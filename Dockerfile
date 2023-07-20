@@ -24,8 +24,8 @@ ENV PATH="$HOME/miniconda/bin:${PATH}"
 RUN conda init bash && source $HOME/.bashrc
 
 # Create a new conda environment from a yml file
-COPY environment.yml .
-RUN conda env create -f environment.yml
+COPY acmg_conda.yml .
+RUN conda env create -f acmg_conda.yml
 
 # Clean up
 RUN apt-get autoremove -y \

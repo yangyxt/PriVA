@@ -206,6 +206,7 @@ dependencies:
   - orc=1.9.0=h385abfd_1
   - packaging=23.1=pyhd8ed1ab_0
   - pandas=2.0.3=py39h40cae4c_1
+  - parallel=20230522=ha770c72_0
   - paramiko=3.2.0=pyhd8ed1ab_0
   - partd=1.4.0=pyhd8ed1ab_0
   - peppy=0.35.7=pyhd8ed1ab_0

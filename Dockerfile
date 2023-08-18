@@ -36,4 +36,9 @@ ENV DEBIAN_FRONTEND=dialog
 ENV CONDA_DEFAULT_ENV=acmg
 ENV PATH="/root/miniconda/envs/${CONDA_DEFAULT_ENV}/bin:${PATH}"
 
-CMD ["bash", "-c", "source activate acmg && exec $0 $@"]
+COPY ./common_bash_utils.sh /scripts/common_bash_utils.sh
+COPY ./annotation_per_family.sh /scripts/annotation_per_family.sh
+COPY ./data /data
+
+ENTRYPOINT [ "/scripts/annotation_per_family.sh" ]
+CMD []

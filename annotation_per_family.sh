@@ -17,6 +17,7 @@ SCRIPT_DIR="$(dirname "${SELF_SCRIPT}")"
 
 # Source the other script
 source "$SCRIPT_DIR/common_bash_utils.sh"
+conda activate acmg
 
 
 function log() {
@@ -98,27 +99,68 @@ function main_workflow() {
 	fi
     
 	if [[ -z ${output_dir} ]]; then local output_dir=$(dirname ${input_vcf}); fi
+	if [[ -z ${assembly} ]]; then local assembly=$(check_vcf_assembly_version ${input_vcf}); fi
+	if [[ -z ${assembly} ]]; then
+		# Here expecting the specified reference genome to have a name like ucsc.hg19.fasta or ucsc.hg38.fasta
+		local ref_gen_extraction==$(basename ${ref_genome} | awk -F '.' '{printf "%s", $2;}')
+		if [[ ${ref_gen_extraction} =~ ^hg[13][98]$ ]]; then
+			local assembly=${ref_gen_extraction}
+		else
+			log "Please specify the assembly as hg19 or hg38. Failed to extract the assembly version either from input VCF or input ref_genome fasta file. Quit now."
+			return 1;
+		fi
+	fi
 
+	# Preprocess the input vcf to:  
+	# Remove the variants not located in primary chromsomes
+	# Convert the contig names to UCSC style. Meaning mapping VCF to hg19 or hg38
+	# Sort and normalize (including indel left alignment)
+	# Remove variants where proband DP < 5
+	# Remove VCF records where all patients in the family has either missing or homo ref genotype. 
+
+	local pre_anno_vcf=${input_vcf/.vcf/.preanno.vcf}
 	preprocess_vcf \
 	${input_vcf} \
-	${ref_genome} \
 	${ped_file} \
-	${fam_name}
+	${fam_name} \
+	${ref_genome} \
+	${pre_anno_vcf} && \
+	display_vcf ${pre_anno_vcf} || { \
+	log "Failed to preprocess the input vcf ${input_vcf} for annotation. Quit with error."; \
+	return 1; }
 
+	# Start to run ANNOVAR on the preprocessed VCF files. Predefine the output annovar results
+	local annovar_tab=${output_dir}/${fam_name}.${assembly}_multianno.txt
+	local annovar_vcf=${annovar_tab/.txt/.vcf}
+
+	run_ANNOVAR \
+	-a ${assembly} \
+	-p ${ped_file} \
+	-f ${fam_name} \
+	-i ${pre_anno_vcf} \
+	-o ${output_dir} \
+	-d ${annovar_dir} && \
+	display_table ${annovar_tab} || { \
+	log "Failed to perform ANNOVAR on ${pre_anno_vcf}. Quit now"
+	return 1; }
 }
 
 
 function preprocess_vcf() {
 	local input_vcf=${1}
-	local output_vcf=${input_vcf/.vcf/.preanno.vcf}
+	local output_vcf=${5}
 	local ped_file=${2}
 	local fam_name=${3}
 	local ref_genome=${4}
 
 	local proband=($(awk -F '\t' '$1 == "'${fam_name}'" && $6 == "2" {printf "%s\n", $2}' ${ped_file} | head -1))
+	local vcf_assembly=$(check_vcf_assembly_version ${input_vcf})
 
 	if [[ -z ${ref_genome} ]]; then
 		log "User does not specify the ref genome fasta file. Cant proceed now. Quit with Error!"
+		return 1;
+	elif [[ ! -z ${vcf_assembly} ]] && [[ ! ${ref_genome} =~ ${vcf_assembly} ]]; then
+		log "User specified ref_genome fasta file ${ref_genome} seems not match with the VCF used assembly ${vcf_assembly}. Quit with Error"
 		return 1;
 	fi
 
@@ -148,10 +190,10 @@ function preprocess_vcf() {
 	
 	# First sort the input_vcf,
 	# Then normalize the input_vcf with bcftools 
-	normalize_vcf ${input_vcf} ${input_vcf/.vcf/.norm.vcf} ${ref_genome} $TMPDIR
+	normalize_vcf ${input_vcf/.vcf*/.ucsc.vcf.gz} ${input_vcf/.vcf/.norm.vcf} ${ref_genome} $TMPDIR
 
 	# Then filter the variants where DP value less than or equalt to 5
-	bcftools filter -e 'FORMAT/DP[0] <= 5' -Oz -o ${input_vcf/.vcf*/.filtered.vcf.gz} ${input_vcf/.vcf/.norm.vcf} && \
+	bcftools filter -e 'FORMAT/DP[0] < 5' -Oz -o ${input_vcf/.vcf*/.filtered.vcf.gz} ${input_vcf/.vcf/.norm.vcf} && \
 	announce_remove_tmps ${input_vcf/.vcf/.norm.vcf}
 
 	# Then filter out the variants where no patients in this family has alternative alleles
@@ -248,8 +290,8 @@ function run_ANNOVAR {
 	fi
     
 	if [[ -z ${output_dir} ]]; then local output_dir=$(dirname ${input_vcf}); fi
-    local output_table=${output_dir}/${fam_name}.hg19_multianno.txt
-	local output_vcf=${output_dir}/${fam_name}.hg19_multianno.vcf
+    local output_table=${output_dir}/${fam_name}.${assembly}_multianno.txt
+	local output_vcf=${output_dir}/${fam_name}.${assembly}_multianno.vcf
 	local table_annovar=${annovar_dir}/table_annovar.pl
 
     # Check whether we can skip this function
@@ -293,4 +335,21 @@ function run_ANNOVAR {
 		log "The ANNOVAR annotation process seems problematic since the output table ${output_table} has different number of records with the input vcf file: ${input_vcf}"
     fi
 }
+
+
+if [[ "${#BASH_SOURCE[@]}" -eq 1 ]]; then
+    declare -a func_names=($(typeset -f | awk '!/^main[ (]/ && /^[^ {}]+ *\(\)/ { gsub(/[()]/, "", $1); printf $1" ";}'))
+    declare -a input_func_names=($(return_array_intersection "${func_names[*]}" "$*"))
+    declare -a arg_indices=($(get_array_index "${input_func_names[*]}" "$*"))
+    if [[ ${#input_func_names[@]} -gt 0 ]]; then
+        >&2 echo "Seems like the command is trying to directly run a function in this script ${BASH_SOURCE[0]}."
+        first_func_ind=${arg_indices}
+        >&2 echo "The identified first func name is at the ${first_func_ind}th input argument, while the total input arguments are: $*"
+        following_arg_ind=$((first_func_ind + 1))
+        >&2 echo "Executing: ${*:${following_arg_ind}}"
+        "${@:${following_arg_ind}}"
+    else
+		main_workflow "$@"
+	fi
+fi
 

@@ -701,3 +701,43 @@ function liftover_from_GRCh_to_hg () {
 		ls -lh ${output_vcf}*
 	fi
 }
+
+
+function return_array_intersection {
+    # Both arrays should not contain item values with space
+    local -a array1=($(echo ${1}))
+    local -a array2=($(echo ${2}))
+    local -a special_char=("." "+" "?" "^" "$" "(" ")" "[" "]" "{" "}" "|" ":")
+    local spe=0
+
+    for item in "${array1[@]}"; do
+        local new_item=${item}
+        for char in "${special_char[@]}"; do
+            if [[ ${item} == *"${char}"* ]]; then local spe=1 && local new_item=$(echo ${new_item} | awk '{gsub("\\'${char}'","\\'${char}'",$0); print;}'); fi
+        done
+        # if [[ ${spe} -gt 0 ]]; then echo "Line "${LINENO}": In function "${FUNCNAME}: After adding escape symbol to special characters, iterating item ${item} now looks like ${new_item}; fi
+        if [[ ${array2[*]} =~ ${new_item} ]]; then
+            result+=(${item})
+        fi
+    done
+    echo "${result[*]}"
+}
+
+
+function get_array_index {
+    # Only applied to non-associative array
+    local -a values=($(echo ${1}))
+    local -a array=($(echo ${2}))
+    local -a indices
+
+    for value in "${values[@]}"; do
+        for i in "${!array[@]}"; do
+            if [[ "${array[$i]}" == "${value}" ]]; then
+                indices+=("${i}")
+            fi
+        done
+    done
+
+    echo "${indices[*]}"
+}
+

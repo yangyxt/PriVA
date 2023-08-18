@@ -105,10 +105,10 @@ function filter_vcf_by_GT() {
     # where a specified subset of samples contain all ref calls or missing calls.
     # Arguments:
     #   $1 - VCF file to filter
-    #   $2 - An array containing sample names
+    #   $2 - An array containing sample names, delimited by comma
 
     local vcf_file="$1"
-    local sample_array=("${!2}") # Access the array passed as argument
+    local -a sample_array=($(echo ${2} | awk 'BEGIN {RS=ORS=",";} {printf "%s ", $1;}')) # Access the array passed as argument
     local output_vcf="$3"
 
 	local tmp_sample_list=$TMPDIR/$(randomID).txt
@@ -122,7 +122,15 @@ function filter_vcf_by_GT() {
 	fi
 
     printf "%s\n" "${sample_array[@]}" > ${tmp_sample_list}
-    bcftools view -S ${tmp_sample_list} -i 'GT="alt"' ${vcf_file} -Oz -o ${output_vcf/.${place_holder}*/.vcf.gz} && \
+    
+	# First extract the subset samples to a vcf file and make sure all samples are not missing or homo ref
+	bcftools view -S ${tmp_sample_list} -i 'GT="alt"' ${vcf_file} -Ou | \
+	bcftools sort -Oz -o ${output_vcf/.${place_holder}*/.subset.vcf.gz} && \
+	tabix -f -p vcf ${output_vcf/.${place_holder}*/.subset.vcf.gz}
+
+	bcftools annotate -a ${output_vcf/.${place_holder}*/.subset.vcf.gz} -m VALID_REC -Ou ${vcf_file} | \
+	bcftools filter -i 'INFO/VALID_REC=1' -Ou | \
+	bcftools sort -Oz -o ${output_vcf/.${place_holder}*/.vcf.gz} && \
 	consistent_vcf_format ${output_vcf} ${output_vcf/.${place_holder}*/.vcf.gz} && \
     silent_remove_tmps ${tmp_sample_list}
 }
@@ -186,7 +194,7 @@ function consistent_vcf_format () {
 	fi
 
 	local final_output_vcf=${output_vcf/.${ori_output_format}*/${op_suffix}}
-	bcftools sort --no-version ${output_vcf} | \
+	bcftools sort ${output_vcf} | \
 	bcftools view -O${op_format} --no-version -o ${final_output_vcf}
 	
 	if [[ ${final_output_vcf} =~ \.vcf\.gz$ ]]; then
@@ -209,7 +217,7 @@ function check_vcf_validity {
     fi
 
     if [[ ${input_vcf} =~ \.gz$ ]]; then
-        >&2 echo "$(timestamp): In function ${FUNCNAME}: ${input_vcf} should be bgzipped, check gz vcf validity"
+        log "${input_vcf} should be bgzipped, check gz vcf validity"
         if check_gz_vcf ${input_vcf} ${expected_lines}; then
             if check_vcf_samples ${input_vcf} ${expected_samples}; then
                 log "${input_vcf} has solid sample names as expected."
@@ -228,7 +236,7 @@ function check_vcf_validity {
             return 10
         fi
     elif [[ ${input_vcf} =~ \.vcf$ ]]; then
-        >&2 echo "$(timestamp): In function ${FUNCNAME}: ${input_vcf} should be plain text, check plain vcf validity"
+        log "${input_vcf} should be plain text, check plain vcf validity"
         if check_plain_vcf ${input_vcf} ${expected_lines}; then
             if check_vcf_samples ${input_vcf} ${expected_samples}; then
                 log "${input_vcf} has solid sample names as expected."
@@ -386,7 +394,7 @@ function contain_only_variants {
     local input_vcf=${1}
     local sample_ID=${2}
 
-    # Test whether the input sample contain only variants (No ref calls or missing calls) in the given VCF file.
+    # Test whether the input sample contain only variants (No ref calls or missing calls) in the given VCF file for a given sample.
 
     if [[ -z ${sample_ID} ]];then
         local no_var_lines=$(bcftools query -f '[%GT\t]\n' ${input_vcf} | uniq - | sort - | uniq - | awk -F '\t' '$1 ~ /^[\.0][\|\/][\.0]/{print;}' | wc -l)
@@ -498,5 +506,198 @@ function normalize_vcf () {
 }
 
 
+function install_annovar () {
+	local assembly=""
+    local parent_dir=""
+	local download_url=""
+
+    local TEMP
+    TEMP=$(getopt -o ap:u: --long assembly,parent_dir:,download_url: -- "$@")
+
+    # if getopt failed, return an error
+    [[ $? != 0 ]] && return 1
+
+    eval set -- "$TEMP"
+
+    while true; do
+        case "$1" in
+            -a|--assembly)
+                local assembly="$2"
+                shift 2
+                ;;
+            -p|--parent_dir)
+                local parent_dir="$2"
+                shift 2
+                ;;
+			-u|--download_url)
+                local download_url="$2"
+                shift 2
+                ;;	
+            --)
+                shift
+                break
+                ;;
+            *)
+                echo "Invalid option"
+                return 2
+                ;;
+        esac
+    done
+
+	wget -O ${parent_dir}/annovar_latest.tar.gz ${download_url} && \
+	tar -xvzf ${parent_dir}/annovar_latest.tar.gz && \
+	local annovar_dir=${parent_dir}/annovar && \
+	local table_annovar=${annovar_dir}/table_annovar.pl
+	local main_annovar=${annovar_dir}/annotate_variation.pl
+
+	# Start download databases, several databases are required for downstream analysis
+	# Clinvar records (clinvar20221231)
+	# refGene annotation ( refGene )
+	# gnomAD_exome, gnomAD_genome (optional, can replace these annotations with annotations from an in-house prepared gnomAD dataset)
+	# FATHMM, PROVEAN, MetaSVM, MetaLR, DANN ( combined in dbnsfp42a )
+
+	if [[ -z ${assembly} ]]; then
+		local -a assemblies=( "hg19" "hg38" )
+		for assembly in "${assemblies[@]}"; do
+			download_basic_annovar_resource ${main_annovar} ${assembly}
+		done
+	else
+		download_basic_annovar_resource ${main_annovar} ${assembly}
+	fi
+
+	# These annotations are acquired elsewhere
+	# Protein domain information, which will be added to the data directory in the acmg_auto github (from Prot2hg database, now the URL www.prot2hg.com not accessible)
+	# CADD
+	# gnomAD v2 and v3 combined
+	# ClinVAR	
+}
 
 
+function download_basic_annovar_resources () {
+	local annovar_pl=${1}
+	local assembly=${2}
+
+	# refGene
+	# dbnsfp42a
+	# clinvar20221231
+	# gnomad_exome
+	# gnomad_genome
+
+	${annovar_pl} -downdb refGene humandb -buildver ${assembly} && \
+	${annovar_pl} -downdb dbnsfp42a humandb -buildver ${assembly} && \
+	${annovar_pl} -downdb clinvar20221231 humandb -buildver ${assembly} && \
+	${annovar_pl} -downdb gnomad_exome humandb -buildver ${assembly} && \
+	${annovar_pl} -downdb gnomad_genome humandb -buildver ${assembly} && \
+	log "Succesfully download refGene, dbnsfp42a, clinvar20221231, gnomad_exome, gnomad_genome to the $(dirname ${annovar_pl})/humandb for assembly ${assembly}"
+}
+
+
+function check_table_lineno {
+    local input_table=${1}
+
+    awk -F '\t' 'NR > 1{print;}' ${input_table} | wc -l
+}
+
+
+function check_vcf_lineno {
+    local input_vcf=${1}
+    bcftools query -f '%CHROM\t%POS\t%REF\t%ALT\n' ${input_vcf} | wc -l
+}
+
+
+function check_vcf_contig_version () {
+	local input_vcf=${1}
+
+	local example_contig_name=$(bcftools query -f '%CHROM\n' ${input_vcf} | head -1)
+
+	if [[ ${example_contig_name} =~ ^chr ]]; then
+		echo "ucsc"
+	else
+		echo "ncbi"
+	fi
+}
+
+
+function check_vcf_contig_size { 
+    local input_vcf=${1}
+    local contig_name=${2}
+
+    if [[ -z ${contig_name} ]]; then
+        local contig_name="chrM"
+    fi
+
+    bcftools view -h ${input_vcf} | \
+    grep "^##contig" | \
+    grep "ID=${contig_name}" | \
+    awk -F '[,=]' '{for(i=1;i<=NF;++i) if($i=="length") print $(i+1)}' | \
+    strip "" ">"
+}
+
+
+function check_vcf_assembly_version () {
+	# INput VCF should contain UCSC contig names instead of GRC contig names
+	local input_vcf=${1}
+
+	local chr1_size=$(check_vcf_contig_size ${input_vcf} "chr1")
+	
+	local random_contig_presence=$(bcftools view -h ${input_vcf} | \
+					  			   awk -F '=' '$1 ~ /##contig/ && $3 ~ /chr7_gl000195_random/{print;}' | wc -l)
+
+	local alt_contig_presence=$(bcftools view -h ${input_vcf} | \
+					  			   awk -F '=' '$1 ~ /##contig/ && $3 ~ /chr6_GL000256v2_alt/{print;}' | wc -l)
+	
+	if [[ ${chr1_size} == "249250621" ]]; then
+		echo "hg19"
+	elif [[ ${chr1_size} == "248956422" ]]; then
+		echo "hg38"
+	else
+		if [[ ${random_contig_presence} -ge 1 ]]; then
+			echo "hg19"
+		elif [[ ${alt_contig_presence} -ge 1 ]]; then
+			echo "hg38"
+		else
+			log "Cant locate the required contig name in the VCF header line to tell the assembly version of this VCF file ${input_vcf}"
+			echo ""
+		fi
+	fi
+}
+
+
+function liftover_from_GRCh_to_hg () {
+	# Only designed for lifting over GRCh37 to hg19 or GRCh38 to hg38
+    local input_vcf=${1}
+    local contig_map=${2}
+	local output_vcf=${3}
+    local tmp_vcf=${input_vcf/.vcf*/.tmp.vcf}
+    if [[ -z ${output_vcf} ]]; then local output_vcf=${input_vcf/.vcf/.addchr.vcf}; fi
+
+	# Upon test, we do not need to escape < in awk regex
+	bcftools view -Ov ${input_vcf} | \
+	awk 'BEGIN{OFS=FS="\t";} \
+		NR == FNR {arr[$2] = $1;} \
+		NR > FNR && $0 ~ /^##contig/{old_contig = gensub(/##contig=<ID=([a-zA-Z_0-9\.]+),*(.+)>$/, "\\1", "g", $1); \
+									if (length(arr[old_contig]) == 0) new_contig = old_contig; \
+									else new_contig = arr[old_contig]; \
+									mod_line = gensub(/^(.+contig=<ID=)[a-zA-Z_0-9\.]+(,*.*>)/, "\\1"new_contig"\\2", "g", $0); \
+									printf "%s\n", mod_line;} \
+		NR > FNR && $0 !~ /^##contig/ && $0 ~ /^##/{print;} \
+		NR > FNR && $0 ~ /^#CHROM/{print;} \
+		NR > FNR && $0 !~ /^#/{ if (length(arr[$1]) == 0) new_contig = $1; \
+								else new_contig = arr[$1]; \
+								gsub(/.+/, new_contig, $1); \
+								printf "%s\n", $0;}' ${contig_map} - > ${tmp_vcf}
+
+	if [[ ${output_vcf} =~ \.[b]*gz$ ]]; then
+		bgzip -f ${tmp_vcf} && \
+		bcftools sort --temp-dir $TMPDIR -Oz -o ${tmp_vcf}.gz ${tmp_vcf}.gz && \
+		tabix -f -p vcf ${tmp_vcf}.gz
+		if check_vcf_validity ${tmp_vcf}.gz; then
+			mv ${tmp_vcf}.gz ${output_vcf} && \
+			mv ${tmp_vcf}.gz.tbi ${output_vcf}.tbi && \
+			ls -lh ${output_vcf}*
+		fi
+	elif check_vcf_validity ${tmp_vcf}; then
+		mv ${tmp_vcf} ${output_vcf} && \
+		ls -lh ${output_vcf}*
+	fi
+}

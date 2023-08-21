@@ -35,9 +35,9 @@ ENV DEBIAN_FRONTEND=dialog
 # Activate the environment by default
 ENV CONDA_DEFAULT_ENV=acmg
 ENV PATH="/root/miniconda/envs/${CONDA_DEFAULT_ENV}/bin:${PATH}"
+ENV TMPDIR="/tmp"
 
-COPY ./common_bash_utils.sh /scripts/common_bash_utils.sh
-COPY ./annotation_per_family.sh /scripts/annotation_per_family.sh
+COPY ./scripts /scripts
 COPY ./data /data
 
 ENTRYPOINT [ "/scripts/annotation_per_family.sh" ]

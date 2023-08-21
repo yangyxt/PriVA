@@ -35,7 +35,6 @@ function display_table {
         return;
     fi
 
-    local tsv_pretty=/home/yangyxt/software/tsv-utils-v2.2.0_linux-x86_64_ldc2/bin/tsv-pretty
     local row_num=$(tail -n +2 ${1} | wc -l)
     local col_num=$(head -1 ${1} | awk '{print NF;}')
 
@@ -50,14 +49,10 @@ function display_table {
     
     log "${1} has ${row_num} rows and ${col_num} columns. It looks like:"
     if [[ ${rows} -le 0 ]]; then
-        ${tsv_pretty} -u ${del_arg} -m 5000 -l 200 -a ${input} >&2 2> /dev/null 
+        tsv-pretty -u ${del_arg} -m 5000 -l 200 -a ${input} >&2 2> /dev/null 
     else
-        ${tsv_pretty} -u ${del_arg} -m 5000 -l 200 -a ${input} | \
+        tsv-pretty -u ${del_arg} -m 5000 -l 200 -a ${input} | \
         head -n ${rows} - >&2 2> /dev/null || >&2 echo ""
-        # Try to make the pipe above close cleanly, we need to add tail -n +1 before head
-        # python3 /paedyl01/disk1/yangyxt/ngs_scripts/display_table.py \
-        # -df $1 \
-        # -nr ${rows} # Old code block
     fi
 
     if [[ ${input} != ${1} ]]; then
@@ -69,7 +64,7 @@ function display_table {
 function display_vcf {
     local input_vcf=${1}
     local head_lines=${2}
-    local tmp_tab="/paedyl01/disk1/yangyxt/test_tmp/$(randomID).tsv"
+    local tmp_tab="$TMPDIR/$(randomID).tsv"
 
     if [[ -z ${head_lines} ]]; then
         local head_lines=10
@@ -182,6 +177,15 @@ function consistent_vcf_format () {
 	else
 		log "The input VCF file ${input_vcf} does not have a recognizable format judging by its file name suffix"
 		return 10
+	fi
+
+	if [[ -z ${op_format} ]]; then
+		if [[ ${input_vcf} == ${output_vcf} ]]; then
+			return
+		else
+			mv ${input_vcf} ${output_vcf}
+			mv ${input_vcf}.tbi ${output_vcf}.tbi 2> /dev/null || :
+		fi
 	fi
 
 	if [[ ${output_vcf} =~ \.bcf$ ]]; then
@@ -368,7 +372,7 @@ function filter_out_noalleles {
         fi
     elif [[ ${input_vcf} =~ \.vcf\.gz$ ]]; then
         bcftools filter -e 'ALT=="."' -Ov ${input_vcf} | \
-        bcftools sort --temp-dir /paedyl01/disk1/yangyxt/test_tmp -Oz -o ${input_vcf/.vcf/}.${tmp_tag}.vcf.gz - && \
+        bcftools sort -Oz -o ${input_vcf/.vcf/}.${tmp_tag}.vcf.gz - && \
         if [[ $(sha256sum ${input_vcf} | awk '{printf "%s", $1;}') != $(sha256sum ${input_vcf/.vcf/}.${tmp_tag}.vcf.gz | awk '{printf "%s", $1;}') ]]; then
             mv ${input_vcf/.vcf/}.${tmp_tag}.vcf.gz ${input_vcf} && \
             tabix -f -p vcf ${input_vcf}
@@ -377,7 +381,7 @@ function filter_out_noalleles {
         fi
     elif [[ ${input_vcf} =~ \.bcf$ ]]; then
         bcftools filter -e 'ALT=="."' -Ov ${input_vcf} | \
-        bcftools sort --temp-dir /paedyl01/disk1/yangyxt/test_tmp -Ob -o ${input_vcf/.vcf/}.${tmp_tag}.bcf - && \
+        bcftools sort -Ob -o ${input_vcf/.vcf/}.${tmp_tag}.bcf - && \
         if [[ $(sha256sum -b ${input_vcf} | awk '{printf "%s", $1;}') != $(sha256sum -b ${input_vcf/.vcf/}.${tmp_tag}.bcf | awk '{printf "%s", $1;}') ]]; then
             mv ${input_vcf/.vcf/}.${tmp_tag}.bcf ${input_vcf}
         else
@@ -495,14 +499,16 @@ function normalize_vcf () {
 	local ref_genome=${3}
 	local tmp_dir=${4}
 
+	log "Try to normalize the vcf file ${input_vcf}, and let the temporary folder set as ${tmp_dir}"
+
 	bcftools norm -m -both -f ${ref_genome} --atom-overlaps "." --keep-sum AD -a ${input_vcf} | \
     bcftools norm -d exact - | \
     bcftools view -i 'ALT!="*"' - | \
-	bcftools sort --temp-dir ${tmp_dir} -Oz -o ${output_vcf/.vcf*/.vcf.gz} && \
+	bcftools sort -Oz -o ${output_vcf/.vcf*/.vcf.gz} && \
 	consistent_vcf_format ${output_vcf} ${output_vcf/.vcf*/.vcf.gz}
 	
-	display_table ${output_vcf}
-	>&2 echo ""
+	display_vcf ${output_vcf}
+	>&2 echo ""  # Append a new line to the end of the logs from this function
 }
 
 
@@ -512,7 +518,7 @@ function install_annovar () {
 	local download_url=""
 
     local TEMP
-    TEMP=$(getopt -o ap:u: --long assembly,parent_dir:,download_url: -- "$@")
+    TEMP=$(getopt -o a:p:u: --long assembly:,parent_dir:,download_url: -- "$@")
 
     # if getopt failed, return an error
     [[ $? != 0 ]] && return 1
@@ -559,10 +565,10 @@ function install_annovar () {
 	if [[ -z ${assembly} ]]; then
 		local -a assemblies=( "hg19" "hg38" )
 		for assembly in "${assemblies[@]}"; do
-			download_basic_annovar_resource ${main_annovar} ${assembly}
+			download_basic_annovar_resources ${main_annovar} ${assembly}
 		done
 	else
-		download_basic_annovar_resource ${main_annovar} ${assembly}
+		download_basic_annovar_resources ${main_annovar} ${assembly}
 	fi
 
 	# These annotations are acquired elsewhere
@@ -576,6 +582,7 @@ function install_annovar () {
 function download_basic_annovar_resources () {
 	local annovar_pl=${1}
 	local assembly=${2}
+	local annovar_dir=$(dirname ${annovar_pl})
 
 	# refGene
 	# dbnsfp42a
@@ -583,11 +590,21 @@ function download_basic_annovar_resources () {
 	# gnomad_exome
 	# gnomad_genome
 
-	${annovar_pl} -downdb refGene humandb -buildver ${assembly} && \
-	${annovar_pl} -downdb dbnsfp42a humandb -buildver ${assembly} && \
-	${annovar_pl} -downdb clinvar20221231 humandb -buildver ${assembly} && \
-	${annovar_pl} -downdb gnomad_exome humandb -buildver ${assembly} && \
-	${annovar_pl} -downdb gnomad_genome humandb -buildver ${assembly} && \
+	${annovar_pl} -downdb refGene ${annovar_dir}/humandb -buildver ${assembly} && \
+	${annovar_pl} -downdb dbnsfp42a ${annovar_dir}/humandb -buildver ${assembly} -webfrom annovar && \
+	${annovar_pl} -downdb gerp++gt2 ${annovar_dir}/humandb -buildver ${assembly} -webfrom annovar && \
+	${annovar_pl} -downdb clinvar_20221231 ${annovar_dir}/humandb -buildver ${assembly}
+
+	if [[ ${assembly} == "hg19" ]]; then
+		${annovar_pl} -downdb gnomad211_exome ${annovar_dir}/humandb -buildver ${assembly} -webfrom annovar && \
+		${annovar_pl} -downdb gnomad211_genome ${annovar_dir}/humandb -buildver ${assembly} -webfrom annovar
+	elif [[ ${assembly} == "hg38" ]]; then
+		${annovar_pl} -downdb gnomad211_exome ${annovar_dir}/humandb -buildver ${assembly} -webfrom annovar && \
+		${annovar_pl} -downdb gnomad312_genome ${annovar_dir}/humandb -buildver ${assembly} -webfrom annovar
+	else
+		log "Failed to have a valid assembly version: ${assembly}"
+	fi
+
 	log "Succesfully download refGene, dbnsfp42a, clinvar20221231, gnomad_exome, gnomad_genome to the $(dirname ${annovar_pl})/humandb for assembly ${assembly}"
 }
 
@@ -629,14 +646,17 @@ function check_vcf_contig_size {
     bcftools view -h ${input_vcf} | \
     grep "^##contig" | \
     grep "ID=${contig_name}" | \
-    awk -F '[,=]' '{for(i=1;i<=NF;++i) if($i=="length") print $(i+1)}' | \
-    strip "" ">"
+    awk -F '[,=]' '{for(i=1;i<=NF;++i) if($i=="length") print $(i+1)}'
 }
 
 
 function check_vcf_assembly_version () {
 	# INput VCF should contain UCSC contig names instead of GRC contig names
 	local input_vcf=${1}
+	if ! check_vcf_validity ${input_vcf}; then
+		log "Cant locate the required contig name in the VCF header line to tell the assembly version of this VCF file ${input_vcf}"
+		return 1;
+	fi
 
 	local chr1_size=$(check_vcf_contig_size ${input_vcf} "chr1")
 	
@@ -676,7 +696,8 @@ function liftover_from_GRCh_to_hg () {
 	awk 'BEGIN{OFS=FS="\t";} \
 		NR == FNR {arr[$2] = $1;} \
 		NR > FNR && $0 ~ /^##contig/{old_contig = gensub(/##contig=<ID=([a-zA-Z_0-9\.]+),*(.+)>$/, "\\1", "g", $1); \
-									if (length(arr[old_contig]) == 0) new_contig = old_contig; \
+									if (old_contig !~ /^[0-9MTXT]$/) next; \
+									else if (length(arr[old_contig]) == 0) new_contig = old_contig; \
 									else new_contig = arr[old_contig]; \
 									mod_line = gensub(/^(.+contig=<ID=)[a-zA-Z_0-9\.]+(,*.*>)/, "\\1"new_contig"\\2", "g", $0); \
 									printf "%s\n", mod_line;} \
@@ -741,3 +762,21 @@ function get_array_index {
     echo "${indices[*]}"
 }
 
+
+function vcf_content_sha256 () {
+	local input_vcf=${1}
+
+	if check_vcf_validity ${input_vcf}; then
+		bcftools view --no-version -Ov ${input_vcf} | \
+		sha256sum | \
+		awk '{printf "%s", $1;}'
+	else
+		echo $(randomID)
+	fi
+}
+
+
+
+if [[ "${#BASH_SOURCE[@]}" -eq 1 ]]; then
+    "$@"
+fi

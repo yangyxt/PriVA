@@ -64,7 +64,8 @@ def gender_col_suffix(label,
     elif gender == "F":
         return label + female_suffix
     
-    
+
+
 def filter_nhomoalt_per_record(row, 
                                chromosome_col="Chr", 
                                obs_nhomoalt_col="nhomalt_gnomAD_Controls",

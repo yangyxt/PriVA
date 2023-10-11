@@ -204,6 +204,7 @@ function main_workflow() {
 	${gnomAD_tab} || { \
 	log "Failed to add aggregated gnomAD annotation on ${reformat_tab}. Quit now"
 	return 1; }
+	
 
 	local lowfreq_tab=${reformat_tab/.tsv/.lowfreq.tsv}
 	filter_on_AF_HOMOALT \

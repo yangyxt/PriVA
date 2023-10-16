@@ -204,15 +204,31 @@ function main_workflow() {
 	${gnomAD_tab} || { \
 	log "Failed to add aggregated gnomAD annotation on ${reformat_tab}. Quit now"
 	return 1; }
-	
 
-	local lowfreq_tab=${reformat_tab/.tsv/.lowfreq.tsv}
+
+	local lowfreq_tab=${gnomAD_tab/.tsv/.lowfreq.tsv}
 	filter_on_AF_HOMOALT \
 	-i ${gnomAD_tab} \
 	-o ${lowfreq_tab} \
 	--af_cutoff ${af_cutoff} || { \
 	log "Failed to filter on gnomAD annotation on ${gnomAD_tab}. Quit now"
 	return 1; }
+
+
+	# Now after filtering on the AF and HOMOALT no of variants. We need to filter on the pedigree information. 
+	# Specifically, we only filter out variants carried by healthy parents in homozygous form
+	local pedigree_filtered_tab=${lowfreq_tab/.tsv/.rmfit.tsv}
+	filter_allele_based_on_pedigree_with_py \
+    -i ${lowfreq_tab} \
+    -o ${pedigree_filtered_tab} \
+    -p ${ped_file} \
+    -f ${fam_name} || { \
+	log "Failed to filter on pedigree information on ${lowfreq_tab}. Quit now"
+	return 1; }
+
+
+	# Now we've done the variants filtration 
+
 }
 
 
@@ -608,6 +624,100 @@ function run_ANNOVAR {
 		log "The ANNOVAR annotation process seems problematic since the output table ${output_table} has different number of records with the input vcf file: ${input_vcf}"
     fi
 }
+
+
+
+function filter_allele_based_on_pedigree_with_py {
+    local OPTIND i o p f
+    while getopts i:o::p:f:: args
+    do
+        case ${args} in
+            i) local input_table=$OPTARG ;;
+            p) local pedfile=$OPTARG ;;
+            o) local output_table=$OPTARG ;;
+            f) local family_name=$OPTARG ;;
+            *) echo "No argument passed. At least pass an argument specifying the family ID"
+        esac
+    done
+
+    if [[ -z ${output_table} ]]; then
+        local output_table=${input_table/.txt/.rmfit.txt}
+    fi
+
+    if [[ -z ${family_name} ]]; then
+        local family_name=$(basename ${input_table} | awk -F '.' '{printf "%s", $1;}')
+    fi
+
+    if [[ ${output_table} -nt ${input_table} ]] && \
+       [[ $(check_table_lineno ${output_table}) -le $(check_table_lineno ${input_table}) ]]; then
+       log "The output table ${output_table} is valid and updated"
+       return 0;
+    fi
+
+    log "Start filtering the records where patients GT are the same with controls GT info"
+    log "Running commands: python3 ${SCRIPT_DIR}/pedigree_filtration_per_fam.py \
+    -vt ${input_table} \
+    -pt ${pedfile} \
+    -tf ${family_name} \
+    -o ${output_table}"
+
+    python3 ${SCRIPT_DIR}/pedigree_filtration_per_fam.py \
+    -vt ${input_table} \
+    -pt ${pedfile} \
+    -tf ${family_name} \
+    -o ${output_table}
+    check_return_code
+
+    check_result_size ${output_table} && \
+    drop_redundant_rows ${output_table}
+    log "Finish filtering the records where patients GT are the same with controls."$'\n\n'
+}
+
+
+function prepare_vcf_add_varID {
+    local input_table=${1}
+    local output_vcf=${2}
+
+    if [[ -z ${output_vcf} ]]; then
+        local output_vcf=${input_table/.txt/.vcf}
+    fi
+
+    if [[ ${output_vcf} -nt ${input_table} ]] && \
+       [[ $(check_vcf_lineno ${output_vcf} 2> /dev/null) -le $(check_table_lineno ${input_table}) ]] && \
+        check_table_column ${input_table} "uniq_ID"; then
+        log "The output vcf ${output_vcf} is valid and updated"
+        return 0;
+    elif check_table_column ${input_table} "uniq_ID"; then
+        log "The output vcf ${output_vcf} might not be valid. Reformatting the vcf"
+        local id_col=$(head -1 ${input_table} | awk -F '\t' '{for (i=1;i<=NF;i++) {if ($i == "uniq_ID") {printf "%s", i; exit 0;}}}')
+        
+        tail -n +2 ${input_table} | cut -f ${id_col} | sort - | uniq > ${input_table/.txt/.id.lst} && \
+        ls -lh ${input_table/.txt/.id.lst}
+
+        bcftools query -f '%ID\n' ${output_vcf} 2> /dev/null | sort - | uniq > ${output_vcf}.id.lst && \
+        ls -lh ${output_vcf/.vcf*/.id.lst} || { \
+        log "Seems like that ${output_vcf} is not valid and the uniq_ID is already existed in the ${input_table} due to last run of this function"; }
+
+        if [[ $(md5sum ${input_table/.txt/.id.lst} | awk '{printf "%s", $1;}') == $(md5sum ${output_vcf}.id.lst | awk '{printf "%s", $1;}') ]]; then
+            log "The output vcf ${output_vcf} is valid and all the VCF IDs are the same"
+            return 0;
+        fi
+    else
+        if [[ ${output_vcf} -ot ${input_table} ]]; then
+            log "Output VCF is older than the input"
+        fi
+        if [[ $(check_vcf_lineno ${output_vcf} 2> /dev/null) -gt $(check_table_lineno ${input_table}) ]]; then
+            log "Output VCF has more lines than the input table"
+        fi
+    fi
+
+    python3 ${SCRIPT_DIR}/generate_vep_input.py \
+    -vt ${input_table} && \
+    check_table_column ${input_table} "uniq_ID" && \
+    display_table ${output_vcf}
+}
+
+
 
 
 if [[ "${#BASH_SOURCE[@]}" -eq 1 ]]; then

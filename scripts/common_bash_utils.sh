@@ -616,6 +616,30 @@ function check_table_lineno {
 }
 
 
+function check_table_column {
+    local input_table=${1}
+    local column=${2}
+
+    if [[ ! -f ${input_table} ]]; then
+        >&2 echo "Line "${LINENO}": In function ${FUNCNAME}: $(timestamp): Input table ${input_table} does not even exist."
+        false;
+    fi
+
+    local -a col_inds=($(head -1 ${input_table} | \
+                         awk -F '\t' -v col="${column}" '{for(i=1;i<=NF;i++) if ($i == col) printf "%s ", i;}'))
+
+    if [[ ${#col_inds[@]} -eq 1 ]]; then
+        true;
+    elif [[ ${#col_inds[@]} -eq 0 ]]; then
+        false;
+    elif [[ ${#col_inds[@]} -gt 1 ]]; then
+        >&2 echo "Line "${LINENO}": In function ${FUNCNAME}: $(timestamp): Multiple columns have the same column label ${column}. The column indices are: ${col_inds[*]}"
+        echo "${col_inds[*]}"
+        true;
+    fi
+}
+
+
 function check_vcf_lineno {
     local input_vcf=${1}
     bcftools query -f '%CHROM\t%POS\t%REF\t%ALT\n' ${input_vcf} | wc -l

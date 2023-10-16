@@ -185,26 +185,24 @@ def parallel_check_var_presence(input_variants,
     return result_dict
         
 
+# def on_completion(future, progress_dict, iterator_dict, result_dict, gnomAD_db_template):
+#     exception = future.exception()
+#     if exception:
+#         raise exception
 
-
-def on_completion(future, progress_dict, iterator_dict, result_dict, gnomAD_db_template):
-    exception = future.exception()
-    if exception:
-        raise exception
-
-    result = future.result()
-    group_index = progress_dict[future]
-    # Add the resulting row to the corresponding chromosome set
-    result_dict[group_index].add(result)
+#     result = future.result()
+#     group_index = progress_dict[future]
+#     # Add the resulting row to the corresponding chromosome set
+#     result_dict[group_index].add(result)
     
-    row = next(iterator_dict[group_index], None)
+#     row = next(iterator_dict[group_index], None)
     
-    if row is not None:
-        # Schedule a new task from the same group
-        new_future = executor.submit(check_var_presence, row, gnomAD_sql_template = gnomAD_db_template)
-        new_future.add_done_callback(on_completion)
-        active_futures[new_future] = group_index
-    del active_futures[future]
+#     if row is not None:
+#         # Schedule a new task from the same group
+#         new_future = executor.submit(check_var_presence, row, gnomAD_sql_template = gnomAD_db_template)
+#         new_future.add_done_callback(on_completion)
+#         active_futures[new_future] = group_index
+#     del active_futures[future]
     
 
 def create_index_sql(table_name, index_cols, index_name = "idx_of_cols", sql_path = "", db_conn = None):

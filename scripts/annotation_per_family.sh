@@ -227,8 +227,20 @@ function main_workflow() {
 	return 1; }
 
 
-	# Now we've done the variants filtration 
+	# Now we crosscheck the variants with the known Clinvar records.
+	
 
+
+
+	# Now we've done the variants filtration
+	local filtered_vcf=${annovar_vcf/.vcf/.filtered.vcf}
+	prepare_vcf_add_varID \
+	${pedigree_filtered_tab} \
+	${assembly} \
+	${filtered_vcf}
+
+
+	# Next we need to perform VEP and SpliceAI and 
 }
 
 
@@ -676,7 +688,8 @@ function filter_allele_based_on_pedigree_with_py {
 
 function prepare_vcf_add_varID {
     local input_table=${1}
-    local output_vcf=${2}
+	local assembly=${2}
+    local output_vcf=${3}
 
     if [[ -z ${output_vcf} ]]; then
         local output_vcf=${input_table/.txt/.vcf}
@@ -711,8 +724,9 @@ function prepare_vcf_add_varID {
         fi
     fi
 
-    python3 ${SCRIPT_DIR}/generate_vep_input.py \
-    -vt ${input_table} && \
+    python3 ${SCRIPT_DIR}/generate_varID_and_vcf.py \
+    -vt ${input_table} \
+	-as ${assembly} && \
     check_table_column ${input_table} "uniq_ID" && \
     display_table ${output_vcf}
 }

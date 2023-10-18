@@ -111,9 +111,100 @@ def convert_input_value(v):
             return v
     else:
         return v
-    
-        
 
+
+
+def deal_with_nullkey_group_return(func):
+    def check_name_wrapper(*args, **kwargs):
+        first_arg = [a for a in args][0]
+        res = func(*args, **kwargs)
+        if type(first_arg) == pd.core.frame.DataFrame:
+            try:
+                group_name = first_arg.name
+            except AttributeError:
+                logger.debug("WARNING: This function {} is supposed to be used as a groupby apply function, while we cannot access the groupdf name".format(func.__name__))
+                return res
+            else:  
+                if check_null_groupkeys(group_name):
+                    print("WARNING: Input group df to function {} has all NA group keys: {}, key type {}. The group_df has shape of {}, check the head part:\n{}".format(func.__name__, 
+                                                                                                                                                            group_name, 
+                                                                                                                                                            type(group_name),
+                                                                                                                                                            first_arg.shape, 
+                                                                                                                                                            first_arg[:3].to_string(index=False)), file=sys.stderr)
+                    if type(res) == pd.core.frame.DataFrame:
+                        input_cols = first_arg.columns.tolist()
+                        output_cols = res.columns.tolist()
+                        new_cols = [ l for l in output_cols if l not in input_cols ]
+                        if len(new_cols) == 0:
+                            return res
+                        else:
+                            res.loc[:, new_cols] = np.nan
+                            return res.drop_duplicates()
+                    elif res is None:
+                        pass
+                    else:
+                        return res
+                else:
+                    return res
+        else:
+            print("WARNING: This function {} is supposed to be used as a groupby apply function, while the first arg is not a dataframe, instead its a {}".format(func.__name__, type(first_arg)), file=sys.stderr)
+            return res
+    return check_name_wrapper
+
+
+
+def create_gffutils_db(gff_file="/paedyl01/disk1/yangyxt/public_data/gene_annotation/GCF_000001405.25_GRCh37.p13_genomic.gff.gz", 
+                       db_file = None, **kwargs):
+    import gffutils
+    
+    if not db_file:
+        db_file = re.sub("(\.g[tf]f[3]*)\.gz$", "\1.db", gff_file)
+        logger.info(f"The output database file is {db_file}")
+        
+    # kwargs here can have merge_strategy = "merge" or merge_strategy = "create_unique"
+    db = gffutils.create_db(gff_file, 
+                            dbfn=db_file, 
+                            force=True, 
+                            keep_order=True,  
+                            sort_attribute_values=True,
+                            merge_strategy = "merge",
+                            **kwargs)
+    
+    return db
+
+
+def check_remote_file_exists(url):
+    import requests
+    try:
+        response = requests.head(url)
+        if response.status_code == 200:
+            return True
+        else:
+            return False
+    except Exception as e:
+        print(f"An error occurred: {e}")
+        return False
+
+
+def get_updated_clinvar_reformat_tab(clinvar_dir = "/home/yangyxt/public_data/clinvar", 
+                                     assembly = "GRCh37", 
+                                     **kwargs):
+    from clinvar_class import UPDATED_CLINVAR
+
+    ncbi2ucsc_as_dict = {"GRCh38": "hg38", 
+                        "hg38": "hg38",
+                        "GRCh37": "hg19",
+                        "hg19": "hg19"}
+ 
+    ucsc_assembly = ncbi2ucsc_as_dict[assembly]
+
+    clinvar_dir = os.path.join(clinvar_dir, ucsc_assembly)
+    clinvar_obj = UPDATED_CLINVAR(clinvar_dir = clinvar_dir, 
+                                     assembly = assembly, **kwargs)
+ 
+    clinvar_obj.prepare_updated_reformat_clinvar()
+ 
+ 
 if __name__ == "__main__":
     parser = ap.ArgumentParser()
     parser.add_argument("-f", "--function", type=str, help="The function name", required=True)

@@ -314,7 +314,7 @@ def reformat(a, b, c, d, ped, output, fam):
     new_chunks.drop(columns=['count'], inplace=True)
 
     # Output the variable to the new file
-    new_headers = 'unknown1\tunknown2\tChr.1\tPOS\tID\tRef.1\tAlt.1\tQUAL.1\tFILTER.1\tINFO.1\tFORMAT'.split('\t')
+    new_headers = 'unknown1\tunknown2\tChr.1\tPOS\tID\tRef.1\tAlt.1\tQUAL.1\tFILTER.1\tINFO\tFORMAT'.split('\t')
     rename_dict = {}
     for i in range(2, 13): rename_dict["Otherinfo" + str(i)] = new_headers[i-2] 
     new_chunks.rename(columns=rename_dict, inplace=True)
@@ -340,7 +340,7 @@ def reformat(a, b, c, d, ped, output, fam):
         new_chunks.drop(columns=[label.split('_')[0]], inplace=True)
         new_chunks.insert(loc=loc, column=label.split('_')[0], value=tobe_mov)
 
-    new_chunks.drop(columns=["unknown1", "unknown2", "Chr.1", "POS", "ID", "Ref.1", "Alt.1", "QUAL.1", "FILTER.1", "INFO.1"], inplace=True, errors = "ignore")
+    new_chunks.drop(columns=["unknown1", "unknown2", "Chr.1", "POS", "ID", "Ref.1", "Alt.1", "QUAL.1", "FILTER.1"], inplace=True, errors = "ignore")
     logger.info("The final table looks like:\n {}\n".format(new_chunks[:5].to_string(index=False)))
     
     # Output the final result

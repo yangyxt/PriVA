@@ -12,10 +12,10 @@ RUN apt update -y && \
     apt upgrade -y && \
     apt install -y wget bzip2
 
-# Install Miniconda3 and add to PATH
-RUN wget https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh \
-    && bash Miniconda3-latest-Linux-x86_64.sh -b -p /root/miniconda \
-    && rm Miniconda3-latest-Linux-x86_64.sh
+# Install Mambaforge (includes Mamba and Miniforge3) and add to PATH
+RUN wget https://github.com/conda-forge/miniforge/releases/latest/download/Mambaforge-Linux-x86_64.sh \
+    && bash Mambaforge-Linux-x86_64.sh -b -p /root/mambaforge \
+    && rm Mambaforge-Linux-x86_64.sh
 
 # Put Miniconda on PATH
 ENV PATH="/root/miniconda/bin:${PATH}"

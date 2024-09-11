@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # This script is used to define all the annotation process functions and run the main pipeline
 # For now, the script is only used to process short variants (Indels and SNVs). Large structural variants and CNVs are not included.
-
+# Since there will be unexpected indels in the input VCF file. So prescores are not enough to cover them. We need to use some tools to address this issue.
+# In this workflow, we use VEP, CADD, SpliceAI, VEP-plugin(UTRannotator). We abandon the ANNOVAR for its related releasing and distribution restrictions.
 # The script expect a Family VCF input along with a pedigree table contains the Family pedigree information.
 # Notice that the family sample ID should be consistent between the pedigree table and the VCF file.
 # Notice that the proband of the family should stay as the first record of the family in the pedigree table
@@ -129,7 +130,7 @@ function main_workflow() {
 	if [[ -z ${assembly} ]]; then local assembly=$(check_vcf_assembly_version ${input_vcf}); fi
 	if [[ -z ${assembly} ]]; then
 		# Here expecting the specified reference genome to have a name like ucsc.hg19.fasta or ucsc.hg38.fasta
-		local ref_gen_extraction==$(basename ${ref_genome} | awk -F '.' '{printf "%s", $2;}')
+		local ref_gen_extraction=$(basename ${ref_genome} | awk -F '.' '{printf "%s", $2;}')
 		if [[ ${ref_gen_extraction} =~ ^hg[13][98]$ ]]; then
 			local assembly=${ref_gen_extraction}
 		else
@@ -160,36 +161,9 @@ function main_workflow() {
 	log "The assembly using is ${assembly}."
 	log "The pedigree file used is ${ped_file}."
 	log "The Family Name of the inspecting family is ${fam_name}."
-	log "The VCF preprocessed for ANNOVAR annotation is ${pre_anno_vcf}."
+	log "The VCF preprocessed for annotation is ${pre_anno_vcf}."
 	log "The output folder for annotation results is ${output_dir}"
-	log "The ANNOVAR perl executable file is located in ${annovar_dir}"
 
-
-	# Start to run ANNOVAR on the preprocessed VCF files. Predefine the output annovar results
-	local annovar_tab=${output_dir}/${fam_name}.${assembly}_multianno.txt
-	local annovar_vcf=${annovar_tab/.txt/.vcf}
-	log "Expected ANNOVAR annotation table is ${annovar_tab} and the annotation VCF file is ${annovar_vcf}"
-
-
-	run_ANNOVAR \
-	-a ${assembly} \
-	-p ${ped_file} \
-	-f ${fam_name} \
-	-i ${pre_anno_vcf} \
-	-o ${output_dir} \
-	-d ${annovar_dir} && \
-	display_table ${annovar_tab} || { \
-	log "Failed to perform ANNOVAR on ${pre_anno_vcf}. Quit now"
-	return 1; }
-
-
-	# Reformat the table
-	local reformat_tab=${annovar_tab::-4}.reformat.tsv && \
-	reformat_annovar_table \
-	${annovar_tab} && \
-	display_table ${reformat_tab} || { \
-	log "Failed to perform reformat on ${annovar_tab}. Quit now"
-	return 1; }
 
 
 	# First annotate gnomAD aggregated frequency and number of homozygous ALT allele carriers
@@ -225,11 +199,6 @@ function main_workflow() {
     -f ${fam_name} || { \
 	log "Failed to filter on pedigree information on ${lowfreq_tab}. Quit now"
 	return 1; }
-
-
-	# Now we crosscheck the variants with the known Clinvar records.
-	
-
 
 
 	# Now we've done the variants filtration
@@ -519,124 +488,6 @@ function update_HGNC_symbol {
 }
 
 
-function run_ANNOVAR {
-    local input_vcf=""
-    local ped_file=""
-	local fam_name=""
-	local assembly="hg19"
-    local annovar_dir=""
-	local output_dir=""
-
-    local TEMP
-    TEMP=$(getopt -o a:i:p:f:d:o: --long assembly:,input_vcf:,ped_file:,fam_name:,annovar_dir:,output_dir: -- "$@")
-
-    # if getopt failed, return an error
-    [[ $? != 0 ]] && return 1
-
-    eval set -- "$TEMP"
-	log "TEMP: $TEMP"
-
-    while true; do
-        case "$1" in
-            -a|--assembly)
-                assembly="$2"
-                shift 2
-                ;;
-            -p|--ped_file)
-                ped_file="$2"
-                shift 2
-                ;;
-			-f|--fam_name)
-                fam_name="$2"
-                shift 2
-                ;;
-			-i|--input_vcf)
-                input_vcf="$2"
-                shift 2
-                ;;
-			-d|--annovar_dir)
-                annovar_dir="$2"
-                shift 2
-                ;;
-			-o|--output_dir)
-                output_dir="$2"
-                shift 2
-                ;;
-            --)
-                shift
-                break
-                ;;
-            *)
-                log "Invalid option"
-                return 2
-                ;;
-        esac
-    done
-
-	# Prepare proband_ID and family_name
-	if [[ -z ${fam_name} ]]; then
-		local proband_ID=$(bcftools query -l ${input_vcf} | head -1)
-		local fam_name=$(awk -F '\t' '$2 == "'${proband_ID}'"{printf "%s", $1; exit 0;}' ${ped_file})
-    	local -a patient_IDs=($(awk -F '\t' '$1 == "'${fam_name}'" && $6 == "2" {printf "%s ", $2}' ${ped_file}))
-	else
-		local -a patient_IDs=($(awk -F '\t' '$1 == "'${fam_name}'" && $6 == "2" {printf "%s ", $2}' ${ped_file}))
-		local proband_ID=${patient_IDs[0]}
-	fi
-    
-	if [[ -z ${output_dir} ]]; then local output_dir=$(dirname ${input_vcf}); fi
-    local output_table=${output_dir}/${fam_name}.${assembly}_multianno.txt
-	local output_vcf=${output_dir}/${fam_name}.${assembly}_multianno.vcf
-	local table_annovar=${annovar_dir}/table_annovar.pl
-
-    # Check whether we can skip this function
-    if [[ ${output_table} -nt ${input_vcf} ]] && \
-       [[ $(check_table_lineno ${output_table}) -eq $(check_vcf_lineno ${input_vcf}) ]] && \
-       [[ ${output_vcf} -nt ${input_vcf} ]]; then
-        log "The output table is already existed and updated. Skip the following steps"
-        return 0;
-    fi
-
-    # Check whether the input is valid
-    if check_vcf_validity ${input_vcf}; then
-        log "Input vcf ${input_vcf} is updated and valid"
-    else
-        log "Input vcf ${input_vcf} is not valid"
-        return 1;
-    fi
-
-	local af_dbs
-	if [[ ${assembly} == "hg19" ]]; then
-		local af_dbs="gnomad211_exome,gnomad211_genome"
-	elif [[ ${assembly} == "hg38" ]]; then
-		local af_dbs="gnomad211_exome,gnomad312_genome"
-	fi
-
-	log "Start running ANNOVAR core program on the family VCF ${input_vcf}"
-	time perl ${table_annovar} \
-    ${input_vcf} \
-    ${annovar_dir}/humandb/ \
-    -buildver ${assembly} \
-    -out ${output_dir}/${fam_name} \
-    -remove \
-    -protocol refGene,${af_dbs},dbnsfp42a,clinvar_20221231 \
-    -operation g,f,f,f,f \
-    -otherinfo \
-    -nastring . \
-    -vcfinput || \
-	{ log "Failed to preform ANNOVAR on family VCF ${input_vcf}"; return 1; }
-
-	log "Finish running ANNOVAR core program on the sample ${fam_name}:${proband_ID} "
-	log "**********************This is the separate line of ANNOVAR main program and customed program***************************"
-	log "proband_ID=${proband_ID}"
-
-	if [[ $(check_table_lineno ${output_table}) -eq $(check_vcf_lineno ${output_vcf} 2> /dev/null) ]] && \
-       [[ $(check_table_lineno ${output_table}) -eq $(check_vcf_lineno ${input_vcf}) ]]; then
-        log "The annotation seems successfully finished"
-	else
-		log "The ANNOVAR annotation process seems problematic since the output table ${output_table} has different number of records with the input vcf file: ${input_vcf}"
-    fi
-}
-
 
 
 function filter_allele_based_on_pedigree_with_py {
@@ -644,91 +495,62 @@ function filter_allele_based_on_pedigree_with_py {
     while getopts i:o::p:f:: args
     do
         case ${args} in
-            i) local input_table=$OPTARG ;;
+            i) local input_vcf=$OPTARG ;;
             p) local pedfile=$OPTARG ;;
-            o) local output_table=$OPTARG ;;
+            o) local output_vcf=$OPTARG ;;
             f) local family_name=$OPTARG ;;
             *) echo "No argument passed. At least pass an argument specifying the family ID"
         esac
     done
 
-    if [[ -z ${output_table} ]]; then
-        local output_table=${input_table/.txt/.rmfit.txt}
+    if [[ -z ${output_vcf} ]]; then
+        local output_vcf=${input_vcf/.vcf/.rmfit.vcf}
     fi
 
     if [[ -z ${family_name} ]]; then
-        local family_name=$(basename ${input_table} | awk -F '.' '{printf "%s", $1;}')
+        local family_name=$(basename ${input_vcf} | awk -F '.' '{printf "%s", $1;}')
     fi
 
-    if [[ ${output_table} -nt ${input_table} ]] && \
-       [[ $(check_table_lineno ${output_table}) -le $(check_table_lineno ${input_table}) ]]; then
-       log "The output table ${output_table} is valid and updated"
+    if [[ ${output_vcf} -nt ${input_vcf} ]] && \
+	   [[ $(check_vcf_validity ${output_vcf}) ]] && \
+       [[ $(check_vcf_lineno ${output_vcf}) -le $(check_vcf_lineno ${input_vcf}) ]]; then
+       log "The output vcf ${output_vcf} is valid and updated"
        return 0;
     fi
 
     log "Start filtering the records where patients GT are the same with controls GT info"
     log "Running commands: python3 ${SCRIPT_DIR}/pedigree_filtration_per_fam.py \
-    -vt ${input_table} \
-    -pt ${pedfile} \
-    -tf ${family_name} \
-    -o ${output_table}"
+    -v ${input_vcf} \
+    -p ${pedfile} \
+    -f ${family_name} \
+    -o ${output_vcf}"
 
     python3 ${SCRIPT_DIR}/pedigree_filtration_per_fam.py \
-    -vt ${input_table} \
-    -pt ${pedfile} \
-    -tf ${family_name} \
-    -o ${output_table}
+    -v ${input_vcf} \
+    -p ${pedfile} \
+    -f ${family_name} \
+    -o ${output_vcf}
     check_return_code
 
-    check_result_size ${output_table} && \
-    drop_redundant_rows ${output_table}
-    log "Finish filtering the records where patients GT are the same with controls."$'\n\n'
+	display_vcf ${output_vcf}
+    log "Finish filtering the records where control sample has homozygous or hemizygous GTs or the records no patients carrying the variant allele."$'\n\n'
 }
 
 
 function prepare_vcf_add_varID {
-    local input_table=${1}
-	local assembly=${2}
-    local output_vcf=${3}
+    local input_vcf=${1}
+    local output_vcf=${2}
 
     if [[ -z ${output_vcf} ]]; then
-        local output_vcf=${input_table/.txt/.vcf}
+        local output_vcf=${input_vcf/.vcf/.id.vcf}
     fi
 
-    if [[ ${output_vcf} -nt ${input_table} ]] && \
-       [[ $(check_vcf_lineno ${output_vcf} 2> /dev/null) -le $(check_table_lineno ${input_table}) ]] && \
-        check_table_column ${input_table} "uniq_ID"; then
-        log "The output vcf ${output_vcf} is valid and updated"
-        return 0;
-    elif check_table_column ${input_table} "uniq_ID"; then
-        log "The output vcf ${output_vcf} might not be valid. Reformatting the vcf"
-        local id_col=$(head -1 ${input_table} | awk -F '\t' '{for (i=1;i<=NF;i++) {if ($i == "uniq_ID") {printf "%s", i; exit 0;}}}')
-        
-        tail -n +2 ${input_table} | cut -f ${id_col} | sort - | uniq > ${input_table/.txt/.id.lst} && \
-        ls -lh ${input_table/.txt/.id.lst}
+    python3 ${SCRIPT_DIR}/generate_varID_for_vcf.py \
+    -i ${input_vcf} \
+	-o ${output_vcf}
+	check_return_code
 
-        bcftools query -f '%ID\n' ${output_vcf} 2> /dev/null | sort - | uniq > ${output_vcf}.id.lst && \
-        ls -lh ${output_vcf/.vcf*/.id.lst} || { \
-        log "Seems like that ${output_vcf} is not valid and the uniq_ID is already existed in the ${input_table} due to last run of this function"; }
-
-        if [[ $(md5sum ${input_table/.txt/.id.lst} | awk '{printf "%s", $1;}') == $(md5sum ${output_vcf}.id.lst | awk '{printf "%s", $1;}') ]]; then
-            log "The output vcf ${output_vcf} is valid and all the VCF IDs are the same"
-            return 0;
-        fi
-    else
-        if [[ ${output_vcf} -ot ${input_table} ]]; then
-            log "Output VCF is older than the input"
-        fi
-        if [[ $(check_vcf_lineno ${output_vcf} 2> /dev/null) -gt $(check_table_lineno ${input_table}) ]]; then
-            log "Output VCF has more lines than the input table"
-        fi
-    fi
-
-    python3 ${SCRIPT_DIR}/generate_varID_and_vcf.py \
-    -vt ${input_table} \
-	-as ${assembly} && \
-    check_table_column ${input_table} "uniq_ID" && \
-    display_table ${output_vcf}
+    display_vcf ${output_vcf}
 }
 
 

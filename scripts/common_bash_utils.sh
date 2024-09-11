@@ -800,6 +800,18 @@ function vcf_content_sha256 () {
 }
 
 
+function check_return_code {
+    local return_code=$(echo $?)
+    log ": The last step's return code is ${return_code}";
+    if [[ ${return_code} -gt 0 ]]; then
+        log "The last step does not finish in normal way. Exiting the whole script now." && \
+        exit 1
+    else
+        log ": The last step finished properly. Continue";
+    fi
+}
+
+
 
 if [[ "${#BASH_SOURCE[@]}" -eq 1 ]]; then
     "$@"

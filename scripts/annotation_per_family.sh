@@ -42,16 +42,15 @@ function main_workflow() {
     local ped_file
 	local fam_name
 	local assembly
-    local annovar_dir
 	local output_dir
+	local vep_cache_dir
 	local ref_genome
-	local gnomAD_db_dir
 	local threads
 	local af_cutoff
 
     local TEMP
 	log "Raw input arguments: $#"
-    TEMP=$(getopt -o a:i:p:f:d:o:r:g:t: --long assembly:,input_vcf:,ped_file:,fam_name:,annovar_dir:,output_dir:,ref_genome:,gnomAD_db_dir:,threads:,af_cutoff: -- "$@")
+    TEMP=$(getopt -o a:i:p:f:d:o:r:g:t: --long assembly:,input_vcf:,ped_file:,fam_name:,vep_cache_dir:,output_dir:,ref_genome:,threads:,af_cutoff: -- "$@")
 
 	log "TEMP: $TEMP"
     # if getopt failed, return an error
@@ -77,8 +76,8 @@ function main_workflow() {
                 input_vcf="$2"
                 shift 2
                 ;;
-			-d|--annovar_dir)
-                annovar_dir="$2"
+			-d|--vep_cache_dir)
+                vep_cache_dir="$2"
                 shift 2
                 ;;
 			-o|--output_dir)
@@ -89,10 +88,6 @@ function main_workflow() {
                 ref_genome="$2"
                 shift 2
                 ;;
-			-g|--gnomAD_db_dir)
-				gnomAD_db_dir="$2"
-				shift 2
-				;;
 			-t|--threads)
 				threads="$2"
 				shift 2

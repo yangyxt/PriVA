@@ -47,10 +47,11 @@ function main_workflow() {
 	local ref_genome
 	local threads
 	local af_cutoff
-
+	local gnomAD_chr1_vcf
+	local clinvar_vcf
     local TEMP
 	log "Raw input arguments: $#"
-    TEMP=$(getopt -o a:i:p:f:d:o:r:g:t: --long assembly:,input_vcf:,ped_file:,fam_name:,vep_cache_dir:,output_dir:,ref_genome:,threads:,af_cutoff: -- "$@")
+    TEMP=$(getopt -o a:i:p:f:c:o:r:t: --long assembly:,input_vcf:,ped_file:,fam_name:,vep_cache_dir:,output_dir:,ref_genome:,threads:,af_cutoff:,gnomAD_chr1_vcf:,clinvar_vcf: -- "$@")
 
 	log "TEMP: $TEMP"
     # if getopt failed, return an error
@@ -96,6 +97,14 @@ function main_workflow() {
 				af_cutoff="$2"
 				shift 2
 				;;
+			--gnomAD_chr1_vcf)
+				gnomAD_chr1_vcf="$2"
+				shift 2
+				;;
+			--clinvar_vcf)
+				clinvar_vcf="$2"
+				shift 2
+				;;
             --)
                 shift
                 break
@@ -120,7 +129,7 @@ function main_workflow() {
 		local -a patient_IDs=($(awk -F '\t' '$1 == "'${fam_name}'" && $6 == "2" {printf "%s ", $2}' ${ped_file}))
 		local proband_ID=${patient_IDs[0]}
 	fi
-    
+
 	if [[ -z ${output_dir} ]]; then local output_dir=$(dirname ${input_vcf}); fi
 	if [[ -z ${assembly} ]]; then local assembly=$(check_vcf_assembly_version ${input_vcf}); fi
 	if [[ -z ${assembly} ]]; then
@@ -134,12 +143,12 @@ function main_workflow() {
 		fi
 	fi
 
-	# Preprocess the input vcf to:  
+	# Preprocess the input vcf to:
 	# Remove the variants not located in primary chromsomes
 	# Convert the contig names to UCSC style. Meaning mapping VCF to hg19 or hg38
 	# Sort and normalize (including indel left alignment)
 	# Remove variants where proband DP < 5
-	# Remove VCF records where all patients in the family has either missing or homo ref genotype. 
+	# Remove VCF records where all patients in the family has either missing or homo ref genotype.
 
 	local pre_anno_vcf=${input_vcf/.vcf*/.preanno.vcf.gz}
 	preprocess_vcf \
@@ -152,59 +161,46 @@ function main_workflow() {
 	log "Failed to preprocess the input vcf ${input_vcf} for annotation. Quit with error."; \
 	return 1; }
 
+	# Specifically, we only filter out variants carried by healthy parents in homozygous form
+	local ped_filter_vcf=${pre_anno_vcf/.vcf/.ped.vcf}
+	filter_allele_based_on_pedigree_with_py \
+    -i ${pre_anno_vcf} \
+    -o ${ped_filter_vcf} \
+    -p ${ped_file} \
+    -f ${fam_name} || { \
+	log "Failed to filter on pedigree information on ${pre_anno_vcf}. Quit now"
+	return 1; }
+
 
 	log "The assembly using is ${assembly}."
 	log "The pedigree file used is ${ped_file}."
 	log "The Family Name of the inspecting family is ${fam_name}."
-	log "The VCF preprocessed for annotation is ${pre_anno_vcf}."
+	log "The VCF preprocessed for annotation is ${ped_filter_vcf}."
 	log "The output folder for annotation results is ${output_dir}"
-
-
 
 	# First annotate gnomAD aggregated frequency and number of homozygous ALT allele carriers
 	# Filter on the allele frequency but first assign inhouse gnomAD AN AC AF data to the variants
 	# Since the archive of the aggregated gnomAD database is too big. The tar file will be uploaded to our google drive and open for download.
-	local gnomAD_tab=${reformat_tab/.tsv/.gnomAD.tsv}
-	add_agg_gnomAD_data \
-	${reformat_tab} \
+	local gnomAD_anno_vcf=${ped_filter_vcf/.vcf/.gnomAD.vcf}
+	anno_agg_gnomAD_data \
+	${ped_filter_vcf} \
 	${threads} \
 	${assembly} \
-	${gnomAD_db_dir} \
-	${gnomAD_tab} || { \
-	log "Failed to add aggregated gnomAD annotation on ${reformat_tab}. Quit now"
+	${gnomAD_chr1_vcf} \
+	${gnomAD_anno_vcf} && \
+	log "Successfully add aggregated gnomAD annotation on ${ped_filter_vcf} and filtered on AF >= 0.05. The result is ${gnomAD_anno_vcf}" || { \
+	log "Failed to add aggregated gnomAD annotation on ${ped_filter_vcf}. Quit now"
 	return 1; }
 
 
-	local lowfreq_tab=${gnomAD_tab/.tsv/.lowfreq.tsv}
-	filter_on_AF_HOMOALT \
-	-i ${gnomAD_tab} \
-	-o ${lowfreq_tab} \
-	--af_cutoff ${af_cutoff} || { \
-	log "Failed to filter on gnomAD annotation on ${gnomAD_tab}. Quit now"
+	# Now we annotate ClinVar variants
+	local clinvar_anno_vcf=${gnomAD_anno_vcf/.vcf/.clinvar.vcf}
+	anno_clinvar_data \
+	${gnomAD_anno_vcf} \
+	${clinvar_vcf} \
+	${clinvar_anno_vcf} || { \
+	log "Failed to add ClinVar annotation on ${gnomAD_anno_vcf}. Quit now"
 	return 1; }
-
-
-	# Now after filtering on the AF and HOMOALT no of variants. We need to filter on the pedigree information. 
-	# Specifically, we only filter out variants carried by healthy parents in homozygous form
-	local pedigree_filtered_tab=${lowfreq_tab/.tsv/.rmfit.tsv}
-	filter_allele_based_on_pedigree_with_py \
-    -i ${lowfreq_tab} \
-    -o ${pedigree_filtered_tab} \
-    -p ${ped_file} \
-    -f ${fam_name} || { \
-	log "Failed to filter on pedigree information on ${lowfreq_tab}. Quit now"
-	return 1; }
-
-
-	# Now we've done the variants filtration
-	local filtered_vcf=${annovar_vcf/.vcf/.filtered.vcf}
-	prepare_vcf_add_varID \
-	${pedigree_filtered_tab} \
-	${assembly} \
-	${filtered_vcf}
-
-
-	# Next we need to perform VEP and SpliceAI and 
 }
 
 
@@ -246,10 +242,10 @@ function preprocess_vcf() {
 	tabix -f -p vcf ${input_vcf/.vcf*/.primary.vcf.gz} || \
 	{ log "Failed to generate a VCF file that only contains records in primary chromosomes"; \
 	  return 1; }
- 
+
 	# First check whether the VCF is using NCBI or UCSC assembly
 	local assembly_version=$(check_vcf_contig_version ${input_vcf/.vcf*/.primary.vcf.gz})
-	if [[ ${assembly_version} == "ncbi" ]]; then
+	if [[ ${assembly_version} =~ "GRCh" ]]; then
 		log "The input vcf is detected to map variants to GRC assemblies instead of UCSC assemblies" && \
 		liftover_from_GRCh_to_hg \
 		${input_vcf/.vcf*/.primary.vcf.gz} \
@@ -260,196 +256,82 @@ function preprocess_vcf() {
 			cp -f ${input_vcf/.vcf*/.primary.vcf.gz} ${input_vcf/.vcf*/.ucsc.vcf.gz}
 		fi
 	fi
-	
+
 	# First sort the input_vcf,
-	# Then normalize the input_vcf with bcftools 
+	# Then normalize the input_vcf with bcftools
 	normalize_vcf ${input_vcf/.vcf*/.ucsc.vcf.gz} ${input_vcf/.vcf*/.norm.vcf.gz} ${ref_genome} $TMPDIR
 
-	# Then filter the variants where DP value less than or equalt to 5
+	# Then filter the variants where DP value less than or equal to 5
 	bcftools filter -i 'FORMAT/DP[*] >= 5' -Oz -o ${input_vcf/.vcf*/.filtered.vcf.gz} ${input_vcf/.vcf/.norm.vcf} && \
 	tabix -f -p vcf ${input_vcf/.vcf*/.filtered.vcf.gz} && \
 	announce_remove_tmps ${input_vcf/.vcf/.norm.vcf} && \
 	announce_remove_tmps ${input_vcf/.vcf*/}*tmp*vcf*
 
-	# Then filter out the variants where no patients in this family has alternative alleles
-	filter_records_with_missingGT_on_pat_vcf \
-	${input_vcf/.vcf*/.filtered.vcf.gz} \
-	${ped_file} \
-	${output_vcf} \
-	${fam_name} && \
+	# Then we add uniq IDs to these variants
+	prepare_vcf_add_varID \
+	${input_vcf/.vcf/.norm.vcf} \
+	${output_vcf} && \
 	tabix -f -p vcf ${output_vcf}
 }
 
 
-function filter_records_with_missingGT_on_pat_vcf {
+
+
+function anno_agg_gnomAD_data () {
 	local input_vcf=${1}
-	local ped_file=${2}
-	local output_vcf=${3}
-	local fam_name=${4}
-
-	log "Input vcf is ${input_vcf}, the pedigree file storing this family's pedigree info is ${ped_file}"
-	local -a patient_IDs=($(awk -F '\t' '$1 == "'${fam_name}'" && $6 == "2" {printf "%s ", $2}' ${ped_file}))
-
-	log "patient IDs are ${patient_IDs[*]}"
-	log "Before filtering the records where patients GT are all ref or null, ${input_vcf} has $(wc -l ${input_vcf} | awk '{printf $1}') rows."
-	
-    filter_vcf_by_GT \
-	${input_vcf} \
-	"$(echo ${patient_IDs[*]} | awk 'BEGIN{FS=OFS="\t";} {gsub(" ", ","); printf "%s", $0}')" \
-	${output_vcf} && \
-	display_vcf ${output_vcf} && \
-	log "Finish filtering the records where patients GT are all ref or null. ${input_vcf} has $(wc -l ${input_vcf} | awk '{printf $1}') rows." $'\n\n'
-}
-
-
-function remove_redundant_AF_cols () {
-	# This function is specifically designed for gnomAD211 and gnomAD312 databases from ANNOVAR
-	local annovar_table=${1}
-	local output_table=${2}
-	local -a del_cols=( "AF_popmax" "AF_male" "AF_female" "AF_raw" "AF_afr" "AF_sas" "AF_amr" "AF_eas" "AF_nfe" "AF_fin" "AF_asj" "AF_oth" "non_topmed_AF_popmax" "non_neuro_AF_popmax" "non_cancer_AF_popmax" "controls_AF_popmax" )
-	local -a del_col_ids
-
-	# Delete the second AFs and rename the AF to gnomAD_exome_ALL and gnomAD_genome_ALL separately 
-	for del_col in "${del_cols[@]}"; do
-		local indices=$(awk -F '\t' 'NR == 1{for (i=1;i<=NF;i++) {if ($i == "'${del_col}'") printf "%s,", i;}}' ${annovar_table})
-		del_col_ids=${del_col_ids}${indices}
-	done
-
-	log "The indices of the tobe deleted columns are ${del_col_ids}" && \
-	display_table ${annovar_table} && \
-	cut -f ${del_col_ids::-1} --complement ${annovar_table} | \
-	mawk 'BEGIN{FS=OFS="\t";}
-		  NR == 1{count = 0; \
-				for (i=1;i<=NF;i++) { \
-					if ($i == "AF") { \
-						count++; \
-						if (count == 1) { \
-							$i = "gnomAD_exome_ALL"; } \
-						else if (count == 2) { \
-							$i = "gnomAD_genome_ALL"; } \
-					} \
-				} \
-				print; } \
-		  NR > 1 {print;}' > ${output_table} && \
-	display_table ${output_table}
-}
-
-
-function reformat_annovar_table () {
-	local annovar_table=${1}
-	local tmp_table=${annovar_table::-4}.tmp.tsv
-
-	remove_redundant_AF_cols \
-	${annovar_table} \
-	${tmp_table}
-
-	# Then using an in-house python script to reformat the table to achieve these goals:
-	# 1. Use VCF coordinates and REF/ALT alleles
-	# 2. Split the FORMAT fields to seperate columns for each sample in this family
-	# 3. Update the HGNC gene symbol
-	python3 ${SCRIPT_DIR}/reformat_annovar_table.py \
-	-at ${tmp_table} \
-	-av ${annovar_vcf} \
-	-ped ${ped_file} \
-	-ot ${annovar_table::-4}.reformat.tsv \
-	-fam ${fam_name} && \
-	update_HGNC_symbol \
-    -i ${annovar_table::-4}.reformat.tsv && \
-    display_table ${annovar_table::-4}.reformat.tsv
-}
-
-
-function add_agg_gnomAD_data () {
-	local anno_table=${1}
 	local threads=${2}
 	local assembly=${3}
-	local gnomAD_db_dir=${4}
-	local output_table=${5}
+	local gnomAD_vcf_chr1=${4}
+	local output_vcf=${5}
 
 	if [[ -z ${output_table} ]]; then
 		local output_table=${anno_table::-4}.gnomAD.tsv
 	fi
 
-	python3 ${SCRIPT_DIR}/annotate_agg_gnomAD.py \
-	-v ${anno_table} \
-	-a "${assembly}" \
-	-t ${threads} \
-	-d ${gnomAD_db_dir} \
-	-o ${output_table} && \
-	display_table ${output_table}
+	local -a main_chroms=( 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 X Y )
+	# Step 1: Split the input vcf to alt-contig-variants file and main-contig-variants file
+	bcftools view -r $(echo ${main_chroms[@]} | tr ' ' ',') -Ou ${input_vcf} | \
+	bcftools sort -Oz -o ${input_vcf/.vcf*/.primary.vcf.gz} && \
+	tabix -f -p vcf ${input_vcf/.vcf*/.primary.vcf.gz} && \
+	bcftools isec -C -Ou ${input_vcf} ${input_vcf/.vcf*/.primary.vcf.gz} | \
+	bcftools sort -Oz -o ${input_vcf/.vcf*/.alt.vcf.gz} && \
+	tabix -f -p vcf ${input_vcf/.vcf*/.alt.vcf.gz}
+
+	# Step 2: Further split the main-contig-variants file to multiple single-contig variant files
+	for chr in "${main_chroms[@]}"; do
+		bcftools view -r chr${chr} ${input_vcf} -Oz -o ${input_vcf/.vcf*/.chr${chr}.vcf.gz}
+	done
+
+	# Step 3: Perform annotation with bcftools annotate to add the INFO fields from gnomAD vcfs to the input splitted vcfs
+	export gnomAD_vcf_chr1
+	parallel -j ${threads} "bcftools annotate -a ${gnomAD_vcf_chr1/.chr1.vcf.bgz/}.chr{}.vcf.bgz -c CHROM,POS,REF,ALT,.INFO/AC_joint,.INFO/AN_joint,.INFO/AF_joint,.INFO/nhomo_joint_XX,.INFO/nhomo_joint_XY -Oz -o ${input_vcf/.vcf*/}.chr{}.gnomAD.vcf.gz ${input_vcf/.vcf*/}.chr{}.vcf.gz" ::: "${main_chroms[@]}"
+
+	# Merge the annotated vcfs together (including the alt-contig-variants file) to form into the output vcf
+	# We can filter on AF here
+	bcftools concat -Ou ${input_vcf/.vcf*/.alt.vcf.gz} ${input_vcf/.vcf*/.chr*.gnomAD.vcf.gz} | \
+	bcftools sort -Ou - | \
+	bcftools filter -e 'INFO/AF_joint >= 0.05' -Oz -o ${output_vcf} && \
+	tabix -f -p vcf ${output_vcf}
 }
 
 
 
-function filter_on_AF_HOMOALT () {
-	local input_table
-	local output_table
-	local af_cutoff
-	local excl_tags   # Should be the filter tag, if two or more are included, then use comma to separate them
-	local af_cols	# If two or more are included, then use comma to separate them
-	
-	local TEMP
-	log "Raw input arguments: $#"
-    TEMP=$(getopt -o i:o: --long input_table:,output_table:,af_cutoff:,excl_tags:,af_cols: -- "$@")
+function anno_clinvar_data () {
+	local input_vcf=${1}
+	local clinvar_vcf=${2}
+	local output_vcf=${3}
 
-	log "TEMP: $TEMP"
-    # if getopt failed, return an error
-    [[ $? != 0 ]] && return 1
-
-    eval set -- "$TEMP"
-
-    while true; do
-        case "$1" in
-            -i|--input_table)
-				input_table="$2"
-                shift 2
-                ;;
-			-o|--output_table)
-				output_table="$2"
-				shift 2
-				;;
-			--af_cutoff)
-				af_cutoff="$2"
-				shift 2
-				;;
-			--excl_tags)
-				excl_tags="$2"
-				shift 2
-				;;
-			--af_cols)
-				af_cols="$2"
-				shift 2
-				;;
-			--)
-                shift
-                break
-                ;;
-            *)
-                log "Invalid option"
-                return 2
-                ;;
-        esac
-    done
-
-	if [[ -z ${output_table} ]]; then
-		local output_table=${input_table::-4}.lowfreq.tsv
+	if [[ -z ${output_vcf} ]]; then
+		local output_vcf=${input_vcf/.vcf/.clinvar.vcf}
 	fi
 
-	if [[ -z ${af_cutoff} ]]; then
-		local af_cutoff="0.05"
-	fi
-
-	if [[ -z ${af_cols} ]]; then
-		local af_cols="gnomAD_exome_ALL,gnomAD_genome_ALL,AF_gnomAD_Controls"
-	fi
-
-	python3 ${SCRIPT_DIR}/filter_on_AF_and_nhomoalt.py \
-	-i ${input_table} \
-	-o ${output_table} \
-	-c ${af_cutoff} \
-	-l ${af_cols} && \
-	display_table ${output_table}
+	bcftools annotate -a ${clinvar_vcf} -c CHROM,POS,REF,ALT,.INFO/CLNDN,.INFO/CLNHGVS,.INFO/CLNREVSTAT,.INFO/CLNSIG,.INFO/GENEINFO -Ou ${input_vcf} | \
+	bcftools sort -Oz -o ${output_vcf} && \
+	tabix -f -p vcf ${output_vcf} && \
+	display_vcf ${output_vcf}
 }
+
+
 
 
 function update_HGNC_symbol {
@@ -530,6 +412,7 @@ function filter_allele_based_on_pedigree_with_py {
 	display_vcf ${output_vcf}
     log "Finish filtering the records where control sample has homozygous or hemizygous GTs or the records no patients carrying the variant allele."$'\n\n'
 }
+
 
 
 function prepare_vcf_add_varID {

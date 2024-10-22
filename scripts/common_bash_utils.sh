@@ -1,7 +1,22 @@
 #!/usr/bin/env bash
-
-
 # This script is just a function pool, used to store commonly shared functions
+
+# Function to read YAML configuration
+function read_yaml() {
+    local yaml_file=$1
+    local key=$2
+    yq eval ".$key" "$yaml_file"
+}
+
+# Function to update YAML configuration
+function update_yaml() {
+    local yaml_file=$1
+    local key=$2
+    local value=$3
+    yq eval ".$key = \"$value\"" -i "$yaml_file"
+}
+
+
 function log() {
     local msg="$1"
     local script_name="${BASH_SOURCE[1]##*/}"
@@ -46,10 +61,10 @@ function display_table {
         local input=${1}
     fi
 
-    
+
     log "${1} has ${row_num} rows and ${col_num} columns. It looks like:"
     if [[ ${rows} -le 0 ]]; then
-        tsv-pretty -u ${del_arg} -m 5000 -l 200 -a ${input} >&2 2> /dev/null 
+        tsv-pretty -u ${del_arg} -m 5000 -l 200 -a ${input} >&2 2> /dev/null
     else
         tsv-pretty -u ${del_arg} -m 5000 -l 200 -a ${input} | \
         head -n ${rows} - >&2 2> /dev/null || >&2 echo ""
@@ -113,11 +128,11 @@ function filter_vcf_by_GT() {
 	elif [[ ${output_vcf} =~ \.bcf ]]; then
 		local place_holder="bcf"
 	else
-		log "Cannot identify the specified output VCF format: ${output_vcf}" 
+		log "Cannot identify the specified output VCF format: ${output_vcf}"
 	fi
 
     printf "%s\n" "${sample_array[@]}" > ${tmp_sample_list}
-    
+
 	# First extract the subset samples to a vcf file and make sure all samples are not missing or homo ref
 	bcftools view -S ${tmp_sample_list} -i 'GT="alt"' ${vcf_file} -Ou | \
 	bcftools sort -Oz -o ${output_vcf/.${place_holder}*/.subset.vcf.gz} && \
@@ -200,7 +215,7 @@ function consistent_vcf_format () {
 	local final_output_vcf=${output_vcf/.${ori_output_format}*/${op_suffix}}
 	bcftools sort ${output_vcf} | \
 	bcftools view -O${op_format} --no-version -o ${final_output_vcf}
-	
+
 	if [[ ${final_output_vcf} =~ \.vcf\.gz$ ]]; then
 		tabix -f -p vcf ${final_output_vcf}
 	fi
@@ -271,10 +286,10 @@ function check_gz_vcf {
 
     if check_vcf_format ${input_vcf}; then  # Check input_vcf format
         log "${input_vcf} has solid vcf format. Check whether contains enough record number"
-        if [ $(zcat ${input_vcf} | mawk '$0 !~ /^#/{print;}' | wc -l | awk '{print $1}') -ge ${expected_lines} ]; then  # Check input_vcf content
+        if [ $(bcftools query -f '%CHROM:%POS:%REF:%ALT\n' ${input_vcf} | wc -l | awk '{print $1}') -ge ${expected_lines} ]; then  # Check input_vcf content
             log "${input_vcf} has enough records."
         else
-            log "${input_vcf} has $(zcat ${input_vcf} | mawk '$0 !~ /^#/{print;}' | wc -l | awk '{print $1}') valid lines while expected to have ${expected_lines} lines."
+            log "${input_vcf} has $(bcftools query -f '%CHROM:%POS:%REF:%ALT\n' ${input_vcf} | wc -l | awk '{print $1}') valid lines while expected to have ${expected_lines} lines."
             return 30
         fi
     else
@@ -291,10 +306,10 @@ function check_plain_vcf {
 
     if check_vcf_format ${input_vcf}; then
         log "${input_vcf} has solid vcf format. Check whether contains enough record number"
-        if [ $(mawk '$0 !~ /^#/{print;}' ${input_vcf} | wc -l | awk '{print $1}') -ge ${expected_lines} ]; then
+        if [ $(bcftools query -f '%CHROM:%POS:%REF:%ALT\n' ${input_vcf} | wc -l | awk '{print $1}') -ge ${expected_lines} ]; then
             log "${input_vcf} has enough records."
         else
-            log "${input_vcf} has $(mawk '$0 !~ /^#/{print;}' ${input_vcf} | wc -l | awk '{print $1}') valid lines while expected to have ${expected_lines} lines."
+            log "${input_vcf} has $(bcftools query -f '%CHROM:%POS:%REF:%ALT\n' ${input_vcf} | wc -l | awk '{print $1}') valid lines while expected to have ${expected_lines} lines."
             return 30
         fi
     else
@@ -343,12 +358,12 @@ function check_vcf_format {
 		log "Input VCF file ${input_vcf} seems not exist"
 		return 10
 	fi
-    
+
 	bcftools view ${input_vcf} > /dev/null || { \
 	log "The input VCF file ${input_vcf} has some format issue detected by bcftools. Quit this function with error."$'\n'; \
 	return 10; }
 
-    # If VCF file does not have variant format issues. Check if it has meaningless variant records. 
+    # If VCF file does not have variant format issues. Check if it has meaningless variant records.
     filter_out_noalleles ${input_vcf}
 }
 
@@ -418,13 +433,13 @@ function contain_only_variants {
 }
 
 
-function check_vcf_multiallelics { 
+function check_vcf_multiallelics {
     local input_vcf=${1}
 
     local multi_lines=$( \
     bcftools query -f '%ALT\n' ${input_vcf} | \
     mawk '$1 ~ /,/{print;}' | \
-    wc -l ) 
+    wc -l )
 
     if [[ ${multi_lines} -gt 0 ]]; then
         log "${input_vcf} has ${multi_lines} lines of multi-allelic records, by default return false"
@@ -497,115 +512,16 @@ function normalize_vcf () {
 	local input_vcf=${1}
 	local output_vcf=${2}
 	local ref_genome=${3}
-	local tmp_dir=${4}
 
-	log "Try to normalize the vcf file ${input_vcf}, and let the temporary folder set as ${tmp_dir}"
 
 	bcftools norm -m -both -f ${ref_genome} --atom-overlaps "." --keep-sum AD -a ${input_vcf} | \
     bcftools norm -d exact - | \
     bcftools view -i 'ALT!="*"' - | \
 	bcftools sort -Oz -o ${output_vcf/.vcf*/.vcf.gz} && \
 	consistent_vcf_format ${output_vcf} ${output_vcf/.vcf*/.vcf.gz}
-	
+
 	display_vcf ${output_vcf}
 	>&2 echo ""  # Append a new line to the end of the logs from this function
-}
-
-
-function install_annovar () {
-	local assembly=""
-    local parent_dir=""
-	local download_url=""
-
-    local TEMP
-    TEMP=$(getopt -o a:p:u: --long assembly:,parent_dir:,download_url: -- "$@")
-
-    # if getopt failed, return an error
-    [[ $? != 0 ]] && return 1
-
-    eval set -- "$TEMP"
-
-    while true; do
-        case "$1" in
-            -a|--assembly)
-                local assembly="$2"
-                shift 2
-                ;;
-            -p|--parent_dir)
-                local parent_dir="$2"
-                shift 2
-                ;;
-			-u|--download_url)
-                local download_url="$2"
-                shift 2
-                ;;	
-            --)
-                shift
-                break
-                ;;
-            *)
-                echo "Invalid option"
-                return 2
-                ;;
-        esac
-    done
-
-	wget -O ${parent_dir}/annovar_latest.tar.gz ${download_url} && \
-	tar -xvzf ${parent_dir}/annovar_latest.tar.gz && \
-	local annovar_dir=${parent_dir}/annovar && \
-	local table_annovar=${annovar_dir}/table_annovar.pl
-	local main_annovar=${annovar_dir}/annotate_variation.pl
-
-	# Start download databases, several databases are required for downstream analysis
-	# Clinvar records (clinvar20221231)
-	# refGene annotation ( refGene )
-	# gnomAD_exome, gnomAD_genome (optional, can replace these annotations with annotations from an in-house prepared gnomAD dataset)
-	# FATHMM, PROVEAN, MetaSVM, MetaLR, DANN ( combined in dbnsfp42a )
-
-	if [[ -z ${assembly} ]]; then
-		local -a assemblies=( "hg19" "hg38" )
-		for assembly in "${assemblies[@]}"; do
-			download_basic_annovar_resources ${main_annovar} ${assembly}
-		done
-	else
-		download_basic_annovar_resources ${main_annovar} ${assembly}
-	fi
-
-	# These annotations are acquired elsewhere
-	# Protein domain information, which will be added to the data directory in the acmg_auto github (from Prot2hg database, now the URL www.prot2hg.com not accessible)
-	# CADD
-	# gnomAD v2 and v3 combined
-	# ClinVAR	
-}
-
-
-function download_basic_annovar_resources () {
-	local annovar_pl=${1}
-	local assembly=${2}
-	local annovar_dir=$(dirname ${annovar_pl})
-
-	# refGene
-	# dbnsfp42a
-	# clinvar20221231
-	# gnomad_exome
-	# gnomad_genome
-
-	${annovar_pl} -downdb refGene ${annovar_dir}/humandb -buildver ${assembly} && \
-	${annovar_pl} -downdb dbnsfp42a ${annovar_dir}/humandb -buildver ${assembly} -webfrom annovar && \
-	${annovar_pl} -downdb gerp++gt2 ${annovar_dir}/humandb -buildver ${assembly} -webfrom annovar && \
-	${annovar_pl} -downdb clinvar_20221231 ${annovar_dir}/humandb -buildver ${assembly}
-
-	if [[ ${assembly} == "hg19" ]]; then
-		${annovar_pl} -downdb gnomad211_exome ${annovar_dir}/humandb -buildver ${assembly} -webfrom annovar && \
-		${annovar_pl} -downdb gnomad211_genome ${annovar_dir}/humandb -buildver ${assembly} -webfrom annovar
-	elif [[ ${assembly} == "hg38" ]]; then
-		${annovar_pl} -downdb gnomad211_exome ${annovar_dir}/humandb -buildver ${assembly} -webfrom annovar && \
-		${annovar_pl} -downdb gnomad312_genome ${annovar_dir}/humandb -buildver ${assembly} -webfrom annovar
-	else
-		log "Failed to have a valid assembly version: ${assembly}"
-	fi
-
-	log "Succesfully download refGene, dbnsfp42a, clinvar20221231, gnomad_exome, gnomad_genome to the $(dirname ${annovar_pl})/humandb for assembly ${assembly}"
 }
 
 
@@ -621,7 +537,7 @@ function check_table_column {
     local column=${2}
 
     if [[ ! -f ${input_table} ]]; then
-        >&2 echo "Line "${LINENO}": In function ${FUNCNAME}: $(timestamp): Input table ${input_table} does not even exist."
+        log "Input table ${input_table} does not even exist."
         false;
     fi
 
@@ -633,7 +549,7 @@ function check_table_column {
     elif [[ ${#col_inds[@]} -eq 0 ]]; then
         false;
     elif [[ ${#col_inds[@]} -gt 1 ]]; then
-        >&2 echo "Line "${LINENO}": In function ${FUNCNAME}: $(timestamp): Multiple columns have the same column label ${column}. The column indices are: ${col_inds[*]}"
+        log "Multiple columns have the same column label ${column}. The column indices are: ${col_inds[*]}"
         echo "${col_inds[*]}"
         true;
     fi
@@ -659,7 +575,7 @@ function check_vcf_contig_version () {
 }
 
 
-function check_vcf_contig_size { 
+function check_vcf_contig_size {
     local input_vcf=${1}
     local contig_name=${2}
 
@@ -683,13 +599,13 @@ function check_vcf_assembly_version () {
 	fi
 
 	local chr1_size=$(check_vcf_contig_size ${input_vcf} "chr1")
-	
+
 	local random_contig_presence=$(bcftools view -h ${input_vcf} | \
 					  			   awk -F '=' '$1 ~ /##contig/ && $3 ~ /chr7_gl000195_random/{print;}' | wc -l)
 
 	local alt_contig_presence=$(bcftools view -h ${input_vcf} | \
 					  			   awk -F '=' '$1 ~ /##contig/ && $3 ~ /chr6_GL000256v2_alt/{print;}' | wc -l)
-	
+
 	if [[ ${chr1_size} == "249250621" ]]; then
 		echo "hg19"
 	elif [[ ${chr1_size} == "248956422" ]]; then
@@ -809,6 +725,173 @@ function check_return_code {
     else
         log ": The last step finished properly. Continue";
     fi
+}
+
+
+
+function crossmap_liftover_hg382hg19 {
+    local chain_file=""
+    local input_vcf=""
+    local output_vcf=""
+    local hg19_fasta=""
+
+    local TEMP
+    TEMP=$(getopt -o c:i:o::f: --long help,chain_file:,input_vcf:,output_vcf::,hg19_fasta: -- "$@")
+
+    if [[ $? != 0 ]]; then return 1; fi
+
+    eval set -- "$TEMP"
+
+    while true; do
+        case "$1" in
+            -h|--help)
+                echo "Usage: crossmap_liftover_hg382hg19 [options]"
+                echo "Options:"
+                echo "  -c, --chain_file        Path to the chain file for liftover"
+                echo "  -i, --input_vcf         Path to the input VCF file"
+                echo "  -o, --output_vcf        Path to the output VCF file (default: <input_vcf>.hg19.vcf)"
+                echo "  -f, --hg19_fasta        Path to the hg19 fasta file"
+                return 0
+                ;;
+            -c|--chain_file)
+                chain_file="$2"
+                shift 2
+                ;;
+            -i|--input_vcf)
+                input_vcf="$2"
+                shift 2
+                ;;
+            -o|--output_vcf)
+                output_vcf="$2"
+                shift 2
+                ;;
+            -f|--hg19_fasta)
+                hg19_fasta="$2"
+                shift 2
+                ;;
+            --)
+                shift
+                break
+                ;;
+            *)
+                echo "Invalid option: $1" >&2
+                return 1
+                ;;
+        esac
+    done
+
+
+    if [[ -z ${output_vcf} ]]; then
+        local output_vcf=${input_vcf/.vcf/.hg19.vcf}
+    fi
+
+    if [[ ! ${CONDA_PREFIX} =~ acmg ]]; then
+        mamba activate acmg
+        local activated=1
+    fi
+
+    CrossMap.py vcf \
+    ${chain_file} \
+    ${input_vcf} \
+    ${hg19_fasta} \
+    ${output_vcf} && \
+    display_vcf ${output_vcf}
+
+    [[ ${activated} -eq 1 ]] && mamba deactivate
+}
+
+
+
+function bcftools_concatvcfs {
+    local OPTIND v o e s a t m
+    while getopts v:o::e::s::a::t::m:: args
+    do
+        case ${args} in
+            v) local input_vcfs=$OPTARG ;;
+            o) local merged_vcf=$OPTARG ;;
+            e) local ignore_error=$OPTARG ;;
+            a) local other_args=$OPTARG ;;
+            t) local threads=$OPTARG ;;
+            s) local samples=$OPTARG ;;  # Should be delimited by comma
+            m) local tmp_dir=$OPTARG ;;
+            *) echo "No argument passed, Pls at least pass sample path." ;;
+        esac
+    done
+
+    if [[ -z ${tmp_dir} ]]; then
+        local tmp_dir=${TMPDIR}
+    fi
+
+    if [[ ${input_vcfs}  =~ \/ ]] && [[ ! ${input_vcfs} =~ \.vcf(\.[b]*gz)*$ ]] && [[ ! ${input_vcfs} =~ , ]]; then
+        local -a vcfs=($(awk '{printf "%s ", $1;}' < ${input_vcfs}))
+    else
+        local -a vcfs=($(echo ${input_vcfs} | awk 'BEGIN{FS=",";} {for(i=1;i<=NF;i++) printf $i" ";}'))
+    fi
+
+    if [[ -z ${threads} ]]; then
+        local threads=1
+    fi
+
+    log "the vcfs are ${vcfs[*]}"
+    log "The merged vcf is ${merged_vcf}"
+    # Check file existence.
+    if [[ -z ${ignore_error} ]]; then
+        local -a invalid_vcfs
+        for vcf in "${vcfs[@]}"; do
+            if check_vcf_validity ${vcf} 1 2> /dev/null; then
+                log "To be merged ${vcf} is valid."
+            else
+                log "${vcf} not existed or corrupted. Run check_vcf_validity ${vcf} to see for yourself"
+                invalid_vcfs+=( ${vcf} )
+            fi
+            if [[ ${vcf} =~ \.vcf$ ]]; then
+                log "Since ${vcf} is plain text format and bcftools -f need to use bgzipped vcfs, we compress the vcf and index it with tabix."
+                bcftools sort --temp-dir ${tmp_dir} -Oz -o ${vcf}.gz ${vcf} && tabix -f -p vcf ${vcf}.gz && \
+                ls -lh ${vcf}.gz
+            fi
+            if [[ ! -z ${samples} ]]; then
+                bcftools view -s "${samples}" -Oz -o ${vcf/.vcf*/.samp.vcf.gz} ${vcf/.vcf*/.vcf.gz} && \
+                ls -lht ${vcf/.vcf*/.samp.vcf.gz} && \
+                check_vcf_validity ${vcf/.vcf*/.samp.vcf.gz} 1 && \
+                mv ${vcf/.vcf*/.samp.vcf.gz} ${vcf/.vcf*/.vcf.gz} && \
+                tabix -f -p vcf ${vcf/.vcf*/.vcf.gz}
+            fi
+        done
+
+        if [[ ${#invalid_vcfs[@]} -gt 0 ]]; then
+            log "The following vcfs are invalid: ${invalid_vcfs[*]}"
+            return 1
+        fi
+    fi
+
+    local tmp_file_list=${tmp_dir}/$(randomID).lst
+    echo "${vcfs[*]}" | awk -F '\t' 'BEGIN{RS=" ";} length($1) > 0{gsub(/\n$/, ""); if ($1 ~ /\.gz$/) printf "%s\n", $1; else printf "%s.gz\n", $1;}' > ${tmp_file_list}
+    log "Here is the temp list file storing the paths of to be concat vcfs:"
+    ls -lh ${tmp_file_list}
+    cat ${tmp_file_list}
+
+    if [[ ${merged_vcf} =~ \.vcf$ ]]; then
+        local plain_merged=${merged_vcf}
+        local merged_vcf=${merged_vcf}.gz
+    fi
+
+    if [[ $(cat ${tmp_file_list} | wc -l) -eq 1 ]]; then
+        cp -f $(cat ${tmp_file_list}) ${merged_vcf}
+    else
+        # If using file list for input a list of vcfs, each one of them need to be bgzipped and tabix indexed
+        bcftools concat -o ${merged_vcf} ${other_args} -a --threads ${threads} -d exact -Oz -f ${tmp_file_list} && \
+        tabix -f -p vcf ${merged_vcf} && \
+        bcftools sort --temp-dir ${tmp_dir} -o ${merged_vcf/.vcf.gz/.sorted.vcf.gz} -Oz ${merged_vcf} && \
+        mv ${merged_vcf/.vcf.gz/.sorted.vcf.gz} ${merged_vcf}
+    fi
+
+    if [[ ! -z ${plain_merged} ]]; then
+        gunzip -c ${merged_vcf} > ${plain_merged}
+    else
+        tabix -f -p vcf ${merged_vcf}
+    fi
+
+    display_table ${merged_vcf} 20
 }
 
 

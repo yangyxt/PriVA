@@ -1,0 +1,7 @@
+host: yangyxt-OptiPlex-7090
+Building DAG of jobs...
+MissingInputException in rule preprocess_vcf in file /home/yangyxt/git_repos/acmg_auto/Snakefile, line 32:
+Missing input files for rule preprocess_vcf:
+    output: results/Family1.preprocessed.vcf.gz
+    affected files:
+        data/reference/ucsc.hg38.fasta

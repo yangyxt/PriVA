@@ -1,0 +1,20 @@
+# config.yaml
+
+# Below we specify the conda env yml file in relative path
+conda_env_yaml: "acmg_conda.yml"
+
+# Below we specify the input vcf file in absolute paths
+input_vcf: "/home/yangyxt/git_repos/acmg_auto/data/test_example/TEST_FAM.vcf.gz"
+ped_file: "/home/yangyxt/git_repos/acmg_auto/data/test_example/TEST_FAM.ped"
+fam_name: "Family1"
+assembly: "hg38"
+ref_genome: "/home/yangyxt/git_repos/acmg_auto/data/reference/ucsc.hg38.fasta"
+output_dir: "/home/yangyxt/git_repos/acmg_auto/results"
+threads: 8
+af_cutoff: 0.05
+gnomad_vcf_dir: "/home/yangyxt/git_repos/acmg_auto/data/gnomad"
+clinvar_vcf: "/home/yangyxt/git_repos/acmg_auto/data/clinvar/clinvar.vcf.gz"
+vep_cache_dir: "/home/yangyxt/Caches/ensembl-vep"
+vep_plugins_dir: "/home/yangyxt/Tools/VEP_plugins"
+vep_plugins_cachedir: "/home/yangyxt/Caches/VEP_plugin_caches"
+script_dir: "/home/yangyxt/git_repos/acmg_auto/scripts"

@@ -736,7 +736,7 @@ function crossmap_liftover_hg382hg19 {
     local hg19_fasta=""
 
     local TEMP
-    TEMP=$(getopt -o c:i:o::f: --long help,chain_file:,input_vcf:,output_vcf::,hg19_fasta: -- "$@")
+    TEMP=$(getopt -o hc:i:o::f: --long help,chain_file:,input_vcf:,output_vcf::,hg19_fasta: -- "$@")
 
     if [[ $? != 0 ]]; then return 1; fi
 

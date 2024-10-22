@@ -496,6 +496,82 @@ function gnomAD_install() {
 }
 
 
+function gnomAD_liftover_per_chromosome() {
+    local hg38_vcf=${1}
+    local output_dir=${2}
+    local chain_file=${3}
+    local hg19_fasta=${4}
+    local hg19_vcf_name=$(basename ${hg38_vcf/.vcf*/.hg19.vcf.gz}) # make sure the suffix is .vcf.gz instead of .vcf or .vcf.bgz
+
+    local chrom=$(basename ${hg38_vcf/.vcf*/} | awk -F '.' '{print $NF;}')
+
+    local hg19_vcf=${output_dir}/${hg19_vcf_name}
+
+    crossmap_liftover_hg382hg19 \
+    --chain_file ${chain_file} \
+    --input_vcf ${hg38_vcf} \
+    --output_vcf ${hg19_vcf/.${chrom}/.mixed} \
+    --hg19_fasta ${hg19_fasta} && \
+    display_vcf ${hg19_vcf} || \
+    { log "Failed to liftover the gnomAD v4.1 VCF file from hg38 to hg19 assembly"; return 1; }
+
+    # Now we need to split the VCF file by chromosome as some variants from different chromosomes are mixed in the result hg19 VCF file
+    local -a hg19_chrs=($(bcftools query -f '%CHROM\n' ${hg19_vcf} | sort - | uniq - ))
+
+    for chr in "${hg19_chrs[@]}"; do
+        if [[ ${chr} == "${chrom}" ]]; then
+            bcftools view -Oz -o ${hg19_vcf} ${hg19_vcf/.${chrom}/.mixed} --include 'CHROM="${chr}"'
+        else
+            bcftools view -Oz -o ${hg19_vcf/.${chrom}/.${chr}} ${hg19_vcf/.${chrom}/.mixed} --include 'CHROM="${chr}"'
+        fi
+    done
+}
+
+
+
+function gnomAD_liftover() {
+    local hg38_vcf_chr1=${1}
+    local chain_file=${2}
+    local hg19_fasta=${3}
+    local threads=${4}
+
+    if [[ -z ${threads} ]]; then
+        local threads=4
+    fi
+
+    local basename_hg38_vcf=${hg38_vcf_chr1/.chr1*/}
+    local suffix_hg38_vcf=$(basename ${hg38_vcf_chr1/*.chr1./})
+
+    local hg19_dir=$(dirname ${hg38_vcf_chr1})/hg19
+    local -a hg38_chrs=( "chr1" "chr2" "chr3" "chr4" "chr5" "chr6" "chr7" "chr8" "chr9" "chr10" "chr11" "chr12" "chr13" "chr14" "chr15" "chr16" "chr17" "chr18" "chr19" "chr20" "chr21" "chr22" "chrX" "chrY" )
+
+    for chr in "${hg38_chrs[@]}"; do
+        mkdir -p ${hg19_dir}/${chr}
+    done
+
+    parallel -j ${threads} --dry-run \
+    gnomAD_liftover_per_chromosome \
+    ${basename_hg38_vcf}.chr{}.${suffix_hg38_vcf} \
+    ${hg19_dir}/{} \
+    ${hg19_fasta} \
+    ${chain_file} ::: "${hg38_chrs[@]}" && \
+    parallel -j ${threads} \
+    gnomAD_liftover_per_chromosome \
+    ${basename_hg38_vcf}.chr{}.${suffix_hg38_vcf} \
+    ${hg19_dir}/{} \
+    ${hg19_fasta} \
+    ${chain_file} ::: "${hg38_chrs[@]}"
+
+    for chr in "${hg38_chrs[@]}"; do
+        local tmp_vcfs=($(ls ${hg19_dir}/*/*${chr}*.vcf.gz))
+        local hg38_vcf=${hg38_vcf_chr1/.chr1/.${chr}}
+        local hg19_vcf=${hg38_vcf/.${chr}/.hg19.${chr}}
+        bcftools_concatvcfs -v "${tmp_vcfs[@]}" -o ${hg19_vcf}
+    done
+}
+
+
+
 function ClinVar_VCF_deploy() {
     local CACHEDIR=${1}
     local assembly_version=${2}

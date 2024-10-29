@@ -1,50 +1,48 @@
-#!/usr/bin/env bash
-SELF_SCRIPT=$(readlink -f "$0")
-SELF_DIR=$(dirname ${SELF_SCRIPT})
-source ${SELF_DIR}/common_bash_utils.sh
+#! /usr/bin/env bash
+source $(dirname $(realpath ${BASH_SOURCE[0]}))/common_bash_utils.sh
 
 function conda_install_vep() {
     local env_yaml=${1}
 
-	# Extract the env name from the env.yaml file
-	local env_name=$(head -1 ${env_yaml} | awk -F ': ' '{print $2;}')
-	log "The environment name to-be setup according to the env.yaml ${env_yaml} file is ${env_name}"
+    # Extract the env name from the env.yaml file
+    local env_name=$(head -1 ${env_yaml} | awk -F ': ' '{print $2;}')
+    log "The environment name to-be setup according to the env.yaml ${env_yaml} file is ${env_name}"
 
-	# Test if mamba is available
-	if ! command -v mamba &> /dev/null; then
-		log "mamba is not installed, please install mamba first"
-		return 1
-	fi
+    # Test if mamba is available
+    if ! command -v mamba &> /dev/null; then
+        log "mamba is not installed, please install mamba first"
+        return 1
+    fi
 
-	# Before do anything, we can check whether the env_name is already installed and check several key packages in the env if already installed
-	if [[ $(mamba env list | grep ${env_name}) =~ ${env_name} ]]; then
-		log "The environment ${env_name} is already installed"
-		local skip_env_creation=1
-	else
-		log "The environment ${env_name} is not installed"
-		local skip_env_creation=0
-	fi
+    # Before do anything, we can check whether the env_name is already installed and check several key packages in the env if already installed
+    if [[ $(mamba env list | grep ${env_name}) =~ ${env_name} ]]; then
+        log "The environment ${env_name} is already installed"
+        local skip_env_creation=1
+    else
+        log "The environment ${env_name} is not installed"
+        local skip_env_creation=0
+    fi
 
-	# Test if several key packages are installed
-	if [[ ${skip_env_creation} -eq 1 ]]; then
-		mamba activate ${env_name}
-		# The to be checked packages are: ensembl-vep, perl-bio-procedural, perl-bioperl
-		if [[ $(mamba list | grep ensembl-vep) =~ ensembl-vep ]] && \
-		   [[ $(mamba list | grep perl-bio-procedural) =~ perl-bio-procedural ]] && \
-		   [[ $(mamba list | grep perl-bioperl) =~ perl-bioperl ]]; then
-			log "The key packages are already installed in the environment ${env_name}"
-		else
-			log "The key packages are not installed in the environment ${env_name}"
-			return 1
-		fi
-	fi
+    # Test if several key packages are installed
+    if [[ ${skip_env_creation} -eq 1 ]]; then
+        mamba activate ${env_name}
+        # The to be checked packages are: ensembl-vep, perl-bio-procedural, perl-bioperl
+        if [[ $(mamba list | grep ensembl-vep) =~ ensembl-vep ]] && \
+           [[ $(mamba list | grep perl-bio-procedural) =~ perl-bio-procedural ]] && \
+           [[ $(mamba list | grep perl-bioperl) =~ perl-bioperl ]]; then
+            log "The key packages are already installed in the environment ${env_name}"
+        else
+            log "The key packages are not installed in the environment ${env_name}"
+            return 1
+        fi
+    fi
 
     # You need to separately install the ensembl-vep and perl-bio-procedural packages
     # because Bio::Perl module is migrated from perl-bioperl to perl-bio-procedural since perl-bioperl 1.7.3
-	# Or you can directly install the env from our env.yaml file
-	if [[ ${skip_env_creation} -eq 0 ]]; then
-		mamba env create -p ${CONDA_PREFIX} -f ${env_yaml}
-	fi
+    # Or you can directly install the env from our env.yaml file
+    if [[ ${skip_env_creation} -eq 0 ]]; then
+        mamba env create -p ${CONDA_PREFIX} -f ${env_yaml}
+    fi
 }
 
 
@@ -235,16 +233,16 @@ function VEP_plugins_install() {
 function UTRAnnotator_install() {
     local PLUGIN_CACHEDIR=${1}
 
-	if [[ ! -d ${PLUGIN_CACHEDIR}/UTRannotator ]] || \
+    if [[ ! -d ${PLUGIN_CACHEDIR}/UTRannotator ]] || \
        [[ ! -f ${PLUGIN_CACHEDIR}/UTRannotator/uORF_starts_ends_GRCh38_PUBLIC.txt ]] || \
        [[ ! -f ${PLUGIN_CACHEDIR}/UTRannotator/uORF_starts_ends_GRCh37_PUBLIC.txt ]]; then
-		cd ${PLUGIN_CACHEDIR} && \
-		git clone https://github.com/Ensembl/UTRannotator && \
-		log "${PLUGIN_CACHEDIR}/UTRannotator/uORF_5UTR_GRCh37_PUBLIC.txt and ${PLUGIN_CACHEDIR}/UTRannotator/uORF_5UTR_GRCh38_PUBLIC.txt are well-downloaded, remember to specify them when using UTRAnnotator"
-		log "A typical command syntax would be: vep -i variations.vcf --plugin UTRAnnotator,file=${PLUGIN_CACHEDIR}/UTRannotator/uORF_starts_ends_GRCh38_PUBLIC.txt"
-	else
-		log "The UTRannotator plugin is already downloaded for both hg19 and hg38 assemblies"
-	fi
+        cd ${PLUGIN_CACHEDIR} && \
+        git clone https://github.com/Ensembl/UTRannotator && \
+        log "${PLUGIN_CACHEDIR}/UTRannotator/uORF_5UTR_GRCh37_PUBLIC.txt and ${PLUGIN_CACHEDIR}/UTRannotator/uORF_5UTR_GRCh38_PUBLIC.txt are well-downloaded, remember to specify them when using UTRAnnotator"
+        log "A typical command syntax would be: vep -i variations.vcf --plugin UTRAnnotator,file=${PLUGIN_CACHEDIR}/UTRannotator/uORF_starts_ends_GRCh38_PUBLIC.txt"
+    else
+        log "The UTRannotator plugin is already downloaded for both hg19 and hg38 assemblies"
+    fi
 
     echo ${PLUGIN_CACHEDIR}/UTRannotator/uORF_5UTR_GRCh37_PUBLIC.txt && \
     echo ${PLUGIN_CACHEDIR}/UTRannotator/uORF_5UTR_GRCh38_PUBLIC.txt
@@ -282,8 +280,16 @@ function SpliceAI_install() {
         log "Now the installation of the SpliceAI plugin is completed. Please specify the paths to the prescore files (one for snv and one for indel)"
         read -p "Please specify the absolute path to the snv prescore file, remember the file should correspond to the assembly version of your VEP installation"
         local snv_pre_score_file=${REPLY}
+        if [[ ! -f ${snv_pre_score_file} ]]; then
+            log "The file ${snv_pre_score_file} does not exist"
+            return 1
+        fi
         read -p "Please specify the absolute path to the indel prescore file, remember the file should correspond to the assembly version of your VEP installation"
         local indel_pre_score_file=${REPLY}
+        if [[ ! -f ${indel_pre_score_file} ]]; then
+            log "The file ${indel_pre_score_file} does not exist"
+            return 1
+        fi
         log "Now we start to install the SpliceAI plugin"
         # We need to return the prescore file paths to the outside of the function
         echo ${snv_pre_score_file}
@@ -339,8 +345,13 @@ function PrimateAI_install() {
     if [[ ${REPLY} =~ "yes" ]] || [[ ${REPLY} =~ "y" ]] || [[ ${REPLY} =~ "Y" ]] || [[ ${REPLY} =~ "Yes" ]] || [[ ${REPLY} =~ "YES" ]]; then
         read -p "Please specify the absolute path to the tsv prescore file, choose the right assembly version"
         local prescore_file=${REPLY}
-        # We need to return the prescore file paths to the outside of the function
-        echo ${prescore_file}
+        if [[ -f ${prescore_file} ]]; then
+            # We need to return the prescore file paths to the outside of the function
+            echo ${prescore_file}
+        else
+            log "The file ${prescore_file} does not exist"
+            return 1
+        fi
     else
         log "Please finish formatting the downloaded files first"
         return 1
@@ -476,55 +487,108 @@ function LOEUF_install() {
 
 function gnomAD_install() {
     local CACHEDIR=${1}
-    local assembly_version=${2}
+    local assembly=${2}
+
+    # Assembly is the fasta file path
+    # If assembly is not provided, we will use GRCh38 assembly
+
+    if [[ -z ${assembly} ]]; then
+        local assembly="GRCh38"
+    fi
 
     # We need to iterate over all chromosomes to check if the files are already downloaded and valid
-    local -a chromosomes=( 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 X Y )
+    # local -a chromosomes=( 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 X Y )
+    local -a chromosomes=( "22" "X" "Y" )
     for chr in "${chromosomes[@]}"; do
         log "About to download the gnomAD v4.1 files for chr${chr} from the url https://storage.googleapis.com/gcp-public-data--gnomad/release/4.1/vcf/joint/gnomad.joint.v4.1.sites.chr${chr}.vcf.bgz"
-        if [[ ! -f ${CACHEDIR}/gnomad.joint.v4.1.sites.chr${chr}.vcf.bgz ]] && \
-           check_vcf_validity ${CACHEDIR}/gnomad.joint.v4.1.sites.chr${chr}.vcf.bgz && \
-           [[ ${CACHEDIR}/gnomad.joint.v4.1.sites.chr${chr}.vcf.bgz.tbi -nt ${CACHEDIR}/gnomad.joint.v4.1.sites.chr${chr}.vcf.bgz ]]; then
-            log "The gnomAD v4.1 files for chr${chr} are already downloaded to ${CACHEDIR} and updated"
+        if check_vcf_validity ${CACHEDIR}/gnomad.joint.v4.1.sites.chr${chr}.vcf.bgz; then
+            log "The gnomAD v4.1 file for chr${chr} is already downloaded to ${CACHEDIR} and updated"
+            if [[ ${CACHEDIR}/gnomad.joint.v4.1.sites.chr${chr}.vcf.bgz.tbi -ot ${CACHEDIR}/gnomad.joint.v4.1.sites.chr${chr}.vcf.bgz ]]; then
+                log "The index file is not updated, now we start to index the file"
+                tabix -f -p vcf ${CACHEDIR}/gnomad.joint.v4.1.sites.chr${chr}.vcf.bgz
+            fi
         else
+            log "The gnomAD v4.1 file for chr${chr} (${CACHEDIR}/gnomad.joint.v4.1.sites.chr${chr}.vcf.bgz) is not downloaded or not updated, now we start to download the files"
             wget https://storage.googleapis.com/gcp-public-data--gnomad/release/4.1/vcf/joint/gnomad.joint.v4.1.sites.chr${chr}.vcf.bgz -O ${CACHEDIR}/gnomad.joint.v4.1.sites.chr${chr}.vcf.bgz && \
             wget https://storage.googleapis.com/gcp-public-data--gnomad/release/4.1/vcf/joint/gnomad.joint.v4.1.sites.chr${chr}.vcf.bgz.tbi -O ${CACHEDIR}/gnomad.joint.v4.1.sites.chr${chr}.vcf.bgz.tbi
         fi
     done
 
     log "The gnomAD v4.1 files are already downloaded to ${CACHEDIR}, remember that the VCF records are 1-based and currently mapped to hg38 assembly"
+
+    if [[ ${assembly} =~ "GRCh37" ]] || [[ ${assembly} =~ "hg19" ]]; then
+        local self_script=$(realpath ${BASH_SOURCE[0]})
+        local self_dir=$(dirname ${self_script})
+        local chain_file=$(dirname ${self_dir})/data/liftover/hg38ToHg19.over.chain.gz
+        log "Since the gnomAD v4.1 files are currently mapped to hg38 assembly, we need to liftover the files to hg19 assembly, the chain file is ${chain_file}, self_dir is ${self_dir}, self_script is ${self_script}"
+
+        gnomAD_liftover \
+        ${CACHEDIR}/gnomad.joint.v4.1.sites.chr1.vcf.bgz \
+        ${chain_file} \
+        ${assembly} 4 && \
+        log "The gnomAD v4.1 files are liftovered to hg19 assembly and saved to ${CACHEDIR}" && \
+        echo ${CACHEDIR}/gnomad.joint.v4.1.sites.hg19.chr1.vcf.gz || \
+        { log "Failed to liftover the gnomAD v4.1 files to hg19 assembly"; return 1; }
+    else
+        echo ${CACHEDIR}/gnomad.joint.v4.1.sites.chr1.vcf.bgz
+    fi
 }
 
 
 function gnomAD_liftover_per_chromosome() {
     local hg38_vcf=${1}
     local output_dir=${2}
-    local chain_file=${3}
-    local hg19_fasta=${4}
+    local hg19_fasta=${3}
+    local chain_file=${4}
     local hg19_vcf_name=$(basename ${hg38_vcf/.vcf*/.hg19.vcf.gz}) # make sure the suffix is .vcf.gz instead of .vcf or .vcf.bgz
 
     local chrom=$(basename ${hg38_vcf/.vcf*/} | awk -F '.' '{print $NF;}')
+    log "About to liftover the gnomAD v4.1 VCF file ${hg38_vcf} on chromosome ${chrom} to hg19 assembly, the chain file is ${chain_file}"
 
     local hg19_vcf=${output_dir}/${hg19_vcf_name}
+
+    if check_vcf_validity ${hg19_vcf}; then
+        if [[ ${hg19_vcf}.tbi -nt ${hg19_vcf} ]]; then
+            log "The hg19 VCF file is already indexed and the VCF file is valid and updated"
+            return 0
+        else
+            tabix -f -p vcf ${hg19_vcf} && \
+            log "The hg19 VCF file is already indexed and the VCF file is valid and updated" && \
+            return 0 || \
+            { log "Failed to index the hg19 VCF file, try to regenerate the VCF file"; }
+        fi
+    fi
+
+    check_vcf_validity ${hg38_vcf} || \
+    { log "The input hg38 VCF file is not valid, please check the file"; return 1; }
+
+    log "Calling crossmap_liftover_hg382hg19 --chain_file ${chain_file} --input_vcf ${hg38_vcf} --output_vcf ${hg19_vcf/.${chrom}/.mixed} --hg19_fasta ${hg19_fasta}"
 
     crossmap_liftover_hg382hg19 \
     --chain_file ${chain_file} \
     --input_vcf ${hg38_vcf} \
     --output_vcf ${hg19_vcf/.${chrom}/.mixed} \
-    --hg19_fasta ${hg19_fasta} && \
-    display_vcf ${hg19_vcf} || \
-    { log "Failed to liftover the gnomAD v4.1 VCF file from hg38 to hg19 assembly"; return 1; }
+    --hg19_fasta ${hg19_fasta} || \
+    { log "Failed to liftover the gnomAD v4.1 VCF file ${hg38_vcf} from hg38 to hg19 assembly"; return 1; }
 
     # Now we need to split the VCF file by chromosome as some variants from different chromosomes are mixed in the result hg19 VCF file
-    local -a hg19_chrs=($(bcftools query -f '%CHROM\n' ${hg19_vcf} | sort - | uniq - ))
+    local -a hg19_chrs=($(bcftools query -f '%CHROM\n' ${hg19_vcf/.${chrom}/.mixed} | sort - | uniq - ))
+    log "There are ${#hg19_chrs[@]} chromosomes in the hg19 VCF file ${hg19_vcf/.${chrom}/.mixed}: ${hg19_chrs[*]}"
 
     for chr in "${hg19_chrs[@]}"; do
         if [[ ${chr} == "${chrom}" ]]; then
-            bcftools view -Oz -o ${hg19_vcf} ${hg19_vcf/.${chrom}/.mixed} --include 'CHROM="${chr}"'
+            bcftools view -Oz -o ${hg19_vcf} ${hg19_vcf/.${chrom}/.mixed} "${chr}" && \
+            bcftools index -f -t ${hg19_vcf} && \
+            display_vcf ${hg19_vcf}
         else
-            bcftools view -Oz -o ${hg19_vcf/.${chrom}/.${chr}} ${hg19_vcf/.${chrom}/.mixed} --include 'CHROM="${chr}"'
+            bcftools view -Oz -o ${hg19_vcf/.${chrom}/.${chr}} ${hg19_vcf/.${chrom}/.mixed} "${chr}" && \
+            bcftools index -f -t ${hg19_vcf/.${chrom}/.${chr}} && \
+            display_vcf ${hg19_vcf/.${chrom}/.${chr}}
         fi
     done
+
+    local -a generated_vcfs=($(ls ${output_dir}/*.vcf.gz))
+    log "The following VCF files are generated: ${generated_vcfs[*]} after the liftover from hg38 to hg19 assembly on VCF file ${hg38_vcf}"
 }
 
 
@@ -535,6 +599,8 @@ function gnomAD_liftover() {
     local hg19_fasta=${3}
     local threads=${4}
 
+    local self_script=$(realpath ${BASH_SOURCE[0]})
+
     if [[ -z ${threads} ]]; then
         local threads=4
     fi
@@ -544,29 +610,40 @@ function gnomAD_liftover() {
 
     local hg19_dir=$(dirname ${hg38_vcf_chr1})/hg19
     local -a hg38_chrs=( "chr1" "chr2" "chr3" "chr4" "chr5" "chr6" "chr7" "chr8" "chr9" "chr10" "chr11" "chr12" "chr13" "chr14" "chr15" "chr16" "chr17" "chr18" "chr19" "chr20" "chr21" "chr22" "chrX" "chrY" )
+    # local -a hg38_chrs=( "chr22" "chrX" "chrY" )
 
     for chr in "${hg38_chrs[@]}"; do
-        mkdir -p ${hg19_dir}/${chr}
+        [[ -d ${hg19_dir}/${chr} ]] || mkdir -p ${hg19_dir}/${chr}
     done
 
     parallel -j ${threads} --dry-run \
+    bash ${self_script} \
     gnomAD_liftover_per_chromosome \
-    ${basename_hg38_vcf}.chr{}.${suffix_hg38_vcf} \
+    ${basename_hg38_vcf}.{}.${suffix_hg38_vcf} \
     ${hg19_dir}/{} \
     ${hg19_fasta} \
     ${chain_file} ::: "${hg38_chrs[@]}" && \
     parallel -j ${threads} \
+    bash ${self_script} \
     gnomAD_liftover_per_chromosome \
-    ${basename_hg38_vcf}.chr{}.${suffix_hg38_vcf} \
+    ${basename_hg38_vcf}.{}.${suffix_hg38_vcf} \
     ${hg19_dir}/{} \
     ${hg19_fasta} \
     ${chain_file} ::: "${hg38_chrs[@]}"
 
     for chr in "${hg38_chrs[@]}"; do
-        local tmp_vcfs=($(ls ${hg19_dir}/*/*${chr}*.vcf.gz))
-        local hg38_vcf=${hg38_vcf_chr1/.chr1/.${chr}}
-        local hg19_vcf=${hg38_vcf/.${chr}/.hg19.${chr}}
-        bcftools_concatvcfs -v "${tmp_vcfs[@]}" -o ${hg19_vcf}
+        local -a tmp_vcfs=($(ls ${hg19_dir}/*/*${chr}.*vcf.gz))
+        if [[ ${#tmp_vcfs[@]} -gt 0 ]]; then
+            local hg38_vcf=${hg38_vcf_chr1/.chr1/.${chr}}
+            local hg19_vcf=${hg38_vcf/.${chr}/.hg19.${chr}}
+            local hg19_vcf=${hg19_vcf/.bgz/.gz}
+            log "About to concat the VCF files ${tmp_vcfs[*]} to ${hg19_vcf}, the original hg38 VCF file is ${hg38_vcf}"
+            [[ -d $(dirname ${hg19_vcf}) ]] && \
+            bcftools_concatvcfs -v "${tmp_vcfs[*]}" -o ${hg19_vcf} || \
+            { log "Failed to concat the VCF files ${tmp_vcfs[*]} to ${hg19_vcf}, please check the folder $(dirname ${hg19_vcf})"; return 1; }
+        else
+            log "No VCF files found for chromosome ${chr} at hg19 in folder ${hg19_dir}"
+        fi
     done
 }
 
@@ -601,7 +678,8 @@ function ClinVar_VCF_deploy() {
     fi
 
     wget https://ftp.ncbi.nlm.nih.gov/pub/clinvar/vcf_${assembly_version}/clinvar.vcf.gz -O ${CACHEDIR}/${ucsc_assembly_version}/clinvar.vcf.gz && \
-    wget https://ftp.ncbi.nlm.nih.gov/pub/clinvar/vcf_${assembly_version}/clinvar.vcf.gz.tbi -O ${CACHEDIR}/${ucsc_assembly_version}/clinvar.vcf.gz.tbi
+    wget https://ftp.ncbi.nlm.nih.gov/pub/clinvar/vcf_${assembly_version}/clinvar.vcf.gz.tbi -O ${CACHEDIR}/${ucsc_assembly_version}/clinvar.vcf.gz.tbi && \
+    echo ${CACHEDIR}/${ucsc_assembly_version}/clinvar.vcf.gz
 }
 
 
@@ -639,51 +717,51 @@ function LoFtee_install() {
 
     log "You need to download the prescores yourself to ${PLUGIN_CACHEDIR}. And the detailed info can be found in the corresponding github repo https://github.com/konradjk/loftee"
     log "Example running command: perl variant_effect_predictor.pl [--other options to VEP] --plugin LoF,loftee_path:/path/to/loftee,human_ancestor_fa:/path/to/human_ancestor.fa.gz"
-	if [[ ${assembly_version} == "GRCh37" ]] || [[ ${assembly_version} == "hg19" ]]; then
-		local human_ancestor_fasta_url="https://s3.amazonaws.com/bcbio_nextgen/human_ancestor.fa.gz"
-		local human_ancestor_fasta_fai_url="https://s3.amazonaws.com/bcbio_nextgen/human_ancestor.fa.gz.fai"
-		local conservation_file_url="https://personal.broadinstitute.org/konradk/loftee_data/GRCh37/phylocsf_gerp.sql.gz"
-	elif [[ ${assembly_version} == "GRCh38" ]] || [[ ${assembly_version} == "hg38" ]]; then
-		local gerp_bigwig_url="https://personal.broadinstitute.org/konradk/loftee_data/GRCh38/gerp_conservation_scores.homo_sapiens.GRCh38.bw"
-		local human_ancestor_fasta_url="https://personal.broadinstitute.org/konradk/loftee_data/GRCh38/human_ancestor.fa.gz"
-		local human_ancestor_fasta_fai_url="https://personal.broadinstitute.org/konradk/loftee_data/GRCh38/human_ancestor.fa.gz.fai"
-		local conservation_file_url="https://personal.broadinstitute.org/konradk/loftee_data/GRCh38/loftee.sql.gz"
-	else
-		log "Currently we only support GRCh37 and GRCh38 assembly versions"
-		return 1
-	fi
+    if [[ ${assembly_version} == "GRCh37" ]] || [[ ${assembly_version} == "hg19" ]]; then
+        local human_ancestor_fasta_url="https://s3.amazonaws.com/bcbio_nextgen/human_ancestor.fa.gz"
+        local human_ancestor_fasta_fai_url="https://s3.amazonaws.com/bcbio_nextgen/human_ancestor.fa.gz.fai"
+        local conservation_file_url="https://personal.broadinstitute.org/konradk/loftee_data/GRCh37/phylocsf_gerp.sql.gz"
+    elif [[ ${assembly_version} == "GRCh38" ]] || [[ ${assembly_version} == "hg38" ]]; then
+        local gerp_bigwig_url="https://personal.broadinstitute.org/konradk/loftee_data/GRCh38/gerp_conservation_scores.homo_sapiens.GRCh38.bw"
+        local human_ancestor_fasta_url="https://personal.broadinstitute.org/konradk/loftee_data/GRCh38/human_ancestor.fa.gz"
+        local human_ancestor_fasta_fai_url="https://personal.broadinstitute.org/konradk/loftee_data/GRCh38/human_ancestor.fa.gz.fai"
+        local conservation_file_url="https://personal.broadinstitute.org/konradk/loftee_data/GRCh38/loftee.sql.gz"
+    else
+        log "Currently we only support GRCh37 and GRCh38 assembly versions"
+        return 1
+    fi
 
-	mkdir -p ${PLUGIN_CACHEDIR}/LoFtee/${assembly_version}
-	# Check if the files are already downloaded
-	if [[ ! -f ${PLUGIN_CACHEDIR}/LoFtee/${assembly_version}/human_ancestor.fa.gz ]]; then
-		wget ${human_ancestor_fasta_url} -O ${PLUGIN_CACHEDIR}/LoFtee/${assembly_version}/human_ancestor.fa.gz
-	fi
+    mkdir -p ${PLUGIN_CACHEDIR}/LoFtee/${assembly_version}
+    # Check if the files are already downloaded
+    if [[ ! -f ${PLUGIN_CACHEDIR}/LoFtee/${assembly_version}/human_ancestor.fa.gz ]]; then
+        wget ${human_ancestor_fasta_url} -O ${PLUGIN_CACHEDIR}/LoFtee/${assembly_version}/human_ancestor.fa.gz
+    fi
 
-	if [[ ! -f ${PLUGIN_CACHEDIR}/LoFtee/${assembly_version}/human_ancestor.fa.gz.fai ]]; then
-		wget ${human_ancestor_fasta_fai_url} -O ${PLUGIN_CACHEDIR}/LoFtee/${assembly_version}/human_ancestor.fa.gz.fai
-	fi
+    if [[ ! -f ${PLUGIN_CACHEDIR}/LoFtee/${assembly_version}/human_ancestor.fa.gz.fai ]]; then
+        wget ${human_ancestor_fasta_fai_url} -O ${PLUGIN_CACHEDIR}/LoFtee/${assembly_version}/human_ancestor.fa.gz.fai
+    fi
 
-	if [[ ! -f ${PLUGIN_CACHEDIR}/LoFtee/${assembly_version}/phylocsf_gerp.sql.gz ]]; then
-		wget ${conservation_file_url} -O ${PLUGIN_CACHEDIR}/LoFtee/${assembly_version}/phylocsf_gerp.sql.gz
-	fi
+    if [[ ! -f ${PLUGIN_CACHEDIR}/LoFtee/${assembly_version}/phylocsf_gerp.sql.gz ]]; then
+        wget ${conservation_file_url} -O ${PLUGIN_CACHEDIR}/LoFtee/${assembly_version}/phylocsf_gerp.sql.gz
+    fi
 
-	if [[ ${gerp_bigwig_url} =~ \.gz$ ]] && [[ ! -f ${PLUGIN_CACHEDIR}/LoFtee/${assembly_version}/gerp_conservation_scores.homo_sapiens.bw ]]; then
-		wget ${gerp_bigwig_url} -O ${PLUGIN_CACHEDIR}/LoFtee/${assembly_version}/gerp_conservation_scores.homo_sapiens.bw
-	elif [[ -z ${gerp_bigwig_url} ]]; then
-		log "Specifying the hg19/GRCh37 assembly version. So the bigwig file ${gerp_bigwig_url} is not available"
-	else
-		log "The bigwig file ${gerp_bigwig_url} is already downloaded"
-	fi
+    if [[ ${gerp_bigwig_url} =~ \.gz$ ]] && [[ ! -f ${PLUGIN_CACHEDIR}/LoFtee/${assembly_version}/gerp_conservation_scores.homo_sapiens.bw ]]; then
+        wget ${gerp_bigwig_url} -O ${PLUGIN_CACHEDIR}/LoFtee/${assembly_version}/gerp_conservation_scores.homo_sapiens.bw
+    elif [[ -z ${gerp_bigwig_url} ]]; then
+        log "Specifying the hg19/GRCh37 assembly version. So the bigwig file ${gerp_bigwig_url} is not available"
+    else
+        log "The bigwig file ${gerp_bigwig_url} is already downloaded"
+    fi
 
-	# Now we need to return the paths of the downloaded files as a BASH variable which can be used outside this function
-	echo "${PLUGIN_CACHEDIR}/LoFtee/${assembly_version}/human_ancestor.fa.gz"
-	echo "${PLUGIN_CACHEDIR}/LoFtee/${assembly_version}/human_ancestor.fa.gz.fai"
-	echo "${PLUGIN_CACHEDIR}/LoFtee/${assembly_version}/phylocsf_gerp.sql.gz"
-	if [[ ${gerp_bigwig_url} =~ \.gz$ ]]; then
-		echo "${PLUGIN_CACHEDIR}/LoFtee/${assembly_version}/gerp_conservation_scores.homo_sapiens.bw"
-	else
-		echo ""
-	fi
+    # Now we need to return the paths of the downloaded files as a BASH variable which can be used outside this function
+    echo "${PLUGIN_CACHEDIR}/LoFtee/${assembly_version}/human_ancestor.fa.gz"
+    echo "${PLUGIN_CACHEDIR}/LoFtee/${assembly_version}/human_ancestor.fa.gz.fai"
+    echo "${PLUGIN_CACHEDIR}/LoFtee/${assembly_version}/phylocsf_gerp.sql.gz"
+    if [[ ${gerp_bigwig_url} =~ \.gz$ ]]; then
+        echo "${PLUGIN_CACHEDIR}/LoFtee/${assembly_version}/gerp_conservation_scores.homo_sapiens.bw"
+    else
+        echo ""
+    fi
 }
 
 
@@ -696,6 +774,7 @@ function main_install() {
     local vep_cache_dir=$(read_yaml "$config_file" "vep_cache_dir")
     local vep_plugins_dir=$(read_yaml "$config_file" "vep_plugins_dir")
     local assembly=$(read_yaml "$config_file" "assembly")
+    local ref_fasta=$(read_yaml "$config_file" "ref_genome")
     local vep_plugins_cachedir=$(read_yaml "$config_file" "vep_plugins_cachedir")
     # ... read other config values ...
 
@@ -738,15 +817,19 @@ function main_install() {
     # 4. Install gnomAD VCF (basically download bgzipped VCF files)
     local gnomad_vcf_dir=$(read_yaml "$config_file" "gnomad_vcf_dir")
     if [[ ${assembly} =~ "GRCh37" ]] || [[ ${assembly} =~ "hg19" ]]; then
+        # Chain file is small enough to be included in the git repo
         local chain_file=$(read_yaml "$config_file" "chain_file")
     fi
-
-    gnomAD_install ${gnomad_vcf_dir} ${assembly} || \
+    local gnomAD_chr22_vcf=$(gnomAD_install ${gnomad_vcf_dir} ${ref_fasta} | tail -1)
+    [[ -f ${gnomAD_chr22_vcf} ]] && \
+    update_yaml "$config_file" "gnomad_chr22_vcf" "${gnomAD_chr22_vcf}" || \
     { log "Failed to install gnomAD VCF"; return 1; }
 
     # 5. Install ClinVar VCF
     local clinvar_vcf_dir=$(read_yaml "$config_file" "clinvar_vcf_dir")
-    ClinVar_VCF_deploy ${clinvar_vcf_dir} ${assembly} || \
+    local prepared_clinvar_vcf=$(ClinVar_VCF_deploy ${clinvar_vcf_dir} ${assembly} | tail -1)
+    [[ -f ${prepared_clinvar_vcf} ]] && \
+    update_yaml "$config_file" "clinvar_vcf" "${prepared_clinvar_vcf}" || \
     { log "Failed to install ClinVar VCF"; return 1; }
 
     # ... other installation steps ...

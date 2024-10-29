@@ -1,5 +1,7 @@
 # config.yaml
 
+# Note that the paths specified below are all data that cant be included in the github repo (primarily due to the size limit of github repo)
+
 # Below we specify the conda env yml file in relative path
 conda_env_yaml: "acmg_conda.yml"
 
@@ -7,9 +9,17 @@ conda_env_yaml: "acmg_conda.yml"
 input_vcf: "/home/yangyxt/git_repos/acmg_auto/data/test_example/TEST_FAM.vcf.gz"
 ped_file: "/home/yangyxt/git_repos/acmg_auto/data/test_example/TEST_FAM.ped"
 fam_name: "Family1"
-assembly: "hg38"
-ref_genome: "/home/yangyxt/git_repos/acmg_auto/data/reference/ucsc.hg38.fasta"
+
+# Note that the assembly version must be consistent with the reference genome
+assembly: "hg19"
+
+# Below we specify the reference genome in absolute paths because the size of the file is too large to be included in the github repo
+ref_genome: "/home/yangyxt/Caches/genomes/hg19/ucsc.hg19.fasta"
+
+# Below we specify the output directory in absolute paths
 output_dir: "/home/yangyxt/git_repos/acmg_auto/results"
+
+# Below we specify the number of threads to be used
 threads: 8
 af_cutoff: 0.05
 gnomad_vcf_dir: "/home/yangyxt/git_repos/acmg_auto/data/gnomad"

@@ -11,4 +11,3 @@ Breakdown of annotation resources used for variant deleterious effect evaluation
 7. Population-wise allele frequency + number of homozygous carriers: gnomADv4 (bcftools annotate)
 8. Conservation: Conservation (VEP_plugin)
 9. Codon based evaluation: SameCodon (VEP_plugin, only used with internet connection in database mode, needs separate running)
-

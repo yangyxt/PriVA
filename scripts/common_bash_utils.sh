@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+
+SELF=$(basename ${BASH_SOURCE[0]})
+SELF_DIR=$(dirname ${SELF})
+ARGPARSE=${SELF_DIR}/argparse.bash
 # This script is just a function pool, used to store commonly shared functions
 
 # Function to read YAML configuration
@@ -79,7 +83,12 @@ function display_table {
 function display_vcf {
     local input_vcf=${1}
     local head_lines=${2}
+    if [[ -z ${TMPDIR} ]]; then
+        TMPDIR="/tmp"
+    fi
+
     local tmp_tab="$TMPDIR/$(randomID).tsv"
+    log "Using ${tmp_tab} as the temporary file to store the VCF records"
 
     if [[ -z ${head_lines} ]]; then
         local head_lines=10
@@ -87,7 +96,7 @@ function display_vcf {
         local head_lines=$((head_lines + 1))
     fi
 
-    bcftools view -H ${input_vcf} | tail -n +${head_lines} > ${tmp_tab} && \
+    bcftools view -H ${input_vcf} | head -${head_lines} > ${tmp_tab} && \
     display_table ${tmp_tab} && \
     silent_remove_tmps ${tmp_tab}
 }
@@ -99,11 +108,11 @@ function silent_remove_tmps {
     for target in "${targets[@]}"; do
         if [[ -f ${target} ]]; then
             rm ${target} || \
-			log "File ${target} failed to be deleted (either its not existed or occupied)"
+            log "File ${target} failed to be deleted (either its not existed or occupied)"
         elif [[ -d ${target} ]]; then
             if [[ ${target} != $TMPDIR ]]; then
                 rm -r ${target} || \
-				log "Folder ${target} failed to be deleted (either its not existed or occupied)"
+                log "Folder ${target} failed to be deleted (either its not existed or occupied)"
             fi
         fi
     done
@@ -121,27 +130,27 @@ function filter_vcf_by_GT() {
     local -a sample_array=($(echo ${2} | awk 'BEGIN {RS=ORS=",";} {printf "%s ", $1;}')) # Access the array passed as argument
     local output_vcf="$3"
 
-	local tmp_sample_list=$TMPDIR/$(randomID).txt
+    local tmp_sample_list=$TMPDIR/$(randomID).txt
 
-	if [[ ${output_vcf} =~ \.vcf ]]; then
-		local place_holder="vcf"
-	elif [[ ${output_vcf} =~ \.bcf ]]; then
-		local place_holder="bcf"
-	else
-		log "Cannot identify the specified output VCF format: ${output_vcf}"
-	fi
+    if [[ ${output_vcf} =~ \.vcf ]]; then
+        local place_holder="vcf"
+    elif [[ ${output_vcf} =~ \.bcf ]]; then
+        local place_holder="bcf"
+    else
+        log "Cannot identify the specified output VCF format: ${output_vcf}"
+    fi
 
     printf "%s\n" "${sample_array[@]}" > ${tmp_sample_list}
 
-	# First extract the subset samples to a vcf file and make sure all samples are not missing or homo ref
-	bcftools view -S ${tmp_sample_list} -i 'GT="alt"' ${vcf_file} -Ou | \
-	bcftools sort -Oz -o ${output_vcf/.${place_holder}*/.subset.vcf.gz} && \
-	tabix -f -p vcf ${output_vcf/.${place_holder}*/.subset.vcf.gz}
+    # First extract the subset samples to a vcf file and make sure all samples are not missing or homo ref
+    bcftools view -S ${tmp_sample_list} -i 'GT="alt"' ${vcf_file} -Ou | \
+    bcftools sort -Oz -o ${output_vcf/.${place_holder}*/.subset.vcf.gz} && \
+    tabix -f -p vcf ${output_vcf/.${place_holder}*/.subset.vcf.gz}
 
-	bcftools annotate -a ${output_vcf/.${place_holder}*/.subset.vcf.gz} -m VALID_REC -Ou ${vcf_file} | \
-	bcftools filter -i 'INFO/VALID_REC=1' -Ou | \
-	bcftools sort -Oz -o ${output_vcf/.${place_holder}*/.vcf.gz} && \
-	consistent_vcf_format ${output_vcf} ${output_vcf/.${place_holder}*/.vcf.gz} && \
+    bcftools annotate -a ${output_vcf/.${place_holder}*/.subset.vcf.gz} -m VALID_REC -Ou ${vcf_file} | \
+    bcftools filter -i 'INFO/VALID_REC=1' -Ou | \
+    bcftools sort -Oz -o ${output_vcf/.${place_holder}*/.vcf.gz} && \
+    consistent_vcf_format ${output_vcf} ${output_vcf/.${place_holder}*/.vcf.gz} && \
     silent_remove_tmps ${tmp_sample_list}
 }
 
@@ -152,75 +161,75 @@ function announce_remove_tmps {
     for target in "${targets[@]}"; do
         if [[ -f ${target} ]]; then
             rm ${target} && \
-			log "${target} has been succesfully removed" || \
-			log "File ${target} failed to be deleted (either its not existed or occupied)"
+            log "${target} has been succesfully removed" || \
+            log "File ${target} failed to be deleted (either its not existed or occupied)"
         elif [[ -d ${target} ]]; then
             if [[ ${target} != $TMPDIR ]]; then
                 rm -r ${target} && \
-				log "${target} has been succesfully removed" || \
-				log "Folder ${target} failed to be deleted (either its not existed or occupied)"
+                log "${target} has been succesfully removed" || \
+                log "Folder ${target} failed to be deleted (either its not existed or occupied)"
             fi
         fi
-		>&2 echo ""
+        >&2 echo ""
     done
 }
 
 
 
 function consistent_vcf_format () {
-	local input_vcf=${1}
-	local output_vcf=${2}
+    local input_vcf=${1}
+    local output_vcf=${2}
 
-	# Convert output_vcf format to make it the same format with the input vcf
-	if [[ ${input_vcf} == ${output_vcf} ]]; then
-		true
-	fi
+    # Convert output_vcf format to make it the same format with the input vcf
+    if [[ ${input_vcf} == ${output_vcf} ]]; then
+        true
+    fi
 
-	if [[ ${input_vcf/*.vcf/vcf} == ${output_vcf/*.vcf/vcf} ]]; then
-		:
-	elif [[ ${input_vcf/*.bcf/bcf} == ${output_vcf/*.bcf/bcf} ]]; then
-		:
-	elif [[ ${input_vcf} =~ \.vcf\.gz$ ]]; then
-		local op_format="z"
-		local op_suffix=".vcf.gz"
-	elif [[ ${input_vcf} =~ \.vcf$ ]]; then
-		local op_format="v"
-		local op_suffix=".vcf"
-	elif [[ ${input_vcf} =~ \.bcf$ ]]; then
-		local op_format="b"
-		local op_suffix=".bcf"
-	else
-		log "The input VCF file ${input_vcf} does not have a recognizable format judging by its file name suffix"
-		return 10
-	fi
+    if [[ ${input_vcf/*.vcf/vcf} == ${output_vcf/*.vcf/vcf} ]]; then
+        :
+    elif [[ ${input_vcf/*.bcf/bcf} == ${output_vcf/*.bcf/bcf} ]]; then
+        :
+    elif [[ ${input_vcf} =~ \.vcf\.gz$ ]]; then
+        local op_format="z"
+        local op_suffix=".vcf.gz"
+    elif [[ ${input_vcf} =~ \.vcf$ ]]; then
+        local op_format="v"
+        local op_suffix=".vcf"
+    elif [[ ${input_vcf} =~ \.bcf$ ]]; then
+        local op_format="b"
+        local op_suffix=".bcf"
+    else
+        log "The input VCF file ${input_vcf} does not have a recognizable format judging by its file name suffix"
+        return 10
+    fi
 
-	if [[ -z ${op_format} ]]; then
-		if [[ ${input_vcf} == ${output_vcf} ]]; then
-			return
-		else
-			mv ${input_vcf} ${output_vcf}
-			mv ${input_vcf}.tbi ${output_vcf}.tbi 2> /dev/null || :
-		fi
-	fi
+    if [[ -z ${op_format} ]]; then
+        if [[ ${input_vcf} == ${output_vcf} ]]; then
+            return
+        else
+            mv ${input_vcf} ${output_vcf}
+            mv ${input_vcf}.tbi ${output_vcf}.tbi 2> /dev/null || :
+        fi
+    fi
 
-	if [[ ${output_vcf} =~ \.bcf$ ]]; then
-		local ori_output_format=bcf
-	elif [[ ${output_vcf} =~ \.vcf ]]; then
-		local ori_output_format=vcf
-	else
-		log "The input output VCF file ${output_vcf} does not have a recognizable format judging by its file name suffix"
-		return 10
-	fi
+    if [[ ${output_vcf} =~ \.bcf$ ]]; then
+        local ori_output_format=bcf
+    elif [[ ${output_vcf} =~ \.vcf ]]; then
+        local ori_output_format=vcf
+    else
+        log "The input output VCF file ${output_vcf} does not have a recognizable format judging by its file name suffix"
+        return 10
+    fi
 
-	local final_output_vcf=${output_vcf/.${ori_output_format}*/${op_suffix}}
-	bcftools sort ${output_vcf} | \
-	bcftools view -O${op_format} --no-version -o ${final_output_vcf}
+    local final_output_vcf=${output_vcf/.${ori_output_format}*/${op_suffix}}
+    bcftools sort ${output_vcf} | \
+    bcftools view -O${op_format} --no-version -o ${final_output_vcf}
 
-	if [[ ${final_output_vcf} =~ \.vcf\.gz$ ]]; then
-		tabix -f -p vcf ${final_output_vcf}
-	fi
+    if [[ ${final_output_vcf} =~ \.vcf\.gz$ ]]; then
+        tabix -f -p vcf ${final_output_vcf}
+    fi
 
-	echo ${final_output_vcf}
+    echo ${final_output_vcf}
 }
 
 
@@ -235,7 +244,7 @@ function check_vcf_validity {
         return 10
     fi
 
-    if [[ ${input_vcf} =~ \.gz$ ]]; then
+    if [[ ${input_vcf} =~ gz$ ]]; then
         log "${input_vcf} should be bgzipped, check gz vcf validity"
         if check_gz_vcf ${input_vcf} ${expected_lines}; then
             if check_vcf_samples ${input_vcf} ${expected_samples}; then
@@ -286,7 +295,7 @@ function check_gz_vcf {
 
     if check_vcf_format ${input_vcf}; then  # Check input_vcf format
         log "${input_vcf} has solid vcf format. Check whether contains enough record number"
-        if [ $(bcftools query -f '%CHROM:%POS:%REF:%ALT\n' ${input_vcf} | wc -l | awk '{print $1}') -ge ${expected_lines} ]; then  # Check input_vcf content
+        if [ $(bcftools view -H ${input_vcf} | head -${expected_lines} | wc -l | awk '{print $1}') -ge ${expected_lines} ]; then  # Check input_vcf content
             log "${input_vcf} has enough records."
         else
             log "${input_vcf} has $(bcftools query -f '%CHROM:%POS:%REF:%ALT\n' ${input_vcf} | wc -l | awk '{print $1}') valid lines while expected to have ${expected_lines} lines."
@@ -355,16 +364,14 @@ function check_vcf_samples {
 function check_vcf_format {
     local input_vcf=${1}
     if [[ ! -f ${input_vcf} ]]; then
-		log "Input VCF file ${input_vcf} seems not exist"
-		return 10
-	fi
+        log "Input VCF file ${input_vcf} seems not exist"
+        return 10
+    fi
 
-	bcftools view ${input_vcf} > /dev/null || { \
-	log "The input VCF file ${input_vcf} has some format issue detected by bcftools. Quit this function with error."$'\n'; \
-	return 10; }
-
-    # If VCF file does not have variant format issues. Check if it has meaningless variant records.
-    filter_out_noalleles ${input_vcf}
+    bcftools view ${input_vcf} | head -200 > /dev/null && \
+    log "The input VCF file ${input_vcf} has no format issue detected by bcftools" && \
+    return 0 || \
+    { log "The input VCF file ${input_vcf} has some format issue detected by bcftools. Quit this function with error."$'\n'; return 10; }
 }
 
 
@@ -452,24 +459,24 @@ function check_vcf_multiallelics {
 
 
 function whether_same_varset {
-	# Input can be TSV or VCF
-	# Test whether two file contains the same set of variants (excluding the inspection of the GTs)
-	local tab1=${1}
-	local tab2=${2}
+    # Input can be TSV or VCF
+    # Test whether two file contains the same set of variants (excluding the inspection of the GTs)
+    local tab1=${1}
+    local tab2=${2}
 
-	local tab1_ids=$(grab_varids_sha256 ${tab1})
-	local tab2_ids=$(grab_varids_sha256 ${tab2})
+    local tab1_ids=$(grab_varids_sha256 ${tab1})
+    local tab2_ids=$(grab_varids_sha256 ${tab2})
 
-	if [[ ${tab1_ids} == ${tab2_ids} ]]; then
-		log "${tab1} and ${tab2} share the same set of variants"
+    if [[ ${tab1_ids} == ${tab2_ids} ]]; then
+        log "${tab1} and ${tab2} share the same set of variants"
         return 0;
-	elif [[ $(echo ${tab2_ids} | awk -F ',' '{printf "%s", $NF;}') -gt $(echo ${tab1_ids} | awk -F ',' '{printf "%s", $NF;}') ]]; then
-		log "${tab1} has more variants than ${tab2}."
+    elif [[ $(echo ${tab2_ids} | awk -F ',' '{printf "%s", $NF;}') -gt $(echo ${tab1_ids} | awk -F ',' '{printf "%s", $NF;}') ]]; then
+        log "${tab1} has more variants than ${tab2}."
         return 20
-	else
-		log "${tab2} has different variants with ${tab1}."
+    else
+        log "${tab2} has different variants with ${tab1}."
         return 10
-	fi
+    fi
 }
 
 
@@ -509,19 +516,19 @@ function grab_varids_sha256 {
 
 
 function normalize_vcf () {
-	local input_vcf=${1}
-	local output_vcf=${2}
-	local ref_genome=${3}
+    local input_vcf=${1}
+    local output_vcf=${2}
+    local ref_genome=${3}
 
 
-	bcftools norm -m -both -f ${ref_genome} --atom-overlaps "." --keep-sum AD -a ${input_vcf} | \
+    bcftools norm -m -both -f ${ref_genome} --atom-overlaps "." --keep-sum AD -a ${input_vcf} | \
     bcftools norm -d exact - | \
     bcftools view -i 'ALT!="*"' - | \
-	bcftools sort -Oz -o ${output_vcf/.vcf*/.vcf.gz} && \
-	consistent_vcf_format ${output_vcf} ${output_vcf/.vcf*/.vcf.gz}
+    bcftools sort -Oz -o ${output_vcf/.vcf*/.vcf.gz} && \
+    consistent_vcf_format ${output_vcf} ${output_vcf/.vcf*/.vcf.gz}
 
-	display_vcf ${output_vcf}
-	>&2 echo ""  # Append a new line to the end of the logs from this function
+    display_vcf ${output_vcf}
+    >&2 echo ""  # Append a new line to the end of the logs from this function
 }
 
 
@@ -563,15 +570,15 @@ function check_vcf_lineno {
 
 
 function check_vcf_contig_version () {
-	local input_vcf=${1}
+    local input_vcf=${1}
 
-	local example_contig_name=$(bcftools query -f '%CHROM\n' ${input_vcf} | head -1)
+    local example_contig_name=$(bcftools query -f '%CHROM\n' ${input_vcf} | head -1)
 
-	if [[ ${example_contig_name} =~ ^chr ]]; then
-		echo "ucsc"
-	else
-		echo "ncbi"
-	fi
+    if [[ ${example_contig_name} =~ ^chr ]]; then
+        echo "ucsc"
+    else
+        echo "ncbi"
+    fi
 }
 
 
@@ -591,76 +598,76 @@ function check_vcf_contig_size {
 
 
 function check_vcf_assembly_version () {
-	# INput VCF should contain UCSC contig names instead of GRC contig names
-	local input_vcf=${1}
-	if ! check_vcf_validity ${input_vcf}; then
-		log "Cant locate the required contig name in the VCF header line to tell the assembly version of this VCF file ${input_vcf}"
-		return 1;
-	fi
+    # INput VCF should contain UCSC contig names instead of GRC contig names
+    local input_vcf=${1}
+    if ! check_vcf_validity ${input_vcf}; then
+        log "Cant locate the required contig name in the VCF header line to tell the assembly version of this VCF file ${input_vcf}"
+        return 1;
+    fi
 
-	local chr1_size=$(check_vcf_contig_size ${input_vcf} "chr1")
+    local chr1_size=$(check_vcf_contig_size ${input_vcf} "chr1")
 
-	local random_contig_presence=$(bcftools view -h ${input_vcf} | \
-					  			   awk -F '=' '$1 ~ /##contig/ && $3 ~ /chr7_gl000195_random/{print;}' | wc -l)
+    local random_contig_presence=$(bcftools view -h ${input_vcf} | \
+                                     awk -F '=' '$1 ~ /##contig/ && $3 ~ /chr7_gl000195_random/{print;}' | wc -l)
 
-	local alt_contig_presence=$(bcftools view -h ${input_vcf} | \
-					  			   awk -F '=' '$1 ~ /##contig/ && $3 ~ /chr6_GL000256v2_alt/{print;}' | wc -l)
+    local alt_contig_presence=$(bcftools view -h ${input_vcf} | \
+                                     awk -F '=' '$1 ~ /##contig/ && $3 ~ /chr6_GL000256v2_alt/{print;}' | wc -l)
 
-	if [[ ${chr1_size} == "249250621" ]]; then
-		echo "hg19"
-	elif [[ ${chr1_size} == "248956422" ]]; then
-		echo "hg38"
-	else
-		if [[ ${random_contig_presence} -ge 1 ]]; then
-			echo "hg19"
-		elif [[ ${alt_contig_presence} -ge 1 ]]; then
-			echo "hg38"
-		else
-			log "Cant locate the required contig name in the VCF header line to tell the assembly version of this VCF file ${input_vcf}"
-			echo ""
-		fi
-	fi
+    if [[ ${chr1_size} == "249250621" ]]; then
+        echo "hg19"
+    elif [[ ${chr1_size} == "248956422" ]]; then
+        echo "hg38"
+    else
+        if [[ ${random_contig_presence} -ge 1 ]]; then
+            echo "hg19"
+        elif [[ ${alt_contig_presence} -ge 1 ]]; then
+            echo "hg38"
+        else
+            log "Cant locate the required contig name in the VCF header line to tell the assembly version of this VCF file ${input_vcf}"
+            echo ""
+        fi
+    fi
 }
 
 
 function liftover_from_GRCh_to_hg () {
-	# Only designed for lifting over GRCh37 to hg19 or GRCh38 to hg38
+    # Only designed for lifting over GRCh37 to hg19 or GRCh38 to hg38
     local input_vcf=${1}
     local contig_map=${2}
-	local output_vcf=${3}
+    local output_vcf=${3}
     local tmp_vcf=${input_vcf/.vcf*/.tmp.vcf}
     if [[ -z ${output_vcf} ]]; then local output_vcf=${input_vcf/.vcf/.addchr.vcf}; fi
 
-	# Upon test, we do not need to escape < in awk regex
-	bcftools view -Ov ${input_vcf} | \
-	awk 'BEGIN{OFS=FS="\t";} \
-		NR == FNR {arr[$2] = $1;} \
-		NR > FNR && $0 ~ /^##contig/{old_contig = gensub(/##contig=<ID=([a-zA-Z_0-9\.]+),*(.+)>$/, "\\1", "g", $1); \
-									if (old_contig !~ /^[0-9MTXT]$/) next; \
-									else if (length(arr[old_contig]) == 0) new_contig = old_contig; \
-									else new_contig = arr[old_contig]; \
-									mod_line = gensub(/^(.+contig=<ID=)[a-zA-Z_0-9\.]+(,*.*>)/, "\\1"new_contig"\\2", "g", $0); \
-									printf "%s\n", mod_line;} \
-		NR > FNR && $0 !~ /^##contig/ && $0 ~ /^##/{print;} \
-		NR > FNR && $0 ~ /^#CHROM/{print;} \
-		NR > FNR && $0 !~ /^#/{ if (length(arr[$1]) == 0) new_contig = $1; \
-								else new_contig = arr[$1]; \
-								gsub(/.+/, new_contig, $1); \
-								printf "%s\n", $0;}' ${contig_map} - > ${tmp_vcf}
+    # Upon test, we do not need to escape < in awk regex
+    bcftools view -Ov ${input_vcf} | \
+    awk 'BEGIN{OFS=FS="\t";} \
+        NR == FNR {arr[$2] = $1;} \
+        NR > FNR && $0 ~ /^##contig/{old_contig = gensub(/##contig=<ID=([a-zA-Z_0-9\.]+),*(.+)>$/, "\\1", "g", $1); \
+                                    if (old_contig !~ /^[0-9MTXT]$/) next; \
+                                    else if (length(arr[old_contig]) == 0) new_contig = old_contig; \
+                                    else new_contig = arr[old_contig]; \
+                                    mod_line = gensub(/^(.+contig=<ID=)[a-zA-Z_0-9\.]+(,*.*>)/, "\\1"new_contig"\\2", "g", $0); \
+                                    printf "%s\n", mod_line;} \
+        NR > FNR && $0 !~ /^##contig/ && $0 ~ /^##/{print;} \
+        NR > FNR && $0 ~ /^#CHROM/{print;} \
+        NR > FNR && $0 !~ /^#/{ if (length(arr[$1]) == 0) new_contig = $1; \
+                                else new_contig = arr[$1]; \
+                                gsub(/.+/, new_contig, $1); \
+                                printf "%s\n", $0;}' ${contig_map} - > ${tmp_vcf}
 
-	if [[ ${output_vcf} =~ \.[b]*gz$ ]]; then
-		bgzip -f ${tmp_vcf} && \
-		bcftools sort --temp-dir $TMPDIR -Oz -o ${tmp_vcf}.gz ${tmp_vcf}.gz && \
-		tabix -f -p vcf ${tmp_vcf}.gz
-		if check_vcf_validity ${tmp_vcf}.gz; then
-			mv ${tmp_vcf}.gz ${output_vcf} && \
-			mv ${tmp_vcf}.gz.tbi ${output_vcf}.tbi && \
-			ls -lh ${output_vcf}*
-		fi
-	elif check_vcf_validity ${tmp_vcf}; then
-		mv ${tmp_vcf} ${output_vcf} && \
-		ls -lh ${output_vcf}*
-	fi
+    if [[ ${output_vcf} =~ \.[b]*gz$ ]]; then
+        bgzip -f ${tmp_vcf} && \
+        bcftools sort --temp-dir $TMPDIR -Oz -o ${tmp_vcf}.gz ${tmp_vcf}.gz && \
+        tabix -f -p vcf ${tmp_vcf}.gz
+        if check_vcf_validity ${tmp_vcf}.gz; then
+            mv ${tmp_vcf}.gz ${output_vcf} && \
+            mv ${tmp_vcf}.gz.tbi ${output_vcf}.tbi && \
+            ls -lh ${output_vcf}*
+        fi
+    elif check_vcf_validity ${tmp_vcf}; then
+        mv ${tmp_vcf} ${output_vcf} && \
+        ls -lh ${output_vcf}*
+    fi
 }
 
 
@@ -704,15 +711,15 @@ function get_array_index {
 
 
 function vcf_content_sha256 () {
-	local input_vcf=${1}
+    local input_vcf=${1}
 
-	if check_vcf_validity ${input_vcf}; then
-		bcftools view --no-version -Ov ${input_vcf} | \
-		sha256sum | \
-		awk '{printf "%s", $1;}'
-	else
-		echo $(randomID)
-	fi
+    if check_vcf_validity ${input_vcf}; then
+        bcftools view --no-version -Ov ${input_vcf} | \
+        sha256sum | \
+        awk '{printf "%s", $1;}'
+    else
+        echo $(randomID)
+    fi
 }
 
 
@@ -736,7 +743,7 @@ function crossmap_liftover_hg382hg19 {
     local hg19_fasta=""
 
     local TEMP
-    TEMP=$(getopt -o hc:i:o::f: --long help,chain_file:,input_vcf:,output_vcf::,hg19_fasta: -- "$@")
+    TEMP=$(getopt -o hc:i:o:f: --long help,chain_file:,input_vcf:,output_vcf:,hg19_fasta: -- "$@")
 
     if [[ $? != 0 ]]; then return 1; fi
 
@@ -755,18 +762,22 @@ function crossmap_liftover_hg382hg19 {
                 ;;
             -c|--chain_file)
                 chain_file="$2"
+                log "The chain file is ${chain_file}"
                 shift 2
                 ;;
             -i|--input_vcf)
                 input_vcf="$2"
+                log "The input vcf is ${input_vcf}"
                 shift 2
                 ;;
             -o|--output_vcf)
                 output_vcf="$2"
+                log "The output vcf is ${output_vcf}"
                 shift 2
                 ;;
             -f|--hg19_fasta)
                 hg19_fasta="$2"
+                log "The hg19 fasta is ${hg19_fasta}"
                 shift 2
                 ;;
             --)
@@ -781,23 +792,33 @@ function crossmap_liftover_hg382hg19 {
     done
 
 
+    if [[ ${input_vcf} =~ \.bgz$ ]]; then
+        bcftools view -Oz -o ${input_vcf/.bgz/.gz} ${input_vcf} && \
+        display_vcf ${input_vcf/.bgz/.gz} && \
+        local input_vcf=${input_vcf/.bgz/.gz} && \
+        bcftools index -f -t ${input_vcf} && \
+        ls -lh ${input_vcf}*
+    fi
+
     if [[ -z ${output_vcf} ]]; then
         local output_vcf=${input_vcf/.vcf/.hg19.vcf}
     fi
 
     if [[ ! ${CONDA_PREFIX} =~ acmg ]]; then
         mamba activate acmg
-        local activated=1
     fi
 
-    CrossMap.py vcf \
+
+    CrossMap vcf \
+    --chromid l \
     ${chain_file} \
     ${input_vcf} \
     ${hg19_fasta} \
-    ${output_vcf} && \
-    display_vcf ${output_vcf}
-
-    [[ ${activated} -eq 1 ]] && mamba deactivate
+    ${output_vcf/.gz/} && \
+    bcftools sort -Oz -o ${output_vcf} ${output_vcf/.gz/} && \
+    bcftools index -f -t ${output_vcf} && \
+    display_vcf ${output_vcf} && \
+    rm ${output_vcf/.gz/}
 }
 
 
@@ -820,7 +841,9 @@ function bcftools_concatvcfs {
 
     if [[ -z ${tmp_dir} ]]; then
         local tmp_dir=${TMPDIR}
+        [[ -z ${tmp_dir} ]] && local tmp_dir=/tmp
     fi
+    log "The tmp dir is ${tmp_dir}"
 
     if [[ ${input_vcfs}  =~ \/ ]] && [[ ! ${input_vcfs} =~ \.vcf(\.[b]*gz)*$ ]] && [[ ! ${input_vcfs} =~ , ]]; then
         local -a vcfs=($(awk '{printf "%s ", $1;}' < ${input_vcfs}))
@@ -865,30 +888,25 @@ function bcftools_concatvcfs {
     fi
 
     local tmp_file_list=${tmp_dir}/$(randomID).lst
-    echo "${vcfs[*]}" | awk -F '\t' 'BEGIN{RS=" ";} length($1) > 0{gsub(/\n$/, ""); if ($1 ~ /\.gz$/) printf "%s\n", $1; else printf "%s.gz\n", $1;}' > ${tmp_file_list}
+    echo "${vcfs[*]}" | \
+    awk -F '\t' 'BEGIN{RS=" ";} length($1) > 0{gsub(/\n$/, ""); if ($1 ~ /\.gz$/) printf "%s\n", $1; else printf "%s.gz\n", $1;}' > ${tmp_file_list}
     log "Here is the temp list file storing the paths of to be concat vcfs:"
     ls -lh ${tmp_file_list}
     cat ${tmp_file_list}
 
-    if [[ ${merged_vcf} =~ \.vcf$ ]]; then
-        local plain_merged=${merged_vcf}
-        local merged_vcf=${merged_vcf}.gz
-    fi
 
     if [[ $(cat ${tmp_file_list} | wc -l) -eq 1 ]]; then
-        cp -f $(cat ${tmp_file_list}) ${merged_vcf}
+        cp -f $(cat ${tmp_file_list}) ${merged_vcf} && \
+        bcftools index -f -t ${merged_vcf} && \
+        ls -lh ${merged_vcf}*
     else
         # If using file list for input a list of vcfs, each one of them need to be bgzipped and tabix indexed
         bcftools concat -o ${merged_vcf} ${other_args} -a --threads ${threads} -d exact -Oz -f ${tmp_file_list} && \
         tabix -f -p vcf ${merged_vcf} && \
         bcftools sort --temp-dir ${tmp_dir} -o ${merged_vcf/.vcf.gz/.sorted.vcf.gz} -Oz ${merged_vcf} && \
-        mv ${merged_vcf/.vcf.gz/.sorted.vcf.gz} ${merged_vcf}
-    fi
-
-    if [[ ! -z ${plain_merged} ]]; then
-        gunzip -c ${merged_vcf} > ${plain_merged}
-    else
-        tabix -f -p vcf ${merged_vcf}
+        mv ${merged_vcf/.vcf.gz/.sorted.vcf.gz} ${merged_vcf} && \
+        bcftools index -f -t ${merged_vcf} && \
+        ls -lh ${merged_vcf}*
     fi
 
     display_table ${merged_vcf} 20

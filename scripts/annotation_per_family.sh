@@ -38,87 +38,86 @@ function log() {
 
 
 function main_workflow() {
-	local input_vcf
-    local ped_file
-	local fam_name
-	local assembly
-	local output_dir
-	local vep_cache_dir
-	local ref_genome
-	local threads
-	local af_cutoff
-	local gnomAD_chr1_vcf
-	local clinvar_vcf
-    local TEMP
-	log "Raw input arguments: $#"
-    TEMP=$(getopt -o a:i:p:f:c:o:r:t: --long assembly:,input_vcf:,ped_file:,fam_name:,vep_cache_dir:,output_dir:,ref_genome:,threads:,af_cutoff:,gnomAD_chr1_vcf:,clinvar_vcf: -- "$@")
+    # Source the argparse.bash script
+    source ${SCRIPT_DIR}/argparse.bash || { log "Failed to source argparse.bash"; return 1; }
 
-	log "TEMP: $TEMP"
-    # if getopt failed, return an error
-    [[ $? != 0 ]] && return 1
+    # Initialize an associative array to hold the configuration values
+    declare -A config
 
-    eval set -- "$TEMP"
+    # Use argparse to define and parse arguments
+    argparse -n main_workflow "$@" < ${SCRIPT_DIR}/main_args.txt || { log "Failed to parse arguments"; return 1; }
 
-    while true; do
-        case "$1" in
-            -a|--assembly)
-                assembly="$2"
-                shift 2
-                ;;
-            -p|--ped_file)
-                ped_file="$2"
-                shift 2
-                ;;
-			-f|--fam_name)
-                fam_name="$2"
-                shift 2
-                ;;
-			-i|--input_vcf)
-                input_vcf="$2"
-                shift 2
-                ;;
-			-d|--vep_cache_dir)
-                vep_cache_dir="$2"
-                shift 2
-                ;;
-			-o|--output_dir)
-                output_dir="$2"
-                shift 2
-                ;;
-			-r|--ref_genome)
-                ref_genome="$2"
-                shift 2
-                ;;
-			-t|--threads)
-				threads="$2"
-				shift 2
-				;;
-			--af_cutoff)
-				af_cutoff="$2"
-				shift 2
-				;;
-			--gnomAD_chr1_vcf)
-				gnomAD_chr1_vcf="$2"
-				shift 2
-				;;
-			--clinvar_vcf)
-				clinvar_vcf="$2"
-				shift 2
-				;;
-            --)
-                shift
-                break
-                ;;
-            *)
-                log "Invalid option"
-                return 2
-                ;;
-        esac
-    done
+    # If a config file is specified, read it and set default values
+    if [[ -n "${args[config]}" ]]; then
+        local config_file="${args[config]}"
+        if [[ ! -f "$config_file" ]]; then
+            echo "Config file '$config_file' not found." >&2
+            return 1
+        fi
+        # Read the config file using yq
+        # Install yq if not already installed: https://github.com/mikefarah/yq/
+        # For this example, assuming yq version 4.x
+        config_keys=(conda_env_yaml input_vcf ped_file fam_name assembly ref_genome output_dir threads af_cutoff gnomad_vcf_dir clinvar_vcf vep_cache_dir vep_plugins_dir vep_plugins_cachedir script_dir)
 
-	if [[ -z ${af_cutoff} ]]; then
-		local af_cutoff=0.05
-	fi
+        for key in "${config_keys[@]}"; do
+            config[$key]="$(yq e ".$key // empty" "$config_file")"
+        done
+    fi
+
+    # Now, set the variables, giving precedence to command line arguments
+    # Command line arguments override config file values
+    local assembly="${args[assembly]:-${config[assembly]}}"
+    local input_vcf="${args[input_vcf]:-${config[input_vcf]}}"
+    local ped_file="${args[ped_file]:-${config[ped_file]}}"
+    local fam_name="${args[fam_name]:-${config[fam_name]}}"
+    local vep_cache_dir="${args[vep_cache_dir]:-${config[vep_cache_dir]}}"
+    local output_dir="${args[output_dir]:-${config[output_dir]}}"
+    local ref_genome="${args[ref_genome]:-${config[ref_genome]}}"
+    local threads="${args[threads]:-${config[threads]}}"
+    local af_cutoff="${args[af_cutoff]:-${config[af_cutoff]:-0.05}}"
+    local gnomad_vcf_dir="${args[gnomad_vcf_dir]:-${config[gnomad_vcf_dir]}}"
+    local clinvar_vcf="${args[clinvar_vcf]:-${config[clinvar_vcf]}}"
+    local vep_plugins_dir="${args[vep_plugins_dir]:-${config[vep_plugins_dir]}}"
+    local vep_plugins_cachedir="${args[vep_plugins_cachedir]:-${config[vep_plugins_cachedir]}}"
+    local script_dir="${args[script_dir]:-${config[script_dir]}}"
+
+    # Check for required arguments (either from command line or config file)
+    local missing_args=()
+    if [[ -z "$assembly" ]]; then missing_args+=("assembly"); fi
+    if [[ -z "$input_vcf" ]]; then missing_args+=("input_vcf"); fi
+    if [[ -z "$ped_file" ]]; then missing_args+=("ped_file"); fi
+    if [[ -z "$fam_name" ]]; then missing_args+=("fam_name"); fi
+    if [[ -z "$vep_cache_dir" ]]; then missing_args+=("vep_cache_dir"); fi
+    if [[ -z "$output_dir" ]]; then missing_args+=("output_dir"); fi
+    if [[ -z "$ref_genome" ]]; then missing_args+=("ref_genome"); fi
+    if [[ -z "$threads" ]]; then missing_args+=("threads"); fi
+    # Add checks for other required arguments if necessary
+
+    if [[ ${#missing_args[@]} -gt 0 ]]; then
+        echo "Error: Missing required arguments: ${missing_args[*]}" >&2
+        return 1
+    fi
+
+    # Log the parsed arguments
+    log "Parsed arguments:"
+    log "  assembly: $assembly"
+    log "  input_vcf: $input_vcf"
+    log "  ped_file: $ped_file"
+    log "  fam_name: $fam_name"
+    log "  vep_cache_dir: $vep_cache_dir"
+    log "  output_dir: $output_dir"
+    log "  ref_genome: $ref_genome"
+    log "  threads: $threads"
+    log "  af_cutoff: $af_cutoff"
+    log "  gnomad_vcf_dir: $gnomad_vcf_dir"
+    log "  clinvar_vcf: $clinvar_vcf"
+    log "  vep_plugins_dir: $vep_plugins_dir"
+    log "  vep_plugins_cachedir: $vep_plugins_cachedir"
+    log "  script_dir: $script_dir"
+
+    # Rest of your function code...
+}
+
 
 	# Prepare proband_ID and family_name
 	if [[ -z ${fam_name} ]]; then

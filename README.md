@@ -6,7 +6,7 @@ Breakdown of annotation resources used for variant deleterious effect evaluation
 2. 5-UTR uORF disruption effect: UTRannotator (VEP_plugin)
 3. General Deleterious effect prediction: CADD (standalone client) || PrimateAI (VEP_plugin) || AlphaMissense (VEP_plugin)
 4. Haplo-insufficiency: LOEUF (VEP_plugin)
-5. Transcript disruption effect prediction: NMD (VEP_plugin) || LoFtee (VEP_plugin)
+5. Transcript disruption effect prediction: NMD (VEP_plugin)
 6. Clinical variants: ClinVar (bcftools annotate)
 7. Population-wise allele frequency + number of homozygous carriers: gnomADv4 (bcftools annotate)
 8. Conservation: Conservation (VEP_plugin)

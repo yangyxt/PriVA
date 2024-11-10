@@ -21,10 +21,41 @@ output_dir: "/home/yangyxt/git_repos/acmg_auto/results"
 
 # Below we specify the number of threads to be used
 threads: 8
-af_cutoff: 0.05
-gnomad_vcf_dir: "/home/yangyxt/git_repos/acmg_auto/data/gnomad"
+
+# Below we specify the allele frequency cutoff for common variants
+af_cutoff: 0.01
+
+# Below we specify the path to the gnomAD vcf file for chromosome 1 and we'll use that template to deduce the paths to other chromosome VCF files, the paths should be relatively constant
+gnomad_vcf_chr1: "/home/yangyxt/git_repos/acmg_auto/data/gnomad/gnomad.genomes.v3.1.2.sites.chr1.vcf.gz"
+
+# Below we specify the path to the clinvar vcf file, the path should be relatively constant
 clinvar_vcf: "/home/yangyxt/git_repos/acmg_auto/data/clinvar/clinvar.vcf.gz"
+
+# Below we specify the cache directory for VEP
 vep_cache_dir: "/home/yangyxt/Caches/ensembl-vep"
+
+# Below we specify the directory containing the VEP plugins executable files
 vep_plugins_dir: "/home/yangyxt/Tools/VEP_plugins"
+
+# Below we specify the directory for storing the VEP plugin caches
 vep_plugins_cachedir: "/home/yangyxt/Caches/VEP_plugin_caches"
-script_dir: "/home/yangyxt/git_repos/acmg_auto/scripts"
+
+# The UTRAnnotator plugin cachefile
+utr_annotator_file: "/home/yangyxt/Caches/VEP_plugin_caches/UTRAnnotator/uORF_5UTR_GRCh37_PUBLIC.txt"
+
+# The LOEUF plugin cache file
+loeuf_prescore: "/home/yangyxt/Caches/VEP_plugin_caches/LOEUF/loeuf_dataset.tsv.gz"
+
+# The AlphaMissense plugin cache file
+alphamissense_prescore: "/home/yangyxt/Caches/VEP_plugin_caches/AlphaMissense/AlphaMissense_hg19.tsv.gz"
+
+# The SpliceAI plugin cache file, snv and indel
+spliceai_snv_prescore: "/home/yangyxt/Caches/VEP_plugin_caches/SpliceAI/hg19/spliceai_scores.raw.snv.hg19.vcf.gz"
+spliceai_indel_prescore: "/home/yangyxt/Caches/VEP_plugin_caches/SpliceAI/hg19/spliceai_scores.raw.indel.hg19.vcf.gz"
+
+# The PrimateAI plugin cache file
+primateai_prescore: "/home/yangyxt/Caches/VEP_plugin_caches/PrimateAI/hg19/PrimateAI_scores_v0.2.tsv.gz"
+
+# The Conversation cache file, only available for GRCh38
+conversation_file: "/home/yangyxt/Caches/VEP_plugin_caches/Conservation/gerp_conservation_scores.homo_sapiens.GRCh37.bw"
+

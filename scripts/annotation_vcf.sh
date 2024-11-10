@@ -1,0 +1,461 @@
+#!/usr/bin/env bash
+# This script is used to define all the annotation process functions and run the main pipeline
+# For now, the script is only used to process short variants (Indels and SNVs). Large structural variants and CNVs are not included.
+# Since there will be unexpected indels in the input VCF file. So prescores are not enough to cover them. We need to use some tools to address this issue.
+# In this workflow, we use VEP, CADD, SpliceAI, VEP-plugin(UTRannotator). We abandon the ANNOVAR for its related releasing and distribution restrictions.
+# The script expect a Family VCF input along with a pedigree table contains the Family pedigree information.
+# Notice that the family sample ID should be consistent between the pedigree table and the VCF file.
+# Notice that the proband of the family should stay as the first record of the family in the pedigree table
+
+# For the same set of configurations (arguments), the pipeline should start with the position it ends last time, unless user specifically asked to forcefully rerun the pipeline
+
+# Maintainer: yangyxt@gmail.com, yangyxt@hku.hk
+
+SELF_SCRIPT="$(realpath ${BASH_SOURCE[0]})"
+SCRIPT_DIR="$(dirname "${SELF_SCRIPT}")"
+BASE_DIR="$(dirname ${SCRIPT_DIR})"
+if [[ ${BASE_DIR} == "/" ]]; then BASE_DIR=""; fi
+DATA_DIR="${BASE_DIR}/data"
+
+if [[ -z $TMPDIR ]]; then TMPDIR=/tmp; fi
+
+# Source the other script
+source "${SCRIPT_DIR}/common_bash_utils.sh"
+# conda activate acmg
+
+log "The folder storing scripts is ${SCRIPT_DIR}, the base folder for used scripts and data is ${BASE_DIR}"
+
+
+
+function main_workflow() {
+    # Source the argparse.bash script
+    source ${SCRIPT_DIR}/argparse.bash || { log "Failed to source argparse.bash"; return 1; }
+
+	argparse "$@" < ${SCRIPT_DIR}/anno_main_args || { log "Failed to parse arguments"; return 1; }
+
+    # Process config file
+    local config_file="${args[config]:-${BASE_DIR}/config.yaml}"
+    declare -A config
+
+    if [[ -f "$config_file" ]]; then
+        log "Using config file: $config_file"
+        # Read config values using yq
+        local -a config_keys=(conda_env_yaml input_vcf ped_file fam_name assembly ref_genome output_dir threads af_cutoff gnomad_vcf_chr1 clinvar_vcf vep_cache_dir vep_plugins_dir vep_plugins_cachedir)
+        for key in "${config_keys[@]}"; do
+            config[$key]="$(yq e ".$key // empty" "$config_file")"
+        done
+    else
+        log "No config file found at $config_file, will use command line arguments only"
+    fi
+
+    # Set variables with command line arguments taking precedence over config file
+    local input_vcf="${args[input_vcf]:-${config[input_vcf]}}"
+    local ped_file="${args[ped_file]:-${config[ped_file]}}"
+    local fam_name="${args[fam_name]:-${config[fam_name]}}"
+
+	# Set the optional arguments
+	local assembly="${args[assembly]:-${config[assembly]}}"
+	local vep_cache_dir="${args[vep_cache_dir]:-${config[vep_cache_dir]}}"
+	local output_dir="${args[output_dir]:-${config[output_dir]}}"
+	local ref_genome="${args[ref_genome]:-${config[ref_genome]}}"
+	local threads="${args[threads]:-${config[threads]}}"
+	local af_cutoff="${args[af_cutoff]:-${config[af_cutoff]:-0.05}}"
+	local gnomad_vcf_chr1="${args[gnomad_vcf_chr1]:-${config[gnomad_vcf_chr1]}}"
+	local clinvar_vcf="${args[clinvar_vcf]:-${config[clinvar_vcf]}}"
+	local vep_plugins_dir="${args[vep_plugins_dir]:-${config[vep_plugins_dir]}}"
+	local vep_plugins_cachedir="${args[vep_plugins_cachedir]:-${config[vep_plugins_cachedir]}}"
+
+    # Set and check required paths
+    local has_error=0
+    check_path "$input_vcf" "file" "input_vcf" || has_error=1
+    check_path "$ped_file" "file" "ped_file" || has_error=1
+
+    # Check non-path required argument
+    if [[ -z "$fam_name" ]]; then
+        log "Error: fam_name not specified (in either command line or config)"
+        has_error=1
+    fi
+
+    # Set optional arguments with defaults
+    local assembly="${args[assembly]:-${config[assembly]}}"
+    local vep_cache_dir="${args[vep_cache_dir]:-${config[vep_cache_dir]}}"
+    local output_dir="${args[output_dir]:-${config[output_dir]}}"
+    local ref_genome="${args[ref_genome]:-${config[ref_genome]}}"
+    local threads="${args[threads]:-${config[threads]}}"
+    local af_cutoff="${args[af_cutoff]:-${config[af_cutoff]:-0.05}}"
+    local gnomad_vcf_chr1="${args[gnomad_vcf_chr1]:-${config[gnomad_vcf_chr1]}}"
+    local clinvar_vcf="${args[clinvar_vcf]:-${config[clinvar_vcf]}}"
+    local vep_plugins_dir="${args[vep_plugins_dir]:-${config[vep_plugins_dir]}}"
+    local vep_plugins_cachedir="${args[vep_plugins_cachedir]:-${config[vep_plugins_cachedir]}}"
+
+    # Check paths that must exist
+    check_path "$ref_genome" "file" "ref_genome" || has_error=1
+    check_path "$gnomad_vcf_chr1" "file" "gnomad_vcf_chr1" || has_error=1
+    check_path "$clinvar_vcf" "file" "clinvar_vcf" || has_error=1
+    check_path "$vep_cache_dir" "dir" "vep_cache_dir" || has_error=1
+    check_path "$vep_plugins_dir" "dir" "vep_plugins_dir" || has_error=1
+    check_path "$vep_plugins_cachedir" "dir" "vep_plugins_cachedir" || has_error=1
+
+    # Create output directory if it doesn't exist
+	local output_dir
+	[[ -z ${output_dir} ]] && output_dir=$(dirname ${input_vcf})
+    if [[ ! -d "$output_dir" ]]; then
+        mkdir -p "$output_dir" || {
+            log "Error: Failed to create output_dir: $output_dir"
+            has_error=1
+        }
+    fi
+
+	# If assembly not specified, try to extract it from the input VCF
+    [[ -z ${assembly} ]] && assembly=$(check_vcf_assembly_version ${input_vcf})
+	[[ -z ${assembly} ]] && assembly=$(check_fasta_assembly_version ${ref_genome})
+
+    # Exit if any errors were found
+    if [[ $has_error -eq 1 ]]; then
+        return 1
+    fi
+
+    # Log the parsed arguments
+    log "Using the following parameters:"
+    log "  input_vcf: $input_vcf"
+    log "  ped_file: $ped_file"
+    log "  fam_name: $fam_name"
+    log "  assembly: $assembly"
+    log "  vep_cache_dir: $vep_cache_dir"
+    log "  output_dir: $output_dir"
+    log "  ref_genome: $ref_genome"
+    log "  threads: $threads"
+    log "  af_cutoff: $af_cutoff"
+    log "  gnomad_vcf_chr1: $gnomad_vcf_chr1"
+    log "  clinvar_vcf: $clinvar_vcf"
+    log "  vep_plugins_dir: $vep_plugins_dir"
+    log "  vep_plugins_cachedir: $vep_plugins_cachedir"
+
+	# Preprocess the input vcf to:
+	# Remove the variants not located in primary chromsomes
+	# Convert the contig names to UCSC style. Meaning mapping VCF to hg19 or hg38
+	# Sort and normalize (including indel left alignment)
+	# Remove variants where proband DP < 5
+	# Remove VCF records where all patients in the family has either missing or homo ref genotype.
+
+	local anno_vcf=${input_vcf/.vcf*/.anno.vcf.gz}
+	preprocess_vcf \
+	${input_vcf} \
+	${ped_file} \
+	${fam_name} \
+	${ref_genome} \
+	${anno_vcf} && \
+	log "Successfully preprocess the input vcf ${input_vcf} for annotation. The result is ${anno_vcf}" && \
+	display_vcf ${anno_vcf} || { \
+	log "Failed to preprocess the input vcf ${input_vcf} for annotation. Quit with error."; \
+	return 1; }
+
+
+	# First annotate gnomAD aggregated frequency and number of homozygous ALT allele carriers
+	# Tag the variants with gnomAD_common and gnomAD_BA FILTER tags
+	anno_agg_gnomAD_data \
+	${anno_vcf} \
+	${threads} \
+	${assembly} \
+	${gnomAD_vcf_chr1} && \
+	log "Successfully add aggregated gnomAD annotation on ${anno_vcf}. The result is ${anno_vcf}" || { \
+	log "Failed to add aggregated gnomAD annotation on ${anno_vcf}. Quit now"
+	return 1; }
+
+
+	# Now we annotate ClinVar variants and return result as VCF file
+	# Annotate the variants with
+	anno_clinvar_data \
+	${anno_vcf} \
+	${clinvar_vcf} || { \
+	log "Failed to add ClinVar annotation on ${anno_vcf}. Quit now"
+	return 1; }
+
+
+	# Now we annotate the variants with VEP
+}
+
+
+function preprocess_vcf() {
+	local input_vcf=${1}
+	local ped_file=${2}
+	local fam_name=${3}
+	local ref_genome=${4}
+	local output_vcf=${5}
+
+	# Make sure several things
+	# 1. The VCF file is having a chromosome notation with chr prefix (UCSC style instead of the NCBI style)
+	# 2. The VCF file is using the same assembly as the ref genome fasta file
+	# 3. The VCF file is sorted and normalized, no multi-allelics allowed which should be splitted into multiple records
+	# 4. Temporarily do not deal with variant records located in alternative contigs
+
+	local vcf_assembly=$(check_vcf_assembly_version ${input_vcf})
+	local fasta_assembly=$(extract_assembly_from_fasta ${ref_genome})
+
+	if [[ -z ${ref_genome} ]]; then
+		log "User does not specify the ref genome fasta file. Cant proceed now. Quit with Error!"
+		return 1;
+	elif [[ ! -z ${vcf_assembly} ]] && [[ ! ${fasta_assembly} =~ ${vcf_assembly} ]]; then
+		log "User specified ref_genome fasta file ${ref_genome} seems not match with the VCF used assembly ${vcf_assembly}. Quit with Error"
+		return 1;
+	fi
+
+	# Test if output_vcf is already valid
+	if [[ ${output_vcf} -nt ${input_vcf} ]] && \
+		check_vcf_validity ${output_vcf} && \
+		check_vcf_multiallelics ${output_vcf}; then
+		log "The ${output_vcf} is valid and udpated. Skip this function"
+		return 0;
+    fi
+
+	# First filter out variants that not in primary chromosomes (chrM to chrY)(MT to Y)
+	bcftools sort -Ou ${input_vcf} | \
+	bcftools view -r "$(cat ${BASE_DIR}/data/liftover/ucsc_GRC.primary.contigs.tsv | tr '\n' ',')" -Ou - | \
+	bcftools sort -Oz -o ${input_vcf/.vcf*/.primary.vcf.gz} && \
+	tabix -f -p vcf ${input_vcf/.vcf*/.primary.vcf.gz} || \
+	{ log "Failed to generate a VCF file that only contains records in primary chromosomes"; \
+	  return 1; }
+
+	# First check whether the VCF is using NCBI or UCSC assembly
+	local assembly_version=$(check_vcf_contig_version ${input_vcf/.vcf*/.primary.vcf.gz})
+	if [[ ${assembly_version} =~ "ncbi" ]]; then
+		log "The input vcf is detected to map variants to GRC assemblies instead of UCSC assemblies" && \
+		liftover_from_GRCh_to_hg \
+		${input_vcf/.vcf*/.primary.vcf.gz} \
+		${BASE_DIR}/data/liftover/ucsc_to_GRC.contig.map.tsv \
+		${input_vcf/.vcf*/.ucsc.vcf.gz}
+	else
+		cp -f ${input_vcf/.vcf*/.primary.vcf.gz} ${input_vcf/.vcf*/.ucsc.vcf.gz}
+	fi
+
+	# First sort the input_vcf,
+	# Then normalize the input_vcf with bcftools
+	normalize_vcf ${input_vcf/.vcf*/.ucsc.vcf.gz} ${input_vcf/.vcf*/.norm.vcf.gz} ${ref_genome} $TMPDIR
+	announce_remove_tmps ${input_vcf/.vcf*/}*tmp*vcf*
+
+	# Then we add uniq IDs to these variants
+	prepare_vcf_add_varID \
+	${input_vcf/.vcf/.norm.vcf} \
+	${output_vcf} && \
+	tabix -f -p vcf ${output_vcf} && \
+	announce_remove_tmps ${input_vcf/.vcf/.norm.vcf} && \
+	display_vcf ${output_vcf}
+}
+
+
+
+
+function anno_agg_gnomAD_data () {
+	local input_vcf=${1}
+	local threads=${2}
+	local assembly=${3}
+	local gnomAD_vcf_chr1=${4}
+	local tmp_tag=$(randomID)
+	local output_vcf=${input_vcf/.vcf/.${tmp_tag}.vcf}
+
+	# Check the compression format of the input vcf file
+	[[ ! ${input_vcf} =~ \.vcf\.gz$ ]] && {
+		log "The input vcf ${input_vcf} is not a gzipped vcf file. Quit with Error!"
+		return 1;
+	}
+
+	check_vcf_infotags ${input_vcf} "AC_joint,AN_joint,AF_joint,nhomo_joint_XX,nhomo_joint_XY" && \
+	log "The input vcf ${input_vcf} already contains the INFO tags AC_joint,AN_joint,AF_joint,nhomo_joint_XX,nhomo_joint_XY. We do not need to add them again" && \
+	return 0
+
+	# We already make sure the input VCF is sorted and normalized
+	# We also make sure no variants in alternative contigs are included in the input VCF
+	# The used gnomAD vcf files should be the ones with joint AF information from both exome and genome datasets
+
+	local -a chr_chroms
+	# Step 1: Extract all the chromosome names from the input vcf
+	mapfile -t chr_chroms < <(bcftools query -f '%CHROM\n' ${input_vcf} | uniq -)
+	log "The chromosome names extracted from the input vcf are: ${chr_chroms[*]}"
+
+	# Step 2: Further split the main-contig-variants file to multiple single-contig variant files
+	for chr in "${chr_chroms[@]}"; do
+		bcftools view -r ${chr} ${input_vcf} -Oz -o ${input_vcf/.vcf*/.chr${chr}.vcf.gz}
+	done
+
+	# Step 3: Perform annotation with bcftools annotate to add the INFO fields from gnomAD vcfs to the input splitted vcfs
+	export gnomAD_vcf_chr1
+	parallel -j ${threads} --dry-run "bcftools annotate -a ${gnomAD_vcf_chr1/.chr1.vcf.bgz/}.chr{}.vcf.bgz -c CHROM,POS,REF,ALT,.INFO/AC_joint,.INFO/AN_joint,.INFO/AF_joint,.INFO/nhomo_joint_XX,.INFO/nhomo_joint_XY -Oz -o ${input_vcf/.vcf*/}.chr{}.gnomAD.vcf.gz ${input_vcf/.vcf*/}.chr{}.vcf.gz" ::: "${chr_chroms[@]}" && \
+	parallel -j ${threads} --joblog ${input_vcf/.vcf*/.anno.gnomAD.log} "bcftools annotate -a ${gnomAD_vcf_chr1/.chr1.vcf.bgz/}.chr{}.vcf.bgz -c CHROM,POS,REF,ALT,.INFO/AC_joint,.INFO/AN_joint,.INFO/AF_joint,.INFO/nhomo_joint_XX,.INFO/nhomo_joint_XY -Oz -o ${input_vcf/.vcf*/}.chr{}.gnomAD.vcf.gz ${input_vcf/.vcf*/}.chr{}.vcf.gz" ::: "${chr_chroms[@]}"; \
+	check_parallel_joblog ${input_vcf/.vcf*/.anno.gnomAD.log} || { \
+	log "Failed to add aggregated gnomAD annotation on ${input_vcf}. Quit now"
+	return 1; }
+
+	# Merge the annotated vcfs together (including the alt-contig-variants file) to form into the output vcf
+	# We can filter on AF here
+	bcftools concat -Ou ${input_vcf/.vcf*/.chr*.gnomAD.vcf.gz} | \
+	bcftools sort -Oz -o ${output_vcf} && \
+	tabix -f -p vcf ${output_vcf} && \
+	mv ${output_vcf} ${input_vcf} && \
+	mv ${output_vcf}.tbi ${input_vcf}.tbi
+
+}
+
+
+
+function anno_clinvar_data () {
+	local input_vcf=${1}
+	local clinvar_vcf=${2}
+	local tmp_tag=$(randomID)
+	local output_vcf=${input_vcf/.vcf/.${tmp_tag}.vcf}
+
+	[[ ! ${input_vcf} =~ \.vcf\.gz$ ]] && {
+		log "The input vcf ${input_vcf} is not a gzipped vcf file. Quit with Error!"
+		return 1;
+	}
+
+	check_vcf_infotags ${input_vcf} "CLNDN,CLNHGVS,CLNREVSTAT,CLNSIG,GENEINFO" && \
+	log "The input vcf ${input_vcf} already contains the INFO tags CLNDN,CLNHGVS,CLNREVSTAT,CLNSIG,GENEINFO. We do not need to add them again" && \
+	return 0
+
+	bcftools annotate -a ${clinvar_vcf} -c CHROM,POS,REF,ALT,.INFO/CLNDN,.INFO/CLNHGVS,.INFO/CLNREVSTAT,.INFO/CLNSIG,.INFO/GENEINFO -Ou ${input_vcf} | \
+	bcftools sort -Oz -o ${output_vcf} && \
+	tabix -f -p vcf ${output_vcf} && \
+	mv ${output_vcf} ${input_vcf} && \
+	mv ${output_vcf}.tbi ${input_vcf}.tbi && \
+	display_vcf ${input_vcf}
+}
+
+
+
+
+function prepare_vcf_add_varID {
+    local input_vcf=${1}
+    local output_vcf=${2}
+
+    if [[ -z ${output_vcf} ]]; then
+        local output_vcf=${input_vcf/.vcf/.id.vcf}
+    fi
+
+    python3 ${SCRIPT_DIR}/generate_varID_for_vcf.py \
+    -i ${input_vcf} \
+	-o ${output_vcf}
+	check_return_code
+
+    display_vcf ${output_vcf}
+}
+
+
+
+function anno_VEP_data() {
+    # Source the argparse.bash script
+    source ${SCRIPT_DIR}/argparse.bash || { log "Failed to source argparse.bash"; return 1; }
+
+    # Process arguments using anno_vep_args
+    argparse "$@" < ${SCRIPT_DIR}/anno_vep_args || { log "Failed to parse arguments"; return 1; }
+
+    # Process config file
+    local config_file="${args[config]:-${BASE_DIR}/config.yaml}"
+    declare -A config
+
+    if [[ -f "$config_file" ]]; then
+        log "Using config file: $config_file"
+        local -a config_keys=(assembly ref_genome vep_cache_dir vep_plugins_dir vep_plugins_cachedir threads
+                              utr_annotator_file loeuf_prescore alphamissense_prescore
+                              spliceai_snv_prescore spliceai_indel_prescore primateai_prescore conversation_file)
+        for key in "${config_keys[@]}"; do
+            config[$key]="$(yq e ".$key // empty" "$config_file")"
+        done
+    else
+        log "No config file found at $config_file, will use command line arguments only"
+    fi
+
+    # Set variables with command line arguments taking precedence over config file
+    local input_vcf="${args[input_vcf]}"
+    local assembly="${args[assembly]:-${config[assembly]}}"
+    local ref_genome="${args[ref_genome]:-${config[ref_genome]}}"
+    local vep_cache_dir="${args[vep_cache_dir]:-${config[vep_cache_dir]}}"
+    local vep_plugins_dir="${args[vep_plugins_dir]:-${config[vep_plugins_dir]}}"
+    local vep_plugins_cachedir="${args[vep_plugins_cachedir]:-${config[vep_plugins_cachedir]}}"
+    local threads="${args[threads]:-${config[threads]:-4}}"
+
+    # Plugin cache files
+    local utr_annotator_file="${args[utr_annotator_file]:-${config[utr_annotator_file]}}"
+    local loeuf_prescore="${args[loeuf_prescore]:-${config[loeuf_prescore]}}"
+    local alphamissense_prescore="${args[alphamissense_prescore]:-${config[alphamissense_prescore]}}"
+    local spliceai_snv_prescore="${args[spliceai_snv_prescore]:-${config[spliceai_snv_prescore]}}"
+    local spliceai_indel_prescore="${args[spliceai_indel_prescore]:-${config[spliceai_indel_prescore]}}"
+    local primateai_prescore="${args[primateai_prescore]:-${config[primateai_prescore]}}"
+    local conversation_file="${args[conversation_file]:-${config[conversation_file]}}"
+
+    # Validate inputs
+    local has_error=0
+    check_path "$input_vcf" "file" "input_vcf" || has_error=1
+    check_path "$ref_genome" "file" "ref_genome" || has_error=1
+    check_path "$vep_cache_dir" "dir" "vep_cache_dir" || has_error=1
+    check_path "$vep_plugins_dir" "dir" "vep_plugins_dir" || has_error=1
+    check_path "$vep_plugins_cachedir" "dir" "vep_plugins_cachedir" || has_error=1
+
+    # Check plugin cache files
+    check_path "$utr_annotator_file" "file" "utr_annotator_file" || has_error=1
+    check_path "$loeuf_prescore" "file" "loeuf_prescore" || has_error=1
+    check_path "$alphamissense_prescore" "file" "alphamissense_prescore" || has_error=1
+    check_path "$spliceai_snv_prescore" "file" "spliceai_snv_prescore" || has_error=1
+    check_path "$spliceai_indel_prescore" "file" "spliceai_indel_prescore" || has_error=1
+    check_path "$primateai_prescore" "file" "primateai_prescore" || has_error=1
+    check_path "$conversation_file" "file" "conversation_file" || has_error=1
+
+    # Try to determine assembly if not specified
+    [[ -z ${assembly} ]] && assembly=$(check_vcf_assembly_version ${input_vcf})
+    [[ -z ${assembly} ]] && assembly=$(check_fasta_assembly_version ${ref_genome})
+
+    # Exit if any errors were found
+    if [[ $has_error -eq 1 ]]; then
+        return 1
+    fi
+
+    # Run VEP annotation
+    vep -i ${input_vcf} \
+    --format vcf \
+    --verbose \
+    --vcf \
+    --species homo_sapiens \
+    --use_given_ref \
+    --assembly ${assembly} \
+    --cache \
+    --merged \
+    --numbers \
+    --symbol \
+    --canonical \
+    --variant_class \
+    --gene_phenotype \
+    --stats_file ${input_vcf/.vcf*/.vep.stats.html} \
+    --fork ${threads} \
+    --buffer_size 10000 \
+    --fasta ${ref_genome} \
+    --dir_cache ${vep_cache_dir} \
+    --dir_plugins ${vep_plugins_dir} \
+    -plugin UTRAnnotator,file=${utr_annotator_file} \
+    -plugin LOEUF,file=${loeuf_prescore},match_by=transcript \
+    -plugin AlphaMissense,file=${alphamissense_prescore} \
+    -plugin SpliceAI,snv=${spliceai_snv_prescore},indel=${spliceai_indel_prescore},cutoff=0.5 \
+    -plugin PrimateAI,${primateai_prescore} \
+    -plugin Conservation,file=${conversation_file} \
+    --force_overwrite \
+    -o ${input_vcf/.vcf*/.vep.vcf.gz}
+}
+
+
+
+
+if [[ "${#BASH_SOURCE[@]}" -eq 1 ]]; then
+    declare -a func_names=($(typeset -f | awk '!/^main[ (]/ && /^[^ {}]+ *\(\)/ { gsub(/[()]/, "", $1); printf $1" ";}'))
+    declare -a input_func_names=($(return_array_intersection "${func_names[*]}" "$*"))
+    declare -a arg_indices=($(get_array_index "${input_func_names[*]}" "$*"))
+    if [[ ${#input_func_names[@]} -gt 0 ]]; then
+        log "Seems like the command is trying to directly run a function in this script ${BASH_SOURCE[0]}."
+        first_func_ind=${arg_indices}
+        log "The identified first func name is at the ${first_func_ind}th input argument, while the total input arguments are: $*"
+        following_arg_ind=$((first_func_ind + 1))
+        log "Executing: ${*:${following_arg_ind}}"
+        "${@:${following_arg_ind}}"
+    else
+		log "Directly run main_workflow with input args: $#"
+		main_workflow "$@"
+	fi
+fi
+

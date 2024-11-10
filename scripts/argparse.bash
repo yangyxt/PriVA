@@ -44,7 +44,7 @@ EOF
     cat >> "$argparser" <<EOF
 args = parser.parse_args()
 for arg in [a for a in dir(args) if not a.startswith('_')]:
-    key = arg.upper()
+    key = arg
     value = getattr(args, arg, None)
 
     if isinstance(value, bool) or value is None:

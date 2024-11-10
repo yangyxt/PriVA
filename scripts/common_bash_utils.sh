@@ -26,7 +26,8 @@ function log() {
     local script_name="${BASH_SOURCE[1]##*/}"
     local func_name="${FUNCNAME[1]}"
     local line_num="${BASH_LINENO[0]}"
-    local timestamp=$(date +"%Y-%m-%d %H:%M:%S")
+    local timestamp
+	timestamp=$(date +"%Y-%m-%d %H:%M:%S")
     >&2 echo "[$timestamp] [Script $script_name: Line $line_num] [Func: $func_name] $msg"
 }
 
@@ -572,7 +573,8 @@ function check_vcf_lineno {
 function check_vcf_contig_version () {
     local input_vcf=${1}
 
-    local example_contig_name=$(bcftools query -f '%CHROM\n' ${input_vcf} | head -1)
+    local example_contig_name
+	example_contig_name=$(bcftools query -f '%CHROM\n' ${input_vcf} | head -1)
 
     if [[ ${example_contig_name} =~ ^chr ]]; then
         echo "ucsc"
@@ -910,6 +912,142 @@ function bcftools_concatvcfs {
     fi
 
     display_table ${merged_vcf} 20
+}
+
+
+# Simplified helper function to check path existence
+function check_path() {
+    local path="$1"
+    local type="$2"  # "file" or "dir"
+    local var_name="$3"
+
+    if [[ -z "$path" ]]; then
+        log "Error: $var_name not specified (in either command line or config)"
+        return 1
+    fi
+
+    if [[ "$type" == "file" && ! -f "$path" ]]; then
+        log "Error: $var_name file not found: $path"
+        return 1
+    elif [[ "$type" == "dir" && ! -d "$path" ]]; then
+        log "Error: $var_name directory not found: $path"
+        return 1
+    fi
+
+    return 0
+}
+
+
+function parse_ped_file() {
+	# Extract the proband ID and all the patient IDs from the pedigree file
+	local ped_file=${1}
+	local fam_vcf=${2}
+	local fam_name=${3}
+
+	# Extract the proband ID, usually it is the first sample in the VCF file
+	local proband_ID
+	proband_ID=$(bcftools query -l ${fam_vcf} | head -1) || {
+			log "Failed to get proband ID from ${input_vcf}. Quit now"
+			return 1
+		}
+
+	# Extract the family name from the pedigree file
+	if [[ -z ${fam_name} ]]; then
+		fam_name=$(awk -F '\t' '$2 == "'${proband_ID}'"{printf "%s", $1; exit 0;}' ${ped_file}) || {
+			log "Failed to get family name from ${ped_file} using proband ID ${proband_ID}. Quit now"
+			return 1
+		}
+	fi
+
+	# Extract all the patient IDs from the pedigree file
+	local -a patient_IDs
+	mapfile -t patient_IDs < <(awk -F '\t' '$1 == "'${fam_name}'" && $6 == "2" {printf "%s\n", $2}' "${ped_file}") || {
+		log "Failed to get patient IDs from ${ped_file} for family ${fam_name}. Quit now"
+		return 1
+	}
+
+	echo "${fam_name}"
+	echo "${proband_ID}"
+	echo "${patient_IDs[@]}"
+}
+
+
+function check_parallel_joblog {
+    local ret_code=$(echo $?)
+    local job_log=${1}
+
+	# compatible with the GNU parallel joblog format
+    # print failed job commands to stdout
+
+    local job_num=$(tail -n +2 ${job_log} | wc -l)
+    local -a fail_job_ids=($(tail -n +2 ${job_log} | awk -F '\t' '$7 != "0"{print $1;}'))
+    log ": Parallel job log is $(ls -lh ${job_log})"
+    if [[ ${#fail_job_ids[@]} -gt 0 ]]; then
+        >&2 cat ${job_log}
+        log ": According to ${job_log}: totally ${job_num} jobs were running in parallel, ${#fail_job_ids[@]} of the parallel jobs failed, get a return code of ${ret_code}, the commands are:"
+        for id in "${fail_job_ids[@]}"; do
+            >&2 awk -F '\t' '$1 == "'${id}'"{printf "%s\n", $NF;}' ${job_log}
+        done
+    else
+        log ": All parellel jobs are finished without an error."
+        >&2 cat ${job_log}
+    fi
+
+	return ${#fail_job_ids[@]}
+}
+
+
+function extract_assembly_from_fasta() {
+	local fasta_file=${1}
+	# Here expecting the specified reference genome to have a name like ucsc.hg19.fasta or ucsc.hg38.fasta
+	assembly=$(basename ${fasta_file} | awk -F '.' '{printf "%s", $2;}')
+	[[ ! ${assembly} =~ ^hg[13][98]$ ]] && \
+	log "Please specify the assembly as hg19 or hg38. Failed to extract the assembly version either from input VCF or input ref_genome fasta file. Quit now." && \
+	return 1
+}
+
+
+function check_vcf_infotags() {
+    # Check if one or more INFO tags are defined in VCF header
+    # Arguments:
+    #   $1 - Input VCF file
+    #   $2 - Comma-separated list of INFO tags to check
+    # Returns:
+    #   0 if all tags are found
+    #   1 if any tag is missing or input is invalid
+
+    local input_vcf="$1"
+    local -a tags=($(echo "$2" | tr ',' ' '))
+
+    # Validate inputs
+    if [[ ! -f ${input_vcf} ]]; then
+        log "Input VCF file ${input_vcf} does not exist"
+        return 1
+    fi
+
+    if [[ ${#tags[@]} -eq 0 ]]; then
+        log "No INFO tags specified to check"
+        return 1
+    fi
+
+    # Extract INFO tags from header
+    local header_tags=$(bcftools view -h "${input_vcf}" | grep -E "^##INFO=<ID=" | cut -d',' -f1 | cut -d'=' -f3)
+
+    # Check each requested tag
+    local missing_tags=()
+    for tag in "${tags[@]}"; do
+        if ! echo "${header_tags}" | grep -q "^${tag}$"; then
+            missing_tags+=("${tag}")
+        fi
+    done
+
+    if [[ ${#missing_tags[@]} -gt 0 ]]; then
+        log "The following INFO tags are not defined in ${input_vcf} header: ${missing_tags[*]}"
+        return 1
+    else
+        log "All requested INFO tags are present in ${input_vcf} header: ${tags[*]}"
+        return 0
+    fi
 }
 
 

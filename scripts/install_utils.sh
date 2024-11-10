@@ -340,13 +340,21 @@ function PrimateAI_install() {
           ./vep -i variations.vcf --plugin PrimateAI,PrimateAI_scores_v0.2_GRCh37_sorted.tsv.bgz
           ./vep -i variations.vcf --plugin PrimateAI,PrimateAI_scores_v0.2_GRCh38_sorted.tsv.bgz"
 
-    read -p "Have you finished formatting the downloaded files? (yes or no)"
+    read -p "Have you finished downloading the files? (yes or no)"
     if [[ ${REPLY} =~ "yes" ]] || [[ ${REPLY} =~ "y" ]] || [[ ${REPLY} =~ "Y" ]] || [[ ${REPLY} =~ "Yes" ]] || [[ ${REPLY} =~ "YES" ]]; then
         read -p "Please specify the absolute path to the tsv prescore file, choose the right assembly version"
         local prescore_file=${REPLY}
-        if [[ -f ${prescore_file} ]]; then
+        if [[ -f ${prescore_file} ]] && [[ ${prescore_file} =~ \.tsv\.gz$ ]]; then
             # We need to return the prescore file paths to the outside of the function
-            echo ${prescore_file}
+			gunzip -cf ${prescore_file} | \
+			sed '12s/.*/#&/' | \
+			sed '/^$/d' | \
+			awk 'NR<12{print $0;next}{print $0 | "sort -k1,1 -k 2,2n -V"}' | \
+			bgzip > ${prescore_file/.tsv.gz/.sorted.tsv.bgz} && \
+			tabix -s 1 -b 2 -e 2 ${prescore_file/.tsv.gz/.sorted.tsv.bgz} && \
+            echo ${prescore_file/.tsv.gz/.sorted.tsv.bgz}
+		elif [[ -f ${prescore_file} ]] && [[ ${prescore_file} =~ \.tsv.bgz$ ]]; then
+			echo ${prescore_file}
         else
             log "The file ${prescore_file} does not exist"
             return 1
@@ -706,9 +714,11 @@ function Conservation_install() {
     fi
 
 	if [[ ${assembly_version} == "GRCh38" ]]; then
-		wget http://ftp.ensembl.org/pub/current_compara/conservation_scores/91_mammals.gerp_conservation_score/gerp_conservation_scores.homo_sapiens.${assembly_version}.bw -O ${CACHEDIR}/Conservation/gerp_conservation_scores.homo_sapiens.${assembly_version}.bw
-		log "The conservation scores for ${assembly_version} assembly version are downloaded to ${CACHEDIR}/Conservation"
-		echo ${CACHEDIR}/Conservation/gerp_conservation_scores.homo_sapiens.${assembly_version}.bw
+		[[ ! -f ${CACHEDIR}/Conservation/gerp_conservation_scores.homo_sapiens.${assembly_version}.bw ]] && \
+		wget http://ftp.ensembl.org/pub/current_compara/conservation_scores/91_mammals.gerp_conservation_score/gerp_conservation_scores.homo_sapiens.${assembly_version}.bw -O ${CACHEDIR}/Conservation/gerp_conservation_scores.homo_sapiens.${assembly_version}.bw && \
+		log "The conservation scores for ${assembly_version} assembly version are downloaded to ${CACHEDIR}/Conservation" && \
+		echo ${CACHEDIR}/Conservation/gerp_conservation_scores.homo_sapiens.${assembly_version}.bw || \
+		{ log "Failed to download the conservation scores for ${assembly_version} assembly version"; return 1; }
 	elif [[ ${assembly_version} == "GRCh37" ]]; then
 		wget http://hgdownload.soe.ucsc.edu/gbdb/hg19/bbi/All_hg19_RS.bw -O ${CACHEDIR}/Conservation/gerp_conservation_scores.homo_sapiens.${assembly_version}.bw
 		log "The conservation scores for ${assembly_version} assembly version are downloaded to ${CACHEDIR}/Conservation"

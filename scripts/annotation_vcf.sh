@@ -28,42 +28,58 @@ log "The folder storing scripts is ${SCRIPT_DIR}, the base folder for used scrip
 
 
 function main_workflow() {
+	# Define local variables first
+	local input_vcf \
+		  config \
+		  ped_file \
+		  fam_name \
+		  assembly \
+		  ref_genome \
+		  output_dir \
+		  threads \
+		  af_cutoff \
+		  gnomad_vcf_chr1 \
+		  clinvar_vcf \
+		  vep_cache_dir \
+		  vep_plugins_dir \
+		  vep_plugins_cachedir
+
     # Source the argparse.bash script
     source ${SCRIPT_DIR}/argparse.bash || { log "Failed to source argparse.bash"; return 1; }
 
 	argparse "$@" < ${SCRIPT_DIR}/anno_main_args || { log "Failed to parse arguments"; return 1; }
 
     # Process config file
-    local config_file="${args[config]:-${BASE_DIR}/config.yaml}"
-    declare -A config
+    local config_file="${config:-${BASE_DIR}/config.yaml}"
+    local -A config_args
 
     if [[ -f "$config_file" ]]; then
         log "Using config file: $config_file"
-        # Read config values using yq
-        local -a config_keys=(conda_env_yaml input_vcf ped_file fam_name assembly ref_genome output_dir threads af_cutoff gnomad_vcf_chr1 clinvar_vcf vep_cache_dir vep_plugins_dir vep_plugins_cachedir)
+        local -a config_keys=(input_vcf ped_file fam_name assembly vep_cache_dir output_dir ref_genome threads af_cutoff gnomad_vcf_chr1 clinvar_vcf vep_plugins_dir vep_plugins_cachedir)
         for key in "${config_keys[@]}"; do
-            config[$key]="$(yq e ".$key // empty" "$config_file")"
+			# Need to remove the quotes around the value
+            config_args[$key]="$(yq ".${key}" "$config_file" | sed 's/^"\(.*\)"$/\1/' || echo '')"
         done
     else
         log "No config file found at $config_file, will use command line arguments only"
     fi
 
     # Set variables with command line arguments taking precedence over config file
-    local input_vcf="${args[input_vcf]:-${config[input_vcf]}}"
-    local ped_file="${args[ped_file]:-${config[ped_file]}}"
-    local fam_name="${args[fam_name]:-${config[fam_name]}}"
+    local input_vcf="${input_vcf:-${config_args[input_vcf]}}"
+    local ped_file="${ped_file:-${config_args[ped_file]}}"
+    local fam_name="${fam_name:-${config_args[fam_name]}}"
 
 	# Set the optional arguments
-	local assembly="${args[assembly]:-${config[assembly]}}"
-	local vep_cache_dir="${args[vep_cache_dir]:-${config[vep_cache_dir]}}"
-	local output_dir="${args[output_dir]:-${config[output_dir]}}"
-	local ref_genome="${args[ref_genome]:-${config[ref_genome]}}"
-	local threads="${args[threads]:-${config[threads]}}"
-	local af_cutoff="${args[af_cutoff]:-${config[af_cutoff]:-0.05}}"
-	local gnomad_vcf_chr1="${args[gnomad_vcf_chr1]:-${config[gnomad_vcf_chr1]}}"
-	local clinvar_vcf="${args[clinvar_vcf]:-${config[clinvar_vcf]}}"
-	local vep_plugins_dir="${args[vep_plugins_dir]:-${config[vep_plugins_dir]}}"
-	local vep_plugins_cachedir="${args[vep_plugins_cachedir]:-${config[vep_plugins_cachedir]}}"
+	local assembly="${assembly:-${config_args[assembly]}}"
+	local vep_cache_dir="${vep_cache_dir:-${config_args[vep_cache_dir]}}"
+	local output_dir="${output_dir:-${config_args[output_dir]}}"
+	local ref_genome="${ref_genome:-${config_args[ref_genome]}}"
+	local threads="${threads:-${config_args[threads]}}"
+	local af_cutoff="${af_cutoff:-${config_args[af_cutoff]:-0.05}}"
+	local gnomad_vcf_chr1="${gnomad_vcf_chr1:-${config_args[gnomad_vcf_chr1]}}"
+	local clinvar_vcf="${clinvar_vcf:-${config_args[clinvar_vcf]}}"
+	local vep_plugins_dir="${vep_plugins_dir:-${config_args[vep_plugins_dir]}}"
+	local vep_plugins_cachedir="${vep_plugins_cachedir:-${config_args[vep_plugins_cachedir]}}"
 
     # Set and check required paths
     local has_error=0
@@ -75,18 +91,6 @@ function main_workflow() {
         log "Error: fam_name not specified (in either command line or config)"
         has_error=1
     fi
-
-    # Set optional arguments with defaults
-    local assembly="${args[assembly]:-${config[assembly]}}"
-    local vep_cache_dir="${args[vep_cache_dir]:-${config[vep_cache_dir]}}"
-    local output_dir="${args[output_dir]:-${config[output_dir]}}"
-    local ref_genome="${args[ref_genome]:-${config[ref_genome]}}"
-    local threads="${args[threads]:-${config[threads]}}"
-    local af_cutoff="${args[af_cutoff]:-${config[af_cutoff]:-0.05}}"
-    local gnomad_vcf_chr1="${args[gnomad_vcf_chr1]:-${config[gnomad_vcf_chr1]}}"
-    local clinvar_vcf="${args[clinvar_vcf]:-${config[clinvar_vcf]}}"
-    local vep_plugins_dir="${args[vep_plugins_dir]:-${config[vep_plugins_dir]}}"
-    local vep_plugins_cachedir="${args[vep_plugins_cachedir]:-${config[vep_plugins_cachedir]}}"
 
     # Check paths that must exist
     check_path "$ref_genome" "file" "ref_genome" || has_error=1
@@ -108,7 +112,7 @@ function main_workflow() {
 
 	# If assembly not specified, try to extract it from the input VCF
     [[ -z ${assembly} ]] && assembly=$(check_vcf_assembly_version ${input_vcf})
-	[[ -z ${assembly} ]] && assembly=$(check_fasta_assembly_version ${ref_genome})
+	[[ -z ${assembly} ]] && assembly=$(extract_assembly_from_fasta ${ref_genome})
 
     # Exit if any errors were found
     if [[ $has_error -eq 1 ]]; then
@@ -173,6 +177,18 @@ function main_workflow() {
 
 
 	# Now we annotate the variants with VEP
+	anno_VEP_data \
+	--input_vcf ${anno_vcf} \
+	--config ${config_file} \
+	--assembly ${assembly} \
+	--ref_genome ${ref_genome} \
+	--vep_cache_dir ${vep_cache_dir} \
+	--vep_plugins_dir ${vep_plugins_dir} \
+	--vep_plugins_cachedir ${vep_plugins_cachedir} \
+	--threads ${threads} || { \
+	log "Failed to add VEP annotation on ${anno_vcf}. Quit now"
+	return 1; }
+
 }
 
 
@@ -342,15 +358,29 @@ function prepare_vcf_add_varID {
 
 
 function anno_VEP_data() {
-    # Source the argparse.bash script
-    source ${SCRIPT_DIR}/argparse.bash || { log "Failed to source argparse.bash"; return 1; }
+	# Declare local variables first
+	local input_vcf \
+	      config \
+		  assembly \
+		  ref_genome \
+		  vep_cache_dir \
+		  vep_plugins_dir \
+		  vep_plugins_cachedir \
+		  threads \
+		  utr_annotator_file \
+		  loeuf_prescore \
+		  alphamissense_prescore \
+		  spliceai_snv_prescore \
+		  spliceai_indel_prescore \
+		  primateai_prescore \
+		  conversation_file
 
     # Process arguments using anno_vep_args
     argparse "$@" < ${SCRIPT_DIR}/anno_vep_args || { log "Failed to parse arguments"; return 1; }
 
     # Process config file
-    local config_file="${args[config]:-${BASE_DIR}/config.yaml}"
-    declare -A config
+    local config_file="${config:-${BASE_DIR}/config.yaml}"
+    local -A config_args
 
     if [[ -f "$config_file" ]]; then
         log "Using config file: $config_file"
@@ -358,29 +388,30 @@ function anno_VEP_data() {
                               utr_annotator_file loeuf_prescore alphamissense_prescore
                               spliceai_snv_prescore spliceai_indel_prescore primateai_prescore conversation_file)
         for key in "${config_keys[@]}"; do
-            config[$key]="$(yq e ".$key // empty" "$config_file")"
+			# Need to strip the double quotes enclosing the string value
+            config_args[$key]="$(yq ".${key}" "$config_file" | sed 's/^"\(.*\)"$/\1/' || echo '')"
         done
     else
         log "No config file found at $config_file, will use command line arguments only"
     fi
 
     # Set variables with command line arguments taking precedence over config file
-    local input_vcf="${args[input_vcf]}"
-    local assembly="${args[assembly]:-${config[assembly]}}"
-    local ref_genome="${args[ref_genome]:-${config[ref_genome]}}"
-    local vep_cache_dir="${args[vep_cache_dir]:-${config[vep_cache_dir]}}"
-    local vep_plugins_dir="${args[vep_plugins_dir]:-${config[vep_plugins_dir]}}"
-    local vep_plugins_cachedir="${args[vep_plugins_cachedir]:-${config[vep_plugins_cachedir]}}"
-    local threads="${args[threads]:-${config[threads]:-4}}"
+    local input_vcf="${input_vcf:-${config_args[input_vcf]}}"
+    local assembly="${assembly:-${config_args[assembly]}}"
+    local ref_genome="${ref_genome:-${config_args[ref_genome]}}"
+    local vep_cache_dir="${vep_cache_dir:-${config_args[vep_cache_dir]}}"
+    local vep_plugins_dir="${vep_plugins_dir:-${config_args[vep_plugins_dir]}}"
+    local vep_plugins_cachedir="${vep_plugins_cachedir:-${config_args[vep_plugins_cachedir]}}"
+    local threads="${threads:-${config_args[threads]:-4}}"
 
     # Plugin cache files
-    local utr_annotator_file="${args[utr_annotator_file]:-${config[utr_annotator_file]}}"
-    local loeuf_prescore="${args[loeuf_prescore]:-${config[loeuf_prescore]}}"
-    local alphamissense_prescore="${args[alphamissense_prescore]:-${config[alphamissense_prescore]}}"
-    local spliceai_snv_prescore="${args[spliceai_snv_prescore]:-${config[spliceai_snv_prescore]}}"
-    local spliceai_indel_prescore="${args[spliceai_indel_prescore]:-${config[spliceai_indel_prescore]}}"
-    local primateai_prescore="${args[primateai_prescore]:-${config[primateai_prescore]}}"
-    local conversation_file="${args[conversation_file]:-${config[conversation_file]}}"
+    local utr_annotator_file="${utr_annotator_file:-${config_args[utr_annotator_file]}}"
+    local loeuf_prescore="${loeuf_prescore:-${config_args[loeuf_prescore]}}"
+    local alphamissense_prescore="${alphamissense_prescore:-${config_args[alphamissense_prescore]}}"
+    local spliceai_snv_prescore="${spliceai_snv_prescore:-${config_args[spliceai_snv_prescore]}}"
+    local spliceai_indel_prescore="${spliceai_indel_prescore:-${config_args[spliceai_indel_prescore]}}"
+    local primateai_prescore="${primateai_prescore:-${config_args[primateai_prescore]}}"
+    local conversation_file="${conversation_file:-${config_args[conversation_file]}}"
 
     # Validate inputs
     local has_error=0
@@ -401,12 +432,25 @@ function anno_VEP_data() {
 
     # Try to determine assembly if not specified
     [[ -z ${assembly} ]] && assembly=$(check_vcf_assembly_version ${input_vcf})
-    [[ -z ${assembly} ]] && assembly=$(check_fasta_assembly_version ${ref_genome})
+    [[ -z ${assembly} ]] && assembly=$(extract_assembly_from_fasta ${ref_genome})
 
     # Exit if any errors were found
-    if [[ $has_error -eq 1 ]]; then
+    if [[ $has_error -gt 0 ]]; then
         return 1
     fi
+
+	# We can check that whether the input vcf is already annotated by VEP
+	# The annotated INFO tags should include:
+	# - CSQ, from VEP
+	# - NMD, from VEP plugin NMD
+	# - am_pathogenicity & am_class, from VEP plugin AlphaMissense
+	# - SpliceAI_pred_DS_AG, SpliceAI_pred_DS_AL, SpliceAI_pred_DS_DG, SpliceAI_pred_DS_DL, SpliceAI_pred_DP_AG, SpliceAI_pred_DP_AL, SpliceAI_pred_DP_DG, SpliceAI_pred_DP_DL, from VEP plugin SpliceAI
+	check_vcf_infotags ${input_vcf} "CSQ,NMD,am_pathogenicity,am_class,SpliceAI_pred_DS_AG,SpliceAI_pred_DS_AL,SpliceAI_pred_DS_DG,SpliceAI_pred_DS_DL,SpliceAI_pred_DP_AG,SpliceAI_pred_DP_AL,SpliceAI_pred_DP_DG,SpliceAI_pred_DP_DL" && \
+	log "The input vcf ${input_vcf} is already annotated by VEP. Skip this step" && \
+	return 0
+
+	local tmp_tag=$(randomID)
+	local output_vcf=${input_vcf/.vcf*/.${tmp_tag}.vcf.gz}
 
     # Run VEP annotation
     vep -i ${input_vcf} \
@@ -435,8 +479,13 @@ function anno_VEP_data() {
     -plugin SpliceAI,snv=${spliceai_snv_prescore},indel=${spliceai_indel_prescore},cutoff=0.5 \
     -plugin PrimateAI,${primateai_prescore} \
     -plugin Conservation,file=${conversation_file} \
+	-plugin NMD \
     --force_overwrite \
-    -o ${input_vcf/.vcf*/.vep.vcf.gz}
+    -o ${output_vcf} && \
+	tabix -f -p vcf ${output_vcf} && \
+	mv ${output_vcf} ${input_vcf} && \
+	mv ${output_vcf}.tbi ${input_vcf}.tbi && \
+	display_vcf ${input_vcf}
 }
 
 
@@ -454,7 +503,7 @@ if [[ "${#BASH_SOURCE[@]}" -eq 1 ]]; then
         log "Executing: ${*:${following_arg_ind}}"
         "${@:${following_arg_ind}}"
     else
-		log "Directly run main_workflow with input args: $#"
+		log "Directly run main_workflow with input args: $*"
 		main_workflow "$@"
 	fi
 fi

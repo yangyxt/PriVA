@@ -1,0 +1,5 @@
+[2024-11-10 21:58:58] [Script annotation_vcf.sh: Line 26] [Func: main] The folder storing scripts is /home/yangyxt/git_repos/acmg_auto/scripts, the base folder for used scripts and data is /home/yangyxt/git_repos/acmg_auto
+[2024-11-10 21:58:58] [Script annotation_vcf.sh: Line 504] [Func: main] Directly run main_workflow with input args: --input_vcf /home/yangyxt/git_repos/acmg_auto/data/test_example/TEST_FAM.vcf.gz --ped_file /home/yangyxt/git_repos/acmg_auto/data/test_example/TEST_FAM.ped --fam_name TEST_FAM --config /home/yangyxt/git_repos/acmg_auto/config.yaml
+[2024-11-10 21:58:58] [Script annotation_vcf.sh: Line 57] [Func: main_workflow] Using config file: /home/yangyxt/git_repos/acmg_auto/config.yaml
+[2024-11-10 21:58:59] [Script common_bash_utils.sh: Line 930] [Func: check_path] Error: gnomad_vcf_chr1 file not found: /home/yangyxt/git_repos/acmg_auto/data/gnomad/gnomad.genomes.v3.1.2.sites.chr1.vcf.gz
+[2024-11-10 21:58:59] [Script common_bash_utils.sh: Line 930] [Func: check_path] Error: clinvar_vcf file not found: /home/yangyxt/git_repos/acmg_auto/data/clinvar/clinvar.vcf.gz

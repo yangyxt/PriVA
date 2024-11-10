@@ -17,7 +17,7 @@ REF_GENOME = get_config("ref_genome")
 OUTPUT_DIR = get_config("output_dir", "results")
 THREADS = get_config("threads", 1)
 AF_CUTOFF = get_config("af_cutoff", 0.01)
-GNOMAD_VCF_DIR = str(Path(get_config("gnomad_vcf_chr1")).parent)
+GNOMAD_VCF_DIR = str(Path(get_config("gnomad_vcf_chrX")).parent)
 CLINVAR_VCF = get_config("clinvar_vcf")
 VEP_CACHE_DIR = get_config("vep_cache_dir")
 VEP_PLUGINS_DIR = get_config("vep_plugins_dir")
@@ -64,7 +64,7 @@ rule annotate_variants:
             --output_dir {OUTPUT_DIR} \
             --threads {threads} \
             --af_cutoff {AF_CUTOFF} \
-            --gnomad_vcf_chr1 {params.gnomad_dir}/gnomad.genomes.v3.1.2.sites.chr1.vcf.gz \
+            --gnomad_vcf_chrX {params.gnomad_dir}/gnomad.genomes.v3.1.2.sites.chr1.vcf.gz \
             --clinvar_vcf {params.clinvar} \
             --vep_cache_dir {params.vep_cache} \
             --vep_plugins_dir {params.vep_plugins} \

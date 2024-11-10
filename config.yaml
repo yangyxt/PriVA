@@ -6,7 +6,7 @@
 conda_env_yaml: "acmg_conda.yml"
 
 # Below we specify the input vcf file in absolute paths
-input_vcf: "/home/yangyxt/git_repos/acmg_auto/data/test_example/TEST_FAM.vcf.gz"
+input_vcf: "/home/yangyxt/git_repos/acmg_auto/data/test_example/TEST_FAM.filtered.vcf.gz"
 ped_file: "/home/yangyxt/git_repos/acmg_auto/data/test_example/TEST_FAM.ped"
 fam_name: "TEST_FAM"
 
@@ -26,7 +26,7 @@ threads: 4
 af_cutoff: 0.01
 
 # Below we specify the path to the gnomAD vcf file for chromosome 1 and we'll use that template to deduce the paths to other chromosome VCF files, the paths should be relatively constant
-gnomad_vcf_chr1: "/home/yangyxt/Caches/gnomAD/v4/gnomad.joint.v4.1.sites.hg19.chrX.vcf.gz"
+gnomad_vcf_chrX: "/home/yangyxt/Caches/gnomAD/v4/gnomad.joint.v4.1.sites.hg19.chrX.vcf.gz"
 
 # Below we specify the path to the clinvar vcf file, the path should be relatively constant
 clinvar_vcf: "/home/yangyxt/Caches/ClinVar/clinvar.hg19.vcf.gz"

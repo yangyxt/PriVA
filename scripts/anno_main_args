@@ -7,7 +7,7 @@ parser.add_argument('-r', '--ref_genome', help='Reference genome FASTA', require
 parser.add_argument('-o', '--output_dir', help='Output directory', required=False)
 parser.add_argument('-t', '--threads', type=int, help='Number of threads', required=False)
 parser.add_argument('--af_cutoff', type=float, help='Allele frequency cutoff', required=False)
-parser.add_argument('--gnomad_vcf_chr1', help='Path to the gnomAD VCF file for chromosome 1', required=False)
+parser.add_argument('--gnomad_vcf_chrX', help='Path to the gnomAD VCF file for chromosome 1', required=False)
 parser.add_argument('--clinvar_vcf', help='Path to the ClinVar VCF file', required=False)
 parser.add_argument('--vep_cache_dir', help='VEP cache directory', required=False)
 parser.add_argument('--vep_plugins_dir', help='Path to the VEP plugins directory', required=False)

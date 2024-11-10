@@ -38,7 +38,7 @@ function main_workflow() {
 		  output_dir \
 		  threads \
 		  af_cutoff \
-		  gnomad_vcf_chr1 \
+		  gnomad_vcf_chrX \
 		  clinvar_vcf \
 		  vep_cache_dir \
 		  vep_plugins_dir \
@@ -55,7 +55,7 @@ function main_workflow() {
 
     if [[ -f "$config_file" ]]; then
         log "Using config file: $config_file"
-        local -a config_keys=(input_vcf ped_file fam_name assembly vep_cache_dir output_dir ref_genome threads af_cutoff gnomad_vcf_chr1 clinvar_vcf vep_plugins_dir vep_plugins_cachedir)
+        local -a config_keys=(input_vcf ped_file fam_name assembly vep_cache_dir output_dir ref_genome threads af_cutoff gnomad_vcf_chrX clinvar_vcf vep_plugins_dir vep_plugins_cachedir)
         for key in "${config_keys[@]}"; do
 			# Need to remove the quotes around the value
             config_args[$key]="$(yq ".${key}" "$config_file" | sed 's/^"\(.*\)"$/\1/' || echo '')"
@@ -76,7 +76,7 @@ function main_workflow() {
 	local ref_genome="${ref_genome:-${config_args[ref_genome]}}"
 	local threads="${threads:-${config_args[threads]}}"
 	local af_cutoff="${af_cutoff:-${config_args[af_cutoff]:-0.05}}"
-	local gnomad_vcf_chr1="${gnomad_vcf_chr1:-${config_args[gnomad_vcf_chr1]}}"
+	local gnomad_vcf_chrX="${gnomad_vcf_chrX:-${config_args[gnomad_vcf_chrX]}}"
 	local clinvar_vcf="${clinvar_vcf:-${config_args[clinvar_vcf]}}"
 	local vep_plugins_dir="${vep_plugins_dir:-${config_args[vep_plugins_dir]}}"
 	local vep_plugins_cachedir="${vep_plugins_cachedir:-${config_args[vep_plugins_cachedir]}}"
@@ -94,7 +94,7 @@ function main_workflow() {
 
     # Check paths that must exist
     check_path "$ref_genome" "file" "ref_genome" || has_error=1
-    check_path "$gnomad_vcf_chr1" "file" "gnomad_vcf_chr1" || has_error=1
+    check_path "$gnomad_vcf_chrX" "file" "gnomad_vcf_chrX" || has_error=1
     check_path "$clinvar_vcf" "file" "clinvar_vcf" || has_error=1
     check_path "$vep_cache_dir" "dir" "vep_cache_dir" || has_error=1
     check_path "$vep_plugins_dir" "dir" "vep_plugins_dir" || has_error=1
@@ -130,7 +130,7 @@ function main_workflow() {
     log "  ref_genome: $ref_genome"
     log "  threads: $threads"
     log "  af_cutoff: $af_cutoff"
-    log "  gnomad_vcf_chr1: $gnomad_vcf_chr1"
+    log "  gnomad_vcf_chrX: $gnomad_vcf_chrX"
     log "  clinvar_vcf: $clinvar_vcf"
     log "  vep_plugins_dir: $vep_plugins_dir"
     log "  vep_plugins_cachedir: $vep_plugins_cachedir"
@@ -161,7 +161,7 @@ function main_workflow() {
 	${anno_vcf} \
 	${threads} \
 	${assembly} \
-	${gnomAD_vcf_chr1} && \
+	${gnomad_vcf_chrX} && \
 	log "Successfully add aggregated gnomAD annotation on ${anno_vcf}. The result is ${anno_vcf}" || { \
 	log "Failed to add aggregated gnomAD annotation on ${anno_vcf}. Quit now"
 	return 1; }
@@ -206,12 +206,11 @@ function preprocess_vcf() {
 	# 4. Temporarily do not deal with variant records located in alternative contigs
 
 	local vcf_assembly=$(check_vcf_assembly_version ${input_vcf})
-	local fasta_assembly=$(extract_assembly_from_fasta ${ref_genome})
 
 	if [[ -z ${ref_genome} ]]; then
 		log "User does not specify the ref genome fasta file. Cant proceed now. Quit with Error!"
 		return 1;
-	elif [[ ! -z ${vcf_assembly} ]] && [[ ! ${fasta_assembly} =~ ${vcf_assembly} ]]; then
+	elif [[ ! -z ${vcf_assembly} ]] && [[ ! ${ref_genome} =~ ${vcf_assembly} ]]; then
 		log "User specified ref_genome fasta file ${ref_genome} seems not match with the VCF used assembly ${vcf_assembly}. Quit with Error"
 		return 1;
 	fi
@@ -226,7 +225,7 @@ function preprocess_vcf() {
 
 	# First filter out variants that not in primary chromosomes (chrM to chrY)(MT to Y)
 	bcftools sort -Ou ${input_vcf} | \
-	bcftools view -r "$(cat ${BASE_DIR}/data/liftover/ucsc_GRC.primary.contigs.tsv | tr '\n' ',')" -Ou - | \
+	bcftools view -r "$(cat ${BASE_DIR}/data/liftover/ucsc_GRC.primary.contigs.tsv | tr '\n' ',')" -Ou | \
 	bcftools sort -Oz -o ${input_vcf/.vcf*/.primary.vcf.gz} && \
 	tabix -f -p vcf ${input_vcf/.vcf*/.primary.vcf.gz} || \
 	{ log "Failed to generate a VCF file that only contains records in primary chromosomes"; \
@@ -265,7 +264,7 @@ function anno_agg_gnomAD_data () {
 	local input_vcf=${1}
 	local threads=${2}
 	local assembly=${3}
-	local gnomAD_vcf_chr1=${4}
+	local gnomad_vcf_chrX=${4}
 	local tmp_tag=$(randomID)
 	local output_vcf=${input_vcf/.vcf/.${tmp_tag}.vcf}
 
@@ -294,9 +293,9 @@ function anno_agg_gnomAD_data () {
 	done
 
 	# Step 3: Perform annotation with bcftools annotate to add the INFO fields from gnomAD vcfs to the input splitted vcfs
-	export gnomAD_vcf_chr1
-	parallel -j ${threads} --dry-run "bcftools annotate -a ${gnomAD_vcf_chr1/.chr1.vcf.bgz/}.chr{}.vcf.bgz -c CHROM,POS,REF,ALT,.INFO/AC_joint,.INFO/AN_joint,.INFO/AF_joint,.INFO/nhomo_joint_XX,.INFO/nhomo_joint_XY -Oz -o ${input_vcf/.vcf*/}.chr{}.gnomAD.vcf.gz ${input_vcf/.vcf*/}.chr{}.vcf.gz" ::: "${chr_chroms[@]}" && \
-	parallel -j ${threads} --joblog ${input_vcf/.vcf*/.anno.gnomAD.log} "bcftools annotate -a ${gnomAD_vcf_chr1/.chr1.vcf.bgz/}.chr{}.vcf.bgz -c CHROM,POS,REF,ALT,.INFO/AC_joint,.INFO/AN_joint,.INFO/AF_joint,.INFO/nhomo_joint_XX,.INFO/nhomo_joint_XY -Oz -o ${input_vcf/.vcf*/}.chr{}.gnomAD.vcf.gz ${input_vcf/.vcf*/}.chr{}.vcf.gz" ::: "${chr_chroms[@]}"; \
+	export gnomad_vcf_chrX
+	parallel -j ${threads} --dry-run "bcftools annotate -a ${gnomad_vcf_chrX/.chr1.vcf.bgz/}.chr{}.vcf.bgz -c CHROM,POS,REF,ALT,.INFO/AC_joint,.INFO/AN_joint,.INFO/AF_joint,.INFO/nhomo_joint_XX,.INFO/nhomo_joint_XY -Oz -o ${input_vcf/.vcf*/}.chr{}.gnomAD.vcf.gz ${input_vcf/.vcf*/}.chr{}.vcf.gz" ::: "${chr_chroms[@]}" && \
+	parallel -j ${threads} --joblog ${input_vcf/.vcf*/.anno.gnomAD.log} "bcftools annotate -a ${gnomad_vcf_chrX/.chr1.vcf.bgz/}.chr{}.vcf.bgz -c CHROM,POS,REF,ALT,.INFO/AC_joint,.INFO/AN_joint,.INFO/AF_joint,.INFO/nhomo_joint_XX,.INFO/nhomo_joint_XY -Oz -o ${input_vcf/.vcf*/}.chr{}.gnomAD.vcf.gz ${input_vcf/.vcf*/}.chr{}.vcf.gz" ::: "${chr_chroms[@]}"; \
 	check_parallel_joblog ${input_vcf/.vcf*/.anno.gnomAD.log} || { \
 	log "Failed to add aggregated gnomAD annotation on ${input_vcf}. Quit now"
 	return 1; }

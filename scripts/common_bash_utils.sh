@@ -1002,7 +1002,7 @@ function extract_assembly_from_fasta() {
 	# Here expecting the specified reference genome to have a name like ucsc.hg19.fasta or ucsc.hg38.fasta
 	assembly=$(basename ${fasta_file} | awk -F '.' '{printf "%s", $2;}')
 	[[ ! ${assembly} =~ ^hg[13][98]$ ]] && \
-	log "Please specify the assembly as hg19 or hg38. Failed to extract the assembly version either from input VCF or input ref_genome fasta file. Quit now." && \
+	log "Failed to extract the assembly version either from the fasta file name. Quit now." && \
 	return 1
 }
 

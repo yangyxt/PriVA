@@ -1,5 +1,33 @@
-[2024-11-10 21:58:58] [Script annotation_vcf.sh: Line 26] [Func: main] The folder storing scripts is /home/yangyxt/git_repos/acmg_auto/scripts, the base folder for used scripts and data is /home/yangyxt/git_repos/acmg_auto
-[2024-11-10 21:58:58] [Script annotation_vcf.sh: Line 504] [Func: main] Directly run main_workflow with input args: --input_vcf /home/yangyxt/git_repos/acmg_auto/data/test_example/TEST_FAM.vcf.gz --ped_file /home/yangyxt/git_repos/acmg_auto/data/test_example/TEST_FAM.ped --fam_name TEST_FAM --config /home/yangyxt/git_repos/acmg_auto/config.yaml
-[2024-11-10 21:58:58] [Script annotation_vcf.sh: Line 57] [Func: main_workflow] Using config file: /home/yangyxt/git_repos/acmg_auto/config.yaml
-[2024-11-10 21:58:59] [Script common_bash_utils.sh: Line 930] [Func: check_path] Error: gnomad_vcf_chr1 file not found: /home/yangyxt/git_repos/acmg_auto/data/gnomad/gnomad.genomes.v3.1.2.sites.chr1.vcf.gz
-[2024-11-10 21:58:59] [Script common_bash_utils.sh: Line 930] [Func: check_path] Error: clinvar_vcf file not found: /home/yangyxt/git_repos/acmg_auto/data/clinvar/clinvar.vcf.gz
+[2024-11-10 23:13:40] [Script annotation_vcf.sh: Line 26] [Func: main] The folder storing scripts is /home/yangyxt/git_repos/acmg_auto/scripts, the base folder for used scripts and data is /home/yangyxt/git_repos/acmg_auto
+[2024-11-10 23:13:40] [Script annotation_vcf.sh: Line 505] [Func: main] Directly run main_workflow with input args: --input_vcf /home/yangyxt/git_repos/acmg_auto/data/test_example/TEST_FAM.filtered.vcf.gz --ped_file /home/yangyxt/git_repos/acmg_auto/data/test_example/TEST_FAM.ped --fam_name TEST_FAM --config /home/yangyxt/git_repos/acmg_auto/config.yaml
+[2024-11-10 23:13:40] [Script annotation_vcf.sh: Line 57] [Func: main_workflow] Using config file: /home/yangyxt/git_repos/acmg_auto/config.yaml
+[2024-11-10 23:13:40] [Script annotation_vcf.sh: Line 123] [Func: main_workflow] Using the following parameters:
+[2024-11-10 23:13:40] [Script annotation_vcf.sh: Line 124] [Func: main_workflow]   input_vcf: /home/yangyxt/git_repos/acmg_auto/data/test_example/TEST_FAM.filtered.vcf.gz
+[2024-11-10 23:13:40] [Script annotation_vcf.sh: Line 125] [Func: main_workflow]   ped_file: /home/yangyxt/git_repos/acmg_auto/data/test_example/TEST_FAM.ped
+[2024-11-10 23:13:40] [Script annotation_vcf.sh: Line 126] [Func: main_workflow]   fam_name: TEST_FAM
+[2024-11-10 23:13:40] [Script annotation_vcf.sh: Line 127] [Func: main_workflow]   assembly: hg19
+[2024-11-10 23:13:40] [Script annotation_vcf.sh: Line 128] [Func: main_workflow]   vep_cache_dir: /home/yangyxt/Caches/ensembl-vep
+[2024-11-10 23:13:40] [Script annotation_vcf.sh: Line 129] [Func: main_workflow]   output_dir: /home/yangyxt/git_repos/acmg_auto/results
+[2024-11-10 23:13:40] [Script annotation_vcf.sh: Line 130] [Func: main_workflow]   ref_genome: /home/yangyxt/Caches/genomes/hg19/ucsc.hg19.fasta
+[2024-11-10 23:13:40] [Script annotation_vcf.sh: Line 131] [Func: main_workflow]   threads: 4
+[2024-11-10 23:13:40] [Script annotation_vcf.sh: Line 132] [Func: main_workflow]   af_cutoff: 0.01
+[2024-11-10 23:13:40] [Script annotation_vcf.sh: Line 133] [Func: main_workflow]   gnomad_vcf_chrX: /home/yangyxt/Caches/gnomAD/v4/gnomad.joint.v4.1.sites.hg19.chrX.vcf.gz
+[2024-11-10 23:13:40] [Script annotation_vcf.sh: Line 134] [Func: main_workflow]   clinvar_vcf: /home/yangyxt/Caches/ClinVar/clinvar.hg19.vcf.gz
+[2024-11-10 23:13:40] [Script annotation_vcf.sh: Line 135] [Func: main_workflow]   vep_plugins_dir: /home/yangyxt/Tools/VEP_plugins
+[2024-11-10 23:13:40] [Script annotation_vcf.sh: Line 136] [Func: main_workflow]   vep_plugins_cachedir: /home/yangyxt/Caches/VEP_plugin_caches
+[2024-11-10 23:13:40] [Script common_bash_utils.sh: Line 249] [Func: check_vcf_validity] /home/yangyxt/git_repos/acmg_auto/data/test_example/TEST_FAM.filtered.vcf.gz should be bgzipped, check gz vcf validity
+[2024-11-10 23:13:40] [Script common_bash_utils.sh: Line 373] [Func: check_vcf_format] The input VCF file /home/yangyxt/git_repos/acmg_auto/data/test_example/TEST_FAM.filtered.vcf.gz has no format issue detected by bcftools
+[2024-11-10 23:13:40] [Script common_bash_utils.sh: Line 298] [Func: check_gz_vcf] /home/yangyxt/git_repos/acmg_auto/data/test_example/TEST_FAM.filtered.vcf.gz has solid vcf format. Check whether contains enough record number
+[2024-11-10 23:13:40] [Script common_bash_utils.sh: Line 300] [Func: check_gz_vcf] /home/yangyxt/git_repos/acmg_auto/data/test_example/TEST_FAM.filtered.vcf.gz has enough records.
+[2024-11-10 23:13:40] [Script common_bash_utils.sh: Line 349] [Func: check_vcf_samples] No expected samples specified. Quit checking samples
+[2024-11-10 23:13:40] [Script common_bash_utils.sh: Line 252] [Func: check_vcf_validity] /home/yangyxt/git_repos/acmg_auto/data/test_example/TEST_FAM.filtered.vcf.gz has solid sample names as expected.
+Writing to /tmp/bcftools.LF2RCI
+Writing to /tmp/bcftools.uzBzjC
+Merging 1 temporary files
+[E::idx_find_and_load] Could not retrieve index file for '-'
+Failed to read from standard input: could not load index
+[E::bcf_hdr_read] Input is not detected as bcf or vcf format
+Could not read VCF/BCF headers from -
+Cleaning
+[2024-11-10 23:13:41] [Script annotation_vcf.sh: Line 231] [Func: preprocess_vcf] Failed to generate a VCF file that only contains records in primary chromosomes
+[2024-11-10 23:13:41] [Script annotation_vcf.sh: Line 154] [Func: main_workflow] Failed to preprocess the input vcf /home/yangyxt/git_repos/acmg_auto/data/test_example/TEST_FAM.filtered.vcf.gz for annotation. Quit with error.

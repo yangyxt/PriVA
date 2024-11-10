@@ -54,7 +54,7 @@ function vep_install_wrapper() {
     local VEP_PLUGINSCACHEDIR=""
 
     local TEMP
-    TEMP=$(getopt -o hc:y:r:p: --long help,CACHEDIR:,ASSEMBLY:,PLUGINSDIR:,PLUGINS_CACHEDIR:,PLUGINS:: -- "$@")
+    TEMP=$(getopt -o hc:y:r:p: --long help,CACHEDIR:,ASSEMBLY:,PLUGINSDIR:,PLUGINS_CACHEDIR:,PLUGINS: -- "$@")
 
     if [[ $? != 0 ]]; then return 1; fi
 
@@ -117,7 +117,7 @@ function vep_install_wrapper() {
 
     local CONDA_ENV_NAME=$(basename $CONDA_PREFIX)
     local VEP_DESTDIR=$(perl -e 'print join("\n", @INC);' | head -1)
-    [[ ${VEP_DESTDIR} =~ ${CONDA_ENV_NAME} ]] && log "The dest dir is set to the directory (${VEP_DESTDIR})where perl modules are installed by conda" || \
+    [[ ${VEP_DESTDIR} =~ ${CONDA_ENV_NAME} ]] && log "The dest dir is set to the directory (${VEP_DESTDIR}) where perl modules are installed by conda" || \
     { log "Since the function is designed to perform follow up installation of VEP upon the installation of VEP dependencies via conda, we only accept installing VEP API at the perl module installation location previously used by conda"; return 1; }
 
     # Construct the command
@@ -154,7 +154,6 @@ function VEP_plugins_install() {
     if [[ -z ${conda_env_name} ]]; then
         local conda_env_name=$(basename $CONDA_PREFIX)
     fi
-
 
     # Install VEP plugins
     # First install LoFtee
@@ -223,7 +222,7 @@ function VEP_plugins_install() {
         log "Now we start to install the conservation file for hg38"
         local conservation_file=$(Conservation_install ${VEP_PLUGINSCACHEDIR} ${ASSEMBLY_VERSION}) || \
         { log "Failed to install Conservation file"; return 1; }
-        update_yaml "$config_file" "conservation_file_hg38" "${conservation_file}"
+        update_yaml "$config_file" "conservation_file" "${conservation_file}"
     else
         log "Not supported assembly version: ${ASSEMBLY_VERSION}, so skip installing the conservation file"
     fi
@@ -691,10 +690,12 @@ function Conservation_install() {
         local assembly_version="GRCh38"
     elif [[ ${assembly_version} == "hg38" ]] || [[ ${assembly_version} == "GRCh38" ]]; then
         local assembly_version="GRCh38"
-    else
-        log "Currently we only support hg38 assemblies, hg19 does not have corresponding GERP conservation bigwig file, you have to use database option to acquire corresponding GERP conservation scores over the internet"
-        return 1
-    fi
+	elif [[ ${assembly_version} == "hg19" ]] || [[ ${assembly_version} == "GRCh37" ]]; then
+		local assembly_version="GRCh37"
+	else
+		log "Currently we only support GRCh37 and GRCh38 assembly versions"
+		return 1
+	fi
 
     if [[ ! -d ${CACHEDIR} ]]; then
         mkdir -p ${CACHEDIR}
@@ -704,14 +705,25 @@ function Conservation_install() {
         mkdir -p ${CACHEDIR}/Conservation
     fi
 
-    wget http://ftp.ensembl.org/pub/current_compara/conservation_scores/91_mammals.gerp_conservation_score/gerp_conservation_scores.homo_sapiens.${assembly_version}.bw -O ${CACHEDIR}/Conservation/gerp_conservation_scores.homo_sapiens.${assembly_version}.bw
-    log "The conservation scores for ${assembly_version} assembly version are downloaded to ${CACHEDIR}/Conservation"
-    echo ${CACHEDIR}/Conservation/gerp_conservation_scores.homo_sapiens.${assembly_version}.bw
+	if [[ ${assembly_version} == "GRCh38" ]]; then
+		wget http://ftp.ensembl.org/pub/current_compara/conservation_scores/91_mammals.gerp_conservation_score/gerp_conservation_scores.homo_sapiens.${assembly_version}.bw -O ${CACHEDIR}/Conservation/gerp_conservation_scores.homo_sapiens.${assembly_version}.bw
+		log "The conservation scores for ${assembly_version} assembly version are downloaded to ${CACHEDIR}/Conservation"
+		echo ${CACHEDIR}/Conservation/gerp_conservation_scores.homo_sapiens.${assembly_version}.bw
+	elif [[ ${assembly_version} == "GRCh37" ]]; then
+		wget http://hgdownload.soe.ucsc.edu/gbdb/hg19/bbi/All_hg19_RS.bw -O ${CACHEDIR}/Conservation/gerp_conservation_scores.homo_sapiens.${assembly_version}.bw
+		log "The conservation scores for ${assembly_version} assembly version are downloaded to ${CACHEDIR}/Conservation"
+		echo ${CACHEDIR}/Conservation/gerp_conservation_scores.homo_sapiens.${assembly_version}.bw
+	else
+		log "Currently we only support GRCh37 and GRCh38 assembly versions"
+		return 1
+	fi
 }
 
 
 
 function LoFtee_install() {
+	# Temporarily disabled due to inconsistent cache file support across different assemblies
+	# Also deprecated due to the redundant functionality based on CADD and SpliceAI
     local PLUGIN_CACHEDIR=${1}
     local assembly_version=${2}
 

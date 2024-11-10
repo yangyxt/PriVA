@@ -1,109 +1,100 @@
 #!/usr/bin/env snakemake
-# Snakefile
 
 import os
+from pathlib import Path
 
 configfile: "config.yaml"
 
-# Define variables from the config file for convenience
-input_vcf = config["input_vcf"]
-ped_file = config["ped_file"]
-fam_name = config["fam_name"]
-assembly = config["assembly"]
-ref_genome = config["ref_genome"]
-output_dir = config["output_dir"]
-threads = config["threads"]
-af_cutoff = config["af_cutoff"]
-gnomad_vcf_dir = config["gnomad_vcf_dir"]
-clinvar_vcf = config["clinvar_vcf"]
-vep_cache_dir = config["vep_cache_dir"]
-script_dir = config["script_dir"]
+# Define variables from config with defaults
+def get_config(key, default=None):
+    return config.get(key, default)
 
-# Ensure the output directory exists
-os.makedirs(output_dir, exist_ok=True)
+INPUT_VCF = get_config("input_vcf")
+PED_FILE = get_config("ped_file")
+FAM_NAME = get_config("fam_name")
+ASSEMBLY = get_config("assembly")
+REF_GENOME = get_config("ref_genome")
+OUTPUT_DIR = get_config("output_dir", "results")
+THREADS = get_config("threads", 1)
+AF_CUTOFF = get_config("af_cutoff", 0.01)
+GNOMAD_VCF_DIR = str(Path(get_config("gnomad_vcf_chr1")).parent)
+CLINVAR_VCF = get_config("clinvar_vcf")
+VEP_CACHE_DIR = get_config("vep_cache_dir")
+VEP_PLUGINS_DIR = get_config("vep_plugins_dir")
+VEP_PLUGINS_CACHEDIR = get_config("vep_plugins_cachedir")
 
-# Define the final output
-final_vcf = os.path.join(output_dir, f"{fam_name}.annotated.vcf.gz")
+# Ensure output directory exists
+os.makedirs(OUTPUT_DIR, exist_ok=True)
+
+# Define the final outputs for each major step
+def get_output_path(filename):
+    return os.path.join(OUTPUT_DIR, f"{FAM_NAME}.{filename}.vcf.gz")
 
 rule all:
     input:
-        final_vcf
+        get_output_path("annotated"),  # Final annotated VCF
+        get_output_path("filtered"),   # After variant filtration
+        get_output_path("prioritized") # After variant prioritization
 
-rule preprocess_vcf:
+# Step 1: Annotation
+rule annotate_variants:
     input:
-        vcf=input_vcf,
-        ped=ped_file,
-        ref=ref_genome
+        vcf=INPUT_VCF,
+        ped=PED_FILE,
+        ref=REF_GENOME
     output:
-        vcf=os.path.join(output_dir, f"{fam_name}.preprocessed.vcf.gz")
+        vcf=get_output_path("annotated")
     params:
-        script=os.path.join(script_dir, "preprocess_vcf.sh"),
-        fam_name=fam_name
-    threads: threads
+        script=os.path.join("scripts", "annotation_vcf.sh"),
+        fam_name=FAM_NAME,
+        gnomad_dir=GNOMAD_VCF_DIR,
+        clinvar=CLINVAR_VCF,
+        vep_cache=VEP_CACHE_DIR,
+        vep_plugins=VEP_PLUGINS_DIR,
+        vep_cache_plugins=VEP_PLUGINS_CACHEDIR
+    threads: THREADS
     shell:
         """
-        bash {params.script} \
-            -i {input.vcf} \
-            -p {input.ped} \
-            -f {params.fam_name} \
-            -r {input.ref} \
-            -o {output.vcf}
+        bash {params.script} main_workflow \
+            --input_vcf {input.vcf} \
+            --ped_file {input.ped} \
+            --fam_name {params.fam_name} \
+            --assembly {ASSEMBLY} \
+            --ref_genome {input.ref} \
+            --output_dir {OUTPUT_DIR} \
+            --threads {threads} \
+            --af_cutoff {AF_CUTOFF} \
+            --gnomad_vcf_chr1 {params.gnomad_dir}/gnomad.genomes.v3.1.2.sites.chr1.vcf.gz \
+            --clinvar_vcf {params.clinvar} \
+            --vep_cache_dir {params.vep_cache} \
+            --vep_plugins_dir {params.vep_plugins} \
+            --vep_plugins_cachedir {params.vep_cache_plugins}
         """
 
-rule filter_pedigree:
+# Step 2: Variant Filtration
+rule filter_variants:
     input:
-        vcf=rules.preprocess_vcf.output.vcf,
-        ped=ped_file
+        vcf=rules.annotate_variants.output.vcf,
+        ped=PED_FILE
     output:
-        vcf=os.path.join(output_dir, f"{fam_name}.filtered.vcf.gz")
+        vcf=get_output_path("filtered")
     params:
-        script=os.path.join(script_dir, "filter_allele_based_on_pedigree_with_py.sh"),
-        fam_name=fam_name
-    threads: threads
+        script=os.path.join("scripts", "filter_variants.sh"),
+        fam_name=FAM_NAME
+    threads: THREADS
     shell:
-        """
-        bash {params.script} \
-            -i {input.vcf} \
-            -p {input.ped} \
-            -f {params.fam_name} \
-            -o {output.vcf}
-        """
+        "bash {params.script} -i {input.vcf} -p {input.ped} -f {params.fam_name} -o {output.vcf}"
 
-rule annotate_gnomad:
+# Step 3: Variant Prioritization
+rule prioritize_variants:
     input:
-        vcf=rules.filter_pedigree.output.vcf,
-        gnomad_dir=gnomad_vcf_dir
+        vcf=rules.filter_variants.output.vcf,
+        ped=PED_FILE
     output:
-        vcf=os.path.join(output_dir, f"{fam_name}.gnomad_annotated.vcf.gz")
+        vcf=get_output_path("prioritized")
     params:
-        script=os.path.join(script_dir, "anno_agg_gnomAD_data.sh"),
-        assembly=assembly,
-        af_cutoff=af_cutoff
-    threads: threads
+        script=os.path.join("scripts", "prioritize_variants.sh"),
+        fam_name=FAM_NAME
+    threads: THREADS
     shell:
-        """
-        bash {params.script} \
-            -i {input.vcf} \
-            -g {input.gnomad_dir} \
-            -a {params.assembly} \
-            -t {threads} \
-            -o {output.vcf} \
-            --af_cutoff {params.af_cutoff}
-        """
-
-rule annotate_clinvar:
-    input:
-        vcf=rules.annotate_gnomad.output.vcf,
-        clinvar_vcf=clinvar_vcf
-    output:
-        vcf=final_vcf
-    params:
-        script=os.path.join(script_dir, "anno_clinvar_data.sh")
-    threads: threads
-    shell:
-        """
-        bash {params.script} \
-            -i {input.vcf} \
-            -c {input.clinvar_vcf} \
-            -o {output.vcf}
-        """
+        "bash {params.script} -i {input.vcf} -p {input.ped} -f {params.fam_name} -o {output.vcf}"

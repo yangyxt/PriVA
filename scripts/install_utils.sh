@@ -121,7 +121,7 @@ function vep_install_wrapper() {
     { log "Since the function is designed to perform follow up installation of VEP upon the installation of VEP dependencies via conda, we only accept installing VEP API at the perl module installation location previously used by conda"; return 1; }
 
     # Construct the command
-    local cmd="vep_install -d ${VEP_DESTDIR} --AUTO acp -s homo_sapiens --NO_HTSLIB --NO_BIOPERL --CONVERT"
+    local cmd="vep_install -d ${VEP_DESTDIR} --AUTO acp -s homo_sapiens_merged --NO_HTSLIB --NO_BIOPERL --CONVERT"
     [[ -n "$VEP_CACHEDIR" ]] && cmd+=" --CACHEDIR $VEP_CACHEDIR"
     [[ -n "$VEP_ASSEMBLY" ]] && cmd+=" --ASSEMBLY $VEP_ASSEMBLY"
     [[ -n "$VEP_PLUGINS" ]] && [[ $VEP_PLUGINS != "empty" ]] && cmd+=" --PLUGINS $VEP_PLUGINS,SpliceAI,UTRAnnotator,AlphaMissense,GO,Phenotypes,Conservation,LOEUF,SameCodon,NMD,PrimateAI" || cmd+=" --PLUGINS SpliceAI,UTRAnnotator,AlphaMissense,GO,Phenotypes,Conservation,LOEUF,SameCodon,NMD,PrimateAI"
@@ -129,10 +129,10 @@ function vep_install_wrapper() {
 
     # Execute the command
     # After executing the command, we need to bind the new PERL5LIB value with the current conda env
-    log "Now we start to install the VEP api and downloading caches (which might take a while to finish). So pls be patient"
+    log "Now we start to install the VEP api and downloading caches (which might take a while to finish). So pls be patient, here is the command we are going to execute: ${cmd}"
     $cmd && \
     conda env config vars set PERL5LIB="$VEP_DESTDIR:$VEP_PLUGINSDIR" && \
-    conda env config vars set PATH="$VEP_DESTDIR:$PATH" && \
+    conda env config vars set PATH="$VEP_DESTDIR:$VEP_DESTDIR/htslib:$PATH" && \
     log "Now we have bound the new PERL5LIB value (adding ${VEP_DESTDIR} and ${VEP_PLUGINSDIR} to the PERL5LIB) with the current conda env ${CONDA_ENV_NAME}" && \
     log "Now we have bound the new PATH value (adding ${VEP_DESTDIR} to the PATH) with the current conda env ${CONDA_ENV_NAME}"
 }
@@ -659,6 +659,7 @@ function gnomAD_liftover() {
 function ClinVar_VCF_deploy() {
     local CACHEDIR=${1}
     local assembly_version=${2}
+    local contig_map=${BASE_DIR}/data/liftover/GRC_to_ucsc.contig.map.tsv
 
     if [[ -z ${assembly_version} ]]; then
         local assembly_version="GRCh37"
@@ -684,9 +685,14 @@ function ClinVar_VCF_deploy() {
         mkdir -p ${CACHEDIR}
     fi
 
-    wget https://ftp.ncbi.nlm.nih.gov/pub/clinvar/vcf_${assembly_version}/clinvar.vcf.gz -O ${CACHEDIR}/${ucsc_assembly_version}/clinvar.vcf.gz && \
-    wget https://ftp.ncbi.nlm.nih.gov/pub/clinvar/vcf_${assembly_version}/clinvar.vcf.gz.tbi -O ${CACHEDIR}/${ucsc_assembly_version}/clinvar.vcf.gz.tbi && \
-    echo ${CACHEDIR}/${ucsc_assembly_version}/clinvar.vcf.gz
+    wget https://ftp.ncbi.nlm.nih.gov/pub/clinvar/vcf_${assembly_version}/clinvar.vcf.gz -O ${CACHEDIR}/clinvar.${assembly_version}.vcf.gz && \
+    wget https://ftp.ncbi.nlm.nih.gov/pub/clinvar/vcf_${assembly_version}/clinvar.vcf.gz.tbi -O ${CACHEDIR}/clinvar.${assembly_version}.vcf.gz.tbi && \
+    log "The ClinVar VCF file is downloaded to ${CACHEDIR}/clinvar.${assembly_version}.vcf.gz" && \
+    liftover_from_ucsc_to_GRCh \
+    ${CACHEDIR}/clinvar.${assembly_version}.vcf.gz \
+    ${contig_map} \
+    ${CACHEDIR}/clinvar.${ucsc_assembly_version}.vcf.gz && \
+    echo ${CACHEDIR}/clinvar.${ucsc_assembly_version}.vcf.gz
 }
 
 

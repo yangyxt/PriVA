@@ -2,6 +2,7 @@
 
 SELF=$(basename ${BASH_SOURCE[0]})
 SELF_DIR=$(dirname ${SELF})
+BASE_DIR=$(dirname ${SELF_DIR})
 ARGPARSE=${SELF_DIR}/argparse.bash
 # This script is just a function pool, used to store commonly shared functions
 
@@ -577,44 +578,37 @@ function check_vcf_assembly_version () {
 }
 
 
-function liftover_from_GRCh_to_hg () {
+function liftover_from_GRCh_to_ucsc () {
     # Only designed for lifting over GRCh37 to hg19 or GRCh38 to hg38
     local input_vcf=${1}
     local contig_map=${2}
     local output_vcf=${3}
-    local tmp_vcf=${input_vcf/.vcf*/.tmp.vcf}
-    if [[ -z ${output_vcf} ]]; then local output_vcf=${input_vcf/.vcf/.addchr.vcf}; fi
+    [[ -z ${contig_map} ]] && local contig_map=${BASE_DIR}/data/liftover/GRC_to_ucsc.contig.map.tsv
+    [[ -z ${output_vcf} ]] && local output_vcf=${input_vcf/.vcf/.addchr.vcf}
+    [[ ! ${output_vcf} =~ \.vcf\.gz$ ]] && local output_vcf=${output_vcf/.vcf*/.vcf.gz}
 
     # Upon test, we do not need to escape < in awk regex
-    bcftools view -Ov ${input_vcf} | \
-    awk 'BEGIN{OFS=FS="\t";} \
-        NR == FNR {arr[$2] = $1;} \
-        NR > FNR && $0 ~ /^##contig/{old_contig = gensub(/##contig=<ID=([a-zA-Z_0-9\.]+),*(.+)>$/, "\\1", "g", $1); \
-                                    if (old_contig !~ /^[0-9MTXT]$/) next; \
-                                    else if (length(arr[old_contig]) == 0) new_contig = old_contig; \
-                                    else new_contig = arr[old_contig]; \
-                                    mod_line = gensub(/^(.+contig=<ID=)[a-zA-Z_0-9\.]+(,*.*>)/, "\\1"new_contig"\\2", "g", $0); \
-                                    printf "%s\n", mod_line;} \
-        NR > FNR && $0 !~ /^##contig/ && $0 ~ /^##/{print;} \
-        NR > FNR && $0 ~ /^#CHROM/{print;} \
-        NR > FNR && $0 !~ /^#/{ if (length(arr[$1]) == 0) new_contig = $1; \
-                                else new_contig = arr[$1]; \
-                                gsub(/.+/, new_contig, $1); \
-                                printf "%s\n", $0;}' ${contig_map} - > ${tmp_vcf}
+    bcftools annotate --rename-chrs ${contig_map} ${input_vcf} -Ou | \
+    bcftools sort -Oz -o ${output_vcf} && \
+    tabix -f -p vcf ${output_vcf} && \
+    log "The output vcf file is ${output_vcf}" && \
+    display_vcf ${output_vcf}
+}
 
-    if [[ ${output_vcf} =~ \.[b]*gz$ ]]; then
-        bgzip -f ${tmp_vcf} && \
-        bcftools sort --temp-dir $TMPDIR -Oz -o ${tmp_vcf}.gz ${tmp_vcf}.gz && \
-        tabix -f -p vcf ${tmp_vcf}.gz
-        if check_vcf_validity ${tmp_vcf}.gz; then
-            mv ${tmp_vcf}.gz ${output_vcf} && \
-            mv ${tmp_vcf}.gz.tbi ${output_vcf}.tbi && \
-            ls -lh ${output_vcf}*
-        fi
-    elif check_vcf_validity ${tmp_vcf}; then
-        mv ${tmp_vcf} ${output_vcf} && \
-        ls -lh ${output_vcf}*
-    fi
+
+function liftover_from_ucsc_to_GRCh () {
+    local input_vcf=${1}
+    local contig_map=${2}
+    local output_vcf=${3}
+    [[ -z ${contig_map} ]] && local contig_map=$(dirname ${SELF_DIR})/data/liftover/ucsc_to_GRC.contig.map.tsv
+    [[ -z ${output_vcf} ]] && local output_vcf=${input_vcf/.vcf/.rmchr.vcf}
+    [[ ! ${output_vcf} =~ \.vcf\.gz$ ]] && local output_vcf=${output_vcf/.vcf*/.vcf.gz}
+
+    bcftools annotate --rename-chrs ${contig_map} ${input_vcf} -Ou | \
+    bcftools sort -Oz -o ${output_vcf} && \
+    tabix -f -p vcf ${output_vcf} && \
+    log "The output vcf file is ${output_vcf}" && \
+    display_vcf ${output_vcf}
 }
 
 

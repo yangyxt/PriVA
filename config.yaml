@@ -39,7 +39,7 @@ vep_plugins_dir: "/home/yangyxt/Tools/VEP_plugins"
 # Below we specify the directory for storing the VEP plugin caches
 vep_plugins_cachedir: "/home/yangyxt/Caches/VEP_plugin_caches"
 # The UTRAnnotator plugin cachefile
-utr_annotator_file: "/home/yangyxt/Caches/VEP_plugin_caches/UTRAnnotator/uORF_5UTR_GRCh37_PUBLIC.txt"
+utr_annotator_file: "/home/yangyxt/Caches/VEP_plugin_caches/UTRannotator/uORF_5UTR_GRCh37_PUBLIC.txt"
 # The LOEUF plugin cache file
 loeuf_prescore: "/home/yangyxt/Caches/VEP_plugin_caches/LOEUF/loeuf_dataset.tsv.gz"
 # The AlphaMissense plugin cache file
@@ -49,6 +49,6 @@ spliceai_snv_prescore: "/home/yangyxt/Caches/VEP_plugin_caches/SpliceAI/hg19/spl
 spliceai_indel_prescore: "/home/yangyxt/Caches/VEP_plugin_caches/SpliceAI/hg19/spliceai_scores.raw.indel.hg19.vcf.gz"
 # The PrimateAI plugin cache file
 primateai_prescore: "/home/yangyxt/Caches/VEP_plugin_caches/PrimateAI/hg19/PrimateAI_scores_v0.2_GRCh37_sorted.tsv.bgz"
-# The Conversation cache file, only available for GRCh38
-conversation_file: "/home/yangyxt/Caches/VEP_plugin_caches/Conservation/gerp_conservation_scores.homo_sapiens.GRCh37.bw"
+# The Conversation cache file
+conversation_file: "/home/yangyxt/Caches/VEP_plugin_caches/Conservations/gerp_conservation_scores.homo_sapiens.GRCh37.bw"
 

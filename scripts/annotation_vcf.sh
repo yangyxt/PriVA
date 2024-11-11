@@ -238,7 +238,7 @@ function preprocess_vcf() {
 	local assembly_version=$(check_vcf_contig_version ${input_vcf/.vcf*/.primary.vcf.gz})
 	if [[ ${assembly_version} =~ "ncbi" ]]; then
 		log "The input vcf is detected to map variants to GRC assemblies instead of UCSC assemblies" && \
-		liftover_from_GRCh_to_hg \
+		liftover_from_GRCh_to_ucsc \
 		${input_vcf/.vcf*/.primary.vcf.gz} \
 		${BASE_DIR}/data/liftover/ucsc_to_GRC.contig.map.tsv \
 		${input_vcf/.vcf*/.ucsc.vcf.gz}
@@ -438,6 +438,8 @@ function anno_VEP_data() {
     # Try to determine assembly if not specified
     [[ -z ${assembly} ]] && assembly=$(check_vcf_assembly_version ${input_vcf})
     [[ -z ${assembly} ]] && assembly=$(extract_assembly_from_fasta ${ref_genome})
+	[[ ${assembly} == "hg19" ]] && assembly="GRCh37" # Convert to NCBI assembly name
+	[[ ${assembly} == "hg38" ]] && assembly="GRCh38" # Convert to NCBI assembly name
 
     # Exit if any errors were found
     if [[ $has_error -gt 0 ]]; then
@@ -457,7 +459,10 @@ function anno_VEP_data() {
 	local tmp_tag=$(randomID)
 	local output_vcf=${input_vcf/.vcf*/.${tmp_tag}.vcf.gz}
 
-    # Run VEP annotation
+	log "Running VEP annotation with the command below:"
+	log "vep -i ${input_vcf} --format vcf --verbose --vcf --species homo_sapiens --use_given_ref --assembly ${assembly} --cache --merged --numbers --symbol --canonical --variant_class --gene_phenotype --stats_file ${input_vcf/.vcf*/.vep.stats.html} --fork ${threads} --buffer_size 10000 --dir_cache ${vep_cache_dir} --dir_plugins ${vep_plugins_dir} -plugin UTRAnnotator,file=${utr_annotator_file} -plugin LOEUF,file=${loeuf_prescore},match_by=transcript -plugin AlphaMissense,file=${alphamissense_prescore} -plugin SpliceAI,snv=${spliceai_snv_prescore},indel=${spliceai_indel_prescore},cutoff=0.5 -plugin PrimateAI,${primateai_prescore} -plugin Conservation,file=${conversation_file} -plugin NMD --force_overwrite -o ${output_vcf}"
+
+	# Run VEP annotation
     vep -i ${input_vcf} \
     --format vcf \
     --verbose \

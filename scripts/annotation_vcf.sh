@@ -205,6 +205,10 @@ function preprocess_vcf() {
 	# 3. The VCF file is sorted and normalized, no multi-allelics allowed which should be splitted into multiple records
 	# 4. Temporarily do not deal with variant records located in alternative contigs
 
+	check_path ${input_vcf} "file" "input_vcf" || return 1
+	check_path ${ped_file} "file" "ped_file" || return 1
+	check_path ${ref_genome} "file" "ref_genome" || return 1
+
 	local vcf_assembly=$(check_vcf_assembly_version ${input_vcf})
 
 	if [[ -z ${ref_genome} ]]; then
@@ -224,8 +228,7 @@ function preprocess_vcf() {
     fi
 
 	# First filter out variants that not in primary chromosomes (chrM to chrY)(MT to Y)
-	bcftools sort -Ou ${input_vcf} | \
-	bcftools view -r "$(cat ${BASE_DIR}/data/liftover/ucsc_GRC.primary.contigs.tsv | tr '\n' ',')" -Ou | \
+	bcftools view -r "$(cat ${BASE_DIR}/data/liftover/ucsc_GRC.primary.contigs.tsv | tr '\n' ',')" -Ou ${input_vcf}| \
 	bcftools sort -Oz -o ${input_vcf/.vcf*/.primary.vcf.gz} && \
 	tabix -f -p vcf ${input_vcf/.vcf*/.primary.vcf.gz} || \
 	{ log "Failed to generate a VCF file that only contains records in primary chromosomes"; \
@@ -274,8 +277,8 @@ function anno_agg_gnomAD_data () {
 		return 1;
 	}
 
-	check_vcf_infotags ${input_vcf} "AC_joint,AN_joint,AF_joint,nhomo_joint_XX,nhomo_joint_XY" && \
-	log "The input vcf ${input_vcf} already contains the INFO tags AC_joint,AN_joint,AF_joint,nhomo_joint_XX,nhomo_joint_XY. We do not need to add them again" && \
+	check_vcf_infotags ${input_vcf} "AC_joint,AN_joint,AF_joint,nhomalt_joint_XX,nhomalt_joint_XY" && \
+	log "The input vcf ${input_vcf} already contains the INFO tags AC_joint,AN_joint,AF_joint,nhomalt_joint_XX,nhomalt_joint_XY. We do not need to add them again" && \
 	return 0
 
 	# We already make sure the input VCF is sorted and normalized
@@ -289,13 +292,16 @@ function anno_agg_gnomAD_data () {
 
 	# Step 2: Further split the main-contig-variants file to multiple single-contig variant files
 	for chr in "${chr_chroms[@]}"; do
-		bcftools view -r ${chr} ${input_vcf} -Oz -o ${input_vcf/.vcf*/.chr${chr}.vcf.gz}
+		bcftools view -r ${chr} -Ou ${input_vcf} | \
+		bcftools sort -Oz -o ${input_vcf/.vcf*/.${chr}.vcf.gz} && \
+		tabix -f -p vcf ${input_vcf/.vcf*/.${chr}.vcf.gz}
 	done
 
 	# Step 3: Perform annotation with bcftools annotate to add the INFO fields from gnomAD vcfs to the input splitted vcfs
 	export gnomad_vcf_chrX
-	parallel -j ${threads} --dry-run "bcftools annotate -a ${gnomad_vcf_chrX/.chr1.vcf.bgz/}.chr{}.vcf.bgz -c CHROM,POS,REF,ALT,.INFO/AC_joint,.INFO/AN_joint,.INFO/AF_joint,.INFO/nhomo_joint_XX,.INFO/nhomo_joint_XY -Oz -o ${input_vcf/.vcf*/}.chr{}.gnomAD.vcf.gz ${input_vcf/.vcf*/}.chr{}.vcf.gz" ::: "${chr_chroms[@]}" && \
-	parallel -j ${threads} --joblog ${input_vcf/.vcf*/.anno.gnomAD.log} "bcftools annotate -a ${gnomad_vcf_chrX/.chr1.vcf.bgz/}.chr{}.vcf.bgz -c CHROM,POS,REF,ALT,.INFO/AC_joint,.INFO/AN_joint,.INFO/AF_joint,.INFO/nhomo_joint_XX,.INFO/nhomo_joint_XY -Oz -o ${input_vcf/.vcf*/}.chr{}.gnomAD.vcf.gz ${input_vcf/.vcf*/}.chr{}.vcf.gz" ::: "${chr_chroms[@]}"; \
+	local gnomad_vcf_suffix=${gnomad_vcf_chrX/*.chrX.vcf/}
+	parallel -j ${threads} --dry-run "bcftools annotate -a ${gnomad_vcf_chrX/.chrX.vcf*gz/}.{}.vcf${gnomad_vcf_suffix} -c CHROM,POS,REF,ALT,.INFO/AC_joint,.INFO/AN_joint,.INFO/AF_joint,.INFO/nhomalt_joint_XX,.INFO/nhomalt_joint_XY -Oz -o ${input_vcf/.vcf*/}.{}.gnomAD.vcf.gz ${input_vcf/.vcf*/}.{}.vcf.gz" ::: "${chr_chroms[@]}" && \
+	parallel -j ${threads} --joblog ${input_vcf/.vcf*/.anno.gnomAD.log} "bcftools annotate -a ${gnomad_vcf_chrX/.chrX.vcf*gz/}.{}.vcf${gnomad_vcf_suffix} -c CHROM,POS,REF,ALT,.INFO/AC_joint,.INFO/AN_joint,.INFO/AF_joint,.INFO/nhomalt_joint_XX,.INFO/nhomalt_joint_XY -Oz -o ${input_vcf/.vcf*/}.{}.gnomAD.vcf.gz ${input_vcf/.vcf*/}.{}.vcf.gz" ::: "${chr_chroms[@]}"; \
 	check_parallel_joblog ${input_vcf/.vcf*/.anno.gnomAD.log} || { \
 	log "Failed to add aggregated gnomAD annotation on ${input_vcf}. Quit now"
 	return 1; }

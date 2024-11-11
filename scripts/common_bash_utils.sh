@@ -89,7 +89,7 @@ function display_vcf {
     fi
 
     local tmp_tab="$TMPDIR/$(randomID).tsv"
-    log "Using ${tmp_tab} as the temporary file to store the VCF records"
+    log "Using ${tmp_tab} as the temporary file to store the VCF records from ${input_vcf}"
 
     if [[ -z ${head_lines} ]]; then
         local head_lines=10
@@ -151,7 +151,7 @@ function filter_vcf_by_GT() {
     bcftools annotate -a ${output_vcf/.${place_holder}*/.subset.vcf.gz} -m VALID_REC -Ou ${vcf_file} | \
     bcftools filter -i 'INFO/VALID_REC=1' -Ou | \
     bcftools sort -Oz -o ${output_vcf/.${place_holder}*/.vcf.gz} && \
-    consistent_vcf_format ${output_vcf} ${output_vcf/.${place_holder}*/.vcf.gz} && \
+    tabix -f -p vcf ${output_vcf/.${place_holder}*/.vcf.gz} && \
     silent_remove_tmps ${tmp_sample_list}
 }
 
@@ -173,64 +173,6 @@ function announce_remove_tmps {
         fi
         >&2 echo ""
     done
-}
-
-
-
-function consistent_vcf_format () {
-    local input_vcf=${1}
-    local output_vcf=${2}
-
-    # Convert output_vcf format to make it the same format with the input vcf
-    if [[ ${input_vcf} == ${output_vcf} ]]; then
-        true
-    fi
-
-    if [[ ${input_vcf/*.vcf/vcf} == ${output_vcf/*.vcf/vcf} ]]; then
-        :
-    elif [[ ${input_vcf/*.bcf/bcf} == ${output_vcf/*.bcf/bcf} ]]; then
-        :
-    elif [[ ${input_vcf} =~ \.vcf\.gz$ ]]; then
-        local op_format="z"
-        local op_suffix=".vcf.gz"
-    elif [[ ${input_vcf} =~ \.vcf$ ]]; then
-        local op_format="v"
-        local op_suffix=".vcf"
-    elif [[ ${input_vcf} =~ \.bcf$ ]]; then
-        local op_format="b"
-        local op_suffix=".bcf"
-    else
-        log "The input VCF file ${input_vcf} does not have a recognizable format judging by its file name suffix"
-        return 10
-    fi
-
-    if [[ -z ${op_format} ]]; then
-        if [[ ${input_vcf} == ${output_vcf} ]]; then
-            return
-        else
-            mv ${input_vcf} ${output_vcf}
-            mv ${input_vcf}.tbi ${output_vcf}.tbi 2> /dev/null || :
-        fi
-    fi
-
-    if [[ ${output_vcf} =~ \.bcf$ ]]; then
-        local ori_output_format=bcf
-    elif [[ ${output_vcf} =~ \.vcf ]]; then
-        local ori_output_format=vcf
-    else
-        log "The input output VCF file ${output_vcf} does not have a recognizable format judging by its file name suffix"
-        return 10
-    fi
-
-    local final_output_vcf=${output_vcf/.${ori_output_format}*/${op_suffix}}
-    bcftools sort ${output_vcf} | \
-    bcftools view -O${op_format} --no-version -o ${final_output_vcf}
-
-    if [[ ${final_output_vcf} =~ \.vcf\.gz$ ]]; then
-        tabix -f -p vcf ${final_output_vcf}
-    fi
-
-    echo ${final_output_vcf}
 }
 
 
@@ -521,12 +463,15 @@ function normalize_vcf () {
     local output_vcf=${2}
     local ref_genome=${3}
 
+	[[ ! ${output_vcf} =~ \.vcf\.gz$ ]] && \
+	log "Output vcf file ${output_vcf} is not ending with .vcf.gz. Only support .vcf.gz format now." && \
+	return 1;
 
     bcftools norm -m -both -f ${ref_genome} --atom-overlaps "." --keep-sum AD -a ${input_vcf} | \
     bcftools norm -d exact - | \
-    bcftools view -i 'ALT!="*"' - | \
-    bcftools sort -Oz -o ${output_vcf/.vcf*/.vcf.gz} && \
-    consistent_vcf_format ${output_vcf} ${output_vcf/.vcf*/.vcf.gz}
+    bcftools view -i 'ALT!="*" && GT="alt"' - | \
+    bcftools sort -Oz -o ${output_vcf} && \
+    tabix -f -p vcf ${output_vcf}
 
     display_vcf ${output_vcf}
     >&2 echo ""  # Append a new line to the end of the logs from this function

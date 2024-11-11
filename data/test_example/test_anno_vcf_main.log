@@ -1,33 +1,75 @@
-[2024-11-10 23:13:40] [Script annotation_vcf.sh: Line 26] [Func: main] The folder storing scripts is /home/yangyxt/git_repos/acmg_auto/scripts, the base folder for used scripts and data is /home/yangyxt/git_repos/acmg_auto
-[2024-11-10 23:13:40] [Script annotation_vcf.sh: Line 505] [Func: main] Directly run main_workflow with input args: --input_vcf /home/yangyxt/git_repos/acmg_auto/data/test_example/TEST_FAM.filtered.vcf.gz --ped_file /home/yangyxt/git_repos/acmg_auto/data/test_example/TEST_FAM.ped --fam_name TEST_FAM --config /home/yangyxt/git_repos/acmg_auto/config.yaml
-[2024-11-10 23:13:40] [Script annotation_vcf.sh: Line 57] [Func: main_workflow] Using config file: /home/yangyxt/git_repos/acmg_auto/config.yaml
-[2024-11-10 23:13:40] [Script annotation_vcf.sh: Line 123] [Func: main_workflow] Using the following parameters:
-[2024-11-10 23:13:40] [Script annotation_vcf.sh: Line 124] [Func: main_workflow]   input_vcf: /home/yangyxt/git_repos/acmg_auto/data/test_example/TEST_FAM.filtered.vcf.gz
-[2024-11-10 23:13:40] [Script annotation_vcf.sh: Line 125] [Func: main_workflow]   ped_file: /home/yangyxt/git_repos/acmg_auto/data/test_example/TEST_FAM.ped
-[2024-11-10 23:13:40] [Script annotation_vcf.sh: Line 126] [Func: main_workflow]   fam_name: TEST_FAM
-[2024-11-10 23:13:40] [Script annotation_vcf.sh: Line 127] [Func: main_workflow]   assembly: hg19
-[2024-11-10 23:13:40] [Script annotation_vcf.sh: Line 128] [Func: main_workflow]   vep_cache_dir: /home/yangyxt/Caches/ensembl-vep
-[2024-11-10 23:13:40] [Script annotation_vcf.sh: Line 129] [Func: main_workflow]   output_dir: /home/yangyxt/git_repos/acmg_auto/results
-[2024-11-10 23:13:40] [Script annotation_vcf.sh: Line 130] [Func: main_workflow]   ref_genome: /home/yangyxt/Caches/genomes/hg19/ucsc.hg19.fasta
-[2024-11-10 23:13:40] [Script annotation_vcf.sh: Line 131] [Func: main_workflow]   threads: 4
-[2024-11-10 23:13:40] [Script annotation_vcf.sh: Line 132] [Func: main_workflow]   af_cutoff: 0.01
-[2024-11-10 23:13:40] [Script annotation_vcf.sh: Line 133] [Func: main_workflow]   gnomad_vcf_chrX: /home/yangyxt/Caches/gnomAD/v4/gnomad.joint.v4.1.sites.hg19.chrX.vcf.gz
-[2024-11-10 23:13:40] [Script annotation_vcf.sh: Line 134] [Func: main_workflow]   clinvar_vcf: /home/yangyxt/Caches/ClinVar/clinvar.hg19.vcf.gz
-[2024-11-10 23:13:40] [Script annotation_vcf.sh: Line 135] [Func: main_workflow]   vep_plugins_dir: /home/yangyxt/Tools/VEP_plugins
-[2024-11-10 23:13:40] [Script annotation_vcf.sh: Line 136] [Func: main_workflow]   vep_plugins_cachedir: /home/yangyxt/Caches/VEP_plugin_caches
-[2024-11-10 23:13:40] [Script common_bash_utils.sh: Line 249] [Func: check_vcf_validity] /home/yangyxt/git_repos/acmg_auto/data/test_example/TEST_FAM.filtered.vcf.gz should be bgzipped, check gz vcf validity
-[2024-11-10 23:13:40] [Script common_bash_utils.sh: Line 373] [Func: check_vcf_format] The input VCF file /home/yangyxt/git_repos/acmg_auto/data/test_example/TEST_FAM.filtered.vcf.gz has no format issue detected by bcftools
-[2024-11-10 23:13:40] [Script common_bash_utils.sh: Line 298] [Func: check_gz_vcf] /home/yangyxt/git_repos/acmg_auto/data/test_example/TEST_FAM.filtered.vcf.gz has solid vcf format. Check whether contains enough record number
-[2024-11-10 23:13:40] [Script common_bash_utils.sh: Line 300] [Func: check_gz_vcf] /home/yangyxt/git_repos/acmg_auto/data/test_example/TEST_FAM.filtered.vcf.gz has enough records.
-[2024-11-10 23:13:40] [Script common_bash_utils.sh: Line 349] [Func: check_vcf_samples] No expected samples specified. Quit checking samples
-[2024-11-10 23:13:40] [Script common_bash_utils.sh: Line 252] [Func: check_vcf_validity] /home/yangyxt/git_repos/acmg_auto/data/test_example/TEST_FAM.filtered.vcf.gz has solid sample names as expected.
-Writing to /tmp/bcftools.LF2RCI
-Writing to /tmp/bcftools.uzBzjC
+[2024-11-11 08:41:58] [Script annotation_vcf.sh: Line 26] [Func: main] The folder storing scripts is /home/yangyxt/git_repos/acmg_auto/scripts, the base folder for used scripts and data is /home/yangyxt/git_repos/acmg_auto
+[2024-11-11 08:41:58] [Script annotation_vcf.sh: Line 511] [Func: main] Directly run main_workflow with input args: --input_vcf /home/yangyxt/git_repos/acmg_auto/data/test_example/TEST_FAM.filtered.vcf.gz --ped_file /home/yangyxt/git_repos/acmg_auto/data/test_example/TEST_FAM.ped --fam_name TEST_FAM --config /home/yangyxt/git_repos/acmg_auto/config.yaml
+[2024-11-11 08:41:58] [Script annotation_vcf.sh: Line 57] [Func: main_workflow] Using config file: /home/yangyxt/git_repos/acmg_auto/config.yaml
+[2024-11-11 08:41:59] [Script annotation_vcf.sh: Line 123] [Func: main_workflow] Using the following parameters:
+[2024-11-11 08:41:59] [Script annotation_vcf.sh: Line 124] [Func: main_workflow]   input_vcf: /home/yangyxt/git_repos/acmg_auto/data/test_example/TEST_FAM.filtered.vcf.gz
+[2024-11-11 08:41:59] [Script annotation_vcf.sh: Line 125] [Func: main_workflow]   ped_file: /home/yangyxt/git_repos/acmg_auto/data/test_example/TEST_FAM.ped
+[2024-11-11 08:41:59] [Script annotation_vcf.sh: Line 126] [Func: main_workflow]   fam_name: TEST_FAM
+[2024-11-11 08:41:59] [Script annotation_vcf.sh: Line 127] [Func: main_workflow]   assembly: hg19
+[2024-11-11 08:41:59] [Script annotation_vcf.sh: Line 128] [Func: main_workflow]   vep_cache_dir: /home/yangyxt/Caches/ensembl-vep
+[2024-11-11 08:41:59] [Script annotation_vcf.sh: Line 129] [Func: main_workflow]   output_dir: /home/yangyxt/git_repos/acmg_auto/results
+[2024-11-11 08:41:59] [Script annotation_vcf.sh: Line 130] [Func: main_workflow]   ref_genome: /home/yangyxt/Caches/genomes/hg19/ucsc.hg19.fasta
+[2024-11-11 08:41:59] [Script annotation_vcf.sh: Line 131] [Func: main_workflow]   threads: 4
+[2024-11-11 08:41:59] [Script annotation_vcf.sh: Line 132] [Func: main_workflow]   af_cutoff: 0.01
+[2024-11-11 08:41:59] [Script annotation_vcf.sh: Line 133] [Func: main_workflow]   gnomad_vcf_chrX: /home/yangyxt/Caches/gnomAD/v4/gnomad.joint.v4.1.sites.hg19.chrX.vcf.gz
+[2024-11-11 08:41:59] [Script annotation_vcf.sh: Line 134] [Func: main_workflow]   clinvar_vcf: /home/yangyxt/Caches/ClinVar/clinvar.hg19.vcf.gz
+[2024-11-11 08:41:59] [Script annotation_vcf.sh: Line 135] [Func: main_workflow]   vep_plugins_dir: /home/yangyxt/Tools/VEP_plugins
+[2024-11-11 08:41:59] [Script annotation_vcf.sh: Line 136] [Func: main_workflow]   vep_plugins_cachedir: /home/yangyxt/Caches/VEP_plugin_caches
+[2024-11-11 08:41:59] [Script common_bash_utils.sh: Line 191] [Func: check_vcf_validity] /home/yangyxt/git_repos/acmg_auto/data/test_example/TEST_FAM.filtered.vcf.gz should be bgzipped, check gz vcf validity
+[2024-11-11 08:41:59] [Script common_bash_utils.sh: Line 315] [Func: check_vcf_format] The input VCF file /home/yangyxt/git_repos/acmg_auto/data/test_example/TEST_FAM.filtered.vcf.gz has no format issue detected by bcftools
+[2024-11-11 08:41:59] [Script common_bash_utils.sh: Line 240] [Func: check_gz_vcf] /home/yangyxt/git_repos/acmg_auto/data/test_example/TEST_FAM.filtered.vcf.gz has solid vcf format. Check whether contains enough record number
+[2024-11-11 08:41:59] [Script common_bash_utils.sh: Line 242] [Func: check_gz_vcf] /home/yangyxt/git_repos/acmg_auto/data/test_example/TEST_FAM.filtered.vcf.gz has enough records.
+[2024-11-11 08:41:59] [Script common_bash_utils.sh: Line 291] [Func: check_vcf_samples] No expected samples specified. Quit checking samples
+[2024-11-11 08:41:59] [Script common_bash_utils.sh: Line 194] [Func: check_vcf_validity] /home/yangyxt/git_repos/acmg_auto/data/test_example/TEST_FAM.filtered.vcf.gz has solid sample names as expected.
+[2024-11-11 08:41:59] [Script common_bash_utils.sh: Line 191] [Func: check_vcf_validity] /home/yangyxt/git_repos/acmg_auto/data/test_example/TEST_FAM.filtered.anno.vcf.gz should be bgzipped, check gz vcf validity
+[2024-11-11 08:41:59] [Script common_bash_utils.sh: Line 315] [Func: check_vcf_format] The input VCF file /home/yangyxt/git_repos/acmg_auto/data/test_example/TEST_FAM.filtered.anno.vcf.gz has no format issue detected by bcftools
+[2024-11-11 08:41:59] [Script common_bash_utils.sh: Line 240] [Func: check_gz_vcf] /home/yangyxt/git_repos/acmg_auto/data/test_example/TEST_FAM.filtered.anno.vcf.gz has solid vcf format. Check whether contains enough record number
+[2024-11-11 08:41:59] [Script common_bash_utils.sh: Line 242] [Func: check_gz_vcf] /home/yangyxt/git_repos/acmg_auto/data/test_example/TEST_FAM.filtered.anno.vcf.gz has enough records.
+[2024-11-11 08:41:59] [Script common_bash_utils.sh: Line 291] [Func: check_vcf_samples] No expected samples specified. Quit checking samples
+[2024-11-11 08:41:59] [Script common_bash_utils.sh: Line 194] [Func: check_vcf_validity] /home/yangyxt/git_repos/acmg_auto/data/test_example/TEST_FAM.filtered.anno.vcf.gz has solid sample names as expected.
+[2024-11-11 08:41:59] [Script common_bash_utils.sh: Line 398] [Func: check_vcf_multiallelics] /home/yangyxt/git_repos/acmg_auto/data/test_example/TEST_FAM.filtered.anno.vcf.gz does not have multi-allelic records
+[2024-11-11 08:41:59] [Script annotation_vcf.sh: Line 226] [Func: preprocess_vcf] The /home/yangyxt/git_repos/acmg_auto/data/test_example/TEST_FAM.filtered.anno.vcf.gz is valid and udpated. Skip this function
+[2024-11-11 08:41:59] [Script annotation_vcf.sh: Line 152] [Func: main_workflow] Successfully preprocess the input vcf /home/yangyxt/git_repos/acmg_auto/data/test_example/TEST_FAM.filtered.vcf.gz for annotation. The result is /home/yangyxt/git_repos/acmg_auto/data/test_example/TEST_FAM.filtered.anno.vcf.gz
+[2024-11-11 08:41:59] [Script common_bash_utils.sh: Line 92] [Func: display_vcf] Using /tmp/IWYWU9Mfq0uuspmUGyGPMYfoJgC2CP5U.tsv as the temporary file to store the VCF records from /home/yangyxt/git_repos/acmg_auto/data/test_example/TEST_FAM.filtered.anno.vcf.gz
+[2024-11-11 08:41:59] [Script common_bash_utils.sh: Line 70] [Func: display_table] /tmp/IWYWU9Mfq0uuspmUGyGPMYfoJgC2CP5U.tsv has 9 rows and 13 columns. It looks like:
+chr22  16122665  Y2hyMjI6MTYxMjI2NjU6QTpH  A  G  68  DeepVariant  AF=0.139535;AQ=68;AN=8;AC=8  GT:DP:AD:GQ:PL:RNC     1/1:1:0,1:28:68,31,0:..         1/1:2:0,2:38:65,41,0:..           1/1:2:0,2:19:37,22,0:..               1/1:3:0,3:27:45,30,0:..
+chr22  16123469  Y2hyMjI6MTYxMjM0Njk6VDpH  T  G  67  DeepVariant  AF=0.453488;AQ=67;AN=8;AC=6  GT:DP:AD:GQ:PL:RNC     0/1:91:24,67:43:50,0,44:..      0/1:96:10,86:11:32,0,10:..        1/1:90:16,74:1:0,4,0:..               1/1:128:27,101:2:3,9,0:..
+chr22  16123813  Y2hyMjI6MTYxMjM4MTM6RzpB  G  A  58  DeepVariant  AF=0.27907;AQ=58;AN=8;AC=1   GT:DP:AD:GQ:PL:RNC     0/0:45:18,24:31:0,30,57:..      0/1:60:9,43:1:7,1,0:..            0/0:41:13,25:28:0,27,46:..            0/0:57:22,32:37:0,37,57:..
+chr22  16171658  Y2hyMjI6MTYxNzE2NTg6QzpU  C  T  37  DeepVariant  AF=0.011628;AQ=37;AN=6;AC=2  GT:DP:AD:GQ:PL:RNC     0/1:3:1,2:37:37,0,50:..         0/1:2:1,1:7:6,0,32:..             ./.:.:.:.:.:.                         0/0:4:4,0:12:0,12,119:..
+chr22  16172059  Y2hyMjI6MTYxNzIwNTk6QzpU  C  T  45  DeepVariant  AF=0.011628;AQ=45;AN=6;AC=2  GT:DP:AD:GQ:PL:RNC     0/1:13:11,2:38:45,0,38:..       0/1:11:9,2:8:6,0,21:..            ./.:.:.:.:.:.                         0/0:11:11,0:4:0,3,269:..
+chr22  16255188  Y2hyMjI6MTYyNTUxODg6VDpD  T  C  55  DeepVariant  AF=0.523256;AQ=55;AN=8;AC=6  GT:DP:AD:GQ:PL:RNC:PS  1/1:12:0,12:48:50,49,0:..:.     0|1:9:5,4:48:48,0,74:..:16255188  1/1:8:0,8:31:38,32,0:..:.             1|0:12:8,4:25:25,0,48:..:16255188
+chr22  16255517  Y2hyMjI6MTYyNTU1MTc6VDpD  T  C  99  DeepVariant  AF=0.895349;AQ=99;AN=8;AC=8  GT:DP:AD:GQ:PL:RNC     1/1:23:0,23:36:99,36,0:..       1/1:25:0,25:38:99,38,0:..         1/1:25:1,24:42:44,42,0:..             1/1:31:0,31:47:48,47,0:..
+chr22  16255622  Y2hyMjI6MTYyNTU2MjI6QTpH  A  G  29  DeepVariant  AF=0.023256;AQ=29;AN=8;AC=2  GT:DP:AD:GQ:PL:RNC:PS  0/0:153:105,48:58:0,57,72:..:.  0/0:176:112,64:42:0,41,69:..:.    1|0:111:70,41:30:29,0,68:..:16255188  1|0:122:86,36:27:27,0,69:..:16255188
+chr22  16255747  Y2hyMjI6MTYyNTU3NDc6VDpD  T  C  31  DeepVariant  AF=0.034884;AQ=31;AN=6;AC=1  GT:DP:AD:GQ:PL:RNC     ./.:.:.:.:.:.                   0/1:189:99,90:5:3,0,34:..         0/0:144:82,60:47:0,48,52:..           0/0:122:68,54:46:0,46,58:..
+chr22  16255757  Y2hyMjI6MTYyNTU3NTc6QTpH  A  G  77  DeepVariant  AF=0.104651;AQ=77;AN=8;AC=2  GT:DP:AD:GQ:PL:RNC     0/1:165:111,54:54:73,0,54:..    0/1:190:128,62:59:77,0,58:..      0/0:142:97,45:56:0,55,72:..           0/0:116:85,31:69:0,70,74:..
+[2024-11-11 08:41:59] [Script common_bash_utils.sh: Line 990] [Func: check_vcf_infotags] The following INFO tags are not defined in /home/yangyxt/git_repos/acmg_auto/data/test_example/TEST_FAM.filtered.anno.vcf.gz header: AC_joint AN_joint AF_joint nhomo_joint_XX nhomo_joint_XY
+[2024-11-11 08:41:59] [Script annotation_vcf.sh: Line 291] [Func: anno_agg_gnomAD_data] The chromosome names extracted from the input vcf are: chr22 chrX chrY
+Writing to /tmp/bcftools.9451Wq
 Merging 1 temporary files
-[E::idx_find_and_load] Could not retrieve index file for '-'
-Failed to read from standard input: could not load index
-[E::bcf_hdr_read] Input is not detected as bcf or vcf format
-Could not read VCF/BCF headers from -
 Cleaning
-[2024-11-10 23:13:41] [Script annotation_vcf.sh: Line 231] [Func: preprocess_vcf] Failed to generate a VCF file that only contains records in primary chromosomes
-[2024-11-10 23:13:41] [Script annotation_vcf.sh: Line 154] [Func: main_workflow] Failed to preprocess the input vcf /home/yangyxt/git_repos/acmg_auto/data/test_example/TEST_FAM.filtered.vcf.gz for annotation. Quit with error.
+Done
+Writing to /tmp/bcftools.nSNfX8
+Merging 1 temporary files
+Cleaning
+Done
+Writing to /tmp/bcftools.xRpZoS
+Merging 1 temporary files
+Cleaning
+Done
+bcftools annotate -a /home/yangyxt/Caches/gnomAD/v4/gnomad.joint.v4.1.sites.hg19.chr22.vcf.gz -c CHROM,POS,REF,ALT,.INFO/AC_joint,.INFO/AN_joint,.INFO/AF_joint,.INFO/nhomo_joint_XX,.INFO/nhomo_joint_XY -Oz -o /home/yangyxt/git_repos/acmg_auto/data/test_example/TEST_FAM.filtered.anno.chr22.gnomAD.vcf.gz /home/yangyxt/git_repos/acmg_auto/data/test_example/TEST_FAM.filtered.anno.chr22.vcf.gz
+bcftools annotate -a /home/yangyxt/Caches/gnomAD/v4/gnomad.joint.v4.1.sites.hg19.chrX.vcf.gz -c CHROM,POS,REF,ALT,.INFO/AC_joint,.INFO/AN_joint,.INFO/AF_joint,.INFO/nhomo_joint_XX,.INFO/nhomo_joint_XY -Oz -o /home/yangyxt/git_repos/acmg_auto/data/test_example/TEST_FAM.filtered.anno.chrX.gnomAD.vcf.gz /home/yangyxt/git_repos/acmg_auto/data/test_example/TEST_FAM.filtered.anno.chrX.vcf.gz
+bcftools annotate -a /home/yangyxt/Caches/gnomAD/v4/gnomad.joint.v4.1.sites.hg19.chrY.vcf.gz -c CHROM,POS,REF,ALT,.INFO/AC_joint,.INFO/AN_joint,.INFO/AF_joint,.INFO/nhomo_joint_XX,.INFO/nhomo_joint_XY -Oz -o /home/yangyxt/git_repos/acmg_auto/data/test_example/TEST_FAM.filtered.anno.chrY.gnomAD.vcf.gz /home/yangyxt/git_repos/acmg_auto/data/test_example/TEST_FAM.filtered.anno.chrY.vcf.gz
+The INFO tag "nhomo_joint_XX" is not defined in /home/yangyxt/Caches/gnomAD/v4/gnomad.joint.v4.1.sites.hg19.chrX.vcf.gz, was the -h option provided?
+The INFO tag "nhomo_joint_XX" is not defined in /home/yangyxt/Caches/gnomAD/v4/gnomad.joint.v4.1.sites.hg19.chrY.vcf.gz, was the -h option provided?
+The INFO tag "nhomo_joint_XX" is not defined in /home/yangyxt/Caches/gnomAD/v4/gnomad.joint.v4.1.sites.hg19.chr22.vcf.gz, was the -h option provided?
+[2024-11-11 08:42:00] [Script common_bash_utils.sh: Line 929] [Func: check_parallel_joblog] : Parallel job log is -rw-rw-r-- 1 yangyxt yangyxt 1.4K Nov 11 08:42 /home/yangyxt/git_repos/acmg_auto/data/test_example/TEST_FAM.filtered.anno.anno.gnomAD.log
+Seq	Host	Starttime	JobRuntime	Send	Receive	Exitval	Signal	Command
+2	:	1731285720.455	     0.029	0	0	255	0	bcftools annotate -a /home/yangyxt/Caches/gnomAD/v4/gnomad.joint.v4.1.sites.hg19.chrX.vcf.gz -c CHROM,POS,REF,ALT,.INFO/AC_joint,.INFO/AN_joint,.INFO/AF_joint,.INFO/nhomo_joint_XX,.INFO/nhomo_joint_XY -Oz -o /home/yangyxt/git_repos/acmg_auto/data/test_example/TEST_FAM.filtered.anno.chrX.gnomAD.vcf.gz /home/yangyxt/git_repos/acmg_auto/data/test_example/TEST_FAM.filtered.anno.chrX.vcf.gz
+3	:	1731285720.456	     0.032	0	0	255	0	bcftools annotate -a /home/yangyxt/Caches/gnomAD/v4/gnomad.joint.v4.1.sites.hg19.chrY.vcf.gz -c CHROM,POS,REF,ALT,.INFO/AC_joint,.INFO/AN_joint,.INFO/AF_joint,.INFO/nhomo_joint_XX,.INFO/nhomo_joint_XY -Oz -o /home/yangyxt/git_repos/acmg_auto/data/test_example/TEST_FAM.filtered.anno.chrY.gnomAD.vcf.gz /home/yangyxt/git_repos/acmg_auto/data/test_example/TEST_FAM.filtered.anno.chrY.vcf.gz
+1	:	1731285720.453	     0.069	0	0	255	0	bcftools annotate -a /home/yangyxt/Caches/gnomAD/v4/gnomad.joint.v4.1.sites.hg19.chr22.vcf.gz -c CHROM,POS,REF,ALT,.INFO/AC_joint,.INFO/AN_joint,.INFO/AF_joint,.INFO/nhomo_joint_XX,.INFO/nhomo_joint_XY -Oz -o /home/yangyxt/git_repos/acmg_auto/data/test_example/TEST_FAM.filtered.anno.chr22.gnomAD.vcf.gz /home/yangyxt/git_repos/acmg_auto/data/test_example/TEST_FAM.filtered.anno.chr22.vcf.gz
+[2024-11-11 08:42:00] [Script common_bash_utils.sh: Line 932] [Func: check_parallel_joblog] : According to /home/yangyxt/git_repos/acmg_auto/data/test_example/TEST_FAM.filtered.anno.anno.gnomAD.log: totally 3 jobs were running in parallel, 3 of the parallel jobs failed, get a return code of 3, the commands are:
+bcftools annotate -a /home/yangyxt/Caches/gnomAD/v4/gnomad.joint.v4.1.sites.hg19.chrX.vcf.gz -c CHROM,POS,REF,ALT,.INFO/AC_joint,.INFO/AN_joint,.INFO/AF_joint,.INFO/nhomo_joint_XX,.INFO/nhomo_joint_XY -Oz -o /home/yangyxt/git_repos/acmg_auto/data/test_example/TEST_FAM.filtered.anno.chrX.gnomAD.vcf.gz /home/yangyxt/git_repos/acmg_auto/data/test_example/TEST_FAM.filtered.anno.chrX.vcf.gz
+bcftools annotate -a /home/yangyxt/Caches/gnomAD/v4/gnomad.joint.v4.1.sites.hg19.chrY.vcf.gz -c CHROM,POS,REF,ALT,.INFO/AC_joint,.INFO/AN_joint,.INFO/AF_joint,.INFO/nhomo_joint_XX,.INFO/nhomo_joint_XY -Oz -o /home/yangyxt/git_repos/acmg_auto/data/test_example/TEST_FAM.filtered.anno.chrY.gnomAD.vcf.gz /home/yangyxt/git_repos/acmg_auto/data/test_example/TEST_FAM.filtered.anno.chrY.vcf.gz
+bcftools annotate -a /home/yangyxt/Caches/gnomAD/v4/gnomad.joint.v4.1.sites.hg19.chr22.vcf.gz -c CHROM,POS,REF,ALT,.INFO/AC_joint,.INFO/AN_joint,.INFO/AF_joint,.INFO/nhomo_joint_XX,.INFO/nhomo_joint_XY -Oz -o /home/yangyxt/git_repos/acmg_auto/data/test_example/TEST_FAM.filtered.anno.chr22.gnomAD.vcf.gz /home/yangyxt/git_repos/acmg_auto/data/test_example/TEST_FAM.filtered.anno.chr22.vcf.gz
+[2024-11-11 08:42:00] [Script annotation_vcf.sh: Line 306] [Func: anno_agg_gnomAD_data] Failed to add aggregated gnomAD annotation on /home/yangyxt/git_repos/acmg_auto/data/test_example/TEST_FAM.filtered.anno.vcf.gz. Quit now
+[2024-11-11 08:42:00] [Script annotation_vcf.sh: Line 166] [Func: main_workflow] Failed to add aggregated gnomAD annotation on /home/yangyxt/git_repos/acmg_auto/data/test_example/TEST_FAM.filtered.anno.vcf.gz. Quit now

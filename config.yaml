@@ -12,7 +12,7 @@ ped_file: "/home/yangyxt/git_repos/acmg_auto/data/test_example/TEST_FAM.ped"
 fam_name: "TEST_FAM"
 
 # Note that the assembly version must be consistent with the reference genome
-assembly: hg38
+assembly: hg19
 
 # Below we specify the reference genome in absolute paths because the size of the file is too large to be included in the github repo
 ref_genome: "/home/yangyxt/Caches/genomes/hg19/ucsc.hg19.fasta"

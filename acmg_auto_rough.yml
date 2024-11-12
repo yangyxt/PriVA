@@ -1,0 +1,31 @@
+name: acmg
+channels:
+  - bioconda
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.12
+  - ensembl-vep
+  - ca-certificates
+  - openssl
+  - bioconda::cadd-scripts
+  - spliceai
+  - certifi
+  - mawk
+  - samtools
+  - bcftools
+  - sambamba
+  - pysam
+  - pybedtools
+  - conda-forge::parallel
+  - gengetopt
+  - gffutils
+  - perl-bio-procedural
+  - yq
+  - bioconda::crossmap
+  - bioconda::tsv-utils
+  - anaconda::git-lfs
+  - perl-bio-bigfile
+variables:
+  PERL5LIB: /home/yangyxt/miniconda3/envs/acmg/lib/perl5/5.32/site_perl:/home/yangyxt/Tools/VEP_plugins
+  PATH: /home/yangyxt/miniconda3/envs/acmg/lib/perl5/5.32/site_perl/htslib:/home/yangyxt/miniconda3/envs/acmg/lib/perl5/5.32/site_perl:/home/yangyxt/miniconda3/envs/acmg/lib/perl5/5.32/site_perl:/home/yangyxt/.cursor-server/cli/servers/Stable-63dae81aea2c3fc079420fe72578a8eef26ba870/server/bin/remote-cli:/home/yangyxt/miniconda3/envs/acmg/bin:/home/yangyxt/miniconda3/condabin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin

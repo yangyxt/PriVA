@@ -970,8 +970,8 @@ function main_install() {
     { log "Failed to install the conda env"; return 1; }
 
     # Test whether currently the conda env is activated
-    local conda_env_name=$(conda env list | grep "$conda_env_yaml" | awk '{print $1;}')
-    if [[ ${CONDA_PREFIX} =~ ${conda_env_name} ]]; then
+    local conda_env_name=$(head -1 ${conda_env_yaml} | awk -F ': ' '{print $2;}')
+    if [[ ${CONDA_PREFIX} =~ ${conda_env_name} ]] && [[ ! -z ${conda_env_name} ]]; then
         log "The conda env $conda_env_name is already activated"
     else
         conda activate $conda_env_name

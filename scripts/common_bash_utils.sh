@@ -6,19 +6,9 @@ BASE_DIR=$(dirname ${SELF_DIR})
 ARGPARSE=${SELF_DIR}/argparse.bash
 # This script is just a function pool, used to store commonly shared functions
 
-# Function to read YAML configuration
-function read_yaml() {
-    local yaml_file=$1
-    local key=$2
-    yq eval ".$key" "$yaml_file"
-}
 
-# Function to update YAML configuration
-function update_yaml() {
-    local yaml_file=$1
-    local key=$2
-    local value=$3
-    yq eval ".$key = \"$value\"" -i "$yaml_file"
+function randomID {
+    dd bs=24 count=1 status=none if=/dev/urandom | base64 | tr +/ _
 }
 
 
@@ -33,9 +23,26 @@ function log() {
 }
 
 
-function randomID {
-    dd bs=24 count=1 status=none if=/dev/urandom | base64 | tr +/ _
+# Function to read YAML configuration
+function read_yaml() {
+    local yaml_file=$1
+    local key=$2
+    # Remove the quotes enclosing the value
+    yq ".$key" "$yaml_file" | sed 's/^"\(.*\)"$/\1/'
 }
+
+# Function to update YAML configuration
+function update_yaml() {
+    local yaml_file=$1
+    local key=$2
+    local value=$3
+    local tmp_tag=$(randomID)
+
+    yq -i ".$key = \"$value\"" "$yaml_file" > ${yaml_file/.yaml/.${tmp_tag}.yaml} && \
+    cat ${yaml_file/.yaml/.${tmp_tag}.yaml}
+}
+
+
 
 
 function display_table {

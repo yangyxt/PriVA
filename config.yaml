@@ -3,7 +3,7 @@
 # Note that the paths specified below are all data that cant be included in the github repo (primarily due to the size limit of github repo)
 
 # Below we specify the conda env yml file in relative path
-conda_env_yaml: "acmg_conda.yml"
+conda_env_yaml: "acmg_auto_rough.yml"
 conda_env_name: "acmg"
 
 # Below we specify the input vcf file in absolute paths

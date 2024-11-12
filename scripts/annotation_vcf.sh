@@ -452,15 +452,15 @@ function anno_VEP_data() {
 	# - NMD, from VEP plugin NMD
 	# - am_pathogenicity & am_class, from VEP plugin AlphaMissense
 	# - SpliceAI_pred_DS_AG, SpliceAI_pred_DS_AL, SpliceAI_pred_DS_DG, SpliceAI_pred_DS_DL, SpliceAI_pred_DP_AG, SpliceAI_pred_DP_AL, SpliceAI_pred_DP_DG, SpliceAI_pred_DP_DL, from VEP plugin SpliceAI
-	check_vcf_infotags ${input_vcf} "CSQ,NMD,am_pathogenicity,am_class,SpliceAI_pred_DS_AG,SpliceAI_pred_DS_AL,SpliceAI_pred_DS_DG,SpliceAI_pred_DS_DL,SpliceAI_pred_DP_AG,SpliceAI_pred_DP_AL,SpliceAI_pred_DP_DG,SpliceAI_pred_DP_DL" && \
+	check_vcf_infotags ${input_vcf} "CSQ" && \
 	log "The input vcf ${input_vcf} is already annotated by VEP. Skip this step" && \
 	return 0
 
 	local tmp_tag=$(randomID)
-	local output_vcf=${input_vcf/.vcf*/.${tmp_tag}.vcf.gz}
+	local output_vcf=${input_vcf/.vcf*/.${tmp_tag}.vcf}
 
 	log "Running VEP annotation with the command below:"
-	log "vep -i ${input_vcf} --format vcf --verbose --vcf --species homo_sapiens --use_given_ref --assembly ${assembly} --cache --merged --numbers --symbol --canonical --variant_class --gene_phenotype --stats_file ${input_vcf/.vcf*/.vep.stats.html} --fork ${threads} --buffer_size 10000 --dir_cache ${vep_cache_dir} --dir_plugins ${vep_plugins_dir} -plugin UTRAnnotator,file=${utr_annotator_file} -plugin LOEUF,file=${loeuf_prescore},match_by=transcript -plugin AlphaMissense,file=${alphamissense_prescore} -plugin SpliceAI,snv=${spliceai_snv_prescore},indel=${spliceai_indel_prescore},cutoff=0.5 -plugin PrimateAI,${primateai_prescore} -plugin Conservation,file=${conversation_file} -plugin NMD --force_overwrite -o ${output_vcf}"
+	log "vep -i ${input_vcf} --format vcf --verbose --vcf --species homo_sapiens --use_given_ref --assembly ${assembly} --cache --offline --merged --numbers --symbol --canonical --variant_class --gene_phenotype --stats_file ${input_vcf/.vcf*/.vep.stats.html} --fork ${threads} --buffer_size 10000 --dir_cache ${vep_cache_dir} --dir_plugins ${vep_plugins_dir} -plugin UTRAnnotator,file=${utr_annotator_file} -plugin LOEUF,file=${loeuf_prescore},match_by=transcript -plugin AlphaMissense,file=${alphamissense_prescore} -plugin SpliceAI,snv=${spliceai_snv_prescore},indel=${spliceai_indel_prescore},cutoff=0.5 -plugin PrimateAI,${primateai_prescore} -plugin Conservation,file=${conversation_file} -plugin NMD --force_overwrite -o ${output_vcf}"
 
 	# Run VEP annotation
     vep -i ${input_vcf} \
@@ -471,6 +471,7 @@ function anno_VEP_data() {
     --use_given_ref \
     --assembly ${assembly} \
     --cache \
+	--offline \
     --merged \
     --numbers \
     --symbol \
@@ -488,14 +489,14 @@ function anno_VEP_data() {
     -plugin AlphaMissense,file=${alphamissense_prescore} \
     -plugin SpliceAI,snv=${spliceai_snv_prescore},indel=${spliceai_indel_prescore},cutoff=0.5 \
     -plugin PrimateAI,${primateai_prescore} \
-    -plugin Conservation,file=${conversation_file} \
+    -plugin Conservation,${conversation_file},MAX \
 	-plugin NMD \
     --force_overwrite \
     -o ${output_vcf} && \
-	tabix -f -p vcf ${output_vcf} && \
-	mv ${output_vcf} ${input_vcf} && \
-	mv ${output_vcf}.tbi ${input_vcf}.tbi && \
-	display_vcf ${input_vcf}
+	bcftools sort -Oz -o ${input_vcf/.vcf*/.vcf.gz} ${output_vcf} && \
+	tabix -f -p vcf ${input_vcf/.vcf*/.vcf.gz} && \
+	announce_remove_tmps ${output_vcf} && \
+	display_vcf ${input_vcf/.vcf*/.vcf.gz}
 }
 
 

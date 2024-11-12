@@ -1,9 +1,0 @@
-WARNING: Failed to compile plugin Conservation: Can't locate Bio/DB/BigFile.pm in @INC (you may need to install the Bio::DB::BigFile module) (@INC contains: /home/yangyxt/Tools/VEP_plugins /home/yangyxt/miniconda3/envs/acmg/share/ensembl-vep-112.0-0/modules /home/yangyxt/miniconda3/envs/acmg/share/ensembl-vep-112.0-0 /home/yangyxt/miniconda3/envs/acmg/lib/perl5/5.32/site_perl /home/yangyxt/Tools/VEP_plugins /home/yangyxt/miniconda3/envs/acmg/lib/perl5/site_perl /home/yangyxt/miniconda3/envs/acmg/lib/perl5/5.32/vendor_perl /home/yangyxt/miniconda3/envs/acmg/lib/perl5/vendor_perl /home/yangyxt/miniconda3/envs/acmg/lib/perl5/5.32/core_perl /home/yangyxt/miniconda3/envs/acmg/lib/perl5/core_perl .) at /home/yangyxt/miniconda3/envs/acmg/share/ensembl-vep-112.0-0/Bio/EnsEMBL/IO/BigFileParser.pm line 34.
-BEGIN failed--compilation aborted at /home/yangyxt/miniconda3/envs/acmg/share/ensembl-vep-112.0-0/Bio/EnsEMBL/IO/BigFileParser.pm line 34.
-Compilation failed in require at /home/yangyxt/miniconda3/envs/acmg/lib/perl5/vendor_perl/parent.pm line 16.
-BEGIN failed--compilation aborted at /home/yangyxt/miniconda3/envs/acmg/share/ensembl-vep-112.0-0/Bio/EnsEMBL/IO/Parser/BigWig.pm line 32.
-Compilation failed in require at /home/yangyxt/Tools/VEP_plugins/Conservation.pm line 66.
-BEGIN failed--compilation aborted at /home/yangyxt/Tools/VEP_plugins/Conservation.pm line 66.
-Compilation failed in require at (eval 57) line 2.
-BEGIN failed--compilation aborted at (eval 57) line 2.
-

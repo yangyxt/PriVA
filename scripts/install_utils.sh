@@ -300,6 +300,162 @@ function SpliceAI_install() {
 }
 
 
+
+function convert_splicevault_hg38_to_hg19() {
+    local input_tsv=$1
+    local output_tsv=$2
+    local chain_file=$3
+    local reference_fasta=$4  # GRCh38 reference
+    local temp_dir=$(mktemp -d)
+
+    log "Starting conversion process..."
+
+    # 1. Convert TSV to VCF with all columns as INFO fields
+    log "Converting TSV to VCF..."
+    bcftools convert --tsv2vcf "$input_tsv" \
+        -f "$reference_fasta" \
+        -s "SAMPLE" \
+        --columns CHROM,POS,REF,ALT \
+        --annot-fields TRANSCRIPT_ID,SITE_TYPE,SITE_LOC,SPLICEAI_DELTA,OUT_OF_FRAME,TOP4_EVENTS,SAMPLE_COUNT,MAX_DEPTH \
+        | bcftools annotate \
+            --set-id '%CHROM\_%POS\_%REF\_%ALT' \
+            -Oz -o "${temp_dir}/grch38.vcf.gz" && \
+    display_vcf "${temp_dir}/grch38.vcf.gz"
+
+    # Add INFO field descriptions to header
+    bcftools header -h <(cat << EOF
+##INFO=<ID=TRANSCRIPT_ID,Number=1,Type=String,Description="Ensembl transcript ID">
+##INFO=<ID=SITE_TYPE,Number=1,Type=String,Description="SpliceVault site type">
+##INFO=<ID=SITE_LOC,Number=1,Type=String,Description="SpliceVault site location">
+##INFO=<ID=SPLICEAI_DELTA,Number=1,Type=Float,Description="SpliceAI delta score">
+##INFO=<ID=OUT_OF_FRAME,Number=1,Type=String,Description="Out of frame events">
+##INFO=<ID=TOP4_EVENTS,Number=1,Type=String,Description="Top 4 splicing events">
+##INFO=<ID=SAMPLE_COUNT,Number=1,Type=Integer,Description="Sample count">
+##INFO=<ID=MAX_DEPTH,Number=1,Type=Integer,Description="Maximum depth">
+EOF
+    ) -o "${temp_dir}/grch38.header.vcf.gz"
+
+    # 2. Liftover using CrossMap
+    log "Lifting over coordinates..."
+    CrossMap.py vcf "$chain_file" \
+        "${temp_dir}/grch38.vcf.gz" \
+        "$reference_fasta" \
+        "${temp_dir}/hg19.vcf" && \
+    display_vcf "${temp_dir}/hg19.vcf"
+
+    # Compress and index the lifted VCF
+    bgzip -f "${temp_dir}/hg19.vcf" && \
+    bcftools index -t "${temp_dir}/hg19.vcf.gz" && \
+    display_vcf "${temp_dir}/hg19.vcf.gz"
+
+    # 3. Convert back to TSV format preserving all INFO fields
+    log "Converting back to TSV format..."
+    # First, save header
+    head -n 1 "$input_tsv" > "$output_tsv"
+
+    # Extract data from VCF including all INFO fields
+    bcftools query -f '%CHROM\t%POS\t%REF\t%ALT\t%INFO/TRANSCRIPT_ID\t%INFO/SITE_TYPE\t%INFO/SITE_LOC\t%INFO/SPLICEAI_DELTA\t%INFO/OUT_OF_FRAME\t%INFO/TOP4_EVENTS\t%INFO/SAMPLE_COUNT\t%INFO/MAX_DEPTH\n' \
+        "${temp_dir}/hg19.vcf.gz" >> "$output_tsv"
+
+    # Clean up
+    rm -rf "$temp_dir"
+    log "Conversion complete. Output written to $output_tsv"
+}
+
+
+
+function CADD_install() {
+    local config_file=${1}
+    local assembly=${2}
+
+    [[ -z ${assembly} ]] && assembly=$(read_yaml "${config_file}" "assembly")
+    [[ ${assembly} == "hg19" ]] && assembly="GRCh37"
+    [[ ${assembly} == "hg38" ]] && assembly="GRCh38"
+    local CADD_script
+
+    # Running CADD requires 4 big parts of preparations:
+    # 1. snakemake (solved by conda environment)
+    # 2. CADD dependencies (solved by conda environment)
+    # 3. CADD genome annotation file (need to download)
+    # 4. CADD prescores (need to download)
+
+    CADD_script=$(find ${CONDA_PREFIX}/ -type f -name "CADD.sh")
+    if [[ -z ${CADD_script} ]] || [[ ! -f ${CADD_script} ]]; then
+        log "Cannot find the CADD script in the conda environment"
+        return 1
+    fi
+
+    local CADD_cache_dir=$(dirname ${CADD_script})/data
+    # Note that by default, CADD will use the CADD cache file in the conda environment
+    # Ask the user whether they want to use the default CADD cache directory to store the genome annotation file and the prescores.
+    read -p "Do you want to use the default CADD cache directory ${CADD_cache_dir} to store the genome annotation file and the prescores which could be take up to 1TB space? (yes or no)"
+    if [[ ${REPLY} =~ "yes" ]] || [[ ${REPLY} =~ "y" ]] || [[ ${REPLY} =~ "Y" ]] || [[ ${REPLY} =~ "Yes" ]] || [[ ${REPLY} =~ "YES" ]]; then
+        local CADD_prescore_dir=${CADD_cache_dir}/prescored
+        local CADD_anno_dir=${CADD_cache_dir}/annotations
+    else
+        read -p "In this case, you need to download the CADD repo as a zip file and unzip it to a local directory and all the cache files will be store in that directory. Please specify the absolute path to the directory: "
+        local CADD_parent_dir=${REPLY}
+        local CADD_zip_download_url=$(read_yaml "${config_file}" "cadd_zip_download_url")
+        wget ${CADD_zip_download_url} -O ${CADD_parent_dir}/CADD-scripts.zip && \
+        unzip ${CADD_parent_dir}/CADD-scripts.zip -d ${CADD_parent_dir}/ && \
+        rm ${CADD_parent_dir}/CADD-scripts.zip && \
+        # Get the base folder name from the unzipped directory
+        local cadd_version=$(read_yaml "${config_file}" "cadd_version")
+        local CADD_base_dir=$(find ${CADD_parent_dir}/ -maxdepth 1 -type d -name "CADD-scripts-*${cadd_version#v}" -print | head -n1) && \
+        [[ -z ${CADD_base_dir} ]] && { log "Could not find CADD scripts directory"; return 1; }
+        local CADD_script=${CADD_base_dir}/CADD.sh && \
+        local CADD_cache_dir=${CADD_base_dir}/data && \
+        local CADD_prescore_dir=${CADD_cache_dir}/prescored && \
+        local CADD_anno_dir=${CADD_cache_dir}/annotations
+    fi
+
+
+    # Now we start downloading the CADD genome annotations corresponding to the assembly version
+    if [[ ${assembly} == "GRCh37" ]] || [[ ${assembly} == "hg19" ]]; then
+        wget -c https://kircherlab.bihealth.org/download/CADD/v1.7/GRCh37/GRCh37_v1.7.tar.gz -O ${CADD_anno_dir}/GRCh37_v1.7.tar.gz && \
+        md5sum ${CADD_anno_dir}/GRCh37_v1.7.tar.gz | grep -q $(read_yaml "${config_file}" "cadd_GRCh37_anno_md5") && \
+        tar -xzvf ${CADD_anno_dir}/GRCh37_v1.7.tar.gz -C ${CADD_anno_dir}/ && \
+        rm ${CADD_anno_dir}/GRCh37_v1.7.tar.gz
+    elif [[ ${assembly} == "GRCh38" ]] || [[ ${assembly} == "hg38" ]]; then
+        wget -c https://kircherlab.bihealth.org/download/CADD/v1.7/GRCh38/GRCh38_v1.7.tar.gz -O ${CADD_anno_dir}/GRCh38_v1.7.tar.gz && \
+        md5sum ${CADD_anno_dir}/GRCh38_v1.7.tar.gz | grep -q $(read_yaml "${config_file}" "cadd_GRCh38_anno_md5") && \
+        tar -xzvf ${CADD_anno_dir}/GRCh38_v1.7.tar.gz -C ${CADD_anno_dir}/ && \
+        rm ${CADD_anno_dir}/GRCh38_v1.7.tar.gz
+    else
+        log "Not supported assembly version: ${assembly}"
+        return 1
+    fi
+
+
+    # Now we start downloading the CADD prescores corresponding to the assembly version
+    local snv_prescore_url
+    local indel_prescore_url
+    local snv_prescore_md5
+    local indel_prescore_md5
+    if [[ ${assembly} == "GRCh37" ]] || [[ ${assembly} == "hg19" ]]; then
+        snv_prescore_url=$(read_yaml "${config_file}" "cadd_GRCh37_snv_anno_url")
+        indel_prescore_url=$(read_yaml "${config_file}" "cadd_GRCh37_indel_anno_url")
+        snv_prescore_md5=$(read_yaml "${config_file}" "cadd_GRCh37_snv_anno_md5")
+        indel_prescore_md5=$(read_yaml "${config_file}" "cadd_GRCh37_indel_anno_md5")
+    elif [[ ${assembly} == "GRCh38" ]] || [[ ${assembly} == "hg38" ]]; then
+        snv_prescore_url=$(read_yaml "${config_file}" "cadd_GRCh38_snv_anno_url")
+        indel_prescore_url=$(read_yaml "${config_file}" "cadd_GRCh38_indel_anno_url")
+        snv_prescore_md5=$(read_yaml "${config_file}" "cadd_GRCh38_snv_anno_md5")
+        indel_prescore_md5=$(read_yaml "${config_file}" "cadd_GRCh38_indel_anno_md5")
+    fi
+
+    local snv_file_name=$(basename ${snv_prescore_url})
+    local indel_file_name=$(basename ${indel_prescore_url})
+    wget -c ${snv_prescore_url} -O ${CADD_prescore_dir}/${snv_file_name} && \
+    md5sum ${CADD_prescore_dir}/${snv_file_name} | grep -q ${snv_prescore_md5} && \
+    wget -c ${snv_prescore_url}.tbi -O ${CADD_prescore_dir}/${snv_file_name}.tbi && \
+    wget -c ${indel_prescore_url} -O ${CADD_prescore_dir}/${indel_file_name} && \
+    md5sum ${CADD_prescore_dir}/${indel_file_name} | grep -q ${indel_prescore_md5} && \
+    wget -c ${indel_prescore_url}.tbi -O ${CADD_prescore_dir}/${indel_file_name}.tbi
+}
+
+
+
 function PrimateAI_install() {
     local PLUGIN_CACHEDIR=${1}
     local PLUGIN_DIR=${2}
@@ -860,7 +1016,10 @@ function main_install() {
     update_yaml "$config_file" "clinvar_vcf" "${prepared_clinvar_vcf}" || \
     { log "Failed to install ClinVar VCF"; return 1; }
 
-    # ... other installation steps ...
+    # 6. Install CADD prescores
+    CADD_install \
+    ${config_file} \
+    ${assembly}
 }
 
 

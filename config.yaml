@@ -4,6 +4,7 @@
 
 # Below we specify the conda env yml file in relative path
 conda_env_yaml: "acmg_conda.yml"
+conda_env_name: "acmg"
 
 # Below we specify the input vcf file in absolute paths
 input_vcf: "/home/yangyxt/git_repos/acmg_auto/data/test_example/TEST_FAM.filtered.vcf.gz"
@@ -52,3 +53,18 @@ primateai_prescore: "/home/yangyxt/Caches/VEP_plugin_caches/PrimateAI/hg19/Prima
 # The Conversation cache file
 conversation_file: "/home/yangyxt/Caches/VEP_plugin_caches/Conservations/gerp_conservation_scores.homo_sapiens.GRCh37.bw"
 
+
+# Below we specify the path to the CADD base directory
+cadd_base_dir: "/home/yangyxt/miniconda3/envs/acmg/share/cadd-scripts-1.7.1-0"
+cadd_zip_download_url: "https://github.com/kircherlab/CADD-scripts/archive/refs/tags/v1.7.zip"
+cadd_GRCh37_anno_md5: "22549309c65de8d25e903695aa4f749f"
+cadd_GRCh38_anno_md5: "205d3e702df3565efb424e2ca80c9d25"
+cadd_GRCh37_snv_anno_url: "https://krishna.gs.washington.edu/download/CADD/v1.7/GRCh37/whole_genome_SNVs_inclAnno.tsv.gz"
+cadd_GRCh37_snv_anno_md5: "1b89cfd7da4e2a8f336c1ec33a6f44eb"
+cadd_GRCh37_indel_anno_url: "https://krishna.gs.washington.edu/download/CADD/v1.7/GRCh37/gnomad.genomes-exomes.r4.0.indel_inclAnno.tsv.gz"
+cadd_GRCh37_indel_anno_md5: "3d88f8fde9df07060b4f8fe07a0d5d5d"
+cadd_GRCh38_snv_anno_url: "https://krishna.gs.washington.edu/download/CADD/v1.7/GRCh38/whole_genome_SNVs_inclAnno.tsv.gz"
+cadd_GRCh38_snv_anno_md5: "ed9d3e029686375e2ac80e96b5d0067a"
+cadd_GRCh38_indel_anno_url: "https://krishna.gs.washington.edu/download/CADD/v1.7/GRCh38/gnomad.genomes.r4.0.indel_inclAnno.tsv.gz"
+cadd_GRCh38_indel_anno_md5: "00ce2d2431a6ec3324b23ff625f4e0cd"
+cadd_version: "v1.7"

@@ -43,7 +43,7 @@ function conda_install_vep() {
     # because Bio::Perl module is migrated from perl-bioperl to perl-bio-procedural since perl-bioperl 1.7.3
     # Or you can directly install the env from our env.yaml file
     if [[ ${skip_env_creation} -eq 0 ]]; then
-        mamba env create -p ${CONDA_PREFIX} -f ${env_yaml}
+        mamba env create -f ${env_yaml}
     fi
 }
 

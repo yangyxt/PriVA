@@ -7,7 +7,8 @@ function conda_install_vep() {
 
     # Extract the env name from the env.yaml file
     local env_name=$(head -1 ${env_yaml} | awk -F ': ' '{print $2;}')
-    log "The environment name to-be setup according to the env.yaml ${env_yaml} file is ${env_name}"
+    log "The environment name to-be setup according to the ${env_yaml} file is ${env_name}"
+    [[ -z ${env_name} ]] && { log "Failed to extract the env name from the ${env_yaml} file"; return 1; }
 
     # Test if mamba is available
     if ! command -v mamba &> /dev/null; then

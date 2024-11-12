@@ -1,6 +1,7 @@
 #! /usr/bin/env bash
 source $(dirname $(realpath ${BASH_SOURCE[0]}))/common_bash_utils.sh
 
+
 function conda_install_vep() {
     local env_yaml=${1}
 
@@ -690,10 +691,10 @@ function gnomAD_install() {
         ${chain_file} \
         ${assembly} 4 && \
         log "The gnomAD v4.1 files are liftovered to hg19 assembly and saved to ${CACHEDIR}" && \
-        echo ${CACHEDIR}/gnomad.joint.v4.1.sites.hg19.chr1.vcf.gz || \
+        echo ${CACHEDIR}/gnomad.joint.v4.1.sites.hg19.chrX.vcf.gz || \
         { log "Failed to liftover the gnomAD v4.1 files to hg19 assembly"; return 1; }
     else
-        echo ${CACHEDIR}/gnomad.joint.v4.1.sites.chr1.vcf.bgz
+        echo ${CACHEDIR}/gnomad.joint.v4.1.sites.chrX.vcf.bgz
     fi
 }
 
@@ -1004,9 +1005,9 @@ function main_install() {
         # Chain file is small enough to be included in the git repo
         local chain_file=$(read_yaml "$config_file" "chain_file")
     fi
-    local gnomAD_chr22_vcf=$(gnomAD_install ${gnomad_vcf_dir} ${ref_fasta} | tail -1)
-    [[ -f ${gnomAD_chr22_vcf} ]] && \
-    update_yaml "$config_file" "gnomad_chr22_vcf" "${gnomAD_chr22_vcf}" || \
+    local gnomAD_chrX_vcf=$(gnomAD_install ${gnomad_vcf_dir} ${ref_fasta} | tail -1)
+    [[ -f ${gnomAD_chrX_vcf} ]] && \
+    update_yaml "$config_file" "gnomad_vcf_chrX" "${gnomAD_chrX_vcf}" || \
     { log "Failed to install gnomAD VCF"; return 1; }
 
     # 5. Install ClinVar VCF

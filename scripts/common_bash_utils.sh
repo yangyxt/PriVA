@@ -32,17 +32,25 @@ function read_yaml() {
 }
 
 # Function to update YAML configuration
+# function update_yaml() {
+#     # This function is deprecated because it will remove comments in the updated yaml file, the yq is the python yq instead of the Go yq.
+#     local yaml_file=$1
+#     local key=$2
+#     local value=$3
+#     local tmp_tag=$(randomID)
+
+#     yq -yi ".$key = $value" "$yaml_file"
+# }
+
+
 function update_yaml() {
     local yaml_file=$1
     local key=$2
     local value=$3
-    local tmp_tag=$(randomID)
 
-    yq -i ".$key = \"$value\"" "$yaml_file" > ${yaml_file/.yaml/.${tmp_tag}.yaml} && \
-    cat ${yaml_file/.yaml/.${tmp_tag}.yaml}
+    # Replace the value while preserving comments using sed
+    sed -i "s/^\($key *: *\).*/\1$value/" "${yaml_file}"
 }
-
-
 
 
 function display_table {

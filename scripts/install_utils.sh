@@ -966,7 +966,9 @@ function main_install() {
 
     # Perform installation steps
     # 1. Install the conda env
-    conda_install_vep "$config_file"
+    conda_install_vep "${conda_env_yaml}" || \
+    { log "Failed to install the conda env"; return 1; }
+
     # Test whether currently the conda env is activated
     local conda_env_name=$(conda env list | grep "$conda_env_yaml" | awk '{print $1;}')
     if [[ ${CONDA_PREFIX} =~ ${conda_env_name} ]]; then
@@ -1021,7 +1023,8 @@ function main_install() {
     # 6. Install CADD prescores
     CADD_install \
     ${config_file} \
-    ${assembly}
+    ${assembly} || \
+    { log "Failed to install CADD prescores"; return 1; }
 }
 
 

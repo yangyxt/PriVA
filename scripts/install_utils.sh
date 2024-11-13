@@ -63,7 +63,7 @@ function vep_install_wrapper() {
     local VEP_PLUGINSCACHEDIR=""
 
     local TEMP
-    TEMP=$(getopt -o hc:y:r:p: --long help,CACHEDIR:,ASSEMBLY:,PLUGINSDIR:,PLUGINS_CACHEDIR:,PLUGINS: -- "$@")
+    TEMP=$(getopt -o hc:y:r:p: --long help,VEP_CACHEDIR:,VEP_ASSEMBLY:,VEP_PLUGINSDIR:,VEP_PLUGINSCACHEDIR:,VEP_PLUGINS: -- "$@")
 
     if [[ $? != 0 ]]; then return 1; fi
 
@@ -74,30 +74,30 @@ function vep_install_wrapper() {
             -h|--help)
                 echo "Usage: vep_install [options]"
                 echo "Options:"
-                echo "  -c, --CACHEDIR          Set destination directory for cache files"
-                echo "  -y, --ASSEMBLY          Assembly name to use if more than one"
-                echo "  -g, --PLUGINS           Comma-separated list of plugins to install"
-                echo "  -r, --PLUGINSDIR        Set destination directory for VEP plugins files"
-                echo "  -p, --PLUGINS_CACHEDIR  Set destination direcotry for VEP plugins caches"
+                echo "  -c, --VEP_CACHEDIR          Set destination directory for cache files"
+                echo "  -y, --VEP_ASSEMBLY          Assembly name to use if more than one"
+                echo "  -g, --VEP_PLUGINS           Comma-separated list of plugins to install"
+                echo "  -r, --VEP_PLUGINSDIR        Set destination directory for VEP plugins files"
+                echo "  -p, --VEP_PLUGINSCACHEDIR  Set destination direcotry for VEP plugins caches"
                 return 0
                 ;;
-            -c|--CACHEDIR)
+            -c|--VEP_CACHEDIR)
                 VEP_CACHEDIR="$2"
                 shift 2
                 ;;
-            -y|--ASSEMBLY)
+            -y|--VEP_ASSEMBLY)
                 VEP_ASSEMBLY="$2"
                 shift 2
                 ;;
-            -g|--PLUGINS)
+            -g|--VEP_PLUGINS)
                 VEP_PLUGINS="$2"
                 shift 2
                 ;;
-            -r|--PLUGINSDIR)
+            -r|--VEP_PLUGINSDIR)
                 VEP_PLUGINSDIR="$2"
                 shift 2
                 ;;
-            -p|--PLUGINSCACHEDIR)
+            -p|--VEP_PLUGINSCACHEDIR)
                 VEP_PLUGINSCACHEDIR="$2"
                 shift 2
                 ;;
@@ -991,10 +991,10 @@ function main_install() {
 
     # Install VEP API and caches and plugins first
     vep_install_wrapper \
-    --CACHEDIR "$vep_cache_dir" \
-    --PLUGINSDIR "$vep_plugins_dir" \
-    --ASSEMBLY "$assembly" \
-    --PLUGINSCACHEDIR "$vep_plugins_cachedir" || \
+    --VEP_CACHEDIR "$vep_cache_dir" \
+    --VEP_PLUGINSDIR "$vep_plugins_dir" \
+    --VEP_ASSEMBLY "$assembly" \
+    --VEP_PLUGINSCACHEDIR "$vep_plugins_cachedir" || \
     { log "Failed to install VEP API and caches"; return 1; }
 
     # Install VEP plugins caches

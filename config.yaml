@@ -7,8 +7,8 @@ conda_env_yaml: "acmg_auto_rough.yml"
 conda_env_name: "acmg"
 
 # Below we specify the input vcf file in absolute paths
-input_vcf: "/home/yangyxt/git_repos/acmg_auto/data/test_example/TEST_FAM.filtered.vcf.gz"
-ped_file: "/home/yangyxt/git_repos/acmg_auto/data/test_example/TEST_FAM.ped"
+input_vcf: "/paedyl01/disk1/yangyxt/test_acmg_auto/TEST_FAM.filtered.vcf.gz"
+ped_file: "/paedyl01/disk1/yangyxt/test_acmg_auto/TEST_FAM.ped"
 fam_name: "TEST_FAM"
 
 # Note that the assembly version must be consistent with the reference genome
@@ -18,7 +18,7 @@ assembly: hg19
 ref_genome: "/home/yangyxt/Caches/genomes/hg19/ucsc.hg19.fasta"
 
 # Below we specify the output directory in absolute paths
-output_dir: "/home/yangyxt/git_repos/acmg_auto/results"
+output_dir: "/paedyl01/disk1/yangyxt/test_acmg_auto"
 
 # Below we specify the number of threads to be used
 threads: 5
@@ -33,12 +33,14 @@ gnomad_vcf_chrX: "/home/yangyxt/Caches/gnomAD/v4/gnomad.joint.v4.1.sites.hg19.ch
 clinvar_vcf: "/home/yangyxt/Caches/ClinVar/clinvar.hg19.vcf.gz"
 
 
-# Below we specify the cache directory for VEP
-vep_cache_dir: "/home/yangyxt/Caches/ensembl-vep"
+# Below we specify the cache directory for VEP, you need to specify the locations before starting installing VEP and its plugins
+vep_cache_dir: "/paedyl01/disk1/yangyxt/public_data/VEP_caches"
 # Below we specify the directory containing the VEP plugins executable files
-vep_plugins_dir: "/home/yangyxt/Tools/VEP_plugins"
+vep_plugins_dir: "/paedyl01/disk1/yangyxt/public_data/VEP_plugins"
 # Below we specify the directory for storing the VEP plugin caches
-vep_plugins_cachedir: "/home/yangyxt/Caches/VEP_plugin_caches"
+vep_plugins_cachedir: "/paedyl01/disk1/yangyxt/public_data/VEP_plugins_caches"
+
+
 # The UTRAnnotator plugin cachefile
 utr_annotator_file: "/home/yangyxt/Caches/VEP_plugin_caches/UTRannotator/uORF_5UTR_GRCh37_PUBLIC.txt"
 # The LOEUF plugin cache file

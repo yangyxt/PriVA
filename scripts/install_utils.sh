@@ -2,6 +2,7 @@
 source $(dirname $(realpath ${BASH_SOURCE[0]}))/common_bash_utils.sh
 
 
+
 function conda_install_vep() {
     local env_yaml=${1}
 
@@ -27,11 +28,13 @@ function conda_install_vep() {
 
     # Test if several key packages are installed
     if [[ ${skip_env_creation} -eq 1 ]]; then
+        source /home/yangyxt/miniforge3/etc/profile.d/conda.sh && source /home/yangyxt/miniforge3/etc/profile.d/mamba.sh && \
         mamba activate ${env_name}
         # The to be checked packages are: ensembl-vep, perl-bio-procedural, perl-bioperl
         if [[ $(mamba list | grep ensembl-vep) =~ ensembl-vep ]] && \
            [[ $(mamba list | grep perl-bio-procedural) =~ perl-bio-procedural ]] && \
-           [[ $(mamba list | grep perl-bioperl) =~ perl-bioperl ]]; then
+           [[ $(mamba list | grep perl-bioperl) =~ perl-bioperl ]] && \
+           [[ $(which vep) =~ ${CONDA_PREFIX} ]]; then
             log "The key packages are already installed in the environment ${env_name}"
         else
             log "The key packages are not installed in the environment ${env_name}"
@@ -43,7 +46,11 @@ function conda_install_vep() {
     # because Bio::Perl module is migrated from perl-bioperl to perl-bio-procedural since perl-bioperl 1.7.3
     # Or you can directly install the env from our env.yaml file
     if [[ ${skip_env_creation} -eq 0 ]]; then
-        mamba env create -f ${env_yaml}
+        mamba env create -f ${env_yaml} && \
+        source /home/yangyxt/miniforge3/etc/profile.d/conda.sh && source /home/yangyxt/miniforge3/etc/profile.d/mamba.sh && \
+        mamba activate ${env_name} && \
+        [[ $(which vep) =~ ${CONDA_PREFIX} ]] && log "The VEP binaries are successfully linked to the conda env ${env_name}" || \
+        { log "The VEP binaries are not linked to the conda env ${env_name}, please run the function vep_bin_check manually"; return 1; }
     fi
 }
 
@@ -150,8 +157,7 @@ function VEP_plugins_install() {
 
     [[ $CONDA_PREFIX =~ envs ]] && \
     log "currently in a conda env $(basename $CONDA_PREFIX)" || \
-    { [[ -z ${conda_env_name} ]] && log "Not encouraged to install the VEP plugins directly in the conda base env. So quit with error." && return 1 || \
-      mamba activate ${conda_env_name}; }
+    { [[ -z ${conda_env_name} ]] && log "Not encouraged to install the VEP plugins directly in the conda base env. So quit with error." && return 1; }
 
     if [[ -z ${conda_env_name} ]]; then
         local conda_env_name=$(basename $CONDA_PREFIX)
@@ -979,7 +985,7 @@ function main_install() {
 
     # 2. Install VEP
     # Update config with installation results
-    local vep_version=$(vep --version)
+    local vep_version=$(vep --help | grep "ensembl-vep" | awk '{print $NF}' | awk -F '.' '{print $1}')
     # Update config with installation results
     update_yaml "$config_file" "vep_installed_version" "$vep_version"
 

@@ -28,8 +28,7 @@ function conda_install_vep() {
 
     # Test if several key packages are installed
     if [[ ${skip_env_creation} -eq 1 ]]; then
-        source /home/yangyxt/miniforge3/etc/profile.d/conda.sh && source /home/yangyxt/miniforge3/etc/profile.d/mamba.sh && \
-        mamba activate ${env_name}
+        mamba_activate ${env_name}
         # The to be checked packages are: ensembl-vep, perl-bio-procedural, perl-bioperl
         if [[ $(mamba list | grep ensembl-vep) =~ ensembl-vep ]] && \
            [[ $(mamba list | grep perl-bio-procedural) =~ perl-bio-procedural ]] && \
@@ -47,8 +46,7 @@ function conda_install_vep() {
     # Or you can directly install the env from our env.yaml file
     if [[ ${skip_env_creation} -eq 0 ]]; then
         mamba env create -f ${env_yaml} && \
-        source /home/yangyxt/miniforge3/etc/profile.d/conda.sh && source /home/yangyxt/miniforge3/etc/profile.d/mamba.sh && \
-        mamba activate ${env_name} && \
+        mamba_activate ${env_name} && \
         [[ $(which vep) =~ ${CONDA_PREFIX} ]] && log "The VEP binaries are successfully linked to the conda env ${env_name}" || \
         { log "The VEP binaries are not linked to the conda env ${env_name}, please run the function vep_bin_check manually"; return 1; }
     fi
@@ -119,17 +117,19 @@ function vep_install_wrapper() {
 
     # Test the PERL5LIB value and PATH value to see if they already include the VEP_DESTDIR and VEP_PLUGINSDIR
     # If yes for both, then we can directly skip the follow up installation of VEP API
-    [[ $(echo $PERL5LIB) =~ "${VEP_DESTDIR}" ]] && \
+    local VEP_DESTDIR=$(perl -e 'print join("\n", @INC);' | grep site_perl | head -1)
+	[[ $(echo $PERL5LIB) =~ "${VEP_DESTDIR}" ]] && \
     [[ $(echo $PATH) =~ "${VEP_DESTDIR}" ]] && \
     [[ $(echo $PERL5LIB}) =~ "${VEP_PLUGINSDIR}" ]] && \
     { log "The PERL5LIB value and PATH value already include ${VEP_DESTDIR} and ${VEP_PLUGINSDIR}, indicating the following installation process has already been succesfully performed. Skip the function for now."; return 0; }
 
-    local CONDA_ENV_NAME=$(basename $CONDA_PREFIX)
-    local VEP_DESTDIR=$(perl -e 'print join("\n", @INC);' | head -1)
-    [[ ${VEP_DESTDIR} =~ ${CONDA_ENV_NAME} ]] && log "The dest dir is set to the directory (${VEP_DESTDIR}) where perl modules are installed by conda" || \
+    local conda_env_name=$(basename $CONDA_PREFIX)
+    [[ ${VEP_DESTDIR} =~ ${conda_env_name} ]] && log "The dest dir is set to the directory (${VEP_DESTDIR}) where perl modules are installed by conda" || \
     { log "Since the function is designed to perform follow up installation of VEP upon the installation of VEP dependencies via conda, we only accept installing VEP API at the perl module installation location previously used by conda"; return 1; }
 
     # Construct the command
+    [[ ${VEP_ASSEMBLY} =~ "hg19" ]] && VEP_ASSEMBLY="GRCh37"
+    [[ ${VEP_ASSEMBLY} =~ "hg38" ]] && VEP_ASSEMBLY="GRCh38"
     local cmd="vep_install -d ${VEP_DESTDIR} --AUTO acp -s homo_sapiens_merged --NO_HTSLIB --NO_BIOPERL --CONVERT"
     [[ -n "$VEP_CACHEDIR" ]] && cmd+=" --CACHEDIR $VEP_CACHEDIR"
     [[ -n "$VEP_ASSEMBLY" ]] && cmd+=" --ASSEMBLY $VEP_ASSEMBLY"
@@ -143,7 +143,10 @@ function vep_install_wrapper() {
     conda env config vars set PERL5LIB="$VEP_DESTDIR:$VEP_PLUGINSDIR" && \
     conda env config vars set PATH="$VEP_DESTDIR:$VEP_DESTDIR/htslib:$PATH" && \
     log "Now we have bound the new PERL5LIB value (adding ${VEP_DESTDIR} and ${VEP_PLUGINSDIR} to the PERL5LIB) with the current conda env ${CONDA_ENV_NAME}" && \
-    log "Now we have bound the new PATH value (adding ${VEP_DESTDIR} to the PATH) with the current conda env ${CONDA_ENV_NAME}"
+    log "Now we have bound the new PATH value (adding ${VEP_DESTDIR} to the PATH) with the current conda env ${CONDA_ENV_NAME}" && \
+    mamba_deactivate && \
+    mamba_activate ${conda_env_name} || \
+    { log "Failed to install the VEP api and download caches"; return 1; }
 }
 
 
@@ -155,7 +158,7 @@ function VEP_plugins_install() {
     local conda_env_name=${5}
 
 
-    [[ $CONDA_PREFIX =~ envs ]] && \
+    [[ $CONDA_PREFIX =~ "envs" ]] && \
     log "currently in a conda env $(basename $CONDA_PREFIX)" || \
     { [[ -z ${conda_env_name} ]] && log "Not encouraged to install the VEP plugins directly in the conda base env. So quit with error." && return 1; }
 
@@ -164,29 +167,8 @@ function VEP_plugins_install() {
     fi
 
     # Install VEP plugins
-    # First install LoFtee
-    cd $VEP_PLUGINSDIR && \
-    git clone https://github.com/konradjk/loftee.git && \
-    conda env config vars set PERL5LIB="$VEP_PLUGINSDIR/loftee/:$PERL5LIB" && \
-    local loftee_cache_paths=$(Loftee_install ${VEP_PLUGINSCACHEDIR} ${ASSEMBLY_VERSION}) || \
-    { log "Failed to install LoFtee"; return 1; }
-
-    if [[ ${ASSEMBLY_VERSION} =~ "GRCh37" ]] || [[ ${ASSEMBLY_VERSION} =~ "hg19" ]]; then
-        # update the human_ancestor_fasta_url and conservation_file_url in the config.yaml file
-        update_yaml "$config_file" "loftee_human_ancestor_fasta" "$(echo ${loftee_cache_paths} | head -1)" && \
-        update_yaml "$config_file" "loftee_conservation_file" "$(echo ${loftee_cache_paths} | tail -1)"
-    elif [[ ${ASSEMBLY_VERSION} =~ "GRCh38" ]] || [[ ${ASSEMBLY_VERSION} =~ "hg38" ]]; then
-        # update the gerp_bigwig_url in the config.yaml file
-        update_yaml "$config_file" "loftee_human_ancestor_fasta" "$(echo ${loftee_cache_paths} | head -1)" && \
-        update_yaml "$config_file" "loftee_conservation_file" "$(echo ${loftee_cache_paths} | tail -2 | head -1)" && \
-        update_yaml "$config_file" "loftee_gerp_bigwig" "$(echo ${loftee_cache_paths} | tail -1)"
-    else
-        log "Not supported assembly version: ${ASSEMBLY_VERSION}"
-        return 1
-    fi
-
-
-    # Then install UTRAnnotator
+    # First install UTRAnnotator
+	log "The Cache directory to store the requried annotation files for VEP Plugins is ${VEP_PLUGINSCACHEDIR}"
     local utr_annotator_files=$(UTRAnnotator_install ${VEP_PLUGINSCACHEDIR}) || \
     { log "Failed to install UTRAnnotator"; return 1; }
 
@@ -201,7 +183,7 @@ function VEP_plugins_install() {
 
 
     # Then install LOEUF
-    local loeuf_prescore=$(LOEUF_install ${VEP_PLUGINSCACHEDIR} ${ASSEMBLY_VERSION}) || \
+    local loeuf_prescore=$(LOEUF_install ${VEP_PLUGINSCACHEDIR} ${ASSEMBLY_VERSION} ${VEP_PLUGINSDIR}) || \
     { log "Failed to install LOEUF"; return 1; }
     update_yaml "$config_file" "loeuf_prescore" "${loeuf_prescore}"
 
@@ -240,9 +222,11 @@ function VEP_plugins_install() {
 function UTRAnnotator_install() {
     local PLUGIN_CACHEDIR=${1}
 
+	[[ ! -d ${PLUGIN_CACHEDIR} ]] && { log "The cache directory ${PLUGIN_CACHEDIR} is not found, please check the file"; return 1; }
+
     if [[ ! -d ${PLUGIN_CACHEDIR}/UTRannotator ]] || \
-       [[ ! -f ${PLUGIN_CACHEDIR}/UTRannotator/uORF_starts_ends_GRCh38_PUBLIC.txt ]] || \
-       [[ ! -f ${PLUGIN_CACHEDIR}/UTRannotator/uORF_starts_ends_GRCh37_PUBLIC.txt ]]; then
+       [[ ! -f ${PLUGIN_CACHEDIR}/UTRannotator/uORF_5UTR_GRCh38_PUBLIC.txt ]] || \
+       [[ ! -f ${PLUGIN_CACHEDIR}/UTRannotator/uORF_5UTR_GRCh37_PUBLIC.txt ]]; then
         cd ${PLUGIN_CACHEDIR} && \
         git clone https://github.com/Ensembl/UTRannotator && \
         log "${PLUGIN_CACHEDIR}/UTRannotator/uORF_5UTR_GRCh37_PUBLIC.txt and ${PLUGIN_CACHEDIR}/UTRannotator/uORF_5UTR_GRCh38_PUBLIC.txt are well-downloaded, remember to specify them when using UTRAnnotator"
@@ -281,6 +265,8 @@ function SpliceAI_install() {
         ./vep -i variations.vcf --plugin SpliceAI,snv=/path/to/spliceai_scores.raw.snv.hg38.vcf.gz,indel=/path/to/spliceai_scores.raw.indel.hg38.vcf.gz,cutoff=0.5 "
     # Prepare a command waiting for the user to download the prescores and put them into the corresponding directory
     # Waiting for user's confirmation (yes or no) to finish the installation properly, we dont need to offer the cmd directly because such downloading will need them to register account and login, which is not convenient to put in the script
+	[[ ! -d ${PLUGIN_CACHEDIR} ]] && { log "The cache directory ${PLUGIN_CACHEDIR}/SpliceAI is not found, please check the file"; return 1; }
+	[[ ! -d ${PLUGIN_DIR} ]] && { log "The plugins directory ${PLUGIN_DIR} is not found, please check the file"; return 1; }
 
     read -p "Have you finished downloading the prescores for the SpliceAI plugin? (yes or no)"
     if [[ ${REPLY} =~ "yes" ]] || [[ ${REPLY} =~ "y" ]] || [[ ${REPLY} =~ "Y" ]] || [[ ${REPLY} =~ "Yes" ]] || [[ ${REPLY} =~ "YES" ]]; then
@@ -595,6 +581,7 @@ function AlphaMissense_install() {
 function LOEUF_install() {
     local PLUGIN_CACHEDIR=${1}
     local assembly_version=${2}
+	local PLUGIN_DIR=${3}
 
     if [[ -z ${assembly_version} ]]; then
         local assembly_version="hg19"
@@ -608,12 +595,13 @@ function LOEUF_install() {
         mkdir -p ${PLUGIN_CACHEDIR}/LOEUF
     fi
 
-    log "For details, read ${PLUGIN_DIR}/LOEUF.pm"
+    log "Starting to install the annotation files for plugin LOEUF, for details, read ${PLUGIN_DIR}/LOEUF.pm"
 
     if [[ ! -d ${PLUGIN_CACHEDIR}/supplement ]]; then
         local total_package_url="https://www.ncbi.nlm.nih.gov/pmc/articles/PMC7334197/bin/41586_2020_2308_MOESM4_ESM.zip"
         wget ${total_package_url} -O ${PLUGIN_CACHEDIR}/41586_2020_2308_MOESM4_ESM.zip && \
-        unzip ${PLUGIN_CACHEDIR}/41586_2020_2308_MOESM4_ESM.zip -d ${PLUGIN_CACHEDIR}
+        unzip ${PLUGIN_CACHEDIR}/41586_2020_2308_MOESM4_ESM.zip -d ${PLUGIN_CACHEDIR} || \
+        { log "Failed to download and unzip the LOEUF files"; return 1; }
     else
         log "The LOEUF files are already downloaded to ${PLUGIN_CACHEDIR}/supplement"
     fi
@@ -625,7 +613,8 @@ function LOEUF_install() {
             zcat ${PLUGIN_CACHEDIR}/supplement/supplementary_dataset_11_full_constraint_metrics.tsv.gz | (head -n 1 && tail -n +2  | sort -t$'\t' -k 76,76 -k 77,77n ) > ${PLUGIN_CACHEDIR}/supplement/loeuf_temp.tsv && \
             sed '1s/.*/#&/' ${PLUGIN_CACHEDIR}/supplement/loeuf_temp.tsv > ${PLUGIN_CACHEDIR}/LOEUF/loeuf_dataset.tsv && \
             bgzip ${PLUGIN_CACHEDIR}/LOEUF/loeuf_dataset.tsv && \
-            tabix -f -s 76 -b 77 -e 78 ${PLUGIN_CACHEDIR}/LOEUF/loeuf_dataset.tsv.gz
+            tabix -f -s 76 -b 77 -e 78 ${PLUGIN_CACHEDIR}/LOEUF/loeuf_dataset.tsv.gz || \
+			{ log "Failed to index the LOEUF file"; return 1; }
         else
             log "The LOEUF files are already processed and indexed for hg19 assembly"
         fi
@@ -961,6 +950,7 @@ function LoFtee_install() {
 function main_install() {
     local config_file=${1}
 
+	local has_error=0
     # Read configuration
     local conda_env_yaml=$(read_yaml "$config_file" "conda_env_yaml")
     local vep_cache_dir=$(read_yaml "$config_file" "vep_cache_dir")
@@ -968,8 +958,12 @@ function main_install() {
     local assembly=$(read_yaml "$config_file" "assembly")
     local ref_fasta=$(read_yaml "$config_file" "ref_genome")
     local vep_plugins_cachedir=$(read_yaml "$config_file" "vep_plugins_cachedir")
-    # ... read other config values ...
-
+    [[ -f ${conda_env_yaml} ]] || { log "The conda env yaml file ${conda_env_yaml} is not found, please check the file"; has_error=1; }
+	[[ -d ${vep_cache_dir} ]] || { log "The cache directory for VEP ${vep_cache_dir} is not found, please check the file"; has_error=1; }
+	[[ -d ${vep_plugins_dir} ]] || { log "The plugins directory for VEP ${vep_plugins_dir} is not found, please check the file"; has_error=1; }
+	[[ -d ${vep_plugins_cachedir} ]] || { log "The plugins cache directory for VEP ${vep_plugins_cachedir} is not found, please check the file"; has_error=1; }
+	[[ -f ${ref_fasta} ]] || { log "The reference genome fasta file ${ref_fasta} is not found, please check the file"; has_error=1; }
+	[[ ${has_error} -eq 1 ]] && { log "Please check the values in the configuration file ${config_file}"; return 1; }
     # Perform installation steps
     # 1. Install the conda env
     conda_install_vep "${conda_env_yaml}" || \
@@ -1009,7 +1003,8 @@ function main_install() {
 
 
     # 4. Install gnomAD VCF (basically download bgzipped VCF files)
-    local gnomad_vcf_dir=$(read_yaml "$config_file" "gnomad_vcf_dir")
+    local gnomad_vcf_chrX=$(read_yaml "$config_file" "gnomad_vcf_chrX")
+	local gnomad_vcf_dir=$(dirname ${gnomad_vcf_chrX})
     if [[ ${assembly} =~ "GRCh37" ]] || [[ ${assembly} =~ "hg19" ]]; then
         # Chain file is small enough to be included in the git repo
         local chain_file=$(read_yaml "$config_file" "chain_file")

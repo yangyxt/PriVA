@@ -1,6 +1,6 @@
 #! /usr/bin/env bash
-source $(dirname $(realpath ${BASH_SOURCE[0]}))/common_bash_utils.sh
-
+SCRIPT_DIR=$(dirname $(realpath ${BASH_SOURCE[0]}))
+source ${SCRIPT_DIR}/common_bash_utils.sh
 
 
 function conda_install_vep() {
@@ -169,13 +169,18 @@ function VEP_plugins_install() {
     # Install VEP plugins
     # First install UTRAnnotator
 	log "The Cache directory to store the requried annotation files for VEP Plugins is ${VEP_PLUGINSCACHEDIR}"
-    local utr_annotator_files=$(UTRAnnotator_install ${VEP_PLUGINSCACHEDIR}) || \
+    local utr_annotator_file_hg19
+	local utr_annotator_file_hg38
+	{ read -r utr_annotator_file_hg19; \
+	  read -r utr_annotator_file_hg38; } < <(UTRAnnotator_install ${VEP_PLUGINSCACHEDIR}) || \
     { log "Failed to install UTRAnnotator"; return 1; }
 
     if [[ ${ASSEMBLY_VERSION} =~ "GRCh37" ]] || [[ ${ASSEMBLY_VERSION} =~ "hg19" ]]; then
-        update_yaml "$config_file" "utr_annotator_file" "$(echo ${utr_annotator_files} | head -1)"
+		log "The UTRAnnotator plugin is successfully installed, the required annotation files returned is ${utr_annotator_file_hg19}"
+        update_yaml "$config_file" "utr_annotator_file" "${utr_annotator_file_hg19}"
     elif [[ ${ASSEMBLY_VERSION} =~ "GRCh38" ]] || [[ ${ASSEMBLY_VERSION} =~ "hg38" ]]; then
-        update_yaml "$config_file" "utr_annotator_file" "$(echo ${utr_annotator_files} | tail -1)"
+		log "The UTRAnnotator plugin is successfully installed, the required annotation files returned is ${utr_annotator_file_hg38}"
+        update_yaml "$config_file" "utr_annotator_file" "${utr_annotator_file_hg38}"
     else
         log "Not supported assembly version: ${ASSEMBLY_VERSION}"
         return 1
@@ -183,7 +188,7 @@ function VEP_plugins_install() {
 
 
     # Then install LOEUF
-    local loeuf_prescore=$(LOEUF_install ${VEP_PLUGINSCACHEDIR} ${ASSEMBLY_VERSION} ${VEP_PLUGINSDIR}) || \
+    local loeuf_prescore=$(LOEUF_install ${ASSEMBLY_VERSION} ${BASE_DIR}) || \
     { log "Failed to install LOEUF"; return 1; }
     update_yaml "$config_file" "loeuf_prescore" "${loeuf_prescore}"
 
@@ -579,69 +584,21 @@ function AlphaMissense_install() {
 
 
 function LOEUF_install() {
-    local PLUGIN_CACHEDIR=${1}
-    local assembly_version=${2}
-	local PLUGIN_DIR=${3}
+	# The LOEUF plugin cache files are stored in the github repo because the original url is not accessible anymore
+    local assembly_version=${1}
+	local git_repo_dir=${2}
 
-    if [[ -z ${assembly_version} ]]; then
-        local assembly_version="hg19"
-    fi
+	local loeuf_hg19_file=${git_repo_dir}/data/loeuf/loeuf_dataset.tsv.gz
+	local loeuf_hg38_file=${git_repo_dir}/data/loeuf/loeuf_dataset_hg38.tsv.gz
 
-    if [[ ! -d ${PLUGIN_CACHEDIR} ]]; then
-        mkdir -p ${PLUGIN_CACHEDIR}
-    fi
-
-    if [[ ! -d ${PLUGIN_CACHEDIR}/LOEUF ]]; then
-        mkdir -p ${PLUGIN_CACHEDIR}/LOEUF
-    fi
-
-    log "Starting to install the annotation files for plugin LOEUF, for details, read ${PLUGIN_DIR}/LOEUF.pm"
-
-    if [[ ! -d ${PLUGIN_CACHEDIR}/supplement ]]; then
-        local total_package_url="https://www.ncbi.nlm.nih.gov/pmc/articles/PMC7334197/bin/41586_2020_2308_MOESM4_ESM.zip"
-        wget ${total_package_url} -O ${PLUGIN_CACHEDIR}/41586_2020_2308_MOESM4_ESM.zip && \
-        unzip ${PLUGIN_CACHEDIR}/41586_2020_2308_MOESM4_ESM.zip -d ${PLUGIN_CACHEDIR} || \
-        { log "Failed to download and unzip the LOEUF files"; return 1; }
-    else
-        log "The LOEUF files are already downloaded to ${PLUGIN_CACHEDIR}/supplement"
-    fi
-
-    if [[ ${assembly_version} == "GRCh37" ]] || [[ ${assembly_version} == "hg19" ]]; then
-        if [[ ! -f ${PLUGIN_CACHEDIR}/LOEUF/loeuf_dataset.tsv.gz ]] || \
-        [[ ${PLUGIN_CACHEDIR}/LOEUF/loeuf_dataset.tsv.gz -ot ${PLUGIN_CACHEDIR}/supplement/supplementary_dataset_11_full_constraint_metrics.tsv.gz ]] || \
-        [[ ${PLUGIN_CACHEDIR}/LOEUF/loeuf_dataset.tsv.gz.tbi -ot ${PLUGIN_CACHEDIR}/LOEUF/loeuf_dataset.tsv.gz ]]; then
-            zcat ${PLUGIN_CACHEDIR}/supplement/supplementary_dataset_11_full_constraint_metrics.tsv.gz | (head -n 1 && tail -n +2  | sort -t$'\t' -k 76,76 -k 77,77n ) > ${PLUGIN_CACHEDIR}/supplement/loeuf_temp.tsv && \
-            sed '1s/.*/#&/' ${PLUGIN_CACHEDIR}/supplement/loeuf_temp.tsv > ${PLUGIN_CACHEDIR}/LOEUF/loeuf_dataset.tsv && \
-            bgzip ${PLUGIN_CACHEDIR}/LOEUF/loeuf_dataset.tsv && \
-            tabix -f -s 76 -b 77 -e 78 ${PLUGIN_CACHEDIR}/LOEUF/loeuf_dataset.tsv.gz || \
-			{ log "Failed to index the LOEUF file"; return 1; }
-        else
-            log "The LOEUF files are already processed and indexed for hg19 assembly"
-        fi
-        echo ${PLUGIN_CACHEDIR}/LOEUF/loeuf_dataset.tsv.gz
-    fi
-
-    if [[ ${assembly_version} == "GRCh38" ]] || [[ ${assembly_version} == "hg38" ]]; then
-        log "Since the LOEUF scores are primarily based on the hg19 assembly, we need to re-process the LOEUF files for hg38 assembly"
-        if [[ ! -f ${PLUGIN_CACHEDIR}/LOEUF/loeuf_dataset_grch38.tsv.gz ]] || \
-        [[ ${PLUGIN_CACHEDIR}/LOEUF/loeuf_dataset_grch38.tsv.gz -nt ${PLUGIN_CACHEDIR}/supplement/supplementary_dataset_11_full_constraint_metrics_grch38.tsv ]] || \
-        [[ ${PLUGIN_CACHEDIR}/LOEUF/loeuf_dataset_grch38.tsv.gz.tbi -ot ${PLUGIN_CACHEDIR}/LOEUF/loeuf_dataset_grch38.tsv.gz ]]; then
-            # Extract the VEP version from VEP binary executable first
-            local VEP_VERSION=$(vep_install --help | grep ensembl-vep | head -1 | awk '{print $NF;}' | awk -F '.' '{print $1;}')
-            wget https://ftp.ensembl.org/pub/release-${VEP_VERSION}/gtf/homo_sapiens/Homo_sapiens.GRCh38.${VEP_VERSION}.chr.gtf.gz -O ${PLUGIN_CACHEDIR}/supplement/Homo_sapiens.GRCh38.${VEP_VERSION}.chr.gtf.gz
-            # Find the path of the current shell script, pwd is not working
-            local SCRIPT_DIR=$(dirname $(readlink -f $0))
-            python3 ${SCRIPT_DIR}/python_utils.py -f extract_transcript_coordinates -a "${PLUGIN_CACHEDIR}/supplement/Homo_sapiens.GRCh38.${VEP_VERSION}.chr.gtf.gz;${PLUGIN_CACHEDIR}/supplement/Homo_sapiens.GRCh38.${VEP_VERSION}.chr.tranx.span.tsv" && \
-            python3 ${SCRIPT_DIR}/python_utils.py -f update_tranx_span -a "${PLUGIN_CACHEDIR}/supplement/supplementary_dataset_11_full_constraint_metrics.tsv.gz;${PLUGIN_CACHEDIR}/supplement/Homo_sapiens.GRCh38.${VEP_VERSION}.chr.tranx.span.tsv;${PLUGIN_CACHEDIR}/supplement/supplementary_dataset_11_full_constraint_metrics.grch38.tsv.gz" && \
-            zcat ${PLUGIN_CACHEDIR}/supplement/supplementary_dataset_11_full_constraint_metrics_grch38.tsv | (head -n 1 && tail -n +2  | sort -t$'\t' -k 76,76 -k 77,77n ) > ${PLUGIN_CACHEDIR}/supplement/loeuf_grch38_temp.tsv && \
-            sed '1s/.*/#&/' ${PLUGIN_CACHEDIR}/supplement/loeuf_grch38_temp.tsv > ${PLUGIN_CACHEDIR}/LOEUF/loeuf_dataset_grch38.tsv && \
-            bgzip ${PLUGIN_CACHEDIR}/LOEUF/loeuf_dataset_grch38.tsv && \
-            tabix -f -s 76 -b 77 -e 78 ${PLUGIN_CACHEDIR}/LOEUF/loeuf_dataset_grch38.tsv.gz
-        else
-            log "The LOEUF files are already processed and indexed for hg38 assembly"
-        fi
-        echo ${PLUGIN_CACHEDIR}/LOEUF/loeuf_dataset_grch38.tsv.gz
-    fi
+	if [[ ${assembly_version} =~ "GRCh37" ]] || [[ ${assembly_version} =~ "hg19" ]]; then
+		echo ${loeuf_hg19_file}
+	elif [[ ${assembly_version} =~ "GRCh38" ]] || [[ ${assembly_version} =~ "hg38" ]]; then
+		echo ${loeuf_hg38_file}
+	else
+		log "Not supported assembly version: ${assembly_version}"
+		return 1
+	fi
 }
 
 

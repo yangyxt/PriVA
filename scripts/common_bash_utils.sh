@@ -38,8 +38,12 @@ function update_yaml() {
     local key=$2
     local value=$3
 
+	# Escape all forward slashes in the value
+    local value_escaped=${value//\//\\/}
+
     # Replace the value while preserving comments using sed
-    sed -i "s/^\($key *: *\).*/\1$value/" "${yaml_file}"
+	sed -i "s/^\($key *: *\).*/\1${value_escaped}/g" "${yaml_file}"
+    # sed -i "s/^\($key *: *\).*/\1$value/" "${yaml_file}"
 }
 
 

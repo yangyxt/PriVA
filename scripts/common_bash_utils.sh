@@ -31,18 +31,8 @@ function read_yaml() {
     yq ".$key" "$yaml_file" | sed 's/^"\(.*\)"$/\1/'
 }
 
+
 # Function to update YAML configuration
-# function update_yaml() {
-#     # This function is deprecated because it will remove comments in the updated yaml file, the yq is the python yq instead of the Go yq.
-#     local yaml_file=$1
-#     local key=$2
-#     local value=$3
-#     local tmp_tag=$(randomID)
-
-#     yq -yi ".$key = $value" "$yaml_file"
-# }
-
-
 function update_yaml() {
     local yaml_file=$1
     local key=$2
@@ -51,6 +41,26 @@ function update_yaml() {
     # Replace the value while preserving comments using sed
     sed -i "s/^\($key *: *\).*/\1$value/" "${yaml_file}"
 }
+
+
+function mamba_activate {
+    local env_name=${1}
+    mamba activate ${env_name} 2> /dev/null || { \
+    local conda_path=$(dirname $(dirname ${CONDA_EXE})) && \
+    source ${conda_path}/etc/profile.d/conda.sh && source ${conda_path}/etc/profile.d/mamba.sh && \
+    mamba activate ${env_name} || \
+    return 1; }
+}
+
+
+function mamba_deactivate {
+    mamba deactivate 2> /dev/null || { \
+    local conda_path=$(dirname $(dirname ${CONDA_EXE})) && \
+    source ${conda_path}/etc/profile.d/conda.sh && source ${conda_path}/etc/profile.d/mamba.sh && \
+    mamba deactivate || \
+    return 1; }
+}
+
 
 
 function display_table {
@@ -761,7 +771,7 @@ function crossmap_liftover_hg382hg19 {
     fi
 
     if [[ ! ${CONDA_PREFIX} =~ acmg ]]; then
-        mamba activate acmg
+        mamba_activate acmg
     fi
 
 

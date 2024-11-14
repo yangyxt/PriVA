@@ -526,8 +526,8 @@ function AlphaMissense_install() {
     local ASSEMBLY_VERSION=${2}
 
     log "For details, read ${PLUGIN_DIR}/AlphaMissense.pm"
-    local hg19_url="https://console.cloud.google.com/storage/browser/_details/dm_alphamissense/AlphaMissense_hg19.tsv.gz"
-    local hg38_url="https://storage.cloud.google.com/dm_alphamissense/AlphaMissense_hg38.tsv.gz"
+    local hg19_url="https://storage.googleapis.com/dm_alphamissense/AlphaMissense_hg19.tsv.gz"
+    local hg38_url="https://storage.googleapis.com/dm_alphamissense/AlphaMissense_hg38.tsv.gz"
 
 
     if [[ ! -d ${PLUGIN_CACHEDIR} ]]; then

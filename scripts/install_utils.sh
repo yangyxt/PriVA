@@ -168,6 +168,7 @@ function VEP_plugins_install() {
 
     # Install VEP plugins
     # First install UTRAnnotator
+	log "The Cache directory to store the requried annotation files for VEP Plugins is ${VEP_PLUGINSCACHEDIR}"
     local utr_annotator_files=$(UTRAnnotator_install ${VEP_PLUGINSCACHEDIR}) || \
     { log "Failed to install UTRAnnotator"; return 1; }
 
@@ -224,8 +225,8 @@ function UTRAnnotator_install() {
 	[[ ! -d ${PLUGIN_CACHEDIR} ]] && { log "The cache directory ${PLUGIN_CACHEDIR} is not found, please check the file"; return 1; }
 
     if [[ ! -d ${PLUGIN_CACHEDIR}/UTRannotator ]] || \
-       [[ ! -f ${PLUGIN_CACHEDIR}/UTRannotator/uORF_starts_ends_GRCh38_PUBLIC.txt ]] || \
-       [[ ! -f ${PLUGIN_CACHEDIR}/UTRannotator/uORF_starts_ends_GRCh37_PUBLIC.txt ]]; then
+       [[ ! -f ${PLUGIN_CACHEDIR}/UTRannotator/uORF_5UTR_GRCh38_PUBLIC.txt ]] || \
+       [[ ! -f ${PLUGIN_CACHEDIR}/UTRannotator/uORF_5UTR_GRCh37_PUBLIC.txt ]]; then
         cd ${PLUGIN_CACHEDIR} && \
         git clone https://github.com/Ensembl/UTRannotator && \
         log "${PLUGIN_CACHEDIR}/UTRannotator/uORF_5UTR_GRCh37_PUBLIC.txt and ${PLUGIN_CACHEDIR}/UTRannotator/uORF_5UTR_GRCh38_PUBLIC.txt are well-downloaded, remember to specify them when using UTRAnnotator"
@@ -266,7 +267,7 @@ function SpliceAI_install() {
     # Waiting for user's confirmation (yes or no) to finish the installation properly, we dont need to offer the cmd directly because such downloading will need them to register account and login, which is not convenient to put in the script
 	[[ ! -d ${PLUGIN_CACHEDIR} ]] && { log "The cache directory ${PLUGIN_CACHEDIR}/SpliceAI is not found, please check the file"; return 1; }
 	[[ ! -d ${PLUGIN_DIR} ]] && { log "The plugins directory ${PLUGIN_DIR} is not found, please check the file"; return 1; }
-	
+
     read -p "Have you finished downloading the prescores for the SpliceAI plugin? (yes or no)"
     if [[ ${REPLY} =~ "yes" ]] || [[ ${REPLY} =~ "y" ]] || [[ ${REPLY} =~ "Y" ]] || [[ ${REPLY} =~ "Yes" ]] || [[ ${REPLY} =~ "YES" ]]; then
         log "Now the installation of the SpliceAI plugin is completed. Please specify the paths to the prescore files (one for snv and one for indel)"
@@ -962,7 +963,7 @@ function main_install() {
 	[[ -d ${vep_plugins_dir} ]] || { log "The plugins directory for VEP ${vep_plugins_dir} is not found, please check the file"; has_error=1; }
 	[[ -d ${vep_plugins_cachedir} ]] || { log "The plugins cache directory for VEP ${vep_plugins_cachedir} is not found, please check the file"; has_error=1; }
 	[[ -f ${ref_fasta} ]] || { log "The reference genome fasta file ${ref_fasta} is not found, please check the file"; has_error=1; }
-	[[ ${has_error} -eq 1 ]] && { log "Please check the values in theconfiguration file ${config_file}"; return 1; }
+	[[ ${has_error} -eq 1 ]] && { log "Please check the values in the configuration file ${config_file}"; return 1; }
     # Perform installation steps
     # 1. Install the conda env
     conda_install_vep "${conda_env_yaml}" || \

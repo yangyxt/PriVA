@@ -200,10 +200,13 @@ function VEP_plugins_install() {
 
 
     # Then install SpliceAI
-    local spliceai_prescores=$(SpliceAI_install ${VEP_PLUGINSCACHEDIR} ${VEP_PLUGINSDIR}) || \
+	local spliceai_snv_prescore
+	local spliceai_indel_prescore
+    { read -r spliceai_snv_prescore; \
+	  read -r spliceai_indel_prescore; } < <(SpliceAI_install ${VEP_PLUGINSCACHEDIR} ${VEP_PLUGINSDIR}) || \
     { log "Failed to install SpliceAI"; return 1; }
-    update_yaml "$config_file" "spliceai_snv_prescore" "$(echo ${spliceai_prescores} | head -1)" && \
-    update_yaml "$config_file" "spliceai_indel_prescore" "$(echo ${spliceai_prescores} | tail -1)"
+    update_yaml "$config_file" "spliceai_snv_prescore" "${spliceai_snv_prescore}" && \
+    update_yaml "$config_file" "spliceai_indel_prescore" "${spliceai_indel_prescore}"
 
 
     # Last, install PrimateAI
@@ -383,6 +386,7 @@ function CADD_install() {
         log "Cannot find the CADD script in the conda environment"
         return 1
     fi
+	update_yaml ${config_file} "cadd_base_dir" "$(dirname ${CADD_script})"
 
     local CADD_cache_dir=$(dirname ${CADD_script})/data
     # Note that by default, CADD will use the CADD cache file in the conda environment
@@ -394,14 +398,20 @@ function CADD_install() {
     else
         read -p "In this case, you need to download the CADD repo as a zip file and unzip it to a local directory and all the cache files will be store in that directory. Please specify the absolute path to the directory: "
         local CADD_parent_dir=${REPLY}
-        local CADD_zip_download_url=$(read_yaml "${config_file}" "cadd_zip_download_url")
-        wget ${CADD_zip_download_url} -O ${CADD_parent_dir}/CADD-scripts.zip && \
-        unzip ${CADD_parent_dir}/CADD-scripts.zip -d ${CADD_parent_dir}/ && \
-        rm ${CADD_parent_dir}/CADD-scripts.zip && \
-        # Get the base folder name from the unzipped directory
-        local cadd_version=$(read_yaml "${config_file}" "cadd_version")
-        local CADD_base_dir=$(find ${CADD_parent_dir}/ -maxdepth 1 -type d -name "CADD-scripts-*${cadd_version#v}" -print | head -n1) && \
+		
+		# Check if the CADD scripts directory exists, if not, download the zip file and unzip it
+		local CADD_base_dir=$(find ${CADD_parent_dir}/ -maxdepth 1 -type d -name "CADD-scripts-*${cadd_version#v}" -print | head -n1)
+		[[ -z ${CADD_base_dir} ]] && \
+		local CADD_zip_download_url=$(read_yaml "${config_file}" "cadd_zip_download_url") && \
+		wget ${CADD_zip_download_url} -O ${CADD_parent_dir}/CADD-scripts.zip && \
+		unzip ${CADD_parent_dir}/CADD-scripts.zip -d ${CADD_parent_dir}/ && \
+		rm ${CADD_parent_dir}/CADD-scripts.zip
+
+		# Get the base folder name from the unzipped directory
+		local cadd_version=$(read_yaml "${config_file}" "cadd_version") && \
+		CADD_base_dir=$(find ${CADD_parent_dir}/ -maxdepth 1 -type d -name "CADD-scripts-*${cadd_version#v}" -print | head -n1) && \
         [[ -z ${CADD_base_dir} ]] && { log "Could not find CADD scripts directory"; return 1; }
+		update_yaml ${config_file} "cadd_base_dir" "${CADD_base_dir}"
         local CADD_script=${CADD_base_dir}/CADD.sh && \
         local CADD_cache_dir=${CADD_base_dir}/data && \
         local CADD_prescore_dir=${CADD_cache_dir}/prescored && \

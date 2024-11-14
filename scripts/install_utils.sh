@@ -117,13 +117,13 @@ function vep_install_wrapper() {
 
     # Test the PERL5LIB value and PATH value to see if they already include the VEP_DESTDIR and VEP_PLUGINSDIR
     # If yes for both, then we can directly skip the follow up installation of VEP API
-    [[ $(echo $PERL5LIB) =~ "${VEP_DESTDIR}" ]] && \
+    local VEP_DESTDIR=$(perl -e 'print join("\n", @INC);' | head -1)
+	[[ $(echo $PERL5LIB) =~ "${VEP_DESTDIR}" ]] && \
     [[ $(echo $PATH) =~ "${VEP_DESTDIR}" ]] && \
     [[ $(echo $PERL5LIB}) =~ "${VEP_PLUGINSDIR}" ]] && \
     { log "The PERL5LIB value and PATH value already include ${VEP_DESTDIR} and ${VEP_PLUGINSDIR}, indicating the following installation process has already been succesfully performed. Skip the function for now."; return 0; }
 
     local conda_env_name=$(basename $CONDA_PREFIX)
-    local VEP_DESTDIR=$(perl -e 'print join("\n", @INC);' | head -1)
     [[ ${VEP_DESTDIR} =~ ${conda_env_name} ]] && log "The dest dir is set to the directory (${VEP_DESTDIR}) where perl modules are installed by conda" || \
     { log "Since the function is designed to perform follow up installation of VEP upon the installation of VEP dependencies via conda, we only accept installing VEP API at the perl module installation location previously used by conda"; return 1; }
 

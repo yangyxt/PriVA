@@ -117,7 +117,7 @@ function vep_install_wrapper() {
 
     # Test the PERL5LIB value and PATH value to see if they already include the VEP_DESTDIR and VEP_PLUGINSDIR
     # If yes for both, then we can directly skip the follow up installation of VEP API
-    local VEP_DESTDIR=$(perl -e 'print join("\n", @INC);' | head -1)
+    local VEP_DESTDIR=$(perl -e 'print join("\n", @INC);' | grep site_perl | head -1)
 	[[ $(echo $PERL5LIB) =~ "${VEP_DESTDIR}" ]] && \
     [[ $(echo $PATH) =~ "${VEP_DESTDIR}" ]] && \
     [[ $(echo $PERL5LIB}) =~ "${VEP_PLUGINSDIR}" ]] && \
@@ -167,10 +167,7 @@ function VEP_plugins_install() {
     fi
 
     # Install VEP plugins
-    # First enter the VEP plugins directory
-    cd $VEP_PLUGINSDIR
-
-    # Then install UTRAnnotator
+    # First install UTRAnnotator
     local utr_annotator_files=$(UTRAnnotator_install ${VEP_PLUGINSCACHEDIR}) || \
     { log "Failed to install UTRAnnotator"; return 1; }
 
@@ -224,6 +221,8 @@ function VEP_plugins_install() {
 function UTRAnnotator_install() {
     local PLUGIN_CACHEDIR=${1}
 
+	[[ ! -d ${PLUGIN_CACHEDIR} ]] && { log "The cache directory ${PLUGIN_CACHEDIR} is not found, please check the file"; return 1; }
+
     if [[ ! -d ${PLUGIN_CACHEDIR}/UTRannotator ]] || \
        [[ ! -f ${PLUGIN_CACHEDIR}/UTRannotator/uORF_starts_ends_GRCh38_PUBLIC.txt ]] || \
        [[ ! -f ${PLUGIN_CACHEDIR}/UTRannotator/uORF_starts_ends_GRCh37_PUBLIC.txt ]]; then
@@ -265,7 +264,9 @@ function SpliceAI_install() {
         ./vep -i variations.vcf --plugin SpliceAI,snv=/path/to/spliceai_scores.raw.snv.hg38.vcf.gz,indel=/path/to/spliceai_scores.raw.indel.hg38.vcf.gz,cutoff=0.5 "
     # Prepare a command waiting for the user to download the prescores and put them into the corresponding directory
     # Waiting for user's confirmation (yes or no) to finish the installation properly, we dont need to offer the cmd directly because such downloading will need them to register account and login, which is not convenient to put in the script
-
+	[[ ! -d ${PLUGIN_CACHEDIR} ]] && { log "The cache directory ${PLUGIN_CACHEDIR}/SpliceAI is not found, please check the file"; return 1; }
+	[[ ! -d ${PLUGIN_DIR} ]] && { log "The plugins directory ${PLUGIN_DIR} is not found, please check the file"; return 1; }
+	
     read -p "Have you finished downloading the prescores for the SpliceAI plugin? (yes or no)"
     if [[ ${REPLY} =~ "yes" ]] || [[ ${REPLY} =~ "y" ]] || [[ ${REPLY} =~ "Y" ]] || [[ ${REPLY} =~ "Yes" ]] || [[ ${REPLY} =~ "YES" ]]; then
         log "Now the installation of the SpliceAI plugin is completed. Please specify the paths to the prescore files (one for snv and one for indel)"
@@ -948,6 +949,7 @@ function LoFtee_install() {
 function main_install() {
     local config_file=${1}
 
+	local has_error=0
     # Read configuration
     local conda_env_yaml=$(read_yaml "$config_file" "conda_env_yaml")
     local vep_cache_dir=$(read_yaml "$config_file" "vep_cache_dir")
@@ -955,8 +957,12 @@ function main_install() {
     local assembly=$(read_yaml "$config_file" "assembly")
     local ref_fasta=$(read_yaml "$config_file" "ref_genome")
     local vep_plugins_cachedir=$(read_yaml "$config_file" "vep_plugins_cachedir")
-    # ... read other config values ...
-
+    [[ -f ${conda_env_yaml} ]] || { log "The conda env yaml file ${conda_env_yaml} is not found, please check the file"; has_error=1; }
+	[[ -d ${vep_cache_dir} ]] || { log "The cache directory for VEP ${vep_cache_dir} is not found, please check the file"; has_error=1; }
+	[[ -d ${vep_plugins_dir} ]] || { log "The plugins directory for VEP ${vep_plugins_dir} is not found, please check the file"; has_error=1; }
+	[[ -d ${vep_plugins_cachedir} ]] || { log "The plugins cache directory for VEP ${vep_plugins_cachedir} is not found, please check the file"; has_error=1; }
+	[[ -f ${ref_fasta} ]] || { log "The reference genome fasta file ${ref_fasta} is not found, please check the file"; has_error=1; }
+	[[ ${has_error} -eq 1 ]] && { log "Please check the values in theconfiguration file ${config_file}"; return 1; }
     # Perform installation steps
     # 1. Install the conda env
     conda_install_vep "${conda_env_yaml}" || \
@@ -996,7 +1002,8 @@ function main_install() {
 
 
     # 4. Install gnomAD VCF (basically download bgzipped VCF files)
-    local gnomad_vcf_dir=$(read_yaml "$config_file" "gnomad_vcf_dir")
+    local gnomad_vcf_chrX=$(read_yaml "$config_file" "gnomad_vcf_chrX")
+	local gnomad_vcf_dir=$(dirname ${gnomad_vcf_chrX})
     if [[ ${assembly} =~ "GRCh37" ]] || [[ ${assembly} =~ "hg19" ]]; then
         # Chain file is small enough to be included in the git repo
         local chain_file=$(read_yaml "$config_file" "chain_file")

@@ -169,50 +169,28 @@ function VEP_plugins_install() {
     # Install VEP plugins
     # First install UTRAnnotator
 	log "The Cache directory to store the requried annotation files for VEP Plugins is ${VEP_PLUGINSCACHEDIR}"
-    local utr_annotator_file_hg19
-	local utr_annotator_file_hg38
-	{ read -r utr_annotator_file_hg19; \
-	  read -r utr_annotator_file_hg38; } < <(UTRAnnotator_install ${VEP_PLUGINSCACHEDIR}) || \
+    UTRAnnotator_install ${config_file} ${VEP_PLUGINSCACHEDIR} || \
     { log "Failed to install UTRAnnotator"; return 1; }
-
-    if [[ ${ASSEMBLY_VERSION} =~ "GRCh37" ]] || [[ ${ASSEMBLY_VERSION} =~ "hg19" ]]; then
-		log "The UTRAnnotator plugin is successfully installed, the required annotation files returned is ${utr_annotator_file_hg19}"
-        update_yaml "$config_file" "utr_annotator_file" "${utr_annotator_file_hg19}"
-    elif [[ ${ASSEMBLY_VERSION} =~ "GRCh38" ]] || [[ ${ASSEMBLY_VERSION} =~ "hg38" ]]; then
-		log "The UTRAnnotator plugin is successfully installed, the required annotation files returned is ${utr_annotator_file_hg38}"
-        update_yaml "$config_file" "utr_annotator_file" "${utr_annotator_file_hg38}"
-    else
-        log "Not supported assembly version: ${ASSEMBLY_VERSION}"
-        return 1
-    fi
 
 
     # Then install LOEUF
-    local loeuf_prescore=$(LOEUF_install ${ASSEMBLY_VERSION} ${BASE_DIR}) || \
+    LOEUF_install ${config_file} ${ASSEMBLY_VERSION} ${BASE_DIR} || \
     { log "Failed to install LOEUF"; return 1; }
-    update_yaml "$config_file" "loeuf_prescore" "${loeuf_prescore}"
 
 
     # Then install AlphaMissense
-    local alphamissense_prescore=$(AlphaMissense_install ${VEP_PLUGINSCACHEDIR} ${ASSEMBLY_VERSION}) || \
+    AlphaMissense_install ${config_file} ${VEP_PLUGINSCACHEDIR} ${ASSEMBLY_VERSION} ${VEP_PLUGINSDIR} || \
     { log "Failed to install AlphaMissense"; return 1; }
-    update_yaml "$config_file" "alphamissense_prescore" "${alphamissense_prescore}"
 
 
     # Then install SpliceAI
-	local spliceai_snv_prescore
-	local spliceai_indel_prescore
-    { read -r spliceai_snv_prescore; \
-	  read -r spliceai_indel_prescore; } < <(SpliceAI_install ${VEP_PLUGINSCACHEDIR} ${VEP_PLUGINSDIR}) || \
+	SpliceAI_install ${config_file} ${VEP_PLUGINSCACHEDIR} ${VEP_PLUGINSDIR} || \
     { log "Failed to install SpliceAI"; return 1; }
-    update_yaml "$config_file" "spliceai_snv_prescore" "${spliceai_snv_prescore}" && \
-    update_yaml "$config_file" "spliceai_indel_prescore" "${spliceai_indel_prescore}"
 
 
     # Last, install PrimateAI
-    local primateai_prescore=$(PrimateAI_install ${VEP_PLUGINSCACHEDIR} ${VEP_PLUGINSDIR}) || \
+    PrimateAI_install ${config_file} ${VEP_PLUGINSCACHEDIR} ${VEP_PLUGINSDIR} || \
     { log "Failed to install PrimateAI"; return 1; }
-    update_yaml "$config_file" "primateai_prescore" "${primateai_prescore}"
 
 
     # Install Conservation file if assembly version is hg38
@@ -228,7 +206,13 @@ function VEP_plugins_install() {
 
 
 function UTRAnnotator_install() {
-    local PLUGIN_CACHEDIR=${1}
+	local config_file=${1}
+    local PLUGIN_CACHEDIR=${2}
+	local assembly_version=$(read_yaml ${config_file} "assembly")
+
+	local utr_annotator_file=$(read_yaml ${config_file} "utr_annotator_file")
+	[[ -f ${utr_annotator_file} ]] && \
+    log "The UTRAnnotator plugin is already downloaded for both hg19 and hg38 assemblies" && return 0
 
 	[[ ! -d ${PLUGIN_CACHEDIR} ]] && { log "The cache directory ${PLUGIN_CACHEDIR} is not found, please check the file"; return 1; }
 
@@ -243,14 +227,27 @@ function UTRAnnotator_install() {
         log "The UTRannotator plugin is already downloaded for both hg19 and hg38 assemblies"
     fi
 
-    echo ${PLUGIN_CACHEDIR}/UTRannotator/uORF_5UTR_GRCh37_PUBLIC.txt && \
-    echo ${PLUGIN_CACHEDIR}/UTRannotator/uORF_5UTR_GRCh38_PUBLIC.txt
+	if [[ ${assembly_version} =~ "GRCh37" ]] || [[ ${assembly_version} =~ "hg19" ]]; then
+		update_yaml ${config_file} "utr_annotator_file" "${PLUGIN_CACHEDIR}/UTRannotator/uORF_5UTR_GRCh37_PUBLIC.txt"
+	elif [[ ${assembly_version} =~ "GRCh38" ]] || [[ ${assembly_version} =~ "hg38" ]]; then
+		update_yaml ${config_file} "utr_annotator_file" "${PLUGIN_CACHEDIR}/UTRannotator/uORF_5UTR_GRCh38_PUBLIC.txt"
+	else
+		log "Not supported assembly version: ${assembly_version}"
+		return 1
+	fi
 }
 
 
 function SpliceAI_install() {
-    local PLUGIN_CACHEDIR=${1}
-    local PLUGIN_DIR=${2}
+	local config_file=${1}
+    local PLUGIN_CACHEDIR=${2}
+    local PLUGIN_DIR=${3}
+
+	local snv_prescore=$(read_yaml ${config_file} "spliceai_snv_prescore")
+	local indel_prescore=$(read_yaml ${config_file} "spliceai_indel_prescore")
+
+	[[ -f ${snv_prescore} ]] && [[ -f ${indel_prescore} ]] && \
+    log "The prescores for the SpliceAI plugin are already downloaded, skip the installation process" && return 0
 
     log "You need to download the prescores yourself to ${PLUGIN_CACHEDIR}/SpliceAI by registering a free BaseSequence Account from Illumina. Note that the downloaded files are pretty large (around 200 GB) and might take hours to days to complete the downloading process."
     log "For details, read ${PLUGIN_DIR}/SpliceAI.pm"
@@ -285,6 +282,7 @@ function SpliceAI_install() {
             log "The file ${snv_pre_score_file} does not exist"
             return 1
         fi
+		update_yaml ${config_file} "spliceai_snv_prescore" "${snv_pre_score_file}"
         read -p "Please specify the absolute path to the indel prescore file, remember the file should correspond to the assembly version of your VEP installation"
         local indel_pre_score_file=${REPLY}
         if [[ ! -f ${indel_pre_score_file} ]]; then
@@ -293,8 +291,7 @@ function SpliceAI_install() {
         fi
         log "Now we start to install the SpliceAI plugin"
         # We need to return the prescore file paths to the outside of the function
-        echo ${snv_pre_score_file}
-        echo ${indel_pre_score_file}
+		update_yaml ${config_file} "spliceai_indel_prescore" "${indel_pre_score_file}"
     else
         log "Please download the prescores for the SpliceAI plugin first"
         return 1
@@ -466,8 +463,13 @@ function CADD_install() {
 
 
 function PrimateAI_install() {
-    local PLUGIN_CACHEDIR=${1}
-    local PLUGIN_DIR=${2}
+    local config_file=${1}
+    local PLUGIN_CACHEDIR=${2}
+    local PLUGIN_DIR=${3}
+
+	local prescore_file=$(read_yaml ${config_file} "primateai_prescore")
+	[[ -f ${prescore_file} ]] && \
+	log "The prescore file for the PrimateAI plugin is already downloaded, skip the installation process" && return 0
 
     log "You need to download the prescores yourself to ${PLUGIN_CACHEDIR}/PrimateAI by registering a free BaseSequence Account from Illumina. Note that the downloaded files are a bit large (around 2 GB) and might take minutes to complete the downloading process."
     log "For details, read ${PLUGIN_DIR}/PrimateAI.pm"
@@ -517,9 +519,9 @@ function PrimateAI_install() {
 			awk 'NR<12{print $0;next}{print $0 | "sort -k1,1 -k 2,2n -V"}' | \
 			bgzip > ${prescore_file/.tsv.gz/.sorted.tsv.bgz} && \
 			tabix -s 1 -b 2 -e 2 ${prescore_file/.tsv.gz/.sorted.tsv.bgz} && \
-            echo ${prescore_file/.tsv.gz/.sorted.tsv.bgz}
+            update_yaml ${config_file} "primateai_prescore" "${prescore_file/.tsv.gz/.sorted.tsv.bgz}"
 		elif [[ -f ${prescore_file} ]] && [[ ${prescore_file} =~ \.tsv.bgz$ ]]; then
-			echo ${prescore_file}
+			update_yaml ${config_file} "primateai_prescore" "${prescore_file}"
         else
             log "The file ${prescore_file} does not exist"
             return 1
@@ -532,13 +534,18 @@ function PrimateAI_install() {
 
 
 function AlphaMissense_install() {
-    local PLUGIN_CACHEDIR=${1}
-    local ASSEMBLY_VERSION=${2}
+	local config_file=${1}
+    local PLUGIN_CACHEDIR=${2}
+    local ASSEMBLY_VERSION=${3}
+	local PLUGIN_DIR=${4}
 
     log "For details, read ${PLUGIN_DIR}/AlphaMissense.pm"
     local hg19_url="https://storage.googleapis.com/dm_alphamissense/AlphaMissense_hg19.tsv.gz"
     local hg38_url="https://storage.googleapis.com/dm_alphamissense/AlphaMissense_hg38.tsv.gz"
 
+	local alphamissense_prescore=$(read_yaml ${config_file} "alphamissense_prescore")
+	[[ -f ${alphamissense_prescore} ]] && \
+	log "The prescore file for the AlphaMissense plugin is already downloaded, skip the installation process" && return 0
 
     if [[ ! -d ${PLUGIN_CACHEDIR} ]]; then
         mkdir -p ${PLUGIN_CACHEDIR}
@@ -583,9 +590,9 @@ function AlphaMissense_install() {
     fi
 
     if [[ ${ASSEMBLY_VERSION} == "GRCh37" ]] || [[ ${ASSEMBLY_VERSION} == "hg19" ]]; then
-        echo ${PLUGIN_CACHEDIR}/AlphaMissense/AlphaMissense_hg19.tsv.gz
+        update_yaml ${config_file} "alphamissense_prescore" "${PLUGIN_CACHEDIR}/AlphaMissense/AlphaMissense_hg19.tsv.gz"
     elif [[ ${ASSEMBLY_VERSION} == "GRCh38" ]] || [[ ${ASSEMBLY_VERSION} == "hg38" ]]; then
-        echo ${PLUGIN_CACHEDIR}/AlphaMissense/AlphaMissense_hg38.tsv.gz
+        update_yaml ${config_file} "alphamissense_prescore" "${PLUGIN_CACHEDIR}/AlphaMissense/AlphaMissense_hg38.tsv.gz"
     else
         log "Not supported assembly version: ${ASSEMBLY_VERSION}"
         return 1
@@ -595,16 +602,17 @@ function AlphaMissense_install() {
 
 function LOEUF_install() {
 	# The LOEUF plugin cache files are stored in the github repo because the original url is not accessible anymore
-    local assembly_version=${1}
-	local git_repo_dir=${2}
+    local config_file=${1}
+	local assembly_version=${2}
+	local git_repo_dir=${3}
 
 	local loeuf_hg19_file=${git_repo_dir}/data/loeuf/loeuf_dataset.tsv.gz
 	local loeuf_hg38_file=${git_repo_dir}/data/loeuf/loeuf_dataset_hg38.tsv.gz
 
 	if [[ ${assembly_version} =~ "GRCh37" ]] || [[ ${assembly_version} =~ "hg19" ]]; then
-		echo ${loeuf_hg19_file}
+		update_yaml ${config_file} "loeuf_prescore" "${loeuf_hg19_file}"
 	elif [[ ${assembly_version} =~ "GRCh38" ]] || [[ ${assembly_version} =~ "hg38" ]]; then
-		echo ${loeuf_hg38_file}
+		update_yaml ${config_file} "loeuf_prescore" "${loeuf_hg38_file}"
 	else
 		log "Not supported assembly version: ${assembly_version}"
 		return 1

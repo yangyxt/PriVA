@@ -151,7 +151,7 @@ def main():
     parser.add_argument('--chain_file', required=True)
     parser.add_argument('--reference_fasta', required=True)
     parser.add_argument('--temp_dir', default='./temp')
-    parser.add_argument('--chunk_size', type=int, default=40000)
+    parser.add_argument('--chunk_size', type=int, default=50000)
     args = parser.parse_args()
 
     os.makedirs(args.temp_dir, exist_ok=True)

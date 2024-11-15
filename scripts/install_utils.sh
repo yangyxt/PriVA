@@ -411,7 +411,7 @@ function CADD_install() {
     else
         read -p "In this case, you need to download the CADD repo as a zip file and unzip it to a local directory and all the cache files will be store in that directory. Please specify the absolute path to the directory: "
         local CADD_parent_dir=${REPLY}
-		
+
 		# Check if the CADD scripts directory exists, if not, download the zip file and unzip it
 		local CADD_base_dir=$(find ${CADD_parent_dir}/ -maxdepth 1 -type d -name "CADD-scripts-*${cadd_version#v}" -print | head -n1)
 		[[ -z ${CADD_base_dir} ]] && \
@@ -637,9 +637,9 @@ function LOEUF_install() {
 
 
 function gnomAD_install() {
-    local CACHEDIR=${1}
-    local assembly=${2}
-
+    local config_file=${1}
+    local CACHEDIR=${2}
+    local assembly=${3}
     # Assembly is the fasta file path
     # If assembly is not provided, we will use GRCh38 assembly
 
@@ -650,6 +650,8 @@ function gnomAD_install() {
     # We need to iterate over all chromosomes to check if the files are already downloaded and valid
     # local -a chromosomes=( 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 X Y )
     local -a chromosomes=( "22" "X" "Y" )
+    local gnomAD_chrX_vcf=$(read_yaml ${config_file} "gnomad_vcf_chrX")
+
     for chr in "${chromosomes[@]}"; do
         log "About to download the gnomAD v4.1 files for chr${chr} from the url https://storage.googleapis.com/gcp-public-data--gnomad/release/4.1/vcf/joint/gnomad.joint.v4.1.sites.chr${chr}.vcf.bgz"
         if check_vcf_validity ${CACHEDIR}/gnomad.joint.v4.1.sites.chr${chr}.vcf.bgz; then
@@ -678,10 +680,11 @@ function gnomAD_install() {
         ${chain_file} \
         ${assembly} 4 && \
         log "The gnomAD v4.1 files are liftovered to hg19 assembly and saved to ${CACHEDIR}" && \
-        echo ${CACHEDIR}/gnomad.joint.v4.1.sites.hg19.chrX.vcf.gz || \
+        parallel -j4 bash ${SCRIPT_DIR}/common_bash_utils.sh check_vcf_validity ${CACHEDIR}/gnomad.joint.v4.1.sites.hg19.chr{}.vcf.gz ::: "${chromosomes[@]}" && \
+        update_yaml ${config_file} "gnomad_vcf_chrX" "${CACHEDIR}/gnomad.joint.v4.1.sites.hg19.chrX.vcf.gz" || \
         { log "Failed to liftover the gnomAD v4.1 files to hg19 assembly"; return 1; }
     else
-        echo ${CACHEDIR}/gnomad.joint.v4.1.sites.chrX.vcf.bgz
+        update_yaml ${config_file} "gnomad_vcf_chrX" "${CACHEDIR}/gnomad.joint.v4.1.sites.chrX.vcf.bgz"
     fi
 }
 
@@ -760,8 +763,8 @@ function gnomAD_liftover() {
     local suffix_hg38_vcf=$(basename ${hg38_vcf_chr1/*.chr1./})
 
     local hg19_dir=$(dirname ${hg38_vcf_chr1})/hg19
-    local -a hg38_chrs=( "chr1" "chr2" "chr3" "chr4" "chr5" "chr6" "chr7" "chr8" "chr9" "chr10" "chr11" "chr12" "chr13" "chr14" "chr15" "chr16" "chr17" "chr18" "chr19" "chr20" "chr21" "chr22" "chrX" "chrY" )
-    # local -a hg38_chrs=( "chr22" "chrX" "chrY" )
+    # local -a hg38_chrs=( "chr1" "chr2" "chr3" "chr4" "chr5" "chr6" "chr7" "chr8" "chr9" "chr10" "chr11" "chr12" "chr13" "chr14" "chr15" "chr16" "chr17" "chr18" "chr19" "chr20" "chr21" "chr22" "chrX" "chrY" )
+    local -a hg38_chrs=( "chr22" "chrX" "chrY" )
 
     for chr in "${hg38_chrs[@]}"; do
         [[ -d ${hg19_dir}/${chr} ]] || mkdir -p ${hg19_dir}/${chr}
@@ -801,8 +804,9 @@ function gnomAD_liftover() {
 
 
 function ClinVar_VCF_deploy() {
-    local CACHEDIR=${1}
-    local assembly_version=${2}
+    local config_file=${1}
+    local CACHEDIR=${2}
+    local assembly_version=${3}
     local contig_map=${BASE_DIR}/data/liftover/GRC_to_ucsc.contig.map.tsv
 
     if [[ -z ${assembly_version} ]]; then
@@ -829,6 +833,9 @@ function ClinVar_VCF_deploy() {
         mkdir -p ${CACHEDIR}
     fi
 
+    local clinvar_vcf=$(read_yaml ${config_file} "clinvar_vcf")
+    check_vcf_validity ${clinvar_vcf} && { log "The ClinVar VCF file ${clinvar_vcf} is already downloaded"; return 0; }
+
     wget https://ftp.ncbi.nlm.nih.gov/pub/clinvar/vcf_${assembly_version}/clinvar.vcf.gz -O ${CACHEDIR}/clinvar.${assembly_version}.vcf.gz && \
     wget https://ftp.ncbi.nlm.nih.gov/pub/clinvar/vcf_${assembly_version}/clinvar.vcf.gz.tbi -O ${CACHEDIR}/clinvar.${assembly_version}.vcf.gz.tbi && \
     log "The ClinVar VCF file is downloaded to ${CACHEDIR}/clinvar.${assembly_version}.vcf.gz" && \
@@ -836,7 +843,8 @@ function ClinVar_VCF_deploy() {
     ${CACHEDIR}/clinvar.${assembly_version}.vcf.gz \
     ${contig_map} \
     ${CACHEDIR}/clinvar.${ucsc_assembly_version}.vcf.gz && \
-    echo ${CACHEDIR}/clinvar.${ucsc_assembly_version}.vcf.gz
+    check_vcf_validity ${CACHEDIR}/clinvar.${ucsc_assembly_version}.vcf.gz && \
+    update_yaml ${config_file} "clinvar_vcf" "${CACHEDIR}/clinvar.${ucsc_assembly_version}.vcf.gz"
 }
 
 
@@ -1042,16 +1050,12 @@ function main_install() {
         # Chain file is small enough to be included in the git repo
         local chain_file=$(read_yaml "$config_file" "chain_file")
     fi
-    local gnomAD_chrX_vcf=$(gnomAD_install ${gnomad_vcf_dir} ${ref_fasta} | tail -1)
-    [[ -f ${gnomAD_chrX_vcf} ]] && \
-    update_yaml "$config_file" "gnomad_vcf_chrX" "${gnomAD_chrX_vcf}" || \
+    gnomAD_install ${config_file} ${gnomad_vcf_dir} ${ref_fasta} || \
     { log "Failed to install gnomAD VCF"; return 1; }
 
     # 5. Install ClinVar VCF
     local clinvar_vcf_dir=$(read_yaml "$config_file" "clinvar_vcf_dir")
-    local prepared_clinvar_vcf=$(ClinVar_VCF_deploy ${clinvar_vcf_dir} ${assembly} | tail -1)
-    [[ -f ${prepared_clinvar_vcf} ]] && \
-    update_yaml "$config_file" "clinvar_vcf" "${prepared_clinvar_vcf}" || \
+    ClinVar_VCF_deploy ${config_file} ${clinvar_vcf_dir} ${assembly} || \
     { log "Failed to install ClinVar VCF"; return 1; }
 
     # 6. Install CADD prescores

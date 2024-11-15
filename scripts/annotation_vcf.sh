@@ -380,7 +380,8 @@ function anno_VEP_data() {
 		  spliceai_snv_prescore \
 		  spliceai_indel_prescore \
 		  primateai_prescore \
-		  conversation_file
+		  conversation_file \
+		  splicevault_prescore
 
     # Process arguments using anno_vep_args
     argparse "$@" < ${SCRIPT_DIR}/anno_vep_args || { log "Failed to parse arguments"; return 1; }
@@ -419,7 +420,7 @@ function anno_VEP_data() {
     local spliceai_indel_prescore="${spliceai_indel_prescore:-${config_args[spliceai_indel_prescore]}}"
     local primateai_prescore="${primateai_prescore:-${config_args[primateai_prescore]}}"
     local conversation_file="${conversation_file:-${config_args[conversation_file]}}"
-
+	local splicevault_prescore="${splicevault_prescore:-${config_args[splicevault_prescore]}}"
     # Validate inputs
     local has_error=0
     check_path "$input_vcf" "file" "input_vcf" || has_error=1
@@ -436,7 +437,7 @@ function anno_VEP_data() {
     check_path "$spliceai_indel_prescore" "file" "spliceai_indel_prescore" || has_error=1
     check_path "$primateai_prescore" "file" "primateai_prescore" || has_error=1
     check_path "$conversation_file" "file" "conversation_file" || has_error=1
-
+	check_path "$splicevault_prescore" "file" "splicevault_prescore" || has_error=1
     # Try to determine assembly if not specified
     [[ -z ${assembly} ]] && assembly=$(check_vcf_assembly_version ${input_vcf})
     [[ -z ${assembly} ]] && assembly=$(extract_assembly_from_fasta ${ref_genome})
@@ -492,6 +493,7 @@ function anno_VEP_data() {
     -plugin AlphaMissense,file=${alphamissense_prescore} \
     -plugin SpliceAI,snv=${spliceai_snv_prescore},indel=${spliceai_indel_prescore},cutoff=0.5 \
     -plugin PrimateAI,${primateai_prescore} \
+	-plugin SpliceVault,file=${splicevault_prescore} \
     -plugin Conservation,${conversation_file},MAX \
 	-plugin NMD \
     --force_overwrite \

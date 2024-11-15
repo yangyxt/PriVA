@@ -121,6 +121,17 @@ function vep_install_wrapper() {
 	[[ $(echo $PERL5LIB) =~ "${VEP_DESTDIR}" ]] && \
     [[ $(echo $PATH) =~ "${VEP_DESTDIR}" ]] && \
     [[ $(echo $PERL5LIB}) =~ "${VEP_PLUGINSDIR}" ]] && \
+    [[ -f ${VEP_PLUGINSDIR}/SpliceVault.pm ]] && \
+    [[ -f ${VEP_PLUGINSDIR}/SpliceAI.pm ]] && \
+    [[ -f ${VEP_PLUGINSDIR}/UTRAnnotator.pm ]] && \
+    [[ -f ${VEP_PLUGINSDIR}/AlphaMissense.pm ]] && \
+    [[ -f ${VEP_PLUGINSDIR}/GO.pm ]] && \
+    [[ -f ${VEP_PLUGINSDIR}/Phenotypes.pm ]] && \
+    [[ -f ${VEP_PLUGINSDIR}/Conservation.pm ]] && \
+    [[ -f ${VEP_PLUGINSDIR}/LOEUF.pm ]] && \
+    [[ -f ${VEP_PLUGINSDIR}/SameCodon.pm ]] && \
+    [[ -f ${VEP_PLUGINSDIR}/NMD.pm ]] && \
+    [[ -f ${VEP_PLUGINSDIR}/PrimateAI.pm ]] && \
     { log "The PERL5LIB value and PATH value already include ${VEP_DESTDIR} and ${VEP_PLUGINSDIR}, indicating the following installation process has already been succesfully performed. Skip the function for now."; return 0; }
 
     local conda_env_name=$(basename $CONDA_PREFIX)
@@ -133,7 +144,7 @@ function vep_install_wrapper() {
     local cmd="vep_install -d ${VEP_DESTDIR} --AUTO acp -s homo_sapiens_merged --NO_HTSLIB --NO_BIOPERL --CONVERT"
     [[ -n "$VEP_CACHEDIR" ]] && cmd+=" --CACHEDIR $VEP_CACHEDIR"
     [[ -n "$VEP_ASSEMBLY" ]] && cmd+=" --ASSEMBLY $VEP_ASSEMBLY"
-    [[ -n "$VEP_PLUGINS" ]] && [[ $VEP_PLUGINS != "empty" ]] && cmd+=" --PLUGINS $VEP_PLUGINS,SpliceAI,UTRAnnotator,AlphaMissense,GO,Phenotypes,Conservation,LOEUF,SameCodon,NMD,PrimateAI" || cmd+=" --PLUGINS SpliceAI,UTRAnnotator,AlphaMissense,GO,Phenotypes,Conservation,LOEUF,SameCodon,NMD,PrimateAI"
+    [[ -n "$VEP_PLUGINS" ]] && [[ $VEP_PLUGINS != "empty" ]] && cmd+=" --PLUGINS $VEP_PLUGINS,SpliceAI,SpliceVault,UTRAnnotator,AlphaMissense,GO,Phenotypes,Conservation,LOEUF,SameCodon,NMD,PrimateAI" || cmd+=" --PLUGINS SpliceAI,SpliceVault,UTRAnnotator,AlphaMissense,GO,Phenotypes,Conservation,LOEUF,SameCodon,NMD,PrimateAI"
     [[ -n "$VEP_PLUGINSDIR" ]] && cmd+=" --PLUGINSDIR $VEP_PLUGINSDIR"
 
     # Execute the command
@@ -186,6 +197,11 @@ function VEP_plugins_install() {
     # Then install SpliceAI
 	SpliceAI_install ${config_file} ${VEP_PLUGINSCACHEDIR} ${VEP_PLUGINSDIR} || \
     { log "Failed to install SpliceAI"; return 1; }
+
+
+    # Followed by SpliceVault
+    SpliceVault_install ${config_file} ${VEP_PLUGINSCACHEDIR} ${SCRIPT_DIR} || \
+    { log "Failed to install SpliceVault"; return 1; }
 
 
     # Last, install PrimateAI
@@ -861,6 +877,48 @@ function Conservation_install() {
 		log "Currently we only support GRCh37 and GRCh38 assembly versions"
 		return 1
 	fi
+}
+
+
+
+function SpliceVault_install () {
+    local config=${1}
+    local PLUGIN_CACHEDIR=${2}
+    local git_scripts_dir=${3}
+
+
+    [[ -z ${git_scripts_dir} ]] && git_scripts_dir=$(dirname $(dirname $(dirname $(read_yaml "${config}" "hg38_hg19_chain"))))/scripts
+    [[ ! -d ${PLUGIN_CACHEDIR} ]] && { log "The cache directory ${PLUGIN_CACHEDIR} is not found, please check the file"; return 1; }
+    local splicevault_file=$(read_yaml "${config}" "splicevault_file")
+    [[ -f ${splicevault_file} ]] && { log "The SpliceVault plugin is already installed"; return 0; }
+
+    local splicevault_url=$(read_yaml "${config}" "splicevault_url")
+    if [[ ${ASSEMBLY_VERSION} =~ "GRCh37" ]] || [[ ${ASSEMBLY_VERSION} =~ "hg19" ]]; then
+        local chain_file=$(read_yaml "${config}" "hg38_hg19_chain")
+        local ref_genome=$(read_yaml "${config}" "ref_genome")
+        local tmp_dir=$(read_yaml "${config}" "tmp_dir")
+        [[ ! -f ${ref_genome} ]] && { log "The reference genome file ${ref_genome} is not found, please check the file"; return 1; }
+        [[ ! -f ${chain_file} ]] && { log "The chain file ${chain_file} is not found, please check the file"; return 1; }
+        [[ ! -d ${tmp_dir} ]] && { log "The temporary directory ${tmp_dir} is not found, please check the file"; return 1; }
+        # Currently, we only have the SpliceVault data for GRCh38, so we need to convert it to GRCh37
+        wget -c ${splicevault_url} -O ${PLUGIN_CACHEDIR}/SpliceVault/SpliceVault_data_GRCh38.tsv.gz && \
+        gunzip -c ${PLUGIN_CACHEDIR}/SpliceVault/SpliceVault_data_GRCh38.tsv.gz > ${PLUGIN_CACHEDIR}/SpliceVault/SpliceVault_data_GRCh37.tsv && \
+        python ${git_scripts_dir}/SpliceVault_tsv_vcf_conversion.py \
+        --input_tsv ${PLUGIN_CACHEDIR}/SpliceVault/SpliceVault_data_GRCh38.tsv \
+        --output_tsv ${PLUGIN_CACHEDIR}/SpliceVault/SpliceVault_data_GRCh37.tsv \
+        --chain_file ${chain_file} \
+        --reference_fasta ${ref_genome} && \
+        LC_ALL=C sort -k1,1V -k2,2n --parallel=8 --buffer-size=8G -T ${tmp_dir} ${PLUGIN_CACHEDIR}/SpliceVault/SpliceVault_data_GRCh37.tsv | \
+        bgzip > ${PLUGIN_CACHEDIR}/SpliceVault/SpliceVault_data_GRCh37.tsv.gz && \
+        tabix -s 1 -b 2 -e 2 -c "#" ${PLUGIN_CACHEDIR}/SpliceVault/SpliceVault_data_GRCh37.tsv.gz && \
+        update_yaml "${config}" "splicevault_file" "${PLUGIN_CACHEDIR}/SpliceVault/SpliceVault_data_GRCh37.tsv.gz"
+    elif [[ ${ASSEMBLY_VERSION} =~ "GRCh38" ]] || [[ ${ASSEMBLY_VERSION} =~ "hg38" ]]; then
+        wget -c ${splicevault_url} -O ${PLUGIN_CACHEDIR}/SpliceVault/SpliceVault_data_GRCh38.tsv.gz && \
+        wget -c ${splicevault_url}.tbi -O ${PLUGIN_CACHEDIR}/SpliceVault/SpliceVault_data_GRCh38.tsv.gz.tbi && \
+        update_yaml "${config}" "splicevault_file" "${PLUGIN_CACHEDIR}/SpliceVault/SpliceVault_data_GRCh38.tsv.gz"
+    else
+        log "Not supported assembly version: ${ASSEMBLY_VERSION}, so skip installing the SpliceVault plugin"
+    fi
 }
 
 

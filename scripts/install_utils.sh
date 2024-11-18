@@ -402,6 +402,7 @@ function CADD_install() {
 	update_yaml ${config_file} "cadd_base_dir" "$(dirname ${CADD_script})"
 
     local CADD_cache_dir=$(dirname ${CADD_script})/data
+    local cadd_version=$(read_yaml "${config_file}" "cadd_version")
     # Note that by default, CADD will use the CADD cache file in the conda environment
     # Ask the user whether they want to use the default CADD cache directory to store the genome annotation file and the prescores.
     read -p "Do you want to use the default CADD cache directory ${CADD_cache_dir} to store the genome annotation file and the prescores which could be take up to 1TB space? (yes or no)"
@@ -414,14 +415,13 @@ function CADD_install() {
 
 		# Check if the CADD scripts directory exists, if not, download the zip file and unzip it
 		local CADD_base_dir=$(find ${CADD_parent_dir}/ -maxdepth 1 -type d -name "CADD-scripts-*${cadd_version#v}" -print | head -n1)
-		[[ -z ${CADD_base_dir} ]] && \
+		[[ ! -d ${CADD_base_dir} ]] && \
 		local CADD_zip_download_url=$(read_yaml "${config_file}" "cadd_zip_download_url") && \
 		wget ${CADD_zip_download_url} -O ${CADD_parent_dir}/CADD-scripts.zip && \
 		unzip ${CADD_parent_dir}/CADD-scripts.zip -d ${CADD_parent_dir}/ && \
 		rm ${CADD_parent_dir}/CADD-scripts.zip
 
 		# Get the base folder name from the unzipped directory
-		local cadd_version=$(read_yaml "${config_file}" "cadd_version") && \
 		CADD_base_dir=$(find ${CADD_parent_dir}/ -maxdepth 1 -type d -name "CADD-scripts-*${cadd_version#v}" -print | head -n1) && \
         [[ -z ${CADD_base_dir} ]] && { log "Could not find CADD scripts directory"; return 1; }
 		update_yaml ${config_file} "cadd_base_dir" "${CADD_base_dir}"
@@ -434,11 +434,13 @@ function CADD_install() {
 
     # Now we start downloading the CADD genome annotations corresponding to the assembly version
     if [[ ${assembly} == "GRCh37" ]] || [[ ${assembly} == "hg19" ]]; then
+        [[ ! -d ${CADD_anno_dir}/GRCh37_${cadd_version} ]] && \
         wget -c https://kircherlab.bihealth.org/download/CADD/v1.7/GRCh37/GRCh37_v1.7.tar.gz -O ${CADD_anno_dir}/GRCh37_v1.7.tar.gz && \
         md5sum ${CADD_anno_dir}/GRCh37_v1.7.tar.gz | grep -q $(read_yaml "${config_file}" "cadd_GRCh37_anno_md5") && \
         tar -xzvf ${CADD_anno_dir}/GRCh37_v1.7.tar.gz -C ${CADD_anno_dir}/ && \
         rm ${CADD_anno_dir}/GRCh37_v1.7.tar.gz
     elif [[ ${assembly} == "GRCh38" ]] || [[ ${assembly} == "hg38" ]]; then
+        [[ ! -d ${CADD_anno_dir}/GRCh38_${cadd_version} ]] && \
         wget -c https://kircherlab.bihealth.org/download/CADD/v1.7/GRCh38/GRCh38_v1.7.tar.gz -O ${CADD_anno_dir}/GRCh38_v1.7.tar.gz && \
         md5sum ${CADD_anno_dir}/GRCh38_v1.7.tar.gz | grep -q $(read_yaml "${config_file}" "cadd_GRCh38_anno_md5") && \
         tar -xzvf ${CADD_anno_dir}/GRCh38_v1.7.tar.gz -C ${CADD_anno_dir}/ && \
@@ -468,12 +470,16 @@ function CADD_install() {
 
     local snv_file_name=$(basename ${snv_prescore_url})
     local indel_file_name=$(basename ${indel_prescore_url})
-    wget -c ${snv_prescore_url} -O ${CADD_prescore_dir}/${snv_file_name} && \
-    md5sum ${CADD_prescore_dir}/${snv_file_name} | grep -q ${snv_prescore_md5} && \
-    wget -c ${snv_prescore_url}.tbi -O ${CADD_prescore_dir}/${snv_file_name}.tbi && \
-    wget -c ${indel_prescore_url} -O ${CADD_prescore_dir}/${indel_file_name} && \
-    md5sum ${CADD_prescore_dir}/${indel_file_name} | grep -q ${indel_prescore_md5} && \
-    wget -c ${indel_prescore_url}.tbi -O ${CADD_prescore_dir}/${indel_file_name}.tbi
+
+    [[ ! -f ${CADD_prescore_dir}/${assembly}_${cadd_version}/${snv_file_name} ]] && \
+    wget -c ${snv_prescore_url} -O ${CADD_prescore_dir}/${assembly}_${cadd_version}/${snv_file_name} && \
+    md5sum ${CADD_prescore_dir}/${assembly}_${cadd_version}/${snv_file_name} | grep -q ${snv_prescore_md5} && \
+    wget -c ${snv_prescore_url}.tbi -O ${CADD_prescore_dir}/${assembly}_${cadd_version}/${snv_file_name}.tbi
+
+    [[ ! -f ${CADD_prescore_dir}/${assembly}_${cadd_version}/${indel_file_name} ]] && \
+    wget -c ${indel_prescore_url} -O ${CADD_prescore_dir}/${assembly}_${cadd_version}/${indel_file_name} && \
+    md5sum ${CADD_prescore_dir}/${assembly}_${cadd_version}/${indel_file_name} | grep -q ${indel_prescore_md5} && \
+    wget -c ${indel_prescore_url}.tbi -O ${CADD_prescore_dir}/${assembly}_${cadd_version}/${indel_file_name}.tbi
 }
 
 
@@ -897,8 +903,8 @@ function SpliceVault_install () {
 
     [[ -z ${git_scripts_dir} ]] && git_scripts_dir=$(dirname $(dirname $(dirname $(read_yaml "${config}" "hg38_hg19_chain"))))/scripts
     [[ ! -d ${PLUGIN_CACHEDIR} ]] && { log "The cache directory ${PLUGIN_CACHEDIR} is not found, please check the file"; return 1; }
-    local splicevault_file=$(read_yaml "${config}" "splicevault_file")
-    [[ -f ${splicevault_file} ]] && { log "The SpliceVault plugin is already installed"; return 0; }
+    local splicevault_prescore=$(read_yaml "${config}" "splicevault_prescore")
+    [[ -f ${splicevault_prescore} ]] && { log "The SpliceVault plugin is already installed"; return 0; }
 
     local splicevault_url=$(read_yaml "${config}" "splicevault_url")
     if [[ ${ASSEMBLY_VERSION} =~ "GRCh37" ]] || [[ ${ASSEMBLY_VERSION} =~ "hg19" ]]; then
@@ -919,11 +925,11 @@ function SpliceVault_install () {
         LC_ALL=C sort -k1,1V -k2,2n --parallel=8 --buffer-size=8G -T ${tmp_dir} ${PLUGIN_CACHEDIR}/SpliceVault/SpliceVault_data_GRCh37.tsv | \
         bgzip > ${PLUGIN_CACHEDIR}/SpliceVault/SpliceVault_data_GRCh37.tsv.gz && \
         tabix -s 1 -b 2 -e 2 -c "#" ${PLUGIN_CACHEDIR}/SpliceVault/SpliceVault_data_GRCh37.tsv.gz && \
-        update_yaml "${config}" "splicevault_file" "${PLUGIN_CACHEDIR}/SpliceVault/SpliceVault_data_GRCh37.tsv.gz"
+        update_yaml "${config}" "splicevault_prescore" "${PLUGIN_CACHEDIR}/SpliceVault/SpliceVault_data_GRCh37.tsv.gz"
     elif [[ ${ASSEMBLY_VERSION} =~ "GRCh38" ]] || [[ ${ASSEMBLY_VERSION} =~ "hg38" ]]; then
         wget -c ${splicevault_url} -O ${PLUGIN_CACHEDIR}/SpliceVault/SpliceVault_data_GRCh38.tsv.gz && \
         wget -c ${splicevault_url}.tbi -O ${PLUGIN_CACHEDIR}/SpliceVault/SpliceVault_data_GRCh38.tsv.gz.tbi && \
-        update_yaml "${config}" "splicevault_file" "${PLUGIN_CACHEDIR}/SpliceVault/SpliceVault_data_GRCh38.tsv.gz"
+        update_yaml "${config}" "splicevault_prescore" "${PLUGIN_CACHEDIR}/SpliceVault/SpliceVault_data_GRCh38.tsv.gz"
     else
         log "Not supported assembly version: ${ASSEMBLY_VERSION}, so skip installing the SpliceVault plugin"
     fi

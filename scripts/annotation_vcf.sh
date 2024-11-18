@@ -391,17 +391,18 @@ function anno_VEP_data() {
     local -A config_args
 
     if [[ -f "$config_file" ]]; then
-        log "Using config file: $config_file"
+        log "Using config file: $config_file to assign default values to the following variables"
         local -a config_keys=(assembly ref_genome vep_cache_dir vep_plugins_dir vep_plugins_cachedir threads
                               utr_annotator_file loeuf_prescore alphamissense_prescore
-                              spliceai_snv_prescore spliceai_indel_prescore primateai_prescore conversation_file)
+                              spliceai_snv_prescore spliceai_indel_prescore splicevault_prescore primateai_prescore conversation_file)
         for key in "${config_keys[@]}"; do
 			# Need to strip the double quotes enclosing the string value
-            config_args[$key]="$(yq ".${key}" "$config_file" | sed 's/^"\(.*\)"$/\1/' || echo '')"
+            config_args[$key]="$(read_yaml ${config_file} ${key})"
         done
     else
         log "No config file found at $config_file, will use command line arguments only"
     fi
+	log "The splicevault_prescore is ${config_args[splicevault_prescore]}"
 
     # Set variables with command line arguments taking precedence over config file
     local input_vcf="${input_vcf:-${config_args[input_vcf]}}"
@@ -438,6 +439,7 @@ function anno_VEP_data() {
     check_path "$primateai_prescore" "file" "primateai_prescore" || has_error=1
     check_path "$conversation_file" "file" "conversation_file" || has_error=1
 	check_path "$splicevault_prescore" "file" "splicevault_prescore" || has_error=1
+
     # Try to determine assembly if not specified
     [[ -z ${assembly} ]] && assembly=$(check_vcf_assembly_version ${input_vcf})
     [[ -z ${assembly} ]] && assembly=$(extract_assembly_from_fasta ${ref_genome})

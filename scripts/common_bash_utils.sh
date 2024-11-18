@@ -28,7 +28,7 @@ function read_yaml() {
     local yaml_file=$1
     local key=$2
     # Remove the quotes enclosing the value
-    yq ".$key" "$yaml_file" | sed 's/^"\(.*\)"$/\1/'
+    yq ".$key" "$yaml_file" | sed 's/^"\(.*\)"$/\1/' || echo ""
 }
 
 

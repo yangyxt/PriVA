@@ -210,14 +210,9 @@ function VEP_plugins_install() {
 
 
     # Install Conservation file if assembly version is hg38
-    if [[ ${ASSEMBLY_VERSION} =~ "GRCh38" ]] || [[ ${ASSEMBLY_VERSION} =~ "hg38" ]]; then
-        log "Now we start to install the conservation file for hg38"
-        local conservation_file=$(Conservation_install ${VEP_PLUGINSCACHEDIR} ${ASSEMBLY_VERSION}) || \
-        { log "Failed to install Conservation file"; return 1; }
-        update_yaml "$config_file" "conservation_file" "${conservation_file}"
-    else
-        log "Not supported assembly version: ${ASSEMBLY_VERSION}, so skip installing the conservation file"
-    fi
+	log "Now we start to install the conservation file"
+	local conservation_file=$(Conservation_install ${config_file} ${VEP_PLUGINSCACHEDIR} ${ASSEMBLY_VERSION}) || \
+	{ log "Failed to install Conservation file"; return 1; }
 }
 
 
@@ -709,13 +704,13 @@ function gnomAD_liftover_per_chromosome() {
 
     if check_vcf_validity ${hg19_vcf}; then
         if [[ ${hg19_vcf}.tbi -nt ${hg19_vcf} ]]; then
-            log "The hg19 VCF file is already indexed and the VCF file is valid and updated"
+            log "The hg19 VCF file ${hg19_vcf} is already indexed and the VCF file is valid and updated"
             return 0
         else
             tabix -f -p vcf ${hg19_vcf} && \
-            log "The hg19 VCF file is already indexed and the VCF file is valid and updated" && \
+            log "The hg19 VCF file ${hg19_vcf} is already indexed and the VCF file is valid and updated" && \
             return 0 || \
-            { log "Failed to index the hg19 VCF file, try to regenerate the VCF file"; }
+            { log "Failed to index the hg19 VCF file ${hg19_vcf}, try to regenerate the VCF file"; }
         fi
     fi
 
@@ -855,8 +850,9 @@ function ClinVar_VCF_deploy() {
 
 
 function Conservation_install() {
-    local CACHEDIR=${1}
-    local assembly_version=${2}
+	local config=${1}
+    local CACHEDIR=${2}
+    local assembly_version=${3}
 
     if [[ -z ${assembly_version} ]]; then
         local assembly_version="GRCh38"
@@ -877,16 +873,20 @@ function Conservation_install() {
         mkdir -p ${CACHEDIR}/Conservation
     fi
 
+	local existed_file=$(read_yaml "${config}" "conversation_file")
+
 	if [[ ${assembly_version} == "GRCh38" ]]; then
-		[[ ! -f ${CACHEDIR}/Conservation/gerp_conservation_scores.homo_sapiens.${assembly_version}.bw ]] && \
+		[[ ! -f ${existed_file} ]] && \
 		wget http://ftp.ensembl.org/pub/current_compara/conservation_scores/91_mammals.gerp_conservation_score/gerp_conservation_scores.homo_sapiens.${assembly_version}.bw -O ${CACHEDIR}/Conservation/gerp_conservation_scores.homo_sapiens.${assembly_version}.bw && \
 		log "The conservation scores for ${assembly_version} assembly version are downloaded to ${CACHEDIR}/Conservation" && \
-		echo ${CACHEDIR}/Conservation/gerp_conservation_scores.homo_sapiens.${assembly_version}.bw || \
+		update_yaml "${config}" "conversation_file" "${CACHEDIR}/Conservation/gerp_conservation_scores.homo_sapiens.${assembly_version}.bw" || \
 		{ log "Failed to download the conservation scores for ${assembly_version} assembly version"; return 1; }
 	elif [[ ${assembly_version} == "GRCh37" ]]; then
+		[[ ! -f ${existed_file} ]] && \
 		wget http://hgdownload.soe.ucsc.edu/gbdb/hg19/bbi/All_hg19_RS.bw -O ${CACHEDIR}/Conservation/gerp_conservation_scores.homo_sapiens.${assembly_version}.bw
-		log "The conservation scores for ${assembly_version} assembly version are downloaded to ${CACHEDIR}/Conservation"
-		echo ${CACHEDIR}/Conservation/gerp_conservation_scores.homo_sapiens.${assembly_version}.bw
+		log "The conservation scores for ${assembly_version} assembly version are downloaded to ${CACHEDIR}/Conservation" && \
+		update_yaml "${config}" "conversation_file" "${CACHEDIR}/Conservation/gerp_conservation_scores.homo_sapiens.${assembly_version}.bw" || \
+		{ log "Failed to download the conservation scores for ${assembly_version} assembly version"; return 1; }
 	else
 		log "Currently we only support GRCh37 and GRCh38 assembly versions"
 		return 1
@@ -904,9 +904,11 @@ function SpliceVault_install () {
     [[ -z ${git_scripts_dir} ]] && git_scripts_dir=$(dirname $(dirname $(dirname $(read_yaml "${config}" "hg38_hg19_chain"))))/scripts
     [[ ! -d ${PLUGIN_CACHEDIR} ]] && { log "The cache directory ${PLUGIN_CACHEDIR} is not found, please check the file"; return 1; }
     local splicevault_prescore=$(read_yaml "${config}" "splicevault_prescore")
-    [[ -f ${splicevault_prescore} ]] && { log "The SpliceVault plugin is already installed"; return 0; }
+    [[ -f ${splicevault_prescore} ]] && { log "The SpliceVault plugin is already installed at ${splicevault_prescore}"; return 0; } || \
+	log "The SpliceVault plugin is not installed by checking the existence of specified file path ${splicevault_prescore} in the config file ${config}, now start installing it"
 
     local splicevault_url=$(read_yaml "${config}" "splicevault_url")
+	local ASSEMBLY_VERSION=$(read_yaml "${config}" "assembly")
     if [[ ${ASSEMBLY_VERSION} =~ "GRCh37" ]] || [[ ${ASSEMBLY_VERSION} =~ "hg19" ]]; then
         local chain_file=$(read_yaml "${config}" "hg38_hg19_chain")
         local ref_genome=$(read_yaml "${config}" "ref_genome")

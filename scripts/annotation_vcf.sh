@@ -511,8 +511,10 @@ function anno_VEP_data() {
 function Calculate_CADD {
 	local input_vcf=${1}
     local config_file=${2}
+	local output_file=${3}
 	local threads=$(read_yaml ${config_file} "threads")
 	local cadd_base_dir=$(read_yaml ${config_file} "cadd_base_dir")
+	local assembly=$(read_yaml ${config_file} "assembly")
 	local cadd_script=${cadd_base_dir}/CADD.sh
 
     if [[ ${output_file} -nt ${input_file} ]]; then
@@ -520,58 +522,38 @@ function Calculate_CADD {
         return 0;
     fi
 
-    #Transfer input file to CADD input format.
-    local CADD_input_file=${input_vcf/.vcf/.CADD.vcf} ##set output file name
-    check_vcf_validity ${input_file}
-    #extract,substitute file for CADDInput.
-    #sub("chr","") substitute chr in $1 with NA
-    bash ${central_scripts}/common_bash_utils.sh \
-    strip_chr_vcf \
-    ${input_file} \
-    ${CADD_input_file} && \
-    display_table ${CADD_input_file}
-
-    if [[ ${CADD_input_file/.vcf*/.tmp.vcf} == ${CADD_input_file} ]]; then
-        log "Failed to generate ${CADD_input_file/.vcf*/.tmp.vcf}, The CADD_input_file after stripping the chr prefix seems not a VCF file."
-        exit 1
-    fi
-
-    bcftools view --no-version ${CADD_input_file} | \
-    mawk -F '\t' '$1 ~ /^[XY0-9]+$/ || $1 ~ /^#/{print;}' > ${CADD_input_file/.vcf*/.tmp.vcf}
-
-    if [[ ${CADD_input_file} =~ \.vcf\.gz$ ]]; then
-        bcftools view --no-version -Oz -o ${CADD_input_file} ${CADD_input_file/.vcf*/.tmp.vcf}
-    elif [[ ${CADD_input_file} =~ \.vcf$ ]]; then
-        bcftools view --no-version -Ov -o ${CADD_input_file} ${CADD_input_file/.vcf*/.tmp.vcf}
-    fi
-
-    display_table ${CADD_input_file}
-    silent_remove_tmps ${CADD_input_file/.vcf*/.tmp.vcf}
-
     #Run CADD and CADD only output gzipped file.
-    local CADD_output_file=${CADD_input_file/.vcf*/.anno.txt.gz}
+    [[ -z ${output_file} ]] && output_file=${input_vcf/.vcf*/.anno.txt.gz}
+	[[ ! ${output_file} =~ \.gz$ ]] && output_file=${output_file}.gz  # Ensure the output file is gzipped
 
+	# Check if the output file is valid and updated. If so, skip this function
+	[[ -f ${output_file}]] && \
+	[[ ${output_file} -nt ${input_vcf} ]] && { \
+	log "Output file ${output_file} is valid and updated. Skip this function for now."
+	return 0; }
+
+	# Determine the genome tag based on the assembly
+	if [[ ${assembly} == "GRCh37" ]] || [[ ${assembly} == "hg19" ]]; then
+		local genome_tag="GRCh37"
+	elif [[ ${assembly} == "GRCh38" ]] || [[ ${assembly} == "hg38" ]]; then
+		local genome_tag="GRCh38"
+	else
+		log "The assembly ${assembly} is not supported. Please check the config file ${config_file}"
+		return 1;
+	fi
+
+	# Run CADD
     ${cadd_script} \
     -c ${threads} \
     -a -p \
     -g ${genome_tag} \
-    -o ${CADD_output_file} \
-    ${CADD_input_file} && \
-    gunzip -f ${CADD_output_file} && \
-    mawk -F '\t' '$1 !~ /^##/{print;}' ${CADD_output_file/.gz/} > ${CADD_output_file/.gz/}.tmp && \
-    mv ${CADD_output_file/.gz/}.tmp ${CADD_output_file/.gz/} && \
-    display_table ${CADD_output_file/.gz/}
-
-    if [[ ${output_file} =~ ^[A-Za-z0-9_]+$ ]]; then
-        eval ${output_file}="'${CADD_output_file/.gz/}'"
-    elif [[ ${output_file} =~ \.gz$ ]]; then
-        gzip -f -c ${CADD_output_file/.gz/} > ${output_file}
-    elif [[ ${CADD_output_file/.gz/} != "${output_file}" ]]; then
-        mv ${CADD_output_file/.gz/} ${output_file} && \
-        display_table ${output_file}
-    else
-        display_table ${output_file}
-    fi
+    -o ${output_file} \
+    ${input_vcf} && \
+    gunzip -f ${output_file} && \
+    mawk -F '\t' '$1 !~ /^##/{print;}' ${output_file/.gz/} > ${output_file/.gz/}.tmp && \
+    mv ${output_file/.gz/}.tmp ${output_file/.gz/} && \
+    display_table ${output_file/.gz/} || { \
+	log "Failed to run CADD on ${input_vcf}. Quit now"; return 1; }
 }
 
 

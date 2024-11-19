@@ -1,6 +1,7 @@
 #! /usr/bin/env bash
 SCRIPT_DIR=$(dirname $(realpath ${BASH_SOURCE[0]}))
 source ${SCRIPT_DIR}/common_bash_utils.sh
+log "The base directory is ${BASE_DIR}"
 
 
 function conda_install_vep() {
@@ -810,6 +811,8 @@ function ClinVar_VCF_deploy() {
     local CACHEDIR=${2}
     local assembly_version=${3}
     local contig_map=${BASE_DIR}/data/liftover/GRC_to_ucsc.contig.map.tsv
+
+    [[ ! -f ${contig_map} ]] && { log "The contig map file ${contig_map} is not found, please check the file"; return 1; }
 
     if [[ -z ${assembly_version} ]]; then
         local assembly_version="GRCh37"

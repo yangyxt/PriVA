@@ -793,9 +793,10 @@ function gnomAD_liftover() {
             local hg19_vcf=${hg38_vcf/.${chr}/.hg19.${chr}}
             local hg19_vcf=${hg19_vcf/.bgz/.gz}
             log "About to concat the VCF files ${tmp_vcfs[*]} to ${hg19_vcf}, the original hg38 VCF file is ${hg38_vcf}"
+            check_vcf_validity ${hg19_vcf} || { \
             [[ -d $(dirname ${hg19_vcf}) ]] && \
             bcftools_concatvcfs -v "${tmp_vcfs[*]}" -o ${hg19_vcf} || \
-            { log "Failed to concat the VCF files ${tmp_vcfs[*]} to ${hg19_vcf}, please check the folder $(dirname ${hg19_vcf})"; return 1; }
+            { log "Failed to concat the VCF files ${tmp_vcfs[*]} to ${hg19_vcf}, please check the folder $(dirname ${hg19_vcf})"; return 1; } }
         else
             log "No VCF files found for chromosome ${chr} at hg19 in folder ${hg19_dir}"
         fi

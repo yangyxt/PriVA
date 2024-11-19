@@ -422,9 +422,10 @@ function CADD_install() {
 		rm ${CADD_parent_dir}/CADD-scripts.zip
 
 		# Get the base folder name from the unzipped directory
-		CADD_base_dir=$(find ${CADD_parent_dir}/ -maxdepth 1 -type d -name "CADD-scripts-*${cadd_version#v}" -print | head -n1) && \
+		CADD_base_dir=$(find ${CADD_parent_dir}/ -maxdepth 1 -type d -name "CADD-scripts-*${cadd_version#v}" -print | head -n1)
         [[ -z ${CADD_base_dir} ]] && { log "Could not find CADD scripts directory"; return 1; }
-		update_yaml ${config_file} "cadd_base_dir" "${CADD_base_dir}"
+		update_yaml ${config_file} "cadd_base_dir" "${CADD_base_dir}" && \
+        log "Now the CADD base directory is ${CADD_base_dir} and it's updated to the config file ${config_file}"
         local CADD_script=${CADD_base_dir}/CADD.sh && \
         local CADD_cache_dir=${CADD_base_dir}/data && \
         local CADD_prescore_dir=${CADD_cache_dir}/prescored && \

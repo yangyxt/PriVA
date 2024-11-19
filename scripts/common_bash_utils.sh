@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-SELF=$(basename ${BASH_SOURCE[0]})
+SELF=$(realpath ${BASH_SOURCE[0]})
 SELF_DIR=$(dirname ${SELF})
 BASE_DIR=$(dirname ${SELF_DIR})
 ARGPARSE=${SELF_DIR}/argparse.bash
@@ -615,6 +615,9 @@ function liftover_from_GRCh_to_ucsc () {
     [[ -z ${contig_map} ]] && local contig_map=${BASE_DIR}/data/liftover/GRC_to_ucsc.contig.map.tsv
     [[ -z ${output_vcf} ]] && local output_vcf=${input_vcf/.vcf/.addchr.vcf}
     [[ ! ${output_vcf} =~ \.vcf\.gz$ ]] && local output_vcf=${output_vcf/.vcf*/.vcf.gz}
+
+    [[ ! -f ${contig_map} ]] && { log "The contig map file ${contig_map} is not found, please check the file"; return 1; }
+    [[ ! -f ${input_vcf} ]] && { log "The input vcf file ${input_vcf} is not found, please check the file"; return 1; }
 
     # Upon test, we do not need to escape < in awk regex
     bcftools annotate --rename-chrs ${contig_map} ${input_vcf} -Ou | \

@@ -468,15 +468,15 @@ function CADD_install() {
     local snv_file_name=$(basename ${snv_prescore_url})
     local indel_file_name=$(basename ${indel_prescore_url})
 
-    [[ ! -f ${CADD_prescore_dir}/${assembly}_${cadd_version}/${snv_file_name} ]] && \
-    wget -c ${snv_prescore_url} -O ${CADD_prescore_dir}/${assembly}_${cadd_version}/${snv_file_name} && \
-    md5sum ${CADD_prescore_dir}/${assembly}_${cadd_version}/${snv_file_name} | grep -q ${snv_prescore_md5} && \
-    wget -c ${snv_prescore_url}.tbi -O ${CADD_prescore_dir}/${assembly}_${cadd_version}/${snv_file_name}.tbi
+    [[ ! -f ${CADD_prescore_dir}/${assembly}_${cadd_version}/incl_anno/${snv_file_name} ]] && \
+    wget -c ${snv_prescore_url} -O ${CADD_prescore_dir}/${assembly}_${cadd_version}/incl_anno/${snv_file_name} && \
+    md5sum ${CADD_prescore_dir}/${assembly}_${cadd_version}/incl_anno/${snv_file_name} | grep -q ${snv_prescore_md5} && \
+    wget -c ${snv_prescore_url}.tbi -O ${CADD_prescore_dir}/${assembly}_${cadd_version}/incl_anno/${snv_file_name}.tbi
 
-    [[ ! -f ${CADD_prescore_dir}/${assembly}_${cadd_version}/${indel_file_name} ]] && \
-    wget -c ${indel_prescore_url} -O ${CADD_prescore_dir}/${assembly}_${cadd_version}/${indel_file_name} && \
-    md5sum ${CADD_prescore_dir}/${assembly}_${cadd_version}/${indel_file_name} | grep -q ${indel_prescore_md5} && \
-    wget -c ${indel_prescore_url}.tbi -O ${CADD_prescore_dir}/${assembly}_${cadd_version}/${indel_file_name}.tbi
+    [[ ! -f ${CADD_prescore_dir}/${assembly}_${cadd_version}/incl_anno/${indel_file_name} ]] && \
+    wget -c ${indel_prescore_url} -O ${CADD_prescore_dir}/${assembly}_${cadd_version}/incl_anno/${indel_file_name} && \
+    md5sum ${CADD_prescore_dir}/${assembly}_${cadd_version}/incl_anno/${indel_file_name} | grep -q ${indel_prescore_md5} && \
+    wget -c ${indel_prescore_url}.tbi -O ${CADD_prescore_dir}/${assembly}_${cadd_version}/incl_anno/${indel_file_name}.tbi
 }
 
 

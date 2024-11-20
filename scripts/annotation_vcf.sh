@@ -538,6 +538,15 @@ function Calculate_CADD {
 	log "Output file ${output_file} is valid and updated. Skip this function for now."; \
 	return 0; }
 
+	# First convert UCSC-style chr names to GRCh-style
+    local nochr_vcf=${input_vcf/.vcf.gz/.nochr.vcf.gz}
+    liftover_from_ucsc_to_GRCh \
+	${input_vcf} \
+	"${BASE_DIR}/data/liftover/ucsc_to_GRC.contig.map.tsv" \
+	${nochr_vcf} || { \
+	log "Failed to convert chromosome names from UCSC to GRCh style for ${input_vcf}. Quit now"; 
+	return 1; }
+
 	# Determine the genome tag based on the assembly
 	if [[ ${assembly} == "GRCh37" ]] || [[ ${assembly} == "hg19" ]]; then
 		local genome_tag="GRCh37"
@@ -555,7 +564,7 @@ function Calculate_CADD {
     -a -p \
     -g ${genome_tag} \
     -o ${output_file} \
-    ${input_vcf} && \
+    ${nochr_vcf} && \
     gunzip -f ${output_file} && \
     mawk -F '\t' '$1 !~ /^##/{print;}' ${output_file/.gz/} > ${output_file/.gz/}.tmp && \
     mv ${output_file/.gz/}.tmp ${output_file/.gz/} && \

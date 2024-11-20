@@ -189,6 +189,14 @@ function main_workflow() {
 	log "Failed to add VEP annotation on ${anno_vcf}. Quit now"
 	return 1; }
 
+
+	# Now we annotate the VCF with CADD
+	Calculate_CADD \
+	${anno_vcf} \
+	${config_file} || { \
+	log "Failed to add CADD annotation on ${anno_vcf}. Quit now"
+	return 1; }
+
 }
 
 
@@ -515,22 +523,18 @@ function Calculate_CADD {
 	local threads=$(read_yaml ${config_file} "threads")
 	local cadd_base_dir=$(read_yaml ${config_file} "cadd_base_dir")
 	local assembly=$(read_yaml ${config_file} "assembly")
+	local tmp_dir=$(read_yaml ${config_file} "tmp_dir")
 	local cadd_script=${cadd_base_dir}/CADD.sh
 
 	check_vcf_validity ${input_vcf} || { \
 	log "The input vcf file ${input_vcf} is not valid. Please check the file"; return 1; }
 
-    if [[ ${output_file} -nt ${input_file} ]]; then
-        log "Output file ${output_file} is valid and updated. Skip this function for now."
-        return 0;
-    fi
-
     #Run CADD and CADD only output gzipped file.
-    [[ -z ${output_file} ]] && output_file=${input_vcf/.vcf*/.anno.txt.gz}
+    [[ -z ${output_file} ]] && output_file=${input_vcf/.vcf*/.cadd.tsv.gz}
 	[[ ! ${output_file} =~ \.gz$ ]] && output_file=${output_file}.gz  # Ensure the output file is gzipped
 
 	# Check if the output file is valid and updated. If so, skip this function
-	[[ -f ${output_file} ]] && [[ ${output_file} -nt ${input_vcf} ]] && { \
+	[[ -f ${output_file/.gz/} ]] && [[ ${output_file/.gz/} -nt ${input_vcf} ]] && { \
 	log "Output file ${output_file} is valid and updated. Skip this function for now."; \
 	return 0; }
 
@@ -545,7 +549,8 @@ function Calculate_CADD {
 	fi
 
 	# Run CADD
-    ${cadd_script} \
+	export TMPDIR=${tmp_dir}
+	conda run -n acmg ${cadd_script} \
     -c ${threads} \
     -a -p \
     -g ${genome_tag} \

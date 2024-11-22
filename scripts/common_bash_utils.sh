@@ -636,6 +636,7 @@ function liftover_from_ucsc_to_GRCh () {
     [[ -z ${output_vcf} ]] && local output_vcf=${input_vcf/.vcf/.rmchr.vcf}
     [[ ! ${output_vcf} =~ \.vcf\.gz$ ]] && local output_vcf=${output_vcf/.vcf*/.vcf.gz}
 
+	log "Starting to convert chromosome names from ucsc to GRCh style for ${input_vcf}"
     bcftools annotate --rename-chrs ${contig_map} ${input_vcf} -Ou | \
     bcftools sort -Oz -o ${output_vcf} && \
     tabix -f -p vcf ${output_vcf} && \

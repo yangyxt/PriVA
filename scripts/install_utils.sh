@@ -807,6 +807,56 @@ function gnomAD_liftover() {
 
 
 
+function clinvar_vep_annotation() {
+    local input_vcf=${1}
+    local assembly=${2}
+    local ref_genome=${3}
+    local vep_cache_dir=${4}
+    local threads=${5}
+
+    # Convert hg19/hg38 to GRCh37/GRCh38
+    [[ ${assembly} == "hg19" ]] && assembly="GRCh37"
+    [[ ${assembly} == "hg38" ]] && assembly="GRCh38"
+
+    # Check if VCF is already annotated
+    check_vcf_infotags ${input_vcf} "CSQ" && \
+    log "The input vcf ${input_vcf} is already annotated by VEP. Skip this step" && \
+    return 0
+
+    local tmp_tag=$(randomID)
+    local output_vcf=${input_vcf/.vcf*/.${tmp_tag}.vep.vcf}
+
+    log "Running basic VEP annotation with the command below:"
+    log "vep -i ${input_vcf} --format vcf --vcf --species homo_sapiens --assembly ${assembly} --cache --offline --merged --hgvs --symbol --canonical --numbers --stats_file ${input_vcf/.vcf*/.vep.stats.html} --fork ${threads} --buffer_size 10000 --fasta ${ref_genome} --dir_cache ${vep_cache_dir} --force_overwrite -o ${output_vcf}"
+
+    # Run VEP annotation with basic options
+    vep -i ${input_vcf} \
+    --format vcf \
+    --vcf \
+    --species homo_sapiens \
+    --assembly ${assembly} \
+    --cache \
+    --offline \
+    --merged \
+    --hgvs \
+    --symbol \
+    --canonical \
+    --numbers \
+    --stats_file ${input_vcf/.vcf*/.vep.stats.html} \
+    --fork ${threads:-4} \
+    --buffer_size 10000 \
+    --fasta ${ref_genome} \
+    --dir_cache ${vep_cache_dir} \
+    --force_overwrite \
+    -o ${output_vcf} && \
+    bcftools sort -Oz -o ${input_vcf/.vcf*/.vcf.gz} ${output_vcf} && \
+    tabix -f -p vcf ${input_vcf/.vcf*/.vcf.gz} && \
+    announce_remove_tmps ${output_vcf} && \
+    display_vcf ${input_vcf/.vcf*/.vcf.gz}
+}
+
+
+
 function ClinVar_VCF_deploy() {
     local config_file=${1}
     local CACHEDIR=${2}
@@ -840,7 +890,13 @@ function ClinVar_VCF_deploy() {
     fi
 
     local clinvar_vcf=$(read_yaml ${config_file} "clinvar_vcf")
-    check_vcf_validity ${clinvar_vcf} && { log "The ClinVar VCF file ${clinvar_vcf} is already downloaded"; return 0; }
+    local vep_cache_dir=$(read_yaml ${config_file} "vep_cache_dir")
+    local threads=$(read_yaml ${config_file} "threads")
+    local ref_genome=$(read_yaml ${config_file} "ref_genome")
+    local assembly=$(read_yaml ${config_file} "assembly")
+    check_vcf_validity ${clinvar_vcf} && \
+    check_vcf_infotags ${clinvar_vcf} "CSQ" && \
+    log "The ClinVar VCF file ${clinvar_vcf} is already downloaded" && return 0
 
     wget https://ftp.ncbi.nlm.nih.gov/pub/clinvar/vcf_${assembly_version}/clinvar.vcf.gz -O ${CACHEDIR}/clinvar.${assembly_version}.vcf.gz && \
     wget https://ftp.ncbi.nlm.nih.gov/pub/clinvar/vcf_${assembly_version}/clinvar.vcf.gz.tbi -O ${CACHEDIR}/clinvar.${assembly_version}.vcf.gz.tbi && \
@@ -849,6 +905,13 @@ function ClinVar_VCF_deploy() {
     ${CACHEDIR}/clinvar.${assembly_version}.vcf.gz \
     ${contig_map} \
     ${CACHEDIR}/clinvar.${ucsc_assembly_version}.vcf.gz && \
+    check_vcf_validity ${CACHEDIR}/clinvar.${ucsc_assembly_version}.vcf.gz && \
+    clinvar_vep_annotation \
+    ${CACHEDIR}/clinvar.${ucsc_assembly_version}.vcf.gz \
+    ${assembly} \
+    ${ref_genome} \
+    ${vep_cache_dir} \
+    ${threads} && \
     check_vcf_validity ${CACHEDIR}/clinvar.${ucsc_assembly_version}.vcf.gz && \
     update_yaml ${config_file} "clinvar_vcf" "${CACHEDIR}/clinvar.${ucsc_assembly_version}.vcf.gz"
 }

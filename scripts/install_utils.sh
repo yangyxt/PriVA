@@ -410,7 +410,7 @@ function CADD_install() {
         local CADD_parent_dir=${REPLY}
 
 		# Check if the CADD scripts directory exists, if not, download the zip file and unzip it
-		local CADD_base_dir=$(find ${CADD_parent_dir}/ -maxdepth 1 -type d -name "CADD-scripts-*${cadd_version#v}" -print | head -n1)
+		local CADD_base_dir=$(find ${CADD_parent_dir}/ -maxdepth 1 -type d -name "CADD-scripts-*${cadd_version#v}*" -print | head -n1)
 		[[ ! -d ${CADD_base_dir} ]] && \
 		local CADD_zip_download_url=$(read_yaml "${config_file}" "cadd_zip_download_url") && \
 		wget ${CADD_zip_download_url} -O ${CADD_parent_dir}/CADD-scripts.zip && \
@@ -418,7 +418,7 @@ function CADD_install() {
 		rm ${CADD_parent_dir}/CADD-scripts.zip
 
 		# Get the base folder name from the unzipped directory
-		CADD_base_dir=$(find ${CADD_parent_dir}/ -maxdepth 1 -type d -name "CADD-scripts-*${cadd_version#v}" -print | head -n1)
+		CADD_base_dir=$(find ${CADD_parent_dir}/ -maxdepth 1 -type d -name "CADD-scripts-*${cadd_version#v}*" -print | head -n1)
         [[ -z ${CADD_base_dir} ]] && { log "Could not find CADD scripts directory"; return 1; }
 		update_yaml ${config_file} "cadd_base_dir" "${CADD_base_dir}" && \
         log "Now the CADD base directory is ${CADD_base_dir} and it's updated to the config file ${config_file}"

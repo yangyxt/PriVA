@@ -558,10 +558,11 @@ function Calculate_CADD {
 	fi
 
 	# Run CADD
+	log "Running CADD script ${cadd_script}"
 	export TMPDIR=${tmp_dir}
 	conda run -n acmg ${cadd_script} \
     -c ${threads} \
-    -a -p \
+    -a -p -m -d \
     -g ${genome_tag} \
     -o ${output_file} \
     ${nochr_vcf} && \

@@ -133,6 +133,7 @@ function vep_install_wrapper() {
     [[ -f ${VEP_PLUGINSDIR}/SameCodon.pm ]] && \
     [[ -f ${VEP_PLUGINSDIR}/NMD.pm ]] && \
     [[ -f ${VEP_PLUGINSDIR}/PrimateAI.pm ]] && \
+	[[ -f ${VEP_PLUGINSDIR}/SingleLetterAA.pm ]] && \
     { log "The PERL5LIB value and PATH value already include ${VEP_DESTDIR} and ${VEP_PLUGINSDIR}, indicating the following installation process has already been succesfully performed. Skip the function for now."; return 0; }
 
     local conda_env_name=$(basename $CONDA_PREFIX)
@@ -145,7 +146,7 @@ function vep_install_wrapper() {
     local cmd="vep_install -d ${VEP_DESTDIR} --AUTO acp -s homo_sapiens_merged --NO_HTSLIB --NO_BIOPERL --CONVERT"
     [[ -n "$VEP_CACHEDIR" ]] && cmd+=" --CACHEDIR $VEP_CACHEDIR"
     [[ -n "$VEP_ASSEMBLY" ]] && cmd+=" --ASSEMBLY $VEP_ASSEMBLY"
-    [[ -n "$VEP_PLUGINS" ]] && [[ $VEP_PLUGINS != "empty" ]] && cmd+=" --PLUGINS $VEP_PLUGINS,SpliceAI,SpliceVault,UTRAnnotator,AlphaMissense,GO,Phenotypes,Conservation,LOEUF,SameCodon,NMD,PrimateAI" || cmd+=" --PLUGINS SpliceAI,SpliceVault,UTRAnnotator,AlphaMissense,GO,Phenotypes,Conservation,LOEUF,SameCodon,NMD,PrimateAI"
+    [[ -n "$VEP_PLUGINS" ]] && [[ $VEP_PLUGINS != "empty" ]] && cmd+=" --PLUGINS $VEP_PLUGINS,SpliceAI,SpliceVault,UTRAnnotator,AlphaMissense,GO,Phenotypes,Conservation,LOEUF,SameCodon,NMD,PrimateAI,SingleLetterAA" || cmd+=" --PLUGINS SpliceAI,SpliceVault,UTRAnnotator,AlphaMissense,GO,Phenotypes,Conservation,LOEUF,SameCodon,NMD,PrimateAI,SingleLetterAA"
     [[ -n "$VEP_PLUGINSDIR" ]] && cmd+=" --PLUGINSDIR $VEP_PLUGINSDIR"
 
     # Execute the command
@@ -193,6 +194,9 @@ function VEP_plugins_install() {
     # Then install AlphaMissense
     AlphaMissense_install ${config_file} ${VEP_PLUGINSCACHEDIR} ${ASSEMBLY_VERSION} ${VEP_PLUGINSDIR} || \
     { log "Failed to install AlphaMissense"; return 1; }
+	# Then annotate the AlphaMissense prescore file to vcf file
+	AlphaMissense_anno ${config_file} || \
+	{ log "Failed to convert the AlphaMissense prescore file to vcf file and annotate protein domains to it"; return 1; }
 
 
     # Then install SpliceAI
@@ -619,6 +623,37 @@ function AlphaMissense_install() {
 }
 
 
+
+function AlphaMissense_anno() {
+	local config_file=${1}
+
+	local alphamissense_prescore=$(read_yaml ${config_file} "alphamissense_prescore")
+	local alphamissense_vcf=$(read_yaml ${config_file} "alphamissense_vcf")
+
+	[[ -f ${alphamissense_vcf} ]] && \
+	[[ ${alphamissense_vcf} -nt ${alphamissense_prescore} ]] && \
+	check_vcf_infotags ${alphamissense_vcf} "CSQ" && \
+	log "The AlphaMissense VCF file ${alphamissense_vcf} is already annotated by VEP. Skip this step" && return 0
+	
+	local convert_py=${SCRIPT_DIR}/alphmis_tsv2vcf.py
+	python ${convert_py} \
+	${alphamissense_prescore} \
+	${alphamissense_prescore/.tsv/.vcf} && \
+	local vep_cache_dir=$(read_yaml ${config_file} "vep_cache_dir") && \
+	local threads=$(read_yaml ${config_file} "threads") && \
+	local ref_genome=$(read_yaml ${config_file} "ref_genome") && \
+	local assembly=$(read_yaml ${config_file} "assembly") && \
+	basic_vep_annotation \
+	${alphamissense_prescore/.tsv/.vcf} \
+	${assembly} \
+	${ref_genome} \
+	${vep_cache_dir} \
+	${threads} && \
+	display_vcf ${alphamissense_prescore/.tsv/.vep.vcf} && \
+	update_yaml ${config_file} "alphamissense_vcf" "${alphamissense_prescore/.tsv/.vep.vcf}"
+}
+
+
 function LOEUF_install() {
 	# The LOEUF plugin cache files are stored in the github repo because the original url is not accessible anymore
     local config_file=${1}
@@ -807,8 +842,11 @@ function gnomAD_liftover() {
 
 
 
-function clinvar_vep_annotation() {
-    local input_vcf=${1}
+function basic_vep_annotation() {
+    # This function can be used to annotate ClinVar VCF file
+	# This function can be used to annotate AlphaMissense VCF file (converted from TSV file)
+
+	local input_vcf=${1}
     local assembly=${2}
     local ref_genome=${3}
     local vep_cache_dir=${4}
@@ -818,13 +856,16 @@ function clinvar_vep_annotation() {
     [[ ${assembly} == "hg19" ]] && assembly="GRCh37"
     [[ ${assembly} == "hg38" ]] && assembly="GRCh38"
 
-    # Check if VCF is already annotated
-    check_vcf_infotags ${input_vcf} "CSQ" && \
-    log "The input vcf ${input_vcf} is already annotated by VEP. Skip this step" && \
-    return 0
-
     local tmp_tag=$(randomID)
-    local output_vcf=${input_vcf/.vcf*/.${tmp_tag}.vep.vcf}
+    local tmp_output=${input_vcf/.vcf*/.${tmp_tag}.vep.vcf}
+	local output_vcf=${input_vcf/.vcf*/.vep.vcf.gz}
+
+	# Check if VCF is already annotated
+	check_vcf_validity ${output_vcf} && \
+    check_vcf_infotags ${output_vcf} "CSQ" && \
+	[[ ${output_vcf} -nt ${input_vcf} ]] && \
+    log "The output vcf ${output_vcf} is already annotated by VEP. Skip this step" && \
+    return 0
 
     log "Running basic VEP annotation with the command below:"
     log "vep -i ${input_vcf} --format vcf --vcf --species homo_sapiens --assembly ${assembly} --cache --offline --merged --hgvs --symbol --canonical --numbers --stats_file ${input_vcf/.vcf*/.vep.stats.html} --fork ${threads} --buffer_size 10000 --fasta ${ref_genome} --dir_cache ${vep_cache_dir} --force_overwrite -o ${output_vcf}"
@@ -838,21 +879,24 @@ function clinvar_vep_annotation() {
     --cache \
     --offline \
     --merged \
-    --hgvs \
+	--use_transcript_ref \
+	--hgvs \
     --symbol \
     --canonical \
+	--domains \
     --numbers \
+	--plugin SingleLetterAA \
     --stats_file ${input_vcf/.vcf*/.vep.stats.html} \
     --fork ${threads:-4} \
     --buffer_size 10000 \
     --fasta ${ref_genome} \
     --dir_cache ${vep_cache_dir} \
     --force_overwrite \
-    -o ${output_vcf} && \
-    bcftools sort -Oz -o ${input_vcf/.vcf*/.vcf.gz} ${output_vcf} && \
-    tabix -f -p vcf ${input_vcf/.vcf*/.vcf.gz} && \
-    announce_remove_tmps ${output_vcf} && \
-    display_vcf ${input_vcf/.vcf*/.vcf.gz}
+    -o ${tmp_output} && \
+    bcftools sort -Oz -o ${output_vcf} ${tmp_output} && \
+    tabix -f -p vcf ${output_vcf} && \
+    announce_remove_tmps ${tmp_output} && \
+    display_vcf ${output_vcf}
 }
 
 
@@ -896,7 +940,7 @@ function ClinVar_VCF_deploy() {
     local assembly=$(read_yaml ${config_file} "assembly")
     check_vcf_validity ${clinvar_vcf} && \
     check_vcf_infotags ${clinvar_vcf} "CSQ" && \
-    log "The ClinVar VCF file ${clinvar_vcf} is already downloaded" && return 0
+    log "The ClinVar VCF file ${clinvar_vcf} is already downloaded and annotated by VEP. Skip the following steps" && return 0
 
     wget https://ftp.ncbi.nlm.nih.gov/pub/clinvar/vcf_${assembly_version}/clinvar.vcf.gz -O ${CACHEDIR}/clinvar.${assembly_version}.vcf.gz && \
     wget https://ftp.ncbi.nlm.nih.gov/pub/clinvar/vcf_${assembly_version}/clinvar.vcf.gz.tbi -O ${CACHEDIR}/clinvar.${assembly_version}.vcf.gz.tbi && \
@@ -906,14 +950,14 @@ function ClinVar_VCF_deploy() {
     ${contig_map} \
     ${CACHEDIR}/clinvar.${ucsc_assembly_version}.vcf.gz && \
     check_vcf_validity ${CACHEDIR}/clinvar.${ucsc_assembly_version}.vcf.gz && \
-    clinvar_vep_annotation \
+    basic_vep_annotation \
     ${CACHEDIR}/clinvar.${ucsc_assembly_version}.vcf.gz \
     ${assembly} \
     ${ref_genome} \
     ${vep_cache_dir} \
     ${threads} && \
-    check_vcf_validity ${CACHEDIR}/clinvar.${ucsc_assembly_version}.vcf.gz && \
-    update_yaml ${config_file} "clinvar_vcf" "${CACHEDIR}/clinvar.${ucsc_assembly_version}.vcf.gz"
+    check_vcf_validity ${CACHEDIR}/clinvar.${ucsc_assembly_version}.vep.vcf.gz && \
+    update_yaml ${config_file} "clinvar_vcf" "${CACHEDIR}/clinvar.${ucsc_assembly_version}.vep.vcf.gz"
 }
 
 
@@ -1061,6 +1105,7 @@ function LoFtee_install() {
         echo ""
     fi
 }
+
 
 
 # Main installation function

@@ -343,7 +343,7 @@ function anno_clinvar_data () {
 	log "The input vcf ${input_vcf} already contains the INFO tags CLNDN,CLNHGVS,CLNREVSTAT,CLNSIG,GENEINFO. We do not need to add them again" && \
 	return 0
 
-	bcftools annotate -a ${clinvar_vcf} -c CHROM,POS,REF,ALT,.INFO/CLNDN,.INFO/CLNHGVS,.INFO/CLNREVSTAT,.INFO/CLNSIG,.INFO/GENEINFO -Ou ${input_vcf} | \
+	bcftools annotate -a ${clinvar_vcf} -c CHROM,POS,REF,ALT,.INFO/CLNDN,.INFO/CLNHGVS,.INFO/CLNREVSTAT,.INFO/CLNSIG,.INFO/GENEINFO,.INFO/CLNCSQ:=INFO/CSQ -Ou ${input_vcf} | \
 	bcftools sort -Oz -o ${output_vcf} && \
 	tabix -f -p vcf ${output_vcf} && \
 	mv ${output_vcf} ${input_vcf} && \
@@ -481,7 +481,7 @@ function anno_VEP_data() {
     --verbose \
     --vcf \
     --species homo_sapiens \
-    --use_given_ref \
+    --use_transcript_ref \
     --assembly ${assembly} \
     --cache \
 	--offline \

@@ -2,6 +2,14 @@ import gzip
 import subprocess
 import sys
 import os
+import pysam
+
+
+def get_contig_header_from_tabix(tsv_gz_file):
+    """Get ordered list of unique contigs from a tabix-indexed TSV file"""
+    tbx = pysam.TabixFile(tsv_gz_file)
+    for contig in tbx.contigs:
+        yield f"##contig=<ID={contig}>"
 
 
 def tsv_to_vcf(input_tsv, output_vcf):
@@ -9,8 +17,8 @@ def tsv_to_vcf(input_tsv, output_vcf):
     Convert AlphaMissense TSV file to VCF format
     
     Parameters:
-    input_tsv (str): Path to input TSV file
-    output_vcf (str): Path to output VCF file
+    input_tsv (str): Path to input TSV file, must be bgzipped and tabixed
+    output_vcf (str): Path to output VCF file, intended to be gzipped and tabixed
     """
     # VCF header
     vcf_header = "\n".join([
@@ -20,20 +28,28 @@ def tsv_to_vcf(input_tsv, output_vcf):
         "##INFO=<ID=PVAR,Number=1,Type=String,Description=\"Protein Variant\">",
         "##INFO=<ID=AM_PATHOGENICITY,Number=1,Type=Float,Description=\"Pathogenicity Score\">",
         "##INFO=<ID=AM_CLASS,Number=1,Type=String,Description=\"Classification\">",
-        "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO"
     ])
     
     if not output_vcf.endswith(".gz"):
         raise ValueError("Output VCF file must end with .gz")
         
     tmp_output = output_vcf + ".tmp.vcf"
+    header_line = "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO"
+    # Generate contig header lines
+    contig_headers = list(get_contig_header_from_tabix(input_tsv))
+
+    # Extract all the contigs in the tsv file
     # Open gzip file in text mode with explicit encoding
     with gzip.open(input_tsv, 'rt', encoding='utf-8') as fin, open(tmp_output, 'w') as fout:
         # Write VCF header
         fout.write(vcf_header + '\n')
-        
+        fout.write('\n'.join(contig_headers) + '\n')
+        fout.write(header_line + '\n')
         # Skip header in TSV
-        header = fin.readline()
+        _ = fin.readline()
+
+        # Store VCF lines
+        vcf_lines = [header_line]
         
         # Process each line
         for line in fin:

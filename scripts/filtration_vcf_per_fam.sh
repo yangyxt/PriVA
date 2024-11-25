@@ -55,16 +55,16 @@ function filter_allele_based_on_pedigree_with_py {
     log "Finish filtering the records where control sample has homozygous or hemizygous GTs or the records no patients carrying the variant allele."$'\n\n'
 }
 
-# Specifically, we only filter out variants carried by healthy parents in homozygous form
-local ped_filter_vcf=${pre_anno_vcf/.vcf/.ped.vcf}
-filter_allele_based_on_pedigree_with_py \
--i ${pre_anno_vcf} \
--o ${ped_filter_vcf} \
--p ${ped_file} \
--f ${fam_name} && \
-log "Successfully filter on pedigree information on ${pre_anno_vcf}. The result is ${ped_filter_vcf}" && \
-display_vcf ${ped_filter_vcf} || { \
-log "Failed to filter on pedigree information on ${pre_anno_vcf}. Quit now"
-return 1; }
+
+
+function filter_af () {
+	local config_file=$1
+	local input_vcf=$2
+	local output_vcf=$3
+
+	
+}
+
+
 
 

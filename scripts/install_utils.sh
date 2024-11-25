@@ -197,6 +197,8 @@ function VEP_plugins_install() {
 	# Then annotate the AlphaMissense prescore file to vcf file
 	AlphaMissense_anno ${config_file} || \
 	{ log "Failed to convert the AlphaMissense prescore file to vcf file and annotate protein domains to it"; return 1; }
+	AlphaMissense_stat ${config_file} || \
+	{ log "Failed to generate the AlphaMissense statistics JSON file"; return 1; }
 
 
     # Then install SpliceAI
@@ -650,8 +652,28 @@ function AlphaMissense_anno() {
 	${vep_cache_dir} \
 	${threads} && \
 	display_vcf ${alphamissense_prescore/.tsv/.vep.vcf} && \
-	update_yaml ${config_file} "alphamissense_vcf" "${alphamissense_prescore/.tsv/.vep.vcf}"
+	update_yaml ${config_file} "alphamissense_vcf" "${alphamissense_prescore/.tsv/.vep.vcf}" && \
+	log "The AlphaMissense VCF file ${alphamissense_prescore/.tsv/.vep.vcf} is annotated by VEP and saved to ${alphamissense_vcf}"
 }
+
+
+function AlphaMissense_stat() {
+	local config_file=${1}
+	local alphamissense_stat=$(read_yaml ${config_file} "alphamissense_stat_json")
+	local alphamissense_vcf=$(read_yaml ${config_file} "alphamissense_vcf")
+
+	[[ -f ${alphamissense_stat} ]] && \
+	[[ ${alphamissense_stat} -nt ${alphamissense_vcf} ]] && \
+	log "The AlphaMissense statistics JSON file ${alphamissense_stat} is already generated, skip this step" && return 0
+
+	local stat_py=${SCRIPT_DIR}/stat_protein_domain_amscores.py && \
+	python ${stat_py} \
+	${alphamissense_vcf} \
+	${alphamissense_vcf/.vcf*/.prot.domain.stats.json} && \
+	update_yaml ${config_file} "alphamissense_stat_json" "${alphamissense_vcf/.vcf*/.prot.domain.stats.json}" && \
+	log "The AlphaMissense statistics JSON file ${alphamissense_vcf/.vcf*/.prot.domain.stats.json} is generated and saved to ${alphamissense_stat}"
+}
+
 
 
 function LOEUF_install() {

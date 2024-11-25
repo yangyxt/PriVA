@@ -61,7 +61,7 @@ class DomainScoreCollector:
             try:
                 am_score = float(record.info['AM_PATHOGENICITY'])
                 prot_var = record.info['PVAR']
-				aa_pos = prot_var[:-1]
+                aa_pos = prot_var[:-1]
                 
                 # Handle CSQ as tuple - take first element if it's a tuple
                 csq_value = record.info['CSQ']
@@ -95,12 +95,12 @@ class DomainScoreCollector:
                             if 'distribution' not in current_dict:
                                 current_dict['distribution'] = {}
                             # Add score to distribution
-							if aa_pos not in current_dict['distribution']:
-								current_dict['distribution'][aa_pos] = am_score
-							elif am_score > current_dict['distribution'][aa_pos]:
-								# We only keep the strongest structural change at this AA position
-								# The resulting distribution will follow Poisson distribution
-								current_dict['distribution'][aa_pos] = am_score
+                            if aa_pos not in current_dict['distribution']:
+                                current_dict['distribution'][aa_pos] = am_score
+                            elif am_score > current_dict['distribution'][aa_pos]:
+                                # We only keep the strongest structural change at this AA position
+                                # The resulting distribution will follow Poisson distribution
+                                current_dict['distribution'][aa_pos] = am_score
                         
             except (KeyError, ValueError) as e:
                 print(f"Error processing record {record.chrom}:{record.pos} - {str(e)}")

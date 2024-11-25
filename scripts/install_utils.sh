@@ -631,11 +631,14 @@ function AlphaMissense_anno() {
 
 	local alphamissense_prescore=$(read_yaml ${config_file} "alphamissense_prescore")
 	local alphamissense_vcf=$(read_yaml ${config_file} "alphamissense_vcf")
+	local alphamissense_vep_vcf=$(read_yaml ${config_file} "alphamissense_vep_vcf")
 
-	[[ -f ${alphamissense_vcf} ]] && \
+	check_vcf_validity ${alphamissense_vcf} && \
 	[[ ${alphamissense_vcf} -nt ${alphamissense_prescore} ]] && \
-	check_vcf_infotags ${alphamissense_vcf} "CSQ" && \
-	log "The AlphaMissense VCF file ${alphamissense_vcf} is already annotated by VEP. Skip this step" && return 0
+	check_vcf_validity ${alphamissense_vep_vcf} && \
+	[[ ${alphamissense_vep_vcf} -nt ${alphamissense_vcf} ]] && \
+	check_vcf_infotags ${alphamissense_vep_vcf} "CSQ" && \
+	log "The AlphaMissense VCF file ${alphamissense_vcf} is already annotated by VEP to ${alphamissense_vep_vcf}. Skip this step" && return 0
 	
 	local convert_py=${SCRIPT_DIR}/alphmis_tsv2vcf.py
 	python ${convert_py} \

@@ -887,7 +887,7 @@ function basic_vep_annotation() {
     --numbers \
 	--plugin SingleLetterAA \
     --stats_file ${input_vcf/.vcf*/.vep.stats.html} \
-    --fork ${threads:-4} \
+    --fork ${threads} \
     --buffer_size 10000 \
     --fasta ${ref_genome} \
     --dir_cache ${vep_cache_dir} \

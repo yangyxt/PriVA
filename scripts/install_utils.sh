@@ -655,7 +655,7 @@ function AlphaMissense_anno() {
 	${vep_cache_dir} \
 	${threads} && \
 	display_vcf ${alphamissense_prescore/.tsv/.vep.vcf} && \
-	update_yaml ${config_file} "alphamissense_vcf" "${alphamissense_prescore/.tsv/.vep.vcf}" && \
+	update_yaml ${config_file} "alphamissense_vep_vcf" "${alphamissense_prescore/.tsv/.vep.vcf}" && \
 	log "The AlphaMissense VCF file ${alphamissense_prescore/.tsv/.vep.vcf} is annotated by VEP and saved to ${alphamissense_vcf}"
 }
 
@@ -663,7 +663,7 @@ function AlphaMissense_anno() {
 function AlphaMissense_stat() {
 	local config_file=${1}
 	local alphamissense_stat=$(read_yaml ${config_file} "alphamissense_stat_json")
-	local alphamissense_vcf=$(read_yaml ${config_file} "alphamissense_vcf")
+	local alphamissense_vcf=$(read_yaml ${config_file} "alphamissense_vep_vcf")
 
 	[[ -f ${alphamissense_stat} ]] && \
 	[[ ${alphamissense_stat} -nt ${alphamissense_vcf} ]] && \

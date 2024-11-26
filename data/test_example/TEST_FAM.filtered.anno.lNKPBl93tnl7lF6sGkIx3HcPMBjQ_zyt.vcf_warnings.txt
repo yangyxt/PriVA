@@ -1,2 +1,0 @@
-WARNING: Failed to instantiate plugin PrimateAI: The PrimateAI scores file contains GRCh37 coordinates, but you have not selected the GRCh37 assembly in your input. Please check and try again.
-

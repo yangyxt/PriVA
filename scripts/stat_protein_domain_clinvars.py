@@ -6,18 +6,29 @@ from collections import defaultdict
 from typing import Dict, List
 import sys
 import json
+import logging
 
 
-class DomainAMScoreCollector:
-    def __init__(self, vcf_path: str):
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
+console_handler=logging.StreamHandler()
+console_handler.setLevel(logging.INFO)
+formatter = logging.Formatter("%(levelname)s:%(asctime)s:%(funcName)s:%(lineno)s:%(message)s")
+console_handler.setFormatter(formatter)
+logger.addHandler(console_handler)
+
+
+class DomainCinVarCollector:
+    def __init__(self, vcf_path: str, logger = logger):
         """Initialize collector with VCF file path."""
         self.vcf_path = vcf_path
         self.scores_dict = self._create_nested_dict()
+        self.logger = logger
         
     @staticmethod
     def _create_nested_dict():
         """Create a nested defaultdict that allows arbitrary depth."""
-        return defaultdict(lambda: defaultdict(DomainAMScoreCollector._create_nested_dict))
+        return defaultdict(lambda: defaultdict(DomainCinVarCollector._create_nested_dict))
     
     def _parse_domain_hierarchy(self, domains_str: str) -> List[tuple]:
         """Parse domain string into hierarchical components.
@@ -53,15 +64,18 @@ class DomainAMScoreCollector:
         # Get CSQ format from header
         csq_format = str(vcf.header).split('Format: ')[-1].strip('>"').split('|')
         domains_idx = csq_format.index('DOMAINS')
-        gene_idx = csq_format.index('Gene')
+        consq_idx = csq_format.index('Consequence')
         feature_type_idx = csq_format.index('Feature_type')
         transcript_idx = csq_format.index('Feature')
         
         for record in vcf:
             try:
-                am_score = float(record.info['AM_PATHOGENICITY'])
-                prot_var = record.info['PVAR']
-                aa_pos = prot_var[:-1]
+                if 'CLNREVSTAT' not in record.info or 'CLNSIG' not in record.info:
+                    self.logger.warning(f"This record {record.chrom}:{record.pos} is recording an oncogenic variant instead of a Mendelian Pathogenic variant. Continue")
+                    continue
+
+                rev_status = ",".join(record.info['CLNREVSTAT'])
+                cln_sig = ",".join(record.info['CLNSIG'])
                 
                 # Handle CSQ as tuple - take first element if it's a tuple
                 csq_value = record.info['CSQ']
@@ -79,14 +93,15 @@ class DomainAMScoreCollector:
                         continue
                     
                     domains_str = fields[domains_idx]
-                    ensg_id = fields[gene_idx]
+                    enst_id = fields[transcript_idx]
+                    consq = fields[consq_idx]
                     
-                    if not domains_str or not ensg_id:
+                    if not domains_str or not enst_id:
                         continue
                     
                     # Process each domain annotation
                     for db_name, hierarchy in self._parse_domain_hierarchy(domains_str):
-                        current_dict = self.scores_dict[ensg_id][db_name]
+                        current_dict = self.scores_dict[enst_id][db_name]
                         
                         # Navigate through domain hierarchy
                         for level in hierarchy:
@@ -94,28 +109,26 @@ class DomainAMScoreCollector:
                             # Initialize distribution if not exists
                             if 'distribution' not in current_dict:
                                 current_dict['distribution'] = {}
-                            # Add score to distribution
-                            if aa_pos not in current_dict['distribution']:
-                                current_dict['distribution'][aa_pos] = am_score
-                            elif am_score > current_dict['distribution'][aa_pos]:
-                                # We only keep the strongest structural change at this AA position
-                                # The resulting distribution will follow Poisson distribution
-                                current_dict['distribution'][aa_pos] = am_score
+                            # collect clinrevstatus, clnsig, and mole_consq
+                            if "clinrevstatus" not in current_dict['distribution']:
+                                current_dict['distribution']["clinrevstatus"] = [rev_status]
+                            else:
+                                current_dict['distribution']["clinrevstatus"].append(rev_status)
+                            if "clnsig" not in current_dict['distribution']:
+                                current_dict['distribution']["clnsig"] = [cln_sig]
+                            else:
+                                current_dict['distribution']["clnsig"].append(cln_sig)
+                            if "mole_consq" not in current_dict['distribution']:
+                                current_dict['distribution']["mole_consq"] = [consq]
+                            else:
+                                current_dict['distribution']["mole_consq"].append(consq)
+                            
                         
             except (KeyError, ValueError) as e:
                 print(f"Error processing record {record.chrom}:{record.pos} - {str(e)}")
                 continue
 
-    def finalize_scores(self):
-        """Convert score dict to numpy arrays."""
-        def convert_nested(d):
-            for k, v in d.items():
-                if k == 'distribution' and isinstance(v, dict):
-                    d[k] = np.array(list(v.values()))
-                elif isinstance(v, dict):
-                    convert_nested(v)
-        
-        convert_nested(self.scores_dict)
+
     
     def convert_for_json(self, d) -> Dict:
         """Return the collected scores dictionary with numpy arrays converted to lists."""
@@ -132,37 +145,22 @@ class DomainAMScoreCollector:
 
     def load_scores_from_json(json_path: str) -> Dict:
         """Load scores from JSON and convert lists back to numpy arrays."""
-        def convert_from_json(d):
-            output = {}
-            for k, v in d.items():
-                if isinstance(v, dict):
-                    output[k] = convert_from_json(v)
-                elif k == 'distribution' and isinstance(v, list):
-                    output[k] = np.array(v)  # Convert list back to numpy array
-                else:
-                    output[k] = v
-            return output
-        
         with open(json_path, 'r') as f:
             data = json.load(f)
-        return convert_from_json(data)
+        return data
 
 
 def main(vcf_path, output_json):
     '''
     Notice that the input VCF file must be the AlphaMissense VCF file annotated by VEP with the --domains argument.
     '''
-    collector = DomainAMScoreCollector(vcf_path)
+    collector = DomainCinVarCollector(vcf_path)
     collector.collect_scores()
-    collector.finalize_scores()
     
-    # Get scores with numpy arrays converted to lists
-    scores_dict = collector.convert_for_json(collector.scores_dict)
-
     # Output the scores (nested dict) to a JSON file
     if output_json:
         with open(output_json, 'w') as f:
-            json.dump(scores_dict, f, indent=4)
+            json.dump(collector.scores_dict, f, indent=4)
 
     return collector.scores_dict
         

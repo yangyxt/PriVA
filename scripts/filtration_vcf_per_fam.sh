@@ -7,6 +7,13 @@
 
 # Maintainer: yangyxt@gmail.com, yangyxt@hku.hk
 
+SCRIPT_DIR=$(dirname $(readlink -f $0))
+source ${SCRIPT_DIR}/common_bash_utils.sh
+
+
+# Just two very simple functions to filter out the variants based on the pedigree information
+# The first function is to filter out the variants where patients GT are the same with controls GT info
+# The second function is to filter out the variants based on the allele frequency
 
 
 function filter_allele_based_on_pedigree_with_py {
@@ -23,7 +30,7 @@ function filter_allele_based_on_pedigree_with_py {
     done
 
     if [[ -z ${output_vcf} ]]; then
-        local output_vcf=${input_vcf/.vcf/.rmfit.vcf}
+        local output_vcf=${input_vcf/.vcf/.filtered.vcf}
     fi
 
     if [[ -z ${family_name} ]]; then
@@ -48,10 +55,12 @@ function filter_allele_based_on_pedigree_with_py {
     -v ${input_vcf} \
     -p ${pedfile} \
     -f ${family_name} \
-    -o ${output_vcf}
-    check_return_code
-
-	display_vcf ${output_vcf}
+    -o ${output_vcf} && \
+    tabix -p vcf -f ${output_vcf} && \
+	display_vcf ${output_vcf} || { \
+    log "Failed to filter the records where patients GT are the same with controls GT info"; \
+    return 1; }
+    
     log "Finish filtering the records where control sample has homozygous or hemizygous GTs or the records no patients carrying the variant allele."$'\n\n'
 }
 
@@ -60,11 +69,99 @@ function filter_allele_based_on_pedigree_with_py {
 function filter_af () {
 	local config_file=$1
 	local input_vcf=$2
-	local output_vcf=$3
 
-	
+    local af_cutoff=$(read_yaml ${config_file} "af_cutoff")
+    local tmp_tag=$(randomID)
+    local output_vcf=${input_vcf/.vcf*/.${tmp_tag}.vcf.gz}
+
+    check_vcf_validity ${input_vcf} && \
+    [[ $(bcftools view -h ${input_vcf} | grep -c "AF_joint > ${af_cutoff}") -gt 0 ]] && \
+    log "The input VCF ${input_vcf} already been filtered on allele frequency at the cutoff ${af_cutoff}" && \
+    return 0
+
+    bcftools view -e "AF_joint > ${af_cutoff}" -Oz -o ${output_vcf} ${input_vcf} && \
+    mv ${output_vcf} ${input_vcf} && \
+    tabix -p vcf -f ${input_vcf} && \
+    display_vcf ${input_vcf}
 }
 
 
+function extract_fam_vcf () {
+    local input_vcf=${1}
+    local ped_file=${2}
+    local family_name=${3}
 
+    local fam_members=$(awk -v family_name=${family_name} '$1 == family_name {print $2}' ${ped_file} | tr '\n' ',')
+    local tmp_tag=$(randomID)
+    local output_vcf=${input_vcf/.vcf*/.${tmp_tag}.vcf.gz}
+
+    check_vcf_validity ${input_vcf} || { \
+    log "The input VCF ${input_vcf} is not valid"; \
+    return 1; }
+
+    check_vcf_validity ${input_vcf/.vcf*/.${family_name}.vcf.gz} 1 ${fam_members::-1} && \
+    [[ ${input_vcf/.vcf*/.${family_name}.vcf.gz} -nt ${input_vcf} ]] && \
+    { log "The output VCF ${input_vcf/.vcf*/.${family_name}.vcf.gz} is valid and updated"; \
+    return 0; }
+
+    log "Running command: bcftools view --force-samples -s ${fam_members::-1} -Oz -o ${output_vcf} ${input_vcf}"
+    bcftools view --force-samples -s ${fam_members::-1} -Oz -o ${output_vcf} ${input_vcf} && \
+    mv ${output_vcf} ${input_vcf/.vcf*/.${family_name}.vcf.gz} && \
+    tabix -p vcf -f ${input_vcf/.vcf*/.${family_name}.vcf.gz} && \
+    display_vcf ${input_vcf/.vcf*/.${family_name}.vcf.gz}
+}
+
+
+function main_filtration () {
+    local OPTIND v f c
+    while getopts v:f:c: args
+    do
+        case ${args} in
+            v) local ped_vcf=$OPTARG ;;
+            f) local fam_name=$OPTARG ;;
+            c) local config=$OPTARG ;;
+            *) echo "No argument passed. At least pass an argument specifying the family ID"
+        esac
+    done
+
+    local ped_file=$(read_yaml ${config} "ped_file")
+
+    # Extract the family samples from the ped vcf file
+    extract_fam_vcf ${ped_vcf} ${ped_file} ${fam_name} && \
+    local fam_vcf=${ped_vcf/.vcf*/.${fam_name}.vcf.gz} || \
+    { log "Failed to extract the family VCF"; return 1; }
+
+    # Filter the variants based on the pedigree information
+    filter_allele_based_on_pedigree_with_py \
+    -i ${fam_vcf} \
+    -p ${ped_file} \
+    -f ${fam_name} \
+    -o ${fam_vcf/.vcf*/.filtered.vcf.gz} && \
+    local filtered_vcf=${fam_vcf/.vcf*/.filtered.vcf.gz} || \
+    { log "Failed to filter the variants based on the pedigree information"; return 1; }
+
+    # Filter the variants based on the allele frequency
+    filter_af ${config} ${filtered_vcf} || \
+    { log "Failed to filter the variants based on the allele frequency"; return 1; }
+}
+
+
+if [[ "${#BASH_SOURCE[@]}" -eq 1 ]]; then
+    declare -a func_names=($(typeset -f | awk '!/^main[ (]/ && /^[^ {}]+ *\(\)/ { gsub(/[()]/, "", $1); printf $1" ";}'))
+    declare -a input_func_names=($(return_array_intersection "${func_names[*]}" "$*"))
+    declare -a arg_indices=($(get_array_index "${input_func_names[*]}" "$*"))
+    if [[ ${#input_func_names[@]} -gt 0 ]]; then
+        log "Seems like the command is trying to directly run a function in this script ${BASH_SOURCE[0]}."
+        log "The identified function names are: ${input_func_names[*]}"
+        log "All function names are: ${func_names[*]}"
+        first_func_ind=${arg_indices}
+        log "The identified first func name is at the ${first_func_ind}th input argument, while the total input arguments are: $*"
+        following_arg_ind=$((first_func_ind + 1))
+        log "Executing: ${*:${following_arg_ind}}"
+        "${@:${following_arg_ind}}"
+    else
+		log "Directly run main_filtration with input args: $*"
+		main_filtration "$@"
+	fi
+fi
 

@@ -655,10 +655,10 @@ function return_array_intersection {
     for item in "${array1[@]}"; do
         local new_item=${item}
         for char in "${special_char[@]}"; do
-            if [[ ${item} == *"${char}"* ]]; then local spe=1 && local new_item=$(echo ${new_item} | awk '{gsub("\\'${char}'","\\'${char}'",$0); print;}'); fi
+            [[ ${item} == *"${char}"* ]] && local spe=1 && local new_item=$(echo ${new_item} | awk '{gsub("\\'${char}'","\\'${char}'",$0); print;}')
         done
         # if [[ ${spe} -gt 0 ]]; then echo "Line "${LINENO}": In function "${FUNCNAME}: After adding escape symbol to special characters, iterating item ${item} now looks like ${new_item}; fi
-        if [[ ${array2[*]} =~ ${new_item} ]]; then
+        if [[ ${array2[*]} == ${new_item} ]]; then
             result+=(${item})
         fi
     done

@@ -986,6 +986,23 @@ function ClinVar_VCF_deploy() {
 }
 
 
+function ClinVar_PD_stat () {
+    local config_file=${1}
+
+    local clinvar_stat=$(read_yaml ${config_file} "clinvar_pd_stat")
+    [[ -f ${clinvar_stat} ]] && \
+    [[ ${clinvar_stat} -nt ${clinvar_vcf} ]] && \
+    log "The clinvar stat file ${clinvar_stat} is already generated. Skip this step" && return 0
+
+    local clinvar_stat_py=${SCRIPTS_DIR}/stat_protein_domain_clinvars.py
+
+    python ${clinvar_stat_py} \
+    ${clinvar_vcf} \
+    ${clinvar_vcf/.vcf*/.prot.domain.stats.json} && \
+    update_yaml ${config_file} "clinvar_pd_stat" "${clinvar_vcf/.vcf*/.prot.domain.stats.json}"
+}
+
+
 function Conservation_install() {
 	local config=${1}
     local CACHEDIR=${2}
@@ -1203,6 +1220,8 @@ function main_install() {
     local clinvar_vcf_dir=$(read_yaml "$config_file" "clinvar_vcf_dir")
     ClinVar_VCF_deploy ${config_file} ${clinvar_vcf_dir} ${assembly} || \
     { log "Failed to install ClinVar VCF"; return 1; }
+    ClinVar_PD_stat ${config_file} || \
+    { log "Failed to stat ClinVar per protein domain"; return 1; }
 
     # 6. Install CADD prescores
     CADD_install \

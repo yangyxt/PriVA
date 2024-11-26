@@ -8,7 +8,7 @@ import sys
 import json
 
 
-class DomainScoreCollector:
+class DomainAMScoreCollector:
     def __init__(self, vcf_path: str):
         """Initialize collector with VCF file path."""
         self.vcf_path = vcf_path
@@ -17,7 +17,7 @@ class DomainScoreCollector:
     @staticmethod
     def _create_nested_dict():
         """Create a nested defaultdict that allows arbitrary depth."""
-        return defaultdict(lambda: defaultdict(DomainScoreCollector._create_nested_dict))
+        return defaultdict(lambda: defaultdict(DomainAMScoreCollector._create_nested_dict))
     
     def _parse_domain_hierarchy(self, domains_str: str) -> List[tuple]:
         """Parse domain string into hierarchical components.
@@ -152,7 +152,7 @@ def main(vcf_path, output_json):
     '''
     Notice that the input VCF file must be the AlphaMissense VCF file annotated by VEP with the --domains argument.
     '''
-    collector = DomainScoreCollector(vcf_path)
+    collector = DomainAMScoreCollector(vcf_path)
     collector.collect_scores()
     collector.finalize_scores()
     

@@ -79,18 +79,30 @@ def extract_record_info(record):
         'pos': record.pos,
         'ref': record.ref,
         'alts': record.alts,
+        'VCF_filters': ",".join(record.filter),
         'info': {
             'CSQ': record.info.get('CSQ', ["",])[0],
             'AF_joint': record.info.get('AF_joint', [np.nan])[0],
             'nhomalt_joint_XX': record.info.get('nhomalt_joint_XX', [np.nan])[0],
             'nhomalt_joint_XY': record.info.get('nhomalt_joint_XY', [np.nan])[0],
             'CLNSIG': record.info.get('CLNSIG', [""])[0],
-            'CLNREVSTAT': record.info.get('CLNREVSTAT', [""])[0]
-        }
-        ,
-        # Extract GT info for each sample
+            'CLNREVSTAT': record.info.get('CLNREVSTAT', [""])[0],
+            'VARIANT_SOURCE': record.info.get('VARIANT_SOURCE', "")
+        },
+        # Extract GT info for each sample, preserving phasing information
+        # Convert tuple GT to string with proper phasing separator (| for phased, / for unphased)
+        # Handle None values by converting to "."
         'GT': {
-            sample: record.samples[sample]['GT']
+            sample: '|'.join('.' if allele is None else str(allele) for allele in record.samples[sample]['GT']) 
+            if record.samples[sample].phased 
+            else '/'.join('.' if allele is None else str(allele) for allele in record.samples[sample]['GT'])
+            for sample in record.samples.keys()
+        },
+        # Extract AD info for each sample
+        # Convert tuple AD to comma-separated string
+        # Handle None values by converting to "."
+        'AD': {
+            f"{sample}_AD": ','.join('.' if value is None else str(value) for value in record.samples[sample]['AD'])
             for sample in record.samples.keys()
         }
     }
@@ -115,16 +127,19 @@ def convert_record_to_tab(args: tuple) -> tuple[List[Dict[str, Any]], List[str]]
             "gnomAD_nhomalt_XX": record_dict['info']['nhomalt_joint_XX'],
             "gnomAD_nhomalt_XY": record_dict['info']['nhomalt_joint_XY'],
             "CLNSIG": record_dict['info']['CLNSIG'],
-            "CLNREVSTAT": record_dict['info']['CLNREVSTAT']
+            "CLNREVSTAT": record_dict['info']['CLNREVSTAT'],
+            "VARIANT_SOURCE": record_dict['info']['VARIANT_SOURCE'],
+            "VCF_filters": record_dict['VCF_filters']
         }
         
         gt_dict = record_dict['GT']
+        ad_dict = record_dict['AD']
         # Extract the variant-transcript level annotations
         csqs = parse_csq_field(record_dict['info']['CSQ'], csq_fields, logger)
 
         for feature_name, feature_dict in csqs.items():
             if feature_name.startswith("ENS"):
-                row_dict = {**var_dict_items, **feature_dict, **gt_dict}
+                row_dict = {**var_dict_items, **feature_dict, **gt_dict, **ad_dict}
                 rows.append(row_dict)
             
         logger.info(f"Completed processing variant at {record_dict['chrom']}:{record_dict['pos']}\n")

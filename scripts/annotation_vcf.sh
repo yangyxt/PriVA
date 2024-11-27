@@ -486,6 +486,7 @@ function anno_VEP_data() {
     --cache \
 	--offline \
     --merged \
+	--domains \
 	--hgvs \
     --numbers \
     --symbol \
@@ -506,6 +507,7 @@ function anno_VEP_data() {
 	-plugin SpliceVault,file=${splicevault_prescore} \
     -plugin Conservation,${conversation_file},MAX \
 	-plugin NMD \
+	-plugin SingleLetterAA \
     --force_overwrite \
     -o ${output_vcf} && \
 	bcftools sort -Oz -o ${input_vcf/.vcf*/.vcf.gz} ${output_vcf} && \

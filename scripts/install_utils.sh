@@ -1,7 +1,7 @@
 #! /usr/bin/env bash
 SCRIPT_DIR=$(dirname $(realpath ${BASH_SOURCE[0]}))
 source ${SCRIPT_DIR}/common_bash_utils.sh
-log "The base directory is ${BASE_DIR}"
+log "The base directory is ${BASE_DIR}, the scripts directory is ${SCRIPT_DIR}"
 
 
 function conda_install_vep() {
@@ -119,7 +119,7 @@ function vep_install_wrapper() {
     # Test the PERL5LIB value and PATH value to see if they already include the VEP_DESTDIR and VEP_PLUGINSDIR
     # If yes for both, then we can directly skip the follow up installation of VEP API
     local VEP_DESTDIR=$(perl -e 'print join("\n", @INC);' | grep site_perl | head -1)
-	[[ $(echo $PERL5LIB) =~ "${VEP_DESTDIR}" ]] && \
+    [[ $(echo $PERL5LIB) =~ "${VEP_DESTDIR}" ]] && \
     [[ $(echo $PATH) =~ "${VEP_DESTDIR}" ]] && \
     [[ $(echo $PERL5LIB}) =~ "${VEP_PLUGINSDIR}" ]] && \
     [[ -f ${VEP_PLUGINSDIR}/SpliceVault.pm ]] && \
@@ -133,7 +133,7 @@ function vep_install_wrapper() {
     [[ -f ${VEP_PLUGINSDIR}/SameCodon.pm ]] && \
     [[ -f ${VEP_PLUGINSDIR}/NMD.pm ]] && \
     [[ -f ${VEP_PLUGINSDIR}/PrimateAI.pm ]] && \
-	[[ -f ${VEP_PLUGINSDIR}/SingleLetterAA.pm ]] && \
+    [[ -f ${VEP_PLUGINSDIR}/SingleLetterAA.pm ]] && \
     { log "The PERL5LIB value and PATH value already include ${VEP_DESTDIR} and ${VEP_PLUGINSDIR}, indicating the following installation process has already been succesfully performed. Skip the function for now."; return 0; }
 
     local conda_env_name=$(basename $CONDA_PREFIX)
@@ -181,7 +181,7 @@ function VEP_plugins_install() {
 
     # Install VEP plugins
     # First install UTRAnnotator
-	log "The Cache directory to store the requried annotation files for VEP Plugins is ${VEP_PLUGINSCACHEDIR}"
+    log "The Cache directory to store the requried annotation files for VEP Plugins is ${VEP_PLUGINSCACHEDIR}"
     UTRAnnotator_install ${config_file} ${VEP_PLUGINSCACHEDIR} || \
     { log "Failed to install UTRAnnotator"; return 1; }
 
@@ -194,15 +194,15 @@ function VEP_plugins_install() {
     # Then install AlphaMissense
     AlphaMissense_install ${config_file} ${VEP_PLUGINSCACHEDIR} ${ASSEMBLY_VERSION} ${VEP_PLUGINSDIR} || \
     { log "Failed to install AlphaMissense"; return 1; }
-	# Then annotate the AlphaMissense prescore file to vcf file
-	AlphaMissense_anno ${config_file} || \
-	{ log "Failed to convert the AlphaMissense prescore file to vcf file and annotate protein domains to it"; return 1; }
-	AlphaMissense_stat ${config_file} || \
-	{ log "Failed to generate the AlphaMissense statistics JSON file"; return 1; }
+    # Then annotate the AlphaMissense prescore file to vcf file
+    AlphaMissense_anno ${config_file} || \
+    { log "Failed to convert the AlphaMissense prescore file to vcf file and annotate protein domains to it"; return 1; }
+    AlphaMissense_stat ${config_file} || \
+    { log "Failed to generate the AlphaMissense statistics JSON file"; return 1; }
 
 
     # Then install SpliceAI
-	SpliceAI_install ${config_file} ${VEP_PLUGINSCACHEDIR} ${VEP_PLUGINSDIR} || \
+    SpliceAI_install ${config_file} ${VEP_PLUGINSCACHEDIR} ${VEP_PLUGINSDIR} || \
     { log "Failed to install SpliceAI"; return 1; }
 
 
@@ -217,22 +217,22 @@ function VEP_plugins_install() {
 
 
     # Install Conservation file if assembly version is hg38
-	log "Now we start to install the conservation file"
-	local conservation_file=$(Conservation_install ${config_file} ${VEP_PLUGINSCACHEDIR} ${ASSEMBLY_VERSION}) || \
-	{ log "Failed to install Conservation file"; return 1; }
+    log "Now we start to install the conservation file"
+    local conservation_file=$(Conservation_install ${config_file} ${VEP_PLUGINSCACHEDIR} ${ASSEMBLY_VERSION}) || \
+    { log "Failed to install Conservation file"; return 1; }
 }
 
 
 function UTRAnnotator_install() {
-	local config_file=${1}
+    local config_file=${1}
     local PLUGIN_CACHEDIR=${2}
-	local assembly_version=$(read_yaml ${config_file} "assembly")
+    local assembly_version=$(read_yaml ${config_file} "assembly")
 
-	local utr_annotator_file=$(read_yaml ${config_file} "utr_annotator_file")
-	[[ -f ${utr_annotator_file} ]] && \
+    local utr_annotator_file=$(read_yaml ${config_file} "utr_annotator_file")
+    [[ -f ${utr_annotator_file} ]] && \
     log "The UTRAnnotator plugin is already downloaded for both hg19 and hg38 assemblies" && return 0
 
-	[[ ! -d ${PLUGIN_CACHEDIR} ]] && { log "The cache directory ${PLUGIN_CACHEDIR} is not found, please check the file"; return 1; }
+    [[ ! -d ${PLUGIN_CACHEDIR} ]] && { log "The cache directory ${PLUGIN_CACHEDIR} is not found, please check the file"; return 1; }
 
     if [[ ! -d ${PLUGIN_CACHEDIR}/UTRannotator ]] || \
        [[ ! -f ${PLUGIN_CACHEDIR}/UTRannotator/uORF_5UTR_GRCh38_PUBLIC.txt ]] || \
@@ -245,26 +245,26 @@ function UTRAnnotator_install() {
         log "The UTRannotator plugin is already downloaded for both hg19 and hg38 assemblies"
     fi
 
-	if [[ ${assembly_version} =~ "GRCh37" ]] || [[ ${assembly_version} =~ "hg19" ]]; then
-		update_yaml ${config_file} "utr_annotator_file" "${PLUGIN_CACHEDIR}/UTRannotator/uORF_5UTR_GRCh37_PUBLIC.txt"
-	elif [[ ${assembly_version} =~ "GRCh38" ]] || [[ ${assembly_version} =~ "hg38" ]]; then
-		update_yaml ${config_file} "utr_annotator_file" "${PLUGIN_CACHEDIR}/UTRannotator/uORF_5UTR_GRCh38_PUBLIC.txt"
-	else
-		log "Not supported assembly version: ${assembly_version}"
-		return 1
-	fi
+    if [[ ${assembly_version} =~ "GRCh37" ]] || [[ ${assembly_version} =~ "hg19" ]]; then
+        update_yaml ${config_file} "utr_annotator_file" "${PLUGIN_CACHEDIR}/UTRannotator/uORF_5UTR_GRCh37_PUBLIC.txt"
+    elif [[ ${assembly_version} =~ "GRCh38" ]] || [[ ${assembly_version} =~ "hg38" ]]; then
+        update_yaml ${config_file} "utr_annotator_file" "${PLUGIN_CACHEDIR}/UTRannotator/uORF_5UTR_GRCh38_PUBLIC.txt"
+    else
+        log "Not supported assembly version: ${assembly_version}"
+        return 1
+    fi
 }
 
 
 function SpliceAI_install() {
-	local config_file=${1}
+    local config_file=${1}
     local PLUGIN_CACHEDIR=${2}
     local PLUGIN_DIR=${3}
 
-	local snv_prescore=$(read_yaml ${config_file} "spliceai_snv_prescore")
-	local indel_prescore=$(read_yaml ${config_file} "spliceai_indel_prescore")
+    local snv_prescore=$(read_yaml ${config_file} "spliceai_snv_prescore")
+    local indel_prescore=$(read_yaml ${config_file} "spliceai_indel_prescore")
 
-	[[ -f ${snv_prescore} ]] && [[ -f ${indel_prescore} ]] && \
+    [[ -f ${snv_prescore} ]] && [[ -f ${indel_prescore} ]] && \
     log "The prescores for the SpliceAI plugin are already downloaded, skip the installation process" && return 0
 
     log "You need to download the prescores yourself to ${PLUGIN_CACHEDIR}/SpliceAI by registering a free BaseSequence Account from Illumina. Note that the downloaded files are pretty large (around 200 GB) and might take hours to days to complete the downloading process."
@@ -288,8 +288,8 @@ function SpliceAI_install() {
         ./vep -i variations.vcf --plugin SpliceAI,snv=/path/to/spliceai_scores.raw.snv.hg38.vcf.gz,indel=/path/to/spliceai_scores.raw.indel.hg38.vcf.gz,cutoff=0.5 "
     # Prepare a command waiting for the user to download the prescores and put them into the corresponding directory
     # Waiting for user's confirmation (yes or no) to finish the installation properly, we dont need to offer the cmd directly because such downloading will need them to register account and login, which is not convenient to put in the script
-	[[ ! -d ${PLUGIN_CACHEDIR} ]] && { log "The cache directory ${PLUGIN_CACHEDIR}/SpliceAI is not found, please check the file"; return 1; }
-	[[ ! -d ${PLUGIN_DIR} ]] && { log "The plugins directory ${PLUGIN_DIR} is not found, please check the file"; return 1; }
+    [[ ! -d ${PLUGIN_CACHEDIR} ]] && { log "The cache directory ${PLUGIN_CACHEDIR}/SpliceAI is not found, please check the file"; return 1; }
+    [[ ! -d ${PLUGIN_DIR} ]] && { log "The plugins directory ${PLUGIN_DIR} is not found, please check the file"; return 1; }
 
     read -p "Have you finished downloading the prescores for the SpliceAI plugin? (yes or no)"
     if [[ ${REPLY} =~ "yes" ]] || [[ ${REPLY} =~ "y" ]] || [[ ${REPLY} =~ "Y" ]] || [[ ${REPLY} =~ "Yes" ]] || [[ ${REPLY} =~ "YES" ]]; then
@@ -300,7 +300,7 @@ function SpliceAI_install() {
             log "The file ${snv_pre_score_file} does not exist"
             return 1
         fi
-		update_yaml ${config_file} "spliceai_snv_prescore" "${snv_pre_score_file}"
+        update_yaml ${config_file} "spliceai_snv_prescore" "${snv_pre_score_file}"
         read -p "Please specify the absolute path to the indel prescore file, remember the file should correspond to the assembly version of your VEP installation"
         local indel_pre_score_file=${REPLY}
         if [[ ! -f ${indel_pre_score_file} ]]; then
@@ -309,7 +309,7 @@ function SpliceAI_install() {
         fi
         log "Now we start to install the SpliceAI plugin"
         # We need to return the prescore file paths to the outside of the function
-		update_yaml ${config_file} "spliceai_indel_prescore" "${indel_pre_score_file}"
+        update_yaml ${config_file} "spliceai_indel_prescore" "${indel_pre_score_file}"
     else
         log "Please download the prescores for the SpliceAI plugin first"
         return 1
@@ -401,7 +401,7 @@ function CADD_install() {
         log "Cannot find the CADD script in the conda environment"
         return 1
     fi
-	update_yaml ${config_file} "cadd_base_dir" "$(dirname ${CADD_script})"
+    update_yaml ${config_file} "cadd_base_dir" "$(dirname ${CADD_script})"
 
     local CADD_cache_dir=$(dirname ${CADD_script})/data
     local cadd_version=$(read_yaml "${config_file}" "cadd_version")
@@ -415,18 +415,18 @@ function CADD_install() {
         read -p "In this case, you need to download the CADD repo as a zip file and unzip it to a local directory and all the cache files will be store in that directory. Please specify the absolute path to the directory: "
         local CADD_parent_dir=${REPLY}
 
-		# Check if the CADD scripts directory exists, if not, download the zip file and unzip it
-		local CADD_base_dir=$(find ${CADD_parent_dir}/ -maxdepth 1 -type d -name "CADD-scripts-*${cadd_version#v}*" -print | head -n1)
-		[[ ! -d ${CADD_base_dir} ]] && \
-		local CADD_zip_download_url=$(read_yaml "${config_file}" "cadd_zip_download_url") && \
-		wget ${CADD_zip_download_url} -O ${CADD_parent_dir}/CADD-scripts.zip && \
-		unzip ${CADD_parent_dir}/CADD-scripts.zip -d ${CADD_parent_dir}/ && \
-		rm ${CADD_parent_dir}/CADD-scripts.zip
+        # Check if the CADD scripts directory exists, if not, download the zip file and unzip it
+        local CADD_base_dir=$(find ${CADD_parent_dir}/ -maxdepth 1 -type d -name "CADD-scripts-*${cadd_version#v}*" -print | head -n1)
+        [[ ! -d ${CADD_base_dir} ]] && \
+        local CADD_zip_download_url=$(read_yaml "${config_file}" "cadd_zip_download_url") && \
+        wget ${CADD_zip_download_url} -O ${CADD_parent_dir}/CADD-scripts.zip && \
+        unzip ${CADD_parent_dir}/CADD-scripts.zip -d ${CADD_parent_dir}/ && \
+        rm ${CADD_parent_dir}/CADD-scripts.zip
 
-		# Get the base folder name from the unzipped directory
-		CADD_base_dir=$(find ${CADD_parent_dir}/ -maxdepth 1 -type d -name "CADD-scripts-*${cadd_version#v}*" -print | head -n1)
+        # Get the base folder name from the unzipped directory
+        CADD_base_dir=$(find ${CADD_parent_dir}/ -maxdepth 1 -type d -name "CADD-scripts-*${cadd_version#v}*" -print | head -n1)
         [[ -z ${CADD_base_dir} ]] && { log "Could not find CADD scripts directory"; return 1; }
-		update_yaml ${config_file} "cadd_base_dir" "${CADD_base_dir}" && \
+        update_yaml ${config_file} "cadd_base_dir" "${CADD_base_dir}" && \
         log "Now the CADD base directory is ${CADD_base_dir} and it's updated to the config file ${config_file}"
         local CADD_script=${CADD_base_dir}/CADD.sh && \
         local CADD_cache_dir=${CADD_base_dir}/data && \
@@ -492,9 +492,9 @@ function PrimateAI_install() {
     local PLUGIN_CACHEDIR=${2}
     local PLUGIN_DIR=${3}
 
-	local prescore_file=$(read_yaml ${config_file} "primateai_prescore")
-	[[ -f ${prescore_file} ]] && \
-	log "The prescore file for the PrimateAI plugin is already downloaded, skip the installation process" && return 0
+    local prescore_file=$(read_yaml ${config_file} "primateai_prescore")
+    [[ -f ${prescore_file} ]] && \
+    log "The prescore file for the PrimateAI plugin is already downloaded, skip the installation process" && return 0
 
     log "You need to download the prescores yourself to ${PLUGIN_CACHEDIR}/PrimateAI by registering a free BaseSequence Account from Illumina. Note that the downloaded files are a bit large (around 2 GB) and might take minutes to complete the downloading process."
     log "For details, read ${PLUGIN_DIR}/PrimateAI.pm"
@@ -538,15 +538,15 @@ function PrimateAI_install() {
         local prescore_file=${REPLY}
         if [[ -f ${prescore_file} ]] && [[ ${prescore_file} =~ \.tsv\.gz$ ]]; then
             # We need to return the prescore file paths to the outside of the function
-			gunzip -cf ${prescore_file} | \
-			sed '12s/.*/#&/' | \
-			sed '/^$/d' | \
-			awk 'NR<12{print $0;next}{print $0 | "sort -k1,1 -k 2,2n -V"}' | \
-			bgzip > ${prescore_file/.tsv.gz/.sorted.tsv.bgz} && \
-			tabix -s 1 -b 2 -e 2 ${prescore_file/.tsv.gz/.sorted.tsv.bgz} && \
+            gunzip -cf ${prescore_file} | \
+            sed '12s/.*/#&/' | \
+            sed '/^$/d' | \
+            awk 'NR<12{print $0;next}{print $0 | "sort -k1,1 -k 2,2n -V"}' | \
+            bgzip > ${prescore_file/.tsv.gz/.sorted.tsv.bgz} && \
+            tabix -s 1 -b 2 -e 2 ${prescore_file/.tsv.gz/.sorted.tsv.bgz} && \
             update_yaml ${config_file} "primateai_prescore" "${prescore_file/.tsv.gz/.sorted.tsv.bgz}"
-		elif [[ -f ${prescore_file} ]] && [[ ${prescore_file} =~ \.tsv.bgz$ ]]; then
-			update_yaml ${config_file} "primateai_prescore" "${prescore_file}"
+        elif [[ -f ${prescore_file} ]] && [[ ${prescore_file} =~ \.tsv.bgz$ ]]; then
+            update_yaml ${config_file} "primateai_prescore" "${prescore_file}"
         else
             log "The file ${prescore_file} does not exist"
             return 1
@@ -559,18 +559,18 @@ function PrimateAI_install() {
 
 
 function AlphaMissense_install() {
-	local config_file=${1}
+    local config_file=${1}
     local PLUGIN_CACHEDIR=${2}
     local ASSEMBLY_VERSION=${3}
-	local PLUGIN_DIR=${4}
+    local PLUGIN_DIR=${4}
 
     log "For details, read ${PLUGIN_DIR}/AlphaMissense.pm"
     local hg19_url="https://storage.googleapis.com/dm_alphamissense/AlphaMissense_hg19.tsv.gz"
     local hg38_url="https://storage.googleapis.com/dm_alphamissense/AlphaMissense_hg38.tsv.gz"
 
-	local alphamissense_prescore=$(read_yaml ${config_file} "alphamissense_prescore")
-	[[ -f ${alphamissense_prescore} ]] && \
-	log "The prescore file for the AlphaMissense plugin is already downloaded, skip the installation process" && return 0
+    local alphamissense_prescore=$(read_yaml ${config_file} "alphamissense_prescore")
+    [[ -f ${alphamissense_prescore} ]] && \
+    log "The prescore file for the AlphaMissense plugin is already downloaded, skip the installation process" && return 0
 
     if [[ ! -d ${PLUGIN_CACHEDIR} ]]; then
         mkdir -p ${PLUGIN_CACHEDIR}
@@ -627,75 +627,75 @@ function AlphaMissense_install() {
 
 
 function AlphaMissense_anno() {
-	local config_file=${1}
+    local config_file=${1}
 
-	local alphamissense_prescore=$(read_yaml ${config_file} "alphamissense_prescore")
-	local alphamissense_vcf=$(read_yaml ${config_file} "alphamissense_vcf")
-	local alphamissense_vep_vcf=$(read_yaml ${config_file} "alphamissense_vep_vcf")
+    local alphamissense_prescore=$(read_yaml ${config_file} "alphamissense_prescore")
+    local alphamissense_vcf=$(read_yaml ${config_file} "alphamissense_vcf")
+    local alphamissense_vep_vcf=$(read_yaml ${config_file} "alphamissense_vep_vcf")
 
-	check_vcf_validity ${alphamissense_vcf} && \
-	[[ ${alphamissense_vcf} -nt ${alphamissense_prescore} ]] && \
-	check_vcf_validity ${alphamissense_vep_vcf} && \
-	[[ ${alphamissense_vep_vcf} -nt ${alphamissense_vcf} ]] && \
-	check_vcf_infotags ${alphamissense_vep_vcf} "CSQ" && \
-	log "The AlphaMissense VCF file ${alphamissense_vcf} is already annotated by VEP to ${alphamissense_vep_vcf}. Skip this step" && return 0
-	
-	local convert_py=${SCRIPT_DIR}/alphmis_tsv2vcf.py
-	python ${convert_py} \
-	${alphamissense_prescore} \
-	${alphamissense_prescore/.tsv/.vcf} && \
-	local vep_cache_dir=$(read_yaml ${config_file} "vep_cache_dir") && \
-	local threads=$(read_yaml ${config_file} "threads") && \
-	local ref_genome=$(read_yaml ${config_file} "ref_genome") && \
-	local assembly=$(read_yaml ${config_file} "assembly") && \
-	basic_vep_annotation \
-	${alphamissense_prescore/.tsv/.vcf} \
-	${assembly} \
-	${ref_genome} \
-	${vep_cache_dir} \
-	${threads} && \
-	display_vcf ${alphamissense_prescore/.tsv/.vep.vcf} && \
-	update_yaml ${config_file} "alphamissense_vep_vcf" "${alphamissense_prescore/.tsv/.vep.vcf}" && \
-	log "The AlphaMissense VCF file ${alphamissense_prescore/.tsv/.vep.vcf} is annotated by VEP and saved to ${alphamissense_vcf}"
+    check_vcf_validity ${alphamissense_vcf} && \
+    [[ ${alphamissense_vcf} -nt ${alphamissense_prescore} ]] && \
+    check_vcf_validity ${alphamissense_vep_vcf} && \
+    [[ ${alphamissense_vep_vcf} -nt ${alphamissense_vcf} ]] && \
+    check_vcf_infotags ${alphamissense_vep_vcf} "CSQ" && \
+    log "The AlphaMissense VCF file ${alphamissense_vcf} is already annotated by VEP to ${alphamissense_vep_vcf}. Skip this step" && return 0
+    
+    local convert_py=${SCRIPT_DIR}/alphmis_tsv2vcf.py
+    python ${convert_py} \
+    ${alphamissense_prescore} \
+    ${alphamissense_prescore/.tsv/.vcf} && \
+    local vep_cache_dir=$(read_yaml ${config_file} "vep_cache_dir") && \
+    local threads=$(read_yaml ${config_file} "threads") && \
+    local ref_genome=$(read_yaml ${config_file} "ref_genome") && \
+    local assembly=$(read_yaml ${config_file} "assembly") && \
+    basic_vep_annotation \
+    ${alphamissense_prescore/.tsv/.vcf} \
+    ${assembly} \
+    ${ref_genome} \
+    ${vep_cache_dir} \
+    ${threads} && \
+    display_vcf ${alphamissense_prescore/.tsv/.vep.vcf} && \
+    update_yaml ${config_file} "alphamissense_vep_vcf" "${alphamissense_prescore/.tsv/.vep.vcf}" && \
+    log "The AlphaMissense VCF file ${alphamissense_prescore/.tsv/.vep.vcf} is annotated by VEP and saved to ${alphamissense_vcf}"
 }
 
 
 function AlphaMissense_stat() {
-	local config_file=${1}
-	local alphamissense_stat=$(read_yaml ${config_file} "alphamissense_stat_json")
-	local alphamissense_vcf=$(read_yaml ${config_file} "alphamissense_vep_vcf")
+    local config_file=${1}
+    local alphamissense_stat=$(read_yaml ${config_file} "alphamissense_stat_pickle")
+    local alphamissense_vcf=$(read_yaml ${config_file} "alphamissense_vep_vcf")
 
-	[[ -f ${alphamissense_stat} ]] && \
-	[[ ${alphamissense_stat} -nt ${alphamissense_vcf} ]] && \
-	log "The AlphaMissense statistics JSON file ${alphamissense_stat} is already generated, skip this step" && return 0
+    [[ -f ${alphamissense_stat} ]] && \
+    [[ ${alphamissense_stat} -nt ${alphamissense_vcf} ]] && \
+    log "The AlphaMissense statistics JSON file ${alphamissense_stat} is already generated, skip this step" && return 0
 
-	local stat_py=${SCRIPT_DIR}/stat_protein_domain_amscores.py && \
-	python ${stat_py} \
-	${alphamissense_vcf} \
-	${alphamissense_vcf/.vcf*/.prot.domain.stats.json} && \
-	update_yaml ${config_file} "alphamissense_stat_json" "${alphamissense_vcf/.vcf*/.prot.domain.stats.json}" && \
-	log "The AlphaMissense statistics JSON file ${alphamissense_vcf/.vcf*/.prot.domain.stats.json} is generated and saved to ${alphamissense_stat}"
+    local stat_py=${SCRIPT_DIR}/stat_protein_domain_amscores.py && \
+    python ${stat_py} \
+    ${alphamissense_vcf} \
+    ${alphamissense_vcf/.vcf*/.prot.domain.stats.pkl} && \
+    update_yaml ${config_file} "alphamissense_stat_pickle" "${alphamissense_vcf/.vcf*/.prot.domain.stats.pkl}" && \
+    log "The AlphaMissense statistics pickle file ${alphamissense_vcf/.vcf*/.prot.domain.stats.pkl} is generated and saved to ${alphamissense_stat}"
 }
 
 
 
 function LOEUF_install() {
-	# The LOEUF plugin cache files are stored in the github repo because the original url is not accessible anymore
+    # The LOEUF plugin cache files are stored in the github repo because the original url is not accessible anymore
     local config_file=${1}
-	local assembly_version=${2}
-	local git_repo_dir=${3}
+    local assembly_version=${2}
+    local git_repo_dir=${3}
 
-	local loeuf_hg19_file=${git_repo_dir}/data/loeuf/loeuf_dataset.tsv.gz
-	local loeuf_hg38_file=${git_repo_dir}/data/loeuf/loeuf_dataset_hg38.tsv.gz
+    local loeuf_hg19_file=${git_repo_dir}/data/loeuf/loeuf_dataset.tsv.gz
+    local loeuf_hg38_file=${git_repo_dir}/data/loeuf/loeuf_dataset_hg38.tsv.gz
 
-	if [[ ${assembly_version} =~ "GRCh37" ]] || [[ ${assembly_version} =~ "hg19" ]]; then
-		update_yaml ${config_file} "loeuf_prescore" "${loeuf_hg19_file}"
-	elif [[ ${assembly_version} =~ "GRCh38" ]] || [[ ${assembly_version} =~ "hg38" ]]; then
-		update_yaml ${config_file} "loeuf_prescore" "${loeuf_hg38_file}"
-	else
-		log "Not supported assembly version: ${assembly_version}"
-		return 1
-	fi
+    if [[ ${assembly_version} =~ "GRCh37" ]] || [[ ${assembly_version} =~ "hg19" ]]; then
+        update_yaml ${config_file} "loeuf_prescore" "${loeuf_hg19_file}"
+    elif [[ ${assembly_version} =~ "GRCh38" ]] || [[ ${assembly_version} =~ "hg38" ]]; then
+        update_yaml ${config_file} "loeuf_prescore" "${loeuf_hg38_file}"
+    else
+        log "Not supported assembly version: ${assembly_version}"
+        return 1
+    fi
 }
 
 
@@ -869,9 +869,9 @@ function gnomAD_liftover() {
 
 function basic_vep_annotation() {
     # This function can be used to annotate ClinVar VCF file
-	# This function can be used to annotate AlphaMissense VCF file (converted from TSV file)
+    # This function can be used to annotate AlphaMissense VCF file (converted from TSV file)
 
-	local input_vcf=${1}
+    local input_vcf=${1}
     local assembly=${2}
     local ref_genome=${3}
     local vep_cache_dir=${4}
@@ -883,12 +883,12 @@ function basic_vep_annotation() {
 
     local tmp_tag=$(randomID)
     local tmp_output=${input_vcf/.vcf*/.${tmp_tag}.vep.vcf}
-	local output_vcf=${input_vcf/.vcf*/.vep.vcf.gz}
+    local output_vcf=${input_vcf/.vcf*/.vep.vcf.gz}
 
-	# Check if VCF is already annotated
-	check_vcf_validity ${output_vcf} && \
+    # Check if VCF is already annotated
+    check_vcf_validity ${output_vcf} && \
     check_vcf_infotags ${output_vcf} "CSQ" && \
-	[[ ${output_vcf} -nt ${input_vcf} ]] && \
+    [[ ${output_vcf} -nt ${input_vcf} ]] && \
     log "The output vcf ${output_vcf} is already annotated by VEP. Skip this step" && \
     return 0
 
@@ -904,13 +904,13 @@ function basic_vep_annotation() {
     --cache \
     --offline \
     --merged \
-	--use_transcript_ref \
-	--hgvs \
+    --use_transcript_ref \
+    --hgvs \
     --symbol \
     --canonical \
-	--domains \
+    --domains \
     --numbers \
-	--plugin SingleLetterAA \
+    --plugin SingleLetterAA \
     --stats_file ${input_vcf/.vcf*/.vep.stats.html} \
     --fork ${threads} \
     --buffer_size 10000 \
@@ -990,21 +990,44 @@ function ClinVar_PD_stat () {
     local config_file=${1}
 
     local clinvar_stat=$(read_yaml ${config_file} "clinvar_pd_stat")
+    local clinvar_vcf=$(read_yaml ${config_file} "clinvar_vcf")
+
     [[ -f ${clinvar_stat} ]] && \
     [[ ${clinvar_stat} -nt ${clinvar_vcf} ]] && \
     log "The clinvar stat file ${clinvar_stat} is already generated. Skip this step" && return 0
 
-    local clinvar_stat_py=${SCRIPTS_DIR}/stat_protein_domain_clinvars.py
+    local clinvar_stat_py=${SCRIPT_DIR}/stat_protein_domain_clinvars.py
 
+    log "Running command: python ${clinvar_stat_py} ${clinvar_vcf} ${clinvar_vcf/.vcf*/.prot.domain.stats.pkl}"
     python ${clinvar_stat_py} \
     ${clinvar_vcf} \
-    ${clinvar_vcf/.vcf*/.prot.domain.stats.json} && \
-    update_yaml ${config_file} "clinvar_pd_stat" "${clinvar_vcf/.vcf*/.prot.domain.stats.json}"
+    ${clinvar_vcf/.vcf*/.prot.domain.stats.pkl} && \
+    update_yaml ${config_file} "clinvar_pd_stat" "${clinvar_vcf/.vcf*/.prot.domain.stats.pkl}"
+}
+
+
+function ClinVar_AA_stat () {
+    local config_file=${1}
+
+    local clinvar_aa_stat=$(read_yaml ${config_file} "clinvar_aa_stat")
+    local clinvar_vcf=$(read_yaml ${config_file} "clinvar_vcf")
+    
+    [[ -f ${clinvar_aa_stat} ]] && \
+    [[ ${clinvar_aa_stat} -nt ${clinvar_vcf} ]] && \
+    log "The clinvar AA stat file ${clinvar_aa_stat} is already generated. Skip this step" && return 0
+
+    local clinvar_aa_stat_py=${SCRIPT_DIR}/stat_aachange_clinvar.py
+
+    log "Running command: python ${clinvar_aa_stat_py} ${clinvar_vcf} ${clinvar_vcf/.vcf*/.aa_change.stats.pkl}"
+    python ${clinvar_aa_stat_py} \
+    ${clinvar_vcf} \
+    ${clinvar_vcf/.vcf*/.aa_change.stats.pkl} && \
+    update_yaml ${config_file} "clinvar_aa_stat" "${clinvar_vcf/.vcf*/.aa_change.stats.pkl}"
 }
 
 
 function Conservation_install() {
-	local config=${1}
+    local config=${1}
     local CACHEDIR=${2}
     local assembly_version=${3}
 
@@ -1012,12 +1035,12 @@ function Conservation_install() {
         local assembly_version="GRCh38"
     elif [[ ${assembly_version} == "hg38" ]] || [[ ${assembly_version} == "GRCh38" ]]; then
         local assembly_version="GRCh38"
-	elif [[ ${assembly_version} == "hg19" ]] || [[ ${assembly_version} == "GRCh37" ]]; then
-		local assembly_version="GRCh37"
-	else
-		log "Currently we only support GRCh37 and GRCh38 assembly versions"
-		return 1
-	fi
+    elif [[ ${assembly_version} == "hg19" ]] || [[ ${assembly_version} == "GRCh37" ]]; then
+        local assembly_version="GRCh37"
+    else
+        log "Currently we only support GRCh37 and GRCh38 assembly versions"
+        return 1
+    fi
 
     if [[ ! -d ${CACHEDIR} ]]; then
         mkdir -p ${CACHEDIR}
@@ -1027,24 +1050,24 @@ function Conservation_install() {
         mkdir -p ${CACHEDIR}/Conservation
     fi
 
-	local existed_file=$(read_yaml "${config}" "conversation_file")
+    local existed_file=$(read_yaml "${config}" "conversation_file")
 
-	if [[ ${assembly_version} == "GRCh38" ]]; then
-		[[ ! -f ${existed_file} ]] && \
-		wget http://ftp.ensembl.org/pub/current_compara/conservation_scores/91_mammals.gerp_conservation_score/gerp_conservation_scores.homo_sapiens.${assembly_version}.bw -O ${CACHEDIR}/Conservation/gerp_conservation_scores.homo_sapiens.${assembly_version}.bw && \
-		log "The conservation scores for ${assembly_version} assembly version are downloaded to ${CACHEDIR}/Conservation" && \
-		update_yaml "${config}" "conversation_file" "${CACHEDIR}/Conservation/gerp_conservation_scores.homo_sapiens.${assembly_version}.bw" || \
-		{ log "Failed to download the conservation scores for ${assembly_version} assembly version"; return 1; }
-	elif [[ ${assembly_version} == "GRCh37" ]]; then
-		[[ ! -f ${existed_file} ]] && \
-		wget http://hgdownload.soe.ucsc.edu/gbdb/hg19/bbi/All_hg19_RS.bw -O ${CACHEDIR}/Conservation/gerp_conservation_scores.homo_sapiens.${assembly_version}.bw
-		log "The conservation scores for ${assembly_version} assembly version are downloaded to ${CACHEDIR}/Conservation" && \
-		update_yaml "${config}" "conversation_file" "${CACHEDIR}/Conservation/gerp_conservation_scores.homo_sapiens.${assembly_version}.bw" || \
-		{ log "Failed to download the conservation scores for ${assembly_version} assembly version"; return 1; }
-	else
-		log "Currently we only support GRCh37 and GRCh38 assembly versions"
-		return 1
-	fi
+    if [[ ${assembly_version} == "GRCh38" ]]; then
+        [[ ! -f ${existed_file} ]] && \
+        wget http://ftp.ensembl.org/pub/current_compara/conservation_scores/91_mammals.gerp_conservation_score/gerp_conservation_scores.homo_sapiens.${assembly_version}.bw -O ${CACHEDIR}/Conservation/gerp_conservation_scores.homo_sapiens.${assembly_version}.bw && \
+        log "The conservation scores for ${assembly_version} assembly version are downloaded to ${CACHEDIR}/Conservation" && \
+        update_yaml "${config}" "conversation_file" "${CACHEDIR}/Conservation/gerp_conservation_scores.homo_sapiens.${assembly_version}.bw" || \
+        { log "Failed to download the conservation scores for ${assembly_version} assembly version"; return 1; }
+    elif [[ ${assembly_version} == "GRCh37" ]]; then
+        [[ ! -f ${existed_file} ]] && \
+        wget http://hgdownload.soe.ucsc.edu/gbdb/hg19/bbi/All_hg19_RS.bw -O ${CACHEDIR}/Conservation/gerp_conservation_scores.homo_sapiens.${assembly_version}.bw
+        log "The conservation scores for ${assembly_version} assembly version are downloaded to ${CACHEDIR}/Conservation" && \
+        update_yaml "${config}" "conversation_file" "${CACHEDIR}/Conservation/gerp_conservation_scores.homo_sapiens.${assembly_version}.bw" || \
+        { log "Failed to download the conservation scores for ${assembly_version} assembly version"; return 1; }
+    else
+        log "Currently we only support GRCh37 and GRCh38 assembly versions"
+        return 1
+    fi
 }
 
 
@@ -1059,10 +1082,10 @@ function SpliceVault_install () {
     [[ ! -d ${PLUGIN_CACHEDIR} ]] && { log "The cache directory ${PLUGIN_CACHEDIR} is not found, please check the file"; return 1; }
     local splicevault_prescore=$(read_yaml "${config}" "splicevault_prescore")
     [[ -f ${splicevault_prescore} ]] && { log "The SpliceVault plugin is already installed at ${splicevault_prescore}"; return 0; } || \
-	log "The SpliceVault plugin is not installed by checking the existence of specified file path ${splicevault_prescore} in the config file ${config}, now start installing it"
+    log "The SpliceVault plugin is not installed by checking the existence of specified file path ${splicevault_prescore} in the config file ${config}, now start installing it"
 
     local splicevault_url=$(read_yaml "${config}" "splicevault_url")
-	local ASSEMBLY_VERSION=$(read_yaml "${config}" "assembly")
+    local ASSEMBLY_VERSION=$(read_yaml "${config}" "assembly")
     if [[ ${ASSEMBLY_VERSION} =~ "GRCh37" ]] || [[ ${ASSEMBLY_VERSION} =~ "hg19" ]]; then
         local chain_file=$(read_yaml "${config}" "hg38_hg19_chain")
         local ref_genome=$(read_yaml "${config}" "ref_genome")
@@ -1094,8 +1117,8 @@ function SpliceVault_install () {
 
 
 function LoFtee_install() {
-	# Temporarily disabled due to inconsistent cache file support across different assemblies
-	# Also deprecated due to the redundant functionality based on CADD and SpliceAI
+    # Temporarily disabled due to inconsistent cache file support across different assemblies
+    # Also deprecated due to the redundant functionality based on CADD and SpliceAI
     local PLUGIN_CACHEDIR=${1}
     local assembly_version=${2}
 
@@ -1154,7 +1177,7 @@ function LoFtee_install() {
 function main_install() {
     local config_file=${1}
 
-	local has_error=0
+    local has_error=0
     # Read configuration
     local conda_env_yaml=$(read_yaml "$config_file" "conda_env_yaml")
     local vep_cache_dir=$(read_yaml "$config_file" "vep_cache_dir")
@@ -1163,11 +1186,11 @@ function main_install() {
     local ref_fasta=$(read_yaml "$config_file" "ref_genome")
     local vep_plugins_cachedir=$(read_yaml "$config_file" "vep_plugins_cachedir")
     [[ -f ${conda_env_yaml} ]] || { log "The conda env yaml file ${conda_env_yaml} is not found, please check the file"; has_error=1; }
-	[[ -d ${vep_cache_dir} ]] || { log "The cache directory for VEP ${vep_cache_dir} is not found, please check the file"; has_error=1; }
-	[[ -d ${vep_plugins_dir} ]] || { log "The plugins directory for VEP ${vep_plugins_dir} is not found, please check the file"; has_error=1; }
-	[[ -d ${vep_plugins_cachedir} ]] || { log "The plugins cache directory for VEP ${vep_plugins_cachedir} is not found, please check the file"; has_error=1; }
-	[[ -f ${ref_fasta} ]] || { log "The reference genome fasta file ${ref_fasta} is not found, please check the file"; has_error=1; }
-	[[ ${has_error} -eq 1 ]] && { log "Please check the values in the configuration file ${config_file}"; return 1; }
+    [[ -d ${vep_cache_dir} ]] || { log "The cache directory for VEP ${vep_cache_dir} is not found, please check the file"; has_error=1; }
+    [[ -d ${vep_plugins_dir} ]] || { log "The plugins directory for VEP ${vep_plugins_dir} is not found, please check the file"; has_error=1; }
+    [[ -d ${vep_plugins_cachedir} ]] || { log "The plugins cache directory for VEP ${vep_plugins_cachedir} is not found, please check the file"; has_error=1; }
+    [[ -f ${ref_fasta} ]] || { log "The reference genome fasta file ${ref_fasta} is not found, please check the file"; has_error=1; }
+    [[ ${has_error} -eq 1 ]] && { log "Please check the values in the configuration file ${config_file}"; return 1; }
     # Perform installation steps
     # 1. Install the conda env
     conda_install_vep "${conda_env_yaml}" || \
@@ -1208,7 +1231,7 @@ function main_install() {
 
     # 4. Install gnomAD VCF (basically download bgzipped VCF files)
     local gnomad_vcf_chrX=$(read_yaml "$config_file" "gnomad_vcf_chrX")
-	local gnomad_vcf_dir=$(dirname ${gnomad_vcf_chrX})
+    local gnomad_vcf_dir=$(dirname ${gnomad_vcf_chrX})
     if [[ ${assembly} =~ "GRCh37" ]] || [[ ${assembly} =~ "hg19" ]]; then
         # Chain file is small enough to be included in the git repo
         local chain_file=$(read_yaml "$config_file" "chain_file")
@@ -1222,6 +1245,8 @@ function main_install() {
     { log "Failed to install ClinVar VCF"; return 1; }
     ClinVar_PD_stat ${config_file} || \
     { log "Failed to stat ClinVar per protein domain"; return 1; }
+    ClinVar_AA_stat ${config_file} || \
+    { log "Failed to stat ClinVar per AA change"; return 1; }
 
     # 6. Install CADD prescores
     CADD_install \

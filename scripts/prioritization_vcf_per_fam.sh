@@ -21,7 +21,7 @@ function prepare_combined_tab () {
     local CADD_anno_file=${2}
     local config_file=${3}
 
-    local threads=$(read_config ${config_file} "threads")
+    local threads=$(read_yaml ${config_file} "threads")
     local output_tab=${input_vcf/.vcf*/.tsv}
 
     [[ -f ${output_tab} ]] && \
@@ -29,7 +29,7 @@ function prepare_combined_tab () {
     log "The combined annotation table ${output_tab} is up to date, skip the conversion" && \
     return 0
 
-    ${SCRIPT_DIR}/combine_annotations.py \
+    python ${SCRIPT_DIR}/combine_annotations.py \
     -i ${input_vcf} \
     -c ${CADD_anno_file} \
     -o ${output_tab} \
@@ -44,18 +44,19 @@ if [[ "${#BASH_SOURCE[@]}" -eq 1 ]]; then
     declare -a func_names=($(typeset -f | awk '!/^main[ (]/ && /^[^ {}]+ *\(\)/ { gsub(/[()]/, "", $1); printf $1" ";}'))
     declare -a input_func_names=($(return_array_intersection "${func_names[*]}" "$*"))
     declare -a arg_indices=($(get_array_index "${input_func_names[*]}" "$*"))
+    log "All function names are: ${func_names[*]}"
     if [[ ${#input_func_names[@]} -gt 0 ]]; then
         log "Seems like the command is trying to directly run a function in this script ${BASH_SOURCE[0]}."
         log "The identified function names are: ${input_func_names[*]}"
-        log "All function names are: ${func_names[*]}"
+        
         first_func_ind=${arg_indices}
         log "The identified first func name is at the ${first_func_ind}th input argument, while the total input arguments are: $*"
         following_arg_ind=$((first_func_ind + 1))
         log "Executing: ${*:${following_arg_ind}}"
         "${@:${following_arg_ind}}"
     else
-		log "Directly run main_filtration with input args: $*"
-		main_filtration "$@"
+		log "Directly run main_prioritization with input args: $*"
+		main_prioritization "$@"
 	fi
 fi
 

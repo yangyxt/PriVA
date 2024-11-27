@@ -646,22 +646,26 @@ function liftover_from_ucsc_to_GRCh () {
 
 
 function return_array_intersection {
-    # Both arrays should not contain item values with space
-    local -a array1=($(echo ${1}))
-    local -a array2=($(echo ${2}))
-    local -a special_char=("." "+" "?" "^" "$" "(" ")" "[" "]" "{" "}" "|" ":")
-    local spe=0
-
+    # Convert the first argument string into an array
+    local IFS=' ' 
+    local -a array1=($1)
+    local -a array2=($2)
+    local -a result=()
+    
+    # Build a lookup array for array2
+    local -A lookup=()
+    for item in "${array2[@]}"; do
+        lookup["$item"]=1
+    done
+    
+    # Find common elements
     for item in "${array1[@]}"; do
-        local new_item=${item}
-        for char in "${special_char[@]}"; do
-            [[ ${item} == *"${char}"* ]] && local spe=1 && local new_item=$(echo ${new_item} | awk '{gsub("\\'${char}'","\\'${char}'",$0); print;}')
-        done
-        # if [[ ${spe} -gt 0 ]]; then echo "Line "${LINENO}": In function "${FUNCNAME}: After adding escape symbol to special characters, iterating item ${item} now looks like ${new_item}; fi
-        if [[ ${array2[*]} == ${new_item} ]]; then
-            result+=(${item})
+        if [[ -n "${lookup[$item]}" ]]; then
+            result+=("$item")
         fi
     done
+    
+    # Return space-separated string of results
     echo "${result[*]}"
 }
 

@@ -72,47 +72,66 @@ def parse_csq_field(csq_field: str, csq_fields: List[str], logger: logging.Logge
     return anno_dict
 
 
+def extract_record_info(record):
+    """Extract necessary information from a VariantRecord object"""
+    return {
+        'chrom': record.chrom,
+        'pos': record.pos,
+        'ref': record.ref,
+        'alts': record.alts,
+        'info': {
+            'CSQ': record.info.get('CSQ', ["",])[0],
+            'AF_joint': record.info.get('AF_joint', [np.nan])[0],
+            'nhomalt_joint_XX': record.info.get('nhomalt_joint_XX', [np.nan])[0],
+            'nhomalt_joint_XY': record.info.get('nhomalt_joint_XY', [np.nan])[0],
+            'CLNSIG': record.info.get('CLNSIG', [""])[0],
+            'CLNREVSTAT': record.info.get('CLNREVSTAT', [""])[0]
+        }
+        ,
+        # Extract GT info for each sample
+        'GT': {
+            sample: record.samples[sample]['GT']
+            for sample in record.samples.keys()
+        }
+    }
 
 
 def convert_record_to_tab(args: tuple) -> tuple[List[Dict[str, Any]], List[str]]:
-    """Convert a VCF record to a list of dictionaries and collect logs.
-    
-    Returns:
-        Tuple of (list of row dictionaries, list of log messages)
-    """
-    record, worker_id, csq_fields, clinvar_csq_fields = args
+    """Convert a record dictionary to a list of dictionaries and collect logs."""
+    record_dict, worker_id, csq_fields, clinvar_csq_fields = args
     logger, collector = setup_worker_logger(worker_id)
     
     try:
-        rows = [] # List of dictionaries, very efficiently pickable
-        # Process record and create rows...
-        logger.info(f"Processing variant at {record.chrom}:{record.pos}\n")
+        rows = []
+        logger.info(f"Processing variant at {record_dict['chrom']}:{record_dict['pos']}\n")
         
         # Extract the variant-specific annotations
-        var_dict_items = {}
-        var_dict_items["chrom"] = record.chrom
-        var_dict_items["pos"] = record.pos
-        var_dict_items["ref"] = record.ref
-        var_dict_items["alt"] = record.alts[0]
-        var_dict_items["gnomAD_joint_af"] = record.info.get('AF_joint', [np.nan])[0]
-        var_dict_items["gnomAD_nhomalt_XX"] = record.info.get('nhomalt_joint_XX', [np.nan])[0]
-        var_dict_items["gnomAD_nhomalt_XY"] = record.info.get('nhomalt_joint_XY', [np.nan])[0]
-        var_dict_items["CLNSIG"] = record.info.get('CLNSIG', [""])[0]
-        var_dict_items["CLNREVSTAT"] = record.info.get('CLNREVSTAT', [""])[0]        
+        var_dict_items = {
+            "chrom": record_dict['chrom'],
+            "pos": record_dict['pos'],
+            "ref": record_dict['ref'],
+            "alt": record_dict['alts'][0],
+            "gnomAD_joint_af": record_dict['info']['AF_joint'],
+            "gnomAD_nhomalt_XX": record_dict['info']['nhomalt_joint_XX'],
+            "gnomAD_nhomalt_XY": record_dict['info']['nhomalt_joint_XY'],
+            "CLNSIG": record_dict['info']['CLNSIG'],
+            "CLNREVSTAT": record_dict['info']['CLNREVSTAT']
+        }
         
+        gt_dict = record_dict['GT']
         # Extract the variant-transcript level annotations
-        csqs = parse_csq_field(record.info.get('CSQ', ["",])[0], csq_fields, logger)
+        csqs = parse_csq_field(record_dict['info']['CSQ'], csq_fields, logger)
 
         for feature_name, feature_dict in csqs.items():
             if feature_name.startswith("ENS"):
-                row_dict = {**var_dict_items, **feature_dict}
+                row_dict = {**var_dict_items, **feature_dict, **gt_dict}
                 rows.append(row_dict)
             
-        logger.info(f"Completed processing variant at {record.chrom}:{record.pos}\n")
+        logger.info(f"Completed processing variant at {record_dict['chrom']}:{record_dict['pos']}\n")
         return rows, list(collector.log_buffer)
         
     except Exception as e:
-        logger.error(f"Error processing variant at {record.chrom}:{record.pos}: {str(e)}\n\n")
+        logger.error(f"Error processing variant at {record_dict['chrom']}:{record_dict['pos']}: {str(e)}\n\n")
         return [], list(collector.log_buffer)
 
 
@@ -121,17 +140,18 @@ def convert_vcf_to_tab(input_vcf: str, threads=4) -> pd.DataFrame:
     
     try:
         with pysam.VariantFile(input_vcf) as vcf_file:
-            # Extract the VEP CSQ (in INFO) field description from the header
+            # Extract the VEP CSQ field description from the header
             csq_fields = vcf_file.header.info['CSQ'].description.split('Format: ')[1].split('|')
             clinvar_csq_fields = vcf_file.header.info['CLNCSQ'].description.split('Format: ')[1].split('|')
-            record_args = ((record, 
-                            f"{record.chrom}:{record.pos}:{record.ref}->{record.alts[0]}", 
-                            tuple(csq_fields), 
-                            tuple(clinvar_csq_fields)) for record in vcf_file)
+            
+            # Convert records to dictionaries before multiprocessing
+            record_args = ((extract_record_info(record), 
+                          f"{record.chrom}:{record.pos}:{record.ref}->{record.alts[0]}", 
+                          tuple(csq_fields), 
+                          tuple(clinvar_csq_fields)) for record in vcf_file)
 
             with mp.Pool(threads) as pool:
                 for rows, logs in pool.imap_unordered(convert_record_to_tab, record_args):
-                    # Print collected logs as a group
                     if logs:
                         sys.stderr.write("\n".join(logs) + "\n")
                         sys.stderr.flush()

@@ -12,6 +12,8 @@ import json
 from collections import defaultdict
 from statsmodels.stats.multitest import multipletests
 
+from stat_protein_domain_amscores import nested_defaultdict
+
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)

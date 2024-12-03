@@ -219,7 +219,7 @@ def collect_domain_data(d, output_dir: str, min_variants: int, path=[]) -> List:
 
 def get_missense_intolerant_domains(mechanism_tsv: str, 
                                     intolerant_tsv: str, 
-                                    min_odds_ratio: float = 0.5) -> Set[str]:
+                                    min_odds_ratio: float = 0.75) -> Set[str]:
     """
     Identify domains that are both intolerant to variation and not enriched for truncating variants.
     
@@ -242,6 +242,7 @@ def get_missense_intolerant_domains(mechanism_tsv: str,
     mechanism_domains = set(
         mech_df[
             (mech_df['pvalue'] > 0.05) &
+            (mech_df['odds_ratio'] >= min_odds_ratio) &
             (~mech_df['odds_ratio'].isna())  # Exclude domains with undefined odds ratios
         ]['domain']
     )

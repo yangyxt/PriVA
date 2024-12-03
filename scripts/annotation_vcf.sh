@@ -413,7 +413,6 @@ function anno_VEP_data() {
 	log "The splicevault_prescore is ${config_args[splicevault_prescore]}"
 
     # Set variables with command line arguments taking precedence over config file
-    local input_vcf="${input_vcf:-${config_args[input_vcf]}}"
     local assembly="${assembly:-${config_args[assembly]}}"
     local ref_genome="${ref_genome:-${config_args[ref_genome]}}"
     local vep_cache_dir="${vep_cache_dir:-${config_args[vep_cache_dir]}}"
@@ -507,7 +506,6 @@ function anno_VEP_data() {
 	-plugin SpliceVault,file=${splicevault_prescore} \
     -plugin Conservation,${conversation_file},MAX \
 	-plugin NMD \
-	-plugin SingleLetterAA \
     --force_overwrite \
     -o ${output_vcf} && \
 	bcftools sort -Oz -o ${input_vcf/.vcf*/.vcf.gz} ${output_vcf} && \

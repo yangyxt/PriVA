@@ -39,6 +39,23 @@ function prepare_combined_tab () {
 
 
 
+function assign_acmg_criteria () {
+    local input_tab=${1}
+    local config_file=${2}
+
+    local clinvar_pd_stat=$(read_yaml ${config_file} "clinvar_pd_stat")
+    local clinvar_aa_stat=$(read_yaml ${config_file} "clinvar_aa_stat")
+    local am_pd_stat=$(read_yaml ${config_file} "alphamissense_pd_stat")
+
+    local acmg_py=${SCRIPT_DIR}/acmg_criteria_assign.py
+
+
+
+
+}
+
+
+
 
 if [[ "${#BASH_SOURCE[@]}" -eq 1 ]]; then
     declare -a func_names=($(typeset -f | awk '!/^main[ (]/ && /^[^ {}]+ *\(\)/ { gsub(/[()]/, "", $1); printf $1" ";}'))

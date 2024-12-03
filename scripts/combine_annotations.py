@@ -85,6 +85,7 @@ def extract_record_info(record):
             'AF_joint': record.info.get('AF_joint', [np.nan])[0],
             'nhomalt_joint_XX': record.info.get('nhomalt_joint_XX', [np.nan])[0],
             'nhomalt_joint_XY': record.info.get('nhomalt_joint_XY', [np.nan])[0],
+            'CLNDN': record.info.get('CLNDN', [""])[0],
             'CLNSIG': record.info.get('CLNSIG', [""])[0],
             'CLNREVSTAT': record.info.get('CLNREVSTAT', [""])[0],
             'VARIANT_SOURCE': record.info.get('VARIANT_SOURCE', "")

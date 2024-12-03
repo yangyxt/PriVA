@@ -1,4 +1,4 @@
-parser.add_argument('--input_vcf', required=False, help='Input VCF file (must be bgzipped)')
+parser.add_argument('--input_vcf', required=True, help='Input VCF file (must be bgzipped)')
 parser.add_argument('--config', default='', help='Config file path')
 parser.add_argument('--assembly', help='Assembly version (hg19/hg38)')
 parser.add_argument('--ref_genome', help='Reference genome FASTA')

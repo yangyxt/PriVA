@@ -52,6 +52,7 @@ class DomainAMScoreCollector:
         csq_format = str(vcf.header).split('Format: ')[-1].strip('>"').split('|')
         domains_idx = csq_format.index('DOMAINS')
         gene_idx = csq_format.index('Gene')
+        exon_idx = csq_format.index('EXON')
         feature_type_idx = csq_format.index('Feature_type')
         transcript_idx = csq_format.index('Feature')
         
@@ -78,6 +79,8 @@ class DomainAMScoreCollector:
                     
                     domains_str = fields[domains_idx]
                     ensg_id = fields[gene_idx]
+                    transcript_id = fields[transcript_idx]
+                    exon_id = fields[exon_idx]
                     
                     if not domains_str or not ensg_id:
                         continue
@@ -89,15 +92,19 @@ class DomainAMScoreCollector:
                         # Navigate through domain hierarchy
                         for level in hierarchy:
                             current_dict = current_dict[level]
+                            if transcript_id not in current_dict:
+                                current_dict[transcript_id] = set()
+                            else:
+                                current_dict[transcript_id].add(exon_id)
                             # Initialize distribution if not exists
                             if 'distribution' not in current_dict:
                                 current_dict['distribution'] = {}
                             # Add score to distribution
-                            if aa_pos not in current_dict['distribution']:
-                                current_dict['distribution'][aa_pos] = am_score
-                            elif am_score > current_dict['distribution'][aa_pos]:
-                                # Keep the highest score for this AA position
-                                current_dict['distribution'][aa_pos] = am_score
+                            if prot_var not in current_dict['distribution']:
+                                current_dict['distribution'][prot_var] = am_score
+                            # elif am_score > current_dict['distribution'][aa_pos]:
+                            #     # Keep the highest score for this AA position
+                            #     current_dict['distribution'][aa_pos] = am_score
                         
             except (KeyError, ValueError) as e:
                 print(f"Error processing record {record.chrom}:{record.pos} - {str(e)}")

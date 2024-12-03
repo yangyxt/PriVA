@@ -62,6 +62,7 @@ class DomainClinVarCollector:
         # Get CSQ format from header
         csq_format = str(vcf.header).split('Format: ')[-1].strip('>"').split('|')
         domains_idx = csq_format.index('DOMAINS')
+        gene_idx = csq_format.index('Gene')
         consq_idx = csq_format.index('Consequence')
         feature_type_idx = csq_format.index('Feature_type')
         transcript_idx = csq_format.index('Feature')
@@ -94,15 +95,16 @@ class DomainClinVarCollector:
                         continue
 
                     domains_str = fields[domains_idx]
-                    enst_id = fields[transcript_idx]
+                    # enst_id = fields[transcript_idx]
+                    ensg_id = fields[gene_idx]
                     consq = fields[consq_idx]
 
-                    if not domains_str or not enst_id:
+                    if not domains_str or not ensg_id:
                         continue
 
                     # Process each domain annotation
                     for db_name, hierarchy in self._parse_domain_hierarchy(domains_str):
-                        current_dict = self.scores_dict[enst_id][db_name]
+                        current_dict = self.scores_dict[ensg_id][db_name]
 
                         # Navigate through domain hierarchy
                         for level in hierarchy:

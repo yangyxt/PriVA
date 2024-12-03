@@ -133,7 +133,6 @@ function vep_install_wrapper() {
     [[ -f ${VEP_PLUGINSDIR}/SameCodon.pm ]] && \
     [[ -f ${VEP_PLUGINSDIR}/NMD.pm ]] && \
     [[ -f ${VEP_PLUGINSDIR}/PrimateAI.pm ]] && \
-    [[ -f ${VEP_PLUGINSDIR}/SingleLetterAA.pm ]] && \
     { log "The PERL5LIB value and PATH value already include ${VEP_DESTDIR} and ${VEP_PLUGINSDIR}, indicating the following installation process has already been succesfully performed. Skip the function for now."; return 0; }
 
     local conda_env_name=$(basename $CONDA_PREFIX)
@@ -146,7 +145,7 @@ function vep_install_wrapper() {
     local cmd="vep_install -d ${VEP_DESTDIR} --AUTO acp -s homo_sapiens_merged --NO_HTSLIB --NO_BIOPERL --CONVERT"
     [[ -n "$VEP_CACHEDIR" ]] && cmd+=" --CACHEDIR $VEP_CACHEDIR"
     [[ -n "$VEP_ASSEMBLY" ]] && cmd+=" --ASSEMBLY $VEP_ASSEMBLY"
-    [[ -n "$VEP_PLUGINS" ]] && [[ $VEP_PLUGINS != "empty" ]] && cmd+=" --PLUGINS $VEP_PLUGINS,SpliceAI,SpliceVault,UTRAnnotator,AlphaMissense,GO,Phenotypes,Conservation,LOEUF,SameCodon,NMD,PrimateAI,SingleLetterAA" || cmd+=" --PLUGINS SpliceAI,SpliceVault,UTRAnnotator,AlphaMissense,GO,Phenotypes,Conservation,LOEUF,SameCodon,NMD,PrimateAI,SingleLetterAA"
+    [[ -n "$VEP_PLUGINS" ]] && [[ $VEP_PLUGINS != "empty" ]] && cmd+=" --PLUGINS $VEP_PLUGINS,SpliceAI,SpliceVault,UTRAnnotator,AlphaMissense,GO,Phenotypes,Conservation,LOEUF,SameCodon,NMD,PrimateAI" || cmd+=" --PLUGINS SpliceAI,SpliceVault,UTRAnnotator,AlphaMissense,GO,Phenotypes,Conservation,LOEUF,SameCodon,NMD,PrimateAI"
     [[ -n "$VEP_PLUGINSDIR" ]] && cmd+=" --PLUGINSDIR $VEP_PLUGINSDIR"
 
     # Execute the command
@@ -401,7 +400,6 @@ function CADD_install() {
         log "Cannot find the CADD script in the conda environment"
         return 1
     fi
-    update_yaml ${config_file} "cadd_base_dir" "$(dirname ${CADD_script})"
 
     local CADD_cache_dir=$(dirname ${CADD_script})/data
     local cadd_version=$(read_yaml "${config_file}" "cadd_version")
@@ -411,6 +409,7 @@ function CADD_install() {
     if [[ ${REPLY} =~ "yes" ]] || [[ ${REPLY} =~ "y" ]] || [[ ${REPLY} =~ "Y" ]] || [[ ${REPLY} =~ "Yes" ]] || [[ ${REPLY} =~ "YES" ]]; then
         local CADD_prescore_dir=${CADD_cache_dir}/prescored
         local CADD_anno_dir=${CADD_cache_dir}/annotations
+        update_yaml ${config_file} "cadd_base_dir" "$(dirname ${CADD_script})"
     else
         read -p "In this case, you need to download the CADD repo as a zip file and unzip it to a local directory and all the cache files will be store in that directory. Please specify the absolute path to the directory: "
         local CADD_parent_dir=${REPLY}
@@ -662,7 +661,7 @@ function AlphaMissense_anno() {
 
 function AlphaMissense_stat() {
     local config_file=${1}
-    local alphamissense_stat=$(read_yaml ${config_file} "alphamissense_stat_pickle")
+    local alphamissense_stat=$(read_yaml ${config_file} "alphamissense_pd_stat")
     local alphamissense_vcf=$(read_yaml ${config_file} "alphamissense_vep_vcf")
 
     [[ -f ${alphamissense_stat} ]] && \
@@ -673,7 +672,7 @@ function AlphaMissense_stat() {
     python ${stat_py} \
     ${alphamissense_vcf} \
     ${alphamissense_vcf/.vcf*/.prot.domain.stats.pkl} && \
-    update_yaml ${config_file} "alphamissense_stat_pickle" "${alphamissense_vcf/.vcf*/.prot.domain.stats.pkl}" && \
+    update_yaml ${config_file} "alphamissense_pd_stat" "${alphamissense_vcf/.vcf*/.prot.domain.stats.pkl}" && \
     log "The AlphaMissense statistics pickle file ${alphamissense_vcf/.vcf*/.prot.domain.stats.pkl} is generated and saved to ${alphamissense_stat}"
 }
 
@@ -910,7 +909,6 @@ function basic_vep_annotation() {
     --canonical \
     --domains \
     --numbers \
-    --plugin SingleLetterAA \
     --stats_file ${input_vcf/.vcf*/.vep.stats.html} \
     --fork ${threads} \
     --buffer_size 10000 \
@@ -1095,16 +1093,21 @@ function SpliceVault_install () {
         [[ ! -d ${tmp_dir} ]] && { log "The temporary directory ${tmp_dir} is not found, please check the file"; return 1; }
         # Currently, we only have the SpliceVault data for GRCh38, so we need to convert it to GRCh37
         wget -c ${splicevault_url} -O ${PLUGIN_CACHEDIR}/SpliceVault/SpliceVault_data_GRCh38.tsv.gz && \
-        gunzip -c ${PLUGIN_CACHEDIR}/SpliceVault/SpliceVault_data_GRCh38.tsv.gz > ${PLUGIN_CACHEDIR}/SpliceVault/SpliceVault_data_GRCh37.tsv && \
+        gunzip -c ${PLUGIN_CACHEDIR}/SpliceVault/SpliceVault_data_GRCh38.tsv.gz > ${PLUGIN_CACHEDIR}/SpliceVault/SpliceVault_data_GRCh38.tsv && \
         python ${git_scripts_dir}/SpliceVault_tsv_vcf_conversion.py \
         --input_tsv ${PLUGIN_CACHEDIR}/SpliceVault/SpliceVault_data_GRCh38.tsv \
         --output_tsv ${PLUGIN_CACHEDIR}/SpliceVault/SpliceVault_data_GRCh37.tsv \
         --chain_file ${chain_file} \
         --reference_fasta ${ref_genome} && \
-        LC_ALL=C sort -k1,1V -k2,2n --parallel=8 --buffer-size=8G -T ${tmp_dir} ${PLUGIN_CACHEDIR}/SpliceVault/SpliceVault_data_GRCh37.tsv | \
+        head -1 ${PLUGIN_CACHEDIR}/SpliceVault/SpliceVault_data_GRCh37.tsv > ${PLUGIN_CACHEDIR}/SpliceVault/SpliceVault_data_GRCh37.tsv.header && \
+        tail -n +2 ${PLUGIN_CACHEDIR}/SpliceVault/SpliceVault_data_GRCh37.tsv > ${PLUGIN_CACHEDIR}/SpliceVault/SpliceVault_data_GRCh37.tsv.body && \
+        LC_ALL=C sort -k1,1V -k2,2n --parallel=8 --buffer-size=8G -T ${tmp_dir} ${PLUGIN_CACHEDIR}/SpliceVault/SpliceVault_data_GRCh37.tsv.body > \
+        ${PLUGIN_CACHEDIR}/SpliceVault/SpliceVault_data_GRCh37.tsv && \
+        cat ${PLUGIN_CACHEDIR}/SpliceVault/SpliceVault_data_GRCh37.tsv.header ${PLUGIN_CACHEDIR}/SpliceVault/SpliceVault_data_GRCh37.tsv | \
         bgzip > ${PLUGIN_CACHEDIR}/SpliceVault/SpliceVault_data_GRCh37.tsv.gz && \
         tabix -s 1 -b 2 -e 2 -c "#" ${PLUGIN_CACHEDIR}/SpliceVault/SpliceVault_data_GRCh37.tsv.gz && \
-        update_yaml "${config}" "splicevault_prescore" "${PLUGIN_CACHEDIR}/SpliceVault/SpliceVault_data_GRCh37.tsv.gz"
+        update_yaml "${config}" "splicevault_prescore" "${PLUGIN_CACHEDIR}/SpliceVault/SpliceVault_data_GRCh37.tsv.gz" && \
+        announce_remove_tmps ${PLUGIN_CACHEDIR}/SpliceVault/SpliceVault_data_GRCh37.tsv.header ${PLUGIN_CACHEDIR}/SpliceVault/SpliceVault_data_GRCh37.tsv.body
     elif [[ ${ASSEMBLY_VERSION} =~ "GRCh38" ]] || [[ ${ASSEMBLY_VERSION} =~ "hg38" ]]; then
         wget -c ${splicevault_url} -O ${PLUGIN_CACHEDIR}/SpliceVault/SpliceVault_data_GRCh38.tsv.gz && \
         wget -c ${splicevault_url}.tbi -O ${PLUGIN_CACHEDIR}/SpliceVault/SpliceVault_data_GRCh38.tsv.gz.tbi && \

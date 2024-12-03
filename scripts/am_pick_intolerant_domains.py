@@ -455,8 +455,7 @@ def analyze_domain_data(pickle_file: str,
     domain_tasks = [
         (domain_path, scores, ref_domain_scores)
         for domain_path, scores in domain_scores.items()
-        if domain_path not in ref_mis_intolerant_domains
-    ]
+        ]
 
     # Process domains in parallel
     n_cores = min(threads, len(domain_tasks))  # Don't use more cores than tasks

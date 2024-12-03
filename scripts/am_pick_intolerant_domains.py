@@ -10,8 +10,7 @@ import pandas as pd
 import logging
 import json
 from collections import defaultdict
-
-from stat_protein_domain_amscores import nested_defaultdict
+from statsmodels.stats.multitest import multipletests
 
 
 logger = logging.getLogger(__name__)
@@ -218,7 +217,7 @@ def collect_domain_data(d, output_dir: str, min_variants: int, path=[]) -> List:
 
 def get_missense_intolerant_domains(mechanism_tsv: str, 
                                     intolerant_tsv: str, 
-                                    min_odds_ratio: float = 0.8) -> Set[str]:
+                                    min_odds_ratio: float = 0.6) -> Set[str]:
     """
     Identify domains that are both intolerant to variation and not enriched for truncating variants.
     
@@ -240,6 +239,7 @@ def get_missense_intolerant_domains(mechanism_tsv: str,
     # Filter mechanism domains based on odds ratio
     mechanism_domains = set(
         mech_df[
+            (mech_df['pvalue'] < 0.05) &
             (mech_df['odds_ratio'] >= min_odds_ratio) &
             (~mech_df['odds_ratio'].isna())  # Exclude domains with undefined odds ratios
         ]['domain']
@@ -477,7 +477,7 @@ def analyze_domain_data(pickle_file: str,
             p_values.append(result['fisher_combined_p_value'])
         
         # Apply FDR correction
-        rejected, p_values_corrected, _, _ = stats.multipletests(
+        rejected, p_values_corrected, _, _ = multipletests(
             p_values, 
             alpha=fdr_threshold, 
             method='fdr_bh'  # Benjamini-Hochberg procedure

@@ -677,6 +677,37 @@ function AlphaMissense_stat() {
 }
 
 
+function AlphaMissense_pick_intolerant_domains() {
+    local config_file=${1}
+
+    local alphamissense_pd_stat=$(read_yaml ${config_file} "alphamissense_pd_stat")
+    local alphamissense_tranx_domain_map=$(read_yaml ${config_file} "alphamissense_tranx_domain_map")
+    local alphamissense_intolerant_domains=$(read_yaml ${config_file} "alphamissense_intolerant_domains")
+
+    [[ -f ${alphamissense_intolerant_domains} ]] && \
+    [[ ${alphamissense_intolerant_domains} -nt ${alphamissense_pd_stat} ]] && \
+    [[ -f ${alphamissense_tranx_domain_map} ]] && \
+    [[ ${alphamissense_tranx_domain_map} -nt ${alphamissense_intolerant_domains} ]] && \
+    log "The AlphaMissense intolerant domains file ${alphamissense_intolerant_domains} is already generated, skip this step" && return 0
+
+    local pick_intolerant_domains_py=${SCRIPT_DIR}/am_pick_intolerant_domains.py
+    local clinvar_intolerant_domains=$(read_yaml ${config_file} "clinvar_intolerant_domains")
+    local clinvar_intolerance_mechanisms=$(read_yaml ${config_file} "clinvar_intolerance_mechanisms")
+    local threads=$(read_yaml ${config_file} "threads")
+    local alphamissense_dir=$(dirname ${alphamissense_pd_stat})
+    
+    python ${pick_intolerant_domains_py} \
+    --pickle_file ${alphamissense_pd_stat} \
+    --threads ${threads} \
+    --output_dir ${alphamissense_dir} \
+    --intolerant_domains_tsv ${clinvar_intolerant_domains} \
+    --mechanisms_tsv ${clinvar_intolerance_mechanisms} && \
+    update_yaml ${config_file} "alphamissense_intolerant_domains" "${alphamissense_dir}/domain_tolerance_analysis.tsv" && \
+    update_yaml ${config_file} "alphamissense_tranx_domain_map" "${alphamissense_dir}/transcript_exon_domain_mapping.pkl" && \
+    log "The AlphaMissense intolerant domains file ${alphamissense_intolerant_domains} and transcript exon domain mapping file ${alphamissense_tranx_domain_map} are generated and saved to ${alphamissense_dir}"
+}
+
+
 
 function LOEUF_install() {
     # The LOEUF plugin cache files are stored in the github repo because the original url is not accessible anymore
@@ -1024,6 +1055,32 @@ function ClinVar_AA_stat () {
 }
 
 
+function ClinVar_pick_intolerant_domains () {
+    local config_file=${1}
+
+    local clinvar_domain_stats=$(read_yaml ${config_file} "clinvar_pd_stat")
+    local clinvar_intolerant_domains=$(read_yaml ${config_file} "clinvar_intolerant_domains")
+    local clinvar_intolerance_mechanisms=$(read_yaml ${config_file} "clinvar_intolerance_mechanisms")
+
+    [[ -f ${clinvar_intolerant_domains} ]] && \
+    [[ ${clinvar_intolerant_domains} -nt ${clinvar_domain_stats} ]] && \
+    [[ -f ${clinvar_intolerance_mechanisms} ]] && \
+    [[ ${clinvar_intolerance_mechanisms} -nt ${clinvar_domain_stats} ]] && \
+    log "The intolerant domains file ${clinvar_intolerant_domains} and intolerance mechanisms file ${clinvar_intolerance_mechanisms} are already generated. Skip this step" && return 0
+
+    local clinvar_pick_intolerant_domains_py=${SCRIPT_DIR}/clinvar_pick_intolerant_domains.py
+    local clinvar_dir=$(read_yaml ${config_file} "clinvar_vcf_dir")
+
+    log "Running command: python ${clinvar_pick_intolerant_domains_py} --pickle_file ${clinvar_domain_stats} --output_dir ${clinvar_dir}"
+    python ${clinvar_pick_intolerant_domains_py} \
+    --pickle_file ${clinvar_domain_stats} \
+    --output_dir ${clinvar_dir} && \
+    update_yaml ${config_file} "clinvar_intolerant_domains" "${clinvar_dir}/intolerant_domains.tsv" && \
+    update_yaml ${config_file} "clinvar_intolerance_mechanisms" "${clinvar_dir}/domain_mechanism_analysis.tsv"
+}
+
+
+
 function Conservation_install() {
     local config=${1}
     local CACHEDIR=${2}
@@ -1250,6 +1307,11 @@ function main_install() {
     { log "Failed to stat ClinVar per protein domain"; return 1; }
     ClinVar_AA_stat ${config_file} || \
     { log "Failed to stat ClinVar per AA change"; return 1; }
+    ClinVar_pick_intolerant_domains ${config_file} || \
+    { log "Failed to pick intolerant domains from ClinVar"; return 1; }
+    AlphaMissense_pick_intolerant_domains ${config_file} || \
+    { log "Failed to pick intolerant domains from AlphaMissense"; return 1; }
+
 
     # 6. Install CADD prescores
     CADD_install \

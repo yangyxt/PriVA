@@ -38,16 +38,71 @@ function prepare_combined_tab () {
 }
 
 
+function interpret_splicing_annotations () {
+    local input_tab=${1}
+    local config_file=${2}
+
+    local splicing_py=${SCRIPT_DIR}/splicing_var_analysis.py
+
+    local alphamissense_tranx_domain_map=$(read_yaml ${config_file} "alphamissense_tranx_domain_map")
+    local alphamissense_intolerant_domains=$(read_yaml ${config_file} "alphamissense_intolerant_domains")
+    local threads=$(read_yaml ${config_file} "threads")
+
+    python ${splicing_py} \
+    --anno_table ${input_tab} \
+    --transcript_domain_map ${alphamissense_tranx_domain_map} \
+    --intolerant_domains ${alphamissense_intolerant_domains} \
+    --threads ${threads} && \
+    display_table ${input_tab} && \
+    log "The splicing interpretations are saved to ${input_tab}, added with two columns: splicing_lof and splicing_len_changing"
+}
+
+
+
+function interpret_utr_annotations () {
+    local input_tab=${1}
+    local config_file=${2}
+
+    local utr_py=${SCRIPT_DIR}/utr_anno_interpret.py
+
+    local alphamissense_tranx_domain_map=$(read_yaml ${config_file} "alphamissense_tranx_domain_map")
+    local alphamissense_intolerant_domains=$(read_yaml ${config_file} "alphamissense_intolerant_domains")
+    local threads=$(read_yaml ${config_file} "threads")
+
+    python ${utr_py} \
+    --variants_table ${input_tab} \
+    --domain_map ${alphamissense_tranx_domain_map} \
+    --intolerant_domains ${alphamissense_intolerant_domains} \
+    --threads ${threads} && \
+    display_table ${input_tab} && \
+    log "The UTR interpretations are saved to ${input_tab}, added with two columns: 5UTR_lof and 5UTR_length_changing"
+}
+
+
 
 function assign_acmg_criteria () {
     local input_tab=${1}
     local config_file=${2}
 
+    
+    # Preprocess step, interpret the splicing annotations
+    interpret_splicing_annotations ${input_tab} ${config_file} || \
+    { log "Failed to interpret splicing annotations"; return 1; }
+
+    # Preprocess step, interpret the UTR annotations
+    interpret_utr_annotations ${input_tab} ${config_file} || \
+    { log "Failed to interpret UTR annotations"; return 1; }
+    
+    
     local clinvar_pd_stat=$(read_yaml ${config_file} "clinvar_pd_stat")
     local clinvar_aa_stat=$(read_yaml ${config_file} "clinvar_aa_stat")
     local am_pd_stat=$(read_yaml ${config_file} "alphamissense_pd_stat")
 
+    
+    
     local acmg_py=${SCRIPT_DIR}/acmg_criteria_assign.py
+
+
 
 
 

@@ -389,7 +389,7 @@ def analyze_domain_data(pickle_file: str, output_dir: str):
     Analyze domain data from the pickle file.
     
     Args:
-        pickle_file: Path to the pickle file containing clinvar_dict
+        pickle_file: Path to the pickle file containing clinvar_dict of the domain level stats
         output_dir: Directory to save analysis outputs
     """
     # Load the data

@@ -506,6 +506,7 @@ def analyze_domain_data(pickle_file: str,
         results_df.to_csv(os.path.join(output_dir, 'domain_tolerance_analysis.tsv'), 
                          sep='\t', index=False)
         
+        logger.info(f"The domain tolerance analysis results are saved to {os.path.join(output_dir, 'domain_tolerance_analysis.tsv')}")
         logger.info(f"Completed tolerance analysis for {len(tolerance_results)} domains")
         logger.info(f"Found {sum(rejected)} domains that are significantly more tolerant "
                    f"than reference domains (FDR < {fdr_threshold})")

@@ -9,7 +9,7 @@ import pandas as pd
 import argparse as ap
 from typing import Tuple, Dict, Set, Optional
 import logging
-import json
+import pickle
 import multiprocessing as mp
 
 logger = logging.getLogger(__name__)
@@ -175,9 +175,8 @@ def process_variants_table(variants_table: str,
     df = pd.read_table(variants_table, low_memory=False)
     
     if domain_map_file and intolerant_domains_file:
-        with open(domain_map_file) as f:
-            domain_map = json.load(f)
-        intolerant_domains = set(pd.read_csv(intolerant_domains_file, sep='\t')['domain'])
+        domain_map = pickle.load(open(domain_map_file, 'rb'))
+        intolerant_domains = pickle.load(open(intolerant_domains_file, 'rb'))
     
     # Create arguments for each row
     row_args = [(row, domain_map, intolerant_domains) for _, row in df.iterrows()]
@@ -186,7 +185,7 @@ def process_variants_table(variants_table: str,
     with mp.Pool(processes=threads) as pool:
         results = pool.map(process_row, row_args)
     
-    df['5UTR_lof'], df['5UTR_length_changing'] = zip(*results)
+    df['5UTR_lof'], df['5UTR_len_changing'] = zip(*results)
     df.to_csv(variants_table, sep='\t', index=False)
     return df
 
@@ -195,8 +194,8 @@ def process_variants_table(variants_table: str,
 if __name__ == "__main__":
     parser = ap.ArgumentParser(description="Interpret UTR annotations")
     parser.add_argument("--variants_table", required=True, help="Path to the variants table")
-    parser.add_argument("--domain_map", required=True, help="Path to the domain map")
-    parser.add_argument("--intolerant_domains", required=True, help="Path to the intolerant domains")
+    parser.add_argument("--domain_map", required=True, help="Path to the domain map, pickle file")
+    parser.add_argument("--intolerant_domains", required=True, help="Path to the intolerant domains, pickle file")
     parser.add_argument("--threads", type=int, default=12, help="Number of processes to use")
     args = parser.parse_args()
     process_variants_table(args.variants_table, 

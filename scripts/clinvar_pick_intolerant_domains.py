@@ -136,7 +136,7 @@ def is_protein_disrupting(consq: str) -> bool:
     return any(term in consq.lower() for term in protein_disrupting_terms)
 
 
-def create_contingency_table(domain_dist: Dict) -> Dict:
+def vartype_corr_exam(domain_dist: Dict) -> Dict:
     """
     Create a 2x2 contingency table for a domain's variants.
     
@@ -354,7 +354,8 @@ def identify_intolerant_domains(clinvar_dict: Dict,
                               output_dir: str,
                               benign_threshold: float = 0.1,
                               pathogenic_threshold: float = 0.5,
-                              min_variants: int = 5) -> Dict[str, float]:
+                              min_variants: int = 5,
+                              threads: int = 1) -> Dict[str, float]:
     """
     Identify domains that have very few benign variants and create distribution plots.
     
@@ -363,6 +364,7 @@ def identify_intolerant_domains(clinvar_dict: Dict,
         output_dir: Directory to save outputs
         benign_threshold: Maximum fraction of benign variants allowed
         min_variants: Minimum number of variants required in a domain
+        threads: Number of CPU threads to use
         
     Returns:
         Dictionary mapping domain paths to their statistics
@@ -371,10 +373,10 @@ def identify_intolerant_domains(clinvar_dict: Dict,
     domain_data = collect_domain_data(clinvar_dict, output_dir, benign_threshold, min_variants, pathogenic_threshold)
     
     # Process domains in parallel
-    n_cores = max(1, mp.cpu_count() - 30)  # Leave some cores free
-    logger.info(f"Processing {len(domain_data)} domains using {n_cores} cores")
+    threads = min(threads, len(domain_data), mp.cpu_count()-1)
+    logger.info(f"Processing {len(domain_data)} domains using {threads} cores")
     
-    with mp.Pool(n_cores) as pool:
+    with mp.Pool(threads) as pool:
         results = list(pool.imap_unordered(process_single_domain, domain_data))
     
     # Filter out None results and convert to dictionary
@@ -382,34 +384,6 @@ def identify_intolerant_domains(clinvar_dict: Dict,
     intolerant_domains = {r['domain']: r for r in results}
     
     return intolerant_domains
-
-
-def analyze_domain_data(pickle_file: str, output_dir: str):
-    """
-    Analyze domain data from the pickle file.
-    
-    Args:
-        pickle_file: Path to the pickle file containing clinvar_dict of the domain level stats
-        output_dir: Directory to save analysis outputs
-    """
-    # Load the data
-    with open(pickle_file, 'rb') as f:
-        clinvar_dict = pickle.load(f)
-    
-    # Filter and analyze ClinVar data
-    filtered_clinvar = filter_high_confidence_variants(clinvar_dict)
-    intolerant_domains = identify_intolerant_domains(filtered_clinvar, output_dir)
-    
-    # Save intolerant domains results
-    results_df = pd.DataFrame.from_dict(intolerant_domains, orient='index')
-    results_df.index.name = 'domain'
-    results_df.to_csv(os.path.join(output_dir, 'intolerant_domains.tsv'), 
-                     sep='\t', index=False)
-    
-    logger.info(f"Found {len(intolerant_domains)} intolerant domains")
-
-    # Analyze domain mechanisms
-    mechanism_df = analyze_domain_mechanisms(filtered_clinvar, output_dir)
 
 
 
@@ -428,7 +402,7 @@ def process_domain_mechanism(domain_path: str, dist: Dict) -> Dict:
         return None
         
     # Create contingency table
-    stats = create_contingency_table(dist['distribution'])
+    stats = vartype_corr_exam(dist['distribution'])
     table = stats['table']
     
     # Calculate additional metrics
@@ -451,6 +425,7 @@ def process_domain_mechanism(domain_path: str, dist: Dict) -> Dict:
         'odds_ratio': stats['odds_ratio']
     }
 
+
 def traverse_mechanism_dict(d: Dict, results: List, path: List = []):
     """
     Traverse the nested dictionary to collect mechanism data.
@@ -469,13 +444,17 @@ def traverse_mechanism_dict(d: Dict, results: List, path: List = []):
         elif isinstance(v, dict):
             traverse_mechanism_dict(v, results, path + [k])
 
-def analyze_domain_mechanisms(clinvar_dict: Dict, output_dir: str) -> pd.DataFrame:
+
+
+
+def analyze_domain_mechanisms(clinvar_dict: Dict, output_dir: str, threads: int) -> pd.DataFrame:
     """
-    Analyze variant type distributions for all domains.
+    Analyze variant type distributions for all domains and genes.
     
     Args:
         clinvar_dict: Nested dictionary containing ClinVar data
         output_dir: Directory to save outputs
+        threads: Number of CPU threads to use
         
     Returns:
         DataFrame containing mechanism analysis results
@@ -485,33 +464,186 @@ def analyze_domain_mechanisms(clinvar_dict: Dict, output_dir: str) -> pd.DataFra
     # Process all domains
     traverse_mechanism_dict(clinvar_dict, results)
     
-    # Convert results to DataFrame and save
+    # Convert results to DataFrame and add gene-level analysis
     if results:
         df = pd.DataFrame(results)
+        
+        # Add gene-level statistics
+        df = analyze_gene_mechanisms(df, threads)
+        
+        # Save results
         output_file = os.path.join(output_dir, 'domain_mechanism_analysis.tsv')
         df.to_csv(output_file, sep='\t', index=False)
         logger.info(f"Saved mechanism analysis results to {output_file}")
         
-        # Create summary plot
-        plt.figure(figsize=(10, 6))
-        plt.scatter(df['truncating_fraction'], -np.log10(df['pvalue']))
-        plt.xlabel('Fraction of Pathogenic Variants that are Truncating')
-        plt.ylabel('-log10(Fisher P-value)')
-        plt.title('Domain Mechanism Analysis')
-        
-        plot_file = os.path.join(output_dir, 'domain_mechanism_plot.png')
-        plt.savefig(plot_file)
-        logger.info(f"Saved mechanism plot to {plot_file}")
-        plt.close()
+        # Create summary plots
+        create_mechanism_plots(df, output_dir)
         
         return df
     
     return None
 
 
+def analyze_gene_mechanisms(df: pd.DataFrame, threads: int) -> pd.DataFrame:
+    '''
+    Aggregate domain-level data to gene level and perform statistical tests.
+    
+    Args:
+        df: DataFrame containing domain mechanism analysis results
+        threads: Number of CPU threads to use
+        
+    Returns:
+        Original DataFrame with added gene-level statistics
+    '''
+    # Extract gene IDs
+    df['gene_id'] = df['domain'].str.split('_').str[0]
+    
+    # Group by gene and sum the contingency table values
+    gene_stats = df.groupby('gene_id').agg({
+        'missense_pathogenic': 'sum',
+        'missense_not_patho': 'sum',
+        'truncating_pathogenic': 'sum',
+        'truncating_not_patho': 'sum',
+        'total_variants': 'sum',
+        'total_pathogenic': 'sum'
+    }).reset_index()
+    
+    # Convert DataFrame rows to dictionaries for parallel processing
+    gene_dicts = gene_stats.to_dict('records')
+    
+    # Calculate gene-level statistics using parallel processing
+    threads = min(threads, len(gene_dicts), mp.cpu_count()-1)
+    logger.info(f"Calculating {len(gene_dicts)} gene statistics using {threads} cores")
+    with mp.Pool(threads) as pool:
+        results = pool.map(calculate_gene_stats, gene_dicts)
+    
+    # Convert results to DataFrame
+    gene_level_df = pd.DataFrame(results)
+    
+    # Merge gene-level statistics back to original domain DataFrame
+    df = df.merge(gene_level_df[['gene_id', 'gene_pvalue', 'gene_odds_ratio', 'gene_test_used']], 
+                 on='gene_id', 
+                 how='left')
+    
+    return df
+
+
+def calculate_gene_stats(row_dict: dict) -> dict:
+    '''
+    Calculate statistical tests for a gene's contingency table.
+    
+    Args:
+        row_dict: Dictionary containing gene statistics
+        
+    Returns:
+        Dictionary containing gene statistics and test results
+    '''
+    # Create contingency table
+    table = [
+        [row_dict['missense_pathogenic'], row_dict['missense_not_patho']],
+        [row_dict['truncating_pathogenic'], row_dict['truncating_not_patho']]
+    ]
+    
+    # Initialize results
+    result_stats = {
+        'gene_id': row_dict['gene_id'],
+        'gene_pvalue': np.nan,
+        'gene_odds_ratio': np.nan,
+        'gene_test_used': 'none'
+    }
+    
+    # Check if we have enough data for statistical testing
+    total_count = sum(sum(row) for row in table)
+    min_cell_count = min(min(row) for row in table)
+    
+    if (total_count >= 5 and 
+        all(sum(row) > 0 for row in table) and
+        all(sum(col) > 0 for col in zip(*table))):
+        try:
+            if total_count >= 20 and min_cell_count >= 5:
+                # Use Chi-square test
+                chi2, pvalue = stats.chi2_contingency(table)[0:2]
+                result_stats['gene_test_used'] = 'chi_square'
+            else:
+                # Use Fisher's exact test
+                odds_ratio, pvalue = stats.fisher_exact(table)
+                result_stats['gene_test_used'] = 'fisher'
+            
+            # Calculate odds ratio
+            odds_ratio = ((row_dict['missense_pathogenic'] * row_dict['truncating_not_patho']) / 
+                         (row_dict['missense_not_patho'] * row_dict['truncating_pathogenic'])) if row_dict['truncating_pathogenic'] > 0 else np.inf
+            
+            result_stats['gene_pvalue'] = min(pvalue, 0.99999)
+            result_stats['gene_odds_ratio'] = odds_ratio
+            
+        except Exception as e:
+            logger.warning(f"Error calculating statistics for gene {row_dict['gene_id']}: {str(e)}")
+    
+    return result_stats
+
+
+def create_mechanism_plots(df: pd.DataFrame, output_dir: str):
+    """Create domain and gene level mechanism plots."""
+    # Domain-level plot
+    plt.figure(figsize=(10, 6))
+    plt.scatter(df['truncating_fraction'], -np.log10(df['pvalue']))
+    plt.xlabel('Fraction of Pathogenic Variants that are Truncating')
+    plt.ylabel('-log10(Domain P-value)')
+    plt.title('Domain Mechanism Analysis')
+    plt.savefig(os.path.join(output_dir, 'domain_mechanism_plot.png'))
+    plt.close()
+    
+    # Gene-level plot
+    plt.figure(figsize=(10, 6))
+    gene_df = df.drop_duplicates('gene_id')
+    plt.scatter(gene_df['gene_odds_ratio'], -np.log10(gene_df['gene_pvalue']))
+    plt.xlabel('Gene-level Odds Ratio (log scale)')
+    plt.xscale('log')
+    plt.ylabel('-log10(Gene P-value)')
+    plt.title('Gene Mechanism Analysis')
+    plt.savefig(os.path.join(output_dir, 'gene_mechanism_plot.png'))
+    plt.close()
+
+
+def main(pickle_file: str, output_dir: str, threads: int):
+    """
+    Analyze domain data from the pickle file.
+    
+    Args:
+        pickle_file: Path to the pickle file containing clinvar_dict
+        output_dir: Directory to save analysis outputs
+        threads: Number of CPU threads to use
+    """
+    # Load the data
+    with open(pickle_file, 'rb') as f:
+        clinvar_dict = pickle.load(f)
+    
+    # Filter and analyze ClinVar data
+    filtered_clinvar = filter_high_confidence_variants(clinvar_dict)
+    intolerant_domains = identify_intolerant_domains(filtered_clinvar, output_dir, threads=threads)
+    
+    # Save intolerant domains results
+    results_df = pd.DataFrame.from_dict(intolerant_domains, orient='index')
+    results_df.index.name = 'domain'
+    results_df.to_csv(os.path.join(output_dir, 'intolerant_domains.tsv'), 
+                     sep='\t', index=False)
+    
+    logger.info(f"Found {len(intolerant_domains)} intolerant domains")
+
+    # Analyze domain mechanisms
+    mechanism_df = analyze_domain_mechanisms(filtered_clinvar, output_dir, threads=threads)
+
+
 if __name__ == "__main__":
-    parser = ap.ArgumentParser(description="Analyze domain data from ClinVar pickle file")
-    parser.add_argument('--pickle_file', required=True, help="Path to the ClinVar pickle file")
-    parser.add_argument('--output_dir', required=True, help="Directory to save analysis outputs")
+    parser = ap.ArgumentParser(description="Analyze ClinVar domain data")
+    parser.add_argument("--pickle_file", required=True, help="Path to pickle file containing clinvar_dict")
+    parser.add_argument("--output_dir", required=True, help="Directory to save analysis outputs")
+    parser.add_argument("--threads", type=int, default=40, help="Number of CPU threads to use (default: CPU count - 2)")
+    
     args = parser.parse_args()
-    analyze_domain_data(args.pickle_file, args.output_dir)
+    
+    # Create output directory if it doesn't exist
+    os.makedirs(args.output_dir, exist_ok=True)
+    
+    # Run main function
+    main(args.pickle_file, args.output_dir, args.threads)

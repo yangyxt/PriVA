@@ -1,8 +1,7 @@
 import os
+import pickle
 import pandas as pd
-from collections import defaultdict
 import argparse as ap
-import numpy as np
 import logging
 import uuid
 import multiprocessing as mp
@@ -20,9 +19,16 @@ logger.addHandler(console_handler)
 
 
 
-def splicing_interpretation(anno_table, transcript_domain_map, intolerant_domains, spliceai_cutoff = 0.8, threads = 12):
+def splicing_interpretation(anno_table, 
+                            transcript_domain_map_pkl, 
+                            intolerant_domains_pkl, 
+                            spliceai_cutoff = 0.8, 
+                            threads = 12):
     """Process annotation table in parallel to interpret splicing effects"""
     anno_df = pd.read_table(anno_table, low_memory=False)
+
+    intolerant_domains = pickle.load(open(intolerant_domains_pkl, 'rb'))
+    transcript_domain_map = pickle.load(open(transcript_domain_map_pkl, 'rb'))
     
     # Create partial function with fixed arguments
     process_row = partial(splicing_altering_per_row, 
@@ -71,12 +77,14 @@ def splicing_altering_per_row(row,
     splicevault_events = row['SpliceVault_top_events']
     intron_pos = row['INTRON']
     exon_pos = row['EXON']
+    cds_pos = row["CDS_position"]
 
     # First get SpliceVault interpretation
     splicevault_lof, splicevault_len_changing = SpliceVault_interpretation( splicevault_events, 
                                                                             transcript_id, 
                                                                             transcript_domain_map, 
                                                                             intolerant_domains,
+                                                                            cds_pos,
                                                                             intron_pos,
                                                                             exon_pos )
     
@@ -100,6 +108,7 @@ def splicing_altering_per_row(row,
                                                                   transcript_id, 
                                                                   transcript_domain_map, 
                                                                   intolerant_domains,
+                                                                  cds_pos,
                                                                   intron_pos,
                                                                   exon_pos,
                                                                   spliceai_cutoff)
@@ -115,9 +124,10 @@ def SpliceAI_interpretation(DS_AG,
                             DP_AL, 
                             DP_DG, 
                             DP_DL, 
-                            transcript_id, 
-                            transcript_domain_map, 
-                            intolerant_domains, 
+                            transcript_id: str, 
+                            transcript_domain_map: dict, 
+                            intolerant_domains: set, 
+                            cds_pos = None,
                             intron_pos = None, 
                             exon_pos = None,
                             cutoff = 0.8) -> tuple:
@@ -143,6 +153,9 @@ def SpliceAI_interpretation(DS_AG,
             if abs(DP_AG) % 3 != 0:
                 # Causing a frameshift effect
                 is_harmful = True
+            if abs(DP_AG) / int(cds_pos.split('/')[1]) > 0.1:
+                # Large truncation relative to cds size
+                is_harmful = True
         else:
             # We cannot determine whether the new acceptor site is upstream or downstream of the existing acceptor site. Hence not able to predict its effect.
             pass
@@ -155,6 +168,9 @@ def SpliceAI_interpretation(DS_AG,
             affected_exons.add(int(exon_pos.split('/')[0]))
             if abs(DP_DG) % 3 != 0:
                 # Causing a frameshift effect
+                is_harmful = True
+            if abs(DP_DG) / int(cds_pos.split('/')[1]) > 0.1:
+                # Large truncation relative to cds size
                 is_harmful = True
         else:
             # We cannot determine whether the new donor site is upstream or downstream of the existing donor site. Hence not able to predict its effect.
@@ -191,6 +207,7 @@ def SpliceVault_interpretation(value,
                                transcript_id, 
                                transcript_domain_map, 
                                intolerant_domains,
+                               cds_pos = None,
                                intron_pos = None,
                                exon_pos = None) -> tuple:
     '''
@@ -211,6 +228,7 @@ def SpliceVault_interpretation(value,
                                               transcript_id, 
                                               transcript_domain_map, 
                                               intolerant_domains, 
+                                              cds_pos,
                                               intron_pos, 
                                               exon_pos)
         analysis_results.append(event_analysis)
@@ -243,6 +261,7 @@ def analyze_splice_event(event_str: str,
                         transcript_id: str,
                         transcript_domain_map: dict,
                         intolerant_domains: set,
+                        cds_pos: str = None,
                         intron_pos: str = None,  # Format: "2/3" meaning 2nd intron out of 3
                         exon_pos: str = None,    # Format: "2-3" meaning exons 2 and 3
                         ) -> dict:
@@ -277,14 +296,14 @@ def analyze_splice_event(event_str: str,
 
     # Process event based on type
     if event_type == 'ES':
-        affected_exons, reason, length_changing = process_exon_skipping(
+        affected_exons, reason, length_changing, is_harmful = process_exon_skipping(
             pos_str, transcript_id, transcript_domain_map, intolerant_domains)
     elif event_type == 'CD':
-        affected_exons, reason, length_changing = process_cryptic_donor(
-            pos_str, transcript_id, transcript_domain_map, intolerant_domains, intron_pos, exon_pos)
+        affected_exons, reason, length_changing, is_harmful = process_cryptic_donor(
+            pos_str, transcript_id, transcript_domain_map, intolerant_domains, intron_pos, exon_pos, cds_pos)
     elif event_type == 'CA':
-        affected_exons, reason, length_changing = process_cryptic_acceptor(
-            pos_str, transcript_id, transcript_domain_map, intolerant_domains, intron_pos, exon_pos)
+        affected_exons, reason, length_changing, is_harmful = process_cryptic_acceptor(
+            pos_str, transcript_id, transcript_domain_map, intolerant_domains, intron_pos, exon_pos, cds_pos)
     
     # Look up affected domains and determine if harmful
     affected_domains = set()
@@ -317,10 +336,15 @@ def analyze_splice_event(event_str: str,
     }
 
 
-def process_exon_skipping(pos_str: str, transcript_id: str, transcript_domain_map: dict, intolerant_domains: set) -> tuple:
+def process_exon_skipping(pos_str: str, 
+                         transcript_id: str, 
+                         transcript_domain_map: dict, 
+                         intolerant_domains: set) -> tuple:
     """Process exon skipping events."""
     affected_exons = set()
     reason = []
+    length_changing = True
+    is_lof = True
     
     if '-' in pos_str:
         start, end = map(int, pos_str.split('-'))
@@ -336,9 +360,9 @@ def process_exon_skipping(pos_str: str, transcript_id: str, transcript_domain_ma
             intolerant_affected = set(domains).intersection(intolerant_domains)
             if intolerant_affected:
                 reason.append(f'exon_{exon}_overlaps_intolerant_domain')
+                is_lof = True
      
-    return affected_exons, reason, True
-
+    return affected_exons, reason, length_changing, is_lof
 
 
 def process_cryptic_donor(pos_str: str, 
@@ -346,16 +370,14 @@ def process_cryptic_donor(pos_str: str,
                          transcript_domain_map: dict,
                          intolerant_domains: set,
                          intron_pos: str = None,
-                         exon_pos: str = None
+                         exon_pos: str = None,
+                         cds_pos: str = None
                          ) -> tuple:
-    """
-    Process cryptic donor events.
-    For donor sites (5' splice site), the spliceosome scans from 5' to 3',
-    so a cryptic site upstream of canonical site can compete.
-    """
+    """Process cryptic donor events."""
     affected_exons = set()
     reason = []
     length_changing = False
+    is_lof = False
 
     # Parse position information if available
     if intron_pos:
@@ -366,12 +388,10 @@ def process_cryptic_donor(pos_str: str,
     offset = int(pos_str.lstrip('+-'))
     if pos_str.startswith('+'):
         # Downstream cryptic donor (in intron)
-        # Less likely to compete with canonical site due to 5'->3' scanning
         if intron_pos:
             reason.append(f'downstream_cryptic_donor_in_intron_{intron_num}')
     else:
         # Upstream cryptic donor (in exon)
-        # Can compete with canonical site
         if abs(offset) > 3:  # Ignore very close cryptic sites
             length_changing = True
             if exon_pos:
@@ -380,6 +400,11 @@ def process_cryptic_donor(pos_str: str,
             elif intron_pos:
                 affected_exons.add(intron_num)
                 reason.append(f'upstream_cryptic_donor_in_exon_{intron_num}')
+
+        # Check offset fraction if > 10%, then it is likely to cause LoF
+        if abs(offset) / int(cds_pos.split('/')[1]) > 0.1:
+            reason.append('large_truncation_relative_to_cds_size')
+            is_lof = True
     
     # Check for intolerant domains
     for exon in affected_exons:
@@ -389,8 +414,9 @@ def process_cryptic_donor(pos_str: str,
             intolerant_affected = set(domains).intersection(intolerant_domains)
             if intolerant_affected:
                 reason.append(f'exon_{exon}_overlaps_intolerant_domain')
+                is_lof = True
     
-    return affected_exons, reason, length_changing
+    return affected_exons, reason, length_changing, is_lof
 
 
 def process_cryptic_acceptor(pos_str: str, 
@@ -398,16 +424,15 @@ def process_cryptic_acceptor(pos_str: str,
                            transcript_domain_map: dict,
                            intolerant_domains: set,
                            intron_pos: str = None,
-                           exon_pos: str = None
+                           exon_pos: str = None,
+                           cds_pos: str = None
                            ) -> tuple:
-    """
-    Process cryptic acceptor events.
-    For acceptor sites (3' splice site), the spliceosome recognizes the first AG
-    encountered when scanning from 5' to 3'.
-    """
+    """Process cryptic acceptor events."""
     affected_exons = set()
     reason = []
     length_changing = False
+    is_lof = False
+
     # Parse position information if available
     if intron_pos:
         intron_num, total_introns = map(int, intron_pos.split('/'))
@@ -417,18 +442,21 @@ def process_cryptic_acceptor(pos_str: str,
     offset = int(pos_str.lstrip('+-'))
     if pos_str.startswith('-'):
         # Upstream cryptic acceptor (in intron)
-        # Can compete with canonical site
         length_changing = True
         if intron_pos:
             affected_exons.add(intron_num + 1)
             reason.append(f'upstream_cryptic_acceptor_in_intron_{intron_num}')
     else:
         # Downstream cryptic acceptor (in exon)
-        # Won't compete because canonical site is encountered first
         if exon_pos:
             reason.append(f'downstream_cryptic_acceptor_in_exon_{exon_num}')
         elif intron_pos:
             reason.append(f'downstream_cryptic_acceptor_in_exon_{intron_num + 1}')
+
+        # Check offset fraction if > 10%, then it is likely to cause LoF
+        if abs(offset) / int(cds_pos.split('/')[1]) > 0.1:
+            reason.append('large_truncation_relative_to_cds_size')
+            is_lof = True
     
     # Check for intolerant domains
     for exon in affected_exons:
@@ -438,16 +466,17 @@ def process_cryptic_acceptor(pos_str: str,
             intolerant_affected = set(domains).intersection(intolerant_domains)
             if intolerant_affected:
                 reason.append(f'exon_{exon}_overlaps_intolerant_domain')
+                is_lof = True
     
-    return affected_exons, reason, length_changing
+    return affected_exons, reason, length_changing, is_lof
 
 
 
 if __name__ == "__main__":
     parser = ap.ArgumentParser(description="Interpret splicing variants")
     parser.add_argument("--anno_table", required=True, help="Annotation table")
-    parser.add_argument("--transcript_domain_map", required=True, help="Transcript domain map")
-    parser.add_argument("--intolerant_domains", required=True, help="Intolerant domains")
+    parser.add_argument("--transcript_domain_map", required=True, help="Transcript domain map, pickle file")
+    parser.add_argument("--intolerant_domains", required=True, help="Intolerant domains, pickle file")
     parser.add_argument("--threads", default=12, type=int, help="Number of threads")
     args = parser.parse_args()
     splicing_interpretation(args.anno_table, 

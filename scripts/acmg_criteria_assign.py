@@ -865,18 +865,52 @@ def summary_acmg_per_var(row: pd.Series) -> pd.Series:
     
     # Assign final rank
     if final_score >= 12:
-        row['ACMG_final_rank'] = 'Pathogenic'
+        row['ACMG_class'] = 'Pathogenic'
     elif final_score < 12 and final_score >= 6:
-        row['ACMG_final_rank'] = 'Likely_Pathogenic'
+        row['ACMG_class'] = 'Likely_Pathogenic'
     elif final_score <= -12:
-        row['ACMG_final_rank'] = 'Benign'
+        row['ACMG_class'] = 'Benign'
     elif final_score <= -3 and final_score > -12:
-        row['ACMG_final_rank'] = 'Likely_Benign'
+        row['ACMG_class'] = 'Likely_Benign'
     else:
-        row['ACMG_final_rank'] = 'VOUS'
+        row['ACMG_class'] = 'VOUS'
     
     return row
 
+
+
+def sort_and_rank_variants(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Sort variants by their maximum ACMG quantitative score and add ranking.
+    
+    Args:
+        df: DataFrame with ACMG_quant_score column and variant information
+        
+    Returns:
+        DataFrame sorted by variant's max ACMG score with added variant rank column
+    """
+    # Group by variant coordinates to get max score per variant
+    variant_groups = df.groupby(['chrom', 'pos', 'ref', 'alt'])
+    max_scores = variant_groups['ACMG_quant_score'].transform('max')
+    
+    # Sort the DataFrame by max scores (descending) while maintaining variant grouping
+    df['max_variant_score'] = max_scores
+    df_sorted = df.sort_values(
+        by=['max_variant_score', 'chrom', 'pos', 'ref', 'alt', 'ACMG_quant_score'],
+        ascending=[False, True, True, True, True, False]
+    )
+    
+    # Add variant rank (same rank for all rows of same variant)
+    variant_rank = (df_sorted.groupby(['chrom', 'pos', 'ref', 'alt'])
+                            .ngroup()
+                            .reset_index()
+                            .set_index('index') + 1)
+    df_sorted['variant_rank'] = variant_rank
+    
+    # Clean up temporary column
+    df_sorted = df_sorted.drop('max_variant_score', axis=1)
+    
+    return df_sorted
 
 
 
@@ -1010,9 +1044,17 @@ def ACMG_criteria_assign(anno_table: str,
     
     # Create summary and matrix
     anno_df, criteria_matrix = summarize_acmg_criteria(anno_df, criteria_dict)
+    # Save the criteria matrix to a file which the path is based on the input anno_table
+    output_matrix = ".".join(anno_table.split(".")[:-1]) + ".acmg.tsv"
+    criteria_matrix.to_csv(output_matrix, sep="\t", index=False)
     
-    # Apply quantification using ACMG_criteria column
+    # Apply quantification using ACMG_criteria column and use that to sort the variants
     anno_df = anno_df.apply(summary_acmg_per_var, axis=1)
+
+    # Sort and rank variants
+    anno_df = sort_and_rank_variants(anno_df)
+    # Save the annotated table to replace the input anno_table
+    anno_df.to_csv(anno_table, sep="\t", index=False)
     
     return anno_df, criteria_matrix
 
@@ -1040,10 +1082,10 @@ if __name__ == "__main__":
                                                     args.clinvar_aa_dict_pkl,
                                                     args.intolerant_domains_pkl,
                                                     args.domain_mechanism_tsv,
-                                                    args.alt_disease_vcf,
-                                                    args.gnomAD_extreme_rare_threshold,
-                                                    args.expected_incidence,
-                                                    args.threads)
+                                                    alt_disease_vcf=args.alt_disease_vcf,
+                                                    gnomAD_extreme_rare_threshold=args.gnomAD_extreme_rare_threshold,
+                                                    expected_incidence=args.expected_incidence,
+                                                    threads=args.threads)
 
 
 

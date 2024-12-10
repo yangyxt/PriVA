@@ -85,25 +85,59 @@ function interpret_utr_annotations () {
 function assign_acmg_criteria () {
     local input_tab=${1}
     local config_file=${2}
-
+    local fam_name=${3}
     
     # Preprocess step, interpret the splicing annotations
     interpret_splicing_annotations ${input_tab} ${config_file} || \
-    { log "Failed to interpret splicing annotations"; return 1; }
+    { log "Failed to interpret splicing annotations for ${input_tab}"; return 1; }
 
     # Preprocess step, interpret the UTR annotations
     interpret_utr_annotations ${input_tab} ${config_file} || \
-    { log "Failed to interpret UTR annotations"; return 1; }
+    { log "Failed to interpret UTR annotations for ${input_tab}"; return 1; }
     
-    
-    local clinvar_pd_stat=$(read_yaml ${config_file} "clinvar_pd_stat")
-    local clinvar_aa_stat=$(read_yaml ${config_file} "clinvar_aa_stat")
-    local am_pd_stat=$(read_yaml ${config_file} "alphamissense_pd_stat")
+    local mean_am_score_table=${BASE_DIR}/data/alphamissense/alphamissense_mean_score.tsv
+    local ped_table=$(read_yaml ${config_file} "ped_file")
+    local clinvar_aa_dict_pkl=$(read_yaml ${config_file} "clinvar_aa_stat")
+    local intolerant_domains_pkl=$(read_yaml ${config_file} "all_intolerant_domains")
+    local domain_mechanism_tsv=$(read_yaml ${config_file} "clinvar_intolerance_mechanisms")
+    local alt_disease_vcf=$(read_yaml ${config_file} "alt_disease_vcf")
+    local gnomAD_extreme_rare_threshold=$(read_yaml ${config_file} "extreme_rare_PAF")
+    local expected_incidence=$(read_yaml ${config_file} "exp_disease_incidence")
 
-    
+    # Test whether the function can be skipped
+    [[ -f ${input_tab} ]] && \
+    [[ ${input_tab} -nt ${mean_am_score_table} ]] && \
+    [[ ${input_tab} -nt ${ped_table} ]] && \
+    [[ ${input_tab} -nt ${clinvar_aa_dict_pkl} ]] && \
+    [[ ${input_tab} -nt ${intolerant_domains_pkl} ]] && \
+    [[ ${input_tab} -nt ${domain_mechanism_tsv} ]] && \
+    [[ ${input_tab} -nt ${alt_disease_vcf} ]] && \
+    check_table_column ${input_tab} "ACMG_quant_score" && \
+    check_table_column ${input_tab} "ACMG_class" && \
+    check_table_column ${input_tab} "ACMG_criteria" && \
+    log "The ACMG criterias are already assigned for ${input_tab}, skip the assignment" && \
+    return 0
     
     local acmg_py=${SCRIPT_DIR}/acmg_criteria_assign.py
 
+    log "Running the following command to assign the ACMG criterias: python ${acmg_py} --anno_table ${input_tab} --am_score_table ${mean_am_score_table} --ped_table ${ped_table} --fam_name ${fam_name} --clinvar_aa_dict_pkl ${clinvar_aa_dict_pkl} --intolerant_domains_pkl ${intolerant_domains_pkl} --domain_mechanism_tsv ${domain_mechanism_tsv} --alt_disease_vcf ${alt_disease_vcf} --gnomAD_extreme_rare_threshold ${gnomAD_extreme_rare_threshold} --expected_incidence ${expected_incidence} --threads ${threads}"
+    python ${acmg_py} \
+    --anno_table ${input_tab} \
+    --am_score_table ${mean_am_score_table} \
+    --ped_table ${ped_table} \
+    --fam_name ${fam_name} \
+    --clinvar_aa_dict_pkl ${clinvar_aa_dict_pkl} \
+    --intolerant_domains_pkl ${intolerant_domains_pkl} \
+    --domain_mechanism_tsv ${domain_mechanism_tsv} \
+    --alt_disease_vcf ${alt_disease_vcf} \
+    --gnomAD_extreme_rare_threshold ${gnomAD_extreme_rare_threshold} \
+    --expected_incidence ${expected_incidence} \
+    --threads ${threads} && \
+    display_table ${input_tab} && \
+    local output_acmg_mat=${input_tab::-4}.acmg.tsv && \
+    log "The ACMG criterias are assigned for ${input_tab}, added with three columns: ACMG_quant_score, ACMG_class, ACMG_criteria, and the output matrix is saved to ${output_acmg_mat}" && \
+    display_table ${output_acmg_mat} || \
+    { log "Failed to assign the ACMG criterias for ${input_tab}"; return 1; }
 }
 
 
@@ -111,7 +145,8 @@ function assign_acmg_criteria () {
 function main_prioritization () {
     local input_vcf=${1}
     local config_file=${2}
-	
+    local fam_name=${3}
+    
 	# Read the expected number of threads
 	local threads=$(read_yaml ${config_file} "threads")
 
@@ -122,7 +157,7 @@ function main_prioritization () {
     { log "Failed to prepare the combined annotation table"; return 1; }
 
     # Assign the ACMG criterias to each variant-transcript annotation record
-    assign_acmg_criteria ${input_tab} ${config_file} || \
+    assign_acmg_criteria ${input_tab} ${config_file} ${fam_name} || \
     { log "Failed to assign the ACMG criterias"; return 1; }
 
 }

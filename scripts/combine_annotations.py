@@ -83,6 +83,8 @@ def extract_record_info(record):
         'info': {
             'CSQ': record.info.get('CSQ', ["",])[0],
             'AF_joint': record.info.get('AF_joint', [np.nan])[0],
+            'AF_joint_XX': record.info.get('AF_joint_XX', [np.nan])[0],
+            'AF_joint_XY': record.info.get('AF_joint_XY', [np.nan])[0],
             'nhomalt_joint_XX': record.info.get('nhomalt_joint_XX', [np.nan])[0],
             'nhomalt_joint_XY': record.info.get('nhomalt_joint_XY', [np.nan])[0],
             'CLNDN': record.info.get('CLNDN', [""])[0],
@@ -125,6 +127,8 @@ def convert_record_to_tab(args: tuple) -> tuple[List[Dict[str, Any]], List[str]]
             "ref": record_dict['ref'],
             "alt": record_dict['alts'][0],
             "gnomAD_joint_af": record_dict['info']['AF_joint'],
+            "gnomAD_joint_af_XX": record_dict['info']['AF_joint_XX'],
+            "gnomAD_joint_af_XY": record_dict['info']['AF_joint_XY'],
             "gnomAD_nhomalt_XX": record_dict['info']['nhomalt_joint_XX'],
             "gnomAD_nhomalt_XY": record_dict['info']['nhomalt_joint_XY'],
             "CLNSIG": record_dict['info']['CLNSIG'],
@@ -182,7 +186,11 @@ def convert_vcf_to_tab(input_vcf: str, threads=4) -> pd.DataFrame:
         raise
 
 
-def main(input_vcf: str, output_tab: str, cadd_tab: str,threads=4):
+def main(input_vcf: str, 
+         output_tab: str, 
+         cadd_tab: str, 
+         hpo_tab: str, 
+         threads=4):
     converted_tab = convert_vcf_to_tab(input_vcf, threads)
     cadd_tab = pd.read_table(cadd_tab, low_memory=False)
 
@@ -193,6 +201,17 @@ def main(input_vcf: str, output_tab: str, cadd_tab: str,threads=4):
     cadd_tab["CADD_phred"] = cadd_tab["PHRED"].astype(float)
 
     merged_tab = pd.merge(converted_tab, cadd_tab[["chrom", "pos", "ref", "alt", "CADD_phred"]], on=["chrom", "pos", "ref", "alt"], how="left")
+
+    # Read hpo tab file, which is a tsv.gz file
+    hpo_tab = pd.read_table(hpo_tab, low_memory=False)
+    hpo_tab["SYMBOL"] = hpo_tab["gene_symbol"].astype(str)
+    hpo_tab["HPO_IDs"] = hpo_tab["hpo_id"].astype(str)
+    hpo_tab["HPO_terms"] = hpo_tab["hpo_name"].astype(str)
+    hpo_tab["HPO_sources"] = hpo_tab["disease_id"].astype(str)
+    hpo_tab["HPO_gene_inheritance"] = hpo_tab["inheritance_modes"].astype(str)
+
+    merged_tab = pd.merge(merged_tab, hpo_tab[["SYMBOL", "HPO_IDs", "HPO_terms", "HPO_sources", "HPO_gene_inheritance"]], on="SYMBOL", how="left")
+
     merged_tab.to_csv(output_tab, sep="\t", index=False)
     return merged_tab
 
@@ -203,6 +222,7 @@ if __name__ == "__main__":
     args.add_argument("--output", "-o", type=str, required=True, help="The output tab file")
     args.add_argument("--threads", "-t", type=int, default=4, help="The number of threads")
     args.add_argument("--cadd", "-c", type=str, required=True, help="The CADD tab file")
+    args.add_argument("--hpo", "-p", type=str, required=True, help="The HPO tab file")
     args = args.parse_args()
 
-    main(args.input, args.output, args.cadd, args.threads)
+    main(args.input, args.output, args.cadd, args.hpo, args.threads)

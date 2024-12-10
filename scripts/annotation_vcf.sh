@@ -310,8 +310,8 @@ function anno_agg_gnomAD_data () {
 	# Step 3: Perform annotation with bcftools annotate to add the INFO fields from gnomAD vcfs to the input splitted vcfs
 	export gnomad_vcf_chrX
 	local gnomad_vcf_suffix=${gnomad_vcf_chrX/*.chrX.vcf/}
-	parallel -j ${threads} --dry-run "bcftools annotate -a ${gnomad_vcf_chrX/.chrX.vcf*gz/}.{}.vcf${gnomad_vcf_suffix} -c CHROM,POS,REF,ALT,.INFO/AC_joint,.INFO/AN_joint,.INFO/AF_joint,.INFO/nhomalt_joint_XX,.INFO/nhomalt_joint_XY -Oz -o ${input_vcf/.vcf*/}.{}.gnomAD.vcf.gz ${input_vcf/.vcf*/}.{}.vcf.gz" ::: "${chr_chroms[@]}" && \
-	parallel -j ${threads} --joblog ${input_vcf/.vcf*/.gnomAD.log} "bcftools annotate -a ${gnomad_vcf_chrX/.chrX.vcf*gz/}.{}.vcf${gnomad_vcf_suffix} -c CHROM,POS,REF,ALT,.INFO/AC_joint,.INFO/AN_joint,.INFO/AF_joint,.INFO/nhomalt_joint_XX,.INFO/nhomalt_joint_XY -Oz -o ${input_vcf/.vcf*/}.{}.gnomAD.vcf.gz ${input_vcf/.vcf*/}.{}.vcf.gz" ::: "${chr_chroms[@]}"; \
+	parallel -j ${threads} --dry-run "bcftools annotate -a ${gnomad_vcf_chrX/.chrX.vcf*gz/}.{}.vcf${gnomad_vcf_suffix} -c CHROM,POS,REF,ALT,.INFO/AC_joint,.INFO/AN_joint,.INFO/AF_joint,.INFO/AF_joint_XX,.INFO/AF_joint_XY,.INFO/nhomalt_joint_XX,.INFO/nhomalt_joint_XY -Oz -o ${input_vcf/.vcf*/}.{}.gnomAD.vcf.gz ${input_vcf/.vcf*/}.{}.vcf.gz" ::: "${chr_chroms[@]}" && \
+	parallel -j ${threads} --joblog ${input_vcf/.vcf*/.gnomAD.log} "bcftools annotate -a ${gnomad_vcf_chrX/.chrX.vcf*gz/}.{}.vcf${gnomad_vcf_suffix} -c CHROM,POS,REF,ALT,.INFO/AC_joint,.INFO/AN_joint,.INFO/AF_joint,.INFO/AF_joint_XX,.INFO/AF_joint_XY,.INFO/nhomalt_joint_XX,.INFO/nhomalt_joint_XY -Oz -o ${input_vcf/.vcf*/}.{}.gnomAD.vcf.gz ${input_vcf/.vcf*/}.{}.vcf.gz" ::: "${chr_chroms[@]}"; \
 	check_parallel_joblog ${input_vcf/.vcf*/.gnomAD.log} || { \
 	log "Failed to add aggregated gnomAD annotation on ${input_vcf}. Quit now"
 	return 1; }
@@ -472,7 +472,7 @@ function anno_VEP_data() {
 	local output_vcf=${input_vcf/.vcf*/.${tmp_tag}.vcf}
 
 	log "Running VEP annotation with the command below:"
-	log "vep -i ${input_vcf} --format vcf --verbose --vcf --species homo_sapiens --use_given_ref --assembly ${assembly} --cache --offline --merged --hgvs --numbers --symbol --canonical --variant_class --gene_phenotype --stats_file ${input_vcf/.vcf*/.vep.stats.html} --fork ${threads} --buffer_size 10000 --dir_cache ${vep_cache_dir} --dir_plugins ${vep_plugins_dir} -plugin UTRAnnotator,file=${utr_annotator_file} -plugin LOEUF,file=${loeuf_prescore},match_by=transcript -plugin AlphaMissense,file=${alphamissense_prescore} -plugin SpliceAI,snv=${spliceai_snv_prescore},indel=${spliceai_indel_prescore},cutoff=0.5 -plugin PrimateAI,${primateai_prescore} -plugin Conservation,file=${conversation_file} -plugin NMD --force_overwrite -o ${output_vcf}"
+	log "vep -i ${input_vcf} --format vcf --verbose --vcf --species homo_sapiens --use_given_ref --assembly ${assembly} --cache --total_length --offline --merged --hgvs --numbers --symbol --canonical --variant_class --gene_phenotype --stats_file ${input_vcf/.vcf*/.vep.stats.html} --fork ${threads} --buffer_size 10000 --dir_cache ${vep_cache_dir} --dir_plugins ${vep_plugins_dir} -plugin UTRAnnotator,file=${utr_annotator_file} -plugin LOEUF,file=${loeuf_prescore},match_by=transcript -plugin AlphaMissense,file=${alphamissense_prescore} -plugin SpliceAI,snv=${spliceai_snv_prescore},indel=${spliceai_indel_prescore},cutoff=0.5 -plugin PrimateAI,${primateai_prescore} -plugin Conservation,file=${conversation_file} -plugin NMD --force_overwrite -o ${output_vcf}"
 
 	# Run VEP annotation
     vep -i ${input_vcf} \
@@ -490,6 +490,7 @@ function anno_VEP_data() {
     --numbers \
     --symbol \
     --canonical \
+	--total_length \
     --variant_class \
     --gene_phenotype \
     --stats_file ${input_vcf/.vcf*/.vep.stats.html} \
@@ -569,7 +570,8 @@ function Calculate_CADD {
     gunzip -f ${output_file} && \
     mawk -F '\t' '$1 !~ /^##/{print;}' ${output_file/.gz/} > ${output_file/.gz/}.tmp && \
     mv ${output_file/.gz/}.tmp ${output_file/.gz/} && \
-    display_table ${output_file/.gz/} || { \
+    display_table ${output_file/.gz/} && \
+	update_yaml ${config_file} "cadd_output_file" ${output_file/.gz/} || { \
 	log "Failed to run CADD on ${input_vcf}. Quit now"; return 1; }
 }
 

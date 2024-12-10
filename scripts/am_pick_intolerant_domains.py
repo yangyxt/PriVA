@@ -273,6 +273,9 @@ def visualize_domain_distribution(scores_dict: dict, output_dir: str, threads: i
     domain_data = []
     domain_scores = {}  # New dictionary to store scores
 
+    output_dir = os.path.join(output_dir, 'am_domain_distributions')
+    os.makedirs(output_dir, exist_ok=True)
+    
     if os.path.exists(os.path.join(output_dir, 'domain_amscores.pkl')): 
         logger.info(f"Loading existing domain scores from {os.path.join(output_dir, 'domain_amscores.pkl')}")
         with open(os.path.join(output_dir, 'domain_amscores.pkl'), 'rb') as f:
@@ -510,6 +513,31 @@ def analyze_domain_data(pickle_file: str,
         logger.info(f"Completed tolerance analysis for {len(tolerance_results)} domains")
         logger.info(f"Found {sum(rejected)} domains that are significantly more tolerant "
                    f"than reference domains (FDR < {fdr_threshold})")
+        
+        # Get intolerant domains from analysis results
+        analysis_intolerant_domains = set(
+            results_df[~results_df['is_more_tolerant']]['domain'].tolist()
+        )
+        
+        # Get intolerant domains from input file
+        input_intolerant_domains = set()
+        if intolerant_domains_tsv:
+            input_intolerant_domains = set(
+                pd.read_csv(intolerant_domains_tsv, sep='\t')['domain']
+            )
+        
+        # Merge both sets of intolerant domains
+        all_intolerant_domains = analysis_intolerant_domains.union(input_intolerant_domains)
+        
+        # Save merged intolerant domains to pickle file
+        intolerant_domains_pickle = os.path.join(output_dir, 'all_intolerant_domains.pkl')
+        with open(intolerant_domains_pickle, 'wb') as f:
+            pickle.dump(all_intolerant_domains, f)
+        
+        logger.info(f"Found {len(analysis_intolerant_domains)} intolerant domains from analysis")
+        logger.info(f"Found {len(input_intolerant_domains)} intolerant domains from input file")
+        logger.info(f"Total {len(all_intolerant_domains)} unique intolerant domains")
+        logger.info(f"Saved merged intolerant domains to {intolerant_domains_pickle}")
 
 
 if __name__ == '__main__':

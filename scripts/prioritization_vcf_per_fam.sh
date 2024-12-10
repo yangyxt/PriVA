@@ -19,9 +19,8 @@ source ${SCRIPT_DIR}/common_bash_utils.sh
 function prepare_combined_tab () {
     local input_vcf=${1}  # This input VCF file should be annotated with many things
     local CADD_anno_file=${2}
-    local config_file=${3}
+    local threads=${3}
 
-    local threads=$(read_yaml ${config_file} "threads")
     local output_tab=${input_vcf/.vcf*/.tsv}
 
     [[ -f ${output_tab} ]] && \
@@ -29,10 +28,13 @@ function prepare_combined_tab () {
     log "The combined annotation table ${output_tab} is up to date, skip the conversion" && \
     return 0
 
+	local hpo_tab=${BASE_DIR}/data/hpo/genes_to_phenotype.collapse.tsv.gz
+
     python ${SCRIPT_DIR}/combine_annotations.py \
     -i ${input_vcf} \
     -c ${CADD_anno_file} \
     -o ${output_tab} \
+	-p ${hpo_tab} \
     -t ${threads} && \
     display_table ${output_tab}
 }
@@ -45,13 +47,13 @@ function interpret_splicing_annotations () {
     local splicing_py=${SCRIPT_DIR}/splicing_var_analysis.py
 
     local alphamissense_tranx_domain_map=$(read_yaml ${config_file} "alphamissense_tranx_domain_map")
-    local alphamissense_intolerant_domains=$(read_yaml ${config_file} "alphamissense_intolerant_domains")
+    local intolerant_domains=$(read_yaml ${config_file} "all_intolerant_domains")
     local threads=$(read_yaml ${config_file} "threads")
 
     python ${splicing_py} \
     --anno_table ${input_tab} \
     --transcript_domain_map ${alphamissense_tranx_domain_map} \
-    --intolerant_domains ${alphamissense_intolerant_domains} \
+    --intolerant_domains ${intolerant_domains} \
     --threads ${threads} && \
     display_table ${input_tab} && \
     log "The splicing interpretations are saved to ${input_tab}, added with two columns: splicing_lof and splicing_len_changing"
@@ -66,13 +68,13 @@ function interpret_utr_annotations () {
     local utr_py=${SCRIPT_DIR}/utr_anno_interpret.py
 
     local alphamissense_tranx_domain_map=$(read_yaml ${config_file} "alphamissense_tranx_domain_map")
-    local alphamissense_intolerant_domains=$(read_yaml ${config_file} "alphamissense_intolerant_domains")
+    local intolerant_domains=$(read_yaml ${config_file} "all_intolerant_domains")
     local threads=$(read_yaml ${config_file} "threads")
 
     python ${utr_py} \
     --variants_table ${input_tab} \
     --domain_map ${alphamissense_tranx_domain_map} \
-    --intolerant_domains ${alphamissense_intolerant_domains} \
+    --intolerant_domains ${intolerant_domains} \
     --threads ${threads} && \
     display_table ${input_tab} && \
     log "The UTR interpretations are saved to ${input_tab}, added with two columns: 5UTR_lof and 5UTR_length_changing"
@@ -102,10 +104,26 @@ function assign_acmg_criteria () {
     
     local acmg_py=${SCRIPT_DIR}/acmg_criteria_assign.py
 
+}
 
 
 
+function main_prioritization () {
+    local input_vcf=${1}
+    local config_file=${2}
+	
+	# Read the expected number of threads
+	local threads=$(read_yaml ${config_file} "threads")
 
+    # Preprocess step, convert the annotated VCF to a Table with transcript specific annotations as rows
+    local CADD_anno_file=$(read_yaml ${config_file} "cadd_output_file")
+	prepare_combined_tab ${input_vcf} ${CADD_anno_file} ${threads} && \
+    local input_tab=${input_vcf/.vcf*/.tsv} || \
+    { log "Failed to prepare the combined annotation table"; return 1; }
+
+    # Assign the ACMG criterias to each variant-transcript annotation record
+    assign_acmg_criteria ${input_tab} ${config_file} || \
+    { log "Failed to assign the ACMG criterias"; return 1; }
 
 }
 

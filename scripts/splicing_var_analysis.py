@@ -218,7 +218,7 @@ def SpliceVault_interpretation(value,
     Expect to return a tuple of boolean values(is_harmful, length_changing)
     '''
     if not isinstance(value, str):
-        logger.info(f"The input value for SpliceVault interpretation is not a string: {value}, return False, False")
+        logger.debug(f"The input value for SpliceVault interpretation is not a string: {value}, return False, False")
         return False, False
     
     events = value.split('|')

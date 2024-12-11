@@ -773,7 +773,7 @@ def BP7_criteria(df: pd.DataFrame) -> pd.Series:
 
 
 def identify_fam_members(ped_df: pd.DataFrame, fam_name: str) -> pd.DataFrame:
-    fam_ped_df = ped_df[ped_df['#Family'] == fam_name]
+    fam_ped_df = ped_df[ped_df['#Family_ID'] == fam_name]
     fam_ped_df["Phenotype"] = fam_ped_df["Phenotype"].astype(int)
     # fam_members = fam_ped_df['Individual_ID'].tolist()
     father = fam_ped_df[fam_ped_df["Paternal_ID"] != "0", "Individual_ID"].tolist()

@@ -35,7 +35,7 @@ def vep_consq_interpret_per_row(row: Dict) -> Tuple[bool, bool]:
     Returns:
         Tuple[bool, bool]: (is_lof, is_length_changing)
     '''
-    consq = row.get('Consequence', '')
+    consq = row.get('Consequence', None)
     if not isinstance(consq, str):
         return False, False
         
@@ -320,15 +320,18 @@ def PS3_BS3_criteria(df: pd.DataFrame) -> pd.DataFrame:
             }
 
 
-def locate_intolerant_domain(row: pd.Series, intolerant_domains: set) -> bool:
+def locate_intolerant_domain(row: dict, intolerant_domains: set) -> bool:
     '''
     Check if the variant is located in a mutational hotspot or a well-established functional protein domain
     The intolerant domains are calculated by scripts: 
     1. scripts/am_pick_intolerant_domains.py
     2. scripts/clinvar_pick_intolerant_domains.py
     '''
-    gene = row.get('Gene', '')
-    domains = [gene + "_" + d.replace(":", "_") for d in row.get('DOMAINS', '').split('&')]
+    gene = row.get('Gene', '') if isinstance(row.get('Gene', None), str) else ''
+    if isinstance(row.get('DOMAINS', None), str):
+        domains = [gene + "_" + d.replace(":", "_") for d in row.get('DOMAINS', None).split('&')]
+    else:
+        return False
     # The variant itself need to be protein altering.
     missense = row['Consequence'] == 'missense_variant'
     length_changing = row['vep_consq_length_changing'] | row['splicing_len_changing'] | row['5UTR_len_changing']
@@ -343,11 +346,12 @@ def PM1_criteria(df: pd.DataFrame,
                  threads: int = 10) -> np.ndarray:
     # PM1: The variant is located in a mutational hotspot or a well-established functional protein domain
     # Load intolerant domains into shared memory
+    row_dicts = df.to_dict('records')
     with Manager() as manager:
         shared_domains = manager.dict()
-        shared_domains.update(pickle.load(open(intolerant_domains_pkl, 'rb')))
+        shared_domains['intolerant_domains'] = pickle.load(open(intolerant_domains_pkl, 'rb'))
         
-        args = [(row, shared_domains) for row in df.itertuples(index=False)]
+        args = [(row, shared_domains['intolerant_domains']) for row in row_dicts]
         
         with mp.Pool(threads) as pool:
             results = pool.starmap(locate_intolerant_domain, args)
@@ -451,10 +455,14 @@ def BS1_criteria(df: pd.DataFrame, expected_incidence: float = 0.001) -> pd.Seri
 
 
 def parse_hpo_inheritance(row_dict: dict) -> str:
-    # Parse the HPO_inheritance field and return the inheritance mode
-    # The HPO_inheritance field is a string with multiple inheritance modes separated by semicolons
+    # Parse the HPO_gene_inheritance field and return the inheritance mode
+    # The HPO_gene_inheritance field is a string with multiple inheritance modes separated by semicolons
     # These inheritance modes can correspond to 3 different pathogenic mechanisms: LoF, GoF, DN. 
-    hpo_inheritances = row_dict['HPO_inheritance'].split(";")
+    if isinstance(row_dict.get('HPO_gene_inheritance', None), str):
+        hpo_inheritances = row_dict['HPO_gene_inheritance'].split(";")
+    else:
+        return None
+    
     non_monogenic_set = {"Digenic inheritance", "Oligogenic inheritance", "Polygenic inheritance"}  # In most cases, these indicate compound heterozygous variants
     non_mendelian_set = {"Non-Mendelian inheritance"}  # Includes epigenetic modifications
     dominant_set = {"Autosomal dominant inheritance", "Autosomal dominant inheritance with maternal imprinting", "X-linked dominant inheritance"}
@@ -483,15 +491,20 @@ def identify_inheritance_mode_per_row(row_dict: dict, gene_mean_am_score: float)
     # 1. Chromosome
     # 2. LOEUF
     # 3. AM score
-    # 4. HPO_inheritance (overrides the above two fields)
+    # 4. HPO_gene_inheritance (overrides the above two fields)
 
     haplo_insufficient = (float(row_dict.get('LOEUF', np.nan)) < 0.6) | (gene_mean_am_score > 0.58)
-    haplo_sufficient = np.logical_not(haplo_insufficient)
+    haplo_sufficient = not haplo_insufficient
 
     hpo_inheritance = parse_hpo_inheritance(row_dict)
+    if hpo_inheritance is None:
+        return haplo_insufficient, haplo_sufficient
+
+    dominant = False
+    recessive = False
 
     if haplo_insufficient and \
-       not any("recessive" in hpo for hpo in row_dict['HPO_inheritance'].split(";")) and \
+       not any("recessive" in hpo for hpo in row_dict['HPO_gene_inheritance'].split(";")) and \
        not hpo_inheritance['hpo_non_mendelian'] and \
        not hpo_inheritance['hpo_non_monogenic']:
         # If haplo-insufficiency statistics indicate dominant inheritance, and HPO does not indicate recessive inheritance (nor non-mendelian and non-monogenic), then it is dominant
@@ -648,6 +661,10 @@ def BP2_PM3_criteria(df: pd.DataFrame,
             in_trans_pathogenic |= var_in_trans
             in_cis_pathogenic |= var_in_cis
 
+    logger.info(f"There are {len(in_trans_pathogenic & is_dominant)} variants that are in-trans with pathogenic variants in a dominant (haploinsufficient) gene (disease)")
+    logger.info(f"There are {len(in_trans_pathogenic & is_recessive)} variants that are in-trans with pathogenic variants in a recessive (haplo-sufficient) gene (disease)")
+    logger.info(f"There are {len(in_cis_pathogenic)} variants that are in-cis with pathogenic variants regardless of the gene's known inheritance mode")
+
     bp2_criteria = (in_trans_pathogenic & is_dominant) | in_cis_pathogenic
     pm3_criteria = in_trans_pathogenic & is_recessive
 
@@ -659,10 +676,10 @@ def check_gene_variants(gene, df, pathogenic, proband):
     pathogenic_variants = df.loc[pathogenic, proband].tolist()
     var_in_trans = np.array([False] * len(df))
     var_in_cis = np.array([False] * len(df))
-    if len(v for v in pathogenic_variants if v[-1] == "1") > 0:
+    if len([v for v in pathogenic_variants if v[-1] == "1"]) > 0:
         var_in_trans = ((df.loc[:, proband].str.split("|")[0] == "1") | (df.loc[:, proband].str.split("/")[0] == "1")) & (df.loc[:, "Gene"] == gene)
         var_in_cis = ((df.loc[:, proband].str.split("|")[1] == "1") | (df.loc[:, proband] == "1/1")) & (df.loc[:, "Gene"] == gene)
-    if len(v for v in pathogenic_variants if v[0] == "1") > 0:
+    if len([v for v in pathogenic_variants if v[0] == "1"]) > 0:
         var_in_trans = ((df.loc[:, proband].str.split("|")[1] == "1") | (df.loc[:, proband] == "1/1")) & (df.loc[:, "Gene"] == gene)
         var_in_cis = ((df.loc[:, proband].str.split("|")[0] == "1") | (df.loc[:, proband].str.split("/")[0] == "1")) & (df.loc[:, "Gene"] == gene)
     return var_in_trans, var_in_cis
@@ -728,20 +745,22 @@ def identify_presence_in_alt_disease_vcf(row: dict, alt_disease_vcf: str, gene_m
         is_dominant, is_recessive = identify_inheritance_mode_per_row(row, gene_mean_am_score)
         
         if not (is_dominant or is_recessive):
-            return False
+            is_dominant = False
+            is_recessive = True
             
         # Open VCF file
         with pysam.VariantFile(alt_disease_vcf) as vcf:
             # Extract variant information from row
-            chrom = row['chrom'].replace('chr', '')  # Remove 'chr' prefix if present
-            pos = int(row['pos'])
+            chrom = row['chrom']  # Remove 'chr' prefix if present
+            pos = int(row['pos']) # 0-based
             ref = row['ref']
             alt = row['alt']
             
-            # Fetch variants in the region
-            region = f"{chrom}:{max(1, pos-1)}-{pos+1}"
+            # Fetch variants in the region, remember that the region is 0-based and half-open, meaning the end is not included
+            # End should be pos + length of ref (half-open leads to the exclusion of the end position)
+            region = f"{chrom}:{max(1, pos-1)}-{pos+len(ref)}"
             
-            for record in vcf.fetch(region):
+            for record in vcf.fetch(region=region):
                 # Check exact position and allele match
                 if record.pos == pos and record.ref == ref and alt in record.alts:
                     # For dominant inheritance, any presence is sufficient
@@ -779,15 +798,17 @@ def identify_fam_members(ped_df: pd.DataFrame, fam_name: str) -> pd.DataFrame:
     father = fam_ped_df.loc[fam_ped_df["PaternalID"] != "0", "IndividualID"].tolist()
     mother = fam_ped_df.loc[fam_ped_df["MaternalID"] != "0", "IndividualID"].tolist()
     proband = fam_ped_df.loc[fam_ped_df["Phenotype"] == 2, "IndividualID"].tolist()[0]
-    exist_mems = {father, mother, proband}
-    sibs = fam_ped_df.loc[~fam_ped_df["IndividualID"].isin(exist_mems), "IndividualID"].tolist()
-    sib_pheno = fam_ped_df.loc[fam_ped_df["IndividualID"].isin(sibs), "Phenotype"].tolist()
-    sib_info = dict(zip(sibs, sib_pheno))
 
     father = father[0] if father else None
     father_pheno = fam_ped_df.loc[fam_ped_df["IndividualID"] == father, "Phenotype"].tolist()[0] if father else None
     mother = mother[0] if mother else None
     mother_pheno = fam_ped_df.loc[fam_ped_df["IndividualID"] == mother, "Phenotype"].tolist()[0] if mother else None
+
+    # Process siblings
+    exist_mems = [m for m in [father, mother, proband] if m is not None]
+    sibs = fam_ped_df.loc[~fam_ped_df["IndividualID"].isin(exist_mems), "IndividualID"].tolist()
+    sib_pheno = fam_ped_df.loc[fam_ped_df["IndividualID"].isin(sibs), "Phenotype"].tolist()
+    sib_info = dict(zip(sibs, sib_pheno))
 
     return (proband, 2), (father, father_pheno), (mother, mother_pheno), sib_info
 

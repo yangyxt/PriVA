@@ -118,7 +118,7 @@ def convert_record_to_tab(args: tuple) -> tuple[List[Dict[str, Any]], List[str]]
     
     try:
         rows = []
-        logger.info(f"Processing variant at {record_dict['chrom']}:{record_dict['pos']}\n")
+        logger.debug(f"Processing variant at {record_dict['chrom']}:{record_dict['pos']}\n")
         
         # Extract the variant-specific annotations
         var_dict_items = {
@@ -147,7 +147,7 @@ def convert_record_to_tab(args: tuple) -> tuple[List[Dict[str, Any]], List[str]]
                 row_dict = {**var_dict_items, **feature_dict, **gt_dict, **ad_dict}
                 rows.append(row_dict)
             
-        logger.info(f"Completed processing variant at {record_dict['chrom']}:{record_dict['pos']}\n")
+        logger.debug(f"Completed processing variant at {record_dict['chrom']}:{record_dict['pos']}\n")
         return rows, list(collector.log_buffer)
         
     except Exception as e:

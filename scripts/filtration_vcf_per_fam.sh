@@ -69,6 +69,9 @@ function filter_allele_based_on_pedigree_with_py {
 function filter_af () {
 	local config_file=$1
 	local input_vcf=$2
+    local threads=${3}
+
+    [[ -z ${threads} ]] && threads=1
 
     local af_cutoff=$(read_yaml ${config_file} "af_cutoff")
     local tmp_tag=$(randomID)
@@ -79,7 +82,7 @@ function filter_af () {
     log "The input VCF ${input_vcf} already been filtered on allele frequency at the cutoff ${af_cutoff}" && \
     return 0
 
-    bcftools view -e "AF_joint > ${af_cutoff}" -Oz -o ${output_vcf} ${input_vcf} && \
+    bcftools view --threads ${threads} -e "AF_joint > ${af_cutoff}" -Oz -o ${output_vcf} ${input_vcf} && \
     mv ${output_vcf} ${input_vcf} && \
     tabix -p vcf -f ${input_vcf} && \
     display_vcf ${input_vcf}
@@ -90,6 +93,9 @@ function extract_fam_vcf () {
     local input_vcf=${1}
     local ped_file=${2}
     local family_name=${3}
+    local threads=${4}
+
+    [[ -z ${threads} ]] && threads=1
 
     local fam_members=$(awk -v family_name=${family_name} '$1 == family_name {print $2}' ${ped_file} | tr '\n' ',')
     local tmp_tag=$(randomID)
@@ -104,8 +110,8 @@ function extract_fam_vcf () {
     { log "The output VCF ${input_vcf/.vcf*/.${family_name}.vcf.gz} is valid and updated"; \
     return 0; }
 
-    log "Running command: bcftools view --force-samples -s ${fam_members::-1} -Oz -o ${output_vcf} ${input_vcf}"
-    bcftools view --force-samples -s ${fam_members::-1} -Oz -o ${output_vcf} ${input_vcf} && \
+    log "Running command: bcftools view --threads ${threads} --force-samples -s ${fam_members::-1} -Oz -o ${output_vcf} ${input_vcf}"
+    bcftools view --threads ${threads} --force-samples -s ${fam_members::-1} -Oz -o ${output_vcf} ${input_vcf} && \
     mv ${output_vcf} ${input_vcf/.vcf*/.${family_name}.vcf.gz} && \
     tabix -p vcf -f ${input_vcf/.vcf*/.${family_name}.vcf.gz} && \
     display_vcf ${input_vcf/.vcf*/.${family_name}.vcf.gz}
@@ -125,9 +131,11 @@ function main_filtration () {
     done
 
     local ped_file=$(read_yaml ${config} "ped_file")
+    local threads=$SNAKEMAKE_THREADS
+    [[ -z ${threads} ]] && threads=$(read_yaml ${config} "threads")
 
     # Extract the family samples from the ped vcf file
-    extract_fam_vcf ${ped_vcf} ${ped_file} ${fam_name} && \
+    extract_fam_vcf ${ped_vcf} ${ped_file} ${fam_name} ${threads} && \
     local fam_vcf=${ped_vcf/.vcf*/.${fam_name}.vcf.gz} || \
     { log "Failed to extract the family VCF"; return 1; }
 
@@ -141,7 +149,7 @@ function main_filtration () {
     { log "Failed to filter the variants based on the pedigree information"; return 1; }
 
     # Filter the variants based on the allele frequency
-    filter_af ${config} ${filtered_vcf} || \
+    filter_af ${config} ${filtered_vcf} ${threads} || \
     { log "Failed to filter the variants based on the allele frequency"; return 1; }
 }
 

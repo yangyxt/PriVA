@@ -43,12 +43,11 @@ function prepare_combined_tab () {
 function interpret_splicing_annotations () {
     local input_tab=${1}
     local config_file=${2}
-
+    local threads=${3}
     local splicing_py=${SCRIPT_DIR}/splicing_var_analysis.py
 
     local alphamissense_tranx_domain_map=$(read_yaml ${config_file} "alphamissense_tranx_domain_map")
     local intolerant_domains=$(read_yaml ${config_file} "all_intolerant_domains")
-    local threads=$(read_yaml ${config_file} "threads")
 
     python ${splicing_py} \
     --anno_table ${input_tab} \
@@ -64,12 +63,12 @@ function interpret_splicing_annotations () {
 function interpret_utr_annotations () {
     local input_tab=${1}
     local config_file=${2}
+    local threads=${3}
 
     local utr_py=${SCRIPT_DIR}/utr_anno_interpret.py
 
     local alphamissense_tranx_domain_map=$(read_yaml ${config_file} "alphamissense_tranx_domain_map")
     local intolerant_domains=$(read_yaml ${config_file} "all_intolerant_domains")
-    local threads=$(read_yaml ${config_file} "threads")
 
     python ${utr_py} \
     --variants_table ${input_tab} \
@@ -86,13 +85,14 @@ function assign_acmg_criteria () {
     local input_tab=${1}
     local config_file=${2}
     local fam_name=${3}
-    
+    local threads=${4}
+
     # Preprocess step, interpret the splicing annotations
-    interpret_splicing_annotations ${input_tab} ${config_file} || \
+    interpret_splicing_annotations ${input_tab} ${config_file} ${threads} || \
     { log "Failed to interpret splicing annotations for ${input_tab}"; return 1; }
 
     # Preprocess step, interpret the UTR annotations
-    interpret_utr_annotations ${input_tab} ${config_file} || \
+    interpret_utr_annotations ${input_tab} ${config_file} ${threads} || \
     { log "Failed to interpret UTR annotations for ${input_tab}"; return 1; }
     
     local mean_am_score_table=${BASE_DIR}/data/alphamissense/alphamissense_mean_score.tsv
@@ -146,9 +146,11 @@ function main_prioritization () {
     local input_vcf=${1}
     local config_file=${2}
     local fam_name=${3}
-    
+
 	# Read the expected number of threads
-	local threads=$(read_yaml ${config_file} "threads")
+    local threads=$SNAKEMAKE_THREADS
+	[[ -z ${threads} ]] && threads=$(read_yaml ${config_file} "threads")
+    log "The number of threads is set to ${threads} for the current family ${fam_name} and input VCF file ${input_vcf}"
 
     # Preprocess step, convert the annotated VCF to a Table with transcript specific annotations as rows
     local CADD_anno_file=$(read_yaml ${config_file} "cadd_output_file")
@@ -157,7 +159,7 @@ function main_prioritization () {
     { log "Failed to prepare the combined annotation table"; return 1; }
 
     # Assign the ACMG criterias to each variant-transcript annotation record
-    assign_acmg_criteria ${input_tab} ${config_file} ${fam_name} || \
+    assign_acmg_criteria ${input_tab} ${config_file} ${fam_name} ${threads} || \
     { log "Failed to assign the ACMG criterias"; return 1; }
 
 }

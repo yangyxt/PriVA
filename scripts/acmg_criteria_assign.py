@@ -157,7 +157,7 @@ def check_aa_pathogenic(row: dict, clinvar_tranx_aa_dict: dict, high_confidence_
                 logger.info(f"Same_AA_Change: {hgvsp} is pathogenic with high confidence in ClinVar")
                 return "Same_AA_Change"
     
-    logger.info(f"No clinvar entry for {hgvsp} in transcript {transcript}. But there are AA changes recorded in the same protein position {protein_pos}")
+    logger.debug(f"No clinvar entry for {hgvsp} in transcript {transcript}. But there are AA changes recorded in the same protein position {protein_pos}")
     for hgvsp_alt, clinvar_entry in clinvar_tranx_aa_dict[protein_pos].items():
         for sig, rev_stat in zip(clinvar_entry['CLNSIG'], clinvar_entry['CLNREVSTAT']):
             if ('athogenic' in sig and  # Captures both 'Pathogenic' and 'Likely_pathogenic'
@@ -211,7 +211,7 @@ def determine_denovo_per_row(row: dict, ped_info: dict, ped_df: pd.DataFrame) ->
     father, father_pheno = father_info
     mother, mother_pheno = mother_info
 
-    proband_sex = ped_df.loc[ped_df['Individual_ID'] == proband, 'Sex'].values[0]
+    proband_sex = ped_df.loc[ped_df['IndividualID'] == proband, 'Sex'].values[0]
     # First determine when proband is Male.
     if proband_sex == "1" or proband_sex == 1:
         if row['chrom'] == "chrX":
@@ -287,7 +287,7 @@ def PS2_PM6_criteria(df: pd.DataFrame,
     records = df.to_dict('records')
     
     # Prepare arguments for starmap
-    args = [(record, (proband_info, father_info, mother_info, sib_info), ped_df.loc[ped_df['#Family_ID'] == fam_name, :]) for record in records]
+    args = [(record, (proband_info, father_info, mother_info, sib_info), ped_df.loc[ped_df['#FamilyID'] == fam_name, :]) for record in records]
     
     # Use pool.starmap with the arguments
     with mp.Pool(threads) as pool:
@@ -773,21 +773,21 @@ def BP7_criteria(df: pd.DataFrame) -> pd.Series:
 
 
 def identify_fam_members(ped_df: pd.DataFrame, fam_name: str) -> pd.DataFrame:
-    fam_ped_df = ped_df[ped_df['#Family_ID'] == fam_name]
+    fam_ped_df = ped_df[ped_df['#FamilyID'] == fam_name]
     fam_ped_df["Phenotype"] = fam_ped_df["Phenotype"].astype(int)
-    # fam_members = fam_ped_df['Individual_ID'].tolist()
-    father = fam_ped_df[fam_ped_df["Paternal_ID"] != "0", "Individual_ID"].tolist()
-    mother = fam_ped_df[fam_ped_df["Maternal_ID"] != "0", "Individual_ID"].tolist()
-    proband = fam_ped_df[fam_ped_df["Phenotype"] == 2, "Individual_ID"].tolist()[0]
+    # fam_members = fam_ped_df['IndividualID'].tolist()
+    father = fam_ped_df[fam_ped_df["PaternalID"] != "0", "IndividualID"].tolist()
+    mother = fam_ped_df[fam_ped_df["MaternalID"] != "0", "IndividualID"].tolist()
+    proband = fam_ped_df[fam_ped_df["Phenotype"] == 2, "IndividualID"].tolist()[0]
     exist_mems = {father, mother, proband}
-    sibs = fam_ped_df[~fam_ped_df["Individual_ID"].isin(exist_mems), "Individual_ID"].tolist()
-    sib_pheno = fam_ped_df[fam_ped_df["Individual_ID"].isin(sibs), "Phenotype"].tolist()
+    sibs = fam_ped_df[~fam_ped_df["IndividualID"].isin(exist_mems), "IndividualID"].tolist()
+    sib_pheno = fam_ped_df[fam_ped_df["IndividualID"].isin(sibs), "Phenotype"].tolist()
     sib_info = dict(zip(sibs, sib_pheno))
 
     father = father[0] if father else None
-    father_pheno = fam_ped_df[fam_ped_df["Individual_ID"] == father, "Phenotype"].tolist()[0] if father else None
+    father_pheno = fam_ped_df[fam_ped_df["IndividualID"] == father, "Phenotype"].tolist()[0] if father else None
     mother = mother[0] if mother else None
-    mother_pheno = fam_ped_df[fam_ped_df["Individual_ID"] == mother, "Phenotype"].tolist()[0] if mother else None
+    mother_pheno = fam_ped_df[fam_ped_df["IndividualID"] == mother, "Phenotype"].tolist()[0] if mother else None
 
     return (proband, 2), (father, father_pheno), (mother, mother_pheno), sib_info
 

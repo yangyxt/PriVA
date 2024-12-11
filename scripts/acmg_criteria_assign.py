@@ -387,9 +387,9 @@ def PP2_BP1_criteria(df: pd.DataFrame, domain_mechanism_tsv: str) -> Tuple[pd.Se
     
     # Filter for genes and domains that are both intolerant to truncating and missense variants
     tolerant_genes = set(domain_df.loc[domain_df['gene_pvalue'] > 0.05,'gene_id'].unique())
-    tolerant_domains = set(domain_df[domain_df['pvalue'] > 0.05, 'domain'].unique())
+    tolerant_domains = set(domain_df.loc[domain_df['pvalue'] > 0.05, 'domain'].unique())
     intolerant_genes = set(domain_df.loc[domain_df['pvalue'] < 0.05,'gene_id'].unique())
-    intolerant_domains = set(domain_df[domain_df['pvalue'] < 0.05, 'domain'].unique())
+    intolerant_domains = set(domain_df.loc[domain_df['pvalue'] < 0.05, 'domain'].unique())
     
     # Split the DOMAINS column into multiple columns. Each domain is a column.
     domain_df = df["DOMAINS"].str.split('&', expand=True)
@@ -776,18 +776,18 @@ def identify_fam_members(ped_df: pd.DataFrame, fam_name: str) -> pd.DataFrame:
     fam_ped_df = ped_df[ped_df['#FamilyID'] == fam_name]
     fam_ped_df["Phenotype"] = fam_ped_df["Phenotype"].astype(int)
     # fam_members = fam_ped_df['IndividualID'].tolist()
-    father = fam_ped_df[fam_ped_df["PaternalID"] != "0", "IndividualID"].tolist()
-    mother = fam_ped_df[fam_ped_df["MaternalID"] != "0", "IndividualID"].tolist()
-    proband = fam_ped_df[fam_ped_df["Phenotype"] == 2, "IndividualID"].tolist()[0]
+    father = fam_ped_df.loc[fam_ped_df["PaternalID"] != "0", "IndividualID"].tolist()
+    mother = fam_ped_df.loc[fam_ped_df["MaternalID"] != "0", "IndividualID"].tolist()
+    proband = fam_ped_df.loc[fam_ped_df["Phenotype"] == 2, "IndividualID"].tolist()[0]
     exist_mems = {father, mother, proband}
-    sibs = fam_ped_df[~fam_ped_df["IndividualID"].isin(exist_mems), "IndividualID"].tolist()
-    sib_pheno = fam_ped_df[fam_ped_df["IndividualID"].isin(sibs), "Phenotype"].tolist()
+    sibs = fam_ped_df.loc[~fam_ped_df["IndividualID"].isin(exist_mems), "IndividualID"].tolist()
+    sib_pheno = fam_ped_df.loc[fam_ped_df["IndividualID"].isin(sibs), "Phenotype"].tolist()
     sib_info = dict(zip(sibs, sib_pheno))
 
     father = father[0] if father else None
-    father_pheno = fam_ped_df[fam_ped_df["IndividualID"] == father, "Phenotype"].tolist()[0] if father else None
+    father_pheno = fam_ped_df.loc[fam_ped_df["IndividualID"] == father, "Phenotype"].tolist()[0] if father else None
     mother = mother[0] if mother else None
-    mother_pheno = fam_ped_df[fam_ped_df["IndividualID"] == mother, "Phenotype"].tolist()[0] if mother else None
+    mother_pheno = fam_ped_df.loc[fam_ped_df["IndividualID"] == mother, "Phenotype"].tolist()[0] if mother else None
 
     return (proband, 2), (father, father_pheno), (mother, mother_pheno), sib_info
 

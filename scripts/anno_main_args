@@ -18,5 +18,11 @@ parser.add_argument('--alphamissense_prescore', help='AlphaMissense plugin cache
 parser.add_argument('--spliceai_snv_prescore', help='SpliceAI SNV plugin cache file', required=False)
 parser.add_argument('--spliceai_indel_prescore', help='SpliceAI indel plugin cache file', required=False)
 parser.add_argument('--primateai_prescore', help='PrimateAI plugin cache file', required=False)
-parser.add_argument('--conversation_file', help='Conservation plugin cache file', required=False)
+parser.add_argument('--conservation_file', help='Conservation plugin cache file', required=False)
+parser.add_argument('--loftee_conservation_file', help='LoFTEE conservation file', required=False)
+parser.add_argument('--gerp_bigwig', help='LoFTEE gerp bigwig file', required=False)
+parser.add_argument('--human_ancestor_fasta', help='LoFTEE human ancestor fasta file', required=False)
+parser.add_argument('--loftee_repo', help='LoFTEE repository', required=False)
+parser.add_argument('--splicevault_prescore', help='SpliceVault prescore file', required=False)
 parser.add_argument('--conda_env_yaml', help='Conda environment YAML file', required=False)
+

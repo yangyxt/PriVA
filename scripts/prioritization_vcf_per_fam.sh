@@ -82,10 +82,23 @@ function interpret_utr_annotations () {
 
 
 function assign_acmg_criteria () {
-    local input_tab=${1}
-    local config_file=${2}
-    local fam_name=${3}
-    local threads=${4}
+    local input_tab
+    local config_file
+    local fam_name
+    local threads
+
+    # Use getopts to parse the input arguments based on the defined local variable above
+    local OPTIND i c f t
+    while getopts i:c:f::t: args
+    do
+        case ${args} in
+            i) input_tab=$OPTARG ;;
+            c) config_file=$OPTARG ;;
+            f) fam_name=$OPTARG ;;
+            t) threads=$OPTARG ;;
+            *) echo "No argument passed. At least pass an argument specifying the input table"
+        esac
+    done
 
     # Preprocess step, interpret the splicing annotations
     interpret_splicing_annotations ${input_tab} ${config_file} ${threads} || \
@@ -104,10 +117,18 @@ function assign_acmg_criteria () {
     local gnomAD_extreme_rare_threshold=$(read_yaml ${config_file} "extreme_rare_PAF")
     local expected_incidence=$(read_yaml ${config_file} "exp_disease_incidence")
 
+    local has_error=0
+    check_path ${clinvar_aa_dict_pkl} "file" "clinvar_aa_stat" || has_error=1
+    check_path ${intolerant_domains_pkl} "file" "all_intolerant_domains" || has_error=1
+    check_path ${domain_mechanism_tsv} "file" "clinvar_intolerance_mechanisms" || has_error=1
+    check_path ${alt_disease_vcf} "file" "alt_disease_vcf" || has_error=1
+
+    [[ ${has_error} -eq 1 ]] && \
+    { log "Failed to offer the valid required files for the ACMG criteria assignment"; return 1; }
+
     # Test whether the function can be skipped
     [[ -f ${input_tab} ]] && \
     [[ ${input_tab} -nt ${mean_am_score_table} ]] && \
-    [[ ${input_tab} -nt ${ped_table} ]] && \
     [[ ${input_tab} -nt ${clinvar_aa_dict_pkl} ]] && \
     [[ ${input_tab} -nt ${intolerant_domains_pkl} ]] && \
     [[ ${input_tab} -nt ${domain_mechanism_tsv} ]] && \
@@ -119,20 +140,20 @@ function assign_acmg_criteria () {
     return 0
     
     local acmg_py=${SCRIPT_DIR}/acmg_criteria_assign.py
-
-    log "Running the following command to assign the ACMG criterias: python ${acmg_py} --anno_table ${input_tab} --am_score_table ${mean_am_score_table} --ped_table ${ped_table} --fam_name ${fam_name} --clinvar_aa_dict_pkl ${clinvar_aa_dict_pkl} --intolerant_domains_pkl ${intolerant_domains_pkl} --domain_mechanism_tsv ${domain_mechanism_tsv} --alt_disease_vcf ${alt_disease_vcf} --gnomAD_extreme_rare_threshold ${gnomAD_extreme_rare_threshold} --expected_incidence ${expected_incidence} --threads ${threads}"
+    
+    [[ -z ${ped_table} ]] && local ped_arg="" || local ped_arg="--ped_table ${ped_table}"
+    [[ -z ${fam_name} ]] && local fam_arg="" || local fam_arg="--fam_name ${fam_name}"
+    log "Running the following command to assign the ACMG criterias: python ${acmg_py} --anno_table ${input_tab} --am_score_table ${mean_am_score_table} ${ped_arg} ${fam_arg} --clinvar_aa_dict_pkl ${clinvar_aa_dict_pkl} --intolerant_domains_pkl ${intolerant_domains_pkl} --domain_mechanism_tsv ${domain_mechanism_tsv} --alt_disease_vcf ${alt_disease_vcf} --gnomAD_extreme_rare_threshold ${gnomAD_extreme_rare_threshold} --expected_incidence ${expected_incidence} --threads ${threads}"
     python ${acmg_py} \
     --anno_table ${input_tab} \
     --am_score_table ${mean_am_score_table} \
-    --ped_table ${ped_table} \
-    --fam_name ${fam_name} \
     --clinvar_aa_dict_pkl ${clinvar_aa_dict_pkl} \
     --intolerant_domains_pkl ${intolerant_domains_pkl} \
     --domain_mechanism_tsv ${domain_mechanism_tsv} \
     --alt_disease_vcf ${alt_disease_vcf} \
     --gnomAD_extreme_rare_threshold ${gnomAD_extreme_rare_threshold} \
     --expected_incidence ${expected_incidence} \
-    --threads ${threads} && \
+    --threads ${threads} ${ped_arg} ${fam_arg} && \
     display_table ${input_tab} && \
     local output_acmg_mat=${input_tab::-4}.acmg.tsv && \
     log "The ACMG criterias are assigned for ${input_tab}, added with three columns: ACMG_quant_score, ACMG_class, ACMG_criteria, and the output matrix is saved to ${output_acmg_mat}" && \
@@ -154,12 +175,19 @@ function main_prioritization () {
 
     # Preprocess step, convert the annotated VCF to a Table with transcript specific annotations as rows
     local CADD_anno_file=$(read_yaml ${config_file} "cadd_output_file")
-	prepare_combined_tab ${input_vcf} ${CADD_anno_file} ${threads} && \
+	prepare_combined_tab \
+    ${input_vcf} \
+    ${CADD_anno_file} \
+    ${threads} && \
     local input_tab=${input_vcf/.vcf*/.tsv} || \
     { log "Failed to prepare the combined annotation table"; return 1; }
 
     # Assign the ACMG criterias to each variant-transcript annotation record
-    assign_acmg_criteria ${input_tab} ${config_file} ${fam_name} ${threads} || \
+    [[ -z ${fam_name} ]] && local fam_arg="" || local fam_arg="--fam_name ${fam_name}"
+    assign_acmg_criteria \
+    -i ${input_tab} \
+    -c ${config_file} \
+    -t ${threads} ${fam_arg} || \
     { log "Failed to assign the ACMG criterias"; return 1; }
 
 }

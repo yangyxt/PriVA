@@ -77,41 +77,94 @@ rule annotate_variants:
             --config {params.config}
         """
 
-# Step 2: Filter variants per family
+# Checkpoint to validate the pedigree file
+checkpoint validate_pedigree:
+    input:
+        ped=PED_FILE
+    output:
+        valid=os.path.join(OUTPUT_DIR, "pedigree_valid.txt")
+    run:
+        if os.path.isfile(input.ped) and os.path.getsize(input.ped) > 0:
+            with open(output.valid, 'w') as f:
+                f.write("valid")
+        else:
+            with open(output.valid, 'w') as f:
+                f.write("invalid")
+
+# Function to determine the next steps based on pedigree validation
+def determine_next_steps(wildcards):
+    valid_file = checkpoints.validate_pedigree.output.valid
+    if os.path.isfile(valid_file):
+        with open(valid_file) as f:
+            status = f.read().strip()
+        if status == "valid":
+            return expand(os.path.join(OUTPUT_DIR, f"{INPUT_BASE}.anno.{{family}}.filtered.vcf.gz"), family=FAMILIES)
+    return [os.path.join(OUTPUT_DIR, f"{INPUT_BASE}.anno.filtered.vcf.gz")]
+
+# Step 2: Filter variants
 rule filter_variants:
     input:
         vcf=rules.annotate_variants.output.vcf,
-        ped=PED_FILE
+        ped=PED_FILE,
+        valid=checkpoints.validate_pedigree.output.valid
     output:
-        vcf=os.path.join(OUTPUT_DIR, f"{INPUT_BASE}.anno.{{family}}.filtered.vcf.gz")
+        vcf=determine_next_steps
     params:
         script=os.path.join("scripts", "filtration_vcf_per_fam.sh"),
         config="config.yaml"
-    threads: THREADS_PER_FAMILY  # Dynamically allocated threads per family
+    threads: THREADS_PER_FAMILY
     shell:
         """
-        bash {params.script} \
-            -v {input.vcf} \
-            -f {wildcards.family} \
-            -c {params.config}
+        if [[ $(cat {input.valid}) == "valid" ]]; then
+            bash {params.script} \
+                -v {input.vcf} \
+                -f {wildcards.family} \
+                -c {params.config}
+        else
+            bash {params.script} \
+                -v {input.vcf} \
+                -c {params.config}
+        fi
         """
 
-# Step 3: Prioritize variants per family
+# Function to determine output paths for prioritization
+def determine_prioritization_outputs(wildcards):
+    valid_file = checkpoints.validate_pedigree.output.valid
+    if os.path.isfile(valid_file):
+        with open(valid_file) as f:
+            status = f.read().strip()
+        if status == "valid":
+            return {
+                'tsv': os.path.join(OUTPUT_DIR, f"{INPUT_BASE}.anno.{wildcards.family}.filtered.tsv"),
+                'mat': os.path.join(OUTPUT_DIR, f"{INPUT_BASE}.anno.{wildcards.family}.filtered.acmg.tsv")
+            }
+    return {
+        'tsv': os.path.join(OUTPUT_DIR, f"{INPUT_BASE}.anno.filtered.tsv"),
+        'mat': os.path.join(OUTPUT_DIR, f"{INPUT_BASE}.anno.filtered.acmg.tsv")
+    }
+
+# Step 3: Prioritize variants
 rule prioritize_variants:
     input:
         vcf=rules.filter_variants.output.vcf,
-        ped=PED_FILE
+        ped=PED_FILE,
+        valid=checkpoints.validate_pedigree.output.valid
     output:
-        tsv=os.path.join(OUTPUT_DIR, f"{INPUT_BASE}.anno.{{family}}.filtered.tsv"),
-        mat=os.path.join(OUTPUT_DIR, f"{INPUT_BASE}.anno.{{family}}.filtered.acmg.tsv")
+        unpack(determine_prioritization_outputs)
     params:
         script=os.path.join("scripts", "prioritization_vcf_per_fam.sh"),
         config="config.yaml"
-    threads: THREADS_PER_FAMILY  # Dynamically allocated threads per family
+    threads: THREADS_PER_FAMILY
     shell:
         """
-        bash {params.script} \
-            {input.vcf} \
-            {params.config} \
-            {wildcards.family}
+        if [[ $(cat {input.valid}) == "valid" ]]; then
+            bash {params.script} \
+                {input.vcf} \
+                {params.config} \
+                {wildcards.family}
+        else
+            bash {params.script} \
+                {input.vcf} \
+                {params.config}
+        fi
         """

@@ -1105,19 +1105,19 @@ function Conservation_install() {
         mkdir -p ${CACHEDIR}/Conservation
     fi
 
-    local existed_file=$(read_yaml "${config}" "conversation_file")
+    local existed_file=$(read_yaml "${config}" "conservation_file")
 
     if [[ ${assembly_version} == "GRCh38" ]]; then
         [[ ! -f ${existed_file} ]] && \
         wget http://ftp.ensembl.org/pub/current_compara/conservation_scores/91_mammals.gerp_conservation_score/gerp_conservation_scores.homo_sapiens.${assembly_version}.bw -O ${CACHEDIR}/Conservation/gerp_conservation_scores.homo_sapiens.${assembly_version}.bw && \
         log "The conservation scores for ${assembly_version} assembly version are downloaded to ${CACHEDIR}/Conservation" && \
-        update_yaml "${config}" "conversation_file" "${CACHEDIR}/Conservation/gerp_conservation_scores.homo_sapiens.${assembly_version}.bw" || \
+        update_yaml "${config}" "conservation_file" "${CACHEDIR}/Conservation/gerp_conservation_scores.homo_sapiens.${assembly_version}.bw" || \
         { log "Failed to download the conservation scores for ${assembly_version} assembly version"; return 1; }
     elif [[ ${assembly_version} == "GRCh37" ]]; then
         [[ ! -f ${existed_file} ]] && \
         wget http://hgdownload.soe.ucsc.edu/gbdb/hg19/bbi/All_hg19_RS.bw -O ${CACHEDIR}/Conservation/gerp_conservation_scores.homo_sapiens.${assembly_version}.bw
         log "The conservation scores for ${assembly_version} assembly version are downloaded to ${CACHEDIR}/Conservation" && \
-        update_yaml "${config}" "conversation_file" "${CACHEDIR}/Conservation/gerp_conservation_scores.homo_sapiens.${assembly_version}.bw" || \
+        update_yaml "${config}" "conservation_file" "${CACHEDIR}/Conservation/gerp_conservation_scores.homo_sapiens.${assembly_version}.bw" || \
         { log "Failed to download the conservation scores for ${assembly_version} assembly version"; return 1; }
     else
         log "Currently we only support GRCh37 and GRCh38 assembly versions"
@@ -1180,15 +1180,74 @@ function LoFtee_install() {
     # Temporarily disabled due to inconsistent cache file support across different assemblies
     # Also deprecated due to the redundant functionality based on CADD and SpliceAI
     local PLUGIN_CACHEDIR=${1}
-    local assembly_version=${2}
+    local config=${2}
+
+	local assembly_version=$(read_yaml "${config}" "assembly")
+	local loftee_parent_dir=$(read_yaml "${config}" "loftee_parent_dir")
+
+	local loftee_repo=$(read_yaml "${config}" "loftee_repo")
+	local human_ancestor_fasta=$(read_yaml "${config}" "human_ancestor_fasta")
+	local loftee_conservation_file=$(read_yaml "${config}" "loftee_conservation_file")
+	local gerp_bigwig=$(read_yaml "${config}" "gerp_bigwig")
+
+	if [[ ${assembly_version} == "GRCh37" ]] || [[ ${assembly_version} == "hg19" ]]; then
+		[[ -d ${loftee_repo} ]] && [[ -f ${loftee_repo}/LoF.pm ]] && \
+	    [[ -f ${human_ancestor_fasta} ]] && \
+		[[ -f ${loftee_conservation_file} ]] && \
+		log "The LOFTEE repository for hg19/GRCh37 is already installed at ${loftee_repo}" && \
+		return 0
+	fi
+
+	if [[ ${assembly_version} == "GRCh38" ]] || [[ ${assembly_version} == "hg38" ]]; then
+		[[ -d ${loftee_repo} ]] && [[ -f ${loftee_repo}/LoF.pm ]] && \
+	    [[ -f ${human_ancestor_fasta} ]] && \
+		[[ -f ${loftee_conservation_file} ]] && \
+		[[ -f ${gerp_bigwig} ]] && \
+		log "The LOFTEE repository for hg38/GRCh38 is already installed at ${loftee_repo}" && \
+		return 0
+	fi
+
 
     log "You need to download the prescores yourself to ${PLUGIN_CACHEDIR}. And the detailed info can be found in the corresponding github repo https://github.com/konradjk/loftee"
     log "Example running command: perl variant_effect_predictor.pl [--other options to VEP] --plugin LoF,loftee_path:/path/to/loftee,human_ancestor_fa:/path/to/human_ancestor.fa.gz"
     if [[ ${assembly_version} == "GRCh37" ]] || [[ ${assembly_version} == "hg19" ]]; then
+	    if [[ ! -d ${loftee_parent_dir}/loftee-hg19 ]]; then
+			git clone https://github.com/konradjk/loftee.git ${loftee_parent_dir}/loftee-hg19 && \
+			update_yaml "${config}" "loftee_repo" "${loftee_parent_dir}/loftee-hg19" && \
+			conda env config vars set PERL5LIB="${loftee_parent_dir}/loftee-hg19/:$PERL5LIB" && \
+			log "The LOFTEE repository for hg19/GRCh37 is installed at ${loftee_parent_dir}/loftee-hg19 and the PERL5LIB is set to ${PERL5LIB}"
+		elif [[ -d ${loftee_parent_dir}/loftee-hg19 ]] && [[ -f ${loftee_parent_dir}/loftee-hg19/.git ]]; then
+			cd ${loftee_parent_dir}/loftee-hg19 && \
+			git pull && \
+			log "The LOFTEE repository for hg19/GRCh37 is updated at ${loftee_parent_dir}/loftee-hg19 and the PERL5LIB is set to ${PERL5LIB}"
+		elif [[ -d ${loftee_parent_dir}/loftee-hg19 ]] && [[ -f ${loftee_parent_dir}/loftee-hg19/LoF.pm ]]; then
+			log "It seems the LOFTEE repository for hg19/GRCh37 is already installed at ${loftee_parent_dir}/loftee-hg19 but we cant update it by git pull since it is not a git repo"
+		else
+			log "Failed to install the LOFTEE repository for hg19/GRCh37"
+			return 1
+		fi
         local human_ancestor_fasta_url="https://s3.amazonaws.com/bcbio_nextgen/human_ancestor.fa.gz"
         local human_ancestor_fasta_fai_url="https://s3.amazonaws.com/bcbio_nextgen/human_ancestor.fa.gz.fai"
         local conservation_file_url="https://personal.broadinstitute.org/konradk/loftee_data/GRCh37/phylocsf_gerp.sql.gz"
     elif [[ ${assembly_version} == "GRCh38" ]] || [[ ${assembly_version} == "hg38" ]]; then
+		if [[ ! -d ${loftee_parent_dir}/loftee-hg38 ]]; then
+			git clone https://github.com/konradjk/loftee.git ${loftee_parent_dir}/loftee-hg38 && \
+			cd ${loftee_parent_dir}/loftee-hg38 && \
+			git checkout grch38 && \
+			git pull && \
+			update_yaml "${config}" "loftee_repo" "${loftee_parent_dir}/loftee-hg38" && \
+			conda env config vars set PERL5LIB="${loftee_parent_dir}/loftee-hg38/:$PERL5LIB" && \
+			log "The LOFTEE repository for hg38/GRCh38 is installed at ${loftee_parent_dir}/loftee-hg38 and the PERL5LIB is set to ${PERL5LIB}"
+		elif [[ -d ${loftee_parent_dir}/loftee-hg38 ]] && [[ -f ${loftee_parent_dir}/loftee-hg38/.git ]]; then
+			cd ${loftee_parent_dir}/loftee-hg38 && \
+			git pull && \
+			log "The LOFTEE repository for hg38/GRCh38 is updated at ${loftee_parent_dir}/loftee-hg38 and the PERL5LIB is set to ${PERL5LIB}"
+		elif [[ -d ${loftee_parent_dir}/loftee-hg38 ]] && [[ -f ${loftee_parent_dir}/loftee-hg38/LoF.pm ]]; then
+			log "It seems the LOFTEE repository for hg38/GRCh38 is already installed at ${loftee_parent_dir}/loftee-hg38 but we cant update it by git pull since it is not a git repo"
+		else
+			log "Failed to install the LOFTEE repository for hg38/GRCh38"
+			return 1
+		fi
         local gerp_bigwig_url="https://personal.broadinstitute.org/konradk/loftee_data/GRCh38/gerp_conservation_scores.homo_sapiens.GRCh38.bw"
         local human_ancestor_fasta_url="https://personal.broadinstitute.org/konradk/loftee_data/GRCh38/human_ancestor.fa.gz"
         local human_ancestor_fasta_fai_url="https://personal.broadinstitute.org/konradk/loftee_data/GRCh38/human_ancestor.fa.gz.fai"
@@ -1201,7 +1260,8 @@ function LoFtee_install() {
     mkdir -p ${PLUGIN_CACHEDIR}/LoFtee/${assembly_version}
     # Check if the files are already downloaded
     if [[ ! -f ${PLUGIN_CACHEDIR}/LoFtee/${assembly_version}/human_ancestor.fa.gz ]]; then
-        wget ${human_ancestor_fasta_url} -O ${PLUGIN_CACHEDIR}/LoFtee/${assembly_version}/human_ancestor.fa.gz
+        wget ${human_ancestor_fasta_url} -O ${PLUGIN_CACHEDIR}/LoFtee/${assembly_version}/human_ancestor.fa.gz && \
+		update_yaml "${config}" "human_ancestor_fasta" "${PLUGIN_CACHEDIR}/LoFtee/${assembly_version}/human_ancestor.fa.gz"
     fi
 
     if [[ ! -f ${PLUGIN_CACHEDIR}/LoFtee/${assembly_version}/human_ancestor.fa.gz.fai ]]; then
@@ -1209,25 +1269,18 @@ function LoFtee_install() {
     fi
 
     if [[ ! -f ${PLUGIN_CACHEDIR}/LoFtee/${assembly_version}/phylocsf_gerp.sql.gz ]]; then
-        wget ${conservation_file_url} -O ${PLUGIN_CACHEDIR}/LoFtee/${assembly_version}/phylocsf_gerp.sql.gz
+        wget ${conservation_file_url} -O ${PLUGIN_CACHEDIR}/LoFtee/${assembly_version}/phylocsf_gerp.sql.gz && \
+		update_yaml "${config}" "loftee_conservation_file" "${PLUGIN_CACHEDIR}/LoFtee/${assembly_version}/phylocsf_gerp.sql.gz"
     fi
 
-    if [[ ${gerp_bigwig_url} =~ \.gz$ ]] && [[ ! -f ${PLUGIN_CACHEDIR}/LoFtee/${assembly_version}/gerp_conservation_scores.homo_sapiens.bw ]]; then
-        wget ${gerp_bigwig_url} -O ${PLUGIN_CACHEDIR}/LoFtee/${assembly_version}/gerp_conservation_scores.homo_sapiens.bw
+    if [[ ${gerp_bigwig_url} =~ \.bw$ ]] && [[ ! -f ${PLUGIN_CACHEDIR}/LoFtee/${assembly_version}/gerp_conservation_scores.homo_sapiens.bw ]]; then
+        wget ${gerp_bigwig_url} -O ${PLUGIN_CACHEDIR}/LoFtee/${assembly_version}/gerp_conservation_scores.homo_sapiens.bw && \
+		update_yaml "${config}" "gerp_bigwig" "${PLUGIN_CACHEDIR}/LoFtee/${assembly_version}/gerp_conservation_scores.homo_sapiens.bw"
     elif [[ -z ${gerp_bigwig_url} ]]; then
-        log "Specifying the hg19/GRCh37 assembly version. So the bigwig file ${gerp_bigwig_url} is not available"
+        log "Specifying the hg19/GRCh37 assembly version. So the bigwig file ${gerp_bigwig_url} is not available" && \
+        update_yaml "${config}" "gerp_bigwig" ""
     else
         log "The bigwig file ${gerp_bigwig_url} is already downloaded"
-    fi
-
-    # Now we need to return the paths of the downloaded files as a BASH variable which can be used outside this function
-    echo "${PLUGIN_CACHEDIR}/LoFtee/${assembly_version}/human_ancestor.fa.gz"
-    echo "${PLUGIN_CACHEDIR}/LoFtee/${assembly_version}/human_ancestor.fa.gz.fai"
-    echo "${PLUGIN_CACHEDIR}/LoFtee/${assembly_version}/phylocsf_gerp.sql.gz"
-    if [[ ${gerp_bigwig_url} =~ \.gz$ ]]; then
-        echo "${PLUGIN_CACHEDIR}/LoFtee/${assembly_version}/gerp_conservation_scores.homo_sapiens.bw"
-    else
-        echo ""
     fi
 }
 
@@ -1288,6 +1341,9 @@ function main_install() {
     ${conda_env_name} || \
     { log "Failed to install VEP plugins"; return 1; }
 
+	# Install LOFTEE separately despite it is also a VEP plugin
+	LoFtee_install ${vep_plugins_cachedir} ${config_file} || \
+	{ log "Failed to install LOFTEE"; return 1; }
 
     # 4. Install gnomAD VCF (basically download bgzipped VCF files)
     local gnomad_vcf_chrX=$(read_yaml "$config_file" "gnomad_vcf_chrX")

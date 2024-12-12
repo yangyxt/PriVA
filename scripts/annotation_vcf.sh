@@ -457,8 +457,10 @@ function anno_VEP_data() {
 	[[ ${assembly} == "hg38" ]] && assembly="GRCh38" # Convert to NCBI assembly name
 
 	[[ ${assembly} == "GRCh37" ]] && local gerp_bw_argument=""
-	[[ ${assembly} == "GRCh38" ]] && local gerp_bw_argument=",gerp_bigwig ${gerp_bigwig}" && \
-	check_path "$gerp_bigwig" "file" "gerp_bigwig" || has_error=1
+	if [[ ${assembly} == "GRCh38" ]]; then
+		local gerp_bw_argument=",gerp_bigwig ${gerp_bigwig}"
+		check_path "$gerp_bigwig" "file" "gerp_bigwig" || has_error=1
+	fi
 
     # Exit if any errors were found
     if [[ $has_error -gt 0 ]]; then
@@ -479,7 +481,7 @@ function anno_VEP_data() {
 	local output_vcf=${input_vcf/.vcf*/.${tmp_tag}.vcf}
 
 	log "Running VEP annotation with the command below:"
-	log "vep -i ${input_vcf} --format vcf --verbose --vcf --species homo_sapiens --use_given_ref --assembly ${assembly} --cache --total_length --offline --merged --hgvs --numbers --symbol --canonical --variant_class --gene_phenotype --stats_file ${input_vcf/.vcf*/.vep.stats.html} --fork ${threads} --buffer_size 10000 --dir_cache ${vep_cache_dir} --dir_plugins ${vep_plugins_dir} -plugin UTRAnnotator,file=${utr_annotator_file} -plugin LOEUF,file=${loeuf_prescore},match_by=transcript -plugin AlphaMissense,file=${alphamissense_prescore} -plugin SpliceAI,snv=${spliceai_snv_prescore},indel=${spliceai_indel_prescore},cutoff=0.5 -plugin LoF,loftee_path:${loftee_repo},human_ancestor_fa:${human_ancestor_fasta},conservation_file:${conservation_file}${gerp_bw_argument} -plugin PrimateAI,${primateai_prescore} -plugin Conservation,file=${conservation_file} -plugin NMD --force_overwrite -o ${output_vcf}"
+	log "vep -i ${input_vcf} --format vcf --verbose --vcf --species homo_sapiens --use_transcript_ref --assembly ${assembly} --cache --offline --merged --domains --hgvs --numbers --symbol --canonical --total_length --variant_class --gene_phenotype --stats_file ${input_vcf/.vcf*/.vep.stats.html} --fork ${threads} --buffer_size 10000 --fasta ${ref_genome} --dir_cache ${vep_cache_dir} --dir_plugins ${vep_plugins_dir} -plugin UTRAnnotator,file=${utr_annotator_file} -plugin LOEUF,file=${loeuf_prescore},match_by=transcript -plugin AlphaMissense,file=${alphamissense_prescore} -plugin LoF,loftee_path:${loftee_repo},human_ancestor_fa:${human_ancestor_fasta},conservation_file:${loftee_conservation_file}${gerp_bw_argument} -plugin SpliceAI,snv=${spliceai_snv_prescore},indel=${spliceai_indel_prescore},cutoff=0.5 -plugin PrimateAI,${primateai_prescore} -plugin SpliceVault,file=${splicevault_prescore} -plugin Conservation,${conservation_file},MAX -plugin NMD --force_overwrite -o ${output_vcf}"
 
 	# Run VEP annotation
     vep -i ${input_vcf} \
@@ -505,11 +507,11 @@ function anno_VEP_data() {
     --buffer_size 10000 \
     --fasta ${ref_genome} \
     --dir_cache ${vep_cache_dir} \
-    --dir_plugins ${vep_plugins_dir} \
+    --dir_plugins ${vep_plugins_dir},${loftee_repo} \
     -plugin UTRAnnotator,file=${utr_annotator_file} \
     -plugin LOEUF,file=${loeuf_prescore},match_by=transcript \
     -plugin AlphaMissense,file=${alphamissense_prescore} \
-	-plugin LoF,loftee_path:${loftee_repo},human_ancestor_fa:${human_ancestor_fasta},conservation_file:${conservation_file}${gerp_bw_argument} \
+	-plugin LoF,loftee_path:${loftee_repo},human_ancestor_fa:${human_ancestor_fasta},conservation_file:${loftee_conservation_file}${gerp_bw_argument} \
     -plugin SpliceAI,snv=${spliceai_snv_prescore},indel=${spliceai_indel_prescore},cutoff=0.5 \
     -plugin PrimateAI,${primateai_prescore} \
 	-plugin SpliceVault,file=${splicevault_prescore} \

@@ -1,10 +1,11 @@
 #!/usr/bin/env snakemake
 
 import os
+import sys
 from pathlib import Path
 import math
 
-configfile: "config.yaml"
+config: "config.yaml"
 
 # Define variables from config with defaults
 def get_config(key, default=None):
@@ -15,49 +16,52 @@ INPUT_VCF = get_config("input_vcf")
 PED_FILE = get_config("ped_file")
 ASSEMBLY = get_config("assembly")
 REF_GENOME = get_config("ref_genome")
+OUTPUT_DIR = get_config("output_dir", "results")
+THREADS = get_config("threads", 1)
+BASE_DIR = get_config("base_dir", ".")
+SCRIPT_DIR = os.path.join(BASE_DIR, "scripts")
+
 
 # Get input basename for output naming
 INPUT_BASE = os.path.splitext(os.path.basename(INPUT_VCF))[0]
 if INPUT_BASE.endswith('.vcf'):
     INPUT_BASE = os.path.splitext(INPUT_BASE)[0]
 
-# Optional configs with defaults
-OUTPUT_DIR = get_config("output_dir", "results")
-THREADS = get_config("threads", 1)
-
-# Get list of families from PED file
-def get_families():
-    with open(PED_FILE) as f:
-        families = {line.split()[0] for line in f if not line.startswith('#')}
-    return sorted(list(families))
-
-FAMILIES = get_families()
-N_FAMILIES = len(FAMILIES)
-
-# Calculate threads per family (minimum 1 thread)
-def get_threads_per_family():
-    return max(1, math.floor(THREADS / N_FAMILIES))
-
-THREADS_PER_FAMILY = get_threads_per_family()
+print(f"INPUT_BASE: {INPUT_BASE}", file=sys.stderr)
 
 # Ensure output directory exists
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-# Define the final outputs for each family
-def get_family_outputs(wildcards):
-    return [
-        os.path.join(OUTPUT_DIR, f"{INPUT_BASE}.anno.{fam}.filtered.vcf.gz") for fam in FAMILIES
-    ] + [
-        os.path.join(OUTPUT_DIR, f"{INPUT_BASE}.anno.{fam}.filtered.tsv") for fam in FAMILIES
-    ] + [
-        os.path.join(OUTPUT_DIR, f"{INPUT_BASE}.anno.{fam}.filtered.acmg.tsv") for fam in FAMILIES
-    ]
+
+def get_final_outputs():
+    if not os.path.exists(PED_FILE):
+        outputs = [
+            os.path.join(OUTPUT_DIR, f"{INPUT_BASE}.anno.filtered.vcf.gz"),
+            os.path.join(OUTPUT_DIR, f"{INPUT_BASE}.anno.filtered.tsv"),
+            os.path.join(OUTPUT_DIR, f"{INPUT_BASE}.anno.filtered.acmg.tsv")
+        ]
+        print(f"Expected outputs: {outputs}", file=sys.stderr)
+        return outputs
+
+    with open(PED_FILE, 'r') as f:
+        families = set(line.split()[0] for line in f if not line.startswith('#'))
+
+    outputs = []
+    for family in families:
+        outputs.append(os.path.join(OUTPUT_DIR, f"{INPUT_BASE}.anno.{family}.filtered.vcf.gz"))
+        outputs.append(os.path.join(OUTPUT_DIR, f"{INPUT_BASE}.anno.{family}.filtered.tsv"))
+        outputs.append(os.path.join(OUTPUT_DIR, f"{INPUT_BASE}.anno.{family}.filtered.acmg.tsv"))
+
+    print(f"Expected outputs: {outputs}", file=sys.stderr)
+    return outputs
+
 
 rule all:
     input:
-        get_family_outputs
+        get_final_outputs()
 
-# Step 1: Annotation (shared step for all families)
+
+# Step 1: Annotation (shared step)
 rule annotate_variants:
     input:
         vcf=INPUT_VCF,
@@ -66,9 +70,9 @@ rule annotate_variants:
     output:
         vcf=os.path.join(OUTPUT_DIR, f"{INPUT_BASE}.anno.vcf.gz")
     params:
-        script=os.path.join("scripts", "annotation_vcf.sh"),
-        config="config.yaml"
-    threads: THREADS  # Uses full thread allocation as it's a shared step
+        script=os.path.join(SCRIPT_DIR, "annotation_vcf.sh"),
+        config=os.path.join(BASE_DIR, "config.yaml")
+    threads: THREADS
     shell:
         """
         bash {params.script} main_workflow \
@@ -77,94 +81,76 @@ rule annotate_variants:
             --config {params.config}
         """
 
-# Checkpoint to validate the pedigree file
-checkpoint validate_pedigree:
-    input:
-        ped=PED_FILE
-    output:
-        valid=os.path.join(OUTPUT_DIR, "pedigree_valid.txt")
-    run:
-        if os.path.isfile(input.ped) and os.path.getsize(input.ped) > 0:
-            with open(output.valid, 'w') as f:
-                f.write("valid")
-        else:
-            with open(output.valid, 'w') as f:
-                f.write("invalid")
-
-# Function to determine the next steps based on pedigree validation
-def determine_next_steps(wildcards):
-    valid_file = checkpoints.validate_pedigree.output.valid
-    if os.path.isfile(valid_file):
-        with open(valid_file) as f:
-            status = f.read().strip()
-        if status == "valid":
-            return expand(os.path.join(OUTPUT_DIR, f"{INPUT_BASE}.anno.{{family}}.filtered.vcf.gz"), family=FAMILIES)
-    return [os.path.join(OUTPUT_DIR, f"{INPUT_BASE}.anno.filtered.vcf.gz")]
-
-# Step 2: Filter variants
-rule filter_variants:
+# Step 2: Filter variants with family information
+rule filter_variants_per_family:
     input:
         vcf=rules.annotate_variants.output.vcf,
-        ped=PED_FILE,
-        valid=checkpoints.validate_pedigree.output.valid
+        ped=PED_FILE
     output:
-        vcf=determine_next_steps
+        vcf=os.path.join(OUTPUT_DIR, f"{INPUT_BASE}.anno.{{family}}.filtered.vcf.gz")
     params:
-        script=os.path.join("scripts", "filtration_vcf_per_fam.sh"),
-        config="config.yaml"
-    threads: THREADS_PER_FAMILY
+        script=os.path.join(SCRIPT_DIR, "filtration_vcf_per_fam.sh"),
+        config=os.path.join(BASE_DIR, "config.yaml")
+    threads: THREADS
     shell:
         """
-        if [[ $(cat {input.valid}) == "valid" ]]; then
-            bash {params.script} \
-                -v {input.vcf} \
-                -f {wildcards.family} \
-                -c {params.config}
-        else
-            bash {params.script} \
-                -v {input.vcf} \
-                -c {params.config}
-        fi
+        bash {params.script} \
+            -v {input.vcf} \
+            -f {wildcards.family} \
+            -c {params.config}
         """
 
-# Function to determine output paths for prioritization
-def determine_prioritization_outputs(wildcards):
-    valid_file = checkpoints.validate_pedigree.output.valid
-    if os.path.isfile(valid_file):
-        with open(valid_file) as f:
-            status = f.read().strip()
-        if status == "valid":
-            return {
-                'tsv': os.path.join(OUTPUT_DIR, f"{INPUT_BASE}.anno.{wildcards.family}.filtered.tsv"),
-                'mat': os.path.join(OUTPUT_DIR, f"{INPUT_BASE}.anno.{wildcards.family}.filtered.acmg.tsv")
-            }
-    return {
-        'tsv': os.path.join(OUTPUT_DIR, f"{INPUT_BASE}.anno.filtered.tsv"),
-        'mat': os.path.join(OUTPUT_DIR, f"{INPUT_BASE}.anno.filtered.acmg.tsv")
-    }
-
-# Step 3: Prioritize variants
-rule prioritize_variants:
+# Step 2 alternative: Filter variants without family information
+rule filter_variants_no_family:
     input:
-        vcf=rules.filter_variants.output.vcf,
-        ped=PED_FILE,
-        valid=checkpoints.validate_pedigree.output.valid
+        vcf=rules.annotate_variants.output.vcf
     output:
-        unpack(determine_prioritization_outputs)
+        vcf=os.path.join(OUTPUT_DIR, f"{INPUT_BASE}.anno.filtered.vcf.gz")
     params:
-        script=os.path.join("scripts", "prioritization_vcf_per_fam.sh"),
-        config="config.yaml"
-    threads: THREADS_PER_FAMILY
+        script=os.path.join(SCRIPT_DIR, "filtration_vcf_per_fam.sh"),
+        config=os.path.join(BASE_DIR, "config.yaml")
+    threads: THREADS
     shell:
         """
-        if [[ $(cat {input.valid}) == "valid" ]]; then
-            bash {params.script} \
-                {input.vcf} \
-                {params.config} \
-                {wildcards.family}
-        else
-            bash {params.script} \
-                {input.vcf} \
-                {params.config}
-        fi
+        bash {params.script} \
+            -v {input.vcf} \
+            -c {params.config}
+        """
+
+# Step 3: Prioritize variants with family information
+rule prioritize_variants_per_family:
+    input:
+        vcf=os.path.join(OUTPUT_DIR, f"{INPUT_BASE}.anno.{{family}}.filtered.vcf.gz"),
+        ped=PED_FILE
+    output:
+        tsv=os.path.join(OUTPUT_DIR, f"{INPUT_BASE}.anno.{{family}}.filtered.tsv"),
+        acmg=os.path.join(OUTPUT_DIR, f"{INPUT_BASE}.anno.{{family}}.filtered.acmg.tsv")
+    params:
+        script=os.path.join(SCRIPT_DIR, "prioritization_vcf_per_fam.sh"),
+        config=os.path.join(BASE_DIR, "config.yaml")
+    threads: THREADS
+    shell:
+        """
+        bash {params.script} \
+            {input.vcf} \
+            {params.config} \
+            {wildcards.family}
+        """
+
+# Step 3 alternative: Prioritize variants without family information
+rule prioritize_variants_no_family:
+    input:
+        vcf=rules.filter_variants_no_family.output.vcf
+    output:
+        tsv=os.path.join(OUTPUT_DIR, f"{INPUT_BASE}.anno.filtered.tsv"),
+        acmg=os.path.join(OUTPUT_DIR, f"{INPUT_BASE}.anno.filtered.acmg.tsv")
+    params:
+        script=os.path.join(SCRIPT_DIR, "prioritization_vcf_per_fam.sh"),
+        config=os.path.join(BASE_DIR, "config.yaml")
+    threads: THREADS
+    shell:
+        """
+        bash {params.script} \
+            {input.vcf} \
+            {params.config}
         """

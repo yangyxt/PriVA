@@ -423,30 +423,36 @@ function CADD_install() {
         rm ${CADD_parent_dir}/CADD-scripts.zip
 
         # Get the base folder name from the unzipped directory
-        CADD_base_dir=$(find ${CADD_parent_dir}/ -maxdepth 1 -type d -name "CADD-scripts-*${cadd_version#v}*" -print | head -n1)
         [[ -z ${CADD_base_dir} ]] && { log "Could not find CADD scripts directory"; return 1; }
         update_yaml ${config_file} "cadd_base_dir" "${CADD_base_dir}" && \
         log "Now the CADD base directory is ${CADD_base_dir} and it's updated to the config file ${config_file}"
-        local CADD_script=${CADD_base_dir}/CADD.sh && \
-        local CADD_cache_dir=${CADD_base_dir}/data && \
-        local CADD_prescore_dir=${CADD_cache_dir}/prescored && \
-        local CADD_anno_dir=${CADD_cache_dir}/annotations
+        local CADD_script="${CADD_base_dir}/CADD.sh" && \
+        local CADD_cache_dir="${CADD_base_dir}/data" && \
+        local CADD_prescore_dir="${CADD_cache_dir}/prescored" && \
+        local CADD_anno_dir="${CADD_cache_dir}/annotations" && \
+		log "Now the CADD script is ${CADD_script}, the CADD cache directory is ${CADD_cache_dir}, the CADD prescore directory is ${CADD_prescore_dir}, the CADD annotation directory is ${CADD_anno_dir}"
     fi
 
 
     # Now we start downloading the CADD genome annotations corresponding to the assembly version
     if [[ ${assembly} == "GRCh37" ]] || [[ ${assembly} == "hg19" ]]; then
-        [[ ! -d ${CADD_anno_dir}/GRCh37_${cadd_version} ]] && \
-        wget -c https://kircherlab.bihealth.org/download/CADD/v1.7/GRCh37/GRCh37_v1.7.tar.gz -O ${CADD_anno_dir}/GRCh37_v1.7.tar.gz && \
-        md5sum ${CADD_anno_dir}/GRCh37_v1.7.tar.gz | grep -q $(read_yaml "${config_file}" "cadd_GRCh37_anno_md5") && \
-        tar -xzvf ${CADD_anno_dir}/GRCh37_v1.7.tar.gz -C ${CADD_anno_dir}/ && \
-        rm ${CADD_anno_dir}/GRCh37_v1.7.tar.gz
+        if [[ ! -d ${CADD_anno_dir}/GRCh37_${cadd_version} ]]; then
+			wget -c https://kircherlab.bihealth.org/download/CADD/v1.7/GRCh37/GRCh37_v1.7.tar.gz -O ${CADD_anno_dir}/GRCh37_v1.7.tar.gz && \
+			md5sum ${CADD_anno_dir}/GRCh37_v1.7.tar.gz | grep -q $(read_yaml "${config_file}" "cadd_GRCh37_anno_md5") && \
+			tar -xzvf ${CADD_anno_dir}/GRCh37_v1.7.tar.gz -C ${CADD_anno_dir}/ && \
+			rm ${CADD_anno_dir}/GRCh37_v1.7.tar.gz
+		else
+			log "The CADD genome annotation for GRCh37_${cadd_version} is already downloaded, skip the downloading process"
+		fi
     elif [[ ${assembly} == "GRCh38" ]] || [[ ${assembly} == "hg38" ]]; then
-        [[ ! -d ${CADD_anno_dir}/GRCh38_${cadd_version} ]] && \
-        wget -c https://kircherlab.bihealth.org/download/CADD/v1.7/GRCh38/GRCh38_v1.7.tar.gz -O ${CADD_anno_dir}/GRCh38_v1.7.tar.gz && \
-        md5sum ${CADD_anno_dir}/GRCh38_v1.7.tar.gz | grep -q $(read_yaml "${config_file}" "cadd_GRCh38_anno_md5") && \
-        tar -xzvf ${CADD_anno_dir}/GRCh38_v1.7.tar.gz -C ${CADD_anno_dir}/ && \
-        rm ${CADD_anno_dir}/GRCh38_v1.7.tar.gz
+        if [[ ! -d ${CADD_anno_dir}/GRCh38_${cadd_version} ]]; then
+			wget -c https://kircherlab.bihealth.org/download/CADD/v1.7/GRCh38/GRCh38_v1.7.tar.gz -O ${CADD_anno_dir}/GRCh38_v1.7.tar.gz && \
+			md5sum ${CADD_anno_dir}/GRCh38_v1.7.tar.gz | grep -q $(read_yaml "${config_file}" "cadd_GRCh38_anno_md5") && \
+			tar -xzvf ${CADD_anno_dir}/GRCh38_v1.7.tar.gz -C ${CADD_anno_dir}/ && \
+			rm ${CADD_anno_dir}/GRCh38_v1.7.tar.gz
+		else
+			log "The CADD genome annotation for GRCh38_${cadd_version} is already downloaded, skip the downloading process"
+		fi
     else
         log "Not supported assembly version: ${assembly}"
         return 1
@@ -469,19 +475,26 @@ function CADD_install() {
         snv_prescore_md5=$(read_yaml "${config_file}" "cadd_GRCh38_snv_anno_md5")
         indel_prescore_md5=$(read_yaml "${config_file}" "cadd_GRCh38_indel_anno_md5")
     fi
+	log "Now the CADD prescore URL for ${assembly} is ${snv_prescore_url} and ${indel_prescore_url}"
 
     local snv_file_name=$(basename ${snv_prescore_url})
     local indel_file_name=$(basename ${indel_prescore_url})
 
-    [[ ! -f ${CADD_prescore_dir}/${assembly}_${cadd_version}/incl_anno/${snv_file_name} ]] && \
-    wget -c ${snv_prescore_url} -O ${CADD_prescore_dir}/${assembly}_${cadd_version}/incl_anno/${snv_file_name} && \
-    md5sum ${CADD_prescore_dir}/${assembly}_${cadd_version}/incl_anno/${snv_file_name} | grep -q ${snv_prescore_md5} && \
-    wget -c ${snv_prescore_url}.tbi -O ${CADD_prescore_dir}/${assembly}_${cadd_version}/incl_anno/${snv_file_name}.tbi
+    if [[ ! -f ${CADD_prescore_dir}/${assembly}_${cadd_version}/incl_anno/${snv_file_name} ]]; then
+		wget -c ${snv_prescore_url} -O ${CADD_prescore_dir}/${assembly}_${cadd_version}/incl_anno/${snv_file_name} && \
+		md5sum ${CADD_prescore_dir}/${assembly}_${cadd_version}/incl_anno/${snv_file_name} | grep -q ${snv_prescore_md5} && \
+		wget -c ${snv_prescore_url}.tbi -O ${CADD_prescore_dir}/${assembly}_${cadd_version}/incl_anno/${snv_file_name}.tbi
+	else
+		log "The CADD prescore for ${assembly} is already downloaded at ${CADD_prescore_dir}/${assembly}_${cadd_version}/incl_anno/${snv_file_name}, skip the downloading process"
+	fi
 
-    [[ ! -f ${CADD_prescore_dir}/${assembly}_${cadd_version}/incl_anno/${indel_file_name} ]] && \
-    wget -c ${indel_prescore_url} -O ${CADD_prescore_dir}/${assembly}_${cadd_version}/incl_anno/${indel_file_name} && \
-    md5sum ${CADD_prescore_dir}/${assembly}_${cadd_version}/incl_anno/${indel_file_name} | grep -q ${indel_prescore_md5} && \
-    wget -c ${indel_prescore_url}.tbi -O ${CADD_prescore_dir}/${assembly}_${cadd_version}/incl_anno/${indel_file_name}.tbi
+    if [[ ! -f ${CADD_prescore_dir}/${assembly}_${cadd_version}/incl_anno/${indel_file_name} ]]; then
+		wget -c ${indel_prescore_url} -O ${CADD_prescore_dir}/${assembly}_${cadd_version}/incl_anno/${indel_file_name} && \
+		md5sum ${CADD_prescore_dir}/${assembly}_${cadd_version}/incl_anno/${indel_file_name} | grep -q ${indel_prescore_md5} && \
+		wget -c ${indel_prescore_url}.tbi -O ${CADD_prescore_dir}/${assembly}_${cadd_version}/incl_anno/${indel_file_name}.tbi
+	else
+		log "The CADD prescore for ${assembly} is already downloaded at ${CADD_prescore_dir}/${assembly}_${cadd_version}/incl_anno/${indel_file_name}, skip the downloading process"
+	fi
 }
 
 
@@ -683,25 +696,30 @@ function AlphaMissense_pick_intolerant_domains() {
     local alphamissense_pd_stat=$(read_yaml ${config_file} "alphamissense_pd_stat")
     local alphamissense_tranx_domain_map=$(read_yaml ${config_file} "alphamissense_tranx_domain_map")
     local alphamissense_intolerant_domains=$(read_yaml ${config_file} "alphamissense_intolerant_domains")
+	local clinvar_intolerant_domains=$(read_yaml ${config_file} "clinvar_intolerant_domains")
+    local clinvar_intolerance_mechanisms=$(read_yaml ${config_file} "clinvar_intolerance_mechanisms")
+
 
     [[ -f ${alphamissense_intolerant_domains} ]] && \
     [[ ${alphamissense_intolerant_domains} -nt ${alphamissense_pd_stat} ]] && \
     [[ -f ${alphamissense_tranx_domain_map} ]] && \
-    [[ ${alphamissense_tranx_domain_map} -nt ${alphamissense_intolerant_domains} ]] && \
+    [[ ${alphamissense_tranx_domain_map} -nt ${alphamissense_pd_stat} ]] && \
+    [[ ${alphamissense_intolerant_domains} -nt ${clinvar_intolerant_domains} ]] && \
+    [[ ${alphamissense_intolerant_domains} -nt ${clinvar_intolerance_mechanisms} ]] && \
     log "The AlphaMissense intolerant domains file ${alphamissense_intolerant_domains} is already generated, skip this step" && return 0
 
     local pick_intolerant_domains_py=${SCRIPT_DIR}/am_pick_intolerant_domains.py
-    local clinvar_intolerant_domains=$(read_yaml ${config_file} "clinvar_intolerant_domains")
-    local clinvar_intolerance_mechanisms=$(read_yaml ${config_file} "clinvar_intolerance_mechanisms")
+    
     local threads=$(read_yaml ${config_file} "threads")
     local alphamissense_dir=$(dirname ${alphamissense_pd_stat})
     
+	log "Running the AlphaMissense intolerant domains analysis with this command: python ${pick_intolerant_domains_py} --pickle_file ${alphamissense_pd_stat} --threads ${threads} --output_dir ${alphamissense_dir} --intolerant_domains_tsv ${clinvar_intolerant_domains} --mechanism_tsv ${clinvar_intolerance_mechanisms}"
     python ${pick_intolerant_domains_py} \
     --pickle_file ${alphamissense_pd_stat} \
     --threads ${threads} \
     --output_dir ${alphamissense_dir} \
     --intolerant_domains_tsv ${clinvar_intolerant_domains} \
-    --mechanisms_tsv ${clinvar_intolerance_mechanisms} && \
+    --mechanism_tsv ${clinvar_intolerance_mechanisms} && \
     update_yaml ${config_file} "alphamissense_intolerant_domains" "${alphamissense_dir}/domain_tolerance_analysis.tsv" && \
     update_yaml ${config_file} "alphamissense_tranx_domain_map" "${alphamissense_dir}/transcript_exon_domain_mapping.pkl" && \
     log "The AlphaMissense intolerant domains file ${alphamissense_intolerant_domains} and transcript exon domain mapping file ${alphamissense_tranx_domain_map} are generated and saved to ${alphamissense_dir}"
@@ -1185,6 +1203,8 @@ function LoFtee_install() {
 	local assembly_version=$(read_yaml "${config}" "assembly")
 	local loftee_parent_dir=$(read_yaml "${config}" "loftee_parent_dir")
 
+	[[ ! -d ${loftee_parent_dir} ]] && { log "The parent directory for LOFTEE ${loftee_parent_dir} is not found, please check the directory before proceeding"; return 1; }
+
 	local loftee_repo=$(read_yaml "${config}" "loftee_repo")
 	local human_ancestor_fasta=$(read_yaml "${config}" "human_ancestor_fasta")
 	local loftee_conservation_file=$(read_yaml "${config}" "loftee_conservation_file")
@@ -1270,7 +1290,8 @@ function LoFtee_install() {
 
     if [[ ! -f ${PLUGIN_CACHEDIR}/LoFtee/${assembly_version}/phylocsf_gerp.sql.gz ]]; then
         wget ${conservation_file_url} -O ${PLUGIN_CACHEDIR}/LoFtee/${assembly_version}/phylocsf_gerp.sql.gz && \
-		update_yaml "${config}" "loftee_conservation_file" "${PLUGIN_CACHEDIR}/LoFtee/${assembly_version}/phylocsf_gerp.sql.gz"
+		gunzip -f ${PLUGIN_CACHEDIR}/LoFtee/${assembly_version}/phylocsf_gerp.sql.gz && \
+		update_yaml "${config}" "loftee_conservation_file" "${PLUGIN_CACHEDIR}/LoFtee/${assembly_version}/phylocsf_gerp.sql"
     fi
 
     if [[ ${gerp_bigwig_url} =~ \.bw$ ]] && [[ ! -f ${PLUGIN_CACHEDIR}/LoFtee/${assembly_version}/gerp_conservation_scores.homo_sapiens.bw ]]; then
@@ -1374,6 +1395,8 @@ function main_install() {
     ${config_file} \
     ${assembly} || \
     { log "Failed to install CADD prescores"; return 1; }
+
+	log "Congratulations! The installation is completed!"
 }
 
 

@@ -96,7 +96,7 @@ function assign_acmg_criteria () {
             c) config_file=$OPTARG ;;
             f) fam_name=$OPTARG ;;
             t) threads=$OPTARG ;;
-            *) echo "No argument passed. At least pass an argument specifying the input table"
+            *) echo "No argument passed. At least pass an argument specifying the input table" ;;
         esac
     done
 

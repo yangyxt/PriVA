@@ -25,7 +25,7 @@ function filter_allele_based_on_pedigree_with_py {
             p) local pedfile=$OPTARG ;;
             o) local output_vcf=$OPTARG ;;
             f) local family_name=$OPTARG ;;
-            *) echo "No argument passed. At least pass an argument specifying the family ID"
+            *) echo "No argument passed. At least pass an argument specifying the family ID" ;;
         esac
     done
 
@@ -69,21 +69,23 @@ function filter_allele_based_on_pedigree_with_py {
 function filter_af () {
 	local config_file
 	local input_vcf
+	local output_vcf
     local threads
 
     # Use getopts to parse the input arguments
     while getopts i:o::c:t:: args
     do
         case ${args} in
-            i) local input_vcf=$OPTARG ;;
-            o) local output_vcf=$OPTARG ;;
-            c) local config_file=$OPTARG ;;
-            t) local threads=$OPTARG ;;
-            *) echo "No argument passed. At least pass an argument specifying the family ID"
+            i) input_vcf=$OPTARG ;;
+            o) output_vcf=$OPTARG ;;
+            c) config_file=$OPTARG ;;
+            t) threads=$OPTARG ;;
+            *) echo "No argument passed. At least pass an argument specifying the family ID" ;;
         esac
     done
 
-    [[ -z ${threads} ]] && threads=1
+    [[ -z ${threads} ]] && threads=1 || log "Using ${threads} threads to filter the variants based on the allele frequency"
+	[[ ! -f ${config_file} ]] && { log "The config file ${config_file} does not exist"; return 1; }
 
     local af_cutoff=$(read_yaml ${config_file} "af_cutoff")
 
@@ -149,14 +151,14 @@ function main_filtration () {
         case ${args} in
             v) local input_vcf=$OPTARG ;;
             f) local fam_name=$OPTARG ;;
-            c) local config=$OPTARG ;;
-            *) echo "No argument passed. At least pass an argument specifying the family ID"
+            c) local config_file=$OPTARG ;;
+            *) echo "No argument passed. At least pass an argument specifying the family ID" ;;
         esac
     done
 
-    local ped_file=$(read_yaml ${config} "ped_file")
+    local ped_file=$(read_yaml ${config_file} "ped_file")
     local threads=$SNAKEMAKE_THREADS
-    [[ -z ${threads} ]] && threads=$(read_yaml ${config} "threads")
+    [[ -z ${threads} ]] && threads=$(read_yaml ${config_file} "threads")
 
     # Extract the family samples from the ped vcf file
     if [[ -f ${ped_file} ]]; then
@@ -184,14 +186,14 @@ function main_filtration () {
     # Filter the variants based on the allele frequency
     if [[ -f ${ped_file} ]]; then
         filter_af \
-        -c ${config} \
+        -c ${config_file} \
         -i ${filtered_vcf} \
         -t ${threads} || \
         { log "Failed to filter the variants based on the allele frequency"; return 1; }
     else
         log "No pedigree table and family name provided, directly filter the variants based on the allele frequency to get the filtered VCF file"
         filter_af \
-        -c ${config} \
+        -c ${config_file} \
         -i ${input_vcf} \
         -o ${filtered_vcf} \
         -t ${threads} || \

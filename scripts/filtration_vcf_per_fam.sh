@@ -18,7 +18,7 @@ source ${SCRIPT_DIR}/common_bash_utils.sh
 
 function filter_allele_based_on_pedigree_with_py {
     local OPTIND i o p f
-    while getopts i:o::p:f:: args
+    while getopts i:o::p::f:: args
     do
         case ${args} in
             i) local input_vcf=$OPTARG ;;
@@ -67,25 +67,49 @@ function filter_allele_based_on_pedigree_with_py {
 
 
 function filter_af () {
-	local config_file=$1
-	local input_vcf=$2
-    local threads=${3}
+	local config_file
+	local input_vcf
+    local threads
+
+    # Use getopts to parse the input arguments
+    while getopts i:o::c:t:: args
+    do
+        case ${args} in
+            i) local input_vcf=$OPTARG ;;
+            o) local output_vcf=$OPTARG ;;
+            c) local config_file=$OPTARG ;;
+            t) local threads=$OPTARG ;;
+            *) echo "No argument passed. At least pass an argument specifying the family ID"
+        esac
+    done
 
     [[ -z ${threads} ]] && threads=1
 
     local af_cutoff=$(read_yaml ${config_file} "af_cutoff")
-    local tmp_tag=$(randomID)
-    local output_vcf=${input_vcf/.vcf*/.${tmp_tag}.vcf.gz}
+
+    [[ -z ${output_vcf} ]] && \
+    local tmp_tag=$(randomID) && \
+    local output_vcf=${input_vcf/.vcf*/.${tmp_tag}.vcf.gz} && \
+    local replace="TRUE" || \
+    { log "Failed to generate a temporary output VCF file name. Quit with error"; return 1; }
 
     check_vcf_validity ${input_vcf} && \
     [[ $(bcftools view -h ${input_vcf} | grep -c "AF_joint > ${af_cutoff}") -gt 0 ]] && \
     log "The input VCF ${input_vcf} already been filtered on allele frequency at the cutoff ${af_cutoff}" && \
     return 0
 
-    bcftools view --threads ${threads} -e "AF_joint > ${af_cutoff}" -Oz -o ${output_vcf} ${input_vcf} && \
-    mv ${output_vcf} ${input_vcf} && \
-    tabix -p vcf -f ${input_vcf} && \
-    display_vcf ${input_vcf}
+    bcftools view --threads ${threads} -e "AF_joint > ${af_cutoff}" -Ou ${input_vcf} | \
+    bcftools sort -Oz -o ${output_vcf} || \
+    { log "Failed to filter the variants based on the allele frequency"; return 1; }
+    
+    if [[ ${replace} == "TRUE" ]]; then
+        mv ${output_vcf} ${input_vcf} && \
+        tabix -p vcf -f ${input_vcf} && \
+        display_vcf ${input_vcf}
+    else
+        tabix -p vcf -f ${output_vcf} && \
+        display_vcf ${output_vcf}
+    fi
 }
 
 
@@ -120,10 +144,10 @@ function extract_fam_vcf () {
 
 function main_filtration () {
     local OPTIND v f c
-    while getopts v:f:c: args
+    while getopts v:f::c: args
     do
         case ${args} in
-            v) local ped_vcf=$OPTARG ;;
+            v) local input_vcf=$OPTARG ;;
             f) local fam_name=$OPTARG ;;
             c) local config=$OPTARG ;;
             *) echo "No argument passed. At least pass an argument specifying the family ID"
@@ -135,22 +159,44 @@ function main_filtration () {
     [[ -z ${threads} ]] && threads=$(read_yaml ${config} "threads")
 
     # Extract the family samples from the ped vcf file
-    extract_fam_vcf ${ped_vcf} ${ped_file} ${fam_name} ${threads} && \
-    local fam_vcf=${ped_vcf/.vcf*/.${fam_name}.vcf.gz} || \
-    { log "Failed to extract the family VCF"; return 1; }
+    if [[ -f ${ped_file} ]]; then
+        # Optional filtration based on family and pedigree information
+        extract_fam_vcf ${input_vcf} ${ped_file} ${fam_name} ${threads} && \
+        local fam_vcf=${input_vcf/.vcf*/.${fam_name}.vcf.gz} || \
+        { log "Failed to extract the family VCF"; return 1; }
+    fi
 
-    # Filter the variants based on the pedigree information
-    filter_allele_based_on_pedigree_with_py \
-    -i ${fam_vcf} \
-    -p ${ped_file} \
-    -f ${fam_name} \
-    -o ${fam_vcf/.vcf*/.filtered.vcf.gz} && \
-    local filtered_vcf=${fam_vcf/.vcf*/.filtered.vcf.gz} || \
-    { log "Failed to filter the variants based on the pedigree information"; return 1; }
+    # Filter the variants based on the pedigree information\
+    if [[ -f ${ped_file} ]]; then
+        # Optional operation based on pedigree information
+        filter_allele_based_on_pedigree_with_py \
+        -i ${fam_vcf} \
+        -p ${ped_file} \
+        -f ${fam_name} \
+        -o ${fam_vcf/.vcf*/.filtered.vcf.gz} && \
+        local filtered_vcf=${fam_vcf/.vcf*/.filtered.vcf.gz} || \
+        { log "Failed to filter the variants based on the pedigree information"; return 1; }
+    else
+        log "No pedigree table and family name provided, directly add filtered tag to the input VCF file as the output VCF file"
+        local filtered_vcf=${input_vcf/.vcf*/.filtered.vcf.gz}
+    fi
 
     # Filter the variants based on the allele frequency
-    filter_af ${config} ${filtered_vcf} ${threads} || \
-    { log "Failed to filter the variants based on the allele frequency"; return 1; }
+    if [[ -f ${ped_file} ]]; then
+        filter_af \
+        -c ${config} \
+        -i ${filtered_vcf} \
+        -t ${threads} || \
+        { log "Failed to filter the variants based on the allele frequency"; return 1; }
+    else
+        log "No pedigree table and family name provided, directly filter the variants based on the allele frequency to get the filtered VCF file"
+        filter_af \
+        -c ${config} \
+        -i ${input_vcf} \
+        -o ${filtered_vcf} \
+        -t ${threads} || \
+        { log "Failed to filter the variants based on the allele frequency"; return 1; }
+    fi
 }
 
 

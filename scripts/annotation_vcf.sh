@@ -3,9 +3,6 @@
 # For now, the script is only used to process short variants (Indels and SNVs). Large structural variants and CNVs are not included.
 # Since there will be unexpected indels in the input VCF file. So prescores are not enough to cover them. We need to use some tools to address this issue.
 # In this workflow, we use VEP, CADD, SpliceAI, VEP-plugin(UTRannotator). We abandon the ANNOVAR for its related releasing and distribution restrictions.
-# The script expect a Family VCF input along with a pedigree table contains the Family pedigree information.
-# Notice that the family sample ID should be consistent between the pedigree table and the VCF file.
-# Notice that the proband of the family should stay as the first record of the family in the pedigree table
 
 # For the same set of configurations (arguments), the pipeline should start with the position it ends last time, unless user specifically asked to forcefully rerun the pipeline
 
@@ -31,8 +28,6 @@ function main_workflow() {
 	# Define local variables first
 	local input_vcf \
 		  config \
-		  ped_file \
-		  fam_name \
 		  assembly \
 		  ref_genome \
 		  output_dir \
@@ -55,10 +50,10 @@ function main_workflow() {
 
     if [[ -f "$config_file" ]]; then
         log "Using config file: $config_file"
-        local -a config_keys=(input_vcf ped_file fam_name assembly vep_cache_dir output_dir ref_genome threads af_cutoff gnomad_vcf_chrX clinvar_vcf vep_plugins_dir vep_plugins_cachedir)
+        local -a config_keys=(input_vcf assembly vep_cache_dir output_dir ref_genome threads af_cutoff gnomad_vcf_chrX clinvar_vcf vep_plugins_dir vep_plugins_cachedir)
         for key in "${config_keys[@]}"; do
 			# Need to remove the quotes around the value
-            config_args[$key]="$(yq ".${key}" "$config_file" | sed 's/^"\(.*\)"$/\1/' || echo '')"
+            config_args[$key]="$(read_yaml ${config_file} ${key})"
         done
     else
         log "No config file found at $config_file, will use command line arguments only"
@@ -66,8 +61,6 @@ function main_workflow() {
 
     # Set variables with command line arguments taking precedence over config file
     local input_vcf="${input_vcf:-${config_args[input_vcf]}}"
-    local ped_file="${ped_file:-${config_args[ped_file]}}"
-    local fam_name="${fam_name:-${config_args[fam_name]}}"
 
 	# Set the optional arguments
 	local assembly="${assembly:-${config_args[assembly]}}"
@@ -84,13 +77,6 @@ function main_workflow() {
     # Set and check required paths
     local has_error=0
     check_path "$input_vcf" "file" "input_vcf" || has_error=1
-    check_path "$ped_file" "file" "ped_file" || has_error=1
-
-    # Check non-path required argument
-    if [[ -z "$fam_name" ]]; then
-        log "Error: fam_name not specified (in either command line or config)"
-        has_error=1
-    fi
 
     # Check paths that must exist
     check_path "$ref_genome" "file" "ref_genome" || has_error=1
@@ -122,8 +108,6 @@ function main_workflow() {
     # Log the parsed arguments
     log "Using the following parameters:"
     log "  input_vcf: $input_vcf"
-    log "  ped_file: $ped_file"
-    log "  fam_name: $fam_name"
     log "  assembly: $assembly"
     log "  vep_cache_dir: $vep_cache_dir"
     log "  output_dir: $output_dir"
@@ -144,11 +128,9 @@ function main_workflow() {
 
 	local anno_vcf=${input_vcf/.vcf*/.anno.vcf.gz}
 	preprocess_vcf \
-	${input_vcf} \
-	${ped_file} \
-	${fam_name} \
-	${ref_genome} \
-	${anno_vcf} && \
+	-i ${input_vcf} \
+	-o ${anno_vcf} \
+	-r ${ref_genome} && \
 	log "Successfully preprocess the input vcf ${input_vcf} for annotation. The result is ${anno_vcf}" && \
 	display_vcf ${anno_vcf} || { \
 	log "Failed to preprocess the input vcf ${input_vcf} for annotation. Quit with error."; \
@@ -201,11 +183,19 @@ function main_workflow() {
 
 
 function preprocess_vcf() {
-	local input_vcf=${1}
-	local ped_file=${2}
-	local fam_name=${3}
-	local ref_genome=${4}
-	local output_vcf=${5}
+	local input_vcf
+	local ref_genome
+	local output_vcf
+
+	# Use getopts to parse the arguments
+	local OPTIND=1
+	while getopts "i:o:r:" opt; do
+		case ${opt} in
+			i) input_vcf=${OPTARG};;
+			o) output_vcf=${OPTARG};;
+			r) ref_genome=${OPTARG};;
+		esac
+	done
 
 	# Make sure several things
 	# 1. The VCF file is having a chromosome notation with chr prefix (UCSC style instead of the NCBI style)
@@ -214,7 +204,6 @@ function preprocess_vcf() {
 	# 4. Temporarily do not deal with variant records located in alternative contigs
 
 	check_path ${input_vcf} "file" "input_vcf" || return 1
-	check_path ${ped_file} "file" "ped_file" || return 1
 	check_path ${ref_genome} "file" "ref_genome" || return 1
 
 	local vcf_assembly=$(check_vcf_assembly_version ${input_vcf})
@@ -388,7 +377,10 @@ function anno_VEP_data() {
 		  spliceai_snv_prescore \
 		  spliceai_indel_prescore \
 		  primateai_prescore \
-		  conversation_file \
+		  conservation_file \
+		  loftee_conservation_file \
+		  gerp_bigwig \
+		  human_ancestor_fasta \
 		  splicevault_prescore
 
     # Process arguments using anno_vep_args
@@ -402,7 +394,9 @@ function anno_VEP_data() {
         log "Using config file: $config_file to assign default values to the following variables"
         local -a config_keys=(assembly ref_genome vep_cache_dir vep_plugins_dir vep_plugins_cachedir threads
                               utr_annotator_file loeuf_prescore alphamissense_prescore
-                              spliceai_snv_prescore spliceai_indel_prescore splicevault_prescore primateai_prescore conversation_file)
+                              spliceai_snv_prescore spliceai_indel_prescore splicevault_prescore primateai_prescore 
+							  loftee_repo human_ancestor_fasta loftee_conservation_file gerp_bigwig 
+							  conservation_file)
         for key in "${config_keys[@]}"; do
 			# Need to strip the double quotes enclosing the string value
             config_args[$key]="$(read_yaml ${config_file} ${key})"
@@ -427,8 +421,14 @@ function anno_VEP_data() {
     local spliceai_snv_prescore="${spliceai_snv_prescore:-${config_args[spliceai_snv_prescore]}}"
     local spliceai_indel_prescore="${spliceai_indel_prescore:-${config_args[spliceai_indel_prescore]}}"
     local primateai_prescore="${primateai_prescore:-${config_args[primateai_prescore]}}"
-    local conversation_file="${conversation_file:-${config_args[conversation_file]}}"
+    local conservation_file="${conservation_file:-${config_args[conservation_file]}}"
 	local splicevault_prescore="${splicevault_prescore:-${config_args[splicevault_prescore]}}"
+	local loftee_repo="${loftee_repo:-${config_args[loftee_repo]}}"
+	local human_ancestor_fasta="${human_ancestor_fasta:-${config_args[human_ancestor_fasta]}}"
+	local loftee_conservation_file="${loftee_conservation_file:-${config_args[loftee_conservation_file]}}"
+	local gerp_bigwig="${gerp_bigwig:-${config_args[gerp_bigwig]}}"
+
+
     # Validate inputs
     local has_error=0
     check_path "$input_vcf" "file" "input_vcf" || has_error=1
@@ -444,14 +444,21 @@ function anno_VEP_data() {
     check_path "$spliceai_snv_prescore" "file" "spliceai_snv_prescore" || has_error=1
     check_path "$spliceai_indel_prescore" "file" "spliceai_indel_prescore" || has_error=1
     check_path "$primateai_prescore" "file" "primateai_prescore" || has_error=1
-    check_path "$conversation_file" "file" "conversation_file" || has_error=1
+    check_path "$conservation_file" "file" "conservation_file" || has_error=1
 	check_path "$splicevault_prescore" "file" "splicevault_prescore" || has_error=1
+	check_path "$loftee_repo" "dir" "loftee_repo" || has_error=1
+	check_path "$human_ancestor_fasta" "file" "human_ancestor_fasta" || has_error=1
+	check_path "$loftee_conservation_file" "file" "loftee_conservation_file" || has_error=1
 
     # Try to determine assembly if not specified
     [[ -z ${assembly} ]] && assembly=$(check_vcf_assembly_version ${input_vcf})
     [[ -z ${assembly} ]] && assembly=$(extract_assembly_from_fasta ${ref_genome})
 	[[ ${assembly} == "hg19" ]] && assembly="GRCh37" # Convert to NCBI assembly name
 	[[ ${assembly} == "hg38" ]] && assembly="GRCh38" # Convert to NCBI assembly name
+
+	[[ ${assembly} == "GRCh37" ]] && local gerp_bw_argument=""
+	[[ ${assembly} == "GRCh38" ]] && local gerp_bw_argument=",gerp_bigwig ${gerp_bigwig}" && \
+	check_path "$gerp_bigwig" "file" "gerp_bigwig" || has_error=1
 
     # Exit if any errors were found
     if [[ $has_error -gt 0 ]]; then
@@ -472,7 +479,7 @@ function anno_VEP_data() {
 	local output_vcf=${input_vcf/.vcf*/.${tmp_tag}.vcf}
 
 	log "Running VEP annotation with the command below:"
-	log "vep -i ${input_vcf} --format vcf --verbose --vcf --species homo_sapiens --use_given_ref --assembly ${assembly} --cache --total_length --offline --merged --hgvs --numbers --symbol --canonical --variant_class --gene_phenotype --stats_file ${input_vcf/.vcf*/.vep.stats.html} --fork ${threads} --buffer_size 10000 --dir_cache ${vep_cache_dir} --dir_plugins ${vep_plugins_dir} -plugin UTRAnnotator,file=${utr_annotator_file} -plugin LOEUF,file=${loeuf_prescore},match_by=transcript -plugin AlphaMissense,file=${alphamissense_prescore} -plugin SpliceAI,snv=${spliceai_snv_prescore},indel=${spliceai_indel_prescore},cutoff=0.5 -plugin PrimateAI,${primateai_prescore} -plugin Conservation,file=${conversation_file} -plugin NMD --force_overwrite -o ${output_vcf}"
+	log "vep -i ${input_vcf} --format vcf --verbose --vcf --species homo_sapiens --use_given_ref --assembly ${assembly} --cache --total_length --offline --merged --hgvs --numbers --symbol --canonical --variant_class --gene_phenotype --stats_file ${input_vcf/.vcf*/.vep.stats.html} --fork ${threads} --buffer_size 10000 --dir_cache ${vep_cache_dir} --dir_plugins ${vep_plugins_dir} -plugin UTRAnnotator,file=${utr_annotator_file} -plugin LOEUF,file=${loeuf_prescore},match_by=transcript -plugin AlphaMissense,file=${alphamissense_prescore} -plugin SpliceAI,snv=${spliceai_snv_prescore},indel=${spliceai_indel_prescore},cutoff=0.5 -plugin LoF,loftee_path:${loftee_repo},human_ancestor_fa:${human_ancestor_fasta},conservation_file:${conservation_file}${gerp_bw_argument} -plugin PrimateAI,${primateai_prescore} -plugin Conservation,file=${conservation_file} -plugin NMD --force_overwrite -o ${output_vcf}"
 
 	# Run VEP annotation
     vep -i ${input_vcf} \
@@ -502,10 +509,11 @@ function anno_VEP_data() {
     -plugin UTRAnnotator,file=${utr_annotator_file} \
     -plugin LOEUF,file=${loeuf_prescore},match_by=transcript \
     -plugin AlphaMissense,file=${alphamissense_prescore} \
+	-plugin LoF,loftee_path:${loftee_repo},human_ancestor_fa:${human_ancestor_fasta},conservation_file:${conservation_file}${gerp_bw_argument} \
     -plugin SpliceAI,snv=${spliceai_snv_prescore},indel=${spliceai_indel_prescore},cutoff=0.5 \
     -plugin PrimateAI,${primateai_prescore} \
 	-plugin SpliceVault,file=${splicevault_prescore} \
-    -plugin Conservation,${conversation_file},MAX \
+    -plugin Conservation,${conservation_file},MAX \
 	-plugin NMD \
     --force_overwrite \
     -o ${output_vcf} && \

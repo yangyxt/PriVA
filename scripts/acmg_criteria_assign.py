@@ -90,7 +90,54 @@ def vep_consq_interpret(df: pd.DataFrame, threads: int = 10) -> pd.DataFrame:
 
 
 
-def PVS1_criteria(df: pd.DataFrame, am_score_dict: dict) -> pd.DataFrame:
+def summarize_clinvar_gene_pathogenicity(clinvar_gene_aa_dict: dict) -> set:
+    '''
+    Based on the clinvar_gene_aa_dict:
+    {ensg: {protein_pos: {hgvsp: {'CLNSIG': [cln_sig], 'CLNREVSTAT': [rev_stat]}}}}
+
+    Extract the gene list that has been reported to harbor pathogenic variants in ClinVar database,
+    considering both CLNSIG and CLNREVSTAT values.
+    '''
+    high_confidence_status = {
+        'practice_guideline',                                    # 4 stars
+        'reviewed_by_expert_panel',                              # 3 stars
+        'criteria_provided,_multiple_submitters,_no_conflicts',  # 2 stars
+        'criteria_provided,_single_submitter',                   # 1 star
+    }
+
+    # Initialize set to store genes with high-confidence pathogenic variants
+    pathogenic_genes = set()
+
+    # Iterate through each gene and its amino acid changes
+    for ensg, aa_positions in clinvar_gene_aa_dict.items():
+        for pos, hgvsp_dict in aa_positions.items():
+            for hgvsp, info in hgvsp_dict.items():
+                # Retrieve CLNSIG and CLNREVSTAT lists
+                clnsig_list = info.get('CLNSIG', [])
+                revstat_list = info.get('CLNREVSTAT', [])
+
+                # Check if any variant is pathogenic with high confidence
+                for clnsig, revstat in zip(clnsig_list, revstat_list):
+                    if ('pathogenic' in clnsig.lower() and
+                        any(status in revstat.lower() for status in high_confidence_status)):
+                        pathogenic_genes.add(ensg)
+                        break  # No need to check other entries for this gene
+                if ensg in pathogenic_genes:
+                    break  # Move to the next gene
+            if ensg in pathogenic_genes:
+                break  # Move to the next gene
+
+    logger.info(f"Found {len(pathogenic_genes)} genes with high-confidence pathogenic variants in ClinVar")
+    return pathogenic_genes
+
+
+
+
+def PVS1_criteria(df: pd.DataFrame, 
+                  am_score_dict: dict,
+                  clinvar_gene_aa_dict: dict,
+                  ped_df: pd.DataFrame = None,
+                  fam_name: str = None) -> pd.DataFrame:
     # LoF is high confidence if it is a LoF variant and the consequence is known
     # VEP LoF, splicing LoF, UTRAnnotator LoF, ClinVar Pathogenic
     high_confidence_status = {
@@ -103,12 +150,32 @@ def PVS1_criteria(df: pd.DataFrame, am_score_dict: dict) -> pd.DataFrame:
     clinvar_lof = (df['CLNSIG'] == 'Pathogenic') & df['CLNREVSTAT'].isin(high_confidence_status)
     lof_criteria = df['vep_consq_lof'] | df['splicing_lof'] | df['5UTR_lof'] | clinvar_lof
 
-    # Determine whether the gene is known to be pathogenic due to LoF
-    # Evaluated by mean AM scores and LOEUF
-    am_intolerant_tranx = df['Feature'].map(am_score_dict).fillna(0) >= 0.58  # The bin 0 threshold according to AM publication
-    loeuf_intolerant_tranx = df['LOEUF'] < 0.6 # The most two intolerant bins according to LOEUF publication
-    intolerant_lof = am_intolerant_tranx | loeuf_intolerant_tranx
-    pvs1_criteria = lof_criteria & intolerant_lof
+    '''
+    Determine whether the gene is known to be pathogenic due to LoF
+    Evaluated by mean AM scores and LOEUF
+    1. if mean_AM_score is high and LoF depletion is high, then it means the gene is both functional essential and haploinsufficient
+    2. if they are both low, then you cant tell whether the gene has functional redundancy or being haplosufficient.
+    3. But for genes that are known to be pathogenic with AR inheritance mode, it is likely the gene is having low LoF depletion and low mean AM score and it is largely due to the haplo-sufficiency.
+    
+    There are two types of combinations we can use to determine.
+    1. No matter the variant dosage, if the variant is LoF, and mean_AM_score is high or LoF depletion is high, then the variant is given PVS1.
+    2. If the variant is LoF and homozygous, and the gene has been reported to be pathogenic in ClinVar, or the gene is with high mean_AM_score and LoF depletion, then the variant is given PVS1.
+    '''
+
+    mean_am_score_essential = df['Gene'].map(am_score_dict).fillna(0) > 0.58
+    loeuf_insufficient = df['LOEUF'] < 0.6
+    intolerant_lof = mean_am_score_essential | loeuf_insufficient
+
+    clinvar_pathogenic_genes = summarize_clinvar_gene_pathogenicity(clinvar_gene_aa_dict)
+    clinvar_pathogenic = df['Gene'].isin(clinvar_pathogenic_genes)
+
+    if ped_df and fam_name:
+        proband = ped_df.loc[ped_df['#FamilyID'] == fam_name & ped_df['Phenotype'].isin(["2", 2]), 'IndividualID'].values[0]
+        homozygous = df[proband].str.count("1") == 2
+        pvs1_criteria = ( lof_criteria & intolerant_lof ) | \
+                        ( lof_criteria & homozygous & ( intolerant_lof | clinvar_pathogenic ))
+    else:
+        pvs1_criteria = lof_criteria & intolerant_lof
 
     return pvs1_criteria
 
@@ -531,8 +598,8 @@ def identify_inheritance_mode_per_row(row_dict: dict, gene_mean_am_score: float)
     
 
 def identify_inheritance_mode(df: pd.DataFrame, 
-                            gene_to_am_score_map: dict, 
-                            threads: int = 10) -> Tuple[np.ndarray, np.ndarray]:
+                              gene_to_am_score_map: dict, 
+                              threads: int = 10) -> Tuple[np.ndarray, np.ndarray]:
     """
     Identify inheritance mode for each variant in parallel.
     
@@ -968,11 +1035,11 @@ def sort_and_rank_variants(df: pd.DataFrame) -> pd.DataFrame:
 
 def ACMG_criteria_assign(anno_table: str, 
                          am_score_table: str, 
-                         ped_table: str, 
-                         fam_name: str,
                          clinvar_aa_dict_pkl: str,
                          intolerant_domains_pkl: str,
                          domain_mechanism_tsv: str,
+                         fam_name: str = "",
+                         ped_table: str = "",
                          alt_disease_vcf: str = "",
                          gnomAD_extreme_rare_threshold: float = 0.0001,
                          expected_incidence: float = 0.001,
@@ -986,7 +1053,10 @@ def ACMG_criteria_assign(anno_table: str,
     anno_df = vep_consq_interpret(anno_df, threads)
 
     am_score_df = pd.read_table(am_score_table, low_memory=False)
-    ped_df = pd.read_table(ped_table, low_memory=False)
+    if ped_table:
+        ped_df = pd.read_table(ped_table, low_memory=False)
+    else:
+        ped_df = None
 
     # Convert the am_score_df to a dictionary:
     # 1. Ensembl transcript ID (column 'transcript') to mean AM score (column 'mean_am_pathogenicity')
@@ -995,10 +1065,16 @@ def ACMG_criteria_assign(anno_table: str,
     transcript_to_gene_map = dict(zip(anno_df['Feature'], anno_df['Gene']))
     # Use the two dict above to create dict that maps gene ID to mean AM score
     gene_to_am_score_map = {g: am_score_dict[t] for t, g in transcript_to_gene_map.items() if t in am_score_dict}
+    clinvar_aa_dict = pickle.load(open(clinvar_aa_dict_pkl, "rb"))
+    clinvar_aa_gene_map = {g: clinvar_aa_dict[t] for t, g in transcript_to_gene_map.items() if t in clinvar_aa_dict}
     logger.info(f"gene_to_am_score_map created, {len(gene_to_am_score_map)} genes are having the AM score")
 
     # Apply the PVS1 criteria, LoF on a gene known to to be pathogenic due to LoF
-    pvs1_criteria = PVS1_criteria(anno_df, gene_to_am_score_map)
+    pvs1_criteria = PVS1_criteria(anno_df, 
+                                  gene_to_am_score_map, 
+                                  clinvar_aa_gene_map, 
+                                  ped_df, 
+                                  fam_name)
     logger.info(f"PVS1 criteria applied, {pvs1_criteria.sum()} variants are having the PVS1 criteria")
 
     # Apply the PS1 and PM5 criteria
@@ -1007,7 +1083,11 @@ def ACMG_criteria_assign(anno_table: str,
     logger.info(f"PM5 criteria applied, {pm5_criteria.sum()} variants are having the PM5 criteria")
 
     # Apply the PS2 and PM6 criteria
-    ps2_criteria, pm6_criteria = PS2_PM6_criteria(anno_df, ped_df, fam_name)
+    if ped_df and fam_name:
+        ps2_criteria, pm6_criteria = PS2_PM6_criteria(anno_df, ped_df, fam_name)
+    else:
+        logger.warning(f"No ped_table provided, skip the PS2 and PM6 criteria")
+        ps2_criteria, pm6_criteria = np.array([False] * len(anno_df)), np.array([False] * len(anno_df))
     logger.info(f"PS2 criteria applied, {ps2_criteria.sum()} variants are having the PS2 criteria")
     logger.info(f"PM6 criteria applied, {pm6_criteria.sum()} variants are having the PM6 criteria")
 
@@ -1076,8 +1156,12 @@ def ACMG_criteria_assign(anno_table: str,
     bs3_criteria = BS3_criteria(anno_df)
     logger.info(f"BS3 criteria applied, {bs3_criteria.sum()} variants are having the BS3 criteria")
 
-    # Apply BS4, lack of family aggregation
-    bs4_criteria = BS4_criteria(anno_df, ped_df, fam_name)
+    # Apply BS4, lack of family segregation
+    if ped_df:
+        bs4_criteria = BS4_criteria(anno_df, ped_df, fam_name)
+    else:
+        logger.warning(f"No ped_table provided, skip the BS4 criteria")
+        bs4_criteria = np.array([False] * len(anno_df))
     logger.info(f"BS4 criteria applied, {bs4_criteria.sum()} variants are having the BS4 criteria")
     # Apply BP3, in-frame deletion in a repetitive region without a known function
     bp3_criteria = BP3_criteria(anno_df)
@@ -1095,7 +1179,8 @@ def ACMG_criteria_assign(anno_table: str,
     logger.info(f"BP7 criteria applied, {bp7_criteria.sum()} variants are having the BP7 criteria")
     # Apply BP2, observed in trans with a pathogenic variant in dominant disease, Or in-cis with a pathogenic variant with any inheritance mode
     # Apply PM3, observed in trans with a pathogenic variant in recessive disease.
-    bp2_criteria, pm3_criteria = BP2_PM3_criteria(anno_df, 
+    if ped_df:
+        bp2_criteria, pm3_criteria = BP2_PM3_criteria(anno_df, 
                                                   ped_df, 
                                                   fam_name,
                                                   gene_to_am_score_map,
@@ -1103,6 +1188,9 @@ def ACMG_criteria_assign(anno_table: str,
                                                   ps2_criteria,
                                                   ps3_criteria,
                                                   threads)
+    else:
+        logger.warning(f"No ped_table provided, skip the BP2 and PM3 criteria")
+        bp2_criteria, pm3_criteria = np.array([False] * len(anno_df)), np.array([False] * len(anno_df))
     logger.info(f"BP2 criteria applied, {bp2_criteria.sum()} variants are having the BP2 criteria")
     logger.info(f"PM3 criteria applied, {pm3_criteria.sum()} variants are having the PM3 criteria")
 
@@ -1156,8 +1244,8 @@ if __name__ == "__main__":
     parser = ap.ArgumentParser()
     parser.add_argument("--anno_table", type=str, required=True)
     parser.add_argument("--am_score_table", type=str, required=True)
-    parser.add_argument("--ped_table", type=str, required=True)
-    parser.add_argument("--fam_name", type=str, required=True)
+    parser.add_argument("--ped_table", type=str, required=False, default=None)
+    parser.add_argument("--fam_name", type=str, required=False, default=None)
     parser.add_argument("--clinvar_aa_dict_pkl", type=str, required=True)
     parser.add_argument("--intolerant_domains_pkl", type=str, required=True)
     parser.add_argument("--domain_mechanism_tsv", type=str, required=True)
@@ -1169,11 +1257,11 @@ if __name__ == "__main__":
 
     anno_df, criteria_matrix = ACMG_criteria_assign(args.anno_table, 
                                                     args.am_score_table, 
-                                                    args.ped_table, 
-                                                    args.fam_name,
                                                     args.clinvar_aa_dict_pkl,
                                                     args.intolerant_domains_pkl,
                                                     args.domain_mechanism_tsv,
+                                                    fam_name=args.fam_name,
+                                                    ped_table=args.ped_table,
                                                     alt_disease_vcf=args.alt_disease_vcf,
                                                     gnomAD_extreme_rare_threshold=args.gnomAD_extreme_rare_threshold,
                                                     expected_incidence=args.expected_incidence,

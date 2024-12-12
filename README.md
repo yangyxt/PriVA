@@ -1,6 +1,11 @@
 # acmg_auto
 The repository storing all the scripts and data needed for running acmg based variant prioritization pipeline
 
+If a valid pedigree table is provided please notice:
+1. The family sample ID should be consistent between the pedigree table and the VCF file.
+2. The proband of the family should stay as the first record of the family in the pedigree table
+3. Every family should have a uniq identifier in the pedigree table
+
 Breakdown of annotation resources used for variant deleterious effect evaluation
 1. splicing disruption effect: SpliceAI (VEP_plugin) || SpliceVault (VEP_Plugin)
 2. 5-UTR uORF disruption effect: UTRannotator (VEP_plugin)

@@ -122,7 +122,7 @@ function assign_acmg_criteria () {
     check_path ${clinvar_aa_dict_pkl} "file" "clinvar_aa_stat" || has_error=1
     check_path ${intolerant_domains_pkl} "file" "all_intolerant_domains" || has_error=1
     check_path ${domain_mechanism_tsv} "file" "clinvar_intolerance_mechanisms" || has_error=1
-    check_path ${am_score_vcf} "file" "AlphaMissense_vcf" || has_error=1
+    check_path ${am_score_vcf} "file" "alphamissense_vcf" || has_error=1
     [[ ${has_error} -eq 1 ]] && \
     { log "Failed to offer the valid required files for the ACMG criteria assignment"; return 1; }
 

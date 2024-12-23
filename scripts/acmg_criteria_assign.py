@@ -162,15 +162,15 @@ def PVS1_criteria(df: pd.DataFrame,
     2. If the variant is LoF and homozygous, and the gene has been reported to be pathogenic in ClinVar, or the gene is with high mean_AM_score and LoF depletion, then the variant is given PVS1.
     '''
 
-    mean_am_score_essential = df['Gene'].map(am_score_dict).fillna(0) > 0.58
-    loeuf_insufficient = df['LOEUF'] < 0.6
+    mean_am_score_essential = df['Gene'].map(am_score_dict).fillna(0) >= 0.58
+    loeuf_insufficient = df['LOEUF'] <= 0.35
     intolerant_lof = mean_am_score_essential | loeuf_insufficient
 
     clinvar_pathogenic_genes = summarize_clinvar_gene_pathogenicity(clinvar_gene_aa_dict)
     clinvar_pathogenic = df['Gene'].isin(clinvar_pathogenic_genes)
 
-    if ped_df and fam_name:
-        proband = ped_df.loc[ped_df['#FamilyID'] == fam_name & ped_df['Phenotype'].isin(["2", 2]), 'IndividualID'].values[0]
+    if not ped_df is None and not fam_name is None:
+        proband = ped_df.loc[(ped_df['#FamilyID'] == fam_name) & (ped_df['Phenotype'].isin(["2", 2])), 'IndividualID'].values[0]
         homozygous = df[proband].str.count("1") == 2
         pvs1_criteria = ( lof_criteria & intolerant_lof ) | \
                         ( lof_criteria & homozygous & ( intolerant_lof | clinvar_pathogenic ))
@@ -368,7 +368,6 @@ def PS2_PM6_criteria(df: pd.DataFrame,
 
 
 
-
 def PS3_BS3_criteria(df: pd.DataFrame) -> pd.DataFrame:
     # Basically rely on ClinVar annotations
     high_confidence_status = {
@@ -405,11 +404,59 @@ def locate_intolerant_domain(row: dict, intolerant_domains: set) -> bool:
     protein_altering = missense | length_changing | (row['Consequence'] == 'protein_altering_variant')
 
     return any(domain in intolerant_domains for domain in domains) & protein_altering
+
+
+def split_vcf_by_chrom(am_score_vcf: str, output_dir: str = None) -> Dict[str, str]:
+    """
+    Split a tabix-indexed VCF file by chromosome and create new indexed files.
     
+    Args:
+        am_score_vcf: Path to the input tabix-indexed VCF
+        output_dir: Directory to store chromosome-specific VCFs
+    
+    Returns:
+        Dict mapping chromosome names to their VCF file paths
+    """
+    os.makedirs(output_dir, exist_ok=True)
+    chrom_vcfs = {}
+    base_name = os.path.basename(am_score_vcf.replace(".vcf.gz", ""))
+    if output_dir is None:
+        output_dir = os.path.dirname(am_score_vcf)
+    
+    try:
+        vcf = pysam.VariantFile(am_score_vcf)
+        
+        # Get list of chromosomes from the tabix index
+        for chrom in vcf.header.contigs:
+            out_vcf = os.path.join(output_dir, f"{base_name}.{chrom}.vcf.gz")
+            
+            # Create new VCF for this chromosome
+            with pysam.VariantFile(out_vcf, 'w', header=vcf.header) as out_file:
+                for record in vcf.fetch(chrom):
+                    out_file.write(record)
+            
+            # Index the chromosome-specific VCF
+            pysam.tabix_index(out_vcf, preset='vcf', force=True)
+            chrom_vcfs[chrom] = out_vcf
+            
+        return chrom_vcfs
+        
+    except Exception as e:
+        logger.error(f"Error splitting VCF by chromosome: {str(e)}")
+        raise
+
+
+def locate_less_char_region(row: dict, am_score_vcf: str) -> Tuple[bool, bool]:
+    '''
+    Check if the variant is located in a less well-characterized region but with high AM scores. The region size is by default 100bp.
+
+    '''
+    position = row['pos']
 
 
 def PM1_criteria(df: pd.DataFrame, 
                  intolerant_domains_pkl: str, 
+                 am_score_vcf: str,
                  threads: int = 10) -> np.ndarray:
     # PM1: The variant is located in a mutational hotspot or a well-established functional protein domain
     # Load intolerant domains into shared memory
@@ -422,7 +469,15 @@ def PM1_criteria(df: pd.DataFrame,
         
         with mp.Pool(threads) as pool:
             results = pool.starmap(locate_intolerant_domain, args)
-    
+
+    loc_intol_domain = np.array(results)
+    truncating = df['vep_consq_length_changing'] | df['splicing_len_changing'] | df['5UTR_len_changing']
+    missense = df['Consequence'] == 'missense_variant'
+
+    # Split the am_score_vcf to multiple tables by chromosomes
+    # The table is tabix indexed, so we can use pysam to split the table by chromosomes
+    am_score_chrom_vcfs = split_vcf_by_chrom(am_score_vcf)
+
     return np.array(results)
 
 
@@ -941,59 +996,74 @@ def summarize_acmg_criteria(df: pd.DataFrame, criteria_dict: Dict[str, np.ndarra
 
 
 
-def summary_acmg_per_var(row: pd.Series) -> pd.Series:
-    '''
-    Quantify ACMG criteria based on the ACMG_criteria column.
-    
-    Quantification:
-    1. pvs = 9
-    2. ps = 6
-    3. pm = 2
-    4. pp = 1.5
-    
-    1. bs = -6
-    2. bp = -1.5
-    
+def calculate_posterior_probability(row, prior_probability=0.1, exp_base=2, odds_pvst=350):
+    """
+    Calculates the posterior probability of pathogenicity for a variant based on its criteria assignment using a Bayesian framework.
+
     Args:
-        row: DataFrame row containing ACMG_criteria column
-        
+        criteria_assignment (dict): A dictionary representing the strength of each evidence criterion.
+                                     Keys are criteria names (e.g., "PVS1", "PS1", "PM2", "PP3", "BS1", "BP4"),
+                                     and values are the corresponding strength scores.
+        prior_probability (float): The prior probability of pathogenicity (default: 0.1).
+        evidence_weights (dict): A dictionary mapping criteria names to their numerical weights, 
+                                 according to the latest ClinGen SVI recommendations (default: illustrative values).
+                                 PM2 is downgraded to a PP criterion
+
     Returns:
-        Updated row with quantification results
-    '''
-    # Get criteria from ACMG_criteria column
-    criteria = set(row['ACMG_criteria'].split(';')) if row['ACMG_criteria'] != '' else set()
-    
-    # Count criteria by type
-    pvs_sum = sum(1 for c in criteria if c.startswith('PVS'))
-    ps_sum = sum(1 for c in criteria if c.startswith('PS'))
-    pm_sum = sum(1 for c in criteria if c.startswith('PM'))
-    pp_sum = sum(1 for c in criteria if c.startswith('PP'))
-    bs_sum = sum(1 for c in criteria if c.startswith('BS'))
-    bp_sum = sum(1 for c in criteria if c.startswith('BP'))
-    
-    # Calculate final score
-    final_score = pvs_sum * 9 + \
-                  ps_sum * 6 + \
-                  pm_sum * 2 + \
-                  pp_sum * 1.5 + \
-                  bs_sum * -6 + \
-                  bp_sum * -1.5
-    
-    # Update row with results
-    row['ACMG_quant_score'] = final_score
-    
-    # Assign final rank
-    if final_score >= 12:
-        row['ACMG_class'] = 'Pathogenic'
-    elif final_score < 12 and final_score >= 6:
-        row['ACMG_class'] = 'Likely_Pathogenic'
-    elif final_score <= -12:
-        row['ACMG_class'] = 'Benign'
-    elif final_score <= -3 and final_score > -12:
-        row['ACMG_class'] = 'Likely_Benign'
+        float: The posterior probability of pathogenicity.
+    """
+    if isinstance(row, pd.Series):
+        # Convert the Series to a dictionary
+        criteria_assignment = row.to_dict()
+
+    evidence_weights = {"PVS1": 1,
+                        "PS1": 1/exp_base, "PS2": 1/exp_base, "PS3": 1/exp_base, "PS4": 1/exp_base,
+                        "PM1": 1/exp_base**2, "PM2": 1/exp_base**2, "PM3": 1/exp_base**2, "PM4": 1/exp_base**2, "PM5": 1/exp_base**2, "PM6": 1/exp_base**2,
+                        "PP1": 1/exp_base**3, "PP2": 1/exp_base**3, "PP3": 1/exp_base**3, "PP4": 1/exp_base**3, "PP5": 1/exp_base**3,
+                        "BA1": -1,
+                        "BS1": -1/exp_base, "BS2": -1/exp_base, "BS3": -1/exp_base, "BS4": -1/exp_base,
+                        "BP1": -1/exp_base**3, "BP2": -1/exp_base**3, "BP3": -1/exp_base**3, "BP4": -1/exp_base**3, "BP5": -1/exp_base**3, "BP6": -1/exp_base**3, "BP7": -1/exp_base**3}
+
+    # Default odds function (Illustrative - replace with a calibrated function based on SVI guidelines)
+    odds_function = lambda total_weight: np.power(odds_pvst, total_weight)
+
+    # Calculate total weight based on provided evidence weights
+    total_weight_pathogenic = 0
+    total_weight_benign = 0
+    for criterion, occurence in criteria_assignment.items():
+        if criterion == "BA1" and occurence > 0:
+            total_weight_pathogenic = 0
+            total_weight_benign = 0
+            break
+        if criterion in evidence_weights:
+            occurence = 1 if int(occurence) > 0 else 0
+            if criterion.startswith("P"):  # Pathogenic criteria
+                total_weight_pathogenic += evidence_weights[criterion] * occurence
+            elif criterion.startswith("B"):  # Benign criteria
+                total_weight_benign += evidence_weights[criterion] * occurence
+        else:
+            continue
+
+    # Calculate odds of pathogenicity
+    odds_path = odds_function(total_weight_pathogenic + total_weight_benign)
+
+    # Calculate posterior probability
+    posterior_probability = (odds_path * prior_probability) / ((odds_path - 1) * prior_probability + 1)
+
+    # Classify the variant based on the posterior probability
+    if posterior_probability >= 0.99:
+        acmg_class = "Pathogenic"
+    elif posterior_probability >= 0.90:
+        acmg_class = "Likely Pathogenic"
+    elif posterior_probability <= 0.001:
+        acmg_class = "Benign"
+    elif posterior_probability <= 0.1:
+        acmg_class = "Likely Benign"
     else:
-        row['ACMG_class'] = 'VOUS'
-    
+        acmg_class = "Uncertain Significance"
+
+    row["ACMG_quant_score"] = posterior_probability
+    row["ACMG_class"] = acmg_class
     return row
 
 
@@ -1047,6 +1117,25 @@ def ACMG_criteria_assign(anno_table: str,
     """
     Main function to assign ACMG criteria.
     Returns both annotated DataFrame and criteria matrix.
+
+	The ClinGen SVI group has introduced a new dimension of evaluation for each criteria called Strength of Criteria.
+	But many strengths cannot be applied at bioinformatic level. 
+
+	===========Regarding the combining rule===========
+	Regarding the combining rule, SVI from ClinGen suggests that PVS1 + 1PP = Likely Pathogenic.
+	We just adopted the naive Bayesian Framework to calculate the posterior probability of pathogenicity.
+
+	===========Regarding the criteria, Cannot be applied===========
+	1. PS2/PM6, regarding the DeNovo related evidence. The strength is related to the phenotype consistency with the disease. Such clinical information is rarely normalized for automatic interpretation. Thus Skip.
+	2. PP1, the refinement not applicable because multiple family co-segregation information is rarely available for a same type of disease. 
+	3. PP4, Patient's phenotype or family history is highly specific for a disease with a single genetic etiology. (This cannot be applied simutaneously with PP1, because if a disease is tightly linked with only one gene, the segregation is doomed. Therefore further segregation observation does not add any more confidence because the confidence from this perspective is already reaching a ceiling.)
+	4. PS3/BS3, the functional assay for a specific variant is so rare and so hard to fetch, nearly impossible for practice.
+
+	===========Regarding the criteria, Can be applied===========
+	1. PVS1, LOEUF <= 0.35 should be considered as intolerant to LoF.
+	2. PM2, is reduced from Moderate to Supporting.
+	3. PP5/BP6, reputable source reported as benign or pathogenic. Suggested to be abandoned or at least not assigned along with PS3/BS3.
+	3. PM3, can be only applied if PM2 is True (sufficiently rare in gnomAD).
     """
     anno_df = pd.read_table(anno_table, low_memory=False)
     logger.info(f"Got {threads} threads to process the input table {anno_table}, now the table looks like: \n{anno_df[:5].to_string(index=False)}")
@@ -1083,7 +1172,7 @@ def ACMG_criteria_assign(anno_table: str,
     logger.info(f"PM5 criteria applied, {pm5_criteria.sum()} variants are having the PM5 criteria")
 
     # Apply the PS2 and PM6 criteria
-    if ped_df and fam_name:
+    if not ped_df is None and not fam_name is None:
         ps2_criteria, pm6_criteria = PS2_PM6_criteria(anno_df, ped_df, fam_name)
     else:
         logger.warning(f"No ped_table provided, skip the PS2 and PM6 criteria")
@@ -1134,8 +1223,7 @@ def ACMG_criteria_assign(anno_table: str,
     pp3_criteria = pp3_criteria & ~ps3_criteria & ~pvs1_criteria & ~pm4_criteria
     logger.info(f"PP3 criteria applied, {pp3_criteria.sum()} variants are having the PP3 criteria")
     '''
-    PP4 cannot be applied, Patient
-    's phenotype or family history is highly specific for a disease with a single genetic etiology
+    PP4 cannot be applied, Patient's phenotype or family history is highly specific for a disease with a single genetic etiology
     '''
     # Apply PP5 criteria, reported as pathogenic by a reputable source but without to many supporting evidences
     # Apply BP6 criteria, reported as benign by a reputable source but without to many supporting evidences
@@ -1157,7 +1245,7 @@ def ACMG_criteria_assign(anno_table: str,
     logger.info(f"BS3 criteria applied, {bs3_criteria.sum()} variants are having the BS3 criteria")
 
     # Apply BS4, lack of family segregation
-    if ped_df:
+    if not ped_df is None and not fam_name is None:
         bs4_criteria = BS4_criteria(anno_df, ped_df, fam_name)
     else:
         logger.warning(f"No ped_table provided, skip the BS4 criteria")
@@ -1179,15 +1267,15 @@ def ACMG_criteria_assign(anno_table: str,
     logger.info(f"BP7 criteria applied, {bp7_criteria.sum()} variants are having the BP7 criteria")
     # Apply BP2, observed in trans with a pathogenic variant in dominant disease, Or in-cis with a pathogenic variant with any inheritance mode
     # Apply PM3, observed in trans with a pathogenic variant in recessive disease.
-    if ped_df:
+    if not ped_df is None and not fam_name is None:
         bp2_criteria, pm3_criteria = BP2_PM3_criteria(anno_df, 
-                                                  ped_df, 
-                                                  fam_name,
-                                                  gene_to_am_score_map,
-                                                  ps1_criteria,
-                                                  ps2_criteria,
-                                                  ps3_criteria,
-                                                  threads)
+                                                      ped_df, 
+                                                      fam_name,
+                                                      gene_to_am_score_map,
+                                                      ps1_criteria,
+                                                      ps2_criteria,
+                                                      ps3_criteria,
+                                                      threads)
     else:
         logger.warning(f"No ped_table provided, skip the BP2 and PM3 criteria")
         bp2_criteria, pm3_criteria = np.array([False] * len(anno_df)), np.array([False] * len(anno_df))
@@ -1229,7 +1317,7 @@ def ACMG_criteria_assign(anno_table: str,
     criteria_matrix.to_csv(output_matrix, sep="\t", index=False)
     
     # Apply quantification using ACMG_criteria column and use that to sort the variants
-    anno_df = anno_df.apply(summary_acmg_per_var, axis=1)
+    anno_df = anno_df.apply(calculate_posterior_probability, axis=1)
 
     # Sort and rank variants
     anno_df = sort_and_rank_variants(anno_df)
@@ -1249,7 +1337,7 @@ if __name__ == "__main__":
     parser.add_argument("--clinvar_aa_dict_pkl", type=str, required=True)
     parser.add_argument("--intolerant_domains_pkl", type=str, required=True)
     parser.add_argument("--domain_mechanism_tsv", type=str, required=True)
-    parser.add_argument("--alt_disease_vcf", type=str, required=False)
+    parser.add_argument("--alt_disease_vcf", type=str, required=False, default=None)
     parser.add_argument("--gnomAD_extreme_rare_threshold", type=float, required=False, default=0.0001)
     parser.add_argument("--expected_incidence", type=float, required=False, default=0.001)
     parser.add_argument("--threads", type=int, required=False, default=10)

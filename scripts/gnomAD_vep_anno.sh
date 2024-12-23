@@ -192,6 +192,7 @@ function parallel_annotate_vep_gnomAD() {
 	--joblog ${output_dir}/vep_anno_gnomAD.log \
 	--tmpdir ${tmp_dir} \
 	bash ${SCRIPT_DIR}/gnomAD_vep_anno.sh annotate_vep_gnomAD_per_chromosome -v {1} -c ${config_file} -d ${output_dir} -t ${job_thread_num} '>' ${output_dir}/vep_anno_gnomAD_{2}.log '2>&1' ::: ${gnomAD_vcf_files[@]} ::: ${chromosomes[@]} && \
+	export TMPDIR=${tmp_dir}
 	parallel -j 8 \
 	--halt soon,fail=1 \
 	--link \

@@ -73,6 +73,7 @@ function filter_af () {
     local threads
 
     # Use getopts to parse the input arguments
+	local OPTIND i o c t
     while getopts i:o::c:t:: args
     do
         case ${args} in
@@ -156,6 +157,8 @@ function main_filtration () {
         esac
     done
 
+	log "The input config file is ${config_file}"
+
     local ped_file=$(read_yaml ${config_file} "ped_file")
     local threads=$SNAKEMAKE_THREADS
     [[ -z ${threads} ]] && threads=$(read_yaml ${config_file} "threads")
@@ -185,6 +188,7 @@ function main_filtration () {
 
     # Filter the variants based on the allele frequency
     if [[ -f ${ped_file} ]]; then
+		log "Filter the variants based on the allele frequency, the config file is ${config_file}"
         filter_af \
         -c ${config_file} \
         -i ${filtered_vcf} \

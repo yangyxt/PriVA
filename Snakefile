@@ -5,20 +5,17 @@ import sys
 from pathlib import Path
 import math
 
-config: "config.yaml"
+configfile: "config.yaml"
 
-# Define variables from config with defaults
-def get_config(key, default=None):
-    return config.get(key, default)
 
 # Required inputs
-INPUT_VCF = get_config("input_vcf")
-PED_FILE = get_config("ped_file")
-ASSEMBLY = get_config("assembly")
-REF_GENOME = get_config("ref_genome")
-OUTPUT_DIR = get_config("output_dir", "results")
-THREADS = get_config("threads", 1)
-BASE_DIR = get_config("base_dir", ".")
+INPUT_VCF = config.get("input_vcf")
+PED_FILE = config.get("ped_file")
+ASSEMBLY = config.get("assembly")
+REF_GENOME = config.get("ref_genome")
+OUTPUT_DIR = config.get("output_dir", "results")
+THREADS = config.get("threads", 1)
+BASE_DIR = config.get("base_dir", ".")
 SCRIPT_DIR = os.path.join(BASE_DIR, "scripts")
 
 
@@ -27,7 +24,7 @@ INPUT_BASE = os.path.splitext(os.path.basename(INPUT_VCF))[0]
 if INPUT_BASE.endswith('.vcf'):
     INPUT_BASE = os.path.splitext(INPUT_BASE)[0]
 
-print(f"INPUT_BASE: {INPUT_BASE}", file=sys.stderr)
+print(f"INPUT_BASE: {INPUT_BASE}, SCRIPT_DIR: {SCRIPT_DIR}, OUTPUT_DIR: {OUTPUT_DIR}, THREADS: {THREADS}, BASE_DIR: {BASE_DIR}", file=sys.stderr)
 
 # Ensure output directory exists
 os.makedirs(OUTPUT_DIR, exist_ok=True)
@@ -68,10 +65,11 @@ rule annotate_variants:
         ped=PED_FILE,
         ref=REF_GENOME
     output:
-        vcf=os.path.join(OUTPUT_DIR, f"{INPUT_BASE}.anno.vcf.gz")
+        vcf=os.path.join(OUTPUT_DIR, f"{INPUT_BASE}.anno.vcf.gz"),
+        cadd_tsv=os.path.join(OUTPUT_DIR, f"{INPUT_BASE}.anno.cadd.tsv")
     params:
         script=os.path.join(SCRIPT_DIR, "annotation_vcf.sh"),
-        config=os.path.join(BASE_DIR, "config.yaml")
+        config=workflow.configfiles[0]
     threads: THREADS
     shell:
         """
@@ -90,7 +88,7 @@ rule filter_variants_per_family:
         vcf=os.path.join(OUTPUT_DIR, f"{INPUT_BASE}.anno.{{family}}.filtered.vcf.gz")
     params:
         script=os.path.join(SCRIPT_DIR, "filtration_vcf_per_fam.sh"),
-        config=os.path.join(BASE_DIR, "config.yaml")
+        config=workflow.configfiles[0]
     threads: THREADS
     shell:
         """
@@ -108,7 +106,7 @@ rule filter_variants_no_family:
         vcf=os.path.join(OUTPUT_DIR, f"{INPUT_BASE}.anno.filtered.vcf.gz")
     params:
         script=os.path.join(SCRIPT_DIR, "filtration_vcf_per_fam.sh"),
-        config=os.path.join(BASE_DIR, "config.yaml")
+        config=workflow.configfiles[0]
     threads: THREADS
     shell:
         """
@@ -120,37 +118,42 @@ rule filter_variants_no_family:
 # Step 3: Prioritize variants with family information
 rule prioritize_variants_per_family:
     input:
-        vcf=os.path.join(OUTPUT_DIR, f"{INPUT_BASE}.anno.{{family}}.filtered.vcf.gz"),
+        vcf=rules.filter_variants_per_family.output.vcf,
+        cadd_tsv=rules.annotate_variants.output.cadd_tsv,
         ped=PED_FILE
     output:
         tsv=os.path.join(OUTPUT_DIR, f"{INPUT_BASE}.anno.{{family}}.filtered.tsv"),
         acmg=os.path.join(OUTPUT_DIR, f"{INPUT_BASE}.anno.{{family}}.filtered.acmg.tsv")
     params:
         script=os.path.join(SCRIPT_DIR, "prioritization_vcf_per_fam.sh"),
-        config=os.path.join(BASE_DIR, "config.yaml")
+        config=workflow.configfiles[0]
     threads: THREADS
     shell:
         """
         bash {params.script} \
-            {input.vcf} \
-            {params.config} \
-            {wildcards.family}
+            -i {input.vcf} \
+            -c {params.config} \
+            -f {wildcards.family} \
+            -t {input.cadd_tsv}
         """
 
 # Step 3 alternative: Prioritize variants without family information
 rule prioritize_variants_no_family:
     input:
-        vcf=rules.filter_variants_no_family.output.vcf
+        vcf=rules.filter_variants_no_family.output.vcf,
+        cadd_tsv=rules.annotate_variants.output.cadd_tsv
     output:
         tsv=os.path.join(OUTPUT_DIR, f"{INPUT_BASE}.anno.filtered.tsv"),
         acmg=os.path.join(OUTPUT_DIR, f"{INPUT_BASE}.anno.filtered.acmg.tsv")
     params:
         script=os.path.join(SCRIPT_DIR, "prioritization_vcf_per_fam.sh"),
-        config=os.path.join(BASE_DIR, "config.yaml")
+        config=workflow.configfiles[0]
     threads: THREADS
     shell:
         """
         bash {params.script} \
-            {input.vcf} \
-            {params.config}
+            -i {input.vcf} \
+            -c {params.config} \
+            -t {input.cadd_tsv}
         """
+

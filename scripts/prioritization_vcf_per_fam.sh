@@ -116,7 +116,7 @@ function assign_acmg_criteria () {
     local alt_disease_vcf=$(read_yaml ${config_file} "alt_disease_vcf")
     local gnomAD_extreme_rare_threshold=$(read_yaml ${config_file} "extreme_rare_PAF")
     local expected_incidence=$(read_yaml ${config_file} "exp_disease_incidence")
-    local am_score_vcf=$(read_yaml ${config_file} "AlphaMissense_vcf")
+    local am_score_vcf=$(read_yaml ${config_file} "alphamissense_vcf")
 
     local has_error=0
     check_path ${clinvar_aa_dict_pkl} "file" "clinvar_aa_stat" || has_error=1

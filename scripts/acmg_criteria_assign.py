@@ -552,6 +552,7 @@ def locate_less_char_region(row: dict, am_score_vcf: str) -> Tuple[bool, bool]:
         # Get maximum score per amino acid position
         protein_scores = aa_change_scores[uniprot_id]
         all_aa_bases = set(k[:-1] for k in protein_scores.keys())
+        all_aa_scores = np.array(list(protein_scores.values()))
         severe_aa_scores = np.array([
             np.max([
                 score for key, score in protein_scores.items() 
@@ -922,15 +923,26 @@ def BP2_PM3_criteria(df: pd.DataFrame,
     
 
 def check_gene_variants(gene, df, pathogenic, proband):
-    pathogenic_variants = df.loc[pathogenic, proband].tolist()
+    pathogenic_variants = df.loc[pathogenic & (df.loc[:, "Gene"] == gene), proband].tolist()
+    logger.info(f"For gene {gene}, there are {len(pathogenic_variants)} pathogenic variants, and {len(df.loc[df.loc[:, "Gene"] == gene, proband])} variants in the gene")
     var_in_trans = np.array([False] * len(df))
     var_in_cis = np.array([False] * len(df))
     if len([v for v in pathogenic_variants if v[-1] == "1"]) > 0:
+        # If there is at least one pathogenic variant at the second copy of the proband's genome
         var_in_trans = ((df.loc[:, proband].str.split("|")[0] == "1") | (df.loc[:, proband].str.split("/")[0] == "1")) & (df.loc[:, "Gene"] == gene)
         var_in_cis = ((df.loc[:, proband].str.split("|")[1] == "1") | (df.loc[:, proband] == "1/1")) & (df.loc[:, "Gene"] == gene)
+        logger.info(f"For gene {gene}, there are {len(var_in_trans)} variants in-trans with pathogenic variants at the second copy of the proband's genome")
+        logger.info(f"For gene {gene}, there are {len(var_in_cis)} variants in-cis with pathogenic variants at the second copy of the proband's genome")
+
     if len([v for v in pathogenic_variants if v[0] == "1"]) > 0:
-        var_in_trans = ((df.loc[:, proband].str.split("|")[1] == "1") | (df.loc[:, proband] == "1/1")) & (df.loc[:, "Gene"] == gene)
-        var_in_cis = ((df.loc[:, proband].str.split("|")[0] == "1") | (df.loc[:, proband].str.split("/")[0] == "1")) & (df.loc[:, "Gene"] == gene)
+        # If there is at least one pathogenic variant at the first copy of the proband's genome
+        var_in_trans_1 = ((df.loc[:, proband].str.split("|")[1] == "1") | (df.loc[:, proband] == "1/1")) & (df.loc[:, "Gene"] == gene)
+        var_in_cis_1 = ((df.loc[:, proband].str.split("|")[0] == "1") | (df.loc[:, proband].str.split("/")[0] == "1")) & (df.loc[:, "Gene"] == gene)
+        logger.info(f"For gene {gene}, there are {len(var_in_trans_1)} variants in-trans with pathogenic variants at the first copy of the proband's genome")
+        logger.info(f"For gene {gene}, there are {len(var_in_cis_1)} variants in-cis with pathogenic variants at the first copy of the proband's genome")
+
+    var_in_trans |= var_in_trans_1
+    var_in_cis |= var_in_cis_1
     return var_in_trans, var_in_cis
 
 

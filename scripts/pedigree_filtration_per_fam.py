@@ -217,9 +217,11 @@ def pedigree_filter(vcf_path, ped_path, target_fam, output):
     controls = set(fam_ped[fam_ped['Phenotype'] == "1"]['IndividualID'])
     
     # Define values to be considered as NA
-    na_values = ['0', '.', '', 'NA', 'nan', 'NaN', "-", -9]
-    ped_df["PaternalID"] = ped_df["PaternalID"].replace(na_values, np.nan)
-    ped_df["MaternalID"] = ped_df["MaternalID"].replace(na_values, np.nan)
+    na_values = ['0', '.', '', 'NA', 'nan', 'NaN', "-", -9, 0, 0.0]
+    fam_ped.loc[:, "PaternalID"] = fam_ped["PaternalID"].replace(na_values, np.nan)
+    fam_ped.loc[:, "MaternalID"] = fam_ped["MaternalID"].replace(na_values, np.nan)
+
+    logger.info(f"The pedigree table looks like: \n{fam_ped.to_string(index=False)}")
     # Extract parent IDs
     father = fam_ped["PaternalID"].dropna().drop_duplicates().tolist()[0] if len(fam_ped["PaternalID"].dropna().drop_duplicates().tolist()) > 0 else None
     mother = fam_ped["MaternalID"].dropna().drop_duplicates().tolist()[0] if len(fam_ped["MaternalID"].dropna().drop_duplicates().tolist()) > 0 else None

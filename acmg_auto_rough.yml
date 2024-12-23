@@ -29,9 +29,13 @@ dependencies:
   - snakemake=8.25.2
   - perl-bio-bigfile
   - bash
+  - matplotlib
+  - scipy
+  - statsmodels
+  - bioconda::perl-dbd-sqlite
 variables:
   PERL5LIB: 
-    /home/yangyxt/miniforge3/envs/acmg/lib/perl5/5.32/site_perl:/paedyl01/disk1/yangyxt/public_data/VEP_plugins
+    /paedyl01/disk1/yangyxt/public_data/VEP_plugins/LoFtee_repos/loftee-hg19/:/home/yangyxt/miniforge3/envs/acmg/lib/perl5/5.32/site_perl:/paedyl01/disk1/yangyxt/public_data/VEP_plugins
   PATH: 
     /home/yangyxt/miniforge3/envs/acmg/lib/perl5/5.32/site_perl:/home/yangyxt/miniforge3/envs/acmg/lib/perl5/5.32/site_perl/htslib:/home/yangyxt/miniforge3/envs/acmg/lib/perl5/5.32/site_perl:/home/yangyxt/miniforge3/envs/acmg/lib/perl5/5.32/site_perl/htslib:/home/yangyxt/miniforge3/envs/acmg/lib/perl5/5.32/site_perl:/home/yangyxt/miniforge3/envs/acmg/lib/perl5/5.32/site_perl/htslib:/home/yangyxt/miniforge3/envs/acmg/lib/perl5/5.32/site_perl:/home/yangyxt/miniforge3/envs/acmg/lib/perl5/5.32/site_perl/htslib:/home/yangyxt/src/edirect:/home/yangyxt/.cursor-server/cli/servers/Stable-b1e87884330fc271d5eb589e368c35f14e76dec0/server/bin/remote-cli:/home/yangyxt/src/edirect:/home/yangyxt/miniforge3/envs/acmg/bin:/home/yangyxt/miniforge3/condabin:/home/yangyxt/src/edirect:/usr/local/bin:/usr/bin:/usr/local/sbin:/usr/sbin:/opt/pbs/bin:/opt/dell/srvadmin/bin:/home/yangyxt/software/fastqc/FastQC:/home/yangyxt/go_project/bin:/home/yangyxt/software/tsv-utils-v2.2.0_linux-x86_64_ldc2/bin:/home/yangyxt/bin:/home/bin:/~/bin:/home/yangyxt/software:/home/yangyxt/software/go/bin:/paedyl01/disk1/yangyxt/ngs_scripts:/home/yangyxt/software/genedock-data-client/bin:/paedyl01/disk1/yangyxt/CADD-scripts:/home/yangyxt/.local/bin:/home/yangyxt/software/ensembl-vep:/paedyl01/disk1/yangyxt/bulkRNAseq/chenxx/subread/subread-2.0.2/bin:/home/yangyxt/edirect:/home/yangyxt/go_project/bin:/opt/pbs/bin:/home/yangyxt/software/fastqc/FastQC:/home/yangyxt/go_project/bin:/home/yangyxt/software/tsv-utils-v2.2.0_linux-x86_64_ldc2/bin:/home/yangyxt/bin:/home/bin:/~/bin:/home/yangyxt/software:/home/yangyxt/software/go/bin:/paedyl01/disk1/yangyxt/ngs_scripts:/home/yangyxt/software/genedock-data-client/bin:/paedyl01/disk1/yangyxt/CADD-scripts:/home/yangyxt/.local/bin:/home/yangyxt/software/ensembl-vep:/paedyl01/disk1/yangyxt/bulkRNAseq/chenxx/subread/subread-2.0.2/bin:/home/yangyxt/edirect:/home/yangyxt/go_project/bin:/home/yangyxt/go_project/bin
 prefix: /home/yangyxt/miniforge3/envs/acmg

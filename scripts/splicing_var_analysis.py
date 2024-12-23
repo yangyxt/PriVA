@@ -1,6 +1,7 @@
 import os
 import pickle
 import pandas as pd
+import numpy as np
 import argparse as ap
 import logging
 import uuid
@@ -17,6 +18,10 @@ console_handler.setFormatter(formatter)
 logger.addHandler(console_handler)
 
 
+def na_value(value):
+    if isinstance(value, float) and np.isnan(value):
+        return True
+    return True if value in [np.nan, "NaN", "nan", "na", "NA", "NAN", None, "None", "none", "", ".", "-"] else False
 
 
 def splicing_interpretation(anno_table, 
@@ -75,9 +80,10 @@ def splicing_altering_per_row(row,
     '''
     transcript_id = row['Feature']
     splicevault_events = row['SpliceVault_top_events']
-    intron_pos = row['INTRON']
-    exon_pos = row['EXON']
-    cds_pos = row["CDS_position"]
+    intron_pos = None if na_value(row['INTRON']) else row['INTRON']
+    exon_pos = None if na_value(row['EXON']) else row['EXON']
+    cds_pos = None if na_value(row["CDS_position"]) else row["CDS_position"]
+    logger.info(f"The input transcript_id is {transcript_id}, splicevault_events is {splicevault_events}, intron_pos is {intron_pos}, exon_pos is {exon_pos}, cds_pos is {cds_pos}")
 
     # First get SpliceVault interpretation
     splicevault_lof, splicevault_len_changing = SpliceVault_interpretation( splicevault_events, 
@@ -141,7 +147,7 @@ def SpliceAI_interpretation(DS_AG,
     affected_exons = set()
 
     logger.debug(f"For {transcript_id}, the SpliceAI predictions are DS_AG: {DS_AG}, DS_AL: {DS_AL}, DS_DG: {DS_DG}, DS_DL: {DS_DL}, DP_AG: {DP_AG}, DP_AL: {DP_AL}, DP_DG: {DP_DG}, DP_DL: {DP_DL}")
-    logger.debug(f"The other input arguments are transcript_id: {transcript_id}, transcript_domain_map: {transcript_domain_map}, intolerant_domains: {intolerant_domains}, intron_pos: {intron_pos}, exon_pos: {exon_pos}, cutoff: {cutoff}")
+    logger.info(f"The other input arguments are transcript_id: {transcript_id}, intron_pos: {intron_pos}, exon_pos: {exon_pos}, cutoff: {cutoff}")
 
     # First look at acceptor-gain
     if DS_AG > cutoff:
@@ -153,9 +159,10 @@ def SpliceAI_interpretation(DS_AG,
             if abs(DP_AG) % 3 != 0:
                 # Causing a frameshift effect
                 is_harmful = True
-            if abs(DP_AG) / int(cds_pos.split('/')[1]) > 0.1:
-                # Large truncation relative to cds size
-                is_harmful = True
+            if cds_pos:
+                if abs(DP_AG) / int(cds_pos.split('/')[1]) > 0.1:
+                    # Large truncation relative to cds size
+                    is_harmful = True
         else:
             # We cannot determine whether the new acceptor site is upstream or downstream of the existing acceptor site. Hence not able to predict its effect.
             pass
@@ -169,9 +176,10 @@ def SpliceAI_interpretation(DS_AG,
             if abs(DP_DG) % 3 != 0:
                 # Causing a frameshift effect
                 is_harmful = True
-            if abs(DP_DG) / int(cds_pos.split('/')[1]) > 0.1:
-                # Large truncation relative to cds size
-                is_harmful = True
+            if cds_pos:
+                if abs(DP_DG) / int(cds_pos.split('/')[1]) > 0.1:
+                    # Large truncation relative to cds size
+                    is_harmful = True
         else:
             # We cannot determine whether the new donor site is upstream or downstream of the existing donor site. Hence not able to predict its effect.
             pass
@@ -212,16 +220,18 @@ def SpliceVault_interpretation(value,
                                exon_pos = None) -> tuple:
     '''
     The input value is the top-4 SpliceVault events:
-    Top1:ES;3-4;12%;Frameshift|Top2:ES;3;0.05%;Frameshift|Top3:CD;+228;0.03%;Frameshift|Top4:CD;+252;0.02%;Frameshift
-    Top1:CD;-51;0.5%;inFrame|Top2:CD;+394;0.1%;inFrame|Top3:CD;+389;0.09%;Frameshift|Top4:CD;+440;0.04%;Frameshift
+    Top1:CD:-10:2%:Frameshift&Top2:CD:-4:0.6%:Frameshift&Top3:CD:+491:0.05%:Frameshift&Top4:CD:+21:0.006%:Frameshift
+    Top1:CD;-51;0.5%;inFrame&Top2:CD;+394;0.1%;inFrame&Top3:CD;+389;0.09%;Frameshift&Top4:CD;+440;0.04%;Frameshift
 
     Expect to return a tuple of boolean values(is_harmful, length_changing)
     '''
     if not isinstance(value, str):
         logger.debug(f"The input value for SpliceVault interpretation is not a string: {value}, return False, False")
         return False, False
+
+    logger.info(f"The input transcript_id is {transcript_id}, cds_pos is {cds_pos}, intron_pos is {intron_pos}, exon_pos is {exon_pos}")
     
-    events = value.split('|')
+    events = value.split('&')
     analysis_results = []
     for event in events:
         event_analysis = analyze_splice_event(event, 
@@ -261,9 +271,9 @@ def analyze_splice_event(event_str: str,
                         transcript_id: str,
                         transcript_domain_map: dict,
                         intolerant_domains: set,
-                        cds_pos: str = None,
-                        intron_pos: str = None,  # Format: "2/3" meaning 2nd intron out of 3
-                        exon_pos: str = None,    # Format: "2-3" meaning exons 2 and 3
+                        cds_pos = None,
+                        intron_pos = None,  # Format: "2/3" meaning 2nd intron out of 3
+                        exon_pos = None,    # Format: "2-3" meaning exons 2 and 3
                         ) -> dict:
     """
     Analyze a single SpliceVault event to determine if it affects intolerant domains.
@@ -285,9 +295,19 @@ def analyze_splice_event(event_str: str,
             - reason (str): String explaining LoF classification
     """
     # Parse event string
-    rank, event_info = event_str.split(':')  # e.g., "Top1:ES;3-4;12%;Frameshift"
-    event_type, pos_str, freq, frame_impact = event_info.split(';')
-    
+    try:
+        rank, event_type, pos_str, freq, frame_impact = event_str.split(':')  # e.g., "Top1:CD:-10:2%:Frameshift&Top2:CD:-4:0.6%:Frameshift&Top3:CD:+491:0.05%:Frameshift&Top4:CD:+21:0.006%:Frameshift"
+    except ValueError as ve:
+        raise ValueError(f"Error splitting event string {event_str}: {ve}")
+
+    logger.debug(f"The input transcript_id is {transcript_id}, event_type is {event_type}, pos_str is {pos_str}, freq is {freq}, frame_impact is {frame_impact}, intron_pos is {intron_pos}, exon_pos is {exon_pos}, whether exon_pos is NA value? {na_value(exon_pos)}, what is the dtype of exon_pos? {type(exon_pos), }, cds_pos is {cds_pos}")
+    # We need to translate 2% to 0.02, 0.6% to 0.006, 0.05% to 0.00005, 0.006% to 0.000006
+    if '%' in freq:
+        freq = float(freq.rstrip('%')) / 100
+    elif "#" in freq:
+        freq = float(freq.lstrip('#')) / 100
+    else:
+        raise ValueError(f"The frequency format is not recognized: {freq}, the event string is {event_str}")
     # Initialize results
     affected_exons = set()
     is_harmful = False
@@ -369,9 +389,9 @@ def process_cryptic_donor(pos_str: str,
                          transcript_id: str,
                          transcript_domain_map: dict,
                          intolerant_domains: set,
-                         intron_pos: str = None,
-                         exon_pos: str = None,
-                         cds_pos: str = None
+                         intron_pos = None,
+                         exon_pos = None,
+                         cds_pos = None
                          ) -> tuple:
     """Process cryptic donor events."""
     affected_exons = set()
@@ -379,11 +399,30 @@ def process_cryptic_donor(pos_str: str,
     length_changing = False
     is_lof = False
 
+    logger.warning(f"The input transcript_id is {transcript_id}, intron_pos is {intron_pos}, exon_pos is {exon_pos}, cds_pos is {cds_pos}, whether intron_pos is NA value? {na_value(intron_pos)}, whether exon_pos is NA value? {na_value(exon_pos)}")
     # Parse position information if available
-    if intron_pos:
+    if not na_value(intron_pos):
         intron_num, total_introns = map(int, intron_pos.split('/'))
-    if exon_pos:
+    else:
+        intron_num = None
+        total_introns = None
+    if not na_value(exon_pos):
         exon_num, total_exons = map(int, exon_pos.split('/'))
+    else:
+        exon_num = None
+        total_exons = None
+
+    if not na_value(cds_pos):
+        cds_pos, total_cds = cds_pos.split('/')
+        if "-" in cds_pos:
+            cds_pos = int(cds_pos.split('-')[0]) if cds_pos.split('-')[0] else None
+            total_cds = int(total_cds)
+        else:
+            cds_pos = int(cds_pos)
+            total_cds = int(total_cds)
+    else:
+        cds_pos = None
+        total_cds = None
     
     offset = int(pos_str.lstrip('+-'))
     if pos_str.startswith('+'):
@@ -402,9 +441,10 @@ def process_cryptic_donor(pos_str: str,
                 reason.append(f'upstream_cryptic_donor_in_exon_{intron_num}')
 
         # Check offset fraction if > 10%, then it is likely to cause LoF
-        if abs(offset) / int(cds_pos.split('/')[1]) > 0.1:
-            reason.append('large_truncation_relative_to_cds_size')
-            is_lof = True
+        if total_cds:
+            if abs(offset) / total_cds > 0.1:
+                reason.append('large_truncation_relative_to_cds_size')
+                is_lof = True
     
     # Check for intolerant domains
     for exon in affected_exons:
@@ -423,9 +463,9 @@ def process_cryptic_acceptor(pos_str: str,
                            transcript_id: str,
                            transcript_domain_map: dict,
                            intolerant_domains: set,
-                           intron_pos: str = None,
-                           exon_pos: str = None,
-                           cds_pos: str = None
+                           intron_pos = None,
+                           exon_pos = None,
+                           cds_pos = None
                            ) -> tuple:
     """Process cryptic acceptor events."""
     affected_exons = set()
@@ -434,29 +474,48 @@ def process_cryptic_acceptor(pos_str: str,
     is_lof = False
 
     # Parse position information if available
-    if intron_pos:
+    if not na_value(intron_pos):
         intron_num, total_introns = map(int, intron_pos.split('/'))
-    if exon_pos:
+    else:
+        intron_num = None
+        total_introns = None
+    if not na_value(exon_pos):
         exon_num, total_exons = map(int, exon_pos.split('/'))
+    else:
+        exon_num = None
+        total_exons = None
+    if not na_value(cds_pos):
+        cds_pos, total_cds = cds_pos.split('/')
+        if "-" in cds_pos:
+            logger.info(f"The cds_pos is {cds_pos}, total_cds is {total_cds}, the cds_pos is a range, we need to split it into two parts")
+            cds_pos = int(cds_pos.split('-')[0]) if cds_pos.split('-')[0] else None
+            total_cds = int(total_cds)
+        else:
+            cds_pos = int(cds_pos)
+            total_cds = int(total_cds)
+    else:
+        cds_pos = None
+        total_cds = None
     
     offset = int(pos_str.lstrip('+-'))
     if pos_str.startswith('-'):
         # Upstream cryptic acceptor (in intron)
         length_changing = True
-        if intron_pos:
+        if not na_value(intron_pos):
             affected_exons.add(intron_num + 1)
             reason.append(f'upstream_cryptic_acceptor_in_intron_{intron_num}')
     else:
         # Downstream cryptic acceptor (in exon)
-        if exon_pos:
+        if not na_value(exon_pos):
             reason.append(f'downstream_cryptic_acceptor_in_exon_{exon_num}')
-        elif intron_pos:
+        elif not na_value(intron_pos):
             reason.append(f'downstream_cryptic_acceptor_in_exon_{intron_num + 1}')
 
         # Check offset fraction if > 10%, then it is likely to cause LoF
-        if abs(offset) / int(cds_pos.split('/')[1]) > 0.1:
-            reason.append('large_truncation_relative_to_cds_size')
-            is_lof = True
+        if total_cds:
+            if abs(offset) / total_cds > 0.1:
+                reason.append('large_truncation_relative_to_cds_size')
+                is_lof = True
     
     # Check for intolerant domains
     for exon in affected_exons:

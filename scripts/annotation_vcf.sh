@@ -328,16 +328,19 @@ function anno_clinvar_data () {
 		return 1;
 	}
 
-	check_vcf_infotags ${input_vcf} "CLNDN,CLNHGVS,CLNREVSTAT,CLNSIG,GENEINFO" && \
-	log "The input vcf ${input_vcf} already contains the INFO tags CLNDN,CLNHGVS,CLNREVSTAT,CLNSIG,GENEINFO. We do not need to add them again" && \
-	return 0
+	check_vcf_infotags ${input_vcf} "CLNDN,CLNHGVS,CLNREVSTAT,CLNSIG,GENEINFO,CLNCSQ" && \
+	log "The input vcf ${input_vcf} already contains the INFO tags CLNDN,CLNHGVS,CLNREVSTAT,CLNSIG,GENEINFO,CLNCSQ. We do not need to add them again" && \
+	return 0 || \
+	log "The input vcf ${input_vcf} does not contain the INFO tags CLNDN,CLNHGVS,CLNREVSTAT,CLNSIG,GENEINFO,CLNCSQ. We need to add them"
 
 	bcftools annotate -a ${clinvar_vcf} -c CHROM,POS,REF,ALT,.INFO/CLNDN,.INFO/CLNHGVS,.INFO/CLNREVSTAT,.INFO/CLNSIG,.INFO/GENEINFO,.INFO/CLNCSQ:=INFO/CSQ -Ou ${input_vcf} | \
 	bcftools sort -Oz -o ${output_vcf} && \
 	tabix -f -p vcf ${output_vcf} && \
 	mv ${output_vcf} ${input_vcf} && \
 	mv ${output_vcf}.tbi ${input_vcf}.tbi && \
-	display_vcf ${input_vcf}
+	check_vcf_infotags ${input_vcf} "CLNDN,CLNHGVS,CLNREVSTAT,CLNSIG,GENEINFO,CLNCSQ" && \
+	display_vcf ${input_vcf} || \
+	{ log "Failed to add ClinVar annotation on ${input_vcf}. Quit now"; return 1; }
 }
 
 
@@ -569,7 +572,8 @@ function Calculate_CADD {
 	fi
 
 	# Run CADD
-	log "Running CADD script ${cadd_script}"
+	log "Running CADD script ${cadd_script} with the following command"
+	log "conda run -n acmg ${cadd_script} -c ${threads} -a -p -m -d -g ${genome_tag} -o ${output_file} ${nochr_vcf}"
 	export TMPDIR=${tmp_dir}
 	conda run -n acmg ${cadd_script} \
     -c ${threads} \

@@ -426,7 +426,7 @@ def split_vcf_by_chrom(am_score_vcf: str, output_dir: str = None) -> Dict[str, s
     if output_dir is None:
         output_dir = os.path.dirname(am_score_vcf)
     os.makedirs(output_dir, exist_ok=True)
-    
+
     try:
         vcf = pysam.VariantFile(am_score_vcf)
         
@@ -1230,6 +1230,7 @@ def ACMG_criteria_assign(anno_table: str,
                          clinvar_aa_dict_pkl: str,
                          intolerant_domains_pkl: str,
                          domain_mechanism_tsv: str,
+                         am_score_vcf: str,
                          fam_name: str = "",
                          ped_table: str = "",
                          alt_disease_vcf: str = "",
@@ -1315,7 +1316,7 @@ def ACMG_criteria_assign(anno_table: str,
     PS4 cannot be applied because usually we dont have enough cases to determine the frequency of the variant
     '''
     # Apply PM1 criteria, mutational hotspot or well-established functional protein domain
-    pm1_criteria = PM1_criteria(anno_df, intolerant_domains_pkl, threads)
+    pm1_criteria = PM1_criteria(anno_df, intolerant_domains_pkl, am_score_vcf, threads)
     logger.info(f"PM1 criteria applied, {pm1_criteria.sum()} variants are having the PM1 criteria")
     
     # Apply PM2 criteria, absent from gnomAD or extremely rare in gnomAD
@@ -1459,6 +1460,7 @@ if __name__ == "__main__":
     parser.add_argument("--clinvar_aa_dict_pkl", type=str, required=True)
     parser.add_argument("--intolerant_domains_pkl", type=str, required=True)
     parser.add_argument("--domain_mechanism_tsv", type=str, required=True)
+    parser.add_argument("--am_score_vcf", type=str, required=True)
     parser.add_argument("--alt_disease_vcf", type=str, required=False, default=None)
     parser.add_argument("--gnomAD_extreme_rare_threshold", type=float, required=False, default=0.0001)
     parser.add_argument("--expected_incidence", type=float, required=False, default=0.001)
@@ -1470,6 +1472,7 @@ if __name__ == "__main__":
                                                     args.clinvar_aa_dict_pkl,
                                                     args.intolerant_domains_pkl,
                                                     args.domain_mechanism_tsv,
+                                                    args.am_score_vcf,
                                                     fam_name=args.fam_name,
                                                     ped_table=args.ped_table,
                                                     alt_disease_vcf=args.alt_disease_vcf,

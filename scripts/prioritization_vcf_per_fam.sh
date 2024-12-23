@@ -116,12 +116,13 @@ function assign_acmg_criteria () {
     local alt_disease_vcf=$(read_yaml ${config_file} "alt_disease_vcf")
     local gnomAD_extreme_rare_threshold=$(read_yaml ${config_file} "extreme_rare_PAF")
     local expected_incidence=$(read_yaml ${config_file} "exp_disease_incidence")
+    local am_score_vcf=$(read_yaml ${config_file} "AlphaMissense_vcf")
 
     local has_error=0
     check_path ${clinvar_aa_dict_pkl} "file" "clinvar_aa_stat" || has_error=1
     check_path ${intolerant_domains_pkl} "file" "all_intolerant_domains" || has_error=1
     check_path ${domain_mechanism_tsv} "file" "clinvar_intolerance_mechanisms" || has_error=1
-
+    check_path ${am_score_vcf} "file" "AlphaMissense_vcf" || has_error=1
     [[ ${has_error} -eq 1 ]] && \
     { log "Failed to offer the valid required files for the ACMG criteria assignment"; return 1; }
 
@@ -132,6 +133,7 @@ function assign_acmg_criteria () {
     [[ ${input_tab} -nt ${intolerant_domains_pkl} ]] && \
     [[ ${input_tab} -nt ${domain_mechanism_tsv} ]] && \
     [[ ${input_tab} -nt ${alt_disease_vcf} ]] && \
+    [[ ${input_tab} -nt ${am_score_vcf} ]] && \
     check_table_column ${input_tab} "ACMG_quant_score" && \
     check_table_column ${input_tab} "ACMG_class" && \
     check_table_column ${input_tab} "ACMG_criteria" && \
@@ -144,7 +146,7 @@ function assign_acmg_criteria () {
     [[ -z ${fam_name} ]] && local fam_arg="" || local fam_arg="--fam_name ${fam_name}"
 	[[ -z ${alt_disease_vcf} ]] && local alt_disease_arg="" || local alt_disease_arg="--alt_disease_vcf ${alt_disease_vcf}"
 
-    log "Running the following command to assign the ACMG criterias: python ${acmg_py} --anno_table ${input_tab} --am_score_table ${mean_am_score_table} ${ped_arg} ${fam_arg} --clinvar_aa_dict_pkl ${clinvar_aa_dict_pkl} --intolerant_domains_pkl ${intolerant_domains_pkl} --domain_mechanism_tsv ${domain_mechanism_tsv} ${alt_disease_arg} --gnomAD_extreme_rare_threshold ${gnomAD_extreme_rare_threshold} --expected_incidence ${expected_incidence} --threads ${threads}"
+    log "Running the following command to assign the ACMG criterias: python ${acmg_py} --anno_table ${input_tab} --am_score_table ${mean_am_score_table} ${ped_arg} ${fam_arg} --clinvar_aa_dict_pkl ${clinvar_aa_dict_pkl} --intolerant_domains_pkl ${intolerant_domains_pkl} --domain_mechanism_tsv ${domain_mechanism_tsv} ${alt_disease_arg} --gnomAD_extreme_rare_threshold ${gnomAD_extreme_rare_threshold} --expected_incidence ${expected_incidence} --am_score_vcf ${am_score_vcf} --threads ${threads}"
     python ${acmg_py} \
     --anno_table ${input_tab} \
     --am_score_table ${mean_am_score_table} \
@@ -153,6 +155,7 @@ function assign_acmg_criteria () {
     --domain_mechanism_tsv ${domain_mechanism_tsv} \
     --gnomAD_extreme_rare_threshold ${gnomAD_extreme_rare_threshold} \
     --expected_incidence ${expected_incidence} \
+    --am_score_vcf ${am_score_vcf} \
     --threads ${threads} ${ped_arg} ${fam_arg} ${alt_disease_arg} && \
     display_table ${input_tab} && \
     local output_acmg_mat=${input_tab::-4}.acmg.tsv && \

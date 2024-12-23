@@ -1,5 +1,6 @@
 #!/usr/bin/env python
 
+import os
 import pysam
 import pickle
 import logging
@@ -10,6 +11,8 @@ from collections import namedtuple
 from typing import Tuple, Dict
 import multiprocessing as mp
 from multiprocessing import Manager
+from scipy.stats import beta
+from scipy.optimize import curve_fit
 
 from stat_protein_domain_amscores import nested_defaultdict
 
@@ -36,6 +39,7 @@ def vep_consq_interpret_per_row(row: Dict) -> Tuple[bool, bool]:
         Tuple[bool, bool]: (is_lof, is_length_changing)
     '''
     consq = row.get('Consequence', None)
+    loftee_result = row.get('LoF', None)
     if not isinstance(consq, str):
         return False, False
         
@@ -55,7 +59,7 @@ def vep_consq_interpret_per_row(row: Dict) -> Tuple[bool, bool]:
         'feature_truncation'
     }
     
-    is_lof = any(c in consq for c in lof_criteria)
+    is_lof = any(c in consq for c in lof_criteria) | (loftee_result == 'HC')
     is_length_changing = is_lof or any(c in consq for c in length_changing_criteria)
     
     return is_lof, is_length_changing
@@ -446,12 +450,124 @@ def split_vcf_by_chrom(am_score_vcf: str, output_dir: str = None) -> Dict[str, s
         raise
 
 
+def fit_beta_mixture(x: np.ndarray) -> Tuple[float, bool]:
+    """
+    Fit a mixture of two beta distributions to determine if the distribution is bimodal.
+    
+    Args:
+        x: Array of AM scores (between 0 and 1)
+    Returns:
+        Tuple[float, bool]: (Bimodality coefficient, Is_bimodal)
+    """
+    try:
+        # Calculate basic statistics
+        mean = np.mean(x)
+        var = np.var(x)
+        skewness = np.mean((x - mean) ** 3) / var ** 1.5
+        kurtosis = np.mean((x - mean) ** 4) / var ** 2
+        
+        # Calculate bimodality coefficient
+        # b = (skewness^2 + 1) / kurtosis
+        # b > 0.555 indicates bimodality (empirical threshold)
+        bimodality_coef = (skewness ** 2 + 1) / kurtosis
+        
+        return bimodality_coef, bimodality_coef > 0.555
+        
+    except Exception as e:
+        logger.warning(f"Error in beta mixture fitting: {str(e)}")
+        return 0.0, False
+
+
+def analyze_score_distribution(scores: np.ndarray) -> Tuple[bool, float]:
+    """
+    Analyze if the AM score distribution is unimodal with a peak in pathogenic range.
+    Only checks for unimodality and peak position, regardless of distribution symmetry.
+    
+    Args:
+        scores: Array of AM scores
+    
+    Returns:
+        Tuple[bool, float]: (is_pathogenic_unimodal, peak_score)
+    """
+    if len(scores) < 5:  # Need minimum points for analysis
+        return False, 0.0
+    
+    try:
+        # Create histogram
+        hist, bin_edges = np.histogram(scores, bins=20, range=(0,1), density=True)
+        bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2
+        
+        # Check for bimodality first
+        _, is_bimodal = fit_beta_mixture(scores)
+        
+        if is_bimodal:
+            return False, 0.0
+            
+        # If unimodal, find the peak
+        peak_idx = np.argmax(hist)
+        peak_score = bin_centers[peak_idx]
+        
+        # Check if peak is in pathogenic range (0.58-1.0)
+        is_pathogenic = 0.58 <= peak_score <= 1.0
+        
+        return is_pathogenic, peak_score
+        
+    except Exception as e:
+        logger.warning(f"Error in distribution analysis: {str(e)}")
+        return False, 0.0
+
+
 def locate_less_char_region(row: dict, am_score_vcf: str) -> Tuple[bool, bool]:
     '''
-    Check if the variant is located in a less well-characterized region but with high AM scores. The region size is by default 100bp.
-
+    Check if the variant is located in a less well-characterized region but with high AM scores. 
+    The region size is by default 60bp (20 amino acids).
     '''
     position = row['pos']
+    chrom = row['chrom']
+    ref_allele = row['ref']
+    alt_allele = row['alt']
+    vcf = pysam.VariantFile(am_score_vcf)
+
+    aa_change_scores = {}
+    uniprot_id = None
+    
+    try:
+        # Collect scores in the region
+        for record in vcf.fetch(chrom, position-30, position+30):
+            if record.pos == position:
+                uniprot_id = record.info['UNIPROT']
+                if uniprot_id not in aa_change_scores:
+                    aa_change_scores[uniprot_id] = {}
+            if uniprot_id:
+                aa_change_scores[uniprot_id][record.info['PVAR']] = record.info['AM_PATHOGENICITY']
+
+        if not uniprot_id or not aa_change_scores.get(uniprot_id):
+            return False, False
+
+        # Get maximum score per amino acid position
+        protein_scores = aa_change_scores[uniprot_id]
+        all_aa_bases = set(k[:-1] for k in protein_scores.keys())
+        severe_aa_scores = np.array([
+            np.max([
+                score for key, score in protein_scores.items() 
+                if key.startswith(aa_base)
+            ]) 
+            for aa_base in all_aa_bases
+        ])
+
+        # Analyze distribution
+        severe_pathogenic_unimodal, severe_peak_score = analyze_score_distribution(severe_aa_scores)
+        all_pathogenic_unimodal, all_peak_score = analyze_score_distribution(all_aa_scores)
+
+        if severe_pathogenic_unimodal or all_pathogenic_unimodal:
+            logger.info(f"Variant at {chrom}:{position}:{ref_allele}>{alt_allele} is located in a region with high AM scores, the peak score for the AM score distribution is {all_peak_score}.")
+        
+        # Return results
+        return severe_pathogenic_unimodal, all_pathogenic_unimodal
+
+    except Exception as e:
+        logger.warning(f"Error processing variant at {chrom}:{position}:{ref_allele}>{alt_allele}: {str(e)}")
+        return False, False
 
 
 def PM1_criteria(df: pd.DataFrame, 
@@ -477,8 +593,14 @@ def PM1_criteria(df: pd.DataFrame,
     # Split the am_score_vcf to multiple tables by chromosomes
     # The table is tabix indexed, so we can use pysam to split the table by chromosomes
     am_score_chrom_vcfs = split_vcf_by_chrom(am_score_vcf)
+    args = [(row, am_score_chrom_vcfs[row['chrom']]) for row in row_dicts]
+    with mp.Pool(threads) as pool:
+        results = pool.starmap(locate_less_char_region, args)
+        # Results are a list of tuples, we need to convert them to two independent boolean arrays
+        severe_pathogenic_unimodal_motifs = np.array([r[0] for r in results])
+        all_pathogenic_unimodal_motifs = np.array([r[1] for r in results])
 
-    return np.array(results)
+    return loc_intol_domain | ( severe_pathogenic_unimodal_motifs & truncating ) | ( all_pathogenic_unimodal_motifs & missense )
 
 
 def PM2_criteria(df: pd.DataFrame, gnomAD_extreme_rare_threshold: float = 0.0001) -> np.ndarray:
@@ -772,9 +894,9 @@ def BP2_PM3_criteria(df: pd.DataFrame,
     in_cis_pathogenic = np.array([False] * len(df))
     
     with Manager() as manager:
-        shared_df = manager.dict()
-        shared_df['data'] = df
-        args = [(gene, shared_df['data'], pathogenic, proband) for gene in all_genes]
+        shared_dict = manager.dict()
+        shared_dict['data'] = df.loc[:, ["Gene", proband]]
+        args = [(gene, shared_dict['data'], pathogenic, proband) for gene in all_genes]
 
         with mp.Pool(threads) as pool:
             results = pool.starmap(check_gene_variants, args)
@@ -1118,24 +1240,24 @@ def ACMG_criteria_assign(anno_table: str,
     Main function to assign ACMG criteria.
     Returns both annotated DataFrame and criteria matrix.
 
-	The ClinGen SVI group has introduced a new dimension of evaluation for each criteria called Strength of Criteria.
-	But many strengths cannot be applied at bioinformatic level. 
+    The ClinGen SVI group has introduced a new dimension of evaluation for each criteria called Strength of Criteria.
+    But many strengths cannot be applied at bioinformatic level. 
 
-	===========Regarding the combining rule===========
-	Regarding the combining rule, SVI from ClinGen suggests that PVS1 + 1PP = Likely Pathogenic.
-	We just adopted the naive Bayesian Framework to calculate the posterior probability of pathogenicity.
+    ===========Regarding the combining rule===========
+    Regarding the combining rule, SVI from ClinGen suggests that PVS1 + 1PP = Likely Pathogenic.
+    We just adopted the naive Bayesian Framework to calculate the posterior probability of pathogenicity.
 
-	===========Regarding the criteria, Cannot be applied===========
-	1. PS2/PM6, regarding the DeNovo related evidence. The strength is related to the phenotype consistency with the disease. Such clinical information is rarely normalized for automatic interpretation. Thus Skip.
-	2. PP1, the refinement not applicable because multiple family co-segregation information is rarely available for a same type of disease. 
-	3. PP4, Patient's phenotype or family history is highly specific for a disease with a single genetic etiology. (This cannot be applied simutaneously with PP1, because if a disease is tightly linked with only one gene, the segregation is doomed. Therefore further segregation observation does not add any more confidence because the confidence from this perspective is already reaching a ceiling.)
-	4. PS3/BS3, the functional assay for a specific variant is so rare and so hard to fetch, nearly impossible for practice.
+    ===========Regarding the criteria, Cannot be applied===========
+    1. PS2/PM6, regarding the DeNovo related evidence. The strength is related to the phenotype consistency with the disease. Such clinical information is rarely normalized for automatic interpretation. Thus Skip.
+    2. PP1, the refinement not applicable because multiple family co-segregation information is rarely available for a same type of disease. 
+    3. PP4, Patient's phenotype or family history is highly specific for a disease with a single genetic etiology. (This cannot be applied simutaneously with PP1, because if a disease is tightly linked with only one gene, the segregation is doomed. Therefore further segregation observation does not add any more confidence because the confidence from this perspective is already reaching a ceiling.)
+    4. PS3/BS3, the functional assay for a specific variant is so rare and so hard to fetch, nearly impossible for practice.
 
-	===========Regarding the criteria, Can be applied===========
-	1. PVS1, LOEUF <= 0.35 should be considered as intolerant to LoF.
-	2. PM2, is reduced from Moderate to Supporting.
-	3. PP5/BP6, reputable source reported as benign or pathogenic. Suggested to be abandoned or at least not assigned along with PS3/BS3.
-	3. PM3, can be only applied if PM2 is True (sufficiently rare in gnomAD).
+    ===========Regarding the criteria, Can be applied===========
+    1. PVS1, LOEUF <= 0.35 should be considered as intolerant to LoF.
+    2. PM2, is reduced from Moderate to Supporting.
+    3. PP5/BP6, reputable source reported as benign or pathogenic. Suggested to be abandoned or at least not assigned along with PS3/BS3.
+    3. PM3, can be only applied if PM2 is True (sufficiently rare in gnomAD).
     """
     anno_df = pd.read_table(anno_table, low_memory=False)
     logger.info(f"Got {threads} threads to process the input table {anno_table}, now the table looks like: \n{anno_df[:5].to_string(index=False)}")
@@ -1354,6 +1476,7 @@ if __name__ == "__main__":
                                                     gnomAD_extreme_rare_threshold=args.gnomAD_extreme_rare_threshold,
                                                     expected_incidence=args.expected_incidence,
                                                     threads=args.threads)
+
 
 
 

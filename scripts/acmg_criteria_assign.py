@@ -421,11 +421,11 @@ def split_vcf_by_chrom(am_score_vcf: str, output_dir: str = None) -> Dict[str, s
     Returns:
         Dict mapping chromosome names to their VCF file paths
     """
-    os.makedirs(output_dir, exist_ok=True)
     chrom_vcfs = {}
     base_name = os.path.basename(am_score_vcf.replace(".vcf.gz", ""))
     if output_dir is None:
         output_dir = os.path.dirname(am_score_vcf)
+    os.makedirs(output_dir, exist_ok=True)
     
     try:
         vcf = pysam.VariantFile(am_score_vcf)

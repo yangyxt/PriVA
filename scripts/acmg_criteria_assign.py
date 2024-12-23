@@ -433,6 +433,11 @@ def split_vcf_by_chrom(am_score_vcf: str, output_dir: str = None) -> Dict[str, s
         # Get list of chromosomes from the tabix index
         for chrom in vcf.header.contigs:
             out_vcf = os.path.join(output_dir, f"{base_name}.{chrom}.vcf.gz")
+            if os.path.exists(out_vcf) and \
+               (os.path.getmtime(out_vcf) > os.path.getmtime(am_score_vcf)) and \
+               os.path.exists(os.path.join(output_dir, f"{base_name}.{chrom}.vcf.gz.tbi")) and \
+               (os.path.getmtime(os.path.join(output_dir, f"{base_name}.{chrom}.vcf.gz.tbi")) > os.path.getmtime(out_vcf)):
+                continue
             
             # Create new VCF for this chromosome
             with pysam.VariantFile(out_vcf, 'w', header=vcf.header) as out_file:

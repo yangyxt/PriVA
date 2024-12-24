@@ -932,15 +932,15 @@ def check_gene_variants(gene, df, pathogenic, proband):
         # If there is at least one pathogenic variant at the second copy of the proband's genome
         var_in_trans = ((df.loc[:, proband].str.split("|")[0] == "1") | (df.loc[:, proband].str.split("/")[0] == "1")) & (df.loc[:, "Gene"] == gene)
         var_in_cis = ((df.loc[:, proband].str.split("|")[1] == "1") | (df.loc[:, proband] == "1/1")) & (df.loc[:, "Gene"] == gene)
-        logger.info(f"For gene {gene}, there are {len(var_in_trans)} variants in-trans with pathogenic variants at the second copy of the proband's genome")
-        logger.info(f"For gene {gene}, there are {len(var_in_cis)} variants in-cis with pathogenic variants at the second copy of the proband's genome")
+        logger.info(f"For gene {gene}, there are {var_in_trans.sum()} variants in-trans with pathogenic variants at the second copy of the proband's genome")
+        logger.info(f"For gene {gene}, there are {var_in_cis.sum()} variants in-cis with pathogenic variants at the second copy of the proband's genome")
 
     if len([v for v in pathogenic_variants if v[0] == "1"]) > 0:
         # If there is at least one pathogenic variant at the first copy of the proband's genome
         var_in_trans_1 = ((df.loc[:, proband].str.split("|")[1] == "1") | (df.loc[:, proband] == "1/1")) & (df.loc[:, "Gene"] == gene)
         var_in_cis_1 = ((df.loc[:, proband].str.split("|")[0] == "1") | (df.loc[:, proband].str.split("/")[0] == "1")) & (df.loc[:, "Gene"] == gene)
-        logger.info(f"For gene {gene}, there are {len(var_in_trans_1)} variants in-trans with pathogenic variants at the first copy of the proband's genome")
-        logger.info(f"For gene {gene}, there are {len(var_in_cis_1)} variants in-cis with pathogenic variants at the first copy of the proband's genome")
+        logger.info(f"For gene {gene}, there are {var_in_trans_1.sum()} variants in-trans with pathogenic variants at the first copy of the proband's genome")
+        logger.info(f"For gene {gene}, there are {var_in_cis_1.sum()} variants in-cis with pathogenic variants at the first copy of the proband's genome")
         var_in_trans |= var_in_trans_1
         var_in_cis |= var_in_cis_1
 

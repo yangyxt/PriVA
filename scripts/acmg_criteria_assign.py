@@ -437,6 +437,7 @@ def split_vcf_by_chrom(am_score_vcf: str, output_dir: str = None) -> Dict[str, s
                (os.path.getmtime(out_vcf) > os.path.getmtime(am_score_vcf)) and \
                os.path.exists(os.path.join(output_dir, f"{base_name}.{chrom}.vcf.gz.tbi")) and \
                (os.path.getmtime(os.path.join(output_dir, f"{base_name}.{chrom}.vcf.gz.tbi")) > os.path.getmtime(out_vcf)):
+                chrom_vcfs[chrom] = out_vcf
                 continue
             
             # Create new VCF for this chromosome

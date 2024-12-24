@@ -941,9 +941,9 @@ def check_gene_variants(gene, df, pathogenic, proband):
         var_in_cis_1 = ((df.loc[:, proband].str.split("|")[0] == "1") | (df.loc[:, proband].str.split("/")[0] == "1")) & (df.loc[:, "Gene"] == gene)
         logger.info(f"For gene {gene}, there are {len(var_in_trans_1)} variants in-trans with pathogenic variants at the first copy of the proband's genome")
         logger.info(f"For gene {gene}, there are {len(var_in_cis_1)} variants in-cis with pathogenic variants at the first copy of the proband's genome")
+        var_in_trans |= var_in_trans_1
+        var_in_cis |= var_in_cis_1
 
-    var_in_trans |= var_in_trans_1
-    var_in_cis |= var_in_cis_1
     return var_in_trans, var_in_cis
 
 

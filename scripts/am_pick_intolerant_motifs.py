@@ -90,10 +90,12 @@ class AMMotifAnalyzer:
                     csq_field_str = record.info.get("CSQ", [""])[0]
                     # logger.info(f"CSQ field string: {csq_field_str}")
                     if not csq_field_str:
+                        logger.error(f"No CSQ field string found for record: {record}")
                         continue
                     gene = csq_field_str.split('|')[gene_field]
                     pvar = record.info.get('PVAR')
                     if not gene or not pvar:
+                        logger.error(f"No gene or PVAR found for record: {record}")
                         continue
 
                     # Example PVAR: "M10I" => ref_aa = 'M', aa_pos = 10, alt_aa = 'I'
@@ -216,7 +218,6 @@ class AMMotifAnalyzer:
         # Fit KDE to positions, weighted by scores
         kde_max = self.kde_local_density(positions, max_scores, query_pos)
         kde_min = self.kde_local_density(positions, min_scores, query_pos)
-        # assert np.all(kde_max >= kde_min), f"Error in {gene}: kde_max < kde_min at some positions: Here is the kde_max: \n{kde_max},\n and kde_min: \n{kde_min},\n the original scores are max_scores: \n{max_scores},\n and min_scores: \n{min_scores}"
 
         # Compute expected density for 5aa window with avg score 0.564
         max_density_threshold = self.compute_density_threshold(

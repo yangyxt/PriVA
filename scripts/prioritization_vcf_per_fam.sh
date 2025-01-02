@@ -28,13 +28,13 @@ function prepare_combined_tab () {
     log "The combined annotation table ${output_tab} is up to date, skip the conversion" && \
     return 0
 
-	local hpo_tab=${BASE_DIR}/data/hpo/genes_to_phenotype.collapse.tsv.gz
+    local hpo_tab=${BASE_DIR}/data/hpo/genes_to_phenotype.collapse.tsv.gz
 
     python ${SCRIPT_DIR}/combine_annotations.py \
     -i ${input_vcf} \
     -c ${CADD_anno_file} \
     -o ${output_tab} \
-	-p ${hpo_tab} \
+    -p ${hpo_tab} \
     -t ${threads} && \
     display_table ${output_tab}
 }
@@ -113,6 +113,7 @@ function assign_acmg_criteria () {
     local clinvar_aa_dict_pkl=$(read_yaml ${config_file} "clinvar_aa_stat")
     local intolerant_domains_pkl=$(read_yaml ${config_file} "all_intolerant_domains")
     local domain_mechanism_tsv=$(read_yaml ${config_file} "clinvar_intolerance_mechanisms")
+    local intolerant_motifs_pkl=$(read_yaml ${config_file} "alphamissense_intolerant_motifs")
     local alt_disease_vcf=$(read_yaml ${config_file} "alt_disease_vcf")
     local gnomAD_extreme_rare_threshold=$(read_yaml ${config_file} "extreme_rare_PAF")
     local expected_incidence=$(read_yaml ${config_file} "exp_disease_incidence")
@@ -122,6 +123,7 @@ function assign_acmg_criteria () {
     check_path ${clinvar_aa_dict_pkl} "file" "clinvar_aa_stat" || has_error=1
     check_path ${intolerant_domains_pkl} "file" "all_intolerant_domains" || has_error=1
     check_path ${domain_mechanism_tsv} "file" "clinvar_intolerance_mechanisms" || has_error=1
+    check_path ${intolerant_motifs_pkl} "file" "alphamissense_intolerant_motifs" || has_error=1
     check_path ${am_score_vcf} "file" "alphamissense_vcf" || has_error=1
     [[ ${has_error} -eq 1 ]] && \
     { log "Failed to offer the valid required files for the ACMG criteria assignment"; return 1; }
@@ -144,7 +146,7 @@ function assign_acmg_criteria () {
     
     [[ -z ${ped_table} ]] && local ped_arg="" || local ped_arg="--ped_table ${ped_table}"
     [[ -z ${fam_name} ]] && local fam_arg="" || local fam_arg="--fam_name ${fam_name}"
-	[[ -z ${alt_disease_vcf} ]] && local alt_disease_arg="" || local alt_disease_arg="--alt_disease_vcf ${alt_disease_vcf}"
+    [[ -z ${alt_disease_vcf} ]] && local alt_disease_arg="" || local alt_disease_arg="--alt_disease_vcf ${alt_disease_vcf}"
 
     log "Running the following command to assign the ACMG criterias: python ${acmg_py} --anno_table ${input_tab} --am_score_table ${mean_am_score_table} ${ped_arg} ${fam_arg} --clinvar_aa_dict_pkl ${clinvar_aa_dict_pkl} --intolerant_domains_pkl ${intolerant_domains_pkl} --domain_mechanism_tsv ${domain_mechanism_tsv} ${alt_disease_arg} --gnomAD_extreme_rare_threshold ${gnomAD_extreme_rare_threshold} --expected_incidence ${expected_incidence} --am_score_vcf ${am_score_vcf} --threads ${threads}"
     python ${acmg_py} \
@@ -152,6 +154,7 @@ function assign_acmg_criteria () {
     --am_score_table ${mean_am_score_table} \
     --clinvar_aa_dict_pkl ${clinvar_aa_dict_pkl} \
     --intolerant_domains_pkl ${intolerant_domains_pkl} \
+    --intolerant_motifs_pkl ${intolerant_motifs_pkl} \
     --domain_mechanism_tsv ${domain_mechanism_tsv} \
     --gnomAD_extreme_rare_threshold ${gnomAD_extreme_rare_threshold} \
     --expected_incidence ${expected_incidence} \
@@ -186,16 +189,16 @@ function main_prioritization () {
     done
 
 
-	# Read the expected number of threads
+    # Read the expected number of threads
     local threads=$SNAKEMAKE_THREADS
-	[[ -z ${threads} ]] && threads=$(read_yaml ${config_file} "threads")
+    [[ -z ${threads} ]] && threads=$(read_yaml ${config_file} "threads")
     log "The number of threads is set to ${threads} for the current family ${fam_name} and input VCF file ${input_vcf}"
 
     # Preprocess step, convert the annotated VCF to a Table with transcript specific annotations as rows
     if [[ -z ${cadd_tsv} ]]; then
         cadd_tsv=$(read_yaml ${config_file} "cadd_output_file")
     fi
-	prepare_combined_tab \
+    prepare_combined_tab \
     ${input_vcf} \
     ${cadd_tsv} \
     ${threads} && \
@@ -230,9 +233,9 @@ if [[ "${#BASH_SOURCE[@]}" -eq 1 ]]; then
         log "Executing: ${*:${following_arg_ind}}"
         "${@:${following_arg_ind}}"
     else
-		log "Directly run main_prioritization with input args: $*"
-		main_prioritization "$@"
-	fi
+        log "Directly run main_prioritization with input args: $*"
+        main_prioritization "$@"
+    fi
 fi
 
 

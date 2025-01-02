@@ -410,51 +410,6 @@ def locate_intolerant_domain(row: dict, intolerant_domains: set) -> bool:
     return any(domain in intolerant_domains for domain in domains) & protein_altering
 
 
-def split_vcf_by_chrom(am_score_vcf: str, output_dir: str = None) -> Dict[str, str]:
-    """
-    Split a tabix-indexed VCF file by chromosome and create new indexed files.
-    
-    Args:
-        am_score_vcf: Path to the input tabix-indexed VCF
-        output_dir: Directory to store chromosome-specific VCFs
-    
-    Returns:
-        Dict mapping chromosome names to their VCF file paths
-    """
-    chrom_vcfs = {}
-    base_name = os.path.basename(am_score_vcf.replace(".vcf.gz", ""))
-    if output_dir is None:
-        output_dir = os.path.dirname(am_score_vcf)
-    os.makedirs(output_dir, exist_ok=True)
-
-    try:
-        vcf = pysam.VariantFile(am_score_vcf)
-        
-        # Get list of chromosomes from the tabix index
-        for chrom in vcf.header.contigs:
-            out_vcf = os.path.join(output_dir, f"{base_name}.{chrom}.vcf.gz")
-            if os.path.exists(out_vcf) and \
-               (os.path.getmtime(out_vcf) > os.path.getmtime(am_score_vcf)) and \
-               os.path.exists(os.path.join(output_dir, f"{base_name}.{chrom}.vcf.gz.tbi")) and \
-               (os.path.getmtime(os.path.join(output_dir, f"{base_name}.{chrom}.vcf.gz.tbi")) > os.path.getmtime(out_vcf)):
-                chrom_vcfs[chrom] = out_vcf
-                continue
-            
-            # Create new VCF for this chromosome
-            with pysam.VariantFile(out_vcf, 'w', header=vcf.header) as out_file:
-                for record in vcf.fetch(chrom):
-                    out_file.write(record)
-            
-            # Index the chromosome-specific VCF
-            pysam.tabix_index(out_vcf, preset='vcf', force=True)
-            chrom_vcfs[chrom] = out_vcf
-            
-        return chrom_vcfs
-        
-    except Exception as e:
-        logger.error(f"Error splitting VCF by chromosome: {str(e)}")
-        raise
-
 
 def fit_beta_mixture(x: np.ndarray) -> Tuple[float, bool]:
     """
@@ -523,72 +478,46 @@ def analyze_score_distribution(scores: np.ndarray) -> Tuple[bool, float]:
         return False, 0.0
 
 
-def locate_less_char_region(row: dict, am_score_vcf: str) -> Tuple[bool, bool]:
+def locate_less_char_region(row: dict, am_intolerant_motifs: dict) -> Tuple[bool, bool]:
     '''
     Check if the variant is located in a less well-characterized region but with high AM scores. 
-    The region size is by default 60bp (20 amino acids).
+    The region was previous extracted during the installation step of the pipeline, it uses weighted KDE to identify the segments along the protein chain which are likely to be intolerant to AA changes
     '''
-    position = row['pos']
-    chrom = row['chrom']
-    ref_allele = row['ref']
-    alt_allele = row['alt']
-    vcf = pysam.VariantFile(am_score_vcf)
+    aa_code_dict = {"Gly": "G", "Ala": "A", "Val": "V", "Leu": "L", 
+                    "Ile": "I", "Thr": "T", "Ser": "S", "Met": "M", 
+                    "Cys": "C", "Pro": "P", "Phe": "F", "Tyr": "Y", 
+                    "Trp": "W", "His": "H", "Lys": "K", "Arg": "R", 
+                    "Asp": "D", "Glu": "E", "Asn": "N", "Gln": "Q"}
 
-    aa_change_scores = {}
-    uniprot_id = None
+    gene = row['Gene']
+    hgvsp_aa = row["HGVSp"].split(":")[1].lstrip("p.")
+    # Extract the characters that is digit in the hgvsp_aa
+    protein_position = re.search(r'\d+', hgvsp_aa).group()
+    # Extract the string before the digits as the reference amino acid
+    ref_aa = re.split(r'\d+', hgvsp_aa)[0]
+    single_letter_aa_code = aa_code_dict[ref_aa]
+    combo = f"{single_letter_aa_code}{protein_position}"
+
+    hit_max_score_motifs = [d for d in am_intolerant_motifs[gene]['max_score_regions'] if combo in d['positions']]
+    hit_min_score_motifs = [d for d in am_intolerant_motifs[gene]['min_score_regions'] if combo in d['positions']]
+
+    return len(hit_max_score_motifs) > 0, len(hit_min_score_motifs) > 0
+
     
-    try:
-        # Collect scores in the region
-        for record in vcf.fetch(chrom, position-30, position+30):
-            if record.pos == position:
-                uniprot_id = record.info['UNIPROT']
-                if uniprot_id not in aa_change_scores:
-                    aa_change_scores[uniprot_id] = {}
-            if uniprot_id:
-                aa_change_scores[uniprot_id][record.info['PVAR']] = record.info['AM_PATHOGENICITY']
-
-        if not uniprot_id or not aa_change_scores.get(uniprot_id):
-            return False, False
-
-        # Get maximum score per amino acid position
-        protein_scores = aa_change_scores[uniprot_id]
-        all_aa_bases = set(k[:-1] for k in protein_scores.keys())
-        all_aa_scores = np.array(list(protein_scores.values()))
-        severe_aa_scores = np.array([
-            np.max([
-                score for key, score in protein_scores.items() 
-                if key.startswith(aa_base)
-            ]) 
-            for aa_base in all_aa_bases
-        ])
-
-        # Analyze distribution
-        severe_pathogenic_unimodal, severe_peak_score = analyze_score_distribution(severe_aa_scores)
-        all_pathogenic_unimodal, all_peak_score = analyze_score_distribution(all_aa_scores)
-
-        if severe_pathogenic_unimodal or all_pathogenic_unimodal:
-            logger.info(f"Variant at {chrom}:{position}:{ref_allele}>{alt_allele} is located in a region with high AM scores, the peak score for the AM score distribution is {all_peak_score}.")
-        
-        # Return results
-        return severe_pathogenic_unimodal, all_pathogenic_unimodal
-
-    except Exception as e:
-        logger.warning(f"Error processing variant at {chrom}:{position}:{ref_allele}>{alt_allele}: {str(e)}")
-        return False, False
 
 
 def PM1_criteria(df: pd.DataFrame, 
                  intolerant_domains_pkl: str, 
+                 intolerant_motifs_pkl: str,
                  am_score_vcf: str,
                  threads: int = 10) -> np.ndarray:
     # PM1: The variant is located in a mutational hotspot or a well-established functional protein domain
     # Load intolerant domains into shared memory
     row_dicts = df.to_dict('records')
     with Manager() as manager:
-        shared_domains = manager.dict()
-        shared_domains['intolerant_domains'] = pickle.load(open(intolerant_domains_pkl, 'rb'))
-        
-        args = [(row, shared_domains['intolerant_domains']) for row in row_dicts]
+        shared_data = manager.dict()
+        shared_data['intolerant_domains'] = pickle.load(open(intolerant_domains_pkl, 'rb'))
+        args = [(row, shared_data['intolerant_domains']) for row in row_dicts]
         
         with mp.Pool(threads) as pool:
             results = pool.starmap(locate_intolerant_domain, args)
@@ -597,17 +526,18 @@ def PM1_criteria(df: pd.DataFrame,
     truncating = df['vep_consq_length_changing'] | df['splicing_len_changing'] | df['5UTR_len_changing']
     missense = df['Consequence'] == 'missense_variant'
 
-    # Split the am_score_vcf to multiple tables by chromosomes
-    # The table is tabix indexed, so we can use pysam to split the table by chromosomes
-    am_score_chrom_vcfs = split_vcf_by_chrom(am_score_vcf)
-    args = [(row, am_score_chrom_vcfs[row['chrom']]) for row in row_dicts]
-    with mp.Pool(threads) as pool:
-        results = pool.starmap(locate_less_char_region, args)
-        # Results are a list of tuples, we need to convert them to two independent boolean arrays
-        severe_pathogenic_unimodal_motifs = np.array([r[0] for r in results])
-        all_pathogenic_unimodal_motifs = np.array([r[1] for r in results])
+    with Manager() as manager:
+        shared_data = manager.dict()
+        shared_data['intolerant_motifs'] = pickle.load(open(intolerant_motifs_pkl, 'rb'))
+        args = [(row, am_score_chrom_vcfs[row['chrom']], shared_data['intolerant_motifs']) for row in row_dicts]
+        with mp.Pool(threads) as pool:
+            results = pool.starmap(locate_less_char_region, args)
+            # Results are a list of tuples, we need to convert them to two independent boolean arrays
+            severe_pathogenic_unimodal_motifs = np.array([r[0] for r in results])
+            all_pathogenic_unimodal_motifs = np.array([r[1] for r in results])
 
     return loc_intol_domain | ( severe_pathogenic_unimodal_motifs & truncating ) | ( all_pathogenic_unimodal_motifs & missense )
+
 
 
 def PM2_criteria(df: pd.DataFrame, gnomAD_extreme_rare_threshold: float = 0.0001) -> np.ndarray:
@@ -1247,6 +1177,7 @@ def ACMG_criteria_assign(anno_table: str,
                          am_score_table: str, 
                          clinvar_aa_dict_pkl: str,
                          intolerant_domains_pkl: str,
+                         intolerant_motifs_pkl: str,
                          domain_mechanism_tsv: str,
                          am_score_vcf: str,
                          fam_name: str = "",
@@ -1334,7 +1265,7 @@ def ACMG_criteria_assign(anno_table: str,
     PS4 cannot be applied because usually we dont have enough cases to determine the frequency of the variant
     '''
     # Apply PM1 criteria, mutational hotspot or well-established functional protein domain
-    pm1_criteria = PM1_criteria(anno_df, intolerant_domains_pkl, am_score_vcf, threads)
+    pm1_criteria = PM1_criteria(anno_df, intolerant_domains_pkl, intolerant_motifs_pkl, am_score_vcf, threads)
     logger.info(f"PM1 criteria applied, {pm1_criteria.sum()} variants are having the PM1 criteria")
     
     # Apply PM2 criteria, absent from gnomAD or extremely rare in gnomAD
@@ -1477,6 +1408,7 @@ if __name__ == "__main__":
     parser.add_argument("--fam_name", type=str, required=False, default=None)
     parser.add_argument("--clinvar_aa_dict_pkl", type=str, required=True)
     parser.add_argument("--intolerant_domains_pkl", type=str, required=True)
+    parser.add_argument("--intolerant_motifs_pkl", type=str, required=True)
     parser.add_argument("--domain_mechanism_tsv", type=str, required=True)
     parser.add_argument("--am_score_vcf", type=str, required=True)
     parser.add_argument("--alt_disease_vcf", type=str, required=False, default=None)
@@ -1489,6 +1421,7 @@ if __name__ == "__main__":
                                                     args.am_score_table, 
                                                     args.clinvar_aa_dict_pkl,
                                                     args.intolerant_domains_pkl,
+                                                    args.intolerant_motifs_pkl,
                                                     args.domain_mechanism_tsv,
                                                     args.am_score_vcf,
                                                     fam_name=args.fam_name,

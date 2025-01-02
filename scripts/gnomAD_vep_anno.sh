@@ -152,7 +152,9 @@ function annotate_vep_gnomAD_per_chromosome() {
     -plugin Conservation,${conservation_file},MAX \
 	-plugin NMD \
     --force_overwrite \
-	-o ${tmp_output} && \
+	--compress_output bgzip \
+	-o ${tmp_output}
+
 	bcftools sort -Oz -o ${output_vcf} ${tmp_output} && \
 	tabix -f -p vcf ${output_vcf} && \
 	announce_remove_tmps ${tmp_output} && \
@@ -188,7 +190,7 @@ function parallel_annotate_vep_gnomAD() {
 	local job_thread_num=$(awk -v t="${threads}" 'BEGIN {printf "%i", t/8; }' )
 	log "The number of jobs is: 8 and the number of threads per job is: ${job_thread_num}"
 
-	parallel -j 8 --dry-run --link --halt soon,fail=1 \
+	parallel -j 8 --dry-run --link --halt soon,fail= \
 	--joblog ${output_dir}/vep_anno_gnomAD.log \
 	--tmpdir ${tmp_dir} \
 	bash ${SCRIPT_DIR}/gnomAD_vep_anno.sh annotate_vep_gnomAD_per_chromosome -v {1} -c ${config_file} -d ${output_dir} -t ${job_thread_num} '>' ${output_dir}/vep_anno_gnomAD_{2}.log '2>&1' ::: ${gnomAD_vcf_files[@]} ::: ${chromosomes[@]} && \

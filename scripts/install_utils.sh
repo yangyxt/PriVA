@@ -196,6 +196,8 @@ function VEP_plugins_install() {
     # Then annotate the AlphaMissense prescore file to vcf file
     AlphaMissense_anno ${config_file} || \
     { log "Failed to convert the AlphaMissense prescore file to vcf file and annotate protein domains to it"; return 1; }
+    AlphaMissense_pick_intolerant_motifs ${config_file} || \
+    { log "Failed to pick intolerant motifs from the AlphaMissense prescore file"; return 1; }
     AlphaMissense_stat ${config_file} || \
     { log "Failed to generate the AlphaMissense statistics JSON file"; return 1; }
 
@@ -430,29 +432,29 @@ function CADD_install() {
         local CADD_cache_dir="${CADD_base_dir}/data" && \
         local CADD_prescore_dir="${CADD_cache_dir}/prescored" && \
         local CADD_anno_dir="${CADD_cache_dir}/annotations" && \
-		log "Now the CADD script is ${CADD_script}, the CADD cache directory is ${CADD_cache_dir}, the CADD prescore directory is ${CADD_prescore_dir}, the CADD annotation directory is ${CADD_anno_dir}"
+        log "Now the CADD script is ${CADD_script}, the CADD cache directory is ${CADD_cache_dir}, the CADD prescore directory is ${CADD_prescore_dir}, the CADD annotation directory is ${CADD_anno_dir}"
     fi
 
 
     # Now we start downloading the CADD genome annotations corresponding to the assembly version
     if [[ ${assembly} == "GRCh37" ]] || [[ ${assembly} == "hg19" ]]; then
         if [[ ! -d ${CADD_anno_dir}/GRCh37_${cadd_version} ]]; then
-			wget -c https://kircherlab.bihealth.org/download/CADD/v1.7/GRCh37/GRCh37_v1.7.tar.gz -O ${CADD_anno_dir}/GRCh37_v1.7.tar.gz && \
-			md5sum ${CADD_anno_dir}/GRCh37_v1.7.tar.gz | grep -q $(read_yaml "${config_file}" "cadd_GRCh37_anno_md5") && \
-			tar -xzvf ${CADD_anno_dir}/GRCh37_v1.7.tar.gz -C ${CADD_anno_dir}/ && \
-			rm ${CADD_anno_dir}/GRCh37_v1.7.tar.gz
-		else
-			log "The CADD genome annotation for GRCh37_${cadd_version} is already downloaded, skip the downloading process"
-		fi
+            wget -c https://kircherlab.bihealth.org/download/CADD/v1.7/GRCh37/GRCh37_v1.7.tar.gz -O ${CADD_anno_dir}/GRCh37_v1.7.tar.gz && \
+            md5sum ${CADD_anno_dir}/GRCh37_v1.7.tar.gz | grep -q $(read_yaml "${config_file}" "cadd_GRCh37_anno_md5") && \
+            tar -xzvf ${CADD_anno_dir}/GRCh37_v1.7.tar.gz -C ${CADD_anno_dir}/ && \
+            rm ${CADD_anno_dir}/GRCh37_v1.7.tar.gz
+        else
+            log "The CADD genome annotation for GRCh37_${cadd_version} is already downloaded, skip the downloading process"
+        fi
     elif [[ ${assembly} == "GRCh38" ]] || [[ ${assembly} == "hg38" ]]; then
         if [[ ! -d ${CADD_anno_dir}/GRCh38_${cadd_version} ]]; then
-			wget -c https://kircherlab.bihealth.org/download/CADD/v1.7/GRCh38/GRCh38_v1.7.tar.gz -O ${CADD_anno_dir}/GRCh38_v1.7.tar.gz && \
-			md5sum ${CADD_anno_dir}/GRCh38_v1.7.tar.gz | grep -q $(read_yaml "${config_file}" "cadd_GRCh38_anno_md5") && \
-			tar -xzvf ${CADD_anno_dir}/GRCh38_v1.7.tar.gz -C ${CADD_anno_dir}/ && \
-			rm ${CADD_anno_dir}/GRCh38_v1.7.tar.gz
-		else
-			log "The CADD genome annotation for GRCh38_${cadd_version} is already downloaded, skip the downloading process"
-		fi
+            wget -c https://kircherlab.bihealth.org/download/CADD/v1.7/GRCh38/GRCh38_v1.7.tar.gz -O ${CADD_anno_dir}/GRCh38_v1.7.tar.gz && \
+            md5sum ${CADD_anno_dir}/GRCh38_v1.7.tar.gz | grep -q $(read_yaml "${config_file}" "cadd_GRCh38_anno_md5") && \
+            tar -xzvf ${CADD_anno_dir}/GRCh38_v1.7.tar.gz -C ${CADD_anno_dir}/ && \
+            rm ${CADD_anno_dir}/GRCh38_v1.7.tar.gz
+        else
+            log "The CADD genome annotation for GRCh38_${cadd_version} is already downloaded, skip the downloading process"
+        fi
     else
         log "Not supported assembly version: ${assembly}"
         return 1
@@ -475,26 +477,26 @@ function CADD_install() {
         snv_prescore_md5=$(read_yaml "${config_file}" "cadd_GRCh38_snv_anno_md5")
         indel_prescore_md5=$(read_yaml "${config_file}" "cadd_GRCh38_indel_anno_md5")
     fi
-	log "Now the CADD prescore URL for ${assembly} is ${snv_prescore_url} and ${indel_prescore_url}"
+    log "Now the CADD prescore URL for ${assembly} is ${snv_prescore_url} and ${indel_prescore_url}"
 
     local snv_file_name=$(basename ${snv_prescore_url})
     local indel_file_name=$(basename ${indel_prescore_url})
 
     if [[ ! -f ${CADD_prescore_dir}/${assembly}_${cadd_version}/incl_anno/${snv_file_name} ]]; then
-		wget -c ${snv_prescore_url} -O ${CADD_prescore_dir}/${assembly}_${cadd_version}/incl_anno/${snv_file_name} && \
-		md5sum ${CADD_prescore_dir}/${assembly}_${cadd_version}/incl_anno/${snv_file_name} | grep -q ${snv_prescore_md5} && \
-		wget -c ${snv_prescore_url}.tbi -O ${CADD_prescore_dir}/${assembly}_${cadd_version}/incl_anno/${snv_file_name}.tbi
-	else
-		log "The CADD prescore for ${assembly} is already downloaded at ${CADD_prescore_dir}/${assembly}_${cadd_version}/incl_anno/${snv_file_name}, skip the downloading process"
-	fi
+        wget -c ${snv_prescore_url} -O ${CADD_prescore_dir}/${assembly}_${cadd_version}/incl_anno/${snv_file_name} && \
+        md5sum ${CADD_prescore_dir}/${assembly}_${cadd_version}/incl_anno/${snv_file_name} | grep -q ${snv_prescore_md5} && \
+        wget -c ${snv_prescore_url}.tbi -O ${CADD_prescore_dir}/${assembly}_${cadd_version}/incl_anno/${snv_file_name}.tbi
+    else
+        log "The CADD prescore for ${assembly} is already downloaded at ${CADD_prescore_dir}/${assembly}_${cadd_version}/incl_anno/${snv_file_name}, skip the downloading process"
+    fi
 
     if [[ ! -f ${CADD_prescore_dir}/${assembly}_${cadd_version}/incl_anno/${indel_file_name} ]]; then
-		wget -c ${indel_prescore_url} -O ${CADD_prescore_dir}/${assembly}_${cadd_version}/incl_anno/${indel_file_name} && \
-		md5sum ${CADD_prescore_dir}/${assembly}_${cadd_version}/incl_anno/${indel_file_name} | grep -q ${indel_prescore_md5} && \
-		wget -c ${indel_prescore_url}.tbi -O ${CADD_prescore_dir}/${assembly}_${cadd_version}/incl_anno/${indel_file_name}.tbi
-	else
-		log "The CADD prescore for ${assembly} is already downloaded at ${CADD_prescore_dir}/${assembly}_${cadd_version}/incl_anno/${indel_file_name}, skip the downloading process"
-	fi
+        wget -c ${indel_prescore_url} -O ${CADD_prescore_dir}/${assembly}_${cadd_version}/incl_anno/${indel_file_name} && \
+        md5sum ${CADD_prescore_dir}/${assembly}_${cadd_version}/incl_anno/${indel_file_name} | grep -q ${indel_prescore_md5} && \
+        wget -c ${indel_prescore_url}.tbi -O ${CADD_prescore_dir}/${assembly}_${cadd_version}/incl_anno/${indel_file_name}.tbi
+    else
+        log "The CADD prescore for ${assembly} is already downloaded at ${CADD_prescore_dir}/${assembly}_${cadd_version}/incl_anno/${indel_file_name}, skip the downloading process"
+    fi
 }
 
 
@@ -672,6 +674,24 @@ function AlphaMissense_anno() {
 }
 
 
+function AlphaMissense_pick_intolerant_motifs() {
+    local config_file=${1}
+
+    local alphamissense_vep_vcf=$(read_yaml ${config_file} "alphamissense_vep_vcf")
+    local alphamissense_intolerant_motifs=$(read_yaml ${config_file} "alphamissense_intolerant_motifs")
+    local threads=$(read_yaml ${config_file} "threads")
+    [[ -f ${alphamissense_intolerant_motifs} ]] && \
+    [[ ${alphamissense_intolerant_motifs} -nt ${alphamissense_vep_vcf} ]] && \
+    log "The AlphaMissense intolerant motifs file ${alphamissense_intolerant_motifs} is already generated, skip this step" && return 0
+
+    local pick_intolerant_motifs_py=${SCRIPT_DIR}/am_pick_intolerant_motifs.py
+    python ${pick_intolerant_motifs_py} \
+    --vcf_path ${alphamissense_vep_vcf} \
+    --output ${alphamissense_intolerant_motifs} \
+    --processes ${threads}
+}
+
+
 function AlphaMissense_stat() {
     local config_file=${1}
     local alphamissense_stat=$(read_yaml ${config_file} "alphamissense_pd_stat")
@@ -696,7 +716,7 @@ function AlphaMissense_pick_intolerant_domains() {
     local alphamissense_pd_stat=$(read_yaml ${config_file} "alphamissense_pd_stat")
     local alphamissense_tranx_domain_map=$(read_yaml ${config_file} "alphamissense_tranx_domain_map")
     local alphamissense_intolerant_domains=$(read_yaml ${config_file} "alphamissense_intolerant_domains")
-	local clinvar_intolerant_domains=$(read_yaml ${config_file} "clinvar_intolerant_domains")
+    local clinvar_intolerant_domains=$(read_yaml ${config_file} "clinvar_intolerant_domains")
     local clinvar_intolerance_mechanisms=$(read_yaml ${config_file} "clinvar_intolerance_mechanisms")
 
 
@@ -713,7 +733,7 @@ function AlphaMissense_pick_intolerant_domains() {
     local threads=$(read_yaml ${config_file} "threads")
     local alphamissense_dir=$(dirname ${alphamissense_pd_stat})
     
-	log "Running the AlphaMissense intolerant domains analysis with this command: python ${pick_intolerant_domains_py} --pickle_file ${alphamissense_pd_stat} --threads ${threads} --output_dir ${alphamissense_dir} --intolerant_domains_tsv ${clinvar_intolerant_domains} --mechanism_tsv ${clinvar_intolerance_mechanisms}"
+    log "Running the AlphaMissense intolerant domains analysis with this command: python ${pick_intolerant_domains_py} --pickle_file ${alphamissense_pd_stat} --threads ${threads} --output_dir ${alphamissense_dir} --intolerant_domains_tsv ${clinvar_intolerant_domains} --mechanism_tsv ${clinvar_intolerance_mechanisms}"
     python ${pick_intolerant_domains_py} \
     --pickle_file ${alphamissense_pd_stat} \
     --threads ${threads} \
@@ -1200,74 +1220,74 @@ function LoFtee_install() {
     local PLUGIN_CACHEDIR=${1}
     local config=${2}
 
-	local assembly_version=$(read_yaml "${config}" "assembly")
-	local loftee_parent_dir=$(read_yaml "${config}" "loftee_parent_dir")
+    local assembly_version=$(read_yaml "${config}" "assembly")
+    local loftee_parent_dir=$(read_yaml "${config}" "loftee_parent_dir")
 
-	[[ ! -d ${loftee_parent_dir} ]] && { log "The parent directory for LOFTEE ${loftee_parent_dir} is not found, please check the directory before proceeding"; return 1; }
+    [[ ! -d ${loftee_parent_dir} ]] && { log "The parent directory for LOFTEE ${loftee_parent_dir} is not found, please check the directory before proceeding"; return 1; }
 
-	local loftee_repo=$(read_yaml "${config}" "loftee_repo")
-	local human_ancestor_fasta=$(read_yaml "${config}" "human_ancestor_fasta")
-	local loftee_conservation_file=$(read_yaml "${config}" "loftee_conservation_file")
-	local gerp_bigwig=$(read_yaml "${config}" "gerp_bigwig")
+    local loftee_repo=$(read_yaml "${config}" "loftee_repo")
+    local human_ancestor_fasta=$(read_yaml "${config}" "human_ancestor_fasta")
+    local loftee_conservation_file=$(read_yaml "${config}" "loftee_conservation_file")
+    local gerp_bigwig=$(read_yaml "${config}" "gerp_bigwig")
 
-	if [[ ${assembly_version} == "GRCh37" ]] || [[ ${assembly_version} == "hg19" ]]; then
-		[[ -d ${loftee_repo} ]] && [[ -f ${loftee_repo}/LoF.pm ]] && \
-	    [[ -f ${human_ancestor_fasta} ]] && \
-		[[ -f ${loftee_conservation_file} ]] && \
-		log "The LOFTEE repository for hg19/GRCh37 is already installed at ${loftee_repo}" && \
-		return 0
-	fi
+    if [[ ${assembly_version} == "GRCh37" ]] || [[ ${assembly_version} == "hg19" ]]; then
+        [[ -d ${loftee_repo} ]] && [[ -f ${loftee_repo}/LoF.pm ]] && \
+        [[ -f ${human_ancestor_fasta} ]] && \
+        [[ -f ${loftee_conservation_file} ]] && \
+        log "The LOFTEE repository for hg19/GRCh37 is already installed at ${loftee_repo}" && \
+        return 0
+    fi
 
-	if [[ ${assembly_version} == "GRCh38" ]] || [[ ${assembly_version} == "hg38" ]]; then
-		[[ -d ${loftee_repo} ]] && [[ -f ${loftee_repo}/LoF.pm ]] && \
-	    [[ -f ${human_ancestor_fasta} ]] && \
-		[[ -f ${loftee_conservation_file} ]] && \
-		[[ -f ${gerp_bigwig} ]] && \
-		log "The LOFTEE repository for hg38/GRCh38 is already installed at ${loftee_repo}" && \
-		return 0
-	fi
+    if [[ ${assembly_version} == "GRCh38" ]] || [[ ${assembly_version} == "hg38" ]]; then
+        [[ -d ${loftee_repo} ]] && [[ -f ${loftee_repo}/LoF.pm ]] && \
+        [[ -f ${human_ancestor_fasta} ]] && \
+        [[ -f ${loftee_conservation_file} ]] && \
+        [[ -f ${gerp_bigwig} ]] && \
+        log "The LOFTEE repository for hg38/GRCh38 is already installed at ${loftee_repo}" && \
+        return 0
+    fi
 
 
     log "You need to download the prescores yourself to ${PLUGIN_CACHEDIR}. And the detailed info can be found in the corresponding github repo https://github.com/konradjk/loftee"
     log "Example running command: perl variant_effect_predictor.pl [--other options to VEP] --plugin LoF,loftee_path:/path/to/loftee,human_ancestor_fa:/path/to/human_ancestor.fa.gz"
     if [[ ${assembly_version} == "GRCh37" ]] || [[ ${assembly_version} == "hg19" ]]; then
-	    if [[ ! -d ${loftee_parent_dir}/loftee-hg19 ]]; then
-			git clone https://github.com/konradjk/loftee.git ${loftee_parent_dir}/loftee-hg19 && \
-			update_yaml "${config}" "loftee_repo" "${loftee_parent_dir}/loftee-hg19" && \
-			conda env config vars set PERL5LIB="${loftee_parent_dir}/loftee-hg19/:$PERL5LIB" && \
-			log "The LOFTEE repository for hg19/GRCh37 is installed at ${loftee_parent_dir}/loftee-hg19 and the PERL5LIB is set to ${PERL5LIB}"
-		elif [[ -d ${loftee_parent_dir}/loftee-hg19 ]] && [[ -f ${loftee_parent_dir}/loftee-hg19/.git ]]; then
-			cd ${loftee_parent_dir}/loftee-hg19 && \
-			git pull && \
-			log "The LOFTEE repository for hg19/GRCh37 is updated at ${loftee_parent_dir}/loftee-hg19 and the PERL5LIB is set to ${PERL5LIB}"
-		elif [[ -d ${loftee_parent_dir}/loftee-hg19 ]] && [[ -f ${loftee_parent_dir}/loftee-hg19/LoF.pm ]]; then
-			log "It seems the LOFTEE repository for hg19/GRCh37 is already installed at ${loftee_parent_dir}/loftee-hg19 but we cant update it by git pull since it is not a git repo"
-		else
-			log "Failed to install the LOFTEE repository for hg19/GRCh37"
-			return 1
-		fi
+        if [[ ! -d ${loftee_parent_dir}/loftee-hg19 ]]; then
+            git clone https://github.com/konradjk/loftee.git ${loftee_parent_dir}/loftee-hg19 && \
+            update_yaml "${config}" "loftee_repo" "${loftee_parent_dir}/loftee-hg19" && \
+            conda env config vars set PERL5LIB="${loftee_parent_dir}/loftee-hg19/:$PERL5LIB" && \
+            log "The LOFTEE repository for hg19/GRCh37 is installed at ${loftee_parent_dir}/loftee-hg19 and the PERL5LIB is set to ${PERL5LIB}"
+        elif [[ -d ${loftee_parent_dir}/loftee-hg19 ]] && [[ -f ${loftee_parent_dir}/loftee-hg19/.git ]]; then
+            cd ${loftee_parent_dir}/loftee-hg19 && \
+            git pull && \
+            log "The LOFTEE repository for hg19/GRCh37 is updated at ${loftee_parent_dir}/loftee-hg19 and the PERL5LIB is set to ${PERL5LIB}"
+        elif [[ -d ${loftee_parent_dir}/loftee-hg19 ]] && [[ -f ${loftee_parent_dir}/loftee-hg19/LoF.pm ]]; then
+            log "It seems the LOFTEE repository for hg19/GRCh37 is already installed at ${loftee_parent_dir}/loftee-hg19 but we cant update it by git pull since it is not a git repo"
+        else
+            log "Failed to install the LOFTEE repository for hg19/GRCh37"
+            return 1
+        fi
         local human_ancestor_fasta_url="https://s3.amazonaws.com/bcbio_nextgen/human_ancestor.fa.gz"
         local human_ancestor_fasta_fai_url="https://s3.amazonaws.com/bcbio_nextgen/human_ancestor.fa.gz.fai"
         local conservation_file_url="https://personal.broadinstitute.org/konradk/loftee_data/GRCh37/phylocsf_gerp.sql.gz"
     elif [[ ${assembly_version} == "GRCh38" ]] || [[ ${assembly_version} == "hg38" ]]; then
-		if [[ ! -d ${loftee_parent_dir}/loftee-hg38 ]]; then
-			git clone https://github.com/konradjk/loftee.git ${loftee_parent_dir}/loftee-hg38 && \
-			cd ${loftee_parent_dir}/loftee-hg38 && \
-			git checkout grch38 && \
-			git pull && \
-			update_yaml "${config}" "loftee_repo" "${loftee_parent_dir}/loftee-hg38" && \
-			conda env config vars set PERL5LIB="${loftee_parent_dir}/loftee-hg38/:$PERL5LIB" && \
-			log "The LOFTEE repository for hg38/GRCh38 is installed at ${loftee_parent_dir}/loftee-hg38 and the PERL5LIB is set to ${PERL5LIB}"
-		elif [[ -d ${loftee_parent_dir}/loftee-hg38 ]] && [[ -f ${loftee_parent_dir}/loftee-hg38/.git ]]; then
-			cd ${loftee_parent_dir}/loftee-hg38 && \
-			git pull && \
-			log "The LOFTEE repository for hg38/GRCh38 is updated at ${loftee_parent_dir}/loftee-hg38 and the PERL5LIB is set to ${PERL5LIB}"
-		elif [[ -d ${loftee_parent_dir}/loftee-hg38 ]] && [[ -f ${loftee_parent_dir}/loftee-hg38/LoF.pm ]]; then
-			log "It seems the LOFTEE repository for hg38/GRCh38 is already installed at ${loftee_parent_dir}/loftee-hg38 but we cant update it by git pull since it is not a git repo"
-		else
-			log "Failed to install the LOFTEE repository for hg38/GRCh38"
-			return 1
-		fi
+        if [[ ! -d ${loftee_parent_dir}/loftee-hg38 ]]; then
+            git clone https://github.com/konradjk/loftee.git ${loftee_parent_dir}/loftee-hg38 && \
+            cd ${loftee_parent_dir}/loftee-hg38 && \
+            git checkout grch38 && \
+            git pull && \
+            update_yaml "${config}" "loftee_repo" "${loftee_parent_dir}/loftee-hg38" && \
+            conda env config vars set PERL5LIB="${loftee_parent_dir}/loftee-hg38/:$PERL5LIB" && \
+            log "The LOFTEE repository for hg38/GRCh38 is installed at ${loftee_parent_dir}/loftee-hg38 and the PERL5LIB is set to ${PERL5LIB}"
+        elif [[ -d ${loftee_parent_dir}/loftee-hg38 ]] && [[ -f ${loftee_parent_dir}/loftee-hg38/.git ]]; then
+            cd ${loftee_parent_dir}/loftee-hg38 && \
+            git pull && \
+            log "The LOFTEE repository for hg38/GRCh38 is updated at ${loftee_parent_dir}/loftee-hg38 and the PERL5LIB is set to ${PERL5LIB}"
+        elif [[ -d ${loftee_parent_dir}/loftee-hg38 ]] && [[ -f ${loftee_parent_dir}/loftee-hg38/LoF.pm ]]; then
+            log "It seems the LOFTEE repository for hg38/GRCh38 is already installed at ${loftee_parent_dir}/loftee-hg38 but we cant update it by git pull since it is not a git repo"
+        else
+            log "Failed to install the LOFTEE repository for hg38/GRCh38"
+            return 1
+        fi
         local gerp_bigwig_url="https://personal.broadinstitute.org/konradk/loftee_data/GRCh38/gerp_conservation_scores.homo_sapiens.GRCh38.bw"
         local human_ancestor_fasta_url="https://personal.broadinstitute.org/konradk/loftee_data/GRCh38/human_ancestor.fa.gz"
         local human_ancestor_fasta_fai_url="https://personal.broadinstitute.org/konradk/loftee_data/GRCh38/human_ancestor.fa.gz.fai"
@@ -1281,7 +1301,7 @@ function LoFtee_install() {
     # Check if the files are already downloaded
     if [[ ! -f ${PLUGIN_CACHEDIR}/LoFtee/${assembly_version}/human_ancestor.fa.gz ]]; then
         wget ${human_ancestor_fasta_url} -O ${PLUGIN_CACHEDIR}/LoFtee/${assembly_version}/human_ancestor.fa.gz && \
-		update_yaml "${config}" "human_ancestor_fasta" "${PLUGIN_CACHEDIR}/LoFtee/${assembly_version}/human_ancestor.fa.gz"
+        update_yaml "${config}" "human_ancestor_fasta" "${PLUGIN_CACHEDIR}/LoFtee/${assembly_version}/human_ancestor.fa.gz"
     fi
 
     if [[ ! -f ${PLUGIN_CACHEDIR}/LoFtee/${assembly_version}/human_ancestor.fa.gz.fai ]]; then
@@ -1290,13 +1310,13 @@ function LoFtee_install() {
 
     if [[ ! -f ${PLUGIN_CACHEDIR}/LoFtee/${assembly_version}/phylocsf_gerp.sql.gz ]]; then
         wget ${conservation_file_url} -O ${PLUGIN_CACHEDIR}/LoFtee/${assembly_version}/phylocsf_gerp.sql.gz && \
-		gunzip -f ${PLUGIN_CACHEDIR}/LoFtee/${assembly_version}/phylocsf_gerp.sql.gz && \
-		update_yaml "${config}" "loftee_conservation_file" "${PLUGIN_CACHEDIR}/LoFtee/${assembly_version}/phylocsf_gerp.sql"
+        gunzip -f ${PLUGIN_CACHEDIR}/LoFtee/${assembly_version}/phylocsf_gerp.sql.gz && \
+        update_yaml "${config}" "loftee_conservation_file" "${PLUGIN_CACHEDIR}/LoFtee/${assembly_version}/phylocsf_gerp.sql"
     fi
 
     if [[ ${gerp_bigwig_url} =~ \.bw$ ]] && [[ ! -f ${PLUGIN_CACHEDIR}/LoFtee/${assembly_version}/gerp_conservation_scores.homo_sapiens.bw ]]; then
         wget ${gerp_bigwig_url} -O ${PLUGIN_CACHEDIR}/LoFtee/${assembly_version}/gerp_conservation_scores.homo_sapiens.bw && \
-		update_yaml "${config}" "gerp_bigwig" "${PLUGIN_CACHEDIR}/LoFtee/${assembly_version}/gerp_conservation_scores.homo_sapiens.bw"
+        update_yaml "${config}" "gerp_bigwig" "${PLUGIN_CACHEDIR}/LoFtee/${assembly_version}/gerp_conservation_scores.homo_sapiens.bw"
     elif [[ -z ${gerp_bigwig_url} ]]; then
         log "Specifying the hg19/GRCh37 assembly version. So the bigwig file ${gerp_bigwig_url} is not available" && \
         update_yaml "${config}" "gerp_bigwig" ""
@@ -1362,9 +1382,9 @@ function main_install() {
     ${conda_env_name} || \
     { log "Failed to install VEP plugins"; return 1; }
 
-	# Install LOFTEE separately despite it is also a VEP plugin
-	LoFtee_install ${vep_plugins_cachedir} ${config_file} || \
-	{ log "Failed to install LOFTEE"; return 1; }
+    # Install LOFTEE separately despite it is also a VEP plugin
+    LoFtee_install ${vep_plugins_cachedir} ${config_file} || \
+    { log "Failed to install LOFTEE"; return 1; }
 
     # 4. Install gnomAD VCF (basically download bgzipped VCF files)
     local gnomad_vcf_chrX=$(read_yaml "$config_file" "gnomad_vcf_chrX")
@@ -1396,7 +1416,7 @@ function main_install() {
     ${assembly} || \
     { log "Failed to install CADD prescores"; return 1; }
 
-	log "Congratulations! The installation is completed!"
+    log "Congratulations! The installation is completed!"
 }
 
 

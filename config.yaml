@@ -1,0 +1,106 @@
+# config.yaml
+
+# Note that the paths specified below are all data that can't be included in the GitHub repo (primarily due to the size limit of GitHub repo)
+tmp_dir: "/paedyl01/disk1/yangyxt/test_tmp/test_acmg"
+base_dir: "/paedyl01/disk1/yangyxt/acmg_auto"
+
+# Below we specify the conda env yml file in relative path
+conda_env_yaml: "/paedyl01/disk1/yangyxt/acmg_auto/acmg_auto_rough.yml"
+conda_env_name: "acmg"
+
+# Below we specify the input vcf file in absolute paths
+input_vcf: "/paedyl01/disk1/yangyxt/test_acmg_auto/TEST_FAM.filtered.vcf.gz"
+ped_file: "/paedyl01/disk1/yangyxt/test_acmg_auto/TEST_FAM.ped"
+
+# Note that the assembly version must be consistent with the reference genome
+# Below we specify the reference genome in absolute paths because the size of the file is too large to be included in the GitHub repo
+assembly: hg19
+ref_genome: "/paedyl01/disk1/yangyxt/indexed_genome/ucsc.hg19.fasta"
+hg38_hg19_chain: "/paedyl01/disk1/yangyxt/acmg_auto/data/liftover/hg38ToHg19.over.chain.gz"
+
+# Below we specify the output directory in absolute paths
+output_dir: "/paedyl01/disk1/yangyxt/test_acmg_auto"
+
+# Below we specify the number of threads to be used
+threads: 72
+
+# Below we specify the allele frequency cutoff for common variants
+af_cutoff: 0.03
+
+# Below we specify the path to the gnomAD vcf file for chromosome X and we'll use that template to deduce the paths to other chromosome VCF files, the paths should be relatively constant
+gnomad_vcf_chrX: /paedyl01/disk1/yangyxt/public_data/gnomAD/v4_dataset/gnomad.joint.v4.1.sites.hg19.chrX.vcf.gz
+
+# Below we specify the path to the ClinVar VCF file, the path should be relatively constant
+clinvar_vcf: /paedyl01/disk1/yangyxt/public_data/clinvar/clinvar.hg19.vep.vcf.gz
+clinvar_pd_stat: /paedyl01/disk1/yangyxt/public_data/clinvar/clinvar.hg19.vep.prot.domain.stats.pkl
+clinvar_aa_stat: /paedyl01/disk1/yangyxt/public_data/clinvar/clinvar.hg19.vep.aa_change.stats.pkl
+clinvar_vcf_dir: /paedyl01/disk1/yangyxt/public_data/clinvar
+clinvar_intolerant_domains: /paedyl01/disk1/yangyxt/public_data/clinvar/intolerant_domains.tsv
+clinvar_intolerance_mechanisms: /paedyl01/disk1/yangyxt/public_data/clinvar/domain_mechanism_analysis.tsv
+
+# Below we specify the cache directory for VEP, you need to specify the locations before starting installing VEP and its plugins
+vep_cache_dir: "/paedyl01/disk1/yangyxt/public_data/VEP_caches"
+# Below we specify the directory containing the VEP plugins executable files
+vep_plugins_dir: "/paedyl01/disk1/yangyxt/public_data/VEP_plugins"
+# Below we specify the directory for storing the VEP plugin caches
+vep_plugins_cachedir: "/paedyl01/disk1/yangyxt/public_data/VEP_plugins_caches"
+
+# The UTRAnnotator plugin cache file
+utr_annotator_file: /paedyl01/disk1/yangyxt/public_data/VEP_plugins_caches/UTRannotator/uORF_5UTR_GRCh37_PUBLIC.txt
+# The LOEUF plugin cache file
+loeuf_prescore: /paedyl01/disk1/yangyxt/acmg_auto/data/loeuf/loeuf_dataset.tsv.gz
+
+# The LOFTEE plugin cache file and LOFTEE repository
+loftee_parent_dir: /paedyl01/disk1/yangyxt/public_data/VEP_plugins/LoFtee_repos
+loftee_repo: /paedyl01/disk1/yangyxt/public_data/VEP_plugins/LoFtee_repos/loftee-hg19
+human_ancestor_fasta: /paedyl01/disk1/yangyxt/public_data/VEP_plugins_caches/LoFtee/hg19/human_ancestor.fa.gz
+# The GERP SQL file must not be compressed.
+loftee_conservation_file: /paedyl01/disk1/yangyxt/public_data/VEP_plugins_caches/LoFtee/hg19/phylocsf_gerp.sql
+# Below is only available for GRCh38
+gerp_bigwig: 
+
+# The AlphaMissense plugin cache file
+alphamissense_prescore: /paedyl01/disk1/yangyxt/public_data/VEP_plugins_caches/AlphaMissense/AlphaMissense_hg19.tsv.gz
+alphamissense_vcf: /paedyl01/disk1/yangyxt/public_data/VEP_plugins_caches/AlphaMissense/AlphaMissense_hg19.vcf.gz
+alphamissense_vep_vcf: /paedyl01/disk1/yangyxt/public_data/VEP_plugins_caches/AlphaMissense/AlphaMissense_hg19.vep.vcf.gz
+alphamissense_pd_stat: /paedyl01/disk1/yangyxt/public_data/VEP_plugins_caches/AlphaMissense/AlphaMissense_hg19.vep.prot.domain.stats.pkl
+alphamissense_tranx_domain_map: /paedyl01/disk1/yangyxt/public_data/VEP_plugins_caches/AlphaMissense/transcript_exon_domain_mapping.pkl
+alphamissense_intolerant_domains: /paedyl01/disk1/yangyxt/public_data/VEP_plugins_caches/AlphaMissense/domain_tolerance_analysis.tsv
+alphamissense_intolerant_motifs: /paedyl01/disk1/yangyxt/public_data/VEP_plugins_caches/AlphaMissense/AlphaMissense_hg19.kde.pkl
+
+# Final intolerant domains combining results from AlphaMissense and ClinVar
+all_intolerant_domains: /paedyl01/disk1/yangyxt/public_data/VEP_plugins_caches/AlphaMissense/all_intolerant_domains.pkl
+
+# The SpliceAI plugin cache file, snv and indel
+spliceai_snv_prescore: /paedyl01/disk1/yangyxt/public_data/VEP_plugins_caches/SpliceAI/hg19/spliceai_scores.raw.snv.hg19.vcf.gz
+spliceai_indel_prescore: /paedyl01/disk1/yangyxt/public_data/VEP_plugins_caches/SpliceAI/hg19/spliceai_scores.raw.indel.hg19.vcf.gz
+# The PrimateAI plugin cache file
+primateai_prescore: /paedyl01/disk1/yangyxt/public_data/VEP_plugins_caches/PrimateAI/hg19/PrimateAI_scores_v0.2_GRCh37_sorted.tsv.bgz
+# The Conservation cache file
+conservation_file: /paedyl01/disk1/yangyxt/public_data/VEP_plugins_caches/Conservation/gerp_conservation_scores.homo_sapiens.GRCh37.bw
+# The SpliceVault plugin cache file
+splicevault_url: "https://ftp.ensembl.org/pub/current_variation/SpliceVault/SpliceVault_data_GRCh38.tsv.gz"
+splicevault_prescore: "/paedyl01/disk1/yangyxt/public_data/VEP_plugins_caches/SpliceVault/SpliceVault_data_GRCh37.tsv.gz"
+
+# Below we specify the path to the CADD base directory
+cadd_output_file: /paedyl01/disk1/yangyxt/test_acmg_auto/TEST_FAM.filtered.anno.cadd.tsv
+cadd_base_dir: /paedyl01/disk1/yangyxt/Tools/CADD/CADD-scripts-1.7.2
+cadd_zip_download_url: "https://github.com/kircherlab/CADD-scripts/archive/refs/tags/v1.7.2.zip"
+cadd_GRCh37_anno_md5: "22549309c65de8d25e903695aa4f749f"
+cadd_GRCh38_anno_md5: "205d3e702df3565efb424e2ca80c9d25"
+cadd_GRCh37_snv_anno_url: "https://krishna.gs.washington.edu/download/CADD/v1.7/GRCh37/whole_genome_SNVs_inclAnno.tsv.gz"
+cadd_GRCh37_snv_anno_md5: "1b89cfd7da4e2a8f336c1ec33a6f44eb"
+cadd_GRCh37_indel_anno_url: "https://krishna.gs.washington.edu/download/CADD/v1.7/GRCh37/gnomad.genomes-exomes.r4.0.indel_inclAnno.tsv.gz"
+cadd_GRCh37_indel_anno_md5: "3d88f8fde9df07060b4f8fe07a0d5d5d"
+cadd_GRCh38_snv_anno_url: "https://krishna.gs.washington.edu/download/CADD/v1.7/GRCh38/whole_genome_SNVs_inclAnno.tsv.gz"
+cadd_GRCh38_snv_anno_md5: "ed9d3e029686375e2ac80e96b5d0067a"
+cadd_GRCh38_indel_anno_url: "https://krishna.gs.washington.edu/download/CADD/v1.7/GRCh38/gnomad.genomes.r4.0.indel_inclAnno.tsv.gz"
+cadd_GRCh38_indel_anno_md5: "00ce2d2431a6ec3324b23ff625f4e0cd"
+cadd_version: "v1.7"
+
+
+# Below we specify the path to the VCF file containing the variants from alternate disease patients, make sure it is normalized and biallelic
+# Make sure that the VCF file is in an reference genome that is consistent with the processing VCF file
+alt_disease_vcf: /paedyl01/disk1/yangyxt/public_data/ShortStatue/ShortStature.hg19.vcf.gz
+extreme_rare_PAF: 0.0001
+exp_disease_incidence: 0.001

@@ -83,28 +83,47 @@ class AMMotifAnalyzer:
             # Extract the CSQ header line
             csq_fields = vcf.header.info['CSQ'].description.split('Format: ')[1].split('|')
             gene_field = csq_fields.index('Gene')
+            transcript_field = csq_fields.index('Feature')
+            consq_field = csq_fields.index('Consequence')
+
+            logger.info(f"CSQ fields are {csq_fields}, gene field index is {gene_field}, transcript field index is {transcript_field}, consq field index is {consq_field}")
             count = 0
             for record in vcf:
                 try:
                     am_score = float(record.info['AM_PATHOGENICITY'])
-                    csq_field_str = record.info.get("CSQ", [""])[0]
-                    # logger.info(f"CSQ field string: {csq_field_str}")
-                    if not csq_field_str:
-                        logger.error(f"No CSQ field string found for record: {record}")
-                        continue
-                    gene = csq_field_str.split('|')[gene_field]
+                    target_tranx = record.info.get('TRANSCRIPT')[:-2]
                     pvar = record.info.get('PVAR')
-                    if not gene or not pvar:
-                        logger.error(f"No gene or PVAR found for record: {record}")
+                    transcript_specific_csqs = record.info.get("CSQ", [])
+                    logger.debug(f"Found {len(transcript_specific_csqs)} transcript specific CSQ annotations for record")
+                    if not transcript_specific_csqs:
+                        logger.error(f"No CSQ field annotations found for record: {record}")
                         continue
 
-                    # Example PVAR: "M10I" => ref_aa = 'M', aa_pos = 10, alt_aa = 'I'
-                    ref_aa = pvar[0]  # 'M'
-                    aa_pos_str = ''.join(filter(str.isdigit, pvar))  # '10'
-                    aa_pos = int(aa_pos_str)
-                    
-                    self.gene_variants[gene].append((aa_pos, ref_aa, am_score))
-                    count += 1
+                    for tranx_specific_anno in transcript_specific_csqs:
+                        tranx_specific_anno = tranx_specific_anno.split('|')
+                        gene = tranx_specific_anno[gene_field]
+                        transcript = tranx_specific_anno[transcript_field]
+                        consequence = tranx_specific_anno[consq_field]
+                        logger.debug(f"Gene: {gene}, transcript: {transcript}, consequence: {consequence}")
+
+                        if consequence != 'missense_variant':
+                            continue
+                        
+                        if transcript != target_tranx:
+                            continue
+                        
+                        if not gene or not pvar:
+                            logger.error(f"No gene or PVAR found for record: {record}")
+                            continue
+
+                        # Example PVAR: "M10I" => ref_aa = 'M', aa_pos = 10, alt_aa = 'I'
+                        ref_aa = pvar[0]  # 'M'
+                        aa_pos_str = ''.join(filter(str.isdigit, pvar))  # '10'
+                        aa_pos = int(aa_pos_str)
+                        
+                        self.gene_variants[gene].append((aa_pos, ref_aa, am_score))
+                        logger.debug(f"Stored AA position {aa_pos}, ref_AA {ref_aa}, AM_score {am_score} for Gene {gene} and transcript {transcript}")
+                        count += 1
                 except (KeyError, ValueError) as e:
                     logger.warning(f"Skipping record due to parse error: {e}")
                     continue
@@ -341,7 +360,6 @@ def main():
     args = parser.parse_args()
 
     analyzer = AMMotifAnalyzer(args.vcf_path, args.bandwidth)
-    analyzer.parse_vcf()
 
     results = analyzer.identify_intolerant_regions(n_processes=args.processes)
 

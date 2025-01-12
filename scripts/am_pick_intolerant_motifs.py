@@ -2,10 +2,10 @@
 
 import os
 # Limit OpenBLAS threads
-os.environ["OPENBLAS_NUM_THREADS"] = "1"
-os.environ["MKL_NUM_THREADS"] = "1"
-os.environ["NUMEXPR_NUM_THREADS"] = "1"
-os.environ["OMP_NUM_THREADS"] = "1"
+os.environ["OPENBLAS_NUM_THREADS"] = "4"
+os.environ["MKL_NUM_THREADS"] = "4"
+os.environ["NUMEXPR_NUM_THREADS"] = "4"
+os.environ["OMP_NUM_THREADS"] = "4"
 
 
 import pysam
@@ -68,7 +68,7 @@ class AMMotifAnalyzer:
         self.vcf_path = vcf_path
         self.bandwidth = bandwidth
         # Store list of (pos, ref_aa, score) for each gene
-        self.gene_variants = defaultdict(list)
+        self.transcript_variants = defaultdict(list)
 
     def parse_vcf(self):
         """
@@ -121,14 +121,14 @@ class AMMotifAnalyzer:
                         aa_pos_str = ''.join(filter(str.isdigit, pvar))  # '10'
                         aa_pos = int(aa_pos_str)
                         
-                        self.gene_variants[gene].append((aa_pos, ref_aa, am_score))
+                        self.transcript_variants[target_tranx].append((aa_pos, ref_aa, am_score))
                         logger.debug(f"Stored AA position {aa_pos}, ref_AA {ref_aa}, AM_score {am_score} for Gene {gene} and transcript {transcript}")
                         count += 1
                 except (KeyError, ValueError) as e:
                     logger.warning(f"Skipping record due to parse error: {e}")
                     continue
                     
-            logger.info(f"Stored {count} variant entries across {len(self.gene_variants)} genes.")
+            logger.info(f"Stored {count} variant entries across {len(self.transcript_variants)} genes.")
         except Exception as e:
             logger.error(f"Error reading VCF file: {e}")
             raise
@@ -200,36 +200,36 @@ class AMMotifAnalyzer:
 
 
 
-    def process_single_gene(self, gene_data) -> tuple[str, dict]:
+    def process_single_transcript(self, transcript_data) -> tuple[str, dict]:
         """
         Process a single gene's data. Must be a standalone function for Pool.
         
         Args:
-            gene_data: tuple of (gene_id, variant_list)
+            transcript_data: tuple of (gene_id, variant_list)
             
         Returns:
             tuple of (gene_id, regions_dict)
         """
-        gene, variants = gene_data
+        transcript, variants = transcript_data
         if len(variants) < 5:
-            return gene, {}
+            return transcript, {}
             
         # Group variants by position
         pos_variants = defaultdict(list)
         pos_ref_aa = {}
         for pos, ref_aa, score in variants:
             pos_variants[pos].append(score)
-            pos_ref_aa[pos] = ref_aa
-            
+            pos_ref_aa[int(pos)] = ref_aa
+        
         # Get arrays - convert to numpy arrays immediately
         positions = np.array(sorted(pos_variants.keys()))
         max_scores = np.array([max(pos_variants[p]) for p in positions])
         min_scores = np.array([min(pos_variants[p]) for p in positions])
 
-        assert np.all(max_scores >= min_scores), f"Error in {gene}: max_scores < min_scores at some positions: Here is the max_scores: {max_scores}, and min_scores: {min_scores}"
+        assert np.all(max_scores >= min_scores), f"Error in {transcript}: max_scores < min_scores at some positions: Here is the max_scores: {max_scores}, and min_scores: {min_scores}"
         
         if not len(positions):
-            return gene, {}
+            return transcript, {}
             
         # Evaluate KDE at all integer positions
         query_pos = np.arange(min(positions), max(positions) + 1)
@@ -242,29 +242,29 @@ class AMMotifAnalyzer:
         max_density_threshold = self.compute_density_threshold(
             target_score=0.564,
             total_weight=np.sum(max_scores),
-            gene_name=gene
+            gene_name=transcript
         )
         logger.info(f"density_threshold for max_score: {max_density_threshold}")
 
         min_density_threshold = self.compute_density_threshold(
             target_score=0.2,
             total_weight=np.sum(min_scores),
-            gene_name=gene
+            gene_name=transcript
         )
         logger.info(f"density_threshold for min_score: {min_density_threshold}")
         
         # Find regions where local weighted density indicates avg score > 0.564
-        max_regions = self._find_high_density_regions(query_pos, kde_max, gene, pos_ref_aa, max_density_threshold)
-        logger.info(f"Found {len(max_regions)} max_regions for {gene}, they looks like {max_regions}")
-        min_regions = self._find_high_density_regions(query_pos, kde_min, gene, pos_ref_aa, min_density_threshold)
-        logger.info(f"Found {len(min_regions)} min_regions for {gene}, they looks like {min_regions}")
+        max_regions = self._find_high_density_regions(query_pos, kde_max, pos_ref_aa, max_density_threshold)
+        logger.info(f"Found {len(max_regions)} max_regions for {transcript}, they looks like {max_regions}")
+        min_regions = self._find_high_density_regions(query_pos, kde_min, pos_ref_aa, min_density_threshold)
+        logger.info(f"Found {len(min_regions)} min_regions for {transcript}, they looks like {min_regions}")
         
         if max_regions or min_regions:
-            return gene, {
+            return transcript, {
                 'max_score_regions': max_regions,
                 'min_score_regions': min_regions
             }
-        return gene, {}
+        return transcript, {}
 
 
 
@@ -276,18 +276,18 @@ class AMMotifAnalyzer:
             bandwidth: KDE bandwidth parameter
             n_processes: number of processes to use (default: CPU count)
         """
-        if not self.gene_variants:
+        if not self.transcript_variants:
             self.parse_vcf()
             
         if n_processes is None:
             n_processes = mp.cpu_count()
             
         # Convert data to list of tuples for Pool
-        gene_data = list(self.gene_variants.items())
+        transcript_data = list(self.transcript_variants.items())
         
         # Create Pool and process genes in parallel
         with mp.Pool(n_processes) as pool:
-            results = pool.map(self.process_single_gene, gene_data)
+            results = pool.map(self.process_single_transcript, transcript_data)
             
         # Combine results into final dictionary
         return {tid: regions for tid, regions in results if regions}
@@ -297,7 +297,6 @@ class AMMotifAnalyzer:
     def _find_high_density_regions(self, 
                                    positions: np.ndarray, 
                                    densities: np.ndarray, 
-                                   gene_name: str, 
                                    pos_ref_aa: dict,
                                    density_threshold: float) -> list:
         """
@@ -310,39 +309,24 @@ class AMMotifAnalyzer:
             densities: array of density values at each position
         
         Returns:
-            List of region dicts, each with:
-            {
-                'start': int,
-                'end': int,
-                'length': int,
-                'positions': list of positions
-            }
+            set of positions, each position is a string of REF_AA + POSITION: "A10"
         """
         
-        regions = []
-        current_positions = []
+        regions = set()
+        current_positions = set()
         
         for pos, density in zip(positions, densities):
             if density > density_threshold:
-                current_positions.append(f"{pos_ref_aa[pos]}{pos}")
+                if int(pos) in pos_ref_aa:
+                    current_positions.add(f"{pos_ref_aa[int(pos)]}{pos}")
             else:
                 if current_positions:  # end of a region
-                    regions.append({
-                        'start': int(current_positions[0]),
-                        'end': int(current_positions[-1]),
-                        'length': int(len(current_positions)),
-                        'positions': current_positions
-                    })
-                    current_positions = []
+                    regions.update(current_positions)
+                    current_positions = set()
                 
         # Handle last region if exists
         if current_positions:
-            regions.append({
-                'start': int(current_positions[0]),
-                'end': int(current_positions[-1]),
-                'length': int(len(current_positions)),
-                'positions': current_positions
-            })
+            regions.update(current_positions)
         
         return regions
 
@@ -366,6 +350,7 @@ def main():
     # Save or print results
     if args.output:
         if args.output.endswith('.pkl'):
+			# Convert positions to set instead of list
             with open(args.output, 'wb') as f:
                 pickle.dump(results, f)
             logger.info(f"Results saved to {args.output} in pickle format.")

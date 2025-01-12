@@ -413,7 +413,8 @@ def analyze_domain_data(pickle_file: str,
                        intolerant_domains_tsv: str = None,
                        mechanism_tsv: str = None,
                        threads: int = 12,
-                       fdr_threshold: float = 0.05):
+                       fdr_threshold: float = 0.05,
+                       assembly: str = 'hg19'):
     """
     Analyze domain data from the pickle file.
     
@@ -436,8 +437,8 @@ def analyze_domain_data(pickle_file: str,
     transcript_map = generate_transcript_exon_domain_map(scores_dict)
     
     # Save the mapping to both JSON and pickle files
-    mapping_json = os.path.join(output_dir, 'transcript_exon_domain_mapping.json')
-    mapping_pickle = os.path.join(output_dir, 'transcript_exon_domain_mapping.pkl')
+    mapping_json = os.path.join(output_dir, f'transcript_exon_domain_mapping.{assembly}.json')
+    mapping_pickle = os.path.join(output_dir, f'transcript_exon_domain_mapping.{assembly}.pkl')
     
     with open(mapping_json, 'w') as f:
         json.dump(transcript_map, f, indent=2)
@@ -506,10 +507,10 @@ def analyze_domain_data(pickle_file: str,
             df_rows.append(row)
             
         results_df = pd.DataFrame(df_rows)
-        results_df.to_csv(os.path.join(output_dir, 'domain_tolerance_analysis.tsv'), 
+        results_df.to_csv(os.path.join(output_dir, f'domain_tolerance_analysis.{assembly}.tsv'), 
                          sep='\t', index=False)
         
-        logger.info(f"The domain tolerance analysis results are saved to {os.path.join(output_dir, 'domain_tolerance_analysis.tsv')}")
+        logger.info(f"The domain tolerance analysis results are saved to {os.path.join(output_dir, f'domain_tolerance_analysis.{assembly}.tsv')}")
         logger.info(f"Completed tolerance analysis for {len(tolerance_results)} domains")
         logger.info(f"Found {sum(rejected)} domains that are significantly more tolerant "
                    f"than reference domains (FDR < {fdr_threshold})")
@@ -530,7 +531,7 @@ def analyze_domain_data(pickle_file: str,
         all_intolerant_domains = analysis_intolerant_domains.union(input_intolerant_domains)
         
         # Save merged intolerant domains to pickle file
-        intolerant_domains_pickle = os.path.join(output_dir, 'all_intolerant_domains.pkl')
+        intolerant_domains_pickle = os.path.join(output_dir, f'all_intolerant_domains.{assembly}.pkl')
         with open(intolerant_domains_pickle, 'wb') as f:
             pickle.dump(all_intolerant_domains, f)
         
@@ -547,10 +548,12 @@ if __name__ == '__main__':
     parser.add_argument('--intolerant_domains_tsv', required=True, help='Path to TSV file containing intolerant domains (Based on ClinVar)')
     parser.add_argument('--mechanism_tsv', required=True, help='Path to TSV file containing mechanism analysis results (Based on ClinVar)')
     parser.add_argument('--threads', type=int, default=62, help='Number of threads for parallel processing (default: 12)')
+    parser.add_argument('--assembly', type=str, default='hg19', help='Assembly version, either hg19 or hg38')
     args = parser.parse_args()
     
     analyze_domain_data(args.pickle_file, 
                        args.output_dir, 
                        args.intolerant_domains_tsv, 
                        args.mechanism_tsv,
-                       args.threads)
+                       args.threads,
+                       args.assembly)

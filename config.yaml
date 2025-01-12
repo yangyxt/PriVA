@@ -35,8 +35,8 @@ clinvar_vcf: /paedyl01/disk1/yangyxt/public_data/clinvar/clinvar.hg19.vep.vcf.gz
 clinvar_pd_stat: /paedyl01/disk1/yangyxt/public_data/clinvar/clinvar.hg19.vep.prot.domain.stats.pkl
 clinvar_aa_stat: /paedyl01/disk1/yangyxt/public_data/clinvar/clinvar.hg19.vep.aa_change.stats.pkl
 clinvar_vcf_dir: /paedyl01/disk1/yangyxt/public_data/clinvar
-clinvar_intolerant_domains: /paedyl01/disk1/yangyxt/public_data/clinvar/intolerant_domains.tsv
-clinvar_intolerance_mechanisms: /paedyl01/disk1/yangyxt/public_data/clinvar/domain_mechanism_analysis.tsv
+clinvar_intolerant_domains: /paedyl01/disk1/yangyxt/public_data/clinvar/intolerant_domains.hg19.tsv
+clinvar_intolerance_mechanisms: /paedyl01/disk1/yangyxt/public_data/clinvar/domain_mechanism_analysis.hg19.tsv
 
 # Below we specify the cache directory for VEP, you need to specify the locations before starting installing VEP and its plugins
 vep_cache_dir: "/paedyl01/disk1/yangyxt/public_data/VEP_caches"
@@ -64,12 +64,12 @@ alphamissense_prescore: /paedyl01/disk1/yangyxt/public_data/VEP_plugins_caches/A
 alphamissense_vcf: /paedyl01/disk1/yangyxt/public_data/VEP_plugins_caches/AlphaMissense/AlphaMissense_hg19.vcf.gz
 alphamissense_vep_vcf: /paedyl01/disk1/yangyxt/public_data/VEP_plugins_caches/AlphaMissense/AlphaMissense_hg19.vep.vcf.gz
 alphamissense_pd_stat: /paedyl01/disk1/yangyxt/public_data/VEP_plugins_caches/AlphaMissense/AlphaMissense_hg19.vep.prot.domain.stats.pkl
-alphamissense_tranx_domain_map: /paedyl01/disk1/yangyxt/public_data/VEP_plugins_caches/AlphaMissense/transcript_exon_domain_mapping.pkl
-alphamissense_intolerant_domains: /paedyl01/disk1/yangyxt/public_data/VEP_plugins_caches/AlphaMissense/domain_tolerance_analysis.tsv
+alphamissense_tranx_domain_map: /paedyl01/disk1/yangyxt/public_data/VEP_plugins_caches/AlphaMissense/transcript_exon_domain_mapping.hg19.pkl
+alphamissense_intolerant_domains: /paedyl01/disk1/yangyxt/public_data/VEP_plugins_caches/AlphaMissense/domain_tolerance_analysis.hg19.tsv
 alphamissense_intolerant_motifs: /paedyl01/disk1/yangyxt/public_data/VEP_plugins_caches/AlphaMissense/AlphaMissense_hg19.kde.pkl
 
 # Final intolerant domains combining results from AlphaMissense and ClinVar
-all_intolerant_domains: /paedyl01/disk1/yangyxt/public_data/VEP_plugins_caches/AlphaMissense/all_intolerant_domains.pkl
+all_intolerant_domains: /paedyl01/disk1/yangyxt/public_data/VEP_plugins_caches/AlphaMissense/all_intolerant_domains.hg19.pkl
 
 # The SpliceAI plugin cache file, snv and indel
 spliceai_snv_prescore: /paedyl01/disk1/yangyxt/public_data/VEP_plugins_caches/SpliceAI/hg19/spliceai_scores.raw.snv.hg19.vcf.gz

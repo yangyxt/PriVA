@@ -54,15 +54,16 @@ function conda_install_vep() {
 }
 
 
-function vep_install_wrapper() {
+function vep_cache_api_install() {
     local VEP_CACHEDIR=""
     local VEP_ASSEMBLY=""
     local VEP_PLUGINS=""
     local VEP_PLUGINSDIR=""
+    local VEP_VERSION=""
     local VEP_PLUGINSCACHEDIR=""
 
     local TEMP
-    TEMP=$(getopt -o hc:y:r:p: --long help,VEP_CACHEDIR:,VEP_ASSEMBLY:,VEP_PLUGINSDIR:,VEP_PLUGINSCACHEDIR:,VEP_PLUGINS: -- "$@")
+    TEMP=$(getopt -o hc:y:r:p:v: --long help,VEP_CACHEDIR:,VEP_ASSEMBLY:,VEP_PLUGINSDIR:,VEP_PLUGINSCACHEDIR:,VEP_PLUGINS:,VEP_VERSION: -- "$@")
 
     if [[ $? != 0 ]]; then return 1; fi
 
@@ -78,6 +79,7 @@ function vep_install_wrapper() {
                 echo "  -g, --VEP_PLUGINS           Comma-separated list of plugins to install"
                 echo "  -r, --VEP_PLUGINSDIR        Set destination directory for VEP plugins files"
                 echo "  -p, --VEP_PLUGINSCACHEDIR  Set destination direcotry for VEP plugins caches"
+                echo "  -v, --VEP_VERSION         Set the version of VEP to install"
                 return 0
                 ;;
             -c|--VEP_CACHEDIR)
@@ -100,6 +102,10 @@ function vep_install_wrapper() {
                 VEP_PLUGINSCACHEDIR="$2"
                 shift 2
                 ;;
+            -v|--VEP_VERSION)
+                VEP_VERSION="$2"
+                shift 2
+                ;;
             --)
                 shift
                 break
@@ -116,12 +122,19 @@ function vep_install_wrapper() {
     log "currently in a conda env $(basename $CONDA_PREFIX)" || \
     { log "Not encouraged to install the VEP dependencies directly in the conda base env. So quit with error."; return 1; }
 
+    [[ ${VEP_ASSEMBLY} =~ "hg19" ]] && VEP_ASSEMBLY="GRCh37"
+    [[ ${VEP_ASSEMBLY} =~ "hg38" ]] && VEP_ASSEMBLY="GRCh38"
+
     # Test the PERL5LIB value and PATH value to see if they already include the VEP_DESTDIR and VEP_PLUGINSDIR
     # If yes for both, then we can directly skip the follow up installation of VEP API
     local VEP_DESTDIR=$(perl -e 'print join("\n", @INC);' | grep site_perl | head -1)
     [[ $(echo $PERL5LIB) =~ "${VEP_DESTDIR}" ]] && \
     [[ $(echo $PATH) =~ "${VEP_DESTDIR}" ]] && \
     [[ $(echo $PERL5LIB}) =~ "${VEP_PLUGINSDIR}" ]] && \
+    [[ -d ${VEP_CACHEDIR}/homo_sapiens_merged/${VEP_VERSION}_${VEP_ASSEMBLY} ]] && \
+    [[ -d ${VEP_CACHEDIR}/homo_sapiens_merged/${VEP_VERSION}_${VEP_ASSEMBLY}/1 ]] && \
+    [[ -f ${VEP_CACHEDIR}/homo_sapiens_merged/${VEP_VERSION}_${VEP_ASSEMBLY}/1/all_vars.gz ]] && \
+    [[ -f ${VEP_CACHEDIR}/homo_sapiens_merged/${VEP_VERSION}_${VEP_ASSEMBLY}/chr_synonyms.txt ]] && \
     [[ -f ${VEP_PLUGINSDIR}/SpliceVault.pm ]] && \
     [[ -f ${VEP_PLUGINSDIR}/SpliceAI.pm ]] && \
     [[ -f ${VEP_PLUGINSDIR}/UTRAnnotator.pm ]] && \
@@ -140,8 +153,6 @@ function vep_install_wrapper() {
     { log "Since the function is designed to perform follow up installation of VEP upon the installation of VEP dependencies via conda, we only accept installing VEP API at the perl module installation location previously used by conda"; return 1; }
 
     # Construct the command
-    [[ ${VEP_ASSEMBLY} =~ "hg19" ]] && VEP_ASSEMBLY="GRCh37"
-    [[ ${VEP_ASSEMBLY} =~ "hg38" ]] && VEP_ASSEMBLY="GRCh38"
     local cmd="vep_install -d ${VEP_DESTDIR} --AUTO acp -s homo_sapiens_merged --NO_HTSLIB --NO_BIOPERL --CONVERT"
     [[ -n "$VEP_CACHEDIR" ]] && cmd+=" --CACHEDIR $VEP_CACHEDIR"
     [[ -n "$VEP_ASSEMBLY" ]] && cmd+=" --ASSEMBLY $VEP_ASSEMBLY"
@@ -152,8 +163,8 @@ function vep_install_wrapper() {
     # After executing the command, we need to bind the new PERL5LIB value with the current conda env
     log "Now we start to install the VEP api and downloading caches (which might take a while to finish). So pls be patient, here is the command we are going to execute: ${cmd}"
     $cmd && \
-    conda env config vars set PERL5LIB="$VEP_DESTDIR:$VEP_PLUGINSDIR" && \
-    conda env config vars set PATH="$VEP_DESTDIR:$VEP_DESTDIR/htslib:$PATH" && \
+    [[ ! ${PERL5LIB} == *${VEP_DESTDIR}* ]] && conda env config vars set PERL5LIB="$VEP_DESTDIR:$VEP_PLUGINSDIR" || log "The PERL5LIB value is already bound with the current conda env ${CONDA_ENV_NAME}"
+    [[ ! ${PATH} == *${VEP_DESTDIR}* ]] && conda env config vars set PATH="$VEP_DESTDIR:$VEP_DESTDIR/htslib:$PATH" || log "The PATH value is already bound with the current conda env ${CONDA_ENV_NAME}"
     log "Now we have bound the new PERL5LIB value (adding ${VEP_DESTDIR} and ${VEP_PLUGINSDIR} to the PERL5LIB) with the current conda env ${CONDA_ENV_NAME}" && \
     log "Now we have bound the new PATH value (adding ${VEP_DESTDIR} to the PATH) with the current conda env ${CONDA_ENV_NAME}" && \
     mamba_deactivate && \
@@ -184,11 +195,9 @@ function VEP_plugins_install() {
     UTRAnnotator_install ${config_file} ${VEP_PLUGINSCACHEDIR} || \
     { log "Failed to install UTRAnnotator"; return 1; }
 
-
     # Then install LOEUF
     LOEUF_install ${config_file} ${ASSEMBLY_VERSION} ${BASE_DIR} || \
     { log "Failed to install LOEUF"; return 1; }
-
 
     # Then install AlphaMissense
     AlphaMissense_install ${config_file} ${VEP_PLUGINSCACHEDIR} ${ASSEMBLY_VERSION} ${VEP_PLUGINSDIR} || \
@@ -201,16 +210,13 @@ function VEP_plugins_install() {
     AlphaMissense_stat ${config_file} || \
     { log "Failed to generate the AlphaMissense statistics JSON file"; return 1; }
 
-
     # Then install SpliceAI
     SpliceAI_install ${config_file} ${VEP_PLUGINSCACHEDIR} ${VEP_PLUGINSDIR} || \
     { log "Failed to install SpliceAI"; return 1; }
 
-
     # Followed by SpliceVault
     SpliceVault_install ${config_file} ${VEP_PLUGINSCACHEDIR} ${SCRIPT_DIR} || \
     { log "Failed to install SpliceVault"; return 1; }
-
 
     # Last, install PrimateAI
     PrimateAI_install ${config_file} ${VEP_PLUGINSCACHEDIR} ${VEP_PLUGINSDIR} || \
@@ -712,7 +718,8 @@ function AlphaMissense_stat() {
 
 function AlphaMissense_pick_intolerant_domains() {
     local config_file=${1}
-
+    
+    local assembly=$(read_yaml ${config_file} "assembly")
     local alphamissense_pd_stat=$(read_yaml ${config_file} "alphamissense_pd_stat")
     local alphamissense_tranx_domain_map=$(read_yaml ${config_file} "alphamissense_tranx_domain_map")
     local alphamissense_intolerant_domains=$(read_yaml ${config_file} "alphamissense_intolerant_domains")
@@ -735,13 +742,15 @@ function AlphaMissense_pick_intolerant_domains() {
     
     log "Running the AlphaMissense intolerant domains analysis with this command: python ${pick_intolerant_domains_py} --pickle_file ${alphamissense_pd_stat} --threads ${threads} --output_dir ${alphamissense_dir} --intolerant_domains_tsv ${clinvar_intolerant_domains} --mechanism_tsv ${clinvar_intolerance_mechanisms}"
     python ${pick_intolerant_domains_py} \
+    --assembly ${assembly} \
     --pickle_file ${alphamissense_pd_stat} \
     --threads ${threads} \
     --output_dir ${alphamissense_dir} \
     --intolerant_domains_tsv ${clinvar_intolerant_domains} \
     --mechanism_tsv ${clinvar_intolerance_mechanisms} && \
-    update_yaml ${config_file} "alphamissense_intolerant_domains" "${alphamissense_dir}/domain_tolerance_analysis.tsv" && \
-    update_yaml ${config_file} "alphamissense_tranx_domain_map" "${alphamissense_dir}/transcript_exon_domain_mapping.pkl" && \
+    update_yaml ${config_file} "alphamissense_intolerant_domains" "${alphamissense_dir}/domain_tolerance_analysis.${assembly}.tsv" && \
+    update_yaml ${config_file} "alphamissense_tranx_domain_map" "${alphamissense_dir}/transcript_exon_domain_mapping.${assembly}.pkl" && \
+    update_yaml ${config_file} "all_intolerant_domains" "${alphamissense_dir}/all_intolerant_domains.${assembly}.pkl" && \
     log "The AlphaMissense intolerant domains file ${alphamissense_intolerant_domains} and transcript exon domain mapping file ${alphamissense_tranx_domain_map} are generated and saved to ${alphamissense_dir}"
 }
 
@@ -1096,6 +1105,7 @@ function ClinVar_AA_stat () {
 function ClinVar_pick_intolerant_domains () {
     local config_file=${1}
 
+    local assembly=$(read_yaml ${config_file} "assembly")
     local clinvar_domain_stats=$(read_yaml ${config_file} "clinvar_pd_stat")
     local clinvar_intolerant_domains=$(read_yaml ${config_file} "clinvar_intolerant_domains")
     local clinvar_intolerance_mechanisms=$(read_yaml ${config_file} "clinvar_intolerance_mechanisms")
@@ -1112,9 +1122,10 @@ function ClinVar_pick_intolerant_domains () {
     log "Running command: python ${clinvar_pick_intolerant_domains_py} --pickle_file ${clinvar_domain_stats} --output_dir ${clinvar_dir}"
     python ${clinvar_pick_intolerant_domains_py} \
     --pickle_file ${clinvar_domain_stats} \
-    --output_dir ${clinvar_dir} && \
-    update_yaml ${config_file} "clinvar_intolerant_domains" "${clinvar_dir}/intolerant_domains.tsv" && \
-    update_yaml ${config_file} "clinvar_intolerance_mechanisms" "${clinvar_dir}/domain_mechanism_analysis.tsv"
+    --output_dir ${clinvar_dir} \
+    --assembly ${assembly} && \
+    update_yaml ${config_file} "clinvar_intolerant_domains" "${clinvar_dir}/intolerant_domains.${assembly}.tsv" && \
+    update_yaml ${config_file} "clinvar_intolerance_mechanisms" "${clinvar_dir}/domain_mechanism_analysis.${assembly}.tsv"
 }
 
 
@@ -1365,7 +1376,8 @@ function main_install() {
     update_yaml "$config_file" "vep_installed_version" "$vep_version"
 
     # Install VEP API and caches and plugins first
-    vep_install_wrapper \
+    vep_cache_api_install \
+    --VEP_VERSION "$vep_version" \
     --VEP_CACHEDIR "$vep_cache_dir" \
     --VEP_PLUGINSDIR "$vep_plugins_dir" \
     --VEP_ASSEMBLY "$assembly" \

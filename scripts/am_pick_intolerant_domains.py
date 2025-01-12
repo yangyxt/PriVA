@@ -117,6 +117,7 @@ def analyze_domain_tolerance(query_scores: np.ndarray,
     chi_square_stat = -2 * np.sum(np.log(np.array(p_values)))
     significant_proportion = sum(p_value < 0.05 for p_value in p_values) / len(p_values)
     combined_p_value = stats.chi2.sf(chi_square_stat, df=2*len(p_values))
+    assert isinstance(combined_p_value, float), f"combined_p_value is not a float: {combined_p_value} for query scores {query_scores} and reference domains {reference_domains}"
     
     return {
         'is_more_tolerant': combined_p_value < 0.05,  # You can adjust this threshold
@@ -336,7 +337,7 @@ def process_domain_tolerance(args):
         if result is not None:
             # vis_result = {k:v for k, v in result.items() if k != 'individual_results'}
             if result['fisher_combined_p_value'] > 0.05:
-                logger.info(f"Completed tolerance analysis for domain {domain_path}, the result is {result}\n")
+                logger.debug(f"Completed tolerance analysis for domain {domain_path}, the result is {result}\n")
             return (domain_path, result)
         else:
             logger.warning(f"Failed to complete tolerance analysis for domain {domain_path}")
@@ -479,7 +480,7 @@ def analyze_domain_data(pickle_file: str,
         p_values = []
         for domain, result in tolerance_results.items():
             domains.append(domain)
-            p_values.append(result['fisher_combined_p_value'])
+            p_values.append(float(result['fisher_combined_p_value']))
         
         # Apply FDR correction
         rejected, p_values_corrected, _, _ = multipletests(
@@ -552,8 +553,8 @@ if __name__ == '__main__':
     args = parser.parse_args()
     
     analyze_domain_data(args.pickle_file, 
-                       args.output_dir, 
-                       args.intolerant_domains_tsv, 
-                       args.mechanism_tsv,
-                       args.threads,
-                       args.assembly)
+                        args.output_dir, 
+                        args.intolerant_domains_tsv, 
+                        args.mechanism_tsv,
+                        args.threads,
+                        assembly=args.assembly)

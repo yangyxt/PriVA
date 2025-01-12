@@ -447,7 +447,7 @@ def traverse_mechanism_dict(d: Dict, results: List, path: List = []):
 
 
 
-def analyze_domain_mechanisms(clinvar_dict: Dict, output_dir: str, threads: int) -> pd.DataFrame:
+def analyze_domain_mechanisms(clinvar_dict: Dict, output_dir: str, threads: int, assembly: str = 'hg19') -> pd.DataFrame:
     """
     Analyze variant type distributions for all domains and genes.
     
@@ -472,7 +472,7 @@ def analyze_domain_mechanisms(clinvar_dict: Dict, output_dir: str, threads: int)
         df = analyze_gene_mechanisms(df, threads)
         
         # Save results
-        output_file = os.path.join(output_dir, 'domain_mechanism_analysis.tsv')
+        output_file = os.path.join(output_dir, f'domain_mechanism_analysis.{assembly}.tsv')
         df.to_csv(output_file, sep='\t', index=False)
         logger.info(f"Saved mechanism analysis results to {output_file}")
         
@@ -605,7 +605,7 @@ def create_mechanism_plots(df: pd.DataFrame, output_dir: str):
     plt.close()
 
 
-def main(pickle_file: str, output_dir: str, threads: int):
+def main(pickle_file: str, output_dir: str, threads: int, assembly: str = 'hg19'):
     """
     Analyze domain data from the pickle file.
     
@@ -613,6 +613,7 @@ def main(pickle_file: str, output_dir: str, threads: int):
         pickle_file: Path to the pickle file containing clinvar_dict
         output_dir: Directory to save analysis outputs
         threads: Number of CPU threads to use
+        assembly: Assembly version, either 'hg19' or 'hg38'
     """
     # Load the data
     with open(pickle_file, 'rb') as f:
@@ -625,13 +626,13 @@ def main(pickle_file: str, output_dir: str, threads: int):
     # Save intolerant domains results
     results_df = pd.DataFrame.from_dict(intolerant_domains, orient='index')
     results_df.index.name = 'domain'
-    results_df.to_csv(os.path.join(output_dir, 'intolerant_domains.tsv'), 
+    results_df.to_csv(os.path.join(output_dir, f'intolerant_domains.{assembly}.tsv'), 
                      sep='\t', index=False)
     
     logger.info(f"Found {len(intolerant_domains)} intolerant domains")
 
     # Analyze domain mechanisms
-    mechanism_df = analyze_domain_mechanisms(filtered_clinvar, output_dir, threads=threads)
+    mechanism_df = analyze_domain_mechanisms(filtered_clinvar, output_dir, threads=threads, assembly=assembly)
 
 
 if __name__ == "__main__":
@@ -639,11 +640,12 @@ if __name__ == "__main__":
     parser.add_argument("--pickle_file", required=True, help="Path to pickle file containing clinvar_dict")
     parser.add_argument("--output_dir", required=True, help="Directory to save analysis outputs")
     parser.add_argument("--threads", type=int, default=40, help="Number of CPU threads to use (default: CPU count - 2)")
-    
+    parser.add_argument("--assembly", type=str, default='hg19', help="Assembly version, either 'hg19' or 'hg38'")
+
     args = parser.parse_args()
     
     # Create output directory if it doesn't exist
     os.makedirs(args.output_dir, exist_ok=True)
     
     # Run main function
-    main(args.pickle_file, args.output_dir, args.threads)
+    main(args.pickle_file, args.output_dir, args.threads, args.assembly)

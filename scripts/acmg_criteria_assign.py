@@ -1,18 +1,15 @@
 #!/usr/bin/env python
 
-import os
+import re
 import pysam
 import pickle
 import logging
 import pandas as pd
 import numpy as np
 import argparse as ap
-from collections import namedtuple
 from typing import Tuple, Dict
 import multiprocessing as mp
 from multiprocessing import Manager
-from scipy.stats import beta
-from scipy.optimize import curve_fit
 
 from stat_protein_domain_amscores import nested_defaultdict
 
@@ -404,8 +401,8 @@ def locate_intolerant_domain(row: dict, intolerant_domains: set) -> bool:
         return False
     # The variant itself need to be protein altering.
     missense = row['Consequence'] == 'missense_variant'
-    length_changing = row['vep_consq_length_changing'] | row['splicing_len_changing'] | row['5UTR_len_changing']
-    protein_altering = missense | length_changing | (row['Consequence'] == 'protein_altering_variant')
+    length_changing = row['vep_consq_length_changing'] or row['splicing_len_changing'] or row['5UTR_len_changing']
+    protein_altering = missense or length_changing or (row['Consequence'] == 'protein_altering_variant')
 
     return any(domain in intolerant_domains for domain in domains) & protein_altering
 
@@ -483,25 +480,48 @@ def locate_less_char_region(row: dict, am_intolerant_motifs: dict) -> Tuple[bool
     Check if the variant is located in a less well-characterized region but with high AM scores. 
     The region was previous extracted during the installation step of the pipeline, it uses weighted KDE to identify the segments along the protein chain which are likely to be intolerant to AA changes
     '''
+
     aa_code_dict = {"Gly": "G", "Ala": "A", "Val": "V", "Leu": "L", 
                     "Ile": "I", "Thr": "T", "Ser": "S", "Met": "M", 
                     "Cys": "C", "Pro": "P", "Phe": "F", "Tyr": "Y", 
                     "Trp": "W", "His": "H", "Lys": "K", "Arg": "R", 
                     "Asp": "D", "Glu": "E", "Asn": "N", "Gln": "Q"}
+    
+    if not am_intolerant_motifs:
+        logger.debug(f"No AM scores for gene {row['Gene']}, the AM profile might only calculate the variants effect at {row['chrom']}:{row['pos']} on another overlapping transcript that does not belong to this gene.")
+        return False, False
+    
+    raw_protein_pos = row.get('Protein_position', '') # e.g 117/340 (pos/total_size)
+    protein_pos = str(raw_protein_pos).split("/")[0] if raw_protein_pos and not raw_protein_pos in [np.nan, np.inf] else ''
 
-    gene = row['Gene']
-    hgvsp_aa = row["HGVSp"].split(":")[1].lstrip("p.")
+    # Deal with non-protein-altering variants
+    if not protein_pos:
+        logger.debug(f"No protein position for variant {row['chrom']}:{row['pos']}, cannot determine if it is located in a mutational hotspot or a well-established functional protein domain")
+        return False, False
+    
+    # Deal with indels
+    if len(row['alt']) != len(row['ref']):
+        return protein_pos in [x[1:] for x in am_intolerant_motifs['max_score_regions']], protein_pos in [x[1:] for x in am_intolerant_motifs['min_score_regions']]
+    
+    hgvsp_aa = row["HGVSp"].split(":")[1].lstrip("p.") if isinstance(row["HGVSp"], str) else ''
     # Extract the characters that is digit in the hgvsp_aa
-    protein_position = re.search(r'\d+', hgvsp_aa).group()
+    protein_position = re.search(r'\d+', hgvsp_aa).group() if hgvsp_aa else ''
     # Extract the string before the digits as the reference amino acid
-    ref_aa = re.split(r'\d+', hgvsp_aa)[0]
-    single_letter_aa_code = aa_code_dict[ref_aa]
+    ref_aa = re.split(r'\d+', hgvsp_aa)[0] if protein_position else ''
+    # Deal with stop codons
+    if ref_aa == "Ter":
+        logger.warning(f"The variant {row['chrom']}:{row['pos']} is a stop codon, can only determine by protein position")
+        return protein_position in [x[1:] for x in am_intolerant_motifs['max_score_regions']], protein_position in [x[1:] for x in am_intolerant_motifs['min_score_regions']]
+    # Deal with empty HGVSp
+    if not ref_aa:
+        return False, False
+    
+    single_letter_aa_code = aa_code_dict.get(ref_aa, ref_aa)
+    assert len(single_letter_aa_code) == 1, f"For variant at {row['chrom']}:{row['pos']}, the amino acid code for {protein_position}: {ref_aa} is not a single letter"
     combo = f"{single_letter_aa_code}{protein_position}"
+    logger.debug(f"The variant {row['chrom']}:{row['pos']} is causing AA changes at {combo}")
 
-    hit_max_score_motifs = [d for d in am_intolerant_motifs[gene]['max_score_regions'] if combo in d['positions']]
-    hit_min_score_motifs = [d for d in am_intolerant_motifs[gene]['min_score_regions'] if combo in d['positions']]
-
-    return len(hit_max_score_motifs) > 0, len(hit_min_score_motifs) > 0
+    return combo in am_intolerant_motifs['max_score_regions'], combo in am_intolerant_motifs['min_score_regions']
 
     
 
@@ -523,19 +543,21 @@ def PM1_criteria(df: pd.DataFrame,
             results = pool.starmap(locate_intolerant_domain, args)
 
     loc_intol_domain = np.array(results)
+    logger.info(f"There are {np.sum(loc_intol_domain)} variants located in a protein domain that is seemingly intolerant to AA changes according to AM scores")
     truncating = df['vep_consq_length_changing'] | df['splicing_len_changing'] | df['5UTR_len_changing']
     missense = df['Consequence'] == 'missense_variant'
 
-    with Manager() as manager:
-        shared_data = manager.dict()
-        shared_data['intolerant_motifs'] = pickle.load(open(intolerant_motifs_pkl, 'rb'))
-        args = [(row, am_score_chrom_vcfs[row['chrom']], shared_data['intolerant_motifs']) for row in row_dicts]
-        with mp.Pool(threads) as pool:
-            results = pool.starmap(locate_less_char_region, args)
-            # Results are a list of tuples, we need to convert them to two independent boolean arrays
-            severe_pathogenic_unimodal_motifs = np.array([r[0] for r in results])
-            all_pathogenic_unimodal_motifs = np.array([r[1] for r in results])
+    intolerant_motifs = pickle.load(open(intolerant_motifs_pkl, 'rb'))
+    args = [(row, intolerant_motifs.get(row['Feature'], {})) for row in row_dicts]
+    logger.info(f"There are {len(args)} variants to be checked for intolerant motifs")
+    with mp.Pool(threads) as pool:
+        results = pool.starmap(locate_less_char_region, args)
+        # Results are a list of tuples, we need to convert them to two independent boolean arrays
+        severe_pathogenic_unimodal_motifs = np.array([r[0] for r in results])
+        all_pathogenic_unimodal_motifs = np.array([r[1] for r in results])
 
+    logger.info(f"There are {np.sum(all_pathogenic_unimodal_motifs)} variants located in a mutational hotspot that is seemingly intolerant to AA changes according to AM scores")
+    logger.info(f"There are {np.sum(severe_pathogenic_unimodal_motifs)} variants located in a mutational hotspot that is seemingly intolerant to AA changes according to most severeAM scores")
     return loc_intol_domain | ( severe_pathogenic_unimodal_motifs & truncating ) | ( all_pathogenic_unimodal_motifs & missense )
 
 
@@ -855,7 +877,7 @@ def BP2_PM3_criteria(df: pd.DataFrame,
 
 def check_gene_variants(gene, df, pathogenic, proband):
     pathogenic_variants = df.loc[pathogenic & (df.loc[:, "Gene"] == gene), proband].tolist()
-    logger.info(f"For gene {gene}, there are {len(pathogenic_variants)} pathogenic variants, and {len(df.loc[df.loc[:, "Gene"] == gene, proband])} variants in the gene")
+    logger.debug(f"For gene {gene}, there are {len(pathogenic_variants)} pathogenic variants, and {len(df.loc[df.loc[:, "Gene"] == gene, proband])} variants in the gene")
     var_in_trans = np.array([False] * len(df))
     var_in_cis = np.array([False] * len(df))
     if len([v for v in pathogenic_variants if v[-1] == "1"]) > 0:
@@ -1075,9 +1097,8 @@ def calculate_posterior_probability(row, prior_probability=0.1, exp_base=2, odds
                                      Keys are criteria names (e.g., "PVS1", "PS1", "PM2", "PP3", "BS1", "BP4"),
                                      and values are the corresponding strength scores.
         prior_probability (float): The prior probability of pathogenicity (default: 0.1).
-        evidence_weights (dict): A dictionary mapping criteria names to their numerical weights, 
-                                 according to the latest ClinGen SVI recommendations (default: illustrative values).
-                                 PM2 is downgraded to a PP criterion
+        exp_base (float): The base of the exponential function (default: 2).
+        odds_pvst (float): The odds of pathogenicity (default: 350).
 
     Returns:
         float: The posterior probability of pathogenicity.
@@ -1088,7 +1109,7 @@ def calculate_posterior_probability(row, prior_probability=0.1, exp_base=2, odds
 
     evidence_weights = {"PVS1": 1,
                         "PS1": 1/exp_base, "PS2": 1/exp_base, "PS3": 1/exp_base, "PS4": 1/exp_base,
-                        "PM1": 1/exp_base**2, "PM2": 1/exp_base**2, "PM3": 1/exp_base**2, "PM4": 1/exp_base**2, "PM5": 1/exp_base**2, "PM6": 1/exp_base**2,
+                        "PM1": 1/exp_base**2, "PM2": 1/exp_base**3, "PM3": 1/exp_base**2, "PM4": 1/exp_base**2, "PM5": 1/exp_base**2, "PM6": 1/exp_base**2,
                         "PP1": 1/exp_base**3, "PP2": 1/exp_base**3, "PP3": 1/exp_base**3, "PP4": 1/exp_base**3, "PP5": 1/exp_base**3,
                         "BA1": -1,
                         "BS1": -1/exp_base, "BS2": -1/exp_base, "BS3": -1/exp_base, "BS4": -1/exp_base,
@@ -1132,9 +1153,7 @@ def calculate_posterior_probability(row, prior_probability=0.1, exp_base=2, odds
     else:
         acmg_class = "Uncertain Significance"
 
-    row["ACMG_quant_score"] = posterior_probability
-    row["ACMG_class"] = acmg_class
-    return row
+    return posterior_probability, acmg_class
 
 
 
@@ -1389,7 +1408,9 @@ def ACMG_criteria_assign(anno_table: str,
     criteria_matrix.to_csv(output_matrix, sep="\t", index=False)
     
     # Apply quantification using ACMG_criteria column and use that to sort the variants
-    anno_df = anno_df.apply(calculate_posterior_probability, axis=1)
+    posterior_probability, acmg_class = zip(*criteria_matrix.apply(calculate_posterior_probability, axis=1))
+    anno_df["ACMG_quant_score"] = posterior_probability
+    anno_df["ACMG_class"] = acmg_class
 
     # Sort and rank variants
     anno_df = sort_and_rank_variants(anno_df)

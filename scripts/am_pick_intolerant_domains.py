@@ -258,7 +258,7 @@ def get_missense_intolerant_domains(mechanism_tsv: str,
     return missense_intolerant
 
 
-def visualize_domain_distribution(scores_dict: dict, output_dir: str, threads: int) -> Dict[str, np.ndarray]:
+def visualize_domain_distribution(scores_dict: dict, output_dir: str, threads: int, assembly: str='hg19') -> Dict[str, np.ndarray]:
     """
     Process and visualize domain distributions, returning a dictionary of domain scores.
     
@@ -277,9 +277,9 @@ def visualize_domain_distribution(scores_dict: dict, output_dir: str, threads: i
     output_dir = os.path.join(output_dir, 'am_domain_distributions')
     os.makedirs(output_dir, exist_ok=True)
     
-    if os.path.exists(os.path.join(output_dir, 'domain_amscores.pkl')): 
-        logger.info(f"Loading existing domain scores from {os.path.join(output_dir, 'domain_amscores.pkl')}")
-        with open(os.path.join(output_dir, 'domain_amscores.pkl'), 'rb') as f:
+    if os.path.exists(os.path.join(output_dir, f'domain_amscores.{assembly}.pkl')): 
+        logger.info(f"Loading existing domain scores from {os.path.join(output_dir, f'domain_amscores.{assembly}.pkl')}")
+        with open(os.path.join(output_dir, f'domain_amscores.{assembly}.pkl'), 'rb') as f:
             domain_scores = pickle.load(f)
     else:
         for gene_id, gene_data in scores_dict.items():
@@ -297,7 +297,7 @@ def visualize_domain_distribution(scores_dict: dict, output_dir: str, threads: i
             domain_scores[path] = scores
     
         # Dump the domain scores to a pickle file
-        with open(os.path.join(output_dir, 'domain_amscores.pkl'), 'wb') as f:
+        with open(os.path.join(output_dir, f'domain_amscores.{assembly}.pkl'), 'wb') as f:
             pickle.dump(domain_scores, f)
     
         logger.info(f"Found {len(domain_data)} domains to process")
@@ -315,7 +315,7 @@ def visualize_domain_distribution(scores_dict: dict, output_dir: str, threads: i
         # Save results to TSV if any successful results
         if results:
             results_df = pd.DataFrame(results)
-            results_df.to_csv(os.path.join(output_dir, 'distribution_test_results.tsv'), 
+            results_df.to_csv(os.path.join(output_dir, f'distribution_test_results.{assembly}.tsv'), 
                             sep='\t', index=False)
     
     return domain_scores
@@ -449,7 +449,7 @@ def analyze_domain_data(pickle_file: str,
     logger.info(f"Saved transcript-exon-domain mapping to {mapping_json} and {mapping_pickle}")
     
     # Continue with existing analysis
-    domain_scores = visualize_domain_distribution(scores_dict, output_dir, threads)
+    domain_scores = visualize_domain_distribution(scores_dict, output_dir, threads, assembly)
     
     # Pickout the reference domains
     ref_mis_intolerant_domains = get_missense_intolerant_domains(mechanism_tsv, intolerant_domains_tsv)

@@ -290,17 +290,24 @@ function anno_agg_gnomAD_data () {
 	log "The chromosome names extracted from the input vcf are: ${chr_chroms[*]}"
 
 	# Step 2: Further split the main-contig-variants file to multiple single-contig variant files
+	local -a valid_chroms
 	for chr in "${chr_chroms[@]}"; do
-		bcftools view -r ${chr} -Ou ${input_vcf} | \
-		bcftools sort -Oz -o ${input_vcf/.vcf*/.${chr}.vcf.gz} && \
-		tabix -f -p vcf ${input_vcf/.vcf*/.${chr}.vcf.gz}
+		if [[ ${chr} =~ chr[0-9XY]+ ]]; then
+			bcftools view -r ${chr} -Ou ${input_vcf} | \
+			bcftools sort -Oz -o ${input_vcf/.vcf*/.${chr}.vcf.gz} && \
+			tabix -f -p vcf ${input_vcf/.vcf*/.${chr}.vcf.gz}
+			valid_chroms+=( ${chr} )
+		else
+			log "WARNING!!! The chromosome ${chr} is not supported by gnomAD now. Currently only support chr1 to chrY. Skip this chromosome"
+		fi
 	done
+	log "The valid chromosomes are: ${valid_chroms[*]}"
 
 	# Step 3: Perform annotation with bcftools annotate to add the INFO fields from gnomAD vcfs to the input splitted vcfs
 	export gnomad_vcf_chrX
 	local gnomad_vcf_suffix=${gnomad_vcf_chrX/*.chrX.vcf/}
-	parallel -j ${threads} --dry-run "bcftools annotate -a ${gnomad_vcf_chrX/.chrX.vcf*gz/}.{}.vcf${gnomad_vcf_suffix} -c CHROM,POS,REF,ALT,.INFO/AC_joint,.INFO/AN_joint,.INFO/AF_joint,.INFO/AF_joint_XX,.INFO/AF_joint_XY,.INFO/nhomalt_joint_XX,.INFO/nhomalt_joint_XY -Oz -o ${input_vcf/.vcf*/}.{}.gnomAD.vcf.gz ${input_vcf/.vcf*/}.{}.vcf.gz" ::: "${chr_chroms[@]}" && \
-	parallel -j ${threads} --joblog ${input_vcf/.vcf*/.gnomAD.log} "bcftools annotate -a ${gnomad_vcf_chrX/.chrX.vcf*gz/}.{}.vcf${gnomad_vcf_suffix} -c CHROM,POS,REF,ALT,.INFO/AC_joint,.INFO/AN_joint,.INFO/AF_joint,.INFO/AF_joint_XX,.INFO/AF_joint_XY,.INFO/nhomalt_joint_XX,.INFO/nhomalt_joint_XY -Oz -o ${input_vcf/.vcf*/}.{}.gnomAD.vcf.gz ${input_vcf/.vcf*/}.{}.vcf.gz" ::: "${chr_chroms[@]}"; \
+	parallel -j ${threads} --dry-run "bcftools annotate -a ${gnomad_vcf_chrX/.chrX.vcf*gz/}.{}.vcf${gnomad_vcf_suffix} -c CHROM,POS,REF,ALT,.INFO/AC_joint,.INFO/AN_joint,.INFO/AF_joint,.INFO/AF_joint_XX,.INFO/AF_joint_XY,.INFO/nhomalt_joint_XX,.INFO/nhomalt_joint_XY -Oz -o ${input_vcf/.vcf*/}.{}.gnomAD.vcf.gz ${input_vcf/.vcf*/}.{}.vcf.gz" ::: "${valid_chroms[@]}" && \
+	parallel -j ${threads} --joblog ${input_vcf/.vcf*/.gnomAD.log} "bcftools annotate -a ${gnomad_vcf_chrX/.chrX.vcf*gz/}.{}.vcf${gnomad_vcf_suffix} -c CHROM,POS,REF,ALT,.INFO/AC_joint,.INFO/AN_joint,.INFO/AF_joint,.INFO/AF_joint_XX,.INFO/AF_joint_XY,.INFO/nhomalt_joint_XX,.INFO/nhomalt_joint_XY -Oz -o ${input_vcf/.vcf*/}.{}.gnomAD.vcf.gz ${input_vcf/.vcf*/}.{}.vcf.gz" ::: "${valid_chroms[@]}"; \
 	check_parallel_joblog ${input_vcf/.vcf*/.gnomAD.log} || { \
 	log "Failed to add aggregated gnomAD annotation on ${input_vcf}. Quit now"
 	return 1; }

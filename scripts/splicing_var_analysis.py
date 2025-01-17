@@ -488,7 +488,11 @@ def process_cryptic_acceptor(pos_str: str,
         cds_pos, total_cds = cds_pos.split('/')
         if "-" in cds_pos:
             logger.info(f"The cds_pos is {cds_pos}, total_cds is {total_cds}, the cds_pos is a range, we need to split it into two parts")
-            cds_pos = int(cds_pos.split('-')[0]) if cds_pos.split('-')[0] else None
+            try:
+                cds_pos = int(cds_pos.split('-')[0])
+            except ValueError as ve:
+                logger.warning(f"Error splitting cds_pos {cds_pos} and total_cds {total_cds}: {ve}")
+                cds_pos = None
             total_cds = int(total_cds)
         else:
             cds_pos = int(cds_pos)

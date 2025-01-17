@@ -468,7 +468,7 @@ function anno_VEP_data() {
 
 	[[ ${assembly} == "GRCh37" ]] && local gerp_bw_argument=""
 	if [[ ${assembly} == "GRCh38" ]]; then
-		local gerp_bw_argument=",gerp_bigwig ${gerp_bigwig}"
+		local gerp_bw_argument=",gerp_bigwig:${gerp_bigwig}"
 		check_path "$gerp_bigwig" "file" "gerp_bigwig" || has_error=1
 	fi
 

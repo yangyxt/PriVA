@@ -10,9 +10,9 @@ import argparse as ap
 from typing import Tuple, Dict
 import multiprocessing as mp
 from multiprocessing import Manager
+import mmap
 
 from stat_protein_domain_amscores import nested_defaultdict
-
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -531,16 +531,16 @@ def PM1_criteria(df: pd.DataFrame,
                  intolerant_motifs_pkl: str,
                  am_score_vcf: str,
                  threads: int = 10) -> np.ndarray:
-    # PM1: The variant is located in a mutational hotspot or a well-established functional protein domain
-    # Load intolerant domains into shared memory
+    # Memory-mapped approach
+    with open(intolerant_domains_pkl, 'rb') as f:
+        mm = mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ)
+        intolerant_domains = pickle.load(mm)
+    
     row_dicts = df.to_dict('records')
-    with Manager() as manager:
-        shared_data = manager.dict()
-        shared_data['intolerant_domains'] = pickle.load(open(intolerant_domains_pkl, 'rb'))
-        args = [(row, shared_data['intolerant_domains']) for row in row_dicts]
-        
-        with mp.Pool(threads) as pool:
-            results = pool.starmap(locate_intolerant_domain, args)
+    args = [(row, intolerant_domains) for row in row_dicts]
+    
+    with mp.Pool(threads) as pool:
+        results = pool.starmap(locate_intolerant_domain, args)
 
     loc_intol_domain = np.array(results)
     logger.info(f"There are {np.sum(loc_intol_domain)} variants located in a protein domain that is seemingly intolerant to AA changes according to AM scores")

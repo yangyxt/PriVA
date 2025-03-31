@@ -35,6 +35,7 @@ clinvar_vcf: /paedyl01/disk1/yangyxt/public_data/clinvar/clinvar.hg19.vep.vcf.gz
 clinvar_pd_stat: /paedyl01/disk1/yangyxt/public_data/clinvar/clinvar.hg19.vep.prot.domain.stats.pkl
 clinvar_aa_stat: /paedyl01/disk1/yangyxt/public_data/clinvar/clinvar.hg19.vep.aa_change.stats.pkl
 clinvar_vcf_dir: /paedyl01/disk1/yangyxt/public_data/clinvar
+clinvar_patho_af_stat: /paedyl01/disk1/yangyxt/public_data/clinvar/clinvar.hg19.vep.patho_af_stat.pkl
 clinvar_intolerant_domains: /paedyl01/disk1/yangyxt/public_data/clinvar/intolerant_domains.hg19.tsv
 clinvar_intolerance_mechanisms: /paedyl01/disk1/yangyxt/public_data/clinvar/domain_mechanism_analysis.hg19.tsv
 

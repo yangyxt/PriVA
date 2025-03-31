@@ -118,6 +118,9 @@ function assign_acmg_criteria () {
     local gnomAD_extreme_rare_threshold=$(read_yaml ${config_file} "extreme_rare_PAF")
     local expected_incidence=$(read_yaml ${config_file} "exp_disease_incidence")
     local am_score_vcf=$(read_yaml ${config_file} "alphamissense_vcf")
+	local clinvar_patho_af_stat=$(read_yaml ${config_file} "clinvar_patho_af_stat")
+
+	local output_acmg_mat=${input_tab::-4}.acmg.tsv
 
     local has_error=0
     check_path ${clinvar_aa_dict_pkl} "file" "clinvar_aa_stat" || has_error=1
@@ -136,6 +139,7 @@ function assign_acmg_criteria () {
     [[ ${input_tab} -nt ${domain_mechanism_tsv} ]] && \
     [[ ${input_tab} -nt ${alt_disease_vcf} ]] && \
     [[ ${input_tab} -nt ${am_score_vcf} ]] && \
+	[[ ${input_tab} -ot ${output_acmg_mat} ]] && \
     check_table_column ${input_tab} "ACMG_quant_score" && \
     check_table_column ${input_tab} "ACMG_class" && \
     check_table_column ${input_tab} "ACMG_criteria" && \
@@ -148,10 +152,11 @@ function assign_acmg_criteria () {
     [[ -z ${fam_name} ]] && local fam_arg="" || local fam_arg="--fam_name ${fam_name}"
     [[ -z ${alt_disease_vcf} ]] && local alt_disease_arg="" || local alt_disease_arg="--alt_disease_vcf ${alt_disease_vcf}"
 
-    log "Running the following command to assign the ACMG criterias: python ${acmg_py} --anno_table ${input_tab} --am_score_table ${mean_am_score_table} ${ped_arg} ${fam_arg} --clinvar_aa_dict_pkl ${clinvar_aa_dict_pkl} --intolerant_domains_pkl ${intolerant_domains_pkl} --domain_mechanism_tsv ${domain_mechanism_tsv} ${alt_disease_arg} --gnomAD_extreme_rare_threshold ${gnomAD_extreme_rare_threshold} --expected_incidence ${expected_incidence} --am_score_vcf ${am_score_vcf} --threads ${threads}"
+    log "Running the following command to assign the ACMG criterias: python ${acmg_py} --anno_table ${input_tab} --am_score_table ${mean_am_score_table} --clinvar_aa_dict_pkl ${clinvar_aa_dict_pkl} --intolerant_domains_pkl ${intolerant_domains_pkl} --intolerant_motifs_pkl ${intolerant_motifs_pkl} --domain_mechanism_tsv ${domain_mechanism_tsv} --gnomAD_extreme_rare_threshold ${gnomAD_extreme_rare_threshold} --expected_incidence ${expected_incidence} --am_score_vcf ${am_score_vcf} --threads ${threads} ${ped_arg} ${fam_arg} ${alt_disease_arg}"
     python ${acmg_py} \
     --anno_table ${input_tab} \
     --am_score_table ${mean_am_score_table} \
+	--clinvar_patho_af_stat ${clinvar_patho_af_stat} \
     --clinvar_aa_dict_pkl ${clinvar_aa_dict_pkl} \
     --intolerant_domains_pkl ${intolerant_domains_pkl} \
     --intolerant_motifs_pkl ${intolerant_motifs_pkl} \
@@ -161,7 +166,6 @@ function assign_acmg_criteria () {
     --am_score_vcf ${am_score_vcf} \
     --threads ${threads} ${ped_arg} ${fam_arg} ${alt_disease_arg} && \
     display_table ${input_tab} && \
-    local output_acmg_mat=${input_tab::-4}.acmg.tsv && \
     log "The ACMG criterias are assigned for ${input_tab}, added with three columns: ACMG_quant_score, ACMG_class, ACMG_criteria, and the output matrix is saved to ${output_acmg_mat}" && \
     display_table ${output_acmg_mat} || \
     { log "Failed to assign the ACMG criterias for ${input_tab}"; return 1; }
@@ -202,7 +206,8 @@ function main_prioritization () {
     ${input_vcf} \
     ${cadd_tsv} \
     ${threads} && \
-    local input_tab=${input_vcf/.vcf*/.tsv} || \
+    local input_tab=${input_vcf/.vcf*/.tsv} && \
+    [[ -f ${input_tab} ]] || \
     { log "Failed to prepare the combined annotation table"; return 1; }
 
     # Assign the ACMG criterias to each variant-transcript annotation record

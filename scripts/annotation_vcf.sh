@@ -323,7 +323,9 @@ function anno_agg_gnomAD_data () {
     bcftools sort -Oz -o ${output_vcf} && \
     tabix -f -p vcf ${output_vcf} && \
     mv ${output_vcf} ${input_vcf} && \
-    mv ${output_vcf}.tbi ${input_vcf}.tbi
+    mv ${output_vcf}.tbi ${input_vcf}.tbi && \
+	rm -f ${input_vcf/.vcf*/.chr*.gnomAD.vcf.gz} && \
+	rm -f ${input_vcf/.vcf*/.chr*.gnomAD.vcf.gz.tbi}
 
 }
 

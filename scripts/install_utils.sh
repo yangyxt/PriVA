@@ -985,6 +985,7 @@ function basic_vep_annotation() {
     --hgvs \
     --symbol \
     --canonical \
+	--total_length \
     --domains \
     --numbers \
     --stats_file ${input_vcf/.vcf*/.vep.stats.html} \
@@ -1041,6 +1042,7 @@ function ClinVar_VCF_deploy() {
     local assembly=$(read_yaml ${config_file} "assembly")
     check_vcf_validity ${clinvar_vcf} && \
     check_vcf_infotags ${clinvar_vcf} "CSQ" && \
+	check_vcf_infotags ${clinvar_vcf} "AF_joint" && \
     log "The ClinVar VCF file ${clinvar_vcf} is already downloaded and annotated by VEP. Skip the following steps" && return 0
 
     wget https://ftp.ncbi.nlm.nih.gov/pub/clinvar/vcf_${assembly_version}/clinvar.vcf.gz -O ${CACHEDIR}/clinvar.${assembly_version}.vcf.gz && \
@@ -1058,6 +1060,13 @@ function ClinVar_VCF_deploy() {
     ${vep_cache_dir} \
     ${threads} && \
     check_vcf_validity ${CACHEDIR}/clinvar.${ucsc_assembly_version}.vep.vcf.gz && \
+	local gnomad_vcf_chrX=$(read_yaml ${config_file} "gnomad_vcf_chrX") && \
+	bash ${SCRIPT_DIR}/annotation_vcf.sh \
+	anno_agg_gnomAD_data \
+	${CACHEDIR}/clinvar.${ucsc_assembly_version}.vep.vcf.gz \
+	${threads} \
+	${assembly} \
+	${gnomad_vcf_chrX} && \
     update_yaml ${config_file} "clinvar_vcf" "${CACHEDIR}/clinvar.${ucsc_assembly_version}.vep.vcf.gz"
 }
 
@@ -1126,6 +1135,27 @@ function ClinVar_pick_intolerant_domains () {
     --assembly ${assembly} && \
     update_yaml ${config_file} "clinvar_intolerant_domains" "${clinvar_dir}/intolerant_domains.${assembly}.tsv" && \
     update_yaml ${config_file} "clinvar_intolerance_mechanisms" "${clinvar_dir}/domain_mechanism_analysis.${assembly}.tsv"
+}
+
+
+function ClinVar_patho_AF_stat () {
+	local config_file=${1}
+	local clinvar_vcf=$(read_yaml ${config_file} "clinvar_vcf")
+	local threads=$(read_yaml ${config_file} "threads")
+	local assembly=$(read_yaml ${config_file} "assembly")
+	local output_pickle=$(read_yaml ${config_file} "clinvar_patho_af_stat")
+
+	[[ -f ${output_pickle} ]] && \
+	[[ ${output_pickle} -nt ${clinvar_vcf} ]] && \
+	log "The clinvar pathogenic variants per allele frequency file ${output_pickle} is already generated. Skip this step" && \
+	return 0 || \
+	log "The clinvar pathogenic variants per allele frequency file ${output_pickle} is not found or not up to date, so we need to generate it"
+
+	python ${SCRIPT_DIR}/stat_gene_patho_afs.py \
+	${clinvar_vcf} \
+	${clinvar_vcf/.vcf*/.patho_af_stat.pkl} \
+	${threads} && \
+	update_yaml ${config_file} "clinvar_patho_af_stat" "${clinvar_vcf/.vcf*/.patho_af_stat.pkl}"
 }
 
 
@@ -1420,6 +1450,8 @@ function main_install() {
     { log "Failed to pick intolerant domains from ClinVar"; return 1; }
     AlphaMissense_pick_intolerant_domains ${config_file} || \
     { log "Failed to pick intolerant domains from AlphaMissense"; return 1; }
+	ClinVar_patho_AF_stat ${config_file} || \
+	{ log "Failed to stat ClinVar pathogenic variants per allele frequency"; return 1; }
 
 
     # 6. Install CADD prescores

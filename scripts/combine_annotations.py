@@ -3,11 +3,19 @@ import numpy as np
 import multiprocessing as mp
 import pysam
 import argparse as ap
-import json
 import logging
 import sys
 from typing import List, Dict, Any
 from collections import deque
+
+
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
+console_handler=logging.StreamHandler()
+console_handler.setLevel(logging.INFO)
+formatter = logging.Formatter("%(levelname)s:%(asctime)s:%(funcName)s:%(lineno)s:%(message)s")
+console_handler.setFormatter(formatter)
+logger.addHandler(console_handler)
 
 
 class SubprocessLogCollector:
@@ -24,7 +32,7 @@ class SubprocessLogCollector:
 
 def setup_worker_logger(worker_id: int) -> logging.Logger:
     logger = logging.getLogger(f'worker_{worker_id}')
-    logger.setLevel(logging.INFO)
+    logger.setLevel(logging.DEBUG)
     
     # Create a collector for this worker
     collector = SubprocessLogCollector(worker_id)
@@ -48,7 +56,8 @@ def parse_csq_field(csq_field: str, csq_fields: List[str], logger: logging.Logge
     if not csq_field:
         return None
     
-    tranx_annos = csq_field.split(",")
+    tranx_annos = csq_field
+    logger.debug(f"There are {len(tranx_annos)} transcript level annotations in the CSQ field")
     anno_dict = {}
     for tranx_anno in tranx_annos:
         field_values = tranx_anno.split("|")
@@ -68,7 +77,7 @@ def parse_csq_field(csq_field: str, csq_fields: List[str], logger: logging.Logge
             field_value = np.nan if field_value == "" else field_value
             feature_dict[csq_fields[i]] = field_value
         anno_dict[feature_name] = feature_dict
-
+    logger.debug(f"There are {len(anno_dict)} transcript level annotations in the CSQ field after the extraction")
     return anno_dict
 
 
@@ -81,7 +90,7 @@ def extract_record_info(record):
         'alts': record.alts,
         'VCF_filters': ",".join(record.filter),
         'info': {
-            'CSQ': record.info.get('CSQ', ["",])[0],
+            'CSQ': record.info.get('CSQ', tuple(["",])),
             'AF_joint': record.info.get('AF_joint', [np.nan])[0],
             'AF_joint_XX': record.info.get('AF_joint_XX', [np.nan])[0],
             'AF_joint_XY': record.info.get('AF_joint_XY', [np.nan])[0],
@@ -89,7 +98,7 @@ def extract_record_info(record):
             'nhomalt_joint_XY': record.info.get('nhomalt_joint_XY', [np.nan])[0],
             'CLNDN': record.info.get('CLNDN', [""])[0],
             'CLNSIG': record.info.get('CLNSIG', [""])[0],
-            'CLNREVSTAT': record.info.get('CLNREVSTAT', [""])[0],
+            'CLNREVSTAT': ",".join(record.info.get('CLNREVSTAT', [""])),
             'VARIANT_SOURCE': record.info.get('VARIANT_SOURCE', "")
         },
         # Extract GT info for each sample, preserving phasing information
@@ -147,7 +156,7 @@ def convert_record_to_tab(args: tuple) -> tuple[List[Dict[str, Any]], List[str]]
                 row_dict = {**var_dict_items, **feature_dict, **gt_dict, **ad_dict}
                 rows.append(row_dict)
             
-        logger.debug(f"Completed processing variant at {record_dict['chrom']}:{record_dict['pos']}\n")
+        logger.debug(f"Completed processing variant at {record_dict['chrom']}:{record_dict['pos']}, which contains {len(rows)} transcript level annotations\n")
         return rows, list(collector.log_buffer)
         
     except Exception as e:
@@ -171,14 +180,19 @@ def convert_vcf_to_tab(input_vcf: str, threads=4) -> pd.DataFrame:
                           tuple(clinvar_csq_fields)) for record in vcf_file)
 
             with mp.Pool(threads) as pool:
+                varcount = 0
                 for rows, logs in pool.imap_unordered(convert_record_to_tab, record_args):
                     if logs:
                         sys.stderr.write("\n".join(logs) + "\n")
                         sys.stderr.flush()
+                    varcount += 1
                     all_rows.extend(rows)
         
         if all_rows:
-            return pd.DataFrame(all_rows)
+            logger.info(f"Completed processing {varcount} variants, which contains {len(all_rows)} transcript level annotations")
+            anno_df = pd.DataFrame(all_rows)
+            logger.info(f"The annotation table has {anno_df.shape[0]} rows and {anno_df.shape[1]} columns. And it looks like this: \n{anno_df.head().to_string(index=False)}")
+            return anno_df
         return pd.DataFrame()
         
     except Exception as e:

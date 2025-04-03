@@ -668,12 +668,14 @@ function AlphaMissense_anno() {
     local threads=$(read_yaml ${config_file} "threads") && \
     local ref_genome=$(read_yaml ${config_file} "ref_genome") && \
     local assembly=$(read_yaml ${config_file} "assembly") && \
+    local vep_plugins_dir=$(read_yaml ${config_file} "vep_plugins_dir") && \
     basic_vep_annotation \
     ${alphamissense_prescore/.tsv/.vcf} \
     ${assembly} \
     ${ref_genome} \
     ${vep_cache_dir} \
-    ${threads} && \
+    ${threads} \
+    ${vep_plugins_dir} && \
     display_vcf ${alphamissense_prescore/.tsv/.vep.vcf} && \
     update_yaml ${config_file} "alphamissense_vep_vcf" "${alphamissense_prescore/.tsv/.vep.vcf}" && \
     log "The AlphaMissense VCF file ${alphamissense_prescore/.tsv/.vep.vcf} is annotated by VEP and saved to ${alphamissense_vcf}"
@@ -702,12 +704,13 @@ function AlphaMissense_stat() {
     local config_file=${1}
     local alphamissense_stat=$(read_yaml ${config_file} "alphamissense_pd_stat")
     local alphamissense_vcf=$(read_yaml ${config_file} "alphamissense_vep_vcf")
+    local stat_py=${SCRIPT_DIR}/stat_protein_domain_amscores.py
 
     [[ -f ${alphamissense_stat} ]] && \
     [[ ${alphamissense_stat} -nt ${alphamissense_vcf} ]] && \
+    [[ ${alphamissense_stat} -nt ${stat_py} ]] && \
     log "The AlphaMissense statistics JSON file ${alphamissense_stat} is already generated, skip this step" && return 0
 
-    local stat_py=${SCRIPT_DIR}/stat_protein_domain_amscores.py && \
     python ${stat_py} \
     ${alphamissense_vcf} \
     ${alphamissense_vcf/.vcf*/.prot.domain.stats.pkl} && \
@@ -725,7 +728,7 @@ function AlphaMissense_pick_intolerant_domains() {
     local alphamissense_intolerant_domains=$(read_yaml ${config_file} "alphamissense_intolerant_domains")
     local clinvar_intolerant_domains=$(read_yaml ${config_file} "clinvar_intolerant_domains")
     local clinvar_intolerance_mechanisms=$(read_yaml ${config_file} "clinvar_intolerance_mechanisms")
-
+    local pick_intolerant_domains_py=${SCRIPT_DIR}/am_pick_intolerant_domains.py
 
     [[ -f ${alphamissense_intolerant_domains} ]] && \
     [[ ${alphamissense_intolerant_domains} -nt ${alphamissense_pd_stat} ]] && \
@@ -733,9 +736,8 @@ function AlphaMissense_pick_intolerant_domains() {
     [[ ${alphamissense_tranx_domain_map} -nt ${alphamissense_pd_stat} ]] && \
     [[ ${alphamissense_intolerant_domains} -nt ${clinvar_intolerant_domains} ]] && \
     [[ ${alphamissense_intolerant_domains} -nt ${clinvar_intolerance_mechanisms} ]] && \
+    [[ ${alphamissense_intolerant_domains} -nt ${pick_intolerant_domains_py} ]] && \
     log "The AlphaMissense intolerant domains file ${alphamissense_intolerant_domains} is already generated, skip this step" && return 0
-
-    local pick_intolerant_domains_py=${SCRIPT_DIR}/am_pick_intolerant_domains.py
     
     local threads=$(read_yaml ${config_file} "threads")
     local alphamissense_dir=$(dirname ${alphamissense_pd_stat})
@@ -953,6 +955,9 @@ function basic_vep_annotation() {
     local ref_genome=${3}
     local vep_cache_dir=${4}
     local threads=${5}
+    local vep_plugins_dir=${6}
+    local spliceai_snv_prescore=${7}
+    local spliceai_indel_prescore=${8}
 
     # Convert hg19/hg38 to GRCh37/GRCh38
     [[ ${assembly} == "hg19" ]] && assembly="GRCh37"
@@ -969,8 +974,15 @@ function basic_vep_annotation() {
     log "The output vcf ${output_vcf} is already annotated by VEP. Skip this step" && \
     return 0
 
+    if [[ -f ${spliceai_snv_prescore} ]] && [[ -f ${spliceai_indel_prescore} ]]; then
+        local spliceai_arg="-plugin SpliceAI,snv=${spliceai_snv_prescore},indel=${spliceai_indel_prescore},cutoff=0.5"
+    else
+        log "The spliceai prescore files are not found, skip the SpliceAI plugin annotation"
+        local spliceai_arg=""
+    fi
+
     log "Running basic VEP annotation with the command below:"
-    log "vep -i ${input_vcf} --format vcf --vcf --species homo_sapiens --assembly ${assembly} --cache --offline --merged --hgvs --symbol --canonical --numbers --stats_file ${input_vcf/.vcf*/.vep.stats.html} --fork ${threads} --buffer_size 10000 --fasta ${ref_genome} --dir_cache ${vep_cache_dir} --force_overwrite -o ${output_vcf}"
+    log "vep -i ${input_vcf} --format vcf --vcf --species homo_sapiens --assembly ${assembly} --cache --offline --merged --hgvs --symbol --canonical --numbers --stats_file ${input_vcf/.vcf*/.vep.stats.html} --fork ${threads} --buffer_size 10000 --fasta ${ref_genome} --dir_cache ${vep_cache_dir} ${spliceai_arg} --force_overwrite -o ${output_vcf}"
 
     # Run VEP annotation with basic options
     vep -i ${input_vcf} \
@@ -985,7 +997,7 @@ function basic_vep_annotation() {
     --hgvs \
     --symbol \
     --canonical \
-	--total_length \
+    --total_length \
     --domains \
     --numbers \
     --stats_file ${input_vcf/.vcf*/.vep.stats.html} \
@@ -993,6 +1005,7 @@ function basic_vep_annotation() {
     --buffer_size 10000 \
     --fasta ${ref_genome} \
     --dir_cache ${vep_cache_dir} \
+    --dir_plugins ${vep_plugins_dir} ${spliceai_arg} \
     --force_overwrite \
     -o ${tmp_output} && \
     bcftools sort -Oz -o ${output_vcf} ${tmp_output} && \
@@ -1037,12 +1050,16 @@ function ClinVar_VCF_deploy() {
 
     local clinvar_vcf=$(read_yaml ${config_file} "clinvar_vcf")
     local vep_cache_dir=$(read_yaml ${config_file} "vep_cache_dir")
+    local vep_plugins_dir=$(read_yaml ${config_file} "vep_plugins_dir")
     local threads=$(read_yaml ${config_file} "threads")
     local ref_genome=$(read_yaml ${config_file} "ref_genome")
     local assembly=$(read_yaml ${config_file} "assembly")
+    local spliceai_snv_prescore=$(read_yaml ${config_file} "spliceai_snv_prescore")
+    local spliceai_indel_prescore=$(read_yaml ${config_file} "spliceai_indel_prescore")
+
     check_vcf_validity ${clinvar_vcf} && \
     check_vcf_infotags ${clinvar_vcf} "CSQ" && \
-	check_vcf_infotags ${clinvar_vcf} "AF_joint" && \
+    check_vcf_infotags ${clinvar_vcf} "AF_joint" && \
     log "The ClinVar VCF file ${clinvar_vcf} is already downloaded and annotated by VEP. Skip the following steps" && return 0
 
     wget https://ftp.ncbi.nlm.nih.gov/pub/clinvar/vcf_${assembly_version}/clinvar.vcf.gz -O ${CACHEDIR}/clinvar.${assembly_version}.vcf.gz && \
@@ -1058,15 +1075,18 @@ function ClinVar_VCF_deploy() {
     ${assembly} \
     ${ref_genome} \
     ${vep_cache_dir} \
-    ${threads} && \
+    ${threads} \
+    ${vep_plugins_dir} \
+    ${spliceai_snv_prescore} \
+    ${spliceai_indel_prescore} && \
     check_vcf_validity ${CACHEDIR}/clinvar.${ucsc_assembly_version}.vep.vcf.gz && \
-	local gnomad_vcf_chrX=$(read_yaml ${config_file} "gnomad_vcf_chrX") && \
-	bash ${SCRIPT_DIR}/annotation_vcf.sh \
-	anno_agg_gnomAD_data \
-	${CACHEDIR}/clinvar.${ucsc_assembly_version}.vep.vcf.gz \
-	${threads} \
-	${assembly} \
-	${gnomad_vcf_chrX} && \
+    local gnomad_vcf_chrX=$(read_yaml ${config_file} "gnomad_vcf_chrX") && \
+    bash ${SCRIPT_DIR}/annotation_vcf.sh \
+    anno_agg_gnomAD_data \
+    ${CACHEDIR}/clinvar.${ucsc_assembly_version}.vep.vcf.gz \
+    ${threads} \
+    ${assembly} \
+    ${gnomad_vcf_chrX} && \
     update_yaml ${config_file} "clinvar_vcf" "${CACHEDIR}/clinvar.${ucsc_assembly_version}.vep.vcf.gz"
 }
 
@@ -1095,19 +1115,28 @@ function ClinVar_AA_stat () {
     local config_file=${1}
 
     local clinvar_aa_stat=$(read_yaml ${config_file} "clinvar_aa_stat")
+    local clinvar_splice_stat=$(read_yaml ${config_file} "clinvar_splice_stat")
     local clinvar_vcf=$(read_yaml ${config_file} "clinvar_vcf")
+    local threads=$(read_yaml ${config_file} "threads")
     
     [[ -f ${clinvar_aa_stat} ]] && \
     [[ ${clinvar_aa_stat} -nt ${clinvar_vcf} ]] && \
-    log "The clinvar AA stat file ${clinvar_aa_stat} is already generated. Skip this step" && return 0
+    [[ -f ${clinvar_splice_stat} ]] && \
+    [[ ${clinvar_splice_stat} -nt ${clinvar_vcf} ]] && \
+    log "The clinvar AA stat file ${clinvar_aa_stat} and splice stat file ${clinvar_splice_stat} are already generated. Skip this step" && \
+    return 0 || \
+    log "The clinvar AA stat file ${clinvar_aa_stat} and/or splice stat file ${clinvar_splice_stat} are not ready, start generating them"
 
     local clinvar_aa_stat_py=${SCRIPT_DIR}/stat_aachange_clinvar.py
 
     log "Running command: python ${clinvar_aa_stat_py} ${clinvar_vcf} ${clinvar_vcf/.vcf*/.aa_change.stats.pkl}"
     python ${clinvar_aa_stat_py} \
     ${clinvar_vcf} \
-    ${clinvar_vcf/.vcf*/.aa_change.stats.pkl} && \
-    update_yaml ${config_file} "clinvar_aa_stat" "${clinvar_vcf/.vcf*/.aa_change.stats.pkl}"
+    ${clinvar_vcf/.vcf*/.aa_change.stats.pkl} \
+    ${clinvar_vcf/.vcf*/.splice_change.stats.pkl} \
+    ${threads} && \
+    update_yaml ${config_file} "clinvar_aa_stat" "${clinvar_vcf/.vcf*/.aa_change.stats.pkl}" && \
+    update_yaml ${config_file} "clinvar_splice_stat" "${clinvar_vcf/.vcf*/.splice_change.stats.pkl}"
 }
 
 
@@ -1118,14 +1147,16 @@ function ClinVar_pick_intolerant_domains () {
     local clinvar_domain_stats=$(read_yaml ${config_file} "clinvar_pd_stat")
     local clinvar_intolerant_domains=$(read_yaml ${config_file} "clinvar_intolerant_domains")
     local clinvar_intolerance_mechanisms=$(read_yaml ${config_file} "clinvar_intolerance_mechanisms")
+    local clinvar_pick_intolerant_domains_py=${SCRIPT_DIR}/clinvar_pick_intolerant_domains.py
 
     [[ -f ${clinvar_intolerant_domains} ]] && \
     [[ ${clinvar_intolerant_domains} -nt ${clinvar_domain_stats} ]] && \
     [[ -f ${clinvar_intolerance_mechanisms} ]] && \
     [[ ${clinvar_intolerance_mechanisms} -nt ${clinvar_domain_stats} ]] && \
+    [[ ${clinvar_intolerant_domains} -nt ${clinvar_vcf} ]] && \
+    [[ ${clinvar_intolerance_mechanisms} -nt ${clinvar_pick_intolerant_domains_py} ]] && \
     log "The intolerant domains file ${clinvar_intolerant_domains} and intolerance mechanisms file ${clinvar_intolerance_mechanisms} are already generated. Skip this step" && return 0
 
-    local clinvar_pick_intolerant_domains_py=${SCRIPT_DIR}/clinvar_pick_intolerant_domains.py
     local clinvar_dir=$(read_yaml ${config_file} "clinvar_vcf_dir")
 
     log "Running command: python ${clinvar_pick_intolerant_domains_py} --pickle_file ${clinvar_domain_stats} --output_dir ${clinvar_dir}"
@@ -1139,23 +1170,23 @@ function ClinVar_pick_intolerant_domains () {
 
 
 function ClinVar_patho_AF_stat () {
-	local config_file=${1}
-	local clinvar_vcf=$(read_yaml ${config_file} "clinvar_vcf")
-	local threads=$(read_yaml ${config_file} "threads")
-	local assembly=$(read_yaml ${config_file} "assembly")
-	local output_pickle=$(read_yaml ${config_file} "clinvar_patho_af_stat")
+    local config_file=${1}
+    local clinvar_vcf=$(read_yaml ${config_file} "clinvar_vcf")
+    local threads=$(read_yaml ${config_file} "threads")
+    local assembly=$(read_yaml ${config_file} "assembly")
+    local gene_pickle=$(read_yaml ${config_file} "clinvar_patho_af_stat")
+    local exon_pickle=$(read_yaml ${config_file} "clinvar_patho_exon_af_stat")
 
-	[[ -f ${output_pickle} ]] && \
-	[[ ${output_pickle} -nt ${clinvar_vcf} ]] && \
-	log "The clinvar pathogenic variants per allele frequency file ${output_pickle} is already generated. Skip this step" && \
-	return 0 || \
-	log "The clinvar pathogenic variants per allele frequency file ${output_pickle} is not found or not up to date, so we need to generate it"
-
-	python ${SCRIPT_DIR}/stat_gene_patho_afs.py \
-	${clinvar_vcf} \
-	${clinvar_vcf/.vcf*/.patho_af_stat.pkl} \
-	${threads} && \
-	update_yaml ${config_file} "clinvar_patho_af_stat" "${clinvar_vcf/.vcf*/.patho_af_stat.pkl}"
+    python ${SCRIPT_DIR}/stat_gene_patho_afs.py \
+    ${clinvar_vcf} \
+    ${clinvar_vcf/.vcf*/.patho_af_stat.pkl} \
+    ${threads} && \
+    update_yaml ${config_file} "clinvar_patho_af_stat" "${clinvar_vcf/.vcf*/.patho_af_stat.pkl}" && \
+    python ${SCRIPT_DIR}/stat_exon_patho_afs.py \
+    --vcf_path ${clinvar_vcf} \
+    --output ${clinvar_vcf/.vcf*/.patho_exon_af_stat.pkl} \
+    --threads ${threads} && \
+    update_yaml ${config_file} "clinvar_patho_exon_af_stat" "${clinvar_vcf/.vcf*/.patho_exon_af_stat.pkl}"
 }
 
 
@@ -1204,6 +1235,41 @@ function Conservation_install() {
     fi
 }
 
+
+
+function InterPro_parsing () {
+    local config=${1}
+    # Assembly independent
+
+    local interpro_dir=$(read_yaml "${config}" "interpro_dir")
+    local interpro_mapping_pickle=$(read_yaml "${config}" "interpro_mapping_pickle")
+    local summary_mapping_py=${SCRIPT_DIR}/protein_domain_mapping.py
+    local interpro_xml_gz_url=$(read_yaml "${config}" "interpro_xml_gz_url")
+    local am_vep_vcf=$(read_yaml "${config}" "alphamissense_vep_vcf")
+
+    [[ ! -d ${interpro_dir} ]] && { log "The InterPro directory ${interpro_dir} is not found, please check the file"; return 1; }
+    [[ -f ${interpro_mapping_pickle} ]] && \
+    [[ -f ${interpro_dir}/$(basename ${interpro_xml_gz_url}) ]] && \
+    [[ ${interpro_mapping_pickle} -nt ${interpro_dir}/$(basename ${interpro_xml_gz_url}) ]] && \
+    [[ ${interpro_mapping_pickle} -nt ${summary_mapping_py} ]] && \
+    log "The InterPro mapping pickle file ${interpro_mapping_pickle} is already generated. Skip this step" && return 0 || \
+    log "The InterPro mapping pickle file ${interpro_mapping_pickle} is not ready or updated, start generating it"
+
+
+    log "Running command: wget -c ${interpro_xml_gz_url} -O ${interpro_dir}/$(basename ${interpro_xml_gz_url})"
+    wget -c ${interpro_xml_gz_url} -O ${interpro_dir}/$(basename ${interpro_xml_gz_url}) && \
+    log "Running command: python ${summary_mapping_py} \
+    --xml ${interpro_dir}/$(basename ${interpro_xml_gz_url}) \
+    --mapping_output ${interpro_dir}/Interpro_entry_mapping.pickle \
+    --vcf ${am_vep_vcf} \
+    --report ${interpro_dir}/Interpro_format_report.txt"
+    python ${summary_mapping_py} \
+    --xml ${interpro_dir}/$(basename ${interpro_xml_gz_url}) \
+    --mapping_output ${interpro_dir}/Interpro_entry_mapping.pickle \
+    --vcf ${am_vep_vcf} \
+    --report ${interpro_dir}/Interpro_format_report.txt && \
+    update_yaml "${config}" "interpro_mapping_pickle" "${interpro_dir}/Interpro_entry_mapping.pickle"
+}
 
 
 function SpliceVault_install () {
@@ -1438,7 +1504,11 @@ function main_install() {
     gnomAD_install ${config_file} ${gnomad_vcf_dir} ${ref_fasta} || \
     { log "Failed to install gnomAD VCF"; return 1; }
 
-    # 5. Install ClinVar VCF
+    # 5. Install InterPro mapping pickle
+    InterPro_parsing ${config_file} || \
+    { log "Failed to install InterPro mapping pickle"; return 1; }
+
+    # 6. Install ClinVar VCF
     local clinvar_vcf_dir=$(read_yaml "$config_file" "clinvar_vcf_dir")
     ClinVar_VCF_deploy ${config_file} ${clinvar_vcf_dir} ${assembly} || \
     { log "Failed to install ClinVar VCF"; return 1; }
@@ -1450,11 +1520,11 @@ function main_install() {
     { log "Failed to pick intolerant domains from ClinVar"; return 1; }
     AlphaMissense_pick_intolerant_domains ${config_file} || \
     { log "Failed to pick intolerant domains from AlphaMissense"; return 1; }
-	ClinVar_patho_AF_stat ${config_file} || \
-	{ log "Failed to stat ClinVar pathogenic variants per allele frequency"; return 1; }
+    ClinVar_patho_AF_stat ${config_file} || \
+    { log "Failed to stat ClinVar pathogenic variants per allele frequency"; return 1; }
 
 
-    # 6. Install CADD prescores
+    # 7. Install CADD prescores
     CADD_install \
     ${config_file} \
     ${assembly} || \

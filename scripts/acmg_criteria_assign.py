@@ -13,6 +13,7 @@ from multiprocessing import Manager
 import mmap
 
 from stat_protein_domain_amscores import nested_defaultdict
+from protein_domain_mapping import DomainNormalizer
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -130,13 +131,96 @@ def summarize_clinvar_gene_pathogenicity(clinvar_gene_aa_dict: dict) -> set:
     return pathogenic_genes
 
 
+def identify_alternative_start_codon_genes(df: pd.DataFrame) -> set:
+    if df["Consequence"].str.contains("start_lost").any():
+        if df["Consequence"].str.contains("start_lost").all():
+            return np.nan
+        elif (np.logical_not(df["Consequence"].str.contains("start_lost")) & df["BIOTYPE"].str.contains("protein_coding")).any():
+            return df["Gene"].values[0] if len(df["Gene"].values) > 0 else np.nan
+        else:
+            return np.nan
+    else:
+        return np.nan
+    
 
+def downstream_domain_impact(exon_str, tranx_exon_domain_map, interpro_entry_map_dict, dm_instance, domains=[]):
+    '''
+    Used for frameshift and stopgain variants to explore whether the downstream protein region involving functional domains
+    '''
+    affected_exons = set([])
+    if "-" in exon_str and "/" in exon_str:
+        affected_exons.update(range(int(exon_str.split("-")[0]), int(exon_str.split("/")[1]) + 1))
+    elif "/" in exon_str:
+        affected_exons.update(range(int(exon_str.split("/")[0]), int(exon_str.split("/")[1]) + 1))
+    else:
+        raise ValueError(f"Invalid exon string: {exon_str}")
+    
+    if domains:
+        for domain in domains:
+            if dm_instance.interpret_functionality(domain, interpro_entry_map_dict) == "Functional":
+                return True
+    
+    for exon in affected_exons:
+        if exon in tranx_exon_domain_map:
+            domains = tranx_exon_domain_map[exon]
+            for domain in domains:
+                domain = domain.split(":", 1)[1] # Remove the ENSG prefix in the domain path
+                if dm_instance.interpret_functionality(domain, interpro_entry_map_dict) == "Functional":
+                    return True
+    return False
+
+
+def downstream_exon_patho_af(row, clinvar_patho_exon_af_dict, logic="any", threshold=0.01):
+    exon_str = row['EXON']
+    affected_exons = set([])
+    if "-" in exon_str and "/" in exon_str:
+        affected_exons.update(range(int(exon_str.split("-")[0]), int(exon_str.split("/")[1]) + 1))
+    elif "/" in exon_str:
+        affected_exons.update(range(int(exon_str.split("/")[0]), int(exon_str.split("/")[1]) + 1))
+    else:
+        raise ValueError(f"Invalid exon string: {exon_str}")
+    
+    tranx_id = row['Feature']
+    affected_exons_patho_af = set([])
+    for exon in affected_exons:
+        affected_exons_patho_af.add(clinvar_patho_exon_af_dict.get(tranx_id, {}).get(exon, (np.nan, ))[0])
+    
+    if logic == "any":
+        return any(float(epa) < threshold for epa in affected_exons_patho_af)
+    elif logic == "all":
+        return all(float(epa) < threshold for epa in affected_exons_patho_af)
+    else:
+        raise ValueError(f"Invalid logic: {logic}, it should be either 'any' or 'all', depending on your needs")
+
+
+def identify_functional_truncation(row, 
+                                   dm_instance=None, 
+                                   interpro_entry_map_dict=None, 
+                                   tranx_exon_domain_map=None, 
+                                   clinvar_patho_exon_af_dict=None, 
+                                   exon_patho_af_threshold=0.01):
+    '''
+    Identify whether a truncating variant is involving functional regions on a protein
+    '''
+    if "frameshift" in row['Consequence'] or "stop_gained" in row['Consequence']:
+        # These variants not only affect the local region of proteins, but also affect the downstream protein regions
+        func_domain = downstream_domain_impact(row['EXON'], tranx_exon_domain_map, interpro_entry_map_dict, dm_instance, domains=row["DOMAINS"])
+        exon_frequent_patho = downstream_exon_patho_af(row, clinvar_patho_exon_af_dict, logic="any", threshold=exon_patho_af_threshold)
+    else:
+        func_domain = any(dm_instance.interpret_functionality(domain, interpro_entry_map_dict) == "Functional" for domain in row["DOMAINS"])
+        exon_frequent_patho = float(clinvar_patho_exon_af_dict.get(row['Feature'], {}).get(row['EXON'], (np.nan, ))[0]) < exon_patho_af_threshold
+    
+    return func_domain, exon_frequent_patho
+    
 
 def PVS1_criteria(df: pd.DataFrame, 
                   am_score_dict: dict,
                   clinvar_gene_aa_dict: dict,
+                  clinvar_patho_exon_af_stat: str,
+                  interpro_entry_map_pkl: str,
                   ped_df: pd.DataFrame = None,
-                  fam_name: str = None) -> pd.DataFrame:
+                  fam_name: str = None,
+                  tranx_exon_domain_map_pkl: str = None) -> pd.DataFrame:
     # LoF is high confidence if it is a LoF variant and the consequence is known
     # VEP LoF, splicing LoF, UTRAnnotator LoF, ClinVar Pathogenic
     high_confidence_status = {
@@ -152,6 +236,52 @@ def PVS1_criteria(df: pd.DataFrame,
     logger.info(f"{df['splicing_lof'].sum()} variants are considered LoF by splicing effect prediction")
     logger.info(f"{df['5UTR_lof'].sum()} variants are considered LoF by 5UTR Annotator")
     lof_criteria = df['vep_consq_lof'] | df['splicing_lof'] | df['5UTR_lof'] | clinvar_lof
+    # Do not consider the start_loss variants where functional transcripts for this gene uses alternative start codons
+    alt_start_genes = set(df.groupby(['chrom', 'pos', 'ref', 'alt', 'Gene']).apply(identify_alternative_start_codon_genes).unique().tolist())
+    logger.info(f"These are the {len(alt_start_genes)} genes that have functional transcripts using alternative start codons: {alt_start_genes}")
+    alt_start_losts = df["Consequence"].str.contains("start_lost") & df["Gene"].isin(alt_start_genes)
+    logger.info(f"{alt_start_losts.sum()} variants are having start_lost consequences to transcripts with alternative start codons")
+    
+    # Load the necessary dict file
+    clinvar_patho_exon_af_dict = pickle.load(open(clinvar_patho_exon_af_stat, 'rb'))
+    interpro_entry_map_dict = pickle.load(open(interpro_entry_map_pkl, 'rb'))
+    tranx_exon_domain_map = pickle.load(open(tranx_exon_domain_map_pkl, 'rb'))
+    dm_instance = DomainNormalizer()
+
+    functional_domains, exon_rare_patho_afs = zip(*df.apply(identify_functional_truncation, axis=1, dm_instance=dm_instance, 
+                                                                                                    interpro_entry_map_dict=interpro_entry_map_dict, 
+                                                                                                    tranx_exon_domain_map=tranx_exon_domain_map, 
+                                                                                                    clinvar_patho_exon_af_dict=clinvar_patho_exon_af_dict, 
+                                                                                                    exon_patho_af_threshold=0.01))
+    unknown_function_domains = ~functional_domains
+    logger.info(f"{unknown_function_domains.sum()} variants are truncating out protein regions with unknown functionality")
+    exon_median_af = ~exon_rare_patho_afs
+    logger.info(f"{exon_median_af.sum()} variants located in exons with median pathogenic AF > 0.01")
+    nmd_escaping = df['NMD'].str.contains("NMD_escaping")
+    logger.info(f"{nmd_escaping.sum()} variants are having NMD escaping, while {(nmd_escaping & lof_criteria).sum()} among them are predicted LoF")
+
+    # stop-gain or frameshift variants that located in regions with unknown function
+    stop_gains = df['Consequence'].str.contains("stop_gained")
+    start_losts = df['Consequence'].str.contains("start_lost")
+    frameshifts = df['Consequence'].str.contains("frameshift")
+    inframe_dels = df['Consequence'].str.contains("inframe_deletion")
+    inframe_dels = inframe_dels & ~stop_gains & ~start_losts & ~df['splicing_lof']
+
+    null_variants_uncritical_region = unknown_function_domains & (stop_gains | frameshifts) & exon_median_af & nmd_escaping
+    logger.info(f"{null_variants_uncritical_region.sum()} variants causing stop_gained or frameshift effects but not causing NMD, and only truncate out uncritical regions from the protein product")
+    splicing_uncritical_region = ((df['splicing_len_changing'] | nmd_escaping) & unknown_function_domains & exon_median_af)
+    logger.info(f"{splicing_uncritical_region.sum()} variants are having splicing altering, but did not cause NMD, and only cut off unknown functionality regions from protein")
+    inframe_dels_uncritical_region = ((inframe_dels | nmd_escaping) & unknown_function_domains & exon_median_af)
+    logger.info(f"{inframe_dels_uncritical_region.sum()} variants are having inframe deletions, did not cause NMD, and only cut off unknown functionality regions from protein")
+    not_lof = null_variants_uncritical_region | splicing_uncritical_region | inframe_dels_uncritical_region | alt_start_losts
+    logger.info(f"{not_lof.sum()} variants are not LoF, and located in exons with median pathogenic AF < 0.01")
+
+    # Refine VEP LoF criteria
+    df['vep_len_changing'] = df['vep_len_changing'] | ((null_variants_uncritical_region | inframe_dels_uncritical_region | splicing_uncritical_region) & df['vep_consq_lof'])
+    df['vep_consq_lof'] = df['vep_consq_lof'] & ~(null_variants_uncritical_region | inframe_dels_uncritical_region | splicing_uncritical_region)
+    logger.info(f"After refining,{df['vep_consq_lof'].sum()} variants are considered LoF by VEP")
+
+    lof_criteria = lof_criteria & ~not_lof
     logger.info(f"In total, {lof_criteria.sum()} variants are considered LoF")
 
     '''
@@ -176,6 +306,9 @@ def PVS1_criteria(df: pd.DataFrame,
     clinvar_pathogenic_genes = summarize_clinvar_gene_pathogenicity(clinvar_gene_aa_dict)
     clinvar_pathogenic = df['Gene'].isin(clinvar_pathogenic_genes)
     logger.info(f"{clinvar_pathogenic.sum()} variants are having ClinVar pathogenic variants")
+    
+    clinvar_pathogenic = clinvar_pathogenic & ~not_lof
+    logger.info(f"{clinvar_pathogenic.sum()} variants are having ClinVar pathogenic variants and located in exons with median pathogenic AF < 0.01")
 
     if not ped_df is None and not fam_name is None:
         proband = ped_df.loc[(ped_df['#FamilyID'] == fam_name) & (ped_df['Phenotype'].isin(["2", 2])), 'IndividualID'].values[0]
@@ -190,7 +323,77 @@ def PVS1_criteria(df: pd.DataFrame,
 
 
 
-def check_aa_pathogenic(row: dict, clinvar_tranx_aa_dict: dict, high_confidence_status: set) -> bool:
+def check_splice_pathogenic(row: dict, 
+                            clinvar_tranx_splice_dict_list: list) -> bool:
+    '''
+    Check if a variant's splice change matches a known pathogenic variant.
+    The dict is prepared by the script stat_aachange_clinvar.py
+    The dict should actually be a list of dicts:
+    pos_info = {
+                'chrom': record.chrom,
+                'pos': record.pos,
+                'ref': record.ref,
+                'alt': record.alts[0] if record.alts else None,
+                'exon': exon,
+                'intron': intron,
+                'hgvsc': hgvsc,
+                'consequence': consq,
+                'clinvar_sig': cln_sig,
+                'clinvar_review': rev_status,
+                'splice_ai': splice_ai_data
+            }
+    while splice_ai_data is also a dict that looks like:
+        SpliceAI_pred_DP_AG: <value> # Delta position for acceptor gain
+        SpliceAI_pred_DP_AL: <value> # Delta position for acceptor loss
+        SpliceAI_pred_DP_DG: <value> # Delta position for donor gain
+        SpliceAI_pred_DP_DL: <value> # Delta position for donor loss
+        SpliceAI_pred_DS_AG: <value> # Delta score for acceptor gain
+        SpliceAI_pred_DS_AL: <value> # Delta score for acceptor loss
+        SpliceAI_pred_DS_DG: <value> # Delta score for donor gain
+        SpliceAI_pred_DS_DL: <value> # Delta score for donor loss
+    '''
+    if not clinvar_tranx_splice_dict_list:
+        return False
+    
+    # Find the same splicing site pathogenic variant in the same transcript
+    var_intron = row.get('INTRON', None)
+    var_exon = row.get('EXON', None)
+    if var_intron is None or var_exon is None:
+        return False
+    
+    # Find the same splicing site pathogenic variant in the same transcript
+    patho_records = [patho for patho in clinvar_tranx_splice_dict_list if patho['exon'] == var_exon or patho['intron'] == var_intron]
+    if not patho_records:
+        return False
+    
+    var_spliceai_ds_ag = row.get('SpliceAI_pred_DS_AG', np.nan)
+    var_spliceai_ds_al = row.get('SpliceAI_pred_DS_AL', np.nan)
+    var_spliceai_ds_dg = row.get('SpliceAI_pred_DS_DG', np.nan)
+    var_spliceai_ds_dl = row.get('SpliceAI_pred_DS_DL', np.nan)
+
+    delta_scores = abs(var_spliceai_ds_ag), abs(var_spliceai_ds_al), abs(var_spliceai_ds_dg), abs(var_spliceai_ds_dl)
+    if all(ds < 0.5 for ds in delta_scores):
+        return False
+    
+    # Find the biggest delta score index in delta_scores
+    max_delta_score_index = np.argmax(delta_scores)
+    max_delta_score = delta_scores[max_delta_score_index]
+    target_spliceai_ds = ['SpliceAI_pred_DS_AG', 'SpliceAI_pred_DS_AL', 'SpliceAI_pred_DS_DG', 'SpliceAI_pred_DS_DL'][max_delta_score_index]
+    
+    for patho in patho_records:
+        patho_spliceai_ds = patho.get(target_spliceai_ds, np.nan)
+        if abs(patho_spliceai_ds) <= max_delta_score:
+            return "Same_Splice_Site"
+    
+    return False
+    
+
+    
+
+def check_aa_pathogenic(row: dict, 
+                        clinvar_tranx_aa_dict: dict, 
+                        clinvar_tranx_splice_dict_list: list, 
+                        high_confidence_status: set) -> bool:
     '''
     Check if a variant's amino acid change matches a known pathogenic variant.
     
@@ -208,23 +411,22 @@ def check_aa_pathogenic(row: dict, clinvar_tranx_aa_dict: dict, high_confidence_
     hgvsp = row.get('HGVSp', '') # e.g ENSP00000349098.5:p.E117K
     
     logger.debug(f"The current row records a variant overlapping with transcript {transcript} at protein position {raw_protein_pos} with HGVSp {hgvsp}")
-    if hgvsp in [np.nan, np.inf, 'nan', 'inf', '']:
-        return False
         
     # Check if this transcript has any ClinVar entries
     if not clinvar_tranx_aa_dict:
         logger.debug(f"Transcript {transcript} not in ClinVar's VEP annotation records")
         return False
+    
+    if hgvsp in [np.nan, np.inf, 'nan', 'inf', '']:
+        return check_splice_pathogenic(row, clinvar_tranx_splice_dict_list)
         
     # Check if this position has any ClinVar entries
     if raw_protein_pos not in clinvar_tranx_aa_dict:
         logger.debug(f"Protein position {raw_protein_pos} not in ClinVar's VEP annotation records for transcript {transcript}")
-        return False
+        return check_splice_pathogenic(row, clinvar_tranx_splice_dict_list)
         
     # Get the clinical significance and review status
     clinvar_entry = clinvar_tranx_aa_dict[raw_protein_pos].get(hgvsp, None)
-    if clinvar_entry is None:
-        clinvar_entry = clinvar_tranx_aa_dict[raw_protein_pos].get(hgvsp, None)
     
     # Check if any entry is pathogenic with high confidence
     if clinvar_entry:
@@ -236,6 +438,10 @@ def check_aa_pathogenic(row: dict, clinvar_tranx_aa_dict: dict, high_confidence_
                 return "Same_AA_Change"
     
     logger.debug(f"No clinvar entry for {hgvsp} in transcript {transcript}. But there are AA changes recorded in the same protein position {raw_protein_pos}")
+    splice_pathogenic = check_splice_pathogenic(row, clinvar_tranx_splice_dict_list)
+    if splice_pathogenic:
+        return splice_pathogenic
+    
     for hgvsp_alt, clinvar_entry in clinvar_tranx_aa_dict[raw_protein_pos].items():
         for sig, rev_stat in zip(clinvar_entry['CLNSIG'], clinvar_entry['CLNREVSTAT']):
             if ('athogenic' in sig and  # Captures both 'Pathogenic' and 'Likely_pathogenic'
@@ -248,6 +454,7 @@ def check_aa_pathogenic(row: dict, clinvar_tranx_aa_dict: dict, high_confidence_
 
 def PS1_PM5_criteria(df: pd.DataFrame, 
                      clinvar_aa_dict_pkl: str, 
+                     clinvar_splice_dict_pkl: str,
                      threads: int = 10) -> Tuple[np.ndarray, np.ndarray]:
     '''
     Identify variants using starmap,
@@ -261,12 +468,14 @@ def PS1_PM5_criteria(df: pd.DataFrame,
     }
     logger.info(f"Loading ClinVar AA change dict from {clinvar_aa_dict_pkl}")
     clinvar_aa_dict = pickle.load(open(clinvar_aa_dict_pkl, 'rb'))
+    logger.info(f"Loading ClinVar splice dict from {clinvar_splice_dict_pkl}")
+    clinvar_splice_dict = pickle.load(open(clinvar_splice_dict_pkl, 'rb'))
     
     # Convert DataFrame to list of dictionaries
     records = df.to_dict('records')
     
     # Create argument tuples for starmap
-    args = [(record, clinvar_aa_dict.get(record['Feature'], {}), high_confidence_status) for record in records]
+    args = [(record, clinvar_aa_dict.get(record['Feature'], clinvar_splice_dict.get(record['Feature'], {})), high_confidence_status) for record in records]
     
      # Add chunking
     chunk_size = max(len(records) // (threads * 4), 1)
@@ -276,7 +485,7 @@ def PS1_PM5_criteria(df: pd.DataFrame,
         results = pool.starmap(check_aa_pathogenic, args, chunksize=chunk_size)
     
     results = np.array(results)
-    ps1_criteria = results == "Same_AA_Change"
+    ps1_criteria = (results == "Same_AA_Change") | (results == "Same_Splice_Site")
     pm5_criteria = results == "Same_AA_Residue"
     return ps1_criteria, pm5_criteria
 
@@ -388,7 +597,7 @@ def PS3_BS3_criteria(df: pd.DataFrame) -> pd.DataFrame:
         'reviewed_by_expert_panel',                             # 3 stars
         'criteria_provided,_multiple_submitters,_no_conflicts',  # 2 stars
     }
-
+    
     clinvar_lof = df['CLNSIG'].str.contains('Pathogenic') & df['CLNREVSTAT'].isin(high_confidence_status)
     high_conf_benign = df['CLNSIG'].str.contains('Benign') & df['CLNREVSTAT'].isin(high_confidence_status)
 
@@ -659,6 +868,7 @@ def PP5_BP6_criteria(df: pd.DataFrame) -> pd.Series:
 def BS1_criteria(df: pd.DataFrame, expected_incidence: float = 0.001, clinvar_patho_af_stat: str = "") -> pd.Series:
     # BS1: PAF of variant is greater than expected incidence of the disease
     greater_than_disease_incidence = df['gnomAD_joint_af'] > expected_incidence
+    logger.info(f"Loading the clinvar pathogenic AF stat from {clinvar_patho_af_stat}")
     clinvar_patho_af_dict = pickle.load(open(clinvar_patho_af_stat, 'rb'))
     greater_than_clinvar_patho_af = df['gnomAD_joint_af'] > df['Gene'].map(lambda gene: clinvar_patho_af_dict.get(gene, {}).get('af', 0))
     return greater_than_disease_incidence | greater_than_clinvar_patho_af
@@ -1255,10 +1465,14 @@ def sort_and_rank_variants(df: pd.DataFrame) -> pd.DataFrame:
 def ACMG_criteria_assign(anno_table: str, 
                          am_score_table: str, 
                          clinvar_patho_af_stat: str,
+                         clinvar_patho_exon_af_stat: str,
                          clinvar_aa_dict_pkl: str,
+                         clinvar_splice_dict_pkl: str,
+                         interpro_entry_map_pkl: str,
                          intolerant_domains_pkl: str,
                          intolerant_motifs_pkl: str,
                          domain_mechanism_tsv: str,
+                         tranx_exon_domain_map_pkl: str,
                          am_score_vcf: str,
                          fam_name: str = "",
                          ped_table: str = "",
@@ -1314,11 +1528,14 @@ def ACMG_criteria_assign(anno_table: str,
     pvs1_criteria = PVS1_criteria(anno_df, 
                                   gene_to_am_score_map, 
                                   clinvar_aa_gene_map, 
-                                  ped_df) # When test on ClinVar variants, fam_name is set to None because no genotype information are provided
+                                  clinvar_patho_exon_af_stat,
+                                  interpro_entry_map_pkl,
+                                  ped_df,
+                                  tranx_exon_domain_map_pkl=tranx_exon_domain_map_pkl) # When test on ClinVar variants, fam_name is set to None because no genotype information are provided
     logger.info(f"PVS1 criteria applied, {pvs1_criteria.sum()} variants are having the PVS1 criteria")
 
     # Apply the PS1 and PM5 criteria
-    ps1_criteria, pm5_criteria = PS1_PM5_criteria(anno_df, clinvar_aa_dict_pkl, threads)
+    ps1_criteria, pm5_criteria = PS1_PM5_criteria(anno_df, clinvar_aa_dict_pkl, clinvar_splice_dict_pkl, threads)
     logger.info(f"PS1 criteria applied, {ps1_criteria.sum()} variants are having the PS1 criteria") 
     logger.info(f"PM5 criteria applied, {pm5_criteria.sum()} variants are having the PM5 criteria")
 
@@ -1488,10 +1705,14 @@ if __name__ == "__main__":
     parser.add_argument("--ped_table", type=str, required=False, default=None)
     parser.add_argument("--fam_name", type=str, required=False, default=None)
     parser.add_argument("--clinvar_patho_af_stat", type=str, required=True)
+    parser.add_argument("--clinvar_patho_exon_af_stat", type=str, required=True)
     parser.add_argument("--clinvar_aa_dict_pkl", type=str, required=True)
+    parser.add_argument("--clinvar_splice_dict_pkl", type=str, required=True)
+    parser.add_argument("--interpro_entry_map_pkl", type=str, required=True)
     parser.add_argument("--intolerant_domains_pkl", type=str, required=True)
     parser.add_argument("--intolerant_motifs_pkl", type=str, required=True)
     parser.add_argument("--domain_mechanism_tsv", type=str, required=True)
+    parser.add_argument("--tranx_exon_domain_map_pkl", type=str, required=True)
     parser.add_argument("--am_score_vcf", type=str, required=True)
     parser.add_argument("--alt_disease_vcf", type=str, required=False, default=None)
     parser.add_argument("--gnomAD_extreme_rare_threshold", type=float, required=False, default=0.0001)
@@ -1502,10 +1723,14 @@ if __name__ == "__main__":
     anno_df, criteria_matrix = ACMG_criteria_assign(args.anno_table, 
                                                     args.am_score_table, 
                                                     args.clinvar_patho_af_stat,
+                                                    args.clinvar_patho_exon_af_stat,
                                                     args.clinvar_aa_dict_pkl,
+                                                    args.clinvar_splice_dict_pkl,
+                                                    args.interpro_entry_map_pkl,
                                                     args.intolerant_domains_pkl,
                                                     args.intolerant_motifs_pkl,
                                                     args.domain_mechanism_tsv,
+                                                    args.tranx_exon_domain_map_pkl,
                                                     args.am_score_vcf,
                                                     fam_name=args.fam_name,
                                                     ped_table=args.ped_table,

@@ -1,0 +1,87 @@
+{
+	"database_name_mappings": {
+	  "vep_to_interpro": {
+		"comment": "Map VEP DB Name (key) to InterPro DB Name (value, UPPERCASE). Curated based on hg19/hg38 reports.",
+		"Pfam": "PFAM",
+		"PANTHER": "PANTHER",
+		"Superfamily": "SSF",
+		"SUPFAM": "SSF", 
+		"Gene3D": "CATHGENE3D",
+		"PROSITE_profiles": "PROFILE", 
+		"PROSITE_patterns": "PROSITE", 
+		"SMART": "SMART",
+		"Prints": "PRINTS", 
+		"HAMAP": "HAMAP",
+		"PIRSF": "PIRSF",
+		"TIGRFAM": "NCBIFAM", 
+		"CDD": "CDD", 
+		"SFLD": "SFLD", 
+		"NCBIFAM": "NCBIFAM" 
+	  },
+	  "interpro_to_vep": {
+		"comment": "Map InterPro DB Name (key, UPPERCASE) to preferred VEP DB Name (value). Curated based on hg19/hg38 reports.",
+		"PFAM": "Pfam",
+		"PANTHER": "PANTHER",
+		"SSF": "Superfamily", 
+		"CATHGENE3D": "Gene3D",
+		"PROFILE": "PROSITE_profiles",
+		"PROSITE": "PROSITE_patterns",
+		"SMART": "SMART",
+		"PRINTS": "Prints",
+		"HAMAP": "HAMAP",
+		"PIRSF": "PIRSF",
+		"NCBIFAM": "NCBIFAM", 
+		"CDD": "CDD",
+		"SFLD": "SFLD"
+	  }
+	},
+	"accession_id_normalization": {
+	  "vep_to_interpro_key": {
+		"comment": "Rules to convert VEP ID string -> InterPro XML dbkey format. Keyed by VEP DB Name.",
+		"__default__": {
+		  "rule_type": "identity",
+		  "comment": "Default: use VEP ID as is. Assumes format matches InterPro dbkey."
+		},
+		"PANTHER": {
+		  "rule_type": "regex_capture",
+		  "pattern": "^(PTHR\\d+)", 
+		  "group": 1,
+		  "comment": "Extract primary PTHR##### ID, ignore potential :SFxxx suffix."
+		},
+		"Gene3D": {
+		  "rule_type": "prefix_add",
+		  "prefix": "G3DSA:",
+		  "comment": "ASSUMPTION: Prepend 'G3DSA:' as InterPro dbkey examples show it, while VEP examples omit it. VERIFY ACTUAL XML <dbkey> FORMAT for CATHGENE3D entries."
+		},
+		"Superfamily": {
+		   "rule_type": "identity",
+		   "comment": "Updated based on hg38 report: VEP examples now consistently show SSF prefix (e.g., SSF46955). Assumes VEP output is SSF#####."
+		},
+		"SUPFAM": { 
+		   "rule_type": "identity",
+		   "comment": "Updated based on hg38 report: Assumes VEP output is SSF#####."
+		}
+	  },
+	  "interpro_key_to_vep_id": {
+		 "comment": "Rules to format InterPro XML dbkey -> preferred VEP ID format. Keyed by InterPro DB Name (UPPERCASE).",
+		 "__default__": {
+		  "rule_type": "identity",
+		  "comment": "Default: use InterPro dbkey as is. Assumes VEP accepts this format."
+		 },
+		 "PANTHER": {
+			 "rule_type": "identity",
+			 "comment": "Return primary PTHR#####. Cannot reliably reconstruct VEP's :SFxxx suffix."
+		 },
+		 "CATHGENE3D": {
+			 "rule_type": "regex_substitute",
+			 "pattern": "^G3DSA:(.*)", 
+			 "replacement": "\\1",
+			 "comment": "ASSUMPTION: Remove 'G3DSA:' prefix if present in InterPro dbkey, as VEP seems to omit it. VERIFY ACTUAL XML <dbkey> FORMAT."
+		 },
+		  "NCBIFAM": {
+			 "rule_type": "identity",
+			 "comment": "Return TIGR##### or NF###### ID as is."
+		  }
+	  }
+	}
+  }

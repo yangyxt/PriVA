@@ -12,6 +12,39 @@ def nested_defaultdict():
     return defaultdict(nested_defaultdict)
 
 class DomainAMScoreCollector:
+    '''
+    {
+        <ENSG_ID>: {  # Key: Ensembl Gene ID (string, e.g., 'ENSG00000123456')
+            <DB_NAME>: {  # Key: Domain Database Name (string, e.g., 'PANTHER', 'Pfam')
+            <LEVEL_1_ID>: {  # Key: First level of domain ID (string, e.g., 'PTHR26451', 'PF00001')
+                # --- This level contains transcript info and the score distribution ---
+                <TRANSCRIPT_ID_1>: set(<EXON_ID_A>, <EXON_ID_B>, ...), # Key: Ensembl Transcript ID (string), Value: Set of Exon IDs (strings like '1/10')
+                <TRANSCRIPT_ID_2>: set(<EXON_ID_C>, ...),
+                # ... potentially more transcript IDs ...
+                'distribution': np.ndarray([<score1>, <score2>, ...]), # Key: literal string 'distribution', Value: NumPy array of AlphaMissense scores (floats) for this domain level
+
+                # --- If the domain has further hierarchy (e.g., PANTHER subfamilies) ---
+                <LEVEL_2_ID>: { # Key: Second level of domain ID (string, e.g., 'SF72')
+                # --- This level ALSO contains transcript info and its own score distribution ---
+                <TRANSCRIPT_ID_1>: set(<EXON_ID_A>, <EXON_ID_D>, ...), # Transcript info specific to this sub-level
+                <TRANSCRIPT_ID_3>: set(<EXON_ID_E>, ...),
+                # ... potentially more transcript IDs ...
+                'distribution': np.ndarray([<score3>, <score4>, ...]), # NumPy array of scores specific to this sub-level (LEVEL_1 + LEVEL_2)
+
+                # --- And potentially more levels ---
+                <LEVEL_3_ID>: {
+                    # ... structure repeats ...
+                    'distribution': np.ndarray([...])
+                                }
+                            }
+                        }
+                        # ... potentially more LEVEL_1_IDs ...
+                        }
+                        # ... potentially more DB_NAMEs ...
+                    }
+                    # ... potentially more ENSG_IDs ...
+    }
+    '''
     def __init__(self, vcf_path: str):
         """Initialize collector with VCF file path."""
         self.vcf_path = vcf_path

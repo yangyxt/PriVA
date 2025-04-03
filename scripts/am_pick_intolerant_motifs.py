@@ -56,7 +56,7 @@ class AMMotifAnalyzer:
     Note: Here, "bandwidth=10" is the standard deviation of the Gaussian kernel in
     the coordinate space of amino acid positions. Roughly, each variant influences
     positions within ± (2–3)*bandwidth around it, depending on the Gaussian's shape.
-    It does NOT mean we only look at ±10 aa in a strict “box”; it's a Gaussian decay
+    It does NOT mean we only look at ±10 aa in a strict "box"; it's a Gaussian decay
     with σ = 10.
     """
 
@@ -70,33 +70,83 @@ class AMMotifAnalyzer:
         # Store list of (pos, ref_aa, score) for each gene
         self.transcript_variants = defaultdict(list)
 
-    def parse_vcf(self):
+    def parse_vcf(self, n_processes=None):
         """
         Parse VCF file using pysam and collect (position, ref_aa, score) by gene.
         The VCF should be annotated by VEP with CSQ field.
-
-        The CSQ header line contain contents like this "Format: Allele|Consequence|IMPACT|SYMBOL|Gene|Feature_type|Feature|"
+        
+        Parallel processing by chromosome.
         """
         logger.info(f"Parsing VCF file: {self.vcf_path}")
+        if n_processes is None:
+            n_processes = mp.cpu_count()
+            
         try:
+            # First pass to identify chromosomes and extract field indices
             vcf = pysam.VariantFile(self.vcf_path)
             # Extract the CSQ header line
             csq_fields = vcf.header.info['CSQ'].description.split('Format: ')[1].split('|')
             gene_field = csq_fields.index('Gene')
             transcript_field = csq_fields.index('Feature')
             consq_field = csq_fields.index('Consequence')
-
-            logger.info(f"CSQ fields are {csq_fields}, gene field index is {gene_field}, transcript field index is {transcript_field}, consq field index is {consq_field}")
+            
+            # Group by chromosome
+            chromosomes = list(vcf.header.contigs)
+            logger.info(f"Found {len(chromosomes)} chromosomes, processing in parallel with {n_processes} processes")
+            
+            # Close the first pass file
+            vcf.close()
+            
+            # Process each chromosome in parallel
+            with mp.Pool(n_processes) as pool:
+                chrom_results = pool.map(
+                    partial(self._parse_chromosome, 
+                            gene_field=gene_field, 
+                            transcript_field=transcript_field,
+                            consq_field=consq_field),
+                    chromosomes
+                )
+            
+            # Combine results from all chromosomes
+            total_variants = 0
+            for chrom_transcript_variants in chrom_results:
+                for transcript, variants in chrom_transcript_variants:
+                    self.transcript_variants[transcript].extend(variants)
+                    total_variants += len(variants)
+                    
+            logger.info(f"Stored {total_variants} variant entries across {len(self.transcript_variants)} transcripts.")
+            
+        except Exception as e:
+            logger.error(f"Error reading VCF file: {e}")
+            raise
+    
+    def _parse_chromosome(self, chromosome, gene_field, transcript_field, consq_field):
+        """
+        Parse VCF records for a specific chromosome.
+        
+        Args:
+            chromosome: Chromosome name
+            gene_field: Index of gene field in CSQ
+            transcript_field: Index of transcript field in CSQ
+            consq_field: Index of consequence field in CSQ
+            
+        Returns:
+            List of tuples [(transcript_id, [(pos, ref_aa, score), ...]), ...]
+        """
+        chrom_variants = defaultdict(list)
+        try:
+            vcf = pysam.VariantFile(self.vcf_path)
             count = 0
-            for record in vcf:
+            
+            # Create a fetch iterator for just this chromosome
+            for record in vcf.fetch(chromosome):
                 try:
                     am_score = float(record.info['AM_PATHOGENICITY'])
-                    target_tranx = record.info.get('TRANSCRIPT')[:-2]
+                    target_tranx = record.info.get('TRANSCRIPT').split('.')[0]
                     pvar = record.info.get('PVAR')
                     transcript_specific_csqs = record.info.get("CSQ", [])
-                    logger.debug(f"Found {len(transcript_specific_csqs)} transcript specific CSQ annotations for record")
+                    
                     if not transcript_specific_csqs:
-                        logger.error(f"No CSQ field annotations found for record: {record}")
                         continue
 
                     for tranx_specific_anno in transcript_specific_csqs:
@@ -104,7 +154,6 @@ class AMMotifAnalyzer:
                         gene = tranx_specific_anno[gene_field]
                         transcript = tranx_specific_anno[transcript_field]
                         consequence = tranx_specific_anno[consq_field]
-                        logger.debug(f"Gene: {gene}, transcript: {transcript}, consequence: {consequence}")
 
                         if consequence != 'missense_variant':
                             continue
@@ -113,25 +162,28 @@ class AMMotifAnalyzer:
                             continue
                         
                         if not gene or not pvar:
-                            logger.error(f"No gene or PVAR found for record: {record}")
                             continue
 
                         # Example PVAR: "M10I" => ref_aa = 'M', aa_pos = 10, alt_aa = 'I'
-                        ref_aa = pvar[0]  # 'M'
-                        aa_pos_str = ''.join(filter(str.isdigit, pvar))  # '10'
+                        regex_groups = re.match(r'^([A-Z]+)([0-9]+)([A-Z]+)$', pvar)
+                        ref_aa = regex_groups.group(1)  # 'M'
+                        aa_pos_str = regex_groups.group(2)  # '10'
                         aa_pos = int(aa_pos_str)
                         
-                        self.transcript_variants[target_tranx].append((aa_pos, ref_aa, am_score))
-                        logger.debug(f"Stored AA position {aa_pos}, ref_AA {ref_aa}, AM_score {am_score} for Gene {gene} and transcript {transcript}")
+                        chrom_variants[target_tranx].append((aa_pos, ref_aa, am_score))
                         count += 1
                 except (KeyError, ValueError) as e:
-                    logger.warning(f"Skipping record due to parse error: {e}")
                     continue
                     
-            logger.info(f"Stored {count} variant entries across {len(self.transcript_variants)} genes.")
+            logger.info(f"Processed {count} variant entries on chromosome {chromosome}")
+            vcf.close()
+            
+            # Convert defaultdict to list of tuples for pickling
+            return list(chrom_variants.items())
+            
         except Exception as e:
-            logger.error(f"Error reading VCF file: {e}")
-            raise
+            logger.error(f"Error processing chromosome {chromosome}: {e}")
+            return []
 
 
 
@@ -344,13 +396,15 @@ def main():
     args = parser.parse_args()
 
     analyzer = AMMotifAnalyzer(args.vcf_path, args.bandwidth)
+    
+    # Parse VCF using same number of processes
+    analyzer.parse_vcf(n_processes=args.processes)
 
     results = analyzer.identify_intolerant_regions(n_processes=args.processes)
 
     # Save or print results
     if args.output:
         if args.output.endswith('.pkl'):
-			# Convert positions to set instead of list
             with open(args.output, 'wb') as f:
                 pickle.dump(results, f)
             logger.info(f"Results saved to {args.output} in pickle format.")

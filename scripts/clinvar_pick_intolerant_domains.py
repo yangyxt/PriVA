@@ -343,7 +343,7 @@ def collect_domain_data(d, output_dir, benign_threshold, min_variants, pathogeni
     domain_data = []
     for k, v in d.items():
         if k == 'distribution':
-            domain_path = '_'.join(path)
+            domain_path = ':'.join(path)
             domain_data.append((domain_path, v, output_dir, benign_threshold, min_variants, pathogenic_threshold))
         elif isinstance(v, dict):
             domain_data.extend(collect_domain_data(v, output_dir, benign_threshold, min_variants, pathogenic_threshold, path + [k]))
@@ -437,7 +437,7 @@ def traverse_mechanism_dict(d: Dict, results: List, path: List = []):
     """
     for k, v in d.items():
         if k == 'distribution':
-            domain_path = '_'.join(path)
+            domain_path = ':'.join(path)
             result = process_domain_mechanism(domain_path, d)
             if result:
                 results.append(result)
@@ -496,7 +496,7 @@ def analyze_gene_mechanisms(df: pd.DataFrame, threads: int) -> pd.DataFrame:
         Original DataFrame with added gene-level statistics
     '''
     # Extract gene IDs
-    df['gene_id'] = df['domain'].str.split('_').str[0]
+    df['gene_id'] = df['domain'].str.split(':').str[0]
     
     # Group by gene and sum the contingency table values
     gene_stats = df.groupby('gene_id').agg({
@@ -571,7 +571,7 @@ def calculate_gene_stats(row_dict: dict) -> dict:
             
             # Calculate odds ratio
             odds_ratio = ((row_dict['missense_pathogenic'] * row_dict['truncating_not_patho']) / 
-                         (row_dict['missense_not_patho'] * row_dict['truncating_pathogenic'])) if row_dict['truncating_pathogenic'] > 0 else np.inf
+                         (row_dict['missense_not_patho'] * row_dict['truncating_pathogenic'])) if row_dict['truncating_pathogenic'] > 0 and row_dict['missense_not_patho'] > 0 else np.inf
             
             result_stats['gene_pvalue'] = min(pvalue, 0.99999)
             result_stats['gene_odds_ratio'] = odds_ratio

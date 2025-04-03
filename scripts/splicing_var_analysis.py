@@ -8,6 +8,7 @@ import uuid
 import multiprocessing as mp
 from functools import partial
 
+from protein_domain_mapping import DomainNormalizer
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -27,6 +28,7 @@ def na_value(value):
 def splicing_interpretation(anno_table, 
                             transcript_domain_map_pkl, 
                             intolerant_domains_pkl, 
+                            interpro_entry_map_pkl,
                             spliceai_cutoff = 0.8, 
                             threads = 12):
     """Process annotation table in parallel to interpret splicing effects"""
@@ -34,12 +36,16 @@ def splicing_interpretation(anno_table,
 
     intolerant_domains = pickle.load(open(intolerant_domains_pkl, 'rb'))
     transcript_domain_map = pickle.load(open(transcript_domain_map_pkl, 'rb'))
-    
+    interpro_entry_map_dict = pickle.load(open(interpro_entry_map_pkl, 'rb'))
+
+    dm_instance = DomainNormalizer()
     # Create partial function with fixed arguments
     process_row = partial(splicing_altering_per_row, 
                          transcript_domain_map=transcript_domain_map,
                          intolerant_domains=intolerant_domains,
-                         spliceai_cutoff=spliceai_cutoff)
+                         interpro_entry_map_dict=interpro_entry_map_dict,
+                         spliceai_cutoff=spliceai_cutoff,
+                         dm_instance=dm_instance)
     
     # Get number of CPU cores (leave some free for other processes)
     logger.info(f"Processing {len(anno_df)} variants using {threads} cores")
@@ -69,6 +75,8 @@ def splicing_interpretation(anno_table,
 def splicing_altering_per_row(row, 
                               transcript_domain_map, 
                               intolerant_domains,
+                              interpro_entry_map_dict,
+                              dm_instance = None,
                               spliceai_cutoff = 0.8):
     '''
     Basically, we just refer to SpliceVault top-4 events and SpliceAI delta scores.
@@ -90,9 +98,11 @@ def splicing_altering_per_row(row,
                                                                             transcript_id, 
                                                                             transcript_domain_map, 
                                                                             intolerant_domains,
+                                                                            interpro_entry_map_dict,
                                                                             cds_pos,
                                                                             intron_pos,
-                                                                            exon_pos )
+                                                                            exon_pos,
+                                                                            dm_instance)
     
     # Then get SpliceAI interpretation
     DP_AG = float(row['SpliceAI_pred_DP_AG'])
@@ -117,7 +127,9 @@ def splicing_altering_per_row(row,
                                                                   cds_pos,
                                                                   intron_pos,
                                                                   exon_pos,
-                                                                  spliceai_cutoff)
+                                                                  spliceai_cutoff,
+                                                                  interpro_entry_map_dict,
+                                                                  dm_instance)
     return splicevault_lof or spliceai_lof, splicevault_len_changing or spliceai_len_changing
     
 
@@ -136,7 +148,9 @@ def SpliceAI_interpretation(DS_AG,
                             cds_pos = None,
                             intron_pos = None, 
                             exon_pos = None,
-                            cutoff = 0.8) -> tuple:
+                            cutoff = 0.8,
+                            interpro_entry_map_dict = None,
+                            dm_instance = None) -> tuple:
     '''
     Expect to return a tuple of boolean values(is_harmful, length_changing)
     Regarding DP values, negative values means the site is upstream of the variant site,
@@ -202,8 +216,9 @@ def SpliceAI_interpretation(DS_AG,
         for exon in affected_exons:
             if transcript_id in transcript_domain_map and str(exon) in transcript_domain_map[transcript_id]:
                 domains = transcript_domain_map[transcript_id][str(exon)]
+                func_domains = [domain_path for domain_path in domains if dm_instance.interpret_functionality(domain_path.split(':', 1)[-1], interpro_entry_map_dict) == "Functional"]
                 intolerant_affected = set(domains).intersection(intolerant_domains)
-                if intolerant_affected:
+                if (len(intolerant_affected) > 0) or (len(func_domains) > 0):
                     is_harmful = True
 
     return is_harmful, length_changing
@@ -215,15 +230,18 @@ def SpliceVault_interpretation(value,
                                transcript_id, 
                                transcript_domain_map, 
                                intolerant_domains,
+                               interpro_entry_map_dict,
                                cds_pos = None,
                                intron_pos = None,
-                               exon_pos = None) -> tuple:
+                               exon_pos = None,
+                               dm_instance = None) -> tuple:
     '''
     The input value is the top-4 SpliceVault events:
     Top1:CD:-10:2%:Frameshift&Top2:CD:-4:0.6%:Frameshift&Top3:CD:+491:0.05%:Frameshift&Top4:CD:+21:0.006%:Frameshift
     Top1:CD;-51;0.5%;inFrame&Top2:CD;+394;0.1%;inFrame&Top3:CD;+389;0.09%;Frameshift&Top4:CD;+440;0.04%;Frameshift
 
     Expect to return a tuple of boolean values(is_harmful, length_changing)
+    Return False, False if the input value is not a string
     '''
     if not isinstance(value, str):
         logger.debug(f"The input value for SpliceVault interpretation is not a string: {value}, return False, False")
@@ -238,9 +256,11 @@ def SpliceVault_interpretation(value,
                                               transcript_id, 
                                               transcript_domain_map, 
                                               intolerant_domains, 
+                                              interpro_entry_map_dict,
                                               cds_pos,
                                               intron_pos, 
-                                              exon_pos)
+                                              exon_pos,
+                                              dm_instance)
         analysis_results.append(event_analysis)
 
     # There are in total 4 events, if all of them are harmful, then return "LoF"
@@ -271,9 +291,11 @@ def analyze_splice_event(event_str: str,
                         transcript_id: str,
                         transcript_domain_map: dict,
                         intolerant_domains: set,
+                        interpro_entry_map_dict: dict,
                         cds_pos = None,
                         intron_pos = None,  # Format: "2/3" meaning 2nd intron out of 3
                         exon_pos = None,    # Format: "2-3" meaning exons 2 and 3
+                        dm_instance: DomainNormalizer = None
                         ) -> dict:
     """
     Analyze a single SpliceVault event to determine if it affects intolerant domains.
@@ -317,13 +339,13 @@ def analyze_splice_event(event_str: str,
     # Process event based on type
     if event_type == 'ES':
         affected_exons, reason, length_changing, is_harmful = process_exon_skipping(
-            pos_str, transcript_id, transcript_domain_map, intolerant_domains)
+            pos_str, transcript_id, transcript_domain_map, intolerant_domains, interpro_entry_map_dict, dm_instance)
     elif event_type == 'CD':
         affected_exons, reason, length_changing, is_harmful = process_cryptic_donor(
-            pos_str, transcript_id, transcript_domain_map, intolerant_domains, intron_pos, exon_pos, cds_pos)
+            pos_str, transcript_id, transcript_domain_map, intolerant_domains, intron_pos, exon_pos, cds_pos, interpro_entry_map_dict, dm_instance)
     elif event_type == 'CA':
         affected_exons, reason, length_changing, is_harmful = process_cryptic_acceptor(
-            pos_str, transcript_id, transcript_domain_map, intolerant_domains, intron_pos, exon_pos, cds_pos)
+            pos_str, transcript_id, transcript_domain_map, intolerant_domains, intron_pos, exon_pos, cds_pos, interpro_entry_map_dict, dm_instance)
     
     # Look up affected domains and determine if harmful
     affected_domains = set()
@@ -359,12 +381,14 @@ def analyze_splice_event(event_str: str,
 def process_exon_skipping(pos_str: str, 
                          transcript_id: str, 
                          transcript_domain_map: dict, 
-                         intolerant_domains: set) -> tuple:
+                         intolerant_domains: set,
+                         interpro_entry_map_dict: dict,
+                         dm_instance: DomainNormalizer = None) -> tuple:
     """Process exon skipping events."""
     affected_exons = set()
     reason = []
     length_changing = True
-    is_lof = True
+    is_lof = False
     
     if '-' in pos_str:
         start, end = map(int, pos_str.split('-'))
@@ -377,8 +401,9 @@ def process_exon_skipping(pos_str: str,
         exon_str = str(exon)
         if transcript_id in transcript_domain_map and exon_str in transcript_domain_map[transcript_id]:
             domains = transcript_domain_map[transcript_id][exon_str]
+            func_domains = [domain_path for domain_path in domains if dm_instance.interpret_functionality(domain_path.split(':', 1)[-1], interpro_entry_map_dict) == "Functional"]
             intolerant_affected = set(domains).intersection(intolerant_domains)
-            if intolerant_affected:
+            if (len(intolerant_affected) > 0) or (len(func_domains) > 0):
                 reason.append(f'exon_{exon}_overlaps_intolerant_domain')
                 is_lof = True
      
@@ -391,7 +416,9 @@ def process_cryptic_donor(pos_str: str,
                          intolerant_domains: set,
                          intron_pos = None,
                          exon_pos = None,
-                         cds_pos = None
+                         cds_pos = None,
+                         interpro_entry_map_dict: dict = None,
+                         dm_instance: DomainNormalizer = None
                          ) -> tuple:
     """Process cryptic donor events."""
     affected_exons = set()
@@ -451,8 +478,9 @@ def process_cryptic_donor(pos_str: str,
         exon_str = str(exon)
         if transcript_id in transcript_domain_map and exon_str in transcript_domain_map[transcript_id]:
             domains = transcript_domain_map[transcript_id][exon_str]
+            func_domains = [domain_path for domain_path in domains if dm_instance.interpret_functionality(domain_path.split(':', 1)[-1], interpro_entry_map_dict) == "Functional"]
             intolerant_affected = set(domains).intersection(intolerant_domains)
-            if intolerant_affected:
+            if (len(intolerant_affected) > 0) or (len(func_domains) > 0):
                 reason.append(f'exon_{exon}_overlaps_intolerant_domain')
                 is_lof = True
     
@@ -465,7 +493,9 @@ def process_cryptic_acceptor(pos_str: str,
                            intolerant_domains: set,
                            intron_pos = None,
                            exon_pos = None,
-                           cds_pos = None
+                           cds_pos = None,
+                           interpro_entry_map_dict: dict = None,
+                           dm_instance: DomainNormalizer = None
                            ) -> tuple:
     """Process cryptic acceptor events."""
     affected_exons = set()
@@ -526,8 +556,9 @@ def process_cryptic_acceptor(pos_str: str,
         exon_str = str(exon)
         if transcript_id in transcript_domain_map and exon_str in transcript_domain_map[transcript_id]:
             domains = transcript_domain_map[transcript_id][exon_str]
+            func_domains = [domain_path for domain_path in domains if dm_instance.interpret_functionality(domain_path.split(':', 1)[-1], interpro_entry_map_dict) == "Functional"]
             intolerant_affected = set(domains).intersection(intolerant_domains)
-            if intolerant_affected:
+            if (len(intolerant_affected) > 0) or (len(func_domains) > 0):
                 reason.append(f'exon_{exon}_overlaps_intolerant_domain')
                 is_lof = True
     
@@ -540,9 +571,11 @@ if __name__ == "__main__":
     parser.add_argument("--anno_table", required=True, help="Annotation table")
     parser.add_argument("--transcript_domain_map", required=True, help="Transcript domain map, pickle file")
     parser.add_argument("--intolerant_domains", required=True, help="Intolerant domains, pickle file")
+    parser.add_argument("--interpro_entry_map_pkl", required=True, help="InterPro entry map, pickle file")
     parser.add_argument("--threads", default=12, type=int, help="Number of threads")
     args = parser.parse_args()
     splicing_interpretation(args.anno_table, 
                             args.transcript_domain_map, 
                             args.intolerant_domains, 
+                            args.interpro_entry_map_pkl,
                             threads=args.threads)

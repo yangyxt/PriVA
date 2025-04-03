@@ -206,7 +206,7 @@ def collect_domain_data(d, output_dir: str, min_variants: int, path=[]) -> List:
     domain_data = []
     for k, v in d.items():
         if k == 'distribution':
-            domain_path = '_'.join(path)
+            domain_path = ':'.join(path)
             if len(v) >= min_variants:
                 logger.debug(f"Processing domain {domain_path} with {len(v)} variants")
                 domain_data.append((domain_path, v, output_dir))
@@ -277,46 +277,41 @@ def visualize_domain_distribution(scores_dict: dict, output_dir: str, threads: i
     output_dir = os.path.join(output_dir, 'am_domain_distributions')
     os.makedirs(output_dir, exist_ok=True)
     
-    if os.path.exists(os.path.join(output_dir, f'domain_amscores.{assembly}.pkl')): 
-        logger.info(f"Loading existing domain scores from {os.path.join(output_dir, f'domain_amscores.{assembly}.pkl')}")
-        with open(os.path.join(output_dir, f'domain_amscores.{assembly}.pkl'), 'rb') as f:
-            domain_scores = pickle.load(f)
-    else:
-        for gene_id, gene_data in scores_dict.items():
-            for db_name, db_data in gene_data.items():
-                # Recursively collect domain data
-                domain_data.extend(collect_domain_data(
-                db_data, 
-                output_dir, 
-                8,  # Minimum variants required
-                path=[gene_id, db_name]
-            ))
-            
-        # Also store scores in flat dictionary for later use
-        for path, scores, _ in domain_data:
-            domain_scores[path] = scores
+    for gene_id, gene_data in scores_dict.items():
+        for db_name, db_data in gene_data.items():
+            # Recursively collect domain data
+            domain_data.extend(collect_domain_data(
+                                                    db_data, 
+                                                    output_dir, 
+                                                    6,  # Minimum variants required
+                                                    path=[gene_id, db_name]
+                                                ))
+        
+    # Also store scores in flat dictionary for later use
+    for path, scores, _ in domain_data:
+        domain_scores[path] = scores
+
+    # Dump the domain scores to a pickle file
+    with open(os.path.join(output_dir, f'domain_amscores.{assembly}.pkl'), 'wb') as f:
+        pickle.dump(domain_scores, f)
+
+    logger.info(f"Found {len(domain_data)} domains to process, saved their AM scores to {os.path.join(output_dir, f'domain_amscores.{assembly}.pkl')}")
     
-        # Dump the domain scores to a pickle file
-        with open(os.path.join(output_dir, f'domain_amscores.{assembly}.pkl'), 'wb') as f:
-            pickle.dump(domain_scores, f)
+    # Process domains in parallel
+    n_cores = min(threads, len(domain_data))  # Don't use more cores than tasks
+    logger.info(f"Processing {len(domain_data)} domains using {n_cores} cores")
+    with mp.Pool(n_cores) as pool:
+        results = list(pool.imap_unordered(visualize_single_domain, domain_data))
     
-        logger.info(f"Found {len(domain_data)} domains to process")
-        
-        # Process domains in parallel
-        n_cores = min(threads, len(domain_data))  # Don't use more cores than tasks
-        logger.info(f"Processing {len(domain_data)} domains using {n_cores} cores")
-        with mp.Pool(n_cores) as pool:
-            results = list(pool.imap_unordered(visualize_single_domain, domain_data))
-        
-        # Filter out None results
-        results = [r for r in results if r is not None]
-        logger.info(f"Successfully visualized distribution of {len(results)} domains")
-        
-        # Save results to TSV if any successful results
-        if results:
-            results_df = pd.DataFrame(results)
-            results_df.to_csv(os.path.join(output_dir, f'distribution_test_results.{assembly}.tsv'), 
-                            sep='\t', index=False)
+    # Filter out None results
+    results = [r for r in results if r is not None]
+    logger.info(f"Successfully visualized distribution of {len(results)} domains")
+    
+    # Save results to TSV if any successful results
+    if results:
+        results_df = pd.DataFrame(results)
+        results_df.to_csv(os.path.join(output_dir, f'distribution_test_results.{assembly}.tsv'), 
+                        sep='\t', index=False)
     
     return domain_scores
 
@@ -360,7 +355,7 @@ def process_domain_dict_for_mapping(d: dict, current_path: List[str], transcript
             # Check if this level contains transcript information
             if 'distribution' in v:
                 # This level contains domain information
-                domain_path = '_'.join(current_path + [k])
+                domain_path = ':'.join(current_path + [k])
                 for transcript_id, exon_set in v.items():
                     if isinstance(transcript_id, str) and transcript_id.startswith('ENST'):
                         if isinstance(exon_set, set):  # This is the exon set

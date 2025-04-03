@@ -48,11 +48,24 @@ function interpret_splicing_annotations () {
 
     local alphamissense_tranx_domain_map=$(read_yaml ${config_file} "alphamissense_tranx_domain_map")
     local intolerant_domains=$(read_yaml ${config_file} "all_intolerant_domains")
+	local interpro_entry_map_pkl=$(read_yaml ${config_file} "interpro_mapping_pickle")
+    
+    [[ -f ${input_tab} ]] && \
+    [[ ${input_tab} -nt ${interpro_entry_map_pkl} ]] && \
+    [[ ${input_tab} -nt ${alphamissense_tranx_domain_map} ]] && \
+    [[ ${input_tab} -nt ${intolerant_domains} ]] && \
+    [[ ${input_tab} -nt ${splicing_py} ]] && \
+    check_table_column ${input_tab} "splicing_lof" && \
+    check_table_column ${input_tab} "splicing_len_changing" && \
+    log "The input table ${input_tab} is up to date, skip the splicing interpretation" && \
+    return 0 || \
+    log "The input table ${input_tab} is outdated, start the splicing interpretation"
 
     python ${splicing_py} \
     --anno_table ${input_tab} \
     --transcript_domain_map ${alphamissense_tranx_domain_map} \
     --intolerant_domains ${intolerant_domains} \
+    --interpro_entry_map_pkl ${interpro_entry_map_pkl} \
     --threads ${threads} && \
     display_table ${input_tab} && \
     log "The splicing interpretations are saved to ${input_tab}, added with two columns: splicing_lof and splicing_len_changing"
@@ -69,6 +82,16 @@ function interpret_utr_annotations () {
 
     local alphamissense_tranx_domain_map=$(read_yaml ${config_file} "alphamissense_tranx_domain_map")
     local intolerant_domains=$(read_yaml ${config_file} "all_intolerant_domains")
+
+    [[ -f ${input_tab} ]] && \
+    [[ ${input_tab} -nt ${alphamissense_tranx_domain_map} ]] && \
+    [[ ${input_tab} -nt ${intolerant_domains} ]] && \
+    [[ ${input_tab} -nt ${utr_py} ]] && \
+    check_table_column ${input_tab} "5UTR_lof" && \
+    check_table_column ${input_tab} "5UTR_length_changing" && \
+    log "The input table ${input_tab} is up to date, skip the UTR interpretation" && \
+    return 0 || \
+    log "The input table ${input_tab} is outdated, start the UTR interpretation"
 
     python ${utr_py} \
     --variants_table ${input_tab} \
@@ -111,23 +134,31 @@ function assign_acmg_criteria () {
     local mean_am_score_table=${BASE_DIR}/data/alphamissense/alphamissense_mean_score.tsv
     local ped_table=$(read_yaml ${config_file} "ped_file")
     local clinvar_aa_dict_pkl=$(read_yaml ${config_file} "clinvar_aa_stat")
+    local clinvar_splice_dict_pkl=$(read_yaml ${config_file} "clinvar_splice_stat")
     local intolerant_domains_pkl=$(read_yaml ${config_file} "all_intolerant_domains")
     local domain_mechanism_tsv=$(read_yaml ${config_file} "clinvar_intolerance_mechanisms")
+    local tranx_exon_domain_map_pkl=$(read_yaml ${config_file} "alphamissense_tranx_domain_map")
     local intolerant_motifs_pkl=$(read_yaml ${config_file} "alphamissense_intolerant_motifs")
     local alt_disease_vcf=$(read_yaml ${config_file} "alt_disease_vcf")
     local gnomAD_extreme_rare_threshold=$(read_yaml ${config_file} "extreme_rare_PAF")
     local expected_incidence=$(read_yaml ${config_file} "exp_disease_incidence")
     local am_score_vcf=$(read_yaml ${config_file} "alphamissense_vcf")
 	local clinvar_patho_af_stat=$(read_yaml ${config_file} "clinvar_patho_af_stat")
-
+	local clinvar_patho_exon_af_stat=$(read_yaml ${config_file} "clinvar_patho_exon_af_stat")
+	local interpro_entry_map_pkl=$(read_yaml ${config_file} "interpro_mapping_pickle")
 	local output_acmg_mat=${input_tab::-4}.acmg.tsv
 
     local has_error=0
     check_path ${clinvar_aa_dict_pkl} "file" "clinvar_aa_stat" || has_error=1
+    check_path ${clinvar_splice_dict_pkl} "file" "clinvar_splice_stat" || has_error=1
     check_path ${intolerant_domains_pkl} "file" "all_intolerant_domains" || has_error=1
     check_path ${domain_mechanism_tsv} "file" "clinvar_intolerance_mechanisms" || has_error=1
     check_path ${intolerant_motifs_pkl} "file" "alphamissense_intolerant_motifs" || has_error=1
     check_path ${am_score_vcf} "file" "alphamissense_vcf" || has_error=1
+    check_path ${tranx_exon_domain_map_pkl} "file" "alphamissense_tranx_domain_map" || has_error=1
+	check_path ${clinvar_patho_af_stat} "file" "clinvar_patho_af_stat" || has_error=1
+	check_path ${clinvar_patho_exon_af_stat} "file" "clinvar_patho_exon_af_stat" || has_error=1
+	check_path ${interpro_entry_map_pkl} "file" "interpro_mapping_pickle" || has_error=1
     [[ ${has_error} -eq 1 ]] && \
     { log "Failed to offer the valid required files for the ACMG criteria assignment"; return 1; }
 
@@ -135,10 +166,15 @@ function assign_acmg_criteria () {
     [[ -f ${input_tab} ]] && \
     [[ ${input_tab} -nt ${mean_am_score_table} ]] && \
     [[ ${input_tab} -nt ${clinvar_aa_dict_pkl} ]] && \
+    [[ ${input_tab} -nt ${clinvar_splice_dict_pkl} ]] && \
     [[ ${input_tab} -nt ${intolerant_domains_pkl} ]] && \
     [[ ${input_tab} -nt ${domain_mechanism_tsv} ]] && \
     [[ ${input_tab} -nt ${alt_disease_vcf} ]] && \
     [[ ${input_tab} -nt ${am_score_vcf} ]] && \
+    [[ ${input_tab} -nt ${clinvar_patho_af_stat} ]] && \
+    [[ ${input_tab} -nt ${clinvar_patho_exon_af_stat} ]] && \
+	[[ ${input_tab} -nt ${interpro_entry_map_pkl} ]] && \
+	[[ ${input_tab} -nt ${tranx_exon_domain_map_pkl} ]] && \
 	[[ ${input_tab} -ot ${output_acmg_mat} ]] && \
     check_table_column ${input_tab} "ACMG_quant_score" && \
     check_table_column ${input_tab} "ACMG_class" && \
@@ -152,19 +188,23 @@ function assign_acmg_criteria () {
     [[ -z ${fam_name} ]] && local fam_arg="" || local fam_arg="--fam_name ${fam_name}"
     [[ -z ${alt_disease_vcf} ]] && local alt_disease_arg="" || local alt_disease_arg="--alt_disease_vcf ${alt_disease_vcf}"
 
-    log "Running the following command to assign the ACMG criterias: python ${acmg_py} --anno_table ${input_tab} --am_score_table ${mean_am_score_table} --clinvar_aa_dict_pkl ${clinvar_aa_dict_pkl} --intolerant_domains_pkl ${intolerant_domains_pkl} --intolerant_motifs_pkl ${intolerant_motifs_pkl} --domain_mechanism_tsv ${domain_mechanism_tsv} --gnomAD_extreme_rare_threshold ${gnomAD_extreme_rare_threshold} --expected_incidence ${expected_incidence} --am_score_vcf ${am_score_vcf} --threads ${threads} ${ped_arg} ${fam_arg} ${alt_disease_arg}"
+    log "Running the following command to assign the ACMG criterias: python ${acmg_py} --anno_table ${input_tab} --am_score_table ${mean_am_score_table} --clinvar_aa_dict_pkl ${clinvar_aa_dict_pkl} --intolerant_domains_pkl ${intolerant_domains_pkl} --intolerant_motifs_pkl ${intolerant_motifs_pkl} --domain_mechanism_tsv ${domain_mechanism_tsv} --gnomAD_extreme_rare_threshold ${gnomAD_extreme_rare_threshold} --expected_incidence ${expected_incidence} --am_score_vcf ${am_score_vcf} --threads ${threads} --tranx_exon_domain_map_pkl ${tranx_exon_domain_map_pkl} ${ped_arg} ${fam_arg} ${alt_disease_arg}"
     python ${acmg_py} \
     --anno_table ${input_tab} \
     --am_score_table ${mean_am_score_table} \
 	--clinvar_patho_af_stat ${clinvar_patho_af_stat} \
+	--clinvar_patho_exon_af_stat ${clinvar_patho_exon_af_stat} \
     --clinvar_aa_dict_pkl ${clinvar_aa_dict_pkl} \
+    --clinvar_splice_dict_pkl ${clinvar_splice_dict_pkl} \
+    --interpro_entry_map_pkl ${interpro_entry_map_pkl} \
     --intolerant_domains_pkl ${intolerant_domains_pkl} \
     --intolerant_motifs_pkl ${intolerant_motifs_pkl} \
     --domain_mechanism_tsv ${domain_mechanism_tsv} \
     --gnomAD_extreme_rare_threshold ${gnomAD_extreme_rare_threshold} \
     --expected_incidence ${expected_incidence} \
     --am_score_vcf ${am_score_vcf} \
-    --threads ${threads} ${ped_arg} ${fam_arg} ${alt_disease_arg} && \
+    --threads ${threads} \
+    --tranx_exon_domain_map_pkl ${tranx_exon_domain_map_pkl} ${ped_arg} ${fam_arg} ${alt_disease_arg} && \
     display_table ${input_tab} && \
     log "The ACMG criterias are assigned for ${input_tab}, added with three columns: ACMG_quant_score, ACMG_class, ACMG_criteria, and the output matrix is saved to ${output_acmg_mat}" && \
     display_table ${output_acmg_mat} || \

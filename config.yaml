@@ -17,6 +17,7 @@ ped_file: "/paedyl01/disk1/yangyxt/test_acmg_auto/TEST_FAM.ped"
 assembly: hg19
 ref_genome: "/paedyl01/disk1/yangyxt/indexed_genome/ucsc.hg19.fasta"
 hg38_hg19_chain: "/paedyl01/disk1/yangyxt/acmg_auto/data/liftover/hg38ToHg19.over.chain.gz"
+repeat_region_file_name: "ucsc.hg19.fasta.repeat.bed.gz"
 
 # Below we specify the output directory in absolute paths
 output_dir: "/paedyl01/disk1/yangyxt/test_acmg_auto"

@@ -52,7 +52,7 @@ def process_chromosome(chrom, vcf_file, csq_field_map):
                 clnsig = str(clnsig)
                 
             # Check if pathogenic or likely pathogenic
-            if not ('athogenic' in clnsig and not ('enign' in clnsig or 'Conf' in clnsig)):
+            if not ('athogenic' in clnsig):
                 continue
             
             # Get review status

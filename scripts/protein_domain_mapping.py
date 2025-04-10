@@ -11,15 +11,16 @@ import logging
 from collections import defaultdict
 import json
 import os
+import csv
 self_directory = os.path.dirname(os.path.abspath(__file__))
 
 # --- Logger Setup ---
 logger = logging.getLogger(__name__)
-logger.setLevel(logging.INFO)
+logger.setLevel(logging.ERROR)
 # Check if handlers already exist to prevent duplication
 if not logger.handlers:
     console_handler = logging.StreamHandler(sys.stderr) # Log to stderr
-    console_handler.setLevel(logging.INFO)
+    console_handler.setLevel(logging.ERROR)
     formatter = logging.Formatter("%(levelname)s:%(asctime)s:%(name)s:%(funcName)s:%(lineno)s:%(message)s")
     console_handler.setFormatter(formatter)
     logger.addHandler(console_handler)
@@ -35,7 +36,7 @@ FinalMapping = Dict[Tuple[str, str], List[InterProMapValue]]
 # --- End Type Hint Definitions ---
 
 # --- Class Definition: DomainNormalizer ---
-class DomainNormalizer:
+class DomainNormalizer():
     """
     Analyzes domain annotations from VEP VCF files and InterPro XML data
     to facilitate the creation of curated mappings for database names and
@@ -48,7 +49,7 @@ class DomainNormalizer:
     4. Call generate_comparison_report() to output the collected info for review.
     5. **Note:** Normalization methods require manual curation based on the report.
     """
-    def __init__(self):
+    def __init__(self, logger = logger):
         """Initialize the normalizer."""
         self.vep_db_names: Set[str] = set()
         self.vep_db_id_examples: Dict[str, Set[str]] = defaultdict(set)
@@ -60,12 +61,14 @@ class DomainNormalizer:
         self._ipr_to_vep_map: Dict[str, str] = {}
         self._vep_to_ipr_id_rules: Dict = {}
         self._ipr_to_vep_id_rules: Dict = {}
+        self.logger = logger
         self.load_curated_mappings()
-        logger.info("DomainNormalizer initialized.")
+        self.load_curated_functional_domains()
+        self.logger.info("DomainNormalizer initialized.")
 
     def parse_vcf_file(self, vcf_path: str) -> None:
         """ Parses VCF to collect VEP domain formats. """
-        logger.info(f"Starting VEP domain format collection from: {vcf_path}")
+        self.logger.info(f"Starting VEP domain format collection from: {vcf_path}")
         record_count = 0
         processed_domains_total = 0
         start_time = time.time()
@@ -92,7 +95,7 @@ class DomainNormalizer:
                     if 'CSQ' in record.info:
                         csq_entries = record.info['CSQ']
                         if not isinstance(csq_entries, tuple):
-                             csq_entries = (csq_entries,)
+                            csq_entries = (csq_entries,)
                         for csq_entry in csq_entries:
                              if isinstance(csq_entry, str):
                                 fields = csq_entry.split('|')
@@ -100,26 +103,26 @@ class DomainNormalizer:
                                     domains_str = fields[domains_idx]
                                     processed_domains_total += self._parse_domains_vep(domains_str)
                              else:
-                                 logger.warning(f"Skipping non-string CSQ entry in record {record.id or record_count}")
+                                self.logger.warning(f"Skipping non-string CSQ entry in record {record.id or record_count}")
                 except Exception as record_err:
-                    logger.warning(f"Error processing record #{record_count} (ID: {record.id}): {record_err}")
+                    self.logger.warning(f"Error processing record #{record_count} (ID: {record.id}): {record_err}")
                 if record_count % 500000 == 0:
                     elapsed = time.time() - start_time
-                    logger.info(f"Processed {record_count} VCF records... ({elapsed:.1f}s)")
+                    self.logger.info(f"Processed {record_count} VCF records... ({elapsed:.1f}s)")
 
             vcf.close()
             elapsed = time.time() - start_time
-            logger.info(f"Finished VCF processing. Processed {record_count} records in {elapsed:.2f} seconds.")
-            logger.info(f"Found {len(self.vep_db_names)} unique VEP domain DB names.")
-            logger.info(f"Collected {processed_domains_total} total domain annotations.")
+            self.logger.info(f"Finished VCF processing. Processed {record_count} records in {elapsed:.2f} seconds.")
+            self.logger.info(f"Found {len(self.vep_db_names)} unique VEP domain DB names.")
+            self.logger.info(f"Collected {processed_domains_total} total domain annotations.")
         except ImportError:
-             logger.error("pysam library not found. Please install pysam to parse VCF files.")
-             raise
+            self.logger.error("pysam library not found. Please install pysam to parse VCF files.")
+            raise
         except FileNotFoundError:
-             logger.error(f"VCF file not found at: {vcf_path}")
-             raise
+            self.logger.error(f"VCF file not found at: {vcf_path}")
+            raise
         except Exception as e:
-            logger.exception(f"An unexpected error occurred parsing VCF file: {vcf_path}")
+            self.logger.exception(f"An unexpected error occurred parsing VCF file: {vcf_path}")
             raise
 
     def _parse_domains_vep(self, domains_str: str) -> int:
@@ -139,12 +142,12 @@ class DomainNormalizer:
                         self.vep_db_counts[db_name] += 1
                         count += 1
         except Exception as e:
-            logger.warning(f"Error parsing VEP domain substring '{domains_str[:50]}...': {e}")
+            self.logger.warning(f"Error parsing VEP domain substring '{domains_str[:50]}...': {e}")
         return count
 
     def parse_interpro_xml_formats(self, xml_file_path: str) -> None:
         """ Parses InterPro XML to collect member DB names and example keys. """
-        logger.info(f"Starting InterPro format collection from: {xml_file_path}")
+        self.logger.info(f"Starting InterPro format collection from: {xml_file_path}")
         interpro_entry_count = 0
         processed_signatures_total = 0
         start_time = time.time()
@@ -169,29 +172,29 @@ class DomainNormalizer:
                                         self.interpro_db_counts[db_name] += 1
                         except Exception as inner_e:
                             ipr_id = elem.get('id', 'N/A')
-                            logger.warning(f"Error processing members for InterPro entry {ipr_id}: {inner_e}")
+                            self.logger.warning(f"Error processing members for InterPro entry {ipr_id}: {inner_e}")
                         finally:
                              elem.clear()
                         if interpro_entry_count % 50000 == 0:
                             elapsed = time.time() - start_time
-                            logger.info(f"Processed {interpro_entry_count} InterPro entries (format scan)... ({elapsed:.1f}s)")
+                            self.logger.info(f"Processed {interpro_entry_count} InterPro entries (format scan)... ({elapsed:.1f}s)")
             elapsed = time.time() - start_time
-            logger.info(f"Finished InterPro XML format collection. Processed {interpro_entry_count} entries in {elapsed:.2f} seconds.")
-            logger.info(f"Found {len(self.interpro_db_names)} unique InterPro member DB names.")
-            logger.info(f"Collected {processed_signatures_total} total member signature annotations.")
+            self.logger.info(f"Finished InterPro XML format collection. Processed {interpro_entry_count} entries in {elapsed:.2f} seconds.")
+            self.logger.info(f"Found {len(self.interpro_db_names)} unique InterPro member DB names.")
+            self.logger.info(f"Collected {processed_signatures_total} total member signature annotations.")
         except FileNotFoundError:
-            logger.error(f"Error: File not found at {xml_file_path}")
+            self.logger.error(f"Error: File not found at {xml_file_path}")
             raise
         except ET.ParseError as e:
-            logger.exception(f"Error: Failed to parse XML file")
+            self.logger.exception(f"Error: Failed to parse XML file")
             raise
         except Exception as e:
-            logger.exception(f"An unexpected error occurred parsing InterPro XML for formats")
+            self.logger.exception(f"An unexpected error occurred parsing InterPro XML for formats")
             raise
 
     def generate_comparison_report(self, output_path: str) -> None:
         """ Generates comparison report for manual curation. """
-        logger.info(f"Generating comparison report to: {output_path}")
+        self.logger.info(f"Generating comparison report to: {output_path}")
         try:
             with open(output_path, 'w') as f:
                 # (Content of report generation as in previous version)
@@ -225,9 +228,9 @@ class DomainNormalizer:
                 f.write("2. Review VEP IDs vs InterPro IDs and define ID normalization rules (e.g., strip :SFxxx from PANTHER).\n")
                 f.write("3. Implement mappings and rules in DomainNormalizer methods.\n")
 
-            logger.info(f"Comparison report saved successfully to {output_path}")
+            self.logger.info(f"Comparison report saved successfully to {output_path}")
         except Exception as e:
-            logger.exception(f"Failed to generate or save comparison report to {output_path}")
+            self.logger.exception(f"Failed to generate or save comparison report to {output_path}")
 
     def load_curated_mappings(self, json_file_path = os.path.join(os.path.dirname(self_directory), 'data', 'InterPro', 'InterPro_domain_norm_map.json')) -> None:
         """ Loads the manually curated mappings from a JSON file. """
@@ -240,17 +243,17 @@ class DomainNormalizer:
             self._vep_to_ipr_id_rules = mapping_data['accession_id_normalization']['vep_to_interpro_key']
             self._ipr_to_vep_id_rules = mapping_data['accession_id_normalization']['interpro_key_to_vep_id']
             
-            logger.info(f"Loaded domain mappings from {json_file_path}")
-            logger.info(f"Loaded {len(self._vep_to_ipr_map)} VEP to InterPro DB mappings")
-            logger.info(f"Loaded {len(self._ipr_to_vep_map)} InterPro to VEP DB mappings")
+            self.logger.info(f"Loaded domain mappings from {json_file_path}")
+            self.logger.info(f"Loaded {len(self._vep_to_ipr_map)} VEP to InterPro DB mappings")
+            self.logger.info(f"Loaded {len(self._ipr_to_vep_map)} InterPro to VEP DB mappings")
         except Exception as e:
-            logger.error(f"Error loading domain mappings from {json_file_path}: {e}")
+            self.logger.error(f"Error loading domain mappings from {json_file_path}: {e}")
             raise
 
     def normalize_vep_to_interpro(self, vep_db_name: str, vep_id: str) -> Optional[Tuple[str, str]]:
         """ Normalizes VEP DB name and ID to InterPro format. """
         if not self._vep_to_ipr_map or not self._vep_to_ipr_id_rules:
-            logger.error("Curated mappings not loaded. Call load_curated_mappings() first.")
+            self.logger.error("Curated mappings not loaded. Call load_curated_mappings() first.")
             return None
             
         # Map database name
@@ -277,7 +280,7 @@ class DomainNormalizer:
                 if match and len(match.groups()) >= group:
                     normalized_id = match.group(group)
                 else:
-                    logger.debug(f"Regex pattern {pattern} did not match VEP ID {vep_id}")
+                    self.logger.debug(f"Regex pattern {pattern} did not match VEP ID {vep_id}")
                     return None
             
         elif rule_type == 'prefix_add':
@@ -295,14 +298,14 @@ class DomainNormalizer:
         if not normalized_id:
             return None
         
-        logger.info(f"Normalized VEP anno domain {vep_db_name}:{vep_id} to InterPro XML domain {interpro_db}:{normalized_id}")
+        self.logger.debug(f"Normalized VEP anno domain {vep_db_name}:{vep_id} to InterPro XML domain {interpro_db}:{normalized_id}")
         return (interpro_db, normalized_id)
 
 
     def normalize_interpro_to_vep(self, interpro_db_name: str, interpro_dbkey: str) -> Optional[Tuple[str, str]]:
         """ Normalizes InterPro DB name and key back to VEP format. """
         if not self._ipr_to_vep_map or not self._ipr_to_vep_id_rules:
-            logger.error("Curated mappings not loaded. Call load_curated_mappings() first.")
+            self.logger.error("Curated mappings not loaded. Call load_curated_mappings() first.")
             return None
             
         # Map database name
@@ -342,23 +345,27 @@ class DomainNormalizer:
         VEP anno string is delimited by '&', each domain is formatted generally as 'db:id',
         '''
         if not isinstance(vep_anno_str, str):
-            logger.warning(f"VEP anno string is not a string: {vep_anno_str}")
+            self.logger.warning(f"VEP anno string is not a string: {vep_anno_str}")
             return None
         vep_domains = vep_anno_str.split('&')
         norm_domains = set([])
         for vep_domain in vep_domains:
-            db_name, db_id = vep_domain.split(':', 1)
+            vep_anno_pack = vep_domain.split(':', 1)
+            if len(vep_anno_pack) < 2:
+                self.logger.warning(f"VEP anno domain {vep_domain} is not formatted in a standard format: {vep_anno_pack}")
+                continue
+            db_name, db_id = vep_anno_pack
             normalized_pack = self.normalize_vep_to_interpro(db_name, db_id)
             if normalized_pack is None:
-                logger.warning(f"No InterPro entry found for VEP anno domain {db_name}:{db_id}")
+                self.logger.warning(f"No InterPro entries found for VEP anno domain {db_name}:{db_id}")
                 continue
             norm_domains.add(normalized_pack)
         if len(norm_domains) == 0:
-            logger.warning(f"No InterPro entries found for VEP anno {vep_anno_str}")
+            self.logger.warning(f"No InterPro entries found for VEP anno {vep_anno_str}")
             vep_domains = [vep_domain for vep_domain in vep_domains if vep_domain.split(':', 1)[0] in vep_pred_domains]
             return {"vep_domains": vep_domains, "interpro_entries": None}
         else:
-            logger.info(f"Found {len(norm_domains)} InterPro XML normalized domain names for VEP anno {vep_anno_str}: {norm_domains}")
+            self.logger.debug(f"Found {len(norm_domains)} InterPro XML normalized domain names for VEP anno {vep_anno_str}: {norm_domains}")
             '''
             InterProMapValue = (
                             ipr_id,
@@ -374,14 +381,32 @@ class DomainNormalizer:
             for norm_pack in norm_domains:
                 interpro_entry = interpro_entry_map_dict.get(norm_pack)
                 if interpro_entry is None:
-                    logger.warning(f"No InterPro entry found for normalized domain {norm_pack}")
+                    self.logger.warning(f"No InterPro entry found for normalized domain {norm_pack}")
                     continue
                 else:
-                    logger.info(f"Found {len(interpro_entry)} InterPro entries for normalized domain {norm_pack}: {interpro_entry}")
+                    self.logger.debug(f"Found {len(interpro_entry)} InterPro entries for normalized domain {norm_pack}: {interpro_entry}")
                     interpro_entry_list.extend(interpro_entry)
             vep_domains = [vep_domain for vep_domain in vep_domains if vep_domain.split(':', 1)[0] in vep_pred_domains]
             return {"vep_domains": vep_domains, "interpro_entries": interpro_entry_list}
-            
+    
+
+    def load_curated_functional_domains(self, tsv_file_path: str = os.path.join(os.path.dirname(self_directory), 'data', 'InterPro', 'curated_InterPro_func_domains.tsv')) -> Set[str]:
+        '''
+        Loads the curated functional domains from a TSV file.
+        '''
+        interpro_ipr_func_dict = {}
+        try:
+            with open(tsv_file_path, 'r') as f:
+                reader = csv.reader(f, delimiter='\t')
+                for row in reader:
+                    ipr_id = row[0] # First column is the InterPro ID
+                    ipr_type = row[6]
+                    interpro_ipr_func_dict[ipr_id] = ipr_type
+        except Exception as e:
+            self.logger.exception(f"Error loading curated functional domains from {tsv_file_path}: {e}")
+            raise
+        self._interpro_ipr_func_dict = interpro_ipr_func_dict
+        
     
     def interpret_functionality(self, vep_anno_str:str, interpro_entry_map_dict: FinalMapping, vep_pred_domains= { "Cleavage_site_(Signalp)",
                                                                                                                     "Coiled-coils_(Ncoils)",
@@ -395,30 +420,31 @@ class DomainNormalizer:
         '''
         domain_info = self.query_interpro_entry_vep_anno(vep_anno_str, interpro_entry_map_dict, vep_pred_domains)
         if domain_info is None:
-            logger.warning(f"No domain info found for VEP anno {vep_anno_str}")
+            self.logger.warning(f"No domain info found for VEP anno {vep_anno_str}")
             return np.nan
+
         vep_domains = domain_info["vep_domains"]
         func_vep_pred_domains = vep_pred_domains - { "Low_complexity_(Seg)" }
         func_vep_domains = [vep_domain for vep_domain in vep_domains if vep_domain.split(':', 1)[0] in func_vep_pred_domains]
         if len(func_vep_domains) > 0:
-            logger.info(f"Found {len(func_vep_domains)} functional VEP domains for the query domains {domain_info}")
+            self.logger.debug(f"Found {len(func_vep_domains)} functional VEP domains for the query domains {domain_info}")
             return "Functional"
 
         # Now we need to check the InterPro entries
         interpro_entries = domain_info["interpro_entries"]
-        if interpro_entries is None:
-            logger.warning(f"No InterPro entries found for the query domains {domain_info}")
-            return "Unknown"
-        else:
-            logger.info(f"Found {len(interpro_entries)} InterPro entries for the query domains {domain_info}")
-            if any(DomainNormalizer.is_functional_domain(interpro_entry) for interpro_entry in interpro_entries):
+        if interpro_entries:
+            self.logger.debug(f"Found {len(interpro_entries)} InterPro entries for the query domains {domain_info}")
+            if any(DomainNormalizer.is_functional_domain(interpro_entry, self._interpro_ipr_func_dict) for interpro_entry in interpro_entries):
                 return "Functional"
             else:
                 return "Unknown"
+        else:
+            self.logger.warning(f"No InterPro entries found for the query domains {domain_info}")
+            return np.nan
 
 
     @staticmethod
-    def is_functional_domain(entry_data: List[Any]) -> bool:
+    def is_functional_domain(entry_data: List[Any], interpro_ipr_func_dict: Dict[str, str] = None) -> bool:
         """
         Identifies functional InterPro domains/regions with high accuracy by analyzing
         multiple data fields including type, name, and GO terms. Handles cases
@@ -434,14 +460,13 @@ class DomainNormalizer:
                             go_terms_list (list),  # Index 4
                             abstract_text (str)    # Index 5
                         ]
-
+            interpro_ipr_func_dict: A dictionary mapping InterPro IDs to functional status (curated by Gemini 2.0 flash thinking).
         Returns:
             bool: True if the entry is deemed functional based on evidence, False otherwise.
         """
         # --- Basic Checks ---
-        if not isinstance(entry_data, list) or len(entry_data) < 5:
-            # logger.debug(f"Invalid entry data format: {entry_data}")
-            return False
+        if not isinstance(entry_data, tuple) or len(entry_data) < 5:
+            raise ValueError(f"Invalid entry data format: {entry_data}")
 
         try:
             entry_id = entry_data[0]
@@ -450,8 +475,12 @@ class DomainNormalizer:
             full_name = entry_data[3]
             go_terms = entry_data[4]
         except IndexError:
-            # logger.debug(f"Entry data missing expected elements: {entry_data}")
-            return False
+            raise ValueError(f"Entry data missing expected elements: {entry_data}")
+
+        if interpro_ipr_func_dict is not None:
+            curated_result = interpro_ipr_func_dict.get(entry_id, None)
+            if curated_result is not None:
+                return curated_result == "yes"
 
         # --- RULE 1: GO TERM-BASED (Strongest Evidence) ---
         # Check GO terms first, as they provide direct functional annotation.

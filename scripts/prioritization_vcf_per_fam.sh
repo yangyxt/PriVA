@@ -48,7 +48,7 @@ function interpret_splicing_annotations () {
 
     local alphamissense_tranx_domain_map=$(read_yaml ${config_file} "alphamissense_tranx_domain_map")
     local intolerant_domains=$(read_yaml ${config_file} "all_intolerant_domains")
-	local interpro_entry_map_pkl=$(read_yaml ${config_file} "interpro_mapping_pickle")
+    local interpro_entry_map_pkl=$(read_yaml ${config_file} "interpro_mapping_pickle")
     
     [[ -f ${input_tab} ]] && \
     [[ ${input_tab} -nt ${interpro_entry_map_pkl} ]] && \
@@ -143,10 +143,12 @@ function assign_acmg_criteria () {
     local gnomAD_extreme_rare_threshold=$(read_yaml ${config_file} "extreme_rare_PAF")
     local expected_incidence=$(read_yaml ${config_file} "exp_disease_incidence")
     local am_score_vcf=$(read_yaml ${config_file} "alphamissense_vcf")
-	local clinvar_patho_af_stat=$(read_yaml ${config_file} "clinvar_patho_af_stat")
-	local clinvar_patho_exon_af_stat=$(read_yaml ${config_file} "clinvar_patho_exon_af_stat")
-	local interpro_entry_map_pkl=$(read_yaml ${config_file} "interpro_mapping_pickle")
-	local output_acmg_mat=${input_tab::-4}.acmg.tsv
+    local clinvar_patho_af_stat=$(read_yaml ${config_file} "clinvar_patho_af_stat")
+    local clinvar_patho_exon_af_stat=$(read_yaml ${config_file} "clinvar_patho_exon_af_stat")
+    local interpro_entry_map_pkl=$(read_yaml ${config_file} "interpro_mapping_pickle")
+    local output_acmg_mat=${input_tab::-4}.acmg.tsv
+    local repeat_region_file_name=$(read_yaml ${config_file} "repeat_region_file_name")
+    local repeat_region_file=${BASE_DIR}/data/repeats/${repeat_region_file_name}
 
     local has_error=0
     check_path ${clinvar_aa_dict_pkl} "file" "clinvar_aa_stat" || has_error=1
@@ -156,9 +158,10 @@ function assign_acmg_criteria () {
     check_path ${intolerant_motifs_pkl} "file" "alphamissense_intolerant_motifs" || has_error=1
     check_path ${am_score_vcf} "file" "alphamissense_vcf" || has_error=1
     check_path ${tranx_exon_domain_map_pkl} "file" "alphamissense_tranx_domain_map" || has_error=1
-	check_path ${clinvar_patho_af_stat} "file" "clinvar_patho_af_stat" || has_error=1
-	check_path ${clinvar_patho_exon_af_stat} "file" "clinvar_patho_exon_af_stat" || has_error=1
-	check_path ${interpro_entry_map_pkl} "file" "interpro_mapping_pickle" || has_error=1
+    check_path ${clinvar_patho_af_stat} "file" "clinvar_patho_af_stat" || has_error=1
+    check_path ${clinvar_patho_exon_af_stat} "file" "clinvar_patho_exon_af_stat" || has_error=1
+    check_path ${interpro_entry_map_pkl} "file" "interpro_mapping_pickle" || has_error=1
+    check_path ${repeat_region_file} "file" "repeat_region_file" || has_error=1
     [[ ${has_error} -eq 1 ]] && \
     { log "Failed to offer the valid required files for the ACMG criteria assignment"; return 1; }
 
@@ -173,9 +176,10 @@ function assign_acmg_criteria () {
     [[ ${input_tab} -nt ${am_score_vcf} ]] && \
     [[ ${input_tab} -nt ${clinvar_patho_af_stat} ]] && \
     [[ ${input_tab} -nt ${clinvar_patho_exon_af_stat} ]] && \
-	[[ ${input_tab} -nt ${interpro_entry_map_pkl} ]] && \
-	[[ ${input_tab} -nt ${tranx_exon_domain_map_pkl} ]] && \
-	[[ ${input_tab} -ot ${output_acmg_mat} ]] && \
+    [[ ${input_tab} -nt ${interpro_entry_map_pkl} ]] && \
+    [[ ${input_tab} -nt ${tranx_exon_domain_map_pkl} ]] && \
+    [[ ${input_tab} -ot ${output_acmg_mat} ]] && \
+    [[ ${input_tab} -nt ${repeat_region_file} ]] && \
     check_table_column ${input_tab} "ACMG_quant_score" && \
     check_table_column ${input_tab} "ACMG_class" && \
     check_table_column ${input_tab} "ACMG_criteria" && \
@@ -192,13 +196,14 @@ function assign_acmg_criteria () {
     python ${acmg_py} \
     --anno_table ${input_tab} \
     --am_score_table ${mean_am_score_table} \
-	--clinvar_patho_af_stat ${clinvar_patho_af_stat} \
-	--clinvar_patho_exon_af_stat ${clinvar_patho_exon_af_stat} \
+    --clinvar_patho_af_stat ${clinvar_patho_af_stat} \
+    --clinvar_patho_exon_af_stat ${clinvar_patho_exon_af_stat} \
     --clinvar_aa_dict_pkl ${clinvar_aa_dict_pkl} \
     --clinvar_splice_dict_pkl ${clinvar_splice_dict_pkl} \
     --interpro_entry_map_pkl ${interpro_entry_map_pkl} \
     --intolerant_domains_pkl ${intolerant_domains_pkl} \
     --intolerant_motifs_pkl ${intolerant_motifs_pkl} \
+    --repeat_region_file ${repeat_region_file} \
     --domain_mechanism_tsv ${domain_mechanism_tsv} \
     --gnomAD_extreme_rare_threshold ${gnomAD_extreme_rare_threshold} \
     --expected_incidence ${expected_incidence} \

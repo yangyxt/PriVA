@@ -73,13 +73,8 @@ def filter_high_confidence_variants(clinvar_dict: Dict) -> Dict:
         'practice_guideline',                                    # 4 stars
         'reviewed_by_expert_panel',                             # 3 stars
         'criteria_provided,_multiple_submitters,_no_conflicts',  # 2 stars
-        
-        # One star reviews
-        'criteria_provided,_conflicting_classifications',        # 1 star
-        'criteria_provided,_single_submitter'                   # 1 star
     }
     
-    filtered_dict = nested_defaultdict()
     
     return recursive_filter_revstatus(clinvar_dict, high_confidence_status)
 
@@ -95,7 +90,6 @@ def is_pathogenic(clnsig: str) -> bool:
 def is_missense(consq: str) -> bool:
     """Check if a variant consequence is missense."""
     return 'missense_variant' in consq.lower()
-
 
 
 def is_protein_disrupting(consq: str) -> bool:
@@ -115,7 +109,7 @@ def is_protein_disrupting(consq: str) -> bool:
         'frameshift_variant',        # Reading frame disruption
         'start_lost',               # Loss of start codon
         'stop_lost',                # Loss of stop codon
-        'protein_altering_variant', # Protein-altering variant
+        
         # Essential splice site variants
         'splice_acceptor_variant',   # Changes 3' splice site
         'splice_donor_variant',      # Changes 5' splice site
@@ -127,7 +121,7 @@ def is_protein_disrupting(consq: str) -> bool:
         'feature_truncation',        # Reduction of genomic feature
         'inframe_deletion',          # Deletion without frameshift
         'inframe_insertion',         # Insertion without frameshift
-		'feature_elongation',		# Increase in genomic feature size
+        'feature_elongation',		# Increase in genomic feature size
         
         # Complete loss
         'transcript_ablation'        # Complete removal of transcript
@@ -180,6 +174,8 @@ def vartype_corr_exam(domain_dist: Dict) -> Dict:
         is_miss = is_missense(consq)
         is_truncating = is_protein_disrupting(consq)
         is_path = is_pathogenic(clnsig)
+
+        is_miss = False if is_truncating else is_miss
         
         if is_miss and is_path:
             counts['missense_patho'] += 1

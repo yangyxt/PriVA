@@ -684,19 +684,35 @@ function AlphaMissense_anno() {
 
 function AlphaMissense_pick_intolerant_motifs() {
     local config_file=${1}
+    local intolerant_motif_prefix=${2}
+    local pick_intolerant_motifs_py=${SCRIPT_DIR}/am_pick_intolerant_motifs.py
+
+    if [[ -z ${intolerant_motif_prefix} ]]; then
+        log "The intolerant motif prefix is not provided, we will use the default prefix: /paedyl01/disk1/yangyxt/public_data/VEP_plugins_caches/AlphaMissense/AlphaMissense_hg19.kde"
+        local assembly=$(read_yaml ${config_file} "assembly")
+        local intolerant_motif_prefix="/paedyl01/disk1/yangyxt/public_data/VEP_plugins_caches/AlphaMissense/AlphaMissense_${assembly}.kde"
+    fi
 
     local alphamissense_vep_vcf=$(read_yaml ${config_file} "alphamissense_vep_vcf")
     local alphamissense_intolerant_motifs=$(read_yaml ${config_file} "alphamissense_intolerant_motifs")
     local threads=$(read_yaml ${config_file} "threads")
     [[ -f ${alphamissense_intolerant_motifs} ]] && \
     [[ ${alphamissense_intolerant_motifs} -nt ${alphamissense_vep_vcf} ]] && \
-    log "The AlphaMissense intolerant motifs file ${alphamissense_intolerant_motifs} is already generated, skip this step" && return 0
+    [[ ${alphamissense_intolerant_motifs} -nt ${pick_intolerant_motifs_py} ]] && \
+    log "The AlphaMissense intolerant motifs file ${alphamissense_intolerant_motifs} is already generated, skip this step" && \
+    return 0 || \
+    log "The AlphaMissense intolerant motifs file ${alphamissense_intolerant_motifs} is not generated, we will generate it"
 
-    local pick_intolerant_motifs_py=${SCRIPT_DIR}/am_pick_intolerant_motifs.py
+    [[ -d $(dirname ${alphamissense_intolerant_motifs}) ]] || \
+    log "The directory $(dirname ${alphamissense_intolerant_motifs}) does not exist, we will use the prefix ${intolerant_motif_prefix}" && \
+    local alphamissense_intolerant_motifs="${intolerant_motif_prefix}.pkl"
+
     python ${pick_intolerant_motifs_py} \
     --vcf_path ${alphamissense_vep_vcf} \
     --output ${alphamissense_intolerant_motifs} \
-    --processes ${threads}
+    --processes ${threads} && \
+    update_yaml ${config_file} "alphamissense_intolerant_motifs" "${alphamissense_intolerant_motifs}" && \
+    log "The AlphaMissense intolerant motifs file is generated and saved to ${alphamissense_intolerant_motifs}"
 }
 
 
@@ -709,7 +725,9 @@ function AlphaMissense_stat() {
     [[ -f ${alphamissense_stat} ]] && \
     [[ ${alphamissense_stat} -nt ${alphamissense_vcf} ]] && \
     [[ ${alphamissense_stat} -nt ${stat_py} ]] && \
-    log "The AlphaMissense statistics JSON file ${alphamissense_stat} is already generated, skip this step" && return 0
+    log "The AlphaMissense statistics JSON file ${alphamissense_stat} is already generated, skip this step" && \
+    return 0 || \
+    log "The AlphaMissense statistics JSON file ${alphamissense_stat} is not generated or updated, we will generate it"
 
     python ${stat_py} \
     ${alphamissense_vcf} \

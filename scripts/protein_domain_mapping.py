@@ -390,17 +390,17 @@ class DomainNormalizer():
             return {"vep_domains": vep_domains, "interpro_entries": interpro_entry_list}
     
 
-    def load_curated_functional_domains(self, tsv_file_path: str = os.path.join(os.path.dirname(self_directory), 'data', 'InterPro', 'curated_InterPro_func_domains.tsv')) -> Set[str]:
+    def load_curated_functional_domains(self, tsv_file_path: str = os.path.join(os.path.dirname(self_directory), 'data', 'InterPro', 'curated_InterPro_func_domains.tsv.gz')) -> Set[str]:
         '''
         Loads the curated functional domains from a TSV file.
         '''
         interpro_ipr_func_dict = {}
         try:
-            with open(tsv_file_path, 'r') as f:
+            with gzip.open(tsv_file_path, 'rt', encoding='utf-8') as f:
                 reader = csv.reader(f, delimiter='\t')
                 for row in reader:
                     ipr_id = row[0] # First column is the InterPro ID
-                    ipr_type = row[6]
+                    ipr_type = row[8] # Ninth column is the InterPro functional status (functional or not)
                     interpro_ipr_func_dict[ipr_id] = ipr_type
         except Exception as e:
             self.logger.exception(f"Error loading curated functional domains from {tsv_file_path}: {e}")

@@ -7,7 +7,7 @@ os.environ["MKL_NUM_THREADS"] = "4"
 os.environ["NUMEXPR_NUM_THREADS"] = "4"
 os.environ["OMP_NUM_THREADS"] = "4"
 
-
+import re
 import pysam
 import numpy as np
 from collections import defaultdict
@@ -299,7 +299,7 @@ class AMMotifAnalyzer:
         logger.info(f"density_threshold for max_score: {max_density_threshold}")
 
         min_density_threshold = self.compute_density_threshold(
-            target_score=0.2,
+            target_score=0.564,
             total_weight=np.sum(min_scores),
             gene_name=transcript
         )

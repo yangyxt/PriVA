@@ -135,10 +135,22 @@ class DomainAMScoreCollector:
                             # Add score to distribution
                             if prot_var not in current_dict['distribution']:
                                 current_dict['distribution'][prot_var] = am_score
-                            # elif am_score > current_dict['distribution'][aa_pos]:
-                            #     # Keep the highest score for this AA position
-                            #     current_dict['distribution'][aa_pos] = am_score
-                        
+
+                            if 'min_distribution' not in current_dict:
+                                current_dict['min_distribution'] = {}
+                            if aa_pos not in current_dict['min_distribution']:
+                                current_dict['min_distribution'][aa_pos] = am_score
+                            elif am_score < current_dict['min_distribution'][aa_pos]:
+                                # Keep the lowest score for this AA position
+                                current_dict['min_distribution'][aa_pos] = am_score
+
+                            if 'max_distribution' not in current_dict:
+                                current_dict['max_distribution'] = {}
+                            if aa_pos not in current_dict['max_distribution']:
+                                current_dict['max_distribution'][aa_pos] = am_score
+                            elif am_score > current_dict['max_distribution'][aa_pos]:
+                                # Keep the highest score for this AA position
+                                current_dict['max_distribution'][aa_pos] = am_score
             except (KeyError, ValueError) as e:
                 print(f"Error processing record {record.chrom}:{record.pos} - {str(e)}")
                 continue
@@ -147,7 +159,11 @@ class DomainAMScoreCollector:
         """Convert score dict to numpy arrays."""
         def convert_nested(d):
             for k, v in d.items():
-                if k == 'distribution' and isinstance(v, dict):
+                if k == 'all_distribution' and isinstance(v, dict):
+                    d[k] = np.array(list(v.values()))
+                elif k == 'min_distribution' and isinstance(v, dict):
+                    d[k] = np.array(list(v.values()))
+                elif k == 'max_distribution' and isinstance(v, dict):
                     d[k] = np.array(list(v.values()))
                 elif isinstance(v, dict):
                     convert_nested(v)

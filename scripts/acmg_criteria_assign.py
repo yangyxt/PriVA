@@ -971,7 +971,7 @@ def identify_inheritance_mode_per_row(row_dict: dict, gene_mean_am_score: float)
 
     hpo_inheritance = parse_hpo_inheritance(row_dict)
     if hpo_inheritance is None:
-        logger.warning(f"No HPO inheritance information for {row_dict['Gene']}, using LOEUF and AM score to determine inheritance mode. The row looks like this: \n{row_dict}\n")
+        logger.debug(f"No HPO inheritance information for {row_dict['Gene']}, using LOEUF and AM score to determine inheritance mode. The row looks like this: \n{row_dict}\n")
         return haplo_insufficient, haplo_sufficient, False, False, haplo_insufficient
 
     return hpo_inheritance['hpo_recessive'], hpo_inheritance['hpo_dominant'], hpo_inheritance['hpo_non_monogenic'], hpo_inheritance['hpo_non_mendelian'], haplo_insufficient
@@ -1038,7 +1038,7 @@ def BS2_criteria(df: pd.DataFrame,
 
     y_linked = y_linked & (df['gnomAD_nhomalt_XY'] > 0) & np.logical_not(non_monogenic) & np.logical_not(non_mendelian)
 
-    return autosomal_dominant | autosomal_recessive | x_linked_recessive | x_linked_dominant | y_linked
+    return autosomal_dominant | autosomal_recessive | x_linked_recessive | x_linked_dominant | y_linked, recessive, dominant, non_monogenic, non_mendelian, haplo_insufficient
 
 
 
@@ -1073,11 +1073,15 @@ def BP2_PM3_criteria(df: pd.DataFrame,
                      ps1_criteria: pd.Series,
                      ps2_criteria: pd.Series,
                      ps3_criteria: pd.Series,
+                     is_recessive: np.ndarray,
+                     is_dominant: np.ndarray,
+                     is_non_monogenic: np.ndarray,
+                     is_non_mendelian: np.ndarray,
+                     haplo_insufficient: np.ndarray,
                      threads: int = 10) -> Tuple[pd.Series, pd.Series]:
     # BP2: observed in trans with a pathogenic variant in dominant disease, Or in-cis with a pathogenic variant with any inheritance mode
     # PM3: observed in trans with a pathogenic variant in recessive disease.
     pathogenic = df['vep_consq_lof'] | df['splicing_lof'] | df['5UTR_lof'] | ps1_criteria | (ps2_criteria & (df["CADD_phred"] >= 20)) | ps3_criteria
-    is_recessive, is_dominant, is_non_monogenic, is_non_mendelian, haplo_insufficient = identify_inheritance_mode(df, gene_to_am_score_map, threads)
 
     # Groupby gene and see if some variant is in-trans or in-cis with a pathogenic variant using the pathogenic boolean array above
     proband_info, father_info, mother_info, sib_info = identify_fam_members(ped_df, fam_name)
@@ -1087,19 +1091,37 @@ def BP2_PM3_criteria(df: pd.DataFrame,
     in_trans_pathogenic = np.array([False] * len(df))
     in_cis_pathogenic = np.array([False] * len(df))
     
-    args = [(gene, df.loc[df["Gene"] == gene, ["Gene", proband]], pathogenic[df.index[df['Gene'] == gene]], proband) for gene in all_genes]
+    # Memory-efficient approach that preserves order
+    logger.info(f"Checking genes for in-trans and in-cis pathogenic variants using {threads} threads")
 
-    logger.info(f"Parallel (with {threads} threads) Checking {len(args)} genes for in-trans and in-cis pathogenic variants")
+    # Pre-calculate the indices for each gene (this avoids repeated df filtering)
+    gene_to_indices = {}
+    for gene in df['Gene'].unique():
+        gene_to_indices[gene] = df.index[df['Gene'] == gene].tolist()
+
+    # Set up initial result arrays
+    in_trans_pathogenic = np.zeros(len(df), dtype=bool)
+    in_cis_pathogenic = np.zeros(len(df), dtype=bool)
+
+    # Create a generator function that preserves gene order
+    def gene_args_generator():
+        for gene in df['Gene'].unique():
+            indices = gene_to_indices[gene]
+            yield (gene, 
+                   df.loc[indices, ["Gene", proband]], 
+                   pathogenic[indices], 
+                   proband)
+
+    # Use regular imap to preserve order
     with mp.Pool(threads) as pool:
-        results = pool.starmap(check_gene_variants, args)
-
-    for i in range(len(all_genes)):
-        gene = all_genes[i]
-        gene_indices = np.array(df.index[df['Gene'] == gene])
-        var_in_trans, var_in_cis = results[i]
-        assert gene_indices.size == var_in_trans.size == var_in_cis.size, f"The size of the gene indices, var_in_trans, and var_in_cis must be the same, but they are {gene_indices.size}, {var_in_trans.size}, and {var_in_cis.size} respectively"
-        in_trans_pathogenic[gene_indices] |= var_in_trans
-        in_cis_pathogenic[gene_indices] |= var_in_cis
+        for gene_result in pool.imap(lambda args: check_gene_variants(*args), 
+                                    gene_args_generator()):
+            # Process results as they arrive, in the correct order
+            gene, trans_indices, cis_indices = gene_result
+            if trans_indices:
+                in_trans_pathogenic[trans_indices] = True
+            if cis_indices:
+                in_cis_pathogenic[cis_indices] = True
 
     logger.info(f"There are {(in_trans_pathogenic & is_dominant).sum()} variants that are in-trans with pathogenic variants in a dominant (haploinsufficient) gene (disease)")
     logger.info(f"There are {(in_trans_pathogenic & is_recessive).sum()} variants that are in-trans with pathogenic variants in a recessive (haplo-sufficient) gene (disease)")
@@ -1708,7 +1730,7 @@ def ACMG_criteria_assign(anno_table: str,
     logger.info(f"BS1 criteria applied, {bs1_criteria.sum()} variants are having the BS1 criteria")
     gc.collect()
     # Apply BS2, variant observed in a healthy adult
-    bs2_criteria = BS2_criteria(anno_df, gene_to_am_score_map, threads)
+    bs2_criteria, recessive, dominant, non_monogenic, non_mendelian, haplo_insufficient = BS2_criteria(anno_df, gene_to_am_score_map, threads)
     logger.info(f"BS2 criteria applied, {bs2_criteria.sum()} variants are having the BS2 criteria")
     gc.collect()
     # Apply BS4, lack of family segregation
@@ -1743,6 +1765,11 @@ def ACMG_criteria_assign(anno_table: str,
                                                       ps1_criteria,
                                                       ps2_criteria,
                                                       ps3_criteria,
+                                                      recessive,
+                                                      dominant,
+                                                      non_monogenic,
+                                                      non_mendelian,
+                                                      haplo_insufficient,
                                                       threads)
     else:
         logger.warning(f"No ped_table provided, skip the BP2 and PM3 criteria")

@@ -205,14 +205,14 @@ def collect_domain_data(d, output_dir: str, min_variants: int, path=[]) -> List:
     """
     domain_data = []
     for k, v in d.items():
-        if k == 'distribution':
+        if k == 'min_distribution':
             domain_path = ':'.join(path)
             if len(v) >= min_variants:
                 logger.debug(f"Processing domain {domain_path} with {len(v)} variants")
                 domain_data.append((domain_path, v, output_dir))
             else:
                 logger.info(f"Skipping domain {domain_path} due to insufficient variants ({len(v)} < {min_variants})")
-        elif isinstance(v, dict):
+        elif isinstance(v, dict) and not 'distribution' in k:
             current_path = path + [k]
             domain_data.extend(collect_domain_data(v, output_dir, min_variants, current_path))
     return domain_data

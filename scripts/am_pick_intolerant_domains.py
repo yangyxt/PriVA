@@ -205,7 +205,7 @@ def collect_domain_data(d, output_dir: str, min_variants: int, path=[]) -> List:
     """
     domain_data = []
     for k, v in d.items():
-        if k == 'min_distribution':
+        if k == 'max_distribution':
             domain_path = ':'.join(path)
             if len(v) >= min_variants:
                 logger.debug(f"Processing domain {domain_path} with {len(v)} variants")

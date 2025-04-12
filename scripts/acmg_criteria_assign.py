@@ -758,8 +758,10 @@ def locate_less_char_region(row: dict, am_intolerant_motifs: dict) -> Tuple[bool
     assert len(single_letter_aa_code) == 1, f"For variant at {row['chrom']}:{row['pos']}, the amino acid code for {protein_position}: {ref_aa} is not a single letter"
     combo = f"{single_letter_aa_code}{protein_position}"
     logger.debug(f"The variant {row['chrom']}:{row['pos']} is causing AA changes at {combo}")
+    key_regex = re.compile(rf'^[A-Z]{protein_position}$')
 
-    return combo in am_intolerant_motifs['max_score_regions'], combo in am_intolerant_motifs['min_score_regions']
+    return (combo in am_intolerant_motifs['max_score_regions']) or any(key_regex.match(x) for x in am_intolerant_motifs['max_score_regions']), \
+           (combo in am_intolerant_motifs['min_score_regions']) or any(key_regex.match(x) for x in am_intolerant_motifs['min_score_regions'])
 
     
 
@@ -783,8 +785,9 @@ def PM1_criteria(df: pd.DataFrame,
 
     loc_intol_domain = np.array(results)
     logger.info(f"There are {np.sum(loc_intol_domain)} variants located in a protein domain that is seemingly intolerant to AA changes according to AM scores")
-    truncating = df['vep_consq_length_changing'] | df['splicing_len_changing'] | df['5UTR_len_changing']
-    missense = df['Consequence'] == 'missense_variant'
+    
+    missense = df['Consequence'].str.contains('missense_variant')
+    missense_damaging = df["am_class"].str.contains('athogenic')
 
     intolerant_motifs = pickle.load(open(intolerant_motifs_pkl, 'rb'))
     args = [(row, intolerant_motifs.get(row['Feature'], {})) for row in row_dicts]
@@ -797,7 +800,7 @@ def PM1_criteria(df: pd.DataFrame,
 
     logger.info(f"There are {np.sum(all_pathogenic_unimodal_motifs)} variants located in a mutational hotspot that is seemingly intolerant to AA changes according to AM scores")
     logger.info(f"There are {np.sum(severe_pathogenic_unimodal_motifs)} variants located in a mutational hotspot that is seemingly intolerant to AA changes according to most severeAM scores")
-    return loc_intol_domain | ( severe_pathogenic_unimodal_motifs & truncating ) | ( all_pathogenic_unimodal_motifs & missense )
+    return missense & (( severe_pathogenic_unimodal_motifs & missense_damaging ) | all_pathogenic_unimodal_motifs | loc_intol_domain )
 
 
 
@@ -1066,6 +1069,11 @@ def BS4_criteria(df: pd.DataFrame, ped_df: pd.DataFrame, fam_name: str) -> pd.Se
     return final_criteria
 
 
+# Define this function at module level (outside any other function)
+def process_gene_variants(args):
+    """Helper function to unpack arguments for check_gene_variants"""
+    return check_gene_variants(*args)
+
 def BP2_PM3_criteria(df: pd.DataFrame, 
                      ped_df: pd.DataFrame, 
                      fam_name: str,
@@ -1112,10 +1120,9 @@ def BP2_PM3_criteria(df: pd.DataFrame,
                    pathogenic[indices], 
                    proband)
 
-    # Use regular imap to preserve order
+    # Use the named function instead of lambda
     with mp.Pool(threads) as pool:
-        for gene_result in pool.imap(lambda args: check_gene_variants(*args), 
-                                    gene_args_generator()):
+        for gene_result in pool.imap(process_gene_variants, gene_args_generator()):
             # Process results as they arrive, in the correct order
             gene, trans_indices, cis_indices = gene_result
             if trans_indices:
@@ -1683,6 +1690,7 @@ def ACMG_criteria_assign(anno_table: str,
     '''
     # Apply PM1 criteria, mutational hotspot or well-established functional protein domain
     pm1_criteria = PM1_criteria(anno_df, intolerant_domains_pkl, intolerant_motifs_pkl, threads)
+    pm1_criteria = pm1_criteria & ~pvs1_criteria & ~ps1_criteria
     logger.info(f"PM1 criteria applied, {pm1_criteria.sum()} variants are having the PM1 criteria")
     gc.collect()
     # Apply PM2 criteria, absent from gnomAD or extremely rare in gnomAD

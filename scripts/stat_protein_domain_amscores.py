@@ -159,7 +159,7 @@ class DomainAMScoreCollector:
         """Convert score dict to numpy arrays."""
         def convert_nested(d):
             for k, v in d.items():
-                if k == 'all_distribution' and isinstance(v, dict):
+                if k == 'distribution' and isinstance(v, dict):
                     d[k] = np.array(list(v.values()))
                 elif k == 'min_distribution' and isinstance(v, dict):
                     d[k] = np.array(list(v.values()))

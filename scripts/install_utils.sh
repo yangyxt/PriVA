@@ -1,6 +1,7 @@
 #! /usr/bin/env bash
 SCRIPT_DIR=$(dirname $(realpath ${BASH_SOURCE[0]}))
 source ${SCRIPT_DIR}/common_bash_utils.sh
+source ${SCRIPT_DIR}/annotation_vcf.sh
 log "The base directory is ${BASE_DIR}, the scripts directory is ${SCRIPT_DIR}"
 
 
@@ -1451,6 +1452,25 @@ function LoFtee_install() {
 }
 
 
+function AlphaMissense_anno_gnomAD() {
+    local config_file=${1}
+    local alphamissense_vep_vcf=$(read_yaml "${config_file}" "alphamissense_vep_vcf")
+    local gnomAD_vcf_chrX=$(read_yaml "${config_file}" "gnomad_vcf_chrX")
+    local threads=$(read_yaml "${config_file}" "threads")
+    local assembly=$(read_yaml "${config_file}" "assembly")
+
+    [[ -f ${alphamissense_vep_vcf} ]] && [[ -f ${gnomAD_vcf_chrX} ]] || { log "The AlphaMissense VCF file ${alphamissense_vep_vcf} or the gnomAD VCF file ${gnomAD_vcf_chrX} is not found, please check the files"; return 1; }
+    
+    log "Running anno_agg_gnomAD_data ${alphamissense_vep_vcf} ${threads} ${assembly} ${gnomAD_vcf_chrX} to annotate gnomAD data to AlphaMissense VCF"
+    anno_agg_gnomAD_data \
+    ${alphamissense_vep_vcf} \
+    ${threads} \
+    ${assembly} \
+    ${gnomAD_vcf_chrX} && \
+    update_yaml "${config_file}" "alphamissense_vep_vcf" "${alphamissense_vep_vcf}"
+}
+
+
 
 # Main installation function
 function main_install() {
@@ -1521,6 +1541,8 @@ function main_install() {
     fi
     gnomAD_install ${config_file} ${gnomad_vcf_dir} ${ref_fasta} || \
     { log "Failed to install gnomAD VCF"; return 1; }
+    AlphaMissense_anno_gnomAD ${config_file} || \
+    { log "Failed to annotate gnomAD data to AlphaMissense VCF"; return 1; }
 
     # 5. Install InterPro mapping pickle
     InterPro_parsing ${config_file} || \

@@ -208,8 +208,6 @@ function VEP_plugins_install() {
     { log "Failed to convert the AlphaMissense prescore file to vcf file and annotate protein domains to it"; return 1; }
     AlphaMissense_pick_intolerant_motifs ${config_file} || \
     { log "Failed to pick intolerant motifs from the AlphaMissense prescore file"; return 1; }
-    AlphaMissense_stat ${config_file} || \
-    { log "Failed to generate the AlphaMissense statistics JSON file"; return 1; }
 
     # Then install SpliceAI
     SpliceAI_install ${config_file} ${VEP_PLUGINSCACHEDIR} ${VEP_PLUGINSDIR} || \
@@ -1558,6 +1556,8 @@ function main_install() {
     { log "Failed to stat ClinVar per AA change"; return 1; }
     ClinVar_pick_intolerant_domains ${config_file} || \
     { log "Failed to pick intolerant domains from ClinVar"; return 1; }
+    AlphaMissense_stat ${config_file} || \
+    { log "Failed to generate the AlphaMissense statistics JSON file"; return 1; }
     AlphaMissense_pick_intolerant_domains ${config_file} || \
     { log "Failed to pick intolerant domains from AlphaMissense"; return 1; }
     ClinVar_patho_AF_stat ${config_file} || \

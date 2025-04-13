@@ -1074,6 +1074,52 @@ def process_gene_variants(args):
     """Helper function to unpack arguments for check_gene_variants"""
     return check_gene_variants(*args)
 
+
+def check_gene_variants(gene, gene_df, pathogenic, proband, original_indices):
+    """
+    Check variants within a gene for trans/cis relationships with pathogenic variants.
+    
+    Args:
+        gene: Gene name
+        gene_df: DataFrame containing just variants for this gene
+        pathogenic: Boolean array indicating which variants are pathogenic
+        proband: Name of proband column
+        original_indices: Array of indices in the original dataframe
+        
+    Returns:
+        Tuple of arrays containing original indices where trans/cis conditions are true
+    """
+    pathogenic_variants = gene_df.loc[pathogenic, proband].tolist()
+    logger.debug(f"For gene {gene}, there are {len(pathogenic_variants)} pathogenic variants")
+    
+    var_in_trans = np.array([False] * len(gene_df))
+    var_in_cis = np.array([False] * len(gene_df))
+    
+    if len([v for v in pathogenic_variants if len(v.split("|")) == 2 and v.split("|")[0] == "0"]) > 0:
+        # If there is at least one pathogenic variant at the second copy of the proband's genome
+        # Convert pandas Series to numpy array with np.array()
+        var_in_trans = np.array(((gene_df.loc[:, proband].str.split("|").str.get(0) == "1")) & (gene_df.loc[:, "Gene"] == gene))
+        var_in_cis = np.array(((gene_df.loc[:, proband].str.split("|").str.get(1) == "1")) & (gene_df.loc[:, "Gene"] == gene))
+        logger.info(f"For gene {gene}, there are {var_in_trans.sum()} variants in-trans with pathogenic variants at the second copy of the proband's genome")
+        logger.info(f"For gene {gene}, there are {var_in_cis.sum()} variants in-cis with pathogenic variants at the second copy of the proband's genome")
+
+    if len([v for v in pathogenic_variants if len(v.split("|")) == 2 and v.split("|")[0] == "1"]) > 0:
+        # If there is at least one pathogenic variant at the first copy of the proband's genome
+        # Convert pandas Series to numpy array with np.array()
+        var_in_trans_1 = np.array(((gene_df.loc[:, proband].str.split("|").str.get(1) == "1")) & (gene_df.loc[:, "Gene"] == gene))
+        var_in_cis_1 = np.array(((gene_df.loc[:, proband].str.split("|").str.get(0) == "1")) & (gene_df.loc[:, "Gene"] == gene))
+        logger.info(f"For gene {gene}, there are {var_in_trans_1.sum()} variants in-trans with pathogenic variants at the first copy of the proband's genome")
+        logger.info(f"For gene {gene}, there are {var_in_cis_1.sum()} variants in-cis with pathogenic variants at the first copy of the proband's genome")
+        var_in_trans |= var_in_trans_1
+        var_in_cis |= var_in_cis_1
+
+    # Map local boolean arrays to original indices
+    trans_original_indices = original_indices[var_in_trans] if var_in_trans.any() else np.array([], dtype=int)
+    cis_original_indices = original_indices[var_in_cis] if var_in_cis.any() else np.array([], dtype=int)
+    
+    return trans_original_indices, cis_original_indices
+
+
 def BP2_PM3_criteria(df: pd.DataFrame, 
                      ped_df: pd.DataFrame, 
                      fam_name: str,
@@ -1105,7 +1151,7 @@ def BP2_PM3_criteria(df: pd.DataFrame,
     # Pre-calculate the indices for each gene (this avoids repeated df filtering)
     gene_to_indices = {}
     for gene in df['Gene'].unique():
-        gene_to_indices[gene] = df.index[df['Gene'] == gene].tolist()
+        gene_to_indices[gene] = np.array(df.index[df['Gene'] == gene].tolist())
 
     # Set up initial result arrays
     in_trans_pathogenic = np.zeros(len(df), dtype=bool)
@@ -1118,16 +1164,17 @@ def BP2_PM3_criteria(df: pd.DataFrame,
             yield (gene, 
                    df.loc[indices, ["Gene", proband]], 
                    pathogenic[indices], 
-                   proband)
+                   proband, 
+                   indices)
 
     # Use the named function instead of lambda
     with mp.Pool(threads) as pool:
-        for gene_result in pool.imap(process_gene_variants, gene_args_generator()):
-            # Process results as they arrive, in the correct order
-            gene, trans_indices, cis_indices = gene_result
-            if trans_indices:
+        results = pool.imap_unordered(process_gene_variants, gene_args_generator())
+        # Combine results
+        for trans_indices, cis_indices in results:
+            if len(trans_indices) > 0:
                 in_trans_pathogenic[trans_indices] = True
-            if cis_indices:
+            if len(cis_indices) > 0:
                 in_cis_pathogenic[cis_indices] = True
 
     logger.info(f"There are {(in_trans_pathogenic & is_dominant).sum()} variants that are in-trans with pathogenic variants in a dominant (haploinsufficient) gene (disease)")
@@ -1138,33 +1185,6 @@ def BP2_PM3_criteria(df: pd.DataFrame,
     pm3_criteria = in_trans_pathogenic & ( is_recessive | is_non_monogenic )
 
     return bp2_criteria, pm3_criteria
-
-    
-
-def check_gene_variants(gene, df, pathogenic, proband):
-    pathogenic_variants = df.loc[pathogenic, proband].tolist()
-    logger.debug(f"For gene {gene}, there are {len(pathogenic_variants)} pathogenic variants, and {len(df)} variants in the gene")
-    var_in_trans = np.array([False] * len(df))
-    var_in_cis = np.array([False] * len(df))
-    if len([v for v in pathogenic_variants if len(v.split("|")) == 2 and v.split("|")[0] == "0"]) > 0:
-        # If there is at least one pathogenic variant at the second copy of the proband's genome
-        # Convert pandas Series to numpy array with np.array()
-        var_in_trans = np.array(((df.loc[:, proband].str.split("|").str.get(0) == "1")) & (df.loc[:, "Gene"] == gene))
-        var_in_cis = np.array(((df.loc[:, proband].str.split("|").str.get(1) == "1")) & (df.loc[:, "Gene"] == gene))
-        logger.info(f"For gene {gene}, there are {var_in_trans.sum()} variants in-trans with pathogenic variants at the second copy of the proband's genome")
-        logger.info(f"For gene {gene}, there are {var_in_cis.sum()} variants in-cis with pathogenic variants at the second copy of the proband's genome")
-
-    if len([v for v in pathogenic_variants if len(v.split("|")) == 2 and v.split("|")[0] == "1"]) > 0:
-        # If there is at least one pathogenic variant at the first copy of the proband's genome
-        # Convert pandas Series to numpy array with np.array()
-        var_in_trans_1 = np.array(((df.loc[:, proband].str.split("|").str.get(1) == "1")) & (df.loc[:, "Gene"] == gene))
-        var_in_cis_1 = np.array(((df.loc[:, proband].str.split("|").str.get(0) == "1")) & (df.loc[:, "Gene"] == gene))
-        logger.info(f"For gene {gene}, there are {var_in_trans_1.sum()} variants in-trans with pathogenic variants at the first copy of the proband's genome")
-        logger.info(f"For gene {gene}, there are {var_in_cis_1.sum()} variants in-cis with pathogenic variants at the first copy of the proband's genome")
-        var_in_trans |= var_in_trans_1
-        var_in_cis |= var_in_cis_1
-
-    return var_in_trans, var_in_cis
 
 
 def find_overlaps_bedtools_efficient(variants_df, regions_file):

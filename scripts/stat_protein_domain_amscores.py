@@ -92,6 +92,7 @@ class DomainAMScoreCollector:
         for record in vcf:
             try:
                 am_score = float(record.info['AM_PATHOGENICITY'])
+                gnomAD_AF = float(record.info.get('AF_joint', (0.0,))[0])
                 prot_var = record.info['PVAR']
                 # Extract amino acid position from PVAR (assuming format like 'p.Arg123Ser')
                 aa_pos = prot_var[:-1]
@@ -136,6 +137,13 @@ class DomainAMScoreCollector:
                             if prot_var not in current_dict['distribution']:
                                 current_dict['distribution'][prot_var] = am_score
 
+                            if 'gnomAD_distribution' not in current_dict:
+                                current_dict['gnomAD_distribution'] = {}
+                            if prot_var not in current_dict['gnomAD_distribution']:
+                                current_dict['gnomAD_distribution'][prot_var] = gnomAD_AF
+                            elif gnomAD_AF > current_dict['gnomAD_distribution'][prot_var]:
+                                current_dict['gnomAD_distribution'][prot_var] = gnomAD_AF
+
                             if 'min_distribution' not in current_dict:
                                 current_dict['min_distribution'] = {}
                             if aa_pos not in current_dict['min_distribution']:
@@ -164,6 +172,8 @@ class DomainAMScoreCollector:
                 elif k == 'min_distribution' and isinstance(v, dict):
                     d[k] = np.array(list(v.values()))
                 elif k == 'max_distribution' and isinstance(v, dict):
+                    d[k] = np.array(list(v.values()))
+                elif k == 'gnomAD_distribution' and isinstance(v, dict):
                     d[k] = np.array(list(v.values()))
                 elif isinstance(v, dict):
                     convert_nested(v)

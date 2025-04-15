@@ -73,7 +73,7 @@ def process_chromosome(chrom, vcf_file, csq_field_map):
                 continue
             
             # Extract gnomAD allele frequency
-            af = record.info.get('AF_joint', 0)
+            af = record.info.get('AF_grpmax_joint', 0)
             if isinstance(af, tuple):
                 af = af[0]
             

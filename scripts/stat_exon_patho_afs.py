@@ -76,8 +76,8 @@ def process_chromosome(chromosome, vcf_path, csq_fields, high_confidence_status)
                 # Get allele frequency
                 af = None
                 # Try different AF fields that might be in the VCF
-                if "AF_joint" in record.info:
-                    af = record.info["AF_joint"]
+                if "AF_grpmax_joint" in record.info:
+                    af = record.info["AF_grpmax_joint"]
                     if isinstance(af, tuple):
                         af = float(af[0])  # Get first AF if it's a tuple
                 

@@ -30,7 +30,7 @@ class SubprocessLogCollector:
         pass
 
 
-def setup_worker_logger(worker_id: int) -> logging.Logger:
+def setup_worker_logger(worker_id: str) -> logging.Logger:
     logger = logging.getLogger(f'worker_{worker_id}')
     logger.setLevel(logging.DEBUG)
     
@@ -41,7 +41,6 @@ def setup_worker_logger(worker_id: int) -> logging.Logger:
     handler.setFormatter(formatter)
     logger.addHandler(handler)
     return logger, collector
-
 
 
 def parse_csq_field(csq_field: str, csq_fields: List[str], logger: logging.Logger) -> Dict[str, Any]:
@@ -83,36 +82,64 @@ def parse_csq_field(csq_field: str, csq_fields: List[str], logger: logging.Logge
 
 def extract_record_info(record):
     """Extract necessary information from a VariantRecord object"""
+    # Initialize the info dictionary
+    info_dict = {
+        # Core frequency fields
+        'AC_joint': record.info.get('AC_joint', [np.nan])[0],
+        'AN_joint': record.info.get('AN_joint', np.nan),
+        'AF_joint': record.info.get('AF_joint', [np.nan])[0],
+        'nhomalt_joint': record.info.get('nhomalt_joint', [np.nan])[0],
+        
+        # Maximum values across populations
+        'AC_grpmax_joint': record.info.get('AC_grpmax_joint', [np.nan])[0],
+        'AF_grpmax_joint': record.info.get('AF_grpmax_joint', [np.nan])[0],
+        'AN_grpmax_joint': record.info.get('AN_grpmax_joint', [np.nan])[0],
+        'nhomalt_grpmax_joint': record.info.get('nhomalt_grpmax_joint', [np.nan])[0],
+        
+        # Sex-specific fields (overall)
+        'AF_joint_XX': record.info.get('AF_joint_XX', [np.nan])[0],
+        'AF_joint_XY': record.info.get('AF_joint_XY', [np.nan])[0],
+        'nhomalt_joint_XX': record.info.get('nhomalt_joint_XX', [np.nan])[0],
+        'nhomalt_joint_XY': record.info.get('nhomalt_joint_XY', [np.nan])[0],
+        
+        # ClinVar information
+        'CLNDN': ",".join(record.info.get('CLNDN', [""])),
+        'CLNSIG': ",".join(record.info.get('CLNSIG', [""])),
+        'CLNREVSTAT': ",".join(record.info.get('CLNREVSTAT', [""])),
+        'VARIANT_SOURCE': record.info.get('VARIANT_SOURCE', ""),
+        
+        # CSQ field
+        'CSQ': record.info.get('CSQ', tuple(["",])),
+    }
+    
+    # Add population-specific fields
+    pop_codes = ["nfe", "eas", "afr", "amr", "asj", "fin", "sas", "mid", "remaining"]
+    
+    for pop in pop_codes:
+        # Add XX/XY-specific allele frequencies for each population
+        info_dict[f'AF_joint_{pop}_XX'] = record.info.get(f'AF_joint_{pop}_XX', [np.nan])[0]
+        info_dict[f'AF_joint_{pop}_XY'] = record.info.get(f'AF_joint_{pop}_XY', [np.nan])[0]
+        
+        # Add XX homozygote counts (as specified in the script)
+        info_dict[f'nhomalt_joint_{pop}_XX'] = record.info.get(f'nhomalt_joint_{pop}_XX', [np.nan])[0]
+    
     return {
         'chrom': record.chrom,
         'pos': record.pos,
         'ref': record.ref,
         'alts': record.alts,
         'VCF_filters': ",".join(record.filter),
-        'info': {
-            'CSQ': record.info.get('CSQ', tuple(["",])),
-            'AF_joint': record.info.get('AF_joint', [np.nan])[0],
-            'AF_joint_XX': record.info.get('AF_joint_XX', [np.nan])[0],
-            'AF_joint_XY': record.info.get('AF_joint_XY', [np.nan])[0],
-            'nhomalt_joint_XX': record.info.get('nhomalt_joint_XX', [np.nan])[0],
-            'nhomalt_joint_XY': record.info.get('nhomalt_joint_XY', [np.nan])[0],
-            'CLNDN': record.info.get('CLNDN', [""])[0],
-            'CLNSIG': record.info.get('CLNSIG', [""])[0],
-            'CLNREVSTAT': ",".join(record.info.get('CLNREVSTAT', [""])),
-            'VARIANT_SOURCE': record.info.get('VARIANT_SOURCE', "")
-        },
+        'info': info_dict,
+        
         # Extract GT info for each sample, preserving phasing information
-        # Convert tuple GT to string with proper phasing separator (| for phased, / for unphased)
-        # Handle None values by converting to "."
         'GT': {
             sample: '|'.join('.' if allele is None else str(allele) for allele in record.samples[sample]['GT']) 
             if record.samples[sample].phased 
             else '/'.join('.' if allele is None else str(allele) for allele in record.samples[sample]['GT'])
             for sample in record.samples.keys()
         },
+        
         # Extract AD info for each sample
-        # Convert tuple AD to comma-separated string
-        # Handle None values by converting to "."
         'AD': {
             f"{sample}_AD": ','.join('.' if value is None else str(value) for value in record.samples[sample]['AD'])
             for sample in record.samples.keys()
@@ -134,20 +161,44 @@ def convert_record_to_tab(args: tuple) -> tuple[List[Dict[str, Any]], List[str]]
             "chrom": record_dict['chrom'],
             "pos": record_dict['pos'],
             "ref": record_dict['ref'],
-            "alt": record_dict['alts'][0],
-            "gnomAD_joint_af": record_dict['info']['AF_joint'],
-            "gnomAD_joint_af_XX": record_dict['info']['AF_joint_XX'],
-            "gnomAD_joint_af_XY": record_dict['info']['AF_joint_XY'],
+            "alt": record_dict['alts'][0] if record_dict['alts'] else '',
+            
+            # Core frequency fields
+            "gnomAD_joint_AN": record_dict['info']['AN_joint'],
+            "gnomAD_joint_AF": record_dict['info']['AF_joint'],
+            
+            # Maximum values across populations
+            "gnomAD_joint_AF_max": record_dict['info']['AF_grpmax_joint'],
+            "gnomAD_joint_AN_max": record_dict['info']['AN_grpmax_joint'],
+            "gnomAD_nhomalt_max": record_dict['info']['nhomalt_grpmax_joint'],
+            
+            # Sex-specific fields (overall)
+            "gnomAD_joint_AF_XX": record_dict['info']['AF_joint_XX'],
+            "gnomAD_joint_AF_XY": record_dict['info']['AF_joint_XY'],
             "gnomAD_nhomalt_XX": record_dict['info']['nhomalt_joint_XX'],
             "gnomAD_nhomalt_XY": record_dict['info']['nhomalt_joint_XY'],
+            
+            # ClinVar information
             "CLNSIG": record_dict['info']['CLNSIG'],
             "CLNREVSTAT": record_dict['info']['CLNREVSTAT'],
             "VARIANT_SOURCE": record_dict['info']['VARIANT_SOURCE'],
             "VCF_filters": record_dict['VCF_filters']
         }
         
+        # # Add population-specific fields
+        # pop_codes = ["nfe", "eas", "afr", "amr", "asj", "fin", "sas", "mid", "remaining"]
+        
+        # for pop in pop_codes:
+        #     # Add XX/XY-specific allele frequencies for each population
+        #     var_dict_items[f"gnomAD_AF_{pop}_XX"] = record_dict['info'].get(f'AF_joint_{pop}_XX', np.nan)
+        #     var_dict_items[f"gnomAD_AF_{pop}_XY"] = record_dict['info'].get(f'AF_joint_{pop}_XY', np.nan)
+            
+        #     # Add XX homozygote counts (as specified in the script)
+        #     var_dict_items[f"gnomAD_nhomalt_{pop}_XX"] = record_dict['info'].get(f'nhomalt_joint_{pop}_XX', np.nan)
+        
         gt_dict = record_dict['GT']
         ad_dict = record_dict['AD']
+        
         # Extract the variant-transcript level annotations
         csqs = parse_csq_field(record_dict['info']['CSQ'], csq_fields, logger)
 
@@ -161,6 +212,7 @@ def convert_record_to_tab(args: tuple) -> tuple[List[Dict[str, Any]], List[str]]
         
     except Exception as e:
         logger.error(f"Error processing variant at {record_dict['chrom']}:{record_dict['pos']}: {str(e)}\n\n")
+        raise(e)
         return [], list(collector.log_buffer)
 
 
@@ -175,13 +227,14 @@ def convert_vcf_to_tab(input_vcf: str, threads=4) -> pd.DataFrame:
             
             # Convert records to dictionaries before multiprocessing
             record_args = ((extract_record_info(record), 
-                          f"{record.chrom}:{record.pos}:{record.ref}->{record.alts[0]}", 
+                          f"{record.chrom}:{record.pos}:{record.ref}->{record.alts[0] if record.alts else ''}",
                           tuple(csq_fields), 
                           tuple(clinvar_csq_fields)) for record in vcf_file)
 
             with mp.Pool(threads) as pool:
                 varcount = 0
-                for rows, logs in pool.imap_unordered(convert_record_to_tab, record_args):
+                results = pool.imap_unordered(convert_record_to_tab, record_args)
+                for rows, logs in results:
                     if logs:
                         sys.stderr.write("\n".join(logs) + "\n")
                         sys.stderr.flush()
@@ -197,7 +250,7 @@ def convert_vcf_to_tab(input_vcf: str, threads=4) -> pd.DataFrame:
         
     except Exception as e:
         sys.stderr.write(f"Error in conversion process: {str(e)}\n")
-        raise
+        raise(e)
 
 
 def main(input_vcf: str, 

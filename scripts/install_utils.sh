@@ -1042,8 +1042,10 @@ function ClinVar_VCF_deploy() {
     [[ ! -f ${contig_map} ]] && { log "The contig map file ${contig_map} is not found, please check the file"; return 1; }
 
     if [[ -z ${assembly_version} ]]; then
-        local assembly_version="GRCh37"
-    elif [[ ${assembly_version} == "hg19" ]] || [[ ${assembly_version} == "GRCh37" ]]; then
+        local assembly_version=$(read_yaml ${config_file} "assembly")
+    fi
+
+    if [[ ${assembly_version} == "hg19" ]] || [[ ${assembly_version} == "GRCh37" ]]; then
         local assembly_version="GRCh37"
     elif [[ ${assembly_version} == "hg38" ]] || [[ ${assembly_version} == "GRCh38" ]]; then
         local assembly_version="GRCh38"
@@ -1076,7 +1078,7 @@ function ClinVar_VCF_deploy() {
 
     check_vcf_validity ${clinvar_vcf} && \
     check_vcf_infotags ${clinvar_vcf} "CSQ" && \
-    check_vcf_infotags ${clinvar_vcf} "AF_joint" && \
+    check_vcf_infotags ${clinvar_vcf} "AF_grpmax_joint" && \
     log "The ClinVar VCF file ${clinvar_vcf} is already downloaded and annotated by VEP. Skip the following steps" && return 0
 
     wget https://ftp.ncbi.nlm.nih.gov/pub/clinvar/vcf_${assembly_version}/clinvar.vcf.gz -O ${CACHEDIR}/clinvar.${assembly_version}.vcf.gz && \

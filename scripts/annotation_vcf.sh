@@ -276,8 +276,26 @@ function anno_agg_gnomAD_data () {
         return 1;
     }
 
-    check_vcf_infotags ${input_vcf} "AC_joint,AN_joint,AF_joint,nhomalt_joint_XX,nhomalt_joint_XY" && \
-    log "The input vcf ${input_vcf} already contains the INFO tags AC_joint,AN_joint,AF_joint,nhomalt_joint_XX,nhomalt_joint_XY. We do not need to add them again" && \
+    # Core frequency fields
+    local core_fields="CHROM,POS,REF,ALT,.INFO/AC_joint,.INFO/AN_joint,.INFO/AF_joint,.INFO/nhomalt_joint"
+
+    # Maximum values across populations (no sex-specific versions available)
+    local max_fields=",.INFO/AC_grpmax_joint,.INFO/AF_grpmax_joint,.INFO/AN_grpmax_joint,.INFO/nhomalt_grpmax_joint"
+
+    # Sex-specific fields (overall)
+    local sex_fields=",.INFO/AF_joint_XX,.INFO/AF_joint_XY,.INFO/nhomalt_joint_XX,.INFO/nhomalt_joint_XY"
+
+    # Major population frequencies
+    local -a pop_codes=("nfe" "eas" "afr" "amr" "asj" "fin" "sas" "mid" "remaining")
+    local pop_af_fields=""
+    local pop_nhomalt_fields=""
+    for pop in ${pop_codes[@]}; do
+        pop_af_fields+=",.INFO/AF_joint_${pop}_XX,.INFO/AF_joint_${pop}_XY"
+        pop_nhomalt_fields+=",.INFO/nhomalt_joint_${pop}_XX"
+    done
+
+    check_vcf_infotags ${input_vcf} "${core_fields}${max_fields}${sex_fields}${pop_af_fields}${pop_nhomalt_fields}" && \
+    log "The input vcf ${input_vcf} already contains the INFO tags ${core_fields}${max_fields}${sex_fields}${pop_af_fields}${pop_nhomalt_fields}. We do not need to add them again" && \
     return 0
 
     # We already make sure the input VCF is sorted and normalized
@@ -311,8 +329,8 @@ function anno_agg_gnomAD_data () {
     # Step 3: Perform annotation with bcftools annotate to add the INFO fields from gnomAD vcfs to the input splitted vcfs
     export gnomad_vcf_chrX
     local gnomad_vcf_suffix=${gnomad_vcf_chrX/*.chrX.vcf/}
-    parallel -j ${threads} --dry-run "if [[ ! -f ${input_vcf/.vcf*/}.{}.gnomAD.vcf.gz ]] || [[ ${input_vcf/.vcf*/}.{}.gnomAD.vcf.gz -ot ${input_vcf/.vcf*/}.{}.vcf.gz ]] || [[ ${input_vcf/.vcf*/}.{}.gnomAD.vcf.gz -ot ${gnomad_vcf_chrX/.chrX.vcf*gz/}.{}.vcf${gnomad_vcf_suffix} ]]; then bcftools annotate -a ${gnomad_vcf_chrX/.chrX.vcf*gz/}.{}.vcf${gnomad_vcf_suffix} -c CHROM,POS,REF,ALT,.INFO/AC_joint,.INFO/AN_joint,.INFO/AF_joint,.INFO/AF_joint_XX,.INFO/AF_joint_XY,.INFO/nhomalt_joint_XX,.INFO/nhomalt_joint_XY -Oz -o ${input_vcf/.vcf*/}.{}.gnomAD.vcf.gz ${input_vcf/.vcf*/}.{}.vcf.gz; fi" ::: "${valid_chroms[@]}" && \
-    parallel -j ${threads} --joblog ${input_vcf/.vcf*/.gnomAD.log} "if [[ ! -f ${input_vcf/.vcf*/}.{}.gnomAD.vcf.gz ]] || [[ ${input_vcf/.vcf*/}.{}.gnomAD.vcf.gz -ot ${input_vcf/.vcf*/}.{}.vcf.gz ]] || [[ ${input_vcf/.vcf*/}.{}.gnomAD.vcf.gz -ot ${gnomad_vcf_chrX/.chrX.vcf*gz/}.{}.vcf${gnomad_vcf_suffix} ]]; then bcftools annotate -a ${gnomad_vcf_chrX/.chrX.vcf*gz/}.{}.vcf${gnomad_vcf_suffix} -c CHROM,POS,REF,ALT,.INFO/AC_joint,.INFO/AN_joint,.INFO/AF_joint,.INFO/AF_joint_XX,.INFO/AF_joint_XY,.INFO/nhomalt_joint_XX,.INFO/nhomalt_joint_XY -Oz -o ${input_vcf/.vcf*/}.{}.gnomAD.vcf.gz ${input_vcf/.vcf*/}.{}.vcf.gz; fi" ::: "${valid_chroms[@]}"; \
+    parallel -j ${threads} --dry-run "if [[ ! -f ${input_vcf/.vcf*/}.{}.gnomAD.vcf.gz ]] || [[ ${input_vcf/.vcf*/}.{}.gnomAD.vcf.gz -ot ${input_vcf/.vcf*/}.{}.vcf.gz ]] || [[ ${input_vcf/.vcf*/}.{}.gnomAD.vcf.gz -ot ${gnomad_vcf_chrX/.chrX.vcf*gz/}.{}.vcf${gnomad_vcf_suffix} ]]; then bcftools annotate -a ${gnomad_vcf_chrX/.chrX.vcf*gz/}.{}.vcf${gnomad_vcf_suffix} -c ${core_fields}${max_fields}${sex_fields}${pop_af_fields}${pop_nhomalt_fields} -Oz -o ${input_vcf/.vcf*/}.{}.gnomAD.vcf.gz ${input_vcf/.vcf*/}.{}.vcf.gz; fi" ::: "${valid_chroms[@]}" && \
+    parallel -j ${threads} --joblog ${input_vcf/.vcf*/.gnomAD.log} "if [[ ! -f ${input_vcf/.vcf*/}.{}.gnomAD.vcf.gz ]] || [[ ${input_vcf/.vcf*/}.{}.gnomAD.vcf.gz -ot ${input_vcf/.vcf*/}.{}.vcf.gz ]] || [[ ${input_vcf/.vcf*/}.{}.gnomAD.vcf.gz -ot ${gnomad_vcf_chrX/.chrX.vcf*gz/}.{}.vcf${gnomad_vcf_suffix} ]]; then bcftools annotate -a ${gnomad_vcf_chrX/.chrX.vcf*gz/}.{}.vcf${gnomad_vcf_suffix} -c ${core_fields}${max_fields}${sex_fields}${pop_af_fields}${pop_nhomalt_fields} -Oz -o ${input_vcf/.vcf*/}.{}.gnomAD.vcf.gz ${input_vcf/.vcf*/}.{}.vcf.gz; fi" ::: "${valid_chroms[@]}"; \
     check_parallel_joblog ${input_vcf/.vcf*/.gnomAD.log} || { \
     log "Failed to add aggregated gnomAD annotation on ${input_vcf}. Quit now"
     return 1; }
@@ -324,8 +342,8 @@ function anno_agg_gnomAD_data () {
     tabix -f -p vcf ${output_vcf} && \
     mv ${output_vcf} ${input_vcf} && \
     mv ${output_vcf}.tbi ${input_vcf}.tbi && \
-	rm -f ${input_vcf/.vcf*/.chr*.gnomAD.vcf.gz} && \
-	rm -f ${input_vcf/.vcf*/.chr*.gnomAD.vcf.gz.tbi}
+    rm -f ${input_vcf/.vcf*/.chr*.gnomAD.vcf.gz} && \
+    rm -f ${input_vcf/.vcf*/.chr*.gnomAD.vcf.gz.tbi}
 
 }
 

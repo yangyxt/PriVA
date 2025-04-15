@@ -96,8 +96,7 @@ function interpret_utr_annotations () {
     python ${utr_py} \
     --variants_table ${input_tab} \
     --domain_map ${alphamissense_tranx_domain_map} \
-    --intolerant_domains ${intolerant_domains} \
-    --threads ${threads} && \
+    --intolerant_domains ${intolerant_domains} && \
     display_table ${input_tab} && \
     log "The UTR interpretations are saved to ${input_tab}, added with two columns: 5UTR_lof and 5UTR_length_changing"
 }

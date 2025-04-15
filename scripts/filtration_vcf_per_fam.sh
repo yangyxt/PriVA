@@ -97,11 +97,11 @@ function filter_af () {
     { log "Failed to generate a temporary output VCF file name. Quit with error"; return 1; }
 
     check_vcf_validity ${input_vcf} && \
-    [[ $(bcftools view -h ${input_vcf} | grep -c "AF_joint > ${af_cutoff}") -gt 0 ]] && \
+    [[ $(bcftools view -h ${input_vcf} | grep -c "AF_grpmax_joint > ${af_cutoff}") -gt 0 ]] && \
     log "The input VCF ${input_vcf} already been filtered on allele frequency at the cutoff ${af_cutoff}" && \
     return 0
 
-    bcftools view --threads ${threads} -e "AF_joint > ${af_cutoff}" -Ou ${input_vcf} | \
+    bcftools view --threads ${threads} -e "AF_grpmax_joint > ${af_cutoff}" -Ou ${input_vcf} | \
     bcftools sort -Oz -o ${output_vcf} || \
     { log "Failed to filter the variants based on the allele frequency"; return 1; }
     

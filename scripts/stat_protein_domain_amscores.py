@@ -92,7 +92,7 @@ class DomainAMScoreCollector:
         for record in vcf:
             try:
                 am_score = float(record.info['AM_PATHOGENICITY'])
-                gnomAD_AF = float(record.info.get('AF_joint', (0.0,))[0])
+                gnomAD_AF = float(record.info.get('AF_grpmax_joint', (0.0,))[0])
                 prot_var = record.info['PVAR']
                 # Extract amino acid position from PVAR (assuming format like 'p.Arg123Ser')
                 aa_pos = prot_var[:-1]

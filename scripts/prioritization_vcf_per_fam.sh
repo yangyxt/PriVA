@@ -25,8 +25,10 @@ function prepare_combined_tab () {
 
     [[ -f ${output_tab} ]] && \
     [[ ${output_tab} -nt ${input_vcf} ]] && \
+    [[ ${output_tab} -nt ${SCRIPT_DIR}/combine_annotations.py ]] && \
     log "The combined annotation table ${output_tab} is up to date, skip the conversion" && \
-    return 0
+    return 0 || \
+    log "The combined annotation table ${output_tab} is outdated, start the conversion"
 
     local hpo_tab=${BASE_DIR}/data/hpo/genes_to_phenotype.collapse.tsv.gz
 
@@ -161,9 +163,19 @@ function assign_acmg_criteria () {
     check_path ${clinvar_patho_exon_af_stat} "file" "clinvar_patho_exon_af_stat" || has_error=1
     check_path ${interpro_entry_map_pkl} "file" "interpro_mapping_pickle" || has_error=1
     check_path ${repeat_region_file} "file" "repeat_region_file" || has_error=1
+
+    local assembly=$(read_yaml ${config_file} "assembly")
+    if [[ ${assembly} == "hg38" ]]; then
+        local mavedb_metadata_tsv=${BASE_DIR}/data/MaveDB/mavedb_assay_summary.tsv
+        check_path ${mavedb_metadata_tsv} "file" "mavedb_assay_summary" || has_error=1
+        local mavedb_arg="--mavedb_metadata_tsv ${mavedb_metadata_tsv}"
+    else
+        local mavedb_arg=""
+    fi
+
     [[ ${has_error} -eq 1 ]] && \
     { log "Failed to offer the valid required files for the ACMG criteria assignment"; return 1; }
-
+    
     # Test whether the function can be skipped
     [[ -f ${input_tab} ]] && \
     [[ ${input_tab} -nt ${mean_am_score_table} ]] && \
@@ -191,7 +203,7 @@ function assign_acmg_criteria () {
     [[ -z ${fam_name} ]] && local fam_arg="" || local fam_arg="--fam_name ${fam_name}"
     [[ -z ${alt_disease_vcf} ]] && local alt_disease_arg="" || local alt_disease_arg="--alt_disease_vcf ${alt_disease_vcf}"
 
-    log "Running the following command to assign the ACMG criterias: python ${acmg_py} --anno_table ${input_tab} --am_score_table ${mean_am_score_table} --clinvar_aa_dict_pkl ${clinvar_aa_dict_pkl} --intolerant_domains_pkl ${intolerant_domains_pkl} --intolerant_motifs_pkl ${intolerant_motifs_pkl} --domain_mechanism_tsv ${domain_mechanism_tsv} --gnomAD_extreme_rare_threshold ${gnomAD_extreme_rare_threshold} --expected_incidence ${expected_incidence} --am_score_vcf ${am_score_vcf} --threads ${threads} --tranx_exon_domain_map_pkl ${tranx_exon_domain_map_pkl} ${ped_arg} ${fam_arg} ${alt_disease_arg}"
+    log "Running the following command to assign the ACMG criterias: python ${acmg_py} --anno_table ${input_tab} --am_score_table ${mean_am_score_table} --clinvar_aa_dict_pkl ${clinvar_aa_dict_pkl} --intolerant_domains_pkl ${intolerant_domains_pkl} --intolerant_motifs_pkl ${intolerant_motifs_pkl} --domain_mechanism_tsv ${domain_mechanism_tsv} --gnomAD_extreme_rare_threshold ${gnomAD_extreme_rare_threshold} --expected_incidence ${expected_incidence} --am_score_vcf ${am_score_vcf} --threads ${threads} --tranx_exon_domain_map_pkl ${tranx_exon_domain_map_pkl} ${ped_arg} ${fam_arg} ${alt_disease_arg} ${mavedb_arg}"
     python ${acmg_py} \
     --anno_table ${input_tab} \
     --am_score_table ${mean_am_score_table} \
@@ -208,7 +220,7 @@ function assign_acmg_criteria () {
     --expected_incidence ${expected_incidence} \
     --am_score_vcf ${am_score_vcf} \
     --threads ${threads} \
-    --tranx_exon_domain_map_pkl ${tranx_exon_domain_map_pkl} ${ped_arg} ${fam_arg} ${alt_disease_arg} && \
+    --tranx_exon_domain_map_pkl ${tranx_exon_domain_map_pkl} ${ped_arg} ${fam_arg} ${alt_disease_arg} ${mavedb_arg} && \
     display_table ${input_tab} && \
     log "The ACMG criterias are assigned for ${input_tab}, added with three columns: ACMG_quant_score, ACMG_class, ACMG_criteria, and the output matrix is saved to ${output_acmg_mat}" && \
     display_table ${output_acmg_mat} || \

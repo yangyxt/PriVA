@@ -147,6 +147,7 @@ function vep_cache_api_install() {
     [[ -f ${VEP_PLUGINSDIR}/SameCodon.pm ]] && \
     [[ -f ${VEP_PLUGINSDIR}/NMD.pm ]] && \
     [[ -f ${VEP_PLUGINSDIR}/PrimateAI.pm ]] && \
+    [[ -f ${VEP_PLUGINSDIR}/MaveDB.pm ]] && \
     { log "The PERL5LIB value and PATH value already include ${VEP_DESTDIR} and ${VEP_PLUGINSDIR}, indicating the following installation process has already been succesfully performed. Skip the function for now."; return 0; }
 
     local conda_env_name=$(basename $CONDA_PREFIX)
@@ -157,7 +158,7 @@ function vep_cache_api_install() {
     local cmd="vep_install -d ${VEP_DESTDIR} --AUTO acp -s homo_sapiens_merged --NO_HTSLIB --NO_BIOPERL --CONVERT"
     [[ -n "$VEP_CACHEDIR" ]] && cmd+=" --CACHEDIR $VEP_CACHEDIR"
     [[ -n "$VEP_ASSEMBLY" ]] && cmd+=" --ASSEMBLY $VEP_ASSEMBLY"
-    [[ -n "$VEP_PLUGINS" ]] && [[ $VEP_PLUGINS != "empty" ]] && cmd+=" --PLUGINS $VEP_PLUGINS,SpliceAI,SpliceVault,UTRAnnotator,AlphaMissense,GO,Phenotypes,Conservation,LOEUF,SameCodon,NMD,PrimateAI" || cmd+=" --PLUGINS SpliceAI,SpliceVault,UTRAnnotator,AlphaMissense,GO,Phenotypes,Conservation,LOEUF,SameCodon,NMD,PrimateAI"
+    [[ -n "$VEP_PLUGINS" ]] && [[ $VEP_PLUGINS != "empty" ]] && cmd+=" --PLUGINS $VEP_PLUGINS,SpliceAI,SpliceVault,UTRAnnotator,AlphaMissense,GO,Phenotypes,Conservation,LOEUF,SameCodon,NMD,PrimateAI,MaveDB" || cmd+=" --PLUGINS SpliceAI,SpliceVault,UTRAnnotator,AlphaMissense,GO,Phenotypes,Conservation,LOEUF,SameCodon,NMD,PrimateAI,MaveDB"
     [[ -n "$VEP_PLUGINSDIR" ]] && cmd+=" --PLUGINSDIR $VEP_PLUGINSDIR"
 
     # Execute the command
@@ -216,6 +217,10 @@ function VEP_plugins_install() {
     # Followed by SpliceVault
     SpliceVault_install ${config_file} ${VEP_PLUGINSCACHEDIR} ${SCRIPT_DIR} || \
     { log "Failed to install SpliceVault"; return 1; }
+
+    # Followed by MaveDB
+    MaveDB_install ${config_file} ${VEP_PLUGINSCACHEDIR} || \
+    { log "Failed to install MaveDB"; return 1; }
 
     # Last, install PrimateAI
     PrimateAI_install ${config_file} ${VEP_PLUGINSCACHEDIR} ${VEP_PLUGINSDIR} || \
@@ -575,6 +580,42 @@ function PrimateAI_install() {
         return 1
     fi
 }
+
+
+function MaveDB_install() {
+    local config_file=${1}
+    local PLUGIN_CACHEDIR=${2}
+
+    if [[ -z ${PLUGIN_CACHEDIR} ]]; then
+        local PLUGIN_CACHEDIR=$(read_yaml ${config_file} "vep_plugins_dir")
+    fi
+
+    local assembly=$(read_yaml ${config_file} "assembly")
+    local mavedb_url=$(read_yaml ${config_file} "mavedb_url")
+    local mavedb_file=$(read_yaml ${config_file} "mavedb_file")
+
+    if [[ ! -d ${PLUGIN_CACHEDIR}/MaveDB ]]; then
+        mkdir -p ${PLUGIN_CACHEDIR}/MaveDB
+    fi
+
+    if [[ ${assembly} == "GRCh37" ]] || [[ ${assembly} == "hg19" ]]; then
+        log "The MaveDB file is not available for ${assembly}, skip the downloading process"
+        update_yaml ${config_file} "mavedb_file" ""
+        return 0
+    fi
+
+    if [[ -f ${mavedb_file} ]] && \
+       [[ -f ${mavedb_file}.tbi ]] && \
+       [[ ${mavedb_file} -ot ${mavedb_file}.tbi ]]; then
+        log "The MaveDB file is already downloaded, skip the downloading process"
+    else
+        wget -c ${mavedb_url} -O ${PLUGIN_CACHEDIR}/MaveDB/MaveDB_variants.${assembly}.tsv.gz && \
+        wget -c ${mavedb_url}.tbi -O ${PLUGIN_CACHEDIR}/MaveDB/MaveDB_variants.${assembly}.tsv.gz.tbi && \
+        update_yaml ${config_file} "mavedb_file" "${PLUGIN_CACHEDIR}/MaveDB/MaveDB_variants.${assembly}.tsv.gz"
+    fi
+
+}
+
 
 
 function AlphaMissense_install() {

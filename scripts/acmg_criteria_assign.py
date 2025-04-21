@@ -10,6 +10,7 @@ import argparse as ap
 from typing import Tuple, Dict
 import multiprocessing as mp
 from multiprocessing import Manager
+from scipy.stats import binom
 import mmap
 import gc
 
@@ -213,7 +214,7 @@ def identify_functional_truncation(row,
     '''
     Identify whether a truncating variant is involving functional regions on a protein
     '''
-    if "frameshift" in row['Consequence'] or "stop_gained" in row['Consequence']:
+    if ("frameshift" in row['Consequence']) or ("stop_gained" in row['Consequence']) or row["5UTR_lof"] or row["splicing_lof"]:
         # These variants not only affect the local region of proteins, but also affect the downstream protein regions
         func_domain = downstream_domain_impact(row['EXON'], row['Feature'], tranx_exon_domain_map, interpro_entry_map_dict, dm_instance, domains=row["DOMAINS"])
         exon_frequent_patho = downstream_exon_patho_af(row, clinvar_patho_exon_af_dict, logic="any", threshold=exon_patho_af_threshold)
@@ -226,6 +227,97 @@ def identify_functional_truncation(row,
     
     return func_domain, exon_frequent_patho
     
+
+
+def control_false_neg_rate(
+    allele_frequencies: pd.Series,
+    allele_numbers: pd.Series,
+    af_threshold = 0.001,
+    alpha: float = 0.01
+) -> Tuple[pd.Series, pd.Series]:
+    """
+    Performs a one-sided binomial test for each variant with potentially
+    different allele frequency thresholds for each variant.
+
+    Args:
+        allele_frequencies (pd.Series): Series of observed allele frequencies.
+        allele_numbers (pd.Series): Series of total observed allele numbers.
+        af_threshold (float, pd.Series, or np.ndarray): The allele frequency
+            threshold(s) for the null hypothesis (H₀: p_true < af_threshold).
+            If array-like, must match the length of allele_frequencies.
+        alpha (float): The significance level for rejecting H₀. Default is 0.01.
+
+    Returns:
+        Tuple[pd.Series, pd.Series]: p_values and reject_h0 decisions.
+    """
+    if not isinstance(allele_frequencies, pd.Series):
+        allele_frequencies = pd.Series(allele_frequencies)
+    if not isinstance(allele_numbers, pd.Series):
+        allele_numbers = pd.Series(allele_numbers)
+
+    if not len(allele_frequencies) == len(allele_numbers):
+        raise ValueError("Input Series must have the same length.")
+
+    # Handle af_threshold input
+    if isinstance(af_threshold, (float, int)):
+        # If scalar, convert to Series with same index as allele_frequencies
+        af_thresh_series = pd.Series(af_threshold, index=allele_frequencies.index)
+    elif isinstance(af_threshold, np.ndarray):
+        # Convert numpy array to Series, aligning index
+        if len(af_threshold) != len(allele_frequencies):
+            raise ValueError("If af_threshold is an array, it must have the same length as allele_frequencies.")
+        af_thresh_series = pd.Series(af_threshold, index=allele_frequencies.index)
+    elif isinstance(af_threshold, pd.Series):
+        af_thresh_series = af_threshold
+        if len(af_thresh_series) != len(allele_frequencies):
+            raise ValueError("If af_threshold is a Series, it must have the same length as allele_frequencies.")
+    else:
+        raise TypeError("af_threshold must be a float, int, pandas Series, or numpy array.")
+    
+    # Ensure threshold is numeric and within [0,1]
+    af_thresh_series = pd.to_numeric(af_thresh_series, errors='coerce').clip(0, 1)
+    if af_thresh_series.isnull().any():
+        raise ValueError("Non-numeric values found in af_threshold Series/array after coercion.")
+
+    # --- Input Cleaning and Preparation (same as before) ---
+    an = pd.to_numeric(allele_numbers, errors='coerce')
+    an = an.fillna(0).astype(int)
+    an[an < 0] = 0 
+
+    af = pd.to_numeric(allele_frequencies, errors='coerce')
+    af = af.clip(0, 1)
+
+    ac_float = np.where(np.isnan(af), 0, af * an)
+    ac_observed = np.where(np.isnan(ac_float), 0, np.round(ac_float).astype(int))
+    ac_observed = np.minimum(ac_observed, an)
+    ac_observed[an == 0] = 0
+
+    valid_mask = (an > 0) & (~af.isna()) & (~allele_numbers.isna())
+
+    # --- P-value Calculation ---
+    p_values = pd.Series(np.nan, index=allele_frequencies.index)
+    
+    # Handle edge case k=0: P(AC >= 0) is always 1
+    p_values.loc[valid_mask & (ac_observed == 0)] = 1.0
+    
+    # Calculate for k > 0
+    mask_k_pos = valid_mask & (ac_observed > 0)
+    if mask_k_pos.any():
+        # Get the threshold values for each valid variant
+        thresholds_to_use = af_thresh_series[mask_k_pos].values
+        
+        p_values.loc[mask_k_pos] = binom.sf(
+            k=ac_observed[mask_k_pos] - 1,
+            n=an[mask_k_pos],
+            p=thresholds_to_use  # Now using the array of thresholds
+        )
+
+    # --- Decision ---
+    reject_h0 = p_values <= alpha
+    logger.info(f"There are {reject_h0.sum()} variants having their p-value less than {alpha}, {reject_h0.isna().sum()} datapoints are NA")
+
+    return p_values, reject_h0
+
 
 def PVS1_criteria(df: pd.DataFrame, 
                   am_score_dict: dict,
@@ -250,6 +342,7 @@ def PVS1_criteria(df: pd.DataFrame,
     logger.info(f"{df['splicing_lof'].sum()} variants are considered LoF by splicing effect prediction")
     logger.info(f"{df['5UTR_lof'].sum()} variants are considered LoF by 5UTR Annotator")
     lof_criteria = df['vep_consq_lof'] | df['splicing_lof'] | df['5UTR_lof'] | clinvar_lof
+
     # Do not consider the start_loss variants where functional transcripts for this gene uses alternative start codons
     alt_start_genes = set(df.groupby(['chrom', 'pos', 'ref', 'alt', 'Gene']).apply(identify_alternative_start_codon_genes).unique().tolist())
     logger.info(f"These are the {len(alt_start_genes)} genes that have functional transcripts using alternative start codons: {alt_start_genes}")
@@ -324,7 +417,7 @@ def PVS1_criteria(df: pd.DataFrame,
     clinvar_pathogenic = df['Gene'].isin(clinvar_pathogenic_genes)
     logger.info(f"{clinvar_pathogenic.sum()} variants are having ClinVar pathogenic variants")
     
-    clinvar_pathogenic = clinvar_pathogenic & ~not_lof
+    clinvar_pathogenic = clinvar_pathogenic
     logger.info(f"{clinvar_pathogenic.sum()} variants are having ClinVar pathogenic variants and located in exons with median pathogenic AF < 0.01")
 
     if not ped_df is None and not fam_name is None:
@@ -588,11 +681,8 @@ def PS2_PM6_criteria(df: pd.DataFrame,
     """
     proband_info, father_info, mother_info, sib_info = identify_fam_members(ped_df, fam_name)
     
-    # Convert DataFrame to list of dictionaries for multiprocessing
-    records = df.to_dict('records')
-    
     # Prepare arguments for starmap
-    args = ((record, (proband_info, father_info, mother_info, sib_info), ped_df.loc[ped_df['#FamilyID'] == fam_name, :]) for record in records)
+    args = ((df.iloc[i, :].to_dict(orient='records'), (proband_info, father_info, mother_info, sib_info), ped_df.loc[ped_df['#FamilyID'] == fam_name, :]) for i in range(len(df)))
     
     # Use pool.starmap with the arguments
     logger.info(f"Running determine_denovo_per_row in parallel with {threads} threads on {len(records)} records")
@@ -608,7 +698,71 @@ def PS2_PM6_criteria(df: pd.DataFrame,
 
 
 
-def PS3_BS3_criteria(df: pd.DataFrame) -> pd.DataFrame:
+
+def mavedb_interpretation_per_row(row: pd.Series, urn_func_dict: dict) -> bool:
+    '''
+    Interpret the MaveDB scores and return the PS3 and BS3 criteria
+    '''
+    score_sets = str(row.get('MaveDB_score', '')).split('&')
+    high_confs = str(row.get('MaveDB_high_conf', '')).split('&')
+    pvalues = str(row.get('MaveDB_pvalue', '')).split('&')
+    scores = str(row.get('MaveDB_score', '')).split('&')
+
+    assays = []
+    mavedb_ps3 = False
+    mavedb_bs3 = False
+    for i, urn in enumerate(score_sets):
+        if urn not in urn_func_dict:
+            logger.debug(f"The URN {urn} is not in the MaveDB metadata, it is ignored")
+            continue
+        func = urn_func_dict[urn]
+        assays.append(func)
+        score = scores[i]
+        high_conf = high_confs[i]
+        pvalue = pvalues[i]
+        try: 
+            score = float(score)
+        except:
+            continue
+        else:
+            if score < 0.2:
+                if high_conf == "1":
+                    mavedb_ps3 = True
+
+            if score > 0.8 or score < 1.2:
+                if high_conf == "1":
+                    mavedb_bs3 = True
+
+            try:
+                pvalue = float(pvalue)
+            except:
+                continue
+            else:
+                if pvalue < 0.05 and score < 1:
+                    mavedb_ps3 = True
+                if pvalue > 0.05:
+                    mavedb_bs3 = True
+    row["MaveDB_assays"] = assays
+    row["MaveDB_PS3"] = mavedb_ps3
+    row["MaveDB_BS3"] = mavedb_bs3
+    return row
+
+
+def mavedb_score_interpretation(df: pd.DataFrame, mavedb_metadata: pd.DataFrame) -> pd.DataFrame:
+    '''
+    Interpret the MaveDB scores and return the PS3 and BS3 criteria
+    '''
+    mavedb_metadata["func_select"] = np.where(mavedb_metadata["DMS_Assay_Type"].str.contains("N/A"), mavedb_metadata["Experiment_Type"], mavedb_metadata["Experiment_Type"] + ":" + mavedb_metadata["DMS_Assay_Type"])
+    urn_func_dict = mavedb_metadata.set_index('URN')['func_select'].to_dict()
+    df = df.apply(mavedb_interpretation_per_row, axis=1, urn_func_dict=urn_func_dict)
+    mavedb_ps3_recs = df.loc[df['MaveDB_PS3'], ["MaveDB_assays", "MaveDB_pvalue", "MaveDB_score", "MaveDB_high_conf"]]
+    logger.info(f"There are {df['MaveDB_PS3'].sum()} variants with MaveDB determined PS3 criteria, they are determined by these functional assays: \n{mavedb_ps3_recs[:10].to_string()}")
+    mavedb_bs3_recs = df.loc[df['MaveDB_BS3'], ["MaveDB_assays", "MaveDB_pvalue", "MaveDB_score", "MaveDB_high_conf"]]
+    logger.info(f"There are {df['MaveDB_BS3'].sum()} variants with MaveDB determined BS3 criteria, they are determined by these functional assays: \n{mavedb_bs3_recs[:10].to_string()}")
+    return df
+
+
+def PS3_BS3_criteria(df: pd.DataFrame, pvs1_criteria: np.ndarray, mavedb_metadata_tsv: str = "") -> pd.DataFrame:
     # Basically rely on ClinVar annotations
     high_confidence_status = {
         # Higher confidence (2+ stars)
@@ -621,10 +775,22 @@ def PS3_BS3_criteria(df: pd.DataFrame) -> pd.DataFrame:
     clinvar_lof = clinvar_lof | (df['CLNSIG'].str.contains('athogenic') & (df['CLNREVSTAT'].map(high_confidence_status) >= 3)) # Including Likely_pathogenic
     high_conf_benign = df['CLNSIG'].str.contains('Benign') & (df['CLNREVSTAT'].map(high_confidence_status) == 2)
     high_conf_benign = high_conf_benign | (df['CLNSIG'].str.contains('enign') & (df['CLNREVSTAT'].map(high_confidence_status) >= 3)) # Including Likely_benign
+
+    clinvar_lof = clinvar_lof & ~pvs1_criteria  # Prevent inflation of matching a high revstatus patho record from clinvar
+    
+    if mavedb_metadata_tsv:
+        mavedb_metadata = pd.read_table(mavedb_metadata_tsv, low_memory=False)
+        df = mavedb_score_interpretation(df, mavedb_metadata)
+        ps3_criteria = clinvar_lof | df['MaveDB_PS3']
+        bs3_criteria = high_conf_benign | df['MaveDB_BS3']
+    else:
+        ps3_criteria = clinvar_lof
+        bs3_criteria = high_conf_benign
+
     return {
-            'PS3': clinvar_lof,
-            'BS3': high_conf_benign
-            }
+            'PS3': ps3_criteria,
+            'BS3': bs3_criteria
+            }, df
 
 
 def locate_intolerant_domain(row: dict, intolerant_domains: set) -> bool:
@@ -639,12 +805,8 @@ def locate_intolerant_domain(row: dict, intolerant_domains: set) -> bool:
         domains = [gene + ":" + d for d in row.get('DOMAINS', None).split('&')]
     else:
         return False
-    # The variant itself need to be protein altering.
-    missense = row['Consequence'] == 'missense_variant'
-    length_changing = row['vep_consq_length_changing'] or row['splicing_len_changing'] or row['5UTR_len_changing'] or row['vep_consq_lof'] or row['splicing_lof'] or row['5UTR_lof']
-    protein_altering = missense or length_changing or (row['Consequence'] == 'protein_altering_variant')
 
-    return any(domain in intolerant_domains for domain in domains) & protein_altering
+    return any(domain in intolerant_domains for domain in domains)
 
 
 
@@ -791,7 +953,16 @@ def PM1_criteria(df: pd.DataFrame,
     truncating = df['vep_consq_length_changing'] | df['splicing_len_changing'] | df['5UTR_len_changing'] | df['vep_consq_lof'] | df['splicing_lof'] | df['5UTR_lof']
 
     missense = df['Consequence'].str.contains('missense_variant')
+    logger.info(f"There are {missense.sum()} missense variants")
     missense_damaging = df["am_class"].str.contains('athogenic')
+    logger.info(f"There are {missense_damaging.sum()} missense variants that are considered damaging by AlphaMissense")
+    missense_damaging = missense_damaging | (df["PrimateAI"] > 0.9)
+    logger.info(f"There are {missense_damaging.sum()} missense variants that are considered damaging after considering the PrimateAI score")
+    if "MaveDB_PS3" in df.columns:
+        # If DMS says the variant is damaging (decreased activity or expression), then consider it as damaging
+        missense_damaging = missense_damaging | df["MaveDB_PS3"]
+        logger.info(f"There are {missense_damaging.sum()} missense variants that are considered damaging after considering the MaveDB DMS/MPRA data")
+    missense_damaging = missense_damaging & missense
 
     intolerant_motifs = pickle.load(open(intolerant_motifs_pkl, 'rb'))
     args = [(row, intolerant_motifs.get(row['Feature'], {})) for row in row_dicts]
@@ -813,7 +984,8 @@ def PM1_criteria(df: pd.DataFrame,
 def PM2_criteria(df: pd.DataFrame, gnomAD_extreme_rare_threshold: float = 0.0001) -> np.ndarray:
     # PM2: The variant is absent from gnomAD or the variant is extremely rare in gnomAD
     gnomAD_absent = (df['gnomAD_joint_AF'] == 0) | (df['gnomAD_joint_AF'].isna())
-    gnomAD_rare = df['gnomAD_joint_AF'] < gnomAD_extreme_rare_threshold
+    _, gnomAD_max_not_that_rare = control_false_neg_rate(df['gnomAD_joint_AF_max'], df['gnomAD_joint_AN_max'], af_threshold=gnomAD_extreme_rare_threshold, alpha=0.01)
+    gnomAD_rare = np.where(gnomAD_max_not_that_rare.isna(), df['gnomAD_joint_AF'] < gnomAD_extreme_rare_threshold, ~gnomAD_max_not_that_rare)
     return gnomAD_absent | gnomAD_rare
 
 
@@ -870,7 +1042,7 @@ def PP2_BP1_criteria(df: pd.DataFrame,
         chunk_slice = slice(start_idx, end_idx)
         
         # Process only variants that are missense
-        missense_mask = df.iloc[chunk_slice]['Consequence'] == 'missense_variant'
+        missense_mask = df.iloc[chunk_slice]['Consequence'].str.contains('missense_variant')
         if not missense_mask.any():
             continue
             
@@ -906,11 +1078,13 @@ def PP3_BP4_criteria(df: pd.DataFrame) -> pd.Series:
     # BP4: variant is reported benign
     return (df['PrimateAI'] > 0.9) | \
            (df['CADD_phred'] >= 20) | \
+           (df['am_class'].str.contains('pathogenic')) | \
            (df['vep_consq_lof'] == True) | \
            (df['splicing_lof'] == True) | \
            (df['5UTR_lof'] == True), \
            (df['PrimateAI'] < 0.8) & \
            (df['CADD_phred'] < 20) & \
+           (np.logical_not(df['am_class'].str.contains('athogenic'))) & \
            (df['vep_consq_lof'] != True) & \
            (df['splicing_lof'] != True) & \
            (df['5UTR_lof'] != True)
@@ -922,29 +1096,32 @@ def PP5_BP6_criteria(df: pd.DataFrame) -> pd.Series:
            df['CLNSIG'].str.contains('enign')
 
 
-
 def BS1_criteria(df: pd.DataFrame, 
+                 gene_to_am_score_map: dict,
                  expected_incidence: float = 0.001, 
                  clinvar_patho_af_stat: str = "",
-                 recessive: np.ndarray = None,
-                 dominant: np.ndarray = None,
-                 non_monogenic: np.ndarray = None,
-                 non_mendelian: np.ndarray = None,
-                 haplo_insufficient: np.ndarray = None) -> pd.Series:
+                 threads: int = 10):
     # BS1: PAF of variant is greater than expected incidence of the disease
     autosomal = (df['chrom'] != "chrX") & (df['chrom'] != "chrY")
     x_linked = df['chrom'] == "chrX"
     y_linked = df['chrom'] == "chrY"
-    
+
+    recessive, dominant, non_monogenic, non_mendelian, haplo_insufficient = identify_inheritance_mode(df, gene_to_am_score_map, threads)
+
+    false_neg_rate, common_vars = control_false_neg_rate(df['gnomAD_joint_AF_max'], df['gnomAD_joint_AN_max'], af_threshold=expected_incidence, alpha=0.01)
+
+    max_ind_incidence = np.where(df['gnomAD_joint_AN_max']/2 > 10/expected_incidence, df['gnomAD_nhomalt_max']/(df['gnomAD_joint_AN_max']/2), (df['gnomAD_nhomalt_XX'] + df['gnomAD_nhomalt_XY'])/(df['gnomAD_joint_AN']/2))
+    max_af_larger_incidence = np.where(common_vars.isna(), df['gnomAD_joint_AF'] > expected_incidence, common_vars)
+    logger.info(f"There are {max_af_larger_incidence.sum()} variants having their PAF greater than the expected incidence of the disease")
     # For autosomal dominant disease, we can assign BS1 if the variant is observed the frequency of the variant is greater than the expected incidence of the disease
-    autosomal_dominant = autosomal & dominant & (df['gnomAD_joint_AF_max'] > expected_incidence) & np.logical_not(recessive) & np.logical_not(non_monogenic) & np.logical_not(non_mendelian) & haplo_insufficient
-    autosomal_recessive = autosomal & recessive & (df['gnomAD_nhomalt_max']/(df['gnomAD_joint_AN_max']/2) > expected_incidence) & np.logical_not(non_monogenic) & np.logical_not(non_mendelian)
+    autosomal_dominant = autosomal & dominant & max_af_larger_incidence & np.logical_not(recessive) & np.logical_not(non_monogenic) & np.logical_not(non_mendelian)
+    autosomal_recessive = autosomal & recessive & (max_ind_incidence > expected_incidence) & np.logical_not(non_monogenic) & np.logical_not(non_mendelian)
 
     # For X-linked disease, we can assign BS1 if the variant is observed the frequency of the variant is greater than the expected incidence of the disease
-    x_linked_recessive = x_linked & recessive & (df['gnomAD_nhomalt_max']/(df['gnomAD_joint_AN_max']/2) > expected_incidence) & np.logical_not(non_monogenic) & np.logical_not(non_mendelian)
-    x_linked_dominant = x_linked & dominant & (df['gnomAD_joint_AF_max'] > expected_incidence) & np.logical_not(non_monogenic) & np.logical_not(non_mendelian) & haplo_insufficient
+    x_linked_recessive = x_linked & recessive & ((df['gnomAD_nhomalt_XX'] + df['gnomAD_nhomalt_XY'])/(df['gnomAD_joint_AN']/2) > expected_incidence) & np.logical_not(non_monogenic) & np.logical_not(non_mendelian)
+    x_linked_dominant = x_linked & dominant & max_af_larger_incidence & np.logical_not(non_monogenic) & np.logical_not(non_mendelian)
     # For Y-linked disease, we can assign BS1 if the variant is observed the frequency of the variant is greater than the expected incidence of the disease
-    y_linked = y_linked & (df['gnomAD_joint_AF_max'] > expected_incidence) & np.logical_not(non_monogenic) & np.logical_not(non_mendelian)
+    y_linked = y_linked & max_af_larger_incidence & np.logical_not(non_monogenic) & np.logical_not(non_mendelian)
     greater_than_disease_incidence = autosomal_dominant | autosomal_recessive | x_linked_recessive | x_linked_dominant | y_linked
     logger.info(f"There are {greater_than_disease_incidence.sum()} variants having their PAF greater than the expected incidence of the disease")
     
@@ -953,9 +1130,12 @@ def BS1_criteria(df: pd.DataFrame,
     clinvar_patho_af_dict = {k: v for k, v in clinvar_patho_af_dict.items() if v is not None}
     logger.info(f"The clinvar pathogenic AF stat type is {type(clinvar_patho_af_dict)}")
     df.loc[:, "Gene"] = df["Gene"].fillna(np.nan)
-    greater_than_clinvar_patho_af = df['gnomAD_joint_AF_max'] > df['Gene'].map(lambda gene: clinvar_patho_af_dict.get(gene, {"af": 0}).get('af', 0))
-    greater_than_basic_af = df['gnomAD_joint_AF_max'] > 0.0001
-    return (greater_than_disease_incidence | greater_than_clinvar_patho_af) & greater_than_basic_af
+    gene_max_patho_af = df['Gene'].map(lambda gene: clinvar_patho_af_dict.get(gene, {"af": 0}).get('af', 0))
+    _, greater_than_clinvar_patho_af = control_false_neg_rate(df['gnomAD_joint_AF_max'], df['gnomAD_joint_AN_max'], af_threshold=gene_max_patho_af, alpha=0.01)
+    greater_than_clinvar_patho_af = np.where(greater_than_clinvar_patho_af.isna(), df['gnomAD_joint_AF'] > gene_max_patho_af, greater_than_clinvar_patho_af)
+    _, greater_than_basic_af = control_false_neg_rate(df['gnomAD_joint_AF_max'], df['gnomAD_joint_AN_max'], af_threshold=0.0001, alpha=0.01)
+    greater_than_basic_af = np.where(greater_than_basic_af.isna(), df['gnomAD_joint_AF'] > 0.0001, greater_than_basic_af)
+    return (greater_than_disease_incidence | greater_than_clinvar_patho_af) & greater_than_basic_af, recessive, dominant, non_monogenic, non_mendelian, haplo_insufficient
 
 
 def parse_hpo_inheritance(row_dict: dict) -> str:
@@ -1041,8 +1221,12 @@ def identify_inheritance_mode(df: pd.DataFrame,
 
 
 def BS2_criteria(df: pd.DataFrame, 
-                 gene_to_am_score_map: dict, 
-                 threads: int = 10) -> pd.Series:
+                 bs1_criteria: np.ndarray,
+                 recessive: np.ndarray,
+                 dominant: np.ndarray,
+                 non_monogenic: np.ndarray,
+                 non_mendelian: np.ndarray,
+                 haplo_insufficient: np.ndarray) -> pd.Series:
     '''
     The BS2 criteria is about observing variant in healthy adult
     There are several categories of situations here:
@@ -1057,19 +1241,18 @@ def BS2_criteria(df: pd.DataFrame,
     x_linked = df['chrom'] == "chrX"
     y_linked = df['chrom'] == "chrY"
     
-    recessive, dominant, non_monogenic, non_mendelian, haplo_insufficient = identify_inheritance_mode(df, gene_to_am_score_map, threads)
-
     # For autosomal dominant disease, we can assign BS2 if the variant is observed in a healthy adult (either homozygous or heterozygous)
-    autosomal_dominant = autosomal & dominant & (df['gnomAD_joint_AF'] > 0) & np.logical_not(recessive) & np.logical_not(non_monogenic) & np.logical_not(non_mendelian) & haplo_insufficient
-    autosomal_recessive = autosomal & recessive & ((df['gnomAD_nhomalt_XX'] > 0) | (df['gnomAD_nhomalt_XY'] > 0)) & np.logical_not(non_monogenic) & np.logical_not(non_mendelian)
+    autosomal_dominant = autosomal & dominant & ((df['gnomAD_joint_AF'] * df['gnomAD_joint_AN']) >= 5) & np.logical_not(recessive) & np.logical_not(non_monogenic) & np.logical_not(non_mendelian)
+    autosomal_recessive = autosomal & recessive & (((df['gnomAD_nhomalt_XX'] + df['gnomAD_nhomalt_XY']) >= 5)) & np.logical_not(non_monogenic) & np.logical_not(non_mendelian)
 
     # For X-linked disease, we can assign BS2 if the variant is observed in a healthy adult male (hemizygous) or a healthy adult female (homozygous)
-    x_linked_recessive = x_linked & recessive & ((df['gnomAD_nhomalt_XX'] > 0) | (df['gnomAD_joint_AF_XY'] > 0)) & np.logical_not(non_monogenic) & np.logical_not(non_mendelian)
-    x_linked_dominant = x_linked & dominant & np.logical_not(recessive) & ((df['gnomAD_nhomalt_XX'] > 0) | (df['gnomAD_nhomalt_XY'] > 0) | (df['gnomAD_joint_AF_XX'] > 0) | (df['gnomAD_joint_AF_XY'] > 0)) & np.logical_not(non_monogenic) & np.logical_not(non_mendelian) & haplo_insufficient
+    x_linked_recessive = x_linked & recessive & (((df['gnomAD_nhomalt_XX'] + df['gnomAD_nhomalt_XY']) >= 5)) & np.logical_not(non_monogenic) & np.logical_not(non_mendelian)
+    x_linked_dominant = x_linked & dominant & np.logical_not(recessive) & (((df['gnomAD_nhomalt_XX'] + df['gnomAD_nhomalt_XY']) >= 5) | ((df['gnomAD_joint_AF'] * df['gnomAD_joint_AN']) >= 5)) & np.logical_not(non_monogenic) & np.logical_not(non_mendelian)
 
-    y_linked = y_linked & (df['gnomAD_nhomalt_XY'] > 0) & np.logical_not(non_monogenic) & np.logical_not(non_mendelian)
-
-    return autosomal_dominant | autosomal_recessive | x_linked_recessive | x_linked_dominant | y_linked, recessive, dominant, non_monogenic, non_mendelian, haplo_insufficient
+    y_linked = y_linked & (df['gnomAD_joint_AF_XY'] > 0) & np.logical_not(non_monogenic) & np.logical_not(non_mendelian)
+    gnomad_bs2_criteria = autosomal_dominant | autosomal_recessive | x_linked_recessive | x_linked_dominant | y_linked
+    bs2_criteria = gnomad_bs2_criteria & np.logical_not(bs1_criteria)
+    return bs2_criteria
 
 
 
@@ -1118,7 +1301,7 @@ def check_gene_variants(gene, gene_df, pathogenic, proband, original_indices):
         Tuple of arrays containing original indices where trans/cis conditions are true
     """
     pathogenic_variants = gene_df.loc[pathogenic, proband].tolist()
-    logger.debug(f"For gene {gene}, there are {len(pathogenic_variants)} pathogenic variants")
+    logger.info(f"For gene {gene}, there are {len(pathogenic_variants)} pathogenic variants and {len(gene_df)} variants in total")
     
     var_in_trans = np.array([False] * len(gene_df))
     var_in_cis = np.array([False] * len(gene_df))
@@ -1126,26 +1309,39 @@ def check_gene_variants(gene, gene_df, pathogenic, proband, original_indices):
     if len([v for v in pathogenic_variants if len(v.split("|")) == 2 and v.split("|")[0] == "0"]) > 0:
         # If there is at least one pathogenic variant at the second copy of the proband's genome
         # Convert pandas Series to numpy array with np.array()
-        var_in_trans = np.array(((gene_df.loc[:, proband].str.split("|").str.get(0) == "1")) & (gene_df.loc[:, "Gene"] == gene))
-        var_in_cis = np.array(((gene_df.loc[:, proband].str.split("|").str.get(1) == "1")) & (gene_df.loc[:, "Gene"] == gene))
+        var_in_trans = np.array((gene_df.loc[:, proband].str.split("|").str.get(0) == "1") & (gene_df.loc[:, "Gene"] == gene))
+        var_in_cis = np.array((gene_df.loc[:, proband].str.split("|").str.get(1) == "1") & (gene_df.loc[:, "Gene"] == gene))
         logger.info(f"For gene {gene}, there are {var_in_trans.sum()} variants in-trans with pathogenic variants at the second copy of the proband's genome")
         logger.info(f"For gene {gene}, there are {var_in_cis.sum()} variants in-cis with pathogenic variants at the second copy of the proband's genome")
 
     if len([v for v in pathogenic_variants if len(v.split("|")) == 2 and v.split("|")[0] == "1"]) > 0:
         # If there is at least one pathogenic variant at the first copy of the proband's genome
         # Convert pandas Series to numpy array with np.array()
-        var_in_trans_1 = np.array(((gene_df.loc[:, proband].str.split("|").str.get(1) == "1")) & (gene_df.loc[:, "Gene"] == gene))
-        var_in_cis_1 = np.array(((gene_df.loc[:, proband].str.split("|").str.get(0) == "1")) & (gene_df.loc[:, "Gene"] == gene))
+        var_in_trans_1 = np.array((gene_df.loc[:, proband].str.split("|").str.get(1) == "1") & (gene_df.loc[:, "Gene"] == gene))
+        var_in_cis_1 = np.array((gene_df.loc[:, proband].str.split("|").str.get(0) == "1") & (gene_df.loc[:, "Gene"] == gene))
         logger.info(f"For gene {gene}, there are {var_in_trans_1.sum()} variants in-trans with pathogenic variants at the first copy of the proband's genome")
         logger.info(f"For gene {gene}, there are {var_in_cis_1.sum()} variants in-cis with pathogenic variants at the first copy of the proband's genome")
-        var_in_trans |= var_in_trans_1
-        var_in_cis |= var_in_cis_1
+        var_in_trans = np.logical_or(var_in_trans, var_in_trans_1)
+        var_in_cis = np.logical_or(var_in_cis, var_in_cis_1)
 
     # Map local boolean arrays to original indices
     trans_original_indices = original_indices[var_in_trans] if var_in_trans.any() else np.array([], dtype=int)
     cis_original_indices = original_indices[var_in_cis] if var_in_cis.any() else np.array([], dtype=int)
+    logger.info(f"For gene {gene}, there are {len(trans_original_indices)} variants in-trans with pathogenic variants")
+    logger.info(f"For gene {gene}, there are {len(cis_original_indices)} variants in-cis with pathogenic variants")
     
     return trans_original_indices, cis_original_indices
+
+
+# Create a generator function that preserves gene order
+def gene_args_generator(df, gene_to_indices, pathogenic, proband):
+    for gene in df['Gene'].unique():
+        indices = gene_to_indices[gene]
+        yield (gene, 
+                df.loc[indices, ["Gene", proband]], 
+                pathogenic[indices], 
+                proband, 
+                indices)
 
 
 def BP2_PM3_criteria(df: pd.DataFrame, 
@@ -1177,27 +1373,18 @@ def BP2_PM3_criteria(df: pd.DataFrame,
     logger.info(f"Checking genes for in-trans and in-cis pathogenic variants using {threads} threads")
 
     # Pre-calculate the indices for each gene (this avoids repeated df filtering)
-    gene_to_indices = {}
-    for gene in df['Gene'].unique():
-        gene_to_indices[gene] = np.array(df.index[df['Gene'] == gene].tolist())
+    df.loc[:, "Gene"] = df.loc[:, "Gene"].astype('category')
+    gene_to_indices = {name: np.array(group.index) for name, group in df.groupby('Gene')}
+
+    logger.info(f"There are {len(df['Gene'].unique())} genes to check")
 
     # Set up initial result arrays
     in_trans_pathogenic = np.zeros(len(df), dtype=bool)
     in_cis_pathogenic = np.zeros(len(df), dtype=bool)
 
-    # Create a generator function that preserves gene order
-    def gene_args_generator():
-        for gene in df['Gene'].unique():
-            indices = gene_to_indices[gene]
-            yield (gene, 
-                   df.loc[indices, ["Gene", proband]], 
-                   pathogenic[indices], 
-                   proband, 
-                   indices)
-
     # Use the named function instead of lambda
     with mp.Pool(threads) as pool:
-        results = pool.imap_unordered(process_gene_variants, gene_args_generator())
+        results = pool.imap_unordered(process_gene_variants, gene_args_generator(df, gene_to_indices, pathogenic, proband))
         # Combine results
         for trans_indices, cis_indices in results:
             if len(trans_indices) > 0:
@@ -1635,6 +1822,17 @@ def sort_and_rank_variants(df: pd.DataFrame) -> pd.DataFrame:
     return df_sorted
 
 
+def BA1_criteria(anno_df: pd.DataFrame) -> pd.Series:
+    """
+    Apply BA1 criteria to the annotation DataFrame.
+    """
+    false_neg_rate, common_vars = control_false_neg_rate(anno_df['gnomAD_joint_AF_max'], anno_df['gnomAD_joint_AN_max'], af_threshold=0.05, alpha=0.01)
+    ba1_criteria = np.where(common_vars.isna(), anno_df['gnomAD_joint_AF'] > 0.05, common_vars)
+    logger.info(f"BA1 criteria applied, {ba1_criteria.sum()} variants are having the BA1 criteria")
+
+    return ba1_criteria
+
+
 
 def ACMG_criteria_assign(anno_table: str, 
                          am_score_table: str, 
@@ -1648,6 +1846,7 @@ def ACMG_criteria_assign(anno_table: str,
                          domain_mechanism_tsv: str,
                          tranx_exon_domain_map_pkl: str,
                          repeat_region_file: str,
+                         mavedb_metadata_tsv: str = "",
                          fam_name: str = "",
                          ped_table: str = "",
                          alt_disease_vcf: str = "",
@@ -1709,8 +1908,21 @@ def ACMG_criteria_assign(anno_table: str,
     logger.info(f"PVS1 criteria applied, {pvs1_criteria.sum()} variants are having the PVS1 criteria")
     gc.collect()
 
+    # Apply the PS3 and BS3 criteria
+    ps3bs3_results, anno_df = PS3_BS3_criteria(anno_df, pvs1_criteria, mavedb_metadata_tsv)
+    logger.info(f"PS3 criteria applied, {ps3bs3_results['PS3'].sum()} variants are having the PS3 criteria")
+
+    # Prevent double counting, if PVS1 is True, then PS3 should be False
+    ps3_criteria = ps3bs3_results['PS3']
+    bs3_criteria = ps3bs3_results['BS3']
+    logger.info(f"PS3 criteria applied, after preventing double counting with PVS1, {ps3_criteria.sum()} variants are having the PS3 criteria")
+    logger.info(f"BS3 criteria applied, {bs3_criteria.sum()} variants are having the BS3 criteria")
+    gc.collect()
+
     # Apply the PS1 and PM5 criteria
     ps1_criteria, pm5_criteria = PS1_PM5_criteria(anno_df, clinvar_aa_dict_pkl, clinvar_splice_dict_pkl, threads)
+    pm5_criteria = pm5_criteria & ~ps1_criteria
+    ps1_criteria = ps1_criteria & ~pvs1_criteria & ~ps3_criteria
     logger.info(f"PS1 criteria applied, {ps1_criteria.sum()} variants are having the PS1 criteria") 
     logger.info(f"PM5 criteria applied, {pm5_criteria.sum()} variants are having the PM5 criteria")
     gc.collect()
@@ -1723,16 +1935,7 @@ def ACMG_criteria_assign(anno_table: str,
     logger.info(f"PS2 criteria applied, {ps2_criteria.sum()} variants are having the PS2 criteria")
     logger.info(f"PM6 criteria applied, {pm6_criteria.sum()} variants are having the PM6 criteria")
     gc.collect()
-    # Apply the PS3 and BS3 criteria
-    ps3bs3_results = PS3_BS3_criteria(anno_df)
-    logger.info(f"PS3 criteria applied, {ps3bs3_results['PS3'].sum()} variants are having the PS3 criteria")
-
-    # Prevent double counting, if PVS1 is True, then PS3 should be False
-    ps3_criteria = ps3bs3_results['PS3'] & ~pvs1_criteria
-    bs3_criteria = ps3bs3_results['BS3']
-    logger.info(f"PS3 criteria applied, after preventing double counting with PVS1, {ps3_criteria.sum()} variants are having the PS3 criteria")
-    logger.info(f"BS3 criteria applied, {bs3_criteria.sum()} variants are having the BS3 criteria")
-    gc.collect()
+   
     '''
     PS4 cannot be applied because usually we dont have enough cases to determine the frequency of the variant
     '''
@@ -1765,7 +1968,7 @@ def ACMG_criteria_assign(anno_table: str,
     logger.info(f"BP4 criteria applied, {bp4_criteria.sum()} variants are having the BP4 criteria")
     gc.collect()
     # Prevent double counting of PP3
-    pp3_criteria = pp3_criteria & ~ps3_criteria & ~pvs1_criteria & ~pm4_criteria
+    pp3_criteria = pp3_criteria & ~pvs1_criteria & ~pm4_criteria
     logger.info(f"PP3 criteria applied, {pp3_criteria.sum()} variants are having the PP3 criteria")
     gc.collect()
     '''
@@ -1774,21 +1977,22 @@ def ACMG_criteria_assign(anno_table: str,
     # Apply PP5 criteria, reported as pathogenic by a reputable source but without to many supporting evidences
     # Apply BP6 criteria, reported as benign by a reputable source but without to many supporting evidences
     pp5_criteria, bp6_criteria = PP5_BP6_criteria(anno_df)
+    pp5_criteria = pp5_criteria & ~ps3_criteria
     bp6_criteria = bp6_criteria & ~bs3_criteria
     logger.info(f"PP5 criteria applied, {pp5_criteria.sum()} variants are having the PP5 criteria")
     logger.info(f"BP6 criteria applied, {bp6_criteria.sum()} variants are having the BP6 criteria")
     gc.collect()
-    '''
-    BA1 cannot be applied, because usually not a single variant with PAF larger than 5% will survive to this step.
-    '''
-    # Apply BS2, variant observed in a healthy adult
-    bs2_criteria, recessive, dominant, non_monogenic, non_mendelian, haplo_insufficient = BS2_criteria(anno_df, gene_to_am_score_map, threads)
-    logger.info(f"BS2 criteria applied, {bs2_criteria.sum()} variants are having the BS2 criteria")
-    gc.collect()
+    
+    ba1_criteria = BA1_criteria(anno_df)
+
     # Apply BS1, PAF of variant is greater than expected incidence of the disease
-    bs1_criteria = BS1_criteria(anno_df, expected_incidence, clinvar_patho_af_stat, recessive, dominant, non_monogenic, non_mendelian, haplo_insufficient)
-    bs2_criteria = bs2_criteria & ~bs1_criteria
-    logger.info(f"BS1 criteria applied, {bs1_criteria.sum()} variants are having the BS1 criteria, And we removed redundant BS2 criteria, now BS2 is applied to {bs2_criteria.sum()} variants")
+    bs1_criteria, recessive, dominant, non_monogenic, non_mendelian, haplo_insufficient = BS1_criteria(anno_df, gene_to_am_score_map, threads = threads, expected_incidence = expected_incidence, clinvar_patho_af_stat = clinvar_patho_af_stat)
+    logger.info(f"BS1 criteria applied, {bs1_criteria.sum()} variants are having the BS1 criteria")
+    gc.collect()
+
+    # Apply BS2, variant observed in a healthy adult
+    bs2_criteria = BS2_criteria(anno_df, bs1_criteria, recessive, dominant, non_monogenic, non_mendelian, haplo_insufficient)
+    logger.info(f"BS2 criteria applied, {bs2_criteria.sum()} variants are having the BS2 criteria")
     gc.collect()
 
     # Apply BS4, lack of family segregation
@@ -1850,6 +2054,7 @@ def ACMG_criteria_assign(anno_table: str,
         'PP2': pp2_criteria,
         'PP3': pp3_criteria,
         'PP5': pp5_criteria,
+        'BA1': ba1_criteria,
         'BS1': bs1_criteria,
         'BS2': bs2_criteria,
         'BS3': bs3_criteria,
@@ -1901,6 +2106,7 @@ if __name__ == "__main__":
     parser.add_argument("--tranx_exon_domain_map_pkl", type=str, required=True)
     parser.add_argument("--am_score_vcf", type=str, required=False, default=None)
     parser.add_argument("--alt_disease_vcf", type=str, required=False, default=None)
+    parser.add_argument("--mavedb_metadata_tsv", type=str, required=False, default=None)
     parser.add_argument("--repeat_region_file", type=str, required=True)
     parser.add_argument("--gnomAD_extreme_rare_threshold", type=float, required=False, default=0.0001)
     parser.add_argument("--expected_incidence", type=float, required=False, default=0.001)
@@ -1919,6 +2125,7 @@ if __name__ == "__main__":
                                                     args.domain_mechanism_tsv,
                                                     args.tranx_exon_domain_map_pkl,
                                                     args.repeat_region_file,
+                                                    mavedb_metadata_tsv=args.mavedb_metadata_tsv,
                                                     fam_name=args.fam_name,
                                                     ped_table=args.ped_table,
                                                     alt_disease_vcf=args.alt_disease_vcf,

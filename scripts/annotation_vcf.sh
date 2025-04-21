@@ -419,6 +419,7 @@ function anno_VEP_data() {
           splicevault_prescore
 
     # Process arguments using anno_vep_args
+    source ${SCRIPT_DIR}/argparse.bash || { log "Failed to source argparse.bash"; return 1; }
     argparse "$@" < ${SCRIPT_DIR}/anno_vep_args || { log "Failed to parse arguments"; return 1; }
 
     # Process config file
@@ -495,11 +496,15 @@ function anno_VEP_data() {
         # VEP does not provide gerp_bigwig for GRCh37
         local loftee_gerp_bw_argument=""
         local loftee_conservation_argument=",conservation_file:${loftee_conservation_file}"
+        local mavedb_argument=""
     elif [[ ${assembly} == "GRCh38" ]]; then
         local loftee_gerp_bw_argument=",gerp_bigwig:${gerp_bigwig}"
         check_path "$gerp_bigwig" "file" "gerp_bigwig" || has_error=1
         # Conservation file (SQL) is broken in GRCh38
         local loftee_conservation_argument=""
+        local mavedb_file=$(read_yaml ${config_file} "mavedb_file")
+        check_path "$mavedb_file" "file" "mavedb_file" || has_error=1
+        local mavedb_argument="-plugin MaveDB,file=${mavedb_file},cols=urn:score:nt:pro:se:sd:df:epsilon:vtype:high_conf:pvalue:ci95_lower:ci95_upper"
     fi
 
     # Exit if any errors were found
@@ -514,6 +519,7 @@ function anno_VEP_data() {
     # - am_pathogenicity & am_class, from VEP plugin AlphaMissense
     # - SpliceAI_pred_DS_AG, SpliceAI_pred_DS_AL, SpliceAI_pred_DS_DG, SpliceAI_pred_DS_DL, SpliceAI_pred_DP_AG, SpliceAI_pred_DP_AL, SpliceAI_pred_DP_DG, SpliceAI_pred_DP_DL, from VEP plugin SpliceAI
     check_vcf_infotags ${input_vcf} "CSQ" && \
+    [[ ${input_vcf} -nt ${SELF_SCRIPT} ]] && \
     log "The input vcf ${input_vcf} is already annotated by VEP. Skip this step" && \
     return 0
 
@@ -521,7 +527,7 @@ function anno_VEP_data() {
     local output_vcf=${input_vcf/.vcf*/.${tmp_tag}.vcf}
 
     log "Running VEP annotation with the command below:"
-    log "vep -i ${input_vcf} --format vcf --verbose --vcf --species homo_sapiens --use_transcript_ref --assembly ${assembly} --cache --offline --merged --domains --hgvs --numbers --symbol --canonical --total_length --variant_class --gene_phenotype --stats_file ${input_vcf/.vcf*/.vep.stats.html} --fork ${threads} --buffer_size 10000 --fasta ${ref_genome} --dir_cache ${vep_cache_dir} --dir_plugins ${vep_plugins_dir} -plugin UTRAnnotator,file=${utr_annotator_file} -plugin LOEUF,file=${loeuf_prescore},match_by=transcript -plugin AlphaMissense,file=${alphamissense_prescore} -plugin LoF,loftee_path:${loftee_repo},human_ancestor_fa:${human_ancestor_fasta}${loftee_conservation_argument}${loftee_gerp_bw_argument} -plugin SpliceAI,snv=${spliceai_snv_prescore},indel=${spliceai_indel_prescore},cutoff=0.5 -plugin PrimateAI,${primateai_prescore} -plugin SpliceVault,file=${splicevault_prescore} -plugin Conservation,${conservation_file},MAX -plugin NMD --force_overwrite -o ${output_vcf}"
+    log "vep -i ${input_vcf} --format vcf --verbose --vcf --species homo_sapiens --use_transcript_ref --assembly ${assembly} --cache --offline --merged --domains --hgvs --numbers --symbol --canonical --total_length --variant_class --gene_phenotype --stats_file ${input_vcf/.vcf*/.vep.stats.html} --fork ${threads} --buffer_size 10000 --fasta ${ref_genome} --dir_cache ${vep_cache_dir} --dir_plugins ${vep_plugins_dir} -plugin UTRAnnotator,file=${utr_annotator_file} -plugin LOEUF,file=${loeuf_prescore},match_by=transcript -plugin AlphaMissense,file=${alphamissense_prescore} -plugin LoF,loftee_path:${loftee_repo},human_ancestor_fa:${human_ancestor_fasta}${loftee_conservation_argument}${loftee_gerp_bw_argument} -plugin SpliceAI,snv=${spliceai_snv_prescore},indel=${spliceai_indel_prescore},cutoff=0.5 -plugin PrimateAI,${primateai_prescore} -plugin SpliceVault,file=${splicevault_prescore} -plugin Conservation,${conservation_file},MAX -plugin NMD ${mavedb_argument} --force_overwrite -o ${output_vcf}"
 
     # Run VEP annotation
     vep -i ${input_vcf} \
@@ -556,7 +562,7 @@ function anno_VEP_data() {
     -plugin PrimateAI,${primateai_prescore} \
     -plugin SpliceVault,file=${splicevault_prescore} \
     -plugin Conservation,${conservation_file},MAX \
-    -plugin NMD \
+    -plugin NMD ${mavedb_argument} \
     --force_overwrite \
     -o ${output_vcf} && \
     bcftools sort -Oz -o ${input_vcf/.vcf*/.vcf.gz} ${output_vcf} && \

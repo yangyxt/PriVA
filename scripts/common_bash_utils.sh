@@ -99,9 +99,9 @@ function display_table {
 
     log "${1} has ${row_num} rows and ${col_num} columns. It looks like:"
     if [[ ${rows} -le 0 ]]; then
-        tsv-pretty -u ${del_arg} -m 5000 -l 200 -a ${input} >&2 2> /dev/null
+        tsv-pretty -u ${del_arg} -m 50000 -l 200 -a ${input} >&2 2> /dev/null
     else
-        tsv-pretty -u ${del_arg} -m 5000 -l 200 -a ${input} | \
+        tsv-pretty -u ${del_arg} -m 50000 -l 200 -a ${input} | \
         head -n ${rows} - >&2 2> /dev/null || >&2 echo ""
     fi
 
@@ -528,6 +528,7 @@ function check_table_column {
                          awk -F '\t' -v col="${column}" '{for(i=1;i<=NF;i++) if ($i == col) printf "%s ", i;}'))
 
     if [[ ${#col_inds[@]} -eq 1 ]]; then
+		log "The column label ${column} is found at col index ${col_inds[0]} in the input table ${input_table}"
         true;
     elif [[ ${#col_inds[@]} -eq 0 ]]; then
         false;

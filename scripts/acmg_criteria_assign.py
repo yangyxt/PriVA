@@ -16,6 +16,7 @@ import gc
 
 from stat_protein_domain_amscores import nested_defaultdict
 from protein_domain_mapping import DomainNormalizer
+from mavdb_interpreter import MaveDBScoreInterpreter
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -496,9 +497,55 @@ def check_splice_pathogenic(row: dict,
             return "Same_Splice_Site"
     
     return False
-    
 
+
+def extract_protein_position(hgvs_notation):
+    # Pattern matches: "p." followed by letters, followed by numbers (position), followed by more letters
+    pattern = r'p\.([A-Za-z]+)(\d+)([A-Za-z]+|\*)'
     
+    match = re.search(pattern, hgvs_notation)
+    if match:
+        position = match.group(2)  # Group 2 contains just the position
+        return int(position)
+    else:
+        return None
+
+
+def get_variant_type(hgvsp):
+    """
+    Determine the type of protein variant from HGVS notation.
+    Returns 'nonsense', 'frameshift', 'delins', 'deletion', 'insertion_type' (for insertions and duplications), 
+    'missense', or 'unknown'.
+    """
+    if not isinstance(hgvsp, str):
+        return None
+    
+    # Extract the p. part from potential ENSP prefixes (e.g., ENSP00000439902.1:p.Asn3264LeufsTer12)
+    if ":" in hgvsp:
+        hgvsp = hgvsp.split(":")[-1]
+    
+    # Order patterns based on biological severity
+    # Check nonsense/stop gain variants first (most severe)
+    if re.search(r'p\.\w+\d+Ter', hgvsp) or re.search(r'p\.\w+\d+\*', hgvsp):  # p.Arg123Ter or p.Arg123*
+        return "nonsense"
+    # Check frameshift second (next most severe)
+    elif re.search(r'p\.\w+\d+fs', hgvsp) or re.search(r'p\.\w+\d+[Ff]s[Tt]er\d+', hgvsp):  # p.Gly123fs or p.Asn3264LeufsTer12
+        return "frameshift"
+    # Check delins (length changing)
+    elif re.search(r'p\.\w+\d+delins', hgvsp):  # p.Ala123delinsGly
+        return "delins"
+    # Check deletion
+    elif re.search(r'p\.\w+\d+del', hgvsp):  # p.Ala123del
+        return "deletion"
+    # Group duplications and insertions together as they're functionally similar (both add amino acids)
+    elif re.search(r'p\.\w+\d+dup', hgvsp) or re.search(r'p\.\w+\d+ins', hgvsp):  # p.Ala123dup or p.Ala123insGly
+        return "insertion_type"
+    # Check missense last (least severe structural change) - more specific pattern to avoid false matches
+    elif re.search(r'p\.\w+\d+[A-Z][a-z]+$', hgvsp):  # p.Ala123Gly (single amino acid change)
+        return "missense"
+    else:
+        return None
+
 
 def check_aa_pathogenic(row: dict, 
                         clinvar_tranx_aa_dict: dict, 
@@ -554,9 +601,26 @@ def check_aa_pathogenic(row: dict,
     
     for hgvsp_alt, clinvar_entry in clinvar_tranx_aa_dict[raw_protein_pos].items():
         logger.debug(f"There is one clinvar entry for transcript {transcript} at protein position {raw_protein_pos}, which is variant {hgvsp_alt} has these clinvar annotations: {clinvar_entry}")
+        hgvs_pos = extract_protein_position(hgvsp_alt)
+        if hgvs_pos is None:
+            logger.warning(f"The hgvs_alt {hgvsp_alt} is not a valid protein position, it is ignored")
+            continue
+
+        if str(hgvs_pos) != raw_protein_pos.split("/")[0]:
+            logger.warning(f"The protein position {raw_protein_pos} does not match the hgvs_alt {hgvsp_alt}, it is ignored")
+            continue
+        
+        # Check if variants are of the same type
+        query_variant_type = get_variant_type(hgvsp)
+        clinvar_variant_type = get_variant_type(hgvsp_alt)
+        
+        if query_variant_type != clinvar_variant_type:
+            logger.debug(f"Variant types don't match: {hgvsp} ({query_variant_type}) vs {hgvsp_alt} ({clinvar_variant_type})")
+            continue
+        
         for sig, rev_stat in zip(clinvar_entry['CLNSIG'], clinvar_entry['CLNREVSTAT']):
             if ('athogenic' in sig) and (rev_stat in high_confidence_status):
-                logger.debug(f"Same_AA_Residue: {hgvsp} is pathogenic with high confidence in ClinVar")
+                logger.debug(f"Same_AA_Residue: {hgvsp} is pathogenic with high confidence in ClinVar and is of the same type as {hgvsp_alt}")
                 return "Same_AA_Residue"
             
     return False
@@ -679,27 +743,70 @@ def PS2_PM6_criteria(df: pd.DataFrame,
     PS2: confirmed denovo mutation in the proband
     PM6: Assumed denovo mutation in the proband (if only have one parent and the PAF is absent from gnomAD)
     """
+    logger.info(f"Running determine_denovo using pandas apply method")
     proband_info, father_info, mother_info, sib_info = identify_fam_members(ped_df, fam_name)
+    proband, _ = proband_info
+    father, _ = father_info
+    mother, _ = mother_info
     
-    # Prepare arguments for starmap
-    args = ((df.iloc[i, :].to_dict(orient='records'), (proband_info, father_info, mother_info, sib_info), ped_df.loc[ped_df['#FamilyID'] == fam_name, :]) for i in range(len(df)))
+    # Get subset of pedigree for this family
+    ped_subset = ped_df.loc[ped_df['#FamilyID'] == fam_name, :]
     
-    # Use pool.starmap with the arguments
-    logger.info(f"Running determine_denovo_per_row in parallel with {threads} threads on {len(records)} records")
-    with mp.Pool(threads) as pool:
-        # Make args a generator to reduce memory usage
-        results = pool.starmap(determine_denovo_per_row, args)
-        results = np.array(results)
-
+    # Select only necessary columns to reduce memory usage
+    # These columns are needed for the denovo determination
+    necessary_cols = ['chrom', 'pos', 'ref', 'alt', 'gnomAD_joint_AF']
+    
+    # Add columns for family members if they exist
+    if proband in df.columns:
+        necessary_cols.append(proband)
+    if father in df.columns:
+        necessary_cols.append(father)
+    if mother in df.columns:
+        necessary_cols.append(mother)
+    
+    # Create a unique key for each variant
+    df['variant_key'] = df['chrom'] + '_' + df['pos'].astype(str) + '_' + df['ref'] + '_' + df['alt']
+    
+    # Keep track of original index
+    original_index = df.index.copy()
+    
+    # Select necessary columns and drop duplicates
+    cols_to_use = [col for col in necessary_cols if col in df.columns]
+    unique_df = df[cols_to_use + ['variant_key']].drop_duplicates(subset=['variant_key'])
+    
+    logger.info(f"Processing {len(unique_df)} unique variants (reduced from {len(df)} total variants)")
+    
+    # Create ped_info tuple
+    ped_info = (proband_info, father_info, mother_info, sib_info)
+    
+    # Apply the function to each unique row
+    unique_results = unique_df.apply(
+        lambda row: determine_denovo_per_row(row.to_dict(), ped_info, ped_subset), 
+        axis=1
+    )
+    
+    # Create a mapping from variant keys to results
+    result_map = dict(zip(unique_df['variant_key'], unique_results))
+    
+    # Map results back to original dataframe
+    results = np.array([result_map.get(key, False) for key in df['variant_key']])
+    
+    # Clean up temporary column
+    df.drop('variant_key', axis=1, inplace=True)
+    
+    # Convert results to final form
     ps2_criteria = results == "PS2"
     pm6_criteria = results == "PM6"
+    
+    logger.info(f"Found {ps2_criteria.sum()} variants with PS2 criteria (confirmed de novo)")
+    logger.info(f"Found {pm6_criteria.sum()} variants with PM6 criteria (assumed de novo)")
     
     return ps2_criteria, pm6_criteria
 
 
 
 
-def mavedb_interpretation_per_row(row: pd.Series, urn_func_dict: dict) -> bool:
+def mavedb_interpretation_per_row(row: pd.Series, urn_func_dict=None, mavedb_interpreter=None) -> bool:
     '''
     Interpret the MaveDB scores and return the PS3 and BS3 criteria
     '''
@@ -707,44 +814,45 @@ def mavedb_interpretation_per_row(row: pd.Series, urn_func_dict: dict) -> bool:
     high_confs = str(row.get('MaveDB_high_conf', '')).split('&')
     pvalues = str(row.get('MaveDB_pvalue', '')).split('&')
     scores = str(row.get('MaveDB_score', '')).split('&')
+    urn_sets = str(row.get('MaveDB_urn')).split('&')
 
-    assays = []
+    score_interpretation = []
     mavedb_ps3 = False
     mavedb_bs3 = False
-    for i, urn in enumerate(score_sets):
+    for i, urn in enumerate(urn_sets):
         if urn not in urn_func_dict:
-            logger.debug(f"The URN {urn} is not in the MaveDB metadata, it is ignored")
+            logger.warning(f"The URN {urn} is not in the MaveDB metadata, it is ignored")
             continue
-        func = urn_func_dict[urn]
-        assays.append(func)
+        interpretation = urn_func_dict[urn]
+        score_interpretation.append(interpretation)
         score = scores[i]
         high_conf = high_confs[i]
         pvalue = pvalues[i]
-        try: 
+
+        try:
             score = float(score)
-        except:
+        except ValueError:
             continue
-        else:
-            if score < 0.2:
-                if high_conf == "1":
-                    mavedb_ps3 = True
 
-            if score > 0.8 or score < 1.2:
-                if high_conf == "1":
-                    mavedb_bs3 = True
+        try:
+            pvalue = float(pvalue)
+        except ValueError:
+            pvalue = np.nan
 
-            try:
-                pvalue = float(pvalue)
-            except:
-                continue
-            else:
-                if pvalue < 0.05 and score < 1:
-                    mavedb_ps3 = True
-                if pvalue > 0.05:
-                    mavedb_bs3 = True
-    row["MaveDB_assays"] = assays
+        result = mavedb_interpreter.interpret_score(score, interpretation, pvalue, high_conf)
+        if result['mavedb_ps3']:
+            mavedb_ps3 = True
+        if result['mavedb_bs3']:
+            mavedb_bs3 = True
+
+    if mavedb_ps3 and mavedb_bs3:
+        logger.warning(f"The variant {row['chrom']}:{row['pos']}:{row['ref']}:{row['alt']} has both PS3 and BS3 criteria according to MaveDB, the score is {score}, the high confidence is {high_conf}, the pvalue is {pvalue}, the interpretation is {interpretation}, it is likely to be a false positive")
+        mavedb_ps3 = False
+        mavedb_bs3 = False
+        
     row["MaveDB_PS3"] = mavedb_ps3
     row["MaveDB_BS3"] = mavedb_bs3
+    row["MaveDB_score_interpretation"] = "&".join([str(x) for x in score_interpretation])
     return row
 
 
@@ -752,12 +860,12 @@ def mavedb_score_interpretation(df: pd.DataFrame, mavedb_metadata: pd.DataFrame)
     '''
     Interpret the MaveDB scores and return the PS3 and BS3 criteria
     '''
-    mavedb_metadata["func_select"] = np.where(mavedb_metadata["DMS_Assay_Type"].str.contains("N/A"), mavedb_metadata["Experiment_Type"], mavedb_metadata["Experiment_Type"] + ":" + mavedb_metadata["DMS_Assay_Type"])
-    urn_func_dict = mavedb_metadata.set_index('URN')['func_select'].to_dict()
-    df = df.apply(mavedb_interpretation_per_row, axis=1, urn_func_dict=urn_func_dict)
-    mavedb_ps3_recs = df.loc[df['MaveDB_PS3'], ["MaveDB_assays", "MaveDB_pvalue", "MaveDB_score", "MaveDB_high_conf"]]
+    urn_func_dict = mavedb_metadata.set_index('URN')['Score_Interpretation'].to_dict()
+    mavedb_interpreter = MaveDBScoreInterpreter()
+    df = df.apply(mavedb_interpretation_per_row, axis=1, urn_func_dict=urn_func_dict, mavedb_interpreter=mavedb_interpreter)
+    mavedb_ps3_recs = df.loc[df['MaveDB_PS3'], [ "MaveDB_pvalue", "MaveDB_score", "MaveDB_high_conf", "MaveDB_score_interpretation"]]
     logger.info(f"There are {df['MaveDB_PS3'].sum()} variants with MaveDB determined PS3 criteria, they are determined by these functional assays: \n{mavedb_ps3_recs[:10].to_string()}")
-    mavedb_bs3_recs = df.loc[df['MaveDB_BS3'], ["MaveDB_assays", "MaveDB_pvalue", "MaveDB_score", "MaveDB_high_conf"]]
+    mavedb_bs3_recs = df.loc[df['MaveDB_BS3'], [ "MaveDB_pvalue", "MaveDB_score", "MaveDB_high_conf", "MaveDB_score_interpretation"]]
     logger.info(f"There are {df['MaveDB_BS3'].sum()} variants with MaveDB determined BS3 criteria, they are determined by these functional assays: \n{mavedb_bs3_recs[:10].to_string()}")
     return df
 
@@ -780,6 +888,8 @@ def PS3_BS3_criteria(df: pd.DataFrame, pvs1_criteria: np.ndarray, mavedb_metadat
     
     if mavedb_metadata_tsv:
         mavedb_metadata = pd.read_table(mavedb_metadata_tsv, low_memory=False)
+        mavedb_metadata.drop_duplicates(subset=["URN"], inplace=True)
+        logger.info(f"There are {len(mavedb_metadata)} unique URNs in the MaveDB metadata, which looks like: \n{mavedb_metadata.head().to_string(index=False)}")
         df = mavedb_score_interpretation(df, mavedb_metadata)
         ps3_criteria = clinvar_lof | df['MaveDB_PS3']
         bs3_criteria = high_conf_benign | df['MaveDB_BS3']
@@ -958,6 +1068,8 @@ def PM1_criteria(df: pd.DataFrame,
     logger.info(f"There are {missense_damaging.sum()} missense variants that are considered damaging by AlphaMissense")
     missense_damaging = missense_damaging | (df["PrimateAI"] > 0.9)
     logger.info(f"There are {missense_damaging.sum()} missense variants that are considered damaging after considering the PrimateAI score")
+
+    missense_benign = df["am_class"].str.contains('benign')
     if "MaveDB_PS3" in df.columns:
         # If DMS says the variant is damaging (decreased activity or expression), then consider it as damaging
         missense_damaging = missense_damaging | df["MaveDB_PS3"]
@@ -976,16 +1088,16 @@ def PM1_criteria(df: pd.DataFrame,
     logger.info(f"There are {np.sum(min_am_score_motifs)} variants located in a mutational hotspot that is seemingly intolerant to AA changes according to AM scores")
     logger.info(f"There are {np.sum(max_am_score_motifs)} variants located in a mutational hotspot that is seemingly intolerant to AA changes according to most severe AM scores")
     return ( max_am_score_motifs & (missense_damaging | truncating) ) | \
-           ( min_am_score_motifs & (truncating | missense) ) | \
-           ( loc_intol_domain & (missense | truncating) )
+           ( min_am_score_motifs & (truncating | missense) & ~missense_benign ) | \
+           ( loc_intol_domain & (missense | truncating) & ~missense_benign )
 
 
 
 def PM2_criteria(df: pd.DataFrame, gnomAD_extreme_rare_threshold: float = 0.0001) -> np.ndarray:
     # PM2: The variant is absent from gnomAD or the variant is extremely rare in gnomAD
     gnomAD_absent = (df['gnomAD_joint_AF'] == 0) | (df['gnomAD_joint_AF'].isna())
-    _, gnomAD_max_not_that_rare = control_false_neg_rate(df['gnomAD_joint_AF_max'], df['gnomAD_joint_AN_max'], af_threshold=gnomAD_extreme_rare_threshold, alpha=0.01)
-    gnomAD_rare = np.where(gnomAD_max_not_that_rare.isna(), df['gnomAD_joint_AF'] < gnomAD_extreme_rare_threshold, ~gnomAD_max_not_that_rare)
+    # _, gnomAD_max_not_that_rare = control_false_neg_rate(df['gnomAD_joint_AF_max'], df['gnomAD_joint_AN_max'], af_threshold=gnomAD_extreme_rare_threshold, alpha=0.01)
+    gnomAD_rare = df['gnomAD_joint_AF'] < gnomAD_extreme_rare_threshold
     return gnomAD_absent | gnomAD_rare
 
 
@@ -1106,7 +1218,7 @@ def BS1_criteria(df: pd.DataFrame,
     x_linked = df['chrom'] == "chrX"
     y_linked = df['chrom'] == "chrY"
 
-    recessive, dominant, non_monogenic, non_mendelian, haplo_insufficient = identify_inheritance_mode(df, gene_to_am_score_map, threads)
+    recessive, dominant, non_monogenic, non_mendelian, haplo_insufficient, incomplete_penetrance = identify_inheritance_mode(df, gene_to_am_score_map, threads)
 
     false_neg_rate, common_vars = control_false_neg_rate(df['gnomAD_joint_AF_max'], df['gnomAD_joint_AN_max'], af_threshold=expected_incidence, alpha=0.01)
 
@@ -1135,17 +1247,113 @@ def BS1_criteria(df: pd.DataFrame,
     greater_than_clinvar_patho_af = np.where(greater_than_clinvar_patho_af.isna(), df['gnomAD_joint_AF'] > gene_max_patho_af, greater_than_clinvar_patho_af)
     _, greater_than_basic_af = control_false_neg_rate(df['gnomAD_joint_AF_max'], df['gnomAD_joint_AN_max'], af_threshold=0.0001, alpha=0.01)
     greater_than_basic_af = np.where(greater_than_basic_af.isna(), df['gnomAD_joint_AF'] > 0.0001, greater_than_basic_af)
-    return (greater_than_disease_incidence | greater_than_clinvar_patho_af) & greater_than_basic_af, recessive, dominant, non_monogenic, non_mendelian, haplo_insufficient
+    return (greater_than_disease_incidence | greater_than_clinvar_patho_af) & greater_than_basic_af, recessive, dominant, non_monogenic, non_mendelian, haplo_insufficient, incomplete_penetrance
+
+
+def hpo_onset_modes(hpo_string):
+    """
+    Checks if an HPO profile suggests early onset WITHOUT known confounding
+    factors like late onset or slow/mild progression, which might affect
+    gnomAD frequency interpretation.
+
+    Args:
+        hpo_string: A string containing one or more HPO IDs
+                    separated by semicolons. Can be None or empty.
+
+    Returns:
+        bool: True if at least one 'early_onset' term is present AND
+              no 'late_onset' or 'slow_mild' terms are present.
+              False otherwise.
+
+    **Disclaimer:** This check provides a simplified signal based on HPO terms
+    related to onset and course. Always interpret gnomAD frequency using
+    established guidelines (e.g., ACMG/AMP) and considering the specific
+    disease context (prevalence, inheritance, penetrance, overall severity).
+    """
+
+    # --- Define HPO Sets ---
+
+    # 1. List of Early Onset HPO IDs (Onset definitively before age 16)
+    early_onset_hpos = {
+        "HP:0030674",  # Antenatal onset (before birth)
+        "HP:0011460",  # Embryonal onset (first 8 weeks)
+        "HP:0011461",  # Fetal onset (after 8 weeks, before birth)
+        "HP:0003577",  # Congenital onset (present at birth)
+        "HP:0003623",  # Neonatal onset (<= 28 days)
+        "HP:0003593",  # Infantile onset (28 days to 1 year)
+        "HP:0011463",  # Childhood onset (1 to 5 years)
+        "HP:0003621",  # Juvenile onset (5 to 15 years)
+        "HP:0410280",  # Pediatric onset (broader term, 28 days to 15 years)
+    }
+
+    # 2. List of Late Onset HPO IDs (Onset at age 16 or later)
+    late_onset_hpos = {
+        "HP:0003581",  # Adult onset (>= 16 years)
+        "HP:0011462",  # Young adult onset (16-40 years)
+        "HP:0003596",  # Middle age onset (40-60 years)
+        "HP:0003584",  # Late onset (>= 60 years)
+    }
+
+    # 3. List of Slow Progression or Mildness HPO IDs
+    #    (Terms suggesting a course potentially compatible with survival/reproduction or reduced severity)
+    slow_mild_hpos = {
+        "HP:0031785",  # Insidious onset (gradual development)
+        "HP:0012829",  # Mild (severity modifier)
+        "HP:0040007",  # Asymptomatic
+    }
+
+    # Backup HPOs
+    # "HP:0003774",  # Slow progression
+    # "HP:0003678",  # Nonprogressive (condition does not worsen over time)
+    # "HP:0011010",  # Chronic (persisting for a long time)
+
+    # Combine the "confounding" factor lists for easier checking
+    # These are terms that, if present, suggest caution is needed with gnomAD filtering
+    confounding_hpos = late_onset_hpos.union(slow_mild_hpos)
+
+    # Initialize flags
+    found_early = False
+    found_confounding = False
+
+    if not isinstance(hpo_string, str) or not hpo_string:
+        return False # Invalid input cannot meet criteria
+
+    # Process input string
+    potential_hpos = [term.strip() for term in hpo_string.split(';')]
+
+    for hpo_id in potential_hpos:
+        # Basic format check
+        if re.match(r'^HP:\d+$', hpo_id):
+            # Check if it's an early onset term
+            if hpo_id in early_onset_hpos:
+                found_early = True
+            # Check if it's a confounding term (late onset OR slow/mild)
+            if hpo_id in confounding_hpos:
+                found_confounding = True
+                # Optimization: If a confounding term is found, the final result
+                # must be False, so we can stop iterating early.
+                break
+
+    # Evaluate the final condition:
+    # Return True only if an early term was found AND no confounding term was found.
+    return found_early and not found_confounding
 
 
 def parse_hpo_inheritance(row_dict: dict) -> str:
     # Parse the HPO_gene_inheritance field and return the inheritance mode
     # The HPO_gene_inheritance field is a string with multiple inheritance modes separated by semicolons
     # These inheritance modes can correspond to 3 different pathogenic mechanisms: LoF, GoF, DN. 
+    if isinstance(row_dict.get('HPO_IDs', None), str):
+        hpo_terms = row_dict['HPO_IDs'].split(";")
+        incomplete_penetrance = "HP:0003829" in hpo_terms
+    else:
+        incomplete_penetrance = False
+
+
     if isinstance(row_dict.get('HPO_gene_inheritance', None), str):
         hpo_inheritances = row_dict['HPO_gene_inheritance'].split(";")
     else:
-        return None
+        return incomplete_penetrance
     
     non_monogenic_set = {"Digenic inheritance", "Oligogenic inheritance", "Polygenic inheritance"}  # In most cases, these indicate compound heterozygous variants
     non_mendelian_set = {"Non-Mendelian inheritance"}  # Includes epigenetic modifications
@@ -1166,7 +1374,8 @@ def parse_hpo_inheritance(row_dict: dict) -> str:
             'hpo_recessive': hpo_recessive,
             'hpo_dominant': hpo_dominant,
             'hpo_non_monogenic': hpo_non_monogenic,
-            'hpo_non_mendelian': hpo_non_mendelian
+            'hpo_non_mendelian': hpo_non_mendelian,
+            'incomplete_penetrance': incomplete_penetrance
             }
 
 
@@ -1181,11 +1390,11 @@ def identify_inheritance_mode_per_row(row_dict: dict, gene_mean_am_score: float)
     haplo_sufficient = not haplo_insufficient
 
     hpo_inheritance = parse_hpo_inheritance(row_dict)
-    if hpo_inheritance is None:
+    if isinstance(hpo_inheritance, bool):
         logger.debug(f"No HPO inheritance information for {row_dict['Gene']}, using LOEUF and AM score to determine inheritance mode. The row looks like this: \n{row_dict}\n")
-        return haplo_insufficient, haplo_sufficient, False, False, haplo_insufficient
+        return haplo_insufficient, haplo_sufficient, False, False, haplo_insufficient, hpo_inheritance
 
-    return hpo_inheritance['hpo_recessive'], hpo_inheritance['hpo_dominant'], hpo_inheritance['hpo_non_monogenic'], hpo_inheritance['hpo_non_mendelian'], haplo_insufficient
+    return hpo_inheritance['hpo_recessive'], hpo_inheritance['hpo_dominant'], hpo_inheritance['hpo_non_monogenic'], hpo_inheritance['hpo_non_mendelian'], haplo_insufficient, hpo_inheritance['incomplete_penetrance']
 
     
 
@@ -1215,8 +1424,8 @@ def identify_inheritance_mode(df: pd.DataFrame,
         results = pool.starmap(identify_inheritance_mode_per_row, args)
     
     # Unzip results into separate arrays
-    recessive_array, dominant_array, non_monogenic_array, non_mendelian_array, haplo_insufficient_array = zip(*results)
-    return np.array(recessive_array), np.array(dominant_array), np.array(non_monogenic_array), np.array(non_mendelian_array), np.array(haplo_insufficient_array)
+    recessive_array, dominant_array, non_monogenic_array, non_mendelian_array, haplo_insufficient_array, incomplete_penetrance_array = zip(*results)
+    return np.array(recessive_array), np.array(dominant_array), np.array(non_monogenic_array), np.array(non_mendelian_array), np.array(haplo_insufficient_array), np.array(incomplete_penetrance_array)
 
 
 
@@ -1226,7 +1435,8 @@ def BS2_criteria(df: pd.DataFrame,
                  dominant: np.ndarray,
                  non_monogenic: np.ndarray,
                  non_mendelian: np.ndarray,
-                 haplo_insufficient: np.ndarray) -> pd.Series:
+                 haplo_insufficient: np.ndarray,
+                 incomplete_penetrance: np.ndarray) -> pd.Series:
     '''
     The BS2 criteria is about observing variant in healthy adult
     There are several categories of situations here:
@@ -1236,22 +1446,25 @@ def BS2_criteria(df: pd.DataFrame,
     4. For X-linked dominant disease (gene on X and is haplo-insufficient), we can assign BS2 if the variant is observed in a healthy adult male (hemizygous)
 
     For haplo-insufficiency, we need to use LOEUF and mean AM score to determine.
+    For panetrance, we use hpo terms to determine: HP:0003829
     '''
     autosomal = (df['chrom'] != "chrX") & (df['chrom'] != "chrY")
     x_linked = df['chrom'] == "chrX"
     y_linked = df['chrom'] == "chrY"
+
+    early_onsets = df['HPO_IDs'].map(hpo_onset_modes)
     
     # For autosomal dominant disease, we can assign BS2 if the variant is observed in a healthy adult (either homozygous or heterozygous)
-    autosomal_dominant = autosomal & dominant & ((df['gnomAD_joint_AF'] * df['gnomAD_joint_AN']) >= 5) & np.logical_not(recessive) & np.logical_not(non_monogenic) & np.logical_not(non_mendelian)
-    autosomal_recessive = autosomal & recessive & (((df['gnomAD_nhomalt_XX'] + df['gnomAD_nhomalt_XY']) >= 5)) & np.logical_not(non_monogenic) & np.logical_not(non_mendelian)
+    autosomal_dominant = autosomal & dominant & ((df['gnomAD_joint_AF'] * df['gnomAD_joint_AN']) > 5) & np.logical_not(recessive) & np.logical_not(non_monogenic) & np.logical_not(non_mendelian)
+    autosomal_recessive = autosomal & recessive & (((df['gnomAD_nhomalt_XX'] + df['gnomAD_nhomalt_XY']) > 5)) & np.logical_not(non_monogenic) & np.logical_not(non_mendelian)
 
     # For X-linked disease, we can assign BS2 if the variant is observed in a healthy adult male (hemizygous) or a healthy adult female (homozygous)
-    x_linked_recessive = x_linked & recessive & (((df['gnomAD_nhomalt_XX'] + df['gnomAD_nhomalt_XY']) >= 5)) & np.logical_not(non_monogenic) & np.logical_not(non_mendelian)
-    x_linked_dominant = x_linked & dominant & np.logical_not(recessive) & (((df['gnomAD_nhomalt_XX'] + df['gnomAD_nhomalt_XY']) >= 5) | ((df['gnomAD_joint_AF'] * df['gnomAD_joint_AN']) >= 5)) & np.logical_not(non_monogenic) & np.logical_not(non_mendelian)
+    x_linked_recessive = x_linked & recessive & (((df['gnomAD_nhomalt_XX'] + df['gnomAD_nhomalt_XY']) > 5)) & np.logical_not(non_monogenic) & np.logical_not(non_mendelian)
+    x_linked_dominant = x_linked & dominant & np.logical_not(recessive) & (((df['gnomAD_nhomalt_XX'] + df['gnomAD_nhomalt_XY']) > 5) | ((df['gnomAD_joint_AF'] * df['gnomAD_joint_AN']) > 5)) & np.logical_not(non_monogenic) & np.logical_not(non_mendelian)
 
     y_linked = y_linked & (df['gnomAD_joint_AF_XY'] > 0) & np.logical_not(non_monogenic) & np.logical_not(non_mendelian)
     gnomad_bs2_criteria = autosomal_dominant | autosomal_recessive | x_linked_recessive | x_linked_dominant | y_linked
-    bs2_criteria = gnomad_bs2_criteria & np.logical_not(bs1_criteria)
+    bs2_criteria = gnomad_bs2_criteria & np.logical_not(bs1_criteria) & np.logical_not(incomplete_penetrance) & early_onsets
     return bs2_criteria
 
 
@@ -1365,39 +1578,89 @@ def BP2_PM3_criteria(df: pd.DataFrame,
     proband_info, father_info, mother_info, sib_info = identify_fam_members(ped_df, fam_name)
     proband, proband_pheno = proband_info
     
-    all_genes = df['Gene'].unique().tolist()
-    in_trans_pathogenic = np.array([False] * len(df))
-    in_cis_pathogenic = np.array([False] * len(df))
-    
-    # Memory-efficient approach that preserves order
-    logger.info(f"Checking genes for in-trans and in-cis pathogenic variants using {threads} threads")
+    logger.info(f"Checking genes for in-trans and in-cis pathogenic variants")
 
-    # Pre-calculate the indices for each gene (this avoids repeated df filtering)
+    # Ensure Gene column is categorical for faster groupby
     df.loc[:, "Gene"] = df.loc[:, "Gene"].astype('category')
-    gene_to_indices = {name: np.array(group.index) for name, group in df.groupby('Gene')}
-
-    logger.info(f"There are {len(df['Gene'].unique())} genes to check")
-
-    # Set up initial result arrays
-    in_trans_pathogenic = np.zeros(len(df), dtype=bool)
-    in_cis_pathogenic = np.zeros(len(df), dtype=bool)
-
-    # Use the named function instead of lambda
-    with mp.Pool(threads) as pool:
-        results = pool.imap_unordered(process_gene_variants, gene_args_generator(df, gene_to_indices, pathogenic, proband))
-        # Combine results
-        for trans_indices, cis_indices in results:
-            if len(trans_indices) > 0:
-                in_trans_pathogenic[trans_indices] = True
-            if len(cis_indices) > 0:
-                in_cis_pathogenic[cis_indices] = True
-
-    logger.info(f"There are {(in_trans_pathogenic & is_dominant).sum()} variants that are in-trans with pathogenic variants in a dominant (haploinsufficient) gene (disease)")
-    logger.info(f"There are {(in_trans_pathogenic & is_recessive).sum()} variants that are in-trans with pathogenic variants in a recessive (haplo-sufficient) gene (disease)")
-    logger.info(f"There are {(in_cis_pathogenic).sum()} variants that are in-cis with pathogenic variants regardless of the gene's known inheritance mode")
-
+    
+    # Create empty Series to hold results
+    in_trans_pathogenic = pd.Series(False, index=df.index)
+    in_cis_pathogenic = pd.Series(False, index=df.index)
+    
+    # Add pathogenic status to the dataframe temporarily
+    df_with_pathogenic = df.assign(_pathogenic=pathogenic)
+    
+    # Define a function to process each gene group
+    def process_gene_group(group):
+        gene = group.name
+        pathogenic_variants = group.loc[group['_pathogenic'], proband].tolist()
+        logger.info(f"For gene {gene}, there are {len(pathogenic_variants)} pathogenic variants and {len(group)} variants in total")
+        
+        # Create Series to hold results for this gene
+        trans_result = pd.Series(False, index=group.index)
+        cis_result = pd.Series(False, index=group.index)
+        
+        # Check for variants on the second copy (where pathogenic has 0 in first position)
+        path_second_copy = [v for v in pathogenic_variants if len(v.split("|")) == 2 and v.split("|")[0] == "0"]
+        if len(path_second_copy) > 0:
+            # Find variants in-trans (opposite haplotype) and in-cis (same haplotype)
+            trans_mask = group[proband].str.split("|").str.get(0) == "1"
+            cis_mask = group[proband].str.split("|").str.get(1) == "1"
+            
+            trans_result.loc[trans_mask] = True
+            cis_result.loc[cis_mask] = True
+            
+            logger.info(f"For gene {gene}, there are {trans_mask.sum()} variants in-trans with pathogenic variants at the second copy")
+            logger.info(f"For gene {gene}, there are {cis_mask.sum()} variants in-cis with pathogenic variants at the second copy")
+        
+        # Check for variants on the first copy (where pathogenic has 1 in first position)
+        path_first_copy = [v for v in pathogenic_variants if len(v.split("|")) == 2 and v.split("|")[0] == "1"]
+        if len(path_first_copy) > 0:
+            # Find variants in-trans (opposite haplotype) and in-cis (same haplotype)
+            trans_mask = group[proband].str.split("|").str.get(1) == "1"
+            cis_mask = group[proband].str.split("|").str.get(0) == "1"
+            
+            # Update existing results with logical OR
+            trans_result = trans_result | trans_mask
+            cis_result = cis_result | cis_mask
+            
+            logger.info(f"For gene {gene}, there are {trans_mask.sum()} variants in-trans with pathogenic variants at the first copy")
+            logger.info(f"For gene {gene}, there are {cis_mask.sum()} variants in-cis with pathogenic variants at the first copy")
+        
+        logger.info(f"For gene {gene}, there are {trans_result.sum()} variants in-trans with pathogenic variants")
+        logger.info(f"For gene {gene}, there are {cis_result.sum()} variants in-cis with pathogenic variants")
+        
+        # Return a dataframe with two boolean columns for this gene group
+        return pd.DataFrame({'trans': trans_result, 'cis': cis_result})
+    
+    # Apply the function to each gene group
+    logger.info(f"Processing {df['Gene'].nunique()} genes with groupby.apply")
+    results = df_with_pathogenic.groupby('Gene').apply(process_gene_group)
+    
+    # Unstack the results (convert MultiIndex to columns)
+    if not results.empty:
+        # Handle the case where results might have a MultiIndex
+        if isinstance(results.index, pd.MultiIndex):
+            # Combine the gene-level results back to the full dataframe
+            for idx in results.index:
+                gene_idx, variant_idx = idx
+                in_trans_pathogenic.loc[variant_idx] = results.loc[idx, 'trans']
+                in_cis_pathogenic.loc[variant_idx] = results.loc[idx, 'cis']
+        else:
+            # If only one gene was processed
+            gene = results.index[0]
+            in_trans_pathogenic.loc[results.index] = results['trans']
+            in_cis_pathogenic.loc[results.index] = results['cis']
+    
+    # Convert Series back to numpy arrays before returning
+    in_trans_pathogenic = in_trans_pathogenic.values
+    in_cis_pathogenic = in_cis_pathogenic.values
+    
+    logger.info(f"There are {in_trans_pathogenic.sum()} variants in-trans with pathogenic variants")
+    logger.info(f"There are {in_cis_pathogenic.sum()} variants in-cis with pathogenic variants")
+    
     bp2_criteria = (in_trans_pathogenic & is_dominant) | in_cis_pathogenic
-    pm3_criteria = in_trans_pathogenic & ( is_recessive | is_non_monogenic )
+    pm3_criteria = in_trans_pathogenic & (is_recessive | is_non_monogenic)
 
     return bp2_criteria, pm3_criteria
 
@@ -1503,7 +1766,7 @@ def identify_presence_in_alt_disease_vcf(row: dict, alt_disease_vcf: str, gene_m
     '''
     try:
         # First determine inheritance mode
-        is_recessive, is_dominant, is_non_monogenic, is_non_mendelian, haplo_insufficient = identify_inheritance_mode_per_row(row, gene_mean_am_score)
+        is_recessive, is_dominant, is_non_monogenic, is_non_mendelian, haplo_insufficient, incomplete_penetrance = identify_inheritance_mode_per_row(row, gene_mean_am_score)
         
         if not (is_dominant or is_recessive):
             is_dominant = False
@@ -1699,6 +1962,8 @@ def calculate_posterior_probability(row, prior_probability=0.1, exp_base=2, odds
 
     # Calculate posterior probability
     posterior_probability = (odds_path * prior_probability) / ((odds_path - 1) * prior_probability + 1)
+    # Round posterior probability to 3 decimal places
+    posterior_probability = round(posterior_probability, 3)
 
     if len(ba_matches) > 0:
         posterior_probability = 0
@@ -1706,7 +1971,7 @@ def calculate_posterior_probability(row, prior_probability=0.1, exp_base=2, odds
     # Classify the variant based on the posterior probability
     if posterior_probability >= 0.99:
         acmg_class = "Pathogenic"
-    elif posterior_probability >= 0.90:
+    elif posterior_probability >= 0.9:
         acmg_class = "Likely Pathogenic"
     elif posterior_probability <= 0.001:
         acmg_class = "Benign"
@@ -1986,12 +2251,12 @@ def ACMG_criteria_assign(anno_table: str,
     ba1_criteria = BA1_criteria(anno_df)
 
     # Apply BS1, PAF of variant is greater than expected incidence of the disease
-    bs1_criteria, recessive, dominant, non_monogenic, non_mendelian, haplo_insufficient = BS1_criteria(anno_df, gene_to_am_score_map, threads = threads, expected_incidence = expected_incidence, clinvar_patho_af_stat = clinvar_patho_af_stat)
+    bs1_criteria, recessive, dominant, non_monogenic, non_mendelian, haplo_insufficient, incomplete_penetrance = BS1_criteria(anno_df, gene_to_am_score_map, threads = threads, expected_incidence = expected_incidence, clinvar_patho_af_stat = clinvar_patho_af_stat)
     logger.info(f"BS1 criteria applied, {bs1_criteria.sum()} variants are having the BS1 criteria")
     gc.collect()
 
     # Apply BS2, variant observed in a healthy adult
-    bs2_criteria = BS2_criteria(anno_df, bs1_criteria, recessive, dominant, non_monogenic, non_mendelian, haplo_insufficient)
+    bs2_criteria = BS2_criteria(anno_df, bs1_criteria, recessive, dominant, non_monogenic, non_mendelian, haplo_insufficient, incomplete_penetrance)
     logger.info(f"BS2 criteria applied, {bs2_criteria.sum()} variants are having the BS2 criteria")
     gc.collect()
 

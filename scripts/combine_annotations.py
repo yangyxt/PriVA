@@ -266,8 +266,9 @@ def main(input_vcf: str,
     cadd_tab["ref"] = cadd_tab["Ref"].astype(str)
     cadd_tab["alt"] = cadd_tab["Alt"].astype(str)
     cadd_tab["CADD_phred"] = cadd_tab["PHRED"].astype(float)
+    cadd_tab["Feature"] = cadd_tab["FeatureID"]
 
-    merged_tab = pd.merge(converted_tab, cadd_tab[["chrom", "pos", "ref", "alt", "CADD_phred"]], on=["chrom", "pos", "ref", "alt"], how="left")
+    merged_tab = pd.merge(converted_tab, cadd_tab[["chrom", "pos", "ref", "alt", "Feature", "CADD_phred"]], on=["chrom", "pos", "ref", "alt", "Feature"], how="left")
 
     # Read hpo tab file, which is a tsv.gz file
     hpo_tab = pd.read_table(hpo_tab, low_memory=False)

@@ -18,7 +18,7 @@ logger.addHandler(console_handler)
 
 
 def offer_clinvar_alleleid_to_transcript_map(clinvar_tab: str = "/paedyl01/disk1/yangyxt/public_data/clinvar/tab_delimited/variant_summary.txt.gz",
-                                            mane_tranx_tab: str = "/paedyl01/disk1/yangyxt/acmg_auto/data/MANE/MANE.GRCh38.v1.4.summary.txt.gz"):
+                                            mane_tranx_tab: str = "/paedyl01/disk1/yangyxt/PriVA/data/MANE/MANE.GRCh38.v1.4.summary.txt.gz"):
 
     # URL for updated clinvar tab: https://ftp.ncbi.nlm.nih.gov/pub/clinvar/tab_delimited/variant_summary.txt.gz
     # URL for updated MANE tab: https://ftp.ncbi.nlm.nih.gov/refseq/MANE/MANE_human/release_1.4/MANE.GRCh38.v1.4.summary.txt.gz

@@ -5,7 +5,7 @@ tmp_dir: "/paedyl01/disk1/yangyxt/test_tmp/test_acmg"
 base_dir: "/paedyl01/disk1/yangyxt/acmg_auto"
 
 # Below we specify the conda env yml file in relative path
-conda_env_yaml: "/paedyl01/disk1/yangyxt/acmg_auto/acmg_auto_rough.yml"
+conda_env_yaml: "/paedyl01/disk1/yangyxt/PriVA/acmg_auto_rough.yml"
 conda_env_name: "acmg"
 
 # Below we specify the input vcf file in absolute paths
@@ -16,7 +16,7 @@ ped_file: "/paedyl01/disk1/yangyxt/test_acmg_auto/TEST_FAM.ped"
 # Below we specify the reference genome in absolute paths because the size of the file is too large to be included in the GitHub repo
 assembly: hg19
 ref_genome: "/paedyl01/disk1/yangyxt/indexed_genome/ucsc.hg19.fasta"
-hg38_hg19_chain: "/paedyl01/disk1/yangyxt/acmg_auto/data/liftover/hg38ToHg19.over.chain.gz"
+hg38_hg19_chain: "/paedyl01/disk1/yangyxt/PriVA/data/liftover/hg38ToHg19.over.chain.gz"
 repeat_region_file_name: "ucsc.hg19.fasta.repeat.bed.gz"
 
 # Below we specify the output directory in absolute paths
@@ -38,7 +38,7 @@ clinvar_splice_stat: /paedyl01/disk1/yangyxt/public_data/clinvar/clinvar.hg19.ve
 clinvar_vcf_dir: /paedyl01/disk1/yangyxt/public_data/clinvar
 clinvar_patho_af_stat: /paedyl01/disk1/yangyxt/public_data/clinvar/clinvar.hg19.vep.patho_af_stat.pkl
 clinvar_patho_exon_af_stat: /paedyl01/disk1/yangyxt/public_data/clinvar/clinvar.hg19.vep.patho_exon_af_stat.pkl
-clinvar_gene_stat: /paedyl01/disk1/yangyxt/acmg_auto/data/ClinVar/clinvar_2star_stats.pkl.gz
+clinvar_gene_stat: /paedyl01/disk1/yangyxt/PriVA/data/ClinVar/clinvar_2star_stats.pkl.gz
 
 # Below we specify the cache directory for VEP, you need to specify the locations before starting installing VEP and its plugins
 vep_cache_dir: "/paedyl01/disk1/yangyxt/public_data/VEP_caches"
@@ -50,7 +50,7 @@ vep_plugins_cachedir: "/paedyl01/disk1/yangyxt/public_data/VEP_plugins_caches"
 # The UTRAnnotator plugin cache file
 utr_annotator_file: /paedyl01/disk1/yangyxt/public_data/VEP_plugins_caches/UTRannotator/uORF_5UTR_GRCh37_PUBLIC.txt
 # The LOEUF plugin cache file
-loeuf_prescore: /paedyl01/disk1/yangyxt/acmg_auto/data/loeuf/loeuf_dataset.tsv.gz
+loeuf_prescore: /paedyl01/disk1/yangyxt/PriVA/data/loeuf/loeuf_dataset.tsv.gz
 
 # The LOFTEE plugin cache file and LOFTEE repository
 loftee_parent_dir: /paedyl01/disk1/yangyxt/public_data/VEP_plugins/LoFtee_repos

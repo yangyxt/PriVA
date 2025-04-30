@@ -5,6 +5,7 @@ import pysam
 import argparse as ap
 import logging
 import sys
+import traceback
 from typing import List, Dict, Any
 from collections import deque
 
@@ -80,7 +81,7 @@ def parse_csq_field(csq_field: str, csq_fields: List[str], logger: logging.Logge
     return anno_dict
 
 
-def extract_record_info(record):
+def extract_record_info(record, var_source_exists: bool):
     """Extract necessary information from a VariantRecord object"""
     # Initialize the info dictionary
     info_dict = {
@@ -106,11 +107,13 @@ def extract_record_info(record):
         'CLNDN': ",".join(record.info.get('CLNDN', [""])),
         'CLNSIG': ",".join(record.info.get('CLNSIG', [""])),
         'CLNREVSTAT': ",".join(record.info.get('CLNREVSTAT', [""])),
-        'VARIANT_SOURCE': record.info.get('VARIANT_SOURCE', ""),
         
         # CSQ field
         'CSQ': record.info.get('CSQ', tuple(["",])),
     }
+
+    if var_source_exists:
+        info_dict['VARIANT_SOURCE'] = record.info.get('VARIANT_SOURCE', "")
     
     # Add population-specific fields
     pop_codes = ["nfe", "eas", "afr", "amr", "asj", "fin", "sas", "mid", "remaining"]
@@ -149,7 +152,7 @@ def extract_record_info(record):
 
 def convert_record_to_tab(args: tuple) -> tuple[List[Dict[str, Any]], List[str]]:
     """Convert a record dictionary to a list of dictionaries and collect logs."""
-    record_dict, worker_id, csq_fields, clinvar_csq_fields = args
+    record_dict, worker_id, csq_fields, clinvar_csq_fields, var_source_exists = args
     logger, collector = setup_worker_logger(worker_id)
     
     try:
@@ -181,9 +184,11 @@ def convert_record_to_tab(args: tuple) -> tuple[List[Dict[str, Any]], List[str]]
             # ClinVar information
             "CLNSIG": record_dict['info']['CLNSIG'],
             "CLNREVSTAT": record_dict['info']['CLNREVSTAT'],
-            "VARIANT_SOURCE": record_dict['info']['VARIANT_SOURCE'],
             "VCF_filters": record_dict['VCF_filters']
         }
+
+        if var_source_exists:
+            var_dict_items["VARIANT_SOURCE"] = record_dict['info']['VARIANT_SOURCE']
         
         # # Add population-specific fields
         # pop_codes = ["nfe", "eas", "afr", "amr", "asj", "fin", "sas", "mid", "remaining"]
@@ -224,12 +229,12 @@ def convert_vcf_to_tab(input_vcf: str, threads=4) -> pd.DataFrame:
             # Extract the VEP CSQ field description from the header
             csq_fields = vcf_file.header.info['CSQ'].description.split('Format: ')[1].split('|')
             clinvar_csq_fields = vcf_file.header.info['CLNCSQ'].description.split('Format: ')[1].split('|')
-            
+            var_source_exists = "VARIANT_SOURCE" in vcf_file.header.info
             # Convert records to dictionaries before multiprocessing
-            record_args = ((extract_record_info(record), 
+            record_args = ((extract_record_info(record, var_source_exists), 
                           f"{record.chrom}:{record.pos}:{record.ref}->{record.alts[0] if record.alts else ''}",
                           tuple(csq_fields), 
-                          tuple(clinvar_csq_fields)) for record in vcf_file)
+                          tuple(clinvar_csq_fields), var_source_exists) for record in vcf_file)
 
             with mp.Pool(threads) as pool:
                 varcount = 0
@@ -240,6 +245,14 @@ def convert_vcf_to_tab(input_vcf: str, threads=4) -> pd.DataFrame:
                         sys.stderr.flush()
                     varcount += 1
                     all_rows.extend(rows)
+            # varcount = 0
+            # for tup in record_args:
+            #     rows, logs = convert_record_to_tab(tup)
+            #     if logs:
+            #         sys.stderr.write("\n".join(logs) + "\n")
+            #         sys.stderr.flush()
+            #     varcount += 1
+            #     all_rows.extend(rows)
         
         if all_rows:
             logger.info(f"Completed processing {varcount} variants, which contains {len(all_rows)} transcript level annotations")
@@ -249,15 +262,24 @@ def convert_vcf_to_tab(input_vcf: str, threads=4) -> pd.DataFrame:
         return pd.DataFrame()
         
     except Exception as e:
+        # Capture full traceback
+        error_traceback = traceback.format_exc()
         sys.stderr.write(f"Error in conversion process: {str(e)}\n")
+        sys.stderr.write(f"Full traceback:\n{error_traceback}\n")
+        
+        # Optionally log to file as well
+        logger.error(f"Error in conversion process: {str(e)}")
+        logger.error(f"Full traceback:\n{error_traceback}")
+        
+        # Reraise the exception
         raise(e)
 
 
-def main(input_vcf: str, 
-         output_tab: str, 
-         cadd_tab: str, 
-         hpo_tab: str, 
-         threads=4):
+def main_combine_annotations(input_vcf: str,
+                            cadd_tab: str, 
+                            hpo_tab: str, 
+                            threads=4,
+                            output_tab = None):
     converted_tab = convert_vcf_to_tab(input_vcf, threads)
     cadd_tab = pd.read_table(cadd_tab, low_memory=False)
 
@@ -280,17 +302,18 @@ def main(input_vcf: str,
 
     merged_tab = pd.merge(merged_tab, hpo_tab[["SYMBOL", "HPO_IDs", "HPO_terms", "HPO_sources", "HPO_gene_inheritance"]], on="SYMBOL", how="left")
 
-    merged_tab.to_csv(output_tab, sep="\t", index=False)
+    if output_tab:
+        merged_tab.to_csv(output_tab, sep="\t", index=False)
     return merged_tab
 
 
 if __name__ == "__main__":
     args = ap.ArgumentParser()
     args.add_argument("--input", "-i", type=str, required=True, help="The input VCF file")
-    args.add_argument("--output", "-o", type=str, required=True, help="The output tab file")
+    args.add_argument("--output", "-o", type=str, required=False, help="The output tab file", default=None)
     args.add_argument("--threads", "-t", type=int, default=4, help="The number of threads")
     args.add_argument("--cadd", "-c", type=str, required=True, help="The CADD tab file")
     args.add_argument("--hpo", "-p", type=str, required=True, help="The HPO tab file")
     args = args.parse_args()
 
-    main(args.input, args.output, args.cadd, args.hpo, args.threads)
+    main_combine_annotations(args.input, args.cadd, args.hpo, threads = args.threads, output_tab = args.output)

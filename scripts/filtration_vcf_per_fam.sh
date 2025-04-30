@@ -16,7 +16,7 @@ source ${SCRIPT_DIR}/common_bash_utils.sh
 # The second function is to filter out the variants based on the allele frequency
 
 
-function filter_allele_based_on_pedigree_with_py {
+function filter_allele_based_on_pedigree_data {
     local OPTIND i o p f
     while getopts i:o::p::f:: args
     do
@@ -174,7 +174,7 @@ function main_filtration () {
     # Filter the variants based on the pedigree information\
     if [[ -f ${ped_file} ]]; then
         # Optional operation based on pedigree information
-        filter_allele_based_on_pedigree_with_py \
+        filter_allele_based_on_pedigree_data \
         -i ${fam_vcf} \
         -p ${ped_file} \
         -f ${fam_name} \

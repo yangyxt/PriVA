@@ -137,7 +137,7 @@ function assign_acmg_criteria () {
     local clinvar_aa_dict_pkl=$(read_yaml ${config_file} "clinvar_aa_stat")
     local clinvar_splice_dict_pkl=$(read_yaml ${config_file} "clinvar_splice_stat")
     local intolerant_domains_pkl=$(read_yaml ${config_file} "all_intolerant_domains")
-    local domain_mechanism_tsv=$(read_yaml ${config_file} "clinvar_intolerance_mechanisms")
+    local clinvar_gene_stat_pkl=$(read_yaml ${config_file} "clinvar_gene_stat")
     local tranx_exon_domain_map_pkl=$(read_yaml ${config_file} "alphamissense_tranx_domain_map")
     local intolerant_motifs_pkl=$(read_yaml ${config_file} "alphamissense_intolerant_motifs")
     local alt_disease_vcf=$(read_yaml ${config_file} "alt_disease_vcf")
@@ -155,7 +155,7 @@ function assign_acmg_criteria () {
     check_path ${clinvar_aa_dict_pkl} "file" "clinvar_aa_stat" || has_error=1
     check_path ${clinvar_splice_dict_pkl} "file" "clinvar_splice_stat" || has_error=1
     check_path ${intolerant_domains_pkl} "file" "all_intolerant_domains" || has_error=1
-    check_path ${domain_mechanism_tsv} "file" "clinvar_intolerance_mechanisms" || has_error=1
+    check_path ${clinvar_gene_stat_pkl} "file" "clinvar_gene_stat" || has_error=1
     check_path ${intolerant_motifs_pkl} "file" "alphamissense_intolerant_motifs" || has_error=1
     check_path ${am_score_vcf} "file" "alphamissense_vcf" || has_error=1
     check_path ${tranx_exon_domain_map_pkl} "file" "alphamissense_tranx_domain_map" || has_error=1
@@ -182,7 +182,7 @@ function assign_acmg_criteria () {
     [[ ${input_tab} -nt ${clinvar_aa_dict_pkl} ]] && \
     [[ ${input_tab} -nt ${clinvar_splice_dict_pkl} ]] && \
     [[ ${input_tab} -nt ${intolerant_domains_pkl} ]] && \
-    [[ ${input_tab} -nt ${domain_mechanism_tsv} ]] && \
+    [[ ${input_tab} -nt ${clinvar_gene_stat_pkl} ]] && \
     [[ ${input_tab} -nt ${alt_disease_vcf} ]] && \
     [[ ${input_tab} -nt ${am_score_vcf} ]] && \
     [[ ${input_tab} -nt ${clinvar_patho_af_stat} ]] && \
@@ -203,7 +203,7 @@ function assign_acmg_criteria () {
     [[ -z ${fam_name} ]] && local fam_arg="" || local fam_arg="--fam_name ${fam_name}"
     [[ -z ${alt_disease_vcf} ]] && local alt_disease_arg="" || local alt_disease_arg="--alt_disease_vcf ${alt_disease_vcf}"
 
-    log "Running the following command to assign the ACMG criterias: python ${acmg_py} --anno_table ${input_tab} --am_score_table ${mean_am_score_table} --clinvar_aa_dict_pkl ${clinvar_aa_dict_pkl} --intolerant_domains_pkl ${intolerant_domains_pkl} --intolerant_motifs_pkl ${intolerant_motifs_pkl} --domain_mechanism_tsv ${domain_mechanism_tsv} --gnomAD_extreme_rare_threshold ${gnomAD_extreme_rare_threshold} --expected_incidence ${expected_incidence} --am_score_vcf ${am_score_vcf} --threads ${threads} --tranx_exon_domain_map_pkl ${tranx_exon_domain_map_pkl} ${ped_arg} ${fam_arg} ${alt_disease_arg} ${mavedb_arg}"
+    log "Running the following command to assign the ACMG criterias: python ${acmg_py} --anno_table ${input_tab} --am_score_table ${mean_am_score_table} --clinvar_aa_dict_pkl ${clinvar_aa_dict_pkl} --intolerant_domains_pkl ${intolerant_domains_pkl} --intolerant_motifs_pkl ${intolerant_motifs_pkl} --clinvar_gene_stat_pkl ${clinvar_gene_stat_pkl} --gnomAD_extreme_rare_threshold ${gnomAD_extreme_rare_threshold} --expected_incidence ${expected_incidence} --am_score_vcf ${am_score_vcf} --threads ${threads} --tranx_exon_domain_map_pkl ${tranx_exon_domain_map_pkl} ${ped_arg} ${fam_arg} ${alt_disease_arg} ${mavedb_arg}"
     python ${acmg_py} \
     --anno_table ${input_tab} \
     --am_score_table ${mean_am_score_table} \
@@ -215,7 +215,7 @@ function assign_acmg_criteria () {
     --intolerant_domains_pkl ${intolerant_domains_pkl} \
     --intolerant_motifs_pkl ${intolerant_motifs_pkl} \
     --repeat_region_file ${repeat_region_file} \
-    --domain_mechanism_tsv ${domain_mechanism_tsv} \
+    --clinvar_gene_stat_pkl ${clinvar_gene_stat_pkl} \
     --gnomAD_extreme_rare_threshold ${gnomAD_extreme_rare_threshold} \
     --expected_incidence ${expected_incidence} \
     --am_score_vcf ${am_score_vcf} \

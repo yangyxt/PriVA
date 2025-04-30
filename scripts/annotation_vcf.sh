@@ -37,7 +37,9 @@ function main_workflow() {
           clinvar_vcf \
           vep_cache_dir \
           vep_plugins_dir \
-          vep_plugins_cachedir
+          vep_plugins_cachedir \
+          hub_vcf_file \
+          hub_cadd_file
 
     # Source the argparse.bash script
     source ${SCRIPT_DIR}/argparse.bash || { log "Failed to source argparse.bash"; return 1; }
@@ -50,7 +52,7 @@ function main_workflow() {
 
     if [[ -f "$config_file" ]]; then
         log "Using config file: $config_file"
-        local -a config_keys=(input_vcf assembly vep_cache_dir output_dir ref_genome threads af_cutoff gnomad_vcf_chrX clinvar_vcf vep_plugins_dir vep_plugins_cachedir)
+        local -a config_keys=(input_vcf assembly vep_cache_dir output_dir ref_genome threads af_cutoff gnomad_vcf_chrX clinvar_vcf vep_plugins_dir vep_plugins_cachedir hub_vcf_file hub_cadd_file)
         for key in "${config_keys[@]}"; do
             # Need to remove the quotes around the value
             config_args[$key]="$(read_yaml ${config_file} ${key})"
@@ -73,27 +75,30 @@ function main_workflow() {
     local clinvar_vcf="${clinvar_vcf:-${config_args[clinvar_vcf]}}"
     local vep_plugins_dir="${vep_plugins_dir:-${config_args[vep_plugins_dir]}}"
     local vep_plugins_cachedir="${vep_plugins_cachedir:-${config_args[vep_plugins_cachedir]}}"
+    
+    # Simplify hub caching settings, remove hub_enabled
+    local hub_vcf_file="${hub_vcf_file:-${config_args[hub_vcf_file]}}"
+    local hub_cadd_file="${hub_cadd_file:-${config_args[hub_cadd_file]}}"
 
-    # Set and check required paths
-    local has_error=0
-    check_path "$input_vcf" "file" "input_vcf" || has_error=1
+    # Create hub directories if needed, simplified
+    if [[ -n "${hub_vcf_file}" ]]; then
+        local hub_dir=$(dirname "${hub_vcf_file}")
+        if [[ ! -d "${hub_dir}" ]]; then
+            mkdir -p "${hub_dir}" || {
+                log "Error: Failed to create hub directory: ${hub_dir}"
+                has_error=1
+            }
+        fi
+    fi
 
-    # Check paths that must exist
-    check_path "$ref_genome" "file" "ref_genome" || has_error=1
-    check_path "$gnomad_vcf_chrX" "file" "gnomad_vcf_chrX" || has_error=1
-    check_path "$clinvar_vcf" "file" "clinvar_vcf" || has_error=1
-    check_path "$vep_cache_dir" "dir" "vep_cache_dir" || has_error=1
-    check_path "$vep_plugins_dir" "dir" "vep_plugins_dir" || has_error=1
-    check_path "$vep_plugins_cachedir" "dir" "vep_plugins_cachedir" || has_error=1
-
-    # Create output directory if it doesn't exist
-    local output_dir
-    [[ -z ${output_dir} ]] && output_dir=$(dirname ${input_vcf})
-    if [[ ! -d "$output_dir" ]]; then
-        mkdir -p "$output_dir" || {
-            log "Error: Failed to create output_dir: $output_dir"
-            has_error=1
-        }
+    if [[ -n "${hub_cadd_file}" ]]; then
+        local cadd_dir=$(dirname "${hub_cadd_file}")
+        if [[ ! -d "${cadd_dir}" ]]; then
+            mkdir -p "${cadd_dir}" || {
+                log "Error: Failed to create CADD hub directory: ${cadd_dir}"
+                has_error=1
+            }
+        fi
     fi
 
     # If assembly not specified, try to extract it from the input VCF
@@ -118,6 +123,8 @@ function main_workflow() {
     log "  clinvar_vcf: $clinvar_vcf"
     log "  vep_plugins_dir: $vep_plugins_dir"
     log "  vep_plugins_cachedir: $vep_plugins_cachedir"
+    log "  hub_vcf_file: $hub_vcf_file"
+    log "  hub_cadd_file: $hub_cadd_file"
 
     # Preprocess the input vcf to:
     # Remove the variants not located in primary chromsomes
@@ -136,49 +143,128 @@ function main_workflow() {
     log "Failed to preprocess the input vcf ${input_vcf} for annotation. Quit with error."; \
     return 1; }
 
+    # If hub VCF file exists, check for variants
+    if [[ -f "${hub_vcf_file}" ]] && check_vcf_validity "${hub_vcf_file}"; then
+        local covered_vcf="${anno_vcf/.vcf*/.covered.vcf.gz}"
+        local uncovered_vcf="${anno_vcf/.vcf*/.uncovered.vcf.gz}"
+        
+        log "Checking for cached annotations in hub VCF"
+        if use_hub_vcf_annotations "${anno_vcf}" "${hub_vcf_file}" "${covered_vcf}" "${uncovered_vcf}"; then
+            log "All variants found in hub VCF, skipping annotation pipeline"
+            
+            # Use covered variants as final result
+            cp "${covered_vcf}" "${anno_vcf}"
+            cp "${covered_vcf}.tbi" "${anno_vcf}.tbi"
+            
+            # Skip to CADD annotation
+            local skip_annotation=true
+        else
+            if [[ -f "${covered_vcf}" ]] && [[ $(bcftools view -H "${covered_vcf}" | wc -l) -gt 0 ]]; then
+                log "Found cached variants, will only annotate uncovered variants"
+                
+                # Save the original anno_vcf path and work with uncovered variants
+                local final_anno_vcf="${anno_vcf}"
+                local anno_vcf="${uncovered_vcf}"
+            else
+                log "No cached variants found, will annotate all variants"
+            fi
+        fi
+    fi
 
-    # First annotate gnomAD aggregated frequency and number of homozygous ALT allele carriers
-    # Tag the variants with gnomAD_common and gnomAD_BA FILTER tags
-    anno_agg_gnomAD_data \
-    ${anno_vcf} \
-    ${threads} \
-    ${assembly} \
-    ${gnomad_vcf_chrX} && \
-    log "Successfully add aggregated gnomAD annotation on ${anno_vcf}. The result is ${anno_vcf}" || { \
-    log "Failed to add aggregated gnomAD annotation on ${anno_vcf}. Quit now"
-    return 1; }
+    # Skip annotation if all variants were in hub VCF
+    if [[ "${skip_annotation}" != "true" ]]; then
+        # First annotate gnomAD aggregated frequency and number of homozygous ALT allele carriers
+        # Tag the variants with gnomAD_common and gnomAD_BA FILTER tags
+        anno_agg_gnomAD_data \
+        ${anno_vcf} \
+        ${threads} \
+        ${assembly} \
+        ${gnomad_vcf_chrX} && \
+        log "Successfully add aggregated gnomAD annotation on ${anno_vcf}. The result is ${anno_vcf}" || { \
+        log "Failed to add aggregated gnomAD annotation on ${anno_vcf}. Quit now"
+        return 1; }
 
+        # Now we annotate ClinVar variants and return result as VCF file
+        # Annotate the variants with
+        anno_clinvar_data \
+        ${anno_vcf} \
+        ${clinvar_vcf} || { \
+        log "Failed to add ClinVar annotation on ${anno_vcf}. Quit now"
+        return 1; }
 
-    # Now we annotate ClinVar variants and return result as VCF file
-    # Annotate the variants with
-    anno_clinvar_data \
-    ${anno_vcf} \
-    ${clinvar_vcf} || { \
-    log "Failed to add ClinVar annotation on ${anno_vcf}. Quit now"
-    return 1; }
-
-
-    # Now we annotate the variants with VEP
-    anno_VEP_data \
-    --input_vcf ${anno_vcf} \
-    --config ${config_file} \
-    --assembly ${assembly} \
-    --ref_genome ${ref_genome} \
-    --vep_cache_dir ${vep_cache_dir} \
-    --vep_plugins_dir ${vep_plugins_dir} \
-    --vep_plugins_cachedir ${vep_plugins_cachedir} \
-    --threads ${threads} || { \
-    log "Failed to add VEP annotation on ${anno_vcf}. Quit now"
-    return 1; }
-
+        # Now we annotate the variants with VEP
+        anno_VEP_data \
+        --input_vcf ${anno_vcf} \
+        --config ${config_file} \
+        --assembly ${assembly} \
+        --ref_genome ${ref_genome} \
+        --vep_cache_dir ${vep_cache_dir} \
+        --vep_plugins_dir ${vep_plugins_dir} \
+        --vep_plugins_cachedir ${vep_plugins_cachedir} \
+        --threads ${threads} || { \
+        log "Failed to add VEP annotation on ${anno_vcf}. Quit now"
+        return 1; }
+        
+        # If using hub caching, merge covered and newly annotated variants
+        if [[ -n "${final_anno_vcf}" ]]; then
+            local newly_annotated_vcf="${anno_vcf}"
+            merge_annotated_vcfs "${covered_vcf}" "${newly_annotated_vcf}" "${final_anno_vcf}"
+            
+            # Update hub VCF with newly annotated variants
+            update_hub_vcf "${newly_annotated_vcf}" "${hub_vcf_file}"
+            
+            # Set anno_vcf back to final result for downstream steps
+            local anno_vcf="${final_anno_vcf}"
+        fi
+    fi
 
     # Now we annotate the VCF with CADD
-    Calculate_CADD \
-    ${anno_vcf} \
-    ${config_file} || { \
-    log "Failed to add CADD annotation on ${anno_vcf}. Quit now"
-    return 1; }
-
+    if [[ -n "${hub_cadd_file}" ]]; then
+        local cadd_covered_tsv="${anno_vcf/.vcf*/.cadd.covered.tsv}"
+        local cadd_uncovered_vcf="${anno_vcf/.vcf*/.cadd.uncovered.vcf.gz}"
+        
+        log "Checking for cached CADD scores in ${hub_cadd_file}"
+        if find_cached_cadd_variants "${anno_vcf}" "${hub_cadd_file}" "${cadd_covered_tsv}" "${cadd_uncovered_vcf}"; then
+            # All variants are covered - copy to output
+            cp "${cadd_covered_tsv}" "${anno_vcf/.vcf*/.cadd.tsv}"
+            update_yaml "${config_file}" "cadd_output_file" "${anno_vcf/.vcf*/.cadd.tsv}"
+            log "All variants have cached CADD scores, skipping CADD calculation"
+        else
+            # Some variants need CADD calculation
+            if [[ $(bcftools view -H "${cadd_uncovered_vcf}" | wc -l) -gt 0 ]]; then
+                # Calculate CADD for uncovered variants
+                Calculate_CADD "${cadd_uncovered_vcf}" "${config_file}" "${anno_vcf/.vcf*/.cadd.new.tsv}" || {
+                    log "Failed to calculate CADD scores. Quit now"
+                    return 1
+                }
+                
+                # Merge covered and newly calculated scores
+                merge_cadd_results "${cadd_covered_tsv}" "${anno_vcf/.vcf*/.cadd.new.tsv}" "${anno_vcf/.vcf*/.cadd.tsv}"
+                
+                # Update CADD hub with new scores
+                update_hub_cadd "${anno_vcf/.vcf*/.cadd.new.tsv}" "${hub_cadd_file}"
+                
+                # Update config with output file
+                update_yaml "${config_file}" "cadd_output_file" "${anno_vcf/.vcf*/.cadd.tsv}"
+                
+                # Clean up temporary files
+                rm -f "${anno_vcf/.vcf*/.cadd.new.tsv}"
+            else
+                # Only covered variants (should not happen but just in case)
+                cp "${cadd_covered_tsv}" "${anno_vcf/.vcf*/.cadd.tsv}" 
+                update_yaml "${config_file}" "cadd_output_file" "${anno_vcf/.vcf*/.cadd.tsv}"
+            fi
+            
+            # Clean up temporary files
+            rm -f "${cadd_covered_tsv}" "${cadd_uncovered_vcf}" "${cadd_uncovered_vcf}.tbi"
+        fi
+    else
+        # Original CADD calculation without caching
+        Calculate_CADD "${anno_vcf}" "${config_file}" || {
+            log "Failed to add CADD annotation on ${anno_vcf}. Quit now"
+            return 1
+        }
+    fi
 }
 
 
@@ -632,7 +718,207 @@ function Calculate_CADD {
     log "Failed to run CADD on ${input_vcf}. Quit now"; return 1; }
 }
 
+function use_hub_vcf_annotations() {
+    local input_vcf=$1
+    local hub_vcf=$2
+    local output_covered_vcf=$3
+    local output_uncovered_vcf=$4
+    
+    # Check if hub VCF exists and is valid
+    if [[ ! -f "${hub_vcf}" ]] || ! check_vcf_validity "${hub_vcf}"; then
+        log "Hub VCF is missing or invalid, all variants are uncovered"
+        cp "${input_vcf}" "${output_uncovered_vcf}"
+        # Create empty covered VCF with header only
+        bcftools view -h "${input_vcf}" | bgzip > "${output_covered_vcf}"
+        tabix -p vcf "${output_covered_vcf}"
+        return 1
+    fi
+    
+    # Create a temporary file to hold intersection results
+    local intersect_file="${input_vcf/.vcf*/.intersect.vcf.gz}"
+    
+    # Find the intersection between the input VCF and hub VCF
+    bcftools isec -n =2 -w1 "${input_vcf}" "${hub_vcf}" -Oz -o "${intersect_file}"
+    tabix -p vcf "${intersect_file}"
+    
+    # Annotate the covered variants with all INFO fields from hub VCF
+    bcftools annotate -a "${hub_vcf}" -c CHROM,POS,REF,ALT,INFO "${intersect_file}" -Oz -o "${output_covered_vcf}"
+    tabix -p vcf "${output_covered_vcf}"
+    
+    # Find variants not in the intersection (uncovered)
+    bcftools isec -n -1 -C "${input_vcf}" "${intersect_file}" -Oz -o "${output_uncovered_vcf}"
+    tabix -p vcf "${output_uncovered_vcf}"
+    
+    # Clean up
+    rm -f "${intersect_file}" "${intersect_file}.tbi"
+    
+    # Check if all variants were covered
+    if [[ $(bcftools view -H "${output_uncovered_vcf}" | wc -l) -eq 0 ]]; then
+        log "All variants found in hub VCF, skipping annotation pipeline"
+        return 0
+    else
+        log "Found $(bcftools view -H "${output_covered_vcf}" | wc -l) cached variants"
+        log "Processing $(bcftools view -H "${output_uncovered_vcf}" | wc -l) uncovered variants"
+        return 1
+    fi
+}
 
+function update_hub_vcf() {
+    local newly_annotated_vcf=$1
+    local hub_vcf=$2
+    
+    # Skip if no new annotations
+    if [[ ! -f "${newly_annotated_vcf}" ]] || [[ $(bcftools view -H "${newly_annotated_vcf}" | wc -l) -eq 0 ]]; then
+        log "No new variants to add to hub VCF"
+        return 0
+    fi
+    
+    # If hub VCF doesn't exist or is invalid, create it
+    if [[ ! -f "${hub_vcf}" ]] || ! check_vcf_validity "${hub_vcf}"; then
+        log "Hub VCF was missing or invalid, creating new hub with $(bcftools view -H "${newly_annotated_vcf}" | wc -l) variants"
+        cp "${newly_annotated_vcf}" "${hub_vcf}"
+        tabix -p vcf "${hub_vcf}"
+        return 0
+    fi
+    
+    # Merge hub VCF with newly annotated VCF
+    local temp_hub="${hub_vcf/.vcf*/.temp.vcf.gz}"
+    
+    # Concatenate files and remove duplicates (keeping the newer version)
+    bcftools concat -a "${hub_vcf}" "${newly_annotated_vcf}" -Ou | \
+    bcftools sort -Ou | \
+    bcftools norm -d both -Oz -o "${temp_hub}"  # -d both removes duplicate variants
+    
+    tabix -p vcf -f "${temp_hub}"
+    mv "${temp_hub}" "${hub_vcf}"
+    mv "${temp_hub}.tbi" "${hub_vcf}.tbi"
+    
+    log "Updated hub VCF with $(bcftools view -H "${newly_annotated_vcf}" | wc -l) new variants"
+}
+
+function merge_annotated_vcfs() {
+    local covered_vcf=$1
+    local newly_annotated_vcf=$2
+    local output_vcf=$3
+    
+    # Handle edge cases
+    if [[ ! -f "${newly_annotated_vcf}" ]] || [[ $(bcftools view -H "${newly_annotated_vcf}" | wc -l) -eq 0 ]]; then
+        if [[ -f "${covered_vcf}" ]] && [[ $(bcftools view -H "${covered_vcf}" | wc -l) -gt 0 ]]; then
+            cp "${covered_vcf}" "${output_vcf}"
+            tabix -p vcf "${output_vcf}"
+            log "Using only covered variants, no newly annotated variants"
+        else
+            log "ERROR: No covered or newly annotated variants available"
+            return 1
+        fi
+        return 0
+    fi
+    
+    if [[ ! -f "${covered_vcf}" ]] || [[ $(bcftools view -H "${covered_vcf}" | wc -l) -eq 0 ]]; then
+        cp "${newly_annotated_vcf}" "${output_vcf}"
+        tabix -p vcf "${output_vcf}"
+        log "Using only newly annotated variants, no covered variants"
+        return 0
+    fi
+    
+    # Merge the files
+    bcftools concat -a "${covered_vcf}" "${newly_annotated_vcf}" -Ou | \
+    bcftools sort -Oz -o "${output_vcf}"
+    tabix -p vcf "${output_vcf}"
+    log "Merged $(bcftools view -H "${covered_vcf}" | wc -l) covered variants with $(bcftools view -H "${newly_annotated_vcf}" | wc -l) newly annotated variants"
+}
+
+function find_cached_cadd_variants() {
+    local input_vcf=$1
+    local hub_cadd_file=$2
+    local output_covered_tsv=$3
+    local output_uncovered_vcf=$4
+    
+    # Create a temporary "positions file" from input VCF for lookup
+    local pos_file=$(mktemp --tmpdir="$TMPDIR" pos_file.XXXXXX)
+    bcftools query -f '%CHROM\t%POS\t%REF\t%ALT\n' "${input_vcf}" > "${pos_file}"
+    
+    # Create a temporary file for variants not found in hub
+    local uncovered_pos=$(mktemp --tmpdir="$TMPDIR" uncovered_pos.XXXXXX)
+    touch "${uncovered_pos}"
+    
+    # Extract matching variants from CADD TSV using Python script
+    python ${SCRIPT_DIR}/cadd_hub_util.py match \
+        --hub "${hub_cadd_file}" \
+        --pos "${pos_file}" \
+        --covered "${output_covered_tsv}" \
+        --uncovered "${uncovered_pos}"
+    local match_result=$?
+    
+    # Clean up temporary positions file
+    rm -f "${pos_file}"
+    
+    # Check if we found any uncovered variants
+    if [[ ${match_result} -eq 0 ]]; then
+        log "All variants found in CADD hub TSV"
+        rm -f "${uncovered_pos}"
+        return 0
+    fi
+    
+    # Extract uncovered variants from VCF using exact position matching
+    bcftools view -R "${uncovered_pos}" --regions-overlap pos "${input_vcf}" -Oz -o "${output_uncovered_vcf}"
+    tabix -p vcf "${output_uncovered_vcf}"
+    
+    # Clean up temporary positions file
+    rm -f "${uncovered_pos}"
+    
+    # Check if any uncovered variants
+    if [[ $(bcftools view -H "${output_uncovered_vcf}" | wc -l) -eq 0 ]]; then
+        log "No uncovered variants (should not happen)"
+        return 0
+    else
+        log "Will process $(bcftools view -H "${output_uncovered_vcf}" | wc -l) uncached variants"
+        return 1
+    fi
+}
+
+function update_hub_cadd() {
+    local new_cadd_tsv=$1
+    local hub_cadd_file=$2
+    
+    # Skip if no new annotations
+    if [[ ! -f "${new_cadd_tsv}" ]] || [[ $(wc -l < "${new_cadd_tsv}") -le 1 ]]; then
+        log "No new CADD scores to add to hub"
+        return 0
+    fi
+    
+    # Ensure hub directory exists
+    local hub_dir=$(dirname "${hub_cadd_file}")
+    [[ -d "${hub_dir}" ]] || {
+        log "Error: Hub directory ${hub_dir} does not exist to store the hub cadd anno file ${hub_cadd_file}"
+        return 1
+    }
+    
+    # Update hub CADD TSV with new scores
+    python ${SCRIPT_DIR}/cadd_hub_util.py update --new "${new_cadd_tsv}" --hub "${hub_cadd_file}"
+    log "Updated CADD hub TSV ${hub_cadd_file}"
+}
+
+
+function merge_cadd_results() {
+    local covered_tsv=$1
+    local new_cadd_tsv=$2
+    local output_tsv=$3
+    
+    # Merge covered and new CADD scores
+    python ${SCRIPT_DIR}/cadd_hub_util.py merge \
+        --covered "${covered_tsv}" \
+        --new "${new_cadd_tsv}" \
+        --output "${output_tsv}"
+    
+    if [[ $? -eq 0 ]]; then
+        log "Successfully merged CADD results"
+        return 0
+    else
+        log "Failed to merge CADD results"
+        return 1
+    fi
+}
 
 if [[ "${#BASH_SOURCE[@]}" -eq 1 ]]; then
     declare -a func_names=($(typeset -f | awk '!/^main[ (]/ && /^[^ {}]+ *\(\)/ { gsub(/[()]/, "", $1); printf $1" ";}'))

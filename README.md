@@ -113,7 +113,7 @@ snakemake --configfile config.yaml -j <threads>
 A more comprehensive example:
 
 ```bash
-nohup snakemake --snakefile /paedyl01/disk1/yangyxt/acmg_auto/Snakefile --cores 50 --configfile /paedyl01/disk1/yangyxt/test_acmg_auto/test_clinvar/config_clinvar.hg38.yaml --printshellcmds --verbose > /paedyl01/disk1/yangyxt/test_acmg_auto/test_clinvar/clinvar_2star_snakemake_pipeline.hg38.log 2>&1 &
+nohup snakemake --snakefile /paedyl01/disk1/yangyxt/PriVA/Snakefile --cores 50 --configfile /paedyl01/disk1/yangyxt/test_acmg_auto/test_clinvar/config_clinvar.hg38.yaml --printshellcmds --verbose > /paedyl01/disk1/yangyxt/test_acmg_auto/test_clinvar/clinvar_2star_snakemake_pipeline.hg38.log 2>&1 &
 ```
 
 For family-specific analysis, ensure your pedigree file is properly formatted and specified in the config file.

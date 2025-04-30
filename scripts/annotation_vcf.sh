@@ -463,6 +463,92 @@ function anno_clinvar_data () {
 
 
 
+function anno_control_vcf_allele() {
+    local input_vcf=$1
+    local control_vcf=$2
+    local tmp_tag=$(randomID)
+    # Output will initially be temporary, then moved to replace input_vcf
+    local output_vcf=${input_vcf/.vcf.gz/.${tmp_tag}.vcf.gz}
+    local processed_control_vcf="" # Will hold path to control vcf with required tags
+
+    # --- Validate Inputs ---
+    check_path "${input_vcf}" "file" "input_vcf" || return 1
+    check_path "${control_vcf}" "file" "control_vcf" || return 1
+    [[ "${input_vcf}" =~ \.vcf\.gz$ ]] || { log "ERROR: input_vcf must be bgzipped (.vcf.gz)"; return 1; }
+    [[ "${control_vcf}" =~ \.vcf\.gz$ ]] || { log "ERROR: control_vcf must be bgzipped (.vcf.gz)"; return 1; }
+    check_vcf_validity "${input_vcf}" || return 1
+    check_vcf_validity "${control_vcf}" || return 1
+
+    # --- Check if annotation already done ---
+    local control_tags="control_AC,control_AN,control_AF,control_nhomalt"
+    if check_vcf_infotags "${input_vcf}" "${control_tags}"; then
+        log "Input VCF ${input_vcf} already contains control allele info tags: ${control_tags}. Skipping."
+        return 0
+    fi
+
+    # --- Prepare Control VCF ---
+    # Check for AC, AN, AF, and AC_Hom (assuming AC_Hom includes relevant hemizygous cases formatted as 1/1)
+    local source_tags="AC,AN,AF,AC_Hom"
+    if check_vcf_infotags "${control_vcf}" "${source_tags}"; then
+        log "Control VCF ${control_vcf} already has required tags (${source_tags})."
+        processed_control_vcf="${control_vcf}"
+    else
+        log "Control VCF ${control_vcf} missing one or more required tags (${source_tags}). Calculating..."
+        local temp_control_vcf=$(mktemp --tmpdir="$TMPDIR" control_processed.XXXXXX.vcf.gz)
+        announce_remove_tmps "${temp_control_vcf}" "${temp_control_vcf}.tbi" # Schedule cleanup
+
+        # Ensure control VCF is indexed if needed
+        if [[ ! -f "${control_vcf}.tbi" ]]; then
+           log "Indexing control VCF: ${control_vcf}"
+           tabix -p vcf -f "${control_vcf}" || { log "ERROR: Failed to index control VCF ${control_vcf}"; return 1; }
+        fi
+
+        # Calculate the required tags
+        bcftools +fill-tags "${control_vcf}" -Oz -o "${temp_control_vcf}" -- -t ${source_tags} && \
+        tabix -p vcf -f "${temp_control_vcf}" || {
+            log "ERROR: Failed to calculate tags for control VCF ${control_vcf}"
+            return 1
+        }
+        log "Calculated tags written to temporary file: ${temp_control_vcf}"
+        processed_control_vcf="${temp_control_vcf}"
+    fi
+
+    # --- Annotate Input VCF ---
+    log "Annotating ${input_vcf} with control allele info from ${processed_control_vcf}"
+    bcftools annotate \
+        -a "${processed_control_vcf}" \
+        -c "CHROM,POS,REF,ALT,INFO/control_AC:=INFO/AC,INFO/control_AN:=INFO/AN,INFO/control_AF:=INFO/AF,INFO/control_nhomalt:=INFO/AC_Hom" \
+        -Oz -o "${output_vcf}" \
+        "${input_vcf}" && \
+    tabix -p vcf -f "${output_vcf}" || {
+        log "ERROR: Failed to annotate ${input_vcf} with control allele info."
+        # Explicitly remove temp file on error if announce_remove_tmps hasn't run yet
+        [[ "${processed_control_vcf}" != "${control_vcf}" ]] && rm -f "${processed_control_vcf}" "${processed_control_vcf}.tbi"
+        rm -f "${output_vcf}" "${output_vcf}.tbi" # Remove potentially failed output
+        return 1
+    }
+
+    # --- Finalize ---
+    log "Successfully annotated ${input_vcf}. Moving temporary output ${output_vcf} to replace input."
+    mv "${output_vcf}" "${input_vcf}" && \
+    mv "${output_vcf}.tbi" "${input_vcf}.tbi" || {
+        log "ERROR: Failed to move temporary output ${output_vcf} to ${input_vcf}"
+        # Explicitly remove temp file on error
+        [[ "${processed_control_vcf}" != "${control_vcf}" ]] && rm -f "${processed_control_vcf}" "${processed_control_vcf}.tbi"
+        rm -f "${output_vcf}" "${output_vcf}.tbi" # Clean up the temp output we couldn't move
+        return 1
+    }
+
+    # Cleanup temp file if created
+    [[ "${processed_control_vcf}" != "${control_vcf}" ]] && rm -f "${processed_control_vcf}" "${processed_control_vcf}.tbi"
+
+    display_vcf "${input_vcf}"
+    log "Annotation with control cohort allele frequencies complete for ${input_vcf}."
+    return 0
+}
+
+
+
 
 function prepare_vcf_add_varID {
     local input_vcf=${1}

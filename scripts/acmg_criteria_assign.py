@@ -1528,7 +1528,6 @@ def BS2_criteria(df: pd.DataFrame,
                  dominant: np.ndarray,
                  non_monogenic: np.ndarray,
                  non_mendelian: np.ndarray,
-                 haplo_insufficient: np.ndarray,
                  incomplete_penetrance: np.ndarray) -> pd.Series:
     '''
     The BS2 criteria is about observing variant in healthy adult
@@ -1556,6 +1555,17 @@ def BS2_criteria(df: pd.DataFrame,
     x_linked_dominant = x_linked & dominant & np.logical_not(recessive) & (((df['gnomAD_nhomalt_XX'] + df['gnomAD_nhomalt_XY']) > 5) | ((df['gnomAD_joint_AF'] * df['gnomAD_joint_AN']) > 5)) & np.logical_not(non_monogenic) & np.logical_not(non_mendelian)
 
     y_linked = y_linked & (df['gnomAD_joint_AF_XY'] > 0) & np.logical_not(non_monogenic) & np.logical_not(non_mendelian)
+    
+    if 'control_AC' in df.columns:
+        logger.warning("Seems user has provided a control cohort VCF, using control allele counts to assign BS2 criteria")
+        autosomal_dominant = autosomal_dominant | (df['control_AC'] > 0)
+        x_linked_dominant = x_linked_dominant | (df['control_AC'] > 0)
+        y_linked = y_linked | (df['control_AC'] > 0)
+    if 'control_nhomalt' in df.columns:
+        logger.warning("Seems user has provided a control cohort VCF, using control homozygous counts to assign BS2 criteria")
+        autosomal_recessive = autosomal_recessive | (df['control_nhomalt'] > 0)
+        x_linked_recessive = x_linked_recessive | (df['control_nhomalt'] > 0)
+
     gnomad_bs2_criteria = autosomal_dominant | autosomal_recessive | x_linked_recessive | x_linked_dominant | y_linked
     bs2_criteria = gnomad_bs2_criteria & np.logical_not(bs1_criteria) & np.logical_not(incomplete_penetrance) & early_onsets
     return bs2_criteria
@@ -2350,7 +2360,7 @@ def ACMG_criteria_assign(anno_table: str,
     gc.collect()
 
     # Apply BS2, variant observed in a healthy adult
-    bs2_criteria = BS2_criteria(anno_df, bs1_criteria, recessive, dominant, non_monogenic, non_mendelian, haplo_insufficient, incomplete_penetrance)
+    bs2_criteria = BS2_criteria(anno_df, bs1_criteria, recessive, dominant, non_monogenic, non_mendelian, incomplete_penetrance)
     logger.info(f"BS2 criteria applied, {bs2_criteria.sum()} variants are having the BS2 criteria")
     gc.collect()
 

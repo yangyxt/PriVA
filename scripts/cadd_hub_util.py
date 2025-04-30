@@ -69,7 +69,7 @@ def match_variants(hub_file, pos_file, covered_file, uncovered_file, threads=Non
     ])
     
     # Create lookup key for hub
-    hub_df = hub_df.with_column(
+    hub_df = hub_df.with_columns(
         pl.concat_str([
             pl.col("Chrom"),
             pl.col("Pos").cast(pl.Utf8),
@@ -199,7 +199,7 @@ def update_hub(new_file, hub_file, threads=None):
     original_size = len(hub_df)
     
     # Create lookup key for hub
-    hub_df = hub_df.with_column(
+    hub_df = hub_df.with_columns(
         pl.concat_str([
             pl.col("Chrom"),
             pl.col("Pos").cast(pl.Utf8),
@@ -224,7 +224,7 @@ def update_hub(new_file, hub_file, threads=None):
     ])
     
     # Create lookup key for new data
-    new_df = new_df.with_column(
+    new_df = new_df.with_columns(
         pl.concat_str([
             pl.col("Chrom"),
             pl.col("Pos").cast(pl.Utf8),

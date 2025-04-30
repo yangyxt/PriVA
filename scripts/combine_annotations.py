@@ -108,6 +108,12 @@ def extract_record_info(record, var_source_exists: bool):
         'CLNSIG': ",".join(record.info.get('CLNSIG', [""])),
         'CLNREVSTAT': ",".join(record.info.get('CLNREVSTAT', [""])),
         
+        # Control cohort allele info (if present)
+        'control_AC': record.info.get('control_AC', (np.nan,))[0], # Usually Number=A, take first for biallelic
+        'control_AN': record.info.get('control_AN', np.nan),
+        'control_AF': record.info.get('control_AF', (np.nan,))[0], # Usually Number=A, take first for biallelic
+        'control_nhomalt': record.info.get('control_nhomalt', np.nan),
+        
         # CSQ field
         'CSQ': record.info.get('CSQ', tuple(["",])),
     }
@@ -184,7 +190,13 @@ def convert_record_to_tab(args: tuple) -> tuple[List[Dict[str, Any]], List[str]]
             # ClinVar information
             "CLNSIG": record_dict['info']['CLNSIG'],
             "CLNREVSTAT": record_dict['info']['CLNREVSTAT'],
-            "VCF_filters": record_dict['VCF_filters']
+            "VCF_filters": record_dict['VCF_filters'],
+
+            # Control cohort allele info (if present)
+            "control_AC": record_dict['info']['control_AC'],
+            "control_AN": record_dict['info']['control_AN'],
+            "control_AF": record_dict['info']['control_AF'],
+            "control_nhomalt": record_dict['info']['control_nhomalt'],
         }
 
         if var_source_exists:

@@ -4,6 +4,10 @@
 tmp_dir: "/paedyl01/disk1/yangyxt/test_tmp/test_acmg"
 base_dir: "/paedyl01/disk1/yangyxt/acmg_auto"
 
+# Prepare hub files for annotation caching
+hub_vcf_file: "/paedyl01/disk1/yangyxt/ngs_summary/hg19.anno.vcf.gz"
+hub_cadd_file: "/paedyl01/disk1/yangyxt/ngs_summary/hg19.cadd.tsv.gz"
+
 # Below we specify the conda env yml file in relative path
 conda_env_yaml: "/paedyl01/disk1/yangyxt/PriVA/acmg_auto_rough.yml"
 conda_env_name: "acmg"
@@ -110,3 +114,4 @@ interpro_mapping_pickle: "/paedyl01/disk1/yangyxt/public_data/Interpro/Interpro_
 alt_disease_vcf: /paedyl01/disk1/yangyxt/public_data/ShortStatue/ShortStature.hg19.vcf.gz
 extreme_rare_PAF: 0.0001
 exp_disease_incidence: 0.001
+

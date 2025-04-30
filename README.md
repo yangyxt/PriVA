@@ -1,4 +1,4 @@
-# ACMG Auto
+# PriVA
 
 A comprehensive pipeline for ACMG-based variant prioritization in genetic analysis.
 

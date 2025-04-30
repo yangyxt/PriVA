@@ -1,4 +1,5 @@
 import pickle
+import gzip
 import argparse as ap
 import numpy as np
 import matplotlib.pyplot as plt
@@ -11,8 +12,11 @@ import logging
 import json
 from collections import defaultdict
 from statsmodels.stats.multitest import multipletests
+import random
 
+from protein_domain_mapping import DomainNormalizer
 from stat_protein_domain_amscores import nested_defaultdict
+self_directory = os.path.dirname(os.path.abspath(__file__))
 
 
 logger = logging.getLogger(__name__)
@@ -89,7 +93,11 @@ def analyze_domain_tolerance(query_scores: np.ndarray,
     results = []
     p_values = []  # Collect p-values for Fisher's method
     
-    for ref_name, ref_scores in reference_domains.items():
+    # Randomly pickle 100 domains from the reference domains
+    ref_names = list(reference_domains.keys())
+    ref_names = random.sample(ref_names, min(100, len(ref_names)))
+    for ref_name in ref_names:
+        ref_scores = reference_domains[ref_name]
         # Perform KS test
         stat, p_value = stats.ks_2samp(
             query_scores,
@@ -218,44 +226,22 @@ def collect_domain_data(d, output_dir: str, min_variants: int, path=[]) -> List:
     return domain_data
 
 
-def get_missense_intolerant_domains(mechanism_tsv: str, 
-                                    intolerant_tsv: str, 
-                                    min_odds_ratio: float = 0.75) -> Set[str]:
-    """
-    Identify domains that are both intolerant to variation and not enriched for truncating variants.
-    
-    Args:
-        mechanism_tsv: Path to TSV containing mechanism analysis results (Based on ClinVar)
-        intolerant_tsv: Path to TSV containing intolerant domain results (Based on ClinVar)
-        min_odds_ratio: Minimum odds ratio for missense vs truncating variants
-        
-    Returns:
-        Set of domain identifiers meeting both criteria
-    """
-    # Load both TSV files
-    mech_df = pd.read_csv(mechanism_tsv, sep='\t')
-    intol_df = pd.read_csv(intolerant_tsv, sep='\t')
-    
-    # Filter intolerant domains based on pathogenic/benign fractions
-    intolerant_domains = set(intol_df['domain'])
-    
-    # Filter mechanism domains based on odds ratio
-    mechanism_domains = set(
-        mech_df[
-            (mech_df['pvalue'] > 0.05) &
-            (mech_df['odds_ratio'] >= min_odds_ratio) &
-            (~mech_df['odds_ratio'].isna())  # Exclude domains with undefined odds ratios
-        ]['domain']
-    )
-    
-    # Find intersection of both sets
-    missense_intolerant = intolerant_domains.intersection(mechanism_domains)
-    
-    logger.info(f"Found {len(missense_intolerant)} domains that are both intolerant to missense and truncating variants:")
-    logger.info(f"- {len(intolerant_domains)} domains are intolerant to variation")
-    logger.info(f"- {len(mechanism_domains)} domains have odds ratio >= {min_odds_ratio}")
-    
-    return missense_intolerant
+def identify_functional_domain(domain_path, dm_instance=None, func_map_dict = None, func_pred_dict = None, interpro_map_dict = None):
+    domain_name = domain_path.split(':', 1)[-1] # Remove ENSG ids
+    interpro_entry = dm_instance.query_interpro_entry_vep_anno(domain_name, interpro_map_dict).get("interpro_entries", None)
+    if interpro_entry:
+        interpro_id = interpro_entry[0][0]
+        interpro_type = interpro_entry[0][1]
+        go_terms = interpro_entry[0][4]
+        functional = False if all([go_term[1] != "molecular_function" for go_term in go_terms]) else True
+    else:
+        return None
+    if functional and interpro_type in ["Conserved_Site", "Binding_site", "Active_site", "Domain"]:
+        return "Functional"
+    elif not functional and interpro_type in ["Domain", "Conserved_Site", "Binding_site", "Active_site"]:
+        return "Non-functional"
+    else:
+        return None
 
 
 def visualize_domain_distribution(scores_dict: dict, output_dir: str, threads: int, assembly: str='hg19') -> Dict[str, np.ndarray]:
@@ -405,9 +391,7 @@ def generate_transcript_exon_domain_map(scores_dict: dict) -> Dict[str, Dict[str
 
 
 def analyze_domain_data(pickle_file: str, 
-                       output_dir: str, 
-                       intolerant_domains_tsv: str = None,
-                       mechanism_tsv: str = None,
+                       output_dir: str,
                        threads: int = 12,
                        fdr_threshold: float = 0.05,
                        assembly: str = 'hg19'):
@@ -445,16 +429,24 @@ def analyze_domain_data(pickle_file: str,
     
     # Continue with existing analysis
     domain_scores = visualize_domain_distribution(scores_dict, output_dir, threads, assembly)
+    dm_instance = DomainNormalizer()
+
+    interpro_map_pickle = os.path.join(os.path.dirname(self_directory), 'data', 'InterPro', 'Interpro_entry_mapping.pkl.gz')
+    interpro_map_dict = pickle.load(gzip.open(interpro_map_pickle, 'rb'))
+
+    functional_map = os.path.join(os.path.dirname(self_directory), 'data', 'InterPro', 'curated_InterPro_func_domains.tsv.gz')
+    func_map_df = pd.read_table(functional_map, low_memory=False)
+    func_map_dict = dict(zip(func_map_df['IPR_ID'], func_map_df['Molecular_Function_GO_Terms']))
+    func_pred_dict = dict(zip(func_map_df['IPR_ID'], func_map_df['Functionality_Assessment']))
     
     # Pickout the reference domains
-    ref_mis_intolerant_domains = get_missense_intolerant_domains(mechanism_tsv, intolerant_domains_tsv)
-    ref_domain_scores = {domain: domain_scores.get(domain) for domain in ref_mis_intolerant_domains if domain in domain_scores}
-    logger.info(f"Found {len(ref_domain_scores)} reference domains both intolerant to missense and truncating variants")
+    ref_domain_scores = {domain: domain_s for domain, domain_s in domain_scores.items() if identify_functional_domain(domain, dm_instance, func_map_dict, func_pred_dict, interpro_map_dict) == "Functional" }
+    logger.info(f"Found {len(ref_domain_scores)} well established functional domains/sites as reference domains")
 
     # Prepare data for parallel processing
     domain_tasks = [
         (domain_path, scores, ref_domain_scores)
-        for domain_path, scores in domain_scores.items()
+        for domain_path, scores in domain_scores.items() if domain_path not in ref_domain_scores
         ]
 
     # Process domains in parallel
@@ -513,43 +505,31 @@ def analyze_domain_data(pickle_file: str,
         
         # Get intolerant domains from analysis results
         analysis_intolerant_domains = set(
-            results_df[~results_df['is_more_tolerant']]['domain'].tolist()
+            results_df[~results_df['is_more_tolerant']]['domain'].unique().tolist()
         )
-        
-        # Get intolerant domains from input file
-        input_intolerant_domains = set()
-        if intolerant_domains_tsv:
-            input_intolerant_domains = set(
-                pd.read_csv(intolerant_domains_tsv, sep='\t')['domain']
-            )
-        
-        # Merge both sets of intolerant domains
-        all_intolerant_domains = analysis_intolerant_domains.union(input_intolerant_domains)
+        logger.info(f"Found {len(analysis_intolerant_domains)} intolerant domains from analysis")
+        # Merge with reference domains
+        analysis_intolerant_domains = analysis_intolerant_domains | set(ref_domain_scores.keys())
+        logger.info(f"Found {len(analysis_intolerant_domains)} intolerant domains from analysis after merging with reference domains")
         
         # Save merged intolerant domains to pickle file
         intolerant_domains_pickle = os.path.join(output_dir, f'all_intolerant_domains.{assembly}.pkl')
         with open(intolerant_domains_pickle, 'wb') as f:
-            pickle.dump(all_intolerant_domains, f)
+            pickle.dump(analysis_intolerant_domains, f)
         
         logger.info(f"Found {len(analysis_intolerant_domains)} intolerant domains from analysis")
-        logger.info(f"Found {len(input_intolerant_domains)} intolerant domains from input file")
-        logger.info(f"Total {len(all_intolerant_domains)} unique intolerant domains")
-        logger.info(f"Saved merged intolerant domains to {intolerant_domains_pickle}")
+        logger.info(f"Saved intolerant domains to {intolerant_domains_pickle}")
 
 
 if __name__ == '__main__':
     parser = ap.ArgumentParser(description='Analyze domain data from the pickle file.')
     parser.add_argument('--pickle_file', required=True, help='Path to the pickle file containing scores_dict')
     parser.add_argument('--output_dir', required=True, help='Directory to save analysis outputs')
-    parser.add_argument('--intolerant_domains_tsv', required=True, help='Path to TSV file containing intolerant domains (Based on ClinVar)')
-    parser.add_argument('--mechanism_tsv', required=True, help='Path to TSV file containing mechanism analysis results (Based on ClinVar)')
     parser.add_argument('--threads', type=int, default=62, help='Number of threads for parallel processing (default: 12)')
     parser.add_argument('--assembly', type=str, default='hg19', help='Assembly version, either hg19 or hg38')
     args = parser.parse_args()
     
     analyze_domain_data(args.pickle_file, 
                         args.output_dir, 
-                        args.intolerant_domains_tsv, 
-                        args.mechanism_tsv,
                         args.threads,
                         assembly=args.assembly)

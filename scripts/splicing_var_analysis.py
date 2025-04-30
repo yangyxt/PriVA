@@ -88,6 +88,7 @@ def splicing_altering_per_row(row,
     '''
     transcript_id = row['Feature']
     splicevault_events = row['SpliceVault_top_events']
+    spliceai_delta = float(row['SpliceVault_SpliceAI_delta'])
     intron_pos = None if na_value(row['INTRON']) else row['INTRON']
     exon_pos = None if na_value(row['EXON']) else row['EXON']
     cds_pos = None if na_value(row["CDS_position"]) else row["CDS_position"]
@@ -95,6 +96,7 @@ def splicing_altering_per_row(row,
 
     # First get SpliceVault interpretation
     splicevault_lof, splicevault_len_changing = SpliceVault_interpretation( splicevault_events, 
+                                                                            spliceai_delta,
                                                                             transcript_id, 
                                                                             transcript_domain_map, 
                                                                             intolerant_domains,
@@ -102,7 +104,8 @@ def splicing_altering_per_row(row,
                                                                             cds_pos,
                                                                             intron_pos,
                                                                             exon_pos,
-                                                                            dm_instance)
+                                                                            dm_instance )
+        
     
     # Then get SpliceAI interpretation
     DP_AG = float(row['SpliceAI_pred_DP_AG'])
@@ -130,6 +133,7 @@ def splicing_altering_per_row(row,
                                                                   spliceai_cutoff,
                                                                   interpro_entry_map_dict,
                                                                   dm_instance)
+
     return splicevault_lof or spliceai_lof, splicevault_len_changing or spliceai_len_changing
     
 
@@ -146,8 +150,8 @@ def SpliceAI_interpretation(DS_AG,
                             transcript_domain_map: dict, 
                             intolerant_domains: set, 
                             cds_pos = None,
-                            intron_pos = None, 
-                            exon_pos = None,
+                            intron_pos = None,  # 1/8 or 1-3/8 for indels
+                            exon_pos = None,  # 1/8 or 1-3/8 for indels
                             cutoff = 0.8,
                             interpro_entry_map_dict = None,
                             dm_instance = None) -> tuple:
@@ -201,6 +205,10 @@ def SpliceAI_interpretation(DS_AG,
     # Then look at acceptor-loss
     if DS_AL > cutoff:
         length_changing = True
+        if exon_pos:
+            affected_exons.add(int(exon_pos.split('/')[0]))
+        if intron_pos:
+            affected_exons.add(int(intron_pos.split('/')[0]) + 1)
         # Based on the input annotations, we cannot determine whether:
         # 1. There is a downstream cryptic acceptor site that can rescue some part of the downstream exon
         # 2. Whether the truncated part will cause a frameshift effect
@@ -227,6 +235,7 @@ def SpliceAI_interpretation(DS_AG,
 
 
 def SpliceVault_interpretation(value, 
+                               spliceai_delta,
                                transcript_id, 
                                transcript_domain_map, 
                                intolerant_domains,
@@ -264,26 +273,30 @@ def SpliceVault_interpretation(value,
         analysis_results.append(event_analysis)
 
     # There are in total 4 events, if all of them are harmful, then return "LoF"
-    if all([result['is_harmful'] for result in analysis_results]):
-        logger.info(f"All 4 events are harmful for {transcript_id}, the interpretations are {analysis_results}\n")
+    # Aggregate the fraction of harmful events
+    # Aggregate the fraction of not harmful events
+    # If the odds ratio is greater than 20, then return "LoF"
+    # Otherwise, return "VOUS"
+    harmful_frac = sum([result['fraction_of_samples'] for result in analysis_results if result['is_harmful']])
+    non_harmful_frac = sum([result['fraction_of_samples'] for result in analysis_results if not result['is_harmful']])
+    len_change_frac = sum([result['fraction_of_samples'] for result in analysis_results if result['length_changing']])
+    no_len_change_frac = sum([result['fraction_of_samples'] for result in analysis_results if not result['length_changing']])
+    harmful_odds_ratio = harmful_frac / non_harmful_frac if non_harmful_frac > 0 else 20
+    len_change_odds_ratio = len_change_frac / no_len_change_frac if no_len_change_frac > 0 else 20
+    if harmful_odds_ratio >= 20 and harmful_frac > 0.05 and spliceai_delta >= 0.5:
+        logger.info(f"For {transcript_id}, there are {harmful_frac} fraction of samples with harmful events and {non_harmful_frac} fraction of samples with non-harmful events, the fraction ratio is {harmful_odds_ratio}, so return LoF, the interpretations are {analysis_results}\n")
+        return True, True
+    elif harmful_odds_ratio >= 20 and harmful_frac > 0.4 and spliceai_delta >= 0.3:
+        logger.info(f"For {transcript_id}, there are {harmful_frac} fraction of samples with harmful events and {non_harmful_frac} fraction of samples with non-harmful events, the fraction ratio is {harmful_odds_ratio}, so return LoF, the interpretations are {analysis_results}\n")
         return True, True
     else:
-        # Aggregate the fraction of harmful events
-        # Aggregate the fraction of not harmful events
-        # If the odds ratio is greater than 10, then return "LoF"
-        # Otherwise, return "VOUS"
-        harmful_frac = sum([result['fraction_of_samples'] for result in analysis_results if result['is_harmful']])
-        non_harmful_frac = sum([result['fraction_of_samples'] for result in analysis_results if not result['is_harmful']])
-        odds_ratio = harmful_frac / non_harmful_frac
-        if odds_ratio >= 20:
-            logger.info(f"For {transcript_id}, there are {harmful_frac} fraction of samples with harmful events and {non_harmful_frac} fraction of samples with non-harmful events, the fraction ratio is {odds_ratio}, so return LoF, the interpretations are {analysis_results}\n")
-            return True, True
+        logger.info(f"For {transcript_id}, there are {harmful_frac} fraction of samples with harmful events and {non_harmful_frac} fraction of samples with non-harmful events, the fraction ratio is {harmful_odds_ratio}, so return VOUS, the interpretations are {analysis_results}\n")
+        if len_change_odds_ratio >= 20 and len_change_frac > 0.05 and spliceai_delta >= 0.5:
+            return False, True
+        elif len_change_odds_ratio >= 20 and len_change_frac > 0.4 and spliceai_delta >= 0.3:
+            return False, True
         else:
-            logger.info(f"For {transcript_id}, there are {harmful_frac} fraction of samples with harmful events and {non_harmful_frac} fraction of samples with non-harmful events, the fraction ratio is {odds_ratio}, so return VOUS, the interpretations are {analysis_results}\n")
-            if all([result['length_changing'] for result in analysis_results]):
-                return False, True
-            else:
-                return False, False
+            return False, False
             
     
 
@@ -456,6 +469,8 @@ def process_cryptic_donor(pos_str: str,
         # Downstream cryptic donor (in intron)
         if intron_pos:
             reason.append(f'downstream_cryptic_donor_in_intron_{intron_num}')
+        if abs(offset) > 3:
+            length_changing = True
     else:
         # Upstream cryptic donor (in exon)
         if abs(offset) > 3:  # Ignore very close cryptic sites
@@ -539,6 +554,7 @@ def process_cryptic_acceptor(pos_str: str,
             affected_exons.add(intron_num + 1)
             reason.append(f'upstream_cryptic_acceptor_in_intron_{intron_num}')
     else:
+        length_changing = True
         # Downstream cryptic acceptor (in exon)
         if not na_value(exon_pos):
             reason.append(f'downstream_cryptic_acceptor_in_exon_{exon_num}')

@@ -10,9 +10,13 @@ import argparse as ap
 from typing import Tuple, Dict
 import multiprocessing as mp
 from multiprocessing import Manager
+from scipy import stats
 from scipy.stats import binom
 import mmap
 import gc
+import gzip
+
+
 
 from stat_protein_domain_amscores import nested_defaultdict
 from protein_domain_mapping import DomainNormalizer
@@ -60,8 +64,21 @@ def vep_consq_interpret_per_row(row: Dict) -> Tuple[bool, bool]:
         'feature_truncation'
     }
     
-    is_lof = any(c in consq for c in lof_criteria) | (loftee_result == 'HC')
-    is_length_changing = is_lof or any(c in consq for c in length_changing_criteria)
+    is_lof = any(c in consq for c in lof_criteria) & (loftee_result == 'HC')
+
+    # For pure splicing related consequences, we trust SpliceAI and SpliceVault more than VEP
+    splicing_criteria = {
+        'splice_acceptor_variant',
+        'splice_donor_variant',
+        'splice_region_variant',
+        'splice_donor_5th_base_variant',
+        'splice_donor_region_variant',
+        'splice_polypyrimidine_tract_variant'
+    }
+    splicing_lof = row.get('splicing_lof', False)
+
+    is_lof = splicing_lof if all(c in consq for c in splicing_criteria) else is_lof
+    is_length_changing = is_lof or any(c in consq for c in length_changing_criteria) or any(c in consq for c in lof_criteria)
     
     return is_lof, is_length_changing
 
@@ -326,7 +343,6 @@ def PVS1_criteria(df: pd.DataFrame,
                   clinvar_patho_exon_af_stat: str,
                   interpro_entry_map_pkl: str,
                   ped_df: pd.DataFrame = None,
-                  fam_name: str = None,
                   tranx_exon_domain_map_pkl: str = None) -> pd.DataFrame:
     # LoF is high confidence if it is a LoF variant and the consequence is known
     # VEP LoF, splicing LoF, UTRAnnotator LoF, ClinVar Pathogenic
@@ -421,7 +437,7 @@ def PVS1_criteria(df: pd.DataFrame,
     clinvar_pathogenic = clinvar_pathogenic
     logger.info(f"{clinvar_pathogenic.sum()} variants are having ClinVar pathogenic variants and located in exons with median pathogenic AF < 0.01")
 
-    if not ped_df is None and not fam_name is None:
+    if not ped_df is None:
         proband = ped_df.loc[(ped_df['#FamilyID'] == fam_name) & (ped_df['Phenotype'].isin(["2", 2])), 'IndividualID'].values[0]
         homozygous = df[proband].str.count("0") == 0
         pvs1_criteria = ( lof_criteria & intolerant_lof ) | \
@@ -1037,12 +1053,14 @@ def locate_less_char_region(row: dict, am_intolerant_motifs: dict) -> Tuple[bool
     return (combo in am_intolerant_motifs['max_score_regions']) or any(key_regex.match(x) for x in am_intolerant_motifs['max_score_regions']), \
            (combo in am_intolerant_motifs['min_score_regions']) or any(key_regex.match(x) for x in am_intolerant_motifs['min_score_regions'])
 
-    
+
+        
 
 
 def PM1_criteria(df: pd.DataFrame, 
                  intolerant_domains_pkl: str, 
                  intolerant_motifs_pkl: str,
+                 pvs1_criteria,
                  threads: int = 10) -> np.ndarray:
     # Memory-mapped approach
     with open(intolerant_domains_pkl, 'rb') as f:
@@ -1060,16 +1078,20 @@ def PM1_criteria(df: pd.DataFrame,
     loc_intol_domain = np.array(results)
     logger.info(f"There are {np.sum(loc_intol_domain)} variants located in a protein domain that is seemingly intolerant to AA changes according to AM scores")
     
-    truncating = df['vep_consq_length_changing'] | df['splicing_len_changing'] | df['5UTR_len_changing'] | df['vep_consq_lof'] | df['splicing_lof'] | df['5UTR_lof']
+    # We need to check whether the altered splicing event disrupts the intolerant domains downstream of the splicing site, splicing lof already considered affected domains
+    splicing_disrupt_domain = df['splicing_lof'] & ~pvs1_criteria
+
+    truncating = (df['vep_consq_length_changing'] | df['splicing_len_changing'] | df['5UTR_len_changing'] | df['vep_consq_lof'] | df['5UTR_lof']) & ~pvs1_criteria
 
     missense = df['Consequence'].str.contains('missense_variant')
     logger.info(f"There are {missense.sum()} missense variants")
-    missense_damaging = df["am_class"].str.contains('athogenic')
+    missense_damaging = df["am_class"].str.contains('athogenic').fillna(False)
     logger.info(f"There are {missense_damaging.sum()} missense variants that are considered damaging by AlphaMissense")
     missense_damaging = missense_damaging | (df["PrimateAI"] > 0.9)
     logger.info(f"There are {missense_damaging.sum()} missense variants that are considered damaging after considering the PrimateAI score")
 
-    missense_benign = df["am_class"].str.contains('benign')
+    missense_benign = df["am_class"].str.contains('benign').fillna(False)
+    logger.info(f"There are {missense_benign.sum()} missense variants that are considered benign by AlphaMissense")
     if "MaveDB_PS3" in df.columns:
         # If DMS says the variant is damaging (decreased activity or expression), then consider it as damaging
         missense_damaging = missense_damaging | df["MaveDB_PS3"]
@@ -1088,8 +1110,9 @@ def PM1_criteria(df: pd.DataFrame,
     logger.info(f"There are {np.sum(min_am_score_motifs)} variants located in a mutational hotspot that is seemingly intolerant to AA changes according to AM scores")
     logger.info(f"There are {np.sum(max_am_score_motifs)} variants located in a mutational hotspot that is seemingly intolerant to AA changes according to most severe AM scores")
     return ( max_am_score_motifs & (missense_damaging | truncating) ) | \
-           ( min_am_score_motifs & (truncating | missense) & ~missense_benign ) | \
-           ( loc_intol_domain & (missense | truncating) & ~missense_benign )
+           ( min_am_score_motifs & (truncating | missense) & np.logical_not(missense_benign) ) | \
+           ( loc_intol_domain & (missense | truncating) & np.logical_not(missense_benign) ) | \
+           splicing_disrupt_domain
 
 
 
@@ -1107,99 +1130,169 @@ def PM4_criteria(df: pd.DataFrame) -> np.ndarray:
 
 
 
-def PP2_BP1_criteria(df: pd.DataFrame, 
-                     domain_mechanism_tsv: str, 
-                     conf_level: float = 0.05,
-                     chunk_size: int = 10000) -> Tuple[pd.Series, pd.Series]:
+def analyze_bp1_pp2(gene_stat_dict: Dict):
     """
-    Memory-efficient implementation of PP2/BP1 criteria evaluation.
+    Analyze BP1 and PP2 criteria for a gene based on variant statistics.
+    
+    Args:
+        gene_stat_dict: Dictionary containing gene-level variant statistics
+        
+    Returns:
+        Dictionary with BP1 and PP2 analysis results
+    """
+    gene = gene_stat_dict['ensembl_id']
+    if len(gene_stat_dict) <= 1:
+        return (gene, (False, False))
+
+    # Get pathogenic variants
+    patho_variants = gene_stat_dict['clinvar_pathogenic']
+    total_patho = len(patho_variants)
+    
+    if total_patho == 0:
+        return (gene, (False, False))
+    
+    # BP1 Analysis
+    # Combine large AA change and NMD variants
+    large_aa_nmd_variants = (gene_stat_dict['large_aachange'] | 
+                            gene_stat_dict['putative_nmd_variants'])
+    patho_large_aa_nmd = len(patho_variants & large_aa_nmd_variants)
+    bp1_fraction = patho_large_aa_nmd / total_patho
+    bp1_granted = bp1_fraction >= 0.7
+    
+    # PP2 Analysis
+    # Create contingency table for small vs large AA changes
+    small_aa_variants = gene_stat_dict['small_aachange']
+    large_aa_variants = gene_stat_dict['large_aachange']
+    
+    # Count variants in each category
+    patho_small_aa = len(patho_variants & small_aa_variants)
+    patho_large_aa = len(patho_variants & large_aa_variants)
+    non_patho_small_aa = len(small_aa_variants - patho_variants)
+    non_patho_large_aa = len(large_aa_variants - patho_variants)
+    
+    # Create contingency table
+    table = [[patho_small_aa, patho_large_aa],
+             [non_patho_small_aa, non_patho_large_aa]]
+    
+    # Initialize PP2 results
+    pp2_granted = False
+    pp2_test_used = 'none'
+    pp2_pvalue = np.nan
+    pp2_odds_ratio = np.nan
+    
+    # Check if we can perform statistical tests
+    total_count = sum(sum(row) for row in table)
+    min_cell_count = min(min(row) for row in table)
+    
+    if (total_count >= 5 and 
+        all(sum(row) > 0 for row in table) and 
+        all(sum(col) > 0 for col in zip(*table))):
+        
+        if total_count >= 20 and min_cell_count >= 5:
+            # Use Chi-square test
+            chi2, pp2_pvalue = stats.chi2_contingency(table)[0:2]
+            pp2_odds_ratio = ((table[0][1] * table[1][0]) / 
+                            (table[0][0] * table[1][1]))  # Note: reversed for large AA changes
+            pp2_test_used = 'chi_square'
+        else:
+            # Use Fisher's exact test
+            pp2_odds_ratio, pp2_pvalue = stats.fisher_exact(table, alternative='greater')
+            pp2_test_used = 'fisher'
+        
+        # Adjust p-value of 1 to 0.99999 to avoid log10(1) = 0
+        pp2_pvalue = min(pp2_pvalue, 0.99999)
+        
+        # Grant PP2 if there is NO significant enrichment of large AA changes
+        # (p-value > 0.05) and missense variants are ≥50% of pathogenic variants
+        pp2_fraction = patho_small_aa / total_patho
+        pp2_granted = (pp2_pvalue > 0.05) and (pp2_fraction >= 0.5)
+    else:
+        # Fall back to fraction-based approach
+        pp2_fraction = patho_small_aa / total_patho
+        pp2_granted = pp2_fraction >= 0.5
+        pp2_test_used = 'fraction'
+    
+    result_dict = {
+        'bp1_granted': bp1_granted,
+        'bp1_fraction': bp1_fraction,
+        'pp2_granted': pp2_granted,
+        'pp2_fraction': patho_small_aa / total_patho if total_patho > 0 else 0.0,
+        'pp2_test_used': pp2_test_used,
+        'pp2_pvalue': pp2_pvalue,
+        'pp2_odds_ratio': pp2_odds_ratio
+    }
+
+    return (gene, (result_dict['pp2_granted'], result_dict['bp1_granted']))
+
+
+
+
+def PP2_BP1_criteria(df: pd.DataFrame, 
+                     clinvar_stats_dict: dict,
+                     threads: int = 10) -> Tuple[pd.Series, pd.Series]:
+    """
+    Efficient implementation of PP2/BP1 criteria evaluation using 
+    ClinVar statistics dictionary.
     
     Args:
         df: Variant annotation DataFrame
-        domain_mechanism_tsv: Path to domain mechanism analysis results
-        conf_level: P-value threshold for significance
+        clinvar_stats_dict: Dictionary containing ClinVar statistics per gene
+        threads: Number of threads for multiprocessing
         
     Returns:
         Tuple[pd.Series, pd.Series]: PP2 and BP1 criteria boolean series
     """
-    # Read domain mechanism data more efficiently by selecting only needed columns
-    domain_df = pd.read_table(
-        domain_mechanism_tsv, 
-        usecols=['gene_id', 'domain', 'pvalue', 'gene_pvalue'],
-        low_memory=False
-    )
     
-    # Create sets of tolerant/intolerant genes and domains using boolean indexing
-    # This avoids creating intermediate DataFrames
-    tolerant_genes = set(domain_df.loc[domain_df['gene_pvalue'] > conf_level, 'gene_id'])
-    intolerant_genes = set(domain_df.loc[domain_df['gene_pvalue'] < conf_level, 'gene_id'])
-    tolerant_domains = set(domain_df.loc[domain_df['pvalue'] > conf_level, 'domain'])
-    intolerant_domains = set(domain_df.loc[domain_df['pvalue'] < conf_level, 'domain'])
-
-    logger.info(f"There are {len(tolerant_genes)} tolerant genes and {len(intolerant_genes)} intolerant genes")
-    logger.info(f"There are {len(tolerant_domains)} tolerant domains and {len(intolerant_domains)} intolerant domains")
+    # Get unique genes
+    unique_genes = df['Gene'].dropna().unique()
+    logger.info(f"Processing BP1/PP2 criteria for {len(unique_genes)} unique genes")
     
-    # Clear domain_df from memory
-    del domain_df
-    gc.collect()
+    # Process genes in parallel
+    with mp.Pool(threads) as pool:
+        gene_results = pool.imap_unordered(analyze_bp1_pp2, (clinvar_stats_dict.get(gene, {"ensembl_id": gene}) for gene in unique_genes))
+        # Convert to dictionary for faster lookups
+        gene_criteria_dict = dict(gene_results)
     
-    # Initialize result arrays
-    n_variants = len(df)
-    pp2_criteria = np.zeros(n_variants, dtype=bool)
-    bp1_criteria = np.zeros(n_variants, dtype=bool)
+    # Create result Series using map operation (vectorized)
+    gene_pp2 = df['Gene'].map(lambda g: gene_criteria_dict.get(g, (False, False))[0] if pd.notna(g) else False)
+    gene_bp1 = df['Gene'].map(lambda g: gene_criteria_dict.get(g, (False, False))[1] if pd.notna(g) else False)
     
-    # Process in chunks to reduce memory usage
-    for start_idx in range(0, n_variants, chunk_size):
-        end_idx = min(start_idx + chunk_size, n_variants)
-        chunk_slice = slice(start_idx, end_idx)
-        
-        # Process only variants that are missense
-        missense_mask = df.iloc[chunk_slice]['Consequence'].str.contains('missense_variant')
-        if not missense_mask.any():
-            continue
-            
-        # Get relevant data for missense variants
-        chunk_genes = df.iloc[chunk_slice]['Gene'][missense_mask]
-        chunk_domains = df.iloc[chunk_slice]['DOMAINS'][missense_mask]
-        
-        # Process domains for missense variants
-        for i, (gene, domains_str) in enumerate(zip(chunk_genes, chunk_domains)):
-            if pd.isna(domains_str):
-                continue
-                
-            # Create domain identifiers
-            domain_ids = [f"{gene}:{domain}" for domain in str(domains_str).split('&')]
-            
-            # Check domain matches
-            has_tolerant_domain = any(d in tolerant_domains for d in domain_ids)
-            has_intolerant_domain = any(d in intolerant_domains for d in domain_ids)
-            
-            # Update criteria arrays for this variant
-            true_idx = chunk_slice.start + missense_mask[:i+1].sum() - 1
-            pp2_criteria[true_idx] = (gene in tolerant_genes) or has_tolerant_domain
-            bp1_criteria[true_idx] = (gene in intolerant_genes) or has_intolerant_domain
+    # Apply PP2 only to missense variants
+    is_missense = df['Consequence'].str.contains('missense_variant', na=False)
+    pp2_criteria = gene_pp2 & is_missense
     
-    return pd.Series(pp2_criteria, index=df.index), pd.Series(bp1_criteria, index=df.index)
+    # BP1 applies to all variants
+    bp1_criteria = gene_bp1 & is_missense
+    
+    # Log stats
+    logger.info(f"Granted PP2 to {pp2_criteria.sum()} variants")
+    logger.info(f"Granted BP1 to {bp1_criteria.sum()} variants")
+    
+    return pp2_criteria, bp1_criteria
 
 
 
 def PP3_BP4_criteria(df: pd.DataFrame) -> pd.Series:
     # PP3: predicted to be deleterious by in-silico tools
     # Including PrimateAI (Missense), CADD, AlphaMissense (Missense), VEP, SpliceAI, SpliceVault, UTRAnnotator
-
+    
+    missense_variant = df['Consequence'].str.contains('missense_variant') & np.logical_not(df['Consequence'].str.contains('splice')) & np.logical_not(df['Consequence'].str.contains('stop')) & np.logical_not(df['Consequence'].str.contains('frameshift'))
+    splice_variant = df['Consequence'].str.contains('splice') & np.logical_not(df['Consequence'].str.contains('missense')) & np.logical_not(df['Consequence'].str.contains('stop')) & np.logical_not(df['Consequence'].str.contains('frameshift'))
     # BP4: variant is reported benign
-    return (df['PrimateAI'] > 0.9) | \
-           (df['CADD_phred'] >= 20) | \
-           (df['am_class'].str.contains('pathogenic')) | \
-           (df['vep_consq_lof'] == True) | \
-           (df['splicing_lof'] == True) | \
-           (df['5UTR_lof'] == True), \
-           (df['PrimateAI'] < 0.8) & \
-           (df['CADD_phred'] < 20) & \
-           (np.logical_not(df['am_class'].str.contains('athogenic'))) & \
-           (df['vep_consq_lof'] != True) & \
-           (df['splicing_lof'] != True) & \
-           (df['5UTR_lof'] != True)
+    PP3 =  ((df['PrimateAI'] > 0.9) & missense_variant) | \
+           ((df['CADD_phred'] >= 20) & np.logical_not(splice_variant) & np.logical_not(missense_variant)) | \
+           (df['am_class'].str.contains('pathogenic') & missense_variant) | \
+           ((df['vep_consq_lof'] == True) & np.logical_not(splice_variant) & np.logical_not(missense_variant)) | \
+           ((df['splicing_lof'] == True) & splice_variant) | \
+           (df['5UTR_lof'] == True)
+    missense_benign = (df['PrimateAI'] < 0.8) & np.logical_not(df['am_class'].str.contains('athogenic')) & ((df['PrimateAI'] < 0.7) | df['am_class'].str.contains('benign')) & missense_variant
+    splice_benign = np.logical_not(df['splicing_lof']) & splice_variant
+    utr_benign = np.logical_not(df['5UTR_lof']) & np.logical_not(splice_variant) & np.logical_not(missense_variant)
+    other_benign = np.logical_not(df['vep_consq_lof']) & np.logical_not(df['CADD_phred'] > 15) & np.logical_not(splice_variant) & np.logical_not(missense_variant)
+    BP4 = missense_benign | splice_benign | (utr_benign & other_benign)
+    
+    return PP3, BP4
+           
 
 
 def PP5_BP6_criteria(df: pd.DataFrame) -> pd.Series:
@@ -1226,14 +1319,14 @@ def BS1_criteria(df: pd.DataFrame,
     max_af_larger_incidence = np.where(common_vars.isna(), df['gnomAD_joint_AF'] > expected_incidence, common_vars)
     logger.info(f"There are {max_af_larger_incidence.sum()} variants having their PAF greater than the expected incidence of the disease")
     # For autosomal dominant disease, we can assign BS1 if the variant is observed the frequency of the variant is greater than the expected incidence of the disease
-    autosomal_dominant = autosomal & dominant & max_af_larger_incidence & np.logical_not(recessive) & np.logical_not(non_monogenic) & np.logical_not(non_mendelian)
-    autosomal_recessive = autosomal & recessive & (max_ind_incidence > expected_incidence) & np.logical_not(non_monogenic) & np.logical_not(non_mendelian)
+    autosomal_dominant = autosomal & dominant & max_af_larger_incidence & np.logical_not(recessive) & np.logical_not(non_monogenic) & np.logical_not(non_mendelian) & np.logical_not(incomplete_penetrance)
+    autosomal_recessive = autosomal & recessive & (max_ind_incidence > expected_incidence) & np.logical_not(non_monogenic) & np.logical_not(non_mendelian) & np.logical_not(incomplete_penetrance)
 
     # For X-linked disease, we can assign BS1 if the variant is observed the frequency of the variant is greater than the expected incidence of the disease
-    x_linked_recessive = x_linked & recessive & ((df['gnomAD_nhomalt_XX'] + df['gnomAD_nhomalt_XY'])/(df['gnomAD_joint_AN']/2) > expected_incidence) & np.logical_not(non_monogenic) & np.logical_not(non_mendelian)
-    x_linked_dominant = x_linked & dominant & max_af_larger_incidence & np.logical_not(non_monogenic) & np.logical_not(non_mendelian)
+    x_linked_recessive = x_linked & recessive & ((df['gnomAD_nhomalt_XX'] + df['gnomAD_nhomalt_XY'])/(df['gnomAD_joint_AN']/2) > expected_incidence) & np.logical_not(non_monogenic) & np.logical_not(non_mendelian) & np.logical_not(incomplete_penetrance)
+    x_linked_dominant = x_linked & dominant & max_af_larger_incidence & np.logical_not(non_monogenic) & np.logical_not(non_mendelian) & np.logical_not(incomplete_penetrance)
     # For Y-linked disease, we can assign BS1 if the variant is observed the frequency of the variant is greater than the expected incidence of the disease
-    y_linked = y_linked & max_af_larger_incidence & np.logical_not(non_monogenic) & np.logical_not(non_mendelian)
+    y_linked = y_linked & max_af_larger_incidence & np.logical_not(non_monogenic) & np.logical_not(non_mendelian) & np.logical_not(incomplete_penetrance)
     greater_than_disease_incidence = autosomal_dominant | autosomal_recessive | x_linked_recessive | x_linked_dominant | y_linked
     logger.info(f"There are {greater_than_disease_incidence.sum()} variants having their PAF greater than the expected incidence of the disease")
     
@@ -1922,7 +2015,7 @@ def calculate_posterior_probability(row, prior_probability=0.1, exp_base=2, odds
                         "PS1": 1/exp_base, "PS2": 1/exp_base, "PS3": 1/exp_base, "PS4": 1/exp_base,
                         "PM1": 1/exp_base**2, "PM2": 1/exp_base**3, "PM3": 1/exp_base**2, "PM4": 1/exp_base**2, "PM5": 1/exp_base**2, "PM6": 1/exp_base**2,
                         "PP1": 1/exp_base**3, "PP2": 1/exp_base**3, "PP3": 1/exp_base**3, "PP4": 1/exp_base**3, "PP5": 1/exp_base**3,
-                        "BA1": -1,
+                        "BA1": -5,
                         "BS1": -1/exp_base, "BS2": -1/exp_base, "BS3": -1/exp_base, "BS4": -1/exp_base,
                         "BP1": -1/exp_base**3, "BP2": -1/exp_base**3, "BP3": -1/exp_base**3, "BP4": -1/exp_base**3, "BP5": -1/exp_base**3, "BP6": -1/exp_base**3, "BP7": -1/exp_base**3}
 
@@ -1969,13 +2062,13 @@ def calculate_posterior_probability(row, prior_probability=0.1, exp_base=2, odds
         posterior_probability = 0
 
     # Classify the variant based on the posterior probability
-    if posterior_probability >= 0.99:
+    if posterior_probability > 0.99:
         acmg_class = "Pathogenic"
     elif posterior_probability >= 0.9:
         acmg_class = "Likely Pathogenic"
-    elif posterior_probability <= 0.001:
+    elif posterior_probability < 0.001:
         acmg_class = "Benign"
-    elif posterior_probability <= 0.1:
+    elif posterior_probability < 0.05:
         acmg_class = "Likely Benign"
     else:
         acmg_class = "Uncertain Significance"
@@ -2108,7 +2201,7 @@ def ACMG_criteria_assign(anno_table: str,
                          interpro_entry_map_pkl: str,
                          intolerant_domains_pkl: str,
                          intolerant_motifs_pkl: str,
-                         domain_mechanism_tsv: str,
+                         clinvar_gene_stat_pkl: str,
                          tranx_exon_domain_map_pkl: str,
                          repeat_region_file: str,
                          mavedb_metadata_tsv: str = "",
@@ -2205,8 +2298,8 @@ def ACMG_criteria_assign(anno_table: str,
     PS4 cannot be applied because usually we dont have enough cases to determine the frequency of the variant
     '''
     # Apply PM1 criteria, mutational hotspot or well-established functional protein domain
-    pm1_criteria = PM1_criteria(anno_df, intolerant_domains_pkl, intolerant_motifs_pkl, threads)
-    pm1_criteria = pm1_criteria & ~pvs1_criteria & ~ps1_criteria
+    pm1_criteria = PM1_criteria(anno_df, intolerant_domains_pkl, intolerant_motifs_pkl, pvs1_criteria, threads)
+    pm1_criteria = pm1_criteria & ~ps1_criteria
     logger.info(f"PM1 criteria applied, {pm1_criteria.sum()} variants are having the PM1 criteria")
     gc.collect()
     # Apply PM2 criteria, absent from gnomAD or extremely rare in gnomAD
@@ -2223,7 +2316,8 @@ def ACMG_criteria_assign(anno_table: str,
     PP1 cannot be applied because usually we dont have multiple family segregation information for each variant
     '''
     # Apply PP2 criteria, missense variant in a gene/domain that not only intolerant to truncating variants but also intolerant to missense variants
-    pp2_criteria, bp1_criteria = PP2_BP1_criteria(anno_df, domain_mechanism_tsv)
+    clinvar_gene_stat = pickle.load(gzip.open(clinvar_gene_stat_pkl, "rb"))
+    pp2_criteria, bp1_criteria = PP2_BP1_criteria(anno_df, clinvar_gene_stat)
     logger.info(f"PP2 criteria applied, {pp2_criteria.sum()} variants are having the PP2 criteria")
     logger.info(f"BP1 criteria applied, {bp1_criteria.sum()} variants are having the BP1 criteria")
     gc.collect()
@@ -2367,7 +2461,7 @@ if __name__ == "__main__":
     parser.add_argument("--interpro_entry_map_pkl", type=str, required=True)
     parser.add_argument("--intolerant_domains_pkl", type=str, required=True)
     parser.add_argument("--intolerant_motifs_pkl", type=str, required=True)
-    parser.add_argument("--domain_mechanism_tsv", type=str, required=True)
+    parser.add_argument("--clinvar_gene_stat_pkl", type=str, required=True)
     parser.add_argument("--tranx_exon_domain_map_pkl", type=str, required=True)
     parser.add_argument("--am_score_vcf", type=str, required=False, default=None)
     parser.add_argument("--alt_disease_vcf", type=str, required=False, default=None)
@@ -2387,7 +2481,7 @@ if __name__ == "__main__":
                                                     args.interpro_entry_map_pkl,
                                                     args.intolerant_domains_pkl,
                                                     args.intolerant_motifs_pkl,
-                                                    args.domain_mechanism_tsv,
+                                                    args.clinvar_gene_stat_pkl,
                                                     args.tranx_exon_domain_map_pkl,
                                                     args.repeat_region_file,
                                                     mavedb_metadata_tsv=args.mavedb_metadata_tsv,

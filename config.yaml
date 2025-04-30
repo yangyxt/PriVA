@@ -33,14 +33,12 @@ gnomad_vcf_chrX: /paedyl01/disk1/yangyxt/public_data/gnomAD/v4_dataset/gnomad.jo
 
 # Below we specify the path to the ClinVar VCF file, the path should be relatively constant
 clinvar_vcf: /paedyl01/disk1/yangyxt/public_data/clinvar/clinvar.hg19.vep.vcf.gz
-clinvar_pd_stat: /paedyl01/disk1/yangyxt/public_data/clinvar/clinvar.hg19.vep.prot.domain.stats.pkl
 clinvar_aa_stat: /paedyl01/disk1/yangyxt/public_data/clinvar/clinvar.hg19.vep.aa_change.stats.pkl
 clinvar_splice_stat: /paedyl01/disk1/yangyxt/public_data/clinvar/clinvar.hg19.vep.splice_change.stats.pkl
 clinvar_vcf_dir: /paedyl01/disk1/yangyxt/public_data/clinvar
 clinvar_patho_af_stat: /paedyl01/disk1/yangyxt/public_data/clinvar/clinvar.hg19.vep.patho_af_stat.pkl
 clinvar_patho_exon_af_stat: /paedyl01/disk1/yangyxt/public_data/clinvar/clinvar.hg19.vep.patho_exon_af_stat.pkl
-clinvar_intolerant_domains: /paedyl01/disk1/yangyxt/public_data/clinvar/intolerant_domains.hg19.tsv
-clinvar_intolerance_mechanisms: /paedyl01/disk1/yangyxt/public_data/clinvar/domain_mechanism_analysis.hg19.tsv
+clinvar_gene_stat: /paedyl01/disk1/yangyxt/acmg_auto/data/ClinVar/clinvar_2star_stats.pkl.gz
 
 # Below we specify the cache directory for VEP, you need to specify the locations before starting installing VEP and its plugins
 vep_cache_dir: "/paedyl01/disk1/yangyxt/public_data/VEP_caches"
@@ -105,7 +103,7 @@ cadd_version: "v1.7"
 # InterPro paths
 interpro_dir: "/paedyl01/disk1/yangyxt/public_data/Interpro"
 interpro_xml_gz_url: "https://ftp.ebi.ac.uk/pub/databases/interpro/current_release/interpro.xml.gz"
-interpro_mapping_pickle: "/paedyl01/disk1/yangyxt/public_data/Interpro/Interpro_entry_mapping.pickle"
+interpro_mapping_pickle: "/paedyl01/disk1/yangyxt/public_data/Interpro/Interpro_entry_mapping.pkl.gz"
 
 # Below we specify the path to the VCF file containing the variants from alternate disease patients, make sure it is normalized and biallelic
 # Make sure that the VCF file is in an reference genome that is consistent with the processing VCF file

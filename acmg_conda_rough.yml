@@ -1,0 +1,38 @@
+name: acmg
+channels:
+  - conda-forge
+  - bioconda
+  - r
+  - defaults
+dependencies:
+  - anaconda::git-lfs
+  - bcftools
+  - bioconda::cadd-scripts
+  - bioconda::crossmap
+  - bioconda::tsv-utils
+  - ca-certificates
+  - certifi
+  - conda-forge::parallel
+  - conda-forge::perl-compress-raw-zlib[version='>=2.201']
+  - ensembl-vep
+  - gengetopt
+  - gffutils
+  - mawk
+  - openssl
+  - perl-bio-procedural
+  - pybedtools
+  - pysam
+  - python=3.12
+  - sambamba
+  - samtools
+  - yq
+  - snakemake=8.25.2
+  - perl-bio-bigfile
+  - bash
+  - matplotlib
+  - scipy
+  - statsmodels
+  - bioconda::perl-dbd-sqlite
+  - anaconda::scikit-learn
+  - seqtk
+  - polars

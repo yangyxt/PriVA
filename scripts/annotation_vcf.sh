@@ -52,7 +52,7 @@ function main_workflow() {
 
     if [[ -f "$config_file" ]]; then
         log "Using config file: $config_file"
-        local -a config_keys=(input_vcf assembly vep_cache_dir output_dir ref_genome threads af_cutoff gnomad_vcf_chrX clinvar_vcf vep_plugins_dir vep_plugins_cachedir hub_vcf_file hub_cadd_file)
+        local -a config_keys=(input_vcf assembly vep_cache_dir output_dir ref_genome threads af_cutoff gnomad_vcf_chrX clinvar_vcf vep_plugins_dir vep_plugins_cachedir hub_vcf_file hub_cadd_file control_vcf)
         for key in "${config_keys[@]}"; do
             # Need to remove the quotes around the value
             config_args[$key]="$(read_yaml ${config_file} ${key})"
@@ -73,6 +73,7 @@ function main_workflow() {
     local af_cutoff="${af_cutoff:-${config_args[af_cutoff]:-0.05}}"
     local gnomad_vcf_chrX="${gnomad_vcf_chrX:-${config_args[gnomad_vcf_chrX]}}"
     local clinvar_vcf="${clinvar_vcf:-${config_args[clinvar_vcf]}}"
+    local control_vcf="${control_vcf:-${config_args[control_vcf]}}"
     local vep_plugins_dir="${vep_plugins_dir:-${config_args[vep_plugins_dir]}}"
     local vep_plugins_cachedir="${vep_plugins_cachedir:-${config_args[vep_plugins_cachedir]}}"
     
@@ -191,6 +192,12 @@ function main_workflow() {
         ${clinvar_vcf} || { \
         log "Failed to add ClinVar annotation on ${anno_vcf}. Quit now"
         return 1; }
+
+		anno_control_vcf_allele \
+		${anno_vcf} \
+		${control_vcf} || { \
+		log "Failed to add control VCF allele annotation on ${anno_vcf}. Quit now"
+		return 1; }
 
         # Now we annotate the variants with VEP
         anno_VEP_data \
@@ -472,8 +479,8 @@ function anno_control_vcf_allele() {
     local processed_control_vcf="" # Will hold path to control vcf with required tags
 
     # --- Validate Inputs ---
-    check_path "${input_vcf}" "file" "input_vcf" || return 1
-    check_path "${control_vcf}" "file" "control_vcf" || return 1
+    check_path "${input_vcf}" "file" "input_vcf" || { log "ERROR: input_vcf is not a valid file"; return 1; }
+    check_path "${control_vcf}" "file" "control_vcf" || { log "WARNING: control_vcf is not a valid file but this function is optional"; return 0; }
     [[ "${input_vcf}" =~ \.vcf\.gz$ ]] || { log "ERROR: input_vcf must be bgzipped (.vcf.gz)"; return 1; }
     [[ "${control_vcf}" =~ \.vcf\.gz$ ]] || { log "ERROR: control_vcf must be bgzipped (.vcf.gz)"; return 1; }
     check_vcf_validity "${input_vcf}" || return 1

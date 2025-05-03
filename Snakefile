@@ -76,23 +76,21 @@ rule all:
 rule annotate_variants:
     input:
         vcf=INPUT_VCF,
-        # ped=PED_FILE, # Ped file not strictly needed as input for annotation script itself? Check script.
+        # ped=PED_FILE, # Ped file not needed as direct input if script reads from config
         ref=REF_GENOME
     output:
         vcf=os.path.join(OUTPUT_DIR, f"{INPUT_BASE}.anno.vcf.gz"),
         cadd_tsv=os.path.join(OUTPUT_DIR, f"{INPUT_BASE}.anno.cadd.tsv")
     params:
         script=os.path.join(SCRIPT_DIR, "annotation_vcf.sh"),
-        config=workflow.configfiles[0],
-        # Pass ped file path via config if needed by the script, or add specific param if preferred
-        # ped_param=PED_FILE # Example if script needs -p explicitly
+        config=workflow.configfiles[0]
+        # Pedigree file path is expected to be read from the config file by the script if needed
     threads: THREADS # Use total threads for annotation
     shell:
         """
         bash {params.script} main_workflow \
             -i {input.vcf} \
             --config {params.config}
-            # Add -p {params.ped_param} if needed by annotation_vcf.sh
         """
 
 # Step 2: Filter variants with family information

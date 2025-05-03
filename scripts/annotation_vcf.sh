@@ -138,7 +138,8 @@ function main_workflow() {
     preprocess_vcf \
     -i ${input_vcf} \
     -o ${anno_vcf} \
-    -r ${ref_genome} && \
+    -r ${ref_genome} \
+    -t ${threads} && \
     log "Successfully preprocess the input vcf ${input_vcf} for annotation. The result is ${anno_vcf}" && \
     display_vcf ${anno_vcf} || { \
     log "Failed to preprocess the input vcf ${input_vcf} for annotation. Quit with error."; \
@@ -150,7 +151,7 @@ function main_workflow() {
         local uncovered_vcf="${anno_vcf/.vcf*/.uncovered.vcf.gz}"
         
         log "Checking for cached annotations in hub VCF"
-        if use_hub_vcf_annotations "${anno_vcf}" "${hub_vcf_file}" "${covered_vcf}" "${uncovered_vcf}"; then
+        if use_hub_vcf_annotations "${anno_vcf}" "${hub_vcf_file}" "${covered_vcf}" "${uncovered_vcf}" "${threads}"; then
             log "All variants found in hub VCF, skipping annotation pipeline"
             
             # Use covered variants as final result
@@ -189,7 +190,8 @@ function main_workflow() {
         # Annotate the variants with
         anno_clinvar_data \
         ${anno_vcf} \
-        ${clinvar_vcf} || { \
+        ${clinvar_vcf} \
+        ${threads} || { \
         log "Failed to add ClinVar annotation on ${anno_vcf}. Quit now"
         return 1; }
 
@@ -218,7 +220,7 @@ function main_workflow() {
             merge_annotated_vcfs "${covered_vcf}" "${newly_annotated_vcf}" "${final_anno_vcf}"
             
             # Update hub VCF with newly annotated variants
-            update_hub_vcf "${newly_annotated_vcf}" "${hub_vcf_file}"
+            update_hub_vcf "${newly_annotated_vcf}" "${hub_vcf_file}" "${threads}"
             
             # Set anno_vcf back to final result for downstream steps
             local anno_vcf="${final_anno_vcf}"
@@ -279,14 +281,16 @@ function preprocess_vcf() {
     local input_vcf
     local ref_genome
     local output_vcf
+	local threads
 
     # Use getopts to parse the arguments
     local OPTIND=1
-    while getopts "i:o:r:" opt; do
+    while getopts "i:o:r:t::" opt; do
         case ${opt} in
             i) input_vcf=${OPTARG};;
             o) output_vcf=${OPTARG};;
             r) ref_genome=${OPTARG};;
+            t) threads=${OPTARG};;
         esac
     done
 
@@ -300,6 +304,10 @@ function preprocess_vcf() {
     check_path ${ref_genome} "file" "ref_genome" || return 1
 
     local vcf_assembly=$(check_vcf_assembly_version ${input_vcf})
+
+	if [[ -z ${threads} ]]; then
+		threads=1
+	fi
 
     if [[ -z ${ref_genome} ]]; then
         log "User does not specify the ref genome fasta file. Cant proceed now. Quit with Error!"
@@ -318,7 +326,7 @@ function preprocess_vcf() {
     fi
 
     # First filter out variants that not in primary chromosomes (chrM to chrY)(MT to Y)
-    bcftools view -r "$(cat ${BASE_DIR}/data/liftover/ucsc_GRC.primary.contigs.tsv | tr '\n' ',')" -Ou ${input_vcf}| \
+    bcftools view --threads ${threads} -r "$(cat ${BASE_DIR}/data/liftover/ucsc_GRC.primary.contigs.tsv | tr '\n' ',')" -Ou ${input_vcf}| \
     bcftools sort -Oz -o ${input_vcf/.vcf*/.primary.vcf.gz} && \
     tabix -f -p vcf ${input_vcf/.vcf*/.primary.vcf.gz} || \
     { log "Failed to generate a VCF file that only contains records in primary chromosomes"; \
@@ -338,7 +346,7 @@ function preprocess_vcf() {
 
     # First sort the input_vcf,
     # Then normalize the input_vcf with bcftools
-    normalize_vcf ${input_vcf/.vcf*/.ucsc.vcf.gz} ${input_vcf/.vcf*/.norm.vcf.gz} ${ref_genome} $TMPDIR
+    normalize_vcf ${input_vcf/.vcf*/.ucsc.vcf.gz} ${input_vcf/.vcf*/.norm.vcf.gz} ${ref_genome} ${threads}
     announce_remove_tmps ${input_vcf/.vcf*/}*tmp*vcf*
 
     # Then we add uniq IDs to these variants
@@ -445,6 +453,12 @@ function anno_agg_gnomAD_data () {
 function anno_clinvar_data () {
     local input_vcf=${1}
     local clinvar_vcf=${2}
+	local threads=${3}
+
+	if [[ -z ${threads} ]]; then
+		threads=1
+	fi
+
     local tmp_tag=$(randomID)
     local output_vcf=${input_vcf/.vcf/.${tmp_tag}.vcf}
 
@@ -458,7 +472,7 @@ function anno_clinvar_data () {
     return 0 || \
     log "The input vcf ${input_vcf} does not contain the INFO tags CLNDN,CLNHGVS,CLNREVSTAT,CLNSIG,GENEINFO,CLNCSQ. We need to add them"
 
-    bcftools annotate -a ${clinvar_vcf} -c CHROM,POS,REF,ALT,.INFO/CLNDN,.INFO/CLNHGVS,.INFO/CLNREVSTAT,.INFO/CLNSIG,.INFO/GENEINFO,.INFO/CLNCSQ:=INFO/CSQ -Ou ${input_vcf} | \
+    bcftools annotate --threads ${threads} -a ${clinvar_vcf} -c CHROM,POS,REF,ALT,.INFO/CLNDN,.INFO/CLNHGVS,.INFO/CLNREVSTAT,.INFO/CLNSIG,.INFO/GENEINFO,.INFO/CLNCSQ:=INFO/CSQ -Ou ${input_vcf} | \
     bcftools sort -Oz -o ${output_vcf} && \
     tabix -f -p vcf ${output_vcf} && \
     mv ${output_vcf} ${input_vcf} && \
@@ -816,6 +830,11 @@ function use_hub_vcf_annotations() {
     local hub_vcf=$2
     local output_covered_vcf=$3
     local output_uncovered_vcf=$4
+	local threads=${5}
+
+	if [[ -z ${threads} ]]; then
+		threads=1
+	fi
     
     # Check if hub VCF exists and is valid
     if [[ ! -f "${hub_vcf}" ]] || ! check_vcf_validity "${hub_vcf}"; then
@@ -835,7 +854,7 @@ function use_hub_vcf_annotations() {
     tabix -p vcf "${intersect_file}"
     
     # Annotate the covered variants with all INFO fields from hub VCF
-    bcftools annotate -a "${hub_vcf}" -c CHROM,POS,REF,ALT,INFO "${intersect_file}" -Oz -o "${output_covered_vcf}"
+    bcftools annotate --threads ${threads} -a "${hub_vcf}" -c CHROM,POS,REF,ALT,INFO "${intersect_file}" -Oz -o "${output_covered_vcf}"
     tabix -p vcf "${output_covered_vcf}"
     
     # Find variants not in the intersection (uncovered)
@@ -846,12 +865,13 @@ function use_hub_vcf_annotations() {
     rm -f "${intersect_file}" "${intersect_file}.tbi"
     
     # Check if all variants were covered
-    if [[ $(bcftools view -H "${output_uncovered_vcf}" | wc -l) -eq 0 ]]; then
+	local variant_count=$(bcftools view --threads ${threads} -H "${output_uncovered_vcf}" | wc -l)
+    if [[ ${variant_count} -eq 0 ]]; then
         log "All variants found in hub VCF, skipping annotation pipeline"
         return 0
     else
-        log "Found $(bcftools view -H "${output_covered_vcf}" | wc -l) cached variants"
-        log "Processing $(bcftools view -H "${output_uncovered_vcf}" | wc -l) uncovered variants"
+        log "Found ${variant_count} cached variants"
+        log "Processing ${variant_count} uncovered variants"
         return 1
     fi
 }
@@ -859,16 +879,22 @@ function use_hub_vcf_annotations() {
 function update_hub_vcf() {
     local newly_annotated_vcf=$1
     local hub_vcf=$2
+	local threads=${3}
+
+	if [[ -z ${threads} ]]; then
+		threads=1
+	fi
     
     # Skip if no new annotations
-    if [[ ! -f "${newly_annotated_vcf}" ]] || [[ $(bcftools view -H "${newly_annotated_vcf}" | wc -l) -eq 0 ]]; then
+	local new_variant_count=$(bcftools view --threads ${threads} -H "${newly_annotated_vcf}" | wc -l)
+    if [[ ! -f "${newly_annotated_vcf}" ]] || [[ ${new_variant_count} -eq 0 ]]; then
         log "No new variants to add to hub VCF"
         return 0
     fi
     
     # If hub VCF doesn't exist or is invalid, create it
     if [[ ! -f "${hub_vcf}" ]] || ! check_vcf_validity "${hub_vcf}"; then
-        log "Hub VCF was missing or invalid, creating new hub with $(bcftools view -H "${newly_annotated_vcf}" | wc -l) variants"
+        log "Hub VCF was missing or invalid, creating new hub with ${new_variant_count} variants"
         cp "${newly_annotated_vcf}" "${hub_vcf}"
         tabix -p vcf "${hub_vcf}"
         return 0
@@ -880,7 +906,7 @@ function update_hub_vcf() {
     # Concatenate files and remove duplicates (keeping the newer version)
     bcftools concat -a "${hub_vcf}" "${newly_annotated_vcf}" -Ou | \
     bcftools sort -Ou | \
-    bcftools norm -d both -Oz -o "${temp_hub}"  # -d both removes duplicate variants
+    bcftools norm --threads ${threads} -d both -Oz -o "${temp_hub}"  # -d both removes duplicate variants
     
     tabix -p vcf -f "${temp_hub}"
     mv "${temp_hub}" "${hub_vcf}"

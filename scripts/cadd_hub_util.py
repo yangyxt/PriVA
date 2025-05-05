@@ -6,6 +6,17 @@ import argparse
 import multiprocessing as mp
 import polars as pl
 from pathlib import Path
+import logging
+
+
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
+console_handler=logging.StreamHandler()
+console_handler.setLevel(logging.INFO)
+formatter = logging.Formatter("%(levelname)s:%(asctime)s:%(module)s:%(funcName)s:%(lineno)s:%(message)s")
+console_handler.setFormatter(formatter)
+logger.addHandler(console_handler)
+
 
 def match_variants(hub_file, pos_file, covered_file, uncovered_file, threads=None):
     """Match variants in position file against hub file using Polars for efficiency"""
@@ -18,7 +29,9 @@ def match_variants(hub_file, pos_file, covered_file, uncovered_file, threads=Non
         variants_df = pl.read_csv(pos_file, separator='\t', has_header=False)
         variants_df = variants_df.rename({
             "column_1": "Chrom",
-            "column_2": "Pos"
+            "column_2": "Pos",
+			"column_3": "Ref",
+			"column_4": "Alt"
         })
         
         # Write uncovered positions - ensuring 1-indexed positions for bcftools -R
@@ -31,7 +44,7 @@ def match_variants(hub_file, pos_file, covered_file, uncovered_file, threads=Non
         with open(covered_file, 'w') as f:
             f.write("#Chrom\tPos\tRef\tAlt\tFeatureID\tPHRED\n")
         
-        print(f"Hub file {hub_file} missing or empty, all variants are uncovered", file=sys.stderr)
+        logger.warning(f"Hub file {hub_file} missing or empty, all variants are uncovered")
         return False
     
     # Read position file with variant data
@@ -100,7 +113,7 @@ def match_variants(hub_file, pos_file, covered_file, uncovered_file, threads=Non
     if os.path.exists(temp_covered) and os.path.getsize(temp_covered) > 0:
         os.rename(temp_covered, covered_file)
     else:
-        print(f"Error: Failed to create valid covered file", file=sys.stderr)
+        logger.error("Error: Failed to create valid covered file")
         if os.path.exists(temp_covered):
             os.remove(temp_covered)
     
@@ -117,7 +130,7 @@ def match_variants(hub_file, pos_file, covered_file, uncovered_file, threads=Non
     if os.path.exists(temp_uncovered) and os.path.getsize(temp_uncovered) > 0:
         os.rename(temp_uncovered, uncovered_file)
     else:
-        print(f"Error: Failed to create valid uncovered file", file=sys.stderr)
+        logger.error("Error: Failed to create valid uncovered file")
         if os.path.exists(temp_uncovered):
             os.remove(temp_uncovered)
     
@@ -125,7 +138,7 @@ def match_variants(hub_file, pos_file, covered_file, uncovered_file, threads=Non
     total = len(variant_keys)
     covered = len(covered_keys)
     uncovered = len(uncovered_keys)
-    print(f"Found {covered} cached variants, {uncovered} uncached variants", file=sys.stderr)
+    logger.info(f"Found {covered} cached variants, {uncovered} uncached variants")
     
     # Return True if all variants were covered
     return uncovered == 0
@@ -137,7 +150,7 @@ def update_hub(new_file, hub_file, threads=None):
     
     # Skip if new file doesn't exist or is empty
     if not os.path.exists(new_file) or os.path.getsize(new_file) == 0:
-        print("New CADD file is empty or doesn't exist, no update needed", file=sys.stderr)
+        logger.info("New CADD file is empty or doesn't exist, no update needed")
         return
     
     # Ensure hub directory exists
@@ -174,9 +187,9 @@ def update_hub(new_file, hub_file, threads=None):
         if os.path.exists(temp_file) and os.path.getsize(temp_file) > 0:
             # Move temp file to hub file (atomic operation)
             os.rename(temp_file, hub_file)
-            print(f"Created new CADD hub TSV with {len(new_df)} variants", file=sys.stderr)
+            logger.info(f"Created new CADD hub TSV with {len(new_df)} variants")
         else:
-            print(f"Error: Failed to create valid temp file", file=sys.stderr)
+            logger.error("Error: Failed to create valid temp file")
             if os.path.exists(temp_file):
                 os.remove(temp_file)
         return
@@ -241,7 +254,7 @@ def update_hub(new_file, hub_file, threads=None):
     
     # If no new variants, we're done
     if len(new_variants) == 0:
-        print("No new variants to add to hub", file=sys.stderr)
+        logger.info("No new variants to add to hub")
         return
     
     # Prepare new variants for append (drop var_key and rename Chrom back to #Chrom)
@@ -264,16 +277,16 @@ def update_hub(new_file, hub_file, threads=None):
             if len(temp_df) > original_size:
                 # Move temp file to hub file (atomic operation)
                 os.rename(temp_file, hub_file)
-                print(f"Added {len(new_variants)} new variants to CADD hub TSV", file=sys.stderr)
+                logger.info(f"Added {len(new_variants)} new variants to CADD hub TSV")
             else:
-                print(f"Error: Temp file doesn't contain more entries than original", file=sys.stderr)
+                logger.error("Error: Temp file doesn't contain more entries than original")
                 os.remove(temp_file)
         except Exception as e:
-            print(f"Error verifying temp file: {str(e)}", file=sys.stderr)
+            logger.error(f"Error verifying temp file: {str(e)}")
             if os.path.exists(temp_file):
                 os.remove(temp_file)
     else:
-        print(f"Error: Failed to create valid temp file", file=sys.stderr)
+        logger.error("Error: Failed to create valid temp file")
         if os.path.exists(temp_file):
             os.remove(temp_file)
 
@@ -284,7 +297,7 @@ def merge_results(covered_file, new_file, output_file):
     new_exists = os.path.exists(new_file) and os.path.getsize(new_file) > 0
     
     if not covered_exists and not new_exists:
-        print("ERROR: No CADD scores available (neither covered nor newly calculated)", file=sys.stderr)
+        logger.error("ERROR: No CADD scores available (neither covered nor newly calculated)")
         return False
     
     # Ensure output directory exists
@@ -295,7 +308,7 @@ def merge_results(covered_file, new_file, output_file):
     
     # Handle edge cases
     if not covered_exists:
-        print("No cached variants, using only newly calculated CADD scores", file=sys.stderr)
+        logger.info("No cached variants, using only newly calculated CADD scores")
         # Just copy the new file
         new_df = pl.read_csv(new_file, separator='\t', has_header=True, comment_char='#')
         new_df.write_csv(temp_file, separator='\t')
@@ -304,13 +317,13 @@ def merge_results(covered_file, new_file, output_file):
             os.rename(temp_file, output_file)
             return True
         else:
-            print("Error: Failed to create valid output file", file=sys.stderr)
+            logger.error("Error: Failed to create valid output file")
             if os.path.exists(temp_file):
                 os.remove(temp_file)
             return False
     
     if not new_exists:
-        print("No new CADD scores, using only cached variants", file=sys.stderr)
+        logger.info("No new CADD scores, using only cached variants")
         # Just copy the covered file
         covered_df = pl.read_csv(covered_file, separator='\t', has_header=True, comment_char='#')
         covered_df.write_csv(temp_file, separator='\t')
@@ -319,7 +332,7 @@ def merge_results(covered_file, new_file, output_file):
             os.rename(temp_file, output_file)
             return True
         else:
-            print("Error: Failed to create valid output file", file=sys.stderr)
+            logger.error("Error: Failed to create valid output file")
             if os.path.exists(temp_file):
                 os.remove(temp_file)
             return False
@@ -348,19 +361,19 @@ def merge_results(covered_file, new_file, output_file):
             if len(temp_df) == len(covered_df) + len(new_df):
                 # Move temp file to output file (atomic operation)
                 os.rename(temp_file, output_file)
-                print(f"Merged {len(covered_df)} cached and {len(new_df)} newly calculated CADD scores", file=sys.stderr)
+                logger.info(f"Merged {len(covered_df)} cached and {len(new_df)} newly calculated CADD scores")
                 return True
             else:
-                print(f"Error: Temp file doesn't contain the expected number of entries", file=sys.stderr)
+                logger.error("Error: Temp file doesn't contain the expected number of entries")
                 os.remove(temp_file)
                 return False
         except Exception as e:
-            print(f"Error verifying temp file: {str(e)}", file=sys.stderr)
+            logger.error(f"Error verifying temp file: {str(e)}")
             if os.path.exists(temp_file):
                 os.remove(temp_file)
             return False
     else:
-        print(f"Error: Failed to create valid temp file", file=sys.stderr)
+        logger.error("Error: Failed to create valid temp file")
         if os.path.exists(temp_file):
             os.remove(temp_file)
         return False

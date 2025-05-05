@@ -103,19 +103,44 @@ def add_variant_ids_to_vcf(input_vcf, output_vcf):
                 vcf_out.write(record)
 
 
+def decode_variant_ids_from_vcf(input_vcf, output_vcf):
+    """
+    Decode variant IDs from a VCF file.
+    """
+    with pysam.VariantFile(input_vcf, 'r') as vcf_in:
+        with pysam.VariantFile(output_vcf, 'w', header=vcf_in.header) as vcf_out:
+            for record in vcf_in:
+                var_id = record.id
+                chrom, pos, ref, alt, end = id_to_variant(var_id)
+                literal_id =  chrom + ":" + str(pos) + "-" + str(end) + ":" + ref + "->" + alt
+                record.id = literal_id
+                vcf_out.write(record)
+    
+
 
 if __name__ == '__main__':
     parser = ap.ArgumentParser()
+    parser.add_argument("-m", "--mode", type=str, required=True, help="The mode to run the script, either 'encode' or 'decode'")
     parser.add_argument("-i", "--input_vcf", type=str, help="The path to the VCF of a family containing patients", required=True)
     parser.add_argument("-o", "--output_vcf", type=str, help="The path to the output VCF file", required=False, default="")
 
     args=parser.parse_args()
 
-    if len(args.output_vcf) > 0:
-        output_vcf = args.output_vcf
+    if args.mode == "encode":
+        if len(args.output_vcf) > 0:
+            output_vcf = args.output_vcf
+        else:
+            output_vcf = args.input_vcf.replace(".vcf", ".uniqID.vcf")
+        add_variant_ids_to_vcf(args.input_vcf, output_vcf)
+    elif args.mode == "decode":
+        if len(args.output_vcf) > 0:
+            output_vcf = args.output_vcf
+        else:
+            output_vcf = args.input_vcf.replace(".vcf", ".decodeID.vcf")
+        decode_variant_ids_from_vcf(args.input_vcf, output_vcf)
     else:
-        output_vcf = args.input_vcf.replace(".vcf", ".uniqID.vcf")
-    add_variant_ids_to_vcf(args.input_vcf, output_vcf)
+        parser.print_help()
+        sys.exit(1)
 
 
 

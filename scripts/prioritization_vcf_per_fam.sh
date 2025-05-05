@@ -137,6 +137,7 @@ function assign_acmg_criteria () {
     local clinvar_aa_dict_pkl=$(read_yaml ${config_file} "clinvar_aa_stat")
     local clinvar_splice_dict_pkl=$(read_yaml ${config_file} "clinvar_splice_stat")
     local intolerant_domains_pkl=$(read_yaml ${config_file} "all_intolerant_domains")
+	local am_intol_domains_tsv=$(read_yaml ${config_file} "alphamissense_intolerant_domains")
     local clinvar_gene_stat_pkl=$(read_yaml ${config_file} "clinvar_gene_stat")
     local tranx_exon_domain_map_pkl=$(read_yaml ${config_file} "alphamissense_tranx_domain_map")
     local intolerant_motifs_pkl=$(read_yaml ${config_file} "alphamissense_intolerant_motifs")
@@ -155,6 +156,7 @@ function assign_acmg_criteria () {
     check_path ${clinvar_aa_dict_pkl} "file" "clinvar_aa_stat" || has_error=1
     check_path ${clinvar_splice_dict_pkl} "file" "clinvar_splice_stat" || has_error=1
     check_path ${intolerant_domains_pkl} "file" "all_intolerant_domains" || has_error=1
+    check_path ${am_intol_domains_tsv} "file" "alphamissense_intolerant_domains" || has_error=1
     check_path ${clinvar_gene_stat_pkl} "file" "clinvar_gene_stat" || has_error=1
     check_path ${intolerant_motifs_pkl} "file" "alphamissense_intolerant_motifs" || has_error=1
     check_path ${am_score_vcf} "file" "alphamissense_vcf" || has_error=1
@@ -182,6 +184,7 @@ function assign_acmg_criteria () {
     [[ ${input_tab} -nt ${clinvar_aa_dict_pkl} ]] && \
     [[ ${input_tab} -nt ${clinvar_splice_dict_pkl} ]] && \
     [[ ${input_tab} -nt ${intolerant_domains_pkl} ]] && \
+    [[ ${input_tab} -nt ${am_intol_domains_tsv} ]] && \
     [[ ${input_tab} -nt ${clinvar_gene_stat_pkl} ]] && \
     [[ ${input_tab} -nt ${alt_disease_vcf} ]] && \
     [[ ${input_tab} -nt ${am_score_vcf} ]] && \
@@ -213,6 +216,7 @@ function assign_acmg_criteria () {
     --clinvar_splice_dict_pkl ${clinvar_splice_dict_pkl} \
     --interpro_entry_map_pkl ${interpro_entry_map_pkl} \
     --intolerant_domains_pkl ${intolerant_domains_pkl} \
+    --am_intol_domains_tsv ${am_intol_domains_tsv} \
     --intolerant_motifs_pkl ${intolerant_motifs_pkl} \
     --repeat_region_file ${repeat_region_file} \
     --clinvar_gene_stat_pkl ${clinvar_gene_stat_pkl} \

@@ -1226,9 +1226,9 @@ def analyze_bp1_pp2(gene_stat_dict: Dict):
 
 
 
-
 def PP2_BP1_criteria(df: pd.DataFrame, 
                      clinvar_stats_dict: dict,
+                     am_intol_domains_tsv: str,
                      threads: int = 10) -> Tuple[pd.Series, pd.Series]:
     """
     Efficient implementation of PP2/BP1 criteria evaluation using 
@@ -1265,8 +1265,24 @@ def PP2_BP1_criteria(df: pd.DataFrame,
     bp1_criteria = gene_bp1 & is_missense
     
     # Log stats
-    logger.info(f"Granted PP2 to {pp2_criteria.sum()} variants")
-    logger.info(f"Granted BP1 to {bp1_criteria.sum()} variants")
+    logger.info(f"Granted PP2 to {pp2_criteria.sum()} variants based on ClinVar stats")
+    logger.info(f"Granted BP1 to {bp1_criteria.sum()} variants based on ClinVar stats")
+
+    # Load the AlphaMissense intolerant domains
+    am_intol_domains_df = pd.read_table(am_intol_domains_tsv, low_memory=False)
+    am_intol_domains_df["Ensembl_Gene_ID"] = am_intol_domains_df["domain"].str.split(":").str[0]
+    by_gene = am_intol_domains_df.groupby("Ensembl_Gene_ID", as_index=False)
+    gene_all_intol_domains = {}
+    for gene, gene_df in by_gene:
+        if gene_df["is_more_tolerant"].any():
+            gene_all_intol_domains[gene] = False
+        else:
+            gene_all_intol_domains[gene] = True
+
+    # Apply PP2 to all variants
+    pp2_am = df['Gene'].map(lambda g: gene_all_intol_domains.get(g, False))
+    pp2_criteria = pp2_criteria | pp2_am
+    logger.info(f"Granted PP2 to {pp2_criteria.sum()} variants based on updates from AlphaMissense intolerant domains")
     
     return pp2_criteria, bp1_criteria
 
@@ -2210,6 +2226,7 @@ def ACMG_criteria_assign(anno_table: str,
                          clinvar_splice_dict_pkl: str,
                          interpro_entry_map_pkl: str,
                          intolerant_domains_pkl: str,
+                         am_intol_domains_tsv: str,
                          intolerant_motifs_pkl: str,
                          clinvar_gene_stat_pkl: str,
                          tranx_exon_domain_map_pkl: str,
@@ -2327,7 +2344,7 @@ def ACMG_criteria_assign(anno_table: str,
     '''
     # Apply PP2 criteria, missense variant in a gene/domain that not only intolerant to truncating variants but also intolerant to missense variants
     clinvar_gene_stat = pickle.load(gzip.open(clinvar_gene_stat_pkl, "rb"))
-    pp2_criteria, bp1_criteria = PP2_BP1_criteria(anno_df, clinvar_gene_stat)
+    pp2_criteria, bp1_criteria = PP2_BP1_criteria(anno_df, clinvar_gene_stat, am_intol_domains_tsv)
     logger.info(f"PP2 criteria applied, {pp2_criteria.sum()} variants are having the PP2 criteria")
     logger.info(f"BP1 criteria applied, {bp1_criteria.sum()} variants are having the BP1 criteria")
     gc.collect()
@@ -2470,6 +2487,7 @@ if __name__ == "__main__":
     parser.add_argument("--clinvar_splice_dict_pkl", type=str, required=True)
     parser.add_argument("--interpro_entry_map_pkl", type=str, required=True)
     parser.add_argument("--intolerant_domains_pkl", type=str, required=True)
+    parser.add_argument("--am_intol_domains_tsv", type=str, required=True)
     parser.add_argument("--intolerant_motifs_pkl", type=str, required=True)
     parser.add_argument("--clinvar_gene_stat_pkl", type=str, required=True)
     parser.add_argument("--tranx_exon_domain_map_pkl", type=str, required=True)
@@ -2490,6 +2508,7 @@ if __name__ == "__main__":
                                                     args.clinvar_splice_dict_pkl,
                                                     args.interpro_entry_map_pkl,
                                                     args.intolerant_domains_pkl,
+                                                    args.am_intol_domains_tsv,
                                                     args.intolerant_motifs_pkl,
                                                     args.clinvar_gene_stat_pkl,
                                                     args.tranx_exon_domain_map_pkl,

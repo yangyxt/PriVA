@@ -200,6 +200,8 @@ function announce_remove_tmps {
                 log "${target} has been succesfully removed" || \
                 log "Folder ${target} failed to be deleted (either its not existed or occupied)"
             fi
+		else
+			log "File or directory ${target} does not exist, so do not need to remove it"
         fi
         >&2 echo ""
     done
@@ -428,6 +430,67 @@ function check_vcf_multiallelics {
         log "${input_vcf} does not have multi-allelic records"
         true
     fi
+}
+
+
+function clean_vcf_multiallelics {
+    local input_vcf=${1}
+    local ref_genome=${2}
+	local threads=${3}
+
+	if [[ -z ${threads} ]]; then
+		threads=1
+	fi
+
+	if check_vcf_multiallelics ${input_vcf}; then
+		return 0
+	else
+		local tmp_tag=$(randomID)
+		local tmp_output=${input_vcf/.vcf/.norm.${tmp_tag}.vcf}
+		normalize_vcf ${input_vcf} ${tmp_output} ${ref_genome} ${threads} && \
+		mv ${tmp_output} ${input_vcf} && \
+		mv ${tmp_output}.tbi ${input_vcf}.tbi || \
+		{ log "Failed to normalize ${input_vcf} to remove multi-allelics. Return with error." && return 1; }
+	fi
+}
+
+
+function remove_format_fields {
+	local input_vcf=${1}
+	local output_vcf=${2}
+
+	if ! check_format_fields ${input_vcf}; then
+		log "The input VCF file ${input_vcf} already has no FORMAT fields in the header."
+		return 0
+	fi
+
+	if [[ -z ${output_vcf} ]] || [[ ${output_vcf} == ${input_vcf} ]]; then
+		local tmp_tag=$(randomID)
+		local output_vcf=${input_vcf/.vcf/.tmp.${tmp_tag}.vcf}
+		local replace=True
+	fi
+
+	bcftools annotate -x FORMAT -Oz -o ${output_vcf} ${input_vcf} && \
+	tabix -f -p vcf ${output_vcf}
+
+	if [[ ${replace} == True ]]; then
+		mv ${output_vcf} ${input_vcf}
+		mv ${output_vcf}.tbi ${input_vcf}.tbi
+	fi
+}
+
+
+function check_format_fields {
+	local input_vcf=${1}
+	# Check whether there are any FORMAT fields in the VCF file from the header line
+	local format_lines=$(bcftools view -h ${input_vcf} | grep -c "##FORMAT")
+	if [[ ${format_lines} -gt 0 ]]; then
+		log "The input VCF file ${input_vcf} has ${format_lines} lines of FORMAT fields in the header."
+		return 0
+	else
+		log "The input VCF file ${input_vcf} has no FORMAT fields in the header."
+		return 1
+	fi
 }
 
 

@@ -3,6 +3,7 @@ import pysam
 import logging
 import argparse as ap
 import base64
+import sys
 
 
 logger = logging.getLogger(__name__)

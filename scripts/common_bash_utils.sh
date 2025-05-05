@@ -119,7 +119,7 @@ function display_vcf {
     fi
 
     local tmp_tab="$TMPDIR/$(randomID).tsv"
-    log "Using ${tmp_tab} as the temporary file to store the VCF records from ${input_vcf}"
+    log "For ${input_vcf}, it contains $(bcftools query -f '%CHROM\t%POS\n' ${input_vcf} | wc -l) records and genotypes from $(bcftools query -l ${input_vcf} | wc -l) samples. Using ${tmp_tab} as the temporary table to display the records"
 
     if [[ -z ${head_lines} ]]; then
         local head_lines=10

@@ -126,10 +126,10 @@ function main_workflow() {
     log "  vep_plugins_cachedir: $vep_plugins_cachedir"
     log "  hub_vcf_file: $hub_vcf_file"
     log "  hub_cadd_file: $hub_cadd_file"
-	
-	# Prepare a comma separated list of samples in the input vcf
-	local samples=$(bcftools query -l "${input_vcf}" | tr '\n' ',')
-	log "The samples in the input vcf are ${samples}"
+    
+    # Prepare a comma separated list of samples in the input vcf
+    local samples=$(bcftools query -l "${input_vcf}" | tr '\n' ',')
+    log "The samples in the input vcf are ${samples}"
 
     # Preprocess the input vcf to:
     # Remove the variants not located in primary chromsomes
@@ -155,33 +155,34 @@ function main_workflow() {
         local uncovered_vcf="${anno_vcf/.vcf*/.uncovered.vcf.gz}"
         
         log "Checking for cached annotations in hub VCF"
-		local total_count=$(bcftools view -H "${input_vcf}" | wc -l)
+        local total_count=$(bcftools query -f '%CHROM\t%POS\t%REF\t%ALT\n' "${anno_vcf}" | wc -l)
+        log "The total number of variants in the input vcf is ${total_count}"
         if use_hub_vcf_annotations -i "${anno_vcf}" -h "${hub_vcf_file}" -o "${covered_vcf}" -u "${uncovered_vcf}" -t "${threads}" -c "${total_count}"; then
             log "All variants found in hub VCF, skipping annotation pipeline"
 
-			if check_vcf_validity "${covered_vcf}" && \
-			   clean_vcf_multiallelics "${covered_vcf}" "${ref_genome}" "${threads}" && \
-			   [[ $(bcftools view -H "${covered_vcf}" | wc -l) -ge ${total_count} ]] && \
-			   [[ ${covered_vcf} -nt ${anno_vcf} ]] && \
-			   [[ "$(bcftools query -l ${covered_vcf})" == "$(bcftools query -l ${anno_vcf})" ]]; then
-				log "The covered vcf file ${covered_vcf} contains all variants in the input vcf ${input_vcf}."
+            if check_vcf_validity "${covered_vcf}" && \
+               clean_vcf_multiallelics "${covered_vcf}" "${ref_genome}" "${threads}" && \
+               [[ $(bcftools query -f '%CHROM\t%POS\t%REF\t%ALT\n' "${covered_vcf}" | wc -l) -ge ${total_count} ]] && \
+               [[ ${covered_vcf} -nt ${anno_vcf} ]] && \
+               [[ "$(bcftools query -l ${covered_vcf})" == "$(bcftools query -l ${anno_vcf})" ]]; then
+                log "The covered vcf file ${covered_vcf} contains all variants in the input vcf ${input_vcf}."
             
-				# Use covered variants as final result
-				cp "${covered_vcf}" "${anno_vcf}"
-				cp "${covered_vcf}.tbi" "${anno_vcf}.tbi"
-				
-				# Skip to CADD annotation
-				local skip_annotation=true
-			fi
+                # Use covered variants as final result
+                cp "${covered_vcf}" "${anno_vcf}"
+                cp "${covered_vcf}.tbi" "${anno_vcf}.tbi"
+                
+                # Skip to CADD annotation
+                local skip_annotation=true
+            fi
         else
             if check_vcf_validity "${covered_vcf}" && \
-			   clean_vcf_multiallelics "${covered_vcf}" "${ref_genome}" "${threads}" && \
-			   [[ ${covered_vcf} -nt ${anno_vcf} ]] && \
-			   [[ "$(bcftools query -l ${covered_vcf})" == "$(bcftools query -l ${anno_vcf})" ]] && \
-			   [[ "$(bcftools query -l ${uncovered_vcf})" == "$(bcftools query -l ${anno_vcf})" ]] && \
-			   [[ ${uncovered_vcf} -nt ${anno_vcf} ]] && \
-			   check_vcf_validity "${uncovered_vcf}" && \
-			   clean_vcf_multiallelics "${uncovered_vcf}" "${ref_genome}" "${threads}"; then
+               clean_vcf_multiallelics "${covered_vcf}" "${ref_genome}" "${threads}" && \
+               [[ ${covered_vcf} -nt ${anno_vcf} ]] && \
+               [[ "$(bcftools query -l ${covered_vcf})" == "$(bcftools query -l ${anno_vcf})" ]] && \
+               [[ "$(bcftools query -l ${uncovered_vcf})" == "$(bcftools query -l ${anno_vcf})" ]] && \
+               [[ ${uncovered_vcf} -nt ${anno_vcf} ]] && \
+               check_vcf_validity "${uncovered_vcf}" && \
+               clean_vcf_multiallelics "${uncovered_vcf}" "${ref_genome}" "${threads}"; then
                 log "Found cached variants and uncovered variants, will only annotate uncovered variants"
                 
                 # Save the original anno_vcf path and work with uncovered variants
@@ -215,11 +216,11 @@ function main_workflow() {
         log "Failed to add ClinVar annotation on ${anno_vcf}. Quit now"
         return 1; }
 
-		anno_control_vcf_allele \
-		${anno_vcf} \
-		${control_vcf} || { \
-		log "Failed to add control VCF allele annotation on ${anno_vcf}. Quit now"
-		return 1; }
+        anno_control_vcf_allele \
+        ${anno_vcf} \
+        ${control_vcf} || { \
+        log "Failed to add control VCF allele annotation on ${anno_vcf}. Quit now"
+        return 1; }
 
         # Now we annotate the variants with VEP
         anno_VEP_data \
@@ -237,7 +238,7 @@ function main_workflow() {
         # If using hub caching, merge covered and newly annotated variants
         if [[ -n "${final_anno_vcf}" ]]; then
             local newly_annotated_vcf="${anno_vcf}"
-			# Update hub VCF with newly annotated variants
+            # Update hub VCF with newly annotated variants
             update_hub_vcf "${newly_annotated_vcf}" "${hub_vcf_file}" "${threads}"
 
             merge_annotated_vcfs "${covered_vcf}" "${newly_annotated_vcf}" "${final_anno_vcf}"
@@ -281,7 +282,7 @@ function main_workflow() {
             else
                 # Only covered variants (should not happen but just in case)
                 log "There should be uncovered variants existed but the VCF file ${cadd_uncovered_vcf} is invalid. Quit with error"
-				return 1
+                return 1
             fi
             
             # Clean up temporary files
@@ -301,7 +302,7 @@ function preprocess_vcf() {
     local input_vcf
     local ref_genome
     local output_vcf
-	local threads
+    local threads
 
     # Use getopts to parse the arguments
     local OPTIND=1
@@ -325,9 +326,9 @@ function preprocess_vcf() {
 
     local vcf_assembly=$(check_vcf_assembly_version ${input_vcf})
 
-	if [[ -z ${threads} ]]; then
-		threads=1
-	fi
+    if [[ -z ${threads} ]]; then
+        threads=1
+    fi
 
     if [[ -z ${ref_genome} ]]; then
         log "User does not specify the ref genome fasta file. Cant proceed now. Quit with Error!"
@@ -340,9 +341,18 @@ function preprocess_vcf() {
     # Test if output_vcf is already valid
     if [[ ${output_vcf} -nt ${input_vcf} ]] && \
         check_vcf_validity ${output_vcf} && \
-        clean_vcf_multiallelics ${output_vcf} "${ref_genome}" "${threads}"; then
-        log "The ${output_vcf} is valid and udpated. Skip this function"
-        return 0;
+        clean_vcf_multiallelics ${output_vcf} "${ref_genome}" "${threads}" && \
+        [[ "$(bcftools query -l ${output_vcf})" == "$(bcftools query -l ${input_vcf})" ]]; then
+        log "The ${output_vcf} is valid and udpated. Check the sizes of the output vcf and the input vcf ${input_vcf}"
+        local output_vcf_size=$(ls -l ${output_vcf} | awk '{print $5}')
+        local input_vcf_size=$(ls -l ${input_vcf} | awk '{print $5}')
+        # If output is smaller than 80% (use awk to calculate the percentage) of the input, then we need to continue running the subsequent steps
+        if [[ $(awk -v a=${output_vcf_size} -v b=${input_vcf_size} 'BEGIN{printf "%d", (a/b)*100}') -lt 80 ]]; then
+            log "The output vcf ${output_vcf} $(ls -lh ${output_vcf} | cut -d ' ' -f 5) is smaller than 80% of the input vcf ${input_vcf} $(ls -lh ${input_vcf} | cut -d ' ' -f 5). Continue running the subsequent steps"
+        else
+            log "The output vcf ${output_vcf} $(ls -lh ${output_vcf} | cut -d ' ' -f 5) is larger than 80% of the input vcf ${input_vcf} $(ls -lh ${input_vcf} | cut -d ' ' -f 5). Skip the subsequent steps"
+            return 0;
+        fi        
     fi
 
     # First filter out variants that not in primary chromosomes (chrM to chrY)(MT to Y)
@@ -473,11 +483,11 @@ function anno_agg_gnomAD_data () {
 function anno_clinvar_data () {
     local input_vcf=${1}
     local clinvar_vcf=${2}
-	local threads=${3}
+    local threads=${3}
 
-	if [[ -z ${threads} ]]; then
-		threads=1
-	fi
+    if [[ -z ${threads} ]]; then
+        threads=1
+    fi
 
     local tmp_tag=$(randomID)
     local output_vcf=${input_vcf/.vcf/.${tmp_tag}.vcf}
@@ -600,6 +610,7 @@ function prepare_vcf_add_varID {
     fi
 
     python3 ${SCRIPT_DIR}/generate_varID_for_vcf.py \
+    -m encode \
     -i ${input_vcf} \
     -o ${output_vcf}
     check_return_code
@@ -854,7 +865,7 @@ function use_hub_vcf_annotations() {
     local threads
     local total_count
 
-	# Parse arguments using getopts
+    # Parse arguments using getopts
     local OPTIND=1
     while getopts "i:h:o:u:t:c::" opt; do
         case ${opt} in
@@ -876,9 +887,9 @@ function use_hub_vcf_annotations() {
         return 1
     fi
 
-	if [[ -z ${total_count} ]]; then
-		total_count=$(bcftools view -H "${input_vcf}" | wc -l)
-	fi
+    if [[ -z ${total_count} ]]; then
+        total_count=$(bcftools query -f '%CHROM\t%POS\t%REF\t%ALT\n' "${input_vcf}" | wc -l)
+    fi
 
     local tmp_isec_dir=$(mktemp -d --tmpdir="$TMPDIR" isec_hub.XXXXXX)
     log "Created temporary intersection directory: ${tmp_isec_dir}"
@@ -898,11 +909,11 @@ function use_hub_vcf_annotations() {
     local covered_sites_file="${tmp_isec_dir}/0002/sites.tsv"
 
     # --- Handle Uncovered Variants ---
-    if [[ -s "${uncovered_sites_file}" ]]; then
+    if [[ -f "${uncovered_sites_file}" ]]; then
         log "Extracting uncovered variants from ${input_vcf}..."
         bcftools view --threads ${threads} -R "${uncovered_sites_file}" "${input_vcf}" -Oz -o "${output_uncovered_vcf}"
         tabix -p vcf "${output_uncovered_vcf}"
-        local uncovered_count=$(bcftools view -H "${output_uncovered_vcf}" | wc -l)
+        local uncovered_count=$(bcftools query -f '%CHROM\t%POS\t%REF\t%ALT\n' "${output_uncovered_vcf}" | wc -l)
         log "Found ${uncovered_count} uncovered variants, saved to ${output_uncovered_vcf}"
     else
         log "No uncovered variants found."
@@ -920,11 +931,11 @@ function use_hub_vcf_annotations() {
         # Annotate using only INFO fields from the hub
         bcftools annotate --threads ${threads} -a "${hub_vcf}" -c INFO -Oz -o "${output_covered_vcf}" "${temp_covered_from_input}"
         tabix -p vcf "${output_covered_vcf}"
-        local covered_count=$(bcftools view -H "${output_covered_vcf}" | wc -l)
+        local covered_count=$(bcftools query -f '%CHROM\t%POS\t%REF\t%ALT\n' "${output_covered_vcf}" | wc -l)
         log "Found ${covered_count} covered variants, annotated and saved to ${output_covered_vcf}"
     else
         local uncovered_count=${total_count}
-		log "No covered variants found. Directly return error to proceed annotation across all variants in the input VCF file ${input_vcf}, which contains ${total_count} variants"
+        log "No covered variants found. Directly return error to proceed annotation across all variants in the input VCF file ${input_vcf}, which contains ${total_count} variants"
     fi
 
     # Clean up temporary directory
@@ -944,23 +955,23 @@ function use_hub_vcf_annotations() {
 function update_hub_vcf() {
     local newly_annotated_vcf=$1
     local hub_vcf=$2
-	local threads=${3}
+    local threads=${3}
 
-	if [[ -z ${threads} ]]; then
-		threads=1
-	fi
+    if [[ -z ${threads} ]]; then
+        threads=1
+    fi
     
     # Skip if no new annotations
-	local new_variant_count=$(bcftools view --threads ${threads} -H "${newly_annotated_vcf}" | wc -l)
+    local new_variant_count=$(bcftools view --threads ${threads} -H "${newly_annotated_vcf}" | wc -l)
     if [[ ! -f "${newly_annotated_vcf}" ]] || [[ ${new_variant_count} -eq 0 ]]; then
         log "No new variants to add to hub VCF"
         return 0
     fi
 
-	# Create a temp newly_annotated_vcf with only INFO fields (remove all FORMAT fields information)
-	local tmp_tag=$(randomID)
-	local temp_newly_annotated_vcf=${newly_annotated_vcf/.vcf/.tmp.${tmp_tag}.vcf}
-	remove_format_fields ${newly_annotated_vcf} ${temp_newly_annotated_vcf}
+    # Create a temp newly_annotated_vcf with only INFO fields (remove all FORMAT fields information)
+    local tmp_tag=$(randomID)
+    local temp_newly_annotated_vcf=${newly_annotated_vcf/.vcf/.tmp.${tmp_tag}.vcf}
+    remove_format_fields ${newly_annotated_vcf} ${temp_newly_annotated_vcf}
     
     # If hub VCF doesn't exist or is invalid, create it
     if [[ ! -f "${hub_vcf}" ]] || ! check_vcf_validity "${hub_vcf}"; then
@@ -968,20 +979,20 @@ function update_hub_vcf() {
         mv "${temp_newly_annotated_vcf}" "${hub_vcf}" && \
         mv "${temp_newly_annotated_vcf}.tbi" "${hub_vcf}.tbi" && \
         return 0 || \
-		{ log "Failed to create new hub VCF by directly copying the newly annotated VCF ${temp_newly_annotated_vcf}. Return with error." && return 1; }
+        { log "Failed to create new hub VCF by directly copying the newly annotated VCF ${temp_newly_annotated_vcf}. Return with error." && return 1; }
     fi
     
     # Merge hub VCF with newly annotated VCF
     local temp_hub="${hub_vcf/.vcf*/.${tmp_tag}.vcf.gz}"
-	remove_format_fields ${hub_vcf}
+    remove_format_fields ${hub_vcf}
     
     # Concatenate files and remove duplicates (keeping the newer version)
     bcftools concat -a "${hub_vcf}" "${temp_newly_annotated_vcf}" -Ou | \
     bcftools sort -Oz -o "${temp_hub}" && tabix -p vcf -f "${temp_hub}" && \
-	normalize_vcf ${temp_hub} ${hub_vcf} ${ref_genome} ${threads} && \
-	announce_remove_tmps "${temp_hub}" "${temp_newly_annotated_vcf}" && \
-	log "Updated hub VCF with $(bcftools view -H "${newly_annotated_vcf}" | wc -l) new variants" || \
-	{ log "Failed to update hub VCF with $(bcftools view -H "${newly_annotated_vcf}" | wc -l) new variants. Return with error." && return 1; }
+    normalize_vcf ${temp_hub} ${hub_vcf} ${ref_genome} ${threads} && \
+    announce_remove_tmps "${temp_hub}" "${temp_newly_annotated_vcf}" && \
+    log "Updated hub VCF with $(bcftools query -f '%CHROM\t%POS\t%REF\t%ALT\n' "${newly_annotated_vcf}" | wc -l) new variants" || \
+    { log "Failed to update hub VCF with $(bcftools query -f '%CHROM\t%POS\t%REF\t%ALT\n' "${newly_annotated_vcf}" | wc -l) new variants. Return with error." && return 1; }
 }
 
 function merge_annotated_vcfs() {
@@ -990,11 +1001,11 @@ function merge_annotated_vcfs() {
     local output_vcf=$3
     
     # Handle edge cases
-    if [[ ! -f "${newly_annotated_vcf}" ]] || [[ $(bcftools view -H "${newly_annotated_vcf}" | wc -l) -eq 0 ]]; then
-        if [[ -f "${covered_vcf}" ]] && [[ $(bcftools view -H "${covered_vcf}" | wc -l) -gt 0 ]]; then
+    if [[ ! -f "${newly_annotated_vcf}" ]] || [[ $(bcftools query -f '%CHROM\t%POS\t%REF\t%ALT\n' "${newly_annotated_vcf}" | wc -l) -eq 0 ]]; then
+        if [[ -f "${covered_vcf}" ]] && [[ $(bcftools query -f '%CHROM\t%POS\t%REF\t%ALT\n' "${covered_vcf}" | wc -l) -gt 0 ]]; then
             mv "${covered_vcf}" "${output_vcf}"
             tabix -p vcf "${output_vcf}"
-			announce_remove_tmps "${newly_annotated_vcf}" "${covered_vcf}.*"
+            announce_remove_tmps "${newly_annotated_vcf}" "${covered_vcf}.*"
             log "Using only covered variants, no newly annotated variants"
         else
             log "ERROR: No covered variants in ${covered_vcf} or newly annotated variants in ${newly_annotated_vcf} available"
@@ -1003,7 +1014,7 @@ function merge_annotated_vcfs() {
         return 0
     fi
     
-    if [[ ! -f "${covered_vcf}" ]] || [[ $(bcftools view -H "${covered_vcf}" | wc -l) -eq 0 ]]; then
+    if [[ ! -f "${covered_vcf}" ]] || [[ $(bcftools query -f '%CHROM\t%POS\t%REF\t%ALT\n' "${covered_vcf}" | wc -l) -eq 0 ]]; then
         mv "${newly_annotated_vcf}" "${output_vcf}"
         tabix -p vcf "${output_vcf}"
         log "Using only newly annotated variants, no covered variants"
@@ -1015,7 +1026,7 @@ function merge_annotated_vcfs() {
     bcftools sort -Oz -o "${output_vcf}" && \
     tabix -p vcf "${output_vcf}" && \
     announce_remove_tmps "${covered_vcf}*" "${newly_annotated_vcf}*" && \
-    log "Merged $(bcftools view -H "${covered_vcf}" | wc -l) covered variants with $(bcftools view -H "${newly_annotated_vcf}" | wc -l) newly annotated variants"
+    log "Merged $(bcftools query -f '%CHROM\t%POS\t%REF\t%ALT\n' "${covered_vcf}" | wc -l) covered variants with $(bcftools query -f '%CHROM\t%POS\t%REF\t%ALT\n' "${newly_annotated_vcf}" | wc -l) newly annotated variants"
 }
 
 function find_cached_cadd_variants() {
@@ -1038,7 +1049,7 @@ function find_cached_cadd_variants() {
         --pos "${pos_file}" \
         --covered "${output_covered_tsv}" \
         --uncovered "${uncovered_pos}" && \
-	local match_result=0 || \
+    local match_result=0 || \
     local match_result=1
     
     # Clean up temporary positions file
@@ -1059,11 +1070,11 @@ function find_cached_cadd_variants() {
     rm -f "${uncovered_pos}"
     
     # Check if any uncovered variants
-    if [[ $(bcftools view -H "${output_uncovered_vcf}" | wc -l) -eq 0 ]]; then
+    if [[ $(bcftools query -f '%CHROM\t%POS\t%REF\t%ALT\n' "${output_uncovered_vcf}" | wc -l) -eq 0 ]]; then
         log "No uncovered variants"
         return 0
     else
-        log "Will process $(bcftools view -H "${output_uncovered_vcf}" | wc -l) uncached variants"
+        log "Will process $(bcftools query -f '%CHROM\t%POS\t%REF\t%ALT\n' "${output_uncovered_vcf}" | wc -l) uncached variants"
         return 1
     fi
 }

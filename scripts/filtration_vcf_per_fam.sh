@@ -39,7 +39,7 @@ function filter_allele_based_on_pedigree_data {
 
     if [[ ${output_vcf} -nt ${input_vcf} ]] && \
 	   [[ $(check_vcf_validity ${output_vcf}) ]] && \
-       [[ $(check_vcf_lineno ${output_vcf}) -le $(check_vcf_lineno ${input_vcf}) ]]; then
+       [[ $(count_vcf_records ${output_vcf}) -le $(count_vcf_records ${input_vcf}) ]]; then
        log "The output vcf ${output_vcf} is valid and updated"
        return 0;
     fi

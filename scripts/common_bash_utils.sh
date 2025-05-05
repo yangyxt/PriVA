@@ -119,7 +119,7 @@ function display_vcf {
     fi
 
     local tmp_tab="$TMPDIR/$(randomID).tsv"
-    log "For ${input_vcf}, it contains $(bcftools query -f '%CHROM\t%POS\n' ${input_vcf} | wc -l) records and genotypes from $(bcftools query -l ${input_vcf} | wc -l) samples. Using ${tmp_tab} as the temporary table to display the records"
+    log "For ${input_vcf}, it contains $(count_vcf_records ${input_vcf}) records and genotypes from $(bcftools query -l ${input_vcf} | wc -l) samples. Using ${tmp_tab} as the temporary table to display the records"
 
     if [[ -z ${head_lines} ]]; then
         local head_lines=10
@@ -130,6 +130,12 @@ function display_vcf {
     bcftools view -H ${input_vcf} | head -${head_lines} > ${tmp_tab} && \
     display_table ${tmp_tab} && \
     silent_remove_tmps ${tmp_tab}
+}
+
+
+function count_vcf_records {
+	local input_vcf=${1}
+	bcftools query -f '\n' ${input_vcf} | wc -l
 }
 
 
@@ -270,10 +276,10 @@ function check_gz_vcf {
 
     if check_vcf_format ${input_vcf}; then  # Check input_vcf format
         log "${input_vcf} has solid vcf format. Check whether contains enough record number"
-        if [ $(bcftools view -H ${input_vcf} | head -${expected_lines} | wc -l | awk '{print $1}') -ge ${expected_lines} ]; then  # Check input_vcf content
+        if [ $(count_vcf_records ${input_vcf}) -ge ${expected_lines} ]; then  # Check input_vcf content
             log "${input_vcf} has enough records."
         else
-            log "${input_vcf} has $(bcftools query -f '%CHROM:%POS:%REF:%ALT\n' ${input_vcf} | wc -l | awk '{print $1}') valid lines while expected to have ${expected_lines} lines."
+            log "${input_vcf} has $(count_vcf_records ${input_vcf}) valid lines while expected to have ${expected_lines} lines."
             return 30
         fi
     else
@@ -290,10 +296,10 @@ function check_plain_vcf {
 
     if check_vcf_format ${input_vcf}; then
         log "${input_vcf} has solid vcf format. Check whether contains enough record number"
-        if [ $(bcftools query -f '%CHROM:%POS:%REF:%ALT\n' ${input_vcf} | wc -l | awk '{print $1}') -ge ${expected_lines} ]; then
+        if [ $(count_vcf_records ${input_vcf}) -ge ${expected_lines} ]; then
             log "${input_vcf} has enough records."
         else
-            log "${input_vcf} has $(bcftools query -f '%CHROM:%POS:%REF:%ALT\n' ${input_vcf} | wc -l | awk '{print $1}') valid lines while expected to have ${expected_lines} lines."
+            log "${input_vcf} has $(count_vcf_records ${input_vcf}) valid lines while expected to have ${expected_lines} lines."
             return 30
         fi
     else
@@ -605,12 +611,6 @@ function check_table_column {
         echo "${col_inds[*]}"
         true;
     fi
-}
-
-
-function check_vcf_lineno {
-    local input_vcf=${1}
-    bcftools query -f '%CHROM\t%POS\t%REF\t%ALT\n' ${input_vcf} | wc -l
 }
 
 

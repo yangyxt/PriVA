@@ -55,8 +55,8 @@ function filter_clinvar_records() {
 
     # Display summary
     log "Filtered VCF file created: ${output_vcf}"
-    log "Original record count: $(bcftools view -H ${input_vcf} | wc -l)"
-    log "Filtered record count: $(bcftools view -H ${output_vcf} | wc -l)"
+    log "Original record count: $(count_vcf_records ${input_vcf})"
+    log "Filtered record count: $(count_vcf_records ${output_vcf})"
 }
 
 

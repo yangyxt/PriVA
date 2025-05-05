@@ -81,7 +81,7 @@ def parse_csq_field(csq_field: str, csq_fields: List[str], logger: logging.Logge
     return anno_dict
 
 
-def extract_record_info(record, var_source_exists: bool):
+def extract_record_info(record, var_source_exists: bool, control_ac_exists: bool):
     """Extract necessary information from a VariantRecord object"""
     # Initialize the info dictionary
     info_dict = {
@@ -107,19 +107,19 @@ def extract_record_info(record, var_source_exists: bool):
         'CLNDN': ",".join(record.info.get('CLNDN', [""])),
         'CLNSIG': ",".join(record.info.get('CLNSIG', [""])),
         'CLNREVSTAT': ",".join(record.info.get('CLNREVSTAT', [""])),
-        
-        # Control cohort allele info (if present)
-        'control_AC': record.info.get('control_AC', (np.nan,))[0], # Usually Number=A, take first for biallelic
-        'control_AN': record.info.get('control_AN', np.nan),
-        'control_AF': record.info.get('control_AF', (np.nan,))[0], # Usually Number=A, take first for biallelic
-        'control_nhomalt': record.info.get('control_nhomalt', np.nan),
-        
+
         # CSQ field
         'CSQ': record.info.get('CSQ', tuple(["",])),
     }
 
     if var_source_exists:
         info_dict['VARIANT_SOURCE'] = record.info.get('VARIANT_SOURCE', "")
+    
+    if control_ac_exists:
+        info_dict['control_AC'] = record.info.get('control_AC', (np.nan,))[0]
+        info_dict['control_AN'] = record.info.get('control_AN', np.nan)
+        info_dict['control_AF'] = record.info.get('control_AF', (np.nan,))[0]
+        info_dict['control_nhomalt'] = record.info.get('control_nhomalt', np.nan)
     
     # Add population-specific fields
     pop_codes = ["nfe", "eas", "afr", "amr", "asj", "fin", "sas", "mid", "remaining"]
@@ -158,7 +158,7 @@ def extract_record_info(record, var_source_exists: bool):
 
 def convert_record_to_tab(args: tuple) -> tuple[List[Dict[str, Any]], List[str]]:
     """Convert a record dictionary to a list of dictionaries and collect logs."""
-    record_dict, worker_id, csq_fields, clinvar_csq_fields, var_source_exists = args
+    record_dict, worker_id, csq_fields, clinvar_csq_fields, var_source_exists, control_ac_exists = args
     logger, collector = setup_worker_logger(worker_id)
     
     try:
@@ -191,16 +191,16 @@ def convert_record_to_tab(args: tuple) -> tuple[List[Dict[str, Any]], List[str]]
             "CLNSIG": record_dict['info']['CLNSIG'],
             "CLNREVSTAT": record_dict['info']['CLNREVSTAT'],
             "VCF_filters": record_dict['VCF_filters'],
-
-            # Control cohort allele info (if present)
-            "control_AC": record_dict['info']['control_AC'],
-            "control_AN": record_dict['info']['control_AN'],
-            "control_AF": record_dict['info']['control_AF'],
-            "control_nhomalt": record_dict['info']['control_nhomalt'],
         }
 
         if var_source_exists:
             var_dict_items["VARIANT_SOURCE"] = record_dict['info']['VARIANT_SOURCE']
+        
+        if control_ac_exists:
+            var_dict_items["control_AC"] = record_dict['info']['control_AC']
+            var_dict_items["control_AN"] = record_dict['info']['control_AN']
+            var_dict_items["control_AF"] = record_dict['info']['control_AF']
+            var_dict_items["control_nhomalt"] = record_dict['info']['control_nhomalt']
         
         # # Add population-specific fields
         # pop_codes = ["nfe", "eas", "afr", "amr", "asj", "fin", "sas", "mid", "remaining"]
@@ -242,11 +242,14 @@ def convert_vcf_to_tab(input_vcf: str, threads=4) -> pd.DataFrame:
             csq_fields = vcf_file.header.info['CSQ'].description.split('Format: ')[1].split('|')
             clinvar_csq_fields = vcf_file.header.info['CLNCSQ'].description.split('Format: ')[1].split('|')
             var_source_exists = "VARIANT_SOURCE" in vcf_file.header.info
+            control_ac_exists = "control_AC" in vcf_file.header.info
             # Convert records to dictionaries before multiprocessing
-            record_args = ((extract_record_info(record, var_source_exists), 
+            record_args = ((extract_record_info(record, var_source_exists, control_ac_exists), 
                           f"{record.chrom}:{record.pos}:{record.ref}->{record.alts[0] if record.alts else ''}",
                           tuple(csq_fields), 
-                          tuple(clinvar_csq_fields), var_source_exists) for record in vcf_file)
+                          tuple(clinvar_csq_fields), 
+                          var_source_exists, 
+                          control_ac_exists) for record in vcf_file)
 
             with mp.Pool(threads) as pool:
                 varcount = 0

@@ -1344,7 +1344,8 @@ function InterPro_parsing () {
     --mapping_output ${interpro_dir}/Interpro_entry_mapping.pkl.gz \
     --vcf ${am_vep_vcf} \
     --report ${interpro_dir}/Interpro_format_report.txt && \
-    update_yaml "${config}" "interpro_mapping_pickle" "${interpro_dir}/Interpro_entry_mapping.pkl.gz"
+    update_yaml "${config}" "interpro_mapping_pickle" "${interpro_dir}/Interpro_entry_mapping.pkl.gz" && \
+	rm ${interpro_dir}/$(basename ${interpro_xml_gz_url})
 }
 
 

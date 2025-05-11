@@ -571,9 +571,9 @@ function normalize_vcf () {
 	log "Output vcf file ${output_vcf} is not ending with .vcf.gz. Only support .vcf.gz format now." && \
 	return 1;
 
-    bcftools norm --threads ${threads} -m -both -f ${ref_genome} --atom-overlaps "." --keep-sum AD -a ${input_vcf} | \
-    bcftools norm --threads ${threads} -d exact - | \
-    bcftools view --threads ${threads} -i 'ALT!="*" && GT="alt"' - | \
+    bcftools norm --threads ${threads} -m -both -c s -f ${ref_genome} --atom-overlaps "." --keep-sum AD -Ou -a ${input_vcf} | \
+    bcftools norm --threads ${threads} -d exact -Ou - | \
+    bcftools filter --threads ${threads} -i 'ALT!="*" && GT="alt"' -Ou - | \
     bcftools sort -Oz -o ${output_vcf} && \
     tabix -f -p vcf ${output_vcf}
 

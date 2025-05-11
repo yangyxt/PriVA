@@ -1,5 +1,6 @@
 import os
 import pickle
+import gzip
 import pandas as pd
 import numpy as np
 import argparse as ap
@@ -34,9 +35,9 @@ def splicing_interpretation(anno_table,
     """Process annotation table in parallel to interpret splicing effects"""
     anno_df = pd.read_table(anno_table, low_memory=False)
 
-    intolerant_domains = pickle.load(open(intolerant_domains_pkl, 'rb'))
-    transcript_domain_map = pickle.load(open(transcript_domain_map_pkl, 'rb'))
-    interpro_entry_map_dict = pickle.load(open(interpro_entry_map_pkl, 'rb'))
+    intolerant_domains = pickle.load(gzip.open(intolerant_domains_pkl, 'rb')) if intolerant_domains_pkl.endswith('.gz') else pickle.load(open(intolerant_domains_pkl, 'rb'))
+    transcript_domain_map = pickle.load(gzip.open(transcript_domain_map_pkl, 'rb')) if transcript_domain_map_pkl.endswith('.gz') else pickle.load(open(transcript_domain_map_pkl, 'rb'))
+    interpro_entry_map_dict = pickle.load(gzip.open(interpro_entry_map_pkl, 'rb')) if interpro_entry_map_pkl.endswith('.gz') else pickle.load(open(interpro_entry_map_pkl, 'rb'))
 
     dm_instance = DomainNormalizer()
     # Create partial function with fixed arguments
@@ -283,17 +284,12 @@ def SpliceVault_interpretation(value,
     no_len_change_frac = sum([result['fraction_of_samples'] for result in analysis_results if not result['length_changing']])
     harmful_odds_ratio = harmful_frac / non_harmful_frac if non_harmful_frac > 0 else 20
     len_change_odds_ratio = len_change_frac / no_len_change_frac if no_len_change_frac > 0 else 20
-    if harmful_odds_ratio >= 20 and harmful_frac > 0.05 and spliceai_delta >= 0.5:
-        logger.info(f"For {transcript_id}, there are {harmful_frac} fraction of samples with harmful events and {non_harmful_frac} fraction of samples with non-harmful events, the fraction ratio is {harmful_odds_ratio}, so return LoF, the interpretations are {analysis_results}\n")
-        return True, True
-    elif harmful_odds_ratio >= 20 and harmful_frac > 0.4 and spliceai_delta >= 0.3:
+    if harmful_odds_ratio >= 20 and harmful_frac > 0.3 and spliceai_delta >= 0.5:
         logger.info(f"For {transcript_id}, there are {harmful_frac} fraction of samples with harmful events and {non_harmful_frac} fraction of samples with non-harmful events, the fraction ratio is {harmful_odds_ratio}, so return LoF, the interpretations are {analysis_results}\n")
         return True, True
     else:
         logger.info(f"For {transcript_id}, there are {harmful_frac} fraction of samples with harmful events and {non_harmful_frac} fraction of samples with non-harmful events, the fraction ratio is {harmful_odds_ratio}, so return VOUS, the interpretations are {analysis_results}\n")
-        if len_change_odds_ratio >= 20 and len_change_frac > 0.05 and spliceai_delta >= 0.5:
-            return False, True
-        elif len_change_odds_ratio >= 20 and len_change_frac > 0.4 and spliceai_delta >= 0.3:
+        if len_change_odds_ratio >= 20 and len_change_frac > 0.3 and spliceai_delta >= 0.5:
             return False, True
         else:
             return False, False

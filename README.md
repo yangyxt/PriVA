@@ -262,7 +262,9 @@ The pipeline automatically adapts based on the presence of the `ped_file` specif
 
 ## License
 
-[Specify your license information here]
+PriVA is licensed under the Apache License 2.0 with Commons Clause. This means:
+- You can use, modify, and share it freely for academic and clinical research.
+- Commercial use is prohibited without my permission, including selling PriVA as a product or involving PriVA as a part of charging service.
 
 ## Contact
 

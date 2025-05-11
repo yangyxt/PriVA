@@ -114,6 +114,9 @@ interpro_mapping_pickle: "/paedyl01/disk1/yangyxt/PriVA/data/InterPro/Interpro_e
 # Make sure that the VCF file is in an reference genome that is consistent with the processing VCF file
 alt_disease_vcf: /paedyl01/disk1/yangyxt/public_data/ShortStatue/ShortStature.hg19.vcf.gz
 control_vcf: ""
+pp1_vcf: ""
+pp1_ped: ""
+
 extreme_rare_PAF: 0.0001
 exp_disease_incidence: 0.001
 

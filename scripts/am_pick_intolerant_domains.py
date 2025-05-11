@@ -104,6 +104,10 @@ def analyze_domain_tolerance(query_scores: np.ndarray,
             ref_scores,
             alternative='greater'
         )
+		
+		# For alternative='greater',
+		# CDF of ref scores < CDF of query scores if p-value < 0.05, so PDF of ref scores > PDF of query scores, meaning query domains are more tolerant
+		# CDF of ref scores >= CDF of query scores if p-value > 0.05, so PDF of ref scores <= PDF of query scores, meaning query domains are more or equally intolerant
         
         # Calculate effect sizes (percentile differences)
         percentile_diffs = calculate_percentile_differences(query_scores, ref_scores)
@@ -236,9 +240,9 @@ def identify_functional_domain(domain_path, dm_instance=None, func_map_dict = No
         functional = False if all([go_term[1] != "molecular_function" for go_term in go_terms]) else True
     else:
         return None
-    if functional and interpro_type in ["Conserved_Site", "Binding_site", "Active_site", "Domain"]:
+    if functional and interpro_type in ["Conserved_Site", "Binding_site", "Active_site", "Domain", "PTM"]:
         return "Functional"
-    elif not functional and interpro_type in ["Domain", "Conserved_Site", "Binding_site", "Active_site"]:
+    elif not functional and interpro_type in ["Domain", "Conserved_Site", "Binding_site", "Active_site", "PTM"]:
         return "Non-functional"
     else:
         return None

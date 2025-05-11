@@ -151,6 +151,8 @@ function assign_acmg_criteria () {
     local output_acmg_mat=${input_tab::-4}.acmg.tsv
     local repeat_region_file_name=$(read_yaml ${config_file} "repeat_region_file_name")
     local repeat_region_file=${BASE_DIR}/data/repeats/${repeat_region_file_name}
+	local pp1_vcf=$(read_yaml ${config_file} "pp1_vcf")
+	local pp1_ped=$(read_yaml ${config_file} "pp1_ped")
 
     local has_error=0
     check_path ${clinvar_aa_dict_pkl} "file" "clinvar_aa_stat" || has_error=1
@@ -202,11 +204,12 @@ function assign_acmg_criteria () {
     
     local acmg_py=${SCRIPT_DIR}/acmg_criteria_assign.py
     
-    [[ -z ${ped_table} ]] && local ped_arg="" || local ped_arg="--ped_table ${ped_table}"
+	check_vcf_validity ${pp1_vcf} && [[ -f ${pp1_ped} ]] && local pp1_arg="--pp1_vcf ${pp1_vcf} --pp1_ped ${pp1_ped}" || local pp1_arg=""
+    [[ -f ${ped_table} ]] && local ped_arg="--ped_table ${ped_table}" || local ped_arg=""
     [[ -z ${fam_name} ]] && local fam_arg="" || local fam_arg="--fam_name ${fam_name}"
-    [[ -z ${alt_disease_vcf} ]] && local alt_disease_arg="" || local alt_disease_arg="--alt_disease_vcf ${alt_disease_vcf}"
+    check_vcf_validity ${alt_disease_vcf} && local alt_disease_arg="--alt_disease_vcf ${alt_disease_vcf}" || local alt_disease_arg=""
 
-    log "Running the following command to assign the ACMG criterias: python ${acmg_py} --anno_table ${input_tab} --am_score_table ${mean_am_score_table} --clinvar_aa_dict_pkl ${clinvar_aa_dict_pkl} --intolerant_domains_pkl ${intolerant_domains_pkl} --intolerant_motifs_pkl ${intolerant_motifs_pkl} --clinvar_gene_stat_pkl ${clinvar_gene_stat_pkl} --gnomAD_extreme_rare_threshold ${gnomAD_extreme_rare_threshold} --expected_incidence ${expected_incidence} --am_score_vcf ${am_score_vcf} --threads ${threads} --tranx_exon_domain_map_pkl ${tranx_exon_domain_map_pkl} ${ped_arg} ${fam_arg} ${alt_disease_arg} ${mavedb_arg}"
+    log "Running the following command to assign the ACMG criterias: python ${acmg_py} --anno_table ${input_tab} --am_score_table ${mean_am_score_table} --clinvar_aa_dict_pkl ${clinvar_aa_dict_pkl} --intolerant_domains_pkl ${intolerant_domains_pkl} --intolerant_motifs_pkl ${intolerant_motifs_pkl} --clinvar_gene_stat_pkl ${clinvar_gene_stat_pkl} --gnomAD_extreme_rare_threshold ${gnomAD_extreme_rare_threshold} --expected_incidence ${expected_incidence} --am_score_vcf ${am_score_vcf} --threads ${threads} --tranx_exon_domain_map_pkl ${tranx_exon_domain_map_pkl} ${ped_arg} ${fam_arg} ${alt_disease_arg} ${mavedb_arg} ${pp1_arg}"
     python ${acmg_py} \
     --anno_table ${input_tab} \
     --am_score_table ${mean_am_score_table} \
@@ -224,7 +227,7 @@ function assign_acmg_criteria () {
     --expected_incidence ${expected_incidence} \
     --am_score_vcf ${am_score_vcf} \
     --threads ${threads} \
-    --tranx_exon_domain_map_pkl ${tranx_exon_domain_map_pkl} ${ped_arg} ${fam_arg} ${alt_disease_arg} ${mavedb_arg} && \
+    --tranx_exon_domain_map_pkl ${tranx_exon_domain_map_pkl} ${ped_arg} ${fam_arg} ${alt_disease_arg} ${mavedb_arg} ${pp1_arg} && \
     display_table ${input_tab} && \
     log "The ACMG criterias are assigned for ${input_tab}, added with three columns: ACMG_quant_score, ACMG_class, ACMG_criteria, and the output matrix is saved to ${output_acmg_mat}" && \
     display_table ${output_acmg_mat} || \

@@ -8,413 +8,493 @@ import polars as pl
 from pathlib import Path
 import logging
 
-
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
-console_handler=logging.StreamHandler()
+console_handler = logging.StreamHandler()
 console_handler.setLevel(logging.INFO)
 formatter = logging.Formatter("%(levelname)s:%(asctime)s:%(module)s:%(funcName)s:%(lineno)s:%(message)s")
 console_handler.setFormatter(formatter)
 logger.addHandler(console_handler)
 
+# Define standard column sets
+OUTPUT_HEADER_COLS = ["#Chrom", "Pos", "Ref", "Alt", "FeatureID", "PHRED"]
+INTERNAL_PROCESSING_COLS = ["Chrom", "Pos", "Ref", "Alt", "FeatureID", "PHRED"]
+SELF_SCRIPT_PATH = Path(__file__).parent.parent
+CONTIG_MAP_PATH = os.path.join(SELF_SCRIPT_PATH, "data", "liftover", "GRC_to_ucsc.contig.map.txt")
 
-def match_variants(hub_file, pos_file, covered_file, uncovered_file, threads=None):
+
+
+def table_to_dict(file_path, separator=' '):
+    """
+    Efficiently convert a 2-column table to dictionary.
+    
+    Parameters:
+    - file_path: Path to the table file
+    - separator: Column delimiter (default: tab)
+    - has_header: Whether the file has a header row
+    - key_col: Name or index of key column (if None, uses first column)
+    - val_col: Name or index of value column (if None, uses second column)
+    
+    Returns:
+    - Dictionary mapping keys to values
+    """
+    result_dict = {}
+    with open(file_path, 'r', encoding='utf-8') as f:
+        for line in f.readlines():
+            line = line.strip()
+            if not line:
+                continue
+            key, val = line.split(separator)
+            result_dict[key] = val
+    return result_dict
+
+
+
+def read_and_standardize_chrom(file_path, 
+                               separator='\t', 
+                               has_header=True, 
+                               comment_prefix='#', 
+                               is_pos_file=False, 
+                               null_values=["NA", "na", "NaN", "nan", "", ".", ",", ";", "NAN"]):
+    """Reads a CSV/TSV and standardizes the chromosome column name."""
+    if is_pos_file: # Position file from VCF has no header and fixed columns
+        force_schema = {"column_1": pl.Utf8}
+        df = pl.read_csv(file_path, separator=separator, has_header=False, comment_prefix=comment_prefix, null_values=null_values, infer_schema_length=10000, schema_overrides=force_schema)
+        df = df.rename({
+            "column_1": "Chrom",
+            "column_2": "Pos",
+            "column_3": "Ref",
+            "column_4": "Alt"
+        })
+        # Select only these four columns for pos_file
+        return df.select(["Chrom", "Pos", "Ref", "Alt"])
+
+    force_schema = {"#Chrom": pl.Utf8, "Chrom": pl.Utf8, "column_1": pl.Utf8}
+    df = pl.read_csv(file_path, 
+                     separator=separator, 
+                     has_header=has_header,
+                     null_values=null_values, 
+                     infer_schema_length=1000, 
+                     schema_overrides=force_schema)
+    if "#Chrom" in df.columns:
+        df = df.rename({"#Chrom": "Chrom"})
+
+    # pretty print the first 10 rows of df
+    logger.info(f"First 10 rows of {file_path}: \n{df.head(10)}")
+
+    # If chr prefix is absent from the first value of Chrom column, add it
+    contig_map_dict = table_to_dict(CONTIG_MAP_PATH, separator=' ')
+    df = df.with_columns([pl.col("Chrom").replace_strict(contig_map_dict, default=pl.col("Chrom")).alias("Chrom")])
+
+    logger.info(f"First 10 rows of {file_path} after contig map: \n{df.head(10)}")
+    # Ensure all internal processing columns (or all output header cols if more relevant) exist for hub/new files
+    # For this generic function, we'll assume "Chrom" is the main one to standardize.
+    # Specific column selection will happen in the calling functions.
+    return df
+
+
+def select_and_rename_for_output(df: pl.DataFrame) -> pl.DataFrame:
+    """Selects standard columns and renames Chrom to #Chrom for output."""
+    if "Chrom" not in df.columns:
+        logger.error("Cannot rename 'Chrom' to '#Chrom': 'Chrom' column does not exist.")
+        # Attempt to select other columns if they exist
+        cols_to_select_anyway = [col for col in OUTPUT_HEADER_COLS if col in df.columns or col.replace("#","") in df.columns]
+        if not cols_to_select_anyway:
+             raise ValueError("DataFrame does not contain 'Chrom' or any recognizable output columns.")
+        return df.select(cols_to_select_anyway) # Or handle error more gracefully
+
+    # Ensure all internal columns are present before trying to select them with #Chrom rename
+    # This expects df to have "Chrom" and other INTERNAL_PROCESSING_COLS
+    select_exprs = []
+    if "Chrom" in df.columns:
+        select_exprs.append(pl.col("Chrom").alias("#Chrom"))
+    for col_name in INTERNAL_PROCESSING_COLS:
+        if col_name != "Chrom" and col_name in df.columns:
+            select_exprs.append(pl.col(col_name))
+    
+    # If FeatureID or PHRED are missing from df, this select will fail.
+    # It's better to select based on OUTPUT_HEADER_COLS, mapping from internal names.
+    final_selection = []
+    if "Chrom" in df.columns: # This should be the case if the function is called correctly
+        final_selection.append(pl.col("Chrom").alias("#Chrom"))
+    else: # Fallback if Chrom is already #Chrom or missing
+        if "#Chrom" in df.columns:
+            final_selection.append(pl.col("#Chrom"))
+
+    for col_name in OUTPUT_HEADER_COLS:
+        internal_name = col_name.replace("#", "")
+        if col_name == "#Chrom": continue # Already handled
+        if internal_name in df.columns:
+            final_selection.append(pl.col(internal_name))
+        elif col_name in df.columns: # If it was already #Chrom for example
+             final_selection.append(pl.col(col_name))
+    
+    return df.select(final_selection)
+
+
+def match_variants(hub_file, pos_file, covered_file, uncovered_file, threads=None, null_values=["NA", "na", "NaN", "nan", "", ".", ",", ";", "NAN"]):
     """Match variants in position file against hub file using Polars for efficiency"""
-    if threads is None:
-        threads = mp.cpu_count()
+    # Threads argument is kept for signature compatibility, Polars handles its own threading.
+    # if threads is None:
+    #     threads = mp.cpu_count() # Polars uses this by default
 
     # Check if hub file exists and has content
     if not os.path.exists(hub_file) or os.path.getsize(hub_file) == 0:
-        # Write all variants to uncovered file
-        variants_df = pl.read_csv(pos_file, separator='\t', has_header=False)
-        variants_df = variants_df.rename({
-            "column_1": "Chrom",
-            "column_2": "Pos",
-			"column_3": "Ref",
-			"column_4": "Alt"
-        })
+        variants_df = read_and_standardize_chrom(pos_file, is_pos_file=True)
         
-        # Write uncovered positions - ensuring 1-indexed positions for bcftools -R
-        # The format is CHROM\tPOS, which bcftools treats as 1-indexed positions
         with open(uncovered_file, 'w') as f:
             for row in variants_df.select(["Chrom", "Pos"]).iter_rows():
                 f.write(f"{row[0]}\t{row[1]}\n")
         
-        # Create empty covered file with header
         with open(covered_file, 'w') as f:
-            f.write("#Chrom\tPos\tRef\tAlt\tFeatureID\tPHRED\n")
+            f.write("\t".join(OUTPUT_HEADER_COLS) + "\n")
         
         logger.warning(f"Hub file {hub_file} missing or empty, all variants are uncovered")
-        return False
+        return False # Indicates not all variants were covered (in this case, none were from hub)
     
-    # Read position file with variant data
-    variants_df = pl.read_csv(pos_file, separator='\t', has_header=False)
-    variants_df = variants_df.rename({
-        "column_1": "Chrom",
-        "column_2": "Pos",
-        "column_3": "Ref",
-        "column_4": "Alt"
-    })
-    
-    # Create lookup key
-    variants_df = variants_df.with_column(
+    variants_df = read_and_standardize_chrom(pos_file, is_pos_file=True)
+    variants_df = variants_df.with_columns(
         pl.concat_str([
-            pl.col("Chrom"),
+            pl.col("Chrom").cast(pl.Utf8),
             pl.col("Pos").cast(pl.Utf8),
-            pl.col("Ref"),
-            pl.col("Alt")
+            pl.col("Ref").cast(pl.Utf8),
+            pl.col("Alt").cast(pl.Utf8)
         ], separator="_").alias("var_key")
     )
     
-    # Read hub file with lazy evaluation - only needed columns
-    hub_df = pl.scan_csv(
-        hub_file, 
-        separator='\t',
-        has_header=True,
-        comment_char='#'
-    ).select([
-        pl.col("#Chrom").alias("Chrom"),
-        pl.col("Pos"),
-        pl.col("Ref"),
-        pl.col("Alt"),
-        pl.col("FeatureID"),
-        pl.col("PHRED")
-    ])
-    
-    # Create lookup key for hub
+    hub_df_raw = read_and_standardize_chrom(hub_file, comment_prefix='#')
+    # Select only the necessary columns for internal processing from the hub
+    try:
+        hub_df = hub_df_raw.select(INTERNAL_PROCESSING_COLS)
+    except pl.ColumnNotFoundError as e:
+        logger.error(f"Hub file {hub_file} is missing required columns: {e}. Cannot proceed with matching.")
+        # Fallback: treat as if hub was empty
+        with open(uncovered_file, 'w') as f:
+            for row in variants_df.select(["Chrom", "Pos"]).iter_rows():
+                f.write(f"{row[0]}\t{row[1]}\n")
+        with open(covered_file, 'w') as f:
+            f.write("\t".join(OUTPUT_HEADER_COLS) + "\n")
+        return False
+
+
     hub_df = hub_df.with_columns(
         pl.concat_str([
-            pl.col("Chrom"),
+            pl.col("Chrom").cast(pl.Utf8),
             pl.col("Pos").cast(pl.Utf8),
-            pl.col("Ref"),
-            pl.col("Alt")
+            pl.col("Ref").cast(pl.Utf8),
+            pl.col("Alt").cast(pl.Utf8)
         ], separator="_").alias("var_key")
     )
     
-    # Collect hub data with key for faster lookup
-    hub_df = hub_df.collect()
+    # hub_df is already a DataFrame. The .collect() call was an error and is removed.
     
-    # Create sets of variant keys for fast lookup
     variant_keys = set(variants_df["var_key"].to_list())
     hub_keys = set(hub_df["var_key"].to_list())
     
-    # Find covered variants
     covered_keys = variant_keys.intersection(hub_keys)
     uncovered_keys = variant_keys - covered_keys
     
-    # Filter covered variants from hub
-    covered_df = hub_df.filter(pl.col("var_key").is_in(covered_keys))
+    # Filter covered variants from hub_df (which has internal column names)
+    covered_df_internal = hub_df.filter(pl.col("var_key").is_in(list(covered_keys))) # Use list for safety
     
-    # Write covered variants to file
-    # Write to temp file first and then move
-    temp_covered = f"{covered_file}.temp"
-    covered_df.drop("var_key").write_csv(temp_covered, separator='\t')
+    temp_covered = f"{covered_file}.temp.{os.getpid()}"
+    if not covered_df_internal.is_empty():
+        covered_df_output = select_and_rename_for_output(covered_df_internal.drop("var_key"))
+        covered_df_output.write_csv(temp_covered, separator='\t')
+    else: # Create empty temp file if no covered variants
+        with open(temp_covered, 'w') as f:
+            f.write("\t".join(OUTPUT_HEADER_COLS) + "\n")
+
+
+    if os.path.exists(temp_covered): # Check if temp file was created (even if empty with header)
+        if os.path.getsize(temp_covered) > 0 or not covered_df_internal.is_empty(): # Ensure non-empty content if variants were expected
+            os.rename(temp_covered, covered_file)
+        elif covered_df_internal.is_empty() and os.path.getsize(temp_covered) == len("\t".join(OUTPUT_HEADER_COLS) + "\n"):
+             os.rename(temp_covered, covered_file) # It's an empty file with just header
+        else:
+            logger.error(f"Error: Failed to create valid covered file. Temp file size: {os.path.getsize(temp_covered)}")
+            if os.path.exists(temp_covered): os.remove(temp_covered)
+            # Fallback to creating a minimal covered file
+            with open(covered_file, 'w') as f:
+                f.write("\t".join(OUTPUT_HEADER_COLS) + "\n")
+    else: # Should not happen if logic above is correct
+        logger.error("Error: Temp covered file was not created.")
+        with open(covered_file, 'w') as f:
+            f.write("\t".join(OUTPUT_HEADER_COLS) + "\n")
+
+    uncovered_pos_df = variants_df.filter(pl.col("var_key").is_in(list(uncovered_keys)))
     
-    if os.path.exists(temp_covered) and os.path.getsize(temp_covered) > 0:
-        os.rename(temp_covered, covered_file)
-    else:
-        logger.error("Error: Failed to create valid covered file")
-        if os.path.exists(temp_covered):
-            os.remove(temp_covered)
-    
-    # Get uncovered variants
-    uncovered_df = variants_df.filter(pl.col("var_key").is_in(uncovered_keys))
-    
-    # Write uncovered positions to file for bcftools
-    # The format is CHROM\tPOS, which bcftools treats as 1-indexed positions
-    temp_uncovered = f"{uncovered_file}.temp"
+    temp_uncovered = f"{uncovered_file}.temp.{os.getpid()}"
     with open(temp_uncovered, 'w') as f:
-        for row in uncovered_df.select(["Chrom", "Pos"]).iter_rows():
+        for row in uncovered_pos_df.select(["Chrom", "Pos"]).iter_rows():
             f.write(f"{row[0]}\t{row[1]}\n")
     
-    if os.path.exists(temp_uncovered) and os.path.getsize(temp_uncovered) > 0:
+    # Ensure uncovered_file is always created, even if empty
+    if os.path.exists(temp_uncovered) and (os.path.getsize(temp_uncovered) > 0 or uncovered_pos_df.is_empty()):
         os.rename(temp_uncovered, uncovered_file)
     else:
-        logger.error("Error: Failed to create valid uncovered file")
-        if os.path.exists(temp_uncovered):
+        logger.warning(f"No uncovered positions to write, or failed to write. Creating empty uncovered file: {uncovered_file}")
+        with open(uncovered_file, 'w') as f: # Create empty file
+            pass
+        if os.path.exists(temp_uncovered) and os.path.getsize(temp_uncovered) == 0: # if temp was empty, remove it
             os.remove(temp_uncovered)
-    
-    # Print stats
+        elif os.path.exists(temp_uncovered): # if temp existed with error
+             logger.error(f"Failed to create valid uncovered file from temp file.")
+             os.remove(temp_uncovered)
+
+
     total = len(variant_keys)
     covered = len(covered_keys)
-    uncovered = len(uncovered_keys)
-    logger.info(f"Found {covered} cached variants, {uncovered} uncached variants")
+    uncovered_count = len(uncovered_keys) # Use a different name to avoid conflict with file name
+    logger.info(f"Found {covered} cached variants, {uncovered_count} uncached variants from {total} input variants.")
     
-    # Return True if all variants were covered
-    return uncovered == 0
+    return uncovered_count == 0
 
-def update_hub(new_file, hub_file, threads=None):
+
+def update_hub(new_file_path, hub_file_path, threads=None, null_values=["NA", "na", "NaN", "nan", "", ".", ",", ";", "NAN"]):
     """Update hub CADD TSV with new scores using Polars, with atomic file operations"""
-    if threads is None:
-        threads = mp.cpu_count()
-    
-    # Skip if new file doesn't exist or is empty
-    if not os.path.exists(new_file) or os.path.getsize(new_file) == 0:
-        logger.info("New CADD file is empty or doesn't exist, no update needed")
+    if not os.path.exists(new_file_path) or os.path.getsize(new_file_path) == 0:
+        logger.info(f"New CADD file {new_file_path} is empty or doesn't exist, no update needed")
         return
     
-    # Ensure hub directory exists
-    hub_dir = os.path.dirname(hub_file)
-    os.makedirs(hub_dir, exist_ok=True)
+    hub_dir = os.path.dirname(hub_file_path)
+    if hub_dir: # Create dir only if hub_file_path includes a directory part
+        os.makedirs(hub_dir, exist_ok=True)
     
-    # Create temp file in same directory to ensure atomic move
-    temp_file = f"{hub_file}.temp"
+    temp_hub_file = f"{hub_file_path}.temp.{os.getpid()}"
     
-    # If hub file doesn't exist, just copy the new file with only needed columns
-    if not os.path.exists(hub_file) or os.path.getsize(hub_file) == 0:
-        new_df = pl.read_csv(
-            new_file, 
-            separator='\t', 
-            has_header=True, 
-            comment_char='#'
-        ).select([
-            pl.col("#Chrom").alias("Chrom"),
-            pl.col("Pos"),
-            pl.col("Ref"),
-            pl.col("Alt"),
-            pl.col("FeatureID"),
-            pl.col("PHRED")
-        ])
-        
-        # Check if we need to rename the first column
-        if "#Chrom" not in new_df.columns and "Chrom" in new_df.columns:
-            new_df = new_df.rename({"Chrom": "#Chrom"})
-        
-        # Write to temp file first
-        new_df.write_csv(temp_file, separator='\t')
-        
-        # Check if temp file is valid
-        if os.path.exists(temp_file) and os.path.getsize(temp_file) > 0:
-            # Move temp file to hub file (atomic operation)
-            os.rename(temp_file, hub_file)
-            logger.info(f"Created new CADD hub TSV with {len(new_df)} variants")
-        else:
-            logger.error("Error: Failed to create valid temp file")
-            if os.path.exists(temp_file):
-                os.remove(temp_file)
+    new_df_raw = read_and_standardize_chrom(new_file_path, comment_prefix='#')
+    try:
+        new_df_internal = new_df_raw.select(INTERNAL_PROCESSING_COLS)
+    except pl.ColumnNotFoundError as e:
+        logger.error(f"New file {new_file_path} is missing required columns: {e}. Cannot update hub.")
         return
-    
-    # Read existing hub data
-    hub_df = pl.read_csv(
-        hub_file, 
-        separator='\t', 
-        has_header=True,
-        comment_char='#'
-    ).select([
-        pl.col("#Chrom").alias("Chrom"),
-        pl.col("Pos"),
-        pl.col("Ref"),
-        pl.col("Alt"),
-        pl.col("FeatureID"),
-        pl.col("PHRED")
-    ])
-    
-    original_size = len(hub_df)
-    
-    # Create lookup key for hub
-    hub_df = hub_df.with_columns(
-        pl.concat_str([
-            pl.col("Chrom"),
-            pl.col("Pos").cast(pl.Utf8),
-            pl.col("Ref"),
-            pl.col("Alt")
-        ], separator="_").alias("var_key")
-    )
-    
-    # Read new data
-    new_df = pl.read_csv(
-        new_file, 
-        separator='\t', 
-        has_header=True,
-        comment_char='#'
-    ).select([
-        pl.col("#Chrom").alias("Chrom"),
-        pl.col("Pos"),
-        pl.col("Ref"),
-        pl.col("Alt"),
-        pl.col("FeatureID"),
-        pl.col("PHRED")
-    ])
-    
-    # Create lookup key for new data
-    new_df = new_df.with_columns(
-        pl.concat_str([
-            pl.col("Chrom"),
-            pl.col("Pos").cast(pl.Utf8),
-            pl.col("Ref"),
-            pl.col("Alt")
-        ], separator="_").alias("var_key")
-    )
-    
-    # Get hub keys for filtering
-    hub_keys = set(hub_df["var_key"].to_list())
-    
-    # Filter new variants not in hub
-    new_variants = new_df.filter(~pl.col("var_key").is_in(hub_keys))
-    
-    # If no new variants, we're done
-    if len(new_variants) == 0:
-        logger.info("No new variants to add to hub")
-        return
-    
-    # Prepare new variants for append (drop var_key and rename Chrom back to #Chrom)
-    new_variants = new_variants.drop("var_key")
-    if "Chrom" in new_variants.columns and "#Chrom" not in new_variants.columns:
-        new_variants = new_variants.rename({"Chrom": "#Chrom"})
-    
-    # Create the combined DataFrame
-    combined_df = pl.concat([hub_df.drop("var_key"), new_variants])
-    
-    # Write to temp file first
-    combined_df.write_csv(temp_file, separator='\t')
-    
-    # Verify the temp file is valid and larger than original
-    if os.path.exists(temp_file) and os.path.getsize(temp_file) > 0:
-        # Additional verification that the file is valid and has more entries
-        try:
-            # Check if the new file has more entries
-            temp_df = pl.read_csv(temp_file, separator='\t', has_header=True, comment_char='#')
-            if len(temp_df) > original_size:
-                # Move temp file to hub file (atomic operation)
-                os.rename(temp_file, hub_file)
-                logger.info(f"Added {len(new_variants)} new variants to CADD hub TSV")
-            else:
-                logger.error("Error: Temp file doesn't contain more entries than original")
-                os.remove(temp_file)
-        except Exception as e:
-            logger.error(f"Error verifying temp file: {str(e)}")
-            if os.path.exists(temp_file):
-                os.remove(temp_file)
-    else:
-        logger.error("Error: Failed to create valid temp file")
-        if os.path.exists(temp_file):
-            os.remove(temp_file)
 
-def merge_results(covered_file, new_file, output_file):
-    """Merge covered and new CADD results using Polars with atomic file updates"""
-    # Check if files exist and have content
-    covered_exists = os.path.exists(covered_file) and os.path.getsize(covered_file) > 0
-    new_exists = os.path.exists(new_file) and os.path.getsize(new_file) > 0
-    
-    if not covered_exists and not new_exists:
-        logger.error("ERROR: No CADD scores available (neither covered nor newly calculated)")
-        return False
-    
-    # Ensure output directory exists
-    os.makedirs(os.path.dirname(output_file), exist_ok=True)
-    
-    # Create temp file in same directory for atomic operation
-    temp_file = f"{output_file}.temp"
-    
-    # Handle edge cases
-    if not covered_exists:
-        logger.info("No cached variants, using only newly calculated CADD scores")
-        # Just copy the new file
-        new_df = pl.read_csv(new_file, separator='\t', has_header=True, comment_char='#')
-        new_df.write_csv(temp_file, separator='\t')
+    if not os.path.exists(hub_file_path) or os.path.getsize(hub_file_path) == 0:
+        logger.info(f"Hub file {hub_file_path} does not exist or is empty. Creating new hub from {new_file_path}.")
+        final_hub_df = select_and_rename_for_output(new_df_internal)
+        final_hub_df.write_csv(temp_hub_file, separator='\t')
         
-        if os.path.exists(temp_file) and os.path.getsize(temp_file) > 0:
-            os.rename(temp_file, output_file)
-            return True
+        if os.path.exists(temp_hub_file) and os.path.getsize(temp_hub_file) > 0:
+            os.rename(temp_hub_file, hub_file_path)
+            logger.info(f"Created new CADD hub TSV {hub_file_path} with {len(final_hub_df)} variants.")
         else:
-            logger.error("Error: Failed to create valid output file")
-            if os.path.exists(temp_file):
-                os.remove(temp_file)
-            return False
-    
-    if not new_exists:
-        logger.info("No new CADD scores, using only cached variants")
-        # Just copy the covered file
-        covered_df = pl.read_csv(covered_file, separator='\t', has_header=True, comment_char='#')
-        covered_df.write_csv(temp_file, separator='\t')
+            logger.error(f"Error: Failed to create valid temp file for new hub {hub_file_path}.")
+            if os.path.exists(temp_hub_file): os.remove(temp_hub_file)
+        return
+
+    hub_df_raw = read_and_standardize_chrom(hub_file_path, comment_prefix='#')
+    try:
+        hub_df_internal = hub_df_raw.select(INTERNAL_PROCESSING_COLS)
+    except pl.ColumnNotFoundError as e:
+        logger.error(f"Existing hub file {hub_file_path} is missing required columns: {e}. Cannot update. Consider re-creating the hub.")
+        return
         
-        if os.path.exists(temp_file) and os.path.getsize(temp_file) > 0:
-            os.rename(temp_file, output_file)
-            return True
-        else:
-            logger.error("Error: Failed to create valid output file")
-            if os.path.exists(temp_file):
-                os.remove(temp_file)
-            return False
+    original_size = len(hub_df_internal)
     
-    # Read both files
-    covered_df = pl.read_csv(covered_file, separator='\t', has_header=True, comment_char='#')
-    new_df = pl.read_csv(new_file, separator='\t', has_header=True, comment_char='#')
+    hub_df_internal = hub_df_internal.with_columns(
+        pl.concat_str([pl.col(c).cast(pl.Utf8) for c in ["Chrom", "Pos", "Ref", "Alt"]], separator="_").alias("var_key")
+    )
+    new_df_internal = new_df_internal.with_columns(
+        pl.concat_str([pl.col(c).cast(pl.Utf8) for c in ["Chrom", "Pos", "Ref", "Alt"]], separator="_").alias("var_key")
+    )
     
-    # Standardize column names between the two DataFrames
-    if "#Chrom" in covered_df.columns and "Chrom" in new_df.columns:
-        new_df = new_df.rename({"Chrom": "#Chrom"})
-    elif "Chrom" in covered_df.columns and "#Chrom" in new_df.columns:
-        new_df = new_df.rename({"#Chrom": "Chrom"})
+    hub_keys = set(hub_df_internal["var_key"].to_list())
+    new_variants_to_add = new_df_internal.filter(~pl.col("var_key").is_in(list(hub_keys)))
     
-    # Concatenate the DataFrames
-    combined_df = pl.concat([covered_df, new_df])
+    if new_variants_to_add.is_empty():
+        logger.info(f"No new unique variants from {new_file_path} to add to hub {hub_file_path}.")
+        return
     
-    # Write to temp file first
-    combined_df.write_csv(temp_file, separator='\t')
+    combined_df_internal = pl.concat([
+        hub_df_internal.drop("var_key"), 
+        new_variants_to_add.drop("var_key")
+    ])
     
-    # Verify the temp file is valid
-    if os.path.exists(temp_file) and os.path.getsize(temp_file) > 0:
+    final_combined_df_output = select_and_rename_for_output(combined_df_internal)
+    final_combined_df_output.write_csv(temp_hub_file, separator='\t')
+    
+    if os.path.exists(temp_hub_file) and os.path.getsize(temp_hub_file) > 0:
         try:
-            # Check if the temp file has all entries
-            temp_df = pl.read_csv(temp_file, separator='\t', has_header=True, comment_char='#')
-            if len(temp_df) == len(covered_df) + len(new_df):
-                # Move temp file to output file (atomic operation)
-                os.rename(temp_file, output_file)
-                logger.info(f"Merged {len(covered_df)} cached and {len(new_df)} newly calculated CADD scores")
+            temp_df_check = pl.read_csv(temp_hub_file, separator='\t', has_header=True, comment_prefix='#', null_values=null_values, infer_schema_length=10000)
+            if len(temp_df_check) >= original_size : # Should be strictly greater if new_variants_to_add was not empty
+                os.rename(temp_hub_file, hub_file_path)
+                logger.info(f"Added {len(new_variants_to_add)} new variants to CADD hub {hub_file_path}. New total: {len(temp_df_check)}.")
+            else:
+                logger.error(f"Error: Temp hub file ({len(temp_df_check)} entries) incorrect size. Original: {original_size}, Added: {len(new_variants_to_add)}. Hub not updated.")
+                os.remove(temp_hub_file)
+        except Exception as e:
+            logger.error(f"Error verifying temp hub file: {str(e)}")
+            if os.path.exists(temp_hub_file): os.remove(temp_hub_file)
+    else:
+        logger.error(f"Error: Failed to create valid temp file for hub update: {temp_hub_file}")
+        if os.path.exists(temp_hub_file): os.remove(temp_hub_file)
+
+
+def merge_results(covered_file_path, new_file_path, output_file_path, null_values=["NA", "na", "NaN", "nan", "", ".", ",", ";", "NAN"]):
+    """Merge covered and new CADD results using Polars with atomic file updates"""
+    covered_exists = os.path.exists(covered_file_path) and os.path.getsize(covered_file_path) > 0
+    new_exists = os.path.exists(new_file_path) and os.path.getsize(new_file_path) > 0
+    
+    output_dir = os.path.dirname(output_file_path)
+    if output_dir:
+        os.makedirs(output_dir, exist_ok=True)
+    
+    temp_output_file = f"{output_file_path}.temp.{os.getpid()}"
+
+    dfs_to_concat = []
+    len_covered = 0
+    len_new = 0
+
+    if covered_exists:
+        try:
+            covered_df_raw = read_and_standardize_chrom(covered_file_path, comment_prefix='#')
+            # Covered file should already be in output format with #Chrom
+            # but we select to ensure order and existence of columns
+            if "#Chrom" not in covered_df_raw.columns and "Chrom" in covered_df_raw.columns: # If it was stored with "Chrom"
+                 covered_df_raw = covered_df_raw.rename({"Chrom": "#Chrom"})
+
+            # Select based on OUTPUT_HEADER_COLS, ensuring they exist
+            present_cols_covered = [col for col in OUTPUT_HEADER_COLS if col in covered_df_raw.columns]
+            covered_df = covered_df_raw.select(present_cols_covered)
+
+            if not covered_df.is_empty():
+                dfs_to_concat.append(covered_df)
+                len_covered = len(covered_df)
+        except Exception as e:
+            logger.warning(f"Could not read or process covered file {covered_file_path}: {e}. Skipping.")
+    
+    if new_exists:
+        try:
+            new_df_raw = read_and_standardize_chrom(new_file_path, comment_prefix='#')
+            if "#Chrom" not in new_df_raw.columns and "Chrom" in new_df_raw.columns: # If it was stored with "Chrom"
+                 new_df_raw = new_df_raw.rename({"Chrom": "#Chrom"})
+            
+            present_cols_new = [col for col in OUTPUT_HEADER_COLS if col in new_df_raw.columns]
+            new_df = new_df_raw.select(present_cols_new)
+
+            if not new_df.is_empty():
+                dfs_to_concat.append(new_df)
+                len_new = len(new_df)
+        except Exception as e:
+            logger.warning(f"Could not read or process new scores file {new_file_path}: {e}. Skipping.")
+
+    if not dfs_to_concat:
+        logger.error("ERROR: No CADD scores available to merge. Creating empty output file.")
+        with open(output_file_path, 'w') as f: # Create empty file with header
+            f.write("\t".join(OUTPUT_HEADER_COLS) + "\n")
+        return False # No successful merge
+
+    # Polars concat can handle schema differences by name alignment, filling missing with nulls.
+    # By selecting common OUTPUT_HEADER_COLS, we aim for consistency.
+    try:
+        combined_df = pl.concat(dfs_to_concat, how="diagonal_relaxed") # Changed 'diagonal' to 'diagonal_relaxed' in recent polars
+    except TypeError: # Fallback for slightly older Polars versions if 'diagonal_relaxed' isn't there
+        try:
+            combined_df = pl.concat(dfs_to_concat, how="diagonal")
+        except TypeError: # Fallback to default if diagonal strategies are not available/suitable
+            combined_df = pl.concat(dfs_to_concat)
+
+
+    # Ensure final output has the exact OUTPUT_HEADER_COLS in order, if possible
+    final_cols_present_in_combined = [col for col in OUTPUT_HEADER_COLS if col in combined_df.columns]
+    combined_df_final_output = combined_df.select(final_cols_present_in_combined)
+
+
+    combined_df_final_output.write_csv(temp_output_file, separator='\t')
+    
+    if os.path.exists(temp_output_file) and os.path.getsize(temp_output_file) > 0:
+        try:
+            temp_df_check = pl.read_csv(temp_output_file, separator='\t', has_header=True, comment_prefix='#', null_values=null_values, infer_schema_length=10000)
+            # Check if the merged file seems reasonable (not empty if input wasn't empty)
+            if not temp_df_check.is_empty() or (len_covered == 0 and len_new == 0) :
+                os.rename(temp_output_file, output_file_path)
+                logger.info(f"Merged {len_covered} cached and {len_new} newly calculated CADD scores into {output_file_path}. Total rows: {len(temp_df_check)}.")
                 return True
             else:
-                logger.error("Error: Temp file doesn't contain the expected number of entries")
-                os.remove(temp_file)
+                logger.error(f"Error: Merged temp file {temp_output_file} is unexpectedly empty. Original covered={len_covered}, new={len_new}.")
+                os.remove(temp_output_file)
+                # Create empty file with header as fallback
+                with open(output_file_path, 'w') as f:
+                    f.write("\t".join(OUTPUT_HEADER_COLS) + "\n")
                 return False
         except Exception as e:
-            logger.error(f"Error verifying temp file: {str(e)}")
-            if os.path.exists(temp_file):
-                os.remove(temp_file)
+            logger.error(f"Error verifying merged temp file: {str(e)}")
+            if os.path.exists(temp_output_file): os.remove(temp_output_file)
+            with open(output_file_path, 'w') as f:
+                f.write("\t".join(OUTPUT_HEADER_COLS) + "\n")
             return False
     else:
-        logger.error("Error: Failed to create valid temp file")
-        if os.path.exists(temp_file):
-            os.remove(temp_file)
+        logger.error(f"Error: Failed to create valid temp file for merge: {temp_output_file}")
+        if os.path.exists(temp_output_file): os.remove(temp_output_file)
+        with open(output_file_path, 'w') as f:
+            f.write("\t".join(OUTPUT_HEADER_COLS) + "\n")
         return False
+
 
 def main():
     parser = argparse.ArgumentParser(description='CADD score caching utilities')
-    subparsers = parser.add_subparsers(dest='command', help='Command to run')
+    # Make subcommand mandatory
+    subparsers = parser.add_subparsers(dest='command', help='Command to run', required=True)
     
     # Match variants subcommand
     match_parser = subparsers.add_parser('match', help='Match variants against hub CADD TSV')
     match_parser.add_argument('--hub', required=True, help='Hub CADD TSV file')
-    match_parser.add_argument('--pos', required=True, help='Position file from VCF')
-    match_parser.add_argument('--covered', required=True, help='Output file for covered variants')
-    match_parser.add_argument('--uncovered', required=True, help='Output file for uncovered positions')
-    match_parser.add_argument('--threads', type=int, default=mp.cpu_count(), help='Number of threads to use')
+    match_parser.add_argument('--pos', required=True, help='Position file from VCF (Chrom Pos Ref Alt, no header)')
+    match_parser.add_argument('--covered', required=True, help='Output file for covered variants (TSV with header)')
+    match_parser.add_argument('--uncovered', required=True, help='Output file for uncovered positions (Chrom Pos, for bcftools)')
+    match_parser.add_argument('--threads', type=int, default=None, help='Number of threads (Polars usually auto-detects optimal).')
     
     # Update hub subcommand
     update_parser = subparsers.add_parser('update', help='Update hub CADD TSV with new scores')
-    update_parser.add_argument('--new', required=True, help='New CADD TSV file')
-    update_parser.add_argument('--hub', required=True, help='Hub CADD TSV file')
-    update_parser.add_argument('--threads', type=int, default=mp.cpu_count(), help='Number of threads to use')
+    update_parser.add_argument('--new', required=True, help='New CADD TSV file with scores to add')
+    update_parser.add_argument('--hub', required=True, help='Hub CADD TSV file to update')
+    update_parser.add_argument('--threads', type=int, default=None, help='Number of threads.')
     
     # Merge results subcommand
     merge_parser = subparsers.add_parser('merge', help='Merge covered and new CADD results')
-    merge_parser.add_argument('--covered', required=True, help='Covered CADD TSV file')
-    merge_parser.add_argument('--new', required=True, help='New CADD TSV file')
+    merge_parser.add_argument('--covered', required=True, help='Covered CADD TSV file (from cache)')
+    merge_parser.add_argument('--new', required=True, help='New CADD TSV file (newly calculated scores)')
     merge_parser.add_argument('--output', required=True, help='Output merged TSV file')
+    # Threads not used directly by merge logic's polars calls beyond default polars behavior
     
     args = parser.parse_args()
-    
+
+    # Polars global settings (optional, as Polars often defaults well)
+    # if args.threads is not None and args.threads > 0:
+    #    try:
+    #        pl.set_num_threads(args.threads) # Available in modern Polars
+    #    except AttributeError:
+    #        logger.warning("pl.set_num_threads not available. Ensure POLARS_NUM_THREADS env var if specific thread count needed.")
+    # pl.enable_string_cache(True) # Generally recommended
+
     if args.command == 'match':
-        success = match_variants(args.hub, args.pos, args.covered, args.uncovered, args.threads)
-        sys.exit(0 if success else 1)
+        # The return of match_variants is True if all variants were covered.
+        # Exit code 0 usually means success of the script's operation,
+        # not necessarily that all variants were covered.
+        # Let's adjust to exit 0 if the command ran without catastrophic error.
+        try:
+            match_variants(args.hub, args.pos, args.covered, args.uncovered, args.threads)
+            sys.exit(0)
+        except Exception as e:
+            logger.critical(f"Critical error in 'match' command: {e}", exc_info=True)
+            sys.exit(1)
     elif args.command == 'update':
-        update_hub(args.new, args.hub, args.threads)
-        sys.exit(0)
+        try:
+            update_hub(args.new, args.hub, args.threads)
+            sys.exit(0)
+        except Exception as e:
+            logger.critical(f"Critical error in 'update' command: {e}", exc_info=True)
+            sys.exit(1)
     elif args.command == 'merge':
-        success = merge_results(args.covered, args.new, args.output)
-        sys.exit(0 if success else 1)
+        try:
+            success_flag = merge_results(args.covered, args.new, args.output)
+            sys.exit(0 if success_flag else 1) # Exit 1 if merge reported an issue (e.g. no files)
+        except Exception as e:
+            logger.critical(f"Critical error in 'merge' command: {e}", exc_info=True)
+            sys.exit(1)
     else:
-        parser.print_help()
+        parser.print_help() # Should not be reached if subparsers are 'required'
         sys.exit(1)
 
 if __name__ == "__main__":

@@ -80,6 +80,7 @@ def find_cosegregating_variants(vcf_file, ped_file, mode):
             variant = (chrom, record.pos, record.ref, record.alts[0])
             all_families_pass = True
             for mode in modes:
+                segregation_count = 0
                 for _, family in families:
                     affected = family[family['Phenotype'] == 2][['IndividualID', 'Sex']].values
                     unaffected = family[family['Phenotype'] == 1][['IndividualID', 'Sex']].values
@@ -91,6 +92,8 @@ def find_cosegregating_variants(vcf_file, ped_file, mode):
                         if check_variant_presence(alleles, mode, gender, chrom, True) is False:
                             all_families_pass = False
                             break
+                        else:
+                            segregation_count += alleles.count("1")
 
                     if not all_families_pass:
                         break
@@ -102,12 +105,14 @@ def find_cosegregating_variants(vcf_file, ped_file, mode):
                         if check_variant_presence(alleles, mode, gender, chrom, False) is True:
                             all_families_pass = False
                             break
+                        else:
+                            segregation_count += alleles.count("1")
 
                     if not all_families_pass:
                         break
 
                 if all_families_pass:
-                    results[mode].add(variant)
+                    results[mode].add(tuple([v for v in variant] + [segregation_count]))
                     
     return results
 

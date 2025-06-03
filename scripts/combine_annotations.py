@@ -164,6 +164,8 @@ def convert_record_to_tab(args: tuple) -> tuple[List[Dict[str, Any]], List[str]]
     try:
         rows = []
         logger.debug(f"Processing variant at {record_dict['chrom']}:{record_dict['pos']}\n")
+
+        assert isinstance(record_dict['chrom'], str), f"The chromosome is not a valid value: {record_dict}"
         
         # Extract the variant-specific annotations
         var_dict_items = {
@@ -271,7 +273,7 @@ def convert_vcf_to_tab(input_vcf: str, threads=4) -> pd.DataFrame:
         
         if all_rows:
             logger.info(f"Completed processing {varcount} variants, which contains {len(all_rows)} transcript level annotations")
-            anno_df = pd.DataFrame(all_rows)
+            anno_df = pd.DataFrame(all_rows).dropna(subset=["chrom"])
             logger.info(f"The annotation table has {anno_df.shape[0]} rows and {anno_df.shape[1]} columns. And it looks like this: \n{anno_df.head().to_string(index=False)}")
             return anno_df
         return pd.DataFrame()
@@ -306,6 +308,8 @@ def main_combine_annotations(input_vcf: str,
     cadd_tab["Feature"] = cadd_tab["FeatureID"]
 
     merged_tab = pd.merge(converted_tab, cadd_tab[["chrom", "pos", "ref", "alt", "Feature", "CADD_phred"]], on=["chrom", "pos", "ref", "alt", "Feature"], how="left")
+    cadd_tab["CADD_reg_phred"] = cadd_tab["CADD_phred"]
+    merged_tab = pd.merge(merged_tab, cadd_tab.loc[cadd_tab["Feature"].str.contains("ENSR").fillna(False), ["chrom", "pos", "ref", "alt", "CADD_reg_phred"]], on=["chrom", "pos", "ref", "alt"], how="left")
 
     # Read hpo tab file, which is a tsv.gz file
     hpo_tab = pd.read_table(hpo_tab, low_memory=False)

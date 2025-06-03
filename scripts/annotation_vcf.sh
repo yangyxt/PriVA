@@ -138,7 +138,9 @@ function main_workflow() {
     # Remove variants where proband DP < 5
     # Remove VCF records where all patients in the family has either missing or homo ref genotype.
 
-    local anno_vcf=${input_vcf/.vcf*/.anno.vcf.gz}
+    local final_anno_vcf=${output_dir}/$(basename ${input_vcf/.vcf*/.anno.vcf.gz}) && \
+	local anno_vcf=${input_vcf/.vcf*/.anno.vcf.gz} && \
+	ls -lhtr ${anno_vcf} || log "Expect the intermediate vcf file at ${anno_vcf} and the final output vcf file at ${final_anno_vcf}"
     preprocess_vcf \
     -i ${input_vcf} \
     -o ${anno_vcf} \
@@ -157,7 +159,9 @@ function main_workflow() {
         log "Checking for cached annotations in hub VCF"
         local total_count=$(count_vcf_records "${anno_vcf}")
         log "The total number of variants in the input vcf is ${total_count}"
-        if use_hub_vcf_annotations -i "${anno_vcf}" -h "${hub_vcf_file}" -o "${covered_vcf}" -u "${uncovered_vcf}" -t "${threads}" -c "${total_count}"; then
+        local tmp_dir=$(read_yaml ${config_file} "tmp_dir")
+		log "Using command to find cached annotation records: use_hub_vcf_annotations -i ${anno_vcf} -h ${hub_vcf_file} -o ${covered_vcf} -u ${uncovered_vcf} -t ${threads} -c ${total_count} -d ${tmp_dir}"
+        if use_hub_vcf_annotations -i "${anno_vcf}" -h "${hub_vcf_file}" -o "${covered_vcf}" -u "${uncovered_vcf}" -t "${threads}" -c "${total_count}" -d "${tmp_dir}"; then
             log "All variants found in hub VCF, skipping annotation pipeline"
 
             if check_vcf_validity "${covered_vcf}" && \
@@ -186,7 +190,7 @@ function main_workflow() {
                 log "Found cached variants and uncovered variants, will only annotate uncovered variants"
                 
                 # Save the original anno_vcf path and work with uncovered variants
-                local final_anno_vcf="${anno_vcf}"
+                local tmp_anno_vcf="${anno_vcf}"
                 local anno_vcf="${uncovered_vcf}"
             else
                 log "No cached variants found, will annotate all variants"
@@ -236,15 +240,15 @@ function main_workflow() {
         return 1; }
         
         # If using hub caching, merge covered and newly annotated variants
-        if [[ -n "${final_anno_vcf}" ]]; then
+        if [[ -n "${tmp_anno_vcf}" ]]; then
             local newly_annotated_vcf="${anno_vcf}"
             # Update hub VCF with newly annotated variants
-            update_hub_vcf "${newly_annotated_vcf}" "${hub_vcf_file}" "${threads}"
+            update_hub_vcf "${tmp_anno_vcf}" "${hub_vcf_file}" "${threads}"
 
-            merge_annotated_vcfs "${covered_vcf}" "${newly_annotated_vcf}" "${final_anno_vcf}"
+            merge_annotated_vcfs "${covered_vcf}" "${newly_annotated_vcf}" "${tmp_anno_vcf}"
             
             # Set anno_vcf back to final result for downstream steps
-            local anno_vcf="${final_anno_vcf}"
+            local anno_vcf="${tmp_anno_vcf}"
         fi
     fi
 
@@ -253,8 +257,8 @@ function main_workflow() {
         local cadd_covered_tsv="${anno_vcf/.vcf*/.cadd.covered.tsv}"
         local cadd_uncovered_vcf="${anno_vcf/.vcf*/.cadd.uncovered.vcf.gz}"
         
-        log "Checking for cached CADD scores in ${hub_cadd_file}"
-        if find_cached_cadd_variants "${anno_vcf}" "${hub_cadd_file}" "${cadd_covered_tsv}" "${cadd_uncovered_vcf}"; then
+        log "Checking for cached CADD scores in ${hub_cadd_file} with command: find_cached_cadd_variants ${anno_vcf} ${hub_cadd_file} ${cadd_covered_tsv} ${cadd_uncovered_vcf}"
+        if find_cached_cadd_variants "${anno_vcf}" "${hub_cadd_file}" "${cadd_covered_tsv}" "${cadd_uncovered_vcf}" "${threads}"; then
             # All variants are covered - copy to output
             cp "${cadd_covered_tsv}" "${anno_vcf/.vcf*/.cadd.tsv}"
             update_yaml "${config_file}" "cadd_output_file" "${anno_vcf/.vcf*/.cadd.tsv}"
@@ -269,13 +273,15 @@ function main_workflow() {
                 }
                 
                 # Merge covered and newly calculated scores
-                merge_cadd_results "${cadd_covered_tsv}" "${anno_vcf/.vcf*/.cadd.new.tsv}" "${anno_vcf/.vcf*/.cadd.tsv}"
-                
-                # Update CADD hub with new scores
-                update_hub_cadd "${anno_vcf/.vcf*/.cadd.new.tsv}" "${hub_cadd_file}"
-                
-                # Update config with output file
-                update_yaml "${config_file}" "cadd_output_file" "${anno_vcf/.vcf*/.cadd.tsv}"
+                merge_cadd_results "${cadd_covered_tsv}" "${anno_vcf/.vcf*/.cadd.new.tsv}" "${anno_vcf/.vcf*/.cadd.tsv}" && \
+                update_hub_cadd "${anno_vcf/.vcf*/.cadd.new.tsv}" "${hub_cadd_file}" && \
+                update_yaml "${config_file}" "cadd_output_file" "${anno_vcf/.vcf*/.cadd.tsv}" && \
+				mv ${anno_vcf} ${final_anno_vcf} && \
+				check_vcf_validity ${final_anno_vcf} || \
+				{
+					log "Failed to update the output vcf file with CADD scores. Quit now"
+					return 1
+				}
                 
                 # Clean up temporary files
                 rm -f "${anno_vcf/.vcf*/.cadd.new.tsv}"
@@ -290,7 +296,10 @@ function main_workflow() {
         fi
     else
         # Original CADD calculation without caching
-        Calculate_CADD "${anno_vcf}" "${config_file}" || {
+        Calculate_CADD "${anno_vcf}" "${config_file}" && \
+		mv ${anno_vcf} ${final_anno_vcf} && \
+		check_vcf_validity ${final_anno_vcf} || \
+		{
             log "Failed to add CADD annotation on ${anno_vcf}. Quit now"
             return 1
         }
@@ -337,6 +346,8 @@ function preprocess_vcf() {
         log "User specified ref_genome fasta file ${ref_genome} seems not match with the VCF used assembly ${vcf_assembly}. Quit with Error"
         return 1;
     fi
+
+	log "Expect the output vcf file at ${output_vcf}"
 
     # Test if output_vcf is already valid
     if [[ ${output_vcf} -nt ${input_vcf} ]] && \
@@ -429,9 +440,16 @@ function anno_agg_gnomAD_data () {
         pop_nhomalt_fields+=",.INFO/nhomalt_joint_${pop}_XX"
     done
 
+	check_vcf_validity ${input_vcf} || \
+	{
+		log "The input vcf ${input_vcf} is not valid. Quit now"
+		return 1
+	}
+
     check_vcf_infotags ${input_vcf} "${core_fields}${max_fields}${sex_fields}${pop_af_fields}${pop_nhomalt_fields}" && \
     log "The input vcf ${input_vcf} already contains the INFO tags ${core_fields}${max_fields}${sex_fields}${pop_af_fields}${pop_nhomalt_fields}. We do not need to add them again" && \
-    return 0
+    return 0 || \
+	log "The input vcf ${input_vcf} does not contain the INFO tags ${core_fields}${max_fields}${sex_fields}${pop_af_fields}${pop_nhomalt_fields}. We need to add them"
 
     # We already make sure the input VCF is sorted and normalized
     # We also make sure no variants in alternative contigs are included in the input VCF
@@ -868,10 +886,11 @@ function use_hub_vcf_annotations() {
     local output_uncovered_vcf
     local threads
     local total_count
+    local tmp_dir
 
     # Parse arguments using getopts
     local OPTIND=1
-    while getopts "i:h:o:u:t:c::" opt; do
+    while getopts "i:h:o:u:t:c::d::" opt; do
         case ${opt} in
             i) input_vcf=${OPTARG} ;;
             h) hub_vcf=${OPTARG} ;;
@@ -879,6 +898,7 @@ function use_hub_vcf_annotations() {
             u) output_uncovered_vcf=${OPTARG} ;;
             t) threads=${OPTARG} ;;
             c) total_count=${OPTARG} ;;
+            d) tmp_dir=${OPTARG} ;;
             *) log "Invalid option: -${OPTARG}" && return 1 ;;
         esac
     done
@@ -895,47 +915,55 @@ function use_hub_vcf_annotations() {
         total_count=$(count_vcf_records "${input_vcf}")
     fi
 
-    local tmp_isec_dir=$(mktemp -d --tmpdir="$TMPDIR" isec_hub.XXXXXX)
+    if [[ -z ${tmp_dir} ]]; then
+        tmp_dir=${TMPDIR}
+    fi
+
+    local tmp_isec_dir=$(mktemp -d --tmpdir="$tmp_dir" isec_hub.XXXXXX)
     log "Created temporary intersection directory: ${tmp_isec_dir}"
 
     # Use isec -p to efficiently find intersection and complements
-    # 0000/sites.tsv -> unique to input_vcf (uncovered)
-    # 0001/sites.tsv -> unique to hub_vcf (ignore)
-    # 0002/sites.tsv -> intersection (covered)
-    log "Running bcftools isec to find covered/uncovered sites..."
-    if ! bcftools isec --threads ${threads} -p "${tmp_isec_dir}" "${input_vcf}" "${hub_vcf}"; then
-         log "ERROR: bcftools isec failed."
-         rm -rf "${tmp_isec_dir}"
-         return 1 # Indicate error
-    fi
+    log "Running bcftools isec to find covered/uncovered sites using command:"
+    >&2 echo "bcftools isec --threads ${threads} -Oz -p ${tmp_isec_dir} ${input_vcf} ${hub_vcf}"
+    bcftools isec --threads ${threads} -Oz -p "${tmp_isec_dir}" "${input_vcf}" "${hub_vcf}" || \
+    { log "ERROR: bcftools isec failed." && \
+      rm -rf "${tmp_isec_dir}" && \
+      return 1; }
 
-    local uncovered_sites_file="${tmp_isec_dir}/0000/sites.tsv"
-    local covered_sites_file="${tmp_isec_dir}/0002/sites.tsv"
+    local uncovered_sites_vcf="${tmp_isec_dir}/0000.vcf.gz"
+    local covered_sites_vcf="${tmp_isec_dir}/0002.vcf.gz"
 
     # --- Handle Uncovered Variants ---
-    if [[ -f "${uncovered_sites_file}" ]]; then
-        log "Extracting uncovered variants from ${input_vcf}..."
-        bcftools view --threads ${threads} -R "${uncovered_sites_file}" "${input_vcf}" -Oz -o "${output_uncovered_vcf}"
-        tabix -p vcf "${output_uncovered_vcf}"
+    if check_vcf_validity "${uncovered_sites_vcf}" 1; then
+        log "Extracting uncovered variants from ${input_vcf} using command:"
+        bcftools query -f '%CHROM\t%POS\n' ${uncovered_sites_vcf} > ${uncovered_sites_vcf/.vcf*/.pos.tsv} && \
+        local uncovered_sites_file=${uncovered_sites_vcf/.vcf*/.pos.tsv}
+        >&2 echo "parallel_extract_variants ${uncovered_sites_file} ${input_vcf} ${threads} ${output_uncovered_vcf}"
+		parallel_extract_variants \
+		${uncovered_sites_file} \
+		${input_vcf} \
+		${threads} \
+		${output_uncovered_vcf} && \
+		display_vcf ${output_uncovered_vcf} || \
+		{ log "Failed to extract uncovered variants from ${input_vcf} using ${uncovered_sites_file}. Return with error." && return 1; }
+        tabix -p vcf "${output_uncovered_vcf}" && \
+        display_vcf "${output_uncovered_vcf}" && \
         local uncovered_count=$(count_vcf_records "${output_uncovered_vcf}")
         log "Found ${uncovered_count} uncovered variants, saved to ${output_uncovered_vcf}"
     else
-        log "No uncovered variants found."
+        log "No uncovered variants found in ${tmp_isec_dir}"
+        >&2 echo "$(ls -lh ${tmp_isec_dir})"
         local uncovered_count=0
     fi
 
     # --- Handle Covered Variants ---
-    if [[ -s "${covered_sites_file}" ]]; then
-        log "Extracting covered variants from ${input_vcf} to annotate..."
-        local temp_covered_from_input="${tmp_isec_dir}/covered_from_input.vcf.gz"
-        bcftools view --threads ${threads} -R "${covered_sites_file}" -Oz -o "${temp_covered_from_input}" "${input_vcf}"
-        tabix -p vcf "${temp_covered_from_input}"
-
+	local covered_count=$(count_vcf_records "${covered_sites_vcf}")
+    if [[ ${covered_count} -gt 0 ]]; then
         log "Annotating extracted covered variants with INFO from ${hub_vcf}..."
         # Annotate using only INFO fields from the hub
-        bcftools annotate --threads ${threads} -a "${hub_vcf}" -c INFO -Oz -o "${output_covered_vcf}" "${temp_covered_from_input}"
+        bcftools annotate --threads ${threads} -a "${hub_vcf}" -c INFO -Ou "${input_vcf}" | \
+		bcftools filter --threads ${threads} -i 'INFO/CSQ != "."' -Oz -o "${output_covered_vcf}" && \
         tabix -p vcf "${output_covered_vcf}"
-        local covered_count=$(count_vcf_records "${output_covered_vcf}")
         log "Found ${covered_count} covered variants, annotated and saved to ${output_covered_vcf}"
     else
         local uncovered_count=${total_count}
@@ -955,6 +983,7 @@ function use_hub_vcf_annotations() {
         return 1
     fi
 }
+
 
 function update_hub_vcf() {
     local newly_annotated_vcf=$1
@@ -1005,11 +1034,12 @@ function merge_annotated_vcfs() {
     local output_vcf=$3
     
     # Handle edge cases
-    if [[ ! -f "${newly_annotated_vcf}" ]] || [[ $(count_vcf_records "${newly_annotated_vcf}") -eq 0 ]]; then
-        if [[ -f "${covered_vcf}" ]] && [[ $(count_vcf_records "${covered_vcf}") -gt 0 ]]; then
+    if [[ ! -s "${newly_annotated_vcf}" ]] || [[ $(count_vcf_records "${newly_annotated_vcf}") -eq 0 ]]; then
+		log "No newly annotated variants in ${newly_annotated_vcf}"
+        if [[ -s "${covered_vcf}" ]] && [[ $(count_vcf_records "${covered_vcf}") -gt 0 ]]; then
             mv "${covered_vcf}" "${output_vcf}"
             tabix -p vcf "${output_vcf}"
-            announce_remove_tmps "${newly_annotated_vcf}" "${covered_vcf}.*"
+            announce_remove_tmps "${covered_vcf}.*"
             log "Using only covered variants, no newly annotated variants"
         else
             log "ERROR: No covered variants in ${covered_vcf} or newly annotated variants in ${newly_annotated_vcf} available"
@@ -1019,32 +1049,42 @@ function merge_annotated_vcfs() {
     fi
     
     if [[ ! -f "${covered_vcf}" ]] || [[ $(count_vcf_records "${covered_vcf}") -eq 0 ]]; then
-        mv "${newly_annotated_vcf}" "${output_vcf}"
-        tabix -p vcf "${output_vcf}"
+        [[ ${newly_annotated_vcf} != ${output_vcf} ]] && \
+		mv "${newly_annotated_vcf}" "${output_vcf}" && \
+        tabix -p vcf "${output_vcf}" || :
         log "Using only newly annotated variants, no covered variants"
         return 0
     fi
     
     # Merge the files
     bcftools concat -a "${covered_vcf}" "${newly_annotated_vcf}" -Ou | \
-    bcftools sort -Oz -o "${output_vcf}" && \
+    bcftools sort -Oz -o "${output_vcf/.vcf*/.tmp.vcf.gz}" && \
+	mv "${output_vcf/.vcf*/.tmp.vcf.gz}" "${output_vcf}" && \
     tabix -p vcf "${output_vcf}" && \
-    announce_remove_tmps "${covered_vcf}*" "${newly_annotated_vcf}*" && \
+    announce_remove_tmps "${covered_vcf}*" && \
     log "Merged $(count_vcf_records "${covered_vcf}") covered variants with $(count_vcf_records "${newly_annotated_vcf}") newly annotated variants"
 }
+
+
 
 function find_cached_cadd_variants() {
     local input_vcf=$1
     local hub_cadd_file=$2
     local output_covered_tsv=$3
     local output_uncovered_vcf=$4
-    
+    local threads=${5}
+
+	if [[ -z ${threads} ]]; then
+		threads=1
+	fi
+
     # Create a temporary "positions file" from input VCF for lookup
     local pos_file=$(mktemp --tmpdir="$TMPDIR" pos_file.XXXXXX)
-    bcftools query -f '%CHROM\t%POS\t%REF\t%ALT\n' "${input_vcf}" > "${pos_file}"
+    bcftools query -f '%CHROM\t%POS\t%REF\t%ALT\n' "${input_vcf}" > "${pos_file}" && \
+	display_table ${pos_file}
     
     # Create a temporary file for variants not found in hub
-    local uncovered_pos=$(mktemp --tmpdir="$TMPDIR" uncovered_pos.XXXXXX)
+    local uncovered_pos=$(mktemp --tmpdir="$TMPDIR" uncovered_pos.XXXXXX.tsv)
     touch "${uncovered_pos}"
     
     # Extract matching variants from CADD TSV using Python script
@@ -1053,8 +1093,13 @@ function find_cached_cadd_variants() {
         --pos "${pos_file}" \
         --covered "${output_covered_tsv}" \
         --uncovered "${uncovered_pos}" && \
-    local match_result=0 || \
-    local match_result=1
+	ls -lhtr ${output_covered_tsv} ${uncovered_pos} || \
+	{ log "Failed to match variants in CADD hub TSV" && return 1; }
+	if [[ $(cat ${uncovered_pos} | wc -l) -eq 0 ]]; then
+		local match_result=0
+	else
+		local match_result=1
+	fi
     
     # Clean up temporary positions file
     rm -f "${pos_file}"
@@ -1065,10 +1110,17 @@ function find_cached_cadd_variants() {
         rm -f "${uncovered_pos}"
         return 0
     fi
+
+	local -a uncovered_chrs=($(cut -f 1 ${uncovered_pos} | sort -u))
     
     # Extract uncovered variants from VCF using exact position matching
-    bcftools view -R "${uncovered_pos}" --regions-overlap pos "${input_vcf}" -Oz -o "${output_uncovered_vcf}"
-    tabix -p vcf "${output_uncovered_vcf}"
+	parallel_extract_variants \
+	${uncovered_pos} \
+	${input_vcf} \
+	${threads} \
+	${output_uncovered_vcf} && \
+	display_vcf ${output_uncovered_vcf} || \
+	{ log "Failed to extract uncovered variants from ${input_vcf} using ${uncovered_pos}. Return with error." && return 1; }
     
     # Clean up temporary positions file
     rm -f "${uncovered_pos}"
@@ -1082,6 +1134,7 @@ function find_cached_cadd_variants() {
         return 1
     fi
 }
+
 
 function update_hub_cadd() {
     local new_cadd_tsv=$1

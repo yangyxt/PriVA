@@ -262,8 +262,20 @@ function check_vcf_validity {
         else
             return 10
         fi
+    elif [[ ${input_vcf} =~ \.bcf$ ]]; then
+        log "${input_vcf} should be in bcf format, check bcf validity"
+        if check_plain_vcf ${input_vcf} ${expected_lines}; then
+            if check_vcf_samples ${input_vcf} ${expected_samples}; then
+                log "${input_vcf} has solid sample names as expected."
+            else
+                return 10
+            fi
+        else
+            return 10
+        fi
     else
-        return 20
+        log "Input vcf format is not recognized by its suffix: ${input_vcf}"
+        return 10
     fi
 }
 
@@ -296,7 +308,7 @@ function check_plain_vcf {
 
     if check_vcf_format ${input_vcf}; then
         log "${input_vcf} has solid vcf format. Check whether contains enough record number"
-        if [ $(count_vcf_records ${input_vcf}) -ge ${expected_lines} ]; then
+        if [[ $(count_vcf_records ${input_vcf}) -ge ${expected_lines} ]]; then
             log "${input_vcf} has enough records."
         else
             log "${input_vcf} has $(count_vcf_records ${input_vcf}) valid lines while expected to have ${expected_lines} lines."
@@ -681,7 +693,7 @@ function liftover_from_GRCh_to_ucsc () {
     local input_vcf=${1}
     local contig_map=${2}
     local output_vcf=${3}
-    [[ -z ${contig_map} ]] && local contig_map=${BASE_DIR}/data/liftover/GRC_to_ucsc.contig.map.tsv
+    [[ -z ${contig_map} ]] && local contig_map=${BASE_DIR}/data/liftover/GRC_to_ucsc.contig.map.txt
     [[ -z ${output_vcf} ]] && local output_vcf=${input_vcf/.vcf/.addchr.vcf}
     [[ ! ${output_vcf} =~ \.vcf\.gz$ ]] && local output_vcf=${output_vcf/.vcf*/.vcf.gz}
 
@@ -892,7 +904,7 @@ function bcftools_concatvcfs {
     fi
     log "The tmp dir is ${tmp_dir}"
 
-    if [[ ${input_vcfs}  =~ \/ ]] && [[ ! ${input_vcfs} =~ \.vcf(\.[b]*gz)*$ ]] && [[ ! ${input_vcfs} =~ , ]]; then
+    if [[ ${input_vcfs}  =~ \/ ]] && [[ ! ${input_vcfs} =~ (\.[vb]cf)(\.[b]*gz)*$ ]] && [[ ! ${input_vcfs} =~ , ]]; then
         local -a vcfs=($(awk '{printf "%s ", $1;}' < ${input_vcfs}))
     else
         local -a vcfs=($(echo ${input_vcfs} | awk 'BEGIN{FS=",";} {for(i=1;i<=NF;i++) printf $i" ";}'))
@@ -904,27 +916,16 @@ function bcftools_concatvcfs {
 
     log "the vcfs are ${vcfs[*]}"
     log "The merged vcf is ${merged_vcf}"
+    log "The samples specified are: ${samples}"
     # Check file existence.
     if [[ -z ${ignore_error} ]]; then
         local -a invalid_vcfs
         for vcf in "${vcfs[@]}"; do
-            if check_vcf_validity ${vcf} 1 2> /dev/null; then
+            if check_vcf_validity ${vcf} 1 ${samples} 2> /dev/null; then
                 log "To be merged ${vcf} is valid."
             else
                 log "${vcf} not existed or corrupted. Run check_vcf_validity ${vcf} to see for yourself"
                 invalid_vcfs+=( ${vcf} )
-            fi
-            if [[ ${vcf} =~ \.vcf$ ]]; then
-                log "Since ${vcf} is plain text format and bcftools -f need to use bgzipped vcfs, we compress the vcf and index it with tabix."
-                bcftools sort --temp-dir ${tmp_dir} -Oz -o ${vcf}.gz ${vcf} && tabix -f -p vcf ${vcf}.gz && \
-                ls -lh ${vcf}.gz
-            fi
-            if [[ ! -z ${samples} ]]; then
-                bcftools view -s "${samples}" -Oz -o ${vcf/.vcf*/.samp.vcf.gz} ${vcf/.vcf*/.vcf.gz} && \
-                ls -lht ${vcf/.vcf*/.samp.vcf.gz} && \
-                check_vcf_validity ${vcf/.vcf*/.samp.vcf.gz} 1 && \
-                mv ${vcf/.vcf*/.samp.vcf.gz} ${vcf/.vcf*/.vcf.gz} && \
-                tabix -f -p vcf ${vcf/.vcf*/.vcf.gz}
             fi
         done
 
@@ -936,7 +937,7 @@ function bcftools_concatvcfs {
 
     local tmp_file_list=${tmp_dir}/$(randomID).lst
     echo "${vcfs[*]}" | \
-    awk -F '\t' 'BEGIN{RS=" ";} length($1) > 0{gsub(/\n$/, ""); if ($1 ~ /\.gz$/) printf "%s\n", $1; else printf "%s.gz\n", $1;}' > ${tmp_file_list}
+    awk -F '\t' 'BEGIN{RS=" ";} length($1) > 0{gsub(/\n$/, ""); printf "%s\n", $1;}' > ${tmp_file_list}
     log "Here is the temp list file storing the paths of to be concat vcfs:"
     ls -lh ${tmp_file_list}
     cat ${tmp_file_list}
@@ -948,6 +949,7 @@ function bcftools_concatvcfs {
         ls -lh ${merged_vcf}*
     else
         # If using file list for input a list of vcfs, each one of them need to be bgzipped and tabix indexed
+        log "Running the command to concat VCFs: bcftools concat -o ${merged_vcf} ${other_args} -a --threads ${threads} -d exact -Oz -f ${tmp_file_list}"
         bcftools concat -o ${merged_vcf} ${other_args} -a --threads ${threads} -d exact -Oz -f ${tmp_file_list} && \
         tabix -f -p vcf ${merged_vcf} && \
         bcftools sort --temp-dir ${tmp_dir} -o ${merged_vcf/.vcf.gz/.sorted.vcf.gz} -Oz ${merged_vcf} && \
@@ -956,7 +958,94 @@ function bcftools_concatvcfs {
         ls -lh ${merged_vcf}*
     fi
 
-    display_table ${merged_vcf} 20
+    display_vcf ${merged_vcf} 20
+}
+
+
+
+function extract_variants_per_chr() {
+	local pos_file
+	local chr
+	local input_vcf
+	local threads
+	local output_vcf
+
+	# Parse arguments using getopts
+	local OPTIND=1
+	while getopts "p:c:i:t::o::" opt; do
+		case ${opt} in
+			p) pos_file=${OPTARG} ;;
+			c) chr=${OPTARG} ;;
+			i) input_vcf=${OPTARG} ;;
+			t) threads=${OPTARG} ;;
+			o) output_vcf=${OPTARG} ;;
+			*) log "Invalid option: -${OPTARG}" && return 1 ;;
+		esac
+	done
+
+	if [[ -z ${output_vcf} ]]; then
+		output_vcf=${input_vcf/.vcf*/.${chr}.bcf}
+	fi
+
+	if [[ -z ${threads} ]]; then
+		threads=1
+	fi
+
+	local chr_pos_file=${pos_file}.${chr}.tsv
+	mawk -F '\t' -v chr=${chr} '$1 == chr {print}' ${pos_file} > ${chr_pos_file}
+
+    if check_vcf_validity ${output_vcf} 2> /dev/null && [[ ${output_vcf} -nt ${input_vcf} ]]; then
+        log "The output vcf ${output_vcf} already exists and is newer than the input vcf ${input_vcf}, skip the extraction"
+        return 0
+    fi
+
+	bcftools view \
+	--threads ${threads} \
+	-R "${chr_pos_file}" \
+	--regions-overlap pos \
+	-Oz -o "${output_vcf}" "${input_vcf}" && \
+	bcftools index -f "${output_vcf}" && \
+	check_vcf_validity ${output_vcf} || \
+	{ log "Failed to extract variants from ${input_vcf} for chromosome ${chr}. Return with error." && return 1; }
+}
+
+
+function parallel_extract_variants() {
+	local pos_file=${1}
+	local input_vcf=${2}
+	local threads=${3}
+	local output_vcf=${4}
+
+	if [[ -z ${output_vcf} ]]; then
+		output_vcf=${input_vcf/.vcf*/.vcf.gz}
+	fi
+
+	local -a chrs=($(cut -f 1 ${pos_file} | sort -u))
+	local per_job_threads
+	local job_num
+	[[ ${threads} -ge ${#chrs[@]} ]] && \
+	job_num=${#chrs[@]} && per_job_threads=$(( threads / ${#chrs[@]} )) || \
+	job_num=${threads} && per_job_threads=1
+
+	local log_file=${output_vcf/.vcf*/.extraction.log}
+	local -a output_chr_vcfs
+	local output_vcf_list
+	for chr in ${chrs[@]}; do
+		output_chr_vcfs+=( ${output_vcf/.vcf*/}.${chr}.bcf )
+		output_vcf_list+="${output_vcf/.vcf*/}.${chr}.bcf,"
+	done
+	# Concat the output vcfs into a comma delimited list string with
+	output_vcf_list=${output_vcf_list%,}
+	parallel -j ${job_num} --halt soon,fail=1 --joblog ${log_file} --dry-run --link \
+	bash ${SELF} extract_variants_per_chr -p ${pos_file} -c {1} -i ${input_vcf} -t ${per_job_threads} -o {2} ::: ${chrs[@]} ::: ${output_chr_vcfs[@]} && \
+	parallel -j ${job_num} --halt soon,fail=1 --joblog ${log_file} --link \
+	bash ${SELF} extract_variants_per_chr -p ${pos_file} -c {1} -i ${input_vcf} -t ${per_job_threads} -o {2} ::: ${chrs[@]} ::: ${output_chr_vcfs[@]} && \
+    check_parallel_joblog ${log_file} && \
+	bcftools_concatvcfs -o ${output_vcf} -t ${threads} -v ${output_vcf_list} && \
+	announce_remove_tmps ${output_vcf/.vcf*/.chr*} && \
+	log "Extracted variants from ${input_vcf} for ${#chrs[@]} chromosomes from position file ${pos_file}" || \
+	{ log "Failed to extract variants from ${input_vcf} within ${pos_file}. Return with error." && return 1; }
+	
 }
 
 
@@ -980,6 +1069,12 @@ function check_path() {
     fi
 
     return 0
+}
+
+
+function check_bam_validity {
+    local input=${1}
+    samtools quickcheck -v ${input} && return 0 || return 1
 }
 
 

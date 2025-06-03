@@ -80,6 +80,11 @@ def process_chromosome(chromosome, vcf_path, csq_fields, high_confidence_status)
                     af = record.info["AF_grpmax_joint"]
                     if isinstance(af, tuple):
                         af = float(af[0])  # Get first AF if it's a tuple
+
+                if "AF_joint" in record.info and (af == 0 or af is None):
+                    af = record.info["AF_joint"]
+                    if isinstance(af, tuple):
+                        af = float(af[0])  # Get first AF if it's a tuple
                 
                 if af is None or af <= 0:
                     af = 0

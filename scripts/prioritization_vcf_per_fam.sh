@@ -59,6 +59,7 @@ function interpret_splicing_annotations () {
     [[ ${input_tab} -nt ${splicing_py} ]] && \
     check_table_column ${input_tab} "splicing_lof" && \
     check_table_column ${input_tab} "splicing_len_changing" && \
+    check_table_column ${input_tab} "splicing_canonical_offset" && \
     log "The input table ${input_tab} is up to date, skip the splicing interpretation" && \
     return 0 || \
     log "The input table ${input_tab} is outdated, start the splicing interpretation"
@@ -83,7 +84,9 @@ function interpret_utr_annotations () {
     local utr_py=${SCRIPT_DIR}/utr_anno_interpret.py
 
     local alphamissense_tranx_domain_map=$(read_yaml ${config_file} "alphamissense_tranx_domain_map")
+    log "The alphamissense_tranx_domain_map is: ${alphamissense_tranx_domain_map}"
     local intolerant_domains=$(read_yaml ${config_file} "all_intolerant_domains")
+    log "The intolerant_domains is: ${intolerant_domains}"
 
     [[ -f ${input_tab} ]] && \
     [[ ${input_tab} -nt ${alphamissense_tranx_domain_map} ]] && \
@@ -153,6 +156,8 @@ function assign_acmg_criteria () {
     local repeat_region_file=${BASE_DIR}/data/repeats/${repeat_region_file_name}
 	local pp1_vcf=$(read_yaml ${config_file} "pp1_vcf")
 	local pp1_ped=$(read_yaml ${config_file} "pp1_ped")
+	local clingen_map_pkl=$(read_yaml ${config_file} "clingen_map")
+	local gene_dosage_sensitivity=$(read_yaml ${config_file} "gene_dosage_sensitivity")
 
     local has_error=0
     check_path ${clinvar_aa_dict_pkl} "file" "clinvar_aa_stat" || has_error=1
@@ -167,6 +172,8 @@ function assign_acmg_criteria () {
     check_path ${clinvar_patho_exon_af_stat} "file" "clinvar_patho_exon_af_stat" || has_error=1
     check_path ${interpro_entry_map_pkl} "file" "interpro_mapping_pickle" || has_error=1
     check_path ${repeat_region_file} "file" "repeat_region_file" || has_error=1
+	check_path ${clingen_map_pkl} "file" "clingen_map" || has_error=1
+	check_path ${gene_dosage_sensitivity} "file" "gene_dosage_sensitivity" || has_error=1
 
     local assembly=$(read_yaml ${config_file} "assembly")
     if [[ ${assembly} == "hg38" ]]; then
@@ -188,7 +195,6 @@ function assign_acmg_criteria () {
     [[ ${input_tab} -nt ${intolerant_domains_pkl} ]] && \
     [[ ${input_tab} -nt ${am_intol_domains_tsv} ]] && \
     [[ ${input_tab} -nt ${clinvar_gene_stat_pkl} ]] && \
-    [[ ${input_tab} -nt ${alt_disease_vcf} ]] && \
     [[ ${input_tab} -nt ${am_score_vcf} ]] && \
     [[ ${input_tab} -nt ${clinvar_patho_af_stat} ]] && \
     [[ ${input_tab} -nt ${clinvar_patho_exon_af_stat} ]] && \
@@ -219,10 +225,12 @@ function assign_acmg_criteria () {
     --clinvar_splice_dict_pkl ${clinvar_splice_dict_pkl} \
     --interpro_entry_map_pkl ${interpro_entry_map_pkl} \
     --intolerant_domains_pkl ${intolerant_domains_pkl} \
+	--gene_dosage_sensitivity ${gene_dosage_sensitivity} \
     --am_intol_domains_tsv ${am_intol_domains_tsv} \
     --intolerant_motifs_pkl ${intolerant_motifs_pkl} \
     --repeat_region_file ${repeat_region_file} \
     --clinvar_gene_stat_pkl ${clinvar_gene_stat_pkl} \
+    --clingen_map_pkl ${clingen_map_pkl} \
     --gnomAD_extreme_rare_threshold ${gnomAD_extreme_rare_threshold} \
     --expected_incidence ${expected_incidence} \
     --am_score_vcf ${am_score_vcf} \
@@ -305,5 +313,3 @@ if [[ "${#BASH_SOURCE[@]}" -eq 1 ]]; then
         main_prioritization "$@"
     fi
 fi
-
-

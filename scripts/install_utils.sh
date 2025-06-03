@@ -1,5 +1,6 @@
 #! /usr/bin/env bash
 SCRIPT_DIR=$(dirname $(realpath ${BASH_SOURCE[0]}))
+DATA_DIR=$(dirname ${SCRIPT_DIR})/data
 source ${SCRIPT_DIR}/common_bash_utils.sh
 source ${SCRIPT_DIR}/annotation_vcf.sh
 log "The base directory is ${BASE_DIR}, the scripts directory is ${SCRIPT_DIR}"
@@ -1117,7 +1118,7 @@ function ClinVar_VCF_deploy() {
     local config_file=${1}
     local CACHEDIR=${2}
     local assembly_version=${3}
-    local contig_map=${BASE_DIR}/data/liftover/GRC_to_ucsc.contig.map.tsv
+    local contig_map=${BASE_DIR}/data/liftover/GRC_to_ucsc.contig.map.txt
 
     [[ ! -f ${contig_map} ]] && { log "The contig map file ${contig_map} is not found, please check the file"; return 1; }
 
@@ -1345,7 +1346,7 @@ function InterPro_parsing () {
     --vcf ${am_vep_vcf} \
     --report ${interpro_dir}/Interpro_format_report.txt && \
     update_yaml "${config}" "interpro_mapping_pickle" "${interpro_dir}/Interpro_entry_mapping.pkl.gz" && \
-	rm ${interpro_dir}/$(basename ${interpro_xml_gz_url})
+    rm ${interpro_dir}/$(basename ${interpro_xml_gz_url})
 }
 
 
@@ -1529,6 +1530,46 @@ function AlphaMissense_anno_gnomAD() {
 }
 
 
+function ClinGen_deploy() {
+    local config_file=${1}
+    local assembly=$(read_yaml "${config_file}" "assembly")
+    local clinvar_vcf=$(read_yaml "${config_file}" "clinvar_vcf")
+
+    # if the local file is at least 1 month old, then download the latest version, otherwise use the local file
+    local clingen_url="https://erepo.clinicalgenome.org/evrepo/api/summary/classifications/download"
+    local clingen_dir=${DATA_DIR}/clingen
+    if [[ ! -f ${clingen_dir}/clingen_erepo.tsv ]] || [[ ! $(find ${clingen_dir}/clingen_erepo.tsv -mtime -30) ]]; then
+        local download=1
+    else
+        local download=0
+    fi
+
+    if [[ ${download} -eq 1 ]]; then
+        wget -c ${clingen_url} -O ${clingen_dir}/clingen_erepo.tsv
+    fi
+
+    python ${SCRIPT_DIR}/prepare_clingen_map.py \
+    -v ${clinvar_vcf} \
+    -t ${clingen_dir}/clingen_erepo.tsv \
+    -o ${clingen_dir}/clingen_map.${assembly}.pkl.gz && \
+    update_yaml "${config_file}" "clingen_map" "${clingen_dir}/clingen_map.${assembly}.pkl.gz"
+
+    # Download the dosage sensitivity file
+    [[ ${assembly} =~ "GRCh38" ]] || [[ ${assembly} =~ "hg38" ]] && local url_assembly=GRCh38 || :
+    [[ ${assembly} =~ "GRCh37" ]] || [[ ${assembly} =~ "hg19" ]] && local url_assembly=GRCh37 || :
+
+    if [[ ! -f ${clingen_dir}/gene_dosage_sensitivity.${assembly}.tsv ]] || [[ ! $(find ${clingen_dir}/gene_dosage_sensitivity.${assembly}.tsv -mtime -30) ]]; then
+        wget -c http://ftp.clinicalgenome.org/ClinGen_gene_curation_list_${url_assembly}.tsv -O ${clingen_dir}/gene_dosage_sensitivity.${assembly}.tsv
+    else
+        log "The dosage sensitivity file ${clingen_dir}/gene_dosage_sensitivity.${assembly}.tsv is already downloaded"
+    fi
+
+    mawk -F '\t' '$1 !~ /^#/ {print;} $1 ~ /^#Gene/{print;}' ${clingen_dir}/gene_dosage_sensitivity.${assembly}.tsv > ${clingen_dir}/gene_dosage_sensitivity.${assembly}.tsv.clean && \
+    mv ${clingen_dir}/gene_dosage_sensitivity.${assembly}.tsv.clean ${clingen_dir}/gene_dosage_sensitivity.${assembly}.tsv && \
+    update_yaml "${config_file}" "gene_dosage_sensitivity" "${clingen_dir}/gene_dosage_sensitivity.${assembly}.tsv"
+}
+
+
 
 # Main installation function
 function main_install() {
@@ -1628,6 +1669,10 @@ function main_install() {
     ${assembly} || \
     { log "Failed to install CADD prescores"; return 1; }
 
+    # 8. ClinGen install
+    ClinGen_deploy \
+    ${config_file} || \
+    { log "Failed to deploy ClinGen data"; return 1; }
     log "Congratulations! The installation is completed!"
 }
 

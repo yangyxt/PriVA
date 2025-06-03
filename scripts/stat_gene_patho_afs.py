@@ -76,6 +76,14 @@ def process_chromosome(chrom, vcf_file, csq_field_map):
             af = record.info.get('AF_grpmax_joint', 0)
             if isinstance(af, tuple):
                 af = af[0]
+
+            if af is None or af == 0:
+                af = record.info.get('AF_joint', 0)
+                if isinstance(af, tuple):
+                    af = af[0]
+
+            if af is None or af <= 0:
+                af = 0
             
             # Skip if no CSQ field
             if 'CSQ' not in record.info:

@@ -29,9 +29,9 @@ class AAClinvarCollector:
         self.splice_dict = nested_defaultdict()  # New dict for splice-related data
         self.logger = logger
         self.high_confidence_status = {
-            'practice_guideline',                                    # 4 stars
-            'reviewed_by_expert_panel',                              # 3 stars
-            'criteria_provided,_multiple_submitters,_no_conflicts',  # 2 stars
+            'practice_guideline': 4,                                    # 4 stars
+            'reviewed_by_expert_panel': 3,                              # 3 stars
+            'criteria_provided,_multiple_submitters,_no_conflicts': 2,  # 2 stars
         }
         
     def get_csq_indices(self):

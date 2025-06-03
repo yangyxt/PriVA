@@ -1,8 +1,3 @@
-#ClinGen Gene Curation Results
-#22 Dec,2024
-#Genomic Locations are reported on GRCh37 (hg19): GCF_000001405.13
-#https://www.ncbi.nlm.nih.gov/projects/dbvar/clingen
-#to create link: https://www.ncbi.nlm.nih.gov/projects/dbvar/clingen/clingen_gene.cgi?sym=Gene Symbol
 #Gene Symbol	Gene ID	cytoBand	Genomic Location	Haploinsufficiency Score	Haploinsufficiency Description	Haploinsufficiency PMID1	Haploinsufficiency PMID2	Haploinsufficiency PMID3	Haploinsufficiency PMID4	Haploinsufficiency PMID5	Haploinsufficiency PMID6	Triplosensitivity Score	Triplosensitivity Description	Triplosensitivity PMID1	Triplosensitivity PMID2	Triplosensitivity PMID3	Triplosensitivity PMID4	Triplosensitivity PMID5	Triplosensitivity PMID6	Date Last Evaluated	Haploinsufficiency Disease ID	Triplosensitivity Disease ID
 A4GALT	53947	22q13.2	chr22:43088127-43117307	30	Gene associated with autosomal recessive phenotype							0	No evidence available							2014-12-11		
 AAGAB	79719	15q23	chr15:67493005-67547536	3	Sufficient evidence for dosage pathogenicity	23064416	23000146					0	No evidence available							2013-02-28	MONDO:0007858	
@@ -12,8 +7,7 @@ ABCB11	8647	2q31.1	chr2:169777291-169887834	30	Gene associated with autosomal re
 ABCB4	5244	7q21.12	chr7:87031012-87104996	3	Sufficient evidence for dosage pathogenicity	21989363	23684896	25544413				0	No evidence available							2024-04-16	MONDO:0010939	
 ABCC8	6833	11p15.1	chr11:17414045-17498392	30	Gene associated with autosomal recessive phenotype							0	No evidence available							2012-02-24	MONDO:0009734	
 ABCD1	215	Xq28	chrX:152990311-153010209	3	Sufficient evidence for dosage pathogenicity	8040304	23835273	25835712	7825602			0	No evidence available							2020-12-02	MONDO:0018544	
-ABCG5	64240	2p21	chr2:44039611-44065978	30	Gene associated with autosomal recessive phenotype							Not yet evaluated	Not yet evaluated							2016-08-22	MONDO:0020747	
-ABCG8	64241	2p21	chr2:44066110-44110127	30	Gene associated with autosomal recessive phenotype							0	No evidence available							2016-08-22	MONDO:0020747	
+ABCG8	64241	2p21	chr2:44066110-44110127	30	Gene associated with autosomal recessive phenotype	11099417	15210841	16029460	28521186	24166850	32166861	0	No evidence available							2025-02-03	MONDO:0008863	
 ABHD12	26090	20p11.21	chr20:25275379-25371471	30	Gene associated with autosomal recessive phenotype							0	No evidence available							2014-12-11	MONDO:0012984	
 ABR	29	17p13.3	chr17:906759-1133016	0	No evidence available							0	No evidence available							2012-09-05		
 ABRAXAS1	84142	4q21.23	chr4:84380670-84406253	0	No evidence available	31159747	37198153	29484706				0	No evidence available							2023-07-18		
@@ -21,15 +15,16 @@ ACAD8	27034	11q25	chr11:134123462-134135749	30	Gene associated with autosomal re
 ACADM	34	1p31.1	chr1:76190394-76229364	30	Gene associated with autosomal recessive phenotype							0	No evidence available							2016-08-22	MONDO:0008721	
 ACADSB	36	10q26.13	chr10:124768522-124817806	30	Gene associated with autosomal recessive phenotype							Not yet evaluated	Not yet evaluated							2016-08-22	MONDO:0012392	
 ACADVL	37	17p13.1	chr17:7120444-7128585	30	Gene associated with autosomal recessive phenotype							0	No evidence available							2016-08-22	MONDO:0008723	
+ACD	65057	16q22.1	chr16:67691415-67694163	0	No evidence available							0	No evidence available							2025-04-24		
 ACOX1	51	17q25.1	chr17:73937588-73975247	30	Gene associated with autosomal recessive phenotype							0	No evidence available							2014-11-20	MONDO:0009919	
 ACP5	54	19p13.2	chr19:11685475-11689790	30	Gene associated with autosomal recessive phenotype							0	No evidence available							2016-08-22	MONDO:0011939	
 ACSF3	197322	16q24.3	chr16:89160260-89222641	30	Gene associated with autosomal recessive phenotype							0	No evidence available							2016-08-22	MONDO:0013661	
 ACSL4	2182	Xq23	chrX:108884564-108976486	1	Little evidence for dosage pathogenicity	11889465	12525535	21584729	31481330	26350204	22581936	0	No evidence available							2021-04-28	MONDO:0010313	
-ACTA2	59	10q23.31	chr10:90694831-90751154	1	Little evidence for dosage pathogenicity	32209317	30056620	34498425				0	No evidence available							2022-09-28		
+ACTA2	59	10q23.31	chr10:90694831-90751154	1	Little evidence for dosage pathogenicity	32209317	30056620	34498425				0	No evidence available							2022-09-28	MONDO:0019625	
 ACTB	60	7p22.1	chr7:5566779-5570232	0	No evidence available	29220674	31898838	30315159	29274487			0	No evidence available							2022-02-08	MONDO:0000508	
-ACTC1	70	15q14	chr15:35082431-35087750	1	Little evidence for dosage pathogenicity	17947298						0	No evidence available							2024-09-10	MONDO:0020434	
+ACTC1	70	15q14	chr15:35082431-35087750	1	Little evidence for dosage pathogenicity	17947298	34495297	32233023				0	No evidence available							2024-09-10	MONDO:0100547	
 ACTL6B	51412	7q22.1	chr7:100240720-100254071	30	Gene associated with autosomal recessive phenotype	32312822	30656450	31031012				Not yet evaluated	Not yet evaluated							2022-11-23	MONDO:0100062	
-ACVRL1	94	12q13.13	chr12:52301288-52317145	3	Sufficient evidence for dosage pathogenicity	18312453	20414677					0	No evidence available							2016-11-10	MONDO:0010880	
+ACVRL1	94	12q13.13	chr12:52301288-52317145	3	Sufficient evidence for dosage pathogenicity	20414677						0	No evidence available							2025-02-11	MONDO:0010880	
 ADA2	51816	22q11.1	chr22:17659680-17702738	30	Gene associated with autosomal recessive phenotype							Not yet evaluated	Not yet evaluated							2016-08-22	MONDO:0014306	
 ADAM9	8754	8p11.22	chr8:38854492-38962780	30	Gene associated with autosomal recessive phenotype							0	No evidence available							2014-12-11	MONDO:0013002	
 ADAMTS13	11093	9q34.2	chr9:136279457-136324508	30	Gene associated with autosomal recessive phenotype							Not yet evaluated	Not yet evaluated							2016-08-22	MONDO:0010122	
@@ -43,6 +38,7 @@ ADNP	23394	20q13.13	chr20:49505455-49547974	3	Sufficient evidence for dosage pat
 ADSL	158	22q13.1	chr22:40742504-40783531	30	Gene associated with autosomal recessive phenotype							0	No evidence available							2015-11-05	MONDO:0007068	
 AFF2	2334	Xq28	chrX:147582137-148082193	3	Sufficient evidence for dosage pathogenicity	22065534	21739600	8673085				0	No evidence available							2020-12-08	MONDO:0010659	
 AGA	175	4q34.3	chr4:178351928-178363591	30	Gene associated with autosomal recessive phenotype							Not yet evaluated	Not yet evaluated							2016-08-22	MONDO:0008830	
+AGAP2	116986	12q14.1	chr12:58117544-58135944	0	No evidence available							0	No evidence available							2025-02-26		
 AGK	55750	7q34	chr7:141251210-141355044	30	Gene associated with autosomal recessive phenotype							0	No evidence available							2014-11-20	MONDO:0008922	
 AGO4	192670	1p34.3	chr1:36273237-36323491	0	No evidence available							0	No evidence available							2024-10-08		
 AGPAT2	10555	9q34.3	chr9:139567595-139581909	30	Gene associated with autosomal recessive phenotype							0	No evidence available							2016-08-22	MONDO:0012071	
@@ -54,6 +50,7 @@ AHCY	191	20q11.22	chr20:32868074-32899608	30	Gene associated with autosomal rece
 AHDC1	27245	1p36.11-p35.3	chr1:27860756-27930655	3	Sufficient evidence for dosage pathogenicity	24791903	27148574	29230160				0	No evidence available							2018-02-28	MONDO:0014358	
 AHI1	54806	6q23.3	chr6:135604670-135818878	30	Gene associated with autosomal recessive phenotype							0	No evidence available							2012-09-06	MONDO:0012078	
 AICDA	57379	12p13.31	chr12:8754766-8765455	30	Gene associated with autosomal recessive phenotype							Not yet evaluated	Not yet evaluated							2016-08-22	MONDO:0011528	
+AIFM1	9131	Xq26.1	chrX:129263337-129299815	0	No evidence available	28991257						0	No evidence available							2025-04-23	MONDO:0010378	
 AIMP1	9255	4q24	chr4:107236701-107270613	30	Gene associated with autosomal recessive phenotype							0	No evidence available							2016-08-22	MONDO:0009843	
 AKT1	207	14q32.33	chr14:105235686-105262085	0	No evidence available							0	No evidence available							2022-01-25		
 AKT2	208	19q13.2	chr19:40736224-40791252	0	No evidence available							0	No evidence available							2015-05-07		
@@ -66,15 +63,16 @@ ALDH5A1	7915	6p22.3	chr6:24495197-24537435	30	Gene associated with autosomal rec
 ALDOA	226	16p11.2	chr16:30075600-30081741	30	Gene associated with autosomal recessive phenotype							Not yet evaluated	Not yet evaluated							2016-08-22	MONDO:0012747	
 ALG1	56052	16p13.3	chr16:5121844-5137380	30	Gene associated with autosomal recessive phenotype							Not yet evaluated	Not yet evaluated							2016-08-22	MONDO:0012052	
 ALG12	79087	22q13.33	chr22:50293877-50312086	30	Gene associated with autosomal recessive phenotype							0	No evidence available							2016-08-22	MONDO:0011783	
+ALG13	79868	Xq23	chrX:110924398-111003877	1	Little evidence for dosage pathogenicity	22492991	33734437					0	No evidence available							2025-04-23		
 ALG2	85365	9q22.33	chr9:101978707-101984224	30	Gene associated with autosomal recessive phenotype							Not yet evaluated	Not yet evaluated							2016-08-22	MONDO:0014543	
 ALG6	29929	1p31.3	chr1:63833298-63904224	30	Gene associated with autosomal recessive phenotype							Not yet evaluated	Not yet evaluated							2016-08-22	MONDO:0011291	
-ALK	238	2p23.2-p23.1	chr2:29415640-30144452	0	No evidence available							0	No evidence available							2019-12-20		
 ALMS1	7840	2p13.1	chr2:73612886-73837046	30	Gene associated with autosomal recessive phenotype							0	No evidence available							2016-08-22	MONDO:0008763	
 ALS2	57679	2q33.1	chr2:202564990-202645656	30	Gene associated with autosomal recessive phenotype							0	No evidence available							2016-08-22	MONDO:0008763	
 ALX4	60529	11p11.2	chr11:44281990-44331689	3	Sufficient evidence for dosage pathogenicity	11137991	11106354	16319823				0	No evidence available							2020-07-22	MONDO:0012309	
 AMH	268	19p13.3	chr19:2249322-2252072	30	Gene associated with autosomal recessive phenotype							Not yet evaluated	Not yet evaluated							2016-08-22	MONDO:0009857	
 AMN	81693	14q32.32	chr14:103389000-103397179	30	Gene associated with autosomal recessive phenotype							0	No evidence available							2016-08-22	MONDO:0100156	
 ANGPTL3	27329	1p31.3	chr1:63063191-63071984	30	Gene associated with autosomal recessive phenotype							Not yet evaluated	Not yet evaluated							2016-08-22	MONDO:0011505	
+ANK2	287	4q25-q26	chr4:113626778-114304892	3	Sufficient evidence for dosage pathogenicity	37195288	22542183	25363768	25363760	28263302	37088467	0	No evidence available							2025-01-14	MONDO:0100038	
 ANKH	56172	5p15.2	chr5:14704909-14871887	0	No evidence available	11326338	22150416	20186813	23390136			0	No evidence available							2022-02-23		
 ANKRD11	29123	16q24.3	chr16:89334038-89556969	3	Sufficient evidence for dosage pathogenicity	21782149	35330407	28422132				0	No evidence available							2022-06-14	MONDO:0007846	
 ANKRD17	26057	4q13.3	chr4:73939093-74124515	3	Sufficient evidence for dosage pathogenicity	33909992						0	No evidence available							2023-04-11	MONDO:0000508	
@@ -85,7 +83,7 @@ ANTXR2	118429	4q21.21	chr4:80822300-80994626	30	Gene associated with autosomal r
 AP1S2	8905	Xp22.2	chrX:15843929-15872936	3	Sufficient evidence for dosage pathogenicity	17186471	17617514	18428203	23756445	30383884	25649377	0	No evidence available							2021-04-28	MONDO:0010574	
 AP4B1	10717	1p13.2	chr1:114436816-114447650	30	Gene associated with autosomal recessive phenotype							0	No evidence available							2016-08-22	MONDO:0013551	
 AP4S1	11154	14q12	chr14:31494312-31565656	30	Gene associated with autosomal recessive phenotype							0	No evidence available							2016-08-22	MONDO:0013552	
-APC	324	5q22.2	chr5:112043195-112181936	3	Sufficient evidence for dosage pathogenicity	1651174	10051640	23159591				0	No evidence available							2021-07-18	MONDO:0021056	
+APC	324	5q22.2	chr5:112043195-112181936	3	Sufficient evidence for dosage pathogenicity	1651174	10051640	23159591				0	No evidence available							2021-07-18	MONDO:0021057	
 APOB	338	2p24.1	chr2:21224301-21266945	3	Sufficient evidence for dosage pathogenicity	27179706	1527480	2843815				0	No evidence available							2020-04-09	MONDO:0014252	
 APOC2	344	19q13.32	chr19:45449308-45452822	30	Gene associated with autosomal recessive phenotype							Not yet evaluated	Not yet evaluated							2016-08-22	MONDO:0008810	
 AR	367	Xq12	chrX:66763863-66950461	3	Sufficient evidence for dosage pathogenicity	22334387	27994190	30742848				0	No evidence available							2020-12-08	MONDO:0019154	
@@ -140,7 +138,8 @@ B3GALT6	126792	1p36.33	chr1:1167617-1170421	30	Gene associated with autosomal re
 B4GALT1	2683	9p21.1	chr9:33104075-33167334	30	Gene associated with autosomal recessive phenotype							0	No evidence available							2016-08-22	MONDO:0011772	
 B4GALT7	11285	5q35.3	chr5:177027133-177037331	30	Gene associated with autosomal recessive phenotype							0	No evidence available							2016-08-22	MONDO:0020682	
 B9D1	27077	17p11.2	chr17:19238008-19281226	30	Gene associated with autosomal recessive phenotype							0	No evidence available							2016-08-22	MONDO:0014927	
-BAG3	9531	10q26.11	chr10:121410892-121437331	3	Sufficient evidence for dosage pathogenicity	21353195	25008357	21459883				0	No evidence available							2015-02-12	MONDO:0013479	
+BAG3	9531	10q26.11	chr10:121410892-121437331	3	Sufficient evidence for dosage pathogenicity	21353195	25008357	21459883				0	No evidence available							2015-02-12	MONDO:0005021	
+BAP1	8314	3p21.1	chr3:52435024-52444024	3	Sufficient evidence for dosage pathogenicity	21874000	21941004	21874003	30883995	30517737		0	No evidence available							2025-01-30	MONDO:0013692	
 BARD1	580	2q35	chr2:215590370-215674407	3	Sufficient evidence for dosage pathogenicity	20077502	20842729	21344236; 25994375				0	No evidence available							2020-05-01	MONDO:0016419	
 BBS12	166379	4q27	chr4:123653859-123666094	30	Gene associated with autosomal recessive phenotype							0	No evidence available							2016-08-22	MONDO:0014440	
 BBS5	129880	2q31.1	chr2:170336004-170363165	30	Gene associated with autosomal recessive phenotype							0	No evidence available							2015-10-11	MONDO:0014434	
@@ -158,6 +157,7 @@ BCS1L	617	2q35	chr2:219524406-219528166	30	Gene associated with autosomal recess
 BIN1	274	2q14.3	chr2:127805599-127864730	30	Gene associated with autosomal recessive phenotype							Not yet evaluated	Not yet evaluated							2016-08-22	MONDO:0009709	
 BLM	641	15q26.1	chr15:91260577-91359396	30	Gene associated with autosomal recessive phenotype							0	No evidence available							2022-02-09	MONDO:0008876	
 BLNK	29760	10q24.1	chr10:97948927-98031326	30	Gene associated with autosomal recessive phenotype							0	No evidence available							2016-08-22	MONDO:0013289	
+BMP4	652	14q22.2	chr14:54416454-54423609	3	Sufficient evidence for dosage pathogenicity	21340693	18252212	31053785	30568244	31120642	34926457	0	No evidence available							2025-04-23	MONDO:0011936	
 BMPER	168667	7p14.3	chr7:33944527-34196039	30	Gene associated with autosomal recessive phenotype							Not yet evaluated	Not yet evaluated							2016-08-22	MONDO:0011946	
 BMPR1A	657	10q23.2	chr10:88516376-88687726	3	Sufficient evidence for dosage pathogenicity	11381269	15235019	23399955				0	No evidence available							2020-06-24	MONDO:0017380	
 BMPR2	659	2q33.1-q33.2	chr2:203241050-203432472	3	Sufficient evidence for dosage pathogenicity	10903931	11015450					0	No evidence available							2020-08-26	MONDO:0024533	
@@ -165,10 +165,9 @@ BPHL	670	6p25.2	chr6:3118610-3153812	40	Dosage sensitivity unlikely	32487729	223
 BPNT2	54928	8q12.1	chr8:57870490-57906426	30	Gene associated with autosomal recessive phenotype							Not yet evaluated	Not yet evaluated							2016-08-22	MONDO:0013561	
 BPTF	2186	17q24.2	chr17:65821619-65980494	3	Sufficient evidence for dosage pathogenicity	28942966	33522091					0	No evidence available							2022-07-12	MONDO:0000508	
 BPY2	9083	Yq11.223	chrY:25130410-25151612	0	No evidence available							0	No evidence available							2012-08-22		
-BRAF	673	7q34	chr7:140413128-140624729	1	Little evidence for dosage pathogenicity	21862832						0	No evidence available							2014-08-04		
 BRAT1	221927	7p22.3	chr7:2577444-2595158	30	Gene associated with autosomal recessive phenotype							0	No evidence available							2016-08-22	MONDO:0013784	
 BRCA1	672	17q21.31	chr17:41196312-41277381	3	Sufficient evidence for dosage pathogenicity	32375709	21989022	11802209	24312913			0	No evidence available							2021-09-23	MONDO:0700268	
-BRCA2	675	13q13.1	chr13:32889645-32974405	3	Sufficient evidence for dosage pathogenicity	16199546	17063271	25632310	12097290	11897832	12569143	0	No evidence available							2021-07-14	MONDO:0012933	
+BRCA2	675	13q13.1	chr13:32889645-32974405	3	Sufficient evidence for dosage pathogenicity	16199546	17063271	25632310	12097290	11897832	12569143	0	No evidence available							2021-07-14	MONDO:0700269	
 BRIP1	83990	17q23.2	chr17:59756500-59940889	3	Sufficient evidence for dosage pathogenicity	29368626	26720728	26315354				0	No evidence available							2019-02-15	MONDO:0016419	
 BRPF1	7862	3p25.3	chr3:9773419-9789699	3	Sufficient evidence for dosage pathogenicity	27939640	27939639	31020800	32010779	35243762	37190896	0	No evidence available							2023-08-23	MONDO:0015022	
 BRWD3	254065	Xq21.1	chrX:79925002-80065376	3	Sufficient evidence for dosage pathogenicity	17668385	24462886	28475857	31714006	30628072		0	No evidence available							2022-08-24	MONDO:0100284	
@@ -189,7 +188,7 @@ CACNA1C	775	12p13.33	chr12:2162153-2807116	1	Little evidence for dosage pathogen
 CACNA1E	777	1q25.3	chr1:181452653-181777219	1	Little evidence for dosage pathogenicity	30343943	34702355					0	No evidence available							2024-09-10	MONDO:0032657	
 CADPS2	93664	7q31.32	chr7:121958465-122526514	0	No evidence available							0	No evidence available							2012-07-10		
 CALM1	801	14q32.11	chr14:90862846-90874612	0	No evidence available	27535533						0	No evidence available							2023-12-12		
-CALM2	805	2p21	chr2:47387221-47404075	0	No evidence available							0	No evidence available							2024-07-09		
+CALM2	805	2p21	chr2:47387221-47404075	0	No evidence available							0	No evidence available							2024-07-09	MONDO:0017990	
 CALM3	808	19q13.32	chr19:47104331-47114039	0	No evidence available							0	No evidence available							2024-07-09		
 CAMK2A	815	5q32	chr5:149599054-149669693	1	Little evidence for dosage pathogenicity	29100089	29560374	35143101	24463508			0	No evidence available							2023-05-24	MONDO:0030919	
 CAMK2B	816	7p13	chr7:44256753-44365193	1	Little evidence for dosage pathogenicity	29100089	33796307	35519826	35753512			0	No evidence available							2023-01-25	MONDO:0030920	
@@ -199,7 +198,7 @@ CAPN3	825	15q15.1	chr15:42651699-42704515	30	Gene associated with autosomal rece
 CAPRIN1	4076	11p13	chr11:34073278-34124157	1	Little evidence for dosage pathogenicity	35979925	34356170					0	No evidence available							2024-07-24	MONDO:0100038	
 CARD14	79092	17q25.3	chr17:78143829-78183130	0	No evidence available							0	No evidence available							2013-08-01		
 CASP10	843	2q33.1	chr2:202047864-202094129	1	Little evidence for dosage pathogenicity	21382177						0	No evidence available							2020-04-10		
-CASQ2	845	1p13.1	chr1:116242642-116311335	30	Gene associated with autosomal recessive phenotype							Not yet evaluated	Not yet evaluated							2016-08-22	MONDO:0012762	
+CASQ2	845	1p13.1	chr1:116242642-116311335	30	Gene associated with autosomal recessive phenotype							Not yet evaluated	Not yet evaluated							2016-08-22	MONDO:0017990	
 CASZ1	54897	1p36.22	chr1:10696661-10856703	1	Little evidence for dosage pathogenicity	8263302						0	No evidence available							2019-04-25		
 CATSPER2	117155	15q15.3	chr15:43920701-43941082	30	Gene associated with autosomal recessive phenotype							0	No evidence available							2012-09-20		
 CBFB	865	16q22.1	chr16:67063052-67134961	0	No evidence available							0	No evidence available							2012-02-22		
@@ -225,7 +224,7 @@ CD40LG	959	Xq26.3	chrX:135730317-135742549	3	Sufficient evidence for dosage path
 CD59	966	11p13	chr11:33724556-33758025	30	Gene associated with autosomal recessive phenotype							Not yet evaluated	Not yet evaluated							2016-08-22	MONDO:0012858	
 CD8A	925	2p11.2	chr2:87011728-87035519	30	Gene associated with autosomal recessive phenotype							0	No evidence available							2016-08-22	MONDO:0012161	
 CDAN1	146059	15q15.2	chr15:43015742-43029326	30	Gene associated with autosomal recessive phenotype							0	No evidence available							2016-08-22	MONDO:0009135	
-CDC42BPB	9578	14q32.32	chr14:103398717-103523886	1	Little evidence for dosage pathogenicity	22495309	28263302					0	No evidence available							2018-10-24	MONDO:0005258	
+CDC42BPB	9578	14q32.32	chr14:103398717-103523886	1	Little evidence for dosage pathogenicity	22495309	28263302	32031333	31785789	35586607		0	No evidence available							2025-04-23	MONDO:0100038	
 CDC73	79577	1q31.2	chr1:193091161-193223945	3	Sufficient evidence for dosage pathogenicity	12434154	28774260	21324824	27544721	32590342		0	No evidence available							2022-04-13	MONDO:0007768	
 CDH1	999	16q22.1	chr16:68771195-68869440	3	Sufficient evidence for dosage pathogenicity	26182300	24037103	19168852				0	No evidence available							2020-04-10	MONDO:0007648	
 CDH15	1013	16q24.3	chr16:89238156-89261900	0	No evidence available							0	No evidence available							2013-08-08	MONDO:0012946	
@@ -315,7 +314,7 @@ COL16A1	1307	1p35.2	chr1:32117864-32169618	40	Dosage sensitivity unlikely	324877
 COL1A1	1277	17q21.33	chr17:48261462-48278992	3	Sufficient evidence for dosage pathogenicity	9067755	9016532					0	No evidence available							2012-08-23	MONDO:0008146	
 COL1A2	1278	7q21.3	chr7:94024207-94060539	0	No evidence available							0	No evidence available							2012-10-12		
 COL2A1	1280	12q13.11	chr12:48366750-48398259	3	Sufficient evidence for dosage pathogenicity	27390512	27408751	17721977				0	No evidence available							2020-07-29	MONDO:0007160	
-COL3A1	1281	2q32.2	chr2:189839099-189877472	3	Sufficient evidence for dosage pathogenicity	11577371	24922459	24650746				0	No evidence available							2017-01-12	MONDO:0007524	
+COL3A1	1281	2q32.2	chr2:189839099-189877472	3	Sufficient evidence for dosage pathogenicity	11577371	24922459	24650746				0	No evidence available							2017-01-12	MONDO:0017314	
 COL4A3	1285	2q36.3	chr2:228029340-228179508	30	Gene associated with autosomal recessive phenotype							0	No evidence available							2013-05-22	MONDO:0008762	
 COL4A5	1287	Xq22.3	chrX:107683068-107940775	3	Sufficient evidence for dosage pathogenicity	16941480	10752524	30577881				0	No evidence available							2020-09-08	MONDO:0010520	
 COL5A1	1289	9q34.3	chr9:137533649-137736689	3	Sufficient evidence for dosage pathogenicity	10777716	8673139	10796876				0	No evidence available							2017-12-14	MONDO:0019567	
@@ -348,10 +347,10 @@ CRTAP	10491	3p22.3	chr3:33155506-33189265	30	Gene associated with autosomal rece
 CRYBA1	1411	17q11.2	chr17:27573877-27581512	0	No evidence available							0	No evidence available							2013-06-06		
 CRYBB2	1415	22q11.23	chr22:25615606-25627836	0	No evidence available							0	No evidence available							2023-01-10		
 CRYGC	1420	2q33.3	chr2:208992861-208994552	0	No evidence available							0	No evidence available							2013-05-22		
-CSF2RA	1438	Xp22.33 and Yp11.2	chrY:1268814-1325218	30	Gene associated with autosomal recessive phenotype							0	No evidence available							2021-08-23	MONDO:0012580	
 CSF2RA	1438	Xp22.33 and Yp11.2	chrX:1387707-1444111	30	Gene associated with autosomal recessive phenotype							0	No evidence available							2021-08-23	MONDO:0012580	
+CSF2RA	1438	Xp22.33 and Yp11.2	chrY:1268814-1325218	30	Gene associated with autosomal recessive phenotype							0	No evidence available							2021-08-23	MONDO:0012580	
 CSF2RB	1439	22q12.3	chr22:37309670-37336481	30	Gene associated with autosomal recessive phenotype							Not yet evaluated	Not yet evaluated							2016-08-22	MONDO:0013712	
-CSMD1	64478	8p23.2	chr8:2792883-4852436	1	Little evidence for dosage pathogenicity	2165858	28934986					0	No evidence available							2024-10-08	MONDO:0100038	
+CSMD1	64478	8p23.2	chr8:2792883-4852436	1	Little evidence for dosage pathogenicity	21658582	28934986					0	No evidence available							2024-10-08	MONDO:0100038	
 CSNK2A1	1457	20p13	chr20:453142-524434	1	Little evidence for dosage pathogenicity	27048600	30655572	38444259	37195306	33944995	35221879	0	No evidence available							2024-06-26	MONDO:0000508	
 CSPP1	79848	8q13.1-q13.2	chr8:67976603-68108849	30	Gene associated with autosomal recessive phenotype							0	No evidence available							2016-08-22	MONDO:0014288	
 CSTB	1476	21q22.3	chr21:45193831-45196189	30	Gene associated with autosomal recessive phenotype							0	No evidence available							2016-08-22	MONDO:0009698	
@@ -439,11 +438,11 @@ DPP6	1804	7q36.2	chr7:153445218-154685995	1	Little evidence for dosage pathogeni
 DPYD	1806	1p21.3	chr1:97543299-98386615	30	Gene associated with autosomal recessive phenotype							0	No evidence available							2018-01-23	MONDO:0010130	
 DPYS	1807	8q22.3	chr8:105391659-105479283	30	Gene associated with autosomal recessive phenotype							Not yet evaluated	Not yet evaluated							2016-08-22	MONDO:0009111	
 DRD5	1816	4p16.1	chr4:9783258-9785633	0	No evidence available							0	No evidence available							2012-05-15		
-DSC2	1824	18q12.1	chr18:28638806-28682384	1	Little evidence for dosage pathogenicity	17186466	17033975		29178656	31386562	33684294	0	No evidence available							2024-04-24	MONDO:0012506	
+DSC2	1824	18q12.1	chr18:28638806-28682384	1	Little evidence for dosage pathogenicity	17186466	17033975		29178656	31386562	33684294	0	No evidence available							2024-04-24	MONDO:0016342	
 DSC3	1825	18q12.1	chr18:28569331-28622708	30	Gene associated with autosomal recessive phenotype							Not yet evaluated	Not yet evaluated							2016-08-22	MONDO:0013136	
 DSCAM	1826	21q22.2	chr21:41382926-42219084	2	Some evidence for dosage pathogenicity	27824329	25363768	25363760	33004838	34312540		0	No evidence available							2023-10-10	MONDO:0005258	
 DSE	29940	6q22.1	chr6:116575334-116766024	30	Gene associated with autosomal recessive phenotype							Not yet evaluated	Not yet evaluated							2016-08-22	MONDO:0014236	
-DSG2	1829	18q12.1	chr18:29078140-29128971	2	Some evidence for dosage pathogenicity	21397041	17105751	16773573	31638835	29606362	16505173	0	No evidence available							2022-12-13	MONDO:0012434	
+DSG2	1829	18q12.1	chr18:29078140-29128971	2	Some evidence for dosage pathogenicity	21397041	17105751	16773573	31638835	29606362	16505173	0	No evidence available							2022-12-13	MONDO:0016587	
 DSG4	147409	18q12.1	chr18:28956740-28994872	30	Gene associated with autosomal recessive phenotype							0	No evidence available							2016-08-22	MONDO:0011932	
 DSP	1832	6p24.3	chr6:7541904-7586947	3	Sufficient evidence for dosage pathogenicity	31514951	27532257	24503780	23810894	20716751	31319917	0	No evidence available							2021-10-12	MONDO:0005021	
 DSPP	1834	4q22.1	chr4:88529681-88538025	0	No evidence available							0	No evidence available							2013-03-27		
@@ -460,6 +459,7 @@ EDNRB	1910	13q22.3	chr13:78469616-78549662	1	Little evidence for dosage pathogen
 EEF1A2	1917	20q13.33	chr20:62119367-62130436	0	No evidence available							0	No evidence available							2023-06-13		
 EFCAB13	124989	17q21.32	chr17:45401321-45518678	40	Dosage sensitivity unlikely	32487729	26940866	25807282	28406212	32461654		0	No evidence available							2021-02-02		
 EFL1	79631	15q25.2	chr15:82422574-82555075	30	Gene associated with autosomal recessive phenotype							Not yet evaluated	Not yet evaluated							2022-04-13	MONDO:0009833	
+EFNB1	1947	Xq13.1	chrX:68048864-68062003	3	Sufficient evidence for dosage pathogenicity	15124102	15166289	23335590	31285555	16639408		1	Little evidence for dosage pathogenicity	21064195	21542058	21782985				2025-05-13	MONDO:0010570	
 EFTUD2	9343	17q21.31	chr17:42927316-42976813	3	Sufficient evidence for dosage pathogenicity	22305528	23188108					0	No evidence available							2013-05-23	MONDO:0012516	
 EGFR	1956	7p11.2	chr7:55086710-55279321	0	No evidence available	25606410						0	No evidence available							2022-05-11		
 EGR2	1959	10q21.3	chr10:64571756-64578927	0	No evidence available							0	No evidence available							2011-11-28		
@@ -523,12 +523,13 @@ FANCA	2175	16q24.3	chr16:89803957-89883055	30	Gene associated with autosomal rec
 FANCB	2187	Xp22.2	chrX:14861527-14891191	3	Sufficient evidence for dosage pathogenicity	15502827	29232005	21910217	16679491			0	No evidence available							2021-06-23	MONDO:0010351	
 FANCD2	2177	3p25.3	chr3:10068121-10143616	30	Gene associated with autosomal recessive phenotype							0	No evidence available							2023-08-09	MONDO:0009214	
 FANCE	2178	6p21.31	chr6:35420115-35434879	30	Gene associated with autosomal recessive phenotype							0	No evidence available							2020-06-12	MONDO:0010953	
+FANCF	2188	11p14.3	chr11:22644079-22647369	30	Gene associated with autosomal recessive phenotype							0	No evidence available							2025-01-08	MONDO:0011325	
 FANCG	2189	9p13.3	chr9:35073836-35079939	30	Gene associated with autosomal recessive phenotype							0	No evidence available							2020-11-15	MONDO:0013565	
-FANCL	55120	2p16.1	chr2:58386378-58468515	30	Gene associated with autosomal recessive phenotype	32235514						30	Gene associated with autosomal recessive phenotype							2023-10-21		
+FANCL	55120	2p16.1	chr2:58386378-58468515	30	Gene associated with autosomal recessive phenotype	32235514						0	No evidence available							2023-10-21		
 FANCM	57697	14q21.2	chr14:45605133-45670093	30	Gene associated with autosomal recessive phenotype							0	No evidence available							2024-04-09		
 FARS2	10667	6p25.1	chr6:5261240-5771816	30	Gene associated with autosomal recessive phenotype							0	No evidence available							2016-08-22	MONDO:0009723	
 FAS	355	10q23.31	chr10:90750555-90776816	1	Little evidence for dosage pathogenicity	21490157	26563159	23524443	34171534			0	No evidence available							2022-02-08	MONDO:0017979	
-FASLG	356	1q24.3	chr1:172628243-172636016	30	Gene associated with autosomal recessive phenotype							30	Gene associated with autosomal recessive phenotype							2023-10-11	MONDO:0011158	
+FASLG	356	1q24.3	chr1:172628243-172636016	30	Gene associated with autosomal recessive phenotype							0	No evidence available							2023-10-11	MONDO:0011158	
 FBN1	2200	15q21.1	chr15:48700510-48937906	3	Sufficient evidence for dosage pathogenicity	17701892	30286810	21063442				0	No evidence available							2019-12-04	MONDO:0007947	
 FBN2	2201	5q23.3	chr5:127593601-127873938	0	No evidence available							0	No evidence available							2024-02-28		
 FBP1	2203	9q22.32	chr9:97365415-97402545	30	Gene associated with autosomal recessive phenotype							0	No evidence available							2016-08-22	MONDO:0009251	
@@ -564,7 +565,7 @@ FOXF1	2294	16q24.1	chr16:86544133-86549028	3	Sufficient evidence for dosage path
 FOXG1	2290	14q12	chr14:29235993-29239483	3	Sufficient evidence for dosage pathogenicity	28661489	24836831	29655203	24139857	19578037	18571142	0	No evidence available							2021-03-09	MONDO:0100040	
 FOXL2	668	3q22.3	chr3:138663066-138665979	3	Sufficient evidence for dosage pathogenicity	28924383	15962237	20232352	11468277	29339661	18726931	0	No evidence available							2021-02-09	MONDO:0007201	
 FOXP1	27086	3p13	chr3:71003859-71633129	3	Sufficient evidence for dosage pathogenicity	29090079	20848658	20950788				0	No evidence available							2020-01-22	MONDO:0013352	
-FOXP2	93986	7q31.1	chr7:113726382-114333820	1	Little evidence for dosage pathogenicity	15877281						0	No evidence available							2012-09-19	MONDO:0016226	
+FOXP2	93986	7q31.1	chr7:113726382-114333820	3	Sufficient evidence for dosage pathogenicity	15877281	23918746	27572252	36328423			0	No evidence available							2025-04-08	MONDO:0016226	
 FOXRED1	55572	11q24.2	chr11:126139049-126148021	30	Gene associated with autosomal recessive phenotype							0	No evidence available							2016-08-22	MONDO:0009723	
 FRMD7	90167	Xq26.2	chrX:131211018-131262048	3	Sufficient evidence for dosage pathogenicity	17013395	20450309	28378818				0	No evidence available							2020-04-09	MONDO:0010693	
 FSHB	2488	11p14.1	chr11:30252561-30256741	30	Gene associated with autosomal recessive phenotype							Not yet evaluated	Not yet evaluated							2016-08-22	MONDO:0009239	
@@ -613,6 +614,7 @@ GIGYF2	26058	2q37.1	chr2:233562041-233725315	1	Little evidence for dosage pathog
 GIPC3	126326	19p13.3	chr19:3585476-3593539	30	Gene associated with autosomal recessive phenotype	21326233	21660509					0	No evidence available							2016-08-22	MONDO:0011160	
 GJA1	2697	6q22.31	chr6:121756792-121770873	0	No evidence available							0	No evidence available							2013-11-20		
 GJA5	2702	1q21.2	chr1:147228332-147245455	1	Little evidence for dosage pathogenicity	20818502						0	No evidence available							2012-02-23		
+GJA8	2703	1q21.2	chr1:147374921-147381396	0	No evidence available	18006672	31844091	34722561	37337769	25148791		0	No evidence available							2025-04-08		
 GJB2	2706	13q12.11	chr13:20761609-20767077	40	Dosage sensitivity unlikely							0	No evidence available							2012-05-10		
 GJB6	10804	13q12.11	chr13:20796101-20806458	0	No evidence available							0	No evidence available							2014-01-30		
 GK	2710	Xp21.2	chrX:30671540-30749579	3	Sufficient evidence for dosage pathogenicity	8651297	9719371	10851254				0	No evidence available							2012-09-06	MONDO:0010613	
@@ -675,7 +677,7 @@ H19	283120	11p15.5	chr11:2016406-2022696	0	No evidence available							0	No evid
 H6PD	9563	1p36.22	chr1:9294833-9331396	30	Gene associated with autosomal recessive phenotype							0	No evidence available							2016-08-22	MONDO:0011503	
 HBA1	3039	16p13.3	chr16:226679-227521	30	Gene associated with autosomal recessive phenotype							0	No evidence available							2012-04-19	MONDO:0011399	
 HBA2	3040	16p13.3	chr16:222875-223709	30	Gene associated with autosomal recessive phenotype							0	No evidence available							2012-07-06	MONDO:0011399	
-HDAC4	9759	2q37.3	chr2:239969864-240323343	1	Little evidence for dosage pathogenicity	20691407	35937050	35982159	33057194	31502745	31502745	0	No evidence available							2024-07-16	MONDO:0010886	
+HDAC4	9759	2q37.3	chr2:239969864-240323343	1	Little evidence for dosage pathogenicity	20691407	35937050	35982159	33057194	31502745		0	No evidence available							2024-07-16	MONDO:0010886	
 HDAC8	55869	Xq13.1	chrX:71549366-71792693	3	Sufficient evidence for dosage pathogenicity	22885700	24403048	26671848				0	No evidence available							2018-03-28	MONDO:0010471	
 HEXB	3074	5q13.3	chr5:73935848-74017113	30	Gene associated with autosomal recessive phenotype							Not yet evaluated	Not yet evaluated							2016-08-22	MONDO:0010006	
 HFE	3077	6p22.2	chr6:26087657-26098571	30	Gene associated with autosomal recessive phenotype	22093335	20117027	17951290	24920245	18809761		0	No evidence available							2024-04-08	MONDO:0006507	
@@ -692,6 +694,7 @@ HMGA2	8091	12q14.3	chr12:66218240-66360071	1	Little evidence for dosage pathogen
 HNF1A	6927	12q24.31	chr12:121416346-121440315	3	Sufficient evidence for dosage pathogenicity	12574234	11668618	8945470	9097962	9166684		0	No evidence available							2023-12-13	MONDO:0010894	
 HNF1B	6928	17q12	chr17:36046434-36105050	3	Sufficient evidence for dosage pathogenicity	10720943	15068978	9398836				0	No evidence available							2020-12-21	MONDO:0007669	
 HNRNPC	3183	14q11.2	chr14:21677306-21737601	1	Little evidence for dosage pathogenicity	37541189						0	No evidence available							2023-11-29	MONDO:0100038	
+HNRNPDL	9987	4q21.22	chr4:83343717-83351615	0	No evidence available	33131168						0	No evidence available							2025-04-08	MONDO:0015151	
 HNRNPK	3190	9q21.32	chr9:86582998-86595530	3	Sufficient evidence for dosage pathogenicity	26173930	26954065	29904177	36130591			0	No evidence available							2023-08-23	MONDO:0018681	
 HNRNPU	3192	1q44	chr1:245013599-245027845	3	Sufficient evidence for dosage pathogenicity	28944577	28815871	28393272	32319732	35138025		0	No evidence available							2024-11-27	MONDO:0100038	
 HOXD13	3239	2q31.1	chr2:176957449-176960672	3	Sufficient evidence for dosage pathogenicity	31611522	22233338	9758628				0	No evidence available							2020-09-23	MONDO:0008513	
@@ -732,6 +735,7 @@ IMMP2L	83943	7q31.1	chr7:110302700-111202548	40	Dosage sensitivity unlikely	2547
 IMPA1	3612	8q21.13	chr8:82569149-82598560	0	No evidence available							0	No evidence available							2012-02-08		
 INPP5E	56623	9q34.3	chr9:139323071-139334297	30	Gene associated with autosomal recessive phenotype							0	No evidence available							2016-08-22	MONDO:0008944	
 INS	3630	11p15.5	chr11:2181009-2182439	0	No evidence available							0	No evidence available							2012-03-22		
+IQSEC2	23096	Xp11.22	chrX:53262058-53350548	3	Sufficient evidence for dosage pathogenicity	30206421	23674175	36012761	24306141	25649377		0	No evidence available							2025-03-26	MONDO:0100148	
 IRAK4	51135	12q12	chr12:44152754-44183344	30	Gene associated with autosomal recessive phenotype							0	No evidence available							2016-08-22	MONDO:0011888	
 IRF6	3664	1q32.2	chr1:209958962-209979487	3	Sufficient evidence for dosage pathogenicity							0	No evidence available							2012-07-06	MONDO:0007333	
 ITCH	83737	20q11.22	chr20:32951079-33099578	30	Gene associated with autosomal recessive phenotype							Not yet evaluated	Not yet evaluated							2016-08-22	MONDO:0013245	
@@ -749,13 +753,14 @@ KANSL1	284058	17q21.31	chr17:44107282-44302733	3	Sufficient evidence for dosage 
 KARS1	3735	16q23.1	chr16:75661622-75681563	30	Gene associated with autosomal recessive phenotype							0	No evidence available							2016-08-22	MONDO:0013489	
 KAT6A	7994	8p11.21	chr8:41786997-41909505	3	Sufficient evidence for dosage pathogenicity	25728777	27133397	25728775				0	No evidence available							2018-03-28	MONDO:0014558	
 KAT6B	23522	10q22.2	chr10:76585013-76792382	3	Sufficient evidence for dosage pathogenicity	22077973	22265014	25424711				0	No evidence available							2018-04-25	MONDO:0011365	
-KATNAL2	83473	18q21.1	chr18:44497557-44628614	1	Little evidence for dosage pathogenicity	22495311	22495309	28191889				0	No evidence available							2018-11-28		
+KATNAL2	83473	18q21.1	chr18:44497557-44628614	1	Little evidence for dosage pathogenicity	22495311	22495309	28191889				0	No evidence available							2018-11-28	MONDO:0100038	
+KCNC1	3746	11p15.1	chr11:17756328-17804604	1	Little evidence for dosage pathogenicity	28145425	31353855	31353862				0	No evidence available							2025-03-31	MONDO:0100038	
 KCNH1	3756	1q32.2	chr1:210851656-211307490	0	No evidence available	33494179	34312540	31175295	32938993			0	No evidence available							2023-06-28	MONDO:0100485	
-KCNH2	3757	7q36.1	chr7:150642049-150675409	3	Sufficient evidence for dosage pathogenicity		18774102	24530480				0	No evidence available							2020-02-26	MONDO:0013367	
+KCNH2	3757	7q36.1	chr7:150642049-150675409	3	Sufficient evidence for dosage pathogenicity		18774102	24530480				0	No evidence available							2020-02-26	MONDO:0002442	
 KCNJ1	3758	11q24.3	chr11:128707915-128737191	30	Gene associated with autosomal recessive phenotype							0	No evidence available							2012-03-22	MONDO:0009424	
 KCNJ6	3763	21q22.13	chr21:38979675-39288760	0	No evidence available							0	No evidence available							2024-12-10		
 KCNK9	51305	8q24.3	chr8:140613081-140715366	0	No evidence available							0	No evidence available							2012-02-29	MONDO:0012856	
-KCNQ1	3784	11p15.5-p15.4	chr11:2466238-2870340	3	Sufficient evidence for dosage pathogenicity	26669661	29532034	23098067				0	No evidence available							2020-10-13	MONDO:0100316	
+KCNQ1	3784	11p15.5-p15.4	chr11:2466238-2870340	3	Sufficient evidence for dosage pathogenicity	26669661	29532034	23098067				0	No evidence available							2020-10-13	MONDO:0002442	
 KCNQ1OT1	10984	11p15.5	chr11:2629558-2721228	1	Little evidence for dosage pathogenicity	33177595	32447323	35772847	35772845	35906012		0	No evidence available							2023-12-06	MONDO:0008394	
 KCNQ2	3785	20q13.33	chr20:62031561-62104008	3	Sufficient evidence for dosage pathogenicity	17675531	14534157					0	No evidence available							2013-07-18	MONDO:0007365	
 KCNV2	169522	9p24.2	chr9:2717510-2730037	30	Gene associated with autosomal recessive phenotype							Not yet evaluated	Not yet evaluated							2016-08-22	MONDO:0012475	
@@ -777,7 +782,7 @@ KLF14	136259	7q32.2	chr7:130415525-130418967	0	No evidence available							0	No 
 KLF8	11279	Xp11.21	chrX:55934556-56317964	0	No evidence available							0	No evidence available							2012-10-12		
 KLK12	43849	19q13.41	chr19:51532350-51538258	40	Dosage sensitivity unlikely	32487729	22344438	32461654				0	No evidence available							2021-02-02		
 KMT2A	4297	11q23.3	chr11:118307207-118397547	3	Sufficient evidence for dosage pathogenicity	22795537	24818805	27759909				0	No evidence available							2018-05-23	MONDO:0011518	
-KMT2B	9757	19q13.12	chr19:36208905-36229779	3	Sufficient evidence for dosage pathogenicity	27839873	27992417					0	No evidence available							2017-05-11	MONDO:0015004	
+KMT2B	9757	19q13.12	chr19:36208905-36229779	3	Sufficient evidence for dosage pathogenicity	33098801	33150406	36288966				0	No evidence available							2025-05-13	MONDO:0100516	
 KMT2C	58508	7q36.1	chr7:151832010-152133088	3	Sufficient evidence for dosage pathogenicity	23375656	22726846	29069077				0	No evidence available							2018-01-24	MONDO:0000508	
 KMT2D	8085	12q13.12	chr12:49412761-49454577	3	Sufficient evidence for dosage pathogenicity	20711175	21671394	21607748				0	No evidence available							2020-01-23	MONDO:0007843	
 KMT2E	55904	7q22.3	chr7:104654652-104755466	3	Sufficient evidence for dosage pathogenicity	31079897	34321323	33681112	32691224	25284784		0	No evidence available							2021-12-29	MONDO:0032793	
@@ -798,6 +803,7 @@ LCA5	167691	6q14.1	chr6:80194708-80247147	30	Gene associated with autosomal rece
 LCT	3938	2q21.3	chr2:136545420-136594754	30	Gene associated with autosomal recessive phenotype							0	No evidence available							2016-08-22	MONDO:0009115	
 LDLR	3949	19p13.2	chr19:11200139-11244496	3	Sufficient evidence for dosage pathogenicity	33740630	15321837					0	No evidence available							2021-10-27	MONDO:0007750	
 LEMD3	23592	12q14.3	chr12:65563363-65642135	3	Sufficient evidence for dosage pathogenicity	15489854	17087626	19438932				0	No evidence available							2020-10-19	MONDO:0008157	
+LEO1	123169	15q21.2	chr15:52230222-52263975	1	Little evidence for dosage pathogenicity	33004838	25363760	28135719				0	No evidence available							2025-03-14	MONDO:0700092	
 LEPR	3953	1p31.3	chr1:65886335-66107242	30	Gene associated with autosomal recessive phenotype							Not yet evaluated	Not yet evaluated							2016-08-22	MONDO:0013992	
 LETM1	3954	4p16.3	chr4:1813206-1857883	0	No evidence available							0	No evidence available							2012-02-03	MONDO:0008684	
 LFNG	3955	7p22.3	chr7:2552163-2568811	30	Gene associated with autosomal recessive phenotype							Not yet evaluated	Not yet evaluated							2016-08-22	MONDO:0012349	
@@ -810,7 +816,7 @@ LIPA	3988	10q23.31	chr10:90973329-91011532	30	Gene associated with autosomal rec
 LITAF	9516	16p13.13	chr16:11641578-11681322	0	No evidence available							0	No evidence available							2016-10-21		
 LMAN1	3998	18q21.32	chr18:56995055-57026497	30	Gene associated with autosomal recessive phenotype							Not yet evaluated	Not yet evaluated							2016-08-22	MONDO:0009206	
 LMBR1	64327	7q36.3	chr7:156461706-156685877	30	Gene associated with autosomal recessive phenotype							0	No evidence available							2012-10-18	MONDO:0008700	
-LMNA	4000	1q22	chr1:156052364-156109872	3	Sufficient evidence for dosage pathogenicity	31983221	31476771					0	No evidence available							2023-12-14	MONDO:0007269	
+LMNA	4000	1q22	chr1:156052364-156109872	3	Sufficient evidence for dosage pathogenicity	31983221	31476771					0	No evidence available							2023-12-14	MONDO:0005021	
 LMNB1	4001	5q23.2	chr5:126112315-126172712	0	No evidence available							3	Sufficient evidence for dosage pathogenicity	16951681	23649844	28769756	30697589			2023-10-25		MONDO:0008215
 LMTK3	114783	19q13.33	chr19:48988528-49016446	1	Little evidence for dosage pathogenicity	28263302	22542183					0	No evidence available							2018-07-25		
 LMX1B	4010	9q33.3	chr9:129376207-129463311	3	Sufficient evidence for dosage pathogenicity	9618165	9837817	18414507				0	No evidence available							2020-11-10	MONDO:0008061	
@@ -840,7 +846,7 @@ MAPT	4137	17q21.31	chr17:43971920-44105700	0	No evidence available							0	No ev
 MARVELD2	153562	5q13.2	chr5:68710943-68740157	30	Gene associated with autosomal recessive phenotype							0	No evidence available							2016-08-22	MONDO:0012420	
 MASP2	10747	1p36.22	chr1:11086580-11107296	30	Gene associated with autosomal recessive phenotype							Not yet evaluated	Not yet evaluated							2016-08-22	MONDO:0013423	
 MATN3	4148	2p24.1	chr2:20191813-20212429	0	No evidence available							0	No evidence available							2014-03-12		
-MAX	4149	14q23.3	chr14:65472819-65569413	3	Sufficient evidence for dosage pathogenicity	21685915	22452945	33815275	28384794			0	No evidence available							2021-07-20	MONDO:0008233	
+MAX	4149	14q23.3	chr14:65472819-65569413	3	Sufficient evidence for dosage pathogenicity	21685915	22452945	33815275	28384794			0	No evidence available							2021-07-20	MONDO:0017366	
 MC2R	4158	18p11.21	chr18:13882043-13915706	30	Gene associated with autosomal recessive phenotype							Not yet evaluated	Not yet evaluated							2016-08-22	MONDO:0024536	
 MCCC1	56922	3q27.1	chr3:182733006-182817375	30	Gene associated with autosomal recessive phenotype							0	No evidence available							2016-08-22	MONDO:0008861	
 MCEE	84693	2p13.3	chr2:71336817-71357359	30	Gene associated with autosomal recessive phenotype							0	No evidence available							2015-03-25	MONDO:0009615	
@@ -867,7 +873,7 @@ MID2	11043	Xq22.3	chrX:107068965-107174867	0	No evidence available							0	No ev
 MITF	4286	3p13	chr3:69788615-70017483	3	Sufficient evidence for dosage pathogenicity	27889061	31427586	30936914	20127975			0	No evidence available							2021-04-13	MONDO:0008671	
 MKKS	8195	20p12.2	chr20:10381657-10414870	30	Gene associated with autosomal recessive phenotype							Not yet evaluated	Not yet evaluated							2016-08-22	MONDO:0015229	
 MLC1	23209	22q13.33	chr22:50497820-50524304	30	Gene associated with autosomal recessive phenotype							Not yet evaluated	Not yet evaluated							2016-08-22	MONDO:0024555	
-MLH1	4292	3p22.2	chr3:37035009-37092337	3	Sufficient evidence for dosage pathogenicity	14635101	15942939	16955466	33335961	30289396	33468175	0	No evidence available							2021-10-13	MONDO:0012249	
+MLH1	4292	3p22.2	chr3:37035009-37092337	3	Sufficient evidence for dosage pathogenicity	14635101	15942939	16955466	33335961	30289396	33468175	0	No evidence available							2021-10-13	MONDO:0005835	
 MLPH	79083	2q37.3	chr2:238395053-238463965	30	Gene associated with autosomal recessive phenotype							Not yet evaluated	Not yet evaluated							2016-08-22	MONDO:0012220	
 MLYCD	23417	16q23.3	chr16:83932720-83960636	30	Gene associated with autosomal recessive phenotype							0	No evidence available							2016-08-22	MONDO:0009556	
 MMAA	166785	4q31.21	chr4:146540537-146581185	30	Gene associated with autosomal recessive phenotype							0	No evidence available							2016-08-22	MONDO:0009613	
@@ -880,10 +886,10 @@ MOCS2	4338	5q11.2	chr5:52391509-52405587	30	Gene associated with autosomal reces
 MOV10	4343	1p13.2	chr1:113216934-113243368	0	No evidence available	24463507	25363768	27824329				0	No evidence available							2019-03-12		
 MPDZ	8777	9p23	chr9:13105706-13279691	30	Gene associated with autosomal recessive phenotype							0	No evidence available							2016-08-22	MONDO:0014085	
 MPLKIP	136647	7p14.1	chr7:40165626-40174221	30	Gene associated with autosomal recessive phenotype							Not yet evaluated	Not yet evaluated							2016-08-22	MONDO:0021013	
-MRE11	4361	11q21	chr11:94148736-94227010	30	Gene associated with autosomal recessive phenotype							30	Gene associated with autosomal recessive phenotype							2023-12-19		
+MRE11	4361	11q21	chr11:94148736-94227010	30	Gene associated with autosomal recessive phenotype							0	No evidence available							2023-12-19		
 MSH2	4436	2p21-p16.3	chr2:47630206-47710367	3	Sufficient evidence for dosage pathogenicity	10850409	12203789	9843200	34203177	30710526		0	No evidence available							2021-10-13	MONDO:0005835	
 MSH3	4437	5q14.1	chr5:79950471-80172634	30	Gene associated with autosomal recessive phenotype							0	No evidence available							2020-05-08	MONDO:0044300	
-MSH6	2956	2p16.3	chr2:48010284-48034092	3	Sufficient evidence for dosage pathogenicity	9354786	11709755	14974087	20028993	20487569	25318681	0	No evidence available							2021-10-13	MONDO:0013710	
+MSH6	2956	2p16.3	chr2:48010284-48034092	3	Sufficient evidence for dosage pathogenicity	9354786	11709755	14974087	20028993	20487569	25318681	0	No evidence available							2021-10-13	MONDO:0005835	
 MSL3	10943	Xp22.2	chrX:11776278-11793891	3	Sufficient evidence for dosage pathogenicity	30224647	33173220					0	No evidence available							2023-08-23	MONDO:0026730	
 MSRB3	253827	12q14.3	chr12:65672463-65860687	30	Gene associated with autosomal recessive phenotype							0	No evidence available							2021-08-23	MONDO:0019497	
 MSX1	4487	4p16.2	chr4:4861392-4865663	3	Sufficient evidence for dosage pathogenicity	11369996	10742093	15264286				0	No evidence available							2021-01-12	MONDO:0007129	
@@ -898,14 +904,13 @@ MTR	4548	1q43	chr1:236958581-237067281	30	Gene associated with autosomal recessi
 MTRR	4552	5p15.31	chr5:7869261-7901226	30	Gene associated with autosomal recessive phenotype							0	No evidence available							2016-08-22	MONDO:0009354	
 MTTP	4547	4q23	chr4:100485287-100545154	30	Gene associated with autosomal recessive phenotype							0	No evidence available							2016-08-22	MONDO:0008692	
 MUTYH	4595	1p34.1	chr1:45794914-45806112	30	Gene associated with autosomal recessive phenotype							0	No evidence available							2015-11-11	MONDO:0012041	
-MYBPC3	4607	11p11.2	chr11:47352957-47374253	3	Sufficient evidence for dosage pathogenicity	22820391	23816408	32973354	19574547	7493025		0	No evidence available							2023-01-10	MONDO:0007268	
+MYBPC3	4607	11p11.2	chr11:47352957-47374253	3	Sufficient evidence for dosage pathogenicity	22820391	23816408	32973354	19574547	7493025		0	No evidence available							2023-01-10	MONDO:0005045	
 MYCN	4613	2p24.3	chr2:16080672-16087126	3	Sufficient evidence for dosage pathogenicity	16906565	18671284	18470948				0	No evidence available							2017-07-12	MONDO:0008115	
 MYH10	4628	17p13.1	chr17:8377530-8534043	1	Little evidence for dosage pathogenicity	25003005	25284784	25363768				0	No evidence available							2019-01-23	MONDO:0100038	
 MYH11	4629	16p13.11	chr16:15796992-15950885	0	No evidence available	16444274	21937134					0	No evidence available							2024-09-25	MONDO:0019625	
 MYH7	4625	14q11.2	chr14:23881949-23904869	0	No evidence available							0	No evidence available							2015-11-15		
 MYH9	4627	22q12.3	chr22:36677326-36784012	1	Little evidence for dosage pathogenicity	37076359	31125547	31562665	24963352	26969326		0	No evidence available							2024-09-04	MONDO:0015912	
-MYL2	4633	12q24.11	chr12:111348649-111358383	30	Gene associated with autosomal recessive phenotype							0	No evidence available							2015-11-20	MONDO:0012112	
-MYL3	4634	3p21.31	chr3:46899362-46904934	0	No evidence available							0	No evidence available							2015-11-18		
+MYL3	4634	3p21.31	chr3:46899362-46904934	0	No evidence available							0	No evidence available							2015-11-18	MONDO:0005045	
 MYLK	4638	3q21.1	chr3:123328896-123603179	1	Little evidence for dosage pathogenicity	21055718	25907466					0	No evidence available							2016-01-14	MONDO:0013418	
 MYO15A	51168	17p11.2	chr17:18012070-18083114	30	Gene associated with autosomal recessive phenotype							Not yet evaluated	Not yet evaluated							2016-08-22	MONDO:0010860	
 MYO1E	4643	15q22.2	chr15:59424633-59665070	30	Gene associated with autosomal recessive phenotype							0	No evidence available							2016-08-22	MONDO:0013589	
@@ -958,14 +963,16 @@ NHS	4810	Xp22.2-p22.13	chrX:17393323-17754114	3	Sufficient evidence for dosage p
 NIPA1	123606	15q11.2	chr15:23043279-23086843	0	No evidence available							0	No evidence available							2012-04-04		
 NIPA2	81614	15q11.2	chr15:23004684-23034402	0	No evidence available							0	No evidence available							2012-04-04		
 NIPBL	25836	5p13.2	chr5:36876871-37066515	3	Sufficient evidence for dosage pathogenicity	15146185	15146186	15318302				1	Little evidence for dosage pathogenicity	23085304	19052029					2020-08-26	MONDO:0007387	
-NKX2-5	1482	5q35.1	chr5:172659112-172662209	3	Sufficient evidence for dosage pathogenicity	28690296	26679770	17891520				0	No evidence available							2020-07-22		
+NKX2-5	1482	5q35.1	chr5:172659112-172662209	3	Sufficient evidence for dosage pathogenicity	28690296	26679770	17891520				0	No evidence available							2020-07-22	MONDO:0800441	
 NKX3-2	579	4p15.33	chr4:13542454-13546132	30	Gene associated with autosomal recessive phenotype							Not yet evaluated	Not yet evaluated							2016-08-22	MONDO:0013228	
 NLGN1	22871	3q26.31	chr3:173113742-174012162	0	No evidence available	15551338	22106001					0	No evidence available							2016-03-25		
 NLGN3	54413	Xq13.1	chrX:70364691-70391051	0	No evidence available							0	No evidence available							2012-07-25		
+NLGN4X	57502	Xp22.32-p22.31	chrX:5808083-6146908	2	Some evidence for dosage pathogenicity	12669065	14963808	18231125	23352163	36368308	32005694	0	No evidence available							2025-03-26	MONDO:0100148	
 NNAT	4826	20q11.23	chr20:36149652-36152092	0	No evidence available							0	No evidence available							2012-04-28		
 NODAL	4838	10q22.1	chr10:72191692-72207707	1	Little evidence for dosage pathogenicity	19064609						0	No evidence available							2013-08-08		
 NOG	9241	17q22	chr17:54671060-54672972	3	Sufficient evidence for dosage pathogenicity	12089654	16532400	11846737				0	No evidence available							2021-01-12	MONDO:0008519	
 NONO	4841	Xq13.1	chrX:70503485-70521018	3	Sufficient evidence for dosage pathogenicity	36426740						0	No evidence available							2024-07-24	MONDO:0020119	
+NOP10	55505	15q14	chr15:34633920-34635337	0	No evidence available							0	No evidence available							2025-02-12		
 NOTCH1	4851	9q34.3	chr9:139388885-139440500	3	Sufficient evidence for dosage pathogenicity	16025100	37239988	32720365	25963545			0	No evidence available							2024-09-24	MONDO:0014459	
 NOTCH2	4853	1p12	chr1:120454176-120612276	0	No evidence available							0	No evidence available							2014-07-17	MONDO:0012439	
 NPC1	4864	18q11.2	chr18:21111406-21166470	30	Gene associated with autosomal recessive phenotype							Not yet evaluated	Not yet evaluated							2016-08-22	MONDO:0009757	
@@ -989,7 +996,6 @@ NTAN1	123803	16p13.11	chr16:15131714-15149931	0	No evidence available							0	No
 NTHL1	4913	16p13.3	chr16:2089821-2097835	30	Gene associated with autosomal recessive phenotype							0	No evidence available							2020-07-06	MONDO:0014630	
 NUDT13	25961	10q22.2	chr10:74870213-74891581	40	Dosage sensitivity unlikely	32487729	22344438	28406212	25807282	32461654		0	No evidence available							2021-02-02		
 NUS1	116150	6q22.1	chr6:117996632-118031890	3	Sufficient evidence for dosage pathogenicity	29100083	34532305	33731878	31656175			0	No evidence available							2022-09-27	MONDO:0100038	
-NXF5	55998	Xq22.1	chrX:101087085-101112549	1	Little evidence for dosage pathogenicity	11566096						0	No evidence available							2012-05-17		
 NYX	60506	Xp11.4	chrX:41306596-41334905	3	Sufficient evidence for dosage pathogenicity	11062472	11062471	18617546				0	No evidence available							2020-01-22	MONDO:0010690	
 OAT	4942	10q26.13	chr10:126085872-126107492	30	Gene associated with autosomal recessive phenotype							Not yet evaluated	Not yet evaluated							2016-08-22	MONDO:0009796	
 OBSL1	23363	2q35	chr2:220415450-220436261	30	Gene associated with autosomal recessive phenotype							0	No evidence available							2016-08-22	MONDO:0013039	
@@ -1015,11 +1021,13 @@ PACS1	55690	11q13.1-q13.2	chr11:65837743-66012215	0	No evidence available	343736
 PAFAH1B1	5048	17p13.3	chr17:2496948-2588909	3	Sufficient evidence for dosage pathogenicity	11754098	19667223					0	No evidence available							2020-10-13	MONDO:0015146	
 PAH	5053	12q23.2	chr12:103230667-103352219	30	Gene associated with autosomal recessive phenotype							0	No evidence available							2014-08-28	MONDO:0009861	
 PAK2	5062	3q29	chr3:196466728-196559518	1	Little evidence for dosage pathogenicity	21841781						1	Little evidence for dosage pathogenicity	21841781						2011-12-27		
+PAK3	5063	Xq23	chrX:110187625-110470589	3	Sufficient evidence for dosage pathogenicity	9731525	18523455	27753653	25533962	35599849	16014725	0	No evidence available							2025-03-31	MONDO:0020119	
+PALB2	79728	16p12.2	chr16:23614486-23652631	3	Sufficient evidence for dosage pathogenicity	17200668	25099575	31841383				0	No evidence available							2025-02-24	MONDO:0700272	
 PARK7	11315	1p36.23	chr1:8021771-8045565	30	Gene associated with autosomal recessive phenotype							0	No evidence available							2016-08-22	MONDO:0011658	
 PAX1	5075	20p11.22	chr20:21686302-21699119	30	Gene associated with autosomal recessive phenotype							0	No evidence available							2016-08-22	MONDO:0014254	
 PAX2	5076	10q24.31	chr10:102495153-102589701	3	Sufficient evidence for dosage pathogenicity	21285886	11241473	22213154				0	No evidence available							2020-02-26	MONDO:0007352	
 PAX3	5077	2q36.1	chr2:223064606-223163717	3	Sufficient evidence for dosage pathogenicity	1347148	8490648	8533800				0	No evidence available							2020-05-27	MONDO:0008670	
-PAX5	5079	9p13.2	chr9:36833266-37034265	1	Little evidence for dosage pathogenicity	35094443	22542183					0	No evidence available							2022-05-24	MONDO:0100038	
+PAX5	5079	9p13.2	chr9:36833266-37034265	1	Little evidence for dosage pathogenicity	35094443	22542183					0	No evidence available							2025-02-12	MONDO:0100038	
 PAX6	5080	11p13	chr11:31810574-31839509	3	Sufficient evidence for dosage pathogenicity							1	Little evidence for dosage pathogenicity	21271670						2015-11-05	MONDO:0024507	
 PAX8	7849	2q14.1	chr2:113973574-114036498	1	Little evidence for dosage pathogenicity	9590296	22898500	33029631	15531527	26362610	28444304	0	No evidence available							2021-11-09	MONDO:0018612	
 PAX9	5083	14q13.3	chr14:37126773-37148567	3	Sufficient evidence for dosage pathogenicity	28910570	11781684	24028587				0	No evidence available							2020-07-08	MONDO:0011477	
@@ -1031,10 +1039,11 @@ PCDH15	65217	10q21.1	chr10:55562531-57387702	30	Gene associated with autosomal r
 PCDH19	57526	Xq22.1	chrX:99546642-99665271	3	Sufficient evidence for dosage pathogenicity	18469813	19214208	23712037	21480887	23334464	36408521	0	No evidence available							2023-02-14		
 PCDH9	5101	13q21.32	chr13:66876966-67804468	0	No evidence available							0	No evidence available							2012-06-07		
 PCDHGA8	9708	5q31.3	chr5:140772200-140892542	40	Dosage sensitivity unlikely	32487729	25807282	28406212	32461654			0	No evidence available							2021-02-02		
-PCSK9	255738	1p32.3	chr1:55505221-55530525	40	Dosage sensitivity unlikely	19191301	15654334					0	No evidence available							2015-12-17		
+PCSK9	255738	1p32.3	chr1:55505221-55530525	40	Dosage sensitivity unlikely	19191301	15654334					0	No evidence available							2015-12-17	MONDO:0011369	
 PCYT1A	5130	3q29	chr3:195961239-196014597	30	Gene associated with autosomal recessive phenotype							0	No evidence available							2016-08-22	MONDO:0012160	
 PDE4D	5144	5q11.2-q12.1	chr5:58264865-59792113	0	No evidence available							0	No evidence available							2018-02-02		
 PDE6C	5146	10q23.33	chr10:95372294-95425767	30	Gene associated with autosomal recessive phenotype							0	No evidence available							2016-08-22	MONDO:0013129	
+PDGFRA	5156	4q12	chr4:55095460-55164412	0	No evidence available	38350919	29205322	33084842				0	No evidence available	28398664	26884814					2025-02-12		
 PDHA1	5160	Xp22.12	chrX:19362045-19379836	3	Sufficient evidence for dosage pathogenicity	21914562	33504798	18709504	15384102	20002125		0	No evidence available							2022-09-27	MONDO:0019169	
 PDHX	8050	11p13	chr11:34937677-35017675	30	Gene associated with autosomal recessive phenotype							Not yet evaluated	Not yet evaluated							2016-08-22	MONDO:0009503	
 PDP1	54704	8q22.1	chr8:94929151-94938296	30	Gene associated with autosomal recessive phenotype							Not yet evaluated	Not yet evaluated							2016-08-22	MONDO:0012120	
@@ -1056,6 +1065,7 @@ PGM1	5236	1p31.3	chr1:64059082-64125916	30	Gene associated with autosomal recess
 PGM3	5238	6q14.1	chr6:83860447-83903619	30	Gene associated with autosomal recessive phenotype							0	No evidence available							2016-08-22	MONDO:0014353	
 PHC1	1911	12p13.31	chr12:9067105-9094063	30	Gene associated with autosomal recessive phenotype							0	No evidence available							2016-08-22	MONDO:0014173	
 PHEX	5251	Xp22.11	chrX:22050443-22269427	3	Sufficient evidence for dosage pathogenicity							0	No evidence available							2012-06-28	MONDO:0010619	
+PHF12	57649	17q11.2	chr17:27232268-27278536	3	Sufficient evidence for dosage pathogenicity	30559488	33004838	28263302	35982160	33057194		0	No evidence available							2025-03-31	MONDO:0100038	
 PHF2	5253	9q22.31	chr9:96338866-96441869	1	Little evidence for dosage pathogenicity	25363768	27824329					0	No evidence available							2019-02-27		
 PHF21A	51317	11p11.2	chr11:45950870-46143005	3	Sufficient evidence for dosage pathogenicity	30487643	36555772	36158052	31981491	25363760	35982159	0	No evidence available							2023-09-21	MONDO:0100038	
 PHF3	23469	6q12	chr6:64345707-64435904	1	Little evidence for dosage pathogenicity	25363768	28263302					0	No evidence available							2019-02-27	MONDO:0005258	
@@ -1067,11 +1077,11 @@ PHKG2	5261	16p11.2	chr16:30759746-30772497	30	Gene associated with autosomal rec
 PHLDA2	7262	11p15.4	chr11:2949503-2950650	0	No evidence available							0	No evidence available							2012-03-22		
 PHOX2B	8929	4p13	chr4:41746099-41750742	3	Sufficient evidence for dosage pathogenicity	33958749	21830319	28371199	29098737			0	No evidence available							2024-07-10	OMIM:613013,OMIM:209880	
 PHYH	5264	10p13	chr10:13319799-13342064	30	Gene associated with autosomal recessive phenotype							Not yet evaluated	Not yet evaluated							2016-08-22	MONDO:0009958	
-PIGA	5277	Xp22.2	chrX:15337573-15353676	2	Some evidence for dosage pathogenicity							0	No evidence available							2024-11-26	MONDO:0005047	
+PIGA	5277	Xp22.2	chrX:15337573-15353676	1	Little evidence for dosage pathogenicity							0	No evidence available							2025-04-10	MONDO:0005047	
 PIGN	23556	18q21.33	chr18:59708397-59854289	30	Gene associated with autosomal recessive phenotype							Not yet evaluated	Not yet evaluated							2016-08-22	MONDO:0013563	
 PIGO	84720	9p13.3	chr9:35088685-35096588	30	Gene associated with autosomal recessive phenotype							0	No evidence available							2016-08-22	MONDO:0013882	
 PIGW	284098	17q12	chr17:34890814-34895152	30	Gene associated with autosomal recessive phenotype							0	No evidence available							2016-08-22	MONDO:0014457	
-PIK3CA	5290	3q26.32	chr3:178866145-178957881	0	No evidence available							0	No evidence available							2015-03-12		
+PIK3CA	5290	3q26.32	chr3:178866145-178957881	0	No evidence available							0	No evidence available							2025-03-13		
 PIK3R2	5296	19p13.11	chr19:18263973-18281342	0	No evidence available							0	No evidence available							2015-06-25		
 PINK1	65018	1p36.12	chr1:20959951-20978004	30	Gene associated with autosomal recessive phenotype							Not yet evaluated	Not yet evaluated							2016-08-22	MONDO:0011613	
 PIP5K1C	23396	19p13.3	chr19:3630181-3700466	30	Gene associated with autosomal recessive phenotype							Not yet evaluated	Not yet evaluated							2016-08-22	MONDO:0012656	
@@ -1102,6 +1112,7 @@ POMP	51371	13q12.3	chr13:29233267-29253096	30	Gene associated with autosomal rec
 POMT2	29954	14q24.3	chr14:77741299-77787226	30	Gene associated with autosomal recessive phenotype							Not yet evaluated	Not yet evaluated							2016-08-22	MONDO:0018276	
 POR	5447	7q11.23	chr7:75544473-75616173	30	Gene associated with autosomal recessive phenotype							Not yet evaluated	Not yet evaluated							2016-08-22	MONDO:0008726	
 PORCN	64840	Xp11.23	chrX:48367380-48379202	3	Sufficient evidence for dosage pathogenicity	17546030	17546031	20854095				0	No evidence available							2012-08-23	MONDO:0010592	
+POU3F3	5455	2q12.1	chr2:105470573-105475032	0	No evidence available	37010288	24550763					Not yet evaluated	Not yet evaluated							2025-01-14	MONDO:0100038	
 POU4F3	5459	5q32	chr5:145718402-145721291	3	Sufficient evidence for dosage pathogenicity	9506947	27535032	27999687	24556497	32684921	28545070	0	No evidence available							2023-11-29	MONDO:0011226	
 PPIB	5479	15q22.31	chr15:64448016-64455221	30	Gene associated with autosomal recessive phenotype							0	No evidence available							2016-08-22	MONDO:0009805	
 PPM1D	8493	17q23.2	chr17:58677554-58743641	0	No evidence available	28343630	35016835					0	No evidence available							2023-03-28	MONDO:0000508	
@@ -1114,14 +1125,14 @@ PRCD	768206	17q25.1	chr17:74523668-74541458	30	Gene associated with autosomal re
 PRDM6	93166	5q23.2	chr5:122424936-122529960	0	No evidence available							0	No evidence available							2017-12-14		
 PREPL	9581	2p21	chr2:44544746-44589001	30	Gene associated with autosomal recessive phenotype							0	No evidence available							2012-03-21	MONDO:0044299	
 PRG4	10216	1q31.1	chr1:186265405-186283699	30	Gene associated with autosomal recessive phenotype							0	No evidence available							2016-08-22	MONDO:0008828	
-PRKAG2	51422	7q36.1	chr7:151253213-151574200	0	No evidence available							0	No evidence available							2015-11-05		
+PRKAG2	51422	7q36.1	chr7:151253213-151574200	0	No evidence available							0	No evidence available							2015-11-05	MONDO:0800484	
 PRKAR1A	5573	17q24.2	chr17:66409764-66547457	3	Sufficient evidence for dosage pathogenicity	24170103			26354069			0	No evidence available							2024-10-09		
+PRKD1	5587	14q12	chr14:30045685-30397053	0	No evidence available	36478645	34328347	28991257				Not yet evaluated	Not yet evaluated							2025-04-08	MONDO:0005453	
 PRKN	5071	6q26	chr6:161768449-163148798	30	Gene associated with autosomal recessive phenotype							0	No evidence available							2018-05-15	MONDO:0010820	
 PRODH	5625	22q11.21	chr22:18900294-18924066	30	Gene associated with autosomal recessive phenotype							0	No evidence available							2022-11-08	MONDO:0009400	
 PROP1	5626	5q35.3	chr5:177419236-177423243	30	Gene associated with autosomal recessive phenotype							0	No evidence available							2016-08-22	MONDO:0009878	
 PRR12	57479	19q13.33	chr19:50094439-50129696	3	Sufficient evidence for dosage pathogenicity	33824499	33314030	29556724	26163108			0	No evidence available							2023-11-29	MONDO:0859193	
 PRRT2	112476	16p11.2	chr16:29823514-29827202	3	Sufficient evidence for dosage pathogenicity	22543779	22744660	22120146	32237035	33791013		0	No evidence available							2021-12-14	MONDO:0100024	
-PRSS1	5644	7q34	chr7:142457323-142460923	0	No evidence available							0	No evidence available							2012-10-29		
 PSAT1	29968	9q21.2	chr9:80912041-80945009	30	Gene associated with autosomal recessive phenotype							Not yet evaluated	Not yet evaluated							2016-08-22	MONDO:0018162	
 PSD3	23362	8p22	chr8:18384813-18871213	0	No evidence available							0	No evidence available							2016-12-07		
 PSORS1C2	170680	6p21.33	chr6:31105311-31106843	40	Dosage sensitivity unlikely	32487729	22344438	25807282	32461654			0	No evidence available							2021-02-02		
@@ -1135,7 +1146,7 @@ PTPN11	5781	12q24.13	chr12:112856751-112947722	3	Sufficient evidence for dosage 
 PTPRQ	374462	12q21.31	chr12:80838015-81074052	30	Gene associated with autosomal recessive phenotype							Not yet evaluated	Not yet evaluated							2016-08-22	MONDO:0013249	
 PTS	5805	11q23.1	chr11:112097151-112104696	30	Gene associated with autosomal recessive phenotype							0	No evidence available							2016-08-22	MONDO:0009863	
 PUF60	22827	8q24.3	chr8:144898514-144911485	3	Sufficient evidence for dosage pathogenicity	24140112	27804958	28327570	28074499	32851780	36367278	0	No evidence available							2024-01-09	MONDO:0000508	
-PURA	5813	5q31.3	chr5:139493694-139505204	3	Sufficient evidence for dosage pathogenicity	25342064	25439098	27148565				0	No evidence available							2017-06-07	MONDO:0014512	
+PURA	5813	5q31.3	chr5:139493694-139505204	3	Sufficient evidence for dosage pathogenicity	25342064	25439098	27148565	29097605	34116881	33633953	0	No evidence available							2025-03-26	MONDO:0100038	
 PXDN	7837	2p25.3	chr2:1635659-1748287	30	Gene associated with autosomal recessive phenotype							0	No evidence available							2016-08-22	MONDO:0010015	
 PYCR1	5831	17q25.3	chr17:79890267-79895176	30	Gene associated with autosomal recessive phenotype							Not yet evaluated	Not yet evaluated							2016-08-22	MONDO:0013051	
 QDPR	5860	4p15.32	chr4:17488018-17513713	30	Gene associated with autosomal recessive phenotype							Not yet evaluated	Not yet evaluated							2016-08-22	MONDO:0009862	
@@ -1147,6 +1158,7 @@ RAB3GAP1	22930	2q21.3	chr2:135809862-135928280	30	Gene associated with autosomal
 RAB3GAP2	25782	1q41	chr1:220321635-220445795	30	Gene associated with autosomal recessive phenotype							0	No evidence available							2016-08-22	MONDO:0015159	
 RABL2A	11159	2q14.1	chr2:114384843-114400969	40	Dosage sensitivity unlikely	32487729	25807282	32461654				0	No evidence available							2021-02-02		
 RAD21	5885	8q24.11	chr8:117858173-117887015	3	Sufficient evidence for dosage pathogenicity	32193685	30716475	30919572	33277604	27882533	32696056	0	No evidence available							2022-03-08	MONDO:0016033	
+RAD50	10111	5q31.1	chr5:131892669-131982041	1	Little evidence for dosage pathogenicity				38924040		37790698	0	No evidence available							2025-03-12		
 RAD51C	5889	17q22	chr17:56769934-56812972	3	Sufficient evidence for dosage pathogenicity	21990120	24800917	20400964				0	No evidence available							2020-07-08	MONDO:0013253	
 RAD51D	5892	17q12	chr17:33419240-33446879	3	Sufficient evidence for dosage pathogenicity	32359370	34923718					0	No evidence available							2024-01-09	MONDO:0016248	
 RAF1	5894	3p25.2	chr3:12625100-12705616	0	No evidence available							0	No evidence available							2018-09-13		
@@ -1157,7 +1169,7 @@ RALGAPB	57148	20q11.23	chr20:37101486-37207501	1	Little evidence for dosage path
 RARS2	57038	6q15	chr6:88223656-88299705	30	Gene associated with autosomal recessive phenotype							0	No evidence available							2015-04-08	MONDO:0012683	
 RASA1	5921	5q14.3	chr5:86563700-86687733	3	Sufficient evidence for dosage pathogenicity	24038909	29891884					0	No evidence available							2020-04-22	MONDO:0020783	
 RAX	30062	18q21.32	chr18:56934270-56940686	30	Gene associated with autosomal recessive phenotype							Not yet evaluated	Not yet evaluated							2016-08-22	MONDO:0012604	
-RB1	5925	13q14.2	chr13:48877887-49056026	3	Sufficient evidence for dosage pathogenicity	2601691	8651278	28575107	27126562			0	No evidence available							2021-03-09	MONDO:0018160	
+RB1	5925	13q14.2	chr13:48877887-49056026	3	Sufficient evidence for dosage pathogenicity	2601691	8651278	28575107	27126562			0	No evidence available							2021-03-09	MONDO:0008380	
 RB1CC1	9821	8q11.23	chr8:53535018-53626995	1	Little evidence for dosage pathogenicity	28263302	21822266					0	No evidence available	26151896	21841781					2018-07-25		
 RBBP8	5932	18q11.2	chr18:20513291-20606449	30	Gene associated with autosomal recessive phenotype							Not yet evaluated	Not yet evaluated							2016-08-22	MONDO:0011715	
 RBP3	5949	10q11.22	chr10:48381481-48390999	30	Gene associated with autosomal recessive phenotype							0	No evidence available							2016-08-22	MONDO:0014093	
@@ -1182,7 +1194,9 @@ ROBO1	6091	3p12.3	chr3:78646389-79817148	0	No evidence available	16254601						0
 ROBO3	64221	11q24.2	chr11:124735328-124751367	30	Gene associated with autosomal recessive phenotype							0	No evidence available							2016-08-22	MONDO:0020790	
 ROGDI	79641	16p13.3	chr16:4846969-4852634	30	Gene associated with autosomal recessive phenotype							0	No evidence available							2015-02-12	MONDO:0009185	
 ROR2	4920	9q22.31	chr9:94484883-94712510	0	No evidence available							0	No evidence available							2013-03-27		
+RORB	6096	9q21.13	chr9:77112251-77308093	3	Sufficient evidence for dosage pathogenicity	27352968	32162308	38165337				0	No evidence available							2025-01-14	MONDO:0100038	
 RP2	6102	Xp11.3	chrX:46696478-46741793	3	Sufficient evidence for dosage pathogenicity	16969763	9697692	10090907				0	No evidence available							2012-10-04	MONDO:0010723	
+RPE65	6121	1p31.3	chr1:68894505-68915637	30	Gene associated with autosomal recessive phenotype	9326927	9326941	9501220				0	No evidence available							2025-02-27	MONDO:0100368	
 RPGRIP1	57096	14q11.2	chr14:21748242-21819460	30	Gene associated with autosomal recessive phenotype							0	No evidence available							2016-08-22	MONDO:0013446	
 RPH3A	22895	12q24.13	chr12:113013040-113336686	1	Little evidence for dosage pathogenicity	28263302	22083728					0	No evidence available							2018-07-25		
 RPL10	6134	Xq28	chrX:153626406-153630680	0	No evidence available							0	No evidence available							2018-10-24	MONDO:0100038	
@@ -1190,7 +1204,7 @@ RPL15	6138	3p24.2	chr3:23958036-23966122	1	Little evidence for dosage pathogenic
 RPS17	6218	15q25.2	chr15:83205501-83209208	3	Sufficient evidence for dosage pathogenicity	23812780	20378560	17647292				0	No evidence available							2015-12-10	MONDO:0012924	
 RPS19	6223	19q13.2	chr19:42364325-42376993	3	Sufficient evidence for dosage pathogenicity	10590074	15384984	15059149	20960466			0	No evidence available							2021-03-24	MONDO:0007110	
 RPS20	6224	8q12.1	chr8:56979813-56987065	0	No evidence available							0	No evidence available							2024-12-12		
-RPS24	6229	10q22.3	chr10:79793621-79816564	3	Sufficient evidence for dosage pathogenicity	23812780	17186470					0	No evidence available							2019-10-23	MONDO:0012529	
+RPS24	6229	10q22.3	chr10:79793621-79816564	3	Sufficient evidence for dosage pathogenicity	23812780	17186470	29044489	25946618	19689926	26136524	0	No evidence available							2025-04-09	MONDO:0012529	
 RPS26	6231	12q13.2	chr12:56435702-56438481	3	Sufficient evidence for dosage pathogenicity	23812780						0	No evidence available							2019-10-23	MONDO:0013217	
 RPS6KA3	6197	Xp22.12	chrX:20168029-20285027	3	Sufficient evidence for dosage pathogenicity	8955270	9837815	16879200	26297997	31400053		0	No evidence available							2022-06-14	MONDO:0010561	
 RS1	6247	Xp22.13	chrX:18657808-18690228	3	Sufficient evidence for dosage pathogenicity	24138048	32300273					0	No evidence available							2021-08-02	MONDO:0010725	
@@ -1201,11 +1215,12 @@ RTTN	25914	18q22.2	chr18:67670267-67872923	30	Gene associated with autosomal rec
 RUNX1	861	21q22.12	chr21:36160098-36421599	3	Sufficient evidence for dosage pathogenicity	31723833	18478040	19357396	33616470			0	No evidence available							2023-06-14	MONDO:0100083	
 RXFP2	122042	13q13.1	chr13:32313663-32377526	0	No evidence available							0	No evidence available							2012-07-06		
 RYR1	6261	19q13.2	chr19:38924331-39078204	0	No evidence available							0	No evidence available							2015-11-12		
-RYR2	6262	1q43	chr1:237205484-237997288	0	No evidence available							0	No evidence available							2015-11-05		
+RYR2	6262	1q43	chr1:237205484-237997288	0	No evidence available							0	No evidence available							2015-11-05	MONDO:0017990	
 SACS	26278	13q12.12	chr13:23902969-24007841	30	Gene associated with autosomal recessive phenotype							0	No evidence available							2016-08-22	MONDO:0010041	
 SALL1	6299	16q12.1	chr16:51169893-51185181	1	Little evidence for dosage pathogenicity	22308078	16429401					0	No evidence available							2021-01-27	MONDO:0054581	
 SALL4	57167	20q13.2	chr20:50398870-50419060	3	Sufficient evidence for dosage pathogenicity	16086360	30552424	17256792				0	No evidence available							2021-01-11	MONDO:0011812	
 SAMD9	54809	7q21.2	chr7:92728831-92747292	0	No evidence available							Not yet evaluated	Not yet evaluated							2024-05-14	MONDO:0012502	
+SAMHD1	25939	20q11.23	chr20:35518176-35580111	30	Gene associated with autosomal recessive phenotype	19525956	20358604	20653736				0	No evidence available							2025-03-28	MONDO:0700260	
 SATB2	23314	2q33.1	chr2:200134223-200335989	3	Sufficient evidence for dosage pathogenicity	28139846	28151491					0	No evidence available							2020-07-15	MONDO:0100147	
 SBDS	51119	7q11.21	chr7:66452667-66460573	30	Gene associated with autosomal recessive phenotype	15284109	22491737	35969835	32293785			0	No evidence available							2024-05-08	MONDO:0009833	
 SBF2	81846	11p15.4	chr11:9800215-10315766	30	Gene associated with autosomal recessive phenotype							Not yet evaluated	Not yet evaluated							2016-08-22	MONDO:0011475	
@@ -1217,10 +1232,10 @@ SCN2A	6326	2q24.3	chr2:166095924-166248814	3	Sufficient evidence for dosage path
 SCN5A	6331	3p22.2	chr3:38589553-38691178	3	Sufficient evidence for dosage pathogenicity	30193851	29574140	21288276	17399644	33131149	20129283	0	No evidence available							2021-06-08	MONDO:0015263	
 SDCCAG8	10806	1q43-q44	chr1:243419343-243663393	30	Gene associated with autosomal recessive phenotype							0	No evidence available							2016-08-22	MONDO:0014444	
 SDHAF1	644096	19q13.12	chr19:36486090-36487214	30	Gene associated with autosomal recessive phenotype							0	No evidence available							2016-08-22	MONDO:0100294	
-SDHAF2	54949	11q12.2	chr11:61197596-61214205	3	Sufficient evidence for dosage pathogenicity	22241717	26096992	31687641				0	No evidence available							2022-05-11		
+SDHAF2	54949	11q12.2	chr11:61197596-61214205	3	Sufficient evidence for dosage pathogenicity	22241717	26096992	31687641				0	No evidence available							2022-05-11	MONDO:0017366	
 SDHB	6390	1p36.13	chr1:17345217-17380527	3	Sufficient evidence for dosage pathogenicity	16258955	19389109	17652212				0	No evidence available							2020-07-22	MONDO:0017366	
-SDHC	6391	1q23.3	chr1:161284171-161345130	3	Sufficient evidence for dosage pathogenicity	15342702	17667967	29386252	19454582			0	No evidence available							2021-10-13	MONDO:0011544	
-SDHD	6392	11q23.1	chr11:111957597-111966518	3	Sufficient evidence for dosage pathogenicity	10657297	12111639	11343322	15531530	12000816	18211978	0	No evidence available							2021-08-11	MONDO:0008192	
+SDHC	6391	1q23.3	chr1:161284171-161345130	3	Sufficient evidence for dosage pathogenicity	15342702	17667967	29386252	19454582			0	No evidence available							2021-10-13	MONDO:0017366	
+SDHD	6392	11q23.1	chr11:111957597-111966518	3	Sufficient evidence for dosage pathogenicity	10657297	12111639	11343322	15531530	12000816	18211978	0	No evidence available							2021-08-11	MONDO:0017366	
 SDR42E1	93517	16q23.3	chr16:82022460-82045075	40	Dosage sensitivity unlikely	32487729	22344438	25807282	32461654			0	No evidence available							2021-02-02		
 SEC14L4	284904	22q12.2	chr22:30884889-30901682	40	Dosage sensitivity unlikely	32487729	22344438	32461654				0	No evidence available							2021-02-02		
 SEC23B	10483	20p11.23	chr20:18488192-18542059	30	Gene associated with autosomal recessive phenotype							0	No evidence available							2016-08-22	MONDO:0009134	
@@ -1233,6 +1248,7 @@ SERPINB6	5269	6p25.2	chr6:2948393-2972027	30	Gene associated with autosomal rece
 SERPINB7	8710	18q21.33	chr18:61420291-61472604	30	Gene associated with autosomal recessive phenotype							0	No evidence available							2014-11-13	MONDO:0014272	
 SERPINE1	5054	7q22.1	chr7:100770385-100782528	30	Gene associated with autosomal recessive phenotype							Not yet evaluated	Not yet evaluated							2016-08-22	MONDO:0013227	
 SERPINF1	5176	17p13.3	chr17:1665354-1680859	30	Gene associated with autosomal recessive phenotype							Not yet evaluated	Not yet evaluated							2016-08-22	MONDO:0013515	
+SET	6418	9q34.11	chr9:131445703-131458675	3	Sufficient evidence for dosage pathogenicity	29688601	33619735	37737486	34008892	35599849	33287870	0	No evidence available							2025-01-22	MONDO:0001071	
 SETBP1	26040	18q12.3	chr18:42260038-42648475	3	Sufficient evidence for dosage pathogenicity	25217958	25356899					0	No evidence available							2018-05-23	MONDO:0014482	
 SETD1A	9739	16p11.2	chr16:30969075-30995985	3	Sufficient evidence for dosage pathogenicity	24853937	26974950					0	No evidence available							2018-02-28	MONDO:0005090	
 SETD1B	23067	12q24.31	chr12:122241915-122270562	3	Sufficient evidence for dosage pathogenicity	34345025	32546566	31110234	31685013	38313655	38108116	0	No evidence available							2024-08-28	MONDO:0100038	
@@ -1245,7 +1261,7 @@ SGSH	6448	17q25.3	chr17:78183075-78194132	30	Gene associated with autosomal rece
 SH2B1	25970	16p11.2	chr16:28857927-28885526	1	Little evidence for dosage pathogenicity	23160192	24971614	17235396	31439647	26031769		0	No evidence available							2021-07-13		
 SH2D1A	4068	Xq25	chrX:123480413-123507010	3	Sufficient evidence for dosage pathogenicity	11049992	11159547	31144249				0	No evidence available							2021-01-27	MONDO:0024551	
 SH3TC2	79628	5q32	chr5:148361713-148442625	30	Gene associated with autosomal recessive phenotype							Not yet evaluated	Not yet evaluated							2016-08-22	MONDO:0011113	
-SHANK1	50944	19q13.33	chr19:51162512-51223059	1	Little evidence for dosage pathogenicity	27824329						0	No evidence available							2019-03-27	MONDO:0100038	
+SHANK1	50944	19q13.33	chr19:51162512-51223059	1	Little evidence for dosage pathogenicity	34113010	36980980					0	No evidence available							2025-03-11	MONDO:0100038	
 SHANK2	22941	11q13.3-q13.4	chr11:70313959-70963623	3	Sufficient evidence for dosage pathogenicity	20473310	22346768	20531469	35456494	32987185	25188300	0	No evidence available							2023-10-26	MONDO:0100038	
 SHANK3	85358	22q13.33	chr22:51111251-51171640	3	Sufficient evidence for dosage pathogenicity	23758760	21984749	21779178				0	No evidence available							2018-08-14	MONDO:0011652	
 SHH	6469	7q36.3	chr7:155592674-155605157	3	Sufficient evidence for dosage pathogenicity	10556296	12567406	22791840				0	No evidence available	19431187						2020-06-24	MONDO:0007733	
@@ -1307,6 +1323,7 @@ SMARCA4	6597	19p13.2	chr19:11071706-11172949	3	Sufficient evidence for dosage pa
 SMARCB1	6598	22q11.23|22q11	chr22:24129153-24180196	3	Sufficient evidence for dosage pathogenicity	21108436	29706634	18285426				0	No evidence available							2020-04-22	MONDO:0012252	
 SMARCE1	6605	17q21.2	chr17:38781214-38804070	3	Sufficient evidence for dosage pathogenicity	23377182	27891692	25143307	26803492	37164167	30421029	0	No evidence available							2024-12-11	MONDO:0011789	
 SMC1A	8243	Xp11.22	chrX:53401070-53449677	3	Sufficient evidence for dosage pathogenicity	24896178	26386245	28166369				0	No evidence available							2018-07-23	MONDO:0010370	
+SMC3	9126	10q25.2	chr10:112327453-112365806	1	Little evidence for dosage pathogenicity	38297832	31178897	25125236	28191889			0	No evidence available							2025-04-08		
 SMOC1	64093	14q24.2	chr14:70346133-70499083	30	Gene associated with autosomal recessive phenotype							0	No evidence available							2016-08-22	MONDO:0008800	
 SMOC2	64094	6q27	chr6:168841864-169068672	30	Gene associated with autosomal recessive phenotype							0	No evidence available							2016-08-22	MONDO:0007436	
 SMS	6611	Xp22.11	chrX:21958827-22012955	3	Sufficient evidence for dosage pathogenicity	14508504	18550699	19206178				0	No evidence available							2012-08-23	MONDO:0010664	
@@ -1319,6 +1336,7 @@ SNORD8	319103	14q11.2	chr14:21865452-21865560	0	No evidence available							0	No
 SNORD9	692053	14q11.2	chr14:21860310-21860412	0	No evidence available							0	No evidence available							2015-03-11		
 SNRPN	6638	15q11.2	chr15:25068784-25223870	0	No evidence available							0	No evidence available							2012-10-26		
 SNURF	8926	15q11.2	chr15:25200134-25223870	1	Little evidence for dosage pathogenicity	22511895	28554868	27659713	24311433			0	No evidence available							2023-03-28		
+SNX10	29887	7p15.2	chr7:26331482-26414003	30	Gene associated with autosomal recessive phenotype	29620724	23280965	29090071	27391121	36526684	27391121	0	No evidence available							2025-05-15	MONDO:0014040	
 SOBP	55084	6q21	chr6:107811321-107982510	30	Gene associated with autosomal recessive phenotype							0	No evidence available							2016-08-22	MONDO:0013353	
 SON	6651	21q22.11	chr21:34915344-34949787	3	Sufficient evidence for dosage pathogenicity	25590979	27256762	27545680				0	No evidence available							2019-04-24	MONDO:0014936	
 SOS1	6654	2p22.1	chr2:39208690-39352009	0	No evidence available	21387466						0	No evidence available							2012-03-30		
@@ -1344,9 +1362,11 @@ SRCAP	10847	16p11.2	chr16:30710492-30752730	1	Little evidence for dosage pathoge
 SRD5A2	6716	2p23.1	chr2:31747550-31806007	30	Gene associated with autosomal recessive phenotype							0	No evidence available							2012-08-22	MONDO:0009923	
 SRPX2	27286	Xq22.1	chrX:99899196-99930785	0	No evidence available							0	No evidence available							2012-07-25		
 SRRM2	23524	16p13.3	chr16:2802639-2821413	3	Sufficient evidence for dosage pathogenicity	35567594						0	No evidence available							2024-02-13	MONDO:0100038	
+SRSF11	9295	1p31.1	chr1:70671379-70718735	1	Little evidence for dosage pathogenicity	25363760	28263302	30257206	33057194			0	No evidence available							2025-04-08	MONDO:0100038	
 SRY	6736	Yp11.2	chrY:2654896-2655723	3	Sufficient evidence for dosage pathogenicity	1639410	1339396	7987333				0	No evidence available							2020-12-22	MONDO:0020712	
 ST14	6768	11q24.3	chr11:130029677-130080257	30	Gene associated with autosomal recessive phenotype							0	No evidence available							2016-08-22	MONDO:0011218	
 ST3GAL5	8869	2p11.2	chr2:86064243-86116157	30	Gene associated with autosomal recessive phenotype							0	No evidence available							2014-09-25	MONDO:0018274	
+STAG1	10274	3q22.3	chr3:136055078-136471220	3	Sufficient evidence for dosage pathogenicity	28119487	30158690	34440290	39336775	39224759		0	No evidence available							2025-01-22	MONDO:0100038	
 STAG2	10735	Xq25	chrX:123094410-123236506	3	Sufficient evidence for dosage pathogenicity	28296084	30158690	31334757	33758131			0	No evidence available							2023-01-25	MONDO:0020119	
 STARD9	57519	15q15.2	chr15:42867804-43013196	0	No evidence available	28777490	28440294					Not yet evaluated	Not yet evaluated							2023-10-10		
 STAT1	6772	2q32.2	chr2:191833875-191878897	0	No evidence available							0	No evidence available							2013-09-18		
@@ -1421,13 +1441,14 @@ TMEM135	65084	11q14.2	chr11:86748976-87039866	0	No evidence available							0	No
 TMEM178A	130733	2p22.1	chr2:39892623-39945103	0	No evidence available	28191890						0	No evidence available							2024-10-23		
 TMEM231	79583	16q23.1	chr16:75570639-75590184	30	Gene associated with autosomal recessive phenotype							0	No evidence available							2016-08-22	MONDO:0015369	
 TMEM237	65062	2q33.1	chr2:202484909-202508226	30	Gene associated with autosomal recessive phenotype							0	No evidence available							2015-04-08	MONDO:0013745	
-TMEM43	79188	3p25.1	chr3:14166552-14185180	0	No evidence available							0	No evidence available							2015-11-08		
+TMEM43	79188	3p25.1	chr3:14166552-14185180	0	No evidence available							0	No evidence available							2015-11-08	MONDO:0011459	
 TMEM67	91147	8q22.1	chr8:94767072-94831466	30	Gene associated with autosomal recessive phenotype							0	No evidence available							2016-08-22	MONDO:0015369	
+TMEM94	9772	17q25.1	chr17:73452716-73496533	30	Gene associated with autosomal recessive phenotype	30526868	32825426	34374989				0	No evidence available							2025-03-31	MONDO:0032672	
 TMLHE	55217	Xq28	chrX:154718672-154842613	1	Little evidence for dosage pathogenicity	21865298	22566635	23092983				0	No evidence available							2013-08-01		
 TMPRSS3	64699	21q22.3	chr21:43791999-43816161	30	Gene associated with autosomal recessive phenotype							0	No evidence available							2016-08-22	MONDO:0010987	
 TMPRSS6	164656	22q12.3	chr22:37461476-37505753	30	Gene associated with autosomal recessive phenotype							0	No evidence available							2016-08-22	MONDO:0008788	
 TNFRSF11B	4982	8q24.12	chr8:119935796-119964124	30	Gene associated with autosomal recessive phenotype							Not yet evaluated	Not yet evaluated							2016-08-22	MONDO:0009394	
-TNNI3	7137	19q13.42	chr19:55663135-55669100	1	Little evidence for dosage pathogenicity	18006163	28436080	27532257	26688388	18533079	29095814	0	No evidence available							2023-05-25	MONDO:0007270	
+TNNI3	7137	19q13.42	chr19:55663135-55669100	1	Little evidence for dosage pathogenicity	18006163	28436080	27532257	26688388	18533079	29095814	0	No evidence available							2023-05-25	MONDO:0005045	
 TNNT1	7138	19q13.42	chr19:55644066-55660574	30	Gene associated with autosomal recessive phenotype							0	No evidence available							2016-08-22	MONDO:0011539	
 TNNT2	7139	1q32.1	chr1:201328142-201346808	0	No evidence available							0	No evidence available							2015-11-15		
 TNRC6B	23112	22q13.1	chr22:40440838-40731812	3	Sufficient evidence for dosage pathogenicity	25284784	25363768	27479843				0	No evidence available							2019-06-26	MONDO:0100038	
@@ -1443,7 +1464,7 @@ TPSD1	23430	16p13.3	chr16:1306070-1309009	40	Dosage sensitivity unlikely	3248772
 TRAPPC10	7109	21q22.3	chr21:45432190-45526433	0	No evidence available							0	No evidence available							2012-09-06		
 TRAPPC2	6399	Xp22.2	chrX:13730364-13752739	3	Sufficient evidence for dosage pathogenicity	11252002	12919139	11349230				0	No evidence available							2014-01-16	MONDO:0010737	
 TRAPPC9	83696	8q24.3	chr8:140739968-141468678	30	Gene associated with autosomal recessive phenotype							0	No evidence available							2015-08-06	MONDO:0013173	
-TRDN	10345	6q22.31	chr6:123537484-123958095	30	Gene associated with autosomal recessive phenotype							Not yet evaluated	Not yet evaluated							2016-08-22	MONDO:0014191	
+TRDN	10345	6q22.31	chr6:123537484-123958095	30	Gene associated with autosomal recessive phenotype							Not yet evaluated	Not yet evaluated							2016-08-22	MONDO:0017990	
 TRHR	7201	8q23.1	chr8:110098814-110133794	30	Gene associated with autosomal recessive phenotype							Not yet evaluated	Not yet evaluated							2016-08-22	MONDO:0032819	
 TRIM2	23321	4q31.3	chr4:154073315-154260469	30	Gene associated with autosomal recessive phenotype							0	No evidence available							2016-08-22	MONDO:0014208	
 TRIM32	22954	9q33.1	chr9:119449584-119463578	30	Gene associated with autosomal recessive phenotype							0	No evidence available							2016-08-22	MONDO:0009683	
@@ -1457,8 +1478,8 @@ TRMU	55687	22q13.31	chr22:46731611-46753237	30	Gene associated with autosomal re
 TRPM1	4308	15q13.3	chr15:31293268-31453363	30	Gene associated with autosomal recessive phenotype							Not yet evaluated	Not yet evaluated							2016-08-22	MONDO:0013183	
 TRPS1	7227	8q23.3	chr8:116420724-116681202	3	Sufficient evidence for dosage pathogenicity	31662300	21740822	11112658				0	No evidence available							2020-07-08	MONDO:0008596	
 TRRAP	8295	7q22.1	chr7:98476155-98610864	1	Little evidence for dosage pathogenicity	28263302	23042115					0	No evidence available							2019-04-24	MONDO:0100038	
-TSC1	7248	9q34.13	chr9:135766736-135820003	3	Sufficient evidence for dosage pathogenicity	32917966	23389244	17304050				0	No evidence available							2020-10-13	MONDO:0008612	
-TSC2	7249	16p13.3	chr16:2097986-2139492	3	Sufficient evidence for dosage pathogenicity	31525612	10205261	29932062				0	No evidence available							2020-06-10	MONDO:0013199	
+TSC1	7248	9q34.13	chr9:135766736-135820003	3	Sufficient evidence for dosage pathogenicity	32917966	23389244	17304050				0	No evidence available							2020-10-13	MONDO:0001734	
+TSC2	7249	16p13.3	chr16:2097986-2139492	3	Sufficient evidence for dosage pathogenicity	31525612	10205261	29932062				0	No evidence available							2020-06-10	MONDO:0001734	
 TSEN2	80746	3p25.2	chr3:12525979-12581123	30	Gene associated with autosomal recessive phenotype							0	No evidence available							2016-08-22	MONDO:0012890	
 TSEN54	283989	17q25.1	chr17:73512609-73520816	30	Gene associated with autosomal recessive phenotype							Not yet evaluated	Not yet evaluated							2016-08-22	MONDO:0020135	
 TSPAN7	7102	Xp11.4	chrX:38420795-38548172	1	Little evidence for dosage pathogenicity	12070254	10655063	26350204				0	No evidence available							2022-06-22	MONDO:0100284	
@@ -1469,7 +1490,7 @@ TTC37	9652	5q15	chr5:94799598-94890681	30	Gene associated with autosomal recessi
 TTC7A	57217	2p21	chr2:47143005-47303262	30	Gene associated with autosomal recessive phenotype							0	No evidence available							2016-08-22	MONDO:0009465	
 TTC8	123016	14q31.3	chr14:89290497-89347423	30	Gene associated with autosomal recessive phenotype							Not yet evaluated	Not yet evaluated							2016-08-22	MONDO:0014436	
 TTLL5	23093	14q24.3	chr14:76127589-76421422	30	Gene associated with autosomal recessive phenotype							0	No evidence available							2016-08-22	MONDO:0014372	
-TTN	7273	2q31.2	chr2:179390716-179672150	3	Sufficient evidence for dosage pathogenicity	22335739	23418287	31489791	24503780	28045975	25589632	0	No evidence available							2021-08-02	MONDO:0011400	
+TTN	7273	2q31.2	chr2:179390716-179672150	3	Sufficient evidence for dosage pathogenicity	22335739	23418287	31489791	24503780	28045975	25589632	0	No evidence available							2021-08-02	MONDO:0005021	
 TUBA1A	7846	12q13.12	chr12:49578578-49582863	0	No evidence available							0	No evidence available							2016-04-14		
 TUBB3	10381	16q24.3	chr16:89988333-90002505	0	No evidence available							0	No evidence available							2017-08-30		
 TUBB4A	10382	19p13.3	chr19:6494330-6502859	0	No evidence available							0	No evidence available							2014-11-19		
@@ -1487,13 +1508,14 @@ UBE3A	7337	15q11.2	chr15:25578875-25684203	3	Sufficient evidence for dosage path
 UBE3B	89910	12q24.11	chr12:109915439-109974507	30	Gene associated with autosomal recessive phenotype							0	No evidence available							2016-08-22	MONDO:0009485	
 UBN2	254048	7q34	chr7:138915983-138992982	1	Little evidence for dosage pathogenicity	25363768	28263302	25363760	31674007			0	No evidence available							2024-07-24	MONDO:0005258	
 UBR1	197131	15q15.2	chr15:43235095-43398236	30	Gene associated with autosomal recessive phenotype							Not yet evaluated	Not yet evaluated							2016-08-22	MONDO:0009479	
+UNC80	285175	2q34	chr2:210636556-210864020	30	Gene associated with autosomal recessive phenotype	26545877	26708753	26708751	27513830	30167850	29572195	0	No evidence available							2025-02-12		
 UNC93A	54346	6q27	chr6:167704803-167729502	40	Dosage sensitivity unlikely	32487729	22344438	28406212	25807282	32461654		0	No evidence available							2021-02-03		
 UPB1	51733	22q11.23	chr22:24891300-24924358	30	Gene associated with autosomal recessive phenotype							Not yet evaluated	Not yet evaluated							2016-08-22	MONDO:0013164	
 UPF2	26019	10p14	chr10:11962021-12085169	0	No evidence available							0	No evidence available							2019-02-13		
 UPF3B	65109	Xq24	chrX:118967985-118986926	3	Sufficient evidence for dosage pathogenicity	19238151	20479756	17704778	22957832	31737052	22609145	0	No evidence available							2021-02-09	MONDO:0010398	
 UROD	7389	1p34.1	chr1:45477926-45481247	2	Some evidence for dosage pathogenicity	11295834	22382040	1634232				0	No evidence available							2024-10-04	MONDO:0100498	
 UROS	7390	10q26.2	chr10:127473549-127511827	30	Gene associated with autosomal recessive phenotype							Not yet evaluated	Not yet evaluated							2016-08-22	MONDO:0009902	
-USB1	79650	16q21	chr16:58033507-58055522	30	Gene associated with autosomal recessive phenotype							30	Gene associated with autosomal recessive phenotype							2024-11-13		
+USB1	79650	16q21	chr16:58033507-58055522	30	Gene associated with autosomal recessive phenotype							0	No evidence available							2024-11-13		
 USH1C	10083	11p15.1	chr11:17515447-17565963	30	Gene associated with autosomal recessive phenotype							0	No evidence available							2012-04-07	MONDO:0010171	
 USH1G	124590	17q25.1	chr17:72912175-72919350	30	Gene associated with autosomal recessive phenotype							0	No evidence available							2016-08-22	MONDO:0011748	
 USH2A	7399	1q41	chr1:215796233-216596790	30	Gene associated with autosomal recessive phenotype							Not yet evaluated	Not yet evaluated							2016-08-22	MONDO:0010169	
@@ -1511,7 +1533,7 @@ VPS13B	157680	8q22.2	chr8:100025502-100889808	30	Gene associated with autosomal 
 VPS26C	10311	21q22.13	chr21:38595721-38640409	0	No evidence available							0	No evidence available							2012-04-24		
 VPS37A	137492	8p22	chr8:17104467-17190964	30	Gene associated with autosomal recessive phenotype							0	No evidence available							2016-08-22	MONDO:0013962	
 VPS53	55275	17p13.3	chr17:411908-618079	30	Gene associated with autosomal recessive phenotype							Not yet evaluated	Not yet evaluated							2016-08-22	MONDO:0014370	
-WAC	51322	10p12.1|10p12.1-p11.2	chr10:28821708-28912041	3	Sufficient evidence for dosage pathogenicity	26757981	26264232	28263302	26795593	25356899	26325558	0	No evidence available							2018-02-28	MONDO:0014741	
+WAC	51322	10p12.1|10p12.1-p11.2	chr10:28821708-28912041	3	Sufficient evidence for dosage pathogenicity	26757981	26264232	28263302	26795593	25356899	26325558	0	No evidence available							2018-02-28	MONDO:0018760	
 WDFY3	23001	4q21.23	chr4:85590750-85887843	3	Sufficient evidence for dosage pathogenicity	31327001	27824329	30564305				0	No evidence available							2023-10-10	MONDO:0100038	
 WDPCP	51057	2p15	chr2:63346694-63815611	30	Gene associated with autosomal recessive phenotype							0	No evidence available							2016-08-22	MONDO:0009008	
 WDR26	80232	1q42.11-q42.12	chr1:224572848-224622499	3	Sufficient evidence for dosage pathogenicity	28686853	33675273	33506510	32030560	34055682		0	No evidence available							2022-04-27	MONDO:0054636	
@@ -1535,6 +1557,7 @@ XPNPEP3	63929	22q13.2	chr22:41253152-41328819	30	Gene associated with autosomal 
 XYLT1	64131	16p12.3	chr16:17195626-17564817	30	Gene associated with autosomal recessive phenotype							0	No evidence available							2016-08-22	MONDO:0014343	
 YAP1	10413	11q22.1	chr11:101981178-102104155	1	Little evidence for dosage pathogenicity	24462371						0	No evidence available							2014-11-13	MONDO:0007355	
 YTHDC1	91746	4q13.2	chr4:69176105-69215808	1	Little evidence for dosage pathogenicity	27824329	24463507					0	No evidence available							2019-04-24	MONDO:0100038	
+YTHDF3	253943	8q12.3	chr8:64081112-64125346	1	Little evidence for dosage pathogenicity	34708403	33057194	31785789	34312540	33004838		0	No evidence available							2025-04-03	MONDO:0100038	
 ZBTB18	10472	1q44	chr1:244211955-244220778	3	Sufficient evidence for dosage pathogenicity	24193349	28283832	27598823				0	No evidence available							2019-04-24	MONDO:0012869	
 ZBTB24	9841	6q21	chr6:109783797-109804422	30	Gene associated with autosomal recessive phenotype							0	No evidence available							2016-08-22	MONDO:0013553	
 ZC4H2	55906	Xq11.2	chrX:64135687-64254621	3	Sufficient evidence for dosage pathogenicity	31206972	29254829	23623388				0	No evidence available							2020-04-22	MONDO:0010758	

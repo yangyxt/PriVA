@@ -199,9 +199,10 @@ def pedigree_filter(vcf_path, ped_path, target_fam, output):
     target_fam (str): Target family ID.
     output (str): Path to the output VCF file.
     """
-    # Read pedigree file
+    # Read pedigree file, only read the first 6 columns
     ped_df = pd.read_csv(ped_path, sep='\t', header=None, 
-                         names=['#FamilyID', 'IndividualID', 'PaternalID', 'MaternalID', 'Sex', 'Phenotype'])
+                         names=['#FamilyID', 'IndividualID', 'PaternalID', 'MaternalID', 'Sex', 'Phenotype'],
+                         usecols=range(6))
     
     # Filter for target family
     fam_ped = ped_df[ped_df['#FamilyID'] == target_fam]

@@ -38,7 +38,7 @@ function filter_allele_based_on_pedigree_data {
     fi
 
     if [[ ${output_vcf} -nt ${input_vcf} ]] && \
-	   [[ $(check_vcf_validity ${output_vcf}) ]] && \
+       [[ $(check_vcf_validity ${output_vcf}) ]] && \
        [[ $(count_vcf_records ${output_vcf}) -le $(count_vcf_records ${input_vcf}) ]]; then
        log "The output vcf ${output_vcf} is valid and updated"
        return 0;
@@ -57,7 +57,7 @@ function filter_allele_based_on_pedigree_data {
     -f ${family_name} \
     -o ${output_vcf} && \
     tabix -p vcf -f ${output_vcf} && \
-	display_vcf ${output_vcf} || { \
+    display_vcf ${output_vcf} || { \
     log "Failed to filter the records where patients GT are the same with controls GT info"; \
     return 1; }
     
@@ -67,13 +67,13 @@ function filter_allele_based_on_pedigree_data {
 
 
 function filter_af () {
-	local config_file
-	local input_vcf
-	local output_vcf
+    local config_file
+    local input_vcf
+    local output_vcf
     local threads
 
     # Use getopts to parse the input arguments
-	local OPTIND i o c t
+    local OPTIND i o c t
     while getopts i:o::c:t:: args
     do
         case ${args} in
@@ -86,7 +86,7 @@ function filter_af () {
     done
 
     [[ -z ${threads} ]] && threads=1 || log "Using ${threads} threads to filter the variants based on the allele frequency"
-	[[ ! -f ${config_file} ]] && { log "The config file ${config_file} does not exist"; return 1; }
+    [[ ! -f ${config_file} ]] && { log "The config file ${config_file} does not exist"; return 1; }
 
     local af_cutoff=$(read_yaml ${config_file} "af_cutoff")
 
@@ -157,11 +157,10 @@ function main_filtration () {
         esac
     done
 
-	log "The input config file is ${config_file}"
+    log "The input config file is ${config_file}"
 
     local ped_file=$(read_yaml ${config_file} "ped_file")
-    local threads=$SNAKEMAKE_THREADS
-    [[ -z ${threads} ]] && threads=$(read_yaml ${config_file} "threads")
+    local threads=$(read_yaml ${config_file} "threads_per_fam")
 
     # Extract the family samples from the ped vcf file
     if [[ -f ${ped_file} ]]; then
@@ -188,7 +187,7 @@ function main_filtration () {
 
     # Filter the variants based on the allele frequency
     if [[ -f ${ped_file} ]]; then
-		log "Filter the variants based on the allele frequency, the config file is ${config_file}"
+        log "Filter the variants based on the allele frequency, the config file is ${config_file}"
         filter_af \
         -c ${config_file} \
         -i ${filtered_vcf} \
@@ -220,8 +219,8 @@ if [[ "${#BASH_SOURCE[@]}" -eq 1 ]]; then
         log "Executing: ${*:${following_arg_ind}}"
         "${@:${following_arg_ind}}"
     else
-		log "Directly run main_filtration with input args: $*"
-		main_filtration "$@"
-	fi
+        log "Directly run main_filtration with input args: $*"
+        main_filtration "$@"
+    fi
 fi
 

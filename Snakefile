@@ -33,6 +33,9 @@ print(f"THREADS - Total/Annotation: {THREADS}, Per Family: {THREADS_PER_FAM}", f
 # Ensure output directory exists
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
+# Ensure logs directory exists
+os.makedirs(os.path.join(OUTPUT_DIR, "logs"), exist_ok=True)
+
 
 def get_final_outputs():
     # Check if PED_FILE exists and is not empty or just whitespace
@@ -86,11 +89,14 @@ rule annotate_variants:
         config=workflow.configfiles[0]
         # Pedigree file path is expected to be read from the config file by the script if needed
     threads: THREADS # Use total threads for annotation
+    log:
+        os.path.join(OUTPUT_DIR, "logs", f"{INPUT_BASE}.annotation.log")
     shell:
         """
+        echo "[$(date)] Starting annotation step. Detailed log: {log}" >&2
         bash {params.script} main_workflow \
             -i {input.vcf} \
-            --config {params.config}
+            --config {params.config} > {log} 2>&1
         """
 
 # Step 2: Filter variants with family information
@@ -104,12 +110,15 @@ rule filter_variants_per_family:
         script=os.path.join(SCRIPT_DIR, "filtration_vcf_per_fam.sh"),
         config=workflow.configfiles[0]
     threads: THREADS_PER_FAM # Use per-family threads
+    log:
+        os.path.join(OUTPUT_DIR, "logs", f"{INPUT_BASE}.{{family}}.filtration.log")
     shell:
         """
+        echo "[$(date)] Starting filtration for family {wildcards.family}. Detailed log: {log}" >&2
         bash {params.script} \
             -v {input.vcf} \
             -f {wildcards.family} \
-            -c {params.config}
+            -c {params.config} > {log} 2>&1
         """
 
 # Step 2 alternative: Filter variants without family information
@@ -122,11 +131,14 @@ rule filter_variants_no_family:
         script=os.path.join(SCRIPT_DIR, "filtration_vcf_per_fam.sh"),
         config=workflow.configfiles[0]
     threads: THREADS # Use total threads for non-family filtering
+    log:
+        os.path.join(OUTPUT_DIR, "logs", f"{INPUT_BASE}.no_family.filtration.log")
     shell:
         """
+        echo "[$(date)] Starting filtration (no family mode). Detailed log: {log}" >&2
         bash {params.script} \
             -v {input.vcf} \
-            -c {params.config}
+            -c {params.config} > {log} 2>&1
         """
 
 # Step 3: Prioritize variants with family information
@@ -142,13 +154,16 @@ rule prioritize_variants_per_family:
         script=os.path.join(SCRIPT_DIR, "prioritization_vcf_per_fam.sh"),
         config=workflow.configfiles[0]
     threads: THREADS_PER_FAM # Use per-family threads
+    log:
+        os.path.join(OUTPUT_DIR, "logs", f"{INPUT_BASE}.{{family}}.prioritization.log")
     shell:
         """
+        echo "[$(date)] Starting prioritization for family {wildcards.family}. Detailed log: {log}" >&2
         bash {params.script} \
             -i {input.vcf} \
             -c {params.config} \
             -f {wildcards.family} \
-            -t {input.cadd_tsv}
+            -t {input.cadd_tsv} > {log} 2>&1
         """
 
 # Step 3 alternative: Prioritize variants without family information
@@ -163,11 +178,14 @@ rule prioritize_variants_no_family:
         script=os.path.join(SCRIPT_DIR, "prioritization_vcf_per_fam.sh"),
         config=workflow.configfiles[0]
     threads: THREADS # Use total threads for non-family prioritization
+    log:
+        os.path.join(OUTPUT_DIR, "logs", f"{INPUT_BASE}.no_family.prioritization.log")
     shell:
         """
+        echo "[$(date)] Starting prioritization (no family mode). Detailed log: {log}" >&2
         bash {params.script} \
             -i {input.vcf} \
             -c {params.config} \
-            -t {input.cadd_tsv}
+            -t {input.cadd_tsv} > {log} 2>&1
         """
 

@@ -18,7 +18,7 @@ if [[ -z $TMPDIR ]]; then TMPDIR=/tmp; fi
 
 # Source the other script
 source "${SCRIPT_DIR}/common_bash_utils.sh"
-# conda activate acmg
+# conda activate priva_acmg
 
 log "The folder storing scripts is ${SCRIPT_DIR}, the base folder for used scripts and data is ${BASE_DIR}"
 
@@ -862,9 +862,9 @@ function Calculate_CADD {
 
     # Run CADD
     log "Running CADD script ${cadd_script} with the following command"
-    log "conda run -n acmg ${cadd_script} -c ${threads} -a -p -m -d -g ${genome_tag} -o ${output_file} ${nochr_vcf}"
+    log "conda run -n priva_acmg ${cadd_script} -c ${threads} -a -p -m -d -g ${genome_tag} -o ${output_file} ${nochr_vcf}"
     export TMPDIR=${tmp_dir}
-    conda run -n acmg ${cadd_script} \
+    conda run -n priva_acmg ${cadd_script} \
     -c ${threads} \
     -a -p -m -d \
     -g ${genome_tag} \

@@ -1,4 +1,4 @@
-name: acmg
+name: priva_acmg
 channels:
   - conda-forge
   - bioconda

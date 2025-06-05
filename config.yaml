@@ -10,7 +10,7 @@ hub_cadd_file: "/paedyl01/disk1/yangyxt/ngs_summary/hg19.cadd.tsv.gz"
 
 # Below we specify the conda env yml file in relative path
 conda_env_yaml: "/paedyl01/disk1/yangyxt/PriVA/acmg_auto_rough.yml"
-conda_env_name: "acmg"
+conda_env_name: "priva_acmg"
 
 # Below we specify the input vcf file in absolute paths
 input_vcf: "/paedyl01/disk1/yangyxt/test_acmg_auto/TEST_FAM.filtered.vcf.gz"

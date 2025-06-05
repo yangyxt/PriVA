@@ -1,4 +1,4 @@
-name: acmg
+name: priva_acmg
 channels:
   - anaconda
   - conda-forge

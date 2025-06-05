@@ -88,7 +88,7 @@ function run_TAPES() {
 	# The link of the TAPES github page is: https://github.com/a-xavier/tapes
 
 	# Run TAPES
-	python3 ${tapes_py} annotate -i ${input_vcf} -o ${output_dir}/tapes_annotated_clinvar.vcf --acmg && \
+	python3 ${tapes_py} annotate -i ${input_vcf} -o ${output_dir}/tapes_annotated_clinvar.vcf --priva_acmg && \
 	log "TAPES annotation completed. Output file: ${output_dir}/tapes_annotated_clinvar.vcf" && \
 	python3 ${tapes_py} sort -i ${output_dir}/tapes_annotated_clinvar.hg19_multianno.vcf -o ${output_dir}/tapes_annotated_clinvar.hg19_multianno.sorted.tsv --tab && \
 	log "TAPES sorting completed. Output file: ${output_dir}/tapes_annotated_clinvar.hg19_multianno.sorted.tsv" && \

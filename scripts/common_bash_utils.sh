@@ -863,8 +863,8 @@ function crossmap_liftover_hg382hg19 {
         local output_vcf=${input_vcf/.vcf/.hg19.vcf}
     fi
 
-    if [[ ! ${CONDA_PREFIX} =~ acmg ]]; then
-        mamba_activate acmg
+    if [[ ! ${CONDA_PREFIX} =~ priva_acmg ]]; then
+        mamba_activate priva_acmg
     fi
 
 

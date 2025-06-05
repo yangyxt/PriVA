@@ -2722,7 +2722,7 @@ def ACMG_criteria_assign(anno_table: str,
     gc.collect()
     # Apply BP5, variant found in a sample with known alternative molecular basis for disease
     if alt_disease_vcf:
-        bp5_criteria = BP5_criteria(anno_df, alt_disease_vcf, gene_to_am_score_map, threads)
+        bp5_criteria = BP5_criteria(anno_df, alt_disease_vcf, gene_to_am_score_map, gene_dosage_sensitivity, threads)
     else:
         bp5_criteria = np.array([0] * len(anno_df))
     logger.info(f"BP5 criteria applied, {(bp5_criteria > 0).sum()} variants are having the BP5 criteria")

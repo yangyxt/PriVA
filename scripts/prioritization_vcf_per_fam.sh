@@ -265,8 +265,7 @@ function main_prioritization () {
 
 
     # Read the expected number of threads
-    local threads=$SNAKEMAKE_THREADS
-    [[ -z ${threads} ]] && threads=$(read_yaml ${config_file} "threads")
+    local threads=$(read_yaml ${config_file} "threads_per_fam")
     log "The number of threads is set to ${threads} for the current family ${fam_name} and input VCF file ${input_vcf}"
 
     # Preprocess step, convert the annotated VCF to a Table with transcript specific annotations as rows

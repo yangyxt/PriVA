@@ -358,9 +358,18 @@ def truncate_fraction(df):
     '''
     nonsense_vars = df["Consequence"].str.contains("stop_gained") | df["Consequence"].str.contains("frameshift")
     # inframe_indels = df["Consequence"].str.contains("inframe_deletion") | df["Consequence"].str.contains("inframe_insertion")
-    protein_poses = np.where(df["Protein_position"].str.contains("-"), df["Protein_position"].str.split("-", expand=True).iloc[:, 0], df["Protein_position"].astype(str))
-    # Convert protein_poses to a pd series astype of str
-    protein_poses = pd.Series(protein_poses, dtype=str)
+    
+    # Fix the issue by ensuring we maintain the same index
+    protein_pos_series = df["Protein_position"].astype(str)
+    contains_dash = protein_pos_series.str.contains("-", na=False)
+    
+    # Extract the first part for positions with "-"
+    split_result = protein_pos_series.str.split("-", expand=True)
+    first_part = split_result.iloc[:, 0] if len(split_result.columns) > 0 else protein_pos_series
+    
+    # Use pandas .where() instead of np.where() to maintain index alignment
+    protein_poses = first_part.where(contains_dash, protein_pos_series)
+    
     var_span = df["Protein_position"].map(lambda x: abs(pd.to_numeric(x.split("/")[0].split("-")[1], errors="coerce") - pd.to_numeric(x.split("/")[0].split("-")[0], errors="coerce") + 1) if "-" in str(x) else 1)
     var_protein_pos = pd.to_numeric(protein_poses.str.split("/", expand=True).iloc[:, 0], errors='coerce')
     total_protein_len = pd.to_numeric(df["Protein_position"].str.split("/", expand=True).iloc[:, 1], errors='coerce')
@@ -443,10 +452,11 @@ def PVS1_criteria(df: pd.DataFrame,
     # Deal with inframe_deletion variants
     inframe_del_intol_domains = df['Consequence'].str.contains("inframe_deletion") & intolerant_domains
     inframe_ins_intol_domains = df['Consequence'].str.contains("inframe_insertion") & intolerant_domains
-    pvs1_criteria[inframe_del_intol_domains & lof_intolerant & (pvs1_criteria < 3)] = 3
-    pvs1_criteria[inframe_ins_intol_domains & lof_intolerant & (pvs1_criteria < 3)] = 3
-    pvs1_criteria[df['Consequence'].str.contains("inframe_deletion") & lof_intolerant & ~intolerant_domains & exon_rare_patho_afs & (truncate_frac >= 0.1) & (pvs1_criteria < 3)] = 3
-    pvs1_criteria[df['Consequence'].str.contains("inframe_deletion") & lof_intolerant & ~intolerant_domains & exon_rare_patho_afs & (truncate_frac < 0.1) & (pvs1_criteria < 2)] = 2
+    large_inframe_indels = (df["ref"].str.len() > 30) | (df["alt"].str.len() > 30)
+    pvs1_criteria[inframe_ins_intol_domains & lof_intolerant & (pvs1_criteria < 3) & ~large_inframe_indels] = 3
+    pvs1_criteria[large_inframe_indels & lof_intolerant & (pvs1_criteria < 3) & ~large_inframe_indels] = 3
+    pvs1_criteria[df['Consequence'].str.contains("inframe_deletion") & lof_intolerant & ~intolerant_domains & exon_rare_patho_afs & large_inframe_indels & (truncate_frac >= 0.1) & (pvs1_criteria < 3)] = 3
+    pvs1_criteria[df['Consequence'].str.contains("inframe_deletion") & lof_intolerant & ~intolerant_domains & exon_rare_patho_afs & large_inframe_indels & (truncate_frac < 0.1) & (pvs1_criteria < 2)] = 2
 
     # Now we start to deal with splicing variants, we cannot predict NMD escaping given the current annotation, therefore we assume frameshift causing early termination and NMD
     pvs1_criteria[df['splicing_frameshift'] & lof_intolerant & (pvs1_criteria < 4)] = 4
@@ -1297,8 +1307,18 @@ def gnomAD_rare_nhomalt(df: pd.DataFrame, cutoff: float) -> np.ndarray:
 
 
 def PM2_criteria(df: pd.DataFrame, 
+                 clinvar_patho_af_stat: str,
                  clinvar_patho_exon_af_stat: str,
                  gnomAD_extreme_rare_threshold: float = 0.0001) -> np.ndarray:
+
+    logger.info(f"Loading the clinvar pathogenic AF stat from {clinvar_patho_af_stat}")
+    clinvar_patho_af_dict = pickle.load(gzip.open(clinvar_patho_af_stat)) if clinvar_patho_af_stat.endswith(".gz") else pickle.load(open(clinvar_patho_af_stat, 'rb'))
+    clinvar_patho_af_dict = {k: v for k, v in clinvar_patho_af_dict.items() if v is not None}
+    logger.info(f"The clinvar pathogenic AF stat type is {type(clinvar_patho_af_dict)}")
+    df.loc[:, "Gene"] = df["Gene"].fillna(np.nan)
+    gene_max_patho_af = df['Gene'].map(lambda gene: clinvar_patho_af_dict.get(gene, {"af": 0}).get('af', 0))
+    df["clinvar_patho_gene_max_af"] = gene_max_patho_af
+
     clinvar_patho_exon_af_stat_dict = pickle.load(gzip.open(clinvar_patho_exon_af_stat)) if clinvar_patho_exon_af_stat.endswith(".gz") else pickle.load(open(clinvar_patho_exon_af_stat, 'rb'))
     df["exon_patho_median_af"] = df.apply(lambda row: clinvar_patho_exon_af_stat_dict.get(row['Feature'], {}).get(row["EXON"], (np.nan,))[0], axis=1)
     df["exon_patho_max_af"] = df.apply(lambda row: clinvar_patho_exon_af_stat_dict.get(row['Feature'], {}).get(row["EXON"], (np.nan,np.nan,np.nan))[2], axis=1)
@@ -1562,8 +1582,7 @@ def PP5_BP6_criteria(df: pd.DataFrame, clinvar_patho, clinvar_benign) -> pd.Seri
 
 def BS1_criteria(df: pd.DataFrame, 
                  gene_to_am_score_map: dict,
-                 expected_incidence: float = 0.001, 
-                 clinvar_patho_af_stat: str = "",
+                 expected_incidence: float = 0.001,
                  gene_dosage_sensitivity: str = "",
                  pm2_criteria: np.ndarray = None,
                  threads: int = 10):
@@ -1590,14 +1609,8 @@ def BS1_criteria(df: pd.DataFrame,
     y_linked = y_linked & max_af_larger_incidence & np.logical_not(non_monogenic) & np.logical_not(non_mendelian) & np.logical_not(incomplete_penetrance)
     greater_than_disease_incidence = autosomal_dominant | autosomal_recessive | x_linked_recessive | x_linked_dominant | y_linked
     logger.info(f"There are {greater_than_disease_incidence.sum()} variants having their PAF greater than the expected incidence of the disease")
-    
-    logger.info(f"Loading the clinvar pathogenic AF stat from {clinvar_patho_af_stat}")
-    clinvar_patho_af_dict = pickle.load(gzip.open(clinvar_patho_af_stat)) if clinvar_patho_af_stat.endswith(".gz") else pickle.load(open(clinvar_patho_af_stat, 'rb'))
-    clinvar_patho_af_dict = {k: v for k, v in clinvar_patho_af_dict.items() if v is not None}
-    logger.info(f"The clinvar pathogenic AF stat type is {type(clinvar_patho_af_dict)}")
-    df.loc[:, "Gene"] = df["Gene"].fillna(np.nan)
-    gene_max_patho_af = df['Gene'].map(lambda gene: clinvar_patho_af_dict.get(gene, {"af": 0}).get('af', 0))
-    df["clinvar_patho_gene_max_af"] = gene_max_patho_af
+    gene_max_patho_af = df["clinvar_patho_gene_max_af"].fillna(0)
+
     _, greater_than_clinvar_patho_af = control_false_neg_rate(df['gnomAD_joint_AF_max'], df['gnomAD_joint_AN_max'], af_threshold=gene_max_patho_af, alpha=0.01)
     greater_than_clinvar_patho_af = np.where(greater_than_clinvar_patho_af.isna(), df['gnomAD_joint_AF'] > gene_max_patho_af, greater_than_clinvar_patho_af)
     _, greater_than_basic_af = control_false_neg_rate(df['gnomAD_joint_AF_max'], df['gnomAD_joint_AN_max'], af_threshold=0.0001, alpha=0.01)
@@ -1607,6 +1620,7 @@ def BS1_criteria(df: pd.DataFrame,
     bs1_array = np.zeros(len(df), dtype=int)
     bs1_array[bs1_criteria] = 3
     return bs1_array, recessive, dominant, non_monogenic, non_mendelian, haplo_insufficient, incomplete_penetrance
+
 
 
 def hpo_onset_modes(hpo_string):
@@ -2645,6 +2659,7 @@ def ACMG_criteria_assign(anno_table: str,
 
     # Apply PM2 criteria, absent from gnomAD or extremely rare in gnomAD
     pm2_criteria = PM2_criteria(anno_df, 
+                                clinvar_patho_af_stat,
                                 clinvar_patho_exon_af_stat,
                                 gnomAD_extreme_rare_threshold)
     logger.info(f"PM2 criteria applied, {(pm2_criteria > 0).sum()} variants are having the PM2 criteria")
@@ -2655,7 +2670,6 @@ def ACMG_criteria_assign(anno_table: str,
                                                                                                                               gene_to_am_score_map, 
                                                                                                                               threads = threads, 
                                                                                                                               expected_incidence = expected_incidence, 
-                                                                                                                              clinvar_patho_af_stat = clinvar_patho_af_stat, 
                                                                                                                               gene_dosage_sensitivity = gene_dosage_sensitivity,
                                                                                                                               pm2_criteria = pm2_criteria)
     logger.info(f"BS1 criteria applied, {(bs1_criteria > 0).sum()} variants are having the BS1 criteria")

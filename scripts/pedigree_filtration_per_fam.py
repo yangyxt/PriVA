@@ -223,6 +223,8 @@ def pedigree_filter(vcf_path, ped_path, target_fam, output):
     fam_ped.loc[:, "MaternalID"] = fam_ped["MaternalID"].replace(na_values, np.nan)
 
     logger.info(f"The pedigree table looks like: \n{fam_ped.to_string(index=False)}")
+    logger.info(f"The proband is {proband} and the proband sex is {proband_sex}")
+    logger.info(f"The patients are {patients}")
     # Extract parent IDs
     father = fam_ped["PaternalID"].dropna().drop_duplicates().tolist()[0] if len(fam_ped["PaternalID"].dropna().drop_duplicates().tolist()) > 0 else None
     mother = fam_ped["MaternalID"].dropna().drop_duplicates().tolist()[0] if len(fam_ped["MaternalID"].dropna().drop_duplicates().tolist()) > 0 else None
@@ -237,7 +239,7 @@ def pedigree_filter(vcf_path, ped_path, target_fam, output):
                 keep_variant = True
                 if not (1 in record.samples[proband]['GT']):
                     keep_variant = False
-                    logger.warning(f"Proband {proband} is not a carrier of the variant {record}")
+                    logger.debug(f"Proband {proband} is not a carrier of the variant {record}")
                     continue
 
                 # Check controls
@@ -245,7 +247,7 @@ def pedigree_filter(vcf_path, ped_path, target_fam, output):
                     if sample in record.samples:
                         genotype = record.samples[sample]['GT']
                         if is_homozygous_or_hemizygous(genotype):
-                            logger.info(f"Control sample {sample} is homozygous or hemizygous for the variant {record}")
+                            logger.debug(f"Control sample {sample} is homozygous or hemizygous for the variant {record}")
                             keep_variant = False
                             break
                 
@@ -260,7 +262,7 @@ def pedigree_filter(vcf_path, ped_path, target_fam, output):
                                 break
                     
                     if not patient_carrier:
-                        logger.info(f"No patient ({patients}) carries the variant {record}")
+                        logger.debug(f"No patient ({patients}) carries the variant {record}")
                         keep_variant = False
                 
                 # Write variant to output if it passed filters

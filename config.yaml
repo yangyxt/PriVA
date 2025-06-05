@@ -112,6 +112,7 @@ interpro_mapping_pickle: "/paedyl01/disk1/yangyxt/PriVA/data/InterPro/Interpro_e
 
 # ClinGen paths
 clingen_map: /paedyl01/disk1/yangyxt/PriVA/data/clingen/clingen_map.hg19.pkl.gz
+gene_dosage_sensitivity: /paedyl01/disk1/yangyxt/PriVA/data/clingen/gene_dosage_sensitivity.hg19.tsv
 
 # Below we specify the path to the VCF file containing the variants from alternate disease patients, make sure it is normalized and biallelic
 # Make sure that the VCF file is in an reference genome that is consistent with the processing VCF file

@@ -6,6 +6,7 @@ import argparse as ap
 import logging
 import sys
 import traceback
+import gc
 from typing import List, Dict, Any
 from collections import deque
 
@@ -297,32 +298,83 @@ def main_combine_annotations(input_vcf: str,
                             hpo_tab: str, 
                             threads=4,
                             output_tab = None):
+    # Convert VCF to dataframe
     converted_tab = convert_vcf_to_tab(input_vcf, threads)
-    cadd_tab = pd.read_table(cadd_tab, low_memory=False)
+    logger.info(f"Initial converted table memory usage: {converted_tab.memory_usage(deep=True).sum() / 1024**2:.1f} MB")
+    
+    # Read CADD data with memory optimization
+    logger.info("Loading CADD data...")
+    cadd_df = pd.read_table(cadd_tab, low_memory=False)
+    
+    # Prepare CADD data more efficiently
+    cadd_df["chrom"] = "chr" + cadd_df["#Chrom"].astype(str)
+    cadd_df["pos"] = cadd_df["Pos"].astype(int)
+    cadd_df["ref"] = cadd_df["Ref"].astype(str)
+    cadd_df["alt"] = cadd_df["Alt"].astype(str)
+    cadd_df["CADD_phred"] = cadd_df["PHRED"].astype(float)
+    cadd_df["Feature"] = cadd_df["FeatureID"]
+    
+    # Create subsets to reduce memory during merges
+    cadd_subset = cadd_df[["chrom", "pos", "ref", "alt", "Feature", "CADD_phred"]].copy()
+    logger.info(f"CADD subset memory usage: {cadd_subset.memory_usage(deep=True).sum() / 1024**2:.1f} MB")
+    
+    # First merge with CADD
+    logger.info("Merging with CADD transcript data...")
+    merged_tab = pd.merge(converted_tab, cadd_subset, on=["chrom", "pos", "ref", "alt", "Feature"], how="left")
+    
+    # Clean up intermediate data
+    del cadd_subset
+    gc.collect()
+    
+    # Prepare regulatory CADD data
+    cadd_reg_subset = cadd_df.loc[cadd_df["Feature"].str.contains("ENSR", na=False), 
+                                  ["chrom", "pos", "ref", "alt", "CADD_phred"]].copy()
+    cadd_reg_subset.rename(columns={"CADD_phred": "CADD_reg_phred"}, inplace=True)
+    
+    # Second merge with regulatory CADD
+    logger.info("Merging with CADD regulatory data...")
+    merged_tab = pd.merge(merged_tab, cadd_reg_subset, on=["chrom", "pos", "ref", "alt"], how="left")
+    
+    # Clean up CADD data
+    del cadd_df, cadd_reg_subset
+    gc.collect()
+    logger.info(f"After CADD merge memory usage: {merged_tab.memory_usage(deep=True).sum() / 1024**2:.1f} MB")
 
-    cadd_tab["chrom"] = "chr" + cadd_tab["#Chrom"].astype(str)
-    cadd_tab["pos"] = cadd_tab["Pos"].astype(int)
-    cadd_tab["ref"] = cadd_tab["Ref"].astype(str)
-    cadd_tab["alt"] = cadd_tab["Alt"].astype(str)
-    cadd_tab["CADD_phred"] = cadd_tab["PHRED"].astype(float)
-    cadd_tab["Feature"] = cadd_tab["FeatureID"]
-
-    merged_tab = pd.merge(converted_tab, cadd_tab[["chrom", "pos", "ref", "alt", "Feature", "CADD_phred"]], on=["chrom", "pos", "ref", "alt", "Feature"], how="left")
-    cadd_tab["CADD_reg_phred"] = cadd_tab["CADD_phred"]
-    merged_tab = pd.merge(merged_tab, cadd_tab.loc[cadd_tab["Feature"].str.contains("ENSR").fillna(False), ["chrom", "pos", "ref", "alt", "CADD_reg_phred"]], on=["chrom", "pos", "ref", "alt"], how="left")
-
-    # Read hpo tab file, which is a tsv.gz file
-    hpo_tab = pd.read_table(hpo_tab, low_memory=False)
-    hpo_tab["SYMBOL"] = hpo_tab["gene_symbol"].astype(str)
-    hpo_tab["HPO_IDs"] = hpo_tab["hpo_id"].astype(str)
-    hpo_tab["HPO_terms"] = hpo_tab["hpo_name"].astype(str)
-    hpo_tab["HPO_sources"] = hpo_tab["disease_id"].astype(str)
-    hpo_tab["HPO_gene_inheritance"] = hpo_tab["inheritance_modes"].astype(str)
-
-    merged_tab = pd.merge(merged_tab, hpo_tab[["SYMBOL", "HPO_IDs", "HPO_terms", "HPO_sources", "HPO_gene_inheritance"]], on="SYMBOL", how="left")
+    # Read HPO data
+    logger.info("Loading HPO data...")
+    hpo_df = pd.read_table(hpo_tab, low_memory=False)
+    
+    # Prepare HPO data efficiently
+    hpo_subset = hpo_df[["gene_symbol", "hpo_id", "hpo_name", "disease_id", "inheritance_modes"]].copy()
+    hpo_subset.rename(columns={
+        "gene_symbol": "SYMBOL",
+        "hpo_id": "HPO_IDs", 
+        "hpo_name": "HPO_terms",
+        "disease_id": "HPO_sources",
+        "inheritance_modes": "HPO_gene_inheritance"
+    }, inplace=True)
+    
+    # Convert to string type to save memory
+    for col in ["SYMBOL", "HPO_IDs", "HPO_terms", "HPO_sources", "HPO_gene_inheritance"]:
+        hpo_subset[col] = hpo_subset[col].astype(str)
+    
+    logger.info(f"HPO subset memory usage: {hpo_subset.memory_usage(deep=True).sum() / 1024**2:.1f} MB")
+    
+    # Final merge with HPO
+    logger.info("Merging with HPO data...")
+    merged_tab = pd.merge(merged_tab, hpo_subset, on="SYMBOL", how="left")
+    
+    # Clean up HPO data
+    del hpo_df, hpo_subset
+    gc.collect()
+    
+    logger.info(f"Final table memory usage: {merged_tab.memory_usage(deep=True).sum() / 1024**2:.1f} MB")
+    logger.info(f"Final table shape: {merged_tab.shape}")
 
     if output_tab:
+        logger.info(f"Writing output to {output_tab}...")
         merged_tab.to_csv(output_tab, sep="\t", index=False)
+    
     return merged_tab
 
 

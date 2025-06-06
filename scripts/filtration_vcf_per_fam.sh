@@ -202,6 +202,122 @@ function main_filtration () {
         -t ${threads} || \
         { log "Failed to filter the variants based on the allele frequency"; return 1; }
     fi
+    
+    # Step 2: Filter CADD table based on filtered VCF to reduce memory usage in prioritization
+    # Generate family-specific CADD file that follows same naming as VCF
+    if [[ -f ${filtered_vcf} ]]; then
+        # Derive CADD file names based on VCF naming pattern
+        local base_name=$(basename ${filtered_vcf} .filtered.vcf.gz)  # e.g., INPUT_BASE.anno.family1
+        local family_specific_cadd=$(dirname ${filtered_vcf})/"${base_name}.filtered.cadd.tsv"
+        
+        # Get the original CADD file from config for filtering source
+        local original_cadd=$(read_yaml ${config_file} "cadd_output_file")
+        
+        if [[ -f ${original_cadd} ]]; then
+            log "Step 2: Filtering CADD table based on filtered variants to optimize memory usage"
+            log "Creating family-specific CADD file: ${family_specific_cadd}"
+            
+            filter_cadd_based_on_vcf \
+            -i ${filtered_vcf} \
+            -c ${original_cadd} \
+            -o ${family_specific_cadd} \
+            -t ${threads} || \
+            { log "Failed to filter CADD table based on VCF variants"; return 1; }
+            
+            log "CADD filtering complete. Family-specific CADD file: ${family_specific_cadd}"
+        else
+            log "Skipping CADD filtering: Original CADD file (${original_cadd}) not found"
+        fi
+    else
+        log "Skipping CADD filtering: Filtered VCF (${filtered_vcf}) not found"
+    fi
+}
+
+
+function filter_cadd_based_on_vcf () {
+    local OPTIND i c o t
+    while getopts i:c:o::t:: args
+    do
+        case ${args} in
+            i) local input_vcf=$OPTARG ;;
+            c) local cadd_table=$OPTARG ;;
+            o) local output_cadd=$OPTARG ;;
+            t) local threads=$OPTARG ;;
+            *) echo "No argument passed. At least pass VCF input and CADD table arguments" ;;
+        esac
+    done
+
+    [[ -z ${threads} ]] && threads=1
+    [[ -z ${output_cadd} ]] && output_cadd=${cadd_table/.tsv/.filtered.tsv}
+
+    # Check if output is already up to date
+    [[ -f ${output_cadd} ]] && \
+    [[ ${output_cadd} -nt ${input_vcf} ]] && \
+    [[ ${output_cadd} -nt ${cadd_table} ]] && \
+    log "The filtered CADD table ${output_cadd} is up to date, skip filtering" && \
+    return 0
+
+    log "Filtering CADD table ${cadd_table} based on variants in ${input_vcf}"
+    
+    # Create temporary files
+    local tmp_dir=$(mktemp -d)
+    local vcf_variants="${tmp_dir}/vcf_variants.txt"
+    local filtered_cadd="${tmp_dir}/filtered_cadd.tsv"
+    
+    # Extract variant positions from VCF (remove chr prefix to match CADD format)
+    log "Extracting variant positions from VCF..."
+    bcftools query -f '%CHROM\t%POS\t%REF\t%ALT\n' ${input_vcf} | \
+    sed 's/^chr//' > ${vcf_variants}
+    
+    local variant_count=$(wc -l < ${vcf_variants})
+    log "Found ${variant_count} variants in VCF file"
+    
+    # Get header from CADD table
+    head -n 1 ${cadd_table} > ${filtered_cadd}
+    
+    # Filter CADD table using mawk for efficiency
+    log "Filtering CADD table (this may take a few minutes)..."
+    
+    # Create an associative array lookup in mawk
+    mawk -v vcf_file="${vcf_variants}" '
+    BEGIN {
+        # Load VCF variants into associative array for fast lookup
+        while ((getline line < vcf_file) > 0) {
+            split(line, fields, "\t")
+            chrom = fields[1]
+            pos = fields[2] 
+            ref = fields[3]
+            alt = fields[4]
+            key = chrom "\t" pos "\t" ref "\t" alt
+            vcf_variants[key] = 1
+        }
+        close(vcf_file)
+        print "Loaded", length(vcf_variants), "variants from VCF" > "/dev/stderr"
+    }
+    NR > 1 {  # Skip header (already written)
+        # Create key from CADD table row
+        key = $1 "\t" $2 "\t" $3 "\t" $4
+        if (key in vcf_variants) {
+            print $0
+        }
+    }' ${cadd_table} >> ${filtered_cadd}
+    
+    # Move filtered result to final location
+    mv ${filtered_cadd} ${output_cadd}
+    
+    # Clean up temporary directory
+    rm -rf ${tmp_dir}
+    
+    # Report results
+    local original_lines=$(wc -l < ${cadd_table})
+    local filtered_lines=$(wc -l < ${output_cadd})
+    local reduction_percent=$(echo "scale=1; (${original_lines} - ${filtered_lines}) * 100 / ${original_lines}" | bc -l)
+    
+    log "CADD table filtering complete:"
+    log "  Original lines: ${original_lines}"
+    log "  Filtered lines: ${filtered_lines}" 
+    log "  Reduction: ${reduction_percent}%"
+    log "  Output: ${output_cadd}"
 }
 
 

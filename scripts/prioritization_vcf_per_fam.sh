@@ -270,8 +270,22 @@ function main_prioritization () {
 
     # Preprocess step, convert the annotated VCF to a Table with transcript specific annotations as rows
     if [[ -z ${cadd_tsv} ]]; then
-        cadd_tsv=$(read_yaml ${config_file} "cadd_output_file")
+        # Try to find family-specific filtered CADD file first
+        local base_name=$(basename ${input_vcf} .vcf.gz)  # e.g., INPUT_BASE.anno.family1.filtered
+        local family_specific_cadd="${base_name}.cadd.tsv"
+        
+        if [[ -f ${family_specific_cadd} ]]; then
+            log "Using family-specific filtered CADD file: ${family_specific_cadd}"
+            cadd_tsv=${family_specific_cadd}
+        else
+            # Fall back to original CADD file from config
+            cadd_tsv=$(read_yaml ${config_file} "cadd_output_file")
+            log "Family-specific CADD not found, using original CADD file: ${cadd_tsv}"
+        fi
+    else
+        log "Using provided CADD file: ${cadd_tsv}"
     fi
+	
     prepare_combined_tab \
     ${input_vcf} \
     ${cadd_tsv} \

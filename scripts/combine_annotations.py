@@ -302,17 +302,27 @@ def main_combine_annotations(input_vcf: str,
     converted_tab = convert_vcf_to_tab(input_vcf, threads)
     logger.info(f"Initial converted table memory usage: {converted_tab.memory_usage(deep=True).sum() / 1024**2:.1f} MB")
     
-    # Read CADD data with memory optimization
+    # Read CADD data with memory optimization - only load required columns
     logger.info("Loading CADD data...")
-    cadd_df = pd.read_table(cadd_tab, low_memory=False)
+    cadd_required_columns = ["#Chrom", "Pos", "Ref", "Alt", "PHRED", "FeatureID"]
+    cadd_dtypes = {
+        "#Chrom": "category",  # Chromosomes are truly categorical (chr1, chr2, etc.)
+        "Pos": "int32",        # Positions don't need int64
+        "Ref": "string",       # Ref bases - use string, not category (variable length)
+        "Alt": "string",       # Alt bases - use string, not category (variable length)
+        "PHRED": "float32",    # CADD scores don't need float64 precision
+        "FeatureID": "string"  # Feature IDs - use string, not category (variable length)
+    }
+    cadd_df = pd.read_table(cadd_tab, low_memory=False, usecols=cadd_required_columns, dtype=cadd_dtypes)
+    logger.info(f"CADD data loaded with {cadd_df.shape[0]} rows and {cadd_df.shape[1]} columns (only required columns)")
     
-    # Prepare CADD data more efficiently
+    # Prepare CADD data more efficiently - data types already optimized during reading
     cadd_df["chrom"] = "chr" + cadd_df["#Chrom"].astype(str)
-    cadd_df["pos"] = cadd_df["Pos"].astype(int)
-    cadd_df["ref"] = cadd_df["Ref"].astype(str)
-    cadd_df["alt"] = cadd_df["Alt"].astype(str)
-    cadd_df["CADD_phred"] = cadd_df["PHRED"].astype(float)
-    cadd_df["Feature"] = cadd_df["FeatureID"]
+    cadd_df["pos"] = cadd_df["Pos"]  # Already int32
+    cadd_df["ref"] = cadd_df["Ref"]  # Already string dtype, no conversion needed
+    cadd_df["alt"] = cadd_df["Alt"]  # Already string dtype, no conversion needed
+    cadd_df["CADD_phred"] = cadd_df["PHRED"]  # Already float32
+    cadd_df["Feature"] = cadd_df["FeatureID"]  # Already string dtype
     
     # Create subsets to reduce memory during merges
     cadd_subset = cadd_df[["chrom", "pos", "ref", "alt", "Feature", "CADD_phred"]].copy()
@@ -340,12 +350,21 @@ def main_combine_annotations(input_vcf: str,
     gc.collect()
     logger.info(f"After CADD merge memory usage: {merged_tab.memory_usage(deep=True).sum() / 1024**2:.1f} MB")
 
-    # Read HPO data
+    # Read HPO data - only load required columns
     logger.info("Loading HPO data...")
-    hpo_df = pd.read_table(hpo_tab, low_memory=False)
+    hpo_required_columns = ["gene_symbol", "hpo_id", "hpo_name", "disease_id", "inheritance_modes"]
+    hpo_dtypes = {
+        "gene_symbol": "string",        # Gene symbols - use string (some are long/variable)
+        "hpo_id": "string",            # HPO IDs as string
+        "hpo_name": "string",          # HPO names as string  
+        "disease_id": "string",        # Disease IDs as string
+        "inheritance_modes": "string"   # Inheritance modes as string (safer than category)
+    }
+    hpo_df = pd.read_table(hpo_tab, low_memory=False, usecols=hpo_required_columns, dtype=hpo_dtypes)
+    logger.info(f"HPO data loaded with {hpo_df.shape[0]} rows and {hpo_df.shape[1]} columns (only required columns)")
     
-    # Prepare HPO data efficiently
-    hpo_subset = hpo_df[["gene_symbol", "hpo_id", "hpo_name", "disease_id", "inheritance_modes"]].copy()
+    # Prepare HPO data efficiently - data types already optimized during reading
+    hpo_subset = hpo_df.copy()  # No need to select columns since we only loaded what we need
     hpo_subset.rename(columns={
         "gene_symbol": "SYMBOL",
         "hpo_id": "HPO_IDs", 
@@ -354,9 +373,7 @@ def main_combine_annotations(input_vcf: str,
         "inheritance_modes": "HPO_gene_inheritance"
     }, inplace=True)
     
-    # Convert to string type to save memory
-    for col in ["SYMBOL", "HPO_IDs", "HPO_terms", "HPO_sources", "HPO_gene_inheritance"]:
-        hpo_subset[col] = hpo_subset[col].astype(str)
+    # No need for type conversions - already optimized string dtypes during reading
     
     logger.info(f"HPO subset memory usage: {hpo_subset.memory_usage(deep=True).sum() / 1024**2:.1f} MB")
     

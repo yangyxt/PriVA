@@ -103,15 +103,17 @@ rule annotate_variants:
 rule filter_variants_per_family:
     input:
         vcf=rules.annotate_variants.output.vcf,
+        cadd_tsv=rules.annotate_variants.output.cadd_tsv,  # Need original CADD for filtering
         ped=PED_FILE # Ped file is needed here to know which families exist
     output:
-        vcf=os.path.join(OUTPUT_DIR, f"{INPUT_BASE}.anno.{{family}}.filtered.vcf.gz")
+        vcf=os.path.join(OUTPUT_DIR, INPUT_BASE + ".anno.{family}.filtered.vcf.gz"),
+        cadd_tsv=os.path.join(OUTPUT_DIR, INPUT_BASE + ".anno.{family}.filtered.cadd.tsv")  # Family-specific CADD
     params:
         script=os.path.join(SCRIPT_DIR, "filtration_vcf_per_fam.sh"),
         config=workflow.configfiles[0]
     threads: THREADS_PER_FAM # Use per-family threads
     log:
-        os.path.join(OUTPUT_DIR, "logs", f"{INPUT_BASE}.{{family}}.filtration.log")
+        os.path.join(OUTPUT_DIR, "logs", INPUT_BASE + ".{family}.filtration.log")
     shell:
         """
         echo "[$(date)] Starting filtration for family {wildcards.family}. Detailed log: {log}" >&2
@@ -145,7 +147,7 @@ rule filter_variants_no_family:
 rule prioritize_variants_per_family:
     input:
         vcf=rules.filter_variants_per_family.output.vcf,
-        cadd_tsv=rules.annotate_variants.output.cadd_tsv,
+        cadd_tsv=rules.filter_variants_per_family.output.cadd_tsv,  # Use family-specific CADD
         ped=PED_FILE # Ped file might be needed by script for context
     output:
         tsv=os.path.join(OUTPUT_DIR, f"{INPUT_BASE}.anno.{{family}}.filtered.tsv"),

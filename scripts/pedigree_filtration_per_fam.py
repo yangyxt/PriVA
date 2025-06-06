@@ -120,7 +120,7 @@ class VariantSource:
         mother_gt: Optional[Tuple[int, ...]],
     ) -> str:
         """Determine source for autosomal chromosomes."""
-        logger.info(f"For variant {self.record.chrom}:{self.record.pos}:{self.record.id}:{self.record.ref}:{self.record.alts[0]}, proband {self.proband} GT: {proband_gt}, has_variant: {self._has_variant(proband_gt)}, father {self.father} GT: {father_gt}, has_variant: {self._has_variant(father_gt)}, mother {self.mother} GT: {mother_gt}, has_variant: {self._has_variant(mother_gt)}")
+        logger.debug(f"For variant {self.record.chrom}:{self.record.pos}:{self.record.id}:{self.record.ref}:{self.record.alts[0]}, proband {self.proband} GT: {proband_gt}, has_variant: {self._has_variant(proband_gt)}, father {self.father} GT: {father_gt}, has_variant: {self._has_variant(father_gt)}, mother {self.mother} GT: {mother_gt}, has_variant: {self._has_variant(mother_gt)}")
 
         if not self._genotype_exists(father_gt) or not self._genotype_exists(mother_gt):
             # Cannot determine exact source without both parents' genotypes

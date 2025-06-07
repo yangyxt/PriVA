@@ -553,7 +553,7 @@ def check_splice_pathogenic(row: dict,
     max_delta_score_index = np.argmax(delta_scores)
     max_delta_score = delta_scores[max_delta_score_index]
     target_spliceai_ds = ['SpliceAI_pred_DS_AG', 'SpliceAI_pred_DS_AL', 'SpliceAI_pred_DS_DG', 'SpliceAI_pred_DS_DL'][max_delta_score_index]
-    logger.info(f"The biggest DELTA score from SpliceAI is {max_delta_score}, which is from {target_spliceai_ds}")
+    logger.debug(f"The biggest DELTA score from SpliceAI is {max_delta_score}, which is from {target_spliceai_ds}")
 
     for patho in patho_records:
         patho_spliceai_ds = float(patho["splice_ai"].get(target_spliceai_ds, np.nan))
@@ -1454,7 +1454,7 @@ def analyze_bp1_pp2(gene_stat_dict: Dict):
         'pp2_odds_ratio': pp2_odds_ratio
     }
 
-    logger.info(f"The result_dict looks like {result_dict}")
+    logger.debug(f"The result_dict looks like {result_dict}")
 
     return (gene, (result_dict['pp2_granted'], result_dict['bp1_granted']))
 
@@ -1756,9 +1756,9 @@ def parse_hpo_inheritance(row_dict: dict) -> str:
 
 def identify_inheritance_mode_per_row(row_dict: dict, gene_mean_am_score: float, clingen_curate_score: int = None) -> Tuple[bool, bool]:
     # We need to use three fields of the table to determine the inheritance mode:
-    # 1. Chromosome
+    # 1. Gene
     # 2. LOEUF
-    # 3. AM score
+    # 3. HPO_IDs
     # 4. HPO_gene_inheritance (overrides the above two fields), HPO observed dominant inheritance can derive from GOF variants
     # 5. ClinGen curated dosage sensitivity, 3 means haploinsufficient, 30 or 40 means haplosufficient
 
@@ -1770,7 +1770,7 @@ def identify_inheritance_mode_per_row(row_dict: dict, gene_mean_am_score: float,
 
     hpo_inheritance = parse_hpo_inheritance(row_dict)
     if isinstance(hpo_inheritance, bool):
-        logger.info(f"No HPO inheritance information for {row_dict['Gene']}, using LOEUF: {row_dict['LOEUF']} and AM score: {gene_mean_am_score} to determine inheritance mode. The haploinsufficiency is {haplo_insufficient} and haplosufficiency is {haplo_sufficient}")
+        logger.debug(f"No HPO inheritance information for {row_dict['Gene']}, using LOEUF: {row_dict['LOEUF']} and AM score: {gene_mean_am_score} to determine inheritance mode. The haploinsufficiency is {haplo_insufficient} and haplosufficiency is {haplo_sufficient}")
         return haplo_sufficient, haplo_insufficient, False, False, haplo_insufficient, hpo_inheritance
 
     if clingen_curate_score:
@@ -1806,7 +1806,8 @@ def identify_inheritance_mode(df: pd.DataFrame,
     """
 
     # Convert DataFrame rows to dictionaries for picklable input
-    row_dicts = df.to_dict('records')
+    shrink_df = df.loc[:, ["Feature", "Gene", "LOEUF", "HPO_IDs", "HPO_gene_inheritance"]].drop_duplicates()
+    row_dicts = shrink_df.to_dict('records')
 
     clingen_dosage_df = pd.read_table(clingen_dosage_sensitivity, low_memory=False).dropna(subset=["#Gene Symbol", "Haploinsufficiency Score"])
     clingen_dosage_map = dict(zip(clingen_dosage_df['#Gene Symbol'], clingen_dosage_df['Haploinsufficiency Score'].astype(int)))
@@ -1821,7 +1822,21 @@ def identify_inheritance_mode(df: pd.DataFrame,
     
     # Unzip results into separate arrays
     recessive_array, dominant_array, non_monogenic_array, non_mendelian_array, haplo_insufficient_array, incomplete_penetrance_array = zip(*results)
-    return np.array(recessive_array), np.array(dominant_array), np.array(non_monogenic_array), np.array(non_mendelian_array), np.array(haplo_insufficient_array), np.array(incomplete_penetrance_array)
+    shrink_df['recessive'] = np.array(recessive_array)
+    shrink_df['dominant'] = np.array(dominant_array)
+    shrink_df['non_monogenic'] = np.array(non_monogenic_array)
+    shrink_df['non_mendelian'] = np.array(non_mendelian_array)
+    shrink_df['haplo_insufficient'] = np.array(haplo_insufficient_array)
+    shrink_df['incomplete_penetrance'] = np.array(incomplete_penetrance_array)
+
+    # Map the arrays back to the original DataFrame, we need to use merge, anchor on Feature and Gene
+    merged_df = df.merge(shrink_df, on=["Feature", "Gene"], how="left")
+    return merged_df.loc[:, "recessive"].to_numpy(), \
+           merged_df.loc[:, "dominant"].to_numpy(), \
+           merged_df.loc[:, "non_monogenic"].to_numpy(), \
+           merged_df.loc[:, "non_mendelian"].to_numpy(), \
+           merged_df.loc[:, "haplo_insufficient"].to_numpy(), \
+           merged_df.loc[:, "incomplete_penetrance"].to_numpy()
 
 
 

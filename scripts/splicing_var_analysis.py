@@ -104,7 +104,7 @@ def splicing_altering_per_row(row,
     # Extract HGVSc if available
     hgvsc = None if na_value(row.get('HGVSc', None)) else row.get('HGVSc', None)
     
-    logger.info(f"The input transcript_id is {transcript_id}, splicevault_events is {splicevault_events}, intron_pos is {intron_pos}, exon_pos is {exon_pos}, cds_pos is {cds_pos}, hgvsc is {hgvsc}")
+    logger.debug(f"The input transcript_id is {transcript_id}, splicevault_events is {splicevault_events}, intron_pos is {intron_pos}, exon_pos is {exon_pos}, cds_pos is {cds_pos}, hgvsc is {hgvsc}")
 
     # First get SpliceVault interpretation
     splicevault_lof, splicevault_len_changing, splicevault_frame_shift, splicevault_span_intol_domain, splicevault_affected_exons, splicevault_ten_percent_protein = SpliceVault_interpretation(splicevault_events, 
@@ -430,7 +430,7 @@ def SpliceAI_interpretation(DS_AG,
     canonical_loss_offset = 0
     canonical_gain_offset = 0
     logger.debug(f"For {transcript_id}, the SpliceAI predictions are DS_AG: {DS_AG}, DS_AL: {DS_AL}, DS_DG: {DS_DG}, DS_DL: {DS_DL}, DP_AG: {DP_AG}, DP_AL: {DP_AL}, DP_DG: {DP_DG}, DP_DL: {DP_DL}")
-    logger.info(f"The other input arguments are transcript_id: {transcript_id}, intron_pos: {intron_pos}, exon_pos: {exon_pos}, cutoff: {cutoff}")
+    logger.debug(f"The other input arguments are transcript_id: {transcript_id}, intron_pos: {intron_pos}, exon_pos: {exon_pos}, cutoff: {cutoff}")
 
     # First look at acceptor-gain
     if DS_AG > cutoff and (not "UTR" in consequence):

@@ -23,6 +23,9 @@ function prepare_combined_tab () {
 
     local output_tab=${input_vcf/.vcf*/.tsv}
 
+	check_vcf_validity ${input_vcf} || \
+	{ log "The input VCF file ${input_vcf} is not valid, please check the VCF file"; return 1; }
+
     [[ -f ${output_tab} ]] && \
     [[ ${output_tab} -nt ${input_vcf} ]] && \
     [[ ${output_tab} -nt ${SCRIPT_DIR}/combine_annotations.py ]] && \

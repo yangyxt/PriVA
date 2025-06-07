@@ -34,7 +34,7 @@ class SubprocessLogCollector:
 
 def setup_worker_logger(worker_id: str) -> logging.Logger:
     logger = logging.getLogger(f'worker_{worker_id}')
-    logger.setLevel(logging.DEBUG)
+    logger.setLevel(logging.INFO)
     
     # Create a collector for this worker
     collector = SubprocessLogCollector(worker_id)

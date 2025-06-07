@@ -5,6 +5,14 @@ from typing import Callable, Optional, List, Dict, Any, NamedTuple, Tuple
 import multiprocessing
 import os # For os.cpu_count()
 
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
+console_handler=logging.StreamHandler()
+console_handler.setLevel(logging.INFO)
+formatter = logging.Formatter("%(levelname)s:%(asctime)s:%(funcName)s:%(lineno)s:%(message)s")
+console_handler.setFormatter(formatter)
+logger.addHandler(console_handler)
+
 # --- START: determine_cis_trans and its helpers ---
 # This section is identical to the previous response.
 # It includes ParsedGenotype, parse_genotype_string,
@@ -253,7 +261,7 @@ def batch_annotate_cis_trans_from_table(
     alt_col: str = "Alternate_Allele",
     gene_col: str = "Gene_Symbol",
     # --- Column name parameters for pedigree_df ---
-    ped_sample_id_col: str = "SampleID", # Changed from IndividualID for consistency
+    ped_sample_id_col: str = "IndividualID",
     ped_paternal_id_col: str = "PaternalID",
     ped_maternal_id_col: str = "MaternalID",
     ped_sex_col: str = "Sex",
@@ -310,17 +318,11 @@ def batch_annotate_cis_trans_from_table(
     
     patient_ped_rows_df = pedigree_df[pedigree_df[ped_phenotype_col].astype(int) == ped_patient_value]
     if patient_ped_rows_df.empty:
-        print("Warning: No individuals identified as 'patients'. Returning zero-filled count arrays.")
+        logger.warning("Warning: No individuals identified as 'patients'. Returning zero-filled count arrays.")
         return patients_in_cis_count_arr, patients_in_trans_count_arr
 
-    actual_num_processes = os.cpu_count()
-    if num_processes is not None : # User specified
-        actual_num_processes = num_processes
-    elif actual_num_processes > 1: # Default to all but one if multiple available
-         actual_num_processes = max(1, actual_num_processes -1)
-    else: # Only 1 CPU
-        actual_num_processes = 1
-    print(f"Using {actual_num_processes} processes for per-gene analysis per patient.")
+    actual_num_processes = 1 if num_processes is None else num_processes
+    logger.info(f"Using {actual_num_processes} processes for per-gene analysis per patient.")
 
 
     for _, patient_ped_row in patient_ped_rows_df.iterrows():
@@ -343,13 +345,15 @@ def batch_annotate_cis_trans_from_table(
         else: proband_sex = "unknown"
 
         if proband_sex == "unknown":
-            print(f"Warning: Patient {proband_id} has unknown sex. Skipping.")
+            logger.warning(f"Warning: Patient {proband_id} has unknown sex. Skipping.")
             continue
         if proband_id not in df_proc.columns:
-            print(f"Warning: GT column for patient {proband_id} not found. Skipping.")
+            logger.debug(f"Warning: GT column for patient {proband_id} not found. Skipping.")
             continue
         if father_id and father_id not in df_proc.columns: father_id = None
         if mother_id and mother_id not in df_proc.columns: mother_id = None
+
+        logger.info(f"Processing patient {proband_id} with sex {proband_sex} and father {father_id} and mother {mother_id}")
 
         proband_variants_by_gene = defaultdict(list)
         for _, g_var_row in unique_genomic_variants.iterrows():

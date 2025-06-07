@@ -361,10 +361,68 @@ function check_vcf_format {
         return 10
     fi
 
+	check_vcf_index ${input_vcf} || \
+	{ log "The input VCF file ${input_vcf} has some index issue detected by bcftools. Quit this function with error."$'\n'; return 10; }
+
     bcftools view ${input_vcf} | head -200 > /dev/null && \
     log "The input VCF file ${input_vcf} has no format issue detected by bcftools" && \
     return 0 || \
     { log "The input VCF file ${input_vcf} has some format issue detected by bcftools. Quit this function with error."$'\n'; return 10; }
+}
+
+
+function check_vcf_index {
+	local input_vcf=${1}
+	
+	# Determine file type and preferred index format
+	if [[ ${input_vcf} =~ \.vcf\.gz$ ]]; then
+		# For .vcf.gz files: prefer .tbi, but accept .csi if that's what exists
+		local tbi_file="${input_vcf}.tbi"
+		local csi_file="${input_vcf}.csi"
+		
+		# Priority logic: prefer .tbi over .csi
+		if [[ -f ${tbi_file} ]]; then
+			# .tbi exists - check if up to date
+			if [[ ${tbi_file} -nt ${input_vcf} ]]; then
+				# .tbi is current, remove any .csi file
+				silent_remove_tmps ${csi_file}
+				return 0
+			else
+				# .tbi is outdated, update it and remove .csi
+				bcftools index -t -f ${input_vcf} && silent_remove_tmps ${csi_file} || \
+				{ log "Failed to update .tbi index for ${input_vcf}"; return 1; }
+			fi
+		elif [[ -f ${csi_file} ]]; then
+			# Only .csi exists - update it if it is outdated
+			if [[ ${csi_file} -ot ${input_vcf} ]]; then
+				bcftools index -f ${input_vcf} || \
+				{ log "Failed to update .csi index ${input_vcf}"; return 1; }
+			fi
+		else
+			# No index exists - create .tbi
+			bcftools index -t -f ${input_vcf} || \
+			{ log "Failed to create .tbi index for ${input_vcf}"; return 1; }
+		fi
+		
+	elif [[ ${input_vcf} =~ \.vcf$ ]]; then
+		log "The input VCF file ${input_vcf} is plain text, so no index is needed."
+		return 0
+	elif [[ ${input_vcf} =~ \.bcf$ ]]; then
+		# For .bcf files: only .csi format is supported
+		local csi_file="${input_vcf}.csi"
+		
+		if [[ -f ${csi_file} ]] && [[ ${csi_file} -nt ${input_vcf} ]]; then
+			return 0  # Index is current
+		else
+			# Create or update .csi index (bcftools index defaults to .csi for .bcf)
+			bcftools index -f ${input_vcf} || \
+			{ log "Failed to index .bcf file ${input_vcf}"; return 1; }
+		fi
+		
+	else
+		log "Unsupported VCF file format: ${input_vcf}"
+		return 1
+	fi
 }
 
 

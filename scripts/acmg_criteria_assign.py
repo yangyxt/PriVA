@@ -1830,7 +1830,8 @@ def identify_inheritance_mode(df: pd.DataFrame,
     shrink_df['incomplete_penetrance'] = np.array(incomplete_penetrance_array)
 
     # Map the arrays back to the original DataFrame, we need to use merge, anchor on Feature and Gene
-    merged_df = df.merge(shrink_df, on=["Feature", "Gene"], how="left")
+    merged_df = df.merge(shrink_df, on=["Feature", "Gene", "SYMBOL", "LOEUF", "HPO_IDs", "HPO_gene_inheritance"], how="left")
+    assert merged_df.shape[0] == df.shape[0], f"The number of rows in the merged DataFrame {merged_df.shape[0]} is not equal to the number of rows in the original DataFrame {df.shape[0]}"
     return merged_df.loc[:, "recessive"].fillna(False).to_numpy(), \
            merged_df.loc[:, "dominant"].fillna(False).to_numpy(), \
            merged_df.loc[:, "non_monogenic"].fillna(False).to_numpy(), \

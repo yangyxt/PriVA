@@ -1806,7 +1806,7 @@ def identify_inheritance_mode(df: pd.DataFrame,
     """
 
     # Convert DataFrame rows to dictionaries for picklable input
-    shrink_df = df.loc[:, ["Feature", "Gene", "LOEUF", "HPO_IDs", "HPO_gene_inheritance"]].drop_duplicates()
+    shrink_df = df.loc[:, ["Feature", "Gene", "SYMBOL", "LOEUF", "HPO_IDs", "HPO_gene_inheritance"]].drop_duplicates()
     row_dicts = shrink_df.to_dict('records')
 
     clingen_dosage_df = pd.read_table(clingen_dosage_sensitivity, low_memory=False).dropna(subset=["#Gene Symbol", "Haploinsufficiency Score"])
@@ -1831,12 +1831,12 @@ def identify_inheritance_mode(df: pd.DataFrame,
 
     # Map the arrays back to the original DataFrame, we need to use merge, anchor on Feature and Gene
     merged_df = df.merge(shrink_df, on=["Feature", "Gene"], how="left")
-    return merged_df.loc[:, "recessive"].to_numpy(), \
-           merged_df.loc[:, "dominant"].to_numpy(), \
-           merged_df.loc[:, "non_monogenic"].to_numpy(), \
-           merged_df.loc[:, "non_mendelian"].to_numpy(), \
-           merged_df.loc[:, "haplo_insufficient"].to_numpy(), \
-           merged_df.loc[:, "incomplete_penetrance"].to_numpy()
+    return merged_df.loc[:, "recessive"].fillna(False).to_numpy(), \
+           merged_df.loc[:, "dominant"].fillna(False).to_numpy(), \
+           merged_df.loc[:, "non_monogenic"].fillna(False).to_numpy(), \
+           merged_df.loc[:, "non_mendelian"].fillna(False).to_numpy(), \
+           merged_df.loc[:, "haplo_insufficient"].fillna(False).to_numpy(), \
+           merged_df.loc[:, "incomplete_penetrance"].fillna(False).to_numpy()
 
 
 

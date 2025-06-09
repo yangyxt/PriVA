@@ -1,7 +1,6 @@
 #!/usr/bin/env python
 
 import re
-import pysam
 import pickle
 import logging
 import pandas as pd
@@ -15,6 +14,9 @@ from scipy.stats import binom
 import mmap
 import gc
 import gzip
+import subprocess
+import tempfile
+import os
 
 from stat_protein_domain_amscores import nested_defaultdict
 from protein_domain_mapping import DomainNormalizer
@@ -220,12 +222,12 @@ def downstream_exon_patho_af(row, clinvar_patho_exon_af_dict, logic="any", thres
 
 
 def span_functional_domains(row, 
-                            dm_instance=None, 
-                            interpro_entry_map_dict=None, 
-                            tranx_exon_domain_map=None, 
-                            clinvar_patho_exon_af_dict=None, 
+                                   dm_instance=None, 
+                                   interpro_entry_map_dict=None, 
+                                   tranx_exon_domain_map=None, 
+                                   clinvar_patho_exon_af_dict=None, 
                             intol_domains=[],
-                            exon_patho_af_threshold=0.01):
+                                   exon_patho_af_threshold=0.01):
     '''
     Identify whether a truncating variant is involving functional regions on a protein
     '''
@@ -253,7 +255,7 @@ def span_functional_domains(row,
         if isinstance(row["DOMAINS"], str):
             if intol_domains:
                 func_domain = any([ensg_id + ":" + domain in intol_domains for domain in row["DOMAINS"].split("&")])
-            else:
+        else:
                 func_domain = any([dm_instance.interpret_functionality(domain, interpro_entry_map_dict) == "Functional" for domain in row["DOMAINS"].split("&")])
         exon_frequent_patho = float(clinvar_patho_exon_af_dict.get(row['Feature'], {}).get(row['EXON'], (0, ))[0]) < exon_patho_af_threshold
         logger.debug(f"For variant {row['chrom']}:{row['pos']} with transcript {row['Feature']}, the exon is: {row['EXON']}, and the pathogenic AF is: {exon_frequent_patho}")
@@ -408,8 +410,8 @@ def PVS1_criteria(df: pd.DataFrame,
         homozygous = np.array([False] * len(df))
     
     lof_intol_metric = (df["LOEUF"].fillna(2) < 0.35) | (df["Gene_avg_AM_score"].fillna(0) > 0.7)
-    logger.info(f"For LOEUF < 0.35, {(df["LOEUF"].fillna(2) < 0.35).sum()} variants are located in a gene intolerant to LoF variants")
-    logger.info(f"For mean AM score > 0.7, {(df["Gene_avg_AM_score"].fillna(0) > 0.7).sum()} variants are located in a gene intolerant to LoF variants")
+    logger.info(f"For LOEUF < 0.35, {(df['LOEUF'].fillna(2) < 0.35).sum()} variants are located in a gene intolerant to LoF variants")
+    logger.info(f"For mean AM score > 0.7, {(df['Gene_avg_AM_score'].fillna(0) > 0.7).sum()} variants are located in a gene intolerant to LoF variants")
     lof_intolerant_het = (clinvar_pathogenic | lof_intol_metric) & heterozygous
     lof_intolerant_hom = clinvar_pathogenic & homozygous
     lof_intolerant = lof_intolerant_het | lof_intolerant_hom
@@ -420,11 +422,11 @@ def PVS1_criteria(df: pd.DataFrame,
     tranx_exon_domain_map = pickle.load(gzip.open(tranx_exon_domain_map_pkl)) if tranx_exon_domain_map_pkl.endswith(".gz") else pickle.load(open(tranx_exon_domain_map_pkl, 'rb'))
     dm_instance = DomainNormalizer()
     intolerant_domains, exon_rare_patho_afs = zip(*df.apply(span_functional_domains, axis=1, dm_instance=dm_instance, 
-                                                                                            interpro_entry_map_dict=interpro_entry_map_dict, 
-                                                                                            tranx_exon_domain_map=tranx_exon_domain_map, 
-                                                                                            clinvar_patho_exon_af_dict=clinvar_patho_exon_af_dict, 
+                                                                                                    interpro_entry_map_dict=interpro_entry_map_dict, 
+                                                                                                    tranx_exon_domain_map=tranx_exon_domain_map, 
+                                                                                                    clinvar_patho_exon_af_dict=clinvar_patho_exon_af_dict, 
                                                                                             intol_domains=intolerant_domains,
-                                                                                            exon_patho_af_threshold=0.01))
+                                                                                                    exon_patho_af_threshold=0.01))
     
     # Convert tuples to numpy arrays for boolean operations
     intolerant_domains = np.array(intolerant_domains)
@@ -554,7 +556,7 @@ def check_splice_pathogenic(row: dict,
     max_delta_score = delta_scores[max_delta_score_index]
     target_spliceai_ds = ['SpliceAI_pred_DS_AG', 'SpliceAI_pred_DS_AL', 'SpliceAI_pred_DS_DG', 'SpliceAI_pred_DS_DL'][max_delta_score_index]
     logger.debug(f"The biggest DELTA score from SpliceAI is {max_delta_score}, which is from {target_spliceai_ds}")
-
+    
     for patho in patho_records:
         patho_spliceai_ds = float(patho["splice_ai"].get(target_spliceai_ds, np.nan))
         if abs(patho_spliceai_ds) <= max_delta_score:
@@ -1174,7 +1176,7 @@ def locate_less_char_region(row: dict, am_intolerant_motifs: dict) -> Tuple[bool
            (combo in am_intolerant_motifs['min_score_regions']) or any(key_regex.match(x) for x in am_intolerant_motifs['min_score_regions'])
 
 
-
+        
 
 def PP1_criteria(df: pd.DataFrame,
                  recessive: np.ndarray,
@@ -1582,7 +1584,7 @@ def PP5_BP6_criteria(df: pd.DataFrame, clinvar_patho, clinvar_benign) -> pd.Seri
 
 def BS1_criteria(df: pd.DataFrame, 
                  gene_to_am_score_map: dict,
-                 expected_incidence: float = 0.001,
+                 expected_incidence: float = 0.001, 
                  gene_dosage_sensitivity: str = "",
                  pm2_criteria: np.ndarray = None,
                  threads: int = 10):
@@ -1754,7 +1756,7 @@ def parse_hpo_inheritance(row_dict: dict) -> str:
             }
 
 
-def identify_inheritance_mode_per_row(row_dict: dict, gene_mean_am_score: float, clingen_curate_score: int = None) -> Tuple[bool, bool]:
+def identify_inheritance_mode_per_row(row_dict: dict, gene_mean_am_score: float, clingen_curate_score: int = None) -> Tuple[bool, bool, bool, bool, bool, bool]:
     # We need to use three fields of the table to determine the inheritance mode:
     # 1. Gene
     # 2. LOEUF
@@ -2075,7 +2077,7 @@ def find_overlaps_bedtools_efficient(variants_df, regions_file, method = "any"):
     
     # Load regions (already in 0-based BED format)
     regions_bed = pybedtools.BedTool(regions_file)
-    
+        
     # Find overlaps - this keeps only the features from variants_bed that overlap
     if method == "any":
         # Find intersections of any size
@@ -2116,95 +2118,145 @@ def BP3_criteria(df: pd.DataFrame, repeat_region_file: str, interpro_entry_map_p
 
 def BP5_criteria(df: pd.DataFrame, 
                  alt_disease_vcf: str, 
-                 gene_to_am_score_map: dict, 
-                 clingen_dosage_sensitivity: str,
-                 threads: int = 10) -> np.ndarray:
+                 recessive: np.ndarray,
+                 dominant: np.ndarray,
+                 non_monogenic: np.ndarray,
+                 non_mendelian: np.ndarray,
+                 incomplete_penetrance: np.ndarray) -> np.ndarray:
     '''
     BP5: variant found in a sample with known alternative molecular basis for disease
-    Considers inheritance mode when determining presence in alternative disease samples
+    
+    Logic: If a variant is found in patients with alternative diseases, it suggests benignity
+    for the query disease, UNLESS the gene has non-monogenic inheritance or incomplete penetrance.
+    
+    For genes with dominant inheritance + monogenic + complete penetrance:
+    - Variants found in alt disease patients (het or hom) get BP5
+    
+    For genes with recessive inheritance + monogenic + complete penetrance:
+    - Only variants found as homozygous in alt disease patients get BP5
+    
+    Optimized version using pre-computed inheritance arrays and vectorized operations
     '''
-    # Convert DataFrame to dictionaries for parallel processing
-    row_dicts = df.to_dict('records')
-
-    clingen_dosage_df = pd.read_table(clingen_dosage_sensitivity, low_memory=False).dropna(subset=["#Gene Symbol", "Haploinsufficiency Score"])
-    clingen_dosage_map = dict(zip(clingen_dosage_df['#Gene Symbol'], clingen_dosage_df['Haploinsufficiency Score'].astype(int)))
     
-    # Prepare arguments for starmap
-    args = [(row_dict, alt_disease_vcf, gene_to_am_score_map.get(row_dict['Gene'], np.nan), clingen_dosage_map.get(row_dict['SYMBOL'], None)) for row_dict in row_dicts]
+    # Extract and process alt_disease_vcf using bcftools + pandas
+    alt_disease_summary = extract_and_summarize_alt_disease_variants(alt_disease_vcf)
+    if alt_disease_summary is None or len(alt_disease_summary) == 0:
+        logger.warning(f"No variants extracted from alt_disease_vcf: {alt_disease_vcf}")
+        return np.zeros(len(df), dtype=int)
     
-    # Process in parallel
-    with mp.Pool(threads) as pool:
-        results = pool.starmap(identify_presence_in_alt_disease_vcf, args)
+    # Merge with input DataFrame on variant coordinates
+    merged_df = df.merge(alt_disease_summary, 
+                        on=['chrom', 'pos', 'ref', 'alt'], 
+                        how='left', 
+                        suffixes=('', '_alt_disease'))
     
-    bp5_criteria = np.array(results)
+    assert merged_df.shape[0] == df.shape[0], f"The number of variants in the merged dataframe {merged_df.shape[0]} should be the same as the number of variants in the input dataframe {df.shape[0]}"
+    
+    # Fill NaN values (variants not found in alt_disease_vcf)
+    merged_df['alt_disease_hets'].fillna(False, inplace=True)
+    merged_df['alt_disease_homs'].fillna(False, inplace=True)
+    
+    # Vectorized BP5 logic
+    # Only apply BP5 to genes with monogenic inheritance and complete penetrance
+    eligible_genes = ~non_monogenic & ~incomplete_penetrance & ~non_mendelian
+    
+    # For dominant genes: any presence (het or hom) in alt disease patients = BP5
+    only_dominant = (dominant | incomplete_penetrance) & ~recessive
+    dominant_bp5 = (only_dominant & \
+                   eligible_genes & \
+                   (merged_df['alt_disease_hets'] | merged_df['alt_disease_homs']))
+    
+    # For recessive genes: only homozygous presence in alt disease patients = BP5
+    recessive_bp5 = (recessive | ~incomplete_penetrance) & \
+                    eligible_genes & \
+                    merged_df['alt_disease_homs']
+    
+    # Combine conditions
+    bp5_criteria = dominant_bp5 | recessive_bp5
+    
     bp5_array = np.zeros(len(df), dtype=int)
     bp5_array[bp5_criteria] = 1
+    
+    logger.info(f"BP5 criteria applied to {eligible_genes.sum()} variants with monogenic + complete penetrance")
+    logger.info(f"BP5 assigned to {bp5_criteria.sum()} variants found in alternative disease patients")
+    
     return bp5_array
-    
 
-def identify_presence_in_alt_disease_vcf(row: dict, alt_disease_vcf: str, gene_mean_am_score: float, clingen_curate_score: int) -> bool:
+
+def extract_and_summarize_alt_disease_variants(alt_disease_vcf: str) -> pd.DataFrame:
     '''
-    Identify if the variant is present in the alt_disease_vcf with pysam.
-    The alt_disease_vcf is a VCF file with known alternative molecular basis for disease.
-    We need to identify whether the current variant is in a gene leading to recessive/dominant disease.
-    
-    For dominant disease:
-        - Check if variant is present in alt_disease_vcf (heterozygous or homozygous)
-        - If present, return True
-    
-    For recessive disease:
-        - Check if variant is present with homozygous genotype in alt_disease_vcf
-        - If present as homozygous, return True
+    Extract variants from alt_disease_vcf using bcftools and summarize genotype information.
     
     Args:
-        row: Dictionary containing variant information
         alt_disease_vcf: Path to VCF file with known alternative molecular basis for disease
-        gene_to_am_score_map: Dictionary mapping genes to AM scores for inheritance determination
         
     Returns:
-        bool: True if variant is present according to inheritance mode criteria
+        DataFrame with columns: chrom, pos, ref, alt, alt_disease_hets, alt_disease_homs
     '''
     try:
-        # First determine inheritance mode
-        is_recessive, is_dominant, is_non_monogenic, is_non_mendelian, haplo_insufficient, incomplete_penetrance = identify_inheritance_mode_per_row(row, gene_mean_am_score, clingen_curate_score)
+        # Use bcftools norm to split multi-allelic sites, then query genotypes
+        cmd = f'bcftools norm -m-any {alt_disease_vcf} | bcftools query -f "%CHROM\\t%POS\\t%REF\\t%ALT[\\t%GT]\\n"'
         
-        if not (is_dominant or is_recessive):
-            is_dominant = False
-            is_recessive = True
+        logger.info(f"Extracting and normalizing variants from {alt_disease_vcf} using bcftools...")
+        result = subprocess.run(cmd, shell=True, capture_output=True, text=True, check=True)
+        
+        if not result.stdout.strip():
+            logger.warning(f"No variants found in {alt_disease_vcf}")
+            return pd.DataFrame()
+        
+        # Read bcftools output directly into DataFrame
+        from io import StringIO
+        df = pd.read_csv(StringIO(result.stdout), sep='\t', header=None)
+        
+        # Set column names - first 4 are variant info, rest are genotypes
+        n_cols = df.shape[1]
+        col_names = ['chrom', 'pos', 'ref', 'alt'] + [f'GT_{i}' for i in range(n_cols - 4)]
+        df.columns = col_names
+        
+        # Get genotype columns
+        gt_cols = [col for col in df.columns if col.startswith('GT_')]
+        
+        # Vectorized genotype summarization
+        # Convert all genotype columns to string and handle missing values
+        for col in gt_cols:
+            df[col] = df[col].astype(str).fillna('./.')
+        
+        # Create boolean masks for het (0/1, 1/0, 0|1, 1|0) and hom (1/1, 1|1)
+        het_patterns = ['0/1', '1/0', '0|1', '1|0']
+        hom_patterns = ['1/1', '1|1']
+        
+        # Efficient vectorized summarization - check if any sample has het/hom genotypes
+        if gt_cols:
+            # Stack all genotype columns and check patterns in one operation
+            gt_data = df[gt_cols].values
             
-        # Open VCF file
-        with pysam.VariantFile(alt_disease_vcf) as vcf:
-            # Extract variant information from row
-            chrom = row['chrom']  # Remove 'chr' prefix if present
-            pos = int(row['pos']) # 0-based
-            ref = row['ref']
-            alt = row['alt']
+            # Create boolean masks across all samples (vectorized)
+            het_mask = pd.DataFrame(gt_data).isin(het_patterns).any(axis=1)
+            hom_mask = pd.DataFrame(gt_data).isin(hom_patterns).any(axis=1)
             
-            # Fetch variants in the region, remember that the region is 0-based and half-open, meaning the end is not included
-            # End should be pos + length of ref (half-open leads to the exclusion of the end position)
-            region = f"{chrom}:{max(1, pos-1)}-{pos+len(ref)}"
-            
-            for record in vcf.fetch(region=region):
-                # Check exact position and allele match
-                if record.pos == pos and record.ref == ref and alt in record.alts:
-                    # For dominant inheritance, any presence is sufficient
-                    if is_dominant:
-                        if any(s.get('GT', (0,0)) != (0,0) for s in record.samples.values()):
-                            return True
-                    
-                    # For recessive inheritance, need homozygous genotype
-                    if is_recessive:
-                        for sample in record.samples.values():
-                            gt = sample.get('GT', (0,0))
-                            # Check for homozygous alternate (1/1, 2/2, etc.)
-                            if gt and len(gt) == 2 and gt[0] == gt[1] and gt[0] != 0:
-                                return True
-            
-            return False
-            
-    except (ValueError, KeyError, OSError) as e:
-        logger.warning(f"Error checking variant in alt disease VCF: {str(e)}")
-        return False
+            df['alt_disease_hets'] = het_mask
+            df['alt_disease_homs'] = hom_mask
+        else:
+            df['alt_disease_hets'] = False
+            df['alt_disease_homs'] = False
+        
+        # Return only the required columns
+        result_df = df[['chrom', 'pos', 'ref', 'alt', 'alt_disease_hets', 'alt_disease_homs']]
+        
+        logger.info(f"Extracted {len(result_df)} bi-allelic variant entries from alt_disease_vcf")
+        logger.info(f"Variants with het samples: {result_df['alt_disease_hets'].sum()}")
+        logger.info(f"Variants with hom samples: {result_df['alt_disease_homs'].sum()}")
+        
+        return result_df
+        
+    except subprocess.CalledProcessError as e:
+        logger.error(f"bcftools command failed: {e}")
+        logger.error(f"stderr: {e.stderr}")
+        return pd.DataFrame()
+    except Exception as e:
+        logger.error(f"Error extracting variants from alt_disease_vcf: {str(e)}")
+        return pd.DataFrame()
+
 
 
 def BP7_criteria(df: pd.DataFrame) -> pd.Series:
@@ -2600,9 +2652,9 @@ def ACMG_criteria_assign(anno_table: str,
 
     # Apply the PVS1 criteria, LoF on a gene known to to be pathogenic due to LoF
     pvs1_criteria, locate_intol_domains = PVS1_criteria(anno_df, 
-                                                        clinvar_aa_gene_map, 
-                                                        clinvar_patho_exon_af_stat,
-                                                        interpro_entry_map_pkl,
+                                  clinvar_aa_gene_map, 
+                                  clinvar_patho_exon_af_stat,
+                                  interpro_entry_map_pkl,
                                                         gene_to_am_score_map,
                                                         intolerant_domains=intolerant_domains,
                                                         tranx_exon_domain_map_pkl=tranx_exon_domain_map_pkl,
@@ -2725,7 +2777,7 @@ def ACMG_criteria_assign(anno_table: str,
     gc.collect()
     # Apply BP5, variant found in a sample with known alternative molecular basis for disease
     if alt_disease_vcf:
-        bp5_criteria = BP5_criteria(anno_df, alt_disease_vcf, gene_to_am_score_map, gene_dosage_sensitivity, threads)
+        bp5_criteria = BP5_criteria(anno_df, alt_disease_vcf, recessive, dominant, non_monogenic, non_mendelian, incomplete_penetrance)
     else:
         bp5_criteria = np.array([0] * len(anno_df))
     logger.info(f"BP5 criteria applied, {(bp5_criteria > 0).sum()} variants are having the BP5 criteria")

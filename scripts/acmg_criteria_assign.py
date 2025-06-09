@@ -2095,12 +2095,12 @@ def find_overlaps_bedtools_efficient(variants_df, regions_file, method = "any"):
 
 def BP3_criteria(df: pd.DataFrame, repeat_region_file: str, interpro_entry_map_pkl: str, pm1_criteria: np.ndarray, pm4_criteria: np.ndarray) -> pd.Series:
     # BP3: in-frame deletion in a repetitive region without a known function
-    inframe_del = (df['Consequence'].str.contains('inframe_deletion')) | \
-                  (df['Consequence'].str.contains('inframe_insertion')) | \
+    inframe_del = (df['Consequence'].fillna("").str.contains('inframe_deletion')) | \
+                  (df['Consequence'].fillna("").str.contains('inframe_insertion')) | \
                   (df['vep_consq_len_changing'] & ~df["Consequence"].str.contains("frameshift")) | \
                   (df['splicing_len_changing'] & ~df['splicing_frameshift']) | \
                   (df['5UTR_len_changing'] & ~df['5UTR_frameshift']) | \
-                  (df["Consequence"].str.contains("stop_gained") & df["NMD"].str.contains("escaping"))
+                  (df["Consequence"].fillna("").str.contains("stop_gained") & df["NMD"].fillna("").str.contains("escaping"))
 
     # Repeat region file is a gzipped bed file, we can read it with pandas
     in_repeat_regions = find_overlaps_bedtools_efficient(df, repeat_region_file)

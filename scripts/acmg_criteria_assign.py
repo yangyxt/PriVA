@@ -222,12 +222,12 @@ def downstream_exon_patho_af(row, clinvar_patho_exon_af_dict, logic="any", thres
 
 
 def span_functional_domains(row, 
-                                   dm_instance=None, 
-                                   interpro_entry_map_dict=None, 
-                                   tranx_exon_domain_map=None, 
-                                   clinvar_patho_exon_af_dict=None, 
+                            dm_instance=None, 
+                            interpro_entry_map_dict=None, 
+                            tranx_exon_domain_map=None, 
+                            clinvar_patho_exon_af_dict=None, 
                             intol_domains=[],
-                                   exon_patho_af_threshold=0.01):
+                            exon_patho_af_threshold=0.01):
     '''
     Identify whether a truncating variant is involving functional regions on a protein
     '''
@@ -236,7 +236,7 @@ def span_functional_domains(row,
     exon_frequent_patho = False
     if ("frameshift" in row['Consequence']) or ("stop_gained" in row['Consequence']):
         # These variants not only affect the local region of proteins, but also affect the downstream protein regions
-        func_domain = downstream_domain_impact(row['EXON'], row['Feature'], tranx_exon_domain_map, interpro_entry_map_dict, dm_instance, domains=row["DOMAINS"], intol_domains=intol_domains, ensg_id=ensg_id)
+        func_domain = downstream_domain_impact(row['EXON'], row['Feature'], tranx_exon_domain_map, interpro_entry_map_dict, dm_instance, domains=str(row["DOMAINS"]), intol_domains=intol_domains, ensg_id=ensg_id)
         exon_frequent_patho = downstream_exon_patho_af(row, clinvar_patho_exon_af_dict, logic="any", threshold=exon_patho_af_threshold)
         logger.info(f"For variant {row['chrom']}:{row['pos']} with transcript {row['Feature']}, the exon is: {row['EXON']}, and the pathogenic AF is: {exon_frequent_patho}")
     elif row["5UTR_lof"] or row["5UTR_frameshift"] or row["5UTR_len_changing"]:
@@ -254,9 +254,9 @@ def span_functional_domains(row,
     else:
         if isinstance(row["DOMAINS"], str):
             if intol_domains:
-                func_domain = any([ensg_id + ":" + domain in intol_domains for domain in row["DOMAINS"].split("&")])
-        else:
-                func_domain = any([dm_instance.interpret_functionality(domain, interpro_entry_map_dict) == "Functional" for domain in row["DOMAINS"].split("&")])
+                func_domain = any([ensg_id + ":" + domain in intol_domains for domain in str(row["DOMAINS"]).split("&")])
+            else:
+                func_domain = any([dm_instance.interpret_functionality(domain, interpro_entry_map_dict) == "Functional" for domain in str(row["DOMAINS"]).split("&")])
         exon_frequent_patho = float(clinvar_patho_exon_af_dict.get(row['Feature'], {}).get(row['EXON'], (0, ))[0]) < exon_patho_af_threshold
         logger.debug(f"For variant {row['chrom']}:{row['pos']} with transcript {row['Feature']}, the exon is: {row['EXON']}, and the pathogenic AF is: {exon_frequent_patho}")
     
@@ -422,11 +422,11 @@ def PVS1_criteria(df: pd.DataFrame,
     tranx_exon_domain_map = pickle.load(gzip.open(tranx_exon_domain_map_pkl)) if tranx_exon_domain_map_pkl.endswith(".gz") else pickle.load(open(tranx_exon_domain_map_pkl, 'rb'))
     dm_instance = DomainNormalizer()
     intolerant_domains, exon_rare_patho_afs = zip(*df.apply(span_functional_domains, axis=1, dm_instance=dm_instance, 
-                                                                                                    interpro_entry_map_dict=interpro_entry_map_dict, 
-                                                                                                    tranx_exon_domain_map=tranx_exon_domain_map, 
-                                                                                                    clinvar_patho_exon_af_dict=clinvar_patho_exon_af_dict, 
-                                                                                            intol_domains=intolerant_domains,
-                                                                                                    exon_patho_af_threshold=0.01))
+                                                                                             interpro_entry_map_dict=interpro_entry_map_dict, 
+                                                                                             tranx_exon_domain_map=tranx_exon_domain_map, 
+                                                                                             clinvar_patho_exon_af_dict=clinvar_patho_exon_af_dict, 
+                                                                                             intol_domains=intolerant_domains,
+                                                                                             exon_patho_af_threshold=0.01))
     
     # Convert tuples to numpy arrays for boolean operations
     intolerant_domains = np.array(intolerant_domains)
@@ -2652,9 +2652,9 @@ def ACMG_criteria_assign(anno_table: str,
 
     # Apply the PVS1 criteria, LoF on a gene known to to be pathogenic due to LoF
     pvs1_criteria, locate_intol_domains = PVS1_criteria(anno_df, 
-                                  clinvar_aa_gene_map, 
-                                  clinvar_patho_exon_af_stat,
-                                  interpro_entry_map_pkl,
+                                                        clinvar_aa_gene_map, 
+                                                        clinvar_patho_exon_af_stat,
+                                                        interpro_entry_map_pkl,
                                                         gene_to_am_score_map,
                                                         intolerant_domains=intolerant_domains,
                                                         tranx_exon_domain_map_pkl=tranx_exon_domain_map_pkl,

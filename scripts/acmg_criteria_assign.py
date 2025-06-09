@@ -2219,7 +2219,7 @@ def BP7_criteria(df: pd.DataFrame) -> pd.Series:
 
 def identify_fam_members(ped_df: pd.DataFrame, fam_name: str) -> pd.DataFrame:
     fam_ped_df = ped_df[ped_df['#FamilyID'] == fam_name]
-    fam_ped_df["Phenotype"] = fam_ped_df["Phenotype"].astype(int)
+    fam_ped_df.loc[:, "Phenotype"] = fam_ped_df["Phenotype"].astype(int)
     # fam_members = fam_ped_df['IndividualID'].tolist()
     father = fam_ped_df.loc[fam_ped_df["PaternalID"] != "0", "IndividualID"].tolist()
     mother = fam_ped_df.loc[fam_ped_df["MaternalID"] != "0", "IndividualID"].tolist()
@@ -2693,27 +2693,14 @@ def ACMG_criteria_assign(anno_table: str,
 
     # Summarize the inheritance mode, first prepare a df composed of recessive, dominant, non_monogenic, non_mendelian, haplo_insufficient, incomplete_penetrance
     inheritance_df = pd.DataFrame({
-        'recessive': recessive,
-        'dominant': dominant,
-        'non_monogenic': non_monogenic,
-        'non_mendelian': non_mendelian,
-        'haplo_insufficient': haplo_insufficient,
-        'incomplete_penetrance': incomplete_penetrance
+        'recessive': ["recessive" if i else "" for i in recessive],
+        'dominant': ["dominant" if i else "" for i in dominant],
+        'non_monogenic': ["non_monogenic" if i else "" for i in non_monogenic],
+        'non_mendelian': ["non_mendelian" if i else "" for i in non_mendelian],
+        'haplo_insufficient': ["haplo_insufficient" if i else "" for i in haplo_insufficient],
+        'incomplete_penetrance': ["incomplete_penetrance" if i else "" for i in incomplete_penetrance]
     })
-
-    inheritance_df.loc[recessive, "recessive"] = "recessive"
-    inheritance_df.loc[~recessive, "recessive"] = ""
-    inheritance_df.loc[dominant, "dominant"] = "dominant"
-    inheritance_df.loc[~dominant, "dominant"] = ""
-    inheritance_df.loc[non_monogenic, "non_monogenic"] = "non_monogenic"
-    inheritance_df.loc[~non_monogenic, "non_monogenic"] = ""
-    inheritance_df.loc[non_mendelian, "non_mendelian"] = "non_mendelian"
-    inheritance_df.loc[~non_mendelian, "non_mendelian"] = ""
-    inheritance_df.loc[incomplete_penetrance, "incomplete_penetrance"] = "incomplete_penetrance"
-    inheritance_df.loc[~incomplete_penetrance, "incomplete_penetrance"] = ""
-    inheritance_df.loc[haplo_insufficient, "haplo_insufficient"] = "haplo_insufficient"
-    inheritance_df.loc[~haplo_insufficient, "haplo_insufficient"] = ""
-    anno_df["inheritance_mode"] = inheritance_df.apply(lambda x: ",".join([i for i in x if i != ""]), axis=1)
+    logger.info(f"The inheritance_df looks like: \n{inheritance_df[:10].to_string(index=False)}")
 
     # Apply BS2, variant observed in a healthy adult
     bs2_criteria = BS2_criteria(anno_df, recessive, dominant, non_monogenic, non_mendelian, incomplete_penetrance, pm2_criteria)

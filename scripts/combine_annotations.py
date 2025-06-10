@@ -7,6 +7,7 @@ import logging
 import sys
 import traceback
 import gc
+import pyarrow as pa
 from typing import List, Dict, Any
 from collections import deque
 
@@ -159,7 +160,7 @@ def extract_record_info(record, var_source_exists: bool, control_ac_exists: bool
 
 def convert_record_to_tab(args: tuple) -> tuple[List[Dict[str, Any]], List[str]]:
     """Convert a record dictionary to a list of dictionaries and collect logs."""
-    record_dict, worker_id, csq_fields, clinvar_csq_fields, var_source_exists, control_ac_exists = args
+    record_dict, worker_id, csq_fields, clinvar_csq_fields, var_source_exists, control_ac_exists, cadd_phred_dict, hpo_symbol_map = args
     logger, collector = setup_worker_logger(worker_id)
     
     try:
@@ -225,6 +226,14 @@ def convert_record_to_tab(args: tuple) -> tuple[List[Dict[str, Any]], List[str]]
         for feature_name, feature_dict in csqs.items():
             if feature_name.startswith("ENS"):
                 row_dict = {**var_dict_items, **feature_dict, **gt_dict, **ad_dict}
+                cadd_phred = cadd_phred_dict.get(feature_name, {"CADD_phred": np.nan, "CADD_reg_phred": np.nan})
+                if len(cadd_phred) == 1:
+                    cadd_phred = cadd_phred.update({"CADD_reg_phred": np.nan}) if feature_name.startswith("ENST") else {"CADD_reg_phred": cadd_phred["CADD_phred"], "CADD_phred": np.nan}
+                row_dict.update(cadd_phred)
+
+                if len(hpo_symbol_map) == 0:
+                    hpo_symbol_map = {"HPO_IDs": np.nan, "HPO_terms": np.nan, "HPO_sources": np.nan, "HPO_gene_inheritance": np.nan}
+                row_dict.update(hpo_symbol_map)
                 rows.append(row_dict)
             
         logger.debug(f"Completed processing variant at {record_dict['chrom']}:{record_dict['pos']}, which contains {len(rows)} transcript level annotations\n")
@@ -236,13 +245,14 @@ def convert_record_to_tab(args: tuple) -> tuple[List[Dict[str, Any]], List[str]]
         return [], list(collector.log_buffer)
 
 
-def convert_vcf_to_tab(input_vcf: str, threads=4) -> pd.DataFrame:
+def convert_vcf_to_tab(input_vcf: str, threads=4, cadd_phred_dict: dict = None, hpo_symbol_map: dict = None) -> pd.DataFrame:
     all_rows = []
     
     try:
         with pysam.VariantFile(input_vcf) as vcf_file:
             # Extract the VEP CSQ field description from the header
             csq_fields = vcf_file.header.info['CSQ'].description.split('Format: ')[1].split('|')
+            symbol_field_index = csq_fields.index("SYMBOL")
             clinvar_csq_fields = vcf_file.header.info['CLNCSQ'].description.split('Format: ')[1].split('|')
             var_source_exists = "VARIANT_SOURCE" in vcf_file.header.info
             control_ac_exists = "control_AC" in vcf_file.header.info
@@ -252,25 +262,29 @@ def convert_vcf_to_tab(input_vcf: str, threads=4) -> pd.DataFrame:
                           tuple(csq_fields), 
                           tuple(clinvar_csq_fields), 
                           var_source_exists, 
-                          control_ac_exists) for record in vcf_file)
+                          control_ac_exists,
+                          cadd_phred_dict.get(f"{record.chrom}:{record.pos}:{record.ref}-{record.alts[0] if record.alts else ''}", {}),
+                          hpo_symbol_map.get(record.info.get("CSQ", "|" * symbol_field_index).split("|")[symbol_field_index], {})) for record in vcf_file)
 
-            with mp.Pool(threads) as pool:
+            if threads == 1:
                 varcount = 0
-                results = pool.imap_unordered(convert_record_to_tab, record_args)
-                for rows, logs in results:
+                for tup in record_args:
+                    rows, logs = convert_record_to_tab(tup)
                     if logs:
                         sys.stderr.write("\n".join(logs) + "\n")
                         sys.stderr.flush()
                     varcount += 1
                     all_rows.extend(rows)
-            # varcount = 0
-            # for tup in record_args:
-            #     rows, logs = convert_record_to_tab(tup)
-            #     if logs:
-            #         sys.stderr.write("\n".join(logs) + "\n")
-            #         sys.stderr.flush()
-            #     varcount += 1
-            #     all_rows.extend(rows)
+            else:
+                with mp.Pool(threads) as pool:
+                    varcount = 0
+                    results = pool.imap_unordered(convert_record_to_tab, record_args)
+                    for rows, logs in results:
+                        if logs:
+                            sys.stderr.write("\n".join(logs) + "\n")
+                            sys.stderr.flush()
+                        varcount += 1
+                        all_rows.extend(rows)
         
         if all_rows:
             logger.info(f"Completed processing {varcount} variants, which contains {len(all_rows)} transcript level annotations")
@@ -298,15 +312,12 @@ def main_combine_annotations(input_vcf: str,
                             hpo_tab: str, 
                             threads=4,
                             output_tab = None):
-    # Convert VCF to dataframe
-    converted_tab = convert_vcf_to_tab(input_vcf, threads)
-    logger.info(f"Initial converted table memory usage: {converted_tab.memory_usage(deep=True).sum() / 1024**2:.1f} MB")
     
     # Read CADD data with memory optimization - only load required columns
     logger.info("Loading CADD data...")
     cadd_required_columns = ["#Chrom", "Pos", "Ref", "Alt", "PHRED", "FeatureID"]
     cadd_dtypes = {
-        "#Chrom": "category",  # Chromosomes are truly categorical (chr1, chr2, etc.)
+        "#Chrom": "string",  # Chromosomes are truly categorical (chr1, chr2, etc.)
         "Pos": "int32",        # Positions don't need int64
         "Ref": "string",       # Ref bases - use string, not category (variable length)
         "Alt": "string",       # Alt bases - use string, not category (variable length)
@@ -315,40 +326,21 @@ def main_combine_annotations(input_vcf: str,
     }
     cadd_df = pd.read_table(cadd_tab, low_memory=False, usecols=cadd_required_columns, dtype=cadd_dtypes)
     logger.info(f"CADD data loaded with {cadd_df.shape[0]} rows and {cadd_df.shape[1]} columns (only required columns)")
-    
+
     # Prepare CADD data more efficiently - data types already optimized during reading
     cadd_df["chrom"] = "chr" + cadd_df["#Chrom"].astype(str)
     cadd_df["pos"] = cadd_df["Pos"]  # Already int32
     cadd_df["ref"] = cadd_df["Ref"]  # Already string dtype, no conversion needed
     cadd_df["alt"] = cadd_df["Alt"]  # Already string dtype, no conversion needed
+    cadd_df['variant_id'] = cadd_df["chrom"] + ":" + cadd_df["pos"].astype(str) + ":" + cadd_df["ref"] + "-" + cadd_df["alt"]
     cadd_df["CADD_phred"] = cadd_df["PHRED"]  # Already float32
     cadd_df["Feature"] = cadd_df["FeatureID"]  # Already string dtype
-    
+
     # Create subsets to reduce memory during merges
-    cadd_subset = cadd_df[["chrom", "pos", "ref", "alt", "Feature", "CADD_phred"]].copy()
+    cadd_subset = cadd_df[["variant_id", "Feature", "CADD_phred"]].copy()
     logger.info(f"CADD subset memory usage: {cadd_subset.memory_usage(deep=True).sum() / 1024**2:.1f} MB")
-    
-    # First merge with CADD
-    logger.info("Merging with CADD transcript data...")
-    merged_tab = pd.merge(converted_tab, cadd_subset, on=["chrom", "pos", "ref", "alt", "Feature"], how="left")
-    
-    # Clean up intermediate data
-    del cadd_subset
-    gc.collect()
-    
-    # Prepare regulatory CADD data
-    cadd_reg_subset = cadd_df.loc[cadd_df["Feature"].str.contains("ENSR", na=False), 
-                                  ["chrom", "pos", "ref", "alt", "CADD_phred"]].copy()
-    cadd_reg_subset.rename(columns={"CADD_phred": "CADD_reg_phred"}, inplace=True)
-    
-    # Second merge with regulatory CADD
-    logger.info("Merging with CADD regulatory data...")
-    merged_tab = pd.merge(merged_tab, cadd_reg_subset, on=["chrom", "pos", "ref", "alt"], how="left")
-    
-    # Clean up CADD data
-    del cadd_df, cadd_reg_subset
-    gc.collect()
-    logger.info(f"After CADD merge memory usage: {merged_tab.memory_usage(deep=True).sum() / 1024**2:.1f} MB")
+
+    cadd_phred_dict = cadd_subset.groupby("variant_id").apply(lambda x: x.set_index("Feature")[["CADD_phred"]].to_dict(orient="index")).to_dict()
 
     # Read HPO data - only load required columns
     logger.info("Loading HPO data...")
@@ -362,28 +354,21 @@ def main_combine_annotations(input_vcf: str,
     }
     hpo_df = pd.read_table(hpo_tab, low_memory=False, usecols=hpo_required_columns, dtype=hpo_dtypes)
     logger.info(f"HPO data loaded with {hpo_df.shape[0]} rows and {hpo_df.shape[1]} columns (only required columns)")
-    
+
     # Prepare HPO data efficiently - data types already optimized during reading
-    hpo_subset = hpo_df.copy()  # No need to select columns since we only loaded what we need
-    hpo_subset.rename(columns={
+    hpo_df.rename(columns={
         "gene_symbol": "SYMBOL",
         "hpo_id": "HPO_IDs", 
         "hpo_name": "HPO_terms",
         "disease_id": "HPO_sources",
         "inheritance_modes": "HPO_gene_inheritance"
     }, inplace=True)
+    hpo_df = hpo_df.loc[hpo_df["SYMBOL"] != "-", :]
+    hpo_symbol_map = hpo_df.set_index("SYMBOL").to_dict()
     
-    # No need for type conversions - already optimized string dtypes during reading
-    
-    logger.info(f"HPO subset memory usage: {hpo_subset.memory_usage(deep=True).sum() / 1024**2:.1f} MB")
-    
-    # Final merge with HPO
-    logger.info("Merging with HPO data...")
-    merged_tab = pd.merge(merged_tab, hpo_subset, on="SYMBOL", how="left")
-    
-    # Clean up HPO data
-    del hpo_df, hpo_subset
-    gc.collect()
+    # Convert VCF to dataframe
+    converted_tab = convert_vcf_to_tab(input_vcf, threads, cadd_phred_dict, hpo_symbol_map)
+    logger.info(f"Initial converted table memory usage: {converted_tab.memory_usage(deep=True).sum() / 1024**2:.1f} MB")
     
     logger.info(f"Final table memory usage: {merged_tab.memory_usage(deep=True).sum() / 1024**2:.1f} MB")
     logger.info(f"Final table shape: {merged_tab.shape}")

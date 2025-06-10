@@ -9,8 +9,11 @@ import argparse as ap
 from typing import Tuple, Dict
 import multiprocessing as mp
 from multiprocessing import Manager
+import functools
+from multiprocessing import Pool
 from scipy import stats
 from scipy.stats import binom
+from io import StringIO
 import mmap
 import gc
 import gzip
@@ -2122,7 +2125,8 @@ def BP5_criteria(df: pd.DataFrame,
                  dominant: np.ndarray,
                  non_monogenic: np.ndarray,
                  non_mendelian: np.ndarray,
-                 incomplete_penetrance: np.ndarray) -> np.ndarray:
+                 incomplete_penetrance: np.ndarray,
+                 n_processes: int = 1) -> np.ndarray:
     '''
     BP5: variant found in a sample with known alternative molecular basis for disease
     
@@ -2138,23 +2142,43 @@ def BP5_criteria(df: pd.DataFrame,
     Optimized version using pre-computed inheritance arrays and vectorized operations
     '''
     
-    # Extract and process alt_disease_vcf using bcftools + pandas
-    alt_disease_summary = extract_and_summarize_alt_disease_variants(alt_disease_vcf)
-    if alt_disease_summary is None or len(alt_disease_summary) == 0:
-        logger.warning(f"No variants extracted from alt_disease_vcf: {alt_disease_vcf}")
+    # First, efficiently extract unique chromosomes from alt_disease_vcf
+    logger.info(f"Extracting unique chromosomes from {alt_disease_vcf}")
+    chrom_cmd = f'bcftools query -f "%CHROM\\n" {alt_disease_vcf} | sort -u'
+    chrom_result = subprocess.run(chrom_cmd, shell=True, capture_output=True, text=True, check=True)
+    
+    if not chrom_result.stdout.strip():
+        logger.warning(f"No chromosomes found in {alt_disease_vcf}")
         return np.zeros(len(df), dtype=int)
     
-    # Merge with input DataFrame on variant coordinates
-    merged_df = df.merge(alt_disease_summary, 
-                        on=['chrom', 'pos', 'ref', 'alt'], 
-                        how='left', 
-                        suffixes=('', '_alt_disease'))
+    unique_chroms = [chrom.strip() for chrom in chrom_result.stdout.strip().split('\n') if chrom.strip()]
+    logger.info(f"Found {len(unique_chroms)} unique chromosomes: {unique_chroms}")
     
-    assert merged_df.shape[0] == df.shape[0], f"The number of variants in the merged dataframe {merged_df.shape[0]} should be the same as the number of variants in the input dataframe {df.shape[0]}"
+    # Create partial function with fixed alt_disease_vcf parameter
+    extract_func = functools.partial(extract_and_summarize_alt_disease_variants, alt_disease_vcf)
     
-    # Fill NaN values (variants not found in alt_disease_vcf)
-    merged_df['alt_disease_hets'].fillna(False, inplace=True)
-    merged_df['alt_disease_homs'].fillna(False, inplace=True)
+    logger.info(f"Using {n_processes} processes for parallel chromosome processing")
+    
+    # Execute in parallel
+    with mp.Pool(processes=n_processes) as pool:
+        results = pool.map(extract_func, unique_chroms)
+    
+    # Combine results from all chromosomes
+    combined_het_dict = {}
+    combined_hom_dict = {}
+    
+    for het_dict, hom_dict in results:
+        combined_het_dict.update(het_dict)
+        combined_hom_dict.update(hom_dict)
+    
+    logger.info(f"Combined results: {len(combined_het_dict)} het variants, {len(combined_hom_dict)} hom variants")
+    
+    # Create variant_id column for merging (matching the format used in extract function)
+    df['variant_id'] = df['chrom'].astype(str) + ':' + df['pos'].astype(str) + ':' + df['ref'] + '-' + df['alt']
+    
+    # Map the dict results back to the dataframe
+    df['alt_disease_hets'] = df['variant_id'].map(combined_het_dict).fillna(False)
+    df['alt_disease_homs'] = df['variant_id'].map(combined_hom_dict).fillna(False)
     
     # Vectorized BP5 logic
     # Only apply BP5 to genes with monogenic inheritance and complete penetrance
@@ -2164,12 +2188,12 @@ def BP5_criteria(df: pd.DataFrame,
     only_dominant = (dominant | incomplete_penetrance) & ~recessive
     dominant_bp5 = (only_dominant & \
                    eligible_genes & \
-                   (merged_df['alt_disease_hets'] | merged_df['alt_disease_homs']))
+                   (df['alt_disease_hets'] | df['alt_disease_homs']))
     
     # For recessive genes: only homozygous presence in alt disease patients = BP5
     recessive_bp5 = (recessive | ~incomplete_penetrance) & \
                     eligible_genes & \
-                    merged_df['alt_disease_homs']
+                    df['alt_disease_homs']
     
     # Combine conditions
     bp5_criteria = dominant_bp5 | recessive_bp5
@@ -2183,7 +2207,7 @@ def BP5_criteria(df: pd.DataFrame,
     return bp5_array
 
 
-def extract_and_summarize_alt_disease_variants(alt_disease_vcf: str) -> pd.DataFrame:
+def extract_and_summarize_alt_disease_variants(alt_disease_vcf: str, chrom = None) -> pd.DataFrame:
     '''
     Extract variants from alt_disease_vcf using bcftools and summarize genotype information.
     
@@ -2193,69 +2217,42 @@ def extract_and_summarize_alt_disease_variants(alt_disease_vcf: str) -> pd.DataF
     Returns:
         DataFrame with columns: chrom, pos, ref, alt, alt_disease_hets, alt_disease_homs
     '''
-    try:
-        # Use bcftools norm to split multi-allelic sites, then query genotypes
-        cmd = f'bcftools norm -m-any {alt_disease_vcf} | bcftools query -f "%CHROM\\t%POS\\t%REF\\t%ALT[\\t%GT]\\n"'
-        
-        logger.info(f"Extracting and normalizing variants from {alt_disease_vcf} using bcftools...")
-        result = subprocess.run(cmd, shell=True, capture_output=True, text=True, check=True)
-        
-        if not result.stdout.strip():
-            logger.warning(f"No variants found in {alt_disease_vcf}")
-            return pd.DataFrame()
-        
-        # Read bcftools output directly into DataFrame
-        from io import StringIO
-        df = pd.read_csv(StringIO(result.stdout), sep='\t', header=None)
-        
-        # Set column names - first 4 are variant info, rest are genotypes
-        n_cols = df.shape[1]
-        col_names = ['chrom', 'pos', 'ref', 'alt'] + [f'GT_{i}' for i in range(n_cols - 4)]
-        df.columns = col_names
-        
-        # Get genotype columns
-        gt_cols = [col for col in df.columns if col.startswith('GT_')]
-        
-        # Vectorized genotype summarization
-        # Convert all genotype columns to string and handle missing values
-        for col in gt_cols:
-            df[col] = df[col].astype(str).fillna('./.')
-        
-        # Create boolean masks for het (0/1, 1/0, 0|1, 1|0) and hom (1/1, 1|1)
-        het_patterns = ['0/1', '1/0', '0|1', '1|0']
-        hom_patterns = ['1/1', '1|1']
-        
-        # Efficient vectorized summarization - check if any sample has het/hom genotypes
-        if gt_cols:
-            # Stack all genotype columns and check patterns in one operation
-            gt_data = df[gt_cols].values
-            
-            # Create boolean masks across all samples (vectorized)
-            het_mask = pd.DataFrame(gt_data).isin(het_patterns).any(axis=1)
-            hom_mask = pd.DataFrame(gt_data).isin(hom_patterns).any(axis=1)
-            
-            df['alt_disease_hets'] = het_mask
-            df['alt_disease_homs'] = hom_mask
-        else:
-            df['alt_disease_hets'] = False
-            df['alt_disease_homs'] = False
-        
-        # Return only the required columns
-        result_df = df[['chrom', 'pos', 'ref', 'alt', 'alt_disease_hets', 'alt_disease_homs']]
-        
-        logger.info(f"Extracted {len(result_df)} bi-allelic variant entries from alt_disease_vcf")
-        logger.info(f"Variants with het samples: {result_df['alt_disease_hets'].sum()}")
-        logger.info(f"Variants with hom samples: {result_df['alt_disease_homs'].sum()}")
-        
-        return result_df
-        
-    except subprocess.CalledProcessError as e:
-        logger.error(f"bcftools command failed: {e}")
-        logger.error(f"stderr: {e.stderr}")
+    # Use bcftools to query genotype
+    if chrom is None:
+        cmd = f'bcftools +fill-tags {alt_disease_vcf} -Ou -- -t AC_Het,AC_Hom,AC_Hemi | bcftools filter -e \'(INFO/AC_Het == 0) && (INFO/AC_Hom == 0) && (INFO/AC_Hemi == 0)\' -Ou | bcftools query -f "%CHROM:%POS:%REF-%ALT\\t%INFO/AC_Het\\t%INFO/AC_Hom\\t%INFO/AC_Hemi\\n"'
+    else:
+        cmd = f'bcftools view -Ou {alt_disease_vcf} {chrom} | bcftools +fill-tags - -Ou -- -t AC_Het,AC_Hom,AC_Hemi | bcftools filter -e \'(INFO/AC_Het == 0) && (INFO/AC_Hom == 0) && (INFO/AC_Hemi == 0)\' -Ou | bcftools query -f "%CHROM:%POS:%REF-%ALT\\t%INFO/AC_Het\\t%INFO/AC_Hom\\t%INFO/AC_Hemi\\n"'
+    
+    logger.info(f"Extracting and normalizing variants from {alt_disease_vcf} using bcftools...")
+    result = subprocess.run(cmd, shell=True, capture_output=True, text=True, check=True)
+    
+    if not result.stdout.strip():
+        logger.warning(f"No variants found in {alt_disease_vcf}")
         return pd.DataFrame()
-    except Exception as e:
-        logger.error(f"Error extracting variants from alt_disease_vcf: {str(e)}")
-        return pd.DataFrame()
+    
+    # Read bcftools output directly into DataFrame
+    df = pd.read_csv(StringIO(result.stdout), sep='\t', header=None)
+    
+    # Set column names - first 4 are variant info, rest are genotypes
+    col_names = ['variant_id'] + ['AC_Het', 'AC_Hom', 'AC_Hemi']
+    df.columns = col_names
+    
+    # Create boolean masks across all samples (vectorized)
+    het_mask = df['AC_Het'] > 0
+    hom_mask = (df['AC_Hom'] > 0) | (df['AC_Hemi'] > 0)
+    
+    df['alt_disease_hets'] = het_mask
+    df['alt_disease_homs'] = hom_mask
+
+    # Return only the required columns
+    result_df = df[['variant_id', 'alt_disease_hets', 'alt_disease_homs']]
+    # Convert the df to 2 dicts efficiently, one is het, one is hom
+    result_df.set_index('variant_id', inplace=True)
+    het_dict = result_df['alt_disease_hets'].to_dict()
+    hom_dict = result_df['alt_disease_homs'].to_dict()
+    
+    return het_dict, hom_dict
+
 
 
 
@@ -2777,7 +2774,7 @@ def ACMG_criteria_assign(anno_table: str,
     gc.collect()
     # Apply BP5, variant found in a sample with known alternative molecular basis for disease
     if alt_disease_vcf:
-        bp5_criteria = BP5_criteria(anno_df, alt_disease_vcf, recessive, dominant, non_monogenic, non_mendelian, incomplete_penetrance)
+        bp5_criteria = BP5_criteria(anno_df, alt_disease_vcf, recessive, dominant, non_monogenic, non_mendelian, incomplete_penetrance, threads)
     else:
         bp5_criteria = np.array([0] * len(anno_df))
     logger.info(f"BP5 criteria applied, {(bp5_criteria > 0).sum()} variants are having the BP5 criteria")

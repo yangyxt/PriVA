@@ -228,8 +228,13 @@ def convert_record_to_tab(args: tuple) -> tuple[List[Dict[str, Any]], List[str]]
                 row_dict = {**var_dict_items, **feature_dict, **gt_dict, **ad_dict}
                 cadd_phred = cadd_phred_dict.get(feature_name, {"CADD_phred": np.nan, "CADD_reg_phred": np.nan})
                 if len(cadd_phred) == 1:
-                    cadd_phred = cadd_phred.update({"CADD_reg_phred": np.nan}) if feature_name.startswith("ENST") else {"CADD_reg_phred": cadd_phred["CADD_phred"], "CADD_phred": np.nan}
-                row_dict.update(cadd_phred)
+                    if feature_name.startswith("ENST"):
+                        cadd_phred.update({"CADD_reg_phred": np.nan})
+                        row_dict.update(cadd_phred)
+                    else:
+                        row_dict.update({"CADD_reg_phred": cadd_phred["CADD_phred"], "CADD_phred": np.nan})
+                else:
+                    row_dict.update(cadd_phred)
 
                 if len(hpo_symbol_map) == 0:
                     hpo_symbol_map = {"HPO_IDs": np.nan, "HPO_terms": np.nan, "HPO_sources": np.nan, "HPO_gene_inheritance": np.nan}
@@ -264,7 +269,7 @@ def convert_vcf_to_tab(input_vcf: str, threads=4, cadd_phred_dict: dict = None, 
                           var_source_exists, 
                           control_ac_exists,
                           cadd_phred_dict.get(f"{record.chrom}:{record.pos}:{record.ref}-{record.alts[0] if record.alts else ''}", {}),
-                          hpo_symbol_map.get(record.info.get("CSQ", "|" * symbol_field_index).split("|")[symbol_field_index], {})) for record in vcf_file)
+                          {k: v for k,v in hpo_symbol_map.items() if k in [ csq.split("|")[symbol_field_index] for csq in record.info.get("CSQ", ("|" * symbol_field_index,)) ]}) for record in vcf_file)
 
             if threads == 1:
                 varcount = 0
@@ -368,16 +373,16 @@ def main_combine_annotations(input_vcf: str,
     
     # Convert VCF to dataframe
     converted_tab = convert_vcf_to_tab(input_vcf, threads, cadd_phred_dict, hpo_symbol_map)
-    logger.info(f"Initial converted table memory usage: {converted_tab.memory_usage(deep=True).sum() / 1024**2:.1f} MB")
+    logger.info(f"Final converted table memory usage: {converted_tab.memory_usage(deep=True).sum() / 1024**2:.1f} MB")
     
-    logger.info(f"Final table memory usage: {merged_tab.memory_usage(deep=True).sum() / 1024**2:.1f} MB")
-    logger.info(f"Final table shape: {merged_tab.shape}")
+    logger.info(f"Final table memory usage: {converted_tab.memory_usage(deep=True).sum() / 1024**2:.1f} MB")
+    logger.info(f"Final table shape: {converted_tab.shape}")
 
     if output_tab:
         logger.info(f"Writing output to {output_tab}...")
-        merged_tab.to_csv(output_tab, sep="\t", index=False)
+        converted_tab.to_csv(output_tab, sep="\t", index=False)
     
-    return merged_tab
+    return converted_tab
 
 
 if __name__ == "__main__":

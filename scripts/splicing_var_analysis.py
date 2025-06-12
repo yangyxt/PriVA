@@ -11,6 +11,7 @@ from functools import partial
 import re
 import sys
 
+from combine_annotations import na_value
 from protein_domain_mapping import DomainNormalizer
 
 logger = logging.getLogger(__name__)
@@ -21,11 +22,6 @@ formatter = logging.Formatter("%(levelname)s:%(asctime)s:%(funcName)s:%(lineno)s
 console_handler.setFormatter(formatter)
 logger.addHandler(console_handler)
 
-
-def na_value(value):
-    if isinstance(value, float) and np.isnan(value):
-        return True
-    return True if value in [np.nan, "NaN", "nan", "na", "NA", "NAN", None, "None", "none", "", ".", "-"] else False
 
 
 def splicing_interpretation(anno_table, 

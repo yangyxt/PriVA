@@ -8,7 +8,12 @@ import sys
 import traceback
 import gc
 import pyarrow as pa
-from typing import List, Dict, Any
+import pyarrow.parquet as pq
+import tempfile
+import subprocess
+import time
+import os
+from typing import List, Dict, Any, Tuple
 from collections import deque
 
 
@@ -35,18 +40,42 @@ class SubprocessLogCollector:
 
 def setup_worker_logger(worker_id: str) -> logging.Logger:
     logger = logging.getLogger(f'worker_{worker_id}')
-    logger.setLevel(logging.INFO)
     
-    # Create a collector for this worker
-    collector = SubprocessLogCollector(worker_id)
-    handler = logging.StreamHandler(collector)
-    formatter = logging.Formatter("%(levelname)s:%(asctime)s:%(funcName)s:%(lineno)s:%(message)s")
-    handler.setFormatter(formatter)
-    logger.addHandler(handler)
-    return logger, collector
+    # Only setup if not already configured (avoid duplicate handlers)
+    if not logger.handlers:
+        logger.setLevel(logging.INFO)
+        
+        # Create a collector for this worker
+        collector = SubprocessLogCollector(worker_id)
+        handler = logging.StreamHandler(collector)
+        formatter = logging.Formatter("%(levelname)s:%(asctime)s:%(funcName)s:%(lineno)s:%(message)s")
+        handler.setFormatter(formatter)
+        logger.addHandler(handler)
+        
+        # Store collector as logger attribute for reuse
+        logger._collector = collector
+    
+    return logger, logger._collector
 
 
-def parse_csq_field(csq_field: str, csq_fields: List[str], logger: logging.Logger) -> Dict[str, Any]:
+
+def na_value(value):
+    if isinstance(value, float):
+        if np.isnan(value):
+            return True
+        else:
+            return False
+    elif isinstance(value, int):
+        return False
+    elif value is None:
+        return True
+    elif isinstance(value, str):
+        return value in ["NaN", "nan", "na", "NA", "NAN", "None", "none", "", ".", "-"]
+    else:
+        return False
+
+
+def parse_csq_field(csq_field: Tuple[str, ...], csq_fields: List[str], logger: logging.Logger) -> Dict[str, Any]:
     '''
     The function is used to parse CSQ field into a dictionary
     {value_name: [value_list],
@@ -60,6 +89,8 @@ def parse_csq_field(csq_field: str, csq_fields: List[str], logger: logging.Logge
     
     tranx_annos = csq_field
     logger.debug(f"There are {len(tranx_annos)} transcript level annotations in the CSQ field")
+    if len(tranx_annos) == 0:
+        logger.warning(f"There are no transcript level annotations in the CSQ field: {csq_field}")
     anno_dict = {}
     for tranx_anno in tranx_annos:
         field_values = tranx_anno.split("|")
@@ -76,10 +107,11 @@ def parse_csq_field(csq_field: str, csq_fields: List[str], logger: logging.Logge
                         field_value = float(field_value)
                     except ValueError:
                         pass
-            field_value = np.nan if field_value == "" else field_value
+            field_value = np.nan if field_value in ["", ".", None, np.nan, "-", "NaN", "nan", "NA", "N/A"] else field_value
             feature_dict[csq_fields[i]] = field_value
-        anno_dict[feature_name] = feature_dict
-    logger.debug(f"There are {len(anno_dict)} transcript level annotations in the CSQ field after the extraction")
+        if feature_name:
+            anno_dict[feature_name] = feature_dict
+            logger.debug(f"Adding feature dict {feature_dict} to the anno_dict with key {feature_name}, now anno_dict contain {len(anno_dict)} transcript level annotations")
     return anno_dict
 
 
@@ -159,6 +191,7 @@ def extract_record_info(record, var_source_exists: bool, control_ac_exists: bool
 
 
 def convert_record_to_tab(args: tuple) -> tuple[List[Dict[str, Any]], List[str]]:
+    start_time = time.time()
     """Convert a record dictionary to a list of dictionaries and collect logs."""
     record_dict, worker_id, csq_fields, clinvar_csq_fields, var_source_exists, control_ac_exists, cadd_phred_dict, hpo_symbol_map = args
     logger, collector = setup_worker_logger(worker_id)
@@ -240,63 +273,159 @@ def convert_record_to_tab(args: tuple) -> tuple[List[Dict[str, Any]], List[str]]
                     hpo_symbol_map = {"HPO_IDs": np.nan, "HPO_terms": np.nan, "HPO_sources": np.nan, "HPO_gene_inheritance": np.nan}
                 row_dict.update(hpo_symbol_map)
                 rows.append(row_dict)
-            
-        logger.debug(f"Completed processing variant at {record_dict['chrom']}:{record_dict['pos']}, which contains {len(rows)} transcript level annotations\n")
-        return rows, list(collector.log_buffer)
+        
+        if rows:
+            logger.debug(f"Completed processing variant at {record_dict['chrom']}:{record_dict['pos']}, which contains {len(rows)} transcript level annotations\n")
+        else:
+            logger.debug(f"Variant at {record_dict['chrom']}:{record_dict['pos']}:{record_dict['ref']}->{record_dict['alts'][0] if record_dict['alts'] else ''} seems to be an intergenic variant")
+        
+        return rows, list(collector.log_buffer), time.time() - start_time
         
     except Exception as e:
         logger.error(f"Error processing variant at {record_dict['chrom']}:{record_dict['pos']}: {str(e)}\n\n")
         raise(e)
-        return [], list(collector.log_buffer)
+        return [], list(collector.log_buffer), time.time() - start_time
 
 
-def convert_vcf_to_tab(input_vcf: str, threads=4, cadd_phred_dict: dict = None, hpo_symbol_map: dict = None) -> pd.DataFrame:
-    all_rows = []
+def arg_generator(vcf_file, threads, cadd_phred_dict, hpo_symbol_map):
+    with pysam.VariantFile(vcf_file) as vcf_file:
+        # Extract the VEP CSQ field description from the header
+        csq_fields = vcf_file.header.info['CSQ'].description.split('Format: ')[1].split('|')
+        symbol_field_index = csq_fields.index("SYMBOL")
+        clinvar_csq_fields = vcf_file.header.info['CLNCSQ'].description.split('Format: ')[1].split('|')
+        var_source_exists = "VARIANT_SOURCE" in vcf_file.header.info
+        control_ac_exists = "control_AC" in vcf_file.header.info
+        # Convert records to dictionaries before multiprocessing
+        worker_ind = 0
+        for record in vcf_file:
+            worker_ind += 1
+            yield ( extract_record_info(record, var_source_exists, control_ac_exists), 
+                    str(worker_ind % threads),
+                    tuple(csq_fields), 
+                    tuple(clinvar_csq_fields), 
+                    var_source_exists, 
+                    control_ac_exists,
+                    cadd_phred_dict.get(f"{record.chrom}:{record.pos}:{record.ref}-{record.alts[0] if record.alts else ''}", {}),
+                    {k: v for k,v in hpo_symbol_map.items() if k in [ csq.split("|")[symbol_field_index] for csq in record.info.get("CSQ", ("|" * symbol_field_index,)) ]} )
+
+
+def convert_vcf_to_tab(input_vcf: str, threads=4, cadd_phred_dict: dict = None, hpo_symbol_map: dict = None, chunk_size: int = 20000) -> pd.DataFrame:
+    est_anno_count = subprocess.run(f'bcftools query -f "%INFO/CSQ\\n" {input_vcf} | tr \',\' \'\\n\' | wc -l', shell=True, capture_output=True, text=True).stdout.strip()
+    est_anno_count = int(est_anno_count)
+    logger.info(f"The VCF file {input_vcf} has {est_anno_count} transcript_level annotations")
     
     try:
-        with pysam.VariantFile(input_vcf) as vcf_file:
-            # Extract the VEP CSQ field description from the header
-            csq_fields = vcf_file.header.info['CSQ'].description.split('Format: ')[1].split('|')
-            symbol_field_index = csq_fields.index("SYMBOL")
-            clinvar_csq_fields = vcf_file.header.info['CLNCSQ'].description.split('Format: ')[1].split('|')
-            var_source_exists = "VARIANT_SOURCE" in vcf_file.header.info
-            control_ac_exists = "control_AC" in vcf_file.header.info
-            # Convert records to dictionaries before multiprocessing
-            record_args = ((extract_record_info(record, var_source_exists, control_ac_exists), 
-                          f"{record.chrom}:{record.pos}:{record.ref}->{record.alts[0] if record.alts else ''}",
-                          tuple(csq_fields), 
-                          tuple(clinvar_csq_fields), 
-                          var_source_exists, 
-                          control_ac_exists,
-                          cadd_phred_dict.get(f"{record.chrom}:{record.pos}:{record.ref}-{record.alts[0] if record.alts else ''}", {}),
-                          {k: v for k,v in hpo_symbol_map.items() if k in [ csq.split("|")[symbol_field_index] for csq in record.info.get("CSQ", ("|" * symbol_field_index,)) ]}) for record in vcf_file)
+        record_args = arg_generator(input_vcf, threads, cadd_phred_dict, hpo_symbol_map)
+        varcount = 0
+        anno_record_count = 0
+        batch_run_time = np.zeros(5000, dtype=np.float16)
+        batch_extend_time = np.zeros(5000, dtype=np.float16)
+        all_rows = []
+        col_dicts = None
 
-            if threads == 1:
-                varcount = 0
-                for tup in record_args:
-                    rows, logs = convert_record_to_tab(tup)
-                    if logs:
-                        sys.stderr.write("\n".join(logs) + "\n")
-                        sys.stderr.flush()
-                    varcount += 1
-                    all_rows.extend(rows)
-            else:
-                with mp.Pool(threads) as pool:
-                    varcount = 0
-                    results = pool.imap_unordered(convert_record_to_tab, record_args)
-                    for rows, logs in results:
-                        if logs:
-                            sys.stderr.write("\n".join(logs) + "\n")
-                            sys.stderr.flush()
-                        varcount += 1
-                        all_rows.extend(rows)
+        if threads == 1:
+            results = map(convert_record_to_tab, record_args)
+            pool = None
+        else:
+            pool = mp.Pool(threads)
+            results = pool.imap_unordered(convert_record_to_tab, record_args)
+
+        for rows, logs, run_time in results:
+            if logs:
+                sys.stderr.write("\n".join(logs) + "\n")
+                sys.stderr.flush()
+            varcount += 1
+            before_ext_time = time.time()
+            all_rows.extend(rows)
+            after_ext_time = time.time()
+            batch_run_time[varcount % 5000 - 1] = run_time
+            batch_extend_time[varcount % 5000 - 1] = after_ext_time - before_ext_time
+            if varcount % 5000 == 0:
+                logger.info(f"At Variant {varcount}: total run time across past 5000 variants: {batch_run_time.sum():.6f}s, extend time: {batch_extend_time.sum():.6f}s")
+            if col_dicts is None: col_dicts = {key: np.empty(est_anno_count, dtype=object) for key in rows[0].keys()}
+            
+            # Force garbage collection every 1000 variants to prevent memory buildup
+            if varcount % 1000 == 0:
+                gc.collect()
+            if len(all_rows) >= chunk_size:
+                # Append dict to the col dicts
+                start_collect = time.time()
+                num_rows = len(all_rows)
+                for key in all_rows[0].keys():
+                    has_digit = False
+                    values = [None] * num_rows
+                    for i in range(num_rows):
+                        d = all_rows[i]
+                        value = np.nan if na_value(d.get(key, np.nan)) else d.get(key, np.nan)
+                        try:
+                            value = float(value)
+                        except ValueError:
+                            pass
+                        else:
+                            if not na_value(value):
+                                has_digit = True
+                        values[i] = value
+                    
+                    if has_digit and col_dicts[key].dtype != np.float32:
+                        logger.info(f"Found the column {key} has digit values in the iterating chunk, convert the np array type to float32")
+                        col_dicts[key] = col_dicts[key].astype(np.float32)
+                    
+                    col_dicts[key][anno_record_count:anno_record_count + num_rows] = values
+                anno_record_count += num_rows
+                finish_collect = time.time()
+                logger.info(f"Completed processing {varcount} variants, which contains {anno_record_count} transcript level annotations, collect time for this chunk: {finish_collect - start_collect:.6f}s")
+                all_rows = []
+                gc.collect()  # Force garbage collection after processing each chunk
         
         if all_rows:
-            logger.info(f"Completed processing {varcount} variants, which contains {len(all_rows)} transcript level annotations")
-            anno_df = pd.DataFrame(all_rows).dropna(subset=["chrom"])
-            logger.info(f"The annotation table has {anno_df.shape[0]} rows and {anno_df.shape[1]} columns. And it looks like this: \n{anno_df.head().to_string(index=False)}")
-            return anno_df
-        return pd.DataFrame()
+            num_rows = len(all_rows)
+            for key in all_rows[0].keys():
+                has_digit = False
+                values = [None] * num_rows
+                for i in range(num_rows):
+                    d = all_rows[i]
+                    value = np.nan if na_value(d.get(key, np.nan)) else d.get(key, np.nan)
+                    try:
+                        value = float(value)
+                    except ValueError:
+                        pass
+                    else:
+                        if not na_value(value):
+                            has_digit = True
+                    values[i] = value
+                
+                if has_digit and col_dicts[key].dtype != np.float32:
+                    logger.info(f"Found the column {key} has digit values in the iterating chunk, convert the np array type to float32")
+                    col_dicts[key] = col_dicts[key].astype(np.float32)
+                
+                col_dicts[key][anno_record_count:anno_record_count + num_rows] = values
+            anno_record_count += num_rows
+            logger.info(f"Completed processing {varcount} variants, which contains {anno_record_count} transcript level annotations")
+            gc.collect()  # Force garbage collection after final batch
+            
+        if pool:
+            pool.close()
+            pool.join()
+            pool.terminate()
+            pool = None
+        
+        col_dicts = {k: v[:anno_record_count] for k, v in col_dicts.items()}
+        df = pd.DataFrame(col_dicts)
+        for col in df.columns:
+            # Convert float back to int if possible
+            df.loc[:, col] = df.loc[:, col].replace("NaN", np.nan)
+            try:
+                df.loc[:, col] = df.loc[:, col].astype(np.float32)
+            except ValueError:
+                pass
+            else:
+                try:
+                    df.loc[:, col] = df.loc[:, col].astype(np.int32)
+                except ValueError:
+                    pass
+        
+        logger.info(f"The annotation table has {df.shape[0]} rows and {df.shape[1]} columns. And it looks like this: \n{df.head().to_string(index=False)}")
+        return df
         
     except Exception as e:
         # Capture full traceback
@@ -310,6 +439,13 @@ def convert_vcf_to_tab(input_vcf: str, threads=4, cadd_phred_dict: dict = None, 
         
         # Reraise the exception
         raise(e)
+    finally:
+        if pool:
+            try:
+                pool.close()
+                pool.join()
+            except:
+                pass
 
 
 def main_combine_annotations(input_vcf: str,

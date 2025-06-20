@@ -342,6 +342,7 @@ def convert_vcf_to_tab(input_vcf: str, threads=4, cadd_phred_dict: dict = None, 
             batch_extend_time[varcount % 5000 - 1] = after_ext_time - before_ext_time
             if varcount % 5000 == 0:
                 logger.info(f"At Variant {varcount}: total run time across past 5000 variants: {batch_run_time.sum():.6f}s, extend time: {batch_extend_time.sum():.6f}s")
+            if len(rows) == 0: continue
             if col_dicts is None: col_dicts = {key: np.empty(est_anno_count, dtype=object) for key in rows[0].keys()}
             
             # Force garbage collection every 1000 variants to prevent memory buildup
@@ -413,16 +414,31 @@ def convert_vcf_to_tab(input_vcf: str, threads=4, cadd_phred_dict: dict = None, 
         df = pd.DataFrame(col_dicts)
         for col in df.columns:
             # Convert float back to int if possible
-            df.loc[:, col] = df.loc[:, col].replace("NaN", np.nan)
+            # Replace "NaN" strings with pd.NA
+            df[col] = df[col].replace("NaN", pd.NA)
+            if col == "pos":
+                df[col] = df[col].astype('Int32')
+                continue
+            
+            # Try to convert to Float32 first
             try:
-                df.loc[:, col] = df.loc[:, col].astype(np.float32)
+                df[col] = df[col].astype('Float32')
             except ValueError:
-                pass
+                continue
             else:
-                try:
-                    df.loc[:, col] = df.loc[:, col].astype(np.int32)
-                except ValueError:
-                    pass
+                # Try to convert Float32 to Int32 if all values are integer-like
+                uniq_values = df[col].dropna().unique()
+                convert = True
+                for value in uniq_values:
+                    if value % 1 != 0:
+                        convert = False
+                        break
+                if convert:
+                    try:
+                        df[col] = df[col].astype('Int32')
+                    except ValueError:
+                        uniq_values = df[col].dropna().unique()
+                        logger.info(f"Column {col} contains non-integer numeric values. Keeping as Float32 type, unique values sample: {uniq_values[:20].tolist()}")
         
         logger.info(f"The annotation table has {df.shape[0]} rows and {df.shape[1]} columns. And it looks like this: \n{df.head().to_string(index=False)}")
         return df

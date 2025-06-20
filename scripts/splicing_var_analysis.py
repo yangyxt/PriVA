@@ -125,7 +125,7 @@ def splicing_altering_per_row(row,
     DS_DG = float(row['SpliceAI_pred_DS_DG'])
     DS_DL = float(row['SpliceAI_pred_DS_DL'])
     var_pos = int(row['pos'])
-    strand = str(row['STRAND'])
+    strand = str(int(row['STRAND']))
     hgvsc = str(row['HGVSc']) if not na_value(row['HGVSc']) else None
     spliceai_lof, spliceai_len_changing, spliceai_frame_shift, spliceai_span_intol_domain, spliceai_affected_exons, spliceai_ten_percent_protein, spliceai_canonical_gain_offset, spliceai_canonical_loss_offset = SpliceAI_interpretation( DS_AG, 
                                                                                                                                                                                                                                             DS_AL,

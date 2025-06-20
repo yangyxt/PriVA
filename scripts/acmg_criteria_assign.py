@@ -21,11 +21,17 @@ import subprocess
 import tempfile
 import os
 
+# Identify the parent folder of the self file
+self_file = os.path.abspath(__file__)
+self_dir = os.path.dirname(self_file)
+data_dir = os.path.join(os.path.dirname(self_dir), "data")
+
+
 from stat_protein_domain_amscores import nested_defaultdict
 from protein_domain_mapping import DomainNormalizer
 from mavdb_interpreter import MaveDBScoreInterpreter
 from find_cosegregation_vars import find_cosegregating_variants
-from determine_phase import batch_annotate_cis_trans_from_table
+from determine_phase import determine_cis_trans_relationships
 from splicing_var_analysis import parse_hgvsc_splice_position
 
 logger = logging.getLogger(__name__)
@@ -815,57 +821,57 @@ def determine_denovo_per_row(row: dict, ped_info: dict, ped_df: pd.DataFrame) ->
     if proband_sex == "1" or proband_sex == 1:
         if row['chrom'] == "chrX":
             # Variant on chrX are hemizygous in males
-            if "1" in row.get(mother, ''):
+            if "1" in row.get(mother, '.'):
                 return False
-            else:
+            elif not "." in row.get(mother, '.'):
                 return "PS2"
         elif row['chrom'] == "chrY":
             # Variant on chrY are hemizygous in males
-            if "1" in row.get(father, ''):
+            if "1" in row.get(father, '.'):
                 return False
-            else:
+            elif not "." in row.get(father, '.'):
                 return "PS2"
         elif row['chrom'] == "chrM":
             # Variant on chrM are hemizygous in males
-            if "1" in row.get(mother, ''):
+            if "1" in row.get(mother, '.'):
                 return False
-            else:
+            elif not "." in row.get(mother, '.'):
                 return "PS2"
         else:
-            if "1" in row.get(father, '') or "1" in row.get(mother, ''):
+            if "1" in row.get(father, '.') or "1" in row.get(mother, '.'):
                 return False
-            elif father and mother:
+            elif (not "." in row.get(father, '.')) and (not "." in row.get(mother, '.')):
                 return "PS2"
-            elif row.get('gnomAD_joint_AF') in [0, np.nan]:
+            elif row.get('gnomAD_joint_AF') in [0, np.nan] and ((not "." in row.get(father, '.')) or (not "." in row.get(mother, '.'))):
                 return "PM6"
             else:
                 return False
     else:
         if row['chrom'] == "chrX":
-            if "1" in row.get(father, '') or "1" in row.get(mother, ''):
+            if "1" in row.get(father, '.') or "1" in row.get(mother, '.'):
                 return False
-            elif father and mother:
+            elif (not "." in row.get(father, '.')) and (not "." in row.get(mother, '.')):
                 return "PS2"
-            elif row.get('gnomAD_joint_AF') in [0, np.nan]:
+            elif row.get('gnomAD_joint_AF') in [0, np.nan] and ((not "." in row.get(father, '.')) or (not "." in row.get(mother, '.'))):
                 return "PM6"
             else:
                 return False
         elif row['chrom'] == "chrY":
-            if "1" in row.get(father, ''):
+            if "1" in row.get(father, '.'):
                 return False
-            else:
+            elif (not "." in row.get(father, '.')):
                 return "PS2"
         elif row['chrom'] == "chrM":
-            if "1" in row.get(mother, ''):
+            if "1" in row.get(mother, '.'):
                 return False
-            else:
+            elif (not "." in row.get(mother, '.')):
                 return "PS2"
         else:
-            if "1" in row.get(father, '') or "1" in row.get(mother, ''):
+            if "1" in row.get(father, '.') or "1" in row.get(mother, '.'):
                 return False
-            elif father and mother:
+            elif (not "." in row.get(father, '.')) and (not "." in row.get(mother, '.')):
                 return "PS2"
-            elif row.get('gnomAD_joint_AF') in [0, np.nan]:
+            elif row.get('gnomAD_joint_AF') in [0, np.nan] and ((not "." in row.get(father, '.')) or (not "." in row.get(mother, '.'))):
                 return "PM6"
             else:
                 return False
@@ -911,6 +917,7 @@ def PS2_PM6_criteria(df: pd.DataFrame,
     # Select necessary columns and drop duplicates
     cols_to_use = [col for col in necessary_cols if col in df.columns]
     unique_df = df[cols_to_use + ['variant_key']].drop_duplicates(subset=['variant_key'])
+    unique_df['gnomAD_joint_AF'] = unique_df['gnomAD_joint_AF'].fillna(0)
     
     logger.info(f"Processing {len(unique_df)} unique variants (reduced from {len(df)} total variants)")
     
@@ -1770,25 +1777,39 @@ def identify_inheritance_mode_per_row(row_dict: dict, gene_mean_am_score: float,
     loeuf_score = float(row_dict.get('LOEUF', 0.3))
     loeuf_score = 1.0 if pd.isna(loeuf_score) else loeuf_score  # If LOEUF is NaN, we leave the decision to gene avg AM score
     haplo_insufficient = (loeuf_score <= 0.36) or (gene_mean_am_score >= 0.564)
-    haplo_insufficient = haplo_insufficient and (loeuf_score <= 0.8) and (gene_mean_am_score >= 0.4)
+    haplo_insufficient = haplo_insufficient and ((loeuf_score <= 0.8) or pd.isna(loeuf_score)) and ((gene_mean_am_score >= 0.4) or pd.isna(gene_mean_am_score))
     haplo_sufficient = not haplo_insufficient
+
+    clingen_recessive = None
+    clingen_dominant = None
+    if clingen_curate_score:
+        logger.debug(f"Using ClinGen curated dosage sensitivity to determine inheritance mode for {row_dict['Gene']}, the ClinGen record looks like this: \n{clingen_curate_score}\n")
+        if clingen_curate_score == 3:
+            clingen_recessive = False
+            clingen_dominant = True
+            haplo_insufficient = True
+        elif clingen_curate_score == 30 or clingen_curate_score == 40:
+            clingen_recessive = True
+            haplo_insufficient = False
+            haplo_sufficient = True
+            # Cannot modify hpo_dominant because it might relates to GOF variants 
 
     hpo_inheritance = parse_hpo_inheritance(row_dict)
     if isinstance(hpo_inheritance, bool):
         logger.debug(f"No HPO inheritance information for {row_dict['Gene']}, using LOEUF: {row_dict['LOEUF']} and AM score: {gene_mean_am_score} to determine inheritance mode. The haploinsufficiency is {haplo_insufficient} and haplosufficiency is {haplo_sufficient}")
-        return haplo_sufficient, haplo_insufficient, False, False, haplo_insufficient, hpo_inheritance
+        recessive = clingen_recessive if clingen_recessive is not None else haplo_sufficient
+        dominant = clingen_dominant if clingen_dominant is not None else haplo_insufficient
+        return recessive, dominant, False, False, haplo_insufficient, hpo_inheritance
 
-    if clingen_curate_score:
-        logger.debug(f"Using ClinGen curated dosage sensitivity to determine inheritance mode for {row_dict['Gene']}, the ClinGen record looks like this: \n{clingen_curate_score}\n")
-        if clingen_curate_score == 3:
-            hpo_inheritance['hpo_recessive'] = False
-            hpo_inheritance['hpo_dominant'] = True
-        elif clingen_curate_score == 30 or clingen_curate_score == 40:
-            hpo_inheritance['hpo_recessive'] = True
-            # Cannot modify hpo_dominant because it might relates to GOF variants 
+    if clingen_recessive is not None:
+        hpo_inheritance['hpo_recessive'] = clingen_recessive
+    
+    if clingen_dominant is not None:
+        hpo_inheritance['hpo_dominant'] = clingen_dominant
 
     if hpo_inheritance['hpo_recessive']:
         haplo_insufficient = False
+        haplo_sufficient=True
 
     return hpo_inheritance['hpo_recessive'], hpo_inheritance['hpo_dominant'], hpo_inheritance['hpo_non_monogenic'], hpo_inheritance['hpo_non_mendelian'], haplo_insufficient, hpo_inheritance['incomplete_penetrance']
 
@@ -2019,25 +2040,16 @@ def BP2_PM3_criteria(df: pd.DataFrame,
                      ps3_criteria: np.ndarray,
                      is_recessive: np.ndarray,
                      is_dominant: np.ndarray,
-                     incomplete_penetrance: np.ndarray) -> Tuple[pd.Series, pd.Series]:
+                     incomplete_penetrance: np.ndarray,
+                     threads: int = 1) -> Tuple[pd.Series, pd.Series]:
     # BP2: observed in trans with a pathogenic variant in dominant disease, Or in-cis with a pathogenic variant with any inheritance mode
     # PM3: observed in trans with a pathogenic variant in recessive disease.
     pathogenic = df["vep_consq_lof"] | df["splicing_lof"] | df["5UTR_lof"] | (ps1_criteria & ps3_criteria) | pvs1_criteria
 
-    in_cis_pathogenic, in_trans_pathogenic = batch_annotate_cis_trans_from_table(df, 
-                                                                                 pathogenic, 
-                                                                                 ped_df, 
-                                                                                 chrom_col="chrom",
-                                                                                 pos_col="pos",
-                                                                                 ref_col="ref",
-                                                                                 alt_col="alt",
-                                                                                 gene_col="Gene",
-                                                                                 ped_sample_id_col="IndividualID", 
-                                                                                 ped_paternal_id_col="PaternalID", 
-                                                                                 ped_maternal_id_col="MaternalID", 
-                                                                                 ped_sex_col="Sex", 
-                                                                                 ped_phenotype_col="Phenotype", 
-                                                                                 ped_patient_value=2)
+    in_cis_pathogenic, in_trans_pathogenic, df = determine_cis_trans_relationships( df, 
+                                                                                    pathogenic, 
+                                                                                    ped_df, 
+                                                                                    threads )
 
     in_cis_pathogenic = in_cis_pathogenic > 0
     in_trans_pathogenic = in_trans_pathogenic > 0
@@ -2497,7 +2509,12 @@ def calculate_posterior_probability(row, prior_probability=0.1, exp_base=2, odds
 
 
 
-def sort_and_rank_variants(df: pd.DataFrame, ped_df: pd.DataFrame, fam_name: str, pvs1_criteria: np.ndarray, gene_to_am_score_map: dict, recessive: np.ndarray, dominant: np.ndarray) -> pd.DataFrame:
+def sort_and_rank_variants(df: pd.DataFrame, 
+                           ped_df: pd.DataFrame, 
+                           fam_name: str, 
+                           gene_to_am_score_map: dict, 
+                           relevant_gene_list: str = None,
+                           dispensable_gene_list: str = os.path.join(data_dir, "dispensable_genes", "dispensable_gene_list.txt")) -> pd.DataFrame:
     """
     Sort variants by their maximum ACMG quantitative score and add ranking.
     
@@ -2511,20 +2528,37 @@ def sort_and_rank_variants(df: pd.DataFrame, ped_df: pd.DataFrame, fam_name: str
         proband = ped_df.loc[(ped_df['#FamilyID'] == fam_name) & (ped_df['Phenotype'].isin(["2", 2])), 'IndividualID'].values[0]
         proband_het = (df.loc[:, proband].str.count("1") == 1)
     else:
+        logger.warning(f"No ped_table provided, skip the haplo_sufficient penalty")
         proband_het = np.array([False] * len(df))
+
+    df = df.copy()
         
     df["sort_index"] = df.loc[:, "ACMG_quant_score"]
+    df = df.loc[df["BIOTYPE"] == "protein_coding", :]
 
     # normalized_loeuf = df.loc[:, "LOEUF"].fillna(1)
     # normalized_mean_am = (1-df.loc[:, "Gene"].map(gene_to_am_score_map)) * 2
     # normalized_mean_am = normalized_mean_am.fillna(1)
-    haplo_sufficient = (df.loc[:, "LOEUF"] > 0.8) | (df.loc[:, "Gene"].map(gene_to_am_score_map) < 0.4)
-    df["haplo_insuf_index"] = 1
+    haplo_sufficient = (df.loc[:, "LOEUF"] > 0.35) | (df.loc[:, "Gene"].map(gene_to_am_score_map) < 0.564)
+    df["haplo_insuf_index"] = 1.0
     df.loc[haplo_sufficient, "haplo_insuf_index"] = 0.9 # This penalty coefficient will lead to a near-1 posterior prob downgrade to below 0.9 which is below the cutoff of likely pathogenic.
     
-    only_recessive = (recessive & np.logical_not(dominant))
-    lof = pvs1_criteria | df["vep_consq_lof"] | df["splicing_lof"] | df["5UTR_lof"]
-    df.loc[lof & proband_het & only_recessive, "sort_index"] = df.loc[lof & proband_het & only_recessive, "sort_index"] * df.loc[lof & proband_het & only_recessive, "haplo_insuf_index"]
+    if dispensable_gene_list is not None:
+        dispensable_genes = pd.read_table(dispensable_gene_list, header=None, names=["SYMBOL"], comment="#") # Skip the header row starting with #
+        dispensable_genes = set(dispensable_genes["SYMBOL"].tolist())
+        df["dispensable_gene_index"] = 1.0
+        df.loc[df["SYMBOL"].isin(dispensable_genes), "dispensable_gene_index"] = 0.9
+        df.loc[:, "sort_index"] = df.loc[:, "sort_index"] * df.loc[:, "dispensable_gene_index"]
+
+    if relevant_gene_list is not None:
+        relevant_genes = pd.read_table(relevant_gene_list, header=None, names=["SYMBOL"], comment="#") # Skip the header row starting with #
+        relevant_genes = set(relevant_genes["SYMBOL"].tolist())
+        df["relevant_gene_index"] = 1.0
+        df.loc[df["SYMBOL"].isin(relevant_genes), "relevant_gene_index"] = 1.2  # Prioritize the variants in relevant genes
+        df.loc[:, "sort_index"] = df.loc[:, "sort_index"] * df.loc[:, "relevant_gene_index"]
+    
+    lof = df["ACMG_quant_score"] > 0.89
+    df.loc[lof & proband_het, "sort_index"] = df.loc[lof & proband_het, "sort_index"] * df.loc[lof & proband_het, "haplo_insuf_index"]
     # Group by variant coordinates to get max score per variant
     variant_groups = df.groupby(['chrom', 'pos', 'ref', 'alt'])
     max_scores = variant_groups['sort_index'].transform('max')
@@ -2584,6 +2618,8 @@ def ACMG_criteria_assign(anno_table: str,
                          ped_table: str = "",
                          alt_disease_vcf: str = "",
                          clingen_map_pkl: str = "",
+                         relevant_gene_list: str = None,
+                         dispensable_gene_list: str = None,
                          gnomAD_extreme_rare_threshold: float = 0.0001,
                          expected_incidence: float = 0.001,
                          threads: int = 10) -> Tuple[pd.DataFrame, pd.DataFrame]:
@@ -2845,7 +2881,12 @@ def ACMG_criteria_assign(anno_table: str,
     anno_df["ACMG_class"] = acmg_class
 
     # Sort and rank variants
-    anno_df = sort_and_rank_variants(anno_df, ped_df, fam_name, pvs1_criteria, gene_to_am_score_map, recessive, dominant)
+    anno_df = sort_and_rank_variants(anno_df, 
+                                     ped_df, 
+                                     fam_name, 
+                                     gene_to_am_score_map, 
+                                     relevant_gene_list,
+                                     dispensable_gene_list)
     # Save the annotated table to replace the input anno_table
     anno_df.to_csv(anno_table, sep="\t", index=False)
     
@@ -2877,6 +2918,8 @@ if __name__ == "__main__":
     parser.add_argument("--repeat_region_file", type=str, required=True)
     parser.add_argument("--gnomAD_extreme_rare_threshold", type=float, required=False, default=0.0001)
     parser.add_argument("--expected_incidence", type=float, required=False, default=0.001)
+    parser.add_argument("--relevant_gene_list", type=str, required=False, default=None)
+    parser.add_argument("--dispensable_gene_list", type=str, required=False, default=os.path.join(data_dir, "dispensable_genes", "dispensable_gene_list.txt"))
     parser.add_argument("--threads", type=int, required=False, default=10)
     args = parser.parse_args()
 
@@ -2899,6 +2942,8 @@ if __name__ == "__main__":
                                                     ped_table=args.ped_table,
                                                     alt_disease_vcf=args.alt_disease_vcf,
                                                     clingen_map_pkl=args.clingen_map_pkl,
+                                                    relevant_gene_list=args.relevant_gene_list,
+                                                    dispensable_gene_list=args.dispensable_gene_list,
                                                     gnomAD_extreme_rare_threshold=args.gnomAD_extreme_rare_threshold,
                                                     expected_incidence=args.expected_incidence,
                                                     threads=args.threads)

@@ -259,6 +259,9 @@ def convert_record_to_tab(args: tuple) -> tuple[List[Dict[str, Any]], List[str]]
         for feature_name, feature_dict in csqs.items():
             if feature_name.startswith("ENS"):
                 row_dict = {**var_dict_items, **feature_dict, **gt_dict, **ad_dict}
+                if na_value(row_dict['pos']) or na_value(record_dict['pos']):
+                    logger.warning(f"TRACKING: Position is None set in var_dict_items:\n{var_dict_items}\n")
+                    continue
                 cadd_phred = cadd_phred_dict.get(feature_name, {"CADD_phred": np.nan, "CADD_reg_phred": np.nan})
                 if len(cadd_phred) == 1:
                     if feature_name.startswith("ENST"):
@@ -343,7 +346,7 @@ def convert_vcf_to_tab(input_vcf: str, threads=4, cadd_phred_dict: dict = None, 
             if varcount % 5000 == 0:
                 logger.info(f"At Variant {varcount}: total run time across past 5000 variants: {batch_run_time.sum():.6f}s, extend time: {batch_extend_time.sum():.6f}s")
             if len(rows) == 0: continue
-            if col_dicts is None: col_dicts = {key: np.empty(est_anno_count, dtype=object) for key in rows[0].keys()}
+            if col_dicts is None: col_dicts = {key: np.empty(est_anno_count, dtype=object) if key != "pos" else np.zeros(est_anno_count, dtype=np.int64) for key in rows[0].keys()}
             
             # Force garbage collection every 1000 variants to prevent memory buildup
             if varcount % 1000 == 0:
@@ -358,6 +361,16 @@ def convert_vcf_to_tab(input_vcf: str, threads=4, cadd_phred_dict: dict = None, 
                     for i in range(num_rows):
                         d = all_rows[i]
                         value = np.nan if na_value(d.get(key, np.nan)) else d.get(key, np.nan)
+                        
+                        # Special handling for position field to preserve integer values
+                        if key == "pos" and not na_value(value):
+                            try:
+                                values[i] = int(value)
+                                has_digit = True
+                                continue
+                            except (ValueError, TypeError):
+                                logger.warning(f"Could not convert position value {value} to integer")
+                        
                         try:
                             value = float(value)
                         except ValueError:
@@ -368,8 +381,12 @@ def convert_vcf_to_tab(input_vcf: str, threads=4, cadd_phred_dict: dict = None, 
                         values[i] = value
                     
                     if has_digit and col_dicts[key].dtype != np.float32:
-                        logger.info(f"Found the column {key} has digit values in the iterating chunk, convert the np array type to float32")
-                        col_dicts[key] = col_dicts[key].astype(np.float32)
+                        if key == "pos":
+                            logger.info(f"Found the column {key} has digit values in the iterating chunk, convert the np array type to int64")
+                            col_dicts[key] = col_dicts[key].astype(np.int64)
+                        else:
+                            logger.info(f"Found the column {key} has digit values in the iterating chunk, convert the np array type to float32")
+                            col_dicts[key] = col_dicts[key].astype(np.float32)
                     
                     col_dicts[key][anno_record_count:anno_record_count + num_rows] = values
                 anno_record_count += num_rows
@@ -386,6 +403,16 @@ def convert_vcf_to_tab(input_vcf: str, threads=4, cadd_phred_dict: dict = None, 
                 for i in range(num_rows):
                     d = all_rows[i]
                     value = np.nan if na_value(d.get(key, np.nan)) else d.get(key, np.nan)
+                    
+                    # Special handling for position field to preserve integer values
+                    if key == "pos" and not na_value(value):
+                        try:
+                            values[i] = int(value)
+                            has_digit = True
+                            continue
+                        except (ValueError, TypeError):
+                            logger.warning(f"Could not convert position value {value} to integer")
+                    
                     try:
                         value = float(value)
                     except ValueError:
@@ -396,8 +423,12 @@ def convert_vcf_to_tab(input_vcf: str, threads=4, cadd_phred_dict: dict = None, 
                     values[i] = value
                 
                 if has_digit and col_dicts[key].dtype != np.float32:
-                    logger.info(f"Found the column {key} has digit values in the iterating chunk, convert the np array type to float32")
-                    col_dicts[key] = col_dicts[key].astype(np.float32)
+                    if key == "pos":
+                        logger.info(f"Found the column {key} has digit values in the iterating chunk, convert the np array type to int64")
+                        col_dicts[key] = col_dicts[key].astype(np.int64)
+                    else:
+                        logger.info(f"Found the column {key} has digit values in the iterating chunk, convert the np array type to float32")
+                        col_dicts[key] = col_dicts[key].astype(np.float32)
                 
                 col_dicts[key][anno_record_count:anno_record_count + num_rows] = values
             anno_record_count += num_rows
@@ -417,7 +448,7 @@ def convert_vcf_to_tab(input_vcf: str, threads=4, cadd_phred_dict: dict = None, 
             # Replace "NaN" strings with pd.NA
             df[col] = df[col].replace("NaN", pd.NA)
             if col == "pos":
-                df[col] = df[col].astype('Int32')
+                df[col] = df[col].astype('Int64')
                 continue
             
             # Try to convert to Float32 first
@@ -526,6 +557,7 @@ def main_combine_annotations(input_vcf: str,
     # Convert VCF to dataframe
     converted_tab = convert_vcf_to_tab(input_vcf, threads, cadd_phred_dict, hpo_symbol_map)
     logger.info(f"Final converted table memory usage: {converted_tab.memory_usage(deep=True).sum() / 1024**2:.1f} MB")
+    logger.info(f"The converted tab looks like this: \n{converted_tab.head(10).to_string(index=False)}")
     
     logger.info(f"Final table memory usage: {converted_tab.memory_usage(deep=True).sum() / 1024**2:.1f} MB")
     logger.info(f"Final table shape: {converted_tab.shape}")

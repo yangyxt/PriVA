@@ -1260,9 +1260,8 @@ def PM1_criteria(df: pd.DataFrame,
     splicing_plc_intol_domain = (df['splicing_lof'] | df['splicing_len_changing']) & df['splicing_span_intol_domain']
     utr_plc_intol_domain = (df['5UTR_lof'] | df['5UTR_len_changing']) & df['5UTR_span_intol_domain']
     indel_intol_domain = (df['vep_consq_len_changing'] | df["vep_consq_lof"]) & loc_intol_domain
-    nmd_variants = (df["Consequence"].str.contains("stop_gained") | df["Consequence"].str.contains("frameshift")) & np.logical_not(df["NMD"].fillna(".").str.contains("escaping"))
-    plc_intol_domain = (splicing_plc_intol_domain | utr_plc_intol_domain | indel_intol_domain) & np.logical_not(nmd_variants)
-    indel_no_nmd = (df['vep_consq_len_changing'] | df["vep_consq_lof"]) & np.logical_not(nmd_variants)
+    
+    plc_intol_domain = (splicing_plc_intol_domain | utr_plc_intol_domain | indel_intol_domain) # For NMD variants, if gene is not known for pathogenic, PVS1 is not assigned, PM1 should be assigned
 
     missense = df['Consequence'].str.contains('missense_variant')
     logger.info(f"There are {missense.sum()} missense variants")
@@ -1295,6 +1294,9 @@ def PM1_criteria(df: pd.DataFrame,
                    ( min_am_score_motifs & missense & np.logical_not(missense_benign) ) | \
                    ( loc_intol_domain & missense & np.logical_not(missense_benign) ) | plc_intol_domain
     pm1_criteria = pm1_criteria & np.logical_not(pvs1_double_count)
+    # For NMD variants without PVS1, we can grant them PM1 instead.
+    nmd_variants = (df["Consequence"].str.contains("stop_gained") | df["Consequence"].str.contains("frameshift")) & np.logical_not(df["NMD"].fillna(".").str.contains("escaping"))
+    pm1_criteria = pm1_criteria | (nmd_variants & (pvs1_criteria == 0))
     pm1_array = np.zeros(len(df), dtype=int)
     pm1_array[pm1_criteria] = 2
     return pm1_array, loc_intol_domain
@@ -1352,18 +1354,18 @@ def PM2_criteria(df: pd.DataFrame,
     return pm2_array
 
 
-def PM4_criteria(df: pd.DataFrame, repeat_regions_file: str, loc_intol_domain: np.ndarray) -> np.ndarray:
+def PM4_criteria(df: pd.DataFrame, pvs1_criteria: np.ndarray, repeat_regions_file: str, loc_intol_domain: np.ndarray) -> np.ndarray:
     # PM4: The variant is causing the protein length change within the Frame
     in_repeat_vars = find_overlaps_bedtools_efficient(df, repeat_regions_file, method="all")
     in_repeat = df['variant_id'].isin(in_repeat_vars)
-    frameshift_variants = df["Consequence"].str.contains("frameshift")
-    nmd_variants = df["Consequence"].str.contains("stop_gained") & np.logical_not(df["NMD"].fillna(".").str.contains("escaping"))
+    frameshift_variants = df["Consequence"].str.contains("frameshift") & (pvs1_criteria > 0)
+    nmd_variants = pvs1_criteria >= 3
     inframe_indels = (df['vep_consq_len_changing'] & \
                      (np.logical_not(in_repeat) | loc_intol_domain) & \
                      np.logical_not(frameshift_variants) & \
                      np.logical_not(nmd_variants))
     splicing_inframe_indels = df["splicing_len_changing"] & \
-                              np.logical_not(df["splicing_frameshift"]) & \
+                              np.logical_not(df["splicing_frameshift"] & (pvs1_criteria > 0)) & \
                               (np.logical_not(in_repeat) | df["splicing_span_intol_domain"])
     utr_inframe_indels = df["5UTR_len_changing"] & \
                          (np.logical_not(in_repeat) | df["5UTR_span_intol_domain"])
@@ -2729,7 +2731,7 @@ def ACMG_criteria_assign(anno_table: str,
     logger.info(f"PM1 criteria applied, {(pm1_criteria > 0).sum()} variants are having the PM1 criteria")
     gc.collect()
     # Apply PM4 criteria, causing the protein length change
-    pm4_criteria, in_repeat_vars = PM4_criteria(anno_df, repeat_region_file, loc_intol_domain)
+    pm4_criteria, in_repeat_vars = PM4_criteria(anno_df, pvs1_criteria, repeat_region_file, loc_intol_domain)
     anno_df["variant_in_repeat_region"] = in_repeat_vars
     gc.collect()
     logger.info(f"PM4 criteria applied, {(pm4_criteria > 0).sum()} variants are having the PM4 criteria")

@@ -37,6 +37,7 @@ The pipeline integrates multiple annotation resources to comprehensively evaluat
    - CADD (standalone client)
    - PrimateAI (VEP_plugin)
    - AlphaMissense (VEP_plugin)
+   - LOFTEE (VEP_plugin)
 
 4. **Haplo-insufficiency**: 
    - LOEUF (VEP_plugin)
@@ -46,16 +47,14 @@ The pipeline integrates multiple annotation resources to comprehensively evaluat
    - VEP
 
 6. **Clinical variants**: 
-   - ClinVar (bcftools annotate)
+   - ClinVar VCF (bcftools annotate)
 
 7. **Population-wise allele frequency + number of homozygous carriers**: 
-   - gnomADv4 (bcftools annotate)
+   - gnomADv4 VCFs (bcftools annotate)
 
 8. **Conservation**: 
    - Conservation (VEP_plugin)
 
-9. **Codon based evaluation**: 
-   - SameCodon (VEP_plugin, only used with internet connection in database mode, needs separate running)
 
 ## Pipeline Structure
 
@@ -124,6 +123,7 @@ The recommended way to run the pipeline is using Snakemake, which manages depend
 **Running the Pipeline:**
 
 Navigate to your working directory (or specify absolute paths in the command).
+The config file can be duplicated and customized for batch-specific runs.
 
 **Basic Command:**
 
@@ -229,12 +229,12 @@ This shows a full command often used for running on a cluster or server:
 # Activate environment first!
 # conda activate priva_acmg
 
-nohup snakemake --snakefile /paedyl01/disk1/yangyxt/PriVA/Snakefile \
+nohup snakemake --snakefile /path/to/PriVA/Snakefile \
                 --cores 50 \
-                --configfile /paedyl01/disk1/yangyxt/PriVA/test_clinvar/config_clinvar.hg38.yaml \
+                --configfile /path/to/config.yaml \
                 --printshellcmds \
                 --verbose \
-                > /paedyl01/disk1/yangyxt/PriVA/test_clinvar/clinvar_2star_snakemake_pipeline.hg38.log 2>&1 &
+                > /path/to/snakemake_pipeline.log 2>&1 &
 ```
 
 * `nohup ... &`: Runs the command in the background, detached from the terminal, logging output to the specified file.

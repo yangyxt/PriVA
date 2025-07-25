@@ -1626,7 +1626,8 @@ def BS1_criteria(df: pd.DataFrame,
     gene_max_patho_af = df["clinvar_patho_gene_max_af"].fillna(0)
 
     _, greater_than_clinvar_patho_af = control_false_neg_rate(df['gnomAD_joint_AF_max'], df['gnomAD_joint_AN_max'], af_threshold=gene_max_patho_af, alpha=0.01)
-    greater_than_clinvar_patho_af = np.where(greater_than_clinvar_patho_af.isna(), df['gnomAD_joint_AF'] > gene_max_patho_af, greater_than_clinvar_patho_af)
+    greater_than_clinvar_patho_af = np.where(greater_than_clinvar_patho_af.isna() & (gene_max_patho_af > 0), df['gnomAD_joint_AF'] > gene_max_patho_af, greater_than_clinvar_patho_af)
+    greater_than_clinvar_patho_af = np.where(np.isnan(greater_than_clinvar_patho_af), False, greater_than_clinvar_patho_af)
     _, greater_than_basic_af = control_false_neg_rate(df['gnomAD_joint_AF_max'], df['gnomAD_joint_AN_max'], af_threshold=0.0001, alpha=0.01)
     greater_than_basic_af = np.where(greater_than_basic_af.isna(), df['gnomAD_joint_AF'] > 0.0001, greater_than_basic_af)
     bs1_criteria = (greater_than_disease_incidence | greater_than_clinvar_patho_af) & greater_than_basic_af

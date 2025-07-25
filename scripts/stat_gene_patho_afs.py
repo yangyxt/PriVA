@@ -37,6 +37,7 @@ def process_chromosome(chrom, vcf_file, csq_field_map):
     logger.info(f"Processing chromosome {chrom}")
     
     gene_to_variant = defaultdict(lambda: (None, 0))
+    acc_patho_afs = defaultdict(lambda: 0)
     
     with pysam.VariantFile(vcf_file) as vcf:
         for record in vcf.fetch(chrom):
@@ -84,6 +85,13 @@ def process_chromosome(chrom, vcf_file, csq_field_map):
 
             if af is None or af <= 0:
                 af = 0
+
+            joint_af = record.info.get('AF_joint', 0)
+            if isinstance(joint_af, tuple):
+                joint_af = joint_af[0]
+
+            if joint_af is None or joint_af <= 0:
+                joint_af = 0
             
             # Skip if no CSQ field
             if 'CSQ' not in record.info:
@@ -107,6 +115,11 @@ def process_chromosome(chrom, vcf_file, csq_field_map):
                     continue
                 
                 # Check if this is a higher frequency than what we've seen before
+                if ensg in acc_patho_afs:
+                    acc_patho_afs[ensg] += joint_af
+                else:
+                    acc_patho_afs[ensg] = joint_af
+
                 current_af = gene_to_variant[ensg][1]
                 if af > current_af:
                     variant_info = {
@@ -120,7 +133,8 @@ def process_chromosome(chrom, vcf_file, csq_field_map):
                         'consequence': consequence,
                         'clnsig': clnsig,
                         'clnrevstat': clnrevstat,
-                        'gene_symbol': symbol
+                        'gene_symbol': symbol,
+                        'acc_patho_af': acc_patho_afs[ensg]
                     }
                     gene_to_variant[ensg] = (variant_info, af)
     

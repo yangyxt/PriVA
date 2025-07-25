@@ -6,6 +6,8 @@ A comprehensive pipeline for ACMG-based variant prioritization in genetic analys
 
 This repository contains scripts and configuration files for running an automated variant prioritization pipeline based on ACMG guidelines. The pipeline integrates multiple annotation resources to evaluate variant pathogenicity and prioritize variants for clinical interpretation.
 
+![PriVA Workflow](PriVA_figure1.png)
+
 ## Requirements
 
 - Snakemake workflow management system
@@ -77,10 +79,10 @@ The pipeline consists of three main steps:
 
 The pipeline includes an installation utility (`scripts/install_utils.sh`) that helps set up all required components:
 
-1. Create and configure the conda environment (expected name `acmg`):
+1. Create and configure the conda environment (expected name `priva_acmg`):
    ```bash
    bash scripts/install_utils.sh conda_install_vep path/to/env.yaml
-   # Make sure the environment name in env.yaml is 'acmg' or activate it manually later
+   # Make sure the environment name in env.yaml is 'priva_acmg' or activate it manually later
    ```
 
 2. Install VEP and its plugins:
@@ -112,9 +114,9 @@ The recommended way to run the pipeline is using Snakemake, which manages depend
 
 **Prerequisites:**
 
-1. Activate Conda Environment: Ensure the `acmg` conda environment (or the one created during installation) is activated:
+1. Activate Conda Environment: Ensure the `priva_acmg` conda environment (or the one created during installation) is activated:
    ```bash
-   conda activate acmg
+   conda activate priva_acmg
    ```
 2. Configuration File: Have your `config.yaml` file ready with all necessary paths and parameters correctly specified.
 3. Snakefile Location: Know the path to the `Snakefile`.
@@ -170,14 +172,14 @@ run_priva_pipeline() {
     fi
 
     # --- Environment Check ---
-    if [[ -z "$CONDA_DEFAULT_ENV" ]] || [[ "$CONDA_DEFAULT_ENV" != "acmg" ]]; then
-        echo "WARNING: Conda environment 'acmg' might not be active. Attempting to activate..."
-        conda activate acmg
+    if [[ -z "$CONDA_DEFAULT_ENV" ]] || [[ "$CONDA_DEFAULT_ENV" != "priva_acmg" ]]; then
+        echo "WARNING: Conda environment 'priva_acmg' might not be active. Attempting to activate..."
+        conda activate priva_acmg
         if [[ $? -ne 0 ]]; then
-            echo "ERROR: Failed to activate conda environment 'acmg'. Please activate it manually."
+            echo "ERROR: Failed to activate conda environment 'priva_acmg'. Please activate it manually."
             return 1
         fi
-        echo "Activated conda environment 'acmg'."
+        echo "Activated conda environment 'priva_acmg'."
     fi
 
     # --- Execution ---
@@ -216,7 +218,7 @@ run_priva_pipeline() {
 1. **Configuration:** Set the path to your `Snakefile` and optionally a default config file path.
 2. **Arguments:** Takes the config file path (required), number of cores (optional, defaults to 8), and log directory (optional, defaults to `snakemake_logs`) as arguments.
 3. **Validation:** Checks if the Snakefile and config file exist and if the core count is valid.
-4. **Environment Check:** Verifies if the `acmg` conda environment is active and tries to activate it if not.
+4. **Environment Check:** Verifies if the `priva_acmg` conda environment is active and tries to activate it if not.
 5. **Execution:** Creates a log directory, constructs the `snakemake` command with useful options (`--printshellcmds`, `--verbose`, `--rerun-incomplete`), and runs it in the background using `nohup`. It prints the PID and log file location for monitoring.
 
 **Comprehensive Example Command (from original README):**
@@ -225,14 +227,14 @@ This shows a full command often used for running on a cluster or server:
 
 ```bash
 # Activate environment first!
-# conda activate acmg
+# conda activate priva_acmg
 
 nohup snakemake --snakefile /paedyl01/disk1/yangyxt/PriVA/Snakefile \
                 --cores 50 \
-                --configfile /paedyl01/disk1/yangyxt/test_acmg_auto/test_clinvar/config_clinvar.hg38.yaml \
+                --configfile /paedyl01/disk1/yangyxt/PriVA/test_clinvar/config_clinvar.hg38.yaml \
                 --printshellcmds \
                 --verbose \
-                > /paedyl01/disk1/yangyxt/test_acmg_auto/test_clinvar/clinvar_2star_snakemake_pipeline.hg38.log 2>&1 &
+                > /paedyl01/disk1/yangyxt/PriVA/test_clinvar/clinvar_2star_snakemake_pipeline.hg38.log 2>&1 &
 ```
 
 * `nohup ... &`: Runs the command in the background, detached from the terminal, logging output to the specified file.

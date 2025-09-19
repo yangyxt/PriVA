@@ -128,7 +128,7 @@ function main_workflow() {
     log "  hub_cadd_file: $hub_cadd_file"
     
     # Prepare a comma separated list of samples in the input vcf
-    local samples=$(bcftools query -l "${input_vcf}" | tr '\n' ',')
+    local samples=$(bcftools query -l "${input_vcf}" | sort -u | tr '\n' ',' | sed 's/,$//')
     log "The samples in the input vcf are ${samples}"
 
     # Preprocess the input vcf to:

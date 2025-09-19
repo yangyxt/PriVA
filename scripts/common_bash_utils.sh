@@ -18,7 +18,7 @@ function log() {
     local func_name="${FUNCNAME[1]}"
     local line_num="${BASH_LINENO[0]}"
     local timestamp
-	timestamp=$(date +"%Y-%m-%d %H:%M:%S")
+    timestamp=$(date +"%Y-%m-%d %H:%M:%S")
     >&2 echo "[$timestamp] [Script $script_name: Line $line_num] [Func: $func_name] $msg"
 }
 
@@ -38,11 +38,11 @@ function update_yaml() {
     local key=$2
     local value=$3
 
-	# Escape all forward slashes in the value
+    # Escape all forward slashes in the value
     local value_escaped=${value//\//\\/}
 
     # Replace the value while preserving comments using sed
-	sed -i "s/^\($key *: *\).*/\1${value_escaped}/g" "${yaml_file}"
+    sed -i "s/^\($key *: *\).*/\1${value_escaped}/g" "${yaml_file}"
     # sed -i "s/^\($key *: *\).*/\1$value/" "${yaml_file}"
 }
 
@@ -134,8 +134,8 @@ function display_vcf {
 
 
 function count_vcf_records {
-	local input_vcf=${1}
-	bcftools query -f '\n' ${input_vcf} | wc -l
+    local input_vcf=${1}
+    bcftools query -f '\n' ${input_vcf} | wc -l
 }
 
 
@@ -206,8 +206,8 @@ function announce_remove_tmps {
                 log "${target} has been succesfully removed" || \
                 log "Folder ${target} failed to be deleted (either its not existed or occupied)"
             fi
-		else
-			log "File or directory ${target} does not exist, so do not need to remove it"
+        else
+            log "File or directory ${target} does not exist, so do not need to remove it"
         fi
         >&2 echo ""
     done
@@ -329,18 +329,18 @@ function check_vcf_samples {
         bgzip -f -c ${input_vcf} > ${input_vcf/.vcf/.tmp.vcf.gz} && \
         tabix -f -p vcf ${input_vcf/.vcf/.tmp.vcf.gz} && \
         local gz_vcf=${input_vcf/.vcf/.tmp.vcf.gz} && \
-        local asks=$(bcftools query -l ${gz_vcf} | sort - | awk '{printf "%s\n", $1;}') && \
+        local asks=$(bcftools query -l ${gz_vcf} | sort -u | tr '\n' ',' | sed 's/,$//') && \
         rm -f ${gz_vcf} || { log "Failed to compress ${input_vcf}" && return 10; }
         if [[ $? != "0" ]]; then return 10; fi
     else
         local gz_vcf=${input_vcf} && \
-        local asks=$(bcftools query -l ${gz_vcf} | sort - | awk '{printf "%s\n", $1;}')
+        local asks=$(bcftools query -l ${gz_vcf} | sort -u | tr '\n' ',' | sed 's/,$//')
     fi
 
     if [[ -z ${expected_samples} ]]; then
         log "No expected samples specified. Quit checking samples"
     else
-        local expected_samples=$(echo ${expected_samples} | awk 'BEGIN{RS=",";} {printf "%s\n", $1;}' | sort - | awk '{printf "%s\n", $1;}')
+        local expected_samples=$(echo ${expected_samples} | awk 'BEGIN{RS=",";} {printf "%s\n", $1;}' | sort -u | tr '\n' ',' | sed 's/,$//')
         if [[ ${expected_samples} == ${asks} ]]; then
             log "Expected samples are identical with actual samples in vcf file ${input_vcf}"
         else
@@ -361,8 +361,8 @@ function check_vcf_format {
         return 10
     fi
 
-	check_vcf_index ${input_vcf} || \
-	{ log "The input VCF file ${input_vcf} has some index issue detected by bcftools. Quit this function with error."$'\n'; return 10; }
+    check_vcf_index ${input_vcf} || \
+    { log "The input VCF file ${input_vcf} has some index issue detected by bcftools. Quit this function with error."$'\n'; return 10; }
 
     bcftools view ${input_vcf} | head -200 > /dev/null && \
     log "The input VCF file ${input_vcf} has no format issue detected by bcftools" && \
@@ -372,57 +372,57 @@ function check_vcf_format {
 
 
 function check_vcf_index {
-	local input_vcf=${1}
-	
-	# Determine file type and preferred index format
-	if [[ ${input_vcf} =~ \.vcf\.gz$ ]]; then
-		# For .vcf.gz files: prefer .tbi, but accept .csi if that's what exists
-		local tbi_file="${input_vcf}.tbi"
-		local csi_file="${input_vcf}.csi"
-		
-		# Priority logic: prefer .tbi over .csi
-		if [[ -f ${tbi_file} ]]; then
-			# .tbi exists - check if up to date
-			if [[ ${tbi_file} -nt ${input_vcf} ]]; then
-				# .tbi is current, remove any .csi file
-				silent_remove_tmps ${csi_file}
-				return 0
-			else
-				# .tbi is outdated, update it and remove .csi
-				bcftools index -t -f ${input_vcf} && silent_remove_tmps ${csi_file} || \
-				{ log "Failed to update .tbi index for ${input_vcf}"; return 1; }
-			fi
-		elif [[ -f ${csi_file} ]]; then
-			# Only .csi exists - update it if it is outdated
-			if [[ ${csi_file} -ot ${input_vcf} ]]; then
-				bcftools index -f ${input_vcf} || \
-				{ log "Failed to update .csi index ${input_vcf}"; return 1; }
-			fi
-		else
-			# No index exists - create .tbi
-			bcftools index -t -f ${input_vcf} || \
-			{ log "Failed to create .tbi index for ${input_vcf}"; return 1; }
-		fi
-		
-	elif [[ ${input_vcf} =~ \.vcf$ ]]; then
-		log "The input VCF file ${input_vcf} is plain text, so no index is needed."
-		return 0
-	elif [[ ${input_vcf} =~ \.bcf$ ]]; then
-		# For .bcf files: only .csi format is supported
-		local csi_file="${input_vcf}.csi"
-		
-		if [[ -f ${csi_file} ]] && [[ ${csi_file} -nt ${input_vcf} ]]; then
-			return 0  # Index is current
-		else
-			# Create or update .csi index (bcftools index defaults to .csi for .bcf)
-			bcftools index -f ${input_vcf} || \
-			{ log "Failed to index .bcf file ${input_vcf}"; return 1; }
-		fi
-		
-	else
-		log "Unsupported VCF file format: ${input_vcf}"
-		return 1
-	fi
+    local input_vcf=${1}
+    
+    # Determine file type and preferred index format
+    if [[ ${input_vcf} =~ \.vcf\.gz$ ]]; then
+        # For .vcf.gz files: prefer .tbi, but accept .csi if that's what exists
+        local tbi_file="${input_vcf}.tbi"
+        local csi_file="${input_vcf}.csi"
+        
+        # Priority logic: prefer .tbi over .csi
+        if [[ -f ${tbi_file} ]]; then
+            # .tbi exists - check if up to date
+            if [[ ${tbi_file} -nt ${input_vcf} ]]; then
+                # .tbi is current, remove any .csi file
+                silent_remove_tmps ${csi_file}
+                return 0
+            else
+                # .tbi is outdated, update it and remove .csi
+                bcftools index -t -f ${input_vcf} && silent_remove_tmps ${csi_file} || \
+                { log "Failed to update .tbi index for ${input_vcf}"; return 1; }
+            fi
+        elif [[ -f ${csi_file} ]]; then
+            # Only .csi exists - update it if it is outdated
+            if [[ ${csi_file} -ot ${input_vcf} ]]; then
+                bcftools index -f ${input_vcf} || \
+                { log "Failed to update .csi index ${input_vcf}"; return 1; }
+            fi
+        else
+            # No index exists - create .tbi
+            bcftools index -t -f ${input_vcf} || \
+            { log "Failed to create .tbi index for ${input_vcf}"; return 1; }
+        fi
+        
+    elif [[ ${input_vcf} =~ \.vcf$ ]]; then
+        log "The input VCF file ${input_vcf} is plain text, so no index is needed."
+        return 0
+    elif [[ ${input_vcf} =~ \.bcf$ ]]; then
+        # For .bcf files: only .csi format is supported
+        local csi_file="${input_vcf}.csi"
+        
+        if [[ -f ${csi_file} ]] && [[ ${csi_file} -nt ${input_vcf} ]]; then
+            return 0  # Index is current
+        else
+            # Create or update .csi index (bcftools index defaults to .csi for .bcf)
+            bcftools index -f ${input_vcf} || \
+            { log "Failed to index .bcf file ${input_vcf}"; return 1; }
+        fi
+        
+    else
+        log "Unsupported VCF file format: ${input_vcf}"
+        return 1
+    fi
 }
 
 
@@ -512,61 +512,61 @@ function check_vcf_multiallelics {
 function clean_vcf_multiallelics {
     local input_vcf=${1}
     local ref_genome=${2}
-	local threads=${3}
+    local threads=${3}
 
-	if [[ -z ${threads} ]]; then
-		threads=1
-	fi
+    if [[ -z ${threads} ]]; then
+        threads=1
+    fi
 
-	if check_vcf_multiallelics ${input_vcf}; then
-		return 0
-	else
-		local tmp_tag=$(randomID)
-		local tmp_output=${input_vcf/.vcf/.norm.${tmp_tag}.vcf}
-		normalize_vcf ${input_vcf} ${tmp_output} ${ref_genome} ${threads} && \
-		mv ${tmp_output} ${input_vcf} && \
-		mv ${tmp_output}.tbi ${input_vcf}.tbi || \
-		{ log "Failed to normalize ${input_vcf} to remove multi-allelics. Return with error." && return 1; }
-	fi
+    if check_vcf_multiallelics ${input_vcf}; then
+        return 0
+    else
+        local tmp_tag=$(randomID)
+        local tmp_output=${input_vcf/.vcf/.norm.${tmp_tag}.vcf}
+        normalize_vcf ${input_vcf} ${tmp_output} ${ref_genome} ${threads} && \
+        mv ${tmp_output} ${input_vcf} && \
+        mv ${tmp_output}.tbi ${input_vcf}.tbi || \
+        { log "Failed to normalize ${input_vcf} to remove multi-allelics. Return with error." && return 1; }
+    fi
 }
 
 
 function remove_format_fields {
-	local input_vcf=${1}
-	local output_vcf=${2}
+    local input_vcf=${1}
+    local output_vcf=${2}
 
-	if ! check_format_fields ${input_vcf}; then
-		log "The input VCF file ${input_vcf} already has no FORMAT fields in the header."
-		return 0
-	fi
+    if ! check_format_fields ${input_vcf}; then
+        log "The input VCF file ${input_vcf} already has no FORMAT fields in the header."
+        return 0
+    fi
 
-	if [[ -z ${output_vcf} ]] || [[ ${output_vcf} == ${input_vcf} ]]; then
-		local tmp_tag=$(randomID)
-		local output_vcf=${input_vcf/.vcf/.tmp.${tmp_tag}.vcf}
-		local replace=True
-	fi
+    if [[ -z ${output_vcf} ]] || [[ ${output_vcf} == ${input_vcf} ]]; then
+        local tmp_tag=$(randomID)
+        local output_vcf=${input_vcf/.vcf/.tmp.${tmp_tag}.vcf}
+        local replace=True
+    fi
 
-	bcftools annotate -x FORMAT -Oz -o ${output_vcf} ${input_vcf} && \
-	tabix -f -p vcf ${output_vcf}
+    bcftools annotate -x FORMAT -Oz -o ${output_vcf} ${input_vcf} && \
+    tabix -f -p vcf ${output_vcf}
 
-	if [[ ${replace} == True ]]; then
-		mv ${output_vcf} ${input_vcf}
-		mv ${output_vcf}.tbi ${input_vcf}.tbi
-	fi
+    if [[ ${replace} == True ]]; then
+        mv ${output_vcf} ${input_vcf}
+        mv ${output_vcf}.tbi ${input_vcf}.tbi
+    fi
 }
 
 
 function check_format_fields {
-	local input_vcf=${1}
-	# Check whether there are any FORMAT fields in the VCF file from the header line
-	local format_lines=$(bcftools view -h ${input_vcf} | grep -c "##FORMAT")
-	if [[ ${format_lines} -gt 0 ]]; then
-		log "The input VCF file ${input_vcf} has ${format_lines} lines of FORMAT fields in the header."
-		return 0
-	else
-		log "The input VCF file ${input_vcf} has no FORMAT fields in the header."
-		return 1
-	fi
+    local input_vcf=${1}
+    # Check whether there are any FORMAT fields in the VCF file from the header line
+    local format_lines=$(bcftools view -h ${input_vcf} | grep -c "##FORMAT")
+    if [[ ${format_lines} -gt 0 ]]; then
+        log "The input VCF file ${input_vcf} has ${format_lines} lines of FORMAT fields in the header."
+        return 0
+    else
+        log "The input VCF file ${input_vcf} has no FORMAT fields in the header."
+        return 1
+    fi
 }
 
 
@@ -633,13 +633,13 @@ function normalize_vcf () {
     local ref_genome=${3}
     local threads=${4}
 
-	if [[ -z ${threads} ]]; then
-		threads=1
-	fi
+    if [[ -z ${threads} ]]; then
+        threads=1
+    fi
 
-	[[ ! ${output_vcf} =~ \.vcf\.gz$ ]] && \
-	log "Output vcf file ${output_vcf} is not ending with .vcf.gz. Only support .vcf.gz format now." && \
-	return 1;
+    [[ ! ${output_vcf} =~ \.vcf\.gz$ ]] && \
+    log "Output vcf file ${output_vcf} is not ending with .vcf.gz. Only support .vcf.gz format now." && \
+    return 1;
 
     bcftools norm --threads ${threads} -m -both -c s -f ${ref_genome} --atom-overlaps "." --keep-sum AD -Ou -a ${input_vcf} | \
     bcftools norm --threads ${threads} -d exact -Ou - | \
@@ -672,7 +672,7 @@ function check_table_column {
                          awk -F '\t' -v col="${column}" '{for(i=1;i<=NF;i++) if ($i == col) printf "%s ", i;}'))
 
     if [[ ${#col_inds[@]} -eq 1 ]]; then
-		log "The column label ${column} is found at col index ${col_inds[0]} in the input table ${input_table}"
+        log "The column label ${column} is found at col index ${col_inds[0]} in the input table ${input_table}"
         true;
     elif [[ ${#col_inds[@]} -eq 0 ]]; then
         false;
@@ -688,7 +688,7 @@ function check_vcf_contig_version () {
     local input_vcf=${1}
 
     local example_contig_name
-	example_contig_name=$(bcftools query -f '%CHROM\n' ${input_vcf} | head -1)
+    example_contig_name=$(bcftools query -f '%CHROM\n' ${input_vcf} | head -1)
 
     if [[ ${example_contig_name} =~ ^chr ]]; then
         echo "ucsc"
@@ -775,7 +775,7 @@ function liftover_from_ucsc_to_GRCh () {
     [[ -z ${output_vcf} ]] && local output_vcf=${input_vcf/.vcf/.rmchr.vcf}
     [[ ! ${output_vcf} =~ \.vcf\.gz$ ]] && local output_vcf=${output_vcf/.vcf*/.vcf.gz}
 
-	log "Starting to convert chromosome names from ucsc to GRCh style for ${input_vcf}"
+    log "Starting to convert chromosome names from ucsc to GRCh style for ${input_vcf}"
     bcftools annotate --rename-chrs ${contig_map} ${input_vcf} -Ou | \
     bcftools sort -Oz -o ${output_vcf} && \
     tabix -f -p vcf ${output_vcf} && \
@@ -972,6 +972,11 @@ function bcftools_concatvcfs {
         local threads=1
     fi
 
+    # Trim off the appending comma in the samples string
+    if [[ ! -z ${samples} ]]; then
+        local samples=$(echo ${samples} | sed 's/,$//')
+    fi
+
     log "the vcfs are ${vcfs[*]}"
     log "The merged vcf is ${merged_vcf}"
     log "The samples specified are: ${samples}"
@@ -979,7 +984,7 @@ function bcftools_concatvcfs {
     if [[ -z ${ignore_error} ]]; then
         local -a invalid_vcfs
         for vcf in "${vcfs[@]}"; do
-            if check_vcf_validity ${vcf} 1 ${samples} 2> /dev/null; then
+            if check_vcf_validity ${vcf} 1 ${samples}; then
                 log "To be merged ${vcf} is valid."
             else
                 log "${vcf} not existed or corrupted. Run check_vcf_validity ${vcf} to see for yourself"
@@ -1022,88 +1027,88 @@ function bcftools_concatvcfs {
 
 
 function extract_variants_per_chr() {
-	local pos_file
-	local chr
-	local input_vcf
-	local threads
-	local output_vcf
+    local pos_file
+    local chr
+    local input_vcf
+    local threads
+    local output_vcf
 
-	# Parse arguments using getopts
-	local OPTIND=1
-	while getopts "p:c:i:t::o::" opt; do
-		case ${opt} in
-			p) pos_file=${OPTARG} ;;
-			c) chr=${OPTARG} ;;
-			i) input_vcf=${OPTARG} ;;
-			t) threads=${OPTARG} ;;
-			o) output_vcf=${OPTARG} ;;
-			*) log "Invalid option: -${OPTARG}" && return 1 ;;
-		esac
-	done
+    # Parse arguments using getopts
+    local OPTIND=1
+    while getopts "p:c:i:t::o::" opt; do
+        case ${opt} in
+            p) pos_file=${OPTARG} ;;
+            c) chr=${OPTARG} ;;
+            i) input_vcf=${OPTARG} ;;
+            t) threads=${OPTARG} ;;
+            o) output_vcf=${OPTARG} ;;
+            *) log "Invalid option: -${OPTARG}" && return 1 ;;
+        esac
+    done
 
-	if [[ -z ${output_vcf} ]]; then
-		output_vcf=${input_vcf/.vcf*/.${chr}.bcf}
-	fi
+    if [[ -z ${output_vcf} ]]; then
+        output_vcf=${input_vcf/.vcf*/.${chr}.bcf}
+    fi
 
-	if [[ -z ${threads} ]]; then
-		threads=1
-	fi
+    if [[ -z ${threads} ]]; then
+        threads=1
+    fi
 
-	local chr_pos_file=${pos_file}.${chr}.tsv
-	mawk -F '\t' -v chr=${chr} '$1 == chr {print}' ${pos_file} > ${chr_pos_file}
+    local chr_pos_file=${pos_file}.${chr}.tsv
+    mawk -F '\t' -v chr=${chr} '$1 == chr {print}' ${pos_file} > ${chr_pos_file}
 
     if check_vcf_validity ${output_vcf} 2> /dev/null && [[ ${output_vcf} -nt ${input_vcf} ]]; then
         log "The output vcf ${output_vcf} already exists and is newer than the input vcf ${input_vcf}, skip the extraction"
         return 0
     fi
 
-	bcftools view \
-	--threads ${threads} \
-	-R "${chr_pos_file}" \
-	--regions-overlap pos \
-	-Oz -o "${output_vcf}" "${input_vcf}" && \
-	bcftools index -f "${output_vcf}" && \
-	check_vcf_validity ${output_vcf} || \
-	{ log "Failed to extract variants from ${input_vcf} for chromosome ${chr}. Return with error." && return 1; }
+    bcftools view \
+    --threads ${threads} \
+    -R "${chr_pos_file}" \
+    --regions-overlap pos \
+    -Oz -o "${output_vcf}" "${input_vcf}" && \
+    bcftools index -f "${output_vcf}" && \
+    check_vcf_validity ${output_vcf} || \
+    { log "Failed to extract variants from ${input_vcf} for chromosome ${chr}. Return with error." && return 1; }
 }
 
 
 function parallel_extract_variants() {
-	local pos_file=${1}
-	local input_vcf=${2}
-	local threads=${3}
-	local output_vcf=${4}
+    local pos_file=${1}
+    local input_vcf=${2}
+    local threads=${3}
+    local output_vcf=${4}
 
-	if [[ -z ${output_vcf} ]]; then
-		output_vcf=${input_vcf/.vcf*/.vcf.gz}
-	fi
+    if [[ -z ${output_vcf} ]]; then
+        output_vcf=${input_vcf/.vcf*/.vcf.gz}
+    fi
 
-	local -a chrs=($(cut -f 1 ${pos_file} | sort -u))
-	local per_job_threads
-	local job_num
-	[[ ${threads} -ge ${#chrs[@]} ]] && \
-	job_num=${#chrs[@]} && per_job_threads=$(( threads / ${#chrs[@]} )) || \
-	job_num=${threads} && per_job_threads=1
+    local -a chrs=($(cut -f 1 ${pos_file} | sort -u))
+    local per_job_threads
+    local job_num
+    [[ ${threads} -ge ${#chrs[@]} ]] && \
+    job_num=${#chrs[@]} && per_job_threads=$(( threads / ${#chrs[@]} )) || \
+    job_num=${threads} && per_job_threads=1
 
-	local log_file=${output_vcf/.vcf*/.extraction.log}
-	local -a output_chr_vcfs
-	local output_vcf_list
-	for chr in ${chrs[@]}; do
-		output_chr_vcfs+=( ${output_vcf/.vcf*/}.${chr}.bcf )
-		output_vcf_list+="${output_vcf/.vcf*/}.${chr}.bcf,"
-	done
-	# Concat the output vcfs into a comma delimited list string with
-	output_vcf_list=${output_vcf_list%,}
-	parallel -j ${job_num} --halt soon,fail=1 --joblog ${log_file} --dry-run --link \
-	bash ${SELF} extract_variants_per_chr -p ${pos_file} -c {1} -i ${input_vcf} -t ${per_job_threads} -o {2} ::: ${chrs[@]} ::: ${output_chr_vcfs[@]} && \
-	parallel -j ${job_num} --halt soon,fail=1 --joblog ${log_file} --link \
-	bash ${SELF} extract_variants_per_chr -p ${pos_file} -c {1} -i ${input_vcf} -t ${per_job_threads} -o {2} ::: ${chrs[@]} ::: ${output_chr_vcfs[@]} && \
+    local log_file=${output_vcf/.vcf*/.extraction.log}
+    local -a output_chr_vcfs
+    local output_vcf_list
+    for chr in ${chrs[@]}; do
+        output_chr_vcfs+=( ${output_vcf/.vcf*/}.${chr}.bcf )
+        output_vcf_list+="${output_vcf/.vcf*/}.${chr}.bcf,"
+    done
+    # Concat the output vcfs into a comma delimited list string with
+    output_vcf_list=${output_vcf_list%,}
+    parallel -j ${job_num} --halt soon,fail=1 --joblog ${log_file} --dry-run --link \
+    bash ${SELF} extract_variants_per_chr -p ${pos_file} -c {1} -i ${input_vcf} -t ${per_job_threads} -o {2} ::: ${chrs[@]} ::: ${output_chr_vcfs[@]} && \
+    parallel -j ${job_num} --halt soon,fail=1 --joblog ${log_file} --link \
+    bash ${SELF} extract_variants_per_chr -p ${pos_file} -c {1} -i ${input_vcf} -t ${per_job_threads} -o {2} ::: ${chrs[@]} ::: ${output_chr_vcfs[@]} && \
     check_parallel_joblog ${log_file} && \
-	bcftools_concatvcfs -o ${output_vcf} -t ${threads} -v ${output_vcf_list} && \
-	announce_remove_tmps ${output_vcf/.vcf*/.chr*} && \
-	log "Extracted variants from ${input_vcf} for ${#chrs[@]} chromosomes from position file ${pos_file}" || \
-	{ log "Failed to extract variants from ${input_vcf} within ${pos_file}. Return with error." && return 1; }
-	
+    bcftools_concatvcfs -o ${output_vcf} -t ${threads} -v ${output_vcf_list} && \
+    announce_remove_tmps ${output_vcf/.vcf*/.chr*} && \
+    log "Extracted variants from ${input_vcf} for ${#chrs[@]} chromosomes from position file ${pos_file}" || \
+    { log "Failed to extract variants from ${input_vcf} within ${pos_file}. Return with error." && return 1; }
+    
 }
 
 
@@ -1137,36 +1142,36 @@ function check_bam_validity {
 
 
 function parse_ped_file() {
-	# Extract the proband ID and all the patient IDs from the pedigree file
-	local ped_file=${1}
-	local fam_vcf=${2}
-	local fam_name=${3}
+    # Extract the proband ID and all the patient IDs from the pedigree file
+    local ped_file=${1}
+    local fam_vcf=${2}
+    local fam_name=${3}
 
-	# Extract the proband ID, usually it is the first sample in the VCF file
-	local proband_ID
-	proband_ID=$(bcftools query -l ${fam_vcf} | head -1) || {
-			log "Failed to get proband ID from ${input_vcf}. Quit now"
-			return 1
-		}
+    # Extract the proband ID, usually it is the first sample in the VCF file
+    local proband_ID
+    proband_ID=$(bcftools query -l ${fam_vcf} | head -1) || {
+            log "Failed to get proband ID from ${input_vcf}. Quit now"
+            return 1
+        }
 
-	# Extract the family name from the pedigree file
-	if [[ -z ${fam_name} ]]; then
-		fam_name=$(awk -F '\t' '$2 == "'${proband_ID}'"{printf "%s", $1; exit 0;}' ${ped_file}) || {
-			log "Failed to get family name from ${ped_file} using proband ID ${proband_ID}. Quit now"
-			return 1
-		}
-	fi
+    # Extract the family name from the pedigree file
+    if [[ -z ${fam_name} ]]; then
+        fam_name=$(awk -F '\t' '$2 == "'${proband_ID}'"{printf "%s", $1; exit 0;}' ${ped_file}) || {
+            log "Failed to get family name from ${ped_file} using proband ID ${proband_ID}. Quit now"
+            return 1
+        }
+    fi
 
-	# Extract all the patient IDs from the pedigree file
-	local -a patient_IDs
-	mapfile -t patient_IDs < <(awk -F '\t' '$1 == "'${fam_name}'" && $6 == "2" {printf "%s\n", $2}' "${ped_file}") || {
-		log "Failed to get patient IDs from ${ped_file} for family ${fam_name}. Quit now"
-		return 1
-	}
+    # Extract all the patient IDs from the pedigree file
+    local -a patient_IDs
+    mapfile -t patient_IDs < <(awk -F '\t' '$1 == "'${fam_name}'" && $6 == "2" {printf "%s\n", $2}' "${ped_file}") || {
+        log "Failed to get patient IDs from ${ped_file} for family ${fam_name}. Quit now"
+        return 1
+    }
 
-	echo "${fam_name}"
-	echo "${proband_ID}"
-	echo "${patient_IDs[@]}"
+    echo "${fam_name}"
+    echo "${proband_ID}"
+    echo "${patient_IDs[@]}"
 }
 
 
@@ -1174,7 +1179,7 @@ function check_parallel_joblog {
     local ret_code=$(echo $?)
     local job_log=${1}
 
-	# compatible with the GNU parallel joblog format
+    # compatible with the GNU parallel joblog format
     # print failed job commands to stdout
 
     local job_num=$(tail -n +2 ${job_log} | wc -l)
@@ -1191,17 +1196,17 @@ function check_parallel_joblog {
         >&2 cat ${job_log}
     fi
 
-	return ${#fail_job_ids[@]}
+    return ${#fail_job_ids[@]}
 }
 
 
 function extract_assembly_from_fasta() {
-	local fasta_file=${1}
-	# Here expecting the specified reference genome to have a name like ucsc.hg19.fasta or ucsc.hg38.fasta
-	assembly=$(basename ${fasta_file} | awk -F '.' '{printf "%s", $2;}')
-	[[ ! ${assembly} =~ ^hg[13][98]$ ]] && \
-	log "Failed to extract the assembly version either from the fasta file name. Quit now." && \
-	return 1
+    local fasta_file=${1}
+    # Here expecting the specified reference genome to have a name like ucsc.hg19.fasta or ucsc.hg38.fasta
+    assembly=$(basename ${fasta_file} | awk -F '.' '{printf "%s", $2;}')
+    [[ ! ${assembly} =~ ^hg[13][98]$ ]] && \
+    log "Failed to extract the assembly version either from the fasta file name. Quit now." && \
+    return 1
 }
 
 

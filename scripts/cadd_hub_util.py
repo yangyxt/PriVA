@@ -59,7 +59,7 @@ def read_and_standardize_chrom(file_path,
     """Reads a CSV/TSV and standardizes the chromosome column name."""
     if is_pos_file: # Position file from VCF has no header and fixed columns
         force_schema = {"column_1": pl.Utf8}
-        df = pl.read_csv(file_path, separator=separator, has_header=False, comment_prefix=comment_prefix, null_values=null_values, infer_schema_length=10000, schema_overrides=force_schema)
+        df = pl.read_csv(file_path, separator=separator, has_header=False, comment_prefix=comment_prefix, null_values=null_values, infer_schema_length=100000, schema_overrides=force_schema)
         df = df.rename({
             "column_1": "Chrom",
             "column_2": "Pos",
@@ -74,7 +74,7 @@ def read_and_standardize_chrom(file_path,
                      separator=separator, 
                      has_header=has_header,
                      null_values=null_values, 
-                     infer_schema_length=1000, 
+                     infer_schema_length=100000, 
                      schema_overrides=force_schema)
     if "#Chrom" in df.columns:
         df = df.rename({"#Chrom": "Chrom"})

@@ -253,6 +253,7 @@ function main_workflow() {
     fi
 
     # Now we annotate the VCF with CADD
+    local cadd_output=${final_anno_vcf/.vcf*/.cadd.tsv}
     if [[ -n "${hub_cadd_file}" ]]; then
         local cadd_covered_tsv="${anno_vcf/.vcf*/.cadd.covered.tsv}"
         local cadd_uncovered_vcf="${anno_vcf/.vcf*/.cadd.uncovered.vcf.gz}"
@@ -260,10 +261,11 @@ function main_workflow() {
         log "Checking for cached CADD scores in ${hub_cadd_file} with command: find_cached_cadd_variants ${anno_vcf} ${hub_cadd_file} ${cadd_covered_tsv} ${cadd_uncovered_vcf}"
         if find_cached_cadd_variants "${anno_vcf}" "${hub_cadd_file}" "${cadd_covered_tsv}" "${cadd_uncovered_vcf}" "${threads}"; then
             # All variants are covered - copy to output
-            cp "${cadd_covered_tsv}" "${anno_vcf/.vcf*/.cadd.tsv}" && \
-            ls -lht ${anno_vcf/.vcf*/.cadd.tsv} && \
-            update_yaml "${config_file}" "cadd_output_file" "${anno_vcf/.vcf*/.cadd.tsv}" && \
-            log "All variants have cached CADD scores, skipping CADD calculation" && \
+            cp "${cadd_covered_tsv}" "${cadd_output}" && \
+            ls -lht ${cadd_output} && \
+            chmod 444 ${cadd_output} && \
+            update_yaml "${config_file}" "cadd_output_file" "${cadd_output}" && \
+            log "All variants have cached CADD scores, results copied to ${cadd_output}, skipping CADD calculation" && \
             mv ${anno_vcf} ${final_anno_vcf} && \
             check_vcf_validity ${final_anno_vcf} && \
             chmod 444 ${final_anno_vcf} && \
@@ -282,19 +284,20 @@ function main_workflow() {
                 }
                 
                 # Merge covered and newly calculated scores
-                merge_cadd_results "${cadd_covered_tsv}" "${anno_vcf/.vcf*/.cadd.new.tsv}" "${anno_vcf/.vcf*/.cadd.tsv}" && \
+                merge_cadd_results "${cadd_covered_tsv}" "${anno_vcf/.vcf*/.cadd.new.tsv}" "${cadd_output}" && \
                 update_hub_cadd "${anno_vcf/.vcf*/.cadd.new.tsv}" "${hub_cadd_file}" && \
-                update_yaml "${config_file}" "cadd_output_file" "${anno_vcf/.vcf*/.cadd.tsv}" && \
+                update_yaml "${config_file}" "cadd_output_file" "${cadd_output}" && \
                 mv ${anno_vcf} ${final_anno_vcf} && \
                 check_vcf_validity ${final_anno_vcf} && \
-                chmod 444 ${final_anno_vcf} || \
+                chmod 444 ${final_anno_vcf} && \
+                chmod 444 ${cadd_output} || \
                 {
                     log "Failed to update the output vcf file with CADD scores. Quit now"
                     return 1
                 }
                 
                 # Clean up temporary files
-                rm -f "${anno_vcf/.vcf*/.cadd.new.tsv}"
+                announce_remove_tmps "${anno_vcf/.vcf*/.cadd.new.tsv}"
             else
                 # Only covered variants (should not happen but just in case)
                 log "There should be uncovered variants existed but the VCF file ${cadd_uncovered_vcf} is invalid. Quit with error"
@@ -306,10 +309,11 @@ function main_workflow() {
         fi
     else
         # Original CADD calculation without caching
-        Calculate_CADD "${anno_vcf}" "${config_file}" && \
+        Calculate_CADD "${anno_vcf}" "${config_file}" "${cadd_output}" && \
         mv ${anno_vcf} ${final_anno_vcf} && \
         check_vcf_validity ${final_anno_vcf} && \
-        chmod 444 ${final_anno_vcf} || \
+        chmod 444 ${final_anno_vcf} && \
+        chmod 444 ${cadd_output} || \
         {
             log "Failed to add CADD annotation on ${anno_vcf}. Quit now"
             return 1

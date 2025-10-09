@@ -174,6 +174,8 @@ function main_workflow() {
                 # Use covered variants as final result
                 cp "${covered_vcf}" "${anno_vcf}"
                 cp "${covered_vcf}.tbi" "${anno_vcf}.tbi"
+                log "Copied ${covered_vcf} to ${anno_vcf}"
+                display_vcf ${anno_vcf}
                 
                 # Skip to CADD annotation
                 local skip_annotation=true
@@ -207,6 +209,7 @@ function main_workflow() {
         ${threads} \
         ${assembly} \
         ${gnomad_vcf_chrX} && \
+        display_vcf ${anno_vcf} && \
         log "Successfully add aggregated gnomAD annotation on ${anno_vcf}. The result is ${anno_vcf}" || { \
         log "Failed to add aggregated gnomAD annotation on ${anno_vcf}. Quit now"
         return 1; }
@@ -608,7 +611,8 @@ function anno_control_vcf_allele() {
         -c "CHROM,POS,REF,ALT,INFO/control_AC:=INFO/AC,INFO/control_AN:=INFO/AN,INFO/control_AF:=INFO/AF,INFO/control_nhomalt:=INFO/AC_Hom" \
         -Oz -o "${output_vcf}" \
         "${input_vcf}" && \
-    tabix -p vcf -f "${output_vcf}" || {
+    tabix -p vcf -f "${output_vcf}" && \
+    display_vcf ${output_vcf} || {
         log "ERROR: Failed to annotate ${input_vcf} with control allele info."
         # Explicitly remove temp file on error if announce_remove_tmps hasn't run yet
         [[ "${processed_control_vcf}" != "${control_vcf}" ]] && rm -f "${processed_control_vcf}" "${processed_control_vcf}.tbi"
@@ -619,7 +623,8 @@ function anno_control_vcf_allele() {
     # --- Finalize ---
     log "Successfully annotated ${input_vcf}. Moving temporary output ${output_vcf} to replace input."
     mv "${output_vcf}" "${input_vcf}" && \
-    mv "${output_vcf}.tbi" "${input_vcf}.tbi" || {
+    mv "${output_vcf}.tbi" "${input_vcf}.tbi" && \
+    display_vcf ${input_vcf} || {
         log "ERROR: Failed to move temporary output ${output_vcf} to ${input_vcf}"
         # Explicitly remove temp file on error
         [[ "${processed_control_vcf}" != "${control_vcf}" ]] && rm -f "${processed_control_vcf}" "${processed_control_vcf}.tbi"

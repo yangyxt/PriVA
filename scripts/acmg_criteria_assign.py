@@ -383,7 +383,7 @@ def truncate_fraction(df):
     
     var_span = df["Protein_position"].map(lambda x: abs(pd.to_numeric(x.split("/")[0].split("-")[1], errors="coerce") - pd.to_numeric(x.split("/")[0].split("-")[0], errors="coerce") + 1) if "-" in str(x) else 1)
     var_protein_pos = pd.to_numeric(protein_poses.str.split("/", expand=True).iloc[:, 0], errors='coerce')
-    total_protein_len = pd.to_numeric(df["Protein_position"].str.split("/", expand=True).iloc[:, 1], errors='coerce')
+    total_protein_len = pd.to_numeric(df["Protein_position"].astype(str).str.split("/", expand=True).iloc[:, -1], errors='coerce')
     truncate_frac = np.where(nonsense_vars, 1 - (var_protein_pos / total_protein_len), var_span / total_protein_len)
     return truncate_frac
 

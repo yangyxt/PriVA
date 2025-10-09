@@ -214,7 +214,7 @@ function main_filtration () {
         local original_cadd=$(read_yaml ${config_file} "cadd_output_file")
         
         if [[ -f ${original_cadd} ]]; then
-            log "Step 2: Filtering CADD table based on filtered variants to optimize memory usage"
+            log "Step 2: Filtering CADD table from ${original_cadd} based on filtered variants to optimize memory usage"
             log "Creating family-specific CADD file: ${family_specific_cadd}"
             
             filter_cadd_based_on_vcf \
@@ -270,16 +270,18 @@ function filter_cadd_based_on_vcf () {
     sed 's/^chr//' > ${vcf_variants}
     
     local variant_count=$(wc -l < ${vcf_variants})
-    log "Found ${variant_count} variants in VCF file"
-    
+    log "Found ${variant_count} variants in VCF file, temporarily stored in ${vcf_variants}"
+    display_table ${vcf_variants} 10
+
     # Get header from CADD table
     head -n 1 ${cadd_table} > ${filtered_cadd}
     
     # Filter CADD table using mawk for efficiency
-    log "Filtering CADD table (this may take a few minutes)..."
+    log "Filtering CADD table ${cadd_table} (this may take a few minutes)..."
+    display_table ${cadd_table} 10
     
     # Create an associative array lookup in mawk
-    mawk -v vcf_file="${vcf_variants}" '
+    mawk -v vcf_file="${vcf_variants}" -F '\t' '
     BEGIN {
         # Load VCF variants into associative array for fast lookup
         while ((getline line < vcf_file) > 0) {
@@ -288,7 +290,7 @@ function filter_cadd_based_on_vcf () {
             pos = fields[2] 
             ref = fields[3]
             alt = fields[4]
-            key = chrom "\t" pos "\t" ref "\t" alt
+            key = chrom"\t"pos"\t"ref"\t"alt
             vcf_variants[key] = 1
         }
         close(vcf_file)
@@ -296,7 +298,7 @@ function filter_cadd_based_on_vcf () {
     }
     NR > 1 {  # Skip header (already written)
         # Create key from CADD table row
-        key = $1 "\t" $2 "\t" $3 "\t" $4
+        key = $1"\t"$2"\t"$3"\t"$4
         if (key in vcf_variants) {
             print $0
         }
@@ -315,7 +317,7 @@ function filter_cadd_based_on_vcf () {
     
     log "CADD table filtering complete:"
     log "  Original lines: ${original_lines}"
-    log "  Filtered lines: ${filtered_lines}" 
+    log "  Remained lines: ${filtered_lines}" 
     log "  Reduction: ${reduction_percent}%"
     log "  Output: ${output_cadd}"
 }

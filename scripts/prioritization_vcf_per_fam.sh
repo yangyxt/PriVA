@@ -29,9 +29,8 @@ function prepare_combined_tab () {
     [[ -f ${output_tab} ]] && \
     [[ ${output_tab} -nt ${input_vcf} ]] && \
     [[ ${output_tab} -nt ${SCRIPT_DIR}/combine_annotations.py ]] && \
-    log "The combined annotation table ${output_tab} is up to date, skip the conversion" && \
-    return 0 || \
-    log "The combined annotation table ${output_tab} is outdated, start the conversion"
+    { log "The combined annotation table ${output_tab} is up to date, skip the conversion"; return 0; } || \
+    { log "The combined annotation table ${output_tab} is outdated, start the conversion"; }
 
     local hpo_tab=${BASE_DIR}/data/hpo/genes_to_phenotype.collapse.tsv.gz
 
@@ -292,12 +291,23 @@ function main_prioritization () {
     else
         log "Using provided CADD file: ${cadd_tsv}"
     fi
+
+    local input_tab=${input_vcf/.vcf*/.tsv}
+    local output_acmg_mat=${input_tab::-4}.acmg.tsv
+
+    [[ $(count_vcf_records ${input_vcf}) -lt 1 ]] && check_vcf_validity ${input_vcf} 0 && \
+    { log "WARNING: The input VCF file ${input_vcf} is empty, skip the prioritization with warnings"; \
+      : > ${input_tab}; : > ${output_acmg_mat}; return 0; } || \
+    log "The input VCF file ${input_vcf} is not empty, start the prioritization"
+
+    [[ $(cat ${cadd_tsv} | wc -l) -le 1 ]] && \
+    { log "WARNING: The CADD annotation file ${cadd_tsv} is empty, just quit with warning"; return 0; } || \
+    log "The CADD annotation file ${cadd_tsv} is not empty, start the prioritization"
 	
     prepare_combined_tab \
     ${input_vcf} \
     ${cadd_tsv} \
     ${threads} && \
-    local input_tab=${input_vcf/.vcf*/.tsv} && \
     [[ -f ${input_tab} ]] || \
     { log "Failed to prepare the combined annotation table"; return 1; }
 

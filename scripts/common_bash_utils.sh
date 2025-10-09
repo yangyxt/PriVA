@@ -1093,16 +1093,16 @@ function parallel_extract_variants() {
     local log_file=${output_vcf/.vcf*/.extraction.log}
     local -a output_chr_vcfs
     local output_vcf_list
-    for chr in ${chrs[@]}; do
+    for chr in "${chrs[@]}"; do
         output_chr_vcfs+=( ${output_vcf/.vcf*/}.${chr}.bcf )
         output_vcf_list+="${output_vcf/.vcf*/}.${chr}.bcf,"
     done
     # Concat the output vcfs into a comma delimited list string with
     output_vcf_list=${output_vcf_list%,}
     parallel -j ${job_num} --halt soon,fail=1 --joblog ${log_file} --dry-run --link \
-    bash ${SELF} extract_variants_per_chr -p ${pos_file} -c {1} -i ${input_vcf} -t ${per_job_threads} -o {2} ::: ${chrs[@]} ::: ${output_chr_vcfs[@]} && \
+    bash ${SELF} extract_variants_per_chr -p ${pos_file} -c {1} -i ${input_vcf} -t ${per_job_threads} -o {2} ::: "${chrs[@]}" ::: "${output_chr_vcfs[@]}" && \
     parallel -j ${job_num} --halt soon,fail=1 --joblog ${log_file} --link \
-    bash ${SELF} extract_variants_per_chr -p ${pos_file} -c {1} -i ${input_vcf} -t ${per_job_threads} -o {2} ::: ${chrs[@]} ::: ${output_chr_vcfs[@]} && \
+    bash ${SELF} extract_variants_per_chr -p ${pos_file} -c {1} -i ${input_vcf} -t ${per_job_threads} -o {2} ::: "${chrs[@]}" ::: "${output_chr_vcfs[@]}" && \
     check_parallel_joblog ${log_file} && \
     bcftools_concatvcfs -o ${output_vcf} -t ${threads} -v ${output_vcf_list} && \
     announce_remove_tmps ${output_vcf/.vcf*/.chr*} && \

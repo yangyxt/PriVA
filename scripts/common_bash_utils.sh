@@ -519,13 +519,16 @@ function clean_vcf_multiallelics {
     fi
 
     if check_vcf_multiallelics ${input_vcf}; then
+        log "Input VCF file ${input_vcf} does not have multi-allelic records. No need to normalize it."
+        display_vcf ${input_vcf}
         return 0
     else
         local tmp_tag=$(randomID)
         local tmp_output=${input_vcf/.vcf/.norm.${tmp_tag}.vcf}
         normalize_vcf ${input_vcf} ${tmp_output} ${ref_genome} ${threads} && \
         mv ${tmp_output} ${input_vcf} && \
-        mv ${tmp_output}.tbi ${input_vcf}.tbi || \
+        mv ${tmp_output}.tbi ${input_vcf}.tbi && \
+        display_vcf ${input_vcf} || \
         { log "Failed to normalize ${input_vcf} to remove multi-allelics. Return with error." && return 1; }
     fi
 }

@@ -951,24 +951,13 @@ function use_hub_vcf_annotations() {
 
     # --- Handle Uncovered Variants ---
     if check_vcf_validity "${uncovered_sites_vcf}" 1; then
-        log "Extracting uncovered variants from ${input_vcf} using command:"
-        bcftools query -f '%CHROM\t%POS\n' ${uncovered_sites_vcf} > ${uncovered_sites_vcf/.vcf*/.pos.tsv} && \
-        local uncovered_sites_file=${uncovered_sites_vcf/.vcf*/.pos.tsv}
-        >&2 echo "parallel_extract_variants ${uncovered_sites_file} ${input_vcf} ${threads} ${output_uncovered_vcf}"
-        parallel_extract_variants \
-        ${uncovered_sites_file} \
-        ${input_vcf} \
-        ${threads} \
-        ${output_uncovered_vcf} && \
-        display_vcf ${output_uncovered_vcf} || \
-        { log "Failed to extract uncovered variants from ${input_vcf} using ${uncovered_sites_file}. Return with error." && return 1; }
-        tabix -p vcf "${output_uncovered_vcf}" && \
-        display_vcf "${output_uncovered_vcf}" && \
-        local uncovered_count=$(count_vcf_records "${output_uncovered_vcf}")
+        # 0000.vcf.gz already has full records, just copy/move it
+        mv "${uncovered_sites_vcf}" "${output_uncovered_vcf}" && \
+        mv "${uncovered_sites_vcf}.tbi" "${output_uncovered_vcf}.tbi" && \
+        local uncovered_count=$(count_vcf_records "${output_uncovered_vcf}") && \
         log "Found ${uncovered_count} uncovered variants, saved to ${output_uncovered_vcf}"
     else
-        log "No uncovered variants found in ${tmp_isec_dir}"
-        >&2 echo "$(ls -lh ${tmp_isec_dir})"
+        log "No uncovered variants found"
         local uncovered_count=0
     fi
 

@@ -31,7 +31,7 @@ threads: 60          # Total threads for annotation / non-family steps
 threads_per_fam: 4   # Threads for EACH family filtering/prioritization job
 
 # Below we specify the allele frequency cutoff for common variants
-af_cutoff: 0.03
+af_cutoff: 0.05
 
 # Below we specify the path to the gnomAD vcf file for chromosome X and we'll use that template to deduce the paths to other chromosome VCF files, the paths should be relatively constant
 gnomad_vcf_chrX: /paedyl01/disk1/yangyxt/public_data/gnomAD/v4_dataset/gnomad.joint.v4.1.sites.hg19.chrX.vcf.gz

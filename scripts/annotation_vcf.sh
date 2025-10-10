@@ -140,7 +140,12 @@ function main_workflow() {
 
     local final_anno_vcf=${output_dir}/$(basename ${input_vcf/.vcf*/.anno.vcf.gz}) && \
     local anno_vcf=${input_vcf/.vcf*/.anno.vcf.gz} && \
-    ls -lhtr ${anno_vcf} || log "Expect the intermediate vcf file at ${anno_vcf} and the final output vcf file at ${final_anno_vcf}"
+    log "Expect the intermediate vcf file at ${anno_vcf} and the final output vcf file at ${final_anno_vcf}"
+    check_vcf_validity ${input_vcf} || { \
+        log "Invalid input VCF file: ${input_vcf}"; \
+        return 1; \
+    }
+    check_vcf_validity ${anno_vcf} && [[ ${anno_vcf} -nt ${input_vcf} ]] && log "${anno_vcf} already generated, skip preprocess" || { \
     preprocess_vcf \
     -i ${input_vcf} \
     -o ${anno_vcf} \
@@ -149,7 +154,7 @@ function main_workflow() {
     log "Successfully preprocess the input vcf ${input_vcf} for annotation. The result is ${anno_vcf}" && \
     display_vcf ${anno_vcf} || { \
     log "Failed to preprocess the input vcf ${input_vcf} for annotation. Quit with error."; \
-    return 1; }
+    return 1; }; }
 
     # If hub VCF file exists, check for variants
     if [[ -f "${hub_vcf_file}" ]] && check_vcf_validity "${hub_vcf_file}"; then
@@ -189,7 +194,8 @@ function main_workflow() {
                [[ ${uncovered_vcf} -nt ${anno_vcf} ]] && \
                check_vcf_validity "${uncovered_vcf}" && \
                clean_vcf_multiallelics "${uncovered_vcf}" "${ref_genome}" "${threads}"; then
-                log "Found cached variants and uncovered variants, will only annotate uncovered variants"
+                log "Found cached variants and uncovered variants, will only annotate uncovered variants, save anno_vcf path ${anno_vcf} as variable ${tmp_anno_vcf} for downstream analysis"
+                log "Save uncovered_vcf path ${uncovered_vcf} as variable anno_vcf for downstream analysis"
                 
                 # Save the original anno_vcf path and work with uncovered variants
                 local tmp_anno_vcf="${anno_vcf}"
@@ -244,11 +250,20 @@ function main_workflow() {
         
         # If using hub caching, merge covered and newly annotated variants
         if [[ -n "${tmp_anno_vcf}" ]]; then
+            # The tmp_anno_vcf is the original anno_vcf path, what has been annotated is the uncovered_vcf in ${anno_vcf}
             local newly_annotated_vcf="${anno_vcf}"
             # Update hub VCF with newly annotated variants
-            update_hub_vcf "${tmp_anno_vcf}" "${hub_vcf_file}" "${threads}"
-
-            merge_annotated_vcfs "${covered_vcf}" "${newly_annotated_vcf}" "${tmp_anno_vcf}"
+            log "Updating hub VCF ${hub_vcf_file} with newly annotated variants ${tmp_anno_vcf}"
+            update_hub_vcf "${newly_annotated_vcf}" "${hub_vcf_file}" "${threads}" && \
+            log "Successfully update hub VCF ${hub_vcf_file} with newly annotated variants ${newly_annotated_vcf}" || {
+                log "Failed to update hub VCF ${hub_vcf_file} with newly annotated variants ${newly_annotated_vcf}. Quit now"
+                return 1
+            }
+            merge_annotated_vcfs "${covered_vcf}" "${newly_annotated_vcf}" "${tmp_anno_vcf}" && \
+            log "Successfully merge covered variants ${covered_vcf} and newly annotated variants ${newly_annotated_vcf} into original annotated vcf ${tmp_anno_vcf}" || {
+                log "Failed to merge covered variants ${covered_vcf} and newly annotated variants ${newly_annotated_vcf} into original annotated vcf ${tmp_anno_vcf}. Quit now"
+                return 1
+            }
             
             # Set anno_vcf back to final result for downstream steps
             local anno_vcf="${tmp_anno_vcf}"
@@ -259,7 +274,7 @@ function main_workflow() {
     local cadd_output=${final_anno_vcf/.vcf*/.cadd.tsv}
     if [[ -n "${hub_cadd_file}" ]]; then
         local cadd_covered_tsv="${anno_vcf/.vcf*/.cadd.covered.tsv}"
-        local cadd_uncovered_vcf="${anno_vcf/.vcf*/.cadd.uncovered.vcf.gz}"
+        local cadd_uncovered_vcf="${anno_vcf/.vcf*/.cadd.uncovered.bcf}"
         
         log "Checking for cached CADD scores in ${hub_cadd_file} with command: find_cached_cadd_variants ${anno_vcf} ${hub_cadd_file} ${cadd_covered_tsv} ${cadd_uncovered_vcf}"
         if find_cached_cadd_variants "${anno_vcf}" "${hub_cadd_file}" "${cadd_covered_tsv}" "${cadd_uncovered_vcf}" "${threads}"; then
@@ -441,7 +456,7 @@ function anno_agg_gnomAD_data () {
     }
 
     # Core frequency fields
-    local core_fields="CHROM,POS,REF,ALT,.INFO/AC_joint,.INFO/AN_joint,.INFO/AF_joint,.INFO/nhomalt_joint"
+    local core_fields=".INFO/AC_joint,.INFO/AN_joint,.INFO/AF_joint,.INFO/nhomalt_joint"
 
     # Maximum values across populations (no sex-specific versions available)
     local max_fields=",.INFO/AC_grpmax_joint,.INFO/AF_grpmax_joint,.INFO/AN_grpmax_joint,.INFO/nhomalt_grpmax_joint"
@@ -453,12 +468,12 @@ function anno_agg_gnomAD_data () {
     local -a pop_codes=("nfe" "eas" "afr" "amr" "asj" "fin" "sas" "mid" "remaining")
     local pop_af_fields=""
     local pop_nhomalt_fields=""
-    for pop in ${pop_codes[@]}; do
+    for pop in "${pop_codes[@]}"; do
         pop_af_fields+=",.INFO/AF_joint_${pop}_XX,.INFO/AF_joint_${pop}_XY"
         pop_nhomalt_fields+=",.INFO/nhomalt_joint_${pop}_XX"
     done
 
-    check_vcf_validity ${input_vcf} || \
+    check_vcf_validity "${input_vcf}" || \
     {
         log "The input vcf ${input_vcf} is not valid. Quit now"
         return 1
@@ -542,7 +557,8 @@ function anno_clinvar_data () {
     return 0 || \
     log "The input vcf ${input_vcf} does not contain the INFO tags CLNDN,CLNHGVS,CLNREVSTAT,CLNSIG,GENEINFO,CLNCSQ. We need to add them"
 
-    bcftools annotate --threads ${threads} -a ${clinvar_vcf} -c CHROM,POS,REF,ALT,.INFO/CLNDN,.INFO/CLNHGVS,.INFO/CLNREVSTAT,.INFO/CLNSIG,.INFO/GENEINFO,.INFO/CLNCSQ:=INFO/CSQ -Ou ${input_vcf} | \
+    log "bcftools annotate -a ${clinvar_vcf} -c .INFO/CLNDN,.INFO/CLNHGVS,.INFO/CLNREVSTAT,.INFO/CLNSIG,.INFO/GENEINFO,.INFO/CLNCSQ:=INFO/CSQ -Oz -o ${output_vcf} ${input_vcf} | bcftools sort -Oz -o ${output_vcf} && tabix -f -p vcf ${output_vcf} && mv ${output_vcf} ${input_vcf} && mv ${output_vcf}.tbi ${input_vcf}.tbi && check_vcf_infotags ${input_vcf} \"CLNDN,CLNHGVS,CLNREVSTAT,CLNSIG,GENEINFO,CLNCSQ\" && display_vcf ${input_vcf}"
+    bcftools annotate --threads ${threads} -a ${clinvar_vcf} -c .INFO/CLNDN,.INFO/CLNHGVS,.INFO/CLNREVSTAT,.INFO/CLNSIG,.INFO/GENEINFO,.INFO/CLNCSQ:=INFO/CSQ -Ou ${input_vcf} | \
     bcftools sort -Oz -o ${output_vcf} && \
     tabix -f -p vcf ${output_vcf} && \
     mv ${output_vcf} ${input_vcf} && \
@@ -608,7 +624,7 @@ function anno_control_vcf_allele() {
     log "Annotating ${input_vcf} with control allele info from ${processed_control_vcf}"
     bcftools annotate \
         -a "${processed_control_vcf}" \
-        -c "CHROM,POS,REF,ALT,INFO/control_AC:=INFO/AC,INFO/control_AN:=INFO/AN,INFO/control_AF:=INFO/AF,INFO/control_nhomalt:=INFO/AC_Hom" \
+        -c "INFO/control_AC:=INFO/AC,INFO/control_AN:=INFO/AN,INFO/control_AF:=INFO/AF,INFO/control_nhomalt:=INFO/AC_Hom" \
         -Oz -o "${output_vcf}" \
         "${input_vcf}" && \
     tabix -p vcf -f "${output_vcf}" && \
@@ -862,7 +878,8 @@ function Calculate_CADD {
     return 0; }
 
     # First convert UCSC-style chr names to GRCh-style
-    local nochr_vcf=${input_vcf/.vcf.gz/.nochr.vcf.gz}
+    local nochr_vcf=${input_vcf/.vcf*/.nochr.vcf.gz}
+    [[ ${nochr_vcf} == ${input_vcf} ]] && nochr_vcf=${input_vcf/.bcf*/.nochr.vcf.gz} || log "${nochr_vcf} is set up correctly"
     liftover_from_ucsc_to_GRCh \
     ${input_vcf} \
     "${BASE_DIR}/data/liftover/ucsc_to_GRC.contig.map.tsv" \
@@ -1011,10 +1028,15 @@ function update_hub_vcf() {
         return 0
     fi
 
-    # Create a temp newly_annotated_vcf with only INFO fields (remove all FORMAT fields information)
+    # Create a temp newly_annotated_vcf with no FORMAT fields (sites-only)
     local tmp_tag=$(randomID)
-    local temp_newly_annotated_vcf=${newly_annotated_vcf/.vcf/.tmp.${tmp_tag}.vcf}
-    remove_format_fields ${newly_annotated_vcf} ${temp_newly_annotated_vcf}
+    local temp_newly_annotated_vcf=${newly_annotated_vcf/.vcf/.tmp.${tmp_tag}.vcf.gz}
+    
+    # Strip all samples and FORMAT fields to create sites-only VCF
+    log "Converting to sites-only VCF (no samples, no FORMAT fields)"
+    bcftools view -G -Oz -o "${temp_newly_annotated_vcf}" "${newly_annotated_vcf}" && \
+    tabix -p vcf -f "${temp_newly_annotated_vcf}" || \
+    { log "Failed to create sites-only VCF from ${newly_annotated_vcf}"; return 1; }
     
     # If hub VCF doesn't exist or is invalid, create it
     if [[ ! -f "${hub_vcf}" ]] || ! check_vcf_validity "${hub_vcf}"; then
@@ -1025,15 +1047,19 @@ function update_hub_vcf() {
         { log "Failed to create new hub VCF by directly copying the newly annotated VCF ${temp_newly_annotated_vcf}. Return with error." && return 1; }
     fi
     
-    # Merge hub VCF with newly annotated VCF
+    # Merge hub VCF with newly annotated VCF (both are now sites-only)
     local temp_hub="${hub_vcf/.vcf*/.${tmp_tag}.vcf.gz}"
-    remove_format_fields ${hub_vcf}
+    bcftools view -G -Oz -o "${temp_hub}" "${hub_vcf}" && tabix -p vcf -f "${temp_hub}" || \
+    { log "Failed to create temporary copy of hub VCF ${hub_vcf}. Return with error." && return 1; }
     
     # Concatenate files and remove duplicates (keeping the newer version)
-    bcftools concat -a "${hub_vcf}" "${temp_newly_annotated_vcf}" -Ou | \
-    bcftools sort -Oz -o "${temp_hub}" && tabix -p vcf -f "${temp_hub}" && \
-    normalize_vcf ${temp_hub} ${hub_vcf} ${ref_genome} ${threads} && \
-    announce_remove_tmps "${temp_hub}" "${temp_newly_annotated_vcf}" && \
+    log "Concat FORMAT-less hub VCF ${temp_hub} with newly annotated VCF ${temp_newly_annotated_vcf}: bcftools concat -a ${temp_hub} ${temp_newly_annotated_vcf} -Ou | bcftools sort -Oz -o ${hub_vcf}"
+    bcftools concat -a "${temp_hub}" "${temp_newly_annotated_vcf}" -Ou | \
+    bcftools sort -Oz -o "${hub_vcf}" && tabix -p vcf -f "${hub_vcf}" && \
+    normalize_vcf ${hub_vcf} ${temp_hub} ${ref_genome} ${threads} && \
+    mv ${temp_hub} ${hub_vcf} && \
+    mv ${temp_hub}.tbi ${hub_vcf}.tbi && \
+    announce_remove_tmps "${temp_newly_annotated_vcf}" && \
     log "Updated hub VCF with $(count_vcf_records "${newly_annotated_vcf}") new variants" || \
     { log "Failed to update hub VCF with $(count_vcf_records "${newly_annotated_vcf}") new variants. Return with error." && return 1; }
 }

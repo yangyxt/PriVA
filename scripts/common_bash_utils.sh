@@ -644,9 +644,26 @@ function normalize_vcf () {
     log "Output vcf file ${output_vcf} is not ending with .vcf.gz. Only support .vcf.gz format now." && \
     return 1;
 
-    bcftools norm --threads ${threads} -m -both -c s -f ${ref_genome} --atom-overlaps "." --keep-sum AD -Ou -a ${input_vcf} | \
+    local keep_sum_arg
+    # Check whether the input VCF has AD field in the FORMAT column
+    if ! bcftools view -h ${input_vcf} | grep -q "##FORMAT=<ID=AD,"; then
+        keep_sum_arg=""
+    else
+        keep_sum_arg="--keep-sum AD"
+    fi
+
+    local filter_expr
+    # Check whether the input VCF has GT field in the FORMAT column
+    if ! bcftools view -h ${input_vcf} | grep -q "##FORMAT=<ID=GT,"; then
+        log "Input VCF file ${input_vcf} has no GT field in the FORMAT column. Do not need to filter on GT"
+        filter_expr='ALT != "*"'
+    else
+        filter_expr='ALT!="*" && GT="alt"'
+    fi
+
+    bcftools norm --threads ${threads} -m -both -c s -f ${ref_genome} --atom-overlaps "." ${keep_sum_arg} -Ou -a ${input_vcf} | \
     bcftools norm --threads ${threads} -d exact -Ou - | \
-    bcftools filter --threads ${threads} -i 'ALT!="*" && GT="alt"' -Ou - | \
+    bcftools filter --threads ${threads} -i "${filter_expr}" -Ou - | \
     bcftools sort -Oz -o ${output_vcf} && \
     tabix -f -p vcf ${output_vcf}
 
@@ -1069,7 +1086,7 @@ function extract_variants_per_chr() {
     --threads ${threads} \
     -R "${chr_pos_file}" \
     --regions-overlap pos \
-    -Oz -o "${output_vcf}" "${input_vcf}" && \
+    -Ob -o "${output_vcf}" "${input_vcf}" && \
     bcftools index -f "${output_vcf}" && \
     check_vcf_validity ${output_vcf} || \
     { log "Failed to extract variants from ${input_vcf} for chromosome ${chr}. Return with error." && return 1; }

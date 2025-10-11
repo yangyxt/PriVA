@@ -647,6 +647,7 @@ function normalize_vcf () {
     local keep_sum_arg
     # Check whether the input VCF has AD field in the FORMAT column
     if ! bcftools view -h ${input_vcf} | grep -q "##FORMAT=<ID=AD,"; then
+        log "Input VCF file ${input_vcf} has no AD field in the FORMAT column. Do not need to keep sum of AD"
         keep_sum_arg=""
     else
         keep_sum_arg="--keep-sum AD"
@@ -655,12 +656,15 @@ function normalize_vcf () {
     local filter_expr
     # Check whether the input VCF has GT field in the FORMAT column
     if ! bcftools view -h ${input_vcf} | grep -q "##FORMAT=<ID=GT,"; then
-        log "Input VCF file ${input_vcf} has no GT field in the FORMAT column. Do not need to filter on GT"
+        log "Input VCF file ${input_vcf} has no GT field in the FORMAT column. Do not need to filter on GT, since GT is none, AD is also set to none, so as the keepsum AD arg"
         filter_expr='ALT != "*"'
+        keep_sum_arg=""
     else
         filter_expr='ALT!="*" && GT="alt"'
     fi
 
+    log "Normalizing VCF file ${input_vcf} to ${output_vcf} using reference genome ${ref_genome} with ${threads} threads"
+    log "bcftools norm --threads ${threads} -m -both -c s -f ${ref_genome} --atom-overlaps ${keep_sum_arg} -Ou -a ${input_vcf} | bcftools norm --threads ${threads} -d exact -Ou - | bcftools filter --threads ${threads} -i \"${filter_expr}\" -Ou - | bcftools sort -Oz -o ${output_vcf} && tabix -f -p vcf ${output_vcf}"
     bcftools norm --threads ${threads} -m -both -c s -f ${ref_genome} --atom-overlaps "." ${keep_sum_arg} -Ou -a ${input_vcf} | \
     bcftools norm --threads ${threads} -d exact -Ou - | \
     bcftools filter --threads ${threads} -i "${filter_expr}" -Ou - | \
@@ -982,7 +986,7 @@ function bcftools_concatvcfs {
     fi
     log "The tmp dir is ${tmp_dir}"
 
-    if [[ ${input_vcfs}  =~ \/ ]] && [[ ! ${input_vcfs} =~ (\.[vb]cf)(\.[b]*gz)*$ ]] && [[ ! ${input_vcfs} =~ , ]]; then
+    if [[ ${input_vcfs} =~ \/ ]] && [[ ! ${input_vcfs} =~ (\.[vb]cf)(\.[b]*gz)*$ ]] && [[ ! ${input_vcfs} =~ , ]]; then
         local -a vcfs=($(awk '{printf "%s ", $1;}' < ${input_vcfs}))
     else
         local -a vcfs=($(echo ${input_vcfs} | awk 'BEGIN{FS=",";} {for(i=1;i<=NF;i++) printf $i" ";}'))
@@ -1027,7 +1031,7 @@ function bcftools_concatvcfs {
 
 
     if [[ $(cat ${tmp_file_list} | wc -l) -eq 1 ]]; then
-        cp -f $(cat ${tmp_file_list}) ${merged_vcf} && \
+        bcftools view -Oz -o ${merged_vcf} $(cat ${tmp_file_list}) && \
         bcftools index -f -t ${merged_vcf} && \
         ls -lh ${merged_vcf}*
     else

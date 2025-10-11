@@ -274,7 +274,7 @@ function main_workflow() {
     local cadd_output=${final_anno_vcf/.vcf*/.cadd.tsv}
     if [[ -n "${hub_cadd_file}" ]]; then
         local cadd_covered_tsv="${anno_vcf/.vcf*/.cadd.covered.tsv}"
-        local cadd_uncovered_vcf="${anno_vcf/.vcf*/.cadd.uncovered.bcf}"
+        local cadd_uncovered_vcf="${anno_vcf/.vcf*/.cadd.uncovered.vcf.gz}"
         
         log "Checking for cached CADD scores in ${hub_cadd_file} with command: find_cached_cadd_variants ${anno_vcf} ${hub_cadd_file} ${cadd_covered_tsv} ${cadd_uncovered_vcf}"
         if find_cached_cadd_variants "${anno_vcf}" "${hub_cadd_file}" "${cadd_covered_tsv}" "${cadd_uncovered_vcf}" "${threads}"; then
@@ -1070,25 +1070,29 @@ function merge_annotated_vcfs() {
     local output_vcf=$3
     
     # Handle edge cases
-    if [[ ! -s "${newly_annotated_vcf}" ]] || [[ $(count_vcf_records "${newly_annotated_vcf}") -eq 0 ]]; then
+    if [[ ! -f "${newly_annotated_vcf}" ]] || [[ $(count_vcf_records "${newly_annotated_vcf}") -eq 0 ]]; then
         log "No newly annotated variants in ${newly_annotated_vcf}"
-        if [[ -s "${covered_vcf}" ]] && [[ $(count_vcf_records "${covered_vcf}") -gt 0 ]]; then
-            mv "${covered_vcf}" "${output_vcf}"
-            tabix -p vcf "${output_vcf}"
-            announce_remove_tmps "${covered_vcf}.*"
-            log "Using only covered variants, no newly annotated variants"
+        if [[ -f "${covered_vcf}" ]] && [[ $(count_vcf_records "${covered_vcf}") -gt 0 ]]; then
+            [[ ${covered_vcf} != ${output_vcf} ]] && \
+            mv "${covered_vcf}" "${output_vcf}" && \
+            tabix -p vcf "${output_vcf}" && \
+            announce_remove_tmps "${covered_vcf}.*" && \
+            log "Using only covered variants, no newly annotated variants" || \
+            { log "ERROR: No covered variants in ${covered_vcf} or newly annotated variants in ${newly_annotated_vcf} available" && return 1; }
+            return 0
         else
-            log "ERROR: No covered variants in ${covered_vcf} or newly annotated variants in ${newly_annotated_vcf} available"
-            return 1
+            log "ERROR: No covered variants in ${covered_vcf} or newly annotated variants in ${newly_annotated_vcf} available" && return 1
         fi
-        return 0
     fi
     
+    # Handle edge case
     if [[ ! -f "${covered_vcf}" ]] || [[ $(count_vcf_records "${covered_vcf}") -eq 0 ]]; then
         [[ ${newly_annotated_vcf} != ${output_vcf} ]] && \
         mv "${newly_annotated_vcf}" "${output_vcf}" && \
-        tabix -p vcf "${output_vcf}" || :
-        log "Using only newly annotated variants, no covered variants"
+        tabix -p vcf "${output_vcf}" && \
+        announce_remove_tmps "${newly_annotated_vcf}.*" && \
+        log "Using only newly annotated variants, no covered variants" || \
+        { log "ERROR: No covered variants in ${covered_vcf} or newly annotated variants in ${newly_annotated_vcf} available" && return 1; }
         return 0
     fi
     

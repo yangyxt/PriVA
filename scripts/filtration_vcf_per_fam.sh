@@ -266,8 +266,7 @@ function filter_cadd_based_on_vcf () {
     
     # Extract variant positions from VCF (remove chr prefix to match CADD format)
     log "Extracting variant positions from VCF..."
-    bcftools query -f '%CHROM\t%POS\t%REF\t%ALT\n' ${input_vcf} | \
-    sed 's/^chr//' > ${vcf_variants}
+    bcftools query -f '%CHROM\t%POS\t%REF\t%ALT\n' ${input_vcf} > ${vcf_variants}
     
     local variant_count=$(wc -l < ${vcf_variants})
     log "Found ${variant_count} variants in VCF file, temporarily stored in ${vcf_variants}"

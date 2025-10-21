@@ -1030,7 +1030,7 @@ function update_hub_vcf() {
 
     # Create a temp newly_annotated_vcf with no FORMAT fields (sites-only)
     local tmp_tag=$(randomID)
-    local temp_newly_annotated_vcf=${newly_annotated_vcf/.vcf/.tmp.${tmp_tag}.vcf.gz}
+    local temp_newly_annotated_vcf=${newly_annotated_vcf/.vcf*/.tmp.${tmp_tag}.vcf.gz}
     
     # Strip all samples and FORMAT fields to create sites-only VCF
     log "Converting to sites-only VCF (no samples, no FORMAT fields)"
@@ -1053,8 +1053,8 @@ function update_hub_vcf() {
     { log "Failed to create temporary copy of hub VCF ${hub_vcf}. Return with error." && return 1; }
     
     # Concatenate files and remove duplicates (keeping the newer version)
-    log "Concat FORMAT-less hub VCF ${temp_hub} with newly annotated VCF ${temp_newly_annotated_vcf}: bcftools concat -a ${temp_hub} ${temp_newly_annotated_vcf} -Ou | bcftools sort -Oz -o ${hub_vcf}"
-    bcftools concat -a "${temp_hub}" "${temp_newly_annotated_vcf}" -Ou | \
+    log "Concat FORMAT-less hub VCF ${temp_hub} with newly annotated VCF ${temp_newly_annotated_vcf}: bcftools concat -a ${temp_hub} ${temp_newly_annotated_vcf} -Ov | bcftools sort -Oz -o ${hub_vcf}"
+    bcftools concat -a "${temp_hub}" "${temp_newly_annotated_vcf}" -Ov | \
     bcftools sort -Oz -o "${hub_vcf}" && tabix -p vcf -f "${hub_vcf}" && \
     normalize_vcf ${hub_vcf} ${temp_hub} ${ref_genome} ${threads} && \
     mv ${temp_hub} ${hub_vcf} && \
@@ -1097,7 +1097,7 @@ function merge_annotated_vcfs() {
     fi
     
     # Merge the files
-    bcftools concat -a "${covered_vcf}" "${newly_annotated_vcf}" -Ou | \
+    bcftools concat -a "${covered_vcf}" "${newly_annotated_vcf}" -Ov | \
     bcftools sort -Oz -o "${output_vcf/.vcf*/.tmp.vcf.gz}" && \
     mv "${output_vcf/.vcf*/.tmp.vcf.gz}" "${output_vcf}" && \
     tabix -p vcf "${output_vcf}" && \

@@ -182,9 +182,18 @@ def extract_record_info(record, var_source_exists: bool, control_ac_exists: bool
             for sample in record.samples.keys()
         },
         
-        # Extract AD info for each sample
+        # Extract AD info for each sample, construct from DP if missing
         'AD': {
-            f"{sample}_AD": ','.join('.' if value is None else str(value) for value in record.samples[sample]['AD'])
+            f"{sample}_AD": (
+                ','.join('.' if value is None else str(value) for value in record.samples[sample]['AD'])
+                if 'AD' in record.samples[sample] and record.samples[sample]['AD'] is not None
+                else (
+                    # Construct AD for homozygous alt (1/1): 0 for ref, all DP on alt allele
+                    '0,' + str(record.samples[sample].get('DP', '.'))
+                    if record.samples[sample].get('GT') == (1, 1) and 'DP' in record.samples[sample] and str(record.samples[sample].get('DP', '.')).isdigit()
+                    else '.' + ',.'  # Missing data if no DP available or unclear genotype
+                )
+            )
             for sample in record.samples.keys()
         }
     }

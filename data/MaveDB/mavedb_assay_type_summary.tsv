@@ -1,0 +1,28 @@
+MajorAssay	AssaySubtypeEnum	AssaySubtypeValue	Directionality	Scale	Baseline	Units	InterpretationFunction
+Stability_K50	StabilityK50Subtype	LOG10_K50_STANDARDIZED	HIGHER_IS_FUNCTION	CENTERED_0	WT≈0 (after log2 fold)	log2_from_relative	StabilityK50Interpreter
+Stability_K50	StabilityK50Subtype	LOG10_K50_RELATIVE	HIGHER_IS_FUNCTION	CENTERED_0	WT≈0 (after log2 of WT=1)	log2_from_relative	StabilityK50Interpreter
+Stability_K50	StabilityK50Subtype	K50_RAW	HIGHER_IS_FUNCTION	RAW	Assay-defined	K50	StabilityK50Interpreter
+Stability_DG	StabilityDGSubtype	DDG_KCAL_MOL	LOWER_IS_FUNCTION	CENTERED_0	WT delta ≈ 0	kcal/mol	StabilityDGInterpreter
+Stability_DG	StabilityDGSubtype	DG_KCAL_MOL	LOWER_IS_FUNCTION	CENTERED_0	WT delta ≈ 0	kcal/mol	StabilityDGInterpreter
+Abundance	AbundanceSubtype	VAMP_SEQ	HIGHER_IS_FUNCTION	WT_EQ_1	WT=1 → log2	relative	AbundanceInterpreter
+Abundance	AbundanceSubtype	CELL_SURFACE_TRAFF	HIGHER_IS_FUNCTION	WT_EQ_1	WT=1 → log2	relative	AbundanceInterpreter
+Abundance	AbundanceSubtype	TOTAL_EXPRESSION	HIGHER_IS_FUNCTION	WT_EQ_1	WT=1 → log2	relative	AbundanceInterpreter
+Activity	ActivitySubtype	ENZYME_ACTIVITY_REL	HIGHER_IS_FUNCTION	WT_EQ_1	WT=1 → log2	relative	ActivityInterpreter
+Activity	ActivitySubtype	REPORTER_ACTIVITY_REL	HIGHER_IS_FUNCTION	WT_EQ_1	WT=1 → log2	relative	ActivityInterpreter
+Binding	BindingSubtype	PKD	HIGHER_IS_FUNCTION	CENTERED_0	WT delta ≈ 0	pKd	BindingInterpreter
+Binding	BindingSubtype	KD	LOWER_IS_FUNCTION	RAW	Assay-defined	Kd	BindingInterpreter
+Binding	BindingSubtype	KA	HIGHER_IS_FUNCTION	CENTERED_0	WT delta ≈ 0	Ka	BindingInterpreter
+Binding	BindingSubtype	KD_APPARENT	LOWER_IS_FUNCTION	RAW	Assay-defined	Kd_app	BindingInterpreter
+Fitness	FitnessSubtype	LOG2_ENRICHMENT	HIGHER_IS_FUNCTION	CENTERED_0	WT≈0	log2	FitnessInterpreter
+Splicing	SplicingSubtype	DELTA_PSI_PERCENT	HIGHER_IS_FUNCTION	CENTERED_0	0 ≈ WT inclusion	ΔPSI%	SplicingInterpreter
+Splicing	SplicingSubtype	DELTA_PSI_FRACTION	HIGHER_IS_FUNCTION	CENTERED_0	0 ≈ WT inclusion	ΔPSI	SplicingInterpreter
+Electrophysiology	EphysSubtype	V1_2	NON_MONOTONIC	CENTERED_0	WT≈0	mV	EphysInterpreter
+Electrophysiology	EphysSubtype	CURRENT_DENSITY	NON_MONOTONIC	CENTERED_0	WT≈0	pA/pF	EphysInterpreter
+Complementation	ComplementationSubtype	YEAST	HIGHER_IS_FUNCTION	WT_EQ_1	WT=1 → log2	relative	ComplementationInterpreter
+Complementation	ComplementationSubtype	MAMMALIAN_CELL	HIGHER_IS_FUNCTION	WT_EQ_1	WT=1 → log2	relative	ComplementationInterpreter
+Localization	LocalizationSubtype	CELLULAR_LOCALIZATION	HIGHER_IS_FUNCTION	WT_EQ_1	WT=1 → log2	relative	LocalizationInterpreter
+Aggregation	AggregationSubtype	AGGREGATION_METRIC	LOWER_IS_FUNCTION	CENTERED_0	WT≈0	relative	AggregationInterpreter
+PTM	PTMSubtype	PHOSPHORYLATION	NON_MONOTONIC	CENTERED_0	WT≈0	unitless	PTMInterpreter
+Interaction	InteractionSubtype	TWO_HYBRID	HIGHER_IS_FUNCTION	CENTERED_0	WT≈0	unitless	InteractionInterpreter
+MPRA	MPRASubtype	REPORTER_ACTIVITY	HIGHER_IS_FUNCTION	WT_EQ_1	WT=1 → log2	relative	MPRAInterpreter
+Composite	CompositeSubtype	MACHINE_LEARNED	NON_MONOTONIC	RAW	Assay-defined	NA

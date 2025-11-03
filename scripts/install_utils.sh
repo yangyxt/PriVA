@@ -588,34 +588,81 @@ function MaveDB_install() {
     local PLUGIN_CACHEDIR=${2}
 
     if [[ -z ${PLUGIN_CACHEDIR} ]]; then
-        local PLUGIN_CACHEDIR=$(read_yaml ${config_file} "vep_plugins_dir")
+        PLUGIN_CACHEDIR="$(read_yaml "${config_file}" "vep_plugins_dir")"
     fi
 
-    local assembly=$(read_yaml ${config_file} "assembly")
-    local mavedb_url=$(read_yaml ${config_file} "mavedb_url")
-    local mavedb_file=$(read_yaml ${config_file} "mavedb_file")
+    local assembly
+    assembly="$(read_yaml "${config_file}" "assembly")"
+    local mavedb_url
+    mavedb_url="$(read_yaml "${config_file}" "mavedb_url")"
+    local mavedb_file
+    mavedb_file="$(read_yaml "${config_file}" "mavedb_file")"
 
-    if [[ ! -d ${PLUGIN_CACHEDIR}/MaveDB ]]; then
-        mkdir -p ${PLUGIN_CACHEDIR}/MaveDB
-    fi
+    local MAVEDB_CACHE_DIR="${PLUGIN_CACHEDIR%/}/MaveDB"
+    mkdir -p "${MAVEDB_CACHE_DIR}"
 
+    # Existing plugin TSV download logic
     if [[ ${assembly} == "GRCh37" ]] || [[ ${assembly} == "hg19" ]]; then
         log "The MaveDB file is not available for ${assembly}, skip the downloading process"
-        update_yaml ${config_file} "mavedb_file" ""
+        update_yaml "${config_file}" "mavedb_file" ""
         return 0
     fi
 
-    if [[ -f ${mavedb_file} ]] && \
-       [[ -f ${mavedb_file}.tbi ]] && \
-       [[ ${mavedb_file} -ot ${mavedb_file}.tbi ]]; then
+    if [[ -f ${mavedb_file} && -f ${mavedb_file}.tbi && ${mavedb_file} -ot ${mavedb_file}.tbi ]]; then
         log "The MaveDB file is already downloaded, skip the downloading process"
     else
-        wget -c ${mavedb_url} -O ${PLUGIN_CACHEDIR}/MaveDB/MaveDB_variants.${assembly}.tsv.gz && \
-        wget -c ${mavedb_url}.tbi -O ${PLUGIN_CACHEDIR}/MaveDB/MaveDB_variants.${assembly}.tsv.gz.tbi && \
-        update_yaml ${config_file} "mavedb_file" "${PLUGIN_CACHEDIR}/MaveDB/MaveDB_variants.${assembly}.tsv.gz"
+        wget -c "${mavedb_url}" -O "${MAVEDB_CACHE_DIR}/MaveDB_variants.${assembly}.tsv.gz" && \
+        wget -c "${mavedb_url}.tbi" -O "${MAVEDB_CACHE_DIR}/MaveDB_variants.${assembly}.tsv.gz.tbi" && \
+        update_yaml "${config_file}" "mavedb_file" "${MAVEDB_CACHE_DIR}/MaveDB_variants.${assembly}.tsv.gz"
+    fi
+}
+
+
+
+
+function MaveDB_deployment() {
+    # This function is not used for production. Only a record of the commands used to prepare MaveDB metadata
+    # Bulk ZIP / csv handling
+    # - Expect CSVs under ${MAVEDB_CACHE_DIR}/csv
+    # - If count of *scores.csv < 2680, (re)download the zenodo zip and extract into MAVEDB_CACHE_DIR
+    local CSV_DIR="${MAVEDB_CACHE_DIR%/}/csv"
+    local EXPECTED_COUNT=2680
+
+    local n_scores
+    n_scores="$(find ${CSV_DIR} -type f -name '*scores.csv' | wc -l)"
+    if [[ ${n_scores} -lt ${EXPECTED_COUNT} ]]; then
+        # try to get zenodo url from config
+        local ZENODO_URL
+        ZENODO_URL="$(read_yaml "${config_file}" "mavedb_zenodo_url" 2>/dev/null || true)"
+        if [[ -n "${ZENODO_URL}" ]]; then
+            local ZIPPATH="${MAVEDB_CACHE_DIR%/}/mavedb_all.zip"
+            log "[mavedb] (re)downloading Zenodo bulk archive to ${ZIPPATH} ..."
+            wget -O "${ZIPPATH}" "${ZENODO_URL}"
+            log "[mavedb] extracting ${ZIPPATH} into ${MAVEDB_CACHE_DIR} ..."
+            unzip -q -o "${ZIPPATH}" -d "${MAVEDB_CACHE_DIR}"
+            rm -f "${ZIPPATH}"
+        else
+            log "[mavedb] mavedb_zenodo_url not found in config; skipping bulk download."
+            [[ n_scores -eq 0 ]] && log "[mavedb] No score CSVs found; cannot compute neutral bands." && return 0 || log "[mavedb] proceeding with existing ${n_scores} score CSVs."
+        fi
     fi
 
+    log "[mavedb] detected ${n_scores} '*scores.csv' files under ${CSV_DIR}"
+
+    # Run neutral-band python script if CSVs exist
+    if [[ ${n_scores} -gt 0 ]]; then
+        local SCRIPT_PATH="${SCRIPT_DIR}/compute_neutral_bands.py"
+        local BANDS_OUT="${MAVEDB_CACHE_DIR%/}/neutral_bands.tsv"
+        log "[mavedb] Running compute_neutral_bands.py --scores-dir \"${CSV_DIR}\" --output \"${BANDS_OUT}\" ..."
+        python3 "${SCRIPT_PATH}" --scores-dir "${CSV_DIR}" --output "${BANDS_OUT}"
+        log "[mavedb] neutral bands written to ${BANDS_OUT}"
+    else
+        log "[mavedb] No score CSVs found; skipping neutral-band computation."
+    fi
+
+    return 0
 }
+
 
 
 

@@ -29,7 +29,7 @@ data_dir = os.path.join(os.path.dirname(self_dir), "data")
 
 from stat_protein_domain_amscores import nested_defaultdict
 from protein_domain_mapping import DomainNormalizer
-from mavdb_interpreter import MaveDBScoreInterpreter
+from mavedb_interpreter import pick_interpreter_from_metadata
 from find_cosegregation_vars import find_cosegregating_variants
 from determine_phase import determine_cis_trans_relationships
 from splicing_var_analysis import parse_hgvsc_splice_position
@@ -956,7 +956,7 @@ def PS2_PM6_criteria(df: pd.DataFrame,
 
 
 
-def mavedb_interpretation_per_row(row: pd.Series, urn_func_dict=None, mavedb_interpreter=None) -> bool:
+def mavedb_interpretation_per_row(row: pd.Series, metadata_df: pd.DataFrame) -> bool:
     '''
     Interpret the MaveDB scores and return the PS3 and BS3 criteria
     '''
@@ -966,7 +966,6 @@ def mavedb_interpretation_per_row(row: pd.Series, urn_func_dict=None, mavedb_int
         row["MaveDB_score_interpretation"] = np.nan
         return row
     
-    score_sets = str(row.get('MaveDB_score', '')).split('&')
     high_confs = str(row.get('MaveDB_high_conf', '')).split('&')
     pvalues = str(row.get('MaveDB_pvalue', '')).split('&')
     scores = str(row.get('MaveDB_score', '')).split('&')
@@ -976,10 +975,10 @@ def mavedb_interpretation_per_row(row: pd.Series, urn_func_dict=None, mavedb_int
     mavedb_ps3 = False
     mavedb_bs3 = False
     for i, urn in enumerate(urn_sets):
-        if urn not in urn_func_dict:
+        if urn not in metadata_df['urn'].values:
             logger.warning(f"The URN {urn} is not in the MaveDB metadata, it is ignored")
             continue
-        interpretation = urn_func_dict[urn]
+        interpretation = metadata_df.loc[metadata_df['urn'] == urn, 'rationale'].values[0]
         score_interpretation.append(interpretation)
         score = scores[i]
         high_conf = high_confs[i]
@@ -995,11 +994,18 @@ def mavedb_interpretation_per_row(row: pd.Series, urn_func_dict=None, mavedb_int
         except ValueError:
             pvalue = np.nan
 
-        result = mavedb_interpreter.interpret_score(score, interpretation, pvalue, high_conf)
-        if result['mavedb_ps3']:
+        if pd.isna(pvalue):
+            result = pick_interpreter_from_metadata(urn, score, metadata_df)
+            if result['mavedb_ps3']:
+                mavedb_ps3 = True
+            if result['mavedb_bs3']:
+                mavedb_bs3 = True
+        elif pvalue < 0.05:
             mavedb_ps3 = True
-        if result['mavedb_bs3']:
+            mavedb_bs3 = False
+        elif pvalue >= 0.05:
             mavedb_bs3 = True
+            mavedb_ps3 = False
 
     if mavedb_ps3 and mavedb_bs3:
         logger.warning(f"The variant {row['chrom']}:{row['pos']}:{row['ref']}:{row['alt']} has both PS3 and BS3 criteria according to MaveDB, the score is {score}, the high confidence is {high_conf}, the pvalue is {pvalue}, the interpretation is {interpretation}, it is likely to be a false positive")
@@ -1016,9 +1022,7 @@ def mavedb_score_interpretation(df: pd.DataFrame, mavedb_metadata: pd.DataFrame)
     '''
     Interpret the MaveDB scores and return the PS3 and BS3 criteria
     '''
-    urn_func_dict = mavedb_metadata.set_index('URN')['Score_Interpretation'].to_dict()
-    mavedb_interpreter = MaveDBScoreInterpreter()
-    df = df.apply(mavedb_interpretation_per_row, axis=1, urn_func_dict=urn_func_dict, mavedb_interpreter=mavedb_interpreter)
+    df = df.apply(mavedb_interpretation_per_row, axis=1, metadata_df=mavedb_metadata)
     mavedb_ps3_recs = df.loc[df['MaveDB_PS3'], [ "MaveDB_pvalue", "MaveDB_score", "MaveDB_high_conf", "MaveDB_score_interpretation"]]
     logger.info(f"There are {df['MaveDB_PS3'].sum()} variants with MaveDB determined PS3 criteria, they are determined by these functional assays: \n{mavedb_ps3_recs[:10].to_string()}")
     mavedb_bs3_recs = df.loc[df['MaveDB_BS3'], [ "MaveDB_pvalue", "MaveDB_score", "MaveDB_high_conf", "MaveDB_score_interpretation"]]

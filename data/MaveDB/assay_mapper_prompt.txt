@@ -1,0 +1,269 @@
+Please use **maximal reasoning effort** to assign each MaveDB experiment scoreset a specific interpretation function (definition and other metadata offered below) given the assay type and assay descriptions in the Metadata json block 
+
+## Goal
+Given:
+  (A) a master TSV catalog describing allowed assay families, subtypes, directionality, scale, baseline, units, and the interpreter function name; and
+  (B) one experiment’s metadata JSON from MaveDB,
+
+infer the **single best** standardized specification for this experiment (or return a conservative “Other/NA” with reasons if truly unmappable). Always choose from rows provided in the TSV. Do not invent new families or subtypes. 
+The flexibiligy_requirement item stands for whether the protein requires flexibility to function, in which case higher stability implies loss-of-function
+
+## Canonical output JSON schema
+Return **only** a single JSON object (no comments, no extra text) that exactly matches:
+{
+  "urn": "<string>",
+  "assay_family": "<one of TSV MajorAssay>",
+  "subtype_enum": "<value from TSV AssaySubtypeEnum>",
+  "subtype_value": "<value from TSV AssaySubtypeValue>",
+  "directionality": "<one of TSV Directionality>",
+  "scale": "<one of TSV Scale>",
+  "baseline": "<string from TSV Baseline>",
+  "units": "<string from TSV Units>",
+  "interpreter": "<value from TSV InterpretationFunction, detailed definition shown in below input block B>",
+  "neutral_bands": "[<float value cuts the border bewteen LoF and neutral, NA if no information available>,<float value cuts the border between GoF and neutral, NA if no information available>]",
+  "flexibility_requirement": "<true|false>",
+  "rationale": "<brief justification referencing fields in metadata>",
+  "needs_gene_specific_rules": <true|false>,
+  "nonmonotonic": <true|false>,
+  "ambiguous": <true|false>
+}
+
+If mapping is not possible without risk of wrong semantics, emit:
+{
+  "urn": "<...>",
+  "assay_family": "Other",
+  "subtype_enum": "NA",
+  "subtype_value": "NA",
+  "directionality": "NON_MONOTONIC",
+  "scale": "RAW",
+  "baseline": "Assay-defined",
+  "units": "NA",
+  "interpreter": "NA",
+  "neutral_bands": "[NA, NA]",
+  "flexibility_requirement": false,
+  "rationale": "Explain why mapping is unsafe or ambiguous.",
+  "needs_gene_specific_rules": false, 
+  "nonmonotonic": true, 
+  "ambiguous": true
+}
+
+## Selection rules
+- Prefer **monotonic** assay families/subtypes when the metadata indicates normalized, WT-anchored, or log-ratio-based scores (e.g., “WT=1→log2”, “centered at WT~=0”, “pKd”).
+- If binding is in Kd (raw), map to Binding/KD with **LOWER_IS_FUNCTION** and units “Kd”; if pKd or Ka is used, map to **HIGHER_IS_FUNCTION** with the corresponding subtype.
+- If the metadata indicates imputed/predicted scores alongside experimental scores, still map the **assay semantics** based on the experimental assay description (don’t choose “Composite/MACHINE_LEARNED” unless the output is explicitly a composite that mixes axes and cannot be interpreted monotonically).
+- Electrophysiology V1/2 or current density is non-monotonic unless gene-specific rules are provided. Set flags.needs_gene_specific_rules=true for those.
+- For promoter/enhancer MPRA with reporter activity relative to WT, prefer Activity/REPORTER_ACTIVITY_REL with **WT_EQ_1** scale; if not relative, leave as RAW and consider “Other” when semantics are unclear.
+- Do not change the TSV’s fields—select the closest **row** and copy its Directionality, Scale, Baseline, Units, and InterpretationFunction into the output.
+
+## Inputs
+### (A) Assay catalog TSV (header included)
+MajorAssay	AssaySubtypeEnum	AssaySubtypeValue	Directionality	Scale	Baseline	Units	InterpretationFunction
+Stability_K50	StabilityK50Subtype	LOG10_K50_STANDARDIZED	HIGHER_IS_FUNCTION	CENTERED_0	WT~=0 (after log2 fold)	log2_from_relative	StabilityK50Interpreter
+Stability_K50	StabilityK50Subtype	LOG10_K50_RELATIVE	HIGHER_IS_FUNCTION	CENTERED_0	WT~=0 (after log2 of WT=1)	log2_from_relative	StabilityK50Interpreter
+Stability_K50	StabilityK50Subtype	K50_RAW	HIGHER_IS_FUNCTION	RAW	Assay-defined	K50	StabilityK50Interpreter
+Stability_DG	StabilityDGSubtype	DDG_KCAL_MOL	LOWER_IS_FUNCTION	CENTERED_0	WT delta~=0	kcal/mol	StabilityDGInterpreter
+Stability_DG	StabilityDGSubtype	DG_KCAL_MOL	LOWER_IS_FUNCTION	CENTERED_0	WT delta~=0	kcal/mol	StabilityDGInterpreter
+Abundance	AbundanceSubtype	VAMP_SEQ	HIGHER_IS_FUNCTION	WT_EQ_1	WT=1:log2	relative	AbundanceInterpreter
+Abundance	AbundanceSubtype	CELL_SURFACE_TRAFF	HIGHER_IS_FUNCTION	WT_EQ_1	WT=1:log2	relative	AbundanceInterpreter
+Abundance	AbundanceSubtype	TOTAL_EXPRESSION	HIGHER_IS_FUNCTION	WT_EQ_1	WT=1:log2	relative	AbundanceInterpreter
+Activity	ActivitySubtype	ENZYME_ACTIVITY_REL	HIGHER_IS_FUNCTION	WT_EQ_1	WT=1:log2	relative	ActivityInterpreter
+Activity	ActivitySubtype	REPORTER_ACTIVITY_REL	HIGHER_IS_FUNCTION	WT_EQ_1	WT=1:log2	relative	ActivityInterpreter
+Binding	BindingSubtype	PKD	HIGHER_IS_FUNCTION	CENTERED_0	WT delta~=0	pKd	BindingInterpreter
+Binding	BindingSubtype	KD	LOWER_IS_FUNCTION	RAW	Assay-defined	Kd	BindingInterpreter
+Binding	BindingSubtype	KA	HIGHER_IS_FUNCTION	CENTERED_0	WT delta~=0	Ka	BindingInterpreter
+Binding	BindingSubtype	KD_APPARENT	LOWER_IS_FUNCTION	RAW	Assay-defined	Kd_app	BindingInterpreter
+Fitness	FitnessSubtype	LOG2_ENRICHMENT	HIGHER_IS_FUNCTION	CENTERED_0	WT~=0	log2	FitnessInterpreter
+Splicing	SplicingSubtype	DELTA_PSI_PERCENT	HIGHER_IS_FUNCTION	CENTERED_0	0~=WT inclusion	deltaPSI%	SplicingInterpreter
+Splicing	SplicingSubtype	DELTA_PSI_FRACTION	HIGHER_IS_FUNCTION	CENTERED_0	0~=WT inclusion	deltaPSI	SplicingInterpreter
+Electrophysiology	EphysSubtype	V1_2	NON_MONOTONIC	CENTERED_0	WT~=0	mV	EphysInterpreter
+Electrophysiology	EphysSubtype	CURRENT_DENSITY	NON_MONOTONIC	CENTERED_0	WT~=0	pA/pF	EphysInterpreter
+Complementation	ComplementationSubtype	YEAST	HIGHER_IS_FUNCTION	WT_EQ_1	WT=1:log2	relative	ComplementationInterpreter
+Complementation	ComplementationSubtype	MAMMALIAN_CELL	HIGHER_IS_FUNCTION	WT_EQ_1	WT=1:log2	relative	ComplementationInterpreter
+Localization	LocalizationSubtype	CELLULAR_LOCALIZATION	HIGHER_IS_FUNCTION	WT_EQ_1	WT=1:log2	relative	LocalizationInterpreter
+Aggregation	AggregationSubtype	AGGREGATION_METRIC	LOWER_IS_FUNCTION	CENTERED_0	WT~=0	relative	AggregationInterpreter
+PTM	PTMSubtype	PHOSPHORYLATION	NON_MONOTONIC	CENTERED_0	WT~=0	unitless	PTMInterpreter
+Interaction	InteractionSubtype	TWO_HYBRID	HIGHER_IS_FUNCTION	CENTERED_0	WT~=0	unitless	InteractionInterpreter
+MPRA	MPRASubtype	REPORTER_ACTIVITY	HIGHER_IS_FUNCTION	WT_EQ_1	WT=1:log2	relative	MPRAInterpreter
+Composite	CompositeSubtype	MACHINE_LEARNED	NON_MONOTONIC	RAW	Assay-defined	NA
+
+### (C) Interpreter function definitions
+
+# ----------------------------- Base Interpreter -----------------------------
+
+class BaseInterpreter:
+    def standardize(self, score: float, spec: AssaySpec) -> Optional[float]:
+        if score is None:
+            return None
+        if spec.scale == Scale.CENTERED_0:
+            return float(score)
+        if spec.scale == Scale.WT_EQ_1:
+            return _to_log2(float(score))
+        if spec.scale in (Scale.PERCENT, Scale.FRACTION):
+            return float(score)
+        # RAW handled by specific interpreters where applicable
+        return None
+
+    def call_from_band(self, s: float, spec: AssaySpec, favors_lower_stability: bool=False) -> str:
+        lo, hi = spec.neutral_band
+        if s is None:
+            return "Unknown"
+        if lo <= s <= hi:
+            return "Neutral"
+
+        if spec.directionality == Directionality.HIGHER_IS_FUNCTION:
+            return "GoF" if s > hi else "LoF"
+        elif spec.directionality == Directionality.LOWER_IS_FUNCTION:
+            # If users pass function_prefers_lower_stability=True, the "lower" side may be GoF
+            return "GoF" if s < lo else "LoF" if not favors_lower_stability else ("GoF" if s < lo else "LoF")
+        else:
+            return "Unknown"
+
+    def interpret(self, score: float, spec: AssaySpec, **kwargs) -> Dict[str, Any]:
+        raise NotImplementedError
+
+
+# ----------------------------- Interpreters -----------------------------
+
+class StabilityK50Interpreter(BaseInterpreter):
+    def interpret(self, score: float, spec: AssaySpec, function_prefers_lower_stability: bool=False, **kwargs):
+        if not validate_spec(spec):
+            return {"call":"NA","standardized_score":None,"reason":"Invalid spec","notes":""}
+
+        if spec.subtype in (StabilityK50Subtype.LOG10_K50_STANDARDIZED, StabilityK50Subtype.LOG10_K50_RELATIVE):
+            s = self.standardize(score, spec)
+            if s is None:
+                return {"call":"NA","standardized_score":None,"reason":"K50 not standardized","notes":spec.units}
+            call = self.call_from_band(s, spec, favors_lower_stability=function_prefers_lower_stability)
+            return {"call":call,"standardized_score":s,"reason":"K50 heuristic band","notes":f"{spec.neutral_band} | {spec.units}"}
+
+        return {"call":"NA","standardized_score":None,"reason":"K50 RAW requires transform","notes":spec.subtype.value}
+
+
+class StabilityDGInterpreter(BaseInterpreter):
+    def interpret(self, score: float, spec: AssaySpec, function_prefers_lower_stability: bool=False, **kwargs):
+        if not validate_spec(spec):
+            return {"call":"NA","standardized_score":None,"reason":"Invalid spec","notes":""}
+
+        s = self.standardize(score, spec)
+        raw_used = False
+        if s is None:
+            raw_used = True
+            if spec.subtype == StabilityDGSubtype.DDG_KCAL_MOL:
+                s = -float(score)           # ddG: higher (+) = less stable → invert so higher = more function
+            elif spec.subtype == StabilityDGSubtype.DG_KCAL_MOL:
+                s = float(score)            # dG: more negative = more stable (already lower→more function)
+            else:
+                return {"call":"NA","standardized_score":None,"reason":"Unknown ΔG subtype for RAW","notes":spec.units}
+
+        call = self.call_from_band(s, spec, favors_lower_stability=function_prefers_lower_stability)
+        return {"call":call,"standardized_score":s,"reason":"ΔG/ΔΔG transform" if raw_used else "ΔG/ΔΔG standardized","notes":f"{spec.neutral_band} | {spec.units}"}
+
+
+class AbundanceInterpreter(BaseInterpreter):
+    def interpret(self, score: float, spec: AssaySpec, **kwargs):
+        if not validate_spec(spec):
+            return {"call":"NA","standardized_score":None,"reason":"Invalid spec","notes":""}
+        s = self.standardize(score, spec)
+        if s is None:
+            return {"call":"NA","standardized_score":None,"reason":"Abundance not standardized","notes":spec.units}
+        return {"call":self.call_from_band(s, spec),"standardized_score":s,"reason":"Abundance band","notes":f"{spec.neutral_band} | {spec.subtype.value}"}
+
+
+class ActivityInterpreter(BaseInterpreter):
+    def interpret(self, score: float, spec: AssaySpec, **kwargs):
+        if not validate_spec(spec):
+            return {"call":"NA","standardized_score":None,"reason":"Invalid spec","notes":""}
+        s = self.standardize(score, spec)
+        if s is None:
+            return {"call":"NA","standardized_score":None,"reason":"Activity not standardized","notes":spec.units}
+        return {"call":self.call_from_band(s, spec),"standardized_score":s,"reason":"Activity band","notes":f"{spec.neutral_band} | {spec.subtype.value}"}
+
+
+class BindingInterpreter(BaseInterpreter):
+    def interpret(self, score: float, spec: AssaySpec, **kwargs):
+        if not validate_spec(spec):
+            return {"call":"NA","standardized_score":None,"reason":"Invalid spec","notes":""}
+
+        s = self.standardize(score, spec)
+        if s is None:
+            # RAW: convert KD/KD_APPARENT → ~pKd; PKD/KA already "higher=stronger"
+            if spec.subtype in (BindingSubtype.KD, BindingSubtype.KD_APPARENT):
+                kd = float(score)
+                if kd <= 0:
+                    return {"call":"NA","standardized_score":None,"reason":"Kd <= 0 invalid","notes":""}
+                s = math.log(1.0/kd, 10)  # ~ -log10(Kd)
+                if spec.directionality == Directionality.NON_MONOTONIC:
+                    spec.directionality = Directionality.HIGHER_IS_FUNCTION
+            elif spec.subtype in (BindingSubtype.PKD, BindingSubtype.KA):
+                s = float(score)
+                if spec.directionality == Directionality.NON_MONOTONIC:
+                    spec.directionality = Directionality.HIGHER_IS_FUNCTION
+            else:
+                return {"call":"NA","standardized_score":None,"reason":"Unsupported Binding subtype for RAW","notes":spec.subtype.value}
+
+        if spec.directionality == Directionality.NON_MONOTONIC:
+            return {"call":"NA","standardized_score":s,"reason":"Binding directionality unknown","notes":spec.units}
+
+        return {"call":self.call_from_band(s, spec),"standardized_score":s,"reason":"Binding band","notes":f"{spec.neutral_band} | {spec.subtype.value}"}
+
+
+class FitnessInterpreter(BaseInterpreter):
+    def interpret(self, score: float, spec: AssaySpec, **kwargs):
+        if not validate_spec(spec):
+            return {"call":"NA","standardized_score":None,"reason":"Invalid spec","notes":""}
+        s = self.standardize(score, spec)
+        if s is None:
+            return {"call":"NA","standardized_score":None,"reason":"Fitness not standardized","notes":spec.units}
+        return {"call":self.call_from_band(s, spec),"standardized_score":s,"reason":"Fitness band","notes":f"{spec.neutral_band}"}
+
+
+class SplicingInterpreter(BaseInterpreter):
+    def interpret(self, score: float, spec: AssaySpec, **kwargs):
+        if not validate_spec(spec):
+            return {"call":"NA","standardized_score":None,"reason":"Invalid spec","notes":""}
+        s = self.standardize(score, spec)
+        if s is None:
+            return {"call":"NA","standardized_score":None,"reason":"Splicing not standardized","notes":spec.units}
+        return {"call":self.call_from_band(s, spec),"standardized_score":s,"reason":"Splicing band","notes":f"{spec.neutral_band} | ΔPSI mapping is gene/context-specific"}
+
+
+class EphysInterpreter(BaseInterpreter):
+    def interpret(self, score: float, spec: AssaySpec, gene_specific_rules: Optional[Dict[str, Any]]=None, **kwargs):
+        if not validate_spec(spec):
+            return {"call":"NA","standardized_score":None,"reason":"Invalid spec","notes":""}
+        if not gene_specific_rules:
+            return {"call":"NA","standardized_score":None,"reason":"Gene-specific rule required","notes":""}
+        s = self.standardize(score, spec)
+        if s is None:
+            return {"call":"NA","standardized_score":None,"reason":"Ephys not standardized","notes":spec.units}
+
+        # Map V1/2 direction to GoF/LoF using gene rule
+        gof_dir = gene_specific_rules.get("gof_dir", "")
+        lo, hi = spec.neutral_band
+        if lo <= s <= hi:
+            return {"call":"Neutral","standardized_score":s,"reason":"Ephys neutral band","notes":spec.subtype.value}
+
+        if gof_dir == "more_negative":
+            call = "GoF" if s < lo else "LoF"
+        elif gof_dir == "more_positive":
+            call = "GoF" if s > hi else "LoF"
+        else:
+            call = "Unknown"
+
+        return {"call":call,"standardized_score":s,"reason":"Ephys rule","notes":f"{spec.neutral_band} | {spec.subtype.value} | {gof_dir}"}
+
+
+class ComplementationInterpreter(BaseInterpreter):
+    def interpret(self, score: float, spec: AssaySpec, **kwargs):
+        if not validate_spec(spec):
+            return {"call":"NA","standardized_score":None,"reason":"Invalid spec","notes":""}
+        s = self.standardize(score, spec)
+        if s is None:
+            return {"call":"NA","standardized_score":None,"reason":"Complementation not standardized","notes":spec.units}
+        return {"call":self.call_from_band(s, spec),"standardized_score":s,"reason":"Complementation band","notes":f"{spec.neutral_band} | {spec.subtype.value}"}
+
+### (B) MaveDB experiment metadata JSON
+{{METADATA_JSON}}
+
+## Task
+Produce exactly one JSON object following the schema above.

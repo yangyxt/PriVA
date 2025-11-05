@@ -1,6 +1,7 @@
 #! /usr/bin/env bash
 SCRIPT_DIR=$(dirname $(realpath ${BASH_SOURCE[0]}))
 DATA_DIR=$(dirname ${SCRIPT_DIR})/data
+BASE_DIR=$(dirname ${SCRIPT_DIR})
 source ${SCRIPT_DIR}/common_bash_utils.sh
 source ${SCRIPT_DIR}/annotation_vcf.sh
 log "The base directory is ${BASE_DIR}, the scripts directory is ${SCRIPT_DIR}"
@@ -199,7 +200,7 @@ function VEP_plugins_install() {
     { log "Failed to install UTRAnnotator"; return 1; }
 
     # Then install LOEUF
-    LOEUF_install ${config_file} ${ASSEMBLY_VERSION} ${BASE_DIR} || \
+    LOEUF_install ${config_file} ${ASSEMBLY_VERSION} || \
     { log "Failed to install LOEUF"; return 1; }
 
     # Then install AlphaMissense
@@ -410,7 +411,7 @@ function CADD_install() {
 
     CADD_script=$(find ${CONDA_PREFIX}/ -type f -name "CADD.sh")
     if [[ -z ${CADD_script} ]] || [[ ! -f ${CADD_script} ]]; then
-        log "Cannot find the CADD script in the conda environment"
+        log "Cannot find the CADD script in the conda environment. Expect a pre-installed CADD via conda (should be included in the conda env yaml file)"
         return 1
     fi
 
@@ -867,10 +868,9 @@ function LOEUF_install() {
     # The LOEUF plugin cache files are stored in the github repo because the original url is not accessible anymore
     local config_file=${1}
     local assembly_version=${2}
-    local git_repo_dir=${3}
 
-    local loeuf_hg19_file=${git_repo_dir}/data/loeuf/loeuf_dataset.tsv.gz
-    local loeuf_hg38_file=${git_repo_dir}/data/loeuf/loeuf_dataset_hg38.tsv.gz
+    local loeuf_hg19_file=${DATA_DIR}/loeuf/loeuf_dataset.tsv.gz
+    local loeuf_hg38_file=${DATA_DIR}/loeuf/loeuf_dataset_hg38.tsv.gz
 
     if [[ ${assembly_version} =~ "GRCh37" ]] || [[ ${assembly_version} =~ "hg19" ]]; then
         update_yaml ${config_file} "loeuf_prescore" "${loeuf_hg19_file}"
@@ -885,8 +885,7 @@ function LOEUF_install() {
 
 function gnomAD_install() {
     local config_file=${1}
-    local CACHEDIR=${2}
-    local assembly=${3}
+    local assembly=${2}
     # Assembly is the fasta file path
     # If assembly is not provided, we will use GRCh38 assembly
 
@@ -895,43 +894,41 @@ function gnomAD_install() {
     fi
 
     # We need to iterate over all chromosomes to check if the files are already downloaded and valid
-    # local -a chromosomes=( 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 X Y )
-    local -a chromosomes=( "22" "X" "Y" )
-    local gnomAD_chrX_vcf=$(read_yaml ${config_file} "gnomad_vcf_chrX")
+    local -a chromosomes=( 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 X Y )
+    # local -a chromosomes=( "22" "X" "Y" )
+    local gnomAD_vcf_dir=$(read_yaml ${config_file} "gnomad_vcf_dir")
 
     for chr in "${chromosomes[@]}"; do
         log "About to download the gnomAD v4.1 files for chr${chr} from the url https://storage.googleapis.com/gcp-public-data--gnomad/release/4.1/vcf/joint/gnomad.joint.v4.1.sites.chr${chr}.vcf.bgz"
-        if check_vcf_validity ${CACHEDIR}/gnomad.joint.v4.1.sites.chr${chr}.vcf.bgz; then
-            log "The gnomAD v4.1 file for chr${chr} is already downloaded to ${CACHEDIR} and updated"
-            if [[ ${CACHEDIR}/gnomad.joint.v4.1.sites.chr${chr}.vcf.bgz.tbi -ot ${CACHEDIR}/gnomad.joint.v4.1.sites.chr${chr}.vcf.bgz ]]; then
+        if check_vcf_validity ${gnomAD_vcf_dir}/gnomad.joint.v4.1.sites.chr${chr}.vcf.bgz; then
+            log "The gnomAD v4.1 file for chr${chr} is already downloaded to ${gnomAD_vcf_dir} and updated"
+            if [[ ${gnomAD_vcf_dir}/gnomad.joint.v4.1.sites.chr${chr}.vcf.bgz.tbi -ot ${gnomAD_vcf_dir}/gnomad.joint.v4.1.sites.chr${chr}.vcf.bgz ]]; then
                 log "The index file is not updated, now we start to index the file"
-                tabix -f -p vcf ${CACHEDIR}/gnomad.joint.v4.1.sites.chr${chr}.vcf.bgz
+                tabix -f -p vcf ${gnomAD_vcf_dir}/gnomad.joint.v4.1.sites.chr${chr}.vcf.bgz
             fi
         else
-            log "The gnomAD v4.1 file for chr${chr} (${CACHEDIR}/gnomad.joint.v4.1.sites.chr${chr}.vcf.bgz) is not downloaded or not updated, now we start to download the files"
-            wget https://storage.googleapis.com/gcp-public-data--gnomad/release/4.1/vcf/joint/gnomad.joint.v4.1.sites.chr${chr}.vcf.bgz -O ${CACHEDIR}/gnomad.joint.v4.1.sites.chr${chr}.vcf.bgz && \
-            wget https://storage.googleapis.com/gcp-public-data--gnomad/release/4.1/vcf/joint/gnomad.joint.v4.1.sites.chr${chr}.vcf.bgz.tbi -O ${CACHEDIR}/gnomad.joint.v4.1.sites.chr${chr}.vcf.bgz.tbi
+            log "The gnomAD v4.1 file for chr${chr} (${gnomAD_vcf_dir}/gnomad.joint.v4.1.sites.chr${chr}.vcf.bgz) is not downloaded or not updated, now we start to download the files"
+            wget https://storage.googleapis.com/gcp-public-data--gnomad/release/4.1/vcf/joint/gnomad.joint.v4.1.sites.chr${chr}.vcf.bgz -O ${gnomAD_vcf_dir}/gnomad.joint.v4.1.sites.chr${chr}.vcf.bgz && \
+            wget https://storage.googleapis.com/gcp-public-data--gnomad/release/4.1/vcf/joint/gnomad.joint.v4.1.sites.chr${chr}.vcf.bgz.tbi -O ${gnomAD_vcf_dir}/gnomad.joint.v4.1.sites.chr${chr}.vcf.bgz.tbi
         fi
     done
 
-    log "The gnomAD v4.1 files are already downloaded to ${CACHEDIR}, remember that the VCF records are 1-based and currently mapped to hg38 assembly"
+    log "The gnomAD v4.1 files are already downloaded to ${gnomAD_vcf_dir}, remember that the VCF records are 1-based and currently mapped to hg38 assembly"
 
     if [[ ${assembly} =~ "GRCh37" ]] || [[ ${assembly} =~ "hg19" ]]; then
-        local self_script=$(realpath ${BASH_SOURCE[0]})
-        local self_dir=$(dirname ${self_script})
-        local chain_file=$(dirname ${self_dir})/data/liftover/hg38ToHg19.over.chain.gz
-        log "Since the gnomAD v4.1 files are currently mapped to hg38 assembly, we need to liftover the files to hg19 assembly, the chain file is ${chain_file}, self_dir is ${self_dir}, self_script is ${self_script}"
+        local chain_file=${BASE_DIR}/data/liftover/hg38ToHg19.over.chain.gz
+        log "Since the gnomAD v4.1 files are currently mapped to hg38 assembly, we need to liftover the files to hg19 assembly, the chain file is ${chain_file}"
 
         gnomAD_liftover \
-        ${CACHEDIR}/gnomad.joint.v4.1.sites.chr1.vcf.bgz \
+        ${gnomAD_vcf_dir}/gnomad.joint.v4.1.sites.chr1.vcf.bgz \
         ${chain_file} \
-        ${assembly} 4 && \
-        log "The gnomAD v4.1 files are liftovered to hg19 assembly and saved to ${CACHEDIR}" && \
-        parallel -j4 bash ${SCRIPT_DIR}/common_bash_utils.sh check_vcf_validity ${CACHEDIR}/gnomad.joint.v4.1.sites.hg19.chr{}.vcf.gz ::: "${chromosomes[@]}" && \
-        update_yaml ${config_file} "gnomad_vcf_chrX" "${CACHEDIR}/gnomad.joint.v4.1.sites.hg19.chrX.vcf.gz" || \
+        ${hg19_fasta} 4 && \
+        log "The gnomAD v4.1 files are liftovered to hg19 assembly and saved to ${gnomAD_vcf_dir}" && \
+        parallel -j4 bash ${SCRIPT_DIR}/common_bash_utils.sh check_vcf_validity ${gnomAD_vcf_dir}/gnomad.joint.v4.1.sites.hg19.chr{}.vcf.gz ::: "${chromosomes[@]}" && \
+        update_yaml ${config_file} "gnomad_vcf_chrX" "${gnomAD_vcf_dir}/gnomad.joint.v4.1.sites.hg19.chrX.vcf.gz" || \
         { log "Failed to liftover the gnomAD v4.1 files to hg19 assembly"; return 1; }
     else
-        update_yaml ${config_file} "gnomad_vcf_chrX" "${CACHEDIR}/gnomad.joint.v4.1.sites.chrX.vcf.bgz"
+        update_yaml ${config_file} "gnomad_vcf_chrX" "${gnomAD_vcf_dir}/gnomad.joint.v4.1.sites.chrX.vcf.bgz"
     fi
 }
 
@@ -1241,14 +1238,14 @@ function ClinVar_VCF_deploy() {
 function ClinVar_Gene_stat () {
     local config_file=${1}
 
-    local clinvar_stat=$(read_yaml ${config_file} "clinvar_gene_stat")
+    local clinvar_stat=${DATA_DIR}/ClinVar/$(basename $(read_yaml ${config_file} "clinvar_gene_stat"))
     local clinvar_vcf=$(read_yaml ${config_file} "clinvar_vcf")
     local threads=$(read_yaml ${config_file} "threads")
 
     [[ -f ${clinvar_stat} ]] && \
     log "The clinvar stat file ${clinvar_stat} is already generated. Skip this step" && return 0
 
-    local clinvar_stat=$(dirname ${SCRIPT_DIR})/data/ClinVar/clinvar_2star_stats.pkl.gz
+    local clinvar_stat=${DATA_DIR}/ClinVar/clinvar_2star_stats.pkl.gz
     local clinvar_stat_py=${SCRIPT_DIR}/clinvar_stat_variants.py
 
     check_path ${clinvar_vcf} || \
@@ -1365,8 +1362,8 @@ function InterPro_parsing () {
     local config=${1}
     # Assembly independent
 
-    local interpro_dir=$(read_yaml "${config}" "interpro_dir")
-    local interpro_mapping_pickle=$(read_yaml "${config}" "interpro_mapping_pickle")
+    local interpro_dir=${DATA_DIR}/InterPro
+    local interpro_mapping_pickle=${interpro_dir}/$(basename $(read_yaml "${config}" "interpro_mapping_pickle"))
     local summary_mapping_py=${SCRIPT_DIR}/protein_domain_mapping.py
     local interpro_xml_gz_url=$(read_yaml "${config}" "interpro_xml_gz_url")
     local am_vep_vcf=$(read_yaml "${config}" "alphamissense_vep_vcf")
@@ -1400,10 +1397,7 @@ function InterPro_parsing () {
 function SpliceVault_install () {
     local config=${1}
     local PLUGIN_CACHEDIR=${2}
-    local git_scripts_dir=${3}
-
-
-    [[ -z ${git_scripts_dir} ]] && git_scripts_dir=$(dirname $(dirname $(dirname $(read_yaml "${config}" "hg38_hg19_chain"))))/scripts
+    
     [[ ! -d ${PLUGIN_CACHEDIR} ]] && { log "The cache directory ${PLUGIN_CACHEDIR} is not found, please check the file"; return 1; }
     local splicevault_prescore=$(read_yaml "${config}" "splicevault_prescore")
     [[ -f ${splicevault_prescore} ]] && { log "The SpliceVault plugin is already installed at ${splicevault_prescore}"; return 0; } || \
@@ -1412,7 +1406,7 @@ function SpliceVault_install () {
     local splicevault_url=$(read_yaml "${config}" "splicevault_url")
     local ASSEMBLY_VERSION=$(read_yaml "${config}" "assembly")
     if [[ ${ASSEMBLY_VERSION} =~ "GRCh37" ]] || [[ ${ASSEMBLY_VERSION} =~ "hg19" ]]; then
-        local chain_file=$(read_yaml "${config}" "hg38_hg19_chain")
+        local chain_file=${DATA_DIR}/liftover/$(basename $(read_yaml "${config}" "hg38_hg19_chain"))
         local ref_genome=$(read_yaml "${config}" "ref_genome")
         local tmp_dir=$(read_yaml "${config}" "tmp_dir")
         [[ ! -f ${ref_genome} ]] && { log "The reference genome file ${ref_genome} is not found, please check the file"; return 1; }
@@ -1421,7 +1415,7 @@ function SpliceVault_install () {
         # Currently, we only have the SpliceVault data for GRCh38, so we need to convert it to GRCh37
         wget -c ${splicevault_url} -O ${PLUGIN_CACHEDIR}/SpliceVault/SpliceVault_data_GRCh38.tsv.gz && \
         gunzip -c ${PLUGIN_CACHEDIR}/SpliceVault/SpliceVault_data_GRCh38.tsv.gz > ${PLUGIN_CACHEDIR}/SpliceVault/SpliceVault_data_GRCh38.tsv && \
-        python ${git_scripts_dir}/SpliceVault_tsv_vcf_conversion.py \
+        python ${SCRIPT_DIR}/SpliceVault_tsv_vcf_conversion.py \
         --input_tsv ${PLUGIN_CACHEDIR}/SpliceVault/SpliceVault_data_GRCh38.tsv \
         --output_tsv ${PLUGIN_CACHEDIR}/SpliceVault/SpliceVault_data_GRCh37.tsv \
         --chain_file ${chain_file} \
@@ -1624,7 +1618,7 @@ function main_install() {
 
     local has_error=0
     # Read configuration
-    local conda_env_yaml=$(read_yaml "$config_file" "conda_env_yaml")
+    local conda_env_yaml=${BASE_DIR}/$(basename $(read_yaml "$config_file" "conda_env_yaml"))
     local vep_cache_dir=$(read_yaml "$config_file" "vep_cache_dir")
     local vep_plugins_dir=$(read_yaml "$config_file" "vep_plugins_dir")
     local assembly=$(read_yaml "$config_file" "assembly")
@@ -1679,13 +1673,7 @@ function main_install() {
     { log "Failed to install LOFTEE"; return 1; }
 
     # 4. Install gnomAD VCF (basically download bgzipped VCF files)
-    local gnomad_vcf_chrX=$(read_yaml "$config_file" "gnomad_vcf_chrX")
-    local gnomad_vcf_dir=$(dirname ${gnomad_vcf_chrX})
-    if [[ ${assembly} =~ "GRCh37" ]] || [[ ${assembly} =~ "hg19" ]]; then
-        # Chain file is small enough to be included in the git repo
-        local chain_file=$(read_yaml "$config_file" "chain_file")
-    fi
-    gnomAD_install ${config_file} ${gnomad_vcf_dir} ${ref_fasta} || \
+    gnomAD_install ${config_file} ${ref_fasta} || \
     { log "Failed to install gnomAD VCF"; return 1; }
     AlphaMissense_anno_gnomAD ${config_file} || \
     { log "Failed to annotate gnomAD data to AlphaMissense VCF"; return 1; }

@@ -8,6 +8,8 @@
 # Maintainer: yangyxt@gmail.com, yangyxt@hku.hk
 
 SCRIPT_DIR=$(dirname $(readlink -f $0))
+BASE_DIR=$(dirname ${SCRIPT_DIR})
+DATA_DIR=${BASE_DIR}/data
 source ${SCRIPT_DIR}/common_bash_utils.sh
 
 # In this script, we have several steps:
@@ -143,7 +145,7 @@ function assign_acmg_criteria () {
     local clinvar_splice_dict_pkl=$(read_yaml ${config_file} "clinvar_splice_stat")
     local intolerant_domains_pkl=$(read_yaml ${config_file} "all_intolerant_domains")
 	local am_intol_domains_tsv=$(read_yaml ${config_file} "alphamissense_intolerant_domains")
-    local clinvar_gene_stat_pkl=$(read_yaml ${config_file} "clinvar_gene_stat")
+    local clinvar_gene_stat_pkl=${DATA_DIR}/ClinVar/$(basename $(read_yaml ${config_file} "clinvar_gene_stat"))
     local tranx_exon_domain_map_pkl=$(read_yaml ${config_file} "alphamissense_tranx_domain_map")
     local intolerant_motifs_pkl=$(read_yaml ${config_file} "alphamissense_intolerant_motifs")
     local alt_disease_vcf=$(read_yaml ${config_file} "alt_disease_vcf")

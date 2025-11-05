@@ -734,7 +734,7 @@ function anno_VEP_data() {
 
     # Plugin cache files
     local utr_annotator_file="${utr_annotator_file:-${config_args[utr_annotator_file]}}"
-    local loeuf_prescore="${loeuf_prescore:-${config_args[loeuf_prescore]}}"
+    local loeuf_prescore="${DATA_DIR}/loeuf/$(basename ${loeuf_prescore:-${config_args[loeuf_prescore]}})"
     local alphamissense_prescore="${alphamissense_prescore:-${config_args[alphamissense_prescore]}}"
     local spliceai_snv_prescore="${spliceai_snv_prescore:-${config_args[spliceai_snv_prescore]}}"
     local spliceai_indel_prescore="${spliceai_indel_prescore:-${config_args[spliceai_indel_prescore]}}"

@@ -1,15 +1,16 @@
 # config.yaml
 
-# Note that the paths specified below are all data that can't be included in the GitHub repo (primarily due to the size limit of GitHub repo)
+####################################################Prepare these paths before running the install_utils.sh script####################################################
 tmp_dir: "/paedyl01/disk1/yangyxt/test_tmp/test_acmg"
-base_dir: "/paedyl01/disk1/yangyxt/acmg_auto"
+assembly: hg19
+ref_genome: "/paedyl01/disk1/yangyxt/indexed_genome/ucsc.hg19.fasta"
 
 # Prepare hub files for annotation caching
 hub_vcf_file: "/paedyl01/disk1/yangyxt/ngs_summary/hg19.anno.vcf.gz"
 hub_cadd_file: "/paedyl01/disk1/yangyxt/ngs_summary/hg19.cadd.tsv.gz"
 
 # Below we specify the conda env yml file in relative path
-conda_env_yaml: "/paedyl01/disk1/yangyxt/PriVA/acmg_auto_rough.yml"
+conda_env_yaml: "acmg_auto_rough.yml"
 conda_env_name: "priva_acmg"
 
 # Below we specify the input vcf file in absolute paths
@@ -18,9 +19,8 @@ ped_file: "/paedyl01/disk1/yangyxt/test_acmg_auto/TEST_FAM.ped"
 
 # Note that the assembly version must be consistent with the reference genome
 # Below we specify the reference genome in absolute paths because the size of the file is too large to be included in the GitHub repo
-assembly: hg19
-ref_genome: "/paedyl01/disk1/yangyxt/indexed_genome/ucsc.hg19.fasta"
-hg38_hg19_chain: "/paedyl01/disk1/yangyxt/PriVA/data/liftover/hg38ToHg19.over.chain.gz"
+
+hg38_hg19_chain: "hg38ToHg19.over.chain.gz"
 repeat_region_file_name: "ucsc.hg19.fasta.repeat.bed.gz"
 
 # Below we specify the output directory in absolute paths
@@ -34,7 +34,8 @@ threads_per_fam: 4   # Threads for EACH family filtering/prioritization job
 af_cutoff: 0.05
 
 # Below we specify the path to the gnomAD vcf file for chromosome X and we'll use that template to deduce the paths to other chromosome VCF files, the paths should be relatively constant
-gnomad_vcf_chrX: /paedyl01/disk1/yangyxt/public_data/gnomAD/v4_dataset/gnomad.joint.v4.1.sites.hg19.chrX.vcf.gz
+gnomad_vcf_chrX: "/paedyl01/disk1/yangyxt/public_data/gnomAD/v4_dataset/gnomad.joint.v4.1.sites.hg19.chrX.vcf.gz"
+gnomad_vcf_dir: "/paedyl01/disk1/yangyxt/public_data/gnomAD/v4_dataset"
 
 # Below we specify the path to the ClinVar VCF file, the path should be relatively constant
 clinvar_vcf: /paedyl01/disk1/yangyxt/public_data/clinvar/clinvar.hg19.vep.vcf.gz
@@ -43,7 +44,7 @@ clinvar_splice_stat: /paedyl01/disk1/yangyxt/public_data/clinvar/clinvar.hg19.ve
 clinvar_vcf_dir: /paedyl01/disk1/yangyxt/public_data/clinvar
 clinvar_patho_af_stat: /paedyl01/disk1/yangyxt/public_data/clinvar/clinvar.hg19.vep.patho_af_stat.pkl
 clinvar_patho_exon_af_stat: /paedyl01/disk1/yangyxt/public_data/clinvar/clinvar.hg19.vep.patho_exon_af_stat.pkl
-clinvar_gene_stat: /paedyl01/disk1/yangyxt/PriVA/data/ClinVar/clinvar_2star_stats.pkl.gz
+clinvar_gene_stat: clinvar_2star_stats.pkl.gz
 
 # Below we specify the cache directory for VEP, you need to specify the locations before starting installing VEP and its plugins
 vep_cache_dir: "/paedyl01/disk1/yangyxt/public_data/VEP_caches"
@@ -55,7 +56,7 @@ vep_plugins_cachedir: "/paedyl01/disk1/yangyxt/public_data/VEP_plugins_caches"
 # The UTRAnnotator plugin cache file
 utr_annotator_file: /paedyl01/disk1/yangyxt/public_data/VEP_plugins_caches/UTRannotator/uORF_5UTR_GRCh37_PUBLIC.txt
 # The LOEUF plugin cache file
-loeuf_prescore: /paedyl01/disk1/yangyxt/PriVA/data/loeuf/loeuf_dataset.tsv.gz
+loeuf_prescore: loeuf_dataset.tsv.gz
 
 # The LOFTEE plugin cache file and LOFTEE repository
 loftee_parent_dir: /paedyl01/disk1/yangyxt/public_data/VEP_plugins/LoFtee_repos
@@ -106,17 +107,21 @@ cadd_GRCh38_indel_anno_md5: "00ce2d2431a6ec3324b23ff625f4e0cd"
 cadd_version: "v1.7"
 
 # InterPro paths
-interpro_dir: "/paedyl01/disk1/yangyxt/PriVA/data/InterPro"
 interpro_xml_gz_url: "https://ftp.ebi.ac.uk/pub/databases/interpro/current_release/interpro.xml.gz"
-interpro_mapping_pickle: "/paedyl01/disk1/yangyxt/PriVA/data/InterPro/Interpro_entry_mapping.pkl.gz"
+interpro_mapping_pickle: "Interpro_entry_mapping.pkl.gz"
 
 # ClinGen paths
-clingen_map: /paedyl01/disk1/yangyxt/PriVA/data/clingen/clingen_map.hg19.pkl.gz
-gene_dosage_sensitivity: /paedyl01/disk1/yangyxt/PriVA/data/clingen/gene_dosage_sensitivity.hg19.tsv
+clingen_map: "/paedyl01/disk1/yangyxt/PriVA/data/clingen/clingen_map.hg19.pkl.gz"
+gene_dosage_sensitivity: "/paedyl01/disk1/yangyxt/PriVA/data/clingen/gene_dosage_sensitivity.hg19.tsv"
+
+
+# MaveDB paths
+mavedb_url: "https://ftp.ensembl.org/pub/current_variation/MaveDB/MaveDB_variants.tsv.gz"
+mavedb_file: "/paedyl01/disk1/yangyxt/public_data/VEP_plugins_caches/MaveDB/MaveDB_variants.hg38.tsv.gz"
 
 # Below we specify the path to the VCF file containing the variants from alternate disease patients, make sure it is normalized and biallelic
 # Make sure that the VCF file is in an reference genome that is consistent with the processing VCF file
-alt_disease_vcf: /paedyl01/disk1/yangyxt/public_data/ShortStatue/ShortStature.hg19.vcf.gz
+alt_disease_vcf: "/paedyl01/disk1/yangyxt/public_data/ShortStatue/ShortStature.hg19.vcf.gz"
 control_vcf: ""
 pp1_vcf: ""
 pp1_ped: ""

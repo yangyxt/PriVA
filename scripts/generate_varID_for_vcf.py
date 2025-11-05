@@ -42,9 +42,9 @@ def variant_to_id(chrom, pos, ref, alt, end=None):
         var_str = f"{chrom}:{pos}:{ref}:{alt}"
 
     # Encode the variant string to base64
-    encoded = base64.urlsafe_b64encode(var_str.encode()).decode()
+    # encoded = base64.urlsafe_b64encode(var_str.encode()).decode() # Deprecated
 
-    return encoded
+    return var_str
 
 
 def id_to_variant(var_id):
@@ -57,8 +57,9 @@ def id_to_variant(var_id):
     Returns:
     tuple: (chrom, pos, ref, alt, end)
     """
-    # Decode the base64 string
-    decoded = base64.urlsafe_b64decode(var_id).decode()
+    # Decode the base64 string, deprecated
+    # decoded = base64.urlsafe_b64decode(var_id).decode()
+    decoded = var_id
 
     # Parse the decoded string
     parts = decoded.split(':')

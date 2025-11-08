@@ -10,10 +10,10 @@ This repository contains scripts and configuration files for running an automate
 
 ## Requirements
 
-- Snakemake workflow management system
+- Snakemake workflow management system (already included in conda env)
 - Conda/Mamba for environment management
 - Sufficient disk space for annotation resources (~1TB)
-- Reference genome files
+- Reference genome file
 
 ## Pedigree File Requirements
 
@@ -22,57 +22,6 @@ If a valid pedigree table is provided, please note:
 2. The proband of the family should stay as the first record of the family in the pedigree table
 3. Every family should have a unique identifier in the pedigree table
 
-## Annotation Resources
-
-The pipeline integrates multiple annotation resources to comprehensively evaluate variant pathogenicity:
-
-1. **Splicing disruption effect**: 
-   - SpliceAI (VEP_plugin)
-   - SpliceVault (VEP_Plugin)
-
-2. **5-UTR uORF disruption effect**: 
-   - UTRannotator (VEP_plugin)
-
-3. **General Deleterious effect prediction**: 
-   - CADD (standalone client)
-   - PrimateAI (VEP_plugin)
-   - AlphaMissense (VEP_plugin)
-   - LOFTEE (VEP_plugin)
-
-4. **Haplo-insufficiency**: 
-   - LOEUF (VEP_plugin)
-   - AlphaMissense_mean_score_per_gene
-
-5. **Transcript disruption effect prediction**: 
-   - VEP
-
-6. **Clinical variants**: 
-   - ClinVar VCF (bcftools annotate)
-
-7. **Population-wise allele frequency + number of homozygous carriers**: 
-   - gnomADv4 VCFs (bcftools annotate)
-
-8. **Conservation**: 
-   - Conservation (VEP_plugin)
-
-
-## Pipeline Structure
-
-The pipeline consists of three main steps:
-
-1. **Annotation**: Annotates variants with multiple resources (Rule `annotate_variants`)
-   - VEP annotation with plugins
-   - CADD scoring
-   - gnomAD frequency annotation
-   - ClinVar annotation
-
-2. **Filtration**: Filters variants based on family information (if available) (Rules `filter_variants_per_family` / `filter_variants_no_family`)
-   - Family-specific filtering when pedigree is provided
-   - General filtering without family information
-
-3. **Prioritization**: Prioritizes variants according to ACMG guidelines (Rules `prioritize_variants_per_family` / `prioritize_variants_no_family`)
-   - Generates TSV output with prioritized variants
-   - Produces ACMG-specific reports
 
 ## Installation
 
@@ -214,6 +163,7 @@ run_priva_pipeline() {
 #    run_priva_pipeline /path/to/my_experiment_config.yaml
 ```
 
+
 **Explanation of the Function:**
 
 1. **Configuration:** Set the path to your `Snakefile` and optionally a default config file path.
@@ -244,6 +194,60 @@ nohup snakemake --snakefile /path/to/PriVA/Snakefile \
 
 For family-specific analysis, ensure your pedigree file (`ped_file` in `config.yaml`) is properly formatted and specified in the config file.
 
+
+## Annotation Resources
+
+The pipeline integrates multiple annotation resources to comprehensively evaluate variant pathogenicity:
+
+1. **Splicing disruption effect**: 
+   - SpliceAI (VEP_plugin)
+   - SpliceVault (VEP_Plugin)
+
+2. **5-UTR uORF disruption effect**: 
+   - UTRannotator (VEP_plugin)
+
+3. **General Deleterious effect prediction**: 
+   - CADD (standalone client)
+   - PrimateAI (VEP_plugin)
+   - AlphaMissense (VEP_plugin)
+   - LOFTEE (VEP_plugin)
+
+4. **Haplo-insufficiency**: 
+   - LOEUF (VEP_plugin)
+   - AlphaMissense_mean_score_per_gene
+
+5. **Transcript disruption effect prediction**: 
+   - VEP
+
+6. **Clinical variants**: 
+   - ClinVar VCF (bcftools annotate)
+
+7. **Population-wise allele frequency + number of homozygous carriers**: 
+   - gnomADv4 VCFs (bcftools annotate)
+
+8. **Conservation**: 
+   - Conservation (VEP_plugin)
+
+
+## Pipeline Structure
+
+The pipeline consists of three main steps:
+
+1. **Annotation**: Annotates variants with multiple resources (Rule `annotate_variants`)
+   - VEP annotation with plugins
+   - CADD scoring
+   - gnomAD frequency annotation
+   - ClinVar annotation
+
+2. **Filtration**: Filters variants based on family information (if available) (Rules `filter_variants_per_family` / `filter_variants_no_family`)
+   - Family-specific filtering when pedigree is provided
+   - General filtering without family information
+
+3. **Prioritization**: Prioritizes variants according to ACMG guidelines (Rules `prioritize_variants_per_family` / `prioritize_variants_no_family`)
+   - Generates TSV output with prioritized variants
+   - Produces ACMG-specific reports
+
+   
 ## Output Files
 
 The pipeline produces several output files in the directory specified by `output_dir` in your `config.yaml`:

@@ -76,38 +76,40 @@ The pipeline consists of three main steps:
 
 ## Installation
 
-The pipeline includes an installation utility (`scripts/install_utils.sh`) that helps set up all required components:
+The github repository includes an one-stop installation BASH script (`scripts/install_utils.sh`) that helps deploy all required dependencies on your host system, with the help from a configuration YAML file (e.g., `config.yaml`). This YAML file is specifying the paths to external annotation dependencies.
 
-1. Create and configure the conda environment (expected name `priva_acmg`):
+**Carefully read comments in `config.yaml` to prepare for execution of install_utils.sh and PriVA**
+
+**This only needs to be executed once**
+Create and configure the conda environment (expected name `priva_acmg`):
    ```bash
-   bash scripts/install_utils.sh conda_install_vep path/to/env.yaml
+   bash scripts/install_utils.sh conda_install_vep acmg_conda.yml
    # Make sure the environment name in env.yaml is 'priva_acmg' or activate it manually later
    ```
 
-2. Install VEP and its plugins:
+**These two steps only need to be executed once per reference assembly**
+1. Install VEP and its plugins:
    ```bash
    bash scripts/install_utils.sh vep_cache_api_install --VEP_CACHEDIR /path/to/cache --VEP_ASSEMBLY GRCh37/GRCh38
    ```
 
-3. Install annotation resources:
+2. Install annotation resources:
    ```bash
    bash scripts/install_utils.sh main_install path/to/config.yaml
    ```
 
 ## Configuration
+We recommend specify the running argument of PriVA using the `config.yaml` file, this can be copied for each cohort.
 
-The pipeline is configured through a YAML file (e.g., `config.yaml`). This file is crucial and specifies:
-
-- Input Files: `input_vcf`, `ped_file` (optional), `ref_genome`.
+- Input Files: `input_vcf`, `ped_file`, `ref_genome`.
 - Genome Assembly: `assembly` (e.g., hg19, hg38).
 - Output & Directories: `output_dir`, `base_dir`.
 - Resources: `threads`.
 - Annotation Paths: Paths to VEP cache (`vep_cache_dir`), plugins (`vep_plugins_dir`, `vep_plugins_cachedir`), gnomAD (`gnomad_vcf_chrX`), ClinVar (`clinvar_vcf`), CADD (`cadd_base_dir`), and various plugin-specific data files (e.g., `alphamissense_prescore`, `spliceai_snv_prescore`). See the example `config.yaml` for the full list.
 - Filtering Thresholds: `af_cutoff`.
 
-**Ensure all paths in your `config.yaml` are correct and accessible from where you run Snakemake.**
 
-## Usage
+## Running PriVA
 
 The recommended way to run the pipeline is using Snakemake, which manages dependencies and execution order.
 
@@ -118,7 +120,6 @@ The recommended way to run the pipeline is using Snakemake, which manages depend
    conda activate priva_acmg
    ```
 2. Configuration File: Have your `config.yaml` file ready with all necessary paths and parameters correctly specified.
-3. Snakefile Location: Know the path to the `Snakefile`.
 
 **Running the Pipeline:**
 
@@ -128,7 +129,7 @@ The config file can be duplicated and customized for batch-specific runs.
 **Basic Command:**
 
 ```bash
-snakemake --snakefile /path/to/your/Snakefile \
+snakemake --snakefile /path/to/your/PriVA/Snakefile \
           --configfile /path/to/your/config.yaml \
           --cores <number_of_cores>
 ```

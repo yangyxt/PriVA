@@ -425,16 +425,23 @@ function CADD_install() {
         local CADD_anno_dir=${CADD_cache_dir}/annotations
         update_yaml ${config_file} "cadd_base_dir" "$(dirname ${CADD_script})"
     else
-        read -p "In this case, you need to download the CADD repo as a zip file and unzip it to a local directory and all the cache files will be store in that directory. Please specify the absolute path to the directory: "
+        read -p "In this case, you need to download the CADD repo as a zip file and unzip it to a local directory and all the cache files will be store in that directory. Please specify the absolute path to the directory (or return empty path and rely on config.yaml path): "
         local CADD_parent_dir=${REPLY}
+        [[ ! -d ${CADD_parent_dir} ]] && CADD_parent_dir=$(read_yaml "${config_file}" "cadd_parent_dir")
+        [[ ! -d ${CADD_parent_dir} ]] && { log "The CADD parent directory ${CADD_parent_dir} does not exist, please check the file"; return 1; }
 
         # Check if the CADD scripts directory exists, if not, download the zip file and unzip it
         local CADD_base_dir=$(find ${CADD_parent_dir}/ -maxdepth 1 -type d -name "CADD-scripts-*${cadd_version#v}*" -print | head -n1)
-        [[ ! -d ${CADD_base_dir} ]] && \
-        local CADD_zip_download_url=$(read_yaml "${config_file}" "cadd_zip_download_url") && \
-        wget ${CADD_zip_download_url} -O ${CADD_parent_dir}/CADD-scripts.zip && \
-        unzip ${CADD_parent_dir}/CADD-scripts.zip -d ${CADD_parent_dir}/ && \
-        rm ${CADD_parent_dir}/CADD-scripts.zip
+        if [[ ! -d ${CADD_base_dir} ]]; then
+            log "The CADD scripts directory is not found under ${CADD_parent_dir}, now we start to download and unzip the CADD scripts"
+            local CADD_zip_download_url=$(read_yaml "${config_file}" "cadd_zip_download_url") && \
+            wget ${CADD_zip_download_url} -O ${CADD_parent_dir}/CADD-scripts.zip && \
+            unzip ${CADD_parent_dir}/CADD-scripts.zip -d ${CADD_parent_dir}/ && \
+            rm ${CADD_parent_dir}/CADD-scripts.zip && \
+            CADD_base_dir=$(find ${CADD_parent_dir}/ -maxdepth 1 -type d -name "CADD-scripts-*${cadd_version#v}*" -print | head -n1)
+        else
+            log "The CADD scripts directory is already downloaded at ${CADD_base_dir}, skip the downloading process"
+        fi
 
         # Get the base folder name from the unzipped directory
         [[ -z ${CADD_base_dir} ]] && { log "Could not find CADD scripts directory"; return 1; }
@@ -445,6 +452,9 @@ function CADD_install() {
         local CADD_prescore_dir="${CADD_cache_dir}/prescored" && \
         local CADD_anno_dir="${CADD_cache_dir}/annotations" && \
         log "Now the CADD script is ${CADD_script}, the CADD cache directory is ${CADD_cache_dir}, the CADD prescore directory is ${CADD_prescore_dir}, the CADD annotation directory is ${CADD_anno_dir}"
+        
+
+        log "CADD installation process completed successfully."
     fi
 
 
@@ -538,7 +548,7 @@ function PrimateAI_install() {
             PrimateAI_scores_v0.2_hg38.tsv.gz (for GRCh38/hg38)
 
         Before running the plugin for the first time, the following steps must be
-        taken to format the downloaded files:
+        taken by executing the command offered below to format the downloaded files:
 
         1.  Unzip the score files
         2.  Add '#' in front of the column description line
@@ -1160,15 +1170,12 @@ function basic_vep_annotation() {
 
 function ClinVar_VCF_deploy() {
     local config_file=${1}
-    local CACHEDIR=${2}
-    local assembly_version=${3}
-    local contig_map=${BASE_DIR}/data/liftover/GRC_to_ucsc.contig.map.txt
+    local contig_map=${DATA_DIR}/liftover/GRC_to_ucsc.contig.map.txt
 
     [[ ! -f ${contig_map} ]] && { log "The contig map file ${contig_map} is not found, please check the file"; return 1; }
 
-    if [[ -z ${assembly_version} ]]; then
-        local assembly_version=$(read_yaml ${config_file} "assembly")
-    fi
+    local CACHEDIR=$(read_yaml ${config_file} "clinvar_vcf_dir")
+    local assembly_version=$(read_yaml ${config_file} "assembly")
 
     if [[ ${assembly_version} == "hg19" ]] || [[ ${assembly_version} == "GRCh37" ]]; then
         local assembly_version="GRCh37"
@@ -1192,7 +1199,7 @@ function ClinVar_VCF_deploy() {
         mkdir -p ${CACHEDIR}
     fi
 
-    local clinvar_vcf=$(read_yaml ${config_file} "clinvar_vcf")
+    local clinvar_vcf=${CACHEDIR}/$(basename $(read_yaml ${config_file} "clinvar_vcf"))
     local vep_cache_dir=$(read_yaml ${config_file} "vep_cache_dir")
     local vep_plugins_dir=$(read_yaml ${config_file} "vep_plugins_dir")
     local threads=$(read_yaml ${config_file} "threads")
@@ -1447,11 +1454,18 @@ function LoFtee_install() {
     local config=${2}
 
     local assembly_version=$(read_yaml "${config}" "assembly")
-    local loftee_parent_dir=$(read_yaml "${config}" "loftee_parent_dir")
+    local vep_plugin_dir=$(read_yaml "${config}" "vep_plugins_dir")
 
-    [[ ! -d ${loftee_parent_dir} ]] && { log "The parent directory for LOFTEE ${loftee_parent_dir} is not found, please check the directory before proceeding"; return 1; }
+    [[ ! -d ${PLUGIN_CACHEDIR} ]] && { log "The VEP plugin cache directory ${PLUGIN_CACHEDIR} is not found, please check the file"; return 1; }
+    [[ ! -d ${vep_plugin_dir} ]] && { log "The VEP plugin directory ${vep_plugin_dir} is not found, please check the file"; return 1; }
 
-    local loftee_repo=$(read_yaml "${config}" "loftee_repo")
+    local loftee_parent_dir=${vep_plugin_dir}/LoFtee_repos
+
+    [[ ! -d ${loftee_parent_dir} ]] && mkdir -p ${loftee_parent_dir} || log "The LOFTEE parent directory ${loftee_parent_dir} is prepared"
+
+    local loftee_repo=${loftee_parent_dir}/"loftee-${assembly_version}"
+
+    [[ ! -d ${loftee_cache_dir} ]] && mkdir -p ${loftee_cache_dir} || log "The LOFTEE cache directory ${loftee_cache_dir} is prepared"
     local human_ancestor_fasta=$(read_yaml "${config}" "human_ancestor_fasta")
     local loftee_conservation_file=$(read_yaml "${config}" "loftee_conservation_file")
     local gerp_bigwig=$(read_yaml "${config}" "gerp_bigwig")
@@ -1477,17 +1491,17 @@ function LoFtee_install() {
     log "You need to download the prescores yourself to ${PLUGIN_CACHEDIR}. And the detailed info can be found in the corresponding github repo https://github.com/konradjk/loftee"
     log "Example running command: perl variant_effect_predictor.pl [--other options to VEP] --plugin LoF,loftee_path:/path/to/loftee,human_ancestor_fa:/path/to/human_ancestor.fa.gz"
     if [[ ${assembly_version} == "GRCh37" ]] || [[ ${assembly_version} == "hg19" ]]; then
-        if [[ ! -d ${loftee_parent_dir}/loftee-hg19 ]]; then
-            git clone https://github.com/konradjk/loftee.git ${loftee_parent_dir}/loftee-hg19 && \
-            update_yaml "${config}" "loftee_repo" "${loftee_parent_dir}/loftee-hg19" && \
-            conda env config vars set PERL5LIB="${loftee_parent_dir}/loftee-hg19/:$PERL5LIB" && \
-            log "The LOFTEE repository for hg19/GRCh37 is installed at ${loftee_parent_dir}/loftee-hg19 and the PERL5LIB is set to ${PERL5LIB}"
-        elif [[ -d ${loftee_parent_dir}/loftee-hg19 ]] && [[ -f ${loftee_parent_dir}/loftee-hg19/.git ]]; then
-            cd ${loftee_parent_dir}/loftee-hg19 && \
+        if [[ ! -d ${loftee_repo} ]]; then
+            git clone https://github.com/konradjk/loftee.git ${loftee_repo} && \
+            update_yaml "${config}" "loftee_repo" "${loftee_repo}" && \
+            conda env config vars set PERL5LIB="${loftee_repo}/:$PERL5LIB" && \
+            log "The LOFTEE repository for hg19/GRCh37 is installed at ${loftee_repo} and the PERL5LIB is set to ${PERL5LIB}"
+        elif [[ -d ${loftee_repo} ]] && [[ -f ${loftee_repo}/.git ]]; then
+            cd ${loftee_repo} && \
             git pull && \
-            log "The LOFTEE repository for hg19/GRCh37 is updated at ${loftee_parent_dir}/loftee-hg19 and the PERL5LIB is set to ${PERL5LIB}"
-        elif [[ -d ${loftee_parent_dir}/loftee-hg19 ]] && [[ -f ${loftee_parent_dir}/loftee-hg19/LoF.pm ]]; then
-            log "It seems the LOFTEE repository for hg19/GRCh37 is already installed at ${loftee_parent_dir}/loftee-hg19 but we cant update it by git pull since it is not a git repo"
+            log "The LOFTEE repository for hg19/GRCh37 is updated at ${loftee_repo} and the PERL5LIB is set to ${PERL5LIB}"
+        elif [[ -d ${loftee_repo} ]] && [[ -f ${loftee_repo}/LoF.pm ]]; then
+            log "It seems the LOFTEE repository for hg19/GRCh37 is already installed at ${loftee_repo} but we cant update it by git pull since it is not a git repo"
         else
             log "Failed to install the LOFTEE repository for hg19/GRCh37"
             return 1
@@ -1496,20 +1510,20 @@ function LoFtee_install() {
         local human_ancestor_fasta_fai_url="https://s3.amazonaws.com/bcbio_nextgen/human_ancestor.fa.gz.fai"
         local conservation_file_url="https://personal.broadinstitute.org/konradk/loftee_data/GRCh37/phylocsf_gerp.sql.gz"
     elif [[ ${assembly_version} == "GRCh38" ]] || [[ ${assembly_version} == "hg38" ]]; then
-        if [[ ! -d ${loftee_parent_dir}/loftee-hg38 ]]; then
-            git clone https://github.com/konradjk/loftee.git ${loftee_parent_dir}/loftee-hg38 && \
-            cd ${loftee_parent_dir}/loftee-hg38 && \
+        if [[ ! -d ${loftee_repo} ]]; then
+            git clone https://github.com/konradjk/loftee.git ${loftee_repo} && \
+            cd ${loftee_repo} && \
             git checkout grch38 && \
             git pull && \
-            update_yaml "${config}" "loftee_repo" "${loftee_parent_dir}/loftee-hg38" && \
-            conda env config vars set PERL5LIB="${loftee_parent_dir}/loftee-hg38/:$PERL5LIB" && \
-            log "The LOFTEE repository for hg38/GRCh38 is installed at ${loftee_parent_dir}/loftee-hg38 and the PERL5LIB is set to ${PERL5LIB}"
-        elif [[ -d ${loftee_parent_dir}/loftee-hg38 ]] && [[ -f ${loftee_parent_dir}/loftee-hg38/.git ]]; then
-            cd ${loftee_parent_dir}/loftee-hg38 && \
+            update_yaml "${config}" "loftee_repo" "${loftee_repo}" && \
+            conda env config vars set PERL5LIB="${loftee_repo}/:$PERL5LIB" && \
+            log "The LOFTEE repository for hg38/GRCh38 is installed at ${loftee_repo} and the PERL5LIB is set to ${PERL5LIB}"
+        elif [[ -d ${loftee_repo} ]] && [[ -f ${loftee_repo}/.git ]]; then
+            cd ${loftee_repo} && \
             git pull && \
-            log "The LOFTEE repository for hg38/GRCh38 is updated at ${loftee_parent_dir}/loftee-hg38 and the PERL5LIB is set to ${PERL5LIB}"
-        elif [[ -d ${loftee_parent_dir}/loftee-hg38 ]] && [[ -f ${loftee_parent_dir}/loftee-hg38/LoF.pm ]]; then
-            log "It seems the LOFTEE repository for hg38/GRCh38 is already installed at ${loftee_parent_dir}/loftee-hg38 but we cant update it by git pull since it is not a git repo"
+            log "The LOFTEE repository for hg38/GRCh38 is updated at ${loftee_repo} and the PERL5LIB is set to ${PERL5LIB}"
+        elif [[ -d ${loftee_repo} ]] && [[ -f ${loftee_repo}/LoF.pm ]]; then
+            log "It seems the LOFTEE repository for hg38/GRCh38 is already installed at ${loftee_repo} but we cant update it by git pull since it is not a git repo"
         else
             log "Failed to install the LOFTEE repository for hg38/GRCh38"
             return 1
@@ -1523,28 +1537,30 @@ function LoFtee_install() {
         return 1
     fi
 
-    mkdir -p ${PLUGIN_CACHEDIR}/LoFtee/${assembly_version}
+    local loftee_cache_dir=${PLUGIN_CACHEDIR}/LoFtee/${assembly_version}
+    mkdir -p ${loftee_cache_dir}
+
     # Check if the files are already downloaded
-    if [[ ! -f ${PLUGIN_CACHEDIR}/LoFtee/${assembly_version}/human_ancestor.fa.gz ]]; then
-        wget ${human_ancestor_fasta_url} -O ${PLUGIN_CACHEDIR}/LoFtee/${assembly_version}/human_ancestor.fa.gz && \
-        update_yaml "${config}" "human_ancestor_fasta" "${PLUGIN_CACHEDIR}/LoFtee/${assembly_version}/human_ancestor.fa.gz"
+    if [[ ! -f ${human_ancestor_fasta} ]]; then
+        wget ${human_ancestor_fasta_url} -O ${loftee_cache_dir}/human_ancestor.fa.gz && \
+        update_yaml "${config}" "human_ancestor_fasta" "${loftee_cache_dir}/human_ancestor.fa.gz"
     fi
 
-    if [[ ! -f ${PLUGIN_CACHEDIR}/LoFtee/${assembly_version}/human_ancestor.fa.gz.fai ]]; then
-        wget ${human_ancestor_fasta_fai_url} -O ${PLUGIN_CACHEDIR}/LoFtee/${assembly_version}/human_ancestor.fa.gz.fai
+    if [[ ! -f ${human_ancestor_fasta}.fai ]]; then
+        wget ${human_ancestor_fasta_fai_url} -O ${loftee_cache_dir}/human_ancestor.fa.gz.fai
     fi
 
-    if [[ ! -f ${PLUGIN_CACHEDIR}/LoFtee/${assembly_version}/phylocsf_gerp.sql.gz ]]; then
-        wget ${conservation_file_url} -O ${PLUGIN_CACHEDIR}/LoFtee/${assembly_version}/phylocsf_gerp.sql.gz && \
-        gunzip -f ${PLUGIN_CACHEDIR}/LoFtee/${assembly_version}/phylocsf_gerp.sql.gz && \
-        update_yaml "${config}" "loftee_conservation_file" "${PLUGIN_CACHEDIR}/LoFtee/${assembly_version}/phylocsf_gerp.sql"
+    if [[ ! -f ${loftee_conservation_file} ]]; then
+        wget ${conservation_file_url} -O ${loftee_cache_dir}/phylocsf_gerp.sql.gz && \
+        gunzip -f ${loftee_cache_dir}/phylocsf_gerp.sql.gz && \
+        update_yaml "${config}" "loftee_conservation_file" "${loftee_cache_dir}/phylocsf_gerp.sql"
     fi
 
-    if [[ ${gerp_bigwig_url} =~ \.bw$ ]] && [[ ! -f ${PLUGIN_CACHEDIR}/LoFtee/${assembly_version}/gerp_conservation_scores.homo_sapiens.bw ]]; then
-        wget ${gerp_bigwig_url} -O ${PLUGIN_CACHEDIR}/LoFtee/${assembly_version}/gerp_conservation_scores.homo_sapiens.bw && \
-        update_yaml "${config}" "gerp_bigwig" "${PLUGIN_CACHEDIR}/LoFtee/${assembly_version}/gerp_conservation_scores.homo_sapiens.bw"
+    if [[ ${gerp_bigwig_url} =~ \.bw$ ]] && [[ ! -f ${gerp_bigwig} ]]; then
+        wget ${gerp_bigwig_url} -O ${loftee_cache_dir}/gerp_conservation_scores.homo_sapiens.bw && \
+        update_yaml "${config}" "gerp_bigwig" "${loftee_cache_dir}/gerp_conservation_scores.homo_sapiens.bw"
     elif [[ -z ${gerp_bigwig_url} ]]; then
-        log "Specifying the hg19/GRCh37 assembly version. So the bigwig file ${gerp_bigwig_url} is not available" && \
+        log "Specified the hg19/GRCh37 assembly version. So the bigwig file ${gerp_bigwig_url} is not available" && \
         update_yaml "${config}" "gerp_bigwig" ""
     else
         log "The bigwig file ${gerp_bigwig_url} is already downloaded"
@@ -1683,8 +1699,7 @@ function main_install() {
     { log "Failed to install InterPro mapping pickle"; return 1; }
 
     # 6. Install ClinVar VCF
-    local clinvar_vcf_dir=$(read_yaml "$config_file" "clinvar_vcf_dir")
-    ClinVar_VCF_deploy ${config_file} ${clinvar_vcf_dir} ${assembly} || \
+    ClinVar_VCF_deploy ${config_file} || \
     { log "Failed to install ClinVar VCF"; return 1; }
     ClinVar_AA_stat ${config_file} || \
     { log "Failed to stat ClinVar per AA change"; return 1; }

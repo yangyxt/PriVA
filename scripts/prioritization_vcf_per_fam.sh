@@ -287,7 +287,9 @@ function main_prioritization () {
             cadd_tsv=${family_specific_cadd}
         else
             # Fall back to original CADD file from config
-            cadd_tsv=$(read_yaml ${config_file} "cadd_output_file")
+            local output_dir=$(read_yaml ${config_file} "output_dir")
+            local input_vcf=$(read_yaml ${config_file} "input_vcf")
+            cadd_tsv=${output_dir}/$(basename ${input_vcf/.vcf*/.anno.cadd.tsv})
             log "Family-specific CADD not found, using original CADD file: ${cadd_tsv}"
         fi
     else

@@ -282,7 +282,6 @@ function main_workflow() {
             cp "${cadd_covered_tsv}" "${cadd_output}" && \
             ls -lht ${cadd_output} && \
             chmod 444 ${cadd_output} && \
-            update_yaml "${config_file}" "cadd_output_file" "${cadd_output}" && \
             log "All variants have cached CADD scores, results copied to ${cadd_output}, skipping CADD calculation" && \
             mv ${anno_vcf} ${final_anno_vcf} && \
             check_vcf_validity ${final_anno_vcf} && \
@@ -304,7 +303,6 @@ function main_workflow() {
                 # Merge covered and newly calculated scores
                 merge_cadd_results "${cadd_covered_tsv}" "${anno_vcf/.vcf*/.cadd.new.tsv}" "${cadd_output}" && \
                 update_hub_cadd "${anno_vcf/.vcf*/.cadd.new.tsv}" "${hub_cadd_file}" && \
-                update_yaml "${config_file}" "cadd_output_file" "${cadd_output}" && \
                 mv ${anno_vcf} ${final_anno_vcf} && \
                 check_vcf_validity ${final_anno_vcf} && \
                 chmod 444 ${final_anno_vcf} && \
@@ -911,8 +909,7 @@ function Calculate_CADD {
     gunzip -f ${output_file} && \
     mawk -F '\t' '$1 !~ /^##/{print;}' ${output_file/.gz/} > ${output_file/.gz/}.tmp && \
     mv ${output_file/.gz/}.tmp ${output_file/.gz/} && \
-    display_table ${output_file/.gz/} && \
-    update_yaml ${config_file} "cadd_output_file" ${output_file/.gz/} || { \
+    display_table ${output_file/.gz/} || { \
     log "Failed to run CADD on ${input_vcf}. Quit now"; return 1; }
 }
 

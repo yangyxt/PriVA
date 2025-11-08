@@ -2,70 +2,67 @@
 
 ####################################################Prepare these paths before running the install_utils.sh script####################################################
 tmp_dir: "/paedyl01/disk1/yangyxt/test_tmp/test_acmg"
-assembly: hg19
-ref_genome: "/paedyl01/disk1/yangyxt/indexed_genome/ucsc.hg19.fasta"
+assembly: hg19   # Change this you need to re-run the install_utils.sh script
+ref_genome: "/paedyl01/disk1/yangyxt/indexed_genome/ucsc.hg19.fasta"  # Be consistent of the assembly tag
+conda_env_yaml: "acmg_auto_rough.yml"  # Included in the GitHub repo, not recommend to change
+conda_env_name: "priva_acmg"   # If choose alternative env name, pls update the yaml file accordingly that will be used by the install_utils.sh script
+hg38_hg19_chain: "hg38ToHg19.over.chain.gz"   # Included in the GitHub repo, not recommend to change
 
-# Prepare hub files for annotation caching
-hub_vcf_file: "/paedyl01/disk1/yangyxt/ngs_summary/hg19.anno.vcf.gz"
-hub_cadd_file: "/paedyl01/disk1/yangyxt/ngs_summary/hg19.cadd.tsv.gz"
+# Below specify the major directories to store the annotation resources
+gnomad_vcf_dir: "/paedyl01/disk1/yangyxt/public_data/gnomAD/v4_dataset"  # The directory to store the gnomAD related annotation resources
+clinvar_vcf_dir: "/paedyl01/disk1/yangyxt/public_data/clinvar"  # The directory to store the ClinVar related annotation resources
+vep_cache_dir: "/paedyl01/disk1/yangyxt/public_data/VEP_caches"  # the cache directory for VEP
+vep_plugins_dir: "/paedyl01/disk1/yangyxt/public_data/VEP_plugins"  # the directory containing the VEP plugins executable files
+vep_plugins_cachedir: "/paedyl01/disk1/yangyxt/public_data/VEP_plugins_caches"   # the directory for storing the VEP plugin caches
+cadd_parent_dir: "/paedyl01/disk1/yangyxt/Tools/CADD"  # The parent directory to store the CADD scripts and cache files
+####################################################Ready to RUN install_utils.sh script####################################################
 
-# Below we specify the conda env yml file in relative path
-conda_env_yaml: "acmg_auto_rough.yml"
-conda_env_name: "priva_acmg"
 
-# Below we specify the input vcf file in absolute paths
-input_vcf: "/paedyl01/disk1/yangyxt/test_acmg_auto/TEST_FAM.filtered.vcf.gz"
-ped_file: "/paedyl01/disk1/yangyxt/test_acmg_auto/TEST_FAM.ped"
+####################################################Prepare these paths before running PriVA workflow####################################################
+input_vcf: "/paedyl01/disk1/yangyxt/test_acmg_auto/TEST_FAM.filtered.vcf.gz"  # Below we specify the input vcf file in absolute paths
+ped_file: "/paedyl01/disk1/yangyxt/test_acmg_auto/TEST_FAM.ped"  # The PED file containing the identical sample set included in the input VCF file
+output_dir: "/paedyl01/disk1/yangyxt/test_acmg_auto"  # Output directory in absolute paths, per-family outputs will be stored directly in it
 
-# Note that the assembly version must be consistent with the reference genome
-# Below we specify the reference genome in absolute paths because the size of the file is too large to be included in the GitHub repo
+hub_file_dir: "/paedyl01/disk1/yangyxt/ngs_summary"   # the directory for storing the hub files for annotation caching
+hub_vcf_file: "hg19.anno.vcf.gz"    # hub file name for annotation caching
+hub_cadd_file: "hg19.cadd.tsv.gz"    # hub file name for CADD annotation caching
 
-hg38_hg19_chain: "hg38ToHg19.over.chain.gz"
-repeat_region_file_name: "ucsc.hg19.fasta.repeat.bed.gz"
-
-# Below we specify the output directory in absolute paths
-output_dir: "/paedyl01/disk1/yangyxt/test_acmg_auto"
-
-# Below we specify the number of threads to be used
+extreme_rare_PAF: 0.0001
+exp_disease_incidence: 0.001
 threads: 60          # Total threads for annotation / non-family steps
 threads_per_fam: 4   # Threads for EACH family filtering/prioritization job
+af_cutoff: 0.05      # Allele frequency cutoff for common variants
 
-# Below we specify the allele frequency cutoff for common variants
-af_cutoff: 0.05
+alt_disease_vcf: "/paedyl01/disk1/yangyxt/public_data/ShortStatue/ShortStature.hg19.vcf.gz"  # abs path to the VCF file containing the variants from alternative disease patients, make sure it is left-normalized and biallelic, optional
+control_vcf: ""   # VCF file containing the variants from control individuals, make sure it is left-normalized and biallelic, optional
+pp1_vcf: ""      # Cohort VCF file containing patients and their family members for PP1 (cosegregation), optional
+pp1_ped: ""      # PED file for the PP1 cohort VCF file, optional
+####################################################You can adjust above argument values for each cohort####################################################
 
+
+####################################################Below paths will be determined automatically by install_utils.sh####################################################
 # Below we specify the path to the gnomAD vcf file for chromosome X and we'll use that template to deduce the paths to other chromosome VCF files, the paths should be relatively constant
 gnomad_vcf_chrX: "/paedyl01/disk1/yangyxt/public_data/gnomAD/v4_dataset/gnomad.joint.v4.1.sites.hg19.chrX.vcf.gz"
-gnomad_vcf_dir: "/paedyl01/disk1/yangyxt/public_data/gnomAD/v4_dataset"
 
 # Below we specify the path to the ClinVar VCF file, the path should be relatively constant
-clinvar_vcf: /paedyl01/disk1/yangyxt/public_data/clinvar/clinvar.hg19.vep.vcf.gz
-clinvar_aa_stat: /paedyl01/disk1/yangyxt/public_data/clinvar/clinvar.hg19.vep.aa_change.stats.pkl
-clinvar_splice_stat: /paedyl01/disk1/yangyxt/public_data/clinvar/clinvar.hg19.vep.splice_change.stats.pkl
-clinvar_vcf_dir: /paedyl01/disk1/yangyxt/public_data/clinvar
-clinvar_patho_af_stat: /paedyl01/disk1/yangyxt/public_data/clinvar/clinvar.hg19.vep.patho_af_stat.pkl
-clinvar_patho_exon_af_stat: /paedyl01/disk1/yangyxt/public_data/clinvar/clinvar.hg19.vep.patho_exon_af_stat.pkl
-clinvar_gene_stat: clinvar_2star_stats.pkl.gz
-
-# Below we specify the cache directory for VEP, you need to specify the locations before starting installing VEP and its plugins
-vep_cache_dir: "/paedyl01/disk1/yangyxt/public_data/VEP_caches"
-# Below we specify the directory containing the VEP plugins executable files
-vep_plugins_dir: "/paedyl01/disk1/yangyxt/public_data/VEP_plugins"
-# Below we specify the directory for storing the VEP plugin caches
-vep_plugins_cachedir: "/paedyl01/disk1/yangyxt/public_data/VEP_plugins_caches"
+clinvar_vcf: "/paedyl01/disk1/yangyxt/public_data/clinvar/clinvar.hg19.vep.vcf.gz"
+clinvar_aa_stat: "/paedyl01/disk1/yangyxt/public_data/clinvar/clinvar.hg19.vep.aa_change.stats.pkl"
+clinvar_splice_stat: "/paedyl01/disk1/yangyxt/public_data/clinvar/clinvar.hg19.vep.splice_change.stats.pkl"
+clinvar_patho_af_stat: "/paedyl01/disk1/yangyxt/public_data/clinvar/clinvar.hg19.vep.patho_af_stat.pkl"
+clinvar_patho_exon_af_stat: "/paedyl01/disk1/yangyxt/public_data/clinvar/clinvar.hg19.vep.patho_exon_af_stat.pkl"
+clinvar_gene_stat: "clinvar_2star_stats.pkl.gz"
 
 # The UTRAnnotator plugin cache file
-utr_annotator_file: /paedyl01/disk1/yangyxt/public_data/VEP_plugins_caches/UTRannotator/uORF_5UTR_GRCh37_PUBLIC.txt
+utr_annotator_file: "/paedyl01/disk1/yangyxt/public_data/VEP_plugins_caches/UTRannotator/uORF_5UTR_GRCh37_PUBLIC.txt"
 # The LOEUF plugin cache file
-loeuf_prescore: loeuf_dataset.tsv.gz
+loeuf_prescore: "loeuf_dataset.tsv.gz"
 
 # The LOFTEE plugin cache file and LOFTEE repository
-loftee_parent_dir: /paedyl01/disk1/yangyxt/public_data/VEP_plugins/LoFtee_repos
-loftee_repo: /paedyl01/disk1/yangyxt/public_data/VEP_plugins/LoFtee_repos/loftee-hg19
-human_ancestor_fasta: /paedyl01/disk1/yangyxt/public_data/VEP_plugins_caches/LoFtee/hg19/human_ancestor.fa.gz
-# The GERP SQL file must not be compressed.
-loftee_conservation_file: /paedyl01/disk1/yangyxt/public_data/VEP_plugins_caches/LoFtee/hg19/phylocsf_gerp.sql
-# Below is only available for GRCh38
-gerp_bigwig: 
+loftee_parent_dir: "/paedyl01/disk1/yangyxt/public_data/VEP_plugins/LoFtee_repos"
+loftee_repo: "/paedyl01/disk1/yangyxt/public_data/VEP_plugins/LoFtee_repos/loftee-hg19"
+human_ancestor_fasta: "/paedyl01/disk1/yangyxt/public_data/VEP_plugins_caches/LoFtee/hg19/human_ancestor.fa.gz"
+loftee_conservation_file: "/paedyl01/disk1/yangyxt/public_data/VEP_plugins_caches/LoFtee/hg19/phylocsf_gerp.sql"  # The GERP SQL file must not be compressed.
+gerp_bigwig: "" # Below is only available for GRCh38
 
 # The AlphaMissense plugin cache file
 alphamissense_prescore: /paedyl01/disk1/yangyxt/public_data/VEP_plugins_caches/AlphaMissense/AlphaMissense_hg19.tsv.gz
@@ -79,20 +76,35 @@ alphamissense_intolerant_motifs: /paedyl01/disk1/yangyxt/public_data/VEP_plugins
 # Final intolerant domains combining results from AlphaMissense and ClinVar
 all_intolerant_domains: /paedyl01/disk1/yangyxt/public_data/VEP_plugins_caches/AlphaMissense/all_intolerant_domains.hg19.pkl
 
-# The SpliceAI plugin cache file, snv and indel
-spliceai_snv_prescore: /paedyl01/disk1/yangyxt/public_data/VEP_plugins_caches/SpliceAI/hg19/spliceai_scores.raw.snv.hg19.vcf.gz
-spliceai_indel_prescore: /paedyl01/disk1/yangyxt/public_data/VEP_plugins_caches/SpliceAI/hg19/spliceai_scores.raw.indel.hg19.vcf.gz
-# The PrimateAI plugin cache file
-primateai_prescore: /paedyl01/disk1/yangyxt/public_data/VEP_plugins_caches/PrimateAI/hg19/PrimateAI_scores_v0.2_GRCh37_sorted.tsv.bgz
 # The Conservation cache file
 conservation_file: /paedyl01/disk1/yangyxt/public_data/VEP_plugins_caches/Conservation/gerp_conservation_scores.homo_sapiens.GRCh37.bw
+
 # The SpliceVault plugin cache file
 splicevault_url: "https://ftp.ensembl.org/pub/current_variation/SpliceVault/SpliceVault_data_GRCh38.tsv.gz"
 splicevault_prescore: "/paedyl01/disk1/yangyxt/public_data/VEP_plugins_caches/SpliceVault/SpliceVault_data_GRCh37.tsv.gz"
 
-# Below we specify the path to the CADD base directory
-cadd_output_file: /paedyl01/disk1/yangyxt/test_acmg_auto/TEST_FAM.filtered.anno.cadd.tsv
+# CADD directory storing its executable and cache files
 cadd_base_dir: /paedyl01/disk1/yangyxt/Tools/CADD/CADD-scripts-1.7.2
+####################################################Above paths will be determined automatically by install_utils.sh####################################################
+
+
+####################################################Below will be determined manually by your reply by install_utils.sh####################################################
+# These cache files are too large you need to register a free account in Illumina to download them upon prompt of the install_utils.sh execution(size up to several hundreds of GB)
+
+# The PrimateAI plugin prescore file
+primateai_prescore: /paedyl01/disk1/yangyxt/public_data/VEP_plugins_caches/PrimateAI/hg19/PrimateAI_scores_v0.2_GRCh37_sorted.tsv.bgz
+
+# The SpliceAI plugin cache file, snv and indel
+spliceai_snv_prescore: /paedyl01/disk1/yangyxt/public_data/VEP_plugins_caches/SpliceAI/hg19/spliceai_scores.raw.snv.hg19.vcf.gz
+spliceai_indel_prescore: /paedyl01/disk1/yangyxt/public_data/VEP_plugins_caches/SpliceAI/hg19/spliceai_scores.raw.indel.hg19.vcf.gz
+####################################################Above will be determined manually by your reply by install_utils.sh####################################################
+
+
+
+####################################################Below are constant values, please report issue when one of them fails####################################################
+repeat_region_file_name: "ucsc.hg19.fasta.repeat.bed.gz"  # Included in the GitHub repo, can be customized if needed
+
+# Below we specify the path to the CADD base directory
 cadd_zip_download_url: "https://github.com/kircherlab/CADD-scripts/archive/refs/tags/v1.7.2.zip"
 cadd_GRCh37_anno_md5: "22549309c65de8d25e903695aa4f749f"
 cadd_GRCh38_anno_md5: "205d3e702df3565efb424e2ca80c9d25"
@@ -114,18 +126,9 @@ interpro_mapping_pickle: "Interpro_entry_mapping.pkl.gz"
 clingen_map: "/paedyl01/disk1/yangyxt/PriVA/data/clingen/clingen_map.hg19.pkl.gz"
 gene_dosage_sensitivity: "/paedyl01/disk1/yangyxt/PriVA/data/clingen/gene_dosage_sensitivity.hg19.tsv"
 
-
 # MaveDB paths
 mavedb_url: "https://ftp.ensembl.org/pub/current_variation/MaveDB/MaveDB_variants.tsv.gz"
 mavedb_file: "/paedyl01/disk1/yangyxt/public_data/VEP_plugins_caches/MaveDB/MaveDB_variants.hg38.tsv.gz"
 
-# Below we specify the path to the VCF file containing the variants from alternate disease patients, make sure it is normalized and biallelic
-# Make sure that the VCF file is in an reference genome that is consistent with the processing VCF file
-alt_disease_vcf: "/paedyl01/disk1/yangyxt/public_data/ShortStatue/ShortStature.hg19.vcf.gz"
-control_vcf: ""
-pp1_vcf: ""
-pp1_ped: ""
 
-extreme_rare_PAF: 0.0001
-exp_disease_incidence: 0.001
 

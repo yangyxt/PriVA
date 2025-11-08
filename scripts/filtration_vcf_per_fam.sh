@@ -211,7 +211,9 @@ function main_filtration () {
         local family_specific_cadd=$(dirname ${filtered_vcf})/"${base_name}.filtered.cadd.tsv"
         
         # Get the original CADD file from config for filtering source
-        local original_cadd=$(read_yaml ${config_file} "cadd_output_file")
+        local output_dir=$(read_yaml ${config_file} "output_dir")
+        local input_vcf=$(read_yaml ${config_file} "input_vcf")
+        local original_cadd=${output_dir}/$(basename ${input_vcf/.vcf*/.anno.cadd.tsv})
         
         if [[ -f ${original_cadd} ]]; then
             log "Step 2: Filtering CADD table from ${original_cadd} based on filtered variants to optimize memory usage"

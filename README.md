@@ -21,7 +21,6 @@ If a valid pedigree table is provided, please note:
 2. The proband of the family should stay as the first record of the family in the pedigree table
 3. Every family should have a unique identifier in the pedigree table
 
-
 ## Installation
 
 The github repository includes an one-stop installation BASH script (`scripts/install_utils.sh`) that helps deploy all required dependencies on your host system, with the help from a configuration YAML file (e.g., `config.yaml`). This YAML file is specifying the paths to external annotation dependencies.
@@ -31,8 +30,7 @@ The github repository includes an one-stop installation BASH script (`scripts/in
 **This only needs to be executed once**
 Create and configure the conda environment (expected name `priva_acmg`):
    ```bash
-   bash scripts/install_utils.sh conda_install_vep acmg_conda.yml
-   # Make sure the environment name in env.yaml is 'priva_acmg' or activate it manually later
+   bash scripts/install_utils.sh conda_install_vep acmg_conda.yml # Make sure the environment name in env.yaml is 'priva_acmg' or activate it manually later
    ```
 
 **These two steps only need to be executed once per reference assembly**
@@ -46,15 +44,30 @@ Create and configure the conda environment (expected name `priva_acmg`):
    bash scripts/install_utils.sh main_install path/to/config.yaml
    ```
 
-## Configuration
-We recommend specify the running argument of PriVA using the `config.yaml` file, this can be copied for each cohort.
+## Configuration File
+The `config.yaml` file in the PriVA repo contains all the parameters you need. Most of them can be automatically handled by the BASH script `install_utils.sh`. Here we list the items need to be specified by users prior to executing `install_utils.sh`
 
-- Input Files: `input_vcf`, `ped_file`, `ref_genome`.
-- Genome Assembly: `assembly` (e.g., hg19, hg38).
-- Output & Directories: `output_dir`, `base_dir`.
-- Resources: `threads`.
-- Annotation Paths: Paths to VEP cache (`vep_cache_dir`), plugins (`vep_plugins_dir`, `vep_plugins_cachedir`), gnomAD (`gnomad_vcf_chrX`), ClinVar (`clinvar_vcf`), CADD (`cadd_base_dir`), and various plugin-specific data files (e.g., `alphamissense_prescore`, `spliceai_snv_prescore`). See the example `config.yaml` for the full list.
-- Filtering Thresholds: `af_cutoff`.
+- TEMPORARY DIRECTORY: `tmp_dir`, used to store the temp folder and file.
+- REF GENOME ASSEMBLY: `assembly` (e.g., hg19, hg38), `ref_genome`, path to the corresponding FASTA file.
+- ANNOTATION CACHE DIRECTORIES: 
+   Paths to VEP cache (`vep_cache_dir`), plugins (`vep_plugins_dir` for plugin executables, `vep_plugins_cachedir` for plugin caches), 
+   gnomAD (`gnomad_vcf_dir` for gnomAD vcf storage), 
+   ClinVar (`clinvar_vcf_dir` for ClinVar related cache storage), 
+   CADD (`cadd_parent_dir` for CADD script and cache storage)
+
+After specifying these directory paths, you are good to execute the `install_utils.sh` to let it do the installation for you.
+There are also items in `config.yaml` that needs to be specified for each PriVA exectuion:
+
+- INPUT_VCF: `input_vcf`, which supposed to be a cohort VCF file
+- PEDIGREE_FILE: `ped_file`, which is the pedigree file corresponding to the cohort VCF file. 
+- OUTPUT_DIR: `output_dir`, which is the directory containing all the output annotation files
+- HUB_CACHE_FILEs: `hub_file_dir`, parent folder storing the hub cache files; `hub_vcf_file`, hub annotated VCF file for annotation caching; `hub_cadd_file`, hub annotated CADD TSV for CADD annotation caching
+- ALLELE_FREQUENCY_THRESHOLDS: `extreme_rare_PAF`, the extreme rare population allele frequency threshold for PM2; `af_cutoff`, population allele frequency threshold distinguishing common and rare variants
+- DISEASE_INCIDENCE: `exp_disease_incidence`, the expected incidence of the disease
+- ALT_DISEASE_PAT_VARs: `alt_disease_vcf`, Abs path to the VCF file containing the variants from alternative disease patients, used for BP5
+- CONTROL_VARs: `control_vcf`, abs path to the VCF containing variants from control samples
+- PP1_RESOURCES: `pp1_vcf`, abs path to the VCF containing patients (as well as family members) from the same disease, for family consegregation; `pp1_ped`, pedigree file corresponding to `pp1_vcf`
+- COMPUTATION_RESOURCES: `threads`, total CPUs assigned to PriVA execution; `threads_per_fam`, per fam processing (step2 and step3) are executed in parallel across all families, this specify how many CPUs to use per family.
 
 
 ## Running PriVA

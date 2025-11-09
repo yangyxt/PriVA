@@ -10,9 +10,8 @@ This repository contains scripts and configuration files for running an automate
 
 ## Requirements
 
-- Snakemake workflow management system (already included in conda env)
 - Conda/Mamba for environment management
-- Sufficient disk space for annotation resources (~1TB)
+- Sufficient disk space for annotation resources (>1TB)
 - Reference genome file
 
 ## Pedigree File Requirements
@@ -247,7 +246,7 @@ The pipeline consists of three main steps:
    - Generates TSV output with prioritized variants
    - Produces ACMG-specific reports
 
-   
+
 ## Output Files
 
 The pipeline produces several output files in the directory specified by `output_dir` in your `config.yaml`:

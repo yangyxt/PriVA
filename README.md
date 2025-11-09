@@ -56,6 +56,13 @@ The `config.yaml` file in the PriVA repo contains all the parameters you need. M
    CADD (`cadd_parent_dir` for CADD script and cache storage)
 
 After specifying these directory paths, you are good to execute the `install_utils.sh` to let it do the installation for you.
+
+**Special annotation resources need manual download**
+There are 2 annotation resource (SpliceAI, PrimateAI) need manual download from Illumina
+`primateai_prescore`: prompt will present during the execution of `install_utils.sh`, please just follow the prompt to download the file
+`spliceai_snv_prescore` & `spliceai_indel_prescore`: each one takes space up to several hundreds GB, so please follow the prompt to download the file
+
+
 There are also items in `config.yaml` that needs to be specified for each PriVA exectuion:
 
 - INPUT_VCF: `input_vcf`, which supposed to be a cohort VCF file

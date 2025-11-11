@@ -545,7 +545,7 @@ def analyze_domain_data(pickle_file: str,
         logger.warning("No query sizes found; skipping KS analysis.")
         return
     T_default = int(np.median(query_sizes))
-    T_cap = 20000
+    T_cap = 200000
     T = max(50, min(T_default, T_cap))  # keep it reasonable
     seed_global = 42  # make reproducible
     rng_global = np.random.default_rng(seed_global)

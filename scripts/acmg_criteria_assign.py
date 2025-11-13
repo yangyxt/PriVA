@@ -1207,20 +1207,56 @@ def PP1_criteria(df: pd.DataFrame,
     pp1_array = np.zeros(len(df), dtype=int)
     if multi_fam_vcf and multi_fam_ped:
         cosegregating_variants = find_cosegregating_variants(multi_fam_vcf, multi_fam_ped, mode)
-        cosegregating_varaints = {mode: {str(t[0]) + ":" + str(t[1]) + ":" + str(t[2]) + "-" + str(t[3]): t[4] for t in variants} for mode,variants in cosegregating_variants.items()}
-        recessive_cosegregating = df['variant_id'].map(cosegregating_varaints['recessive'])
-        dominant_cosegregating = df['variant_id'].map(cosegregating_varaints['dominant'])
+        affected_segs = {}
+        affected_homs = {}
+        control_segs = {}
+        control_nonhoms = {}
+        male_affected_segs = {}
+        male_control_segs = {}
+        for variant, stats in cosegregating_variants.items():
+            varid_key = str(variant[0]) + ":" + str(variant[1]) + ":" + str(variant[2]) + "-" + str(variant[3])
+            affected_segs[varid_key] = stats["Affected_segregated_inds"]
+            affected_homs[varid_key] = stats["Affected_homozygous_inds"]
+            control_segs[varid_key] = stats["Unaffected_segregated_inds"]
+            control_nonhoms[varid_key] = stats["Unaffected_nonhomo_inds"]
+            male_affected_segs[varid_key] = stats["Male_affected_segregated_inds"]
+            male_control_segs[varid_key] = stats["Male_unaffected_segregated_inds"]
+
+        affected_seg_count = df['variant_id'].map(affected_segs).fillna(0).astype(int)
+        affected_hom_count = df['variant_id'].map(affected_homs).fillna(0).astype(int)
+        control_seg_count = df['variant_id'].map(control_segs).fillna(0).astype(int)
+        control_nonhom_count = df['variant_id'].map(control_nonhoms).fillna(0).astype(int)
+        male_affected_seg_count = df['variant_id'].map(male_affected_segs).fillna(0).astype(int)
+        male_control_seg_count = df['variant_id'].map(male_control_segs).fillna(0).astype(int)
+
         recessive_ih = np.logical_not(non_monogenic) & np.logical_not(non_mendelian) & np.logical_not(incomplete_penetrance) & recessive
         dominant_ih = np.logical_not(non_monogenic) & np.logical_not(non_mendelian) & np.logical_not(incomplete_penetrance) & dominant & np.logical_not(recessive)
 
-        pp1_array[(recessive_cosegregating <= 2) & recessive_ih] = 1
-        pp1_array[(dominant_cosegregating <= 2) & dominant_ih] = 1
+        pp1_points = [0] * len(df)
+        recessive_encode = recessive_ih.astype(int)  # Convert boolean to int for multiplication
+        dominant_encode = dominant_ih.astype(int)
 
-        pp1_array[(recessive_cosegregating > 2) & recessive_ih & (recessive_cosegregating <= 4) & (pp1_array < 2)] = 2
-        pp1_array[(dominant_cosegregating > 2) & dominant_ih & (dominant_cosegregating <= 4) & (pp1_array < 2)] = 2
+        autosomal = np.logical_not(df["chrom"].str.contains("X") | df["chrom"].str.contains("Y") | df['chrom'].str.contains("M"))
+        x_chr = df["chrom"].str.contains("X")
+        autosomal_encode = autosomal.astype(int)
+        x_encode = x_chr.astype(int)
 
-        pp1_array[(recessive_cosegregating >= 5) & recessive_ih & (pp1_array < 3)] = 3
-        pp1_array[(dominant_cosegregating >= 5) & dominant_ih & (pp1_array < 3)] = 3
+        pp1_recessive_points = autosomal_encode * recessive_encode * affected_seg_count * 2 + \
+                               autosomal_encode * recessive_encode * control_seg_count * 0.4 + \
+                               x_encode * recessive_encode * male_affected_seg_count + \
+                               x_encode * recessive_encode * male_control_seg_count
+        
+        pp1_recessive_encode = np.where(pp1_recessive_points > 0, 0, 1)
+        pp1_dominant_points = pp1_recessive_encode * (dominant_encode * affected_seg_count + \
+                                                      dominant_encode * control_seg_count + \
+                                                      dominant_encode * affected_hom_count + \
+                                                      dominant_encode * control_nonhom_count)
+        
+        pp1_points = pp1_recessive_points + pp1_dominant_points
+
+        pp1_array[(pp1_points <= 1.9) & (pp1_points >= 1)] = 1  # Supporting
+        pp1_array[(pp1_points >= 2) & (pp1_points <= 3.9)] = 2  # Moderate
+        pp1_array[(pp1_points >= 4)] = 3   # Strong 
 
         return pp1_array
         
@@ -1781,10 +1817,10 @@ def identify_inheritance_mode_per_row(row_dict: dict, gene_mean_am_score: float,
     # 4. HPO_gene_inheritance (overrides the above two fields), HPO observed dominant inheritance can derive from GOF variants
     # 5. ClinGen curated dosage sensitivity, 3 means haploinsufficient, 30 or 40 means haplosufficient
 
-    loeuf_score = float(row_dict.get('LOEUF', 0.3))
+    loeuf_score = float(row_dict.get('LOEUF', 0.6))
     loeuf_score = 1.0 if pd.isna(loeuf_score) else loeuf_score  # If LOEUF is NaN, we leave the decision to gene avg AM score
-    haplo_insufficient = (loeuf_score <= 0.36) or (gene_mean_am_score >= 0.564)
-    haplo_insufficient = haplo_insufficient and ((loeuf_score <= 0.8) or pd.isna(loeuf_score)) and ((gene_mean_am_score >= 0.4) or pd.isna(gene_mean_am_score))
+    haplo_insufficient = (loeuf_score <= 0.6) or (gene_mean_am_score >= 0.564)
+    haplo_insufficient = haplo_insufficient and ((loeuf_score <= 0.7) or pd.isna(loeuf_score)) and ((gene_mean_am_score >= 0.5) or pd.isna(gene_mean_am_score))
     haplo_sufficient = not haplo_insufficient
 
     clingen_recessive = None

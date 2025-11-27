@@ -119,7 +119,7 @@ def ks_vs_fixed_composite(
     if n_q < 2:
         return {'ks_stat': np.nan, 'p_value': np.nan, 'n_query': n_q, 'n_comp': 0, 'median_diff': np.nan}
 
-    M = n_q
+    M = max(n_q, 50)
     if cap is not None:
         M = min(M, cap)
     M = min(M, len(fixed_composite))
@@ -137,7 +137,8 @@ def ks_vs_fixed_composite(
         'p_value': float(p),
         'n_query': int(n_q),
         'n_comp': int(M),
-        'median_diff': median_diff
+        'median_query': np.median(query_scores),
+        'median_comp': np.median(y_mix)
     }
 
 
@@ -544,7 +545,7 @@ def analyze_domain_data(pickle_file: str,
     if len(query_sizes) == 0:
         logger.warning("No query sizes found; skipping KS analysis.")
         return
-    T_default = int(np.median(query_sizes))
+    T_default = int(np.max(query_sizes))
     T_cap = 200000
     T = max(50, min(T_default, T_cap))  # keep it reasonable
     seed_global = 42  # make reproducible
@@ -597,12 +598,13 @@ def analyze_domain_data(pickle_file: str,
             'n_query': ks_results[d]['n_query'],
             'n_comp_used': ks_results[d]['n_comp'],
             'composite_T': int(len(fixed_composite)),
-            'median_diff': ks_results[d]['median_diff']  # + if query more tolerant
+            'median_query': ks_results[d]['median_query'],
+            'median_composite': ks_results[d]['median_comp']
         }
         df_rows.append(row)
 
     results_df = pd.DataFrame(df_rows)
-    out_tsv = os.path.join(output_dir, f'domain_composite_ks_analysis.{assembly}.tsv')
+    out_tsv = os.path.join(output_dir, f'domain_tolerance_analysis.{assembly}.tsv')
     results_df.to_csv(out_tsv, sep='\t', index=False)
     logger.info(f"Composite KS analysis results saved to {out_tsv}")
     logger.info(f"Completed KS analysis for {len(results_df)} domains; "

@@ -183,8 +183,8 @@ function assign_acmg_criteria () {
 
     local assembly=$(read_yaml ${config_file} "assembly")
     if [[ ${assembly} == "hg38" ]]; then
-        local mavedb_metadata_tsv=${BASE_DIR}/data/MaveDB/mavedb_assay_summary.tsv
-        check_path ${mavedb_metadata_tsv} "file" "mavedb_assay_summary" || has_error=1
+        local mavedb_metadata_tsv=${BASE_DIR}/data/MaveDB/assay_mapping_result.neutral_bands.tsv
+        check_path ${mavedb_metadata_tsv} "file" "mavedb_assay_metadata" || has_error=1
         local mavedb_arg="--mavedb_metadata_tsv ${mavedb_metadata_tsv}"
     else
         local mavedb_arg=""

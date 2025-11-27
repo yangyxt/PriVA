@@ -996,9 +996,9 @@ def mavedb_interpretation_per_row(row: pd.Series, metadata_df: pd.DataFrame) -> 
 
         if pd.isna(pvalue):
             result = pick_interpreter_from_metadata(urn, score, metadata_df)
-            if result['mavedb_ps3']:
+            if result['MaveDB_PS3']:
                 mavedb_ps3 = True
-            if result['mavedb_bs3']:
+            if result['MaveDB_BS3']:
                 mavedb_bs3 = True
         elif pvalue < 0.05:
             mavedb_ps3 = True
@@ -1053,7 +1053,7 @@ def PS3_BS3_criteria(df: pd.DataFrame, mavedb_metadata_tsv: str = "", high_confi
     
     if mavedb_metadata_tsv:
         mavedb_metadata = pd.read_table(mavedb_metadata_tsv, low_memory=False)
-        mavedb_metadata.drop_duplicates(subset=["URN"], inplace=True)
+        mavedb_metadata.drop_duplicates(subset=["urn"], inplace=True)
         logger.info(f"There are {len(mavedb_metadata)} unique URNs in the MaveDB metadata, which looks like: \n{mavedb_metadata.head().to_string(index=False)}")
         df = mavedb_score_interpretation(df, mavedb_metadata)
         ps3_criteria = clinvar_lof | df['MaveDB_PS3']

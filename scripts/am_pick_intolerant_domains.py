@@ -111,13 +111,13 @@ def ks_vs_fixed_composite(
 ) -> dict:
     """
     One-sided KS: tests if the query distribution is more tolerant (left-shifted) than the composite.
-    We downsample the composite to match the query size (or 'cap'), for fairness and stability.
-    Returns statistic, pvalue, and sample sizes, plus a simple effect size (median diff).
+    We downsample the composite to max(query_size, 50) samples (or 'cap'), for stability with small queries.
+    Returns statistic, pvalue, sample sizes, and median values for effect size estimation.
     """
     query_scores = np.asarray(query_scores)
     n_q = len(query_scores)
     if n_q < 2:
-        return {'ks_stat': np.nan, 'p_value': np.nan, 'n_query': n_q, 'n_comp': 0, 'median_query': np.nan, 'median_comp': np.nan}
+        return {'ks_stat': float('nan'), 'p_value': float('nan'), 'n_query': n_q, 'n_comp': 0, 'median_query': float('nan'), 'median_comp': float('nan')}
 
     M = max(n_q, 50)
     if cap is not None:
@@ -136,8 +136,8 @@ def ks_vs_fixed_composite(
         'p_value': float(p),
         'n_query': int(n_q),
         'n_comp': int(M),
-        'median_query': np.median(query_scores),
-        'median_comp': np.median(y_mix)
+        'median_query': float(np.median(query_scores)),
+        'median_comp': float(np.median(y_mix))
     }
 
 

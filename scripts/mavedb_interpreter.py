@@ -46,6 +46,10 @@ class AssayFamily:
     SPLICING      = "Splicing"
     EPHYS         = "Electrophysiology"
     COMPLEMENT    = "Complementation"
+    LOCALIZATION  = "Localization"
+    AGGREGATION   = "Aggregation"
+    INTERACTION   = "Interaction"
+    MPRA          = "MPRA"
     OTHER         = "Other"
 
 
@@ -99,6 +103,22 @@ class ComplementationSubtype(Enum):
     MAMMALIAN_CELL = "MAMMALIAN_CELL"
 
 
+class LocalizationSubtype(Enum):
+    CELLULAR_LOCALIZATION = "CELLULAR_LOCALIZATION"
+
+
+class AggregationSubtype(Enum):
+    AGGREGATION_METRIC = "AGGREGATION_METRIC"
+
+
+class InteractionSubtype(Enum):
+    TWO_HYBRID = "TWO_HYBRID"
+
+
+class MPRASubtype(Enum):
+    REPORTER_ACTIVITY = "REPORTER_ACTIVITY"
+
+
 # ----------------------------- Other enums -----------------------------
 
 class Scale(Enum):
@@ -126,6 +146,10 @@ FAMILY_TO_SUBTYPE_ENUM: Dict[str, Type[Enum]] = {
     AssayFamily.SPLICING:      SplicingSubtype,
     AssayFamily.EPHYS:         EphysSubtype,
     AssayFamily.COMPLEMENT:    ComplementationSubtype,
+    AssayFamily.LOCALIZATION:  LocalizationSubtype,
+    AssayFamily.AGGREGATION:   AggregationSubtype,
+    AssayFamily.INTERACTION:   InteractionSubtype,
+    AssayFamily.MPRA:          MPRASubtype,
 }
 
 
@@ -342,6 +366,50 @@ class ComplementationInterpreter(BaseInterpreter):
         return {"call":self.call_from_band(s, spec),"standardized_score":s,"reason":"Complementation band","notes":f"{spec.neutral_band} | {spec.subtype.value}"}
 
 
+class LocalizationInterpreter(BaseInterpreter):
+    """Interpreter for cellular localization assays. Higher score = better localization = more function."""
+    def interpret(self, score: float, spec: AssaySpec, **kwargs):
+        if not validate_spec(spec):
+            return {"call":"NA","standardized_score":None,"reason":"Invalid spec","notes":""}
+        s = self.standardize(score, spec)
+        if s is None:
+            return {"call":"NA","standardized_score":None,"reason":"Localization not standardized","notes":spec.units}
+        return {"call":self.call_from_band(s, spec),"standardized_score":s,"reason":"Localization band","notes":f"{spec.neutral_band} | {spec.subtype.value}"}
+
+
+class AggregationInterpreter(BaseInterpreter):
+    """Interpreter for protein aggregation assays. Lower score = less aggregation = more function."""
+    def interpret(self, score: float, spec: AssaySpec, **kwargs):
+        if not validate_spec(spec):
+            return {"call":"NA","standardized_score":None,"reason":"Invalid spec","notes":""}
+        s = self.standardize(score, spec)
+        if s is None:
+            return {"call":"NA","standardized_score":None,"reason":"Aggregation not standardized","notes":spec.units}
+        return {"call":self.call_from_band(s, spec),"standardized_score":s,"reason":"Aggregation band","notes":f"{spec.neutral_band} | {spec.subtype.value}"}
+
+
+class InteractionInterpreter(BaseInterpreter):
+    """Interpreter for protein-protein interaction assays (e.g., yeast two-hybrid). Higher score = stronger interaction = more function."""
+    def interpret(self, score: float, spec: AssaySpec, **kwargs):
+        if not validate_spec(spec):
+            return {"call":"NA","standardized_score":None,"reason":"Invalid spec","notes":""}
+        s = self.standardize(score, spec)
+        if s is None:
+            return {"call":"NA","standardized_score":None,"reason":"Interaction not standardized","notes":spec.units}
+        return {"call":self.call_from_band(s, spec),"standardized_score":s,"reason":"Interaction band","notes":f"{spec.neutral_band} | {spec.subtype.value}"}
+
+
+class MPRAInterpreter(BaseInterpreter):
+    """Interpreter for Massively Parallel Reporter Assays. Higher reporter activity = more function."""
+    def interpret(self, score: float, spec: AssaySpec, **kwargs):
+        if not validate_spec(spec):
+            return {"call":"NA","standardized_score":None,"reason":"Invalid spec","notes":""}
+        s = self.standardize(score, spec)
+        if s is None:
+            return {"call":"NA","standardized_score":None,"reason":"MPRA not standardized","notes":spec.units}
+        return {"call":self.call_from_band(s, spec),"standardized_score":s,"reason":"MPRA band","notes":f"{spec.neutral_band} | {spec.subtype.value}"}
+
+
 # ----------------------------- Registry & API -----------------------------
 
 REGISTRY = {
@@ -354,6 +422,10 @@ REGISTRY = {
     AssayFamily.SPLICING:      SplicingInterpreter(),
     AssayFamily.EPHYS:         EphysInterpreter(),
     AssayFamily.COMPLEMENT:    ComplementationInterpreter(),
+    AssayFamily.LOCALIZATION:  LocalizationInterpreter(),
+    AssayFamily.AGGREGATION:   AggregationInterpreter(),
+    AssayFamily.INTERACTION:   InteractionInterpreter(),
+    AssayFamily.MPRA:          MPRAInterpreter(),
 }
 
 

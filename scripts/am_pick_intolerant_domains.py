@@ -117,7 +117,7 @@ def ks_vs_fixed_composite(
     query_scores = np.asarray(query_scores)
     n_q = len(query_scores)
     if n_q < 2:
-        return {'ks_stat': np.nan, 'p_value': np.nan, 'n_query': n_q, 'n_comp': 0, 'median_diff': np.nan}
+        return {'ks_stat': np.nan, 'p_value': np.nan, 'n_query': n_q, 'n_comp': 0, 'median_query': np.nan, 'median_comp': np.nan}
 
     M = max(n_q, 50)
     if cap is not None:
@@ -131,7 +131,6 @@ def ks_vs_fixed_composite(
     # One-sided KS: 'greater' → F_query(x) - F_mix(x) (query CDF larger → more left-shift → more tolerant)
     stat, p = stats.ks_2samp(query_scores, y_mix, alternative='greater')
 
-    median_diff = float(np.median(y_mix) - np.median(query_scores))  # positive → query more tolerant
     return {
         'ks_stat': float(stat),
         'p_value': float(p),

@@ -2567,17 +2567,18 @@ def sort_and_rank_variants(df: pd.DataFrame,
     Returns:
         DataFrame sorted by variant's max ACMG score with added variant rank column
     """
+    df = df.copy()
+        
+    df["sort_index"] = df.loc[:, "ACMG_quant_score"]
+    df = df.loc[df["BIOTYPE"] == "protein_coding", :]
+
+    # NOTE: proband_het must be created AFTER filtering to match df's shape
     if ped_df is not None and fam_name is not None:
         proband = ped_df.loc[(ped_df['#FamilyID'] == fam_name) & (ped_df['Phenotype'].isin(["2", 2])), 'IndividualID'].values[0]
         proband_het = (df.loc[:, proband].str.count("1") == 1)
     else:
         logger.warning(f"No ped_table provided, skip the haplo_sufficient penalty")
-        proband_het = np.array([False] * len(df))
-
-    df = df.copy()
-        
-    df["sort_index"] = df.loc[:, "ACMG_quant_score"]
-    df = df.loc[df["BIOTYPE"] == "protein_coding", :]
+        proband_het = pd.Series([False] * len(df), index=df.index)  # Use Series with matching index
 
     # normalized_loeuf = df.loc[:, "LOEUF"].fillna(1)
     # normalized_mean_am = (1-df.loc[:, "Gene"].map(gene_to_am_score_map)) * 2

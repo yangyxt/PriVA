@@ -395,7 +395,13 @@ def convert_vcf_to_tab(input_vcf: str, threads=4, cadd_phred_dict: dict = None, 
                             col_dicts[key] = col_dicts[key].astype(np.int64)
                         else:
                             logger.info(f"Found the column {key} has digit values in the iterating chunk, convert the np array type to float32")
-                            col_dicts[key] = col_dicts[key].astype(np.float32)
+                            try:
+                                col_dicts[key] = col_dicts[key].astype(np.float32)
+                            except ValueError as ve:
+                                logger.warning(f"Could not convert column {key} to float32, due to {ve}. COnvert the column to object type and convert the value to string")
+                                col_dicts[key] = col_dicts[key].astype(np.object)
+                                values[i] = str(value)
+                                has_digit = False
                     
                     col_dicts[key][anno_record_count:anno_record_count + num_rows] = values
                 anno_record_count += num_rows

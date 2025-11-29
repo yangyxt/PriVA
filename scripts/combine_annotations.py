@@ -398,12 +398,16 @@ def convert_vcf_to_tab(input_vcf: str, threads=4, cadd_phred_dict: dict = None, 
                             try:
                                 col_dicts[key] = col_dicts[key].astype(np.float32)
                             except ValueError as ve:
-                                logger.warning(f"Could not convert column {key} to float32, due to {ve}. COnvert the column to object type and convert the value to string")
-                                col_dicts[key] = col_dicts[key].astype(np.object)
-                                values[i] = str(value)
-                                has_digit = False
+                                logger.warning(f"Could not convert column {key} to float32, due to {ve}. Convert the column to object type")
+                                col_dicts[key] = col_dicts[key].astype(object)
                     
-                    col_dicts[key][anno_record_count:anno_record_count + num_rows] = values
+                    # Try to assign values; if it fails due to mixed types (e.g., strings with '&' separators), fall back to object type
+                    try:
+                        col_dicts[key][anno_record_count:anno_record_count + num_rows] = values
+                    except ValueError as ve:
+                        logger.warning(f"Could not assign values to column {key} as {col_dicts[key].dtype}, due to {ve}. Converting column to object type.")
+                        col_dicts[key] = col_dicts[key].astype(object)
+                        col_dicts[key][anno_record_count:anno_record_count + num_rows] = values
                 anno_record_count += num_rows
                 finish_collect = time.time()
                 logger.info(f"Completed processing {varcount} variants, which contains {anno_record_count} transcript level annotations, collect time for this chunk: {finish_collect - start_collect:.6f}s")
@@ -443,9 +447,19 @@ def convert_vcf_to_tab(input_vcf: str, threads=4, cadd_phred_dict: dict = None, 
                         col_dicts[key] = col_dicts[key].astype(np.int64)
                     else:
                         logger.info(f"Found the column {key} has digit values in the iterating chunk, convert the np array type to float32")
-                        col_dicts[key] = col_dicts[key].astype(np.float32)
+                        try:
+                            col_dicts[key] = col_dicts[key].astype(np.float32)
+                        except ValueError as ve:
+                            logger.warning(f"Could not convert column {key} to float32, due to {ve}. Convert the column to object type")
+                            col_dicts[key] = col_dicts[key].astype(object)
                 
-                col_dicts[key][anno_record_count:anno_record_count + num_rows] = values
+                # Try to assign values; if it fails due to mixed types (e.g., strings with '&' separators), fall back to object type
+                try:
+                    col_dicts[key][anno_record_count:anno_record_count + num_rows] = values
+                except ValueError as ve:
+                    logger.warning(f"Could not assign values to column {key} as {col_dicts[key].dtype}, due to {ve}. Converting column to object type.")
+                    col_dicts[key] = col_dicts[key].astype(object)
+                    col_dicts[key][anno_record_count:anno_record_count + num_rows] = values
             anno_record_count += num_rows
             logger.info(f"Completed processing {varcount} variants, which contains {anno_record_count} transcript level annotations")
             gc.collect()  # Force garbage collection after final batch

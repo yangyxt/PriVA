@@ -670,7 +670,9 @@ def pick_interpreter_from_metadata(
                 "reason": "URN not found in metadata",
                 "notes": urn,
                 "metadata_flags": {},
-                "urn": urn
+                "urn": urn,
+                "MaveDB_PS3": False,
+                "MaveDB_BS3": False
             }
     else:  # dict lookup
         meta = metadata_df.get(urn)
@@ -681,7 +683,9 @@ def pick_interpreter_from_metadata(
                 "reason": "URN not found in metadata",
                 "notes": urn,
                 "metadata_flags": {},
-                "urn": urn
+                "urn": urn,
+                "MaveDB_PS3": False,
+                "MaveDB_BS3": False
             }
     
     # Check quality flags - reject problematic datasets immediately
@@ -699,7 +703,9 @@ def pick_interpreter_from_metadata(
             "reason": "Dataset marked ambiguous",
             "notes": meta.get('rationale', ''),
             "metadata_flags": flags,
-            "urn": urn
+            "urn": urn,
+            "MaveDB_PS3": False,
+            "MaveDB_BS3": False
         }
     
     if flags["nonmonotonic"] or flags["needs_gene_rules"]:
@@ -709,7 +715,9 @@ def pick_interpreter_from_metadata(
             "reason": "Gene-specific rules required (not supported)",
             "notes": meta.get('rationale', ''),
             "metadata_flags": flags,
-            "urn": urn
+            "urn": urn,
+            "MaveDB_PS3": False,
+            "MaveDB_BS3": False
         }
     
     # Parse neutral band from metadata (handles one-sided intervals)
@@ -722,7 +730,9 @@ def pick_interpreter_from_metadata(
             "reason": "Unable to determine neutral band",
             "notes": f"neutral_bands={meta.get('neutral_bands')}, q05={meta.get('q05')}, q95={meta.get('q95')}",
             "metadata_flags": flags,
-            "urn": urn
+            "urn": urn,
+            "MaveDB_PS3": False,
+            "MaveDB_BS3": False
         }
     
     neutral_band = (lo, hi)
@@ -741,7 +751,9 @@ def pick_interpreter_from_metadata(
                 "reason": f"Unknown assay family: {family}",
                 "notes": "",
                 "metadata_flags": flags,
-                "urn": urn
+                "urn": urn,
+                "MaveDB_PS3": False,
+                "MaveDB_BS3": False
             }
         
         try:
@@ -753,7 +765,9 @@ def pick_interpreter_from_metadata(
                 "reason": f"Unknown subtype {subtype_value} for {family}",
                 "notes": "",
                 "metadata_flags": flags,
-                "urn": urn
+                "urn": urn,
+                "MaveDB_PS3": False,
+                "MaveDB_BS3": False
             }
         
         # Parse directionality and scale
@@ -770,7 +784,9 @@ def pick_interpreter_from_metadata(
                 "reason": f"Invalid enum value: {e}",
                 "notes": f"directionality={directionality_str}, scale={scale_str}",
                 "metadata_flags": flags,
-                "urn": urn
+                "urn": urn,
+                "MaveDB_PS3": False,
+                "MaveDB_BS3": False
             }
         
         # Extract flexibility_requirement from metadata
@@ -793,7 +809,9 @@ def pick_interpreter_from_metadata(
             "reason": f"Failed to construct AssaySpec: {e}",
             "notes": str(meta),
             "metadata_flags": flags,
-            "urn": urn
+            "urn": urn,
+            "MaveDB_PS3": False,
+            "MaveDB_BS3": False
         }
     
     # Call interpret_score (no longer needs function_prefers_lower_stability param)

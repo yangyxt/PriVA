@@ -496,7 +496,7 @@ def PVS1_criteria(df: pd.DataFrame,
     pvs1_criteria[five_utr_inframe_intol_domains & lof_intolerant & (pvs1_criteria < 3)] = 3
     pvs1_criteria[five_utr_frameshift & lof_intolerant & (pvs1_criteria < 4)] = 4
 
-    alt_start_genes = set(df.groupby(['chrom', 'pos', 'ref', 'alt', 'Gene']).apply(identify_alternative_start_codon_genes).unique().tolist())
+    alt_start_genes = set(df.groupby(['chrom', 'pos', 'ref', 'alt', 'Gene']).apply(identify_alternative_start_codon_genes, include_groups=False).unique().tolist())
     logger.info(f"These are the {len(alt_start_genes)} genes that have functional transcripts using alternative start codons: {alt_start_genes}")
     alt_start_losts = df["Consequence"].str.contains("start_lost") & df["Gene"].isin(alt_start_genes)
     logger.info(f"{alt_start_losts.sum()} variants are having start_lost consequences to transcripts with alternative start codons")

@@ -1587,6 +1587,80 @@ function AlphaMissense_anno_gnomAD() {
 }
 
 
+function CDS_FASTA_install() {
+    # Download Ensembl CDS FASTA file for alternative start codon detection
+    # Per ClinGen SVI guidelines (PMC6185798), for start_lost variants we need to check
+    # if there's a downstream in-frame ATG that could serve as alternative translation start
+    local config_file=${1}
+    local assembly=$(read_yaml "${config_file}" "assembly")
+    local vep_plugins_cachedir=$(read_yaml "${config_file}" "vep_plugins_cachedir")
+    
+    local cds_fasta_dir="${vep_plugins_cachedir}/Ensembl_CDS"
+    mkdir -p "${cds_fasta_dir}"
+    
+    local cds_fasta_file
+    local cds_fasta_url
+    
+    # Set URLs based on assembly version
+    # Using "current" URLs that automatically point to the latest Ensembl release
+    # Note: Using HTTPS instead of FTP for better reliability
+    if [[ ${assembly} == "GRCh38" ]] || [[ ${assembly} == "hg38" ]]; then
+        # GRCh38 uses current_fasta directory (always latest release)
+        cds_fasta_url="https://ftp.ensembl.org/pub/current_fasta/homo_sapiens/cds/Homo_sapiens.GRCh38.cds.all.fa.gz"
+        cds_fasta_file="${cds_fasta_dir}/Homo_sapiens.GRCh38.cds.all.fa.gz"
+    elif [[ ${assembly} == "GRCh37" ]] || [[ ${assembly} == "hg19" ]]; then
+        # GRCh37 uses grch37/current directory (frozen annotations at release-75, but current structure)
+        cds_fasta_url="https://ftp.ensembl.org/pub/grch37/current/fasta/homo_sapiens/cds/Homo_sapiens.GRCh37.cds.all.fa.gz"
+        cds_fasta_file="${cds_fasta_dir}/Homo_sapiens.GRCh37.cds.all.fa.gz"
+    else
+        log "Unsupported assembly version: ${assembly}. Only GRCh37/hg19 and GRCh38/hg38 are supported."
+        return 1
+    fi
+    
+    # Check if file already exists and is valid
+    if [[ -f "${cds_fasta_file}" ]] && [[ -s "${cds_fasta_file}" ]]; then
+        # Verify it's a valid gzipped file
+        if gzip -t "${cds_fasta_file}" 2>/dev/null; then
+            log "CDS FASTA file already exists and is valid: ${cds_fasta_file}"
+            update_yaml "${config_file}" "cds_fasta_file" "${cds_fasta_file}"
+            return 0
+        else
+            log "Existing CDS FASTA file is corrupted, re-downloading..."
+            rm -f "${cds_fasta_file}"
+        fi
+    fi
+    
+    # Download the file
+    log "Downloading Ensembl CDS FASTA for ${assembly} from: ${cds_fasta_url}"
+    log "This file is ~50MB and will be used for alternative start codon detection in start_lost variants"
+    
+    wget -c "${cds_fasta_url}" -O "${cds_fasta_file}" || {
+        log "Failed to download CDS FASTA file from ${cds_fasta_url}"
+        log "You can manually download it and place it at: ${cds_fasta_file}"
+        return 1
+    }
+    
+    # Verify download
+    if gzip -t "${cds_fasta_file}" 2>/dev/null; then
+        log "CDS FASTA file downloaded and verified: ${cds_fasta_file}"
+        update_yaml "${config_file}" "cds_fasta_file" "${cds_fasta_file}"
+        
+        # Pre-generate cache by running the Python script
+        log "Pre-generating CDS sequence cache (this may take a minute)..."
+        python "${SCRIPT_DIR}/alternative_start_codon.py" \
+            --cds_fasta "${cds_fasta_file}" \
+            --transcript "ENST00000000233" 2>/dev/null || \
+            log "Cache generation will happen on first use"
+        
+        return 0
+    else
+        log "Downloaded file is corrupted: ${cds_fasta_file}"
+        rm -f "${cds_fasta_file}"
+        return 1
+    fi
+}
+
+
 function ClinGen_deploy() {
     local config_file=${1}
     local assembly=$(read_yaml "${config_file}" "assembly")
@@ -1723,6 +1797,12 @@ function main_install() {
     ClinGen_deploy \
     ${config_file} || \
     { log "Failed to deploy ClinGen data"; return 1; }
+
+    # 9. Install Ensembl CDS FASTA for alternative start codon detection
+    CDS_FASTA_install \
+    ${config_file} || \
+    { log "Failed to install CDS FASTA for alternative start codon detection"; return 1; }
+    
     log "Congratulations! The installation is completed!"
 }
 

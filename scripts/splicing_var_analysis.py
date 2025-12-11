@@ -53,8 +53,8 @@ def splicing_interpretation(anno_table,
     with mp.Pool(threads) as pool:
         results = pool.map(process_row, [row for _, row in anno_df.iterrows()])
     
-    # Unpack results
-    splicing_lof, splicing_len_changing, splicing_frame_shift, splicing_span_intol_domain, splicing_ten_percent_protein, splicing_canonical_gain_offset, splicing_canonical_loss_offset, splicing_affected_exons = zip(*results)
+    # Unpack results (now includes splicing_last_exon_only for NMD escape determination)
+    splicing_lof, splicing_len_changing, splicing_frame_shift, splicing_span_intol_domain, splicing_ten_percent_protein, splicing_canonical_gain_offset, splicing_canonical_loss_offset, splicing_affected_exons, splicing_last_exon_only = zip(*results)
     
     # Add results to dataframe
     anno_df['splicing_lof'] = splicing_lof
@@ -65,6 +65,7 @@ def splicing_interpretation(anno_table,
     anno_df['splicing_ten_percent_protein'] = splicing_ten_percent_protein
     anno_df['spliceai_canonical_gain_offset'] = splicing_canonical_gain_offset
     anno_df['spliceai_canonical_loss_offset'] = splicing_canonical_loss_offset
+    anno_df['splicing_last_exon_only'] = splicing_last_exon_only  # For NMD escape determination
 
     # Save results
     tmp_tag = str(uuid.uuid4())
@@ -91,11 +92,54 @@ def splicing_altering_per_row(row,
     2. In-frame retention, can be induced by exon skipping, cryptic donor/acceptor activation.
     3. In-frame truncation, can be induced by exon skipping, cryptic donor/acceptor activation.
     '''
+    # ============================================================================
+    # FIX: Canonical splice site variants (+1/+2 donor GT, -1/-2 acceptor AG)
+    # should ALWAYS be treated as LoF regardless of SpliceAI/SpliceVault scores.
+    # VEP's splice_donor_variant and splice_acceptor_variant consequences are
+    # specifically defined as variants within the 2bp invariant dinucleotides.
+    # ============================================================================
+    consequence = str(row.get('Consequence', ''))
+    
+    # Parse exon/intron positions to get total exon count for NMD escape determination
+    intron_pos = None if na_value(row['INTRON']) else row['INTRON']
+    exon_pos = None if na_value(row['EXON']) else row['EXON']
+    
+    # Determine total exons from exon_pos or intron_pos (format: "N/M")
+    total_exons = None
+    if exon_pos:
+        try:
+            total_exons = int(exon_pos.split('/')[1])
+        except (ValueError, IndexError):
+            pass
+    if total_exons is None and intron_pos:
+        try:
+            # Total introns = total exons - 1
+            total_exons = int(intron_pos.split('/')[1]) + 1
+        except (ValueError, IndexError):
+            pass
+    
+    if 'splice_donor_variant' in consequence:
+        # Canonical splice site variants are always LoF
+        # But check if it's the last intron (affects last exon only -> NMD escape)
+        last_exon_only = False
+        if intron_pos and total_exons:
+            try:
+                current_intron = int(intron_pos.split('/')[0].split('-')[0])
+                # Last intron = total_exons - 1, affects only the last exon
+                if current_intron == total_exons - 1:
+                    last_exon_only = True
+                    logger.info(f"Canonical splice donor variant in last intron ({intron_pos}), NMD escape likely")
+            except (ValueError, IndexError):
+                pass
+        # Return: (lof, len_changing, frameshift, span_intol_domain, ten_percent_protein,
+        #          canonical_gain_offset, canonical_loss_offset, affected_exons, last_exon_only)
+        logger.info(f"Canonical splice site variant detected at {row.get('chrom', '?')}:{row.get('pos', '?')}, "
+                   f"consequence={consequence}, treating as LoF by default, last_exon_only={last_exon_only}")
+        return True, True, True, False, True, 0, 0, "", last_exon_only
+    
     transcript_id = row['Feature']
     splicevault_events = row['SpliceVault_top_events']
     spliceai_delta = float(row['SpliceVault_SpliceAI_delta'])
-    intron_pos = None if na_value(row['INTRON']) else row['INTRON']
-    exon_pos = None if na_value(row['EXON']) else row['EXON']
     cds_pos = None if na_value(row["CDS_position"]) else row["CDS_position"]
     # Extract HGVSc if available
     hgvsc = None if na_value(row.get('HGVSc', None)) else row.get('HGVSc', None)
@@ -149,6 +193,43 @@ def splicing_altering_per_row(row,
                                                                                                                                                                                                                                             interpro_entry_map_dict = interpro_entry_map_dict,
                                                                                                                                                                                                                                             dm_instance = dm_instance)
 
+    # Combine affected exons from both SpliceVault and SpliceAI
+    all_affected_exons = set(list(map(str, splicevault_affected_exons)) + list(map(str, spliceai_affected_exons)))
+    affected_exons_str = ",".join(all_affected_exons)
+    
+    # Determine if splicing effect only affects the last exon (NMD escape)
+    last_exon_only = False
+    if total_exons and all_affected_exons:
+        try:
+            # Check if all affected exons are the last exon
+            affected_exon_nums = {int(e) for e in all_affected_exons if e.isdigit()}
+            if affected_exon_nums and affected_exon_nums == {total_exons}:
+                last_exon_only = True
+                logger.info(f"Splicing effect only affects last exon ({total_exons}), NMD escape likely")
+        except (ValueError, TypeError):
+            pass
+    
+    # Also check if variant is in last intron (affects last exon) when no affected_exons identified
+    if not last_exon_only and intron_pos and total_exons:
+        try:
+            current_intron = int(intron_pos.split('/')[0].split('-')[0])
+            # Last intron = total_exons - 1
+            if current_intron == total_exons - 1:
+                last_exon_only = True
+                logger.info(f"Variant in last intron ({intron_pos}), affects only last exon, NMD escape likely")
+        except (ValueError, IndexError):
+            pass
+    
+    # Also check if variant is in last exon
+    if not last_exon_only and exon_pos and total_exons:
+        try:
+            current_exon = int(exon_pos.split('/')[0].split('-')[0])
+            if current_exon == total_exons:
+                last_exon_only = True
+                logger.info(f"Variant in last exon ({exon_pos}), NMD escape likely")
+        except (ValueError, IndexError):
+            pass
+
     return splicevault_lof or spliceai_lof, \
            splicevault_len_changing or spliceai_len_changing, \
            splicevault_frame_shift or spliceai_frame_shift, \
@@ -156,7 +237,8 @@ def splicing_altering_per_row(row,
            splicevault_ten_percent_protein or spliceai_ten_percent_protein, \
            spliceai_canonical_gain_offset, \
            spliceai_canonical_loss_offset, \
-           ",".join(set(list(map(str, splicevault_affected_exons)) + list(map(str, spliceai_affected_exons))))
+           affected_exons_str, \
+           last_exon_only
     
 
 
@@ -755,7 +837,11 @@ def analyze_splice_event(event_str: str,
         is_harmful = True
         reason.append('affects_intolerant_domains')
     if frame_impact == 'Frameshift':
+        # FIX: SpliceVault's Frameshift annotation should set frame_shift = True
+        # This is especially important for exon skipping events where the offset-based
+        # calculation doesn't apply, but the annotation correctly indicates frameshift
         is_harmful = True
+        frame_shift = True
         reason.append('frameshift')
     if "large_truncation_relative_to_cds_size" in reason:
         ten_percent_protein = True

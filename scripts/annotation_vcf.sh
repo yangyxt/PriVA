@@ -1166,12 +1166,18 @@ function find_cached_cadd_variants() {
     # Clean up temporary positions file
     rm -f "${uncovered_pos}"
     
-    # Check if any uncovered variants
-    if [[ $(count_vcf_records "${output_uncovered_vcf}") -eq 0 ]]; then
-        log "No uncovered variants"
+    # Check if any uncovered variants (also handle case where file doesn't exist)
+    if [[ ! -f "${output_uncovered_vcf}" ]]; then
+        log "No uncovered variants (output file was not created)"
+        return 0
+    fi
+    
+    local uncovered_count=$(count_vcf_records "${output_uncovered_vcf}")
+    if [[ ${uncovered_count} -eq 0 ]]; then
+        log "No uncovered variants (0 records in output file)"
         return 0
     else
-        log "Will process $(count_vcf_records "${output_uncovered_vcf}") uncached variants"
+        log "Will process ${uncovered_count} uncached variants"
         return 1
     fi
 }

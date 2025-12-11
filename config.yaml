@@ -4,7 +4,7 @@
 tmp_dir: "/paedyl01/disk1/yangyxt/test_tmp/test_acmg"
 assembly: hg19   # Change this you need to re-run the install_utils.sh script
 ref_genome: "/paedyl01/disk1/yangyxt/indexed_genome/ucsc.hg19.fasta"  # Be consistent of the assembly tag
-conda_env_yaml: "acmg_auto_rough.yml"  # Included in the GitHub repo, not recommend to change
+conda_env_yaml: "acmg_conda_rough.yml"  # Included in the GitHub repo, not recommend to change
 conda_env_name: "priva_acmg"   # If choose alternative env name, pls update the yaml file accordingly that will be used by the install_utils.sh script
 hg38_hg19_chain: "hg38ToHg19.over.chain.gz"   # Included in the GitHub repo, not recommend to change
 
@@ -125,6 +125,12 @@ interpro_mapping_pickle: "Interpro_entry_mapping.pkl.gz"
 # ClinGen paths
 clingen_map: "/paedyl01/disk1/yangyxt/PriVA/data/clingen/clingen_map.hg19.pkl.gz"
 gene_dosage_sensitivity: "/paedyl01/disk1/yangyxt/PriVA/data/clingen/gene_dosage_sensitivity.hg19.tsv"
+
+# Ensembl CDS FASTA for alternative start codon detection (used for start_lost variants)
+# Download URLs (always latest via "current" symlinks, installed by install_utils.sh):
+#   GRCh38: https://ftp.ensembl.org/pub/current_fasta/homo_sapiens/cds/Homo_sapiens.GRCh38.cds.all.fa.gz
+#   GRCh37: https://ftp.ensembl.org/pub/grch37/current/fasta/homo_sapiens/cds/Homo_sapiens.GRCh37.cds.all.fa.gz
+cds_fasta_file: "/paedyl01/disk1/yangyxt/public_data/VEP_plugins_caches/Ensembl_CDS/Homo_sapiens.GRCh37.cds.all.fa.gz"
 
 # MaveDB paths
 mavedb_url: "https://ftp.ensembl.org/pub/current_variation/MaveDB/MaveDB_variants.tsv.gz"

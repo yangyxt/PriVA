@@ -114,6 +114,13 @@ function display_table {
 function display_vcf {
     local input_vcf=${1}
     local head_lines=${2}
+    
+    # Check if file exists first to avoid confusing error messages
+    if [[ ! -f "${input_vcf}" ]]; then
+        log "Warning: VCF file ${input_vcf} does not exist, skipping display"
+        return 0
+    fi
+    
     if [[ -z ${TMPDIR} ]]; then
         TMPDIR="/tmp"
     fi

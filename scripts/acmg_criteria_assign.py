@@ -1773,8 +1773,7 @@ def analyze_bp1_pp2(gene_stat_dict: Dict):
     
     # BP1 Analysis
     # Combine large AA change and NMD variants
-    large_aa_nmd_variants = (gene_stat_dict['large_aachange'] | 
-                            gene_stat_dict['putative_nmd_variants'])
+    large_aa_nmd_variants = (gene_stat_dict['large_aachange'] | gene_stat_dict['putative_nmd_variants'])
     patho_large_aa_nmd = len(patho_variants & large_aa_nmd_variants)
     bp1_fraction = patho_large_aa_nmd / total_patho
     bp1_granted = bp1_fraction >= 0.7

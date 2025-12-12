@@ -165,6 +165,7 @@ function assign_acmg_criteria () {
     local relevant_gene_list=$(read_yaml ${config_file} "relevant_gene_list")
     local dispensable_gene_list=$(read_yaml ${config_file} "dispensable_gene_list")
     local cds_fasta_file=$(read_yaml ${config_file} "cds_fasta_file")
+    local pext_tissues=$(read_yaml ${config_file} "pext_tissues")
 
     local has_error=0
     check_path ${clinvar_aa_dict_pkl} "file" "clinvar_aa_stat" || has_error=1
@@ -225,6 +226,7 @@ function assign_acmg_criteria () {
     [[ -n "${alt_disease_vcf}" ]] && check_vcf_validity ${alt_disease_vcf} && local alt_disease_arg="--alt_disease_vcf ${alt_disease_vcf}" || local alt_disease_arg=""
     [[ -f ${relevant_gene_list} ]] && local relevant_genes_arg="--relevant_gene_list ${relevant_gene_list}" || local relevant_genes_arg=""
     [[ -f ${dispensable_gene_list} ]] && local dispensable_genes_arg="--dispensable_gene_list ${dispensable_gene_list}" || local dispensable_genes_arg=""
+    [[ -n "${pext_tissues}" ]] && [[ "${pext_tissues}" != "null" ]] && local pext_arg="--pext_tissues ${pext_tissues}" || local pext_arg=""
 
     log "Running the following command to assign the ACMG criterias: python ${acmg_py} --anno_table ${input_tab} --am_score_table ${mean_am_score_table} --clinvar_aa_dict_pkl ${clinvar_aa_dict_pkl} --intolerant_domains_pkl ${intolerant_domains_pkl} --intolerant_motifs_pkl ${intolerant_motifs_pkl} --clinvar_gene_stat_pkl ${clinvar_gene_stat_pkl} --gnomAD_extreme_rare_threshold ${gnomAD_extreme_rare_threshold} --expected_incidence ${expected_incidence} --am_score_vcf ${am_score_vcf} --threads ${threads} --tranx_exon_domain_map_pkl ${tranx_exon_domain_map_pkl} ${ped_arg} ${fam_arg} ${alt_disease_arg} ${mavedb_arg} ${pp1_arg} ${relevant_genes_arg} ${dispensable_genes_arg} ${cds_fasta_arg}"
     python ${acmg_py} \
@@ -246,7 +248,7 @@ function assign_acmg_criteria () {
     --expected_incidence ${expected_incidence} \
     --am_score_vcf ${am_score_vcf} \
     --threads ${threads} \
-    --tranx_exon_domain_map_pkl ${tranx_exon_domain_map_pkl} ${ped_arg} ${fam_arg} ${alt_disease_arg} ${mavedb_arg} ${pp1_arg} ${relevant_genes_arg} ${dispensable_genes_arg} ${cds_fasta_arg} && \
+    --tranx_exon_domain_map_pkl ${tranx_exon_domain_map_pkl} ${ped_arg} ${fam_arg} ${alt_disease_arg} ${mavedb_arg} ${pp1_arg} ${relevant_genes_arg} ${dispensable_genes_arg} ${cds_fasta_arg} ${pext_arg} && \
     display_table ${input_tab} && \
     log "The ACMG criterias are assigned for ${input_tab}, added with three columns: ACMG_quant_score, ACMG_class, ACMG_criteria, and the output matrix is saved to ${output_acmg_mat}" && \
     display_table ${output_acmg_mat} || \

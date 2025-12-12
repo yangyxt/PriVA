@@ -3013,6 +3013,7 @@ def ACMG_criteria_assign(anno_table: str,
                          alt_disease_vcf: str = "",
                          clingen_map_pkl: str = "",
                          cds_fasta_path: str = "",
+                         pext_tissues: str = "",
                          relevant_gene_list: str = None,
                          dispensable_gene_list: str = None,
                          gnomAD_extreme_rare_threshold: float = 0.0001,
@@ -3041,6 +3042,19 @@ def ACMG_criteria_assign(anno_table: str,
     """
     anno_df = pd.read_table(anno_table, low_memory=False).drop_duplicates()
     logger.info(f"Got {threads} threads to process the input table {anno_table}, now the table looks like: \n{anno_df[:5].to_string(index=False)}")
+    
+    # Log pext tissue information if provided
+    if pext_tissues:
+        pext_tissue_list = [t.strip() for t in pext_tissues.split(",") if t.strip()]
+        logger.info(f"pext tissues configured: {pext_tissue_list}")
+        # Expected pext column names: PEXT_MEAN plus PEXT_{tissue} for each tissue
+        expected_pext_cols = ["PEXT_MEAN"] + [f"PEXT_{t.replace('-', '_')}" for t in pext_tissue_list]
+        present_pext_cols = [c for c in expected_pext_cols if c in anno_df.columns]
+        if present_pext_cols:
+            logger.info(f"Found pext columns in annotation table: {present_pext_cols}")
+        else:
+            logger.info(f"No pext columns found in annotation table (expected: {expected_pext_cols})")
+    
     anno_df = vep_consq_interpret(anno_df, threads)
 
     am_score_df = pd.read_table(am_score_table, low_memory=False)
@@ -3335,6 +3349,9 @@ if __name__ == "__main__":
     parser.add_argument("--cds_fasta_path", type=str, required=False, default=None,
                         help="Path to Ensembl CDS FASTA file for alternative start codon detection. "
                              "Download from: ftp://ftp.ensembl.org/pub/release-112/fasta/homo_sapiens/cds/")
+    parser.add_argument("--pext_tissues", type=str, required=False, default="",
+                        help="Comma-separated list of pext tissue names used in VEP annotation. "
+                             "Used to identify pext-related columns in the annotation table.")
     parser.add_argument("--repeat_region_file", type=str, required=True)
     parser.add_argument("--gnomAD_extreme_rare_threshold", type=float, required=False, default=0.0001)
     parser.add_argument("--expected_incidence", type=float, required=False, default=0.001)
@@ -3363,6 +3380,7 @@ if __name__ == "__main__":
                                                     alt_disease_vcf=args.alt_disease_vcf,
                                                     clingen_map_pkl=args.clingen_map_pkl,
                                                     cds_fasta_path=args.cds_fasta_path,
+                                                    pext_tissues=args.pext_tissues,
                                                     relevant_gene_list=args.relevant_gene_list,
                                                     dispensable_gene_list=args.dispensable_gene_list,
                                                     gnomAD_extreme_rare_threshold=args.gnomAD_extreme_rare_threshold,

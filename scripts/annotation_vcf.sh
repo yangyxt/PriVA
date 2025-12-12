@@ -818,7 +818,8 @@ function anno_VEP_data() {
                     if [[ -f "$tissue_bw" ]]; then
                         # Convert tissue name to VEP-safe INFO tag (replace special chars with _)
                         local tag="PEXT_$(echo "$tissue" | tr '-' '_')"
-                        pext_arguments="${pext_arguments} --custom ${tissue_bw},${tag},bigwig,exact,0"
+                        # Use ${var:+$var } pattern to avoid leading space when pext_arguments is empty
+                        pext_arguments="${pext_arguments:+$pext_arguments }--custom ${tissue_bw},${tag},bigwig,exact,0"
                         log "Adding tissue pext annotation: $tissue -> $tag"
                     else
                         log "WARNING: Tissue pext file not found: $tissue_bw"

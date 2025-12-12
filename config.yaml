@@ -137,4 +137,44 @@ mavedb_url: "https://ftp.ensembl.org/pub/current_variation/MaveDB/MaveDB_variant
 mavedb_file: "/paedyl01/disk1/yangyxt/public_data/VEP_plugins_caches/MaveDB/MaveDB_variants.hg38.tsv.gz"
 
 
+####################################################pext (proportion expressed across transcripts) Configuration####################################################
+# pext from gnomAD, based on GTEx v10 expression data (updated Nov 2024)
+# Reference: Cummings et al., "Transcript expression-aware annotation improves rare variant interpretation", Nature 2020
+# If pext_enabled is true, the mean pext file is always downloaded and annotated via VEP --custom bigwig
+# Optionally specify comma-delimited tissue names for tissue-specific pext annotation
+#
+# NOTE: Tissue names differ slightly between hg19 and hg38 assemblies!
+#
+# COMMON TISSUES (both assemblies):
+#   Adipose_Subcutaneous, AdrenalGland, Artery_Aorta, Artery_Coronary, Artery_Tibial,
+#   Bladder, Brain_Amygdala, Brain_CerebellarHemisphere, Brain_Cerebellum, Brain_Cortex,
+#   Brain_Hippocampus, Brain_Hypothalamus, Brain_Substantianigra, Breast_MammaryTissue,
+#   Cells_EBV_transformedlymphocytes, Colon_Sigmoid, Colon_Transverse,
+#   Esophagus_GastroesophagealJunction, Esophagus_Mucosa, Esophagus_Muscularis,
+#   Heart_AtrialAppendage, Heart_LeftVentricle, Kidney_Cortex, Liver, Lung,
+#   MinorSalivaryGland, Muscle_Skeletal, Nerve_Tibial, Ovary, Pancreas, Pituitary,
+#   Prostate, SmallIntestine_TerminalIleum, Spleen, Stomach, Testis, Thyroid,
+#   Uterus, Vagina, WholeBlood
+#
+# hg38/GRCh38 ADDITIONAL:
+#   Adipose_Visceral_Omentum, Brain_Anteriorcingulatecortex_BA24, Brain_Caudate_basalganglia,
+#   Brain_FrontalCortex_BA9, Brain_Nucleusaccumbens_basalganglia, Brain_Putamen_basalganglia,
+#   Brain_Spinalcord_cervicalc_1, Cells_Culturedfibroblasts, Skin_NotSunExposed_Suprapubic,
+#   Skin_SunExposed_Lowerleg
+#
+# hg19/GRCh37 ADDITIONAL (note trailing underscores on some):
+#   Adipose_Visceral_Omentum_, Brain_Anteriorcingulatecortex_BA24_, Brain_Caudate_basalganglia_,
+#   Brain_FrontalCortex_BA9_, Brain_Nucleusaccumbens_basalganglia_, Brain_Putamen_basalganglia_,
+#   Brain_Spinalcord_cervicalc_1_, Cells_Transformedfibroblasts, Cervix_Ectocervix,
+#   Cervix_Endocervix, FallopianTube, Skin_NotSunExposed_Suprapubic_, Skin_SunExposed_Lowerleg_
+#
+pext_enabled: true                                           # Set to false to skip pext annotation entirely
+pext_tissues: "Spleen,WholeBlood,Cells_EBV_transformedlymphocytes"  # Immune-related tissues for hg19
+# pext_tissues: ""                                           # Leave empty to use only mean pext (recommended for most use cases)
+
+# Auto-populated by install_utils.sh:
+pext_mean_bw: ""                                             # Path to mean pext BigWig file
+pext_tissue_bw_dir: ""                                       # Directory containing tissue-specific BigWig files
+
+
 

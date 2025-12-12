@@ -1703,6 +1703,108 @@ function ClinGen_deploy() {
 
 
 # Main installation function
+function pext_install() {
+    # Downloads pext (proportion expressed across transcripts) BigWig files from UCSC
+    # Mean pext file is always downloaded if pext_enabled=true
+    # Tissue-specific files are downloaded if pext_tissues is specified
+    # Files are stored in assembly-specific subdirectories (hg19/ or hg38/)
+    local config_file="$1"
+    
+    # Read config values
+    local pext_enabled=$(read_yaml "$config_file" "pext_enabled")
+    local pext_tissues=$(read_yaml "$config_file" "pext_tissues")
+    local vep_plugins_cachedir=$(read_yaml "$config_file" "vep_plugins_cachedir")
+    local assembly=$(read_yaml "$config_file" "assembly")
+    
+    # Skip if pext not enabled
+    if [[ "$pext_enabled" != "true" ]]; then
+        log "pext annotation disabled (pext_enabled != true), skipping download"
+        return 0
+    fi
+    
+    # Validate and normalize assembly name
+    local ucsc_assembly
+    if [[ "$assembly" == "hg19" ]] || [[ "$assembly" == "GRCh37" ]]; then
+        ucsc_assembly="hg19"
+    elif [[ "$assembly" == "hg38" ]] || [[ "$assembly" == "GRCh38" ]]; then
+        ucsc_assembly="hg38"
+    else
+        log "ERROR: Unsupported assembly for pext: $assembly"
+        return 1
+    fi
+    
+    # Get base URL and mean filename for this assembly
+    local base_url=$(get_pext_base_url "$ucsc_assembly")
+    local mean_filename=$(get_pext_mean_filename "$ucsc_assembly")
+    
+    # Create assembly-specific pext directory under VEP plugins cache
+    # Structure: pext/{hg19,hg38}/mean.bw and pext/{hg19,hg38}/tissues/*.bw
+    local pext_base_dir="${vep_plugins_cachedir}/pext"
+    local pext_dir="${pext_base_dir}/${ucsc_assembly}"
+    mkdir -p "$pext_dir" || {
+        log "ERROR: Failed to create pext directory: $pext_dir"
+        return 1
+    }
+    log "pext files for ${ucsc_assembly} will be stored in: $pext_dir"
+    
+    # Always download mean_proportion/exp_prop_mean BigWig
+    local mean_bw="${pext_dir}/${mean_filename}"
+    if [[ ! -f "$mean_bw" ]]; then
+        log "Downloading mean pext file: ${mean_filename} for ${ucsc_assembly}..."
+        wget -q --show-progress -O "$mean_bw" "${base_url}/${mean_filename}" || {
+            log "ERROR: Failed to download ${mean_filename} from ${base_url}"
+            rm -f "$mean_bw"
+            return 1
+        }
+        log "Downloaded: $mean_bw ($(ls -lh "$mean_bw" | awk '{print $5}'))"
+    else
+        log "Mean pext file already exists: $mean_bw"
+    fi
+    
+    # Update config with mean_bw path and tissue directory
+    update_yaml "$config_file" "pext_mean_bw" "$mean_bw"
+    update_yaml "$config_file" "pext_tissue_bw_dir" "$pext_dir"
+    
+    # Download tissue-specific files if specified
+    if [[ -n "$pext_tissues" ]] && [[ "$pext_tissues" != "null" ]]; then
+        # Validate tissue names first
+        validate_pext_tissues "$pext_tissues" "$ucsc_assembly" || {
+            log "ERROR: Invalid tissue names in pext_tissues config, aborting pext installation"
+            return 1
+        }
+        
+        # Create tissues subdirectory under assembly-specific folder
+        local tissue_bw_dir="${pext_dir}/tissues"
+        mkdir -p "$tissue_bw_dir"
+        
+        # Download each tissue file
+        local -a tissues
+        mapfile -t tissues < <(get_pext_tissues_array "$pext_tissues")
+        
+        for tissue in "${tissues[@]}"; do
+            local tissue_bw="${tissue_bw_dir}/${tissue}.bw"
+            
+            if [[ ! -f "$tissue_bw" ]]; then
+                log "Downloading tissue pext file: ${tissue}.bw for ${ucsc_assembly}..."
+                wget -q --show-progress -O "$tissue_bw" "${base_url}/${tissue}.bw" || {
+                    log "ERROR: Failed to download ${tissue}.bw from ${base_url}"
+                    rm -f "$tissue_bw"
+                    return 1
+                }
+                log "Downloaded: $tissue_bw ($(ls -lh "$tissue_bw" | awk '{print $5}'))"
+            else
+                log "Tissue pext file already exists: $tissue_bw"
+            fi
+        done
+        
+        log "Downloaded ${#tissues[@]} tissue-specific pext files to $tissue_bw_dir"
+    fi
+    
+    log "pext data installation complete for ${ucsc_assembly}"
+    return 0
+}
+
+
 function main_install() {
     local config_file=${1}
 
@@ -1802,6 +1904,11 @@ function main_install() {
     CDS_FASTA_install \
     ${config_file} || \
     { log "Failed to install CDS FASTA for alternative start codon detection"; return 1; }
+
+    # 10. Install pext (proportion expressed across transcripts) BigWig files
+    pext_install \
+    ${config_file} || \
+    { log "Failed to install pext BigWig files"; return 1; }
     
     log "Congratulations! The installation is completed!"
 }

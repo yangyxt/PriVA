@@ -2974,13 +2974,14 @@ def sort_and_rank_variants(df: pd.DataFrame,
         logger.info("Using PEXT_MEAN column for expression-aware sorting")
     
     if pext_col_to_use is not None:
-        # pext ranges from 0 to 1; we use it as a multiplier
-        # Low pext (< 0.1) gets penalty, high pext (> 0.5) gets boost
-        # Formula: pext_index = 0.8 + 0.4 * pext (range: 0.8 to 1.2)
-        df["pext_sort_index"] = 0.8 + 0.4 * df[pext_col_to_use].fillna(0.5)
+        # Use sqrt(pext) as multiplier to soften mid-range differences while
+        # heavily penalizing very low expression (pext near 0).
+        # Missing pext values default to 1.0 (no penalty - conservative approach)
+        # sqrt curve: 0.0→0.0, 0.1→0.32, 0.25→0.5, 0.5→0.71, 1.0→1.0
+        df["pext_sort_index"] = np.sqrt(df[pext_col_to_use].fillna(1.0).clip(0, 1))
         # Apply pext modulation only to LoF variants (where expression matters most)
         df.loc[lof, "sort_index"] = df.loc[lof, "sort_index"] * df.loc[lof, "pext_sort_index"]
-        logger.info(f"Applied pext-based sort modulation using {pext_col_to_use}")
+        logger.info(f"Applied pext-based sort modulation using {pext_col_to_use} (sqrt scale)")
     
     # Group by variant coordinates to get max score per variant
     variant_groups = df.groupby(['chrom', 'pos', 'ref', 'alt'])

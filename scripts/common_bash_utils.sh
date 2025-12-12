@@ -1286,6 +1286,217 @@ function check_vcf_infotags() {
 
 
 
+####################################################pext (proportion expressed across transcripts) Configuration####################################################
+# Valid pext tissue names from UCSC gnomAD pext directory (GTEx v10 based, updated Nov 2024)
+# Reference: Cummings et al., "Transcript expression-aware annotation improves rare variant interpretation", Nature 2020
+# Note: Tissue names differ slightly between hg19 and hg38 assemblies!
+#
+# COMMON TISSUES (both assemblies):
+#   Adipose_Subcutaneous, AdrenalGland, Artery_Aorta, Artery_Coronary, Artery_Tibial,
+#   Bladder, Brain_Amygdala, Brain_CerebellarHemisphere, Brain_Cerebellum, Brain_Cortex,
+#   Brain_Hippocampus, Brain_Hypothalamus, Brain_Substantianigra, Breast_MammaryTissue,
+#   Cells_EBV_transformedlymphocytes, Colon_Sigmoid, Colon_Transverse,
+#   Esophagus_GastroesophagealJunction, Esophagus_Mucosa, Esophagus_Muscularis,
+#   Heart_AtrialAppendage, Heart_LeftVentricle, Kidney_Cortex, Liver, Lung,
+#   MinorSalivaryGland, Muscle_Skeletal, Nerve_Tibial, Ovary, Pancreas, Pituitary,
+#   Prostate, SmallIntestine_TerminalIleum, Spleen, Stomach, Testis, Thyroid,
+#   Uterus, Vagina, WholeBlood
+#
+# hg38/GRCh38 ADDITIONAL:
+#   Adipose_Visceral_Omentum, Brain_Anteriorcingulatecortex_BA24, Brain_Caudate_basalganglia,
+#   Brain_FrontalCortex_BA9, Brain_Nucleusaccumbens_basalganglia, Brain_Putamen_basalganglia,
+#   Brain_Spinalcord_cervicalc_1, Cells_Culturedfibroblasts, Skin_NotSunExposed_Suprapubic,
+#   Skin_SunExposed_Lowerleg
+#
+# hg19/GRCh37 ADDITIONAL (note trailing underscores on some):
+#   Adipose_Visceral_Omentum_, Brain_Anteriorcingulatecortex_BA24_, Brain_Caudate_basalganglia_,
+#   Brain_FrontalCortex_BA9_, Brain_Nucleusaccumbens_basalganglia_, Brain_Putamen_basalganglia_,
+#   Brain_Spinalcord_cervicalc_1_, Cells_Transformedfibroblasts, Cervix_Ectocervix,
+#   Cervix_Endocervix, FallopianTube, Skin_NotSunExposed_Suprapubic_, Skin_SunExposed_Lowerleg_
+
+# Common tissues available in both assemblies
+declare -a PEXT_TISSUES_COMMON=(
+    "Adipose_Subcutaneous"
+    "AdrenalGland"
+    "Artery_Aorta"
+    "Artery_Coronary"
+    "Artery_Tibial"
+    "Bladder"
+    "Brain_Amygdala"
+    "Brain_CerebellarHemisphere"
+    "Brain_Cerebellum"
+    "Brain_Cortex"
+    "Brain_Hippocampus"
+    "Brain_Hypothalamus"
+    "Brain_Substantianigra"
+    "Breast_MammaryTissue"
+    "Cells_EBV_transformedlymphocytes"
+    "Colon_Sigmoid"
+    "Colon_Transverse"
+    "Esophagus_GastroesophagealJunction"
+    "Esophagus_Mucosa"
+    "Esophagus_Muscularis"
+    "Heart_AtrialAppendage"
+    "Heart_LeftVentricle"
+    "Kidney_Cortex"
+    "Liver"
+    "Lung"
+    "MinorSalivaryGland"
+    "Muscle_Skeletal"
+    "Nerve_Tibial"
+    "Ovary"
+    "Pancreas"
+    "Pituitary"
+    "Prostate"
+    "SmallIntestine_TerminalIleum"
+    "Spleen"
+    "Stomach"
+    "Testis"
+    "Thyroid"
+    "Uterus"
+    "Vagina"
+    "WholeBlood"
+)
+
+# hg38 (GRCh38) specific tissue names (in addition to common)
+declare -a PEXT_TISSUES_HG38_EXTRA=(
+    "Adipose_Visceral_Omentum"
+    "Brain_Anteriorcingulatecortex_BA24"
+    "Brain_Caudate_basalganglia"
+    "Brain_FrontalCortex_BA9"
+    "Brain_Nucleusaccumbens_basalganglia"
+    "Brain_Putamen_basalganglia"
+    "Brain_Spinalcord_cervicalc_1"
+    "Cells_Culturedfibroblasts"
+    "Skin_NotSunExposed_Suprapubic"
+    "Skin_SunExposed_Lowerleg"
+)
+
+# hg19 (GRCh37) specific tissue names (in addition to common, note trailing underscores)
+declare -a PEXT_TISSUES_HG19_EXTRA=(
+    "Adipose_Visceral_Omentum_"
+    "Brain_Anteriorcingulatecortex_BA24_"
+    "Brain_Caudate_basalganglia_"
+    "Brain_FrontalCortex_BA9_"
+    "Brain_Nucleusaccumbens_basalganglia_"
+    "Brain_Putamen_basalganglia_"
+    "Brain_Spinalcord_cervicalc_1_"
+    "Cells_Transformedfibroblasts"
+    "Cervix_Ectocervix"
+    "Cervix_Endocervix"
+    "FallopianTube"
+    "Skin_NotSunExposed_Suprapubic_"
+    "Skin_SunExposed_Lowerleg_"
+)
+
+# Mean pext file names differ between assemblies
+PEXT_MEAN_FILE_HG38="exp_prop_mean.bw"
+PEXT_MEAN_FILE_HG19="mean_proportion.bw"
+
+# UCSC base URL for pext downloads
+PEXT_BASE_URL_HG38="https://hgdownload.soe.ucsc.edu/gbdb/hg38/gnomAD/pext"
+PEXT_BASE_URL_HG19="https://hgdownload.soe.ucsc.edu/gbdb/hg19/gnomAD/pext"
+
+
+function get_pext_mean_filename() {
+    # Returns the mean pext filename for the given assembly
+    local assembly="$1"
+    if [[ "$assembly" == "hg38" ]] || [[ "$assembly" == "GRCh38" ]]; then
+        echo "$PEXT_MEAN_FILE_HG38"
+    else
+        echo "$PEXT_MEAN_FILE_HG19"
+    fi
+}
+
+
+function get_pext_base_url() {
+    # Returns the UCSC base URL for pext downloads for the given assembly
+    local assembly="$1"
+    if [[ "$assembly" == "hg38" ]] || [[ "$assembly" == "GRCh38" ]]; then
+        echo "$PEXT_BASE_URL_HG38"
+    else
+        echo "$PEXT_BASE_URL_HG19"
+    fi
+}
+
+
+function get_valid_pext_tissues() {
+    # Returns all valid tissue names for the given assembly (one per line)
+    local assembly="$1"
+    
+    # Print common tissues
+    printf '%s\n' "${PEXT_TISSUES_COMMON[@]}"
+    
+    # Print assembly-specific tissues
+    if [[ "$assembly" == "hg38" ]] || [[ "$assembly" == "GRCh38" ]]; then
+        printf '%s\n' "${PEXT_TISSUES_HG38_EXTRA[@]}"
+    else
+        printf '%s\n' "${PEXT_TISSUES_HG19_EXTRA[@]}"
+    fi
+}
+
+
+function validate_pext_tissues() {
+    # Validates comma-delimited tissue names against valid tissues for assembly
+    # Input: $1 = comma-delimited tissue names, $2 = assembly (hg19/hg38/GRCh37/GRCh38)
+    # Output: 0 if all valid, 1 if any invalid
+    # Prints invalid tissue names to stderr
+    local tissue_string="$1"
+    local assembly="$2"
+    local has_error=0
+    
+    # Handle empty input
+    if [[ -z "$tissue_string" ]] || [[ "$tissue_string" == "null" ]]; then
+        return 0
+    fi
+    
+    # Get valid tissues for this assembly
+    local -a valid_tissues
+    mapfile -t valid_tissues < <(get_valid_pext_tissues "$assembly")
+    
+    # Parse and validate each tissue
+    IFS=',' read -ra tissues <<< "$tissue_string"
+    for tissue in "${tissues[@]}"; do
+        tissue=$(echo "$tissue" | xargs)  # trim whitespace
+        [[ -z "$tissue" ]] && continue
+        
+        if [[ ! " ${valid_tissues[*]} " =~ " ${tissue} " ]]; then
+            log "ERROR: Invalid pext tissue name for ${assembly}: '$tissue'"
+            has_error=1
+        fi
+    done
+    
+    if [[ $has_error -eq 1 ]]; then
+        log "Valid tissue names for ${assembly} are:"
+        log "  Common: ${PEXT_TISSUES_COMMON[*]}"
+        if [[ "$assembly" == "hg38" ]] || [[ "$assembly" == "GRCh38" ]]; then
+            log "  hg38-specific: ${PEXT_TISSUES_HG38_EXTRA[*]}"
+        else
+            log "  hg19-specific: ${PEXT_TISSUES_HG19_EXTRA[*]}"
+        fi
+    fi
+    
+    return $has_error
+}
+
+
+function get_pext_tissues_array() {
+    # Parses comma-delimited tissue names and returns as array (one per line)
+    # Input: comma-delimited tissue names from config
+    local tissue_string="$1"
+    
+    if [[ -z "$tissue_string" ]] || [[ "$tissue_string" == "null" ]]; then
+        return 0
+    fi
+    
+    IFS=',' read -ra tissues <<< "$tissue_string"
+    for tissue in "${tissues[@]}"; do
+        tissue=$(echo "$tissue" | xargs)  # trim whitespace
+        [[ -n "$tissue" ]] && echo "$tissue"
+    done
+}
+
+
 if [[ "${#BASH_SOURCE[@]}" -eq 1 ]]; then
     "$@"
 fi

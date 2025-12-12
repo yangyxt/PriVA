@@ -2906,6 +2906,7 @@ def sort_and_rank_variants(df: pd.DataFrame,
                            ped_df: pd.DataFrame, 
                            fam_name: str, 
                            gene_to_am_score_map: dict, 
+                           pext_tissues: str = "",
                            relevant_gene_list: str = None,
                            dispensable_gene_list: str = os.path.join(data_dir, "dispensable_genes", "dispensable_gene_list.txt")) -> pd.DataFrame:
     """
@@ -2953,6 +2954,34 @@ def sort_and_rank_variants(df: pd.DataFrame,
     
     lof = df["ACMG_quant_score"] > 0.89
     df.loc[lof & proband_het, "sort_index"] = df.loc[lof & proband_het, "sort_index"] * df.loc[lof & proband_het, "haplo_insuf_index"]
+    
+    # Apply pext-based expression modulation if pext columns are available
+    # Low pext = variant in low-expression region = deprioritize for LoF interpretation
+    # Use the first tissue-specific pext column if provided, otherwise use PEXT_MEAN
+    pext_col_to_use = None
+    if pext_tissues:
+        pext_tissue_list = [t.strip() for t in pext_tissues.split(",") if t.strip()]
+        if pext_tissue_list:
+            # Try the first tissue-specific column
+            first_tissue_col = f"PEXT_{pext_tissue_list[0].replace('-', '_')}"
+            if first_tissue_col in df.columns:
+                pext_col_to_use = first_tissue_col
+                logger.info(f"Using tissue-specific pext column for sorting: {first_tissue_col}")
+    
+    # Fallback to PEXT_MEAN if no tissue-specific column found
+    if pext_col_to_use is None and "PEXT_MEAN" in df.columns:
+        pext_col_to_use = "PEXT_MEAN"
+        logger.info("Using PEXT_MEAN column for expression-aware sorting")
+    
+    if pext_col_to_use is not None:
+        # pext ranges from 0 to 1; we use it as a multiplier
+        # Low pext (< 0.1) gets penalty, high pext (> 0.5) gets boost
+        # Formula: pext_index = 0.8 + 0.4 * pext (range: 0.8 to 1.2)
+        df["pext_sort_index"] = 0.8 + 0.4 * df[pext_col_to_use].fillna(0.5)
+        # Apply pext modulation only to LoF variants (where expression matters most)
+        df.loc[lof, "sort_index"] = df.loc[lof, "sort_index"] * df.loc[lof, "pext_sort_index"]
+        logger.info(f"Applied pext-based sort modulation using {pext_col_to_use}")
+    
     # Group by variant coordinates to get max score per variant
     variant_groups = df.groupby(['chrom', 'pos', 'ref', 'alt'])
     max_scores = variant_groups['sort_index'].transform('max')
@@ -3316,8 +3345,9 @@ def ACMG_criteria_assign(anno_table: str,
                                      ped_df, 
                                      fam_name, 
                                      gene_to_am_score_map, 
-                                     relevant_gene_list,
-                                     dispensable_gene_list)
+                                     pext_tissues=pext_tissues,
+                                     relevant_gene_list=relevant_gene_list,
+                                     dispensable_gene_list=dispensable_gene_list)
     # Save the annotated table to replace the input anno_table
     anno_df.to_csv(anno_table, sep="\t", index=False)
     

@@ -712,7 +712,8 @@ function anno_VEP_data() {
                               utr_annotator_file loeuf_prescore alphamissense_prescore
                               spliceai_snv_prescore spliceai_indel_prescore splicevault_prescore primateai_prescore 
                               loftee_repo human_ancestor_fasta loftee_conservation_file gerp_bigwig 
-                              conservation_file)
+                              conservation_file
+                              pext_enabled pext_mean_bw pext_tissue_bw_dir pext_tissues)
         for key in "${config_keys[@]}"; do
             # Need to strip the double quotes enclosing the string value
             config_args[$key]="$(read_yaml ${config_file} ${key})"
@@ -744,6 +745,11 @@ function anno_VEP_data() {
     local loftee_conservation_file="${loftee_conservation_file:-${config_args[loftee_conservation_file]}}"
     local gerp_bigwig="${gerp_bigwig:-${config_args[gerp_bigwig]}}"
 
+    # pext (proportion expressed across transcripts) configuration
+    local pext_enabled="${pext_enabled:-${config_args[pext_enabled]:-false}}"
+    local pext_mean_bw="${pext_mean_bw:-${config_args[pext_mean_bw]}}"
+    local pext_tissue_bw_dir="${pext_tissue_bw_dir:-${config_args[pext_tissue_bw_dir]}}"
+    local pext_tissues="${pext_tissues:-${config_args[pext_tissues]}}"
 
     # Validate inputs
     local has_error=0
@@ -787,6 +793,43 @@ function anno_VEP_data() {
         local mavedb_argument="-plugin MaveDB,file=${mavedb_file},cols=urn:score:nt:pro:se:sd:df:epsilon:vtype:high_conf:pvalue:ci95_lower:ci95_upper"
     fi
 
+    # Build pext custom annotation arguments (VEP --custom bigwig)
+    # pext = proportion expressed across transcripts from gnomAD (GTEx expression data)
+    local pext_arguments=""
+    if [[ "$pext_enabled" == "true" ]]; then
+        # Add mean pext annotation if file exists
+        if [[ -n "$pext_mean_bw" ]] && [[ -f "$pext_mean_bw" ]]; then
+            pext_arguments="--custom ${pext_mean_bw},PEXT_MEAN,bigwig,exact,0"
+            log "Adding mean pext annotation from: $pext_mean_bw"
+        else
+            log "WARNING: pext_enabled=true but pext_mean_bw not found: $pext_mean_bw"
+        fi
+        
+        # Add tissue-specific pext annotations if configured
+        # Note: Tissue files are stored in a "tissues" subdirectory under pext_tissue_bw_dir
+        if [[ -n "$pext_tissues" ]] && [[ "$pext_tissues" != "null" ]] && [[ -d "$pext_tissue_bw_dir" ]]; then
+            local tissue_files_dir="${pext_tissue_bw_dir}/tissues"
+            if [[ -d "$tissue_files_dir" ]]; then
+                local -a tissues
+                mapfile -t tissues < <(get_pext_tissues_array "$pext_tissues")
+                
+                for tissue in "${tissues[@]}"; do
+                    local tissue_bw="${tissue_files_dir}/${tissue}.bw"
+                    if [[ -f "$tissue_bw" ]]; then
+                        # Convert tissue name to VEP-safe INFO tag (replace special chars with _)
+                        local tag="PEXT_$(echo "$tissue" | tr '-' '_')"
+                        pext_arguments="${pext_arguments} --custom ${tissue_bw},${tag},bigwig,exact,0"
+                        log "Adding tissue pext annotation: $tissue -> $tag"
+                    else
+                        log "WARNING: Tissue pext file not found: $tissue_bw"
+                    fi
+                done
+            else
+                log "WARNING: Tissue pext directory not found: $tissue_files_dir"
+            fi
+        fi
+    fi
+
     # Exit if any errors were found
     if [[ $has_error -gt 0 ]]; then
         return 1
@@ -807,7 +850,7 @@ function anno_VEP_data() {
     local output_vcf=${input_vcf/.vcf*/.${tmp_tag}.vcf}
 
     log "Running VEP annotation with the command below:"
-    log "vep -i ${input_vcf} --format vcf --verbose --vcf --species homo_sapiens --use_transcript_ref --assembly ${assembly} --cache --offline --merged --domains --hgvs --numbers --symbol --canonical --total_length --variant_class --gene_phenotype --stats_file ${input_vcf/.vcf*/.vep.stats.html} --fork ${threads} --buffer_size 10000 --fasta ${ref_genome} --dir_cache ${vep_cache_dir} --dir_plugins ${vep_plugins_dir} -plugin UTRAnnotator,file=${utr_annotator_file} -plugin LOEUF,file=${loeuf_prescore},match_by=transcript -plugin AlphaMissense,file=${alphamissense_prescore} -plugin LoF,loftee_path:${loftee_repo},human_ancestor_fa:${human_ancestor_fasta}${loftee_conservation_argument}${loftee_gerp_bw_argument} -plugin SpliceAI,snv=${spliceai_snv_prescore},indel=${spliceai_indel_prescore},cutoff=0.5 -plugin PrimateAI,${primateai_prescore} -plugin SpliceVault,file=${splicevault_prescore} -plugin Conservation,${conservation_file},MAX -plugin NMD ${mavedb_argument} --force_overwrite -o ${output_vcf}"
+    log "vep -i ${input_vcf} --format vcf --verbose --vcf --species homo_sapiens --use_transcript_ref --assembly ${assembly} --cache --offline --merged --domains --hgvs --numbers --symbol --canonical --total_length --variant_class --gene_phenotype --stats_file ${input_vcf/.vcf*/.vep.stats.html} --fork ${threads} --buffer_size 10000 --fasta ${ref_genome} --dir_cache ${vep_cache_dir} --dir_plugins ${vep_plugins_dir} -plugin UTRAnnotator,file=${utr_annotator_file} -plugin LOEUF,file=${loeuf_prescore},match_by=transcript -plugin AlphaMissense,file=${alphamissense_prescore} -plugin LoF,loftee_path:${loftee_repo},human_ancestor_fa:${human_ancestor_fasta}${loftee_conservation_argument}${loftee_gerp_bw_argument} -plugin SpliceAI,snv=${spliceai_snv_prescore},indel=${spliceai_indel_prescore},cutoff=0.5 -plugin PrimateAI,${primateai_prescore} -plugin SpliceVault,file=${splicevault_prescore} -plugin Conservation,${conservation_file},MAX -plugin NMD ${mavedb_argument} ${pext_arguments} --force_overwrite -o ${output_vcf}"
 
     # Run VEP annotation
     vep -i ${input_vcf} \
@@ -843,6 +886,7 @@ function anno_VEP_data() {
     -plugin SpliceVault,file=${splicevault_prescore} \
     -plugin Conservation,${conservation_file},MAX \
     -plugin NMD ${mavedb_argument} \
+    ${pext_arguments} \
     --force_overwrite \
     -o ${output_vcf} && \
     bcftools sort -Oz -o ${input_vcf/.vcf*/.vcf.gz} ${output_vcf} && \

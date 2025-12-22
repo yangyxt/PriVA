@@ -3018,6 +3018,7 @@ def sort_and_rank_variants(df: pd.DataFrame,
                            ped_df: pd.DataFrame, 
                            fam_name: str, 
                            gene_to_am_score_map: dict, 
+                           gene_dosage_sensitivity: str = "",
                            pext_tissues: str = "",
                            relevant_gene_list: str = None,
                            dispensable_gene_list: str = os.path.join(data_dir, "dispensable_genes", "dispensable_gene_list.txt")) -> pd.DataFrame:
@@ -3043,10 +3044,59 @@ def sort_and_rank_variants(df: pd.DataFrame,
         logger.warning(f"No ped_table provided, skip the haplo_sufficient penalty")
         proband_het = pd.Series([False] * len(df), index=df.index)  # Use Series with matching index
 
-    # normalized_loeuf = df.loc[:, "LOEUF"].fillna(1)
-    # normalized_mean_am = (1-df.loc[:, "Gene"].map(gene_to_am_score_map)) * 2
-    # normalized_mean_am = normalized_mean_am.fillna(1)
-    haplo_sufficient = (df.loc[:, "LOEUF"] > 0.35) | (df.loc[:, "Gene"].map(gene_to_am_score_map) < 0.564)
+    # ---------------------------------------------------------------------
+    # Haploinsufficiency / haplosufficiency proxy for down-weighting single-allele
+    # LoF-like calls.
+    #
+    # ClinGen dosage sensitivity is treated as high-precision but low-sensitivity:
+    # - If ClinGen calls HI=3, we trust the gene is haploinsufficient.
+    # - Absence of HI=3 does NOT guarantee haplosufficiency, so we also consult
+    #   population constraint (LOEUF) and gene-level intolerance (mean AM).
+    #
+    # We define:
+    #   haplo_insufficient = ClinGen_HI3 OR (LOEUF <= 0.35) OR (GeneMeanAM >= 0.564)
+    #   haplo_sufficient   = NOT haplo_insufficient
+    # ---------------------------------------------------------------------
+
+    # LOEUF-based signal (lower LOEUF => more LoF-intolerant)
+    loeuf_hi = (pd.to_numeric(df.loc[:, "LOEUF"], errors="coerce") <= 0.35).fillna(False)
+
+    # Gene mean AM-based signal (higher mean AM => more constrained/intolerant)
+    gene_mean_am = pd.to_numeric(df.loc[:, "Gene"].map(gene_to_am_score_map), errors="coerce")
+    am_hi = (gene_mean_am >= 0.564).fillna(False)
+
+    # ClinGen haploinsufficiency (HI score == 3) and AR signal (HI score == 30/40)
+    clingen_hi = pd.Series([False] * len(df), index=df.index)
+    clingen_ar = pd.Series([False] * len(df), index=df.index)
+    if gene_dosage_sensitivity and os.path.exists(gene_dosage_sensitivity):
+        try:
+            clingen_dosage_df = pd.read_table(gene_dosage_sensitivity, low_memory=False).dropna(
+                subset=["#Gene Symbol", "Haploinsufficiency Score"]
+            )
+            clingen_dosage_map = dict(
+                zip(clingen_dosage_df["#Gene Symbol"], clingen_dosage_df["Haploinsufficiency Score"].astype(int))
+            )
+            hi_score = df["SYMBOL"].map(clingen_dosage_map)
+            clingen_hi = hi_score.eq(3).fillna(False)
+            clingen_ar = hi_score.isin([30, 40]).fillna(False)
+        except Exception as e:
+            logger.warning(f"Failed to load ClinGen dosage sensitivity file {gene_dosage_sensitivity}: {e}")
+    else:
+        if gene_dosage_sensitivity:
+            logger.warning(f"ClinGen dosage sensitivity file not found: {gene_dosage_sensitivity}")
+
+    # User requirement:
+    # ClinGen AR flags (HI=30/40) have highest priority: regardless of LOEUF/AM/ClinGen HI,
+    # genes marked as AR should NOT be treated as haploinsufficient for the heterozygous LoF penalty.
+    haplo_insufficient = (clingen_hi | loeuf_hi | am_hi) & ~clingen_ar
+    haplo_sufficient = ~haplo_insufficient
+
+    logger.info(
+        "Haploinsufficiency signals for ranking: "
+        f"ClinGen_HI3={clingen_hi.sum()}, ClinGen_AR30/40={clingen_ar.sum()}, "
+        f"LOEUF<=0.35={loeuf_hi.sum()}, GeneMeanAM>=0.564={am_hi.sum()}, "
+        f"combined_haplo_insufficient={haplo_insufficient.sum()}"
+    )
     df["haplo_insuf_index"] = 1.0
     df.loc[haplo_sufficient, "haplo_insuf_index"] = 0.9 # This penalty coefficient will lead to a near-1 posterior prob downgrade to below 0.9 which is below the cutoff of likely pathogenic.
     
@@ -3470,6 +3520,7 @@ def ACMG_criteria_assign(anno_table: str,
                                      ped_df, 
                                      fam_name, 
                                      gene_to_am_score_map, 
+                                     gene_dosage_sensitivity=gene_dosage_sensitivity,
                                      pext_tissues=pext_tissues,
                                      relevant_gene_list=relevant_gene_list,
                                      dispensable_gene_list=dispensable_gene_list)

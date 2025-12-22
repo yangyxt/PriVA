@@ -197,8 +197,15 @@ function assign_acmg_criteria () {
     [[ ${has_error} -eq 1 ]] && \
     { log "Failed to offer the valid required files for the ACMG criteria assignment"; return 1; }
     
+    # Define acmg_py before skip check so we can include it in timestamp comparison
+    local acmg_py=${SCRIPT_DIR}/acmg_criteria_assign.py
+    
     # Test whether the function can be skipped
+    # Skip if: input_tab is newer than all data files, output exists and is newer than input,
+    # AND output is newer than acmg_criteria_assign.py (so script updates trigger re-run)
     [[ -f ${input_tab} ]] && \
+    [[ -f ${output_acmg_mat} ]] && \
+    [[ ${output_acmg_mat} -nt ${acmg_py} ]] && \
     [[ ${input_tab} -nt ${mean_am_score_table} ]] && \
     [[ ${input_tab} -nt ${clinvar_aa_dict_pkl} ]] && \
     [[ ${input_tab} -nt ${clinvar_splice_dict_pkl} ]] && \
@@ -217,8 +224,6 @@ function assign_acmg_criteria () {
     check_table_column ${input_tab} "ACMG_criteria" && \
     log "The ACMG criterias are already assigned for ${input_tab}, skip the assignment" && \
     return 0
-    
-    local acmg_py=${SCRIPT_DIR}/acmg_criteria_assign.py
     
 	[[ -n "${pp1_vcf}" ]] && check_vcf_validity ${pp1_vcf} && [[ -f ${pp1_ped} ]] && local pp1_arg="--pp1_vcf ${pp1_vcf} --pp1_ped ${pp1_ped}" || local pp1_arg=""
     [[ -f ${ped_table} ]] && local ped_arg="--ped_table ${ped_table}" || local ped_arg=""

@@ -146,6 +146,21 @@ def extract_record_info(record, var_source_exists: bool, control_ac_exists: bool
         'CSQ': record.info.get('CSQ', tuple(["",])),
     }
 
+    # pext (proportion expressed across transcripts) annotations from VEP --custom bigwig
+    # These are variant-level INFO tags (not transcript-specific) but we propagate them to
+    # each transcript-row in the downstream TSV so that ranking/filters can use them.
+    try:
+        for k in record.info.keys():
+            if k == "PEXT_MEAN" or str(k).startswith("PEXT_"):
+                v = record.info.get(k, np.nan)
+                # pysam may return scalars, tuples, or lists depending on VCF header type
+                if isinstance(v, (tuple, list)):
+                    v = v[0] if len(v) > 0 else np.nan
+                info_dict[str(k)] = v
+    except Exception:
+        # Conservative: if anything unexpected happens, just skip pext extraction
+        pass
+
     if var_source_exists:
         info_dict['VARIANT_SOURCE'] = record.info.get('VARIANT_SOURCE', "")
     

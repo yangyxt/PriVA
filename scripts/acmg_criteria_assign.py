@@ -533,6 +533,7 @@ def PVS1_criteria(df: pd.DataFrame,
                   clinvar_patho_exon_af_stat: str,
                   interpro_entry_map_pkl: str,
                   gene_to_am_score_map: dict,
+                  gene_dosage_sensitivity: str = None,
                   intolerant_domains: set = [],
                   tranx_exon_domain_map_pkl: str = None,
                   proband_gt_col: str = None,
@@ -551,20 +552,40 @@ def PVS1_criteria(df: pd.DataFrame,
     logger.info(f"{clinvar_pathogenic.sum()} variants are having ClinVar pathogenic variants")
     df["Gene_avg_AM_score"] = df['Gene'].map(gene_to_am_score_map)
 
-    # Decide which variants are in genes that are intolerant to LoF variants
-    if proband_gt_col:
-        heterozygous = df[proband_gt_col].str.count("1") == 1
-        homozygous = df[proband_gt_col].str.count("1") == 2
-    else:
-        heterozygous = np.array([True] * len(df))
-        homozygous = np.array([False] * len(df))
+    # NOTE:
+    # PVS1 is a *variant-level* evidence category that depends on whether LoF is an established
+    # disease mechanism for the gene/disease context, not on the proband's zygosity per se.
+    # PriVA may still apply zygosity-/inheritance-aware prioritization elsewhere (e.g., PM3, BP2),
+    # but here we keep the PVS1 "gene LoF mechanism" gate consistent across genotypes.
     
     lof_intol_metric = (df["LOEUF"].fillna(2) < 0.35) | (df["Gene_avg_AM_score"].fillna(0) > 0.7)
     logger.info(f"For LOEUF < 0.35, {(df['LOEUF'].fillna(2) < 0.35).sum()} variants are located in a gene intolerant to LoF variants")
     logger.info(f"For mean AM score > 0.7, {(df['Gene_avg_AM_score'].fillna(0) > 0.7).sum()} variants are located in a gene intolerant to LoF variants")
-    lof_intolerant_het = (clinvar_pathogenic | lof_intol_metric) & heterozygous
-    lof_intolerant_hom = clinvar_pathogenic & homozygous
-    lof_intolerant = lof_intolerant_het | lof_intolerant_hom
+
+    # ClinGen dosage sensitivity (haploinsufficiency) is an additional signal for whether LoF
+    # is a known pathogenic mechanism. We use the "Haploinsufficiency Score" from ClinGen:
+    # - 3: Sufficient evidence for dosage pathogenicity (haploinsufficient; typically AD LoF)
+    # - 30/40: Gene associated with autosomal recessive phenotype (LoF often relevant when biallelic)
+    clingen_hi_score = pd.Series([np.nan] * len(df), index=df.index)
+    if gene_dosage_sensitivity and os.path.exists(gene_dosage_sensitivity):
+        try:
+            clingen_dosage_df = pd.read_table(gene_dosage_sensitivity, low_memory=False).dropna(
+                subset=["#Gene Symbol", "Haploinsufficiency Score"]
+            )
+            clingen_dosage_map = dict(
+                zip(clingen_dosage_df["#Gene Symbol"], clingen_dosage_df["Haploinsufficiency Score"].astype(int))
+            )
+            clingen_hi_score = df["SYMBOL"].map(clingen_dosage_map)
+        except Exception as e:
+            logger.warning(f"Failed to load ClinGen dosage sensitivity file {gene_dosage_sensitivity}: {e}")
+
+    clingen_hi = clingen_hi_score == 3
+    clingen_ar = clingen_hi_score.isin([30, 40])
+    logger.info(f"ClinGen dosage: {(clingen_hi.fillna(False)).sum()} variants in haploinsufficient genes (HI=3)")
+    logger.info(f"ClinGen dosage: {(clingen_ar.fillna(False)).sum()} variants in autosomal recessive genes (HI=30/40)")
+
+    # Unified "LoF mechanism plausible/established" gate for PVS1 assignment
+    lof_mechanism = clinvar_pathogenic | lof_intol_metric | clingen_hi | clingen_ar
     
     # Load the necessary dict file
     clinvar_patho_exon_af_dict = pickle.load(gzip.open(clinvar_patho_exon_af_stat)) if clinvar_patho_exon_af_stat.endswith(".gz") else pickle.load(open(clinvar_patho_exon_af_stat, 'rb'))
@@ -588,7 +609,7 @@ def PVS1_criteria(df: pd.DataFrame,
                            df['Consequence'].str.contains('frameshift').fillna(False)) & \
                            np.logical_not(df['NMD'].fillna(".").str.contains("escaping"))
     logger.info(f"{non_fs_nmd_variants.sum()} variants are frameshift/nonsense that predicted to cause NMD")
-    pvs1_criteria[non_fs_nmd_variants & lof_intolerant] = 4
+    pvs1_criteria[non_fs_nmd_variants & lof_mechanism] = 4
 
     # Deal with frameshift/nonsense variants that predicted to escape NMD
     non_fs_nmd_esp_variants = (df['Consequence'].str.contains("stop_gained").fillna(False) | df['Consequence'].str.contains('frameshift').fillna(False)) & \
@@ -598,19 +619,19 @@ def PVS1_criteria(df: pd.DataFrame,
     # Check whether non-NMD escaping frameshift/nonsense variants spans functional domains
     non_fs_nmd_esp_intol_domain_vars = non_fs_nmd_esp_variants & intolerant_domains
     logger.info(f"{non_fs_nmd_esp_intol_domain_vars.sum()} variants are frameshift/nonsense that predicted to escape NMD and spans functional domains")
-    pvs1_criteria[non_fs_nmd_esp_intol_domain_vars & lof_intolerant & (pvs1_criteria < 3)] = 3
+    pvs1_criteria[non_fs_nmd_esp_intol_domain_vars & lof_mechanism & (pvs1_criteria < 3)] = 3
 
     truncate_frac = truncate_fraction(df)
-    pvs1_criteria[non_fs_nmd_esp_variants & lof_intolerant & ~intolerant_domains & exon_rare_patho_afs & (truncate_frac >= 0.1) & (pvs1_criteria < 3)] = 3
-    pvs1_criteria[non_fs_nmd_esp_variants & lof_intolerant & ~intolerant_domains & exon_rare_patho_afs & (truncate_frac < 0.1) & (pvs1_criteria < 2)] = 2
+    pvs1_criteria[non_fs_nmd_esp_variants & lof_mechanism & ~intolerant_domains & exon_rare_patho_afs & (truncate_frac >= 0.1) & (pvs1_criteria < 3)] = 3
+    pvs1_criteria[non_fs_nmd_esp_variants & lof_mechanism & ~intolerant_domains & exon_rare_patho_afs & (truncate_frac < 0.1) & (pvs1_criteria < 2)] = 2
 
     # Deal with inframe_deletion variants
     inframe_dels = df['Consequence'].str.contains("inframe_deletion")
     large_indels = (df["ref"].str.len() > 50) | (df["alt"].str.len() > 50) | df['EXON'].fillna("").str.match(r'^\d+-\d+/\d+$')
 
     pvs1_criteria[inframe_dels & intolerant_domains & large_indels] = 3
-    pvs1_criteria[inframe_dels & lof_intolerant & ~intolerant_domains & exon_rare_patho_afs & large_indels & (truncate_frac >= 0.1) & (pvs1_criteria < 3)] = 3
-    pvs1_criteria[inframe_dels & lof_intolerant & ~intolerant_domains & exon_rare_patho_afs & large_indels & (truncate_frac < 0.1) & (pvs1_criteria < 2)] = 2
+    pvs1_criteria[inframe_dels & lof_mechanism & ~intolerant_domains & exon_rare_patho_afs & large_indels & (truncate_frac >= 0.1) & (pvs1_criteria < 3)] = 3
+    pvs1_criteria[inframe_dels & lof_mechanism & ~intolerant_domains & exon_rare_patho_afs & large_indels & (truncate_frac < 0.1) & (pvs1_criteria < 2)] = 2
 
     # Now we start to deal with splicing variants
     # Splicing frameshift variants that do NOT escape NMD -> PVS1 (Very Strong)
@@ -620,42 +641,42 @@ def PVS1_criteria(df: pd.DataFrame,
     
     # Splicing frameshift with NMD (not last exon) -> PVS1=4
     splicing_fs_nmd = splicing_frameshift & ~splicing_last_exon_only
-    pvs1_criteria[splicing_fs_nmd & lof_intolerant & (pvs1_criteria < 4)] = 4
+    pvs1_criteria[splicing_fs_nmd & lof_mechanism & (pvs1_criteria < 4)] = 4
     
     # Splicing frameshift escaping NMD (last exon only) -> reduced strength, same as regular NMD-escaping variants
     splicing_fs_nmd_escape = splicing_frameshift & splicing_last_exon_only
     # PVS1_Strong if spans intolerant domain
-    pvs1_criteria[splicing_fs_nmd_escape & df['splicing_span_intol_domain'].fillna(False) & lof_intolerant & (pvs1_criteria < 3)] = 3
+    pvs1_criteria[splicing_fs_nmd_escape & df['splicing_span_intol_domain'].fillna(False) & lof_mechanism & (pvs1_criteria < 3)] = 3
     # PVS1_Strong if truncates >= 10% protein
-    pvs1_criteria[splicing_fs_nmd_escape & ~df['splicing_span_intol_domain'].fillna(False) & df['splicing_ten_percent_protein'].fillna(False) & lof_intolerant & exon_rare_patho_afs & (pvs1_criteria < 3)] = 3
+    pvs1_criteria[splicing_fs_nmd_escape & ~df['splicing_span_intol_domain'].fillna(False) & df['splicing_ten_percent_protein'].fillna(False) & lof_mechanism & exon_rare_patho_afs & (pvs1_criteria < 3)] = 3
     # PVS1_Moderate if truncates < 10% protein
-    pvs1_criteria[splicing_fs_nmd_escape & ~df['splicing_span_intol_domain'].fillna(False) & ~df['splicing_ten_percent_protein'].fillna(False) & lof_intolerant & exon_rare_patho_afs & (pvs1_criteria < 2)] = 2
+    pvs1_criteria[splicing_fs_nmd_escape & ~df['splicing_span_intol_domain'].fillna(False) & ~df['splicing_ten_percent_protein'].fillna(False) & lof_mechanism & exon_rare_patho_afs & (pvs1_criteria < 2)] = 2
 
     # Splicing-induced inframe del variants (not frameshift)
     splicing_inframe_intol_domains = (df['splicing_lof'] | df['splicing_len_changing']) & \
                                       ~splicing_frameshift & ~splicing_last_exon_only & \
                                       df['splicing_span_intol_domain']
-    pvs1_criteria[splicing_inframe_intol_domains & lof_intolerant & (pvs1_criteria < 3)] = 3
+    pvs1_criteria[splicing_inframe_intol_domains & lof_mechanism & (pvs1_criteria < 3)] = 3
     pvs1_criteria[(df['splicing_lof'] | df['splicing_len_changing']) & \
                   ~splicing_frameshift & \
                   ~df['splicing_span_intol_domain'].fillna(False) & \
                   exon_rare_patho_afs & \
                   df['splicing_ten_percent_protein'] & \
-                  lof_intolerant & \
+                  lof_mechanism & \
                   (pvs1_criteria < 3)] = 3
     pvs1_criteria[(df['splicing_lof'] | df['splicing_len_changing']) & \
                   ~splicing_frameshift & \
                   ~df['splicing_span_intol_domain'].fillna(False) & \
                   exon_rare_patho_afs & \
                   ~df['splicing_ten_percent_protein'] & \
-                  lof_intolerant & \
+                  lof_mechanism & \
                   (pvs1_criteria < 2)] = 2
 
     # Thanks to UTRAnnotator, we also implement the PVS1 for frameshift 5UTR variants
     five_utr_frameshift = df['5UTR_frameshift']  #5UTR frameshift bound to NMDs
     five_utr_inframe_intol_domains = df['5UTR_len_changing'] & df['5UTR_span_intol_domain'] & ~five_utr_frameshift
-    pvs1_criteria[five_utr_inframe_intol_domains & lof_intolerant & (pvs1_criteria < 3)] = 3
-    pvs1_criteria[five_utr_frameshift & lof_intolerant & (pvs1_criteria < 4)] = 4
+    pvs1_criteria[five_utr_inframe_intol_domains & lof_mechanism & (pvs1_criteria < 3)] = 3
+    pvs1_criteria[five_utr_frameshift & lof_mechanism & (pvs1_criteria < 4)] = 4
 
     # Deal with start_lost variants using CDS-based alternative start codon detection
     # Per ClinGen SVI guidelines (PMC6185798), we check for downstream in-frame ATG codons
@@ -666,7 +687,7 @@ def PVS1_criteria(df: pd.DataFrame,
             df, 
             cds_fasta_path, 
             intolerant_domains,
-            lof_intolerant  # Pass gene LoF intolerance status for proper PVS1 strength
+            lof_mechanism  # Pass gene LoF mechanism status for proper PVS1 strength
         )
         # Only update where start_lost PVS1 is higher than current PVS1
         start_lost_mask = df["Consequence"].str.contains("start_lost").fillna(False)
@@ -1709,44 +1730,155 @@ def PM2_criteria(df: pd.DataFrame,
     return pm2_array
 
 
-def PM4_criteria(df: pd.DataFrame, pvs1_criteria: np.ndarray, repeat_regions_file: str, loc_intol_domain: np.ndarray) -> np.ndarray:
-    # PM4: The variant is causing the protein length change within the Frame
-    # Per ClinGen SVI guidelines (PMC6185798):
-    # - PM4 applies to in-frame deletions/insertions AND stop-loss variants (protein extension)
-    # - Stop-loss variants are NOT null variants (not eligible for PVS1), they get PM4
-    # - PVS1 only applies to: nonsense, frameshift, canonical splice, start_lost (null variants)
+def PM4_BP3_criteria(df: pd.DataFrame, 
+                     pvs1_criteria: np.ndarray, 
+                     repeat_regions_file: str, 
+                     loc_intol_domain: np.ndarray) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """
+    Combined PM4 and BP3 criteria assignment for in-frame length-changing variants.
     
+    PM4 and BP3 are mutually exclusive:
+    - PM4: In-frame indels NOT in repetitive regions OR in functional/intolerant domains
+           Also applies to stop-loss variants (protein extension)
+    - BP3: In-frame indels IN repetitive regions WITHOUT functional significance
+    
+    Per ClinGen SVI guidelines (PMC6185798):
+    - PM4 applies to in-frame deletions/insertions AND stop-loss variants (protein extension)
+    - BP3 applies to in-frame deletions/insertions in repetitive regions without known function
+    - Stop-loss variants are NOT null variants (not eligible for PVS1), they get PM4
+    - PVS1 only applies to: nonsense, frameshift, canonical splice, start_lost (null variants)
+    
+    Workflow:
+    1. First identify if variants are in repetitive regions
+    2. Identify all in-frame length-changing variants
+    3. Check functional domain involvement
+    4. Assign PM4 or BP3 based on:
+       - PM4: NOT in repeat OR in functional domain (or stop-loss)
+       - BP3: IN repeat AND NOT in functional domain
+    
+    Args:
+        df: DataFrame with variant annotations
+        pvs1_criteria: Array of PVS1 strength values
+        repeat_regions_file: Path to BED file with repetitive regions
+        loc_intol_domain: Boolean array indicating variants in intolerant domains
+        
+    Returns:
+        Tuple of:
+        - pm4_array: PM4 criteria strength values (int array)
+        - bp3_array: BP3 criteria strength values (int array)
+        - in_repeat: Boolean array indicating variants in repetitive regions
+    """
+    # =========================================================================
+    # Step 1: Identify variants in repetitive regions
+    # =========================================================================
     in_repeat_vars = find_overlaps_bedtools_efficient(df, repeat_regions_file, method="all")
     in_repeat = df['variant_id'].isin(in_repeat_vars)
     
-    # Identify stop-loss variants - these get PM4 (protein extension, not null variant)
-    # Stop-loss is NOT in the PVS1 decision tree, so it should only get PM4
+    # Also check for Low_complexity domains in DOMAINS annotation
+    low_complexity_domain = df['DOMAINS'].fillna(".").str.contains('Low_complexity')
+    in_repetitive_region = in_repeat | low_complexity_domain
+    
+    logger.info(f"PM4_BP3_criteria: {in_repetitive_region.sum()} variants in repetitive regions")
+    
+    # =========================================================================
+    # Step 2: Identify all in-frame length-changing variants
+    # =========================================================================
+    # Standard in-frame indels from VEP consequences
+    inframe_indels = (df['Consequence'].fillna("").str.contains('inframe_deletion')) | \
+                     (df['Consequence'].fillna("").str.contains('inframe_insertion'))
+    
+    # Splicing-induced in-frame length changes (not frameshift)
+    splicing_inframe = df["splicing_len_changing"].fillna(False) & \
+                       ~df["splicing_frameshift"].fillna(False)
+    
+    # 5'UTR-induced in-frame length changes (not frameshift)
+    utr_inframe = df["5UTR_len_changing"].fillna(False) & \
+                  ~df["5UTR_frameshift"].fillna(False)
+    
+    # Also include vep_consq_len_changing but exclude frameshift and stop_gained
+    # BP3 applies to IN-FRAME length changes only (not LoF variants)
+    vep_inframe = df['vep_consq_len_changing'].fillna(False) & \
+                  ~df["Consequence"].fillna("").str.contains("frameshift") & \
+                  ~df["Consequence"].fillna("").str.contains("stop_gained")
+    
+    # Combined in-frame length-changing variants
+    all_inframe = inframe_indels | splicing_inframe | utr_inframe | vep_inframe
+    
+    logger.info(f"PM4_BP3_criteria: {all_inframe.sum()} total in-frame length-changing variants")
+    
+    # =========================================================================
+    # Step 3: Identify stop-loss variants (special case for PM4 only)
+    # =========================================================================
+    # Stop-loss variants get PM4 regardless of repetitive region
+    # Stop-loss causes protein extension, not LoF
     stop_loss_variants = df["Consequence"].str.contains("stop_lost").fillna(False)
-    logger.info(f"PM4_criteria: Found {stop_loss_variants.sum()} stop-loss variants (will get PM4)")
+    logger.info(f"PM4_BP3_criteria: {stop_loss_variants.sum()} stop-loss variants (always get PM4)")
     
-    # Standard in-frame indels (exclude frameshift variants that have PVS1, but NOT stop-loss)
-    # Note: stop-loss variants get PM4 regardless of other criteria
-    frameshift_variants = df["Consequence"].str.contains("frameshift").fillna(False) & (pvs1_criteria > 0) & ~stop_loss_variants
-    nmd_variants = (pvs1_criteria >= 3) & ~stop_loss_variants
+    # =========================================================================
+    # Step 4: Identify variants with functional domain involvement
+    # =========================================================================
+    # These get PM4 even if in repetitive region
+    has_functional_domain = loc_intol_domain | \
+                            df["splicing_span_intol_domain"].fillna(False) | \
+                            df["5UTR_span_intol_domain"].fillna(False) | \
+                            df['span_functional_domains'].fillna(False)
     
-    inframe_indels = ((df['Consequence'].str.contains('inframe_deletion') | df['Consequence'].str.contains('inframe_insertion')) & \
-                     (np.logical_not(in_repeat) | loc_intol_domain) & \
-                     np.logical_not(frameshift_variants) & \
-                     np.logical_not(nmd_variants))
-    splicing_inframe_indels = df["splicing_len_changing"] & \
-                              np.logical_not(df["splicing_frameshift"]) & \
-                              (np.logical_not(in_repeat) | df["splicing_span_intol_domain"])
-    utr_inframe_indels = df["5UTR_len_changing"] & \
-                         (np.logical_not(in_repeat) | df["5UTR_span_intol_domain"])
+    logger.info(f"PM4_BP3_criteria: {has_functional_domain.sum()} variants span functional domains")
     
-    # Combine: standard in-frame indels OR stop-loss variants
-    # Note: stop_loss_variants includes all variants with stop_lost consequence (protein extension)
-    pm4_criteria = inframe_indels | splicing_inframe_indels | utr_inframe_indels | stop_loss_variants
+    # =========================================================================
+    # Step 5: Exclude variants that already have strong PVS1 (frameshift/NMD)
+    # =========================================================================
+    frameshift_with_pvs1 = df["Consequence"].fillna("").str.contains("frameshift") & \
+                           (pvs1_criteria > 0) & ~stop_loss_variants
+    strong_nmd = (pvs1_criteria >= 3) & ~stop_loss_variants
+    exclude_from_pm4 = frameshift_with_pvs1 | strong_nmd
+    
+    # =========================================================================
+    # Step 6: Assign PM4 and BP3 (mutually exclusive)
+    # =========================================================================
+    # PM4 logic:
+    # - In-frame indels that are: (NOT in repeat) OR (in functional domain)
+    # - AND not excluded by PVS1
+    # - OR stop-loss variants (always get PM4)
+    pm4_inframe_eligible = all_inframe & ~exclude_from_pm4 & \
+                           (~in_repetitive_region | has_functional_domain)
+    pm4_eligible = pm4_inframe_eligible | stop_loss_variants
+    
+    # BP3 logic:
+    # - In-frame indels that are: IN repeat AND NOT in functional domain
+    bp3_eligible = all_inframe & in_repetitive_region & ~has_functional_domain
+    
+    # Ensure mutual exclusivity: PM4 takes precedence
+    # (If variant is in functional domain within repeat region, it gets PM4, not BP3)
+    bp3_eligible = bp3_eligible & ~pm4_eligible
+    
+    # =========================================================================
+    # Step 7: Create output arrays with strength levels
+    # =========================================================================
     pm4_array = np.zeros(len(df), dtype=int)
-    pm4_array[pm4_criteria & (pvs1_criteria < 2)] = 2
+    bp3_array = np.zeros(len(df), dtype=int)
     
-    logger.info(f"PM4_criteria: Total {pm4_criteria.sum()} variants assigned PM4")
-    return pm4_array, in_repeat
+    # PM4 is assigned at Moderate level (2) when PVS1 < 2
+    pm4_array[pm4_eligible & (pvs1_criteria < 2)] = 2
+    
+    # BP3 is assigned at Supporting level (1)
+    # Also exclude if PM4 was assigned (double-check mutual exclusivity)
+    bp3_array[bp3_eligible & (pm4_array == 0)] = 1
+    
+    # =========================================================================
+    # Step 8: Log summary statistics
+    # =========================================================================
+    logger.info(f"PM4_BP3_criteria: {(pm4_array > 0).sum()} variants assigned PM4")
+    logger.info(f"PM4_BP3_criteria: {(bp3_array > 0).sum()} variants assigned BP3")
+    
+    # Verify mutual exclusivity
+    both_assigned = (pm4_array > 0) & (bp3_array > 0)
+    if both_assigned.any():
+        logger.error(f"PM4_BP3_criteria: ERROR - {both_assigned.sum()} variants have both PM4 and BP3!")
+    else:
+        logger.info("PM4_BP3_criteria: Verified PM4 and BP3 are mutually exclusive")
+    
+    return pm4_array, bp3_array, in_repeat
 
 
 
@@ -2495,26 +2627,6 @@ def find_overlaps_bedtools_efficient(variants_df, regions_file, method = "any"):
     return overlapping_variants
 
 
-def BP3_criteria(df: pd.DataFrame, repeat_region_file: str, interpro_entry_map_pkl: str, pm1_criteria: np.ndarray, pm4_criteria: np.ndarray) -> pd.Series:
-    # BP3: in-frame deletion in a repetitive region without a known function
-    # BP3 applies to IN-FRAME length changes only (not LoF variants like stop_gained/frameshift)
-    # vep_consq_len_changing includes LoF (wrong for BP3), so we must exclude stop_gained too
-    inframe_del = (df['Consequence'].fillna("").str.contains('inframe_deletion')) | \
-                  (df['Consequence'].fillna("").str.contains('inframe_insertion')) | \
-                  (df['vep_consq_len_changing'] & ~df["Consequence"].str.contains("frameshift") & ~df["Consequence"].str.contains("stop_gained")) | \
-                  (df['splicing_len_changing'] & ~df['splicing_frameshift']) | \
-                  (df['5UTR_len_changing'] & ~df['5UTR_frameshift'])
-
-    # Repeat region file is a gzipped bed file, we can read it with pandas
-    in_repeat_regions = find_overlaps_bedtools_efficient(df, repeat_region_file)
-    dm_instance = DomainNormalizer()
-    interpro_entry_map_dict = pickle.load(gzip.open(interpro_entry_map_pkl)) if interpro_entry_map_pkl.endswith(".gz") else pickle.load(open(interpro_entry_map_pkl, "rb"))
-    repetitive_region = ( df['DOMAINS'].fillna(".").str.contains('Low_complexity') | df['variant_id'].isin(in_repeat_regions) )
-    repetitive_region = repetitive_region & np.logical_not(df["5UTR_span_intol_domain"]) & np.logical_not(df["splicing_span_intol_domain"]) & np.logical_not(df['span_functional_domains'])
-    bp3_criteria = inframe_del & repetitive_region
-    bp3_array = np.zeros(len(df), dtype=int)
-    bp3_array[bp3_criteria] = 1
-    return bp3_array
 
 
 def BP5_criteria(df: pd.DataFrame, 
@@ -2994,12 +3106,19 @@ def sort_and_rank_variants(df: pd.DataFrame,
         ascending=[False, True, True, True, True, False]
     )
     
-    # Add variant rank (same rank for all rows of same variant)
-    variant_rank = (df_sorted.groupby(['chrom', 'pos', 'ref', 'alt'])
-                            .ngroup()
-                            .reset_index()
-                            .set_index('index') + 1)
-    df_sorted['variant_rank'] = variant_rank
+    # Add variant rank based on actual sorted order (not lexicographic ngroup)
+    # Use variant_id if available, otherwise create from coordinates
+    if 'variant_id' in df_sorted.columns:
+        unique_variants = df_sorted['variant_id'].drop_duplicates().reset_index(drop=True)
+        rank_dict = {v: i+1 for i, v in enumerate(unique_variants)}
+        df_sorted['variant_rank'] = df_sorted['variant_id'].map(rank_dict)
+    else:
+        # Create variant key and assign rank based on first occurrence in sorted order
+        df_sorted['_var_key'] = df_sorted['chrom'].astype(str) + ':' + df_sorted['pos'].astype(str) + ':' + df_sorted['ref'] + ':' + df_sorted['alt']
+        unique_variants = df_sorted['_var_key'].drop_duplicates().reset_index(drop=True)
+        rank_dict = {v: i+1 for i, v in enumerate(unique_variants)}
+        df_sorted['variant_rank'] = df_sorted['_var_key'].map(rank_dict)
+        df_sorted = df_sorted.drop('_var_key', axis=1)
     
     # Clean up temporary column
     df_sorted = df_sorted.drop('max_variant_score', axis=1)
@@ -3148,6 +3267,7 @@ def ACMG_criteria_assign(anno_table: str,
                                                         clinvar_patho_exon_af_stat,
                                                         interpro_entry_map_pkl,
                                                         gene_to_am_score_map,
+                                                        gene_dosage_sensitivity=gene_dosage_sensitivity,
                                                         intolerant_domains=intolerant_domains,
                                                         tranx_exon_domain_map_pkl=tranx_exon_domain_map_pkl,
                                                         proband_gt_col=proband,
@@ -3188,11 +3308,15 @@ def ACMG_criteria_assign(anno_table: str,
     # pm1_criteria = pm1_criteria & ~ps1_criteria  # PS1 is already a strength to indicate the intolerance to the AA changes incurred by the variant
     logger.info(f"PM1 criteria applied, {(pm1_criteria > 0).sum()} variants are having the PM1 criteria")
     gc.collect()
-    # Apply PM4 criteria, causing the protein length change
-    pm4_criteria, in_repeat_vars = PM4_criteria(anno_df, pvs1_criteria, repeat_region_file, loc_intol_domain)
+    
+    # Apply PM4 and BP3 criteria together (mutually exclusive)
+    # PM4: in-frame indels NOT in repetitive region OR in functional domain (or stop-loss)
+    # BP3: in-frame indels IN repetitive region WITHOUT functional domain
+    pm4_criteria, bp3_criteria, in_repeat_vars = PM4_BP3_criteria(anno_df, pvs1_criteria, repeat_region_file, loc_intol_domain)
     anno_df["variant_in_repeat_region"] = in_repeat_vars
     gc.collect()
     logger.info(f"PM4 criteria applied, {(pm4_criteria > 0).sum()} variants are having the PM4 criteria")
+    logger.info(f"BP3 criteria applied, {(bp3_criteria > 0).sum()} variants are having the BP3 criteria")
 
     # Apply PP2 criteria, missense variant in a gene/domain that not only intolerant to truncating variants but also intolerant to missense variants
     clinvar_gene_stat = pickle.load(gzip.open(clinvar_gene_stat_pkl, "rb")) if clinvar_gene_stat_pkl.endswith(".gz") else pickle.load(open(clinvar_gene_stat_pkl, "rb"))
@@ -3265,10 +3389,10 @@ def ACMG_criteria_assign(anno_table: str,
         logger.warning(f"No ped_table provided, skip the BS4 criteria")
         bs4_criteria = np.array([0] * len(anno_df))
     logger.info(f"BS4 criteria applied, {(bs4_criteria > 0).sum()} variants are having the BS4 criteria")
-    # Apply BP3, in-frame indels in a repetitive region without a known function
-    bp3_criteria = BP3_criteria(anno_df, repeat_region_file, interpro_entry_map_pkl, pm1_criteria, pm4_criteria)
-    logger.info(f"BP3 criteria applied, {(bp3_criteria > 0).sum()} variants are having the BP3 criteria")
-    gc.collect()
+    
+    # NOTE: BP3 is now calculated together with PM4 in PM4_BP3_criteria (they are mutually exclusive)
+    # BP3 was already assigned above when PM4_BP3_criteria was called
+    
     # Apply BP5, variant found in a sample with known alternative molecular basis for disease
     if alt_disease_vcf:
         bp5_criteria = BP5_criteria(anno_df, alt_disease_vcf, recessive, dominant, non_monogenic, non_mendelian, incomplete_penetrance, threads)

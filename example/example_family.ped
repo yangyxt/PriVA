@@ -1,0 +1,4 @@
+#FamilyID	IndividualID	PaternalID	MaternalID	Sex	Phenotype	Sample_Batch	Probe	Ped_File	Seq_type
+142_samples_batch-Youcef_new	PID21-238A	PID21-240	PID21-239	2	2	142_samples_batch	iGT359V1	/paedyl01/disk1/yangyxt/wesplus/142_samples_batch/pedigree/142_samples_batch.ped	wesplus
+142_samples_batch-Youcef_new	PID21-239	0	0	2	1	142_samples_batch	iGT359V1	/paedyl01/disk1/yangyxt/wesplus/142_samples_batch/pedigree/142_samples_batch.ped	wesplus
+142_samples_batch-Youcef_new	PID21-240	0	0	1	1	142_samples_batch	iGT359V1	/paedyl01/disk1/yangyxt/wesplus/142_samples_batch/pedigree/142_samples_batch.ped	wesplus

@@ -16,7 +16,7 @@ REF_GENOME = config.get("ref_genome")
 OUTPUT_DIR = config.get("output_dir", "results")
 THREADS = config.get("threads", 8) # Total threads for annotation/non-family steps (default 8)
 THREADS_PER_FAM = config.get("threads_per_fam", 1) # Threads per family job (default 1)
-BASE_DIR = config.get("base_dir", ".")
+BASE_DIR = workflow.basedir # Set the BASE_dir to the dir containing the Snakefile
 SCRIPT_DIR = os.path.join(BASE_DIR, "scripts")
 
 

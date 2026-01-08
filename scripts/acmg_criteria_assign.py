@@ -3152,23 +3152,25 @@ def sort_and_rank_variants(df: pd.DataFrame,
     # Sort the DataFrame by max scores (descending) while maintaining variant grouping
     df['max_variant_score'] = max_scores
     df_sorted = df.sort_values(
-        by=['max_variant_score', 'chrom', 'pos', 'ref', 'alt', 'ACMG_quant_score'],
-        ascending=[False, True, True, True, True, False]
+        by=['max_variant_score', 'ACMG_quant_score', 'chrom', 'pos', 'ref', 'alt'],
+        ascending=[False, False, True, True, True, True]
     )
     
     # Add variant rank based on actual sorted order (not lexicographic ngroup)
-    # Use variant_id if available, otherwise create from coordinates
+    # Use factorize() which assigns codes based on order of first appearance (0-indexed)
+    # Adding 1 gives us 1-indexed ranks where rank 1 = first (highest-scored) variant
     if 'variant_id' in df_sorted.columns:
-        unique_variants = df_sorted['variant_id'].drop_duplicates().reset_index(drop=True)
-        rank_dict = {v: i+1 for i, v in enumerate(unique_variants)}
-        df_sorted['variant_rank'] = df_sorted['variant_id'].map(rank_dict)
+        # factorize returns (codes, uniques) where codes are assigned in order of first appearance
+        codes, _ = pd.factorize(df_sorted['variant_id'], sort=False)
+        df_sorted['variant_rank'] = codes + 1  # Convert 0-indexed to 1-indexed
     else:
-        # Create variant key and assign rank based on first occurrence in sorted order
-        df_sorted['_var_key'] = df_sorted['chrom'].astype(str) + ':' + df_sorted['pos'].astype(str) + ':' + df_sorted['ref'] + ':' + df_sorted['alt']
-        unique_variants = df_sorted['_var_key'].drop_duplicates().reset_index(drop=True)
-        rank_dict = {v: i+1 for i, v in enumerate(unique_variants)}
-        df_sorted['variant_rank'] = df_sorted['_var_key'].map(rank_dict)
-        df_sorted = df_sorted.drop('_var_key', axis=1)
+        # Create variant key for ranking
+        var_key = (df_sorted['chrom'].astype(str) + ':' + 
+                   df_sorted['pos'].astype(str) + ':' + 
+                   df_sorted['ref'].astype(str) + ':' + 
+                   df_sorted['alt'].astype(str))
+        codes, _ = pd.factorize(var_key, sort=False)
+        df_sorted['variant_rank'] = codes + 1  # Convert 0-indexed to 1-indexed
     
     # Clean up temporary column
     df_sorted = df_sorted.drop('max_variant_score', axis=1)

@@ -22,6 +22,11 @@ INTERNAL_PROCESSING_COLS = ["Chrom", "Pos", "Ref", "Alt", "FeatureID", "PHRED"]
 SELF_SCRIPT_PATH = Path(__file__).parent.parent
 CONTIG_MAP_PATH = os.path.join(SELF_SCRIPT_PATH, "data", "liftover", "GRC_to_ucsc.contig.map.txt")
 
+# CADD TSVs (and some other annotation tables) commonly use "-" as a missing-value placeholder.
+# Polars' CSV reader is strict about dtype parsing; without listing "-" as a null value,
+# a single "-" in a numeric column can raise an exception and abort the whole read.
+DEFAULT_NULL_VALUES = ("NA", "na", "NaN", "nan", "", ".", ",", ";", "NAN", "-")
+
 
 
 def table_to_dict(file_path, separator=' '):
@@ -53,13 +58,21 @@ def table_to_dict(file_path, separator=' '):
 def read_and_standardize_chrom(file_path, 
                                separator='\t', 
                                has_header=True, 
-                               comment_prefix='#', 
+                               comment_prefix=None, 
                                is_pos_file=False, 
-                               null_values=["NA", "na", "NaN", "nan", "", ".", ",", ";", "NAN"]):
+                               null_values=DEFAULT_NULL_VALUES):
     """Reads a CSV/TSV and standardizes the chromosome column name."""
     if is_pos_file: # Position file from VCF has no header and fixed columns
         force_schema = {"column_1": pl.Utf8}
-        df = pl.read_csv(file_path, separator=separator, has_header=False, comment_prefix=comment_prefix, null_values=null_values, infer_schema_length=100000, schema_overrides=force_schema)
+        df = pl.read_csv(
+            file_path,
+            separator=separator,
+            has_header=False,
+            comment_prefix=comment_prefix,
+            null_values=list(null_values),
+            infer_schema_length=100000,
+            schema_overrides=force_schema,
+        )
         df = df.rename({
             "column_1": "Chrom",
             "column_2": "Pos",
@@ -70,12 +83,14 @@ def read_and_standardize_chrom(file_path,
         return df.select(["Chrom", "Pos", "Ref", "Alt"])
 
     force_schema = {"#Chrom": pl.Utf8, "Chrom": pl.Utf8, "column_1": pl.Utf8}
-    df = pl.read_csv(file_path, 
-                     separator=separator, 
-                     has_header=has_header,
-                     null_values=null_values, 
-                     infer_schema_length=100000, 
-                     schema_overrides=force_schema)
+    df = pl.read_csv(
+        file_path,
+        separator=separator,
+        has_header=has_header,
+        null_values=list(null_values),
+        infer_schema_length=100000,
+        schema_overrides=force_schema,
+    )
     if "#Chrom" in df.columns:
         df = df.rename({"#Chrom": "Chrom"})
 
@@ -132,7 +147,7 @@ def select_and_rename_for_output(df: pl.DataFrame) -> pl.DataFrame:
     return df.select(final_selection)
 
 
-def match_variants(hub_file, pos_file, covered_file, uncovered_file, threads=None, null_values=["NA", "na", "NaN", "nan", "", ".", ",", ";", "NAN"]):
+def match_variants(hub_file, pos_file, covered_file, uncovered_file, threads=None, null_values=DEFAULT_NULL_VALUES):
     """Match variants in position file against hub file using Polars for efficiency"""
     # Threads argument is kept for signature compatibility, Polars handles its own threading.
     # if threads is None:
@@ -162,7 +177,7 @@ def match_variants(hub_file, pos_file, covered_file, uncovered_file, threads=Non
         ], separator="_").alias("var_key")
     )
     
-    hub_df_raw = read_and_standardize_chrom(hub_file, comment_prefix='#')
+    hub_df_raw = read_and_standardize_chrom(hub_file, comment_prefix=None)
     # Select only the necessary columns for internal processing from the hub
     try:
         hub_df = hub_df_raw.select(INTERNAL_PROCESSING_COLS)
@@ -251,7 +266,7 @@ def match_variants(hub_file, pos_file, covered_file, uncovered_file, threads=Non
     return uncovered_count == 0
 
 
-def update_hub(new_file_path, hub_file_path, threads=None, null_values=["NA", "na", "NaN", "nan", "", ".", ",", ";", "NAN"]):
+def update_hub(new_file_path, hub_file_path, threads=None, null_values=DEFAULT_NULL_VALUES):
     """Update hub CADD TSV with new scores using Polars, with atomic file operations"""
     if not os.path.exists(new_file_path) or os.path.getsize(new_file_path) == 0:
         logger.info(f"New CADD file {new_file_path} is empty or doesn't exist, no update needed")
@@ -263,7 +278,7 @@ def update_hub(new_file_path, hub_file_path, threads=None, null_values=["NA", "n
     
     temp_hub_file = f"{hub_file_path}.temp.{os.getpid()}"
     
-    new_df_raw = read_and_standardize_chrom(new_file_path, comment_prefix='#')
+    new_df_raw = read_and_standardize_chrom(new_file_path, comment_prefix=None)
     try:
         new_df_internal = new_df_raw.select(INTERNAL_PROCESSING_COLS)
     except pl.ColumnNotFoundError as e:
@@ -283,7 +298,7 @@ def update_hub(new_file_path, hub_file_path, threads=None, null_values=["NA", "n
             if os.path.exists(temp_hub_file): os.remove(temp_hub_file)
         return
 
-    hub_df_raw = read_and_standardize_chrom(hub_file_path, comment_prefix='#')
+    hub_df_raw = read_and_standardize_chrom(hub_file_path, comment_prefix=None)
     try:
         hub_df_internal = hub_df_raw.select(INTERNAL_PROCESSING_COLS)
     except pl.ColumnNotFoundError as e:
@@ -316,7 +331,13 @@ def update_hub(new_file_path, hub_file_path, threads=None, null_values=["NA", "n
     
     if os.path.exists(temp_hub_file) and os.path.getsize(temp_hub_file) > 0:
         try:
-            temp_df_check = pl.read_csv(temp_hub_file, separator='\t', has_header=True, comment_prefix='#', null_values=null_values, infer_schema_length=10000)
+            temp_df_check = pl.read_csv(
+                temp_hub_file,
+                separator='\t',
+                has_header=True,
+                null_values=list(null_values),
+                infer_schema_length=10000,
+            )
             if len(temp_df_check) >= original_size : # Should be strictly greater if new_variants_to_add was not empty
                 os.rename(temp_hub_file, hub_file_path)
                 logger.info(f"Added {len(new_variants_to_add)} new variants to CADD hub {hub_file_path}. New total: {len(temp_df_check)}.")
@@ -331,7 +352,7 @@ def update_hub(new_file_path, hub_file_path, threads=None, null_values=["NA", "n
         if os.path.exists(temp_hub_file): os.remove(temp_hub_file)
 
 
-def merge_results(covered_file_path, new_file_path, output_file_path, null_values=["NA", "na", "NaN", "nan", "", ".", ",", ";", "NAN"]):
+def merge_results(covered_file_path, new_file_path, output_file_path, null_values=DEFAULT_NULL_VALUES):
     """Merge covered and new CADD results using Polars with atomic file updates"""
     covered_exists = os.path.exists(covered_file_path) and os.path.getsize(covered_file_path) > 0
     new_exists = os.path.exists(new_file_path) and os.path.getsize(new_file_path) > 0
@@ -348,7 +369,7 @@ def merge_results(covered_file_path, new_file_path, output_file_path, null_value
 
     if covered_exists:
         try:
-            covered_df_raw = read_and_standardize_chrom(covered_file_path, comment_prefix='#')
+            covered_df_raw = read_and_standardize_chrom(covered_file_path, comment_prefix=None)
             # Covered file should already be in output format with #Chrom
             # but we select to ensure order and existence of columns
             if "#Chrom" not in covered_df_raw.columns and "Chrom" in covered_df_raw.columns: # If it was stored with "Chrom"
@@ -366,7 +387,7 @@ def merge_results(covered_file_path, new_file_path, output_file_path, null_value
     
     if new_exists:
         try:
-            new_df_raw = read_and_standardize_chrom(new_file_path, comment_prefix='#')
+            new_df_raw = read_and_standardize_chrom(new_file_path, comment_prefix=None)
             if "#Chrom" not in new_df_raw.columns and "Chrom" in new_df_raw.columns: # If it was stored with "Chrom"
                  new_df_raw = new_df_raw.rename({"Chrom": "#Chrom"})
             
@@ -405,7 +426,13 @@ def merge_results(covered_file_path, new_file_path, output_file_path, null_value
     
     if os.path.exists(temp_output_file) and os.path.getsize(temp_output_file) > 0:
         try:
-            temp_df_check = pl.read_csv(temp_output_file, separator='\t', has_header=True, comment_prefix='#', null_values=null_values, infer_schema_length=10000)
+            temp_df_check = pl.read_csv(
+                temp_output_file,
+                separator='\t',
+                has_header=True,
+                null_values=list(null_values),
+                infer_schema_length=10000,
+            )
             # Check if the merged file seems reasonable (not empty if input wasn't empty)
             if not temp_df_check.is_empty() or (len_covered == 0 and len_new == 0) :
                 os.rename(temp_output_file, output_file_path)

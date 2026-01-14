@@ -2777,23 +2777,46 @@ def BP7_criteria(df: pd.DataFrame) -> pd.Series:
 
 
 def identify_fam_members(ped_df: pd.DataFrame, fam_name: str) -> pd.DataFrame:
-    fam_ped_df = ped_df[ped_df['#FamilyID'] == fam_name]
-    fam_ped_df.loc[:, "Phenotype"] = fam_ped_df["Phenotype"].astype(int)
-    # fam_members = fam_ped_df['IndividualID'].tolist()
-    father = fam_ped_df.loc[fam_ped_df["PaternalID"] != "0", "IndividualID"].tolist()
-    mother = fam_ped_df.loc[fam_ped_df["MaternalID"] != "0", "IndividualID"].tolist()
-    proband = fam_ped_df.loc[fam_ped_df["Phenotype"] == 2, "IndividualID"].tolist()[0]
+    """
+    Identify proband/parents/siblings for a given family from a PED table.
 
-    father = father[0] if father else None
-    father_pheno = fam_ped_df.loc[fam_ped_df["IndividualID"] == father, "Phenotype"].tolist()[0] if father else None
-    mother = mother[0] if mother else None
-    mother_pheno = fam_ped_df.loc[fam_ped_df["IndividualID"] == mother, "Phenotype"].tolist()[0] if mother else None
+    IMPORTANT:
+    - Father/mother must come from the *proband's* PaternalID/MaternalID fields.
+    """
+    fam_ped_df = ped_df.loc[ped_df['#FamilyID'] == fam_name, :].copy()
+    if fam_ped_df.empty:
+        raise ValueError(f"Family {fam_name} not found in pedigree table")
 
-    # Process siblings
-    exist_mems = [m for m in [father, mother, proband] if m is not None]
-    sibs = fam_ped_df.loc[~fam_ped_df["IndividualID"].isin(exist_mems), "IndividualID"].tolist()
-    sib_pheno = fam_ped_df.loc[fam_ped_df["IndividualID"].isin(sibs), "Phenotype"].tolist()
-    sib_info = dict(zip(sibs, sib_pheno))
+    # Normalize types (PEDs sometimes store these as strings)
+    fam_ped_df.loc[:, "Phenotype"] = pd.to_numeric(fam_ped_df["Phenotype"], errors="coerce").astype("Int64")
+    fam_ped_df.loc[:, "Sex"] = pd.to_numeric(fam_ped_df["Sex"], errors="coerce")
+
+    patients = fam_ped_df.loc[fam_ped_df["Phenotype"] == 2, "IndividualID"].tolist()
+    if not patients:
+        raise ValueError(f"No affected individual (Phenotype==2) found for family {fam_name}")
+    if len(patients) > 1:
+        logger.warning(f"Family {fam_name} has multiple affected individuals (Phenotype==2): {patients}. Using the first as proband.")
+    proband = patients[0]
+
+    proband_row = fam_ped_df.loc[fam_ped_df["IndividualID"] == proband, :].iloc[0]
+
+    na_values = {"0", 0, ".", "", "NA", "NaN", "nan", -9, "-9"}
+    father = proband_row.get("PaternalID", None)
+    mother = proband_row.get("MaternalID", None)
+    father = None if (pd.isna(father) or father in na_values) else str(father)
+    mother = None if (pd.isna(mother) or mother in na_values) else str(mother)
+
+    father_pheno = None
+    if father and (father in set(fam_ped_df["IndividualID"].astype(str))):
+        father_pheno = fam_ped_df.loc[fam_ped_df["IndividualID"].astype(str) == father, "Phenotype"].iloc[0]
+    mother_pheno = None
+    if mother and (mother in set(fam_ped_df["IndividualID"].astype(str))):
+        mother_pheno = fam_ped_df.loc[fam_ped_df["IndividualID"].astype(str) == mother, "Phenotype"].iloc[0]
+
+    # Process siblings: all family members excluding proband and parents (if present)
+    exist_mems = {m for m in [father, mother, proband] if m is not None}
+    sib_df = fam_ped_df.loc[~fam_ped_df["IndividualID"].astype(str).isin(exist_mems), ["IndividualID", "Phenotype"]]
+    sib_info = dict(zip(sib_df["IndividualID"].astype(str).tolist(), sib_df["Phenotype"].tolist()))
 
     return (proband, 2), (father, father_pheno), (mother, mother_pheno), sib_info
 

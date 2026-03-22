@@ -14,6 +14,8 @@ from collections import defaultdict
 from statsmodels.stats.multitest import multipletests
 import random
 
+import pysam
+
 from protein_domain_mapping import DomainNormalizer
 from stat_protein_domain_amscores import nested_defaultdict
 self_directory = os.path.dirname(os.path.abspath(__file__))
@@ -473,21 +475,384 @@ def generate_transcript_exon_domain_map(scores_dict: dict) -> Dict[str, Dict[str
     return result
 
 
+def _collect_gnomad_leaves(d, result, path):
+    """Walk scores_dict nested structure and collect domain_path -> gnomAD_distribution array."""
+    for k, v in d.items():
+        if k == 'gnomAD_distribution':
+            domain_path = ':'.join(path)
+            result[domain_path] = v
+        elif isinstance(v, dict) and 'distribution' not in k:
+            _collect_gnomad_leaves(v, result, path + [k])
+
+
+def extract_domain_metadata(vcf_path, target_domains=None):
+    """Parse VEP-annotated AlphaMissense VCF to extract per-domain metadata.
+
+    For each domain_path, collects gene_symbol, aa_start, aa_end from CSQ fields.
+    Uses the same domain hierarchy parsing as stat_protein_domain_amscores.
+
+    Args:
+        vcf_path: Path to AlphaMissense VEP-annotated VCF (.vcf.gz)
+        target_domains: Optional set of domain_paths to restrict extraction.
+
+    Returns:
+        dict: {domain_path: {'gene_symbol': str, 'aa_start': int, 'aa_end': int}}
+    """
+    vcf = pysam.VariantFile(vcf_path)
+    csq_format = str(vcf.header).split('Format: ')[-1].strip('>"').split('|')
+
+    domains_idx = csq_format.index('DOMAINS')
+    gene_idx = csq_format.index('Gene')
+    symbol_idx = csq_format.index('SYMBOL')
+    protein_pos_idx = csq_format.index('Protein_position')
+    feature_type_idx = csq_format.index('Feature_type')
+    feature_idx = csq_format.index('Feature')
+
+    domain_meta = {}
+    n_records = 0
+
+    for record in vcf:
+        n_records += 1
+        if n_records % 5_000_000 == 0:
+            logger.info(f"[DOMAIN_META] Processed {n_records:,} VCF records, "
+                        f"metadata for {len(domain_meta)} domains so far")
+
+        csq_value = record.info.get('CSQ')
+        if not csq_value:
+            continue
+
+        if isinstance(csq_value, tuple):
+            transcript_annotations = csq_value
+        else:
+            transcript_annotations = csq_value.split(',')
+
+        for csq_entry in transcript_annotations:
+            fields = csq_entry.split('|')
+
+            if fields[feature_type_idx] != 'Transcript' or not fields[feature_idx].startswith('ENST'):
+                continue
+
+            domains_str = fields[domains_idx]
+            ensg_id = fields[gene_idx]
+            symbol = fields[symbol_idx]
+            protein_pos_str = fields[protein_pos_idx]
+
+            if not domains_str or not ensg_id or not protein_pos_str:
+                continue
+
+            try:
+                # Handle VEP total_length format: "2/305" -> "2"
+                pp_clean = protein_pos_str.split('/')[0]
+                # Handle range format: "2-3" -> "2"
+                aa_pos = int(pp_clean.split('-')[0])
+            except ValueError:
+                continue
+
+            # Parse domains — same logic as stat_protein_domain_amscores._parse_domain_hierarchy
+            for domain_entry in domains_str.split('&'):
+                parts = domain_entry.split(':')
+                db_name = parts[0]
+                for i in range(1, len(parts)):
+                    hierarchy = parts[1:i+1]
+                    domain_path = ':'.join([ensg_id, db_name] + hierarchy)
+
+                    if target_domains is not None and domain_path not in target_domains:
+                        continue
+
+                    if domain_path not in domain_meta:
+                        domain_meta[domain_path] = {
+                            'gene_symbol': symbol,
+                            'aa_start': aa_pos,
+                            'aa_end': aa_pos,
+                        }
+                    else:
+                        meta = domain_meta[domain_path]
+                        if aa_pos < meta['aa_start']:
+                            meta['aa_start'] = aa_pos
+                        if aa_pos > meta['aa_end']:
+                            meta['aa_end'] = aa_pos
+
+    vcf.close()
+    logger.info(f"[DOMAIN_META] Finished: {n_records:,} records processed, "
+                f"metadata for {len(domain_meta)} domains")
+    return domain_meta
+
+
+def filter_coldspot_overlap(intolerant_domains, domain_metadata, hcseeker_spots_tsv,
+                            overlap_threshold=0.5):
+    """Remove domains with bidirectional coldspot overlap > threshold.
+
+    A domain is removed if, for any coldspot in the same gene, EITHER:
+      - overlap / coldspot_length > threshold  (domain covers most of a coldspot), OR
+      - overlap / domain_length   > threshold  (coldspot covers most of the domain).
+
+    Args:
+        intolerant_domains: set of domain_path strings
+        domain_metadata: dict from extract_domain_metadata()
+        hcseeker_spots_tsv: path to HC_spots.{assembly}.tsv
+        overlap_threshold: fraction threshold for either direction
+
+    Returns:
+        (filtered_set, excluded_set, summary_dict)
+    """
+    spots_df = pd.read_csv(hcseeker_spots_tsv, sep='\t')
+    coldspots = spots_df[spots_df['type'] == 'coldspot']
+
+    gene_coldspots = defaultdict(list)
+    for _, row in coldspots.iterrows():
+        gene_coldspots[row['gene']].append((int(row['aa_start_pos']), int(row['aa_end_pos'])))
+    logger.info(f"[FILTER1:COLDSPOT] Loaded {len(coldspots)} coldspots across {len(gene_coldspots)} genes")
+
+    excluded = set()
+    summary = {}
+    n_evaluated = 0
+
+    for domain_path in intolerant_domains:
+        meta = domain_metadata.get(domain_path)
+        if meta is None:
+            summary[domain_path] = {
+                'coldspot_max_frac_of_coldspot': 0.0,
+                'coldspot_max_frac_of_domain': 0.0,
+                'removed': False,
+            }
+            continue
+
+        gene_sym = meta['gene_symbol']
+        dom_start = meta['aa_start']
+        dom_end = meta['aa_end']
+
+        if gene_sym not in gene_coldspots:
+            summary[domain_path] = {
+                'coldspot_max_frac_of_coldspot': 0.0,
+                'coldspot_max_frac_of_domain': 0.0,
+                'removed': False,
+            }
+            continue
+
+        n_evaluated += 1
+        max_frac_of_cs = 0.0
+        max_frac_of_dom = 0.0
+        dom_len = dom_end - dom_start + 1
+
+        for cs_start, cs_end in gene_coldspots[gene_sym]:
+            overlap_start = max(dom_start, cs_start)
+            overlap_end = min(dom_end, cs_end)
+            if overlap_start > overlap_end:
+                continue
+            overlap_len = overlap_end - overlap_start + 1
+            coldspot_len = cs_end - cs_start + 1
+            frac_of_cs = overlap_len / coldspot_len
+            frac_of_dom = overlap_len / dom_len
+            if frac_of_cs > max_frac_of_cs:
+                max_frac_of_cs = frac_of_cs
+            if frac_of_dom > max_frac_of_dom:
+                max_frac_of_dom = frac_of_dom
+
+        removed = (max_frac_of_cs > overlap_threshold) or (max_frac_of_dom > overlap_threshold)
+        summary[domain_path] = {
+            'coldspot_max_frac_of_coldspot': max_frac_of_cs,
+            'coldspot_max_frac_of_domain': max_frac_of_dom,
+            'removed': removed,
+        }
+        if removed:
+            excluded.add(domain_path)
+
+    filtered = intolerant_domains - excluded
+
+    logger.info(f"[FILTER1:COLDSPOT] Input intolerant domains: {len(intolerant_domains)}")
+    logger.info(f"[FILTER1:COLDSPOT] Domains evaluated (gene matched to HCSeeker): {n_evaluated}")
+    logger.info(f"[FILTER1:COLDSPOT] Domains removed (bidirectional overlap > {overlap_threshold}): {len(excluded)}")
+    logger.info(f"[FILTER1:COLDSPOT] Output intolerant domains: {len(filtered)}")
+    if excluded:
+        top_removed = sorted(excluded, key=lambda d: max(
+            summary[d]['coldspot_max_frac_of_coldspot'],
+            summary[d]['coldspot_max_frac_of_domain']), reverse=True)[:5]
+        for d in top_removed:
+            logger.info(f"[FILTER1:COLDSPOT] Removed: {d} "
+                        f"(frac_of_coldspot={summary[d]['coldspot_max_frac_of_coldspot']:.3f}, "
+                        f"frac_of_domain={summary[d]['coldspot_max_frac_of_domain']:.3f})")
+
+    return filtered, excluded, summary
+
+
+def filter_benign_clinvar(intolerant_domains, clinvar_vcf):
+    """Remove domains containing >=1 high-confidence benign ClinVar missense variant.
+
+    High-confidence: CLNSIG contains 'Benign' (not just Likely_benign),
+    CLNREVSTAT >= 2 review stars, consequence includes missense_variant.
+    Uses ClinVar VCF's CSQ DOMAINS field to map variants to domain_paths directly.
+
+    Args:
+        intolerant_domains: set of domain_path strings
+        clinvar_vcf: path to clinvar.{assembly}.vep.vcf.gz
+
+    Returns:
+        (filtered_set, excluded_set, summary_dict)
+    """
+    REVIEW_2STAR = {
+        'practice_guideline',
+        'reviewed_by_expert_panel',
+        'criteria_provided,_multiple_submitters,_no_conflicts',
+    }
+
+    vcf = pysam.VariantFile(clinvar_vcf)
+    csq_format = str(vcf.header).split('Format: ')[-1].strip('>"').split('|')
+
+    domains_idx = csq_format.index('DOMAINS')
+    gene_idx = csq_format.index('Gene')
+    consequence_idx = csq_format.index('Consequence')
+    feature_type_idx = csq_format.index('Feature_type')
+    feature_idx = csq_format.index('Feature')
+
+    domain_benign_count = defaultdict(int)
+
+    for record in vcf:
+        clnsig = record.info.get('CLNSIG')
+        if clnsig is None:
+            continue
+        if isinstance(clnsig, tuple):
+            clnsig = ','.join(clnsig)
+        if 'Benign' not in clnsig:
+            continue
+
+        clnrevstat = record.info.get('CLNREVSTAT')
+        if clnrevstat is None:
+            continue
+        if isinstance(clnrevstat, tuple):
+            clnrevstat = ','.join(clnrevstat)
+        if clnrevstat not in REVIEW_2STAR:
+            continue
+
+        csq_value = record.info.get('CSQ')
+        if not csq_value:
+            continue
+
+        if isinstance(csq_value, tuple):
+            transcript_annotations = csq_value
+        else:
+            transcript_annotations = csq_value.split(',')
+
+        for csq_entry in transcript_annotations:
+            fields = csq_entry.split('|')
+
+            if fields[feature_type_idx] != 'Transcript' or not fields[feature_idx].startswith('ENST'):
+                continue
+            if 'missense_variant' not in fields[consequence_idx]:
+                continue
+
+            domains_str = fields[domains_idx]
+            ensg_id = fields[gene_idx]
+
+            if not domains_str or not ensg_id:
+                continue
+
+            for domain_entry in domains_str.split('&'):
+                parts = domain_entry.split(':')
+                db_name = parts[0]
+                for i in range(1, len(parts)):
+                    hierarchy = parts[1:i+1]
+                    domain_path = ':'.join([ensg_id, db_name] + hierarchy)
+                    if domain_path in intolerant_domains:
+                        domain_benign_count[domain_path] += 1
+
+    vcf.close()
+
+    excluded = set()
+    summary = {}
+
+    for domain_path in intolerant_domains:
+        n_benign = domain_benign_count.get(domain_path, 0)
+        removed = n_benign >= 1
+        summary[domain_path] = {'n_benign_missense': n_benign, 'removed': removed}
+        if removed:
+            excluded.add(domain_path)
+
+    filtered = intolerant_domains - excluded
+
+    logger.info(f"[FILTER2:BENIGN] Input intolerant domains: {len(intolerant_domains)}")
+    logger.info(f"[FILTER2:BENIGN] Domains with >=1 HC benign missense: {len(excluded)}")
+    logger.info(f"[FILTER2:BENIGN] Domains removed: {len(excluded)}")
+    logger.info(f"[FILTER2:BENIGN] Output intolerant domains: {len(filtered)}")
+    if excluded:
+        top_removed = sorted(excluded, key=lambda d: domain_benign_count[d], reverse=True)[:5]
+        for d in top_removed:
+            logger.info(f"[FILTER2:BENIGN] Removed: {d} (n_benign={domain_benign_count[d]})")
+
+    return filtered, excluded, summary
+
+
+def filter_common_missense(intolerant_domains, scores_dict, af_threshold=0.05):
+    """Remove domains containing >=1 missense variant with AF_grpmax_joint > af_threshold.
+
+    Reads gnomAD_distribution from scores_dict (numpy arrays of AF values per domain).
+
+    Args:
+        intolerant_domains: set of domain_path strings
+        scores_dict: loaded domain scores pkl containing gnomAD_distribution per domain leaf
+        af_threshold: AF threshold (default 0.05, BA1 criterion)
+
+    Returns:
+        (filtered_set, excluded_set, summary_dict)
+    """
+    gnomad_data = {}
+    _collect_gnomad_leaves(scores_dict, gnomad_data, path=[])
+
+    excluded = set()
+    summary = {}
+    n_with_gnomad = 0
+
+    for domain_path in intolerant_domains:
+        gnomad_arr = gnomad_data.get(domain_path)
+        if gnomad_arr is None or len(gnomad_arr) == 0:
+            summary[domain_path] = {'n_common_missense': 0, 'max_af': 0.0, 'removed': False}
+            continue
+
+        n_with_gnomad += 1
+        n_common = int(np.sum(gnomad_arr > af_threshold))
+        max_af = float(np.max(gnomad_arr))
+        removed = n_common >= 1
+        summary[domain_path] = {'n_common_missense': n_common, 'max_af': max_af, 'removed': removed}
+        if removed:
+            excluded.add(domain_path)
+
+    filtered = intolerant_domains - excluded
+
+    logger.info(f"[FILTER3:COMMON] Input intolerant domains: {len(intolerant_domains)}")
+    logger.info(f"[FILTER3:COMMON] Domains with gnomAD data: {n_with_gnomad} / {len(intolerant_domains)}")
+    logger.info(f"[FILTER3:COMMON] Domains removed (any AF > {af_threshold}): {len(excluded)}")
+    logger.info(f"[FILTER3:COMMON] Output intolerant domains: {len(filtered)}")
+    if excluded:
+        top_removed = sorted(excluded, key=lambda d: summary[d]['max_af'], reverse=True)[:5]
+        for d in top_removed:
+            logger.info(f"[FILTER3:COMMON] Removed: {d} (max_AF={summary[d]['max_af']:.4f})")
+
+    return filtered, excluded, summary
+
+
 def analyze_domain_data(pickle_file: str, 
                        output_dir: str,
                        threads: int = 12,
                        fdr_threshold: float = 0.05,
-                       assembly: str = 'hg19'):
+                       assembly: str = 'hg19',
+                       am_vcf: str = None,
+                       hcseeker_spots_tsv: str = None,
+                       clinvar_vcf: str = None,
+                       coldspot_overlap_threshold: float = 0.5,
+                       common_af_threshold: float = 0.05):
     """
-    Analyze domain data from the pickle file.
-    
+    Analyze domain data from the pickle file and apply post-KS filters.
+
     Args:
         pickle_file: Path to the pickle file containing scores_dict
         output_dir: Directory to save analysis outputs
-        intolerant_domains_tsv: Optional path to TSV file containing intolerant domains
-        mechanism_tsv: Path to TSV file containing mechanism analysis results
         threads: Number of threads for parallel processing
         fdr_threshold: FDR threshold for significance after correction
+        assembly: Assembly version (hg19 or hg38)
+        am_vcf: Path to VEP-annotated AlphaMissense VCF (needed for Filter 1)
+        hcseeker_spots_tsv: Path to HC_spots.{assembly}.tsv (None = skip Filter 1)
+        clinvar_vcf: Path to clinvar.{assembly}.vep.vcf.gz (None = skip Filter 2)
+        coldspot_overlap_threshold: Overlap fraction threshold for Filter 1 (default 0.5)
+        common_af_threshold: AF threshold for Filter 3 (default 0.05)
     """
     # Create output directory
     os.makedirs(output_dir, exist_ok=True)
@@ -610,15 +975,114 @@ def analyze_domain_data(pickle_file: str,
                 f"found {int(np.sum(rejected))} domains significantly more tolerant than composite (FDR < {fdr_threshold})")
 
     # --- Define "intolerant" set for downstream: those NOT significantly more tolerant + all curated refs ---
-    # (Your earlier logic merged these with reference domains.)
     not_more_tolerant = set(results_df.loc[~results_df['is_more_tolerant'], 'domain'].unique().tolist())
     analysis_intolerant_domains = not_more_tolerant | set(ref_domain_scores.keys())
+    n_ks_intolerant = len(analysis_intolerant_domains)
+    logger.info(f"[KS] Intolerant set (not-tolerant + curated refs): {n_ks_intolerant}")
 
+    # Keep a copy of the pre-filter set for the summary TSV
+    ks_intolerant_raw = set(analysis_intolerant_domains)
+
+    # --- Post-KS filters (each filter is independent and optional) ---
+    filter_summaries = {}
+    excluded_sets = {}
+
+    # Filter 1: HCSeeker coldspot overlap
+    if hcseeker_spots_tsv is not None:
+        if am_vcf is None:
+            logger.warning("[FILTER1:COLDSPOT] Skipped: --am_vcf required for domain AA range extraction")
+        else:
+            domain_meta_cache = os.path.join(output_dir, f'domain_metadata.{assembly}.pkl')
+            if os.path.exists(domain_meta_cache):
+                logger.info(f"[DOMAIN_META] Loading cached metadata from {domain_meta_cache}")
+                with open(domain_meta_cache, 'rb') as f:
+                    domain_metadata = pickle.load(f)
+            else:
+                logger.info(f"[DOMAIN_META] Extracting from AM VCF: {am_vcf}")
+                domain_metadata = extract_domain_metadata(am_vcf)
+                with open(domain_meta_cache, 'wb') as f:
+                    pickle.dump(domain_metadata, f)
+                logger.info(f"[DOMAIN_META] Cached {len(domain_metadata)} domains to {domain_meta_cache}")
+
+            analysis_intolerant_domains, excl, summ = filter_coldspot_overlap(
+                analysis_intolerant_domains, domain_metadata, hcseeker_spots_tsv,
+                coldspot_overlap_threshold)
+            filter_summaries['coldspot'] = summ
+            excluded_sets['coldspot'] = excl
+
+    # Filter 2: High-confidence benign ClinVar missense
+    if clinvar_vcf is not None:
+        analysis_intolerant_domains, excl, summ = filter_benign_clinvar(
+            analysis_intolerant_domains, clinvar_vcf)
+        filter_summaries['benign'] = summ
+        excluded_sets['benign'] = excl
+
+    # Filter 3: Common missense (gnomAD AF > threshold) — always runs
+    analysis_intolerant_domains, excl, summ = filter_common_missense(
+        analysis_intolerant_domains, scores_dict, common_af_threshold)
+    filter_summaries['common'] = summ
+    excluded_sets['common'] = excl
+
+    # --- Summary logging ---
+    n_f1 = len(excluded_sets.get('coldspot', set()))
+    n_f2 = len(excluded_sets.get('benign', set()))
+    n_f3 = len(excluded_sets.get('common', set()))
+    logger.info(f"[SUMMARY] Total domains analyzed: {len(domain_scores)}")
+    logger.info(f"[SUMMARY] Curated functional references: {len(ref_domain_scores)}")
+    logger.info(f"[SUMMARY] DAS intolerant (post-KS): {n_ks_intolerant}")
+    logger.info(f"[SUMMARY] Removed by Filter 1 (coldspot): {n_f1}")
+    logger.info(f"[SUMMARY] Removed by Filter 2 (benign): {n_f2}")
+    logger.info(f"[SUMMARY] Removed by Filter 3 (common): {n_f3}")
+    logger.info(f"[SUMMARY] Final intolerant domains: {len(analysis_intolerant_domains)}")
+
+    # --- Save filter summary TSV ---
+    # Resolve domain metadata for aa coordinates (use cache if available)
+    dm_for_summary = locals().get('domain_metadata', {})
+    if filter_summaries:
+        summary_rows = []
+        for dp in sorted(ks_intolerant_raw):
+            meta = dm_for_summary.get(dp, {})
+            row = {
+                'domain_path': dp,
+                'gene_symbol': meta.get('gene_symbol', ''),
+                'aa_start': meta.get('aa_start', np.nan),
+                'aa_end': meta.get('aa_end', np.nan),
+                'in_original_intolerant': True,
+            }
+            if 'coldspot' in filter_summaries:
+                s = filter_summaries['coldspot'].get(dp, {})
+                row['coldspot_max_frac_of_coldspot'] = s.get('coldspot_max_frac_of_coldspot', np.nan)
+                row['coldspot_max_frac_of_domain'] = s.get('coldspot_max_frac_of_domain', np.nan)
+                row['coldspot_removed'] = s.get('removed', False)
+            if 'benign' in filter_summaries:
+                s = filter_summaries['benign'].get(dp, {})
+                row['n_benign_missense'] = s.get('n_benign_missense', np.nan)
+                row['benign_removed'] = s.get('removed', False)
+            if 'common' in filter_summaries:
+                s = filter_summaries['common'].get(dp, {})
+                row['n_common_missense'] = s.get('n_common_missense', np.nan)
+                row['max_af'] = s.get('max_af', np.nan)
+                row['common_removed'] = s.get('removed', False)
+            row['final_intolerant'] = dp in analysis_intolerant_domains
+            summary_rows.append(row)
+
+        summary_df = pd.DataFrame(summary_rows)
+        summary_tsv = os.path.join(output_dir, f'domain_filter_results.{assembly}.tsv')
+        summary_df.to_csv(summary_tsv, sep='\t', index=False)
+        logger.info(f"Saved filter summary ({len(summary_df)} domains) to {summary_tsv}")
+
+    # --- Save final intolerant domain set ---
     intolerant_domains_pickle = os.path.join(output_dir, f'all_intolerant_domains.{assembly}.pkl')
     with open(intolerant_domains_pickle, 'wb') as f:
         pickle.dump(analysis_intolerant_domains, f)
+    logger.info(f"Saved final intolerant domains (N={len(analysis_intolerant_domains)}) to {intolerant_domains_pickle}")
 
-    logger.info(f"Saved merged intolerant domains (N={len(analysis_intolerant_domains)}) to {intolerant_domains_pickle}")
+    # --- Save excluded domain sets per filter ---
+    if excluded_sets:
+        excluded_pickle = os.path.join(output_dir, f'excluded_domains.{assembly}.pkl')
+        with open(excluded_pickle, 'wb') as f:
+            pickle.dump(excluded_sets, f)
+        logger.info(f"Saved excluded domain sets to {excluded_pickle}")
 
 
 
@@ -628,9 +1092,24 @@ if __name__ == '__main__':
     parser.add_argument('--output_dir', required=True, help='Directory to save analysis outputs')
     parser.add_argument('--threads', type=int, default=62, help='Number of threads for parallel processing (default: 12)')
     parser.add_argument('--assembly', type=str, default='hg19', help='Assembly version, either hg19 or hg38')
+    parser.add_argument('--am_vcf', type=str, default=None,
+                        help='Path to VEP-annotated AlphaMissense VCF (required for Filter 1: coldspot overlap)')
+    parser.add_argument('--hcseeker_spots_tsv', type=str, default=None,
+                        help='Path to HC_spots.{assembly}.tsv for Filter 1 (None = skip)')
+    parser.add_argument('--clinvar_vcf', type=str, default=None,
+                        help='Path to clinvar.{assembly}.vep.vcf.gz for Filter 2 (None = skip)')
+    parser.add_argument('--coldspot_overlap_threshold', type=float, default=0.5,
+                        help='Overlap fraction threshold for Filter 1 (default: 0.5)')
+    parser.add_argument('--common_af_threshold', type=float, default=0.05,
+                        help='AF threshold for Filter 3 common missense (default: 0.05)')
     args = parser.parse_args()
-    
-    analyze_domain_data(args.pickle_file, 
-                        args.output_dir, 
+
+    analyze_domain_data(args.pickle_file,
+                        args.output_dir,
                         args.threads,
-                        assembly=args.assembly)
+                        assembly=args.assembly,
+                        am_vcf=args.am_vcf,
+                        hcseeker_spots_tsv=args.hcseeker_spots_tsv,
+                        clinvar_vcf=args.clinvar_vcf,
+                        coldspot_overlap_threshold=args.coldspot_overlap_threshold,
+                        common_af_threshold=args.common_af_threshold)

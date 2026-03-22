@@ -209,8 +209,8 @@ function VEP_plugins_install() {
     # Then annotate the AlphaMissense prescore file to vcf file
     AlphaMissense_anno ${config_file} || \
     { log "Failed to convert the AlphaMissense prescore file to vcf file and annotate protein domains to it"; return 1; }
-    AlphaMissense_pick_intolerant_motifs ${config_file} || \
-    { log "Failed to pick intolerant motifs from the AlphaMissense prescore file"; return 1; }
+    AlphaMissense_pick_missense_constrained_segments ${config_file} || \
+    { log "Failed to pick missense constrained segments from the AlphaMissense prescore file"; return 1; }
 
     # Then install SpliceAI
     SpliceAI_install ${config_file} ${VEP_PLUGINSCACHEDIR} ${VEP_PLUGINSDIR} || \
@@ -786,10 +786,10 @@ function AlphaMissense_anno() {
 }
 
 
-function AlphaMissense_pick_intolerant_motifs() {
+function AlphaMissense_pick_missense_constrained_segments() {
     local config_file=${1}
     local intolerant_motif_prefix=${2}
-    local pick_intolerant_motifs_py=${SCRIPT_DIR}/am_pick_intolerant_motifs.py
+    local pick_intolerant_motifs_py=${SCRIPT_DIR}/am_pick_missense_constrained_segments.py
 
     if [[ -z ${intolerant_motif_prefix} ]]; then
         log "The intolerant motif prefix is not provided, we will use the default prefix: /paedyl01/disk1/yangyxt/public_data/VEP_plugins_caches/AlphaMissense/AlphaMissense_hg19.kde"

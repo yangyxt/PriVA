@@ -74,7 +74,10 @@ alphamissense_intolerant_domains: /paedyl01/disk1/yangyxt/public_data/VEP_plugin
 alphamissense_intolerant_motifs: /paedyl01/disk1/yangyxt/public_data/VEP_plugins_caches/AlphaMissense/AlphaMissense_hg19.kde.pkl
 
 # Final intolerant domains combining results from AlphaMissense and ClinVar
-all_intolerant_domains: /paedyl01/disk1/yangyxt/public_data/VEP_plugins_caches/AlphaMissense/all_intolerant_domains.hg19.pkl
+all_intolerant_domains: /paedyl01/disk1/yangyxt/test_acmg_auto/das_filtering_output_hg19/all_intolerant_domains.hg19.pkl
+
+# Combined PM1 regions (DAS + HCSeeker + RMC)
+pm1_regions_pkl: /paedyl01/disk1/yangyxt/public_data/VEP_plugins_caches/AlphaMissense/pm1_regions.hg19.pkl
 
 # The Conservation cache file
 conservation_file: /paedyl01/disk1/yangyxt/public_data/VEP_plugins_caches/Conservation/gerp_conservation_scores.homo_sapiens.GRCh37.bw

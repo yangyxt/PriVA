@@ -1486,55 +1486,25 @@ def analyze_score_distribution(scores: np.ndarray) -> Tuple[bool, float]:
         return False, 0.0
 
 
-def locate_less_char_region(row: dict, am_intolerant_motifs: dict) -> Tuple[bool, bool]:
-    '''
-    Check if the variant is located in a less well-characterized region but with high AM scores. 
-    The region was previous extracted during the installation step of the pipeline, it uses weighted KDE to identify the segments along the protein chain which are likely to be intolerant to AA changes
-    '''
+def locate_pm1_region(row: dict,
+                      hcseeker_hotspots: dict,
+                      rmc_constrained: dict) -> Tuple[bool, bool]:
+    """Check if the variant falls in an HCSeeker hotspot or gnomAD RMC-constrained region.
 
-    aa_code_dict = {"Gly": "G", "Ala": "A", "Val": "V", "Leu": "L", 
-                    "Ile": "I", "Thr": "T", "Ser": "S", "Met": "M", 
-                    "Cys": "C", "Pro": "P", "Phe": "F", "Tyr": "Y", 
-                    "Trp": "W", "His": "H", "Lys": "K", "Arg": "R", 
-                    "Asp": "D", "Glu": "E", "Asn": "N", "Gln": "Q"}
-    
-    if not am_intolerant_motifs:
-        logger.debug(f"No AM scores for gene {row['Gene']}, the AM profile might only calculate the variants effect at {row['chrom']}:{row['pos']} on another overlapping transcript that does not belong to this gene.")
-        return False, False
-    
-    raw_protein_pos = row.get('Protein_position', '') # e.g 117/340 (pos/total_size)
-    protein_pos = str(raw_protein_pos).split("/")[0] if raw_protein_pos and not raw_protein_pos in [np.nan, np.inf] else ''
+    Returns (in_hcseeker, in_rmc).
+    Both lookups are keyed by Ensembl transcript (Feature) + protein position.
+    """
+    enst = row.get('Feature', '')
+    raw_protein_pos = row.get('Protein_position', '')
+    pos_str = str(raw_protein_pos).split("/")[0] if raw_protein_pos and raw_protein_pos not in [np.nan, np.inf] else ''
 
-    # Deal with non-protein-altering variants
-    if not protein_pos:
-        logger.debug(f"No protein position for variant {row['chrom']}:{row['pos']}, cannot determine if it is located in a mutational hotspot or a well-established functional protein domain")
+    if not pos_str or not pos_str.isdigit():
         return False, False
-    
-    # Deal with indels
-    if len(row['alt']) != len(row['ref']):
-        return protein_pos in [x[1:] for x in am_intolerant_motifs['max_score_regions']], protein_pos in [x[1:] for x in am_intolerant_motifs['min_score_regions']]
-    
-    hgvsp_aa = row["HGVSp"].split(":")[1].lstrip("p.") if isinstance(row["HGVSp"], str) else ''
-    # Extract the characters that is digit in the hgvsp_aa
-    protein_position = re.search(r'\d+', hgvsp_aa).group() if hgvsp_aa else ''
-    # Extract the string before the digits as the reference amino acid
-    ref_aa = re.split(r'\d+', hgvsp_aa)[0] if protein_position else ''
-    # Deal with stop codons
-    if ref_aa == "Ter":
-        logger.warning(f"The variant {row['chrom']}:{row['pos']} is a stop codon, can only determine by protein position")
-        return protein_position in [x[1:] for x in am_intolerant_motifs['max_score_regions']], protein_position in [x[1:] for x in am_intolerant_motifs['min_score_regions']]
-    # Deal with empty HGVSp
-    if not ref_aa:
-        return False, False
-    
-    single_letter_aa_code = aa_code_dict.get(ref_aa, ref_aa)
-    assert len(single_letter_aa_code) == 1, f"For variant at {row['chrom']}:{row['pos']}, the amino acid code for {protein_position}: {ref_aa} is not a single letter"
-    combo = f"{single_letter_aa_code}{protein_position}"
-    logger.debug(f"The variant {row['chrom']}:{row['pos']} is causing AA changes at {combo}")
-    key_regex = re.compile(rf'^[A-Z]{protein_position}$')
 
-    return (combo in am_intolerant_motifs['max_score_regions']) or any(key_regex.match(x) for x in am_intolerant_motifs['max_score_regions']), \
-           (combo in am_intolerant_motifs['min_score_regions']) or any(key_regex.match(x) for x in am_intolerant_motifs['min_score_regions'])
+    pos_int = int(pos_str)
+    in_hcseeker = enst in hcseeker_hotspots and pos_int in hcseeker_hotspots[enst]
+    in_rmc = enst in rmc_constrained and pos_int in rmc_constrained[enst]
+    return in_hcseeker, in_rmc
 
 
         
@@ -1628,20 +1598,21 @@ def locate_intolerant_domain(row: dict, intolerant_domains: set) -> bool:
         
 
 
-def PM1_criteria(df: pd.DataFrame, 
+def PM1_criteria(df: pd.DataFrame,
                  pvs1_criteria: np.ndarray,
                  loc_intol_domain: np.ndarray,
                  clinvar_patho: np.ndarray = None,
-                 intolerant_motifs_pkl: str=None,
+                 pm1_regions_pkl: str=None,
                  threads: int = 10) -> np.ndarray:
-    # logger.info(f"Loaded the recorded intolerant domains which look alike: {intolerant_domains}")
-    row_dicts = df.to_dict('records')
-    # args = [(row, intolerant_domains) for row in row_dicts]
-    
-    # with mp.Pool(threads) as pool:
-    #     results = pool.starmap(locate_intolerant_domain, args)
+    """Assign PM1 criteria using the 3-arm PM1 regions pickle.
 
-    # loc_intol_domain = np.array(results)
+    Arms:
+      1. DAS intolerant domains — via loc_intol_domain (pre-computed in PVS1)
+      2. HCSeeker hotspots — transcript + protein position lookup
+      3. gnomAD RMC constrained — transcript + protein position lookup
+    """
+    row_dicts = df.to_dict('records')
+
     logger.info(f"There are {np.sum(loc_intol_domain)} variants located in a protein domain that is seemingly intolerant to AA changes according to AM scores")
 
     missense = df['Consequence'].str.contains('missense_variant')
@@ -1652,25 +1623,32 @@ def PM1_criteria(df: pd.DataFrame,
     missense_benign = df["am_class"].fillna("").str.contains('benign')
     logger.info(f"There are {missense_benign.sum()} missense variants that are considered benign by AlphaMissense")
     if clinvar_patho is not None:
-        # If variant is ClinVar pathogenic with high review status (2+ stars), consider it as damaging
         missense_damaging = missense_damaging | clinvar_patho
         logger.info(f"There are {missense_damaging.sum()} missense variants that are considered damaging after considering ClinVar high-confidence pathogenic status")
     missense_damaging = missense_damaging & missense
 
-    intolerant_motifs = pickle.load(gzip.open(intolerant_motifs_pkl)) if intolerant_motifs_pkl.endswith(".gz") else pickle.load(open(intolerant_motifs_pkl, 'rb'))
-    args = [(row, intolerant_motifs.get(row['Feature'], {})) for row in row_dicts]
-    logger.info(f"There are {len(args)} variants to be checked for intolerant motifs")
-    with mp.Pool(threads) as pool:
-        results = pool.starmap(locate_less_char_region, args)
-        # Results are a list of tuples, we need to convert them to two independent boolean arrays
-        max_am_score_motifs = np.array([r[0] for r in results])
-        min_am_score_motifs = np.array([r[1] for r in results])
+    # Load the 3-arm PM1 regions pickle
+    pm1_regions = pickle.load(gzip.open(pm1_regions_pkl, 'rb')) if pm1_regions_pkl.endswith(".gz") else pickle.load(open(pm1_regions_pkl, 'rb'))
+    hcseeker_hotspots = pm1_regions.get("hcseeker_hotspots", {})
+    rmc_constrained = pm1_regions.get("rmc_constrained", {})
+    meta = pm1_regions.get("metadata", {})
+    logger.info(f"PM1 regions loaded: {meta.get('n_das_intolerant_domains', '?')} DAS domains, "
+                f"{meta.get('n_hcseeker_hotspot_residues', '?')} HCSeeker residues, "
+                f"{meta.get('n_rmc_constrained_residues', '?')} RMC residues")
 
-    logger.info(f"There are {np.sum(min_am_score_motifs)} variants located in a mutational hotspot that is seemingly intolerant to AA changes according to AM scores")
-    logger.info(f"There are {np.sum(max_am_score_motifs)} variants located in a mutational hotspot that is seemingly intolerant to AA changes according to most severe AM scores")
+    # Check each variant against HCSeeker hotspots and RMC constrained regions
+    args = [(row, hcseeker_hotspots, rmc_constrained) for row in row_dicts]
+    with mp.Pool(threads) as pool:
+        results = pool.starmap(locate_pm1_region, args)
+        hcseeker_hit = np.array([r[0] for r in results])
+        rmc_hit = np.array([r[1] for r in results])
+
+    logger.info(f"There are {np.sum(hcseeker_hit)} variants located in HCSeeker mutational hotspots")
+    logger.info(f"There are {np.sum(rmc_hit)} variants located in gnomAD RMC-constrained regions")
+
     pvs1_double_count = pvs1_criteria >= 2
-    pm1_criteria = ( max_am_score_motifs & missense & ~missense_benign ) | \
-                   ( min_am_score_motifs & missense ) | \
+    pm1_criteria = ( hcseeker_hit & missense ) | \
+                   ( rmc_hit & missense & ~missense_benign ) | \
                    ( loc_intol_domain & missense )
     pm1_criteria = pm1_criteria & np.logical_not(pvs1_double_count)
     pm1_array = np.zeros(len(df), dtype=int)
@@ -3037,6 +3015,75 @@ def calculate_posterior_probability(row, prior_probability=0.1, exp_base=2, odds
 
 
 
+def compute_control_common(df: pd.DataFrame, proband: str,
+                           cutoff: float = 0.01, conf_level: float = 0.999) -> pd.DataFrame:
+    """Flag variants common in the control cohort via binomial CDF test.
+
+    Uses control_AC/AN/AF/nhomalt fields. For homozygous proband calls,
+    tests nhomalt count; for heterozygous, tests AC count. Falls back to
+    AF > cutoff when counts are unavailable.
+
+    Flagged variants receive control_common_index = 0.5 (rank penalty).
+    """
+    control_cols = {"control_AC", "control_AN", "control_AF", "control_nhomalt"}
+    if not control_cols.intersection(set(df.columns)):
+        df["control_common"] = False
+        df["control_common_index"] = 1.0
+        return df
+
+    an = pd.to_numeric(df.get("control_AN"), errors='coerce')
+    ac = pd.to_numeric(df.get("control_AC"), errors='coerce')
+    af = pd.to_numeric(df.get("control_AF"), errors='coerce')
+    nhomo = pd.to_numeric(df.get("control_nhomalt"), errors='coerce')
+
+    valid_an = an.fillna(0) > 0
+
+    # Determine proband homozygosity from GT column
+    if proband and proband in df.columns:
+        gt = df[proband].astype(str).str.split(":").str[0]
+        is_hom = gt.isin(["1/1", "1|1", "1"])
+    else:
+        is_hom = pd.Series(False, index=df.index)
+
+    # Route 1: hom proband + nhomo available → binomial test on nhomo vs AN/2
+    use_nhomo = valid_an & is_hom & nhomo.notna()
+    # Route 2: AC available (and not using nhomo) → binomial test on AC vs AN
+    use_ac = valid_an & ~use_nhomo & ac.notna()
+    # Route 3: only AF available → simple threshold
+    use_af = valid_an & ~use_nhomo & ~use_ac & af.notna()
+
+    common = pd.Series(False, index=df.index)
+
+    if use_nhomo.any():
+        m = use_nhomo
+        common[m] = binom.cdf(
+            nhomo[m].clip(lower=0).astype(int).values,
+            (an[m] / 2).round().clip(lower=1).astype(int).values,
+            cutoff
+        ) > conf_level
+
+    if use_ac.any():
+        m = use_ac
+        common[m] = binom.cdf(
+            ac[m].clip(lower=0).astype(int).values,
+            an[m].round().clip(lower=1).astype(int).values,
+            cutoff
+        ) > conf_level
+
+    if use_af.any():
+        m = use_af
+        common[m] = af[m] > cutoff
+
+    df["control_common"] = common
+    df["control_common_index"] = np.where(common, 0.5, 1.0)
+
+    n_flagged = common.sum()
+    if n_flagged > 0:
+        logger.info(f"Control-common penalty: {n_flagged} variants flagged as common in control cohort (x0.5 rank penalty)")
+
+    return df
+
+
 def sort_and_rank_variants(df: pd.DataFrame, 
                            ped_df: pd.DataFrame, 
                            fam_name: str, 
@@ -3065,7 +3112,12 @@ def sort_and_rank_variants(df: pd.DataFrame,
         proband_het = (df.loc[:, proband].str.count("1") == 1)
     else:
         logger.warning(f"No ped_table provided, skip the haplo_sufficient penalty")
+        proband = None
         proband_het = pd.Series([False] * len(df), index=df.index)  # Use Series with matching index
+
+    # Control-common penalty: halve sort_index for variants common in control cohort
+    df = compute_control_common(df, proband)
+    df.loc[:, "sort_index"] = df.loc[:, "sort_index"] * df.loc[:, "control_common_index"]
 
     # ---------------------------------------------------------------------
     # Haploinsufficiency / haplosufficiency proxy for down-weighting single-allele
@@ -3224,7 +3276,7 @@ def ACMG_criteria_assign(anno_table: str,
                          interpro_entry_map_pkl: str,
                          intolerant_domains_pkl: str,
                          am_intol_domains_tsv: str,
-                         intolerant_motifs_pkl: str,
+                         pm1_regions_pkl: str,
                          clinvar_gene_stat_pkl: str,
                          tranx_exon_domain_map_pkl: str,
                          repeat_region_file: str,
@@ -3379,7 +3431,7 @@ def ACMG_criteria_assign(anno_table: str,
     PS4 cannot be applied because usually we dont have enough cases to determine the frequency of the variant
     '''
     # Apply PM1 criteria, mutational hotspot or well-established functional protein domain
-    pm1_criteria, loc_intol_domain = PM1_criteria(anno_df, pvs1_criteria, locate_intol_domains, ps3bs3_results['clinvar_patho'], intolerant_motifs_pkl, threads)
+    pm1_criteria, loc_intol_domain = PM1_criteria(anno_df, pvs1_criteria, locate_intol_domains, ps3bs3_results['clinvar_patho'], pm1_regions_pkl, threads)
     # pm1_criteria = pm1_criteria & ~ps1_criteria  # PS1 is already a strength to indicate the intolerance to the AA changes incurred by the variant
     logger.info(f"PM1 criteria applied, {(pm1_criteria > 0).sum()} variants are having the PM1 criteria")
     gc.collect()
@@ -3570,7 +3622,7 @@ if __name__ == "__main__":
     parser.add_argument("--intolerant_domains_pkl", type=str, required=True)
     parser.add_argument("--gene_dosage_sensitivity", type=str, required=True)
     parser.add_argument("--am_intol_domains_tsv", type=str, required=True)
-    parser.add_argument("--intolerant_motifs_pkl", type=str, required=True)
+    parser.add_argument("--pm1_regions_pkl", type=str, required=True)
     parser.add_argument("--clinvar_gene_stat_pkl", type=str, required=True)
     parser.add_argument("--tranx_exon_domain_map_pkl", type=str, required=True)
     parser.add_argument("--am_score_vcf", type=str, required=False, default=None)
@@ -3600,7 +3652,7 @@ if __name__ == "__main__":
                                                     args.interpro_entry_map_pkl,
                                                     args.intolerant_domains_pkl,
                                                     args.am_intol_domains_tsv,
-                                                    args.intolerant_motifs_pkl,
+                                                    args.pm1_regions_pkl,
                                                     args.clinvar_gene_stat_pkl,
                                                     args.tranx_exon_domain_map_pkl,
                                                     args.repeat_region_file,

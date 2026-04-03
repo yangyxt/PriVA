@@ -147,7 +147,7 @@ function assign_acmg_criteria () {
 	local am_intol_domains_tsv=$(read_yaml ${config_file} "alphamissense_intolerant_domains")
     local clinvar_gene_stat_pkl=${DATA_DIR}/ClinVar/$(basename $(read_yaml ${config_file} "clinvar_gene_stat"))
     local tranx_exon_domain_map_pkl=$(read_yaml ${config_file} "alphamissense_tranx_domain_map")
-    local intolerant_motifs_pkl=$(read_yaml ${config_file} "alphamissense_intolerant_motifs")
+    local pm1_regions_pkl=$(read_yaml ${config_file} "pm1_regions_pkl")
     local alt_disease_vcf=$(read_yaml ${config_file} "alt_disease_vcf")
     local gnomAD_extreme_rare_threshold=$(read_yaml ${config_file} "extreme_rare_PAF")
     local expected_incidence=$(read_yaml ${config_file} "exp_disease_incidence")
@@ -173,7 +173,7 @@ function assign_acmg_criteria () {
     check_path ${intolerant_domains_pkl} "file" "all_intolerant_domains" || has_error=1
     check_path ${am_intol_domains_tsv} "file" "alphamissense_intolerant_domains" || has_error=1
     check_path ${clinvar_gene_stat_pkl} "file" "clinvar_gene_stat" || has_error=1
-    check_path ${intolerant_motifs_pkl} "file" "alphamissense_intolerant_motifs" || has_error=1
+    check_path ${pm1_regions_pkl} "file" "pm1_regions_pkl" || has_error=1
     check_path ${am_score_vcf} "file" "alphamissense_vcf" || has_error=1
     check_path ${tranx_exon_domain_map_pkl} "file" "alphamissense_tranx_domain_map" || has_error=1
     check_path ${clinvar_patho_af_stat} "file" "clinvar_patho_af_stat" || has_error=1
@@ -233,7 +233,7 @@ function assign_acmg_criteria () {
     [[ -f ${dispensable_gene_list} ]] && local dispensable_genes_arg="--dispensable_gene_list ${dispensable_gene_list}" || local dispensable_genes_arg=""
     [[ -n "${pext_tissues}" ]] && [[ "${pext_tissues}" != "null" ]] && local pext_arg="--pext_tissues ${pext_tissues}" || local pext_arg=""
 
-    log "Running the following command to assign the ACMG criterias: python ${acmg_py} --anno_table ${input_tab} --am_score_table ${mean_am_score_table} --clinvar_aa_dict_pkl ${clinvar_aa_dict_pkl} --intolerant_domains_pkl ${intolerant_domains_pkl} --intolerant_motifs_pkl ${intolerant_motifs_pkl} --clinvar_gene_stat_pkl ${clinvar_gene_stat_pkl} --gnomAD_extreme_rare_threshold ${gnomAD_extreme_rare_threshold} --expected_incidence ${expected_incidence} --am_score_vcf ${am_score_vcf} --threads ${threads} --tranx_exon_domain_map_pkl ${tranx_exon_domain_map_pkl} ${ped_arg} ${fam_arg} ${alt_disease_arg} ${mavedb_arg} ${pp1_arg} ${relevant_genes_arg} ${dispensable_genes_arg} ${cds_fasta_arg}"
+    log "Running the following command to assign the ACMG criterias: python ${acmg_py} --anno_table ${input_tab} --am_score_table ${mean_am_score_table} --clinvar_aa_dict_pkl ${clinvar_aa_dict_pkl} --intolerant_domains_pkl ${intolerant_domains_pkl} --pm1_regions_pkl ${pm1_regions_pkl} --clinvar_gene_stat_pkl ${clinvar_gene_stat_pkl} --gnomAD_extreme_rare_threshold ${gnomAD_extreme_rare_threshold} --expected_incidence ${expected_incidence} --am_score_vcf ${am_score_vcf} --threads ${threads} --tranx_exon_domain_map_pkl ${tranx_exon_domain_map_pkl} ${ped_arg} ${fam_arg} ${alt_disease_arg} ${mavedb_arg} ${pp1_arg} ${relevant_genes_arg} ${dispensable_genes_arg} ${cds_fasta_arg}"
     python ${acmg_py} \
     --anno_table ${input_tab} \
     --am_score_table ${mean_am_score_table} \
@@ -245,7 +245,7 @@ function assign_acmg_criteria () {
     --intolerant_domains_pkl ${intolerant_domains_pkl} \
 	--gene_dosage_sensitivity ${gene_dosage_sensitivity} \
     --am_intol_domains_tsv ${am_intol_domains_tsv} \
-    --intolerant_motifs_pkl ${intolerant_motifs_pkl} \
+    --pm1_regions_pkl ${pm1_regions_pkl} \
     --repeat_region_file ${repeat_region_file} \
     --clinvar_gene_stat_pkl ${clinvar_gene_stat_pkl} \
     --clingen_map_pkl ${clingen_map_pkl} \

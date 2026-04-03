@@ -39,7 +39,8 @@ function main_workflow() {
           vep_plugins_dir \
           vep_plugins_cachedir \
           hub_vcf_file \
-          hub_cadd_file
+          hub_cadd_file \
+          ped_file
 
     # Source the argparse.bash script
     source ${SCRIPT_DIR}/argparse.bash || { log "Failed to source argparse.bash"; return 1; }
@@ -52,7 +53,7 @@ function main_workflow() {
 
     if [[ -f "$config_file" ]]; then
         log "Using config file: $config_file"
-        local -a config_keys=(input_vcf assembly vep_cache_dir output_dir ref_genome threads af_cutoff gnomad_vcf_chrX clinvar_vcf vep_plugins_dir vep_plugins_cachedir hub_vcf_file hub_cadd_file control_vcf)
+        local -a config_keys=(input_vcf assembly vep_cache_dir output_dir ref_genome threads af_cutoff gnomad_vcf_chrX clinvar_vcf vep_plugins_dir vep_plugins_cachedir hub_vcf_file hub_cadd_file control_vcf ped_file)
         for key in "${config_keys[@]}"; do
             # Need to remove the quotes around the value
             config_args[$key]="$(read_yaml ${config_file} ${key})"
@@ -74,6 +75,7 @@ function main_workflow() {
     local gnomad_vcf_chrX="${gnomad_vcf_chrX:-${config_args[gnomad_vcf_chrX]}}"
     local clinvar_vcf="${clinvar_vcf:-${config_args[clinvar_vcf]}}"
     local control_vcf="${control_vcf:-${config_args[control_vcf]}}"
+    local ped_file="${ped_file:-${config_args[ped_file]}}"
     local vep_plugins_dir="${vep_plugins_dir:-${config_args[vep_plugins_dir]}}"
     local vep_plugins_cachedir="${vep_plugins_cachedir:-${config_args[vep_plugins_cachedir]}}"
     
@@ -230,8 +232,10 @@ function main_workflow() {
         return 1; }
 
         anno_control_vcf_allele \
-        ${anno_vcf} \
-        ${control_vcf} || { \
+        "${anno_vcf}" \
+        "${control_vcf}" \
+        "${ped_file}" \
+        "${threads}" || { \
         log "Failed to add control VCF allele annotation on ${anno_vcf}. Quit now"
         return 1; }
 
@@ -568,9 +572,63 @@ function anno_clinvar_data () {
 
 
 
+function compute_control_stats_from_cohort() {
+    # Derive control allele stats (AC, AN, AF, AC_Hom) from unaffected samples
+    # within the cohort VCF, identified via a PED file (Phenotype column = 1).
+    # Outputs the path to a temporary VCF with filled tags on stdout.
+    local input_vcf=$1
+    local ped_file=$2
+    local threads=${3:-1}
+
+    check_path "${ped_file}" "file" "ped_file" || { log "ERROR: ped_file not available for cohort-based control stat fallback"; return 1; }
+    check_path "${input_vcf}" "file" "input_vcf" || { log "ERROR: input_vcf not valid"; return 1; }
+
+    # Extract control sample IDs (Phenotype=1) from PED, skip comment/header lines
+    local control_samples
+    control_samples=$(awk -F '\t' '!/^#/ && $6 == "1" {print $2}' "${ped_file}" | sort -u)
+
+    if [[ -z "${control_samples}" ]]; then
+        log "WARNING: No control samples (Phenotype=1) found in PED file: ${ped_file}"
+        return 1
+    fi
+
+    # Intersect with samples actually present in the cohort VCF
+    local vcf_samples
+    vcf_samples=$(bcftools query -l "${input_vcf}" | sort -u)
+    local valid_controls
+    valid_controls=$(comm -12 <(echo "${control_samples}") <(echo "${vcf_samples}") | tr '\n' ',' | sed 's/,$//')
+
+    if [[ -z "${valid_controls}" ]]; then
+        log "WARNING: No control samples from PED file found in cohort VCF: ${input_vcf}"
+        return 1
+    fi
+
+    local n_controls
+    n_controls=$(echo "${valid_controls}" | tr ',' '\n' | wc -l)
+    log "Found ${n_controls} control samples in cohort VCF: ${valid_controls}"
+
+    local temp_control_vcf
+    temp_control_vcf=$(mktemp --tmpdir="$TMPDIR" cohort_control_stats.XXXXXX.vcf.gz)
+
+    bcftools view --threads "${threads}" --force-samples -s "${valid_controls}" "${input_vcf}" | \
+    bcftools +fill-tags --threads "${threads}" -Oz -o "${temp_control_vcf}" -- -t AC,AN,AF,AC_Hom && \
+    tabix -p vcf -f "${temp_control_vcf}" || {
+        log "ERROR: Failed to compute control stats from cohort VCF"
+        rm -f "${temp_control_vcf}" "${temp_control_vcf}.tbi"
+        return 1
+    }
+
+    log "Cohort-derived control stats written to: ${temp_control_vcf}"
+    echo "${temp_control_vcf}"
+    return 0
+}
+
+
 function anno_control_vcf_allele() {
     local input_vcf=$1
     local control_vcf=$2
+    local ped_file=${3:-""}
+    local threads=${4:-1}
     local tmp_tag=$(randomID)
     # Output will initially be temporary, then moved to replace input_vcf
     local output_vcf=${input_vcf/.vcf.gz/.${tmp_tag}.vcf.gz}
@@ -578,7 +636,19 @@ function anno_control_vcf_allele() {
 
     # --- Validate Inputs ---
     check_path "${input_vcf}" "file" "input_vcf" || { log "ERROR: input_vcf is not a valid file"; return 1; }
-    check_path "${control_vcf}" "file" "control_vcf" || { log "WARNING: control_vcf is not a valid file but this function is optional"; return 0; }
+
+    # If control_vcf is not provided or invalid, fall back to deriving stats from cohort VCF control samples
+    if ! check_path "${control_vcf}" "file" "control_vcf"; then
+        log "WARNING: control_vcf is not provided or not a valid file. Attempting fallback using control samples from cohort VCF."
+        control_vcf=$(compute_control_stats_from_cohort "${input_vcf}" "${ped_file}" "${threads}")
+        if [[ $? -ne 0 ]] || [[ -z "${control_vcf}" ]]; then
+            log "ERROR: Could not derive control stats from cohort VCF either. Aborting control allele annotation."
+            return 1
+        fi
+        local _cleanup_control_vcf=1
+        log "Using cohort-derived control VCF: ${control_vcf}"
+    fi
+
     [[ "${input_vcf}" =~ \.vcf\.gz$ ]] || { log "ERROR: input_vcf must be bgzipped (.vcf.gz)"; return 1; }
     [[ "${control_vcf}" =~ \.vcf\.gz$ ]] || { log "ERROR: control_vcf must be bgzipped (.vcf.gz)"; return 1; }
     check_vcf_validity "${input_vcf}" || return 1
@@ -651,6 +721,11 @@ function anno_control_vcf_allele() {
 
     display_vcf "${input_vcf}"
     log "Annotation with control cohort allele frequencies complete for ${input_vcf}."
+
+    # Deferred cleanup of cohort-derived control VCF (created in fallback path)
+    if [[ "${_cleanup_control_vcf:-0}" -eq 1 ]]; then
+        rm -f "${control_vcf}" "${control_vcf}.tbi"
+    fi
     return 0
 }
 

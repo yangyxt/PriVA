@@ -790,10 +790,10 @@ function AlphaMissense_pick_missense_constrained_segments() {
     local config_file=${1}
     local intolerant_motif_prefix=${2}
     local pick_intolerant_motifs_py=${SCRIPT_DIR}/am_pick_missense_constrained_segments.py
+    local assembly=$(read_yaml ${config_file} "assembly")
 
     if [[ -z ${intolerant_motif_prefix} ]]; then
         log "The intolerant motif prefix is not provided, we will use the default prefix: /paedyl01/disk1/yangyxt/public_data/VEP_plugins_caches/AlphaMissense/AlphaMissense_hg19.kde"
-        local assembly=$(read_yaml ${config_file} "assembly")
         local intolerant_motif_prefix="/paedyl01/disk1/yangyxt/public_data/VEP_plugins_caches/AlphaMissense/AlphaMissense_${assembly}.kde"
     fi
 
@@ -813,6 +813,8 @@ function AlphaMissense_pick_missense_constrained_segments() {
 
     python ${pick_intolerant_motifs_py} \
     --vcf_path ${alphamissense_vep_vcf} \
+    --rmc_tsv ${SCRIPT_DIR}/../data/gnomAD_RMC/gnomad_v2.1.1_rmc_flat.${assembly}.tsv \
+    --hcseeker_tsv ${SCRIPT_DIR}/../data/HCSeeker/HC_spots.${assembly}.tsv \
     --output ${alphamissense_intolerant_motifs} \
     --processes ${threads} && \
     update_yaml ${config_file} "alphamissense_intolerant_motifs" "${alphamissense_intolerant_motifs}" && \
@@ -870,6 +872,31 @@ function AlphaMissense_pick_intolerant_domains() {
     update_yaml ${config_file} "alphamissense_tranx_domain_map" "${alphamissense_dir}/transcript_exon_domain_mapping.${assembly}.pkl" && \
     update_yaml ${config_file} "all_intolerant_domains" "${alphamissense_dir}/all_intolerant_domains.${assembly}.pkl" && \
     log "The AlphaMissense intolerant domains file ${alphamissense_intolerant_domains} and transcript exon domain mapping file ${alphamissense_tranx_domain_map} are generated and saved to ${alphamissense_dir}"
+}
+
+
+function prepare_pm1_regions() {
+    local config_file=${1}
+    local prepare_pm1_py=${SCRIPT_DIR}/prepare_pm1_regions.py
+    local assembly=$(read_yaml ${config_file} "assembly")
+    local threads=$(read_yaml ${config_file} "threads")
+    local alphamissense_dir=$(dirname $(read_yaml ${config_file} "alphamissense_pd_stat"))
+    local pm1_regions_pkl="${alphamissense_dir}/pm1_regions.${assembly}.pkl"
+
+    [[ -f ${pm1_regions_pkl} ]] && \
+    [[ ${pm1_regions_pkl} -nt ${prepare_pm1_py} ]] && \
+    log "The PM1 regions file ${pm1_regions_pkl} is already generated, skip this step" && \
+    return 0 || \
+    log "Preparing PM1 regions (DAS + HCSeeker + RMC) …"
+
+    python ${prepare_pm1_py} \
+    --config ${config_file} \
+    --output ${pm1_regions_pkl} \
+    --assembly ${assembly} \
+    --threads ${threads} \
+    --skip_das && \
+    update_yaml ${config_file} "pm1_regions_pkl" "${pm1_regions_pkl}" && \
+    log "PM1 regions saved to ${pm1_regions_pkl}"
 }
 
 

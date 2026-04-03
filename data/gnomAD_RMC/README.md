@@ -44,10 +44,14 @@ hg19-specific and cannot be directly transferred to hg38).
 
 ## Key Metrics for Anchor Classification
 
+The raw `p` column tests whether oe differs from 1, but inflates with region size and is
+not directional. **Benjamini-Hochberg FDR correction** must be applied across all RMC
+intervals to produce `p_bh` before classification.
+
 ```
-Constrained (positive anchor):  oe < 1.0  AND  p < 0.05
-Indeterminate (exclude):        oe < 1.0  AND  p >= 0.05  (low statistical power)
-Unconstrained (negative anchor): oe >= 1.0
+Constrained (positive anchor):   oe < 0.4  AND  p_bh < 0.05
+Indeterminate (exclude):         0.4 <= oe <= 0.8  AND  p_bh < 0.05
+Unconstrained (negative anchor): oe > 0.8  OR  p_bh > 0.05
 ```
 
 ## Cross-Assembly Mapping Method (hg19 → hg38)

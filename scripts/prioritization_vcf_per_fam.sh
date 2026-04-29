@@ -31,6 +31,7 @@ function prepare_combined_tab () {
     [[ -f ${output_tab} ]] && \
     [[ ${output_tab} -nt ${input_vcf} ]] && \
     [[ ${output_tab} -nt ${SCRIPT_DIR}/combine_annotations.py ]] && \
+    check_table_column ${output_tab} "vep_consq_lof" && \
     { log "The combined annotation table ${output_tab} is up to date, skip the conversion"; return 0; } || \
     { log "The combined annotation table ${output_tab} is outdated, start the conversion"; }
 

@@ -12,7 +12,7 @@ from multiprocessing import Manager
 import functools
 from multiprocessing import Pool
 from scipy import stats
-from scipy.stats import binom
+from scipy.stats import binom, beta as beta_dist
 from io import StringIO
 import mmap
 import gc
@@ -296,41 +296,42 @@ def evaluate_start_lost_with_cds(
     return pvs1_start_lost, df
     
 
-def downstream_domain_impact(exon_str, tranx_id, tranx_exon_domain_map, interpro_entry_map_dict, dm_instance, domains="", intol_domains=[], ensg_id=""):
+def downstream_domain_impact(protein_pos_str, tranx_id, tranx_pp_domain_map, interpro_entry_map_dict, dm_instance, domains="", intol_domains=[], ensg_id=""):
     '''
-    Used for frameshift and stopgain variants to explore whether the downstream protein region involving functional domains
+    Used for frameshift and stopgain variants to explore whether the downstream protein region involving functional domains.
+    Uses protein position to check if any domain starts beyond the truncation point.
     '''
-    affected_exons = set([])
-    if not isinstance(exon_str, str):
-        pass
-    elif "-" in exon_str and "/" in exon_str:
-        # e.g. 2-3/5
-        affected_exons.update(range(min(int(exon_str.split("-")[1].split("/")[0])+1, int(exon_str.split("/")[1])), int(exon_str.split("/")[1])))
-    elif "/" in exon_str:
-        # e.g. 2/5
-        affected_exons.update(range(min(int(exon_str.split("/")[0])+1, int(exon_str.split("/")[1])), int(exon_str.split("/")[1])))
-    else:
-        raise ValueError(f"Invalid exon string: {exon_str}")
-    
+    # First check the variant's own position via VEP DOMAINS field
     if isinstance(domains, str):
-        domains = domains.split("&")
-        for domain in domains:
+        for domain in domains.split("&"):
             if ensg_id + ":" + domain in intol_domains:
                 return True
             elif dm_instance.interpret_functionality(domain, interpro_entry_map_dict) == "Functional":
                 return True
     
-    tranx_id = tranx_id.split(".", 1)[0] # Remove the ENSG version number
-    for exon in affected_exons:
-        if tranx_id in tranx_exon_domain_map:
-            if exon in tranx_exon_domain_map[tranx_id]:
-                domains = tranx_exon_domain_map[tranx_id][exon]
-                for domain in domains:
-                    domain = domain.split(":", 1)[1] # Remove the ENSG prefix in the domain path
-                    if ensg_id + ":" + domain in intol_domains:
-                        return True
-                    elif dm_instance.interpret_functionality(domain, interpro_entry_map_dict) == "Functional":
-                        return True
+    # Parse protein position from VEP format "150/500" or "150-151/500"
+    truncation_pos = None
+    if isinstance(protein_pos_str, str) and protein_pos_str:
+        try:
+            truncation_pos = int(protein_pos_str.split('/')[0].split('-')[0])
+        except ValueError:
+            pass
+    
+    if truncation_pos is None:
+        return False
+    
+    tranx_id = tranx_id.split(".", 1)[0]
+    if tranx_id not in tranx_pp_domain_map:
+        return False
+    
+    pp_domains = tranx_pp_domain_map[tranx_id].get('pp_domains', [])
+    for aa_start, aa_end, domain_path in pp_domains:
+        if aa_start > truncation_pos:
+            domain = domain_path.split(":", 1)[1]
+            if ensg_id + ":" + domain in intol_domains:
+                return True
+            elif dm_instance.interpret_functionality(domain, interpro_entry_map_dict) == "Functional":
+                return True
     return False
 
 
@@ -362,7 +363,7 @@ def downstream_exon_patho_af(row, clinvar_patho_exon_af_dict, logic="any", thres
 def span_functional_domains(row, 
                             dm_instance=None, 
                             interpro_entry_map_dict=None, 
-                            tranx_exon_domain_map=None, 
+                            tranx_pp_domain_map=None, 
                             clinvar_patho_exon_af_dict=None, 
                             intol_domains=[],
                             exon_patho_af_threshold=0.01):
@@ -374,7 +375,7 @@ def span_functional_domains(row,
     exon_frequent_patho = False
     if ("frameshift" in row['Consequence']) or ("stop_gained" in row['Consequence']):
         # These variants not only affect the local region of proteins, but also affect the downstream protein regions
-        func_domain = downstream_domain_impact(row['EXON'], row['Feature'], tranx_exon_domain_map, interpro_entry_map_dict, dm_instance, domains=str(row["DOMAINS"]), intol_domains=intol_domains, ensg_id=ensg_id)
+        func_domain = downstream_domain_impact(row['Protein_position'], row['Feature'], tranx_pp_domain_map, interpro_entry_map_dict, dm_instance, domains=str(row["DOMAINS"]), intol_domains=intol_domains, ensg_id=ensg_id)
         exon_frequent_patho = downstream_exon_patho_af(row, clinvar_patho_exon_af_dict, logic="any", threshold=exon_patho_af_threshold)
         logger.info(f"For variant {row['chrom']}:{row['pos']} with transcript {row['Feature']}, the exon is: {row['EXON']}, and the pathogenic AF is: {exon_frequent_patho}")
     elif row["5UTR_lof"] or row["5UTR_frameshift"] or row["5UTR_len_changing"]:
@@ -590,11 +591,11 @@ def PVS1_criteria(df: pd.DataFrame,
     # Load the necessary dict file
     clinvar_patho_exon_af_dict = pickle.load(gzip.open(clinvar_patho_exon_af_stat)) if clinvar_patho_exon_af_stat.endswith(".gz") else pickle.load(open(clinvar_patho_exon_af_stat, 'rb'))
     interpro_entry_map_dict = pickle.load(gzip.open(interpro_entry_map_pkl)) if interpro_entry_map_pkl.endswith(".gz") else pickle.load(open(interpro_entry_map_pkl, 'rb'))
-    tranx_exon_domain_map = pickle.load(gzip.open(tranx_exon_domain_map_pkl)) if tranx_exon_domain_map_pkl.endswith(".gz") else pickle.load(open(tranx_exon_domain_map_pkl, 'rb'))
+    tranx_pp_domain_map = pickle.load(gzip.open(tranx_exon_domain_map_pkl)) if tranx_exon_domain_map_pkl.endswith(".gz") else pickle.load(open(tranx_exon_domain_map_pkl, 'rb'))
     dm_instance = DomainNormalizer()
     intolerant_domains, exon_rare_patho_afs = zip(*df.apply(span_functional_domains, axis=1, dm_instance=dm_instance, 
                                                                                              interpro_entry_map_dict=interpro_entry_map_dict, 
-                                                                                             tranx_exon_domain_map=tranx_exon_domain_map, 
+                                                                                             tranx_pp_domain_map=tranx_pp_domain_map, 
                                                                                              clinvar_patho_exon_af_dict=clinvar_patho_exon_af_dict, 
                                                                                              intol_domains=intolerant_domains,
                                                                                              exon_patho_af_threshold=0.01))
@@ -979,72 +980,143 @@ def check_aa_pathogenic(row: dict,
         return False
 
 
-def PS1_PM5_criteria(df: pd.DataFrame, 
-                     clinvar_aa_dict_pkl: str, 
+def PS1_PM5_criteria(df: pd.DataFrame,
+                     clinvar_aa_dict_pkl: str,
                      clinvar_splice_dict_pkl: str,
                      ps3_clinvar_patho: np.ndarray,
                      pvs1_criteria: np.ndarray,
-                     threads: int = 10, 
+                     threads: int = 10,
                      high_confidence_status = {
                                                 'practice_guideline': 4,                                   # 4 stars
                                                 'reviewed_by_expert_panel': 3,                             # 3 stars
                                                 'criteria_provided,_multiple_submitters,_no_conflicts': 2,  # 2 stars
                                               }) -> Tuple[np.ndarray, np.ndarray]:
     '''
-    Identify variants using starmap,
-    PS1: Same amino acid change as a previously established pathogenic variant
-    PM5: Different amino acid change but same AA residue as a previously established pathogenic variant
-    
-    PS1 and PM5 can now coexist when both conditions are met by different pathogenic variants.
-    Self-matching (variant matching itself in ClinVar) is blocked for PS1.
+    Identify PS1/PM5 using vectorized pandas lookups against pre-flattened ClinVar sets,
+    falling back to per-row check_splice_pathogenic only for rows without HGVSp.
+
+    PS1: Same amino acid change as a previously established pathogenic variant.
+    PM5: Same AA residue with a different missense change (same variant_type) as a previously
+         established pathogenic variant.
     '''
     logger.info(f"Loading ClinVar AA change dict from {clinvar_aa_dict_pkl}")
     clinvar_aa_dict = pickle.load(gzip.open(clinvar_aa_dict_pkl)) if clinvar_aa_dict_pkl.endswith(".gz") else pickle.load(open(clinvar_aa_dict_pkl, 'rb'))
     logger.info(f"Loading ClinVar splice dict from {clinvar_splice_dict_pkl}")
     clinvar_splice_dict = pickle.load(gzip.open(clinvar_splice_dict_pkl)) if clinvar_splice_dict_pkl.endswith(".gz") else pickle.load(open(clinvar_splice_dict_pkl, 'rb'))
-    
-    # Convert DataFrame to list of dictionaries
-    records = df.to_dict('records')
-    
-    # Create argument tuples for starmap - now includes is_clinvar_patho for self-match prevention
-    args = [(record, 
-             clinvar_aa_dict.get(record['Feature'], {}), 
-             clinvar_splice_dict.get(record['Feature'], {}), 
-             pvs1_criteria[i], 
-             ps3_clinvar_patho[i],  # Pass is_clinvar_patho for self-match prevention
-             high_confidence_status) for i, record in enumerate(records)]
-    
-    # Add chunking
-    chunk_size = max(len(records) // (threads * 4), 1)
-    
-    with mp.Pool(threads) as pool:
-        logger.info(f"Running check_aa_pathogenic in parallel with {threads} threads on {len(records)} records")
-        results = pool.starmap(check_aa_pathogenic, args, chunksize=chunk_size)
-    
-    results = np.array(results)
-    
-    # PS1 criteria: Same_AA_Change, PS1, PS1_Moderate, PS1_Supporting, or PS1_PM5 (both)
-    ps1_criteria = (results == "Same_AA_Change") | (results == "PS1") | (results == "PS1_PM5")
-    ps1_moderate_criteria = (results == "PS1_Moderate")
-    ps1_supporting_criteria = (results == "PS1_Supporting")
 
-    # PM5 criteria: Same_AA_Residue or PS1_PM5 (both) - NO longer mutually exclusive with PS1
-    pm5_criteria = ((results == "Same_AA_Residue") | (results == "PS1_PM5")) & \
-                   np.logical_not(df["Consequence"].str.contains("synonymous"))
-    
-    # Log statistics
-    both_count = (results == "PS1_PM5").sum()
-    ps1_only = ((results == "Same_AA_Change") | (results == "PS1")).sum()
-    pm5_only = (results == "Same_AA_Residue").sum()
-    logger.info(f"PS1/PM5 results: PS1 only={ps1_only}, PM5 only={pm5_only}, Both PS1+PM5={both_count}")
-    logger.info(f"Self-matching prevention applied to {ps3_clinvar_patho.sum()} ClinVar pathogenic records")
-    
+    # ---------------------------------------------------------------
+    # Build flat lookup sets (one-time O(ClinVar_size) pass)
+    #   ps1_set      = {(transcript, raw_protein_pos, hgvsp_alt)} for high-conf pathogenic
+    #   pm5_residues = {(transcript, raw_protein_pos, variant_type)} for the same
+    # We carry variant_type in the PM5 key because PM5 requires same variant_type
+    # (missense vs nonsense vs frameshift) per the original per-row logic.
+    # ---------------------------------------------------------------
+    ps1_set = set()
+    pm5_residues = set()
+    for transcript, positions in clinvar_aa_dict.items():
+        for raw_pos, variants in positions.items():
+            for hgvsp_alt, entry in variants.items():
+                is_patho_highconf = False
+                for sig, rev_stat in zip(entry['CLNSIG'], entry['CLNREVSTAT']):
+                    if ("Pathogenic" in sig) and (high_confidence_status.get(rev_stat, 0) >= 2):
+                        is_patho_highconf = True
+                        break
+                if not is_patho_highconf:
+                    continue
+                ps1_set.add((transcript, raw_pos, hgvsp_alt))
+                # Encode variant_type at the residue level so PM5 only matches same variant kind
+                vtype = get_variant_type(hgvsp_alt)
+                if vtype is not None:
+                    pm5_residues.add((transcript, raw_pos, vtype))
+
+    logger.info(f"Built PS1 lookup set with {len(ps1_set)} (transcript, pos, hgvsp) entries "
+                f"and PM5 residue set with {len(pm5_residues)} (transcript, pos, variant_type) entries")
+
+    # ---------------------------------------------------------------
+    # Vectorized PS1: exact (Feature, Protein_position, HGVSp) tuple match
+    # ---------------------------------------------------------------
+    feature = df['Feature'].astype(str).values
+    raw_pp = df['Protein_position'].astype(str).values
+    hgvsp_col = df['HGVSp'].astype(str).values
+    consequence = df['Consequence'].astype(str).values
+
+    ps1_keys = list(zip(feature, raw_pp, hgvsp_col))
+    ps1_eligible = np.array([k in ps1_set for k in ps1_keys], dtype=bool)
+
+    # ---------------------------------------------------------------
+    # Vectorized PM5: same (Feature, Protein_position, variant_type) but different HGVSp
+    # PM5 only applies when variant_type == 'missense' for both query and ClinVar entry
+    # (the original per-row logic excludes synonymous and requires same variant_type)
+    # ---------------------------------------------------------------
+    query_vtypes = np.array([get_variant_type(h) if h not in ('nan', 'inf', '') else None
+                             for h in hgvsp_col], dtype=object)
+    pm5_keys = list(zip(feature, raw_pp, query_vtypes))
+    pm5_residue_match = np.array([k in pm5_residues for k in pm5_keys], dtype=bool)
+    # PM5 requires same residue + same variant_type, but NOT same HGVSp (that would be PS1)
+    pm5_eligible = pm5_residue_match
+    # Exclude synonymous variants from PM5 (matches original logic at line 1034)
+    synonymous_mask = pd.Series(consequence).str.contains('synonymous').fillna(False).values
+    pm5_eligible = pm5_eligible & ~synonymous_mask
+
+    logger.info(f"Vectorized lookup: PS1 hits={ps1_eligible.sum()}, PM5 hits={pm5_eligible.sum()}")
+
+    # ---------------------------------------------------------------
+    # Splice fallback: per-row logic for variants without HGVSp or where the
+    # position is not in clinvar_aa_dict. The original per-row function returns
+    # the splice result directly for these cases. Run only on the subset.
+    # ---------------------------------------------------------------
+    no_hgvsp = np.isin(hgvsp_col, ['nan', 'inf', ''])
+    has_transcript_in_clinvar = np.array([f in clinvar_aa_dict for f in feature], dtype=bool)
+    pos_in_clinvar = np.array([(f in clinvar_aa_dict and p in clinvar_aa_dict[f])
+                               for f, p in zip(feature, raw_pp)], dtype=bool)
+    splice_fallback_mask = has_transcript_in_clinvar & (no_hgvsp | ~pos_in_clinvar)
+    n_splice_fallback = splice_fallback_mask.sum()
+    logger.info(f"Splice fallback subset: {n_splice_fallback} rows (no HGVSp or position absent in ClinVar AA dict)")
+
+    splice_results = np.array([False] * len(df), dtype=object)
+    if n_splice_fallback > 0:
+        fallback_idx = np.where(splice_fallback_mask)[0]
+        records_subset = df.iloc[fallback_idx].to_dict('records')
+        args = [(records_subset[i],
+                 [],  # clinvar_tranx_aa_dict not needed here (splice-only path)
+                 clinvar_splice_dict.get(records_subset[i].get('Feature', ''), []),
+                 pvs1_criteria[fallback_idx[i]],
+                 ps3_clinvar_patho[fallback_idx[i]],
+                 high_confidence_status) for i in range(len(records_subset))]
+        chunk_size = max(len(args) // (threads * 4), 1)
+        with mp.Pool(threads) as pool:
+            fallback_results = pool.starmap(check_aa_pathogenic, args, chunksize=chunk_size)
+        for global_i, res in zip(fallback_idx, fallback_results):
+            splice_results[global_i] = res
+
+    # Splice fallback can return PS1-equivalent strength values
+    splice_ps1_strong = (splice_results == "Same_AA_Change") | (splice_results == "PS1") | (splice_results == "PS1_PM5")
+    splice_ps1_moderate = (splice_results == "PS1_Moderate")
+    splice_ps1_supporting = (splice_results == "PS1_Supporting")
+    splice_pm5 = (splice_results == "Same_AA_Residue") | (splice_results == "PS1_PM5")
+
+    # ---------------------------------------------------------------
+    # Combine vectorized + splice fallback results
+    # ---------------------------------------------------------------
     ps1_array = np.zeros(len(df), dtype=int)
     pm5_array = np.zeros(len(df), dtype=int)
-    ps1_array[ps1_criteria] = 3
-    ps1_array[ps1_moderate_criteria] = 2
-    ps1_array[ps1_supporting_criteria] = 1
-    pm5_array[pm5_criteria] = 2
+
+    # PS1 strong (3): vectorized hits OR splice fallback strong hits
+    ps1_array[ps1_eligible | splice_ps1_strong] = 3
+    # Splice-only moderate/supporting (only set if not already strong)
+    ps1_array[splice_ps1_moderate & (ps1_array == 0)] = 2
+    ps1_array[splice_ps1_supporting & (ps1_array == 0)] = 1
+
+    pm5_eligible_combined = pm5_eligible | (splice_pm5 & ~synonymous_mask)
+    pm5_array[pm5_eligible_combined] = 2
+
+    both_count = int(((ps1_array > 0) & (pm5_array > 0)).sum())
+    logger.info(f"PS1/PM5 results (vectorized + splice fallback): "
+                f"PS1 (any strength)={int((ps1_array > 0).sum())}, "
+                f"PM5={int((pm5_array > 0).sum())}, "
+                f"Both PS1+PM5={both_count}")
+    logger.info(f"Self-matching prevention applied to {ps3_clinvar_patho.sum()} ClinVar pathogenic records")
+
     return ps1_array, pm5_array
 
 
@@ -1056,6 +1128,12 @@ def determine_denovo_per_row(row: dict, ped_info: dict, ped_df: pd.DataFrame) ->
     proband, proband_pheno = proband_info
     father, father_pheno = father_info
     mother, mother_pheno = mother_info
+
+    # Coerce NaN genotype values to '.' so that `"1" in gt` never hits a float
+    for sample_id in (father, mother, proband):
+        val = row.get(sample_id)
+        if val is not None and not isinstance(val, str):
+            row[sample_id] = '.'
 
     proband_sex = ped_df.loc[ped_df['IndividualID'] == proband, 'Sex'].values[0]
     # First determine when proband is Male.
@@ -1647,9 +1725,9 @@ def PM1_criteria(df: pd.DataFrame,
     logger.info(f"There are {np.sum(rmc_hit)} variants located in gnomAD RMC-constrained regions")
 
     pvs1_double_count = pvs1_criteria >= 2
-    pm1_criteria = ( hcseeker_hit & missense ) | \
+    pm1_criteria = ( hcseeker_hit & missense & ~missense_benign ) | \
                    ( rmc_hit & missense & ~missense_benign ) | \
-                   ( loc_intol_domain & missense )
+                   ( loc_intol_domain & missense & ~missense_benign )
     pm1_criteria = pm1_criteria & np.logical_not(pvs1_double_count)
     pm1_array = np.zeros(len(df), dtype=int)
     pm1_array[pm1_criteria] = 2
@@ -3075,11 +3153,26 @@ def compute_control_common(df: pd.DataFrame, proband: str,
         common[m] = af[m] > cutoff
 
     df["control_common"] = common
-    df["control_common_index"] = np.where(common, 0.5, 1.0)
+
+    # Graded penalty via Beta posterior lower bound: penalize more when
+    # both AF and sample size are large (high statistical confidence).
+    # Floor at 0.01, ceiling at 0.5 (minimum penalty for any common variant).
+    ac_safe = ac.fillna(0).values.astype(float)
+    an_safe = an.fillna(0).values.astype(float)
+    confident_af = np.zeros(len(df))
+    valid_for_beta = common.values & (an_safe > 0)
+    if valid_for_beta.any():
+        confident_af[valid_for_beta] = beta_dist.ppf(
+            0.01, ac_safe[valid_for_beta] + 1,
+            an_safe[valid_for_beta] - ac_safe[valid_for_beta] + 1
+        )
+    df["control_common_index"] = np.where(
+        common, np.clip(1.0 - confident_af, 0.01, 0.5), 1.0
+    )
 
     n_flagged = common.sum()
     if n_flagged > 0:
-        logger.info(f"Control-common penalty: {n_flagged} variants flagged as common in control cohort (x0.5 rank penalty)")
+        logger.info(f"Control-common penalty: {n_flagged} variants flagged as common in control cohort (graded Beta penalty, ceiling 0.5)")
 
     return df
 

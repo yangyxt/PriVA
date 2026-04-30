@@ -44,6 +44,32 @@ Create and configure the conda environment (expected name `priva_acmg`):
    bash scripts/install_utils.sh main_install path/to/config.yaml
    ```
 
+## Reviewer smoke test
+
+The smoke test is a small end-to-end demo for checking that PriVA can run on the current machine. It uses curated demo assets in `example/smoke_data/` and does not run the full production annotation-resource installation.
+
+From a fresh clone, first create and activate the PriVA conda environment:
+
+```bash
+git clone <PriVA_repo_url>
+cd PriVA
+mamba env create -f acmg_conda.yml
+mamba activate priva_acmg
+```
+
+If `mamba` is unavailable, use `conda env create -f acmg_conda.yml` instead.
+
+Then run the smoke test for one or both supported assemblies:
+
+```bash
+./example/run_smoke_test.sh hg19
+./example/run_smoke_test.sh hg38
+```
+
+The wrapper checks required command-line tools and bundled smoke resources, downloads the configured UCSC reference FASTA if needed, creates the FASTA index with `samtools faidx`, and runs the PriVA Snakemake workflow on the 20-variant demo set. Expected outputs are written under `example/smoke_runs/`.
+
+The smoke test does not require Git LFS on current `main`; all current smoke assets are stored as normal Git files.
+
 ## Configuration File
 The `config.yaml` file in the PriVA repo contains all the parameters you need. Most of them can be automatically handled by the BASH script `install_utils.sh`. Here we list the items need to be specified by users prior to executing `install_utils.sh`
 

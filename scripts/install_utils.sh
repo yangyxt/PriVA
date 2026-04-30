@@ -1832,10 +1832,133 @@ function pext_install() {
 }
 
 
+function reference_genome_install() {
+    local config_file=${1}
+    local assembly=$(read_yaml "${config_file}" "assembly")
+    local ref_fasta=$(read_yaml "${config_file}" "ref_genome")
+    local ucsc_assembly=""
+    local ref_hint=$(echo "${ref_fasta}" | tr '[:upper:]' '[:lower:]')
+
+    if [[ ${assembly} == "hg19" ]] || [[ ${assembly} == "GRCh37" ]]; then
+        ucsc_assembly="hg19"
+    elif [[ ${assembly} == "hg38" ]] || [[ ${assembly} == "GRCh38" ]]; then
+        ucsc_assembly="hg38"
+    elif [[ ${ref_hint} =~ hg19 ]] || [[ ${ref_hint} =~ grch37 ]]; then
+        ucsc_assembly="hg19"
+    elif [[ ${ref_hint} =~ hg38 ]] || [[ ${ref_hint} =~ grch38 ]]; then
+        ucsc_assembly="hg38"
+    else
+        log "ERROR: Unsupported assembly/ref label. assembly=${assembly}, ref_genome=${ref_fasta}. Supported labels: hg19, GRCh37, hg38, GRCh38"
+        return 1
+    fi
+
+    local ref_fasta_url=""
+    if [[ ${ucsc_assembly} == "hg19" ]]; then
+        ref_fasta_url="https://hgdownload.soe.ucsc.edu/goldenPath/hg19/bigZips/hg19.fa.gz"
+    else
+        ref_fasta_url="https://hgdownload.soe.ucsc.edu/goldenPath/hg38/bigZips/hg38.fa.gz"
+    fi
+
+    if [[ -z ${ref_fasta} ]] || [[ ${ref_fasta} == "null" ]]; then
+        ref_fasta="${DATA_DIR}/reference/ucsc.${ucsc_assembly}.fasta"
+        update_yaml "${config_file}" "ref_genome" "${ref_fasta}"
+        log "ref_genome was empty; set to default path: ${ref_fasta}"
+    fi
+
+    local ref_dir=$(dirname "${ref_fasta}")
+    mkdir -p "${ref_dir}" || { log "ERROR: Failed to create reference genome directory ${ref_dir}"; return 1; }
+
+    if ! command -v samtools >/dev/null 2>&1; then
+        log "ERROR: samtools is required but not found in PATH"
+        return 1
+    fi
+
+    if [[ ! -f ${ref_fasta} ]]; then
+        local downloader=""
+        if command -v wget >/dev/null 2>&1; then
+            downloader="wget"
+        elif command -v curl >/dev/null 2>&1; then
+            downloader="curl"
+        else
+            log "ERROR: Either wget or curl is required to download ${ucsc_assembly} reference FASTA"
+            return 1
+        fi
+
+        if ! command -v gzip >/dev/null 2>&1; then
+            log "ERROR: gzip is required but not found in PATH"
+            return 1
+        fi
+        if ! command -v gunzip >/dev/null 2>&1; then
+            log "ERROR: gunzip is required but not found in PATH"
+            return 1
+        fi
+
+        local tmp_gz="${ref_fasta}.download.$$.gz"
+        local tmp_fasta="${ref_fasta}.download.$$"
+        rm -f "${tmp_gz}" "${tmp_fasta}"
+
+        log "Downloading UCSC ${ucsc_assembly} reference FASTA from ${ref_fasta_url}"
+        if [[ ${downloader} == "wget" ]]; then
+            wget -c "${ref_fasta_url}" -O "${tmp_gz}" || {
+                rm -f "${tmp_gz}" "${tmp_fasta}"
+                log "ERROR: Failed to download reference FASTA from ${ref_fasta_url}"
+                return 1
+            }
+        else
+            curl -L "${ref_fasta_url}" -o "${tmp_gz}" || {
+                rm -f "${tmp_gz}" "${tmp_fasta}"
+                log "ERROR: Failed to download reference FASTA from ${ref_fasta_url}"
+                return 1
+            }
+        fi
+
+        gzip -t "${tmp_gz}" || {
+            rm -f "${tmp_gz}" "${tmp_fasta}"
+            log "ERROR: Downloaded reference FASTA archive is corrupted: ${tmp_gz}"
+            return 1
+        }
+
+        gunzip -c "${tmp_gz}" > "${tmp_fasta}" || {
+            rm -f "${tmp_gz}" "${tmp_fasta}"
+            log "ERROR: Failed to decompress downloaded archive ${tmp_gz}"
+            return 1
+        }
+        [[ -s ${tmp_fasta} ]] || {
+            rm -f "${tmp_gz}" "${tmp_fasta}"
+            log "ERROR: Decompressed FASTA is empty: ${tmp_fasta}"
+            return 1
+        }
+
+        mv "${tmp_fasta}" "${ref_fasta}" || {
+            rm -f "${tmp_gz}" "${tmp_fasta}"
+            log "ERROR: Failed to move FASTA into place at ${ref_fasta}"
+            return 1
+        }
+        rm -f "${tmp_gz}"
+        log "Reference FASTA deployed to ${ref_fasta}"
+    else
+        log "Reference FASTA already exists: ${ref_fasta}"
+    fi
+
+    local ref_fai="${ref_fasta}.fai"
+    if [[ ! -f ${ref_fai} ]] || [[ ${ref_fasta} -nt ${ref_fai} ]]; then
+        log "Building FASTA index with samtools faidx: ${ref_fasta}"
+        samtools faidx "${ref_fasta}" || {
+            log "ERROR: Failed to create FASTA index ${ref_fai}"
+            return 1
+        }
+    else
+        log "Reference FASTA index already up-to-date: ${ref_fai}"
+    fi
+}
+
+
 function main_install() {
     local config_file=${1}
 
     local has_error=0
+    local skip_vep_install=0
+    [[ "${PRIVA_SMOKE_SKIP_VEP:-0}" == "1" ]] && skip_vep_install=1
     # Read configuration
     local conda_env_yaml=${BASE_DIR}/$(basename $(read_yaml "$config_file" "conda_env_yaml"))
     local vep_cache_dir=$(read_yaml "$config_file" "vep_cache_dir")
@@ -1844,11 +1967,18 @@ function main_install() {
     local ref_fasta=$(read_yaml "$config_file" "ref_genome")
     local vep_plugins_cachedir=$(read_yaml "$config_file" "vep_plugins_cachedir")
     [[ -f ${conda_env_yaml} ]] || { log "The conda env yaml file ${conda_env_yaml} is not found, please check the file"; has_error=1; }
-    [[ -d ${vep_cache_dir} ]] || { log "The cache directory for VEP ${vep_cache_dir} is not found, please check the file"; has_error=1; }
-    [[ -d ${vep_plugins_dir} ]] || { log "The plugins directory for VEP ${vep_plugins_dir} is not found, please check the file"; has_error=1; }
-    [[ -d ${vep_plugins_cachedir} ]] || { log "The plugins cache directory for VEP ${vep_plugins_cachedir} is not found, please check the file"; has_error=1; }
-    [[ -f ${ref_fasta} ]] || { log "The reference genome fasta file ${ref_fasta} is not found, please check the file"; has_error=1; }
+    if [[ ${skip_vep_install} -eq 0 ]]; then
+        [[ -d ${vep_cache_dir} ]] || { log "The cache directory for VEP ${vep_cache_dir} is not found, please check the file"; has_error=1; }
+        [[ -d ${vep_plugins_dir} ]] || { log "The plugins directory for VEP ${vep_plugins_dir} is not found, please check the file"; has_error=1; }
+        [[ -d ${vep_plugins_cachedir} ]] || { log "The plugins cache directory for VEP ${vep_plugins_cachedir} is not found, please check the file"; has_error=1; }
+    fi
     [[ ${has_error} -eq 1 ]] && { log "Please check the values in the configuration file ${config_file}"; return 1; }
+
+    reference_genome_install "${config_file}" || \
+    { log "Failed to deploy/index configured reference genome"; return 1; }
+    ref_fasta=$(read_yaml "$config_file" "ref_genome")
+    [[ -f ${ref_fasta} ]] || { log "The reference genome fasta file ${ref_fasta} is not found, please check the file"; return 1; }
+
     # Perform installation steps
     # 1. Install the conda env
     conda_install_vep "${conda_env_yaml}" || \
@@ -1862,34 +1992,38 @@ function main_install() {
         conda activate $conda_env_name
     fi
 
-    # 2. Install VEP
-    # Update config with installation results
-    local vep_version=$(vep --help | grep "ensembl-vep" | awk '{print $NF}' | awk -F '.' '{print $1}')
-    # Update config with installation results
-    update_yaml "$config_file" "vep_installed_version" "$vep_version"
+    if [[ ${skip_vep_install} -eq 1 ]]; then
+        log "PRIVA_SMOKE_SKIP_VEP=1: skipping VEP API/cache, VEP plugins, and LoFtee installation; smoke inputs must already contain complete CSQ annotations."
+    else
+        # 2. Install VEP
+        # Update config with installation results
+        local vep_version=$(vep --help | grep "ensembl-vep" | awk '{print $NF}' | awk -F '.' '{print $1}')
+        # Update config with installation results
+        update_yaml "$config_file" "vep_installed_version" "$vep_version"
 
-    # Install VEP API and caches and plugins first
-    vep_cache_api_install \
-    --VEP_VERSION "$vep_version" \
-    --VEP_CACHEDIR "$vep_cache_dir" \
-    --VEP_PLUGINSDIR "$vep_plugins_dir" \
-    --VEP_ASSEMBLY "$assembly" \
-    --VEP_PLUGINSCACHEDIR "$vep_plugins_cachedir" || \
-    { log "Failed to install VEP API and caches"; return 1; }
+        # Install VEP API and caches and plugins first
+        vep_cache_api_install \
+        --VEP_VERSION "$vep_version" \
+        --VEP_CACHEDIR "$vep_cache_dir" \
+        --VEP_PLUGINSDIR "$vep_plugins_dir" \
+        --VEP_ASSEMBLY "$assembly" \
+        --VEP_PLUGINSCACHEDIR "$vep_plugins_cachedir" || \
+        { log "Failed to install VEP API and caches"; return 1; }
 
-    # Install VEP plugins caches
-    # 3. Install VEP plugins
-    VEP_plugins_install \
-    ${vep_plugins_dir} \
-    ${vep_plugins_cachedir} \
-    ${assembly} \
-    ${config_file} \
-    ${conda_env_name} || \
-    { log "Failed to install VEP plugins"; return 1; }
+        # Install VEP plugins caches
+        # 3. Install VEP plugins
+        VEP_plugins_install \
+        ${vep_plugins_dir} \
+        ${vep_plugins_cachedir} \
+        ${assembly} \
+        ${config_file} \
+        ${conda_env_name} || \
+        { log "Failed to install VEP plugins"; return 1; }
 
-    # Install LOFTEE separately despite it is also a VEP plugin
-    LoFtee_install ${vep_plugins_cachedir} ${config_file} || \
-    { log "Failed to install LOFTEE"; return 1; }
+        # Install LOFTEE separately despite it is also a VEP plugin
+        LoFtee_install ${vep_plugins_cachedir} ${config_file} || \
+        { log "Failed to install LOFTEE"; return 1; }
+    fi
 
     # 4. Install gnomAD VCF (basically download bgzipped VCF files)
     gnomAD_install ${config_file} ${ref_fasta} || \

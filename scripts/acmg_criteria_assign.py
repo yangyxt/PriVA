@@ -1725,8 +1725,8 @@ def PM1_criteria(df: pd.DataFrame,
     logger.info(f"There are {np.sum(rmc_hit)} variants located in gnomAD RMC-constrained regions")
 
     pvs1_double_count = pvs1_criteria >= 2
-    pm1_criteria = ( hcseeker_hit & missense & ~missense_benign ) | \
-                   ( rmc_hit & missense & ~missense_benign ) | \
+    pm1_criteria = ( hcseeker_hit & missense_damaging ) | \
+                   ( rmc_hit & missense_damaging ) | \
                    ( loc_intol_domain & missense & ~missense_benign )
     pm1_criteria = pm1_criteria & np.logical_not(pvs1_double_count)
     pm1_array = np.zeros(len(df), dtype=int)

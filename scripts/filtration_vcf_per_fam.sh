@@ -90,11 +90,17 @@ function filter_af () {
 
     local af_cutoff=$(read_yaml ${config_file} "af_cutoff")
 
-    [[ -z ${output_vcf} ]] && \
-    local tmp_tag=$(randomID) && \
-    local output_vcf=${input_vcf/.vcf*/.${tmp_tag}.vcf.gz} && \
-    local replace="TRUE" || \
-    { log "Failed to generate a temporary output VCF file name. Quit with error"; return 1; }
+    if [[ -z ${output_vcf} ]]; then
+        local tmp_tag=$(randomID)
+        if [[ -z ${tmp_tag} ]]; then
+            log "Failed to generate a temporary output VCF file name. Quit with error"
+            return 1
+        fi
+        output_vcf=${input_vcf/.vcf*/.${tmp_tag}.vcf.gz}
+        local replace="TRUE"
+    else
+        local replace="FALSE"
+    fi
 
     check_vcf_validity ${input_vcf} && \
     [[ $(bcftools view -h ${input_vcf} | grep -c "AF_grpmax_joint > ${af_cutoff}") -gt 0 ]] && \
@@ -342,4 +348,3 @@ if [[ "${#BASH_SOURCE[@]}" -eq 1 ]]; then
         main_filtration "$@"
     fi
 fi
-

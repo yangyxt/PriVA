@@ -1,0 +1,134 @@
+{
+  "hg19": {
+    "config": "/paedyl01/disk1/yangyxt/PriVA/example/configs/demo_minimal_hg19.seed20250429.sliced_20260430_115042.yaml",
+    "features": 112,
+    "genes": 25,
+    "variant_ids": 20,
+    "files": {
+      "clinvar_aa_stat": {
+        "path": "/paedyl01/disk1/yangyxt/PriVA/example/example_data/hg19/resources/clinvar.hg19.demo20.vep.aa_change.stats.pkl",
+        "size": 826356
+      },
+      "clinvar_splice_stat": {
+        "path": "/paedyl01/disk1/yangyxt/PriVA/example/example_data/hg19/resources/clinvar.hg19.demo20.vep.splice_change.stats.pkl",
+        "size": 3158935
+      },
+      "clinvar_patho_af_stat": {
+        "path": "/paedyl01/disk1/yangyxt/PriVA/example/example_data/hg19/resources/clinvar.hg19.demo20.vep.patho_af_stat.pkl",
+        "size": 5050
+      },
+      "clinvar_patho_exon_af_stat": {
+        "path": "/paedyl01/disk1/yangyxt/PriVA/example/example_data/hg19/resources/clinvar.hg19.demo20.vep.patho_exon_af_stat.pkl",
+        "size": 183065
+      },
+      "alphamissense_tranx_domain_map": {
+        "path": "/paedyl01/disk1/yangyxt/PriVA/example/example_data/hg19/resources/transcript_pp_domain_mapping.hg19.demo20.pkl",
+        "size": 80399
+      },
+      "alphamissense_intolerant_domains": {
+        "path": "/paedyl01/disk1/yangyxt/PriVA/example/example_data/hg19/resources/domain_tolerance_analysis.hg19.demo20.tsv",
+        "size": 46708
+      },
+      "all_intolerant_domains": {
+        "path": "/paedyl01/disk1/yangyxt/PriVA/example/example_data/hg19/resources/all_intolerant_domains.hg19.demo20.pkl",
+        "size": 3080
+      },
+      "pm1_regions_pkl": {
+        "path": "/paedyl01/disk1/yangyxt/PriVA/example/example_data/hg19/resources/pm1_regions.hg19.demo20.pkl",
+        "size": 3464
+      },
+      "interpro_mapping_pickle": {
+        "path": "/paedyl01/disk1/yangyxt/PriVA/example/example_data/hg19/resources/Interpro_entry_mapping.hg19.demo20.pkl.gz",
+        "size": 36368
+      },
+      "clingen_map": {
+        "path": "/paedyl01/disk1/yangyxt/PriVA/example/example_data/hg19/resources/clingen_map.hg19.demo20.pkl.gz",
+        "size": 53
+      },
+      "gene_dosage_sensitivity": {
+        "path": "/paedyl01/disk1/yangyxt/PriVA/example/example_data/hg19/resources/gene_dosage_sensitivity.hg19.demo20.tsv",
+        "size": 1839
+      }
+    },
+    "slice_counts": {
+      "clinvar_aa_transcripts": 102,
+      "clinvar_splice_transcripts": 107,
+      "patho_af_genes": 25,
+      "patho_exon_transcripts": 104,
+      "tranx_domain_transcripts": 111,
+      "all_intol_entries": 85,
+      "pm1_hc_transcripts": 0,
+      "pm1_rmc_transcripts": 1,
+      "interpro_entries": 118,
+      "clingen_entries": 0,
+      "gene_dosage_rows": 8,
+      "domain_tolerance_rows": 317
+    }
+  },
+  "hg38": {
+    "config": "/paedyl01/disk1/yangyxt/PriVA/example/configs/demo_minimal_hg38.seed20250429.sliced_20260430_115042.yaml",
+    "features": 167,
+    "genes": 25,
+    "variant_ids": 20,
+    "files": {
+      "clinvar_aa_stat": {
+        "path": "/paedyl01/disk1/yangyxt/PriVA/example/example_data/hg38/resources/clinvar.hg38.demo20.vep.aa_change.stats.pkl",
+        "size": 1701094
+      },
+      "clinvar_splice_stat": {
+        "path": "/paedyl01/disk1/yangyxt/PriVA/example/example_data/hg38/resources/clinvar.hg38.demo20.vep.splice_change.stats.pkl",
+        "size": 6946299
+      },
+      "clinvar_patho_af_stat": {
+        "path": "/paedyl01/disk1/yangyxt/PriVA/example/example_data/hg38/resources/clinvar.hg38.demo20.vep.patho_af_stat.pkl",
+        "size": 5094
+      },
+      "clinvar_patho_exon_af_stat": {
+        "path": "/paedyl01/disk1/yangyxt/PriVA/example/example_data/hg38/resources/clinvar.hg38.demo20.vep.patho_exon_af_stat.pkl",
+        "size": 362396
+      },
+      "alphamissense_tranx_domain_map": {
+        "path": "/paedyl01/disk1/yangyxt/PriVA/example/example_data/hg38/resources/transcript_pp_domain_mapping.hg38.demo20.pkl",
+        "size": 133897
+      },
+      "alphamissense_intolerant_domains": {
+        "path": "/paedyl01/disk1/yangyxt/PriVA/example/example_data/hg38/resources/domain_tolerance_analysis.hg38.demo20.tsv",
+        "size": 53116
+      },
+      "all_intolerant_domains": {
+        "path": "/paedyl01/disk1/yangyxt/PriVA/example/example_data/hg38/resources/all_intolerant_domains.hg38.demo20.pkl",
+        "size": 3536
+      },
+      "pm1_regions_pkl": {
+        "path": "/paedyl01/disk1/yangyxt/PriVA/example/example_data/hg38/resources/pm1_regions.hg38.demo20.pkl",
+        "size": 3920
+      },
+      "interpro_mapping_pickle": {
+        "path": "/paedyl01/disk1/yangyxt/PriVA/example/example_data/hg38/resources/Interpro_entry_mapping.hg38.demo20.pkl.gz",
+        "size": 44528
+      },
+      "clingen_map": {
+        "path": "/paedyl01/disk1/yangyxt/PriVA/example/example_data/hg38/resources/clingen_map.hg38.demo20.pkl.gz",
+        "size": 53
+      },
+      "gene_dosage_sensitivity": {
+        "path": "/paedyl01/disk1/yangyxt/PriVA/example/example_data/hg38/resources/gene_dosage_sensitivity.hg38.demo20.tsv",
+        "size": 1840
+      }
+    },
+    "slice_counts": {
+      "clinvar_aa_transcripts": 153,
+      "clinvar_splice_transcripts": 160,
+      "patho_af_genes": 25,
+      "patho_exon_transcripts": 156,
+      "tranx_domain_transcripts": 156,
+      "all_intol_entries": 102,
+      "pm1_hc_transcripts": 0,
+      "pm1_rmc_transcripts": 1,
+      "interpro_entries": 161,
+      "clingen_entries": 0,
+      "gene_dosage_rows": 8,
+      "domain_tolerance_rows": 365
+    }
+  }
+}

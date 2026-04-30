@@ -41,3 +41,5 @@ wheels/
 ehthumbs.db
 Thumbs.db
 /example_test/
+
+/example/smoke_runs/

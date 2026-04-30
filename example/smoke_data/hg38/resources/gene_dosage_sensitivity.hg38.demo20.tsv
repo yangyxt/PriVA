@@ -1,0 +1,9 @@
+#Gene Symbol	Gene ID	cytoBand	Genomic Location	Haploinsufficiency Score	Haploinsufficiency Description	Haploinsufficiency PMID1	Haploinsufficiency PMID2	Haploinsufficiency PMID3	Haploinsufficiency PMID4	Haploinsufficiency PMID5	Haploinsufficiency PMID6	Triplosensitivity Score	Triplosensitivity Description	Triplosensitivity PMID1	Triplosensitivity PMID2	Triplosensitivity PMID3	Triplosensitivity PMID4	Triplosensitivity PMID5	Triplosensitivity PMID6	Date Last Evaluated	Haploinsufficiency Disease ID	Triplosensitivity Disease ID
+BLM	641	15q26.1	chr15:90717346-90816166	30	Gene associated with autosomal recessive phenotype							0	No evidence available							2022-02-09	MONDO:0008876
+CEP290	80184	12q21.32	chr12:88049016-88142088	30	Gene associated with autosomal recessive phenotype							0	No evidence available							2012-08-22	MONDO:0015369
+IDUA	3425	4p16.3	chr4:986997-1008351	30	Gene associated with autosomal recessive phenotype							Not yet evaluated	Not yet evaluated							2016-08-22	MONDO:0001586
+KMT2D	8085	12q13.12	chr12:49018978-49060794	3	Sufficient evidence for dosage pathogenicity	20711175.0	21671394	21607748				0	No evidence available							2020-01-23	MONDO:0007843
+MUTYH	4595	1p34.1	chr1:45329242-45340440	30	Gene associated with autosomal recessive phenotype							0	No evidence available							2015-11-11	MONDO:0012041
+NTHL1	4913	16p13.3	chr16:2039820-2047834	30	Gene associated with autosomal recessive phenotype							0	No evidence available							2020-07-06	MONDO:0014630
+RDX	5962	11q22.3	chr11:110174922-110296614	30	Gene associated with autosomal recessive phenotype							0	No evidence available							2016-08-22	MONDO:0012602
+TSC2	7249	16p13.3	chr16:2047985-2089491	3	Sufficient evidence for dosage pathogenicity	31525612.0	10205261	29932062				0	No evidence available							2020-06-10	MONDO:0001734

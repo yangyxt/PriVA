@@ -71,6 +71,68 @@ check_vcf_index() {
     [[ -f "${vcf}.tbi" || -f "${vcf}.csi" ]] || { echo "ERROR: Missing VCF index (.tbi/.csi): ${vcf}" >&2; exit 1; }
 }
 
+validate_csq_arity() {
+    local vcf="$1"
+    local label="$2"
+    python - "${vcf}" "${label}" <<'PY'
+import gzip
+import re
+import sys
+
+vcf_path = sys.argv[1]
+label = sys.argv[2]
+
+opener = gzip.open if vcf_path.endswith(".gz") else open
+csq_field_count = None
+mismatch_count = 0
+csq_value_count = 0
+bad_examples = []
+
+with opener(vcf_path, "rt") as fh:
+    for line in fh:
+        if line.startswith("##INFO=<ID=CSQ"):
+            m = re.search(r"Format: ([^\">]+)", line)
+            if m:
+                csq_field_count = len(m.group(1).split("|"))
+        elif line.startswith("#"):
+            continue
+        else:
+            parts = line.rstrip("\n").split("\t")
+            info = parts[7]
+            for kv in info.split(";"):
+                if not kv.startswith("CSQ="):
+                    continue
+                for entry in kv[4:].split(","):
+                    if entry in ("", "."):
+                        continue
+                    csq_value_count += 1
+                    field_count = entry.count("|") + 1
+                    if csq_field_count is not None and field_count != csq_field_count:
+                        mismatch_count += 1
+                        if len(bad_examples) < 5:
+                            bad_examples.append(
+                                f"{parts[0]}:{parts[1]} {parts[3]}>{parts[4]} value_fields={field_count} expected={csq_field_count} CSQ={entry[:160]}"
+                            )
+
+if csq_field_count is None:
+    print(f"ERROR: {label} missing INFO/CSQ header: {vcf_path}", file=sys.stderr)
+    sys.exit(1)
+
+if mismatch_count > 0:
+    print(
+        f"ERROR: {label} has malformed INFO/CSQ values in {vcf_path}. "
+        f"Header declares {csq_field_count} fields but found {mismatch_count} mismatched CSQ entries "
+        f"out of {csq_value_count}.",
+        file=sys.stderr,
+    )
+    for ex in bad_examples:
+        print(f"ERROR: Example bad CSQ: {ex}", file=sys.stderr)
+    sys.exit(1)
+
+print(f"Validated CSQ arity for {label}: {vcf_path} (header_fields={csq_field_count}, csq_values={csq_value_count})")
+PY
+}
+
 config_assembly="$(get_cfg assembly)"
 if [[ "${config_assembly}" != "${assembly_norm}" ]] && \
    ! { [[ "${assembly_norm}" == "hg19" ]] && [[ "${config_assembly}" == "GRCh37" ]]; } && \
@@ -140,6 +202,8 @@ check_file "${gene_dosage_sensitivity}"
 check_file "${alphamissense_vcf}"
 check_file "${repeat_region_file}"
 check_file "${clinvar_gene_stat_file}"
+validate_csq_arity "${input_vcf}" "input_vcf"
+validate_csq_arity "${hub_vcf_file}" "hub_vcf_file"
 
 for d in "${output_dir}" "${tmp_dir}"; do
     mkdir -p "${d}"

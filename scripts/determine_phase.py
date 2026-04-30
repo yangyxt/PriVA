@@ -410,6 +410,37 @@ def build_patient_info(pedigree_df: pd.DataFrame, variants_df: pd.DataFrame) -> 
     return patient_info
 
 
+def _can_resolve_phase(variants_df: pd.DataFrame, patient_info: Dict[str, Dict[str, Any]]) -> bool:
+    """Return True if phase determination is possible for at least one patient.
+
+    Phase can be resolved when:
+      (a) at least one patient has recorded parental genotypes, OR
+      (b) at least one genotype column uses the phased delimiter '|'.
+
+    When neither condition holds (no parents, and all genotypes use '/'),
+    every determine_phase_with() call falls through to _phase_with_parents()
+    which returns 'unknown'.  The entire cis/trans analysis is wasted work.
+    """
+    # Check for parental data
+    for info in patient_info.values():
+        if info.get('father_id') is not None or info.get('mother_id') is not None:
+            return True
+
+    # Check for phased genotypes: sample genotype columns for '|' delimiter
+    for pid in patient_info:
+        if pid not in variants_df.columns:
+            continue
+        col = variants_df[pid].dropna()
+        if len(col) == 0:
+            continue
+        # Check a sample — one phased genotype anywhere means phase is resolvable
+        sample = col.head(50) if len(col) > 50 else col
+        if sample.astype(str).str.contains('|', regex=False).any():
+            return True
+
+    return False
+
+
 def determine_cis_trans_relationships(
     variants_df: pd.DataFrame,
     pathogenic_array: List[bool],
@@ -418,43 +449,60 @@ def determine_cis_trans_relationships(
 ) -> Tuple[np.ndarray, np.ndarray]:
     """
     Main function to determine cis/trans relationships using gene-specific parallelization.
-    
+
     Args:
-        variants_df: DataFrame with variant annotations  
+        variants_df: DataFrame with variant annotations
         pathogenic_array: Boolean array for pathogenic status
         pedigree_df: Pedigree information
-        patient_phenotype_value: Phenotype value for patients
         num_processes: Number of processes for multiprocessing
-        
+
     Returns:
-        Tuple of (cis_count_array, trans_count_array)
+        Tuple of (cis_count_array, trans_count_array, variants_df)
     """
     # Prepare data
     variants_df['is_pathogenic'] = pathogenic_array
-    
+
     # Build patient info
     patient_info = build_patient_info(pedigree_df, variants_df)
-    
+
     logger.info(f"Processing {len(patient_info)} patients across genes")
-    
+
+    # ── Short-circuit: if phase resolution is impossible, skip all work ──
+    # Phase can only be determined when (a) parental genotypes exist, or
+    # (b) genotypes use phased delimiter '|'.  Without either, every
+    # determine_phase_with() call returns 'unknown' — the entire analysis
+    # is wasted work.  This is the common case for ClinVar benchmarking.
+    if not _can_resolve_phase(variants_df, patient_info):
+        logger.info("No parental data and no phased genotypes found — "
+                     "skipping cis/trans analysis (all phases are 'unknown')")
+        n = len(variants_df)
+        return np.zeros(n, dtype=int), np.zeros(n, dtype=int), variants_df
+
     uniq_genes = variants_df['Gene'].unique().tolist()
     logger.info(f"Processing {len(uniq_genes)} genes")
 
-    arg_generator = ((gene_symbol, variants_df.loc[variants_df['Gene'] == gene_symbol, :], patient_info) for gene_symbol in uniq_genes)
-    
-    # Process genes (with optional multiprocessing)
+    # ── Single-pass groupby instead of per-gene .loc filtering ──
+    # .loc[variants_df['Gene'] == gene] scans 3.4M rows per gene (O(n × genes)).
+    # groupby scans once (O(n)) and yields (gene, group_df) iterators.
+    gene_groups = variants_df.groupby('Gene', sort=False)
+    arg_iter = ((gene, group, patient_info) for gene, group in gene_groups)
+
+    # ── imap_unordered streams results; pool.map materializes everything ──
+    # pool.map() converts the generator to a list → all 10k+ gene DataFrames
+    # held in memory + pickled for IPC.  imap_unordered with chunksize keeps
+    # memory bounded and reduces serialization overhead.
     pool = None
     if num_processes and num_processes > 1 and len(uniq_genes) > 1:
         pool = mp.Pool(num_processes)
-        results = pool.map(process_gene_wrapper, arg_generator)
+        results = pool.imap_unordered(process_gene_wrapper, arg_iter, chunksize=100)
     else:
-        results = list(map(process_gene_wrapper, arg_generator))
+        results = map(process_gene_wrapper, arg_iter)
 
     total_phase_map = defaultdict(dict)
     for variants_phase_patho in results:
         for patient_id in patient_info.keys():
             total_phase_map[patient_id] = { **total_phase_map[patient_id], **variants_phase_patho[patient_id] }
-    
+
     if pool is not None:
         pool.close()
         pool.join()

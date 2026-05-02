@@ -938,7 +938,9 @@ def check_aa_pathogenic(row: dict,
         # Check if this ClinVar entry is pathogenic with high confidence
         is_patho_highconf = False
         for sig, rev_stat in zip(clinvar_entry['CLNSIG'], clinvar_entry['CLNREVSTAT']):
-            if (("Pathogenic" in sig) and (high_confidence_status.get(rev_stat, 0) >= 2)):
+            stars = high_confidence_status.get(rev_stat, 0)
+            if ("Pathogenic" in sig and stars >= 2) or \
+               (sig == "Likely_pathogenic" and stars >= 3):
                 is_patho_highconf = True
                 break
         
@@ -1018,7 +1020,9 @@ def PS1_PM5_criteria(df: pd.DataFrame,
             for hgvsp_alt, entry in variants.items():
                 is_patho_highconf = False
                 for sig, rev_stat in zip(entry['CLNSIG'], entry['CLNREVSTAT']):
-                    if ("Pathogenic" in sig) and (high_confidence_status.get(rev_stat, 0) >= 2):
+                    stars = high_confidence_status.get(rev_stat, 0)
+                    if ("Pathogenic" in sig and stars >= 2) or \
+                       (sig == "Likely_pathogenic" and stars >= 3):
                         is_patho_highconf = True
                         break
                 if not is_patho_highconf:
@@ -1056,7 +1060,7 @@ def PS1_PM5_criteria(df: pd.DataFrame,
     pm5_eligible = pm5_residue_match
     # Exclude synonymous variants from PM5 (matches original logic at line 1034)
     synonymous_mask = pd.Series(consequence).str.contains('synonymous').fillna(False).values
-    pm5_eligible = pm5_eligible & ~synonymous_mask
+    pm5_eligible = pm5_eligible & ~synonymous_mask & ~ps1_eligible
 
     logger.info(f"Vectorized lookup: PS1 hits={ps1_eligible.sum()}, PM5 hits={pm5_eligible.sum()}")
 
@@ -1066,7 +1070,7 @@ def PS1_PM5_criteria(df: pd.DataFrame,
     # the splice result directly for these cases. Run only on the subset.
     # ---------------------------------------------------------------
     no_hgvsp = np.isin(hgvsp_col, ['nan', 'inf', ''])
-    has_transcript_in_clinvar = np.array([f in clinvar_aa_dict for f in feature], dtype=bool)
+    has_transcript_in_clinvar = np.array([f in clinvar_aa_dict or f in clinvar_splice_dict for f in feature], dtype=bool)
     pos_in_clinvar = np.array([(f in clinvar_aa_dict and p in clinvar_aa_dict[f])
                                for f, p in zip(feature, raw_pp)], dtype=bool)
     splice_fallback_mask = has_transcript_in_clinvar & (no_hgvsp | ~pos_in_clinvar)
@@ -1078,14 +1082,11 @@ def PS1_PM5_criteria(df: pd.DataFrame,
         fallback_idx = np.where(splice_fallback_mask)[0]
         records_subset = df.iloc[fallback_idx].to_dict('records')
         args = [(records_subset[i],
-                 [],  # clinvar_tranx_aa_dict not needed here (splice-only path)
                  clinvar_splice_dict.get(records_subset[i].get('Feature', ''), []),
-                 pvs1_criteria[fallback_idx[i]],
-                 ps3_clinvar_patho[fallback_idx[i]],
-                 high_confidence_status) for i in range(len(records_subset))]
+                 pvs1_criteria[fallback_idx[i]]) for i in range(len(records_subset))]
         chunk_size = max(len(args) // (threads * 4), 1)
         with mp.Pool(threads) as pool:
-            fallback_results = pool.starmap(check_aa_pathogenic, args, chunksize=chunk_size)
+            fallback_results = pool.starmap(check_splice_pathogenic, args, chunksize=chunk_size)
         for global_i, res in zip(fallback_idx, fallback_results):
             splice_results[global_i] = res
 
@@ -1094,6 +1095,10 @@ def PS1_PM5_criteria(df: pd.DataFrame,
     splice_ps1_moderate = (splice_results == "PS1_Moderate")
     splice_ps1_supporting = (splice_results == "PS1_Supporting")
     splice_pm5 = (splice_results == "Same_AA_Residue") | (splice_results == "PS1_PM5")
+
+
+    # Remove self-matching cases
+    clinvar_lof = df['CLNSIG'].fillna("").str.contains('pathogenic') & (df['CLNREVSTAT'].map(high_confidence_status) >= 2) # Including Likely_pathogenic
 
     # ---------------------------------------------------------------
     # Combine vectorized + splice fallback results
@@ -1106,8 +1111,11 @@ def PS1_PM5_criteria(df: pd.DataFrame,
     # Splice-only moderate/supporting (only set if not already strong)
     ps1_array[splice_ps1_moderate & (ps1_array == 0)] = 2
     ps1_array[splice_ps1_supporting & (ps1_array == 0)] = 1
+    ps1_array[clinvar_lof] = 0  # Remove self-matching for PS1 (LoF variants that are already pathogenic in ClinVar)
 
     pm5_eligible_combined = pm5_eligible | (splice_pm5 & ~synonymous_mask)
+    # Remove PS1
+    pm5_eligible_combined = pm5_eligible_combined & (ps1_array == 0)
     pm5_array[pm5_eligible_combined] = 2
 
     both_count = int(((ps1_array > 0) & (pm5_array > 0)).sum())
@@ -1695,7 +1703,7 @@ def PM1_criteria(df: pd.DataFrame,
 
     missense = df['Consequence'].str.contains('missense_variant')
     logger.info(f"There are {missense.sum()} missense variants")
-    missense_damaging = df["am_class"].fillna("").str.contains('athogenic') | (df['PrimateAI'] > 0.8)
+    missense_damaging = df["am_class"].fillna("").str.contains('athogenic') & (df['PrimateAI'].fillna(0) > 0.8)
     logger.info(f"There are {missense_damaging.sum()} missense variants that are considered damaging by AlphaMissense and PrimateAI")
 
     missense_benign = df["am_class"].fillna("").str.contains('benign')
@@ -2185,7 +2193,7 @@ def PP5_BP6_criteria(df: pd.DataFrame, clinvar_patho, clinvar_benign) -> pd.Seri
 
 def BS1_criteria(df: pd.DataFrame, 
                  gene_to_am_score_map: dict,
-                 expected_incidence: float = 0.001, 
+                 expected_incidence: float = 0.0001, 
                  gene_dosage_sensitivity: str = "",
                  pm2_criteria: np.ndarray = None,
                  threads: int = 10):
@@ -2489,12 +2497,12 @@ def BS2_criteria(df: pd.DataFrame,
     moderate_to_low_penetrance = df['HPO_IDs'].fillna("").str.contains("HP:4000159") | df['HPO_IDs'].fillna("").str.contains("HP:4000160")
     
     # For autosomal dominant disease, we can assign BS2 if the variant is observed in a healthy adult (either homozygous or heterozygous)
-    autosomal_dominant = autosomal & dominant & ((df['gnomAD_joint_AF'].fillna(0) * df['gnomAD_joint_AN'].fillna(0)) > 5) & np.logical_not(recessive) & np.logical_not(non_monogenic) & np.logical_not(non_mendelian) & np.logical_not(moderate_to_low_penetrance)
-    autosomal_recessive = autosomal & recessive & (((df['gnomAD_nhomalt_XX'].fillna(0) + df['gnomAD_nhomalt_XY'].fillna(0)) > 5)) & np.logical_not(non_monogenic) & np.logical_not(non_mendelian) & np.logical_not(moderate_to_low_penetrance)
+    autosomal_dominant = autosomal & dominant & ((df['gnomAD_joint_AF'].fillna(0) * df['gnomAD_joint_AN'].fillna(0)) > 10) & np.logical_not(recessive) & np.logical_not(non_monogenic) & np.logical_not(non_mendelian) & np.logical_not(moderate_to_low_penetrance)
+    autosomal_recessive = autosomal & recessive & (((df['gnomAD_nhomalt_XX'].fillna(0) + df['gnomAD_nhomalt_XY'].fillna(0)) > 10)) & np.logical_not(non_monogenic) & np.logical_not(non_mendelian) & np.logical_not(moderate_to_low_penetrance)
 
     # For X-linked disease, we can assign BS2 if the variant is observed in a healthy adult male (hemizygous) or a healthy adult female (homozygous)
-    x_linked_recessive = x_linked & recessive & (((df['gnomAD_nhomalt_XX'].fillna(0) + df['gnomAD_nhomalt_XY'].fillna(0)) > 5)) & np.logical_not(non_monogenic) & np.logical_not(non_mendelian) & np.logical_not(moderate_to_low_penetrance)
-    x_linked_dominant = x_linked & dominant & np.logical_not(recessive) & (((df['gnomAD_nhomalt_XX'].fillna(0) + df['gnomAD_nhomalt_XY'].fillna(0)) > 5) | ((df['gnomAD_joint_AF'].fillna(0) * df['gnomAD_joint_AN'].fillna(0)) > 5)) & np.logical_not(non_monogenic) & np.logical_not(non_mendelian) & np.logical_not(moderate_to_low_penetrance)
+    x_linked_recessive = x_linked & recessive & (((df['gnomAD_nhomalt_XX'].fillna(0) + df['gnomAD_nhomalt_XY'].fillna(0)) > 10)) & np.logical_not(non_monogenic) & np.logical_not(non_mendelian) & np.logical_not(moderate_to_low_penetrance)
+    x_linked_dominant = x_linked & dominant & np.logical_not(recessive) & (((df['gnomAD_nhomalt_XX'].fillna(0) + df['gnomAD_nhomalt_XY'].fillna(0)) > 10) | ((df['gnomAD_joint_AF'].fillna(0) * df['gnomAD_joint_AN'].fillna(0)) > 10)) & np.logical_not(non_monogenic) & np.logical_not(non_mendelian) & np.logical_not(moderate_to_low_penetrance)
 
     y_linked = y_linked & (df['gnomAD_joint_AF_XY'].fillna(0) > 0) & np.logical_not(non_monogenic) & np.logical_not(non_mendelian) & np.logical_not(moderate_to_low_penetrance)
     
@@ -2512,10 +2520,10 @@ def BS2_criteria(df: pd.DataFrame,
     bs2_criteria = gnomad_bs2_criteria & np.logical_not(incomplete_penetrance) & not_late_onsets
 
     # For combination of complete penetrance and not late onset, any AC or nhomalt in gnomAD is considered BS2
-    autosomal_dominant = autosomal & dominant & ((df['gnomAD_joint_AF'].fillna(0) * df['gnomAD_joint_AN'].fillna(0)) > 0) & np.logical_not(recessive) & np.logical_not(non_monogenic) & np.logical_not(non_mendelian)
-    autosomal_recessive = autosomal & recessive & (((df['gnomAD_nhomalt_XX'].fillna(0) + df['gnomAD_nhomalt_XY'].fillna(0)) > 0)) & np.logical_not(non_monogenic) & np.logical_not(non_mendelian)
-    x_linked_recessive = x_linked & recessive & (((df['gnomAD_nhomalt_XX'].fillna(0) + df['gnomAD_nhomalt_XY'].fillna(0)) > 0)) & np.logical_not(non_monogenic) & np.logical_not(non_mendelian)
-    x_linked_dominant = x_linked & dominant & np.logical_not(recessive) & (((df['gnomAD_nhomalt_XX'].fillna(0) + df['gnomAD_nhomalt_XY'].fillna(0)) > 0) | ((df['gnomAD_joint_AF'].fillna(0) * df['gnomAD_joint_AN'].fillna(0)) > 0)) & np.logical_not(non_monogenic) & np.logical_not(non_mendelian)
+    autosomal_dominant = autosomal & dominant & ((df['gnomAD_joint_AF'].fillna(0) * df['gnomAD_joint_AN'].fillna(0)) > 3) & np.logical_not(recessive) & np.logical_not(non_monogenic) & np.logical_not(non_mendelian)
+    autosomal_recessive = autosomal & recessive & (((df['gnomAD_nhomalt_XX'].fillna(0) + df['gnomAD_nhomalt_XY'].fillna(0)) > 3)) & np.logical_not(non_monogenic) & np.logical_not(non_mendelian)
+    x_linked_recessive = x_linked & recessive & (((df['gnomAD_nhomalt_XX'].fillna(0) + df['gnomAD_nhomalt_XY'].fillna(0)) > 3)) & np.logical_not(non_monogenic) & np.logical_not(non_mendelian)
+    x_linked_dominant = x_linked & dominant & np.logical_not(recessive) & (((df['gnomAD_nhomalt_XX'].fillna(0) + df['gnomAD_nhomalt_XY'].fillna(0)) > 3) | ((df['gnomAD_joint_AF'].fillna(0) * df['gnomAD_joint_AN'].fillna(0)) > 3)) & np.logical_not(non_monogenic) & np.logical_not(non_mendelian)
 
     bs2_complete_penetrance = (autosomal_dominant | autosomal_recessive | x_linked_recessive | x_linked_dominant | y_linked) & complete_penetrance & not_late_onsets
     bs2_criteria = bs2_complete_penetrance | bs2_criteria

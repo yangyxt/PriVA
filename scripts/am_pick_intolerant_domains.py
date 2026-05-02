@@ -17,7 +17,7 @@ import random
 import pysam
 
 from protein_domain_mapping import DomainNormalizer
-from stat_protein_domain_amscores import nested_defaultdict
+from stat_protein_domain_amscores import nested_defaultdict, _NON_DOMAIN_SOURCES
 self_directory = os.path.dirname(os.path.abspath(__file__))
 
 
@@ -412,66 +412,93 @@ def process_domain_ks(args):
 #     return None
 
 
-def process_domain_dict_for_mapping(d: dict, current_path: List[str], transcript_exon_map: dict) -> None:
+def process_domain_dict_for_mapping(d: dict, current_path: List[str], pp_map: dict, exon_map: dict) -> None:
     """
-    Process a single level of the domain dictionary to extract transcript-exon-domain relationships.
+    Process a single level of the domain dictionary to extract transcript-domain relationships
+    using protein position ranges and exon-domain associations.
     
     Args:
         d: Current level of the nested dictionary
         current_path: List of strings representing the current domain path
-        transcript_exon_map: Dictionary to store the mapping results
+        pp_map: Dict to store {transcript: {domain_path: (aa_min, aa_max)}}
+        exon_map: Dict to store {transcript: {exon_str: set(domain_paths)}}
     """
     for k, v in d.items():
         if isinstance(v, dict):
-            # Check if this level contains transcript information
             if 'distribution' in v:
-                # This level contains domain information
                 domain_path = ':'.join(current_path + [k])
-                for transcript_id, exon_set in v.items():
-                    if isinstance(transcript_id, str) and transcript_id.startswith('ENST'):
-                        if isinstance(exon_set, set):  # This is the exon set
-                            # Map each exon individually
-                            for exon_id in exon_set:
-                                exon_idx = exon_id.split("/")[0]
-                                transcript_exon_map[transcript_id][exon_idx].add(domain_path)
+                for transcript_id, tx_data in v.items():
+                    if not (isinstance(transcript_id, str) and transcript_id.startswith('ENST')):
+                        continue
+                    # Handle both new format (dict with exons/aa_min/aa_max) and legacy (set)
+                    if isinstance(tx_data, dict) and 'exons' in tx_data:
+                        aa_min = tx_data.get('aa_min', float('inf'))
+                        aa_max = tx_data.get('aa_max', 0)
+                        if aa_min <= aa_max:
+                            pp_map.setdefault(transcript_id, {})[domain_path] = (aa_min, aa_max)
+                        for exon_id in tx_data['exons']:
+                            exon_idx = exon_id.split("/")[0]
+                            exon_map.setdefault(transcript_id, {}).setdefault(exon_idx, set()).add(domain_path)
+                    elif isinstance(tx_data, set):
+                        # Legacy format: bare exon set, no protein positions
+                        for exon_id in tx_data:
+                            exon_idx = exon_id.split("/")[0]
+                            exon_map.setdefault(transcript_id, {}).setdefault(exon_idx, set()).add(domain_path)
             else:
-                # Continue building the domain path
-                process_domain_dict_for_mapping(v, current_path + [k], transcript_exon_map)
+                process_domain_dict_for_mapping(v, current_path + [k], pp_map, exon_map)
 
 
-def generate_transcript_exon_domain_map(scores_dict: dict) -> Dict[str, Dict[str, List[str]]]:
+def generate_transcript_pp_domain_map(scores_dict: dict) -> dict:
     """
-    Generate a mapping from transcript_id to individual exon indices to domain paths.
+    Generate a mapping from transcript_id to protein-position-based domain ranges
+    and exon-domain associations.
     
     Args:
-        scores_dict: Nested dictionary containing domain data with transcript and exon information
+        scores_dict: Nested dictionary containing domain data with transcript info
         
     Returns:
         Dictionary with structure:
         {
             'transcript_id': {
-                '1': ['domain_path1', 'domain_path2'],
-                '2': ['domain_path1', 'domain_path3'],
-                '3': ['domain_path2']
+                'pp_domains': [(aa_start, aa_end, 'domain_path'), ...],  # sorted by aa_start
+                'exon_domains': {
+                    '1': ['domain_path1', 'domain_path2'],
+                    '2': ['domain_path3'],
+                }
             }
         }
     """
-    transcript_exon_map = defaultdict(lambda: defaultdict(set))
+    pp_map = {}   # {transcript: {domain_path: (aa_min, aa_max)}}
+    exon_map = {} # {transcript: {exon_str: set(domain_paths)}}
     
-    # Process the scores dictionary
     for gene_id, gene_data in scores_dict.items():
         for db_name, domain_data in gene_data.items():
-            process_domain_dict_for_mapping(domain_data, [gene_id, db_name], transcript_exon_map)
+            process_domain_dict_for_mapping(domain_data, [gene_id, db_name], pp_map, exon_map)
     
-    # Convert sets to lists for easier handling
     result = {}
-    for transcript_id, exon_map in transcript_exon_map.items():
-        result[transcript_id] = {
-            exon_idx: sorted(list(domain_paths))
-            for exon_idx, domain_paths in exon_map.items()
-        }
+    all_transcripts = set(pp_map.keys()) | set(exon_map.keys())
+    for tx in all_transcripts:
+        entry = {}
+        # Build sorted pp_domains list
+        if tx in pp_map:
+            entry['pp_domains'] = sorted(
+                [(aa_min, aa_max, dp) for dp, (aa_min, aa_max) in pp_map[tx].items()],
+                key=lambda x: x[0]
+            )
+        else:
+            entry['pp_domains'] = []
+        # Build exon_domains with sorted lists
+        if tx in exon_map:
+            entry['exon_domains'] = {
+                exon_idx: sorted(list(domain_paths))
+                for exon_idx, domain_paths in exon_map[tx].items()
+            }
+        else:
+            entry['exon_domains'] = {}
+        result[tx] = entry
     
-    logger.info(f"Generated mapping for {len(result)} transcripts")
+    logger.info(f"Generated mapping for {len(result)} transcripts "
+                f"({sum(1 for v in result.values() if v['pp_domains'])} with protein position data)")
     return result
 
 
@@ -485,7 +512,7 @@ def _collect_gnomad_leaves(d, result, path):
             _collect_gnomad_leaves(v, result, path + [k])
 
 
-def extract_domain_metadata(vcf_path, target_domains=None):
+def extract_domain_metadata(vcf_path, target_domains=None, region=None):
     """Parse VEP-annotated AlphaMissense VCF to extract per-domain metadata.
 
     For each domain_path, collects gene_symbol, aa_start, aa_end from CSQ fields.
@@ -494,6 +521,7 @@ def extract_domain_metadata(vcf_path, target_domains=None):
     Args:
         vcf_path: Path to AlphaMissense VEP-annotated VCF (.vcf.gz)
         target_domains: Optional set of domain_paths to restrict extraction.
+        region: Optional chromosome/region string for region-based fetching.
 
     Returns:
         dict: {domain_path: {'gene_symbol': str, 'aa_start': int, 'aa_end': int}}
@@ -511,7 +539,8 @@ def extract_domain_metadata(vcf_path, target_domains=None):
     domain_meta = {}
     n_records = 0
 
-    for record in vcf:
+    records = vcf.fetch(region) if region else vcf
+    for record in records:
         n_records += 1
         if n_records % 5_000_000 == 0:
             logger.info(f"[DOMAIN_META] Processed {n_records:,} VCF records, "
@@ -541,17 +570,19 @@ def extract_domain_metadata(vcf_path, target_domains=None):
                 continue
 
             try:
-                # Handle VEP total_length format: "2/305" -> "2"
-                pp_clean = protein_pos_str.split('/')[0]
+                pp_parts = protein_pos_str.split('/')
                 # Handle range format: "2-3" -> "2"
-                aa_pos = int(pp_clean.split('-')[0])
-            except ValueError:
+                aa_pos = int(pp_parts[0].split('-')[0])
+                prot_length = int(pp_parts[1]) if len(pp_parts) > 1 else None
+            except (ValueError, IndexError):
                 continue
 
             # Parse domains — same logic as stat_protein_domain_amscores._parse_domain_hierarchy
             for domain_entry in domains_str.split('&'):
                 parts = domain_entry.split(':')
                 db_name = parts[0]
+                if db_name in _NON_DOMAIN_SOURCES:
+                    continue
                 for i in range(1, len(parts)):
                     hierarchy = parts[1:i+1]
                     domain_path = ':'.join([ensg_id, db_name] + hierarchy)
@@ -564,6 +595,7 @@ def extract_domain_metadata(vcf_path, target_domains=None):
                             'gene_symbol': symbol,
                             'aa_start': aa_pos,
                             'aa_end': aa_pos,
+                            'prot_length': prot_length or 0,
                         }
                     else:
                         meta = domain_meta[domain_path]
@@ -571,11 +603,62 @@ def extract_domain_metadata(vcf_path, target_domains=None):
                             meta['aa_start'] = aa_pos
                         if aa_pos > meta['aa_end']:
                             meta['aa_end'] = aa_pos
+                        if prot_length is not None and prot_length > meta['prot_length']:
+                            meta['prot_length'] = prot_length
 
     vcf.close()
     logger.info(f"[DOMAIN_META] Finished: {n_records:,} records processed, "
                 f"metadata for {len(domain_meta)} domains")
     return domain_meta
+
+
+def _extract_metadata_worker(args):
+    """Multiprocessing worker: extract domain metadata for a single chromosome."""
+    vcf_path, chrom, target_domains = args
+    return extract_domain_metadata(vcf_path, target_domains=target_domains, region=chrom)
+
+
+def _merge_domain_metadata(target, source):
+    """Merge per-chromosome domain metadata dicts in place."""
+    for dp, meta in source.items():
+        if dp not in target:
+            target[dp] = meta
+        else:
+            t = target[dp]
+            if meta['aa_start'] < t['aa_start']:
+                t['aa_start'] = meta['aa_start']
+            if meta['aa_end'] > t['aa_end']:
+                t['aa_end'] = meta['aa_end']
+            if meta.get('prot_length', 0) > t.get('prot_length', 0):
+                t['prot_length'] = meta['prot_length']
+
+
+def extract_domain_metadata_parallel(vcf_path, target_domains=None, threads=1):
+    """Parallel wrapper around extract_domain_metadata, split by chromosome.
+
+    Falls back to single-threaded when threads <= 1.
+    """
+    if threads <= 1:
+        return extract_domain_metadata(vcf_path, target_domains=target_domains)
+
+    vcf = pysam.VariantFile(vcf_path)
+    chroms = list(vcf.header.contigs)
+    vcf.close()
+    n_workers = min(threads, len(chroms))
+    logger.info(f"[DOMAIN_META] Extracting metadata from {len(chroms)} chromosomes "
+                f"with {n_workers} workers")
+
+    with mp.Pool(n_workers) as pool:
+        results = pool.map(_extract_metadata_worker,
+                           [(vcf_path, c, target_domains) for c in chroms])
+
+    merged = {}
+    for result in results:
+        _merge_domain_metadata(merged, result)
+
+    logger.info(f"[DOMAIN_META] Parallel extraction complete: "
+                f"metadata for {len(merged)} domains")
+    return merged
 
 
 def filter_coldspot_overlap(intolerant_domains, domain_metadata, hcseeker_spots_tsv,
@@ -829,7 +912,81 @@ def filter_common_missense(intolerant_domains, scores_dict, af_threshold=0.05):
     return filtered, excluded, summary
 
 
-def analyze_domain_data(pickle_file: str, 
+def filter_whole_protein_family(intolerant_domains, domain_metadata,
+                                dm_instance, interpro_map_dict,
+                                coverage_threshold=0.9, min_protein_length=200):
+    """Remove Family-type InterPro entries spanning ≥coverage_threshold of proteins ≥min_protein_length AA.
+
+    Proteins shorter than min_protein_length typically harbor a single structural
+    domain (Ramírez-Sánchez et al. 2016; Xu & Nussinov 1998), so Family entries
+    on such proteins are retained as legitimate single-domain annotations.
+
+    Args:
+        intolerant_domains: set of domain_path strings
+        domain_metadata: dict {domain_path: {aa_start, aa_end, prot_length, ...}}
+        dm_instance: DomainNormalizer instance for InterPro lookups
+        interpro_map_dict: InterPro entry mapping dict
+        coverage_threshold: minimum domain/protein coverage to trigger exclusion (default 0.9)
+        min_protein_length: proteins shorter than this are exempt (default 200)
+
+    Returns:
+        (filtered_set, excluded_set, summary_dict)
+    """
+    excluded = set()
+    summary = {}
+
+    for domain_path in intolerant_domains:
+        meta = domain_metadata.get(domain_path)
+        if meta is None or meta.get('prot_length', 0) == 0:
+            summary[domain_path] = {'interpro_type': None, 'coverage': None,
+                                    'prot_length': None, 'removed': False}
+            continue
+
+        # Resolve InterPro type
+        domain_name = domain_path.split(':', 1)[-1]  # strip ENSG prefix
+        interpro_result = dm_instance.query_interpro_entry_vep_anno(
+            domain_name, interpro_map_dict)
+        interpro_type = None
+        if interpro_result is not None:
+            entries = interpro_result.get('interpro_entries')
+            if entries:
+                interpro_type = entries[0][1]
+
+        prot_len = meta['prot_length']
+        coverage = (meta['aa_end'] - meta['aa_start'] + 1) / prot_len
+
+        removed = (interpro_type == 'Family'
+                   and coverage >= coverage_threshold
+                   and prot_len >= min_protein_length)
+
+        summary[domain_path] = {'interpro_type': interpro_type,
+                                'coverage': round(coverage, 4),
+                                'prot_length': prot_len, 'removed': removed}
+        if removed:
+            excluded.add(domain_path)
+
+    filtered = intolerant_domains - excluded
+
+    n_family = sum(1 for s in summary.values() if s.get('interpro_type') == 'Family')
+    logger.info(f"[FILTER4:FAMILY] Input intolerant domains: {len(intolerant_domains)}")
+    logger.info(f"[FILTER4:FAMILY] Family-type entries found: {n_family}")
+    logger.info(f"[FILTER4:FAMILY] Domains removed "
+                f"(Family + coverage≥{coverage_threshold} + prot≥{min_protein_length}): "
+                f"{len(excluded)}")
+    logger.info(f"[FILTER4:FAMILY] Output intolerant domains: {len(filtered)}")
+    if excluded:
+        top_removed = sorted(excluded,
+                             key=lambda d: summary[d].get('coverage', 0),
+                             reverse=True)[:5]
+        for d in top_removed:
+            s = summary[d]
+            logger.info(f"[FILTER4:FAMILY] Removed: {d} "
+                        f"(coverage={s['coverage']}, prot_length={s['prot_length']})")
+
+    return filtered, excluded, summary
+
+
+def analyze_domain_data(pickle_file: str,
                        output_dir: str,
                        threads: int = 12,
                        fdr_threshold: float = 0.05,
@@ -860,20 +1017,20 @@ def analyze_domain_data(pickle_file: str,
     # Load the data
     with open(pickle_file, 'rb') as f:
         scores_dict = pickle.load(f)
-    
-    # Generate transcript-exon-domain mapping
-    transcript_map = generate_transcript_exon_domain_map(scores_dict)
+
+    # Generate transcript-protein position-domain mapping
+    transcript_map = generate_transcript_pp_domain_map(scores_dict)
     
     # Save the mapping to both JSON and pickle files
-    mapping_json = os.path.join(output_dir, f'transcript_exon_domain_mapping.{assembly}.json')
-    mapping_pickle = os.path.join(output_dir, f'transcript_exon_domain_mapping.{assembly}.pkl')
+    mapping_json = os.path.join(output_dir, f'transcript_pp_domain_mapping.{assembly}.json')
+    mapping_pickle = os.path.join(output_dir, f'transcript_pp_domain_mapping.{assembly}.pkl')
     
     with open(mapping_json, 'w') as f:
         json.dump(transcript_map, f, indent=2)
     with open(mapping_pickle, 'wb') as f:
         pickle.dump(transcript_map, f)
     
-    logger.info(f"Saved transcript-exon-domain mapping to {mapping_json} and {mapping_pickle}")
+    logger.info(f"Saved transcript-pp-domain mapping to {mapping_json} and {mapping_pickle}")
     
     # Continue with existing analysis
     domain_scores = visualize_domain_distribution(scores_dict, output_dir, threads, assembly)
@@ -987,23 +1144,26 @@ def analyze_domain_data(pickle_file: str,
     filter_summaries = {}
     excluded_sets = {}
 
+    # --- Load/cache domain metadata (needed for Filters 1 and 4) ---
+    domain_metadata = None
+    if am_vcf is not None:
+        domain_meta_cache = os.path.join(output_dir, f'domain_metadata.{assembly}.pkl')
+        if os.path.exists(domain_meta_cache):
+            logger.info(f"[DOMAIN_META] Loading cached metadata from {domain_meta_cache}")
+            with open(domain_meta_cache, 'rb') as f:
+                domain_metadata = pickle.load(f)
+        else:
+            logger.info(f"[DOMAIN_META] Extracting from AM VCF: {am_vcf}")
+            domain_metadata = extract_domain_metadata_parallel(am_vcf, threads=threads)
+            with open(domain_meta_cache, 'wb') as f:
+                pickle.dump(domain_metadata, f)
+            logger.info(f"[DOMAIN_META] Cached {len(domain_metadata)} domains to {domain_meta_cache}")
+
     # Filter 1: HCSeeker coldspot overlap
     if hcseeker_spots_tsv is not None:
-        if am_vcf is None:
+        if domain_metadata is None:
             logger.warning("[FILTER1:COLDSPOT] Skipped: --am_vcf required for domain AA range extraction")
         else:
-            domain_meta_cache = os.path.join(output_dir, f'domain_metadata.{assembly}.pkl')
-            if os.path.exists(domain_meta_cache):
-                logger.info(f"[DOMAIN_META] Loading cached metadata from {domain_meta_cache}")
-                with open(domain_meta_cache, 'rb') as f:
-                    domain_metadata = pickle.load(f)
-            else:
-                logger.info(f"[DOMAIN_META] Extracting from AM VCF: {am_vcf}")
-                domain_metadata = extract_domain_metadata(am_vcf)
-                with open(domain_meta_cache, 'wb') as f:
-                    pickle.dump(domain_metadata, f)
-                logger.info(f"[DOMAIN_META] Cached {len(domain_metadata)} domains to {domain_meta_cache}")
-
             analysis_intolerant_domains, excl, summ = filter_coldspot_overlap(
                 analysis_intolerant_domains, domain_metadata, hcseeker_spots_tsv,
                 coldspot_overlap_threshold)
@@ -1023,21 +1183,33 @@ def analyze_domain_data(pickle_file: str,
     filter_summaries['common'] = summ
     excluded_sets['common'] = excl
 
+    # Filter 4: Whole-protein Family classifiers — requires domain_metadata
+    if domain_metadata is not None:
+        analysis_intolerant_domains, excl, summ = filter_whole_protein_family(
+            analysis_intolerant_domains, domain_metadata,
+            dm_instance, interpro_map_dict)
+        filter_summaries['family'] = summ
+        excluded_sets['family'] = excl
+    else:
+        logger.warning("[FILTER4:FAMILY] Skipped: --am_vcf required")
+
     # --- Summary logging ---
     n_f1 = len(excluded_sets.get('coldspot', set()))
     n_f2 = len(excluded_sets.get('benign', set()))
     n_f3 = len(excluded_sets.get('common', set()))
+    n_f4 = len(excluded_sets.get('family', set()))
     logger.info(f"[SUMMARY] Total domains analyzed: {len(domain_scores)}")
     logger.info(f"[SUMMARY] Curated functional references: {len(ref_domain_scores)}")
     logger.info(f"[SUMMARY] DAS intolerant (post-KS): {n_ks_intolerant}")
     logger.info(f"[SUMMARY] Removed by Filter 1 (coldspot): {n_f1}")
     logger.info(f"[SUMMARY] Removed by Filter 2 (benign): {n_f2}")
     logger.info(f"[SUMMARY] Removed by Filter 3 (common): {n_f3}")
+    logger.info(f"[SUMMARY] Removed by Filter 4 (whole-protein family): {n_f4}")
     logger.info(f"[SUMMARY] Final intolerant domains: {len(analysis_intolerant_domains)}")
 
     # --- Save filter summary TSV ---
-    # Resolve domain metadata for aa coordinates (use cache if available)
-    dm_for_summary = locals().get('domain_metadata', {})
+    # Resolve domain metadata for aa coordinates
+    dm_for_summary = domain_metadata or {}
     if filter_summaries:
         summary_rows = []
         for dp in sorted(ks_intolerant_raw):
@@ -1063,6 +1235,12 @@ def analyze_domain_data(pickle_file: str,
                 row['n_common_missense'] = s.get('n_common_missense', np.nan)
                 row['max_af'] = s.get('max_af', np.nan)
                 row['common_removed'] = s.get('removed', False)
+            if 'family' in filter_summaries:
+                s = filter_summaries['family'].get(dp, {})
+                row['interpro_type'] = s.get('interpro_type', '')
+                row['domain_coverage'] = s.get('coverage', np.nan)
+                row['prot_length'] = s.get('prot_length', np.nan)
+                row['family_removed'] = s.get('removed', False)
             row['final_intolerant'] = dp in analysis_intolerant_domains
             summary_rows.append(row)
 
@@ -1102,11 +1280,14 @@ if __name__ == '__main__':
                         help='Overlap fraction threshold for Filter 1 (default: 0.5)')
     parser.add_argument('--common_af_threshold', type=float, default=0.05,
                         help='AF threshold for Filter 3 common missense (default: 0.05)')
+    parser.add_argument('--fdr_threshold', type=float, default=0.05,
+                        help='FDR threshold for KS test significance (default: 0.05)')
     args = parser.parse_args()
 
     analyze_domain_data(args.pickle_file,
                         args.output_dir,
                         args.threads,
+                        fdr_threshold=args.fdr_threshold,
                         assembly=args.assembly,
                         am_vcf=args.am_vcf,
                         hcseeker_spots_tsv=args.hcseeker_spots_tsv,

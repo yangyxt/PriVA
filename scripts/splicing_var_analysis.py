@@ -650,8 +650,12 @@ def SpliceAI_interpretation(DS_AG,
     # If there are affected exons, we take a look at the transcript domain annotations to see if any of them are intolerant domains.
     if affected_exons:
         for exon in affected_exons:
-            if transcript_id in transcript_domain_map and str(exon) in transcript_domain_map[transcript_id]:
-                domains = transcript_domain_map[transcript_id][str(exon)]
+            if transcript_id in transcript_domain_map:
+                exon_domains = transcript_domain_map[transcript_id].get('exon_domains', {})
+                if str(exon) in exon_domains:
+                    domains = exon_domains[str(exon)]
+                else:
+                    domains = []
                 func_domains = [domain_path for domain_path in domains if dm_instance.interpret_functionality(domain_path.split(':', 1)[-1], interpro_entry_map_dict) == "Functional"]
                 intolerant_affected = set(domains).intersection(intolerant_domains)
                 if (len(intolerant_affected) > 0) or (len(func_domains) > 0):
@@ -825,10 +829,11 @@ def analyze_splice_event(event_str: str,
     affected_domains = set()
     intolerant_affected = set()
     if transcript_id in transcript_domain_map:
+        exon_domains = transcript_domain_map[transcript_id].get('exon_domains', {})
         for exon in affected_exons:
             exon_str = str(exon)
-            if exon_str in transcript_domain_map[transcript_id]:
-                domains = transcript_domain_map[transcript_id][exon_str]
+            if exon_str in exon_domains:
+                domains = exon_domains[exon_str]
                 affected_domains.update(domains)
                 intolerant_affected.update(set(domains).intersection(intolerant_domains))
     
@@ -884,8 +889,12 @@ def process_exon_skipping(pos_str: str,
     # Check for intolerant domains
     for exon in affected_exons:
         exon_str = str(exon)
-        if transcript_id in transcript_domain_map and exon_str in transcript_domain_map[transcript_id]:
-            domains = transcript_domain_map[transcript_id][exon_str]
+        if transcript_id in transcript_domain_map:
+            exon_doms = transcript_domain_map[transcript_id].get('exon_domains', {})
+            if exon_str in exon_doms:
+                domains = exon_doms[exon_str]
+            else:
+                domains = []
             func_domains = [domain_path for domain_path in domains if dm_instance.interpret_functionality(domain_path.split(':', 1)[-1], interpro_entry_map_dict) == "Functional"]
             intolerant_affected = set(domains).intersection(intolerant_domains)
             if (len(intolerant_affected) > 0) or (len(func_domains) > 0):
@@ -969,14 +978,16 @@ def process_cryptic_donor(pos_str: str,
     # Check for intolerant domains
     for exon in affected_exons:
         exon_str = str(exon)
-        if transcript_id in transcript_domain_map and exon_str in transcript_domain_map[transcript_id]:
-            domains = transcript_domain_map[transcript_id][exon_str]
-            func_domains = [domain_path for domain_path in domains if dm_instance.interpret_functionality(domain_path.split(':', 1)[-1], interpro_entry_map_dict) == "Functional"]
-            intolerant_affected = set(domains).intersection(intolerant_domains)
-            if (len(intolerant_affected) > 0) or (len(func_domains) > 0):
-                reason.append(f'exon_{exon}_overlaps_intolerant_domain')
-                is_lof = True
-                loc_intol_domain = True
+        if transcript_id in transcript_domain_map:
+            exon_doms = transcript_domain_map[transcript_id].get('exon_domains', {})
+            if exon_str in exon_doms:
+                domains = exon_doms[exon_str]
+                func_domains = [domain_path for domain_path in domains if dm_instance.interpret_functionality(domain_path.split(':', 1)[-1], interpro_entry_map_dict) == "Functional"]
+                intolerant_affected = set(domains).intersection(intolerant_domains)
+                if (len(intolerant_affected) > 0) or (len(func_domains) > 0):
+                    reason.append(f'exon_{exon}_overlaps_intolerant_domain')
+                    is_lof = True
+                    loc_intol_domain = True
     return affected_exons, reason, length_changing, is_lof, frame_shift, loc_intol_domain
 
 
@@ -1053,14 +1064,16 @@ def process_cryptic_acceptor(pos_str: str,
     # Check for intolerant domains
     for exon in affected_exons:
         exon_str = str(exon)
-        if transcript_id in transcript_domain_map and exon_str in transcript_domain_map[transcript_id]:
-            domains = transcript_domain_map[transcript_id][exon_str]
-            func_domains = [domain_path for domain_path in domains if dm_instance.interpret_functionality(domain_path.split(':', 1)[-1], interpro_entry_map_dict) == "Functional"]
-            intolerant_affected = set(domains).intersection(intolerant_domains)
-            if (len(intolerant_affected) > 0) or (len(func_domains) > 0):
-                reason.append(f'exon_{exon}_overlaps_intolerant_domain')
-                is_lof = True
-                loc_intol_domain = True
+        if transcript_id in transcript_domain_map:
+            exon_doms = transcript_domain_map[transcript_id].get('exon_domains', {})
+            if exon_str in exon_doms:
+                domains = exon_doms[exon_str]
+                func_domains = [domain_path for domain_path in domains if dm_instance.interpret_functionality(domain_path.split(':', 1)[-1], interpro_entry_map_dict) == "Functional"]
+                intolerant_affected = set(domains).intersection(intolerant_domains)
+                if (len(intolerant_affected) > 0) or (len(func_domains) > 0):
+                    reason.append(f'exon_{exon}_overlaps_intolerant_domain')
+                    is_lof = True
+                    loc_intol_domain = True
     return affected_exons, reason, length_changing, is_lof, frame_shift, loc_intol_domain
 
 

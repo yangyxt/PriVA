@@ -13,6 +13,7 @@ import json
 from collections import defaultdict
 from statsmodels.stats.multitest import multipletests
 import random
+import diptest
 
 import pysam
 
@@ -299,22 +300,36 @@ def collect_domain_data(d, output_dir: str, min_variants: int, path=[]) -> List:
     return domain_data
 
 
-def identify_functional_domain(domain_path, dm_instance=None, func_map_dict = None, func_pred_dict = None, interpro_map_dict = None):
+def identify_functional_domain(domain_path, dm_instance=None, func_map_dict = None, func_pred_dict = None, interpro_map_dict = None,
+                               domain_metadata = None, coverage_threshold=0.9, min_protein_length=300):
+    """Classify a domain as Functional, Non-functional, or None for the DAS reference set.
+
+    Any entry with GO molecular_function is Functional, UNLESS it is a Family,
+    Homologous_superfamily, or Repeat type that spans >=coverage_threshold of a
+    protein >=min_protein_length AA (too broad for PM1).
+    """
     domain_name = domain_path.split(':', 1)[-1] # Remove ENSG ids
     interpro_entry = dm_instance.query_interpro_entry_vep_anno(domain_name, interpro_map_dict).get("interpro_entries", None)
-    if interpro_entry:
-        interpro_id = interpro_entry[0][0]
-        interpro_type = interpro_entry[0][1]
-        go_terms = interpro_entry[0][4]
-        functional = False if all([go_term[1] != "molecular_function" for go_term in go_terms]) else True
-    else:
+    if not interpro_entry:
         return None
-    if functional and interpro_type in ["Conserved_Site", "Binding_site", "Active_site", "Domain", "PTM"]:
-        return "Functional"
-    elif not functional and interpro_type in ["Domain", "Conserved_Site", "Binding_site", "Active_site", "PTM"]:
+    interpro_id = interpro_entry[0][0]
+    interpro_type = interpro_entry[0][1]
+    go_terms = interpro_entry[0][4]
+    functional = any(go_term[1] == "molecular_function" for go_term in go_terms) if go_terms else False
+
+    if not functional:
         return "Non-functional"
-    else:
-        return None
+
+    # Exclude broad whole-protein entries (Family, Homologous_superfamily, Repeat)
+    broad_types = {"Family", "Homologous_superfamily", "Repeat"}
+    if interpro_type in broad_types and domain_metadata is not None:
+        meta = domain_metadata.get(domain_path)
+        if meta is not None and meta.get('prot_length') is not None and meta['prot_length'] >= min_protein_length:
+            coverage = (meta['aa_end'] - meta['aa_start'] + 1) / meta['prot_length']
+            if coverage >= coverage_threshold:
+                return "Non-functional"
+
+    return "Functional"
 
 
 def visualize_domain_distribution(scores_dict: dict, output_dir: str, threads: int, assembly: str='hg19') -> Dict[str, np.ndarray]:
@@ -386,37 +401,288 @@ def process_domain_ks(args):
     return (domain_path, res)
 
 
+def _dip_rescue_worker(args):
+    """Multiprocessing worker for bimodality rescue dip test.
+    Args: (domain_path, scores, fixed_composite, n_permutations, seed)
+    Returns: (domain_path, result_dict)
+    """
+    domain_path, scores, fixed_composite, n_permutations, seed = args
+    rng = np.random.default_rng(seed)
+    scores = np.asarray(scores)
+    N = len(scores)
 
-# def process_domain_tolerance(args):
-#     """
-#     Process a single domain's tolerance analysis.
-    
-#     Args:
-#         args: Tuple containing (domain_path, scores, ref_domain_scores)
-        
-#     Returns:
-#         Tuple of (domain_path, result) or None if processing fails
-#     """
-#     try:
-#         domain_path, scores, ref_domain_scores = args
-#         result = analyze_domain_tolerance(scores, ref_domain_scores)
-#         if result is not None:
-#             # vis_result = {k:v for k, v in result.items() if k != 'individual_results'}
-#             if result['fisher_combined_p_value'] > 0.05:
-#                 logger.debug(f"Completed tolerance analysis for domain {domain_path}, the result is {result}\n")
-#             return (domain_path, result)
-#         else:
-#             logger.warning(f"Failed to complete tolerance analysis for domain {domain_path}")
-#     except Exception as e:
-#         logger.error(f"Error processing domain {domain_path}: {str(e)}")
-#     return None
+    dip_query = diptest.dipstat(scores)
+
+    ref_dips = np.empty(n_permutations)
+    for i in range(n_permutations):
+        ref_sub = rng.choice(fixed_composite, size=N, replace=False)
+        ref_dips[i] = diptest.dipstat(ref_sub)
+
+    p_value = float(np.mean(ref_dips >= dip_query))
+
+    return (domain_path, {
+        'dip_query': float(dip_query),
+        'dip_ref_mean': float(ref_dips.mean()),
+        'dip_ref_max': float(ref_dips.max()),
+        'p_value': p_value,
+        'n_query': int(N),
+    })
+
+
+def rescue_bimodal_go_mf_domains(tolerant_domains, domain_scores, fixed_composite,
+                                 dm_instance, interpro_map_dict,
+                                 type_composites=None,
+                                 domain_metadata=None,
+                                 threads=1, n_permutations=500,
+                                 fdr_threshold=0.01, min_median_am=0.564, seed=42):
+    """Rescue KS-tolerant GO MF domains that are not significantly more bimodal than reference.
+
+    Identifies domains that were ruled out by the KS test (called tolerant) but have
+    GO MF annotations, median AM score >= min_median_am, and do NOT show significantly
+    more bimodality than the intolerant reference composite. Uses a permutation-based
+    dip test: for each candidate, compares its Hartigan dip statistic against dip
+    statistics of size-matched random draws from the type-specific composite (or global
+    composite as fallback).
+
+    Args:
+        tolerant_domains: set of domain_path strings that KS called tolerant
+        domain_scores: dict {domain_path: np.ndarray of AM scores}
+        fixed_composite: np.ndarray, the global intolerant reference composite (fallback)
+        dm_instance: DomainNormalizer instance
+        interpro_map_dict: InterPro entry mapping dict
+        type_composites: optional dict {InterPro_type: np.ndarray} for stratified dip test
+        domain_metadata: optional dict for coverage filtering
+        threads: number of parallel workers
+        n_permutations: number of reference subsamples per domain (default 500)
+        fdr_threshold: FDR threshold for bimodality significance (default 0.05)
+        min_median_am: minimum median AM score to be eligible for rescue (default 0.564)
+        seed: random seed for reproducibility
+
+    Returns:
+        (rescued_set, summary_dict)
+    """
+    if type_composites is None:
+        type_composites = {}
+
+    # Types that skip the bimodal test — directly rescued if GO MF + median AM threshold met
+    SKIP_DIP_TYPES = {"Domain", "Conserved_site", "Binding_site", "Active_site", "PTM"}
+
+    # Identify GO MF candidates among tolerant domains
+    candidates = []
+    candidate_composites = []
+    directly_rescued = set()
+    n_go_mf = 0
+    for domain_path in tolerant_domains:
+        if domain_path not in domain_scores:
+            continue
+        domain_name = domain_path.split(':', 1)[-1]
+        interpro_result = dm_instance.query_interpro_entry_vep_anno(domain_name, interpro_map_dict)
+        if interpro_result is None:
+            continue
+        entries = interpro_result.get('interpro_entries')
+        if not entries:
+            continue
+        go_terms = entries[0][4]
+        has_go_mf = any(g[1] == "molecular_function" for g in go_terms) if go_terms else False
+        if not has_go_mf:
+            continue
+        n_go_mf += 1
+        if np.median(domain_scores[domain_path]) < min_median_am:
+            continue
+        itype = entries[0][1]
+        if itype in SKIP_DIP_TYPES:
+            directly_rescued.add(domain_path)
+        else:
+            candidates.append(domain_path)
+            candidate_composites.append(type_composites.get(itype, fixed_composite))
+
+    logger.info(f"[RESCUE:BIMODAL] Tolerant domains with GO MF: {n_go_mf} / {len(tolerant_domains)}")
+    logger.info(f"[RESCUE:BIMODAL] Directly rescued (Domain/Site types, no dip test): {len(directly_rescued)}")
+    logger.info(f"[RESCUE:BIMODAL] Candidates for dip test (median AM >= {min_median_am}): {len(candidates)}")
+
+    if not candidates:
+        return set(), {}
+
+    # Parallel dip test
+    n_cores = min(threads, len(candidates))
+    tasks = []
+    for i, dp in enumerate(candidates):
+        task_seed = (seed + i) & 0xFFFFFFFF
+        tasks.append((dp, domain_scores[dp], candidate_composites[i], n_permutations, task_seed))
+
+    dip_results = {}
+    with mp.Pool(n_cores) as pool:
+        for res in pool.imap_unordered(_dip_rescue_worker, tasks):
+            domain_path, result = res
+            dip_results[domain_path] = result
+
+    # FDR correction
+    tested_domains = [dp for dp in candidates if not np.isnan(dip_results[dp]['p_value'])]
+    raw_pvals = [dip_results[dp]['p_value'] for dp in tested_domains]
+
+    if not raw_pvals:
+        logger.info("[RESCUE:BIMODAL] No valid dip tests performed.")
+        return set(), {}
+
+    rejected, pvals_bh, _, _ = multipletests(raw_pvals, alpha=fdr_threshold, method='fdr_bh')
+
+    rescued = set()
+    summary = {}
+    for dp, adj_p, rej in zip(tested_domains, pvals_bh, rejected):
+        r = dip_results[dp]
+        r['fdr_corrected_p_value'] = float(adj_p)
+        r['rescued'] = not bool(rej)
+        summary[dp] = r
+        if not rej:
+            rescued.add(dp)
+
+    logger.info(f"[RESCUE:BIMODAL] Tested: {len(tested_domains)}")
+    logger.info(f"[RESCUE:BIMODAL] Rescued via dip test (NOT significantly more bimodal, FDR >= {fdr_threshold}): {len(rescued)}")
+
+    # Merge directly rescued (Domain/Site types) with dip-test rescued
+    rescued = rescued | directly_rescued
+    logger.info(f"[RESCUE:BIMODAL] Total rescued (direct + dip test): {len(rescued)}")
+
+    if rescued:
+        top_rescued = sorted(
+            [d for d in rescued if d in dip_results],
+            key=lambda d: dip_results[d]['dip_query']
+        )[:5]
+        for d in top_rescued:
+            r = dip_results[d]
+            logger.info(f"[RESCUE:BIMODAL] Rescued: {d} "
+                        f"(dip={r['dip_query']:.4f}, ref_mean={r['dip_ref_mean']:.4f}, "
+                        f"p={r['p_value']:.4f}, fdr={r['fdr_corrected_p_value']:.4f})")
+
+    return rescued, summary
+
+
+def rescue_non_gomf_domains(tolerant_domains, domain_scores, fixed_composite,
+                            dm_instance, interpro_map_dict,
+                            type_composites=None,
+                            threads=1, n_permutations=500,
+                            fdr_threshold=0.01, min_median_am=0.75, seed=99):
+    """Rescue KS-tolerant non-GO-MF Domain/Repeat/Site entries that are not bimodal.
+
+    Targets InterPro entries of type Domain, Repeat, Conserved_site, Binding_site,
+    Active_site, or PTM that lack GO molecular_function annotations but have high
+    median AM scores and are not significantly more bimodal than the type-specific
+    reference composite (or global composite as fallback).
+    Excludes Family and Homologous_superfamily types.
+
+    Args:
+        tolerant_domains: set of domain_path strings that KS called tolerant
+        domain_scores: dict {domain_path: np.ndarray of AM scores}
+        fixed_composite: np.ndarray, the global intolerant reference composite (fallback)
+        dm_instance: DomainNormalizer instance
+        interpro_map_dict: InterPro entry mapping dict
+        type_composites: optional dict {InterPro_type: np.ndarray} for stratified dip test
+        threads: number of parallel workers
+        n_permutations: number of reference subsamples per domain (default 500)
+        fdr_threshold: FDR threshold for bimodality significance (default 0.05)
+        min_median_am: minimum median AM score to be eligible for rescue (default 0.85)
+        seed: random seed for reproducibility
+
+    Returns:
+        (rescued_set, summary_dict)
+    """
+    if type_composites is None:
+        type_composites = {}
+
+    ELIGIBLE_TYPES = {"Domain", "Homologous_superfamily", "Repeat", "Conserved_site", "Binding_site", "Active_site", "PTM"}
+    # Sources whose orphan entries (no InterPro mapping) are still trustworthy domain calls.
+    NO_IPR_OK_SOURCES = {"Gene3D", "Superfamily", "PANTHER", "Pfam", "PIRSF", "SMART", "PROSITE_profiles", "Prints"}
+    # Sources whose entries are structural/low-complexity and should never be treated as functional domains.
+    NO_IPR_EXCLUDED_SOURCES = {"Coiled-coils_(Ncoils)", "Low_complexity_(Seg)", "Transmembrane_helices",
+                                "Cleavage_site_(Signalp)", "PROSITE_patterns"}
+
+    candidates = []
+    candidate_composites = []
+    n_eligible_type = 0
+    for domain_path in tolerant_domains:
+        if domain_path not in domain_scores:
+            continue
+        domain_name = domain_path.split(':', 1)[-1]
+        interpro_result = dm_instance.query_interpro_entry_vep_anno(domain_name, interpro_map_dict)
+        entries = interpro_result.get('interpro_entries') if interpro_result is not None else None
+        if entries:
+            interpro_type = entries[0][1]
+            if interpro_type not in ELIGIBLE_TYPES:
+                continue
+            go_terms = entries[0][4]
+            has_go_mf = any(g[1] == "molecular_function" for g in go_terms) if go_terms else False
+            if has_go_mf:
+                continue
+            composite = type_composites.get(interpro_type, fixed_composite)
+        else:
+            # No InterPro mapping: accept entries from trustworthy sources only.
+            parts = domain_path.split(':')
+            source = parts[1] if len(parts) >= 3 else ''
+            if source not in NO_IPR_OK_SOURCES or source in NO_IPR_EXCLUDED_SOURCES:
+                continue
+            # Use Domain composite as fallback for orphan entries (closest behavioral match).
+            composite = type_composites.get("Domain", fixed_composite)
+        n_eligible_type += 1
+        if np.median(domain_scores[domain_path]) < min_median_am:
+            continue
+        candidates.append(domain_path)
+        candidate_composites.append(composite)
+
+    logger.info(f"[RESCUE:NON_GOMF] Tolerant Domain/Repeat/Site without GO MF: {n_eligible_type} / {len(tolerant_domains)}")
+    logger.info(f"[RESCUE:NON_GOMF] Candidates after median AM >= {min_median_am}: {len(candidates)}")
+
+    if not candidates:
+        return set(), {}
+
+    n_cores = min(threads, len(candidates))
+    tasks = []
+    for i, dp in enumerate(candidates):
+        task_seed = (seed + i) & 0xFFFFFFFF
+        tasks.append((dp, domain_scores[dp], candidate_composites[i], n_permutations, task_seed))
+
+    dip_results = {}
+    with mp.Pool(n_cores) as pool:
+        for res in pool.imap_unordered(_dip_rescue_worker, tasks):
+            domain_path, result = res
+            dip_results[domain_path] = result
+
+    tested_domains = [dp for dp in candidates if not np.isnan(dip_results[dp]['p_value'])]
+    raw_pvals = [dip_results[dp]['p_value'] for dp in tested_domains]
+
+    if not raw_pvals:
+        logger.info("[RESCUE:NON_GOMF] No valid dip tests performed.")
+        return set(), {}
+
+    rejected, pvals_bh, _, _ = multipletests(raw_pvals, alpha=fdr_threshold, method='fdr_bh')
+
+    rescued = set()
+    summary = {}
+    for dp, adj_p, rej in zip(tested_domains, pvals_bh, rejected):
+        r = dip_results[dp]
+        r['fdr_corrected_p_value'] = float(adj_p)
+        r['rescued'] = not bool(rej)
+        summary[dp] = r
+        if not rej:
+            rescued.add(dp)
+
+    logger.info(f"[RESCUE:NON_GOMF] Tested: {len(tested_domains)}")
+    logger.info(f"[RESCUE:NON_GOMF] Rescued (NOT significantly more bimodal, FDR >= {fdr_threshold}): {len(rescued)}")
+    if rescued:
+        top_rescued = sorted(rescued, key=lambda d: dip_results[d]['dip_query'])[:5]
+        for d in top_rescued:
+            r = dip_results[d]
+            logger.info(f"[RESCUE:NON_GOMF] Rescued: {d} "
+                        f"(dip={r['dip_query']:.4f}, ref_mean={r['dip_ref_mean']:.4f}, "
+                        f"p={r['p_value']:.4f}, fdr={r['fdr_corrected_p_value']:.4f})")
+
+    return rescued, summary
 
 
 def process_domain_dict_for_mapping(d: dict, current_path: List[str], pp_map: dict, exon_map: dict) -> None:
     """
     Process a single level of the domain dictionary to extract transcript-domain relationships
     using protein position ranges and exon-domain associations.
-    
+
     Args:
         d: Current level of the nested dictionary
         current_path: List of strings representing the current domain path
@@ -510,6 +776,16 @@ def _collect_gnomad_leaves(d, result, path):
             result[domain_path] = v
         elif isinstance(v, dict) and 'distribution' not in k:
             _collect_gnomad_leaves(v, result, path + [k])
+
+
+def _collect_gnomad_residue_leaves(d, result, path):
+    """Walk scores_dict nested structure and collect domain_path -> gnomAD_residue_distribution dict."""
+    for k, v in d.items():
+        if k == 'gnomAD_residue_distribution':
+            domain_path = ':'.join(path)
+            result[domain_path] = v
+        elif isinstance(v, dict) and 'distribution' not in k:
+            _collect_gnomad_residue_leaves(v, result, path + [k])
 
 
 def extract_domain_metadata(vcf_path, target_domains=None, region=None):
@@ -662,8 +938,12 @@ def extract_domain_metadata_parallel(vcf_path, target_domains=None, threads=1):
 
 
 def filter_coldspot_overlap(intolerant_domains, domain_metadata, hcseeker_spots_tsv,
+                            dm_instance, interpro_map_dict,
                             overlap_threshold=0.5):
-    """Remove domains with bidirectional coldspot overlap > threshold.
+    """Remove Family/Homologous_superfamily domains with bidirectional coldspot overlap > threshold.
+
+    Only applies to InterPro entries of type "Family" or "Homologous_superfamily".
+    Other entry types (Domain, Repeat, Site, etc.) are exempt from this filter.
 
     A domain is removed if, for any coldspot in the same gene, EITHER:
       - overlap / coldspot_length > threshold  (domain covers most of a coldspot), OR
@@ -673,6 +953,8 @@ def filter_coldspot_overlap(intolerant_domains, domain_metadata, hcseeker_spots_
         intolerant_domains: set of domain_path strings
         domain_metadata: dict from extract_domain_metadata()
         hcseeker_spots_tsv: path to HC_spots.{assembly}.tsv
+        dm_instance: DomainNormalizer instance for InterPro lookups
+        interpro_map_dict: InterPro entry mapping dict
         overlap_threshold: fraction threshold for either direction
 
     Returns:
@@ -686,11 +968,32 @@ def filter_coldspot_overlap(intolerant_domains, domain_metadata, hcseeker_spots_
         gene_coldspots[row['gene']].append((int(row['aa_start_pos']), int(row['aa_end_pos'])))
     logger.info(f"[FILTER1:COLDSPOT] Loaded {len(coldspots)} coldspots across {len(gene_coldspots)} genes")
 
+    COLDSPOT_ELIGIBLE_TYPES = {"Family", "Homologous_superfamily"}
+
     excluded = set()
     summary = {}
     n_evaluated = 0
+    n_exempt = 0
 
     for domain_path in intolerant_domains:
+        # Only apply coldspot filter to Family / Homologous_superfamily entries
+        domain_name = domain_path.split(':', 1)[-1]
+        interpro_result = dm_instance.query_interpro_entry_vep_anno(domain_name, interpro_map_dict)
+        interpro_type = None
+        if interpro_result is not None:
+            entries = interpro_result.get('interpro_entries')
+            if entries:
+                interpro_type = entries[0][1]
+
+        if interpro_type not in COLDSPOT_ELIGIBLE_TYPES:
+            n_exempt += 1
+            summary[domain_path] = {
+                'coldspot_max_frac_of_coldspot': 0.0,
+                'coldspot_max_frac_of_domain': 0.0,
+                'removed': False,
+            }
+            continue
+
         meta = domain_metadata.get(domain_path)
         if meta is None:
             summary[domain_path] = {
@@ -743,7 +1046,8 @@ def filter_coldspot_overlap(intolerant_domains, domain_metadata, hcseeker_spots_
     filtered = intolerant_domains - excluded
 
     logger.info(f"[FILTER1:COLDSPOT] Input intolerant domains: {len(intolerant_domains)}")
-    logger.info(f"[FILTER1:COLDSPOT] Domains evaluated (gene matched to HCSeeker): {n_evaluated}")
+    logger.info(f"[FILTER1:COLDSPOT] Exempt (not Family/Homologous_superfamily): {n_exempt}")
+    logger.info(f"[FILTER1:COLDSPOT] Domains evaluated (Family/Homologous_superfamily + gene matched): {n_evaluated}")
     logger.info(f"[FILTER1:COLDSPOT] Domains removed (bidirectional overlap > {overlap_threshold}): {len(excluded)}")
     logger.info(f"[FILTER1:COLDSPOT] Output intolerant domains: {len(filtered)}")
     if excluded:
@@ -758,24 +1062,25 @@ def filter_coldspot_overlap(intolerant_domains, domain_metadata, hcseeker_spots_
     return filtered, excluded, summary
 
 
-def filter_benign_clinvar(intolerant_domains, clinvar_vcf):
-    """Remove domains containing >=1 high-confidence benign ClinVar missense variant.
+def filter_benign_clinvar(intolerant_domains, clinvar_vcf, min_benign=3):
+    """Remove domains containing >=min_benign high-confidence benign ClinVar missense variants.
 
-    High-confidence: CLNSIG contains 'Benign' (not just Likely_benign),
-    CLNREVSTAT >= 2 review stars, consequence includes missense_variant.
+    High-confidence: CLNSIG is exactly 'Benign' (not Likely_benign),
+    CLNREVSTAT >= 3 stars (expert panel or practice guideline),
+    consequence includes missense_variant.
     Uses ClinVar VCF's CSQ DOMAINS field to map variants to domain_paths directly.
 
     Args:
         intolerant_domains: set of domain_path strings
         clinvar_vcf: path to clinvar.{assembly}.vep.vcf.gz
+        min_benign: minimum number of HC benign missense variants to trigger removal (default 3)
 
     Returns:
         (filtered_set, excluded_set, summary_dict)
     """
-    REVIEW_2STAR = {
+    REVIEW_3STAR = {
         'practice_guideline',
         'reviewed_by_expert_panel',
-        'criteria_provided,_multiple_submitters,_no_conflicts',
     }
 
     vcf = pysam.VariantFile(clinvar_vcf)
@@ -795,7 +1100,7 @@ def filter_benign_clinvar(intolerant_domains, clinvar_vcf):
             continue
         if isinstance(clnsig, tuple):
             clnsig = ','.join(clnsig)
-        if 'Benign' not in clnsig:
+        if clnsig != 'Benign':
             continue
 
         clnrevstat = record.info.get('CLNREVSTAT')
@@ -803,7 +1108,7 @@ def filter_benign_clinvar(intolerant_domains, clinvar_vcf):
             continue
         if isinstance(clnrevstat, tuple):
             clnrevstat = ','.join(clnrevstat)
-        if clnrevstat not in REVIEW_2STAR:
+        if clnrevstat not in REVIEW_3STAR:
             continue
 
         csq_value = record.info.get('CSQ')
@@ -845,7 +1150,7 @@ def filter_benign_clinvar(intolerant_domains, clinvar_vcf):
 
     for domain_path in intolerant_domains:
         n_benign = domain_benign_count.get(domain_path, 0)
-        removed = n_benign >= 1
+        removed = n_benign >= min_benign
         summary[domain_path] = {'n_benign_missense': n_benign, 'removed': removed}
         if removed:
             excluded.add(domain_path)
@@ -853,7 +1158,7 @@ def filter_benign_clinvar(intolerant_domains, clinvar_vcf):
     filtered = intolerant_domains - excluded
 
     logger.info(f"[FILTER2:BENIGN] Input intolerant domains: {len(intolerant_domains)}")
-    logger.info(f"[FILTER2:BENIGN] Domains with >=1 HC benign missense: {len(excluded)}")
+    logger.info(f"[FILTER2:BENIGN] Domains with >={min_benign} HC benign missense: {len(excluded)}")
     logger.info(f"[FILTER2:BENIGN] Domains removed: {len(excluded)}")
     logger.info(f"[FILTER2:BENIGN] Output intolerant domains: {len(filtered)}")
     if excluded:
@@ -864,58 +1169,105 @@ def filter_benign_clinvar(intolerant_domains, clinvar_vcf):
     return filtered, excluded, summary
 
 
-def filter_common_missense(intolerant_domains, scores_dict, af_threshold=0.05):
-    """Remove domains containing >=1 missense variant with AF_grpmax_joint > af_threshold.
+def filter_common_missense(intolerant_domains, scores_dict, af_common=0.05, af_rare=0.01, residue_frac=0.05):
+    """Remove domains where >residue_frac of residues are fully common.
 
-    Reads gnomAD_distribution from scores_dict (numpy arrays of AF values per domain).
+    A residue is "fully common" if its MAXIMUM possible missense variant AF
+    exceeds af_common AND its MINIMUM AF exceeds af_rare.
+    A domain is removed if fully-common residues exceed residue_frac of total
+    domain residues.
+
+    Uses gnomAD_residue_distribution {aa_pos: [AF1, AF2, ...]} from scores_dict.
+    Falls back to legacy gnomAD_distribution (flat array, any AF > af_common)
+    if gnomAD_residue_distribution is not available.
 
     Args:
         intolerant_domains: set of domain_path strings
-        scores_dict: loaded domain scores pkl containing gnomAD_distribution per domain leaf
-        af_threshold: AF threshold (default 0.05, BA1 criterion)
+        scores_dict: loaded domain scores pkl
+        af_common: AF threshold for common (default 0.05), applied to max AF at each residue
+        af_rare: AF threshold for rare (default 0.01), applied to min AF at each residue
+        residue_frac: fraction of domain residues that must be fully common to trigger removal (default 0.05)
 
     Returns:
         (filtered_set, excluded_set, summary_dict)
     """
-    gnomad_data = {}
-    _collect_gnomad_leaves(scores_dict, gnomad_data, path=[])
+    # Collect per-residue gnomAD data
+    gnomad_residue_data = {}
+    _collect_gnomad_residue_leaves(scores_dict, gnomad_residue_data, path=[])
+
+    # Fallback: collect flat gnomAD arrays for domains without residue data
+    gnomad_flat_data = {}
+    if not gnomad_residue_data:
+        _collect_gnomad_leaves(scores_dict, gnomad_flat_data, path=[])
+        logger.warning("[FILTER3:COMMON] gnomAD_residue_distribution not found, falling back to legacy flat filter")
 
     excluded = set()
     summary = {}
-    n_with_gnomad = 0
+    n_with_data = 0
 
     for domain_path in intolerant_domains:
-        gnomad_arr = gnomad_data.get(domain_path)
-        if gnomad_arr is None or len(gnomad_arr) == 0:
-            summary[domain_path] = {'n_common_missense': 0, 'max_af': 0.0, 'removed': False}
-            continue
+        residue_dict = gnomad_residue_data.get(domain_path)
 
-        n_with_gnomad += 1
-        n_common = int(np.sum(gnomad_arr > af_threshold))
-        max_af = float(np.max(gnomad_arr))
-        removed = n_common >= 1
-        summary[domain_path] = {'n_common_missense': n_common, 'max_af': max_af, 'removed': removed}
-        if removed:
-            excluded.add(domain_path)
+        if residue_dict is not None and len(residue_dict) > 0:
+            n_with_data += 1
+            n_total_residues = len(residue_dict)
+            n_fully_common = 0
+
+            for aa_pos, af_list in residue_dict.items():
+                if len(af_list) == 0:
+                    continue
+                max_af = max(af_list)
+                min_af = min(af_list)
+                if max_af > af_common and min_af > af_rare:
+                    n_fully_common += 1
+
+            frac = n_fully_common / n_total_residues if n_total_residues > 0 else 0
+            removed = frac > residue_frac
+            summary[domain_path] = {
+                'n_fully_common_residues': n_fully_common,
+                'n_total_residues': n_total_residues,
+                'frac_common': round(frac, 4),
+                'removed': removed,
+            }
+            if removed:
+                excluded.add(domain_path)
+
+        elif domain_path in gnomad_flat_data:
+            # Legacy fallback
+            n_with_data += 1
+            gnomad_arr = gnomad_flat_data[domain_path]
+            n_common = int(np.sum(gnomad_arr > af_common))
+            removed = n_common >= 1
+            summary[domain_path] = {
+                'n_fully_common_residues': n_common,
+                'n_total_residues': len(gnomad_arr),
+                'frac_common': round(n_common / len(gnomad_arr), 4) if len(gnomad_arr) > 0 else 0,
+                'removed': removed,
+            }
+            if removed:
+                excluded.add(domain_path)
+        else:
+            summary[domain_path] = {'n_fully_common_residues': 0, 'n_total_residues': 0, 'frac_common': 0, 'removed': False}
 
     filtered = intolerant_domains - excluded
 
     logger.info(f"[FILTER3:COMMON] Input intolerant domains: {len(intolerant_domains)}")
-    logger.info(f"[FILTER3:COMMON] Domains with gnomAD data: {n_with_gnomad} / {len(intolerant_domains)}")
-    logger.info(f"[FILTER3:COMMON] Domains removed (any AF > {af_threshold}): {len(excluded)}")
+    logger.info(f"[FILTER3:COMMON] Domains with gnomAD data: {n_with_data} / {len(intolerant_domains)}")
+    logger.info(f"[FILTER3:COMMON] Domains removed (>{residue_frac*100:.0f}% residues with max_AF>{af_common} and min_AF>{af_rare}): {len(excluded)}")
     logger.info(f"[FILTER3:COMMON] Output intolerant domains: {len(filtered)}")
     if excluded:
-        top_removed = sorted(excluded, key=lambda d: summary[d]['max_af'], reverse=True)[:5]
+        top_removed = sorted(excluded, key=lambda d: summary[d]['frac_common'], reverse=True)[:5]
         for d in top_removed:
-            logger.info(f"[FILTER3:COMMON] Removed: {d} (max_AF={summary[d]['max_af']:.4f})")
+            s = summary[d]
+            logger.info(f"[FILTER3:COMMON] Removed: {d} (frac={s['frac_common']:.3f}, {s['n_fully_common_residues']}/{s['n_total_residues']} residues)")
 
     return filtered, excluded, summary
 
 
 def filter_whole_protein_family(intolerant_domains, domain_metadata,
                                 dm_instance, interpro_map_dict,
-                                coverage_threshold=0.9, min_protein_length=200):
-    """Remove Family-type InterPro entries spanning ≥coverage_threshold of proteins ≥min_protein_length AA.
+                                coverage_threshold=0.9, min_protein_length=250):
+    """Remove Family-type InterPro entries spanning >coverage_threshold of proteins >min_protein_length AA.
 
     Proteins shorter than min_protein_length typically harbor a single structural
     domain (Ramírez-Sánchez et al. 2016; Xu & Nussinov 1998), so Family entries
@@ -926,8 +1278,8 @@ def filter_whole_protein_family(intolerant_domains, domain_metadata,
         domain_metadata: dict {domain_path: {aa_start, aa_end, prot_length, ...}}
         dm_instance: DomainNormalizer instance for InterPro lookups
         interpro_map_dict: InterPro entry mapping dict
-        coverage_threshold: minimum domain/protein coverage to trigger exclusion (default 0.9)
-        min_protein_length: proteins shorter than this are exempt (default 200)
+        coverage_threshold: domain/protein coverage strictly above this triggers exclusion (default 0.9)
+        min_protein_length: proteins at-or-below this length are exempt (default 250)
 
     Returns:
         (filtered_set, excluded_set, summary_dict)
@@ -956,8 +1308,8 @@ def filter_whole_protein_family(intolerant_domains, domain_metadata,
         coverage = (meta['aa_end'] - meta['aa_start'] + 1) / prot_len
 
         removed = (interpro_type == 'Family'
-                   and coverage >= coverage_threshold
-                   and prot_len >= min_protein_length)
+                   and coverage > coverage_threshold
+                   and prot_len > min_protein_length)
 
         summary[domain_path] = {'interpro_type': interpro_type,
                                 'coverage': round(coverage, 4),
@@ -971,7 +1323,7 @@ def filter_whole_protein_family(intolerant_domains, domain_metadata,
     logger.info(f"[FILTER4:FAMILY] Input intolerant domains: {len(intolerant_domains)}")
     logger.info(f"[FILTER4:FAMILY] Family-type entries found: {n_family}")
     logger.info(f"[FILTER4:FAMILY] Domains removed "
-                f"(Family + coverage≥{coverage_threshold} + prot≥{min_protein_length}): "
+                f"(Family + coverage>{coverage_threshold} + prot>{min_protein_length}): "
                 f"{len(excluded)}")
     logger.info(f"[FILTER4:FAMILY] Output intolerant domains: {len(filtered)}")
     if excluded:
@@ -989,12 +1341,12 @@ def filter_whole_protein_family(intolerant_domains, domain_metadata,
 def analyze_domain_data(pickle_file: str,
                        output_dir: str,
                        threads: int = 12,
-                       fdr_threshold: float = 0.05,
+                       fdr_threshold: float = 0.01,
                        assembly: str = 'hg19',
                        am_vcf: str = None,
                        hcseeker_spots_tsv: str = None,
                        clinvar_vcf: str = None,
-                       coldspot_overlap_threshold: float = 0.5,
+                       coldspot_overlap_threshold: float = 0.6,
                        common_af_threshold: float = 0.05):
     """
     Analyze domain data from the pickle file and apply post-KS filters.
@@ -1043,12 +1395,33 @@ def analyze_domain_data(pickle_file: str,
     func_map_df = pd.read_table(functional_map, low_memory=False)
     func_map_dict = dict(zip(func_map_df['IPR_ID'], func_map_df['Molecular_Function_GO_Terms']))
     func_pred_dict = dict(zip(func_map_df['IPR_ID'], func_map_df['Functionality_Assessment']))
-    
+
+    # --- Load/cache domain metadata (needed for ref set filtering and post-KS filters) ---
+    domain_metadata = None
+    if am_vcf is not None:
+        domain_meta_cache = os.path.join(output_dir, f'domain_metadata.{assembly}.pkl')
+        if os.path.exists(domain_meta_cache):
+            logger.info(f"[DOMAIN_META] Loading cached metadata from {domain_meta_cache}")
+            with open(domain_meta_cache, 'rb') as f:
+                domain_metadata = pickle.load(f)
+            # Validate cache has prot_length
+            sample_meta = next(iter(domain_metadata.values()), {}) if domain_metadata else {}
+            if sample_meta.get('prot_length') is None:
+                logger.warning(f"[DOMAIN_META] Stale cache (no prot_length), regenerating...")
+                domain_metadata = None
+        if domain_metadata is None:
+            logger.info(f"[DOMAIN_META] Extracting from AM VCF: {am_vcf}")
+            domain_metadata = extract_domain_metadata_parallel(am_vcf, threads=threads)
+            with open(domain_meta_cache, 'wb') as f:
+                pickle.dump(domain_metadata, f)
+            logger.info(f"[DOMAIN_META] Cached {len(domain_metadata)} domains to {domain_meta_cache}")
+
     # Pick out the reference (curated functional) domains
     ref_domain_scores = {
         domain: domain_s
         for domain, domain_s in domain_scores.items()
-        if identify_functional_domain(domain, dm_instance, func_map_dict, func_pred_dict, interpro_map_dict) == "Functional"
+        if identify_functional_domain(domain, dm_instance, func_map_dict, func_pred_dict, interpro_map_dict,
+                                      domain_metadata=domain_metadata) == "Functional"
     }
     logger.info(f"Found {len(ref_domain_scores)} curated functional domains/sites as references")
 
@@ -1076,19 +1449,55 @@ def analyze_domain_data(pickle_file: str,
     fixed_composite = build_fixed_equal_weight_composite(ref_arrays, T=T, rng=rng_global)
     logger.info(f"Built fixed equal-weight composite reference of size T={len(fixed_composite)} from {len(ref_arrays)} references")
 
-    # --- Parallel KS over query domains ---
-    # We downsample the composite per-query to match n_query (capped at T)
+    # --- Classify ref domains by InterPro type for stratified KS ---
+    ref_by_type = {}
+    for dp in ref_domain_scores:
+        domain_name = dp.split(':', 1)[-1]
+        interpro_result = dm_instance.query_interpro_entry_vep_anno(domain_name, interpro_map_dict)
+        if interpro_result is None:
+            ref_by_type.setdefault(None, []).append(ref_domain_scores[dp])
+            continue
+        entries = interpro_result.get('interpro_entries')
+        itype = entries[0][1] if entries else None
+        ref_by_type.setdefault(itype, []).append(ref_domain_scores[dp])
+
+    # Build type-specific composites (only for types with enough refs)
+    type_composites = {}
+    MIN_REF_FOR_TYPE = 100
+    for itype, arrays in ref_by_type.items():
+        if itype is None or len(arrays) < MIN_REF_FOR_TYPE:
+            continue
+        T_type = min(T_cap, sum(len(a) for a in arrays))
+        type_composites[itype] = build_fixed_equal_weight_composite(arrays, T=max(50, T_type), rng=rng_global)
+    logger.info(f"Built type-specific composites for: {list(type_composites.keys())}")
+
+    # --- Classify query domains by InterPro type ---
+    query_type_map = {}
+    for d, _ in query_domains:
+        domain_name = d.split(':', 1)[-1]
+        interpro_result = dm_instance.query_interpro_entry_vep_anno(domain_name, interpro_map_dict)
+        if interpro_result is None:
+            query_type_map[d] = None
+            continue
+        entries = interpro_result.get('interpro_entries')
+        query_type_map[d] = entries[0][1] if entries else None
+
+    # --- Parallel KS over query domains (type-stratified) ---
+    # Each query is tested against its type-specific composite if available,
+    # otherwise falls back to the global composite.
     cap = T
     n_tasks = len(query_domains)
     n_cores = min(threads, n_tasks) if n_tasks > 0 else 1
-    logger.info(f"Processing {n_tasks} query domains using {n_cores} cores for composite KS tests")
+    logger.info(f"Processing {n_tasks} query domains using {n_cores} cores for type-stratified KS tests")
 
     ks_results = {}
     tasks = []
     for i, (domain_path, scores) in enumerate(query_domains):
-        # domain-specific seed for deterministic subsampling
         seed = (seed_global + i) & 0xFFFFFFFF
-        tasks.append((domain_path, scores, fixed_composite, cap, seed))
+        itype = query_type_map.get(domain_path)
+        composite = type_composites.get(itype, fixed_composite)
+        task_cap = min(cap, len(composite))
+        tasks.append((domain_path, scores, composite, task_cap, seed))
 
     if n_tasks > 0:
         with mp.Pool(n_cores) as pool:
@@ -1131,11 +1540,25 @@ def analyze_domain_data(pickle_file: str,
     logger.info(f"Completed KS analysis for {len(results_df)} domains; "
                 f"found {int(np.sum(rejected))} domains significantly more tolerant than composite (FDR < {fdr_threshold})")
 
-    # --- Define "intolerant" set for downstream: those NOT significantly more tolerant + all curated refs ---
+    # --- Define "intolerant" set for downstream: those NOT significantly more tolerant ---
     not_more_tolerant = set(results_df.loc[~results_df['is_more_tolerant'], 'domain'].unique().tolist())
-    analysis_intolerant_domains = not_more_tolerant | set(ref_domain_scores.keys())
+    analysis_intolerant_domains = set(not_more_tolerant)
     n_ks_intolerant = len(analysis_intolerant_domains)
-    logger.info(f"[KS] Intolerant set (not-tolerant + curated refs): {n_ks_intolerant}")
+    logger.info(f"[KS] Intolerant set (not-tolerant, before adding refs): {n_ks_intolerant}")
+
+    # --- Log Family-type entries that survived the KS test ---
+    n_family_survived = 0
+    n_family_total = 0
+    for domain_path in domains:
+        domain_name = domain_path.split(':', 1)[-1]
+        interpro_result = dm_instance.query_interpro_entry_vep_anno(domain_name, interpro_map_dict)
+        if interpro_result is not None:
+            entries = interpro_result.get('interpro_entries')
+            if entries and entries[0][1] == 'Family':
+                n_family_total += 1
+                if domain_path in analysis_intolerant_domains:
+                    n_family_survived += 1
+    logger.info(f"[KS] Family-type entries: {n_family_total} total tested, {n_family_survived} survived into intolerant set")
 
     # Keep a copy of the pre-filter set for the summary TSV
     ks_intolerant_raw = set(analysis_intolerant_domains)
@@ -1144,20 +1567,7 @@ def analyze_domain_data(pickle_file: str,
     filter_summaries = {}
     excluded_sets = {}
 
-    # --- Load/cache domain metadata (needed for Filters 1 and 4) ---
-    domain_metadata = None
-    if am_vcf is not None:
-        domain_meta_cache = os.path.join(output_dir, f'domain_metadata.{assembly}.pkl')
-        if os.path.exists(domain_meta_cache):
-            logger.info(f"[DOMAIN_META] Loading cached metadata from {domain_meta_cache}")
-            with open(domain_meta_cache, 'rb') as f:
-                domain_metadata = pickle.load(f)
-        else:
-            logger.info(f"[DOMAIN_META] Extracting from AM VCF: {am_vcf}")
-            domain_metadata = extract_domain_metadata_parallel(am_vcf, threads=threads)
-            with open(domain_meta_cache, 'wb') as f:
-                pickle.dump(domain_metadata, f)
-            logger.info(f"[DOMAIN_META] Cached {len(domain_metadata)} domains to {domain_meta_cache}")
+    # domain_metadata already loaded above (before ref set building)
 
     # Filter 1: HCSeeker coldspot overlap
     if hcseeker_spots_tsv is not None:
@@ -1166,6 +1576,7 @@ def analyze_domain_data(pickle_file: str,
         else:
             analysis_intolerant_domains, excl, summ = filter_coldspot_overlap(
                 analysis_intolerant_domains, domain_metadata, hcseeker_spots_tsv,
+                dm_instance, interpro_map_dict,
                 coldspot_overlap_threshold)
             filter_summaries['coldspot'] = summ
             excluded_sets['coldspot'] = excl
@@ -1193,11 +1604,34 @@ def analyze_domain_data(pickle_file: str,
     else:
         logger.warning("[FILTER4:FAMILY] Skipped: --am_vcf required")
 
+    # --- Bimodality rescue: recover KS-tolerant GO MF domains with significant bimodality ---
+    tolerant_set = set(results_df.loc[results_df['is_more_tolerant'], 'domain'].tolist())
+    rescued_domains, rescue_summary = rescue_bimodal_go_mf_domains(
+        tolerant_set, domain_scores, fixed_composite,
+        dm_instance, interpro_map_dict,
+        type_composites=type_composites,
+        domain_metadata=domain_metadata,
+        threads=threads, fdr_threshold=fdr_threshold)
+    analysis_intolerant_domains = analysis_intolerant_domains | rescued_domains
+
+    # --- Rescue pass 2: non-GO-MF Domain/Repeat/Site entries with high median AM ---
+    rescued_non_gomf, rescue_non_gomf_summary = rescue_non_gomf_domains(
+        tolerant_set, domain_scores, fixed_composite,
+        dm_instance, interpro_map_dict,
+        type_composites=type_composites,
+        threads=threads, fdr_threshold=fdr_threshold, min_median_am=0.75)
+    analysis_intolerant_domains = analysis_intolerant_domains | rescued_non_gomf
+
+    # --- Add curated refs AFTER all filters and rescues (refs are never filtered) ---
+    analysis_intolerant_domains = analysis_intolerant_domains | set(ref_domain_scores.keys())
+
     # --- Summary logging ---
     n_f1 = len(excluded_sets.get('coldspot', set()))
     n_f2 = len(excluded_sets.get('benign', set()))
     n_f3 = len(excluded_sets.get('common', set()))
     n_f4 = len(excluded_sets.get('family', set()))
+    n_rescued_gomf = len(rescued_domains)
+    n_rescued_non_gomf = len(rescued_non_gomf)
     logger.info(f"[SUMMARY] Total domains analyzed: {len(domain_scores)}")
     logger.info(f"[SUMMARY] Curated functional references: {len(ref_domain_scores)}")
     logger.info(f"[SUMMARY] DAS intolerant (post-KS): {n_ks_intolerant}")
@@ -1205,6 +1639,8 @@ def analyze_domain_data(pickle_file: str,
     logger.info(f"[SUMMARY] Removed by Filter 2 (benign): {n_f2}")
     logger.info(f"[SUMMARY] Removed by Filter 3 (common): {n_f3}")
     logger.info(f"[SUMMARY] Removed by Filter 4 (whole-protein family): {n_f4}")
+    logger.info(f"[SUMMARY] Rescued GO MF (not bimodal, median AM >= 0.564): {n_rescued_gomf}")
+    logger.info(f"[SUMMARY] Rescued non-GO-MF Domain/Repeat/Site (not bimodal, median AM >= 0.85): {n_rescued_non_gomf}")
     logger.info(f"[SUMMARY] Final intolerant domains: {len(analysis_intolerant_domains)}")
 
     # --- Save filter summary TSV ---
@@ -1232,8 +1668,9 @@ def analyze_domain_data(pickle_file: str,
                 row['benign_removed'] = s.get('removed', False)
             if 'common' in filter_summaries:
                 s = filter_summaries['common'].get(dp, {})
-                row['n_common_missense'] = s.get('n_common_missense', np.nan)
-                row['max_af'] = s.get('max_af', np.nan)
+                # Support both legacy (flat) and new (per-residue) summary fields
+                row['n_common_missense'] = s.get('n_fully_common_residues', s.get('n_common_missense', np.nan))
+                row['max_af'] = s.get('frac_common', s.get('max_af', np.nan))
                 row['common_removed'] = s.get('removed', False)
             if 'family' in filter_summaries:
                 s = filter_summaries['family'].get(dp, {})
@@ -1254,6 +1691,13 @@ def analyze_domain_data(pickle_file: str,
     with open(intolerant_domains_pickle, 'wb') as f:
         pickle.dump(analysis_intolerant_domains, f)
     logger.info(f"Saved final intolerant domains (N={len(analysis_intolerant_domains)}) to {intolerant_domains_pickle}")
+
+    # --- Save curated functional reference set (used to build the KS composite) ---
+    curated_refs_pickle = os.path.join(output_dir, f'curated_functional_references.{assembly}.pkl')
+    curated_refs = set(ref_domain_scores.keys())
+    with open(curated_refs_pickle, 'wb') as f:
+        pickle.dump(curated_refs, f)
+    logger.info(f"Saved curated functional references (N={len(curated_refs)}) to {curated_refs_pickle}")
 
     # --- Save excluded domain sets per filter ---
     if excluded_sets:
@@ -1276,11 +1720,11 @@ if __name__ == '__main__':
                         help='Path to HC_spots.{assembly}.tsv for Filter 1 (None = skip)')
     parser.add_argument('--clinvar_vcf', type=str, default=None,
                         help='Path to clinvar.{assembly}.vep.vcf.gz for Filter 2 (None = skip)')
-    parser.add_argument('--coldspot_overlap_threshold', type=float, default=0.5,
-                        help='Overlap fraction threshold for Filter 1 (default: 0.5)')
+    parser.add_argument('--coldspot_overlap_threshold', type=float, default=0.6,
+                        help='Overlap fraction threshold for Filter 1 (default: 0.6)')
     parser.add_argument('--common_af_threshold', type=float, default=0.05,
                         help='AF threshold for Filter 3 common missense (default: 0.05)')
-    parser.add_argument('--fdr_threshold', type=float, default=0.05,
+    parser.add_argument('--fdr_threshold', type=float, default=0.01,
                         help='FDR threshold for KS test significance (default: 0.05)')
     args = parser.parse_args()
 

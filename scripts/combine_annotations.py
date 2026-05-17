@@ -94,6 +94,9 @@ def parse_csq_field(csq_field: Tuple[str, ...], csq_fields: List[str], logger: l
     anno_dict = {}
     for tranx_anno in tranx_annos:
         field_values = tranx_anno.split("|")
+        # Pad with empty strings if VEP truncated trailing empty fields
+        if len(field_values) < len(csq_fields):
+            field_values.extend([""] * (len(csq_fields) - len(field_values)))
         feature_dict = {}
         feature_name = field_values[csq_fields.index("Feature")]
         for i in range(len(csq_fields)):
@@ -397,8 +400,14 @@ def convert_vcf_to_tab(input_vcf: str, threads=4, cadd_phred_dict: dict = None, 
                         
                         try:
                             value = float(value)
-                        except ValueError:
-                            pass
+                        except (ValueError, TypeError):
+                            # TypeError: value is a tuple/list (e.g. multi-allelic control_AF)
+                            if isinstance(value, (tuple, list)):
+                                value = value[0] if len(value) == 1 else max(v for v in value if v is not None) if any(v is not None for v in value) else np.nan
+                                try:
+                                    value = float(value)
+                                except (ValueError, TypeError):
+                                    pass
                         else:
                             if not na_value(value):
                                 has_digit = True
@@ -449,13 +458,19 @@ def convert_vcf_to_tab(input_vcf: str, threads=4, cadd_phred_dict: dict = None, 
                     
                     try:
                         value = float(value)
-                    except ValueError:
-                        pass
+                    except (ValueError, TypeError):
+                        # TypeError: value is a tuple/list (e.g. multi-allelic AF fields)
+                        if isinstance(value, (tuple, list)):
+                            value = value[0] if len(value) == 1 else max(v for v in value if v is not None) if any(v is not None for v in value) else np.nan
+                            try:
+                                value = float(value)
+                            except (ValueError, TypeError):
+                                pass
                     else:
                         if not na_value(value):
                             has_digit = True
                     values[i] = value
-                
+
                 if has_digit and col_dicts[key].dtype != np.float32:
                     if key == "pos":
                         logger.info(f"Found the column {key} has digit values in the iterating chunk, convert the np array type to int64")
@@ -560,7 +575,7 @@ def main_combine_annotations(input_vcf: str,
     logger.info(f"CADD data loaded with {cadd_df.shape[0]} rows and {cadd_df.shape[1]} columns (only required columns)")
 
     # Prepare CADD data more efficiently - data types already optimized during reading
-    cadd_df["chrom"] = "chr" + cadd_df["#Chrom"].astype(str)
+    cadd_df["chrom"] = cadd_df["#Chrom"].astype(str).where(lambda s: s.str.startswith("chr"), "chr" + cadd_df["#Chrom"].astype(str))
     cadd_df["pos"] = cadd_df["Pos"]  # Already int32
     cadd_df["ref"] = cadd_df["Ref"]  # Already string dtype, no conversion needed
     cadd_df["alt"] = cadd_df["Alt"]  # Already string dtype, no conversion needed
@@ -572,7 +587,7 @@ def main_combine_annotations(input_vcf: str,
     cadd_subset = cadd_df[["variant_id", "Feature", "CADD_phred"]].copy()
     logger.info(f"CADD subset memory usage: {cadd_subset.memory_usage(deep=True).sum() / 1024**2:.1f} MB")
 
-    cadd_phred_dict = cadd_subset.groupby("variant_id").apply(lambda x: x.set_index("Feature")[["CADD_phred"]].to_dict(orient="index")).to_dict()
+    cadd_phred_dict = cadd_subset.groupby("variant_id").apply(lambda x: x.drop_duplicates(subset="Feature").set_index("Feature")[["CADD_phred"]].to_dict(orient="index")).to_dict()
 
     # Read HPO data - only load required columns
     logger.info("Loading HPO data...")

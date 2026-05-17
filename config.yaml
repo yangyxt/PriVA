@@ -69,12 +69,12 @@ alphamissense_prescore: /paedyl01/disk1/yangyxt/public_data/VEP_plugins_caches/A
 alphamissense_vcf: /paedyl01/disk1/yangyxt/public_data/VEP_plugins_caches/AlphaMissense/AlphaMissense_hg19.vcf.gz
 alphamissense_vep_vcf: /paedyl01/disk1/yangyxt/public_data/VEP_plugins_caches/AlphaMissense/AlphaMissense_hg19.vep.vcf.gz
 alphamissense_pd_stat: /paedyl01/disk1/yangyxt/public_data/VEP_plugins_caches/AlphaMissense/AlphaMissense_hg19.vep.prot.domain.stats.pkl
-alphamissense_tranx_domain_map: /paedyl01/disk1/yangyxt/public_data/VEP_plugins_caches/AlphaMissense/transcript_exon_domain_mapping.hg19.pkl
+alphamissense_tranx_domain_map: /paedyl01/disk1/yangyxt/public_data/VEP_plugins_caches/AlphaMissense/transcript_pp_domain_mapping.hg19.pkl
 alphamissense_intolerant_domains: /paedyl01/disk1/yangyxt/public_data/VEP_plugins_caches/AlphaMissense/domain_tolerance_analysis.hg19.tsv
 alphamissense_intolerant_motifs: /paedyl01/disk1/yangyxt/public_data/VEP_plugins_caches/AlphaMissense/AlphaMissense_hg19.kde.pkl
 
 # Final intolerant domains combining results from AlphaMissense and ClinVar
-all_intolerant_domains: /paedyl01/disk1/yangyxt/test_acmg_auto/das_filtering_output_hg19/all_intolerant_domains.hg19.pkl
+all_intolerant_domains: /paedyl01/disk1/yangyxt/public_data/VEP_plugins_caches/AlphaMissense/all_intolerant_domains.hg19.pkl
 
 # Combined PM1 regions (DAS + HCSeeker + RMC)
 pm1_regions_pkl: /paedyl01/disk1/yangyxt/public_data/VEP_plugins_caches/AlphaMissense/pm1_regions.hg19.pkl

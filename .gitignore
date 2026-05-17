@@ -40,6 +40,19 @@ wheels/
 .Trashes
 ehthumbs.db
 Thumbs.db
-/example_test/
 
+# Progress tracking
+PROGRESS.md
+logs/
+/example_test/
 /example/smoke_runs/
+
+# PBS / scheduler output stubs
+*.o[0-9]*
+*.e[0-9]*
+
+# Root-level intermediate annotation and figure artifacts
+/*.tsv.gz
+/*.vcf.gz
+/*.png
+!/PriVA_figure1.png

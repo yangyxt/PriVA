@@ -128,8 +128,9 @@ def check_domain_tolerance(transcript_id: str,
     """Check if length change affects intolerant domains"""
     if transcript_id not in domain_map:
         return False
-        
-    affected_domains = domain_map[transcript_id].get(exon_num, [])
+    
+    exon_domains = domain_map[transcript_id].get('exon_domains', {})
+    affected_domains = exon_domains.get(exon_num, [])
     logger.info(f"Transcript {transcript_id} exon {exon_num} affected domains: {affected_domains}")
 
     if affected_domains:

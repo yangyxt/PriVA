@@ -827,6 +827,7 @@ function AlphaMissense_stat() {
     local alphamissense_stat=$(read_yaml ${config_file} "alphamissense_pd_stat")
     local alphamissense_vcf=$(read_yaml ${config_file} "alphamissense_vep_vcf")
     local stat_py=${SCRIPT_DIR}/stat_protein_domain_amscores.py
+    local threads=$(read_yaml ${config_file} "threads")
 
     [[ -f ${alphamissense_stat} ]] && \
     [[ ${alphamissense_stat} -nt ${alphamissense_vcf} ]] && \
@@ -837,7 +838,8 @@ function AlphaMissense_stat() {
 
     python ${stat_py} \
     ${alphamissense_vcf} \
-    ${alphamissense_vcf/.vcf*/.prot.domain.stats.pkl} && \
+    ${alphamissense_vcf/.vcf*/.prot.domain.stats.pkl} \
+    ${threads:-1} && \
     update_yaml ${config_file} "alphamissense_pd_stat" "${alphamissense_vcf/.vcf*/.prot.domain.stats.pkl}" && \
     log "The AlphaMissense statistics pickle file ${alphamissense_vcf/.vcf*/.prot.domain.stats.pkl} is generated and saved to ${alphamissense_stat}"
 }
@@ -845,7 +847,7 @@ function AlphaMissense_stat() {
 
 function AlphaMissense_pick_intolerant_domains() {
     local config_file=${1}
-    
+
     local assembly=$(read_yaml ${config_file} "assembly")
     local alphamissense_pd_stat=$(read_yaml ${config_file} "alphamissense_pd_stat")
     local alphamissense_tranx_domain_map=$(read_yaml ${config_file} "alphamissense_tranx_domain_map")
@@ -858,20 +860,42 @@ function AlphaMissense_pick_intolerant_domains() {
     [[ ${alphamissense_tranx_domain_map} -nt ${alphamissense_pd_stat} ]] && \
     [[ ${alphamissense_intolerant_domains} -nt ${pick_intolerant_domains_py} ]] && \
     log "The AlphaMissense intolerant domains file ${alphamissense_intolerant_domains} is already generated, skip this step" && return 0
-    
+
     local threads=$(read_yaml ${config_file} "threads")
     local alphamissense_dir=$(dirname ${alphamissense_pd_stat})
-    
-    log "Running the AlphaMissense intolerant domains analysis with this command: python ${pick_intolerant_domains_py} --pickle_file ${alphamissense_pd_stat} --threads ${threads} --output_dir ${alphamissense_dir}"
+
+    # Post-KS filter inputs
+    local alphamissense_vep_vcf=$(read_yaml ${config_file} "alphamissense_vep_vcf")
+    local hcseeker_spots_tsv=${DATA_DIR}/HCSeeker/HC_spots.${assembly}.tsv
+    local clinvar_vcf=$(read_yaml ${config_file} "clinvar_vcf")
+
+    # Build optional filter flags
+    local filter_flags=""
+    if [[ -f ${alphamissense_vep_vcf} ]] && [[ -f ${hcseeker_spots_tsv} ]]; then
+        filter_flags+=" --am_vcf ${alphamissense_vep_vcf}"
+        filter_flags+=" --hcseeker_spots_tsv ${hcseeker_spots_tsv}"
+        log "Filter 1 (coldspot overlap) enabled: am_vcf=${alphamissense_vep_vcf}, hcseeker=${hcseeker_spots_tsv}"
+    else
+        log "Filter 1 (coldspot overlap) skipped: am_vcf or hcseeker_spots_tsv not found"
+    fi
+    if [[ -f ${clinvar_vcf} ]]; then
+        filter_flags+=" --clinvar_vcf ${clinvar_vcf}"
+        log "Filter 2 (benign ClinVar) enabled: clinvar_vcf=${clinvar_vcf}"
+    else
+        log "Filter 2 (benign ClinVar) skipped: clinvar_vcf not found"
+    fi
+
+    log "Running DAS intolerant domain analysis: python ${pick_intolerant_domains_py} --pickle_file ${alphamissense_pd_stat} --threads ${threads} --output_dir ${alphamissense_dir}${filter_flags}"
     python ${pick_intolerant_domains_py} \
     --assembly ${assembly} \
     --pickle_file ${alphamissense_pd_stat} \
     --threads ${threads} \
-    --output_dir ${alphamissense_dir} && \
+    --output_dir ${alphamissense_dir} \
+    ${filter_flags} && \
     update_yaml ${config_file} "alphamissense_intolerant_domains" "${alphamissense_dir}/domain_tolerance_analysis.${assembly}.tsv" && \
-    update_yaml ${config_file} "alphamissense_tranx_domain_map" "${alphamissense_dir}/transcript_exon_domain_mapping.${assembly}.pkl" && \
+    update_yaml ${config_file} "alphamissense_tranx_domain_map" "${alphamissense_dir}/transcript_pp_domain_mapping.${assembly}.pkl" && \
     update_yaml ${config_file} "all_intolerant_domains" "${alphamissense_dir}/all_intolerant_domains.${assembly}.pkl" && \
-    log "The AlphaMissense intolerant domains file ${alphamissense_intolerant_domains} and transcript exon domain mapping file ${alphamissense_tranx_domain_map} are generated and saved to ${alphamissense_dir}"
+    log "DAS intolerant domains analysis complete. Outputs saved to ${alphamissense_dir}"
 }
 
 
@@ -882,9 +906,11 @@ function prepare_pm1_regions() {
     local threads=$(read_yaml ${config_file} "threads")
     local alphamissense_dir=$(dirname $(read_yaml ${config_file} "alphamissense_pd_stat"))
     local pm1_regions_pkl="${alphamissense_dir}/pm1_regions.${assembly}.pkl"
+    local all_intolerant_pkl="${alphamissense_dir}/all_intolerant_domains.${assembly}.pkl"
 
     [[ -f ${pm1_regions_pkl} ]] && \
     [[ ${pm1_regions_pkl} -nt ${prepare_pm1_py} ]] && \
+    [[ ${pm1_regions_pkl} -nt ${all_intolerant_pkl} ]] && \
     log "The PM1 regions file ${pm1_regions_pkl} is already generated, skip this step" && \
     return 0 || \
     log "Preparing PM1 regions (DAS + HCSeeker + RMC) …"
@@ -2046,6 +2072,8 @@ function main_install() {
     { log "Failed to generate the AlphaMissense statistics JSON file"; return 1; }
     AlphaMissense_pick_intolerant_domains ${config_file} || \
     { log "Failed to pick intolerant domains from AlphaMissense"; return 1; }
+    prepare_pm1_regions ${config_file} || \
+    { log "Failed to prepare PM1 regions pickle"; return 1; }
     ClinVar_patho_AF_stat ${config_file} || \
     { log "Failed to stat ClinVar pathogenic variants per allele frequency"; return 1; }
 

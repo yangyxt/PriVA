@@ -1703,11 +1703,11 @@ def PM1_criteria(df: pd.DataFrame,
 
     missense = df['Consequence'].str.contains('missense_variant')
     logger.info(f"There are {missense.sum()} missense variants")
-    missense_damaging = df["am_class"].fillna("").str.contains('athogenic') & (df['PrimateAI'].fillna(0) > 0.8)
+    missense_damaging = df["am_class"].fillna("").str.contains('athogenic') | (df['PrimateAI'].fillna(0) > 0.9)
     logger.info(f"There are {missense_damaging.sum()} missense variants that are considered damaging by AlphaMissense and PrimateAI")
 
-    missense_benign = df["am_class"].fillna("").str.contains('benign')
-    logger.info(f"There are {missense_benign.sum()} missense variants that are considered benign by AlphaMissense")
+    missense_benign = df["am_class"].fillna("").str.contains('benign') & (df['PrimateAI'].fillna(1.0) < 0.5)
+    logger.info(f"There are {missense_benign.sum()} missense variants that are considered benign by AlphaMissense and PrimateAI")
     if clinvar_patho is not None:
         missense_damaging = missense_damaging | clinvar_patho
         logger.info(f"There are {missense_damaging.sum()} missense variants that are considered damaging after considering ClinVar high-confidence pathogenic status")
@@ -1732,10 +1732,32 @@ def PM1_criteria(df: pd.DataFrame,
     logger.info(f"There are {np.sum(hcseeker_hit)} variants located in HCSeeker mutational hotspots")
     logger.info(f"There are {np.sum(rmc_hit)} variants located in gnomAD RMC-constrained regions")
 
+
+    consq = df["Consequence"].fillna("").astype(str)
+    nmd = df["NMD"].fillna(".").astype(str)
+    lof_filter = df.get("LoF_filter", pd.Series(".", index=df.index)).fillna(".").astype(str)
+
+    truncating = (
+        consq.str.contains("stop_gained", regex=False)
+        | consq.str.contains("frameshift", regex=False)
+    )
+
+    non_nmd_truncating = truncating & (
+        nmd.str.contains("escaping", regex=False)
+        | lof_filter.str.contains("END_TRUNC", regex=False)
+    )
+
+    inframe_indels = (
+        consq.str.contains("inframe_deletion", regex=False)
+        | consq.str.contains("inframe_insertion", regex=False)
+    )
+
+    indels = inframe_indels | non_nmd_truncating
+
     pvs1_double_count = pvs1_criteria >= 2
-    pm1_criteria = ( hcseeker_hit & missense_damaging ) | \
-                   ( rmc_hit & missense_damaging ) | \
-                   ( loc_intol_domain & missense & ~missense_benign )
+    pm1_criteria = ( hcseeker_hit & ((missense & ~missense_benign) | indels) ) | \
+                   ( rmc_hit & ((missense & ~missense_benign) | indels) ) | \
+                   ( loc_intol_domain & ((missense & ~missense_benign) | indels) )
     pm1_criteria = pm1_criteria & np.logical_not(pvs1_double_count)
     pm1_array = np.zeros(len(df), dtype=int)
     pm1_array[pm1_criteria] = 2

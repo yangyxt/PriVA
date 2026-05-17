@@ -4,12 +4,24 @@ import pysam
 import numpy as np
 from collections import defaultdict
 from typing import Dict, List
+from multiprocessing import Pool
 import sys
 import pickle
 
 # Define the nested defaultdict factory at the module level
 def nested_defaultdict():
     return defaultdict(nested_defaultdict)
+
+# VEP DOMAINS sources that are structural mappings, not sequence-homology
+# domain annotations. Filtering them here avoids inflating scores_dict with
+# entries that span most of the protein (PDB/AFDB coordinate mappings) or
+# represent low-complexity / disordered regions (MobiDB_lite).
+_NON_DOMAIN_SOURCES = frozenset({
+    "PDB-ENSP_mappings",
+    "AFDB-ENSP_mappings",
+    "MobiDB_lite",
+})
+
 
 class DomainAMScoreCollector:
     '''
@@ -69,7 +81,9 @@ class DomainAMScoreCollector:
         for entry in domain_entries:
             parts = entry.split(':')
             db_name = parts[0]
-            
+            if db_name in _NON_DOMAIN_SOURCES:
+                continue
+
             # Build hierarchical structure
             for i in range(1, len(parts)):
                 hierarchy = parts[1:i+1]  # Include all levels up to current
@@ -77,8 +91,12 @@ class DomainAMScoreCollector:
                 
         return parsed_domains
 
-    def collect_scores(self):
-        """Process VCF file and collect AlphaMissense pathogenicity scores."""
+    def collect_scores(self, region=None):
+        """Process VCF file and collect AlphaMissense pathogenicity scores.
+        
+        Args:
+            region: Optional chromosome/region string for region-based fetching.
+        """
         vcf = pysam.VariantFile(self.vcf_path)
         
         # Get CSQ format from header
@@ -86,13 +104,18 @@ class DomainAMScoreCollector:
         domains_idx = csq_format.index('DOMAINS')
         gene_idx = csq_format.index('Gene')
         exon_idx = csq_format.index('EXON')
+        protein_pos_idx = csq_format.index('Protein_position')
         feature_type_idx = csq_format.index('Feature_type')
         transcript_idx = csq_format.index('Feature')
         
-        for record in vcf:
+        records = vcf.fetch(region) if region else vcf
+        for record in records:
             try:
                 am_score = float(record.info['AM_PATHOGENICITY'])
-                gnomAD_AF = float(record.info.get('AF_grpmax_joint', (0.0,))[0])
+                try:
+                    gnomAD_AF = float(record.info['AF_grpmax_joint'][0])
+                except (KeyError, ValueError, IndexError):
+                    gnomAD_AF = 0.0
                 prot_var = record.info['PVAR']
                 # Extract amino acid position from PVAR (assuming format like 'p.Arg123Ser')
                 aa_pos = prot_var[:-1]
@@ -115,6 +138,15 @@ class DomainAMScoreCollector:
                     ensg_id = fields[gene_idx]
                     transcript_id = fields[transcript_idx]
                     exon_id = fields[exon_idx]
+                    protein_pos_str = fields[protein_pos_idx]
+                    
+                    # Parse integer protein position from VEP format "150/500" or "150-151/500"
+                    aa_pos_int = None
+                    if protein_pos_str:
+                        try:
+                            aa_pos_int = int(protein_pos_str.split('/')[0].split('-')[0])
+                        except ValueError:
+                            pass
                     
                     if not domains_str or not ensg_id:
                         continue
@@ -127,9 +159,13 @@ class DomainAMScoreCollector:
                         for level in hierarchy:
                             current_dict = current_dict[level]
                             if transcript_id not in current_dict:
-                                current_dict[transcript_id] = set()
-                            else:
-                                current_dict[transcript_id].add(exon_id)
+                                current_dict[transcript_id] = {'exons': set(), 'aa_min': float('inf'), 'aa_max': 0}
+                            current_dict[transcript_id]['exons'].add(exon_id)
+                            if aa_pos_int is not None:
+                                if aa_pos_int < current_dict[transcript_id]['aa_min']:
+                                    current_dict[transcript_id]['aa_min'] = aa_pos_int
+                                if aa_pos_int > current_dict[transcript_id]['aa_max']:
+                                    current_dict[transcript_id]['aa_max'] = aa_pos_int
                             # Initialize distribution if not exists
                             if 'distribution' not in current_dict:
                                 current_dict['distribution'] = {}
@@ -143,6 +179,13 @@ class DomainAMScoreCollector:
                                 current_dict['gnomAD_distribution'][prot_var] = gnomAD_AF
                             elif gnomAD_AF > current_dict['gnomAD_distribution'][prot_var]:
                                 current_dict['gnomAD_distribution'][prot_var] = gnomAD_AF
+
+                            if 'gnomAD_residue_distribution' not in current_dict:
+                                current_dict['gnomAD_residue_distribution'] = {}
+                            if aa_pos not in current_dict['gnomAD_residue_distribution']:
+                                current_dict['gnomAD_residue_distribution'][aa_pos] = [gnomAD_AF]
+                            else:
+                                current_dict['gnomAD_residue_distribution'][aa_pos].append(gnomAD_AF)
 
                             if 'min_distribution' not in current_dict:
                                 current_dict['min_distribution'] = {}
@@ -188,21 +231,121 @@ class DomainAMScoreCollector:
         return data
 
 
-def main(vcf_path, output_pickle):
+def _collect_worker(args):
+    """Multiprocessing worker: collect scores for a single chromosome."""
+    vcf_path, chrom = args
+    collector = DomainAMScoreCollector(vcf_path)
+    collector.collect_scores(region=chrom)
+    return dict(collector.scores_dict)
+
+
+def _merge_domain_level(target, source):
+    """Recursively merge source domain-level dict into target in place."""
+    for key, value in source.items():
+        if key not in target:
+            target[key] = value
+            continue
+        if isinstance(key, str) and key.startswith('ENST'):
+            # Transcript entry — merge exon sets and aa ranges
+            tv = target[key]
+            if isinstance(value, dict) and 'exons' in value:
+                tv['exons'].update(value['exons'])
+                tv['aa_min'] = min(tv['aa_min'], value['aa_min'])
+                tv['aa_max'] = max(tv['aa_max'], value['aa_max'])
+            elif isinstance(value, set):
+                tv.update(value)
+        elif key == 'distribution':
+            for k, v in value.items():
+                if k not in target[key]:
+                    target[key][k] = v
+        elif key == 'gnomAD_distribution':
+            for k, v in value.items():
+                if k not in target[key] or v > target[key][k]:
+                    target[key][k] = v
+        elif key == 'gnomAD_residue_distribution':
+            for k, v in value.items():
+                if k not in target[key]:
+                    target[key][k] = list(v)
+                else:
+                    target[key][k].extend(v)
+        elif key == 'min_distribution':
+            for k, v in value.items():
+                if k not in target[key] or v < target[key][k]:
+                    target[key][k] = v
+        elif key == 'max_distribution':
+            for k, v in value.items():
+                if k not in target[key] or v > target[key][k]:
+                    target[key][k] = v
+        elif isinstance(value, dict):
+            _merge_domain_level(target[key], value)
+
+
+def _merge_scores(target, source):
+    """Merge a per-chromosome scores_dict into the combined target."""
+    for gene_id, gene_data in source.items():
+        if gene_id not in target:
+            target[gene_id] = gene_data
+        else:
+            for db_name, domain_data in gene_data.items():
+                if db_name not in target[gene_id]:
+                    target[gene_id][db_name] = domain_data
+                else:
+                    _merge_domain_level(target[gene_id][db_name], domain_data)
+
+
+def _finalize_scores_dict(scores_dict):
+    """Convert distribution dicts to numpy arrays (same as DomainAMScoreCollector.finalize_scores)."""
+    def convert_nested(d):
+        for k, v in d.items():
+            if k == 'distribution' and isinstance(v, dict):
+                d[k] = np.array(list(v.values()))
+            elif k == 'min_distribution' and isinstance(v, dict):
+                d[k] = np.array(list(v.values()))
+            elif k == 'max_distribution' and isinstance(v, dict):
+                d[k] = np.array(list(v.values()))
+            elif k == 'gnomAD_distribution' and isinstance(v, dict):
+                d[k] = np.array(list(v.values()))
+            elif k == 'gnomAD_residue_distribution' and isinstance(v, dict):
+                pass  # Keep as dict {aa_pos: [AF1, AF2, ...]} — do NOT flatten
+            elif isinstance(v, dict):
+                convert_nested(v)
+    convert_nested(scores_dict)
+
+
+def main(vcf_path, output_pickle, threads=1):
     """
     Notice that the input VCF file must be the AlphaMissense VCF file annotated by VEP with the --domains argument.
     """
-    collector = DomainAMScoreCollector(vcf_path)
-    collector.collect_scores()
-    collector.finalize_scores()
+    if threads > 1:
+        vcf = pysam.VariantFile(vcf_path)
+        chroms = [c for c in vcf.header.contigs]
+        vcf.close()
+        n_workers = min(threads, len(chroms))
+        print(f"Processing {len(chroms)} chromosomes with {n_workers} workers", file=sys.stderr)
+        
+        with Pool(n_workers) as pool:
+            results = pool.map(_collect_worker, [(vcf_path, c) for c in chroms])
+        
+        merged = {}
+        for result in results:
+            _merge_scores(merged, result)
+        
+        _finalize_scores_dict(merged)
+        scores_dict = merged
+    else:
+        collector = DomainAMScoreCollector(vcf_path)
+        collector.collect_scores()
+        collector.finalize_scores()
+        scores_dict = collector.scores_dict
     
-    # Output the scores (nested dict) to a pickle file
     if output_pickle:
         with open(output_pickle, 'wb') as f:
-            pickle.dump(collector.scores_dict, f)
+            pickle.dump(scores_dict, f)
+        print(f"Saved scores to {output_pickle}", file=sys.stderr)
 
-    return collector.scores_dict
+    return scores_dict
         
 
 if __name__ == "__main__":
-    main(sys.argv[1], sys.argv[2])
+    threads = int(sys.argv[3]) if len(sys.argv) > 3 else 1
+    main(sys.argv[1], sys.argv[2], threads)

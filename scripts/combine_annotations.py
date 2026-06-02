@@ -265,7 +265,11 @@ def convert_record_to_tab(args: tuple) -> tuple[List[Dict[str, Any]], List[str]]
             var_dict_items["control_AN"] = record_dict['info']['control_AN']
             var_dict_items["control_AF"] = record_dict['info']['control_AF']
             var_dict_items["control_nhomalt"] = record_dict['info']['control_nhomalt']
-        
+
+        for k, v in record_dict['info'].items():
+            if k == "PEXT_MEAN" or str(k).startswith("PEXT_"):
+                var_dict_items[k] = v
+
         # # Add population-specific fields
         # pop_codes = ["nfe", "eas", "afr", "amr", "asj", "fin", "sas", "mid", "remaining"]
         

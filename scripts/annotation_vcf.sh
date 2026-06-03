@@ -874,7 +874,7 @@ function anno_VEP_data() {
     if [[ "$pext_enabled" == "true" ]]; then
         # Add mean pext annotation if file exists
         if [[ -n "$pext_mean_bw" ]] && [[ -f "$pext_mean_bw" ]]; then
-            pext_arguments="--custom ${pext_mean_bw},PEXT_MEAN,bigwig,exact,0"
+            pext_arguments="--custom ${pext_mean_bw},PEXT_MEAN,bigwig,overlap,0"
             log "Adding mean pext annotation from: $pext_mean_bw"
         else
             log "WARNING: pext_enabled=true but pext_mean_bw not found: $pext_mean_bw"
@@ -894,7 +894,7 @@ function anno_VEP_data() {
                         # Convert tissue name to VEP-safe INFO tag (replace special chars with _)
                         local tag="PEXT_$(echo "$tissue" | tr '-' '_')"
                         # Use ${var:+$var } pattern to avoid leading space when pext_arguments is empty
-                        pext_arguments="${pext_arguments:+$pext_arguments }--custom ${tissue_bw},${tag},bigwig,exact,0"
+                        pext_arguments="${pext_arguments:+$pext_arguments }--custom ${tissue_bw},${tag},bigwig,overlap,0"
                         log "Adding tissue pext annotation: $tissue -> $tag"
                     else
                         log "WARNING: Tissue pext file not found: $tissue_bw"
@@ -1367,4 +1367,3 @@ if [[ "${#BASH_SOURCE[@]}" -eq 1 ]]; then
         main_workflow "$@"
     fi
 fi
-

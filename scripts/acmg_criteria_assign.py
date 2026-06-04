@@ -48,6 +48,30 @@ console_handler.setFormatter(formatter)
 logger.addHandler(console_handler)
 
 
+def coerce_pext_value(value):
+    """
+    Convert VEP BigWig PEXT annotations to a single numeric value.
+
+    VEP may return one value for a point overlap or ampersand-joined values for
+    multi-base overlaps. Use the minimum finite segment value so a low-expression
+    segment is not hidden by a neighboring high-expression segment.
+    """
+    if pd.isna(value):
+        return np.nan
+    if isinstance(value, (int, float, np.integer, np.floating)):
+        return float(value)
+    values = []
+    for item in str(value).replace(",", "&").split("&"):
+        item = item.strip()
+        if item in {"", ".", "NA", "NaN", "nan"}:
+            continue
+        try:
+            values.append(float(item))
+        except ValueError:
+            continue
+    return min(values) if values else np.nan
+
+
 def vep_consq_interpret_per_row(row: Dict) -> Tuple[bool, bool]:
     '''
     Evaluate the functional impact of a variant to the transcript from 2 perspectives:
@@ -2843,7 +2867,7 @@ def extract_and_summarize_alt_disease_variants(alt_disease_vcf: str, chrom = Non
     
     if not result.stdout.strip():
         logger.warning(f"No variants found in {alt_disease_vcf}")
-        return pd.DataFrame()
+        return {}, {}
     
     # Read bcftools output directly into DataFrame
     df = pd.read_csv(StringIO(result.stdout), sep='\t', header=None)
@@ -3357,7 +3381,8 @@ def sort_and_rank_variants(df: pd.DataFrame,
         # heavily penalizing very low expression (pext near 0).
         # Missing pext values default to 1.0 (no penalty - conservative approach)
         # sqrt curve: 0.0→0.0, 0.1→0.32, 0.25→0.5, 0.5→0.71, 1.0→1.0
-        df["pext_sort_index"] = np.sqrt(df[pext_col_to_use].fillna(1.0).clip(0, 1))
+        pext_numeric = df[pext_col_to_use].map(coerce_pext_value)
+        df["pext_sort_index"] = np.sqrt(pext_numeric.fillna(1.0).clip(0, 1))
         # Apply pext modulation only to LoF variants (where expression matters most)
         df.loc[lof, "sort_index"] = df.loc[lof, "sort_index"] * df.loc[lof, "pext_sort_index"]
         logger.info(f"Applied pext-based sort modulation using {pext_col_to_use} (sqrt scale)")
@@ -3811,6 +3836,4 @@ if __name__ == "__main__":
                                                     gnomAD_extreme_rare_threshold=args.gnomAD_extreme_rare_threshold,
                                                     expected_incidence=args.expected_incidence,
                                                     threads=args.threads)
-
-
 

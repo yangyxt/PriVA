@@ -237,9 +237,19 @@ def pedigree_filter(vcf_path, ped_path, target_fam, output):
             for record in vcf_in:
                 # Check if variant should be kept
                 keep_variant = True
-                if not (1 in record.samples[proband]['GT']):
+
+                # Check if any patient carries the variant
+                patient_carrier = False
+                for sample in patients:
+                    if sample in record.samples:
+                        genotype = record.samples[sample]['GT']
+                        if is_variant_carrier(genotype):
+                            patient_carrier = True
+                            break
+
+                if not patient_carrier:
+                    logger.debug(f"No patient ({patients}) carries the variant {record}")
                     keep_variant = False
-                    logger.debug(f"Proband {proband} is not a carrier of the variant {record}")
                     continue
 
                 # Check controls
@@ -250,20 +260,6 @@ def pedigree_filter(vcf_path, ped_path, target_fam, output):
                             logger.debug(f"Control sample {sample} is homozygous or hemizygous for the variant {record}")
                             keep_variant = False
                             break
-                
-                # Check patients
-                if keep_variant:
-                    patient_carrier = False
-                    for sample in patients:
-                        if sample in record.samples:
-                            genotype = record.samples[sample]['GT']
-                            if is_variant_carrier(genotype):
-                                patient_carrier = True
-                                break
-                    
-                    if not patient_carrier:
-                        logger.debug(f"No patient ({patients}) carries the variant {record}")
-                        keep_variant = False
                 
                 # Write variant to output if it passed filters
                 if keep_variant:

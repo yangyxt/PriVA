@@ -38,6 +38,10 @@ from alternative_start_codon import (
     adjust_pvs1_for_start_lost,
     get_detector
 )
+from gene_mechanism_hub import (
+    DEFAULT_MECHANISM_JSON,
+    annotate_gene_mechanism_categories,
+)
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -2586,30 +2590,140 @@ def BS4_criteria(df: pd.DataFrame, ped_df: pd.DataFrame, fam_name: str,
                  dominant: np.ndarray, 
                  non_monogenic: np.ndarray, 
                  non_mendelian: np.ndarray, 
-                 incomplete_penetrance: np.ndarray) -> pd.Series:
-    # BS4: lack of family segregation
+                 incomplete_penetrance: np.ndarray,
+                 haplo_insufficient: np.ndarray = None) -> pd.Series:
+    # BS4: lack of segregation in affected relatives.
+    #
+    # ClinGen PP1/BS4 guidance treats affected genotype-negative relatives as
+    # non-segregation evidence. Genotype-positive unaffected relatives should
+    # be considered under BS2 when appropriate, not BS4. Therefore, a healthy
+    # heterozygous carrier parent for an affected homozygous AR proband must not
+    # trigger BS4.
+    #
+    # For two affected relatives where one is homozygous and the other is only
+    # heterozygous in a gene with only LoF_recessive history, assign BS4 at
+    # Supporting strength. The affected heterozygote is not variant-negative, so
+    # this is weaker than classic affected genotype-negative non-segregation.
     proband_info, father_info, mother_info, sib_info = identify_fam_members(ped_df, fam_name)
     proband, proband_pheno = proband_info
     father, father_pheno = father_info
     mother, mother_pheno = mother_info
+
+    if haplo_insufficient is None:
+        haplo_insufficient = np.array([False] * len(df))
     
-    healthy_fam_members = []
-    if father_pheno == 1:
-        healthy_fam_members.append(father)
-    if mother_pheno == 1:
-        healthy_fam_members.append(mother)
+    affected_fam_members = []
+    if father_pheno == 2:
+        affected_fam_members.append(father)
+    if mother_pheno == 2:
+        affected_fam_members.append(mother)
     for sib, sib_pheno in sib_info.items():
-        if sib_pheno == 1:
-            healthy_fam_members.append(sib)
+        if sib_pheno == 2:
+            affected_fam_members.append(sib)
 
     final_criteria = np.array([False] * len(df))
-    for healthy_mem in healthy_fam_members:
-        hmem_criteria = ((df[healthy_mem].str.count("1") == 2) & recessive) | \
-                        ((df[healthy_mem].str.count("1") >= 1) & dominant & np.logical_not(recessive))
-        hmem_criteria = hmem_criteria & np.logical_not(non_monogenic) & np.logical_not(non_mendelian) & np.logical_not(incomplete_penetrance)
-        final_criteria = final_criteria | hmem_criteria
+    supporting_criteria = np.array([False] * len(df))
+    if proband not in df.columns:
+        bs4_array = np.zeros(len(df), dtype=int)
+        return bs4_array
+
+    def _gt_alt_count(sample_col: str) -> pd.Series:
+        return df[sample_col].fillna(".").astype(str).str.count("1")
+
+    def _gt_called(sample_col: str) -> pd.Series:
+        gt = df[sample_col].fillna(".").astype(str)
+        return (~gt.str.contains(".", regex=False)) & gt.str.contains(r"[01]", regex=True)
+
+    chrom = df["chrom"].fillna("").astype(str)
+    autosomal = np.logical_not(chrom.str.contains("X|Y|M", regex=True))
+    x_linked = chrom.str.contains("X", regex=False)
+
+    proband_alt_count = _gt_alt_count(proband)
+    proband_called = _gt_called(proband)
+    valid_model = (
+        np.logical_not(non_monogenic)
+        & np.logical_not(non_mendelian)
+        & np.logical_not(incomplete_penetrance)
+    )
+
+    mech_history = df.get("gene_mech_inher_history", pd.Series("", index=df.index)).fillna("").astype(str)
+    has_lof_recessive_history = mech_history.str.contains(r"(?:^|;)LoF_recessive(?:;|$)", regex=True)
+    has_dominant_history = mech_history.str.contains(r"(?:^|;)dominant_(?:HI|GOF|DN)(?:;|$)", regex=True)
+    # Prefer the compact gene mechanism/history column. If an older table lacks
+    # the column, fall back to the existing inheritance arrays to keep BS4 usable.
+    missing_mech_history = mech_history.str.strip().eq("")
+    recessive_only_history = (
+        (has_lof_recessive_history & np.logical_not(has_dominant_history))
+        | (missing_mech_history & recessive & np.logical_not(dominant))
+    )
+
+    consq = df["Consequence"].fillna("").astype(str)
+    nmd = df["NMD"].fillna(".").astype(str)
+    lof_filter = df.get("LoF_filter", pd.Series(".", index=df.index)).fillna(".").astype(str)
+    nmd_truncating = (
+        (consq.str.contains("stop_gained", regex=False) | consq.str.contains("frameshift", regex=False))
+        & np.logical_not(nmd.str.contains("escaping", regex=False))
+        & np.logical_not(lof_filter.str.contains("END_TRUNC", regex=False))
+    )
+    dominant_bs4_eligible = dominant & np.logical_not(recessive) & (
+        np.logical_not(nmd_truncating) | haplo_insufficient
+    )
+
+    for affected_mem in affected_fam_members:
+        if affected_mem not in df.columns:
+            continue
+        affected_alt_count = _gt_alt_count(affected_mem)
+        affected_called = _gt_called(affected_mem)
+        called = proband_called & affected_called
+
+        # For a homozygous AR proband, an affected relative with no alternate
+        # allele is genotype-negative and gives classic BS4. An affected
+        # heterozygote is handled below as supporting evidence only.
+        autosomal_recessive_nonseg = (
+            autosomal
+            & recessive
+            & (proband_alt_count >= 2)
+            & (affected_alt_count < 1)
+        )
+        # For X-linked recessive calls, an affected relative lacking the
+        # alternate allele is non-segregating.
+        x_recessive_nonseg = (
+            x_linked
+            & recessive
+            & (proband_alt_count >= 1)
+            & (affected_alt_count < 1)
+        )
+        # For dominant calls, affected relatives should carry the variant. For
+        # NMD-triggering truncating variants, apply this only when LoF/HI is a
+        # plausible dominant mechanism for the gene.
+        dominant_nonseg = (
+            dominant_bs4_eligible
+            & (proband_alt_count >= 1)
+            & (affected_alt_count < 1)
+        )
+
+        # Supporting-level BS4: both affected relatives carry the allele, but
+        # their zygosity is incompatible with a recessive-only gene history.
+        autosomal_recessive_zygosity_mismatch = (
+            autosomal
+            & recessive_only_history
+            & (
+                ((proband_alt_count >= 2) & (affected_alt_count == 1))
+                | ((proband_alt_count == 1) & (affected_alt_count >= 2))
+            )
+        )
+
+        affected_criteria = (
+            autosomal_recessive_nonseg
+            | x_recessive_nonseg
+            | dominant_nonseg
+        )
+        affected_criteria = affected_criteria & called & valid_model
+        final_criteria = final_criteria | affected_criteria
+        supporting_criteria = supporting_criteria | (autosomal_recessive_zygosity_mismatch & called & valid_model)
 
     bs4_array = np.zeros(len(df), dtype=int)
+    bs4_array[supporting_criteria] = 1
     bs4_array[final_criteria] = 3
     return bs4_array
 
@@ -3458,6 +3572,7 @@ def ACMG_criteria_assign(anno_table: str,
                          pext_tissues: str = "",
                          relevant_gene_list: str = None,
                          dispensable_gene_list: str = None,
+                         gene_mechanism_json: str = str(DEFAULT_MECHANISM_JSON),
                          gnomAD_extreme_rare_threshold: float = 0.0001,
                          expected_incidence: float = 0.001,
                          threads: int = 10) -> Tuple[pd.DataFrame, pd.DataFrame]:
@@ -3654,6 +3769,21 @@ def ACMG_criteria_assign(anno_table: str,
     logger.info(f"BS1 criteria applied, {(bs1_criteria > 0).sum()} variants are having the BS1 criteria")
     gc.collect()
 
+    anno_df = annotate_gene_mechanism_categories(
+        anno_df,
+        recessive=recessive,
+        dominant=dominant,
+        haplo_insufficient=haplo_insufficient,
+        mechanism_json=gene_mechanism_json,
+        symbol_col="SYMBOL",
+        use_hgnc_package=False,
+    )
+    logger.info(
+        "Gene mechanism/inheritance history applied: \n%s",
+        anno_df["gene_mech_inher_history"].value_counts(dropna=False).to_string(),
+    )
+    gc.collect()
+
     # Summarize the inheritance mode, first prepare a df composed of recessive, dominant, non_monogenic, non_mendelian, haplo_insufficient, incomplete_penetrance
     inheritance_df = pd.DataFrame({
         'recessive': ["recessive" if i else "" for i in recessive],
@@ -3677,7 +3807,17 @@ def ACMG_criteria_assign(anno_table: str,
 
     # Apply BS4, lack of family segregation
     if not ped_df is None and not fam_name is None:
-        bs4_criteria = BS4_criteria(anno_df, ped_df, fam_name, recessive, dominant, non_monogenic, non_mendelian, incomplete_penetrance)
+        bs4_criteria = BS4_criteria(
+            anno_df,
+            ped_df,
+            fam_name,
+            recessive,
+            dominant,
+            non_monogenic,
+            non_mendelian,
+            incomplete_penetrance,
+            haplo_insufficient,
+        )
     else:
         logger.warning(f"No ped_table provided, skip the BS4 criteria")
         bs4_criteria = np.array([0] * len(anno_df))
@@ -3806,6 +3946,7 @@ if __name__ == "__main__":
     parser.add_argument("--expected_incidence", type=float, required=False, default=0.001)
     parser.add_argument("--relevant_gene_list", type=str, required=False, default=None)
     parser.add_argument("--dispensable_gene_list", type=str, required=False, default=os.path.join(data_dir, "dispensable_genes", "dispensable_gene_list.txt"))
+    parser.add_argument("--gene_mechanism_json", type=str, required=False, default=str(DEFAULT_MECHANISM_JSON))
     parser.add_argument("--threads", type=int, required=False, default=10)
     args = parser.parse_args()
 
@@ -3832,7 +3973,7 @@ if __name__ == "__main__":
                                                     pext_tissues=args.pext_tissues,
                                                     relevant_gene_list=args.relevant_gene_list,
                                                     dispensable_gene_list=args.dispensable_gene_list,
+                                                    gene_mechanism_json=args.gene_mechanism_json,
                                                     gnomAD_extreme_rare_threshold=args.gnomAD_extreme_rare_threshold,
                                                     expected_incidence=args.expected_incidence,
                                                     threads=args.threads)
-

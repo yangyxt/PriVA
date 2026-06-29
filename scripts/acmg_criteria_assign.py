@@ -53,8 +53,8 @@ def coerce_pext_value(value):
     Convert VEP BigWig PEXT annotations to a single numeric value.
 
     VEP may return one value for a point overlap or ampersand-joined values for
-    multi-base overlaps. Use the minimum finite segment value so a low-expression
-    segment is not hidden by a neighboring high-expression segment.
+    multi-base overlaps. Use the maximum finite segment value — the variant's
+    functional impact is driven by the highest-expressed overlapping region.
     """
     if pd.isna(value):
         return np.nan
@@ -69,7 +69,7 @@ def coerce_pext_value(value):
             values.append(float(item))
         except ValueError:
             continue
-    return min(values) if values else np.nan
+    return max(values) if values else np.nan
 
 
 def vep_consq_interpret_per_row(row: Dict) -> Tuple[bool, bool]:
@@ -3377,15 +3377,14 @@ def sort_and_rank_variants(df: pd.DataFrame,
         logger.info("Using PEXT_MEAN column for expression-aware sorting")
     
     if pext_col_to_use is not None:
-        # Use sqrt(pext) as multiplier to soften mid-range differences while
-        # heavily penalizing very low expression (pext near 0).
-        # Missing pext values default to 1.0 (no penalty - conservative approach)
-        # sqrt curve: 0.0→0.0, 0.1→0.32, 0.25→0.5, 0.5→0.71, 1.0→1.0
-        pext_numeric = df[pext_col_to_use].map(coerce_pext_value)
-        df["pext_sort_index"] = np.sqrt(pext_numeric.fillna(1.0).clip(0, 1))
+        # Cummings 2020: PEXT < 0.1 = low/unexpressed region, deprioritize.
+        # PEXT >= 0.1 = sufficiently expressed, no penalty (pext_sort_index = 1.0).
+        # Missing PEXT defaults to 1.0 (no penalty — conservative).
+        pext_numeric = df[pext_col_to_use].map(coerce_pext_value).fillna(1.0).clip(0, 1)
+        df["pext_sort_index"] = np.where(pext_numeric >= 0.1, 1.0, np.sqrt(pext_numeric))
         # Apply pext modulation only to LoF variants (where expression matters most)
         df.loc[lof, "sort_index"] = df.loc[lof, "sort_index"] * df.loc[lof, "pext_sort_index"]
-        logger.info(f"Applied pext-based sort modulation using {pext_col_to_use} (sqrt scale)")
+        logger.info(f"Applied pext-based sort modulation using {pext_col_to_use} (threshold 0.1, sqrt penalty below)")
     
     # Group by variant coordinates to get max score per variant
     variant_groups = df.groupby(['chrom', 'pos', 'ref', 'alt'])

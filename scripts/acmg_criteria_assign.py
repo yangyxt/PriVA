@@ -2397,7 +2397,9 @@ def parse_hpo_inheritance(row_dict: dict) -> str:
     non_monogenic_set = {"Digenic inheritance", "Oligogenic inheritance", "Polygenic inheritance"}  # In most cases, these indicate compound heterozygous variants
     non_mendelian_set = {"Non-Mendelian inheritance"}  # Includes epigenetic modifications
     dominant_set = {"Autosomal dominant inheritance", "Autosomal dominant inheritance with maternal imprinting", "X-linked dominant inheritance"}
-    recessive_set = {"Autosomal recessive inheritance", "X-linked recessive inheritance"}
+    # Treat generic X-linked inheritance as recessive by default. Male chrX
+    # hemizygosity is handled later by sex-aware allele-state normalization.
+    recessive_set = {"Autosomal recessive inheritance", "X-linked recessive inheritance", "X-linked inheritance"}
 
     # HPO recessive
     hpo_recessive = any([ hpo in recessive_set for hpo in hpo_inheritances ])
@@ -2610,6 +2612,11 @@ def BS4_criteria(df: pd.DataFrame, ped_df: pd.DataFrame, fam_name: str,
     #   is_NMD_LOF = NMD-triggering / definite LoF truncating variant.
     #   is_exact_GOF = exact GoFCards gene + HGVSp match.
     #
+    # Sex-chromosome variants use the same tree after sex-aware allele-state
+    # normalization: male chrX/chrY with any ALT allele is treated as hom/hemi
+    # (2), female chrX remains diploid (0/1/2), female chrY is non-informative,
+    # and non-sex chromosomes remain unchanged.
+    #
     # Patient-patient comparison:
     #   1. hom patient vs WT patient -> BS4.
     #   2. hom patient vs het patient:
@@ -2622,10 +2629,6 @@ def BS4_criteria(df: pd.DataFrame, ped_df: pd.DataFrame, fam_name: str,
     #      - dominant_HI present and no LoF_recessive -> BS4.
     #      - dominant_GOF/DN only -> BS4 only for is_exact_GOF.
     #   4. het patient vs het patient -> no BS4.
-    #   X-linked affected patient vs affected WT patient -> BS4, preserving
-    #   the previous X-linked recessive affected-relative non-segregation path.
-    #   X-linked unaffected-carrier logic is left conservative because it needs
-    #   sex-aware penetrance handling and belongs in BS2, not BS4.
     #
     # Patient-control comparison:
     #   5. hom patient vs WT control -> no BS4.
@@ -2652,6 +2655,8 @@ def BS4_criteria(df: pd.DataFrame, ped_df: pd.DataFrame, fam_name: str,
         return bs4_array
     fam_ped_df.loc[:, "Phenotype"] = pd.to_numeric(fam_ped_df["Phenotype"], errors="coerce").astype("Int64")
     fam_ped_df.loc[:, "IndividualID"] = fam_ped_df["IndividualID"].astype(str)
+    fam_ped_df.loc[:, "Sex"] = pd.to_numeric(fam_ped_df.get("Sex", pd.Series(index=fam_ped_df.index)), errors="coerce")
+    sex_by_sample = dict(zip(fam_ped_df["IndividualID"], fam_ped_df["Sex"]))
 
     patient_cols = [
         sample for sample in fam_ped_df.loc[fam_ped_df["Phenotype"] == 2, "IndividualID"].tolist()
@@ -2671,9 +2676,17 @@ def BS4_criteria(df: pd.DataFrame, ped_df: pd.DataFrame, fam_name: str,
     def _gt_alt_count(sample_col: str) -> pd.Series:
         return df[sample_col].fillna(".").astype(str).str.split(":", n=1).str[0].str.count("1")
 
+    def _effective_alt_state(sample_col: str, raw_alt_count: pd.Series) -> pd.Series:
+        if sex_by_sample.get(sample_col) == 1:
+            return raw_alt_count.mask((x_linked | y_linked) & (raw_alt_count >= 1), 2)
+        return raw_alt_count
+
     def _gt_called(sample_col: str) -> pd.Series:
         gt = df[sample_col].fillna(".").astype(str).str.split(":", n=1).str[0]
-        return (~gt.str.contains(".", regex=False)) & gt.str.contains(r"[01]", regex=True)
+        called = (~gt.str.contains(".", regex=False)) & gt.str.contains(r"[01]", regex=True)
+        if sex_by_sample.get(sample_col) == 2:
+            called = called & ~y_linked
+        return called
 
     def _series_or_empty(column: str) -> pd.Series:
         return df.get(column, pd.Series("", index=df.index)).fillna("").astype(str)
@@ -2688,7 +2701,8 @@ def BS4_criteria(df: pd.DataFrame, ped_df: pd.DataFrame, fam_name: str,
     chrom = _series_or_empty("chrom")
     autosomal = ~chrom.str.contains("X|Y|M", regex=True)
     x_linked = chrom.str.contains("X", regex=False)
-    dominant_locus = autosomal | x_linked
+    y_linked = chrom.str.contains("Y", regex=False)
+    mendelian_locus = autosomal | x_linked | y_linked
 
     mech_history = _series_or_empty("gene_mech_inher_history")
     has_ar_lof = mech_history.str.contains(r"(?:^|;)LoF_recessive(?:;|$)", regex=True)
@@ -2733,9 +2747,15 @@ def BS4_criteria(df: pd.DataFrame, ped_df: pd.DataFrame, fam_name: str,
             if match.get("variant_gof_tag") == "GOF":
                 is_exact_gof.loc[idx] = True
 
-    patient_alt_counts = {sample: _gt_alt_count(sample) for sample in patient_cols}
+    patient_alt_counts = {
+        sample: _effective_alt_state(sample, _gt_alt_count(sample))
+        for sample in patient_cols
+    }
     patient_called = {sample: _gt_called(sample) for sample in patient_cols}
-    control_alt_counts = {sample: _gt_alt_count(sample) for sample in control_cols}
+    control_alt_counts = {
+        sample: _effective_alt_state(sample, _gt_alt_count(sample))
+        for sample in control_cols
+    }
     control_called = {sample: _gt_called(sample) for sample in control_cols}
 
     # Patient-patient comparisons.
@@ -2758,25 +2778,16 @@ def BS4_criteria(df: pd.DataFrame, ped_df: pd.DataFrame, fam_name: str,
                 | ((b_alt == 1) & (a_alt == 0))
             )
 
-            final_criteria = final_criteria | (called & autosomal & hom_wt)
-            final_criteria = final_criteria | (
-                called
-                & x_linked
-                & has_ar_lof
-                & (
-                    ((a_alt >= 1) & (b_alt == 0))
-                    | ((b_alt >= 1) & (a_alt == 0))
-                )
-            )
+            final_criteria = final_criteria | (called & mendelian_locus & hom_wt)
             supporting_criteria = supporting_criteria | (
                 called
-                & autosomal
+                & mendelian_locus
                 & hom_het
                 & (ar_only | (ar_plus_dom_gof_dn_no_hi & is_nmd_lof))
             )
             final_criteria = final_criteria | (
                 called
-                & dominant_locus
+                & mendelian_locus
                 & het_wt
                 & (
                     dominant_hi_no_ar
@@ -2797,17 +2808,17 @@ def BS4_criteria(df: pd.DataFrame, ped_df: pd.DataFrame, fam_name: str,
             patient_het_control_wt = (p_alt == 1) & (c_alt == 0)
             patient_het_control_het = (p_alt == 1) & (c_alt == 1)
 
-            final_criteria = final_criteria | (called & autosomal & patient_hom_control_hom)
+            final_criteria = final_criteria | (called & mendelian_locus & patient_hom_control_hom)
             supporting_criteria = supporting_criteria | (
                 called
-                & autosomal
+                & mendelian_locus
                 & patient_hom_control_het
                 & ar_plus_dom_gof_dn_no_hi
                 & is_nmd_lof
             )
             final_criteria = final_criteria | (
                 called
-                & dominant_locus
+                & mendelian_locus
                 & patient_het_control_wt
                 & (
                     (has_dom_hi & ~has_ar_lof)
@@ -2816,7 +2827,7 @@ def BS4_criteria(df: pd.DataFrame, ped_df: pd.DataFrame, fam_name: str,
             )
             final_criteria = final_criteria | (
                 called
-                & dominant_locus
+                & mendelian_locus
                 & patient_het_control_het
                 & (
                     has_dom_hi

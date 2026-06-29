@@ -17,6 +17,7 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import logging
 import math
 import os
 from collections import Counter, defaultdict
@@ -68,6 +69,7 @@ LOOKUP_FIELD_PRIORITY = (
 )
 
 CANONICAL_MECHANISMS = {"GOF", "DOMINANT_NEGATIVE", "TRIPLOSENSITIVITY"}
+logger = logging.getLogger(__name__)
 
 
 def _clean(value: Any) -> str:
@@ -187,7 +189,12 @@ class _LocalHgncResolver:
         best = [row for priority, row in matches if priority == best_priority]
         symbols = sorted({row.get("symbol", "") for row in best if row.get("symbol", "")})
         if len(symbols) > 1:
-            raise ValueError(f"ambiguous HGNC query {cleaned}: {','.join(symbols)}")
+            logger.warning(
+                "Ambiguous HGNC query %s resolves to %s; keeping input symbol",
+                cleaned,
+                ",".join(symbols),
+            )
+            return cleaned
         return symbols[0] if symbols else cleaned
 
 

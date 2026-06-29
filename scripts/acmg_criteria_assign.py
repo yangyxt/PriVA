@@ -82,10 +82,10 @@ def vep_consq_interpret_per_row(row: Dict) -> Tuple[bool, bool]:
     Evaluate the functional impact of a variant to the transcript from 2 perspectives:
     1. Whether the variant is a LoF variant
     2. Whether the variant is a protein length changing variant
-    
+
     Args:
         row: A dictionary containing variant information
-        
+
     Returns:
         Tuple[bool, bool]: (is_lof, is_length_changing)
     '''
@@ -94,15 +94,15 @@ def vep_consq_interpret_per_row(row: Dict) -> Tuple[bool, bool]:
     nmd_escaping = "escaping" in str(row.get('NMD', ""))
     if not isinstance(consq, str):
         return False, False
-        
+
     # Skip splicing related consequences to leave them handled by SpliceAI and SpliceVault
     lof_criteria = {
-        'stop_gained', 
-        'start_lost', 
-        'transcript_ablation', 
+        'stop_gained',
+        'start_lost',
+        'transcript_ablation',
         'frameshift_variant'
     }
-    
+
     # FIX: Added 'stop_lost' - stop-loss variants cause protein extension (PM4, not PVS1)
     # Per ClinGen SVI guidelines, stop-loss variants should be assigned PM4 as they cause
     # protein length change (extension) rather than loss-of-function
@@ -113,12 +113,12 @@ def vep_consq_interpret_per_row(row: Dict) -> Tuple[bool, bool]:
         'feature_truncation',
         'stop_lost'  # Stop-loss causes protein extension → PM4
     }
-    
+
     is_lof = any(c in consq for c in lof_criteria) & (loftee_result != 'LC') & (nmd_escaping == False)
 
     # For pure splicing related consequences, we trust SpliceAI and SpliceVault more than VEP
     is_length_changing = is_lof or any(c in consq for c in length_changing_criteria) or any(c in consq for c in lof_criteria) or nmd_escaping
-    
+
     return is_lof, is_length_changing
 
 
@@ -126,27 +126,27 @@ def vep_consq_interpret_per_row(row: Dict) -> Tuple[bool, bool]:
 def vep_consq_interpret(df: pd.DataFrame, threads: int = 10) -> pd.DataFrame:
     '''
     Apply the interpretation function to each row of the dataframe in parallel
-    
+
     Args:
         df: Input DataFrame containing variant annotations
         threads: Number of CPU threads to use
-        
+
     Returns:
         DataFrame with added 'lof' and 'len_changing' columns
     '''
     # Convert DataFrame to list of dicts for multiprocessing
     records = df.to_dict('records')
-    
+
     # Create arguments for parallel processing
     with mp.Pool(threads) as pool:
         results = pool.map(vep_consq_interpret_per_row, records)
-    
+
     # Add results as new columns
     df['vep_consq_lof'], df['vep_consq_len_changing'] = zip(*results)
     logger.info(f"vep_consq_interpret applied, {df['vep_consq_lof'].sum()} variants are having the LoF criteria")
     logger.info(f"vep_consq_interpret applied, {df['vep_consq_len_changing'].sum()} variants are having the protein length changing criteria")
     logger.info(f"vep_consq_interpret applied, now the table looks like: \n{df[:5].to_string(index=False)}")
-    
+
     return df
 
 
@@ -196,13 +196,13 @@ def summarize_clinvar_gene_pathogenicity(clinvar_gene_aa_dict: dict, high_confid
 def identify_alternative_start_codon_genes(df: pd.DataFrame) -> set:
     """
     DEPRECATED: This function checks for alternative TRANSCRIPTS, not alternative start codons.
-    
+
     Per ClinGen SVI guidelines (PMC6185798), for start_lost variants we should check for
     downstream in-frame ATG codons WITHIN THE SAME TRANSCRIPT, not alternative transcripts.
-    
+
     This function is kept for backwards compatibility but should be replaced with
     CDS-based alternative start codon detection using AlternativeStartCodonDetector.
-    
+
     What this function checks: Different transcripts with different TSS (transcription start sites)
     What ClinGen SVI requires: Downstream ATG in the SAME transcript (translation initiation)
     """
@@ -225,54 +225,54 @@ def evaluate_start_lost_with_cds(
 ) -> Tuple[np.ndarray, pd.DataFrame]:
     """
     Evaluate start_lost variants using CDS-based alternative start codon detection.
-    
+
     Per ClinGen SVI guidelines (PMC6185798), start_lost N-terminal loss is evaluated
     similarly to in-frame deletions:
-    
+
     1. NO alternative downstream ATG:
        - Gene is LoF intolerant → PVS1 (Very Strong)
        - Gene is LoF tolerant → PVS1_Strong
-       
+
     2. Alternative ATG EXISTS (like in-frame deletion):
        - >10% N-terminal loss + spans critical domain → PVS1_Strong
        - >10% N-terminal loss + no critical domain → PVS1_Moderate
        - ≤10% N-terminal loss + spans critical domain → PVS1_Moderate
        - ≤10% N-terminal loss + no critical domain → PVS1_Supporting
-    
+
     Args:
         df: DataFrame with variant annotations
         cds_fasta_path: Path to Ensembl CDS FASTA file
         intolerant_domains: Boolean array indicating variants in intolerant domains
         lof_intolerant: Boolean array indicating gene is LoF intolerant (LOEUF < 0.35 or high AM)
-        
+
     Returns:
         Tuple of:
         - pvs1_start_lost: Array of PVS1 strength values for start_lost variants
         - df: Updated DataFrame with alternative start codon annotations
     """
     pvs1_start_lost = np.zeros(len(df), dtype=int)
-    
+
     # Identify start_lost variants
     start_lost_mask = df["Consequence"].str.contains("start_lost").fillna(False)
     n_start_lost = start_lost_mask.sum()
-    
+
     if n_start_lost == 0:
         logger.info("No start_lost variants found")
         return pvs1_start_lost, df
-    
+
     logger.info(f"Evaluating {n_start_lost} start_lost variants for alternative start codons")
-    
+
     # Default lof_intolerant to True if not provided (conservative)
     if lof_intolerant is None:
         lof_intolerant = np.ones(len(df), dtype=bool)
-    
+
     # Check if CDS FASTA file exists
     if not cds_fasta_path or not os.path.exists(cds_fasta_path):
         logger.warning(f"CDS FASTA file not found: {cds_fasta_path}")
         logger.warning("Falling back to default PVS1_Moderate for all start_lost variants")
         pvs1_start_lost[start_lost_mask] = 2  # PVS1_Moderate (default for start_lost)
         return pvs1_start_lost, df
-    
+
     # Initialize the detector
     try:
         detector = get_detector(cds_fasta_path)
@@ -280,16 +280,16 @@ def evaluate_start_lost_with_cds(
         logger.error(f"Failed to initialize AlternativeStartCodonDetector: {e}")
         pvs1_start_lost[start_lost_mask] = 2
         return pvs1_start_lost, df
-    
+
     # Get unique transcripts with start_lost
     start_lost_df = df.loc[start_lost_mask, ['Feature', 'Gene']].copy()
     unique_transcripts = start_lost_df['Feature'].dropna().unique()
-    
+
     # Batch lookup alternative start codons
     alt_start_info = {}
     for tid in unique_transcripts:
         alt_start_info[tid] = detector.find_alternative_start(tid)
-    
+
     # Add alternative start info to DataFrame
     df['alt_start_exists'] = df['Feature'].map(
         lambda t: alt_start_info.get(t, {}).get('has_alternative', False) if pd.notna(t) else False
@@ -300,7 +300,7 @@ def evaluate_start_lost_with_cds(
     df['alt_start_position'] = df['Feature'].map(
         lambda t: alt_start_info.get(t, {}).get('first_alt_position', None) if pd.notna(t) else None
     )
-    
+
     # Calculate PVS1 strength for each start_lost variant
     for idx in df.index[start_lost_mask]:
         iloc_idx = df.index.get_loc(idx)
@@ -308,10 +308,10 @@ def evaluate_start_lost_with_cds(
         info = alt_start_info.get(transcript, {})
         spans_critical = intolerant_domains[iloc_idx] if len(intolerant_domains) > 0 else False
         gene_lof_intol = lof_intolerant[iloc_idx] if len(lof_intolerant) > 0 else True
-        
+
         pvs1_strength = adjust_pvs1_for_start_lost(info, spans_critical, gene_lof_intol)
         pvs1_start_lost[iloc_idx] = pvs1_strength
-    
+
     # Log summary
     has_alt = df.loc[start_lost_mask, 'alt_start_exists'].sum()
     logger.info(f"start_lost variants with alternative downstream ATG: {has_alt}/{n_start_lost}")
@@ -321,9 +321,9 @@ def evaluate_start_lost_with_cds(
                 f"PVS1_Moderate={np.sum(pvs1_start_lost == 2)}, "
                 f"PVS1_Supporting={np.sum(pvs1_start_lost == 1)}, "
                 f"Not applicable={np.sum((pvs1_start_lost == 0) & start_lost_mask.values)}")
-    
+
     return pvs1_start_lost, df
-    
+
 
 def downstream_domain_impact(protein_pos_str, tranx_id, tranx_pp_domain_map, interpro_entry_map_dict, dm_instance, domains="", intol_domains=[], ensg_id=""):
     '''
@@ -337,7 +337,7 @@ def downstream_domain_impact(protein_pos_str, tranx_id, tranx_pp_domain_map, int
                 return True
             elif dm_instance.interpret_functionality(domain, interpro_entry_map_dict) == "Functional":
                 return True
-    
+
     # Parse protein position from VEP format "150/500" or "150-151/500"
     truncation_pos = None
     if isinstance(protein_pos_str, str) and protein_pos_str:
@@ -345,14 +345,14 @@ def downstream_domain_impact(protein_pos_str, tranx_id, tranx_pp_domain_map, int
             truncation_pos = int(protein_pos_str.split('/')[0].split('-')[0])
         except ValueError:
             pass
-    
+
     if truncation_pos is None:
         return False
-    
+
     tranx_id = tranx_id.split(".", 1)[0]
     if tranx_id not in tranx_pp_domain_map:
         return False
-    
+
     pp_domains = tranx_pp_domain_map[tranx_id].get('pp_domains', [])
     for aa_start, aa_end, domain_path in pp_domains:
         if aa_start > truncation_pos:
@@ -375,12 +375,12 @@ def downstream_exon_patho_af(row, clinvar_patho_exon_af_dict, logic="any", thres
         affected_exons.update(range(int(exon_str.split("/")[0]), int(exon_str.split("/")[1]) + 1))
     else:
         raise ValueError(f"Invalid exon string: {exon_str}")
-    
+
     tranx_id = row['Feature']
     affected_exons_patho_af = set([])
     for exon in affected_exons:
         affected_exons_patho_af.add(clinvar_patho_exon_af_dict.get(tranx_id, {}).get(exon, (0, ))[0])
-    
+
     if logic == "any":
         return any(float(epa) < threshold for epa in affected_exons_patho_af)
     elif logic == "all":
@@ -389,11 +389,11 @@ def downstream_exon_patho_af(row, clinvar_patho_exon_af_dict, logic="any", thres
         raise ValueError(f"Invalid logic: {logic}, it should be either 'any' or 'all', depending on your needs")
 
 
-def span_functional_domains(row, 
-                            dm_instance=None, 
-                            interpro_entry_map_dict=None, 
-                            tranx_pp_domain_map=None, 
-                            clinvar_patho_exon_af_dict=None, 
+def span_functional_domains(row,
+                            dm_instance=None,
+                            interpro_entry_map_dict=None,
+                            tranx_pp_domain_map=None,
+                            clinvar_patho_exon_af_dict=None,
                             intol_domains=[],
                             exon_patho_af_threshold=0.01):
     '''
@@ -418,11 +418,11 @@ def span_functional_domains(row,
         # Parse affected exons from splicing analysis, remove empty strings
         affected_exons_raw = set(str(row["splicing_affected_exons"]).split(","))
         affected_exons = {e.strip() for e in affected_exons_raw if e and e.strip() and e.strip().isdigit()}
-        
+
         if affected_exons:
             affected_exon_patho_af = { exon: clinvar_patho_exon_af_dict.get(row['Feature'], {}).get(exon, (0, ))[0] for exon in affected_exons }
             logger.info(f"For variant {row['chrom']}:{row['pos']} with transcript {row['Feature']}, the affected exons are: {affected_exons}, and the pathogenic AFs are: {affected_exon_patho_af}")
-            # For splicing-induced exon skipping: if ANY affected exon is important (rare patho variants), 
+            # For splicing-induced exon skipping: if ANY affected exon is important (rare patho variants),
             # treat as significant deletion per ClinGen PVS1 exon deletion logic
             exon_frequent_patho = any(float(epa) < exon_patho_af_threshold for epa in affected_exon_patho_af.values())
         else:
@@ -437,9 +437,9 @@ def span_functional_domains(row,
                 func_domain = any([dm_instance.interpret_functionality(domain, interpro_entry_map_dict) == "Functional" for domain in str(row["DOMAINS"]).split("&")])
         exon_frequent_patho = float(clinvar_patho_exon_af_dict.get(row['Feature'], {}).get(row['EXON'], (0, ))[0]) < exon_patho_af_threshold
         logger.debug(f"For variant {row['chrom']}:{row['pos']} with transcript {row['Feature']}, the exon is: {row['EXON']}, and the pathogenic AF is: {exon_frequent_patho}")
-    
+
     return func_domain, exon_frequent_patho
-    
+
 
 
 def control_false_neg_rate(
@@ -486,7 +486,7 @@ def control_false_neg_rate(
             raise ValueError("If af_threshold is a Series, it must have the same length as allele_frequencies.")
     else:
         raise TypeError("af_threshold must be a float, int, pandas Series, or numpy array.")
-    
+
     # Ensure threshold is numeric and within [0,1]
     af_thresh_series = pd.to_numeric(af_thresh_series, errors='coerce').clip(0, 1)
     if af_thresh_series.isnull().any():
@@ -495,7 +495,7 @@ def control_false_neg_rate(
     # --- Input Cleaning and Preparation (same as before) ---
     an = pd.to_numeric(allele_numbers, errors='coerce')
     an = an.fillna(0).astype(int)
-    an[an < 0] = 0 
+    an[an < 0] = 0
 
     af = pd.to_numeric(allele_frequencies, errors='coerce')
     af = af.clip(0, 1)
@@ -509,16 +509,16 @@ def control_false_neg_rate(
 
     # --- P-value Calculation ---
     p_values = pd.Series(np.nan, index=allele_frequencies.index)
-    
+
     # Handle edge case k=0: P(AC >= 0) is always 1
     p_values.loc[valid_mask & (ac_observed == 0)] = 1.0
-    
+
     # Calculate for k > 0
     mask_k_pos = valid_mask & (ac_observed > 0)
     if mask_k_pos.any():
         # Get the threshold values for each valid variant
         thresholds_to_use = af_thresh_series[mask_k_pos].values
-        
+
         p_values.loc[mask_k_pos] = binom.sf(
             k=ac_observed[mask_k_pos] - 1,
             n=an[mask_k_pos],
@@ -538,18 +538,18 @@ def truncate_fraction(df):
     '''
     nonsense_vars = df["Consequence"].str.contains("stop_gained") | df["Consequence"].str.contains("frameshift")
     # inframe_indels = df["Consequence"].str.contains("inframe_deletion") | df["Consequence"].str.contains("inframe_insertion")
-    
+
     # Fix the issue by ensuring we maintain the same index
     protein_pos_series = df["Protein_position"].astype(str)
     contains_dash = protein_pos_series.str.contains("-", na=False)
-    
+
     # Extract the first part for positions with "-"
     split_result = protein_pos_series.str.split("-", expand=True)
     first_part = split_result.iloc[:, 0] if len(split_result.columns) > 0 else protein_pos_series
-    
+
     # Use pandas .where() instead of np.where() to maintain index alignment
     protein_poses = first_part.where(contains_dash, protein_pos_series)
-    
+
     var_span = df["Protein_position"].map(lambda x: abs(pd.to_numeric(x.split("/")[0].split("-")[1], errors="coerce") - pd.to_numeric(x.split("/")[0].split("-")[0], errors="coerce") + 1) if "-" in str(x) else 1)
     var_protein_pos = pd.to_numeric(protein_poses.str.split("/", expand=True).iloc[:, 0], errors='coerce')
     total_protein_len = pd.to_numeric(df["Protein_position"].astype(str).str.split("/", expand=True).iloc[:, -1], errors='coerce')
@@ -558,7 +558,7 @@ def truncate_fraction(df):
 
 
 
-def PVS1_criteria(df: pd.DataFrame, 
+def PVS1_criteria(df: pd.DataFrame,
                   clinvar_gene_aa_dict: dict,
                   clinvar_patho_exon_af_stat: str,
                   interpro_entry_map_pkl: str,
@@ -587,7 +587,7 @@ def PVS1_criteria(df: pd.DataFrame,
     # disease mechanism for the gene/disease context, not on the proband's zygosity per se.
     # PriVA may still apply zygosity-/inheritance-aware prioritization elsewhere (e.g., PM3, BP2),
     # but here we keep the PVS1 "gene LoF mechanism" gate consistent across genotypes.
-    
+
     lof_intol_metric = (df["LOEUF"].fillna(2) < 0.35) | (df["Gene_avg_AM_score"].fillna(0) > 0.7)
     logger.info(f"For LOEUF < 0.35, {(df['LOEUF'].fillna(2) < 0.35).sum()} variants are located in a gene intolerant to LoF variants")
     logger.info(f"For mean AM score > 0.7, {(df['Gene_avg_AM_score'].fillna(0) > 0.7).sum()} variants are located in a gene intolerant to LoF variants")
@@ -616,19 +616,19 @@ def PVS1_criteria(df: pd.DataFrame,
 
     # Unified "LoF mechanism plausible/established" gate for PVS1 assignment
     lof_mechanism = clinvar_pathogenic | lof_intol_metric | clingen_hi | clingen_ar
-    
+
     # Load the necessary dict file
     clinvar_patho_exon_af_dict = pickle.load(gzip.open(clinvar_patho_exon_af_stat)) if clinvar_patho_exon_af_stat.endswith(".gz") else pickle.load(open(clinvar_patho_exon_af_stat, 'rb'))
     interpro_entry_map_dict = pickle.load(gzip.open(interpro_entry_map_pkl)) if interpro_entry_map_pkl.endswith(".gz") else pickle.load(open(interpro_entry_map_pkl, 'rb'))
     tranx_pp_domain_map = pickle.load(gzip.open(tranx_exon_domain_map_pkl)) if tranx_exon_domain_map_pkl.endswith(".gz") else pickle.load(open(tranx_exon_domain_map_pkl, 'rb'))
     dm_instance = DomainNormalizer()
-    intolerant_domains, exon_rare_patho_afs = zip(*df.apply(span_functional_domains, axis=1, dm_instance=dm_instance, 
-                                                                                             interpro_entry_map_dict=interpro_entry_map_dict, 
-                                                                                             tranx_pp_domain_map=tranx_pp_domain_map, 
-                                                                                             clinvar_patho_exon_af_dict=clinvar_patho_exon_af_dict, 
+    intolerant_domains, exon_rare_patho_afs = zip(*df.apply(span_functional_domains, axis=1, dm_instance=dm_instance,
+                                                                                             interpro_entry_map_dict=interpro_entry_map_dict,
+                                                                                             tranx_pp_domain_map=tranx_pp_domain_map,
+                                                                                             clinvar_patho_exon_af_dict=clinvar_patho_exon_af_dict,
                                                                                              intol_domains=intolerant_domains,
                                                                                              exon_patho_af_threshold=0.01))
-    
+
     # Convert tuples to numpy arrays for boolean operations
     intolerant_domains = np.array(intolerant_domains)
     exon_rare_patho_afs = np.array(exon_rare_patho_afs)
@@ -668,11 +668,11 @@ def PVS1_criteria(df: pd.DataFrame,
     # NMD escape occurs when frameshift affects only the last exon
     splicing_frameshift = df['splicing_frameshift'].fillna(False)
     splicing_last_exon_only = df['splicing_last_exon_only'].fillna(False) if 'splicing_last_exon_only' in df.columns else pd.Series(False, index=df.index)
-    
+
     # Splicing frameshift with NMD (not last exon) -> PVS1=4
     splicing_fs_nmd = splicing_frameshift & ~splicing_last_exon_only
     pvs1_criteria[splicing_fs_nmd & lof_mechanism & (pvs1_criteria < 4)] = 4
-    
+
     # Splicing frameshift escaping NMD (last exon only) -> reduced strength, same as regular NMD-escaping variants
     splicing_fs_nmd_escape = splicing_frameshift & splicing_last_exon_only
     # PVS1_Strong if spans intolerant domain
@@ -714,8 +714,8 @@ def PVS1_criteria(df: pd.DataFrame,
     if cds_fasta_path and os.path.exists(cds_fasta_path):
         logger.info(f"Using CDS-based alternative start codon detection from: {cds_fasta_path}")
         pvs1_start_lost, df = evaluate_start_lost_with_cds(
-            df, 
-            cds_fasta_path, 
+            df,
+            cds_fasta_path,
             intolerant_domains,
             lof_mechanism  # Pass gene LoF mechanism status for proper PVS1 strength
         )
@@ -739,7 +739,7 @@ def PVS1_criteria(df: pd.DataFrame,
 
 
 
-def check_splice_pathogenic(row: dict, 
+def check_splice_pathogenic(row: dict,
                             clinvar_tranx_splice_dict_list: list,
                             pvs1_strength: int) -> bool:
     '''
@@ -771,19 +771,19 @@ def check_splice_pathogenic(row: dict,
     '''
     if not clinvar_tranx_splice_dict_list:
         return False
-    
+
     # Find the same splicing site pathogenic variant in the same transcript
     var_intron = row.get('INTRON', None)
     var_exon = row.get('EXON', None)
     if var_intron is None or var_exon is None:
         return False
-    
+
     # Find the same splicing site pathogenic variant in the same transcript
     patho_records = [patho for patho in clinvar_tranx_splice_dict_list if patho['exon'] == var_exon or patho['intron'] == var_intron]
 
     if not patho_records:
         return False
-    
+
     var_spliceai_ds_ag = row.get('SpliceAI_pred_DS_AG', np.nan)
     var_spliceai_ds_al = row.get('SpliceAI_pred_DS_AL', np.nan)
     var_spliceai_ds_dg = row.get('SpliceAI_pred_DS_DG', np.nan)
@@ -792,13 +792,13 @@ def check_splice_pathogenic(row: dict,
     delta_scores = abs(var_spliceai_ds_ag), abs(var_spliceai_ds_al), abs(var_spliceai_ds_dg), abs(var_spliceai_ds_dl)
     if all(ds < 0.5 for ds in delta_scores):
         return False
-    
+
     # Find the biggest delta score index in delta_scores
     max_delta_score_index = np.argmax(delta_scores)
     max_delta_score = delta_scores[max_delta_score_index]
     target_spliceai_ds = ['SpliceAI_pred_DS_AG', 'SpliceAI_pred_DS_AL', 'SpliceAI_pred_DS_DG', 'SpliceAI_pred_DS_DL'][max_delta_score_index]
     logger.debug(f"The biggest DELTA score from SpliceAI is {max_delta_score}, which is from {target_spliceai_ds}")
-    
+
     for patho in patho_records:
         patho_spliceai_ds = float(patho["splice_ai"].get(target_spliceai_ds, np.nan))
         if abs(patho_spliceai_ds) <= max_delta_score:
@@ -814,7 +814,7 @@ def check_splice_pathogenic(row: dict,
             if patho_parse_result is None:
                 patho_parse_result = {"overlapping_canonical_site": False}
             patho_lp = "ikely" in patho["clinvar_sig"]
-            
+
             if vua_parse_result["overlapping_canonical_site"]:
                 logger.info(f"The variant {row['HGVSc']} is overlapping with a canonical splice site, the pathogenic variant is {patho['hgvsc']}")
                 if pvs1_strength >= 4:
@@ -850,14 +850,14 @@ def check_splice_pathogenic(row: dict,
                     if patho_lp:
                         return "PS1_Supporting"
                     else:
-                        return "PS1_Moderate"    
+                        return "PS1_Moderate"
     return False
 
 
 def extract_protein_position(hgvs_notation):
     # Pattern matches: "p." followed by letters, followed by numbers (position), followed by more letters
     pattern = r'p\.([A-Za-z]+)(\d+)([A-Za-z]+|\*)'
-    
+
     match = re.search(pattern, hgvs_notation)
     if match:
         position = match.group(2)  # Group 2 contains just the position
@@ -869,16 +869,16 @@ def extract_protein_position(hgvs_notation):
 def get_variant_type(hgvsp):
     """
     Determine the type of protein variant from HGVS notation.
-    Returns 'nonsense', 'frameshift', 'delins', 'deletion', 'insertion_type' (for insertions and duplications), 
+    Returns 'nonsense', 'frameshift', 'delins', 'deletion', 'insertion_type' (for insertions and duplications),
     'missense', or 'unknown'.
     """
     if not isinstance(hgvsp, str):
         return None
-    
+
     # Extract the p. part from potential ENSP prefixes (e.g., ENSP00000439902.1:p.Asn3264LeufsTer12)
     if ":" in hgvsp:
         hgvsp = hgvsp.split(":")[-1]
-    
+
     # Order patterns based on biological severity
     # Check nonsense/stop gain variants first (most severe)
     if re.search(r'p\.\w+\d+Ter', hgvsp) or re.search(r'p\.\w+\d+\*', hgvsp):  # p.Arg123Ter or p.Arg123*
@@ -902,9 +902,9 @@ def get_variant_type(hgvsp):
         return None
 
 
-def check_aa_pathogenic(row: dict, 
-                        clinvar_tranx_aa_dict: dict, 
-                        clinvar_tranx_splice_dict_list: list, 
+def check_aa_pathogenic(row: dict,
+                        clinvar_tranx_aa_dict: dict,
+                        clinvar_tranx_splice_dict_list: list,
                         pvs1_strength: int,
                         is_clinvar_patho: bool = False,
                         high_confidence_status = {
@@ -915,10 +915,10 @@ def check_aa_pathogenic(row: dict,
     '''
     Check if a variant's amino acid change matches a known pathogenic variant.
     Returns PS1/PM5 eligibility, allowing both to coexist.
-    
-    Per ACMG guidelines: PS1 = "Same amino acid change as a previously established 
+
+    Per ACMG guidelines: PS1 = "Same amino acid change as a previously established
     pathogenic variant regardless of nucleotide change"
-    
+
     Args:
         row: Variant annotation row
         clinvar_tranx_aa_dict: Nested dictionary containing ClinVar amino acid changes
@@ -927,43 +927,43 @@ def check_aa_pathogenic(row: dict,
         is_clinvar_patho: Whether this variant is already classified as pathogenic in ClinVar
                           (reserved for future self-match prevention logic)
         high_confidence_status: Dict mapping review statuses to confidence levels
-        
+
     Returns:
         str: "PS1_PM5" if both apply, "Same_AA_Change" for PS1 only, "Same_AA_Residue" for PM5 only, or False
     '''
     transcript = row.get('Feature', '') # e.g ENST00000438441
     raw_protein_pos = row.get('Protein_position', '') # e.g 117/340 (pos/total_size)
     hgvsp = row.get('HGVSp', '') # e.g ENSP00000349098.5:p.E117K
-    
+
     logger.debug(f"The current row records a variant overlapping with transcript {transcript} at protein position {raw_protein_pos} with HGVSp {hgvsp}")
-        
+
     # Check if this transcript has any ClinVar entries
     if not clinvar_tranx_aa_dict:
         logger.debug(f"Transcript {transcript} not in ClinVar's VEP annotation records")
         return False
-    
+
     if hgvsp in [np.nan, np.inf, 'nan', 'inf', '']:
         return check_splice_pathogenic(row, clinvar_tranx_splice_dict_list, pvs1_strength)
-        
+
     # Check if this position has any ClinVar entries
     if raw_protein_pos not in clinvar_tranx_aa_dict:
         logger.debug(f"Protein position {raw_protein_pos} not in ClinVar's VEP annotation records for transcript {transcript}")
         return check_splice_pathogenic(row, clinvar_tranx_splice_dict_list, pvs1_strength)
-    
+
     # Track PS1 and PM5 eligibility separately
     ps1_eligible = False
     pm5_eligible = False
-    
+
     # Check for splice pathogenic first
     splice_pathogenic = check_splice_pathogenic(row, clinvar_tranx_splice_dict_list, pvs1_strength)
     if splice_pathogenic:
         logger.debug(f"Same_Splice_Site: {hgvsp} is pathogenic with high confidence in ClinVar")
         return splice_pathogenic
-    
+
     # Iterate through all variants at this position
     for hgvsp_alt, clinvar_entry in clinvar_tranx_aa_dict[raw_protein_pos].items():
         logger.debug(f"Checking ClinVar entry at position {raw_protein_pos}: {hgvsp_alt}")
-        
+
         # Check if this ClinVar entry is pathogenic with high confidence
         is_patho_highconf = False
         for sig, rev_stat in zip(clinvar_entry['CLNSIG'], clinvar_entry['CLNREVSTAT']):
@@ -972,10 +972,10 @@ def check_aa_pathogenic(row: dict,
                (sig == "Likely_pathogenic" and stars >= 3):
                 is_patho_highconf = True
                 break
-        
+
         if not is_patho_highconf:
             continue
-        
+
         # Check if this is the SAME HGVSp (PS1 candidate)
         # Per ACMG: "Same amino acid change...regardless of nucleotide change"
         # This includes self-match (same nucleotide) as valid PS1
@@ -989,17 +989,17 @@ def check_aa_pathogenic(row: dict,
                 continue
             if str(hgvs_pos) != raw_protein_pos.split("/")[0]:
                 continue
-            
+
             query_variant_type = get_variant_type(hgvsp)
             clinvar_variant_type = get_variant_type(hgvsp_alt)
-            
+
             if query_variant_type != clinvar_variant_type or query_variant_type is None or clinvar_variant_type is None:
                 logger.debug(f"Variant types don't match: {hgvsp} ({query_variant_type}) vs {hgvsp_alt} ({clinvar_variant_type})")
                 continue
-            
+
             logger.debug(f"Same_AA_Residue: {hgvsp} at same position as pathogenic {hgvsp_alt}")
             pm5_eligible = True
-    
+
     # Return result based on eligibility - PS1 and PM5 can coexist
     if ps1_eligible and pm5_eligible:
         return "PS1_PM5"
@@ -1234,9 +1234,9 @@ def determine_denovo_per_row(row: dict, ped_info: dict, ped_df: pd.DataFrame) ->
 
 
 
-def PS2_PM6_criteria(df: pd.DataFrame, 
-                     ped_df: pd.DataFrame, 
-                     fam_name: str, 
+def PS2_PM6_criteria(df: pd.DataFrame,
+                     ped_df: pd.DataFrame,
+                     fam_name: str,
                      threads: int = 10) -> Tuple[np.ndarray, np.ndarray]:
     """
     PS2: confirmed denovo mutation in the proband
@@ -1248,14 +1248,14 @@ def PS2_PM6_criteria(df: pd.DataFrame,
     proband, _ = proband_info
     father, _ = father_info
     mother, _ = mother_info
-    
+
     # Get subset of pedigree for this family
     ped_subset = ped_df.loc[ped_df['#FamilyID'] == fam_name, :]
-    
+
     # Select only necessary columns to reduce memory usage
     # These columns are needed for the denovo determination
     necessary_cols = ['chrom', 'pos', 'ref', 'alt', 'gnomAD_joint_AF']
-    
+
     # Add columns for family members if they exist
     if proband in df.columns:
         necessary_cols.append(proband)
@@ -1263,50 +1263,50 @@ def PS2_PM6_criteria(df: pd.DataFrame,
         necessary_cols.append(father)
     if mother in df.columns:
         necessary_cols.append(mother)
-    
+
     # Create a unique key for each variant
     df['variant_key'] = df['chrom'] + '_' + df['pos'].astype(str) + '_' + df['ref'] + '_' + df['alt']
-    
+
     # Keep track of original index
     original_index = df.index.copy()
-    
+
     # Select necessary columns and drop duplicates
     cols_to_use = [col for col in necessary_cols if col in df.columns]
     unique_df = df[cols_to_use + ['variant_key']].drop_duplicates(subset=['variant_key'])
     unique_df['gnomAD_joint_AF'] = unique_df['gnomAD_joint_AF'].fillna(0)
-    
+
     logger.info(f"Processing {len(unique_df)} unique variants (reduced from {len(df)} total variants)")
-    
+
     # Create ped_info tuple
     ped_info = (proband_info, father_info, mother_info, sib_info)
-    
+
     # Apply the function to each unique row
     unique_results = unique_df.apply(
-        lambda row: determine_denovo_per_row(row.to_dict(), ped_info, ped_subset), 
+        lambda row: determine_denovo_per_row(row.to_dict(), ped_info, ped_subset),
         axis=1
     )
-    
+
     # Create a mapping from variant keys to results
     result_map = dict(zip(unique_df['variant_key'], unique_results))
-    
+
     # Map results back to original dataframe
     results = np.array([result_map.get(key, False) for key in df['variant_key']])
-    
+
     # Clean up temporary column
     df.drop('variant_key', axis=1, inplace=True)
-    
+
     # Convert results to final form
     ps2_criteria = results == "PS2"
     pm6_criteria = results == "PM6"
-    
+
     logger.info(f"Found {ps2_criteria.sum()} variants with PS2 criteria (confirmed de novo)")
     logger.info(f"Found {pm6_criteria.sum()} variants with PM6 criteria (assumed de novo)")
-    
+
     ps2_array = np.zeros(len(df), dtype=int)
     pm6_array = np.zeros(len(df), dtype=int)
     ps2_array[ps2_criteria] = 3
     pm6_array[pm6_criteria] = 2
-    
+
     return ps2_array, pm6_array
 
 
@@ -1315,11 +1315,11 @@ def PS2_PM6_criteria(df: pd.DataFrame,
 def mavedb_interpretation_per_row(row: pd.Series, metadata_df: pd.DataFrame) -> bool:
     '''
     Interpret the MaveDB scores and return the PS3 and BS3 criteria.
-    
+
     When a variant has multiple MaveDB assays, we count evidence for PS3 (functional impact)
     and BS3 (no functional impact) separately. If there's conflicting evidence from different
     assays, we resolve by majority vote. If tied, we conservatively set both to False.
-    
+
     Tracks URN IDs and assay types for robust logging.
     '''
     if pd.isna(row.get('MaveDB_urn', np.nan)):
@@ -1327,29 +1327,29 @@ def mavedb_interpretation_per_row(row: pd.Series, metadata_df: pd.DataFrame) -> 
         row["MaveDB_BS3"] = False
         row["MaveDB_score_interpretation"] = np.nan
         return row
-    
+
     high_confs = str(row.get('MaveDB_high_conf', '')).split('&')
     pvalues = str(row.get('MaveDB_pvalue', '')).split('&')
     scores = str(row.get('MaveDB_score', '')).split('&')
     urn_sets = str(row.get('MaveDB_urn')).split('&')
 
     score_interpretation = []
-    
+
     # Track evidence with detailed information: list of (urn, assay_family, score, call)
     ps3_evidence = []  # URNs and assay types supporting PS3 (functional impact)
     bs3_evidence = []  # URNs and assay types supporting BS3 (no functional impact)
-    
+
     for i, urn in enumerate(urn_sets):
         if urn not in metadata_df['urn'].values:
             logger.warning(f"The URN {urn} is not in the MaveDB metadata, it is ignored")
             continue
-        
+
         # Get metadata for this URN
         meta_row = metadata_df.loc[metadata_df['urn'] == urn].iloc[0]
         interpretation = meta_row['rationale']
         assay_family = meta_row.get('assay_family', 'Unknown')
         assay_subtype = meta_row.get('subtype_value', 'Unknown')
-        
+
         score_interpretation.append(interpretation)
         score = scores[i]
         high_conf = high_confs[i]
@@ -1406,36 +1406,36 @@ def mavedb_interpretation_per_row(row: pd.Series, metadata_df: pd.DataFrame) -> 
             })
 
     variant_id = f"{row['chrom']}:{row['pos']}:{row['ref']}:{row['alt']}"
-    
+
     # Format evidence for logging
     def format_evidence(evidence_list):
-        return "; ".join([f"{e['urn']}({e['assay_family']}/{e['assay_subtype']}, score={e['score']:.4f}, call={e['call']})" 
+        return "; ".join([f"{e['urn']}({e['assay_family']}/{e['assay_subtype']}, score={e['score']:.4f}, call={e['call']})"
                          for e in evidence_list])
-    
+
     # === Per-assay-family resolution ===
     # Group evidence by assay_family to handle conflicts within the same assay type
     ps3_families = set(e['assay_family'] for e in ps3_evidence)
     bs3_families = set(e['assay_family'] for e in bs3_evidence)
-    
+
     # Families that have ONLY PS3 evidence (no conflicting BS3 from same family)
     ps3_only_families = ps3_families - bs3_families
-    # Families that have ONLY BS3 evidence (no conflicting PS3 from same family)  
+    # Families that have ONLY BS3 evidence (no conflicting PS3 from same family)
     bs3_only_families = bs3_families - ps3_families
     # Families that have BOTH PS3 and BS3 (internal conflict)
     conflicted_families = ps3_families & bs3_families
-    
+
     # Get evidence from non-conflicted families
     ps3_clean_evidence = [e for e in ps3_evidence if e['assay_family'] in ps3_only_families]
     bs3_clean_evidence = [e for e in bs3_evidence if e['assay_family'] in bs3_only_families]
-    
+
     # For conflicted families, resolve by majority within each family
     ps3_resolved_evidence = []
     bs3_resolved_evidence = []
-    
+
     for family in conflicted_families:
         family_ps3 = [e for e in ps3_evidence if e['assay_family'] == family]
         family_bs3 = [e for e in bs3_evidence if e['assay_family'] == family]
-        
+
         if len(family_ps3) > len(family_bs3):
             # PS3 wins within this family
             ps3_resolved_evidence.extend(family_ps3)
@@ -1450,15 +1450,15 @@ def mavedb_interpretation_per_row(row: pd.Series, metadata_df: pd.DataFrame) -> 
             # Tie within family - this family contributes nothing (conservative)
             logger.debug(f"Variant {variant_id}: Family '{family}' has tied conflict "
                         f"(PS3:{len(family_ps3)} vs BS3:{len(family_bs3)}), excluded from final decision")
-    
+
     # Combine clean evidence with resolved evidence
     final_ps3_evidence = ps3_clean_evidence + ps3_resolved_evidence
     final_bs3_evidence = bs3_clean_evidence + bs3_resolved_evidence
-    
+
     # Final decision
     mavedb_ps3 = len(final_ps3_evidence) > 0
     mavedb_bs3 = len(final_bs3_evidence) > 0
-    
+
     # Logging
     if mavedb_ps3 and mavedb_bs3:
         # Both PS3 and BS3 from different assay families - this is valid!
@@ -1473,7 +1473,7 @@ def mavedb_interpretation_per_row(row: pd.Series, metadata_df: pd.DataFrame) -> 
                     f"Final: PS3={mavedb_ps3}, BS3={mavedb_bs3}. "
                     f"PS3: [{format_evidence(final_ps3_evidence)}] | "
                     f"BS3: [{format_evidence(final_bs3_evidence)}]")
-        
+
     row["MaveDB_PS3"] = mavedb_ps3
     row["MaveDB_BS3"] = mavedb_bs3
     row["MaveDB_score_interpretation"] = "&".join([str(x) for x in score_interpretation])
@@ -1499,7 +1499,7 @@ def PS3_BS3_criteria(df: pd.DataFrame, mavedb_metadata_tsv: str = "", high_confi
         'criteria_provided,_multiple_submitters,_no_conflicts': 2,  # 2 stars
     }) -> pd.DataFrame:
     # Basically rely on ClinVar annotations
-    
+
     result_dict = {"PS3": [], "BS3": [], "clinvar_patho": [], "clinvar_benign": []}
 
     clinvar_lof = df['CLNSIG'].fillna("").str.contains('Pathogenic') & (df['CLNREVSTAT'].map(high_confidence_status) >= 2)
@@ -1512,7 +1512,7 @@ def PS3_BS3_criteria(df: pd.DataFrame, mavedb_metadata_tsv: str = "", high_confi
 
     ps3_array = np.zeros(len(df), dtype=int)
     bs3_array = np.zeros(len(df), dtype=int)
-    
+
     if mavedb_metadata_tsv:
         mavedb_metadata = pd.read_table(mavedb_metadata_tsv, low_memory=False)
         mavedb_metadata.drop_duplicates(subset=["urn"], inplace=True)
@@ -1537,7 +1537,7 @@ def PS3_BS3_criteria(df: pd.DataFrame, mavedb_metadata_tsv: str = "", high_confi
 def fit_beta_mixture(x: np.ndarray) -> Tuple[float, bool]:
     """
     Fit a mixture of two beta distributions to determine if the distribution is bimodal.
-    
+
     Args:
         x: Array of AM scores (between 0 and 1)
     Returns:
@@ -1549,14 +1549,14 @@ def fit_beta_mixture(x: np.ndarray) -> Tuple[float, bool]:
         var = np.var(x)
         skewness = np.mean((x - mean) ** 3) / var ** 1.5
         kurtosis = np.mean((x - mean) ** 4) / var ** 2
-        
+
         # Calculate bimodality coefficient
         # b = (skewness^2 + 1) / kurtosis
         # b > 0.555 indicates bimodality (empirical threshold)
         bimodality_coef = (skewness ** 2 + 1) / kurtosis
-        
+
         return bimodality_coef, bimodality_coef > 0.555
-        
+
     except Exception as e:
         logger.warning(f"Error in beta mixture fitting: {str(e)}")
         return 0.0, False
@@ -1566,36 +1566,36 @@ def analyze_score_distribution(scores: np.ndarray) -> Tuple[bool, float]:
     """
     Analyze if the AM score distribution is unimodal with a peak in pathogenic range.
     Only checks for unimodality and peak position, regardless of distribution symmetry.
-    
+
     Args:
         scores: Array of AM scores
-    
+
     Returns:
         Tuple[bool, float]: (is_pathogenic_unimodal, peak_score)
     """
     if len(scores) < 5:  # Need minimum points for analysis
         return False, 0.0
-    
+
     try:
         # Create histogram
         hist, bin_edges = np.histogram(scores, bins=20, range=(0,1), density=True)
         bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2
-        
+
         # Check for bimodality first
         _, is_bimodal = fit_beta_mixture(scores)
-        
+
         if is_bimodal:
             return False, 0.0
-            
+
         # If unimodal, find the peak
         peak_idx = np.argmax(hist)
         peak_score = bin_centers[peak_idx]
-        
+
         # Check if peak is in pathogenic range (0.58-1.0)
         is_pathogenic = 0.58 <= peak_score <= 1.0
-        
+
         return is_pathogenic, peak_score
-        
+
     except Exception as e:
         logger.warning(f"Error in distribution analysis: {str(e)}")
         return False, 0.0
@@ -1622,7 +1622,7 @@ def locate_pm1_region(row: dict,
     return in_hcseeker, in_rmc
 
 
-        
+
 
 def PP1_criteria(df: pd.DataFrame,
                  recessive: np.ndarray,
@@ -1677,21 +1677,21 @@ def PP1_criteria(df: pd.DataFrame,
                                autosomal_encode * recessive_encode * control_seg_count * 0.4 + \
                                x_encode * recessive_encode * male_affected_seg_count + \
                                x_encode * recessive_encode * male_control_seg_count
-        
+
         pp1_recessive_encode = np.where(pp1_recessive_points > 0, 0, 1)
         pp1_dominant_points = pp1_recessive_encode * (dominant_encode * affected_seg_count + \
                                                       dominant_encode * control_seg_count + \
                                                       dominant_encode * affected_hom_count + \
                                                       dominant_encode * control_nonhom_count)
-        
+
         pp1_points = pp1_recessive_points + pp1_dominant_points
 
         pp1_array[(pp1_points <= 1.9) & (pp1_points >= 1)] = 1  # Supporting
         pp1_array[(pp1_points >= 2) & (pp1_points <= 3.9)] = 2  # Moderate
-        pp1_array[(pp1_points >= 4)] = 3   # Strong 
+        pp1_array[(pp1_points >= 4)] = 3   # Strong
 
         return pp1_array
-        
+
     return pp1_array
 
 
@@ -1699,7 +1699,7 @@ def PP1_criteria(df: pd.DataFrame,
 def locate_intolerant_domain(row: dict, intolerant_domains: set) -> bool:
     '''
     Check if the variant is located in a mutational hotspot or a well-established functional protein domain
-    The intolerant domains are calculated by scripts: 
+    The intolerant domains are calculated by scripts:
     1. scripts/am_pick_intolerant_domains.py
     2. scripts/clinvar_pick_intolerant_domains.py
     '''
@@ -1710,7 +1710,7 @@ def locate_intolerant_domain(row: dict, intolerant_domains: set) -> bool:
         return False
 
     return any(domain in intolerant_domains for domain in domains)
-        
+
 
 
 def PM1_criteria(df: pd.DataFrame,
@@ -1811,7 +1811,7 @@ def gnomAD_rare_nhomalt(df: pd.DataFrame, cutoff: float) -> np.ndarray:
                     (df['gnomAD_nhomalt_XX'].fillna(0) + df['gnomAD_nhomalt_XY'].fillna(0))/df['gnomAD_joint_AN'].fillna(1000000) <= cutoff)
 
 
-def PM2_criteria(df: pd.DataFrame, 
+def PM2_criteria(df: pd.DataFrame,
                  clinvar_patho_af_stat: str,
                  clinvar_patho_exon_af_stat: str,
                  gnomAD_extreme_rare_threshold: float = 0.0001) -> np.ndarray:
@@ -1845,24 +1845,24 @@ def PM2_criteria(df: pd.DataFrame,
     return pm2_array
 
 
-def PM4_BP3_criteria(df: pd.DataFrame, 
-                     pvs1_criteria: np.ndarray, 
-                     repeat_regions_file: str, 
+def PM4_BP3_criteria(df: pd.DataFrame,
+                     pvs1_criteria: np.ndarray,
+                     repeat_regions_file: str,
                      loc_intol_domain: np.ndarray) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     """
     Combined PM4 and BP3 criteria assignment for in-frame length-changing variants.
-    
+
     PM4 and BP3 are mutually exclusive:
     - PM4: In-frame indels NOT in repetitive regions OR in functional/intolerant domains
            Also applies to stop-loss variants (protein extension)
     - BP3: In-frame indels IN repetitive regions WITHOUT functional significance
-    
+
     Per ClinGen SVI guidelines (PMC6185798):
     - PM4 applies to in-frame deletions/insertions AND stop-loss variants (protein extension)
     - BP3 applies to in-frame deletions/insertions in repetitive regions without known function
     - Stop-loss variants are NOT null variants (not eligible for PVS1), they get PM4
     - PVS1 only applies to: nonsense, frameshift, canonical splice, start_lost (null variants)
-    
+
     Workflow:
     1. First identify if variants are in repetitive regions
     2. Identify all in-frame length-changing variants
@@ -1870,13 +1870,13 @@ def PM4_BP3_criteria(df: pd.DataFrame,
     4. Assign PM4 or BP3 based on:
        - PM4: NOT in repeat OR in functional domain (or stop-loss)
        - BP3: IN repeat AND NOT in functional domain
-    
+
     Args:
         df: DataFrame with variant annotations
         pvs1_criteria: Array of PVS1 strength values
         repeat_regions_file: Path to BED file with repetitive regions
         loc_intol_domain: Boolean array indicating variants in intolerant domains
-        
+
     Returns:
         Tuple of:
         - pm4_array: PM4 criteria strength values (int array)
@@ -1888,39 +1888,39 @@ def PM4_BP3_criteria(df: pd.DataFrame,
     # =========================================================================
     in_repeat_vars = find_overlaps_bedtools_efficient(df, repeat_regions_file, method="all")
     in_repeat = df['variant_id'].isin(in_repeat_vars)
-    
+
     # Also check for Low_complexity domains in DOMAINS annotation
     low_complexity_domain = df['DOMAINS'].fillna(".").str.contains('Low_complexity')
     in_repetitive_region = in_repeat | low_complexity_domain
-    
+
     logger.info(f"PM4_BP3_criteria: {in_repetitive_region.sum()} variants in repetitive regions")
-    
+
     # =========================================================================
     # Step 2: Identify all in-frame length-changing variants
     # =========================================================================
     # Standard in-frame indels from VEP consequences
     inframe_indels = (df['Consequence'].fillna("").str.contains('inframe_deletion')) | \
                      (df['Consequence'].fillna("").str.contains('inframe_insertion'))
-    
+
     # Splicing-induced in-frame length changes (not frameshift)
     splicing_inframe = df["splicing_len_changing"].fillna(False) & \
                        ~df["splicing_frameshift"].fillna(False)
-    
+
     # 5'UTR-induced in-frame length changes (not frameshift)
     utr_inframe = df["5UTR_len_changing"].fillna(False) & \
                   ~df["5UTR_frameshift"].fillna(False)
-    
+
     # Also include vep_consq_len_changing but exclude frameshift and stop_gained
     # BP3 applies to IN-FRAME length changes only (not LoF variants)
     vep_inframe = df['vep_consq_len_changing'].fillna(False) & \
                   ~df["Consequence"].fillna("").str.contains("frameshift") & \
                   ~df["Consequence"].fillna("").str.contains("stop_gained")
-    
+
     # Combined in-frame length-changing variants
     all_inframe = inframe_indels | splicing_inframe | utr_inframe | vep_inframe
-    
+
     logger.info(f"PM4_BP3_criteria: {all_inframe.sum()} total in-frame length-changing variants")
-    
+
     # =========================================================================
     # Step 3: Identify stop-loss variants (special case for PM4 only)
     # =========================================================================
@@ -1928,7 +1928,7 @@ def PM4_BP3_criteria(df: pd.DataFrame,
     # Stop-loss causes protein extension, not LoF
     stop_loss_variants = df["Consequence"].str.contains("stop_lost").fillna(False)
     logger.info(f"PM4_BP3_criteria: {stop_loss_variants.sum()} stop-loss variants (always get PM4)")
-    
+
     # =========================================================================
     # Step 4: Identify variants with functional domain involvement
     # =========================================================================
@@ -1937,9 +1937,9 @@ def PM4_BP3_criteria(df: pd.DataFrame,
                             df["splicing_span_intol_domain"].fillna(False) | \
                             df["5UTR_span_intol_domain"].fillna(False) | \
                             df['span_functional_domains'].fillna(False)
-    
+
     logger.info(f"PM4_BP3_criteria: {has_functional_domain.sum()} variants span functional domains")
-    
+
     # =========================================================================
     # Step 5: Exclude variants that already have strong PVS1 (frameshift/NMD)
     # =========================================================================
@@ -1947,7 +1947,7 @@ def PM4_BP3_criteria(df: pd.DataFrame,
                            (pvs1_criteria > 0) & ~stop_loss_variants
     strong_nmd = (pvs1_criteria >= 3) & ~stop_loss_variants
     exclude_from_pm4 = frameshift_with_pvs1 | strong_nmd
-    
+
     # =========================================================================
     # Step 6: Assign PM4 and BP3 (mutually exclusive)
     # =========================================================================
@@ -1958,41 +1958,41 @@ def PM4_BP3_criteria(df: pd.DataFrame,
     pm4_inframe_eligible = all_inframe & ~exclude_from_pm4 & \
                            (~in_repetitive_region | has_functional_domain)
     pm4_eligible = pm4_inframe_eligible | stop_loss_variants
-    
+
     # BP3 logic:
     # - In-frame indels that are: IN repeat AND NOT in functional domain
     bp3_eligible = all_inframe & in_repetitive_region & ~has_functional_domain
-    
+
     # Ensure mutual exclusivity: PM4 takes precedence
     # (If variant is in functional domain within repeat region, it gets PM4, not BP3)
     bp3_eligible = bp3_eligible & ~pm4_eligible
-    
+
     # =========================================================================
     # Step 7: Create output arrays with strength levels
     # =========================================================================
     pm4_array = np.zeros(len(df), dtype=int)
     bp3_array = np.zeros(len(df), dtype=int)
-    
+
     # PM4 is assigned at Moderate level (2) when PVS1 < 2
     pm4_array[pm4_eligible & (pvs1_criteria < 2)] = 2
-    
+
     # BP3 is assigned at Supporting level (1)
     # Also exclude if PM4 was assigned (double-check mutual exclusivity)
     bp3_array[bp3_eligible & (pm4_array == 0)] = 1
-    
+
     # =========================================================================
     # Step 8: Log summary statistics
     # =========================================================================
     logger.info(f"PM4_BP3_criteria: {(pm4_array > 0).sum()} variants assigned PM4")
     logger.info(f"PM4_BP3_criteria: {(bp3_array > 0).sum()} variants assigned BP3")
-    
+
     # Verify mutual exclusivity
     both_assigned = (pm4_array > 0) & (bp3_array > 0)
     if both_assigned.any():
         logger.error(f"PM4_BP3_criteria: ERROR - {both_assigned.sum()} variants have both PM4 and BP3!")
     else:
         logger.info("PM4_BP3_criteria: Verified PM4 and BP3 are mutually exclusive")
-    
+
     return pm4_array, bp3_array, in_repeat
 
 
@@ -2000,10 +2000,10 @@ def PM4_BP3_criteria(df: pd.DataFrame,
 def analyze_bp1_pp2(gene_stat_dict: Dict):
     """
     Analyze BP1 and PP2 criteria for a gene based on variant statistics.
-    
+
     Args:
         gene_stat_dict: Dictionary containing gene-level variant statistics
-        
+
     Returns:
         Dictionary with BP1 and PP2 analysis results
     """
@@ -2014,60 +2014,60 @@ def analyze_bp1_pp2(gene_stat_dict: Dict):
     # Get pathogenic variants
     patho_variants = gene_stat_dict['clinvar_pathogenic']
     total_patho = len(patho_variants)
-    
+
     if total_patho == 0:
         return (gene, (False, False))
-    
+
     # BP1 Analysis
     # Combine large AA change and NMD variants
     large_aa_nmd_variants = (gene_stat_dict['large_aachange'] | gene_stat_dict['putative_nmd_variants'])
     patho_large_aa_nmd = len(patho_variants & large_aa_nmd_variants)
     bp1_fraction = patho_large_aa_nmd / total_patho
     bp1_granted = bp1_fraction >= 0.7
-    
+
     # PP2 Analysis
     # Create contingency table for small vs large AA changes
     small_aa_variants = gene_stat_dict['small_aachange']
     large_aa_variants = gene_stat_dict['large_aachange']
-    
+
     # Count variants in each category
     patho_small_aa = len(patho_variants & small_aa_variants)
     patho_large_aa = len(patho_variants & large_aa_variants)
     non_patho_small_aa = len(small_aa_variants - patho_variants)
     non_patho_large_aa = len(large_aa_variants - patho_variants)
-    
+
     # Create contingency table
     table = [[patho_small_aa, patho_large_aa],
              [non_patho_small_aa, non_patho_large_aa]]
-    
+
     # Initialize PP2 results
     pp2_granted = False
     pp2_test_used = 'none'
     pp2_pvalue = np.nan
     pp2_odds_ratio = np.nan
-    
+
     # Check if we can perform statistical tests
     total_count = sum(sum(row) for row in table)
     min_cell_count = min(min(row) for row in table)
-    
-    if (total_count >= 5 and 
-        all(sum(row) > 0 for row in table) and 
+
+    if (total_count >= 5 and
+        all(sum(row) > 0 for row in table) and
         all(sum(col) > 0 for col in zip(*table))):
-        
+
         if total_count >= 20 and min_cell_count >= 5:
             # Use Chi-square test
             chi2, pp2_pvalue = stats.chi2_contingency(table)[0:2]
-            pp2_odds_ratio = ((table[0][1] * table[1][0]) / 
+            pp2_odds_ratio = ((table[0][1] * table[1][0]) /
                             (table[0][0] * table[1][1]))  # Note: reversed for large AA changes
             pp2_test_used = 'chi_square'
         else:
             # Use Fisher's exact test
             pp2_odds_ratio, pp2_pvalue = stats.fisher_exact(table, alternative='greater')
             pp2_test_used = 'fisher'
-        
+
         # Adjust p-value of 1 to 0.99999 to avoid log10(1) = 0
         pp2_pvalue = min(pp2_pvalue, 0.99999)
-        
+
         # Grant PP2 if there is NO significant enrichment of large AA changes
         # (p-value > 0.05) and missense variants are ≥50% of pathogenic variants
         pp2_fraction = patho_small_aa / total_patho
@@ -2077,7 +2077,7 @@ def analyze_bp1_pp2(gene_stat_dict: Dict):
         pp2_fraction = patho_small_aa / total_patho
         pp2_granted = pp2_fraction >= 0.5
         pp2_test_used = 'fraction'
-    
+
     result_dict = {
         'bp1_granted': bp1_granted,
         'bp1_fraction': bp1_fraction,
@@ -2094,44 +2094,44 @@ def analyze_bp1_pp2(gene_stat_dict: Dict):
 
 
 
-def PP2_BP1_criteria(df: pd.DataFrame, 
+def PP2_BP1_criteria(df: pd.DataFrame,
                      clinvar_stats_dict: dict,
                      am_intol_domains_tsv: str,
                      threads: int = 10) -> Tuple[pd.Series, pd.Series]:
     """
-    Efficient implementation of PP2/BP1 criteria evaluation using 
+    Efficient implementation of PP2/BP1 criteria evaluation using
     ClinVar statistics dictionary.
-    
+
     Args:
         df: Variant annotation DataFrame
         clinvar_stats_dict: Dictionary containing ClinVar statistics per gene
         threads: Number of threads for multiprocessing
-        
+
     Returns:
         Tuple[pd.Series, pd.Series]: PP2 and BP1 criteria boolean series
     """
-    
+
     # Get unique genes
     unique_genes = df['Gene'].dropna().unique()
     logger.info(f"Processing BP1/PP2 criteria for {len(unique_genes)} unique genes")
-    
+
     # Process genes in parallel
     with mp.Pool(threads) as pool:
         gene_results = pool.imap_unordered(analyze_bp1_pp2, (clinvar_stats_dict.get(gene, {"ensembl_id": gene}) for gene in unique_genes))
         # Convert to dictionary for faster lookups
         gene_criteria_dict = dict(gene_results)
-    
+
     # Create result Series using map operation (vectorized)
     gene_pp2 = df['Gene'].map(lambda g: gene_criteria_dict.get(g, (False, False))[0] if pd.notna(g) else False)
     gene_bp1 = df['Gene'].map(lambda g: gene_criteria_dict.get(g, (False, False))[1] if pd.notna(g) else False)
-    
+
     # Apply PP2 only to missense variants
     is_missense = df['Consequence'].str.contains('missense_variant', na=False)
     pp2_criteria = gene_pp2 & is_missense
-    
+
     # BP1 applies to all variants
     bp1_criteria = gene_bp1 & is_missense
-    
+
     # Log stats
     logger.info(f"Granted PP2 to {pp2_criteria.sum()} variants based on ClinVar stats")
     logger.info(f"Granted BP1 to {bp1_criteria.sum()} variants based on ClinVar stats")
@@ -2170,7 +2170,7 @@ def PP3_BP4_criteria(df: pd.DataFrame, pvs1_criteria: np.ndarray = None, high_co
     }) -> pd.Series:
     # PP3: predicted to be deleterious by in-silico tools
     # Including PrimateAI (Missense), CADD, AlphaMissense (Missense), VEP, SpliceAI, SpliceVault, UTRAnnotator
-    
+
     missense_variant = df['Consequence'].str.contains('missense_variant') & np.logical_not(df['Consequence'].str.contains('stop')) & np.logical_not(df['Consequence'].str.contains('frameshift'))
     splice_variant = df['Consequence'].str.contains('splice') & np.logical_not(df['Consequence'].str.contains('stop')) & np.logical_not(df['Consequence'].str.contains('frameshift'))
     five_utr_variant = df['Consequence'].str.contains('5_prime_UTR_variant').fillna(False)
@@ -2203,7 +2203,7 @@ def PP3_BP4_criteria(df: pd.DataFrame, pvs1_criteria: np.ndarray = None, high_co
                     (((df['splicing_lof'] | (cadd_phred >= 20)) & splice_variant) | (df['5UTR_lof'] & five_utr_variant))
     clinvar_benign = df['CLNSIG'].fillna("").str.contains('enign') & (df['CLNREVSTAT'].map(high_confidence_status, na_action="ignore") >= 2)
     pp3_criteria = pp3_criteria & ~clinvar_benign
-    
+
     # Per ClinGen SVI guidelines (svi_questions_and_updates_09232021.pdf):
     # PP3 should NOT be applied when PVS1 is assigned to avoid double-counting evidence.
     # Both criteria assess similar aspects of variant impact (LoF prediction), and using
@@ -2211,7 +2211,7 @@ def PP3_BP4_criteria(df: pd.DataFrame, pvs1_criteria: np.ndarray = None, high_co
     if pvs1_criteria is not None:
         pp3_criteria = pp3_criteria & (pvs1_criteria < 4)
         logger.info(f"PP3 double-counting prevention: blocked {(pvs1_criteria > 0).sum()} variants with PVS1")
-    
+
     missense_benign = (primateai < 0.8).fillna(True) & (am_pathogenicity < 0.564).fillna(True) & missense_variant
     splice_benign = np.logical_not(df['splicing_lof'].fillna(False)) & splice_variant & (cadd_phred < 20)
     utr_benign = np.logical_not(df['5UTR_lof'].fillna(False)) & five_utr_variant
@@ -2220,14 +2220,14 @@ def PP3_BP4_criteria(df: pd.DataFrame, pvs1_criteria: np.ndarray = None, high_co
     clinvar_patho = df['CLNSIG'].fillna("").str.contains('athogenic') & (df['CLNREVSTAT'].map(high_confidence_status, na_action="ignore") >= 2)
     bp4_criteria = bp4_criteria & ~clinvar_patho
     bp4_criteria = bp4_criteria & ~pp3_criteria
-    
+
     pp3_array = np.zeros(len(df), dtype=int)
     bp4_array = np.zeros(len(df), dtype=int)
     pp3_array[pp3_criteria] = 1
     bp4_array[bp4_criteria] = 1
     return pp3_array, bp4_array
-           
-   
+
+
 
 def PP5_BP6_criteria(df: pd.DataFrame, clinvar_patho, clinvar_benign) -> pd.Series:
     # PP5: The variant is reported as pathogenic by a reputable source but without to many supporting evidences
@@ -2242,9 +2242,9 @@ def PP5_BP6_criteria(df: pd.DataFrame, clinvar_patho, clinvar_benign) -> pd.Seri
 
 
 
-def BS1_criteria(df: pd.DataFrame, 
+def BS1_criteria(df: pd.DataFrame,
                  gene_to_am_score_map: dict,
-                 expected_incidence: float = 0.0001, 
+                 expected_incidence: float = 0.0001,
                  gene_dosage_sensitivity: str = "",
                  pm2_criteria: np.ndarray = None,
                  threads: int = 10):
@@ -2378,7 +2378,7 @@ def hpo_onset_modes(hpo_string):
 def parse_hpo_inheritance(row_dict: dict) -> str:
     # Parse the HPO_gene_inheritance field and return the inheritance mode
     # The HPO_gene_inheritance field is a string with multiple inheritance modes separated by semicolons
-    # These inheritance modes can correspond to 3 different pathogenic mechanisms: LoF, GoF, DN. 
+    # These inheritance modes can correspond to 3 different pathogenic mechanisms: LoF, GoF, DN.
     if isinstance(row_dict.get('HPO_IDs', None), str):
         hpo_terms = row_dict['HPO_IDs'].split(";")
         # HP:0003829: Incomplete penetrance
@@ -2393,7 +2393,7 @@ def parse_hpo_inheritance(row_dict: dict) -> str:
         hpo_inheritances = row_dict['HPO_gene_inheritance'].split(";")
     else:
         return incomplete_penetrance
-    
+
     non_monogenic_set = {"Digenic inheritance", "Oligogenic inheritance", "Polygenic inheritance"}  # In most cases, these indicate compound heterozygous variants
     non_mendelian_set = {"Non-Mendelian inheritance"}  # Includes epigenetic modifications
     dominant_set = {"Autosomal dominant inheritance", "Autosomal dominant inheritance with maternal imprinting", "X-linked dominant inheritance"}
@@ -2445,7 +2445,7 @@ def identify_inheritance_mode_per_row(row_dict: dict, gene_mean_am_score: float,
             clingen_recessive = True
             haplo_insufficient = False
             haplo_sufficient = True
-            # Cannot modify hpo_dominant because it might relates to GOF variants 
+            # Cannot modify hpo_dominant because it might relates to GOF variants
 
     hpo_inheritance = parse_hpo_inheritance(row_dict)
     if isinstance(hpo_inheritance, bool):
@@ -2456,7 +2456,7 @@ def identify_inheritance_mode_per_row(row_dict: dict, gene_mean_am_score: float,
 
     if clingen_recessive is not None:
         hpo_inheritance['hpo_recessive'] = clingen_recessive
-    
+
     if clingen_dominant is not None:
         hpo_inheritance['hpo_dominant'] = clingen_dominant
 
@@ -2466,20 +2466,20 @@ def identify_inheritance_mode_per_row(row_dict: dict, gene_mean_am_score: float,
 
     return hpo_inheritance['hpo_recessive'], hpo_inheritance['hpo_dominant'], hpo_inheritance['hpo_non_monogenic'], hpo_inheritance['hpo_non_mendelian'], haplo_insufficient, hpo_inheritance['incomplete_penetrance']
 
-    
 
-def identify_inheritance_mode(df: pd.DataFrame, 
-                              gene_to_am_score_map: dict, 
+
+def identify_inheritance_mode(df: pd.DataFrame,
+                              gene_to_am_score_map: dict,
                               clingen_dosage_sensitivity: str,
                               threads: int = 10) -> Tuple[np.ndarray, np.ndarray]:
     """
     Identify inheritance mode for each variant in parallel.
-    
+
     Args:
         df: DataFrame containing variant information
         gene_to_am_score_map: Dictionary mapping genes to AM scores
         threads: Number of CPU threads to use
-        
+
     Returns:
         Tuple of boolean arrays (dominant_array, recessive_array)
     """
@@ -2490,15 +2490,15 @@ def identify_inheritance_mode(df: pd.DataFrame,
 
     clingen_dosage_df = pd.read_table(clingen_dosage_sensitivity, low_memory=False).dropna(subset=["#Gene Symbol", "Haploinsufficiency Score"])
     clingen_dosage_map = dict(zip(clingen_dosage_df['#Gene Symbol'], clingen_dosage_df['Haploinsufficiency Score'].astype(int)))
-    
+
     # Prepare arguments for starmap
     args = [(row_dict, gene_to_am_score_map.get(row_dict['Gene'], np.nan), clingen_dosage_map.get(row_dict['SYMBOL'], np.nan)) for row_dict in row_dicts]
-    
+
     # Process in parallel using dictionaries instead of namedtuples
     threads = min(threads, len(row_dicts), mp.cpu_count()-1)
     with mp.Pool(threads) as pool:
         results = pool.starmap(identify_inheritance_mode_per_row, args)
-    
+
     # Unzip results into separate arrays
     recessive_array, dominant_array, non_monogenic_array, non_mendelian_array, haplo_insufficient_array, incomplete_penetrance_array = zip(*results)
     shrink_df['recessive'] = np.array(recessive_array)
@@ -2520,7 +2520,7 @@ def identify_inheritance_mode(df: pd.DataFrame,
 
 
 
-def BS2_criteria(df: pd.DataFrame, 
+def BS2_criteria(df: pd.DataFrame,
                  recessive: np.ndarray,
                  dominant: np.ndarray,
                  non_monogenic: np.ndarray,
@@ -2548,7 +2548,7 @@ def BS2_criteria(df: pd.DataFrame,
     not_late_onsets = df['HPO_IDs'].map(hpo_onset_modes)
     complete_penetrance = df['HPO_IDs'].fillna("").str.contains("HP:0034950") # HP:0034950: Complete penetrance
     moderate_to_low_penetrance = df['HPO_IDs'].fillna("").str.contains("HP:4000159") | df['HPO_IDs'].fillna("").str.contains("HP:4000160")
-    
+
     # For autosomal dominant disease, we can assign BS2 if the variant is observed in a healthy adult (either homozygous or heterozygous)
     autosomal_dominant = autosomal & dominant & ((df['gnomAD_joint_AF'].fillna(0) * df['gnomAD_joint_AN'].fillna(0)) > 10) & np.logical_not(recessive) & np.logical_not(non_monogenic) & np.logical_not(non_mendelian) & np.logical_not(moderate_to_low_penetrance)
     autosomal_recessive = autosomal & recessive & (((df['gnomAD_nhomalt_XX'].fillna(0) + df['gnomAD_nhomalt_XY'].fillna(0)) > 10)) & np.logical_not(non_monogenic) & np.logical_not(non_mendelian) & np.logical_not(moderate_to_low_penetrance)
@@ -2558,7 +2558,7 @@ def BS2_criteria(df: pd.DataFrame,
     x_linked_dominant = x_linked & dominant & np.logical_not(recessive) & (((df['gnomAD_nhomalt_XX'].fillna(0) + df['gnomAD_nhomalt_XY'].fillna(0)) > 10) | ((df['gnomAD_joint_AF'].fillna(0) * df['gnomAD_joint_AN'].fillna(0)) > 10)) & np.logical_not(non_monogenic) & np.logical_not(non_mendelian) & np.logical_not(moderate_to_low_penetrance)
 
     y_linked = y_linked & (df['gnomAD_joint_AF_XY'].fillna(0) > 0) & np.logical_not(non_monogenic) & np.logical_not(non_mendelian) & np.logical_not(moderate_to_low_penetrance)
-    
+
     if 'control_AC' in df.columns:
         logger.warning("Seems user has provided a control cohort VCF, using control allele counts to assign BS2 criteria")
         autosomal_dominant = (autosomal_dominant | (df['control_AC'].fillna(0) > 0)) & np.logical_not(moderate_to_low_penetrance)
@@ -2588,11 +2588,11 @@ def BS2_criteria(df: pd.DataFrame,
 
 
 
-def BS4_criteria(df: pd.DataFrame, ped_df: pd.DataFrame, fam_name: str, 
-                 recessive: np.ndarray, 
-                 dominant: np.ndarray, 
-                 non_monogenic: np.ndarray, 
-                 non_mendelian: np.ndarray, 
+def BS4_criteria(df: pd.DataFrame, ped_df: pd.DataFrame, fam_name: str,
+                 recessive: np.ndarray,
+                 dominant: np.ndarray,
+                 non_monogenic: np.ndarray,
+                 non_mendelian: np.ndarray,
                  incomplete_penetrance: np.ndarray,
                  haplo_insufficient: np.ndarray = None) -> pd.Series:
     # BS4: lack of segregation / genotype incompatibility within the submitted
@@ -2850,23 +2850,23 @@ def process_gene_variants(args):
 def check_gene_variants(gene, gene_df, pathogenic, proband, original_indices):
     """
     Check variants within a gene for trans/cis relationships with pathogenic variants.
-    
+
     Args:
         gene: Gene name
         gene_df: DataFrame containing just variants for this gene
         pathogenic: Boolean array indicating which variants are pathogenic
         proband: Name of proband column
         original_indices: Array of indices in the original dataframe
-        
+
     Returns:
         Tuple of arrays containing original indices where trans/cis conditions are true
     """
     pathogenic_variants = gene_df.loc[pathogenic, proband].tolist()
     logger.info(f"For gene {gene}, there are {len(pathogenic_variants)} pathogenic variants and {len(gene_df)} variants in total")
-    
+
     var_in_trans = np.array([False] * len(gene_df))
     var_in_cis = np.array([False] * len(gene_df))
-    
+
     if len([v for v in pathogenic_variants if len(v.split("|")) == 2 and v.split("|")[0] == "0"]) > 0:
         # If there is at least one pathogenic variant at the second copy of the proband's genome
         # Convert pandas Series to numpy array with np.array()
@@ -2890,7 +2890,7 @@ def check_gene_variants(gene, gene_df, pathogenic, proband, original_indices):
     cis_original_indices = original_indices[var_in_cis] if var_in_cis.any() else np.array([], dtype=int)
     logger.info(f"For gene {gene}, there are {len(trans_original_indices)} variants in-trans with pathogenic variants")
     logger.info(f"For gene {gene}, there are {len(cis_original_indices)} variants in-cis with pathogenic variants")
-    
+
     return trans_original_indices, cis_original_indices
 
 
@@ -2898,15 +2898,15 @@ def check_gene_variants(gene, gene_df, pathogenic, proband, original_indices):
 def gene_args_generator(df, gene_to_indices, pathogenic, proband):
     for gene in df['Gene'].unique():
         indices = gene_to_indices[gene]
-        yield (gene, 
-                df.loc[indices, ["Gene", proband]], 
-                pathogenic[indices], 
-                proband, 
+        yield (gene,
+                df.loc[indices, ["Gene", proband]],
+                pathogenic[indices],
+                proband,
                 indices)
 
 
-def BP2_PM3_criteria(df: pd.DataFrame, 
-                     ped_df: pd.DataFrame, 
+def BP2_PM3_criteria(df: pd.DataFrame,
+                     ped_df: pd.DataFrame,
                      pm2_criteria: np.ndarray,
                      pvs1_criteria: np.ndarray,
                      ps1_criteria: np.ndarray,
@@ -2919,14 +2919,14 @@ def BP2_PM3_criteria(df: pd.DataFrame,
     # PM3: observed in trans with a pathogenic variant in recessive disease.
     pathogenic = df["vep_consq_lof"] | df["splicing_lof"] | df["5UTR_lof"] | (ps1_criteria & ps3_criteria) | pvs1_criteria
 
-    in_cis_pathogenic, in_trans_pathogenic, df = determine_cis_trans_relationships( df, 
-                                                                                    pathogenic, 
-                                                                                    ped_df, 
+    in_cis_pathogenic, in_trans_pathogenic, df = determine_cis_trans_relationships( df,
+                                                                                    pathogenic,
+                                                                                    ped_df,
                                                                                     threads )
 
     in_cis_pathogenic = in_cis_pathogenic > 0
     in_trans_pathogenic = in_trans_pathogenic > 0
-    
+
     bp2_criteria = (in_trans_pathogenic & is_dominant & np.logical_not(is_recessive)) | (in_cis_pathogenic & is_recessive)
     pm3_criteria = in_trans_pathogenic & (is_recessive) & pm2_criteria
 
@@ -2945,16 +2945,16 @@ def find_overlaps_bedtools_efficient(variants_df, regions_file, method = "any"):
     """
     Find variants that overlap with regions using pybedtools with optimal efficiency.
     Handles conversion between 1-based variant coordinates and 0-based BED coordinates.
-    
+
     Args:
         variants_df: DataFrame with variants (using 1-based coordinates)
         regions_file: Path to BED file with regions (using 0-based coordinates)
-        
+
     Returns:
         set: Set of variant IDs that overlap with regions
     """
     import pybedtools
-    
+
     # Convert variants to BED format (1-based to 0-based)
     variants_bed = pybedtools.BedTool.from_dataframe(
         variants_df[['chrom', 'pos', 'variant_id']].assign(
@@ -2962,10 +2962,10 @@ def find_overlaps_bedtools_efficient(variants_df, regions_file, method = "any"):
             end=lambda x: x['pos'] - 1 + variants_df.get('ref', 'A').str.len()  # End position
         )[['chrom', 'start', 'end', 'variant_id']]
     )
-    
+
     # Load regions (already in 0-based BED format)
     regions_bed = pybedtools.BedTool(regions_file)
-        
+
     # Find overlaps - this keeps only the features from variants_bed that overlap
     if method == "any":
         # Find intersections of any size
@@ -2973,20 +2973,20 @@ def find_overlaps_bedtools_efficient(variants_df, regions_file, method = "any"):
     elif method == "all":
         # Find intersections where the variant interval is fully contained in the region interval
         intersect_result = variants_bed.intersect(regions_bed, wa=True, f=1, u=True)
-    
+
     # Extract the variant IDs that had overlaps
     overlapping_variants = set()
     for feature in intersect_result:
         # The variant_id is the 4th field (index 3)
         overlapping_variants.add(feature[3])
-    
+
     return overlapping_variants
 
 
 
 
-def BP5_criteria(df: pd.DataFrame, 
-                 alt_disease_vcf: str, 
+def BP5_criteria(df: pd.DataFrame,
+                 alt_disease_vcf: str,
                  recessive: np.ndarray,
                  dominant: np.ndarray,
                  non_monogenic: np.ndarray,
@@ -2995,91 +2995,103 @@ def BP5_criteria(df: pd.DataFrame,
                  n_processes: int = 1) -> np.ndarray:
     '''
     BP5: variant found in a sample with known alternative molecular basis for disease
-    
+
     Logic: If a variant is found in patients with alternative diseases, it suggests benignity
     for the query disease, UNLESS the gene has non-monogenic inheritance or incomplete penetrance.
-    
+
     For genes with dominant inheritance + monogenic + complete penetrance:
     - Variants found in alt disease patients (het or hom) get BP5
-    
+
     For genes with recessive inheritance + monogenic + complete penetrance:
     - Only variants found as homozygous in alt disease patients get BP5
-    
+
     Optimized version using pre-computed inheritance arrays and vectorized operations
     '''
-    
-    # First, efficiently extract unique chromosomes from alt_disease_vcf
-    logger.info(f"Extracting unique chromosomes from {alt_disease_vcf}")
-    chrom_cmd = f'bcftools query -f "%CHROM\\n" {alt_disease_vcf} | sort -u'
-    chrom_result = subprocess.run(chrom_cmd, shell=True, capture_output=True, text=True, check=True)
-    
-    if not chrom_result.stdout.strip():
-        logger.warning(f"No chromosomes found in {alt_disease_vcf}")
-        return np.zeros(len(df), dtype=int)
-    
-    unique_chroms = [chrom.strip() for chrom in chrom_result.stdout.strip().split('\n') if chrom.strip()]
-    logger.info(f"Found {len(unique_chroms)} unique chromosomes: {unique_chroms}")
-    
-    # Create partial function with fixed alt_disease_vcf parameter
-    extract_func = functools.partial(extract_and_summarize_alt_disease_variants, alt_disease_vcf)
-    
-    logger.info(f"Using {n_processes} processes for parallel chromosome processing")
-    
-    # Execute in parallel
-    with mp.Pool(processes=n_processes) as pool:
-        results = pool.map(extract_func, unique_chroms)
-    
-    # Combine results from all chromosomes
-    combined_het_dict = {}
-    combined_hom_dict = {}
-    
-    for het_dict, hom_dict in results:
-        combined_het_dict.update(het_dict)
-        combined_hom_dict.update(hom_dict)
-    
-    logger.info(f"Combined results: {len(combined_het_dict)} het variants, {len(combined_hom_dict)} hom variants")
-    
-    # Create variant_id column for merging (matching the format used in extract function)
-    df['variant_id'] = df['chrom'].astype(str) + ':' + df['pos'].astype(str) + ':' + df['ref'] + '-' + df['alt']
-    
-    # Map the dict results back to the dataframe
-    df['alt_disease_hets'] = df['variant_id'].map(combined_het_dict).fillna(False)
-    df['alt_disease_homs'] = df['variant_id'].map(combined_hom_dict).fillna(False)
-    
+    if {"alt_disease_hets", "alt_disease_homs"}.issubset(df.columns):
+        logger.info(
+            "Reusing precomputed alt_disease_hets/alt_disease_homs columns for BP5; "
+            "skip re-scanning %s",
+            alt_disease_vcf,
+        )
+        het_col = df["alt_disease_hets"]
+        hom_col = df["alt_disease_homs"]
+        if het_col.dtype == object:
+            df["alt_disease_hets"] = het_col.astype(str).str.lower().isin({"true", "1", "yes"})
+        if hom_col.dtype == object:
+            df["alt_disease_homs"] = hom_col.astype(str).str.lower().isin({"true", "1", "yes"})
+    else:
+        # First, efficiently extract unique chromosomes from alt_disease_vcf
+        logger.info(f"Extracting unique chromosomes from {alt_disease_vcf}")
+        chrom_cmd = f'bcftools query -f "%CHROM\\n" {alt_disease_vcf} | sort -u'
+        chrom_result = subprocess.run(chrom_cmd, shell=True, capture_output=True, text=True, check=True)
+
+        if not chrom_result.stdout.strip():
+            logger.warning(f"No chromosomes found in {alt_disease_vcf}")
+            return np.zeros(len(df), dtype=int)
+
+        unique_chroms = [chrom.strip() for chrom in chrom_result.stdout.strip().split('\n') if chrom.strip()]
+        logger.info(f"Found {len(unique_chroms)} unique chromosomes: {unique_chroms}")
+
+        # Create partial function with fixed alt_disease_vcf parameter
+        extract_func = functools.partial(extract_and_summarize_alt_disease_variants, alt_disease_vcf)
+
+        logger.info(f"Using {n_processes} processes for parallel chromosome processing")
+
+        # Execute in parallel
+        with mp.Pool(processes=n_processes) as pool:
+            results = pool.map(extract_func, unique_chroms)
+
+        # Combine results from all chromosomes
+        combined_het_dict = {}
+        combined_hom_dict = {}
+
+        for het_dict, hom_dict in results:
+            combined_het_dict.update(het_dict)
+            combined_hom_dict.update(hom_dict)
+
+        logger.info(f"Combined results: {len(combined_het_dict)} het variants, {len(combined_hom_dict)} hom variants")
+
+        # Create variant_id column for merging (matching the format used in extract function)
+        df['variant_id'] = df['chrom'].astype(str) + ':' + df['pos'].astype(str) + ':' + df['ref'] + '-' + df['alt']
+
+        # Map the dict results back to the dataframe
+        df['alt_disease_hets'] = df['variant_id'].map(combined_het_dict).fillna(False)
+        df['alt_disease_homs'] = df['variant_id'].map(combined_hom_dict).fillna(False)
+
     # Vectorized BP5 logic
     # Only apply BP5 to genes with monogenic inheritance and complete penetrance
     eligible_genes = ~non_monogenic & ~incomplete_penetrance & ~non_mendelian
-    
+
     # For dominant genes: any presence (het or hom) in alt disease patients = BP5
     only_dominant = (dominant | incomplete_penetrance) & ~recessive
     dominant_bp5 = (only_dominant & \
                    eligible_genes & \
                    (df['alt_disease_hets'] | df['alt_disease_homs']))
-    
+
     # For recessive genes: only homozygous presence in alt disease patients = BP5
     recessive_bp5 = (recessive | ~incomplete_penetrance) & \
                     eligible_genes & \
                     df['alt_disease_homs']
-    
+
     # Combine conditions
     bp5_criteria = dominant_bp5 | recessive_bp5
-    
+
     bp5_array = np.zeros(len(df), dtype=int)
     bp5_array[bp5_criteria] = 1
-    
+
     logger.info(f"BP5 criteria applied to {eligible_genes.sum()} variants with monogenic + complete penetrance")
     logger.info(f"BP5 assigned to {bp5_criteria.sum()} variants found in alternative disease patients")
-    
+
     return bp5_array
 
 
 def extract_and_summarize_alt_disease_variants(alt_disease_vcf: str, chrom = None) -> pd.DataFrame:
     '''
     Extract variants from alt_disease_vcf using bcftools and summarize genotype information.
-    
+
     Args:
         alt_disease_vcf: Path to VCF file with known alternative molecular basis for disease
-        
+
     Returns:
         DataFrame with columns: chrom, pos, ref, alt, alt_disease_hets, alt_disease_homs
     '''
@@ -3088,25 +3100,25 @@ def extract_and_summarize_alt_disease_variants(alt_disease_vcf: str, chrom = Non
         cmd = f'bcftools +fill-tags {alt_disease_vcf} -Ou -- -t AC_Het,AC_Hom,AC_Hemi | bcftools filter -e \'(INFO/AC_Het == 0) && (INFO/AC_Hom == 0) && (INFO/AC_Hemi == 0)\' -Ou | bcftools query -f "%CHROM:%POS:%REF-%ALT\\t%INFO/AC_Het\\t%INFO/AC_Hom\\t%INFO/AC_Hemi\\n"'
     else:
         cmd = f'bcftools view -Ou {alt_disease_vcf} {chrom} | bcftools +fill-tags - -Ou -- -t AC_Het,AC_Hom,AC_Hemi | bcftools filter -e \'(INFO/AC_Het == 0) && (INFO/AC_Hom == 0) && (INFO/AC_Hemi == 0)\' -Ou | bcftools query -f "%CHROM:%POS:%REF-%ALT\\t%INFO/AC_Het\\t%INFO/AC_Hom\\t%INFO/AC_Hemi\\n"'
-    
+
     logger.info(f"Extracting and normalizing variants from {alt_disease_vcf} using bcftools...")
     result = subprocess.run(cmd, shell=True, capture_output=True, text=True, check=True)
-    
+
     if not result.stdout.strip():
         logger.warning(f"No variants found in {alt_disease_vcf}")
         return {}, {}
-    
+
     # Read bcftools output directly into DataFrame
     df = pd.read_csv(StringIO(result.stdout), sep='\t', header=None)
-    
+
     # Set column names - first 4 are variant info, rest are genotypes
     col_names = ['variant_id'] + ['AC_Het', 'AC_Hom', 'AC_Hemi']
     df.columns = col_names
-    
+
     # Create boolean masks across all samples (vectorized)
     het_mask = df['AC_Het'] > 0
     hom_mask = (df['AC_Hom'] > 0) | (df['AC_Hemi'] > 0)
-    
+
     df['alt_disease_hets'] = het_mask
     df['alt_disease_homs'] = hom_mask
 
@@ -3116,17 +3128,17 @@ def extract_and_summarize_alt_disease_variants(alt_disease_vcf: str, chrom = Non
     result_df.set_index('variant_id', inplace=True)
     het_dict = result_df['alt_disease_hets'].to_dict()
     hom_dict = result_df['alt_disease_homs'].to_dict()
-    
+
     return het_dict, hom_dict
 
 
 
 
 def BP7_criteria(df: pd.DataFrame) -> pd.Series:
-    # BP7: synonymous variant, no splicing-altering consequence, not conserved. 
+    # BP7: synonymous variant, no splicing-altering consequence, not conserved.
     synonymous = df['Consequence'] == 'synonymous_variant'
     no_splicing_altering = (df['splicing_len_changing'] == False) | (df['splicing_lof'].isna()) | (df['splicing_lof'] == False) | (df['splicing_len_changing'].isna())
-    not_conserved = df['Conservation'] <= 5 # 5 is the cutoff for highly conserved of a GERP++ score. 
+    not_conserved = df['Conservation'] <= 5 # 5 is the cutoff for highly conserved of a GERP++ score.
     bp7_array = np.zeros(len(df), dtype=int)
     bp7_array[synonymous & no_splicing_altering & not_conserved] = 1
     return bp7_array
@@ -3180,11 +3192,11 @@ def identify_fam_members(ped_df: pd.DataFrame, fam_name: str) -> pd.DataFrame:
 def create_criteria_summary(row, criteria_order=None, clingen_evidence=None):
     """
     Create a summary string of active criteria for a given row.
-    
+
     Args:
         row: A row from the criteria matrix
         criteria_order: List of criteria in order
-        
+
     Returns:
         A semicolon-separated string of active criteria
     """
@@ -3193,7 +3205,7 @@ def create_criteria_summary(row, criteria_order=None, clingen_evidence=None):
     label_strength_level = {"P": "Supporting", "M": "Moderate", "S": "Strong", "V": "Very Strong", "A": "Standalone"}
 
     active_criteria = [ col if strength_level_suffix.get(int(row[col]), None) == label_strength_level.get(col[1], None) else col + "_" + strength_level_suffix.get(int(row[col]), None) for col in criteria_order if int(row[col]) > 0 ]
-    
+
     # TEMPORARILY COMMENTED OUT: ClinGen evidence inheritance
     # Uncomment the following lines to re-enable ClinGen evidence lookup
     # clingen_criteria = clingen_evidence.get(row["variant_id"], None) if clingen_evidence else None
@@ -3207,7 +3219,7 @@ def create_criteria_summary(row, criteria_order=None, clingen_evidence=None):
 def fix_clingen_term(clingen_str: str) -> str:
     if not isinstance(clingen_str, str):
         raise ValueError(f"ClinGen evidence input {clingen_str} is not a string")
-    
+
     if "_" not in clingen_str:
         return clingen_str
     else:
@@ -3239,11 +3251,11 @@ def translate_strength_level(criteria_name: str, criteria_list_str: str) -> int:
 def summarize_acmg_criteria(df: pd.DataFrame, criteria_dict: Dict[str, np.ndarray], clingen_map_pkl: str) -> Tuple[pd.DataFrame, pd.DataFrame]:
     """
     Create a summary column of assigned criteria and a boolean matrix of all criteria.
-    
+
     Args:
         df: Input DataFrame
         criteria_dict: Dictionary mapping criteria names to boolean arrays
-        
+
     Returns:
         Tuple of:
         - Original DataFrame with added criteria summary column
@@ -3266,10 +3278,10 @@ def summarize_acmg_criteria(df: pd.DataFrame, criteria_dict: Dict[str, np.ndarra
         # Supporting Benign
         'BP1', 'BP2', 'BP3', 'BP4', 'BP5', 'BP6', 'BP7'
     ]
-    
+
     # Create criteria matrix
     criteria_matrix = pd.DataFrame(
-        {name: criteria_dict.get(name, np.zeros(len(df), dtype=int)) 
+        {name: criteria_dict.get(name, np.zeros(len(df), dtype=int))
          for name in criteria_order},
         index=df.index
     )
@@ -3287,7 +3299,7 @@ def summarize_acmg_criteria(df: pd.DataFrame, criteria_dict: Dict[str, np.ndarra
     # Load ClinGen evidence map
     # clingen_map = pickle.load(gzip.open(clingen_map_pkl, "rb")) if clingen_map_pkl.endswith(".gz") else pickle.load(open(clingen_map_pkl, "rb"))
     clingen_map = {}  # Empty map - PriVA will use its own criteria assignments
-    
+
     # Add summary column to original DataFrame
     df['ACMG_criteria'] = criteria_matrix.apply(create_criteria_summary, axis=1, criteria_order=criteria_order, clingen_evidence=clingen_map)
 
@@ -3296,7 +3308,7 @@ def summarize_acmg_criteria(df: pd.DataFrame, criteria_dict: Dict[str, np.ndarra
     # clingen_match = criteria_matrix["variant_id"].isin(clingen_map)
     # for col in criteria_order:
     #     criteria_matrix.loc[clingen_match, col] = df.loc[clingen_match, "ACMG_criteria"].map(lambda x: translate_strength_level(col, x))
-    
+
     return df, criteria_matrix
 
 
@@ -3310,7 +3322,7 @@ def calculate_posterior_probability(row, prior_probability=0.1, exp_base=2, odds
                                      Keys are criteria names (e.g., "PVS1", "PS1", "PM2", "PP3", "BS1", "BP4"),
                                      and values are the corresponding strength scores.
         prior_probability (float): The prior probability of pathogenicity (default: 0.1).
-        evidence_weights (dict): A dictionary mapping criteria names to their numerical weights, 
+        evidence_weights (dict): A dictionary mapping criteria names to their numerical weights,
                                  according to the latest ClinGen SVI recommendations (default: illustrative values).
                                  PM2 is downgraded to a PP criterion
 
@@ -3355,7 +3367,7 @@ def calculate_posterior_probability(row, prior_probability=0.1, exp_base=2, odds
         ps_odds = 1514 * odds_function(float(sum([evidence_weights[int(n)] for n in ps_matches[:-2]])))
     else:
         ps_odds = odds_function(float(sum([evidence_weights[int(n)] for n in ps_matches])))
-    
+
     if len(pvs_matches) > 0 and len(pm_matches) > 0 and len(pp_matches) == 0:
         pv_pm_odds = odds_pvst * odds_function(float(sum([evidence_weights[int(n)] for n in pm_matches[:-1]])))
     else:
@@ -3477,25 +3489,25 @@ def compute_control_common(df: pd.DataFrame, proband: str,
     return df
 
 
-def sort_and_rank_variants(df: pd.DataFrame, 
-                           ped_df: pd.DataFrame, 
-                           fam_name: str, 
-                           gene_to_am_score_map: dict, 
+def sort_and_rank_variants(df: pd.DataFrame,
+                           ped_df: pd.DataFrame,
+                           fam_name: str,
+                           gene_to_am_score_map: dict,
                            gene_dosage_sensitivity: str = "",
                            pext_tissues: str = "",
                            relevant_gene_list: str = None,
                            dispensable_gene_list: str = os.path.join(data_dir, "dispensable_genes", "dispensable_gene_list.txt")) -> pd.DataFrame:
     """
     Sort variants by their maximum ACMG quantitative score and add ranking.
-    
+
     Args:
         df: DataFrame with ACMG_quant_score column and variant information
-        
+
     Returns:
         DataFrame sorted by variant's max ACMG score with added variant rank column
     """
     df = df.copy()
-        
+
     df["sort_index"] = df.loc[:, "ACMG_quant_score"]
     df = df.loc[df["BIOTYPE"] == "protein_coding", :]
 
@@ -3567,7 +3579,7 @@ def sort_and_rank_variants(df: pd.DataFrame,
     )
     df["haplo_insuf_index"] = 1.0
     df.loc[haplo_sufficient, "haplo_insuf_index"] = 0.9 # This penalty coefficient will lead to a near-1 posterior prob downgrade to below 0.9 which is below the cutoff of likely pathogenic.
-    
+
     if dispensable_gene_list is not None:
         dispensable_genes = pd.read_table(dispensable_gene_list, header=None, names=["SYMBOL"], comment="#") # Skip the header row starting with #
         dispensable_genes = set(dispensable_genes["SYMBOL"].tolist())
@@ -3581,10 +3593,10 @@ def sort_and_rank_variants(df: pd.DataFrame,
         df["relevant_gene_index"] = 1.0
         df.loc[df["SYMBOL"].isin(relevant_genes), "relevant_gene_index"] = 1.2  # Prioritize the variants in relevant genes
         df.loc[:, "sort_index"] = df.loc[:, "sort_index"] * df.loc[:, "relevant_gene_index"]
-    
+
     lof = df["ACMG_quant_score"] > 0.89
     df.loc[lof & proband_het, "sort_index"] = df.loc[lof & proband_het, "sort_index"] * df.loc[lof & proband_het, "haplo_insuf_index"]
-    
+
     # Apply pext-based expression modulation if pext columns are available
     # Low pext = variant in low-expression region = deprioritize for LoF interpretation
     # Use the first tissue-specific pext column if provided, otherwise use PEXT_MEAN
@@ -3597,12 +3609,12 @@ def sort_and_rank_variants(df: pd.DataFrame,
             if first_tissue_col in df.columns:
                 pext_col_to_use = first_tissue_col
                 logger.info(f"Using tissue-specific pext column for sorting: {first_tissue_col}")
-    
+
     # Fallback to PEXT_MEAN if no tissue-specific column found
     if pext_col_to_use is None and "PEXT_MEAN" in df.columns:
         pext_col_to_use = "PEXT_MEAN"
         logger.info("Using PEXT_MEAN column for expression-aware sorting")
-    
+
     if pext_col_to_use is not None:
         # Cummings 2020: PEXT < 0.1 = low/unexpressed region, deprioritize.
         # PEXT >= 0.1 = sufficiently expressed, no penalty (pext_sort_index = 1.0).
@@ -3612,18 +3624,18 @@ def sort_and_rank_variants(df: pd.DataFrame,
         # Apply pext modulation only to LoF variants (where expression matters most)
         df.loc[lof, "sort_index"] = df.loc[lof, "sort_index"] * df.loc[lof, "pext_sort_index"]
         logger.info(f"Applied pext-based sort modulation using {pext_col_to_use} (threshold 0.1, sqrt penalty below)")
-    
+
     # Group by variant coordinates to get max score per variant
     variant_groups = df.groupby(['chrom', 'pos', 'ref', 'alt'])
     max_scores = variant_groups['sort_index'].transform('max')
-    
+
     # Sort the DataFrame by max scores (descending) while maintaining variant grouping
     df['max_variant_score'] = max_scores
     df_sorted = df.sort_values(
         by=['max_variant_score', 'ACMG_quant_score', 'chrom', 'pos', 'ref', 'alt'],
         ascending=[False, False, True, True, True, True]
     )
-    
+
     # Add variant rank based on actual sorted order (not lexicographic ngroup)
     # Use factorize() which assigns codes based on order of first appearance (0-indexed)
     # Adding 1 gives us 1-indexed ranks where rank 1 = first (highest-scored) variant
@@ -3633,16 +3645,16 @@ def sort_and_rank_variants(df: pd.DataFrame,
         df_sorted['variant_rank'] = codes + 1  # Convert 0-indexed to 1-indexed
     else:
         # Create variant key for ranking
-        var_key = (df_sorted['chrom'].astype(str) + ':' + 
-                   df_sorted['pos'].astype(str) + ':' + 
-                   df_sorted['ref'].astype(str) + ':' + 
+        var_key = (df_sorted['chrom'].astype(str) + ':' +
+                   df_sorted['pos'].astype(str) + ':' +
+                   df_sorted['ref'].astype(str) + ':' +
                    df_sorted['alt'].astype(str))
         codes, _ = pd.factorize(var_key, sort=False)
         df_sorted['variant_rank'] = codes + 1  # Convert 0-indexed to 1-indexed
-    
+
     # Clean up temporary column
     df_sorted = df_sorted.drop('max_variant_score', axis=1)
-    
+
     return df_sorted
 
 
@@ -3660,8 +3672,8 @@ def BA1_criteria(anno_df: pd.DataFrame) -> pd.Series:
 
 
 
-def ACMG_criteria_assign(anno_table: str, 
-                         am_score_table: str, 
+def ACMG_criteria_assign(anno_table: str,
+                         am_score_table: str,
                          clinvar_patho_af_stat: str,
                          clinvar_patho_exon_af_stat: str,
                          clinvar_aa_dict_pkl: str,
@@ -3694,7 +3706,7 @@ def ACMG_criteria_assign(anno_table: str,
     Returns both annotated DataFrame and criteria matrix.
 
     The ClinGen SVI group has introduced a new dimension of evaluation for each criteria called Strength of Criteria.
-    But many strengths cannot be applied at bioinformatic level. 
+    But many strengths cannot be applied at bioinformatic level.
 
     ===========Regarding the combining rule===========
     Regarding the combining rule, SVI from ClinGen suggests that PVS1 + 1PP = Likely Pathogenic.
@@ -3712,7 +3724,7 @@ def ACMG_criteria_assign(anno_table: str,
     """
     anno_df = pd.read_table(anno_table, low_memory=False).drop_duplicates()
     logger.info(f"Got {threads} threads to process the input table {anno_table}, now the table looks like: \n{anno_df[:5].to_string(index=False)}")
-    
+
     # Log pext tissue information if provided
     if pext_tissues:
         pext_tissue_list = [t.strip() for t in pext_tissues.split(",") if t.strip()]
@@ -3724,7 +3736,7 @@ def ACMG_criteria_assign(anno_table: str,
             logger.info(f"Found pext columns in annotation table: {present_pext_cols}")
         else:
             logger.info(f"No pext columns found in annotation table (expected: {expected_pext_cols})")
-    
+
     anno_df = vep_consq_interpret(anno_df, threads)
 
     am_score_df = pd.read_table(am_score_table, low_memory=False)
@@ -3735,7 +3747,7 @@ def ACMG_criteria_assign(anno_table: str,
         ped_df = pd.read_table(ped_table, low_memory=False)
         fam_df = ped_df[ped_df['#FamilyID'] == fam_name]
         proband = fam_df.loc[fam_df['Phenotype'].isin(["2", 2]), 'IndividualID'].values[0]
-        
+
 
     # Convert the am_score_df to a dictionary:
     # 1. Ensembl transcript ID (column 'transcript') to mean AM score (column 'mean_am_pathogenicity')
@@ -3745,10 +3757,10 @@ def ACMG_criteria_assign(anno_table: str,
     # Use the two dict above to create dict that maps gene ID to mean AM score
     gene_to_am_score_map = {g: am_score_dict[t] for t, g in transcript_to_gene_map.items() if t in am_score_dict}
     clinvar_aa_dict = pickle.load(gzip.open(clinvar_aa_dict_pkl)) if clinvar_aa_dict_pkl.endswith(".gz") else pickle.load(open(clinvar_aa_dict_pkl, "rb"))
-    
+
     # FIX: Merge ClinVar data from ALL transcripts of a gene, not just the last one
     # The old dict comprehension would overwrite gene entries when multiple transcripts
-    # mapped to the same gene, causing genes to be incorrectly excluded from 
+    # mapped to the same gene, causing genes to be incorrectly excluded from
     # clinvar_pathogenic_genes if the last transcript lacked qualifying variants
     clinvar_aa_gene_map = {}
     for t, g in transcript_to_gene_map.items():
@@ -3764,7 +3776,7 @@ def ACMG_criteria_assign(anno_table: str,
                     else:
                         # Merge variants at the same position
                         clinvar_aa_gene_map[g][pos].update(variants)
-    
+
     logger.info(f"gene_to_am_score_map created, {len(gene_to_am_score_map)} genes are having the AM score")
     logger.info(f"clinvar_aa_gene_map created by merging {len(clinvar_aa_dict)} transcripts into {len(clinvar_aa_gene_map)} genes")
 
@@ -3783,8 +3795,8 @@ def ACMG_criteria_assign(anno_table: str,
     logger.info(f"Loading the recorded intolerant domains which look alike: {intolerant_domains}")
 
     # Apply the PVS1 criteria, LoF on a gene known to to be pathogenic due to LoF
-    pvs1_criteria, locate_intol_domains = PVS1_criteria(anno_df, 
-                                                        clinvar_aa_gene_map, 
+    pvs1_criteria, locate_intol_domains = PVS1_criteria(anno_df,
+                                                        clinvar_aa_gene_map,
                                                         clinvar_patho_exon_af_stat,
                                                         interpro_entry_map_pkl,
                                                         gene_to_am_score_map,
@@ -3807,7 +3819,7 @@ def ACMG_criteria_assign(anno_table: str,
 
     # Apply the PS1 and PM5 criteria
     ps1_criteria, pm5_criteria = PS1_PM5_criteria(anno_df, clinvar_aa_dict_pkl, clinvar_splice_dict_pkl, ps3bs3_results['clinvar_patho'], pvs1_criteria, threads)
-    logger.info(f"PS1 criteria applied, {(ps1_criteria > 0).sum()} variants are having the PS1 criteria") 
+    logger.info(f"PS1 criteria applied, {(ps1_criteria > 0).sum()} variants are having the PS1 criteria")
     logger.info(f"PM5 criteria applied, {(pm5_criteria > 0).sum()} variants are having the PM5 criteria")
     gc.collect()
 
@@ -3820,7 +3832,7 @@ def ACMG_criteria_assign(anno_table: str,
     logger.info(f"PS2 criteria applied, {(ps2_criteria > 0).sum()} variants are having the PS2 criteria")
     logger.info(f"PM6 criteria applied, {(pm6_criteria > 0).sum()} variants are having the PM6 criteria")
     gc.collect()
-   
+
     '''
     PS4 cannot be applied because usually we dont have enough cases to determine the frequency of the variant
     '''
@@ -3829,7 +3841,7 @@ def ACMG_criteria_assign(anno_table: str,
     # pm1_criteria = pm1_criteria & ~ps1_criteria  # PS1 is already a strength to indicate the intolerance to the AA changes incurred by the variant
     logger.info(f"PM1 criteria applied, {(pm1_criteria > 0).sum()} variants are having the PM1 criteria")
     gc.collect()
-    
+
     # Apply PM4 and BP3 criteria together (mutually exclusive)
     # PM4: in-frame indels NOT in repetitive region OR in functional domain (or stop-loss)
     # BP3: in-frame indels IN repetitive region WITHOUT functional domain
@@ -3861,11 +3873,11 @@ def ACMG_criteria_assign(anno_table: str,
     logger.info(f"PP5 criteria applied, {(pp5_criteria > 0).sum()} variants are having the PP5 criteria")
     logger.info(f"BP6 criteria applied, {(bp6_criteria > 0).sum()} variants are having the BP6 criteria")
     gc.collect()
-    
+
     ba1_criteria = BA1_criteria(anno_df)
 
     # Apply PM2 criteria, absent from gnomAD or extremely rare in gnomAD
-    pm2_criteria = PM2_criteria(anno_df, 
+    pm2_criteria = PM2_criteria(anno_df,
                                 clinvar_patho_af_stat,
                                 clinvar_patho_exon_af_stat,
                                 gnomAD_extreme_rare_threshold)
@@ -3873,10 +3885,10 @@ def ACMG_criteria_assign(anno_table: str,
     gc.collect()
 
     # Apply BS1, PAF of variant is greater than expected incidence of the disease
-    bs1_criteria, recessive, dominant, non_monogenic, non_mendelian, haplo_insufficient, incomplete_penetrance = BS1_criteria(anno_df, 
-                                                                                                                              gene_to_am_score_map, 
-                                                                                                                              threads = threads, 
-                                                                                                                              expected_incidence = expected_incidence, 
+    bs1_criteria, recessive, dominant, non_monogenic, non_mendelian, haplo_insufficient, incomplete_penetrance = BS1_criteria(anno_df,
+                                                                                                                              gene_to_am_score_map,
+                                                                                                                              threads = threads,
+                                                                                                                              expected_incidence = expected_incidence,
                                                                                                                               gene_dosage_sensitivity = gene_dosage_sensitivity,
                                                                                                                               pm2_criteria = pm2_criteria)
     logger.info(f"BS1 criteria applied, {(bs1_criteria > 0).sum()} variants are having the BS1 criteria")
@@ -3935,10 +3947,10 @@ def ACMG_criteria_assign(anno_table: str,
         logger.warning(f"No ped_table provided, skip the BS4 criteria")
         bs4_criteria = np.array([0] * len(anno_df))
     logger.info(f"BS4 criteria applied, {(bs4_criteria > 0).sum()} variants are having the BS4 criteria")
-    
+
     # NOTE: BP3 is now calculated together with PM4 in PM4_BP3_criteria (they are mutually exclusive)
     # BP3 was already assigned above when PM4_BP3_criteria was called
-    
+
     # Apply BP5, variant found in a sample with known alternative molecular basis for disease
     if alt_disease_vcf:
         bp5_criteria = BP5_criteria(anno_df, alt_disease_vcf, recessive, dominant, non_monogenic, non_mendelian, incomplete_penetrance, threads)
@@ -3946,7 +3958,7 @@ def ACMG_criteria_assign(anno_table: str,
         bp5_criteria = np.array([0] * len(anno_df))
     logger.info(f"BP5 criteria applied, {(bp5_criteria > 0).sum()} variants are having the BP5 criteria")
     gc.collect()
-    # Apply BP7, synonymous variant, no splicing-altering consequence, not conserved. 
+    # Apply BP7, synonymous variant, no splicing-altering consequence, not conserved.
     bp7_criteria = BP7_criteria(anno_df)
     logger.info(f"BP7 criteria applied, {(bp7_criteria > 0).sum()} variants are having the BP7 criteria")
     gc.collect()
@@ -3954,8 +3966,8 @@ def ACMG_criteria_assign(anno_table: str,
     # Apply BP2, observed in trans with a pathogenic variant in dominant disease, Or in-cis with a pathogenic variant with any inheritance mode
     # Apply PM3, observed in trans with a pathogenic variant in recessive disease.
     if not ped_df is None and not fam_name is None:
-        bp2_criteria, pm3_criteria = BP2_PM3_criteria(anno_df, 
-                                                      ped_df, 
+        bp2_criteria, pm3_criteria = BP2_PM3_criteria(anno_df,
+                                                      ped_df,
                                                       pm2_criteria,
                                                       pvs1_criteria,
                                                       ps1_criteria,
@@ -3969,7 +3981,7 @@ def ACMG_criteria_assign(anno_table: str,
     logger.info(f"BP2 criteria applied, {(bp2_criteria > 0).sum()} variants are having the BP2 criteria")
     logger.info(f"PM3 criteria applied, {(pm3_criteria > 0).sum()} variants are having the PM3 criteria")
     gc.collect()
-    
+
     # Collect all criteria in a dictionary
     criteria_dict = {
         'PVS1': pvs1_criteria,
@@ -3999,30 +4011,30 @@ def ACMG_criteria_assign(anno_table: str,
         'BP6': bp6_criteria,
         'BP7': bp7_criteria
     }
-    
+
     # Create summary and matrix
     anno_df, criteria_matrix = summarize_acmg_criteria(anno_df, criteria_dict, clingen_map_pkl)
     # Save the criteria matrix to a file which the path is based on the input anno_table
     output_matrix = ".".join(anno_table.split(".")[:-1]) + ".acmg.tsv"
     criteria_matrix.to_csv(output_matrix, sep="\t", index=False)
-    
+
     # Apply quantification using ACMG_criteria column and use that to sort the variants
     posterior_probability, acmg_class = zip(*criteria_matrix.apply(calculate_posterior_probability, axis=1))
     anno_df["ACMG_quant_score"] = posterior_probability
     anno_df["ACMG_class"] = acmg_class
 
     # Sort and rank variants
-    anno_df = sort_and_rank_variants(anno_df, 
-                                     ped_df, 
-                                     fam_name, 
-                                     gene_to_am_score_map, 
+    anno_df = sort_and_rank_variants(anno_df,
+                                     ped_df,
+                                     fam_name,
+                                     gene_to_am_score_map,
                                      gene_dosage_sensitivity=gene_dosage_sensitivity,
                                      pext_tissues=pext_tissues,
                                      relevant_gene_list=relevant_gene_list,
                                      dispensable_gene_list=dispensable_gene_list)
     # Save the annotated table to replace the input anno_table
     anno_df.to_csv(anno_table, sep="\t", index=False)
-    
+
     return anno_df, criteria_matrix
 
 
@@ -4063,8 +4075,8 @@ if __name__ == "__main__":
     parser.add_argument("--threads", type=int, required=False, default=10)
     args = parser.parse_args()
 
-    anno_df, criteria_matrix = ACMG_criteria_assign(args.anno_table, 
-                                                    args.am_score_table, 
+    anno_df, criteria_matrix = ACMG_criteria_assign(args.anno_table,
+                                                    args.am_score_table,
                                                     args.clinvar_patho_af_stat,
                                                     args.clinvar_patho_exon_af_stat,
                                                     args.clinvar_aa_dict_pkl,

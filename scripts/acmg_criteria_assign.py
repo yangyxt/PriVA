@@ -40,6 +40,7 @@ from alternative_start_codon import (
 )
 from gene_mechanism_hub import (
     DEFAULT_MECHANISM_JSON,
+    GeneMechanismHub,
     annotate_gene_mechanism_categories,
 )
 
@@ -2592,139 +2593,240 @@ def BS4_criteria(df: pd.DataFrame, ped_df: pd.DataFrame, fam_name: str,
                  non_mendelian: np.ndarray, 
                  incomplete_penetrance: np.ndarray,
                  haplo_insufficient: np.ndarray = None) -> pd.Series:
-    # BS4: lack of segregation in affected relatives.
+    # BS4: lack of segregation / genotype incompatibility within the submitted
+    # family. Output keeps the existing PriVA strength encoding:
+    #   0 = no BS4, 1 = BS4_Supporting, 3 = BS4.
     #
-    # ClinGen PP1/BS4 guidance treats affected genotype-negative relatives as
-    # non-segregation evidence. Genotype-positive unaffected relatives should
-    # be considered under BS2 when appropriate, not BS4. Therefore, a healthy
-    # heterozygous carrier parent for an affected homozygous AR proband must not
-    # trigger BS4.
+    # Global gates from the previous function still stand: do not assign BS4
+    # for non-monogenic/polygenic, non-Mendelian, or incomplete-penetrance
+    # rows, because genotype contradictions are not interpretable there.
     #
-    # For two affected relatives where one is homozygous and the other is only
-    # heterozygous in a gene with only LoF_recessive history, assign BS4 at
-    # Supporting strength. The affected heterozygote is not variant-negative, so
-    # this is weaker than classic affected genotype-negative non-segregation.
-    proband_info, father_info, mother_info, sib_info = identify_fam_members(ped_df, fam_name)
-    proband, proband_pheno = proband_info
-    father, father_pheno = father_info
-    mother, mother_pheno = mother_info
-
+    # Inputs per variant:
+    #   patient_GTs = all affected family members with callable GT.
+    #   control_GTs = all unaffected family members with callable GT.
+    #   has_AR_LOF = gene_mech_inher_history contains LoF_recessive.
+    #   has_dom_HI = gene_mech_inher_history contains dominant_HI.
+    #   has_dom_GOF_DN = contains dominant_GOF or dominant_DN.
+    #   is_NMD_LOF = NMD-triggering / definite LoF truncating variant.
+    #   is_exact_GOF = exact GoFCards gene + HGVSp match.
+    #
+    # Patient-patient comparison:
+    #   1. hom patient vs WT patient -> BS4.
+    #   2. hom patient vs het patient:
+    #      - LoF_recessive only -> BS4_Supporting.
+    #      - LoF_recessive + dominant_HI -> no BS4.
+    #      - LoF_recessive + dominant_GOF/DN, no dominant_HI:
+    #          is_NMD_LOF -> BS4_Supporting; otherwise no BS4.
+    #   3. het patient vs WT patient:
+    #      - LoF_recessive + any dominant history -> no BS4.
+    #      - dominant_HI present and no LoF_recessive -> BS4.
+    #      - dominant_GOF/DN only -> BS4 only for is_exact_GOF.
+    #   4. het patient vs het patient -> no BS4.
+    #   X-linked affected patient vs affected WT patient -> BS4, preserving
+    #   the previous X-linked recessive affected-relative non-segregation path.
+    #   X-linked unaffected-carrier logic is left conservative because it needs
+    #   sex-aware penetrance handling and belongs in BS2, not BS4.
+    #
+    # Patient-control comparison:
+    #   5. hom patient vs WT control -> no BS4.
+    #   6. hom patient vs het control:
+    #      - LoF_recessive only -> no BS4.
+    #      - LoF_recessive + dominant_HI -> no BS4.
+    #      - LoF_recessive + dominant_GOF/DN, no dominant_HI:
+    #          is_NMD_LOF -> BS4_Supporting; otherwise no BS4.
+    #   7. hom patient vs hom control -> BS4.
+    #   8. het patient vs WT control:
+    #      - LoF_recessive present -> no BS4.
+    #      - dominant_HI present, regardless other dominant mechanisms -> BS4.
+    #      - dominant_GOF/DN only -> BS4 only for is_exact_GOF; NMD LoF -> no BS4.
+    #   9. het patient vs het control:
+    #      - LoF_recessive only -> no BS4.
+    #      - dominant_HI present -> BS4.
+    #      - dominant_GOF/DN only -> BS4 only for is_exact_GOF; NMD LoF -> no BS4.
     if haplo_insufficient is None:
         haplo_insufficient = np.array([False] * len(df))
-    
-    affected_fam_members = []
-    if father_pheno == 2:
-        affected_fam_members.append(father)
-    if mother_pheno == 2:
-        affected_fam_members.append(mother)
-    for sib, sib_pheno in sib_info.items():
-        if sib_pheno == 2:
-            affected_fam_members.append(sib)
 
-    final_criteria = np.array([False] * len(df))
-    supporting_criteria = np.array([False] * len(df))
-    if proband not in df.columns:
+    fam_ped_df = ped_df.loc[ped_df['#FamilyID'] == fam_name, :].copy()
+    if fam_ped_df.empty:
+        bs4_array = np.zeros(len(df), dtype=int)
+        return bs4_array
+    fam_ped_df.loc[:, "Phenotype"] = pd.to_numeric(fam_ped_df["Phenotype"], errors="coerce").astype("Int64")
+    fam_ped_df.loc[:, "IndividualID"] = fam_ped_df["IndividualID"].astype(str)
+
+    patient_cols = [
+        sample for sample in fam_ped_df.loc[fam_ped_df["Phenotype"] == 2, "IndividualID"].tolist()
+        if sample in df.columns
+    ]
+    control_cols = [
+        sample for sample in fam_ped_df.loc[fam_ped_df["Phenotype"] == 1, "IndividualID"].tolist()
+        if sample in df.columns
+    ]
+
+    final_criteria = pd.Series(False, index=df.index)
+    supporting_criteria = pd.Series(False, index=df.index)
+    if not patient_cols:
         bs4_array = np.zeros(len(df), dtype=int)
         return bs4_array
 
     def _gt_alt_count(sample_col: str) -> pd.Series:
-        return df[sample_col].fillna(".").astype(str).str.count("1")
+        return df[sample_col].fillna(".").astype(str).str.split(":", n=1).str[0].str.count("1")
 
     def _gt_called(sample_col: str) -> pd.Series:
-        gt = df[sample_col].fillna(".").astype(str)
+        gt = df[sample_col].fillna(".").astype(str).str.split(":", n=1).str[0]
         return (~gt.str.contains(".", regex=False)) & gt.str.contains(r"[01]", regex=True)
 
-    chrom = df["chrom"].fillna("").astype(str)
-    autosomal = np.logical_not(chrom.str.contains("X|Y|M", regex=True))
-    x_linked = chrom.str.contains("X", regex=False)
+    def _series_or_empty(column: str) -> pd.Series:
+        return df.get(column, pd.Series("", index=df.index)).fillna("").astype(str)
 
-    proband_alt_count = _gt_alt_count(proband)
-    proband_called = _gt_called(proband)
-    valid_model = (
+    valid_model = pd.Series(
         np.logical_not(non_monogenic)
         & np.logical_not(non_mendelian)
-        & np.logical_not(incomplete_penetrance)
+        & np.logical_not(incomplete_penetrance),
+        index=df.index,
     )
 
-    mech_history = df.get("gene_mech_inher_history", pd.Series("", index=df.index)).fillna("").astype(str)
-    has_lof_recessive_history = mech_history.str.contains(r"(?:^|;)LoF_recessive(?:;|$)", regex=True)
-    has_dominant_history = mech_history.str.contains(r"(?:^|;)dominant_(?:HI|GOF|DN)(?:;|$)", regex=True)
-    # Prefer the compact gene mechanism/history column. If an older table lacks
-    # the column, fall back to the existing inheritance arrays to keep BS4 usable.
+    chrom = _series_or_empty("chrom")
+    autosomal = ~chrom.str.contains("X|Y|M", regex=True)
+    x_linked = chrom.str.contains("X", regex=False)
+    dominant_locus = autosomal | x_linked
+
+    mech_history = _series_or_empty("gene_mech_inher_history")
+    has_ar_lof = mech_history.str.contains(r"(?:^|;)LoF_recessive(?:;|$)", regex=True)
+    has_dom_hi = mech_history.str.contains(r"(?:^|;)dominant_HI(?:;|$)", regex=True)
+    has_dom_gof_dn = mech_history.str.contains(r"(?:^|;)dominant_(?:GOF|DN)(?:;|$)", regex=True)
+
     missing_mech_history = mech_history.str.strip().eq("")
-    recessive_only_history = (
-        (has_lof_recessive_history & np.logical_not(has_dominant_history))
-        | (missing_mech_history & recessive & np.logical_not(dominant))
+    has_ar_lof = has_ar_lof | (missing_mech_history & pd.Series(recessive, index=df.index).astype(bool))
+    has_dom_hi = has_dom_hi | (missing_mech_history & pd.Series(haplo_insufficient, index=df.index).astype(bool))
+    has_dom_gof_dn = has_dom_gof_dn | (
+        missing_mech_history
+        & pd.Series(dominant, index=df.index).astype(bool)
+        & ~pd.Series(haplo_insufficient, index=df.index).astype(bool)
     )
 
-    consq = df["Consequence"].fillna("").astype(str)
-    nmd = df["NMD"].fillna(".").astype(str)
-    lof_filter = df.get("LoF_filter", pd.Series(".", index=df.index)).fillna(".").astype(str)
-    nmd_truncating = (
+    has_any_dominant = has_dom_hi | has_dom_gof_dn
+    ar_only = has_ar_lof & ~has_any_dominant
+    ar_plus_dom_gof_dn_no_hi = has_ar_lof & has_dom_gof_dn & ~has_dom_hi
+    dominant_hi_no_ar = has_dom_hi & ~has_ar_lof
+    dominant_gof_dn_only = has_dom_gof_dn & ~has_dom_hi & ~has_ar_lof
+
+    consq = _series_or_empty("Consequence")
+    nmd = _series_or_empty("NMD")
+    lof_filter = _series_or_empty("LoF_filter")
+    is_nmd_lof = (
         (consq.str.contains("stop_gained", regex=False) | consq.str.contains("frameshift", regex=False))
-        & np.logical_not(nmd.str.contains("escaping", regex=False))
-        & np.logical_not(lof_filter.str.contains("END_TRUNC", regex=False))
-    )
-    dominant_bs4_eligible = dominant & np.logical_not(recessive) & (
-        np.logical_not(nmd_truncating) | haplo_insufficient
+        & ~nmd.str.contains("escaping", regex=False)
+        & ~lof_filter.str.contains("END_TRUNC", regex=False)
     )
 
-    for affected_mem in affected_fam_members:
-        if affected_mem not in df.columns:
-            continue
-        affected_alt_count = _gt_alt_count(affected_mem)
-        affected_called = _gt_called(affected_mem)
-        called = proband_called & affected_called
+    variant_gof_tag = _series_or_empty("variant_gof_tag")
+    is_exact_gof = variant_gof_tag.str.upper().str.contains(r"(?:^|;)GOF(?:;|$)", regex=True)
+    needs_gof_lookup = dominant_gof_dn_only & ~is_nmd_lof & ~is_exact_gof
+    if needs_gof_lookup.any() and {"SYMBOL", "HGVSp"}.issubset(df.columns):
+        hub = GeneMechanismHub(use_hgnc_package=False)
+        for idx in df.index[needs_gof_lookup]:
+            try:
+                match = hub.match_gofcards_variant_gof(df.at[idx, "SYMBOL"], df.at[idx, "HGVSp"])
+            except Exception as exc:
+                logger.debug(f"GoFCards exact variant lookup failed for row {idx}: {exc}")
+                continue
+            if match.get("variant_gof_tag") == "GOF":
+                is_exact_gof.loc[idx] = True
 
-        # For a homozygous AR proband, an affected relative with no alternate
-        # allele is genotype-negative and gives classic BS4. An affected
-        # heterozygote is handled below as supporting evidence only.
-        autosomal_recessive_nonseg = (
-            autosomal
-            & recessive
-            & (proband_alt_count >= 2)
-            & (affected_alt_count < 1)
-        )
-        # For X-linked recessive calls, an affected relative lacking the
-        # alternate allele is non-segregating.
-        x_recessive_nonseg = (
-            x_linked
-            & recessive
-            & (proband_alt_count >= 1)
-            & (affected_alt_count < 1)
-        )
-        # For dominant calls, affected relatives should carry the variant. For
-        # NMD-triggering truncating variants, apply this only when LoF/HI is a
-        # plausible dominant mechanism for the gene.
-        dominant_nonseg = (
-            dominant_bs4_eligible
-            & (proband_alt_count >= 1)
-            & (affected_alt_count < 1)
-        )
+    patient_alt_counts = {sample: _gt_alt_count(sample) for sample in patient_cols}
+    patient_called = {sample: _gt_called(sample) for sample in patient_cols}
+    control_alt_counts = {sample: _gt_alt_count(sample) for sample in control_cols}
+    control_called = {sample: _gt_called(sample) for sample in control_cols}
 
-        # Supporting-level BS4: both affected relatives carry the allele, but
-        # their zygosity is incompatible with a recessive-only gene history.
-        autosomal_recessive_zygosity_mismatch = (
-            autosomal
-            & recessive_only_history
-            & (
-                ((proband_alt_count >= 2) & (affected_alt_count == 1))
-                | ((proband_alt_count == 1) & (affected_alt_count >= 2))
+    # Patient-patient comparisons.
+    for i, sample_a in enumerate(patient_cols):
+        for sample_b in patient_cols[i + 1:]:
+            a_alt = patient_alt_counts[sample_a]
+            b_alt = patient_alt_counts[sample_b]
+            called = patient_called[sample_a] & patient_called[sample_b] & valid_model
+
+            hom_wt = (
+                ((a_alt >= 2) & (b_alt == 0))
+                | ((b_alt >= 2) & (a_alt == 0))
             )
-        )
+            hom_het = (
+                ((a_alt >= 2) & (b_alt == 1))
+                | ((b_alt >= 2) & (a_alt == 1))
+            )
+            het_wt = (
+                ((a_alt == 1) & (b_alt == 0))
+                | ((b_alt == 1) & (a_alt == 0))
+            )
 
-        affected_criteria = (
-            autosomal_recessive_nonseg
-            | x_recessive_nonseg
-            | dominant_nonseg
-        )
-        affected_criteria = affected_criteria & called & valid_model
-        final_criteria = final_criteria | affected_criteria
-        supporting_criteria = supporting_criteria | (autosomal_recessive_zygosity_mismatch & called & valid_model)
+            final_criteria = final_criteria | (called & autosomal & hom_wt)
+            final_criteria = final_criteria | (
+                called
+                & x_linked
+                & has_ar_lof
+                & (
+                    ((a_alt >= 1) & (b_alt == 0))
+                    | ((b_alt >= 1) & (a_alt == 0))
+                )
+            )
+            supporting_criteria = supporting_criteria | (
+                called
+                & autosomal
+                & hom_het
+                & (ar_only | (ar_plus_dom_gof_dn_no_hi & is_nmd_lof))
+            )
+            final_criteria = final_criteria | (
+                called
+                & dominant_locus
+                & het_wt
+                & (
+                    dominant_hi_no_ar
+                    | (dominant_gof_dn_only & is_exact_gof)
+                )
+            )
+
+    # Patient-control comparisons.
+    for patient in patient_cols:
+        p_alt = patient_alt_counts[patient]
+        p_called = patient_called[patient]
+        for control in control_cols:
+            c_alt = control_alt_counts[control]
+            called = p_called & control_called[control] & valid_model
+
+            patient_hom_control_hom = (p_alt >= 2) & (c_alt >= 2)
+            patient_hom_control_het = (p_alt >= 2) & (c_alt == 1)
+            patient_het_control_wt = (p_alt == 1) & (c_alt == 0)
+            patient_het_control_het = (p_alt == 1) & (c_alt == 1)
+
+            final_criteria = final_criteria | (called & autosomal & patient_hom_control_hom)
+            supporting_criteria = supporting_criteria | (
+                called
+                & autosomal
+                & patient_hom_control_het
+                & ar_plus_dom_gof_dn_no_hi
+                & is_nmd_lof
+            )
+            final_criteria = final_criteria | (
+                called
+                & dominant_locus
+                & patient_het_control_wt
+                & (
+                    (has_dom_hi & ~has_ar_lof)
+                    | (dominant_gof_dn_only & is_exact_gof)
+                )
+            )
+            final_criteria = final_criteria | (
+                called
+                & dominant_locus
+                & patient_het_control_het
+                & (
+                    has_dom_hi
+                    | (dominant_gof_dn_only & is_exact_gof)
+                )
+            )
 
     bs4_array = np.zeros(len(df), dtype=int)
-    bs4_array[supporting_criteria] = 1
-    bs4_array[final_criteria] = 3
+    bs4_array[supporting_criteria.to_numpy()] = 1
+    bs4_array[final_criteria.to_numpy()] = 3
     return bs4_array
 
 

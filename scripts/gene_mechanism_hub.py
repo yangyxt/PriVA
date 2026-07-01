@@ -69,6 +69,12 @@ LOOKUP_FIELD_PRIORITY = (
 )
 
 CANONICAL_MECHANISMS = {"GOF", "DOMINANT_NEGATIVE", "TRIPLOSENSITIVITY"}
+GENE_MECHANISM_CATEGORY_ORDER = (
+    "LoF_recessive",
+    "dominant_HI",
+    "dominant_GOF",
+    "dominant_DN",
+)
 logger = logging.getLogger(__name__)
 
 
@@ -155,6 +161,34 @@ def classify_gene_mechanism_categories(
         if has_dn_history:
             categories.append("dominant_DN")
     return categories
+
+
+def _ordered_gene_mechanism_categories(categories: set[str]) -> list[str]:
+    """Return compact mechanism categories in stable downstream order."""
+    return [category for category in GENE_MECHANISM_CATEGORY_ORDER if category in categories]
+
+
+def _hpo_inheritance_flags(inheritance_modes: Any) -> dict[str, bool]:
+    """Parse the HPO inheritance mode text used by the collapsed gene table."""
+    modes = {_clean(part) for part in _clean(inheritance_modes).split(";") if _clean(part)}
+    return {
+        "recessive": bool(
+            {
+                "Autosomal recessive inheritance",
+                "X-linked recessive inheritance",
+                "X-linked inheritance",
+            }
+            & modes
+        ),
+        "dominant": bool(
+            {
+                "Autosomal dominant inheritance",
+                "X-linked dominant inheritance",
+                "Y-linked inheritance",
+            }
+            & modes
+        ),
+    }
 
 
 class _LocalHgncResolver:
@@ -739,12 +773,15 @@ def annotate_gene_mechanism_categories(
     haplo_insufficient: np.ndarray,
     mechanism_json: str | Path = DEFAULT_MECHANISM_JSON,
     symbol_col: str = "SYMBOL",
+    hpo_inheritance_col: str = "HPO_gene_inheritance",
     output_col: str = "gene_mech_inher_history",
     use_hgnc_package: bool = False,
 ) -> pd.DataFrame:
     """Annotate a PriVA dataframe with compact gene-level mechanism history.
 
-    The arrays must come from PriVA's existing inheritance call path. The
+    The arrays come from PriVA's existing row-level inheritance call path. This
+    function also consults the central gene-level inheritance hub so rows with
+    missing local HPO inheritance do not collapse to LOEUF-only HI calls. The
     returned dataframe is a shallow copy with one added column:
     ``gene_mech_inher_history``. Values are semicolon-separated category labels
     such as ``LoF_recessive;dominant_HI``. This is gene/history context only and
@@ -761,24 +798,71 @@ def annotate_gene_mechanism_categories(
     )
     out = df.copy()
     category_values: list[str] = []
+    known_cache: dict[str, dict[str, Any]] = {}
+    row_hpo_values = (
+        out[hpo_inheritance_col]
+        if hpo_inheritance_col in out.columns
+        else pd.Series("", index=out.index)
+    )
 
-    for gene, rec, dom, hi in zip(
+    for gene, row_hpo, rec, dom, hi in zip(
         out[symbol_col],
+        row_hpo_values,
         recessive,
         dominant,
         haplo_insufficient,
         strict=True,
     ):
+        symbol = hub.resolve_symbol(gene)
         history = hub.mechanism_history(gene)
-        categories = classify_gene_mechanism_categories(
-            recessive=bool(rec),
-            dominant=bool(dom),
-            haplo_insufficient=bool(hi),
-            has_gof_history=history["has_gof_history"],
-            has_dn_history=history["has_dn_history"],
-            has_triplosensitivity_history=history["has_triplosensitivity_history"],
+        if symbol not in known_cache:
+            known_cache[symbol] = hub.known_inheritance_mode(symbol)
+        known = known_cache[symbol]
+        hub_hpo_flags = _hpo_inheritance_flags(known.get("hpo_inheritance_modes", ""))
+        row_hpo_flags = _hpo_inheritance_flags(row_hpo)
+        clingen_hi_score = known.get("clingen_haploinsufficiency_score")
+        clingen_hi = clingen_hi_score == 3
+        clingen_haplosufficient = clingen_hi_score in {30, 40}
+
+        effective_recessive = (
+            bool(rec)
+            or row_hpo_flags["recessive"]
+            or hub_hpo_flags["recessive"]
+            or clingen_haplosufficient
         )
-        category_values.append(";".join(categories))
+        effective_dominant = (
+            bool(dom)
+            or row_hpo_flags["dominant"]
+            or hub_hpo_flags["dominant"]
+            or clingen_hi
+        )
+
+        categories = set(
+            classify_gene_mechanism_categories(
+                recessive=effective_recessive,
+                dominant=effective_dominant,
+                haplo_insufficient=bool(hi) or clingen_hi,
+                has_gof_history=history["has_gof_history"],
+                has_dn_history=history["has_dn_history"],
+                has_triplosensitivity_history=history["has_triplosensitivity_history"],
+            )
+        )
+
+        # If the only dominant evidence came from a row-level LOEUF/AM fallback
+        # and the hub's HPO/ClinGen view does not support dominance or HI, drop
+        # the spurious HI label. This prevents genes with missing row HPO fields
+        # from being treated as dominant_HI solely because LOEUF is low.
+        if (
+            "dominant_HI" in categories
+            and bool(hi)
+            and not bool(known.get("dominant"))
+            and not clingen_hi
+            and not row_hpo_flags["dominant"]
+            and not hub_hpo_flags["dominant"]
+        ):
+            categories.discard("dominant_HI")
+
+        category_values.append(";".join(_ordered_gene_mechanism_categories(categories)))
 
     out[output_col] = category_values
     return out

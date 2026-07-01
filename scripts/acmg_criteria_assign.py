@@ -3487,6 +3487,9 @@ def sort_and_rank_variants(df: pd.DataFrame,
                            gene_to_am_score_map: dict,
                            gene_dosage_sensitivity: str = "",
                            pext_tissues: str = "",
+                           pext_low_expression_cutoff: float = 0.1,
+                           pext_penalty_floor: float = 0.8,
+                           pext_penalty_shape: float = 0.5,
                            relevant_gene_list: str = None,
                            dispensable_gene_list: str = os.path.join(data_dir, "dispensable_genes", "dispensable_gene_list.txt")) -> pd.DataFrame:
     """
@@ -3608,14 +3611,32 @@ def sort_and_rank_variants(df: pd.DataFrame,
         logger.info("Using PEXT_MEAN column for expression-aware sorting")
 
     if pext_col_to_use is not None:
-        # Cummings 2020: PEXT < 0.1 = low/unexpressed region, deprioritize.
-        # PEXT >= 0.1 = sufficiently expressed, no penalty (pext_sort_index = 1.0).
-        # Missing PEXT defaults to 1.0 (no penalty — conservative).
+        if pext_low_expression_cutoff <= 0:
+            raise ValueError("pext_low_expression_cutoff must be > 0")
+        if not 0 <= pext_penalty_floor <= 1:
+            raise ValueError("pext_penalty_floor must be between 0 and 1")
+        if pext_penalty_shape <= 0:
+            raise ValueError("pext_penalty_shape must be > 0")
+
+        # Cummings 2020 used PEXT < 0.1 as the low-expression bin.
+        # Bound the ranking penalty so PEXT cannot overwhelm ACMG evidence.
         pext_numeric = df[pext_col_to_use].map(coerce_pext_value).fillna(1.0).clip(0, 1)
-        df["pext_sort_index"] = np.where(pext_numeric >= 0.1, 1.0, np.sqrt(pext_numeric))
+        scaled_pext = (pext_numeric / pext_low_expression_cutoff).clip(0, 1)
+        df["pext_sort_index"] = np.where(
+            pext_numeric >= pext_low_expression_cutoff,
+            1.0,
+            pext_penalty_floor + (1.0 - pext_penalty_floor) * np.power(scaled_pext, pext_penalty_shape)
+        )
         # Apply pext modulation only to LoF variants (where expression matters most)
         df.loc[lof, "sort_index"] = df.loc[lof, "sort_index"] * df.loc[lof, "pext_sort_index"]
-        logger.info(f"Applied pext-based sort modulation using {pext_col_to_use} (threshold 0.1, sqrt penalty below)")
+        logger.info(
+            "Applied pext-based sort modulation using %s "
+            "(cutoff=%s, floor=%s, shape=%s)",
+            pext_col_to_use,
+            pext_low_expression_cutoff,
+            pext_penalty_floor,
+            pext_penalty_shape,
+        )
 
     # Group by variant coordinates to get max score per variant
     variant_groups = df.groupby(['chrom', 'pos', 'ref', 'alt'])
@@ -3687,6 +3708,9 @@ def ACMG_criteria_assign(anno_table: str,
                          clingen_map_pkl: str = "",
                          cds_fasta_path: str = "",
                          pext_tissues: str = "",
+                         pext_low_expression_cutoff: float = 0.1,
+                         pext_penalty_floor: float = 0.8,
+                         pext_penalty_shape: float = 0.5,
                          relevant_gene_list: str = None,
                          dispensable_gene_list: str = None,
                          gene_mechanism_json: str = str(DEFAULT_MECHANISM_JSON),
@@ -4022,6 +4046,9 @@ def ACMG_criteria_assign(anno_table: str,
                                      gene_to_am_score_map,
                                      gene_dosage_sensitivity=gene_dosage_sensitivity,
                                      pext_tissues=pext_tissues,
+                                     pext_low_expression_cutoff=pext_low_expression_cutoff,
+                                     pext_penalty_floor=pext_penalty_floor,
+                                     pext_penalty_shape=pext_penalty_shape,
                                      relevant_gene_list=relevant_gene_list,
                                      dispensable_gene_list=dispensable_gene_list)
     # Save the annotated table to replace the input anno_table
@@ -4058,6 +4085,12 @@ if __name__ == "__main__":
     parser.add_argument("--pext_tissues", type=str, required=False, default="",
                         help="Comma-separated list of pext tissue names used in VEP annotation. "
                              "Used to identify pext-related columns in the annotation table.")
+    parser.add_argument("--pext_low_expression_cutoff", type=float, required=False, default=0.1,
+                        help="PEXT value below which LoF ranking receives a bounded expression penalty.")
+    parser.add_argument("--pext_penalty_floor", type=float, required=False, default=0.8,
+                        help="Minimum PEXT ranking multiplier for zero expression.")
+    parser.add_argument("--pext_penalty_shape", type=float, required=False, default=0.5,
+                        help="Power transform shape for sub-cutoff PEXT ranking penalty.")
     parser.add_argument("--repeat_region_file", type=str, required=True)
     parser.add_argument("--gnomAD_extreme_rare_threshold", type=float, required=False, default=0.0001)
     parser.add_argument("--expected_incidence", type=float, required=False, default=0.001)
@@ -4088,6 +4121,9 @@ if __name__ == "__main__":
                                                     clingen_map_pkl=args.clingen_map_pkl,
                                                     cds_fasta_path=args.cds_fasta_path,
                                                     pext_tissues=args.pext_tissues,
+                                                    pext_low_expression_cutoff=args.pext_low_expression_cutoff,
+                                                    pext_penalty_floor=args.pext_penalty_floor,
+                                                    pext_penalty_shape=args.pext_penalty_shape,
                                                     relevant_gene_list=args.relevant_gene_list,
                                                     dispensable_gene_list=args.dispensable_gene_list,
                                                     gene_mechanism_json=args.gene_mechanism_json,

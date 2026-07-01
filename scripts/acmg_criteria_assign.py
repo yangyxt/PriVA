@@ -2429,7 +2429,7 @@ def identify_inheritance_mode_per_row(row_dict: dict, gene_mean_am_score: float,
 
     loeuf_score = float(row_dict.get('LOEUF', 0.6))
     loeuf_score = 1.0 if pd.isna(loeuf_score) else loeuf_score  # If LOEUF is NaN, we leave the decision to gene avg AM score
-    haplo_insufficient = (loeuf_score <= 0.6) or (gene_mean_am_score >= 0.564)
+    haplo_insufficient = (loeuf_score <= 0.35) or (gene_mean_am_score >= 0.564)
     haplo_insufficient = haplo_insufficient and ((loeuf_score <= 0.7) or pd.isna(loeuf_score)) and ((gene_mean_am_score >= 0.5) or pd.isna(gene_mean_am_score))
     haplo_sufficient = not haplo_insufficient
 

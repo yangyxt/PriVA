@@ -2621,9 +2621,8 @@ def BS4_criteria(df: pd.DataFrame, ped_df: pd.DataFrame, fam_name: str,
     #   1. hom patient vs WT patient -> BS4.
     #   2. hom patient vs het patient:
     #      - LoF_recessive only -> BS4_Supporting.
-    #      - LoF_recessive + dominant_HI -> no BS4.
-    #      - LoF_recessive + dominant_GOF/DN, no dominant_HI:
-    #          is_NMD_LOF -> BS4_Supporting; otherwise no BS4.
+    #      - LoF_recessive + any dominant history -> no BS4.
+    #      - dominant-only history -> no BS4.
     #   3. het patient vs WT patient:
     #      - LoF_recessive + any dominant history -> no BS4.
     #      - dominant_HI present and no LoF_recessive -> BS4.
@@ -2633,15 +2632,16 @@ def BS4_criteria(df: pd.DataFrame, ped_df: pd.DataFrame, fam_name: str,
     # Patient-control comparison:
     #   5. hom patient vs WT control -> no BS4.
     #   6. hom patient vs het control:
-    #      - LoF_recessive only -> no BS4.
-    #      - LoF_recessive + dominant_HI -> no BS4.
-    #      - LoF_recessive + dominant_GOF/DN, no dominant_HI:
+    #      - LoF_recessive present -> no BS4; a healthy heterozygous carrier
+    #        is segregation-compatible for a recessive LoF model.
+    #      - dominant_HI present and no LoF_recessive:
     #          is_NMD_LOF -> BS4_Supporting; otherwise no BS4.
+    #      - dominant_GOF/DN only:
+    #          exact GOF variant -> BS4_Supporting; NMD LoF -> no BS4.
     #   7. hom patient vs hom control -> BS4.
-    #   8. het patient vs WT control:
-    #      - LoF_recessive present -> no BS4.
-    #      - dominant_HI present, regardless other dominant mechanisms -> BS4.
-    #      - dominant_GOF/DN only -> BS4 only for is_exact_GOF; NMD LoF -> no BS4.
+    #   8. het patient vs WT control -> no BS4.
+    #      Unaffected WT relatives are segregation-compatible for a dominant
+    #      heterozygous disease model and are not contradictory for AR logic.
     #   9. het patient vs het control:
     #      - LoF_recessive only -> no BS4.
     #      - dominant_HI present -> BS4.
@@ -2783,7 +2783,7 @@ def BS4_criteria(df: pd.DataFrame, ped_df: pd.DataFrame, fam_name: str,
                 called
                 & mendelian_locus
                 & hom_het
-                & (ar_only | (ar_plus_dom_gof_dn_no_hi & is_nmd_lof))
+                & ar_only
             )
             final_criteria = final_criteria | (
                 called
@@ -2805,7 +2805,6 @@ def BS4_criteria(df: pd.DataFrame, ped_df: pd.DataFrame, fam_name: str,
 
             patient_hom_control_hom = (p_alt >= 2) & (c_alt >= 2)
             patient_hom_control_het = (p_alt >= 2) & (c_alt == 1)
-            patient_het_control_wt = (p_alt == 1) & (c_alt == 0)
             patient_het_control_het = (p_alt == 1) & (c_alt == 1)
 
             final_criteria = final_criteria | (called & mendelian_locus & patient_hom_control_hom)
@@ -2813,16 +2812,9 @@ def BS4_criteria(df: pd.DataFrame, ped_df: pd.DataFrame, fam_name: str,
                 called
                 & mendelian_locus
                 & patient_hom_control_het
-                & ar_plus_dom_gof_dn_no_hi
-                & is_nmd_lof
-            )
-            final_criteria = final_criteria | (
-                called
-                & mendelian_locus
-                & patient_het_control_wt
                 & (
-                    (has_dom_hi & ~has_ar_lof)
-                    | (dominant_gof_dn_only & is_exact_gof)
+                    (dominant_hi_no_ar & is_nmd_lof)
+                    | (dominant_gof_dn_only & is_exact_gof & ~is_nmd_lof)
                 )
             )
             final_criteria = final_criteria | (

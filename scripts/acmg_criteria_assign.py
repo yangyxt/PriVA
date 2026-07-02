@@ -2551,24 +2551,42 @@ def BS2_criteria(df: pd.DataFrame,
       - hom/hemi evidence = gnomAD_nhomalt_XX + gnomAD_nhomalt_XY above
         threshold, or internal control_nhomalt > 0.
 
-    BS2 decision tree:
-      1. LoF_recessive present:
-         - hom/hemi healthy evidence -> BS2.
-         - carrier evidence only, including internal control_AC > 0 -> no BS2.
-      2. Dominant_HI present and LoF_recessive absent:
-         - is_NMD_LOF plus carrier or hom/hemi healthy evidence -> BS2.
-         - non-LoF variant -> no BS2 based on HI history alone.
-      3. Dominant_GOF/DN present and LoF_recessive absent:
-         - exact curated GoFCards GOF variant plus carrier or hom/hemi healthy
-           evidence -> BS2.
-         - NMD/LoF or non-exact GOF/DN candidate -> no BS2.
-      4. Dominant_HI plus dominant_GOF/DN, LoF_recessive absent:
-         - use the same mechanism-compatible rules: NMD_LOF for HI or exact
-           GOF for GOF/DN.
-      5. Missing mechanism history:
-         - fall back to the legacy inheritance arrays conservatively:
-           recessive requires hom/hemi evidence; dominant without recessive can
-           use carrier evidence.
+    BS2 decision matrix:
+      Variant state:
+        NMD_LOF = NMD-triggering stop/frameshift not marked escaping or END_TRUNC.
+        exact_GOF = variant-level exact GoFCards GOF match.
+        ambiguous = neither NMD_LOF nor exact_GOF.
+
+      Important DN limitation:
+        dominant_DN is currently gene-level history only. PriVA has no
+        variant-level DN database, so there is no exact_DN variant state. DN
+        history can restrict interpretation, but it cannot by itself make an
+        observed healthy carrier mechanism-compatible.
+
+      Matrix values are PriVA strengths: 0 = no BS2, 3 = BS2.
+      Every "no healthy evidence" combination is 0.
+
+      mechanism profile        carrier NMD  carrier GOF  carrier amb  hom NMD  hom GOF  hom amb
+      none / missing dominant            0            0            0        0        0        0
+      missing recessive                  0            0            0        3        3        3
+      LoF_recessive only                 0            0            0        3        3        3
+      dominant_HI only                   3            0            3        3        0        3
+      dominant_GOF only                  0            3            0        0        3        0
+      dominant_DN only                   0            3            0        0        3        0
+      dominant_GOF + dominant_DN         0            3            0        0        3        0
+      LoF_recessive + dominant_*         0            0            0        3        3        3
+      dominant_HI + dominant_GOF/DN      3            3            3        3        3        3
+      LoF_recessive + HI + GOF/DN        0            0            0        3        3        3
+
+      Consequences:
+        - GOF_only_NMD_control_AC and DN_only_NMD_control_AC are 0.
+        - GOF_only_ambiguous_control_AC and DN_only_ambiguous_control_AC are 0.
+        - DN-only exact_GOF cells require an independent exact GoFCards GOF
+          match; PriVA is not inferring a DN variant mechanism.
+        - HI-only healthy carriers are BS2 unless the exact variant is already
+          ascertained as GOF.
+        - If LoF_recessive is present, carrier-only evidence is not BS2 even
+          when dominant history is also present; hom/hemi evidence remains BS2.
     '''
     def _series_or_empty(column: str) -> pd.Series:
         return df.get(column, pd.Series("", index=df.index)).fillna("").astype(str)
@@ -2607,12 +2625,10 @@ def BS2_criteria(df: pd.DataFrame,
     mech_history = _series_or_empty("gene_mech_inher_history")
     missing_mech_history = mech_history.str.strip().eq("")
     recessive_series = pd.Series(recessive, index=df.index).astype(bool)
-    dominant_series = pd.Series(dominant, index=df.index).astype(bool)
     has_ar_lof = mech_history.str.contains(r"(?:^|;)LoF_recessive(?:;|$)", regex=True)
     has_dom_hi = mech_history.str.contains(r"(?:^|;)dominant_HI(?:;|$)", regex=True)
     has_dom_gof_dn = mech_history.str.contains(r"(?:^|;)dominant_(?:GOF|DN)(?:;|$)", regex=True)
     has_ar_lof = has_ar_lof | (missing_mech_history & recessive_series)
-    dominant_unknown_no_ar = missing_mech_history & dominant_series & ~recessive_series
 
     consq = _series_or_empty("Consequence")
     nmd = _series_or_empty("NMD")
@@ -2657,10 +2673,13 @@ def BS2_criteria(df: pd.DataFrame,
         ((gnomad_ac > 10) | control_ac_observed | y_allele_observed)
         | (complete_penetrance & ((gnomad_ac > 3) | y_allele_observed))
     )
+    dominant_hi_only = has_dom_hi & ~has_dom_gof_dn & ~has_ar_lof
+    dominant_hi_with_gof_dn = has_dom_hi & has_dom_gof_dn & ~has_ar_lof
+    dominant_gof_dn_only = has_dom_gof_dn & ~has_dom_hi & ~has_ar_lof
     dominant_mechanism_compatible = (
-        ((has_dom_hi & ~has_ar_lof) & is_nmd_lof)
-        | ((has_dom_gof_dn & ~has_ar_lof) & is_exact_gof & ~is_nmd_lof)
-        | dominant_unknown_no_ar
+        (dominant_hi_only & ~is_exact_gof)
+        | dominant_hi_with_gof_dn
+        | (dominant_gof_dn_only & is_exact_gof & ~is_nmd_lof)
     )
 
     bs2_standard = baseline_eligible & (

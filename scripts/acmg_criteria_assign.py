@@ -2177,30 +2177,43 @@ def PP3_BP4_criteria(df: pd.DataFrame, pvs1_criteria: np.ndarray = None, high_co
     missense_variant = missense_variant.fillna(False)
     splice_variant = splice_variant.fillna(False)
 
-    def _coerce_score_column(column_name: str, missing_default: float) -> pd.Series:
+    def _coerce_score_column(column_name: str, missing_default: float | None = None) -> pd.Series:
         raw_values = df[column_name]
         numeric_values = pd.to_numeric(raw_values, errors='coerce')
         non_empty_mask = raw_values.notna() & (raw_values.astype(str).str.strip() != "")
         non_numeric_mask = non_empty_mask & numeric_values.isna()
         if non_numeric_mask.any():
             examples = sorted(raw_values[non_numeric_mask].astype(str).str.strip().unique())[:5]
+            fill_msg = (
+                f"filling default={missing_default}"
+                if missing_default is not None else
+                "leaving as missing"
+            )
             logger.warning(
                 f"PP3/BP4 score coercion: column '{column_name}' has {non_numeric_mask.sum()} non-numeric values "
-                f"(examples: {examples}); treating as missing and filling default={missing_default}"
+                f"(examples: {examples}); treating as missing and {fill_msg}"
             )
+        if missing_default is None:
+            return numeric_values
         return numeric_values.fillna(missing_default)
 
     primateai = _coerce_score_column('PrimateAI', 0)
     am_pathogenicity = _coerce_score_column('am_pathogenicity', 0)
-    cadd_phred = _coerce_score_column('CADD_phred', 10)
-    cadd_reg_phred = _coerce_score_column('CADD_reg_phred', 10)
+    cadd_phred = _coerce_score_column('CADD_phred')
+    cadd_reg_phred = _coerce_score_column('CADD_reg_phred')
+    cadd_phred_high = cadd_phred >= 20
+    # PriVA heuristic: use CADD < 15 only as computational benign support.
+    # Missing CADD remains no evidence, and this is not a universal benign cutoff.
+    cadd_bp4_phred_cutoff = 15.0
+    cadd_phred_low = cadd_phred.notna() & (cadd_phred < cadd_bp4_phred_cutoff)
+    cadd_reg_phred_low = cadd_reg_phred.notna() & (cadd_reg_phred < cadd_bp4_phred_cutoff)
 
     # BP4: variant is reported benign
     pp3_criteria = ((primateai > 0.8) & missense_variant) | \
-                    ((cadd_phred >= 20) & np.logical_not(splice_variant) & np.logical_not(missense_variant) & np.logical_not(five_utr_variant)) | \
+                    (cadd_phred_high & np.logical_not(splice_variant) & np.logical_not(missense_variant) & np.logical_not(five_utr_variant)) | \
                     (df['am_class'].fillna("").str.contains('pathogenic') & missense_variant) | \
                     (df['vep_consq_lof'] & np.logical_not(splice_variant) & np.logical_not(missense_variant) & np.logical_not(five_utr_variant)) | \
-                    (((df['splicing_lof'] | (cadd_phred >= 20)) & splice_variant) | (df['5UTR_lof'] & five_utr_variant))
+                    (((df['splicing_lof'] | cadd_phred_high) & splice_variant) | (df['5UTR_lof'] & five_utr_variant))
     clinvar_benign = df['CLNSIG'].fillna("").str.contains('enign') & (df['CLNREVSTAT'].map(high_confidence_status, na_action="ignore") >= 2)
     pp3_criteria = pp3_criteria & ~clinvar_benign
 
@@ -2213,13 +2226,20 @@ def PP3_BP4_criteria(df: pd.DataFrame, pvs1_criteria: np.ndarray = None, high_co
         logger.info(f"PP3 double-counting prevention: blocked {(pvs1_criteria > 0).sum()} variants with PVS1")
 
     missense_benign = (primateai < 0.8).fillna(True) & (am_pathogenicity < 0.564).fillna(True) & missense_variant
-    splice_benign = np.logical_not(df['splicing_lof'].fillna(False)) & splice_variant & (cadd_phred < 20)
+    splice_benign = np.logical_not(df['splicing_lof'].fillna(False)) & splice_variant & cadd_phred_low
     utr_benign = np.logical_not(df['5UTR_lof'].fillna(False)) & five_utr_variant
-    other_benign = np.logical_not(df['vep_consq_lof'].fillna(False)) & (cadd_phred < 20).fillna(True) & (cadd_reg_phred < 20).fillna(True) & np.logical_not(splice_variant) & np.logical_not(missense_variant) & np.logical_not(five_utr_variant)
+    other_benign = np.logical_not(df['vep_consq_lof'].fillna(False)) & cadd_phred_low & cadd_reg_phred_low & np.logical_not(splice_variant) & np.logical_not(missense_variant) & np.logical_not(five_utr_variant)
     bp4_criteria = missense_benign | splice_benign | utr_benign | other_benign
     clinvar_patho = df['CLNSIG'].fillna("").str.contains('athogenic') & (df['CLNREVSTAT'].map(high_confidence_status, na_action="ignore") >= 2)
     bp4_criteria = bp4_criteria & ~clinvar_patho
     bp4_criteria = bp4_criteria & ~pp3_criteria
+    if pvs1_criteria is not None:
+        # Strong-or-higher PVS1 reflects an explicit LoF model; do not also emit BP4
+        # from generic computational scores for the same variant.
+        strong_pvs1 = np.asarray(pvs1_criteria) >= 3
+        suppressed_bp4 = int((bp4_criteria & strong_pvs1).sum())
+        bp4_criteria = bp4_criteria & ~strong_pvs1
+        logger.info(f"BP4 suppression: blocked {suppressed_bp4} variants with PVS1_Strong or stronger")
 
     pp3_array = np.zeros(len(df), dtype=int)
     bp4_array = np.zeros(len(df), dtype=int)

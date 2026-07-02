@@ -71,6 +71,7 @@ LOOKUP_FIELD_PRIORITY = (
 CANONICAL_MECHANISMS = {"GOF", "DOMINANT_NEGATIVE", "TRIPLOSENSITIVITY"}
 GENE_MECHANISM_CATEGORY_ORDER = (
     "LoF_recessive",
+    "dominant_ambiguous",
     "dominant_HI",
     "dominant_GOF",
     "dominant_DN",
@@ -154,12 +155,17 @@ def classify_gene_mechanism_categories(
     if recessive:
         categories.append("LoF_recessive")
     if dominant:
+        dominant_categories: list[str] = []
         if haplo_insufficient:
-            categories.append("dominant_HI")
+            dominant_categories.append("dominant_HI")
         if has_gof_history or has_triplosensitivity_history:
-            categories.append("dominant_GOF")
+            dominant_categories.append("dominant_GOF")
         if has_dn_history:
-            categories.append("dominant_DN")
+            dominant_categories.append("dominant_DN")
+        if dominant_categories:
+            categories.extend(dominant_categories)
+        else:
+            categories.append("dominant_ambiguous")
     return categories
 
 

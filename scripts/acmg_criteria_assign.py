@@ -2735,9 +2735,12 @@ def BS4_criteria(df: pd.DataFrame, ped_df: pd.DataFrame, fam_name: str,
     #      Unaffected WT relatives are segregation-compatible for a dominant
     #      heterozygous disease model and are not contradictory for AR logic.
     #   9. het patient vs het control:
-    #      - LoF_recessive only -> no BS4.
-    #      - dominant_HI present -> BS4.
-    #      - dominant_GOF/DN only -> BS4 only for is_exact_GOF; NMD LoF -> no BS4.
+    #      - LoF_recessive present -> no BS4, even when dominant history also
+    #        exists, because a healthy heterozygous carrier can fit the AR model.
+    #      - dominant_HI present and no LoF_recessive:
+    #          is_NMD_LOF -> BS4; otherwise no BS4.
+    #      - dominant_GOF/DN only:
+    #          exact GOF variant -> BS4; NMD LoF -> no BS4.
     if haplo_insufficient is None:
         haplo_insufficient = np.array([False] * len(df))
 
@@ -2914,8 +2917,8 @@ def BS4_criteria(df: pd.DataFrame, ped_df: pd.DataFrame, fam_name: str,
                 & mendelian_locus
                 & patient_het_control_het
                 & (
-                    has_dom_hi
-                    | (dominant_gof_dn_only & is_exact_gof)
+                    (dominant_hi_no_ar & is_nmd_lof)
+                    | (dominant_gof_dn_only & is_exact_gof & ~is_nmd_lof)
                 )
             )
 

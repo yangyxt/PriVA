@@ -2560,29 +2560,32 @@ def BS2_criteria(df: pd.DataFrame,
       Important DN limitation:
         dominant_DN is currently gene-level history only. PriVA has no
         variant-level DN database, so there is no exact_DN variant state. DN
-        history can restrict interpretation, but it cannot by itself make an
-        observed healthy carrier mechanism-compatible.
+        history is treated as compatible with ambiguous variants only; NMD_LOF
+        and exact_GOF are not treated as DN-compatible.
 
       Matrix values are PriVA strengths: 0 = no BS2, 3 = BS2.
       Every "no healthy evidence" combination is 0.
 
-      mechanism profile        carrier NMD  carrier GOF  carrier amb  hom NMD  hom GOF  hom amb
-      none / missing dominant            0            0            0        0        0        0
-      missing recessive                  0            0            0        3        3        3
-      LoF_recessive only                 0            0            0        3        3        3
-      dominant_HI only                   3            0            3        3        0        3
-      dominant_GOF only                  0            3            0        0        3        0
-      dominant_DN only                   0            3            0        0        3        0
-      dominant_GOF + dominant_DN         0            3            0        0        3        0
-      LoF_recessive + dominant_*         0            0            0        3        3        3
-      dominant_HI + dominant_GOF/DN      3            3            3        3        3        3
-      LoF_recessive + HI + GOF/DN        0            0            0        3        3        3
+      mechanism profile                   carrier NMD  carrier GOF  carrier amb  hom NMD  hom GOF  hom amb
+      no usable history                             0            0            0        0        0        0
+      LoF_recessive only                            0            0            0        3        3        3
+      dominant_ambiguous only                       3            3            3        3        3        3
+      dominant_HI only                              3            0            3        3        0        3
+      dominant_GOF only                             0            3            0        0        3        0
+      dominant_DN only                              0            0            3        0        0        3
+      dominant_GOF + dominant_DN                    0            3            3        0        3        3
+      dominant_HI + dominant_GOF/DN                 3            3            3        3        3        3
+      LoF_recessive + any dominant history          0            0            0        3        3        3
 
       Consequences:
         - GOF_only_NMD_control_AC and DN_only_NMD_control_AC are 0.
-        - GOF_only_ambiguous_control_AC and DN_only_ambiguous_control_AC are 0.
-        - DN-only exact_GOF cells require an independent exact GoFCards GOF
-          match; PriVA is not inferring a DN variant mechanism.
+        - GOF_only_ambiguous_control_AC is 0.
+        - DN_only_ambiguous_control_AC is 3.
+        - DN-only ambiguous carrier/hom evidence is BS2-compatible; NMD_LOF is
+          not DN-compatible, and exact_GOF is not treated as DN evidence.
+        - dominant_ambiguous only means dominant inheritance without a curated
+          HI/GOF/DN mechanism and without LoF_recessive; healthy carrier or
+          hom/hemi evidence is BS2-compatible regardless of query consequence.
         - HI-only healthy carriers are BS2 unless the exact variant is already
           ascertained as GOF.
         - If LoF_recessive is present, carrier-only evidence is not BS2 even
@@ -2625,10 +2628,19 @@ def BS2_criteria(df: pd.DataFrame,
     mech_history = _series_or_empty("gene_mech_inher_history")
     missing_mech_history = mech_history.str.strip().eq("")
     recessive_series = pd.Series(recessive, index=df.index).astype(bool)
+    dominant_series = pd.Series(dominant, index=df.index).astype(bool)
     has_ar_lof = mech_history.str.contains(r"(?:^|;)LoF_recessive(?:;|$)", regex=True)
+    has_dom_ambiguous = mech_history.str.contains(r"(?:^|;)dominant_ambiguous(?:;|$)", regex=True)
     has_dom_hi = mech_history.str.contains(r"(?:^|;)dominant_HI(?:;|$)", regex=True)
-    has_dom_gof_dn = mech_history.str.contains(r"(?:^|;)dominant_(?:GOF|DN)(?:;|$)", regex=True)
+    has_dom_gof = mech_history.str.contains(r"(?:^|;)dominant_GOF(?:;|$)", regex=True)
+    has_dom_dn = mech_history.str.contains(r"(?:^|;)dominant_DN(?:;|$)", regex=True)
+    has_dom_gof_dn = has_dom_gof | has_dom_dn
     has_ar_lof = has_ar_lof | (missing_mech_history & recessive_series)
+    has_dom_ambiguous = has_dom_ambiguous | (
+        missing_mech_history
+        & dominant_series
+        & ~has_ar_lof
+    )
 
     consq = _series_or_empty("Consequence")
     nmd = _series_or_empty("NMD")
@@ -2641,8 +2653,7 @@ def BS2_criteria(df: pd.DataFrame,
 
     variant_gof_tag = _series_or_empty("variant_gof_tag")
     is_exact_gof = variant_gof_tag.str.upper().str.contains(r"(?:^|;)GOF(?:;|$)", regex=True)
-    dominant_gof_dn_no_ar = has_dom_gof_dn & ~has_ar_lof
-    needs_gof_lookup = dominant_gof_dn_no_ar & ~is_nmd_lof & ~is_exact_gof
+    needs_gof_lookup = has_dom_gof & ~has_ar_lof & ~is_nmd_lof & ~is_exact_gof
     if needs_gof_lookup.any() and {"SYMBOL", "HGVSp"}.issubset(df.columns):
         hub = GeneMechanismHub(use_hgnc_package=False)
         for idx in df.index[needs_gof_lookup]:
@@ -2673,13 +2684,20 @@ def BS2_criteria(df: pd.DataFrame,
         ((gnomad_ac > 10) | control_ac_observed | y_allele_observed)
         | (complete_penetrance & ((gnomad_ac > 3) | y_allele_observed))
     )
-    dominant_hi_only = has_dom_hi & ~has_dom_gof_dn & ~has_ar_lof
+    is_ambiguous_variant = ~is_nmd_lof & ~is_exact_gof
+    dominant_ambiguous_only = has_dom_ambiguous & ~has_dom_hi & ~has_dom_gof_dn & ~has_ar_lof
+    dominant_hi_only = has_dom_hi & ~has_dom_ambiguous & ~has_dom_gof_dn & ~has_ar_lof
     dominant_hi_with_gof_dn = has_dom_hi & has_dom_gof_dn & ~has_ar_lof
-    dominant_gof_dn_only = has_dom_gof_dn & ~has_dom_hi & ~has_ar_lof
+    dominant_gof_only = has_dom_gof & ~has_dom_dn & ~has_dom_hi & ~has_dom_ambiguous & ~has_ar_lof
+    dominant_dn_only = has_dom_dn & ~has_dom_gof & ~has_dom_hi & ~has_dom_ambiguous & ~has_ar_lof
+    dominant_gof_dn_only = has_dom_gof & has_dom_dn & ~has_dom_hi & ~has_dom_ambiguous & ~has_ar_lof
     dominant_mechanism_compatible = (
-        (dominant_hi_only & ~is_exact_gof)
+        dominant_ambiguous_only
+        | (dominant_hi_only & ~is_exact_gof)
         | dominant_hi_with_gof_dn
-        | (dominant_gof_dn_only & is_exact_gof & ~is_nmd_lof)
+        | (dominant_gof_only & is_exact_gof & ~is_nmd_lof)
+        | (dominant_dn_only & is_ambiguous_variant)
+        | (dominant_gof_dn_only & ~is_nmd_lof)
     )
 
     bs2_standard = baseline_eligible & (
@@ -2718,10 +2736,21 @@ def BS4_criteria(df: pd.DataFrame, ped_df: pd.DataFrame, fam_name: str,
     #   patient_GTs = all affected family members with callable GT.
     #   control_GTs = all unaffected family members with callable GT.
     #   has_AR_LOF = gene_mech_inher_history contains LoF_recessive.
+    #   has_dom_ambiguous = contains dominant_ambiguous.
     #   has_dom_HI = gene_mech_inher_history contains dominant_HI.
-    #   has_dom_GOF_DN = contains dominant_GOF or dominant_DN.
-    #   is_NMD_LOF = NMD-triggering / definite LoF truncating variant.
+    #   has_dom_GOF / has_dom_DN = contains dominant_GOF / dominant_DN.
+    #   is_NMD_LOF = NMD-triggering definite LoF truncating variant.
     #   is_exact_GOF = exact GoFCards gene + HGVSp match.
+    #   is_ambiguous_variant = neither is_NMD_LOF nor is_exact_GOF.
+    #
+    # Variant compatibility under dominant-only history:
+    #   dominant_ambiguous only -> any variant state can be dominant-compatible.
+    #   dominant_HI only        -> NMD_LOF or ambiguous; exact_GOF is excluded.
+    #   dominant_GOF only       -> exact_GOF only.
+    #   dominant_DN only        -> ambiguous only; PriVA has no exact DN DB.
+    #   dominant_GOF + DN       -> exact_GOF or ambiguous; NMD_LOF excluded.
+    #   dominant_HI + GOF/DN    -> any variant state can be interpreted under
+    #                              at least one dominant history.
     #
     # Sex-chromosome variants use the same tree after sex-aware allele-state
     # normalization: male chrX/chrY with any ALT allele is treated as hom/hemi
@@ -2732,12 +2761,20 @@ def BS4_criteria(df: pd.DataFrame, ped_df: pd.DataFrame, fam_name: str,
     #   1. hom patient vs WT patient -> BS4.
     #   2. hom patient vs het patient:
     #      - LoF_recessive only -> BS4_Supporting.
-    #      - LoF_recessive + any dominant history -> no BS4.
-    #      - dominant-only history -> no BS4.
+    #      - LoF_recessive + dominant_GOF/DN + NMD_LOF, with no dominant_HI or
+    #        dominant_ambiguous history -> BS4_Supporting. The heterozygous
+    #        affected genotype is incompatible with AR, and the NMD_LOF query
+    #        variant is not compatible with GOF/DN.
+    #      - LoF_recessive + dominant_GOF/DN + ambiguous -> no BS4; ambiguity
+    #        cannot rule out a dominant DN/GOF-compatible mechanism.
+    #      - LoF_recessive + dominant_HI or dominant_ambiguous -> no BS4.
+    #      - dominant-only history -> no BS4, because both affected individuals
+    #        carry ALT and dominant disease only requires one ALT allele.
     #   3. het patient vs WT patient:
-    #      - LoF_recessive + any dominant history -> no BS4.
-    #      - dominant_HI present and no LoF_recessive -> BS4.
-    #      - dominant_GOF/DN only -> BS4 only for is_exact_GOF.
+    #      - no LoF_recessive + dominant-compatible variant -> BS4.
+    #      - LoF_recessive present -> no BS4, because the heterozygous affected
+    #        genotype may reflect a second allele not represented by this row or
+    #        a dominant-compatible history.
     #   4. het patient vs het patient -> no BS4.
     #
     # Patient-control comparison:
@@ -2745,21 +2782,15 @@ def BS4_criteria(df: pd.DataFrame, ped_df: pd.DataFrame, fam_name: str,
     #   6. hom patient vs het control:
     #      - LoF_recessive present -> no BS4; a healthy heterozygous carrier
     #        is segregation-compatible for a recessive LoF model.
-    #      - dominant_HI present and no LoF_recessive:
-    #          is_NMD_LOF -> BS4_Supporting; otherwise no BS4.
-    #      - dominant_GOF/DN only:
-    #          exact GOF variant -> BS4_Supporting; NMD LoF -> no BS4.
-    #   7. hom patient vs hom control -> BS4.
+    #      - no LoF_recessive + dominant-compatible variant -> BS4_Supporting.
+    #   7. carrier patient vs hom/hemi control -> BS4.
     #   8. het patient vs WT control -> no BS4.
     #      Unaffected WT relatives are segregation-compatible for a dominant
     #      heterozygous disease model and are not contradictory for AR logic.
     #   9. het patient vs het control:
     #      - LoF_recessive present -> no BS4, even when dominant history also
     #        exists, because a healthy heterozygous carrier can fit the AR model.
-    #      - dominant_HI present and no LoF_recessive:
-    #          is_NMD_LOF -> BS4; otherwise no BS4.
-    #      - dominant_GOF/DN only:
-    #          exact GOF variant -> BS4; NMD LoF -> no BS4.
+    #      - no LoF_recessive + dominant-compatible variant -> BS4_Supporting.
     if haplo_insufficient is None:
         haplo_insufficient = np.array([False] * len(df))
 
@@ -2820,23 +2851,32 @@ def BS4_criteria(df: pd.DataFrame, ped_df: pd.DataFrame, fam_name: str,
 
     mech_history = _series_or_empty("gene_mech_inher_history")
     has_ar_lof = mech_history.str.contains(r"(?:^|;)LoF_recessive(?:;|$)", regex=True)
+    has_dom_ambiguous = mech_history.str.contains(r"(?:^|;)dominant_ambiguous(?:;|$)", regex=True)
     has_dom_hi = mech_history.str.contains(r"(?:^|;)dominant_HI(?:;|$)", regex=True)
-    has_dom_gof_dn = mech_history.str.contains(r"(?:^|;)dominant_(?:GOF|DN)(?:;|$)", regex=True)
+    has_dom_gof = mech_history.str.contains(r"(?:^|;)dominant_GOF(?:;|$)", regex=True)
+    has_dom_dn = mech_history.str.contains(r"(?:^|;)dominant_DN(?:;|$)", regex=True)
 
     missing_mech_history = mech_history.str.strip().eq("")
+    dominant_series = pd.Series(dominant, index=df.index).astype(bool)
+    haplo_series = pd.Series(haplo_insufficient, index=df.index).astype(bool)
     has_ar_lof = has_ar_lof | (missing_mech_history & pd.Series(recessive, index=df.index).astype(bool))
-    has_dom_hi = has_dom_hi | (missing_mech_history & pd.Series(haplo_insufficient, index=df.index).astype(bool))
-    has_dom_gof_dn = has_dom_gof_dn | (
+    has_dom_hi = has_dom_hi | (missing_mech_history & haplo_series)
+    has_dom_ambiguous = has_dom_ambiguous | (
         missing_mech_history
-        & pd.Series(dominant, index=df.index).astype(bool)
-        & ~pd.Series(haplo_insufficient, index=df.index).astype(bool)
+        & dominant_series
+        & ~haplo_series
+        & ~has_ar_lof
     )
 
-    has_any_dominant = has_dom_hi | has_dom_gof_dn
+    has_dom_gof_dn = has_dom_gof | has_dom_dn
+    has_any_dominant = has_dom_ambiguous | has_dom_hi | has_dom_gof_dn
     ar_only = has_ar_lof & ~has_any_dominant
-    ar_plus_dom_gof_dn_no_hi = has_ar_lof & has_dom_gof_dn & ~has_dom_hi
-    dominant_hi_no_ar = has_dom_hi & ~has_ar_lof
-    dominant_gof_dn_only = has_dom_gof_dn & ~has_dom_hi & ~has_ar_lof
+    ar_plus_gof_dn_nmd_only = (
+        has_ar_lof
+        & has_dom_gof_dn
+        & ~has_dom_hi
+        & ~has_dom_ambiguous
+    )
 
     consq = _series_or_empty("Consequence")
     nmd = _series_or_empty("NMD")
@@ -2849,7 +2889,7 @@ def BS4_criteria(df: pd.DataFrame, ped_df: pd.DataFrame, fam_name: str,
 
     variant_gof_tag = _series_or_empty("variant_gof_tag")
     is_exact_gof = variant_gof_tag.str.upper().str.contains(r"(?:^|;)GOF(?:;|$)", regex=True)
-    needs_gof_lookup = dominant_gof_dn_only & ~is_nmd_lof & ~is_exact_gof
+    needs_gof_lookup = has_dom_gof & ~has_ar_lof & ~is_nmd_lof & ~is_exact_gof
     if needs_gof_lookup.any() and {"SYMBOL", "HGVSp"}.issubset(df.columns):
         hub = GeneMechanismHub(use_hgnc_package=False)
         for idx in df.index[needs_gof_lookup]:
@@ -2860,6 +2900,19 @@ def BS4_criteria(df: pd.DataFrame, ped_df: pd.DataFrame, fam_name: str,
                 continue
             if match.get("variant_gof_tag") == "GOF":
                 is_exact_gof.loc[idx] = True
+    is_ambiguous_variant = ~is_nmd_lof & ~is_exact_gof
+    dominant_ambiguous_no_ar = has_dom_ambiguous & ~has_ar_lof
+    dominant_hi_only_no_ar = has_dom_hi & ~has_dom_ambiguous & ~has_dom_gof_dn & ~has_ar_lof
+    dominant_hi_combo_no_ar = has_dom_hi & (has_dom_ambiguous | has_dom_gof_dn) & ~has_ar_lof
+    dominant_gof_no_ar = has_dom_gof & ~has_dom_hi & ~has_dom_ambiguous & ~has_ar_lof
+    dominant_dn_no_ar = has_dom_dn & ~has_dom_hi & ~has_dom_ambiguous & ~has_ar_lof
+    dominant_variant_compatible_no_ar = (
+        dominant_ambiguous_no_ar
+        | dominant_hi_combo_no_ar
+        | (dominant_hi_only_no_ar & ~is_exact_gof)
+        | (dominant_gof_no_ar & is_exact_gof & ~is_nmd_lof)
+        | (dominant_dn_no_ar & is_ambiguous_variant)
+    )
 
     patient_alt_counts = {
         sample: _effective_alt_state(sample, _gt_alt_count(sample))
@@ -2897,16 +2950,16 @@ def BS4_criteria(df: pd.DataFrame, ped_df: pd.DataFrame, fam_name: str,
                 called
                 & mendelian_locus
                 & hom_het
-                & ar_only
+                & (
+                    ar_only
+                    | (ar_plus_gof_dn_nmd_only & is_nmd_lof)
+                )
             )
             final_criteria = final_criteria | (
                 called
                 & mendelian_locus
                 & het_wt
-                & (
-                    dominant_hi_no_ar
-                    | (dominant_gof_dn_only & is_exact_gof)
-                )
+                & dominant_variant_compatible_no_ar
             )
 
     # Patient-control comparisons.
@@ -2917,28 +2970,22 @@ def BS4_criteria(df: pd.DataFrame, ped_df: pd.DataFrame, fam_name: str,
             c_alt = control_alt_counts[control]
             called = p_called & control_called[control] & valid_model
 
-            patient_hom_control_hom = (p_alt >= 2) & (c_alt >= 2)
             patient_hom_control_het = (p_alt >= 2) & (c_alt == 1)
             patient_het_control_het = (p_alt == 1) & (c_alt == 1)
+            patient_carrier_control_hom = (p_alt >= 1) & (c_alt >= 2)
 
-            final_criteria = final_criteria | (called & mendelian_locus & patient_hom_control_hom)
+            final_criteria = final_criteria | (called & mendelian_locus & patient_carrier_control_hom)
             supporting_criteria = supporting_criteria | (
                 called
                 & mendelian_locus
                 & patient_hom_control_het
-                & (
-                    (dominant_hi_no_ar & is_nmd_lof)
-                    | (dominant_gof_dn_only & is_exact_gof & ~is_nmd_lof)
-                )
+                & dominant_variant_compatible_no_ar
             )
-            final_criteria = final_criteria | (
+            supporting_criteria = supporting_criteria | (
                 called
                 & mendelian_locus
                 & patient_het_control_het
-                & (
-                    (dominant_hi_no_ar & is_nmd_lof)
-                    | (dominant_gof_dn_only & is_exact_gof & ~is_nmd_lof)
-                )
+                & dominant_variant_compatible_no_ar
             )
 
     bs4_array = np.zeros(len(df), dtype=int)

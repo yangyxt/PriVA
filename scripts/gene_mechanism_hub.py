@@ -39,6 +39,7 @@ DEFAULT_MECHANISM_JSON = Path(
     "/paedyl01/disk1/yangyxt/llm_gene_reranker/data/gene_pathogenic_mechanism/"
     "prepared/gene_mechanism_curated_assertions.json"
 )
+DEFAULT_GOFCARDS_EXACT_GOF_HGVSP = DATA_DIR / "gofcards" / "gofcards_exact_gof_hgvsp.tsv.gz"
 DEFAULT_GOFCARDS_STEP1_TSV = Path(
     "/paedyl01/disk1/yangyxt/llm_gene_reranker/results/gof_dn_variant_extraction/"
     "priva_output/gofcards_gof.hg19.numb.anno.step1.tsv"
@@ -389,6 +390,7 @@ class GeneMechanismHub:
     def _load_gofcards_variant_hgvsp(
         self,
         *,
+        gofcards_exact_hgvsp_tsv: str | Path = DEFAULT_GOFCARDS_EXACT_GOF_HGVSP,
         gofcards_step1_tsv: str | Path = DEFAULT_GOFCARDS_STEP1_TSV,
         gofcards_active_tsv: str | Path = DEFAULT_GOFCARDS_ACTIVE_TSV,
         gofcards_raw_xlsx: str | Path = DEFAULT_GOFCARDS_RAW_XLSX,
@@ -401,6 +403,45 @@ class GeneMechanismHub:
         variants in a gene into GOF assertions.
         """
         if self._gofcards_by_symbol_hgvsp is not None:
+            return self._gofcards_by_symbol_hgvsp
+
+        compact_path = Path(gofcards_exact_hgvsp_tsv)
+        if compact_path.exists():
+            compact = pd.read_csv(
+                compact_path,
+                sep="\t",
+                dtype=str,
+                low_memory=False,
+            ).fillna("")
+            by_symbol_hgvsp: dict[tuple[str, str], list[dict[str, str]]] = defaultdict(list)
+            for _, row in compact.iterrows():
+                symbol = self._try_resolve_symbol(row.get("symbol"))
+                if not symbol:
+                    symbol = _clean(row.get("symbol"))
+                hgvsp_key = _clean(row.get("hgvsp_key")) or _norm_hgvsp(row.get("HGVSp"))
+                if not symbol or not hgvsp_key:
+                    continue
+                by_symbol_hgvsp[(symbol, hgvsp_key)].append(
+                    {
+                        "gofcards_variant_id": _clean(row.get("gofcards_variant_id")),
+                        "gofcards_accession_id": _clean(row.get("gofcards_accession_id")),
+                        "disease": _clean(row.get("disease")),
+                        "pmids": _clean(row.get("pmids")),
+                        "pscore": _clean(row.get("pscore")),
+                        "function": _clean(row.get("function")),
+                        "pathway": _clean(row.get("pathway")),
+                        "transcript": _clean(row.get("transcript")),
+                        "symbol": symbol,
+                        "chrom": _clean(row.get("chrom")),
+                        "pos": _clean(row.get("pos")),
+                        "ref": _clean(row.get("ref")),
+                        "alt": _clean(row.get("alt")),
+                        "HGVSc": _clean(row.get("HGVSc")),
+                        "HGVSp": _clean(row.get("HGVSp")),
+                        "canonical_transcript": _clean(row.get("canonical_transcript")),
+                    }
+                )
+            self._gofcards_by_symbol_hgvsp = dict(by_symbol_hgvsp)
             return self._gofcards_by_symbol_hgvsp
 
         step1 = pd.read_csv(
@@ -577,6 +618,7 @@ class GeneMechanismHub:
         gene_symbol: Any,
         hgvsp: Any,
         *,
+        gofcards_exact_hgvsp_tsv: str | Path = DEFAULT_GOFCARDS_EXACT_GOF_HGVSP,
         gofcards_step1_tsv: str | Path = DEFAULT_GOFCARDS_STEP1_TSV,
         gofcards_active_tsv: str | Path = DEFAULT_GOFCARDS_ACTIVE_TSV,
         gofcards_raw_xlsx: str | Path = DEFAULT_GOFCARDS_RAW_XLSX,
@@ -596,6 +638,7 @@ class GeneMechanismHub:
             }
 
         matches = self._load_gofcards_variant_hgvsp(
+            gofcards_exact_hgvsp_tsv=gofcards_exact_hgvsp_tsv,
             gofcards_step1_tsv=gofcards_step1_tsv,
             gofcards_active_tsv=gofcards_active_tsv,
             gofcards_raw_xlsx=gofcards_raw_xlsx,
@@ -878,6 +921,7 @@ def match_gofcards_variant_gof(
     gene_symbol: Any,
     hgvsp: Any,
     *,
+    gofcards_exact_hgvsp_tsv: str | Path = DEFAULT_GOFCARDS_EXACT_GOF_HGVSP,
     gofcards_step1_tsv: str | Path = DEFAULT_GOFCARDS_STEP1_TSV,
     gofcards_active_tsv: str | Path = DEFAULT_GOFCARDS_ACTIVE_TSV,
     gofcards_raw_xlsx: str | Path = DEFAULT_GOFCARDS_RAW_XLSX,
@@ -888,6 +932,7 @@ def match_gofcards_variant_gof(
     return GeneMechanismHub(use_hgnc_package=use_hgnc_package).match_gofcards_variant_gof(
         gene_symbol,
         hgvsp,
+        gofcards_exact_hgvsp_tsv=gofcards_exact_hgvsp_tsv,
         gofcards_step1_tsv=gofcards_step1_tsv,
         gofcards_active_tsv=gofcards_active_tsv,
         gofcards_raw_xlsx=gofcards_raw_xlsx,

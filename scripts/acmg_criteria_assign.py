@@ -2263,32 +2263,178 @@ def PP5_BP6_criteria(df: pd.DataFrame, clinvar_patho, clinvar_benign) -> pd.Seri
 
 
 def BS1_criteria(df: pd.DataFrame,
-                 gene_to_am_score_map: dict,
+                 gene_to_am_score_map: dict = None,
                  expected_incidence: float = 0.0001,
                  gene_dosage_sensitivity: str = "",
                  pm2_criteria: np.ndarray = None,
-                 threads: int = 10):
-    # BS1: PAF of variant is greater than expected incidence of the disease
+                 threads: int = 10,
+                 recessive: np.ndarray = None,
+                 dominant: np.ndarray = None,
+                 non_monogenic: np.ndarray = None,
+                 non_mendelian: np.ndarray = None,
+                 haplo_insufficient: np.ndarray = None,
+                 incomplete_penetrance: np.ndarray = None):
+    '''
+    BS1: allele frequency is greater than expected for the disorder.
+
+    This is mechanism-aware when ``gene_mech_inher_history`` is present. The
+    frequency model is selected from the gene's inheritance/mechanism history
+    and the query variant's plausible molecular state, rather than applying a
+    broad dominant/recessive gene label to every variant.
+
+    Variant state:
+      NMD_LOF = NMD-triggering stop/frameshift not marked escaping or END_TRUNC.
+      exact_GOF = variant-level exact GoFCards GOF match.
+      ambiguous = neither NMD_LOF nor exact_GOF.
+
+    Dominant frequency model:
+      - dominant_ambiguous only: any variant state is compatible.
+      - dominant_HI only: NMD_LOF or ambiguous; exact_GOF is excluded.
+      - dominant_GOF only: exact_GOF only.
+      - dominant_DN only: ambiguous only; PriVA has no exact DN database.
+      - dominant_GOF + dominant_DN: exact_GOF or ambiguous; NMD_LOF excluded.
+      - dominant_HI + dominant_GOF/DN: any variant state can be interpreted
+        under at least one dominant history.
+      - LoF_recessive plus any dominant history: do not use carrier AF for
+        BS1, because heterozygous population observations may simply be
+        recessive carriers. Use the recessive homozygous/hemizygous frequency
+        model instead.
+
+    Recessive frequency model:
+      - LoF_recessive uses homozygous/hemizygous population frequency, not
+        carrier allele count.
+      - ClinVar gene-level pathogenic max-AF does not rescue AR carrier
+        frequency into BS1; that branch is restricted to allele-frequency
+        compatible dominant/Y-linked models.
+
+    Global gates:
+      - no BS1 for non-monogenic/polygenic, non-Mendelian, or incomplete-
+        penetrance rows.
+      - final BS1 is removed when PM2 is assigned.
+    '''
+    if any(
+        value is None
+        for value in (
+            recessive,
+            dominant,
+            non_monogenic,
+            non_mendelian,
+            haplo_insufficient,
+            incomplete_penetrance,
+        )
+    ):
+        if gene_to_am_score_map is None:
+            raise ValueError("gene_to_am_score_map is required when inheritance arrays are not supplied")
+        recessive, dominant, non_monogenic, non_mendelian, haplo_insufficient, incomplete_penetrance = identify_inheritance_mode(
+            df,
+            gene_to_am_score_map,
+            gene_dosage_sensitivity,
+            threads,
+        )
+    else:
+        recessive = np.asarray(recessive, dtype=bool)
+        dominant = np.asarray(dominant, dtype=bool)
+        non_monogenic = np.asarray(non_monogenic, dtype=bool)
+        non_mendelian = np.asarray(non_mendelian, dtype=bool)
+        haplo_insufficient = np.asarray(haplo_insufficient, dtype=bool)
+        incomplete_penetrance = np.asarray(incomplete_penetrance, dtype=bool)
+
+    if pm2_criteria is None:
+        pm2_criteria = np.zeros(len(df), dtype=int)
+
+    def _series_or_empty(column: str) -> pd.Series:
+        return df.get(column, pd.Series("", index=df.index)).fillna("").astype(str)
+
     autosomal = (df['chrom'] != "chrX") & (df['chrom'] != "chrY")
     x_linked = df['chrom'] == "chrX"
-    y_linked = df['chrom'] == "chrY"
+    y_locus = df['chrom'] == "chrY"
 
-    recessive, dominant, non_monogenic, non_mendelian, haplo_insufficient, incomplete_penetrance = identify_inheritance_mode(df, gene_to_am_score_map, gene_dosage_sensitivity, threads)
+    recessive_series = pd.Series(recessive, index=df.index).astype(bool)
+    dominant_series = pd.Series(dominant, index=df.index).astype(bool)
+    non_monogenic_series = pd.Series(non_monogenic, index=df.index).astype(bool)
+    non_mendelian_series = pd.Series(non_mendelian, index=df.index).astype(bool)
+    haplo_series = pd.Series(haplo_insufficient, index=df.index).astype(bool)
+    incomplete_penetrance_series = pd.Series(incomplete_penetrance, index=df.index).astype(bool)
 
     false_neg_rate, common_vars = control_false_neg_rate(df['gnomAD_joint_AF_max'], df['gnomAD_joint_AN_max'], af_threshold=expected_incidence, alpha=0.01)
 
     max_ind_incidence = np.where(df['gnomAD_joint_AN_max']/2 > 10/expected_incidence, df['gnomAD_nhomalt_max']/(df['gnomAD_joint_AN_max']/2), (df['gnomAD_nhomalt_XX'] + df['gnomAD_nhomalt_XY'])/(df['gnomAD_joint_AN']/2))
     max_af_larger_incidence = np.where(common_vars.isna(), df['gnomAD_joint_AF'] > expected_incidence, common_vars)
     logger.info(f"There are {max_af_larger_incidence.sum()} variants having their PAF greater than the expected incidence of the disease")
-    # For autosomal dominant disease, we can assign BS1 if the variant is observed the frequency of the variant is greater than the expected incidence of the disease
-    autosomal_dominant = autosomal & dominant & max_af_larger_incidence & np.logical_not(recessive) & np.logical_not(non_monogenic) & np.logical_not(non_mendelian) & np.logical_not(incomplete_penetrance)
-    autosomal_recessive = autosomal & recessive & (max_ind_incidence > expected_incidence) & np.logical_not(non_monogenic) & np.logical_not(non_mendelian) & np.logical_not(incomplete_penetrance)
 
-    # For X-linked disease, we can assign BS1 if the variant is observed the frequency of the variant is greater than the expected incidence of the disease
-    x_linked_recessive = x_linked & recessive & ((df['gnomAD_nhomalt_XX'] + df['gnomAD_nhomalt_XY'])/(df['gnomAD_joint_AN']/2) > expected_incidence) & np.logical_not(non_monogenic) & np.logical_not(non_mendelian) & np.logical_not(incomplete_penetrance)
-    x_linked_dominant = x_linked & dominant & max_af_larger_incidence & np.logical_not(non_monogenic) & np.logical_not(non_mendelian) & np.logical_not(incomplete_penetrance)
-    # For Y-linked disease, we can assign BS1 if the variant is observed the frequency of the variant is greater than the expected incidence of the disease
-    y_linked = y_linked & max_af_larger_incidence & np.logical_not(non_monogenic) & np.logical_not(non_mendelian) & np.logical_not(incomplete_penetrance)
+    mech_history = _series_or_empty("gene_mech_inher_history")
+    missing_mech_history = mech_history.str.strip().eq("")
+    has_ar_lof = mech_history.str.contains(r"(?:^|;)LoF_recessive(?:;|$)", regex=True)
+    has_dom_ambiguous = mech_history.str.contains(r"(?:^|;)dominant_ambiguous(?:;|$)", regex=True)
+    has_dom_hi = mech_history.str.contains(r"(?:^|;)dominant_HI(?:;|$)", regex=True)
+    has_dom_gof = mech_history.str.contains(r"(?:^|;)dominant_GOF(?:;|$)", regex=True)
+    has_dom_dn = mech_history.str.contains(r"(?:^|;)dominant_DN(?:;|$)", regex=True)
+    has_ar_lof = has_ar_lof | (missing_mech_history & recessive_series)
+    has_dom_hi = has_dom_hi | (missing_mech_history & haplo_series)
+    has_dom_ambiguous = has_dom_ambiguous | (
+        missing_mech_history
+        & dominant_series
+        & ~haplo_series
+        & ~has_ar_lof
+    )
+    has_dom_gof_dn = has_dom_gof | has_dom_dn
+
+    consq = _series_or_empty("Consequence")
+    nmd = _series_or_empty("NMD")
+    lof_filter = _series_or_empty("LoF_filter")
+    is_nmd_lof = (
+        (consq.str.contains("stop_gained", regex=False) | consq.str.contains("frameshift", regex=False))
+        & ~nmd.str.contains("escaping", regex=False)
+        & ~lof_filter.str.contains("END_TRUNC", regex=False)
+    )
+
+    variant_gof_tag = _series_or_empty("variant_gof_tag")
+    is_exact_gof = variant_gof_tag.str.upper().str.contains(r"(?:^|;)GOF(?:;|$)", regex=True)
+    needs_gof_lookup = has_dom_gof & ~has_ar_lof & ~is_nmd_lof & ~is_exact_gof
+    if needs_gof_lookup.any() and {"SYMBOL", "HGVSp"}.issubset(df.columns):
+        hub = GeneMechanismHub(use_hgnc_package=False)
+        for idx in df.index[needs_gof_lookup]:
+            try:
+                match = hub.match_gofcards_variant_gof(df.at[idx, "SYMBOL"], df.at[idx, "HGVSp"])
+            except Exception as exc:
+                logger.debug(f"GoFCards exact variant lookup failed for BS1 row {idx}: {exc}")
+                continue
+            if match.get("variant_gof_tag") == "GOF":
+                is_exact_gof.loc[idx] = True
+
+    is_ambiguous_variant = ~is_nmd_lof & ~is_exact_gof
+    dominant_ambiguous_only = has_dom_ambiguous & ~has_dom_hi & ~has_dom_gof_dn & ~has_ar_lof
+    dominant_hi_only = has_dom_hi & ~has_dom_ambiguous & ~has_dom_gof_dn & ~has_ar_lof
+    dominant_hi_with_gof_dn = has_dom_hi & has_dom_gof_dn & ~has_ar_lof
+    dominant_gof_only = has_dom_gof & ~has_dom_dn & ~has_dom_hi & ~has_dom_ambiguous & ~has_ar_lof
+    dominant_dn_only = has_dom_dn & ~has_dom_gof & ~has_dom_hi & ~has_dom_ambiguous & ~has_ar_lof
+    dominant_gof_dn_only = has_dom_gof & has_dom_dn & ~has_dom_hi & ~has_dom_ambiguous & ~has_ar_lof
+    dominant_frequency_compatible = (
+        dominant_ambiguous_only
+        | (dominant_hi_only & ~is_exact_gof)
+        | dominant_hi_with_gof_dn
+        | (dominant_gof_only & is_exact_gof & ~is_nmd_lof)
+        | (dominant_dn_only & is_ambiguous_variant)
+        | (dominant_gof_dn_only & ~is_nmd_lof)
+    )
+
+    valid_model = (
+        np.logical_not(non_monogenic_series)
+        & np.logical_not(non_mendelian_series)
+        & np.logical_not(incomplete_penetrance_series)
+    )
+
+    # Dominant BS1 uses carrier allele frequency only when the variant is
+    # mechanism-compatible and no recessive LoF history is available to explain
+    # healthy heterozygous population carriers.
+    autosomal_dominant = autosomal & dominant_frequency_compatible & max_af_larger_incidence & valid_model
+    x_linked_dominant = x_linked & dominant_frequency_compatible & max_af_larger_incidence & valid_model
+
+    # Recessive BS1 uses homozygous/hemizygous frequency, not population carrier
+    # count, because heterozygous carriers are expected for AR LoF disease.
+    autosomal_recessive = autosomal & has_ar_lof & (max_ind_incidence > expected_incidence) & valid_model
+    x_linked_recessive = x_linked & has_ar_lof & ((df['gnomAD_nhomalt_XX'] + df['gnomAD_nhomalt_XY'])/(df['gnomAD_joint_AN']/2) > expected_incidence) & valid_model
+    y_linked = y_locus & max_af_larger_incidence & valid_model
     greater_than_disease_incidence = autosomal_dominant | autosomal_recessive | x_linked_recessive | x_linked_dominant | y_linked
     logger.info(f"There are {greater_than_disease_incidence.sum()} variants having their PAF greater than the expected incidence of the disease")
     gene_max_patho_af = df["clinvar_patho_gene_max_af"].fillna(0)
@@ -2296,9 +2442,11 @@ def BS1_criteria(df: pd.DataFrame,
     _, greater_than_clinvar_patho_af = control_false_neg_rate(df['gnomAD_joint_AF_max'], df['gnomAD_joint_AN_max'], af_threshold=gene_max_patho_af, alpha=0.01)
     greater_than_clinvar_patho_af = np.where(greater_than_clinvar_patho_af.isna() & (gene_max_patho_af > 0), df['gnomAD_joint_AF'] > gene_max_patho_af, greater_than_clinvar_patho_af)
     greater_than_clinvar_patho_af = np.where(np.isnan(greater_than_clinvar_patho_af), False, greater_than_clinvar_patho_af)
+    greater_than_clinvar_patho_af = greater_than_clinvar_patho_af & (gene_max_patho_af > 0)
     _, greater_than_basic_af = control_false_neg_rate(df['gnomAD_joint_AF_max'], df['gnomAD_joint_AN_max'], af_threshold=0.0001, alpha=0.01)
     greater_than_basic_af = np.where(greater_than_basic_af.isna(), df['gnomAD_joint_AF'] > 0.0001, greater_than_basic_af)
-    bs1_criteria = (greater_than_disease_incidence | greater_than_clinvar_patho_af) & greater_than_basic_af
+    clinvar_af_mechanism_compatible = valid_model & (dominant_frequency_compatible | y_locus)
+    bs1_criteria = (greater_than_disease_incidence | (greater_than_clinvar_patho_af & clinvar_af_mechanism_compatible)) & greater_than_basic_af
     bs1_criteria = bs1_criteria & (pm2_criteria == 0)
     bs1_array = np.zeros(len(df), dtype=int)
     bs1_array[bs1_criteria] = 3
@@ -4081,15 +4229,12 @@ def ACMG_criteria_assign(anno_table: str,
     logger.info(f"PM2 criteria applied, {(pm2_criteria > 0).sum()} variants are having the PM2 criteria")
     gc.collect()
 
-    # Apply BS1, PAF of variant is greater than expected incidence of the disease
-    bs1_criteria, recessive, dominant, non_monogenic, non_mendelian, haplo_insufficient, incomplete_penetrance = BS1_criteria(anno_df,
-                                                                                                                              gene_to_am_score_map,
-                                                                                                                              threads = threads,
-                                                                                                                              expected_incidence = expected_incidence,
-                                                                                                                              gene_dosage_sensitivity = gene_dosage_sensitivity,
-                                                                                                                              pm2_criteria = pm2_criteria)
-    logger.info(f"BS1 criteria applied, {(bs1_criteria > 0).sum()} variants are having the BS1 criteria")
-    gc.collect()
+    recessive, dominant, non_monogenic, non_mendelian, haplo_insufficient, incomplete_penetrance = identify_inheritance_mode(
+        anno_df,
+        gene_to_am_score_map,
+        gene_dosage_sensitivity,
+        threads,
+    )
 
     anno_df = annotate_gene_mechanism_categories(
         anno_df,
@@ -4104,6 +4249,24 @@ def ACMG_criteria_assign(anno_table: str,
         "Gene mechanism/inheritance history applied: \n%s",
         anno_df["gene_mech_inher_history"].value_counts(dropna=False).to_string(),
     )
+    gc.collect()
+
+    # Apply BS1, PAF of variant is greater than expected incidence of the disease.
+    bs1_criteria, recessive, dominant, non_monogenic, non_mendelian, haplo_insufficient, incomplete_penetrance = BS1_criteria(
+        anno_df,
+        gene_to_am_score_map,
+        threads=threads,
+        expected_incidence=expected_incidence,
+        gene_dosage_sensitivity=gene_dosage_sensitivity,
+        pm2_criteria=pm2_criteria,
+        recessive=recessive,
+        dominant=dominant,
+        non_monogenic=non_monogenic,
+        non_mendelian=non_mendelian,
+        haplo_insufficient=haplo_insufficient,
+        incomplete_penetrance=incomplete_penetrance,
+    )
+    logger.info(f"BS1 criteria applied, {(bs1_criteria > 0).sum()} variants are having the BS1 criteria")
     gc.collect()
 
     # Summarize the inheritance mode, first prepare a df composed of recessive, dominant, non_monogenic, non_mendelian, haplo_insufficient, incomplete_penetrance

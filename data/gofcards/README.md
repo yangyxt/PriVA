@@ -16,5 +16,6 @@ Current cache:
 - unique exact-match keys: 3,935 normalized `symbol+hgvsp_key` pairs
 
 The table includes hg19 and hg38 genomic coordinates/ref/alt, VEP-derived
-HGVSc/HGVSp when available, and GoFCards audit metadata. The stable PriVA input
-path remains `data/gofcards/gofcards_exact_gof_hgvsp.tsv.gz`.
+HGVSc/HGVSp when available, GoFCards audit metadata, HGNC-resolved symbols, and
+GoFCards-to-VEP HGVSc/HGVSp concordance flags. The stable PriVA input path
+remains `data/gofcards/gofcards_exact_gof_hgvsp.tsv.gz`.

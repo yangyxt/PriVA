@@ -53,6 +53,71 @@ console_handler.setFormatter(formatter)
 logger.addHandler(console_handler)
 
 
+def _clean_text(value):
+    if value is None or pd.isna(value):
+        return ""
+    text = str(value).strip()
+    return "" if text.lower() in {"", "nan", "none", "<na>"} else text
+
+
+def _row_assembly_for_gof_lookup(row):
+    for col in ("assembly", "genome_build", "reference_build", "build"):
+        value = _clean_text(row.get(col))
+        if value:
+            return value
+    return "hg19"
+
+
+def _lookup_exact_gofcards_variant(hub, row):
+    """Return exact GoFCards variant-level GOF evidence by HGVS or genomic key."""
+    symbol = row.get("SYMBOL")
+    if not _clean_text(symbol):
+        return {"variant_gof_tag": "", "match_route": "", "matches": []}
+
+    hgvsp = row.get("HGVSp")
+    if _clean_text(hgvsp):
+        match = hub.match_gofcards_variant_gof(symbol, hgvsp)
+        if match.get("variant_gof_tag") == "GOF":
+            match["match_route"] = "hgvsp"
+            return match
+
+    if all(_clean_text(row.get(col)) for col in ("chrom", "pos", "ref", "alt")):
+        match = hub.match_gofcards_variant_gof_by_genomic(
+            symbol,
+            row.get("chrom"),
+            row.get("pos"),
+            row.get("ref"),
+            row.get("alt"),
+            assembly=_row_assembly_for_gof_lookup(row),
+            key_type="auto",
+        )
+        if match.get("variant_gof_tag") == "GOF":
+            match["match_route"] = "genomic"
+            return match
+
+    return {"variant_gof_tag": "", "match_route": "", "matches": []}
+
+
+def _apply_exact_gofcards_lookup(df, needs_gof_lookup, is_exact_gof, *, context):
+    if not needs_gof_lookup.any() or "SYMBOL" not in df.columns:
+        return is_exact_gof
+    has_hgvsp = "HGVSp" in df.columns
+    has_genomic = {"chrom", "pos", "ref", "alt"}.issubset(df.columns)
+    if not has_hgvsp and not has_genomic:
+        return is_exact_gof
+
+    hub = GeneMechanismHub(use_hgnc_package=False)
+    for idx in df.index[needs_gof_lookup]:
+        try:
+            match = _lookup_exact_gofcards_variant(hub, df.loc[idx])
+        except Exception as exc:
+            logger.debug(f"GoFCards exact variant lookup failed for {context} row {idx}: {exc}")
+            continue
+        if match.get("variant_gof_tag") == "GOF":
+            is_exact_gof.loc[idx] = True
+    return is_exact_gof
+
+
 def coerce_pext_value(value):
     """
     Convert VEP BigWig PEXT annotations to a single numeric value.
@@ -2391,16 +2456,7 @@ def BS1_criteria(df: pd.DataFrame,
     variant_gof_tag = _series_or_empty("variant_gof_tag")
     is_exact_gof = variant_gof_tag.str.upper().str.contains(r"(?:^|;)GOF(?:;|$)", regex=True)
     needs_gof_lookup = has_dom_gof & ~has_ar_lof & ~is_nmd_lof & ~is_exact_gof
-    if needs_gof_lookup.any() and {"SYMBOL", "HGVSp"}.issubset(df.columns):
-        hub = GeneMechanismHub(use_hgnc_package=False)
-        for idx in df.index[needs_gof_lookup]:
-            try:
-                match = hub.match_gofcards_variant_gof(df.at[idx, "SYMBOL"], df.at[idx, "HGVSp"])
-            except Exception as exc:
-                logger.debug(f"GoFCards exact variant lookup failed for BS1 row {idx}: {exc}")
-                continue
-            if match.get("variant_gof_tag") == "GOF":
-                is_exact_gof.loc[idx] = True
+    is_exact_gof = _apply_exact_gofcards_lookup(df, needs_gof_lookup, is_exact_gof, context="BS1")
 
     is_ambiguous_variant = ~is_nmd_lof & ~is_exact_gof
     dominant_ambiguous_only = has_dom_ambiguous & ~has_dom_hi & ~has_dom_gof_dn & ~has_ar_lof
@@ -2822,16 +2878,7 @@ def BS2_criteria(df: pd.DataFrame,
     variant_gof_tag = _series_or_empty("variant_gof_tag")
     is_exact_gof = variant_gof_tag.str.upper().str.contains(r"(?:^|;)GOF(?:;|$)", regex=True)
     needs_gof_lookup = has_dom_gof & ~has_ar_lof & ~is_nmd_lof & ~is_exact_gof
-    if needs_gof_lookup.any() and {"SYMBOL", "HGVSp"}.issubset(df.columns):
-        hub = GeneMechanismHub(use_hgnc_package=False)
-        for idx in df.index[needs_gof_lookup]:
-            try:
-                match = hub.match_gofcards_variant_gof(df.at[idx, "SYMBOL"], df.at[idx, "HGVSp"])
-            except Exception as exc:
-                logger.debug(f"GoFCards exact variant lookup failed for BS2 row {idx}: {exc}")
-                continue
-            if match.get("variant_gof_tag") == "GOF":
-                is_exact_gof.loc[idx] = True
+    is_exact_gof = _apply_exact_gofcards_lookup(df, needs_gof_lookup, is_exact_gof, context="BS2")
 
     gnomad_ac = (_numeric_column("gnomAD_joint_AF") * _numeric_column("gnomAD_joint_AN"))
     gnomad_hom_hemi = _numeric_column("gnomAD_nhomalt_XX") + _numeric_column("gnomAD_nhomalt_XY")
@@ -3058,16 +3105,7 @@ def BS4_criteria(df: pd.DataFrame, ped_df: pd.DataFrame, fam_name: str,
     variant_gof_tag = _series_or_empty("variant_gof_tag")
     is_exact_gof = variant_gof_tag.str.upper().str.contains(r"(?:^|;)GOF(?:;|$)", regex=True)
     needs_gof_lookup = has_dom_gof & ~has_ar_lof & ~is_nmd_lof & ~is_exact_gof
-    if needs_gof_lookup.any() and {"SYMBOL", "HGVSp"}.issubset(df.columns):
-        hub = GeneMechanismHub(use_hgnc_package=False)
-        for idx in df.index[needs_gof_lookup]:
-            try:
-                match = hub.match_gofcards_variant_gof(df.at[idx, "SYMBOL"], df.at[idx, "HGVSp"])
-            except Exception as exc:
-                logger.debug(f"GoFCards exact variant lookup failed for row {idx}: {exc}")
-                continue
-            if match.get("variant_gof_tag") == "GOF":
-                is_exact_gof.loc[idx] = True
+    is_exact_gof = _apply_exact_gofcards_lookup(df, needs_gof_lookup, is_exact_gof, context="BS4")
     is_ambiguous_variant = ~is_nmd_lof & ~is_exact_gof
     dominant_ambiguous_no_ar = has_dom_ambiguous & ~has_ar_lof
     dominant_hi_only_no_ar = has_dom_hi & ~has_dom_ambiguous & ~has_dom_gof_dn & ~has_ar_lof

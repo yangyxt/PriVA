@@ -3,9 +3,18 @@
 `gofcards_exact_gof_hgvsp.tsv.gz` is a compact PriVA runtime lookup derived
 from the standalone `gofcards_hg38_normalizer` workflow.
 
-PriVA uses this file only for exact variant-level GOF matching by normalized
-HGNC symbol plus protein change. It must not be interpreted as evidence that
-all variants in a listed gene are gain-of-function.
+PriVA uses this file only for exact variant-level GOF matching. Two evidence
+routes are supported by `scripts/gene_mechanism_hub.py`:
+
+- `match_gofcards_variant_gof(...)`: normalized HGNC symbol plus exact protein
+  change/HGVSp.
+- `match_gofcards_variant_gof_by_genomic(...)`: normalized HGNC symbol plus
+  exact hg19/hg38 genomic allele key. `key_type=vcf` uses VCF-padded indel
+  alleles; `key_type=genomic` uses the sparse GoFCards source fields;
+  `key_type=auto` tries both.
+
+Neither route may be interpreted as evidence that all variants in a listed gene
+are gain-of-function.
 
 Current cache:
 
@@ -22,3 +31,10 @@ GoFCards-to-VEP HGVSc/HGVSp concordance flags. It also includes VCF-padded
 `hg19_vcf_*` and `hg38_vcf_*` keys for deletion/insertion records whose source
 REF or ALT was blank. The stable PriVA input path remains
 `data/gofcards/gofcards_exact_gof_hgvsp.tsv.gz`.
+
+Validated examples:
+
+- `CFTR` + `p.Phe508del` matches by HGVSp.
+- `CFTR` + hg38 VCF key `7|117559592|CTTT|C` matches by genomic allele.
+- `TP53` + hg38 key `17|7669058|A|G` matches by genomic allele even though
+  the GoFCards row has no usable HGVSp.

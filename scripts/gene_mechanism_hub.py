@@ -469,12 +469,22 @@ class GeneMechanismHub:
             ).fillna("")
             by_symbol_hgvsp: dict[tuple[str, str], list[dict[str, str]]] = defaultdict(list)
             for _, row in compact.iterrows():
-                symbol = self._try_resolve_symbol(row.get("symbol"))
+                cache_symbol = (
+                    row.get("HGNC_Symbol")
+                    or row.get("symbol")
+                    or row.get("match_symbol")
+                    or row.get("gofcards_symbol_resolved")
+                    or row.get("gofcards_symbol")
+                )
+                symbol = self._try_resolve_symbol(cache_symbol)
                 if not symbol:
-                    symbol = _clean(row.get("symbol"))
+                    symbol = _clean(cache_symbol)
                 hgvsp_key = _clean(row.get("hgvsp_key")) or _norm_hgvsp(row.get("HGVSp"))
                 if not symbol or not hgvsp_key:
                     continue
+                match_status = _clean(row.get("match_status")) or _clean(
+                    row.get("gofcards_hgvs_match_status")
+                )
                 by_symbol_hgvsp[(symbol, hgvsp_key)].append(
                     {
                         "source": _clean(row.get("source")),
@@ -487,45 +497,58 @@ class GeneMechanismHub:
                         "pscore": _clean(row.get("pscore")),
                         "function": _clean(row.get("function")),
                         "pathway": _clean(row.get("pathway")),
-                        "transcript": _clean(row.get("transcript")),
+                        "transcript": _clean(row.get("GoFCards_transcript"))
+                        or _clean(row.get("transcript")),
                         "symbol": symbol,
-                        "match_symbol": _clean(row.get("match_symbol")),
+                        "match_symbol": _clean(row.get("HGNC_Symbol"))
+                        or _clean(row.get("match_symbol")),
                         "gofcards_symbol": _clean(row.get("gofcards_symbol")),
                         "vep_symbol": _clean(row.get("vep_symbol")),
                         "gofcards_symbol_resolved": _clean(row.get("gofcards_symbol_resolved")),
                         "vep_symbol_resolved": _clean(row.get("vep_symbol_resolved")),
-                        "source_refseq_transcript": _clean(row.get("source_refseq_transcript")),
-                        "vep_transcript": _clean(row.get("vep_transcript")),
-                        "chrom": _clean(row.get("chrom")),
-                        "pos": _clean(row.get("pos")),
-                        "ref": _clean(row.get("ref")),
-                        "alt": _clean(row.get("alt")),
+                        "source_refseq_transcript": _clean(row.get("GoFCards_transcript"))
+                        or _clean(row.get("source_refseq_transcript")),
+                        "vep_transcript": _clean(row.get("VEP_transcript"))
+                        or _clean(row.get("vep_transcript")),
+                        "chrom": _norm_chrom(row.get("hg19_chrom") or row.get("chrom")),
+                        "pos": _clean(row.get("hg19_pos")) or _clean(row.get("pos")),
+                        "ref": _clean(row.get("hg19_ref")) or _clean(row.get("ref")),
+                        "alt": _clean(row.get("hg19_alt")) or _clean(row.get("alt")),
                         "hg19_genomic_key": _clean(row.get("hg19_genomic_key")),
                         "hg19_vcf_key": _clean(row.get("hg19_vcf_key")),
                         "hg38_genomic_key": _clean(row.get("hg38_genomic_key")),
                         "hg38_vcf_key": _clean(row.get("hg38_vcf_key")),
                         "match_key_types": _clean(row.get("match_key_types")),
                         "hg19_chrom": _clean(row.get("hg19_chrom")),
-                        "hg19_start": _clean(row.get("hg19_start")),
-                        "hg19_end": _clean(row.get("hg19_end")),
+                        "hg19_start": _clean(row.get("hg19_pos"))
+                        or _clean(row.get("hg19_start")),
+                        "hg19_end": _clean(row.get("hg19_pos")) or _clean(row.get("hg19_end")),
                         "hg19_ref": _clean(row.get("hg19_ref")),
                         "hg19_alt": _clean(row.get("hg19_alt")),
-                        "hg19_vcf_pos": _clean(row.get("hg19_vcf_pos")),
-                        "hg19_vcf_ref": _clean(row.get("hg19_vcf_ref")),
-                        "hg19_vcf_alt": _clean(row.get("hg19_vcf_alt")),
+                        "hg19_vcf_pos": _clean(row.get("hg19_pos"))
+                        or _clean(row.get("hg19_vcf_pos")),
+                        "hg19_vcf_ref": _clean(row.get("hg19_ref"))
+                        or _clean(row.get("hg19_vcf_ref")),
+                        "hg19_vcf_alt": _clean(row.get("hg19_alt"))
+                        or _clean(row.get("hg19_vcf_alt")),
                         "hg19_vcf_status": _clean(row.get("hg19_vcf_status")),
                         "hg38_chrom": _clean(row.get("hg38_chrom")),
-                        "hg38_start": _clean(row.get("hg38_start")),
-                        "hg38_end": _clean(row.get("hg38_end")),
+                        "hg38_start": _clean(row.get("hg38_pos"))
+                        or _clean(row.get("hg38_start")),
+                        "hg38_end": _clean(row.get("hg38_pos")) or _clean(row.get("hg38_end")),
                         "hg38_ref": _clean(row.get("hg38_ref")),
                         "hg38_alt": _clean(row.get("hg38_alt")),
-                        "hg38_vcf_pos": _clean(row.get("hg38_vcf_pos")),
-                        "hg38_vcf_ref": _clean(row.get("hg38_vcf_ref")),
-                        "hg38_vcf_alt": _clean(row.get("hg38_vcf_alt")),
+                        "hg38_vcf_pos": _clean(row.get("hg38_pos"))
+                        or _clean(row.get("hg38_vcf_pos")),
+                        "hg38_vcf_ref": _clean(row.get("hg38_ref"))
+                        or _clean(row.get("hg38_vcf_ref")),
+                        "hg38_vcf_alt": _clean(row.get("hg38_alt"))
+                        or _clean(row.get("hg38_vcf_alt")),
                         "hg38_refalt_status": _clean(row.get("hg38_refalt_status")),
                         "HGVSc": _clean(row.get("HGVSc")),
                         "HGVSp": _clean(row.get("HGVSp")),
-                        "normalized_hgvsp": _clean(row.get("normalized_hgvsp")),
+                        "normalized_hgvsp": _clean(row.get("normalized_hgvsp"))
+                        or _norm_hgvsp(row.get("HGVSp")),
                         "gofcards_hgvsc_key": _clean(row.get("gofcards_hgvsc_key")),
                         "gofcards_hgvsp_key": _clean(row.get("gofcards_hgvsp_key")),
                         "vep_hgvsc_key": _clean(row.get("vep_hgvsc_key")),
@@ -533,9 +556,11 @@ class GeneMechanismHub:
                         "gofcards_gene_match": _clean(row.get("gofcards_gene_match")),
                         "gofcards_hgvsc_match": _clean(row.get("gofcards_hgvsc_match")),
                         "gofcards_hgvsp_match": _clean(row.get("gofcards_hgvsp_match")),
-                        "gofcards_hgvs_match_status": _clean(row.get("gofcards_hgvs_match_status")),
+                        "gofcards_hgvs_match_status": match_status,
+                        "match_status": match_status,
                         "canonical_transcript": _clean(row.get("canonical_transcript")),
-                        "gofcards_AAChange_refGene": _clean(row.get("gofcards_AAChange_refGene")),
+                        "gofcards_AAChange_refGene": _clean(row.get("raw_GoFCards_HGVS"))
+                        or _clean(row.get("gofcards_AAChange_refGene")),
                         "derived_on": _clean(row.get("derived_on")),
                     }
                 )
@@ -775,13 +800,22 @@ class GeneMechanismHub:
             ("hg38", "vcf"): "hg38_vcf_key",
         }
         for _, row in compact.iterrows():
-            symbol = self._try_resolve_symbol(row.get("symbol"))
+            cache_symbol = (
+                row.get("HGNC_Symbol")
+                or row.get("symbol")
+                or row.get("match_symbol")
+                or row.get("gofcards_symbol_resolved")
+                or row.get("gofcards_symbol")
+            )
+            symbol = self._try_resolve_symbol(cache_symbol)
             if not symbol:
-                symbol = _clean(row.get("symbol"))
+                symbol = _clean(cache_symbol)
             if not symbol:
                 continue
             match = {str(col): _clean(row.get(col)) for col in compact.columns}
             match["symbol"] = symbol
+            match.setdefault("match_status", _clean(row.get("gofcards_hgvs_match_status")))
+            match.setdefault("gofcards_hgvs_match_status", _clean(row.get("match_status")))
             match["input_cache"] = str(compact_path)
             for (assembly, key_type), col in key_columns.items():
                 key = _genomic_match_key_from_text(row.get(col))

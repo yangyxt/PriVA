@@ -100,6 +100,59 @@ def _norm_chrom(value: Any) -> str:
     return text if text.startswith("chr") else f"chr{text}"
 
 
+def _norm_chrom_key(value: Any) -> str:
+    text = _clean(value)
+    if not text:
+        return ""
+    if text.lower().startswith("chr"):
+        text = text[3:]
+    if text.upper() in {"M", "MT"}:
+        return "MT"
+    return text.upper()
+
+
+def _norm_pos_key(value: Any) -> str:
+    text = _clean(value)
+    if not text:
+        return ""
+    try:
+        as_float = float(text)
+    except ValueError:
+        return text
+    if as_float.is_integer():
+        return str(int(as_float))
+    return text
+
+
+def _norm_allele_key(value: Any) -> str:
+    return _clean(value).upper()
+
+
+def _genomic_match_key(chrom: Any, pos: Any, ref: Any, alt: Any) -> str:
+    chrom_key = _norm_chrom_key(chrom)
+    pos_key = _norm_pos_key(pos)
+    if not chrom_key or not pos_key:
+        return ""
+    return "|".join(
+        [
+            chrom_key,
+            pos_key,
+            _norm_allele_key(ref),
+            _norm_allele_key(alt),
+        ]
+    )
+
+
+def _genomic_match_key_from_text(value: Any) -> str:
+    text = _clean(value)
+    if not text:
+        return ""
+    parts = text.split("|")
+    if len(parts) != 4:
+        return ""
+    return _genomic_match_key(parts[0], parts[1], parts[2], parts[3])
+
+
 def _norm_hgvsp(value: Any) -> str:
     text = _clean(value)
     if not text:
@@ -264,6 +317,7 @@ class GeneMechanismHub:
         self._clingen_by_symbol: dict[str, dict[str, Any]] | None = None
         self._loeuf_by_symbol: dict[str, float] | None = None
         self._gofcards_by_symbol_hgvsp: dict[tuple[str, str], list[dict[str, str]]] | None = None
+        self._gofcards_by_symbol_genomic: dict[tuple[str, str, str, str], list[dict[str, str]]] | None = None
 
     def _build_resolver(self, use_hgnc_package: bool) -> Any:
         if use_hgnc_package:
@@ -657,6 +711,90 @@ class GeneMechanismHub:
         self._gofcards_by_symbol_hgvsp = dict(by_symbol_hgvsp)
         return self._gofcards_by_symbol_hgvsp
 
+    @staticmethod
+    def _deduplicate_gofcards_matches(rows: list[dict[str, str]]) -> list[dict[str, str]]:
+        seen: set[tuple[str, str, str, str, str, str, str]] = set()
+        unique_rows: list[dict[str, str]] = []
+        for row in sorted(
+            rows,
+            key=lambda item: (
+                item.get("canonical_transcript") != "YES",
+                item.get("gofcards_accession_id", ""),
+                item.get("gofcards_variant_id", ""),
+                item.get("HGVSp", ""),
+                item.get("hg38_vcf_key", ""),
+                item.get("hg19_vcf_key", ""),
+            ),
+        ):
+            dedup_key = (
+                row.get("gofcards_variant_id", ""),
+                row.get("gofcards_accession_id", ""),
+                row.get("HGVSc", ""),
+                row.get("HGVSp", ""),
+                row.get("hg38_vcf_key", ""),
+                row.get("hg19_vcf_key", ""),
+                row.get("allele_key", ""),
+            )
+            if dedup_key in seen:
+                continue
+            seen.add(dedup_key)
+            unique_rows.append(row)
+        return unique_rows
+
+    def _load_gofcards_variant_genomic(
+        self,
+        *,
+        gofcards_exact_hgvsp_tsv: str | Path = DEFAULT_GOFCARDS_EXACT_GOF_HGVSP,
+    ) -> dict[tuple[str, str, str, str], list[dict[str, str]]]:
+        """Return exact-match GoFCards GOF genomic allele evidence.
+
+        The key is ``(HGNC symbol, assembly, key_type, chrom|pos|ref|alt)``.
+        ``key_type=vcf`` uses the VCF-padded allele representation intended for
+        caller/VCF matching; ``key_type=genomic`` uses the sparse source genomic
+        fields retained from GoFCards.
+        """
+        if self._gofcards_by_symbol_genomic is not None:
+            return self._gofcards_by_symbol_genomic
+
+        compact_path = Path(gofcards_exact_hgvsp_tsv)
+        if not compact_path.exists():
+            self._gofcards_by_symbol_genomic = {}
+            return self._gofcards_by_symbol_genomic
+
+        compact = pd.read_csv(
+            compact_path,
+            sep="\t",
+            dtype=str,
+            low_memory=False,
+        ).fillna("")
+        by_symbol_genomic: dict[tuple[str, str, str, str], list[dict[str, str]]] = defaultdict(list)
+        key_columns = {
+            ("hg19", "genomic"): "hg19_genomic_key",
+            ("hg19", "vcf"): "hg19_vcf_key",
+            ("hg38", "genomic"): "hg38_genomic_key",
+            ("hg38", "vcf"): "hg38_vcf_key",
+        }
+        for _, row in compact.iterrows():
+            symbol = self._try_resolve_symbol(row.get("symbol"))
+            if not symbol:
+                symbol = _clean(row.get("symbol"))
+            if not symbol:
+                continue
+            match = {str(col): _clean(row.get(col)) for col in compact.columns}
+            match["symbol"] = symbol
+            match["input_cache"] = str(compact_path)
+            for (assembly, key_type), col in key_columns.items():
+                key = _genomic_match_key_from_text(row.get(col))
+                if not key:
+                    continue
+                by_symbol_genomic[(symbol, assembly, key_type, key)].append(match)
+
+        self._gofcards_by_symbol_genomic = {
+            key: self._deduplicate_gofcards_matches(rows)
+            for key, rows in by_symbol_genomic.items()
+        }
+        return self._gofcards_by_symbol_genomic
+
     def match_gofcards_variant_gof(
         self,
         gene_symbol: Any,
@@ -699,6 +837,84 @@ class GeneMechanismHub:
             "symbol": symbol,
             "input_hgvsp": _clean(hgvsp),
             "matched_hgvsp_key": hgvsp_key,
+            "variant_gof_tag": "GOF" if matches else "",
+            "gofcards_accession_id": ";".join(accession_ids),
+            "gofcards_variant_id": ";".join(variant_ids),
+            "matches": matches,
+        }
+
+    def match_gofcards_variant_gof_by_genomic(
+        self,
+        gene_symbol: Any,
+        chrom: Any,
+        pos: Any,
+        ref: Any,
+        alt: Any,
+        *,
+        assembly: str = "hg38",
+        key_type: str = "auto",
+        gofcards_exact_hgvsp_tsv: str | Path = DEFAULT_GOFCARDS_EXACT_GOF_HGVSP,
+    ) -> dict[str, Any]:
+        """Return variant-level GOF evidence for an exact GoFCards genomic match."""
+        symbol = self._resolved_symbol_key(gene_symbol)
+        normalized_key = _genomic_match_key(chrom, pos, ref, alt)
+        assembly_key = _clean(assembly).lower()
+        assembly_aliases = {
+            "grch37": "hg19",
+            "hg19": "hg19",
+            "b37": "hg19",
+            "grch38": "hg38",
+            "hg38": "hg38",
+            "b38": "hg38",
+        }
+        assembly_key = assembly_aliases.get(assembly_key, assembly_key)
+        key_type_value = _clean(key_type).lower() or "auto"
+        if key_type_value == "auto":
+            key_types = ("vcf", "genomic")
+        elif key_type_value in {"vcf", "genomic"}:
+            key_types = (key_type_value,)
+        else:
+            key_types = ()
+
+        empty = {
+            "input_symbol": _clean(gene_symbol),
+            "symbol": symbol,
+            "input_assembly": _clean(assembly),
+            "assembly": assembly_key,
+            "input_chrom": _clean(chrom),
+            "input_pos": _clean(pos),
+            "input_ref": _clean(ref),
+            "input_alt": _clean(alt),
+            "matched_genomic_key": normalized_key,
+            "matched_key_type": "",
+            "variant_gof_tag": "",
+            "gofcards_accession_id": "",
+            "gofcards_variant_id": "",
+            "matches": [],
+        }
+        if not symbol or not normalized_key or assembly_key not in {"hg19", "hg38"} or not key_types:
+            return empty
+
+        lookup = self._load_gofcards_variant_genomic(
+            gofcards_exact_hgvsp_tsv=gofcards_exact_hgvsp_tsv,
+        )
+        matches: list[dict[str, str]] = []
+        matched_key_types: list[str] = []
+        for current_key_type in key_types:
+            current_matches = lookup.get((symbol, assembly_key, current_key_type, normalized_key), [])
+            if current_matches:
+                matched_key_types.append(current_key_type)
+                matches.extend(current_matches)
+        matches = self._deduplicate_gofcards_matches(matches)
+        accession_ids = sorted(
+            {row.get("gofcards_accession_id", "") for row in matches if row.get("gofcards_accession_id", "")}
+        )
+        variant_ids = sorted(
+            {row.get("gofcards_variant_id", "") for row in matches if row.get("gofcards_variant_id", "")}
+        )
+        return {
+            **empty,
+            "matched_key_type": ";".join(matched_key_types),
             "variant_gof_tag": "GOF" if matches else "",
             "gofcards_accession_id": ";".join(accession_ids),
             "gofcards_variant_id": ";".join(variant_ids),
@@ -981,6 +1197,31 @@ def match_gofcards_variant_gof(
         gofcards_active_tsv=gofcards_active_tsv,
         gofcards_raw_xlsx=gofcards_raw_xlsx,
         gofcards_conversion_audit_tsv=gofcards_conversion_audit_tsv,
+    )
+
+
+def match_gofcards_variant_gof_by_genomic(
+    gene_symbol: Any,
+    chrom: Any,
+    pos: Any,
+    ref: Any,
+    alt: Any,
+    *,
+    assembly: str = "hg38",
+    key_type: str = "auto",
+    gofcards_exact_hgvsp_tsv: str | Path = DEFAULT_GOFCARDS_EXACT_GOF_HGVSP,
+    use_hgnc_package: bool = False,
+) -> dict[str, Any]:
+    """Convenience wrapper for exact GoFCards genomic variant-level GOF matching."""
+    return GeneMechanismHub(use_hgnc_package=use_hgnc_package).match_gofcards_variant_gof_by_genomic(
+        gene_symbol,
+        chrom,
+        pos,
+        ref,
+        alt,
+        assembly=assembly,
+        key_type=key_type,
+        gofcards_exact_hgvsp_tsv=gofcards_exact_hgvsp_tsv,
     )
 
 

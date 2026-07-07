@@ -21,20 +21,20 @@ Current cache:
 - refreshed: 2026-07-07
 - source workbook: `/paedyl01/disk1/yangyxt/gofcards_hg38_normalizer/work_20260707_full/gofcards_hg38_normalized_workbook_20260707.xlsx`
 - exported TSV: `/paedyl01/disk1/yangyxt/gofcards_hg38_normalizer/work_20260707_full/gofcards_priva_exact_gof_hgvsp_20260707.tsv.gz`
-- rows: 3,927 VEP-calibrated runtime records
-- columns: 39
-- unique exact HGVSp-match keys: 2,097 normalized `HGNC_Symbol+hgvsp_key` pairs
-- rows without HGVSp retained for genomic matching: 55
-- rows with missing hg19/hg38 padded allele keys: 0
-- raw backend unique allele keys not represented: 3 of 2,033; all three are
-  malformed source rows labeled `SNV` despite multi-base/non-SNV alleles and
-  lacking valid hg38 padded REF/ALT fields.
+- rows: 4,009 VEP-calibrated runtime records
+- columns: 45
+- unique exact HGVSp-match keys: 2,106 normalized `HGNC_Symbol+hgvsp_key` pairs
+- rows without HGVSp retained for genomic matching: 83
+- rows with missing hg19/hg38 raw or normalized allele keys: 0
+- raw backend unique allele keys not represented: 0 of 2,033
 
-The table is VEP-centric and compact: one normalized `HGNC_Symbol`, VEP-derived
-`HGVSc`/`HGVSp` for concordant transcript matches, raw GoFCards HGVS for trace,
-and nonblank hg19/hg38 padded genomic allele keys. Coordinate-only rows are
-kept only when GoFCards lacks parseable HGVS but exact genomic matching remains
-possible. The stable PriVA input path remains
+The table is VEP-calibrated and compact: one normalized `HGNC_Symbol`,
+VEP-derived `HGVSc`/`HGVSp` for concordant transcript matches, raw GoFCards HGVS
+for trace, and nonblank hg19/hg38 allele keys. `*_genomic_key` preserves the raw
+GoFCards/source allele representation; `*_vcf_key` stores the bcftools-normalized
+VCF representation used for caller-style exact matching. VEP-discordant rows are
+kept for genomic matching only, with cache HGVSc/HGVSp left blank. The stable
+PriVA input path remains
 `data/gofcards/gofcards_exact_gof_hgvsp.tsv.gz`.
 
 Validated examples:

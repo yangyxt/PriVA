@@ -423,6 +423,9 @@ class GeneMechanismHub:
                     continue
                 by_symbol_hgvsp[(symbol, hgvsp_key)].append(
                     {
+                        "source": _clean(row.get("source")),
+                        "mechanism": _clean(row.get("mechanism")),
+                        "build": _clean(row.get("build")),
                         "gofcards_variant_id": _clean(row.get("gofcards_variant_id")),
                         "gofcards_accession_id": _clean(row.get("gofcards_accession_id")),
                         "disease": _clean(row.get("disease")),
@@ -432,13 +435,30 @@ class GeneMechanismHub:
                         "pathway": _clean(row.get("pathway")),
                         "transcript": _clean(row.get("transcript")),
                         "symbol": symbol,
+                        "match_symbol": _clean(row.get("match_symbol")),
+                        "source_refseq_transcript": _clean(row.get("source_refseq_transcript")),
+                        "vep_transcript": _clean(row.get("vep_transcript")),
                         "chrom": _clean(row.get("chrom")),
                         "pos": _clean(row.get("pos")),
                         "ref": _clean(row.get("ref")),
                         "alt": _clean(row.get("alt")),
+                        "hg19_chrom": _clean(row.get("hg19_chrom")),
+                        "hg19_start": _clean(row.get("hg19_start")),
+                        "hg19_end": _clean(row.get("hg19_end")),
+                        "hg19_ref": _clean(row.get("hg19_ref")),
+                        "hg19_alt": _clean(row.get("hg19_alt")),
+                        "hg38_chrom": _clean(row.get("hg38_chrom")),
+                        "hg38_start": _clean(row.get("hg38_start")),
+                        "hg38_end": _clean(row.get("hg38_end")),
+                        "hg38_ref": _clean(row.get("hg38_ref")),
+                        "hg38_alt": _clean(row.get("hg38_alt")),
+                        "hg38_refalt_status": _clean(row.get("hg38_refalt_status")),
                         "HGVSc": _clean(row.get("HGVSc")),
                         "HGVSp": _clean(row.get("HGVSp")),
+                        "normalized_hgvsp": _clean(row.get("normalized_hgvsp")),
                         "canonical_transcript": _clean(row.get("canonical_transcript")),
+                        "gofcards_AAChange_refGene": _clean(row.get("gofcards_AAChange_refGene")),
+                        "derived_on": _clean(row.get("derived_on")),
                     }
                 )
             self._gofcards_by_symbol_hgvsp = dict(by_symbol_hgvsp)

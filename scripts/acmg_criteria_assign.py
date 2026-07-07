@@ -98,6 +98,144 @@ def _lookup_exact_gofcards_variant(hub, row):
     return {"variant_gof_tag": "", "match_route": "", "matches": []}
 
 
+GOFCARDS_VARIANT_OUTPUT_COLS = (
+    "variant_gof_tag",
+    "gofcards_accession_id",
+    "gofcards_variant_id",
+    "gofcards_match_route",
+)
+
+
+def _merge_semicolon_values(*values):
+    seen = set()
+    merged = []
+    for value in values:
+        for token in _clean_text(value).replace(",", ";").split(";"):
+            token = token.strip()
+            if token and token not in seen:
+                seen.add(token)
+                merged.append(token)
+    return ";".join(merged)
+
+
+def _ensure_gofcards_variant_columns(df):
+    for col in GOFCARDS_VARIANT_OUTPUT_COLS:
+        if col not in df.columns:
+            df[col] = ""
+        else:
+            df[col] = df[col].fillna("").astype(str)
+    if "gofcards_accession" in df.columns:
+        df["gofcards_accession_id"] = [
+            _merge_semicolon_values(current, legacy)
+            for current, legacy in zip(df["gofcards_accession_id"], df["gofcards_accession"])
+        ]
+
+
+def _record_exact_gofcards_match(df, indices, match):
+    if match.get("variant_gof_tag") != "GOF":
+        return
+    route = _clean_text(match.get("match_route")) or _clean_text(match.get("matched_key_type"))
+    accession_id = _clean_text(match.get("gofcards_accession_id"))
+    variant_id = _clean_text(match.get("gofcards_variant_id"))
+    df.loc[indices, "variant_gof_tag"] = [
+        _merge_semicolon_values(value, "GOF") for value in df.loc[indices, "variant_gof_tag"]
+    ]
+    if accession_id:
+        df.loc[indices, "gofcards_accession_id"] = [
+            _merge_semicolon_values(value, accession_id)
+            for value in df.loc[indices, "gofcards_accession_id"]
+        ]
+    if variant_id:
+        df.loc[indices, "gofcards_variant_id"] = [
+            _merge_semicolon_values(value, variant_id)
+            for value in df.loc[indices, "gofcards_variant_id"]
+        ]
+    if route:
+        df.loc[indices, "gofcards_match_route"] = [
+            _merge_semicolon_values(value, route)
+            for value in df.loc[indices, "gofcards_match_route"]
+        ]
+
+
+def annotate_exact_gofcards_variants(df, row_mask=None, *, context=""):
+    """Annotate exact GoFCards variant-level GOF matches on PriVA rows.
+
+    This is intentionally variant-level only. It matches first by SYMBOL+HGVSp,
+    then by SYMBOL+genomic allele for rows not already matched by HGVSp.
+    """
+    if "SYMBOL" not in df.columns:
+        return df
+    _ensure_gofcards_variant_columns(df)
+    if row_mask is None:
+        row_mask = pd.Series(True, index=df.index)
+    else:
+        row_mask = pd.Series(row_mask, index=df.index).fillna(False).astype(bool)
+    row_mask = row_mask & df["SYMBOL"].map(_clean_text).ne("")
+    if not row_mask.any():
+        return df
+
+    hub = GeneMechanismHub(use_hgnc_package=False)
+    matched_rows = 0
+    hgvsp_matches = 0
+    genomic_matches = 0
+
+    if "HGVSp" in df.columns:
+        hgvsp_frame = df.loc[row_mask & df["HGVSp"].map(_clean_text).ne(""), ["SYMBOL", "HGVSp"]].copy()
+        if not hgvsp_frame.empty:
+            hgvsp_frame["_symbol"] = hgvsp_frame["SYMBOL"].map(_clean_text)
+            hgvsp_frame["_hgvsp"] = hgvsp_frame["HGVSp"].map(_clean_text)
+            for (symbol, hgvsp), idx in hgvsp_frame.groupby(["_symbol", "_hgvsp"], sort=False).groups.items():
+                try:
+                    match = hub.match_gofcards_variant_gof(symbol, hgvsp)
+                except Exception as exc:
+                    logger.debug(f"GoFCards HGVSp lookup failed for {context} {symbol} {hgvsp}: {exc}")
+                    continue
+                if match.get("variant_gof_tag") == "GOF":
+                    match["match_route"] = "hgvsp"
+                    _record_exact_gofcards_match(df, idx, match)
+                    hgvsp_matches += 1
+                    matched_rows += len(idx)
+
+    has_genomic = {"chrom", "pos", "ref", "alt"}.issubset(df.columns)
+    if has_genomic:
+        already_matched = df["variant_gof_tag"].str.upper().str.contains(r"(?:^|;)GOF(?:;|$)", regex=True)
+        genomic_mask = row_mask & ~already_matched
+        for col in ("chrom", "pos", "ref", "alt"):
+            genomic_mask = genomic_mask & df[col].map(_clean_text).ne("")
+        if genomic_mask.any():
+            genomic_cols = ["SYMBOL", "chrom", "pos", "ref", "alt"]
+            genomic_frame = df.loc[genomic_mask, genomic_cols].copy()
+            genomic_frame["_assembly"] = df.loc[genomic_mask].apply(_row_assembly_for_gof_lookup, axis=1)
+            for key, idx in genomic_frame.groupby(genomic_cols + ["_assembly"], sort=False).groups.items():
+                symbol, chrom, pos, ref, alt, assembly = key
+                try:
+                    match = hub.match_gofcards_variant_gof_by_genomic(
+                        symbol, chrom, pos, ref, alt, assembly=assembly, key_type="auto"
+                    )
+                except Exception as exc:
+                    logger.debug(
+                        f"GoFCards genomic lookup failed for {context} {symbol} "
+                        f"{chrom}:{pos}:{ref}>{alt} ({assembly}): {exc}"
+                    )
+                    continue
+                if match.get("variant_gof_tag") == "GOF":
+                    match["match_route"] = "genomic"
+                    _record_exact_gofcards_match(df, idx, match)
+                    genomic_matches += 1
+                    matched_rows += len(idx)
+
+    if matched_rows:
+        logger.info(
+            "Exact GoFCards variant-level GOF annotations for %s: rows=%s, "
+            "unique_hgvsp_matches=%s, unique_genomic_matches=%s",
+            context,
+            matched_rows,
+            hgvsp_matches,
+            genomic_matches,
+        )
+    return df
+
+
 def _apply_exact_gofcards_lookup(df, needs_gof_lookup, is_exact_gof, *, context):
     if not needs_gof_lookup.any() or "SYMBOL" not in df.columns:
         return is_exact_gof
@@ -106,16 +244,9 @@ def _apply_exact_gofcards_lookup(df, needs_gof_lookup, is_exact_gof, *, context)
     if not has_hgvsp and not has_genomic:
         return is_exact_gof
 
-    hub = GeneMechanismHub(use_hgnc_package=False)
-    for idx in df.index[needs_gof_lookup]:
-        try:
-            match = _lookup_exact_gofcards_variant(hub, df.loc[idx])
-        except Exception as exc:
-            logger.debug(f"GoFCards exact variant lookup failed for {context} row {idx}: {exc}")
-            continue
-        if match.get("variant_gof_tag") == "GOF":
-            is_exact_gof.loc[idx] = True
-    return is_exact_gof
+    annotate_exact_gofcards_variants(df, needs_gof_lookup, context=context)
+    variant_gof_tag = df.get("variant_gof_tag", pd.Series("", index=df.index)).fillna("").astype(str)
+    return variant_gof_tag.str.upper().str.contains(r"(?:^|;)GOF(?:;|$)", regex=True)
 
 
 def coerce_pext_value(value):
@@ -652,6 +783,8 @@ def PVS1_criteria(df: pd.DataFrame,
     # disease mechanism for the gene/disease context, not on the proband's zygosity per se.
     # PriVA may still apply zygosity-/inheritance-aware prioritization elsewhere (e.g., PM3, BP2),
     # but here we keep the PVS1 "gene LoF mechanism" gate consistent across genotypes.
+    # ``proband_gt_col`` is kept in the function signature for CLI/backward compatibility with
+    # older PriVA calls; it is intentionally not used for PVS1 strength assignment.
 
     lof_intol_metric = (df["LOEUF"].fillna(2) < 0.35) | (df["Gene_avg_AM_score"].fillna(0) > 0.7)
     logger.info(f"For LOEUF < 0.35, {(df['LOEUF'].fillna(2) < 0.35).sum()} variants are located in a gene intolerant to LoF variants")
@@ -799,6 +932,18 @@ def PVS1_criteria(df: pd.DataFrame,
         logger.info(f"{alt_start_losts.sum()} variants are having start_lost consequences to transcripts with alternative start codons")
         # Per ClinGen SVI, start_lost should be PVS1_Moderate at most (not Very Strong)
         pvs1_criteria[df['Consequence'].str.contains("start_lost") & ~alt_start_losts & (pvs1_criteria < 2)] = 2
+
+    variant_gof_tag = df.get("variant_gof_tag", pd.Series("", index=df.index)).fillna("").astype(str)
+    exact_gof = variant_gof_tag.str.upper().str.contains(r"(?:^|;)GOF(?:;|$)", regex=True)
+    needs_gof_lookup = pd.Series(pvs1_criteria > 0, index=df.index) & ~exact_gof
+    exact_gof = _apply_exact_gofcards_lookup(df, needs_gof_lookup, exact_gof, context="PVS1")
+    suppress_pvs1 = (pvs1_criteria > 0) & exact_gof.to_numpy()
+    if suppress_pvs1.any():
+        logger.info(
+            "Suppressing PVS1 for %s exact GoFCards variant-level GOF rows",
+            int(suppress_pvs1.sum()),
+        )
+        pvs1_criteria[suppress_pvs1] = 0
 
     return pvs1_criteria, intolerant_domains
 
@@ -3869,6 +4014,9 @@ def sort_and_rank_variants(df: pd.DataFrame,
         DataFrame sorted by variant's max ACMG score with added variant rank column
     """
     df = df.copy()
+    for stale_col in ("haplo_insuf_index", "zygosity_inheritance_mechanism_index"):
+        if stale_col in df.columns:
+            df = df.drop(columns=[stale_col])
 
     df["sort_index"] = df.loc[:, "ACMG_quant_score"]
     df = df.loc[df["BIOTYPE"] == "protein_coding", :]
@@ -3878,7 +4026,7 @@ def sort_and_rank_variants(df: pd.DataFrame,
         proband = ped_df.loc[(ped_df['#FamilyID'] == fam_name) & (ped_df['Phenotype'].isin(["2", 2])), 'IndividualID'].values[0]
         proband_het = (df.loc[:, proband].str.count("1") == 1)
     else:
-        logger.warning(f"No ped_table provided, skip the haplo_sufficient penalty")
+        logger.warning("No ped_table provided, skip the zygosity/inheritance/mechanism compatibility penalty")
         proband = None
         proband_het = pd.Series([False] * len(df), index=df.index)  # Use Series with matching index
 
@@ -3887,17 +4035,14 @@ def sort_and_rank_variants(df: pd.DataFrame,
     df.loc[:, "sort_index"] = df.loc[:, "sort_index"] * df.loc[:, "control_common_index"]
 
     # ---------------------------------------------------------------------
-    # Haploinsufficiency / haplosufficiency proxy for down-weighting single-allele
-    # LoF-like calls.
+    # Zygosity / inheritance / mechanism compatibility penalty.
     #
-    # ClinGen dosage sensitivity is treated as high-precision but low-sensitivity:
-    # - If ClinGen calls HI=3, we trust the gene is haploinsufficient.
-    # - Absence of HI=3 does NOT guarantee haplosufficiency, so we also consult
-    #   population constraint (LOEUF) and gene-level intolerance (mean AM).
-    #
-    # We define:
-    #   haplo_insufficient = ClinGen_HI3 OR (LOEUF <= 0.35) OR (GeneMeanAM >= 0.564)
-    #   haplo_sufficient   = NOT haplo_insufficient
+    # This was historically named a "haplo_sufficient" penalty, but the actual
+    # ranking intent is narrower: down-weight a single-allele, LoF-like proband
+    # call when the gene history does not support heterozygous LoF as a disease
+    # mechanism. The hub-derived gene_mech_inher_history is authoritative when
+    # available. ClinGen/LOEUF/AM is retained only as a fallback for legacy rows
+    # that lack hub mechanism categories.
     # ---------------------------------------------------------------------
 
     # LOEUF-based signal (lower LOEUF => more LoF-intolerant)
@@ -3927,20 +4072,71 @@ def sort_and_rank_variants(df: pd.DataFrame,
         if gene_dosage_sensitivity:
             logger.warning(f"ClinGen dosage sensitivity file not found: {gene_dosage_sensitivity}")
 
-    # User requirement:
-    # ClinGen AR flags (HI=30/40) have highest priority: regardless of LOEUF/AM/ClinGen HI,
-    # genes marked as AR should NOT be treated as haploinsufficient for the heterozygous LoF penalty.
-    haplo_insufficient = (clingen_hi | loeuf_hi | am_hi) & ~clingen_ar
-    haplo_sufficient = ~haplo_insufficient
+    fallback_heterozygous_lof_compatible = (clingen_hi | loeuf_hi | am_hi) & ~clingen_ar
+
+    def _bool_col(column: str) -> pd.Series:
+        if column not in df.columns:
+            return pd.Series(False, index=df.index)
+        values = df[column]
+        if pd.api.types.is_bool_dtype(values):
+            return values.fillna(False).astype(bool)
+        numeric = pd.to_numeric(values, errors="coerce")
+        text = values.fillna("").astype(str).str.strip().str.lower()
+        return numeric.fillna(0).ne(0) | text.isin({"true", "t", "yes", "y"})
+
+    consq = df.get("Consequence", pd.Series("", index=df.index)).fillna("").astype(str)
+    nmd = df.get("NMD", pd.Series("", index=df.index)).fillna("").astype(str)
+    lof_filter = df.get("LoF_filter", pd.Series("", index=df.index)).fillna("").astype(str)
+    is_nmd_lof = (
+        (consq.str.contains("stop_gained", regex=False) | consq.str.contains("frameshift", regex=False))
+        & ~nmd.str.contains("escaping", regex=False)
+        & ~lof_filter.str.contains("END_TRUNC", regex=False)
+    )
+    acmg_criteria = df.get("ACMG_criteria", pd.Series("", index=df.index)).fillna("").astype(str)
+    pvs1_assigned = acmg_criteria.str.contains(r"(?:^|;)PVS1(?:_|;|$)", regex=True)
+    asserted_lof_effect = (
+        _bool_col("vep_consq_lof")
+        | _bool_col("splicing_lof")
+        | _bool_col("5UTR_lof")
+        | pvs1_assigned
+        | is_nmd_lof
+    )
+
+    mech_history = df.get("gene_mech_inher_history", pd.Series("", index=df.index)).fillna("").astype(str)
+    has_mech_history = mech_history.str.strip().ne("")
+    has_dom_hi = mech_history.str.contains(r"(?:^|;)dominant_HI(?:;|$)", regex=True)
+    has_dom_ambiguous = mech_history.str.contains(r"(?:^|;)dominant_ambiguous(?:;|$)", regex=True)
+    has_dom_dn = mech_history.str.contains(r"(?:^|;)dominant_DN(?:;|$)", regex=True)
+    has_dom_lof_compatible = has_dom_hi | has_dom_ambiguous
+    variant_gof_tag = df.get("variant_gof_tag", pd.Series("", index=df.index)).fillna("").astype(str)
+    exact_gof = variant_gof_tag.str.upper().str.contains(r"(?:^|;)GOF(?:;|$)", regex=True)
+    dn_without_hi_or_ambiguous = has_dom_dn & ~has_dom_hi & ~has_dom_ambiguous
+    lof_effect_for_penalty = np.where(dn_without_hi_or_ambiguous, is_nmd_lof, asserted_lof_effect)
+    heterozygous_lof_incompatible = (
+        lof_effect_for_penalty
+        & ~exact_gof
+        & (
+            (has_mech_history & ~has_dom_lof_compatible)
+            | (~has_mech_history & ~fallback_heterozygous_lof_compatible)
+        )
+    )
+
+    high_acmg_lof = df["ACMG_quant_score"] > 0.89
+    compatibility_penalty_rows = high_acmg_lof & proband_het & heterozygous_lof_incompatible
 
     logger.info(
-        "Haploinsufficiency signals for ranking: "
+        "Zygosity/inheritance/mechanism compatibility signals for ranking: "
         f"ClinGen_HI3={clingen_hi.sum()}, ClinGen_AR30/40={clingen_ar.sum()}, "
         f"LOEUF<=0.35={loeuf_hi.sum()}, GeneMeanAM>=0.564={am_hi.sum()}, "
-        f"combined_haplo_insufficient={haplo_insufficient.sum()}"
+        f"hub_history_rows={has_mech_history.sum()}, "
+        f"asserted_lof_effect={pd.Series(asserted_lof_effect, index=df.index).sum()}, "
+        f"nmd_lof={is_nmd_lof.sum()}, "
+        f"dominant_DN_without_HI_or_ambiguous={dn_without_hi_or_ambiguous.sum()}, "
+        f"heterozygous_lof_incompatible={heterozygous_lof_incompatible.sum()}, "
+        f"compatibility_penalty_rows={compatibility_penalty_rows.sum()}"
     )
-    df["haplo_insuf_index"] = 1.0
-    df.loc[haplo_sufficient, "haplo_insuf_index"] = 0.9 # This penalty coefficient will lead to a near-1 posterior prob downgrade to below 0.9 which is below the cutoff of likely pathogenic.
+    df["zygosity_inheritance_mechanism_compatibility"] = 1.0
+    df.loc[compatibility_penalty_rows, "zygosity_inheritance_mechanism_compatibility"] = 0.9
 
     if dispensable_gene_list is not None:
         dispensable_genes = pd.read_table(dispensable_gene_list, header=None, names=["SYMBOL"], comment="#") # Skip the header row starting with #
@@ -3956,8 +4152,10 @@ def sort_and_rank_variants(df: pd.DataFrame,
         df.loc[df["SYMBOL"].isin(relevant_genes), "relevant_gene_index"] = 1.2  # Prioritize the variants in relevant genes
         df.loc[:, "sort_index"] = df.loc[:, "sort_index"] * df.loc[:, "relevant_gene_index"]
 
-    lof = df["ACMG_quant_score"] > 0.89
-    df.loc[lof & proband_het, "sort_index"] = df.loc[lof & proband_het, "sort_index"] * df.loc[lof & proband_het, "haplo_insuf_index"]
+    df.loc[compatibility_penalty_rows, "sort_index"] = (
+        df.loc[compatibility_penalty_rows, "sort_index"]
+        * df.loc[compatibility_penalty_rows, "zygosity_inheritance_mechanism_compatibility"]
+    )
 
     # Apply pext-based expression modulation if pext columns are available
     # Low pext = variant in low-expression region = deprioritize for LoF interpretation
@@ -4165,6 +4363,7 @@ def ACMG_criteria_assign(anno_table: str,
 
     # Establish the variant ID column
     anno_df["variant_id"] = anno_df["chrom"] + ":" + anno_df["pos"].astype(str) + ":" + anno_df["ref"] + "-" + anno_df["alt"]
+    annotate_exact_gofcards_variants(anno_df, context="step3_initial")
 
     # Load the intolerant domains
     if intolerant_domains_pkl.endswith(".gz"):

@@ -45,6 +45,8 @@ def resort_family(filtered_tsv: str, am_score_table: str, ped_table: str,
     # Drop columns that sort_and_rank_variants will recreate
     drop_cols = [c for c in ("sort_index", "pext_sort_index", "variant_rank",
                              "control_common_index", "haplo_insuf_index",
+                             "zygosity_inheritance_mechanism_index",
+                             "zygosity_inheritance_mechanism_compatibility",
                              "dispensable_gene_index", "relevant_gene_index",
                              "max_variant_score") if c in anno_df.columns]
     anno_df = anno_df.drop(columns=drop_cols)

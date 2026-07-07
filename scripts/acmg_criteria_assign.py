@@ -4123,6 +4123,7 @@ def sort_and_rank_variants(df: pd.DataFrame,
 
     high_acmg_lof = df["ACMG_quant_score"] > 0.89
     compatibility_penalty_rows = high_acmg_lof & proband_het & heterozygous_lof_incompatible
+    pext_modulation_rows = high_acmg_lof
 
     logger.info(
         "Zygosity/inheritance/mechanism compatibility signals for ranking: "
@@ -4192,8 +4193,11 @@ def sort_and_rank_variants(df: pd.DataFrame,
             1.0,
             pext_penalty_floor + (1.0 - pext_penalty_floor) * np.power(scaled_pext, pext_penalty_shape)
         )
-        # Apply pext modulation only to LoF variants (where expression matters most)
-        df.loc[lof, "sort_index"] = df.loc[lof, "sort_index"] * df.loc[lof, "pext_sort_index"]
+        # Historical PriVA behavior applied PEXT modulation to high ACMG-score rows.
+        df.loc[pext_modulation_rows, "sort_index"] = (
+            df.loc[pext_modulation_rows, "sort_index"]
+            * df.loc[pext_modulation_rows, "pext_sort_index"]
+        )
         logger.info(
             "Applied pext-based sort modulation using %s "
             "(cutoff=%s, floor=%s, shape=%s)",

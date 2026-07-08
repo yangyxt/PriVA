@@ -3,7 +3,8 @@
 
 This module normalizes a gene query to one current HGNC symbol, then reports:
 
-1. Curated non-LoF mechanism history from the existing mechanism JSON cache.
+1. Curated mechanism history from the existing mechanism JSON cache and the
+   companion DDG2P/G2P evidence table.
 2. Known inheritance/HI status using PriVA's existing inheritance decision
    function from ``acmg_criteria_assign.py``.
 
@@ -20,6 +21,7 @@ import json
 import logging
 import math
 import os
+import re
 from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any
@@ -38,6 +40,10 @@ DEFAULT_LOEUF_TABLE = DATA_DIR / "loeuf" / "loeuf_dataset.tsv.gz"
 DEFAULT_MECHANISM_JSON = Path(
     "/paedyl01/disk1/yangyxt/llm_gene_reranker/data/gene_pathogenic_mechanism/"
     "prepared/gene_mechanism_curated_assertions.json"
+)
+DEFAULT_DDG2P_MECHANISM_EVIDENCE = Path(
+    "/paedyl01/disk1/yangyxt/llm_gene_reranker/data/gene_pathogenic_mechanism/"
+    "prepared/gene_pathogenic_mechanism_evidence.tsv"
 )
 DEFAULT_GOFCARDS_EXACT_GOF_HGVSP = DATA_DIR / "gofcards" / "gofcards_exact_gof_hgvsp.tsv.gz"
 DEFAULT_GOFCARDS_STEP1_TSV = Path(
@@ -70,6 +76,24 @@ LOOKUP_FIELD_PRIORITY = (
 )
 
 CANONICAL_MECHANISMS = {"GOF", "DOMINANT_NEGATIVE", "TRIPLOSENSITIVITY"}
+DDG2P_LOF_RAW_VALUES = {
+    "loss of function",
+    "absent gene product",
+    "decreased gene product level",
+    "reduced gene product level",
+}
+DDG2P_USABLE_MECHANISM_CONFIDENCE = {"high", "moderate"}
+DDG2P_USABLE_DISEASE_CONFIDENCE = {"definitive", "strong", "moderate"}
+DDG2P_RECESSIVE_LOF_INHERITANCE = {
+    "biallelic_autosomal",
+    "monoallelic_X",
+    "monoallelic_X_hemizygous",
+}
+DDG2P_DOMINANT_LOF_INHERITANCE = {
+    "monoallelic_autosomal",
+    "monoallelic_X_heterozygous",
+    "monoallelic_Y_hemizygous",
+}
 GENE_MECHANISM_CATEGORY_ORDER = (
     "LoF_recessive",
     "dominant_ambiguous",
@@ -168,6 +192,13 @@ def _split_multi(value: Any) -> list[str]:
     if not text:
         return []
     return [part.strip() for part in text.split("|") if part.strip()]
+
+
+def _split_pmids(value: Any) -> list[str]:
+    text = _clean(value)
+    if not text:
+        return []
+    return [part.strip() for part in re.split(r"[;|,]", text) if part.strip()]
 
 
 def _safe_int(value: Any) -> int | None:
@@ -271,7 +302,7 @@ class _LocalHgncResolver:
                     if key:
                         self.lookup[key].append((priority, row))
 
-    def resolve(self, query: Any) -> str:
+    def resolve(self, query: Any, *, warn_ambiguous: bool = True) -> str:
         cleaned = _clean(query)
         if not cleaned:
             return ""
@@ -283,11 +314,12 @@ class _LocalHgncResolver:
         best = [row for priority, row in matches if priority == best_priority]
         symbols = sorted({row.get("symbol", "") for row in best if row.get("symbol", "")})
         if len(symbols) > 1:
-            logger.warning(
-                "Ambiguous HGNC query %s resolves to %s; keeping input symbol",
-                cleaned,
-                ",".join(symbols),
-            )
+            if warn_ambiguous:
+                logger.warning(
+                    "Ambiguous HGNC query %s resolves to %s; keeping input symbol",
+                    cleaned,
+                    ",".join(symbols),
+                )
             return cleaned
         return symbols[0] if symbols else cleaned
 
@@ -299,6 +331,7 @@ class GeneMechanismHub:
         self,
         *,
         mechanism_json: str | Path = DEFAULT_MECHANISM_JSON,
+        ddg2p_evidence: str | Path = DEFAULT_DDG2P_MECHANISM_EVIDENCE,
         hpo_collapsed: str | Path = DEFAULT_HPO_COLLAPSED,
         clingen_dosage: str | Path = DEFAULT_CLINGEN_DOSAGE,
         loeuf_table: str | Path = DEFAULT_LOEUF_TABLE,
@@ -306,6 +339,7 @@ class GeneMechanismHub:
         use_hgnc_package: bool = True,
     ) -> None:
         self.mechanism_json = Path(mechanism_json)
+        self.ddg2p_evidence = Path(ddg2p_evidence) if ddg2p_evidence else Path("")
         self.hpo_collapsed = Path(hpo_collapsed)
         self.clingen_dosage = Path(clingen_dosage)
         self.loeuf_table = Path(loeuf_table)
@@ -313,6 +347,7 @@ class GeneMechanismHub:
 
         self._resolver = self._build_resolver(use_hgnc_package)
         self._mechanism_by_symbol: dict[str, dict[str, Any]] | None = None
+        self._ddg2p_lof_by_symbol: dict[str, list[dict[str, Any]]] | None = None
         self._hpo_by_symbol: dict[str, dict[str, str]] | None = None
         self._clingen_by_symbol: dict[str, dict[str, Any]] | None = None
         self._loeuf_by_symbol: dict[str, float] | None = None
@@ -338,6 +373,8 @@ class GeneMechanismHub:
     def _try_resolve_symbol(self, gene_symbol: Any) -> str:
         """Resolve cache-side symbols without failing on ambiguous legacy aliases."""
         try:
+            if isinstance(self._resolver, _LocalHgncResolver):
+                return self._resolver.resolve(gene_symbol, warn_ambiguous=False)
             return self.resolve_symbol(gene_symbol)
         except ValueError:
             return _clean(gene_symbol)
@@ -361,6 +398,81 @@ class GeneMechanismHub:
                 by_symbol[resolved] = info
         self._mechanism_by_symbol = by_symbol
         return by_symbol
+
+    @staticmethod
+    def _is_strict_ddg2p_lof(row: pd.Series) -> bool:
+        raw = _clean(row.get("patho_mode_raw")).lower()
+        if raw.startswith("undetermined") or "non-loss" in raw:
+            return False
+        norm_tokens = {
+            token.strip().upper()
+            for token in re.split(r"[;,]", _clean(row.get("normalized_mechanisms")))
+            if token.strip()
+        }
+        return raw in DDG2P_LOF_RAW_VALUES or norm_tokens == {"LOF"}
+
+    def _load_ddg2p_lof(self) -> dict[str, list[dict[str, Any]]]:
+        if self._ddg2p_lof_by_symbol is not None:
+            return self._ddg2p_lof_by_symbol
+        by_symbol: dict[str, list[dict[str, Any]]] = defaultdict(list)
+        if not self.ddg2p_evidence or not self.ddg2p_evidence.exists():
+            self._ddg2p_lof_by_symbol = {}
+            return self._ddg2p_lof_by_symbol
+
+        try:
+            df = pd.read_csv(
+                self.ddg2p_evidence,
+                sep="\t",
+                dtype=str,
+                low_memory=False,
+            ).fillna("")
+        except Exception as exc:
+            logger.warning("Failed to load DDG2P/G2P evidence table %s: %s", self.ddg2p_evidence, exc)
+            self._ddg2p_lof_by_symbol = {}
+            return self._ddg2p_lof_by_symbol
+
+        if "source" in df.columns:
+            df = df.loc[df["source"].eq("G2P_DDG2P")].copy()
+        if df.empty or "gene_symbol" not in df.columns:
+            self._ddg2p_lof_by_symbol = {}
+            return self._ddg2p_lof_by_symbol
+
+        for _, row in df.iterrows():
+            if not self._is_strict_ddg2p_lof(row):
+                continue
+            mechanism_confidence = _clean(row.get("mechanism_confidence")).lower()
+            disease_confidence = _clean(row.get("disease_confidence")).lower()
+            if mechanism_confidence not in DDG2P_USABLE_MECHANISM_CONFIDENCE:
+                continue
+            if disease_confidence not in DDG2P_USABLE_DISEASE_CONFIDENCE:
+                continue
+
+            symbol = _clean(row.get("gene_symbol"))
+            if not symbol:
+                continue
+            inheritance = _clean(row.get("inheritance"))
+            record = {
+                "level": "gene_level",
+                "source": "G2P_DDG2P",
+                "mechanism": "LOF",
+                "pmids": _split_pmids(row.get("pmids", "")),
+                "disease": _clean(row.get("disease_label")),
+                "inheritance": inheritance,
+                "mechanism_confidence": mechanism_confidence,
+                "disease_confidence": disease_confidence,
+                "source_record_id": _clean(row.get("source_record_id")),
+            }
+            resolved = self._try_resolve_symbol(symbol)
+            keys = {symbol}
+            if resolved:
+                keys.add(resolved)
+            for key in keys:
+                by_symbol[key].append(record)
+
+        self._ddg2p_lof_by_symbol = {
+            symbol: records for symbol, records in by_symbol.items() if records
+        }
+        return self._ddg2p_lof_by_symbol
 
     def _load_hpo(self) -> dict[str, dict[str, str]]:
         if self._hpo_by_symbol is not None:
@@ -992,6 +1104,7 @@ class GeneMechanismHub:
         symbol = self._resolved_symbol_key(gene_symbol)
         info = self._load_mechanisms().get(symbol, {})
         entries = self._iter_mechanism_entries(info) if info else []
+        entries.extend(self._load_ddg2p_lof().get(symbol, []))
         mechanism_counts = Counter(entry["mechanism"] for entry in entries)
         pmids_by_mechanism: dict[str, set[str]] = defaultdict(set)
         variant_counts = Counter()
@@ -1014,9 +1127,41 @@ class GeneMechanismHub:
             "pmids_by_mechanism": {
                 key: sorted(value) for key, value in sorted(pmids_by_mechanism.items())
             },
+            "has_lof_history": mechanism_counts.get("LOF", 0) > 0,
             "has_gof_history": mechanism_counts.get("GOF", 0) > 0,
             "has_dn_history": mechanism_counts.get("DOMINANT_NEGATIVE", 0) > 0,
             "has_triplosensitivity_history": mechanism_counts.get("TRIPLOSENSITIVITY", 0) > 0,
+        }
+        if include_entries:
+            out["entries"] = entries
+        return out
+
+    def ddg2p_lof_history(
+        self,
+        gene_symbol: Any,
+        *,
+        include_entries: bool = False,
+    ) -> dict[str, Any]:
+        """Return DDG2P/G2P LoF mechanism history and allelic requirement flags."""
+        symbol = self._resolved_symbol_key(gene_symbol)
+        entries = self._load_ddg2p_lof().get(symbol, [])
+        inheritance_counts = Counter(_clean(entry.get("inheritance")) for entry in entries)
+        recessive = any(
+            inheritance in DDG2P_RECESSIVE_LOF_INHERITANCE
+            for inheritance in inheritance_counts
+        )
+        dominant = any(
+            inheritance in DDG2P_DOMINANT_LOF_INHERITANCE
+            for inheritance in inheritance_counts
+        )
+        out: dict[str, Any] = {
+            "input_symbol": _clean(gene_symbol),
+            "symbol": symbol,
+            "has_ddg2p_lof_history": bool(entries),
+            "ddg2p_lof_recessive": recessive,
+            "ddg2p_lof_dominant": dominant,
+            "ddg2p_lof_inheritance_counts": dict(sorted(inheritance_counts.items())),
+            "ddg2p_lof_disease_count": len({entry.get("disease", "") for entry in entries if entry.get("disease", "")}),
         }
         if include_entries:
             out["entries"] = entries
@@ -1055,6 +1200,7 @@ class GeneMechanismHub:
         clingen_record = self._load_clingen().get(symbol, {})
         loeuf = self._load_loeuf().get(symbol, np.nan)
         clingen_hi_score = clingen_record.get("haploinsufficiency_score")
+        ddg2p_lof = self.ddg2p_lof_history(symbol)
 
         row_dict = {
             "Gene": symbol,
@@ -1069,17 +1215,21 @@ class GeneMechanismHub:
             clingen_hi_score,
         )
         recessive, dominant, non_monogenic, non_mendelian, haplo_insufficient, incomplete = result
+        effective_recessive = bool(recessive) or bool(ddg2p_lof["ddg2p_lof_recessive"])
+        effective_dominant = bool(dominant) or bool(ddg2p_lof["ddg2p_lof_dominant"])
+        effective_haplo = bool(haplo_insufficient) or bool(ddg2p_lof["ddg2p_lof_dominant"])
         return {
             "input_symbol": _clean(gene_symbol),
             "symbol": symbol,
-            "recessive": bool(recessive),
-            "dominant": bool(dominant),
+            "recessive": effective_recessive,
+            "dominant": effective_dominant,
             "non_monogenic": bool(non_monogenic),
             "non_mendelian": bool(non_mendelian),
-            "haplo_insufficient": bool(haplo_insufficient),
+            "haplo_insufficient": effective_haplo,
             "incomplete_penetrance": bool(incomplete),
             "hpo_inheritance_modes": hpo_record.get("inheritance_modes", ""),
             "hpo_inheritance_disease_ids": hpo_record.get("inheritance_disease_ids", ""),
+            "ddg2p_lof_history": ddg2p_lof,
             "clingen_haploinsufficiency_score": clingen_hi_score,
             "clingen_haploinsufficiency_description": clingen_record.get(
                 "haploinsufficiency_description", ""
@@ -1099,6 +1249,7 @@ class GeneMechanismHub:
             "input_symbol": _clean(gene_symbol),
             "symbol": symbol,
             "mechanism_history": self.mechanism_history(symbol, include_entries=include_entries),
+            "ddg2p_lof_history": self.ddg2p_lof_history(symbol, include_entries=include_entries),
             "known_inheritance_mode": self.known_inheritance_mode(symbol),
         }
 
@@ -1115,6 +1266,7 @@ def annotate_gene_mechanism_categories(
     dominant: np.ndarray,
     haplo_insufficient: np.ndarray,
     mechanism_json: str | Path = DEFAULT_MECHANISM_JSON,
+    ddg2p_evidence: str | Path = DEFAULT_DDG2P_MECHANISM_EVIDENCE,
     symbol_col: str = "SYMBOL",
     hpo_inheritance_col: str = "HPO_gene_inheritance",
     output_col: str = "gene_mech_inher_history",
@@ -1137,6 +1289,7 @@ def annotate_gene_mechanism_categories(
 
     hub = GeneMechanismHub(
         mechanism_json=mechanism_json,
+        ddg2p_evidence=ddg2p_evidence,
         use_hgnc_package=use_hgnc_package,
     )
     out = df.copy()
@@ -1163,6 +1316,7 @@ def annotate_gene_mechanism_categories(
         known = known_cache[symbol]
         hub_hpo_flags = _hpo_inheritance_flags(known.get("hpo_inheritance_modes", ""))
         row_hpo_flags = _hpo_inheritance_flags(row_hpo)
+        ddg2p_lof = known.get("ddg2p_lof_history", {})
         clingen_hi_score = known.get("clingen_haploinsufficiency_score")
         clingen_hi = clingen_hi_score == 3
         clingen_haplosufficient = clingen_hi_score in {30, 40}
@@ -1172,19 +1326,21 @@ def annotate_gene_mechanism_categories(
             or row_hpo_flags["recessive"]
             or hub_hpo_flags["recessive"]
             or clingen_haplosufficient
+            or bool(ddg2p_lof.get("ddg2p_lof_recessive"))
         )
         effective_dominant = (
             bool(dom)
             or row_hpo_flags["dominant"]
             or hub_hpo_flags["dominant"]
             or clingen_hi
+            or bool(ddg2p_lof.get("ddg2p_lof_dominant"))
         )
 
         categories = set(
             classify_gene_mechanism_categories(
                 recessive=effective_recessive,
                 dominant=effective_dominant,
-                haplo_insufficient=bool(hi) or clingen_hi,
+                haplo_insufficient=bool(hi) or clingen_hi or bool(ddg2p_lof.get("ddg2p_lof_dominant")),
                 has_gof_history=history["has_gof_history"],
                 has_dn_history=history["has_dn_history"],
                 has_triplosensitivity_history=history["has_triplosensitivity_history"],
@@ -1264,6 +1420,7 @@ def main() -> int:
     parser.add_argument("gene", nargs="+", help="Gene symbol/alias/HGNC/Ensembl/Entrez query")
     parser.add_argument("--include-entries", action="store_true")
     parser.add_argument("--mechanism-json", default=str(DEFAULT_MECHANISM_JSON))
+    parser.add_argument("--ddg2p-evidence", default=str(DEFAULT_DDG2P_MECHANISM_EVIDENCE))
     parser.add_argument("--hpo-collapsed", default=str(DEFAULT_HPO_COLLAPSED))
     parser.add_argument("--clingen-dosage", default=str(DEFAULT_CLINGEN_DOSAGE))
     parser.add_argument("--loeuf-table", default=str(DEFAULT_LOEUF_TABLE))
@@ -1272,6 +1429,7 @@ def main() -> int:
 
     hub = GeneMechanismHub(
         mechanism_json=args.mechanism_json,
+        ddg2p_evidence=args.ddg2p_evidence,
         hpo_collapsed=args.hpo_collapsed,
         clingen_dosage=args.clingen_dosage,
         loeuf_table=args.loeuf_table,

@@ -39,6 +39,7 @@ from alternative_start_codon import (
     get_detector
 )
 from gene_mechanism_hub import (
+    DEFAULT_DDG2P_MECHANISM_EVIDENCE,
     DEFAULT_MECHANISM_JSON,
     GeneMechanismHub,
     annotate_gene_mechanism_categories,
@@ -813,7 +814,16 @@ def PVS1_criteria(df: pd.DataFrame,
     logger.info(f"ClinGen dosage: {(clingen_ar.fillna(False)).sum()} variants in autosomal recessive genes (HI=30/40)")
 
     # Unified "LoF mechanism plausible/established" gate for PVS1 assignment
-    lof_mechanism = clinvar_pathogenic | lof_intol_metric | clingen_hi | clingen_ar
+    mech_history = df.get("gene_mech_inher_history", pd.Series("", index=df.index)).fillna("").astype(str)
+    hub_lof_mechanism = mech_history.str.contains(
+        r"(?:^|;)(?:LoF_recessive|dominant_HI|dominant_ambiguous)(?:;|$)",
+        regex=True,
+    )
+    logger.info(
+        "PVS1 LoF mechanism gate: %s variants have hub-derived LoF-compatible gene history",
+        int(hub_lof_mechanism.sum()),
+    )
+    lof_mechanism = hub_lof_mechanism | clinvar_pathogenic | lof_intol_metric | clingen_hi | clingen_ar
 
     # Load the necessary dict file
     clinvar_patho_exon_af_dict = pickle.load(gzip.open(clinvar_patho_exon_af_stat)) if clinvar_patho_exon_af_stat.endswith(".gz") else pickle.load(open(clinvar_patho_exon_af_stat, 'rb'))
@@ -4283,6 +4293,7 @@ def ACMG_criteria_assign(anno_table: str,
                          relevant_gene_list: str = None,
                          dispensable_gene_list: str = None,
                          gene_mechanism_json: str = str(DEFAULT_MECHANISM_JSON),
+                         ddg2p_mechanism_evidence: str = str(DEFAULT_DDG2P_MECHANISM_EVIDENCE),
                          gnomAD_extreme_rare_threshold: float = 0.0001,
                          expected_incidence: float = 0.001,
                          threads: int = 10) -> Tuple[pd.DataFrame, pd.DataFrame]:
@@ -4380,6 +4391,32 @@ def ACMG_criteria_assign(anno_table: str,
             intolerant_domains = pickle.load(mm)
     logger.info(f"Loading the recorded intolerant domains which look alike: {intolerant_domains}")
 
+    # Establish inheritance/mechanism history before PVS1. PVS1 uses this as a
+    # gene/disease LoF mechanism gate; zygosity compatibility is still handled
+    # later by PM3/BP2 and ranking.
+    recessive, dominant, non_monogenic, non_mendelian, haplo_insufficient, incomplete_penetrance = identify_inheritance_mode(
+        anno_df,
+        gene_to_am_score_map,
+        gene_dosage_sensitivity,
+        threads,
+    )
+
+    anno_df = annotate_gene_mechanism_categories(
+        anno_df,
+        recessive=recessive,
+        dominant=dominant,
+        haplo_insufficient=haplo_insufficient,
+        mechanism_json=gene_mechanism_json,
+        ddg2p_evidence=ddg2p_mechanism_evidence,
+        symbol_col="SYMBOL",
+        use_hgnc_package=False,
+    )
+    logger.info(
+        "Gene mechanism/inheritance history applied before PVS1: \n%s",
+        anno_df["gene_mech_inher_history"].value_counts(dropna=False).to_string(),
+    )
+    gc.collect()
+
     # Apply the PVS1 criteria, LoF on a gene known to to be pathogenic due to LoF
     pvs1_criteria, locate_intol_domains = PVS1_criteria(anno_df,
                                                         clinvar_aa_gene_map,
@@ -4468,28 +4505,6 @@ def ACMG_criteria_assign(anno_table: str,
                                 clinvar_patho_exon_af_stat,
                                 gnomAD_extreme_rare_threshold)
     logger.info(f"PM2 criteria applied, {(pm2_criteria > 0).sum()} variants are having the PM2 criteria")
-    gc.collect()
-
-    recessive, dominant, non_monogenic, non_mendelian, haplo_insufficient, incomplete_penetrance = identify_inheritance_mode(
-        anno_df,
-        gene_to_am_score_map,
-        gene_dosage_sensitivity,
-        threads,
-    )
-
-    anno_df = annotate_gene_mechanism_categories(
-        anno_df,
-        recessive=recessive,
-        dominant=dominant,
-        haplo_insufficient=haplo_insufficient,
-        mechanism_json=gene_mechanism_json,
-        symbol_col="SYMBOL",
-        use_hgnc_package=False,
-    )
-    logger.info(
-        "Gene mechanism/inheritance history applied: \n%s",
-        anno_df["gene_mech_inher_history"].value_counts(dropna=False).to_string(),
-    )
     gc.collect()
 
     # Apply BS1, PAF of variant is greater than expected incidence of the disease.
@@ -4682,6 +4697,7 @@ if __name__ == "__main__":
     parser.add_argument("--relevant_gene_list", type=str, required=False, default=None)
     parser.add_argument("--dispensable_gene_list", type=str, required=False, default=os.path.join(data_dir, "dispensable_genes", "dispensable_gene_list.txt"))
     parser.add_argument("--gene_mechanism_json", type=str, required=False, default=str(DEFAULT_MECHANISM_JSON))
+    parser.add_argument("--ddg2p_mechanism_evidence", type=str, required=False, default=str(DEFAULT_DDG2P_MECHANISM_EVIDENCE))
     parser.add_argument("--threads", type=int, required=False, default=10)
     args = parser.parse_args()
 
@@ -4712,6 +4728,7 @@ if __name__ == "__main__":
                                                     relevant_gene_list=args.relevant_gene_list,
                                                     dispensable_gene_list=args.dispensable_gene_list,
                                                     gene_mechanism_json=args.gene_mechanism_json,
+                                                    ddg2p_mechanism_evidence=args.ddg2p_mechanism_evidence,
                                                     gnomAD_extreme_rare_threshold=args.gnomAD_extreme_rare_threshold,
                                                     expected_incidence=args.expected_incidence,
                                                     threads=args.threads)

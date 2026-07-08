@@ -44,13 +44,8 @@ DEFAULT_DDG2P_MECHANISM_EVIDENCE = (
     DATA_DIR / "gene_pathogenic_mechanism" / "prepared" / "gene_pathogenic_mechanism_evidence.tsv"
 )
 DEFAULT_GOFCARDS_EXACT_GOF_HGVSP = DATA_DIR / "gofcards" / "gofcards_exact_gof_hgvsp.tsv.gz"
-DEFAULT_GOFCARDS_STEP1_TSV = DATA_DIR / "gofcards" / "legacy" / "gofcards_gof.hg19.numb.anno.step1.tsv"
-DEFAULT_GOFCARDS_ACTIVE_TSV = DATA_DIR / "gofcards" / "legacy" / "active_json_gof_dn_variant_level.tsv"
 DEFAULT_GOFCARDS_RAW_XLSX = (
     DATA_DIR / "gene_pathogenic_mechanism" / "raw" / "gofcards" / "gofcards_data_download.xlsx"
-)
-DEFAULT_GOFCARDS_CONVERSION_AUDIT_TSV = (
-    DATA_DIR / "gofcards" / "legacy" / "gofcards_gof.hg19.numb.vcf_conversion_audit.tsv"
 )
 
 LOOKUP_FIELD_PRIORITY = (
@@ -547,267 +542,137 @@ class GeneMechanismHub:
         self,
         *,
         gofcards_exact_hgvsp_tsv: str | Path = DEFAULT_GOFCARDS_EXACT_GOF_HGVSP,
-        gofcards_step1_tsv: str | Path = DEFAULT_GOFCARDS_STEP1_TSV,
-        gofcards_active_tsv: str | Path = DEFAULT_GOFCARDS_ACTIVE_TSV,
-        gofcards_raw_xlsx: str | Path = DEFAULT_GOFCARDS_RAW_XLSX,
-        gofcards_conversion_audit_tsv: str | Path = DEFAULT_GOFCARDS_CONVERSION_AUDIT_TSV,
+        gofcards_step1_tsv: str | Path | None = None,
+        gofcards_active_tsv: str | Path | None = None,
+        gofcards_raw_xlsx: str | Path | None = None,
+        gofcards_conversion_audit_tsv: str | Path | None = None,
     ) -> dict[tuple[str, str], list[dict[str, str]]]:
         """Return exact-match GoFCards GOF protein-change evidence.
 
         The key is normalized ``(HGNC symbol, protein change)``. This lookup is
         only for variant-level evidence; it must not be used to convert all
         variants in a gene into GOF assertions.
+
+        The compact PriVA TSV is the only supported runtime source. The older
+        ``gofcards_step1_tsv``/``gofcards_active_tsv``/audit arguments are
+        retained only so external callers do not break, but they are ignored.
         """
         if self._gofcards_by_symbol_hgvsp is not None:
             return self._gofcards_by_symbol_hgvsp
 
         compact_path = Path(gofcards_exact_hgvsp_tsv)
-        if compact_path.exists():
-            compact = pd.read_csv(
+        if not compact_path.exists():
+            logger.warning(
+                "GoFCards exact GOF compact cache not found: %s. "
+                "Run `bash scripts/install_utils.sh gofcards_exact_gof_cache_install config.yaml`.",
                 compact_path,
-                sep="\t",
-                dtype=str,
-                low_memory=False,
-            ).fillna("")
-            by_symbol_hgvsp: dict[tuple[str, str], list[dict[str, str]]] = defaultdict(list)
-            for _, row in compact.iterrows():
-                cache_symbol = (
-                    row.get("HGNC_Symbol")
-                    or row.get("symbol")
-                    or row.get("match_symbol")
-                    or row.get("gofcards_symbol_resolved")
-                    or row.get("gofcards_symbol")
-                )
-                symbol = self._try_resolve_symbol(cache_symbol)
-                if not symbol:
-                    symbol = _clean(cache_symbol)
-                hgvsp_key = _clean(row.get("hgvsp_key")) or _norm_hgvsp(row.get("HGVSp"))
-                if not symbol or not hgvsp_key:
-                    continue
-                match_status = _clean(row.get("match_status")) or _clean(
-                    row.get("gofcards_hgvs_match_status")
-                )
-                by_symbol_hgvsp[(symbol, hgvsp_key)].append(
-                    {
-                        "source": _clean(row.get("source")),
-                        "mechanism": _clean(row.get("mechanism")),
-                        "build": _clean(row.get("build")),
-                        "gofcards_variant_id": _clean(row.get("gofcards_variant_id")),
-                        "gofcards_accession_id": _clean(row.get("gofcards_accession_id")),
-                        "disease": _clean(row.get("disease")),
-                        "pmids": _clean(row.get("pmids")),
-                        "pscore": _clean(row.get("pscore")),
-                        "function": _clean(row.get("function")),
-                        "pathway": _clean(row.get("pathway")),
-                        "transcript": _clean(row.get("GoFCards_transcript"))
-                        or _clean(row.get("transcript")),
-                        "symbol": symbol,
-                        "match_symbol": _clean(row.get("HGNC_Symbol"))
-                        or _clean(row.get("match_symbol")),
-                        "gofcards_symbol": _clean(row.get("gofcards_symbol")),
-                        "vep_symbol": _clean(row.get("vep_symbol")),
-                        "gofcards_symbol_resolved": _clean(row.get("gofcards_symbol_resolved")),
-                        "vep_symbol_resolved": _clean(row.get("vep_symbol_resolved")),
-                        "source_refseq_transcript": _clean(row.get("GoFCards_transcript"))
-                        or _clean(row.get("source_refseq_transcript")),
-                        "vep_transcript": _clean(row.get("VEP_transcript"))
-                        or _clean(row.get("vep_transcript")),
-                        "chrom": _norm_chrom(row.get("hg19_chrom") or row.get("chrom")),
-                        "pos": _clean(row.get("hg19_pos")) or _clean(row.get("pos")),
-                        "ref": _clean(row.get("hg19_ref")) or _clean(row.get("ref")),
-                        "alt": _clean(row.get("hg19_alt")) or _clean(row.get("alt")),
-                        "hg19_genomic_key": _clean(row.get("hg19_genomic_key")),
-                        "hg19_vcf_key": _clean(row.get("hg19_vcf_key")),
-                        "hg38_genomic_key": _clean(row.get("hg38_genomic_key")),
-                        "hg38_vcf_key": _clean(row.get("hg38_vcf_key")),
-                        "match_key_types": _clean(row.get("match_key_types")),
-                        "hg19_chrom": _clean(row.get("hg19_chrom")),
-                        "hg19_start": _clean(row.get("hg19_pos"))
-                        or _clean(row.get("hg19_start")),
-                        "hg19_end": _clean(row.get("hg19_pos")) or _clean(row.get("hg19_end")),
-                        "hg19_ref": _clean(row.get("hg19_ref")),
-                        "hg19_alt": _clean(row.get("hg19_alt")),
-                        "hg19_vcf_pos": _clean(row.get("hg19_pos"))
-                        or _clean(row.get("hg19_vcf_pos")),
-                        "hg19_vcf_ref": _clean(row.get("hg19_ref"))
-                        or _clean(row.get("hg19_vcf_ref")),
-                        "hg19_vcf_alt": _clean(row.get("hg19_alt"))
-                        or _clean(row.get("hg19_vcf_alt")),
-                        "hg19_vcf_status": _clean(row.get("hg19_vcf_status")),
-                        "hg38_chrom": _clean(row.get("hg38_chrom")),
-                        "hg38_start": _clean(row.get("hg38_pos"))
-                        or _clean(row.get("hg38_start")),
-                        "hg38_end": _clean(row.get("hg38_pos")) or _clean(row.get("hg38_end")),
-                        "hg38_ref": _clean(row.get("hg38_ref")),
-                        "hg38_alt": _clean(row.get("hg38_alt")),
-                        "hg38_vcf_pos": _clean(row.get("hg38_pos"))
-                        or _clean(row.get("hg38_vcf_pos")),
-                        "hg38_vcf_ref": _clean(row.get("hg38_ref"))
-                        or _clean(row.get("hg38_vcf_ref")),
-                        "hg38_vcf_alt": _clean(row.get("hg38_alt"))
-                        or _clean(row.get("hg38_vcf_alt")),
-                        "hg38_refalt_status": _clean(row.get("hg38_refalt_status")),
-                        "HGVSc": _clean(row.get("HGVSc")),
-                        "HGVSp": _clean(row.get("HGVSp")),
-                        "normalized_hgvsp": _clean(row.get("normalized_hgvsp"))
-                        or _norm_hgvsp(row.get("HGVSp")),
-                        "gofcards_hgvsc_key": _clean(row.get("gofcards_hgvsc_key")),
-                        "gofcards_hgvsp_key": _clean(row.get("gofcards_hgvsp_key")),
-                        "vep_hgvsc_key": _clean(row.get("vep_hgvsc_key")),
-                        "vep_hgvsp_key": _clean(row.get("vep_hgvsp_key")),
-                        "gofcards_gene_match": _clean(row.get("gofcards_gene_match")),
-                        "gofcards_hgvsc_match": _clean(row.get("gofcards_hgvsc_match")),
-                        "gofcards_hgvsp_match": _clean(row.get("gofcards_hgvsp_match")),
-                        "gofcards_hgvs_match_status": match_status,
-                        "match_status": match_status,
-                        "canonical_transcript": _clean(row.get("canonical_transcript")),
-                        "gofcards_AAChange_refGene": _clean(row.get("raw_GoFCards_HGVS"))
-                        or _clean(row.get("gofcards_AAChange_refGene")),
-                        "derived_on": _clean(row.get("derived_on")),
-                    }
-                )
-            self._gofcards_by_symbol_hgvsp = dict(by_symbol_hgvsp)
+            )
+            self._gofcards_by_symbol_hgvsp = {}
             return self._gofcards_by_symbol_hgvsp
 
-        step1 = pd.read_csv(
-            gofcards_step1_tsv,
-            sep="\t",
-            dtype=str,
-            low_memory=False,
-            usecols=["chrom", "pos", "ref", "alt", "SYMBOL", "HGVSc", "HGVSp", "CANONICAL"],
-        ).fillna("")
-        active = pd.read_csv(
-            gofcards_active_tsv,
+        compact = pd.read_csv(
+            compact_path,
             sep="\t",
             dtype=str,
             low_memory=False,
         ).fillna("")
-        active = active[
-            (active["source"].eq("GoFCards"))
-            & (active["mechanism"].eq("GOF"))
-        ].copy()
-        active["_row_index"] = [str(i) for i in range(1, len(active) + 1)]
-        active["_gofcards_variant_id"] = active["_row_index"].map(
-            lambda value: f"GOFCARDS_GOF_{int(value):04d}"
-        )
-
-        raw = pd.read_excel(
-            gofcards_raw_xlsx,
-            sheet_name="total3161",
-            engine="openpyxl",
-            dtype=str,
-        ).fillna("")
-        raw["_coord_key"] = list(
-            zip(
-                raw["chr"].map(_norm_chrom),
-                raw["hg19start"].map(_clean),
-                raw["ref"].map(_clean),
-                raw["alt"].map(_clean),
+        by_symbol_hgvsp: dict[tuple[str, str], list[dict[str, str]]] = defaultdict(list)
+        for _, row in compact.iterrows():
+            cache_symbol = (
+                row.get("HGNC_Symbol")
+                or row.get("symbol")
+                or row.get("match_symbol")
+                or row.get("gofcards_symbol_resolved")
+                or row.get("gofcards_symbol")
             )
-        )
-        accessions_by_coord: dict[tuple[str, str, str, str], set[str]] = defaultdict(set)
-        for _, row in raw.iterrows():
-            accession = _clean(row.get("Order numbe"))
-            if accession:
-                accessions_by_coord[row["_coord_key"]].add(accession)
-
-        audit = pd.read_csv(
-            gofcards_conversion_audit_tsv,
-            sep="\t",
-            dtype=str,
-            low_memory=False,
-            usecols=[
-                "row_index",
-                "status",
-                "chrom",
-                "vcf_chrom",
-                "vcf_pos",
-                "vcf_ref",
-                "vcf_alt",
-                "source_pos",
-                "source_ref",
-                "source_alt",
-            ],
-        ).fillna("")
-        audit = audit[audit["status"].eq("written")].copy()
-        audit["_row_index"] = audit["row_index"].map(_clean)
-        audit["_vcf_coord_key"] = list(
-            zip(
-                audit["vcf_chrom"].map(_norm_chrom),
-                audit["vcf_pos"].map(_clean),
-                audit["vcf_ref"].map(_clean),
-                audit["vcf_alt"].map(_clean),
+            symbol = self._try_resolve_symbol(cache_symbol)
+            if not symbol:
+                symbol = _clean(cache_symbol)
+            hgvsp_key = _clean(row.get("hgvsp_key")) or _norm_hgvsp(row.get("HGVSp"))
+            if not symbol or not hgvsp_key:
+                continue
+            match_status = _clean(row.get("match_status")) or _clean(
+                row.get("gofcards_hgvs_match_status")
             )
-        )
-        audit["_source_coord_key"] = list(
-            zip(
-                audit["chrom"].map(_norm_chrom),
-                audit["source_pos"].map(_clean),
-                audit["source_ref"].map(_clean),
-                audit["source_alt"].map(_clean),
-            )
-        )
-        audit_by_row = {
-            row["_row_index"]: {
-                "vcf_coord_key": row["_vcf_coord_key"],
-                "source_coord_key": row["_source_coord_key"],
-            }
-            for _, row in audit.iterrows()
-        }
-
-        active_by_coord: dict[tuple[str, str, str, str], list[dict[str, str]]] = defaultdict(list)
-        for _, row in active.iterrows():
-            row_index = _clean(row.get("_row_index"))
-            source_coord_key = (
-                _norm_chrom(row.get("chr")),
-                _clean(row.get("pos")),
-                _clean(row.get("ref")),
-                _clean(row.get("alt")),
-            )
-            audit_row = audit_by_row.get(row_index, {})
-            vcf_coord_key = audit_row.get("vcf_coord_key", source_coord_key)
-            source_coord_key = audit_row.get("source_coord_key", source_coord_key)
-            accessions = sorted(accessions_by_coord.get(source_coord_key, set()))
-            active_by_coord[vcf_coord_key].append(
+            by_symbol_hgvsp[(symbol, hgvsp_key)].append(
                 {
-                    "gofcards_variant_id": _clean(row.get("_gofcards_variant_id")),
-                    "gofcards_accession_id": ";".join(accessions),
+                    "source": _clean(row.get("source")),
+                    "mechanism": _clean(row.get("mechanism")),
+                    "build": _clean(row.get("build")),
+                    "gofcards_variant_id": _clean(row.get("gofcards_variant_id")),
+                    "gofcards_accession_id": _clean(row.get("gofcards_accession_id")),
                     "disease": _clean(row.get("disease")),
                     "pmids": _clean(row.get("pmids")),
                     "pscore": _clean(row.get("pscore")),
                     "function": _clean(row.get("function")),
                     "pathway": _clean(row.get("pathway")),
-                    "transcript": _clean(row.get("transcript")),
-                }
-            )
-
-        by_symbol_hgvsp: dict[tuple[str, str], list[dict[str, str]]] = defaultdict(list)
-        for _, row in step1.iterrows():
-            hgvsp_key = _norm_hgvsp(row.get("HGVSp"))
-            if not hgvsp_key:
-                continue
-            symbol = self._try_resolve_symbol(row.get("SYMBOL"))
-            if not symbol:
-                symbol = _clean(row.get("SYMBOL"))
-            coord_key = (
-                _norm_chrom(row.get("chrom")),
-                _clean(row.get("pos")),
-                _clean(row.get("ref")),
-                _clean(row.get("alt")),
-            )
-            for active_row in active_by_coord.get(coord_key, []):
-                match = {
-                    **active_row,
+                    "transcript": _clean(row.get("GoFCards_transcript"))
+                    or _clean(row.get("transcript")),
                     "symbol": symbol,
-                    "chrom": coord_key[0],
-                    "pos": coord_key[1],
-                    "ref": coord_key[2],
-                    "alt": coord_key[3],
+                    "match_symbol": _clean(row.get("HGNC_Symbol"))
+                    or _clean(row.get("match_symbol")),
+                    "gofcards_symbol": _clean(row.get("gofcards_symbol")),
+                    "vep_symbol": _clean(row.get("vep_symbol")),
+                    "gofcards_symbol_resolved": _clean(row.get("gofcards_symbol_resolved")),
+                    "vep_symbol_resolved": _clean(row.get("vep_symbol_resolved")),
+                    "source_refseq_transcript": _clean(row.get("GoFCards_transcript"))
+                    or _clean(row.get("source_refseq_transcript")),
+                    "vep_transcript": _clean(row.get("VEP_transcript"))
+                    or _clean(row.get("vep_transcript")),
+                    "chrom": _norm_chrom(row.get("hg19_chrom") or row.get("chrom")),
+                    "pos": _clean(row.get("hg19_pos")) or _clean(row.get("pos")),
+                    "ref": _clean(row.get("hg19_ref")) or _clean(row.get("ref")),
+                    "alt": _clean(row.get("hg19_alt")) or _clean(row.get("alt")),
+                    "hg19_genomic_key": _clean(row.get("hg19_genomic_key")),
+                    "hg19_vcf_key": _clean(row.get("hg19_vcf_key")),
+                    "hg38_genomic_key": _clean(row.get("hg38_genomic_key")),
+                    "hg38_vcf_key": _clean(row.get("hg38_vcf_key")),
+                    "match_key_types": _clean(row.get("match_key_types")),
+                    "hg19_chrom": _clean(row.get("hg19_chrom")),
+                    "hg19_start": _clean(row.get("hg19_pos"))
+                    or _clean(row.get("hg19_start")),
+                    "hg19_end": _clean(row.get("hg19_pos")) or _clean(row.get("hg19_end")),
+                    "hg19_ref": _clean(row.get("hg19_ref")),
+                    "hg19_alt": _clean(row.get("hg19_alt")),
+                    "hg19_vcf_pos": _clean(row.get("hg19_pos"))
+                    or _clean(row.get("hg19_vcf_pos")),
+                    "hg19_vcf_ref": _clean(row.get("hg19_ref"))
+                    or _clean(row.get("hg19_vcf_ref")),
+                    "hg19_vcf_alt": _clean(row.get("hg19_alt"))
+                    or _clean(row.get("hg19_vcf_alt")),
+                    "hg19_vcf_status": _clean(row.get("hg19_vcf_status")),
+                    "hg38_chrom": _clean(row.get("hg38_chrom")),
+                    "hg38_start": _clean(row.get("hg38_pos"))
+                    or _clean(row.get("hg38_start")),
+                    "hg38_end": _clean(row.get("hg38_pos")) or _clean(row.get("hg38_end")),
+                    "hg38_ref": _clean(row.get("hg38_ref")),
+                    "hg38_alt": _clean(row.get("hg38_alt")),
+                    "hg38_vcf_pos": _clean(row.get("hg38_pos"))
+                    or _clean(row.get("hg38_vcf_pos")),
+                    "hg38_vcf_ref": _clean(row.get("hg38_ref"))
+                    or _clean(row.get("hg38_vcf_ref")),
+                    "hg38_vcf_alt": _clean(row.get("hg38_alt"))
+                    or _clean(row.get("hg38_vcf_alt")),
+                    "hg38_refalt_status": _clean(row.get("hg38_refalt_status")),
                     "HGVSc": _clean(row.get("HGVSc")),
                     "HGVSp": _clean(row.get("HGVSp")),
-                    "canonical_transcript": _clean(row.get("CANONICAL")),
+                    "normalized_hgvsp": _clean(row.get("normalized_hgvsp"))
+                    or _norm_hgvsp(row.get("HGVSp")),
+                    "gofcards_hgvsc_key": _clean(row.get("gofcards_hgvsc_key")),
+                    "gofcards_hgvsp_key": _clean(row.get("gofcards_hgvsp_key")),
+                    "vep_hgvsc_key": _clean(row.get("vep_hgvsc_key")),
+                    "vep_hgvsp_key": _clean(row.get("vep_hgvsp_key")),
+                    "gofcards_gene_match": _clean(row.get("gofcards_gene_match")),
+                    "gofcards_hgvsc_match": _clean(row.get("gofcards_hgvsc_match")),
+                    "gofcards_hgvsp_match": _clean(row.get("gofcards_hgvsp_match")),
+                    "gofcards_hgvs_match_status": match_status,
+                    "match_status": match_status,
+                    "canonical_transcript": _clean(row.get("canonical_transcript")),
+                    "gofcards_AAChange_refGene": _clean(row.get("raw_GoFCards_HGVS"))
+                    or _clean(row.get("gofcards_AAChange_refGene")),
+                    "derived_on": _clean(row.get("derived_on")),
                 }
-                by_symbol_hgvsp[(symbol, hgvsp_key)].append(match)
+            )
 
         for key, rows in by_symbol_hgvsp.items():
             seen: set[tuple[str, str, str, str, str, str]] = set()
@@ -937,10 +802,10 @@ class GeneMechanismHub:
         hgvsp: Any,
         *,
         gofcards_exact_hgvsp_tsv: str | Path = DEFAULT_GOFCARDS_EXACT_GOF_HGVSP,
-        gofcards_step1_tsv: str | Path = DEFAULT_GOFCARDS_STEP1_TSV,
-        gofcards_active_tsv: str | Path = DEFAULT_GOFCARDS_ACTIVE_TSV,
-        gofcards_raw_xlsx: str | Path = DEFAULT_GOFCARDS_RAW_XLSX,
-        gofcards_conversion_audit_tsv: str | Path = DEFAULT_GOFCARDS_CONVERSION_AUDIT_TSV,
+        gofcards_step1_tsv: str | Path | None = None,
+        gofcards_active_tsv: str | Path | None = None,
+        gofcards_raw_xlsx: str | Path | None = None,
+        gofcards_conversion_audit_tsv: str | Path | None = None,
     ) -> dict[str, Any]:
         """Return variant-level GOF evidence for an exact GoFCards HGVSp match."""
         symbol = self._resolved_symbol_key(gene_symbol)
@@ -1362,10 +1227,10 @@ def match_gofcards_variant_gof(
     hgvsp: Any,
     *,
     gofcards_exact_hgvsp_tsv: str | Path = DEFAULT_GOFCARDS_EXACT_GOF_HGVSP,
-    gofcards_step1_tsv: str | Path = DEFAULT_GOFCARDS_STEP1_TSV,
-    gofcards_active_tsv: str | Path = DEFAULT_GOFCARDS_ACTIVE_TSV,
-    gofcards_raw_xlsx: str | Path = DEFAULT_GOFCARDS_RAW_XLSX,
-    gofcards_conversion_audit_tsv: str | Path = DEFAULT_GOFCARDS_CONVERSION_AUDIT_TSV,
+    gofcards_step1_tsv: str | Path | None = None,
+    gofcards_active_tsv: str | Path | None = None,
+    gofcards_raw_xlsx: str | Path | None = None,
+    gofcards_conversion_audit_tsv: str | Path | None = None,
     use_hgnc_package: bool = False,
 ) -> dict[str, Any]:
     """Convenience wrapper for exact GoFCards HGVSp variant-level GOF matching."""

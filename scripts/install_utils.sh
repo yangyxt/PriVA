@@ -1979,6 +1979,334 @@ function reference_genome_install() {
 }
 
 
+function yaml_value_or_default() {
+    local config_file=${1}
+    local key=${2}
+    local default_value=${3}
+    local value
+    value=$(read_yaml "${config_file}" "${key}")
+    if [[ -z ${value} ]] || [[ ${value} == "null" ]]; then
+        printf "%s\n" "${default_value}"
+    else
+        printf "%s\n" "${value}"
+    fi
+}
+
+
+function validate_gene_pathogenic_mechanism_cache() {
+    local mechanism_json=${1}
+    local evidence_tsv=${2}
+
+    [[ -s ${mechanism_json} ]] || { log "ERROR: Missing/empty gene mechanism JSON: ${mechanism_json}"; return 1; }
+    [[ -s ${evidence_tsv} ]] || { log "ERROR: Missing/empty DDG2P/G2P mechanism evidence TSV: ${evidence_tsv}"; return 1; }
+
+    python - "${mechanism_json}" "${evidence_tsv}" <<'PY'
+import csv
+import json
+import sys
+
+mechanism_json, evidence_tsv = sys.argv[1:3]
+with open(mechanism_json, encoding="utf-8") as handle:
+    payload = json.load(handle)
+gene_count = sum(1 for key in payload if key != "_meta")
+if gene_count == 0:
+    raise SystemExit(f"{mechanism_json} contains no gene entries")
+
+required = {
+    "gene_symbol",
+    "source",
+    "source_record_id",
+    "disease_label",
+    "inheritance",
+    "patho_mode_raw",
+    "normalized_mechanisms",
+    "mechanism_confidence",
+    "disease_confidence",
+    "pmids",
+}
+row_count = 0
+g2p_rows = 0
+g2p_lof_rows = 0
+with open(evidence_tsv, encoding="utf-8", newline="") as handle:
+    reader = csv.DictReader(handle, delimiter="\t")
+    missing = sorted(required - set(reader.fieldnames or []))
+    if missing:
+        raise SystemExit(f"{evidence_tsv} missing required columns: {', '.join(missing)}")
+    for row in reader:
+        row_count += 1
+        if row.get("source") == "G2P_DDG2P":
+            g2p_rows += 1
+            normalized = row.get("normalized_mechanisms", "").upper()
+            raw = row.get("patho_mode_raw", "").lower()
+            if "LOF" in normalized or "loss of function" in raw:
+                g2p_lof_rows += 1
+if row_count == 0:
+    raise SystemExit(f"{evidence_tsv} contains no evidence rows")
+if g2p_rows == 0:
+    raise SystemExit(f"{evidence_tsv} contains no G2P_DDG2P rows")
+if g2p_lof_rows == 0:
+    raise SystemExit(f"{evidence_tsv} contains no DDG2P/G2P LoF rows")
+print(f"mechanism_json_genes={gene_count}; evidence_rows={row_count}; g2p_rows={g2p_rows}; g2p_lof_rows={g2p_lof_rows}")
+PY
+}
+
+
+function gene_pathogenic_mechanism_cache_install() {
+    local config_file=${1}
+    local cache_dir
+    local raw_dir
+    local builder_script
+    local mechanism_json
+    local evidence_tsv
+
+    cache_dir=$(yaml_value_or_default "${config_file}" "gene_mechanism_cache_dir" "${DATA_DIR}/gene_pathogenic_mechanism")
+    raw_dir=$(yaml_value_or_default "${config_file}" "gene_mechanism_raw_dir" "${cache_dir}/raw")
+    builder_script=$(yaml_value_or_default "${config_file}" "gene_mechanism_builder_script" "${SCRIPT_DIR}/build_gene_pathogenic_mechanism_cache.py")
+    mechanism_json=$(yaml_value_or_default "${config_file}" "gene_mechanism_json" "${cache_dir}/prepared/gene_mechanism_curated_assertions.json")
+    evidence_tsv=$(yaml_value_or_default "${config_file}" "ddg2p_mechanism_evidence" "${cache_dir}/prepared/gene_pathogenic_mechanism_evidence.tsv")
+
+    mkdir -p "${cache_dir}" "${raw_dir}" "$(dirname "${mechanism_json}")" || {
+        log "ERROR: Failed to create gene mechanism cache directories"
+        return 1
+    }
+    [[ -f ${builder_script} ]] || { log "ERROR: Gene mechanism builder not found: ${builder_script}"; return 1; }
+
+    if [[ "${PRIVA_FORCE_GENE_MECHANISM_CACHE:-0}" != "1" ]] && \
+       validate_gene_pathogenic_mechanism_cache "${mechanism_json}" "${evidence_tsv}" >/dev/null 2>&1; then
+        log "Gene mechanism/DDG2P cache already valid: ${mechanism_json}; ${evidence_tsv}"
+        update_yaml "${config_file}" "gene_mechanism_json" "${mechanism_json}"
+        update_yaml "${config_file}" "ddg2p_mechanism_evidence" "${evidence_tsv}"
+        return 0
+    fi
+
+    local -a builder_args=(
+        "${builder_script}"
+        --cache-dir "${cache_dir}"
+        --shared-raw-dir "${raw_dir}"
+        --timeout "${GENE_MECHANISM_TIMEOUT:-120}"
+        --retries "${GENE_MECHANISM_RETRIES:-3}"
+    )
+    [[ "${PRIVA_FORCE_GENE_MECHANISM_CACHE:-0}" == "1" ]] && builder_args+=(--force)
+    if [[ -n "${PROXY_URL:-}" ]]; then
+        builder_args+=(--proxy-url "${PROXY_URL}" --download-tool auto)
+    fi
+
+    log "Building PriVA gene mechanism/DDG2P cache from source URLs into ${cache_dir}"
+    python "${builder_args[@]}" || {
+        log "ERROR: Failed to build gene mechanism/DDG2P cache"
+        return 1
+    }
+
+    validate_gene_pathogenic_mechanism_cache "${mechanism_json}" "${evidence_tsv}" || {
+        log "ERROR: Gene mechanism/DDG2P cache validation failed"
+        return 1
+    }
+    update_yaml "${config_file}" "gene_mechanism_json" "${mechanism_json}"
+    update_yaml "${config_file}" "ddg2p_mechanism_evidence" "${evidence_tsv}"
+    log "Gene mechanism/DDG2P cache deployed: ${mechanism_json}; ${evidence_tsv}"
+}
+
+
+function validate_gofcards_exact_gof_cache() {
+    local gofcards_tsv=${1}
+    [[ -s ${gofcards_tsv} ]] || { log "ERROR: Missing/empty GoFCards exact GOF cache: ${gofcards_tsv}"; return 1; }
+
+    python - "${gofcards_tsv}" <<'PY'
+import csv
+import gzip
+import sys
+
+path = sys.argv[1]
+opener = gzip.open if path.endswith(".gz") else open
+required = {
+    "HGNC_Symbol",
+    "HGVSp",
+    "hgvsp_key",
+    "hg19_vcf_key",
+    "hg38_vcf_key",
+    "hg19_genomic_key",
+    "hg38_genomic_key",
+    "gofcards_accession_id",
+    "gofcards_variant_id",
+}
+row_count = 0
+hgvsp_rows = 0
+genomic_rows = 0
+with opener(path, "rt", encoding="utf-8", newline="") as handle:
+    reader = csv.DictReader(handle, delimiter="\t")
+    missing = sorted(required - set(reader.fieldnames or []))
+    if missing:
+        raise SystemExit(f"{path} missing required columns: {', '.join(missing)}")
+    for row in reader:
+        row_count += 1
+        if row.get("HGNC_Symbol") and row.get("hgvsp_key"):
+            hgvsp_rows += 1
+        if row.get("HGNC_Symbol") and (
+            row.get("hg19_vcf_key") or row.get("hg38_vcf_key")
+            or row.get("hg19_genomic_key") or row.get("hg38_genomic_key")
+        ):
+            genomic_rows += 1
+if row_count == 0:
+    raise SystemExit(f"{path} contains no rows")
+if hgvsp_rows == 0:
+    raise SystemExit(f"{path} contains no HGVSp match rows")
+if genomic_rows == 0:
+    raise SystemExit(f"{path} contains no genomic match rows")
+print(f"gofcards_rows={row_count}; hgvsp_rows={hgvsp_rows}; genomic_rows={genomic_rows}")
+PY
+}
+
+
+function ensure_gofcards_normalizer_workflow() {
+    local config_file=${1}
+    local workflow
+    local repo_dir
+    local repo_url
+
+    workflow=$(yaml_value_or_default "${config_file}" "gofcards_normalizer_workflow" "")
+    if [[ -x ${workflow} ]]; then
+        printf "%s\n" "${workflow}"
+        return 0
+    fi
+
+    repo_dir=$(yaml_value_or_default "${config_file}" "gofcards_normalizer_repo_dir" "${DATA_DIR}/gofcards/gofcards_hg38_normalizer")
+    repo_url=$(yaml_value_or_default "${config_file}" "gofcards_normalizer_repo_url" "git@github.com:yangyxt/gofcards_hg38_normalizer.git")
+    if [[ -d ${repo_dir}/.git ]]; then
+        log "Updating GoFCards normalizer repository at ${repo_dir}"
+        git -C "${repo_dir}" pull --ff-only || {
+            log "ERROR: Failed to update GoFCards normalizer repository ${repo_dir}"
+            return 1
+        }
+    else
+        log "Cloning GoFCards normalizer repository ${repo_url} to ${repo_dir}"
+        mkdir -p "$(dirname "${repo_dir}")" || return 1
+        git clone "${repo_url}" "${repo_dir}" || {
+            log "ERROR: Failed to clone GoFCards normalizer repository ${repo_url}"
+            return 1
+        }
+    fi
+
+    workflow="${repo_dir}/bin/gofcards_workflow.sh"
+    [[ -x ${workflow} ]] || { log "ERROR: GoFCards workflow is not executable: ${workflow}"; return 1; }
+    update_yaml "${config_file}" "gofcards_normalizer_repo_dir" "${repo_dir}"
+    update_yaml "${config_file}" "gofcards_normalizer_workflow" "${workflow}"
+    printf "%s\n" "${workflow}"
+}
+
+
+function gofcards_exact_gof_cache_install() {
+    local config_file=${1}
+    local target_tsv
+    local workflow
+    local workdir
+    local conda_env
+    local public_excel_url
+    local hg19_fasta
+    local hg38_fasta
+    local vep_bin
+    local vep_cache_dir
+    local vep_version
+    local vep_cache_hg38
+    local vep_version_hg38
+    local vep_merged_hg38
+    local hgnc_tsv
+
+    target_tsv=$(yaml_value_or_default "${config_file}" "gofcards_exact_gof_hgvsp" "${DATA_DIR}/gofcards/gofcards_exact_gof_hgvsp.tsv.gz")
+    if [[ "${PRIVA_FORCE_GOFCARDS_CACHE:-0}" != "1" ]] && \
+       validate_gofcards_exact_gof_cache "${target_tsv}" >/dev/null 2>&1; then
+        log "GoFCards exact GOF cache already valid: ${target_tsv}"
+        update_yaml "${config_file}" "gofcards_exact_gof_hgvsp" "${target_tsv}"
+        return 0
+    fi
+
+    workflow=$(ensure_gofcards_normalizer_workflow "${config_file}") || return 1
+    workdir=$(yaml_value_or_default "${config_file}" "gofcards_workdir" "${DATA_DIR}/gofcards/build_work")
+    conda_env=$(yaml_value_or_default "${config_file}" "gofcards_conda_env" "gofcards_hg38")
+    public_excel_url=$(yaml_value_or_default "${config_file}" "gofcards_public_excel_url" "https://download.genemed.tech/upload/GainFunCards/gofcards_data_download.xlsx")
+    hg19_fasta=$(read_yaml "${config_file}" "ref_genome")
+    hg38_fasta=$(yaml_value_or_default "${config_file}" "gofcards_hg38_fasta" "")
+    vep_bin=$(command -v vep 2>/dev/null || true)
+    vep_cache_dir=$(read_yaml "${config_file}" "vep_cache_dir")
+    vep_version=$(read_yaml "${config_file}" "vep_installed_version")
+    vep_cache_hg38=$(yaml_value_or_default "${config_file}" "gofcards_vep_cache_hg38" "${vep_cache_dir}")
+    vep_version_hg38=$(yaml_value_or_default "${config_file}" "gofcards_vep_cache_version_hg38" "${vep_version}")
+    vep_merged_hg38=$(yaml_value_or_default "${config_file}" "gofcards_vep_cache_merged_hg38" "1")
+    hgnc_tsv="${DATA_DIR}/hgnc/non_alt_loci_set.tsv"
+
+    [[ -s ${hg19_fasta} ]] || { log "ERROR: hg19/HG19 FASTA not found for GoFCards workflow: ${hg19_fasta}"; return 1; }
+    [[ -s ${hg38_fasta} ]] || { log "ERROR: hg38/GRCh38 FASTA not found for GoFCards workflow: ${hg38_fasta}"; return 1; }
+    [[ -n ${vep_bin} ]] || { log "ERROR: VEP binary not found in PATH; activate the PriVA VEP env before GoFCards cache build"; return 1; }
+
+    mkdir -p "$(dirname "${target_tsv}")" "${workdir}" || return 1
+
+    if command -v mamba >/dev/null 2>&1; then
+        source ~/.bashrc 2>/dev/null || true
+        if ! mamba env list | awk '{print $1}' | grep -qx "${conda_env}"; then
+            log "Creating GoFCards normalizer conda env ${conda_env}"
+            CONDA_ENV="${conda_env}" bash "${workflow}" create_env || {
+                log "ERROR: Failed to create GoFCards normalizer conda env ${conda_env}"
+                return 1
+            }
+        fi
+    fi
+
+    log "Building PriVA GoFCards exact GOF cache from raw GoFCards backend/public sources into ${target_tsv}"
+    if command -v mamba >/dev/null 2>&1 && mamba env list | awk '{print $1}' | grep -qx "${conda_env}"; then
+        env \
+            WORKDIR="${workdir}" \
+            PRIVA_GOF_TSV="${target_tsv}" \
+            PUBLIC_EXCEL_URL="${public_excel_url}" \
+            HG19_FASTA="${hg19_fasta}" \
+            HG38_FASTA="${hg38_fasta}" \
+            VEP="${vep_bin}" \
+            VEP_CACHE_HG19="${vep_cache_dir}" \
+            VEP_CACHE_VERSION_HG19="${vep_version}" \
+            VEP_CACHE_MERGED_HG19=1 \
+            VEP_CACHE_HG38="${vep_cache_hg38}" \
+            VEP_CACHE_VERSION_HG38="${vep_version_hg38}" \
+            VEP_CACHE_MERGED_HG38="${vep_merged_hg38}" \
+            HGNC_COMPLETE_SET_TSV="${hgnc_tsv}" \
+            mamba run -n "${conda_env}" bash "${workflow}" run_all || {
+                log "ERROR: Failed to build GoFCards exact GOF cache"
+                return 1
+            }
+    else
+        env \
+            WORKDIR="${workdir}" \
+            PRIVA_GOF_TSV="${target_tsv}" \
+            PUBLIC_EXCEL_URL="${public_excel_url}" \
+            HG19_FASTA="${hg19_fasta}" \
+            HG38_FASTA="${hg38_fasta}" \
+            VEP="${vep_bin}" \
+            VEP_CACHE_HG19="${vep_cache_dir}" \
+            VEP_CACHE_VERSION_HG19="${vep_version}" \
+            VEP_CACHE_MERGED_HG19=1 \
+            VEP_CACHE_HG38="${vep_cache_hg38}" \
+            VEP_CACHE_VERSION_HG38="${vep_version_hg38}" \
+            VEP_CACHE_MERGED_HG38="${vep_merged_hg38}" \
+            HGNC_COMPLETE_SET_TSV="${hgnc_tsv}" \
+            bash "${workflow}" run_all || {
+                log "ERROR: Failed to build GoFCards exact GOF cache"
+                return 1
+            }
+    fi
+
+    validate_gofcards_exact_gof_cache "${target_tsv}" || {
+        log "ERROR: GoFCards exact GOF cache validation failed"
+        return 1
+    }
+    update_yaml "${config_file}" "gofcards_exact_gof_hgvsp" "${target_tsv}"
+    log "GoFCards exact GOF cache deployed: ${target_tsv}"
+}
+
+
+function mechanism_resource_install() {
+    local config_file=${1}
+    gene_pathogenic_mechanism_cache_install "${config_file}" || return 1
+    gofcards_exact_gof_cache_install "${config_file}" || return 1
+}
+
+
 function main_install() {
     local config_file=${1}
 
@@ -2098,6 +2426,11 @@ function main_install() {
     pext_install \
     ${config_file} || \
     { log "Failed to install pext BigWig files"; return 1; }
+
+    # 11. Install gene mechanism/DDG2P and exact GoFCards GOF caches
+    mechanism_resource_install \
+    ${config_file} || \
+    { log "Failed to install gene mechanism/DDG2P or GoFCards exact GOF caches"; return 1; }
     
     log "Congratulations! The installation is completed!"
 }

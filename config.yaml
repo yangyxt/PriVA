@@ -139,6 +139,31 @@ cds_fasta_file: "/paedyl01/disk1/yangyxt/public_data/VEP_plugins_caches/Ensembl_
 mavedb_url: "https://ftp.ensembl.org/pub/current_variation/MaveDB/MaveDB_variants.tsv.gz"
 mavedb_file: "/paedyl01/disk1/yangyxt/public_data/VEP_plugins_caches/MaveDB/MaveDB_variants.hg38.tsv.gz"
 
+# Gene mechanism / DDG2P-G2P cache paths
+# Built by: bash scripts/install_utils.sh gene_pathogenic_mechanism_cache_install config.yaml
+gene_mechanism_cache_dir: "/paedyl01/disk1/yangyxt/PriVA/data/gene_pathogenic_mechanism"
+gene_mechanism_raw_dir: "/paedyl01/disk1/yangyxt/public_data/gene_pathogenic_mechanism/raw"
+gene_mechanism_builder_script: "/paedyl01/disk1/yangyxt/PriVA/scripts/build_gene_pathogenic_mechanism_cache.py"
+gene_mechanism_json: /paedyl01/disk1/yangyxt/PriVA/data/gene_pathogenic_mechanism/prepared/gene_mechanism_curated_assertions.json
+ddg2p_mechanism_evidence: /paedyl01/disk1/yangyxt/PriVA/data/gene_pathogenic_mechanism/prepared/gene_pathogenic_mechanism_evidence.tsv
+g2p_ddg2p_url: "https://www.ebi.ac.uk/gene2phenotype/api/panel/all/download"
+clingen_dosage_grch38_url: "https://ftp.clinicalgenome.org/ClinGen_gene_curation_list_GRCh38.tsv"
+panelapp_panels_url: "https://panelapp.genomicsengland.co.uk/api/v1/panels/"
+
+# GoFCards exact variant-level GOF cache paths
+# Built by: bash scripts/install_utils.sh gofcards_exact_gof_cache_install config.yaml
+gofcards_exact_gof_hgvsp: /paedyl01/disk1/yangyxt/PriVA/data/gofcards/gofcards_exact_gof_hgvsp.tsv.gz
+gofcards_public_excel_url: "https://download.genemed.tech/upload/GainFunCards/gofcards_data_download.xlsx"
+gofcards_normalizer_repo_url: "git@github.com:yangyxt/gofcards_hg38_normalizer.git"
+gofcards_normalizer_repo_dir: "/paedyl01/disk1/yangyxt/gofcards_hg38_normalizer"
+gofcards_normalizer_workflow: "/paedyl01/disk1/yangyxt/gofcards_hg38_normalizer/bin/gofcards_workflow.sh"
+gofcards_workdir: "/paedyl01/disk1/yangyxt/PriVA/data/gofcards/build_work"
+gofcards_conda_env: "gofcards_hg38"
+gofcards_hg38_fasta: "/paedyl01/disk1/yangyxt/indexed_genome/hg38/ucsc.hg38.fasta"
+gofcards_vep_cache_hg38: "/paedyl01/disk1/yangyxt/public_data/VEP_caches"
+gofcards_vep_cache_version_hg38: "113"
+gofcards_vep_cache_merged_hg38: "1"
+
 
 ####################################################pext (proportion expressed across transcripts) Configuration####################################################
 # pext from gnomAD, based on GTEx v10 expression data (updated Nov 2024)
@@ -178,6 +203,4 @@ pext_tissues: "Spleen,WholeBlood,Cells_EBV_transformedlymphocytes"  # Immune-rel
 # Auto-populated by install_utils.sh:
 pext_mean_bw: ""                                             # Path to mean pext BigWig file
 pext_tissue_bw_dir: ""                                       # Directory containing tissue-specific BigWig files
-
-
 

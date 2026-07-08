@@ -37,30 +37,20 @@ DEFAULT_HGNC_TABLE = DATA_DIR / "hgnc" / "non_alt_loci_set.tsv"
 DEFAULT_HPO_COLLAPSED = DATA_DIR / "hpo" / "genes_to_phenotype.collapse.tsv.gz"
 DEFAULT_CLINGEN_DOSAGE = DATA_DIR / "clingen" / "gene_dosage_sensitivity.hg19.tsv"
 DEFAULT_LOEUF_TABLE = DATA_DIR / "loeuf" / "loeuf_dataset.tsv.gz"
-DEFAULT_MECHANISM_JSON = Path(
-    "/paedyl01/disk1/yangyxt/llm_gene_reranker/data/gene_pathogenic_mechanism/"
-    "prepared/gene_mechanism_curated_assertions.json"
+DEFAULT_MECHANISM_JSON = (
+    DATA_DIR / "gene_pathogenic_mechanism" / "prepared" / "gene_mechanism_curated_assertions.json"
 )
-DEFAULT_DDG2P_MECHANISM_EVIDENCE = Path(
-    "/paedyl01/disk1/yangyxt/llm_gene_reranker/data/gene_pathogenic_mechanism/"
-    "prepared/gene_pathogenic_mechanism_evidence.tsv"
+DEFAULT_DDG2P_MECHANISM_EVIDENCE = (
+    DATA_DIR / "gene_pathogenic_mechanism" / "prepared" / "gene_pathogenic_mechanism_evidence.tsv"
 )
 DEFAULT_GOFCARDS_EXACT_GOF_HGVSP = DATA_DIR / "gofcards" / "gofcards_exact_gof_hgvsp.tsv.gz"
-DEFAULT_GOFCARDS_STEP1_TSV = Path(
-    "/paedyl01/disk1/yangyxt/llm_gene_reranker/results/gof_dn_variant_extraction/"
-    "priva_output/gofcards_gof.hg19.numb.anno.step1.tsv"
+DEFAULT_GOFCARDS_STEP1_TSV = DATA_DIR / "gofcards" / "legacy" / "gofcards_gof.hg19.numb.anno.step1.tsv"
+DEFAULT_GOFCARDS_ACTIVE_TSV = DATA_DIR / "gofcards" / "legacy" / "active_json_gof_dn_variant_level.tsv"
+DEFAULT_GOFCARDS_RAW_XLSX = (
+    DATA_DIR / "gene_pathogenic_mechanism" / "raw" / "gofcards" / "gofcards_data_download.xlsx"
 )
-DEFAULT_GOFCARDS_ACTIVE_TSV = Path(
-    "/paedyl01/disk1/yangyxt/llm_gene_reranker/results/gof_dn_variant_extraction/"
-    "active_json_gof_dn_variant_level.tsv"
-)
-DEFAULT_GOFCARDS_RAW_XLSX = Path(
-    "/paedyl01/disk1/yangyxt/public_data/gene_pathogenic_mechanism/raw/gofcards/"
-    "gofcards_data_download.xlsx"
-)
-DEFAULT_GOFCARDS_CONVERSION_AUDIT_TSV = Path(
-    "/paedyl01/disk1/yangyxt/llm_gene_reranker/results/gof_dn_variant_extraction/"
-    "gofcards_gof.hg19.numb.vcf_conversion_audit.tsv"
+DEFAULT_GOFCARDS_CONVERSION_AUDIT_TSV = (
+    DATA_DIR / "gofcards" / "legacy" / "gofcards_gof.hg19.numb.vcf_conversion_audit.tsv"
 )
 
 LOOKUP_FIELD_PRIORITY = (

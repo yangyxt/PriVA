@@ -46,6 +46,10 @@ PROGRESS.md
 logs/
 /example_test/
 /example/smoke_runs/
+/data/gene_pathogenic_mechanism/raw/
+/data/gene_pathogenic_mechanism/metadata/
+/data/gene_pathogenic_mechanism/logs/
+/data/gofcards/build_work/
 
 # PBS / scheduler output stubs
 *.o[0-9]*

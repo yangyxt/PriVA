@@ -44,6 +44,15 @@ Create and configure the conda environment (expected name `priva_acmg`):
    bash scripts/install_utils.sh main_install path/to/config.yaml
    ```
 
+`main_install` also deploys the gene-mechanism resources used by ACMG step 3:
+DDG2P/G2P mechanism evidence, the curated gene-mechanism JSON, and the compact
+GoFCards exact variant-level GOF cache. These can be refreshed independently:
+
+```bash
+bash scripts/install_utils.sh gene_pathogenic_mechanism_cache_install path/to/config.yaml
+bash scripts/install_utils.sh gofcards_exact_gof_cache_install path/to/config.yaml
+```
+
 ## Reviewer smoke test
 
 The smoke test is a small end-to-end demo for checking that PriVA can run on the current machine. It uses curated demo assets in `example/smoke_data/` and does not run the full production annotation-resource installation.

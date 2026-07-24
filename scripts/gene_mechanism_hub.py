@@ -1503,23 +1503,10 @@ class GeneMechanismHub:
         *,
         include_entries: bool = False,
     ) -> dict[str, Any]:
-        """Return curated mechanism history for a normalized gene.
-
-        G2P and Orphadata records always come from the condition evidence TSV.
-        Filtering those sources out of the JSON prevents duplicate assertions
-        when a caller selects PriVA's packaged JSON, while retaining every other
-        JSON source, including the exact ClinVar/GoFCards integration available
-        only in the richer shared cache.
-        """
+        """Return condition-resolved and unresolved integrated-cache history."""
         symbol = self._resolved_symbol_key(gene_symbol)
-        info = self._load_mechanisms().get(symbol, {})
-        entries = self._iter_mechanism_entries(info) if info else []
-        entries = [
-            entry
-            for entry in entries
-            if entry.get("source") not in CONDITION_MECHANISM_SOURCES
-        ]
-        entries.extend(self._load_condition_mechanism_evidence().get(symbol, []))
+        gene = self._load_condition_cache().get(symbol, {})
+        entries = condition_cache_mechanism_entries(gene)
         mechanism_counts = Counter(entry["mechanism"] for entry in entries)
         pmids_by_mechanism: dict[str, set[str]] = defaultdict(set)
         variant_counts = Counter()
@@ -1559,7 +1546,19 @@ class GeneMechanismHub:
     ) -> dict[str, Any]:
         """Return DDG2P/G2P LoF mechanism history and allelic requirement flags."""
         symbol = self._resolved_symbol_key(gene_symbol)
-        entries = self._load_ddg2p_lof().get(symbol, [])
+        entries = [
+            entry
+            for entry in condition_cache_mechanism_entries(
+                self._load_condition_cache().get(symbol, {})
+            )
+            if entry.get("level") == "gene_level"
+            and entry.get("source") == "G2P_DDG2P"
+            and entry.get("mechanism") == "LOF"
+            and _clean(entry.get("mechanism_confidence")).lower()
+            in DDG2P_USABLE_MECHANISM_CONFIDENCE
+            and _clean(entry.get("disease_confidence")).lower()
+            in DDG2P_USABLE_DISEASE_CONFIDENCE
+        ]
         inheritance_counts = Counter(_clean(entry.get("inheritance")) for entry in entries)
         recessive = any(
             inheritance in DDG2P_RECESSIVE_LOF_INHERITANCE
@@ -1807,6 +1806,177 @@ def condition_cache_context(
         "hpo_assertions": axis_assertions,
         "hpo_assertion_count": condition.get("hpo_assertion_count", 0),
     }
+
+
+def condition_cache_mechanism_entries(
+    gene_record: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """Flatten one integrated gene record for hub summaries and audits.
+
+    Unlike automatic assertion selection, this audit view retains mechanisms
+    from review/excluded conditions and evidence that could not be joined to an
+    HPO condition. Scope and condition-link status remain explicit on every
+    row. Exact GoFCards alleles are emitted at ``variant_level`` and never
+    converted into gene-level mechanism evidence.
+    """
+    entries: list[dict[str, Any]] = []
+    seen: set[str] = set()
+
+    def append_entry(entry: dict[str, Any]) -> None:
+        normalized = {
+            **entry,
+            "level": _clean(entry.get("level")),
+            "source": _clean(entry.get("source")),
+            "mechanism": _clean(entry.get("mechanism")).upper(),
+            "pmids": list(entry.get("pmids", []) or []),
+        }
+        if normalized["mechanism"] not in CANONICAL_MECHANISMS:
+            return
+        identity = json.dumps(normalized, sort_keys=True, separators=(",", ":"))
+        if identity not in seen:
+            seen.add(identity)
+            entries.append(normalized)
+
+    conditions = gene_record.get("conditions", {})
+    if isinstance(conditions, dict):
+        for condition_key, condition in sorted(conditions.items()):
+            if not isinstance(condition, dict):
+                continue
+            scope = condition.get("priva_scope", {})
+            scope = scope if isinstance(scope, dict) else {}
+            condition_common = {
+                "source_condition_id": _clean(condition_key),
+                "disease": _clean(condition.get("label")),
+                "disease_scope": _clean(scope.get("category")),
+                "priva_scope": _clean(scope.get("decision")),
+                "scope_review_status": _clean(scope.get("review_status")),
+                "condition_link_status": "exact",
+            }
+            mechanisms = condition.get("pathogenic_mechanisms", {})
+            if not isinstance(mechanisms, dict):
+                continue
+            for mechanism, block in sorted(mechanisms.items()):
+                mechanism = _clean(mechanism).upper()
+                if mechanism not in CANONICAL_MECHANISMS or not isinstance(block, dict):
+                    continue
+                for evidence in block.get("evidence", []) or []:
+                    if not isinstance(evidence, dict):
+                        continue
+                    source = _clean(evidence.get("source"))
+                    if source == "GoFCards_exact+ClinVar_VCV":
+                        continue
+                    append_entry(
+                        {
+                            **condition_common,
+                            "level": "gene_level",
+                            "source": source,
+                            "source_record_id": _clean(
+                                evidence.get("source_record_id")
+                            ),
+                            "mechanism": mechanism,
+                            "mechanism_raw": _clean(evidence.get("mechanism_raw")),
+                            "allelic_requirement": _clean(
+                                evidence.get("allelic_requirement")
+                            ),
+                            "confidence": _clean(
+                                evidence.get("mechanism_confidence")
+                            ),
+                            "mechanism_confidence": _clean(
+                                evidence.get("mechanism_confidence")
+                            ),
+                            "disease_confidence": _clean(
+                                evidence.get("disease_confidence")
+                            ),
+                            "pmids": list(evidence.get("pmids", []) or []),
+                        }
+                    )
+                for variant_key, variant in sorted(
+                    (block.get("variants", {}) or {}).items()
+                ):
+                    if not isinstance(variant, dict):
+                        continue
+                    links = [
+                        link
+                        for link in variant.get("clinvar_links", []) or []
+                        if isinstance(link, dict)
+                    ]
+                    append_entry(
+                        {
+                            **condition_common,
+                            "level": "variant_level",
+                            "source": "GoFCards_exact+ClinVar_VCV",
+                            "source_record_id": _clean(variant_key),
+                            "mechanism": mechanism,
+                            "allelic_requirement": "",
+                            "confidence": "exact_variant",
+                            "mechanism_confidence": "exact_variant",
+                            "disease_confidence": "ClinVar_germline_assertion",
+                            "pmids": list(variant.get("pmids", []) or []),
+                            "vcv_accessions": [
+                                _clean(link.get("vcv_accession"))
+                                for link in links
+                                if _clean(link.get("vcv_accession"))
+                            ],
+                        }
+                    )
+
+    unmapped = gene_record.get("unmapped_evidence", {})
+    unmapped = unmapped if isinstance(unmapped, dict) else {}
+    for evidence in unmapped.get("mechanisms", []) or []:
+        if not isinstance(evidence, dict):
+            continue
+        source_scope = evidence.get("source_scope", {})
+        source_scope = source_scope if isinstance(source_scope, dict) else {}
+        append_entry(
+            {
+                "level": "gene_level",
+                "source": _clean(evidence.get("source")),
+                "source_record_id": _clean(evidence.get("source_record_id")),
+                "source_condition_id": next(
+                    iter(evidence.get("condition_identifiers", []) or []), ""
+                ),
+                "disease": _clean(evidence.get("condition_label")),
+                "mechanism": _clean(evidence.get("mechanism")),
+                "mechanism_raw": _clean(evidence.get("mechanism_raw")),
+                "allelic_requirement": _clean(evidence.get("allelic_requirement")),
+                "confidence": _clean(evidence.get("mechanism_confidence")),
+                "mechanism_confidence": _clean(
+                    evidence.get("mechanism_confidence")
+                ),
+                "disease_confidence": _clean(evidence.get("disease_confidence")),
+                "disease_scope": _clean(source_scope.get("category")),
+                "priva_scope": _clean(source_scope.get("decision")),
+                "scope_review_status": _clean(source_scope.get("review_status")),
+                "condition_link_status": "unresolved",
+                "unmapped_reason": _clean(evidence.get("reason")),
+                "pmids": list(evidence.get("pmids", []) or []),
+            }
+        )
+    variants = unmapped.get("variants", {})
+    variants = variants if isinstance(variants, dict) else {}
+    for variant_key, variant in sorted(variants.items()):
+        if not isinstance(variant, dict):
+            continue
+        append_entry(
+            {
+                "level": "variant_level",
+                "source": "GoFCards",
+                "source_record_id": _clean(variant_key),
+                "source_condition_id": "",
+                "disease": ";".join(variant.get("disease_labels", []) or []),
+                "mechanism": _clean(variant.get("mechanism")),
+                "allelic_requirement": "",
+                "confidence": "exact_variant_condition_unresolved",
+                "mechanism_confidence": "exact_variant",
+                "disease_confidence": "",
+                "condition_link_status": "unresolved",
+                "unmapped_reason": _clean(
+                    (variant.get("condition_link", {}) or {}).get("reason")
+                ),
+                "pmids": list(variant.get("pmids", []) or []),
+            }
+        )
+    return entries
 
 
 def match_condition_cache_gofcards_variants(

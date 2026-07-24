@@ -1993,6 +1993,19 @@ function yaml_value_or_default() {
 }
 
 
+function update_or_append_yaml() {
+    local config_file=${1}
+    local key=${2}
+    local value=${3}
+
+    if grep -Eq "^${key}[[:space:]]*:" "${config_file}"; then
+        update_yaml "${config_file}" "${key}" "${value}"
+    else
+        printf "\n%s: %s\n" "${key}" "${value}" >> "${config_file}"
+    fi
+}
+
+
 function validate_gene_pathogenic_mechanism_cache() {
     local mechanism_json=${1}
     local evidence_tsv=${2}
@@ -2323,6 +2336,88 @@ function gofcards_exact_gof_cache_install() {
 }
 
 
+function validate_hpo_condition_mechanism_cache() {
+    local builder_script=${1}
+    local cache_json=${2}
+
+    [[ -f ${builder_script} ]] || { log "ERROR: HPO condition mechanism builder not found: ${builder_script}"; return 1; }
+    [[ -s ${cache_json} ]] || { log "ERROR: Missing/empty HPO condition mechanism cache: ${cache_json}"; return 1; }
+    python "${builder_script}" --validate-only "${cache_json}"
+}
+
+
+function hpo_condition_mechanism_cache_install() {
+    local config_file=${1}
+    [[ -f ${config_file} ]] || { log "ERROR: Config file not found: ${config_file}"; return 1; }
+
+    local builder_script
+    local cache_json
+    local hpo_assertions
+    local mechanism_evidence
+    local mechanism_json
+    local gofcards_variants
+    local hpo_release
+    local mondo_release
+
+    builder_script=$(yaml_value_or_default "${config_file}" "hpo_condition_mechanism_builder_script" "${SCRIPT_DIR}/build_hpo_condition_mechanism_cache.py")
+    cache_json=$(yaml_value_or_default "${config_file}" "hpo_condition_mechanism_json" "${DATA_DIR}/gene_pathogenic_mechanism/prepared/hpo_condition_mechanism_cache.json")
+    hpo_assertions=$(yaml_value_or_default "${config_file}" "hpo_assertions" "${DATA_DIR}/hpo/genes_to_phenotype.assertions.tsv.gz")
+    mechanism_evidence=$(yaml_value_or_default "${config_file}" "ddg2p_mechanism_evidence" "${DATA_DIR}/gene_pathogenic_mechanism/prepared/gene_pathogenic_mechanism_evidence.tsv")
+    mechanism_json=$(yaml_value_or_default "${config_file}" "gene_mechanism_json" "${DATA_DIR}/gene_pathogenic_mechanism/prepared/gene_mechanism_curated_assertions.json")
+    gofcards_variants=$(yaml_value_or_default "${config_file}" "gofcards_exact_gof_hgvsp" "${DATA_DIR}/gofcards/gofcards_exact_gof_hgvsp.tsv.gz")
+    hpo_release=$(yaml_value_or_default "${config_file}" "hpo_release" "")
+    mondo_release=$(yaml_value_or_default "${config_file}" "mondo_release" "")
+
+    [[ -f ${builder_script} ]] || { log "ERROR: HPO condition mechanism builder not found: ${builder_script}"; return 1; }
+    [[ -s ${hpo_assertions} ]] || { log "ERROR: Scoped HPO assertions not found: ${hpo_assertions}"; return 1; }
+    [[ -s ${mechanism_evidence} ]] || { log "ERROR: Condition mechanism evidence not found: ${mechanism_evidence}"; return 1; }
+    [[ -s ${mechanism_json} ]] || { log "ERROR: Gene mechanism JSON not found: ${mechanism_json}"; return 1; }
+    [[ -s ${gofcards_variants} ]] || { log "ERROR: Exact GoFCards cache not found: ${gofcards_variants}"; return 1; }
+    mkdir -p "$(dirname "${cache_json}")" || return 1
+
+    local rebuild=0
+    if [[ "${PRIVA_FORCE_HPO_MECHANISM_JSON:-0}" == "1" ]] || [[ ! -s ${cache_json} ]]; then
+        rebuild=1
+    else
+        local source_file
+        for source_file in "${builder_script}" "${hpo_assertions}" "${mechanism_evidence}" "${mechanism_json}" "${gofcards_variants}"; do
+            if [[ ${source_file} -nt ${cache_json} ]]; then
+                rebuild=1
+                break
+            fi
+        done
+        if [[ ${rebuild} -eq 0 ]] && ! validate_hpo_condition_mechanism_cache "${builder_script}" "${cache_json}" >/dev/null 2>&1; then
+            rebuild=1
+        fi
+    fi
+
+    if [[ ${rebuild} -eq 1 ]]; then
+        log "Building atomic HPO-framed condition mechanism JSON: ${cache_json}"
+        python "${builder_script}" \
+            --hpo-assertions "${hpo_assertions}" \
+            --mechanism-evidence "${mechanism_evidence}" \
+            --mechanism-json "${mechanism_json}" \
+            --gofcards-variants "${gofcards_variants}" \
+            --hpo-release "${hpo_release}" \
+            --mondo-release "${mondo_release}" \
+            --output "${cache_json}" || {
+                log "ERROR: Failed to build HPO condition mechanism cache"
+                return 1
+            }
+    else
+        log "HPO condition mechanism cache is already current: ${cache_json}"
+    fi
+
+    validate_hpo_condition_mechanism_cache "${builder_script}" "${cache_json}" || {
+        log "ERROR: HPO condition mechanism cache validation failed"
+        return 1
+    }
+    update_or_append_yaml "${config_file}" "hpo_condition_mechanism_builder_script" "${builder_script}"
+    update_or_append_yaml "${config_file}" "hpo_condition_mechanism_json" "${cache_json}"
+    log "HPO condition mechanism cache deployed: ${cache_json}"
+}
+
+
 function download_resource_atomic() {
     local url=${1}
     local target=${2}
@@ -2514,6 +2609,7 @@ function mechanism_resource_install() {
     mondo_hpo_scope_install "${config_file}" || return 1
     gene_pathogenic_mechanism_cache_install "${config_file}" || return 1
     gofcards_exact_gof_cache_install "${config_file}" || return 1
+    hpo_condition_mechanism_cache_install "${config_file}" || return 1
 }
 
 

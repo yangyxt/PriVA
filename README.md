@@ -45,14 +45,22 @@ Create and configure the conda environment (expected name `priva_acmg`):
    ```
 
 `main_install` also deploys the gene-mechanism resources used by ACMG step 3:
-DDG2P/G2P mechanism evidence, the curated gene-mechanism JSON, and the compact
-GoFCards exact variant-level GOF cache. These can be refreshed independently:
+DDG2P/G2P mechanism evidence, the curated gene-mechanism JSON, the compact
+GoFCards exact variant-level GOF cache, and the integrated HPO-framed condition
+mechanism JSON. These can be refreshed independently:
 
 ```bash
 bash scripts/install_utils.sh gene_pathogenic_mechanism_cache_install path/to/config.yaml
 bash scripts/install_utils.sh gofcards_exact_gof_cache_install path/to/config.yaml
 bash scripts/install_utils.sh mondo_hpo_scope_install path/to/config.yaml
+bash scripts/install_utils.sh hpo_condition_mechanism_cache_install path/to/config.yaml
 ```
+
+The integrated JSON is published by writing and validating a complete temporary
+snapshot before atomically replacing the live cache. It nests external
+mechanism histories and variants under an HPO gene/condition only through exact
+OMIM, ORPHA, or MONDO identifiers; unresolved records remain under the gene's
+`unmapped_evidence` section.
 
 The MONDO/HPO installer downloads pinned releases, builds one disease-scope
 registry, and adds the resulting scope and provenance fields to each HPO

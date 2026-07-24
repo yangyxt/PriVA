@@ -1426,11 +1426,23 @@ class GeneMechanismHub:
         *,
         include_entries: bool = False,
     ) -> dict[str, Any]:
-        """Return curated GoF/DN/triplosensitivity history for a normalized gene."""
+        """Return curated mechanism history for a normalized gene.
+
+        G2P and Orphadata records always come from the condition evidence TSV.
+        Filtering those sources out of the JSON prevents duplicate assertions
+        when a caller selects PriVA's packaged JSON, while retaining every other
+        JSON source, including the exact ClinVar/GoFCards integration available
+        only in the richer shared cache.
+        """
         symbol = self._resolved_symbol_key(gene_symbol)
         info = self._load_mechanisms().get(symbol, {})
         entries = self._iter_mechanism_entries(info) if info else []
-        entries.extend(self._load_ddg2p_lof().get(symbol, []))
+        entries = [
+            entry
+            for entry in entries
+            if entry.get("source") not in CONDITION_MECHANISM_SOURCES
+        ]
+        entries.extend(self._load_condition_mechanism_evidence().get(symbol, []))
         mechanism_counts = Counter(entry["mechanism"] for entry in entries)
         pmids_by_mechanism: dict[str, set[str]] = defaultdict(set)
         variant_counts = Counter()

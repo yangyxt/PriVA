@@ -30,6 +30,16 @@ def test_load_condition_mechanism_evidence_preserves_identity_and_mechanism(
     )
     mechanism_json = tmp_path / "mechanisms.json"
     mechanism_json.write_text(json.dumps({"_meta": {}}), encoding="utf-8")
+    hpo = tmp_path / "hpo.tsv"
+    hpo.write_text(
+        "gene_symbol\tdisease_id\tmondo_id\thpo_id\tfrequency\tevidence\t"
+        "reference\tdisease_scope\tpriva_scope\tscope_review_status\n"
+        "GENE1\tOMIM:1\tMONDO:0000001\tHP:0000006\t-\tTAS\tOMIM:1\t"
+        "mendelian_non_neoplastic\tinclude\tauto_supported\n"
+        "GENE1\tOMIM:1\tMONDO:0000001\tHP:0003829\t2/10\tPCS\tPMID:1\t"
+        "mendelian_non_neoplastic\tinclude\tauto_supported\n",
+        encoding="utf-8",
+    )
     evidence = tmp_path / "evidence.tsv"
     columns = [
         "gene_symbol",
@@ -76,6 +86,7 @@ def test_load_condition_mechanism_evidence_preserves_identity_and_mechanism(
     hub = GeneMechanismHub(
         mechanism_json=mechanism_json,
         ddg2p_evidence=evidence,
+        hpo_collapsed=hpo,
         hgnc_table=hgnc,
         use_hgnc_package=False,
     )
@@ -88,6 +99,17 @@ def test_load_condition_mechanism_evidence_preserves_identity_and_mechanism(
     assert loaded["GENE1"][0]["mondo_id"] == "MONDO:0000001"
     assert loaded["GENE1"][0]["disease_scope"] == "mendelian_non_neoplastic"
     assert loaded["GENE1"][0]["pmids"] == ["11", "12"]
+
+    condition_assertions = hub.condition_mechanism_assertions("GENE1")
+    assert [row["mechanism"] for row in condition_assertions] == ["GOF", "LOF"]
+    assert all(
+        row["hpo_match_status"] == "matched_gene_and_condition"
+        for row in condition_assertions
+    )
+    assert all(
+        row["penetrance_hpo_ids"] == ["HP:0003829"]
+        for row in condition_assertions
+    )
 
 
 def test_build_hpo_condition_index_preserves_assertion_provenance() -> None:

@@ -12,6 +12,7 @@ sys.path.insert(0, str(ROOT / "scripts"))
 from gene_mechanism_hub import (  # noqa: E402
     GeneMechanismHub,
     build_hpo_condition_index,
+    condition_cache_mechanism_assertions,
     enrich_condition_mechanism_assertion,
     extract_exact_clinvar_condition_identities,
     select_condition_histories_for_variant,
@@ -67,10 +68,100 @@ def test_load_integrated_condition_cache_validates_schema_and_resolves_alias(
         stale_hub._load_condition_cache()
 
 
-def test_load_condition_mechanism_evidence_preserves_identity_and_mechanism(
+def test_condition_cache_assertions_preserve_context_and_exclude_variant_only_gof(
+) -> None:
+    hpo_assertion = {
+        "hpo_id": "HP:0000006",
+        "frequency": "-",
+        "evidence": "TAS",
+        "reference": "OMIM:1",
+    }
+    included_condition = {
+        "label": "Condition one",
+        "identifiers": {"OMIM": ["OMIM:1"], "MONDO": ["MONDO:0000001"]},
+        "priva_scope": {
+            "decision": "include",
+            "category": "mendelian_non_neoplastic",
+            "review_status": "auto_supported",
+        },
+        "inheritance": {
+            "modes": ["autosomal_dominant"],
+            "assertions": [hpo_assertion],
+        },
+        "penetrance": {
+            "statuses": ["incomplete"],
+            "assertions": [
+                {
+                    "hpo_id": "HP:0003829",
+                    "frequency": "2/10",
+                    "evidence": "PCS",
+                    "reference": "PMID:1",
+                }
+            ],
+        },
+        "onset": {"terms": [], "assertions": []},
+        "hpo_assertion_count": 12,
+        "pathogenic_mechanisms": {
+            "GOF": {
+                "allelic_requirements": ["monoallelic_autosomal"],
+                "evidence": [
+                    {
+                        "source": "G2P_DDG2P",
+                        "source_record_id": "G2P0001",
+                        "condition_identifiers": ["OMIM:1", "MONDO:0000001"],
+                        "condition_label": "Condition one",
+                        "mechanism": "GOF",
+                        "mechanism_raw": "gain of function",
+                        "allelic_requirement": "monoallelic_autosomal",
+                        "mechanism_confidence": "high",
+                        "disease_confidence": "definitive",
+                        "pmids": ["1"],
+                    },
+                    {
+                        "source": "GoFCards_exact+ClinVar_VCV",
+                        "source_record_id": "VCV1",
+                        "condition_identifiers": ["OMIM:1"],
+                        "mechanism": "GOF",
+                        "mechanism_confidence": "exact_variant",
+                    },
+                ],
+                "variants": {},
+            }
+        },
+    }
+    review_condition = {
+        **included_condition,
+        "priva_scope": {
+            **included_condition["priva_scope"],
+            "decision": "review",
+        },
+    }
+    gene = {
+        "conditions": {
+            "OMIM:1": included_condition,
+            "OMIM:2": review_condition,
+        }
+    }
+
+    assertions = condition_cache_mechanism_assertions(gene)
+
+    assert len(assertions) == 1
+    assertion = assertions[0]
+    assert assertion["source"] == "G2P_DDG2P"
+    assert assertion["source_condition_id"] == "OMIM:1"
+    assert assertion["mondo_id"] == "MONDO:0000001"
+    assert assertion["hpo_inheritance_modes"] == [
+        "Autosomal dominant inheritance"
+    ]
+    assert assertion["penetrance_hpo_ids"] == ["HP:0003829"]
+    assert assertion["hpo_assertion_count"] == 12
+    assert assertion["hpo_assertions"][1]["frequency"] == "2/10"
+
+
+def test_legacy_condition_evidence_loader_remains_audit_only(
     tmp_path: Path,
 ) -> None:
-    """The TSV remains authoritative even when the JSON has no G2P records."""
+    """The old TSV parser remains inspectable but no longer drives runtime."""
     hgnc = tmp_path / "hgnc.tsv"
     hgnc.write_text(
         "hgnc_id\tsymbol\tensembl_gene_id\tentrez_id\tprev_symbol\t"
@@ -150,16 +241,7 @@ def test_load_condition_mechanism_evidence_preserves_identity_and_mechanism(
     assert loaded["GENE1"][0]["disease_scope"] == "mendelian_non_neoplastic"
     assert loaded["GENE1"][0]["pmids"] == ["11", "12"]
 
-    condition_assertions = hub.condition_mechanism_assertions("GENE1")
-    assert [row["mechanism"] for row in condition_assertions] == ["GOF", "LOF"]
-    assert all(
-        row["hpo_match_status"] == "matched_gene_and_condition"
-        for row in condition_assertions
-    )
-    assert all(
-        row["penetrance_hpo_ids"] == ["HP:0003829"]
-        for row in condition_assertions
-    )
+    assert hub.condition_mechanism_assertions("GENE1") == []
 
 
 def test_build_hpo_condition_index_preserves_assertion_provenance() -> None:

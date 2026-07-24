@@ -34,7 +34,9 @@ PRIVA_ROOT = SCRIPT_DIR.parent
 DATA_DIR = PRIVA_ROOT / "data"
 
 DEFAULT_HGNC_TABLE = DATA_DIR / "hgnc" / "non_alt_loci_set.tsv"
-DEFAULT_HPO_COLLAPSED = DATA_DIR / "hpo" / "genes_to_phenotype.collapse.tsv.gz"
+DEFAULT_HPO_ASSERTIONS = DATA_DIR / "hpo" / "genes_to_phenotype.assertions.tsv.gz"
+# Keep the existing constructor argument name while migrating its file schema.
+DEFAULT_HPO_COLLAPSED = DEFAULT_HPO_ASSERTIONS
 DEFAULT_CLINGEN_DOSAGE = DATA_DIR / "clingen" / "gene_dosage_sensitivity.hg19.tsv"
 DEFAULT_LOEUF_TABLE = DATA_DIR / "loeuf" / "loeuf_dataset.tsv.gz"
 PACKAGED_MECHANISM_JSON = (
@@ -79,6 +81,42 @@ LOOKUP_FIELD_PRIORITY = (
 )
 
 CANONICAL_MECHANISMS = {"LOF", "GOF", "DOMINANT_NEGATIVE", "TRIPLOSENSITIVITY"}
+HPO_INHERITANCE_TERMS = {
+    "HP:0000006": "Autosomal dominant inheritance",
+    "HP:0000007": "Autosomal recessive inheritance",
+    "HP:0001417": "X-linked inheritance",
+    "HP:0001419": "X-linked recessive inheritance",
+    "HP:0001423": "X-linked dominant inheritance",
+    "HP:0001426": "Non-Mendelian inheritance",
+    "HP:0001427": "Mitochondrial inheritance",
+    "HP:0001450": "Y-linked inheritance",
+    "HP:0010982": "Polygenic inheritance",
+    "HP:0010983": "Oligogenic inheritance",
+    "HP:0010984": "Digenic inheritance",
+    "HP:0012275": "Autosomal dominant inheritance with maternal imprinting",
+    "HP:0034341": "Pseudoautosomal recessive inheritance",
+}
+HPO_PENETRANCE_TERMS = {
+    "HP:0003829",  # Incomplete penetrance
+    "HP:0034950",  # Complete penetrance
+    "HP:4000159",  # Moderate penetrance
+    "HP:4000160",  # Low penetrance
+}
+HPO_ONSET_TERMS = {
+    "HP:0030674",  # Antenatal onset
+    "HP:0011460",  # Embryonal onset
+    "HP:0011461",  # Fetal onset
+    "HP:0003577",  # Congenital onset
+    "HP:0003623",  # Neonatal onset
+    "HP:0003593",  # Infantile onset
+    "HP:0011463",  # Childhood onset
+    "HP:0003621",  # Juvenile onset
+    "HP:0410280",  # Pediatric onset
+    "HP:0003581",  # Adult onset
+    "HP:0011462",  # Young adult onset
+    "HP:0003596",  # Middle age onset
+    "HP:0003584",  # Late onset
+}
 DDG2P_LOF_RAW_VALUES = {
     "loss of function",
     "absent gene product",
@@ -328,6 +366,105 @@ def _hpo_inheritance_flags(inheritance_modes: Any) -> dict[str, bool]:
     }
 
 
+def build_hpo_condition_index(
+    assertions: pd.DataFrame,
+) -> dict[tuple[str, str], dict[str, Any]]:
+    """Index HPO evidence by the inseparable gene-plus-disease identity.
+
+    The index deliberately requires both a gene symbol and a stable disease ID.
+    A MONDO ID alone is insufficient because one disease can involve multiple
+    genes with different mechanisms. A gene symbol alone is also insufficient
+    because the same gene can cause several disorders with different
+    inheritance, penetrance, or onset.
+
+    Every original HPO assertion is retained with its frequency, evidence code,
+    and reference. Compact inheritance, penetrance, and onset lists are derived
+    only for convenient downstream decisions; they never replace the auditable
+    source rows. Each condition can be looked up by its native OMIM/ORPHA ID or
+    by MONDO, allowing G2P and Orphadata to use the same condition record.
+    """
+    required = {
+        "gene_symbol",
+        "disease_id",
+        "hpo_id",
+        "frequency",
+        "evidence",
+        "reference",
+    }
+    missing = sorted(required - set(assertions.columns))
+    if missing:
+        raise ValueError(f"HPO assertion table missing columns: {', '.join(missing)}")
+
+    frame = assertions.copy().fillna("")
+    for column in (
+        "mondo_id",
+        "disease_scope",
+        "priva_scope",
+        "scope_review_status",
+    ):
+        if column not in frame.columns:
+            frame[column] = ""
+    frame = frame.loc[
+        frame["gene_symbol"].astype(str).str.strip().ne("")
+        & frame["disease_id"].astype(str).str.strip().ne("")
+    ]
+
+    index: dict[tuple[str, str], dict[str, Any]] = {}
+    group_columns = [
+        "gene_symbol",
+        "disease_id",
+        "mondo_id",
+        "disease_scope",
+        "priva_scope",
+        "scope_review_status",
+    ]
+    for group_key, group in frame.groupby(group_columns, sort=False, dropna=False):
+        (
+            gene_symbol,
+            disease_id,
+            mondo_id,
+            disease_scope,
+            priva_scope,
+            scope_review_status,
+        ) = map(_clean, group_key)
+        hpo_rows = [
+            {
+                "hpo_id": _clean(row.get("hpo_id")),
+                "frequency": _clean(row.get("frequency")),
+                "evidence": _clean(row.get("evidence")),
+                "reference": _clean(row.get("reference")),
+            }
+            for row in group.to_dict(orient="records")
+        ]
+        hpo_ids = list(
+            dict.fromkeys(row["hpo_id"] for row in hpo_rows if row["hpo_id"])
+        )
+        record = {
+            "disease_id": disease_id,
+            "mondo_id": mondo_id,
+            "disease_scope": disease_scope,
+            "priva_scope": priva_scope,
+            "scope_review_status": scope_review_status,
+            "hpo_ids": hpo_ids,
+            "inheritance_modes": [
+                HPO_INHERITANCE_TERMS[hpo_id]
+                for hpo_id in hpo_ids
+                if hpo_id in HPO_INHERITANCE_TERMS
+            ],
+            "penetrance_hpo_ids": [
+                hpo_id for hpo_id in hpo_ids if hpo_id in HPO_PENETRANCE_TERMS
+            ],
+            "onset_hpo_ids": [
+                hpo_id for hpo_id in hpo_ids if hpo_id in HPO_ONSET_TERMS
+            ],
+            "hpo_assertions": hpo_rows,
+        }
+        for condition_id in (disease_id, mondo_id):
+            if condition_id:
+                index[(gene_symbol.upper(), condition_id.upper())] = record
+    return index
+
+
 class _LocalHgncResolver:
     """Small fallback resolver using PriVA's local HGNC table."""
 
@@ -395,6 +532,7 @@ class GeneMechanismHub:
         self._mechanism_by_symbol: dict[str, dict[str, Any]] | None = None
         self._ddg2p_lof_by_symbol: dict[str, list[dict[str, Any]]] | None = None
         self._hpo_by_symbol: dict[str, dict[str, str]] | None = None
+        self._hpo_condition_index: dict[tuple[str, str], dict[str, Any]] | None = None
         self._clingen_by_symbol: dict[str, dict[str, Any]] | None = None
         self._loeuf_by_symbol: dict[str, float] | None = None
         self._gofcards_by_symbol_hgvsp: dict[tuple[str, str], list[dict[str, str]]] | None = None
@@ -527,16 +665,114 @@ class GeneMechanismHub:
             return self._hpo_by_symbol
         df = pd.read_csv(self.hpo_collapsed, sep="\t", dtype=str, low_memory=False).fillna("")
         by_symbol: dict[str, dict[str, str]] = {}
-        for _, row in df.iterrows():
-            symbol = _clean(row.get("gene_symbol"))
+        assertion_columns = {
+            "gene_symbol",
+            "disease_id",
+            "hpo_id",
+            "frequency",
+            "evidence",
+            "reference",
+        }
+        if assertion_columns.issubset(df.columns):
+            raw_condition_index = build_hpo_condition_index(df)
+            condition_index: dict[tuple[str, str], dict[str, Any]] = {}
+            for (symbol, condition_id), record in raw_condition_index.items():
+                condition_index[(symbol, condition_id)] = record
+                resolved = self._try_resolve_symbol(symbol)
+                if resolved:
+                    condition_index.setdefault(
+                        (resolved.upper(), condition_id),
+                        record,
+                    )
+            self._hpo_condition_index = condition_index
+            hpo_records = []
+            for symbol, group in df.groupby("gene_symbol", sort=False):
+                if "priva_scope" in group.columns:
+                    included_group = group.loc[group["priva_scope"].eq("include")]
+                    review_diseases = list(
+                        dict.fromkeys(
+                            filter(
+                                None,
+                                map(
+                                    _clean,
+                                    group.loc[
+                                        group["priva_scope"].eq("review"), "disease_id"
+                                    ],
+                                ),
+                            )
+                        )
+                    )
+                    excluded_diseases = list(
+                        dict.fromkeys(
+                            filter(
+                                None,
+                                map(
+                                    _clean,
+                                    group.loc[
+                                        group["priva_scope"].eq("exclude"), "disease_id"
+                                    ],
+                                ),
+                            )
+                        )
+                    )
+                else:
+                    included_group = group
+                    review_diseases = []
+                    excluded_diseases = []
+                hpo_ids = list(
+                    dict.fromkeys(filter(None, map(_clean, included_group["hpo_id"])))
+                )
+                inheritance_rows = included_group[
+                    included_group["hpo_id"].isin(HPO_INHERITANCE_TERMS)
+                ]
+                inheritance_modes = list(
+                    dict.fromkeys(
+                        HPO_INHERITANCE_TERMS[hpo_id]
+                        for hpo_id in inheritance_rows["hpo_id"]
+                    )
+                )
+                inheritance_diseases = list(
+                    dict.fromkeys(filter(None, map(_clean, inheritance_rows["disease_id"])))
+                )
+                hpo_records.append(
+                    (
+                        symbol,
+                        {
+                            "ncbi_gene_id": "",
+                            "hpo_id": ";".join(hpo_ids),
+                            "inheritance_modes": ";".join(inheritance_modes),
+                            "inheritance_disease_ids": ";".join(inheritance_diseases),
+                            "scope_review_required": bool(review_diseases),
+                            "scope_review_disease_ids": ";".join(review_diseases),
+                            "scope_excluded_disease_ids": ";".join(excluded_diseases),
+                        },
+                    )
+                )
+        else:
+            self._hpo_condition_index = {}
+            hpo_records = []
+            for _, row in df.iterrows():
+                symbol = _clean(row.get("gene_symbol"))
+                if not symbol:
+                    continue
+                hpo_records.append(
+                    (
+                        symbol,
+                        {
+                            "ncbi_gene_id": _clean(row.get("ncbi_gene_id")),
+                            "hpo_id": _clean(row.get("hpo_id")),
+                            "inheritance_modes": _clean(row.get("inheritance_modes")),
+                            "inheritance_disease_ids": _clean(
+                                row.get("inheritance_disease_ids")
+                            ),
+                        },
+                    )
+                )
+
+        for symbol, record in hpo_records:
+            symbol = _clean(symbol)
             if not symbol:
                 continue
-            record = {
-                "ncbi_gene_id": _clean(row.get("ncbi_gene_id")),
-                "hpo_id": _clean(row.get("hpo_id")),
-                "inheritance_modes": _clean(row.get("inheritance_modes")),
-                "inheritance_disease_ids": _clean(row.get("inheritance_disease_ids")),
-            }
             by_symbol.setdefault(symbol, record)
             resolved = self._try_resolve_symbol(symbol)
             if resolved:
@@ -1136,6 +1372,15 @@ class GeneMechanismHub:
             "incomplete_penetrance": bool(incomplete),
             "hpo_inheritance_modes": hpo_record.get("inheritance_modes", ""),
             "hpo_inheritance_disease_ids": hpo_record.get("inheritance_disease_ids", ""),
+            "hpo_scope_review_required": bool(
+                hpo_record.get("scope_review_required", False)
+            ),
+            "hpo_scope_review_disease_ids": hpo_record.get(
+                "scope_review_disease_ids", ""
+            ),
+            "hpo_scope_excluded_disease_ids": hpo_record.get(
+                "scope_excluded_disease_ids", ""
+            ),
             "ddg2p_lof_history": ddg2p_lof,
             "clingen_haploinsufficiency_score": clingen_hi_score,
             "clingen_haploinsufficiency_description": clingen_record.get(

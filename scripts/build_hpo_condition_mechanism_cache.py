@@ -731,15 +731,32 @@ def build_clinvar_gofcards_condition_links(
                 continue
             variation = vcv.get("variation", {}) or {}
             vcv_accession = _clean(variation.get("vcv_accession"))
+            clinvar_hgvs = list(
+                dict.fromkeys(
+                    _clean(hgvs.get("expression"))
+                    for hgvs in variation.get("hgvs", []) or []
+                    if isinstance(hgvs, dict) and _clean(hgvs.get("expression"))
+                )
+            )
             for assertion in vcv.get("condition_assertions", []) or []:
                 if not isinstance(assertion, dict):
                     continue
                 identities = _clinvar_condition_identities(assertion)
+                condition_names = list(
+                    dict.fromkeys(
+                        _clean(condition.get("name"))
+                        for condition in assertion.get("conditions", []) or []
+                        if isinstance(condition, dict)
+                        and _clean(condition.get("name"))
+                    )
+                )
                 classification = assertion.get("germline_classification", {}) or {}
                 link = {
                     "vcv_accession": vcv_accession,
                     "rcv_accession": _clean(assertion.get("rcv_accession")),
                     "condition_identifiers": identities,
+                    "condition_names": condition_names,
+                    "hgvs": clinvar_hgvs,
                     "clinical_significance": _clean(
                         classification.get("clinical_significance")
                     ),

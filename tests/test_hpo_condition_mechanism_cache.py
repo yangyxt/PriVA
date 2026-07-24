@@ -174,7 +174,13 @@ def test_gofcards_variants_require_exact_clinvar_hpo_condition_identity(
                     "variant_level": [
                         {
                             "ClinVar_VCV": {
-                                "variation": {"vcv_accession": "VCV0001"},
+                                "variation": {
+                                    "vcv_accession": "VCV0001",
+                                    "hgvs": [
+                                        {"expression": "NM_1.1:c.1A>G"},
+                                        {"expression": "NP_1.1:p.Lys1Arg"},
+                                    ],
+                                },
                                 "match": {
                                     "matched_gofcards_records": [
                                         {
@@ -190,6 +196,7 @@ def test_gofcards_variants_require_exact_clinvar_hpo_condition_identity(
                                             {
                                                 "database": "MedGen",
                                                 "id": "C1",
+                                                "name": "Condition one",
                                             }
                                         ],
                                         "matched_scvs": [
@@ -229,6 +236,11 @@ def test_gofcards_variants_require_exact_clinvar_hpo_condition_identity(
         "condition_key": "OMIM:1",
     }
     assert exact["clinvar_links"][0]["vcv_accession"] == "VCV0001"
+    assert exact["clinvar_links"][0]["condition_names"] == ["Condition one"]
+    assert exact["clinvar_links"][0]["hgvs"] == [
+        "NM_1.1:c.1A>G",
+        "NP_1.1:p.Lys1Arg",
+    ]
     assert exact["match_keys"]["GRCh38"] == ["1|20|A|G"]
     unresolved = genes["GENE1"]["unmapped_evidence"]["variants"][
         "GOFCARDS:VAR2"

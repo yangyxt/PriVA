@@ -57,7 +57,10 @@ NON_LOF_MECHANISM_LABELS = {
     "INCREASED_DOSAGE",
 }
 PANELAPP_NON_LOF_LABEL = "PANELAPP_GREEN_NON_LOF_PATHO_HISTORY"
-PROMPT_EXCEPTION_LABELS = NON_LOF_MECHANISM_LABELS | {PANELAPP_NON_LOF_LABEL}
+PROMPT_EXCEPTION_LABELS = NON_LOF_MECHANISM_LABELS | {
+    "LOF",
+    PANELAPP_NON_LOF_LABEL,
+}
 
 @dataclass(frozen=True)
 class SourceSpec:
@@ -1217,6 +1220,14 @@ def write_tsv(
 
 
 def filter_prompt_exception_rows(unified: pd.DataFrame) -> pd.DataFrame:
+    """Retain condition mechanisms and established non-LOF history records.
+
+    This cache was originally limited to non-LOF prompt exceptions, while G2P
+    loss-of-function rows were written only to the auxiliary TSV. Condition-
+    resolved runtime selection requires LOF and GOF histories in the same JSON
+    structure, so explicit LOF is now retained alongside the existing GOF,
+    dominant-negative, dosage, and PanelApp records.
+    """
     if unified.empty:
         return unified
     keep = unified["mechanism"].apply(
@@ -1224,7 +1235,10 @@ def filter_prompt_exception_rows(unified: pd.DataFrame) -> pd.DataFrame:
     )
     dropped = len(unified) - keep.sum()
     if dropped:
-        print(f"filter: dropped {dropped} rows without curated non-LOF mechanism", file=sys.stderr)
+        print(
+            f"filter: dropped {dropped} rows without a supported mechanism",
+            file=sys.stderr,
+        )
     return unified[keep].reset_index(drop=True)
 
 
@@ -1260,6 +1274,8 @@ def source_url_for_evidence(source: str) -> str:
         if source == "GoFCards" and spec.name == "gofcards_gof_variants":
             return spec.url
         if source == "PanelApp" and spec.name == "panelapp_all_panels":
+            return spec.url
+        if source == "Orphadata" and spec.name == "orphadata_gene_disease":
             return spec.url
     return ""
 
@@ -1410,15 +1426,33 @@ def _nonempty(d: dict) -> dict:
     return {k: v for k, v in d.items() if v is not None and v != "" and v != []}
 
 
-def _g2p_assertion(row: dict) -> dict:
-    return _nonempty({
-        "mechanism": row.get("mechanism", ""),
-        "mechanism_raw": row.get("patho_mode_raw", ""),
-        "disease": row.get("disease", ""),
-        "inheritance": row.get("inheritance", ""),
-        "confidence": row.get("confidence", ""),
-        "pmids": _split_pmids(row.get("pmids", "")),
-    })
+def _condition_mechanism_assertion(row: dict) -> dict:
+    """Serialize one gene-condition mechanism without collapsing its identity.
+
+    G2P and Orphadata differ in their native fields, but after source parsing
+    they share one contract. Keeping the source record, source disease ID, and
+    MONDO ID together lets the runtime hub join only the matching HPO disease
+    assertion. ``allelic_requirement`` is the source's requirement; HPO-derived
+    inheritance and penetrance are intentionally attached later and remain
+    separately attributable.
+    """
+    return _nonempty(
+        {
+            "source_record_id": row.get("source_record_id", ""),
+            "source_condition_id": row.get("source_condition_id", ""),
+            "mondo_id": row.get("mondo_id", ""),
+            "disease": row.get("disease", ""),
+            "mechanism": row.get("mechanism", ""),
+            "mechanism_raw": row.get("patho_mode_raw", ""),
+            "allelic_requirement": row.get("inheritance", ""),
+            "disease_scope": row.get("disease_scope", ""),
+            "priva_scope": row.get("priva_scope", ""),
+            "scope_review_status": row.get("scope_review_status", ""),
+            "confidence": row.get("confidence", ""),
+            "disease_confidence": row.get("disease_confidence", ""),
+            "pmids": _split_pmids(row.get("pmids", "")),
+        }
+    )
 
 
 def _panelapp_assertion(row: dict) -> dict:
@@ -1497,7 +1531,8 @@ def _parse_gofcards_notes(assertion: dict, notes: str) -> None:
 
 
 _SOURCE_BUILDERS = {
-    "G2P_DDG2P": ("gene_level", _g2p_assertion),
+    "G2P_DDG2P": ("gene_level", _condition_mechanism_assertion),
+    "Orphadata": ("gene_level", _condition_mechanism_assertion),
     "PanelApp": ("gene_level", _panelapp_assertion),
     "ClinGen_Dosage": ("gene_level", _clingen_assertion),
     "GoFCards": ("variant_level", _gofcards_assertion),
@@ -1558,9 +1593,14 @@ def build_unified_json(
         "sources": {
             "G2P_DDG2P": {
                 "level": "gene_level",
-                "keys": ["mechanism", "mechanism_raw", "disease", "inheritance", "confidence", "pmids"],
+                "keys": ["source_record_id", "source_condition_id", "mondo_id", "disease", "mechanism", "mechanism_raw", "allelic_requirement", "disease_scope", "priva_scope", "scope_review_status", "confidence", "disease_confidence", "pmids"],
                 "mechanism_raw": "original G2P molecular mechanism text",
                 "confidence_values": "definitive | strong | moderate | limited | conflicting_or_refuted",
+            },
+            "Orphadata": {
+                "level": "gene_level",
+                "keys": ["source_record_id", "source_condition_id", "mondo_id", "disease", "mechanism", "mechanism_raw", "allelic_requirement", "disease_scope", "priva_scope", "scope_review_status", "confidence", "disease_confidence", "pmids"],
+                "scope": "assessed disease-causing germline relationships with explicit GOF or LOF mechanism",
             },
             "GoFCards": {
                 "level": "variant_level",
@@ -1581,7 +1621,7 @@ def build_unified_json(
                 "score": "ClinGen dosage score; 3=sufficient, 2=emerging evidence",
             },
         },
-        "mechanism_values": ["GOF", "DOMINANT_NEGATIVE", "TRIPLOSENSITIVITY", "PANELAPP_GREEN_NON_LOF_PATHO_HISTORY"],
+        "mechanism_values": ["LOF", "GOF", "DOMINANT_NEGATIVE", "TRIPLOSENSITIVITY", "PANELAPP_GREEN_NON_LOF_PATHO_HISTORY"],
     }
 
     for hgnc_id in sorted(genes):

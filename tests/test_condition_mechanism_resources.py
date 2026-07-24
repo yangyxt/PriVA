@@ -9,6 +9,8 @@ sys.path.insert(0, str(ROOT / "scripts"))
 
 from build_gene_pathogenic_mechanism_cache import (  # noqa: E402
     attach_mondo_condition_identity,
+    build_unified_json,
+    filter_prompt_exception_rows,
     parse_g2p,
     parse_orphadata,
 )
@@ -150,3 +152,59 @@ def test_attach_mondo_condition_identity_maps_source_ids_without_overwrite(
     assert result.loc[1, "priva_scope"] == "review"
     assert result.loc[2, "mondo_id"] == ""
     assert result.loc[2, "priva_scope"] == ""
+
+
+def test_condition_mechanism_json_retains_lof_and_stable_disease_identity() -> None:
+    unified = pd.DataFrame(
+        [
+            {
+                "gene_symbol": "GENE1",
+                "source": "G2P_DDG2P",
+                "source_record_id": "G2P00001",
+                "source_condition_id": "OMIM:123",
+                "mondo_id": "MONDO:0000123",
+                "disease": "Condition one",
+                "mechanism": "LOF",
+                "patho_mode_raw": "loss of function",
+                "inheritance": "biallelic_autosomal",
+                "disease_scope": "mendelian_non_neoplastic",
+                "priva_scope": "include",
+                "scope_review_status": "auto_supported",
+                "confidence": "high",
+                "disease_confidence": "definitive",
+                "pmids": "111;222",
+            },
+            {
+                "gene_symbol": "GENE2",
+                "source": "Orphadata",
+                "source_record_id": "ORPHA:456|GENE2|lof",
+                "source_condition_id": "ORPHA:456",
+                "mondo_id": "MONDO:0000456",
+                "disease": "Condition two",
+                "mechanism": "LOF",
+                "patho_mode_raw": "Disease-causing germline mutation(s) (loss of function) in",
+                "inheritance": "",
+                "disease_scope": "mendelian_non_neoplastic",
+                "priva_scope": "include",
+                "scope_review_status": "auto_supported",
+                "confidence": "high",
+                "disease_confidence": "Assessed",
+                "pmids": "333",
+            },
+        ]
+    )
+
+    filtered = filter_prompt_exception_rows(unified)
+    result = build_unified_json(filtered, {})
+
+    assert len(filtered) == 2
+    g2p = result["SYMBOL:GENE1"]["gene_level"][0]["G2P_DDG2P"]
+    assert g2p["source_record_id"] == "G2P00001"
+    assert g2p["source_condition_id"] == "OMIM:123"
+    assert g2p["mondo_id"] == "MONDO:0000123"
+    assert g2p["allelic_requirement"] == "biallelic_autosomal"
+    assert g2p["priva_scope"] == "include"
+    orphadata = result["SYMBOL:GENE2"]["gene_level"][0]["Orphadata"]
+    assert orphadata["source_condition_id"] == "ORPHA:456"
+    assert orphadata["mondo_id"] == "MONDO:0000456"
+    assert orphadata["mechanism"] == "LOF"

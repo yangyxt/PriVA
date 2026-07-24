@@ -2820,8 +2820,21 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("gene", nargs="+", help="Gene symbol/alias/HGNC/Ensembl/Entrez query")
     parser.add_argument("--include-entries", action="store_true")
-    parser.add_argument("--mechanism-json", default=str(DEFAULT_MECHANISM_JSON))
-    parser.add_argument("--ddg2p-evidence", default=str(DEFAULT_DDG2P_MECHANISM_EVIDENCE))
+    parser.add_argument(
+        "--condition-cache",
+        default=str(DEFAULT_HPO_CONDITION_MECHANISM_CACHE),
+        help="Integrated HPO condition-mechanism JSON cache",
+    )
+    parser.add_argument(
+        "--mechanism-json",
+        default=str(DEFAULT_MECHANISM_JSON),
+        help=argparse.SUPPRESS,
+    )
+    parser.add_argument(
+        "--ddg2p-evidence",
+        default=str(DEFAULT_DDG2P_MECHANISM_EVIDENCE),
+        help=argparse.SUPPRESS,
+    )
     parser.add_argument("--hpo-collapsed", default=str(DEFAULT_HPO_COLLAPSED))
     parser.add_argument("--clingen-dosage", default=str(DEFAULT_CLINGEN_DOSAGE))
     parser.add_argument("--loeuf-table", default=str(DEFAULT_LOEUF_TABLE))
@@ -2829,6 +2842,7 @@ def main() -> int:
     args = parser.parse_args()
 
     hub = GeneMechanismHub(
+        condition_cache=args.condition_cache,
         mechanism_json=args.mechanism_json,
         ddg2p_evidence=args.ddg2p_evidence,
         hpo_collapsed=args.hpo_collapsed,

@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 import sys
 
@@ -7,6 +8,7 @@ sys.path.insert(0, str(ROOT / "scripts"))
 
 from audit_gofcards_source_coverage import (  # noqa: E402
     load_condition_mechanism_gene_sets,
+    load_exact_clinvar_linked_gene_counts,
     load_gofcards_gene_counts,
 )
 
@@ -53,3 +55,58 @@ def test_load_condition_mechanism_gene_sets_separates_scope(tmp_path: Path) -> N
     assert result["G2P_DDG2P"]["canonical_mechanism"] == {"GENE1", "GENE3"}
     assert result["G2P_DDG2P"]["priva_included_mechanism"] == {"GENE1"}
     assert result["Orphadata"]["canonical_mechanism"] == {"GENE4"}
+
+
+def test_load_exact_clinvar_linked_gene_counts_requires_exact_allele(
+    tmp_path: Path,
+) -> None:
+    mechanism_json = tmp_path / "mechanisms.json"
+    mechanism_json.write_text(
+        json.dumps(
+            {
+                "_meta": {},
+                "HGNC:1": {
+                    "symbol": "OLD1",
+                    "variant_level": [
+                        {
+                            "ClinVar_VCV": {
+                                "match": {
+                                    "method": "exact_normalized_vcf_allele",
+                                    "matched_gofcards_records": [{"id": "v1"}],
+                                }
+                            }
+                        },
+                        {
+                            "ClinVar_VCV": {
+                                "match": {
+                                    "method": "exact_normalized_vcf_allele",
+                                    "matched_gofcards_records": [{"id": "v2"}],
+                                }
+                            }
+                        },
+                    ],
+                },
+                "HGNC:2": {
+                    "symbol": "GENE2",
+                    "variant_level": [
+                        {
+                            "ClinVar_VCV": {
+                                "match": {
+                                    "method": "disease_name",
+                                    "matched_gofcards_records": [{"id": "v3"}],
+                                }
+                            }
+                        }
+                    ],
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    counts = load_exact_clinvar_linked_gene_counts(
+        mechanism_json,
+        resolve_symbol=lambda symbol: "GENE1" if symbol == "OLD1" else symbol,
+    )
+
+    assert counts == {"GENE1": 2}

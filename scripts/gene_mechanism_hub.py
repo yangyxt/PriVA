@@ -2344,6 +2344,120 @@ def _classify_variant_applicability(
     }
 
 
+def summarize_condition_cache_exact_gof_matches(
+    matches: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Build audit outputs and scoped assertions for exact cache variants.
+
+    Audit fields include both condition-linked and unresolved matches. Automatic
+    GOF assertions are more restrictive: the variant must be nested under a
+    condition whose integrated PriVA scope is ``include``. This separation
+    retains useful ClinVar provenance without letting unresolved, complex, or
+    excluded disease links alter germline ACMG criteria.
+    """
+    output: dict[str, Any] = {
+        "vcv_accessions": [],
+        "condition_names": [],
+        "review_stars": [],
+        "hgvs": [],
+        "assertions": [],
+    }
+
+    def append_unique(field: str, value: Any) -> None:
+        cleaned = _clean(value)
+        if cleaned and cleaned not in output[field]:
+            output[field].append(cleaned)
+
+    for match in matches:
+        if not isinstance(match, dict):
+            continue
+        variant = match.get("variant", {})
+        variant = variant if isinstance(variant, dict) else {}
+        condition = match.get("condition", {})
+        condition = condition if isinstance(condition, dict) else {}
+        condition_key = _clean(match.get("condition_key"))
+        condition_label = _clean(condition.get("label"))
+        links = variant.get("clinvar_links", [])
+        links = [link for link in links or [] if isinstance(link, dict)]
+        has_link_condition_name = False
+        has_link_hgvs = False
+
+        for link in links:
+            append_unique("vcv_accessions", link.get("vcv_accession"))
+            for name in link.get("condition_names", []) or []:
+                has_link_condition_name = has_link_condition_name or bool(_clean(name))
+                append_unique("condition_names", name)
+            for expression in link.get("hgvs", []) or []:
+                has_link_hgvs = has_link_hgvs or bool(_clean(expression))
+                append_unique("hgvs", expression)
+            stars = link.get("review_stars")
+            try:
+                star_value = int(stars)
+            except (TypeError, ValueError):
+                pass
+            else:
+                if star_value not in output["review_stars"]:
+                    output["review_stars"].append(star_value)
+
+        if not has_link_hgvs:
+            hgvs = variant.get("hgvs", {})
+            hgvs = hgvs if isinstance(hgvs, dict) else {}
+            for expression in (hgvs.get("coding", []) or []) + (
+                hgvs.get("protein", []) or []
+            ):
+                append_unique("hgvs", expression)
+        if not has_link_condition_name:
+            if condition_label:
+                append_unique("condition_names", condition_label)
+            else:
+                for name in variant.get("disease_labels", []) or []:
+                    append_unique("condition_names", name)
+
+        context = condition_cache_context(condition_key, condition)
+        if not context:
+            continue
+        requirements = sorted(
+            _hpo_allelic_requirements(
+                ";".join(context.get("hpo_inheritance_modes", []))
+            )
+        ) or [""]
+        assertion_links = links or [{}]
+        for link in assertion_links:
+            stars = link.get("review_stars")
+            confidence = (
+                f"ClinVar_{stars}_star"
+                if stars is not None and _clean(stars)
+                else "exact_variant_match"
+            )
+            for requirement in requirements:
+                output["assertions"].append(
+                    {
+                        **context,
+                        "source": "GoFCards_exact+ClinVar_VCV",
+                        "source_record_id": _clean(link.get("vcv_accession"))
+                        or _clean(match.get("variant_key")),
+                        "source_condition_id": condition_key,
+                        "disease": condition_label,
+                        "mechanism": "GOF",
+                        "mechanism_raw": "gain of function",
+                        "allelic_requirement": requirement,
+                        "confidence": confidence,
+                        "mechanism_confidence": "exact_variant",
+                        "disease_confidence": "ClinVar_germline_assertion",
+                        "clinical_significance": _clean(
+                            link.get("clinical_significance")
+                        ),
+                        "condition_identifiers": list(
+                            link.get("condition_identifiers", []) or []
+                        ),
+                        "pmids": list(variant.get("pmids", []) or []),
+                    }
+                )
+
+    output["assertions"] = _deduplicate_assertions(output["assertions"])
+    return output
+
+
 def annotate_gene_mechanism_categories(
     df: pd.DataFrame,
     *,

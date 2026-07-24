@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Gene-level mechanism and inheritance hub for PriVA.
+"""Gene-condition and query-variant mechanism hub for PriVA.
 
 This module normalizes a gene query to one current HGNC symbol, then reports:
 
@@ -8,9 +8,9 @@ This module normalizes a gene query to one current HGNC symbol, then reports:
 2. Known inheritance/HI status using PriVA's existing inheritance decision
    function from ``acmg_criteria_assign.py``.
 
-The mechanism history is gene/history context only. It must not be treated as a
-variant-level GoF/DN assertion unless a separate variant-specific matcher proves
-that the query variant corresponds to a curated functional variant.
+Gene history and query-variant effect are deliberately represented separately.
+The dataframe annotator combines them only in explicit applicability fields, so
+an unrelated mechanism elsewhere in the gene is not assigned to every variant.
 """
 
 from __future__ import annotations
@@ -37,8 +37,26 @@ DEFAULT_HGNC_TABLE = DATA_DIR / "hgnc" / "non_alt_loci_set.tsv"
 DEFAULT_HPO_COLLAPSED = DATA_DIR / "hpo" / "genes_to_phenotype.collapse.tsv.gz"
 DEFAULT_CLINGEN_DOSAGE = DATA_DIR / "clingen" / "gene_dosage_sensitivity.hg19.tsv"
 DEFAULT_LOEUF_TABLE = DATA_DIR / "loeuf" / "loeuf_dataset.tsv.gz"
-DEFAULT_MECHANISM_JSON = (
+PACKAGED_MECHANISM_JSON = (
     DATA_DIR / "gene_pathogenic_mechanism" / "prepared" / "gene_mechanism_curated_assertions.json"
+)
+SHARED_CANONICAL_MECHANISM_JSON = (
+    PRIVA_ROOT.parent
+    / "llm_gene_reranker"
+    / "data"
+    / "gene_pathogenic_mechanism"
+    / "prepared"
+    / "gene_mechanism_curated_assertions.json"
+)
+DEFAULT_MECHANISM_JSON = Path(
+    os.environ.get(
+        "PRIVA_GENE_MECHANISM_JSON",
+        str(
+            SHARED_CANONICAL_MECHANISM_JSON
+            if SHARED_CANONICAL_MECHANISM_JSON.exists()
+            else PACKAGED_MECHANISM_JSON
+        ),
+    )
 )
 DEFAULT_DDG2P_MECHANISM_EVIDENCE = (
     DATA_DIR / "gene_pathogenic_mechanism" / "prepared" / "gene_pathogenic_mechanism_evidence.tsv"
@@ -60,7 +78,7 @@ LOOKUP_FIELD_PRIORITY = (
     "mane_select",
 )
 
-CANONICAL_MECHANISMS = {"GOF", "DOMINANT_NEGATIVE", "TRIPLOSENSITIVITY"}
+CANONICAL_MECHANISMS = {"LOF", "GOF", "DOMINANT_NEGATIVE", "TRIPLOSENSITIVITY"}
 DDG2P_LOF_RAW_VALUES = {
     "loss of function",
     "absent gene product",
@@ -79,12 +97,19 @@ DDG2P_DOMINANT_LOF_INHERITANCE = {
     "monoallelic_X_heterozygous",
     "monoallelic_Y_hemizygous",
 }
-GENE_MECHANISM_CATEGORY_ORDER = (
-    "LoF_recessive",
-    "dominant_ambiguous",
-    "dominant_HI",
-    "dominant_GOF",
-    "dominant_DN",
+VARIANT_MECHANISM_OUTPUT_COLUMNS = (
+    "gene_lof_evidence",
+    "variant_effect",
+    "variant_effect_evidence",
+    "variant_effect_conflict",
+    "variant_mechanism_applicable",
+    "variant_mechanism_uncertain",
+    "variant_mechanism_incompatible",
+    "variant_mechanism_applicability_detail",
+    "clinvar_vcv_accessions",
+    "clinvar_rcv_conditions",
+    "clinvar_vcv_max_review_stars",
+    "clinvar_vcv_hgvs",
 )
 logger = logging.getLogger(__name__)
 
@@ -96,6 +121,76 @@ def _clean(value: Any) -> str:
     if text.lower() in {"", "nan", "none", "<na>"}:
         return ""
     return text
+
+
+def _bool_value(value: Any) -> bool:
+    """Coerce common dataframe boolean encodings without treating NaN as true."""
+    if value is None or (isinstance(value, float) and math.isnan(value)):
+        return False
+    if isinstance(value, (bool, np.bool_)):
+        return bool(value)
+    if isinstance(value, (int, np.integer)):
+        return value != 0
+    return _clean(value).lower() in {"1", "true", "t", "yes", "y"}
+
+
+def _split_annotation_tokens(value: Any) -> set[str]:
+    return {
+        token.strip().upper()
+        for token in re.split(r"[&,;|]", _clean(value))
+        if token.strip()
+    }
+
+
+def infer_query_variant_effect(row: dict[str, Any] | pd.Series) -> dict[str, str]:
+    """Infer the query allele's primary effect and retain every evidence route.
+
+    An exact curated GoFCards match takes precedence over generic consequence
+    prediction. LOFTEE ``HC`` and ``OS`` are both high-confidence predicted
+    loss-of-function evidence; ``OS`` is LOFTEE's other-splice category.
+    """
+    evidence: list[str] = []
+    loftee_tokens = _split_annotation_tokens(row.get("LoF"))
+    if "HC" in loftee_tokens:
+        evidence.append("LOFTEE_HC")
+    if "OS" in loftee_tokens:
+        evidence.append("LOFTEE_OS")
+
+    consequence = _clean(row.get("Consequence")).lower()
+    nmd = _clean(row.get("NMD")).lower()
+    lof_filter = _clean(row.get("LoF_filter")).upper()
+    truncating = "stop_gained" in consequence or "frameshift" in consequence
+    nmd_lof = truncating and "escaping" not in nmd and "END_TRUNC" not in lof_filter
+    if nmd_lof:
+        evidence.append("NMD_PREDICTED_LOF")
+    if _bool_value(row.get("vep_consq_lof")):
+        evidence.append("VEP_LOF")
+    if _bool_value(row.get("splicing_lof")):
+        evidence.append("PRIVA_SPLICE_LOF")
+    if _bool_value(row.get("5UTR_lof")):
+        evidence.append("PRIVA_5UTR_LOF")
+
+    gof_tokens = _split_annotation_tokens(row.get("variant_gof_tag"))
+    exact_gof = "GOF" in gof_tokens
+    if exact_gof:
+        evidence.append("GOFCARDS_EXACT")
+
+    evidence = list(dict.fromkeys(evidence))
+    lof_evidence = [item for item in evidence if item != "GOFCARDS_EXACT"]
+    if exact_gof:
+        effect = "exact_known_GOF"
+        conflict = "predicted_LOF_vs_exact_GOF" if lof_evidence else ""
+    elif lof_evidence:
+        effect = "predicted_LOF_high_confidence"
+        conflict = ""
+    else:
+        effect = "uncertain"
+        conflict = ""
+    return {
+        "variant_effect": effect,
+        "variant_effect_evidence": ";".join(evidence),
+        "variant_effect_conflict": conflict,
+    }
 
 
 def _norm(value: Any) -> str:
@@ -206,42 +301,8 @@ def _safe_float(value: Any) -> float:
         return np.nan
 
 
-def classify_gene_mechanism_categories(
-    *,
-    recessive: bool,
-    dominant: bool,
-    haplo_insufficient: bool,
-    has_gof_history: bool = False,
-    has_dn_history: bool = False,
-    has_triplosensitivity_history: bool = False,
-) -> list[str]:
-    """Classify gene-level pathogenic mechanism categories.
-
-    Inputs are the already-computed PriVA inheritance outputs plus curated
-    gene/history mechanism flags. This function does not infer inheritance and
-    does not assign a query variant as GoF/DN.
-    """
-    categories: list[str] = []
-    if recessive:
-        categories.append("LoF_recessive")
-    if dominant:
-        dominant_categories: list[str] = []
-        if haplo_insufficient:
-            dominant_categories.append("dominant_HI")
-        if has_gof_history or has_triplosensitivity_history:
-            dominant_categories.append("dominant_GOF")
-        if has_dn_history:
-            dominant_categories.append("dominant_DN")
-        if dominant_categories:
-            categories.extend(dominant_categories)
-        else:
-            categories.append("dominant_ambiguous")
-    return categories
-
-
-def _ordered_gene_mechanism_categories(categories: set[str]) -> list[str]:
-    """Return compact mechanism categories in stable downstream order."""
-    return [category for category in GENE_MECHANISM_CATEGORY_ORDER if category in categories]
+# The former gene-only category classifier is deliberately disabled. Mechanism
+# and inheritance are now resolved together in variant-level assertions.
 
 
 def _hpo_inheritance_flags(inheritance_modes: Any) -> dict[str, bool]:
@@ -443,6 +504,8 @@ class GeneMechanismHub:
                 "pmids": _split_pmids(row.get("pmids", "")),
                 "disease": _clean(row.get("disease_label")),
                 "inheritance": inheritance,
+                "allelic_requirement": inheritance,
+                "confidence": mechanism_confidence,
                 "mechanism_confidence": mechanism_confidence,
                 "disease_confidence": disease_confidence,
                 "source_record_id": _clean(row.get("source_record_id")),
@@ -945,6 +1008,14 @@ class GeneMechanismHub:
                             "ref": _clean(data.get("ref")),
                             "alt": _clean(data.get("alt")),
                             "transcript": _clean(data.get("transcript")),
+                            "allelic_requirement": _clean(
+                                data.get("inheritance")
+                                or data.get("allelic_requirement")
+                            ),
+                            "confidence": _clean(
+                                data.get("confidence")
+                                or data.get("mechanism_confidence")
+                            ),
                         }
                     )
         return entries
@@ -1022,25 +1093,6 @@ class GeneMechanismHub:
             out["entries"] = entries
         return out
 
-    def classify_categories(
-        self,
-        gene_symbol: Any,
-        *,
-        recessive: bool,
-        dominant: bool,
-        haplo_insufficient: bool,
-    ) -> list[str]:
-        """Return mechanism categories for one gene using precomputed inheritance."""
-        history = self.mechanism_history(gene_symbol)
-        return classify_gene_mechanism_categories(
-            recessive=bool(recessive),
-            dominant=bool(dominant),
-            haplo_insufficient=bool(haplo_insufficient),
-            has_gof_history=history["has_gof_history"],
-            has_dn_history=history["has_dn_history"],
-            has_triplosensitivity_history=history["has_triplosensitivity_history"],
-        )
-
     def known_inheritance_mode(
         self,
         gene_symbol: Any,
@@ -1104,9 +1156,90 @@ class GeneMechanismHub:
             "input_symbol": _clean(gene_symbol),
             "symbol": symbol,
             "mechanism_history": self.mechanism_history(symbol, include_entries=include_entries),
+            "condition_mechanism_assertions": self.condition_mechanism_assertions(symbol),
             "ddg2p_lof_history": self.ddg2p_lof_history(symbol, include_entries=include_entries),
             "known_inheritance_mode": self.known_inheritance_mode(symbol),
         }
+
+    def condition_mechanism_assertions(self, gene_symbol: Any) -> list[dict[str, Any]]:
+        """Return condition-specific curated mechanism/allelic assertions."""
+        history = self.mechanism_history(gene_symbol, include_entries=True)
+        assertions: list[dict[str, Any]] = []
+        seen: set[tuple[str, str, str, str, str]] = set()
+        for entry in history.get("entries", []):
+            mechanism = _clean(entry.get("mechanism")).upper()
+            if mechanism not in CANONICAL_MECHANISMS:
+                continue
+            # Other curated variants in the same gene establish history, but
+            # they are not query-variant condition assertions. GoFCards exact
+            # matches are added from the query row below.
+            if entry.get("level") == "variant_level":
+                continue
+            record = {
+                "source": _clean(entry.get("source")),
+                "disease": _clean(entry.get("disease")),
+                "mechanism": mechanism,
+                "allelic_requirement": _clean(entry.get("allelic_requirement")),
+                "confidence": _clean(entry.get("confidence")),
+            }
+            key = tuple(record[field] for field in (
+                "source",
+                "disease",
+                "mechanism",
+                "allelic_requirement",
+                "confidence",
+            ))
+            if key not in seen:
+                seen.add(key)
+                assertions.append(record)
+        return assertions
+
+    def matched_clinvar_vcv_for_gofcards(
+        self,
+        gene_symbol: Any,
+        *,
+        gofcards_variant_ids: Any = "",
+        gofcards_accession_ids: Any = "",
+    ) -> list[dict[str, Any]]:
+        """Return schema-v2 ClinVar VCV records linked to exact GoFCards IDs."""
+        variant_ids = {
+            _clean(token)
+            for token in re.split(r"[;,]", _clean(gofcards_variant_ids))
+            if _clean(token)
+        }
+        accession_ids = {
+            _clean(token)
+            for token in re.split(r"[;,]", _clean(gofcards_accession_ids))
+            if _clean(token)
+        }
+        if not variant_ids and not accession_ids:
+            return []
+
+        symbol = self._resolved_symbol_key(gene_symbol)
+        info = self._load_mechanisms().get(symbol, {})
+        matches: list[dict[str, Any]] = []
+        for entry in info.get("variant_level", []) or []:
+            data = entry.get("ClinVar_VCV") if isinstance(entry, dict) else None
+            if not isinstance(data, dict):
+                continue
+            linked_records = data.get("match", {}).get("matched_gofcards_records", []) or []
+            linked_variant_ids = {
+                _clean(record.get("gofcards_variant_id"))
+                for record in linked_records
+                if isinstance(record, dict) and _clean(record.get("gofcards_variant_id"))
+            }
+            linked_accessions = {
+                _clean(record.get("gofcards_accession_id"))
+                for record in linked_records
+                if isinstance(record, dict) and _clean(record.get("gofcards_accession_id"))
+            }
+            if not (
+                variant_ids & linked_variant_ids
+                or accession_ids & linked_accessions
+            ):
+                continue
+            matches.append(data)
+        return matches
 
 
 def resolve_gene_symbol(gene_symbol: Any) -> str:
@@ -1114,111 +1247,376 @@ def resolve_gene_symbol(gene_symbol: Any) -> str:
     return GeneMechanismHub().resolve_symbol(gene_symbol)
 
 
+def _hpo_allelic_requirements(inheritance_modes: Any) -> set[str]:
+    """Collapse HPO inheritance to the supported compact assertion vocabulary.
+
+    HPO establishes only a broad dominant or recessive history here. It does
+    not establish autosomal/X-linked dosage or a molecular mechanism.
+    """
+    modes = {
+        _clean(part)
+        for part in _clean(inheritance_modes).split(";")
+        if _clean(part)
+    }
+    requirements: set[str] = set()
+    if {
+        "Autosomal recessive inheritance",
+        "X-linked inheritance",
+        "X-linked recessive inheritance",
+        "Pseudoautosomal recessive inheritance",
+    } & modes:
+        requirements.add("recessive")
+    if {
+        "Autosomal dominant inheritance",
+        "Autosomal dominant inheritance with maternal imprinting",
+        "X-linked dominant inheritance",
+        "Y-linked inheritance",
+    } & modes:
+        requirements.add("dominant")
+    if "Mitochondrial inheritance" in modes:
+        requirements.add("mitochondrial")
+    return requirements
+
+
+def _compact_inheritance(allelic_requirement: Any) -> str:
+    requirement = _clean(allelic_requirement)
+    if requirement in {"recessive", "dominant", "mitochondrial"}:
+        return requirement
+    if requirement.startswith("biallelic_") or requirement in {
+        "monoallelic_X",
+        "monoallelic_X_hemizygous",
+    }:
+        return "recessive"
+    if requirement.startswith("monoallelic_"):
+        return "dominant"
+    return ""
+
+
+def _mechanism_profile_tag(assertion: dict[str, Any]) -> str:
+    inheritance = _compact_inheritance(assertion.get("allelic_requirement"))
+    mechanism = _clean(assertion.get("mechanism")).upper() or "UNRESOLVED"
+    if mechanism == "UNRESOLVED":
+        return inheritance or "uncertain"
+    mechanism = "DN" if mechanism == "DOMINANT_NEGATIVE" else mechanism
+    return f"{inheritance}_{mechanism}" if inheritance else mechanism
+
+
+def _compact_profile_tags(assertions: list[dict[str, Any]]) -> list[str]:
+    tags = list(dict.fromkeys(_mechanism_profile_tag(assertion) for assertion in assertions))
+    inheritance_with_mechanism = {
+        tag.split("_", 1)[0]
+        for tag in tags
+        if "_" in tag and tag.split("_", 1)[0] in {"recessive", "dominant"}
+    }
+    qualified_mechanisms = {
+        tag.split("_", 1)[1]
+        for tag in tags
+        if "_" in tag and tag.split("_", 1)[0] in {"recessive", "dominant"}
+    }
+    return [
+        tag
+        for tag in tags
+        if tag not in inheritance_with_mechanism
+        and tag not in qualified_mechanisms
+        and tag != "uncertain"
+    ]
+
+
+def _deduplicate_assertions(assertions: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    fields = ("source", "disease", "mechanism", "allelic_requirement", "confidence")
+    seen: set[tuple[str, ...]] = set()
+    output: list[dict[str, Any]] = []
+    for assertion in assertions:
+        normalized = {
+            "source": _clean(assertion.get("source")),
+            "disease": _clean(assertion.get("disease")),
+            "mechanism": _clean(assertion.get("mechanism")).upper() or "UNRESOLVED",
+            "allelic_requirement": _clean(assertion.get("allelic_requirement")),
+            "confidence": _clean(assertion.get("confidence")),
+        }
+        key = tuple(normalized[field] for field in fields)
+        if key not in seen:
+            seen.add(key)
+            output.append(normalized)
+    return output
+
+
+def _classify_variant_applicability(
+    assertions: list[dict[str, Any]],
+    effect: str,
+) -> dict[str, Any]:
+    groups: dict[str, list[str]] = {
+        "applicable": [],
+        "uncertain": [],
+        "incompatible": [],
+    }
+    details: list[dict[str, str]] = []
+    for assertion in assertions:
+        mechanism = assertion["mechanism"]
+        if mechanism == "LOF":
+            if effect == "predicted_LOF_high_confidence":
+                status, reason = "applicable", "query_effect_matches_LOF"
+            elif effect == "uncertain":
+                status, reason = "uncertain", "query_LOF_effect_not_established"
+            else:
+                status, reason = "incompatible", "exact_GOF_does_not_match_LOF"
+        elif mechanism == "GOF":
+            if effect == "exact_known_GOF":
+                status, reason = "applicable", "exact_query_GOF_match"
+            else:
+                status, reason = "incompatible", "GOF_requires_exact_variant_match"
+        elif mechanism == "DOMINANT_NEGATIVE":
+            if effect == "uncertain":
+                status, reason = "uncertain", "no_variant_level_DN_assertion"
+            else:
+                status, reason = "incompatible", "query_effect_does_not_support_DN"
+        elif mechanism == "TRIPLOSENSITIVITY":
+            status, reason = "uncertain", "sequence_variant_not_equivalent_to_copy_gain"
+        else:
+            status, reason = "uncertain", "inheritance_known_mechanism_unresolved"
+
+        tag = _mechanism_profile_tag(assertion)
+        if tag not in groups[status]:
+            groups[status].append(tag)
+        details.append(
+            {
+                **assertion,
+                "tag": tag,
+                "applicability": status,
+                "reason": reason,
+            }
+        )
+    return {
+        "plausible": ";".join(
+            _compact_profile_tags(
+                [
+                    detail
+                    for detail in details
+                    if detail["applicability"] != "incompatible"
+                ]
+            )
+        ),
+        "applicable": ";".join(groups["applicable"]),
+        "uncertain": ";".join(groups["uncertain"]),
+        "incompatible": ";".join(groups["incompatible"]),
+        "detail": json.dumps(details, sort_keys=True, separators=(",", ":")),
+    }
+
+
 def annotate_gene_mechanism_categories(
     df: pd.DataFrame,
     *,
-    recessive: np.ndarray,
-    dominant: np.ndarray,
-    haplo_insufficient: np.ndarray,
+    clinvar_pathogenic_genes: set[str] | None = None,
+    gene_to_am_score_map: dict[str, float] | None = None,
     mechanism_json: str | Path = DEFAULT_MECHANISM_JSON,
     ddg2p_evidence: str | Path = DEFAULT_DDG2P_MECHANISM_EVIDENCE,
     symbol_col: str = "SYMBOL",
+    gene_col: str = "Gene",
     hpo_inheritance_col: str = "HPO_gene_inheritance",
-    output_col: str = "gene_mech_inher_history",
+    output_col: str = "var_plausible_patho_mechs",
     use_hgnc_package: bool = False,
+    hpo_collapsed: str | Path = DEFAULT_HPO_COLLAPSED,
+    clingen_dosage: str | Path = DEFAULT_CLINGEN_DOSAGE,
+    loeuf_table: str | Path = DEFAULT_LOEUF_TABLE,
+    hgnc_table: str | Path = DEFAULT_HGNC_TABLE,
 ) -> pd.DataFrame:
-    """Annotate a PriVA dataframe with compact gene-level mechanism history.
+    """Annotate compact gene history and query-variant applicability.
 
-    The arrays come from PriVA's existing row-level inheritance call path. This
-    function also consults the central gene-level inheritance hub so rows with
-    missing local HPO inheritance do not collapse to LOEUF-only HI calls. The
-    returned dataframe is a shallow copy with one added column:
-    ``gene_mech_inher_history``. Values are semicolon-separated category labels
-    such as ``LoF_recessive;dominant_HI``. This is gene/history context only and
-    does not assign the query variant as GoF/DN.
+    HPO contributes only ``recessive`` or ``dominant``. A generic inheritance
+    assertion gains a LOF mechanism only when the gene has a pathogenic
+    ClinVar variant reviewed at two stars or above, LOEUF < 0.35, or mean
+    AlphaMissense score > 0.564.
     """
-    if not (len(df) == len(recessive) == len(dominant) == len(haplo_insufficient)):
-        raise ValueError("df and inheritance arrays must have the same length")
     if symbol_col not in df.columns:
         raise KeyError(f"missing symbol column: {symbol_col}")
+    if gene_col not in df.columns:
+        raise KeyError(f"missing gene column: {gene_col}")
 
     hub = GeneMechanismHub(
         mechanism_json=mechanism_json,
         ddg2p_evidence=ddg2p_evidence,
+        hpo_collapsed=hpo_collapsed,
+        clingen_dosage=clingen_dosage,
+        loeuf_table=loeuf_table,
+        hgnc_table=hgnc_table,
         use_hgnc_package=use_hgnc_package,
     )
     out = df.copy()
-    category_values: list[str] = []
+    plausible_mechanism_values: list[str] = []
+    variant_outputs: dict[str, list[str]] = {
+        column: [] for column in VARIANT_MECHANISM_OUTPUT_COLUMNS
+    }
     known_cache: dict[str, dict[str, Any]] = {}
+    assertion_cache: dict[str, list[dict[str, Any]]] = {}
+    clinvar_pathogenic_genes = set(clinvar_pathogenic_genes or set())
+    gene_to_am_score_map = gene_to_am_score_map or {}
     row_hpo_values = (
         out[hpo_inheritance_col]
         if hpo_inheritance_col in out.columns
         else pd.Series("", index=out.index)
     )
 
-    for gene, row_hpo, rec, dom, hi in zip(
-        out[symbol_col],
+    for (_, row), row_hpo in zip(
+        out.iterrows(),
         row_hpo_values,
-        recessive,
-        dominant,
-        haplo_insufficient,
         strict=True,
     ):
+        gene = row[symbol_col]
         symbol = hub.resolve_symbol(gene)
-        history = hub.mechanism_history(gene)
+        if symbol not in assertion_cache:
+            assertion_cache[symbol] = hub.condition_mechanism_assertions(gene)
         if symbol not in known_cache:
             known_cache[symbol] = hub.known_inheritance_mode(symbol)
         known = known_cache[symbol]
-        hub_hpo_flags = _hpo_inheritance_flags(known.get("hpo_inheritance_modes", ""))
-        row_hpo_flags = _hpo_inheritance_flags(row_hpo)
-        ddg2p_lof = known.get("ddg2p_lof_history", {})
         clingen_hi_score = known.get("clingen_haploinsufficiency_score")
         clingen_hi = clingen_hi_score == 3
         clingen_haplosufficient = clingen_hi_score in {30, 40}
 
-        effective_recessive = (
-            bool(rec)
-            or row_hpo_flags["recessive"]
-            or hub_hpo_flags["recessive"]
-            or clingen_haplosufficient
-            or bool(ddg2p_lof.get("ddg2p_lof_recessive"))
+        assertions = list(assertion_cache[symbol])
+        hpo_requirements = _hpo_allelic_requirements(row_hpo)
+        hpo_requirements.update(
+            _hpo_allelic_requirements(known.get("hpo_inheritance_modes", ""))
         )
-        effective_dominant = (
-            bool(dom)
-            or row_hpo_flags["dominant"]
-            or hub_hpo_flags["dominant"]
-            or clingen_hi
-            or bool(ddg2p_lof.get("ddg2p_lof_dominant"))
-        )
-
-        categories = set(
-            classify_gene_mechanism_categories(
-                recessive=effective_recessive,
-                dominant=effective_dominant,
-                haplo_insufficient=bool(hi) or clingen_hi or bool(ddg2p_lof.get("ddg2p_lof_dominant")),
-                has_gof_history=history["has_gof_history"],
-                has_dn_history=history["has_dn_history"],
-                has_triplosensitivity_history=history["has_triplosensitivity_history"],
+        for requirement in sorted(hpo_requirements):
+            assertions.append(
+                {
+                    "source": "HPO_inheritance",
+                    "disease": known.get("hpo_inheritance_disease_ids", ""),
+                    "mechanism": "UNRESOLVED",
+                    "allelic_requirement": requirement,
+                    "confidence": "inheritance_only",
+                }
             )
+
+        gene_id = _clean(row.get(gene_col))
+        lof_evidence: list[str] = []
+        if gene_id in clinvar_pathogenic_genes:
+            lof_evidence.append("ClinVar_pathogenic_2plus")
+        loeuf = _safe_float(row.get("LOEUF"))
+        if not math.isnan(loeuf) and loeuf < 0.35:
+            lof_evidence.append("LOEUF_lt_0.35")
+        gene_avg_am = _safe_float(
+            row.get("Gene_avg_AM_score", gene_to_am_score_map.get(gene_id))
+        )
+        if not math.isnan(gene_avg_am) and gene_avg_am > 0.564:
+            lof_evidence.append("GeneAvgAM_gt_0.564")
+        if lof_evidence:
+            lof_requirements = hpo_requirements or {""}
+            for requirement in sorted(lof_requirements):
+                assertions.append(
+                    {
+                        "source": "PriVA_gene_LOF_evidence",
+                        "disease": known.get("hpo_inheritance_disease_ids", ""),
+                        "mechanism": "LOF",
+                        "allelic_requirement": requirement,
+                        "confidence": ";".join(lof_evidence),
+                    }
+                )
+        if clingen_hi:
+            assertions.append(
+                {
+                    "source": "ClinGen_Dosage",
+                    "disease": "",
+                    "mechanism": "LOF",
+                    "allelic_requirement": "monoallelic_autosomal",
+                    "confidence": "sufficient_HI_evidence",
+                }
+            )
+        elif clingen_haplosufficient:
+            assertions.append(
+                {
+                    "source": "ClinGen_Dosage",
+                    "disease": "",
+                    "mechanism": "LOF",
+                    "allelic_requirement": "biallelic_autosomal",
+                    "confidence": "AR_gene_association",
+                }
+            )
+        effect_call = infer_query_variant_effect(row)
+        vcv_accessions: list[str] = []
+        vcv_conditions: list[str] = []
+        vcv_hgvs: list[str] = []
+        vcv_review_stars: list[int] = []
+        if effect_call["variant_effect"] == "exact_known_GOF":
+            assertions.append(
+                {
+                    "source": "GoFCards",
+                    "disease": "",
+                    "mechanism": "GOF",
+                    "allelic_requirement": "",
+                    "confidence": "exact_variant_match",
+                }
+            )
+            vcv_matches = hub.matched_clinvar_vcv_for_gofcards(
+                symbol,
+                gofcards_variant_ids=row.get("gofcards_variant_id", ""),
+                gofcards_accession_ids=row.get("gofcards_accession_id", ""),
+            )
+            for vcv in vcv_matches:
+                variation = vcv.get("variation", {}) or {}
+                accession = _clean(variation.get("vcv_accession"))
+                if accession:
+                    vcv_accessions.append(accession)
+                for hgvs in variation.get("hgvs", []) or []:
+                    if isinstance(hgvs, dict) and _clean(hgvs.get("expression")):
+                        vcv_hgvs.append(_clean(hgvs.get("expression")))
+                for condition_assertion in vcv.get("condition_assertions", []) or []:
+                    if not isinstance(condition_assertion, dict):
+                        continue
+                    classification = condition_assertion.get("germline_classification", {}) or {}
+                    stars = classification.get("review_stars")
+                    try:
+                        vcv_review_stars.append(int(stars))
+                    except (TypeError, ValueError):
+                        pass
+                    condition_names = [
+                        _clean(condition.get("name"))
+                        for condition in condition_assertion.get("conditions", []) or []
+                        if isinstance(condition, dict) and _clean(condition.get("name"))
+                    ]
+                    vcv_conditions.extend(condition_names)
+                    assertions.append(
+                        {
+                            "source": "GoFCards_exact+ClinVar_VCV",
+                            "disease": ";".join(condition_names),
+                            "mechanism": "GOF",
+                            "allelic_requirement": "",
+                            "confidence": (
+                                f"ClinVar_{stars}_star" if stars is not None else "ClinVar_unrated"
+                            ),
+                        }
+                    )
+        assertions = _deduplicate_assertions(assertions)
+        applicability = _classify_variant_applicability(
+            assertions,
+            effect_call["variant_effect"],
         )
 
-        # If the only dominant evidence came from a row-level LOEUF/AM fallback
-        # and the hub's HPO/ClinGen view does not support dominance or HI, drop
-        # the spurious HI label. This prevents genes with missing row HPO fields
-        # from being treated as dominant_HI solely because LOEUF is low.
-        if (
-            "dominant_HI" in categories
-            and bool(hi)
-            and not bool(known.get("dominant"))
-            and not clingen_hi
-            and not row_hpo_flags["dominant"]
-            and not hub_hpo_flags["dominant"]
-        ):
-            categories.discard("dominant_HI")
+        plausible_mechanism_values.append(applicability["plausible"])
+        variant_outputs["gene_lof_evidence"].append(";".join(lof_evidence))
+        variant_outputs["variant_effect"].append(effect_call["variant_effect"])
+        variant_outputs["variant_effect_evidence"].append(effect_call["variant_effect_evidence"])
+        variant_outputs["variant_effect_conflict"].append(effect_call["variant_effect_conflict"])
+        variant_outputs["variant_mechanism_applicable"].append(applicability["applicable"])
+        variant_outputs["variant_mechanism_uncertain"].append(applicability["uncertain"])
+        variant_outputs["variant_mechanism_incompatible"].append(applicability["incompatible"])
+        variant_outputs["variant_mechanism_applicability_detail"].append(applicability["detail"])
+        variant_outputs["clinvar_vcv_accessions"].append(
+            ";".join(dict.fromkeys(vcv_accessions))
+        )
+        variant_outputs["clinvar_rcv_conditions"].append(
+            ";".join(dict.fromkeys(vcv_conditions))
+        )
+        variant_outputs["clinvar_vcv_max_review_stars"].append(
+            str(max(vcv_review_stars)) if vcv_review_stars else ""
+        )
+        variant_outputs["clinvar_vcv_hgvs"].append(
+            ";".join(dict.fromkeys(vcv_hgvs))
+        )
 
-        category_values.append(";".join(_ordered_gene_mechanism_categories(categories)))
-
-    out[output_col] = category_values
+    out[output_col] = plausible_mechanism_values
+    for column, values in variant_outputs.items():
+        out[column] = values
     return out
 
 

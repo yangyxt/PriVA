@@ -6,7 +6,6 @@ import os
 import sys
 import logging
 
-import numpy as np
 import pandas as pd
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -17,15 +16,8 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 logger = logging.getLogger(__name__)
 
 
-def build_gene_am_map(am_score_table: str, anno_df: pd.DataFrame) -> dict:
-    am_df = pd.read_table(am_score_table, low_memory=False)
-    am_score_dict = dict(zip(am_df["transcript"], am_df["mean_am_pathogenicity"]))
-    transcript_to_gene = dict(zip(anno_df["Feature"], anno_df["Gene"]))
-    return {g: am_score_dict[t] for t, g in transcript_to_gene.items() if t in am_score_dict}
-
-
-def resort_family(filtered_tsv: str, am_score_table: str, ped_table: str,
-                  fam_name: str, gene_dosage_sensitivity: str,
+def resort_family(filtered_tsv: str, ped_table: str,
+                  fam_name: str,
                   pext_tissues: str, relevant_gene_list: str,
                   dispensable_gene_list: str,
                   pext_low_expression_cutoff: float,
@@ -39,7 +31,6 @@ def resort_family(filtered_tsv: str, am_score_table: str, ped_table: str,
         logger.warning(f"SKIP: {filtered_tsv} has no ACMG_quant_score")
         return
 
-    gene_am_map = build_gene_am_map(am_score_table, anno_df)
     ped_df = pd.read_table(ped_table, low_memory=False) if ped_table else None
 
     # Drop columns that sort_and_rank_variants will recreate
@@ -52,8 +43,7 @@ def resort_family(filtered_tsv: str, am_score_table: str, ped_table: str,
     anno_df = anno_df.drop(columns=drop_cols)
 
     sorted_df = sort_and_rank_variants(
-        anno_df, ped_df, fam_name, gene_am_map,
-        gene_dosage_sensitivity=gene_dosage_sensitivity,
+        anno_df, ped_df, fam_name,
         pext_tissues=pext_tissues,
         pext_low_expression_cutoff=pext_low_expression_cutoff,
         pext_penalty_floor=pext_penalty_floor,
@@ -68,10 +58,8 @@ def resort_family(filtered_tsv: str, am_score_table: str, ped_table: str,
 if __name__ == "__main__":
     ap = argparse.ArgumentParser(description="Re-sort .filtered.tsv (step 3 only)")
     ap.add_argument("--filtered_tsv", required=True)
-    ap.add_argument("--am_score_table", required=True)
     ap.add_argument("--ped_table", default=None)
     ap.add_argument("--fam_name", default=None)
-    ap.add_argument("--gene_dosage_sensitivity", default="")
     ap.add_argument("--pext_tissues", default="")
     ap.add_argument("--pext_low_expression_cutoff", type=float, default=0.1)
     ap.add_argument("--pext_penalty_floor", type=float, default=0.8)
@@ -79,8 +67,8 @@ if __name__ == "__main__":
     ap.add_argument("--relevant_gene_list", default=None)
     ap.add_argument("--dispensable_gene_list", default=None)
     args = ap.parse_args()
-    resort_family(args.filtered_tsv, args.am_score_table, args.ped_table,
-                  args.fam_name, args.gene_dosage_sensitivity,
+    resort_family(args.filtered_tsv, args.ped_table,
+                  args.fam_name,
                   args.pext_tissues, args.relevant_gene_list,
                   args.dispensable_gene_list,
                   args.pext_low_expression_cutoff,

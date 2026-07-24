@@ -1,0 +1,92 @@
+digraph priva_gene_mechanism_hub {
+  graph [
+    rankdir=TB,
+    bgcolor="white",
+    pad="0.25",
+    nodesep="0.35",
+    ranksep="0.65",
+    fontname="Arial",
+    fontsize=12,
+    label="PriVA condition-specific gene history and query-variant applicability",
+    labelloc="t"
+  ];
+  node [shape=box, style="rounded,filled", fontname="Arial", fontsize=10, color="#374151", fillcolor="#F9FAFB"];
+  edge [fontname="Arial", fontsize=9, color="#6B7280", arrowsize=0.7];
+
+  subgraph cluster_sources {
+    label="Evidence sources";
+    color="#CBD5E1";
+    style="rounded";
+
+    row [label="Annotated query row\nallele, transcript, consequence,\nLOFTEE, NMD, HPO inheritance", fillcolor="#E0F2FE"];
+    hpo [label="HPO gene-disease inheritance\nallelic requirement only", fillcolor="#DCFCE7"];
+    clingen [label="ClinGen dosage\nHI / AR dosage evidence", fillcolor="#DCFCE7"];
+    constraint [label="Broad gene LOF support\nClinVar pathogenic >=2 stars OR\nLOEUF <0.35 OR mean AM >0.564", fillcolor="#FEF3C7"];
+    ddg2p [label="G2P/DDG2P\ncondition + mechanism +\nallelic requirement", fillcolor="#FCE7F3"];
+    canonical [label="Canonical schema-v2 JSON\nG2P, PanelApp, GoFCards,\nClinGen and ClinVar VCV/RCV/SCV", fillcolor="#EDE9FE"];
+    gof_index [label="Exact GoFCards index\nprotein and hg19/hg38 allele keys", fillcolor="#FFEDD5"];
+  }
+
+  subgraph cluster_history {
+    label="Gene-condition assertion layer";
+    color="#C4B5FD";
+    style="rounded";
+
+    condition [label="mechanism x allelic requirement\n+ disease, source, confidence", fillcolor="#F5F3FF", penwidth=1.5];
+    unresolved [label="HPO inheritance only\nrecessive or dominant\n(no autosomal or LOF claim)", fillcolor="#FEF3C7"];
+    profile [label="var_plausible_patho_mechs\nrecessive / recessive_LOF / recessive_GOF\ndominant / dominant_LOF / dominant_GOF / dominant_DN", fillcolor="#EDE9FE", penwidth=1.5];
+  }
+
+  subgraph cluster_effect {
+    label="Query-variant effect layer";
+    color="#FDBA74";
+    style="rounded";
+
+    exact [label="Exact GoFCards DNA or protein match?", shape=diamond, fillcolor="#FFF7ED"];
+    gof [label="exact_known_GOF", fillcolor="#FED7AA"];
+    lof [label="LOFTEE HC or OS, NMD pLoF,\nor PriVA splice/UTR LOF", shape=diamond, fillcolor="#FFF7ED"];
+    predlof [label="predicted_LOF_high_confidence", fillcolor="#FDE68A"];
+    uncertain [label="uncertain", fillcolor="#F3F4F6"];
+    evidence [label="variant_effect_evidence\nretains LOFTEE_HC vs LOFTEE_OS", fillcolor="#FEF3C7"];
+  }
+
+  combine [label="Compare query effect with each\ncondition mechanism", fillcolor="#DBEAFE", penwidth=1.8];
+  applicable [label="variant_mechanism_applicable", fillcolor="#D1FAE5"];
+  uncertain_app [label="variant_mechanism_uncertain", fillcolor="#FEF3C7"];
+  incompatible [label="variant_mechanism_incompatible", fillcolor="#FEE2E2"];
+
+  vcv [label="Exact GoFCards ID -> nested ClinVar VCV\nVCV accession, RCV condition, stars, HGVS", fillcolor="#E0E7FF", penwidth=1.5];
+  acmg [label="Required variant-level masks\nPVS1, BS1, BS2, BS4 and ranking\nmissing fields raise an error", fillcolor="#F3F4F6", penwidth=1.5];
+
+  ddg2p -> condition;
+  canonical -> condition;
+  clingen -> condition;
+  constraint -> condition [label="add LOF upstream"];
+  hpo -> unresolved;
+  unresolved -> condition;
+  condition -> profile;
+
+  row -> exact;
+  gof_index -> exact;
+  exact -> gof [label="yes"];
+  exact -> lof [label="no"];
+  row -> lof;
+  lof -> predlof [label="yes"];
+  lof -> uncertain [label="no"];
+  gof -> evidence;
+  predlof -> evidence;
+  uncertain -> evidence;
+
+  profile -> combine;
+  evidence -> combine;
+  combine -> applicable;
+  combine -> uncertain_app;
+  combine -> incompatible;
+  applicable -> acmg;
+  uncertain_app -> acmg;
+  incompatible -> acmg [style=dashed, label="audit"];
+
+  gof -> vcv;
+  canonical -> vcv;
+  vcv -> applicable [label="condition enrichment"];
+}

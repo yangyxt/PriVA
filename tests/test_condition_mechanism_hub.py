@@ -12,6 +12,7 @@ sys.path.insert(0, str(ROOT / "scripts"))
 from gene_mechanism_hub import (  # noqa: E402
     GeneMechanismHub,
     build_hpo_condition_index,
+    condition_cache_context,
     condition_cache_mechanism_assertions,
     enrich_condition_mechanism_assertion,
     extract_exact_clinvar_condition_identities,
@@ -156,6 +157,8 @@ def test_condition_cache_assertions_preserve_context_and_exclude_variant_only_go
     assert assertion["penetrance_hpo_ids"] == ["HP:0003829"]
     assert assertion["hpo_assertion_count"] == 12
     assert assertion["hpo_assertions"][1]["frequency"] == "2/10"
+
+    assert condition_cache_context("OMIM:2", review_condition) == {}
 
 
 def test_legacy_condition_evidence_loader_remains_audit_only(

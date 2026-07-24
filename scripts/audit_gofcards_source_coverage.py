@@ -9,6 +9,7 @@ compared, so aliases do not create artificial source-specific genes.
 
 from __future__ import annotations
 
+import argparse
 from collections import Counter
 import json
 from pathlib import Path
@@ -20,6 +21,50 @@ import pandas as pd
 GeneResolver = Callable[[str], str]
 CONDITION_SOURCES = ("G2P_DDG2P", "Orphadata")
 CANONICAL_MECHANISMS = {"LOF", "GOF", "DOMINANT_NEGATIVE", "TRIPLOSENSITIVITY"}
+SCRIPT_DIR = Path(__file__).resolve().parent
+PRIVA_ROOT = SCRIPT_DIR.parent
+DEFAULT_GOFCARDS = PRIVA_ROOT / "data" / "gofcards" / "gofcards_exact_gof_hgvsp.tsv.gz"
+DEFAULT_EVIDENCE = (
+    PRIVA_ROOT
+    / "data"
+    / "gene_pathogenic_mechanism"
+    / "prepared"
+    / "gene_pathogenic_mechanism_evidence.tsv"
+)
+DEFAULT_SHARED_JSON = (
+    PRIVA_ROOT.parent
+    / "llm_gene_reranker"
+    / "data"
+    / "gene_pathogenic_mechanism"
+    / "prepared"
+    / "gene_mechanism_curated_assertions.json"
+)
+DEFAULT_HGNC = PRIVA_ROOT / "data" / "hgnc" / "non_alt_loci_set.tsv"
+DEFAULT_OUTPUT = (
+    PRIVA_ROOT / "data" / "gofcards" / "gofcards_gene_source_coverage.audit.tsv"
+)
+
+
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    """Parse explicit, overridable resource paths for reproducible audits.
+
+    Defaults point to the same deployed resources used by PriVA. Every path is
+    exposed because archived releases should be auditable without editing the
+    script or silently mixing current and historical source versions.
+    """
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--gofcards", type=Path, default=DEFAULT_GOFCARDS)
+    parser.add_argument("--condition-evidence", type=Path, default=DEFAULT_EVIDENCE)
+    parser.add_argument("--mechanism-json", type=Path, default=DEFAULT_SHARED_JSON)
+    parser.add_argument("--hgnc-table", type=Path, default=DEFAULT_HGNC)
+    parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
+    parser.add_argument(
+        "--summary-output",
+        type=Path,
+        default=None,
+        help="JSON summary path (default: <output stem>.summary.json).",
+    )
+    return parser.parse_args(argv)
 
 
 def load_gofcards_gene_counts(

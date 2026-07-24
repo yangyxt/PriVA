@@ -265,3 +265,89 @@ def build_gofcards_coverage_audit(
             }
         )
     return pd.DataFrame(rows)
+
+
+def main(argv: list[str] | None = None) -> int:
+    """Run the normalized cross-source audit and write TSV plus JSON outputs.
+
+    Output creation is intentionally separate from each loader. This keeps the
+    comparison reusable in tests and notebooks, while the command-line entry
+    point records the exact input paths alongside aggregate counts. The HGNC
+    resolver is the same local resolver used by the runtime mechanism hub.
+    """
+    args = parse_args(argv)
+
+    # Import lazily so the pure loader/classifier functions can be reused without
+    # initializing any of the runtime hub's optional resources.
+    from gene_mechanism_hub import GeneMechanismHub
+
+    hub = GeneMechanismHub(
+        hgnc_table=args.hgnc_table,
+        use_hgnc_package=False,
+    )
+    gofcards_counts = load_gofcards_gene_counts(
+        args.gofcards,
+        resolve_symbol=hub.resolve_symbol,
+    )
+    condition_sets = load_condition_mechanism_gene_sets(
+        args.condition_evidence,
+        resolve_symbol=hub.resolve_symbol,
+    )
+    clinvar_counts = load_exact_clinvar_linked_gene_counts(
+        args.mechanism_json,
+        resolve_symbol=hub.resolve_symbol,
+    )
+    audit = build_gofcards_coverage_audit(
+        gofcards_counts,
+        clinvar_counts,
+        condition_sets,
+    )
+
+    args.output.parent.mkdir(parents=True, exist_ok=True)
+    audit.to_csv(args.output, sep="\t", index=False)
+    summary_output = args.summary_output or args.output.with_name(
+        f"{args.output.stem}.summary.json"
+    )
+    summary_output.parent.mkdir(parents=True, exist_ok=True)
+
+    summary = {
+        "inputs": {
+            "gofcards": str(args.gofcards.resolve()),
+            "condition_evidence": str(args.condition_evidence.resolve()),
+            "mechanism_json": str(args.mechanism_json.resolve()),
+            "hgnc_table": str(args.hgnc_table.resolve()),
+        },
+        "outputs": {
+            "gene_audit_tsv": str(args.output.resolve()),
+            "summary_json": str(summary_output.resolve()),
+        },
+        "gofcards_exact_rows": int(sum(gofcards_counts.values())),
+        "gofcards_exact_genes": len(gofcards_counts),
+        "genes_with_exact_clinvar_link": int(
+            audit["exact_clinvar_vcv_rows"].astype(bool).sum()
+        ),
+        "genes_with_g2p_canonical_mechanism": int(
+            audit["g2p_canonical_mechanism"].astype(bool).sum()
+        ),
+        "genes_with_orphadata_canonical_mechanism": int(
+            audit["orphadata_canonical_mechanism"].astype(bool).sum()
+        ),
+        "genes_only_gofcards_vs_explicit_sources": int(
+            audit["only_gofcards_vs_explicit_sources"].astype(bool).sum()
+        ),
+        "genes_only_gofcards_vs_priva_included": int(
+            audit["only_gofcards_vs_priva_included"].astype(bool).sum()
+        ),
+        "genes_only_gofcards_vs_any_source_record": int(
+            audit["only_gofcards_vs_any_source_record"].astype(bool).sum()
+        ),
+    }
+    with open(summary_output, "w", encoding="utf-8") as handle:
+        json.dump(summary, handle, indent=2, sort_keys=True)
+        handle.write("\n")
+    print(json.dumps(summary, indent=2, sort_keys=True))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

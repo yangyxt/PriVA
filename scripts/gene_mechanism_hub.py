@@ -1680,19 +1680,82 @@ def _compact_profile_tags(assertions: list[dict[str, Any]]) -> list[str]:
     ]
 
 
+def select_condition_histories_for_variant(
+    assertions: list[dict[str, Any]],
+    *,
+    variant_effect: str,
+    variant_effect_conflict: str = "",
+) -> list[dict[str, Any]]:
+    """Select only condition histories compatible with the query allele.
+
+    A curated mechanism elsewhere in a gene is background history, not evidence
+    that every variant acts through that mechanism. Selection therefore occurs
+    before inheritance or penetrance can influence ACMG criteria:
+
+    * an exact known GOF allele selects GOF histories;
+    * a high-confidence predicted LOF allele selects LOF histories; and
+    * an unresolved allele retains all histories, clearly marked as uncertain
+      by the later applicability classifier.
+
+    The one deliberate exception is a query that is both an exact curated GOF
+    allele and has high-confidence predicted LOF evidence. PriVA records this as
+    ``predicted_LOF_vs_exact_GOF`` and retains both GOF and LOF histories for
+    review instead of silently allowing either call to erase the other.
+    """
+    effect = _clean(variant_effect)
+    conflict = _clean(variant_effect_conflict)
+    if conflict == "predicted_LOF_vs_exact_GOF":
+        allowed = {"GOF", "LOF"}
+    elif effect == "exact_known_GOF":
+        allowed = {"GOF"}
+    elif effect == "predicted_LOF_high_confidence":
+        allowed = {"LOF"}
+    else:
+        allowed = CANONICAL_MECHANISMS
+    return [
+        assertion
+        for assertion in assertions
+        if _clean(assertion.get("mechanism")).upper() in allowed
+    ]
+
+
 def _deduplicate_assertions(assertions: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    fields = ("source", "disease", "mechanism", "allelic_requirement", "confidence")
-    seen: set[tuple[str, ...]] = set()
+    fields = (
+        "source",
+        "source_record_id",
+        "source_condition_id",
+        "mondo_id",
+        "disease",
+        "mechanism",
+        "allelic_requirement",
+        "confidence",
+    )
+    seen: set[str] = set()
     output: list[dict[str, Any]] = []
     for assertion in assertions:
-        normalized = {
-            "source": _clean(assertion.get("source")),
-            "disease": _clean(assertion.get("disease")),
-            "mechanism": _clean(assertion.get("mechanism")).upper() or "UNRESOLVED",
-            "allelic_requirement": _clean(assertion.get("allelic_requirement")),
-            "confidence": _clean(assertion.get("confidence")),
-        }
-        key = tuple(normalized[field] for field in fields)
+        normalized = dict(assertion)
+        normalized.update(
+            {
+                "source": _clean(assertion.get("source")),
+                "source_record_id": _clean(assertion.get("source_record_id")),
+                "source_condition_id": _clean(
+                    assertion.get("source_condition_id")
+                ),
+                "mondo_id": _clean(assertion.get("mondo_id")),
+                "disease": _clean(assertion.get("disease")),
+                "mechanism": _clean(assertion.get("mechanism")).upper()
+                or "UNRESOLVED",
+                "allelic_requirement": _clean(
+                    assertion.get("allelic_requirement")
+                ),
+                "confidence": _clean(assertion.get("confidence")),
+            }
+        )
+        key = json.dumps(
+            {field: normalized.get(field, "") for field in fields},
+            sort_keys=True,
+            separators=(",", ":"),
+        )
         if key not in seen:
             seen.add(key)
             output.append(normalized)
@@ -1702,6 +1765,7 @@ def _deduplicate_assertions(assertions: list[dict[str, Any]]) -> list[dict[str, 
 def _classify_variant_applicability(
     assertions: list[dict[str, Any]],
     effect: str,
+    effect_conflict: str = "",
 ) -> dict[str, Any]:
     groups: dict[str, list[str]] = {
         "applicable": [],
@@ -1714,6 +1778,8 @@ def _classify_variant_applicability(
         if mechanism == "LOF":
             if effect == "predicted_LOF_high_confidence":
                 status, reason = "applicable", "query_effect_matches_LOF"
+            elif effect_conflict == "predicted_LOF_vs_exact_GOF":
+                status, reason = "uncertain", "query_has_LOF_and_exact_GOF_conflict"
             elif effect == "uncertain":
                 status, reason = "uncertain", "query_LOF_effect_not_established"
             else:
@@ -1721,6 +1787,8 @@ def _classify_variant_applicability(
         elif mechanism == "GOF":
             if effect == "exact_known_GOF":
                 status, reason = "applicable", "exact_query_GOF_match"
+            elif effect == "uncertain":
+                status, reason = "uncertain", "query_GOF_effect_not_established"
             else:
                 status, reason = "incompatible", "GOF_requires_exact_variant_match"
         elif mechanism == "DOMINANT_NEGATIVE":
@@ -1778,12 +1846,13 @@ def annotate_gene_mechanism_categories(
     loeuf_table: str | Path = DEFAULT_LOEUF_TABLE,
     hgnc_table: str | Path = DEFAULT_HGNC_TABLE,
 ) -> pd.DataFrame:
-    """Annotate compact gene history and query-variant applicability.
+    """Annotate condition-specific history and query-variant applicability.
 
-    HPO contributes only ``recessive`` or ``dominant``. A generic inheritance
-    assertion gains a LOF mechanism only when the gene has a pathogenic
-    ClinVar variant reviewed at two stars or above, LOEUF < 0.35, or mean
-    AlphaMissense score > 0.564.
+    HPO inheritance, penetrance, and onset are transferred only through an
+    exact gene-plus-disease match to G2P or Orphadata. Row-level HPO text and
+    gene-wide ClinVar, LOEUF, AlphaMissense, or ClinGen dosage signals remain
+    audit information and cannot create a condition-mechanism assertion.
+    ``hpo_inheritance_col`` is retained for API compatibility during migration.
     """
     if symbol_col not in df.columns:
         raise KeyError(f"missing symbol column: {symbol_col}")
@@ -1804,47 +1873,15 @@ def annotate_gene_mechanism_categories(
     variant_outputs: dict[str, list[str]] = {
         column: [] for column in VARIANT_MECHANISM_OUTPUT_COLUMNS
     }
-    known_cache: dict[str, dict[str, Any]] = {}
     assertion_cache: dict[str, list[dict[str, Any]]] = {}
     clinvar_pathogenic_genes = set(clinvar_pathogenic_genes or set())
     gene_to_am_score_map = gene_to_am_score_map or {}
-    row_hpo_values = (
-        out[hpo_inheritance_col]
-        if hpo_inheritance_col in out.columns
-        else pd.Series("", index=out.index)
-    )
-
-    for (_, row), row_hpo in zip(
-        out.iterrows(),
-        row_hpo_values,
-        strict=True,
-    ):
+    for _, row in out.iterrows():
         gene = row[symbol_col]
         symbol = hub.resolve_symbol(gene)
         if symbol not in assertion_cache:
             assertion_cache[symbol] = hub.condition_mechanism_assertions(gene)
-        if symbol not in known_cache:
-            known_cache[symbol] = hub.known_inheritance_mode(symbol)
-        known = known_cache[symbol]
-        clingen_hi_score = known.get("clingen_haploinsufficiency_score")
-        clingen_hi = clingen_hi_score == 3
-        clingen_haplosufficient = clingen_hi_score in {30, 40}
-
         assertions = list(assertion_cache[symbol])
-        hpo_requirements = _hpo_allelic_requirements(row_hpo)
-        hpo_requirements.update(
-            _hpo_allelic_requirements(known.get("hpo_inheritance_modes", ""))
-        )
-        for requirement in sorted(hpo_requirements):
-            assertions.append(
-                {
-                    "source": "HPO_inheritance",
-                    "disease": known.get("hpo_inheritance_disease_ids", ""),
-                    "mechanism": "UNRESOLVED",
-                    "allelic_requirement": requirement,
-                    "confidence": "inheritance_only",
-                }
-            )
 
         gene_id = _clean(row.get(gene_col))
         lof_evidence: list[str] = []
@@ -1858,52 +1895,19 @@ def annotate_gene_mechanism_categories(
         )
         if not math.isnan(gene_avg_am) and gene_avg_am > 0.564:
             lof_evidence.append("GeneAvgAM_gt_0.564")
-        if lof_evidence:
-            lof_requirements = hpo_requirements or {""}
-            for requirement in sorted(lof_requirements):
-                assertions.append(
-                    {
-                        "source": "PriVA_gene_LOF_evidence",
-                        "disease": known.get("hpo_inheritance_disease_ids", ""),
-                        "mechanism": "LOF",
-                        "allelic_requirement": requirement,
-                        "confidence": ";".join(lof_evidence),
-                    }
-                )
-        if clingen_hi:
-            assertions.append(
-                {
-                    "source": "ClinGen_Dosage",
-                    "disease": "",
-                    "mechanism": "LOF",
-                    "allelic_requirement": "monoallelic_autosomal",
-                    "confidence": "sufficient_HI_evidence",
-                }
-            )
-        elif clingen_haplosufficient:
-            assertions.append(
-                {
-                    "source": "ClinGen_Dosage",
-                    "disease": "",
-                    "mechanism": "LOF",
-                    "allelic_requirement": "biallelic_autosomal",
-                    "confidence": "AR_gene_association",
-                }
-            )
         effect_call = infer_query_variant_effect(row)
+        assertions = select_condition_histories_for_variant(
+            assertions,
+            variant_effect=effect_call["variant_effect"],
+            variant_effect_conflict=effect_call["variant_effect_conflict"],
+        )
         vcv_accessions: list[str] = []
         vcv_conditions: list[str] = []
         vcv_hgvs: list[str] = []
         vcv_review_stars: list[int] = []
         if effect_call["variant_effect"] == "exact_known_GOF":
-            assertions.append(
-                {
-                    "source": "GoFCards",
-                    "disease": "",
-                    "mechanism": "GOF",
-                    "allelic_requirement": "",
-                    "confidence": "exact_variant_match",
-                }
+            use_vcv_condition_history = not any(
+                assertion.get("mechanism") == "GOF" for assertion in assertions
             )
             vcv_matches = hub.matched_clinvar_vcv_for_gofcards(
                 symbol,
@@ -1933,21 +1937,37 @@ def annotate_gene_mechanism_categories(
                         if isinstance(condition, dict) and _clean(condition.get("name"))
                     ]
                     vcv_conditions.extend(condition_names)
-                    assertions.append(
-                        {
-                            "source": "GoFCards_exact+ClinVar_VCV",
-                            "disease": ";".join(condition_names),
-                            "mechanism": "GOF",
-                            "allelic_requirement": "",
-                            "confidence": (
-                                f"ClinVar_{stars}_star" if stars is not None else "ClinVar_unrated"
-                            ),
-                        }
-                    )
+                    if use_vcv_condition_history:
+                        assertions.append(
+                            {
+                                "source": "GoFCards_exact+ClinVar_VCV",
+                                "disease": ";".join(condition_names),
+                                "mechanism": "GOF",
+                                "allelic_requirement": "",
+                                "confidence": (
+                                    f"ClinVar_{stars}_star"
+                                    if stars is not None
+                                    else "ClinVar_unrated"
+                                ),
+                            }
+                        )
+            if use_vcv_condition_history and not any(
+                assertion.get("mechanism") == "GOF" for assertion in assertions
+            ):
+                assertions.append(
+                    {
+                        "source": "GoFCards",
+                        "disease": "",
+                        "mechanism": "GOF",
+                        "allelic_requirement": "",
+                        "confidence": "exact_variant_match_condition_unresolved",
+                    }
+                )
         assertions = _deduplicate_assertions(assertions)
         applicability = _classify_variant_applicability(
             assertions,
             effect_call["variant_effect"],
+            effect_call["variant_effect_conflict"],
         )
 
         plausible_mechanism_values.append(applicability["plausible"])

@@ -2300,6 +2300,186 @@ function gofcards_exact_gof_cache_install() {
 }
 
 
+function download_resource_atomic() {
+    local url=${1}
+    local target=${2}
+    local temporary="${target}.download.$$"
+
+    mkdir -p "$(dirname "${target}")" || return 1
+    rm -f "${temporary}"
+    if command -v wget >/dev/null 2>&1; then
+        wget -c "${url}" -O "${temporary}" || { rm -f "${temporary}"; return 1; }
+    elif command -v curl >/dev/null 2>&1; then
+        curl -fL "${url}" -o "${temporary}" || { rm -f "${temporary}"; return 1; }
+    else
+        log "ERROR: wget or curl is required to download ${url}"
+        return 1
+    fi
+    [[ -s ${temporary} ]] || { log "ERROR: Empty download from ${url}"; rm -f "${temporary}"; return 1; }
+    mv -f "${temporary}" "${target}"
+}
+
+
+function validate_mondo_hpo_scope_cache() {
+    local mondo_obo=${1}
+    local registry=${2}
+    local hpo_assertions=${3}
+    [[ -s ${mondo_obo} ]] || { log "ERROR: Missing MONDO OBO: ${mondo_obo}"; return 1; }
+    [[ -s ${registry} ]] || { log "ERROR: Missing disease-scope registry: ${registry}"; return 1; }
+    [[ -s ${hpo_assertions} ]] || { log "ERROR: Missing scoped HPO assertions: ${hpo_assertions}"; return 1; }
+    grep -q '^data-version: mondo/' "${mondo_obo}" || {
+        log "ERROR: MONDO OBO has no valid data-version header: ${mondo_obo}"
+        return 1
+    }
+    grep -q '^id: MONDO:0003847$' "${mondo_obo}" || {
+        log "ERROR: MONDO hereditary disease root is missing: ${mondo_obo}"
+        return 1
+    }
+
+    python - "${registry}" "${hpo_assertions}" <<'PY'
+import csv
+import gzip
+import sys
+
+registry_path, assertions_path = sys.argv[1:]
+
+def inspect(path, required):
+    opener = gzip.open if path.endswith(".gz") else open
+    with opener(path, "rt", encoding="utf-8", newline="") as handle:
+        reader = csv.DictReader(handle, delimiter="\t")
+        missing = sorted(required - set(reader.fieldnames or []))
+        if missing:
+            raise SystemExit(f"{path} missing required columns: {', '.join(missing)}")
+        count = sum(1 for _ in reader)
+    if count == 0:
+        raise SystemExit(f"{path} contains no data rows")
+    return count
+
+registry_count = inspect(registry_path, {
+    "disease_id", "mondo_id", "disease_scope", "priva_scope",
+    "scope_evidence", "scope_review_status",
+})
+assertion_count = inspect(assertions_path, {
+    "gene_symbol", "disease_id", "hpo_id", "frequency", "evidence",
+    "reference", "mondo_id", "disease_scope", "priva_scope",
+    "scope_evidence", "scope_review_status",
+})
+print(f"disease_scope_rows={registry_count}; scoped_hpo_assertions={assertion_count}")
+PY
+}
+
+
+function mondo_hpo_scope_install() {
+    local config_file=${1}
+    [[ -f ${config_file} ]] || { log "ERROR: Config file not found: ${config_file}"; return 1; }
+
+    local hpo_release
+    local hpo_raw_dir
+    local hpo_genes_url
+    local hpo_hpoa_url
+    local hpo_genes
+    local hpo_hpoa
+    local hpo_base_assertions
+    local hpo_assertions
+    local mondo_release
+    local mondo_url
+    local mondo_sha256
+    local mondo_obo
+    local scope_registry
+    local scope_overrides
+    local scope_builder
+    local hpo_builder
+
+    hpo_release=$(yaml_value_or_default "${config_file}" "hpo_release" "v2026-06-23")
+    hpo_raw_dir=$(yaml_value_or_default "${config_file}" "hpo_raw_dir" "${DATA_DIR}/hpo/raw/${hpo_release}")
+    hpo_genes_url=$(yaml_value_or_default "${config_file}" "hpo_genes_to_phenotype_url" "https://github.com/obophenotype/human-phenotype-ontology/releases/download/${hpo_release}/genes_to_phenotype.txt")
+    hpo_hpoa_url=$(yaml_value_or_default "${config_file}" "hpo_phenotype_hpoa_url" "https://github.com/obophenotype/human-phenotype-ontology/releases/download/${hpo_release}/phenotype.hpoa")
+    hpo_genes="${hpo_raw_dir}/genes_to_phenotype.txt"
+    hpo_hpoa="${hpo_raw_dir}/phenotype.hpoa"
+    hpo_base_assertions="${hpo_raw_dir}/genes_to_phenotype.assertions.base.tsv.gz"
+    hpo_assertions=$(yaml_value_or_default "${config_file}" "hpo_assertions" "${DATA_DIR}/hpo/genes_to_phenotype.assertions.tsv.gz")
+    hpo_builder=$(yaml_value_or_default "${config_file}" "hpo_assertion_builder_script" "${SCRIPT_DIR}/collapse_HPO_anno.py")
+
+    mondo_release=$(yaml_value_or_default "${config_file}" "mondo_release" "v2026-07-06")
+    mondo_url=$(yaml_value_or_default "${config_file}" "mondo_url" "https://github.com/monarch-initiative/mondo/releases/download/${mondo_release}/mondo-simple.obo")
+    mondo_sha256=$(yaml_value_or_default "${config_file}" "mondo_sha256" "")
+    mondo_obo=$(yaml_value_or_default "${config_file}" "mondo_obo" "${DATA_DIR}/mondo/mondo-simple.${mondo_release}.obo")
+    scope_registry=$(yaml_value_or_default "${config_file}" "mondo_disease_scope_registry" "${DATA_DIR}/mondo/disease_scope.tsv.gz")
+    scope_overrides=$(yaml_value_or_default "${config_file}" "mondo_disease_scope_overrides" "${DATA_DIR}/mondo/disease_scope_overrides.tsv")
+    scope_builder=$(yaml_value_or_default "${config_file}" "mondo_scope_builder_script" "${SCRIPT_DIR}/build_mondo_disease_scope.py")
+
+    [[ -f ${hpo_builder} ]] || { log "ERROR: HPO assertion builder not found: ${hpo_builder}"; return 1; }
+    [[ -f ${scope_builder} ]] || { log "ERROR: MONDO scope builder not found: ${scope_builder}"; return 1; }
+    mkdir -p "${hpo_raw_dir}" "$(dirname "${hpo_assertions}")" "$(dirname "${mondo_obo}")" || return 1
+
+    if [[ "${PRIVA_FORCE_HPO_ASSERTIONS:-0}" == "1" ]] || [[ ! -s ${hpo_genes} ]]; then
+        log "Downloading HPO ${hpo_release} genes_to_phenotype.txt"
+        download_resource_atomic "${hpo_genes_url}" "${hpo_genes}" || return 1
+    fi
+    if [[ "${PRIVA_FORCE_HPO_ASSERTIONS:-0}" == "1" ]] || [[ ! -s ${hpo_hpoa} ]]; then
+        log "Downloading HPO ${hpo_release} phenotype.hpoa"
+        download_resource_atomic "${hpo_hpoa_url}" "${hpo_hpoa}" || return 1
+    fi
+
+    local mondo_valid=0
+    if [[ -s ${mondo_obo} ]] && grep -q '^data-version: mondo/' "${mondo_obo}"; then
+        mondo_valid=1
+        if [[ -n ${mondo_sha256} ]]; then
+            local actual_sha256
+            actual_sha256=$(sha256sum "${mondo_obo}" | awk '{print $1}')
+            [[ ${actual_sha256} == "${mondo_sha256}" ]] || mondo_valid=0
+        fi
+    fi
+    if [[ "${PRIVA_FORCE_MONDO_CACHE:-0}" == "1" ]] || [[ ${mondo_valid} -eq 0 ]]; then
+        log "Downloading MONDO ${mondo_release} ontology"
+        download_resource_atomic "${mondo_url}" "${mondo_obo}" || return 1
+        if [[ -n ${mondo_sha256} ]]; then
+            local downloaded_sha256
+            downloaded_sha256=$(sha256sum "${mondo_obo}" | awk '{print $1}')
+            [[ ${downloaded_sha256} == "${mondo_sha256}" ]] || {
+                log "ERROR: MONDO SHA256 mismatch: expected ${mondo_sha256}, found ${downloaded_sha256}"
+                return 1
+            }
+        fi
+    fi
+
+    local rebuild_hpo=0
+    if [[ "${PRIVA_FORCE_HPO_ASSERTIONS:-0}" == "1" ]] || [[ ! -s ${hpo_base_assertions} ]] || \
+       [[ ${hpo_genes} -nt ${hpo_base_assertions} ]] || [[ ${hpo_hpoa} -nt ${hpo_base_assertions} ]] || \
+       [[ ${hpo_builder} -nt ${hpo_base_assertions} ]]; then
+        rebuild_hpo=1
+        log "Building release-matched base HPO assertions"
+        python "${hpo_builder}" "${hpo_genes}" "${hpo_hpoa}" "${hpo_base_assertions}" || return 1
+    fi
+
+    local rebuild_scope=0
+    if [[ ${rebuild_hpo} -eq 1 ]] || [[ "${PRIVA_FORCE_MONDO_CACHE:-0}" == "1" ]] || \
+       [[ ! -s ${scope_registry} ]] || [[ ! -s ${hpo_assertions} ]] || \
+       [[ ${mondo_obo} -nt ${scope_registry} ]] || [[ ${hpo_base_assertions} -nt ${scope_registry} ]] || \
+       [[ ${scope_builder} -nt ${scope_registry} ]] || [[ ${scope_overrides} -nt ${scope_registry} ]]; then
+        rebuild_scope=1
+    fi
+    if [[ ${rebuild_scope} -eq 1 ]]; then
+        log "Building MONDO/HPO disease-scope registry and scoped HPO assertions"
+        local -a scope_args=(
+            "${scope_builder}"
+            --mondo-obo "${mondo_obo}"
+            --hpo-assertions "${hpo_base_assertions}"
+            --registry-output "${scope_registry}"
+            --annotated-assertions-output "${hpo_assertions}"
+        )
+        [[ -s ${scope_overrides} ]] && scope_args+=(--manual-overrides "${scope_overrides}")
+        python "${scope_args[@]}" || return 1
+    fi
+
+    validate_mondo_hpo_scope_cache "${mondo_obo}" "${scope_registry}" "${hpo_assertions}" || return 1
+    update_yaml "${config_file}" "hpo_assertions" "${hpo_assertions}"
+    update_yaml "${config_file}" "mondo_obo" "${mondo_obo}"
+    update_yaml "${config_file}" "mondo_disease_scope_registry" "${scope_registry}"
+    log "MONDO/HPO disease-scope resources deployed: ${scope_registry}; ${hpo_assertions}"
+}
+
+
 function mechanism_resource_install() {
     local config_file=${1}
     gene_pathogenic_mechanism_cache_install "${config_file}" || return 1
@@ -2429,8 +2609,13 @@ function main_install() {
 
     # 11. Install gene mechanism/DDG2P and exact GoFCards GOF caches
     mechanism_resource_install \
-    ${config_file} || \
+        ${config_file} || \
     { log "Failed to install gene mechanism/DDG2P or GoFCards exact GOF caches"; return 1; }
+
+    # 12. Install pinned HPO/MONDO releases and disease-scope annotations
+    mondo_hpo_scope_install \
+        ${config_file} || \
+    { log "Failed to install HPO/MONDO disease-scope resources"; return 1; }
     
     log "Congratulations! The installation is completed!"
 }

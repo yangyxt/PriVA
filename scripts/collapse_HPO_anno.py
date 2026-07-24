@@ -1,238 +1,252 @@
-import pandas as pd
+#!/usr/bin/env python3
+"""Build disease-specific gene-HPO assertions without gene-wide collapsing.
+
+HPO's ``genes_to_phenotype.txt`` supplies the gene-to-disease relationship,
+while ``phenotype.hpoa`` supplies assertion-level frequency and provenance.
+Both files must come from the same HPO release.
+"""
+
+from __future__ import annotations
+
+import argparse
 import logging
-import sys
+from pathlib import Path
+
+import pandas as pd
+
+from build_mondo_disease_scope import annotate_hpo_assertions
+
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
-console_handler=logging.StreamHandler()
-console_handler.setLevel(logging.INFO)
-formatter = logging.Formatter("%(levelname)s:%(asctime)s:%(funcName)s:%(lineno)s:%(message)s")
-console_handler.setFormatter(formatter)
-logger.addHandler(console_handler)
+if not logger.handlers:
+    console_handler = logging.StreamHandler()
+    console_handler.setLevel(logging.INFO)
+    formatter = logging.Formatter(
+        "%(levelname)s:%(asctime)s:%(funcName)s:%(lineno)s:%(message)s"
+    )
+    console_handler.setFormatter(formatter)
+    logger.addHandler(console_handler)
 
 
-def read_phenotype_data(input_file):
-    """
-    Read phenotype annotation data from TSV file.
-    
-    Args:
-        input_file (str): Path to input TSV file
-    
-    Returns:
-        pd.DataFrame: Raw phenotype annotation data
-    """
-    try:
-        df = pd.read_csv(input_file, sep='\t')
-        logger.info(f"Successfully read input file with {len(df)} rows")
-        return df
-    except Exception as e:
-        logger.error(f"Error reading input file: {str(e)}")
-        raise
+GENE_INPUT_COLUMNS = {
+    "gene_symbol",
+    "disease_id",
+    "hpo_id",
+    "frequency",
+}
+HPOA_INPUT_COLUMNS = {
+    "database_id",
+    "qualifier",
+    "hpo_id",
+    "frequency",
+    "evidence",
+    "reference",
+}
+ASSERTION_COLUMNS = [
+    "gene_symbol",
+    "disease_id",
+    "hpo_id",
+    "frequency",
+    "evidence",
+    "reference",
+]
 
-def separate_inheritance_data(df):
-    """
-    Separate inheritance patterns from other phenotype annotations.
-    Use regex to find patterns containing "inheritance" at the end of the string
-    
-    Args:
-        df (pd.DataFrame): Input phenotype annotation dataframe
-    
-    Returns:
-        tuple: (main_df, inheritance_df) - separated dataframes
-    """
-    try:
-        inheritance_record_bool = df['hpo_name'].str.contains(".+ inheritance$", regex=True)
-        inheritance_df = df[inheritance_record_bool].copy()
-        main_df = df[~inheritance_record_bool].copy()
-        
-        logger.info(f"Separated {len(inheritance_df)} inheritance rows from {len(main_df)} phenotype rows")
-        return main_df, inheritance_df
-    except Exception as e:
-        logger.error(f"Error separating inheritance data: {str(e)}")
-        raise
 
-def deduplicate_paired_values(row, separator=';'):
-    """
-    Deduplicate values while maintaining correspondence between paired columns.
-    
-    Args:
-        row (pd.Series): Row containing paired values to deduplicate
-        separator (str): Separator used in string concatenation
-        
-    Returns:
-        pd.Series: Row with deduplicated paired values
-    """
-    try:
-        # Create pairs of values
-        pairs = list(zip(
-            row['hpo_id'].split(separator),
-            row['hpo_name'].split(separator),
-            row['frequency'].split(separator),
-            row['disease_id'].split(separator)
-        ))
-        
-        # Remove duplicates while preserving order
-        unique_pairs = []
-        seen = set()
-        for pair in pairs:
-            # Use first two elements (hpo_id and hpo_name) as key for deduplication
-            key = (pair[0], pair[1])
-            if key not in seen:
-                seen.add(key)
-                unique_pairs.append(pair)
-        
-        # Unzip the pairs back into separate lists
-        if unique_pairs:
-            hpo_ids, hpo_names, frequencies, disease_ids = zip(*unique_pairs)
-        else:
-            hpo_ids, hpo_names, frequencies, disease_ids = [], [], [], []
-        
-        # Update the row with deduplicated values
-        row['hpo_id'] = separator.join(hpo_ids)
-        row['hpo_name'] = separator.join(hpo_names)
-        row['frequency'] = separator.join(frequencies)
-        row['disease_id'] = separator.join(disease_ids)
-        
-        return row
-    except Exception as e:
-        logger.error(f"Error deduplicating paired values: {str(e)}")
-        raise
+def _read_tsv(path: str | Path, *, comments: bool = False) -> pd.DataFrame:
+    return pd.read_csv(
+        path,
+        sep="\t",
+        dtype=str,
+        keep_default_na=False,
+        low_memory=False,
+        comment="#" if comments else None,
+    )
 
-def collapse_main_annotations(df):
-    """
-    Collapse main phenotype annotations by gene with deduplication.
-    
-    Args:
-        df (pd.DataFrame): Main phenotype annotation dataframe
-    
-    Returns:
-        pd.DataFrame: Collapsed and deduplicated main annotations
-    """
-    try:
-        # First collapse all annotations
-        collapsed = df.groupby(['ncbi_gene_id', 'gene_symbol']).agg({
-            'hpo_id': ';'.join,
-            'hpo_name': ';'.join,
-            'frequency': ';'.join,
-            'disease_id': ';'.join
-        }).reset_index()
-        
-        # Then deduplicate while maintaining correspondence
-        collapsed = collapsed.apply(deduplicate_paired_values, axis=1)
-        
-        logger.info(f"Collapsed and deduplicated annotations into {len(collapsed)} gene entries")
-        return collapsed
-    except Exception as e:
-        logger.error(f"Error collapsing main annotations: {str(e)}")
-        raise
 
-def process_inheritance_data(inheritance_df):
-    """
-    Process inheritance patterns into separate columns with deduplication.
-    
-    Args:
-        inheritance_df (pd.DataFrame): Inheritance pattern dataframe
-    
-    Returns:
-        pd.DataFrame: Processed and deduplicated inheritance data
-    """
-    try:
-        # First group by gene
-        inheritance_modes = inheritance_df.groupby('ncbi_gene_id').agg({
-            'hpo_name': ';'.join,
-            'disease_id': ';'.join
-        }).reset_index()
-        
-        # Deduplicate inheritance modes while maintaining disease ID correspondence
-        def deduplicate_inheritance(row):
-            pairs = list(zip(
-                row['hpo_name'].split(';'),
-                row['disease_id'].split(';')
-            ))
-            unique_pairs = []
-            seen = set()
-            for pair in pairs:
-                if pair[0] not in seen:  # Use inheritance mode as key
-                    seen.add(pair[0])
-                    unique_pairs.append(pair)
-            
-            if unique_pairs:
-                modes, disease_ids = zip(*unique_pairs)
-            else:
-                modes, disease_ids = [], []
-                
-            row['hpo_name'] = ';'.join(modes)
-            row['disease_id'] = ';'.join(disease_ids)
-            return row
-        
-        inheritance_modes = inheritance_modes.apply(deduplicate_inheritance, axis=1)
-        inheritance_modes.columns = ['ncbi_gene_id', 'inheritance_modes', 'inheritance_disease_ids']
-        
-        logger.info(f"Processed and deduplicated inheritance data for {len(inheritance_modes)} genes")
-        return inheritance_modes
-    except Exception as e:
-        logger.error(f"Error processing inheritance data: {str(e)}")
-        raise
+def _require_columns(
+    df: pd.DataFrame,
+    required: set[str],
+    source_name: str,
+) -> None:
+    missing = required.difference(df.columns)
+    if missing:
+        raise ValueError(f"{source_name} is missing columns: {sorted(missing)}")
 
-def merge_and_format_results(collapsed_df, inheritance_df):
-    """
-    Merge main annotations with inheritance data and format final results.
-    
-    Args:
-        collapsed_df (pd.DataFrame): Collapsed main annotations
-        inheritance_df (pd.DataFrame): Processed inheritance data
-    
-    Returns:
-        pd.DataFrame: Final merged and formatted dataframe
-    """
-    try:
-        final_df = pd.merge(collapsed_df, inheritance_df, on='ncbi_gene_id', how='left')
-        final_df['inheritance_modes'] = final_df['inheritance_modes'].fillna('-')
-        final_df['inheritance_disease_ids'] = final_df['inheritance_disease_ids'].fillna('-')
-        
-        logger.info(f"Successfully merged and formatted final results")
-        return final_df
-    except Exception as e:
-        logger.error(f"Error merging and formatting results: {str(e)}")
-        raise
 
-def collapse_gene_phenotype_annotations(input_file, output_file):
-    """
-    Main function to collapse gene-phenotype annotations.
-    
-    Args:
-        input_file (str): Path to input TSV file
-        output_file (str): Path to output TSV file
-    
-    Returns:
-        pd.DataFrame: Final collapsed annotations dataframe
-    """
-    try:
-        # Read data
-        df = read_phenotype_data(input_file)
-        
-        # Separate inheritance data
-        main_df, inheritance_df = separate_inheritance_data(df)
-        
-        # Process main annotations
-        collapsed_df = collapse_main_annotations(main_df)
-        
-        # Process inheritance data
-        inheritance_modes = process_inheritance_data(inheritance_df)
-        
-        # Merge and format results
-        final_df = merge_and_format_results(collapsed_df, inheritance_modes)
-        
-        # Save results
-        final_df.to_csv(output_file, sep='\t', index=False)
-        logger.info(f"Successfully wrote collapsed annotations to {output_file}")
-        
-        return final_df
-        
-    except Exception as e:
-        logger.error(f"Error in main processing pipeline: {str(e)}")
-        raise
+def _normalize_optional(series: pd.Series) -> pd.Series:
+    cleaned = series.astype(str).str.strip()
+    return cleaned.mask(cleaned.eq(""), "-")
+
+
+def build_gene_disease_hpo_assertions(
+    genes_to_phenotype: str | Path,
+    phenotype_hpoa: str | Path,
+    *,
+    minimum_match_rate: float = 0.999,
+) -> pd.DataFrame:
+    """Return one row per gene, disease, HPO, frequency, and provenance assertion."""
+    gene_df = _read_tsv(genes_to_phenotype)
+    hpoa_df = _read_tsv(phenotype_hpoa, comments=True)
+    _require_columns(gene_df, GENE_INPUT_COLUMNS, "genes_to_phenotype")
+    _require_columns(hpoa_df, HPOA_INPUT_COLUMNS, "phenotype.hpoa")
+
+    gene_df = gene_df.loc[:, sorted(GENE_INPUT_COLUMNS)].copy()
+    hpoa_df = hpoa_df.loc[:, sorted(HPOA_INPUT_COLUMNS)].copy()
+    for column in gene_df.columns:
+        gene_df[column] = gene_df[column].astype(str).str.strip()
+    for column in hpoa_df.columns:
+        hpoa_df[column] = hpoa_df[column].astype(str).str.strip()
+
+    invalid_identifier = gene_df[["disease_id", "hpo_id"]].isin(["", "-"]).any(axis=1)
+    if invalid_identifier.any():
+        raise ValueError(
+            f"genes_to_phenotype contains {int(invalid_identifier.sum())} rows with "
+            "an empty disease_id or hpo_id"
+        )
+    unmapped_gene = gene_df["gene_symbol"].isin(["", "-"])
+    if unmapped_gene.any():
+        logger.info(
+            "Excluded %d HPO rows without a mapped gene symbol",
+            int(unmapped_gene.sum()),
+        )
+        gene_df = gene_df.loc[~unmapped_gene].copy()
+
+    # genes_to_phenotype does not carry HPOA's qualifier. Identify NOT-only
+    # disease/HPO links so they can be excluded rather than turned into false
+    # positive assertions with blank provenance.
+    negative_pairs = set(
+        map(
+            tuple,
+            hpoa_df.loc[
+                hpoa_df["qualifier"].eq("NOT"), ["database_id", "hpo_id"]
+            ].itertuples(index=False, name=None),
+        )
+    )
+    positive_hpoa = hpoa_df.loc[hpoa_df["qualifier"].eq("")].copy()
+    positive_hpoa.rename(columns={"database_id": "disease_id"}, inplace=True)
+    positive_hpoa["frequency"] = _normalize_optional(positive_hpoa["frequency"])
+    positive_hpoa["evidence"] = _normalize_optional(positive_hpoa["evidence"])
+    positive_hpoa["reference"] = _normalize_optional(positive_hpoa["reference"])
+
+    hpoa_assertions = positive_hpoa.loc[
+        :, ["disease_id", "hpo_id", "frequency", "evidence", "reference"]
+    ].drop_duplicates()
+    gene_links = gene_df.loc[
+        :, ["gene_symbol", "disease_id", "hpo_id", "frequency"]
+    ].rename(columns={"frequency": "gene_summary_frequency"})
+
+    joined = gene_links.merge(
+        hpoa_assertions,
+        on=["disease_id", "hpo_id"],
+        how="left",
+        indicator=True,
+        validate="many_to_many",
+    )
+
+    matched = joined["_merge"].eq("both")
+    joined_pairs = list(zip(joined["disease_id"], joined["hpo_id"]))
+    negative_only = ~matched & pd.Series(
+        (pair in negative_pairs for pair in joined_pairs),
+        index=joined.index,
+    )
+    unknown = ~matched & ~negative_only
+    match_rate = 1.0 - (float(unknown.sum()) / len(joined) if len(joined) else 0.0)
+    if match_rate < minimum_match_rate:
+        raise ValueError(
+            "Only "
+            f"{match_rate:.3%} of gene-disease-HPO rows matched phenotype.hpoa; "
+            "the source files are probably from different HPO releases"
+        )
+
+    if negative_only.any():
+        logger.info(
+            "Excluded %d gene-disease-HPO rows supported only by qualifier=NOT",
+            int(negative_only.sum()),
+        )
+
+    unmatched = joined.loc[unknown, ["gene_symbol", "disease_id", "hpo_id"]]
+    if not unmatched.empty:
+        examples = unmatched.drop_duplicates().head(5).to_dict(orient="records")
+        logger.warning(
+            "%d gene-disease-HPO rows have no positive phenotype.hpoa assertion; "
+            "retaining them with '-' evidence/reference. Examples: %s",
+            len(unmatched),
+            examples,
+        )
+
+    joined["frequency"] = joined["frequency"].where(
+        matched,
+        _normalize_optional(joined["gene_summary_frequency"]),
+    )
+    joined["evidence"] = _normalize_optional(joined["evidence"])
+    joined["reference"] = _normalize_optional(joined["reference"])
+
+    assertions = (
+        joined.loc[~negative_only, ASSERTION_COLUMNS]
+        .drop_duplicates()
+        .sort_values(ASSERTION_COLUMNS, kind="stable")
+        .reset_index(drop=True)
+    )
+    logger.info(
+        "Built %d unique assertions for %d genes and %d diseases (match rate %.3f%%)",
+        len(assertions),
+        assertions["gene_symbol"].nunique(),
+        assertions["disease_id"].nunique(),
+        match_rate * 100,
+    )
+    return assertions
+
+
+def write_gene_disease_hpo_assertions(
+    genes_to_phenotype: str | Path,
+    phenotype_hpoa: str | Path,
+    output_file: str | Path,
+    *,
+    minimum_match_rate: float = 0.999,
+    disease_scope_registry: str | Path | None = None,
+) -> pd.DataFrame:
+    assertions = build_gene_disease_hpo_assertions(
+        genes_to_phenotype,
+        phenotype_hpoa,
+        minimum_match_rate=minimum_match_rate,
+    )
+    if disease_scope_registry is not None:
+        registry = _read_tsv(disease_scope_registry)
+        assertions = annotate_hpo_assertions(assertions, registry)
+    output_path = Path(output_file)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    assertions.to_csv(output_path, sep="\t", index=False)
+    logger.info("Wrote assertion table to %s", output_path)
+    return assertions
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Join release-matched HPO gene links and HPOA provenance."
+    )
+    parser.add_argument("genes_to_phenotype", help="HPO genes_to_phenotype.txt")
+    parser.add_argument("phenotype_hpoa", help="Matching HPO phenotype.hpoa")
+    parser.add_argument("output", help="Output assertion TSV; .gz is supported")
+    parser.add_argument(
+        "--minimum-match-rate",
+        type=float,
+        default=0.999,
+        help="Fail below this gene/HPO source match rate (default: 0.999)",
+    )
+    parser.add_argument(
+        "--disease-scope-registry",
+        help="Optional MONDO/HPO disease-scope registry to attach to each assertion",
+    )
+    return parser.parse_args()
 
 
 if __name__ == "__main__":
-    collapse_gene_phenotype_annotations(sys.argv[1], sys.argv[2])
+    args = parse_args()
+    write_gene_disease_hpo_assertions(
+        args.genes_to_phenotype,
+        args.phenotype_hpoa,
+        args.output,
+        minimum_match_rate=args.minimum_match_rate,
+        disease_scope_registry=args.disease_scope_registry,
+    )

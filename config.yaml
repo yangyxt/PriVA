@@ -164,6 +164,24 @@ gofcards_vep_cache_hg38: "/paedyl01/disk1/yangyxt/public_data/VEP_caches"
 gofcards_vep_cache_version_hg38: "113"
 gofcards_vep_cache_merged_hg38: "1"
 
+# HPO/MONDO disease-scope resources
+# Built by: bash scripts/install_utils.sh mondo_hpo_scope_install config.yaml
+# Releases are pinned so a normal reinstall is reproducible. Update the release,
+# URL, and checksum together when intentionally refreshing MONDO.
+hpo_release: "v2026-06-23"
+hpo_raw_dir: "/paedyl01/disk1/yangyxt/PriVA/data/hpo/raw/v2026-06-23"
+hpo_genes_to_phenotype_url: "https://github.com/obophenotype/human-phenotype-ontology/releases/download/v2026-06-23/genes_to_phenotype.txt"
+hpo_phenotype_hpoa_url: "https://github.com/obophenotype/human-phenotype-ontology/releases/download/v2026-06-23/phenotype.hpoa"
+hpo_assertion_builder_script: "/paedyl01/disk1/yangyxt/PriVA/scripts/collapse_HPO_anno.py"
+hpo_assertions: /paedyl01/disk1/yangyxt/PriVA/data/hpo/genes_to_phenotype.assertions.tsv.gz
+mondo_release: "v2026-07-06"
+mondo_url: "https://github.com/monarch-initiative/mondo/releases/download/v2026-07-06/mondo-simple.obo"
+mondo_sha256: "7e28f3fba97b2f474b70dba54d9b719d07c3d84e5e682189146a05dbedf755aa"
+mondo_obo: /paedyl01/disk1/yangyxt/PriVA/data/mondo/mondo-simple.v2026-07-06.obo
+mondo_scope_builder_script: "/paedyl01/disk1/yangyxt/PriVA/scripts/build_mondo_disease_scope.py"
+mondo_disease_scope_registry: /paedyl01/disk1/yangyxt/PriVA/data/mondo/disease_scope.tsv.gz
+mondo_disease_scope_overrides: "/paedyl01/disk1/yangyxt/PriVA/data/mondo/disease_scope_overrides.tsv"
+
 
 ####################################################pext (proportion expressed across transcripts) Configuration####################################################
 # pext from gnomAD, based on GTEx v10 expression data (updated Nov 2024)

@@ -50,6 +50,11 @@ logs/
 /data/gene_pathogenic_mechanism/metadata/
 /data/gene_pathogenic_mechanism/logs/
 /data/gofcards/build_work/
+/data/hpo/raw/
+/data/hpo/genes_to_phenotype.assertions.tsv.gz
+/data/mondo/*.obo
+/data/mondo/*.tsv.gz
+!/data/mondo/disease_scope_overrides.tsv
 
 # PBS / scheduler output stubs
 *.o[0-9]*

@@ -37,9 +37,9 @@ def test_hpo_frame_groups_gene_conditions_and_preserves_axis_evidence(
         + "GENE1\tOMIM:1\tHP:0003829\t2/10\tPCS\tPMID:1\tMONDO:1\t"
         "Condition one\tmendelian_non_neoplastic\tinclude\tMONDO_ancestor\t"
         "MONDO:v1;OMIM:1\tauto_supported\n"
-        + "GENE1\tORPHA:1\tHP:0003584\t1/10\tPCS\tPMID:2\tMONDO:1\t"
+        + "GENE1\tOMIM:1\tHP:0003584\t1/10\tPCS\tPMID:2\tMONDO:1\t"
         "Condition one\tmendelian_non_neoplastic\tinclude\tMONDO_ancestor\t"
-        "MONDO:v1;ORPHA:1\tauto_supported\n"
+        "MONDO:v1;OMIM:1\tmanually_confirmed\n"
         + "GENE1\tOMIM:1\tHP:0001250\t5/10\tPCS\tPMID:3\tMONDO:1\t"
         "Condition one\tmendelian_non_neoplastic\tinclude\tMONDO_ancestor\t"
         "MONDO:v1;OMIM:1\tauto_supported\n",
@@ -49,14 +49,13 @@ def test_hpo_frame_groups_gene_conditions_and_preserves_axis_evidence(
     genes = build_hpo_gene_condition_frame(hpo)
 
     gene = genes["GENE1"]
-    condition = gene["conditions"]["MONDO:1"]
+    condition = gene["conditions"]["OMIM:1"]
     assert gene["summary"]["condition_count"] == 1
     assert gene["summary"]["conditions_with_inheritance"] == 1
     assert gene["summary"]["conditions_with_penetrance"] == 1
     assert condition["identifiers"] == {
         "MONDO": ["MONDO:1"],
         "OMIM": ["OMIM:1"],
-        "ORPHA": ["ORPHA:1"],
     }
     assert condition["inheritance"]["modes"] == ["autosomal_dominant"]
     assert condition["penetrance"] == {
@@ -75,7 +74,11 @@ def test_hpo_frame_groups_gene_conditions_and_preserves_axis_evidence(
     assert condition["priva_scope"]["references"] == [
         "MONDO:v1",
         "OMIM:1",
-        "ORPHA:1",
+    ]
+    assert condition["priva_scope"]["review_status"] == "manually_confirmed"
+    assert condition["priva_scope"]["review_statuses"] == [
+        "auto_supported",
+        "manually_confirmed",
     ]
 
 
@@ -114,7 +117,7 @@ def test_mechanisms_attach_only_through_exact_condition_identifiers(
 
     stats = attach_condition_mechanisms(genes, mechanism)
 
-    lof = genes["GENE1"]["conditions"]["MONDO:1"][
+    lof = genes["GENE1"]["conditions"]["OMIM:1"][
         "pathogenic_mechanisms"
     ]["LOF"]
     assert lof["allelic_requirements"] == ["monoallelic_autosomal"]
@@ -217,13 +220,13 @@ def test_gofcards_variants_require_exact_clinvar_hpo_condition_identity(
 
     stats = attach_gofcards_variants(genes, gofcards, mechanism_json)
 
-    gof = genes["GENE1"]["conditions"]["MONDO:1"][
+    gof = genes["GENE1"]["conditions"]["OMIM:1"][
         "pathogenic_mechanisms"
     ]["GOF"]
     exact = gof["variants"]["GOFCARDS:VAR1"]
     assert exact["condition_link"] == {
         "status": "exact",
-        "condition_key": "MONDO:1",
+        "condition_key": "OMIM:1",
     }
     assert exact["clinvar_links"][0]["vcv_accession"] == "VCV0001"
     assert exact["match_keys"]["GRCh38"] == ["1|20|A|G"]

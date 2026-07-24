@@ -4,6 +4,7 @@ import logging
 import pysam
 import pickle
 import gzip
+import re
 
 from combine_annotations import convert_vcf_to_tab
 
@@ -246,7 +247,14 @@ def per_gene_stat(gene_df: pd.DataFrame):
         splicing_stat = analyze_splice_event(str(row["SpliceVault_top_events"]), spliceai_delta)
     
         # Identify putative NMD variants
-        vep_consq_lof = (("HC" in str(row["LoF"])) or ("OS" in str(row["LoF"]))) and any(csq in str(row["Consequence"]) for csq in ["stop_gained", "start_lost", "frameshift"]) and (not "escape" in str(row["NMD"]))
+        loftee_tokens = {
+            token.strip().upper()
+            for token in re.split(r"[&,;|]", str(row["LoF"] or ""))
+            if token.strip()
+        }
+        vep_consq_lof = bool({"HC", "OS"} & loftee_tokens) and (
+            "escape" not in str(row["NMD"])
+        )
         splic_donor_loss = float(row["SpliceAI_pred_DS_DL"]) > 0.5
         putative_nmd = vep_consq_lof or splic_donor_loss
         if putative_nmd:
@@ -333,4 +341,3 @@ if __name__ == "__main__":
 
     # This script needs to first annotate the updated GRCh38 ClinVar VCF with annotation_vcf.sh to generate the annotated vcf
     main_stat_variants(args.clinvar_anno_vcf, args.output_pickle, args.threads)
-

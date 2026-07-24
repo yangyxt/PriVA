@@ -237,17 +237,83 @@ def annotate_exact_gofcards_variants(df, row_mask=None, *, context=""):
     return df
 
 
-def _apply_exact_gofcards_lookup(df, needs_gof_lookup, is_exact_gof, *, context):
-    if not needs_gof_lookup.any() or "SYMBOL" not in df.columns:
-        return is_exact_gof
-    has_hgvsp = "HGVSp" in df.columns
-    has_genomic = {"chrom", "pos", "ref", "alt"}.issubset(df.columns)
-    if not has_hgvsp and not has_genomic:
-        return is_exact_gof
+# Criterion-time GoFCards fallback is deliberately disabled. Exact matching is
+# completed before the mechanism hub runs, and downstream code trusts the
+# resulting ``variant_effect`` value.
 
-    annotate_exact_gofcards_variants(df, needs_gof_lookup, context=context)
-    variant_gof_tag = df.get("variant_gof_tag", pd.Series("", index=df.index)).fillna("").astype(str)
-    return variant_gof_tag.str.upper().str.contains(r"(?:^|;)GOF(?:;|$)", regex=True)
+
+def _variant_mechanism_masks(
+    df: pd.DataFrame,
+) -> dict[str, pd.Series]:
+    """Return masks from the required variant-level mechanism contract.
+
+    There is intentionally no fallback to ``gene_mech_inher_history``, raw
+    HPO inheritance arrays, consequences, or GoFCards tags. The upstream hub
+    owns those interpretations and ACMG consumers use its final assertions.
+    """
+    required = {
+        "var_plausible_patho_mechs",
+        "variant_effect",
+        "variant_mechanism_applicable",
+        "variant_mechanism_uncertain",
+    }
+    missing = sorted(required - set(df.columns))
+    if missing:
+        raise KeyError(
+            "variant-level mechanism annotations are required; missing columns: "
+            + ", ".join(missing)
+        )
+
+    def text_series(column: str) -> pd.Series:
+        return df[column].fillna("").astype(str)
+
+    profile = text_series("var_plausible_patho_mechs")
+    applicable = text_series("variant_mechanism_applicable")
+    accepted = profile
+    has_profile = profile.str.strip().ne("")
+
+    rec_accepted = accepted.str.contains(r"(?:^|;)recessive(?:_[^;]+)?(?:;|$)", regex=True)
+    dom_accepted = accepted.str.contains(r"(?:^|;)dominant(?:_[^;]+)?(?:;|$)", regex=True)
+
+    def profile_mechanism(inheritance: str, mechanism: str) -> pd.Series:
+        return profile.str.contains(
+            rf"(?:^|;){inheritance}_{mechanism}(?:;|$)",
+            regex=True,
+        )
+
+    has_rec_lof_history = profile_mechanism("recessive", "LOF")
+    has_rec_gof_history = profile_mechanism("recessive", "GOF")
+    has_rec_dn_history = profile_mechanism("recessive", "DN")
+    has_rec_unresolved_history = profile.str.contains(r"(?:^|;)recessive(?:;|$)", regex=True)
+    has_dom_lof_history = profile_mechanism("dominant", "LOF")
+    has_dom_gof_history = profile_mechanism("dominant", "GOF")
+    has_dom_dn_history = profile_mechanism("dominant", "DN")
+    has_dom_unresolved_history = profile.str.contains(r"(?:^|;)dominant(?:;|$)", regex=True)
+
+    effect = text_series("variant_effect")
+    is_exact_gof = effect.eq("exact_known_GOF")
+    is_predicted_lof = effect.eq("predicted_LOF_high_confidence")
+    is_uncertain = effect.eq("uncertain")
+
+    return {
+        "modern_profile": has_profile,
+        "is_exact_gof": is_exact_gof.astype(bool),
+        "is_predicted_lof": is_predicted_lof.astype(bool),
+        "is_uncertain": is_uncertain.astype(bool),
+        "has_recessive_compatible": rec_accepted.astype(bool),
+        "has_dominant_compatible": dom_accepted.astype(bool),
+        "has_rec_lof_history": has_rec_lof_history.astype(bool),
+        "has_rec_gof_history": has_rec_gof_history.astype(bool),
+        "has_rec_dn_history": has_rec_dn_history.astype(bool),
+        "has_rec_unresolved_history": has_rec_unresolved_history.astype(bool),
+        "has_dom_lof_history": has_dom_lof_history.astype(bool),
+        "has_dom_gof_history": has_dom_gof_history.astype(bool),
+        "has_dom_dn_history": has_dom_dn_history.astype(bool),
+        "has_dom_unresolved_history": has_dom_unresolved_history.astype(bool),
+        "has_applicable_lof_assertion": applicable.str.contains(
+            r"(?:^|;)(?:LOF|(?:recessive|dominant)_LOF)(?:;|$)", regex=True
+        ).astype(bool),
+    }
 
 
 def coerce_pext_value(value):
@@ -292,7 +358,16 @@ def vep_consq_interpret_per_row(row: Dict) -> Tuple[bool, bool]:
     if not isinstance(consq, str):
         return False, False
 
-    # Skip splicing related consequences to leave them handled by SpliceAI and SpliceVault
+    # LOFTEE emits HC for conventional high-confidence pLoF calls and OS for
+    # predicted "other splice" loss-of-function calls in extended splice sites
+    # or at newly created donor sites. Both are high-confidence effect calls.
+    loftee_tokens = {
+        token.strip().upper()
+        for token in re.split(r"[&,;|]", str(loftee_result or ""))
+        if token.strip()
+    }
+    loftee_high_confidence = bool({"HC", "OS"} & loftee_tokens)
+
     lof_criteria = {
         'stop_gained',
         'start_lost',
@@ -311,10 +386,15 @@ def vep_consq_interpret_per_row(row: Dict) -> Tuple[bool, bool]:
         'stop_lost'  # Stop-loss causes protein extension → PM4
     }
 
-    is_lof = any(c in consq for c in lof_criteria) & (loftee_result != 'LC') & (nmd_escaping == False)
+    consequence_lof = any(c in consq for c in lof_criteria)
+    is_lof = loftee_high_confidence or (
+        consequence_lof
+        and "LC" not in loftee_tokens
+        and not nmd_escaping
+    )
 
     # For pure splicing related consequences, we trust SpliceAI and SpliceVault more than VEP
-    is_length_changing = is_lof or any(c in consq for c in length_changing_criteria) or any(c in consq for c in lof_criteria) or nmd_escaping
+    is_length_changing = is_lof or any(c in consq for c in length_changing_criteria) or consequence_lof or nmd_escaping
 
     return is_lof, is_length_changing
 
@@ -375,10 +455,15 @@ def summarize_clinvar_gene_pathogenicity(clinvar_gene_aa_dict: dict, high_confid
 
                 # Check if any variant is pathogenic with high confidence
                 for clnsig, revstat in zip(clnsig_list, revstat_list):
-                    if ('Pathogenic' in clnsig) and (high_confidence_status.get(revstat, 0) == 2):
-                        pathogenic_genes.add(ensg)
-                        break  # No need to check other entries for this gene
-                    if ('athogenic' in clnsig) and (high_confidence_status.get(revstat, 0) > 2):
+                    sig_tokens = {
+                        token.strip().lower()
+                        for token in re.split(r"[,/|;]", str(clnsig))
+                        if token.strip()
+                    }
+                    is_pathogenic = bool(
+                        {"pathogenic", "likely_pathogenic"} & sig_tokens
+                    )
+                    if is_pathogenic and high_confidence_status.get(revstat, 0) >= 2:
                         pathogenic_genes.add(ensg)
                         break  # No need to check other entries for this gene
                 if ensg in pathogenic_genes:
@@ -756,11 +841,8 @@ def truncate_fraction(df):
 
 
 def PVS1_criteria(df: pd.DataFrame,
-                  clinvar_gene_aa_dict: dict,
                   clinvar_patho_exon_af_stat: str,
                   interpro_entry_map_pkl: str,
-                  gene_to_am_score_map: dict,
-                  gene_dosage_sensitivity: str = None,
                   intolerant_domains: set = [],
                   tranx_exon_domain_map_pkl: str = None,
                   proband_gt_col: str = None,
@@ -773,12 +855,6 @@ def PVS1_criteria(df: pd.DataFrame,
     PVS1_supporting: 1
     not_applicable: 0
     '''
-    # Load the domains
-    clinvar_pathogenic_genes = summarize_clinvar_gene_pathogenicity(clinvar_gene_aa_dict)
-    clinvar_pathogenic = df['Gene'].isin(clinvar_pathogenic_genes)
-    logger.info(f"{clinvar_pathogenic.sum()} variants are having ClinVar pathogenic variants")
-    df["Gene_avg_AM_score"] = df['Gene'].map(gene_to_am_score_map)
-
     # NOTE:
     # PVS1 is a *variant-level* evidence category that depends on whether LoF is an established
     # disease mechanism for the gene/disease context, not on the proband's zygosity per se.
@@ -787,43 +863,18 @@ def PVS1_criteria(df: pd.DataFrame,
     # ``proband_gt_col`` is kept in the function signature for CLI/backward compatibility with
     # older PriVA calls; it is intentionally not used for PVS1 strength assignment.
 
-    lof_intol_metric = (df["LOEUF"].fillna(2) < 0.35) | (df["Gene_avg_AM_score"].fillna(0) > 0.7)
-    logger.info(f"For LOEUF < 0.35, {(df['LOEUF'].fillna(2) < 0.35).sum()} variants are located in a gene intolerant to LoF variants")
-    logger.info(f"For mean AM score > 0.7, {(df['Gene_avg_AM_score'].fillna(0) > 0.7).sum()} variants are located in a gene intolerant to LoF variants")
-
-    # ClinGen dosage sensitivity (haploinsufficiency) is an additional signal for whether LoF
-    # is a known pathogenic mechanism. We use the "Haploinsufficiency Score" from ClinGen:
-    # - 3: Sufficient evidence for dosage pathogenicity (haploinsufficient; typically AD LoF)
-    # - 30/40: Gene associated with autosomal recessive phenotype (LoF often relevant when biallelic)
-    clingen_hi_score = pd.Series([np.nan] * len(df), index=df.index)
-    if gene_dosage_sensitivity and os.path.exists(gene_dosage_sensitivity):
-        try:
-            clingen_dosage_df = pd.read_table(gene_dosage_sensitivity, low_memory=False).dropna(
-                subset=["#Gene Symbol", "Haploinsufficiency Score"]
-            )
-            clingen_dosage_map = dict(
-                zip(clingen_dosage_df["#Gene Symbol"], clingen_dosage_df["Haploinsufficiency Score"].astype(int))
-            )
-            clingen_hi_score = df["SYMBOL"].map(clingen_dosage_map)
-        except Exception as e:
-            logger.warning(f"Failed to load ClinGen dosage sensitivity file {gene_dosage_sensitivity}: {e}")
-
-    clingen_hi = clingen_hi_score == 3
-    clingen_ar = clingen_hi_score.isin([30, 40])
-    logger.info(f"ClinGen dosage: {(clingen_hi.fillna(False)).sum()} variants in haploinsufficient genes (HI=3)")
-    logger.info(f"ClinGen dosage: {(clingen_ar.fillna(False)).sum()} variants in autosomal recessive genes (HI=30/40)")
-
-    # Unified "LoF mechanism plausible/established" gate for PVS1 assignment
-    mech_history = df.get("gene_mech_inher_history", pd.Series("", index=df.index)).fillna("").astype(str)
-    hub_lof_mechanism = mech_history.str.contains(
-        r"(?:^|;)(?:LoF_recessive|dominant_HI|dominant_ambiguous)(?:;|$)",
-        regex=True,
-    )
+    # Gene-level fallback gates are deliberately disabled here. ClinVar,
+    # LOEUF, AlphaMissense, ClinGen, DDG2P, and HPO were already resolved by
+    # the upstream hub into variant-level applicability assertions.
+    # clinvar_pathogenic = ...
+    # lof_intol_metric = ...
+    # clingen_hi / clingen_ar = ...
+    mechanism_masks = _variant_mechanism_masks(df)
+    lof_mechanism = mechanism_masks["has_applicable_lof_assertion"]
     logger.info(
-        "PVS1 LoF mechanism gate: %s variants have hub-derived LoF-compatible gene history",
-        int(hub_lof_mechanism.sum()),
+        "PVS1 LoF mechanism gate: %s variants have an upstream applicable LOF assertion",
+        int(lof_mechanism.sum()),
     )
-    lof_mechanism = hub_lof_mechanism | clinvar_pathogenic | lof_intol_metric | clingen_hi | clingen_ar
 
     # Load the necessary dict file
     clinvar_patho_exon_af_dict = pickle.load(gzip.open(clinvar_patho_exon_af_stat)) if clinvar_patho_exon_af_stat.endswith(".gz") else pickle.load(open(clinvar_patho_exon_af_stat, 'rb'))
@@ -943,10 +994,7 @@ def PVS1_criteria(df: pd.DataFrame,
         # Per ClinGen SVI, start_lost should be PVS1_Moderate at most (not Very Strong)
         pvs1_criteria[df['Consequence'].str.contains("start_lost") & ~alt_start_losts & (pvs1_criteria < 2)] = 2
 
-    variant_gof_tag = df.get("variant_gof_tag", pd.Series("", index=df.index)).fillna("").astype(str)
-    exact_gof = variant_gof_tag.str.upper().str.contains(r"(?:^|;)GOF(?:;|$)", regex=True)
-    needs_gof_lookup = pd.Series(pvs1_criteria > 0, index=df.index) & ~exact_gof
-    exact_gof = _apply_exact_gofcards_lookup(df, needs_gof_lookup, exact_gof, context="PVS1")
+    exact_gof = mechanism_masks["is_exact_gof"]
     suppress_pvs1 = (pvs1_criteria > 0) & exact_gof.to_numpy()
     if suppress_pvs1.any():
         logger.info(
@@ -2396,6 +2444,12 @@ def PP3_BP4_criteria(df: pd.DataFrame, pvs1_criteria: np.ndarray = None, high_co
     five_utr_variant = df['Consequence'].str.contains('5_prime_UTR_variant').fillna(False)
     missense_variant = missense_variant.fillna(False)
     splice_variant = splice_variant.fillna(False)
+    loftee_high_confidence = df.get(
+        "LoF", pd.Series("", index=df.index)
+    ).fillna("").astype(str).str.contains(
+        r"(?:^|[&,;|])(?:HC|OS)(?:[&,;|]|$)", regex=True
+    )
+    loftee_splice_lof = splice_variant & loftee_high_confidence
 
     def _coerce_score_column(column_name: str, missing_default: float | None = None) -> pd.Series:
         raw_values = df[column_name]
@@ -2427,13 +2481,14 @@ def PP3_BP4_criteria(df: pd.DataFrame, pvs1_criteria: np.ndarray = None, high_co
     cadd_bp4_phred_cutoff = 15.0
     cadd_phred_low = cadd_phred.notna() & (cadd_phred < cadd_bp4_phred_cutoff)
     cadd_reg_phred_low = cadd_reg_phred.notna() & (cadd_reg_phred < cadd_bp4_phred_cutoff)
+    splice_computational_lof = df['splicing_lof'].fillna(False) | loftee_splice_lof
 
     # BP4: variant is reported benign
     pp3_criteria = ((primateai > 0.8) & missense_variant) | \
                     (cadd_phred_high & np.logical_not(splice_variant) & np.logical_not(missense_variant) & np.logical_not(five_utr_variant)) | \
                     (df['am_class'].fillna("").str.contains('pathogenic') & missense_variant) | \
                     (df['vep_consq_lof'] & np.logical_not(splice_variant) & np.logical_not(missense_variant) & np.logical_not(five_utr_variant)) | \
-                    (((df['splicing_lof'] | cadd_phred_high) & splice_variant) | (df['5UTR_lof'] & five_utr_variant))
+                    (((splice_computational_lof | cadd_phred_high) & splice_variant) | (df['5UTR_lof'] & five_utr_variant))
     clinvar_benign = df['CLNSIG'].fillna("").str.contains('enign') & (df['CLNREVSTAT'].map(high_confidence_status, na_action="ignore") >= 2)
     pp3_criteria = pp3_criteria & ~clinvar_benign
 
@@ -2446,7 +2501,9 @@ def PP3_BP4_criteria(df: pd.DataFrame, pvs1_criteria: np.ndarray = None, high_co
         logger.info(f"PP3 double-counting prevention: blocked {(pvs1_criteria > 0).sum()} variants with PVS1")
 
     missense_benign = (primateai < 0.8).fillna(True) & (am_pathogenicity < 0.564).fillna(True) & missense_variant
-    splice_benign = np.logical_not(df['splicing_lof'].fillna(False)) & splice_variant & cadd_phred_low
+    splice_benign = np.logical_not(
+        splice_computational_lof
+    ) & splice_variant & cadd_phred_low
     utr_benign = np.logical_not(df['5UTR_lof'].fillna(False)) & five_utr_variant
     other_benign = np.logical_not(df['vep_consq_lof'].fillna(False)) & cadd_phred_low & cadd_reg_phred_low & np.logical_not(splice_variant) & np.logical_not(missense_variant) & np.logical_not(five_utr_variant)
     bp4_criteria = missense_benign | splice_benign | utr_benign | other_benign
@@ -2483,45 +2540,37 @@ def PP5_BP6_criteria(df: pd.DataFrame, clinvar_patho, clinvar_benign) -> pd.Seri
 
 
 def BS1_criteria(df: pd.DataFrame,
-                 gene_to_am_score_map: dict = None,
                  expected_incidence: float = 0.0001,
-                 gene_dosage_sensitivity: str = "",
                  pm2_criteria: np.ndarray = None,
-                 threads: int = 10,
-                 recessive: np.ndarray = None,
-                 dominant: np.ndarray = None,
                  non_monogenic: np.ndarray = None,
                  non_mendelian: np.ndarray = None,
-                 haplo_insufficient: np.ndarray = None,
                  incomplete_penetrance: np.ndarray = None):
     '''
     BS1: allele frequency is greater than expected for the disorder.
 
-    This is mechanism-aware when ``gene_mech_inher_history`` is present. The
-    frequency model is selected from the gene's inheritance/mechanism history
-    and the query variant's plausible molecular state, rather than applying a
-    broad dominant/recessive gene label to every variant.
+    This is mechanism-aware through the required upstream variant-effect and
+    applicability fields. Missing variant-level fields are an error.
 
     Variant state:
-      NMD_LOF = NMD-triggering stop/frameshift not marked escaping or END_TRUNC.
+      predicted_LOF = LOFTEE HC/OS, NMD pLoF, or PriVA splice/UTR LOF.
       exact_GOF = variant-level exact GoFCards GOF match.
-      ambiguous = neither NMD_LOF nor exact_GOF.
+      uncertain = neither predicted_LOF nor exact_GOF.
 
     Dominant frequency model:
-      - dominant_ambiguous only: any variant state is compatible.
-      - dominant_HI only: NMD_LOF or ambiguous; exact_GOF is excluded.
-      - dominant_GOF only: exact_GOF only.
-      - dominant_DN only: ambiguous only; PriVA has no exact DN database.
-      - dominant_GOF + dominant_DN: exact_GOF or ambiguous; NMD_LOF excluded.
-      - dominant_HI + dominant_GOF/DN: any variant state can be interpreted
+      - dominant only: any variant state remains uncertain-compatible.
+      - dominant_LOF only: predicted LOF or uncertain; exact GOF is excluded.
+      - dominant_GOF only: exact GOF only.
+      - dominant_DN only: uncertain only; PriVA has no exact DN database.
+      - dominant_GOF + dominant_DN: exact GOF or uncertain; predicted LOF excluded.
+      - dominant_LOF + dominant_GOF/DN: any variant state can be interpreted
         under at least one dominant history.
-      - LoF_recessive plus any dominant history: do not use carrier AF for
+      - Any compatible biallelic requirement plus dominant history: do not use carrier AF for
         BS1, because heterozygous population observations may simply be
         recessive carriers. Use the recessive homozygous/hemizygous frequency
         model instead.
 
     Recessive frequency model:
-      - LoF_recessive uses homozygous/hemizygous population frequency, not
+      - A compatible biallelic requirement uses homozygous/hemizygous population frequency, not
         carrier allele count.
       - ClinVar gene-level pathogenic max-AF does not rescue AR carrier
         frequency into BS1; that branch is restricted to allele-frequency
@@ -2532,32 +2581,13 @@ def BS1_criteria(df: pd.DataFrame,
         penetrance rows.
       - final BS1 is removed when PM2 is assigned.
     '''
-    if any(
-        value is None
-        for value in (
-            recessive,
-            dominant,
-            non_monogenic,
-            non_mendelian,
-            haplo_insufficient,
-            incomplete_penetrance,
+    if any(value is None for value in (non_monogenic, non_mendelian, incomplete_penetrance)):
+        raise ValueError(
+            "non_monogenic, non_mendelian, and incomplete_penetrance are required"
         )
-    ):
-        if gene_to_am_score_map is None:
-            raise ValueError("gene_to_am_score_map is required when inheritance arrays are not supplied")
-        recessive, dominant, non_monogenic, non_mendelian, haplo_insufficient, incomplete_penetrance = identify_inheritance_mode(
-            df,
-            gene_to_am_score_map,
-            gene_dosage_sensitivity,
-            threads,
-        )
-    else:
-        recessive = np.asarray(recessive, dtype=bool)
-        dominant = np.asarray(dominant, dtype=bool)
-        non_monogenic = np.asarray(non_monogenic, dtype=bool)
-        non_mendelian = np.asarray(non_mendelian, dtype=bool)
-        haplo_insufficient = np.asarray(haplo_insufficient, dtype=bool)
-        incomplete_penetrance = np.asarray(incomplete_penetrance, dtype=bool)
+    non_monogenic = np.asarray(non_monogenic, dtype=bool)
+    non_mendelian = np.asarray(non_mendelian, dtype=bool)
+    incomplete_penetrance = np.asarray(incomplete_penetrance, dtype=bool)
 
     if pm2_criteria is None:
         pm2_criteria = np.zeros(len(df), dtype=int)
@@ -2569,11 +2599,8 @@ def BS1_criteria(df: pd.DataFrame,
     x_linked = df['chrom'] == "chrX"
     y_locus = df['chrom'] == "chrY"
 
-    recessive_series = pd.Series(recessive, index=df.index).astype(bool)
-    dominant_series = pd.Series(dominant, index=df.index).astype(bool)
     non_monogenic_series = pd.Series(non_monogenic, index=df.index).astype(bool)
     non_mendelian_series = pd.Series(non_mendelian, index=df.index).astype(bool)
-    haplo_series = pd.Series(haplo_insufficient, index=df.index).astype(bool)
     incomplete_penetrance_series = pd.Series(incomplete_penetrance, index=df.index).astype(bool)
 
     false_neg_rate, common_vars = control_false_neg_rate(df['gnomAD_joint_AF_max'], df['gnomAD_joint_AN_max'], af_threshold=expected_incidence, alpha=0.01)
@@ -2582,52 +2609,9 @@ def BS1_criteria(df: pd.DataFrame,
     max_af_larger_incidence = np.where(common_vars.isna(), df['gnomAD_joint_AF'] > expected_incidence, common_vars)
     logger.info(f"There are {max_af_larger_incidence.sum()} variants having their PAF greater than the expected incidence of the disease")
 
-    mech_history = _series_or_empty("gene_mech_inher_history")
-    missing_mech_history = mech_history.str.strip().eq("")
-    has_ar_lof = mech_history.str.contains(r"(?:^|;)LoF_recessive(?:;|$)", regex=True)
-    has_dom_ambiguous = mech_history.str.contains(r"(?:^|;)dominant_ambiguous(?:;|$)", regex=True)
-    has_dom_hi = mech_history.str.contains(r"(?:^|;)dominant_HI(?:;|$)", regex=True)
-    has_dom_gof = mech_history.str.contains(r"(?:^|;)dominant_GOF(?:;|$)", regex=True)
-    has_dom_dn = mech_history.str.contains(r"(?:^|;)dominant_DN(?:;|$)", regex=True)
-    has_ar_lof = has_ar_lof | (missing_mech_history & recessive_series)
-    has_dom_hi = has_dom_hi | (missing_mech_history & haplo_series)
-    has_dom_ambiguous = has_dom_ambiguous | (
-        missing_mech_history
-        & dominant_series
-        & ~haplo_series
-        & ~has_ar_lof
-    )
-    has_dom_gof_dn = has_dom_gof | has_dom_dn
-
-    consq = _series_or_empty("Consequence")
-    nmd = _series_or_empty("NMD")
-    lof_filter = _series_or_empty("LoF_filter")
-    is_nmd_lof = (
-        (consq.str.contains("stop_gained", regex=False) | consq.str.contains("frameshift", regex=False))
-        & ~nmd.str.contains("escaping", regex=False)
-        & ~lof_filter.str.contains("END_TRUNC", regex=False)
-    )
-
-    variant_gof_tag = _series_or_empty("variant_gof_tag")
-    is_exact_gof = variant_gof_tag.str.upper().str.contains(r"(?:^|;)GOF(?:;|$)", regex=True)
-    needs_gof_lookup = has_dom_gof & ~has_ar_lof & ~is_nmd_lof & ~is_exact_gof
-    is_exact_gof = _apply_exact_gofcards_lookup(df, needs_gof_lookup, is_exact_gof, context="BS1")
-
-    is_ambiguous_variant = ~is_nmd_lof & ~is_exact_gof
-    dominant_ambiguous_only = has_dom_ambiguous & ~has_dom_hi & ~has_dom_gof_dn & ~has_ar_lof
-    dominant_hi_only = has_dom_hi & ~has_dom_ambiguous & ~has_dom_gof_dn & ~has_ar_lof
-    dominant_hi_with_gof_dn = has_dom_hi & has_dom_gof_dn & ~has_ar_lof
-    dominant_gof_only = has_dom_gof & ~has_dom_dn & ~has_dom_hi & ~has_dom_ambiguous & ~has_ar_lof
-    dominant_dn_only = has_dom_dn & ~has_dom_gof & ~has_dom_hi & ~has_dom_ambiguous & ~has_ar_lof
-    dominant_gof_dn_only = has_dom_gof & has_dom_dn & ~has_dom_hi & ~has_dom_ambiguous & ~has_ar_lof
-    dominant_frequency_compatible = (
-        dominant_ambiguous_only
-        | (dominant_hi_only & ~is_exact_gof)
-        | dominant_hi_with_gof_dn
-        | (dominant_gof_only & is_exact_gof & ~is_nmd_lof)
-        | (dominant_dn_only & is_ambiguous_variant)
-        | (dominant_gof_dn_only & ~is_nmd_lof)
-    )
+    mechanism_masks = _variant_mechanism_masks(df)
+    has_recessive_requirement = mechanism_masks["has_recessive_compatible"]
+    dominant_frequency_compatible = mechanism_masks["has_dominant_compatible"]
 
     valid_model = (
         np.logical_not(non_monogenic_series)
@@ -2643,8 +2627,8 @@ def BS1_criteria(df: pd.DataFrame,
 
     # Recessive BS1 uses homozygous/hemizygous frequency, not population carrier
     # count, because heterozygous carriers are expected for AR LoF disease.
-    autosomal_recessive = autosomal & has_ar_lof & (max_ind_incidence > expected_incidence) & valid_model
-    x_linked_recessive = x_linked & has_ar_lof & ((df['gnomAD_nhomalt_XX'] + df['gnomAD_nhomalt_XY'])/(df['gnomAD_joint_AN']/2) > expected_incidence) & valid_model
+    autosomal_recessive = autosomal & has_recessive_requirement & (max_ind_incidence > expected_incidence) & valid_model
+    x_linked_recessive = x_linked & has_recessive_requirement & ((df['gnomAD_nhomalt_XX'] + df['gnomAD_nhomalt_XY'])/(df['gnomAD_joint_AN']/2) > expected_incidence) & valid_model
     y_linked = y_locus & max_af_larger_incidence & valid_model
     greater_than_disease_incidence = autosomal_dominant | autosomal_recessive | x_linked_recessive | x_linked_dominant | y_linked
     logger.info(f"There are {greater_than_disease_incidence.sum()} variants having their PAF greater than the expected incidence of the disease")
@@ -2661,7 +2645,7 @@ def BS1_criteria(df: pd.DataFrame,
     bs1_criteria = bs1_criteria & (pm2_criteria == 0)
     bs1_array = np.zeros(len(df), dtype=int)
     bs1_array[bs1_criteria] = 3
-    return bs1_array, recessive, dominant, non_monogenic, non_mendelian, haplo_insufficient, incomplete_penetrance
+    return bs1_array
 
 
 
@@ -2900,8 +2884,6 @@ def identify_inheritance_mode(df: pd.DataFrame,
 
 
 def BS2_criteria(df: pd.DataFrame,
-                 recessive: np.ndarray,
-                 dominant: np.ndarray,
                  non_monogenic: np.ndarray,
                  non_mendelian: np.ndarray,
                  incomplete_penetrance: np.ndarray,
@@ -2912,9 +2894,8 @@ def BS2_criteria(df: pd.DataFrame,
     strength encoding:
       0 = no BS2, 3 = BS2.
 
-    The decision is mechanism-aware and uses ``gene_mech_inher_history`` when
-    available. That column is generated by ``annotate_gene_mechanism_categories``
-    before BS2 is assigned in the normal ACMG path.
+    The decision requires the upstream variant-effect and mechanism-
+    applicability fields. There is no legacy mechanism fallback.
 
     Global gates:
       - no BS2 for non-monogenic/polygenic, non-Mendelian, incomplete-
@@ -2932,12 +2913,12 @@ def BS2_criteria(df: pd.DataFrame,
 
     BS2 decision matrix:
       Variant state:
-        NMD_LOF = NMD-triggering stop/frameshift not marked escaping or END_TRUNC.
+        predicted_LOF = LOFTEE HC/OS, NMD pLoF, or PriVA splice/UTR LOF.
         exact_GOF = variant-level exact GoFCards GOF match.
-        ambiguous = neither NMD_LOF nor exact_GOF.
+        uncertain = neither predicted_LOF nor exact_GOF.
 
       Important DN limitation:
-        dominant_DN is currently gene-level history only. PriVA has no
+        dominant_DN is currently curated condition history only. PriVA has no
         variant-level DN database, so there is no exact_DN variant state. DN
         history is treated as compatible with ambiguous variants only; NMD_LOF
         and exact_GOF are not treated as DN-compatible.
@@ -2947,14 +2928,14 @@ def BS2_criteria(df: pd.DataFrame,
 
       mechanism profile                   carrier NMD  carrier GOF  carrier amb  hom NMD  hom GOF  hom amb
       no usable history                             0            0            0        0        0        0
-      LoF_recessive only                            0            0            0        3        3        3
-      dominant_ambiguous only                       3            3            3        3        3        3
-      dominant_HI only                              3            0            3        3        0        3
+      recessive only                                0            0            0        3        3        3
+      dominant only                                 3            3            3        3        3        3
+      dominant_LOF only                             3            0            3        3        0        3
       dominant_GOF only                             0            3            0        0        3        0
       dominant_DN only                              0            0            3        0        0        3
       dominant_GOF + dominant_DN                    0            3            3        0        3        3
-      dominant_HI + dominant_GOF/DN                 3            3            3        3        3        3
-      LoF_recessive + any dominant history          0            0            0        3        3        3
+      dominant_LOF + dominant_GOF/DN                3            3            3        3        3        3
+      recessive + any dominant history              0            0            0        3        3        3
 
       Consequences:
         - GOF_only_NMD_control_AC and DN_only_NMD_control_AC are 0.
@@ -2962,12 +2943,12 @@ def BS2_criteria(df: pd.DataFrame,
         - DN_only_ambiguous_control_AC is 3.
         - DN-only ambiguous carrier/hom evidence is BS2-compatible; NMD_LOF is
           not DN-compatible, and exact_GOF is not treated as DN evidence.
-        - dominant_ambiguous only means dominant inheritance without a curated
-          HI/GOF/DN mechanism and without LoF_recessive; healthy carrier or
+        - dominant only means dominant inheritance without a curated
+          LOF/GOF/DN mechanism and without recessive history; healthy carrier or
           hom/hemi evidence is BS2-compatible regardless of query consequence.
-        - HI-only healthy carriers are BS2 unless the exact variant is already
+        - dominant_LOF healthy carriers are BS2 unless the exact variant is already
           ascertained as GOF.
-        - If LoF_recessive is present, carrier-only evidence is not BS2 even
+        - If recessive history is present, carrier-only evidence is not BS2 even
           when dominant history is also present; hom/hemi evidence remains BS2.
     '''
     def _series_or_empty(column: str) -> pd.Series:
@@ -3004,36 +2985,9 @@ def BS2_criteria(df: pd.DataFrame,
         & not_late_onsets
     )
 
-    mech_history = _series_or_empty("gene_mech_inher_history")
-    missing_mech_history = mech_history.str.strip().eq("")
-    recessive_series = pd.Series(recessive, index=df.index).astype(bool)
-    dominant_series = pd.Series(dominant, index=df.index).astype(bool)
-    has_ar_lof = mech_history.str.contains(r"(?:^|;)LoF_recessive(?:;|$)", regex=True)
-    has_dom_ambiguous = mech_history.str.contains(r"(?:^|;)dominant_ambiguous(?:;|$)", regex=True)
-    has_dom_hi = mech_history.str.contains(r"(?:^|;)dominant_HI(?:;|$)", regex=True)
-    has_dom_gof = mech_history.str.contains(r"(?:^|;)dominant_GOF(?:;|$)", regex=True)
-    has_dom_dn = mech_history.str.contains(r"(?:^|;)dominant_DN(?:;|$)", regex=True)
-    has_dom_gof_dn = has_dom_gof | has_dom_dn
-    has_ar_lof = has_ar_lof | (missing_mech_history & recessive_series)
-    has_dom_ambiguous = has_dom_ambiguous | (
-        missing_mech_history
-        & dominant_series
-        & ~has_ar_lof
-    )
-
-    consq = _series_or_empty("Consequence")
-    nmd = _series_or_empty("NMD")
-    lof_filter = _series_or_empty("LoF_filter")
-    is_nmd_lof = (
-        (consq.str.contains("stop_gained", regex=False) | consq.str.contains("frameshift", regex=False))
-        & ~nmd.str.contains("escaping", regex=False)
-        & ~lof_filter.str.contains("END_TRUNC", regex=False)
-    )
-
-    variant_gof_tag = _series_or_empty("variant_gof_tag")
-    is_exact_gof = variant_gof_tag.str.upper().str.contains(r"(?:^|;)GOF(?:;|$)", regex=True)
-    needs_gof_lookup = has_dom_gof & ~has_ar_lof & ~is_nmd_lof & ~is_exact_gof
-    is_exact_gof = _apply_exact_gofcards_lookup(df, needs_gof_lookup, is_exact_gof, context="BS2")
+    mechanism_masks = _variant_mechanism_masks(df)
+    has_recessive_requirement = mechanism_masks["has_recessive_compatible"]
+    dominant_mechanism_compatible = mechanism_masks["has_dominant_compatible"]
 
     gnomad_ac = (_numeric_column("gnomAD_joint_AF") * _numeric_column("gnomAD_joint_AN"))
     gnomad_hom_hemi = _numeric_column("gnomAD_nhomalt_XX") + _numeric_column("gnomAD_nhomalt_XY")
@@ -3054,28 +3008,12 @@ def BS2_criteria(df: pd.DataFrame,
         ((gnomad_ac > 10) | control_ac_observed | y_allele_observed)
         | (complete_penetrance & ((gnomad_ac > 3) | y_allele_observed))
     )
-    is_ambiguous_variant = ~is_nmd_lof & ~is_exact_gof
-    dominant_ambiguous_only = has_dom_ambiguous & ~has_dom_hi & ~has_dom_gof_dn & ~has_ar_lof
-    dominant_hi_only = has_dom_hi & ~has_dom_ambiguous & ~has_dom_gof_dn & ~has_ar_lof
-    dominant_hi_with_gof_dn = has_dom_hi & has_dom_gof_dn & ~has_ar_lof
-    dominant_gof_only = has_dom_gof & ~has_dom_dn & ~has_dom_hi & ~has_dom_ambiguous & ~has_ar_lof
-    dominant_dn_only = has_dom_dn & ~has_dom_gof & ~has_dom_hi & ~has_dom_ambiguous & ~has_ar_lof
-    dominant_gof_dn_only = has_dom_gof & has_dom_dn & ~has_dom_hi & ~has_dom_ambiguous & ~has_ar_lof
-    dominant_mechanism_compatible = (
-        dominant_ambiguous_only
-        | (dominant_hi_only & ~is_exact_gof)
-        | dominant_hi_with_gof_dn
-        | (dominant_gof_only & is_exact_gof & ~is_nmd_lof)
-        | (dominant_dn_only & is_ambiguous_variant)
-        | (dominant_gof_dn_only & ~is_nmd_lof)
-    )
-
     bs2_standard = baseline_eligible & (
-        (has_ar_lof & hom_hemi_evidence)
+        (has_recessive_requirement & hom_hemi_evidence)
         | (dominant_mechanism_compatible & (carrier_evidence | hom_hemi_evidence))
     )
     bs2_complete_penetrance = complete_eligible & (
-        (has_ar_lof & hom_hemi_evidence)
+        (has_recessive_requirement & hom_hemi_evidence)
         | (dominant_mechanism_compatible & (carrier_evidence | hom_hemi_evidence))
     )
     bs2_criteria = bs2_standard | bs2_complete_penetrance
@@ -3088,12 +3026,9 @@ def BS2_criteria(df: pd.DataFrame,
 
 
 def BS4_criteria(df: pd.DataFrame, ped_df: pd.DataFrame, fam_name: str,
-                 recessive: np.ndarray,
-                 dominant: np.ndarray,
                  non_monogenic: np.ndarray,
                  non_mendelian: np.ndarray,
-                 incomplete_penetrance: np.ndarray,
-                 haplo_insufficient: np.ndarray = None) -> pd.Series:
+                 incomplete_penetrance: np.ndarray) -> pd.Series:
     # BS4: lack of segregation / genotype incompatibility within the submitted
     # family. Output keeps the existing PriVA strength encoding:
     #   0 = no BS4, 1 = BS4_Supporting, 3 = BS4.
@@ -3102,24 +3037,23 @@ def BS4_criteria(df: pd.DataFrame, ped_df: pd.DataFrame, fam_name: str,
     # for non-monogenic/polygenic, non-Mendelian, or incomplete-penetrance
     # rows, because genotype contradictions are not interpretable there.
     #
+    # Recessive and dominant compatibility come only from the upstream compact
+    # variant-level assertions.
+    #
     # Inputs per variant:
     #   patient_GTs = all affected family members with callable GT.
     #   control_GTs = all unaffected family members with callable GT.
-    #   has_AR_LOF = gene_mech_inher_history contains LoF_recessive.
-    #   has_dom_ambiguous = contains dominant_ambiguous.
-    #   has_dom_HI = gene_mech_inher_history contains dominant_HI.
-    #   has_dom_GOF / has_dom_DN = contains dominant_GOF / dominant_DN.
-    #   is_NMD_LOF = NMD-triggering definite LoF truncating variant.
-    #   is_exact_GOF = exact GoFCards gene + HGVSp match.
-    #   is_ambiguous_variant = neither is_NMD_LOF nor is_exact_GOF.
+    #   has_recessive = accepted assertion starts with recessive.
+    #   has_dominant = accepted assertion starts with dominant.
+    #   is_predicted_LOF / is_exact_GOF come from variant_effect.
     #
     # Variant compatibility under dominant-only history:
-    #   dominant_ambiguous only -> any variant state can be dominant-compatible.
-    #   dominant_HI only        -> NMD_LOF or ambiguous; exact_GOF is excluded.
+    #   dominant only           -> any variant state remains uncertain-compatible.
+    #   dominant_LOF only       -> predicted LOF or uncertain; exact GOF excluded.
     #   dominant_GOF only       -> exact_GOF only.
     #   dominant_DN only        -> ambiguous only; PriVA has no exact DN DB.
     #   dominant_GOF + DN       -> exact_GOF or ambiguous; NMD_LOF excluded.
-    #   dominant_HI + GOF/DN    -> any variant state can be interpreted under
+    #   dominant_LOF + GOF/DN   -> any variant state can be interpreted under
     #                              at least one dominant history.
     #
     # Sex-chromosome variants use the same tree after sex-aware allele-state
@@ -3130,19 +3064,19 @@ def BS4_criteria(df: pd.DataFrame, ped_df: pd.DataFrame, fam_name: str,
     # Patient-patient comparison:
     #   1. hom patient vs WT patient -> BS4.
     #   2. hom patient vs het patient:
-    #      - LoF_recessive only -> BS4_Supporting.
-    #      - LoF_recessive + dominant_GOF/DN + NMD_LOF, with no dominant_HI or
-    #        dominant_ambiguous history -> BS4_Supporting. The heterozygous
+    #      - recessive only -> BS4_Supporting.
+    #      - recessive + dominant_GOF/DN + predicted LOF, with no dominant_LOF
+    #        or unresolved dominant history -> BS4_Supporting. The heterozygous
     #        affected genotype is incompatible with AR, and the NMD_LOF query
     #        variant is not compatible with GOF/DN.
-    #      - LoF_recessive + dominant_GOF/DN + ambiguous -> no BS4; ambiguity
+    #      - recessive + dominant_GOF/DN + uncertain -> no BS4; uncertainty
     #        cannot rule out a dominant DN/GOF-compatible mechanism.
-    #      - LoF_recessive + dominant_HI or dominant_ambiguous -> no BS4.
+    #      - recessive + dominant_LOF or unresolved dominant -> no BS4.
     #      - dominant-only history -> no BS4, because both affected individuals
     #        carry ALT and dominant disease only requires one ALT allele.
     #   3. het patient vs WT patient:
-    #      - no LoF_recessive + dominant-compatible variant -> BS4.
-    #      - LoF_recessive present -> no BS4, because the heterozygous affected
+    #      - no recessive history + dominant-compatible variant -> BS4.
+    #      - recessive history present -> no BS4, because the heterozygous affected
     #        genotype may reflect a second allele not represented by this row or
     #        a dominant-compatible history.
     #   4. het patient vs het patient -> no BS4.
@@ -3150,20 +3084,17 @@ def BS4_criteria(df: pd.DataFrame, ped_df: pd.DataFrame, fam_name: str,
     # Patient-control comparison:
     #   5. hom patient vs WT control -> no BS4.
     #   6. hom patient vs het control:
-    #      - LoF_recessive present -> no BS4; a healthy heterozygous carrier
+    #      - recessive history present -> no BS4; a healthy heterozygous carrier
     #        is segregation-compatible for a recessive LoF model.
-    #      - no LoF_recessive + dominant-compatible variant -> BS4_Supporting.
+    #      - no recessive history + dominant-compatible variant -> BS4_Supporting.
     #   7. carrier patient vs hom/hemi control -> BS4.
     #   8. het patient vs WT control -> no BS4.
     #      Unaffected WT relatives are segregation-compatible for a dominant
     #      heterozygous disease model and are not contradictory for AR logic.
     #   9. het patient vs het control:
-    #      - LoF_recessive present -> no BS4, even when dominant history also
+    #      - recessive history present -> no BS4, even when dominant history also
     #        exists, because a healthy heterozygous carrier can fit the AR model.
-    #      - no LoF_recessive + dominant-compatible variant -> BS4_Supporting.
-    if haplo_insufficient is None:
-        haplo_insufficient = np.array([False] * len(df))
-
+    #      - no recessive history + dominant-compatible variant -> BS4_Supporting.
     fam_ped_df = ped_df.loc[ped_df['#FamilyID'] == fam_name, :].copy()
     if fam_ped_df.empty:
         bs4_array = np.zeros(len(df), dtype=int)
@@ -3219,60 +3150,26 @@ def BS4_criteria(df: pd.DataFrame, ped_df: pd.DataFrame, fam_name: str,
     y_linked = chrom.str.contains("Y", regex=False)
     mendelian_locus = autosomal | x_linked | y_linked
 
-    mech_history = _series_or_empty("gene_mech_inher_history")
-    has_ar_lof = mech_history.str.contains(r"(?:^|;)LoF_recessive(?:;|$)", regex=True)
-    has_dom_ambiguous = mech_history.str.contains(r"(?:^|;)dominant_ambiguous(?:;|$)", regex=True)
-    has_dom_hi = mech_history.str.contains(r"(?:^|;)dominant_HI(?:;|$)", regex=True)
-    has_dom_gof = mech_history.str.contains(r"(?:^|;)dominant_GOF(?:;|$)", regex=True)
-    has_dom_dn = mech_history.str.contains(r"(?:^|;)dominant_DN(?:;|$)", regex=True)
+    mechanism_masks = _variant_mechanism_masks(df)
 
-    missing_mech_history = mech_history.str.strip().eq("")
-    dominant_series = pd.Series(dominant, index=df.index).astype(bool)
-    haplo_series = pd.Series(haplo_insufficient, index=df.index).astype(bool)
-    has_ar_lof = has_ar_lof | (missing_mech_history & pd.Series(recessive, index=df.index).astype(bool))
-    has_dom_hi = has_dom_hi | (missing_mech_history & haplo_series)
-    has_dom_ambiguous = has_dom_ambiguous | (
-        missing_mech_history
-        & dominant_series
-        & ~haplo_series
-        & ~has_ar_lof
+    has_recessive_requirement = mechanism_masks["has_recessive_compatible"]
+    has_any_dominant_history = (
+        mechanism_masks["has_dom_lof_history"]
+        | mechanism_masks["has_dom_gof_history"]
+        | mechanism_masks["has_dom_dn_history"]
+        | mechanism_masks["has_dom_unresolved_history"]
     )
-
-    has_dom_gof_dn = has_dom_gof | has_dom_dn
-    has_any_dominant = has_dom_ambiguous | has_dom_hi | has_dom_gof_dn
-    ar_only = has_ar_lof & ~has_any_dominant
+    ar_only = has_recessive_requirement & ~has_any_dominant_history
     ar_plus_gof_dn_nmd_only = (
-        has_ar_lof
-        & has_dom_gof_dn
-        & ~has_dom_hi
-        & ~has_dom_ambiguous
+        has_recessive_requirement
+        & (mechanism_masks["has_dom_gof_history"] | mechanism_masks["has_dom_dn_history"])
+        & ~mechanism_masks["has_dom_lof_history"]
+        & ~mechanism_masks["has_dom_unresolved_history"]
     )
-
-    consq = _series_or_empty("Consequence")
-    nmd = _series_or_empty("NMD")
-    lof_filter = _series_or_empty("LoF_filter")
-    is_nmd_lof = (
-        (consq.str.contains("stop_gained", regex=False) | consq.str.contains("frameshift", regex=False))
-        & ~nmd.str.contains("escaping", regex=False)
-        & ~lof_filter.str.contains("END_TRUNC", regex=False)
-    )
-
-    variant_gof_tag = _series_or_empty("variant_gof_tag")
-    is_exact_gof = variant_gof_tag.str.upper().str.contains(r"(?:^|;)GOF(?:;|$)", regex=True)
-    needs_gof_lookup = has_dom_gof & ~has_ar_lof & ~is_nmd_lof & ~is_exact_gof
-    is_exact_gof = _apply_exact_gofcards_lookup(df, needs_gof_lookup, is_exact_gof, context="BS4")
-    is_ambiguous_variant = ~is_nmd_lof & ~is_exact_gof
-    dominant_ambiguous_no_ar = has_dom_ambiguous & ~has_ar_lof
-    dominant_hi_only_no_ar = has_dom_hi & ~has_dom_ambiguous & ~has_dom_gof_dn & ~has_ar_lof
-    dominant_hi_combo_no_ar = has_dom_hi & (has_dom_ambiguous | has_dom_gof_dn) & ~has_ar_lof
-    dominant_gof_no_ar = has_dom_gof & ~has_dom_hi & ~has_dom_ambiguous & ~has_ar_lof
-    dominant_dn_no_ar = has_dom_dn & ~has_dom_hi & ~has_dom_ambiguous & ~has_ar_lof
+    is_nmd_lof = mechanism_masks["is_predicted_lof"]
     dominant_variant_compatible_no_ar = (
-        dominant_ambiguous_no_ar
-        | dominant_hi_combo_no_ar
-        | (dominant_hi_only_no_ar & ~is_exact_gof)
-        | (dominant_gof_no_ar & is_exact_gof & ~is_nmd_lof)
-        | (dominant_dn_no_ar & is_ambiguous_variant)
+        mechanism_masks["has_dominant_compatible"]
+        & ~has_recessive_requirement
     )
 
     patient_alt_counts = {
@@ -4006,8 +3903,6 @@ def compute_control_common(df: pd.DataFrame, proband: str,
 def sort_and_rank_variants(df: pd.DataFrame,
                            ped_df: pd.DataFrame,
                            fam_name: str,
-                           gene_to_am_score_map: dict,
-                           gene_dosage_sensitivity: str = "",
                            pext_tissues: str = "",
                            pext_low_expression_cutoff: float = 0.1,
                            pext_penalty_floor: float = 0.8,
@@ -4047,88 +3942,23 @@ def sort_and_rank_variants(df: pd.DataFrame,
     # ---------------------------------------------------------------------
     # Zygosity / inheritance / mechanism compatibility penalty.
     #
-    # This was historically named a "haplo_sufficient" penalty, but the actual
-    # ranking intent is narrower: down-weight a single-allele, LoF-like proband
-    # call when the gene history does not support heterozygous LoF as a disease
-    # mechanism. The hub-derived gene_mech_inher_history is authoritative when
-    # available. ClinGen/LOEUF/AM is retained only as a fallback for legacy rows
-    # that lack hub mechanism categories.
+    # Down-weight a single-allele predicted-LOF call when the upstream hub does
+    # not provide a dominant-compatible assertion. No raw annotation or
+    # gene-level fallback is allowed at this stage.
     # ---------------------------------------------------------------------
-
-    # LOEUF-based signal (lower LOEUF => more LoF-intolerant)
-    loeuf_hi = (pd.to_numeric(df.loc[:, "LOEUF"], errors="coerce") <= 0.35).fillna(False)
-
-    # Gene mean AM-based signal (higher mean AM => more constrained/intolerant)
-    gene_mean_am = pd.to_numeric(df.loc[:, "Gene"].map(gene_to_am_score_map), errors="coerce")
-    am_hi = (gene_mean_am >= 0.564).fillna(False)
-
-    # ClinGen haploinsufficiency (HI score == 3) and AR signal (HI score == 30/40)
-    clingen_hi = pd.Series([False] * len(df), index=df.index)
-    clingen_ar = pd.Series([False] * len(df), index=df.index)
-    if gene_dosage_sensitivity and os.path.exists(gene_dosage_sensitivity):
-        try:
-            clingen_dosage_df = pd.read_table(gene_dosage_sensitivity, low_memory=False).dropna(
-                subset=["#Gene Symbol", "Haploinsufficiency Score"]
-            )
-            clingen_dosage_map = dict(
-                zip(clingen_dosage_df["#Gene Symbol"], clingen_dosage_df["Haploinsufficiency Score"].astype(int))
-            )
-            hi_score = df["SYMBOL"].map(clingen_dosage_map)
-            clingen_hi = hi_score.eq(3).fillna(False)
-            clingen_ar = hi_score.isin([30, 40]).fillna(False)
-        except Exception as e:
-            logger.warning(f"Failed to load ClinGen dosage sensitivity file {gene_dosage_sensitivity}: {e}")
-    else:
-        if gene_dosage_sensitivity:
-            logger.warning(f"ClinGen dosage sensitivity file not found: {gene_dosage_sensitivity}")
-
-    fallback_heterozygous_lof_compatible = (clingen_hi | loeuf_hi | am_hi) & ~clingen_ar
-
-    def _bool_col(column: str) -> pd.Series:
-        if column not in df.columns:
-            return pd.Series(False, index=df.index)
-        values = df[column]
-        if pd.api.types.is_bool_dtype(values):
-            return values.fillna(False).astype(bool)
-        numeric = pd.to_numeric(values, errors="coerce")
-        text = values.fillna("").astype(str).str.strip().str.lower()
-        return numeric.fillna(0).ne(0) | text.isin({"true", "t", "yes", "y"})
-
-    consq = df.get("Consequence", pd.Series("", index=df.index)).fillna("").astype(str)
-    nmd = df.get("NMD", pd.Series("", index=df.index)).fillna("").astype(str)
-    lof_filter = df.get("LoF_filter", pd.Series("", index=df.index)).fillna("").astype(str)
-    is_nmd_lof = (
-        (consq.str.contains("stop_gained", regex=False) | consq.str.contains("frameshift", regex=False))
-        & ~nmd.str.contains("escaping", regex=False)
-        & ~lof_filter.str.contains("END_TRUNC", regex=False)
+    mechanism_masks = _variant_mechanism_masks(df)
+    has_dom_lof_compatible = mechanism_masks["has_dominant_compatible"]
+    exact_gof = mechanism_masks["is_exact_gof"]
+    asserted_lof_effect = mechanism_masks["is_predicted_lof"]
+    dn_without_hi_or_ambiguous = (
+        mechanism_masks["has_dom_dn_history"]
+        & ~mechanism_masks["has_dom_lof_history"]
+        & ~mechanism_masks["has_dom_unresolved_history"]
     )
-    acmg_criteria = df.get("ACMG_criteria", pd.Series("", index=df.index)).fillna("").astype(str)
-    pvs1_assigned = acmg_criteria.str.contains(r"(?:^|;)PVS1(?:_|;|$)", regex=True)
-    asserted_lof_effect = (
-        _bool_col("vep_consq_lof")
-        | _bool_col("splicing_lof")
-        | _bool_col("5UTR_lof")
-        | pvs1_assigned
-        | is_nmd_lof
-    )
-
-    mech_history = df.get("gene_mech_inher_history", pd.Series("", index=df.index)).fillna("").astype(str)
-    has_mech_history = mech_history.str.strip().ne("")
-    has_dom_hi = mech_history.str.contains(r"(?:^|;)dominant_HI(?:;|$)", regex=True)
-    has_dom_ambiguous = mech_history.str.contains(r"(?:^|;)dominant_ambiguous(?:;|$)", regex=True)
-    has_dom_dn = mech_history.str.contains(r"(?:^|;)dominant_DN(?:;|$)", regex=True)
-    has_dom_lof_compatible = has_dom_hi | has_dom_ambiguous
-    variant_gof_tag = df.get("variant_gof_tag", pd.Series("", index=df.index)).fillna("").astype(str)
-    exact_gof = variant_gof_tag.str.upper().str.contains(r"(?:^|;)GOF(?:;|$)", regex=True)
-    dn_without_hi_or_ambiguous = has_dom_dn & ~has_dom_hi & ~has_dom_ambiguous
-    lof_effect_for_penalty = np.where(dn_without_hi_or_ambiguous, is_nmd_lof, asserted_lof_effect)
     heterozygous_lof_incompatible = (
-        lof_effect_for_penalty
+        asserted_lof_effect
         & ~exact_gof
-        & (
-            (has_mech_history & ~has_dom_lof_compatible)
-            | (~has_mech_history & ~fallback_heterozygous_lof_compatible)
-        )
+        & ~has_dom_lof_compatible
     )
 
     high_acmg_lof = df["ACMG_quant_score"] > 0.89
@@ -4137,11 +3967,8 @@ def sort_and_rank_variants(df: pd.DataFrame,
 
     logger.info(
         "Zygosity/inheritance/mechanism compatibility signals for ranking: "
-        f"ClinGen_HI3={clingen_hi.sum()}, ClinGen_AR30/40={clingen_ar.sum()}, "
-        f"LOEUF<=0.35={loeuf_hi.sum()}, GeneMeanAM>=0.564={am_hi.sum()}, "
-        f"hub_history_rows={has_mech_history.sum()}, "
+        f"hub_profile_rows={mechanism_masks['modern_profile'].sum()}, "
         f"asserted_lof_effect={pd.Series(asserted_lof_effect, index=df.index).sum()}, "
-        f"nmd_lof={is_nmd_lof.sum()}, "
         f"dominant_DN_without_HI_or_ambiguous={dn_without_hi_or_ambiguous.sum()}, "
         f"heterozygous_lof_incompatible={heterozygous_lof_incompatible.sum()}, "
         f"compatibility_penalty_rows={compatibility_penalty_rows.sum()}"
@@ -4375,6 +4202,8 @@ def ACMG_criteria_assign(anno_table: str,
 
     logger.info(f"gene_to_am_score_map created, {len(gene_to_am_score_map)} genes are having the AM score")
     logger.info(f"clinvar_aa_gene_map created by merging {len(clinvar_aa_dict)} transcripts into {len(clinvar_aa_gene_map)} genes")
+    clinvar_pathogenic_genes = summarize_clinvar_gene_pathogenicity(clinvar_aa_gene_map)
+    anno_df["Gene_avg_AM_score"] = anno_df["Gene"].map(gene_to_am_score_map)
 
     # Establish the variant ID column
     anno_df["variant_id"] = anno_df["chrom"] + ":" + anno_df["pos"].astype(str) + ":" + anno_df["ref"] + "-" + anno_df["alt"]
@@ -4391,9 +4220,9 @@ def ACMG_criteria_assign(anno_table: str,
             intolerant_domains = pickle.load(mm)
     logger.info(f"Loading the recorded intolerant domains which look alike: {intolerant_domains}")
 
-    # Establish inheritance/mechanism history before PVS1. PVS1 uses this as a
-    # gene/disease LoF mechanism gate; zygosity compatibility is still handled
-    # later by PM3/BP2 and ranking.
+    # These inheritance arrays remain inputs to criteria such as PM3 and PP1.
+    # They are not mechanism fallbacks for the hub, PVS1, BS1, BS2, BS4, or
+    # ranking.
     recessive, dominant, non_monogenic, non_mendelian, haplo_insufficient, incomplete_penetrance = identify_inheritance_mode(
         anno_df,
         gene_to_am_score_map,
@@ -4403,27 +4232,23 @@ def ACMG_criteria_assign(anno_table: str,
 
     anno_df = annotate_gene_mechanism_categories(
         anno_df,
-        recessive=recessive,
-        dominant=dominant,
-        haplo_insufficient=haplo_insufficient,
+        clinvar_pathogenic_genes=clinvar_pathogenic_genes,
+        gene_to_am_score_map=gene_to_am_score_map,
         mechanism_json=gene_mechanism_json,
         ddg2p_evidence=ddg2p_mechanism_evidence,
         symbol_col="SYMBOL",
         use_hgnc_package=False,
     )
     logger.info(
-        "Gene mechanism/inheritance history applied before PVS1: \n%s",
-        anno_df["gene_mech_inher_history"].value_counts(dropna=False).to_string(),
+        "Variant-level mechanism applicability applied before PVS1; effects: \n%s",
+        anno_df["variant_effect"].value_counts(dropna=False).to_string(),
     )
     gc.collect()
 
     # Apply the PVS1 criteria, LoF on a gene known to to be pathogenic due to LoF
     pvs1_criteria, locate_intol_domains = PVS1_criteria(anno_df,
-                                                        clinvar_aa_gene_map,
                                                         clinvar_patho_exon_af_stat,
                                                         interpro_entry_map_pkl,
-                                                        gene_to_am_score_map,
-                                                        gene_dosage_sensitivity=gene_dosage_sensitivity,
                                                         intolerant_domains=intolerant_domains,
                                                         tranx_exon_domain_map_pkl=tranx_exon_domain_map_pkl,
                                                         proband_gt_col=proband,
@@ -4508,18 +4333,12 @@ def ACMG_criteria_assign(anno_table: str,
     gc.collect()
 
     # Apply BS1, PAF of variant is greater than expected incidence of the disease.
-    bs1_criteria, recessive, dominant, non_monogenic, non_mendelian, haplo_insufficient, incomplete_penetrance = BS1_criteria(
+    bs1_criteria = BS1_criteria(
         anno_df,
-        gene_to_am_score_map,
-        threads=threads,
         expected_incidence=expected_incidence,
-        gene_dosage_sensitivity=gene_dosage_sensitivity,
         pm2_criteria=pm2_criteria,
-        recessive=recessive,
-        dominant=dominant,
         non_monogenic=non_monogenic,
         non_mendelian=non_mendelian,
-        haplo_insufficient=haplo_insufficient,
         incomplete_penetrance=incomplete_penetrance,
     )
     logger.info(f"BS1 criteria applied, {(bs1_criteria > 0).sum()} variants are having the BS1 criteria")
@@ -4537,7 +4356,13 @@ def ACMG_criteria_assign(anno_table: str,
     logger.info(f"The inheritance_df looks like: \n{inheritance_df[:10].to_string(index=False)}")
 
     # Apply BS2, variant observed in a healthy adult
-    bs2_criteria = BS2_criteria(anno_df, recessive, dominant, non_monogenic, non_mendelian, incomplete_penetrance, pm2_criteria)
+    bs2_criteria = BS2_criteria(
+        anno_df,
+        non_monogenic,
+        non_mendelian,
+        incomplete_penetrance,
+        pm2_criteria,
+    )
     logger.info(f"BS2 criteria applied, {(bs2_criteria > 0).sum()} variants are having the BS2 criteria")
     gc.collect()
 
@@ -4552,12 +4377,9 @@ def ACMG_criteria_assign(anno_table: str,
             anno_df,
             ped_df,
             fam_name,
-            recessive,
-            dominant,
             non_monogenic,
             non_mendelian,
             incomplete_penetrance,
-            haplo_insufficient,
         )
     else:
         logger.warning(f"No ped_table provided, skip the BS4 criteria")
@@ -4643,8 +4465,6 @@ def ACMG_criteria_assign(anno_table: str,
     anno_df = sort_and_rank_variants(anno_df,
                                      ped_df,
                                      fam_name,
-                                     gene_to_am_score_map,
-                                     gene_dosage_sensitivity=gene_dosage_sensitivity,
                                      pext_tissues=pext_tissues,
                                      pext_low_expression_cutoff=pext_low_expression_cutoff,
                                      pext_penalty_floor=pext_penalty_floor,

@@ -16,6 +16,7 @@ from gene_mechanism_hub import (  # noqa: E402
     condition_cache_mechanism_assertions,
     enrich_condition_mechanism_assertion,
     extract_exact_clinvar_condition_identities,
+    match_condition_cache_gofcards_variants,
     select_condition_histories_for_variant,
 )
 
@@ -159,6 +160,41 @@ def test_condition_cache_assertions_preserve_context_and_exclude_variant_only_go
     assert assertion["hpo_assertions"][1]["frequency"] == "2/10"
 
     assert condition_cache_context("OMIM:2", review_condition) == {}
+
+
+def test_exact_gofcards_cache_match_preserves_condition_resolution() -> None:
+    linked_variant = {
+        "gofcards_variant_ids": ["SNV|1|100|100|A|G"],
+        "gofcards_accession_ids": ["rs1"],
+        "clinvar_links": [{"vcv_accession": "VCV1"}],
+    }
+    unresolved_variant = {
+        "gofcards_variant_ids": ["SNV|1|200|200|C|T"],
+        "gofcards_accession_ids": ["rs2"],
+        "clinvar_links": [{"vcv_accession": "VCV2"}],
+    }
+    condition = {
+        "pathogenic_mechanisms": {
+            "GOF": {"variants": {"GOFCARDS:linked": linked_variant}}
+        }
+    }
+    gene = {
+        "conditions": {"OMIM:1": condition},
+        "unmapped_evidence": {
+            "variants": {"GOFCARDS:unresolved": unresolved_variant}
+        },
+    }
+
+    matches = match_condition_cache_gofcards_variants(
+        gene,
+        variant_ids={"SNV|1|100|100|A|G", "SNV|1|200|200|C|T"},
+        accession_ids=set(),
+    )
+
+    assert [match["condition_key"] for match in matches] == ["OMIM:1", ""]
+    assert matches[0]["condition"] is condition
+    assert matches[1]["condition"] == {}
+    assert matches[1]["variant"]["clinvar_links"][0]["vcv_accession"] == "VCV2"
 
 
 def test_legacy_condition_evidence_loader_remains_audit_only(

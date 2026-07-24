@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import csv
 import gzip
+import re
 from collections import defaultdict
 from pathlib import Path
 from typing import Any, Iterator, TextIO
@@ -77,6 +78,27 @@ HPO_REQUIRED_COLUMNS = {
     "scope_evidence",
     "scope_reference",
     "scope_review_status",
+}
+
+CONDITION_MECHANISM_SOURCES = {"G2P_DDG2P", "Orphadata"}
+CANONICAL_MECHANISMS = {"LOF", "GOF", "DOMINANT_NEGATIVE"}
+MECHANISM_REQUIRED_COLUMNS = {
+    "gene_symbol",
+    "source",
+    "source_record_id",
+    "source_condition_id",
+    "mondo_id",
+    "disease_scope",
+    "priva_scope",
+    "scope_review_status",
+    "disease_label",
+    "inheritance",
+    "patho_mode_raw",
+    "normalized_mechanisms",
+    "mechanism_confidence",
+    "disease_confidence",
+    "pmids",
+    "evidence_url",
 }
 
 
@@ -330,3 +352,214 @@ def build_hpo_gene_condition_frame(
         gene["summary"] = _summarize_hpo_gene(gene)
         ordered_genes[symbol] = gene
     return ordered_genes
+
+
+# ---------------------------------------------------------------------------
+# Exact G2P/Orphadata condition-mechanism enrichment
+# ---------------------------------------------------------------------------
+
+
+def _empty_gene() -> dict[str, Any]:
+    """Create a gene shell for curated histories absent from HPO's gene frame."""
+    return {
+        "summary": {},
+        "conditions": {},
+        "unmapped_evidence": {"mechanisms": [], "variants": {}},
+    }
+
+
+def _canonical_mechanisms(value: Any) -> list[str]:
+    """Return only PriVA's sequence-variant pathogenic mechanism vocabulary."""
+    tokens = {
+        token.strip().upper()
+        for token in re.split(r"[|;,]", _clean(value))
+        if token.strip()
+    }
+    return sorted(tokens & CANONICAL_MECHANISMS)
+
+
+def _condition_alias_index(
+    genes: dict[str, dict[str, Any]],
+) -> dict[str, dict[str, str]]:
+    """Index only unambiguous stable identifiers within each gene.
+
+    An identifier resolving to multiple canonical conditions is deliberately
+    omitted. This makes a failed join visible in ``unmapped_evidence`` instead
+    of selecting one condition according to input order.
+    """
+    aliases_by_gene: dict[str, dict[str, set[str]]] = defaultdict(
+        lambda: defaultdict(set)
+    )
+    for symbol, gene in genes.items():
+        for condition_key, condition in gene["conditions"].items():
+            aliases_by_gene[symbol][condition_key.upper()].add(condition_key)
+            for identifiers in condition["identifiers"].values():
+                for identifier in identifiers:
+                    aliases_by_gene[symbol][identifier.upper()].add(condition_key)
+    return {
+        symbol: {
+            alias: next(iter(condition_keys))
+            for alias, condition_keys in aliases.items()
+            if len(condition_keys) == 1
+        }
+        for symbol, aliases in aliases_by_gene.items()
+    }
+
+
+def _mechanism_evidence_record(
+    row: dict[str, str],
+    mechanism: str,
+) -> dict[str, Any]:
+    """Retain mechanism provenance without copying unused source columns."""
+    identifiers = list(
+        dict.fromkeys(
+            identifier
+            for identifier in (
+                _clean(row.get("source_condition_id")).upper(),
+                _clean(row.get("mondo_id")).upper(),
+            )
+            if identifier
+        )
+    )
+    return {
+        "source": _clean(row.get("source")),
+        "source_record_id": _clean(row.get("source_record_id")),
+        "condition_identifiers": identifiers,
+        "condition_label": _clean(row.get("disease_label")),
+        "mechanism": mechanism,
+        "mechanism_raw": _clean(row.get("patho_mode_raw")),
+        "allelic_requirement": _clean(row.get("inheritance")),
+        "mechanism_confidence": _clean(row.get("mechanism_confidence")),
+        "disease_confidence": _clean(row.get("disease_confidence")),
+        "source_scope": {
+            "decision": _clean(row.get("priva_scope")),
+            "category": _clean(row.get("disease_scope")),
+            "review_status": _clean(row.get("scope_review_status")),
+        },
+        "pmids": _split_multi(row.get("pmids")),
+        "evidence_url": _clean(row.get("evidence_url")),
+    }
+
+
+def _mechanism_evidence_key(evidence: dict[str, Any]) -> tuple[str, ...]:
+    return (
+        evidence["source"],
+        evidence["source_record_id"],
+        ";".join(evidence["condition_identifiers"]),
+        evidence["mechanism"],
+        evidence["allelic_requirement"],
+    )
+
+
+def _attach_mechanism_to_condition(
+    condition: dict[str, Any],
+    evidence: dict[str, Any],
+) -> None:
+    mechanism = evidence["mechanism"]
+    block = condition["pathogenic_mechanisms"].setdefault(
+        mechanism,
+        {"allelic_requirements": [], "evidence": [], "variants": {}},
+    )
+    requirement = evidence["allelic_requirement"]
+    if requirement and requirement not in block["allelic_requirements"]:
+        block["allelic_requirements"].append(requirement)
+    existing = {_mechanism_evidence_key(item) for item in block["evidence"]}
+    if _mechanism_evidence_key(evidence) not in existing:
+        block["evidence"].append(evidence)
+
+
+def _refresh_gene_summary(gene: dict[str, Any]) -> None:
+    """Derive the disposable gene summary from condition and unmapped records."""
+    summary = _summarize_hpo_gene(gene)
+    condition_counts: dict[str, int] = defaultdict(int)
+    mechanisms: set[str] = set()
+    for condition in gene["conditions"].values():
+        for mechanism in condition["pathogenic_mechanisms"]:
+            mechanisms.add(mechanism)
+            condition_counts[mechanism] += 1
+    unmapped_counts: dict[str, int] = defaultdict(int)
+    for record in gene["unmapped_evidence"]["mechanisms"]:
+        mechanism = _clean(record.get("mechanism")).upper()
+        if mechanism:
+            mechanisms.add(mechanism)
+            unmapped_counts[mechanism] += 1
+    summary.update(
+        {
+            "pathogenic_mechanisms": sorted(mechanisms),
+            "condition_resolved_mechanism_counts": dict(
+                sorted(condition_counts.items())
+            ),
+            "unmapped_mechanism_count": sum(unmapped_counts.values()),
+            "unmapped_mechanism_counts": dict(sorted(unmapped_counts.items())),
+            "unmapped_variant_count": len(
+                gene["unmapped_evidence"]["variants"]
+            ),
+        }
+    )
+    gene["summary"] = summary
+
+
+def attach_condition_mechanisms(
+    genes: dict[str, dict[str, Any]],
+    mechanism_evidence: str | Path,
+) -> dict[str, int]:
+    """Attach G2P/Orphadata mechanisms through exact condition identifiers.
+
+    Returns build statistics so installation validation can distinguish an
+    unexpectedly empty source from a legitimate set of unmatched histories.
+    """
+    aliases_by_gene = _condition_alias_index(genes)
+    stats = {"source_rows": 0, "mechanism_records": 0, "matched": 0, "unmapped": 0}
+    seen_unmapped: dict[str, set[tuple[str, ...]]] = defaultdict(set)
+
+    for row in _iter_tsv_rows(mechanism_evidence, MECHANISM_REQUIRED_COLUMNS):
+        if _clean(row.get("source")) not in CONDITION_MECHANISM_SOURCES:
+            continue
+        stats["source_rows"] += 1
+        symbol = _clean(row.get("gene_symbol")).upper()
+        if not symbol:
+            continue
+        gene = genes.setdefault(symbol, _empty_gene())
+        mechanisms = _canonical_mechanisms(row.get("normalized_mechanisms"))
+        for mechanism in mechanisms:
+            stats["mechanism_records"] += 1
+            evidence = _mechanism_evidence_record(row, mechanism)
+            matched_keys = {
+                aliases_by_gene.get(symbol, {}).get(identifier)
+                for identifier in evidence["condition_identifiers"]
+                if aliases_by_gene.get(symbol, {}).get(identifier)
+            }
+            if len(matched_keys) == 1:
+                condition_key = next(iter(matched_keys))
+                condition = gene["conditions"][condition_key]
+                _attach_mechanism_to_condition(condition, evidence)
+                if not condition["label"] and evidence["condition_label"]:
+                    condition["label"] = evidence["condition_label"]
+                stats["matched"] += 1
+                continue
+
+            reason = (
+                "conflicting_condition_identifiers"
+                if len(matched_keys) > 1
+                else "no_exact_hpo_condition_identifier"
+            )
+            unmapped = {**evidence, "reason": reason}
+            identity = _mechanism_evidence_key(unmapped)
+            if identity not in seen_unmapped[symbol]:
+                seen_unmapped[symbol].add(identity)
+                gene["unmapped_evidence"]["mechanisms"].append(unmapped)
+                stats["unmapped"] += 1
+
+    for gene in genes.values():
+        for condition in gene["conditions"].values():
+            condition["pathogenic_mechanisms"] = dict(
+                sorted(condition["pathogenic_mechanisms"].items())
+            )
+            for block in condition["pathogenic_mechanisms"].values():
+                block["allelic_requirements"].sort()
+                block["evidence"].sort(key=_mechanism_evidence_key)
+        gene["unmapped_evidence"]["mechanisms"].sort(
+            key=_mechanism_evidence_key
+        )
+        _refresh_gene_summary(gene)
+    return stats

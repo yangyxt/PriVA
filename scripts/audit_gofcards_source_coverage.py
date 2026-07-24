@@ -31,13 +31,12 @@ DEFAULT_EVIDENCE = (
     / "prepared"
     / "gene_pathogenic_mechanism_evidence.tsv"
 )
-DEFAULT_SHARED_JSON = (
-    PRIVA_ROOT.parent
-    / "llm_gene_reranker"
+DEFAULT_NONLOF_JSON = (
+    PRIVA_ROOT
     / "data"
     / "gene_pathogenic_mechanism"
     / "prepared"
-    / "gene_mechanism_curated_assertions.json"
+    / "gene_nonlof_mechanism_curated_assertions.json"
 )
 DEFAULT_HGNC = PRIVA_ROOT / "data" / "hgnc" / "non_alt_loci_set.tsv"
 DEFAULT_OUTPUT = (
@@ -55,7 +54,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--gofcards", type=Path, default=DEFAULT_GOFCARDS)
     parser.add_argument("--condition-evidence", type=Path, default=DEFAULT_EVIDENCE)
-    parser.add_argument("--mechanism-json", type=Path, default=DEFAULT_SHARED_JSON)
+    parser.add_argument(
+        "--nonlof-mechanism-json",
+        "--mechanism-json",
+        dest="mechanism_json",
+        type=Path,
+        default=DEFAULT_NONLOF_JSON,
+        help="Shared non-LOF mechanism JSON; --mechanism-json is a compatibility alias.",
+    )
     parser.add_argument("--hgnc-table", type=Path, default=DEFAULT_HGNC)
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
     parser.add_argument(
@@ -314,7 +320,7 @@ def main(argv: list[str] | None = None) -> int:
         "inputs": {
             "gofcards": str(args.gofcards.resolve()),
             "condition_evidence": str(args.condition_evidence.resolve()),
-            "mechanism_json": str(args.mechanism_json.resolve()),
+            "nonlof_mechanism_json": str(args.mechanism_json.resolve()),
             "hgnc_table": str(args.hgnc_table.resolve()),
         },
         "outputs": {

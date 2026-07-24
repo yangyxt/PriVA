@@ -1,0 +1,569 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.yangyxt/gene_nonlof_mechanism_curated_assertions.schema.json",
+  "title": "Canonical Non-LOF Gene Mechanism Assertions",
+  "type": "object",
+  "required": ["_meta"],
+  "properties": {
+    "_meta": {"$ref": "#/$defs/meta"}
+  },
+  "patternProperties": {
+    "^HGNC:[0-9]+$": {"$ref": "#/$defs/gene"},
+    "^SYMBOL:.+$": {"$ref": "#/$defs/gene"}
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "stringArray": {
+      "type": "array",
+      "items": {"type": "string", "minLength": 1},
+      "uniqueItems": true
+    },
+    "nonEmptyStringArray": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"type": "string", "minLength": 1},
+      "uniqueItems": true
+    },
+    "meta": {
+      "type": "object",
+      "required": ["version", "built_at", "total_genes", "sources"],
+      "properties": {
+        "version": {"const": "2.0"},
+        "built_at": {"type": "string"},
+        "total_genes": {"type": "integer", "minimum": 0},
+        "unmapped_symbols": {"$ref": "#/$defs/stringArray"},
+        "mechanism_values": {"$ref": "#/$defs/stringArray"},
+        "sources": {"type": "object"},
+        "clinvar_vcv_integration": {"type": "object"}
+      },
+      "additionalProperties": true
+    },
+    "gene": {
+      "type": "object",
+      "required": ["symbol", "mechanisms"],
+      "properties": {
+        "symbol": {"type": "string", "minLength": 1},
+        "entrez_id": {"type": "string"},
+        "ensembl_id": {"type": "string"},
+        "mechanisms": {"$ref": "#/$defs/nonEmptyStringArray"},
+        "gene_level": {
+          "type": "array",
+          "minItems": 1,
+          "items": {"$ref": "#/$defs/geneAssertion"}
+        },
+        "variant_level": {
+          "type": "array",
+          "minItems": 1,
+          "items": {"$ref": "#/$defs/variantAssertion"}
+        }
+      },
+      "additionalProperties": false
+    },
+    "geneAssertion": {
+      "type": "object",
+      "minProperties": 1,
+      "maxProperties": 1,
+      "properties": {
+        "G2P_DDG2P": {"$ref": "#/$defs/g2pAssertion"},
+        "PanelApp": {"$ref": "#/$defs/panelAppAssertion"},
+        "ClinGen_Dosage": {"$ref": "#/$defs/clinGenDosageAssertion"}
+      },
+      "additionalProperties": false
+    },
+    "g2pAssertion": {
+      "type": "object",
+      "required": ["mechanism"],
+      "properties": {
+        "mechanism": {"type": "string", "minLength": 1},
+        "mechanism_raw": {"type": "string", "minLength": 1},
+        "disease": {"type": "string", "minLength": 1},
+        "inheritance": {"type": "string", "minLength": 1},
+        "confidence": {
+          "enum": ["high", "moderate", "limited", "conflicting_or_refuted"]
+        },
+        "pmids": {"$ref": "#/$defs/nonEmptyStringArray"}
+      },
+      "additionalProperties": false
+    },
+    "panelAppAssertion": {
+      "type": "object",
+      "required": ["mechanism", "confidence"],
+      "properties": {
+        "mechanism": {"const": "PANELAPP_GREEN_NON_LOF_PATHO_HISTORY"},
+        "panel": {"type": "string", "minLength": 1},
+        "panel_id": {"type": "string", "minLength": 1},
+        "inheritance": {"type": "string", "minLength": 1},
+        "confidence": {"const": "high"}
+      },
+      "additionalProperties": false
+    },
+    "clinGenDosageAssertion": {
+      "type": "object",
+      "required": ["mechanism", "score"],
+      "properties": {
+        "mechanism": {"const": "TRIPLOSENSITIVITY"},
+        "score": {"enum": ["2", "3"]},
+        "score_description": {"type": "string", "minLength": 1},
+        "pmids": {"$ref": "#/$defs/nonEmptyStringArray"}
+      },
+      "additionalProperties": false
+    },
+    "variantAssertion": {
+      "type": "object",
+      "minProperties": 1,
+      "maxProperties": 1,
+      "properties": {
+        "GoFCards": {"$ref": "#/$defs/gofcards"},
+        "ClinVar_VCV": {"$ref": "#/$defs/clinvarVCV"}
+      },
+      "additionalProperties": false
+    },
+    "gofcards": {
+      "type": "object",
+      "required": [
+        "mechanism",
+        "source_record_id",
+        "allele_key",
+        "exact_normalization_status"
+      ],
+      "properties": {
+        "mechanism": {"const": "GOF"},
+        "source_record_id": {"type": "string", "minLength": 1},
+        "allele_key": {"type": "string", "minLength": 1},
+        "exact_normalization_status": {
+          "enum": [
+            "matched_gene_concordant",
+            "gene_discordant_coordinate_collision",
+            "unmatched_public_source_allele"
+          ]
+        },
+        "exact_cache_gene_symbols": {"$ref": "#/$defs/nonEmptyStringArray"},
+        "exact_normalized_variants": {
+          "type": "array",
+          "minItems": 1,
+          "items": {"$ref": "#/$defs/gofcardsExactNormalizedVariant"}
+        },
+        "disease": {"type": "string", "minLength": 1},
+        "chr": {"type": "string", "minLength": 1},
+        "pos": {"type": "string", "minLength": 1},
+        "ref": {"type": "string", "minLength": 1},
+        "alt": {"type": "string", "minLength": 1},
+        "transcript": {"type": "string", "minLength": 1},
+        "consequence": {"enum": ["missense_variant", "indel"]},
+        "pscore": {"type": "number"},
+        "pmids": {"$ref": "#/$defs/nonEmptyStringArray"},
+        "function": {"type": "string", "minLength": 1},
+        "pathway": {"type": "string", "minLength": 1},
+        "animal_model": {"const": true},
+        "cell_model": {"const": true}
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "exact_normalization_status": {"const": "matched_gene_concordant"}
+            }
+          },
+          "then": {"required": ["exact_normalized_variants"]}
+        },
+        {
+          "if": {
+            "properties": {
+              "exact_normalization_status": {
+                "const": "gene_discordant_coordinate_collision"
+              }
+            }
+          },
+          "then": {"required": ["exact_cache_gene_symbols"]}
+        }
+      ],
+      "additionalProperties": false
+    },
+    "gofcardsExactNormalizedVariant": {
+      "type": "object",
+      "required": [
+        "source",
+        "mechanism",
+        "build",
+        "HGNC_Symbol",
+        "match_status",
+        "hg19_chrom",
+        "hg19_pos",
+        "hg19_ref",
+        "hg19_alt",
+        "hg19_vcf_status",
+        "hg38_chrom",
+        "hg38_pos",
+        "hg38_ref",
+        "hg38_alt",
+        "hg38_refalt_status",
+        "gofcards_variant_id",
+        "derived_on",
+        "allele_key",
+        "hg19_genomic_key",
+        "hg19_vcf_pos",
+        "hg19_vcf_ref",
+        "hg19_vcf_alt",
+        "hg38_vcf_pos",
+        "hg38_vcf_ref",
+        "hg38_vcf_alt",
+        "hg19_vcf_key",
+        "hg38_genomic_key",
+        "hg38_vcf_key",
+        "match_key_types"
+      ],
+      "properties": {
+        "source": {"const": "GoFCards"},
+        "mechanism": {"const": "GOF"},
+        "build": {"type": "string", "minLength": 1},
+        "HGNC_Symbol": {"type": "string", "minLength": 1},
+        "VEP_assembly": {"enum": ["hg19", "hg38"]},
+        "VEP_transcript": {"type": "string", "minLength": 1},
+        "feature_type": {"type": "string", "minLength": 1},
+        "consequence": {"type": "string", "minLength": 1},
+        "HGVSc": {"type": "string", "minLength": 1},
+        "HGVSp": {"type": "string", "minLength": 1},
+        "hgvsp_key": {"type": "string", "minLength": 1},
+        "match_status": {"type": "string", "minLength": 1},
+        "raw_GoFCards_HGVS": {"type": "string", "minLength": 1},
+        "GoFCards_transcript": {"type": "string", "minLength": 1},
+        "canonical_transcript": {"type": "string", "minLength": 1},
+        "hg19_chrom": {"type": "string", "minLength": 1},
+        "hg19_pos": {"type": "string", "minLength": 1},
+        "hg19_ref": {"type": "string", "minLength": 1},
+        "hg19_alt": {"type": "string", "minLength": 1},
+        "hg19_vcf_status": {"type": "string", "minLength": 1},
+        "hg38_chrom": {"type": "string", "minLength": 1},
+        "hg38_pos": {"type": "string", "minLength": 1},
+        "hg38_ref": {"type": "string", "minLength": 1},
+        "hg38_alt": {"type": "string", "minLength": 1},
+        "hg38_refalt_status": {"type": "string", "minLength": 1},
+        "gofcards_accession_id": {"type": "string", "minLength": 1},
+        "gofcards_variant_id": {"type": "string", "minLength": 1},
+        "disease": {"type": "string", "minLength": 1},
+        "pmids": {"$ref": "#/$defs/nonEmptyStringArray"},
+        "pscore": {"type": ["number", "string"]},
+        "function": {"type": "string", "minLength": 1},
+        "pathway": {"type": "string", "minLength": 1},
+        "derived_on": {"type": "string", "minLength": 1},
+        "allele_key": {"type": "string", "minLength": 1},
+        "hg19_genomic_key": {"type": "string", "minLength": 1},
+        "hg19_vcf_pos": {"type": "string", "minLength": 1},
+        "hg19_vcf_ref": {"type": "string", "minLength": 1},
+        "hg19_vcf_alt": {"type": "string", "minLength": 1},
+        "hg38_vcf_pos": {"type": "string", "minLength": 1},
+        "hg38_vcf_ref": {"type": "string", "minLength": 1},
+        "hg38_vcf_alt": {"type": "string", "minLength": 1},
+        "hg19_vcf_key": {"type": "string", "minLength": 1},
+        "hg38_genomic_key": {"type": "string", "minLength": 1},
+        "hg38_vcf_key": {"type": "string", "minLength": 1},
+        "match_key_types": {"$ref": "#/$defs/nonEmptyStringArray"}
+      },
+      "additionalProperties": false
+    },
+    "clinvarVCV": {
+      "type": "object",
+      "required": [
+        "mechanism_context",
+        "match",
+        "variation",
+        "condition_assertions",
+        "allelic_requirement"
+      ],
+      "properties": {
+        "mechanism_context": {
+          "type": "array",
+          "items": {"const": "GOF"},
+          "minItems": 1,
+          "maxItems": 1
+        },
+        "match": {"$ref": "#/$defs/exactMatch"},
+        "variation": {"$ref": "#/$defs/variation"},
+        "condition_assertions": {
+          "type": "array",
+          "minItems": 1,
+          "items": {"$ref": "#/$defs/conditionAssertion"}
+        },
+        "allelic_requirement": {
+          "type": "object",
+          "required": ["value", "reason"],
+          "properties": {
+            "value": {"const": "unresolved"},
+            "reason": {"type": "string", "minLength": 1}
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "exactMatch": {
+      "type": "object",
+      "required": ["method", "gene_concordance", "matched_gofcards_records"],
+      "properties": {
+        "method": {"const": "exact_normalized_vcf_allele"},
+        "gene_concordance": {"type": "boolean"},
+        "clinvar_gene_symbols": {"$ref": "#/$defs/stringArray"},
+        "exact_cache_gene_symbols": {"$ref": "#/$defs/stringArray"},
+        "discarded_gene_discordant_symbols": {"$ref": "#/$defs/stringArray"},
+        "matched_gofcards_records": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "required": ["HGNC_Symbol", "gofcards_variant_id", "allele_key"],
+            "properties": {
+              "HGNC_Symbol": {"type": "string", "minLength": 1},
+              "gofcards_accession_id": {"type": "string", "minLength": 1},
+              "gofcards_variant_id": {"type": "string", "minLength": 1},
+              "allele_key": {"type": "string", "minLength": 1},
+              "hg19_vcf_key": {"type": "string", "minLength": 1},
+              "hg38_vcf_key": {"type": "string", "minLength": 1},
+              "disease": {"type": "string", "minLength": 1},
+              "pmids": {"type": "string", "minLength": 1},
+              "pscore": {"type": "string", "minLength": 1}
+            },
+            "anyOf": [
+              {"required": ["hg19_vcf_key"]},
+              {"required": ["hg38_vcf_key"]}
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "variation": {
+      "type": "object",
+      "required": [
+        "variation_id",
+        "vcv_accession",
+        "record_type",
+        "record_status",
+        "classification_scope",
+        "matched_component_context",
+        "locations"
+      ],
+      "properties": {
+        "variation_id": {"type": "string"},
+        "vcv_accession": {"type": "string", "pattern": "^VCV"},
+        "vcv_version": {"type": ["integer", "string"]},
+        "variation_name": {"type": "string"},
+        "variation_type": {"type": "string"},
+        "record_type": {"const": "classified"},
+        "record_status": {"const": "current"},
+        "date_created": {"type": "string"},
+        "date_last_updated": {"type": "string"},
+        "classification_scope": {
+          "enum": ["simple_allele", "haplotype", "genotype"]
+        },
+        "matched_component_context": {
+          "enum": [
+            "allele",
+            "haplotype_component",
+            "genotype_component",
+            "genotype_haplotype_component"
+          ]
+        },
+        "component_allele_id": {"type": "string"},
+        "component_variation_id": {"type": "string"},
+        "component_name": {"type": "string"},
+        "component_variant_type": {"type": "string"},
+        "canonical_spdi": {"type": "string"},
+        "genes": {
+          "type": "array",
+          "items": {"type": "object"}
+        },
+        "locations": {
+          "type": "object",
+          "minProperties": 1,
+          "properties": {
+            "GRCh37": {"$ref": "#/$defs/location"},
+            "GRCh38": {"$ref": "#/$defs/location"}
+          },
+          "additionalProperties": false
+        },
+        "hgvs": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["expression"],
+            "properties": {
+              "type": {"type": "string"},
+              "expression": {"type": "string"},
+              "sequence_accession_version": {"type": "string"}
+            },
+            "additionalProperties": false
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "location": {
+      "type": "object",
+      "required": [
+        "chromosome",
+        "position_vcf",
+        "reference_allele_vcf",
+        "alternate_allele_vcf",
+        "vcf_key"
+      ],
+      "properties": {
+        "assembly_accession_version": {"type": "string"},
+        "chromosome": {"type": "string"},
+        "position_vcf": {"type": ["integer", "string"]},
+        "reference_allele_vcf": {"type": "string"},
+        "alternate_allele_vcf": {"type": "string"},
+        "vcf_key": {"type": "string"}
+      },
+      "additionalProperties": false
+    },
+    "conditionAssertion": {
+      "type": "object",
+      "required": [
+        "rcv_accession",
+        "conditions",
+        "germline_classification",
+        "matched_scvs",
+        "scv_linkage"
+      ],
+      "properties": {
+        "rcv_accession": {"type": "string", "pattern": "^RCV"},
+        "rcv_version": {"type": ["integer", "string"]},
+        "title": {"type": "string"},
+        "trait_set_id": {"type": "string"},
+        "conditions": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": {"type": "string"},
+              "database": {"type": "string"},
+              "id": {"type": "string"}
+            },
+            "additionalProperties": false
+          }
+        },
+        "germline_classification": {
+          "type": "object",
+          "required": ["review_status", "review_stars"],
+          "properties": {
+            "clinical_significance": {"type": "string"},
+            "review_status": {
+              "enum": [
+                "criteria provided, multiple submitters, no conflicts",
+                "reviewed by expert panel",
+                "practice guideline"
+              ]
+            },
+            "review_stars": {"type": "integer", "minimum": 2, "maximum": 4},
+            "date_last_evaluated": {"type": "string"},
+            "submission_count": {"type": ["integer", "string"]}
+          },
+          "additionalProperties": false
+        },
+        "matched_scvs": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/scv"}
+        },
+        "scv_linkage": {"type": "object"}
+      },
+      "additionalProperties": false
+    },
+    "scv": {
+      "type": "object",
+      "required": [
+        "scv_accession",
+        "record_status",
+        "contributes_to_aggregate_classification",
+        "classification",
+        "trait_linkage_method"
+      ],
+      "properties": {
+        "clinical_assertion_id": {"type": "string"},
+        "scv_accession": {"type": "string", "pattern": "^SCV"},
+        "scv_version": {"type": ["integer", "string"]},
+        "record_status": {"const": "current"},
+        "contributes_to_aggregate_classification": {"const": true},
+        "submitter": {"type": "object"},
+        "classification": {"type": "object"},
+        "submitted_mode_of_inheritance": {"$ref": "#/$defs/stringArray"},
+        "penetrance": {"$ref": "#/$defs/stringArray"},
+        "trait_linkage_method": {
+          "enum": [
+            "trait_mapping_clinical_assertion_id",
+            "scv_trait_identifier_or_name"
+          ]
+        },
+        "trait_linkage_ambiguous_across_eligible_rcvs": {"const": true},
+        "linked_eligible_rcv_accessions": {
+          "type": "array",
+          "minItems": 2,
+          "uniqueItems": true,
+          "items": {"type": "string", "pattern": "^RCV"}
+        },
+        "trait_mappings": {
+          "type": "array",
+          "items": {"type": "object"}
+        },
+        "observed_zygosity_counts": {
+          "type": "object",
+          "propertyNames": {
+            "enum": [
+              "Homozygote",
+              "SingleHeterozygote",
+              "CompoundHeterozygote",
+              "Hemizygote",
+              "not provided"
+            ]
+          },
+          "additionalProperties": {"type": "integer", "minimum": 0}
+        },
+        "observations": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/observation"}
+        }
+      },
+      "additionalProperties": false
+    },
+    "observation": {
+      "type": "object",
+      "properties": {
+        "origin": {"type": "string"},
+        "affected_status": {"type": "string"},
+        "sex": {"type": "string"},
+        "number_tested": {"type": ["integer", "string"]},
+        "number_males": {"type": ["integer", "string"]},
+        "number_females": {"type": ["integer", "string"]},
+        "number_chromosomes_tested": {"type": ["integer", "string"]},
+        "observed_data": {
+          "type": "array",
+          "items": {"type": "object"}
+        },
+        "cooccurrence_sets": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "asserted_variant_zygosity": {
+                "enum": [
+                  "Homozygote",
+                  "SingleHeterozygote",
+                  "CompoundHeterozygote",
+                  "Hemizygote",
+                  "not provided"
+                ]
+              },
+              "count": {"type": ["integer", "string"]},
+              "cooccurring_alleles": {
+                "type": "array",
+                "items": {"type": "object"}
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

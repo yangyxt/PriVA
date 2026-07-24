@@ -1,0 +1,44 @@
+{
+  "clinvar_xml": "/paedyl01/disk1/yangyxt/PriVA/data/gene_pathogenic_mechanism/raw/clinvar_vcv/ClinVarVCVRelease_00-latest_weekly.xml.gz",
+  "gene_concordant_vcvs_with_any_germline_rcv": 1358,
+  "gene_concordant_vcvs_with_any_rcv_at_least_2_stars": 525,
+  "gene_concordant_vcvs_with_rcvs_but_none_at_least_2_stars": 833,
+  "genes_with_any_lower_review_matched_vcv": 330,
+  "genes_with_any_vcv_at_least_2_stars": 216,
+  "genes_with_only_lower_review_matched_vcvs": 208,
+  "gofcards_exact": "/paedyl01/disk1/yangyxt/PriVA/data/gofcards/gofcards_exact_gof_hgvsp.tsv.gz",
+  "parser_stats_minimum_review_stars_0": {
+    "eligible_rcv_conditions": 4642,
+    "exact_archives_without_eligible_rcv": 25,
+    "exact_variant_archives": 1385,
+    "retained_component_matches": 1360,
+    "retained_gene_assignments": 1360,
+    "retained_genotype": 2,
+    "retained_haplotype": 15,
+    "retained_simple_allele": 1343,
+    "skipped_gene_discordant_component_matches": 2,
+    "skipped_included_record": 723,
+    "variation_archives_seen": 4545909
+  },
+  "rcv_review_star_counts": {
+    "0": 1079,
+    "1": 2489,
+    "2": 960,
+    "3": 111
+  },
+  "rcv_review_status_counts": {
+    "criteria provided, conflicting classifications": 80,
+    "criteria provided, multiple submitters, no conflicts": 960,
+    "criteria provided, single submitter": 2409,
+    "no assertion criteria provided": 963,
+    "no classification provided": 108,
+    "no classifications from unflagged records": 8,
+    "reviewed by expert panel": 111
+  },
+  "vcv_maximum_rcv_review_star_counts": {
+    "0": 207,
+    "1": 626,
+    "2": 445,
+    "3": 80
+  }
+}

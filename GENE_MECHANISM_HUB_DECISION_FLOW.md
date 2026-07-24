@@ -10,14 +10,21 @@ from `/paedyl01/disk1/yangyxt/PriVA/scripts/acmg_criteria_assign.py`.
 
 | ID | Runtime source | Current role |
 |---|---|---|
-| S1 | `/paedyl01/disk1/yangyxt/PriVA/data/hpo/genes_to_phenotype.collapse.tsv.gz` | Collapsed gene-level HPO inheritance terms. |
+| S1 | `/paedyl01/disk1/yangyxt/PriVA/data/hpo/genes_to_phenotype.assertions.tsv.gz` | Explicit gene-disease inheritance terms from HPO annotations. |
 | S2 | `/paedyl01/disk1/yangyxt/PriVA/data/clingen/gene_dosage_sensitivity.hg19.tsv` | Haploinsufficiency and dosage override used by the inheritance decision. |
 | S3 | `/paedyl01/disk1/yangyxt/PriVA/data/loeuf/loeuf_dataset.tsv.gz` | `LOEUF < 0.35` adds broad gene-level LOF support upstream. |
 | S4 | `/paedyl01/disk1/yangyxt/PriVA/data/alphamissense/alphamissense_mean_score.tsv` | Gene-average AlphaMissense score `> 0.564` adds broad gene-level LOF support upstream. |
 | S5 | `/paedyl01/disk1/yangyxt/PriVA/data/gene_pathogenic_mechanism/prepared/gene_pathogenic_mechanism_evidence.tsv` | Strict high/moderate-confidence G2P/DDG2P LOF assertions and their allelic requirements. |
-| S6 | `/paedyl01/disk1/yangyxt/llm_gene_reranker/data/gene_pathogenic_mechanism/prepared/gene_mechanism_curated_assertions.json` | Canonical schema-v2 gene-condition, GoFCards, and exact matched ClinVar VCV evidence. PriVA uses its packaged cache only when this shared file is unavailable. |
+| S6 | `/paedyl01/disk1/yangyxt/PriVA/data/gene_pathogenic_mechanism/prepared/gene_nonlof_mechanism_curated_assertions.json` | PriVA-local canonical schema-v2 non-LOF gene-condition, GoFCards, and exact matched ClinVar VCV evidence. PriVA uses its broader packaged mechanism cache only before this cache is installed. |
 | S7 | `/paedyl01/disk1/yangyxt/PriVA/data/gofcards/gofcards_exact_gof_hgvsp.tsv.gz` | Separate exact variant-level GoFCards index used for HGVSp and genomic matching. |
 | S8 | PriVA's two-star-or-higher ClinVar pathogenic-variant gene set | Gene membership adds broad gene-level LOF support upstream. |
+
+PriVA keeps the two JSON configuration roles separate:
+
+- `gene_nonlof_mechanism_json` selects S6, PriVA's schema-v2 non-LOF cache.
+- `gene_mechanism_json` identifies PriVA's broader locally built fallback, which
+  also contains LOF assertions. Older configurations without the explicit
+  non-LOF key remain supported.
 
 ## Implemented variant-level contract
 
@@ -113,8 +120,8 @@ classification itself is pathogenic or benign.
 
 Audit summary:
 
-`/paedyl01/disk1/yangyxt/llm_gene_reranker/data/gene_pathogenic_mechanism/prepared/clinvar_gofcards_review_tier_summary.json`
+`/paedyl01/disk1/yangyxt/PriVA/data/gene_pathogenic_mechanism/audits/clinvar_gofcards_review_tier_summary.json`
 
 All matched RCV review tiers:
 
-`/paedyl01/disk1/yangyxt/llm_gene_reranker/data/gene_pathogenic_mechanism/prepared/clinvar_gofcards_all_review_tiers.tsv`
+`/paedyl01/disk1/yangyxt/PriVA/data/gene_pathogenic_mechanism/audits/clinvar_gofcards_all_review_tiers.tsv`

@@ -24,18 +24,18 @@ function prepare_combined_tab () {
     local threads=${3}
 
     local output_tab=${input_vcf/.vcf*/.tsv}
+    local hpo_tab=${BASE_DIR}/data/hpo/genes_to_phenotype.assertions.tsv.gz
 
 	check_vcf_validity ${input_vcf} || \
 	{ log "The input VCF file ${input_vcf} is not valid, please check the VCF file"; return 1; }
 
     [[ -f ${output_tab} ]] && \
     [[ ${output_tab} -nt ${input_vcf} ]] && \
+    [[ ${output_tab} -nt ${hpo_tab} ]] && \
     [[ ${output_tab} -nt ${SCRIPT_DIR}/combine_annotations.py ]] && \
     check_table_column ${output_tab} "vep_consq_lof" && \
     { log "The combined annotation table ${output_tab} is up to date, skip the conversion"; return 0; } || \
     { log "The combined annotation table ${output_tab} is outdated, start the conversion"; }
-
-    local hpo_tab=${BASE_DIR}/data/hpo/genes_to_phenotype.collapse.tsv.gz
 
     python ${SCRIPT_DIR}/combine_annotations.py \
     -i ${input_vcf} \

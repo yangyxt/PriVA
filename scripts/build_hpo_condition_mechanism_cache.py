@@ -1089,7 +1089,7 @@ def build_cache_payload(
             "sources": {
                 "hpo_assertions": _source_metadata(hpo_assertions),
                 "mechanism_evidence": _source_metadata(mechanism_evidence),
-                "mechanism_json": _source_metadata(mechanism_json),
+                "nonlof_mechanism_json": _source_metadata(mechanism_json),
                 "gofcards_variants": _source_metadata(gofcards_variants),
             },
             "build_statistics": {
@@ -1225,7 +1225,12 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--hpo-assertions")
     parser.add_argument("--mechanism-evidence")
-    parser.add_argument("--mechanism-json")
+    parser.add_argument(
+        "--nonlof-mechanism-json",
+        "--mechanism-json",
+        dest="mechanism_json",
+        help="Shared non-LOF mechanism JSON; --mechanism-json is a compatibility alias.",
+    )
     parser.add_argument("--gofcards-variants")
     parser.add_argument("--hpo-release", default="")
     parser.add_argument("--mondo-release", default="")

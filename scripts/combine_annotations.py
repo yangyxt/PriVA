@@ -13,6 +13,7 @@ import tempfile
 import subprocess
 import time
 import os
+import json
 from typing import List, Dict, Any, Tuple
 from collections import deque
 
@@ -24,6 +25,219 @@ console_handler.setLevel(logging.INFO)
 formatter = logging.Formatter("%(levelname)s:%(asctime)s:%(funcName)s:%(lineno)s:%(message)s")
 console_handler.setFormatter(formatter)
 logger.addHandler(console_handler)
+
+
+LEGACY_HPO_ANNOTATION_COLUMNS = (
+    "HPO_IDs",
+    "HPO_terms",
+    "HPO_sources",
+    "HPO_gene_inheritance",
+)
+HPO_SCOPE_ANNOTATION_COLUMNS = (
+    "HPO_scope_review_required",
+    "HPO_scope_review_disease_ids",
+    "HPO_scope_excluded_disease_ids",
+)
+HPO_ANNOTATION_COLUMNS = (
+    *LEGACY_HPO_ANNOTATION_COLUMNS,
+    "HPO_assertions",
+    *HPO_SCOPE_ANNOTATION_COLUMNS,
+)
+HPO_ASSERTION_REQUIRED_COLUMNS = (
+    "gene_symbol",
+    "disease_id",
+    "hpo_id",
+    "frequency",
+    "evidence",
+    "reference",
+)
+HPO_ASSERTION_SCOPE_COLUMNS = (
+    "mondo_id",
+    "mondo_name",
+    "disease_scope",
+    "priva_scope",
+    "scope_evidence",
+    "scope_reference",
+    "scope_review_status",
+)
+HPO_ASSERTION_SOURCE_COLUMNS = (
+    *HPO_ASSERTION_REQUIRED_COLUMNS,
+    *HPO_ASSERTION_SCOPE_COLUMNS,
+)
+HPO_INHERITANCE_TERMS = {
+    "HP:0000006": "Autosomal dominant inheritance",
+    "HP:0000007": "Autosomal recessive inheritance",
+    "HP:0001417": "X-linked inheritance",
+    "HP:0001419": "X-linked recessive inheritance",
+    "HP:0001423": "X-linked dominant inheritance",
+    "HP:0001426": "Non-Mendelian inheritance",
+    "HP:0001427": "Mitochondrial inheritance",
+    "HP:0001450": "Y-linked inheritance",
+    "HP:0010982": "Polygenic inheritance",
+    "HP:0010983": "Oligogenic inheritance",
+    "HP:0010984": "Digenic inheritance",
+    "HP:0012275": "Autosomal dominant inheritance with maternal imprinting",
+    "HP:0034341": "Pseudoautosomal recessive inheritance",
+}
+HPO_BS1_BS2_CONTEXT_IDS = set(HPO_INHERITANCE_TERMS).union(
+    {
+        "HP:0030674",  # Antenatal onset
+        "HP:0011460",  # Embryonal onset
+        "HP:0011461",  # Fetal onset
+        "HP:0003577",  # Congenital onset
+        "HP:0003623",  # Neonatal onset
+        "HP:0003593",  # Infantile onset
+        "HP:0011463",  # Childhood onset
+        "HP:0003621",  # Juvenile onset
+        "HP:0410280",  # Pediatric onset
+        "HP:0003596",  # Middle age onset
+        "HP:0003584",  # Late onset
+        "HP:0031785",  # Insidious onset
+        "HP:0012829",  # Mild
+        "HP:0040007",  # Asymptomatic
+        "HP:0003829",  # Incomplete penetrance
+        "HP:0034950",  # Complete penetrance
+        "HP:4000159",  # Moderate penetrance
+        "HP:4000160",  # Low penetrance
+    }
+)
+
+
+def _ordered_unique(values) -> list[str]:
+    return list(dict.fromkeys(value for value in values if value and value != "-"))
+
+
+def _build_assertion_hpo_symbol_map(
+    hpo_df: pd.DataFrame,
+) -> Dict[str, Dict[str, Any]]:
+    required_columns = set(HPO_ASSERTION_REQUIRED_COLUMNS)
+    missing_columns = required_columns.difference(hpo_df.columns)
+    if missing_columns:
+        raise KeyError(f"Missing HPO assertion columns: {sorted(missing_columns)}")
+
+    available_columns = [
+        column for column in HPO_ASSERTION_SOURCE_COLUMNS if column in hpo_df.columns
+    ]
+    rows = hpo_df.loc[:, available_columns].fillna("-").copy()
+    for column in available_columns:
+        rows[column] = rows[column].astype(str).str.strip().replace("", "-")
+    rows = rows.loc[
+        rows["gene_symbol"].ne("-")
+        & rows["hpo_id"].isin(HPO_BS1_BS2_CONTEXT_IDS)
+    ].drop_duplicates()
+
+    by_symbol: Dict[str, Dict[str, Any]] = {}
+    for symbol, group in rows.groupby("gene_symbol", sort=False):
+        if "priva_scope" in group.columns:
+            included_group = group.loc[group["priva_scope"].eq("include")]
+            review_group = group.loc[group["priva_scope"].eq("review")]
+            excluded_group = group.loc[group["priva_scope"].eq("exclude")]
+        else:
+            # Backward compatibility for the previous six-column assertion file.
+            included_group = group
+            review_group = group.iloc[0:0]
+            excluded_group = group.iloc[0:0]
+        assertion_columns = [
+            "disease_id",
+            "hpo_id",
+            "frequency",
+            "evidence",
+            "reference",
+            *[
+                column
+                for column in HPO_ASSERTION_SCOPE_COLUMNS
+                if column in group.columns
+            ],
+        ]
+        assertions = group.loc[
+            :, assertion_columns
+        ].to_dict(orient="records")
+        hpo_ids = _ordered_unique(included_group["hpo_id"])
+        inheritance_modes = _ordered_unique(
+            HPO_INHERITANCE_TERMS[hpo_id]
+            for hpo_id in hpo_ids
+            if hpo_id in HPO_INHERITANCE_TERMS
+        )
+        by_symbol[symbol] = {
+            "HPO_IDs": ";".join(hpo_ids),
+            # The six-column assertion source intentionally has no duplicated
+            # display label. HPO IDs remain the stable ontology identifiers.
+            "HPO_terms": "",
+            "HPO_sources": ";".join(_ordered_unique(included_group["disease_id"])),
+            "HPO_gene_inheritance": ";".join(inheritance_modes),
+            "HPO_assertions": json.dumps(
+                assertions,
+                ensure_ascii=True,
+                separators=(",", ":"),
+                sort_keys=True,
+            ),
+            "HPO_scope_review_required": int(not review_group.empty),
+            "HPO_scope_review_disease_ids": ";".join(
+                _ordered_unique(review_group["disease_id"])
+            ),
+            "HPO_scope_excluded_disease_ids": ";".join(
+                _ordered_unique(excluded_group["disease_id"])
+            ),
+        }
+    return by_symbol
+
+
+def build_hpo_symbol_map(hpo_df: pd.DataFrame) -> Dict[str, Dict[str, Any]]:
+    """Return HPO annotations keyed by gene symbol for either supported schema."""
+    if set(HPO_ASSERTION_REQUIRED_COLUMNS).issubset(hpo_df.columns):
+        return _build_assertion_hpo_symbol_map(hpo_df)
+
+    required_columns = {"SYMBOL", *LEGACY_HPO_ANNOTATION_COLUMNS}
+    missing_columns = required_columns.difference(hpo_df.columns)
+    if missing_columns:
+        raise KeyError(f"Missing HPO columns: {sorted(missing_columns)}")
+
+    hpo_rows = hpo_df.loc[
+        hpo_df["SYMBOL"].notna() & hpo_df["SYMBOL"].ne("-"),
+        ["SYMBOL", *LEGACY_HPO_ANNOTATION_COLUMNS],
+    ].copy()
+    duplicated_symbols = hpo_rows.loc[
+        hpo_rows["SYMBOL"].duplicated(keep=False), "SYMBOL"
+    ].unique()
+    if len(duplicated_symbols) > 0:
+        raise ValueError(
+            "HPO table contains duplicate gene symbols: "
+            + ", ".join(sorted(map(str, duplicated_symbols))[:10])
+        )
+
+    hpo_rows["HPO_assertions"] = "[]"
+    hpo_rows["HPO_scope_review_required"] = 0
+    hpo_rows["HPO_scope_review_disease_ids"] = ""
+    hpo_rows["HPO_scope_excluded_disease_ids"] = ""
+    return hpo_rows.set_index("SYMBOL").to_dict(orient="index")
+
+
+def select_record_hpo_annotations(
+    csq_entries: Tuple[str, ...],
+    symbol_field_index: int,
+    hpo_by_symbol: Dict[str, Dict[str, Any]],
+) -> Dict[str, Dict[str, Any]]:
+    """Select the gene annotations needed by one VCF record."""
+    symbols = set()
+    for csq_entry in csq_entries:
+        fields = csq_entry.split("|")
+        if len(fields) > symbol_field_index and fields[symbol_field_index]:
+            symbols.add(fields[symbol_field_index])
+    return {
+        symbol: hpo_by_symbol[symbol]
+        for symbol in symbols
+        if symbol in hpo_by_symbol
+    }
+
+
+def hpo_annotation_for_symbol(
+    hpo_by_symbol: Dict[str, Dict[str, Any]], symbol: Any
+) -> Dict[str, Any]:
+    """Return flat HPO fields for one transcript's gene symbol."""
+    annotation = hpo_by_symbol.get(symbol)
+    if annotation is not None:
+        return annotation
+    return {column: np.nan for column in HPO_ANNOTATION_COLUMNS}
 
 
 class SubprocessLogCollector:
@@ -303,9 +517,12 @@ def convert_record_to_tab(args: tuple) -> tuple[List[Dict[str, Any]], List[str]]
                 else:
                     row_dict.update(cadd_phred)
 
-                if len(hpo_symbol_map) == 0:
-                    hpo_symbol_map = {"HPO_IDs": np.nan, "HPO_terms": np.nan, "HPO_sources": np.nan, "HPO_gene_inheritance": np.nan}
-                row_dict.update(hpo_symbol_map)
+                row_dict.update(
+                    hpo_annotation_for_symbol(
+                        hpo_symbol_map,
+                        feature_dict.get("SYMBOL"),
+                    )
+                )
                 rows.append(row_dict)
         
         if rows:
@@ -333,6 +550,7 @@ def arg_generator(vcf_file, threads, cadd_phred_dict, hpo_symbol_map):
         worker_ind = 0
         for record in vcf_file:
             worker_ind += 1
+            record_csq = record.info.get("CSQ", ("|" * symbol_field_index,))
             yield ( extract_record_info(record, var_source_exists, control_ac_exists), 
                     str(worker_ind % threads),
                     tuple(csq_fields), 
@@ -340,7 +558,11 @@ def arg_generator(vcf_file, threads, cadd_phred_dict, hpo_symbol_map):
                     var_source_exists, 
                     control_ac_exists,
                     cadd_phred_dict.get(f"{record.chrom}:{record.pos}:{record.ref}-{record.alts[0] if record.alts else ''}", {}),
-                    {k: v for k,v in hpo_symbol_map.items() if k in [ csq.split("|")[symbol_field_index] for csq in record.info.get("CSQ", ("|" * symbol_field_index,)) ]} )
+                    select_record_hpo_annotations(
+                        record_csq,
+                        symbol_field_index,
+                        hpo_symbol_map,
+                    ) )
 
 
 def convert_vcf_to_tab(input_vcf: str, threads=4, cadd_phred_dict: dict = None, hpo_symbol_map: dict = None, chunk_size: int = 20000) -> pd.DataFrame:
@@ -593,29 +815,53 @@ def main_combine_annotations(input_vcf: str,
 
     cadd_phred_dict = cadd_subset.groupby("variant_id").apply(lambda x: x.drop_duplicates(subset="Feature").set_index("Feature")[["CADD_phred"]].to_dict(orient="index")).to_dict()
 
-    # Read HPO data - only load required columns
+    # Read HPO data. New releases use one row per disease-specific assertion;
+    # retain support for the previous one-row-per-gene file during migration.
     logger.info("Loading HPO data...")
-    hpo_required_columns = ["gene_symbol", "hpo_id", "hpo_name", "disease_id", "inheritance_modes"]
-    hpo_dtypes = {
-        "gene_symbol": "string",        # Gene symbols - use string (some are long/variable)
-        "hpo_id": "string",            # HPO IDs as string
-        "hpo_name": "string",          # HPO names as string  
-        "disease_id": "string",        # Disease IDs as string
-        "inheritance_modes": "string"   # Inheritance modes as string (safer than category)
-    }
-    hpo_df = pd.read_table(hpo_tab, low_memory=False, usecols=hpo_required_columns, dtype=hpo_dtypes)
-    logger.info(f"HPO data loaded with {hpo_df.shape[0]} rows and {hpo_df.shape[1]} columns (only required columns)")
-
-    # Prepare HPO data efficiently - data types already optimized during reading
-    hpo_df.rename(columns={
-        "gene_symbol": "SYMBOL",
-        "hpo_id": "HPO_IDs", 
-        "hpo_name": "HPO_terms",
-        "disease_id": "HPO_sources",
-        "inheritance_modes": "HPO_gene_inheritance"
-    }, inplace=True)
-    hpo_df = hpo_df.loc[hpo_df["SYMBOL"] != "-", :]
-    hpo_symbol_map = hpo_df.set_index("SYMBOL").to_dict()
+    hpo_header = set(pd.read_table(hpo_tab, nrows=0).columns)
+    if set(HPO_ASSERTION_REQUIRED_COLUMNS).issubset(hpo_header):
+        hpo_usecols = [
+            column for column in HPO_ASSERTION_SOURCE_COLUMNS if column in hpo_header
+        ]
+        hpo_df = pd.read_table(
+            hpo_tab,
+            low_memory=False,
+            usecols=hpo_usecols,
+            dtype="string",
+        )
+        hpo_schema = "disease-specific assertions"
+    else:
+        hpo_required_columns = [
+            "gene_symbol",
+            "hpo_id",
+            "hpo_name",
+            "disease_id",
+            "inheritance_modes",
+        ]
+        hpo_df = pd.read_table(
+            hpo_tab,
+            low_memory=False,
+            usecols=hpo_required_columns,
+            dtype="string",
+        )
+        hpo_df.rename(
+            columns={
+                "gene_symbol": "SYMBOL",
+                "hpo_id": "HPO_IDs",
+                "hpo_name": "HPO_terms",
+                "disease_id": "HPO_sources",
+                "inheritance_modes": "HPO_gene_inheritance",
+            },
+            inplace=True,
+        )
+        hpo_schema = "legacy gene-collapsed"
+    logger.info(
+        "HPO data loaded with %d rows and %d columns (%s schema)",
+        hpo_df.shape[0],
+        hpo_df.shape[1],
+        hpo_schema,
+    )
+    hpo_symbol_map = build_hpo_symbol_map(hpo_df)
     
     # Convert VCF to dataframe
     converted_tab = convert_vcf_to_tab(input_vcf, threads, cadd_phred_dict, hpo_symbol_map)

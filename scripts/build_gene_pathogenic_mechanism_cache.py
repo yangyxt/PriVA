@@ -5,15 +5,15 @@ The cache is designed for PriVA runtime annotation. It keeps raw source files,
 records checksums and download/check timestamps, and emits two ready-to-use
 outputs:
 
-* ``gene_mechanism_curated_assertions.json`` for curated non-LOF mechanism
-  history (GoF, dominant negative, triplosensitivity, non-LOF PanelApp notes).
+* ``gene_mechanism_curated_assertions.json`` for the broader curated mechanism
+  history, including LOF and non-LOF assertions.
 * ``gene_pathogenic_mechanism_evidence.tsv`` for DDG2P/G2P LoF history used by
   ``gene_mechanism_hub.py``.
 
-The script requires pandas for tabular parsing and can run from cron if pandas
-is available in the environment (e.g. via conda). When a SOCKS proxy is
-requested, downloads are delegated to curl because Python urllib does not
-natively support SOCKS proxies.
+The script requires pandas and is invoked by ``install_utils.sh`` as part of
+the complete PriVA installer refresh. When a SOCKS proxy is requested,
+downloads are delegated to curl because Python urllib does not natively
+support SOCKS proxies.
 """
 
 from __future__ import annotations
@@ -1686,8 +1686,7 @@ def parse_args() -> argparse.Namespace:
         default="auto",
         help=(
             "Downloader backend. auto uses Python urllib except when "
-            "--proxy-url is a SOCKS proxy, where curl is required. curl is "
-            "also useful from cron if the HPC requires proxy-only internet."
+            "--proxy-url is a SOCKS proxy, where curl is required."
         ),
     )
     parser.add_argument("--stale-lock-hours", type=float, default=24.0)
@@ -1753,8 +1752,6 @@ def main() -> int:
             "built_at_utc": iso_now(),
             "sources": source_meta,
         }
-        write_json(manifest_path, manifest)
-
         all_evidence_df = parse_all_sources(
             raw_dir=raw_dir,
             disease_scope_registry=args.disease_scope_registry,
@@ -1778,6 +1775,9 @@ def main() -> int:
         n_unmapped = len(result["_meta"].get("unmapped_symbols", []))
         print(f"json_output: {n_genes} genes, {n_unmapped} unmapped to {json_path}", file=sys.stderr)
 
+        # Do not advance successful-build provenance until all prepared outputs
+        # have been generated. A failed run must remain visibly retryable.
+        write_json(manifest_path, manifest)
         manifest_tsv_count = write_source_manifest_tsv(
             prepared_dir / "source_manifest.tsv",
             manifest,

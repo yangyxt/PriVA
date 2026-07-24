@@ -185,9 +185,15 @@ def _add_identifier(target: dict[str, list[str]], identifier: Any) -> None:
 
 
 def _condition_key(row: dict[str, str]) -> str:
-    """Prefer exact MONDO identity and otherwise retain HPO's native disease ID."""
-    return _clean(row.get("mondo_id")).upper() or _clean(
-        row.get("disease_id")
+    """Use HPO's native disease ID and retain MONDO as a secondary alias.
+
+    MONDO occasionally maps multiple HPO disease records that have different
+    PriVA scope decisions to one ontology term. Native OMIM/ORPHA identity is
+    therefore the lossless condition key. MONDO remains usable by the alias
+    index only when it resolves to one condition within the queried gene.
+    """
+    return _clean(row.get("disease_id")).upper() or _clean(
+        row.get("mondo_id")
     ).upper()
 
 
@@ -214,6 +220,7 @@ def _new_condition(row: dict[str, str]) -> dict[str, Any]:
             "decision": _clean(row.get("priva_scope")),
             "category": _clean(row.get("disease_scope")),
             "review_status": _clean(row.get("scope_review_status")),
+            "review_statuses": [],
             "evidence": [],
             "references": [],
         },
@@ -239,7 +246,6 @@ def _merge_scope(condition: dict[str, Any], row: dict[str, str]) -> None:
     for target, source in (
         ("decision", "priva_scope"),
         ("category", "disease_scope"),
-        ("review_status", "scope_review_status"),
     ):
         incoming = _clean(row.get(source))
         current = _clean(scope.get(target))
@@ -250,6 +256,15 @@ def _merge_scope(condition: dict[str, Any], row: dict[str, str]) -> None:
             )
         if incoming:
             scope[target] = incoming
+    review_status = _clean(row.get("scope_review_status"))
+    if review_status and review_status not in scope["review_statuses"]:
+        scope["review_statuses"].append(review_status)
+    if "manually_confirmed" in scope["review_statuses"]:
+        scope["review_status"] = "manually_confirmed"
+    elif len(scope["review_statuses"]) == 1:
+        scope["review_status"] = scope["review_statuses"][0]
+    elif len(scope["review_statuses"]) > 1:
+        scope["review_status"] = "mixed"
     for value in _split_multi(row.get("scope_evidence")):
         if value not in scope["evidence"]:
             scope["evidence"].append(value)
@@ -1016,7 +1031,7 @@ def _cache_counts(genes: dict[str, dict[str, Any]]) -> dict[str, int]:
             bool(condition["penetrance"]["statuses"]) for condition in conditions
         ),
         "conditions_with_pathogenic_mechanisms": resolved_mechanism_conditions,
-        "condition_linked_variants": condition_variants,
+        "condition_variant_links": condition_variants,
         "unmapped_mechanisms": sum(
             len(gene["unmapped_evidence"]["mechanisms"])
             for gene in genes.values()

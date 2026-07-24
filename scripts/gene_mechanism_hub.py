@@ -647,6 +647,11 @@ class GeneMechanismHub:
                 "mechanism_confidence": mechanism_confidence,
                 "disease_confidence": disease_confidence,
                 "source_record_id": _clean(row.get("source_record_id")),
+                "source_condition_id": _clean(row.get("source_condition_id")),
+                "mondo_id": _clean(row.get("mondo_id")),
+                "disease_scope": _clean(row.get("disease_scope")),
+                "priva_scope": _clean(row.get("priva_scope")),
+                "scope_review_status": _clean(row.get("scope_review_status")),
             }
             resolved = self._try_resolve_symbol(symbol)
             keys = {symbol}
@@ -1237,7 +1242,17 @@ class GeneMechanismHub:
                             "source": source,
                             "mechanism": mechanism,
                             "pmids": pmids,
+                            "source_record_id": _clean(data.get("source_record_id")),
+                            "source_condition_id": _clean(
+                                data.get("source_condition_id")
+                            ),
+                            "mondo_id": _clean(data.get("mondo_id")),
                             "disease": _clean(data.get("disease")),
+                            "disease_scope": _clean(data.get("disease_scope")),
+                            "priva_scope": _clean(data.get("priva_scope")),
+                            "scope_review_status": _clean(
+                                data.get("scope_review_status")
+                            ),
                             "consequence": _clean(data.get("consequence")),
                             "chrom": _clean(data.get("chr")),
                             "pos": _clean(data.get("pos")),
@@ -1407,36 +1422,49 @@ class GeneMechanismHub:
         }
 
     def condition_mechanism_assertions(self, gene_symbol: Any) -> list[dict[str, Any]]:
-        """Return condition-specific curated mechanism/allelic assertions."""
+        """Return G2P/Orphadata histories enriched by the same HPO disease."""
+        symbol = self._resolved_symbol_key(gene_symbol)
         history = self.mechanism_history(gene_symbol, include_entries=True)
+        self._load_hpo()
+        hpo_index = self._hpo_condition_index or {}
         assertions: list[dict[str, Any]] = []
-        seen: set[tuple[str, str, str, str, str]] = set()
+        seen: set[str] = set()
         for entry in history.get("entries", []):
             mechanism = _clean(entry.get("mechanism")).upper()
             if mechanism not in CANONICAL_MECHANISMS:
                 continue
-            # Other curated variants in the same gene establish history, but
-            # they are not query-variant condition assertions. GoFCards exact
-            # matches are added from the query row below.
-            if entry.get("level") == "variant_level":
+            # Only G2P and Orphadata define the gene-condition-mechanism axis.
+            # ClinGen dosage remains gene-level evidence, and variant-level
+            # GoFCards/ClinVar handling is performed only for the query allele.
+            if entry.get("source") not in {"G2P_DDG2P", "Orphadata"}:
                 continue
             record = {
                 "source": _clean(entry.get("source")),
+                "source_record_id": _clean(entry.get("source_record_id")),
+                "source_condition_id": _clean(
+                    entry.get("source_condition_id")
+                ),
+                "mondo_id": _clean(entry.get("mondo_id")),
                 "disease": _clean(entry.get("disease")),
                 "mechanism": mechanism,
                 "allelic_requirement": _clean(entry.get("allelic_requirement")),
+                "disease_scope": _clean(entry.get("disease_scope")),
+                "priva_scope": _clean(entry.get("priva_scope")),
+                "scope_review_status": _clean(
+                    entry.get("scope_review_status")
+                ),
                 "confidence": _clean(entry.get("confidence")),
+                "pmids": list(entry.get("pmids", [])),
             }
-            key = tuple(record[field] for field in (
-                "source",
-                "disease",
-                "mechanism",
-                "allelic_requirement",
-                "confidence",
-            ))
-            if key not in seen:
-                seen.add(key)
-                assertions.append(record)
+            for enriched in enrich_condition_mechanism_assertion(
+                record,
+                gene_symbol=symbol,
+                hpo_condition_index=hpo_index,
+            ):
+                key = json.dumps(enriched, sort_keys=True, separators=(",", ":"))
+                if key not in seen:
+                    seen.add(key)
+                    assertions.append(enriched)
         return assertions
 
     def matched_clinvar_vcv_for_gofcards(
@@ -1521,6 +1549,91 @@ def _hpo_allelic_requirements(inheritance_modes: Any) -> set[str]:
     if "Mitochondrial inheritance" in modes:
         requirements.add("mitochondrial")
     return requirements
+
+
+def enrich_condition_mechanism_assertion(
+    assertion: dict[str, Any],
+    *,
+    gene_symbol: Any,
+    hpo_condition_index: dict[tuple[str, str], dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Bind one mechanism assertion to HPO for the same gene and disease.
+
+    Native disease identity is tried before MONDO identity. This avoids linking
+    through names and prevents another disease of the same gene from donating
+    inheritance, penetrance, or onset. A condition explicitly marked ``review``
+    or ``exclude`` is not eligible for automatic PriVA mechanism transfer.
+
+    G2P allelic requirements remain authoritative when present. Orphadata does
+    not encode allelic requirements, so an unambiguous HPO inheritance term can
+    supply a compact dominant, recessive, or mitochondrial requirement. If HPO
+    legitimately records more than one mode, separate records are returned so
+    no mode is hidden in a lossy combined string.
+    """
+    record = dict(assertion)
+    if _clean(record.get("priva_scope")).lower() in {"review", "exclude"}:
+        return []
+
+    symbol_key = _clean(gene_symbol).upper()
+    hpo_record: dict[str, Any] | None = None
+    for condition_id in (
+        record.get("source_condition_id"),
+        record.get("mondo_id"),
+    ):
+        condition_key = _clean(condition_id).upper()
+        if condition_key:
+            hpo_record = hpo_condition_index.get((symbol_key, condition_key))
+        if hpo_record is not None:
+            break
+
+    if hpo_record is None:
+        record.update(
+            {
+                "hpo_match_status": "no_matching_gene_condition_hpo_record",
+                "hpo_inheritance_modes": [],
+                "penetrance_hpo_ids": [],
+                "onset_hpo_ids": [],
+                "hpo_assertions": [],
+            }
+        )
+        return [record]
+    if _clean(hpo_record.get("priva_scope")).lower() in {"review", "exclude"}:
+        return []
+
+    record.update(
+        {
+            "hpo_match_status": "matched_gene_and_condition",
+            "hpo_disease_id": _clean(hpo_record.get("disease_id")),
+            "hpo_inheritance_modes": list(
+                hpo_record.get("inheritance_modes", [])
+            ),
+            "penetrance_hpo_ids": list(
+                hpo_record.get("penetrance_hpo_ids", [])
+            ),
+            "onset_hpo_ids": list(hpo_record.get("onset_hpo_ids", [])),
+            "hpo_assertions": list(hpo_record.get("hpo_assertions", [])),
+            "disease_scope": _clean(hpo_record.get("disease_scope"))
+            or _clean(record.get("disease_scope")),
+            "priva_scope": _clean(hpo_record.get("priva_scope"))
+            or _clean(record.get("priva_scope")),
+            "scope_review_status": _clean(
+                hpo_record.get("scope_review_status")
+            )
+            or _clean(record.get("scope_review_status")),
+        }
+    )
+    if _clean(record.get("allelic_requirement")):
+        return [record]
+
+    requirements = sorted(
+        _hpo_allelic_requirements(";".join(record["hpo_inheritance_modes"]))
+    )
+    if not requirements:
+        return [record]
+    return [
+        {**record, "allelic_requirement": requirement}
+        for requirement in requirements
+    ]
 
 
 def _compact_inheritance(allelic_requirement: Any) -> str:

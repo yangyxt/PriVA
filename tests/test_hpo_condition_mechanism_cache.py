@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 import sys
 
@@ -7,6 +8,7 @@ sys.path.insert(0, str(ROOT / "scripts"))
 
 from build_hpo_condition_mechanism_cache import (  # noqa: E402
     attach_condition_mechanisms,
+    attach_gofcards_variants,
     build_hpo_gene_condition_frame,
 )
 
@@ -127,4 +129,110 @@ def test_mechanisms_attach_only_through_exact_condition_identifiers(
         "mechanism_records": 3,
         "matched": 1,
         "unmapped": 2,
+    }
+
+
+def test_gofcards_variants_require_exact_clinvar_hpo_condition_identity(
+    tmp_path: Path,
+) -> None:
+    hpo = tmp_path / "hpo.tsv"
+    hpo.write_text(
+        HPO_HEADER
+        + "GENE1\tOMIM:1\tHP:0000006\t-\tTAS\tOMIM:1\tMONDO:1\t"
+        "Condition one\tmendelian_non_neoplastic\tinclude\tMONDO_ancestor\t"
+        "MONDO:v1\tauto_supported\n",
+        encoding="utf-8",
+    )
+    gofcards = tmp_path / "gofcards.tsv"
+    gofcards.write_text(
+        "mechanism\tHGNC_Symbol\tHGVSc\tHGVSp\thgvsp_key\tmatch_status\t"
+        "gofcards_accession_id\tgofcards_variant_id\tdisease\tpmids\tpscore\t"
+        "function\tpathway\tallele_key\thg19_genomic_key\thg19_vcf_key\t"
+        "hg38_genomic_key\thg38_vcf_key\n"
+        "GOF\tGENE1\tNM_1:c.1A>G\tNP_1:p.Lys1Arg\tNP_1:p.Lys1Arg\tmatched\t"
+        "rs1\tVAR1\tCondition one\tPMID:1\t5\tActivating\tPathway\tVAR1\t"
+        "1|10|A|G\t1|10|A|G\t1|20|A|G\t1|20|A|G\n"
+        "GOF\tGENE1\tNM_1:c.2A>G\tNP_1:p.Lys2Arg\tNP_1:p.Lys2Arg\tmatched\t"
+        "rs2\tVAR2\tCondition two\tPMID:2\t3\tActivating\tPathway\tVAR2\t"
+        "1|11|A|G\t1|11|A|G\t1|21|A|G\t1|21|A|G\n",
+        encoding="utf-8",
+    )
+    mechanism_json = tmp_path / "mechanisms.json"
+    mechanism_json.write_text(
+        json.dumps(
+            {
+                "HGNC:1": {
+                    "symbol": "GENE1",
+                    "variant_level": [
+                        {
+                            "ClinVar_VCV": {
+                                "variation": {"vcv_accession": "VCV0001"},
+                                "match": {
+                                    "matched_gofcards_records": [
+                                        {
+                                            "gofcards_variant_id": "VAR1",
+                                            "gofcards_accession_id": "rs1",
+                                        }
+                                    ]
+                                },
+                                "condition_assertions": [
+                                    {
+                                        "rcv_accession": "RCV0001",
+                                        "conditions": [
+                                            {
+                                                "database": "MedGen",
+                                                "id": "C1",
+                                            }
+                                        ],
+                                        "matched_scvs": [
+                                            {
+                                                "trait_mappings": [
+                                                    {
+                                                        "mapping_ref": "OMIM",
+                                                        "mapping_value": "1",
+                                                    }
+                                                ]
+                                            }
+                                        ],
+                                        "germline_classification": {
+                                            "clinical_significance": "Pathogenic",
+                                            "review_stars": 2,
+                                        },
+                                    }
+                                ],
+                            }
+                        }
+                    ],
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    genes = build_hpo_gene_condition_frame(hpo)
+
+    stats = attach_gofcards_variants(genes, gofcards, mechanism_json)
+
+    gof = genes["GENE1"]["conditions"]["MONDO:1"][
+        "pathogenic_mechanisms"
+    ]["GOF"]
+    exact = gof["variants"]["GOFCARDS:VAR1"]
+    assert exact["condition_link"] == {
+        "status": "exact",
+        "condition_key": "MONDO:1",
+    }
+    assert exact["clinvar_links"][0]["vcv_accession"] == "VCV0001"
+    assert exact["match_keys"]["GRCh38"] == ["1|20|A|G"]
+    unresolved = genes["GENE1"]["unmapped_evidence"]["variants"][
+        "GOFCARDS:VAR2"
+    ]
+    assert unresolved["condition_link"]["reason"] == (
+        "no_exact_clinvar_condition_link"
+    )
+    assert genes["GENE1"]["summary"]["pathogenic_mechanisms"] == ["GOF"]
+    assert stats == {
+        "source_rows": 2,
+        "unique_variants": 2,
+        "condition_linked_variants": 1,
+        "condition_variant_links": 1,
+        "unmapped_variants": 1,
     }

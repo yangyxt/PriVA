@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import csv
 import gzip
+import json
 import re
 from collections import defaultdict
 from pathlib import Path
@@ -99,6 +100,27 @@ MECHANISM_REQUIRED_COLUMNS = {
     "disease_confidence",
     "pmids",
     "evidence_url",
+}
+
+GOFCARDS_REQUIRED_COLUMNS = {
+    "mechanism",
+    "HGNC_Symbol",
+    "HGVSc",
+    "HGVSp",
+    "hgvsp_key",
+    "match_status",
+    "gofcards_accession_id",
+    "gofcards_variant_id",
+    "disease",
+    "pmids",
+    "pscore",
+    "function",
+    "pathway",
+    "allele_key",
+    "hg19_genomic_key",
+    "hg19_vcf_key",
+    "hg38_genomic_key",
+    "hg38_vcf_key",
 }
 
 
@@ -483,6 +505,12 @@ def _refresh_gene_summary(gene: dict[str, Any]) -> None:
         if mechanism:
             mechanisms.add(mechanism)
             unmapped_counts[mechanism] += 1
+    unmapped_variant_counts: dict[str, int] = defaultdict(int)
+    for variant in gene["unmapped_evidence"]["variants"].values():
+        mechanism = _clean(variant.get("mechanism")).upper()
+        if mechanism:
+            mechanisms.add(mechanism)
+            unmapped_variant_counts[mechanism] += 1
     summary.update(
         {
             "pathogenic_mechanisms": sorted(mechanisms),
@@ -493,6 +521,9 @@ def _refresh_gene_summary(gene: dict[str, Any]) -> None:
             "unmapped_mechanism_counts": dict(sorted(unmapped_counts.items())),
             "unmapped_variant_count": len(
                 gene["unmapped_evidence"]["variants"]
+            ),
+            "unmapped_variant_mechanism_counts": dict(
+                sorted(unmapped_variant_counts.items())
             ),
         }
     )
@@ -561,5 +592,371 @@ def attach_condition_mechanisms(
         gene["unmapped_evidence"]["mechanisms"].sort(
             key=_mechanism_evidence_key
         )
+        _refresh_gene_summary(gene)
+    return stats
+
+
+# ---------------------------------------------------------------------------
+# Exact GoFCards variant and ClinVar condition enrichment
+# ---------------------------------------------------------------------------
+
+
+def _normalize_clinvar_condition_identifier(
+    namespace: Any,
+    value: Any,
+) -> str:
+    """Normalize only registry identifiers supported by exact identity joins."""
+    database = re.sub(r"[^A-Z0-9]", "", _clean(namespace).upper())
+    identifier = _clean(value).upper()
+    if not database or not identifier:
+        return ""
+    prefixes = {
+        "OMIM": "OMIM",
+        "MONDO": "MONDO",
+        "ORPHA": "ORPHA",
+        "ORPHANET": "ORPHA",
+        "MEDGEN": "MEDGEN",
+    }
+    prefix = prefixes.get(database)
+    if not prefix:
+        return ""
+    if ":" in identifier:
+        incoming_prefix, identifier = identifier.split(":", 1)
+        if incoming_prefix in {"ORPHANET", "ORPHA"}:
+            incoming_prefix = "ORPHA"
+        if incoming_prefix != prefix:
+            return ""
+    return f"{prefix}:{identifier}"
+
+
+def _clinvar_condition_identities(
+    condition_assertion: dict[str, Any],
+) -> list[str]:
+    """Extract database identifiers without disease-name or PMID matching."""
+    identities: list[str] = []
+    for condition in condition_assertion.get("conditions", []) or []:
+        if not isinstance(condition, dict):
+            continue
+        identifier = _normalize_clinvar_condition_identifier(
+            condition.get("database"),
+            condition.get("id"),
+        )
+        if identifier and identifier not in identities:
+            identities.append(identifier)
+    for scv in condition_assertion.get("matched_scvs", []) or []:
+        if not isinstance(scv, dict):
+            continue
+        for mapping in scv.get("trait_mappings", []) or []:
+            if not isinstance(mapping, dict):
+                continue
+            identifier = _normalize_clinvar_condition_identifier(
+                mapping.get("mapping_ref"),
+                mapping.get("mapping_value"),
+            )
+            if identifier and identifier not in identities:
+                identities.append(identifier)
+    return identities
+
+
+def _gofcards_link_tokens(record: dict[str, Any]) -> list[str]:
+    tokens: list[str] = []
+    for field in (
+        "gofcards_variant_id",
+        "gofcards_accession_id",
+        "allele_key",
+        "hg19_vcf_key",
+        "hg38_vcf_key",
+    ):
+        value = _clean(record.get(field))
+        if value and value not in tokens:
+            tokens.append(value)
+    return tokens
+
+
+def build_clinvar_gofcards_condition_links(
+    mechanism_json: str | Path,
+) -> dict[tuple[str, str], list[dict[str, Any]]]:
+    """Index compact ClinVar condition links by exact GoFCards record tokens."""
+    with Path(mechanism_json).open(encoding="utf-8") as handle:
+        payload = json.load(handle)
+    if not isinstance(payload, dict):
+        raise ValueError(f"{mechanism_json} must contain a JSON object")
+
+    index: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
+    seen: dict[tuple[str, str], set[tuple[str, ...]]] = defaultdict(set)
+    for gene_record in payload.values():
+        if not isinstance(gene_record, dict):
+            continue
+        symbol = _clean(gene_record.get("symbol")).upper()
+        if not symbol:
+            continue
+        for variant_record in gene_record.get("variant_level", []) or []:
+            if not isinstance(variant_record, dict):
+                continue
+            vcv = variant_record.get("ClinVar_VCV")
+            if not isinstance(vcv, dict):
+                continue
+            matched_gofcards = (
+                vcv.get("match", {}).get("matched_gofcards_records", []) or []
+            )
+            tokens = list(
+                dict.fromkeys(
+                    token
+                    for record in matched_gofcards
+                    if isinstance(record, dict)
+                    for token in _gofcards_link_tokens(record)
+                )
+            )
+            if not tokens:
+                continue
+            variation = vcv.get("variation", {}) or {}
+            vcv_accession = _clean(variation.get("vcv_accession"))
+            for assertion in vcv.get("condition_assertions", []) or []:
+                if not isinstance(assertion, dict):
+                    continue
+                identities = _clinvar_condition_identities(assertion)
+                classification = assertion.get("germline_classification", {}) or {}
+                link = {
+                    "vcv_accession": vcv_accession,
+                    "rcv_accession": _clean(assertion.get("rcv_accession")),
+                    "condition_identifiers": identities,
+                    "clinical_significance": _clean(
+                        classification.get("clinical_significance")
+                    ),
+                    "review_stars": classification.get("review_stars"),
+                }
+                identity = (
+                    link["vcv_accession"],
+                    link["rcv_accession"],
+                    ";".join(identities),
+                )
+                for token in tokens:
+                    key = (symbol, token)
+                    if identity not in seen[key]:
+                        seen[key].add(identity)
+                        index[key].append(link)
+    return dict(index)
+
+
+def _append_unique(target: list[str], value: Any) -> None:
+    cleaned = _clean(value)
+    if cleaned and cleaned != "." and cleaned not in target:
+        target.append(cleaned)
+
+
+def _new_gofcards_variant(row: dict[str, str]) -> dict[str, Any]:
+    return {
+        "mechanism": "GOF",
+        "gofcards_variant_ids": [],
+        "gofcards_accession_ids": [],
+        "disease_labels": [],
+        "pmids": [],
+        "pscores": [],
+        "functions": [],
+        "pathways": [],
+        "hgvs": {"coding": [], "protein": []},
+        "match_keys": {"protein": [], "GRCh37": [], "GRCh38": []},
+        "match_statuses": [],
+        "clinvar_links": [],
+        "_tokens": [],
+    }
+
+
+def _merge_gofcards_variant(
+    variant: dict[str, Any],
+    row: dict[str, str],
+) -> None:
+    _append_unique(variant["gofcards_variant_ids"], row.get("gofcards_variant_id"))
+    _append_unique(
+        variant["gofcards_accession_ids"], row.get("gofcards_accession_id")
+    )
+    _append_unique(variant["disease_labels"], row.get("disease"))
+    for pmid in _split_multi(row.get("pmids")):
+        _append_unique(variant["pmids"], pmid)
+    _append_unique(variant["pscores"], row.get("pscore"))
+    _append_unique(variant["functions"], row.get("function"))
+    _append_unique(variant["pathways"], row.get("pathway"))
+    _append_unique(variant["hgvs"]["coding"], row.get("HGVSc"))
+    _append_unique(variant["hgvs"]["protein"], row.get("HGVSp"))
+    _append_unique(variant["match_keys"]["protein"], row.get("hgvsp_key"))
+    for field in ("hg19_genomic_key", "hg19_vcf_key"):
+        _append_unique(variant["match_keys"]["GRCh37"], row.get(field))
+    for field in ("hg38_genomic_key", "hg38_vcf_key"):
+        _append_unique(variant["match_keys"]["GRCh38"], row.get(field))
+    _append_unique(variant["match_statuses"], row.get("match_status"))
+    for token in _gofcards_link_tokens(row):
+        _append_unique(variant["_tokens"], token)
+
+
+def _gofcards_variant_key(row: dict[str, str]) -> str:
+    for field in (
+        "gofcards_variant_id",
+        "allele_key",
+        "gofcards_accession_id",
+        "hgvsp_key",
+        "hg38_vcf_key",
+        "hg19_vcf_key",
+    ):
+        value = _clean(row.get(field))
+        if value and value != ".":
+            return f"GOFCARDS:{value}"
+    raise ValueError("GoFCards row has no stable variant or allele key")
+
+
+def _condition_link_mechanism_evidence(
+    variant_key: str,
+    links: list[dict[str, Any]],
+) -> dict[str, Any]:
+    identifiers = sorted(
+        {
+            identifier
+            for link in links
+            for identifier in link["condition_identifiers"]
+        }
+    )
+    vcv_accessions = sorted(
+        {_clean(link.get("vcv_accession")) for link in links}
+        - {""}
+    )
+    return {
+        "source": "GoFCards_exact+ClinVar_VCV",
+        "source_record_id": ";".join(vcv_accessions) or variant_key,
+        "condition_identifiers": identifiers,
+        "condition_label": "",
+        "mechanism": "GOF",
+        "mechanism_raw": "gain of function",
+        "allelic_requirement": "",
+        "mechanism_confidence": "exact_variant",
+        "disease_confidence": "ClinVar_germline_assertion",
+        "source_scope": {"decision": "", "category": "", "review_status": ""},
+        "pmids": [],
+        "evidence_url": "https://www.ncbi.nlm.nih.gov/clinvar/",
+    }
+
+
+def _public_variant_record(
+    variant: dict[str, Any],
+    *,
+    status: str,
+    condition_key: str = "",
+    clinvar_links: list[dict[str, Any]] | None = None,
+    reason: str = "",
+) -> dict[str, Any]:
+    record = {key: value for key, value in variant.items() if key != "_tokens"}
+    record["condition_link"] = {
+        "status": status,
+        "condition_key": condition_key,
+    }
+    if reason:
+        record["condition_link"]["reason"] = reason
+    record["clinvar_links"] = list(clinvar_links or [])
+    return record
+
+
+def attach_gofcards_variants(
+    genes: dict[str, dict[str, Any]],
+    gofcards_variants: str | Path,
+    mechanism_json: str | Path,
+) -> dict[str, int]:
+    """Nest condition-linked GOF alleles and retain every unresolved allele."""
+    clinvar_links = build_clinvar_gofcards_condition_links(mechanism_json)
+    aliases_by_gene = _condition_alias_index(genes)
+    grouped: dict[tuple[str, str], dict[str, Any]] = {}
+    row_count = 0
+    for row in _iter_tsv_rows(gofcards_variants, GOFCARDS_REQUIRED_COLUMNS):
+        symbol = _clean(row.get("HGNC_Symbol")).upper()
+        if not symbol:
+            continue
+        row_count += 1
+        variant_key = _gofcards_variant_key(row)
+        variant = grouped.setdefault(
+            (symbol, variant_key),
+            _new_gofcards_variant(row),
+        )
+        _merge_gofcards_variant(variant, row)
+
+    stats = {
+        "source_rows": row_count,
+        "unique_variants": len(grouped),
+        "condition_linked_variants": 0,
+        "condition_variant_links": 0,
+        "unmapped_variants": 0,
+    }
+    for (symbol, variant_key), variant in sorted(grouped.items()):
+        gene = genes.setdefault(symbol, _empty_gene())
+        links = list(
+            {
+                (
+                    link["vcv_accession"],
+                    link["rcv_accession"],
+                    ";".join(link["condition_identifiers"]),
+                ): link
+                for token in variant["_tokens"]
+                for link in clinvar_links.get((symbol, token), [])
+            }.values()
+        )
+        by_condition: dict[str, list[dict[str, Any]]] = defaultdict(list)
+        ambiguous_link = False
+        for link in links:
+            matched_keys = {
+                aliases_by_gene.get(symbol, {}).get(identifier)
+                for identifier in link["condition_identifiers"]
+                if aliases_by_gene.get(symbol, {}).get(identifier)
+            }
+            if len(matched_keys) == 1:
+                by_condition[next(iter(matched_keys))].append(link)
+            elif len(matched_keys) > 1:
+                ambiguous_link = True
+
+        if by_condition:
+            stats["condition_linked_variants"] += 1
+            for condition_key, condition_links in sorted(by_condition.items()):
+                condition = gene["conditions"][condition_key]
+                evidence = _condition_link_mechanism_evidence(
+                    variant_key,
+                    condition_links,
+                )
+                _attach_mechanism_to_condition(condition, evidence)
+                condition["pathogenic_mechanisms"]["GOF"]["variants"][
+                    variant_key
+                ] = _public_variant_record(
+                    variant,
+                    status="exact",
+                    condition_key=condition_key,
+                    clinvar_links=condition_links,
+                )
+                stats["condition_variant_links"] += 1
+            continue
+
+        reason = (
+            "ambiguous_clinvar_condition_identifiers"
+            if ambiguous_link
+            else (
+                "no_exact_hpo_condition_identifier"
+                if links
+                else "no_exact_clinvar_condition_link"
+            )
+        )
+        gene["unmapped_evidence"]["variants"][variant_key] = (
+            _public_variant_record(
+                variant,
+                status="unresolved",
+                clinvar_links=links,
+                reason=reason,
+            )
+        )
+        stats["unmapped_variants"] += 1
+
+    for gene in genes.values():
+        gene["unmapped_evidence"]["variants"] = dict(
+            sorted(gene["unmapped_evidence"]["variants"].items())
+        )
+        for condition in gene["conditions"].values():
+            condition["pathogenic_mechanisms"] = dict(
+                sorted(condition["pathogenic_mechanisms"].items())
+            )
+            for block in condition["pathogenic_mechanisms"].values():
+                block["variants"] = dict(sorted(block["variants"].items()))
+                block["evidence"].sort(key=_mechanism_evidence_key)
         _refresh_gene_summary(gene)
     return stats

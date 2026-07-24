@@ -1604,6 +1604,8 @@ def enrich_condition_mechanism_assertion(
         {
             "hpo_match_status": "matched_gene_and_condition",
             "hpo_disease_id": _clean(hpo_record.get("disease_id")),
+            "mondo_id": _clean(record.get("mondo_id"))
+            or _clean(hpo_record.get("mondo_id")),
             "hpo_inheritance_modes": list(
                 hpo_record.get("inheritance_modes", [])
             ),
@@ -1634,6 +1636,81 @@ def enrich_condition_mechanism_assertion(
         {**record, "allelic_requirement": requirement}
         for requirement in requirements
     ]
+
+
+def extract_exact_clinvar_condition_identities(
+    condition_assertion: dict[str, Any],
+) -> list[dict[str, str]]:
+    """Extract only explicit disease identifiers from one matched ClinVar RCV.
+
+    The aggregate condition commonly carries a MedGen identifier, while its
+    contributing SCVs can carry exact OMIM, Orphanet, or MONDO cross-references
+    in ``trait_mappings``. These database identifiers are safe for an identity
+    join. Disease names, publications, and phenotype similarity are deliberately
+    ignored because they do not prove that two condition records are identical.
+
+    MedGen identifiers are retained for audit, but the current HPO condition
+    table is keyed by OMIM/ORPHA/MONDO. Consequently, MedGen alone does not
+    transfer HPO inheritance or penetrance.
+    """
+    raw_identities: list[tuple[str, str, str, str]] = []
+    for condition in condition_assertion.get("conditions", []) or []:
+        if not isinstance(condition, dict):
+            continue
+        raw_identities.append(
+            (
+                _clean(condition.get("database")),
+                _clean(condition.get("id")),
+                _clean(condition.get("name")),
+                "ClinVar_RCV_condition",
+            )
+        )
+    for scv in condition_assertion.get("matched_scvs", []) or []:
+        if not isinstance(scv, dict):
+            continue
+        for mapping in scv.get("trait_mappings", []) or []:
+            if not isinstance(mapping, dict):
+                continue
+            raw_identities.append(
+                (
+                    _clean(mapping.get("mapping_ref")),
+                    _clean(mapping.get("mapping_value")),
+                    _clean(mapping.get("medgen_name")),
+                    "ClinVar_SCV_trait_mapping",
+                )
+            )
+
+    prefixes = {
+        "OMIM": "OMIM",
+        "ORPHA": "ORPHA",
+        "ORPHANET": "ORPHA",
+        "MONDO": "MONDO",
+        "MEDGEN": "MEDGEN",
+    }
+    identities: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for database, identifier, name, provenance in raw_identities:
+        prefix = prefixes.get(database.upper())
+        if not prefix or not identifier:
+            continue
+        cleaned_id = identifier
+        for known_prefix in ("OMIM:", "ORPHA:", "ORPHANET:", "MONDO:", "MEDGEN:"):
+            if cleaned_id.upper().startswith(known_prefix):
+                cleaned_id = cleaned_id.split(":", 1)[1]
+                break
+        condition_id = f"{prefix}:{cleaned_id}"
+        if condition_id.upper() in seen:
+            continue
+        seen.add(condition_id.upper())
+        identities.append(
+            {
+                "source_condition_id": condition_id,
+                "mondo_id": condition_id if prefix == "MONDO" else "",
+                "disease": name,
+                "condition_id_provenance": provenance,
+            }
+        )
+    return identities
 
 
 def _compact_inheritance(allelic_requirement: Any) -> str:
@@ -1938,10 +2015,29 @@ def annotate_gene_mechanism_categories(
                     ]
                     vcv_conditions.extend(condition_names)
                     if use_vcv_condition_history:
-                        assertions.append(
-                            {
+                        identities = extract_exact_clinvar_condition_identities(
+                            condition_assertion
+                        )
+                        if not identities:
+                            identities = [
+                                {
+                                    "source_condition_id": "",
+                                    "mondo_id": "",
+                                    "disease": ";".join(condition_names),
+                                    "condition_id_provenance": (
+                                        "ClinVar_condition_identifier_unresolved"
+                                    ),
+                                }
+                            ]
+                        identity_assertions: list[dict[str, Any]] = []
+                        hpo_identity_assertions: list[dict[str, Any]] = []
+                        has_hpo_identity = False
+                        hpo_index = hub._hpo_condition_index or {}
+                        for identity in identities:
+                            base_assertion = {
                                 "source": "GoFCards_exact+ClinVar_VCV",
-                                "disease": ";".join(condition_names),
+                                "source_record_id": accession,
+                                **identity,
                                 "mechanism": "GOF",
                                 "allelic_requirement": "",
                                 "confidence": (
@@ -1950,6 +2046,33 @@ def annotate_gene_mechanism_categories(
                                     else "ClinVar_unrated"
                                 ),
                             }
+                            enriched = enrich_condition_mechanism_assertion(
+                                base_assertion,
+                                gene_symbol=symbol,
+                                hpo_condition_index=hpo_index,
+                            )
+                            identity_assertions.extend(enriched)
+                            identity_key = (
+                                symbol.upper(),
+                                _clean(identity.get("source_condition_id")).upper(),
+                            )
+                            mondo_key = (
+                                symbol.upper(),
+                                _clean(identity.get("mondo_id")).upper(),
+                            )
+                            if identity_key in hpo_index or (
+                                mondo_key[1] and mondo_key in hpo_index
+                            ):
+                                has_hpo_identity = True
+                                hpo_identity_assertions.extend(enriched)
+                        # When any explicit ClinVar ID maps to HPO, use only
+                        # those mapped records. This prevents an unmatched
+                        # MedGen alias from bypassing an HPO review/exclude
+                        # decision attached to the corresponding OMIM/ORPHA ID.
+                        assertions.extend(
+                            hpo_identity_assertions
+                            if has_hpo_identity
+                            else identity_assertions
                         )
             if use_vcv_condition_history and not any(
                 assertion.get("mechanism") == "GOF" for assertion in assertions

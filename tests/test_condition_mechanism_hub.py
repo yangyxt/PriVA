@@ -10,6 +10,7 @@ sys.path.insert(0, str(ROOT / "scripts"))
 from gene_mechanism_hub import (  # noqa: E402
     build_hpo_condition_index,
     enrich_condition_mechanism_assertion,
+    extract_exact_clinvar_condition_identities,
     select_condition_histories_for_variant,
 )
 
@@ -176,3 +177,45 @@ def test_select_condition_histories_for_variant_is_mechanism_specific() -> None:
         "DOMINANT_NEGATIVE",
     ]
     assert [row["mechanism"] for row in conflict] == ["LOF", "GOF"]
+
+
+def test_extract_exact_clinvar_condition_identities_uses_database_ids_only() -> None:
+    condition_assertion = {
+        "conditions": [
+            {
+                "database": "MedGen",
+                "id": "C3809233",
+                "name": "Noonan syndrome 8",
+            }
+        ],
+        "matched_scvs": [
+            {
+                "trait_mappings": [
+                    {
+                        "mapping_ref": "OMIM",
+                        "mapping_value": "615355",
+                        "medgen_name": "Noonan syndrome 8",
+                    },
+                    {
+                        "mapping_ref": "Orphanet",
+                        "mapping_value": "648",
+                        "medgen_name": "Noonan syndrome",
+                    },
+                    {
+                        "mapping_ref": "Preferred",
+                        "mapping_value": "Noonan syndrome 8",
+                        "medgen_name": "Noonan syndrome 8",
+                    },
+                ]
+            }
+        ],
+    }
+
+    identities = extract_exact_clinvar_condition_identities(condition_assertion)
+
+    assert [row["source_condition_id"] for row in identities] == [
+        "MEDGEN:C3809233",
+        "OMIM:615355",
+        "ORPHA:648",
+    ]
+    assert all("Preferred" not in row.values() for row in identities)

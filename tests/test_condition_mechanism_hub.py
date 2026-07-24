@@ -7,7 +7,10 @@ import pandas as pd
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
-from gene_mechanism_hub import build_hpo_condition_index  # noqa: E402
+from gene_mechanism_hub import (  # noqa: E402
+    build_hpo_condition_index,
+    enrich_condition_mechanism_assertion,
+)
 
 
 def test_build_hpo_condition_index_preserves_assertion_provenance() -> None:
@@ -66,3 +69,74 @@ def test_build_hpo_condition_index_preserves_assertion_provenance() -> None:
         "evidence": "PCS",
         "reference": "PMID:111",
     }
+
+
+def test_enrich_condition_mechanism_assertion_requires_gene_and_condition() -> None:
+    hpo_index = {
+        ("GENE1", "MONDO:1"): {
+            "disease_id": "OMIM:1",
+            "mondo_id": "MONDO:1",
+            "disease_scope": "mendelian_non_neoplastic",
+            "priva_scope": "include",
+            "scope_review_status": "auto_supported",
+            "inheritance_modes": ["Autosomal dominant inheritance"],
+            "penetrance_hpo_ids": ["HP:0003829"],
+            "onset_hpo_ids": ["HP:0003584"],
+            "hpo_assertions": [
+                {
+                    "hpo_id": "HP:0003829",
+                    "frequency": "2/10",
+                    "evidence": "PCS",
+                    "reference": "PMID:111",
+                }
+            ],
+        }
+    }
+    assertion = {
+        "source": "Orphadata",
+        "source_condition_id": "ORPHA:1",
+        "mondo_id": "MONDO:1",
+        "disease": "Condition one",
+        "mechanism": "GOF",
+        "allelic_requirement": "",
+        "priva_scope": "",
+    }
+
+    matched = enrich_condition_mechanism_assertion(
+        assertion,
+        gene_symbol="GENE1",
+        hpo_condition_index=hpo_index,
+    )
+    wrong_gene = enrich_condition_mechanism_assertion(
+        assertion,
+        gene_symbol="GENE2",
+        hpo_condition_index=hpo_index,
+    )
+
+    assert len(matched) == 1
+    assert matched[0]["allelic_requirement"] == "dominant"
+    assert matched[0]["penetrance_hpo_ids"] == ["HP:0003829"]
+    assert matched[0]["hpo_assertions"][0]["frequency"] == "2/10"
+    assert wrong_gene[0]["hpo_match_status"] == (
+        "no_matching_gene_condition_hpo_record"
+    )
+    assert wrong_gene[0]["penetrance_hpo_ids"] == []
+
+
+def test_enrich_condition_mechanism_assertion_blocks_review_scope() -> None:
+    assertion = {
+        "source": "G2P_DDG2P",
+        "source_condition_id": "OMIM:2",
+        "mondo_id": "MONDO:2",
+        "mechanism": "LOF",
+        "priva_scope": "review",
+    }
+
+    assert (
+        enrich_condition_mechanism_assertion(
+            assertion,
+            gene_symbol="GENE1",
+            hpo_condition_index={},
+        )
+        == []
+    )

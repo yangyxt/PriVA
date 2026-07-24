@@ -86,6 +86,11 @@ def _write_fixture_sources(tmp_path: Path) -> dict[str, Path]:
                 "gene_symbol",
                 "source",
                 "source_record_id",
+                "source_condition_id",
+                "mondo_id",
+                "disease_scope",
+                "priva_scope",
+                "scope_review_status",
                 "disease_label",
                 "inheritance",
                 "patho_mode_raw",
@@ -96,10 +101,18 @@ def _write_fixture_sources(tmp_path: Path) -> dict[str, Path]:
             ]
         )
         + "\n"
-        + "TESTLOF\tG2P_DDG2P\t1\tbiallelic LOF disorder\t"
+        + "TESTLOF\tG2P_DDG2P\t1\tOMIM:1\tMONDO:1\t"
+        "mendelian_non_neoplastic\tinclude\tauto_supported\t"
+        "biallelic LOF disorder\t"
         "biallelic_autosomal\tloss of function\tLOF\thigh\tdefinitive\t1\n"
-        + "TESTMONO\tG2P_DDG2P\t2\tmonoallelic LOF disorder\t"
-        "monoallelic_autosomal\tloss of function\tLOF\thigh\tdefinitive\t2\n",
+        + "TESTMONO\tG2P_DDG2P\t2\tOMIM:2\tMONDO:2\t"
+        "mendelian_non_neoplastic\tinclude\tauto_supported\t"
+        "monoallelic LOF disorder\t"
+        "monoallelic_autosomal\tloss of function\tLOF\thigh\tdefinitive\t2\n"
+        + "TESTGOF\tG2P_DDG2P\t3\tOMIM:3\tMONDO:3\t"
+        "mendelian_non_neoplastic\tinclude\tauto_supported\t"
+        "biallelic GOF disorder\t"
+        "biallelic_autosomal\tgain of function\tGOF\thigh\tdefinitive\t3\n",
         encoding="utf-8",
     )
 

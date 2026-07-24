@@ -47,6 +47,7 @@ HPO_CONDITION_MECHANISM_SCHEMA_VERSION = "1.0"
 PACKAGED_MECHANISM_JSON = (
     DATA_DIR / "gene_pathogenic_mechanism" / "prepared" / "gene_mechanism_curated_assertions.json"
 )
+# The shared cache is intentionally non-LOF; the packaged fallback is broader.
 SHARED_CANONICAL_NONLOF_MECHANISM_JSON = (
     PRIVA_ROOT.parent
     / "llm_gene_reranker"
@@ -113,6 +114,23 @@ HPO_INHERITANCE_TERMS = {
     "HP:0010984": "Digenic inheritance",
     "HP:0012275": "Autosomal dominant inheritance with maternal imprinting",
     "HP:0034341": "Pseudoautosomal recessive inheritance",
+}
+HPO_CACHE_INHERITANCE_LABELS = {
+    "autosomal_dominant": "Autosomal dominant inheritance",
+    "autosomal_recessive": "Autosomal recessive inheritance",
+    "x_linked": "X-linked inheritance",
+    "x_linked_recessive": "X-linked recessive inheritance",
+    "x_linked_dominant": "X-linked dominant inheritance",
+    "non_mendelian": "Non-Mendelian inheritance",
+    "mitochondrial": "Mitochondrial inheritance",
+    "y_linked": "Y-linked inheritance",
+    "polygenic": "Polygenic inheritance",
+    "oligogenic": "Oligogenic inheritance",
+    "digenic": "Digenic inheritance",
+    "autosomal_dominant_maternal_imprinting": (
+        "Autosomal dominant inheritance with maternal imprinting"
+    ),
+    "pseudoautosomal_recessive": "Pseudoautosomal recessive inheritance",
 }
 HPO_PENETRANCE_TERMS = {
     "HP:0003829",  # Incomplete penetrance
@@ -1642,50 +1660,10 @@ class GeneMechanismHub:
         }
 
     def condition_mechanism_assertions(self, gene_symbol: Any) -> list[dict[str, Any]]:
-        """Return G2P/Orphadata histories enriched by the same HPO disease."""
+        """Return automatic condition histories from the integrated cache."""
         symbol = self._resolved_symbol_key(gene_symbol)
-        history = self.mechanism_history(gene_symbol, include_entries=True)
-        self._load_hpo()
-        hpo_index = self._hpo_condition_index or {}
-        assertions: list[dict[str, Any]] = []
-        seen: set[str] = set()
-        for entry in history.get("entries", []):
-            mechanism = _clean(entry.get("mechanism")).upper()
-            if mechanism not in CANONICAL_MECHANISMS:
-                continue
-            # Only G2P and Orphadata define the gene-condition-mechanism axis.
-            # ClinGen dosage remains gene-level evidence, and variant-level
-            # GoFCards/ClinVar handling is performed only for the query allele.
-            if entry.get("source") not in {"G2P_DDG2P", "Orphadata"}:
-                continue
-            record = {
-                "source": _clean(entry.get("source")),
-                "source_record_id": _clean(entry.get("source_record_id")),
-                "source_condition_id": _clean(
-                    entry.get("source_condition_id")
-                ),
-                "mondo_id": _clean(entry.get("mondo_id")),
-                "disease": _clean(entry.get("disease")),
-                "mechanism": mechanism,
-                "allelic_requirement": _clean(entry.get("allelic_requirement")),
-                "disease_scope": _clean(entry.get("disease_scope")),
-                "priva_scope": _clean(entry.get("priva_scope")),
-                "scope_review_status": _clean(
-                    entry.get("scope_review_status")
-                ),
-                "confidence": _clean(entry.get("confidence")),
-                "pmids": list(entry.get("pmids", [])),
-            }
-            for enriched in enrich_condition_mechanism_assertion(
-                record,
-                gene_symbol=symbol,
-                hpo_condition_index=hpo_index,
-            ):
-                key = json.dumps(enriched, sort_keys=True, separators=(",", ":"))
-                if key not in seen:
-                    seen.add(key)
-                    assertions.append(enriched)
-        return assertions
+        gene = self._load_condition_cache().get(symbol, {})
+        return condition_cache_mechanism_assertions(gene)
 
     def matched_clinvar_vcv_for_gofcards(
         self,
@@ -1769,6 +1747,149 @@ def _hpo_allelic_requirements(inheritance_modes: Any) -> set[str]:
     if "Mitochondrial inheritance" in modes:
         requirements.add("mitochondrial")
     return requirements
+
+
+def condition_cache_mechanism_assertions(
+    gene_record: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """Translate one integrated gene record to PriVA's assertion contract.
+
+    The integrated cache has already performed the only permitted join:
+    gene + exact condition identifier. This adapter therefore does not repeat
+    disease matching. It exposes only conditions whose effective PriVA scope is
+    ``include`` and retains the condition's inheritance, penetrance, onset, and
+    assertion provenance beside every mechanism record.
+
+    The cache also stores synthetic ``GoFCards_exact+ClinVar_VCV`` evidence in a
+    condition block when a particular allele has an exact ClinVar condition
+    link. That source is intentionally excluded here: it becomes an assertion
+    only when the query allele matches the nested cache variant. Otherwise one
+    exact GOF allele would incorrectly create gene-wide GOF history.
+    """
+    assertions: list[dict[str, Any]] = []
+    conditions = gene_record.get("conditions", {})
+    if not isinstance(conditions, dict):
+        return assertions
+
+    for condition_key, condition in sorted(conditions.items()):
+        if not isinstance(condition, dict):
+            continue
+        scope = condition.get("priva_scope", {})
+        if not isinstance(scope, dict) or _clean(scope.get("decision")).lower() != "include":
+            continue
+
+        identifiers = condition.get("identifiers", {})
+        if not isinstance(identifiers, dict):
+            identifiers = {}
+        mondo_ids = identifiers.get("MONDO", [])
+        mondo_id = _clean(mondo_ids[0]) if isinstance(mondo_ids, list) and mondo_ids else ""
+
+        inheritance = condition.get("inheritance", {})
+        inheritance = inheritance if isinstance(inheritance, dict) else {}
+        hpo_inheritance_modes = [
+            HPO_CACHE_INHERITANCE_LABELS.get(_clean(mode), _clean(mode))
+            for mode in inheritance.get("modes", [])
+            if _clean(mode)
+        ]
+        penetrance = condition.get("penetrance", {})
+        penetrance = penetrance if isinstance(penetrance, dict) else {}
+        onset = condition.get("onset", {})
+        onset = onset if isinstance(onset, dict) else {}
+
+        axis_assertions: list[dict[str, str]] = []
+        axis_seen: set[str] = set()
+        for axis in (inheritance, penetrance, onset):
+            for raw_assertion in axis.get("assertions", []) or []:
+                if not isinstance(raw_assertion, dict):
+                    continue
+                hpo_assertion = {
+                    "hpo_id": _clean(raw_assertion.get("hpo_id")),
+                    "frequency": _clean(raw_assertion.get("frequency")),
+                    "evidence": _clean(raw_assertion.get("evidence")),
+                    "reference": _clean(raw_assertion.get("reference")),
+                }
+                key = json.dumps(hpo_assertion, sort_keys=True, separators=(",", ":"))
+                if key not in axis_seen:
+                    axis_seen.add(key)
+                    axis_assertions.append(hpo_assertion)
+
+        common = {
+            "hpo_match_status": "matched_gene_and_condition",
+            "hpo_disease_id": _clean(condition_key),
+            "mondo_id": mondo_id,
+            "disease_scope": _clean(scope.get("category")),
+            "priva_scope": "include",
+            "scope_review_status": _clean(scope.get("review_status")),
+            "hpo_inheritance_modes": hpo_inheritance_modes,
+            "penetrance_hpo_ids": [
+                _clean(item.get("hpo_id"))
+                for item in penetrance.get("assertions", []) or []
+                if isinstance(item, dict) and _clean(item.get("hpo_id"))
+            ],
+            "onset_hpo_ids": [
+                _clean(item.get("hpo_id"))
+                for item in onset.get("assertions", []) or []
+                if isinstance(item, dict) and _clean(item.get("hpo_id"))
+            ],
+            "hpo_assertions": axis_assertions,
+            "hpo_assertion_count": condition.get("hpo_assertion_count", 0),
+        }
+
+        mechanism_blocks = condition.get("pathogenic_mechanisms", {})
+        if not isinstance(mechanism_blocks, dict):
+            continue
+        for mechanism, block in sorted(mechanism_blocks.items()):
+            mechanism = _clean(mechanism).upper()
+            if mechanism not in CANONICAL_MECHANISMS or not isinstance(block, dict):
+                continue
+            for evidence in block.get("evidence", []) or []:
+                if not isinstance(evidence, dict):
+                    continue
+                source = _clean(evidence.get("source"))
+                if source not in CONDITION_MECHANISM_SOURCES:
+                    continue
+                evidence_identifiers = evidence.get("condition_identifiers", [])
+                evidence_identifiers = (
+                    evidence_identifiers if isinstance(evidence_identifiers, list) else []
+                )
+                source_condition_id = next(
+                    (
+                        _clean(identifier)
+                        for identifier in evidence_identifiers
+                        if _clean(identifier) and not _clean(identifier).upper().startswith("MONDO:")
+                    ),
+                    _clean(condition_key),
+                )
+                requirement = _clean(evidence.get("allelic_requirement"))
+                requirements = [requirement] if requirement else sorted(
+                    _hpo_allelic_requirements(";".join(hpo_inheritance_modes))
+                )
+                if not requirements:
+                    requirements = [""]
+
+                for effective_requirement in requirements:
+                    assertions.append(
+                        {
+                            **common,
+                            "source": source,
+                            "source_record_id": _clean(evidence.get("source_record_id")),
+                            "source_condition_id": source_condition_id,
+                            "disease": _clean(evidence.get("condition_label"))
+                            or _clean(condition.get("label")),
+                            "mechanism": mechanism,
+                            "mechanism_raw": _clean(evidence.get("mechanism_raw")),
+                            "allelic_requirement": effective_requirement,
+                            "confidence": _clean(evidence.get("mechanism_confidence")),
+                            "mechanism_confidence": _clean(
+                                evidence.get("mechanism_confidence")
+                            ),
+                            "disease_confidence": _clean(
+                                evidence.get("disease_confidence")
+                            ),
+                            "pmids": list(evidence.get("pmids", []) or []),
+                        }
+                    )
+    return _deduplicate_assertions(assertions)
 
 
 def enrich_condition_mechanism_assertion(

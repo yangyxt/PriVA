@@ -2,6 +2,8 @@ import json
 from pathlib import Path
 import sys
 
+import pytest
+
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
@@ -9,7 +11,10 @@ sys.path.insert(0, str(ROOT / "scripts"))
 from build_hpo_condition_mechanism_cache import (  # noqa: E402
     attach_condition_mechanisms,
     attach_gofcards_variants,
+    build_cache_payload,
     build_hpo_gene_condition_frame,
+    load_and_validate_cache,
+    write_json_atomic,
 )
 
 
@@ -236,3 +241,57 @@ def test_gofcards_variants_require_exact_clinvar_hpo_condition_identity(
         "condition_variant_links": 1,
         "unmapped_variants": 1,
     }
+
+
+def test_complete_cache_is_validated_and_published_atomically(
+    tmp_path: Path,
+) -> None:
+    hpo = tmp_path / "hpo.tsv"
+    hpo.write_text(
+        HPO_HEADER
+        + "GENE1\tOMIM:1\tHP:0000006\t-\tTAS\tOMIM:1\tMONDO:1\t"
+        "Condition one\tmendelian_non_neoplastic\tinclude\tMONDO_ancestor\t"
+        "MONDO:v1\tauto_supported\n",
+        encoding="utf-8",
+    )
+    mechanism = tmp_path / "mechanism.tsv"
+    mechanism.write_text(
+        "gene_symbol\tsource\tsource_record_id\tsource_condition_id\tmondo_id\t"
+        "disease_scope\tpriva_scope\tscope_review_status\tdisease_label\t"
+        "inheritance\tpatho_mode_raw\tnormalized_mechanisms\t"
+        "mechanism_confidence\tdisease_confidence\tpmids\tevidence_url\n",
+        encoding="utf-8",
+    )
+    gofcards = tmp_path / "gofcards.tsv"
+    gofcards.write_text(
+        "mechanism\tHGNC_Symbol\tHGVSc\tHGVSp\thgvsp_key\tmatch_status\t"
+        "gofcards_accession_id\tgofcards_variant_id\tdisease\tpmids\tpscore\t"
+        "function\tpathway\tallele_key\thg19_genomic_key\thg19_vcf_key\t"
+        "hg38_genomic_key\thg38_vcf_key\n",
+        encoding="utf-8",
+    )
+    mechanism_json = tmp_path / "mechanisms.json"
+    mechanism_json.write_text(json.dumps({"_meta": {}}), encoding="utf-8")
+    output = tmp_path / "cache.json"
+    payload = build_cache_payload(
+        hpo_assertions=hpo,
+        mechanism_evidence=mechanism,
+        mechanism_json=mechanism_json,
+        gofcards_variants=gofcards,
+        hpo_release="v1",
+        mondo_release="v2",
+    )
+
+    write_json_atomic(payload, output)
+
+    assert load_and_validate_cache(output)["genes"] == 1
+    assert json.loads(output.read_text(encoding="utf-8"))["_meta"]["releases"] == {
+        "HPO": "v1",
+        "MONDO": "v2",
+    }
+    assert not list(tmp_path.glob(".cache.json.*.tmp"))
+
+    original = output.read_bytes()
+    with pytest.raises(ValueError, match="schema_version"):
+        write_json_atomic({"_meta": {}, "genes": {}}, output)
+    assert output.read_bytes() == original

@@ -15,11 +15,16 @@ number of HPO assertions for each condition.
 
 from __future__ import annotations
 
+import argparse
 import csv
 import gzip
+import hashlib
 import json
+import os
 import re
+import tempfile
 from collections import defaultdict
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterator, TextIO
 
@@ -960,3 +965,278 @@ def attach_gofcards_variants(
                 block["evidence"].sort(key=_mechanism_evidence_key)
         _refresh_gene_summary(gene)
     return stats
+
+
+# ---------------------------------------------------------------------------
+# Cache assembly, validation, and atomic publication
+# ---------------------------------------------------------------------------
+
+
+def _sha256_file(path: str | Path) -> str:
+    digest = hashlib.sha256()
+    with Path(path).open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _source_metadata(path: str | Path) -> dict[str, Any]:
+    source = Path(path).resolve()
+    return {
+        "path": str(source),
+        "size_bytes": source.stat().st_size,
+        "sha256": _sha256_file(source),
+    }
+
+
+def _cache_counts(genes: dict[str, dict[str, Any]]) -> dict[str, int]:
+    conditions = [
+        condition
+        for gene in genes.values()
+        for condition in gene["conditions"].values()
+    ]
+    resolved_mechanism_conditions = sum(
+        bool(condition["pathogenic_mechanisms"]) for condition in conditions
+    )
+    condition_variants = sum(
+        len(block["variants"])
+        for condition in conditions
+        for block in condition["pathogenic_mechanisms"].values()
+    )
+    return {
+        "genes": len(genes),
+        "genes_with_hpo_conditions": sum(
+            bool(gene["conditions"]) for gene in genes.values()
+        ),
+        "conditions": len(conditions),
+        "conditions_with_inheritance": sum(
+            bool(condition["inheritance"]["modes"]) for condition in conditions
+        ),
+        "conditions_with_penetrance": sum(
+            bool(condition["penetrance"]["statuses"]) for condition in conditions
+        ),
+        "conditions_with_pathogenic_mechanisms": resolved_mechanism_conditions,
+        "condition_linked_variants": condition_variants,
+        "unmapped_mechanisms": sum(
+            len(gene["unmapped_evidence"]["mechanisms"])
+            for gene in genes.values()
+        ),
+        "unmapped_variants": sum(
+            len(gene["unmapped_evidence"]["variants"])
+            for gene in genes.values()
+        ),
+    }
+
+
+def build_cache_payload(
+    *,
+    hpo_assertions: str | Path,
+    mechanism_evidence: str | Path,
+    mechanism_json: str | Path,
+    gofcards_variants: str | Path,
+    hpo_release: str = "",
+    mondo_release: str = "",
+) -> dict[str, Any]:
+    """Build the complete single-file cache from prepared PriVA resources."""
+    genes = build_hpo_gene_condition_frame(hpo_assertions)
+    mechanism_stats = attach_condition_mechanisms(genes, mechanism_evidence)
+    variant_stats = attach_gofcards_variants(
+        genes,
+        gofcards_variants,
+        mechanism_json,
+    )
+    genes = dict(sorted(genes.items()))
+    payload = {
+        "_meta": {
+            "schema_version": SCHEMA_VERSION,
+            "built_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            "releases": {
+                "HPO": _clean(hpo_release),
+                "MONDO": _clean(mondo_release),
+            },
+            "sources": {
+                "hpo_assertions": _source_metadata(hpo_assertions),
+                "mechanism_evidence": _source_metadata(mechanism_evidence),
+                "mechanism_json": _source_metadata(mechanism_json),
+                "gofcards_variants": _source_metadata(gofcards_variants),
+            },
+            "build_statistics": {
+                "mechanisms": mechanism_stats,
+                "variants": variant_stats,
+            },
+            "counts": _cache_counts(genes),
+        },
+        "genes": genes,
+    }
+    validate_cache_payload(payload)
+    return payload
+
+
+def validate_cache_payload(payload: dict[str, Any]) -> dict[str, int]:
+    """Validate structural and identity invariants before cache publication."""
+    if not isinstance(payload, dict):
+        raise ValueError("Cache payload must be a JSON object")
+    meta = payload.get("_meta")
+    genes = payload.get("genes")
+    if not isinstance(meta, dict) or meta.get("schema_version") != SCHEMA_VERSION:
+        raise ValueError(f"Cache schema_version must be {SCHEMA_VERSION}")
+    if not isinstance(genes, dict) or not genes:
+        raise ValueError("Cache must contain at least one gene")
+
+    for symbol, gene in genes.items():
+        if not symbol or not isinstance(gene, dict):
+            raise ValueError("Cache contains an invalid gene record")
+        conditions = gene.get("conditions")
+        unmapped = gene.get("unmapped_evidence")
+        if not isinstance(conditions, dict) or not isinstance(unmapped, dict):
+            raise ValueError(f"{symbol} is missing condition or unmapped sections")
+        for condition_key, condition in conditions.items():
+            identifiers = condition.get("identifiers", {})
+            all_identifiers = {
+                identifier
+                for values in identifiers.values()
+                for identifier in values
+            }
+            if condition_key not in all_identifiers:
+                raise ValueError(
+                    f"{symbol}/{condition_key} canonical key is absent from identifiers"
+                )
+            for mechanism, block in condition.get(
+                "pathogenic_mechanisms", {}
+            ).items():
+                if mechanism not in CANONICAL_MECHANISMS:
+                    raise ValueError(
+                        f"{symbol}/{condition_key} has unsupported mechanism {mechanism}"
+                    )
+                for variant_key, variant in block.get("variants", {}).items():
+                    link = variant.get("condition_link", {})
+                    if link.get("status") != "exact" or link.get(
+                        "condition_key"
+                    ) != condition_key:
+                        raise ValueError(
+                            f"{symbol}/{condition_key}/{variant_key} lacks an exact link"
+                        )
+        for variant_key, variant in unmapped.get("variants", {}).items():
+            if variant.get("condition_link", {}).get("status") == "exact":
+                raise ValueError(
+                    f"{symbol}/{variant_key} is exact but stored as unmapped"
+                )
+
+    actual_counts = _cache_counts(genes)
+    recorded_counts = meta.get("counts")
+    if recorded_counts != actual_counts:
+        raise ValueError(
+            f"Cache count mismatch: recorded={recorded_counts}, actual={actual_counts}"
+        )
+    return actual_counts
+
+
+def load_and_validate_cache(path: str | Path) -> dict[str, int]:
+    with Path(path).open(encoding="utf-8") as handle:
+        payload = json.load(handle)
+    return validate_cache_payload(payload)
+
+
+def write_json_atomic(
+    payload: dict[str, Any],
+    output: str | Path,
+    *,
+    pretty: bool = False,
+) -> None:
+    """Publish a validated JSON snapshot with same-filesystem atomic replace.
+
+    The temporary file is fully written, flushed, reparsed, and validated
+    before ``os.replace`` changes the live path. Existing readers therefore see
+    either the previous complete cache or the next complete cache.
+    """
+    validate_cache_payload(payload)
+    destination = Path(output)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temporary_name = tempfile.mkstemp(
+        prefix=f".{destination.name}.",
+        suffix=".tmp",
+        dir=destination.parent,
+        text=True,
+    )
+    temporary = Path(temporary_name)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            json.dump(
+                payload,
+                handle,
+                ensure_ascii=True,
+                indent=2 if pretty else None,
+                separators=None if pretty else (",", ":"),
+                sort_keys=True,
+            )
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        load_and_validate_cache(temporary)
+        os.chmod(temporary, 0o644)
+        os.replace(temporary, destination)
+        try:
+            directory_fd = os.open(destination.parent, os.O_RDONLY)
+            try:
+                os.fsync(directory_fd)
+            finally:
+                os.close(directory_fd)
+        except OSError:
+            # Some network filesystems do not support directory fsync. The
+            # same-directory os.replace above still prevents partial content.
+            pass
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--hpo-assertions")
+    parser.add_argument("--mechanism-evidence")
+    parser.add_argument("--mechanism-json")
+    parser.add_argument("--gofcards-variants")
+    parser.add_argument("--hpo-release", default="")
+    parser.add_argument("--mondo-release", default="")
+    parser.add_argument("--output")
+    parser.add_argument(
+        "--validate-only",
+        metavar="CACHE_JSON",
+        help="Validate an existing cache and exit without rebuilding",
+    )
+    parser.add_argument(
+        "--pretty",
+        action="store_true",
+        help="Write indented JSON instead of the compact production form",
+    )
+    return parser.parse_args()
+
+
+def main() -> None:
+    args = parse_args()
+    if args.validate_only:
+        print(json.dumps(load_and_validate_cache(args.validate_only), sort_keys=True))
+        return
+    required = {
+        "--hpo-assertions": args.hpo_assertions,
+        "--mechanism-evidence": args.mechanism_evidence,
+        "--mechanism-json": args.mechanism_json,
+        "--gofcards-variants": args.gofcards_variants,
+        "--output": args.output,
+    }
+    missing = [option for option, value in required.items() if not value]
+    if missing:
+        raise SystemExit(f"Missing required build arguments: {', '.join(missing)}")
+    payload = build_cache_payload(
+        hpo_assertions=args.hpo_assertions,
+        mechanism_evidence=args.mechanism_evidence,
+        mechanism_json=args.mechanism_json,
+        gofcards_variants=args.gofcards_variants,
+        hpo_release=args.hpo_release,
+        mondo_release=args.mondo_release,
+    )
+    write_json_atomic(payload, args.output, pretty=args.pretty)
+    print(json.dumps(payload["_meta"]["counts"], sort_keys=True))
+
+
+if __name__ == "__main__":
+    main()

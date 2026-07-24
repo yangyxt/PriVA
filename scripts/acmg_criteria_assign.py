@@ -40,6 +40,7 @@ from alternative_start_codon import (
 )
 from gene_mechanism_hub import (
     DEFAULT_DDG2P_MECHANISM_EVIDENCE,
+    DEFAULT_HPO_CONDITION_MECHANISM_CACHE,
     DEFAULT_MECHANISM_JSON,
     GeneMechanismHub,
     annotate_gene_mechanism_categories,
@@ -4119,6 +4120,7 @@ def ACMG_criteria_assign(anno_table: str,
                          pext_penalty_shape: float = 0.5,
                          relevant_gene_list: str = None,
                          dispensable_gene_list: str = None,
+                         hpo_condition_mechanism_json: str = str(DEFAULT_HPO_CONDITION_MECHANISM_CACHE),
                          gene_mechanism_json: str = str(DEFAULT_MECHANISM_JSON),
                          ddg2p_mechanism_evidence: str = str(DEFAULT_DDG2P_MECHANISM_EVIDENCE),
                          gnomAD_extreme_rare_threshold: float = 0.0001,
@@ -4234,8 +4236,7 @@ def ACMG_criteria_assign(anno_table: str,
         anno_df,
         clinvar_pathogenic_genes=clinvar_pathogenic_genes,
         gene_to_am_score_map=gene_to_am_score_map,
-        mechanism_json=gene_mechanism_json,
-        ddg2p_evidence=ddg2p_mechanism_evidence,
+        condition_cache=hpo_condition_mechanism_json,
         symbol_col="SYMBOL",
         use_hgnc_package=False,
     )
@@ -4516,7 +4517,25 @@ if __name__ == "__main__":
     parser.add_argument("--expected_incidence", type=float, required=False, default=0.001)
     parser.add_argument("--relevant_gene_list", type=str, required=False, default=None)
     parser.add_argument("--dispensable_gene_list", type=str, required=False, default=os.path.join(data_dir, "dispensable_genes", "dispensable_gene_list.txt"))
-    parser.add_argument("--gene_mechanism_json", type=str, required=False, default=str(DEFAULT_MECHANISM_JSON))
+    parser.add_argument(
+        "--hpo_condition_mechanism_json",
+        type=str,
+        required=False,
+        default=str(DEFAULT_HPO_CONDITION_MECHANISM_CACHE),
+        help="Integrated gene-condition-inheritance-penetrance-mechanism cache.",
+    )
+    parser.add_argument(
+        "--gene_nonlof_mechanism_json",
+        "--gene_mechanism_json",
+        dest="gene_mechanism_json",
+        type=str,
+        required=False,
+        default=str(DEFAULT_MECHANISM_JSON),
+        help=(
+            "Schema-v2 non-LOF mechanism assertions JSON. "
+            "--gene_mechanism_json is retained as a compatibility alias."
+        ),
+    )
     parser.add_argument("--ddg2p_mechanism_evidence", type=str, required=False, default=str(DEFAULT_DDG2P_MECHANISM_EVIDENCE))
     parser.add_argument("--threads", type=int, required=False, default=10)
     args = parser.parse_args()
@@ -4547,6 +4566,7 @@ if __name__ == "__main__":
                                                     pext_penalty_shape=args.pext_penalty_shape,
                                                     relevant_gene_list=args.relevant_gene_list,
                                                     dispensable_gene_list=args.dispensable_gene_list,
+                                                    hpo_condition_mechanism_json=args.hpo_condition_mechanism_json,
                                                     gene_mechanism_json=args.gene_mechanism_json,
                                                     ddg2p_mechanism_evidence=args.ddg2p_mechanism_evidence,
                                                     gnomAD_extreme_rare_threshold=args.gnomAD_extreme_rare_threshold,

@@ -198,7 +198,7 @@ def test_enrich_condition_mechanism_assertion_requires_gene_and_condition() -> N
         "disease": "Condition one",
         "mechanism": "GOF",
         "allelic_requirement": "",
-        "priva_scope": "",
+        "priva_scope": "include",
     }
 
     matched = enrich_condition_mechanism_assertion(
@@ -229,6 +229,24 @@ def test_enrich_condition_mechanism_assertion_blocks_review_scope() -> None:
         "mondo_id": "MONDO:2",
         "mechanism": "LOF",
         "priva_scope": "review",
+    }
+
+    assert (
+        enrich_condition_mechanism_assertion(
+            assertion,
+            gene_symbol="GENE1",
+            hpo_condition_index={},
+        )
+        == []
+    )
+
+
+def test_enrich_condition_mechanism_assertion_blocks_unscoped_disease() -> None:
+    assertion = {
+        "source": "G2P_DDG2P",
+        "source_condition_id": "OMIM:3",
+        "mechanism": "GOF",
+        "priva_scope": "",
     }
 
     assert (

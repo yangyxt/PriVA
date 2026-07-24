@@ -1722,8 +1722,9 @@ def enrich_condition_mechanism_assertion(
 
     Native disease identity is tried before MONDO identity. This avoids linking
     through names and prevents another disease of the same gene from donating
-    inheritance, penetrance, or onset. A condition explicitly marked ``review``
-    or ``exclude`` is not eligible for automatic PriVA mechanism transfer.
+    inheritance, penetrance, or onset. Automatic transfer requires an effective
+    ``priva_scope=include``; review, excluded, and still-unscoped diseases remain
+    audit-only.
 
     G2P allelic requirements remain authoritative when present. Orphadata does
     not encode allelic requirements, so an unambiguous HPO inheritance term can
@@ -1732,7 +1733,8 @@ def enrich_condition_mechanism_assertion(
     no mode is hidden in a lossy combined string.
     """
     record = dict(assertion)
-    if _clean(record.get("priva_scope")).lower() in {"review", "exclude"}:
+    source_scope = _clean(record.get("priva_scope")).lower()
+    if source_scope in {"review", "exclude"}:
         return []
 
     symbol_key = _clean(gene_symbol).upper()
@@ -1748,6 +1750,12 @@ def enrich_condition_mechanism_assertion(
             break
 
     if hpo_record is None:
+        # A source assertion without a registry-supported inherited-disease
+        # scope is useful for manual review, but it cannot safely influence an
+        # automated germline classification. Explicitly included G2P diseases
+        # remain usable even when HPO has no phenotype rows for that condition.
+        if source_scope != "include":
+            return []
         record.update(
             {
                 "hpo_match_status": "no_matching_gene_condition_hpo_record",
@@ -1785,6 +1793,8 @@ def enrich_condition_mechanism_assertion(
             or _clean(record.get("scope_review_status")),
         }
     )
+    if _clean(record.get("priva_scope")).lower() != "include":
+        return []
     if _clean(record.get("allelic_requirement")):
         return [record]
 

@@ -1749,6 +1749,78 @@ def _hpo_allelic_requirements(inheritance_modes: Any) -> set[str]:
     return requirements
 
 
+def condition_cache_context(
+    condition_key: Any,
+    condition: dict[str, Any],
+) -> dict[str, Any]:
+    """Return the shared PriVA context for one included cache condition.
+
+    An empty result means the condition cannot influence automatic ACMG logic.
+    The cache retains only the HPO axes used here; ``hpo_assertion_count`` keeps
+    the size of the complete phenotype record visible without loading it.
+    """
+    scope = condition.get("priva_scope", {})
+    if not isinstance(scope, dict) or _clean(scope.get("decision")).lower() != "include":
+        return {}
+
+    identifiers = condition.get("identifiers", {})
+    if not isinstance(identifiers, dict):
+        identifiers = {}
+    mondo_ids = identifiers.get("MONDO", [])
+    mondo_id = _clean(mondo_ids[0]) if isinstance(mondo_ids, list) and mondo_ids else ""
+
+    inheritance = condition.get("inheritance", {})
+    inheritance = inheritance if isinstance(inheritance, dict) else {}
+    hpo_inheritance_modes = [
+        HPO_CACHE_INHERITANCE_LABELS.get(_clean(mode), _clean(mode))
+        for mode in inheritance.get("modes", [])
+        if _clean(mode)
+    ]
+    penetrance = condition.get("penetrance", {})
+    penetrance = penetrance if isinstance(penetrance, dict) else {}
+    onset = condition.get("onset", {})
+    onset = onset if isinstance(onset, dict) else {}
+
+    axis_assertions: list[dict[str, str]] = []
+    axis_seen: set[str] = set()
+    for axis in (inheritance, penetrance, onset):
+        for raw_assertion in axis.get("assertions", []) or []:
+            if not isinstance(raw_assertion, dict):
+                continue
+            hpo_assertion = {
+                "hpo_id": _clean(raw_assertion.get("hpo_id")),
+                "frequency": _clean(raw_assertion.get("frequency")),
+                "evidence": _clean(raw_assertion.get("evidence")),
+                "reference": _clean(raw_assertion.get("reference")),
+            }
+            key = json.dumps(hpo_assertion, sort_keys=True, separators=(",", ":"))
+            if key not in axis_seen:
+                axis_seen.add(key)
+                axis_assertions.append(hpo_assertion)
+
+    return {
+        "hpo_match_status": "matched_gene_and_condition",
+        "hpo_disease_id": _clean(condition_key),
+        "mondo_id": mondo_id,
+        "disease_scope": _clean(scope.get("category")),
+        "priva_scope": "include",
+        "scope_review_status": _clean(scope.get("review_status")),
+        "hpo_inheritance_modes": hpo_inheritance_modes,
+        "penetrance_hpo_ids": [
+            _clean(item.get("hpo_id"))
+            for item in penetrance.get("assertions", []) or []
+            if isinstance(item, dict) and _clean(item.get("hpo_id"))
+        ],
+        "onset_hpo_ids": [
+            _clean(item.get("hpo_id"))
+            for item in onset.get("assertions", []) or []
+            if isinstance(item, dict) and _clean(item.get("hpo_id"))
+        ],
+        "hpo_assertions": axis_assertions,
+        "hpo_assertion_count": condition.get("hpo_assertion_count", 0),
+    }
+
+
 def condition_cache_mechanism_assertions(
     gene_record: dict[str, Any],
 ) -> list[dict[str, Any]]:
@@ -1774,66 +1846,9 @@ def condition_cache_mechanism_assertions(
     for condition_key, condition in sorted(conditions.items()):
         if not isinstance(condition, dict):
             continue
-        scope = condition.get("priva_scope", {})
-        if not isinstance(scope, dict) or _clean(scope.get("decision")).lower() != "include":
+        common = condition_cache_context(condition_key, condition)
+        if not common:
             continue
-
-        identifiers = condition.get("identifiers", {})
-        if not isinstance(identifiers, dict):
-            identifiers = {}
-        mondo_ids = identifiers.get("MONDO", [])
-        mondo_id = _clean(mondo_ids[0]) if isinstance(mondo_ids, list) and mondo_ids else ""
-
-        inheritance = condition.get("inheritance", {})
-        inheritance = inheritance if isinstance(inheritance, dict) else {}
-        hpo_inheritance_modes = [
-            HPO_CACHE_INHERITANCE_LABELS.get(_clean(mode), _clean(mode))
-            for mode in inheritance.get("modes", [])
-            if _clean(mode)
-        ]
-        penetrance = condition.get("penetrance", {})
-        penetrance = penetrance if isinstance(penetrance, dict) else {}
-        onset = condition.get("onset", {})
-        onset = onset if isinstance(onset, dict) else {}
-
-        axis_assertions: list[dict[str, str]] = []
-        axis_seen: set[str] = set()
-        for axis in (inheritance, penetrance, onset):
-            for raw_assertion in axis.get("assertions", []) or []:
-                if not isinstance(raw_assertion, dict):
-                    continue
-                hpo_assertion = {
-                    "hpo_id": _clean(raw_assertion.get("hpo_id")),
-                    "frequency": _clean(raw_assertion.get("frequency")),
-                    "evidence": _clean(raw_assertion.get("evidence")),
-                    "reference": _clean(raw_assertion.get("reference")),
-                }
-                key = json.dumps(hpo_assertion, sort_keys=True, separators=(",", ":"))
-                if key not in axis_seen:
-                    axis_seen.add(key)
-                    axis_assertions.append(hpo_assertion)
-
-        common = {
-            "hpo_match_status": "matched_gene_and_condition",
-            "hpo_disease_id": _clean(condition_key),
-            "mondo_id": mondo_id,
-            "disease_scope": _clean(scope.get("category")),
-            "priva_scope": "include",
-            "scope_review_status": _clean(scope.get("review_status")),
-            "hpo_inheritance_modes": hpo_inheritance_modes,
-            "penetrance_hpo_ids": [
-                _clean(item.get("hpo_id"))
-                for item in penetrance.get("assertions", []) or []
-                if isinstance(item, dict) and _clean(item.get("hpo_id"))
-            ],
-            "onset_hpo_ids": [
-                _clean(item.get("hpo_id"))
-                for item in onset.get("assertions", []) or []
-                if isinstance(item, dict) and _clean(item.get("hpo_id"))
-            ],
-            "hpo_assertions": axis_assertions,
-            "hpo_assertion_count": condition.get("hpo_assertion_count", 0),
-        }
 
         mechanism_blocks = condition.get("pathogenic_mechanisms", {})
         if not isinstance(mechanism_blocks, dict):
@@ -1862,7 +1877,9 @@ def condition_cache_mechanism_assertions(
                 )
                 requirement = _clean(evidence.get("allelic_requirement"))
                 requirements = [requirement] if requirement else sorted(
-                    _hpo_allelic_requirements(";".join(hpo_inheritance_modes))
+                    _hpo_allelic_requirements(
+                        ";".join(common["hpo_inheritance_modes"])
+                    )
                 )
                 if not requirements:
                     requirements = [""]

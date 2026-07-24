@@ -81,6 +81,24 @@ LOOKUP_FIELD_PRIORITY = (
 )
 
 CANONICAL_MECHANISMS = {"LOF", "GOF", "DOMINANT_NEGATIVE", "TRIPLOSENSITIVITY"}
+CONDITION_MECHANISM_SOURCES = {"G2P_DDG2P", "Orphadata"}
+CONDITION_MECHANISM_EVIDENCE_COLUMNS = {
+    "gene_symbol",
+    "source",
+    "source_record_id",
+    "source_condition_id",
+    "mondo_id",
+    "disease_scope",
+    "priva_scope",
+    "scope_review_status",
+    "disease_label",
+    "inheritance",
+    "patho_mode_raw",
+    "normalized_mechanisms",
+    "mechanism_confidence",
+    "disease_confidence",
+    "pmids",
+}
 HPO_INHERITANCE_TERMS = {
     "HP:0000006": "Autosomal dominant inheritance",
     "HP:0000007": "Autosomal recessive inheritance",
@@ -530,6 +548,7 @@ class GeneMechanismHub:
 
         self._resolver = self._build_resolver(use_hgnc_package)
         self._mechanism_by_symbol: dict[str, dict[str, Any]] | None = None
+        self._condition_mechanism_by_symbol: dict[str, list[dict[str, Any]]] | None = None
         self._ddg2p_lof_by_symbol: dict[str, list[dict[str, Any]]] | None = None
         self._hpo_by_symbol: dict[str, dict[str, str]] | None = None
         self._hpo_condition_index: dict[tuple[str, str], dict[str, Any]] | None = None
@@ -582,6 +601,136 @@ class GeneMechanismHub:
                 by_symbol[resolved] = info
         self._mechanism_by_symbol = by_symbol
         return by_symbol
+
+    def _load_condition_mechanism_evidence(
+        self,
+    ) -> dict[str, list[dict[str, Any]]]:
+        """Load condition-resolved G2P and Orphadata mechanism assertions.
+
+        The configured mechanism JSON and this TSV have deliberately different
+        responsibilities. The shared JSON preserves exact ClinVar/GoFCards
+        variant relationships, whereas the TSV is the canonical runtime source
+        for G2P and Orphadata's gene-condition-mechanism assertions. Reading the
+        TSV here lets PriVA keep both resources without replacing the richer
+        shared JSON or copying condition records into it.
+
+        A complete identity schema is mandatory. Older evidence tables that do
+        not contain source disease IDs, MONDO mappings, or PriVA disease-scope
+        fields are rejected rather than being interpreted gene-wide. Such old
+        tables remain usable by ``_load_ddg2p_lof`` for the narrowly defined
+        legacy PVS1/inheritance audit, but they cannot transfer condition-level
+        inheritance, onset, or penetrance.
+
+        One source row can encode more than one normalized mechanism. Each
+        canonical mechanism is emitted as its own record so downstream variant
+        matching can select GOF or LOF without carrying an unrelated mechanism.
+        No disease-name, PMID, or phenotype-similarity matching occurs here.
+        """
+        if self._condition_mechanism_by_symbol is not None:
+            return self._condition_mechanism_by_symbol
+
+        by_symbol: dict[str, list[dict[str, Any]]] = defaultdict(list)
+        if not self.ddg2p_evidence or not self.ddg2p_evidence.exists():
+            self._condition_mechanism_by_symbol = {}
+            return self._condition_mechanism_by_symbol
+
+        try:
+            with open(self.ddg2p_evidence, encoding="utf-8", newline="") as handle:
+                reader = csv.DictReader(handle, delimiter="\t")
+                missing = sorted(
+                    CONDITION_MECHANISM_EVIDENCE_COLUMNS
+                    - set(reader.fieldnames or [])
+                )
+                if missing:
+                    logger.warning(
+                        "Condition mechanism evidence table %s has a stale schema; "
+                        "missing columns: %s",
+                        self.ddg2p_evidence,
+                        ", ".join(missing),
+                    )
+                    self._condition_mechanism_by_symbol = {}
+                    return self._condition_mechanism_by_symbol
+
+                seen_by_symbol: dict[str, set[tuple[str, ...]]] = defaultdict(set)
+                for row in reader:
+                    source = _clean(row.get("source"))
+                    symbol = _clean(row.get("gene_symbol"))
+                    if source not in CONDITION_MECHANISM_SOURCES or not symbol:
+                        continue
+
+                    mechanisms = {
+                        token.strip().upper()
+                        for token in re.split(
+                            r"[|;,]", _clean(row.get("normalized_mechanisms"))
+                        )
+                        if token.strip()
+                    } & CANONICAL_MECHANISMS
+                    if not mechanisms:
+                        continue
+
+                    keys = {symbol}
+                    resolved = self._try_resolve_symbol(symbol)
+                    if resolved:
+                        keys.add(resolved)
+                    for mechanism in sorted(mechanisms):
+                        record = {
+                            "level": "gene_level",
+                            "source": source,
+                            "mechanism": mechanism,
+                            "mechanism_raw": _clean(row.get("patho_mode_raw")),
+                            "pmids": _split_pmids(row.get("pmids", "")),
+                            "source_record_id": _clean(
+                                row.get("source_record_id")
+                            ),
+                            "source_condition_id": _clean(
+                                row.get("source_condition_id")
+                            ),
+                            "mondo_id": _clean(row.get("mondo_id")),
+                            "disease": _clean(row.get("disease_label")),
+                            "disease_scope": _clean(row.get("disease_scope")),
+                            "priva_scope": _clean(row.get("priva_scope")),
+                            "scope_review_status": _clean(
+                                row.get("scope_review_status")
+                            ),
+                            "allelic_requirement": _clean(
+                                row.get("inheritance")
+                            ),
+                            "confidence": _clean(
+                                row.get("mechanism_confidence")
+                            ),
+                            "mechanism_confidence": _clean(
+                                row.get("mechanism_confidence")
+                            ),
+                            "disease_confidence": _clean(
+                                row.get("disease_confidence")
+                            ),
+                        }
+                        identity = (
+                            source,
+                            record["source_record_id"],
+                            record["source_condition_id"],
+                            record["mondo_id"],
+                            mechanism,
+                            record["allelic_requirement"],
+                        )
+                        for key in keys:
+                            if identity in seen_by_symbol[key]:
+                                continue
+                            seen_by_symbol[key].add(identity)
+                            by_symbol[key].append(record)
+        except Exception as exc:
+            logger.warning(
+                "Failed to load condition mechanism evidence table %s: %s",
+                self.ddg2p_evidence,
+                exc,
+            )
+            self._condition_mechanism_by_symbol = {}
+            return self._condition_mechanism_by_symbol
+
+        self._condition_mechanism_by_symbol = {
+            symbol: records for symbol, records in by_symbol.items() if records
+        }
+        return self._condition_mechanism_by_symbol
 
     @staticmethod
     def _is_strict_ddg2p_lof(row: pd.Series) -> bool:

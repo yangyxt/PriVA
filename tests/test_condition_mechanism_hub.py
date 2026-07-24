@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 import sys
 
@@ -8,11 +9,85 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
 from gene_mechanism_hub import (  # noqa: E402
+    GeneMechanismHub,
     build_hpo_condition_index,
     enrich_condition_mechanism_assertion,
     extract_exact_clinvar_condition_identities,
     select_condition_histories_for_variant,
 )
+
+
+def test_load_condition_mechanism_evidence_preserves_identity_and_mechanism(
+    tmp_path: Path,
+) -> None:
+    """The TSV remains authoritative even when the JSON has no G2P records."""
+    hgnc = tmp_path / "hgnc.tsv"
+    hgnc.write_text(
+        "hgnc_id\tsymbol\tensembl_gene_id\tentrez_id\tprev_symbol\t"
+        "alias_symbol\trefseq_accession\tuniprot_ids\tmane_select\n"
+        "HGNC:1\tGENE1\tENSG1\t1\tOLD1\t\t\t\t\n",
+        encoding="utf-8",
+    )
+    mechanism_json = tmp_path / "mechanisms.json"
+    mechanism_json.write_text(json.dumps({"_meta": {}}), encoding="utf-8")
+    evidence = tmp_path / "evidence.tsv"
+    columns = [
+        "gene_symbol",
+        "source",
+        "source_record_id",
+        "source_condition_id",
+        "mondo_id",
+        "disease_scope",
+        "priva_scope",
+        "scope_review_status",
+        "disease_label",
+        "inheritance",
+        "patho_mode_raw",
+        "normalized_mechanisms",
+        "mechanism_confidence",
+        "disease_confidence",
+        "pmids",
+    ]
+    evidence.write_text(
+        "\t".join(columns)
+        + "\n"
+        + "\t".join(
+            [
+                "OLD1",
+                "G2P_DDG2P",
+                "G2P0001",
+                "OMIM:1",
+                "MONDO:0000001",
+                "mendelian_non_neoplastic",
+                "include",
+                "auto_supported",
+                "Condition one",
+                "monoallelic_autosomal",
+                "loss or gain of function",
+                "LOF;GOF",
+                "high",
+                "definitive",
+                "11;12",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    hub = GeneMechanismHub(
+        mechanism_json=mechanism_json,
+        ddg2p_evidence=evidence,
+        hgnc_table=hgnc,
+        use_hgnc_package=False,
+    )
+
+    loaded = hub._load_condition_mechanism_evidence()
+
+    assert loaded["OLD1"] is not loaded["GENE1"]
+    assert [row["mechanism"] for row in loaded["GENE1"]] == ["GOF", "LOF"]
+    assert loaded["GENE1"][0]["source_condition_id"] == "OMIM:1"
+    assert loaded["GENE1"][0]["mondo_id"] == "MONDO:0000001"
+    assert loaded["GENE1"][0]["disease_scope"] == "mendelian_non_neoplastic"
+    assert loaded["GENE1"][0]["pmids"] == ["11", "12"]
 
 
 def test_build_hpo_condition_index_preserves_assertion_provenance() -> None:

@@ -17,6 +17,8 @@ import pandas as pd
 
 
 GeneResolver = Callable[[str], str]
+CONDITION_SOURCES = ("G2P_DDG2P", "Orphadata")
+CANONICAL_MECHANISMS = {"LOF", "GOF", "DOMINANT_NEGATIVE", "TRIPLOSENSITIVITY"}
 
 
 def load_gofcards_gene_counts(
@@ -49,3 +51,66 @@ def load_gofcards_gene_counts(
         if symbol:
             counts[symbol] += 1
     return counts
+
+
+def load_condition_mechanism_gene_sets(
+    path: str | Path,
+    *,
+    resolve_symbol: GeneResolver,
+) -> dict[str, dict[str, set[str]]]:
+    """Return broad, explicit-mechanism, and PriVA-usable genes by source.
+
+    Three nested sets answer different audit questions without conflation:
+
+    * ``all_rows`` means the gene occurs anywhere in that source;
+    * ``canonical_mechanism`` requires an explicit normalized GOF/LOF/DN/TS
+      assertion, regardless of disease-scope disposition; and
+    * ``priva_included_mechanism`` additionally requires ``priva_scope=include``
+      and is therefore eligible for automatic condition-history transfer.
+
+    This distinction matters for review or excluded diseases. Their existence
+    demonstrates source coverage, but it must not be presented as an inherited
+    condition mechanism that PriVA can automatically apply.
+    """
+    frame = pd.read_csv(path, sep="\t", dtype=str, low_memory=False).fillna("")
+    required = {
+        "gene_symbol",
+        "source",
+        "normalized_mechanisms",
+        "priva_scope",
+    }
+    missing = sorted(required - set(frame.columns))
+    if missing:
+        raise ValueError(f"{path} is missing required columns: {', '.join(missing)}")
+
+    result = {
+        source: {
+            "all_rows": set(),
+            "canonical_mechanism": set(),
+            "priva_included_mechanism": set(),
+        }
+        for source in CONDITION_SOURCES
+    }
+    for row in frame.loc[frame["source"].isin(CONDITION_SOURCES)].to_dict(
+        orient="records"
+    ):
+        raw_symbol = str(row["gene_symbol"]).strip()
+        if not raw_symbol:
+            continue
+        symbol = str(resolve_symbol(raw_symbol)).strip()
+        if not symbol:
+            continue
+
+        source = row["source"]
+        result[source]["all_rows"].add(symbol)
+        mechanisms = {
+            token.strip().upper()
+            for token in str(row["normalized_mechanisms"]).replace("|", ";").split(";")
+            if token.strip()
+        }
+        if not mechanisms & CANONICAL_MECHANISMS:
+            continue
+        result[source]["canonical_mechanism"].add(symbol)
+        if str(row["priva_scope"]).strip().lower() == "include":
+            result[source]["priva_included_mechanism"].add(symbol)
+    return result

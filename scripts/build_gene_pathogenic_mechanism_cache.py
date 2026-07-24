@@ -42,6 +42,7 @@ import pandas as pd
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_CACHE_DIR = PROJECT_ROOT / "data" / "gene_pathogenic_mechanism"
 DEFAULT_SHARED_RAW_DIR = DEFAULT_CACHE_DIR / "raw"
+DEFAULT_DISEASE_SCOPE_REGISTRY = PROJECT_ROOT / "data" / "mondo" / "disease_scope.tsv.gz"
 
 USER_AGENT = (
     "PriVA/0.1 "
@@ -697,6 +698,9 @@ UNIFIED_COLUMNS = [
     "source_record_id",
     "source_condition_id",
     "mondo_id",
+    "disease_scope",
+    "priva_scope",
+    "scope_review_status",
     "disease",
     "inheritance",
     "confidence",
@@ -724,6 +728,9 @@ def make_unified_row(
     source_record_id: str = "",
     source_condition_id: str = "",
     mondo_id: str = "",
+    disease_scope: str = "",
+    priva_scope: str = "",
+    scope_review_status: str = "",
     disease: str = "",
     inheritance: str = "",
     confidence: str = "",
@@ -748,6 +755,9 @@ def make_unified_row(
         "source_record_id": source_record_id,
         "source_condition_id": source_condition_id,
         "mondo_id": mondo_id,
+        "disease_scope": disease_scope,
+        "priva_scope": priva_scope,
+        "scope_review_status": scope_review_status,
         "disease": disease,
         "inheritance": inheritance,
         "confidence": confidence,
@@ -1119,6 +1129,74 @@ EVIDENCE_PARSERS: dict[str, Callable[[Path], pd.DataFrame]] = {
 }
 
 
+def attach_mondo_condition_identity(
+    unified: pd.DataFrame,
+    disease_scope_registry: Path | None,
+) -> pd.DataFrame:
+    """Attach stable MONDO identity and PriVA disease scope by source ID.
+
+    The pinned disease-scope registry is keyed by a source identifier such as
+    ``OMIM:615355`` or ``ORPHA:648``. It supplies the corresponding MONDO ID and
+    the decision to include, review, or exclude that disease in a germline PriVA
+    run. Source-provided MONDO IDs, currently supplied by G2P, remain primary.
+    Registry values fill missing IDs, which is especially important for
+    Orphadata, but do not silently replace a conflicting source assertion.
+
+    Rows whose disease is absent from the registry remain usable as curated
+    mechanism history. Their scope fields stay empty so downstream code can
+    distinguish "not represented in HPO/MONDO scope data" from an explicit
+    ``review`` or ``exclude`` decision.
+    """
+    output = unified.copy()
+    for column in ("mondo_id", "disease_scope", "priva_scope", "scope_review_status"):
+        if column not in output.columns:
+            output[column] = ""
+    if (
+        output.empty
+        or disease_scope_registry is None
+        or not disease_scope_registry.exists()
+    ):
+        return output
+
+    registry = pd.read_csv(
+        disease_scope_registry,
+        sep="\t",
+        dtype=str,
+        low_memory=False,
+    ).fillna("")
+    required = {
+        "disease_id",
+        "mondo_id",
+        "disease_scope",
+        "priva_scope",
+        "scope_review_status",
+    }
+    missing = sorted(required - set(registry.columns))
+    if missing:
+        raise ValueError(
+            f"disease scope registry missing columns: {', '.join(missing)}"
+        )
+    registry = registry.drop_duplicates("disease_id").set_index("disease_id")
+
+    source_ids = output["source_condition_id"].fillna("").astype(str)
+    mapped_mondo = source_ids.map(registry["mondo_id"]).fillna("")
+    supplied_mondo = output["mondo_id"].fillna("").astype(str)
+    conflicts = supplied_mondo.ne("") & mapped_mondo.ne("") & supplied_mondo.ne(mapped_mondo)
+    if conflicts.any():
+        print(
+            "condition_identity: retained source MONDO ID for "
+            f"{int(conflicts.sum())} registry conflicts",
+            file=sys.stderr,
+        )
+    output["mondo_id"] = supplied_mondo.mask(supplied_mondo.eq(""), mapped_mondo)
+
+    for column in ("disease_scope", "priva_scope", "scope_review_status"):
+        mapped = source_ids.map(registry[column]).fillna("")
+        current = output[column].fillna("").astype(str)
+        output[column] = current.mask(current.eq(""), mapped)
+    return output
+
+
 
 
 def write_tsv(
@@ -1154,6 +1232,11 @@ EVIDENCE_COLUMNS = [
     "gene_symbol",
     "source",
     "source_record_id",
+    "source_condition_id",
+    "mondo_id",
+    "disease_scope",
+    "priva_scope",
+    "scope_review_status",
     "disease_label",
     "inheritance",
     "patho_mode_raw",
@@ -1189,6 +1272,11 @@ def to_gene_pathogenic_mechanism_evidence(unified: pd.DataFrame) -> pd.DataFrame
             "gene_symbol": unified.get("gene_symbol", ""),
             "source": unified.get("source", ""),
             "source_record_id": unified.get("source_record_id", ""),
+            "source_condition_id": unified.get("source_condition_id", ""),
+            "mondo_id": unified.get("mondo_id", ""),
+            "disease_scope": unified.get("disease_scope", ""),
+            "priva_scope": unified.get("priva_scope", ""),
+            "scope_review_status": unified.get("scope_review_status", ""),
             "disease_label": unified.get("disease", ""),
             "inheritance": unified.get("inheritance", ""),
             "patho_mode_raw": unified.get("patho_mode_raw", ""),
@@ -1213,7 +1301,10 @@ def write_gene_pathogenic_mechanism_evidence(path: Path, unified: pd.DataFrame) 
     )
 
 
-def parse_all_sources(raw_dir: Path) -> pd.DataFrame:
+def parse_all_sources(
+    raw_dir: Path,
+    disease_scope_registry: Path | None = DEFAULT_DISEASE_SCOPE_REGISTRY,
+) -> pd.DataFrame:
     frames: list[pd.DataFrame] = []
     for spec in [*SOURCES, PANELAPP_SPEC]:
         parser_fn = EVIDENCE_PARSERS.get(spec.parser)
@@ -1228,7 +1319,10 @@ def parse_all_sources(raw_dir: Path) -> pd.DataFrame:
             print(f"parse_error source={spec.name}: {exc}", file=sys.stderr)
             continue
     unified = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame(columns=UNIFIED_COLUMNS)
-    return unified.reset_index(drop=True)
+    return attach_mondo_condition_identity(
+        unified.reset_index(drop=True),
+        disease_scope_registry,
+    )
 
 
 def write_source_manifest_tsv(path: Path, manifest: dict[str, Any]) -> int:
@@ -1506,6 +1600,15 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--cache-dir", type=Path, default=DEFAULT_CACHE_DIR)
     parser.add_argument(
+        "--disease-scope-registry",
+        type=Path,
+        default=DEFAULT_DISEASE_SCOPE_REGISTRY,
+        help=(
+            "Pinned OMIM/ORPHA-to-MONDO disease-scope table used to enrich "
+            "condition-specific mechanism assertions."
+        ),
+    )
+    parser.add_argument(
         "--shared-raw-dir",
         default=str(DEFAULT_SHARED_RAW_DIR),
         help=(
@@ -1612,7 +1715,10 @@ def main() -> int:
         }
         write_json(manifest_path, manifest)
 
-        all_evidence_df = parse_all_sources(raw_dir=raw_dir)
+        all_evidence_df = parse_all_sources(
+            raw_dir=raw_dir,
+            disease_scope_registry=args.disease_scope_registry,
+        )
         evidence_path = prepared_dir / "gene_pathogenic_mechanism_evidence.tsv"
         evidence_count = write_gene_pathogenic_mechanism_evidence(
             evidence_path,

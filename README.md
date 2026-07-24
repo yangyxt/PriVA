@@ -51,7 +51,16 @@ GoFCards exact variant-level GOF cache. These can be refreshed independently:
 ```bash
 bash scripts/install_utils.sh gene_pathogenic_mechanism_cache_install path/to/config.yaml
 bash scripts/install_utils.sh gofcards_exact_gof_cache_install path/to/config.yaml
+bash scripts/install_utils.sh mondo_hpo_scope_install path/to/config.yaml
 ```
+
+The MONDO/HPO installer downloads pinned releases, builds one disease-scope
+registry, and adds the resulting scope and provenance fields to each HPO
+assertion. Confirmed non-monogenic diseases are excluded from PriVA's flattened
+inheritance/penetrance context. Neoplastic diseases without positive hereditary
+evidence remain review-required rather than being assumed somatic-only. Manual
+decisions are stored in `data/mondo/disease_scope_overrides.tsv` and take
+precedence when the registry is rebuilt.
 
 ## Reviewer smoke test
 

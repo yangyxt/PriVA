@@ -13,6 +13,7 @@ from gene_mechanism_hub import (  # noqa: E402
     GeneMechanismHub,
     build_hpo_condition_index,
     condition_cache_context,
+    condition_cache_mechanism_entries,
     condition_cache_mechanism_assertions,
     enrich_condition_mechanism_assertion,
     extract_exact_clinvar_condition_identities,
@@ -228,6 +229,7 @@ def test_exact_gof_summary_keeps_unresolved_audit_but_scopes_assertions() -> Non
             "condition": condition,
             "variant_key": "GOFCARDS:VAR1",
             "variant": {
+                "mechanism": "GOF",
                 "pmids": ["1"],
                 "clinvar_links": [
                     {
@@ -246,6 +248,7 @@ def test_exact_gof_summary_keeps_unresolved_audit_but_scopes_assertions() -> Non
             "condition": {},
             "variant_key": "GOFCARDS:VAR2",
             "variant": {
+                "mechanism": "GOF",
                 "clinvar_links": [
                     {
                         "vcv_accession": "VCV2",
@@ -272,6 +275,31 @@ def test_exact_gof_summary_keeps_unresolved_audit_but_scopes_assertions() -> Non
     assert assertion["source_condition_id"] == "OMIM:1"
     assert assertion["allelic_requirement"] == "dominant"
     assert assertion["penetrance_hpo_ids"] == []
+
+    gene = {
+        "conditions": {
+            "OMIM:1": {
+                **condition,
+                "pathogenic_mechanisms": {
+                    "GOF": {
+                        "evidence": [],
+                        "variants": {"GOFCARDS:VAR1": matches[0]["variant"]},
+                    }
+                },
+            }
+        },
+        "unmapped_evidence": {
+            "mechanisms": [],
+            "variants": {"GOFCARDS:VAR2": matches[1]["variant"]},
+        },
+    }
+    entries = condition_cache_mechanism_entries(gene)
+    assert [entry["level"] for entry in entries] == [
+        "variant_level",
+        "variant_level",
+    ]
+    assert entries[0]["condition_link_status"] == "exact"
+    assert entries[1]["condition_link_status"] == "unresolved"
 
 
 def test_legacy_condition_evidence_loader_remains_audit_only(

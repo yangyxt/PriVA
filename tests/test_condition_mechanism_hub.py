@@ -3,6 +3,7 @@ from pathlib import Path
 import sys
 
 import pandas as pd
+import pytest
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -15,6 +16,55 @@ from gene_mechanism_hub import (  # noqa: E402
     extract_exact_clinvar_condition_identities,
     select_condition_histories_for_variant,
 )
+
+
+def test_load_integrated_condition_cache_validates_schema_and_resolves_alias(
+    tmp_path: Path,
+) -> None:
+    hgnc = tmp_path / "hgnc.tsv"
+    hgnc.write_text(
+        "hgnc_id\tsymbol\tensembl_gene_id\tentrez_id\tprev_symbol\t"
+        "alias_symbol\trefseq_accession\tuniprot_ids\tmane_select\n"
+        "HGNC:1\tGENE1\tENSG1\t1\tOLD1\t\t\t\t\n",
+        encoding="utf-8",
+    )
+    cache = tmp_path / "condition-cache.json"
+    gene_record = {
+        "conditions": {},
+        "summary": {"pathogenic_mechanisms": []},
+        "unmapped_evidence": {"mechanisms": [], "variants": {}},
+    }
+    cache.write_text(
+        json.dumps(
+            {
+                "_meta": {"schema_version": "1.0"},
+                "genes": {"OLD1": gene_record},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    hub = GeneMechanismHub(
+        condition_cache=cache,
+        hgnc_table=hgnc,
+        use_hgnc_package=False,
+    )
+    loaded = hub._load_condition_cache()
+
+    assert loaded["OLD1"] is loaded["GENE1"]
+    assert hub._condition_cache_meta == {"schema_version": "1.0"}
+
+    cache.write_text(
+        json.dumps({"_meta": {"schema_version": "0.9"}, "genes": {}}),
+        encoding="utf-8",
+    )
+    stale_hub = GeneMechanismHub(
+        condition_cache=cache,
+        hgnc_table=hgnc,
+        use_hgnc_package=False,
+    )
+    with pytest.raises(ValueError, match="Unsupported condition cache schema"):
+        stale_hub._load_condition_cache()
 
 
 def test_load_condition_mechanism_evidence_preserves_identity_and_mechanism(

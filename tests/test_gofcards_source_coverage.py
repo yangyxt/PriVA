@@ -1,3 +1,4 @@
+from collections import Counter
 import json
 from pathlib import Path
 import sys
@@ -7,6 +8,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
 from audit_gofcards_source_coverage import (  # noqa: E402
+    build_gofcards_coverage_audit,
     load_condition_mechanism_gene_sets,
     load_exact_clinvar_linked_gene_counts,
     load_gofcards_gene_counts,
@@ -110,3 +112,30 @@ def test_load_exact_clinvar_linked_gene_counts_requires_exact_allele(
     )
 
     assert counts == {"GENE1": 2}
+
+
+def test_build_gofcards_coverage_audit_exposes_policy_boundaries() -> None:
+    audit = build_gofcards_coverage_audit(
+        Counter({"GENE1": 2, "GENE2": 1, "GENE3": 1, "GENE4": 1}),
+        Counter({"GENE1": 1}),
+        {
+            "G2P_DDG2P": {
+                "all_rows": {"GENE2", "GENE3"},
+                "canonical_mechanism": {"GENE2"},
+                "priva_included_mechanism": {"GENE2"},
+            },
+            "Orphadata": {
+                "all_rows": {"GENE3"},
+                "canonical_mechanism": {"GENE3"},
+                "priva_included_mechanism": set(),
+            },
+        },
+    ).set_index("gene_symbol")
+
+    assert audit.loc["GENE1", "only_gofcards_vs_explicit_sources"] == 0
+    assert audit.loc["GENE2", "only_gofcards_vs_explicit_sources"] == 0
+    assert audit.loc["GENE3", "only_gofcards_vs_explicit_sources"] == 0
+    assert audit.loc["GENE3", "only_gofcards_vs_priva_included"] == 1
+    assert audit.loc["GENE3", "only_gofcards_vs_any_source_record"] == 0
+    assert audit.loc["GENE4", "only_gofcards_vs_explicit_sources"] == 1
+    assert audit.loc["GENE4", "only_gofcards_vs_any_source_record"] == 1

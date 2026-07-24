@@ -160,3 +160,63 @@ def load_exact_clinvar_linked_gene_counts(
                 continue
             counts[symbol] += 1
     return counts
+
+
+def build_gofcards_coverage_audit(
+    gofcards_counts: Counter[str],
+    clinvar_counts: Counter[str],
+    condition_sets: dict[str, dict[str, set[str]]],
+) -> pd.DataFrame:
+    """Build one transparent source-coverage row per exact GoFCards gene.
+
+    ``only_gofcards_vs_explicit_sources`` is the primary strict answer: no exact
+    ClinVar allele link and no canonical mechanism assertion from either G2P or
+    Orphadata. Two companion flags make the policy boundary inspectable:
+
+    * ``only_gofcards_vs_priva_included`` treats review/excluded diseases as not
+      usable because PriVA cannot automatically transfer their histories; and
+    * ``only_gofcards_vs_any_source_record`` asks the broader bibliographic
+      question of whether the gene appears in G2P/Orphadata at all.
+
+    All flags are integers in the written table for stable TSV interoperability.
+    The underlying source-specific columns prevent a composite flag from hiding
+    which database supplied coverage.
+    """
+    g2p = condition_sets["G2P_DDG2P"]
+    orphadata = condition_sets["Orphadata"]
+    rows: list[dict[str, int | str]] = []
+    for symbol in sorted(gofcards_counts):
+        clinvar_rows = clinvar_counts.get(symbol, 0)
+        g2p_any = symbol in g2p["all_rows"]
+        g2p_mechanism = symbol in g2p["canonical_mechanism"]
+        g2p_included = symbol in g2p["priva_included_mechanism"]
+        orphadata_any = symbol in orphadata["all_rows"]
+        orphadata_mechanism = symbol in orphadata["canonical_mechanism"]
+        orphadata_included = symbol in orphadata["priva_included_mechanism"]
+
+        explicit_coverage = bool(
+            clinvar_rows or g2p_mechanism or orphadata_mechanism
+        )
+        included_coverage = bool(
+            clinvar_rows or g2p_included or orphadata_included
+        )
+        any_source_coverage = bool(clinvar_rows or g2p_any or orphadata_any)
+        rows.append(
+            {
+                "gene_symbol": symbol,
+                "gofcards_exact_rows": gofcards_counts[symbol],
+                "exact_clinvar_vcv_rows": clinvar_rows,
+                "g2p_any_source_record": int(g2p_any),
+                "g2p_canonical_mechanism": int(g2p_mechanism),
+                "g2p_priva_included_mechanism": int(g2p_included),
+                "orphadata_any_source_record": int(orphadata_any),
+                "orphadata_canonical_mechanism": int(orphadata_mechanism),
+                "orphadata_priva_included_mechanism": int(orphadata_included),
+                "only_gofcards_vs_explicit_sources": int(not explicit_coverage),
+                "only_gofcards_vs_priva_included": int(not included_coverage),
+                "only_gofcards_vs_any_source_record": int(
+                    not any_source_coverage
+                ),
+            }
+        )
+    return pd.DataFrame(rows)

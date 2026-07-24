@@ -1672,14 +1672,20 @@ class GeneMechanismHub:
         gofcards_variant_ids: Any = "",
         gofcards_accession_ids: Any = "",
     ) -> list[dict[str, Any]]:
-        """Return schema-v2 ClinVar VCV records linked to exact GoFCards IDs."""
+        """Return integrated-cache variants linked to exact GoFCards IDs.
+
+        The historical method name is retained for callers, but the full
+        curated mechanism JSON is no longer read. Each result identifies
+        whether the exact variant is nested under a condition or retained in
+        ``unmapped_evidence`` for audit only.
+        """
         variant_ids = {
-            _clean(token)
+            _norm(token)
             for token in re.split(r"[;,]", _clean(gofcards_variant_ids))
             if _clean(token)
         }
         accession_ids = {
-            _clean(token)
+            _norm(token)
             for token in re.split(r"[;,]", _clean(gofcards_accession_ids))
             if _clean(token)
         }
@@ -1687,30 +1693,12 @@ class GeneMechanismHub:
             return []
 
         symbol = self._resolved_symbol_key(gene_symbol)
-        info = self._load_mechanisms().get(symbol, {})
-        matches: list[dict[str, Any]] = []
-        for entry in info.get("variant_level", []) or []:
-            data = entry.get("ClinVar_VCV") if isinstance(entry, dict) else None
-            if not isinstance(data, dict):
-                continue
-            linked_records = data.get("match", {}).get("matched_gofcards_records", []) or []
-            linked_variant_ids = {
-                _clean(record.get("gofcards_variant_id"))
-                for record in linked_records
-                if isinstance(record, dict) and _clean(record.get("gofcards_variant_id"))
-            }
-            linked_accessions = {
-                _clean(record.get("gofcards_accession_id"))
-                for record in linked_records
-                if isinstance(record, dict) and _clean(record.get("gofcards_accession_id"))
-            }
-            if not (
-                variant_ids & linked_variant_ids
-                or accession_ids & linked_accessions
-            ):
-                continue
-            matches.append(data)
-        return matches
+        gene = self._load_condition_cache().get(symbol, {})
+        return match_condition_cache_gofcards_variants(
+            gene,
+            variant_ids=variant_ids,
+            accession_ids=accession_ids,
+        )
 
 
 def resolve_gene_symbol(gene_symbol: Any) -> str:
@@ -1819,6 +1807,88 @@ def condition_cache_context(
         "hpo_assertions": axis_assertions,
         "hpo_assertion_count": condition.get("hpo_assertion_count", 0),
     }
+
+
+def match_condition_cache_gofcards_variants(
+    gene_record: dict[str, Any],
+    *,
+    variant_ids: set[str],
+    accession_ids: set[str],
+) -> list[dict[str, Any]]:
+    """Find exact GoFCards query tokens in one integrated gene record.
+
+    Variant IDs contain pipe characters (for example
+    ``SNV|12|21995260|21995260|C|T``), so callers must split only on the
+    semicolon/comma separators used between records. Tokens are compared after
+    case normalization. Condition-linked and unresolved cache locations are
+    returned in one shape, with an empty condition for unresolved variants.
+    """
+    wanted_variant_ids = {_norm(value) for value in variant_ids if _clean(value)}
+    wanted_accessions = {_norm(value) for value in accession_ids if _clean(value)}
+    if not wanted_variant_ids and not wanted_accessions:
+        return []
+
+    matches: list[dict[str, Any]] = []
+    seen: set[tuple[str, str]] = set()
+
+    def add_matching_variants(
+        variants: Any,
+        *,
+        condition_key: str = "",
+        condition: dict[str, Any] | None = None,
+    ) -> None:
+        if not isinstance(variants, dict):
+            return
+        for variant_key, variant in variants.items():
+            if not isinstance(variant, dict):
+                continue
+            cached_variant_ids = {
+                _norm(value)
+                for value in variant.get("gofcards_variant_ids", []) or []
+                if _clean(value)
+            }
+            cached_accessions = {
+                _norm(value)
+                for value in variant.get("gofcards_accession_ids", []) or []
+                if _clean(value)
+            }
+            if not (
+                wanted_variant_ids & cached_variant_ids
+                or wanted_accessions & cached_accessions
+            ):
+                continue
+            identity = (_clean(condition_key), _clean(variant_key))
+            if identity in seen:
+                continue
+            seen.add(identity)
+            matches.append(
+                {
+                    "condition_key": _clean(condition_key),
+                    "condition": condition if isinstance(condition, dict) else {},
+                    "variant_key": _clean(variant_key),
+                    "variant": variant,
+                }
+            )
+
+    conditions = gene_record.get("conditions", {})
+    if isinstance(conditions, dict):
+        for condition_key, condition in sorted(conditions.items()):
+            if not isinstance(condition, dict):
+                continue
+            mechanisms = condition.get("pathogenic_mechanisms", {})
+            mechanisms = mechanisms if isinstance(mechanisms, dict) else {}
+            gof = mechanisms.get("GOF", {})
+            gof = gof if isinstance(gof, dict) else {}
+            add_matching_variants(
+                gof.get("variants", {}),
+                condition_key=_clean(condition_key),
+                condition=condition,
+            )
+
+    unmapped = gene_record.get("unmapped_evidence", {})
+    unmapped = unmapped if isinstance(unmapped, dict) else {}
+    add_matching_variants(unmapped.get("variants", {}))
+    return matches
 
 
 def condition_cache_mechanism_assertions(

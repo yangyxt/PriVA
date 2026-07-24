@@ -167,6 +167,7 @@ function assign_acmg_criteria () {
     local dispensable_gene_list=$(read_yaml ${config_file} "dispensable_gene_list")
     local cds_fasta_file=$(read_yaml ${config_file} "cds_fasta_file")
     local pext_tissues=$(read_yaml ${config_file} "pext_tissues")
+    local hpo_condition_mechanism_json=$(read_yaml ${config_file} "hpo_condition_mechanism_json")
 
     local has_error=0
     check_path ${clinvar_aa_dict_pkl} "file" "clinvar_aa_stat" || has_error=1
@@ -183,6 +184,7 @@ function assign_acmg_criteria () {
     check_path ${repeat_region_file} "file" "repeat_region_file" || has_error=1
 	check_path ${clingen_map_pkl} "file" "clingen_map" || has_error=1
 	check_path ${gene_dosage_sensitivity} "file" "gene_dosage_sensitivity" || has_error=1
+    check_path ${hpo_condition_mechanism_json} "file" "hpo_condition_mechanism_json" || has_error=1
     # CDS FASTA is optional - fallback to deprecated transcript-based approach if not available
     [[ -f ${cds_fasta_file} ]] && local cds_fasta_arg="--cds_fasta_path ${cds_fasta_file}" || { log "WARNING: CDS FASTA file not found at ${cds_fasta_file}. Alternative start codon detection for start_lost variants will use deprecated transcript-based approach."; local cds_fasta_arg=""; }
 
@@ -217,6 +219,7 @@ function assign_acmg_criteria () {
     [[ ${input_tab} -nt ${clinvar_patho_af_stat} ]] && \
     [[ ${input_tab} -nt ${clinvar_patho_exon_af_stat} ]] && \
     [[ ${input_tab} -nt ${interpro_entry_map_pkl} ]] && \
+    [[ ${input_tab} -nt ${hpo_condition_mechanism_json} ]] && \
     [[ ${input_tab} -nt ${tranx_exon_domain_map_pkl} ]] && \
     [[ ${input_tab} -ot ${output_acmg_mat} ]] && \
     [[ ${input_tab} -nt ${repeat_region_file} ]] && \
@@ -234,7 +237,7 @@ function assign_acmg_criteria () {
     [[ -f ${dispensable_gene_list} ]] && local dispensable_genes_arg="--dispensable_gene_list ${dispensable_gene_list}" || local dispensable_genes_arg=""
     [[ -n "${pext_tissues}" ]] && [[ "${pext_tissues}" != "null" ]] && local pext_arg="--pext_tissues ${pext_tissues}" || local pext_arg=""
 
-    log "Running the following command to assign the ACMG criterias: python ${acmg_py} --anno_table ${input_tab} --am_score_table ${mean_am_score_table} --clinvar_aa_dict_pkl ${clinvar_aa_dict_pkl} --intolerant_domains_pkl ${intolerant_domains_pkl} --pm1_regions_pkl ${pm1_regions_pkl} --clinvar_gene_stat_pkl ${clinvar_gene_stat_pkl} --gnomAD_extreme_rare_threshold ${gnomAD_extreme_rare_threshold} --expected_incidence ${expected_incidence} --am_score_vcf ${am_score_vcf} --threads ${threads} --tranx_exon_domain_map_pkl ${tranx_exon_domain_map_pkl} ${ped_arg} ${fam_arg} ${alt_disease_arg} ${mavedb_arg} ${pp1_arg} ${relevant_genes_arg} ${dispensable_genes_arg} ${cds_fasta_arg}"
+    log "Running ACMG assignment with integrated condition mechanism cache: ${hpo_condition_mechanism_json}"
     python ${acmg_py} \
     --anno_table ${input_tab} \
     --am_score_table ${mean_am_score_table} \
@@ -244,7 +247,8 @@ function assign_acmg_criteria () {
     --clinvar_splice_dict_pkl ${clinvar_splice_dict_pkl} \
     --interpro_entry_map_pkl ${interpro_entry_map_pkl} \
     --intolerant_domains_pkl ${intolerant_domains_pkl} \
-	--gene_dosage_sensitivity ${gene_dosage_sensitivity} \
+    --gene_dosage_sensitivity ${gene_dosage_sensitivity} \
+    --hpo_condition_mechanism_json ${hpo_condition_mechanism_json} \
     --am_intol_domains_tsv ${am_intol_domains_tsv} \
     --pm1_regions_pkl ${pm1_regions_pkl} \
     --repeat_region_file ${repeat_region_file} \

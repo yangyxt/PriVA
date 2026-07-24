@@ -1,0 +1,253 @@
+#!/usr/bin/env python3
+"""Audit GoFCards and ClinVar VCV evidence in the canonical non-LOF JSON."""
+
+from __future__ import annotations
+
+import argparse
+import json
+from collections import Counter
+from pathlib import Path
+
+
+ALLOWED_REVIEW_STATUSES = {
+    "criteria provided, multiple submitters, no conflicts": 2,
+    "reviewed by expert panel": 3,
+    "practice guideline": 4,
+}
+
+GOFCARDS_NORMALIZATION_STATUSES = {
+    "matched_gene_concordant",
+    "gene_discordant_coordinate_collision",
+    "unmatched_public_source_allele",
+}
+
+PRIVA_ROOT = Path(__file__).resolve().parents[1]
+DEFAULT_NONLOF_ASSERTIONS_JSON = (
+    PRIVA_ROOT
+    / "data"
+    / "gene_pathogenic_mechanism"
+    / "prepared"
+    / "gene_nonlof_mechanism_curated_assertions.json"
+)
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--nonlof-assertions-json",
+        "--json",
+        dest="nonlof_assertions_json",
+        type=Path,
+        default=DEFAULT_NONLOF_ASSERTIONS_JSON,
+        help="Canonical non-LOF assertions JSON; --json is a compatibility alias.",
+    )
+    return parser.parse_args()
+
+
+def main() -> None:
+    args = parse_args()
+    canonical = json.loads(
+        args.nonlof_assertions_json.read_text(encoding="utf-8")
+    )
+    gene_count = sum(key != "_meta" for key in canonical)
+    entries = 0
+    vcvs: set[str] = set()
+    rcvs: set[tuple[str, str]] = set()
+    scv_attachments = 0
+    scvs: set[tuple[str, str]] = set()
+    review_stars: Counter[int] = Counter()
+    scopes: Counter[str] = Counter()
+    contexts: Counter[str] = Counter()
+    zygosity_observations: Counter[str] = Counter()
+    with_moi = 0
+    with_penetrance = 0
+    ambiguous_scv_attachments = 0
+    discarded_gene_symbols = 0
+    gofcards_assertions = 0
+    gofcards_statuses: Counter[str] = Counter()
+    gofcards_exact_records = 0
+    gofcards_exact_record_keys: set[str] = set()
+    gofcards_with_hg19_vcf = 0
+    gofcards_with_hg38_vcf = 0
+    violations: list[str] = []
+
+    for gene_key, gene in canonical.items():
+        if gene_key == "_meta":
+            continue
+        gene_symbol = str(gene.get("symbol", ""))
+        for assertion in gene.get("variant_level", []):
+            gofcards = assertion.get("GoFCards")
+            if isinstance(gofcards, dict):
+                gofcards_assertions += 1
+                source_record_id = str(gofcards.get("source_record_id", ""))
+                allele_key = str(gofcards.get("allele_key", ""))
+                status = str(gofcards.get("exact_normalization_status", ""))
+                gofcards_statuses[status] += 1
+                label = f"{gene_symbol}/GoFCards:{source_record_id or allele_key}"
+                if not source_record_id or not allele_key:
+                    violations.append(f"{label}: missing source record or allele key")
+                if status not in GOFCARDS_NORMALIZATION_STATUSES:
+                    violations.append(f"{label}: invalid normalization status {status!r}")
+
+                exact_records = gofcards.get("exact_normalized_variants", [])
+                if status == "matched_gene_concordant" and not exact_records:
+                    violations.append(f"{label}: matched status without normalized records")
+                if status != "matched_gene_concordant" and exact_records:
+                    violations.append(f"{label}: non-matched status has normalized records")
+                collision_symbols = gofcards.get("exact_cache_gene_symbols", [])
+                if (
+                    status == "gene_discordant_coordinate_collision"
+                    and not collision_symbols
+                ):
+                    violations.append(f"{label}: gene collision lacks cache symbols")
+
+                has_hg19 = False
+                has_hg38 = False
+                for record in exact_records:
+                    if not isinstance(record, dict):
+                        violations.append(f"{label}: non-object normalized record")
+                        continue
+                    gofcards_exact_records += 1
+                    gofcards_exact_record_keys.update(record)
+                    if record.get("allele_key") != allele_key:
+                        violations.append(f"{label}: nested allele key disagrees")
+                    has_hg19 = has_hg19 or bool(record.get("hg19_vcf_key"))
+                    has_hg38 = has_hg38 or bool(record.get("hg38_vcf_key"))
+                if has_hg19:
+                    gofcards_with_hg19_vcf += 1
+                if has_hg38:
+                    gofcards_with_hg38_vcf += 1
+                if status == "matched_gene_concordant" and not has_hg19:
+                    violations.append(f"{label}: no normalized hg19 VCF key")
+                if status == "matched_gene_concordant" and not has_hg38:
+                    violations.append(f"{label}: no normalized hg38 VCF key")
+
+            payload = assertion.get("ClinVar_VCV")
+            if not isinstance(payload, dict):
+                continue
+            entries += 1
+            variation = payload.get("variation", {})
+            vcv = str(variation.get("vcv_accession", ""))
+            vcvs.add(vcv)
+            scopes[str(variation.get("classification_scope", ""))] += 1
+            contexts[str(variation.get("matched_component_context", ""))] += 1
+            if variation.get("record_type") != "classified":
+                violations.append(f"{gene_symbol}/{vcv}: non-classified record")
+            if variation.get("record_status") != "current":
+                violations.append(f"{gene_symbol}/{vcv}: non-current VCV")
+            if payload.get("allelic_requirement", {}).get("value") != "unresolved":
+                violations.append(f"{gene_symbol}/{vcv}: resolved allelic requirement")
+
+            match = payload.get("match", {})
+            clinvar_symbols = set(match.get("clinvar_gene_symbols", []))
+            discarded_gene_symbols += len(
+                match.get("discarded_gene_discordant_symbols", [])
+            )
+            for row in match.get("matched_gofcards_records", []):
+                symbol = str(row.get("HGNC_Symbol", ""))
+                if clinvar_symbols and symbol not in clinvar_symbols:
+                    violations.append(
+                        f"{gene_symbol}/{vcv}: retained discordant GoFCards gene {symbol}"
+                    )
+
+            for condition in payload.get("condition_assertions", []):
+                rcv = str(condition.get("rcv_accession", ""))
+                rcvs.add((vcv, rcv))
+                classification = condition.get("germline_classification", {})
+                status = str(classification.get("review_status", ""))
+                stars = classification.get("review_stars")
+                if ALLOWED_REVIEW_STATUSES.get(status) != stars:
+                    violations.append(
+                        f"{gene_symbol}/{vcv}/{rcv}: invalid review status/stars"
+                    )
+                if isinstance(stars, int):
+                    review_stars[stars] += 1
+                for scv in condition.get("matched_scvs", []):
+                    scv_attachments += 1
+                    scv_accession = str(scv.get("scv_accession", ""))
+                    scvs.add((vcv, scv_accession))
+                    if scv.get("record_status") != "current":
+                        violations.append(
+                            f"{gene_symbol}/{vcv}/{rcv}/{scv_accession}: non-current SCV"
+                        )
+                    if scv.get("contributes_to_aggregate_classification") is not True:
+                        violations.append(
+                            f"{gene_symbol}/{vcv}/{rcv}/{scv_accession}: non-contributing SCV"
+                        )
+                    if scv.get("submitted_mode_of_inheritance"):
+                        with_moi += 1
+                    if scv.get("penetrance"):
+                        with_penetrance += 1
+                    if scv.get("trait_linkage_ambiguous_across_eligible_rcvs"):
+                        ambiguous_scv_attachments += 1
+                    zygosity_observations.update(
+                        {
+                            str(key): int(value)
+                            for key, value in scv.get(
+                                "observed_zygosity_counts", {}
+                            ).items()
+                        }
+                    )
+
+    expected_gene_count = canonical.get("_meta", {}).get("total_genes")
+    if expected_gene_count != gene_count:
+        violations.append(
+            f"meta total_genes={expected_gene_count}, observed={gene_count}"
+        )
+
+    gofcards_meta = (
+        canonical.get("_meta", {}).get("sources", {}).get("GoFCards", {})
+    )
+    expected_raw_fields = {
+        "assembly": "hg19",
+        "keys": ["chr", "pos", "ref", "alt"],
+        "note": (
+            "Applies only to the legacy top-level GoFCards source fields; "
+            "exact_normalized_variants identify hg19 and hg38 fields explicitly"
+        ),
+    }
+    if "assembly" in gofcards_meta:
+        violations.append("GoFCards metadata has ambiguous top-level assembly")
+    if gofcards_meta.get("raw_public_allele_fields") != expected_raw_fields:
+        violations.append("GoFCards raw public allele metadata is missing or invalid")
+
+    print(f"canonical_nonlof_json={args.nonlof_assertions_json.resolve()}")
+    print(f"schema_version={canonical.get('_meta', {}).get('version', '')}")
+    print(f"canonical_genes={gene_count}")
+    print(f"gofcards_assertions={gofcards_assertions}")
+    print(
+        "gofcards_normalization_statuses="
+        f"{json.dumps(dict(sorted(gofcards_statuses.items())))}"
+    )
+    print(f"gofcards_exact_normalized_records={gofcards_exact_records}")
+    print(f"gofcards_matched_assertions_with_hg19_vcf={gofcards_with_hg19_vcf}")
+    print(f"gofcards_matched_assertions_with_hg38_vcf={gofcards_with_hg38_vcf}")
+    print(
+        "gofcards_exact_normalized_record_keys="
+        f"{json.dumps(sorted(gofcards_exact_record_keys))}"
+    )
+    print(f"clinvar_vcv_entries={entries}")
+    print(f"unique_vcv_accessions={len(vcvs)}")
+    print(f"unique_vcv_rcv_pairs={len(rcvs)}")
+    print(f"rcv_review_stars={json.dumps(dict(sorted(review_stars.items()))) }")
+    print(f"classification_scopes={json.dumps(dict(sorted(scopes.items()))) }")
+    print(f"component_contexts={json.dumps(dict(sorted(contexts.items()))) }")
+    print(f"scv_attachments={scv_attachments}")
+    print(f"unique_vcv_scv_pairs={len(scvs)}")
+    print(
+        "zygosity_observation_counts="
+        f"{json.dumps(dict(sorted(zygosity_observations.items())))}"
+    )
+    print(f"scv_attachments_with_submitted_moi={with_moi}")
+    print(f"scv_attachments_with_penetrance={with_penetrance}")
+    print(f"ambiguous_scv_attachments={ambiguous_scv_attachments}")
+    print(f"discarded_gene_discordant_symbols={discarded_gene_symbols}")
+    print(f"violations={len(violations)}")
+    for violation in violations[:20]:
+        print(f"violation={violation}")
+    if violations:
+        raise SystemExit(1)
+
+
+if __name__ == "__main__":
+    main()

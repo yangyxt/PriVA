@@ -570,6 +570,107 @@ def test_clinvar_gene_lof_gate_requires_pathogenic_and_two_stars() -> None:
     assert summarize_clinvar_gene_pathogenicity(clinvar) == {"GENE_PATH"}
 
 
+def test_scope_review_blocks_automatic_bs2() -> None:
+    frame = pd.DataFrame(
+        [
+            {
+                "chrom": "chr1",
+                "HPO_IDs": "",
+                "HPO_scope_review_required": 0,
+                "var_plausible_patho_mechs": "dominant",
+                "variant_effect": "uncertain",
+                "variant_mechanism_applicable": "",
+                "variant_mechanism_uncertain": "dominant",
+                "Consequence": "missense_variant",
+                "NMD": "",
+                "LoF": "",
+                "LoF_filter": "",
+                "variant_gof_tag": "",
+                "gnomAD_joint_AF": 0.01,
+                "gnomAD_joint_AN": 2000,
+                "gnomAD_nhomalt_XX": 0,
+                "gnomAD_nhomalt_XY": 0,
+            },
+            {
+                "chrom": "chr1",
+                "HPO_IDs": "",
+                "HPO_scope_review_required": 1,
+                "var_plausible_patho_mechs": "dominant",
+                "variant_effect": "uncertain",
+                "variant_mechanism_applicable": "",
+                "variant_mechanism_uncertain": "dominant",
+                "Consequence": "missense_variant",
+                "NMD": "",
+                "LoF": "",
+                "LoF_filter": "",
+                "variant_gof_tag": "",
+                "gnomAD_joint_AF": 0.01,
+                "gnomAD_joint_AN": 2000,
+                "gnomAD_nhomalt_XX": 0,
+                "gnomAD_nhomalt_XY": 0,
+            },
+        ]
+    )
+    false = np.array([False, False])
+    result = BS2_criteria(
+        frame,
+        non_monogenic=false,
+        non_mendelian=false,
+        incomplete_penetrance=false,
+        pm2_criteria=np.array([0, 0]),
+    )
+
+    assert result.tolist() == [3, 0]
+
+
+def test_gene_hub_does_not_reintroduce_excluded_hpo_inheritance(
+    tmp_path: Path,
+) -> None:
+    sources = _write_fixture_sources(tmp_path)
+    pd.DataFrame(
+        [
+            {
+                "gene_symbol": "TESTREC",
+                "disease_id": "OMIM:INCLUDED",
+                "hpo_id": "HP:0000006",
+                "frequency": "-",
+                "evidence": "TAS",
+                "reference": "OMIM:INCLUDED",
+                "priva_scope": "include",
+            },
+            {
+                "gene_symbol": "TESTREC",
+                "disease_id": "OMIM:EXCLUDED",
+                "hpo_id": "HP:0000007",
+                "frequency": "-",
+                "evidence": "TAS",
+                "reference": "OMIM:EXCLUDED",
+                "priva_scope": "exclude",
+            },
+            {
+                "gene_symbol": "TESTREC",
+                "disease_id": "OMIM:REVIEW",
+                "hpo_id": "HP:0000007",
+                "frequency": "-",
+                "evidence": "TAS",
+                "reference": "OMIM:REVIEW",
+                "priva_scope": "review",
+            },
+        ]
+    ).to_csv(sources["hpo_collapsed"], sep="\t", index=False)
+
+    summary = GeneMechanismHub(
+        use_hgnc_package=False,
+        **sources,
+    ).known_inheritance_mode("TESTREC")
+
+    assert summary["dominant"] is True
+    assert summary["recessive"] is False
+    assert summary["hpo_scope_review_required"] is True
+    assert summary["hpo_scope_review_disease_ids"] == "OMIM:REVIEW"
+    assert summary["hpo_scope_excluded_disease_ids"] == "OMIM:EXCLUDED"
+
+
 def _modern_mechanism_rows() -> pd.DataFrame:
     return pd.DataFrame(
         {

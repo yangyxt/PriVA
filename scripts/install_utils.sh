@@ -2106,14 +2106,6 @@ function gene_pathogenic_mechanism_cache_install() {
     }
     [[ -f ${builder_script} ]] || { log "ERROR: Gene mechanism builder not found: ${builder_script}"; return 1; }
 
-    if [[ "${PRIVA_FORCE_GENE_MECHANISM_CACHE:-0}" != "1" ]] && \
-       validate_gene_pathogenic_mechanism_cache "${mechanism_json}" "${evidence_tsv}" >/dev/null 2>&1; then
-        log "Gene mechanism/DDG2P cache already valid: ${mechanism_json}; ${evidence_tsv}"
-        update_yaml "${config_file}" "gene_mechanism_json" "${mechanism_json}"
-        update_yaml "${config_file}" "ddg2p_mechanism_evidence" "${evidence_tsv}"
-        return 0
-    fi
-
     local -a builder_args=(
         "${builder_script}"
         --cache-dir "${cache_dir}"
@@ -2122,12 +2114,15 @@ function gene_pathogenic_mechanism_cache_install() {
         --timeout "${GENE_MECHANISM_TIMEOUT:-120}"
         --retries "${GENE_MECHANISM_RETRIES:-3}"
     )
-    [[ "${PRIVA_FORCE_GENE_MECHANISM_CACHE:-0}" == "1" ]] && builder_args+=(--force)
+    if [[ "${PRIVA_FORCE_GENE_MECHANISM_CACHE:-0}" == "1" ]] || \
+       [[ "${PRIVA_FORCE_ALL_CACHES:-0}" == "1" ]]; then
+        builder_args+=(--force)
+    fi
     if [[ -n "${PROXY_URL:-}" ]]; then
         builder_args+=(--proxy-url "${PROXY_URL}" --download-tool auto)
     fi
 
-    log "Building PriVA gene mechanism/DDG2P cache from source URLs into ${cache_dir}"
+    log "Checking and rebuilding PriVA gene mechanism/DDG2P cache as required"
     python "${builder_args[@]}" || {
         log "ERROR: Failed to build gene mechanism/DDG2P cache"
         return 1
@@ -2206,7 +2201,7 @@ function ensure_gofcards_normalizer_workflow() {
     fi
 
     repo_dir=$(yaml_value_or_default "${config_file}" "gofcards_normalizer_repo_dir" "${DATA_DIR}/gofcards/gofcards_hg38_normalizer")
-    repo_url=$(yaml_value_or_default "${config_file}" "gofcards_normalizer_repo_url" "git@github.com:yangyxt/gofcards_hg38_normalizer.git")
+    repo_url=$(yaml_value_or_default "${config_file}" "gofcards_normalizer_repo_url" "https://github.com/yangyxt/gofcards_hg38_normalizer.git")
     if [[ -d ${repo_dir}/.git ]]; then
         log "Updating GoFCards normalizer repository at ${repo_dir}"
         git -C "${repo_dir}" pull --ff-only || {
@@ -2246,11 +2241,15 @@ function gofcards_exact_gof_cache_install() {
     local vep_version_hg38
     local vep_merged_hg38
     local hgnc_tsv
+    local refresh_days
 
     target_tsv=$(yaml_value_or_default "${config_file}" "gofcards_exact_gof_hgvsp" "${DATA_DIR}/gofcards/gofcards_exact_gof_hgvsp.tsv.gz")
+    refresh_days=$(yaml_value_or_default "${config_file}" "gofcards_refresh_days" "180")
     if [[ "${PRIVA_FORCE_GOFCARDS_CACHE:-0}" != "1" ]] && \
-       validate_gofcards_exact_gof_cache "${target_tsv}" >/dev/null 2>&1; then
-        log "GoFCards exact GOF cache already valid: ${target_tsv}"
+       [[ "${PRIVA_FORCE_ALL_CACHES:-0}" != "1" ]] && \
+       validate_gofcards_exact_gof_cache "${target_tsv}" >/dev/null 2>&1 && \
+       [[ -n $(find "${target_tsv}" -mtime "-${refresh_days}" -print -quit 2>/dev/null) ]]; then
+        log "GoFCards exact GOF cache is valid and within its ${refresh_days}-day refresh interval: ${target_tsv}"
         update_yaml "${config_file}" "gofcards_exact_gof_hgvsp" "${target_tsv}"
         return 0
     fi
@@ -2336,6 +2335,84 @@ function gofcards_exact_gof_cache_install() {
 }
 
 
+function validate_gene_nonlof_mechanism_cache() {
+    local builder_script=${1}
+    local cache_json=${2}
+    local schema_json=${3}
+
+    [[ -f ${builder_script} ]] || { log "ERROR: Non-LOF builder not found: ${builder_script}"; return 1; }
+    [[ -s ${cache_json} ]] || { log "ERROR: Missing/empty non-LOF cache: ${cache_json}"; return 1; }
+    [[ -s ${schema_json} ]] || { log "ERROR: Missing/empty non-LOF schema: ${schema_json}"; return 1; }
+    python "${builder_script}" \
+        --output-schema "${schema_json}" \
+        --validate-only "${cache_json}"
+}
+
+
+function gene_nonlof_mechanism_cache_install() {
+    local config_file=${1}
+    [[ -f ${config_file} ]] || { log "ERROR: Config file not found: ${config_file}"; return 1; }
+
+    local cache_dir
+    local raw_dir
+    local builder_script
+    local cache_json
+    local schema_json
+    local gofcards_variants
+    local hgnc_table
+
+    cache_dir=$(yaml_value_or_default "${config_file}" "gene_mechanism_cache_dir" "${DATA_DIR}/gene_pathogenic_mechanism")
+    raw_dir=$(yaml_value_or_default "${config_file}" "gene_mechanism_raw_dir" "${cache_dir}/raw")
+    builder_script=$(yaml_value_or_default "${config_file}" "gene_nonlof_mechanism_builder_script" "${SCRIPT_DIR}/build_gene_nonlof_mechanism_cache.py")
+    cache_json=$(yaml_value_or_default "${config_file}" "gene_nonlof_mechanism_json" "${cache_dir}/prepared/gene_nonlof_mechanism_curated_assertions.json")
+    schema_json=$(yaml_value_or_default "${config_file}" "gene_nonlof_mechanism_schema" "${cache_dir}/schema/gene_nonlof_mechanism_curated_assertions.schema.json")
+    gofcards_variants=$(yaml_value_or_default "${config_file}" "gofcards_exact_gof_hgvsp" "${DATA_DIR}/gofcards/gofcards_exact_gof_hgvsp.tsv.gz")
+    hgnc_table=$(yaml_value_or_default "${config_file}" "hgnc_table" "${DATA_DIR}/hgnc/non_alt_loci_set.tsv")
+
+    [[ -f ${builder_script} ]] || { log "ERROR: Non-LOF builder not found: ${builder_script}"; return 1; }
+    [[ -s ${schema_json} ]] || { log "ERROR: Non-LOF schema not found: ${schema_json}"; return 1; }
+    [[ -s ${gofcards_variants} ]] || { log "ERROR: Exact GoFCards cache not found: ${gofcards_variants}"; return 1; }
+    [[ -s ${hgnc_table} ]] || { log "ERROR: HGNC table not found: ${hgnc_table}"; return 1; }
+    mkdir -p "${cache_dir}" "${raw_dir}" "$(dirname "${cache_json}")" || return 1
+
+    local -a builder_args=(
+        "${builder_script}"
+        --cache-dir "${cache_dir}"
+        --shared-raw-dir "${raw_dir}"
+        --gofcards-exact-variants "${gofcards_variants}"
+        --hgnc-table "${hgnc_table}"
+        --output-schema "${schema_json}"
+        --clinvar-min-review-stars "${CLINVAR_GOF_MIN_REVIEW_STARS:-2}"
+        --clinvar-max-download-seconds "${CLINVAR_VCV_MAX_DOWNLOAD_SECONDS:-86400}"
+        --timeout "${GENE_MECHANISM_TIMEOUT:-120}"
+        --retries "${GENE_MECHANISM_RETRIES:-3}"
+    )
+    if [[ "${PRIVA_FORCE_NONLOF_MECHANISM_CACHE:-0}" == "1" ]] || \
+       [[ "${PRIVA_FORCE_ALL_CACHES:-0}" == "1" ]]; then
+        builder_args+=(--force)
+    fi
+    if [[ -n "${PROXY_URL:-}" ]]; then
+        builder_args+=(--proxy-url "${PROXY_URL}" --download-tool auto)
+    fi
+
+    log "Checking PriVA non-LOF/ClinVar mechanism sources and rebuilding only when inputs changed"
+    python "${builder_args[@]}" || {
+        log "ERROR: Failed to build PriVA non-LOF mechanism cache"
+        return 1
+    }
+    validate_gene_nonlof_mechanism_cache \
+        "${builder_script}" "${cache_json}" "${schema_json}" || {
+        log "ERROR: PriVA non-LOF mechanism cache validation failed"
+        return 1
+    }
+
+    update_or_append_yaml "${config_file}" "gene_nonlof_mechanism_builder_script" "${builder_script}"
+    update_or_append_yaml "${config_file}" "gene_nonlof_mechanism_schema" "${schema_json}"
+    update_or_append_yaml "${config_file}" "gene_nonlof_mechanism_json" "${cache_json}"
+    log "PriVA non-LOF mechanism cache deployed: ${cache_json}"
+}
+
+
 function validate_hpo_condition_mechanism_cache() {
     local builder_script=${1}
     local cache_json=${2}
@@ -2363,7 +2440,12 @@ function hpo_condition_mechanism_cache_install() {
     cache_json=$(yaml_value_or_default "${config_file}" "hpo_condition_mechanism_json" "${DATA_DIR}/gene_pathogenic_mechanism/prepared/hpo_condition_mechanism_cache.json")
     hpo_assertions=$(yaml_value_or_default "${config_file}" "hpo_assertions" "${DATA_DIR}/hpo/genes_to_phenotype.assertions.tsv.gz")
     mechanism_evidence=$(yaml_value_or_default "${config_file}" "ddg2p_mechanism_evidence" "${DATA_DIR}/gene_pathogenic_mechanism/prepared/gene_pathogenic_mechanism_evidence.tsv")
-    mechanism_json=$(yaml_value_or_default "${config_file}" "gene_mechanism_json" "${DATA_DIR}/gene_pathogenic_mechanism/prepared/gene_mechanism_curated_assertions.json")
+    # Prefer PriVA's schema-v2 non-LOF cache. The generic key remains a
+    # compatibility fallback for installations that predate the explicit split.
+    mechanism_json=$(yaml_value_or_default "${config_file}" "gene_nonlof_mechanism_json" "")
+    if [[ -z ${mechanism_json} ]]; then
+        mechanism_json=$(yaml_value_or_default "${config_file}" "gene_mechanism_json" "${DATA_DIR}/gene_pathogenic_mechanism/prepared/gene_mechanism_curated_assertions.json")
+    fi
     gofcards_variants=$(yaml_value_or_default "${config_file}" "gofcards_exact_gof_hgvsp" "${DATA_DIR}/gofcards/gofcards_exact_gof_hgvsp.tsv.gz")
     hpo_release=$(yaml_value_or_default "${config_file}" "hpo_release" "")
     mondo_release=$(yaml_value_or_default "${config_file}" "mondo_release" "")
@@ -2376,7 +2458,8 @@ function hpo_condition_mechanism_cache_install() {
     mkdir -p "$(dirname "${cache_json}")" || return 1
 
     local rebuild=0
-    if [[ "${PRIVA_FORCE_HPO_MECHANISM_JSON:-0}" == "1" ]] || [[ ! -s ${cache_json} ]]; then
+    if [[ "${PRIVA_FORCE_HPO_MECHANISM_JSON:-0}" == "1" ]] || \
+       [[ "${PRIVA_FORCE_ALL_CACHES:-0}" == "1" ]] || [[ ! -s ${cache_json} ]]; then
         rebuild=1
     else
         local source_file
@@ -2396,7 +2479,7 @@ function hpo_condition_mechanism_cache_install() {
         python "${builder_script}" \
             --hpo-assertions "${hpo_assertions}" \
             --mechanism-evidence "${mechanism_evidence}" \
-            --mechanism-json "${mechanism_json}" \
+            --nonlof-mechanism-json "${mechanism_json}" \
             --gofcards-variants "${gofcards_variants}" \
             --hpo-release "${hpo_release}" \
             --mondo-release "${mondo_release}" \
@@ -2530,11 +2613,13 @@ function mondo_hpo_scope_install() {
     [[ -f ${scope_builder} ]] || { log "ERROR: MONDO scope builder not found: ${scope_builder}"; return 1; }
     mkdir -p "${hpo_raw_dir}" "$(dirname "${hpo_assertions}")" "$(dirname "${mondo_obo}")" || return 1
 
-    if [[ "${PRIVA_FORCE_HPO_ASSERTIONS:-0}" == "1" ]] || [[ ! -s ${hpo_genes} ]]; then
+    if [[ "${PRIVA_FORCE_HPO_ASSERTIONS:-0}" == "1" ]] || \
+       [[ "${PRIVA_FORCE_ALL_CACHES:-0}" == "1" ]] || [[ ! -s ${hpo_genes} ]]; then
         log "Downloading HPO ${hpo_release} genes_to_phenotype.txt"
         download_resource_atomic "${hpo_genes_url}" "${hpo_genes}" || return 1
     fi
-    if [[ "${PRIVA_FORCE_HPO_ASSERTIONS:-0}" == "1" ]] || [[ ! -s ${hpo_hpoa} ]]; then
+    if [[ "${PRIVA_FORCE_HPO_ASSERTIONS:-0}" == "1" ]] || \
+       [[ "${PRIVA_FORCE_ALL_CACHES:-0}" == "1" ]] || [[ ! -s ${hpo_hpoa} ]]; then
         log "Downloading HPO ${hpo_release} phenotype.hpoa"
         download_resource_atomic "${hpo_hpoa_url}" "${hpo_hpoa}" || return 1
     fi
@@ -2548,7 +2633,8 @@ function mondo_hpo_scope_install() {
             [[ ${actual_sha256} == "${mondo_sha256}" ]] || mondo_valid=0
         fi
     fi
-    if [[ "${PRIVA_FORCE_MONDO_CACHE:-0}" == "1" ]] || [[ ${mondo_valid} -eq 0 ]]; then
+    if [[ "${PRIVA_FORCE_MONDO_CACHE:-0}" == "1" ]] || \
+       [[ "${PRIVA_FORCE_ALL_CACHES:-0}" == "1" ]] || [[ ${mondo_valid} -eq 0 ]]; then
         log "Downloading MONDO ${mondo_release} ontology"
         download_resource_atomic "${mondo_url}" "${mondo_obo}" || return 1
         if [[ -n ${mondo_sha256} ]]; then
@@ -2562,7 +2648,8 @@ function mondo_hpo_scope_install() {
     fi
 
     local rebuild_hpo=0
-    if [[ "${PRIVA_FORCE_HPO_ASSERTIONS:-0}" == "1" ]] || [[ ! -s ${hpo_base_assertions} ]] || \
+    if [[ "${PRIVA_FORCE_HPO_ASSERTIONS:-0}" == "1" ]] || \
+       [[ "${PRIVA_FORCE_ALL_CACHES:-0}" == "1" ]] || [[ ! -s ${hpo_base_assertions} ]] || \
        [[ ${hpo_genes} -nt ${hpo_base_assertions} ]] || [[ ${hpo_hpoa} -nt ${hpo_base_assertions} ]] || \
        [[ ${hpo_builder} -nt ${hpo_base_assertions} ]]; then
         rebuild_hpo=1
@@ -2572,6 +2659,7 @@ function mondo_hpo_scope_install() {
 
     local rebuild_scope=0
     if [[ ${rebuild_hpo} -eq 1 ]] || [[ "${PRIVA_FORCE_MONDO_CACHE:-0}" == "1" ]] || \
+       [[ "${PRIVA_FORCE_ALL_CACHES:-0}" == "1" ]] || \
        [[ ! -s ${scope_registry} ]] || [[ ! -s ${hpo_assertions} ]] || \
        [[ ${mondo_obo} -nt ${scope_registry} ]] || [[ ${hpo_base_assertions} -nt ${scope_registry} ]] || \
        [[ ${scope_builder} -nt ${scope_registry} ]] || [[ ${scope_overrides} -nt ${scope_registry} ]]; then
@@ -2609,6 +2697,7 @@ function mechanism_resource_install() {
     mondo_hpo_scope_install "${config_file}" || return 1
     gene_pathogenic_mechanism_cache_install "${config_file}" || return 1
     gofcards_exact_gof_cache_install "${config_file}" || return 1
+    gene_nonlof_mechanism_cache_install "${config_file}" || return 1
     hpo_condition_mechanism_cache_install "${config_file}" || return 1
 }
 

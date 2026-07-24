@@ -47,18 +47,15 @@ HPO_CONDITION_MECHANISM_SCHEMA_VERSION = "1.0"
 PACKAGED_MECHANISM_JSON = (
     DATA_DIR / "gene_pathogenic_mechanism" / "prepared" / "gene_mechanism_curated_assertions.json"
 )
-# The shared cache is intentionally non-LOF; the packaged fallback is broader.
-SHARED_CANONICAL_NONLOF_MECHANISM_JSON = (
-    PRIVA_ROOT.parent
-    / "llm_gene_reranker"
-    / "data"
+CANONICAL_NONLOF_MECHANISM_JSON = (
+    DATA_DIR
     / "gene_pathogenic_mechanism"
     / "prepared"
     / "gene_nonlof_mechanism_curated_assertions.json"
 )
 DEFAULT_MECHANISM_JSON = (
-    SHARED_CANONICAL_NONLOF_MECHANISM_JSON
-    if SHARED_CANONICAL_NONLOF_MECHANISM_JSON.exists()
+    CANONICAL_NONLOF_MECHANISM_JSON
+    if CANONICAL_NONLOF_MECHANISM_JSON.exists()
     else PACKAGED_MECHANISM_JSON
 )
 DEFAULT_DDG2P_MECHANISM_EVIDENCE = (

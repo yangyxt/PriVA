@@ -27,13 +27,16 @@ The github repository includes an one-stop installation BASH script (`scripts/in
 
 **Carefully read comments in `config.yaml` to prepare for execution of install_utils.sh and PriVA**
 
-**This only needs to be executed once**
+Create the environment once, then rerun `main_install` whenever PriVA's source
+caches should be checked for updates.
 Create and configure the conda environment (expected name `priva_acmg`):
    ```bash
    bash scripts/install_utils.sh conda_install_vep acmg_conda.yml # Make sure the environment name in env.yaml is 'priva_acmg' or activate it manually later
    ```
 
-**These two steps only need to be executed once per reference assembly**
+The first installation is assembly-specific. The same commands are safe to
+rerun: existing large resources are validated or reused, while refreshable
+sources are checked according to their configured update intervals.
 1. Install VEP and its plugins:
    ```bash
    bash scripts/install_utils.sh vep_cache_api_install --VEP_CACHEDIR /path/to/cache --VEP_ASSEMBLY GRCh37/GRCh38
@@ -44,16 +47,38 @@ Create and configure the conda environment (expected name `priva_acmg`):
    bash scripts/install_utils.sh main_install path/to/config.yaml
    ```
 
-`main_install` also deploys the gene-mechanism resources used by ACMG step 3:
-DDG2P/G2P mechanism evidence, the curated gene-mechanism JSON, the compact
-GoFCards exact variant-level GOF cache, and the integrated HPO-framed condition
-mechanism JSON. These can be refreshed independently:
+`main_install` also deploys the gene-mechanism resources used by ACMG step 3 in
+dependency order: pinned HPO/MONDO data, the broader LOF/non-LOF mechanism
+cache, exact normalized GoFCards variants, the canonical non-LOF/ClinVar VCV
+cache, and the integrated HPO-framed condition cache. All builders, parsers,
+schemas, and outputs are inside the PriVA tree; `llm_gene_reranker` is not an
+installation dependency.
+
+The complete canonical JSON and ClinVar VCV/RCV/SCV field contract is documented
+in `GENE_NONLOF_MECHANISM_JSON_STRUCTURE.md` and enforced by the bundled JSON
+Schema.
+
+The supported full manual refresh is the same entry point as installation:
+
+```bash
+bash scripts/install_utils.sh main_install path/to/config.yaml
+```
+
+Users who want automatic refreshes should schedule that command with their own
+cron or cluster scheduler. PriVA does not install a separate weekly job. Each
+run checks source-specific refresh intervals and rebuilds downstream caches only
+when an input checksum or implementation file changes. A forced mechanism
+refresh can be requested with `PRIVA_FORCE_ALL_CACHES=1`.
+
+The mechanism stages can also be run independently for debugging:
 
 ```bash
 bash scripts/install_utils.sh gene_pathogenic_mechanism_cache_install path/to/config.yaml
 bash scripts/install_utils.sh gofcards_exact_gof_cache_install path/to/config.yaml
+bash scripts/install_utils.sh gene_nonlof_mechanism_cache_install path/to/config.yaml
 bash scripts/install_utils.sh mondo_hpo_scope_install path/to/config.yaml
 bash scripts/install_utils.sh hpo_condition_mechanism_cache_install path/to/config.yaml
+bash scripts/install_utils.sh mechanism_resource_install path/to/config.yaml
 ```
 
 The integrated JSON is published by writing and validating a complete temporary

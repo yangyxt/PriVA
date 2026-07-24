@@ -2545,7 +2545,8 @@ def BS1_criteria(df: pd.DataFrame,
                  pm2_criteria: np.ndarray = None,
                  non_monogenic: np.ndarray = None,
                  non_mendelian: np.ndarray = None,
-                 incomplete_penetrance: np.ndarray = None):
+                 incomplete_penetrance: np.ndarray = None,
+                 return_frequency_components: bool = False):
     '''
     BS1: allele frequency is greater than expected for the disorder.
 
@@ -2573,14 +2574,18 @@ def BS1_criteria(df: pd.DataFrame,
     Recessive frequency model:
       - A compatible biallelic requirement uses homozygous/hemizygous population frequency, not
         carrier allele count.
-      - ClinVar gene-level pathogenic max-AF does not rescue AR carrier
-        frequency into BS1; that branch is restricted to allele-frequency
-        compatible dominant/Y-linked models.
+
+    Gene pathogenic-frequency comparator:
+      - For any valid Mendelian model, BS1 can also be assigned when the
+        variant AF is significantly greater than the non-zero maximum AF of
+        known pathogenic ClinVar variants in that gene.
 
     Global gates:
       - no BS1 for non-monogenic/polygenic, non-Mendelian, or incomplete-
         penetrance rows.
-      - final BS1 is removed when PM2 is assigned.
+      - no BS1 while a relevant HPO disease context still requires scope review.
+      - PM2 blocks only the gene pathogenic-frequency comparator.
+      - A disease-incidence BS1 assignment takes precedence over PM2.
     '''
     if any(value is None for value in (non_monogenic, non_mendelian, incomplete_penetrance)):
         raise ValueError(
@@ -2591,7 +2596,11 @@ def BS1_criteria(df: pd.DataFrame,
     incomplete_penetrance = np.asarray(incomplete_penetrance, dtype=bool)
 
     if pm2_criteria is None:
-        pm2_criteria = np.zeros(len(df), dtype=int)
+        pm2_present = np.zeros(len(df), dtype=bool)
+    else:
+        if len(pm2_criteria) != len(df):
+            raise ValueError("pm2_criteria must have the same number of rows as df")
+        pm2_present = np.asarray(pm2_criteria) > 0
 
     def _series_or_empty(column: str) -> pd.Series:
         return df.get(column, pd.Series("", index=df.index)).fillna("").astype(str)
@@ -2603,6 +2612,9 @@ def BS1_criteria(df: pd.DataFrame,
     non_monogenic_series = pd.Series(non_monogenic, index=df.index).astype(bool)
     non_mendelian_series = pd.Series(non_mendelian, index=df.index).astype(bool)
     incomplete_penetrance_series = pd.Series(incomplete_penetrance, index=df.index).astype(bool)
+    scope_review_required = _series_or_empty("HPO_scope_review_required").str.lower().isin(
+        {"1", "true", "yes"}
+    )
 
     false_neg_rate, common_vars = control_false_neg_rate(df['gnomAD_joint_AF_max'], df['gnomAD_joint_AN_max'], af_threshold=expected_incidence, alpha=0.01)
 
@@ -2618,6 +2630,7 @@ def BS1_criteria(df: pd.DataFrame,
         np.logical_not(non_monogenic_series)
         & np.logical_not(non_mendelian_series)
         & np.logical_not(incomplete_penetrance_series)
+        & np.logical_not(scope_review_required)
     )
 
     # Dominant BS1 uses carrier allele frequency only when the variant is
@@ -2641,11 +2654,29 @@ def BS1_criteria(df: pd.DataFrame,
     greater_than_clinvar_patho_af = greater_than_clinvar_patho_af & (gene_max_patho_af > 0)
     _, greater_than_basic_af = control_false_neg_rate(df['gnomAD_joint_AF_max'], df['gnomAD_joint_AN_max'], af_threshold=0.0001, alpha=0.01)
     greater_than_basic_af = np.where(greater_than_basic_af.isna(), df['gnomAD_joint_AF'] > 0.0001, greater_than_basic_af)
-    clinvar_af_mechanism_compatible = valid_model & (dominant_frequency_compatible | y_locus)
-    bs1_criteria = (greater_than_disease_incidence | (greater_than_clinvar_patho_af & clinvar_af_mechanism_compatible)) & greater_than_basic_af
-    bs1_criteria = bs1_criteria & (pm2_criteria == 0)
+    clinvar_af_model_compatible = valid_model
+    disease_incidence_bs1 = np.asarray(
+        greater_than_disease_incidence & greater_than_basic_af,
+        dtype=bool,
+    )
+    gene_pathogenic_af_bs1_candidate = np.asarray(
+        greater_than_clinvar_patho_af
+        & clinvar_af_model_compatible
+        & greater_than_basic_af,
+        dtype=bool,
+    )
+    gene_pathogenic_af_blocked_by_pm2 = gene_pathogenic_af_bs1_candidate & pm2_present
+    gene_pathogenic_af_bs1 = gene_pathogenic_af_bs1_candidate & ~pm2_present
+    bs1_criteria = disease_incidence_bs1 | gene_pathogenic_af_bs1
     bs1_array = np.zeros(len(df), dtype=int)
     bs1_array[bs1_criteria] = 3
+    frequency_components = {
+        "disease_incidence_bs1": disease_incidence_bs1,
+        "gene_pathogenic_af_bs1": gene_pathogenic_af_bs1,
+        "gene_pathogenic_af_blocked_by_pm2": gene_pathogenic_af_blocked_by_pm2,
+    }
+    if return_frequency_components:
+        return bs1_array, frequency_components
     return bs1_array
 
 
@@ -2901,6 +2932,7 @@ def BS2_criteria(df: pd.DataFrame,
     Global gates:
       - no BS2 for non-monogenic/polygenic, non-Mendelian, incomplete-
         penetrance, moderate/low-penetrance, or late-onset-compatible rows.
+      - no BS2 while a relevant HPO disease context still requires scope review.
       - if HPO explicitly marks complete penetrance, use lower gnomAD count
         thresholds (>3 instead of >10), still requiring no incomplete
         penetrance and no late-onset confounder.
@@ -2962,6 +2994,9 @@ def BS2_criteria(df: pd.DataFrame,
     y_locus = chrom.str.contains("Y", regex=False)
 
     hpo_ids = _series_or_empty("HPO_IDs")
+    scope_review_required = _series_or_empty("HPO_scope_review_required").str.lower().isin(
+        {"1", "true", "yes"}
+    )
     not_late_onsets = hpo_ids.map(hpo_onset_modes)
     complete_penetrance = hpo_ids.str.contains("HP:0034950", regex=False)  # Complete penetrance
     moderate_to_low_penetrance = (
@@ -2978,12 +3013,14 @@ def BS2_criteria(df: pd.DataFrame,
         & np.logical_not(incomplete_penetrance)
         & np.logical_not(moderate_to_low_penetrance)
         & not_late_onsets
+        & np.logical_not(scope_review_required)
     )
     complete_eligible = (
         valid_model
         & np.logical_not(incomplete_penetrance)
         & complete_penetrance
         & not_late_onsets
+        & np.logical_not(scope_review_required)
     )
 
     mechanism_masks = _variant_mechanism_masks(df)
@@ -4169,9 +4206,31 @@ def ACMG_criteria_assign(anno_table: str,
     fam_df = None
     proband = None
     if ped_table:
-        ped_df = pd.read_table(ped_table, low_memory=False)
+        ped_df = pd.read_table(
+            ped_table, dtype=str, keep_default_na=False, low_memory=False
+        )
+        if '#FamilyID' not in ped_df.columns:
+            ped_df = pd.read_table(
+                ped_table,
+                header=None,
+                names=[
+                    '#FamilyID',
+                    'IndividualID',
+                    'PaternalID',
+                    'MaternalID',
+                    'Sex',
+                    'Phenotype',
+                ],
+                usecols=range(6),
+                dtype=str,
+                keep_default_na=False,
+                low_memory=False,
+            )
         fam_df = ped_df[ped_df['#FamilyID'] == fam_name]
-        proband = fam_df.loc[fam_df['Phenotype'].isin(["2", 2]), 'IndividualID'].values[0]
+        affected = fam_df.loc[fam_df['Phenotype'] == "2", 'IndividualID']
+        if affected.empty:
+            raise ValueError(f"No affected individual found for family {fam_name}")
+        proband = affected.values[0]
 
 
     # Convert the am_score_df to a dictionary:
@@ -4334,15 +4393,50 @@ def ACMG_criteria_assign(anno_table: str,
     gc.collect()
 
     # Apply BS1, PAF of variant is greater than expected incidence of the disease.
-    bs1_criteria = BS1_criteria(
+    bs1_criteria, bs1_frequency_components = BS1_criteria(
         anno_df,
         expected_incidence=expected_incidence,
         pm2_criteria=pm2_criteria,
         non_monogenic=non_monogenic,
         non_mendelian=non_mendelian,
         incomplete_penetrance=incomplete_penetrance,
+        return_frequency_components=True,
     )
     logger.info(f"BS1 criteria applied, {(bs1_criteria > 0).sum()} variants are having the BS1 criteria")
+
+    disease_incidence_bs1 = bs1_frequency_components["disease_incidence_bs1"]
+    gene_pathogenic_af_bs1 = bs1_frequency_components["gene_pathogenic_af_bs1"]
+    gene_pathogenic_af_blocked_by_pm2 = bs1_frequency_components["gene_pathogenic_af_blocked_by_pm2"]
+
+    # PM2 blocks the gene pathogenic-AF comparator, while the disease-incidence
+    # BS1 route is stronger and removes either PM2 strength.
+    pm2_backdown = (pm2_criteria > 0) & disease_incidence_bs1
+    pm2_backdown_supporting = int(((pm2_criteria == 1) & pm2_backdown).sum())
+    pm2_backdown_moderate = int(((pm2_criteria == 2) & pm2_backdown).sum())
+    pm2_criteria = pm2_criteria.copy()
+    pm2_criteria[pm2_backdown] = 0
+
+    anno_df["audit_BS1_disease_incidence_gate"] = disease_incidence_bs1.astype(int)
+    anno_df["audit_BS1_gene_pathogenic_AF_gate"] = gene_pathogenic_af_bs1.astype(int)
+    anno_df["audit_BS1_gene_pathogenic_AF_blocked_by_PM2"] = gene_pathogenic_af_blocked_by_pm2.astype(int)
+    anno_df["audit_PM2_backdown_for_BS1_disease_incidence"] = pm2_backdown.astype(int)
+
+    logger.info(
+        "BS1/PM2 route precedence removed "
+        f"{pm2_backdown_supporting} PM2_Supporting and "
+        f"{pm2_backdown_moderate} PM2_Moderate assignments via the disease-incidence BS1 route; "
+        f"PM2 blocked the gene pathogenic-AF BS1 route for {int(gene_pathogenic_af_blocked_by_pm2.sum())} variants"
+    )
+
+    pm2_bs1_conflicts = (pm2_criteria > 0) & (bs1_criteria > 0)
+    anno_df["frequency_conflict_PM2_BS1"] = pm2_bs1_conflicts.astype(int)
+    if pm2_bs1_conflicts.any():
+        logger.warning(
+            "Unexpected unresolved PM2/BS1 frequency conflicts remain for "
+            f"{int(pm2_bs1_conflicts.sum())} variants"
+        )
+    else:
+        logger.info("No PM2/BS1 frequency conflicts detected")
     gc.collect()
 
     # Summarize the inheritance mode, first prepare a df composed of recessive, dominant, non_monogenic, non_mendelian, haplo_insufficient, incomplete_penetrance
@@ -4453,6 +4547,14 @@ def ACMG_criteria_assign(anno_table: str,
 
     # Create summary and matrix
     anno_df, criteria_matrix = summarize_acmg_criteria(anno_df, criteria_dict, clingen_map_pkl)
+    for audit_column in (
+        "audit_BS1_disease_incidence_gate",
+        "audit_BS1_gene_pathogenic_AF_gate",
+        "audit_BS1_gene_pathogenic_AF_blocked_by_PM2",
+        "audit_PM2_backdown_for_BS1_disease_incidence",
+        "frequency_conflict_PM2_BS1",
+    ):
+        criteria_matrix[audit_column] = anno_df[audit_column].to_numpy()
     # Save the criteria matrix to a file which the path is based on the input anno_table
     output_matrix = ".".join(anno_table.split(".")[:-1]) + ".acmg.tsv"
     criteria_matrix.to_csv(output_matrix, sep="\t", index=False)

@@ -2016,6 +2016,11 @@ required = {
     "gene_symbol",
     "source",
     "source_record_id",
+    "source_condition_id",
+    "mondo_id",
+    "disease_scope",
+    "priva_scope",
+    "scope_review_status",
     "disease_label",
     "inheritance",
     "patho_mode_raw",
@@ -2027,6 +2032,8 @@ required = {
 row_count = 0
 g2p_rows = 0
 g2p_lof_rows = 0
+orphadata_rows = 0
+orphadata_mondo_rows = 0
 with open(evidence_tsv, encoding="utf-8", newline="") as handle:
     reader = csv.DictReader(handle, delimiter="\t")
     missing = sorted(required - set(reader.fieldnames or []))
@@ -2040,13 +2047,26 @@ with open(evidence_tsv, encoding="utf-8", newline="") as handle:
             raw = row.get("patho_mode_raw", "").lower()
             if "LOF" in normalized or "loss of function" in raw:
                 g2p_lof_rows += 1
+        if row.get("source") == "Orphadata":
+            orphadata_rows += 1
+            if row.get("mondo_id"):
+                orphadata_mondo_rows += 1
 if row_count == 0:
     raise SystemExit(f"{evidence_tsv} contains no evidence rows")
 if g2p_rows == 0:
     raise SystemExit(f"{evidence_tsv} contains no G2P_DDG2P rows")
 if g2p_lof_rows == 0:
     raise SystemExit(f"{evidence_tsv} contains no DDG2P/G2P LoF rows")
-print(f"mechanism_json_genes={gene_count}; evidence_rows={row_count}; g2p_rows={g2p_rows}; g2p_lof_rows={g2p_lof_rows}")
+if orphadata_rows == 0:
+    raise SystemExit(f"{evidence_tsv} contains no explicit Orphadata mechanism rows")
+if orphadata_mondo_rows == 0:
+    raise SystemExit(f"{evidence_tsv} contains no MONDO-mapped Orphadata rows")
+print(
+    f"mechanism_json_genes={gene_count}; evidence_rows={row_count}; "
+    f"g2p_rows={g2p_rows}; g2p_lof_rows={g2p_lof_rows}; "
+    f"orphadata_rows={orphadata_rows}; "
+    f"orphadata_mondo_rows={orphadata_mondo_rows}"
+)
 PY
 }
 
@@ -2058,12 +2078,14 @@ function gene_pathogenic_mechanism_cache_install() {
     local builder_script
     local mechanism_json
     local evidence_tsv
+    local disease_scope_registry
 
     cache_dir=$(yaml_value_or_default "${config_file}" "gene_mechanism_cache_dir" "${DATA_DIR}/gene_pathogenic_mechanism")
     raw_dir=$(yaml_value_or_default "${config_file}" "gene_mechanism_raw_dir" "${cache_dir}/raw")
     builder_script=$(yaml_value_or_default "${config_file}" "gene_mechanism_builder_script" "${SCRIPT_DIR}/build_gene_pathogenic_mechanism_cache.py")
     mechanism_json=$(yaml_value_or_default "${config_file}" "gene_mechanism_json" "${cache_dir}/prepared/gene_mechanism_curated_assertions.json")
     evidence_tsv=$(yaml_value_or_default "${config_file}" "ddg2p_mechanism_evidence" "${cache_dir}/prepared/gene_pathogenic_mechanism_evidence.tsv")
+    disease_scope_registry=$(yaml_value_or_default "${config_file}" "mondo_disease_scope_registry" "${DATA_DIR}/mondo/disease_scope.tsv.gz")
 
     mkdir -p "${cache_dir}" "${raw_dir}" "$(dirname "${mechanism_json}")" || {
         log "ERROR: Failed to create gene mechanism cache directories"
@@ -2083,6 +2105,7 @@ function gene_pathogenic_mechanism_cache_install() {
         "${builder_script}"
         --cache-dir "${cache_dir}"
         --shared-raw-dir "${raw_dir}"
+        --disease-scope-registry "${disease_scope_registry}"
         --timeout "${GENE_MECHANISM_TIMEOUT:-120}"
         --retries "${GENE_MECHANISM_RETRIES:-3}"
     )
@@ -2482,6 +2505,13 @@ function mondo_hpo_scope_install() {
 
 function mechanism_resource_install() {
     local config_file=${1}
+
+    # Mechanism sources use OMIM and ORPHA identifiers. Build the pinned MONDO
+    # registry first so the mechanism cache can resolve both identifier systems
+    # to one condition without disease-name matching. This ordering is part of
+    # the data contract: the mechanism builder must never fall back to a stale
+    # or absent disease-scope registry and silently emit unscoped assertions.
+    mondo_hpo_scope_install "${config_file}" || return 1
     gene_pathogenic_mechanism_cache_install "${config_file}" || return 1
     gofcards_exact_gof_cache_install "${config_file}" || return 1
 }
@@ -2607,15 +2637,10 @@ function main_install() {
     ${config_file} || \
     { log "Failed to install pext BigWig files"; return 1; }
 
-    # 11. Install gene mechanism/DDG2P and exact GoFCards GOF caches
+    # 11. Install pinned HPO/MONDO, condition mechanisms, and exact GoFCards
     mechanism_resource_install \
         ${config_file} || \
-    { log "Failed to install gene mechanism/DDG2P or GoFCards exact GOF caches"; return 1; }
-
-    # 12. Install pinned HPO/MONDO releases and disease-scope annotations
-    mondo_hpo_scope_install \
-        ${config_file} || \
-    { log "Failed to install HPO/MONDO disease-scope resources"; return 1; }
+    { log "Failed to install HPO/MONDO or mechanism resources"; return 1; }
     
     log "Congratulations! The installation is completed!"
 }

@@ -1,0 +1,20 @@
+{
+  "genes_only_gofcards_vs_any_source_record": 158,
+  "genes_only_gofcards_vs_explicit_sources": 197,
+  "genes_only_gofcards_vs_priva_included": 244,
+  "genes_with_exact_clinvar_link": 216,
+  "genes_with_g2p_canonical_mechanism": 249,
+  "genes_with_orphadata_canonical_mechanism": 201,
+  "gofcards_exact_genes": 587,
+  "gofcards_exact_rows": 4009,
+  "inputs": {
+    "condition_evidence": "/paedyl01/disk1/yangyxt/PriVA/data/gene_pathogenic_mechanism/prepared/gene_pathogenic_mechanism_evidence.tsv",
+    "gofcards": "/paedyl01/disk1/yangyxt/PriVA/data/gofcards/gofcards_exact_gof_hgvsp.tsv.gz",
+    "hgnc_table": "/paedyl01/disk1/yangyxt/PriVA/data/hgnc/non_alt_loci_set.tsv",
+    "mechanism_json": "/paedyl01/disk1/yangyxt/llm_gene_reranker/data/gene_pathogenic_mechanism/prepared/gene_mechanism_curated_assertions.json"
+  },
+  "outputs": {
+    "gene_audit_tsv": "/paedyl01/disk1/yangyxt/PriVA/data/gofcards/gofcards_gene_source_coverage.audit.tsv",
+    "summary_json": "/paedyl01/disk1/yangyxt/PriVA/data/gofcards/gofcards_gene_source_coverage.audit.summary.json"
+  }
+}

@@ -18,6 +18,7 @@ from gene_mechanism_hub import (  # noqa: E402
     extract_exact_clinvar_condition_identities,
     match_condition_cache_gofcards_variants,
     select_condition_histories_for_variant,
+    summarize_condition_cache_exact_gof_matches,
 )
 
 
@@ -195,6 +196,82 @@ def test_exact_gofcards_cache_match_preserves_condition_resolution() -> None:
     assert matches[0]["condition"] is condition
     assert matches[1]["condition"] == {}
     assert matches[1]["variant"]["clinvar_links"][0]["vcv_accession"] == "VCV2"
+
+
+def test_exact_gof_summary_keeps_unresolved_audit_but_scopes_assertions() -> None:
+    condition = {
+        "label": "Condition one",
+        "identifiers": {"OMIM": ["OMIM:1"], "MONDO": ["MONDO:1"]},
+        "priva_scope": {
+            "decision": "include",
+            "category": "mendelian_non_neoplastic",
+            "review_status": "auto_supported",
+        },
+        "inheritance": {
+            "modes": ["autosomal_dominant"],
+            "assertions": [
+                {
+                    "hpo_id": "HP:0000006",
+                    "frequency": "-",
+                    "evidence": "TAS",
+                    "reference": "OMIM:1",
+                }
+            ],
+        },
+        "penetrance": {"statuses": [], "assertions": []},
+        "onset": {"terms": [], "assertions": []},
+        "hpo_assertion_count": 1,
+    }
+    matches = [
+        {
+            "condition_key": "OMIM:1",
+            "condition": condition,
+            "variant_key": "GOFCARDS:VAR1",
+            "variant": {
+                "pmids": ["1"],
+                "clinvar_links": [
+                    {
+                        "vcv_accession": "VCV1",
+                        "condition_names": ["ClinVar condition one"],
+                        "condition_identifiers": ["OMIM:1"],
+                        "hgvs": ["NM_1.1:c.1A>G"],
+                        "clinical_significance": "Pathogenic",
+                        "review_stars": 2,
+                    }
+                ],
+            },
+        },
+        {
+            "condition_key": "",
+            "condition": {},
+            "variant_key": "GOFCARDS:VAR2",
+            "variant": {
+                "clinvar_links": [
+                    {
+                        "vcv_accession": "VCV2",
+                        "condition_names": ["Unresolved condition"],
+                        "hgvs": ["NM_1.1:c.2A>G"],
+                        "review_stars": 1,
+                    }
+                ]
+            },
+        },
+    ]
+
+    summary = summarize_condition_cache_exact_gof_matches(matches)
+
+    assert summary["vcv_accessions"] == ["VCV1", "VCV2"]
+    assert summary["condition_names"] == [
+        "ClinVar condition one",
+        "Unresolved condition",
+    ]
+    assert summary["review_stars"] == [2, 1]
+    assert summary["hgvs"] == ["NM_1.1:c.1A>G", "NM_1.1:c.2A>G"]
+    assert len(summary["assertions"]) == 1
+    assertion = summary["assertions"][0]
+    assert assertion["source_condition_id"] == "OMIM:1"
+    assert assertion["allelic_requirement"] == "dominant"
+    assert assertion["penetrance_hpo_ids"] == []
 
 
 def test_legacy_condition_evidence_loader_remains_audit_only(

@@ -30,6 +30,7 @@ import tempfile
 import time
 import urllib.error
 import urllib.request
+import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -113,6 +114,23 @@ SOURCES: list[SourceSpec] = [
         docs_url="https://academic.oup.com/nar/article/53/D1/D976/7907365",
         parser="gofcards",
         local_fallback_path="",
+    ),
+    SourceSpec(
+        name="orphadata_gene_disease",
+        url="https://www.orphadata.com/data/xml/en_product6.xml",
+        raw_filename="orphadata/en_product6.xml",
+        refresh_days=30,
+        source_role=(
+            "condition-specific assessed germline gain-of-function and "
+            "loss-of-function gene associations"
+        ),
+        official_update_note=(
+            "Orphadata Product 6 contains disorder-gene relationship types. "
+            "PriVA retains only assessed relationships whose type explicitly "
+            "states a germline gain-of-function or loss-of-function mechanism."
+        ),
+        docs_url="https://www.orphadata.com/genes/",
+        parser="orphadata",
     ),
 ]
 
@@ -1008,11 +1026,96 @@ def parse_gofcards(path: Path) -> pd.DataFrame:
     return pd.DataFrame(rows, columns=UNIFIED_COLUMNS)
 
 
+def parse_orphadata(path: Path) -> pd.DataFrame:
+    """Stream condition-resolved germline mechanism assertions from Product 6.
+
+    Orphadata includes many relationship types that are not interchangeable
+    with an inherited disease mechanism. For example, a gene can be recorded
+    as a biomarker, a susceptibility factor, part of a fusion, or the target of
+    a somatic mutation. PriVA therefore accepts a relationship only when all of
+    the following are true:
+
+    1. Orphadata marks the relationship as ``Assessed``;
+    2. the relationship explicitly says ``Disease-causing germline``; and
+    3. the relationship text explicitly names gain or loss of function.
+
+    The parser uses ``iterparse`` so the full Product 6 XML document is never
+    materialized in memory. Each retained row preserves the ORPHA disease ID,
+    disease name, relationship text, validation publications, and a stable
+    source-record key. MONDO identity is added separately from PriVA's pinned
+    disease-scope registry because Product 6 itself does not provide MONDO IDs.
+    """
+    if not path.exists():
+        return pd.DataFrame(columns=UNIFIED_COLUMNS)
+
+    rows: list[dict[str, str]] = []
+    for _, disorder in ET.iterparse(path, events=("end",)):
+        if disorder.tag != "Disorder":
+            continue
+
+        orpha_code = (disorder.findtext("./OrphaCode") or "").strip()
+        disease = (disorder.findtext("./Name") or "").strip()
+        if not orpha_code:
+            disorder.clear()
+            continue
+
+        for association in disorder.findall(
+            "./DisorderGeneAssociationList/DisorderGeneAssociation"
+        ):
+            status = (
+                association.findtext("./DisorderGeneAssociationStatus/Name") or ""
+            ).strip()
+            relationship = (
+                association.findtext("./DisorderGeneAssociationType/Name") or ""
+            ).strip()
+            relationship_lower = relationship.lower()
+            if status != "Assessed" or "disease-causing germline" not in relationship_lower:
+                continue
+
+            mechanisms = normalize_mechanism(relationship, "Orphadata")
+            explicit_mechanisms = [
+                mechanism for mechanism in mechanisms if mechanism in {"GOF", "LOF"}
+            ]
+            if not explicit_mechanisms:
+                continue
+
+            gene = (association.findtext("./Gene/Symbol") or "").strip()
+            if not gene:
+                continue
+            validation = (association.findtext("./SourceOfValidation") or "").strip()
+            pmids = ";".join(
+                dict.fromkeys(re.findall(r"(\d+)\s*\[PMID\]", validation))
+            )
+            source_condition_id = f"ORPHA:{orpha_code}"
+            rows.append(
+                make_unified_row(
+                    gene_symbol=gene,
+                    mechanism=explicit_mechanisms,
+                    source="Orphadata",
+                    source_record_id=(
+                        f"{source_condition_id}|{gene}|{norm_key(relationship)}"
+                    ),
+                    source_condition_id=source_condition_id,
+                    disease=disease,
+                    confidence="high",
+                    disease_confidence=status,
+                    pmids=pmids,
+                    patho_mode_raw=relationship,
+                    notes=f"association_status:{status}",
+                )
+            )
+
+        disorder.clear()
+
+    return pd.DataFrame(rows, columns=UNIFIED_COLUMNS)
+
+
 EVIDENCE_PARSERS: dict[str, Callable[[Path], pd.DataFrame]] = {
     "g2p_ddg2p": parse_g2p,
     "panelapp": parse_panelapp,
     "clingen_dosage": parse_clingen_dosage,
     "gofcards": parse_gofcards,
+    "orphadata": parse_orphadata,
 }
 
 

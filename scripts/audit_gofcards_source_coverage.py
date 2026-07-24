@@ -10,6 +10,7 @@ compared, so aliases do not create artificial source-specific genes.
 from __future__ import annotations
 
 from collections import Counter
+import json
 from pathlib import Path
 from typing import Callable
 
@@ -114,3 +115,48 @@ def load_condition_mechanism_gene_sets(
         if str(row["priva_scope"]).strip().lower() == "include":
             result[source]["priva_included_mechanism"].add(symbol)
     return result
+
+
+def load_exact_clinvar_linked_gene_counts(
+    path: str | Path,
+    *,
+    resolve_symbol: GeneResolver,
+) -> Counter[str]:
+    """Count ClinVar VCV records linked to GoFCards by an exact allele key.
+
+    The shared mechanism JSON records the match method and the exact GoFCards
+    rows supporting each link. Both must be present. Merely having a ClinVar
+    record in the same gene, sharing a disease name, or sharing a publication is
+    not counted as coverage of a GoFCards allele.
+
+    Counts are VCV records, not unique variants or conditions. The final audit
+    uses only whether the normalized gene has at least one exact link, while the
+    count remains available to inspect the strength of that coverage.
+    """
+    with open(path, encoding="utf-8") as handle:
+        payload = json.load(handle)
+
+    counts: Counter[str] = Counter()
+    for key, gene in payload.items():
+        if key == "_meta" or not isinstance(gene, dict):
+            continue
+        raw_symbol = str(gene.get("symbol", "")).strip()
+        if not raw_symbol:
+            continue
+        symbol = str(resolve_symbol(raw_symbol)).strip()
+        if not symbol:
+            continue
+
+        for wrapper in gene.get("variant_level", []) or []:
+            if not isinstance(wrapper, dict):
+                continue
+            record = wrapper.get("ClinVar_VCV")
+            if not isinstance(record, dict):
+                continue
+            match = record.get("match") or {}
+            if match.get("method") != "exact_normalized_vcf_allele":
+                continue
+            if not match.get("matched_gofcards_records"):
+                continue
+            counts[symbol] += 1
+    return counts

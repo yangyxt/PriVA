@@ -252,7 +252,7 @@ def test_variant_level_mechanism_contract(tmp_path: Path) -> None:
 
     hpo_only = annotated.loc["TESTREC"]
     assert "gene_mech_inher_history" not in annotated.columns
-    assert hpo_only["var_plausible_patho_mechs"] == "recessive"
+    assert hpo_only["var_plausible_patho_mechs"] == ""
     assert hpo_only["variant_mechanism_applicable"] == ""
 
     biallelic_lof = annotated.loc["TESTLOF"]
@@ -275,12 +275,12 @@ def test_variant_level_mechanism_contract(tmp_path: Path) -> None:
     assert "dominant_LOF" in monoallelic_lof["variant_mechanism_applicable"]
 
     masks = _variant_mechanism_masks(annotated.reset_index())
-    assert masks["has_recessive_compatible"].tolist() == [True, True, True, False]
+    assert masks["has_recessive_compatible"].tolist() == [False, True, True, False]
     assert masks["has_dominant_compatible"].tolist() == [False, False, False, True]
     assert masks["has_applicable_lof_assertion"].tolist() == [False, True, False, True]
 
 
-def test_generic_recessive_gains_lof_only_from_approved_gene_evidence(
+def test_gene_wide_lof_signals_remain_audit_only_without_condition_history(
     tmp_path: Path,
 ) -> None:
     sources = _write_fixture_sources(tmp_path)
@@ -363,13 +363,9 @@ def test_generic_recessive_gains_lof_only_from_approved_gene_evidence(
         **sources,
     ).set_index("Gene")
 
-    assert annotated.loc["GENE_NONE", "var_plausible_patho_mechs"] == "recessive"
-    assert annotated.loc["GENE_NONE", "variant_mechanism_applicable"] == ""
-    assert annotated.loc["GENE_LOEUF_BOUNDARY", "var_plausible_patho_mechs"] == "recessive"
-    assert annotated.loc["GENE_AM_BOUNDARY", "var_plausible_patho_mechs"] == "recessive"
-    for gene in ("GENE_CLINVAR", "GENE_LOEUF", "GENE_AM"):
-        assert annotated.loc[gene, "var_plausible_patho_mechs"] == "recessive_LOF"
-        assert "recessive_LOF" in annotated.loc[gene, "variant_mechanism_applicable"]
+    for gene in annotated.index:
+        assert annotated.loc[gene, "var_plausible_patho_mechs"] == ""
+        assert annotated.loc[gene, "variant_mechanism_applicable"] == ""
     assert annotated.loc["GENE_CLINVAR", "gene_lof_evidence"] == "ClinVar_pathogenic_2plus"
     assert annotated.loc["GENE_LOEUF", "gene_lof_evidence"] == "LOEUF_lt_0.35"
     assert annotated.loc["GENE_AM", "gene_lof_evidence"] == "GeneAvgAM_gt_0.564"

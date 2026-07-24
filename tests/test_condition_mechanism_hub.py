@@ -10,6 +10,7 @@ sys.path.insert(0, str(ROOT / "scripts"))
 from gene_mechanism_hub import (  # noqa: E402
     build_hpo_condition_index,
     enrich_condition_mechanism_assertion,
+    select_condition_histories_for_variant,
 )
 
 
@@ -140,3 +141,38 @@ def test_enrich_condition_mechanism_assertion_blocks_review_scope() -> None:
         )
         == []
     )
+
+
+def test_select_condition_histories_for_variant_is_mechanism_specific() -> None:
+    assertions = [
+        {"disease": "LOF disorder", "mechanism": "LOF"},
+        {"disease": "GOF disorder", "mechanism": "GOF"},
+        {"disease": "DN disorder", "mechanism": "DOMINANT_NEGATIVE"},
+    ]
+
+    exact_gof = select_condition_histories_for_variant(
+        assertions,
+        variant_effect="exact_known_GOF",
+    )
+    predicted_lof = select_condition_histories_for_variant(
+        assertions,
+        variant_effect="predicted_LOF_high_confidence",
+    )
+    unresolved = select_condition_histories_for_variant(
+        assertions,
+        variant_effect="uncertain",
+    )
+    conflict = select_condition_histories_for_variant(
+        assertions,
+        variant_effect="exact_known_GOF",
+        variant_effect_conflict="predicted_LOF_vs_exact_GOF",
+    )
+
+    assert [row["mechanism"] for row in exact_gof] == ["GOF"]
+    assert [row["mechanism"] for row in predicted_lof] == ["LOF"]
+    assert [row["mechanism"] for row in unresolved] == [
+        "LOF",
+        "GOF",
+        "DOMINANT_NEGATIVE",
+    ]
+    assert [row["mechanism"] for row in conflict] == ["LOF", "GOF"]

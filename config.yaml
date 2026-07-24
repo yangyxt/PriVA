@@ -147,6 +147,7 @@ gene_mechanism_builder_script: "/paedyl01/disk1/yangyxt/PriVA/scripts/build_gene
 gene_mechanism_json: /paedyl01/disk1/yangyxt/PriVA/data/gene_pathogenic_mechanism/prepared/gene_mechanism_curated_assertions.json
 ddg2p_mechanism_evidence: /paedyl01/disk1/yangyxt/PriVA/data/gene_pathogenic_mechanism/prepared/gene_pathogenic_mechanism_evidence.tsv
 g2p_ddg2p_url: "https://www.ebi.ac.uk/gene2phenotype/api/panel/all/download"
+orphadata_gene_disease_url: "https://www.orphadata.com/data/xml/en_product6.xml"
 clingen_dosage_grch38_url: "https://ftp.clinicalgenome.org/ClinGen_gene_curation_list_GRCh38.tsv"
 panelapp_panels_url: "https://panelapp.genomicsengland.co.uk/api/v1/panels/"
 

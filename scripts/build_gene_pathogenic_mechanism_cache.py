@@ -677,6 +677,8 @@ UNIFIED_COLUMNS = [
     "assertion_level",
     "source",
     "source_record_id",
+    "source_condition_id",
+    "mondo_id",
     "disease",
     "inheritance",
     "confidence",
@@ -702,6 +704,8 @@ def make_unified_row(
     assertion_level: str = "gene_level",
     source: str,
     source_record_id: str = "",
+    source_condition_id: str = "",
+    mondo_id: str = "",
     disease: str = "",
     inheritance: str = "",
     confidence: str = "",
@@ -724,6 +728,8 @@ def make_unified_row(
         "assertion_level": assertion_level,
         "source": source,
         "source_record_id": source_record_id,
+        "source_condition_id": source_condition_id,
+        "mondo_id": mondo_id,
         "disease": disease,
         "inheritance": inheritance,
         "confidence": confidence,
@@ -743,6 +749,19 @@ def make_unified_row(
 
 
 def parse_g2p(path: Path) -> pd.DataFrame:
+    """Normalize G2P gene-condition mechanism assertions without losing IDs.
+
+    G2P supplies three distinct identifiers that must not be conflated:
+
+    * ``g2p id`` identifies the curated assertion itself;
+    * ``disease mim`` identifies the source disease in OMIM; and
+    * ``disease MONDO`` provides the cross-source disease identity used to join
+      this assertion to HPO and Orphadata records.
+
+    Earlier PriVA output stored the HGNC gene number as ``source_record_id`` and
+    discarded both disease identifiers. That made condition-specific joins
+    impossible and encouraged downstream gene-wide evidence transfer.
+    """
     if not path.exists():
         return pd.DataFrame(columns=UNIFIED_COLUMNS)
     df = pd.read_csv(path, dtype=str, encoding="utf-8-sig", on_bad_lines="skip").fillna("")
@@ -752,7 +771,9 @@ def parse_g2p(path: Path) -> pd.DataFrame:
     c_confidence = resolve_column(df, "confidence", "confidence category", "g2p relation label")
     c_inheritance = resolve_column(df, "allelic requirement", "allelic_requirement")
     c_pmids = resolve_column(df, "pmids", "publications")
-    c_hgnc = resolve_column(df, "hgnc id", "hgnc_id")
+    c_g2p_id = resolve_column(df, "g2p id", "g2p_id")
+    c_disease_mim = resolve_column(df, "disease mim", "disease_mim")
+    c_disease_mondo = resolve_column(df, "disease MONDO", "disease_mondo")
     rows: list[dict[str, str]] = []
     for _, r in df.iterrows():
         gene = _val(r, c_gene)
@@ -765,7 +786,13 @@ def parse_g2p(path: Path) -> pd.DataFrame:
                 gene_symbol=gene,
                 mechanism=normalize_mechanism(consequence, "G2P"),
                 source="G2P_DDG2P",
-                source_record_id=_val(r, c_hgnc),
+                source_record_id=_val(r, c_g2p_id),
+                source_condition_id=(
+                    f"OMIM:{_val(r, c_disease_mim)}"
+                    if _val(r, c_disease_mim)
+                    else ""
+                ),
+                mondo_id=_val(r, c_disease_mondo),
                 disease=_val(r, c_disease),
                 inheritance=_val(r, c_inheritance),
                 confidence=mechanism_confidence_from_text(confidence),

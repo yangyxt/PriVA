@@ -8,10 +8,13 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
 from audit_gofcards_source_coverage import (  # noqa: E402
+    DEFAULT_EVIDENCE,
+    DEFAULT_GOFCARDS,
     build_gofcards_coverage_audit,
     load_condition_mechanism_gene_sets,
     load_exact_clinvar_linked_gene_counts,
     load_gofcards_gene_counts,
+    parse_args,
 )
 
 
@@ -139,3 +142,20 @@ def test_build_gofcards_coverage_audit_exposes_policy_boundaries() -> None:
     assert audit.loc["GENE3", "only_gofcards_vs_any_source_record"] == 0
     assert audit.loc["GENE4", "only_gofcards_vs_explicit_sources"] == 1
     assert audit.loc["GENE4", "only_gofcards_vs_any_source_record"] == 1
+
+
+def test_parse_args_has_deployed_defaults_and_allows_archives(tmp_path: Path) -> None:
+    defaults = parse_args([])
+    archived = parse_args(
+        [
+            "--gofcards",
+            str(tmp_path / "old_gofcards.tsv.gz"),
+            "--condition-evidence",
+            str(tmp_path / "old_evidence.tsv"),
+        ]
+    )
+
+    assert defaults.gofcards == DEFAULT_GOFCARDS
+    assert defaults.condition_evidence == DEFAULT_EVIDENCE
+    assert archived.gofcards == tmp_path / "old_gofcards.tsv.gz"
+    assert archived.condition_evidence == tmp_path / "old_evidence.tsv"

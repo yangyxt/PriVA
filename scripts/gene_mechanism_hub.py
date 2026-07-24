@@ -2463,8 +2463,9 @@ def annotate_gene_mechanism_categories(
     *,
     clinvar_pathogenic_genes: set[str] | None = None,
     gene_to_am_score_map: dict[str, float] | None = None,
-    mechanism_json: str | Path = DEFAULT_MECHANISM_JSON,
-    ddg2p_evidence: str | Path = DEFAULT_DDG2P_MECHANISM_EVIDENCE,
+    condition_cache: str | Path = DEFAULT_HPO_CONDITION_MECHANISM_CACHE,
+    mechanism_json: str | Path | None = None,
+    ddg2p_evidence: str | Path | None = None,
     symbol_col: str = "SYMBOL",
     gene_col: str = "Gene",
     hpo_inheritance_col: str = "HPO_gene_inheritance",
@@ -2477,11 +2478,12 @@ def annotate_gene_mechanism_categories(
 ) -> pd.DataFrame:
     """Annotate condition-specific history and query-variant applicability.
 
-    HPO inheritance, penetrance, and onset are transferred only through an
-    exact gene-plus-disease match to G2P or Orphadata. Row-level HPO text and
+    HPO inheritance, penetrance, onset, G2P/Orphadata mechanisms, and compact
+    ClinVar links come from the integrated cache. Row-level HPO text and
     gene-wide ClinVar, LOEUF, AlphaMissense, or ClinGen dosage signals remain
     audit information and cannot create a condition-mechanism assertion.
-    ``hpo_inheritance_col`` is retained for API compatibility during migration.
+    ``mechanism_json``, ``ddg2p_evidence``, and ``hpo_inheritance_col`` are
+    retained only for call compatibility and are not runtime evidence sources.
     """
     if symbol_col not in df.columns:
         raise KeyError(f"missing symbol column: {symbol_col}")
@@ -2489,8 +2491,7 @@ def annotate_gene_mechanism_categories(
         raise KeyError(f"missing gene column: {gene_col}")
 
     hub = GeneMechanismHub(
-        mechanism_json=mechanism_json,
-        ddg2p_evidence=ddg2p_evidence,
+        condition_cache=condition_cache,
         hpo_collapsed=hpo_collapsed,
         clingen_dosage=clingen_dosage,
         loeuf_table=loeuf_table,
@@ -2543,89 +2544,13 @@ def annotate_gene_mechanism_categories(
                 gofcards_variant_ids=row.get("gofcards_variant_id", ""),
                 gofcards_accession_ids=row.get("gofcards_accession_id", ""),
             )
-            for vcv in vcv_matches:
-                variation = vcv.get("variation", {}) or {}
-                accession = _clean(variation.get("vcv_accession"))
-                if accession:
-                    vcv_accessions.append(accession)
-                for hgvs in variation.get("hgvs", []) or []:
-                    if isinstance(hgvs, dict) and _clean(hgvs.get("expression")):
-                        vcv_hgvs.append(_clean(hgvs.get("expression")))
-                for condition_assertion in vcv.get("condition_assertions", []) or []:
-                    if not isinstance(condition_assertion, dict):
-                        continue
-                    classification = condition_assertion.get("germline_classification", {}) or {}
-                    stars = classification.get("review_stars")
-                    try:
-                        vcv_review_stars.append(int(stars))
-                    except (TypeError, ValueError):
-                        pass
-                    condition_names = [
-                        _clean(condition.get("name"))
-                        for condition in condition_assertion.get("conditions", []) or []
-                        if isinstance(condition, dict) and _clean(condition.get("name"))
-                    ]
-                    vcv_conditions.extend(condition_names)
-                    if use_vcv_condition_history:
-                        identities = extract_exact_clinvar_condition_identities(
-                            condition_assertion
-                        )
-                        if not identities:
-                            identities = [
-                                {
-                                    "source_condition_id": "",
-                                    "mondo_id": "",
-                                    "disease": ";".join(condition_names),
-                                    "condition_id_provenance": (
-                                        "ClinVar_condition_identifier_unresolved"
-                                    ),
-                                }
-                            ]
-                        identity_assertions: list[dict[str, Any]] = []
-                        hpo_identity_assertions: list[dict[str, Any]] = []
-                        has_hpo_identity = False
-                        hpo_index = hub._hpo_condition_index or {}
-                        for identity in identities:
-                            base_assertion = {
-                                "source": "GoFCards_exact+ClinVar_VCV",
-                                "source_record_id": accession,
-                                **identity,
-                                "mechanism": "GOF",
-                                "allelic_requirement": "",
-                                "confidence": (
-                                    f"ClinVar_{stars}_star"
-                                    if stars is not None
-                                    else "ClinVar_unrated"
-                                ),
-                            }
-                            enriched = enrich_condition_mechanism_assertion(
-                                base_assertion,
-                                gene_symbol=symbol,
-                                hpo_condition_index=hpo_index,
-                            )
-                            identity_assertions.extend(enriched)
-                            identity_key = (
-                                symbol.upper(),
-                                _clean(identity.get("source_condition_id")).upper(),
-                            )
-                            mondo_key = (
-                                symbol.upper(),
-                                _clean(identity.get("mondo_id")).upper(),
-                            )
-                            if identity_key in hpo_index or (
-                                mondo_key[1] and mondo_key in hpo_index
-                            ):
-                                has_hpo_identity = True
-                                hpo_identity_assertions.extend(enriched)
-                        # When any explicit ClinVar ID maps to HPO, use only
-                        # those mapped records. This prevents an unmatched
-                        # MedGen alias from bypassing an HPO review/exclude
-                        # decision attached to the corresponding OMIM/ORPHA ID.
-                        assertions.extend(
-                            hpo_identity_assertions
-                            if has_hpo_identity
-                            else identity_assertions
-                        )
+            exact_gof = summarize_condition_cache_exact_gof_matches(vcv_matches)
+            vcv_accessions.extend(exact_gof["vcv_accessions"])
+            vcv_conditions.extend(exact_gof["condition_names"])
+            vcv_hgvs.extend(exact_gof["hgvs"])
+            vcv_review_stars.extend(exact_gof["review_stars"])
+            if use_vcv_condition_history:
+                assertions.extend(exact_gof["assertions"])
             if use_vcv_condition_history and not any(
                 assertion.get("mechanism") == "GOF" for assertion in assertions
             ):

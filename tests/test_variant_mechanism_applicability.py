@@ -79,6 +79,146 @@ def _write_fixture_sources(tmp_path: Path) -> dict[str, Path]:
         encoding="utf-8",
     )
 
+    def cache_condition(
+        condition_id: str,
+        label: str,
+        mechanism: str,
+        allelic_requirement: str,
+        inheritance_mode: str,
+        source_record_id: str,
+    ) -> dict:
+        hpo_id = (
+            "HP:0000007"
+            if inheritance_mode == "autosomal_recessive"
+            else "HP:0000006"
+        )
+        return {
+            "label": label,
+            "identifiers": {"OMIM": [condition_id]},
+            "priva_scope": {
+                "decision": "include",
+                "category": "mendelian_non_neoplastic",
+                "review_status": "auto_supported",
+            },
+            "inheritance": {
+                "modes": [inheritance_mode],
+                "assertions": [
+                    {
+                        "hpo_id": hpo_id,
+                        "frequency": "-",
+                        "evidence": "TAS",
+                        "reference": condition_id,
+                    }
+                ],
+            },
+            "penetrance": {"statuses": [], "assertions": []},
+            "onset": {"terms": [], "assertions": []},
+            "hpo_assertion_count": 1,
+            "pathogenic_mechanisms": {
+                mechanism: {
+                    "allelic_requirements": [allelic_requirement],
+                    "evidence": [
+                        {
+                            "source": "G2P_DDG2P",
+                            "source_record_id": source_record_id,
+                            "condition_identifiers": [condition_id],
+                            "condition_label": label,
+                            "mechanism": mechanism,
+                            "mechanism_raw": (
+                                "gain of function"
+                                if mechanism == "GOF"
+                                else "loss of function"
+                            ),
+                            "allelic_requirement": allelic_requirement,
+                            "mechanism_confidence": "high",
+                            "disease_confidence": "definitive",
+                            "pmids": [source_record_id],
+                        }
+                    ],
+                    "variants": {},
+                }
+            },
+        }
+
+    lof_condition = cache_condition(
+        "OMIM:1",
+        "biallelic LOF disorder",
+        "LOF",
+        "biallelic_autosomal",
+        "autosomal_recessive",
+        "1",
+    )
+    mono_condition = cache_condition(
+        "OMIM:2",
+        "monoallelic LOF disorder",
+        "LOF",
+        "monoallelic_autosomal",
+        "autosomal_dominant",
+        "2",
+    )
+    gof_condition = cache_condition(
+        "OMIM:3",
+        "biallelic GOF disorder",
+        "GOF",
+        "biallelic_autosomal",
+        "autosomal_recessive",
+        "3",
+    )
+    gof_condition["pathogenic_mechanisms"]["GOF"]["variants"] = {
+        "GOFCARDS:SNV|1|100|100|A|G": {
+            "mechanism": "GOF",
+            "gofcards_variant_ids": ["SNV|1|100|100|A|G"],
+            "gofcards_accession_ids": ["rs1"],
+            "disease_labels": ["biallelic GOF disorder"],
+            "pmids": ["3"],
+            "hgvs": {
+                "coding": ["NM_000001.1:c.1A>G"],
+                "protein": ["NP_000001.1:p.Met1Val"],
+            },
+            "clinvar_links": [
+                {
+                    "vcv_accession": "VCV000000001",
+                    "rcv_accession": "RCV000000001",
+                    "condition_identifiers": ["OMIM:3"],
+                    "condition_names": ["biallelic GOF disorder"],
+                    "hgvs": [
+                        "NM_000001.1:c.1A>G",
+                        "NP_000001.1:p.Met1Val",
+                    ],
+                    "clinical_significance": "Pathogenic",
+                    "review_stars": 2,
+                }
+            ],
+            "condition_link": {"status": "exact", "condition_key": "OMIM:3"},
+        }
+    }
+    condition_cache = tmp_path / "condition-cache.json"
+    condition_cache.write_text(
+        json.dumps(
+            {
+                "_meta": {"schema_version": "1.0"},
+                "genes": {
+                    "TESTLOF": {
+                        "conditions": {"OMIM:1": lof_condition},
+                        "summary": {"pathogenic_mechanisms": ["LOF"]},
+                        "unmapped_evidence": {"mechanisms": [], "variants": {}},
+                    },
+                    "TESTMONO": {
+                        "conditions": {"OMIM:2": mono_condition},
+                        "summary": {"pathogenic_mechanisms": ["LOF"]},
+                        "unmapped_evidence": {"mechanisms": [], "variants": {}},
+                    },
+                    "TESTGOF": {
+                        "conditions": {"OMIM:3": gof_condition},
+                        "summary": {"pathogenic_mechanisms": ["GOF"]},
+                        "unmapped_evidence": {"mechanisms": [], "variants": {}},
+                    },
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
     evidence_tsv = tmp_path / "evidence.tsv"
     evidence_tsv.write_text(
         "\t".join(
@@ -147,6 +287,7 @@ def _write_fixture_sources(tmp_path: Path) -> dict[str, Path]:
         encoding="utf-8",
     )
     return {
+        "condition_cache": condition_cache,
         "mechanism_json": mechanism_json,
         "ddg2p_evidence": evidence_tsv,
         "hpo_collapsed": hpo_tsv,

@@ -3,8 +3,7 @@
 
 This module normalizes a gene query to one current HGNC symbol, then reports:
 
-1. Curated mechanism history from the existing mechanism JSON cache and the
-   companion DDG2P/G2P evidence table.
+1. Condition-resolved mechanism history from the integrated HPO cache.
 2. Known inheritance/HI status using PriVA's existing inheritance decision
    function from ``acmg_criteria_assign.py``.
 
@@ -20,7 +19,6 @@ import csv
 import json
 import logging
 import math
-import os
 import re
 from collections import Counter, defaultdict
 from pathlib import Path
@@ -39,26 +37,28 @@ DEFAULT_HPO_ASSERTIONS = DATA_DIR / "hpo" / "genes_to_phenotype.assertions.tsv.g
 DEFAULT_HPO_COLLAPSED = DEFAULT_HPO_ASSERTIONS
 DEFAULT_CLINGEN_DOSAGE = DATA_DIR / "clingen" / "gene_dosage_sensitivity.hg19.tsv"
 DEFAULT_LOEUF_TABLE = DATA_DIR / "loeuf" / "loeuf_dataset.tsv.gz"
+DEFAULT_HPO_CONDITION_MECHANISM_CACHE = (
+    DATA_DIR
+    / "gene_pathogenic_mechanism"
+    / "prepared"
+    / "hpo_condition_mechanism_cache.json"
+)
+HPO_CONDITION_MECHANISM_SCHEMA_VERSION = "1.0"
 PACKAGED_MECHANISM_JSON = (
     DATA_DIR / "gene_pathogenic_mechanism" / "prepared" / "gene_mechanism_curated_assertions.json"
 )
-SHARED_CANONICAL_MECHANISM_JSON = (
+SHARED_CANONICAL_NONLOF_MECHANISM_JSON = (
     PRIVA_ROOT.parent
     / "llm_gene_reranker"
     / "data"
     / "gene_pathogenic_mechanism"
     / "prepared"
-    / "gene_mechanism_curated_assertions.json"
+    / "gene_nonlof_mechanism_curated_assertions.json"
 )
-DEFAULT_MECHANISM_JSON = Path(
-    os.environ.get(
-        "PRIVA_GENE_MECHANISM_JSON",
-        str(
-            SHARED_CANONICAL_MECHANISM_JSON
-            if SHARED_CANONICAL_MECHANISM_JSON.exists()
-            else PACKAGED_MECHANISM_JSON
-        ),
-    )
+DEFAULT_MECHANISM_JSON = (
+            SHARED_CANONICAL_NONLOF_MECHANISM_JSON
+            if SHARED_CANONICAL_NONLOF_MECHANISM_JSON.exists()
+    else PACKAGED_MECHANISM_JSON
 )
 DEFAULT_DDG2P_MECHANISM_EVIDENCE = (
     DATA_DIR / "gene_pathogenic_mechanism" / "prepared" / "gene_pathogenic_mechanism_evidence.tsv"
@@ -531,6 +531,7 @@ class GeneMechanismHub:
     def __init__(
         self,
         *,
+        condition_cache: str | Path = DEFAULT_HPO_CONDITION_MECHANISM_CACHE,
         mechanism_json: str | Path = DEFAULT_MECHANISM_JSON,
         ddg2p_evidence: str | Path = DEFAULT_DDG2P_MECHANISM_EVIDENCE,
         hpo_collapsed: str | Path = DEFAULT_HPO_COLLAPSED,
@@ -539,6 +540,7 @@ class GeneMechanismHub:
         hgnc_table: str | Path = DEFAULT_HGNC_TABLE,
         use_hgnc_package: bool = True,
     ) -> None:
+        self.condition_cache = Path(condition_cache)
         self.mechanism_json = Path(mechanism_json)
         self.ddg2p_evidence = Path(ddg2p_evidence) if ddg2p_evidence else Path("")
         self.hpo_collapsed = Path(hpo_collapsed)
@@ -547,6 +549,8 @@ class GeneMechanismHub:
         self.hgnc_table = Path(hgnc_table)
 
         self._resolver = self._build_resolver(use_hgnc_package)
+        self._condition_cache_by_symbol: dict[str, dict[str, Any]] | None = None
+        self._condition_cache_meta: dict[str, Any] | None = None
         self._mechanism_by_symbol: dict[str, dict[str, Any]] | None = None
         self._condition_mechanism_by_symbol: dict[str, list[dict[str, Any]]] | None = None
         self._ddg2p_lof_by_symbol: dict[str, list[dict[str, Any]]] | None = None
@@ -584,6 +588,61 @@ class GeneMechanismHub:
 
     def _resolved_symbol_key(self, gene_symbol: Any) -> str:
         return self.resolve_symbol(gene_symbol)
+
+    def _load_condition_cache(self) -> dict[str, dict[str, Any]]:
+        """Load and normalize PriVA's integrated condition-mechanism cache.
+
+        The builder writes one atomic JSON document with a versioned top-level
+        contract. Runtime loading is deliberately strict: using a stale schema
+        could silently move inheritance or penetrance between conditions, which
+        is not acceptable for ACMG criteria. Gene keys are indexed under both
+        their cache spelling and current HGNC symbol so historical aliases do
+        not force callers to understand resource-specific naming.
+        """
+        if self._condition_cache_by_symbol is not None:
+            return self._condition_cache_by_symbol
+        if not self.condition_cache.is_file():
+            raise FileNotFoundError(
+                "Integrated HPO condition-mechanism cache not found: "
+                f"{self.condition_cache}. Run "
+                "`bash scripts/install_utils.sh "
+                "hpo_condition_mechanism_cache_install config.yaml`."
+            )
+
+        with self.condition_cache.open(encoding="utf-8") as handle:
+            payload = json.load(handle)
+        if not isinstance(payload, dict):
+            raise ValueError(f"{self.condition_cache} must contain a JSON object")
+        meta = payload.get("_meta")
+        if not isinstance(meta, dict):
+            raise ValueError(f"{self.condition_cache} is missing object _meta")
+        schema_version = _clean(meta.get("schema_version"))
+        if schema_version != HPO_CONDITION_MECHANISM_SCHEMA_VERSION:
+            raise ValueError(
+                f"Unsupported condition cache schema {schema_version!r}; expected "
+                f"{HPO_CONDITION_MECHANISM_SCHEMA_VERSION!r}"
+            )
+        genes = payload.get("genes")
+        if not isinstance(genes, dict):
+            raise ValueError(f"{self.condition_cache} is missing object genes")
+
+        by_symbol: dict[str, dict[str, Any]] = {}
+        for cache_symbol, gene in genes.items():
+            if not isinstance(gene, dict):
+                raise ValueError(
+                    f"Condition cache gene {cache_symbol!r} must be an object"
+                )
+            symbol = _clean(cache_symbol)
+            if not symbol:
+                continue
+            by_symbol[symbol] = gene
+            resolved = self._try_resolve_symbol(symbol)
+            if resolved:
+                by_symbol.setdefault(resolved, gene)
+
+        self._condition_cache_meta = meta
+        self._condition_cache_by_symbol = by_symbol
+        return by_symbol
 
     def _load_mechanisms(self) -> dict[str, dict[str, Any]]:
         if self._mechanism_by_symbol is not None:

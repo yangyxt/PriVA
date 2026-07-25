@@ -142,7 +142,7 @@ mavedb_file: "/paedyl01/disk1/yangyxt/public_data/VEP_plugins_caches/MaveDB/Mave
 # Gene mechanism / DDG2P-G2P cache paths
 # Built by: bash scripts/install_utils.sh gene_pathogenic_mechanism_cache_install config.yaml
 gene_mechanism_cache_dir: "/paedyl01/disk1/yangyxt/PriVA/data/gene_pathogenic_mechanism"
-gene_mechanism_raw_dir: "/paedyl01/disk1/yangyxt/PriVA/data/gene_pathogenic_mechanism/raw"
+gene_mechanism_raw_dir: "/paedyl01/disk1/yangyxt/public_data/gene_pathogenic_mechanism/raw"
 gene_mechanism_builder_script: "/paedyl01/disk1/yangyxt/PriVA/scripts/build_gene_pathogenic_mechanism_cache.py"
 gene_mechanism_json: /paedyl01/disk1/yangyxt/PriVA/data/gene_pathogenic_mechanism/prepared/gene_mechanism_curated_assertions.json
 gene_nonlof_mechanism_builder_script: /paedyl01/disk1/yangyxt/PriVA/scripts/build_gene_nonlof_mechanism_cache.py

@@ -48,9 +48,10 @@ def audit_compact_record_provenance(
     """Return violations in one canonicalized compact GoFCards record.
 
     Eligible rows must preserve the curated source gene and may have either a
-    concordant VEP gene or no VEP gene. Quarantined rows must preserve that same
-    source gene while recording a different VEP gene. Keeping these checks in
-    one helper makes the GoFCards assertion and ClinVar-link audits identical.
+    concordant VEP gene or no VEP gene. A directly discordant row must record a
+    different VEP gene; an allele-quarantined sibling retains its concordant or
+    source-only row provenance. Keeping these checks in one helper makes the
+    GoFCards assertion and ClinVar-link audits identical.
     """
     violations: list[str] = []
     exported = str(record.get("HGNC_Symbol", "")).upper()
@@ -163,9 +164,9 @@ def main() -> None:
     gofcards_quarantined_record_keys: set[str] = set()
     gofcards_with_hg19_vcf = 0
     gofcards_with_hg38_vcf = 0
-    gofcards_exact_alleles: set[str] = set()
-    gofcards_quarantined_alleles: set[str] = set()
-    gofcards_clinvar_match_alleles: set[str] = set()
+    gofcards_exact_assertions: set[tuple[str, str]] = set()
+    gofcards_quarantined_assertions: set[tuple[str, str]] = set()
+    gofcards_clinvar_match_assertions: set[tuple[str, str]] = set()
     violations: list[str] = []
 
     for gene_key, gene in canonical.items():
@@ -217,10 +218,13 @@ def main() -> None:
                         continue
                     gofcards_exact_records += 1
                     gofcards_exact_record_keys.update(record)
-                    gofcards_exact_alleles.add(
-                        gofcards_allele_identity(
-                            record.get("gofcards_variant_id")
-                            or record.get("allele_key")
+                    gofcards_exact_assertions.add(
+                        (
+                            gene_symbol.upper(),
+                            gofcards_allele_identity(
+                                record.get("gofcards_variant_id")
+                                or record.get("allele_key")
+                            ),
                         )
                     )
                     violations.extend(
@@ -255,10 +259,13 @@ def main() -> None:
                         continue
                     gofcards_quarantined_records += 1
                     gofcards_quarantined_record_keys.update(record)
-                    gofcards_quarantined_alleles.add(
-                        gofcards_allele_identity(
-                            record.get("gofcards_variant_id")
-                            or record.get("allele_key")
+                    gofcards_quarantined_assertions.add(
+                        (
+                            gene_symbol.upper(),
+                            gofcards_allele_identity(
+                                record.get("gofcards_variant_id")
+                                or record.get("allele_key")
+                            ),
                         )
                     )
                     record_eligibility = str(
@@ -308,9 +315,13 @@ def main() -> None:
             )
             for row in match.get("matched_gofcards_records", []):
                 symbol = str(row.get("HGNC_Symbol", ""))
-                gofcards_clinvar_match_alleles.add(
-                    gofcards_allele_identity(
-                        row.get("gofcards_variant_id") or row.get("allele_key")
+                gofcards_clinvar_match_assertions.add(
+                    (
+                        gene_symbol.upper(),
+                        gofcards_allele_identity(
+                            row.get("gofcards_variant_id")
+                            or row.get("allele_key")
+                        ),
                     )
                 )
                 violations.extend(
@@ -372,20 +383,27 @@ def main() -> None:
         )
 
     exact_quarantine_overlap = (
-        gofcards_exact_alleles & gofcards_quarantined_alleles
-    ) - {""}
+        gofcards_exact_assertions & gofcards_quarantined_assertions
+    ) - {("", "")}
     clinvar_quarantine_overlap = (
-        gofcards_clinvar_match_alleles & gofcards_quarantined_alleles
-    ) - {""}
+        gofcards_clinvar_match_assertions & gofcards_quarantined_assertions
+    ) - {("", "")}
     if exact_quarantine_overlap:
         violations.append(
-            "quarantined alleles leaked into canonical exact records: "
-            + ", ".join(sorted(exact_quarantine_overlap))
+            "quarantined gene-allele assertions leaked into canonical exact "
+            "records: "
+            + ", ".join(
+                f"{gene}:{allele}"
+                for gene, allele in sorted(exact_quarantine_overlap)
+            )
         )
     if clinvar_quarantine_overlap:
         violations.append(
-            "quarantined alleles leaked into ClinVar matches: "
-            + ", ".join(sorted(clinvar_quarantine_overlap))
+            "quarantined gene-allele assertions leaked into ClinVar matches: "
+            + ", ".join(
+                f"{gene}:{allele}"
+                for gene, allele in sorted(clinvar_quarantine_overlap)
+            )
         )
 
     gofcards_meta = (
@@ -414,6 +432,22 @@ def main() -> None:
     )
     print(f"gofcards_exact_normalized_records={gofcards_exact_records}")
     print(f"gofcards_quarantined_records={gofcards_quarantined_records}")
+    print(
+        "gofcards_exact_unique_gene_alleles="
+        f"{len(gofcards_exact_assertions - {('', '')})}"
+    )
+    print(
+        "gofcards_quarantined_unique_gene_alleles="
+        f"{len(gofcards_quarantined_assertions - {('', '')})}"
+    )
+    print(
+        "gofcards_exact_quarantine_overlap="
+        f"{len(exact_quarantine_overlap)}"
+    )
+    print(
+        "gofcards_clinvar_quarantine_overlap="
+        f"{len(clinvar_quarantine_overlap)}"
+    )
     print(f"gofcards_matched_assertions_with_hg19_vcf={gofcards_with_hg19_vcf}")
     print(f"gofcards_matched_assertions_with_hg38_vcf={gofcards_with_hg38_vcf}")
     print(

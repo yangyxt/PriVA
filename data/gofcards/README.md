@@ -1,10 +1,12 @@
-# GoFCards exact GOF lookup
+# GoFCards exact GOF upstream cache
 
-`gofcards_exact_gof_hgvsp.tsv.gz` is a compact PriVA runtime lookup derived
-from the standalone `gofcards_hg38_normalizer` workflow.
+`gofcards_exact_gof_hgvsp.tsv.gz` is a compact build-time product from the
+standalone `gofcards_hg38_normalizer` workflow. It is not an independent PriVA
+runtime authority.
 
-PriVA uses this file only for exact variant-level GOF matching. Two evidence
-routes are supported by `scripts/gene_mechanism_hub.py`:
+The canonical builder validates this table and embeds runtime-eligible alleles
+in `gene_nonlof_mechanism_curated_assertions.json`. PriVA's exact matcher reads
+that canonical JSON. Its two exact-match routes are:
 
 - `match_gofcards_variant_gof(...)`: normalized HGNC symbol plus exact protein
   change/HGVSp.
@@ -16,30 +18,22 @@ routes are supported by `scripts/gene_mechanism_hub.py`:
 Neither route may be interpreted as evidence that all variants in a listed gene
 are gain-of-function.
 
-Current cache:
+Current compact cache:
 
-- refreshed: 2026-07-07
-- source workbook: `/paedyl01/disk1/yangyxt/gofcards_hg38_normalizer/work_20260707_full/gofcards_hg38_normalized_workbook_20260707.xlsx`
-- exported TSV: `/paedyl01/disk1/yangyxt/gofcards_hg38_normalizer/work_20260707_full/gofcards_priva_exact_gof_hgvsp_20260707.tsv.gz`
-- rows: 4,009 VEP-calibrated runtime records
-- columns: 45
-- unique exact HGVSp-match keys: 2,106 normalized `HGNC_Symbol+hgvsp_key` pairs
-- rows without HGVSp retained for genomic matching: 83
-- rows with missing hg19/hg38 raw or normalized allele keys: 0
-- raw backend unique allele keys not represented: 0 of 2,033
+- refreshed: 2026-07-25
+- workflow: `/paedyl01/disk1/yangyxt/gofcards_hg38_normalizer/bin/gofcards_workflow.sh`
+- SHA256: `039ef4b151d1afbf44d13f03619c87c786d35e544638e34c8a5ea8f6567b7f5a`
+- rows: 4,009 transcript-level records across 2,033 unique source alleles
+- eligible rows: 3,967, including 3,906 with HGVSp and 61 genomic-only rows
+- quarantined rows: 42 transcript records across 32 genuinely discordant source alleles
 
-The table is VEP-calibrated and compact: one normalized `HGNC_Symbol`,
-VEP-derived `HGVSc`/`HGVSp` for concordant transcript matches, raw GoFCards HGVS
-for trace, and nonblank hg19/hg38 allele keys. `*_genomic_key` preserves the raw
-GoFCards/source allele representation; `*_vcf_key` stores the bcftools-normalized
-VCF representation used for caller-style exact matching. VEP-discordant rows are
-kept for genomic matching only, with cache HGVSc/HGVSp left blank. The stable
-PriVA input path remains
+The table preserves the curated `GoFCards_HGNC_Symbol` as `HGNC_Symbol` and
+stores `VEP_HGNC_Symbol` separately. Current HGNC aliases are resolved before
+the two genes are compared. A genuine disagreement is retained with
+`match_eligibility=quarantined_gene_discordance` for audit, but it cannot enter
+canonical exact matching, ClinVar linking, or the HPO condition cache.
+
+`*_genomic_key` preserves the source allele representation; `*_vcf_key` stores
+the normalized VCF representation used for exact caller-style matching. The
+stable upstream input path remains
 `data/gofcards/gofcards_exact_gof_hgvsp.tsv.gz`.
-
-Validated examples:
-
-- `CFTR` + `p.Phe508del` matches by HGVSp.
-- `CFTR` + hg38 VCF key `7|117559592|CTTT|C` matches by genomic allele.
-- `TP53` + hg38 key `17|7669058|A|G` matches by genomic allele even though
-  the GoFCards row has no usable HGVSp.

@@ -169,7 +169,11 @@ def test_gofcards_variants_require_exact_clinvar_hpo_condition_identity(
         "GOF\tGENE1\tGENE1\tOTHER1\tgene_discordant\t"
         "quarantined_gene_discordance\tNM_1:c.3A>G\tNP_1:p.Lys3Arg\t"
         "NP_1:p.Lys3Arg\tmatched\trs3\tVAR3\tCondition three\tPMID:3\t5\t"
-        "Activating\tPathway\tVAR3\t1|12|A|G\t1|12|A|G\t1|22|A|G\t1|22|A|G\n",
+        "Activating\tPathway\tVAR3\t1|12|A|G\t1|12|A|G\t1|22|A|G\t1|22|A|G\n"
+        "GOF\tGENE1\tGENE1\tGENE1\tgene_concordant\teligible\t"
+        "NM_1:c.3A>G\tNP_1:p.Lys3Arg\tNP_1:p.Lys3Arg\tmatched\t"
+        "rs3\tVAR3\tCondition three\tPMID:3\t5\tActivating\tPathway\tVAR3\t"
+        "1|12|A|G\t1|12|A|G\t1|22|A|G\t1|22|A|G\n",
         encoding="utf-8",
     )
     mechanism_json = tmp_path / "mechanisms.json"
@@ -257,9 +261,10 @@ def test_gofcards_variants_require_exact_clinvar_hpo_condition_identity(
     )
     assert genes["GENE1"]["summary"]["pathogenic_mechanisms"] == ["GOF"]
     assert stats == {
-        "source_rows": 3,
+        "source_rows": 4,
         "eligible_source_rows": 2,
-        "quarantined_source_rows": 1,
+        "quarantined_source_rows": 2,
+        "quarantined_unique_variants": 1,
         "unique_variants": 2,
         "condition_linked_variants": 1,
         "condition_variant_links": 1,

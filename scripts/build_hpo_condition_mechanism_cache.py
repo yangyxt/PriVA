@@ -844,6 +844,35 @@ def _gofcards_variant_key(row: dict[str, str]) -> str:
     raise ValueError("GoFCards row has no stable variant or allele key")
 
 
+def partition_gofcards_variant_rows(
+    rows: Iterator[dict[str, str]] | list[dict[str, str]],
+) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
+    """Partition compact rows using an atomic source-allele quarantine.
+
+    A compact allele can have several transcript rows. If any row is marked
+    ineligible, no sibling row may be copied into the HPO condition cache,
+    even when that sibling is individually gene-concordant. Materializing this
+    resource is inexpensive (roughly four thousand rows) and permits the full
+    allele decision before condition or ClinVar linking begins.
+    """
+    materialized = list(rows)
+    quarantined_keys = {
+        _gofcards_variant_key(row)
+        for row in materialized
+        if _clean(row.get("match_eligibility")).lower() != "eligible"
+    }
+    eligible: list[dict[str, str]] = []
+    quarantined: list[dict[str, str]] = []
+    for row in materialized:
+        target = (
+            quarantined
+            if _gofcards_variant_key(row) in quarantined_keys
+            else eligible
+        )
+        target.append(row)
+    return eligible, quarantined
+
+
 def _condition_link_mechanism_evidence(
     variant_key: str,
     links: list[dict[str, Any]],
@@ -908,19 +937,16 @@ def attach_gofcards_variants(
     clinvar_links = build_clinvar_gofcards_condition_links(mechanism_json)
     aliases_by_gene = _condition_alias_index(genes)
     grouped: dict[tuple[str, str], dict[str, Any]] = {}
-    row_count = 0
-    eligible_row_count = 0
-    quarantined_row_count = 0
-    for row in _iter_tsv_rows(gofcards_variants, GOFCARDS_REQUIRED_COLUMNS):
-        row_count += 1
-        eligibility = _clean(row.get("match_eligibility")).lower()
-        if eligibility != "eligible":
-            quarantined_row_count += 1
-            continue
+    source_rows = list(
+        _iter_tsv_rows(gofcards_variants, GOFCARDS_REQUIRED_COLUMNS)
+    )
+    eligible_rows, quarantined_rows = partition_gofcards_variant_rows(
+        source_rows
+    )
+    for row in eligible_rows:
         symbol = _clean(row.get("HGNC_Symbol")).upper()
         if not symbol:
             continue
-        eligible_row_count += 1
         variant_key = _gofcards_variant_key(row)
         variant = grouped.setdefault(
             (symbol, variant_key),
@@ -929,9 +955,12 @@ def attach_gofcards_variants(
         _merge_gofcards_variant(variant, row)
 
     stats = {
-        "source_rows": row_count,
-        "eligible_source_rows": eligible_row_count,
-        "quarantined_source_rows": quarantined_row_count,
+        "source_rows": len(source_rows),
+        "eligible_source_rows": len(eligible_rows),
+        "quarantined_source_rows": len(quarantined_rows),
+        "quarantined_unique_variants": len(
+            {_gofcards_variant_key(row) for row in quarantined_rows}
+        ),
         "unique_variants": len(grouped),
         "condition_linked_variants": 0,
         "condition_variant_links": 0,

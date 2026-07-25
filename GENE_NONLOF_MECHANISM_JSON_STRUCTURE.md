@@ -15,6 +15,33 @@ The machine-readable output contract is:
 
 `/paedyl01/disk1/yangyxt/PriVA/data/gene_pathogenic_mechanism/schema/gene_nonlof_mechanism_curated_assertions.schema.json`
 
+## Build And Runtime Flow
+
+```text
+GoFCards backend + VEP + current HGNC aliases
+    -> compact exact-allele TSV (upstream normalization and audit)
+    -> canonical non-LOF JSON (validated, atomically published authority)
+    -> exact PriVA query-variant matcher
+```
+
+PriVA runtime never reads the compact TSV independently. The compact file is
+consumed by the canonical builder, which preserves the curated GoFCards gene,
+stores the VEP gene separately, and carries discordant rows only as quarantine
+evidence. The integrated HPO condition cache also ignores quarantined rows.
+
+The exact query-variant score contract is:
+
+| Score | Meaning |
+|---:|---|
+| `0` | mechanism unsupported for this query allele |
+| `1` | prediction-based plausibility, currently used for predicted LOF |
+| `2` | exact curated allele assertion from the canonical JSON |
+
+An exact score of `2` is exclusive to the mechanisms explicitly asserted for
+that allele. A dual GOF and dominant-negative score requires two explicit exact
+assertions for the same allele; a generic consequence prediction cannot add an
+alternative mechanism to an exact assertion.
+
 ## What VCV, RCV, And SCV Mean
 
 ClinVar uses three accession levels:
@@ -42,6 +69,18 @@ and ClinVar `TraitMapping` records. Ambiguous links to several eligible RCVs
 are retained and marked explicitly.
 
 ## Eligibility Contract
+
+A compact GoFCards row can enter exact matching only when:
+
+1. `HGNC_Symbol` equals the curated `GoFCards_HGNC_Symbol` after current HGNC
+   alias resolution.
+2. `match_eligibility` is `eligible`.
+3. `gene_match_status` is `gene_concordant` or `source_gene_only`.
+
+When the VEP gene differs from the curated source gene, the row remains in the
+compact TSV with `gene_match_status=gene_discordant` and
+`match_eligibility=quarantined_gene_discordance`. It can be audited but cannot
+create an exact runtime match, a ClinVar VCV link, or a condition-cache link.
 
 A ClinVar condition is retained only when all of these statements are true:
 
@@ -141,7 +180,9 @@ _meta.sources
 │   │          transcript, consequence, pscore, pmids, function, pathway,
 │   │          animal_model, cell_model]
 │   ├── exact_normalized_variant_keys: [source, mechanism, build, HGNC_Symbol,
-│   │   VEP_assembly, VEP_transcript, feature_type, consequence, HGVSc, HGVSp,
+│   │   GoFCards_HGNC_Symbol, VEP_HGNC_Symbol, gene_match_status,
+│   │   match_eligibility, VEP_assembly, VEP_transcript, feature_type,
+│   │   consequence, HGVSc, HGVSp,
 │   │   hgvsp_key, match_status, raw_GoFCards_HGVS, GoFCards_transcript,
 │   │   canonical_transcript, hg19_chrom, hg19_pos, hg19_ref, hg19_alt,
 │   │   hg19_vcf_status, hg38_chrom, hg38_pos, hg38_ref, hg38_alt,
@@ -219,10 +260,12 @@ root object
         │   ├── exact_normalization_status, required
         │   │   ├── matched_gene_concordant
         │   │   ├── gene_discordant_coordinate_collision
+        │   │   ├── quarantined_upstream_gene_discordance
         │   │   └── unmatched_public_source_allele
         │   ├── exact_cache_gene_symbols[], required only for a gene collision
         │   ├── exact_normalized_variants[], required for a matched assertion
-        │   │   └── full 45-key normalized record; expanded below
+        │   │   └── full normalized record; expanded below
+        │   ├── quarantined_exact_normalized_variants[], audit-only
         │   ├── disease: disorder label, optional
         │   ├── chr, pos, ref, alt: hg19 allele fields, optional individually
         │   ├── transcript: transcript accession, optional
@@ -243,6 +286,10 @@ root object
             │   ├── discarded_gene_discordant_symbols[]
             │   └── matched_gofcards_records[]
             │       ├── HGNC_Symbol
+            │       ├── GoFCards_HGNC_Symbol
+            │       ├── VEP_HGNC_Symbol, optional for source-gene-only rows
+            │       ├── gene_match_status
+            │       ├── match_eligibility: "eligible"
             │       ├── gofcards_accession_id, optional
             │       ├── gofcards_variant_id
             │       ├── allele_key
@@ -426,11 +473,15 @@ survive its source filter.
     "exact_normalization_status":           required; one of
         "matched_gene_concordant" |
         "gene_discordant_coordinate_collision" |
+        "quarantined_upstream_gene_discordance" |
         "unmatched_public_source_allele",
     "exact_cache_gene_symbols": [string],   required only for gene collision
     "exact_normalized_variants": [          required only when matched [1..*]
         { full normalized record }
     ],
+    "quarantined_exact_normalized_variants": [
+        { full normalized record }
+    ],                                        audit-only when quarantined [1..*]
     "disease": string,                      optional
     "chr": string,                          optional, raw hg19
     "pos": string,                          optional, raw hg19
@@ -458,12 +509,13 @@ VCF alleles for hg19 and hg38, plus VEP-calibrated HGVSc/HGVSp when available.
 All transcript/assembly rows are retained; the serializer does not select one
 arbitrary transcript.
 
-The three status branches prevent unsafe coordinate-only enrichment:
+The four status branches prevent unsafe coordinate-only enrichment:
 
 | `exact_normalization_status` | Emitted companion data | Meaning |
 |---|---|---|
 | `matched_gene_concordant` | `exact_normalized_variants[1..*]` | The stable source allele and resolved HGNC gene both agree. |
 | `gene_discordant_coordinate_collision` | `exact_cache_gene_symbols[1..*]` | The allele key exists in the normalized cache but only under another gene. No normalized record is attached. |
+| `quarantined_upstream_gene_discordance` | `exact_cache_gene_symbols[1..*]` and `quarantined_exact_normalized_variants[1..*]` | The compact row preserves the curated source gene but VEP reports a different gene. The row is audit-only. |
 | `unmatched_public_source_allele` | neither companion array | The public workbook allele is absent from the backend-derived normalized cache. No hg38/HGVS value is invented. |
 
 The 2026-07-23 production-source audit contains 3,161 public assertions:
@@ -476,7 +528,7 @@ both an `hg19_vcf_key` and an `hg38_vcf_key`. The raw audit log is:
 `/paedyl01/disk1/yangyxt/PriVA/data/gene_pathogenic_mechanism/audits/audit_gofcards_expanded_source_build_20260723.log`
 
 Each object in `exact_normalized_variants` can emit the following complete
-45-key structure. Optional means the key is absent when its normalized-cache
+49-key structure. Optional means the key is absent when its normalized-cache
 cell is blank or a placeholder; it never means JSON `null` or an empty string.
 
 ```text
@@ -485,6 +537,12 @@ exact_normalized_variants[]
 ├── mechanism: "GOF"                                       required
 ├── build: string                                           required
 ├── HGNC_Symbol: string                                     required
+├── GoFCards_HGNC_Symbol: current curated source gene        required in current builds
+├── VEP_HGNC_Symbol: current VEP annotation gene             optional
+├── gene_match_status: gene_concordant | source_gene_only |
+│   gene_discordant                                          required in current builds
+├── match_eligibility: eligible |
+│   quarantined_gene_discordance                             required in current builds
 ├── VEP_assembly: "hg19" | "hg38"                          optional
 ├── VEP_transcript: string                                  optional
 ├── feature_type: string                                    optional
@@ -537,9 +595,9 @@ The difference between the genomic fields is deliberate:
   VCF alleles used for caller/ClinVar-style exact comparison.
 - `*_genomic_key` preserves the source-style tuple; `*_vcf_key` preserves the
   exact normalized VCF tuple.
-- `HGVSc`, `HGVSp`, and `hgvsp_key` are absent for the 83 current rows without
-  a concordant parseable protein annotation. Those rows remain usable through
-  exact genomic matching.
+- `HGVSc`, `HGVSp`, and `hgvsp_key` can be absent when no concordant parseable
+  protein annotation exists. Eligible rows remain usable through exact genomic
+  matching.
 
 `animal_model` and `cell_model` are presence-only positive flags: when the raw
 value is `Y`, the key is emitted as `true`; otherwise the key is absent. An
@@ -551,10 +609,11 @@ only `hg19_vcf_key` and `hg38_vcf_key`. PriVA additionally supports normalized
 gene plus exact HGVSp and normalized gene plus exact hg19/hg38 genomic allele.
 
 `ClinVar_VCV.match.matched_gofcards_records` remains a deliberately compact
-9-key projection for the ClinVar join (`HGNC_Symbol`, optional
-`gofcards_accession_id`, `gofcards_variant_id`, `allele_key`,
-`hg19_vcf_key`, `hg38_vcf_key`, and optional `disease`, `pmids`, `pscore`). It
-is not the full standalone GoFCards assertion shown above.
+projection for the ClinVar join (`HGNC_Symbol`, `GoFCards_HGNC_Symbol`,
+optional `VEP_HGNC_Symbol`, `gene_match_status`, `match_eligibility`, optional
+`gofcards_accession_id`, `gofcards_variant_id`, `allele_key`, `hg19_vcf_key`,
+`hg38_vcf_key`, and optional `disease`, `pmids`, `pscore`). It is not the full
+standalone GoFCards assertion shown above.
 
 ## ClinVar VCV XML Structure Used By The Parser
 

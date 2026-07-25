@@ -801,6 +801,17 @@ def test_gofcards_assertion_preserves_all_gene_concordant_exact_rows(
 
 def test_gofcards_upstream_gene_discordance_is_audit_only() -> None:
     allele_key = "Indel|10|121484216|121484216||C"
+    concordant_sibling = {
+        "source": "GoFCards",
+        "mechanism": "GOF",
+        "HGNC_Symbol": "FGFR2",
+        "GoFCards_HGNC_Symbol": "FGFR2",
+        "VEP_HGNC_Symbol": "FGFR2",
+        "gene_match_status": "gene_concordant",
+        "match_eligibility": "eligible",
+        "allele_key": allele_key,
+        "gofcards_variant_id": allele_key,
+    }
     exact_record = {
         "source": "GoFCards",
         "mechanism": "GOF",
@@ -844,7 +855,9 @@ def test_gofcards_upstream_gene_discordance_is_audit_only() -> None:
             )
         ]
     )
-    exact_by_allele = {gofcards_allele_identity(allele_key): [exact_record]}
+    exact_by_allele = {
+        gofcards_allele_identity(allele_key): [concordant_sibling, exact_record]
+    }
 
     canonical = build_nonlof_assertions_json(unified, hgnc, exact_by_allele)
     assertion = canonical["HGNC:3689"]["variant_level"][0]["GoFCards"]
@@ -854,7 +867,10 @@ def test_gofcards_upstream_gene_discordance_is_audit_only() -> None:
         == "quarantined_upstream_gene_discordance"
     )
     assert "exact_normalized_variants" not in assertion
-    assert assertion["quarantined_exact_normalized_variants"] == [exact_record]
+    assert assertion["quarantined_exact_normalized_variants"] == [
+        concordant_sibling,
+        exact_record,
+    ]
 
 
 def test_hgnc_mapping_splits_comma_delimited_aliases(tmp_path: Path) -> None:

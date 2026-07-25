@@ -2146,6 +2146,7 @@ function validate_gofcards_exact_gof_cache() {
 import csv
 import gzip
 import sys
+from collections import defaultdict
 
 path = sys.argv[1]
 opener = gzip.open if path.endswith(".gz") else open
@@ -2175,7 +2176,10 @@ allowed_provenance = {
     ("gene_concordant", "eligible"),
     ("source_gene_only", "eligible"),
     ("gene_discordant", "quarantined_gene_discordance"),
+    ("gene_concordant", "quarantined_allele_gene_discordance"),
+    ("source_gene_only", "quarantined_allele_gene_discordance"),
 }
+provenance_by_allele = defaultdict(list)
 with opener(path, "rt", encoding="utf-8", newline="") as handle:
     reader = csv.DictReader(handle, delimiter="\t")
     missing = sorted(required - set(reader.fieldnames or []))
@@ -2188,6 +2192,7 @@ with opener(path, "rt", encoding="utf-8", newline="") as handle:
         vep_symbol = (row.get("VEP_HGNC_Symbol") or "").strip().upper()
         status = (row.get("gene_match_status") or "").strip().lower()
         eligibility = (row.get("match_eligibility") or "").strip().lower()
+        allele_id = (row.get("gofcards_variant_id") or "").strip()
 
         if (row.get("source") or "").strip() != "GoFCards":
             raise SystemExit(f"{path}:{line_number} has a non-GoFCards source")
@@ -2202,6 +2207,7 @@ with opener(path, "rt", encoding="utf-8", newline="") as handle:
                 f"{path}:{line_number} has invalid gene provenance: "
                 f"{status or '<blank>'}/{eligibility or '<blank>'}"
             )
+        provenance_by_allele[allele_id].append((status, eligibility, line_number))
         if status == "gene_concordant" and vep_symbol != source_symbol:
             raise SystemExit(f"{path}:{line_number} has a false gene-concordant label")
         if status == "source_gene_only" and vep_symbol:
@@ -2222,6 +2228,26 @@ with opener(path, "rt", encoding="utf-8", newline="") as handle:
             or row.get("hg19_genomic_key") or row.get("hg38_genomic_key")
         ):
             genomic_rows += 1
+for allele_id, states in provenance_by_allele.items():
+    has_direct_discordance = any(
+        status == "gene_discordant" for status, _eligibility, _line in states
+    )
+    has_collateral_quarantine = any(
+        eligibility == "quarantined_allele_gene_discordance"
+        for _status, eligibility, _line in states
+    )
+    eligible_lines = [
+        line for _status, eligibility, line in states if eligibility == "eligible"
+    ]
+    if has_direct_discordance and eligible_lines:
+        raise SystemExit(
+            f"{path}: allele {allele_id} has gene-discordant and eligible rows; "
+            f"eligible sibling lines={eligible_lines}"
+        )
+    if has_collateral_quarantine and not has_direct_discordance:
+        raise SystemExit(
+            f"{path}: allele {allele_id} has an orphan allele-level quarantine"
+        )
 if row_count == 0:
     raise SystemExit(f"{path} contains no rows")
 if eligible_rows == 0:

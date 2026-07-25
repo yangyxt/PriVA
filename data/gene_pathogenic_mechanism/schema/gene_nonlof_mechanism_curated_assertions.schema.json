@@ -252,6 +252,7 @@
           "enum": [
             "eligible",
             "quarantined_gene_discordance",
+            "quarantined_allele_gene_discordance",
             "quarantined_missing_source_gene"
           ]
         },

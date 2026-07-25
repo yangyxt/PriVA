@@ -224,6 +224,10 @@ def test_compact_record_provenance_audit_separates_runtime_and_quarantine() -> N
         "gene_match_status": "gene_discordant",
         "match_eligibility": "quarantined_gene_discordance",
     }
+    collateral = {
+        **eligible,
+        "match_eligibility": "quarantined_allele_gene_discordance",
+    }
 
     assert audit_compact_record_provenance(
         eligible,
@@ -236,6 +240,12 @@ def test_compact_record_provenance_audit_separates_runtime_and_quarantine() -> N
         parent_gene="FGFR2",
         expected_eligibility="quarantined_gene_discordance",
         label="quarantined",
+    ) == []
+    assert audit_compact_record_provenance(
+        collateral,
+        parent_gene="FGFR2",
+        expected_eligibility="quarantined_allele_gene_discordance",
+        label="collateral",
     ) == []
     assert audit_compact_record_provenance(
         quarantined,

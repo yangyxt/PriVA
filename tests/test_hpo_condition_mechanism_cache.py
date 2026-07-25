@@ -14,6 +14,7 @@ from build_hpo_condition_mechanism_cache import (  # noqa: E402
     build_cache_payload,
     build_hpo_gene_condition_frame,
     load_and_validate_cache,
+    partition_gofcards_variant_rows,
     write_json_atomic,
 )
 
@@ -23,6 +24,29 @@ HPO_HEADER = (
     "mondo_id\tmondo_name\tdisease_scope\tpriva_scope\tscope_evidence\t"
     "scope_reference\tscope_review_status\n"
 )
+
+
+def test_variant_row_partition_is_atomic_per_curated_gene_and_allele() -> None:
+    direct = {
+        "HGNC_Symbol": "GENE1",
+        "gofcards_variant_id": "VAR1",
+        "match_eligibility": "quarantined_gene_discordance",
+    }
+    sibling = {
+        **direct,
+        "match_eligibility": "eligible",
+    }
+    other_gene = {
+        **sibling,
+        "HGNC_Symbol": "GENE2",
+    }
+
+    eligible, quarantined = partition_gofcards_variant_rows(
+        [direct, sibling, other_gene]
+    )
+
+    assert eligible == [other_gene]
+    assert quarantined == [direct, sibling]
 
 
 def test_hpo_frame_groups_gene_conditions_and_preserves_axis_evidence(

@@ -844,6 +844,16 @@ def _gofcards_variant_key(row: dict[str, str]) -> str:
     raise ValueError("GoFCards row has no stable variant or allele key")
 
 
+def _gofcards_variant_assertion_key(
+    row: dict[str, str],
+) -> tuple[str, str]:
+    """Return the curated gene plus stable allele identity for quarantine."""
+    symbol = _clean(row.get("HGNC_Symbol")).upper()
+    if not symbol:
+        raise ValueError("GoFCards row has no curated HGNC symbol")
+    return symbol, _gofcards_variant_key(row)
+
+
 def partition_gofcards_variant_rows(
     rows: Iterator[dict[str, str]] | list[dict[str, str]],
 ) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
@@ -857,7 +867,7 @@ def partition_gofcards_variant_rows(
     """
     materialized = list(rows)
     quarantined_keys = {
-        _gofcards_variant_key(row)
+        _gofcards_variant_assertion_key(row)
         for row in materialized
         if _clean(row.get("match_eligibility")).lower() != "eligible"
     }
@@ -866,7 +876,7 @@ def partition_gofcards_variant_rows(
     for row in materialized:
         target = (
             quarantined
-            if _gofcards_variant_key(row) in quarantined_keys
+            if _gofcards_variant_assertion_key(row) in quarantined_keys
             else eligible
         )
         target.append(row)
@@ -959,7 +969,10 @@ def attach_gofcards_variants(
         "eligible_source_rows": len(eligible_rows),
         "quarantined_source_rows": len(quarantined_rows),
         "quarantined_unique_variants": len(
-            {_gofcards_variant_key(row) for row in quarantined_rows}
+            {
+                _gofcards_variant_assertion_key(row)
+                for row in quarantined_rows
+            }
         ),
         "unique_variants": len(grouped),
         "condition_linked_variants": 0,

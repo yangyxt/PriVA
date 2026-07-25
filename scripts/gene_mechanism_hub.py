@@ -174,7 +174,13 @@ VARIANT_MECHANISM_OUTPUT_COLUMNS = (
     "gene_lof_evidence",
     "variant_effect",
     "variant_effect_evidence",
+    "variant_effect_suppressed_evidence",
     "variant_effect_conflict",
+    "variant_lof_score",
+    "variant_gof_score",
+    "variant_dn_score",
+    "variant_mechanism_exclusive",
+    "variant_exact_mechanisms",
     "variant_mechanism_applicable",
     "variant_mechanism_uncertain",
     "variant_mechanism_incompatible",
@@ -215,19 +221,41 @@ def _split_annotation_tokens(value: Any) -> set[str]:
     }
 
 
-def infer_query_variant_effect(row: dict[str, Any] | pd.Series) -> dict[str, str]:
-    """Infer the query allele's primary effect and retain every evidence route.
+def _bounded_mechanism_score(value: Any) -> int:
+    try:
+        score = int(float(_clean(value)))
+    except ValueError:
+        return 0
+    return score if score in {0, 1, 2} else 0
 
-    An exact curated GoFCards match takes precedence over generic consequence
-    prediction. LOFTEE ``HC`` and ``OS`` are both high-confidence predicted
-    loss-of-function evidence; ``OS`` is LOFTEE's other-splice category.
+
+def _exact_mechanisms_from_effect(value: Any) -> set[str]:
+    effect = _clean(value)
+    prefix = "exact_known_"
+    if not effect.startswith(prefix):
+        return set()
+    return {
+        _normalize_sequence_mechanism(token)
+        for token in effect[len(prefix):].split("+")
+        if _normalize_sequence_mechanism(token) in EXACT_SEQUENCE_MECHANISMS
+    }
+
+
+def infer_query_variant_effect(row: dict[str, Any] | pd.Series) -> dict[str, Any]:
+    """Infer one exclusive variant effect while retaining suppressed predictions.
+
+    Exact curated GoF or dominant-negative evidence has score ``2`` and defines
+    the allowed mechanism set for this allele. Generic consequence, NMD, or
+    LOFTEE signals remain visible as audit evidence but cannot create a competing
+    LoF call. Without an exact assertion, prediction-based LoF evidence receives
+    score ``1``. LOFTEE ``OS`` is its other-splice category.
     """
-    evidence: list[str] = []
+    predicted_lof_evidence: list[str] = []
     loftee_tokens = _split_annotation_tokens(row.get("LoF"))
     if "HC" in loftee_tokens:
-        evidence.append("LOFTEE_HC")
+        predicted_lof_evidence.append("LOFTEE_HC")
     if "OS" in loftee_tokens:
-        evidence.append("LOFTEE_OS")
+        predicted_lof_evidence.append("LOFTEE_OS")
 
     consequence = _clean(row.get("Consequence")).lower()
     nmd = _clean(row.get("NMD")).lower()
@@ -235,34 +263,55 @@ def infer_query_variant_effect(row: dict[str, Any] | pd.Series) -> dict[str, str
     truncating = "stop_gained" in consequence or "frameshift" in consequence
     nmd_lof = truncating and "escaping" not in nmd and "END_TRUNC" not in lof_filter
     if nmd_lof:
-        evidence.append("NMD_PREDICTED_LOF")
+        predicted_lof_evidence.append("NMD_PREDICTED_LOF")
     if _bool_value(row.get("vep_consq_lof")):
-        evidence.append("VEP_LOF")
+        predicted_lof_evidence.append("VEP_LOF")
     if _bool_value(row.get("splicing_lof")):
-        evidence.append("PRIVA_SPLICE_LOF")
+        predicted_lof_evidence.append("PRIVA_SPLICE_LOF")
     if _bool_value(row.get("5UTR_lof")):
-        evidence.append("PRIVA_5UTR_LOF")
+        predicted_lof_evidence.append("PRIVA_5UTR_LOF")
 
+    scores = {
+        "LOF": _bounded_mechanism_score(row.get("variant_lof_score")),
+        "GOF": _bounded_mechanism_score(row.get("variant_gof_score")),
+        "DOMINANT_NEGATIVE": _bounded_mechanism_score(
+            row.get("variant_dn_score")
+        ),
+    }
     gof_tokens = _split_annotation_tokens(row.get("variant_gof_tag"))
-    exact_gof = "GOF" in gof_tokens
-    if exact_gof:
-        evidence.append("GOFCARDS_EXACT")
+    if "GOF" in gof_tokens:
+        scores["GOF"] = 2
 
-    evidence = list(dict.fromkeys(evidence))
-    lof_evidence = [item for item in evidence if item != "GOFCARDS_EXACT"]
-    if exact_gof:
-        effect = "exact_known_GOF"
-        conflict = "predicted_LOF_vs_exact_GOF" if lof_evidence else ""
-    elif lof_evidence:
+    exact_mechanisms = {
+        mechanism for mechanism, score in scores.items() if score == 2
+    } & EXACT_SEQUENCE_MECHANISMS
+    predicted_lof_evidence = list(dict.fromkeys(predicted_lof_evidence))
+    suppressed_evidence: list[str] = []
+    evidence: list[str] = []
+    if exact_mechanisms:
+        for mechanism in scores:
+            scores[mechanism] = 2 if mechanism in exact_mechanisms else 0
+        evidence.extend(
+            f"CANONICAL_EXACT_{mechanism}" for mechanism in sorted(exact_mechanisms)
+        )
+        suppressed_evidence = predicted_lof_evidence
+        effect = "exact_known_" + "+".join(sorted(exact_mechanisms))
+    elif predicted_lof_evidence:
+        scores["LOF"] = max(scores["LOF"], 1)
+        evidence.extend(predicted_lof_evidence)
         effect = "predicted_LOF_high_confidence"
-        conflict = ""
     else:
         effect = "uncertain"
-        conflict = ""
     return {
         "variant_effect": effect,
         "variant_effect_evidence": ";".join(evidence),
-        "variant_effect_conflict": conflict,
+        "variant_effect_suppressed_evidence": ";".join(suppressed_evidence),
+        "variant_effect_conflict": "",
+        "variant_lof_score": scores["LOF"],
+        "variant_gof_score": scores["GOF"],
+        "variant_dn_score": scores["DOMINANT_NEGATIVE"],
+        "variant_mechanism_exclusive": bool(exact_mechanisms),
+        "variant_exact_mechanisms": ";".join(sorted(exact_mechanisms)),
     }
 
 
@@ -2565,17 +2614,14 @@ def select_condition_histories_for_variant(
     * an unresolved allele retains all histories, clearly marked as uncertain
       by the later applicability classifier.
 
-    The one deliberate exception is a query that is both an exact curated GOF
-    allele and has high-confidence predicted LOF evidence. PriVA records this as
-    ``predicted_LOF_vs_exact_GOF`` and retains both GOF and LOF histories for
-    review instead of silently allowing either call to erase the other.
+    Exact curated mechanisms are exclusive. A consequence-based LoF prediction
+    is retained in the row's suppressed-evidence field but cannot reintroduce a
+    different condition history after an exact GoF or DN match.
     """
     effect = _clean(variant_effect)
-    conflict = _clean(variant_effect_conflict)
-    if conflict == "predicted_LOF_vs_exact_GOF":
-        allowed = {"GOF", "LOF"}
-    elif effect == "exact_known_GOF":
-        allowed = {"GOF"}
+    exact_mechanisms = _exact_mechanisms_from_effect(effect)
+    if exact_mechanisms:
+        allowed = exact_mechanisms
     elif effect == "predicted_LOF_high_confidence":
         allowed = {"LOF"}
     else:
@@ -2635,6 +2681,7 @@ def _classify_variant_applicability(
     effect: str,
     effect_conflict: str = "",
 ) -> dict[str, Any]:
+    exact_mechanisms = _exact_mechanisms_from_effect(effect)
     groups: dict[str, list[str]] = {
         "applicable": [],
         "uncertain": [],
@@ -2646,21 +2693,24 @@ def _classify_variant_applicability(
         if mechanism == "LOF":
             if effect == "predicted_LOF_high_confidence":
                 status, reason = "applicable", "query_effect_matches_LOF"
-            elif effect_conflict == "predicted_LOF_vs_exact_GOF":
-                status, reason = "uncertain", "query_has_LOF_and_exact_GOF_conflict"
             elif effect == "uncertain":
                 status, reason = "uncertain", "query_LOF_effect_not_established"
             else:
-                status, reason = "incompatible", "exact_GOF_does_not_match_LOF"
+                status, reason = (
+                    "incompatible",
+                    "exact_nonLOF_mechanism_excludes_predicted_LOF",
+                )
         elif mechanism == "GOF":
-            if effect == "exact_known_GOF":
+            if "GOF" in exact_mechanisms:
                 status, reason = "applicable", "exact_query_GOF_match"
             elif effect == "uncertain":
                 status, reason = "uncertain", "query_GOF_effect_not_established"
             else:
                 status, reason = "incompatible", "GOF_requires_exact_variant_match"
         elif mechanism == "DOMINANT_NEGATIVE":
-            if effect == "uncertain":
+            if "DOMINANT_NEGATIVE" in exact_mechanisms:
+                status, reason = "applicable", "exact_query_DN_match"
+            elif effect == "uncertain":
                 status, reason = "uncertain", "no_variant_level_DN_assertion"
             else:
                 status, reason = "incompatible", "query_effect_does_not_support_DN"
@@ -2888,7 +2938,7 @@ def annotate_gene_mechanism_categories(
         vcv_conditions: list[str] = []
         vcv_hgvs: list[str] = []
         vcv_review_stars: list[int] = []
-        if effect_call["variant_effect"] == "exact_known_GOF":
+        if "GOF" in _exact_mechanisms_from_effect(effect_call["variant_effect"]):
             use_vcv_condition_history = not any(
                 assertion.get("mechanism") == "GOF" for assertion in assertions
             )
@@ -2927,7 +2977,19 @@ def annotate_gene_mechanism_categories(
         variant_outputs["gene_lof_evidence"].append(";".join(lof_evidence))
         variant_outputs["variant_effect"].append(effect_call["variant_effect"])
         variant_outputs["variant_effect_evidence"].append(effect_call["variant_effect_evidence"])
+        variant_outputs["variant_effect_suppressed_evidence"].append(
+            effect_call["variant_effect_suppressed_evidence"]
+        )
         variant_outputs["variant_effect_conflict"].append(effect_call["variant_effect_conflict"])
+        variant_outputs["variant_lof_score"].append(effect_call["variant_lof_score"])
+        variant_outputs["variant_gof_score"].append(effect_call["variant_gof_score"])
+        variant_outputs["variant_dn_score"].append(effect_call["variant_dn_score"])
+        variant_outputs["variant_mechanism_exclusive"].append(
+            effect_call["variant_mechanism_exclusive"]
+        )
+        variant_outputs["variant_exact_mechanisms"].append(
+            effect_call["variant_exact_mechanisms"]
+        )
         variant_outputs["variant_mechanism_applicable"].append(applicability["applicable"])
         variant_outputs["variant_mechanism_uncertain"].append(applicability["uncertain"])
         variant_outputs["variant_mechanism_incompatible"].append(applicability["incompatible"])

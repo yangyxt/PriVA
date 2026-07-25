@@ -16,6 +16,7 @@ sys.path.insert(0, str(ROOT / "scripts"))
 
 from clinvar_vcv import (  # noqa: E402
     load_exact_gofcards_lookup,
+    partition_exact_gofcards_rows,
     review_stars,
     stream_parse_clinvar_vcv,
 )
@@ -208,6 +209,31 @@ def test_review_star_mapping_is_conservative() -> None:
     assert review_stars("reviewed by expert panel") == 3
     assert review_stars("practice guideline") == 4
     assert review_stars("future unknown status") == 0
+
+
+def test_clinvar_lookup_partition_is_atomic_per_gene_and_allele() -> None:
+    direct = {
+        "HGNC_Symbol": "GENE1",
+        "GoFCards_HGNC_Symbol": "GENE1",
+        "gofcards_variant_id": "VAR1",
+        "match_eligibility": "quarantined_gene_discordance",
+    }
+    sibling = {
+        **direct,
+        "match_eligibility": "eligible",
+    }
+    other_gene = {
+        **sibling,
+        "HGNC_Symbol": "GENE2",
+        "GoFCards_HGNC_Symbol": "GENE2",
+    }
+
+    eligible, quarantined = partition_exact_gofcards_rows(
+        [direct, sibling, other_gene]
+    )
+
+    assert eligible == [other_gene]
+    assert quarantined == [direct, sibling]
 
 
 def test_compact_record_provenance_audit_separates_runtime_and_quarantine() -> None:

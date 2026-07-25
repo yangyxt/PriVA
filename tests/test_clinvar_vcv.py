@@ -833,6 +833,12 @@ def test_gofcards_upstream_gene_discordance_is_audit_only() -> None:
         "allele_key": allele_key,
         "gofcards_variant_id": allele_key,
     }
+    other_gene_claim = {
+        **concordant_sibling,
+        "HGNC_Symbol": "INPP5F",
+        "GoFCards_HGNC_Symbol": "INPP5F",
+        "VEP_HGNC_Symbol": "INPP5F",
+    }
     hgnc = {
         "FGFR2": {
             "hgnc_id": "HGNC:3689",
@@ -866,7 +872,11 @@ def test_gofcards_upstream_gene_discordance_is_audit_only() -> None:
         ]
     )
     exact_by_allele = {
-        gofcards_allele_identity(allele_key): [concordant_sibling, exact_record]
+        gofcards_allele_identity(allele_key): [
+            concordant_sibling,
+            exact_record,
+            other_gene_claim,
+        ]
     }
 
     canonical = build_nonlof_assertions_json(unified, hgnc, exact_by_allele)

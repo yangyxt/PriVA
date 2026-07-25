@@ -2150,7 +2150,13 @@ import sys
 path = sys.argv[1]
 opener = gzip.open if path.endswith(".gz") else open
 required = {
+    "source",
+    "mechanism",
     "HGNC_Symbol",
+    "GoFCards_HGNC_Symbol",
+    "VEP_HGNC_Symbol",
+    "gene_match_status",
+    "match_eligibility",
     "HGVSp",
     "hgvsp_key",
     "hg19_vcf_key",
@@ -2161,29 +2167,74 @@ required = {
     "gofcards_variant_id",
 }
 row_count = 0
+eligible_rows = 0
+quarantined_rows = 0
 hgvsp_rows = 0
 genomic_rows = 0
+allowed_provenance = {
+    ("gene_concordant", "eligible"),
+    ("source_gene_only", "eligible"),
+    ("gene_discordant", "quarantined_gene_discordance"),
+}
 with opener(path, "rt", encoding="utf-8", newline="") as handle:
     reader = csv.DictReader(handle, delimiter="\t")
     missing = sorted(required - set(reader.fieldnames or []))
     if missing:
         raise SystemExit(f"{path} missing required columns: {', '.join(missing)}")
-    for row in reader:
+    for line_number, row in enumerate(reader, start=2):
         row_count += 1
-        if row.get("HGNC_Symbol") and row.get("hgvsp_key"):
+        source_symbol = (row.get("GoFCards_HGNC_Symbol") or "").strip().upper()
+        exported_symbol = (row.get("HGNC_Symbol") or "").strip().upper()
+        vep_symbol = (row.get("VEP_HGNC_Symbol") or "").strip().upper()
+        status = (row.get("gene_match_status") or "").strip().lower()
+        eligibility = (row.get("match_eligibility") or "").strip().lower()
+
+        if (row.get("source") or "").strip() != "GoFCards":
+            raise SystemExit(f"{path}:{line_number} has a non-GoFCards source")
+        if (row.get("mechanism") or "").strip().upper() != "GOF":
+            raise SystemExit(f"{path}:{line_number} has a non-GOF mechanism")
+        if not source_symbol or exported_symbol != source_symbol:
+            raise SystemExit(
+                f"{path}:{line_number} does not preserve the curated GoFCards gene"
+            )
+        if (status, eligibility) not in allowed_provenance:
+            raise SystemExit(
+                f"{path}:{line_number} has invalid gene provenance: "
+                f"{status or '<blank>'}/{eligibility or '<blank>'}"
+            )
+        if status == "gene_concordant" and vep_symbol != source_symbol:
+            raise SystemExit(f"{path}:{line_number} has a false gene-concordant label")
+        if status == "source_gene_only" and vep_symbol:
+            raise SystemExit(f"{path}:{line_number} has VEP gene data but source_gene_only status")
+        if status == "gene_discordant" and (
+            not vep_symbol or vep_symbol == source_symbol
+        ):
+            raise SystemExit(f"{path}:{line_number} has a false gene-discordant label")
+
+        if eligibility == "eligible":
+            eligible_rows += 1
+        else:
+            quarantined_rows += 1
+        if eligibility == "eligible" and row.get("hgvsp_key"):
             hgvsp_rows += 1
-        if row.get("HGNC_Symbol") and (
+        if eligibility == "eligible" and (
             row.get("hg19_vcf_key") or row.get("hg38_vcf_key")
             or row.get("hg19_genomic_key") or row.get("hg38_genomic_key")
         ):
             genomic_rows += 1
 if row_count == 0:
     raise SystemExit(f"{path} contains no rows")
+if eligible_rows == 0:
+    raise SystemExit(f"{path} contains no runtime-eligible rows")
 if hgvsp_rows == 0:
-    raise SystemExit(f"{path} contains no HGVSp match rows")
+    raise SystemExit(f"{path} contains no runtime-eligible HGVSp match rows")
 if genomic_rows == 0:
-    raise SystemExit(f"{path} contains no genomic match rows")
-print(f"gofcards_rows={row_count}; hgvsp_rows={hgvsp_rows}; genomic_rows={genomic_rows}")
+    raise SystemExit(f"{path} contains no runtime-eligible genomic match rows")
+print(
+    f"gofcards_rows={row_count}; eligible_rows={eligible_rows}; "
+    f"quarantined_rows={quarantined_rows}; hgvsp_rows={hgvsp_rows}; "
+    f"genomic_rows={genomic_rows}"
+)
 PY
 }
 

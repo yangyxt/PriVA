@@ -8,7 +8,7 @@ from `/paedyl01/disk1/yangyxt/PriVA/scripts/acmg_criteria_assign.py`.
 
 ## Source key
 
-| ID | Runtime source | Current role |
+| ID | Source or resource | Current role |
 |---|---|---|
 | S1 | `/paedyl01/disk1/yangyxt/PriVA/data/hpo/genes_to_phenotype.assertions.tsv.gz` | Explicit gene-disease inheritance terms from HPO annotations. |
 | S2 | `/paedyl01/disk1/yangyxt/PriVA/data/clingen/gene_dosage_sensitivity.hg19.tsv` | Haploinsufficiency and dosage override used by the inheritance decision. |
@@ -16,7 +16,7 @@ from `/paedyl01/disk1/yangyxt/PriVA/scripts/acmg_criteria_assign.py`.
 | S4 | `/paedyl01/disk1/yangyxt/PriVA/data/alphamissense/alphamissense_mean_score.tsv` | Gene-average AlphaMissense score `> 0.564` adds broad gene-level LOF support upstream. |
 | S5 | `/paedyl01/disk1/yangyxt/PriVA/data/gene_pathogenic_mechanism/prepared/gene_pathogenic_mechanism_evidence.tsv` | Strict high/moderate-confidence G2P/DDG2P LOF assertions and their allelic requirements. |
 | S6 | `/paedyl01/disk1/yangyxt/PriVA/data/gene_pathogenic_mechanism/prepared/gene_nonlof_mechanism_curated_assertions.json` | PriVA-local canonical schema-v2 non-LOF gene-condition, GoFCards, and exact matched ClinVar VCV evidence. PriVA uses its broader packaged mechanism cache only before this cache is installed. |
-| S7 | `/paedyl01/disk1/yangyxt/PriVA/data/gofcards/gofcards_exact_gof_hgvsp.tsv.gz` | Separate exact variant-level GoFCards index used for HGVSp and genomic matching. |
+| S7 | `/paedyl01/disk1/yangyxt/PriVA/data/gofcards/gofcards_exact_gof_hgvsp.tsv.gz` | Build-time GoFCards normalization and quarantine table. The canonical S6 JSON embeds eligible exact alleles; runtime does not read S7 independently. |
 | S8 | PriVA's two-star-or-higher ClinVar pathogenic-variant gene set | Gene membership adds broad gene-level LOF support upstream. |
 
 PriVA keeps the two JSON configuration roles separate:

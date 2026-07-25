@@ -23,8 +23,8 @@ digraph priva_gene_mechanism_hub {
     clingen [label="ClinGen dosage\nHI / AR dosage evidence", fillcolor="#DCFCE7"];
     constraint [label="Broad gene LOF support\nClinVar pathogenic >=2 stars OR\nLOEUF <0.35 OR mean AM >0.564", fillcolor="#FEF3C7"];
     ddg2p [label="G2P/DDG2P\ncondition + mechanism +\nallelic requirement", fillcolor="#FCE7F3"];
-    canonical [label="Canonical schema-v2 JSON\nG2P, PanelApp, GoFCards,\nClinGen and ClinVar VCV/RCV/SCV", fillcolor="#EDE9FE"];
-    gof_index [label="Exact GoFCards index\nprotein and hg19/hg38 allele keys", fillcolor="#FFEDD5"];
+    canonical [label="Canonical schema-v2 non-LOF JSON\neligible exact GOF/DN alleles\nplus ClinVar VCV/RCV/SCV", fillcolor="#EDE9FE"];
+    gof_index [label="Compact GoFCards TSV\nbuild-time normalization\nand quarantine", fillcolor="#FFEDD5"];
   }
 
   subgraph cluster_history {
@@ -42,8 +42,8 @@ digraph priva_gene_mechanism_hub {
     color="#FDBA74";
     style="rounded";
 
-    exact [label="Exact GoFCards DNA or protein match?", shape=diamond, fillcolor="#FFF7ED"];
-    gof [label="exact_known_GOF", fillcolor="#FED7AA"];
+    exact [label="Exact canonical GOF/DN\nDNA or protein match?", shape=diamond, fillcolor="#FFF7ED"];
+    gof [label="exact curated GOF and/or DN\nmechanism score 2", fillcolor="#FED7AA"];
     lof [label="LOFTEE HC or OS, NMD pLoF,\nor PriVA splice/UTR LOF", shape=diamond, fillcolor="#FFF7ED"];
     predlof [label="predicted_LOF_high_confidence", fillcolor="#FDE68A"];
     uncertain [label="uncertain", fillcolor="#F3F4F6"];
@@ -55,7 +55,7 @@ digraph priva_gene_mechanism_hub {
   uncertain_app [label="variant_mechanism_uncertain", fillcolor="#FEF3C7"];
   incompatible [label="variant_mechanism_incompatible", fillcolor="#FEE2E2"];
 
-  vcv [label="Exact GoFCards ID -> nested ClinVar VCV\nVCV accession, RCV condition, stars, HGVS", fillcolor="#E0E7FF", penwidth=1.5];
+  vcv [label="Canonical exact allele -> nested ClinVar VCV\nVCV accession, RCV condition, stars, HGVS", fillcolor="#E0E7FF", penwidth=1.5];
   acmg [label="Required variant-level masks\nPVS1, BS1, BS2, BS4 and ranking\nmissing fields raise an error", fillcolor="#F3F4F6", penwidth=1.5];
 
   ddg2p -> condition;
@@ -67,7 +67,8 @@ digraph priva_gene_mechanism_hub {
   condition -> profile;
 
   row -> exact;
-  gof_index -> exact;
+  gof_index -> canonical [label="validate + embed\neligible rows"];
+  canonical -> exact;
   exact -> gof [label="yes"];
   exact -> lof [label="no"];
   row -> lof;

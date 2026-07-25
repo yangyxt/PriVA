@@ -8,6 +8,8 @@ import json
 from collections import Counter
 from pathlib import Path
 
+from build_gene_nonlof_mechanism_cache import gofcards_allele_identity
+
 
 ALLOWED_REVIEW_STATUSES = {
     "criteria provided, multiple submitters, no conflicts": 2,
@@ -76,6 +78,30 @@ def audit_compact_record_provenance(
         if not vep or vep == source:
             violations.append(f"{label}: quarantined row lacks a different VEP gene")
     return violations
+
+
+def audit_compact_record_allele_identity(
+    record: dict,
+    *,
+    parent_allele_key: str,
+    label: str,
+) -> list[str]:
+    """Return a violation unless parent and compact keys identify one allele.
+
+    The GoFCards backend calls some multi-base substitutions ``SNV`` while the
+    public workbook parser derives ``Indel`` from allele length. The canonical
+    builder intentionally joins those records by the type-independent
+    chromosome/start/end/ref/alt identity. The audit must enforce that same
+    contract instead of treating the source vocabulary prefix as identity.
+    """
+    nested_allele_key = str(record.get("allele_key", ""))
+    if (
+        not nested_allele_key
+        or gofcards_allele_identity(nested_allele_key)
+        != gofcards_allele_identity(parent_allele_key)
+    ):
+        return [f"{label}: nested allele identity disagrees"]
+    return []
 
 
 def parse_args() -> argparse.Namespace:
@@ -177,8 +203,13 @@ def main() -> None:
                             label=label,
                         )
                     )
-                    if record.get("allele_key") != allele_key:
-                        violations.append(f"{label}: nested allele key disagrees")
+                    violations.extend(
+                        audit_compact_record_allele_identity(
+                            record,
+                            parent_allele_key=allele_key,
+                            label=label,
+                        )
+                    )
                     has_hg19 = has_hg19 or bool(record.get("hg19_vcf_key"))
                     has_hg38 = has_hg38 or bool(record.get("hg38_vcf_key"))
                 if has_hg19:
@@ -204,8 +235,13 @@ def main() -> None:
                             label=label,
                         )
                     )
-                    if record.get("allele_key") != allele_key:
-                        violations.append(f"{label}: quarantine allele key disagrees")
+                    violations.extend(
+                        audit_compact_record_allele_identity(
+                            record,
+                            parent_allele_key=allele_key,
+                            label=label,
+                        )
+                    )
 
             payload = assertion.get("ClinVar_VCV")
             if not isinstance(payload, dict):

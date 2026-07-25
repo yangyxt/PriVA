@@ -34,6 +34,7 @@ from build_gene_nonlof_mechanism_cache import (  # noqa: E402
 )
 from audit_clinvar_gofcards_review_tiers import summarize_review_tiers  # noqa: E402
 from audit_clinvar_vcv_canonical import (  # noqa: E402
+    audit_compact_record_allele_identity,
     audit_compact_record_provenance,
 )
 
@@ -242,6 +243,23 @@ def test_compact_record_provenance_audit_separates_runtime_and_quarantine() -> N
         expected_eligibility="eligible",
         label="leak",
     )
+
+
+def test_compact_record_allele_audit_ignores_only_variant_type_vocabulary() -> None:
+    backend_record = {
+        "allele_key": "SNV|1|100|101|AC|GT",
+    }
+
+    assert audit_compact_record_allele_identity(
+        backend_record,
+        parent_allele_key="Indel|chr1|100.0|101.0|ac|gt",
+        label="same-allele",
+    ) == []
+    assert audit_compact_record_allele_identity(
+        backend_record,
+        parent_allele_key="Indel|1|100|102|AC|GT",
+        label="different-allele",
+    ) == ["different-allele: nested allele identity disagrees"]
 
 
 def test_review_tier_summary_separates_lower_review_vcvs() -> None:

@@ -33,6 +33,10 @@ ASSEMBLY_TO_BUILD = {
 
 EXACT_GOFCARDS_COLUMNS = (
     "HGNC_Symbol",
+    "GoFCards_HGNC_Symbol",
+    "VEP_HGNC_Symbol",
+    "gene_match_status",
+    "match_eligibility",
     "gofcards_accession_id",
     "gofcards_variant_id",
     "allele_key",
@@ -115,7 +119,13 @@ def normalize_vcf_key(chromosome: str, position: str, ref: str, alt: str) -> str
 
 
 def load_exact_gofcards_lookup(path: Path) -> dict[tuple[str, str], list[dict[str, str]]]:
-    """Index normalized GoFCards alleles by (hg19/hg38, normalized VCF key)."""
+    """Index eligible normalized alleles by (hg19/hg38, normalized VCF key).
+
+    Gene-discordant compact rows remain in the TSV for audit but cannot create
+    ClinVar links. Requiring the provenance columns here also prevents a direct
+    builder invocation from silently consuming the legacy VEP-gene-rewritten
+    compact format.
+    """
     frame = pd.read_csv(path, sep="\t", dtype=str).fillna("")
     missing = [column for column in EXACT_GOFCARDS_COLUMNS if column not in frame.columns]
     if missing:
@@ -124,6 +134,16 @@ def load_exact_gofcards_lookup(path: Path) -> dict[tuple[str, str], list[dict[st
     lookup: dict[tuple[str, str], list[dict[str, str]]] = defaultdict(list)
     seen: set[tuple[str, str, str, str]] = set()
     for row in frame.to_dict(orient="records"):
+        eligibility = str(row.get("match_eligibility", "")).strip().lower()
+        if eligibility != "eligible":
+            continue
+        source_symbol = str(row.get("GoFCards_HGNC_Symbol", "")).strip().upper()
+        exported_symbol = str(row.get("HGNC_Symbol", "")).strip().upper()
+        if not source_symbol or exported_symbol != source_symbol:
+            raise ValueError(
+                "Runtime-eligible GoFCards row does not preserve its curated gene: "
+                f"{exported_symbol or '<blank>'}/{source_symbol or '<blank>'}"
+            )
         compact = {
             key: str(row.get(key, "")).strip()
             for key in EXACT_GOFCARDS_COLUMNS

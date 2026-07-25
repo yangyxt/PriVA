@@ -110,6 +110,10 @@ MECHANISM_REQUIRED_COLUMNS = {
 GOFCARDS_REQUIRED_COLUMNS = {
     "mechanism",
     "HGNC_Symbol",
+    "GoFCards_HGNC_Symbol",
+    "VEP_HGNC_Symbol",
+    "gene_match_status",
+    "match_eligibility",
     "HGVSc",
     "HGVSp",
     "hgvsp_key",
@@ -895,16 +899,28 @@ def attach_gofcards_variants(
     gofcards_variants: str | Path,
     mechanism_json: str | Path,
 ) -> dict[str, int]:
-    """Nest condition-linked GOF alleles and retain every unresolved allele."""
+    """Nest eligible condition-linked GOF alleles and retain unresolved ones.
+
+    Quarantined compact rows remain auditable in the canonical non-LOF JSON;
+    they must not be copied into the condition cache or exposed as candidate
+    exact alleles.
+    """
     clinvar_links = build_clinvar_gofcards_condition_links(mechanism_json)
     aliases_by_gene = _condition_alias_index(genes)
     grouped: dict[tuple[str, str], dict[str, Any]] = {}
     row_count = 0
+    eligible_row_count = 0
+    quarantined_row_count = 0
     for row in _iter_tsv_rows(gofcards_variants, GOFCARDS_REQUIRED_COLUMNS):
+        row_count += 1
+        eligibility = _clean(row.get("match_eligibility")).lower()
+        if eligibility != "eligible":
+            quarantined_row_count += 1
+            continue
         symbol = _clean(row.get("HGNC_Symbol")).upper()
         if not symbol:
             continue
-        row_count += 1
+        eligible_row_count += 1
         variant_key = _gofcards_variant_key(row)
         variant = grouped.setdefault(
             (symbol, variant_key),
@@ -914,6 +930,8 @@ def attach_gofcards_variants(
 
     stats = {
         "source_rows": row_count,
+        "eligible_source_rows": eligible_row_count,
+        "quarantined_source_rows": quarantined_row_count,
         "unique_variants": len(grouped),
         "condition_linked_variants": 0,
         "condition_variant_links": 0,

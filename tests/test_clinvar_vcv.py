@@ -161,6 +161,10 @@ def _write_exact(path: Path) -> None:
         rows.append(
             {
                 "HGNC_Symbol": "MEFV",
+                "GoFCards_HGNC_Symbol": "MEFV",
+                "VEP_HGNC_Symbol": "MEFV",
+                "gene_match_status": "gene_concordant",
+                "match_eligibility": "eligible",
                 "gofcards_accession_id": f"GF{pos}",
                 "gofcards_variant_id": f"SNV|16|{pos}|{pos}|A|G",
                 "allele_key": f"SNV|16|{pos}|{pos}|A|G",
@@ -175,7 +179,20 @@ def _write_exact(path: Path) -> None:
         {
             **rows[0],
             "HGNC_Symbol": "INPP5F",
+            "GoFCards_HGNC_Symbol": "INPP5F",
+            "VEP_HGNC_Symbol": "INPP5F",
             "gofcards_accession_id": "coordinate-collision",
+        }
+    )
+    rows.append(
+        {
+            **rows[0],
+            "HGNC_Symbol": "FGFR2",
+            "GoFCards_HGNC_Symbol": "FGFR2",
+            "VEP_HGNC_Symbol": "INPP5F",
+            "gene_match_status": "gene_discordant",
+            "match_eligibility": "quarantined_gene_discordance",
+            "gofcards_accession_id": "quarantined-coordinate-collision",
         }
     )
     pd.DataFrame(rows).to_csv(path, sep="\t", index=False)
@@ -330,6 +347,7 @@ def test_streaming_parser_filters_and_preserves_edge_context(tmp_path: Path) -> 
     assert {
         item["HGNC_Symbol"] for item in simple["match"]["matched_gofcards_records"]
     } == {"MEFV"}
+    assert "FGFR2" not in simple["match"]["discarded_gene_discordant_symbols"]
     assert simple["variation"]["classification_scope"] == "simple_allele"
     assert len(simple["condition_assertions"]) == 1
     condition = simple["condition_assertions"][0]

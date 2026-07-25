@@ -118,6 +118,47 @@ def normalize_vcf_key(chromosome: str, position: str, ref: str, alt: str) -> str
     return "|".join([chrom, position.strip(), ref.strip().upper(), alt.strip().upper()])
 
 
+def _gofcards_assertion_key(row: dict[str, Any]) -> tuple[str, str]:
+    """Return the curated source gene plus stable compact allele identity."""
+    symbol = str(
+        row.get("GoFCards_HGNC_Symbol") or row.get("HGNC_Symbol") or ""
+    ).strip().upper()
+    allele = str(
+        row.get("gofcards_variant_id") or row.get("allele_key") or ""
+    ).strip()
+    if not symbol or not allele:
+        raise ValueError("GoFCards row lacks a curated gene or stable allele ID")
+    return symbol, allele
+
+
+def partition_exact_gofcards_rows(
+    rows: Iterable[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Apply quarantine atomically to each curated gene-allele assertion.
+
+    A stale compact table can contain one discordant transcript row and an
+    eligible sibling for the same gene and allele. ClinVar matching must not
+    index that sibling. Claims for a different curated gene at the same genomic
+    coordinates remain independent and are not suppressed.
+    """
+    materialized = list(rows)
+    quarantined_keys = {
+        _gofcards_assertion_key(row)
+        for row in materialized
+        if str(row.get("match_eligibility", "")).strip().lower() != "eligible"
+    }
+    eligible: list[dict[str, Any]] = []
+    quarantined: list[dict[str, Any]] = []
+    for row in materialized:
+        target = (
+            quarantined
+            if _gofcards_assertion_key(row) in quarantined_keys
+            else eligible
+        )
+        target.append(row)
+    return eligible, quarantined
+
+
 def load_exact_gofcards_lookup(path: Path) -> dict[tuple[str, str], list[dict[str, str]]]:
     """Index eligible normalized alleles by (hg19/hg38, normalized VCF key).
 
@@ -133,10 +174,10 @@ def load_exact_gofcards_lookup(path: Path) -> dict[tuple[str, str], list[dict[st
 
     lookup: dict[tuple[str, str], list[dict[str, str]]] = defaultdict(list)
     seen: set[tuple[str, str, str, str]] = set()
-    for row in frame.to_dict(orient="records"):
-        eligibility = str(row.get("match_eligibility", "")).strip().lower()
-        if eligibility != "eligible":
-            continue
+    eligible_rows, _quarantined_rows = partition_exact_gofcards_rows(
+        frame.to_dict(orient="records")
+    )
+    for row in eligible_rows:
         source_symbol = str(row.get("GoFCards_HGNC_Symbol", "")).strip().upper()
         exported_symbol = str(row.get("HGNC_Symbol", "")).strip().upper()
         if not source_symbol or exported_symbol != source_symbol:

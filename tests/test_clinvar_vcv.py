@@ -25,6 +25,7 @@ from build_gene_nonlof_mechanism_cache import (  # noqa: E402
     _parse_remote_md5,
     build_nonlof_assertions_json,
     fetch_clinvar_vcv,
+    gofcards_allele_identity,
     inject_clinvar_matches,
     load_gofcards_exact_records,
     load_hgnc_mapping,
@@ -624,6 +625,10 @@ def test_gofcards_assertion_preserves_all_gene_concordant_exact_rows(
             "pscore": "3",
             "derived_on": "2026-07-07",
             "allele_key": "SNV|16|100|100|A|G",
+            "GoFCards_HGNC_Symbol": "MEFV",
+            "VEP_HGNC_Symbol": "MEFV",
+            "gene_match_status": "gene_concordant",
+            "match_eligibility": "eligible",
             "hg19_genomic_key": "16|100|A|G",
             "hg19_vcf_pos": "100",
             "hg19_vcf_ref": "A",
@@ -677,7 +682,8 @@ def test_gofcards_assertion_preserves_all_gene_concordant_exact_rows(
                 position="100",
                 ref="A",
                 alt="G",
-                allele_key="SNV|16|100|100|A|G",
+                # Source type labels differ, while the encoded allele is the same.
+                allele_key="Indel|16|100|100|A|G",
                 consequence="missense_variant",
             )
         ]
@@ -717,6 +723,64 @@ def test_gofcards_assertion_preserves_all_gene_concordant_exact_rows(
         ).read_text(encoding="utf-8")
     )
     Draft202012Validator(schema).validate(canonical)
+
+
+def test_gofcards_upstream_gene_discordance_is_audit_only() -> None:
+    allele_key = "Indel|10|121484216|121484216||C"
+    exact_record = {
+        "source": "GoFCards",
+        "mechanism": "GOF",
+        "HGNC_Symbol": "FGFR2",
+        "GoFCards_HGNC_Symbol": "FGFR2",
+        "VEP_HGNC_Symbol": "INPP5F",
+        "gene_match_status": "gene_discordant",
+        "match_eligibility": "quarantined_gene_discordance",
+        "allele_key": allele_key,
+        "gofcards_variant_id": allele_key,
+    }
+    hgnc = {
+        "FGFR2": {
+            "hgnc_id": "HGNC:3689",
+            "symbol": "FGFR2",
+            "entrez_id": "2263",
+            "ensembl_id": "ENSG00000066468",
+        },
+        "INPP5F": {
+            "hgnc_id": "HGNC:17054",
+            "symbol": "INPP5F",
+            "entrez_id": "22876",
+            "ensembl_id": "ENSG00000198825",
+        },
+    }
+    unified = pd.DataFrame(
+        [
+            make_unified_row(
+                gene_symbol="FGFR2",
+                mechanism=["GOF"],
+                assertion_level="variant_level",
+                source="GoFCards",
+                source_record_id="1",
+                assembly="hg19",
+                chromosome="chr10",
+                position="121484216",
+                ref="",
+                alt="C",
+                allele_key=allele_key,
+                consequence="indel",
+            )
+        ]
+    )
+    exact_by_allele = {gofcards_allele_identity(allele_key): [exact_record]}
+
+    canonical = build_nonlof_assertions_json(unified, hgnc, exact_by_allele)
+    assertion = canonical["HGNC:3689"]["variant_level"][0]["GoFCards"]
+
+    assert (
+        assertion["exact_normalization_status"]
+        == "quarantined_upstream_gene_discordance"
+    )
+    assert "exact_normalized_variants" not in assertion
+    assert assertion["quarantined_exact_normalized_variants"] == [exact_record]
 
 
 def test_hgnc_mapping_splits_comma_delimited_aliases(tmp_path: Path) -> None:

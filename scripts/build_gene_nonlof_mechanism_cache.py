@@ -59,7 +59,7 @@ NONLOF_SOURCE_MANIFEST_FILENAME = "nonlof_source_manifest.json"
 NONLOF_SOURCE_MANIFEST_TSV_FILENAME = "nonlof_source_manifest.tsv"
 NONLOF_RUN_SUMMARY_FILENAME = "nonlof_run_summary.json"
 
-GOFCARDS_EXACT_COLUMNS = [
+GOFCARDS_EXACT_REQUIRED_COLUMNS = [
     "source",
     "mechanism",
     "build",
@@ -107,7 +107,23 @@ GOFCARDS_EXACT_COLUMNS = [
     "match_key_types",
 ]
 
+# These provenance fields are emitted by current versions of the standalone
+# GoFCards normalizer. They remain optional while older installations refresh
+# their compact cache; the canonical builder still protects those legacy rows
+# by requiring agreement with the public-workbook source gene before embedding
+# them as runtime-matchable evidence.
+GOFCARDS_EXACT_OPTIONAL_COLUMNS = [
+    "GoFCards_HGNC_Symbol",
+    "VEP_HGNC_Symbol",
+    "gene_match_status",
+    "match_eligibility",
+]
+GOFCARDS_EXACT_COLUMNS = (
+    GOFCARDS_EXACT_REQUIRED_COLUMNS + GOFCARDS_EXACT_OPTIONAL_COLUMNS
+)
+
 GOFCARDS_EXACT_MISSING_VALUES = {"", ".", "_", "-", "na", "n/a", "nan", "none"}
+GOFCARDS_RUNTIME_ELIGIBLE = {"", "eligible"}
 
 USER_AGENT = (
     "PriVA/0.1 (portable non-LOF pathogenic-mechanism cache)"
@@ -1550,30 +1566,93 @@ def _clean_gofcards_exact_record(row: dict[str, Any]) -> dict[str, Any]:
     return record
 
 
+def gofcards_allele_identity(allele_key: Any) -> str:
+    """Return a type-independent identity for one GoFCards source allele.
+
+    GoFCards' backend labels some multi-base substitutions as ``SNV`` while the
+    public workbook parser derives ``Indel`` from allele length. That source
+    vocabulary difference does not change the allele. Both formats otherwise
+    encode ``type|chrom|start|end|ref|alt``, so the stable join identity is the
+    normalized five-field suffix.
+
+    Malformed or nonstandard identifiers are returned unchanged. This preserves
+    deterministic handling without inventing an allele identity from incomplete
+    data.
+    """
+    text = str(allele_key or "").strip()
+    if not text:
+        return ""
+    fields = text.split("|")
+    if len(fields) != 6:
+        return text.upper()
+
+    chrom, start, end, ref, alt = fields[1:]
+    chrom = chrom.removeprefix("chr").removeprefix("CHR").upper()
+
+    def normalize_position(value: str) -> str:
+        try:
+            number = float(value)
+        except ValueError:
+            return value.strip()
+        return str(int(number)) if number.is_integer() else value.strip()
+
+    return "|".join(
+        [
+            chrom,
+            normalize_position(start),
+            normalize_position(end),
+            ref.strip().upper(),
+            alt.strip().upper(),
+        ]
+    )
+
+
+def _gofcards_exact_row_is_runtime_eligible(record: dict[str, Any]) -> bool:
+    """Return whether an upstream compact row may become exact-match evidence."""
+    return (
+        str(record.get("match_eligibility", "")).strip().lower()
+        in GOFCARDS_RUNTIME_ELIGIBLE
+    )
+
+
 def load_gofcards_exact_records(
     path: Path,
 ) -> tuple[dict[str, list[dict[str, Any]]], dict[str, int]]:
-    """Load every normalized GoFCards row, grouped by stable source allele."""
+    """Load normalized GoFCards rows by type-independent source-allele identity."""
     frame = pd.read_csv(path, sep="\t", dtype=str, keep_default_na=False)
-    missing = [column for column in GOFCARDS_EXACT_COLUMNS if column not in frame.columns]
+    missing = [
+        column
+        for column in GOFCARDS_EXACT_REQUIRED_COLUMNS
+        if column not in frame.columns
+    ]
     if missing:
         raise ValueError(f"GoFCards exact cache lacks columns: {missing}")
+
+    for column in GOFCARDS_EXACT_OPTIONAL_COLUMNS:
+        if column not in frame.columns:
+            frame[column] = ""
 
     by_allele: dict[str, list[dict[str, Any]]] = defaultdict(list)
     seen: set[str] = set()
     duplicate_rows = 0
+    quarantined_rows = 0
     for row in frame.to_dict(orient="records"):
         record = _clean_gofcards_exact_record(row)
         allele_key = str(record.get("allele_key", ""))
         symbol = str(record.get("HGNC_Symbol", ""))
         if not allele_key or not symbol:
             raise ValueError("Every GoFCards exact-cache row requires allele_key and HGNC_Symbol")
+        allele_identity = gofcards_allele_identity(allele_key)
+        if not allele_identity:
+            raise ValueError(f"Cannot derive identity from GoFCards allele key: {allele_key}")
         signature = json.dumps(record, sort_keys=True, separators=(",", ":"))
         if signature in seen:
             duplicate_rows += 1
             continue
         seen.add(signature)
-        by_allele[allele_key].append(record)
+        if not _gofcards_exact_row_is_runtime_eligible(record):
+            quarantined_rows += 1
+        by_allele[allele_identity].append(record)
 
     for records in by_allele.values():
         records.sort(
@@ -1589,6 +1668,7 @@ def load_gofcards_exact_records(
         "unique_cache_rows": len(seen),
         "unique_alleles": len(by_allele),
         "duplicate_cache_rows_removed": duplicate_rows,
+        "quarantined_cache_rows": quarantined_rows,
     }
 
 
@@ -1665,6 +1745,40 @@ def _gofcards_assertion(row: dict) -> dict:
     })
 
 
+def partition_gofcards_exact_records(
+    exact_rows: Iterable[dict[str, Any]],
+    *,
+    source_hgnc_id: str,
+    hgnc_map: dict[str, dict[str, str]],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Separate runtime-matchable compact rows from auditable quarantines.
+
+    Two independent checks are required. First, a current compact cache may mark
+    a row ineligible because its VEP gene disagrees with the curated GoFCards
+    gene. Second, both current and legacy caches must resolve to the same HGNC
+    gene as the public-workbook assertion. Passing only one check is not enough
+    to create exact variant evidence.
+    """
+    eligible: list[dict[str, Any]] = []
+    quarantined: list[dict[str, Any]] = []
+    for exact_row in exact_rows:
+        exact_symbol = str(exact_row.get("HGNC_Symbol", ""))
+        exact_hgnc = hgnc_map.get(exact_symbol.upper())
+        exact_gene_id = (
+            exact_hgnc["hgnc_id"]
+            if exact_hgnc
+            else f"SYMBOL:{exact_symbol.upper()}"
+        )
+        if (
+            exact_gene_id == source_hgnc_id
+            and _gofcards_exact_row_is_runtime_eligible(exact_row)
+        ):
+            eligible.append(exact_row)
+        else:
+            quarantined.append(exact_row)
+    return eligible, quarantined
+
+
 def _parse_gofcards_notes(assertion: dict, notes: str) -> None:
     for part in notes.split(";"):
         p = part.strip()
@@ -1727,29 +1841,39 @@ def build_nonlof_assertions_json(
         if source == "GoFCards":
             _parse_gofcards_notes(assertion, row.get("notes", ""))
             allele_key = str(assertion.get("allele_key", ""))
-            exact_rows = gofcards_exact_by_allele.get(allele_key, [])
-            matching_rows = []
-            for exact_row in exact_rows:
-                exact_symbol = str(exact_row.get("HGNC_Symbol", ""))
-                exact_hgnc = hgnc_map.get(exact_symbol.upper())
-                exact_gene_id = (
-                    exact_hgnc["hgnc_id"]
-                    if exact_hgnc
-                    else f"SYMBOL:{exact_symbol.upper()}"
-                )
-                if exact_gene_id == hgnc_id:
-                    matching_rows.append(exact_row)
+            allele_identity = gofcards_allele_identity(allele_key)
+            exact_rows = gofcards_exact_by_allele.get(allele_identity, [])
+            matching_rows, quarantined_rows = partition_gofcards_exact_records(
+                exact_rows,
+                source_hgnc_id=hgnc_id,
+                hgnc_map=hgnc_map,
+            )
             if matching_rows:
                 assertion["exact_normalization_status"] = "matched_gene_concordant"
                 assertion["exact_normalized_variants"] = matching_rows
+                if quarantined_rows:
+                    assertion["quarantined_exact_normalized_variants"] = (
+                        quarantined_rows
+                    )
             elif exact_rows:
-                assertion["exact_normalization_status"] = "gene_discordant_coordinate_collision"
+                upstream_quarantine = any(
+                    not _gofcards_exact_row_is_runtime_eligible(exact_row)
+                    for exact_row in exact_rows
+                )
+                assertion["exact_normalization_status"] = (
+                    "quarantined_upstream_gene_discordance"
+                    if upstream_quarantine
+                    else "gene_discordant_coordinate_collision"
+                )
                 assertion["exact_cache_gene_symbols"] = sorted(
                     {
                         str(exact_row.get("HGNC_Symbol", ""))
                         for exact_row in exact_rows
                         if exact_row.get("HGNC_Symbol")
                     }
+                )
+                assertion["quarantined_exact_normalized_variants"] = (
+                    quarantined_rows
                 )
             else:
                 assertion["exact_normalization_status"] = "unmatched_public_source_allele"
@@ -2229,6 +2353,10 @@ def main() -> int:
             "public_assertions": len(gofcards_assertions),
             "emitted_exact_normalized_records": sum(
                 len(assertion.get("exact_normalized_variants", []))
+                for assertion in gofcards_assertions
+            ),
+            "emitted_quarantined_records": sum(
+                len(assertion.get("quarantined_exact_normalized_variants", []))
                 for assertion in gofcards_assertions
             ),
             "assertion_status_counts": dict(sorted(gofcards_status_counts.items())),

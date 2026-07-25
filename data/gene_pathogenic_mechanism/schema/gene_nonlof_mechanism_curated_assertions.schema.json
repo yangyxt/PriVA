@@ -134,11 +134,17 @@
           "enum": [
             "matched_gene_concordant",
             "gene_discordant_coordinate_collision",
+            "quarantined_upstream_gene_discordance",
             "unmatched_public_source_allele"
           ]
         },
         "exact_cache_gene_symbols": {"$ref": "#/$defs/nonEmptyStringArray"},
         "exact_normalized_variants": {
+          "type": "array",
+          "minItems": 1,
+          "items": {"$ref": "#/$defs/gofcardsExactNormalizedVariant"}
+        },
+        "quarantined_exact_normalized_variants": {
           "type": "array",
           "minItems": 1,
           "items": {"$ref": "#/$defs/gofcardsExactNormalizedVariant"}
@@ -175,6 +181,21 @@
             }
           },
           "then": {"required": ["exact_cache_gene_symbols"]}
+        },
+        {
+          "if": {
+            "properties": {
+              "exact_normalization_status": {
+                "const": "quarantined_upstream_gene_discordance"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "exact_cache_gene_symbols",
+              "quarantined_exact_normalized_variants"
+            ]
+          }
         }
       ],
       "additionalProperties": false
@@ -217,6 +238,23 @@
         "mechanism": {"const": "GOF"},
         "build": {"type": "string", "minLength": 1},
         "HGNC_Symbol": {"type": "string", "minLength": 1},
+        "GoFCards_HGNC_Symbol": {"type": "string", "minLength": 1},
+        "VEP_HGNC_Symbol": {"type": "string", "minLength": 1},
+        "gene_match_status": {
+          "enum": [
+            "gene_concordant",
+            "source_gene_only",
+            "gene_discordant",
+            "missing_source_gene"
+          ]
+        },
+        "match_eligibility": {
+          "enum": [
+            "eligible",
+            "quarantined_gene_discordance",
+            "quarantined_missing_source_gene"
+          ]
+        },
         "VEP_assembly": {"enum": ["hg19", "hg38"]},
         "VEP_transcript": {"type": "string", "minLength": 1},
         "feature_type": {"type": "string", "minLength": 1},

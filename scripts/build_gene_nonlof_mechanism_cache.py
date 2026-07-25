@@ -1748,22 +1748,36 @@ def partition_gofcards_exact_records(
     the same HGNC gene as the public-workbook assertion.
     """
     exact_rows = list(exact_rows)
-    if any(
-        not _gofcards_exact_row_is_runtime_eligible(exact_row)
-        for exact_row in exact_rows
-    ):
-        return [], exact_rows
 
-    eligible: list[dict[str, Any]] = []
-    quarantined: list[dict[str, Any]] = []
-    for exact_row in exact_rows:
+    def resolved_gene_id(exact_row: dict[str, Any]) -> str:
         exact_symbol = str(exact_row.get("HGNC_Symbol", ""))
         exact_hgnc = hgnc_map.get(exact_symbol.upper())
-        exact_gene_id = (
+        return (
             exact_hgnc["hgnc_id"]
             if exact_hgnc
             else f"SYMBOL:{exact_symbol.upper()}"
         )
+
+    source_gene_rows = [
+        exact_row
+        for exact_row in exact_rows
+        if resolved_gene_id(exact_row) == source_hgnc_id
+    ]
+    if source_gene_rows and any(
+        not _gofcards_exact_row_is_runtime_eligible(exact_row)
+        for exact_row in source_gene_rows
+    ):
+        return [], source_gene_rows
+
+    # When this gene has rows, other curated gene claims at the same coordinate
+    # belong to their own assertion. If it has none, retain all rows solely to
+    # report the existing cross-gene coordinate-collision status.
+    candidate_rows = source_gene_rows or exact_rows
+
+    eligible: list[dict[str, Any]] = []
+    quarantined: list[dict[str, Any]] = []
+    for exact_row in candidate_rows:
+        exact_gene_id = resolved_gene_id(exact_row)
         if (
             exact_gene_id == source_hgnc_id
             and _gofcards_exact_row_is_runtime_eligible(exact_row)

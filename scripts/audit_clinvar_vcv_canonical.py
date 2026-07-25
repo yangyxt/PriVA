@@ -18,6 +18,7 @@ ALLOWED_REVIEW_STATUSES = {
 GOFCARDS_NORMALIZATION_STATUSES = {
     "matched_gene_concordant",
     "gene_discordant_coordinate_collision",
+    "quarantined_upstream_gene_discordance",
     "unmatched_public_source_allele",
 }
 
@@ -29,6 +30,52 @@ DEFAULT_NONLOF_ASSERTIONS_JSON = (
     / "prepared"
     / "gene_nonlof_mechanism_curated_assertions.json"
 )
+
+
+def audit_compact_record_provenance(
+    record: dict,
+    *,
+    parent_gene: str,
+    expected_eligibility: str,
+    label: str,
+) -> list[str]:
+    """Return violations in one canonicalized compact GoFCards record.
+
+    Eligible rows must preserve the curated source gene and may have either a
+    concordant VEP gene or no VEP gene. Quarantined rows must preserve that same
+    source gene while recording a different VEP gene. Keeping these checks in
+    one helper makes the GoFCards assertion and ClinVar-link audits identical.
+    """
+    violations: list[str] = []
+    exported = str(record.get("HGNC_Symbol", "")).upper()
+    source = str(record.get("GoFCards_HGNC_Symbol", "")).upper()
+    vep = str(record.get("VEP_HGNC_Symbol", "")).upper()
+    status = str(record.get("gene_match_status", "")).lower()
+    eligibility = str(record.get("match_eligibility", "")).lower()
+
+    if not exported or exported != parent_gene.upper():
+        violations.append(f"{label}: compact gene differs from parent gene")
+    if not source or source != exported:
+        violations.append(f"{label}: curated source gene was not preserved")
+    if eligibility != expected_eligibility:
+        violations.append(
+            f"{label}: expected eligibility {expected_eligibility!r}, "
+            f"observed {eligibility!r}"
+        )
+
+    if expected_eligibility == "eligible":
+        if status not in {"gene_concordant", "source_gene_only"}:
+            violations.append(f"{label}: eligible row has invalid gene status")
+        if status == "gene_concordant" and vep != source:
+            violations.append(f"{label}: false gene-concordant label")
+        if status == "source_gene_only" and vep:
+            violations.append(f"{label}: source-gene-only row contains a VEP gene")
+    else:
+        if status != "gene_discordant":
+            violations.append(f"{label}: quarantined row lacks discordant status")
+        if not vep or vep == source:
+            violations.append(f"{label}: quarantined row lacks a different VEP gene")
+    return violations
 
 
 def parse_args() -> argparse.Namespace:
@@ -67,6 +114,8 @@ def main() -> None:
     gofcards_statuses: Counter[str] = Counter()
     gofcards_exact_records = 0
     gofcards_exact_record_keys: set[str] = set()
+    gofcards_quarantined_records = 0
+    gofcards_quarantined_record_keys: set[str] = set()
     gofcards_with_hg19_vcf = 0
     gofcards_with_hg38_vcf = 0
     violations: list[str] = []
@@ -94,9 +143,20 @@ def main() -> None:
                     violations.append(f"{label}: matched status without normalized records")
                 if status != "matched_gene_concordant" and exact_records:
                     violations.append(f"{label}: non-matched status has normalized records")
+                quarantined_records = gofcards.get(
+                    "quarantined_exact_normalized_variants", []
+                )
+                if (
+                    status == "quarantined_upstream_gene_discordance"
+                    and not quarantined_records
+                ):
+                    violations.append(f"{label}: quarantine status without audit records")
                 collision_symbols = gofcards.get("exact_cache_gene_symbols", [])
                 if (
-                    status == "gene_discordant_coordinate_collision"
+                    status in {
+                        "gene_discordant_coordinate_collision",
+                        "quarantined_upstream_gene_discordance",
+                    }
                     and not collision_symbols
                 ):
                     violations.append(f"{label}: gene collision lacks cache symbols")
@@ -109,6 +169,14 @@ def main() -> None:
                         continue
                     gofcards_exact_records += 1
                     gofcards_exact_record_keys.update(record)
+                    violations.extend(
+                        audit_compact_record_provenance(
+                            record,
+                            parent_gene=gene_symbol,
+                            expected_eligibility="eligible",
+                            label=label,
+                        )
+                    )
                     if record.get("allele_key") != allele_key:
                         violations.append(f"{label}: nested allele key disagrees")
                     has_hg19 = has_hg19 or bool(record.get("hg19_vcf_key"))
@@ -121,6 +189,23 @@ def main() -> None:
                     violations.append(f"{label}: no normalized hg19 VCF key")
                 if status == "matched_gene_concordant" and not has_hg38:
                     violations.append(f"{label}: no normalized hg38 VCF key")
+
+                for record in quarantined_records:
+                    if not isinstance(record, dict):
+                        violations.append(f"{label}: non-object quarantine record")
+                        continue
+                    gofcards_quarantined_records += 1
+                    gofcards_quarantined_record_keys.update(record)
+                    violations.extend(
+                        audit_compact_record_provenance(
+                            record,
+                            parent_gene=gene_symbol,
+                            expected_eligibility="quarantined_gene_discordance",
+                            label=label,
+                        )
+                    )
+                    if record.get("allele_key") != allele_key:
+                        violations.append(f"{label}: quarantine allele key disagrees")
 
             payload = assertion.get("ClinVar_VCV")
             if not isinstance(payload, dict):
@@ -145,6 +230,14 @@ def main() -> None:
             )
             for row in match.get("matched_gofcards_records", []):
                 symbol = str(row.get("HGNC_Symbol", ""))
+                violations.extend(
+                    audit_compact_record_provenance(
+                        row,
+                        parent_gene=gene_symbol,
+                        expected_eligibility="eligible",
+                        label=f"{gene_symbol}/{vcv}",
+                    )
+                )
                 if clinvar_symbols and symbol not in clinvar_symbols:
                     violations.append(
                         f"{gene_symbol}/{vcv}: retained discordant GoFCards gene {symbol}"
@@ -220,11 +313,16 @@ def main() -> None:
         f"{json.dumps(dict(sorted(gofcards_statuses.items())))}"
     )
     print(f"gofcards_exact_normalized_records={gofcards_exact_records}")
+    print(f"gofcards_quarantined_records={gofcards_quarantined_records}")
     print(f"gofcards_matched_assertions_with_hg19_vcf={gofcards_with_hg19_vcf}")
     print(f"gofcards_matched_assertions_with_hg38_vcf={gofcards_with_hg38_vcf}")
     print(
         "gofcards_exact_normalized_record_keys="
         f"{json.dumps(sorted(gofcards_exact_record_keys))}"
+    )
+    print(
+        "gofcards_quarantined_record_keys="
+        f"{json.dumps(sorted(gofcards_quarantined_record_keys))}"
     )
     print(f"clinvar_vcv_entries={entries}")
     print(f"unique_vcv_accessions={len(vcvs)}")

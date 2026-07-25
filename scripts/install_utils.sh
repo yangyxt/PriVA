@@ -2179,7 +2179,7 @@ allowed_provenance = {
     ("gene_concordant", "quarantined_allele_gene_discordance"),
     ("source_gene_only", "quarantined_allele_gene_discordance"),
 }
-provenance_by_allele = defaultdict(list)
+provenance_by_assertion = defaultdict(list)
 with opener(path, "rt", encoding="utf-8", newline="") as handle:
     reader = csv.DictReader(handle, delimiter="\t")
     missing = sorted(required - set(reader.fieldnames or []))
@@ -2207,7 +2207,9 @@ with opener(path, "rt", encoding="utf-8", newline="") as handle:
                 f"{path}:{line_number} has invalid gene provenance: "
                 f"{status or '<blank>'}/{eligibility or '<blank>'}"
             )
-        provenance_by_allele[allele_id].append((status, eligibility, line_number))
+        provenance_by_assertion[(source_symbol, allele_id)].append(
+            (status, eligibility, line_number)
+        )
         if status == "gene_concordant" and vep_symbol != source_symbol:
             raise SystemExit(f"{path}:{line_number} has a false gene-concordant label")
         if status == "source_gene_only" and vep_symbol:
@@ -2228,7 +2230,7 @@ with opener(path, "rt", encoding="utf-8", newline="") as handle:
             or row.get("hg19_genomic_key") or row.get("hg38_genomic_key")
         ):
             genomic_rows += 1
-for allele_id, states in provenance_by_allele.items():
+for (source_symbol, allele_id), states in provenance_by_assertion.items():
     has_direct_discordance = any(
         status == "gene_discordant" for status, _eligibility, _line in states
     )
@@ -2241,12 +2243,14 @@ for allele_id, states in provenance_by_allele.items():
     ]
     if has_direct_discordance and eligible_lines:
         raise SystemExit(
-            f"{path}: allele {allele_id} has gene-discordant and eligible rows; "
+            f"{path}: assertion {source_symbol}+{allele_id} has gene-discordant "
+            "and eligible rows; "
             f"eligible sibling lines={eligible_lines}"
         )
     if has_collateral_quarantine and not has_direct_discordance:
         raise SystemExit(
-            f"{path}: allele {allele_id} has an orphan allele-level quarantine"
+            f"{path}: assertion {source_symbol}+{allele_id} has an orphan "
+            "allele-level quarantine"
         )
 if row_count == 0:
     raise SystemExit(f"{path} contains no rows")

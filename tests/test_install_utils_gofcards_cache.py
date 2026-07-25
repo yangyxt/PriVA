@@ -182,3 +182,32 @@ def test_validator_rejects_eligible_sibling_of_discordant_allele(
 
     assert result.returncode != 0
     assert "gene-discordant and eligible rows" in result.stderr
+
+
+def test_validator_keeps_other_gene_claim_at_same_allele_independent(
+    tmp_path: Path,
+) -> None:
+    cache = tmp_path / "two-genes.tsv.gz"
+    direct = _eligible_row()
+    direct.update(
+        {
+            "VEP_HGNC_Symbol": "INPP5F",
+            "gene_match_status": "gene_discordant",
+            "match_eligibility": "quarantined_gene_discordance",
+        }
+    )
+    other_gene = _eligible_row()
+    other_gene.update(
+        {
+            "HGNC_Symbol": "INPP5F",
+            "GoFCards_HGNC_Symbol": "INPP5F",
+            "VEP_HGNC_Symbol": "INPP5F",
+        }
+    )
+    _write_cache(cache, [direct, other_gene])
+
+    result = _validate_cache(cache)
+
+    assert result.returncode == 0, result.stderr
+    assert "eligible_rows=1" in result.stdout
+    assert "quarantined_rows=1" in result.stdout

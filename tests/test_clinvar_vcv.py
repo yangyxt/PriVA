@@ -33,6 +33,9 @@ from build_gene_nonlof_mechanism_cache import (  # noqa: E402
     validate_canonical_json,
 )
 from audit_clinvar_gofcards_review_tiers import summarize_review_tiers  # noqa: E402
+from audit_clinvar_vcv_canonical import (  # noqa: E402
+    audit_compact_record_provenance,
+)
 
 
 def _simple_allele(variation_id: int, pos: int, symbol: str = "MEFV") -> str:
@@ -204,6 +207,41 @@ def test_review_star_mapping_is_conservative() -> None:
     assert review_stars("reviewed by expert panel") == 3
     assert review_stars("practice guideline") == 4
     assert review_stars("future unknown status") == 0
+
+
+def test_compact_record_provenance_audit_separates_runtime_and_quarantine() -> None:
+    eligible = {
+        "HGNC_Symbol": "FGFR2",
+        "GoFCards_HGNC_Symbol": "FGFR2",
+        "VEP_HGNC_Symbol": "FGFR2",
+        "gene_match_status": "gene_concordant",
+        "match_eligibility": "eligible",
+    }
+    quarantined = {
+        **eligible,
+        "VEP_HGNC_Symbol": "INPP5F",
+        "gene_match_status": "gene_discordant",
+        "match_eligibility": "quarantined_gene_discordance",
+    }
+
+    assert audit_compact_record_provenance(
+        eligible,
+        parent_gene="FGFR2",
+        expected_eligibility="eligible",
+        label="eligible",
+    ) == []
+    assert audit_compact_record_provenance(
+        quarantined,
+        parent_gene="FGFR2",
+        expected_eligibility="quarantined_gene_discordance",
+        label="quarantined",
+    ) == []
+    assert audit_compact_record_provenance(
+        quarantined,
+        parent_gene="FGFR2",
+        expected_eligibility="eligible",
+        label="leak",
+    )
 
 
 def test_review_tier_summary_separates_lower_review_vcvs() -> None:

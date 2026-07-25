@@ -23,6 +23,10 @@ GOFCARDS_NORMALIZATION_STATUSES = {
     "quarantined_upstream_gene_discordance",
     "unmatched_public_source_allele",
 }
+GOFCARDS_QUARANTINE_ELIGIBILITIES = {
+    "quarantined_gene_discordance",
+    "quarantined_allele_gene_discordance",
+}
 
 PRIVA_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_NONLOF_ASSERTIONS_JSON = (
@@ -72,11 +76,26 @@ def audit_compact_record_provenance(
             violations.append(f"{label}: false gene-concordant label")
         if status == "source_gene_only" and vep:
             violations.append(f"{label}: source-gene-only row contains a VEP gene")
-    else:
+    elif expected_eligibility == "quarantined_gene_discordance":
         if status != "gene_discordant":
             violations.append(f"{label}: quarantined row lacks discordant status")
         if not vep or vep == source:
             violations.append(f"{label}: quarantined row lacks a different VEP gene")
+    elif expected_eligibility == "quarantined_allele_gene_discordance":
+        if status not in {"gene_concordant", "source_gene_only"}:
+            violations.append(
+                f"{label}: allele-quarantined sibling has invalid gene status"
+            )
+        if status == "gene_concordant" and vep != source:
+            violations.append(
+                f"{label}: allele-quarantined concordant sibling is discordant"
+            )
+        if status == "source_gene_only" and vep:
+            violations.append(
+                f"{label}: allele-quarantined source-only sibling has a VEP gene"
+            )
+    else:
+        violations.append(f"{label}: unsupported eligibility {expected_eligibility!r}")
     return violations
 
 
@@ -144,6 +163,9 @@ def main() -> None:
     gofcards_quarantined_record_keys: set[str] = set()
     gofcards_with_hg19_vcf = 0
     gofcards_with_hg38_vcf = 0
+    gofcards_exact_alleles: set[str] = set()
+    gofcards_quarantined_alleles: set[str] = set()
+    gofcards_clinvar_match_alleles: set[str] = set()
     violations: list[str] = []
 
     for gene_key, gene in canonical.items():
@@ -195,6 +217,12 @@ def main() -> None:
                         continue
                     gofcards_exact_records += 1
                     gofcards_exact_record_keys.update(record)
+                    gofcards_exact_alleles.add(
+                        gofcards_allele_identity(
+                            record.get("gofcards_variant_id")
+                            or record.get("allele_key")
+                        )
+                    )
                     violations.extend(
                         audit_compact_record_provenance(
                             record,
@@ -227,14 +255,28 @@ def main() -> None:
                         continue
                     gofcards_quarantined_records += 1
                     gofcards_quarantined_record_keys.update(record)
-                    violations.extend(
-                        audit_compact_record_provenance(
-                            record,
-                            parent_gene=gene_symbol,
-                            expected_eligibility="quarantined_gene_discordance",
-                            label=label,
+                    gofcards_quarantined_alleles.add(
+                        gofcards_allele_identity(
+                            record.get("gofcards_variant_id")
+                            or record.get("allele_key")
                         )
                     )
+                    record_eligibility = str(
+                        record.get("match_eligibility", "")
+                    ).lower()
+                    if record_eligibility not in GOFCARDS_QUARANTINE_ELIGIBILITIES:
+                        violations.append(
+                            f"{label}: audit-only record is not quarantined"
+                        )
+                    else:
+                        violations.extend(
+                            audit_compact_record_provenance(
+                                record,
+                                parent_gene=gene_symbol,
+                                expected_eligibility=record_eligibility,
+                                label=label,
+                            )
+                        )
                     violations.extend(
                         audit_compact_record_allele_identity(
                             record,
@@ -266,6 +308,11 @@ def main() -> None:
             )
             for row in match.get("matched_gofcards_records", []):
                 symbol = str(row.get("HGNC_Symbol", ""))
+                gofcards_clinvar_match_alleles.add(
+                    gofcards_allele_identity(
+                        row.get("gofcards_variant_id") or row.get("allele_key")
+                    )
+                )
                 violations.extend(
                     audit_compact_record_provenance(
                         row,
@@ -322,6 +369,23 @@ def main() -> None:
     if expected_gene_count != gene_count:
         violations.append(
             f"meta total_genes={expected_gene_count}, observed={gene_count}"
+        )
+
+    exact_quarantine_overlap = (
+        gofcards_exact_alleles & gofcards_quarantined_alleles
+    ) - {""}
+    clinvar_quarantine_overlap = (
+        gofcards_clinvar_match_alleles & gofcards_quarantined_alleles
+    ) - {""}
+    if exact_quarantine_overlap:
+        violations.append(
+            "quarantined alleles leaked into canonical exact records: "
+            + ", ".join(sorted(exact_quarantine_overlap))
+        )
+    if clinvar_quarantine_overlap:
+        violations.append(
+            "quarantined alleles leaked into ClinVar matches: "
+            + ", ".join(sorted(clinvar_quarantine_overlap))
         )
 
     gofcards_meta = (

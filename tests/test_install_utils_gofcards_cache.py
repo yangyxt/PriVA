@@ -28,7 +28,12 @@ PROVENANCE_COLUMNS = [
 ]
 
 
-def _write_cache(path: Path, row: dict[str, str], *, include_provenance: bool = True) -> None:
+def _write_cache(
+    path: Path,
+    row: dict[str, str] | list[dict[str, str]],
+    *,
+    include_provenance: bool = True,
+) -> None:
     columns = list(PROVENANCE_COLUMNS)
     if not include_provenance:
         columns = [
@@ -44,7 +49,11 @@ def _write_cache(path: Path, row: dict[str, str], *, include_provenance: bool = 
         ]
     with gzip.open(path, "wt", encoding="utf-8", newline="") as handle:
         handle.write("\t".join(columns) + "\n")
-        handle.write("\t".join(row.get(column, "") for column in columns) + "\n")
+        rows = row if isinstance(row, list) else [row]
+        for record in rows:
+            handle.write(
+                "\t".join(record.get(column, "") for column in columns) + "\n"
+            )
 
 
 def _validate_cache(path: Path) -> subprocess.CompletedProcess[str]:
@@ -125,3 +134,51 @@ def test_validator_rejects_gene_discordance_marked_eligible(tmp_path: Path) -> N
 
     assert result.returncode != 0
     assert "invalid gene provenance" in result.stderr
+
+
+def test_validator_accepts_atomic_allele_quarantine(tmp_path: Path) -> None:
+    cache = tmp_path / "quarantined.tsv.gz"
+    direct = _eligible_row()
+    direct.update(
+        {
+            "VEP_HGNC_Symbol": "INPP5F",
+            "gene_match_status": "gene_discordant",
+            "match_eligibility": "quarantined_gene_discordance",
+        }
+    )
+    collateral = _eligible_row()
+    collateral["match_eligibility"] = "quarantined_allele_gene_discordance"
+    unrelated = _eligible_row()
+    unrelated.update(
+        {
+            "gofcards_variant_id": "SNV|1|155874748|155874748|C|T",
+            "gofcards_accession_id": "rs-unrelated",
+        }
+    )
+    _write_cache(cache, [direct, collateral, unrelated])
+
+    result = _validate_cache(cache)
+
+    assert result.returncode == 0, result.stderr
+    assert "eligible_rows=1" in result.stdout
+    assert "quarantined_rows=2" in result.stdout
+
+
+def test_validator_rejects_eligible_sibling_of_discordant_allele(
+    tmp_path: Path,
+) -> None:
+    cache = tmp_path / "mixed.tsv.gz"
+    direct = _eligible_row()
+    direct.update(
+        {
+            "VEP_HGNC_Symbol": "INPP5F",
+            "gene_match_status": "gene_discordant",
+            "match_eligibility": "quarantined_gene_discordance",
+        }
+    )
+    _write_cache(cache, [direct, _eligible_row()])
+
+    result = _validate_cache(cache)
+
+    assert result.returncode != 0
+    assert "gene-discordant and eligible rows" in result.stderr

@@ -1740,12 +1740,20 @@ def partition_gofcards_exact_records(
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """Separate runtime-matchable compact rows from auditable quarantines.
 
-    Two independent checks are required. First, a current compact cache may mark
-    a row ineligible because its VEP gene disagrees with the curated GoFCards
-    gene. Second, both current and legacy caches must resolve to the same HGNC
-    gene as the public-workbook assertion. Passing only one check is not enough
-    to create exact variant evidence.
+    Exact matching is an allele-level claim. If any transcript row for an
+    allele is upstream-quarantined, every sibling row is quarantined, including
+    rows whose own VEP gene is concordant. This prevents a concordant sibling
+    from bypassing evidence that the same source allele was assigned to another
+    gene. When no upstream quarantine exists, every row must still resolve to
+    the same HGNC gene as the public-workbook assertion.
     """
+    exact_rows = list(exact_rows)
+    if any(
+        not _gofcards_exact_row_is_runtime_eligible(exact_row)
+        for exact_row in exact_rows
+    ):
+        return [], exact_rows
+
     eligible: list[dict[str, Any]] = []
     quarantined: list[dict[str, Any]] = []
     for exact_row in exact_rows:

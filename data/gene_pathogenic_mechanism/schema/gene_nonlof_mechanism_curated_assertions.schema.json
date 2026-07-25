@@ -351,6 +351,12 @@
             "required": ["HGNC_Symbol", "gofcards_variant_id", "allele_key"],
             "properties": {
               "HGNC_Symbol": {"type": "string", "minLength": 1},
+              "GoFCards_HGNC_Symbol": {"type": "string", "minLength": 1},
+              "VEP_HGNC_Symbol": {"type": "string", "minLength": 1},
+              "gene_match_status": {
+                "enum": ["gene_concordant", "source_gene_only"]
+              },
+              "match_eligibility": {"const": "eligible"},
               "gofcards_accession_id": {"type": "string", "minLength": 1},
               "gofcards_variant_id": {"type": "string", "minLength": 1},
               "allele_key": {"type": "string", "minLength": 1},

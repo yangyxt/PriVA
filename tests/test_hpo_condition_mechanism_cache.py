@@ -153,16 +153,23 @@ def test_gofcards_variants_require_exact_clinvar_hpo_condition_identity(
     )
     gofcards = tmp_path / "gofcards.tsv"
     gofcards.write_text(
-        "mechanism\tHGNC_Symbol\tHGVSc\tHGVSp\thgvsp_key\tmatch_status\t"
+        "mechanism\tHGNC_Symbol\tGoFCards_HGNC_Symbol\tVEP_HGNC_Symbol\t"
+        "gene_match_status\tmatch_eligibility\tHGVSc\tHGVSp\thgvsp_key\tmatch_status\t"
         "gofcards_accession_id\tgofcards_variant_id\tdisease\tpmids\tpscore\t"
         "function\tpathway\tallele_key\thg19_genomic_key\thg19_vcf_key\t"
         "hg38_genomic_key\thg38_vcf_key\n"
-        "GOF\tGENE1\tNM_1:c.1A>G\tNP_1:p.Lys1Arg\tNP_1:p.Lys1Arg\tmatched\t"
+        "GOF\tGENE1\tGENE1\tGENE1\tgene_concordant\teligible\t"
+        "NM_1:c.1A>G\tNP_1:p.Lys1Arg\tNP_1:p.Lys1Arg\tmatched\t"
         "rs1\tVAR1\tCondition one\tPMID:1\t5\tActivating\tPathway\tVAR1\t"
         "1|10|A|G\t1|10|A|G\t1|20|A|G\t1|20|A|G\n"
-        "GOF\tGENE1\tNM_1:c.2A>G\tNP_1:p.Lys2Arg\tNP_1:p.Lys2Arg\tmatched\t"
+        "GOF\tGENE1\tGENE1\tGENE1\tgene_concordant\teligible\t"
+        "NM_1:c.2A>G\tNP_1:p.Lys2Arg\tNP_1:p.Lys2Arg\tmatched\t"
         "rs2\tVAR2\tCondition two\tPMID:2\t3\tActivating\tPathway\tVAR2\t"
-        "1|11|A|G\t1|11|A|G\t1|21|A|G\t1|21|A|G\n",
+        "1|11|A|G\t1|11|A|G\t1|21|A|G\t1|21|A|G\n"
+        "GOF\tGENE1\tGENE1\tOTHER1\tgene_discordant\t"
+        "quarantined_gene_discordance\tNM_1:c.3A>G\tNP_1:p.Lys3Arg\t"
+        "NP_1:p.Lys3Arg\tmatched\trs3\tVAR3\tCondition three\tPMID:3\t5\t"
+        "Activating\tPathway\tVAR3\t1|12|A|G\t1|12|A|G\t1|22|A|G\t1|22|A|G\n",
         encoding="utf-8",
     )
     mechanism_json = tmp_path / "mechanisms.json"
@@ -250,7 +257,9 @@ def test_gofcards_variants_require_exact_clinvar_hpo_condition_identity(
     )
     assert genes["GENE1"]["summary"]["pathogenic_mechanisms"] == ["GOF"]
     assert stats == {
-        "source_rows": 2,
+        "source_rows": 3,
+        "eligible_source_rows": 2,
+        "quarantined_source_rows": 1,
         "unique_variants": 2,
         "condition_linked_variants": 1,
         "condition_variant_links": 1,
@@ -279,7 +288,8 @@ def test_complete_cache_is_validated_and_published_atomically(
     )
     gofcards = tmp_path / "gofcards.tsv"
     gofcards.write_text(
-        "mechanism\tHGNC_Symbol\tHGVSc\tHGVSp\thgvsp_key\tmatch_status\t"
+        "mechanism\tHGNC_Symbol\tGoFCards_HGNC_Symbol\tVEP_HGNC_Symbol\t"
+        "gene_match_status\tmatch_eligibility\tHGVSc\tHGVSp\thgvsp_key\tmatch_status\t"
         "gofcards_accession_id\tgofcards_variant_id\tdisease\tpmids\tpscore\t"
         "function\tpathway\tallele_key\thg19_genomic_key\thg19_vcf_key\t"
         "hg38_genomic_key\thg38_vcf_key\n",

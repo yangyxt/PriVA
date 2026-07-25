@@ -64,6 +64,10 @@ GOFCARDS_EXACT_REQUIRED_COLUMNS = [
     "mechanism",
     "build",
     "HGNC_Symbol",
+    "GoFCards_HGNC_Symbol",
+    "VEP_HGNC_Symbol",
+    "gene_match_status",
+    "match_eligibility",
     "VEP_assembly",
     "VEP_transcript",
     "feature_type",
@@ -107,23 +111,10 @@ GOFCARDS_EXACT_REQUIRED_COLUMNS = [
     "match_key_types",
 ]
 
-# These provenance fields are emitted by current versions of the standalone
-# GoFCards normalizer. They remain optional while older installations refresh
-# their compact cache; the canonical builder still protects those legacy rows
-# by requiring agreement with the public-workbook source gene before embedding
-# them as runtime-matchable evidence.
-GOFCARDS_EXACT_OPTIONAL_COLUMNS = [
-    "GoFCards_HGNC_Symbol",
-    "VEP_HGNC_Symbol",
-    "gene_match_status",
-    "match_eligibility",
-]
-GOFCARDS_EXACT_COLUMNS = (
-    GOFCARDS_EXACT_REQUIRED_COLUMNS + GOFCARDS_EXACT_OPTIONAL_COLUMNS
-)
+GOFCARDS_EXACT_COLUMNS = GOFCARDS_EXACT_REQUIRED_COLUMNS
 
 GOFCARDS_EXACT_MISSING_VALUES = {"", ".", "_", "-", "na", "n/a", "nan", "none"}
-GOFCARDS_RUNTIME_ELIGIBLE = {"", "eligible"}
+GOFCARDS_RUNTIME_ELIGIBLE = {"eligible"}
 
 USER_AGENT = (
     "PriVA/0.1 (portable non-LOF pathogenic-mechanism cache)"
@@ -1627,10 +1618,6 @@ def load_gofcards_exact_records(
     ]
     if missing:
         raise ValueError(f"GoFCards exact cache lacks columns: {missing}")
-
-    for column in GOFCARDS_EXACT_OPTIONAL_COLUMNS:
-        if column not in frame.columns:
-            frame[column] = ""
 
     by_allele: dict[str, list[dict[str, Any]]] = defaultdict(list)
     seen: set[str] = set()

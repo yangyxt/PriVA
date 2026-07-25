@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 
 import re
+import json
 import pickle
 import logging
 import pandas as pd
@@ -70,37 +71,14 @@ def _row_assembly_for_gof_lookup(row):
     return "hg19"
 
 
-def _lookup_exact_gofcards_variant(hub, row):
-    """Return exact GoFCards variant-level GOF evidence by HGVS or genomic key."""
-    symbol = row.get("SYMBOL")
-    if not _clean_text(symbol):
-        return {"variant_gof_tag": "", "match_route": "", "matches": []}
-
-    hgvsp = row.get("HGVSp")
-    if _clean_text(hgvsp):
-        match = hub.match_gofcards_variant_gof(symbol, hgvsp)
-        if match.get("variant_gof_tag") == "GOF":
-            match["match_route"] = "hgvsp"
-            return match
-
-    if all(_clean_text(row.get(col)) for col in ("chrom", "pos", "ref", "alt")):
-        match = hub.match_gofcards_variant_gof_by_genomic(
-            symbol,
-            row.get("chrom"),
-            row.get("pos"),
-            row.get("ref"),
-            row.get("alt"),
-            assembly=_row_assembly_for_gof_lookup(row),
-            key_type="auto",
-        )
-        if match.get("variant_gof_tag") == "GOF":
-            match["match_route"] = "genomic"
-            return match
-
-    return {"variant_gof_tag": "", "match_route": "", "matches": []}
-
-
-GOFCARDS_VARIANT_OUTPUT_COLS = (
+EXACT_NONLOF_OUTPUT_COLS = (
+    "variant_lof_score",
+    "variant_gof_score",
+    "variant_dn_score",
+    "variant_mechanism_exclusive",
+    "variant_exact_mechanisms",
+    "variant_exact_mechanism_evidence",
+    "variant_mechanism_match_route",
     "variant_gof_tag",
     "gofcards_accession_id",
     "gofcards_variant_id",
@@ -120,8 +98,26 @@ def _merge_semicolon_values(*values):
     return ";".join(merged)
 
 
-def _ensure_gofcards_variant_columns(df):
-    for col in GOFCARDS_VARIANT_OUTPUT_COLS:
+def _ensure_exact_nonlof_columns(df):
+    score_columns = ("variant_lof_score", "variant_gof_score", "variant_dn_score")
+    for col in score_columns:
+        if col not in df.columns:
+            df[col] = 0
+        else:
+            df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0).astype(int)
+    if "variant_mechanism_exclusive" not in df.columns:
+        df["variant_mechanism_exclusive"] = False
+    else:
+        df["variant_mechanism_exclusive"] = (
+            df["variant_mechanism_exclusive"]
+            .fillna(False)
+            .astype(str)
+            .str.lower()
+            .isin({"1", "true", "yes"})
+        )
+    for col in EXACT_NONLOF_OUTPUT_COLS:
+        if col in score_columns or col == "variant_mechanism_exclusive":
+            continue
         if col not in df.columns:
             df[col] = ""
         else:
@@ -133,10 +129,42 @@ def _ensure_gofcards_variant_columns(df):
         ]
 
 
-def _record_exact_gofcards_match(df, indices, match):
-    if match.get("variant_gof_tag") != "GOF":
+def _record_exact_nonlof_match(df, indices, match):
+    if not match.get("mechanism_exclusive"):
         return
-    route = _clean_text(match.get("match_route")) or _clean_text(match.get("matched_key_type"))
+    route = _clean_text(match.get("match_route"))
+    mechanisms = list(match.get("exclusive_mechanisms", []) or [])
+    scores = match.get("mechanism_scores", {}) or {}
+    evidence = json.dumps(
+        match.get("matches", []),
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    score_columns = {
+        "LOF": "variant_lof_score",
+        "GOF": "variant_gof_score",
+        "DOMINANT_NEGATIVE": "variant_dn_score",
+    }
+    for mechanism, column in score_columns.items():
+        score = int(scores.get(mechanism, 0) or 0)
+        df.loc[indices, column] = np.maximum(
+            pd.to_numeric(df.loc[indices, column], errors="coerce").fillna(0),
+            score,
+        )
+    df.loc[indices, "variant_mechanism_exclusive"] = True
+    df.loc[indices, "variant_exact_mechanisms"] = [
+        _merge_semicolon_values(value, ";".join(mechanisms))
+        for value in df.loc[indices, "variant_exact_mechanisms"]
+    ]
+    df.loc[indices, "variant_exact_mechanism_evidence"] = evidence
+    if route:
+        df.loc[indices, "variant_mechanism_match_route"] = [
+            _merge_semicolon_values(value, route)
+            for value in df.loc[indices, "variant_mechanism_match_route"]
+        ]
+
+    if "GOF" not in mechanisms:
+        return
     accession_id = _clean_text(match.get("gofcards_accession_id"))
     variant_id = _clean_text(match.get("gofcards_variant_id"))
     df.loc[indices, "variant_gof_tag"] = [
@@ -159,15 +187,22 @@ def _record_exact_gofcards_match(df, indices, match):
         ]
 
 
-def annotate_exact_gofcards_variants(df, row_mask=None, *, context=""):
-    """Annotate exact GoFCards variant-level GOF matches on PriVA rows.
+def annotate_exact_nonlof_variants(
+    df,
+    row_mask=None,
+    *,
+    context="",
+    mechanism_json=str(DEFAULT_MECHANISM_JSON),
+):
+    """Annotate exclusive exact GoF/DN matches from the canonical JSON.
 
-    This is intentionally variant-level only. It matches first by SYMBOL+HGVSp,
-    then by SYMBOL+genomic allele for rows not already matched by HGVSp.
+    Matching is variant-level only: current HGNC symbol plus normalized HGVSp is
+    attempted first, followed by current HGNC symbol plus normalized genomic
+    allele. Gene-level mechanism history never creates score ``2``.
     """
     if "SYMBOL" not in df.columns:
         return df
-    _ensure_gofcards_variant_columns(df)
+    _ensure_exact_nonlof_columns(df)
     if row_mask is None:
         row_mask = pd.Series(True, index=df.index)
     else:
@@ -176,7 +211,10 @@ def annotate_exact_gofcards_variants(df, row_mask=None, *, context=""):
     if not row_mask.any():
         return df
 
-    hub = GeneMechanismHub(use_hgnc_package=False)
+    hub = GeneMechanismHub(
+        mechanism_json=mechanism_json,
+        use_hgnc_package=False,
+    )
     matched_rows = 0
     hgvsp_matches = 0
     genomic_matches = 0
@@ -188,19 +226,18 @@ def annotate_exact_gofcards_variants(df, row_mask=None, *, context=""):
             hgvsp_frame["_hgvsp"] = hgvsp_frame["HGVSp"].map(_clean_text)
             for (symbol, hgvsp), idx in hgvsp_frame.groupby(["_symbol", "_hgvsp"], sort=False).groups.items():
                 try:
-                    match = hub.match_gofcards_variant_gof(symbol, hgvsp)
+                    match = hub.match_curated_nonlof_variant(symbol, hgvsp=hgvsp)
                 except Exception as exc:
-                    logger.debug(f"GoFCards HGVSp lookup failed for {context} {symbol} {hgvsp}: {exc}")
+                    logger.debug(f"Canonical non-LOF HGVSp lookup failed for {context} {symbol} {hgvsp}: {exc}")
                     continue
-                if match.get("variant_gof_tag") == "GOF":
-                    match["match_route"] = "hgvsp"
-                    _record_exact_gofcards_match(df, idx, match)
+                if match.get("mechanism_exclusive"):
+                    _record_exact_nonlof_match(df, idx, match)
                     hgvsp_matches += 1
                     matched_rows += len(idx)
 
     has_genomic = {"chrom", "pos", "ref", "alt"}.issubset(df.columns)
     if has_genomic:
-        already_matched = df["variant_gof_tag"].str.upper().str.contains(r"(?:^|;)GOF(?:;|$)", regex=True)
+        already_matched = df["variant_mechanism_exclusive"].astype(bool)
         genomic_mask = row_mask & ~already_matched
         for col in ("chrom", "pos", "ref", "alt"):
             genomic_mask = genomic_mask & df[col].map(_clean_text).ne("")
@@ -211,24 +248,29 @@ def annotate_exact_gofcards_variants(df, row_mask=None, *, context=""):
             for key, idx in genomic_frame.groupby(genomic_cols + ["_assembly"], sort=False).groups.items():
                 symbol, chrom, pos, ref, alt, assembly = key
                 try:
-                    match = hub.match_gofcards_variant_gof_by_genomic(
-                        symbol, chrom, pos, ref, alt, assembly=assembly, key_type="auto"
+                    match = hub.match_curated_nonlof_variant(
+                        symbol,
+                        chrom=chrom,
+                        pos=pos,
+                        ref=ref,
+                        alt=alt,
+                        assembly=assembly,
+                        key_type="auto",
                     )
                 except Exception as exc:
                     logger.debug(
-                        f"GoFCards genomic lookup failed for {context} {symbol} "
+                        f"Canonical non-LOF genomic lookup failed for {context} {symbol} "
                         f"{chrom}:{pos}:{ref}>{alt} ({assembly}): {exc}"
                     )
                     continue
-                if match.get("variant_gof_tag") == "GOF":
-                    match["match_route"] = "genomic"
-                    _record_exact_gofcards_match(df, idx, match)
+                if match.get("mechanism_exclusive"):
+                    _record_exact_nonlof_match(df, idx, match)
                     genomic_matches += 1
                     matched_rows += len(idx)
 
     if matched_rows:
         logger.info(
-            "Exact GoFCards variant-level GOF annotations for %s: rows=%s, "
+            "Exact canonical non-LOF variant annotations for %s: rows=%s, "
             "unique_hgvsp_matches=%s, unique_genomic_matches=%s",
             context,
             matched_rows,
@@ -236,6 +278,11 @@ def annotate_exact_gofcards_variants(df, row_mask=None, *, context=""):
             genomic_matches,
         )
     return df
+
+
+def annotate_exact_gofcards_variants(df, row_mask=None, *, context=""):
+    """Backward-compatible alias for canonical exact non-LoF annotation."""
+    return annotate_exact_nonlof_variants(df, row_mask=row_mask, context=context)
 
 
 # Criterion-time GoFCards fallback is deliberately disabled. Exact matching is
@@ -292,13 +339,37 @@ def _variant_mechanism_masks(
     has_dom_unresolved_history = profile.str.contains(r"(?:^|;)dominant(?:;|$)", regex=True)
 
     effect = text_series("variant_effect")
-    is_exact_gof = effect.eq("exact_known_GOF")
-    is_predicted_lof = effect.eq("predicted_LOF_high_confidence")
+    lof_score = pd.to_numeric(
+        df.get("variant_lof_score", pd.Series(0, index=df.index)),
+        errors="coerce",
+    ).fillna(0)
+    gof_score = pd.to_numeric(
+        df.get("variant_gof_score", pd.Series(0, index=df.index)),
+        errors="coerce",
+    ).fillna(0)
+    dn_score = pd.to_numeric(
+        df.get("variant_dn_score", pd.Series(0, index=df.index)),
+        errors="coerce",
+    ).fillna(0)
+    is_exact_gof = (
+        gof_score.eq(2)
+        | effect.str.contains(r"(?:^exact_known_|\+)GOF(?:\+|$)", regex=True)
+    )
+    is_exact_dn = (
+        dn_score.eq(2)
+        | effect.str.contains(
+            r"(?:^exact_known_|\+)DOMINANT_NEGATIVE(?:\+|$)",
+            regex=True,
+        )
+    )
+    is_predicted_lof = lof_score.eq(1) | effect.eq("predicted_LOF_high_confidence")
     is_uncertain = effect.eq("uncertain")
 
     return {
         "modern_profile": has_profile,
         "is_exact_gof": is_exact_gof.astype(bool),
+        "is_exact_dn": is_exact_dn.astype(bool),
+        "is_exact_nonlof": (is_exact_gof | is_exact_dn).astype(bool),
         "is_predicted_lof": is_predicted_lof.astype(bool),
         "is_uncertain": is_uncertain.astype(bool),
         "has_recessive_compatible": rec_accepted.astype(bool),
@@ -4268,7 +4339,11 @@ def ACMG_criteria_assign(anno_table: str,
 
     # Establish the variant ID column
     anno_df["variant_id"] = anno_df["chrom"] + ":" + anno_df["pos"].astype(str) + ":" + anno_df["ref"] + "-" + anno_df["alt"]
-    annotate_exact_gofcards_variants(anno_df, context="step3_initial")
+    annotate_exact_nonlof_variants(
+        anno_df,
+        context="step3_initial",
+        mechanism_json=gene_mechanism_json,
+    )
 
     # Load the intolerant domains
     if intolerant_domains_pkl.endswith(".gz"):

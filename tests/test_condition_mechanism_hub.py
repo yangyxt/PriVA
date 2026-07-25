@@ -17,6 +17,7 @@ from gene_mechanism_hub import (  # noqa: E402
     condition_cache_mechanism_assertions,
     enrich_condition_mechanism_assertion,
     extract_exact_clinvar_condition_identities,
+    infer_query_variant_effect,
     match_condition_cache_gofcards_variants,
     select_condition_histories_for_variant,
     summarize_condition_cache_exact_gof_matches,
@@ -554,7 +555,7 @@ def test_select_condition_histories_for_variant_is_mechanism_specific() -> None:
         assertions,
         variant_effect="uncertain",
     )
-    conflict = select_condition_histories_for_variant(
+    suppressed_prediction = select_condition_histories_for_variant(
         assertions,
         variant_effect="exact_known_GOF",
         variant_effect_conflict="predicted_LOF_vs_exact_GOF",
@@ -567,7 +568,29 @@ def test_select_condition_histories_for_variant_is_mechanism_specific() -> None:
         "GOF",
         "DOMINANT_NEGATIVE",
     ]
-    assert [row["mechanism"] for row in conflict] == ["LOF", "GOF"]
+    assert [row["mechanism"] for row in suppressed_prediction] == ["GOF"]
+
+
+def test_exact_gof_suppresses_but_retains_predicted_lof_evidence() -> None:
+    effect = infer_query_variant_effect(
+        {
+            "Consequence": "stop_gained",
+            "LoF": "HC",
+            "NMD": "NMD",
+            "vep_consq_lof": True,
+            "variant_gof_score": 2,
+            "variant_dn_score": 0,
+            "variant_lof_score": 0,
+        }
+    )
+
+    assert effect["variant_effect"] == "exact_known_GOF"
+    assert effect["variant_gof_score"] == 2
+    assert effect["variant_lof_score"] == 0
+    assert effect["variant_mechanism_exclusive"] is True
+    assert effect["variant_effect_conflict"] == ""
+    assert "LOFTEE_HC" in effect["variant_effect_suppressed_evidence"]
+    assert "NMD_PREDICTED_LOF" in effect["variant_effect_suppressed_evidence"]
 
 
 def test_extract_exact_clinvar_condition_identities_uses_database_ids_only() -> None:

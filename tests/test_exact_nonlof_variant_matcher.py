@@ -4,11 +4,14 @@ import json
 import sys
 from pathlib import Path
 
+import pandas as pd
+
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
 from gene_mechanism_hub import GeneMechanismHub  # noqa: E402
+from acmg_criteria_assign import annotate_exact_nonlof_variants  # noqa: E402
 
 
 def _exact_row(
@@ -191,3 +194,51 @@ def test_dual_exact_scores_require_two_explicit_allele_assertions(tmp_path: Path
         "CuratedDN",
         "CuratedGOF",
     }
+
+
+def test_dataframe_annotator_writes_exclusive_scores_and_audit(tmp_path: Path) -> None:
+    mechanism_json = _write_mechanism_cache(tmp_path)
+    frame = pd.DataFrame(
+        [
+            {
+                "SYMBOL": "FGFR2",
+                "HGVSp": "p.Pro253Arg",
+                "chrom": "chr10",
+                "pos": "200",
+                "ref": "A",
+                "alt": "G",
+                "assembly": "GRCh38",
+            },
+            {
+                "SYMBOL": "DUAL1",
+                "HGVSp": "p.Arg10His",
+                "chrom": "chr1",
+                "pos": "10",
+                "ref": "G",
+                "alt": "A",
+                "assembly": "GRCh38",
+            },
+        ]
+    )
+
+    annotated = annotate_exact_nonlof_variants(
+        frame,
+        mechanism_json=mechanism_json,
+        context="unit_test",
+    )
+
+    assert annotated["variant_lof_score"].tolist() == [0, 0]
+    assert annotated["variant_gof_score"].tolist() == [2, 2]
+    assert annotated["variant_dn_score"].tolist() == [0, 2]
+    assert annotated["variant_mechanism_exclusive"].tolist() == [True, True]
+    assert annotated["variant_exact_mechanisms"].tolist() == [
+        "GOF",
+        "DOMINANT_NEGATIVE;GOF",
+    ]
+    assert annotated["variant_mechanism_match_route"].tolist() == [
+        "hgvsp",
+        "hgvsp",
+    ]
+    assert "canonical_mechanism_json" in annotated.loc[
+        0, "variant_exact_mechanism_evidence"
+    ]

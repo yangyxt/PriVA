@@ -76,10 +76,14 @@ A compact GoFCards row can enter exact matching only when:
    alias resolution.
 2. `match_eligibility` is `eligible`.
 3. `gene_match_status` is `gene_concordant` or `source_gene_only`.
+4. No sibling transcript row for the same source allele is quarantined.
 
 When the VEP gene differs from the curated source gene, the row remains in the
 compact TSV with `gene_match_status=gene_discordant` and
-`match_eligibility=quarantined_gene_discordance`. It can be audited but cannot
+`match_eligibility=quarantined_gene_discordance`. Otherwise concordant sibling
+rows for that allele receive
+`match_eligibility=quarantined_allele_gene_discordance` without losing their
+row-level VEP provenance. The complete allele remains auditable but cannot
 create an exact runtime match, a ClinVar VCV link, or a condition-cache link.
 
 A ClinVar condition is retained only when all of these statements are true:
@@ -518,14 +522,18 @@ The four status branches prevent unsafe coordinate-only enrichment:
 | `quarantined_upstream_gene_discordance` | `exact_cache_gene_symbols[1..*]` and `quarantined_exact_normalized_variants[1..*]` | The compact row preserves the curated source gene but VEP reports a different gene. The row is audit-only. |
 | `unmatched_public_source_allele` | neither companion array | The public workbook allele is absent from the backend-derived normalized cache. No hg38/HGVS value is invented. |
 
-The 2026-07-23 production-source audit contains 3,161 public assertions:
-3,079 `matched_gene_concordant`, 28
-`gene_discordant_coordinate_collision`, and 54
-`unmatched_public_source_allele`. The 3,079 matched assertions emit 6,108
+The 2026-07-26 production-source audit contains 3,161 public assertions:
+3,123 `matched_gene_concordant`, 37
+`quarantined_upstream_gene_discordance`, and one
+`unmatched_public_source_allele`. The 3,123 matched assertions emit 6,200
 gene-concordant transcript/assembly records, and every matched assertion has
-both an `hg19_vcf_key` and an `hg38_vcf_key`. The raw audit log is:
+both an `hg19_vcf_key` and an `hg38_vcf_key`. The 56 audit-only records cover
+32 quarantined gene/allele assertions. None overlaps canonical exact evidence,
+ClinVar condition links, HPO-cache variants, or runtime matches. The raw audit
+logs are:
 
-`/paedyl01/disk1/yangyxt/PriVA/data/gene_pathogenic_mechanism/audits/audit_gofcards_expanded_source_build_20260723.log`
+- `/tmp/priva_canonical_quarantine_audit_20260726.log`
+- `/tmp/priva_all_quarantined_alleles_audit_20260726.log`
 
 Each object in `exact_normalized_variants` can emit the following complete
 49-key structure. Optional means the key is absent when its normalized-cache
@@ -542,7 +550,8 @@ exact_normalized_variants[]
 ├── gene_match_status: gene_concordant | source_gene_only |
 │   gene_discordant                                          required in current builds
 ├── match_eligibility: eligible |
-│   quarantined_gene_discordance                             required in current builds
+│   quarantined_gene_discordance |
+│   quarantined_allele_gene_discordance                      required in current builds
 ├── VEP_assembly: "hg19" | "hg38"                          optional
 ├── VEP_transcript: string                                  optional
 ├── feature_type: string                                    optional

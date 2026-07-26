@@ -135,6 +135,7 @@
             "matched_gene_concordant",
             "gene_discordant_coordinate_collision",
             "quarantined_upstream_gene_discordance",
+            "quarantined_upstream_mechanism_review",
             "unmatched_public_source_allele"
           ]
         },
@@ -196,6 +197,18 @@
               "quarantined_exact_normalized_variants"
             ]
           }
+        },
+        {
+          "if": {
+            "properties": {
+              "exact_normalization_status": {
+                "const": "quarantined_upstream_mechanism_review"
+              }
+            }
+          },
+          "then": {
+            "required": ["quarantined_exact_normalized_variants"]
+          }
         }
       ],
       "additionalProperties": false
@@ -235,7 +248,16 @@
       ],
       "properties": {
         "source": {"const": "GoFCards"},
-        "mechanism": {"const": "GOF"},
+        "mechanism": {
+          "enum": [
+            "GOF",
+            "LOF",
+            "MIXED",
+            "DOMINANT_NEGATIVE",
+            "UNCERTAIN",
+            "EXCLUDE"
+          ]
+        },
         "build": {"type": "string", "minLength": 1},
         "HGNC_Symbol": {"type": "string", "minLength": 1},
         "GoFCards_HGNC_Symbol": {"type": "string", "minLength": 1},
@@ -253,7 +275,13 @@
             "eligible",
             "quarantined_gene_discordance",
             "quarantined_allele_gene_discordance",
-            "quarantined_missing_source_gene"
+            "quarantined_missing_source_gene",
+            "quarantined_reviewed_lof",
+            "quarantined_reviewed_mixed",
+            "quarantined_reviewed_dominant_negative",
+            "quarantined_reviewed_uncertain",
+            "quarantined_reviewed_exclude",
+            "quarantined_mechanism_review_required"
           ]
         },
         "VEP_assembly": {"enum": ["hg19", "hg38"]},
@@ -296,7 +324,44 @@
         "hg19_vcf_key": {"type": "string", "minLength": 1},
         "hg38_genomic_key": {"type": "string", "minLength": 1},
         "hg38_vcf_key": {"type": "string", "minLength": 1},
-        "match_key_types": {"$ref": "#/$defs/nonEmptyStringArray"}
+        "match_key_types": {"$ref": "#/$defs/nonEmptyStringArray"},
+        "source_mechanism": {"const": "GOF"},
+        "reviewed_mechanism": {
+          "enum": [
+            "GOF",
+            "LOF",
+            "MIXED",
+            "DOMINANT_NEGATIVE",
+            "UNCERTAIN",
+            "EXCLUDE"
+          ]
+        },
+        "mechanism_review_status": {
+          "enum": ["source_claim_only", "reviewed", "review_required"]
+        },
+        "reviewed_gof_eligibility": {"enum": ["eligible", "quarantined"]},
+        "mechanism_match_eligibility": {
+          "enum": [
+            "eligible",
+            "quarantined_reviewed_lof",
+            "quarantined_reviewed_mixed",
+            "quarantined_reviewed_dominant_negative",
+            "quarantined_reviewed_uncertain",
+            "quarantined_reviewed_exclude",
+            "quarantined_mechanism_review_required"
+          ]
+        },
+        "mechanism_review_trigger": {"type": "string", "minLength": 1},
+        "mechanism_review_source_order": {"type": "string", "minLength": 1},
+        "mechanism_review_reason_code": {"type": "string", "minLength": 1},
+        "mechanism_review_evidence_summary": {"type": "string", "minLength": 1},
+        "mechanism_review_pmids": {"type": "string", "minLength": 1},
+        "mechanism_reviewer": {"type": "string", "minLength": 1},
+        "mechanism_reviewed_at": {
+          "type": "string",
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+        },
+        "mechanism_review_version": {"type": "string", "minLength": 1}
       },
       "additionalProperties": false
     },

@@ -292,6 +292,19 @@ def test_compact_record_provenance_audit_separates_runtime_and_quarantine() -> N
         expected_eligibility="quarantined_allele_gene_discordance",
         label="collateral",
     ) == []
+    mechanism_quarantined = {
+        **eligible,
+        "mechanism": "LOF",
+        "mechanism_review_status": "reviewed",
+        "mechanism_match_eligibility": "quarantined_reviewed_lof",
+        "match_eligibility": "quarantined_reviewed_lof",
+    }
+    assert audit_compact_record_provenance(
+        mechanism_quarantined,
+        parent_gene="FGFR2",
+        expected_eligibility="quarantined_reviewed_lof",
+        label="mechanism-quarantined",
+    ) == []
     assert audit_compact_record_provenance(
         quarantined,
         parent_gene="FGFR2",
@@ -936,6 +949,65 @@ def test_gofcards_upstream_gene_discordance_is_audit_only() -> None:
         concordant_sibling,
         exact_record,
     ]
+
+
+def test_gofcards_reviewed_non_gof_is_retained_only_for_audit() -> None:
+    allele_key = "Indel|7|117199647|117199649|TTT|"
+    reviewed_lof = {
+        "source": "GoFCards",
+        "source_mechanism": "GOF",
+        "mechanism": "LOF",
+        "reviewed_mechanism": "LOF",
+        "mechanism_review_status": "reviewed",
+        "reviewed_gof_eligibility": "quarantined",
+        "mechanism_match_eligibility": "quarantined_reviewed_lof",
+        "mechanism_review_reason_code": "article_mechanism_leakage",
+        "HGNC_Symbol": "CFTR",
+        "GoFCards_HGNC_Symbol": "CFTR",
+        "VEP_HGNC_Symbol": "CFTR",
+        "gene_match_status": "gene_concordant",
+        "match_eligibility": "quarantined_reviewed_lof",
+        "allele_key": allele_key,
+        "gofcards_variant_id": allele_key,
+    }
+    hgnc = {
+        "CFTR": {
+            "hgnc_id": "HGNC:1884",
+            "symbol": "CFTR",
+            "entrez_id": "1080",
+            "ensembl_id": "ENSG00000001626",
+        }
+    }
+    unified = pd.DataFrame(
+        [
+            make_unified_row(
+                gene_symbol="CFTR",
+                mechanism=["GOF"],
+                assertion_level="variant_level",
+                source="GoFCards",
+                source_record_id="2746",
+                assembly="hg19",
+                chromosome="chr7",
+                position="117199647",
+                ref="TTT",
+                alt="",
+                allele_key=allele_key,
+                consequence="indel",
+            )
+        ]
+    )
+    exact_by_allele = {
+        gofcards_allele_identity(allele_key): [reviewed_lof]
+    }
+
+    canonical = build_nonlof_assertions_json(unified, hgnc, exact_by_allele)
+    assertion = canonical["HGNC:1884"]["variant_level"][0]["GoFCards"]
+
+    assert assertion["exact_normalization_status"] == (
+        "quarantined_upstream_mechanism_review"
+    )
+    assert "exact_normalized_variants" not in assertion
+    assert assertion["quarantined_exact_normalized_variants"] == [reviewed_lof]
 
 
 def test_hgnc_mapping_splits_comma_delimited_aliases(tmp_path: Path) -> None:

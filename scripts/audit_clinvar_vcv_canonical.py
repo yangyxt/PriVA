@@ -21,11 +21,23 @@ GOFCARDS_NORMALIZATION_STATUSES = {
     "matched_gene_concordant",
     "gene_discordant_coordinate_collision",
     "quarantined_upstream_gene_discordance",
+    "quarantined_upstream_mechanism_review",
     "unmatched_public_source_allele",
 }
 GOFCARDS_QUARANTINE_ELIGIBILITIES = {
     "quarantined_gene_discordance",
     "quarantined_allele_gene_discordance",
+    "quarantined_reviewed_lof",
+    "quarantined_reviewed_mixed",
+    "quarantined_reviewed_dominant_negative",
+    "quarantined_reviewed_uncertain",
+    "quarantined_reviewed_exclude",
+    "quarantined_mechanism_review_required",
+}
+GOFCARDS_MECHANISM_QUARANTINE_ELIGIBILITIES = {
+    value
+    for value in GOFCARDS_QUARANTINE_ELIGIBILITIES
+    if value.startswith(("quarantined_reviewed_", "quarantined_mechanism_"))
 }
 
 PRIVA_ROOT = Path(__file__).resolve().parents[1]
@@ -77,6 +89,8 @@ def audit_compact_record_provenance(
             violations.append(f"{label}: false gene-concordant label")
         if status == "source_gene_only" and vep:
             violations.append(f"{label}: source-gene-only row contains a VEP gene")
+        if str(record.get("mechanism", "GOF")).upper() != "GOF":
+            violations.append(f"{label}: eligible exact row is not reviewed GOF")
     elif expected_eligibility == "quarantined_gene_discordance":
         if status != "gene_discordant":
             violations.append(f"{label}: quarantined row lacks discordant status")
@@ -94,6 +108,32 @@ def audit_compact_record_provenance(
         if status == "source_gene_only" and vep:
             violations.append(
                 f"{label}: allele-quarantined source-only sibling has a VEP gene"
+            )
+    elif expected_eligibility in GOFCARDS_MECHANISM_QUARANTINE_ELIGIBILITIES:
+        if status not in {"gene_concordant", "source_gene_only"}:
+            violations.append(
+                f"{label}: mechanism-quarantined row has invalid gene status"
+            )
+        if status == "gene_concordant" and vep != source:
+            violations.append(
+                f"{label}: mechanism-quarantined concordant row is gene-discordant"
+            )
+        if status == "source_gene_only" and vep:
+            violations.append(
+                f"{label}: mechanism-quarantined source-only row contains a VEP gene"
+            )
+        mechanism_eligibility = str(
+            record.get("mechanism_match_eligibility", "")
+        ).lower()
+        if mechanism_eligibility != expected_eligibility:
+            violations.append(
+                f"{label}: mechanism eligibility does not match quarantine reason"
+            )
+        if expected_eligibility.startswith("quarantined_reviewed_") and (
+            str(record.get("mechanism_review_status", "")).lower() != "reviewed"
+        ):
+            violations.append(
+                f"{label}: reviewed mechanism quarantine lacks review status"
             )
     else:
         violations.append(f"{label}: unsupported eligibility {expected_eligibility!r}")
@@ -196,7 +236,10 @@ def main() -> None:
                     "quarantined_exact_normalized_variants", []
                 )
                 if (
-                    status == "quarantined_upstream_gene_discordance"
+                    status in {
+                        "quarantined_upstream_gene_discordance",
+                        "quarantined_upstream_mechanism_review",
+                    }
                     and not quarantined_records
                 ):
                     violations.append(f"{label}: quarantine status without audit records")

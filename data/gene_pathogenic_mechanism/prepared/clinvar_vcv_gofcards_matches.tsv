@@ -479,8 +479,6 @@ KCNQ1	VCV000053086	53086	NM_000218.3(KCNQ1):c.691C>T (p.Arg231Cys)	simple_allele
 KCNQ1	VCV000053086	53086	NM_000218.3(KCNQ1):c.691C>T (p.Arg231Cys)	simple_allele	allele	RCV000240642	Long QT syndrome 1	Pathogenic/Likely pathogenic	criteria provided, multiple submitters, no conflicts	2	5
 KCNQ1	VCV000053086	53086	NM_000218.3(KCNQ1):c.691C>T (p.Arg231Cys)	simple_allele	allele	RCV001385527	Long QT syndrome	Pathogenic	criteria provided, multiple submitters, no conflicts	2	2
 KCNQ1	VCV000053086	53086	NM_000218.3(KCNQ1):c.691C>T (p.Arg231Cys)	simple_allele	allele	RCV002362679	Cardiovascular phenotype	Pathogenic	criteria provided, multiple submitters, no conflicts	2	2
-KCNQ1	VCV000053101	53101	NM_000218.3(KCNQ1):c.776G>A (p.Arg259His)	simple_allele	allele	RCV000182113	not provided	Likely pathogenic	criteria provided, multiple submitters, no conflicts	2	4
-KCNQ1	VCV000053101	53101	NM_000218.3(KCNQ1):c.776G>A (p.Arg259His)	simple_allele	allele	RCV000709733	Long QT syndrome 1	Pathogenic/Likely pathogenic	criteria provided, multiple submitters, no conflicts	2	6
 PIK3CD	VCV000088675	88675	NM_005026.5(PIK3CD):c.3061G>A (p.Glu1021Lys)	simple_allele	allele	RCV000076908	Immunodeficiency 14	Pathogenic	reviewed by expert panel	3	1
 PIK3CD	VCV000088675	88675	NM_005026.5(PIK3CD):c.3061G>A (p.Glu1021Lys)	simple_allele	allele	RCV000224521	not provided	Pathogenic	criteria provided, multiple submitters, no conflicts	2	0
 ANK2	VCV000067599	67599	NM_001148.6(ANK2):c.10901T>A (p.Val3634Asp)	simple_allele	allele	RCV000589585	not provided	Benign/Likely benign	criteria provided, multiple submitters, no conflicts	2	3

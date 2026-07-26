@@ -1,28 +1,27 @@
 {
-  "built_at_utc": "2026-07-24T17:57:21+00:00",
+  "built_at_utc": "2026-07-25T17:13:27+00:00",
   "cache_dir": "/paedyl01/disk1/yangyxt/PriVA/data/gene_pathogenic_mechanism",
   "clinvar_vcv": {
-    "audit_rows": 1071,
+    "audit_rows": 1070,
     "injection_stats": {
-      "injected_gene_matches": 525,
-      "injected_rcv_conditions": 1071
+      "injected_gene_matches": 524,
+      "injected_rcv_conditions": 1070
     },
-    "match_count": 525,
+    "match_count": 524,
     "minimum_review_stars": 2,
     "parse_status": "parsed",
     "parser_stats": {
-      "eligible_rcv_conditions": 1072,
-      "exact_archives_without_eligible_rcv": 859,
-      "exact_variant_archives": 1385,
-      "retained_component_matches": 525,
-      "retained_gene_assignments": 525,
-      "retained_simple_allele": 525,
-      "skipped_gene_discordant_component_matches": 1,
+      "eligible_rcv_conditions": 1070,
+      "exact_archives_without_eligible_rcv": 851,
+      "exact_variant_archives": 1375,
+      "retained_component_matches": 524,
+      "retained_gene_assignments": 524,
+      "retained_simple_allele": 524,
       "skipped_included_record": 723,
       "variation_archives_seen": 4545909
     }
   },
-  "last_checked_at_utc": "2026-07-24T18:36:34+00:00",
+  "last_checked_at_utc": "2026-07-25T17:13:27+00:00",
   "outputs": {
     "clinvar_vcv_match_audit": "/paedyl01/disk1/yangyxt/PriVA/data/gene_pathogenic_mechanism/prepared/clinvar_vcv_gofcards_matches.tsv",
     "nonlof_assertions_json": "/paedyl01/disk1/yangyxt/PriVA/data/gene_pathogenic_mechanism/prepared/gene_nonlof_mechanism_curated_assertions.json",
@@ -30,7 +29,7 @@
     "source_manifest_tsv": "/paedyl01/disk1/yangyxt/PriVA/data/gene_pathogenic_mechanism/prepared/nonlof_source_manifest.tsv"
   },
   "source_manifest_rows": 5,
-  "status": "checked_inputs_unchanged",
+  "status": "rebuilt",
   "total_genes": 803,
   "unmapped_symbols": 0
 }

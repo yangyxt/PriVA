@@ -37,6 +37,7 @@ from audit_clinvar_gofcards_review_tiers import summarize_review_tiers  # noqa: 
 from audit_clinvar_vcv_canonical import (  # noqa: E402
     audit_compact_record_allele_identity,
     audit_compact_record_provenance,
+    audit_coordinate_collision_record_provenance,
 )
 
 
@@ -311,6 +312,30 @@ def test_compact_record_provenance_audit_separates_runtime_and_quarantine() -> N
         expected_eligibility="eligible",
         label="leak",
     )
+
+
+def test_coordinate_collision_audit_preserves_other_gene_eligibility() -> None:
+    collision = {
+        "HGNC_Symbol": "WHR1",
+        "GoFCards_HGNC_Symbol": "WHR1",
+        "VEP_HGNC_Symbol": "WHR1",
+        "gene_match_status": "gene_concordant",
+        "match_eligibility": "eligible",
+        "mechanism": "GOF",
+    }
+
+    assert audit_coordinate_collision_record_provenance(
+        collision,
+        parent_gene="STK19",
+        label="historical-symbol-collision",
+    ) == []
+    assert audit_coordinate_collision_record_provenance(
+        collision,
+        parent_gene="WHR1",
+        label="false-collision",
+    ) == [
+        "false-collision: coordinate-collision record unexpectedly matches parent gene"
+    ]
 
 
 def test_compact_record_allele_audit_ignores_only_variant_type_vocabulary() -> None:

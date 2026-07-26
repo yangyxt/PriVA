@@ -140,6 +140,39 @@ def audit_compact_record_provenance(
     return violations
 
 
+def audit_coordinate_collision_record_provenance(
+    record: dict,
+    *,
+    parent_gene: str,
+    label: str,
+) -> list[str]:
+    """Audit an eligible compact row attached to a different-gene assertion.
+
+    A type-independent genomic allele can occur in more than one GoFCards
+    assertion when the source and compact caches resolve a historical symbol
+    differently.  The canonical parent status
+    ``gene_discordant_coordinate_collision`` is the runtime gate in this case;
+    the nested row must retain its own upstream eligibility and provenance so
+    the audit does not rewrite a valid assertion about the other gene.
+
+    This helper therefore requires the nested gene to differ from the parent,
+    then applies the ordinary eligible-row checks relative to that nested gene.
+    """
+    nested_gene = str(record.get("HGNC_Symbol", "")).strip()
+    if not nested_gene:
+        return [f"{label}: coordinate-collision record lacks a compact gene"]
+    if nested_gene.upper() == parent_gene.upper():
+        return [
+            f"{label}: coordinate-collision record unexpectedly matches parent gene"
+        ]
+    return audit_compact_record_provenance(
+        record,
+        parent_gene=nested_gene,
+        expected_eligibility="eligible",
+        label=label,
+    )
+
+
 def audit_compact_record_allele_identity(
     record: dict,
     *,
@@ -314,7 +347,15 @@ def main() -> None:
                     record_eligibility = str(
                         record.get("match_eligibility", "")
                     ).lower()
-                    if record_eligibility not in GOFCARDS_QUARANTINE_ELIGIBILITIES:
+                    if status == "gene_discordant_coordinate_collision":
+                        violations.extend(
+                            audit_coordinate_collision_record_provenance(
+                                record,
+                                parent_gene=gene_symbol,
+                                label=label,
+                            )
+                        )
+                    elif record_eligibility not in GOFCARDS_QUARANTINE_ELIGIBILITIES:
                         violations.append(
                             f"{label}: audit-only record is not quarantined"
                         )

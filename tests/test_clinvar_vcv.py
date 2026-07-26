@@ -236,6 +236,25 @@ def test_clinvar_lookup_partition_is_atomic_per_gene_and_allele() -> None:
     assert quarantined == [direct, sibling]
 
 
+def test_clinvar_lookup_quarantines_reviewed_non_gof_assertions_atomically() -> None:
+    reviewed_lof = {
+        "HGNC_Symbol": "CFTR",
+        "GoFCards_HGNC_Symbol": "CFTR",
+        "gofcards_variant_id": "VAR1",
+        "mechanism": "LOF",
+        # The mechanism check remains fail-closed even if eligibility is stale.
+        "match_eligibility": "eligible",
+    }
+    sibling = {**reviewed_lof, "mechanism": "GOF"}
+
+    eligible, quarantined = partition_exact_gofcards_rows(
+        [reviewed_lof, sibling]
+    )
+
+    assert eligible == []
+    assert quarantined == [reviewed_lof, sibling]
+
+
 def test_compact_record_provenance_audit_separates_runtime_and_quarantine() -> None:
     eligible = {
         "HGNC_Symbol": "FGFR2",

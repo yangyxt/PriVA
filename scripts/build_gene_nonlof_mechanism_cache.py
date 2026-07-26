@@ -111,7 +111,26 @@ GOFCARDS_EXACT_REQUIRED_COLUMNS = [
     "match_key_types",
 ]
 
-GOFCARDS_EXACT_COLUMNS = GOFCARDS_EXACT_REQUIRED_COLUMNS
+GOFCARDS_EXACT_REVIEW_COLUMNS = [
+    "source_mechanism",
+    "reviewed_mechanism",
+    "mechanism_review_status",
+    "reviewed_gof_eligibility",
+    "mechanism_match_eligibility",
+    "mechanism_review_trigger",
+    "mechanism_review_source_order",
+    "mechanism_review_reason_code",
+    "mechanism_review_evidence_summary",
+    "mechanism_review_pmids",
+    "mechanism_reviewer",
+    "mechanism_reviewed_at",
+    "mechanism_review_version",
+]
+
+GOFCARDS_EXACT_COLUMNS = [
+    *GOFCARDS_EXACT_REQUIRED_COLUMNS,
+    *GOFCARDS_EXACT_REVIEW_COLUMNS,
+]
 
 GOFCARDS_EXACT_MISSING_VALUES = {"", ".", "_", "-", "na", "n/a", "nan", "none"}
 GOFCARDS_RUNTIME_ELIGIBLE = {"eligible"}
@@ -1599,10 +1618,39 @@ def gofcards_allele_identity(allele_key: Any) -> str:
 
 
 def _gofcards_exact_row_is_runtime_eligible(record: dict[str, Any]) -> bool:
-    """Return whether an upstream compact row may become exact-match evidence."""
+    """Return whether an upstream compact row may become exact-GOF evidence.
+
+    Eligibility is intentionally checked twice: the normalizer's explicit
+    quarantine value must pass, and the effective reviewed mechanism must
+    still be GOF.  This prevents a malformed or hand-edited compact table from
+    making a reviewed LOF/MIXED row matchable merely by restoring the generic
+    ``eligible`` string.
+    """
     return (
         str(record.get("match_eligibility", "")).strip().lower()
         in GOFCARDS_RUNTIME_ELIGIBLE
+        and str(record.get("mechanism", "")).strip().upper() == "GOF"
+    )
+
+
+def gofcards_upstream_quarantine_status(
+    records: Iterable[dict[str, Any]],
+) -> str:
+    """Distinguish mechanism-review quarantine from gene discordance."""
+    records = list(records)
+    mechanism_quarantine = any(
+        str(record.get("mechanism", "")).strip().upper() != "GOF"
+        or str(record.get("mechanism_match_eligibility", "")).strip().lower()
+        not in {"", "eligible"}
+        or str(record.get("match_eligibility", "")).strip().lower().startswith(
+            ("quarantined_reviewed_", "quarantined_mechanism_")
+        )
+        for record in records
+    )
+    return (
+        "quarantined_upstream_mechanism_review"
+        if mechanism_quarantine
+        else "quarantined_upstream_gene_discordance"
     )
 
 
@@ -1865,12 +1913,12 @@ def build_nonlof_assertions_json(
                         quarantined_rows
                     )
             elif exact_rows:
-                upstream_quarantine = any(
+                upstream_quarantine = bool(quarantined_rows) and any(
                     not _gofcards_exact_row_is_runtime_eligible(exact_row)
-                    for exact_row in exact_rows
+                    for exact_row in quarantined_rows
                 )
                 assertion["exact_normalization_status"] = (
-                    "quarantined_upstream_gene_discordance"
+                    gofcards_upstream_quarantine_status(quarantined_rows)
                     if upstream_quarantine
                     else "gene_discordant_coordinate_collision"
                 )

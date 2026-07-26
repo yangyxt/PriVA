@@ -40,6 +40,44 @@ def test_nonlof_outputs_do_not_replace_broad_cache_manifests() -> None:
     assert nonlof.NONLOF_RUN_SUMMARY_FILENAME == "nonlof_run_summary.json"
 
 
+def test_reviewed_non_gof_row_is_never_runtime_eligible() -> None:
+    reviewed_lof = {
+        "mechanism": "LOF",
+        "match_eligibility": "eligible",
+    }
+    reviewed_mixed = {
+        "mechanism": "MIXED",
+        "match_eligibility": "eligible",
+    }
+    reviewed_gof = {
+        "mechanism": "GOF",
+        "match_eligibility": "eligible",
+    }
+
+    assert not nonlof._gofcards_exact_row_is_runtime_eligible(reviewed_lof)
+    assert not nonlof._gofcards_exact_row_is_runtime_eligible(reviewed_mixed)
+    assert nonlof._gofcards_exact_row_is_runtime_eligible(reviewed_gof)
+
+
+def test_upstream_quarantine_status_preserves_the_failed_gate() -> None:
+    assert nonlof.gofcards_upstream_quarantine_status(
+        [
+            {
+                "mechanism": "LOF",
+                "match_eligibility": "quarantined_reviewed_lof",
+            }
+        ]
+    ) == "quarantined_upstream_mechanism_review"
+    assert nonlof.gofcards_upstream_quarantine_status(
+        [
+            {
+                "mechanism": "GOF",
+                "match_eligibility": "quarantined_gene_discordance",
+            }
+        ]
+    ) == "quarantined_upstream_gene_discordance"
+
+
 def test_hgnc_loader_accepts_priva_complete_set_columns(tmp_path: Path) -> None:
     table = tmp_path / "hgnc.tsv"
     table.write_text(

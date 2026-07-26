@@ -145,7 +145,10 @@ def partition_exact_gofcards_rows(
     quarantined_keys = {
         _gofcards_assertion_key(row)
         for row in materialized
-        if str(row.get("match_eligibility", "")).strip().lower() != "eligible"
+        if (
+            str(row.get("match_eligibility", "")).strip().lower() != "eligible"
+            or str(row.get("mechanism", "GOF")).strip().upper() != "GOF"
+        )
     }
     eligible: list[dict[str, Any]] = []
     quarantined: list[dict[str, Any]] = []

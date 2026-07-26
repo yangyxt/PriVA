@@ -28,6 +28,7 @@ HPO_HEADER = (
 
 def test_variant_row_partition_is_atomic_per_curated_gene_and_allele() -> None:
     direct = {
+        "mechanism": "GOF",
         "HGNC_Symbol": "GENE1",
         "gofcards_variant_id": "VAR1",
         "match_eligibility": "quarantined_gene_discordance",
@@ -47,6 +48,23 @@ def test_variant_row_partition_is_atomic_per_curated_gene_and_allele() -> None:
 
     assert eligible == [other_gene]
     assert quarantined == [direct, sibling]
+
+
+def test_variant_partition_rejects_non_gof_even_with_stale_eligibility() -> None:
+    reviewed_lof = {
+        "mechanism": "LOF",
+        "HGNC_Symbol": "CFTR",
+        "gofcards_variant_id": "VAR1",
+        "match_eligibility": "eligible",
+    }
+    sibling = {**reviewed_lof, "mechanism": "GOF"}
+
+    eligible, quarantined = partition_gofcards_variant_rows(
+        [reviewed_lof, sibling]
+    )
+
+    assert eligible == []
+    assert quarantined == [reviewed_lof, sibling]
 
 
 def test_hpo_frame_groups_gene_conditions_and_preserves_axis_evidence(

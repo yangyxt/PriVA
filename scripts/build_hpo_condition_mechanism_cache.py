@@ -869,7 +869,10 @@ def partition_gofcards_variant_rows(
     quarantined_keys = {
         _gofcards_variant_assertion_key(row)
         for row in materialized
-        if _clean(row.get("match_eligibility")).lower() != "eligible"
+        if (
+            _clean(row.get("match_eligibility")).lower() != "eligible"
+            or _clean(row.get("mechanism")).upper() != "GOF"
+        )
     }
     eligible: list[dict[str, str]] = []
     quarantined: list[dict[str, str]] = []

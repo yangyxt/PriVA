@@ -2139,279 +2139,170 @@ function gene_pathogenic_mechanism_cache_install() {
 
 
 function validate_gofcards_exact_gof_cache() {
-    local gofcards_tsv=${1}
-    [[ -s ${gofcards_tsv} ]] || { log "ERROR: Missing/empty GoFCards exact GOF cache: ${gofcards_tsv}"; return 1; }
+    local gofcards_json=${1}
+    [[ -s ${gofcards_json} ]] || { log "ERROR: Missing/empty GoFCards cache: ${gofcards_json}"; return 1; }
 
-    python - "${gofcards_tsv}" <<'PY'
-import csv
+    python - "${gofcards_json}" <<'GOFPY'
 import gzip
+import json
 import sys
-from collections import defaultdict
 
 path = sys.argv[1]
 opener = gzip.open if path.endswith(".gz") else open
-required = {
-    "source",
-    "mechanism",
-    "HGNC_Symbol",
-    "GoFCards_HGNC_Symbol",
-    "VEP_HGNC_Symbol",
-    "gene_match_status",
-    "match_eligibility",
-    "HGVSp",
-    "hgvsp_key",
-    "hg19_vcf_key",
-    "hg38_vcf_key",
-    "hg19_genomic_key",
-    "hg38_genomic_key",
-    "gofcards_accession_id",
-    "gofcards_variant_id",
-}
-row_count = 0
-eligible_rows = 0
-quarantined_rows = 0
-hgvsp_rows = 0
-genomic_rows = 0
-allowed_provenance = {
-    ("gene_concordant", "eligible"),
-    ("source_gene_only", "eligible"),
-    ("gene_discordant", "quarantined_gene_discordance"),
-    ("gene_concordant", "quarantined_allele_gene_discordance"),
-    ("source_gene_only", "quarantined_allele_gene_discordance"),
-}
-provenance_by_assertion = defaultdict(list)
-with opener(path, "rt", encoding="utf-8", newline="") as handle:
-    reader = csv.DictReader(handle, delimiter="\t")
-    missing = sorted(required - set(reader.fieldnames or []))
-    if missing:
-        raise SystemExit(f"{path} missing required columns: {', '.join(missing)}")
-    for line_number, row in enumerate(reader, start=2):
-        row_count += 1
-        source_symbol = (row.get("GoFCards_HGNC_Symbol") or "").strip().upper()
-        exported_symbol = (row.get("HGNC_Symbol") or "").strip().upper()
-        vep_symbol = (row.get("VEP_HGNC_Symbol") or "").strip().upper()
-        status = (row.get("gene_match_status") or "").strip().lower()
-        eligibility = (row.get("match_eligibility") or "").strip().lower()
-        allele_id = (row.get("gofcards_variant_id") or "").strip()
+with opener(path, "rt", encoding="utf-8") as handle:
+    cache = json.load(handle)
 
-        if (row.get("source") or "").strip() != "GoFCards":
-            raise SystemExit(f"{path}:{line_number} has a non-GoFCards source")
-        if (row.get("mechanism") or "").strip().upper() != "GOF":
-            raise SystemExit(f"{path}:{line_number} has a non-GOF mechanism")
-        if not source_symbol or exported_symbol != source_symbol:
-            raise SystemExit(
-                f"{path}:{line_number} does not preserve the curated GoFCards gene"
-            )
-        if (status, eligibility) not in allowed_provenance:
-            raise SystemExit(
-                f"{path}:{line_number} has invalid gene provenance: "
-                f"{status or '<blank>'}/{eligibility or '<blank>'}"
-            )
-        provenance_by_assertion[(source_symbol, allele_id)].append(
-            (status, eligibility, line_number)
-        )
-        if status == "gene_concordant" and vep_symbol != source_symbol:
-            raise SystemExit(f"{path}:{line_number} has a false gene-concordant label")
-        if status == "source_gene_only" and vep_symbol:
-            raise SystemExit(f"{path}:{line_number} has VEP gene data but source_gene_only status")
-        if status == "gene_discordant" and (
-            not vep_symbol or vep_symbol == source_symbol
-        ):
-            raise SystemExit(f"{path}:{line_number} has a false gene-discordant label")
+for key in ("metadata", "genes"):
+    if key not in cache:
+        raise SystemExit(f"{path} has no top-level {key!r} block")
+meta = cache["metadata"]
+if meta.get("source") != "GoFCards":
+    raise SystemExit(f"{path} metadata does not declare GoFCards as the source")
+if meta.get("mechanism") != "GOF":
+    raise SystemExit(f"{path} metadata does not declare GOF as the mechanism")
 
-        if eligibility == "eligible":
-            eligible_rows += 1
+ELIGIBLE = "eligible"
+ALLOWED = {
+    ELIGIBLE,
+    "quarantined_gene_discordance",
+    "quarantined_allele_gene_discordance",
+    "quarantined_missing_source_gene",
+    "quarantined_reviewed_lof",
+    "quarantined_reviewed_mixed",
+    "quarantined_reviewed_dominant_negative",
+    "quarantined_reviewed_uncertain",
+    "quarantined_reviewed_exclude",
+    "quarantined_mechanism_review_required",
+}
+genes = alleles = eligible = quarantined = with_hgvsp = with_hg38 = evidence = 0
+for symbol, gene in cache["genes"].items():
+    genes += 1
+    if not symbol.strip():
+        raise SystemExit(f"{path} has an empty gene symbol key")
+    for allele_id, allele in (gene.get("alleles") or {}).items():
+        alleles += 1
+        parts = allele_id.split("|")
+        if len(parts) != 4 or not parts[1].isdigit():
+            raise SystemExit(f"{path}: {symbol}/{allele_id} is not chrom|pos|ref|alt on GRCh37")
+        state = (allele.get("eligibility") or {}).get("status", "")
+        if state not in ALLOWED:
+            raise SystemExit(f"{path}: {symbol}/{allele_id} has unknown eligibility {state!r}")
+        keys = allele.get("match_keys") or {}
+        if state == ELIGIBLE:
+            eligible += 1
+            if not (keys.get("hgvsp") or keys.get("hgvsc") or keys.get("hg19_vcf")):
+                raise SystemExit(f"{path}: {symbol}/{allele_id} is eligible but offers no match key")
+            if keys.get("hgvsp"):
+                with_hgvsp += 1
+            if keys.get("hg38_vcf"):
+                with_hg38 += 1
         else:
-            quarantined_rows += 1
-        if eligibility == "eligible" and row.get("hgvsp_key"):
-            hgvsp_rows += 1
-        if eligibility == "eligible" and (
-            row.get("hg19_vcf_key") or row.get("hg38_vcf_key")
-            or row.get("hg19_genomic_key") or row.get("hg38_genomic_key")
-        ):
-            genomic_rows += 1
-for (source_symbol, allele_id), states in provenance_by_assertion.items():
-    has_direct_discordance = any(
-        status == "gene_discordant" for status, _eligibility, _line in states
-    )
-    has_collateral_quarantine = any(
-        eligibility == "quarantined_allele_gene_discordance"
-        for _status, eligibility, _line in states
-    )
-    eligible_lines = [
-        line for _status, eligibility, line in states if eligibility == "eligible"
-    ]
-    if has_direct_discordance and eligible_lines:
-        raise SystemExit(
-            f"{path}: assertion {source_symbol}+{allele_id} has gene-discordant "
-            "and eligible rows; "
-            f"eligible sibling lines={eligible_lines}"
-        )
-    if has_collateral_quarantine and not has_direct_discordance:
-        raise SystemExit(
-            f"{path}: assertion {source_symbol}+{allele_id} has an orphan "
-            "allele-level quarantine"
-        )
-if row_count == 0:
-    raise SystemExit(f"{path} contains no rows")
-if eligible_rows == 0:
-    raise SystemExit(f"{path} contains no runtime-eligible rows")
-if hgvsp_rows == 0:
-    raise SystemExit(f"{path} contains no runtime-eligible HGVSp match rows")
-if genomic_rows == 0:
-    raise SystemExit(f"{path} contains no runtime-eligible genomic match rows")
+            quarantined += 1
+            if not (allele.get("eligibility") or {}).get("reason"):
+                raise SystemExit(f"{path}: {symbol}/{allele_id} is quarantined without a reason")
+        if keys.get("hg19_vcf") and keys["hg19_vcf"] != allele_id:
+            raise SystemExit(f"{path}: {symbol}/{allele_id} disagrees with its own hg19 match key")
+        for assembly, block in (allele.get("assemblies") or {}).items():
+            coords = block.get("coordinates") or {}
+            if not coords.get("chrom") or not isinstance(coords.get("pos"), int):
+                raise SystemExit(f"{path}: {symbol}/{allele_id}/{assembly} has no usable coordinates")
+        evidence += len(allele.get("evidence") or [])
+
+if alleles == 0:
+    raise SystemExit(f"{path} contains no alleles")
+if eligible == 0:
+    raise SystemExit(f"{path} contains no runtime-eligible alleles")
+if with_hgvsp == 0:
+    raise SystemExit(f"{path} contains no eligible allele with a protein-change key")
 print(
-    f"gofcards_rows={row_count}; eligible_rows={eligible_rows}; "
-    f"quarantined_rows={quarantined_rows}; hgvsp_rows={hgvsp_rows}; "
-    f"genomic_rows={genomic_rows}"
+    f"gofcards_genes={genes}; alleles={alleles}; eligible={eligible}; "
+    f"quarantined={quarantined}; with_hgvsp={with_hgvsp}; with_hg38={with_hg38}; "
+    f"evidence_records={evidence}"
 )
-PY
-}
-
-
-function ensure_gofcards_normalizer_workflow() {
-    local config_file=${1}
-    local workflow
-    local repo_dir
-    local repo_url
-
-    workflow=$(yaml_value_or_default "${config_file}" "gofcards_normalizer_workflow" "")
-    if [[ -x ${workflow} ]]; then
-        printf "%s\n" "${workflow}"
-        return 0
-    fi
-
-    repo_dir=$(yaml_value_or_default "${config_file}" "gofcards_normalizer_repo_dir" "${DATA_DIR}/gofcards/gofcards_hg38_normalizer")
-    repo_url=$(yaml_value_or_default "${config_file}" "gofcards_normalizer_repo_url" "https://github.com/yangyxt/gofcards_hg38_normalizer.git")
-    if [[ -d ${repo_dir}/.git ]]; then
-        log "Updating GoFCards normalizer repository at ${repo_dir}"
-        git -C "${repo_dir}" pull --ff-only || {
-            log "ERROR: Failed to update GoFCards normalizer repository ${repo_dir}"
-            return 1
-        }
-    else
-        log "Cloning GoFCards normalizer repository ${repo_url} to ${repo_dir}"
-        mkdir -p "$(dirname "${repo_dir}")" || return 1
-        git clone "${repo_url}" "${repo_dir}" || {
-            log "ERROR: Failed to clone GoFCards normalizer repository ${repo_url}"
-            return 1
-        }
-    fi
-
-    workflow="${repo_dir}/bin/gofcards_workflow.sh"
-    [[ -x ${workflow} ]] || { log "ERROR: GoFCards workflow is not executable: ${workflow}"; return 1; }
-    update_yaml "${config_file}" "gofcards_normalizer_repo_dir" "${repo_dir}"
-    update_yaml "${config_file}" "gofcards_normalizer_workflow" "${workflow}"
-    printf "%s\n" "${workflow}"
+GOFPY
 }
 
 
 function gofcards_exact_gof_cache_install() {
+    # Build the GoFCards exact GOF evidence cache from the raw GoFCards sources.
+    # The whole pipeline is one script; see docs/GOFCARDS_NORMALIZATION_METHODS.md
+    # for why the reference check and the liftover are separate gates.
     local config_file=${1}
+    [[ -f ${config_file} ]] || { log "ERROR: Config file not found: ${config_file}"; return 1; }
+
+    local builder_script
     local target_tsv
-    local workflow
     local workdir
-    local conda_env
-    local public_excel_url
     local hg19_fasta
     local hg38_fasta
-    local vep_bin
+    local chain_file
     local vep_cache_dir
     local vep_version
-    local vep_cache_hg38
-    local vep_version_hg38
-    local vep_merged_hg38
-    local hgnc_tsv
+    local hgnc_table
+    local review_tsv
+    local stats_json
     local refresh_days
 
-    target_tsv=$(yaml_value_or_default "${config_file}" "gofcards_exact_gof_hgvsp" "${DATA_DIR}/gofcards/gofcards_exact_gof_hgvsp.tsv.gz")
+    builder_script=$(yaml_value_or_default "${config_file}" "gofcards_builder_script" "${SCRIPT_DIR}/build_gofcards_exact_gof_cache.py")
+    target_tsv=$(yaml_value_or_default "${config_file}" "gofcards_exact_gof_cache" "${DATA_DIR}/gofcards/gofcards_exact_gof.json.gz")
+    workdir=$(yaml_value_or_default "${config_file}" "gofcards_workdir" "${DATA_DIR}/gofcards/build_work")
     refresh_days=$(yaml_value_or_default "${config_file}" "gofcards_refresh_days" "180")
+
     if [[ "${PRIVA_FORCE_GOFCARDS_CACHE:-0}" != "1" ]] && \
        [[ "${PRIVA_FORCE_ALL_CACHES:-0}" != "1" ]] && \
        validate_gofcards_exact_gof_cache "${target_tsv}" >/dev/null 2>&1 && \
        [[ -n $(find "${target_tsv}" -mtime "-${refresh_days}" -print -quit 2>/dev/null) ]]; then
         log "GoFCards exact GOF cache is valid and within its ${refresh_days}-day refresh interval: ${target_tsv}"
-        update_yaml "${config_file}" "gofcards_exact_gof_hgvsp" "${target_tsv}"
+        update_yaml "${config_file}" "gofcards_exact_gof_cache" "${target_tsv}"
         return 0
     fi
 
-    workflow=$(ensure_gofcards_normalizer_workflow "${config_file}") || return 1
-    workdir=$(yaml_value_or_default "${config_file}" "gofcards_workdir" "${DATA_DIR}/gofcards/build_work")
-    conda_env=$(yaml_value_or_default "${config_file}" "gofcards_conda_env" "gofcards_hg38")
-    public_excel_url=$(yaml_value_or_default "${config_file}" "gofcards_public_excel_url" "https://download.genemed.tech/upload/GainFunCards/gofcards_data_download.xlsx")
     hg19_fasta=$(read_yaml "${config_file}" "ref_genome")
     hg38_fasta=$(yaml_value_or_default "${config_file}" "gofcards_hg38_fasta" "")
-    vep_bin=$(command -v vep 2>/dev/null || true)
+    chain_file=$(yaml_value_or_default "${config_file}" "gofcards_hg19_to_hg38_chain" "${DATA_DIR}/liftOver/hg19ToHg38.over.chain")
     vep_cache_dir=$(read_yaml "${config_file}" "vep_cache_dir")
-    vep_version=$(read_yaml "${config_file}" "vep_installed_version")
-    vep_cache_hg38=$(yaml_value_or_default "${config_file}" "gofcards_vep_cache_hg38" "${vep_cache_dir}")
-    vep_version_hg38=$(yaml_value_or_default "${config_file}" "gofcards_vep_cache_version_hg38" "${vep_version}")
-    vep_merged_hg38=$(yaml_value_or_default "${config_file}" "gofcards_vep_cache_merged_hg38" "1")
-    hgnc_tsv="${DATA_DIR}/hgnc/non_alt_loci_set.tsv"
+    vep_version=$(yaml_value_or_default "${config_file}" "vep_installed_version" "")
+    hgnc_table=$(yaml_value_or_default "${config_file}" "hgnc_table" "${DATA_DIR}/hgnc/non_alt_loci_set.tsv")
+    review_tsv=$(yaml_value_or_default "${config_file}" "gofcards_mechanism_review_tsv" "${DATA_DIR}/gofcards/gofcards_mechanism_reviews.tsv")
+    stats_json="${workdir}/gofcards_build_stats.json"
 
-    [[ -s ${hg19_fasta} ]] || { log "ERROR: hg19/HG19 FASTA not found for GoFCards workflow: ${hg19_fasta}"; return 1; }
-    [[ -s ${hg38_fasta} ]] || { log "ERROR: hg38/GRCh38 FASTA not found for GoFCards workflow: ${hg38_fasta}"; return 1; }
-    [[ -n ${vep_bin} ]] || { log "ERROR: VEP binary not found in PATH; activate the PriVA VEP env before GoFCards cache build"; return 1; }
+    [[ -f ${builder_script} ]] || { log "ERROR: GoFCards builder not found: ${builder_script}"; return 1; }
+    [[ -s ${hg19_fasta} ]] || { log "ERROR: GRCh37 FASTA not found for GoFCards build: ${hg19_fasta}"; return 1; }
+    [[ -s ${hg38_fasta} ]] || { log "ERROR: GRCh38 FASTA not found for GoFCards build; set gofcards_hg38_fasta"; return 1; }
+    [[ -s ${chain_file} ]] || { log "ERROR: hg19->hg38 chain file not found: ${chain_file}"; return 1; }
+    [[ -s ${hgnc_table} ]] || { log "ERROR: HGNC complete-set table not found: ${hgnc_table}"; return 1; }
+    command -v vep >/dev/null 2>&1 || { log "ERROR: vep is not on PATH"; return 1; }
+    command -v bcftools >/dev/null 2>&1 || { log "ERROR: bcftools is not on PATH"; return 1; }
+    command -v CrossMap >/dev/null 2>&1 || { log "ERROR: CrossMap is not on PATH; install it into the PriVA environment"; return 1; }
 
     mkdir -p "$(dirname "${target_tsv}")" "${workdir}" || return 1
 
-    if command -v mamba >/dev/null 2>&1; then
-        source ~/.bashrc 2>/dev/null || true
-        if ! mamba env list | awk '{print $1}' | grep -qx "${conda_env}"; then
-            log "Creating GoFCards normalizer conda env ${conda_env}"
-            CONDA_ENV="${conda_env}" bash "${workflow}" create_env || {
-                log "ERROR: Failed to create GoFCards normalizer conda env ${conda_env}"
-                return 1
-            }
-        fi
-    fi
+    log "Building GoFCards exact GOF cache -> ${target_tsv}"
+    python "${builder_script}" \
+        --workdir "${workdir}" \
+        --out-json "${target_tsv}" \
+        --hg19-fasta "${hg19_fasta}" \
+        --hg38-fasta "${hg38_fasta}" \
+        --chain "${chain_file}" \
+        --vep-cache-dir "${vep_cache_dir}" \
+        --vep-cache-version "${vep_version}" \
+        --hgnc-table "${hgnc_table}" \
+        --mechanism-review-tsv "${review_tsv}" \
+        --stats-json "${stats_json}" 2>&1 | tee "${workdir}/gofcards_build.log"
 
-    log "Building PriVA GoFCards exact GOF cache from raw GoFCards backend/public sources into ${target_tsv}"
-    if command -v mamba >/dev/null 2>&1 && mamba env list | awk '{print $1}' | grep -qx "${conda_env}"; then
-        env \
-            WORKDIR="${workdir}" \
-            PRIVA_GOF_TSV="${target_tsv}" \
-            PUBLIC_EXCEL_URL="${public_excel_url}" \
-            HG19_FASTA="${hg19_fasta}" \
-            HG38_FASTA="${hg38_fasta}" \
-            VEP="${vep_bin}" \
-            VEP_CACHE_HG19="${vep_cache_dir}" \
-            VEP_CACHE_VERSION_HG19="${vep_version}" \
-            VEP_CACHE_MERGED_HG19=1 \
-            VEP_CACHE_HG38="${vep_cache_hg38}" \
-            VEP_CACHE_VERSION_HG38="${vep_version_hg38}" \
-            VEP_CACHE_MERGED_HG38="${vep_merged_hg38}" \
-            HGNC_COMPLETE_SET_TSV="${hgnc_tsv}" \
-            mamba run -n "${conda_env}" bash "${workflow}" run_all || {
-                log "ERROR: Failed to build GoFCards exact GOF cache"
-                return 1
-            }
-    else
-        env \
-            WORKDIR="${workdir}" \
-            PRIVA_GOF_TSV="${target_tsv}" \
-            PUBLIC_EXCEL_URL="${public_excel_url}" \
-            HG19_FASTA="${hg19_fasta}" \
-            HG38_FASTA="${hg38_fasta}" \
-            VEP="${vep_bin}" \
-            VEP_CACHE_HG19="${vep_cache_dir}" \
-            VEP_CACHE_VERSION_HG19="${vep_version}" \
-            VEP_CACHE_MERGED_HG19=1 \
-            VEP_CACHE_HG38="${vep_cache_hg38}" \
-            VEP_CACHE_VERSION_HG38="${vep_version_hg38}" \
-            VEP_CACHE_MERGED_HG38="${vep_merged_hg38}" \
-            HGNC_COMPLETE_SET_TSV="${hgnc_tsv}" \
-            bash "${workflow}" run_all || {
-                log "ERROR: Failed to build GoFCards exact GOF cache"
-                return 1
-            }
-    fi
+    local build_status=${PIPESTATUS[0]}
+    [[ ${build_status} -eq 0 ]] || {
+        log "ERROR: GoFCards cache build failed; see ${workdir}/gofcards_build.log"
+        return 1
+    }
 
     validate_gofcards_exact_gof_cache "${target_tsv}" || {
         log "ERROR: GoFCards exact GOF cache validation failed"
         return 1
     }
-    update_yaml "${config_file}" "gofcards_exact_gof_hgvsp" "${target_tsv}"
+    update_yaml "${config_file}" "gofcards_exact_gof_cache" "${target_tsv}"
+    update_yaml "${config_file}" "gofcards_builder_script" "${builder_script}"
+    update_yaml "${config_file}" "gofcards_mechanism_review_tsv" "${review_tsv}"
     log "GoFCards exact GOF cache deployed: ${target_tsv}"
 }
 
@@ -2447,7 +2338,7 @@ function gene_nonlof_mechanism_cache_install() {
     builder_script=$(yaml_value_or_default "${config_file}" "gene_nonlof_mechanism_builder_script" "${SCRIPT_DIR}/build_gene_nonlof_mechanism_cache.py")
     cache_json=$(yaml_value_or_default "${config_file}" "gene_nonlof_mechanism_json" "${cache_dir}/prepared/gene_nonlof_mechanism_curated_assertions.json")
     schema_json=$(yaml_value_or_default "${config_file}" "gene_nonlof_mechanism_schema" "${cache_dir}/schema/gene_nonlof_mechanism_curated_assertions.schema.json")
-    gofcards_variants=$(yaml_value_or_default "${config_file}" "gofcards_exact_gof_hgvsp" "${DATA_DIR}/gofcards/gofcards_exact_gof_hgvsp.tsv.gz")
+    gofcards_variants=$(yaml_value_or_default "${config_file}" "gofcards_exact_gof_cache" "${DATA_DIR}/gofcards/gofcards_exact_gof.json.gz")
     hgnc_table=$(yaml_value_or_default "${config_file}" "hgnc_table" "${DATA_DIR}/hgnc/non_alt_loci_set.tsv")
 
     [[ -f ${builder_script} ]] || { log "ERROR: Non-LOF builder not found: ${builder_script}"; return 1; }
@@ -2527,7 +2418,7 @@ function hpo_condition_mechanism_cache_install() {
     if [[ -z ${mechanism_json} ]]; then
         mechanism_json=$(yaml_value_or_default "${config_file}" "gene_mechanism_json" "${DATA_DIR}/gene_pathogenic_mechanism/prepared/gene_mechanism_curated_assertions.json")
     fi
-    gofcards_variants=$(yaml_value_or_default "${config_file}" "gofcards_exact_gof_hgvsp" "${DATA_DIR}/gofcards/gofcards_exact_gof_hgvsp.tsv.gz")
+    gofcards_variants=$(yaml_value_or_default "${config_file}" "gofcards_exact_gof_cache" "${DATA_DIR}/gofcards/gofcards_exact_gof.json.gz")
     hpo_release=$(yaml_value_or_default "${config_file}" "hpo_release" "")
     mondo_release=$(yaml_value_or_default "${config_file}" "mondo_release" "")
 

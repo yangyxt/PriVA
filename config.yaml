@@ -11,6 +11,7 @@ hg38_hg19_chain: "hg38ToHg19.over.chain.gz"   # Included in the GitHub repo, not
 # Below specify the major directories to store the annotation resources
 gnomad_vcf_dir: "/paedyl01/disk1/yangyxt/public_data/gnomAD/v4_dataset"  # The directory to store the gnomAD related annotation resources
 clinvar_vcf_dir: "/paedyl01/disk1/yangyxt/public_data/clinvar"  # The directory to store the ClinVar related annotation resources
+vep_installed_version: "113"
 vep_cache_dir: "/paedyl01/disk1/yangyxt/public_data/VEP_caches"  # the cache directory for VEP
 vep_plugins_dir: "/paedyl01/disk1/yangyxt/public_data/VEP_plugins"  # the directory containing the VEP plugins executable files
 vep_plugins_cachedir: "/paedyl01/disk1/yangyxt/public_data/VEP_plugins_caches"   # the directory for storing the VEP plugin caches
@@ -157,18 +158,14 @@ panelapp_panels_url: "https://panelapp.genomicsengland.co.uk/api/v1/panels/"
 
 # GoFCards exact variant-level GOF cache paths
 # Built by: bash scripts/install_utils.sh gofcards_exact_gof_cache_install config.yaml
-gofcards_exact_gof_hgvsp: /paedyl01/disk1/yangyxt/PriVA/data/gofcards/gofcards_exact_gof_hgvsp.tsv.gz
+gofcards_exact_gof_cache: /paedyl01/disk1/yangyxt/PriVA/data/gofcards/gofcards_exact_gof.json.gz
 gofcards_public_excel_url: "https://download.genemed.tech/upload/GainFunCards/gofcards_data_download.xlsx"
 gofcards_refresh_days: "180"
-gofcards_normalizer_repo_url: "https://github.com/yangyxt/gofcards_hg38_normalizer.git"
-gofcards_normalizer_repo_dir: "/paedyl01/disk1/yangyxt/gofcards_hg38_normalizer"
-gofcards_normalizer_workflow: "/paedyl01/disk1/yangyxt/gofcards_hg38_normalizer/bin/gofcards_workflow.sh"
 gofcards_workdir: "/paedyl01/disk1/yangyxt/PriVA/data/gofcards/build_work"
-gofcards_conda_env: "gofcards_hg38"
 gofcards_hg38_fasta: "/paedyl01/disk1/yangyxt/indexed_genome/hg38/ucsc.hg38.fasta"
-gofcards_vep_cache_hg38: "/paedyl01/disk1/yangyxt/public_data/VEP_caches"
-gofcards_vep_cache_version_hg38: "113"
-gofcards_vep_cache_merged_hg38: "1"
+gofcards_hg19_to_hg38_chain: "/paedyl01/disk1/yangyxt/public_data/liftOver/hg19ToHg38.over.chain"
+gofcards_builder_script: "/paedyl01/disk1/yangyxt/PriVA/scripts/build_gofcards_exact_gof_cache.py"
+gofcards_mechanism_review_tsv: "/paedyl01/disk1/yangyxt/PriVA/data/gofcards/gofcards_mechanism_reviews.tsv"
 
 # HPO/MONDO disease-scope resources
 # Built by: bash scripts/install_utils.sh mondo_hpo_scope_install config.yaml

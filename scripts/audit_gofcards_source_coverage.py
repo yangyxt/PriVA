@@ -23,7 +23,7 @@ CONDITION_SOURCES = ("G2P_DDG2P", "Orphadata")
 CANONICAL_MECHANISMS = {"LOF", "GOF", "DOMINANT_NEGATIVE", "TRIPLOSENSITIVITY"}
 SCRIPT_DIR = Path(__file__).resolve().parent
 PRIVA_ROOT = SCRIPT_DIR.parent
-DEFAULT_GOFCARDS = PRIVA_ROOT / "data" / "gofcards" / "gofcards_exact_gof_hgvsp.tsv.gz"
+DEFAULT_GOFCARDS = PRIVA_ROOT / "data" / "gofcards" / "gofcards_exact_gof.json.gz"
 DEFAULT_EVIDENCE = (
     PRIVA_ROOT
     / "data"

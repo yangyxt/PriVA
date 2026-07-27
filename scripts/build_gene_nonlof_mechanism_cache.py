@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import gzip
 import json
 import os
 import re
@@ -25,11 +26,13 @@ from collections import Counter, defaultdict
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Iterable
+from typing import Any, Callable, Iterable, Iterator
 
 import pandas as pd
 
 from clinvar_vcv import (
+    GOFCARDS_EXACT_REQUIRED_COLUMNS,
+    gofcards_allele_records as _gofcards_allele_records,
     flatten_match_audit,
     load_exact_gofcards_lookup,
     stream_parse_clinvar_vcv,
@@ -40,7 +43,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_CACHE_DIR = PROJECT_ROOT / "data" / "gene_pathogenic_mechanism"
 DEFAULT_SHARED_RAW_DIR = DEFAULT_CACHE_DIR / "raw"
 DEFAULT_GOFCARDS_EXACT_VARIANTS = (
-    PROJECT_ROOT / "data" / "gofcards" / "gofcards_exact_gof_hgvsp.tsv.gz"
+    PROJECT_ROOT / "data" / "gofcards" / "gofcards_exact_gof.json.gz"
 )
 DEFAULT_HGNC_TABLE = PROJECT_ROOT / "data" / "hgnc" / "non_alt_loci_set.tsv"
 NONLOF_ASSERTIONS_FILENAME = "gene_nonlof_mechanism_curated_assertions.json"
@@ -59,57 +62,6 @@ NONLOF_SOURCE_MANIFEST_FILENAME = "nonlof_source_manifest.json"
 NONLOF_SOURCE_MANIFEST_TSV_FILENAME = "nonlof_source_manifest.tsv"
 NONLOF_RUN_SUMMARY_FILENAME = "nonlof_run_summary.json"
 
-GOFCARDS_EXACT_REQUIRED_COLUMNS = [
-    "source",
-    "mechanism",
-    "build",
-    "HGNC_Symbol",
-    "GoFCards_HGNC_Symbol",
-    "VEP_HGNC_Symbol",
-    "gene_match_status",
-    "match_eligibility",
-    "VEP_assembly",
-    "VEP_transcript",
-    "feature_type",
-    "consequence",
-    "HGVSc",
-    "HGVSp",
-    "hgvsp_key",
-    "match_status",
-    "raw_GoFCards_HGVS",
-    "GoFCards_transcript",
-    "canonical_transcript",
-    "hg19_chrom",
-    "hg19_pos",
-    "hg19_ref",
-    "hg19_alt",
-    "hg19_vcf_status",
-    "hg38_chrom",
-    "hg38_pos",
-    "hg38_ref",
-    "hg38_alt",
-    "hg38_refalt_status",
-    "gofcards_accession_id",
-    "gofcards_variant_id",
-    "disease",
-    "pmids",
-    "pscore",
-    "function",
-    "pathway",
-    "derived_on",
-    "allele_key",
-    "hg19_genomic_key",
-    "hg19_vcf_pos",
-    "hg19_vcf_ref",
-    "hg19_vcf_alt",
-    "hg38_vcf_pos",
-    "hg38_vcf_ref",
-    "hg38_vcf_alt",
-    "hg19_vcf_key",
-    "hg38_genomic_key",
-    "hg38_vcf_key",
-    "match_key_types",
-]
 
 GOFCARDS_EXACT_REVIEW_COLUMNS = [
     "source_mechanism",
@@ -1551,31 +1503,6 @@ def _nonempty(d: dict) -> dict:
     return {k: v for k, v in d.items() if v is not None and v != "" and v != []}
 
 
-def _clean_gofcards_exact_record(row: dict[str, Any]) -> dict[str, Any]:
-    """Convert one exact-cache row to canonical JSON without placeholders."""
-    record: dict[str, Any] = {}
-    for key in GOFCARDS_EXACT_COLUMNS:
-        value = str(row.get(key, "")).strip()
-        if value.lower() in GOFCARDS_EXACT_MISSING_VALUES:
-            continue
-        if key == "pmids":
-            pmids = _split_pmids(value)
-            if pmids:
-                record[key] = pmids
-        elif key == "pscore":
-            try:
-                record[key] = float(value)
-            except ValueError:
-                record[key] = value
-        elif key == "match_key_types":
-            values = sorted({part.strip() for part in value.split(";") if part.strip()})
-            if values:
-                record[key] = values
-        else:
-            record[key] = value
-    return record
-
-
 def gofcards_allele_identity(allele_key: Any) -> str:
     """Return a type-independent identity for one GoFCards source allele.
 
@@ -1657,26 +1584,22 @@ def gofcards_upstream_quarantine_status(
 def load_gofcards_exact_records(
     path: Path,
 ) -> tuple[dict[str, list[dict[str, Any]]], dict[str, int]]:
-    """Load normalized GoFCards rows by type-independent source-allele identity."""
-    frame = pd.read_csv(path, sep="\t", dtype=str, keep_default_na=False)
-    missing = [
-        column
-        for column in GOFCARDS_EXACT_REQUIRED_COLUMNS
-        if column not in frame.columns
-    ]
-    if missing:
-        raise ValueError(f"GoFCards exact cache lacks columns: {missing}")
+    """Load the nested GoFCards cache, keyed by type-independent allele identity."""
+    opener = gzip.open if str(path).endswith(".gz") else open
+    with opener(path, "rt", encoding="utf-8") as handle:
+        cache = json.load(handle)
+    if "genes" not in cache:
+        raise ValueError(f"GoFCards cache has no 'genes' block: {path}")
 
     by_allele: dict[str, list[dict[str, Any]]] = defaultdict(list)
-    seen: set[str] = set()
     duplicate_rows = 0
     quarantined_rows = 0
-    for row in frame.to_dict(orient="records"):
-        record = _clean_gofcards_exact_record(row)
+    seen: set[str] = set()
+    for record in _gofcards_allele_records(cache):
         allele_key = str(record.get("allele_key", ""))
         symbol = str(record.get("HGNC_Symbol", ""))
         if not allele_key or not symbol:
-            raise ValueError("Every GoFCards exact-cache row requires allele_key and HGNC_Symbol")
+            raise ValueError("Every GoFCards allele requires allele_key and HGNC_Symbol")
         allele_identity = gofcards_allele_identity(allele_key)
         if not allele_identity:
             raise ValueError(f"Cannot derive identity from GoFCards allele key: {allele_key}")
@@ -1690,21 +1613,15 @@ def load_gofcards_exact_records(
         by_allele[allele_identity].append(record)
 
     for records in by_allele.values():
-        records.sort(
-            key=lambda item: (
-                str(item.get("HGNC_Symbol", "")),
-                str(item.get("VEP_assembly", "")),
-                str(item.get("VEP_transcript", "")),
-                str(item.get("HGVSc", "")),
-            )
-        )
-    return dict(by_allele), {
-        "cache_rows": len(frame),
-        "unique_cache_rows": len(seen),
-        "unique_alleles": len(by_allele),
-        "duplicate_cache_rows_removed": duplicate_rows,
-        "quarantined_cache_rows": quarantined_rows,
+        records.sort(key=lambda item: (str(item.get("HGNC_Symbol", "")),
+                                       str(item.get("allele_key", ""))))
+    stats = {
+        "gofcards_alleles": len(by_allele),
+        "gofcards_records": sum(len(v) for v in by_allele.values()),
+        "gofcards_duplicate_rows": duplicate_rows,
+        "gofcards_quarantined_rows": quarantined_rows,
     }
+    return dict(by_allele), stats
 
 
 def _g2p_assertion(row: dict) -> dict:

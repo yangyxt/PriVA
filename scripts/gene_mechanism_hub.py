@@ -61,7 +61,7 @@ DEFAULT_MECHANISM_JSON = (
 DEFAULT_DDG2P_MECHANISM_EVIDENCE = (
     DATA_DIR / "gene_pathogenic_mechanism" / "prepared" / "gene_pathogenic_mechanism_evidence.tsv"
 )
-DEFAULT_GOFCARDS_EXACT_GOF_HGVSP = DATA_DIR / "gofcards" / "gofcards_exact_gof_hgvsp.tsv.gz"
+DEFAULT_GOFCARDS_EXACT_GOF_HGVSP = DATA_DIR / "gofcards" / "gofcards_exact_gof.json.gz"
 DEFAULT_GOFCARDS_RAW_XLSX = (
     DATA_DIR / "gene_pathogenic_mechanism" / "raw" / "gofcards" / "gofcards_data_download.xlsx"
 )
@@ -1292,13 +1292,18 @@ class GeneMechanismHub:
             symbol = self._try_resolve_symbol(cache_symbol)
             if not symbol:
                 symbol = _clean(cache_symbol)
-            hgvsp_key = _clean(row.get("hgvsp_key")) or _norm_hgvsp(row.get("HGVSp"))
-            if not symbol or not hgvsp_key:
+            hgvsp_keys = row.get("hgvsp_keys")
+            if not isinstance(hgvsp_keys, (list, tuple)):
+                single = _clean(row.get("hgvsp_key")) or _norm_hgvsp(row.get("HGVSp"))
+                hgvsp_keys = [single] if single else []
+            hgvsp_keys = [_clean(k) for k in hgvsp_keys if _clean(k)]
+            if not symbol or not hgvsp_keys:
                 continue
             match_status = _clean(row.get("match_status")) or _clean(
                 row.get("gofcards_hgvs_match_status")
             )
-            by_symbol_hgvsp[(symbol, hgvsp_key)].append(
+            for hgvsp_key in hgvsp_keys:
+              by_symbol_hgvsp[(symbol, hgvsp_key)].append(
                 {
                     "source": _clean(row.get("source")),
                     "mechanism": _clean(row.get("mechanism")),

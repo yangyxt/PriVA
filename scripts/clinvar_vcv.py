@@ -31,21 +31,100 @@ ASSEMBLY_TO_BUILD = {
     "GRCh38": "hg38",
 }
 
-EXACT_GOFCARDS_COLUMNS = (
-    "HGNC_Symbol",
-    "GoFCards_HGNC_Symbol",
-    "VEP_HGNC_Symbol",
-    "gene_match_status",
-    "match_eligibility",
-    "gofcards_accession_id",
-    "gofcards_variant_id",
-    "allele_key",
-    "hg19_vcf_key",
-    "hg38_vcf_key",
-    "disease",
-    "pmids",
-    "pscore",
-)
+# The allele-record shape and the flattener live here, in the lower-level
+# module, so both consumers share one definition without an import cycle.
+GOFCARDS_EXACT_REQUIRED_COLUMNS = [
+    "source", "mechanism", "build", "derived_on",
+    "HGNC_Symbol", "GoFCards_HGNC_Symbol", "VEP_HGNC_Symbol",
+    "gene_match_status", "match_eligibility", "reject_reason",
+    "allele_key", "gofcards_variant_id", "gofcards_accession_id",
+    "raw_GoFCards_HGVS", "match_status", "liftover_status",
+    "hgvsp_keys", "hgvsc_keys",
+    "hg19_vcf_key", "hg38_vcf_key", "hg19_genomic_key", "hg38_genomic_key",
+    "hg19_vcf_status", "hg38_refalt_status",
+    "hg19_chrom", "hg19_pos", "hg19_ref", "hg19_alt",
+    "hg19_vcf_pos", "hg19_vcf_ref", "hg19_vcf_alt",
+    "hg38_chrom", "hg38_pos", "hg38_ref", "hg38_alt",
+    "hg38_vcf_pos", "hg38_vcf_ref", "hg38_vcf_alt",
+    "pmids", "evidence_record_count", "transcripts", "match_key_types",
+]
+
+EXACT_GOFCARDS_COLUMNS = GOFCARDS_EXACT_REQUIRED_COLUMNS
+
+
+def gofcards_allele_records(cache: dict[str, Any]) -> Iterator[dict[str, Any]]:
+    """Yield one flat record per GoFCards allele from the nested cache.
+
+    The cache is nested gene -> allele -> assembly -> transcript so that
+    evidence and coordinates are stored once each. Runtime matching needs a flat
+    record per allele carrying the lookup keys, so the transcript detail is
+    summarized into key lists here rather than expanded into one record per
+    transcript, which is what previously inflated this cache thirteen-fold.
+    """
+    meta = cache.get("metadata", {})
+    for symbol, gene in (cache.get("genes") or {}).items():
+        for allele_id, allele in (gene.get("alleles") or {}).items():
+            eligibility = allele.get("eligibility") or {}
+            keys = allele.get("match_keys") or {}
+            assemblies = allele.get("assemblies") or {}
+            hg19 = (assemblies.get("hg19") or {}).get("coordinates") or {}
+            hg38 = (assemblies.get("hg38") or {}).get("coordinates") or {}
+            evidence = allele.get("evidence") or []
+            source = allele.get("source_allele") or {}
+            record = {
+                "source": meta.get("source", "GoFCards"),
+                "mechanism": meta.get("mechanism", "GOF"),
+                "build": "hg19_and_hg38" if hg38 else "hg19",
+                "derived_on": meta.get("derived_on", ""),
+                "HGNC_Symbol": symbol,
+                "GoFCards_HGNC_Symbol": symbol,
+                "VEP_HGNC_Symbol": eligibility.get("vep_symbol") or "",
+                "gene_match_status": eligibility.get("gene_match_status", ""),
+                "match_eligibility": eligibility.get("status", ""),
+                "reject_reason": eligibility.get("reason") or "",
+                "allele_key": source.get("allele_key", allele_id),
+                "gofcards_variant_id": source.get("allele_key", allele_id),
+                "gofcards_accession_id": allele.get("rsid") or "",
+                "raw_GoFCards_HGVS": allele.get("source_protein_change") or "",
+                "match_status": allele.get("protein_change_agreement", ""),
+                "liftover_status": allele.get("liftover_status", ""),
+                "hgvsp_keys": list(keys.get("hgvsp") or []),
+                "hgvsc_keys": list(keys.get("hgvsc") or []),
+                "hg19_vcf_key": keys.get("hg19_vcf") or "",
+                "hg38_vcf_key": keys.get("hg38_vcf") or "",
+                "hg19_genomic_key": keys.get("hg19_genomic") or "",
+                "hg38_genomic_key": keys.get("hg38_vcf") or "",
+                "hg19_vcf_status": allele.get("vcf_construction") or (assemblies.get("hg19") or {}).get("status", ""),
+                "hg38_refalt_status": (assemblies.get("hg38") or {}).get("status", "liftover_unmapped"),
+                "pmids": [e.get("pmid", "") for e in evidence if e.get("pmid")],
+                "evidence_record_count": len(evidence),
+                "transcripts": {
+                    assembly: sorted((block.get("transcripts") or {}).keys())
+                    for assembly, block in assemblies.items()
+                },
+            }
+            for assembly, coords in (("hg19", hg19), ("hg38", hg38)):
+                if coords:
+                    record[f"{assembly}_chrom"] = coords.get("chrom", "")
+                    record[f"{assembly}_pos"] = str(coords.get("pos", ""))
+                    record[f"{assembly}_ref"] = coords.get("ref", "")
+                    record[f"{assembly}_alt"] = coords.get("alt", "")
+                    record[f"{assembly}_vcf_pos"] = str(coords.get("pos", ""))
+                    record[f"{assembly}_vcf_ref"] = coords.get("ref", "")
+                    record[f"{assembly}_vcf_alt"] = coords.get("alt", "")
+            record["match_key_types"] = [
+                name for name, present in (
+                    ("hgvsp", record["hgvsp_keys"]), ("hgvsc", record["hgvsc_keys"]),
+                    ("hg19_vcf", record["hg19_vcf_key"]), ("hg19_genomic", record["hg19_genomic_key"]),
+                    ("hg38_vcf", record["hg38_vcf_key"]), ("hg38_genomic", record["hg38_genomic_key"]),
+                ) if present
+            ]
+            # The canonical schema forbids empty strings on these fields, and an
+            # absent rsID or missing GRCh38 coordinate is a real state, not a
+            # blank. Omit rather than emit "".
+            yield {k: v for k, v in record.items() if v not in ("", None, [], {})}
+
+
 
 
 def _text(element: ET.Element | None) -> str:
@@ -170,15 +249,19 @@ def load_exact_gofcards_lookup(path: Path) -> dict[tuple[str, str], list[dict[st
     builder invocation from silently consuming the legacy VEP-gene-rewritten
     compact format.
     """
-    frame = pd.read_csv(path, sep="\t", dtype=str).fillna("")
-    missing = [column for column in EXACT_GOFCARDS_COLUMNS if column not in frame.columns]
-    if missing:
-        raise ValueError(f"GoFCards exact-variant file lacks columns: {missing}")
+    # The cache is nested gene -> allele -> assembly -> transcript. Flattening
+    # to one record per allele here keeps this index unchanged in shape while
+    # the stored form no longer repeats evidence on every transcript.
+    opener = gzip.open if str(path).endswith(".gz") else open
+    with opener(path, "rt", encoding="utf-8") as handle:
+        cache = json.load(handle)
+    if "genes" not in cache:
+        raise ValueError(f"GoFCards cache has no 'genes' block: {path}")
 
     lookup: dict[tuple[str, str], list[dict[str, str]]] = defaultdict(list)
     seen: set[tuple[str, str, str, str]] = set()
     eligible_rows, _quarantined_rows = partition_exact_gofcards_rows(
-        frame.to_dict(orient="records")
+        list(gofcards_allele_records(cache))
     )
     for row in eligible_rows:
         source_symbol = str(row.get("GoFCards_HGNC_Symbol", "")).strip().upper()
@@ -189,9 +272,9 @@ def load_exact_gofcards_lookup(path: Path) -> dict[tuple[str, str], list[dict[st
                 f"{exported_symbol or '<blank>'}/{source_symbol or '<blank>'}"
             )
         compact = {
-            key: str(row.get(key, "")).strip()
+            key: row[key]
             for key in EXACT_GOFCARDS_COLUMNS
-            if str(row.get(key, "")).strip()
+            if row.get(key) not in (None, "", [], {})
         }
         symbol = compact.get("HGNC_Symbol", "")
         allele_key = compact.get("allele_key", "")

@@ -127,6 +127,7 @@ def test_failed_rebuild_does_not_advance_source_manifest(
         clinvar_min_review_stars=2,
         clinvar_max_download_seconds=60,
         clinvar_only_refresh=False,
+        fetch_sources_only=False,
         force=False,
         max_panelapp_panels=None,
         timeout=1,
@@ -156,3 +157,75 @@ def test_failed_rebuild_does_not_advance_source_manifest(
         nonlof.main()
 
     assert json.loads(manifest_path.read_text(encoding="utf-8")) == previous_manifest
+
+
+def test_fetch_sources_only_stops_before_the_build(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The installer runs this phase before ClinVar injection exists, so the
+    # GoFCards cache the ordinary build reads is still missing here. The phase
+    # must place the raw sources without touching that file, and must leave the
+    # previous build_inputs alone so the next full run can still tell whether a
+    # rebuild is needed.
+    cache_dir = tmp_path / "cache"
+    raw_dir = cache_dir / "raw"
+    manifest_path = cache_dir / "metadata" / nonlof.NONLOF_SOURCE_MANIFEST_FILENAME
+    previous_build_inputs = {"builder_sha256": "previous"}
+    manifest_path.parent.mkdir(parents=True)
+    manifest_path.write_text(
+        json.dumps({"schema_version": "2.0", "build_inputs": previous_build_inputs}),
+        encoding="utf-8",
+    )
+
+    missing_gofcards = tmp_path / "gofcards_not_written_yet.json.gz"
+    hgnc = tmp_path / "hgnc.tsv"
+    schema = tmp_path / "schema.json"
+    for path in (hgnc, schema):
+        path.write_text("fixture\n", encoding="utf-8")
+
+    args = argparse.Namespace(
+        validate_only=None,
+        cache_dir=cache_dir,
+        shared_raw_dir=str(raw_dir),
+        gofcards_exact_variants=missing_gofcards,
+        hgnc_table=hgnc,
+        output_schema=schema,
+        clinvar_min_review_stars=2,
+        clinvar_max_download_seconds=60,
+        clinvar_only_refresh=False,
+        fetch_sources_only=True,
+        force=False,
+        max_panelapp_panels=None,
+        timeout=1,
+        retries=1,
+        proxy_url="",
+        download_tool="auto",
+        stale_lock_hours=1.0,
+    )
+    source_meta = {"sha256": "fixture", "status": "skipped_fresh"}
+    monkeypatch.setattr(nonlof, "parse_args", lambda: args)
+    monkeypatch.setattr(
+        nonlof, "fetch_static_source", lambda **_kwargs: dict(source_meta)
+    )
+    monkeypatch.setattr(nonlof, "fetch_panelapp", lambda **_kwargs: dict(source_meta))
+    monkeypatch.setattr(
+        nonlof, "fetch_clinvar_vcv", lambda **_kwargs: dict(source_meta)
+    )
+
+    def fail_if_reached(**_kwargs: object) -> None:
+        raise AssertionError("the build ran during a sources-only phase")
+
+    monkeypatch.setattr(nonlof, "parse_all_sources", fail_if_reached)
+
+    assert nonlof.main() == 0
+
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    # Downloads recorded, so the full run afterwards skips them.
+    assert set(manifest["sources"]) == {
+        source.name for source in nonlof.SOURCES
+    } | {nonlof.PANELAPP_SPEC.name, nonlof.CLINVAR_VCV_SPEC.name}
+    # Carried forward, not replaced by a partial record.
+    assert manifest["build_inputs"] == previous_build_inputs
+    # No cache published, and the missing GoFCards input was never required.
+    assert not (cache_dir / "prepared" / nonlof.NONLOF_ASSERTIONS_FILENAME).exists()
+    assert not missing_gofcards.exists()

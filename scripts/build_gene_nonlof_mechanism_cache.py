@@ -5,6 +5,12 @@ The builder is called by ``scripts/install_utils.sh`` after the exact GoFCards
 cache is available. It checks each upstream source according to that source's
 refresh interval, records checksums, injects eligible ClinVar VCV evidence,
 validates the complete result, and atomically publishes one canonical JSON.
+
+The installer calls it twice, because this builder both downloads the weekly
+ClinVar VCV XML and consumes a GoFCards cache that cannot exist until that XML
+has been injected into it. ``--fetch-sources-only`` runs just the download half
+so injection has its input; the ordinary call afterwards builds the cache and
+reuses the files the first call already placed.
 """
 
 from __future__ import annotations
@@ -1919,6 +1925,17 @@ def parse_args() -> argparse.Namespace:
             "forward, then rebuild the canonical JSON from all existing raw files."
         ),
     )
+    parser.add_argument(
+        "--fetch-sources-only",
+        action="store_true",
+        help=(
+            "Check/download the upstream sources, record the manifest, then "
+            "exit without building the cache. The installer uses this to place "
+            "the weekly ClinVar VCV XML before ClinVar injection runs, because "
+            "injection writes the GoFCards cache this builder reads and so "
+            "cannot wait for the full build to fetch that XML."
+        ),
+    )
     parser.add_argument("--force", action="store_true", help="Check/download all sources.")
     parser.add_argument(
         "--max-panelapp-panels",
@@ -1981,6 +1998,9 @@ def main() -> int:
     prepared_dir = cache_dir / "prepared"
     metadata_dir = cache_dir / "metadata"
     manifest_path = metadata_dir / NONLOF_SOURCE_MANIFEST_FILENAME
+    manifest_tsv_path = prepared_dir / NONLOF_SOURCE_MANIFEST_TSV_FILENAME
+    json_path = prepared_dir / NONLOF_ASSERTIONS_FILENAME
+    summary_path = prepared_dir / NONLOF_RUN_SUMMARY_FILENAME
     lock_path = raw_dir / ".build.lock" if raw_dir_is_shared else cache_dir / ".build.lock"
 
     with BuildLock(lock_path, stale_hours=args.stale_lock_hours):
@@ -2049,6 +2069,48 @@ def main() -> int:
             "built_at_utc": iso_now(),
             "sources": source_meta,
         }
+        if args.fetch_sources_only:
+            # Stop before any build input is hashed. On a first install the
+            # GoFCards cache hashed just below does not exist yet: ClinVar
+            # injection is what writes it, and injection needs the XML this
+            # phase has just fetched.
+            #
+            # The previous build_inputs are carried forward rather than
+            # dropped. They are what the next full run compares against to
+            # decide whether a rebuild is needed, so replacing them with a
+            # partial record here would force a rebuild on every install.
+            previous_build_inputs = previous_manifest.get("build_inputs")
+            if previous_build_inputs is not None:
+                manifest["build_inputs"] = previous_build_inputs
+            write_json(manifest_path, manifest)
+            manifest_tsv_count = write_source_manifest_tsv(
+                manifest_tsv_path,
+                manifest,
+            )
+            run_summary = read_json(summary_path)
+            run_summary.update(
+                {
+                    "last_checked_at_utc": manifest["built_at_utc"],
+                    "status": "fetched_sources_only",
+                    "source_manifest_rows": manifest_tsv_count,
+                }
+            )
+            write_json(summary_path, run_summary)
+            print(
+                json.dumps(
+                    {
+                        "status": "fetched_sources_only",
+                        "clinvar_vcv_xml": source_meta[CLINVAR_VCV_SPEC.name].get(
+                            "raw_path", ""
+                        ),
+                        "source_manifest_json": str(manifest_path),
+                    },
+                    indent=2,
+                    sort_keys=True,
+                )
+            )
+            return 0
+
         gofcards_exact_path = args.gofcards_exact_variants.resolve()
         hgnc_path = args.hgnc_table.resolve()
         schema_path = args.output_schema.resolve()
@@ -2071,8 +2133,6 @@ def main() -> int:
             },
         }
         manifest["build_inputs"] = build_inputs
-        manifest_tsv_path = prepared_dir / NONLOF_SOURCE_MANIFEST_TSV_FILENAME
-        json_path = prepared_dir / NONLOF_ASSERTIONS_FILENAME
         if (
             not args.force
             and json_path.exists()
@@ -2084,7 +2144,6 @@ def main() -> int:
                 manifest_tsv_path,
                 manifest,
             )
-            summary_path = prepared_dir / NONLOF_RUN_SUMMARY_FILENAME
             run_summary = read_json(summary_path)
             run_summary.update(
                 {
@@ -2203,13 +2262,11 @@ def main() -> int:
             },
             "outputs": {
                 "source_manifest_json": str(manifest_path),
-                "source_manifest_tsv": str(
-                    prepared_dir / NONLOF_SOURCE_MANIFEST_TSV_FILENAME
-                ),
+                "source_manifest_tsv": str(manifest_tsv_path),
                 "nonlof_assertions_json": str(json_path),
             },
         }
-        write_json(prepared_dir / NONLOF_RUN_SUMMARY_FILENAME, run_summary)
+        write_json(summary_path, run_summary)
         print(json.dumps(run_summary, indent=2, sort_keys=True))
     return 0
 

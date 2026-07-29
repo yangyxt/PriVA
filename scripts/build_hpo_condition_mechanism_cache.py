@@ -634,12 +634,18 @@ def _normalize_clinvar_condition_identifier(
     identifier = _clean(value).upper()
     if not database or not identifier:
         return ""
+    # Only the three registries the HPO table is keyed by. It carries 12,458
+    # MONDO, 7,360 OMIM and 5,285 ORPHA identifiers and no MedGen at all, so a
+    # MedGen identifier has nothing to join to and admitting it would only
+    # produce identifiers that can never match. ClinVar's `Preferred` and `HP`
+    # values sit in the same place in the structure and are excluded for a
+    # different reason: one is a name qualifier and the other is a phenotype
+    # term, neither is a disease identifier.
     prefixes = {
         "OMIM": "OMIM",
         "MONDO": "MONDO",
         "ORPHA": "ORPHA",
         "ORPHANET": "ORPHA",
-        "MEDGEN": "MEDGEN",
     }
     prefix = prefixes.get(database)
     if not prefix:
@@ -682,208 +688,52 @@ def _clinvar_condition_identities(
     return identities
 
 
-def _gofcards_link_tokens(record: dict[str, Any]) -> list[str]:
-    tokens: list[str] = []
-    for field in (
-        "gofcards_variant_id",
-        "gofcards_accession_id",
-        "allele_key",
-        "hg19_vcf_key",
-        "hg38_vcf_key",
-    ):
-        value = _clean(record.get(field))
-        if value and value not in tokens:
-            tokens.append(value)
-    return tokens
-
-
-def build_clinvar_gofcards_condition_links(
-    mechanism_json: str | Path,
-) -> dict[tuple[str, str], list[dict[str, Any]]]:
-    """Index compact ClinVar condition links by exact GoFCards record tokens."""
-    with Path(mechanism_json).open(encoding="utf-8") as handle:
-        payload = json.load(handle)
-    if not isinstance(payload, dict):
-        raise ValueError(f"{mechanism_json} must contain a JSON object")
-
-    index: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
-    seen: dict[tuple[str, str], set[tuple[str, ...]]] = defaultdict(set)
-    for gene_record in payload.values():
-        if not isinstance(gene_record, dict):
-            continue
-        symbol = _clean(gene_record.get("symbol")).upper()
-        if not symbol:
-            continue
-        for variant_record in gene_record.get("variant_level", []) or []:
-            if not isinstance(variant_record, dict):
-                continue
-            vcv = variant_record.get("ClinVar_VCV")
-            if not isinstance(vcv, dict):
-                continue
-            matched_gofcards = (
-                vcv.get("match", {}).get("matched_gofcards_records", []) or []
-            )
-            tokens = list(
-                dict.fromkeys(
-                    token
-                    for record in matched_gofcards
-                    if isinstance(record, dict)
-                    for token in _gofcards_link_tokens(record)
-                )
-            )
-            if not tokens:
-                continue
-            variation = vcv.get("variation", {}) or {}
-            vcv_accession = _clean(variation.get("vcv_accession"))
-            clinvar_hgvs = list(
-                dict.fromkeys(
-                    _clean(hgvs.get("expression"))
-                    for hgvs in variation.get("hgvs", []) or []
-                    if isinstance(hgvs, dict) and _clean(hgvs.get("expression"))
-                )
-            )
-            for assertion in vcv.get("condition_assertions", []) or []:
-                if not isinstance(assertion, dict):
-                    continue
-                identities = _clinvar_condition_identities(assertion)
-                condition_names = list(
-                    dict.fromkeys(
-                        _clean(condition.get("name"))
-                        for condition in assertion.get("conditions", []) or []
-                        if isinstance(condition, dict)
-                        and _clean(condition.get("name"))
-                    )
-                )
-                classification = assertion.get("germline_classification", {}) or {}
-                link = {
-                    "vcv_accession": vcv_accession,
-                    "rcv_accession": _clean(assertion.get("rcv_accession")),
-                    "condition_identifiers": identities,
-                    "condition_names": condition_names,
-                    "hgvs": clinvar_hgvs,
-                    "clinical_significance": _clean(
-                        classification.get("clinical_significance")
-                    ),
-                    "review_stars": classification.get("review_stars"),
-                }
-                identity = (
-                    link["vcv_accession"],
-                    link["rcv_accession"],
-                    ";".join(identities),
-                )
-                for token in tokens:
-                    key = (symbol, token)
-                    if identity not in seen[key]:
-                        seen[key].add(identity)
-                        index[key].append(link)
-    return dict(index)
-
-
 def _append_unique(target: list[str], value: Any) -> None:
     cleaned = _clean(value)
     if cleaned and cleaned != "." and cleaned not in target:
         target.append(cleaned)
 
 
-def _new_gofcards_variant(row: dict[str, str]) -> dict[str, Any]:
+def gofcards_variant_key(variant_id: str) -> str:
+    """The key a GoFCards variant is published under in this cache."""
+    cleaned = _clean(variant_id)
+    if not cleaned:
+        raise ValueError("GoFCards variant has no identifier")
+    return f"GOFCARDS:{cleaned}"
+
+
+def _gofcards_handover(symbol: str, variant_id: str, variant: dict[str, Any]) -> dict[str, Any]:
+    """Everything the GoFCards cache hands to the condition cache, and no more.
+
+    Gene symbol, transcript with its version, and the HGVS notations. Nothing
+    else: the curated disease text, pathway, functional description and score
+    are evidence about the variant that this cache does not key, join or filter
+    on, and restating them here would be a second copy of the GoFCards cache
+    free to drift from it.
+
+    Every transcript view on both builds is handed over, not a representative
+    one. The transcript *version* differs between GRCh37 and GRCh38 for 1,982 of
+    2,028 variants, so a single entry cannot describe both builds, and one
+    variant is numbered differently on different isoforms -- JAK2 Val617Phe is
+    also Val468Phe -- so a query annotated on any isoform must still be found.
+    """
+    views: list[dict[str, str]] = []
+    for assembly, block in sorted((variant.get("assemblies") or {}).items()):
+        for transcript, view in sorted((block.get("transcripts") or {}).items()):
+            for hgvsc, detail in sorted((view.get("by_hgvsc") or {}).items()):
+                views.append({
+                    "assembly": assembly,
+                    "transcript": transcript,
+                    "hgvsc": hgvsc,
+                    "hgvsp": _clean((detail or {}).get("hgvsp")),
+                })
     return {
         "mechanism": "GOF",
-        "gofcards_variant_ids": [],
-        "gofcards_accession_ids": [],
-        "disease_labels": [],
-        "pmids": [],
-        "pscores": [],
-        "functions": [],
-        "pathways": [],
-        "hgvs": {"coding": [], "protein": []},
-        "match_keys": {"protein": [], "GRCh37": [], "GRCh38": []},
-        "match_statuses": [],
+        "symbol": symbol,
+        "gofcards_variant_id": variant_id,
+        "transcripts": views,
         "clinvar_links": [],
-        "_tokens": [],
     }
-
-
-def _merge_gofcards_variant(
-    variant: dict[str, Any],
-    row: dict[str, str],
-) -> None:
-    _append_unique(variant["gofcards_variant_ids"], row.get("gofcards_variant_id"))
-    _append_unique(
-        variant["gofcards_accession_ids"], row.get("gofcards_accession_id")
-    )
-    _append_unique(variant["disease_labels"], row.get("disease"))
-    for pmid in _split_multi(row.get("pmids")):
-        _append_unique(variant["pmids"], pmid)
-    _append_unique(variant["pscores"], row.get("pscore"))
-    _append_unique(variant["functions"], row.get("function"))
-    _append_unique(variant["pathways"], row.get("pathway"))
-    _append_unique(variant["hgvs"]["coding"], row.get("HGVSc"))
-    _append_unique(variant["hgvs"]["protein"], row.get("HGVSp"))
-    _append_unique(variant["match_keys"]["protein"], row.get("hgvsp_key"))
-    for field in ("hg19_genomic_key", "hg19_vcf_key"):
-        _append_unique(variant["match_keys"]["GRCh37"], row.get(field))
-    for field in ("hg38_genomic_key", "hg38_vcf_key"):
-        _append_unique(variant["match_keys"]["GRCh38"], row.get(field))
-    _append_unique(variant["match_statuses"], row.get("match_status"))
-    for token in _gofcards_link_tokens(row):
-        _append_unique(variant["_tokens"], token)
-
-
-def _gofcards_variant_key(row: dict[str, str]) -> str:
-    for field in (
-        "gofcards_variant_id",
-        "allele_key",
-        "gofcards_accession_id",
-        "hgvsp_key",
-        "hg38_vcf_key",
-        "hg19_vcf_key",
-    ):
-        value = _clean(row.get(field))
-        if value and value != ".":
-            return f"GOFCARDS:{value}"
-    raise ValueError("GoFCards row has no stable variant or allele key")
-
-
-def _gofcards_variant_assertion_key(
-    row: dict[str, str],
-) -> tuple[str, str]:
-    """Return the curated gene plus stable allele identity for quarantine."""
-    symbol = _clean(row.get("HGNC_Symbol")).upper()
-    if not symbol:
-        raise ValueError("GoFCards row has no curated HGNC symbol")
-    return symbol, _gofcards_variant_key(row)
-
-
-def partition_gofcards_variant_rows(
-    rows: Iterator[dict[str, str]] | list[dict[str, str]],
-) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
-    """Partition compact rows using an atomic source-allele quarantine.
-
-    A compact allele can have several transcript rows. If any row is marked
-    ineligible, no sibling row may be copied into the HPO condition cache,
-    even when that sibling is individually gene-concordant. Materializing this
-    resource is inexpensive (roughly four thousand rows) and permits the full
-    allele decision before condition or ClinVar linking begins.
-    """
-    materialized = list(rows)
-    quarantined_keys = {
-        _gofcards_variant_assertion_key(row)
-        for row in materialized
-        if (
-            _clean(row.get("match_eligibility")).lower() != "eligible"
-            or _clean(row.get("mechanism")).upper() != "GOF"
-        )
-    }
-    eligible: list[dict[str, str]] = []
-    quarantined: list[dict[str, str]] = []
-    for row in materialized:
-        target = (
-            quarantined
-            if _gofcards_variant_assertion_key(row) in quarantined_keys
-            else eligible
-        )
-        target.append(row)
-    return eligible, quarantined
 
 
 def _condition_link_mechanism_evidence(
@@ -925,7 +775,7 @@ def _public_variant_record(
     clinvar_links: list[dict[str, Any]] | None = None,
     reason: str = "",
 ) -> dict[str, Any]:
-    record = {key: value for key, value in variant.items() if key != "_tokens"}
+    record = dict(variant)
     record["condition_link"] = {
         "status": status,
         "condition_key": condition_key,
@@ -936,53 +786,90 @@ def _public_variant_record(
     return record
 
 
+def _clinvar_links_by_variant(
+    cache: dict[str, Any],
+) -> dict[tuple[str, str], list[dict[str, Any]]]:
+    """Index ClinVar condition assertions by (gene symbol, variant identifier).
+
+    The injection step nests each ClinVar record under the variant it matched,
+    so the link is already explicit. Nothing has to be re-resolved from tokens.
+
+    Takes the parsed cache rather than a path, so the file is read once for this
+    index and the eligibility partition together.
+    """
+    from clinvar_vcv import iter_gofcards_variants
+
+    index: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
+    for symbol, variant_id, variant in iter_gofcards_variants(cache):
+        blocks = [variant["clinvar"]] if variant.get("clinvar") else []
+        blocks += variant.get("clinvar_additional") or []
+        for block in blocks:
+            vcv = _clean(block.get("vcv_accession"))
+            hgvs = [h for h in (block.get("hgvs") or []) if _clean(h)]
+            for assertion in block.get("condition_assertions") or []:
+                conditions = assertion.get("conditions") or []
+                index[(symbol.strip().upper(), variant_id)].append({
+                    "vcv_accession": vcv,
+                    "hgvs": hgvs,
+                    "rcv_accession": _clean(assertion.get("rcv_accession")),
+                    "clinical_significance": _clean(
+                        (assertion.get("germline_classification") or {}).get(
+                            "clinical_significance"
+                        )
+                    ),
+                    "review_stars": (assertion.get("germline_classification") or {}).get(
+                        "review_stars"
+                    ),
+                    # Reuse the existing extractor: it also reads the trait
+                    # mappings on each submitted record, which is where the OMIM
+                    # and Orphanet identifiers live. The condition list alone
+                    # carries only MedGen, which joins to nothing.
+                    "condition_identifiers": _clinvar_condition_identities(assertion),
+                    "condition_names": [
+                        _clean(c.get("name")) for c in conditions if _clean(c.get("name"))
+                    ],
+                })
+    return dict(index)
+
+
 def attach_gofcards_variants(
     genes: dict[str, dict[str, Any]],
     gofcards_variants: str | Path,
-    mechanism_json: str | Path,
 ) -> dict[str, int]:
     """Nest eligible condition-linked GOF alleles and retain unresolved ones.
 
-    Quarantined compact rows remain auditable in the canonical non-LOF JSON;
-    they must not be copied into the condition cache or exposed as candidate
-    exact alleles.
+    Quarantined variants remain auditable in the canonical non-LOF JSON; they
+    must not be copied into the condition cache or exposed as candidate exact
+    alleles.
+
+    The injected GoFCards cache is the only input. ClinVar conditions were
+    attached to each variant upstream by inject_clinvar_into_gofcards.py, so
+    they are read straight off the variant rather than re-resolved through the
+    non-LOF JSON.
     """
-    clinvar_links = build_clinvar_gofcards_condition_links(mechanism_json)
+    from clinvar_vcv import load_gofcards_cache, partition_gofcards_variants
+
+    # Read once; both the ClinVar link index and the eligibility partition are
+    # built over that same parsed object.
+    cache = load_gofcards_cache(Path(gofcards_variants))
+    clinvar_links = _clinvar_links_by_variant(cache)
     aliases_by_gene = _condition_alias_index(genes)
-    grouped: dict[tuple[str, str], dict[str, Any]] = {}
-    source_rows = list(
-        _iter_tsv_rows(gofcards_variants, GOFCARDS_REQUIRED_COLUMNS)
-    )
-    eligible_rows, quarantined_rows = partition_gofcards_variant_rows(
-        source_rows
-    )
-    for row in eligible_rows:
-        symbol = _clean(row.get("HGNC_Symbol")).upper()
-        if not symbol:
-            continue
-        variant_key = _gofcards_variant_key(row)
-        variant = grouped.setdefault(
-            (symbol, variant_key),
-            _new_gofcards_variant(row),
-        )
-        _merge_gofcards_variant(variant, row)
+    eligible, quarantined = partition_gofcards_variants(cache)
 
     stats = {
-        "source_rows": len(source_rows),
-        "eligible_source_rows": len(eligible_rows),
-        "quarantined_source_rows": len(quarantined_rows),
-        "quarantined_unique_variants": len(
-            {
-                _gofcards_variant_assertion_key(row)
-                for row in quarantined_rows
-            }
-        ),
-        "unique_variants": len(grouped),
+        "source_variants": len(eligible) + len(quarantined),
+        "eligible_variants": len(eligible),
+        "quarantined_variants": len(quarantined),
         "condition_linked_variants": 0,
         "condition_variant_links": 0,
         "unmapped_variants": 0,
     }
-    for (symbol, variant_key), variant in sorted(grouped.items()):
+    for source_symbol, variant_id, source_variant in sorted(
+        eligible, key=lambda item: (item[0].upper(), item[1])
+    ):
+        symbol = source_symbol.upper()
+        variant_key = gofcards_variant_key(variant_id)
+        variant = _gofcards_handover(source_symbol, variant_id, source_variant)
         gene = genes.setdefault(symbol, _empty_gene())
         links = list(
             {
@@ -991,8 +878,7 @@ def attach_gofcards_variants(
                     link["rcv_accession"],
                     ";".join(link["condition_identifiers"]),
                 ): link
-                for token in variant["_tokens"]
-                for link in clinvar_links.get((symbol, token), [])
+                for link in clinvar_links.get((symbol, variant_id), [])
             }.values()
         )
         by_condition: dict[str, list[dict[str, Any]]] = defaultdict(list)
@@ -1135,11 +1021,7 @@ def build_cache_payload(
     """Build the complete single-file cache from prepared PriVA resources."""
     genes = build_hpo_gene_condition_frame(hpo_assertions)
     mechanism_stats = attach_condition_mechanisms(genes, mechanism_evidence)
-    variant_stats = attach_gofcards_variants(
-        genes,
-        gofcards_variants,
-        mechanism_json,
-    )
+    variant_stats = attach_gofcards_variants(genes, gofcards_variants)
     genes = dict(sorted(genes.items()))
     payload = {
         "_meta": {

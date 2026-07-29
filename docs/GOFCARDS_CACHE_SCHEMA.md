@@ -15,6 +15,49 @@ Both are functions in `/paedyl01/disk1/yangyxt/PriVA/scripts/install_utils.sh`.
 The split exists so a ClinVar refresh does not force the VEP pipeline to rerun,
 not because two caches are published.
 
+`mechanism_resource_install` runs both steps, and runs one more between them.
+Injection reads the weekly ClinVar VCV XML, but the component that downloads
+that XML is the non-LOF builder, which in turn cannot start until injection has
+written the deployed cache it reads. The installer breaks that standstill by
+calling the non-LOF builder twice: once as
+`gene_nonlof_mechanism_cache_install <config> sources-only`, which downloads and
+stops, and once normally after injection. The resulting order is:
+
+1. `gofcards_exact_gof_cache_install` — normalize, write the intermediate
+2. `gene_nonlof_mechanism_cache_install <config> sources-only` — place the ClinVar VCV XML
+3. `gofcards_clinvar_injection_install` — write the deployed cache
+4. `gene_nonlof_mechanism_cache_install <config>` — build the non-LOF cache
+5. `hpo_condition_mechanism_cache_install` — build the condition cache
+
+## When each step rebuilds
+
+Neither step rebuilds on a timer alone. Both compare the cache they own against
+the inputs that actually determine its contents.
+
+**Step 1, normalization.** Rebuilds when the normalization script, the mechanism
+review table, the HGNC table, the liftover chain, or either FASTA is newer than
+the intermediate; when the intermediate records a different VEP annotation
+cache, VEP cache version, or chain than the one now configured; or when it is
+older than `gofcards_refresh_days` (180). The refresh interval is an upper bound
+for picking up a new GoFCards release, not the whole test — polarity review is
+applied only while building, so an allele newly marked LOF or mixed-mechanism in
+the review table would otherwise keep its GOF eligibility until the interval
+lapsed. `PRIVA_FORCE_GOFCARDS_CACHE=1` or `PRIVA_FORCE_ALL_CACHES=1` forces it.
+
+The rebuild is affordable because the slow part is cached: the roughly 2,000
+sequential per-allele calls to the GoFCards summary endpoint are appended to
+`<gofcards_workdir>/gofcards_summary_cache.jsonl`, and a rerun fetches only the
+alleles missing from it.
+
+**Step 3, ClinVar injection.** Rereads the entire 5.8 GB VCV XML, so it reruns
+when the injector or the normalized intermediate is newer than the deployed
+cache, when that cache fails validation, or when the cache has fallen more than
+`gofcards_clinvar_reinjection_lag_days` (90) behind the XML. That last rule is
+deliberately a lag and not a plain newer-than test: ClinVar publishes a release
+every week, and chasing each one would spend hours rereading for almost no
+change in the conditions attached here.
+`PRIVA_FORCE_GOFCARDS_CLINVAR_INJECTION=1` or `PRIVA_FORCE_ALL_CACHES=1` forces it.
+
 ## Pipeline position
 
 ```

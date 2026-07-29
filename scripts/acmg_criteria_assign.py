@@ -337,8 +337,9 @@ def _variant_mechanism_masks(
         is_exact_gof        variant_gof_score == 2, or effect names GOF
         is_exact_dn         variant_dn_score  == 2, or effect names DN
         is_exact_nonlof     either of the two above
-        is_predicted_lof    variant_lof_score == 1, or effect ==
-                            "predicted_LOF_high_confidence"
+        is_predicted_lof    variant_lof_score >= 1, or effect ==
+                            "predicted_LOF_high_confidence". True for BOTH
+                            grades; read the score itself to tell them apart.
         is_uncertain        effect == "uncertain"
         modern_profile      the row carries any history at all
 
@@ -350,25 +351,38 @@ def _variant_mechanism_masks(
             condition history, AND this variant's own effect establishes
             loss of function for it. Neither half alone sets it.
 
-    TWO THINGS THIS TREE DOES NOT DO, AND THEY MATTER
-    =================================================
+    HOW LOSS OF FUNCTION IS GRADED
+    ==============================
 
-    1. Loss of function is never scored 2. EXACT_SEQUENCE_MECHANISMS in
-       gene_mechanism_hub.py is {GOF, DOMINANT_NEGATIVE}, so only those two
-       can be "exclusively established". Every predicted loss of function
-       collapses to 1, whatever produced it:
+    Predicted loss of function is graded, and is_predicted_lof deliberately
+    does NOT carry that grade -- it is true for both levels. A consumer that
+    wants the distinction reads variant_lof_score:
 
-           LOFTEE_HC   LOFTEE_OS   NMD_PREDICTED_LOF
-           VEP_LOF     PRIVA_SPLICE_LOF   PRIVA_5UTR_LOF
-                              |
-                              v
-                    scores["LOF"] = max(score, 1)
+        2   the transcript is destroyed. Either nonsense-mediated decay is
+            triggered -- a truncating variant, or a splice variant that
+            shifts the reading frame, in neither case escaping decay -- or
+            LOFTEE's high-confidence call rescues a variant that does escape.
+        1   loss of function is plausible but the transcript may survive:
+            escapes decay without a LOFTEE rescue, LOFTEE_OS, a splice
+            change that does not shift the frame, a 5'UTR change.
+        0   no loss-of-function evidence at all.
 
-       A nonsense variant triggering nonsense-mediated decay and a weak
-       LOFTEE call are therefore indistinguishable here. There is no
-       gradation within predicted loss of function.
+    A score of 2 here does NOT make variant_mechanism_exclusive true.
+    EXACT_SEQUENCE_MECHANISMS in gene_mechanism_hub.py is
+    {GOF, DOMINANT_NEGATIVE}, so a curated gain-of-function or
+    dominant-negative allele still overrides a predicted loss of function.
+    Curation beats prediction, which is the intended precedence.
 
-    2. None of the hub's newer per-variant facts is read at all:
+    Nor does the grade change variant_mechanism_applicable. PVS1 has its own
+    branch for variants that escape decay and assigns them reduced strength,
+    so demoting them to "uncertain" here would stop PVS1 ever reaching them.
+    The grade is a finer signal offered alongside applicability, not a
+    replacement for it.
+
+    WHAT THIS TREE DOES NOT DO
+    ==========================
+
+       None of the hub's newer per-variant facts is read at all:
 
            variant_inheritance          variant_inheritance_basis
            variant_penetrance           variant_condition_histories
@@ -441,7 +455,10 @@ def _variant_mechanism_masks(
             regex=True,
         )
     )
-    is_predicted_lof = lof_score.eq(1) | effect.eq("predicted_LOF_high_confidence")
+    # Any graded loss of function counts as predicted here: 1 for a transcript
+    # that escapes nonsense-mediated decay, 2 for one that does not. Consumers
+    # wanting the distinction read variant_lof_score directly.
+    is_predicted_lof = lof_score.ge(1) | effect.eq("predicted_LOF_high_confidence")
     is_uncertain = effect.eq("uncertain")
 
     return {
@@ -1062,11 +1079,11 @@ def PVS1_criteria(df: pd.DataFrame,
     # is_exact_gof is read once more, far below, to withdraw PVS1 from a
     # variant the upstream hub has curated as gain of function.
     #
-    # One limitation inherited from _variant_mechanism_masks: every predicted
-    # loss of function scores 1, so a nonsense variant triggering nonsense-
-    # mediated decay carries the same mechanism score as a weak LOFTEE call.
-    # The strength gradation above comes from the consequence tests, not from
-    # the score.
+    # The strength gradation above is decided by the consequence tests, not by
+    # variant_lof_score. The score grades the same question more coarsely --
+    # 2 when the transcript is destroyed by nonsense-mediated decay or LOFTEE
+    # rescues it, 1 when the transcript may survive -- and the gate below
+    # admits both, precisely so the escape branch above can still run.
     mechanism_masks = _variant_mechanism_masks(df)
     lof_mechanism = mechanism_masks["has_applicable_lof_assertion"]
     logger.info(

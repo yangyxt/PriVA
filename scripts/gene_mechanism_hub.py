@@ -64,14 +64,30 @@ the cache as assertion_basis.
         "predicted_LOF_high_confidence"
         "uncertain"
 
-    the prediction tokens that can raise LOF to 1, from the row:
-        LOFTEE_HC          LoF == "HC"
-        LOFTEE_OS          LoF == "OS"
-        NMD_PREDICTED_LOF  stop_gained/frameshift, not NMD-escaping,
-                           and LoF_filter is not END_TRUNC
-        VEP_LOF            vep_consq_lof is true
-        PRIVA_SPLICE_LOF   splicing_lof is true
-        PRIVA_5UTR_LOF     5UTR_lof is true
+    Predicted loss of function is GRADED, not flat:
+
+        score 2, the transcript is destroyed
+            NMD_PREDICTED_LOF   stop_gained / frameshift / splicing_frameshift
+                                that does NOT escape nonsense-mediated decay
+                                (NMD does not say "escaping", and LoF_filter
+                                is not END_TRUNC)
+            LOFTEE_HC           LoF == "HC". A high-confidence call rescues a
+                                variant that does escape decay.
+
+        score 1, loss of function is plausible, the transcript may survive
+            NMD_ESCAPING_TRUNCATION  truncating or splice-frameshift, but
+                                     escaping decay, with no LOFTEE rescue
+            LOFTEE_OS           LoF == "OS", LOFTEE's other-splice category
+            VEP_LOF             vep_consq_lof is true
+            PRIVA_SPLICE_LOF    splicing_lof is true, frame not shifted
+            PRIVA_5UTR_LOF      5UTR_lof is true
+
+        score 0 is reserved for no loss-of-function evidence at all.
+
+    A loss-of-function score of 2 does NOT make the mechanism exclusive:
+    EXACT_SEQUENCE_MECHANISMS is {GOF, DOMINANT_NEGATIVE}, so a curated
+    gain-of-function or dominant-negative allele still overrides a predicted
+    loss of function. Curation beats prediction.
 
     After an exact match these are kept in
     variant_effect_suppressed_evidence but cannot create a competing LOF
@@ -540,9 +556,20 @@ def infer_query_variant_effect(row: dict[str, Any] | pd.Series) -> dict[str, Any
     nmd = _clean(row.get("NMD")).lower()
     lof_filter = _clean(row.get("LoF_filter")).upper()
     truncating = "stop_gained" in consequence or "frameshift" in consequence
-    nmd_lof = truncating and "escaping" not in nmd and "END_TRUNC" not in lof_filter
+    escapes_nmd = "escaping" in nmd or "END_TRUNC" in lof_filter
+    # A splice variant that shifts the reading frame destroys the transcript
+    # the same way a coding frameshift does, so it is judged by the same
+    # nonsense-mediated decay question rather than by being "a splice variant".
+    splice_frameshift = _bool_value(row.get("splicing_frameshift"))
+    nmd_lof = (truncating or splice_frameshift) and not escapes_nmd
     if nmd_lof:
         predicted_lof_evidence.append("NMD_PREDICTED_LOF")
+    elif truncating or splice_frameshift:
+        # Escaping decay weakens the claim, it does not withdraw it: the
+        # protein is still truncated, so this remains plausible loss of
+        # function. Without its own token the variant would fall through to
+        # "uncertain" and score 0, which is reserved for no evidence at all.
+        predicted_lof_evidence.append("NMD_ESCAPING_TRUNCATION")
     if _bool_value(row.get("vep_consq_lof")):
         predicted_lof_evidence.append("VEP_LOF")
     if _bool_value(row.get("splicing_lof")):
@@ -576,7 +603,17 @@ def infer_query_variant_effect(row: dict[str, Any] | pd.Series) -> dict[str, Any
         suppressed_evidence = predicted_lof_evidence
         effect = "exact_known_" + "+".join(sorted(exact_mechanisms))
     elif predicted_lof_evidence:
-        scores["LOF"] = max(scores["LOF"], 1)
+        # Predicted loss of function is graded, not flat. A transcript that is
+        # destroyed by nonsense-mediated decay is established loss of function,
+        # not merely a plausible one, so it scores 2. A transcript that escapes
+        # decay may still make a partly functional protein, so it scores 1 --
+        # unless LOFTEE's high-confidence call rescues it, which is a direct
+        # statement that the loss holds despite the escape.
+        established_lof = (
+            "NMD_PREDICTED_LOF" in predicted_lof_evidence
+            or "LOFTEE_HC" in predicted_lof_evidence
+        )
+        scores["LOF"] = max(scores["LOF"], 2 if established_lof else 1)
         evidence.extend(predicted_lof_evidence)
         effect = "predicted_LOF_high_confidence"
     else:

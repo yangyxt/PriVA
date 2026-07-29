@@ -10,7 +10,12 @@ from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any
 
-from clinvar_vcv import load_exact_gofcards_lookup, stream_parse_clinvar_vcv
+from clinvar_vcv import (
+    gofcards_genomic_index_key,
+    index_gofcards_variants,
+    load_gofcards_cache,
+    stream_parse_clinvar_vcv,
+)
 
 
 def parse_args() -> argparse.Namespace:
@@ -113,7 +118,9 @@ def summarize_review_tiers(
 
 def main() -> None:
     args = parse_args()
-    lookup = load_exact_gofcards_lookup(args.gofcards_exact)
+    lookup = index_gofcards_variants(
+        load_gofcards_cache(args.gofcards_exact), gofcards_genomic_index_key
+    )
     matches, parser_stats = stream_parse_clinvar_vcv(
         args.xml,
         lookup,

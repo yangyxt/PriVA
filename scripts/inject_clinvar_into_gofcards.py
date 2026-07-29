@@ -42,6 +42,7 @@ from clinvar_vcv import (  # noqa: E402
     index_gofcards_variants,
     iter_gofcards_variants,
     load_gofcards_cache,
+    open_text,
     stream_parse_clinvar_vcv,
 )
 
@@ -164,7 +165,7 @@ def main(argv: list[str] | None = None) -> int:
     }
 
     args.out_json.parent.mkdir(parents=True, exist_ok=True)
-    with gzip.open(args.out_json, "wt", encoding="utf-8") as handle:
+    with open_text(args.out_json, "wt") as handle:
         json.dump(cache, handle, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     log("injected: " + "; ".join(f"{k}={v}" for k, v in counts.items()))
 

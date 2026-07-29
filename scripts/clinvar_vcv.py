@@ -3,14 +3,16 @@
 
 from __future__ import annotations
 
+import contextlib
 import gzip
+import io
 import json
 import re
 import sys
 import xml.etree.ElementTree as ET
 from collections import Counter, defaultdict
 from pathlib import Path
-from typing import Any, BinaryIO, Callable, Iterable
+from typing import Any, BinaryIO, Callable, Iterable, Iterator
 
 import pandas as pd
 
@@ -124,10 +126,38 @@ def variant_id_of(chrom: Any, start: Any, ref: Any, alt: Any) -> str:
             f"{allele(ref)}->{allele(alt)}_grch37")
 
 
+@contextlib.contextmanager
+def open_text(path: Path | str, mode: str = "rt") -> Iterator[Any]:
+    """Open a text file, transparently gzipped when the name ends in ``.gz``.
+
+    Every cache in this pipeline is read and written through here, so the
+    decision to compress one is a change of filename and nothing else.
+
+    Writes keep neither a modification time nor a stored filename in the gzip
+    header, so identical content always compresses to identical bytes. These
+    caches are tracked in git: with either field present, every rebuild would
+    look like a change and add another copy to the repository's history, and a
+    file written to a temporary name would differ from the same content written
+    directly.
+    """
+    path = Path(path)
+    if str(path).endswith(".gz"):
+        if "r" in mode:
+            with gzip.open(path, "rt", encoding="utf-8") as handle:
+                yield handle
+        else:
+            with path.open("wb") as raw, \
+                    gzip.GzipFile(filename="", fileobj=raw, mode="wb", mtime=0) as compressed, \
+                    io.TextIOWrapper(compressed, encoding="utf-8") as handle:
+                yield handle
+    else:
+        with path.open(mode, encoding="utf-8") as handle:
+            yield handle
+
+
 def load_gofcards_cache(path: Path) -> dict[str, Any]:
-    """Read the gzipped nested GoFCards cache and check it is the right shape."""
-    opener = gzip.open if str(path).endswith(".gz") else open
-    with opener(path, "rt", encoding="utf-8") as handle:
+    """Read the nested GoFCards cache and check it is the right shape."""
+    with open_text(path) as handle:
         cache = json.load(handle)
     if "genes" not in cache:
         raise ValueError(f"GoFCards cache has no 'genes' block: {path}")

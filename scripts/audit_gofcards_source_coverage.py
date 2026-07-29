@@ -36,7 +36,7 @@ DEFAULT_NONLOF_JSON = (
     / "data"
     / "gene_pathogenic_mechanism"
     / "prepared"
-    / "gene_nonlof_mechanism_curated_assertions.json"
+    / "gene_nonlof_mechanism_curated_assertions.json.gz"
 )
 DEFAULT_HGNC = PRIVA_ROOT / "data" / "hgnc" / "non_alt_loci_set.tsv"
 DEFAULT_OUTPUT = (
@@ -184,7 +184,9 @@ def load_exact_clinvar_linked_gene_counts(
     uses only whether the normalized gene has at least one exact link, while the
     count remains available to inspect the strength of that coverage.
     """
-    with open(path, encoding="utf-8") as handle:
+    from clinvar_vcv import open_text
+
+    with open_text(path) as handle:
         payload = json.load(handle)
 
     counts: Counter[str] = Counter()

@@ -10,7 +10,7 @@ import sys
 import xml.etree.ElementTree as ET
 from collections import Counter, defaultdict
 from pathlib import Path
-from typing import Any, BinaryIO, Iterable
+from typing import Any, BinaryIO, Callable, Iterable
 
 import pandas as pd
 
@@ -33,98 +33,133 @@ ASSEMBLY_TO_BUILD = {
 
 # The allele-record shape and the flattener live here, in the lower-level
 # module, so both consumers share one definition without an import cycle.
-GOFCARDS_EXACT_REQUIRED_COLUMNS = [
-    "source", "mechanism", "build", "derived_on",
-    "HGNC_Symbol", "GoFCards_HGNC_Symbol", "VEP_HGNC_Symbol",
-    "gene_match_status", "match_eligibility", "reject_reason",
-    "allele_key", "gofcards_variant_id", "gofcards_accession_id",
-    "raw_GoFCards_HGVS", "match_status", "liftover_status",
-    "hgvsp_keys", "hgvsc_keys",
-    "hg19_vcf_key", "hg38_vcf_key", "hg19_genomic_key", "hg38_genomic_key",
-    "hg19_vcf_status", "hg38_refalt_status",
-    "hg19_chrom", "hg19_pos", "hg19_ref", "hg19_alt",
-    "hg19_vcf_pos", "hg19_vcf_ref", "hg19_vcf_alt",
-    "hg38_chrom", "hg38_pos", "hg38_ref", "hg38_alt",
-    "hg38_vcf_pos", "hg38_vcf_ref", "hg38_vcf_alt",
-    "pmids", "evidence_record_count", "transcripts", "match_key_types",
-]
-
-EXACT_GOFCARDS_COLUMNS = GOFCARDS_EXACT_REQUIRED_COLUMNS
 
 
-def gofcards_allele_records(cache: dict[str, Any]) -> Iterator[dict[str, Any]]:
-    """Yield one flat record per GoFCards allele from the nested cache.
 
-    The cache is nested gene -> allele -> assembly -> transcript so that
-    evidence and coordinates are stored once each. Runtime matching needs a flat
-    record per allele carrying the lookup keys, so the transcript detail is
-    summarized into key lists here rather than expanded into one record per
-    transcript, which is what previously inflated this cache thirteen-fold.
+def iter_gofcards_variants(cache: dict[str, Any]) -> Iterator[tuple[str, str, dict[str, Any]]]:
+    """Walk the GoFCards cache, yielding (gene symbol, variant id, variant block).
+
+    This is the single reader for the nested cache.  It does not reshape
+    anything: consumers receive the variant block exactly as stored, with its
+    ``record`` and its per-assembly ``genomic`` and ``transcripts`` intact, and
+    read the fields they need by their real paths.
+
+    Structure walked here (see docs/GOFCARDS_CACHE_SCHEMA.md):
+
+        genes -> <SYMBOL> -> variants -> <loc_...._grch37>
+                                          |- record.eligibility / source / evidence
+                                          '- assemblies -> hg19|hg38
+                                                            |- genomic {chrom,pos,ref,alt}
+                                                            '- transcripts -> <tx>
+                                                                              |- by_hgvsc
+                                                                              '- by_hgvsp
     """
-    meta = cache.get("metadata", {})
     for symbol, gene in (cache.get("genes") or {}).items():
-        for allele_id, allele in (gene.get("alleles") or {}).items():
-            eligibility = allele.get("eligibility") or {}
-            keys = allele.get("match_keys") or {}
-            assemblies = allele.get("assemblies") or {}
-            hg19 = (assemblies.get("hg19") or {}).get("coordinates") or {}
-            hg38 = (assemblies.get("hg38") or {}).get("coordinates") or {}
-            evidence = allele.get("evidence") or []
-            source = allele.get("source_allele") or {}
-            record = {
-                "source": meta.get("source", "GoFCards"),
-                "mechanism": meta.get("mechanism", "GOF"),
-                "build": "hg19_and_hg38" if hg38 else "hg19",
-                "derived_on": meta.get("derived_on", ""),
-                "HGNC_Symbol": symbol,
-                "GoFCards_HGNC_Symbol": symbol,
-                "VEP_HGNC_Symbol": eligibility.get("vep_symbol") or "",
-                "gene_match_status": eligibility.get("gene_match_status", ""),
-                "match_eligibility": eligibility.get("status", ""),
-                "reject_reason": eligibility.get("reason") or "",
-                "allele_key": source.get("allele_key", allele_id),
-                "gofcards_variant_id": source.get("allele_key", allele_id),
-                "gofcards_accession_id": allele.get("rsid") or "",
-                "raw_GoFCards_HGVS": allele.get("source_protein_change") or "",
-                "match_status": allele.get("protein_change_agreement", ""),
-                "liftover_status": allele.get("liftover_status", ""),
-                "hgvsp_keys": list(keys.get("hgvsp") or []),
-                "hgvsc_keys": list(keys.get("hgvsc") or []),
-                "hg19_vcf_key": keys.get("hg19_vcf") or "",
-                "hg38_vcf_key": keys.get("hg38_vcf") or "",
-                "hg19_genomic_key": keys.get("hg19_genomic") or "",
-                "hg38_genomic_key": keys.get("hg38_vcf") or "",
-                "hg19_vcf_status": allele.get("vcf_construction") or (assemblies.get("hg19") or {}).get("status", ""),
-                "hg38_refalt_status": (assemblies.get("hg38") or {}).get("status", "liftover_unmapped"),
-                "pmids": [e.get("pmid", "") for e in evidence if e.get("pmid")],
-                "evidence_record_count": len(evidence),
-                "transcripts": {
-                    assembly: sorted((block.get("transcripts") or {}).keys())
-                    for assembly, block in assemblies.items()
-                },
-            }
-            for assembly, coords in (("hg19", hg19), ("hg38", hg38)):
-                if coords:
-                    record[f"{assembly}_chrom"] = coords.get("chrom", "")
-                    record[f"{assembly}_pos"] = str(coords.get("pos", ""))
-                    record[f"{assembly}_ref"] = coords.get("ref", "")
-                    record[f"{assembly}_alt"] = coords.get("alt", "")
-                    record[f"{assembly}_vcf_pos"] = str(coords.get("pos", ""))
-                    record[f"{assembly}_vcf_ref"] = coords.get("ref", "")
-                    record[f"{assembly}_vcf_alt"] = coords.get("alt", "")
-            record["match_key_types"] = [
-                name for name, present in (
-                    ("hgvsp", record["hgvsp_keys"]), ("hgvsc", record["hgvsc_keys"]),
-                    ("hg19_vcf", record["hg19_vcf_key"]), ("hg19_genomic", record["hg19_genomic_key"]),
-                    ("hg38_vcf", record["hg38_vcf_key"]), ("hg38_genomic", record["hg38_genomic_key"]),
-                ) if present
-            ]
-            # The canonical schema forbids empty strings on these fields, and an
-            # absent rsID or missing GRCh38 coordinate is a real state, not a
-            # blank. Omit rather than emit "".
-            yield {k: v for k, v in record.items() if v not in ("", None, [], {})}
+        for variant_id, variant in (gene.get("variants") or {}).items():
+            yield symbol, variant_id, variant
 
 
+def clean_text(value: Any) -> str:
+    """Normalize a field to text, mapping every placeholder for "empty" to "".
+
+    VEP writes `-` for an absent field and GoFCards writes `_`, `.` or `-`.
+    Treating those as text would produce match keys like `hgvsp_key="-"`, which
+    would collide across every variant that has no protein change.
+    """
+    if value is None or (isinstance(value, float) and pd.isna(value)):
+        return ""
+    text = str(value).strip()
+    return "" if text.lower() in {"nan", "none", "_", ".", "-"} else text
+
+
+def normalize_chrom(value: Any) -> str:
+    return re.sub(r"^chr", "", clean_text(value), flags=re.IGNORECASE)
+
+
+def normalize_allele(value: Any) -> str:
+    text = clean_text(value)
+    return "" if text in {"-", "."} else text.upper()
+
+
+def normalize_int(value: Any) -> str:
+    if value is None or (isinstance(value, float) and pd.isna(value)):
+        return ""
+    if isinstance(value, float) and value.is_integer():
+        return str(int(value))
+    text = str(value).strip()
+    return text[:-2] if text.endswith(".0") else text
+
+
+def variant_id_of(chrom: Any, start: Any, ref: Any, alt: Any) -> str:
+    """Mint the stable variant identifier, `loc_<chrom>:<start>:<ref>-><alt>_grch37`.
+
+    This lives beside the cache readers because it is part of the cache
+    contract: it is the second-level key the cache is organized under, and both
+    the normalizer that writes the cache and every consumer that looks a variant
+    up must mint it the same way. Two copies of this rule would be two ways to
+    name the same variant.
+
+    GoFCards publishes no identifier that is both complete and unique -- its
+    ``Accession`` field is a ClinVar cross-reference covering only 61% of the
+    catalogue -- so identity has to be constructed.  Chromosome, start,
+    reference and alternate are the minimum that separates every record:
+    chromosome and position alone collide for 104 variants, because hotspot
+    codons carry several different substitutions at one base (TP53 chr17:7577120
+    is C>T, C>A and C>G).
+
+    The ``grch37`` suffix is deliberate and honest.  GoFCards states coordinates
+    on GRCh37 only, so the identifier is minted from that build.  It is an opaque
+    label: never parse it, and never read a GRCh38 position from it.
+
+    Missing alleles are written ``-`` exactly as GoFCards writes them, so an
+    insertion reads ``loc_6:91261902:-->TACTAC_grch37``.  Compound variants need
+    no special handling: the alleles are written verbatim, so an in-cis pair of
+    substitutions reads ``loc_7:140453136:AC->CT_grch37``.
+    """
+    def allele(value: Any) -> str:
+        text = normalize_allele(value)
+        return text if text else "-"
+
+    return (f"loc_{normalize_chrom(chrom)}:{normalize_int(start)}:"
+            f"{allele(ref)}->{allele(alt)}_grch37")
+
+
+def load_gofcards_cache(path: Path) -> dict[str, Any]:
+    """Read the gzipped nested GoFCards cache and check it is the right shape."""
+    opener = gzip.open if str(path).endswith(".gz") else open
+    with opener(path, "rt", encoding="utf-8") as handle:
+        cache = json.load(handle)
+    if "genes" not in cache:
+        raise ValueError(f"GoFCards cache has no 'genes' block: {path}")
+    meta = cache.get("metadata") or {}
+    if meta.get("source") != "GoFCards" or meta.get("mechanism") != "GOF":
+        raise ValueError(f"GoFCards cache does not declare GoFCards/GOF: {path}")
+    return cache
+
+
+def gofcards_variant_is_eligible(variant: dict[str, Any]) -> bool:
+    """Return whether a variant may be used as gain-of-function evidence.
+
+    Only the explicit ``eligible`` state qualifies.  Every quarantine state --
+    gene discordance and reviewed non-GOF mechanisms alike -- is retained in the
+    cache for audit and must never match.
+    """
+    return ((variant.get("record") or {}).get("eligibility") or {}).get("status") == "eligible"
+
+
+def gofcards_variant_genomic_keys(variant: dict[str, Any]) -> dict[str, str]:
+    """Return {assembly: 'chrom|pos|ref|alt'} for every build the variant has.
+
+    A variant that failed liftover simply has no hg38 entry, so the caller sees
+    one key instead of two rather than an empty string it has to test for.
+    """
+    keys: dict[str, str] = {}
+    for assembly, block in (variant.get("assemblies") or {}).items():
+        coords = block.get("genomic") or {}
+        if coords.get("chrom") and coords.get("pos") is not None:
+            keys[assembly] = (f"{coords['chrom']}|{coords['pos']}"
+                              f"|{coords.get('ref','')}|{coords.get('alt','')}")
+    return keys
 
 
 def _text(element: ET.Element | None) -> str:
@@ -210,88 +245,83 @@ def _gofcards_assertion_key(row: dict[str, Any]) -> tuple[str, str]:
     return symbol, allele
 
 
-def partition_exact_gofcards_rows(
-    rows: Iterable[dict[str, Any]],
-) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    """Apply quarantine atomically to each curated gene-allele assertion.
+def partition_gofcards_variants(
+    cache: dict[str, Any],
+) -> tuple[list[tuple[str, str, dict[str, Any]]], list[tuple[str, str, dict[str, Any]]]]:
+    """Split the cache into variants that may match and variants that may not.
 
-    A stale compact table can contain one discordant transcript row and an
-    eligible sibling for the same gene and allele. ClinVar matching must not
-    index that sibling. Claims for a different curated gene at the same genomic
-    coordinates remain independent and are not suppressed.
+    Eligibility is a property of the variant and is already decided upstream, so
+    this is a straight partition on that verdict rather than the row-level
+    reconciliation the flat table used to need.
     """
-    materialized = list(rows)
-    quarantined_keys = {
-        _gofcards_assertion_key(row)
-        for row in materialized
-        if (
-            str(row.get("match_eligibility", "")).strip().lower() != "eligible"
-            or str(row.get("mechanism", "GOF")).strip().upper() != "GOF"
-        )
-    }
-    eligible: list[dict[str, Any]] = []
-    quarantined: list[dict[str, Any]] = []
-    for row in materialized:
-        target = (
-            quarantined
-            if _gofcards_assertion_key(row) in quarantined_keys
-            else eligible
-        )
-        target.append(row)
+    eligible: list[tuple[str, str, dict[str, Any]]] = []
+    quarantined: list[tuple[str, str, dict[str, Any]]] = []
+    for symbol, variant_id, variant in iter_gofcards_variants(cache):
+        target = eligible if gofcards_variant_is_eligible(variant) else quarantined
+        target.append((symbol, variant_id, variant))
     return eligible, quarantined
 
 
-def load_exact_gofcards_lookup(path: Path) -> dict[tuple[str, str], list[dict[str, str]]]:
-    """Index eligible normalized alleles by (hg19/hg38, normalized VCF key).
+def gofcards_variation_id(variant: dict[str, Any]) -> str:
+    """Return GoFCards' own ClinVar VariationID for a variant, if it has one.
 
-    Gene-discordant compact rows remain in the TSV for audit but cannot create
-    ClinVar links. Requiring the provenance columns here also prevents a direct
-    builder invocation from silently consuming the legacy VEP-gene-rewritten
-    compact format.
+    Present for roughly 61% of the catalogue -- only the variants that are in
+    ClinVar at all. Where it exists it is an exact identifier and beats matching
+    on coordinates, which is why the injection step tries it first.
     """
-    # The cache is nested gene -> allele -> assembly -> transcript. Flattening
-    # to one record per allele here keeps this index unchanged in shape while
-    # the stored form no longer repeats evidence on every transcript.
-    opener = gzip.open if str(path).endswith(".gz") else open
-    with opener(path, "rt", encoding="utf-8") as handle:
-        cache = json.load(handle)
-    if "genes" not in cache:
-        raise ValueError(f"GoFCards cache has no 'genes' block: {path}")
+    annotations = ((variant.get("record") or {}).get("annotations") or {})
+    return str(annotations.get("clinvar_variation_id") or "").strip()
 
-    lookup: dict[tuple[str, str], list[dict[str, str]]] = defaultdict(list)
-    seen: set[tuple[str, str, str, str]] = set()
-    eligible_rows, _quarantined_rows = partition_exact_gofcards_rows(
-        list(gofcards_allele_records(cache))
-    )
-    for row in eligible_rows:
-        source_symbol = str(row.get("GoFCards_HGNC_Symbol", "")).strip().upper()
-        exported_symbol = str(row.get("HGNC_Symbol", "")).strip().upper()
-        if not source_symbol or exported_symbol != source_symbol:
-            raise ValueError(
-                "Runtime-eligible GoFCards row does not preserve its curated gene: "
-                f"{exported_symbol or '<blank>'}/{source_symbol or '<blank>'}"
-            )
-        compact = {
-            key: row[key]
-            for key in EXACT_GOFCARDS_COLUMNS
-            if row.get(key) not in (None, "", [], {})
-        }
-        symbol = compact.get("HGNC_Symbol", "")
-        allele_key = compact.get("allele_key", "")
-        for build, column in (("hg19", "hg19_vcf_key"), ("hg38", "hg38_vcf_key")):
-            raw_key = str(row.get(column, "")).strip()
-            if not raw_key:
-                continue
-            parts = raw_key.split("|")
-            if len(parts) != 4:
-                continue
-            key = normalize_vcf_key(*parts)
-            dedup_key = (build, key, symbol, allele_key)
-            if dedup_key in seen:
-                continue
-            seen.add(dedup_key)
-            lookup[(build, key)].append(compact)
-    return dict(lookup)
+
+GofcardsVariant = tuple[str, str, dict[str, Any]]
+
+
+def index_gofcards_variants(
+    cache: dict[str, Any],
+    key: Callable[[str, str, dict[str, Any]], Iterable[Any]],
+    *,
+    eligible_only: bool = True,
+) -> dict[Any, list[GofcardsVariant]]:
+    """Index the cache under whatever key the caller declares.
+
+    The cache has exactly one identity -- gene, then variant identifier -- and
+    every other key is a secondary route to that same identity. So there is one
+    traversal and one index builder, and each consumer supplies only the key it
+    needs. That is why this replaces the several near-identical index builders
+    that each walked the cache and rebuilt a flat row of their own.
+
+    The stored value is always ``(symbol, variant_id, variant)`` with the
+    variant left nested and uncopied. A projection here would be a second
+    description of the same data, free to drift from the first -- which is
+    exactly how the matching path went silently dead once already.
+
+    ``key`` returns an iterable because one variant legitimately lands under
+    several keys: a genomic index holds it under both GRCh37 and GRCh38.
+    """
+    index: dict[Any, list[GofcardsVariant]] = defaultdict(list)
+    for symbol, variant_id, variant in iter_gofcards_variants(cache):
+        if eligible_only and not gofcards_variant_is_eligible(variant):
+            continue
+        for entry_key in key(symbol, variant_id, variant):
+            index[entry_key].append((symbol, variant_id, variant))
+    return dict(index)
+
+
+def gofcards_genomic_index_key(
+    _symbol: str, _variant_id: str, variant: dict[str, Any]
+) -> Iterable[tuple[str, str]]:
+    """Key a variant by (build, normalized VCF allele) on every build it has."""
+    for build, genomic_key in gofcards_variant_genomic_keys(variant).items():
+        yield build, normalize_vcf_key(*genomic_key.split("|"))
+
+
+def gofcards_variation_id_index_key(
+    _symbol: str, _variant_id: str, variant: dict[str, Any]
+) -> Iterable[str]:
+    """Key a variant by GoFCards' own ClinVar VariationID, when it has one."""
+    variation_id = gofcards_variation_id(variant)
+    if variation_id:
+        yield variation_id
 
 
 def _open_xml(path: Path) -> BinaryIO:
@@ -719,23 +749,30 @@ def _attach_scvs(classified: ET.Element, conditions: list[dict[str, Any]]) -> No
 
 def _match_rows_for_allele(
     allele: ET.Element,
-    exact_lookup: dict[tuple[str, str], list[dict[str, str]]],
-) -> tuple[dict[str, dict[str, Any]], list[dict[str, str]]]:
+    exact_lookup: dict[tuple[str, str], list[GofcardsVariant]],
+) -> tuple[dict[str, dict[str, Any]], list[tuple[str, str, dict[str, Any], str]]]:
+    """Find the GoFCards variants sharing this ClinVar allele's coordinates.
+
+    The route is attached here rather than stored in the index, because how a
+    link was found is a property of the match, not of the variant. The same
+    variant can be reached by coordinates on one archive and by GoFCards' own
+    ClinVar identifier on another.
+    """
     locations = _allele_locations(allele)
-    rows: list[dict[str, str]] = []
-    seen = set()
+    rows: list[tuple[str, str, dict[str, Any], str]] = []
+    seen: set[tuple[str, str]] = set()
     for assembly, location in locations.items():
         build = ASSEMBLY_TO_BUILD[assembly]
         key = location["vcf_key"]
-        for row in exact_lookup.get((build, key), []):
-            marker = (
-                row.get("HGNC_Symbol", ""),
-                row.get("allele_key", ""),
-                row.get("gofcards_variant_id", ""),
-            )
-            if marker not in seen:
-                seen.add(marker)
-                rows.append(row)
+        for symbol, variant_id, variant in exact_lookup.get((build, key), []):
+            # The identifier is coordinate-derived, so two genes curated at the
+            # same allele share it; the gene has to be part of the identity or
+            # one of the two claims would be dropped before it can be judged.
+            marker = (symbol, variant_id)
+            if marker in seen:
+                continue
+            seen.add(marker)
+            rows.append((symbol, variant_id, variant, "genomic_coordinates"))
     return locations, rows
 
 
@@ -745,29 +782,33 @@ def _make_match(
     classification_scope: str,
     component_context: str,
     locations: dict[str, dict[str, Any]],
-    matched_rows: list[dict[str, str]],
+    matched_rows: list[tuple[str, str, dict[str, Any], str]],
     conditions: list[dict[str, Any]],
 ) -> dict[str, Any]:
     genes = _allele_genes(allele)
     clinvar_symbols = {gene.get("symbol", "") for gene in genes if gene.get("symbol")}
-    matched_symbols = {
-        row.get("HGNC_Symbol", "") for row in matched_rows if row.get("HGNC_Symbol")
-    }
+    matched_symbols = {symbol for symbol, _vid, _v, _route in matched_rows if symbol}
     concordant = sorted(clinvar_symbols & matched_symbols)
     assignment_symbols = (
         concordant if clinvar_symbols else sorted(matched_symbols)
     )
-    retained_rows = (
-        [row for row in matched_rows if row.get("HGNC_Symbol", "") in concordant]
+    kept = (
+        [row for row in matched_rows if row[0] in concordant]
         if clinvar_symbols
         else matched_rows
     )
+    # Only what identifies the match: which variant, in which gene, found how.
+    # Not a copy of the variant -- the injection step reads this to nest the
+    # ClinVar record back onto the variant the identifier already names.
+    retained_rows = [
+        {"HGNC_Symbol": symbol, "gofcards_variant_id": variant_id, "link_route": route}
+        for symbol, variant_id, _variant, route in kept
+    ]
     discarded_symbols = sorted(
         {
-            row.get("HGNC_Symbol", "")
-            for row in matched_rows
-            if row.get("HGNC_Symbol", "")
-            and row.get("HGNC_Symbol", "") not in assignment_symbols
+            symbol
+            for symbol, _vid, _v, _route in matched_rows
+            if symbol and symbol not in assignment_symbols
         }
     )
     return {
@@ -819,10 +860,23 @@ def _make_match(
 
 def stream_parse_clinvar_vcv(
     xml_path: Path,
-    exact_lookup: dict[tuple[str, str], list[dict[str, str]]],
+    exact_lookup: dict[tuple[str, str], list[GofcardsVariant]],
     min_review_stars: int = 2,
+    variation_id_lookup: dict[str, list[GofcardsVariant]] | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, int]]:
-    """Stream VCV XML; retain current classified exact matches with eligible RCVs."""
+    """Stream VCV XML; retain archives that match a GoFCards variant.
+
+    Two routes decide whether an archive is kept, tried in this order:
+
+      1. ``variation_id_lookup`` -- GoFCards publishes its own ClinVar
+         VariationID for roughly 61% of its catalogue. Where it exists it is an
+         exact identifier and needs no coordinate comparison at all.
+      2. ``exact_lookup`` -- normalized genomic allele on either build, for the
+         remaining variants and for any ClinVar record GoFCards has not
+         cross-referenced.
+
+    Each retained record carries ``link_route`` saying which one found it.
+    """
     matches: list[dict[str, Any]] = []
     stats: Counter[str] = Counter()
     with _open_xml(xml_path) as handle:
@@ -847,13 +901,27 @@ def stream_parse_clinvar_vcv(
             elif classified is None:
                 stats["skipped_included_record"] += 1
             else:
+                by_variation_id = (variation_id_lookup or {}).get(
+                    str(archive.get("VariationID", "")).strip(), []
+                )
                 candidate_alleles = []
                 for allele, scope, component_context in _variant_alleles(classified):
                     locations, rows = _match_rows_for_allele(allele, exact_lookup)
+                    if by_variation_id:
+                        # GoFCards named this exact ClinVar record, so keep it
+                        # whether or not the coordinates also line up.
+                        known = {(symbol, vid) for symbol, vid, _v, _r in rows}
+                        rows = list(rows) + [
+                            (symbol, vid, variant, "gofcards_variation_id")
+                            for symbol, vid, variant in by_variation_id
+                            if (symbol, vid) not in known
+                        ]
                     if rows:
                         candidate_alleles.append(
                             (allele, scope, component_context, locations, rows)
                         )
+                if by_variation_id:
+                    stats["archives_matched_by_gofcards_variation_id"] += 1
                 if candidate_alleles:
                     stats["exact_variant_archives"] += 1
                     conditions = _eligible_conditions(classified, min_review_stars)

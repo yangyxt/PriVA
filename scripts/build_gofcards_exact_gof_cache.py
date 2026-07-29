@@ -4,7 +4,9 @@
 GoFCards publishes GRCh37 coordinates only, so GRCh37 is the sole ground truth
 here.  Everything else is derived from it:
 
-  1. fetch_sources      public workbook + backend SNV/Indel tables
+  1. fetch_sources      public workbook (one download)
+     + fetch_summary_annotations   GRCh38 position and ClinVar accession,
+       one cached request per allele
   2. build_source_vcf   pad sparse indels, check REF against GRCh37, gate failures
   3. normalize_vcf      bcftools norm                  (reused for both assemblies)
   4. run_vep            Ensembl VEP                    (reused for both assemblies)
@@ -36,7 +38,7 @@ import shutil
 import subprocess
 import sys
 import time
-from collections import defaultdict
+from collections import Counter, defaultdict
 from datetime import date
 from pathlib import Path
 from typing import Any, Iterable
@@ -45,12 +47,29 @@ import pandas as pd
 import requests
 from pyfaidx import Fasta
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from clinvar_vcv import (  # noqa: E402
+    clean_text,
+    normalize_allele,
+    normalize_chrom,
+    normalize_int,
+    variant_id_of,
+)
+
 BACKEND_BASE = "https://java.genemed.tech/admin-api/backend/data/hg19"
 PUBLIC_EXCEL_URL = "https://download.genemed.tech/upload/GainFunCards/gofcards_data_download.xlsx"
-TABLE_ENDPOINTS = {
-    "SNV": f"{BACKEND_BASE}/GainFunCards_SNV/geneSymbol/page",
-    "Indel": f"{BACKEND_BASE}/GainFunCards_Indel/geneSymbol/page",
-}
+# One request per allele. It is the only place GoFCards publishes its own GRCh38
+# position and its ClinVar cross-reference, and it returns neither a GRCh38
+# reference nor alternate allele -- only a position, which is why every position
+# it gives has to be checked against the genome before it can be used.
+SUMMARY_ENDPOINT = f"{BACKEND_BASE}/variantLevel/summary"
+# Only two fields are kept. The position recovers variants the liftover
+# cannot place; the accession is GoFCards' ClinVar VariationID, which links
+# a variant to its ClinVar record by identity. The endpoint also returns
+# CLNSIG, CLNDN, CLNREVSTAT and rsID, and nothing downstream reads any of
+# them -- ClinVar significance is taken live from ClinVar itself.
+SUMMARY_FIELDS = ("hg38_start", "Accession")
 API_HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
@@ -65,7 +84,7 @@ API_HEADERS = {
 
 VEP_FIELDS = (
     "Uploaded_variation,Location,Allele,Gene,Feature,Feature_type,Consequence,"
-    "HGVSc,HGVSp,MANE_SELECT,MANE_PLUS_CLINICAL,CANONICAL,SYMBOL,Existing_variation"
+    "HGVSc,HGVSp,MANE_SELECT,MANE_PLUS_CLINICAL,CANONICAL,SYMBOL"
 )
 
 ELIGIBLE = "eligible"
@@ -121,44 +140,19 @@ def require_executable(name: str) -> str:
 # Shared normalization of the raw GoFCards fields
 # ---------------------------------------------------------------------------
 
-def clean_text(value: Any) -> str:
-    """Normalize a field to text, mapping every placeholder for "empty" to "".
-
-    VEP writes `-` for an absent field and GoFCards writes `_`, `.` or `-`.
-    Treating those as text would produce match keys like `hgvsp_key="-"`, which
-    would collide across every variant that has no protein change.
-    """
-    if value is None or (isinstance(value, float) and pd.isna(value)):
-        return ""
-    text = str(value).strip()
-    return "" if text.lower() in {"nan", "none", "_", ".", "-"} else text
-
-
-def normalize_chrom(value: Any) -> str:
-    return re.sub(r"^chr", "", clean_text(value), flags=re.IGNORECASE)
-
-
-def normalize_allele(value: Any) -> str:
-    text = clean_text(value)
-    return "" if text in {"-", "."} else text.upper()
-
-
-def normalize_int(value: Any) -> str:
-    if value is None or (isinstance(value, float) and pd.isna(value)):
-        return ""
-    if isinstance(value, float) and value.is_integer():
-        return str(int(value))
-    text = str(value).strip()
-    return text[:-2] if text.endswith(".0") else text
+# clean_text, normalize_chrom, normalize_allele, normalize_int and
+# variant_id_of are imported from clinvar_vcv, which owns the cache contract.
+# The identifier this module mints is the same one every consumer looks a
+# variant up by, so it is defined once, in the module both sides share.
 
 
 def locus_key_of(row: Any) -> str:
     """Type-free allele identity: chrom|start|end|ref|alt, all GRCh37.
 
-    This is the real identity.  The two GoFCards sources disagree about the
-    `variant_type` label for multi-base substitutions -- the backend calls them
-    SNV, the public parser calls them Indel -- so the label must never be part
-    of the key used to join the two together.
+    This is the real identity.  The `variant_type` label is derived, not
+    published consistently: GoFCards' backend calls multi-base substitutions
+    SNV while the public workbook calls them Indel, so the label must never be
+    part of a key used to join anything.
     """
     return "|".join([
         normalize_chrom(row.get("Chr")),
@@ -192,25 +186,94 @@ PUBLIC_COLUMN_MAP = {
 }
 
 
-def fetch_sources(workdir: Path, public_url: str, page_size: int = 5000,
+def fetch_summary_annotations(records: pd.DataFrame, cache_jsonl: Path,
+                              timeout_seconds: int = 300) -> dict[str, dict]:
+    """Query the per-allele summary endpoint once for every unique allele.
+
+    This is 2,033 sequential HTTP requests and the endpoint has been observed
+    both slow and entirely unreachable, so every response is appended to a
+    JSONL cache keyed by allele. A rerun re-fetches only what is missing, and an
+    outage part-way through loses nothing already collected.
+
+    It supplies two things available nowhere else in GoFCards: the database's own
+    GRCh38 position, and its ClinVar cross-reference (``Accession`` plus the
+    clinical significance, condition names and review status).
+    """
+    cache: dict[str, dict] = {}
+    if cache_jsonl.exists():
+        with cache_jsonl.open("r", encoding="utf-8") as handle:
+            for line in handle:
+                line = line.strip()
+                if line:
+                    row = json.loads(line)
+                    cache[row["allele_key"]] = row.get("data") or {}
+        log(f"summary cache already holds {len(cache)} alleles")
+
+    unique = records.drop_duplicates("locus_key")
+    session = requests.Session()
+    cache_jsonl.parent.mkdir(parents=True, exist_ok=True)
+    pending = [r for _, r in unique.iterrows() if r["allele_key"] not in cache]
+    if pending:
+        log(f"querying the summary endpoint for {len(pending)} uncached alleles")
+    with cache_jsonl.open("a", encoding="utf-8") as handle:
+        for index, row in enumerate(pending, start=1):
+            params = {
+                "projectCode": "GoFCards",
+                "variantLevelType": "Indel" if row["variant_type"] == "Indel" else "SNV",
+                "chr": normalize_chrom(row.get("Chr")),
+                "start": normalize_int(row.get("Start")),
+                "end": normalize_int(row.get("End")),
+                "ref": normalize_allele(row.get("Ref")),
+                "alt": normalize_allele(row.get("Alt")),
+            }
+            data: dict = {}
+            for attempt in range(1, 5):
+                try:
+                    reply = session.get(SUMMARY_ENDPOINT, headers=API_HEADERS,
+                                        params=params, timeout=timeout_seconds)
+                    reply.raise_for_status()
+                    data = (reply.json() or {}).get("data") or {}
+                    break
+                except Exception as exc:
+                    if attempt == 4:
+                        raise RuntimeError(
+                            f"summary endpoint failed for {row['allele_key']} "
+                            f"after 4 attempts: {exc}") from exc
+                    time.sleep(5 * attempt)
+            kept = {field: data[field] for field in SUMMARY_FIELDS if data.get(field)}
+            cache[row["allele_key"]] = kept
+            handle.write(json.dumps({"allele_key": row["allele_key"], "data": kept},
+                                    ensure_ascii=False, sort_keys=True) + "\n")
+            handle.flush()
+            if index == 1 or index % 200 == 0:
+                log(f"  summary {index}/{len(pending)}")
+    with_hg38 = sum(1 for v in cache.values() if v.get("hg38_start"))
+    with_clinvar = sum(1 for v in cache.values() if v.get("Accession"))
+    log(f"summary endpoint: {len(cache)} alleles; {with_hg38} carry a GRCh38 position; "
+        f"{with_clinvar} carry a ClinVar accession")
+    return cache
+
+
+def fetch_sources(workdir: Path, public_url: str,
                   timeout_seconds: int = 300) -> tuple[pd.DataFrame, dict]:
-    """Download the public workbook, then enrich it from the backend tables.
+    """Download the public GoFCards workbook.
 
-    The public workbook is the source of record: it is the citable artifact, it
-    is hash-stable, and it carries every coordinate and every evidence field.
-    The backend tables contribute exactly one thing the workbook omits, the
-    ANNOVAR protein change (`AAChange_refGene`), which is what lets us flag
-    alleles where GoFCards' own protein numbering disagrees with ours.
+    One request. The workbook is the source of record: it is the citable
+    artifact, it is hash-stable, and it carries every coordinate and every
+    evidence field the cache needs.
 
-    The backend endpoint is slow -- a single 2.4 MB page takes around 50 seconds
-    -- so the timeout is generous by design.
+    The backend SNV/Indel table endpoints are deliberately not called. They add
+    only ANNOVAR's protein change, which nothing downstream reads -- our own
+    protein change comes from VEP, on transcripts whose versions match the ones
+    PriVA annotates with.
     """
     workdir.mkdir(parents=True, exist_ok=True)
     session = requests.Session()
 
     public_path = workdir / "gofcards_public.xlsx"
     log(f"Downloading public workbook -> {public_path}")
-    resp = session.get(public_url, headers={"User-Agent": "Mozilla/5.0"}, timeout=120)
+    resp = session.get(public_url, headers={"User-Agent": "Mozilla/5.0"},
+                       timeout=timeout_seconds)
     resp.raise_for_status()
     public_path.write_bytes(resp.content)
 
@@ -224,62 +287,15 @@ def fetch_sources(workdir: Path, public_url: str, page_size: int = 5000,
     public["allele_key"] = public.apply(allele_key_of, axis=1)
     public["locus_key"] = public.apply(locus_key_of, axis=1)
 
-    records: list[dict] = []
-    for variant_type, url in TABLE_ENDPOINTS.items():
-        page, pages = 1, 1
-        while page <= pages:
-            log(f"Pulling backend {variant_type} table, page {page}")
-            payload = {
-                "reference": "hg19", "queryby": "geneSymbol", "terms": "",
-                "page": page, "pageNo": page, "currentPage": page, "pageSize": page_size,
-            }
-            for attempt in range(1, 5):
-                try:
-                    reply = session.post(url, headers=API_HEADERS, json=payload,
-                                         timeout=timeout_seconds)
-                    reply.raise_for_status()
-                    body = reply.json()
-                    break
-                except Exception as exc:
-                    if attempt == 4:
-                        raise RuntimeError(
-                            f"GoFCards backend {variant_type} table page {page} failed "
-                            f"after 4 attempts: {exc}") from exc
-                    log(f"  attempt {attempt} failed ({exc}); retrying")
-                    time.sleep(5 * attempt)
-            data = body.get("data") or {}
-            pages = int(data.get("pages") or 1)
-            for rec in data.get("records") or []:
-                rec["variant_type"] = variant_type
-                records.append(rec)
-            page += 1
-
-    backend = pd.DataFrame(records)
-    if backend.empty:
-        raise RuntimeError("GoFCards backend returned no records")
-    backend["locus_key"] = backend.apply(locus_key_of, axis=1)
-
-    # Join on the type-free locus key: the two sources label multi-base
-    # substitutions differently, so joining on allele_key would drop them.
-    protein = (backend.loc[:, ["locus_key", "AAChange_refGene"]]
-               .assign(AAChange_refGene=lambda d: d["AAChange_refGene"].map(clean_text))
-               .query("AAChange_refGene != ''")
-               .drop_duplicates("locus_key"))
-    merged = public.merge(protein, on="locus_key", how="left").fillna({"AAChange_refGene": ""})
-
     provenance = {
         "public_excel_url": public_url,
         "public_excel_last_modified": resp.headers.get("Last-Modified", ""),
         "public_workbook_rows": int(len(public)),
         "public_unique_alleles": int(public["locus_key"].nunique()),
-        "backend_rows": int(len(backend)),
-        "backend_unique_alleles": int(backend["locus_key"].nunique()),
-        "rows_with_source_protein_change": int((merged["AAChange_refGene"] != "").sum()),
     }
-    log(f"public rows={len(public)} unique alleles={public['locus_key'].nunique()}; "
-        f"backend rows={len(backend)}; "
-        f"protein change attached to {(merged['AAChange_refGene'] != '').sum()} rows")
-    return merged, provenance
+    log(f"public workbook: {len(public)} rows, "
+        f"{public['locus_key'].nunique()} unique alleles")
+    return public, provenance
 
 
 # ---------------------------------------------------------------------------
@@ -477,7 +493,6 @@ def parse_vep(tsv: Path, assembly: str) -> pd.DataFrame:
             "HGVSp": hgvsp,
             "hgvsc_key": hgvsc.split(":")[-1].upper() if hgvsc else "",
             "hgvsp_key": re.sub(r"^P\.", "", hgvsp.split(":")[-1].upper()) if hgvsp else "",
-            "existing_variation": clean_text(rec.get("Existing_variation")),
         })
     frame = pd.DataFrame(rows)
     log(f"VEP {assembly}: {len(frame)} transcript rows over {frame['vcf_id'].nunique() if not frame.empty else 0} records")
@@ -511,6 +526,43 @@ def liftover_vcf(in_vcf: Path, chain: Path, target_fasta: Path, out_vcf: Path,
                     unmapped.add(fields[2])
     log(f"liftover: {len(unmapped)} records could not be placed on GRCh38")
     return out_vcf, unmapped
+
+
+def endpoint_hg38_coordinates(core: pd.DataFrame, summary: dict[str, dict],
+                              hg38_fasta: Path) -> tuple[pd.DataFrame, dict[str, int]]:
+    """Turn GoFCards' own GRCh38 positions into checked coordinates.
+
+    The endpoint returns a position and nothing else -- no GRCh38 reference or
+    alternate allele. The alleles therefore have to be carried over from GRCh37,
+    which is only valid if the GRCh38 sequence at that position really does
+    start with the same reference. That check is the whole safeguard: it is what
+    rejects a position pointing at the wrong part of the chromosome.
+
+    Anything that fails here gets no endpoint coordinate and falls through to the
+    liftover instead.
+    """
+    fasta = Fasta(str(hg38_fasta), sequence_always_upper=True, rebuild=False)
+    rows: list[dict] = []
+    counts: Counter[str] = Counter()
+    for _, record in core.iterrows():
+        data = summary.get(record["allele_key"]) or {}
+        position = normalize_int(data.get("hg38_start"))
+        if not position.isdigit():
+            counts["no_endpoint_position"] += 1
+            continue
+        chrom, ref, alt = record["hg19_chrom"], record["hg19_ref"], record["hg19_alt"]
+        try:
+            observed = _fasta_slice(fasta, chrom, int(position), len(ref))
+        except Exception:
+            counts["endpoint_position_off_the_contig"] += 1
+            continue
+        if observed != ref:
+            counts["endpoint_position_rejected_by_reference_check"] += 1
+            continue
+        counts["endpoint_position_accepted"] += 1
+        rows.append({"vcf_id": record["vcf_id"], "hg38_chrom": chrom,
+                     "hg38_pos": position, "hg38_ref": ref, "hg38_alt": alt})
+    return pd.DataFrame(rows), dict(counts)
 
 
 def read_vcf_coordinates(vcf: Path, prefix: str) -> pd.DataFrame:
@@ -630,7 +682,6 @@ def _aggregate_evidence(source_records: pd.DataFrame) -> tuple[pd.DataFrame, dic
             "allele_key": key,
             "GoFCards_source_symbol": join_unique(group.get("Gene_Symbol", pd.Series(dtype=str))),
             "GoFCards_transcript": join_unique(group.get("Transcript", pd.Series(dtype=str))),
-            "source_protein_change": join_unique(group.get("AAChange_refGene", pd.Series(dtype=str))),
         })
         records[key] = [{
             "source_order": clean_text(row.get("source_order")),
@@ -642,89 +693,118 @@ def _aggregate_evidence(source_records: pd.DataFrame) -> tuple[pd.DataFrame, dic
             "animal_model": clean_text(row.get("Animal_model")),
             "cell_model": clean_text(row.get("Cell_model")),
             "source_transcript": clean_text(row.get("Transcript")),
-            "source_protein_change": clean_text(row.get("AAChange_refGene")),
         } for _, row in group.iterrows()]
     return pd.DataFrame(join_fields), records
 
 
 def _nest(merged: pd.DataFrame, evidence_records: dict[str, list[dict]],
-          resolver: HgncResolver, provenance: dict, unmapped: set[str]) -> dict:
-    """Fold the joined table into gene -> allele -> assembly -> transcript.
+          summary: dict[str, dict], resolver: HgncResolver,
+          provenance: dict, unmapped: set[str]) -> dict:
+    """Fold the joined table into gene -> assembly -> {transcripts, genomic}.
 
-    The nesting follows what actually owns each fact.  Evidence and the
-    eligibility verdict belong to the allele and are assembly-independent, so
-    they sit above the assembly level and are stored once.  Coordinates are
-    shared by every transcript of an allele in one assembly, so they sit at the
-    assembly level.  Only HGVS and consequence genuinely vary per transcript.
+    A GoFCards record is established by one of two routes, and the structure is
+    keyed on exactly those:
 
-    An allele that could not be lifted over simply has no ``hg38`` entry, which
-    states the situation more plainly than empty coordinate fields would.
+      route 1   assembly + gene + transcript + HGVSc  (HGVSp maps to HGVSc)
+      route 2   assembly + chromosome, position, reference and alternate allele
+
+    Both routes are assembly-bound: a transcript identifier carries a different
+    version per genome build, and a coordinate is meaningless without naming the
+    build it belongs to.  Assembly is therefore the second key, above everything
+    it qualifies.  Nothing derived from one build is allowed to sit above it.
+
+    ``by_hgvsc`` is keyed because (gene, assembly, transcript, HGVSc) is unique
+    across the catalogue.  ``by_hgvsp`` maps to a LIST of HGVSc keys because a
+    protein change is not unique: two different coding changes can produce it.
+
+    Facts that do not depend on the build -- the eligibility verdict, the
+    literature, and what GoFCards originally published -- live once per source
+    record under ``records``, which both assembly views reference by key.
     """
     genes: dict[str, dict] = {}
-    for (symbol, allele_id), group in merged.groupby(["HGNC_Symbol", "hg19_vcf_key"], sort=True):
-        if not symbol or not allele_id:
+    for symbol, gene_rows in merged.groupby("HGNC_Symbol", sort=True):
+        if not symbol:
             continue
-        first = group.iloc[0]
-        gene = genes.setdefault(symbol, {"hgnc_id": resolver.hgnc_id(symbol), "alleles": {}})
+        gene = genes.setdefault(symbol, {"hgnc_id": resolver.hgnc_id(symbol), "variants": {}})
 
-        assemblies: dict[str, dict] = {}
-        for assembly, rows in group.groupby("VEP_assembly", sort=True):
-            if not assembly:
-                continue
-            head = rows.iloc[0]
-            chrom, pos = head[f"{assembly}_chrom"], head[f"{assembly}_pos"]
-            if not chrom:
-                continue
-            transcripts = {}
-            for _, r in rows.iterrows():
-                if not r["VEP_transcript"]:
+        for source_key, rows in gene_rows.groupby("allele_key", sort=True):
+            first = rows.iloc[0]
+            identifier = variant_id_of(first["hg19_chrom"], first["source_hg19_pos"],
+                                       first["source_hg19_ref"], first["source_hg19_alt"])
+            variant = gene["variants"].setdefault(identifier, {
+                # Everything that does not depend on the genome build, stored once.
+                "record": {
+                    "eligibility": {
+                        "status": first["match_eligibility"],
+                        "gene_match_status": first["gene_match_status"],
+                        "reason": first["reject_reason"] or None,
+                        "vep_symbol": first["VEP_HGNC_Symbol"] or None,
+                    },
+                    "source": {
+                        "gofcards_allele_key": source_key,
+                        "variant_type_label": source_key.split("|")[0],
+                        "assembly": "hg19",
+                        "chrom": first["hg19_chrom"],
+                        "start": first["source_hg19_pos"],
+                        "ref": first["source_hg19_ref"] or "-",
+                        "alt": first["source_hg19_alt"] or "-",
+                    },
+                    "liftover_status": "unmapped" if first["vcf_id"] in unmapped else "mapped",
+                    # Only what a downstream consumer reads. The ClinVar
+                    # variation id links a variant to its ClinVar record by
+                    # identity and reaches the final ACMG output. GoFCards' own
+                    # snapshot of ClinVar significance, conditions and review
+                    # status is deliberately not kept: the injection step
+                    # attaches the live ClinVar record, and nothing reads the
+                    # snapshot.
+                    "annotations": {
+                        "clinvar_variation_id": first["gofcards_accession_id"] or None,
+                    },
+                    "evidence": evidence_records.get(source_key, []),
+                },
+                "assemblies": {},
+            })
+
+            for assembly, arows in rows.groupby("VEP_assembly", sort=True):
+                if not assembly:
                     continue
-                transcripts[r["VEP_transcript"]] = {
-                    "hgvsc": r["HGVSc"].split(":")[-1] if r["HGVSc"] else "",
-                    "hgvsp": r["HGVSp"].split(":")[-1] if r["HGVSp"] else "",
-                    "consequence": r["consequence"],
-                    "mane_select": r["mane_select"] or None,
-                    "canonical": r["canonical_transcript"] == "YES",
-                }
-            assemblies[assembly] = {
-                "coordinates": {"chrom": chrom, "pos": int(pos),
-                                "ref": head[f"{assembly}_ref"], "alt": head[f"{assembly}_alt"]},
-                "status": head["hg19_vcf_status"] if assembly == "hg19" else head["hg38_refalt_status"],
-                "transcripts": transcripts,
-            }
-
-        source_key = first["allele_key"]
-        gene["alleles"][allele_id] = {
-            "source_allele": {
-                "variant_type_label": source_key.split("|")[0],
-                "chrom": first["hg19_chrom"], "start": first["source_hg19_pos"],
-                "ref": first["source_hg19_ref"], "alt": first["source_hg19_alt"],
-                "allele_key": source_key,
-            },
-            "eligibility": {
-                "status": first["match_eligibility"],
-                "gene_match_status": first["gene_match_status"],
-                "reason": first["reject_reason"] or None,
-                "vep_symbol": first["VEP_HGNC_Symbol"] or None,
-            },
-            "liftover_status": "unmapped" if first["vcf_id"] in unmapped else "mapped",
-            # How the GRCh37 VCF record was constructed at step 2. This describes
-            # the allele itself, so it must survive even when VEP produced no
-            # annotation for an assembly.
-            "vcf_construction": first["hg19_vcf_status"],
-            "rsid": first["gofcards_accession_id"] or None,
-            "source_protein_change": first["source_protein_change"] or None,
-            "protein_change_agreement": first["match_status"],
-            "match_keys": {
-                "hgvsp": sorted({r for r in group["hgvsp_key"] if r}),
-                "hgvsc": sorted({r for r in group["hgvsc_key"] if r}),
-                "hg19_vcf": allele_id,
-                "hg38_vcf": first["hg38_vcf_key"] or None,
-                "hg19_genomic": first["hg19_genomic_key"] or None,
-            },
-            "assemblies": assemblies,
-            "evidence": evidence_records.get(source_key, []),
-        }
+                head = arows.iloc[0]
+                chrom, pos = head[f"{assembly}_chrom"], head[f"{assembly}_pos"]
+                if not chrom:
+                    continue
+                # One variant has exactly one position per build, so this is a
+                # single object rather than a map.
+                block = variant["assemblies"].setdefault(assembly, {
+                    "genomic": {
+                        "chrom": chrom, "pos": int(pos),
+                        "ref": head[f"{assembly}_ref"], "alt": head[f"{assembly}_alt"],
+                        "status": head["hg19_vcf_status"] if assembly == "hg19"
+                                  else head["hg38_refalt_status"],
+                    },
+                    "transcripts": {},
+                })
+                for _, r in arows.iterrows():
+                    transcript = r["VEP_transcript"]
+                    if not transcript:
+                        continue
+                    hgvsc = r["HGVSc"].split(":")[-1] if r["HGVSc"] else ""
+                    hgvsp = r["HGVSp"].split(":")[-1] if r["HGVSp"] else ""
+                    if not hgvsc:
+                        # Nothing to key on for the transcript route; the variant
+                        # stays reachable through its coordinates.
+                        continue
+                    view = block["transcripts"].setdefault(
+                        transcript, {"by_hgvsc": {}, "by_hgvsp": {}})
+                    view["by_hgvsc"][hgvsc] = {
+                        "hgvsp": hgvsp or None,
+                        "consequence": r["consequence"],
+                        "canonical": r["canonical_transcript"] == "YES",
+                        "mane_select": r["mane_select"] or None,
+                    }
+                    if hgvsp:
+                        coding = view["by_hgvsp"].setdefault(hgvsp, [])
+                        if hgvsc not in coding:
+                            coding.append(hgvsc)
 
     return {
         "metadata": {
@@ -740,16 +820,26 @@ def _nest(merged: pd.DataFrame, evidence_records: dict[str, list[dict]],
 
 def build_cache(core: pd.DataFrame, evidence: pd.DataFrame, evidence_records: dict[str, list[dict]],
                 vep_tables: list[pd.DataFrame],
-                hg38_coords: pd.DataFrame, unmapped: set[str], reviews: dict,
+                hg19_coords: pd.DataFrame, hg38_coords: pd.DataFrame,
+                unmapped: set[str], reviews: dict, summary: dict[str, dict],
                 resolver: HgncResolver, provenance: dict, out_tsv: Path) -> dict:
     """Join every layer, decide eligibility, and write the compact cache."""
     annotation = pd.concat([t for t in vep_tables if not t.empty], ignore_index=True)
     frame = core.merge(evidence, on="allele_key", how="left")
-    if not hg38_coords.empty:
-        frame = frame.merge(hg38_coords, on="vcf_id", how="left")
-    for column in ("hg38_chrom", "hg38_pos", "hg38_ref", "hg38_alt"):
-        if column not in frame.columns:
-            frame[column] = ""
+
+    # bcftools norm left-aligns and trims, so a tandem duplication written
+    # longhand as TGAT->TGATTGAT becomes C->CTGAT. The authoritative coordinates
+    # for BOTH builds are therefore the ones read back from the normalized VCFs.
+    # Taking them from only one build would describe the same variant two
+    # different ways depending on the assembly.
+    for coords, prefix in ((hg19_coords, "hg19"), (hg38_coords, "hg38")):
+        columns = [f"{prefix}_{field}" for field in ("chrom", "pos", "ref", "alt")]
+        frame = frame.drop(columns=[c for c in columns if c in frame.columns])
+        if not coords.empty:
+            frame = frame.merge(coords, on="vcf_id", how="left")
+        for column in columns:
+            if column not in frame.columns:
+                frame[column] = ""
     frame = frame.fillna("")
     merged = annotation.merge(frame, on="vcf_id", how="right").fillna("")
 
@@ -817,80 +907,49 @@ def build_cache(core: pd.DataFrame, evidence: pd.DataFrame, evidence_records: di
         applied = merged.apply(apply_review, axis=1, result_type="expand")
         merged["match_eligibility"], merged["reject_reason"] = applied[0], applied[1]
 
-    merged["hg19_genomic_key"] = merged.apply(
-        lambda r: "|".join([r["hg19_chrom"], r["source_hg19_pos"], r["source_hg19_ref"],
-                            r["source_hg19_alt"]]) if r["hg19_chrom"] else "", axis=1)
-    merged["hg19_vcf_key"] = merged.apply(
-        lambda r: "|".join([r["hg19_chrom"], str(r["hg19_pos"]), r["hg19_ref"], r["hg19_alt"]])
-        if r["hg19_chrom"] else "", axis=1)
-    merged["hg38_vcf_key"] = merged.apply(
-        lambda r: "|".join([r["hg38_chrom"], str(r["hg38_pos"]), r["hg38_ref"], r["hg38_alt"]])
-        if r["hg38_chrom"] else "", axis=1)
-    merged["hg38_genomic_key"] = merged["hg38_vcf_key"]
+    # Coordinate keys are no longer precomputed here. Each one is only meaningful
+    # once its assembly is named, so the exporter builds them inside the assembly
+    # block they belong to.
     merged["liftover_status"] = merged["vcf_id"].map(
         lambda v: "unmapped" if v in unmapped else "mapped")
 
-    # Columns the downstream non-LOF and HPO cache builders read. The normalized
-    # VCF representation is the only one produced here, so the *_vcf_* fields
-    # mirror hg19_*/hg38_* rather than duplicating a second convention.
     merged["hg38_refalt_status"] = merged.apply(
         lambda r: "liftover_unmapped" if r["liftover_status"] == "unmapped"
         else ("lifted_ref_match" if r["hg38_chrom"] else "no_hg38_coordinate"), axis=1)
-    for assembly in ("hg19", "hg38"):
-        for field in ("pos", "ref", "alt"):
-            merged[f"{assembly}_vcf_{field}"] = merged[f"{assembly}_{field}"]
-    merged["raw_GoFCards_HGVS"] = merged["source_protein_change"]
-    merged["match_key_types"] = merged.apply(
-        lambda r: ";".join(
-            ([f"hgvsp"] if r["hgvsp_key"] else [])
-            + (["hg19_genomic", "hg19_vcf"] if r["hg19_vcf_key"] else [])
-            + (["hg38_genomic", "hg38_vcf"] if r["hg38_vcf_key"] else [])
-        ), axis=1)
+    # This field reaches the final ACMG output, and its name means what GoFCards
+    # means by it: the ClinVar accession, i.e. the ClinVar VariationID.
+    merged["gofcards_accession_id"] = merged["allele_key"].map(
+        lambda key: clean_text((summary.get(key) or {}).get("Accession")))
 
-    merged["source"] = "GoFCards"
-    merged["mechanism"] = "GOF"
-    merged["build"] = "hg19_and_hg38"
-    merged["gofcards_variant_id"] = merged["allele_key"]
-    merged["gofcards_accession_id"] = merged["existing_variation"].map(
-        lambda v: next((p for p in str(v).split(",") if p.startswith("rs")), ""))
-    merged["match_status"] = merged.apply(
-        lambda r: "source_protein_change_absent" if not r["source_protein_change"]
-        else ("protein_change_agrees" if r["hgvsp_key"] and r["hgvsp_key"].replace("%3D", "=")
-              in r["source_protein_change"].upper().replace("P.", "")
-              else "protein_change_differs"), axis=1)
-    merged["derived_on"] = date.today().isoformat()
+    # Every transcript is kept. The transcript identifier is a key in the exported
+    # structure, so collapsing transcripts that happen to share an HGVS string
+    # would delete a lookup path: a MANE pair gives the same HGVSc from its
+    # Ensembl and its RefSeq member, and PriVA may annotate with either one.
+    log(f"retaining {len(merged)} transcript annotations across "
+        f"{merged['allele_key'].nunique()} source records")
 
-    # Transcripts that yield the same HGVSc and HGVSp are indistinguishable for
-    # matching, so only one representative of each distinct key pair is kept.
-    # MANE Select first, then canonical, so the retained row is the one a reader
-    # would expect to see. This is not a coverage reduction: every distinct
-    # protein and coding change an allele can present is still present.
-    before = len(merged)
-    merged = (merged
-              .assign(_rank=lambda d: list(zip(d["mane_select"] == "",
-                                               d["canonical_transcript"] != "YES",
-                                               d["VEP_transcript"])))
-              .sort_values("_rank")
-              .drop_duplicates(["allele_key", "VEP_assembly", "hgvsp_key", "hgvsc_key"],
-                               keep="first")
-              .drop(columns=["_rank"]))
-    log(f"collapsed {before} transcript rows to {len(merged)} distinct HGVS keys")
-
-    output = _nest(merged, evidence_records, resolver, provenance, unmapped)
+    output = _nest(merged, evidence_records, summary, resolver, provenance, unmapped)
     out_tsv.parent.mkdir(parents=True, exist_ok=True)
     with gzip.open(out_tsv, "wt", encoding="utf-8") as handle:
         json.dump(output, handle, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
-    alleles = [a for gene in output["genes"].values() for a in gene["alleles"].values()]
+    variants = [v for gene in output["genes"].values() for v in gene["variants"].values()]
+    blocks = [(name, b) for v in variants for name, b in v["assemblies"].items()]
+    views = [view for _, b in blocks for view in b["transcripts"].values()]
     stats = {
         "genes": len(output["genes"]),
-        "alleles": len(alleles),
-        "annotation_entries": int(len(merged)),
-        "eligible_alleles": sum(1 for a in alleles if a["eligibility"]["status"] == ELIGIBLE),
-        "quarantined_alleles": sum(1 for a in alleles if a["eligibility"]["status"] != ELIGIBLE),
-        "alleles_with_hgvsp": sum(1 for a in alleles if a["match_keys"]["hgvsp"]),
-        "alleles_with_hg38": sum(1 for a in alleles if a["match_keys"]["hg38_vcf"]),
-        "evidence_records": sum(len(a["evidence"]) for a in alleles),
+        "variants": len(variants),
+        "eligible_variants": sum(1 for v in variants
+                                 if v["record"]["eligibility"]["status"] == ELIGIBLE),
+        "quarantined_variants": sum(1 for v in variants
+                                    if v["record"]["eligibility"]["status"] != ELIGIBLE),
+        "evidence_entries": sum(len(v["record"]["evidence"]) for v in variants),
+        "variants_on_hg19": sum(1 for v in variants if "hg19" in v["assemblies"]),
+        "variants_on_hg38": sum(1 for v in variants if "hg38" in v["assemblies"]),
+        # Transcript route: assembly + transcript + HGVSc (HGVSp maps to HGVSc)
+        "transcript_views": len(views),
+        "hgvsc_keys": sum(len(v["by_hgvsc"]) for v in views),
+        "hgvsp_keys": sum(len(v["by_hgvsp"]) for v in views),
         "liftover_unmapped": len(unmapped),
     }
     log("cache written: " + "; ".join(f"{k}={v}" for k, v in stats.items()))
@@ -930,6 +989,8 @@ def main(argv: list[str] | None = None) -> int:
     # Step 1
     source_records, provenance = fetch_sources(work, args.public_excel_url,
                                                timeout_seconds=args.api_timeout)
+    summary = fetch_summary_annotations(source_records, work / "gofcards_summary_cache.jsonl",
+                                        timeout_seconds=args.api_timeout)
 
     # Step 2 - GRCh37 is the only assembly GoFCards asserts, so it is the only
     # one that can adjudicate the reference allele.
@@ -959,15 +1020,34 @@ def main(argv: list[str] | None = None) -> int:
         "vep_cache_version": str(args.vep_cache_version),
         "liftover_chain": str(args.chain),
     })
+    # CrossMap produces the representative GRCh38 record. It is the only source
+    # that supplies a reference and alternate allele as well as a position: the
+    # GoFCards endpoint returns a position alone, so its coordinate could only
+    # ever be completed by assuming the GRCh37 alleles carry over. The endpoint
+    # position is used solely to recover variants CrossMap could not place, and
+    # only when the GRCh38 sequence confirms the carried-over reference.
+    lifted_coords = read_vcf_coordinates(norm38, "hg38")
+    placed = set(lifted_coords["vcf_id"]) if not lifted_coords.empty else set()
+    unplaced = source_vcf.loc[~source_vcf["vcf_id"].isin(placed)]
+    recovered, endpoint_counts = endpoint_hg38_coordinates(
+        unplaced, summary, args.hg38_fasta)
+    hg38_coords = pd.concat([lifted_coords, recovered], ignore_index=True) \
+        if not recovered.empty else lifted_coords
+    log(f"GRCh38 coordinates: {len(lifted_coords)} from the liftover, "
+        f"{len(recovered)} recovered from the GoFCards endpoint")
+    provenance.update({f"hg38_{k}": v for k, v in endpoint_counts.items()})
+
     evidence_frame, evidence_records = _aggregate_evidence(source_records)
     stats = build_cache(
         core=source_vcf,
         evidence=evidence_frame,
         evidence_records=evidence_records,
         vep_tables=[vep19, vep38],
-        hg38_coords=read_vcf_coordinates(norm38, "hg38"),
+        hg19_coords=read_vcf_coordinates(norm19, "hg19"),
+        hg38_coords=hg38_coords,
         unmapped=unmapped,
         reviews=load_mechanism_reviews(args.mechanism_review_tsv),
+        summary=summary,
         resolver=HgncResolver(args.hgnc_table),
         provenance=provenance,
         out_tsv=args.out_json,

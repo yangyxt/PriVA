@@ -91,6 +91,7 @@ CACNA1A	VCV000008487	8487	NM_001127222.2(CACNA1A):c.575G>A (p.Arg192Gln)	simple_
 SCN5A	VCV000009376	9376	NM_000335.5(SCN5A):c.4865G>A (p.Arg1622Gln)	simple_allele	allele	RCV001588806	not provided	Pathogenic	criteria provided, multiple submitters, no conflicts	2	2
 SCN5A	VCV000009370	9370	NM_000335.5(SCN5A):c.3971A>G (p.Asn1324Ser)	simple_allele	allele	RCV003234898	not provided	Pathogenic	criteria provided, multiple submitters, no conflicts	2	2
 SCN5A	VCV000009375	9375	NM_000335.5(SCN5A):c.5381A>G (p.Tyr1794Cys)	simple_allele	allele	RCV001561910	not provided	Pathogenic	criteria provided, multiple submitters, no conflicts	2	2
+THPO	VCV000009508	9508	NM_000460.4(THPO):c.13+1G>C	simple_allele	allele	RCV003487269	not provided	Pathogenic/Likely pathogenic	criteria provided, multiple submitters, no conflicts	2	2
 TP53	VCV000012353	12353	NM_000546.6(TP53):c.469G>T (p.Val157Phe)	simple_allele	allele	RCV000566103	Hereditary cancer-predisposing syndrome	Pathogenic/Likely pathogenic	criteria provided, multiple submitters, no conflicts	2	2
 TP53	VCV000012353	12353	NM_000546.6(TP53):c.469G>T (p.Val157Phe)	simple_allele	allele	RCV001823095	Li-Fraumeni syndrome 1	Pathogenic/Likely pathogenic	criteria provided, multiple submitters, no conflicts	2	2
 RYR1	VCV000012978	12978	NM_000540.3(RYR1):c.14477C>T (p.Thr4826Ile)	simple_allele	allele	RCV000013847	Malignant hyperthermia, susceptibility to, 1	Pathogenic	reviewed by expert panel	3	1
@@ -813,6 +814,7 @@ MAP2K2	VCV000040813	40813	NM_030662.4(MAP2K2):c.619G>A (p.Glu207Lys)	simple_alle
 MAP2K1	VCV000040744	40744	NM_002755.4(MAP2K1):c.371C>T (p.Pro124Leu)	simple_allele	allele	RCV000037595	Cardio-facio-cutaneous syndrome	Pathogenic/Likely pathogenic	criteria provided, multiple submitters, no conflicts	2	2
 MAP2K1	VCV000040744	40744	NM_002755.4(MAP2K1):c.371C>T (p.Pro124Leu)	simple_allele	allele	RCV000680623	not provided	Pathogenic	criteria provided, multiple submitters, no conflicts	2	2
 MAP2K1	VCV000040744	40744	NM_002755.4(MAP2K1):c.371C>T (p.Pro124Leu)	simple_allele	allele	RCV001542689	Cardiofaciocutaneous syndrome 3	Pathogenic/Likely pathogenic	criteria provided, multiple submitters, no conflicts	2	3
+CRYAA	VCV000068461	68461	NM_000394.4(CRYAA):c.62G>A (p.Arg21Gln)	simple_allele	allele	RCV000059330	Cataract 9 multiple types	Pathogenic	criteria provided, multiple submitters, no conflicts	2	2
 TP53	VCV000127819	127819	NM_000546.6(TP53):c.659A>G (p.Tyr220Cys)	simple_allele	allele	RCV000115731	Hereditary cancer-predisposing syndrome	Pathogenic	criteria provided, multiple submitters, no conflicts	2	0
 TP53	VCV000127819	127819	NM_000546.6(TP53):c.659A>G (p.Tyr220Cys)	simple_allele	allele	RCV000213055	not provided	Pathogenic	criteria provided, multiple submitters, no conflicts	2	0
 TP53	VCV000127819	127819	NM_000546.6(TP53):c.659A>G (p.Tyr220Cys)	simple_allele	allele	RCV000232050	Li-Fraumeni syndrome	Pathogenic	reviewed by expert panel	3	1

@@ -157,13 +157,20 @@ clingen_dosage_grch38_url: "https://ftp.clinicalgenome.org/ClinGen_gene_curation
 panelapp_panels_url: "https://panelapp.genomicsengland.co.uk/api/v1/panels/"
 
 # GoFCards exact variant-level GOF cache paths
-# Built by: bash scripts/install_utils.sh gofcards_exact_gof_cache_install config.yaml
+# One deployed cache, built in two steps. The first normalizes the GoFCards
+# catalogue into <gofcards_workdir>/gofcards_exact_gof.normalized.json.gz, a
+# build intermediate; the second nests each variant's ClinVar conditions into it
+# and writes the file below, which is what every consumer reads:
+#   bash scripts/install_utils.sh gofcards_exact_gof_cache_install   config.yaml
+#   bash scripts/install_utils.sh gofcards_clinvar_injection_install config.yaml
 gofcards_exact_gof_cache: /paedyl01/disk1/yangyxt/PriVA/data/gofcards/gofcards_exact_gof.json.gz
 gofcards_public_excel_url: "https://download.genemed.tech/upload/GainFunCards/gofcards_data_download.xlsx"
 gofcards_refresh_days: "180"
 gofcards_workdir: "/paedyl01/disk1/yangyxt/PriVA/data/gofcards/build_work"
 gofcards_hg38_fasta: "/paedyl01/disk1/yangyxt/indexed_genome/hg38/ucsc.hg38.fasta"
 gofcards_hg19_to_hg38_chain: "/paedyl01/disk1/yangyxt/public_data/liftOver/hg19ToHg38.over.chain"
+gofcards_clinvar_injector_script: "/paedyl01/disk1/yangyxt/PriVA/scripts/inject_clinvar_into_gofcards.py"
+clinvar_vcv_xml: "/paedyl01/disk1/yangyxt/PriVA/data/gene_pathogenic_mechanism/raw/clinvar_vcv/ClinVarVCVRelease_00-latest_weekly.xml.gz"
 gofcards_builder_script: "/paedyl01/disk1/yangyxt/PriVA/scripts/build_gofcards_exact_gof_cache.py"
 gofcards_mechanism_review_tsv: "/paedyl01/disk1/yangyxt/PriVA/data/gofcards/gofcards_mechanism_reviews.tsv"
 

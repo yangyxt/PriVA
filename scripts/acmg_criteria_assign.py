@@ -298,6 +298,85 @@ def _variant_mechanism_masks(
     There is intentionally no fallback to ``gene_mech_inher_history``, raw
     HPO inheritance arrays, consequences, or GoFCards tags. The upstream hub
     owns those interpretations and ACMG consumers use its final assertions.
+
+    THE DECISION TREE
+    =================
+
+    Every criterion that reasons about mechanism reads its inputs from here,
+    so this is the single place the hub's output becomes ACMG-usable. Four
+    columns come in; seventeen boolean masks go out, in three families.
+
+        var_plausible_patho_mechs      "dominant_GOF;recessive_LOF"
+        variant_mechanism_applicable   the subset ESTABLISHED for this variant
+        variant_mechanism_uncertain    the subset merely POSSIBLE
+        variant_effect                 exact_known_* | predicted_LOF_high_
+                                       confidence | uncertain
+              |
+              |  (a KeyError is raised if any of the four is absent --
+              |   there is deliberately no silent default)
+              v
+
+    FAMILY 1  what the GENE's condition history says, split by inheritance
+    ---------------------------------------------------------------------
+    Read out of var_plausible_patho_mechs by matching the tag text.
+
+        has_recessive_compatible     any tag starting "recessive"
+        has_dominant_compatible      any tag starting "dominant"
+
+        has_rec_lof_history          tag == "recessive_LOF"
+        has_rec_gof_history          tag == "recessive_GOF"
+        has_rec_dn_history           tag == "recessive_DN"
+        has_rec_unresolved_history   bare "recessive", no mechanism suffix
+        has_dom_lof_history          tag == "dominant_LOF"
+        has_dom_gof_history          tag == "dominant_GOF"
+        has_dom_dn_history           tag == "dominant_DN"
+        has_dom_unresolved_history   bare "dominant", no mechanism suffix
+
+    FAMILY 2  what THIS VARIANT does, from variant_effect and the scores
+    -------------------------------------------------------------------
+        is_exact_gof        variant_gof_score == 2, or effect names GOF
+        is_exact_dn         variant_dn_score  == 2, or effect names DN
+        is_exact_nonlof     either of the two above
+        is_predicted_lof    variant_lof_score == 1, or effect ==
+                            "predicted_LOF_high_confidence"
+        is_uncertain        effect == "uncertain"
+        modern_profile      the row carries any history at all
+
+    FAMILY 3  the CONJUNCTION of the two, which is what PVS1 gates on
+    ----------------------------------------------------------------
+        has_applicable_lof_assertion
+            read from variant_mechanism_applicable, not from the profile.
+            True only when BOTH hold: the gene has a loss-of-function
+            condition history, AND this variant's own effect establishes
+            loss of function for it. Neither half alone sets it.
+
+    TWO THINGS THIS TREE DOES NOT DO, AND THEY MATTER
+    =================================================
+
+    1. Loss of function is never scored 2. EXACT_SEQUENCE_MECHANISMS in
+       gene_mechanism_hub.py is {GOF, DOMINANT_NEGATIVE}, so only those two
+       can be "exclusively established". Every predicted loss of function
+       collapses to 1, whatever produced it:
+
+           LOFTEE_HC   LOFTEE_OS   NMD_PREDICTED_LOF
+           VEP_LOF     PRIVA_SPLICE_LOF   PRIVA_5UTR_LOF
+                              |
+                              v
+                    scores["LOF"] = max(score, 1)
+
+       A nonsense variant triggering nonsense-mediated decay and a weak
+       LOFTEE call are therefore indistinguishable here. There is no
+       gradation within predicted loss of function.
+
+    2. None of the hub's newer per-variant facts is read at all:
+
+           variant_inheritance          variant_inheritance_basis
+           variant_penetrance           variant_condition_histories
+
+       Inheritance and penetrance still reach the criteria through the
+       gene-level arrays produced by identify_inheritance_mode, at gene
+       resolution, which is what the variant-level chain was built to
+       replace.
     """
     required = {
         "var_plausible_patho_mechs",
@@ -941,6 +1020,53 @@ def PVS1_criteria(df: pd.DataFrame,
     # clinvar_pathogenic = ...
     # lof_intol_metric = ...
     # clingen_hi / clingen_ar = ...
+    #
+    # THE DECISION TREE
+    # =================
+    #
+    # PVS1 is the one criterion that already reads no gene-level array. Its
+    # single gate is has_applicable_lof_assertion, which is a CONJUNCTION and
+    # not, as its name alone might suggest, a statement about the variant
+    # only. It is true when BOTH hold:
+    #
+    #     the gene has a loss-of-function condition history
+    #     AND this variant's own effect establishes loss of function for it
+    #
+    # A truncating variant in a gene whose only history is gain of function
+    # therefore fails the gate, and so does a missense variant in a gene whose
+    # history is loss of function.
+    #
+    #   variant passes the LoF mechanism gate
+    #             |
+    #             +-- frameshift / stop_gained
+    #             |         |
+    #             |         +-- does NOT escape NMD ............. 4  Very Strong
+    #             |         |
+    #             |         +-- escapes NMD (last exon)
+    #             |                   |
+    #             |                   +-- spans an intolerant domain .. 3 Strong
+    #             |                   +-- truncates >= 10% of protein . 3 Strong
+    #             |                   +-- truncates <  10% of protein . 2 Moderate
+    #             |
+    #             +-- splice variant
+    #             |         |
+    #             |         +-- frameshift, not last exon ....... 4  Very Strong
+    #             |         +-- frameshift, escapes NMD ......... 3/2 by the
+    #             |         |                                     same two tests
+    #             |         +-- induced inframe deletion ........ reduced strength
+    #             |
+    #             +-- inframe deletion .......................... reduced strength
+    #             +-- 5'UTR frameshift (via UTRAnnotator) ....... assigned
+    #             +-- start_lost (CDS alternative start codon) .. assigned
+    #
+    # is_exact_gof is read once more, far below, to withdraw PVS1 from a
+    # variant the upstream hub has curated as gain of function.
+    #
+    # One limitation inherited from _variant_mechanism_masks: every predicted
+    # loss of function scores 1, so a nonsense variant triggering nonsense-
+    # mediated decay carries the same mechanism score as a weak LOFTEE call.
+    # The strength gradation above comes from the consequence tests, not from
+    # the score.
     mechanism_masks = _variant_mechanism_masks(df)
     lof_mechanism = mechanism_masks["has_applicable_lof_assertion"]
     logger.info(
@@ -1975,6 +2101,55 @@ def PP1_criteria(df: pd.DataFrame,
                  mode: str = "both",) -> np.ndarray:
     '''
     PP1: The variant is cosegregating with a pathogenic variant in one or more families
+
+    THE DECISION TREE
+    =================
+
+    PP1 reads FIVE gene-level arrays and no variant-level input at all. It is
+    one of the three criteria the variant-level chain has not reached yet, so
+    the inheritance it reasons about is the gene's, not this variant's.
+
+        recessive / dominant / non_monogenic / non_mendelian /
+        incomplete_penetrance          <- all from identify_inheritance_mode,
+                                          one verdict per GENE
+              |
+              v
+        recessive_ih = NOT non_monogenic
+                     & NOT non_mendelian
+                     & NOT incomplete_penetrance
+                     & recessive
+        dominant_ih  = the same three gates
+                     & dominant
+                     & NOT recessive          <- recessive wins a tie
+              |
+              v
+        segregation counts, per family, from find_cosegregating_variants:
+              Affected_segregated_inds     Unaffected_segregated_inds
+              Male_affected_segregated_inds
+              Male_unaffected_segregated_inds     <- used for chrX and chrY
+              |
+              v
+        autosomal = NOT chrX & NOT chrY & NOT chrM
+              |
+              +-- recessive_ih -> pp1_recessive_points -> encoded strength
+              +-- dominant_ih  -> pp1_dominant_points  -> encoded strength
+
+    WHAT IT WOULD READ INSTEAD
+    ==========================
+
+    The hub now states, per variant rather than per gene:
+
+        variant_inheritance          recessive | dominant | y_linked |
+                                     mitochondrial | non_mendelian |
+                                     polygenic | digenic | oligogenic
+        variant_inheritance_basis    matched_history | gene_consensus |
+                                     gene_constraint
+        variant_penetrance           complete | incomplete | unknown
+        variant_condition_histories  condition|mechanism|inheritance|penetrance
+
+    The three gates above map onto those directly: non_monogenic and
+    non_mendelian become the non-Mendelian inheritance values, and
+    incomplete_penetrance becomes variant_penetrance == "incomplete".
     '''
     pp1_array = np.zeros(len(df), dtype=int)
     if multi_fam_vcf and multi_fam_ped:
@@ -3437,6 +3612,46 @@ def BP2_PM3_criteria(df: pd.DataFrame,
                      threads: int = 1) -> Tuple[pd.Series, pd.Series]:
     # BP2: observed in trans with a pathogenic variant in dominant disease, Or in-cis with a pathogenic variant with any inheritance mode
     # PM3: observed in trans with a pathogenic variant in recessive disease.
+    #
+    # THE DECISION TREE
+    # =================
+    #
+    # Two criteria of opposite direction share one function because they read
+    # the same phase evidence and split on inheritance alone. Both take the
+    # inheritance as GENE-level arrays passed in by the caller
+    # (is_recessive, is_dominant, incomplete_penetrance); neither reads any
+    # variant-level column.
+    #
+    #   what counts as a pathogenic partner variant:
+    #       vep_consq_lof | splicing_lof | 5UTR_lof
+    #                     | (PS1 AND PS3) | PVS1
+    #             |
+    #             v
+    #   determine_cis_trans_relationships  ->  in_cis / in_trans
+    #             |
+    #             +-- BP2, benign supporting
+    #             |     in_trans AND is_dominant AND NOT is_recessive
+    #             |         a second pathogenic allele on the other copy is
+    #             |         incompatible with dominant disease
+    #             |     OR in_cis AND is_recessive
+    #             |         both hits on one copy leave the other intact, so
+    #             |         a recessive disease is not explained
+    #             |
+    #             +-- PM3, pathogenic moderate
+    #                   in_trans AND is_recessive AND PM2
+    #                       the partner completes a biallelic genotype, and
+    #                       PM2 requires the variant to be rare enough for
+    #                       that to be meaningful
+    #
+    # Note the asymmetry: is_dominant is additionally guarded by
+    # NOT is_recessive, so a gene carrying both models never yields BP2. The
+    # variant-level chain removes the need for that guard, because it reports
+    # the inheritance of the histories THIS variant's mechanism reaches
+    # rather than every model the gene has ever shown.
+    #
+    # incomplete_penetrance is accepted and used to gate the same way the
+    # other criteria gate on it: a genotype that contradicts the model is not
+    # interpretable when carriers may be unaffected.
     pathogenic = df["vep_consq_lof"] | df["splicing_lof"] | df["5UTR_lof"] | (ps1_criteria & ps3_criteria) | pvs1_criteria
 
     in_cis_pathogenic, in_trans_pathogenic, df = determine_cis_trans_relationships( df,
@@ -3526,6 +3741,44 @@ def BP5_criteria(df: pd.DataFrame,
     - Only variants found as homozygous in alt disease patients get BP5
 
     Optimized version using pre-computed inheritance arrays and vectorized operations
+
+    THE DECISION TREE
+    =================
+
+    BP5 reads five gene-level arrays and no variant-level input. Like PP1, the
+    inheritance it reasons about belongs to the gene, not to this variant.
+
+        recessive / dominant / non_monogenic / non_mendelian /
+        incomplete_penetrance          <- from identify_inheritance_mode
+              |
+              v
+        eligible_genes = NOT non_monogenic
+                       & NOT non_mendelian
+                       & NOT incomplete_penetrance
+              |
+              |   a genotype contradiction in a gene with incomplete
+              |   penetrance or a non-Mendelian model is not interpretable,
+              |   which is why all three are hard gates rather than weights
+              v
+        variant seen in a patient whose disease has another established
+        molecular basis
+              |
+              +-- dominant gene  -> heterozygous OR homozygous carrier -> BP5
+              +-- recessive gene -> homozygous carrier ONLY            -> BP5
+                                    (a heterozygous carrier of a recessive
+                                     gene is unremarkable and says nothing)
+
+    WHAT IT WOULD READ INSTEAD
+    ==========================
+
+        variant_inheritance          replaces recessive / dominant
+        variant_inheritance_basis    says whether that came from this
+                                     variant's own matched history, the
+                                     gene's unanimous consensus, or the
+                                     gene's constraint data
+        variant_penetrance           replaces incomplete_penetrance
+        the non-Mendelian inheritance values replace non_monogenic and
+        non_mendelian
     '''
     if {"alt_disease_hets", "alt_disease_homs"}.issubset(df.columns):
         logger.info(

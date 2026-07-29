@@ -467,11 +467,14 @@ def test_select_condition_histories_for_variant_is_mechanism_specific() -> None:
 
 
 def test_exact_gof_suppresses_but_retains_predicted_lof_evidence() -> None:
+    # A curated gain-of-function allele outranks predicted loss of function,
+    # including LOFTEE's high-confidence call: those are predictions, this is a
+    # curator's verdict on this exact allele. The predictions stay visible.
     effect = infer_query_variant_effect(
         {
             "Consequence": "stop_gained",
             "LoF": "HC",
-            "NMD": "NMD",
+            "NMD": "NMD_escaping_variant",
             "vep_consq_lof": True,
             "variant_gof_score": 2,
             "variant_dn_score": 0,
@@ -484,6 +487,26 @@ def test_exact_gof_suppresses_but_retains_predicted_lof_evidence() -> None:
     assert effect["variant_lof_score"] == 0
     assert effect["variant_mechanism_exclusive"] is True
     assert "LOFTEE_HC" in effect["variant_effect_suppressed_evidence"]
-    assert "NMD_PREDICTED_LOF" in effect["variant_effect_suppressed_evidence"]
+
+
+def test_nonsense_mediated_decay_outranks_even_a_curated_gof_allele() -> None:
+    # Decay destroys the transcript, so there is no protein left to gain a
+    # function. This is the one case where a prediction outranks curation, and
+    # the overridden curated call is recorded rather than silently dropped.
+    effect = infer_query_variant_effect(
+        {
+            "Consequence": "stop_gained",
+            "NMD": "NMD",
+            "variant_gof_score": 2,
+            "variant_dn_score": 0,
+            "variant_lof_score": 0,
+        }
+    )
+
+    assert effect["variant_effect"] == "exact_known_LOF"
+    assert effect["variant_lof_score"] == 2
+    assert effect["variant_gof_score"] == 0
+    assert effect["variant_mechanism_exclusive"] is True
+    assert "CANONICAL_EXACT_GOF" in effect["variant_effect_suppressed_evidence"]
 
 

@@ -71,6 +71,9 @@ def _row_assembly_for_gof_lookup(row):
     return "hg19"
 
 
+# A loss-of-function tag, with or without an inheritance prefix.
+_LOF_TAG_PATTERN = r"(?:^|;)(?:LOF|(?:recessive|dominant)_LOF)(?:;|$)"
+
 EXACT_NONLOF_OUTPUT_COLS = (
     "variant_lof_score",
     "variant_gof_score",
@@ -367,17 +370,15 @@ def _variant_mechanism_masks(
             change that does not shift the frame, a 5'UTR change.
         0   no loss-of-function evidence at all.
 
-    A score of 2 here does NOT make variant_mechanism_exclusive true.
-    EXACT_SEQUENCE_MECHANISMS in gene_mechanism_hub.py is
-    {GOF, DOMINANT_NEGATIVE}, so a curated gain-of-function or
-    dominant-negative allele still overrides a predicted loss of function.
-    Curation beats prediction, which is the intended precedence.
+    Decay-triggered loss of function IS exclusive, and outranks even a
+    curated gain-of-function allele: a destroyed transcript makes no protein
+    to gain a function. A LOFTEE-rescued score of 2 does not outrank curation.
 
-    Nor does the grade change variant_mechanism_applicable. PVS1 has its own
-    branch for variants that escape decay and assigns them reduced strength,
-    so demoting them to "uncertain" here would stop PVS1 ever reaching them.
-    The grade is a finer signal offered alongside applicability, not a
-    replacement for it.
+    The grade decides applicability directly: score 2 lands in
+    variant_mechanism_applicable, score 1 in variant_mechanism_uncertain.
+    Whether a criterion fires, and how strongly, is that criterion's own
+    business and is not pre-empted here -- which is why PVS1 reads
+    has_lof_mechanism_history rather than has_established_lof_mechanism.
 
     WHAT THIS TREE DOES NOT DO
     ==========================
@@ -410,6 +411,7 @@ def _variant_mechanism_masks(
 
     profile = text_series("var_plausible_patho_mechs")
     applicable = text_series("variant_mechanism_applicable")
+    uncertain_tags = text_series("variant_mechanism_uncertain")
     accepted = profile
     has_profile = profile.str.strip().ne("")
 
@@ -478,8 +480,24 @@ def _variant_mechanism_masks(
         "has_dom_gof_history": has_dom_gof_history.astype(bool),
         "has_dom_dn_history": has_dom_dn_history.astype(bool),
         "has_dom_unresolved_history": has_dom_unresolved_history.astype(bool),
-        "has_applicable_lof_assertion": applicable.str.contains(
-            r"(?:^|;)(?:LOF|(?:recessive|dominant)_LOF)(?:;|$)", regex=True
+        # Two different questions, kept apart on purpose.
+        #
+        # has_established_lof_mechanism -- the variant's loss of function is
+        # ESTABLISHED for a condition history of this gene. Read from
+        # variant_mechanism_applicable, which the hub fills only at score 2.
+        #
+        # has_lof_mechanism_history -- this gene causes disease by loss of
+        # function and this variant could act that way, established or merely
+        # plausible. Read from applicable OR uncertain. This is the question
+        # PVS1 asks: whether loss of function is a valid mechanism to consider
+        # at all. How strong the evidence is for a particular null variant is
+        # PVS1's own determination and must not be pre-empted here.
+        "has_established_lof_mechanism": applicable.str.contains(
+            _LOF_TAG_PATTERN, regex=True
+        ).astype(bool),
+        "has_lof_mechanism_history": (
+            applicable.str.contains(_LOF_TAG_PATTERN, regex=True)
+            | uncertain_tags.str.contains(_LOF_TAG_PATTERN, regex=True)
         ).astype(bool),
     }
 
@@ -1085,7 +1103,7 @@ def PVS1_criteria(df: pd.DataFrame,
     # rescues it, 1 when the transcript may survive -- and the gate below
     # admits both, precisely so the escape branch above can still run.
     mechanism_masks = _variant_mechanism_masks(df)
-    lof_mechanism = mechanism_masks["has_applicable_lof_assertion"]
+    lof_mechanism = mechanism_masks["has_lof_mechanism_history"]
     logger.info(
         "PVS1 LoF mechanism gate: %s variants have an upstream applicable LOF assertion",
         int(lof_mechanism.sum()),

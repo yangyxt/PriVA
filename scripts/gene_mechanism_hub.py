@@ -2501,6 +2501,11 @@ def condition_cache_mechanism_assertions(
                             "disease": _clean(evidence.get("condition_label"))
                             or _clean(condition.get("label")),
                             "mechanism": mechanism,
+                            # Carried through so a reader can still tell a curator's
+                            # assertion from one the build inferred from the
+                            # inheritance. Dropping it here would put that
+                            # distinction back out of reach of every consumer.
+                            "assertion_basis": _clean(evidence.get("assertion_basis")),
                             "mechanism_raw": _clean(evidence.get("mechanism_raw")),
                             "allelic_requirement": effective_requirement,
                             "confidence": _clean(evidence.get("mechanism_confidence")),

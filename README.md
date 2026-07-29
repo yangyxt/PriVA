@@ -75,11 +75,21 @@ The mechanism stages can also be run independently for debugging:
 ```bash
 bash scripts/install_utils.sh gene_pathogenic_mechanism_cache_install path/to/config.yaml
 bash scripts/install_utils.sh gofcards_exact_gof_cache_install path/to/config.yaml
+bash scripts/install_utils.sh gene_nonlof_mechanism_cache_install path/to/config.yaml sources-only
+bash scripts/install_utils.sh gofcards_clinvar_injection_install path/to/config.yaml
 bash scripts/install_utils.sh gene_nonlof_mechanism_cache_install path/to/config.yaml
 bash scripts/install_utils.sh mondo_hpo_scope_install path/to/config.yaml
 bash scripts/install_utils.sh hpo_condition_mechanism_cache_install path/to/config.yaml
 bash scripts/install_utils.sh mechanism_resource_install path/to/config.yaml
 ```
+
+The GoFCards steps must run in the order shown. `gofcards_exact_gof_cache_install`
+writes only a build intermediate; `gofcards_clinvar_injection_install` turns that
+into the one deployed cache every consumer reads. The `sources-only` call in
+between downloads the weekly ClinVar VCV XML that injection needs, because the
+component that owns that download is the non-LOF builder, and the non-LOF
+builder's ordinary run cannot start until injection has finished. See
+`docs/GOFCARDS_CACHE_SCHEMA.md` for the full ordering.
 
 The integrated JSON is published by writing and validating a complete temporary
 snapshot before atomically replacing the live cache. It nests external

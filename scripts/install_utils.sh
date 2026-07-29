@@ -2407,8 +2407,18 @@ function validate_gene_nonlof_mechanism_cache() {
 
 
 function gene_nonlof_mechanism_cache_install() {
+    # The second argument selects the phase. "build" (the default) produces the
+    # cache. "sources-only" stops after the downloads, which is how the
+    # installer puts the weekly ClinVar VCV XML in place before ClinVar
+    # injection needs it: injection writes the GoFCards cache this builder
+    # reads, so the full build cannot also be what fetches that XML.
     local config_file=${1}
+    local mode=${2:-build}
     [[ -f ${config_file} ]] || { log "ERROR: Config file not found: ${config_file}"; return 1; }
+    [[ ${mode} == "build" || ${mode} == "sources-only" ]] || {
+        log "ERROR: Unknown gene_nonlof_mechanism_cache_install mode: ${mode} (expected build or sources-only)"
+        return 1
+    }
 
     local cache_dir
     local raw_dir
@@ -2429,8 +2439,12 @@ function gene_nonlof_mechanism_cache_install() {
 
     [[ -f ${builder_script} ]] || { log "ERROR: Non-LOF builder not found: ${builder_script}"; return 1; }
     [[ -s ${schema_json} ]] || { log "ERROR: Non-LOF schema not found: ${schema_json}"; return 1; }
-    [[ -s ${gofcards_variants} ]] || { log "ERROR: GoFCards exact GOF cache not found (run gofcards_clinvar_injection_install first): ${gofcards_variants}"; return 1; }
     [[ -s ${hgnc_table} ]] || { log "ERROR: HGNC table not found: ${hgnc_table}"; return 1; }
+    # Only the build phase reads the GoFCards cache. The sources-only phase runs
+    # before injection has written that cache, which is why the phase exists.
+    if [[ ${mode} == "build" ]]; then
+        [[ -s ${gofcards_variants} ]] || { log "ERROR: GoFCards exact GOF cache not found (run gofcards_clinvar_injection_install first): ${gofcards_variants}"; return 1; }
+    fi
     mkdir -p "${cache_dir}" "${raw_dir}" "$(dirname "${cache_json}")" || return 1
 
     local -a builder_args=(
@@ -2453,11 +2467,36 @@ function gene_nonlof_mechanism_cache_install() {
         builder_args+=(--proxy-url "${PROXY_URL}" --download-tool auto)
     fi
 
-    log "Checking PriVA non-LOF/ClinVar mechanism sources and rebuilding only when inputs changed"
+    if [[ ${mode} == "sources-only" ]]; then
+        builder_args+=(--fetch-sources-only)
+        log "Checking PriVA non-LOF/ClinVar mechanism sources only; no cache build in this phase"
+    else
+        log "Checking PriVA non-LOF/ClinVar mechanism sources and rebuilding only when inputs changed"
+    fi
     python "${builder_args[@]}" || {
-        log "ERROR: Failed to build PriVA non-LOF mechanism cache"
+        log "ERROR: PriVA non-LOF mechanism builder failed (mode=${mode})"
         return 1
     }
+
+    if [[ ${mode} == "sources-only" ]]; then
+        # The builder downloads into <raw_dir>/<source filename>, so that is
+        # where the XML actually is. Record it under the key the injection step
+        # reads, and only when the configured value names a different file, so a
+        # deliberate equivalent path is left untouched.
+        local fetched_clinvar_xml="${raw_dir}/clinvar_vcv/ClinVarVCVRelease_00-latest_weekly.xml.gz"
+        [[ -s ${fetched_clinvar_xml} ]] || {
+            log "ERROR: ClinVar VCV XML missing after the source fetch: ${fetched_clinvar_xml}"
+            return 1
+        }
+        local configured_clinvar_xml
+        configured_clinvar_xml=$(yaml_value_or_default "${config_file}" "clinvar_vcv_xml" "")
+        if [[ $(readlink -f "${configured_clinvar_xml}") != $(readlink -f "${fetched_clinvar_xml}") ]]; then
+            update_or_append_yaml "${config_file}" "clinvar_vcv_xml" "${fetched_clinvar_xml}"
+        fi
+        log "PriVA non-LOF mechanism sources staged; ClinVar VCV XML ready: ${fetched_clinvar_xml}"
+        return 0
+    fi
+
     validate_gene_nonlof_mechanism_cache \
         "${builder_script}" "${cache_json}" "${schema_json}" || {
         log "ERROR: PriVA non-LOF mechanism cache validation failed"
@@ -2756,7 +2795,15 @@ function mechanism_resource_install() {
     # or absent disease-scope registry and silently emit unscoped assertions.
     mondo_hpo_scope_install "${config_file}" || return 1
     gene_pathogenic_mechanism_cache_install "${config_file}" || return 1
+
+    # The GoFCards cache is built in two steps, and the ClinVar VCV XML the
+    # second step needs is downloaded by the non-LOF builder. That would be a
+    # standstill -- injection waiting on the XML, the non-LOF build waiting on
+    # injection's output -- so the downloads are pulled forward into their own
+    # phase here. Order: normalize, fetch sources, inject, then build.
     gofcards_exact_gof_cache_install "${config_file}" || return 1
+    gene_nonlof_mechanism_cache_install "${config_file}" sources-only || return 1
+    gofcards_clinvar_injection_install "${config_file}" || return 1
     gene_nonlof_mechanism_cache_install "${config_file}" || return 1
     hpo_condition_mechanism_cache_install "${config_file}" || return 1
 }

@@ -160,9 +160,13 @@ panelapp_panels_url: "https://panelapp.genomicsengland.co.uk/api/v1/panels/"
 # One deployed cache, built in two steps. The first normalizes the GoFCards
 # catalogue into <gofcards_workdir>/gofcards_exact_gof.normalized.json.gz, a
 # build intermediate; the second nests each variant's ClinVar conditions into it
-# and writes the file below, which is what every consumer reads:
-#   bash scripts/install_utils.sh gofcards_exact_gof_cache_install   config.yaml
-#   bash scripts/install_utils.sh gofcards_clinvar_injection_install config.yaml
+# and writes the file below, which is what every consumer reads.
+# mechanism_resource_install runs both, and runs a third step between them that
+# downloads the weekly ClinVar VCV XML the second step needs. To run them by
+# hand, keep this order:
+#   bash scripts/install_utils.sh gofcards_exact_gof_cache_install     config.yaml
+#   bash scripts/install_utils.sh gene_nonlof_mechanism_cache_install  config.yaml sources-only
+#   bash scripts/install_utils.sh gofcards_clinvar_injection_install   config.yaml
 gofcards_exact_gof_cache: /paedyl01/disk1/yangyxt/PriVA/data/gofcards/gofcards_exact_gof.json.gz
 gofcards_public_excel_url: "https://download.genemed.tech/upload/GainFunCards/gofcards_data_download.xlsx"
 gofcards_refresh_days: "180"

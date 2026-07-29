@@ -2145,6 +2145,7 @@ function validate_gofcards_exact_gof_cache() {
     python - "${gofcards_json}" <<'GOFPY'
 import gzip
 import json
+import re
 import sys
 
 path = sys.argv[1]
@@ -2161,6 +2162,8 @@ if meta.get("source") != "GoFCards":
 if meta.get("mechanism") != "GOF":
     raise SystemExit(f"{path} metadata does not declare GOF as the mechanism")
 
+# loc_<chrom>:<start>:<ref>-><alt>_grch37
+VARIANT_ID = re.compile(r"^loc_[0-9XYMT]+:\d+:[ACGTN-]+->[ACGTN-]+_grch37$")
 ELIGIBLE = "eligible"
 ALLOWED = {
     ELIGIBLE,
@@ -2174,52 +2177,131 @@ ALLOWED = {
     "quarantined_reviewed_exclude",
     "quarantined_mechanism_review_required",
 }
-genes = alleles = eligible = quarantined = with_hgvsp = with_hg38 = evidence = 0
+genes = variants = eligible = quarantined = with_protein = with_hg38 = evidence = 0
+hgvsc_keys = hgvsp_keys = 0
 for symbol, gene in cache["genes"].items():
     genes += 1
     if not symbol.strip():
         raise SystemExit(f"{path} has an empty gene symbol key")
-    for allele_id, allele in (gene.get("alleles") or {}).items():
-        alleles += 1
-        parts = allele_id.split("|")
-        if len(parts) != 4 or not parts[1].isdigit():
-            raise SystemExit(f"{path}: {symbol}/{allele_id} is not chrom|pos|ref|alt on GRCh37")
-        state = (allele.get("eligibility") or {}).get("status", "")
+    for vid, variant in (gene.get("variants") or {}).items():
+        variants += 1
+        if not VARIANT_ID.match(vid):
+            raise SystemExit(f"{path}: {symbol}/{vid} is not a well-formed variant identifier")
+        record = variant.get("record") or {}
+        state = (record.get("eligibility") or {}).get("status", "")
         if state not in ALLOWED:
-            raise SystemExit(f"{path}: {symbol}/{allele_id} has unknown eligibility {state!r}")
-        keys = allele.get("match_keys") or {}
+            raise SystemExit(f"{path}: {symbol}/{vid} has unknown eligibility {state!r}")
+        assemblies = variant.get("assemblies") or {}
+        if not assemblies:
+            raise SystemExit(f"{path}: {symbol}/{vid} is present on no assembly")
+        protein = coding = False
+        for assembly, block in assemblies.items():
+            if assembly not in ("hg19", "hg38"):
+                raise SystemExit(f"{path}: {symbol}/{vid} has unknown assembly {assembly!r}")
+            coords = block.get("genomic") or {}
+            if not coords.get("chrom") or not isinstance(coords.get("pos"), int):
+                raise SystemExit(f"{path}: {symbol}/{vid}/{assembly} has no usable coordinates")
+            if not coords.get("ref") or not coords.get("alt"):
+                raise SystemExit(f"{path}: {symbol}/{vid}/{assembly} has no reference or alternate")
+            for transcript, view in (block.get("transcripts") or {}).items():
+                by_c = view.get("by_hgvsc") or {}
+                by_p = view.get("by_hgvsp") or {}
+                hgvsc_keys += len(by_c)
+                hgvsp_keys += len(by_p)
+                if by_c: coding = True
+                if by_p: protein = True
+                for hgvsp, coding_keys in by_p.items():
+                    if not isinstance(coding_keys, list) or not coding_keys:
+                        raise SystemExit(f"{path}: {symbol}/{vid} protein key {hgvsp!r} maps to no coding change")
+                    for ck in coding_keys:
+                        if ck not in by_c:
+                            raise SystemExit(f"{path}: {symbol}/{vid} protein key {hgvsp!r} points at unknown {ck!r}")
+        if "hg38" in assemblies: with_hg38 += 1
+        if protein: with_protein += 1
         if state == ELIGIBLE:
             eligible += 1
-            if not (keys.get("hgvsp") or keys.get("hgvsc") or keys.get("hg19_vcf")):
-                raise SystemExit(f"{path}: {symbol}/{allele_id} is eligible but offers no match key")
-            if keys.get("hgvsp"):
-                with_hgvsp += 1
-            if keys.get("hg38_vcf"):
-                with_hg38 += 1
+            if not (protein or coding or assemblies):
+                raise SystemExit(f"{path}: {symbol}/{vid} is eligible but offers no match route")
         else:
             quarantined += 1
-            if not (allele.get("eligibility") or {}).get("reason"):
-                raise SystemExit(f"{path}: {symbol}/{allele_id} is quarantined without a reason")
-        if keys.get("hg19_vcf") and keys["hg19_vcf"] != allele_id:
-            raise SystemExit(f"{path}: {symbol}/{allele_id} disagrees with its own hg19 match key")
-        for assembly, block in (allele.get("assemblies") or {}).items():
-            coords = block.get("coordinates") or {}
-            if not coords.get("chrom") or not isinstance(coords.get("pos"), int):
-                raise SystemExit(f"{path}: {symbol}/{allele_id}/{assembly} has no usable coordinates")
-        evidence += len(allele.get("evidence") or [])
+            if not (record.get("eligibility") or {}).get("reason"):
+                raise SystemExit(f"{path}: {symbol}/{vid} is quarantined without a reason")
+        evidence += len(record.get("evidence") or [])
 
-if alleles == 0:
-    raise SystemExit(f"{path} contains no alleles")
+if variants == 0:
+    raise SystemExit(f"{path} contains no variants")
 if eligible == 0:
-    raise SystemExit(f"{path} contains no runtime-eligible alleles")
-if with_hgvsp == 0:
-    raise SystemExit(f"{path} contains no eligible allele with a protein-change key")
+    raise SystemExit(f"{path} contains no runtime-eligible variants")
+if with_protein == 0:
+    raise SystemExit(f"{path} contains no variant with a protein-change key")
 print(
-    f"gofcards_genes={genes}; alleles={alleles}; eligible={eligible}; "
-    f"quarantined={quarantined}; with_hgvsp={with_hgvsp}; with_hg38={with_hg38}; "
-    f"evidence_records={evidence}"
+    f"gofcards_genes={genes}; variants={variants}; eligible={eligible}; "
+    f"quarantined={quarantined}; with_protein_key={with_protein}; on_hg38={with_hg38}; "
+    f"hgvsc_keys={hgvsc_keys}; hgvsp_keys={hgvsp_keys}; evidence_entries={evidence}"
 )
 GOFPY
+}
+
+
+function gofcards_clinvar_injection_install() {
+    # Attach ClinVar VCV condition evidence to each normalized GoFCards variant.
+    # This is its own step so a ClinVar refresh does not force the VEP pipeline
+    # to rerun. See docs/GOFCARDS_CACHE_SCHEMA.md for the injected shape.
+    local config_file=${1}
+    [[ -f ${config_file} ]] || { log "ERROR: Config file not found: ${config_file}"; return 1; }
+
+    local injector
+    local source_cache
+    local target_json
+    local clinvar_xml
+    local min_stars
+    local stats_json
+    local audit_tsv
+    local workdir
+
+    injector=$(yaml_value_or_default "${config_file}" "gofcards_clinvar_injector_script" "${SCRIPT_DIR}/inject_clinvar_into_gofcards.py")
+    workdir=$(yaml_value_or_default "${config_file}" "gofcards_workdir" "${DATA_DIR}/gofcards/build_work")
+    # Reads the build intermediate and writes the one deployed GoFCards cache.
+    # Everything downstream reads that single file, so there is never a question
+    # of which of two caches a consumer meant.
+    source_cache="${workdir}/gofcards_exact_gof.normalized.json.gz"
+    target_json=$(yaml_value_or_default "${config_file}" "gofcards_exact_gof_cache" "${DATA_DIR}/gofcards/gofcards_exact_gof.json.gz")
+    clinvar_xml=$(yaml_value_or_default "${config_file}" "clinvar_vcv_xml" "${DATA_DIR}/gene_pathogenic_mechanism/raw/clinvar_vcv/ClinVarVCVRelease_00-latest_weekly.xml.gz")
+    min_stars=$(yaml_value_or_default "${config_file}" "clinvar_min_review_stars" "2")
+    stats_json="${workdir}/clinvar_injection_stats.json"
+    audit_tsv=$(yaml_value_or_default "${config_file}" "clinvar_vcv_match_audit" "${DATA_DIR}/gene_pathogenic_mechanism/prepared/clinvar_vcv_gofcards_matches.tsv")
+
+    [[ -f ${injector} ]] || { log "ERROR: ClinVar injector not found: ${injector}"; return 1; }
+    [[ -s ${source_cache} ]] || {
+        log "ERROR: Normalized GoFCards cache not found (run gofcards_exact_gof_cache_install first): ${source_cache}"
+        return 1
+    }
+    [[ -s ${clinvar_xml} ]] || { log "ERROR: ClinVar VCV XML not found: ${clinvar_xml}"; return 1; }
+
+    mkdir -p "$(dirname "${target_json}")" "${workdir}" || return 1
+
+    log "Injecting ClinVar VCV conditions into GoFCards variants -> ${target_json}"
+    python "${injector}" \
+        --gofcards-cache "${source_cache}" \
+        --clinvar-vcv "${clinvar_xml}" \
+        --out-json "${target_json}" \
+        --min-review-stars "${min_stars}" \
+        --audit-tsv "${audit_tsv}" \
+        --stats-json "${stats_json}" 2>&1 | tee "${workdir}/clinvar_injection.log"
+
+    local status=${PIPESTATUS[0]}
+    [[ ${status} -eq 0 ]] || {
+        log "ERROR: ClinVar injection failed; see ${workdir}/clinvar_injection.log"
+        return 1
+    }
+
+    validate_gofcards_exact_gof_cache "${target_json}" || {
+        log "ERROR: GoFCards cache failed validation after ClinVar injection"
+        return 1
+    }
+    update_yaml "${config_file}" "gofcards_exact_gof_cache" "${target_json}"
+    update_yaml "${config_file}" "gofcards_clinvar_injector_script" "${injector}"
+    log "GoFCards exact GOF cache deployed (with ClinVar conditions): ${target_json}"
 }
 
 
@@ -2244,16 +2326,20 @@ function gofcards_exact_gof_cache_install() {
     local refresh_days
 
     builder_script=$(yaml_value_or_default "${config_file}" "gofcards_builder_script" "${SCRIPT_DIR}/build_gofcards_exact_gof_cache.py")
-    target_tsv=$(yaml_value_or_default "${config_file}" "gofcards_exact_gof_cache" "${DATA_DIR}/gofcards/gofcards_exact_gof.json.gz")
     workdir=$(yaml_value_or_default "${config_file}" "gofcards_workdir" "${DATA_DIR}/gofcards/build_work")
     refresh_days=$(yaml_value_or_default "${config_file}" "gofcards_refresh_days" "180")
+    # A build intermediate, not the deployed cache. The single deployed file is
+    # written by gofcards_clinvar_injection_install, which reads this one and
+    # adds the ClinVar conditions. Keeping the intermediate in the build
+    # directory is what makes the deployed artifact unambiguous: there is one
+    # GoFCards cache, and it is the finished one.
+    target_tsv="${workdir}/gofcards_exact_gof.normalized.json.gz"
 
     if [[ "${PRIVA_FORCE_GOFCARDS_CACHE:-0}" != "1" ]] && \
        [[ "${PRIVA_FORCE_ALL_CACHES:-0}" != "1" ]] && \
        validate_gofcards_exact_gof_cache "${target_tsv}" >/dev/null 2>&1 && \
        [[ -n $(find "${target_tsv}" -mtime "-${refresh_days}" -print -quit 2>/dev/null) ]]; then
-        log "GoFCards exact GOF cache is valid and within its ${refresh_days}-day refresh interval: ${target_tsv}"
-        update_yaml "${config_file}" "gofcards_exact_gof_cache" "${target_tsv}"
+        log "GoFCards normalized cache is valid and within its ${refresh_days}-day refresh interval: ${target_tsv}"
         return 0
     fi
 
@@ -2297,13 +2383,12 @@ function gofcards_exact_gof_cache_install() {
     }
 
     validate_gofcards_exact_gof_cache "${target_tsv}" || {
-        log "ERROR: GoFCards exact GOF cache validation failed"
+        log "ERROR: GoFCards normalized cache validation failed"
         return 1
     }
-    update_yaml "${config_file}" "gofcards_exact_gof_cache" "${target_tsv}"
     update_yaml "${config_file}" "gofcards_builder_script" "${builder_script}"
     update_yaml "${config_file}" "gofcards_mechanism_review_tsv" "${review_tsv}"
-    log "GoFCards exact GOF cache deployed: ${target_tsv}"
+    log "GoFCards normalized cache built: ${target_tsv}"
 }
 
 
@@ -2338,12 +2423,13 @@ function gene_nonlof_mechanism_cache_install() {
     builder_script=$(yaml_value_or_default "${config_file}" "gene_nonlof_mechanism_builder_script" "${SCRIPT_DIR}/build_gene_nonlof_mechanism_cache.py")
     cache_json=$(yaml_value_or_default "${config_file}" "gene_nonlof_mechanism_json" "${cache_dir}/prepared/gene_nonlof_mechanism_curated_assertions.json")
     schema_json=$(yaml_value_or_default "${config_file}" "gene_nonlof_mechanism_schema" "${cache_dir}/schema/gene_nonlof_mechanism_curated_assertions.schema.json")
+    # The one deployed GoFCards cache, which already carries its ClinVar blocks.
     gofcards_variants=$(yaml_value_or_default "${config_file}" "gofcards_exact_gof_cache" "${DATA_DIR}/gofcards/gofcards_exact_gof.json.gz")
     hgnc_table=$(yaml_value_or_default "${config_file}" "hgnc_table" "${DATA_DIR}/hgnc/non_alt_loci_set.tsv")
 
     [[ -f ${builder_script} ]] || { log "ERROR: Non-LOF builder not found: ${builder_script}"; return 1; }
     [[ -s ${schema_json} ]] || { log "ERROR: Non-LOF schema not found: ${schema_json}"; return 1; }
-    [[ -s ${gofcards_variants} ]] || { log "ERROR: Exact GoFCards cache not found: ${gofcards_variants}"; return 1; }
+    [[ -s ${gofcards_variants} ]] || { log "ERROR: GoFCards exact GOF cache not found (run gofcards_clinvar_injection_install first): ${gofcards_variants}"; return 1; }
     [[ -s ${hgnc_table} ]] || { log "ERROR: HGNC table not found: ${hgnc_table}"; return 1; }
     mkdir -p "${cache_dir}" "${raw_dir}" "$(dirname "${cache_json}")" || return 1
 
@@ -2418,6 +2504,8 @@ function hpo_condition_mechanism_cache_install() {
     if [[ -z ${mechanism_json} ]]; then
         mechanism_json=$(yaml_value_or_default "${config_file}" "gene_mechanism_json" "${DATA_DIR}/gene_pathogenic_mechanism/prepared/gene_mechanism_curated_assertions.json")
     fi
+    # The one deployed GoFCards cache. Every condition link this builder emits
+    # comes from the ClinVar blocks nested inside it.
     gofcards_variants=$(yaml_value_or_default "${config_file}" "gofcards_exact_gof_cache" "${DATA_DIR}/gofcards/gofcards_exact_gof.json.gz")
     hpo_release=$(yaml_value_or_default "${config_file}" "hpo_release" "")
     mondo_release=$(yaml_value_or_default "${config_file}" "mondo_release" "")
@@ -2426,7 +2514,7 @@ function hpo_condition_mechanism_cache_install() {
     [[ -s ${hpo_assertions} ]] || { log "ERROR: Scoped HPO assertions not found: ${hpo_assertions}"; return 1; }
     [[ -s ${mechanism_evidence} ]] || { log "ERROR: Condition mechanism evidence not found: ${mechanism_evidence}"; return 1; }
     [[ -s ${mechanism_json} ]] || { log "ERROR: Gene mechanism JSON not found: ${mechanism_json}"; return 1; }
-    [[ -s ${gofcards_variants} ]] || { log "ERROR: Exact GoFCards cache not found: ${gofcards_variants}"; return 1; }
+    [[ -s ${gofcards_variants} ]] || { log "ERROR: GoFCards exact GOF cache not found (run gofcards_clinvar_injection_install first): ${gofcards_variants}"; return 1; }
     mkdir -p "$(dirname "${cache_json}")" || return 1
 
     local rebuild=0

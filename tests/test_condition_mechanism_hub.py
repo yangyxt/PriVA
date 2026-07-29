@@ -16,11 +16,8 @@ from gene_mechanism_hub import (  # noqa: E402
     condition_cache_mechanism_entries,
     condition_cache_mechanism_assertions,
     enrich_condition_mechanism_assertion,
-    extract_exact_clinvar_condition_identities,
     infer_query_variant_effect,
-    match_condition_cache_gofcards_variants,
     select_condition_histories_for_variant,
-    summarize_condition_cache_exact_gof_matches,
 )
 
 
@@ -150,156 +147,26 @@ def test_condition_cache_assertions_preserve_context_and_exclude_variant_only_go
 
     assertions = condition_cache_mechanism_assertions(gene)
 
-    assert len(assertions) == 1
-    assertion = assertions[0]
-    assert assertion["source"] == "G2P_DDG2P"
-    assert assertion["source_condition_id"] == "OMIM:1"
-    assert assertion["mondo_id"] == "MONDO:0000001"
-    assert assertion["hpo_inheritance_modes"] == [
-        "Autosomal dominant inheritance"
-    ]
-    assert assertion["penetrance_hpo_ids"] == ["HP:0003829"]
-    assert assertion["hpo_assertion_count"] == 12
-    assert assertion["hpo_assertions"][1]["frequency"] == "2/10"
+    # Both sources are admitted. A curated GoFCards allele is this gene's
+    # curated history for the condition it was curated against; it cannot leak
+    # onto an unrelated variant because select_condition_histories_for_variant
+    # keeps only the histories the query variant's own mechanism reaches.
+    assert {assertion["source"] for assertion in assertions} == {
+        "G2P_DDG2P",
+        "GoFCards_exact+ClinVar_VCV",
+    }
+
+    # The review-scoped condition contributes nothing from either source.
+    assert {assertion["source_condition_id"] for assertion in assertions} == {"OMIM:1"}
+
+    g2p = next(a for a in assertions if a["source"] == "G2P_DDG2P")
+    assert g2p["mondo_id"] == "MONDO:0000001"
+    assert g2p["hpo_inheritance_modes"] == ["Autosomal dominant inheritance"]
+    assert g2p["penetrance_hpo_ids"] == ["HP:0003829"]
+    assert g2p["hpo_assertion_count"] == 12
+    assert g2p["hpo_assertions"][1]["frequency"] == "2/10"
 
     assert condition_cache_context("OMIM:2", review_condition) == {}
-
-
-def test_exact_gofcards_cache_match_preserves_condition_resolution() -> None:
-    # One identifier per variant, minted the same way the matcher mints it.
-    linked_variant = {
-        "gofcards_variant_id": "loc_1:100:A->G_grch37",
-        "clinvar_links": [{"vcv_accession": "VCV1"}],
-    }
-    unresolved_variant = {
-        "gofcards_variant_id": "loc_1:200:C->T_grch37",
-        "clinvar_links": [{"vcv_accession": "VCV2"}],
-    }
-    condition = {
-        "pathogenic_mechanisms": {
-            "GOF": {"variants": {"GOFCARDS:linked": linked_variant}}
-        }
-    }
-    gene = {
-        "conditions": {"OMIM:1": condition},
-        "unmapped_evidence": {
-            "variants": {"GOFCARDS:unresolved": unresolved_variant}
-        },
-    }
-
-    matches = match_condition_cache_gofcards_variants(
-        gene,
-        variant_ids={"loc_1:100:A->G_grch37", "loc_1:200:C->T_grch37"},
-        accession_ids=set(),
-    )
-
-    assert [match["condition_key"] for match in matches] == ["OMIM:1", ""]
-    assert matches[0]["condition"] is condition
-    assert matches[1]["condition"] == {}
-    assert matches[1]["variant"]["clinvar_links"][0]["vcv_accession"] == "VCV2"
-
-
-def test_exact_gof_summary_keeps_unresolved_audit_but_scopes_assertions() -> None:
-    condition = {
-        "label": "Condition one",
-        "identifiers": {"OMIM": ["OMIM:1"], "MONDO": ["MONDO:1"]},
-        "priva_scope": {
-            "decision": "include",
-            "category": "mendelian_non_neoplastic",
-            "review_status": "auto_supported",
-        },
-        "inheritance": {
-            "modes": ["autosomal_dominant"],
-            "assertions": [
-                {
-                    "hpo_id": "HP:0000006",
-                    "frequency": "-",
-                    "evidence": "TAS",
-                    "reference": "OMIM:1",
-                }
-            ],
-        },
-        "penetrance": {"statuses": [], "assertions": []},
-        "onset": {"terms": [], "assertions": []},
-        "hpo_assertion_count": 1,
-    }
-    matches = [
-        {
-            "condition_key": "OMIM:1",
-            "condition": condition,
-            "variant_key": "GOFCARDS:VAR1",
-            "variant": {
-                "mechanism": "GOF",
-                "pmids": ["1"],
-                "clinvar_links": [
-                    {
-                        "vcv_accession": "VCV1",
-                        "condition_names": ["ClinVar condition one"],
-                        "condition_identifiers": ["OMIM:1"],
-                        "hgvs": ["NM_1.1:c.1A>G"],
-                        "clinical_significance": "Pathogenic",
-                        "review_stars": 2,
-                    }
-                ],
-            },
-        },
-        {
-            "condition_key": "",
-            "condition": {},
-            "variant_key": "GOFCARDS:VAR2",
-            "variant": {
-                "mechanism": "GOF",
-                "clinvar_links": [
-                    {
-                        "vcv_accession": "VCV2",
-                        "condition_names": ["Unresolved condition"],
-                        "hgvs": ["NM_1.1:c.2A>G"],
-                        "review_stars": 1,
-                    }
-                ]
-            },
-        },
-    ]
-
-    summary = summarize_condition_cache_exact_gof_matches(matches)
-
-    assert summary["vcv_accessions"] == ["VCV1", "VCV2"]
-    assert summary["condition_names"] == [
-        "ClinVar condition one",
-        "Unresolved condition",
-    ]
-    assert summary["review_stars"] == [2, 1]
-    assert summary["hgvs"] == ["NM_1.1:c.1A>G", "NM_1.1:c.2A>G"]
-    assert len(summary["assertions"]) == 1
-    assertion = summary["assertions"][0]
-    assert assertion["source_condition_id"] == "OMIM:1"
-    assert assertion["allelic_requirement"] == "dominant"
-    assert assertion["penetrance_hpo_ids"] == []
-
-    gene = {
-        "conditions": {
-            "OMIM:1": {
-                **condition,
-                "pathogenic_mechanisms": {
-                    "GOF": {
-                        "evidence": [],
-                        "variants": {"GOFCARDS:VAR1": matches[0]["variant"]},
-                    }
-                },
-            }
-        },
-        "unmapped_evidence": {
-            "mechanisms": [],
-            "variants": {"GOFCARDS:VAR2": matches[1]["variant"]},
-        },
-    }
-    entries = condition_cache_mechanism_entries(gene)
-    assert [entry["level"] for entry in entries] == [
-        "variant_level",
-        "variant_level",
-    ]
-    assert entries[0]["condition_link_status"] == "exact"
-    assert entries[1]["condition_link_status"] == "unresolved"
 
 
 def test_legacy_condition_evidence_loader_remains_audit_only(
@@ -537,9 +404,24 @@ def test_enrich_condition_mechanism_assertion_blocks_unscoped_disease() -> None:
 
 def test_select_condition_histories_for_variant_is_mechanism_specific() -> None:
     assertions = [
-        {"disease": "LOF disorder", "mechanism": "LOF"},
-        {"disease": "GOF disorder", "mechanism": "GOF"},
-        {"disease": "DN disorder", "mechanism": "DOMINANT_NEGATIVE"},
+        {
+            "mechanism": "LOF",
+            "hpo_disease_id": "OMIM:1",
+            "allelic_requirement": "biallelic_autosomal",
+            "penetrance_hpo_ids": ["HP:0003829"],
+        },
+        {
+            "mechanism": "GOF",
+            "hpo_disease_id": "OMIM:2",
+            "allelic_requirement": "monoallelic_autosomal",
+            "penetrance_hpo_ids": [],
+        },
+        {
+            "mechanism": "DOMINANT_NEGATIVE",
+            "hpo_disease_id": "OMIM:3",
+            "hpo_inheritance_modes": ["x_linked_dominant"],
+            "penetrance_hpo_ids": [],
+        },
     ]
 
     exact_gof = select_condition_histories_for_variant(
@@ -554,11 +436,6 @@ def test_select_condition_histories_for_variant_is_mechanism_specific() -> None:
         assertions,
         variant_effect="uncertain",
     )
-    suppressed_prediction = select_condition_histories_for_variant(
-        assertions,
-        variant_effect="exact_known_GOF",
-        variant_effect_conflict="predicted_LOF_vs_exact_GOF",
-    )
 
     assert [row["mechanism"] for row in exact_gof] == ["GOF"]
     assert [row["mechanism"] for row in predicted_lof] == ["LOF"]
@@ -567,7 +444,26 @@ def test_select_condition_histories_for_variant_is_mechanism_specific() -> None:
         "GOF",
         "DOMINANT_NEGATIVE",
     ]
-    assert [row["mechanism"] for row in suppressed_prediction] == ["GOF"]
+
+    # Each selected history carries the three facts the chain delivers, and
+    # nothing else travels with it.
+    assert exact_gof[0] == {
+        "mechanism": "GOF",
+        "condition": "OMIM:2",
+        "inheritance": "dominant",
+        "x_linked": False,
+        "penetrance": "unknown",
+    }
+    assert predicted_lof[0] == {
+        "mechanism": "LOF",
+        "condition": "OMIM:1",
+        "inheritance": "recessive",
+        "x_linked": False,
+        "penetrance": "incomplete",
+    }
+    # X-linkage survives as its own fact rather than being folded into the value.
+    assert unresolved[2]["inheritance"] == "dominant"
+    assert unresolved[2]["x_linked"] is True
 
 
 def test_exact_gof_suppresses_but_retains_predicted_lof_evidence() -> None:
@@ -587,48 +483,7 @@ def test_exact_gof_suppresses_but_retains_predicted_lof_evidence() -> None:
     assert effect["variant_gof_score"] == 2
     assert effect["variant_lof_score"] == 0
     assert effect["variant_mechanism_exclusive"] is True
-    assert effect["variant_effect_conflict"] == ""
     assert "LOFTEE_HC" in effect["variant_effect_suppressed_evidence"]
     assert "NMD_PREDICTED_LOF" in effect["variant_effect_suppressed_evidence"]
 
 
-def test_extract_exact_clinvar_condition_identities_uses_database_ids_only() -> None:
-    condition_assertion = {
-        "conditions": [
-            {
-                "database": "MedGen",
-                "id": "C3809233",
-                "name": "Noonan syndrome 8",
-            }
-        ],
-        "matched_scvs": [
-            {
-                "trait_mappings": [
-                    {
-                        "mapping_ref": "OMIM",
-                        "mapping_value": "615355",
-                        "medgen_name": "Noonan syndrome 8",
-                    },
-                    {
-                        "mapping_ref": "Orphanet",
-                        "mapping_value": "648",
-                        "medgen_name": "Noonan syndrome",
-                    },
-                    {
-                        "mapping_ref": "Preferred",
-                        "mapping_value": "Noonan syndrome 8",
-                        "medgen_name": "Noonan syndrome 8",
-                    },
-                ]
-            }
-        ],
-    }
-
-    identities = extract_exact_clinvar_condition_identities(condition_assertion)
-
-    assert [row["source_condition_id"] for row in identities] == [
-        "MEDGEN:C3809233",
-        "OMIM:615355",
-        "ORPHA:648",
-    ]
-    assert all("Preferred" not in row.values() for row in identities)

@@ -289,10 +289,10 @@ def _write_fixture_sources(tmp_path: Path) -> dict[str, Path]:
         "HGNC:4\tTESTMONO\tENSG4\t4\t\t\t\t\t\n",
         encoding="utf-8",
     )
+    # mechanism_json and ddg2p_evidence are no longer inputs: the condition
+    # cache is the only evidence source the chain reads.
     return {
         "condition_cache": condition_cache,
-        "mechanism_json": mechanism_json,
-        "ddg2p_evidence": evidence_tsv,
         "hpo_collapsed": hpo_tsv,
         "clingen_dosage": clingen_tsv,
         "loeuf_table": loeuf_tsv,
@@ -401,8 +401,6 @@ def test_variant_level_mechanism_contract(tmp_path: Path) -> None:
 
     annotated = annotate_gene_mechanism_categories(
         frame,
-        clinvar_pathogenic_genes=set(),
-        gene_to_am_score_map={},
         use_hgnc_package=False,
         **sources,
     ).set_index("SYMBOL")
@@ -415,17 +413,19 @@ def test_variant_level_mechanism_contract(tmp_path: Path) -> None:
     biallelic_lof = annotated.loc["TESTLOF"]
     assert biallelic_lof["var_plausible_patho_mechs"] == "recessive_LOF"
     assert biallelic_lof["variant_effect"] == "predicted_LOF_high_confidence"
-    assert "LOFTEE_OS" in biallelic_lof["variant_effect_evidence"]
     assert "recessive_LOF" in biallelic_lof["variant_mechanism_applicable"]
+    # The three facts the chain delivers, at this variant's own resolution.
+    assert biallelic_lof["variant_condition_ids"] == "OMIM:1"
+    assert biallelic_lof["variant_inheritance"] == "recessive"
+    assert biallelic_lof["variant_x_linked"] == "false"
+    assert biallelic_lof["variant_penetrance"] == "unknown"
 
     biallelic_gof = annotated.loc["TESTGOF"]
     assert biallelic_gof["var_plausible_patho_mechs"] == "recessive_GOF"
     assert biallelic_gof["variant_effect"] == "exact_known_GOF"
     assert "recessive_GOF" in biallelic_gof["variant_mechanism_applicable"]
-    assert biallelic_gof["clinvar_vcv_accessions"] == "VCV000000001"
-    assert biallelic_gof["clinvar_rcv_conditions"] == "biallelic GOF disorder"
-    assert biallelic_gof["clinvar_vcv_max_review_stars"] == "2"
-    assert "NM_000001.1:c.1A>G" in biallelic_gof["clinvar_vcv_hgvs"]
+    assert biallelic_gof["variant_condition_ids"] == "OMIM:3"
+    assert biallelic_gof["variant_inheritance"] == "recessive"
 
     monoallelic_lof = annotated.loc["TESTMONO"]
     assert monoallelic_lof["var_plausible_patho_mechs"] == "dominant_LOF"
@@ -514,18 +514,26 @@ def test_gene_wide_lof_signals_remain_audit_only_without_condition_history(
 
     annotated = annotate_gene_mechanism_categories(
         frame,
-        clinvar_pathogenic_genes={"GENE_CLINVAR"},
-        gene_to_am_score_map={"GENE_AM": 0.565, "GENE_AM_BOUNDARY": 0.564},
         use_hgnc_package=False,
         **sources,
     ).set_index("Gene")
 
+    # Gene-wide loss-of-function signals -- a ClinVar pathogenic history, a
+    # constrained LOEUF, a high average AlphaMissense score -- say nothing about
+    # which condition a variant acts on or by what mechanism. None of them
+    # creates a mechanism, a plausible-mechanism tag, or a condition.
     for gene in annotated.index:
         assert annotated.loc[gene, "var_plausible_patho_mechs"] == ""
         assert annotated.loc[gene, "variant_mechanism_applicable"] == ""
-    assert annotated.loc["GENE_CLINVAR", "gene_lof_evidence"] == "ClinVar_pathogenic_2plus"
-    assert annotated.loc["GENE_LOEUF", "gene_lof_evidence"] == "LOEUF_lt_0.35"
-    assert annotated.loc["GENE_AM", "gene_lof_evidence"] == "GeneAvgAM_gt_0.564"
+        assert annotated.loc[gene, "variant_condition_ids"] == ""
+
+    # Inheritance is the one exception, and only as a last resort. These genes
+    # have no condition stating an inheritance, so rather than deliver nothing
+    # the constraint data decides how many copies must be affected. The basis
+    # column says so, and no mechanism accompanies it.
+    for gene in annotated.index:
+        assert annotated.loc[gene, "variant_inheritance"] in {"recessive", "dominant"}
+        assert annotated.loc[gene, "variant_inheritance_basis"] == "gene_constraint"
 
 
 def test_acmg_masks_reject_legacy_gene_level_fallback() -> None:

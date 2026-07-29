@@ -148,7 +148,7 @@ gene_mechanism_builder_script: "/paedyl01/disk1/yangyxt/PriVA/scripts/build_gene
 gene_mechanism_json: /paedyl01/disk1/yangyxt/PriVA/data/gene_pathogenic_mechanism/prepared/gene_mechanism_curated_assertions.json
 gene_nonlof_mechanism_builder_script: /paedyl01/disk1/yangyxt/PriVA/scripts/build_gene_nonlof_mechanism_cache.py
 gene_nonlof_mechanism_schema: /paedyl01/disk1/yangyxt/PriVA/data/gene_pathogenic_mechanism/schema/gene_nonlof_mechanism_curated_assertions.schema.json
-gene_nonlof_mechanism_json: /paedyl01/disk1/yangyxt/PriVA/data/gene_pathogenic_mechanism/prepared/gene_nonlof_mechanism_curated_assertions.json
+gene_nonlof_mechanism_json: /paedyl01/disk1/yangyxt/PriVA/data/gene_pathogenic_mechanism/prepared/gene_nonlof_mechanism_curated_assertions.json.gz
 ddg2p_mechanism_evidence: /paedyl01/disk1/yangyxt/PriVA/data/gene_pathogenic_mechanism/prepared/gene_pathogenic_mechanism_evidence.tsv
 hgnc_table: /paedyl01/disk1/yangyxt/PriVA/data/hgnc/non_alt_loci_set.tsv
 g2p_ddg2p_url: "https://www.ebi.ac.uk/gene2phenotype/api/panel/all/download"
@@ -234,4 +234,4 @@ pext_tissue_bw_dir: ""                                       # Directory contain
 
 hpo_condition_mechanism_builder_script: /paedyl01/disk1/yangyxt/PriVA/scripts/build_hpo_condition_mechanism_cache.py
 
-hpo_condition_mechanism_json: /paedyl01/disk1/yangyxt/PriVA/data/gene_pathogenic_mechanism/prepared/hpo_condition_mechanism_cache.json
+hpo_condition_mechanism_json: /paedyl01/disk1/yangyxt/PriVA/data/gene_pathogenic_mechanism/prepared/hpo_condition_mechanism_cache.json.gz

@@ -4368,8 +4368,6 @@ def ACMG_criteria_assign(anno_table: str,
 
     anno_df = annotate_gene_mechanism_categories(
         anno_df,
-        clinvar_pathogenic_genes=clinvar_pathogenic_genes,
-        gene_to_am_score_map=gene_to_am_score_map,
         condition_cache=hpo_condition_mechanism_json,
         symbol_col="SYMBOL",
         use_hgnc_package=False,

@@ -1,15 +1,272 @@
 #!/usr/bin/env python3
-"""Gene-condition and query-variant mechanism hub for PriVA.
+r"""Gene-condition and query-variant mechanism hub for PriVA.
 
-This module normalizes a gene query to one current HGNC symbol, then reports:
+THE LOGIC CHAIN
+===============
 
-1. Condition-resolved mechanism history from the integrated HPO cache.
-2. Known inheritance/HI status using PriVA's existing inheritance decision
-   function from ``acmg_criteria_assign.py``.
+This module exists to serve one chain, and nothing in it that fails to serve
+that chain is justified. The purpose is to raise the resolution at which
+inheritance and penetrance are known, from the gene to the individual
+variant-transcript-consequence. A gene's inheritance history on its own does
+not say which condition produced it, nor what pathogenic mechanism that
+condition acts by, so it cannot be attached to the variant in front of us.
+This chain can.
 
-Gene history and query-variant effect are deliberately represented separately.
-The dataframe annotator combines them only in explicit applicability fields, so
-an unrelated mechanism elsewhere in the gene is not assigned to every variant.
+    the variant                          the gene's condition histories
+    (one row, one transcript)            (from the HPO condition cache)
+          |                                          |
+          |  STEP 1                                  |  STEP 2
+          |  score LOF / GOF / DN                    |  germline-included
+          |  each as 0, 1 or 2                       |  conditions only
+          v                                          v
+      +---------------------+              +----------------------------+
+      | variant_lof_score   |              | condition                  |
+      | variant_gof_score   |              | inheritance                |
+      | variant_dn_score    |              | penetrance                 |
+      | variant_effect      |              | mechanism (LOF/GOF/DN)     |
+      +---------------------+              +----------------------------+
+                    \                              /
+                     \        STEP 3              /
+                      \   keep the histories     /
+                       \  this mechanism reaches
+                        v                        v
+                   +--------------------------------------+
+                   | condition + inheritance + penetrance |
+                   |   ...and nothing else travels        |
+                   +--------------------------------------+
+                                    |
+                                    |  STEP 4  attach to the row
+                                    v
+                       every ACMG criterion now reads an
+                       inheritance and a penetrance that
+                       belong to THIS variant's mechanism
+
+STEP 1  the variant's own mechanism, as three scores
+====================================================
+
+    2   exclusively established -- an exact curated allele match.
+        When any mechanism scores 2 the other two are forced to 0.
+    1   plausible -- supported by consequence or prediction only.
+    0   confidently not this mechanism.
+
+The scale grades the QUERY VARIANT. It is not a statement about how well
+attested a condition's mechanism is; that is a separate thing, recorded in
+the cache as assertion_basis.
+
+    match_curated_nonlof_variant   supplies the exact score (2) from the
+                                   non-LOF cache, by HGVSp then HGVSc then
+                                   normalized genomic allele
+    infer_query_variant_effect     combines it with PriVA's own annotation
+
+    variant_effect, one of:
+        "exact_known_GOF"                  |  also _DOMINANT_NEGATIVE, and
+        "exact_known_DOMINANT_NEGATIVE"    |  "+"-joined when both apply
+        "predicted_LOF_high_confidence"
+        "uncertain"
+
+    the prediction tokens that can raise LOF to 1, from the row:
+        LOFTEE_HC          LoF == "HC"
+        LOFTEE_OS          LoF == "OS"
+        NMD_PREDICTED_LOF  stop_gained/frameshift, not NMD-escaping,
+                           and LoF_filter is not END_TRUNC
+        VEP_LOF            vep_consq_lof is true
+        PRIVA_SPLICE_LOF   splicing_lof is true
+        PRIVA_5UTR_LOF     5UTR_lof is true
+
+    After an exact match these are kept in
+    variant_effect_suppressed_evidence but cannot create a competing LOF
+    call: an exact curated mechanism is exclusive.
+
+STEP 2  the gene's condition histories, germline disease only
+=============================================================
+
+Read from the HPO condition cache built by
+build_hpo_condition_mechanism_cache.py. A history is admissible only when
+
+    condition.priva_scope.decision == "include"
+
+enforced in condition_cache_context. Everything else -- "review",
+"exclude", or unscoped -- is audit only and can never influence a criterion.
+
+STEP 3  match by mechanism, and carry three things back
+=======================================================
+
+select_condition_histories_for_variant keeps only histories whose mechanism
+the variant plausibly acts by:
+
+    variant_effect                      histories kept
+    ---------------------------------   ----------------------------
+    exact_known_GOF                     GOF only
+    exact_known_DOMINANT_NEGATIVE       DOMINANT_NEGATIVE only
+    predicted_LOF_high_confidence       LOF only
+    uncertain                           all three, marked uncertain
+
+Each surviving history is reduced to exactly this, and nothing else travels:
+
+    {
+      "mechanism":   "LOF" | "GOF" | "DOMINANT_NEGATIVE",
+      "condition":   the OMIM / ORPHA / MONDO identifier,
+      "inheritance": see the vocabulary below,
+      "x_linked":    True | False,
+      "penetrance":  "complete" | "incomplete" | "unknown",
+    }
+
+THE INHERITANCE VOCABULARY, VALUE BY VALUE
+==========================================
+
+Two source vocabularies describe one fact. G2P states an allelic
+requirement; HPO states an inheritance mode. normalize_inheritance folds
+both, and accepts an HPO mode as either the cache's snake_case key or the
+human-readable label that condition_cache_context substitutes.
+
+    delivered value   source values that fold to it
+    ---------------   ---------------------------------------------------
+    "recessive"       biallelic_autosomal          (G2P)
+                      monoallelic_X_hemizygous     (G2P)
+                      monoallelic_X                (G2P)
+                      autosomal_recessive          (HPO)
+                      x_linked_recessive           (HPO)
+                      pseudoautosomal_recessive    (HPO)
+                      x_linked                     (HPO, bare -- read as
+                                                    X-linked recessive)
+    "dominant"        monoallelic_autosomal        (G2P)
+                      monoallelic_X_heterozygous   (G2P)
+                      autosomal_dominant           (HPO)
+                      x_linked_dominant            (HPO)
+                      autosomal_dominant_maternal_imprinting  (HPO)
+    "y_linked"        monoallelic_Y_hemizygous (G2P), y_linked (HPO)
+    "mitochondrial"   mitochondrial (both)
+    "non_mendelian"   \
+    "polygenic"        |  HPO only, and reported ONLY when no Mendelian
+    "digenic"          |  mode accompanies them on the same condition
+    "oligogenic"      /
+    ""                nothing stated -- 17.3% of assertions
+
+    x_linked is returned SEPARATELY, true when the requirement starts
+    monoallelic_X or any mode starts x_linked. Folding it into the value
+    would erase it, and a hemizygous male affected by one allele is still
+    the recessive pattern.
+
+    Downstream reading of the values:
+        DOMINANT_LIKE_INHERITANCE = {dominant, y_linked, mitochondrial}
+            one allele in a carrier is enough
+        NON_MENDELIAN_INHERITANCE = {non_mendelian, polygenic, digenic,
+                                     oligogenic}
+            germline but not single-gene. Delivered rather than discarded
+            precisely so benign-supporting criteria are NOT assigned
+            easily against them.
+
+THE PENETRANCE VOCABULARY
+=========================
+
+    "incomplete"   HP:0003829 incomplete, HP:4000159 moderate,
+                   HP:4000160 low  -- all three are forms of the condition
+                   failing to appear in some carriers, which is the only
+                   distinction the criteria act on
+    "complete"     HP:0034950
+    "unknown"      nothing stated -- 98.9% of assertions, because HPO
+                   rarely annotates penetrance
+
+WHEN NO HISTORY STATES AN INHERITANCE: THE FALLBACK LADDER
+==========================================================
+
+A variant must not be left with an empty inheritance simply because the
+gene's conditions carry no mechanism. Three tiers are tried in order, most
+grounded first, and variant_inheritance_basis always says which one answered.
+
+    basis = "matched_history"      3,897 genes   70.0%
+        The variant's own mechanism reached at least one condition history,
+        and that history states the inheritance. This is the resolution the
+        whole chain exists to reach.
+
+    basis = "gene_consensus"         879 genes   15.8%
+        No history states one, but every germline-included condition of the
+        gene agrees on a single inheritance, so whatever this variant does,
+        that is what the disease requires. Unanimity is what makes it safe.
+        Delivers 839 dominant, 23 mitochondrial, 17 y_linked. It delivers no
+        recessive genes, because a recessive condition with no mechanism has
+        already been given LOF by the cache build, so it resolves as a
+        matched history instead.
+
+    basis = "gene_constraint"        789 genes   14.2%
+        HPO states no inheritance for this gene at all -- for 755 of these
+        the annotation simply does not exist. The constraint data then
+        decides how many copies must be affected:
+
+            dominant    ClinGen haploinsufficiency score 3
+                        OR LOEUF below 0.35
+            recessive   otherwise, the default
+
+        Either signal is enough: of these genes 196 carry only the LOEUF
+        signal, 6 only the ClinGen one, and 9 both, so requiring both would
+        reduce the rule to 9 genes. Delivers 580 recessive, 209 dominant.
+
+    basis = ""                         0 genes
+        Reserved for a gene whose germline conditions disagree with each
+        other AND whose mechanism reached nothing. No such gene exists in
+        the current data: the 501 genes with mixed inheritance all carry
+        mechanisms, so they resolve as matched histories.
+
+    No mechanism accompanies either fallback. For a gene answered by
+    constraint we know how many copies must be affected, not what a variant
+    has to do to the protein.
+
+STEP 4  what lands on the row
+=============================
+
+    var_plausible_patho_mechs        "<inheritance>_<MECHANISM>" tags,
+                                     e.g. "dominant_GOF;recessive_LOF"
+                                     (DOMINANT_NEGATIVE abbreviates to DN)
+    variant_effect                   see step 1
+    variant_lof_score                0 | 1 | 2
+    variant_gof_score                0 | 1 | 2
+    variant_dn_score                 0 | 1 | 2
+    variant_mechanism_exclusive      True when any score is 2
+    variant_exact_mechanisms         ";"-joined mechanisms scoring 2
+    variant_mechanism_applicable     tags whose mechanism is ESTABLISHED
+                                     for this variant
+    variant_mechanism_uncertain      tags whose mechanism is only POSSIBLE
+                                     because the variant effect is
+                                     unresolved
+    variant_condition_ids            ";"-joined condition identifiers
+    variant_condition_histories      the same facts kept TOGETHER, one
+                                     entry per history:
+
+        <condition>|<mechanism>|<inheritance>|<penetrance>
+
+        e.g. for a truncating variant in ABCB4, a gene with both a dominant
+        and a recessive condition:
+
+        OMIM:600803|LOF|dominant|unknown;OMIM:602347|LOF|recessive|unknown
+
+        and for ATP1A2, where a penetrance is actually recorded:
+
+        OMIM:602481|LOF|dominant|incomplete;OMIM:619602|LOF|recessive|unknown
+
+        This column exists because the three flat lists below are each
+        de-duplicated separately, so they can have different lengths and a
+        reader cannot tell which inheritance belongs to which condition.
+        Empty when no history was reached; the basis column then says which
+        fallback supplied the inheritance.
+
+    variant_inheritance             ";"-joined inheritance values
+    variant_inheritance_basis       matched_history | gene_consensus
+                                    | gene_constraint | ""
+    variant_x_linked                "true" | "false"
+    variant_penetrance              ";"-joined, or "unknown". Stated for
+                                    only 1.0% of assertions, because HPO
+                                    rarely annotates penetrance at all.
+
+WHAT IS OBSOLETE
+================
+
+Anything that does not serve the four steps. That explicitly includes
+re-reading ClinVar per variant to discover a condition: the condition comes
+from matching a mechanism to a history, never from a second pass over
+ClinVar. Gene-wide signals are likewise absent by design -- a ClinVar
+pathogenic history, a constrained LOEUF, a high average AlphaMissense
+score, a ClinGen dosage call at the gene level -- because none of them says
+which condition a variant acts on, or by what mechanism.
 """
 
 from __future__ import annotations
@@ -83,7 +340,22 @@ LOOKUP_FIELD_PRIORITY = (
 CANONICAL_MECHANISMS = {"LOF", "GOF", "DOMINANT_NEGATIVE", "TRIPLOSENSITIVITY"}
 EXACT_SEQUENCE_MECHANISMS = {"GOF", "DOMINANT_NEGATIVE"}
 VARIANT_MECHANISM_SCORE_KEYS = ("LOF", "GOF", "DOMINANT_NEGATIVE")
-CONDITION_MECHANISM_SOURCES = {"G2P_DDG2P", "Orphadata"}
+# Every source that may state a condition's mechanism. GoFCards is included:
+# a curated gain-of-function allele in a gene IS that gene's curated history
+# for the condition it was curated against, and 97 mechanism blocks have no
+# other source at all. The old worry -- that one allele would give every
+# variant in the gene a gain-of-function history -- does not arise, because
+# select_condition_histories_for_variant keeps only the histories the query
+# variant's own mechanism reaches. A predicted loss-of-function allele never
+# sees the gain-of-function history; an unresolved one sees it as possible,
+# not established, which is exactly what it is.
+CONDITION_MECHANISM_SOURCES = {
+    "G2P_DDG2P",
+    "Orphadata",
+    "ClinGen_haploinsufficiency",
+    "GoFCards_exact+ClinVar_VCV",
+    "deduced_from_inheritance",
+}
 CONDITION_MECHANISM_EVIDENCE_COLUMNS = {
     "gene_symbol",
     "source",
@@ -173,24 +445,29 @@ DDG2P_DOMINANT_LOF_INHERITANCE = {
     "monoallelic_Y_hemizygous",
 }
 VARIANT_MECHANISM_OUTPUT_COLUMNS = (
-    "gene_lof_evidence",
+    # Step 1 -- the variant's own mechanism, as three scores.
     "variant_effect",
-    "variant_effect_evidence",
-    "variant_effect_suppressed_evidence",
-    "variant_effect_conflict",
     "variant_lof_score",
     "variant_gof_score",
     "variant_dn_score",
     "variant_mechanism_exclusive",
     "variant_exact_mechanisms",
+    # Steps 2 and 3 -- the histories that mechanism reaches, split by whether
+    # the mechanism is established for them or only possible.
     "variant_mechanism_applicable",
     "variant_mechanism_uncertain",
-    "variant_mechanism_incompatible",
-    "variant_mechanism_applicability_detail",
-    "clinvar_vcv_accessions",
-    "clinvar_rcv_conditions",
-    "clinvar_vcv_max_review_stars",
-    "clinvar_vcv_hgvs",
+    # The three facts the chain exists to deliver, at variant resolution.
+    "variant_condition_ids",
+    # condition|mechanism|inheritance|penetrance, one entry per history, so the
+    # pairing between a condition and its inheritance and penetrance survives.
+    "variant_condition_histories",
+    "variant_inheritance",
+    # How that inheritance was arrived at: matched to this variant's own
+    # mechanism, taken from a gene whose every germline condition agrees, or
+    # inferred from the gene's constraint data when HPO states none.
+    "variant_inheritance_basis",
+    "variant_x_linked",
+    "variant_penetrance",
 )
 logger = logging.getLogger(__name__)
 
@@ -308,7 +585,6 @@ def infer_query_variant_effect(row: dict[str, Any] | pd.Series) -> dict[str, Any
         "variant_effect": effect,
         "variant_effect_evidence": ";".join(evidence),
         "variant_effect_suppressed_evidence": ";".join(suppressed_evidence),
-        "variant_effect_conflict": "",
         "variant_lof_score": scores["LOF"],
         "variant_gof_score": scores["GOF"],
         "variant_dn_score": scores["DOMINANT_NEGATIVE"],
@@ -1793,42 +2069,6 @@ class GeneMechanismHub:
         gene = self._load_condition_cache().get(symbol, {})
         return condition_cache_mechanism_assertions(gene)
 
-    def matched_clinvar_vcv_for_gofcards(
-        self,
-        gene_symbol: Any,
-        *,
-        gofcards_variant_ids: Any = "",
-        gofcards_accession_ids: Any = "",
-    ) -> list[dict[str, Any]]:
-        """Return integrated-cache variants linked to exact GoFCards IDs.
-
-        The historical method name is retained for callers, but the full
-        curated mechanism JSON is no longer read. Each result identifies
-        whether the exact variant is nested under a condition or retained in
-        ``unmapped_evidence`` for audit only.
-        """
-        variant_ids = {
-            _norm(token)
-            for token in re.split(r"[;,]", _clean(gofcards_variant_ids))
-            if _clean(token)
-        }
-        accession_ids = {
-            _norm(token)
-            for token in re.split(r"[;,]", _clean(gofcards_accession_ids))
-            if _clean(token)
-        }
-        if not variant_ids and not accession_ids:
-            return []
-
-        symbol = self._resolved_symbol_key(gene_symbol)
-        gene = self._load_condition_cache().get(symbol, {})
-        return match_condition_cache_gofcards_variants(
-            gene,
-            variant_ids=variant_ids,
-            accession_ids=accession_ids,
-        )
-
-
 def resolve_gene_symbol(gene_symbol: Any) -> str:
     """Convenience function returning one current HGNC symbol."""
     return GeneMechanismHub().resolve_symbol(gene_symbol)
@@ -2120,83 +2360,6 @@ def condition_cache_mechanism_entries(
     return entries
 
 
-def match_condition_cache_gofcards_variants(
-    gene_record: dict[str, Any],
-    *,
-    variant_ids: set[str],
-    accession_ids: set[str],
-) -> list[dict[str, Any]]:
-    """Find exact GoFCards query tokens in one integrated gene record.
-
-    Variant identifiers look like ``loc_12:21995260:C->T_grch37`` and contain
-    the separators used between records only by accident, so callers split on
-    semicolon and comma alone. Tokens are compared after case normalization.
-    Condition-linked and unresolved cache locations are returned in one shape,
-    with an empty condition for unresolved variants.
-
-    ``accession_ids`` is accepted and ignored. The condition cache stores one
-    variant identifier per variant, minted the same way the matcher mints it,
-    so that identifier settles the match on its own; the ClinVar accession was
-    a second name for the same variant.
-    """
-    wanted_variant_ids = {_norm(value) for value in variant_ids if _clean(value)}
-    if not wanted_variant_ids:
-        return []
-
-    matches: list[dict[str, Any]] = []
-    seen: set[tuple[str, str]] = set()
-
-    def add_matching_variants(
-        variants: Any,
-        *,
-        condition_key: str = "",
-        condition: dict[str, Any] | None = None,
-    ) -> None:
-        if not isinstance(variants, dict):
-            return
-        for variant_key, variant in variants.items():
-            if not isinstance(variant, dict):
-                continue
-            # One identifier per variant, and it is the same identifier the
-            # matcher reports, so it alone decides the match. The accession
-            # route it replaced was a secondary key for the same variant.
-            cached_variant_id = _norm(variant.get("gofcards_variant_id"))
-            if not cached_variant_id or cached_variant_id not in wanted_variant_ids:
-                continue
-            identity = (_clean(condition_key), _clean(variant_key))
-            if identity in seen:
-                continue
-            seen.add(identity)
-            matches.append(
-                {
-                    "condition_key": _clean(condition_key),
-                    "condition": condition if isinstance(condition, dict) else {},
-                    "variant_key": _clean(variant_key),
-                    "variant": variant,
-                }
-            )
-
-    conditions = gene_record.get("conditions", {})
-    if isinstance(conditions, dict):
-        for condition_key, condition in sorted(conditions.items()):
-            if not isinstance(condition, dict):
-                continue
-            mechanisms = condition.get("pathogenic_mechanisms", {})
-            mechanisms = mechanisms if isinstance(mechanisms, dict) else {}
-            gof = mechanisms.get("GOF", {})
-            gof = gof if isinstance(gof, dict) else {}
-            add_matching_variants(
-                gof.get("variants", {}),
-                condition_key=_clean(condition_key),
-                condition=condition,
-            )
-
-    unmapped = gene_record.get("unmapped_evidence", {})
-    unmapped = unmapped if isinstance(unmapped, dict) else {}
-    add_matching_variants(unmapped.get("variants", {}))
-    return matches
-
-
 def condition_cache_mechanism_assertions(
     gene_record: dict[str, Any],
 ) -> list[dict[str, Any]]:
@@ -2282,7 +2445,7 @@ def condition_cache_mechanism_assertions(
                             "pmids": list(evidence.get("pmids", []) or []),
                         }
                     )
-    return _deduplicate_assertions(assertions)
+    return _deduplicate_by(assertions, ASSERTION_IDENTITY_FIELDS)
 
 
 def enrich_condition_mechanism_assertion(
@@ -2382,98 +2545,220 @@ def enrich_condition_mechanism_assertion(
     ]
 
 
-def extract_exact_clinvar_condition_identities(
-    condition_assertion: dict[str, Any],
-) -> list[dict[str, str]]:
-    """Extract only explicit disease identifiers from one matched ClinVar RCV.
+# The reverse of HPO_CACHE_INHERITANCE_LABELS, so a mode is recognized whether
+# it arrives as the cache's key or as the label substituted for display.
+_INHERITANCE_LABEL_TO_KEY = {
+    label.lower(): key for key, label in HPO_CACHE_INHERITANCE_LABELS.items()
+}
+# Downstream treats these three the same way: one allele in a carrier is
+# enough for the condition to appear.
+DOMINANT_LIKE_INHERITANCE = {"dominant", "y_linked", "mitochondrial"}
+# Germline, but not single-gene. Delivered rather than discarded, so that
+# benign-supporting criteria are not assigned easily against them.
+NON_MENDELIAN_INHERITANCE = {
+    "non_mendelian",
+    "polygenic",
+    "digenic",
+    "oligogenic",
+}
 
-    The aggregate condition commonly carries a MedGen identifier, while its
-    contributing SCVs can carry exact OMIM, Orphanet, or MONDO cross-references
-    in ``trait_mappings``. These database identifiers are safe for an identity
-    join. Disease names, publications, and phenotype similarity are deliberately
-    ignored because they do not prove that two condition records are identical.
 
-    MedGen identifiers are retained for audit, but the current HPO condition
-    table is keyed by OMIM/ORPHA/MONDO. Consequently, MedGen alone does not
-    transfer HPO inheritance or penetrance.
+def normalize_inheritance(
+    allelic_requirement: Any = "",
+    hpo_inheritance_modes: Any = (),
+) -> tuple[str, bool]:
+    """Reduce the two source vocabularies to one value plus an X-linked flag.
+
+    Two sources describe the same fact in different words: G2P states an
+    allelic requirement (``biallelic_autosomal``, ``monoallelic_X_hemizygous``)
+    and HPO states an inheritance mode (``autosomal_recessive``,
+    ``x_linked_dominant``). Both fold to the same answer.
+
+    The delivered value is ``recessive`` or ``dominant`` wherever that question
+    has an answer, because that is what the criteria reason about. Being on the
+    X chromosome is a separate fact and is returned separately: folding it into
+    the value would erase it, and a hemizygous male affected by one allele is
+    still the recessive pattern.
+
+    ``y_linked`` and ``mitochondrial`` are delivered as themselves rather than
+    forced into dominant; downstream treats them the same as dominant.
+    ``non_mendelian``, ``polygenic``, ``digenic`` and ``oligogenic`` are also
+    delivered as themselves. They are not discarded -- they exist so that
+    benign-supporting criteria are not assigned easily against them.
     """
-    raw_identities: list[tuple[str, str, str, str]] = []
-    for condition in condition_assertion.get("conditions", []) or []:
-        if not isinstance(condition, dict):
-            continue
-        raw_identities.append(
-            (
-                _clean(condition.get("database")),
-                _clean(condition.get("id")),
-                _clean(condition.get("name")),
-                "ClinVar_RCV_condition",
-            )
+    requirement = _clean(allelic_requirement).lower()
+    # Modes arrive in either form: the cache's own snake_case key, or the
+    # human-readable HPO label that condition_cache_context substitutes. Both
+    # name the same mode, so both are accepted here rather than requiring every
+    # caller to know which one it is holding.
+    modes = [
+        _INHERITANCE_LABEL_TO_KEY.get(_clean(mode).lower(), _clean(mode).lower())
+        for mode in (
+            [hpo_inheritance_modes]
+            if isinstance(hpo_inheritance_modes, str)
+            else list(hpo_inheritance_modes or [])
         )
-    for scv in condition_assertion.get("matched_scvs", []) or []:
-        if not isinstance(scv, dict):
-            continue
-        for mapping in scv.get("trait_mappings", []) or []:
-            if not isinstance(mapping, dict):
-                continue
-            raw_identities.append(
-                (
-                    _clean(mapping.get("mapping_ref")),
-                    _clean(mapping.get("mapping_value")),
-                    _clean(mapping.get("medgen_name")),
-                    "ClinVar_SCV_trait_mapping",
-                )
-            )
+        if _clean(mode)
+    ]
+    x_linked = requirement.startswith("monoallelic_x") or any(
+        mode.startswith("x_linked") for mode in modes
+    )
 
-    prefixes = {
-        "OMIM": "OMIM",
-        "ORPHA": "ORPHA",
-        "ORPHANET": "ORPHA",
-        "MONDO": "MONDO",
-        "MEDGEN": "MEDGEN",
-    }
-    identities: list[dict[str, str]] = []
-    seen: set[str] = set()
-    for database, identifier, name, provenance in raw_identities:
-        prefix = prefixes.get(database.upper())
-        if not prefix or not identifier:
+    # A non-Mendelian mode is reported only when no Mendelian mode accompanies
+    # it. Both surviving genes in the current cache carry the two together, and
+    # the Mendelian one is the actionable statement.
+    mendelian_modes = [mode for mode in modes if mode not in NON_MENDELIAN_INHERITANCE]
+    if not mendelian_modes:
+        for mode in modes:
+            if mode in NON_MENDELIAN_INHERITANCE:
+                return mode, x_linked
+
+    if requirement.startswith("biallelic_") or requirement in {
+        "monoallelic_x",
+        "monoallelic_x_hemizygous",
+    }:
+        return "recessive", x_linked
+    if requirement == "mitochondrial":
+        return "mitochondrial", False
+    if requirement.startswith("monoallelic_y"):
+        return "y_linked", False
+    if requirement.startswith("monoallelic_"):
+        return "dominant", x_linked
+
+    for mode in mendelian_modes:
+        if mode in {"autosomal_recessive", "x_linked_recessive", "pseudoautosomal_recessive"}:
+            return "recessive", x_linked
+        # A bare "x_linked" with no recessive or dominant qualifier reads as
+        # X-linked recessive.
+        if mode == "x_linked":
+            return "recessive", True
+        if mode in {
+            "autosomal_dominant",
+            "x_linked_dominant",
+            "autosomal_dominant_maternal_imprinting",
+        }:
+            return "dominant", x_linked
+        if mode == "mitochondrial":
+            return "mitochondrial", False
+        if mode == "y_linked":
+            return "y_linked", False
+    return "", x_linked
+
+
+def gene_inheritance_consensus(gene_record: dict[str, Any]) -> tuple[str, bool, int]:
+    """Return the one inheritance every germline condition of a gene agrees on.
+
+    This is the fallback for a variant whose mechanism reaches no history --
+    because no condition of that gene states a mechanism at all. The inheritance
+    is still knowable: if every germline-included condition of the gene says
+    dominant, then whatever this variant does, one allele is what the disease
+    requires. Leaving it empty would discard a fact we hold.
+
+    Unanimity is what makes it safe. A gene carrying both a dominant and a
+    recessive condition is deliberately given nothing here, because there the
+    question genuinely has two answers and only the per-history match can choose
+    between them. Measured on the current cache: 2,772 genes are unanimously
+    recessive, 1,453 unanimously dominant, and 501 are mixed.
+
+    Conditions that are not germline-inherited disease never contribute, so a
+    review-scoped or excluded condition cannot donate its inheritance here.
+
+    The third return value is how many distinct inheritances the gene's germline
+    conditions stated, which separates the two ways this can come back empty:
+    ``0`` means nothing was stated at all and the caller may fall back further,
+    while ``2`` or more means the gene genuinely disagrees with itself and no
+    fallback is legitimate.
+    """
+    values: set[tuple[str, bool]] = set()
+    for condition in (gene_record.get("conditions") or {}).values():
+        if (condition.get("priva_scope") or {}).get("decision") != "include":
             continue
-        cleaned_id = identifier
-        for known_prefix in ("OMIM:", "ORPHA:", "ORPHANET:", "MONDO:", "MEDGEN:"):
-            if cleaned_id.upper().startswith(known_prefix):
-                cleaned_id = cleaned_id.split(":", 1)[1]
-                break
-        condition_id = f"{prefix}:{cleaned_id}"
-        if condition_id.upper() in seen:
-            continue
-        seen.add(condition_id.upper())
-        identities.append(
-            {
-                "source_condition_id": condition_id,
-                "mondo_id": condition_id if prefix == "MONDO" else "",
-                "disease": name,
-                "condition_id_provenance": provenance,
-            }
+        inheritance, x_linked = normalize_inheritance(
+            "", (condition.get("inheritance") or {}).get("modes") or []
         )
-    return identities
+        if inheritance:
+            values.add((inheritance, x_linked))
+    distinct = len({inheritance for inheritance, _x in values})
+    if distinct != 1:
+        return "", False, distinct
+    inheritance, x_linked = next(iter(values))
+    return inheritance, x_linked, 1
+
+
+def gene_inheritance_from_constraint(
+    symbol: str,
+    *,
+    clingen: dict[str, dict[str, Any]],
+    loeuf: dict[str, float],
+) -> str:
+    """Last resort for a gene HPO says nothing about: read the constraint data.
+
+    Reached only when no germline condition of the gene states an inheritance at
+    all -- 798 genes, for 755 of which HPO holds no inheritance annotation
+    anywhere. Rather than deliver nothing, the inheritance is inferred from
+    whether the gene tolerates losing one copy:
+
+        dominant   ClinGen haploinsufficiency score 3, or LOEUF below 0.35.
+                   Either is a statement that one lost copy already causes
+                   disease, which is the dominant pattern.
+        recessive  otherwise, as the default. Most disease genes are recessive,
+                   and a gene with no haploinsufficiency signal is far more
+                   likely to need both copies disabled.
+
+    The two signals barely overlap -- of these genes 196 have only the LOEUF
+    signal, 6 only the ClinGen one, 9 both -- so requiring both would reduce
+    the rule to 9 genes. Either is therefore enough.
+
+    No mechanism accompanies this. We do not know what a variant must do to
+    cause disease here, only how many copies must be affected.
+    """
+    score = clingen.get(symbol, {}).get("haploinsufficiency_score")
+    try:
+        haploinsufficient = int(str(score)) == 3
+    except (TypeError, ValueError):
+        haploinsufficient = False
+    constraint = loeuf.get(symbol, float("nan"))
+    constrained = (
+        isinstance(constraint, (int, float))
+        and not math.isnan(constraint)
+        and constraint < 0.35
+    )
+    return "dominant" if haploinsufficient or constrained else "recessive"
+
+
+def normalize_penetrance(penetrance_hpo_ids: Any = ()) -> str:
+    """Reduce the penetrance HPO terms to complete, incomplete, or unknown.
+
+    Moderate and low penetrance are forms of incomplete penetrance: in each the
+    condition fails to appear in some carriers, which is the only distinction
+    the criteria act on.
+    """
+    ids = {
+        _clean(value).upper()
+        for value in (penetrance_hpo_ids or [])
+        if _clean(value)
+    }
+    if ids & {"HP:0003829", "HP:4000159", "HP:4000160"}:
+        return "incomplete"
+    if "HP:0034950" in ids:
+        return "complete"
+    return "unknown"
 
 
 def _compact_inheritance(allelic_requirement: Any) -> str:
-    requirement = _clean(allelic_requirement)
-    if requirement in {"recessive", "dominant", "mitochondrial"}:
-        return requirement
-    if requirement.startswith("biallelic_") or requirement in {
-        "monoallelic_X",
-        "monoallelic_X_hemizygous",
-    }:
-        return "recessive"
-    if requirement.startswith("monoallelic_"):
-        return "dominant"
-    return ""
+    """Inheritance value alone, for the compact per-row mechanism tags."""
+    return normalize_inheritance(allelic_requirement)[0]
 
 
-def _mechanism_profile_tag(assertion: dict[str, Any]) -> str:
-    inheritance = _compact_inheritance(assertion.get("allelic_requirement"))
-    mechanism = _clean(assertion.get("mechanism")).upper() or "UNRESOLVED"
+def _mechanism_profile_tag(history: dict[str, Any]) -> str:
+    """One compact `<inheritance>_<MECHANISM>` tag for a selected history.
+
+    The inheritance is read straight off the history, which
+    select_condition_histories_for_variant already normalized. Re-deriving it
+    here from the raw allelic requirement would be a second copy of that rule.
+    """
+    inheritance = _clean(history.get("inheritance"))
+    mechanism = _clean(history.get("mechanism")).upper() or "UNRESOLVED"
     if mechanism == "UNRESOLVED":
         return inheritance or "uncertain"
     mechanism = "DN" if mechanism == "DOMINANT_NEGATIVE" else mechanism
@@ -2505,22 +2790,24 @@ def select_condition_histories_for_variant(
     assertions: list[dict[str, Any]],
     *,
     variant_effect: str,
-    variant_effect_conflict: str = "",
 ) -> list[dict[str, Any]]:
-    """Select only condition histories compatible with the query allele.
+    """Step 3: keep the histories this variant's mechanism reaches, and carry
+    back the condition, the inheritance and the penetrance.
 
     A curated mechanism elsewhere in a gene is background history, not evidence
-    that every variant acts through that mechanism. Selection therefore occurs
-    before inheritance or penetrance can influence ACMG criteria:
+    that every variant acts through that mechanism. Selection therefore happens
+    before inheritance or penetrance can influence any criterion:
 
-    * an exact known GOF allele selects GOF histories;
+    * an exact known GOF or DN allele selects that mechanism's histories only;
     * a high-confidence predicted LOF allele selects LOF histories; and
-    * an unresolved allele retains all histories, clearly marked as uncertain
-      by the later applicability classifier.
+    * an unresolved allele keeps every history, marked uncertain.
 
-    Exact curated mechanisms are exclusive. A consequence-based LoF prediction
-    is retained in the row's suppressed-evidence field but cannot reintroduce a
-    different condition history after an exact GoF or DN match.
+    Exact curated mechanisms are exclusive: a consequence-based loss-of-function
+    prediction cannot reintroduce a different history after an exact match.
+
+    Each surviving history is reduced to the three facts the chain exists to
+    deliver, plus the mechanism that selected it. Nothing else travels, because
+    nothing else is read.
     """
     effect = _clean(variant_effect)
     exact_mechanisms = _exact_mechanisms_from_effect(effect)
@@ -2530,249 +2817,110 @@ def select_condition_histories_for_variant(
         allowed = {"LOF"}
     else:
         allowed = CANONICAL_MECHANISMS
-    return [
-        assertion
-        for assertion in assertions
-        if _clean(assertion.get("mechanism")).upper() in allowed
-    ]
 
-
-def _deduplicate_assertions(assertions: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    fields = (
-        "source",
-        "source_record_id",
-        "source_condition_id",
-        "mondo_id",
-        "disease",
-        "mechanism",
-        "allelic_requirement",
-        "confidence",
-    )
-    seen: set[str] = set()
-    output: list[dict[str, Any]] = []
+    histories: list[dict[str, Any]] = []
     for assertion in assertions:
-        normalized = dict(assertion)
-        normalized.update(
+        mechanism = _clean(assertion.get("mechanism")).upper()
+        if mechanism not in allowed:
+            continue
+        inheritance, x_linked = normalize_inheritance(
+            assertion.get("allelic_requirement"),
+            assertion.get("hpo_inheritance_modes"),
+        )
+        histories.append(
             {
-                "source": _clean(assertion.get("source")),
-                "source_record_id": _clean(assertion.get("source_record_id")),
-                "source_condition_id": _clean(
-                    assertion.get("source_condition_id")
+                "mechanism": mechanism,
+                "condition": _clean(
+                    assertion.get("hpo_disease_id")
+                    or assertion.get("source_condition_id")
                 ),
-                "mondo_id": _clean(assertion.get("mondo_id")),
-                "disease": _clean(assertion.get("disease")),
-                "mechanism": _clean(assertion.get("mechanism")).upper()
-                or "UNRESOLVED",
-                "allelic_requirement": _clean(
-                    assertion.get("allelic_requirement")
+                "inheritance": inheritance,
+                "x_linked": x_linked,
+                "penetrance": normalize_penetrance(
+                    assertion.get("penetrance_hpo_ids")
                 ),
-                "confidence": _clean(assertion.get("confidence")),
             }
         )
-        key = json.dumps(
-            {field: normalized.get(field, "") for field in fields},
-            sort_keys=True,
-            separators=(",", ":"),
+    return histories
+
+
+HISTORY_IDENTITY_FIELDS = ("mechanism", "condition", "inheritance", "x_linked", "penetrance")
+ASSERTION_IDENTITY_FIELDS = (
+    "source",
+    "source_record_id",
+    "source_condition_id",
+    "mondo_id",
+    "disease",
+    "mechanism",
+    "allelic_requirement",
+    "confidence",
+)
+
+
+def _deduplicate_by(
+    records: list[dict[str, Any]],
+    fields: tuple[str, ...],
+) -> list[dict[str, Any]]:
+    """Drop repeats, comparing only the named fields.
+
+    Used twice at different stages: on the gene's raw assertions, where two
+    sources can state the same thing, and on the selected histories, where the
+    identity is only the facts the chain delivers. One rule, two field lists,
+    rather than two functions that would drift apart.
+    """
+    seen: set[tuple[Any, ...]] = set()
+    output: list[dict[str, Any]] = []
+    for record in records:
+        key = tuple(
+            bool(record.get(field))
+            if isinstance(record.get(field), bool)
+            else _clean(record.get(field))
+            for field in fields
         )
-        if key not in seen:
-            seen.add(key)
-            output.append(normalized)
+        if key in seen:
+            continue
+        seen.add(key)
+        output.append(record)
     return output
 
 
 def _classify_variant_applicability(
-    assertions: list[dict[str, Any]],
+    histories: list[dict[str, Any]],
     effect: str,
-    effect_conflict: str = "",
 ) -> dict[str, Any]:
-    exact_mechanisms = _exact_mechanisms_from_effect(effect)
-    groups: dict[str, list[str]] = {
-        "applicable": [],
-        "uncertain": [],
-        "incompatible": [],
-    }
-    details: list[dict[str, str]] = []
-    for assertion in assertions:
-        mechanism = assertion["mechanism"]
-        if mechanism == "LOF":
-            if effect == "predicted_LOF_high_confidence":
-                status, reason = "applicable", "query_effect_matches_LOF"
-            elif effect == "uncertain":
-                status, reason = "uncertain", "query_LOF_effect_not_established"
-            else:
-                status, reason = (
-                    "incompatible",
-                    "exact_nonLOF_mechanism_excludes_predicted_LOF",
-                )
-        elif mechanism == "GOF":
-            if "GOF" in exact_mechanisms:
-                status, reason = "applicable", "exact_query_GOF_match"
-            elif effect == "uncertain":
-                status, reason = "uncertain", "query_GOF_effect_not_established"
-            else:
-                status, reason = "incompatible", "GOF_requires_exact_variant_match"
-        elif mechanism == "DOMINANT_NEGATIVE":
-            if "DOMINANT_NEGATIVE" in exact_mechanisms:
-                status, reason = "applicable", "exact_query_DN_match"
-            elif effect == "uncertain":
-                status, reason = "uncertain", "no_variant_level_DN_assertion"
-            else:
-                status, reason = "incompatible", "query_effect_does_not_support_DN"
-        elif mechanism == "TRIPLOSENSITIVITY":
-            status, reason = "uncertain", "sequence_variant_not_equivalent_to_copy_gain"
-        else:
-            status, reason = "uncertain", "inheritance_known_mechanism_unresolved"
+    """Split the selected histories into established and merely possible.
 
-        tag = _mechanism_profile_tag(assertion)
-        if tag not in groups[status]:
-            groups[status].append(tag)
-        details.append(
-            {
-                **assertion,
-                "tag": tag,
-                "applicability": status,
-                "reason": reason,
-            }
-        )
-    return {
-        "plausible": ";".join(
-            _compact_profile_tags(
-                [
-                    detail
-                    for detail in details
-                    if detail["applicability"] != "incompatible"
-                ]
-            )
-        ),
-        "applicable": ";".join(groups["applicable"]),
-        "uncertain": ";".join(groups["uncertain"]),
-        "incompatible": ";".join(groups["incompatible"]),
-        "detail": json.dumps(details, sort_keys=True, separators=(",", ":")),
-    }
-
-
-def summarize_condition_cache_exact_gof_matches(
-    matches: list[dict[str, Any]],
-) -> dict[str, Any]:
-    """Build audit outputs and scoped assertions for exact cache variants.
-
-    Audit fields include both condition-linked and unresolved matches. Automatic
-    GOF assertions are more restrictive: the variant must be nested under a
-    condition whose integrated PriVA scope is ``include``. This separation
-    retains useful ClinVar provenance without letting unresolved, complex, or
-    excluded disease links alter germline ACMG criteria.
+    Step 3 has already removed the histories this variant's mechanism cannot
+    reach, so nothing here is incompatible. What remains is one distinction the
+    criteria act on: whether the variant's mechanism is *established* for that
+    history (an exact curated allele, or a high-confidence predicted loss of
+    function) or only *possible* because the variant's own effect is unresolved.
     """
-    output: dict[str, Any] = {
-        "vcv_accessions": [],
-        "condition_names": [],
-        "review_stars": [],
-        "hgvs": [],
-        "assertions": [],
+    exact_mechanisms = _exact_mechanisms_from_effect(effect)
+    applicable: list[str] = []
+    uncertain: list[str] = []
+    for history in histories:
+        mechanism = _clean(history.get("mechanism")).upper()
+        established = (
+            mechanism in exact_mechanisms
+            or (mechanism == "LOF" and effect == "predicted_LOF_high_confidence")
+        )
+        tag = _mechanism_profile_tag(history)
+        target = applicable if established else uncertain
+        if tag not in target:
+            target.append(tag)
+    return {
+        "plausible": ";".join(_compact_profile_tags(histories)),
+        "applicable": ";".join(applicable),
+        "uncertain": ";".join(uncertain),
     }
-
-    def append_unique(field: str, value: Any) -> None:
-        cleaned = _clean(value)
-        if cleaned and cleaned not in output[field]:
-            output[field].append(cleaned)
-
-    for match in matches:
-        if not isinstance(match, dict):
-            continue
-        variant = match.get("variant", {})
-        variant = variant if isinstance(variant, dict) else {}
-        condition = match.get("condition", {})
-        condition = condition if isinstance(condition, dict) else {}
-        condition_key = _clean(match.get("condition_key"))
-        condition_label = _clean(condition.get("label"))
-        links = variant.get("clinvar_links", [])
-        links = [link for link in links or [] if isinstance(link, dict)]
-        has_link_condition_name = False
-        has_link_hgvs = False
-
-        for link in links:
-            append_unique("vcv_accessions", link.get("vcv_accession"))
-            for name in link.get("condition_names", []) or []:
-                has_link_condition_name = has_link_condition_name or bool(_clean(name))
-                append_unique("condition_names", name)
-            for expression in link.get("hgvs", []) or []:
-                has_link_hgvs = has_link_hgvs or bool(_clean(expression))
-                append_unique("hgvs", expression)
-            stars = link.get("review_stars")
-            try:
-                star_value = int(stars)
-            except (TypeError, ValueError):
-                pass
-            else:
-                if star_value not in output["review_stars"]:
-                    output["review_stars"].append(star_value)
-
-        if not has_link_hgvs:
-            # The coding and protein changes travel per transcript view, each
-            # carrying the transcript version they belong to.
-            for view in variant.get("transcripts", []) or []:
-                if not isinstance(view, dict):
-                    continue
-                append_unique("hgvs", view.get("hgvsc"))
-                append_unique("hgvs", view.get("hgvsp"))
-        if not has_link_condition_name and condition_label:
-            append_unique("condition_names", condition_label)
-
-        context = condition_cache_context(condition_key, condition)
-        if not context:
-            continue
-        requirements = sorted(
-            _hpo_allelic_requirements(
-                ";".join(context.get("hpo_inheritance_modes", []))
-            )
-        ) or [""]
-        assertion_links = links or [{}]
-        for link in assertion_links:
-            stars = link.get("review_stars")
-            confidence = (
-                f"ClinVar_{stars}_star"
-                if stars is not None and _clean(stars)
-                else "exact_variant_match"
-            )
-            for requirement in requirements:
-                output["assertions"].append(
-                    {
-                        **context,
-                        "source": "GoFCards_exact+ClinVar_VCV",
-                        "source_record_id": _clean(link.get("vcv_accession"))
-                        or _clean(match.get("variant_key")),
-                        "source_condition_id": condition_key,
-                        "disease": condition_label,
-                        "mechanism": "GOF",
-                        "mechanism_raw": "gain of function",
-                        "allelic_requirement": requirement,
-                        "confidence": confidence,
-                        "mechanism_confidence": "exact_variant",
-                        "disease_confidence": "ClinVar_germline_assertion",
-                        "clinical_significance": _clean(
-                            link.get("clinical_significance")
-                        ),
-                        "condition_identifiers": list(
-                            link.get("condition_identifiers", []) or []
-                        ),
-                        "pmids": list(variant.get("pmids", []) or []),
-                    }
-                )
-
-    output["assertions"] = _deduplicate_assertions(output["assertions"])
-    return output
 
 
 def annotate_gene_mechanism_categories(
     df: pd.DataFrame,
     *,
-    clinvar_pathogenic_genes: set[str] | None = None,
-    gene_to_am_score_map: dict[str, float] | None = None,
     condition_cache: str | Path = DEFAULT_HPO_CONDITION_MECHANISM_CACHE,
-    mechanism_json: str | Path | None = None,
-    ddg2p_evidence: str | Path | None = None,
     symbol_col: str = "SYMBOL",
-    gene_col: str = "Gene",
-    hpo_inheritance_col: str = "HPO_gene_inheritance",
     output_col: str = "var_plausible_patho_mechs",
     use_hgnc_package: bool = False,
     hpo_collapsed: str | Path = DEFAULT_HPO_COLLAPSED,
@@ -2780,19 +2928,16 @@ def annotate_gene_mechanism_categories(
     loeuf_table: str | Path = DEFAULT_LOEUF_TABLE,
     hgnc_table: str | Path = DEFAULT_HGNC_TABLE,
 ) -> pd.DataFrame:
-    """Annotate condition-specific history and query-variant applicability.
+    """Step 4: run the chain over every row and attach the result.
 
-    HPO inheritance, penetrance, onset, G2P/Orphadata mechanisms, and compact
-    ClinVar links come from the integrated cache. Row-level HPO text and
-    gene-wide ClinVar, LOEUF, AlphaMissense, or ClinGen dosage signals remain
-    audit information and cannot create a condition-mechanism assertion.
-    ``mechanism_json``, ``ddg2p_evidence``, and ``hpo_inheritance_col`` are
-    retained only for call compatibility and are not runtime evidence sources.
+    The only evidence sources are the variant's own annotation and the HPO
+    condition cache. Gene-wide signals -- a ClinVar pathogenic history, a
+    constrained LOEUF, a high average AlphaMissense score, a ClinGen dosage
+    call -- are deliberately absent: none of them says which condition a
+    variant acts on or by what mechanism, so none can create a history.
     """
     if symbol_col not in df.columns:
         raise KeyError(f"missing symbol column: {symbol_col}")
-    if gene_col not in df.columns:
-        raise KeyError(f"missing gene column: {gene_col}")
 
     hub = GeneMechanismHub(
         condition_cache=condition_cache,
@@ -2808,8 +2953,6 @@ def annotate_gene_mechanism_categories(
         column: [] for column in VARIANT_MECHANISM_OUTPUT_COLUMNS
     }
     assertion_cache: dict[str, list[dict[str, Any]]] = {}
-    clinvar_pathogenic_genes = set(clinvar_pathogenic_genes or set())
-    gene_to_am_score_map = gene_to_am_score_map or {}
     for _, row in out.iterrows():
         gene = row[symbol_col]
         symbol = hub.resolve_symbol(gene)
@@ -2817,71 +2960,25 @@ def annotate_gene_mechanism_categories(
             assertion_cache[symbol] = hub.condition_mechanism_assertions(gene)
         assertions = list(assertion_cache[symbol])
 
-        gene_id = _clean(row.get(gene_col))
-        lof_evidence: list[str] = []
-        if gene_id in clinvar_pathogenic_genes:
-            lof_evidence.append("ClinVar_pathogenic_2plus")
-        loeuf = _safe_float(row.get("LOEUF"))
-        if not math.isnan(loeuf) and loeuf < 0.35:
-            lof_evidence.append("LOEUF_lt_0.35")
-        gene_avg_am = _safe_float(
-            row.get("Gene_avg_AM_score", gene_to_am_score_map.get(gene_id))
-        )
-        if not math.isnan(gene_avg_am) and gene_avg_am > 0.564:
-            lof_evidence.append("GeneAvgAM_gt_0.564")
+        # STEP 1: what mechanism does this variant plausibly act by?
         effect_call = infer_query_variant_effect(row)
-        assertions = select_condition_histories_for_variant(
-            assertions,
-            variant_effect=effect_call["variant_effect"],
-            variant_effect_conflict=effect_call["variant_effect_conflict"],
+        # STEPS 2 and 3: the gene's germline condition histories this
+        # mechanism reaches, reduced to condition, inheritance and penetrance.
+        histories = _deduplicate_by(
+            select_condition_histories_for_variant(
+                assertions,
+                variant_effect=effect_call["variant_effect"],
+            ),
+            HISTORY_IDENTITY_FIELDS,
         )
-        vcv_accessions: list[str] = []
-        vcv_conditions: list[str] = []
-        vcv_hgvs: list[str] = []
-        vcv_review_stars: list[int] = []
-        if "GOF" in _exact_mechanisms_from_effect(effect_call["variant_effect"]):
-            use_vcv_condition_history = not any(
-                assertion.get("mechanism") == "GOF" for assertion in assertions
-            )
-            vcv_matches = hub.matched_clinvar_vcv_for_gofcards(
-                symbol,
-                gofcards_variant_ids=row.get("gofcards_variant_id", ""),
-                gofcards_accession_ids=row.get("gofcards_accession_id", ""),
-            )
-            exact_gof = summarize_condition_cache_exact_gof_matches(vcv_matches)
-            vcv_accessions.extend(exact_gof["vcv_accessions"])
-            vcv_conditions.extend(exact_gof["condition_names"])
-            vcv_hgvs.extend(exact_gof["hgvs"])
-            vcv_review_stars.extend(exact_gof["review_stars"])
-            if use_vcv_condition_history:
-                assertions.extend(exact_gof["assertions"])
-            if use_vcv_condition_history and not any(
-                assertion.get("mechanism") == "GOF" for assertion in assertions
-            ):
-                assertions.append(
-                    {
-                        "source": "GoFCards",
-                        "disease": "",
-                        "mechanism": "GOF",
-                        "allelic_requirement": "",
-                        "confidence": "exact_variant_match_condition_unresolved",
-                    }
-                )
-        assertions = _deduplicate_assertions(assertions)
         applicability = _classify_variant_applicability(
-            assertions,
+            histories,
             effect_call["variant_effect"],
-            effect_call["variant_effect_conflict"],
         )
 
+        # STEP 4: attach at variant-transcript resolution.
         plausible_mechanism_values.append(applicability["plausible"])
-        variant_outputs["gene_lof_evidence"].append(";".join(lof_evidence))
         variant_outputs["variant_effect"].append(effect_call["variant_effect"])
-        variant_outputs["variant_effect_evidence"].append(effect_call["variant_effect_evidence"])
-        variant_outputs["variant_effect_suppressed_evidence"].append(
-            effect_call["variant_effect_suppressed_evidence"]
-        )
-        variant_outputs["variant_effect_conflict"].append(effect_call["variant_effect_conflict"])
         variant_outputs["variant_lof_score"].append(effect_call["variant_lof_score"])
         variant_outputs["variant_gof_score"].append(effect_call["variant_gof_score"])
         variant_outputs["variant_dn_score"].append(effect_call["variant_dn_score"])
@@ -2893,19 +2990,82 @@ def annotate_gene_mechanism_categories(
         )
         variant_outputs["variant_mechanism_applicable"].append(applicability["applicable"])
         variant_outputs["variant_mechanism_uncertain"].append(applicability["uncertain"])
-        variant_outputs["variant_mechanism_incompatible"].append(applicability["incompatible"])
-        variant_outputs["variant_mechanism_applicability_detail"].append(applicability["detail"])
-        variant_outputs["clinvar_vcv_accessions"].append(
-            ";".join(dict.fromkeys(vcv_accessions))
+        # The three facts the chain exists to deliver, at this variant's own
+        # resolution. One entry per selected history, in a stable order.
+        matched_inheritance = list(
+            dict.fromkeys(h["inheritance"] for h in histories if h["inheritance"])
         )
-        variant_outputs["clinvar_rcv_conditions"].append(
-            ";".join(dict.fromkeys(vcv_conditions))
+        matched_x_linked = any(h["x_linked"] for h in histories)
+        if matched_inheritance:
+            basis = "matched_history"
+        else:
+            # No history stated an inheritance, either because the variant's
+            # mechanism reached none or because none of this gene's conditions
+            # records a mechanism at all. Two fallbacks remain, in order of how
+            # much they are grounded in the gene's own disease record.
+            consensus, consensus_x, stated = gene_inheritance_consensus(
+                hub._load_condition_cache().get(symbol, {})
+            )
+            if consensus:
+                matched_inheritance = [consensus]
+                matched_x_linked = consensus_x
+                basis = "gene_consensus"
+            elif stated == 0:
+                # HPO says nothing about this gene's inheritance at all, so the
+                # constraint data decides. A gene that disagrees with itself
+                # (stated > 1) deliberately falls through to nothing.
+                matched_inheritance = [
+                    gene_inheritance_from_constraint(
+                        symbol, clingen=hub._load_clingen(), loeuf=hub._load_loeuf()
+                    )
+                ]
+                basis = "gene_constraint"
+            else:
+                matched_inheritance = []
+                basis = ""
+
+        variant_outputs["variant_condition_ids"].append(
+            ";".join(dict.fromkeys(h["condition"] for h in histories if h["condition"]))
         )
-        variant_outputs["clinvar_vcv_max_review_stars"].append(
-            str(max(vcv_review_stars)) if vcv_review_stars else ""
+        # The same facts kept together rather than as three parallel lists.
+        # De-duplicating each list separately makes them different lengths, so
+        # a reader cannot tell which inheritance belongs to which condition;
+        # here each entry is one whole history and the pairing survives.
+        #
+        #   <condition>|<mechanism>|<inheritance>|<penetrance>
+        #
+        # Empty when no history was reached at all: the basis column then says
+        # whether the inheritance came from the gene's consensus or from its
+        # constraint data, neither of which belongs to a named condition.
+        variant_outputs["variant_condition_histories"].append(
+            ";".join(
+                dict.fromkeys(
+                    "|".join(
+                        (
+                            h["condition"],
+                            "DN" if h["mechanism"] == "DOMINANT_NEGATIVE"
+                            else h["mechanism"],
+                            h["inheritance"] or "unknown",
+                            h["penetrance"],
+                        )
+                    )
+                    for h in histories
+                    if h["condition"]
+                )
+            )
         )
-        variant_outputs["clinvar_vcv_hgvs"].append(
-            ";".join(dict.fromkeys(vcv_hgvs))
+        variant_outputs["variant_inheritance"].append(";".join(matched_inheritance))
+        variant_outputs["variant_inheritance_basis"].append(basis)
+        variant_outputs["variant_x_linked"].append(
+            "true" if matched_x_linked else "false"
+        )
+        variant_outputs["variant_penetrance"].append(
+            ";".join(
+                dict.fromkeys(
+                    h["penetrance"] for h in histories if h["penetrance"] != "unknown"
+                )
+            )
+            or "unknown"
         )
 
     out[output_col] = plausible_mechanism_values

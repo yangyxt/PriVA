@@ -18,10 +18,13 @@ def test_portable_defaults_stay_inside_priva() -> None:
 
     assert nonlof.DEFAULT_CACHE_DIR == expected_cache
     assert nonlof.DEFAULT_SHARED_RAW_DIR == expected_cache / "raw"
+    # Compressed on disk: the cache is tracked in git and gzip takes it from
+    # 96.6 MiB to 5.7 MiB. Readers open it through the shared opener, which
+    # decides by the .gz suffix, so nothing else changes.
     assert nonlof.DEFAULT_NONLOF_ASSERTIONS_JSON == (
         expected_cache
         / "prepared"
-        / "gene_nonlof_mechanism_curated_assertions.json"
+        / "gene_nonlof_mechanism_curated_assertions.json.gz"
     )
     assert nonlof.DEFAULT_GOFCARDS_EXACT_VARIANTS == (
         ROOT / "data" / "gofcards" / "gofcards_exact_gof.json.gz"
@@ -87,7 +90,7 @@ def test_hgnc_loader_accepts_priva_complete_set_columns(tmp_path: Path) -> None:
 def test_deployed_nonlof_json_validates_against_priva_schema() -> None:
     canonical_path = nonlof.DEFAULT_NONLOF_ASSERTIONS_JSON
     schema_path = nonlof.DEFAULT_OUTPUT_SCHEMA
-    canonical = json.loads(canonical_path.read_text(encoding="utf-8"))
+    canonical = nonlof.read_json(canonical_path)
 
     nonlof.validate_canonical_json(canonical, schema_path)
     assert canonical["_meta"]["version"] == "2.0"

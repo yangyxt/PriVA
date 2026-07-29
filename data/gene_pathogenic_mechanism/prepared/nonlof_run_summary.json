@@ -1,13 +1,13 @@
 {
-  "built_at_utc": "2026-07-29T02:08:12+00:00",
+  "built_at_utc": "2026-07-29T02:39:53+00:00",
   "cache_dir": "/paedyl01/disk1/yangyxt/PriVA/data/gene_pathogenic_mechanism",
   "clinvar_vcv": {
     "source": "inject_clinvar_into_gofcards.py",
     "variants_carrying_clinvar_conditions": 525
   },
-  "last_checked_at_utc": "2026-07-29T02:08:12+00:00",
+  "last_checked_at_utc": "2026-07-29T02:39:53+00:00",
   "outputs": {
-    "nonlof_assertions_json": "/paedyl01/disk1/yangyxt/PriVA/data/gene_pathogenic_mechanism/prepared/gene_nonlof_mechanism_curated_assertions.json",
+    "nonlof_assertions_json": "/paedyl01/disk1/yangyxt/PriVA/data/gene_pathogenic_mechanism/prepared/gene_nonlof_mechanism_curated_assertions.json.gz",
     "source_manifest_json": "/paedyl01/disk1/yangyxt/PriVA/data/gene_pathogenic_mechanism/metadata/nonlof_source_manifest.json",
     "source_manifest_tsv": "/paedyl01/disk1/yangyxt/PriVA/data/gene_pathogenic_mechanism/prepared/nonlof_source_manifest.tsv"
   },

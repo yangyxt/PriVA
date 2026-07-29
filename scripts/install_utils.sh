@@ -2421,7 +2421,7 @@ function gene_nonlof_mechanism_cache_install() {
     cache_dir=$(yaml_value_or_default "${config_file}" "gene_mechanism_cache_dir" "${DATA_DIR}/gene_pathogenic_mechanism")
     raw_dir=$(yaml_value_or_default "${config_file}" "gene_mechanism_raw_dir" "${cache_dir}/raw")
     builder_script=$(yaml_value_or_default "${config_file}" "gene_nonlof_mechanism_builder_script" "${SCRIPT_DIR}/build_gene_nonlof_mechanism_cache.py")
-    cache_json=$(yaml_value_or_default "${config_file}" "gene_nonlof_mechanism_json" "${cache_dir}/prepared/gene_nonlof_mechanism_curated_assertions.json")
+    cache_json=$(yaml_value_or_default "${config_file}" "gene_nonlof_mechanism_json" "${cache_dir}/prepared/gene_nonlof_mechanism_curated_assertions.json.gz")
     schema_json=$(yaml_value_or_default "${config_file}" "gene_nonlof_mechanism_schema" "${cache_dir}/schema/gene_nonlof_mechanism_curated_assertions.schema.json")
     # The one deployed GoFCards cache, which already carries its ClinVar blocks.
     gofcards_variants=$(yaml_value_or_default "${config_file}" "gofcards_exact_gof_cache" "${DATA_DIR}/gofcards/gofcards_exact_gof.json.gz")
@@ -2495,7 +2495,7 @@ function hpo_condition_mechanism_cache_install() {
     local mondo_release
 
     builder_script=$(yaml_value_or_default "${config_file}" "hpo_condition_mechanism_builder_script" "${SCRIPT_DIR}/build_hpo_condition_mechanism_cache.py")
-    cache_json=$(yaml_value_or_default "${config_file}" "hpo_condition_mechanism_json" "${DATA_DIR}/gene_pathogenic_mechanism/prepared/hpo_condition_mechanism_cache.json")
+    cache_json=$(yaml_value_or_default "${config_file}" "hpo_condition_mechanism_json" "${DATA_DIR}/gene_pathogenic_mechanism/prepared/hpo_condition_mechanism_cache.json.gz")
     hpo_assertions=$(yaml_value_or_default "${config_file}" "hpo_assertions" "${DATA_DIR}/hpo/genes_to_phenotype.assertions.tsv.gz")
     mechanism_evidence=$(yaml_value_or_default "${config_file}" "ddg2p_mechanism_evidence" "${DATA_DIR}/gene_pathogenic_mechanism/prepared/gene_pathogenic_mechanism_evidence.tsv")
     # Prefer PriVA's schema-v2 non-LOF cache. The generic key remains a

@@ -15,30 +15,91 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
 from clinvar_vcv import (  # noqa: E402
-    load_exact_gofcards_lookup,
-    partition_exact_gofcards_rows,
+    gofcards_genomic_index_key,
+    gofcards_variation_id_index_key,
+    index_gofcards_variants,
+    load_gofcards_cache,
+    partition_gofcards_variants,
     review_stars,
     stream_parse_clinvar_vcv,
+    variant_id_of,
 )
+from inject_clinvar_into_gofcards import inject as inject_clinvar_matches  # noqa: E402
 from build_gene_nonlof_mechanism_cache import (  # noqa: E402
-    GOFCARDS_EXACT_COLUMNS,
     _latest_clinvar_xsd_url,
     _parse_remote_md5,
     build_nonlof_assertions_json,
     fetch_clinvar_vcv,
-    gofcards_allele_identity,
-    inject_clinvar_matches,
     load_gofcards_exact_records,
     load_hgnc_mapping,
     make_unified_row,
+    resolved_hgnc_id,
     validate_canonical_json,
 )
 from audit_clinvar_gofcards_review_tiers import summarize_review_tiers  # noqa: E402
-from audit_clinvar_vcv_canonical import (  # noqa: E402
-    audit_compact_record_allele_identity,
-    audit_compact_record_provenance,
-    audit_coordinate_collision_record_provenance,
-)
+
+
+def _nested_variant(
+    chrom: str,
+    pos: int,
+    *,
+    eligibility: str = "eligible",
+    vep_symbol: str = "",
+    clinvar_variation_id: str = "",
+    hg38_pos: int | None = None,
+) -> dict:
+    """One variant in the shape the normalized GoFCards cache stores."""
+    hg38_pos = pos + 100 if hg38_pos is None else hg38_pos
+
+    def _assembly(position: int, transcript: str, status: str) -> dict:
+        return {
+            "genomic": {"chrom": chrom, "pos": position, "ref": "A", "alt": "G",
+                        "status": status},
+            "transcripts": {transcript: {
+                "by_hgvsc": {"c.1A>G": {"hgvsp": "p.Lys1Arg",
+                                        "consequence": "missense_variant",
+                                        "canonical": True, "mane_select": None}},
+                "by_hgvsp": {"p.Lys1Arg": ["c.1A>G"]},
+            }},
+        }
+
+    return {
+        "record": {
+            "source": {"gofcards_allele_key": f"SNV|{chrom}|{pos}|{pos}|A|G",
+                       "variant_type_label": "SNV", "assembly": "hg19",
+                       "chrom": chrom, "start": str(pos), "ref": "A", "alt": "G"},
+            "eligibility": {
+                "status": eligibility,
+                "gene_match_status": ("gene_concordant" if eligibility == "eligible"
+                                      else "gene_discordant"),
+                "vep_symbol": vep_symbol,
+                "reason": None if eligibility == "eligible" else eligibility,
+            },
+            "liftover_status": "mapped",
+            "annotations": ({"clinvar_variation_id": clinvar_variation_id}
+                            if clinvar_variation_id else {}),
+            "evidence": [{"pmid": "1", "disease": "Test disease"}],
+        },
+        "assemblies": {
+            "hg19": _assembly(pos, "ENST00000000001.1", "raw_ref_alt"),
+            "hg38": _assembly(hg38_pos, "ENST00000000001.2", "lifted_ref_match"),
+        },
+    }
+
+
+def _nested_gofcards_cache(genes: dict[str, dict[str, dict]]) -> dict:
+    """Wrap variants keyed gene -> identifier in the cache envelope."""
+    return {
+        "metadata": {"source": "GoFCards", "mechanism": "GOF",
+                     "derived_on": "2026-07-28"},
+        "genes": {symbol: {"hgnc_id": f"HGNC:{i}", "variants": variants}
+                  for i, (symbol, variants) in enumerate(genes.items(), start=1)},
+    }
+
+
+def _write_nested_gofcards_cache(path: Path, genes: dict[str, dict[str, dict]]) -> Path:
+    path.write_text(json.dumps(_nested_gofcards_cache(genes)), encoding="utf-8")
+    return path
 
 
 def _simple_allele(variation_id: int, pos: int, symbol: str = "MEFV") -> str:
@@ -162,46 +223,30 @@ def _write_fixture(path: Path) -> None:
 
 
 def _write_exact(path: Path) -> None:
-    rows = []
-    for pos in range(100, 701, 100):
-        rows.append(
-            {
-                "HGNC_Symbol": "MEFV",
-                "GoFCards_HGNC_Symbol": "MEFV",
-                "VEP_HGNC_Symbol": "MEFV",
-                "gene_match_status": "gene_concordant",
-                "match_eligibility": "eligible",
-                "gofcards_accession_id": f"GF{pos}",
-                "gofcards_variant_id": f"SNV|16|{pos}|{pos}|A|G",
-                "allele_key": f"SNV|16|{pos}|{pos}|A|G",
-                "hg19_vcf_key": f"chr16|{pos}|a|g",
-                "hg38_vcf_key": f"16|{pos + 100}|A|G",
-                "disease": "Familial Mediterranean fever",
-                "pmids": "1",
-                "pscore": "5",
-            }
-        )
-    rows.append(
-        {
-            **rows[0],
-            "HGNC_Symbol": "INPP5F",
-            "GoFCards_HGNC_Symbol": "INPP5F",
-            "VEP_HGNC_Symbol": "INPP5F",
-            "gofcards_accession_id": "coordinate-collision",
-        }
-    )
-    rows.append(
-        {
-            **rows[0],
-            "HGNC_Symbol": "FGFR2",
-            "GoFCards_HGNC_Symbol": "FGFR2",
-            "VEP_HGNC_Symbol": "INPP5F",
-            "gene_match_status": "gene_discordant",
-            "match_eligibility": "quarantined_gene_discordance",
-            "gofcards_accession_id": "quarantined-coordinate-collision",
-        }
-    )
-    pd.DataFrame(rows).to_csv(path, sep="\t", index=False)
+    """Write the nested GoFCards cache the ClinVar lookup is built from.
+
+    Six MEFV alleles, plus two other genes curated at the very first
+    coordinate: INPP5F, which is eligible, and FGFR2, which is quarantined for
+    gene discordance. That collision is what the coordinate-based tests probe.
+    """
+    _write_nested_gofcards_cache(path, {
+        "MEFV": {
+            f"loc_16:{pos}:A->G_grch37": _nested_variant(
+                "16", pos, vep_symbol="MEFV", clinvar_variation_id=f"GF{pos}")
+            for pos in range(100, 701, 100)
+        },
+        "INPP5F": {
+            "loc_16:100:A->G_grch37": _nested_variant(
+                "16", 100, vep_symbol="INPP5F",
+                clinvar_variation_id="coordinate-collision"),
+        },
+        "FGFR2": {
+            "loc_16:100:A->G_grch37": _nested_variant(
+                "16", 100, eligibility="quarantined_gene_discordance",
+                vep_symbol="INPP5F",
+                clinvar_variation_id="quarantined-coordinate-collision"),
+        },
+    })
 
 
 def test_review_star_mapping_is_conservative() -> None:
@@ -212,147 +257,46 @@ def test_review_star_mapping_is_conservative() -> None:
     assert review_stars("future unknown status") == 0
 
 
-def test_clinvar_lookup_partition_is_atomic_per_gene_and_allele() -> None:
-    direct = {
-        "HGNC_Symbol": "GENE1",
-        "GoFCards_HGNC_Symbol": "GENE1",
-        "gofcards_variant_id": "VAR1",
-        "match_eligibility": "quarantined_gene_discordance",
-    }
-    sibling = {
-        **direct,
-        "match_eligibility": "eligible",
-    }
-    other_gene = {
-        **sibling,
-        "HGNC_Symbol": "GENE2",
-        "GoFCards_HGNC_Symbol": "GENE2",
-    }
+def test_clinvar_lookup_partition_follows_the_variant_eligibility_verdict() -> None:
+    # Eligibility is decided once, upstream, and stored on the variant. The
+    # partition is therefore a straight split on that verdict -- it no longer
+    # reconciles sibling transcript rows, because a variant is one entry.
+    cache = _nested_gofcards_cache({
+        "GENE1": {
+            "loc_1:10:A->G_grch37": _nested_variant("1", 10),
+            "loc_1:11:A->G_grch37": _nested_variant(
+                "1", 11, eligibility="quarantined_gene_discordance"),
+        },
+        "GENE2": {"loc_2:10:A->G_grch37": _nested_variant("2", 10)},
+    })
 
-    eligible, quarantined = partition_exact_gofcards_rows(
-        [direct, sibling, other_gene]
-    )
+    eligible, quarantined = partition_gofcards_variants(cache)
 
-    assert eligible == [other_gene]
-    assert quarantined == [direct, sibling]
-
-
-def test_clinvar_lookup_quarantines_reviewed_non_gof_assertions_atomically() -> None:
-    reviewed_lof = {
-        "HGNC_Symbol": "CFTR",
-        "GoFCards_HGNC_Symbol": "CFTR",
-        "gofcards_variant_id": "VAR1",
-        "mechanism": "LOF",
-        # The mechanism check remains fail-closed even if eligibility is stale.
-        "match_eligibility": "eligible",
-    }
-    sibling = {**reviewed_lof, "mechanism": "GOF"}
-
-    eligible, quarantined = partition_exact_gofcards_rows(
-        [reviewed_lof, sibling]
-    )
-
-    assert eligible == []
-    assert quarantined == [reviewed_lof, sibling]
-
-
-def test_compact_record_provenance_audit_separates_runtime_and_quarantine() -> None:
-    eligible = {
-        "HGNC_Symbol": "FGFR2",
-        "GoFCards_HGNC_Symbol": "FGFR2",
-        "VEP_HGNC_Symbol": "FGFR2",
-        "gene_match_status": "gene_concordant",
-        "match_eligibility": "eligible",
-    }
-    quarantined = {
-        **eligible,
-        "VEP_HGNC_Symbol": "INPP5F",
-        "gene_match_status": "gene_discordant",
-        "match_eligibility": "quarantined_gene_discordance",
-    }
-    collateral = {
-        **eligible,
-        "match_eligibility": "quarantined_allele_gene_discordance",
-    }
-
-    assert audit_compact_record_provenance(
-        eligible,
-        parent_gene="FGFR2",
-        expected_eligibility="eligible",
-        label="eligible",
-    ) == []
-    assert audit_compact_record_provenance(
-        quarantined,
-        parent_gene="FGFR2",
-        expected_eligibility="quarantined_gene_discordance",
-        label="quarantined",
-    ) == []
-    assert audit_compact_record_provenance(
-        collateral,
-        parent_gene="FGFR2",
-        expected_eligibility="quarantined_allele_gene_discordance",
-        label="collateral",
-    ) == []
-    mechanism_quarantined = {
-        **eligible,
-        "mechanism": "LOF",
-        "mechanism_review_status": "reviewed",
-        "mechanism_match_eligibility": "quarantined_reviewed_lof",
-        "match_eligibility": "quarantined_reviewed_lof",
-    }
-    assert audit_compact_record_provenance(
-        mechanism_quarantined,
-        parent_gene="FGFR2",
-        expected_eligibility="quarantined_reviewed_lof",
-        label="mechanism-quarantined",
-    ) == []
-    assert audit_compact_record_provenance(
-        quarantined,
-        parent_gene="FGFR2",
-        expected_eligibility="eligible",
-        label="leak",
-    )
-
-
-def test_coordinate_collision_audit_preserves_other_gene_eligibility() -> None:
-    collision = {
-        "HGNC_Symbol": "WHR1",
-        "GoFCards_HGNC_Symbol": "WHR1",
-        "VEP_HGNC_Symbol": "WHR1",
-        "gene_match_status": "gene_concordant",
-        "match_eligibility": "eligible",
-        "mechanism": "GOF",
-    }
-
-    assert audit_coordinate_collision_record_provenance(
-        collision,
-        parent_gene="STK19",
-        label="historical-symbol-collision",
-    ) == []
-    assert audit_coordinate_collision_record_provenance(
-        collision,
-        parent_gene="WHR1",
-        label="false-collision",
-    ) == [
-        "false-collision: coordinate-collision record unexpectedly matches parent gene"
+    assert [(s, v) for s, v, _ in eligible] == [
+        ("GENE1", "loc_1:10:A->G_grch37"),
+        ("GENE2", "loc_2:10:A->G_grch37"),
+    ]
+    assert [(s, v) for s, v, _ in quarantined] == [
+        ("GENE1", "loc_1:11:A->G_grch37")
     ]
 
 
-def test_compact_record_allele_audit_ignores_only_variant_type_vocabulary() -> None:
-    backend_record = {
-        "allele_key": "SNV|1|100|101|AC|GT",
-    }
+def test_clinvar_lookup_quarantines_reviewed_non_gof_variants() -> None:
+    # A variant reviewed as loss of function carries a reviewed-LOF quarantine
+    # state, so it must never be offered as gain-of-function evidence.
+    cache = _nested_gofcards_cache({
+        "CFTR": {
+            "loc_7:10:A->G_grch37": _nested_variant(
+                "7", 10, eligibility="quarantined_reviewed_lof"),
+        }
+    })
 
-    assert audit_compact_record_allele_identity(
-        backend_record,
-        parent_allele_key="Indel|chr1|100.0|101.0|ac|gt",
-        label="same-allele",
-    ) == []
-    assert audit_compact_record_allele_identity(
-        backend_record,
-        parent_allele_key="Indel|1|100|102|AC|GT",
-        label="different-allele",
-    ) == ["different-allele: nested allele identity disagrees"]
+    eligible, quarantined = partition_gofcards_variants(cache)
+
+    assert eligible == []
+    assert [(s, v) for s, v, _ in quarantined] == [
+        ("CFTR", "loc_7:10:A->G_grch37")
+    ]
 
 
 def test_review_tier_summary_separates_lower_review_vcvs() -> None:
@@ -470,11 +414,11 @@ def test_vcv_fetch_uses_remote_md5_before_large_download(
 
 def test_streaming_parser_filters_and_preserves_edge_context(tmp_path: Path) -> None:
     xml_path = tmp_path / "fixture.xml"
-    exact_path = tmp_path / "exact.tsv"
+    exact_path = tmp_path / "exact.json"
     _write_fixture(xml_path)
     _write_exact(exact_path)
 
-    lookup = load_exact_gofcards_lookup(exact_path)
+    lookup = index_gofcards_variants(load_gofcards_cache(exact_path), gofcards_genomic_index_key)
     matches, stats = stream_parse_clinvar_vcv(xml_path, lookup, min_review_stars=2)
 
     assert len(matches) == 4
@@ -544,73 +488,49 @@ def test_clinvar_matches_are_injected_into_existing_canonical_json(
     tmp_path: Path,
 ) -> None:
     xml_path = tmp_path / "fixture.xml"
-    exact_path = tmp_path / "exact.tsv"
+    exact_path = tmp_path / "exact.json"
     _write_fixture(xml_path)
     _write_exact(exact_path)
     matches, _ = stream_parse_clinvar_vcv(
         xml_path,
-        load_exact_gofcards_lookup(exact_path),
+        index_gofcards_variants(load_gofcards_cache(exact_path), gofcards_genomic_index_key),
         min_review_stars=2,
     )
-    canonical = {
-        "_meta": {
-            "version": "2.0",
-            "built_at": "2026-07-23T00:00:00+00:00",
-            "total_genes": 1,
-            "sources": {},
-        },
-        "HGNC:6998": {
-            "symbol": "MEFV",
-            "mechanisms": ["GOF"],
-            "variant_level": [
-                {
-                    "GoFCards": {
-                        "mechanism": "GOF",
-                        "source_record_id": "1",
-                        "allele_key": "SNV|16|100|100|A|G",
-                        "exact_normalization_status": "unmatched_public_source_allele",
-                    }
-                }
-            ],
-        },
-    }
-    hgnc = {
-        "MEFV": {
-            "hgnc_id": "HGNC:6998",
-            "symbol": "MEFV",
-            "entrez_id": "4210",
-            "ensembl_id": "ENSG00000103313",
-        }
-    }
+    # Injection writes onto the GoFCards cache itself, nesting the ClinVar
+    # block under the variant it matched. Nothing is appended as a sibling
+    # entry, so no consumer has to re-resolve which variant a record belongs to.
+    cache = json.loads(exact_path.read_text(encoding="utf-8"))
 
-    stats = inject_clinvar_matches(canonical, matches, hgnc)
+    stats = inject_clinvar_matches(cache, matches)
 
-    assert stats["injected_gene_matches"] == 4
-    assert len(canonical["HGNC:6998"]["variant_level"]) == 5
-    assert canonical["HGNC:6998"]["variant_level"][1]["ClinVar_VCV"][
-        "allelic_requirement"
-    ]["value"] == "unresolved"
-    schema = json.loads(
-        (
-            ROOT
-            / "data/gene_pathogenic_mechanism/schema/"
-            "gene_nonlof_mechanism_curated_assertions.schema.json"
-        ).read_text(encoding="utf-8")
-    )
-    Draft202012Validator(schema).validate(canonical)
-    validate_canonical_json(
-        canonical,
-        ROOT
-        / "data/gene_pathogenic_mechanism/schema/"
-        "gene_nonlof_mechanism_curated_assertions.schema.json",
-    )
+    assert stats["variants_annotated"] == 4
+    annotated = {
+        variant_id: variant
+        for gene in cache["genes"].values()
+        for variant_id, variant in gene["variants"].items()
+        if variant.get("clinvar")
+    }
+    assert len(annotated) == 4
+    linked = annotated["loc_16:100:A->G_grch37"]["clinvar"]
+    assert linked["vcv_accession"] == "VCV000000001"
+    assert linked["condition_assertions"]
+    # Every route that confirms the link is recorded, not just the first.
+    assert "genomic_coordinates" in linked["link_routes"]
+    # A variant ClinVar never matched keeps no clinvar block at all.
+    unmatched = [
+        variant
+        for gene in cache["genes"].values()
+        for variant in gene["variants"].values()
+        if not variant.get("clinvar")
+    ]
+    assert unmatched
 
 
 def test_scv_linked_to_multiple_eligible_rcvs_is_marked_ambiguous(
     tmp_path: Path,
 ) -> None:
     xml_path = tmp_path / "ambiguous.xml"
-    exact_path = tmp_path / "exact.tsv"
+    exact_path = tmp_path / "exact.json"
     eligible_a = _rcv(
         "RCV000010",
         "C-ELIGIBLE",
@@ -636,7 +556,7 @@ def test_scv_linked_to_multiple_eligible_rcvs_is_marked_ambiguous(
 
     matches, _ = stream_parse_clinvar_vcv(
         xml_path,
-        load_exact_gofcards_lookup(exact_path),
+        index_gofcards_variants(load_gofcards_cache(exact_path), gofcards_genomic_index_key),
         min_review_stars=2,
     )
 
@@ -655,7 +575,7 @@ def test_scv_linked_to_multiple_eligible_rcvs_is_marked_ambiguous(
 
 def test_exact_coordinate_with_contradictory_gene_is_rejected(tmp_path: Path) -> None:
     xml_path = tmp_path / "gene_collision.xml"
-    exact_path = tmp_path / "exact.tsv"
+    exact_path = tmp_path / "exact.json"
     xml_path.write_text(
         "<ClinVarVariationRelease ReleaseDate='2026-07-21'>"
         + _archive(
@@ -674,7 +594,7 @@ def test_exact_coordinate_with_contradictory_gene_is_rejected(tmp_path: Path) ->
 
     matches, stats = stream_parse_clinvar_vcv(
         xml_path,
-        load_exact_gofcards_lookup(exact_path),
+        index_gofcards_variants(load_gofcards_cache(exact_path), gofcards_genomic_index_key),
         min_review_stars=2,
     )
 
@@ -763,71 +683,12 @@ def test_non_clinvar_source_assertion_schema_contracts() -> None:
 def test_gofcards_assertion_preserves_all_gene_concordant_exact_rows(
     tmp_path: Path,
 ) -> None:
-    exact_path = tmp_path / "gofcards_exact.tsv"
-    base = {column: "" for column in GOFCARDS_EXACT_COLUMNS}
-    base.update(
-        {
-            "source": "GoFCards",
-            "mechanism": "GOF",
-            "build": "hg19_and_hg38",
-            "HGNC_Symbol": "MEFV",
-            "feature_type": "Transcript",
-            "consequence": "missense_variant",
-            "match_status": "both_cdna_protein_match",
-            "raw_GoFCards_HGVS": "MEFV:NM_TEST.1:c.1A>G:p.Lys1Arg",
-            "GoFCards_transcript": "NM_TEST.1",
-            "hg19_chrom": "16",
-            "hg19_pos": "100",
-            "hg19_ref": "A",
-            "hg19_alt": "G",
-            "hg19_vcf_status": "raw_ref_alt",
-            "hg38_chrom": "16",
-            "hg38_pos": "200",
-            "hg38_ref": "A",
-            "hg38_alt": "G",
-            "hg38_refalt_status": "snv_ref_match",
-            "gofcards_variant_id": "SNV|16|100|100|A|G",
-            "disease": "test disease",
-            "pmids": "1;2",
-            "pscore": "3",
-            "derived_on": "2026-07-07",
-            "allele_key": "SNV|16|100|100|A|G",
-            "GoFCards_HGNC_Symbol": "MEFV",
-            "VEP_HGNC_Symbol": "MEFV",
-            "gene_match_status": "gene_concordant",
-            "match_eligibility": "eligible",
-            "hg19_genomic_key": "16|100|A|G",
-            "hg19_vcf_pos": "100",
-            "hg19_vcf_ref": "A",
-            "hg19_vcf_alt": "G",
-            "hg38_vcf_pos": "200",
-            "hg38_vcf_ref": "A",
-            "hg38_vcf_alt": "G",
-            "hg19_vcf_key": "16|100|A|G",
-            "hg38_genomic_key": "16|200|A|G",
-            "hg38_vcf_key": "16|200|A|G",
-            "match_key_types": "hgvsp;hg19_vcf;hg38_vcf",
+    exact_path = _write_nested_gofcards_cache(tmp_path / "gofcards_exact.json", {
+        "MEFV": {
+            "loc_16:100:A->G_grch37": _nested_variant(
+                "16", 100, vep_symbol="MEFV", hg38_pos=200),
         }
-    )
-    rows = []
-    for assembly, transcript, hgvsc, hgvsp in (
-        ("hg19", "ENST_TEST.1", "ENST_TEST.1:c.1A>G", "ENSP_TEST.1:p.Lys1Arg"),
-        ("hg38", "ENST_TEST.2", "ENST_TEST.2:c.1A>G", "ENSP_TEST.2:p.Lys1Arg"),
-    ):
-        rows.append(
-            {
-                **base,
-                "VEP_assembly": assembly,
-                "VEP_transcript": transcript,
-                "HGVSc": hgvsc,
-                "HGVSp": hgvsp,
-                "hgvsp_key": "LYS1ARG",
-            }
-        )
-    pd.DataFrame(rows, columns=GOFCARDS_EXACT_COLUMNS).to_csv(
-        exact_path, sep="\t", index=False
-    )
-    exact_by_allele, stats = load_gofcards_exact_records(exact_path)
+    })
     hgnc = {
         "MEFV": {
             "hgnc_id": "HGNC:6998",
@@ -836,6 +697,7 @@ def test_gofcards_assertion_preserves_all_gene_concordant_exact_rows(
             "ensembl_id": "ENSG00000103313",
         }
     }
+    exact_by_variant, stats = load_gofcards_exact_records(exact_path, hgnc)
     unified = pd.DataFrame(
         [
             make_unified_row(
@@ -849,18 +711,22 @@ def test_gofcards_assertion_preserves_all_gene_concordant_exact_rows(
                 position="100",
                 ref="A",
                 alt="G",
-                # Source type labels differ, while the encoded allele is the same.
+                # The source type label differs between GoFCards' two
+                # distribution formats. The join never sees it: the assertion
+                # names its variant by chromosome, start, reference and
+                # alternate, which the label plays no part in.
                 allele_key="Indel|16|100|100|A|G",
                 consequence="missense_variant",
             )
         ]
     )
 
-    canonical = build_nonlof_assertions_json(unified, hgnc, exact_by_allele)
+    canonical = build_nonlof_assertions_json(unified, hgnc, exact_by_variant)
     assertion = canonical["HGNC:6998"]["variant_level"][0]["GoFCards"]
     gofcards_meta = canonical["_meta"]["sources"]["GoFCards"]
 
-    assert stats["cache_rows"] == 2
+    assert stats["gofcards_variants"] == 1
+    assert stats["gofcards_eligible_variants"] == 1
     assert "assembly" not in gofcards_meta
     assert gofcards_meta["raw_public_allele_fields"] == {
         "assembly": "hg19",
@@ -870,17 +736,20 @@ def test_gofcards_assertion_preserves_all_gene_concordant_exact_rows(
             "exact_normalized_variants identify hg19 and hg38 fields explicitly"
         ),
     }
+    # The public assertion labels the allele "Indel" while the cache labels it
+    # "SNV". That is a source vocabulary difference, not a different allele, so
+    # the join must still succeed.
     assert assertion["exact_normalization_status"] == "matched_gene_concordant"
-    assert len(assertion["exact_normalized_variants"]) == 2
-    assert {
-        row["VEP_assembly"] for row in assertion["exact_normalized_variants"]
-    } == {"hg19", "hg38"}
-    assert assertion["exact_normalized_variants"][0]["pmids"] == ["1", "2"]
-    assert assertion["exact_normalized_variants"][0]["match_key_types"] == [
-        "hg19_vcf",
-        "hg38_vcf",
-        "hgvsp",
-    ]
+    # One variant, not one row per assembly: both builds live inside it.
+    assert len(assertion["exact_normalized_variants"]) == 1
+    embedded = assertion["exact_normalized_variants"][0]
+    assert set(embedded["assemblies"]) == {"hg19", "hg38"}
+    assert embedded["assemblies"]["hg19"]["genomic"]["pos"] == 100
+    assert embedded["assemblies"]["hg38"]["genomic"]["pos"] == 200
+    assert embedded["variant_id"] == "loc_16:100:A->G_grch37"
+    # The gene comes from the assertion this is nested under, and the
+    # eligibility verdict from the nested record, so neither is restated here.
+    assert embedded["record"]["eligibility"]["status"] == "eligible"
 
     schema = json.loads(
         (
@@ -892,77 +761,34 @@ def test_gofcards_assertion_preserves_all_gene_concordant_exact_rows(
     Draft202012Validator(schema).validate(canonical)
 
 
-def test_gofcards_upstream_gene_discordance_is_audit_only() -> None:
-    allele_key = "Indel|10|121484216|121484216||C"
-    concordant_sibling = {
-        "source": "GoFCards",
-        "mechanism": "GOF",
-        "HGNC_Symbol": "FGFR2",
-        "GoFCards_HGNC_Symbol": "FGFR2",
-        "VEP_HGNC_Symbol": "FGFR2",
-        "gene_match_status": "gene_concordant",
-        "match_eligibility": "eligible",
-        "allele_key": allele_key,
-        "gofcards_variant_id": allele_key,
-    }
-    exact_record = {
-        "source": "GoFCards",
-        "mechanism": "GOF",
-        "HGNC_Symbol": "FGFR2",
-        "GoFCards_HGNC_Symbol": "FGFR2",
-        "VEP_HGNC_Symbol": "INPP5F",
-        "gene_match_status": "gene_discordant",
-        "match_eligibility": "quarantined_gene_discordance",
-        "allele_key": allele_key,
-        "gofcards_variant_id": allele_key,
-    }
-    other_gene_claim = {
-        **concordant_sibling,
-        "HGNC_Symbol": "INPP5F",
-        "GoFCards_HGNC_Symbol": "INPP5F",
-        "VEP_HGNC_Symbol": "INPP5F",
-    }
-    hgnc = {
-        "FGFR2": {
-            "hgnc_id": "HGNC:3689",
-            "symbol": "FGFR2",
-            "entrez_id": "2263",
-            "ensembl_id": "ENSG00000066468",
-        },
-        "INPP5F": {
-            "hgnc_id": "HGNC:17054",
-            "symbol": "INPP5F",
-            "entrez_id": "22876",
-            "ensembl_id": "ENSG00000198825",
-        },
-    }
-    unified = pd.DataFrame(
-        [
-            make_unified_row(
-                gene_symbol="FGFR2",
-                mechanism=["GOF"],
-                assertion_level="variant_level",
-                source="GoFCards",
-                source_record_id="1",
-                assembly="hg19",
-                chromosome="chr10",
-                position="121484216",
-                ref="",
-                alt="C",
-                allele_key=allele_key,
-                consequence="indel",
-            )
-        ]
-    )
-    exact_by_allele = {
-        gofcards_allele_identity(allele_key): [
-            concordant_sibling,
-            exact_record,
-            other_gene_claim,
-        ]
-    }
+def _one_gofcards_assertion(symbol: str, chrom: str, pos: int) -> pd.DataFrame:
+    """One public assertion naming the allele the nested fixture describes."""
+    return pd.DataFrame([
+        make_unified_row(
+            gene_symbol=symbol, mechanism=["GOF"], assertion_level="variant_level",
+            source="GoFCards", source_record_id="1", assembly="hg19",
+            chromosome=f"chr{chrom}", position=str(pos), ref="A", alt="G",
+            allele_key=f"SNV|{chrom}|{pos}|{pos}|A|G", consequence="missense_variant",
+        )
+    ])
 
-    canonical = build_nonlof_assertions_json(unified, hgnc, exact_by_allele)
+
+def test_gofcards_upstream_gene_discordance_is_audit_only(tmp_path: Path) -> None:
+    # The normalizer decided this variant's VEP gene disagrees with the curated
+    # one and quarantined it. The assertion still finds it -- it is nested under
+    # its own curated gene -- but only as audit, never as matchable evidence.
+    hgnc = {"FGFR2": {"hgnc_id": "HGNC:3689", "symbol": "FGFR2",
+                      "entrez_id": "2263", "ensembl_id": "ENSG00000066468"}}
+    exact_path = _write_nested_gofcards_cache(tmp_path / "exact.json", {
+        "FGFR2": {"loc_10:121484216:A->G_grch37": _nested_variant(
+            "10", 121484216, eligibility="quarantined_gene_discordance",
+            vep_symbol="INPP5F")},
+    })
+    exact_by_variant, _ = load_gofcards_exact_records(exact_path, hgnc)
+
+    canonical = build_nonlof_assertions_json(
+        _one_gofcards_assertion("FGFR2", "10", 121484216), hgnc, exact_by_variant
+    )
     assertion = canonical["HGNC:3689"]["variant_level"][0]["GoFCards"]
 
     assert (
@@ -970,69 +796,74 @@ def test_gofcards_upstream_gene_discordance_is_audit_only() -> None:
         == "quarantined_upstream_gene_discordance"
     )
     assert "exact_normalized_variants" not in assertion
-    assert assertion["quarantined_exact_normalized_variants"] == [
-        concordant_sibling,
-        exact_record,
-    ]
+    quarantined = assertion["quarantined_exact_normalized_variants"]
+    assert [v["variant_id"] for v in quarantined] == ["loc_10:121484216:A->G_grch37"]
 
 
-def test_gofcards_reviewed_non_gof_is_retained_only_for_audit() -> None:
-    allele_key = "Indel|7|117199647|117199649|TTT|"
-    reviewed_lof = {
-        "source": "GoFCards",
-        "source_mechanism": "GOF",
-        "mechanism": "LOF",
-        "reviewed_mechanism": "LOF",
-        "mechanism_review_status": "reviewed",
-        "reviewed_gof_eligibility": "quarantined",
-        "mechanism_match_eligibility": "quarantined_reviewed_lof",
-        "mechanism_review_reason_code": "article_mechanism_leakage",
-        "HGNC_Symbol": "CFTR",
-        "GoFCards_HGNC_Symbol": "CFTR",
-        "VEP_HGNC_Symbol": "CFTR",
-        "gene_match_status": "gene_concordant",
-        "match_eligibility": "quarantined_reviewed_lof",
-        "allele_key": allele_key,
-        "gofcards_variant_id": allele_key,
-    }
-    hgnc = {
-        "CFTR": {
-            "hgnc_id": "HGNC:1884",
-            "symbol": "CFTR",
-            "entrez_id": "1080",
-            "ensembl_id": "ENSG00000001626",
-        }
-    }
-    unified = pd.DataFrame(
-        [
-            make_unified_row(
-                gene_symbol="CFTR",
-                mechanism=["GOF"],
-                assertion_level="variant_level",
-                source="GoFCards",
-                source_record_id="2746",
-                assembly="hg19",
-                chromosome="chr7",
-                position="117199647",
-                ref="TTT",
-                alt="",
-                allele_key=allele_key,
-                consequence="indel",
-            )
-        ]
+def test_gofcards_reviewed_non_gof_is_retained_only_for_audit(tmp_path: Path) -> None:
+    # A variant reviewed as loss of function is quarantined for a different
+    # reason than gene discordance, and the status has to say which.
+    hgnc = {"CFTR": {"hgnc_id": "HGNC:1884", "symbol": "CFTR",
+                     "entrez_id": "1080", "ensembl_id": "ENSG00000001626"}}
+    exact_path = _write_nested_gofcards_cache(tmp_path / "exact.json", {
+        "CFTR": {"loc_7:117199647:A->G_grch37": _nested_variant(
+            "7", 117199647, eligibility="quarantined_reviewed_lof",
+            vep_symbol="CFTR")},
+    })
+    exact_by_variant, _ = load_gofcards_exact_records(exact_path, hgnc)
+
+    canonical = build_nonlof_assertions_json(
+        _one_gofcards_assertion("CFTR", "7", 117199647), hgnc, exact_by_variant
     )
-    exact_by_allele = {
-        gofcards_allele_identity(allele_key): [reviewed_lof]
-    }
-
-    canonical = build_nonlof_assertions_json(unified, hgnc, exact_by_allele)
     assertion = canonical["HGNC:1884"]["variant_level"][0]["GoFCards"]
 
     assert assertion["exact_normalization_status"] == (
         "quarantined_upstream_mechanism_review"
     )
     assert "exact_normalized_variants" not in assertion
-    assert assertion["quarantined_exact_normalized_variants"] == [reviewed_lof]
+    quarantined = assertion["quarantined_exact_normalized_variants"]
+    assert [v["variant_id"] for v in quarantined] == ["loc_7:117199647:A->G_grch37"]
+
+
+def test_gofcards_assertion_reaches_its_variant_through_an_alias_symbol(
+    tmp_path: Path,
+) -> None:
+    # The curated symbol and the cache symbol are reduced by the same rule, so
+    # an assertion filed under an alias still reaches its variant. Comparing the
+    # symbols as text instead loses 27 assertions in the real catalogue.
+    hgnc = {"KMT2A": {"hgnc_id": "HGNC:7132", "symbol": "KMT2A",
+                      "entrez_id": "4297", "ensembl_id": "ENSG00000118058"},
+            "MLL": {"hgnc_id": "HGNC:7132", "symbol": "KMT2A",
+                    "entrez_id": "4297", "ensembl_id": "ENSG00000118058"}}
+    exact_path = _write_nested_gofcards_cache(tmp_path / "exact.json", {
+        "KMT2A": {"loc_11:118307205:A->G_grch37": _nested_variant(
+            "11", 118307205, vep_symbol="KMT2A")},
+    })
+    exact_by_variant, _ = load_gofcards_exact_records(exact_path, hgnc)
+
+    assert resolved_hgnc_id("MLL", hgnc) == resolved_hgnc_id("KMT2A", hgnc)
+
+    canonical = build_nonlof_assertions_json(
+        _one_gofcards_assertion("MLL", "11", 118307205), hgnc, exact_by_variant
+    )
+    assertion = canonical["HGNC:7132"]["variant_level"][0]["GoFCards"]
+
+    assert assertion["exact_normalization_status"] == "matched_gene_concordant"
+    assert [v["variant_id"] for v in assertion["exact_normalized_variants"]] == [
+        "loc_11:118307205:A->G_grch37"
+    ]
+
+
+def test_variant_identifier_is_minted_identically_on_both_sides() -> None:
+    # The join only holds because the assertion mints the identifier the cache
+    # is keyed by. One definition, in the module both sides import.
+    assert variant_id_of("chr9", "5073770", "G", "T") == "loc_9:5073770:G->T_grch37"
+    assert variant_id_of("9", 5073770.0, "g", "t") == "loc_9:5073770:G->T_grch37"
+    # An absent allele is written the way GoFCards writes it, so an insertion
+    # and a deletion remain distinguishable.
+    assert variant_id_of("6", "91261902", "-", "TACTAC") == (
+        "loc_6:91261902:-->TACTAC_grch37"
+    )
 
 
 def test_hgnc_mapping_splits_comma_delimited_aliases(tmp_path: Path) -> None:

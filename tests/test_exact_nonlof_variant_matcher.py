@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import sys
 from pathlib import Path
+from typing import Any
 
 import pandas as pd
 
@@ -18,24 +19,62 @@ def _exact_row(
     symbol: str,
     hgvsp: str,
     mechanism: str,
-    variant_id: str,
+    allele_key: str,
     *,
     eligibility: str = "eligible",
-) -> dict[str, str]:
+    chrom: str = "10",
+    hg19_pos: int = 100,
+    hg38_pos: int = 200,
+) -> dict[str, Any]:
+    """One variant in the nested shape the canonical non-LOF JSON embeds.
+
+    ``hgvsp`` arrives fully qualified (``ENSP...:p.Pro253Arg``); the cache
+    stores the bare protein change, which is what the matcher normalizes and
+    indexes on.
+    """
+    protein = hgvsp.split(":")[-1]
+    coding = "c.758C>G"
+    variant_id = (f"loc_{chrom}:{hg19_pos}:A->G_grch37"
+                  if eligibility == "eligible"
+                  else f"loc_{chrom}:{hg19_pos + 1}:A->G_grch37")
+
+    def _assembly(pos: int, transcript: str, status: str) -> dict[str, Any]:
+        return {
+            "genomic": {"chrom": chrom, "pos": pos, "ref": "A", "alt": "G",
+                        "status": status},
+            "transcripts": {transcript: {
+                "by_hgvsc": {coding: {"hgvsp": protein,
+                                      "consequence": "missense_variant",
+                                      "canonical": True, "mane_select": None}},
+                "by_hgvsp": {protein: [coding]},
+            }},
+        }
+
     return {
         "source": "GoFCards" if mechanism == "GOF" else "CuratedDN",
         "mechanism": mechanism,
         "HGNC_Symbol": symbol,
-        "GoFCards_HGNC_Symbol": symbol,
-        "HGVSp": hgvsp,
-        "hgvsp_key": hgvsp.split("p.")[-1].upper(),
+        "variant_id": variant_id,
         "match_eligibility": eligibility,
-        "gofcards_variant_id": variant_id,
-        "gofcards_accession_id": f"ID-{variant_id}",
-        "hg19_vcf_key": "10|100|A|G",
-        "hg19_genomic_key": "10|100|A|G",
-        "hg38_vcf_key": "10|200|A|G",
-        "hg38_genomic_key": "10|200|A|G",
+        "record": {
+            "source": {"gofcards_allele_key": allele_key, "variant_type_label": "SNV",
+                       "assembly": "hg19", "chrom": chrom, "start": str(hg19_pos),
+                       "ref": "A", "alt": "G"},
+            "eligibility": {
+                "status": eligibility,
+                "gene_match_status": ("gene_concordant" if eligibility == "eligible"
+                                      else "gene_discordant"),
+                "vep_symbol": symbol,
+                "reason": None if eligibility == "eligible" else "gene_discordant",
+            },
+            "liftover_status": "mapped",
+            "annotations": {"clinvar_variation_id": f"ID-{allele_key}"},
+            "evidence": [{"pmid": "1", "disease": "Test condition"}],
+        },
+        "assemblies": {
+            "hg19": _assembly(hg19_pos, "ENST00000000001.1", "raw_ref_alt"),
+            "hg38": _assembly(hg38_pos, "ENST00000000001.2", "lifted_ref_match"),
+        },
     }
 
 

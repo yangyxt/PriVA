@@ -1,6 +1,17 @@
+"""Tests for the shell-level GoFCards cache validator.
+
+The cache is keyed ``genes -> <SYMBOL> -> variants -> <loc_...._grch37> ->
+{record, assemblies -> hg19|hg38 -> {genomic, transcripts}}``. Assembly sits
+above everything build-dependent, and the build-independent verdict and
+literature live once per variant. These tests pin the guarantees the validator
+must enforce on that shape.
+"""
+
 from __future__ import annotations
 
+import copy
 import gzip
+import json
 import os
 import subprocess
 from pathlib import Path
@@ -9,205 +20,234 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 INSTALL_UTILS = ROOT / "scripts" / "install_utils.sh"
 
-PROVENANCE_COLUMNS = [
-    "source",
-    "mechanism",
-    "HGNC_Symbol",
-    "GoFCards_HGNC_Symbol",
-    "VEP_HGNC_Symbol",
-    "gene_match_status",
-    "match_eligibility",
-    "HGVSp",
-    "hgvsp_key",
-    "hg19_vcf_key",
-    "hg38_vcf_key",
-    "hg19_genomic_key",
-    "hg38_genomic_key",
-    "gofcards_accession_id",
-    "gofcards_variant_id",
-]
+VARIANT_ID = "loc_1:155874747:G->A_grch37"
 
 
-def _write_cache(
-    path: Path,
-    row: dict[str, str] | list[dict[str, str]],
-    *,
-    include_provenance: bool = True,
-) -> None:
-    columns = list(PROVENANCE_COLUMNS)
-    if not include_provenance:
-        columns = [
-            column
-            for column in columns
-            if column
-            not in {
-                "GoFCards_HGNC_Symbol",
-                "VEP_HGNC_Symbol",
-                "gene_match_status",
-                "match_eligibility",
-            }
-        ]
-    with gzip.open(path, "wt", encoding="utf-8", newline="") as handle:
-        handle.write("\t".join(columns) + "\n")
-        rows = row if isinstance(row, list) else [row]
-        for record in rows:
-            handle.write(
-                "\t".join(record.get(column, "") for column in columns) + "\n"
-            )
-
-
-def _validate_cache(path: Path) -> subprocess.CompletedProcess[str]:
-    env = os.environ.copy()
-    env.update(
-        {
-            "PRIVA_INSTALL_UTILS": str(INSTALL_UTILS),
-            "GOFCARDS_CACHE": str(path),
-        }
-    )
-    return subprocess.run(
-        [
-            "bash",
-            "-c",
-            'source "$PRIVA_INSTALL_UTILS" >/dev/null; '
-            'validate_gofcards_exact_gof_cache "$GOFCARDS_CACHE"',
-        ],
-        check=False,
-        capture_output=True,
-        text=True,
-        env=env,
-    )
-
-
-def _eligible_row() -> dict[str, str]:
+def _variant() -> dict:
+    """A well-formed, runtime-eligible variant present on both builds."""
     return {
-        "source": "GoFCards",
-        "mechanism": "GOF",
-        "HGNC_Symbol": "RIT1",
-        "GoFCards_HGNC_Symbol": "RIT1",
-        "VEP_HGNC_Symbol": "RIT1",
-        "gene_match_status": "gene_concordant",
-        "match_eligibility": "eligible",
-        "HGVSp": "ENSP00000499386.2:p.Met90Ile",
-        "hgvsp_key": "M90I",
-        "hg19_vcf_key": "1|155874747|G|A",
-        "hg38_vcf_key": "1|155904618|G|A",
-        "hg19_genomic_key": "1|155874747|G|A",
-        "hg38_genomic_key": "1|155904618|G|A",
-        "gofcards_accession_id": "rs730880487",
-        "gofcards_variant_id": "SNV|1|155874747|155874747|G|A",
+        "record": {
+            "eligibility": {
+                "status": "eligible", "gene_match_status": "gene_concordant",
+                "reason": None, "vep_symbol": "RIT1",
+            },
+            "source": {
+                "gofcards_allele_key": "SNV|1|155874747|155874747|G|A",
+                "variant_type_label": "SNV", "assembly": "hg19",
+                "chrom": "1", "start": "155874747", "ref": "G", "alt": "A",
+                "protein_change": "RIT1:NM_006912:exon5:c.G270A:p.M90I",
+            },
+            "liftover_status": "mapped",
+            "annotations": {"rsid": "rs730880487"},
+            "evidence": [{"pmid": "23791108", "pscore": "3", "disease": "Noonan syndrome"}],
+        },
+        "assemblies": {
+            "hg19": {
+                "genomic": {"chrom": "1", "pos": 155874747, "ref": "G", "alt": "A",
+                            "status": "raw_ref_alt"},
+                "transcripts": {
+                    "ENST00000368323.4": {
+                        "by_hgvsc": {"c.270G>A": {
+                            "hgvsp": "p.Met90Ile", "consequence": "missense_variant",
+                            "canonical": True, "mane_select": "NM_006912.6"}},
+                        "by_hgvsp": {"p.Met90Ile": ["c.270G>A"]},
+                    }
+                },
+            },
+            "hg38": {
+                "genomic": {"chrom": "1", "pos": 155904618, "ref": "G", "alt": "A",
+                            "status": "lifted_ref_match"},
+                "transcripts": {
+                    "ENST00000368323.5": {
+                        "by_hgvsc": {"c.270G>A": {
+                            "hgvsp": "p.Met90Ile", "consequence": "missense_variant",
+                            "canonical": True, "mane_select": "NM_006912.6"}},
+                        "by_hgvsp": {"p.Met90Ile": ["c.270G>A"]},
+                    }
+                },
+            },
+        },
     }
 
 
-def test_validator_accepts_source_preserving_compact_cache(tmp_path: Path) -> None:
-    cache = tmp_path / "gofcards.tsv.gz"
-    _write_cache(cache, _eligible_row())
+def _cache(variants: dict | None = None, *, metadata: dict | None = None,
+           gene: str = "RIT1") -> dict:
+    return {
+        "metadata": {
+            "source": "GoFCards", "mechanism": "GOF", "derived_on": "2026-07-28",
+            **(metadata or {}),
+        },
+        "genes": {
+            gene: {
+                "hgnc_id": "HGNC:10023",
+                "variants": variants if variants is not None else {VARIANT_ID: _variant()},
+            }
+        },
+    }
 
-    result = _validate_cache(cache)
+
+def _validate(path: Path) -> subprocess.CompletedProcess[str]:
+    env = os.environ.copy()
+    env.update({"PRIVA_INSTALL_UTILS": str(INSTALL_UTILS), "GOFCARDS_CACHE": str(path)})
+    return subprocess.run(
+        ["bash", "-c",
+         'source "$PRIVA_INSTALL_UTILS" >/dev/null; '
+         'validate_gofcards_exact_gof_cache "$GOFCARDS_CACHE"'],
+        check=False, capture_output=True, text=True, env=env,
+    )
+
+
+def _run(tmp_path: Path, cache: dict, name: str = "gofcards.json.gz"):
+    path = tmp_path / name
+    with gzip.open(path, "wt", encoding="utf-8") as handle:
+        json.dump(cache, handle)
+    return _validate(path)
+
+
+def test_validator_accepts_well_formed_cache(tmp_path: Path) -> None:
+    result = _run(tmp_path, _cache())
 
     assert result.returncode == 0, result.stderr
-    assert "eligible_rows=1" in result.stdout
-    assert "quarantined_rows=0" in result.stdout
+    assert "variants=1" in result.stdout
+    assert "eligible=1" in result.stdout
+    assert "with_protein_key=1" in result.stdout
+    assert "evidence_entries=1" in result.stdout
 
 
-def test_validator_rejects_legacy_cache_without_provenance(tmp_path: Path) -> None:
-    cache = tmp_path / "legacy.tsv.gz"
-    _write_cache(cache, _eligible_row(), include_provenance=False)
+def test_validator_rejects_cache_without_genes_block(tmp_path: Path) -> None:
+    cache = _cache()
+    del cache["genes"]
 
-    result = _validate_cache(cache)
-
-    assert result.returncode != 0
-    assert "missing required columns" in result.stderr
-
-
-def test_validator_rejects_gene_discordance_marked_eligible(tmp_path: Path) -> None:
-    cache = tmp_path / "unsafe.tsv.gz"
-    row = _eligible_row()
-    row.update(
-        {
-            "VEP_HGNC_Symbol": "INPP5F",
-            "gene_match_status": "gene_discordant",
-        }
-    )
-    _write_cache(cache, row)
-
-    result = _validate_cache(cache)
+    result = _run(tmp_path, cache)
 
     assert result.returncode != 0
-    assert "invalid gene provenance" in result.stderr
+    assert "no top-level 'genes' block" in result.stderr
 
 
-def test_validator_accepts_atomic_allele_quarantine(tmp_path: Path) -> None:
-    cache = tmp_path / "quarantined.tsv.gz"
-    direct = _eligible_row()
-    direct.update(
-        {
-            "VEP_HGNC_Symbol": "INPP5F",
-            "gene_match_status": "gene_discordant",
-            "match_eligibility": "quarantined_gene_discordance",
-        }
+def test_validator_rejects_cache_not_declaring_gofcards(tmp_path: Path) -> None:
+    result = _run(tmp_path, _cache(metadata={"source": "SomewhereElse"}))
+
+    assert result.returncode != 0
+    assert "does not declare GoFCards" in result.stderr
+
+
+def test_validator_rejects_non_gof_mechanism(tmp_path: Path) -> None:
+    result = _run(tmp_path, _cache(metadata={"mechanism": "LOF"}))
+
+    assert result.returncode != 0
+    assert "does not declare GOF" in result.stderr
+
+
+def test_validator_rejects_malformed_variant_identifier(tmp_path: Path) -> None:
+    # The identifier is the variant's identity, so a malformed one must never
+    # be accepted silently.
+    result = _run(tmp_path, _cache(variants={"SNV|1|155874747|G|A": _variant()}))
+
+    assert result.returncode != 0
+    assert "not a well-formed variant identifier" in result.stderr
+
+
+def test_validator_rejects_unknown_eligibility_state(tmp_path: Path) -> None:
+    variant = _variant()
+    variant["record"]["eligibility"]["status"] = "probably_fine"
+
+    result = _run(tmp_path, _cache(variants={VARIANT_ID: variant}))
+
+    assert result.returncode != 0
+    assert "unknown eligibility" in result.stderr
+
+
+def test_validator_rejects_variant_present_on_no_assembly(tmp_path: Path) -> None:
+    variant = _variant()
+    variant["assemblies"] = {}
+
+    result = _run(tmp_path, _cache(variants={VARIANT_ID: variant}))
+
+    assert result.returncode != 0
+    assert "present on no assembly" in result.stderr
+
+
+def test_validator_rejects_quarantine_without_a_reason(tmp_path: Path) -> None:
+    # A quarantined variant must say why, or the decision cannot be audited.
+    variant = _variant()
+    variant["record"]["eligibility"].update(
+        {"status": "quarantined_gene_discordance", "reason": None,
+         "gene_match_status": "gene_discordant", "vep_symbol": "INPP5F"}
     )
-    collateral = _eligible_row()
-    collateral["match_eligibility"] = "quarantined_allele_gene_discordance"
-    unrelated = _eligible_row()
-    unrelated.update(
-        {
-            "gofcards_variant_id": "SNV|1|155874748|155874748|C|T",
-            "gofcards_accession_id": "rs-unrelated",
-        }
-    )
-    _write_cache(cache, [direct, collateral, unrelated])
 
-    result = _validate_cache(cache)
+    result = _run(tmp_path, _cache(variants={VARIANT_ID: variant}))
+
+    assert result.returncode != 0
+    assert "quarantined without a reason" in result.stderr
+
+
+def test_validator_accepts_reviewed_mechanism_quarantine(tmp_path: Path) -> None:
+    # The reviewed mechanism is carried in the state itself, so a reader can
+    # tell loss of function from a mixed effect without opening the review table.
+    reviewed = copy.deepcopy(_variant())
+    reviewed["record"]["eligibility"].update(
+        {"status": "quarantined_reviewed_lof", "reason": "article_mechanism_leakage:LOF"}
+    )
+
+    result = _run(tmp_path, _cache(variants={
+        VARIANT_ID: _variant(),                       # a cache must retain eligible variants
+        "loc_1:155874999:C->T_grch37": reviewed,
+    }))
 
     assert result.returncode == 0, result.stderr
-    assert "eligible_rows=1" in result.stdout
-    assert "quarantined_rows=2" in result.stdout
+    assert "eligible=1" in result.stdout
+    assert "quarantined=1" in result.stdout
 
 
-def test_validator_rejects_eligible_sibling_of_discordant_allele(
-    tmp_path: Path,
-) -> None:
-    cache = tmp_path / "mixed.tsv.gz"
-    direct = _eligible_row()
-    direct.update(
-        {
-            "VEP_HGNC_Symbol": "INPP5F",
-            "gene_match_status": "gene_discordant",
-            "match_eligibility": "quarantined_gene_discordance",
-        }
-    )
-    _write_cache(cache, [direct, _eligible_row()])
+def test_validator_rejects_assembly_block_without_coordinates(tmp_path: Path) -> None:
+    # Absence of an assembly is how a failed liftover is recorded, so an empty
+    # assembly block would be ambiguous and must not be accepted.
+    variant = _variant()
+    variant["assemblies"]["hg38"]["genomic"] = {}
 
-    result = _validate_cache(cache)
+    result = _run(tmp_path, _cache(variants={VARIANT_ID: variant}))
 
     assert result.returncode != 0
-    assert "gene-discordant and eligible rows" in result.stderr
+    assert "has no usable coordinates" in result.stderr
 
 
-def test_validator_keeps_other_gene_claim_at_same_allele_independent(
-    tmp_path: Path,
-) -> None:
-    cache = tmp_path / "two-genes.tsv.gz"
-    direct = _eligible_row()
-    direct.update(
-        {
-            "VEP_HGNC_Symbol": "INPP5F",
-            "gene_match_status": "gene_discordant",
-            "match_eligibility": "quarantined_gene_discordance",
-        }
-    )
-    other_gene = _eligible_row()
-    other_gene.update(
-        {
-            "HGNC_Symbol": "INPP5F",
-            "GoFCards_HGNC_Symbol": "INPP5F",
-            "VEP_HGNC_Symbol": "INPP5F",
-        }
-    )
-    _write_cache(cache, [direct, other_gene])
+def test_validator_rejects_protein_key_pointing_at_unknown_coding_change(tmp_path: Path) -> None:
+    # by_hgvsp maps a protein change to the coding changes that produce it, so a
+    # dangling reference means the two views disagree.
+    variant = _variant()
+    variant["assemblies"]["hg19"]["transcripts"]["ENST00000368323.4"]["by_hgvsp"] = {
+        "p.Met90Ile": ["c.999G>A"]
+    }
 
-    result = _validate_cache(cache)
+    result = _run(tmp_path, _cache(variants={VARIANT_ID: variant}))
+
+    assert result.returncode != 0
+    assert "points at unknown" in result.stderr
+
+
+def test_validator_accepts_variant_that_failed_liftover(tmp_path: Path) -> None:
+    # CRLF2 sits in the pseudoautosomal region, whose boundaries moved between
+    # builds. It keeps its protein key and simply offers no GRCh38 coordinate.
+    variant = copy.deepcopy(_variant())
+    variant["record"]["liftover_status"] = "unmapped"
+    variant["assemblies"].pop("hg38", None)
+
+    result = _run(tmp_path, _cache(variants={VARIANT_ID: variant}))
 
     assert result.returncode == 0, result.stderr
-    assert "eligible_rows=1" in result.stdout
-    assert "quarantined_rows=1" in result.stdout
+    assert "eligible=1" in result.stdout
+    assert "on_hg38=0" in result.stdout
+
+
+def test_validator_rejects_cache_with_no_eligible_variant(tmp_path: Path) -> None:
+    variant = _variant()
+    variant["record"]["eligibility"].update(
+        {"status": "quarantined_gene_discordance",
+         "reason": "curated_gene_absent_from_locus",
+         "gene_match_status": "gene_discordant", "vep_symbol": "INPP5F"}
+    )
+
+    result = _run(tmp_path, _cache(variants={VARIANT_ID: variant}))
+
+    assert result.returncode != 0
+    assert "no runtime-eligible variants" in result.stderr

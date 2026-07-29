@@ -21,16 +21,36 @@ from audit_gofcards_source_coverage import (  # noqa: E402
 )
 
 
-def test_load_gofcards_gene_counts_normalizes_and_counts(tmp_path: Path) -> None:
-    cache = tmp_path / "gofcards.tsv"
-    cache.write_text(
-        "HGNC_Symbol\tgofcards_variant_id\n"
-        "OLD1\tv1\n"
-        "GENE1\tv2\n"
-        "GENE2\tv3\n"
-        "\tv4\n",
+def _gofcards_cache_file(path: Path, genes: dict[str, list[str]]) -> Path:
+    """Write a nested GoFCards cache holding the given variants per gene."""
+    path.write_text(
+        json.dumps({
+            "metadata": {"source": "GoFCards", "mechanism": "GOF"},
+            "genes": {
+                symbol: {
+                    "hgnc_id": f"HGNC:{i}",
+                    "variants": {
+                        vid: {"record": {"eligibility": {"status": "eligible"}},
+                              "assemblies": {}}
+                        for vid in variant_ids
+                    },
+                }
+                for i, (symbol, variant_ids) in enumerate(genes.items(), start=1)
+            },
+        }),
         encoding="utf-8",
     )
+    return path
+
+
+def test_load_gofcards_gene_counts_normalizes_and_counts(tmp_path: Path) -> None:
+    # Two genes in the cache resolve to one approved symbol, so their variants
+    # are counted together.
+    cache = _gofcards_cache_file(tmp_path / "gofcards.json", {
+        "OLD1": ["loc_1:1:A->G_grch37"],
+        "GENE1": ["loc_1:2:A->G_grch37"],
+        "GENE2": ["loc_2:1:A->G_grch37"],
+    })
     aliases = {"OLD1": "GENE1"}
 
     counts = load_gofcards_gene_counts(
@@ -165,11 +185,10 @@ def test_parse_args_has_deployed_defaults_and_allows_archives(tmp_path: Path) ->
 
 
 def test_main_writes_gene_audit_and_summary(tmp_path: Path) -> None:
-    gofcards = tmp_path / "gofcards.tsv"
-    gofcards.write_text(
-        "HGNC_Symbol\tgofcards_variant_id\nGENE1\tv1\nGENE2\tv2\n",
-        encoding="utf-8",
-    )
+    gofcards = _gofcards_cache_file(tmp_path / "gofcards.json", {
+        "GENE1": ["loc_1:1:A->G_grch37"],
+        "GENE2": ["loc_2:1:A->G_grch37"],
+    })
     evidence = tmp_path / "evidence.tsv"
     evidence.write_text(
         "gene_symbol\tsource\tnormalized_mechanisms\tpriva_scope\n"

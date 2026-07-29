@@ -10,6 +10,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
 import build_gene_nonlof_mechanism_cache as nonlof  # noqa: E402
+from clinvar_vcv import gofcards_variant_is_eligible  # noqa: E402
 
 
 def test_portable_defaults_stay_inside_priva() -> None:
@@ -23,7 +24,7 @@ def test_portable_defaults_stay_inside_priva() -> None:
         / "gene_nonlof_mechanism_curated_assertions.json"
     )
     assert nonlof.DEFAULT_GOFCARDS_EXACT_VARIANTS == (
-        ROOT / "data" / "gofcards" / "gofcards_exact_gof_hgvsp.tsv.gz"
+        ROOT / "data" / "gofcards" / "gofcards_exact_gof.json.gz"
     )
     assert nonlof.DEFAULT_HGNC_TABLE == (
         ROOT / "data" / "hgnc" / "non_alt_loci_set.tsv"
@@ -40,41 +41,29 @@ def test_nonlof_outputs_do_not_replace_broad_cache_manifests() -> None:
     assert nonlof.NONLOF_RUN_SUMMARY_FILENAME == "nonlof_run_summary.json"
 
 
-def test_reviewed_non_gof_row_is_never_runtime_eligible() -> None:
-    reviewed_lof = {
-        "mechanism": "LOF",
-        "match_eligibility": "eligible",
-    }
-    reviewed_mixed = {
-        "mechanism": "MIXED",
-        "match_eligibility": "eligible",
-    }
-    reviewed_gof = {
-        "mechanism": "GOF",
-        "match_eligibility": "eligible",
-    }
+def _variant_with_status(status: str) -> dict:
+    """The smallest variant shape the quarantine reader looks at."""
+    return {"record": {"eligibility": {"status": status}}}
 
-    assert not nonlof._gofcards_exact_row_is_runtime_eligible(reviewed_lof)
-    assert not nonlof._gofcards_exact_row_is_runtime_eligible(reviewed_mixed)
-    assert nonlof._gofcards_exact_row_is_runtime_eligible(reviewed_gof)
+
+def test_reviewed_non_gof_variant_is_never_runtime_eligible() -> None:
+    # Eligibility is decided once by the normalizer and stored on the variant.
+    # Every quarantine state, whatever its cause, fails the gate.
+    for status in (
+        "quarantined_reviewed_lof",
+        "quarantined_reviewed_mixed",
+        "quarantined_gene_discordance",
+    ):
+        assert not gofcards_variant_is_eligible(_variant_with_status(status))
+    assert gofcards_variant_is_eligible(_variant_with_status("eligible"))
 
 
 def test_upstream_quarantine_status_preserves_the_failed_gate() -> None:
     assert nonlof.gofcards_upstream_quarantine_status(
-        [
-            {
-                "mechanism": "LOF",
-                "match_eligibility": "quarantined_reviewed_lof",
-            }
-        ]
+        _variant_with_status("quarantined_reviewed_lof")
     ) == "quarantined_upstream_mechanism_review"
     assert nonlof.gofcards_upstream_quarantine_status(
-        [
-            {
-                "mechanism": "GOF",
-                "match_eligibility": "quarantined_gene_discordance",
-            }
-        ]
+        _variant_with_status("quarantined_gene_discordance")
     ) == "quarantined_upstream_gene_discordance"
 
 

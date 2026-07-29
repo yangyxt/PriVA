@@ -2276,6 +2276,7 @@ function gofcards_clinvar_injection_install() {
     local stats_json
     local audit_tsv
     local workdir
+    local lag_days
 
     injector=$(yaml_value_or_default "${config_file}" "gofcards_clinvar_injector_script" "${SCRIPT_DIR}/inject_clinvar_into_gofcards.py")
     workdir=$(yaml_value_or_default "${config_file}" "gofcards_workdir" "${DATA_DIR}/gofcards/build_work")
@@ -2286,6 +2287,7 @@ function gofcards_clinvar_injection_install() {
     target_json=$(yaml_value_or_default "${config_file}" "gofcards_exact_gof_cache" "${DATA_DIR}/gofcards/gofcards_exact_gof.json.gz")
     clinvar_xml=$(yaml_value_or_default "${config_file}" "clinvar_vcv_xml" "${DATA_DIR}/gene_pathogenic_mechanism/raw/clinvar_vcv/ClinVarVCVRelease_00-latest_weekly.xml.gz")
     min_stars=$(yaml_value_or_default "${config_file}" "clinvar_min_review_stars" "2")
+    lag_days=$(yaml_value_or_default "${config_file}" "gofcards_clinvar_reinjection_lag_days" "90")
     stats_json="${workdir}/clinvar_injection_stats.json"
     audit_tsv=$(yaml_value_or_default "${config_file}" "clinvar_vcv_match_audit" "${DATA_DIR}/gene_pathogenic_mechanism/prepared/clinvar_vcv_gofcards_matches.tsv")
 
@@ -2298,20 +2300,59 @@ function gofcards_clinvar_injection_install() {
 
     mkdir -p "$(dirname "${target_json}")" "${workdir}" || return 1
 
-    log "Injecting ClinVar VCV conditions into GoFCards variants -> ${target_json}"
-    python "${injector}" \
-        --gofcards-cache "${source_cache}" \
-        --clinvar-vcv "${clinvar_xml}" \
-        --out-json "${target_json}" \
-        --min-review-stars "${min_stars}" \
-        --audit-tsv "${audit_tsv}" \
-        --stats-json "${stats_json}" 2>&1 | tee "${workdir}/clinvar_injection.log"
+    # Reading the weekly VCV XML end to end is the most expensive step in the
+    # mechanism chain, and the installer runs this step on every pass. Redo it
+    # only when the injector or the normalized cache it reads has changed, when
+    # the deployed cache no longer validates, or when that cache has fallen too
+    # far behind the XML.
+    local reinject=0
+    if [[ "${PRIVA_FORCE_GOFCARDS_CLINVAR_INJECTION:-0}" == "1" ]] || \
+       [[ "${PRIVA_FORCE_ALL_CACHES:-0}" == "1" ]] || [[ ! -s ${target_json} ]]; then
+        reinject=1
+    else
+        local source_file
+        for source_file in "${injector}" "${source_cache}"; do
+            if [[ ${source_file} -nt ${target_json} ]]; then
+                log "GoFCards ClinVar injection input is newer than its cache: ${source_file}"
+                reinject=1
+                break
+            fi
+        done
+        # ClinVar publishes a VCV release every week. Rebuilding against each one
+        # would spend hours of reading for almost no change in the conditions
+        # attached here, so the deployed cache is allowed to trail the XML and is
+        # refreshed once the gap reaches gofcards_clinvar_reinjection_lag_days.
+        if [[ ${reinject} -eq 0 ]]; then
+            local lag_seconds=$(( $(stat -c %Y "${clinvar_xml}") - $(stat -c %Y "${target_json}") ))
+            if (( lag_seconds > lag_days * 86400 )); then
+                log "Deployed GoFCards cache trails the ClinVar VCV XML by $(( lag_seconds / 86400 )) days, past the ${lag_days}-day limit"
+                reinject=1
+            fi
+        fi
+        if [[ ${reinject} -eq 0 ]] && ! validate_gofcards_exact_gof_cache "${target_json}" >/dev/null 2>&1; then
+            log "Deployed GoFCards cache failed validation"
+            reinject=1
+        fi
+    fi
 
-    local status=${PIPESTATUS[0]}
-    [[ ${status} -eq 0 ]] || {
-        log "ERROR: ClinVar injection failed; see ${workdir}/clinvar_injection.log"
-        return 1
-    }
+    if [[ ${reinject} -eq 1 ]]; then
+        log "Injecting ClinVar VCV conditions into GoFCards variants -> ${target_json}"
+        python "${injector}" \
+            --gofcards-cache "${source_cache}" \
+            --clinvar-vcv "${clinvar_xml}" \
+            --out-json "${target_json}" \
+            --min-review-stars "${min_stars}" \
+            --audit-tsv "${audit_tsv}" \
+            --stats-json "${stats_json}" 2>&1 | tee "${workdir}/clinvar_injection.log"
+
+        local status=${PIPESTATUS[0]}
+        [[ ${status} -eq 0 ]] || {
+            log "ERROR: ClinVar injection failed; see ${workdir}/clinvar_injection.log"
+            return 1
+        }
+    else
+        log "GoFCards cache already carries current ClinVar conditions: ${target_json}"
+    fi
 
     validate_gofcards_exact_gof_cache "${target_json}" || {
         log "ERROR: GoFCards cache failed validation after ClinVar injection"

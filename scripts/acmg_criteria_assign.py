@@ -71,9 +71,6 @@ def _row_assembly_for_gof_lookup(row):
     return "hg19"
 
 
-# A loss-of-function tag, with or without an inheritance prefix.
-_LOF_TAG_PATTERN = r"(?:^|;)(?:LOF|(?:recessive|dominant)_LOF)(?:;|$)"
-
 EXACT_NONLOF_OUTPUT_COLS = (
     "variant_lof_score",
     "variant_gof_score",
@@ -306,17 +303,15 @@ def _variant_mechanism_masks(
     =================
 
     Every criterion that reasons about mechanism reads its inputs from here,
-    so this is the single place the hub's output becomes ACMG-usable. Four
-    columns come in; seventeen boolean masks go out, in three families.
+    so this is the single place the hub's output becomes ACMG-usable. Two
+    columns come in; fifteen boolean masks go out, in two families.
 
         var_plausible_patho_mechs      "dominant_GOF;recessive_LOF"
-        variant_mechanism_applicable   the subset ESTABLISHED for this variant
-        variant_mechanism_uncertain    the subset merely POSSIBLE
         variant_effect                 exact_known_* | predicted_LOF_high_
                                        confidence | uncertain
               |
-              |  (a KeyError is raised if any of the four is absent --
-              |   there is deliberately no silent default)
+              |  (a KeyError is raised if either is absent -- there is
+              |   deliberately no silent default)
               v
 
     FAMILY 1  what the GENE's condition history says, split by inheritance
@@ -346,13 +341,10 @@ def _variant_mechanism_masks(
         is_uncertain        effect == "uncertain"
         modern_profile      the row carries any history at all
 
-    FAMILY 3  the CONJUNCTION of the two, which is what PVS1 gates on
-    ----------------------------------------------------------------
-        has_applicable_lof_assertion
-            read from variant_mechanism_applicable, not from the profile.
-            True only when BOTH hold: the gene has a loss-of-function
-            condition history, AND this variant's own effect establishes
-            loss of function for it. Neither half alone sets it.
+    There is deliberately no third family conjoining the two. Whether the
+    gene's history and this variant's effect line up is each criterion's own
+    judgement, made from the two families above, and pre-computing a single
+    verdict here would decide it for all of them at once.
 
     HOW LOSS OF FUNCTION IS GRADED
     ==============================
@@ -376,9 +368,10 @@ def _variant_mechanism_masks(
 
     The grade decides applicability directly: score 2 lands in
     variant_mechanism_applicable, score 1 in variant_mechanism_uncertain.
-    Whether a criterion fires, and how strongly, is that criterion's own
-    business and is not pre-empted here -- which is why PVS1 reads
-    has_lof_mechanism_history rather than has_established_lof_mechanism.
+    Neither of those two columns is read here. PVS1 in particular reads no
+    loss-of-function score at all: it gates on whether loss of function is a
+    disease mechanism OF THE GENE, from five independent gene-level sources,
+    and grades a null variant's strength from the consequence itself.
 
     WHAT THIS TREE DOES NOT DO
     ==========================
@@ -396,8 +389,6 @@ def _variant_mechanism_masks(
     required = {
         "var_plausible_patho_mechs",
         "variant_effect",
-        "variant_mechanism_applicable",
-        "variant_mechanism_uncertain",
     }
     missing = sorted(required - set(df.columns))
     if missing:
@@ -410,8 +401,6 @@ def _variant_mechanism_masks(
         return df[column].fillna("").astype(str)
 
     profile = text_series("var_plausible_patho_mechs")
-    applicable = text_series("variant_mechanism_applicable")
-    uncertain_tags = text_series("variant_mechanism_uncertain")
     accepted = profile
     has_profile = profile.str.strip().ne("")
 
@@ -480,25 +469,6 @@ def _variant_mechanism_masks(
         "has_dom_gof_history": has_dom_gof_history.astype(bool),
         "has_dom_dn_history": has_dom_dn_history.astype(bool),
         "has_dom_unresolved_history": has_dom_unresolved_history.astype(bool),
-        # Two different questions, kept apart on purpose.
-        #
-        # has_established_lof_mechanism -- the variant's loss of function is
-        # ESTABLISHED for a condition history of this gene. Read from
-        # variant_mechanism_applicable, which the hub fills only at score 2.
-        #
-        # has_lof_mechanism_history -- this gene causes disease by loss of
-        # function and this variant could act that way, established or merely
-        # plausible. Read from applicable OR uncertain. This is the question
-        # PVS1 asks: whether loss of function is a valid mechanism to consider
-        # at all. How strong the evidence is for a particular null variant is
-        # PVS1's own determination and must not be pre-empted here.
-        "has_established_lof_mechanism": applicable.str.contains(
-            _LOF_TAG_PATTERN, regex=True
-        ).astype(bool),
-        "has_lof_mechanism_history": (
-            applicable.str.contains(_LOF_TAG_PATTERN, regex=True)
-            | uncertain_tags.str.contains(_LOF_TAG_PATTERN, regex=True)
-        ).astype(bool),
     }
 
 
@@ -1029,6 +999,8 @@ def truncate_fraction(df):
 def PVS1_criteria(df: pd.DataFrame,
                   clinvar_patho_exon_af_stat: str,
                   interpro_entry_map_pkl: str,
+                  clinvar_pathogenic_genes: set = None,
+                  gene_dosage_sensitivity: str = None,
                   intolerant_domains: set = [],
                   tranx_exon_domain_map_pkl: str = None,
                   proband_gt_col: str = None,
@@ -1049,27 +1021,31 @@ def PVS1_criteria(df: pd.DataFrame,
     # ``proband_gt_col`` is kept in the function signature for CLI/backward compatibility with
     # older PriVA calls; it is intentionally not used for PVS1 strength assignment.
 
-    # Gene-level fallback gates are deliberately disabled here. ClinVar,
-    # LOEUF, AlphaMissense, ClinGen, DDG2P, and HPO were already resolved by
-    # the upstream hub into variant-level applicability assertions.
-    # clinvar_pathogenic = ...
-    # lof_intol_metric = ...
-    # clingen_hi / clingen_ar = ...
+    # THE GATE: IS LOSS OF FUNCTION A DISEASE MECHANISM FOR THIS GENE?
+    # ================================================================
     #
-    # THE DECISION TREE
-    # =================
+    # Purely a question about the GENE. It deliberately reads none of the
+    # variant's own mechanism scores: whether THIS null variant is convincing
+    # is decided by the strength tree below, from the consequence, and mixing
+    # the two would let the mechanism layer pre-empt PVS1's own judgement.
     #
-    # PVS1 is the one criterion that already reads no gene-level array. Its
-    # single gate is has_applicable_lof_assertion, which is a CONJUNCTION and
-    # not, as its name alone might suggest, a statement about the variant
-    # only. It is true when BOTH hold:
+    # Five independent sources, and ANY ONE of them opens the gate. They are
+    # deliberately a union rather than a consensus: each is incomplete on its
+    # own, and a gene missing from one is routinely present in another.
     #
-    #     the gene has a loss-of-function condition history
-    #     AND this variant's own effect establishes loss of function for it
+    #   1. the HPO condition cache records a loss-of-function mechanism for
+    #      one of the gene's germline conditions
+    #   2. the gene carries ClinVar pathogenic variants at high review status
+    #   3. LOEUF below 0.35            -- intolerant to losing one copy
+    #   4. mean AlphaMissense above 0.7 -- intolerant to missense generally
+    #   5. ClinGen dosage curation      -- haploinsufficiency score 3, or
+    #      30 / 40, which mark a gene whose phenotype is recessive and for
+    #      which loss of function is therefore relevant when biallelic
     #
-    # A truncating variant in a gene whose only history is gain of function
-    # therefore fails the gate, and so does a missense variant in a gene whose
-    # history is loss of function.
+    #   lof_mechanism = 1 OR 2 OR 3 OR 4 OR 5
+    #
+    # THE STRENGTH TREE, entirely separate from the gate above
+    # ========================================================
     #
     #   variant passes the LoF mechanism gate
     #             |
@@ -1095,18 +1071,70 @@ def PVS1_criteria(df: pd.DataFrame,
     #             +-- start_lost (CDS alternative start codon) .. assigned
     #
     # is_exact_gof is read once more, far below, to withdraw PVS1 from a
-    # variant the upstream hub has curated as gain of function.
-    #
-    # The strength gradation above is decided by the consequence tests, not by
-    # variant_lof_score. The score grades the same question more coarsely --
-    # 2 when the transcript is destroyed by nonsense-mediated decay or LOFTEE
-    # rescues it, 1 when the transcript may survive -- and the gate below
-    # admits both, precisely so the escape branch above can still run.
+    # variant the upstream hub has curated as gain of function. That is the
+    # only mechanism score PVS1 reads, and it withdraws evidence rather than
+    # granting it.
     mechanism_masks = _variant_mechanism_masks(df)
-    lof_mechanism = mechanism_masks["has_lof_mechanism_history"]
+
+    # 1. the gene's own condition history, from the HPO condition cache
+    hpo_lof_history = (
+        df.get("gene_lof_mechanism_history", pd.Series("", index=df.index))
+        .fillna("")
+        .astype(str)
+        .str.lower()
+        .eq("true")
+    )
+
+    # 2. the gene carries ClinVar pathogenic variants at high review status
+    clinvar_pathogenic = df["Gene"].isin(set(clinvar_pathogenic_genes or set()))
+
+    # 3 and 4. constraint against losing a copy, and against missense generally
+    loeuf_intolerant = df["LOEUF"].fillna(2) < 0.35
+    am_intolerant = (
+        df.get("Gene_avg_AM_score", pd.Series(np.nan, index=df.index)).fillna(0) > 0.7
+    )
+
+    # 5. ClinGen dosage curation. Score 3 is established haploinsufficiency;
+    # 30 and 40 mark a gene whose phenotype is recessive, where loss of
+    # function is still the relevant mechanism once both copies are affected.
+    clingen_hi_score = pd.Series([np.nan] * len(df), index=df.index)
+    if gene_dosage_sensitivity and os.path.exists(gene_dosage_sensitivity):
+        try:
+            clingen_dosage_df = pd.read_table(
+                gene_dosage_sensitivity, low_memory=False
+            ).dropna(subset=["#Gene Symbol", "Haploinsufficiency Score"])
+            clingen_dosage_map = dict(
+                zip(
+                    clingen_dosage_df["#Gene Symbol"],
+                    clingen_dosage_df["Haploinsufficiency Score"].astype(int),
+                )
+            )
+            clingen_hi_score = df["SYMBOL"].map(clingen_dosage_map)
+        except Exception as exc:
+            logger.warning(
+                "Failed to load ClinGen dosage sensitivity file %s: %s",
+                gene_dosage_sensitivity,
+                exc,
+            )
+    clingen_hi = clingen_hi_score == 3
+    clingen_ar = clingen_hi_score.isin([30, 40])
+
+    lof_mechanism = (
+        hpo_lof_history
+        | clinvar_pathogenic
+        | loeuf_intolerant
+        | am_intolerant
+        | clingen_hi
+        | clingen_ar
+    )
     logger.info(
-        "PVS1 LoF mechanism gate: %s variants have an upstream applicable LOF assertion",
-        int(lof_mechanism.sum()),
+        "PVS1 LoF mechanism gate: %s of %s variants pass. "
+        "HPO condition history %s, ClinVar pathogenic gene %s, "
+        "LOEUF<0.35 %s, mean AM>0.7 %s, ClinGen HI=3 %s, ClinGen HI=30/40 %s",
+        int(lof_mechanism.sum()), len(df),
+        int(hpo_lof_history.sum()), int(clinvar_pathogenic.sum()),
+        int(loeuf_intolerant.sum()), int(am_intolerant.sum()),
+        int(clingen_hi.sum()), int(clingen_ar.sum()),
     )
 
     # Load the necessary dict file
@@ -4670,6 +4698,8 @@ def ACMG_criteria_assign(anno_table: str,
     pvs1_criteria, locate_intol_domains = PVS1_criteria(anno_df,
                                                         clinvar_patho_exon_af_stat,
                                                         interpro_entry_map_pkl,
+                                                        clinvar_pathogenic_genes=clinvar_pathogenic_genes,
+                                                        gene_dosage_sensitivity=gene_dosage_sensitivity,
                                                         intolerant_domains=intolerant_domains,
                                                         tranx_exon_domain_map_pkl=tranx_exon_domain_map_pkl,
                                                         proband_gt_col=proband,

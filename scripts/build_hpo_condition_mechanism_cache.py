@@ -1,16 +1,159 @@
 #!/usr/bin/env python3
 """Build PriVA's HPO-framed condition and pathogenic-mechanism JSON cache.
 
-The cache is intentionally organized for the production lookup performed by
-PriVA: gene -> condition -> inheritance/penetrance/mechanism. HPO establishes
-the gene-condition frame. G2P, Orphadata, ClinVar, and GoFCards may enrich a
-condition only through stable identifiers; disease-name similarity is never a
-join key.
+The cache is organized for the production lookup PriVA performs:
 
-The source HPO assertion table remains the complete phenotype resource. This
-runtime cache retains assertion-level evidence for inheritance, penetrance,
-and onset, which are the HPO axes used by ACMG logic, while recording the total
-number of HPO assertions for each condition.
+    gene -> condition -> inheritance / penetrance / mechanism
+
+HPO establishes the gene-condition frame. Every other source may enrich a
+condition only through a stable identifier; disease-name similarity is never a
+join key. The source HPO assertion table remains the complete phenotype
+resource -- this cache keeps only the three axes ACMG logic reads, plus a count
+of how many HPO assertions the full record holds.
+
+WHAT THIS FILE FEEDS
+====================
+
+It produces the condition half of the chain documented in
+``gene_mechanism_hub.py``. That chain asks, for one variant on one transcript:
+which of this gene's germline condition histories does the variant's mechanism
+reach, and what inheritance and penetrance do those conditions carry. This
+build is what makes those three facts available and complete.
+
+THE BUILD, IN ORDER
+===================
+
+Order is not incidental. A curator's assertion must never be overwritten by an
+inference, so everything sourced runs before anything deduced.
+
+    1. build_hpo_gene_condition_frame(hpo_assertions)
+       ------------------------------------------------------------------
+       One condition per (gene, disease) from HPO. The condition key is
+       HPO's native disease identifier, preferring OMIM then ORPHA.
+
+       Three HPO axes are retained, each as both a value list and the
+       assertion rows behind it:
+
+         inheritance.modes      from HPO_INHERITANCE_TERMS (13 HP: terms)
+         penetrance.statuses    from HPO_PENETRANCE_TERMS  (4 HP: terms)
+         onset.terms            from HPO_ONSET_TERMS       (13 HP: terms)
+
+    2. _merge_conditions_by_disease(...)   <- inside step 1, before return
+       ------------------------------------------------------------------
+       Reunites entries that describe ONE disease under different
+       identifiers. This is the fix for the split that otherwise hides
+       half the facts:
+
+         OMIM:219700  "cystic fibrosis"  MONDO:0009061
+                       inheritance: autosomal_recessive    mechanism: --
+         ORPHA:586    "cystic fibrosis"  MONDO:0009061
+                       inheritance: --                     mechanism: LOF
+
+       HPO annotates inheritance against OMIM; G2P and Orphadata annotate
+       mechanisms against their own identifiers. Both already state the
+       same MONDO term, so MONDO is the identity that reunites them.
+
+         group by      identifiers.MONDO[0], else the condition key
+         surviving key OMIM > ORPHA > MONDO > existing key
+         identifiers   union, per namespace
+         inheritance / penetrance / onset   union of values and assertions
+         mechanisms    union; per mechanism, union allelic_requirements,
+                       concatenate evidence, merge variants
+         priva_scope   MOST RESTRICTIVE wins, see _SCOPE_PRECEDENCE:
+                          exclude  >  review  >  include  >  ""
+
+       Measured on the current data: 12,645 entries -> 11,046 diseases,
+       and NO merged group disagrees about recessive versus dominant, so
+       the inheritance union needs no tie-break. 15 of 1,595 merging
+       groups disagree on priva_scope, which is why that one field has a
+       stated precedence rather than a union.
+
+    3. attach_condition_mechanisms(genes, mechanism_evidence)
+       ------------------------------------------------------------------
+       G2P_DDG2P and Orphadata, joined by condition identifier.
+       Writes assertion_basis="curated".
+
+    4. attach_clingen_haploinsufficiency(genes, clingen_dosage)
+       ------------------------------------------------------------------
+       ClinGen's dosage curation. Reads three columns of
+       data/clingen/gene_dosage_sensitivity.hg38.tsv:
+
+         "#Gene Symbol"
+         "Haploinsufficiency Score"
+         "Haploinsufficiency Disease ID"     <- a MONDO term, 1,255 of 1,257
+
+       Because that disease identifier is MONDO, this attaches at the
+       CONDITION, never at the gene. A haploinsufficient gene is one where
+       losing a single copy causes disease, which is a loss-of-function
+       statement about that disease.
+
+         score  admitted  ClinGen's own description
+         -----  --------  --------------------------------------------
+           3      yes     Sufficient evidence for dosage pathogenicity
+           2      yes     Some evidence for dosage pathogenicity
+           1      yes     Little evidence for dosage pathogenicity
+           0      NO      No evidence available
+          30      NO      Gene associated with autosomal recessive
+                          phenotype  -- ClinGen saying haploinsufficiency
+                          does NOT apply; it corroborates step 5, it is
+                          not itself a mechanism
+          40      NO      Dosage sensitivity unlikely
+
+       0 and 40 are excluded because they assert the ABSENCE of the
+       mechanism rather than any degree of it. Writes mechanism="LOF",
+       assertion_basis="curated", mechanism_confidence one of
+       sufficient_evidence | some_evidence | little_evidence.
+
+    5. deduce_mechanisms_from_inheritance(genes)             <- LAST
+       ------------------------------------------------------------------
+       Only for a condition with priva_scope.decision == "include" that
+       still has NO mechanism from any source above.
+
+         inheritance == "recessive"  ->  mechanism = "LOF"
+                                         assertion_basis = "deduced"
+         anything else               ->  left unresolved
+
+       A recessive disease needs both copies disabled, which is loss of
+       function. A dominant disease carries no such implication -- it can
+       be haploinsufficiency, gain of function, or a dominant-negative
+       effect -- so it is left alone rather than guessed at. Mitochondrial
+       and Y-linked are likewise left alone.
+
+    6. attach_gofcards_variants(genes, gofcards_variants)
+       ------------------------------------------------------------------
+       Exact curated gain-of-function alleles, nested under the condition
+       their ClinVar record names. Writes assertion_basis="curated".
+
+EVERY MECHANISM SAYS HOW IT WAS ESTABLISHED
+===========================================
+
+One field on every evidence entry, so a curator's assertion can never be
+mistaken for an inference:
+
+    assertion_basis   "curated" | "deduced"
+
+    source                        basis      count on current data
+    ---------------------------   --------   ---------------------
+    G2P_DDG2P                     curated    2278
+    Orphadata                     curated     933
+    ClinGen_haploinsufficiency    curated     330
+    GoFCards_exact+ClinVar_VCV    curated     248
+    deduced_from_inheritance      deduced    2342
+
+Every one of these is admitted by the runtime reader --
+CONDITION_MECHANISM_SOURCES in gene_mechanism_hub.py. Adding a source here
+without adding it there writes a mechanism the reader silently ignores, which
+is how ClinGen and the deduced entries were invisible when first added. The
+two lists must be changed together.
+
+WHAT THE BUILD PRODUCES
+=======================
+
+    conditions                            11,046
+    conditions with a mechanism            5,433
+    conditions with an inheritance          7,156
+    condition-variant links                  248
+    mechanisms                    LOF | GOF | DOMINANT_NEGATIVE
 """
 
 from __future__ import annotations
@@ -23,7 +166,7 @@ import json
 import os
 import re
 import tempfile
-from collections import defaultdict
+from collections import Counter, defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterator, TextIO
@@ -32,6 +175,14 @@ from clinvar_vcv import open_text
 
 
 SCHEMA_VERSION = "1.0"
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+# ClinGen's dosage curation. Deliberately the GRCh38 copy: the file is a
+# per-gene curation and the two assemblies differ only in the coordinate
+# column, which this build does not read.
+DEFAULT_CLINGEN_DOSAGE = (
+    PROJECT_ROOT / "data" / "clingen" / "gene_dosage_sensitivity.hg38.tsv"
+)
 
 HPO_INHERITANCE_TERMS = {
     "HP:0000006": "autosomal_dominant",
@@ -218,6 +369,95 @@ def _evidence_record(row: dict[str, str]) -> dict[str, str]:
 # ---------------------------------------------------------------------------
 
 
+# Most restrictive first. When two entries for one disease disagree, the
+# merged entry takes the most cautious decision, matching the runtime gate
+# which already treats anything but "include" as unusable.
+_SCOPE_PRECEDENCE = ("exclude", "review", "include", "")
+
+
+def _merge_conditions_by_disease(
+    conditions: dict[str, dict[str, Any]],
+) -> dict[str, dict[str, Any]]:
+    """Collapse entries that describe one disease under different identifiers.
+
+    HPO annotates inheritance against OMIM identifiers; G2P and Orphadata
+    annotate mechanisms against their own. The same disease therefore arrives
+    twice, each copy holding half the facts: cystic fibrosis appears as
+    OMIM:219700 carrying autosomal recessive inheritance and no mechanism, and
+    as ORPHA:586 carrying a loss-of-function mechanism and no inheritance. Both
+    already state MONDO:0009061, so MONDO is the identity that reunites them --
+    an exact identifier join, never a match on disease names.
+
+    The surviving key prefers OMIM, then Orphanet, then MONDO, so identifiers
+    that already match elsewhere keep matching. Everything else is a union;
+    measured across the current cache, no two merged entries disagree about
+    recessive versus dominant, so no tie-break is needed for inheritance.
+    """
+    groups: dict[str, list[tuple[str, dict[str, Any]]]] = defaultdict(list)
+    for key, condition in conditions.items():
+        mondo = (condition.get("identifiers") or {}).get("MONDO") or []
+        groups[_clean(mondo[0]) if mondo else key].append((key, condition))
+
+    merged: dict[str, dict[str, Any]] = {}
+    for members in groups.values():
+        if len(members) == 1:
+            key, condition = members[0]
+            merged[key] = condition
+            continue
+
+        def rank(item: tuple[str, dict[str, Any]]) -> tuple[int, str]:
+            prefix = item[0].split(":", 1)[0].upper()
+            return ({"OMIM": 0, "ORPHA": 1, "MONDO": 2}.get(prefix, 3), item[0])
+
+        members.sort(key=rank)
+        primary_key, primary = members[0]
+        for _key, other in members[1:]:
+            for namespace, values in (other.get("identifiers") or {}).items():
+                target = primary.setdefault("identifiers", {}).setdefault(namespace, [])
+                for value in values:
+                    if value not in target:
+                        target.append(value)
+            for axis, value_field in (
+                ("inheritance", "modes"),
+                ("penetrance", "statuses"),
+                ("onset", "terms"),
+            ):
+                source = other.get(axis) or {}
+                target = primary.setdefault(axis, {"assertions": [], value_field: []})
+                for value in source.get(value_field, []) or []:
+                    if value not in target.setdefault(value_field, []):
+                        target[value_field].append(value)
+                for assertion in source.get("assertions", []) or []:
+                    if assertion not in target.setdefault("assertions", []):
+                        target["assertions"].append(assertion)
+            for mechanism, block in (other.get("pathogenic_mechanisms") or {}).items():
+                existing = primary.setdefault("pathogenic_mechanisms", {}).get(mechanism)
+                if existing is None:
+                    primary["pathogenic_mechanisms"][mechanism] = block
+                    continue
+                for requirement in block.get("allelic_requirements", []) or []:
+                    if requirement not in existing.setdefault("allelic_requirements", []):
+                        existing["allelic_requirements"].append(requirement)
+                existing.setdefault("evidence", []).extend(block.get("evidence", []) or [])
+                existing.setdefault("variants", {}).update(block.get("variants", {}) or {})
+            primary["hpo_assertion_count"] = (
+                primary.get("hpo_assertion_count", 0)
+                + other.get("hpo_assertion_count", 0)
+            )
+            if not _clean(primary.get("label")):
+                primary["label"] = other.get("label", "")
+            primary_scope = primary.setdefault("priva_scope", {})
+            other_scope = other.get("priva_scope") or {}
+            if _SCOPE_PRECEDENCE.index(
+                _clean(other_scope.get("decision"))
+            ) < _SCOPE_PRECEDENCE.index(_clean(primary_scope.get("decision"))):
+                primary_scope["decision"] = _clean(other_scope.get("decision"))
+                primary_scope["category"] = _clean(other_scope.get("category"))
+                primary_scope["review_status"] = _clean(other_scope.get("review_status"))
+        merged[primary_key] = primary
+    return dict(sorted(merged.items()))
+
+
 def _new_condition(row: dict[str, str]) -> dict[str, Any]:
     condition = {
         "label": _clean(row.get("mondo_name")),
@@ -374,7 +614,10 @@ def build_hpo_gene_condition_frame(
     ordered_genes: dict[str, dict[str, Any]] = {}
     for symbol in sorted(genes):
         gene = genes[symbol]
-        gene["conditions"] = dict(sorted(gene["conditions"].items()))
+        # Reunite the entries that describe one disease before anything else
+        # reads them, so mechanism attachment and every later step see one
+        # condition carrying both its inheritance and its mechanism.
+        gene["conditions"] = _merge_conditions_by_disease(gene["conditions"])
         for condition in gene["conditions"].values():
             condition.pop("_assertion_keys", None)
             condition["identifiers"] = {
@@ -484,6 +727,9 @@ def _mechanism_evidence_record(
             "category": _clean(row.get("disease_scope")),
             "review_status": _clean(row.get("scope_review_status")),
         },
+        # Every mechanism records whether a curator asserted it or the build
+        # inferred it, so the two can never be mistaken for each other.
+        "assertion_basis": "curated",
         "pmids": _split_multi(row.get("pmids")),
         "evidence_url": _clean(row.get("evidence_url")),
     }
@@ -514,6 +760,143 @@ def _attach_mechanism_to_condition(
     existing = {_mechanism_evidence_key(item) for item in block["evidence"]}
     if _mechanism_evidence_key(evidence) not in existing:
         block["evidence"].append(evidence)
+
+
+# ClinGen scores that state some evidence for dosage pathogenicity, with the
+# wording ClinGen itself uses. 0 ("No evidence available") and 40 ("Dosage
+# sensitivity unlikely") are excluded because they assert the absence of the
+# mechanism rather than any degree of it, and 30 ("Gene associated with
+# autosomal recessive phenotype") is ClinGen saying haploinsufficiency does not
+# apply -- it corroborates the recessive reading below, it is not a mechanism.
+CLINGEN_HAPLOINSUFFICIENCY_SCORES = {
+    "3": "sufficient_evidence",
+    "2": "some_evidence",
+    "1": "little_evidence",
+}
+
+
+def attach_clingen_haploinsufficiency(
+    genes: dict[str, dict[str, Any]],
+    clingen_dosage: str | Path,
+) -> dict[str, int]:
+    """Add ClinGen's haploinsufficiency curation as a loss-of-function mechanism.
+
+    ClinGen states its haploinsufficiency verdict against a MONDO disease, which
+    is the same identity the conditions were merged on, so this attaches at the
+    condition and never at the gene. A haploinsufficient gene is one where losing
+    a single copy causes disease, which is a loss-of-function statement about
+    that disease specifically.
+
+    This runs before any mechanism is deduced, so a curator's assertion is never
+    overwritten by an inference.
+    """
+    stats: Counter[str] = Counter()
+    required = {
+        "#Gene Symbol",
+        "Haploinsufficiency Score",
+        "Haploinsufficiency Description",
+        "Haploinsufficiency Disease ID",
+    }
+    for row in _iter_tsv_rows(clingen_dosage, required):
+        score = _clean(row.get("Haploinsufficiency Score"))
+        strength = CLINGEN_HAPLOINSUFFICIENCY_SCORES.get(score)
+        disease = _clean(row.get("Haploinsufficiency Disease ID")).upper()
+        symbol = _clean(row.get("#Gene Symbol")).upper()
+        if not strength or not disease or not symbol:
+            stats["rows_without_a_usable_score_or_disease"] += 1
+            continue
+        gene = genes.get(symbol)
+        if gene is None:
+            stats["gene_absent_from_the_hpo_frame"] += 1
+            continue
+        matched = [
+            condition
+            for condition in (gene.get("conditions") or {}).values()
+            if disease in ((condition.get("identifiers") or {}).get("MONDO") or [])
+        ]
+        if not matched:
+            stats["disease_absent_from_the_gene"] += 1
+            continue
+        for condition in matched:
+            had_lof = "LOF" in (condition.get("pathogenic_mechanisms") or {})
+            _attach_mechanism_to_condition(
+                condition,
+                {
+                    "source": "ClinGen_haploinsufficiency",
+                    "source_record_id": disease,
+                    "condition_identifiers": [disease],
+                    "condition_label": _clean(row.get("Haploinsufficiency Description")),
+                    "mechanism": "LOF",
+                    "mechanism_raw": _clean(row.get("Haploinsufficiency Description")),
+                    "allelic_requirement": "",
+                    "mechanism_confidence": strength,
+                    "disease_confidence": "",
+                    "assertion_basis": "curated",
+                    "source_scope": {"decision": "", "category": "", "review_status": ""},
+                    "pmids": [
+                        _clean(row.get(f"Haploinsufficiency PMID{index}"))
+                        for index in range(1, 7)
+                        if _clean(row.get(f"Haploinsufficiency PMID{index}"))
+                    ],
+                    "evidence_url": "https://search.clinicalgenome.org/kb/gene-dosage",
+                },
+            )
+            stats["conditions_matched"] += 1
+            stats["conditions_that_already_had_lof" if had_lof
+                  else "conditions_that_gained_lof"] += 1
+    return dict(stats)
+
+
+def deduce_mechanisms_from_inheritance(
+    genes: dict[str, dict[str, Any]],
+) -> dict[str, int]:
+    """Give a recessive condition a loss-of-function mechanism when none is stated.
+
+    A recessive disease needs both copies of the gene disabled, so loss of
+    function is what the inheritance itself implies. A dominant disease carries
+    no such implication -- it can be haploinsufficiency, gain of function or a
+    dominant-negative effect -- so it is left unresolved rather than guessed at.
+
+    The evidence records ``assertion_basis: deduced``, so a reader can always
+    tell an inference from a curator's assertion. This runs last, and only where
+    no mechanism was stated by anyone.
+    """
+    from gene_mechanism_hub import normalize_inheritance
+
+    stats: Counter[str] = Counter()
+    for symbol, gene in genes.items():
+        for condition_key, condition in (gene.get("conditions") or {}).items():
+            if (condition.get("priva_scope") or {}).get("decision") != "include":
+                continue
+            if condition.get("pathogenic_mechanisms"):
+                stats["already_had_a_mechanism"] += 1
+                continue
+            inheritance, _x_linked = normalize_inheritance(
+                "", (condition.get("inheritance") or {}).get("modes") or []
+            )
+            if inheritance != "recessive":
+                stats[f"left_unresolved_{inheritance or 'no_inheritance'}"] += 1
+                continue
+            _attach_mechanism_to_condition(
+                condition,
+                {
+                    "source": "deduced_from_inheritance",
+                    "source_record_id": condition_key,
+                    "condition_identifiers": [condition_key],
+                    "condition_label": _clean(condition.get("label")),
+                    "mechanism": "LOF",
+                    "mechanism_raw": "recessive inheritance implies loss of function",
+                    "allelic_requirement": "",
+                    "mechanism_confidence": "",
+                    "disease_confidence": "",
+                    "assertion_basis": "deduced",
+                    "source_scope": {"decision": "", "category": "", "review_status": ""},
+                    "pmids": [],
+                    "evidence_url": "",
+                },
+            )
+            stats["recessive_conditions_given_lof"] += 1
+    return dict(stats)
 
 
 def _refresh_gene_summary(gene: dict[str, Any]) -> None:
@@ -761,6 +1144,9 @@ def _condition_link_mechanism_evidence(
         "mechanism": "GOF",
         "mechanism_raw": "gain of function",
         "allelic_requirement": "",
+        # A curator recorded this allele as gain of function in GoFCards; the
+        # ClinVar record only supplies the condition it belongs to.
+        "assertion_basis": "curated",
         "mechanism_confidence": "exact_variant",
         "disease_confidence": "ClinVar_germline_assertion",
         "source_scope": {"decision": "", "category": "", "review_status": ""},
@@ -1017,12 +1403,18 @@ def build_cache_payload(
     mechanism_evidence: str | Path,
     mechanism_json: str | Path,
     gofcards_variants: str | Path,
+    clingen_dosage: str | Path = DEFAULT_CLINGEN_DOSAGE,
     hpo_release: str = "",
     mondo_release: str = "",
 ) -> dict[str, Any]:
     """Build the complete single-file cache from prepared PriVA resources."""
     genes = build_hpo_gene_condition_frame(hpo_assertions)
     mechanism_stats = attach_condition_mechanisms(genes, mechanism_evidence)
+    # Curated first, inferred last: ClinGen states a haploinsufficiency verdict
+    # against a MONDO disease, and only where no source states any mechanism at
+    # all does the recessive inheritance imply one.
+    clingen_stats = attach_clingen_haploinsufficiency(genes, clingen_dosage)
+    deduced_stats = deduce_mechanisms_from_inheritance(genes)
     variant_stats = attach_gofcards_variants(genes, gofcards_variants)
     genes = dict(sorted(genes.items()))
     payload = {
@@ -1041,6 +1433,8 @@ def build_cache_payload(
             },
             "build_statistics": {
                 "mechanisms": mechanism_stats,
+                "clingen_haploinsufficiency": clingen_stats,
+                "deduced_mechanisms": deduced_stats,
                 "variants": variant_stats,
             },
             "counts": _cache_counts(genes),

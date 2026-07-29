@@ -501,6 +501,10 @@ VARIANT_MECHANISM_OUTPUT_COLUMNS = (
     "variant_inheritance_basis",
     "variant_x_linked",
     "variant_penetrance",
+    # A property of the GENE, not of this variant: does the condition cache
+    # record loss of function as a disease mechanism for it at all. PVS1 reads
+    # this and decides strength for the particular null variant itself.
+    "gene_lof_mechanism_history",
 )
 logger = logging.getLogger(__name__)
 
@@ -2718,6 +2722,28 @@ def normalize_inheritance(
     return "", x_linked
 
 
+def gene_has_lof_mechanism_history(gene_record: dict[str, Any]) -> bool:
+    """Does this gene cause germline disease by loss of function, per the cache?
+
+    A property of the GENE, deliberately independent of any one variant. PVS1
+    asks whether loss of function is an established disease mechanism for the
+    gene at all, and then decides on its own how strong the evidence is for the
+    particular null variant in front of it. Filtering this by what the query
+    variant does would answer a different question and pre-empt that decision.
+
+    Only germline-inherited conditions count, the same gate every other reader
+    applies. Both curated and deduced mechanisms count: the deduction is that a
+    recessive condition with no stated mechanism acts by loss of function,
+    which is exactly the claim PVS1 needs.
+    """
+    for condition in (gene_record.get("conditions") or {}).values():
+        if (condition.get("priva_scope") or {}).get("decision") != "include":
+            continue
+        if "LOF" in (condition.get("pathogenic_mechanisms") or {}):
+            return True
+    return False
+
+
 def gene_inheritance_consensus(gene_record: dict[str, Any]) -> tuple[str, bool, int]:
     """Return the one inheritance every germline condition of a gene agrees on.
 
@@ -3029,12 +3055,19 @@ def annotate_gene_mechanism_categories(
         column: [] for column in VARIANT_MECHANISM_OUTPUT_COLUMNS
     }
     assertion_cache: dict[str, list[dict[str, Any]]] = {}
+    # A gene-level answer, so it is computed once per gene rather than once per
+    # row, the same way assertion_cache already works.
+    lof_history_cache: dict[str, bool] = {}
     for _, row in out.iterrows():
         gene = row[symbol_col]
         symbol = hub.resolve_symbol(gene)
         if symbol not in assertion_cache:
             assertion_cache[symbol] = hub.condition_mechanism_assertions(gene)
         assertions = list(assertion_cache[symbol])
+        if symbol not in lof_history_cache:
+            lof_history_cache[symbol] = gene_has_lof_mechanism_history(
+                hub._load_condition_cache().get(symbol, {})
+            )
 
         # STEP 1: what mechanism does this variant plausibly act by?
         effect_call = infer_query_variant_effect(row)
@@ -3138,6 +3171,9 @@ def annotate_gene_mechanism_categories(
         variant_outputs["variant_inheritance_basis"].append(basis)
         variant_outputs["variant_x_linked"].append(
             "true" if matched_x_linked else "false"
+        )
+        variant_outputs["gene_lof_mechanism_history"].append(
+            "true" if lof_history_cache[symbol] else "false"
         )
         variant_outputs["variant_penetrance"].append(
             ";".join(

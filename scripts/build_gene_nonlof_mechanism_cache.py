@@ -31,11 +31,10 @@ from typing import Any, Callable, Iterable, Iterator
 import pandas as pd
 
 from clinvar_vcv import (
-    GOFCARDS_EXACT_REQUIRED_COLUMNS,
-    gofcards_allele_records as _gofcards_allele_records,
-    flatten_match_audit,
-    load_exact_gofcards_lookup,
-    stream_parse_clinvar_vcv,
+    gofcards_variant_is_eligible,
+    iter_gofcards_variants,
+    load_gofcards_cache,
+    variant_id_of,
 )
 
 
@@ -77,11 +76,6 @@ GOFCARDS_EXACT_REVIEW_COLUMNS = [
     "mechanism_reviewer",
     "mechanism_reviewed_at",
     "mechanism_review_version",
-]
-
-GOFCARDS_EXACT_COLUMNS = [
-    *GOFCARDS_EXACT_REQUIRED_COLUMNS,
-    *GOFCARDS_EXACT_REVIEW_COLUMNS,
 ]
 
 GOFCARDS_EXACT_MISSING_VALUES = {"", ".", "_", "-", "na", "n/a", "nan", "none"}
@@ -1503,125 +1497,86 @@ def _nonempty(d: dict) -> dict:
     return {k: v for k, v in d.items() if v is not None and v != "" and v != []}
 
 
-def gofcards_allele_identity(allele_key: Any) -> str:
-    """Return a type-independent identity for one GoFCards source allele.
+def gofcards_upstream_quarantine_status(variant: dict[str, Any]) -> str:
+    """Say which kind of upstream quarantine kept this variant out.
 
-    GoFCards' backend labels some multi-base substitutions as ``SNV`` while the
-    public workbook parser derives ``Indel`` from allele length. That source
-    vocabulary difference does not change the allele. Both formats otherwise
-    encode ``type|chrom|start|end|ref|alt``, so the stable join identity is the
-    normalized five-field suffix.
-
-    Malformed or nonstandard identifiers are returned unchanged. This preserves
-    deterministic handling without inventing an allele identity from incomplete
-    data.
+    The normalizer already decided and recorded the verdict, so this only reads
+    it back and separates a reviewed non-GOF mechanism from a gene the VEP
+    annotation disagrees with.
     """
-    text = str(allele_key or "").strip()
-    if not text:
-        return ""
-    fields = text.split("|")
-    if len(fields) != 6:
-        return text.upper()
-
-    chrom, start, end, ref, alt = fields[1:]
-    chrom = chrom.removeprefix("chr").removeprefix("CHR").upper()
-
-    def normalize_position(value: str) -> str:
-        try:
-            number = float(value)
-        except ValueError:
-            return value.strip()
-        return str(int(number)) if number.is_integer() else value.strip()
-
-    return "|".join(
-        [
-            chrom,
-            normalize_position(start),
-            normalize_position(end),
-            ref.strip().upper(),
-            alt.strip().upper(),
-        ]
-    )
-
-
-def _gofcards_exact_row_is_runtime_eligible(record: dict[str, Any]) -> bool:
-    """Return whether an upstream compact row may become exact-GOF evidence.
-
-    Eligibility is intentionally checked twice: the normalizer's explicit
-    quarantine value must pass, and the effective reviewed mechanism must
-    still be GOF.  This prevents a malformed or hand-edited compact table from
-    making a reviewed LOF/MIXED row matchable merely by restoring the generic
-    ``eligible`` string.
-    """
-    return (
-        str(record.get("match_eligibility", "")).strip().lower()
-        in GOFCARDS_RUNTIME_ELIGIBLE
-        and str(record.get("mechanism", "")).strip().upper() == "GOF"
-    )
-
-
-def gofcards_upstream_quarantine_status(
-    records: Iterable[dict[str, Any]],
-) -> str:
-    """Distinguish mechanism-review quarantine from gene discordance."""
-    records = list(records)
-    mechanism_quarantine = any(
-        str(record.get("mechanism", "")).strip().upper() != "GOF"
-        or str(record.get("mechanism_match_eligibility", "")).strip().lower()
-        not in {"", "eligible"}
-        or str(record.get("match_eligibility", "")).strip().lower().startswith(
-            ("quarantined_reviewed_", "quarantined_mechanism_")
-        )
-        for record in records
-    )
+    status = str(
+        ((variant.get("record") or {}).get("eligibility") or {}).get("status", "")
+    ).strip().lower()
     return (
         "quarantined_upstream_mechanism_review"
-        if mechanism_quarantine
+        if status.startswith(("quarantined_reviewed_", "quarantined_mechanism_"))
         else "quarantined_upstream_gene_discordance"
     )
 
 
+def resolved_hgnc_id(symbol: Any, hgnc_map: dict[str, dict[str, str]]) -> str:
+    """Reduce a gene symbol to the identifier both sides of the join agree on.
+
+    Used for the cache's gene and for the public assertion's gene alike. One
+    rule, applied twice, is what makes the two sides meet: comparing the symbols
+    as text instead loses 27 assertions whose curated symbol is an alias or a
+    previous symbol of the approved one.
+    """
+    cleaned = str(symbol or "").strip().upper()
+    if not cleaned:
+        return ""
+    entry = hgnc_map.get(cleaned)
+    return entry["hgnc_id"] if entry else f"SYMBOL:{cleaned}"
+
+
 def load_gofcards_exact_records(
     path: Path,
-) -> tuple[dict[str, list[dict[str, Any]]], dict[str, int]]:
-    """Load the nested GoFCards cache, keyed by type-independent allele identity."""
-    opener = gzip.open if str(path).endswith(".gz") else open
-    with opener(path, "rt", encoding="utf-8") as handle:
-        cache = json.load(handle)
-    if "genes" not in cache:
-        raise ValueError(f"GoFCards cache has no 'genes' block: {path}")
+    hgnc_map: dict[str, dict[str, str]],
+) -> tuple[dict[tuple[str, str], dict[str, Any]], dict[str, int]]:
+    """Index the GoFCards cache the way the cache is organized: gene, variant.
 
-    by_allele: dict[str, list[dict[str, Any]]] = defaultdict(list)
-    duplicate_rows = 0
-    quarantined_rows = 0
-    seen: set[str] = set()
-    for record in _gofcards_allele_records(cache):
-        allele_key = str(record.get("allele_key", ""))
-        symbol = str(record.get("HGNC_Symbol", ""))
-        if not allele_key or not symbol:
-            raise ValueError("Every GoFCards allele requires allele_key and HGNC_Symbol")
-        allele_identity = gofcards_allele_identity(allele_key)
-        if not allele_identity:
-            raise ValueError(f"Cannot derive identity from GoFCards allele key: {allele_key}")
-        signature = json.dumps(record, sort_keys=True, separators=(",", ":"))
-        if signature in seen:
-            duplicate_rows += 1
-            continue
-        seen.add(signature)
-        if not _gofcards_exact_row_is_runtime_eligible(record):
-            quarantined_rows += 1
-        by_allele[allele_identity].append(record)
+    The cache is nested gene -> variant identifier, and the identifier is minted
+    from the same chromosome, start, reference and alternate the public
+    assertion already carries. So an assertion reaches its variant by
+    constructing that identifier and resolving its gene -- no third key, and no
+    dependence on GoFCards' ``SNV``/``Indel`` type label, which the two
+    distribution formats disagree about.
 
-    for records in by_allele.values():
-        records.sort(key=lambda item: (str(item.get("HGNC_Symbol", "")),
-                                       str(item.get("allele_key", ""))))
+    At most one variant answers a (gene, identifier) pair, so the value is a
+    single variant rather than a list: a coordinate shared by two curated genes
+    resolves to each gene's own entry, which is what the nesting already
+    expresses.
+
+    The variant is stored nested and uncopied, with only its identifier and its
+    source label stamped alongside, because that nested shape is the contract
+    the runtime hub reads.
+    """
+    cache = load_gofcards_cache(path)
+    index: dict[tuple[str, str], dict[str, Any]] = {}
+    genes: set[str] = set()
+    eligible_count = quarantined_count = 0
+    for symbol, variant_id, variant in iter_gofcards_variants(cache):
+        if not symbol or not variant_id:
+            raise ValueError("Every GoFCards variant requires a gene symbol and an identifier")
+        if gofcards_variant_is_eligible(variant):
+            eligible_count += 1
+        else:
+            quarantined_count += 1
+        genes.add(symbol.strip().upper())
+        index[(resolved_hgnc_id(symbol, hgnc_map), variant_id)] = {
+            "source": "GoFCards",
+            "mechanism": "GOF",
+            "variant_id": variant_id,
+            **variant,
+        }
+
     stats = {
-        "gofcards_alleles": len(by_allele),
-        "gofcards_records": sum(len(v) for v in by_allele.values()),
-        "gofcards_duplicate_rows": duplicate_rows,
-        "gofcards_quarantined_rows": quarantined_rows,
+        "gofcards_genes": len(genes),
+        "gofcards_variants": eligible_count + quarantined_count,
+        "gofcards_eligible_variants": eligible_count,
+        "gofcards_quarantined_variants": quarantined_count,
     }
-    return dict(by_allele), stats
+    return index, stats
 
 
 def _g2p_assertion(row: dict) -> dict:
@@ -1697,62 +1652,6 @@ def _gofcards_assertion(row: dict) -> dict:
     })
 
 
-def partition_gofcards_exact_records(
-    exact_rows: Iterable[dict[str, Any]],
-    *,
-    source_hgnc_id: str,
-    hgnc_map: dict[str, dict[str, str]],
-) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    """Separate runtime-matchable compact rows from auditable quarantines.
-
-    Exact matching is an allele-level claim. If any transcript row for an
-    allele is upstream-quarantined, every sibling row is quarantined, including
-    rows whose own VEP gene is concordant. This prevents a concordant sibling
-    from bypassing evidence that the same source allele was assigned to another
-    gene. When no upstream quarantine exists, every row must still resolve to
-    the same HGNC gene as the public-workbook assertion.
-    """
-    exact_rows = list(exact_rows)
-
-    def resolved_gene_id(exact_row: dict[str, Any]) -> str:
-        exact_symbol = str(exact_row.get("HGNC_Symbol", ""))
-        exact_hgnc = hgnc_map.get(exact_symbol.upper())
-        return (
-            exact_hgnc["hgnc_id"]
-            if exact_hgnc
-            else f"SYMBOL:{exact_symbol.upper()}"
-        )
-
-    source_gene_rows = [
-        exact_row
-        for exact_row in exact_rows
-        if resolved_gene_id(exact_row) == source_hgnc_id
-    ]
-    if source_gene_rows and any(
-        not _gofcards_exact_row_is_runtime_eligible(exact_row)
-        for exact_row in source_gene_rows
-    ):
-        return [], source_gene_rows
-
-    # When this gene has rows, other curated gene claims at the same coordinate
-    # belong to their own assertion. If it has none, retain all rows solely to
-    # report the existing cross-gene coordinate-collision status.
-    candidate_rows = source_gene_rows or exact_rows
-
-    eligible: list[dict[str, Any]] = []
-    quarantined: list[dict[str, Any]] = []
-    for exact_row in candidate_rows:
-        exact_gene_id = resolved_gene_id(exact_row)
-        if (
-            exact_gene_id == source_hgnc_id
-            and _gofcards_exact_row_is_runtime_eligible(exact_row)
-        ):
-            eligible.append(exact_row)
-        else:
-            quarantined.append(exact_row)
-    return eligible, quarantined
-
-
 def _parse_gofcards_notes(assertion: dict, notes: str) -> None:
     for part in notes.split(";"):
         p = part.strip()
@@ -1779,9 +1678,9 @@ _SOURCE_BUILDERS = {
 def build_nonlof_assertions_json(
     nonlof_df: pd.DataFrame,
     hgnc_map: dict[str, dict[str, str]],
-    gofcards_exact_by_allele: dict[str, list[dict[str, Any]]] | None = None,
+    gofcards_exact_by_variant: dict[tuple[str, str], dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    gofcards_exact_by_allele = gofcards_exact_by_allele or {}
+    gofcards_exact_by_variant = gofcards_exact_by_variant or {}
     genes: dict[str, dict[str, Any]] = {}
     unmapped: list[str] = []
 
@@ -1814,43 +1713,27 @@ def build_nonlof_assertions_json(
         assertion = builder(row)
         if source == "GoFCards":
             _parse_gofcards_notes(assertion, row.get("notes", ""))
-            allele_key = str(assertion.get("allele_key", ""))
-            allele_identity = gofcards_allele_identity(allele_key)
-            exact_rows = gofcards_exact_by_allele.get(allele_identity, [])
-            matching_rows, quarantined_rows = partition_gofcards_exact_records(
-                exact_rows,
-                source_hgnc_id=hgnc_id,
-                hgnc_map=hgnc_map,
+            # The assertion carries the same four fields the variant identifier
+            # is minted from, so it can name its own variant directly. Its gene
+            # is already resolved above; both sides of the join use that one
+            # identifier.
+            variant_id = variant_id_of(
+                row.get("chromosome"), row.get("position"),
+                row.get("ref"), row.get("alt"),
             )
-            if matching_rows:
-                assertion["exact_normalization_status"] = "matched_gene_concordant"
-                assertion["exact_normalized_variants"] = matching_rows
-                if quarantined_rows:
-                    assertion["quarantined_exact_normalized_variants"] = (
-                        quarantined_rows
-                    )
-            elif exact_rows:
-                upstream_quarantine = bool(quarantined_rows) and any(
-                    not _gofcards_exact_row_is_runtime_eligible(exact_row)
-                    for exact_row in quarantined_rows
-                )
-                assertion["exact_normalization_status"] = (
-                    gofcards_upstream_quarantine_status(quarantined_rows)
-                    if upstream_quarantine
-                    else "gene_discordant_coordinate_collision"
-                )
-                assertion["exact_cache_gene_symbols"] = sorted(
-                    {
-                        str(exact_row.get("HGNC_Symbol", ""))
-                        for exact_row in exact_rows
-                        if exact_row.get("HGNC_Symbol")
-                    }
-                )
-                assertion["quarantined_exact_normalized_variants"] = (
-                    quarantined_rows
-                )
-            else:
+            variant = gofcards_exact_by_variant.get((hgnc_id, variant_id))
+            if variant is None:
                 assertion["exact_normalization_status"] = "unmatched_public_source_allele"
+            elif gofcards_variant_is_eligible(variant):
+                assertion["exact_normalization_status"] = "matched_gene_concordant"
+                assertion["exact_normalized_variants"] = [variant]
+            else:
+                # Kept, but only for audit: the normalizer already ruled this
+                # variant out, and the reason travels with the status.
+                assertion["exact_normalization_status"] = (
+                    gofcards_upstream_quarantine_status(variant)
+                )
+                assertion["quarantined_exact_normalized_variants"] = [variant]
             assertion = _nonempty(assertion)
 
         mech = row.get("mechanism", "")
@@ -1882,7 +1765,10 @@ def build_nonlof_assertions_json(
                     "alt", "transcript", "consequence", "pscore", "pmids",
                     "function", "pathway", "animal_model", "cell_model",
                 ],
-                "exact_normalized_variant_keys": GOFCARDS_EXACT_COLUMNS,
+                "exact_normalized_variant_shape": (
+                    "gene -> variants -> <loc_...._grch37> -> "
+                    "{record, assemblies -> hg19|hg38 -> {genomic, transcripts}}"
+                ),
                 "raw_public_allele_fields": {
                     "assembly": "hg19",
                     "keys": ["chr", "pos", "ref", "alt"],
@@ -1945,94 +1831,6 @@ def build_nonlof_assertions_json(
         result[hgnc_id] = gene
 
     return result
-
-
-def load_or_parse_clinvar_matches(
-    xml_path: Path,
-    exact_gofcards_path: Path,
-    min_review_stars: int,
-) -> tuple[list[dict[str, Any]], dict[str, int], str]:
-    """Parse ClinVar matches without creating a second JSON evidence store."""
-    if not xml_path.exists() or xml_path.stat().st_size == 0:
-        raise FileNotFoundError(
-            "ClinVar VCV is required for canonical schema 2.0; refusing to "
-            f"replace the canonical JSON without it: {xml_path}"
-        )
-    if not exact_gofcards_path.exists():
-        raise FileNotFoundError(
-            f"Exact GoFCards lookup is required for ClinVar matching: {exact_gofcards_path}"
-        )
-
-    exact_lookup = load_exact_gofcards_lookup(exact_gofcards_path)
-    matches, stats = stream_parse_clinvar_vcv(
-        xml_path,
-        exact_lookup,
-        min_review_stars=min_review_stars,
-    )
-    return matches, stats, "parsed"
-
-
-def inject_clinvar_matches(
-    result: dict[str, Any],
-    matches: list[dict[str, Any]],
-    hgnc_map: dict[str, dict[str, str]],
-) -> dict[str, int]:
-    """Append ClinVar evidence to the same canonical HGNC-keyed JSON."""
-    counts: Counter[str] = Counter()
-    seen: set[tuple[str, str, str, str]] = set()
-    for match in matches:
-        payload = match.get("ClinVar_VCV", {})
-        variation = payload.get("variation", {})
-        for symbol in match.get("gene_symbols", []):
-            hgnc = hgnc_map.get(str(symbol).upper())
-            if not hgnc:
-                counts["skipped_unmapped_gene"] += 1
-                continue
-            hgnc_id = hgnc["hgnc_id"]
-            gene = result.get(hgnc_id)
-            if gene is None:
-                gene = {
-                    **_nonempty(
-                        {
-                            "symbol": hgnc.get("symbol", symbol),
-                            "entrez_id": hgnc.get("entrez_id", ""),
-                            "ensembl_id": hgnc.get("ensembl_id", ""),
-                        }
-                    ),
-                    "mechanisms": ["GOF"],
-                    "variant_level": [],
-                }
-                result[hgnc_id] = gene
-                counts["created_gene_entries"] += 1
-            marker = (
-                hgnc_id,
-                str(variation.get("vcv_accession", "")),
-                str(variation.get("component_variation_id", "")),
-                str(variation.get("matched_component_context", "")),
-            )
-            if marker in seen:
-                counts["deduplicated_gene_matches"] += 1
-                continue
-            seen.add(marker)
-            gene.setdefault("variant_level", []).append(
-                {"ClinVar_VCV": json.loads(json.dumps(payload))}
-            )
-            if "GOF" not in gene.setdefault("mechanisms", []):
-                gene["mechanisms"].append("GOF")
-                gene["mechanisms"].sort()
-            counts["injected_gene_matches"] += 1
-            counts["injected_rcv_conditions"] += len(
-                payload.get("condition_assertions", [])
-            )
-
-    result["_meta"]["total_genes"] = len(result) - 1
-    result["_meta"]["clinvar_vcv_integration"] = {
-        "exact_match_method": "normalized GRCh37/GRCh38 VCF allele key",
-        "minimum_review_stars": 2,
-        "match_count": len(matches),
-        **dict(sorted(counts.items())),
-    }
-    return dict(sorted(counts.items()))
 
 
 def validate_canonical_json(result: dict[str, Any], schema_path: Path) -> None:
@@ -2254,6 +2052,11 @@ def main() -> int:
             "schema_sha256": sha256_file(schema_path),
             "hgnc_sha256": sha256_file(hgnc_path),
             "gofcards_exact_sha256": sha256_file(gofcards_exact_path),
+            # The path, not only the content hash. The built JSON records where
+            # its GoFCards evidence came from, so moving or renaming that file
+            # changes the output even when its bytes do not -- and a shipped
+            # cache citing a path that no longer exists is not auditable.
+            "gofcards_exact_path": str(gofcards_exact_path),
             "source_sha256": {
                 name: str(metadata.get("sha256", ""))
                 for name, metadata in sorted(source_meta.items())
@@ -2301,13 +2104,13 @@ def main() -> int:
         hgnc_map = load_hgnc_mapping(hgnc_path)
         print(f"hgnc_mapping: {len(hgnc_map)} entries", file=sys.stderr)
 
-        gofcards_exact_by_allele, gofcards_exact_stats = load_gofcards_exact_records(
-            gofcards_exact_path
+        gofcards_exact_by_variant, gofcards_exact_stats = load_gofcards_exact_records(
+            gofcards_exact_path, hgnc_map
         )
         result = build_nonlof_assertions_json(
             nonlof_df,
             hgnc_map,
-            gofcards_exact_by_allele=gofcards_exact_by_allele,
+            gofcards_exact_by_variant=gofcards_exact_by_variant,
         )
         gofcards_assertions = [
             assertion["GoFCards"]
@@ -2335,47 +2138,27 @@ def main() -> int:
             ),
             "assertion_status_counts": dict(sorted(gofcards_status_counts.items())),
         }
-        clinvar_xml_path = raw_dir / CLINVAR_VCV_SPEC.raw_filename
-        clinvar_matches, clinvar_stats, clinvar_parse_status = (
-            load_or_parse_clinvar_matches(
-                xml_path=clinvar_xml_path,
-                exact_gofcards_path=args.gofcards_exact_variants.resolve(),
-                min_review_stars=args.clinvar_min_review_stars,
-            )
+        # ClinVar is no longer scanned here. It is attached to each GoFCards
+        # variant by inject_clinvar_into_gofcards.py, which runs directly after
+        # normalization, so the annotation arrives already nested inside the
+        # variant blocks embedded above. Re-scanning would produce a second copy
+        # of the same links that could drift from the first.
+        clinvar_annotated = sum(
+            1
+            for variant in gofcards_exact_by_variant.values()
+            if variant.get("clinvar")
         )
-        clinvar_injection = inject_clinvar_matches(result, clinvar_matches, hgnc_map)
-        result["_meta"]["clinvar_vcv_integration"].update(
+        result["_meta"].setdefault("clinvar_vcv_integration", {}).update(
             {
-                "source_vcv_md5": source_meta[CLINVAR_VCV_SPEC.name].get(
-                    "md5", ""
-                ),
+                "source": "inject_clinvar_into_gofcards.py",
                 "gofcards_exact_sha256": sha256_file(
                     args.gofcards_exact_variants.resolve()
                 ),
+                "variants_carrying_clinvar_conditions": clinvar_annotated,
             }
         )
-        clinvar_audit_count = write_tsv(
-            prepared_dir / "clinvar_vcv_gofcards_matches.tsv",
-            [
-                "gene_symbol",
-                "vcv_accession",
-                "variation_id",
-                "variation_name",
-                "classification_scope",
-                "matched_component_context",
-                "rcv_accession",
-                "condition",
-                "clinical_significance",
-                "review_status",
-                "review_stars",
-                "matched_scv_count",
-            ],
-            flatten_match_audit(clinvar_matches),
-        )
         print(
-            "clinvar_vcv: "
-            f"parse_status={clinvar_parse_status}, matches={len(clinvar_matches)}, "
-            f"audit_rows={clinvar_audit_count}, stats={json.dumps(clinvar_stats, sort_keys=True)}",
+            f"clinvar_vcv: attached upstream; variants_with_conditions={clinvar_annotated}",
             file=sys.stderr,
         )
         validate_canonical_json(result, schema_path)
@@ -2405,12 +2188,10 @@ def main() -> int:
             "unmapped_symbols": n_unmapped,
             "source_manifest_rows": manifest_tsv_count,
             "clinvar_vcv": {
-                "parse_status": clinvar_parse_status,
-                "minimum_review_stars": args.clinvar_min_review_stars,
-                "match_count": len(clinvar_matches),
-                "audit_rows": clinvar_audit_count,
-                "parser_stats": clinvar_stats,
-                "injection_stats": clinvar_injection,
+                # Attached upstream by inject_clinvar_into_gofcards.py; this
+                # builder consumes the result and does not rescan ClinVar.
+                "source": "inject_clinvar_into_gofcards.py",
+                "variants_carrying_clinvar_conditions": clinvar_annotated,
             },
             "outputs": {
                 "source_manifest_json": str(manifest_path),
@@ -2418,9 +2199,6 @@ def main() -> int:
                     prepared_dir / NONLOF_SOURCE_MANIFEST_TSV_FILENAME
                 ),
                 "nonlof_assertions_json": str(json_path),
-                "clinvar_vcv_match_audit": str(
-                    prepared_dir / "clinvar_vcv_gofcards_matches.tsv"
-                ),
             },
         }
         write_json(prepared_dir / NONLOF_RUN_SUMMARY_FILENAME, run_summary)

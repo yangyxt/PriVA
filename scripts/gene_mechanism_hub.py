@@ -84,10 +84,19 @@ the cache as assertion_basis.
 
         score 0 is reserved for no loss-of-function evidence at all.
 
-    A loss-of-function score of 2 does NOT make the mechanism exclusive:
-    EXACT_SEQUENCE_MECHANISMS is {GOF, DOMINANT_NEGATIVE}, so a curated
-    gain-of-function or dominant-negative allele still overrides a predicted
-    loss of function. Curation beats prediction.
+    THE PRECEDENCE, HIGHEST FIRST
+        1. nonsense-mediated decay        effect = "exact_known_LOF"
+           The transcript is destroyed, so there is no protein left to gain a
+           function or to poison a complex. This is the one place a prediction
+           outranks curation: a curated gain-of-function call for the same
+           allele is moved into variant_effect_suppressed_evidence, not kept.
+        2. a curated allele              effect = "exact_known_GOF" | "..._DN"
+           Outranks every remaining loss-of-function signal, including a
+           LOFTEE high-confidence rescue: those are predictions, this is a
+           curator's verdict on this exact allele.
+        3. other predicted loss           effect = "predicted_LOF_high_confidence"
+           2 if LOFTEE rescues it, otherwise 1.
+        4. nothing                        effect = "uncertain"
 
     After an exact match these are kept in
     variant_effect_suppressed_evidence but cannot create a competing LOF
@@ -354,7 +363,15 @@ LOOKUP_FIELD_PRIORITY = (
 )
 
 CANONICAL_MECHANISMS = {"LOF", "GOF", "DOMINANT_NEGATIVE", "TRIPLOSENSITIVITY"}
-EXACT_SEQUENCE_MECHANISMS = {"GOF", "DOMINANT_NEGATIVE"}
+# Mechanisms that can be established exclusively for one allele, meaning the
+# other two are then held to be absent. Loss of function belongs here only by
+# the decay route: if nonsense-mediated decay destroys the transcript there is
+# no protein left to gain a function or to poison a complex.
+EXACT_SEQUENCE_MECHANISMS = {"GOF", "DOMINANT_NEGATIVE", "LOF"}
+# The subset a curated allele match can establish. Loss of function is absent
+# because PriVA has no curated loss-of-function allele database; its exclusive
+# claim comes from the decay prediction, not from curation.
+CURATED_EXACT_MECHANISMS = {"GOF", "DOMINANT_NEGATIVE"}
 VARIANT_MECHANISM_SCORE_KEYS = ("LOF", "GOF", "DOMINANT_NEGATIVE")
 # Every source that may state a condition's mechanism. GoFCards is included:
 # a curated gain-of-function allele in a gene IS that gene's curated history
@@ -588,36 +605,50 @@ def infer_query_variant_effect(row: dict[str, Any] | pd.Series) -> dict[str, Any
     if "GOF" in gof_tokens:
         scores["GOF"] = 2
 
-    exact_mechanisms = {
+    curated_mechanisms = {
         mechanism for mechanism, score in scores.items() if score == 2
-    } & EXACT_SEQUENCE_MECHANISMS
+    } & CURATED_EXACT_MECHANISMS
     predicted_lof_evidence = list(dict.fromkeys(predicted_lof_evidence))
     suppressed_evidence: list[str] = []
     evidence: list[str] = []
-    if exact_mechanisms:
+    decay_lof = "NMD_PREDICTED_LOF" in predicted_lof_evidence
+
+    if decay_lof:
+        # Highest precedence, above even a curated allele. Nonsense-mediated
+        # decay destroys the transcript, so there is no protein left to gain a
+        # function or to poison a complex. A curated gain-of-function claim for
+        # this position cannot survive the message being degraded, so it is
+        # recorded as suppressed rather than allowed to stand.
+        suppressed_evidence = [
+            f"CANONICAL_EXACT_{mechanism}" for mechanism in sorted(curated_mechanisms)
+        ]
+        scores = {mechanism: 0 for mechanism in scores}
+        scores["LOF"] = 2
+        evidence.extend(predicted_lof_evidence)
+        effect = "exact_known_LOF"
+    elif curated_mechanisms:
+        # A curated gain-of-function or dominant-negative allele outranks every
+        # remaining loss-of-function signal, including a LOFTEE rescue: those
+        # are predictions, this is a curator's call on this exact allele.
         for mechanism in scores:
-            scores[mechanism] = 2 if mechanism in exact_mechanisms else 0
+            scores[mechanism] = 2 if mechanism in curated_mechanisms else 0
         evidence.extend(
-            f"CANONICAL_EXACT_{mechanism}" for mechanism in sorted(exact_mechanisms)
+            f"CANONICAL_EXACT_{mechanism}" for mechanism in sorted(curated_mechanisms)
         )
         suppressed_evidence = predicted_lof_evidence
-        effect = "exact_known_" + "+".join(sorted(exact_mechanisms))
+        effect = "exact_known_" + "+".join(sorted(curated_mechanisms))
     elif predicted_lof_evidence:
-        # Predicted loss of function is graded, not flat. A transcript that is
-        # destroyed by nonsense-mediated decay is established loss of function,
-        # not merely a plausible one, so it scores 2. A transcript that escapes
-        # decay may still make a partly functional protein, so it scores 1 --
-        # unless LOFTEE's high-confidence call rescues it, which is a direct
-        # statement that the loss holds despite the escape.
-        established_lof = (
-            "NMD_PREDICTED_LOF" in predicted_lof_evidence
-            or "LOFTEE_HC" in predicted_lof_evidence
+        # No decay and no curated allele. LOFTEE's high-confidence call still
+        # establishes the loss; anything weaker leaves the transcript possibly
+        # intact, so the loss is plausible rather than established.
+        scores["LOF"] = max(
+            scores["LOF"], 2 if "LOFTEE_HC" in predicted_lof_evidence else 1
         )
-        scores["LOF"] = max(scores["LOF"], 2 if established_lof else 1)
         evidence.extend(predicted_lof_evidence)
         effect = "predicted_LOF_high_confidence"
     else:
         effect = "uncertain"
+    exact_mechanisms = _exact_mechanisms_from_effect(effect)
     return {
         "variant_effect": effect,
         "variant_effect_evidence": ";".join(evidence),
@@ -2923,25 +2954,28 @@ def _deduplicate_by(
 
 def _classify_variant_applicability(
     histories: list[dict[str, Any]],
-    effect: str,
+    scores: dict[str, int],
 ) -> dict[str, Any]:
     """Split the selected histories into established and merely possible.
 
     Step 3 has already removed the histories this variant's mechanism cannot
-    reach, so nothing here is incompatible. What remains is one distinction the
-    criteria act on: whether the variant's mechanism is *established* for that
-    history (an exact curated allele, or a high-confidence predicted loss of
-    function) or only *possible* because the variant's own effect is unresolved.
+    reach, so nothing here is incompatible. What remains is the one distinction
+    the scores already draw, read straight off them rather than re-derived:
+
+        score 2  established   -> applicable
+        score 1  plausible     -> uncertain
+        score 0  not this one  -> uncertain
+
+    This deliberately does not consider what any downstream criterion will do
+    with the answer. Whether a particular criterion fires, and how strongly, is
+    that criterion's own business; this function only reports how well the
+    variant's mechanism is established for each history.
     """
-    exact_mechanisms = _exact_mechanisms_from_effect(effect)
     applicable: list[str] = []
     uncertain: list[str] = []
     for history in histories:
         mechanism = _clean(history.get("mechanism")).upper()
-        established = (
-            mechanism in exact_mechanisms
-            or (mechanism == "LOF" and effect == "predicted_LOF_high_confidence")
-        )
+        established = int(scores.get(mechanism, 0) or 0) == 2
         tag = _mechanism_profile_tag(history)
         target = applicable if established else uncertain
         if tag not in target:
@@ -3010,7 +3044,11 @@ def annotate_gene_mechanism_categories(
         )
         applicability = _classify_variant_applicability(
             histories,
-            effect_call["variant_effect"],
+            {
+                "LOF": effect_call["variant_lof_score"],
+                "GOF": effect_call["variant_gof_score"],
+                "DOMINANT_NEGATIVE": effect_call["variant_dn_score"],
+            },
         )
 
         # STEP 4: attach at variant-transcript resolution.

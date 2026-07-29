@@ -410,10 +410,15 @@ def test_variant_level_mechanism_contract(tmp_path: Path) -> None:
     assert hpo_only["var_plausible_patho_mechs"] == ""
     assert hpo_only["variant_mechanism_applicable"] == ""
 
+    # A fifth-base splice-donor variant with LOFTEE "OS" is plausible loss of
+    # function, not established: nothing says the transcript is destroyed, so
+    # it scores 1 and its history is POSSIBLE rather than applicable.
     biallelic_lof = annotated.loc["TESTLOF"]
     assert biallelic_lof["var_plausible_patho_mechs"] == "recessive_LOF"
     assert biallelic_lof["variant_effect"] == "predicted_LOF_high_confidence"
-    assert "recessive_LOF" in biallelic_lof["variant_mechanism_applicable"]
+    assert biallelic_lof["variant_lof_score"] == 1
+    assert biallelic_lof["variant_mechanism_applicable"] == ""
+    assert "recessive_LOF" in biallelic_lof["variant_mechanism_uncertain"]
     # The three facts the chain delivers, at this variant's own resolution.
     assert biallelic_lof["variant_condition_ids"] == "OMIM:1"
     assert biallelic_lof["variant_inheritance"] == "recessive"
@@ -434,7 +439,17 @@ def test_variant_level_mechanism_contract(tmp_path: Path) -> None:
     masks = _variant_mechanism_masks(annotated.reset_index())
     assert masks["has_recessive_compatible"].tolist() == [False, True, True, False]
     assert masks["has_dominant_compatible"].tolist() == [False, False, False, True]
-    assert masks["has_applicable_lof_assertion"].tolist() == [False, True, False, True]
+    # Two different questions, and they answer differently for TESTLOF.
+    #
+    # has_established_lof_mechanism: the loss of function is ESTABLISHED, which
+    # needs score 2. TESTMONO is a nonsense variant triggering decay, so it
+    # qualifies; TESTLOF only escapes with LOFTEE "OS" and does not.
+    #
+    # has_lof_mechanism_history: this gene causes disease by loss of function
+    # and the variant could act that way at all. Both qualify. PVS1 asks this
+    # one, so that its own strength gradation still reaches TESTLOF.
+    assert masks["has_established_lof_mechanism"].tolist() == [False, False, False, True]
+    assert masks["has_lof_mechanism_history"].tolist() == [False, True, False, True]
 
 
 def test_gene_wide_lof_signals_remain_audit_only_without_condition_history(

@@ -169,6 +169,10 @@ panelapp_panels_url: "https://panelapp.genomicsengland.co.uk/api/v1/panels/"
 #   bash scripts/install_utils.sh gofcards_clinvar_injection_install   config.yaml
 gofcards_exact_gof_cache: /paedyl01/disk1/yangyxt/PriVA/data/gofcards/gofcards_exact_gof.json.gz
 gofcards_public_excel_url: "https://download.genemed.tech/upload/GainFunCards/gofcards_data_download.xlsx"
+# Longest the normalized cache may go without being rebuilt to pick up a new
+# GoFCards release. It is an upper bound only: the installer also rebuilds as
+# soon as the normalization code, the mechanism review table, the HGNC table,
+# the chain, either FASTA, or the VEP annotation cache changes.
 gofcards_refresh_days: "180"
 gofcards_workdir: "/paedyl01/disk1/yangyxt/PriVA/data/gofcards/build_work"
 gofcards_hg38_fasta: "/paedyl01/disk1/yangyxt/indexed_genome/hg38/ucsc.hg38.fasta"

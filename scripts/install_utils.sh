@@ -2139,16 +2139,24 @@ function gene_pathogenic_mechanism_cache_install() {
 
 
 function validate_gofcards_exact_gof_cache() {
+    # Any argument after the path is a "<metadata key>=<expected value>" pair,
+    # checked against the build provenance the cache records about itself. That
+    # lets a caller ask the question a timestamp cannot answer: was this cache
+    # built with the same inputs we are about to build with? A pair whose
+    # expected value is empty is skipped, because an unset configuration value
+    # says nothing about whether the cache is still fit to use.
     local gofcards_json=${1}
+    shift
     [[ -s ${gofcards_json} ]] || { log "ERROR: Missing/empty GoFCards cache: ${gofcards_json}"; return 1; }
 
-    python - "${gofcards_json}" <<'GOFPY'
+    python - "${gofcards_json}" "$@" <<'GOFPY'
 import gzip
 import json
 import re
 import sys
 
 path = sys.argv[1]
+expected_provenance = sys.argv[2:]
 opener = gzip.open if path.endswith(".gz") else open
 with opener(path, "rt", encoding="utf-8") as handle:
     cache = json.load(handle)
@@ -2161,6 +2169,16 @@ if meta.get("source") != "GoFCards":
     raise SystemExit(f"{path} metadata does not declare GoFCards as the source")
 if meta.get("mechanism") != "GOF":
     raise SystemExit(f"{path} metadata does not declare GOF as the mechanism")
+
+for pair in expected_provenance:
+    key, _, want = pair.partition("=")
+    if not want:
+        continue
+    have = meta.get(key)
+    if str(have) != want:
+        raise SystemExit(
+            f"{path} was built with {key}={have!r}, but {want!r} is configured now"
+        )
 
 # loc_<chrom>:<start>:<ref>-><alt>_grch37
 VARIANT_ID = re.compile(r"^loc_[0-9XYMT]+:\d+:[ACGTN-]+->[ACGTN-]+_grch37$")
@@ -2335,14 +2353,6 @@ function gofcards_exact_gof_cache_install() {
     # GoFCards cache, and it is the finished one.
     target_tsv="${workdir}/gofcards_exact_gof.normalized.json.gz"
 
-    if [[ "${PRIVA_FORCE_GOFCARDS_CACHE:-0}" != "1" ]] && \
-       [[ "${PRIVA_FORCE_ALL_CACHES:-0}" != "1" ]] && \
-       validate_gofcards_exact_gof_cache "${target_tsv}" >/dev/null 2>&1 && \
-       [[ -n $(find "${target_tsv}" -mtime "-${refresh_days}" -print -quit 2>/dev/null) ]]; then
-        log "GoFCards normalized cache is valid and within its ${refresh_days}-day refresh interval: ${target_tsv}"
-        return 0
-    fi
-
     hg19_fasta=$(read_yaml "${config_file}" "ref_genome")
     hg38_fasta=$(yaml_value_or_default "${config_file}" "gofcards_hg38_fasta" "")
     chain_file=$(yaml_value_or_default "${config_file}" "gofcards_hg19_to_hg38_chain" "${DATA_DIR}/liftOver/hg19ToHg38.over.chain")
@@ -2351,6 +2361,50 @@ function gofcards_exact_gof_cache_install() {
     hgnc_table=$(yaml_value_or_default "${config_file}" "hgnc_table" "${DATA_DIR}/hgnc/non_alt_loci_set.tsv")
     review_tsv=$(yaml_value_or_default "${config_file}" "gofcards_mechanism_review_tsv" "${DATA_DIR}/gofcards/gofcards_mechanism_reviews.tsv")
     stats_json="${workdir}/gofcards_build_stats.json"
+
+    # Age alone is not a fitness test. The refresh interval exists to pick up new
+    # GoFCards releases, and it cannot see a change on this side of the build:
+    # edited normalization code, a newly reviewed allele, a new HGNC table, a new
+    # chain or FASTA, or a different VEP annotation cache. Polarity review is
+    # applied only while building, so without these checks an allele newly marked
+    # LOF or mixed-mechanism in the review table keeps its GOF eligibility until
+    # the interval lapses or someone forces a rebuild.
+    local rebuild=0
+    if [[ "${PRIVA_FORCE_GOFCARDS_CACHE:-0}" == "1" ]] || \
+       [[ "${PRIVA_FORCE_ALL_CACHES:-0}" == "1" ]] || [[ ! -s ${target_tsv} ]]; then
+        rebuild=1
+    else
+        local source_file
+        for source_file in "${builder_script}" "${review_tsv}" "${hgnc_table}" \
+                           "${chain_file}" "${hg19_fasta}" "${hg38_fasta}"; do
+            if [[ -e ${source_file} ]] && [[ ${source_file} -nt ${target_tsv} ]]; then
+                log "GoFCards normalization input is newer than its cache: ${source_file}"
+                rebuild=1
+                break
+            fi
+        done
+        # The cache records which VEP cache, version and chain produced it, which
+        # is the only way to notice an annotation-cache change: those inputs are
+        # named by configuration, not by a file whose timestamp moves.
+        if [[ ${rebuild} -eq 0 ]] && \
+           ! validate_gofcards_exact_gof_cache "${target_tsv}" \
+                 "vep_cache_version=${vep_version}" \
+                 "vep_cache_dir=${vep_cache_dir}" \
+                 "liftover_chain=${chain_file}" >/dev/null 2>&1; then
+            log "GoFCards normalized cache failed validation or was built against different inputs"
+            rebuild=1
+        fi
+        if [[ ${rebuild} -eq 0 ]] && \
+           [[ -z $(find "${target_tsv}" -mtime "-${refresh_days}" -print -quit 2>/dev/null) ]]; then
+            log "GoFCards normalized cache is past its ${refresh_days}-day refresh interval"
+            rebuild=1
+        fi
+    fi
+
+    if [[ ${rebuild} -eq 0 ]]; then
+        log "GoFCards normalized cache is current: every input unchanged and within its ${refresh_days}-day refresh interval: ${target_tsv}"
+        return 0
+    fi
 
     [[ -f ${builder_script} ]] || { log "ERROR: GoFCards builder not found: ${builder_script}"; return 1; }
     [[ -s ${hg19_fasta} ]] || { log "ERROR: GRCh37 FASTA not found for GoFCards build: ${hg19_fasta}"; return 1; }

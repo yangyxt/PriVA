@@ -660,6 +660,7 @@ class GeneMechanismHub:
         self._loeuf_by_symbol: dict[str, float] | None = None
         self._canonical_exact_nonlof_rows: list[dict[str, Any]] | None = None
         self._gofcards_by_symbol_hgvsp: dict[tuple[str, str], list[dict[str, str]]] | None = None
+        self._gofcards_by_symbol_hgvsc: dict[tuple[str, str], list[dict[str, str]]] | None = None
         self._gofcards_by_symbol_genomic: dict[tuple[str, str, str, str], list[dict[str, str]]] | None = None
 
     def _build_resolver(self, use_hgnc_package: bool) -> Any:
@@ -1156,270 +1157,174 @@ class GeneMechanismHub:
     # ------------------------------------------------------------------
 
     def _load_canonical_exact_nonlof_rows(self) -> list[dict[str, Any]]:
-        """Extract runtime-eligible exact alleles from the canonical JSON.
+        """Return runtime-eligible GoFCards variant blocks from the canonical JSON.
 
-        The standalone compact GoFCards table is an upstream normalization
-        product. ``build_gene_nonlof_mechanism_cache.py`` reconciles it with the
-        curated source gene, validates it, and embeds only eligible rows under
-        ``exact_normalized_variants``. Runtime therefore reads this canonical
-        JSON and never reinterprets the compact TSV independently.
+        ``build_gene_nonlof_mechanism_cache.py`` embeds each variant under
+        ``exact_normalized_variants`` exactly as the GoFCards cache stores it,
+        so the block still has its ``record`` and its per-assembly ``genomic``
+        and ``transcripts``. Runtime reads that structure and never reinterprets
+        the upstream cache independently.
 
-        ClinVar VCV entries link an already curated GoFCards allele to clinical
-        assertions; ClinVar pathogenicity alone does not establish GoF or a
-        dominant-negative effect. Those link records are deliberately excluded
-        from this exact mechanism index.
+        ClinVar VCV entries link an already curated variant to clinical
+        assertions; ClinVar pathogenicity alone establishes neither gain of
+        function nor a dominant-negative effect, so those links are excluded
+        here on purpose.
         """
         if self._canonical_exact_nonlof_rows is not None:
             return self._canonical_exact_nonlof_rows
 
-        exact_rows: list[dict[str, Any]] = []
+        entries: list[dict[str, Any]] = []
         seen: set[str] = set()
         for gene in self._load_mechanisms().values():
             symbol = self._try_resolve_symbol(gene.get("symbol"))
             if not symbol:
                 continue
-            for wrapped_assertion in gene.get("variant_level", []) or []:
-                if not isinstance(wrapped_assertion, dict):
+            for wrapped in gene.get("variant_level", []) or []:
+                if not isinstance(wrapped, dict):
                     continue
-                for source, assertion in wrapped_assertion.items():
+                for source, assertion in wrapped.items():
                     if source == "ClinVar_VCV" or not isinstance(assertion, dict):
                         continue
-                    if (
-                        assertion.get("exact_normalization_status")
-                        and assertion.get("exact_normalization_status")
-                        != "matched_gene_concordant"
-                    ):
+                    status = assertion.get("exact_normalization_status")
+                    if status and status != "matched_gene_concordant":
                         continue
-                    normalized_rows = assertion.get("exact_normalized_variants", [])
-                    if not isinstance(normalized_rows, list):
-                        continue
-                    for normalized in normalized_rows:
-                        if not isinstance(normalized, dict):
+                    for variant in assertion.get("exact_normalized_variants", []) or []:
+                        if not isinstance(variant, dict):
                             continue
-                        eligibility = _clean(
-                            normalized.get("match_eligibility")
-                        ).lower()
-                        if eligibility not in {"", "eligible"}:
+                        record = variant.get("record") or {}
+                        if (record.get("eligibility") or {}).get("status") != "eligible":
                             continue
-                        mechanism = _normalize_sequence_mechanism(
-                            normalized.get("mechanism")
-                            or assertion.get("mechanism")
-                        )
-                        if mechanism not in EXACT_SEQUENCE_MECHANISMS:
+                        variant_id = _clean(variant.get("variant_id"))
+                        # One allele can be asserted by two curated sources with
+                        # different mechanisms, so the identity that de-duplicates
+                        # must include the source. Keying on the allele alone
+                        # would silently drop the second mechanism.
+                        marker = f"{source}|{symbol}|{variant_id}"
+                        if not variant_id or marker in seen:
                             continue
+                        seen.add(marker)
+                        entries.append({
+                            **variant,
+                            "symbol": symbol,
+                            # Carried from the wrapping assertion so a curated
+                            # dominant-negative source is not reported as GoFCards
+                            # gain of function.
+                            "assertion_source": source,
+                            "assertion_mechanism": _clean(assertion.get("mechanism")),
+                            # Which canonical file this evidence came from, so an
+                            # audit row identifies its own provenance.
+                            "canonical_mechanism_json": str(self.mechanism_json),
+                        })
 
-                        row_symbol = self._try_resolve_symbol(
-                            normalized.get("GoFCards_HGNC_Symbol")
-                            or normalized.get("HGNC_Symbol")
-                            or symbol
-                        )
-                        if row_symbol and row_symbol != symbol:
-                            logger.warning(
-                                "Skipping canonical exact allele with parent/row gene "
-                                "discordance: parent=%s row=%s source=%s",
-                                symbol,
-                                row_symbol,
-                                source,
-                            )
-                            continue
-
-                        row = dict(normalized)
-                        row.update(
-                            {
-                                "source": _clean(row.get("source")) or source,
-                                "mechanism": mechanism,
-                                "HGNC_Symbol": symbol,
-                                "canonical_gene_symbol": symbol,
-                                "canonical_assertion_source": source,
-                                "canonical_mechanism_json": str(
-                                    self.mechanism_json
-                                ),
-                            }
-                        )
-                        identity = json.dumps(
-                            row,
-                            sort_keys=True,
-                            separators=(",", ":"),
-                        )
-                        if identity in seen:
-                            continue
-                        seen.add(identity)
-                        exact_rows.append(row)
-
-        self._canonical_exact_nonlof_rows = exact_rows
-        return exact_rows
+        self._canonical_exact_nonlof_rows = entries
+        return entries
 
     def _load_gofcards_variant_hgvsp(
         self,
         *,
         gofcards_exact_hgvsp_tsv: str | Path = DEFAULT_GOFCARDS_EXACT_GOF_HGVSP,
-        gofcards_step1_tsv: str | Path | None = None,
-        gofcards_active_tsv: str | Path | None = None,
-        gofcards_raw_xlsx: str | Path | None = None,
-        gofcards_conversion_audit_tsv: str | Path | None = None,
     ) -> dict[tuple[str, str], list[dict[str, str]]]:
-        """Return exact non-LOF protein-change evidence from canonical JSON.
+        """Index eligible variants by (HGNC symbol, normalized protein change).
 
-        The key is normalized ``(HGNC symbol, protein change)``. This lookup is
-        only for variant-level evidence; it must not be used to convert all
-        variants in a gene into GOF assertions.
-
-        The compact-table and legacy arguments remain only for caller
-        compatibility. They are ignored because the configured canonical
-        ``mechanism_json`` is the sole runtime evidence source.
+        A variant registers under every protein change its transcripts present,
+        because one variant is numbered differently on different isoforms --
+        JAK2 V617F is also Val468Phe and Val212Phe. Indexing only one of them
+        would miss a query annotated on any other transcript.
         """
         if self._gofcards_by_symbol_hgvsp is not None:
             return self._gofcards_by_symbol_hgvsp
 
-        if not self.mechanism_json.is_file():
-            logger.warning("Canonical non-LOF cache not found: %s", self.mechanism_json)
-            self._gofcards_by_symbol_hgvsp = {}
-            return self._gofcards_by_symbol_hgvsp
+        index: dict[tuple[str, str], list[dict[str, str]]] = defaultdict(list)
+        for variant in self._load_canonical_exact_nonlof_rows():
+            symbol = variant["symbol"]
+            for assembly, block in (variant.get("assemblies") or {}).items():
+                for transcript, view in (block.get("transcripts") or {}).items():
+                    for hgvsp, coding in (view.get("by_hgvsp") or {}).items():
+                        key = _norm_hgvsp(hgvsp)
+                        if not key:
+                            continue
+                        index[(symbol, key)].append(
+                            self._gofcards_match_entry(
+                                variant, assembly=assembly, transcript=transcript,
+                                hgvsp=hgvsp, hgvsc=coding[0] if coding else "",
+                            )
+                        )
 
-        compact = pd.DataFrame(self._load_canonical_exact_nonlof_rows()).fillna("")
-        if compact.empty:
-            self._gofcards_by_symbol_hgvsp = {}
-            return self._gofcards_by_symbol_hgvsp
-        by_symbol_hgvsp: dict[tuple[str, str], list[dict[str, str]]] = defaultdict(list)
-        for _, row in compact.iterrows():
-            cache_symbol = (
-                row.get("HGNC_Symbol")
-                or row.get("symbol")
-                or row.get("match_symbol")
-                or row.get("gofcards_symbol_resolved")
-                or row.get("gofcards_symbol")
-            )
-            symbol = self._try_resolve_symbol(cache_symbol)
-            if not symbol:
-                symbol = _clean(cache_symbol)
-            hgvsp_keys = row.get("hgvsp_keys")
-            if not isinstance(hgvsp_keys, (list, tuple)):
-                single = _clean(row.get("hgvsp_key")) or _norm_hgvsp(row.get("HGVSp"))
-                hgvsp_keys = [single] if single else []
-            hgvsp_keys = [_clean(k) for k in hgvsp_keys if _clean(k)]
-            if not symbol or not hgvsp_keys:
-                continue
-            match_status = _clean(row.get("match_status")) or _clean(
-                row.get("gofcards_hgvs_match_status")
-            )
-            for hgvsp_key in hgvsp_keys:
-              by_symbol_hgvsp[(symbol, hgvsp_key)].append(
-                {
-                    "source": _clean(row.get("source")),
-                    "mechanism": _clean(row.get("mechanism")),
-                    "canonical_assertion_source": _clean(
-                        row.get("canonical_assertion_source")
-                    ),
-                    "canonical_mechanism_json": _clean(
-                        row.get("canonical_mechanism_json")
-                    ),
-                    "build": _clean(row.get("build")),
-                    "allele_key": _clean(row.get("allele_key")),
-                    "gofcards_variant_id": _clean(row.get("gofcards_variant_id")),
-                    "gofcards_accession_id": _clean(row.get("gofcards_accession_id")),
-                    "disease": _clean(row.get("disease")),
-                    "pmids": _clean(row.get("pmids")),
-                    "pscore": _clean(row.get("pscore")),
-                    "function": _clean(row.get("function")),
-                    "pathway": _clean(row.get("pathway")),
-                    "transcript": _clean(row.get("GoFCards_transcript"))
-                    or _clean(row.get("transcript")),
-                    "symbol": symbol,
-                    "match_symbol": _clean(row.get("HGNC_Symbol"))
-                    or _clean(row.get("match_symbol")),
-                    "gofcards_symbol": _clean(row.get("gofcards_symbol")),
-                    "vep_symbol": _clean(row.get("vep_symbol")),
-                    "gofcards_symbol_resolved": _clean(row.get("gofcards_symbol_resolved")),
-                    "vep_symbol_resolved": _clean(row.get("vep_symbol_resolved")),
-                    "source_refseq_transcript": _clean(row.get("GoFCards_transcript"))
-                    or _clean(row.get("source_refseq_transcript")),
-                    "vep_transcript": _clean(row.get("VEP_transcript"))
-                    or _clean(row.get("vep_transcript")),
-                    "chrom": _norm_chrom(row.get("hg19_chrom") or row.get("chrom")),
-                    "pos": _clean(row.get("hg19_pos")) or _clean(row.get("pos")),
-                    "ref": _clean(row.get("hg19_ref")) or _clean(row.get("ref")),
-                    "alt": _clean(row.get("hg19_alt")) or _clean(row.get("alt")),
-                    "hg19_genomic_key": _clean(row.get("hg19_genomic_key")),
-                    "hg19_vcf_key": _clean(row.get("hg19_vcf_key")),
-                    "hg38_genomic_key": _clean(row.get("hg38_genomic_key")),
-                    "hg38_vcf_key": _clean(row.get("hg38_vcf_key")),
-                    "match_key_types": _clean(row.get("match_key_types")),
-                    "hg19_chrom": _clean(row.get("hg19_chrom")),
-                    "hg19_start": _clean(row.get("hg19_pos"))
-                    or _clean(row.get("hg19_start")),
-                    "hg19_end": _clean(row.get("hg19_pos")) or _clean(row.get("hg19_end")),
-                    "hg19_ref": _clean(row.get("hg19_ref")),
-                    "hg19_alt": _clean(row.get("hg19_alt")),
-                    "hg19_vcf_pos": _clean(row.get("hg19_pos"))
-                    or _clean(row.get("hg19_vcf_pos")),
-                    "hg19_vcf_ref": _clean(row.get("hg19_ref"))
-                    or _clean(row.get("hg19_vcf_ref")),
-                    "hg19_vcf_alt": _clean(row.get("hg19_alt"))
-                    or _clean(row.get("hg19_vcf_alt")),
-                    "hg19_vcf_status": _clean(row.get("hg19_vcf_status")),
-                    "hg38_chrom": _clean(row.get("hg38_chrom")),
-                    "hg38_start": _clean(row.get("hg38_pos"))
-                    or _clean(row.get("hg38_start")),
-                    "hg38_end": _clean(row.get("hg38_pos")) or _clean(row.get("hg38_end")),
-                    "hg38_ref": _clean(row.get("hg38_ref")),
-                    "hg38_alt": _clean(row.get("hg38_alt")),
-                    "hg38_vcf_pos": _clean(row.get("hg38_pos"))
-                    or _clean(row.get("hg38_vcf_pos")),
-                    "hg38_vcf_ref": _clean(row.get("hg38_ref"))
-                    or _clean(row.get("hg38_vcf_ref")),
-                    "hg38_vcf_alt": _clean(row.get("hg38_alt"))
-                    or _clean(row.get("hg38_vcf_alt")),
-                    "hg38_refalt_status": _clean(row.get("hg38_refalt_status")),
-                    "HGVSc": _clean(row.get("HGVSc")),
-                    "HGVSp": _clean(row.get("HGVSp")),
-                    "normalized_hgvsp": _clean(row.get("normalized_hgvsp"))
-                    or _norm_hgvsp(row.get("HGVSp")),
-                    "gofcards_hgvsc_key": _clean(row.get("gofcards_hgvsc_key")),
-                    "gofcards_hgvsp_key": _clean(row.get("gofcards_hgvsp_key")),
-                    "vep_hgvsc_key": _clean(row.get("vep_hgvsc_key")),
-                    "vep_hgvsp_key": _clean(row.get("vep_hgvsp_key")),
-                    "gofcards_gene_match": _clean(row.get("gofcards_gene_match")),
-                    "gofcards_hgvsc_match": _clean(row.get("gofcards_hgvsc_match")),
-                    "gofcards_hgvsp_match": _clean(row.get("gofcards_hgvsp_match")),
-                    "gofcards_hgvs_match_status": match_status,
-                    "match_status": match_status,
-                    "canonical_transcript": _clean(row.get("canonical_transcript")),
-                    "gofcards_AAChange_refGene": _clean(row.get("raw_GoFCards_HGVS"))
-                    or _clean(row.get("gofcards_AAChange_refGene")),
-                    "derived_on": _clean(row.get("derived_on")),
-                }
-            )
-
-        for key, rows in by_symbol_hgvsp.items():
-            seen: set[tuple[str, ...]] = set()
-            unique_rows: list[dict[str, str]] = []
-            for row in sorted(
-                rows,
-                key=lambda item: (
-                    item.get("canonical_transcript") != "YES",
-                    item.get("gofcards_accession_id", ""),
-                    item.get("gofcards_variant_id", ""),
-                    item.get("HGVSp", ""),
-                ),
-            ):
-                dedup_key = (
-                    row.get("mechanism", ""),
-                    row.get("canonical_assertion_source", ""),
-                    row.get("gofcards_variant_id", ""),
-                    row.get("gofcards_accession_id", ""),
-                    row.get("HGVSc", ""),
-                    row.get("HGVSp", ""),
-                    row.get("chrom", ""),
-                    row.get("pos", ""),
-                )
-                if dedup_key in seen:
-                    continue
-                seen.add(dedup_key)
-                unique_rows.append(row)
-            by_symbol_hgvsp[key] = unique_rows
-
-        self._gofcards_by_symbol_hgvsp = dict(by_symbol_hgvsp)
+        self._gofcards_by_symbol_hgvsp = {
+            key: self._deduplicate_gofcards_matches(rows) for key, rows in index.items()
+        }
         return self._gofcards_by_symbol_hgvsp
+
+    def _load_gofcards_variant_hgvsc(
+        self,
+    ) -> dict[tuple[str, str], list[dict[str, str]]]:
+        """Index eligible variants by (HGNC symbol, coding change).
+
+        Measured unique across the catalogue at 25,106 keys with no collisions,
+        so a coding change identifies a variant within its gene where a protein
+        change may not.
+        """
+        if self._gofcards_by_symbol_hgvsc is not None:
+            return self._gofcards_by_symbol_hgvsc
+
+        index: dict[tuple[str, str], list[dict[str, str]]] = defaultdict(list)
+        for variant in self._load_canonical_exact_nonlof_rows():
+            symbol = variant["symbol"]
+            for assembly, block in (variant.get("assemblies") or {}).items():
+                for transcript, view in (block.get("transcripts") or {}).items():
+                    for hgvsc, detail in (view.get("by_hgvsc") or {}).items():
+                        key = _clean(hgvsc).upper()
+                        if not key:
+                            continue
+                        index[(symbol, key)].append(
+                            self._gofcards_match_entry(
+                                variant, assembly=assembly, transcript=transcript,
+                                hgvsp=detail.get("hgvsp") or "", hgvsc=hgvsc,
+                            )
+                        )
+
+        self._gofcards_by_symbol_hgvsc = {
+            key: self._deduplicate_gofcards_matches(rows) for key, rows in index.items()
+        }
+        return self._gofcards_by_symbol_hgvsc
+
+    @staticmethod
+    def _gofcards_match_entry(
+        variant: dict[str, Any], *, assembly: str = "", transcript: str = "",
+        hgvsp: str = "", hgvsc: str = "",
+    ) -> dict[str, str]:
+        """Flatten one variant into the shape the matcher reports back."""
+        record = variant.get("record") or {}
+        source = record.get("source") or {}
+        genomic = ((variant.get("assemblies") or {}).get(assembly) or {}).get("genomic") or {}
+        # GoFCards is the only variant-level source in the shipped cache, so it
+        # is the default; a curated source that declares its own mechanism keeps
+        # that mechanism rather than being reported as gain of function.
+        assertion_source = _clean(variant.get("assertion_source")) or "GoFCards"
+        assertion_mechanism = _clean(variant.get("assertion_mechanism")) or "GOF"
+        return {
+            "source": assertion_source,
+            "mechanism": assertion_mechanism,
+            "canonical_assertion_source": assertion_source,
+            "canonical_mechanism_json": _clean(variant.get("canonical_mechanism_json")),
+            "symbol": variant.get("symbol", ""),
+            "gofcards_variant_id": _clean(variant.get("variant_id")),
+            "gofcards_allele_key": _clean(source.get("gofcards_allele_key")),
+            "gofcards_accession_id": _clean(
+                (record.get("annotations") or {}).get("clinvar_variation_id")),
+            "assembly": assembly,
+            "vep_transcript": transcript,
+            "HGVSp": hgvsp,
+            "HGVSc": hgvsc,
+            "chrom": _clean(genomic.get("chrom")),
+            "pos": _clean(genomic.get("pos")),
+            "ref": _clean(genomic.get("ref")),
+            "alt": _clean(genomic.get("alt")),
+            "match_eligibility": _clean((record.get("eligibility") or {}).get("status")),
+            "pmids": ";".join(
+                e.get("pmid", "") for e in (record.get("evidence") or []) if e.get("pmid")
+            ),
+        }
 
     @staticmethod
     def _deduplicate_gofcards_matches(rows: list[dict[str, str]]) -> list[dict[str, str]]:
@@ -1428,24 +1333,19 @@ class GeneMechanismHub:
         for row in sorted(
             rows,
             key=lambda item: (
-                item.get("canonical_transcript") != "YES",
-                item.get("gofcards_accession_id", ""),
                 item.get("gofcards_variant_id", ""),
+                item.get("assembly", ""),
+                item.get("vep_transcript", ""),
                 item.get("HGVSp", ""),
-                item.get("hg38_vcf_key", ""),
-                item.get("hg19_vcf_key", ""),
             ),
         ):
+            # The variant identifier already distinguishes variants, so a match
+            # reported twice through different transcripts of the same variant
+            # is one match, not two.
             dedup_key = (
                 row.get("mechanism", ""),
                 row.get("canonical_assertion_source", ""),
                 row.get("gofcards_variant_id", ""),
-                row.get("gofcards_accession_id", ""),
-                row.get("HGVSc", ""),
-                row.get("HGVSp", ""),
-                row.get("hg38_vcf_key", ""),
-                row.get("hg19_vcf_key", ""),
-                row.get("allele_key", ""),
             )
             if dedup_key in seen:
                 continue
@@ -1458,58 +1358,36 @@ class GeneMechanismHub:
         *,
         gofcards_exact_hgvsp_tsv: str | Path = DEFAULT_GOFCARDS_EXACT_GOF_HGVSP,
     ) -> dict[tuple[str, str, str, str], list[dict[str, str]]]:
-        """Return exact non-LOF genomic allele evidence from canonical JSON.
+        """Index eligible variants by (symbol, assembly, key type, chrom|pos|ref|alt).
 
-        The key is ``(HGNC symbol, assembly, key_type, chrom|pos|ref|alt)``.
-        ``key_type=vcf`` uses the VCF-padded allele representation intended for
-        caller/VCF matching; ``key_type=genomic`` uses the sparse source genomic
-        fields retained from GoFCards.
+        The coordinate is read from the assembly block it belongs to, so a
+        variant that failed liftover simply contributes no hg38 key rather than
+        an empty one. ``key_type`` is retained for the existing call contract;
+        the cache stores a single normalized representation per build, so both
+        types resolve to the same key.
         """
         if self._gofcards_by_symbol_genomic is not None:
             return self._gofcards_by_symbol_genomic
 
-        if not self.mechanism_json.is_file():
-            self._gofcards_by_symbol_genomic = {}
-            return self._gofcards_by_symbol_genomic
-
-        compact = pd.DataFrame(self._load_canonical_exact_nonlof_rows()).fillna("")
-        if compact.empty:
-            self._gofcards_by_symbol_genomic = {}
-            return self._gofcards_by_symbol_genomic
-        by_symbol_genomic: dict[tuple[str, str, str, str], list[dict[str, str]]] = defaultdict(list)
-        key_columns = {
-            ("hg19", "genomic"): "hg19_genomic_key",
-            ("hg19", "vcf"): "hg19_vcf_key",
-            ("hg38", "genomic"): "hg38_genomic_key",
-            ("hg38", "vcf"): "hg38_vcf_key",
-        }
-        for _, row in compact.iterrows():
-            cache_symbol = (
-                row.get("HGNC_Symbol")
-                or row.get("symbol")
-                or row.get("match_symbol")
-                or row.get("gofcards_symbol_resolved")
-                or row.get("gofcards_symbol")
-            )
-            symbol = self._try_resolve_symbol(cache_symbol)
-            if not symbol:
-                symbol = _clean(cache_symbol)
-            if not symbol:
-                continue
-            match = {str(col): _clean(row.get(col)) for col in compact.columns}
-            match["symbol"] = symbol
-            match.setdefault("match_status", _clean(row.get("gofcards_hgvs_match_status")))
-            match.setdefault("gofcards_hgvs_match_status", _clean(row.get("match_status")))
-            match["input_cache"] = str(self.mechanism_json)
-            for (assembly, key_type), col in key_columns.items():
-                key = _genomic_match_key_from_text(row.get(col))
+        index: dict[tuple[str, str, str, str], list[dict[str, str]]] = defaultdict(list)
+        for variant in self._load_canonical_exact_nonlof_rows():
+            symbol = variant["symbol"]
+            for assembly, block in (variant.get("assemblies") or {}).items():
+                coords = block.get("genomic") or {}
+                if not coords.get("chrom") or coords.get("pos") is None:
+                    continue
+                key = _genomic_match_key(
+                    coords.get("chrom"), coords.get("pos"),
+                    coords.get("ref"), coords.get("alt"),
+                )
                 if not key:
                     continue
-                by_symbol_genomic[(symbol, assembly, key_type, key)].append(match)
+                entry = self._gofcards_match_entry(variant, assembly=assembly)
+                for key_type in ("vcf", "genomic"):
+                    index[(symbol, assembly, key_type, key)].append(entry)
 
         self._gofcards_by_symbol_genomic = {
-            key: self._deduplicate_gofcards_matches(rows)
-            for key, rows in by_symbol_genomic.items()
+            key: self._deduplicate_gofcards_matches(rows) for key, rows in index.items()
         }
         return self._gofcards_by_symbol_genomic
 
@@ -1518,6 +1396,7 @@ class GeneMechanismHub:
         gene_symbol: Any,
         *,
         hgvsp: Any = "",
+        hgvsc: Any = "",
         chrom: Any = "",
         pos: Any = "",
         ref: Any = "",
@@ -1541,6 +1420,7 @@ class GeneMechanismHub:
         """
         symbol = self._resolved_symbol_key(gene_symbol)
         hgvsp_key = _norm_hgvsp(hgvsp)
+        hgvsc_key = _clean(hgvsc).split(":")[-1].upper()
         assembly_key = _normalize_assembly(assembly)
         genomic_key = _genomic_match_key(chrom, pos, ref, alt)
         scores = {mechanism: 0 for mechanism in VARIANT_MECHANISM_SCORE_KEYS}
@@ -1557,6 +1437,15 @@ class GeneMechanismHub:
             )
             if matches:
                 route = "hgvsp"
+
+        # Coding change is the second route: it separates two different coding
+        # changes that produce the same protein change.
+        if symbol and not matches and hgvsc_key:
+            matches = list(
+                self._load_gofcards_variant_hgvsc().get((symbol, hgvsc_key), [])
+            )
+            if matches:
+                route = "hgvsc"
 
         if symbol and not matches and genomic_key and assembly_key:
             genomic_lookup = self._load_gofcards_variant_genomic()
@@ -1610,6 +1499,7 @@ class GeneMechanismHub:
             "symbol": symbol,
             "input_hgvsp": _clean(hgvsp),
             "matched_hgvsp_key": hgvsp_key if route == "hgvsp" else "",
+            "matched_hgvsc_key": hgvsc_key if route == "hgvsc" else "",
             "input_assembly": _clean(assembly),
             "assembly": assembly_key,
             "input_genomic_key": genomic_key,

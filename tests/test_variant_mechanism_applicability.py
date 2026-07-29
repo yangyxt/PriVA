@@ -48,7 +48,7 @@ def _write_fixture_sources(tmp_path: Path) -> dict[str, Path]:
                                 "match": {
                                     "matched_gofcards_records": [
                                         {
-                                            "gofcards_variant_id": "SNV|1|100|100|A|G",
+                                            "gofcards_variant_id": "loc_1:100:A->G_grch37",
                                             "gofcards_accession_id": "rs1",
                                         }
                                     ]
@@ -165,16 +165,19 @@ def _write_fixture_sources(tmp_path: Path) -> dict[str, Path]:
         "3",
     )
     gof_condition["pathogenic_mechanisms"]["GOF"]["variants"] = {
-        "GOFCARDS:SNV|1|100|100|A|G": {
+        "GOFCARDS:loc_1:100:A->G_grch37": {
             "mechanism": "GOF",
-            "gofcards_variant_ids": ["SNV|1|100|100|A|G"],
-            "gofcards_accession_ids": ["rs1"],
-            "disease_labels": ["biallelic GOF disorder"],
-            "pmids": ["3"],
-            "hgvs": {
-                "coding": ["NM_000001.1:c.1A>G"],
-                "protein": ["NP_000001.1:p.Met1Val"],
-            },
+            "symbol": "GENE1",
+            "gofcards_variant_id": "loc_1:100:A->G_grch37",
+            # Transcript with its version, and the HGVS notations, per view.
+            "transcripts": [
+                {
+                    "assembly": "hg19",
+                    "transcript": "ENST00000000001.1",
+                    "hgvsc": "NM_000001.1:c.1A>G",
+                    "hgvsp": "NP_000001.1:p.Met1Val",
+                }
+            ],
             "clinvar_links": [
                 {
                     "vcv_accession": "VCV000000001",
@@ -380,7 +383,7 @@ def test_variant_level_mechanism_contract(tmp_path: Path) -> None:
                 "NMD": "",
                 "vep_consq_lof": False,
                 "variant_gof_tag": "GOF",
-                "gofcards_variant_id": "SNV|1|100|100|A|G",
+                "gofcards_variant_id": "loc_1:100:A->G_grch37",
                 "gofcards_accession_id": "rs1",
             },
             {

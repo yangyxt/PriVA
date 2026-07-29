@@ -2092,7 +2092,19 @@ def condition_cache_mechanism_entries(
                 "source": "GoFCards",
                 "source_record_id": _clean(variant_key),
                 "source_condition_id": "",
-                "disease": ";".join(variant.get("disease_labels", []) or []),
+                # The disease name comes from the ClinVar records linked to
+                # this variant. GoFCards' own free-text disease field is not
+                # carried into the condition cache: it has no identifier, so
+                # it can name a condition but never join to one.
+                "disease": ";".join(
+                    dict.fromkeys(
+                        name
+                        for link in variant.get("clinvar_links", []) or []
+                        if isinstance(link, dict)
+                        for name in link.get("condition_names", []) or []
+                        if _clean(name)
+                    )
+                ),
                 "mechanism": _clean(variant.get("mechanism")),
                 "allelic_requirement": "",
                 "confidence": "exact_variant_condition_unresolved",
@@ -2116,15 +2128,19 @@ def match_condition_cache_gofcards_variants(
 ) -> list[dict[str, Any]]:
     """Find exact GoFCards query tokens in one integrated gene record.
 
-    Variant IDs contain pipe characters (for example
-    ``SNV|12|21995260|21995260|C|T``), so callers must split only on the
-    semicolon/comma separators used between records. Tokens are compared after
-    case normalization. Condition-linked and unresolved cache locations are
-    returned in one shape, with an empty condition for unresolved variants.
+    Variant identifiers look like ``loc_12:21995260:C->T_grch37`` and contain
+    the separators used between records only by accident, so callers split on
+    semicolon and comma alone. Tokens are compared after case normalization.
+    Condition-linked and unresolved cache locations are returned in one shape,
+    with an empty condition for unresolved variants.
+
+    ``accession_ids`` is accepted and ignored. The condition cache stores one
+    variant identifier per variant, minted the same way the matcher mints it,
+    so that identifier settles the match on its own; the ClinVar accession was
+    a second name for the same variant.
     """
     wanted_variant_ids = {_norm(value) for value in variant_ids if _clean(value)}
-    wanted_accessions = {_norm(value) for value in accession_ids if _clean(value)}
-    if not wanted_variant_ids and not wanted_accessions:
+    if not wanted_variant_ids:
         return []
 
     matches: list[dict[str, Any]] = []
@@ -2141,20 +2157,11 @@ def match_condition_cache_gofcards_variants(
         for variant_key, variant in variants.items():
             if not isinstance(variant, dict):
                 continue
-            cached_variant_ids = {
-                _norm(value)
-                for value in variant.get("gofcards_variant_ids", []) or []
-                if _clean(value)
-            }
-            cached_accessions = {
-                _norm(value)
-                for value in variant.get("gofcards_accession_ids", []) or []
-                if _clean(value)
-            }
-            if not (
-                wanted_variant_ids & cached_variant_ids
-                or wanted_accessions & cached_accessions
-            ):
+            # One identifier per variant, and it is the same identifier the
+            # matcher reports, so it alone decides the match. The accession
+            # route it replaced was a secondary key for the same variant.
+            cached_variant_id = _norm(variant.get("gofcards_variant_id"))
+            if not cached_variant_id or cached_variant_id not in wanted_variant_ids:
                 continue
             identity = (_clean(condition_key), _clean(variant_key))
             if identity in seen:
@@ -2700,18 +2707,15 @@ def summarize_condition_cache_exact_gof_matches(
                     output["review_stars"].append(star_value)
 
         if not has_link_hgvs:
-            hgvs = variant.get("hgvs", {})
-            hgvs = hgvs if isinstance(hgvs, dict) else {}
-            for expression in (hgvs.get("coding", []) or []) + (
-                hgvs.get("protein", []) or []
-            ):
-                append_unique("hgvs", expression)
-        if not has_link_condition_name:
-            if condition_label:
-                append_unique("condition_names", condition_label)
-            else:
-                for name in variant.get("disease_labels", []) or []:
-                    append_unique("condition_names", name)
+            # The coding and protein changes travel per transcript view, each
+            # carrying the transcript version they belong to.
+            for view in variant.get("transcripts", []) or []:
+                if not isinstance(view, dict):
+                    continue
+                append_unique("hgvs", view.get("hgvsc"))
+                append_unique("hgvs", view.get("hgvsp"))
+        if not has_link_condition_name and condition_label:
+            append_unique("condition_names", condition_label)
 
         context = condition_cache_context(condition_key, condition)
         if not context:

@@ -166,14 +166,13 @@ def test_condition_cache_assertions_preserve_context_and_exclude_variant_only_go
 
 
 def test_exact_gofcards_cache_match_preserves_condition_resolution() -> None:
+    # One identifier per variant, minted the same way the matcher mints it.
     linked_variant = {
-        "gofcards_variant_ids": ["SNV|1|100|100|A|G"],
-        "gofcards_accession_ids": ["rs1"],
+        "gofcards_variant_id": "loc_1:100:A->G_grch37",
         "clinvar_links": [{"vcv_accession": "VCV1"}],
     }
     unresolved_variant = {
-        "gofcards_variant_ids": ["SNV|1|200|200|C|T"],
-        "gofcards_accession_ids": ["rs2"],
+        "gofcards_variant_id": "loc_1:200:C->T_grch37",
         "clinvar_links": [{"vcv_accession": "VCV2"}],
     }
     condition = {
@@ -190,7 +189,7 @@ def test_exact_gofcards_cache_match_preserves_condition_resolution() -> None:
 
     matches = match_condition_cache_gofcards_variants(
         gene,
-        variant_ids={"SNV|1|100|100|A|G", "SNV|1|200|200|C|T"},
+        variant_ids={"loc_1:100:A->G_grch37", "loc_1:200:C->T_grch37"},
         accession_ids=set(),
     )
 

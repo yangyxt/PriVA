@@ -28,6 +28,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterator, TextIO
 
+from clinvar_vcv import open_text
+
 
 SCHEMA_VERSION = "1.0"
 
@@ -1109,7 +1111,7 @@ def validate_cache_payload(payload: dict[str, Any]) -> dict[str, int]:
 
 
 def load_and_validate_cache(path: str | Path) -> dict[str, int]:
-    with Path(path).open(encoding="utf-8") as handle:
+    with open_text(path) as handle:
         payload = json.load(handle)
     return validate_cache_payload(payload)
 
@@ -1129,15 +1131,21 @@ def write_json_atomic(
     validate_cache_payload(payload)
     destination = Path(output)
     destination.parent.mkdir(parents=True, exist_ok=True)
+    # The temporary name ends the same way the destination does, because that
+    # suffix is what decides whether the bytes are compressed -- and the
+    # temporary file is reparsed before it is published, so it has to be
+    # readable in the same form the destination will be.
+    suffix = ".tmp.gz" if str(destination).endswith(".gz") else ".tmp"
     descriptor, temporary_name = tempfile.mkstemp(
         prefix=f".{destination.name}.",
-        suffix=".tmp",
+        suffix=suffix,
         dir=destination.parent,
-        text=True,
+        text=False,
     )
+    os.close(descriptor)
     temporary = Path(temporary_name)
     try:
-        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+        with open_text(temporary, "wt") as handle:
             json.dump(
                 payload,
                 handle,
@@ -1147,8 +1155,6 @@ def write_json_atomic(
                 sort_keys=True,
             )
             handle.write("\n")
-            handle.flush()
-            os.fsync(handle.fileno())
         load_and_validate_cache(temporary)
         os.chmod(temporary, 0o644)
         os.replace(temporary, destination)

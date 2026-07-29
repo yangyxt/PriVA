@@ -27,6 +27,8 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from clinvar_vcv import open_text
+
 SCRIPT_DIR = Path(__file__).resolve().parent
 PRIVA_ROOT = SCRIPT_DIR.parent
 DATA_DIR = PRIVA_ROOT / "data"
@@ -41,7 +43,7 @@ DEFAULT_HPO_CONDITION_MECHANISM_CACHE = (
     DATA_DIR
     / "gene_pathogenic_mechanism"
     / "prepared"
-    / "hpo_condition_mechanism_cache.json"
+    / "hpo_condition_mechanism_cache.json.gz"
 )
 HPO_CONDITION_MECHANISM_SCHEMA_VERSION = "1.0"
 PACKAGED_MECHANISM_JSON = (
@@ -51,7 +53,7 @@ CANONICAL_NONLOF_MECHANISM_JSON = (
     DATA_DIR
     / "gene_pathogenic_mechanism"
     / "prepared"
-    / "gene_nonlof_mechanism_curated_assertions.json"
+    / "gene_nonlof_mechanism_curated_assertions.json.gz"
 )
 DEFAULT_MECHANISM_JSON = (
     CANONICAL_NONLOF_MECHANISM_JSON
@@ -711,7 +713,7 @@ class GeneMechanismHub:
                 "hpo_condition_mechanism_cache_install config.yaml`."
             )
 
-        with self.condition_cache.open(encoding="utf-8") as handle:
+        with open_text(self.condition_cache) as handle:
             payload = json.load(handle)
         if not isinstance(payload, dict):
             raise ValueError(f"{self.condition_cache} must contain a JSON object")
@@ -749,7 +751,7 @@ class GeneMechanismHub:
     def _load_mechanisms(self) -> dict[str, dict[str, Any]]:
         if self._mechanism_by_symbol is not None:
             return self._mechanism_by_symbol
-        with open(self.mechanism_json, encoding="utf-8") as handle:
+        with open_text(self.mechanism_json) as handle:
             raw = json.load(handle)
         by_symbol: dict[str, dict[str, Any]] = {}
         for info in raw.values():

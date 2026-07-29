@@ -34,6 +34,7 @@ from clinvar_vcv import (
     gofcards_variant_is_eligible,
     iter_gofcards_variants,
     load_gofcards_cache,
+    open_text,
     variant_id_of,
 )
 
@@ -45,7 +46,7 @@ DEFAULT_GOFCARDS_EXACT_VARIANTS = (
     PROJECT_ROOT / "data" / "gofcards" / "gofcards_exact_gof.json.gz"
 )
 DEFAULT_HGNC_TABLE = PROJECT_ROOT / "data" / "hgnc" / "non_alt_loci_set.tsv"
-NONLOF_ASSERTIONS_FILENAME = "gene_nonlof_mechanism_curated_assertions.json"
+NONLOF_ASSERTIONS_FILENAME = "gene_nonlof_mechanism_curated_assertions.json.gz"
 NONLOF_ASSERTIONS_SCHEMA_FILENAME = (
     "gene_nonlof_mechanism_curated_assertions.schema.json"
 )
@@ -231,14 +232,21 @@ def file_mtime_iso(path: Path) -> str:
 def read_json(path: Path) -> dict[str, Any]:
     if not path.exists():
         return {}
-    with path.open(encoding="utf-8") as handle:
+    with open_text(path) as handle:
         return json.load(handle)
 
 
 def write_json(path: Path, data: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    with tmp.open("w", encoding="utf-8") as handle:
+    # The temporary name keeps the destination's .gz suffix, because that suffix
+    # is what decides whether the bytes are compressed. Appending .tmp after it
+    # would write plain text into a file named .gz.
+    tmp = (
+        path.with_name(path.name[: -len(".gz")] + ".tmp.gz")
+        if str(path).endswith(".gz")
+        else path.with_suffix(path.suffix + ".tmp")
+    )
+    with open_text(tmp, "wt") as handle:
         json.dump(data, handle, indent=2, sort_keys=True)
         handle.write("\n")
     tmp.replace(path)

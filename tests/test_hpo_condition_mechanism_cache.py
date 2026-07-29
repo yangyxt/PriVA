@@ -14,9 +14,9 @@ from build_hpo_condition_mechanism_cache import (  # noqa: E402
     build_cache_payload,
     build_hpo_gene_condition_frame,
     load_and_validate_cache,
-    partition_gofcards_variant_rows,
     write_json_atomic,
 )
+from clinvar_vcv import partition_gofcards_variants  # noqa: E402
 
 
 HPO_HEADER = (
@@ -26,45 +26,114 @@ HPO_HEADER = (
 )
 
 
-def test_variant_row_partition_is_atomic_per_curated_gene_and_allele() -> None:
-    direct = {
-        "mechanism": "GOF",
-        "HGNC_Symbol": "GENE1",
-        "gofcards_variant_id": "VAR1",
-        "match_eligibility": "quarantined_gene_discordance",
+def _gofcards_variant(
+    chrom: str,
+    pos: int,
+    disease: str,
+    pmid: str,
+    *,
+    eligibility: str = "eligible",
+    vep_symbol: str = "GENE1",
+    gene_match_status: str = "gene_concordant",
+    clinvar: dict | None = None,
+) -> dict:
+    """One variant in the shape the injected GoFCards cache stores."""
+    variant = {
+        "record": {
+            "source": {
+                "gofcards_allele_key": f"SNV|{chrom}|{pos}|{pos}|A|G",
+                "variant_type_label": "SNV",
+                "assembly": "hg19", "chrom": chrom, "start": str(pos),
+                "ref": "A", "alt": "G",
+            },
+            "eligibility": {
+                "status": eligibility, "gene_match_status": gene_match_status,
+                "vep_symbol": vep_symbol,
+                "reason": None if eligibility == "eligible" else "gene_discordant",
+            },
+            "liftover_status": "mapped",
+            "annotations": {"clinvar_variation_id": f"ID{pos}"},
+            "evidence": [{"pmid": pmid, "disease": disease, "pscore": "5",
+                          "function": "Activating", "pathway": "Pathway"}],
+        },
+        "assemblies": {
+            "hg19": {
+                "genomic": {"chrom": chrom, "pos": pos, "ref": "A", "alt": "G",
+                            "status": "raw_ref_alt"},
+                "transcripts": {"ENST0000000001.1": {
+                    "by_hgvsc": {f"c.{pos}A>G": {
+                        "hgvsp": f"p.Lys{pos}Arg", "consequence": "missense_variant",
+                        "canonical": True, "mane_select": "NM_1.1"}},
+                    "by_hgvsp": {f"p.Lys{pos}Arg": [f"c.{pos}A>G"]}}},
+            },
+            "hg38": {
+                "genomic": {"chrom": chrom, "pos": pos + 10, "ref": "A", "alt": "G",
+                            "status": "lifted_ref_match"},
+                "transcripts": {"ENST0000000001.2": {
+                    "by_hgvsc": {f"c.{pos}A>G": {
+                        "hgvsp": f"p.Lys{pos}Arg", "consequence": "missense_variant",
+                        "canonical": True, "mane_select": "NM_1.1"}},
+                    "by_hgvsp": {f"p.Lys{pos}Arg": [f"c.{pos}A>G"]}}},
+            },
+        },
     }
-    sibling = {
-        **direct,
-        "match_eligibility": "eligible",
-    }
-    other_gene = {
-        **sibling,
-        "HGNC_Symbol": "GENE2",
-    }
+    if clinvar:
+        variant["clinvar"] = clinvar
+    return variant
 
-    eligible, quarantined = partition_gofcards_variant_rows(
-        [direct, sibling, other_gene]
+
+def _write_gofcards_cache(path: Path, variants: dict[str, dict]) -> Path:
+    """Write a nested GoFCards cache keyed gene -> variant identifier."""
+    path.write_text(
+        json.dumps({
+            "metadata": {"source": "GoFCards", "mechanism": "GOF",
+                         "derived_on": "2026-07-28"},
+            "genes": {"GENE1": {"hgnc_id": "HGNC:1", "variants": variants}},
+        }),
+        encoding="utf-8",
     )
-
-    assert eligible == [other_gene]
-    assert quarantined == [direct, sibling]
+    return path
 
 
-def test_variant_partition_rejects_non_gof_even_with_stale_eligibility() -> None:
-    reviewed_lof = {
-        "mechanism": "LOF",
-        "HGNC_Symbol": "CFTR",
-        "gofcards_variant_id": "VAR1",
-        "match_eligibility": "eligible",
+def test_variant_partition_follows_the_upstream_eligibility_verdict() -> None:
+    # A quarantined variant must never reach the condition cache, and its
+    # quarantine is decided once by the normalizer and stored on the variant.
+    cache = {
+        "metadata": {"source": "GoFCards", "mechanism": "GOF"},
+        "genes": {
+            "GENE1": {"hgnc_id": "HGNC:1", "variants": {
+                "loc_1:10:A->G_grch37": _gofcards_variant("1", 10, "d", "1"),
+                "loc_1:11:A->G_grch37": _gofcards_variant(
+                    "1", 11, "d", "1", eligibility="quarantined_gene_discordance"),
+            }},
+            "GENE2": {"hgnc_id": "HGNC:2", "variants": {
+                "loc_2:10:A->G_grch37": _gofcards_variant("2", 10, "d", "1"),
+            }},
+        },
     }
-    sibling = {**reviewed_lof, "mechanism": "GOF"}
 
-    eligible, quarantined = partition_gofcards_variant_rows(
-        [reviewed_lof, sibling]
-    )
+    eligible, quarantined = partition_gofcards_variants(cache)
+
+    assert [(s, v) for s, v, _ in eligible] == [
+        ("GENE1", "loc_1:10:A->G_grch37"),
+        ("GENE2", "loc_2:10:A->G_grch37"),
+    ]
+    assert [(s, v) for s, v, _ in quarantined] == [("GENE1", "loc_1:11:A->G_grch37")]
+
+
+def test_variant_partition_rejects_a_variant_reviewed_as_loss_of_function() -> None:
+    cache = {
+        "metadata": {"source": "GoFCards", "mechanism": "GOF"},
+        "genes": {"CFTR": {"hgnc_id": "HGNC:1", "variants": {
+            "loc_7:10:A->G_grch37": _gofcards_variant(
+                "7", 10, "d", "1", eligibility="quarantined_reviewed_lof"),
+        }}},
+    }
+
+    eligible, quarantined = partition_gofcards_variants(cache)
 
     assert eligible == []
-    assert quarantined == [reviewed_lof, sibling]
+    assert [(s, v) for s, v, _ in quarantined] == [("CFTR", "loc_7:10:A->G_grch37")]
 
 
 def test_hpo_frame_groups_gene_conditions_and_preserves_axis_evidence(
@@ -193,97 +262,54 @@ def test_gofcards_variants_require_exact_clinvar_hpo_condition_identity(
         "MONDO:v1\tauto_supported\n",
         encoding="utf-8",
     )
-    gofcards = tmp_path / "gofcards.tsv"
-    gofcards.write_text(
-        "mechanism\tHGNC_Symbol\tGoFCards_HGNC_Symbol\tVEP_HGNC_Symbol\t"
-        "gene_match_status\tmatch_eligibility\tHGVSc\tHGVSp\thgvsp_key\tmatch_status\t"
-        "gofcards_accession_id\tgofcards_variant_id\tdisease\tpmids\tpscore\t"
-        "function\tpathway\tallele_key\thg19_genomic_key\thg19_vcf_key\t"
-        "hg38_genomic_key\thg38_vcf_key\n"
-        "GOF\tGENE1\tGENE1\tGENE1\tgene_concordant\teligible\t"
-        "NM_1:c.1A>G\tNP_1:p.Lys1Arg\tNP_1:p.Lys1Arg\tmatched\t"
-        "rs1\tVAR1\tCondition one\tPMID:1\t5\tActivating\tPathway\tVAR1\t"
-        "1|10|A|G\t1|10|A|G\t1|20|A|G\t1|20|A|G\n"
-        "GOF\tGENE1\tGENE1\tGENE1\tgene_concordant\teligible\t"
-        "NM_1:c.2A>G\tNP_1:p.Lys2Arg\tNP_1:p.Lys2Arg\tmatched\t"
-        "rs2\tVAR2\tCondition two\tPMID:2\t3\tActivating\tPathway\tVAR2\t"
-        "1|11|A|G\t1|11|A|G\t1|21|A|G\t1|21|A|G\n"
-        "GOF\tGENE1\tGENE1\tOTHER1\tgene_discordant\t"
-        "quarantined_gene_discordance\tNM_1:c.3A>G\tNP_1:p.Lys3Arg\t"
-        "NP_1:p.Lys3Arg\tmatched\trs3\tVAR3\tCondition three\tPMID:3\t5\t"
-        "Activating\tPathway\tVAR3\t1|12|A|G\t1|12|A|G\t1|22|A|G\t1|22|A|G\n"
-        "GOF\tGENE1\tGENE1\tGENE1\tgene_concordant\teligible\t"
-        "NM_1:c.3A>G\tNP_1:p.Lys3Arg\tNP_1:p.Lys3Arg\tmatched\t"
-        "rs3\tVAR3\tCondition three\tPMID:3\t5\tActivating\tPathway\tVAR3\t"
-        "1|12|A|G\t1|12|A|G\t1|22|A|G\t1|22|A|G\n",
-        encoding="utf-8",
-    )
-    mechanism_json = tmp_path / "mechanisms.json"
-    mechanism_json.write_text(
-        json.dumps(
-            {
-                "HGNC:1": {
-                    "symbol": "GENE1",
-                    "variant_level": [
-                        {
-                            "ClinVar_VCV": {
-                                "variation": {
-                                    "vcv_accession": "VCV0001",
-                                    "hgvs": [
-                                        {"expression": "NM_1.1:c.1A>G"},
-                                        {"expression": "NP_1.1:p.Lys1Arg"},
-                                    ],
-                                },
-                                "match": {
-                                    "matched_gofcards_records": [
-                                        {
-                                            "gofcards_variant_id": "VAR1",
-                                            "gofcards_accession_id": "rs1",
-                                        }
-                                    ]
-                                },
-                                "condition_assertions": [
-                                    {
-                                        "rcv_accession": "RCV0001",
-                                        "conditions": [
-                                            {
-                                                "database": "MedGen",
-                                                "id": "C1",
-                                                "name": "Condition one",
-                                            }
-                                        ],
-                                        "matched_scvs": [
-                                            {
-                                                "trait_mappings": [
-                                                    {
-                                                        "mapping_ref": "OMIM",
-                                                        "mapping_value": "1",
-                                                    }
-                                                ]
-                                            }
-                                        ],
-                                        "germline_classification": {
-                                            "clinical_significance": "Pathogenic",
-                                            "review_stars": 2,
-                                        },
-                                    }
-                                ],
-                            }
-                        }
+    # VAR1 carries the ClinVar block the injection step nests on the variant.
+    # Its OMIM identity comes from the submitted record's trait mapping, which
+    # is the only place an identifier that joins to HPO appears.
+    linked = _gofcards_variant(
+        "1", 10, "Condition one", "PMID:1",
+        clinvar={
+            "vcv_accession": "VCV0001",
+            "variation_id": "ID10",
+            "hgvs": ["NM_1.1:c.1A>G", "NP_1.1:p.Lys1Arg"],
+            "condition_assertions": [
+                {
+                    "rcv_accession": "RCV0001",
+                    "conditions": [
+                        {"database": "MedGen", "id": "C1", "name": "Condition one"}
                     ],
+                    "matched_scvs": [
+                        {"trait_mappings": [
+                            {"mapping_ref": "OMIM", "mapping_value": "1"}
+                        ]}
+                    ],
+                    "germline_classification": {
+                        "clinical_significance": "Pathogenic", "review_stars": 2
+                    },
                 }
-            }
-        ),
-        encoding="utf-8",
+            ],
+        },
     )
+    # VAR2 has no ClinVar block, so it cannot reach a condition.
+    unlinked = _gofcards_variant("1", 11, "Condition two", "PMID:2")
+    # VAR3 is quarantined upstream and must never enter the cache.
+    discordant = _gofcards_variant(
+        "1", 12, "Condition three", "PMID:3",
+        eligibility="quarantined_gene_discordance",
+        vep_symbol="OTHER1", gene_match_status="gene_discordant",
+    )
+    gofcards = _write_gofcards_cache(tmp_path / "gofcards.json", {
+        "loc_1:10:A->G_grch37": linked,
+        "loc_1:11:A->G_grch37": unlinked,
+        "loc_1:12:A->G_grch37": discordant,
+    })
     genes = build_hpo_gene_condition_frame(hpo)
 
-    stats = attach_gofcards_variants(genes, gofcards, mechanism_json)
+    stats = attach_gofcards_variants(genes, gofcards)
 
     gof = genes["GENE1"]["conditions"]["OMIM:1"][
         "pathogenic_mechanisms"
     ]["GOF"]
-    exact = gof["variants"]["GOFCARDS:VAR1"]
+    exact = gof["variants"]["GOFCARDS:loc_1:10:A->G_grch37"]
     assert exact["condition_link"] == {
         "status": "exact",
         "condition_key": "OMIM:1",
@@ -294,20 +320,26 @@ def test_gofcards_variants_require_exact_clinvar_hpo_condition_identity(
         "NM_1.1:c.1A>G",
         "NP_1.1:p.Lys1Arg",
     ]
-    assert exact["match_keys"]["GRCh38"] == ["1|20|A|G"]
+    # The handover is symbol, transcript with its version, and the HGVS
+    # notations -- every view on both builds, not a representative one.
+    assert exact["symbol"] == "GENE1"
+    assert exact["transcripts"] == [
+        {"assembly": "hg19", "transcript": "ENST0000000001.1",
+         "hgvsc": "c.10A>G", "hgvsp": "p.Lys10Arg"},
+        {"assembly": "hg38", "transcript": "ENST0000000001.2",
+         "hgvsc": "c.10A>G", "hgvsp": "p.Lys10Arg"},
+    ]
     unresolved = genes["GENE1"]["unmapped_evidence"]["variants"][
-        "GOFCARDS:VAR2"
+        "GOFCARDS:loc_1:11:A->G_grch37"
     ]
     assert unresolved["condition_link"]["reason"] == (
         "no_exact_clinvar_condition_link"
     )
     assert genes["GENE1"]["summary"]["pathogenic_mechanisms"] == ["GOF"]
     assert stats == {
-        "source_rows": 4,
-        "eligible_source_rows": 2,
-        "quarantined_source_rows": 2,
-        "quarantined_unique_variants": 1,
-        "unique_variants": 2,
+        "source_variants": 3,
+        "eligible_variants": 2,
+        "quarantined_variants": 1,
         "condition_linked_variants": 1,
         "condition_variant_links": 1,
         "unmapped_variants": 1,
@@ -333,15 +365,7 @@ def test_complete_cache_is_validated_and_published_atomically(
         "mechanism_confidence\tdisease_confidence\tpmids\tevidence_url\n",
         encoding="utf-8",
     )
-    gofcards = tmp_path / "gofcards.tsv"
-    gofcards.write_text(
-        "mechanism\tHGNC_Symbol\tGoFCards_HGNC_Symbol\tVEP_HGNC_Symbol\t"
-        "gene_match_status\tmatch_eligibility\tHGVSc\tHGVSp\thgvsp_key\tmatch_status\t"
-        "gofcards_accession_id\tgofcards_variant_id\tdisease\tpmids\tpscore\t"
-        "function\tpathway\tallele_key\thg19_genomic_key\thg19_vcf_key\t"
-        "hg38_genomic_key\thg38_vcf_key\n",
-        encoding="utf-8",
-    )
+    gofcards = _write_gofcards_cache(tmp_path / "gofcards.json", {})
     mechanism_json = tmp_path / "mechanisms.json"
     mechanism_json.write_text(json.dumps({"_meta": {}}), encoding="utf-8")
     output = tmp_path / "cache.json"

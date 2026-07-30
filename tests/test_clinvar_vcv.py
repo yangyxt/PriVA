@@ -606,7 +606,7 @@ def test_non_clinvar_source_assertion_schema_contracts() -> None:
     schema = json.loads(
         (
             ROOT
-            / "data/gene_pathogenic_mechanism/schema/"
+            / "data/patho_mechanism/"
             "gene_nonlof_mechanism_curated_assertions.schema.json"
         ).read_text(encoding="utf-8")
     )
@@ -754,7 +754,7 @@ def test_gofcards_assertion_preserves_all_gene_concordant_exact_rows(
     schema = json.loads(
         (
             ROOT
-            / "data/gene_pathogenic_mechanism/schema/"
+            / "data/patho_mechanism/"
             "gene_nonlof_mechanism_curated_assertions.schema.json"
         ).read_text(encoding="utf-8")
     )

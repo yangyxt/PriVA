@@ -46,7 +46,7 @@ from clinvar_vcv import (
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_CACHE_DIR = PROJECT_ROOT / "data" / "gene_pathogenic_mechanism"
+DEFAULT_CACHE_DIR = PROJECT_ROOT / "data" / "patho_mechanism"
 DEFAULT_SHARED_RAW_DIR = DEFAULT_CACHE_DIR / "raw"
 DEFAULT_GOFCARDS_EXACT_VARIANTS = (
     PROJECT_ROOT / "data" / "gofcards" / "gofcards_exact_gof.json.gz"
@@ -56,14 +56,8 @@ NONLOF_ASSERTIONS_FILENAME = "gene_nonlof_mechanism_curated_assertions.json.gz"
 NONLOF_ASSERTIONS_SCHEMA_FILENAME = (
     "gene_nonlof_mechanism_curated_assertions.schema.json"
 )
-DEFAULT_NONLOF_ASSERTIONS_JSON = (
-    DEFAULT_CACHE_DIR / "prepared" / NONLOF_ASSERTIONS_FILENAME
-)
-DEFAULT_OUTPUT_SCHEMA = (
-    DEFAULT_CACHE_DIR
-    / "schema"
-    / NONLOF_ASSERTIONS_SCHEMA_FILENAME
-)
+DEFAULT_NONLOF_ASSERTIONS_JSON = DEFAULT_CACHE_DIR / NONLOF_ASSERTIONS_FILENAME
+DEFAULT_OUTPUT_SCHEMA = DEFAULT_CACHE_DIR / NONLOF_ASSERTIONS_SCHEMA_FILENAME
 NONLOF_SOURCE_MANIFEST_FILENAME = "nonlof_source_manifest.json"
 NONLOF_SOURCE_MANIFEST_TSV_FILENAME = "nonlof_source_manifest.tsv"
 NONLOF_RUN_SUMMARY_FILENAME = "nonlof_run_summary.json"
@@ -1878,8 +1872,8 @@ def parse_args() -> argparse.Namespace:
         "--shared-raw-dir",
         default=str(DEFAULT_SHARED_RAW_DIR),
         help=(
-            "Shared raw-data directory used for downloads and parsing. Prepared "
-            "project-specific outputs still go under --cache-dir/prepared. "
+            "Shared raw-data directory used for downloads and parsing. The "
+            "project-specific outputs are written flat into --cache-dir. "
             "Expected filenames include AllG2P.csv, "
             "ClinGen_gene_curation_list_GRCh38.tsv, the weekly ClinVar VCV XML, "
             "GoFCards, and panelapp_all_panels.json. Use --shared-raw-dir '' to store raw "
@@ -1995,12 +1989,13 @@ def main() -> int:
         else cache_dir / "raw"
     )
     raw_dir_is_shared = raw_dir != cache_dir / "raw"
-    prepared_dir = cache_dir / "prepared"
-    metadata_dir = cache_dir / "metadata"
-    manifest_path = metadata_dir / NONLOF_SOURCE_MANIFEST_FILENAME
-    manifest_tsv_path = prepared_dir / NONLOF_SOURCE_MANIFEST_TSV_FILENAME
-    json_path = prepared_dir / NONLOF_ASSERTIONS_FILENAME
-    summary_path = prepared_dir / NONLOF_RUN_SUMMARY_FILENAME
+    # Everything this builder publishes lands directly in the cache directory.
+    # The former prepared/ and metadata/ split only added a folder level; which
+    # files matter is decided by .gitignore naming the ones PriVA reads.
+    manifest_path = cache_dir / NONLOF_SOURCE_MANIFEST_FILENAME
+    manifest_tsv_path = cache_dir / NONLOF_SOURCE_MANIFEST_TSV_FILENAME
+    json_path = cache_dir / NONLOF_ASSERTIONS_FILENAME
+    summary_path = cache_dir / NONLOF_RUN_SUMMARY_FILENAME
     lock_path = raw_dir / ".build.lock" if raw_dir_is_shared else cache_dir / ".build.lock"
 
     with BuildLock(lock_path, stale_hours=args.stale_lock_hours):

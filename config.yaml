@@ -142,14 +142,16 @@ mavedb_file: "/paedyl01/disk1/yangyxt/public_data/VEP_plugins_caches/MaveDB/Mave
 
 # Gene mechanism / DDG2P-G2P cache paths
 # Built by: bash scripts/install_utils.sh gene_pathogenic_mechanism_cache_install config.yaml
-gene_mechanism_cache_dir: "/paedyl01/disk1/yangyxt/PriVA/data/gene_pathogenic_mechanism"
+# One flat folder. Only the files PriVA reads at runtime are kept in the
+# repository; build byproducts land beside them and are ignored. The raw
+# download tree is shared outside the repository, so it is named absolutely.
+gene_mechanism_cache_dir: "/paedyl01/disk1/yangyxt/PriVA/data/patho_mechanism"
 gene_mechanism_raw_dir: "/paedyl01/disk1/yangyxt/public_data/gene_pathogenic_mechanism/raw"
 gene_mechanism_builder_script: "/paedyl01/disk1/yangyxt/PriVA/scripts/build_gene_pathogenic_mechanism_cache.py"
-gene_mechanism_json: /paedyl01/disk1/yangyxt/PriVA/data/gene_pathogenic_mechanism/prepared/gene_mechanism_curated_assertions.json
 gene_nonlof_mechanism_builder_script: /paedyl01/disk1/yangyxt/PriVA/scripts/build_gene_nonlof_mechanism_cache.py
-gene_nonlof_mechanism_schema: /paedyl01/disk1/yangyxt/PriVA/data/gene_pathogenic_mechanism/schema/gene_nonlof_mechanism_curated_assertions.schema.json
-gene_nonlof_mechanism_json: /paedyl01/disk1/yangyxt/PriVA/data/gene_pathogenic_mechanism/prepared/gene_nonlof_mechanism_curated_assertions.json.gz
-ddg2p_mechanism_evidence: /paedyl01/disk1/yangyxt/PriVA/data/gene_pathogenic_mechanism/prepared/gene_pathogenic_mechanism_evidence.tsv
+gene_nonlof_mechanism_schema: /paedyl01/disk1/yangyxt/PriVA/data/patho_mechanism/gene_nonlof_mechanism_curated_assertions.schema.json
+gene_nonlof_mechanism_json: /paedyl01/disk1/yangyxt/PriVA/data/patho_mechanism/gene_nonlof_mechanism_curated_assertions.json.gz
+ddg2p_mechanism_evidence: /paedyl01/disk1/yangyxt/PriVA/data/patho_mechanism/gene_pathogenic_mechanism_evidence.tsv
 hgnc_table: /paedyl01/disk1/yangyxt/PriVA/data/hgnc/non_alt_loci_set.tsv
 g2p_ddg2p_url: "https://www.ebi.ac.uk/gene2phenotype/api/panel/all/download"
 orphadata_gene_disease_url: "https://www.orphadata.com/data/xml/en_product6.xml"
@@ -183,7 +185,7 @@ gofcards_workdir: "/paedyl01/disk1/yangyxt/PriVA/data/gofcards/build_work"
 gofcards_hg38_fasta: "/paedyl01/disk1/yangyxt/indexed_genome/hg38/ucsc.hg38.fasta"
 gofcards_hg19_to_hg38_chain: "/paedyl01/disk1/yangyxt/public_data/liftOver/hg19ToHg38.over.chain"
 gofcards_clinvar_injector_script: "/paedyl01/disk1/yangyxt/PriVA/scripts/inject_clinvar_into_gofcards.py"
-clinvar_vcv_xml: "/paedyl01/disk1/yangyxt/PriVA/data/gene_pathogenic_mechanism/raw/clinvar_vcv/ClinVarVCVRelease_00-latest_weekly.xml.gz"
+clinvar_vcv_xml: "/paedyl01/disk1/yangyxt/public_data/gene_pathogenic_mechanism/raw/clinvar_vcv/ClinVarVCVRelease_00-latest_weekly.xml.gz"
 gofcards_builder_script: "/paedyl01/disk1/yangyxt/PriVA/scripts/build_gofcards_exact_gof_cache.py"
 gofcards_mechanism_review_tsv: "/paedyl01/disk1/yangyxt/PriVA/data/gofcards/gofcards_mechanism_reviews.tsv"
 
@@ -247,4 +249,4 @@ pext_tissue_bw_dir: ""                                       # Directory contain
 
 hpo_condition_mechanism_builder_script: /paedyl01/disk1/yangyxt/PriVA/scripts/build_hpo_condition_mechanism_cache.py
 
-hpo_condition_mechanism_json: /paedyl01/disk1/yangyxt/PriVA/data/gene_pathogenic_mechanism/prepared/hpo_condition_mechanism_cache.json.gz
+hpo_condition_mechanism_json: /paedyl01/disk1/yangyxt/PriVA/data/patho_mechanism/hpo_condition_mechanism_cache.json.gz

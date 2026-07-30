@@ -25,17 +25,12 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 PRIVA_ROOT = SCRIPT_DIR.parent
 DEFAULT_GOFCARDS = PRIVA_ROOT / "data" / "gofcards" / "gofcards_exact_gof.json.gz"
 DEFAULT_EVIDENCE = (
-    PRIVA_ROOT
-    / "data"
-    / "gene_pathogenic_mechanism"
-    / "prepared"
-    / "gene_pathogenic_mechanism_evidence.tsv"
+    PRIVA_ROOT / "data" / "patho_mechanism" / "gene_pathogenic_mechanism_evidence.tsv"
 )
 DEFAULT_NONLOF_JSON = (
     PRIVA_ROOT
     / "data"
-    / "gene_pathogenic_mechanism"
-    / "prepared"
+    / "patho_mechanism"
     / "gene_nonlof_mechanism_curated_assertions.json.gz"
 )
 DEFAULT_HGNC = PRIVA_ROOT / "data" / "hgnc" / "non_alt_loci_set.tsv"

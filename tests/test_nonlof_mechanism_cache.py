@@ -14,7 +14,7 @@ from clinvar_vcv import gofcards_variant_is_eligible  # noqa: E402
 
 
 def test_portable_defaults_stay_inside_priva() -> None:
-    expected_cache = ROOT / "data" / "gene_pathogenic_mechanism"
+    expected_cache = ROOT / "data" / "patho_mechanism"
 
     assert nonlof.DEFAULT_CACHE_DIR == expected_cache
     assert nonlof.DEFAULT_SHARED_RAW_DIR == expected_cache / "raw"
@@ -22,9 +22,7 @@ def test_portable_defaults_stay_inside_priva() -> None:
     # 96.6 MiB to 5.7 MiB. Readers open it through the shared opener, which
     # decides by the .gz suffix, so nothing else changes.
     assert nonlof.DEFAULT_NONLOF_ASSERTIONS_JSON == (
-        expected_cache
-        / "prepared"
-        / "gene_nonlof_mechanism_curated_assertions.json.gz"
+        expected_cache / "gene_nonlof_mechanism_curated_assertions.json.gz"
     )
     assert nonlof.DEFAULT_GOFCARDS_EXACT_VARIANTS == (
         ROOT / "data" / "gofcards" / "gofcards_exact_gof.json.gz"
@@ -102,7 +100,7 @@ def test_failed_rebuild_does_not_advance_source_manifest(
 ) -> None:
     cache_dir = tmp_path / "cache"
     raw_dir = cache_dir / "raw"
-    manifest_path = cache_dir / "metadata" / nonlof.NONLOF_SOURCE_MANIFEST_FILENAME
+    manifest_path = cache_dir / nonlof.NONLOF_SOURCE_MANIFEST_FILENAME
     previous_manifest = {
         "schema_version": "2.0",
         "marker": "last_successful_build",
@@ -169,7 +167,7 @@ def test_fetch_sources_only_stops_before_the_build(
     # rebuild is needed.
     cache_dir = tmp_path / "cache"
     raw_dir = cache_dir / "raw"
-    manifest_path = cache_dir / "metadata" / nonlof.NONLOF_SOURCE_MANIFEST_FILENAME
+    manifest_path = cache_dir / nonlof.NONLOF_SOURCE_MANIFEST_FILENAME
     previous_build_inputs = {"builder_sha256": "previous"}
     manifest_path.parent.mkdir(parents=True)
     manifest_path.write_text(
@@ -227,5 +225,5 @@ def test_fetch_sources_only_stops_before_the_build(
     # Carried forward, not replaced by a partial record.
     assert manifest["build_inputs"] == previous_build_inputs
     # No cache published, and the missing GoFCards input was never required.
-    assert not (cache_dir / "prepared" / nonlof.NONLOF_ASSERTIONS_FILENAME).exists()
+    assert not (cache_dir / nonlof.NONLOF_ASSERTIONS_FILENAME).exists()
     assert not missing_gofcards.exists()

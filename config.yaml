@@ -130,6 +130,19 @@ interpro_mapping_pickle: "Interpro_entry_mapping.pkl.gz"
 clingen_map: "/paedyl01/disk1/yangyxt/PriVA/data/clingen/clingen_map.hg19.pkl.gz"
 gene_dosage_sensitivity: "/paedyl01/disk1/yangyxt/PriVA/data/clingen/gene_dosage_sensitivity.hg19.tsv"
 
+# For any variant ClinGen has curated, ClinGen's applied evidence codes replace
+# the criteria PriVA derived. This is the production setting: an expert panel's
+# verdict outranks PriVA's own reasoning about the same variant.
+#
+# Set this to false ONLY when benchmarking PriVA against ClinGen-curated
+# variants. With the override on, that comparison is circular -- PriVA would be
+# scored on how well it reproduces answers it was handed, and would agree with
+# ClinGen almost perfectly on exactly the variants used to measure it.
+#
+# Anything other than the exact string false leaves the override on, so a config
+# that predates this key keeps production behaviour.
+apply_clingen_override: true
+
 # Ensembl CDS FASTA for alternative start codon detection (used for start_lost variants)
 # Download URLs (always latest via "current" symlinks, installed by install_utils.sh):
 #   GRCh38: https://ftp.ensembl.org/pub/current_fasta/homo_sapiens/cds/Homo_sapiens.GRCh38.cds.all.fa.gz

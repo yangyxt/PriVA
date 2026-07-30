@@ -24,6 +24,8 @@ existing result table without recomputing the criteria.
 """
 
 import logging
+import pickle
+import gzip
 import os
 import pandas as pd
 import numpy as np
@@ -43,6 +45,63 @@ DEFAULT_DISPENSABLE_GENE_LIST = os.path.join(
 logger = logging.getLogger(__name__)
 
 
+def fix_clingen_term(clingen_str: str) -> str:
+    """Normalize one ClinGen evidence code to PriVA's spelling of the strength.
+
+    ClinGen's ERepo table truncates two of the five strength names -- it writes
+    ``PVS1_Very`` for Very Strong and ``BA1_Stand`` for Stand Alone. PriVA
+    spells both out, and translate_strength_level below looks the spelled-out
+    form up, so the truncation has to be repaired before the code is stored.
+
+    Measured on /paedyl01/disk1/yangyxt/PriVA/data/clingen/clingen_map.hg19.pkl.gz:
+    of the 44 evidence codes carrying a strength suffix, 4 use ``Very`` and 1
+    uses ``Stand``. The other three suffixes -- Strong, Supporting, Moderate --
+    already match and pass through unchanged, as does any code with no suffix.
+    """
+    if not isinstance(clingen_str, str):
+        raise ValueError(f"ClinGen evidence input {clingen_str} is not a string")
+
+    if "_" not in clingen_str:
+        return clingen_str
+    else:
+        prefix = clingen_str.split("_")[0]
+        suffix = clingen_str.split("_")[1]
+        if suffix.startswith("Very"):
+            suffix = "Very Strong"
+        elif suffix.startswith("Stand"):
+            suffix = "Stand Alone"
+        return f"{prefix}_{suffix}"
+
+
+def translate_strength_level(criteria_name: str, criteria_list_str: str) -> int:
+    """Read one criterion's strength back out of an ACMG_criteria summary string.
+
+    The inverse of create_criteria_summary, needed because the ClinGen override
+    replaces the summary string and the criteria matrix then has to be rebuilt
+    from it. Without this the two would disagree, and the scoring step reads the
+    matrix rather than the string.
+
+    Returns the PriVA strength integer: 1 Supporting, 2 Moderate, 3 Strong,
+    4 Very Strong, 5 Stand Alone, 0 when the criterion is not present. A bare
+    code such as ``PM2`` carries its default strength, taken from the second
+    character of its own name; a suffixed code such as ``PM2_Supporting``
+    carries the suffix instead.
+    """
+    strength_map = { "V": 4, "S": 3, "M": 2, "P": 1, "A": 5}
+    variable_strength_level = { "Supporting": 1, "Moderate": 2, "Strong": 3, "Very Strong": 4, "Stand Alone": 5, "Very": 4, "Stand": 5, "Standalone": 5 }
+    if not isinstance(criteria_list_str, str):
+        return 0
+    elif criteria_name not in criteria_list_str:
+        return 0
+    else:
+        criteria_list = criteria_list_str.split(";")
+        if criteria_name in criteria_list:
+            return strength_map[criteria_name[1]]
+        else:
+            criteria_match = [c for c in criteria_list if c.startswith(criteria_name)][0]
+            return variable_strength_level[criteria_match.split("_")[1]]
+
+
 def create_criteria_summary(row, criteria_order=None, clingen_evidence=None):
     """
     Create a summary string of active criteria for a given row.
@@ -50,6 +109,10 @@ def create_criteria_summary(row, criteria_order=None, clingen_evidence=None):
     Args:
         row: A row from the criteria matrix
         criteria_order: List of criteria in order
+        clingen_evidence: variant_id -> ClinGen's applied evidence codes. When
+            the query variant appears here, ClinGen's curated codes REPLACE the
+            criteria PriVA derived, rather than being merged with them -- a
+            curated verdict is not evidence to be weighed alongside PriVA's own.
 
     Returns:
         A semicolon-separated string of active criteria
@@ -60,21 +123,74 @@ def create_criteria_summary(row, criteria_order=None, clingen_evidence=None):
 
     active_criteria = [ col if strength_level_suffix.get(int(row[col]), None) == label_strength_level.get(col[1], None) else col + "_" + strength_level_suffix.get(int(row[col]), None) for col in criteria_order if int(row[col]) > 0 ]
 
-    # TEMPORARILY COMMENTED OUT: ClinGen evidence inheritance
-    # ClinGen evidence lookup is deliberately not applied here. clingen_evidence
-    # is accepted so the parameter stays wired through the pipeline, but a
-    # ClinGen assertion does not override the criteria PriVA derived itself.
+    # ClinGen's curated codes replace PriVA's whenever this variant is curated.
+    #
+    # The isinstance check is not defensive padding. 241 of the 9,646 entries in
+    # the hg19 ClinGen map hold a float NaN rather than a string, because the
+    # ERepo table has a curated variant with no applied evidence codes recorded.
+    # NaN is truthy, so testing only ``if clingen_criteria`` would let those
+    # through, and the list comprehension would then produce an empty list --
+    # erasing the criteria PriVA derived and leaving the variant with nothing at
+    # all. A curated record that states no codes is silence, not a verdict of
+    # "no criteria met", so PriVA's own assessment stands for those variants.
+    clingen_criteria = clingen_evidence.get(row["variant_id"], None) if clingen_evidence else None
+    if isinstance(clingen_criteria, str) and clingen_criteria.strip():
+        active_criteria = [fix_clingen_term(c.strip()) for c in clingen_criteria.split(",") if c.strip()]
 
     return ";".join(active_criteria) if active_criteria else np.nan
 
 
-def summarize_acmg_criteria(df: pd.DataFrame, criteria_dict: Dict[str, np.ndarray], clingen_map_pkl: str) -> Tuple[pd.DataFrame, pd.DataFrame]:
+def summarize_acmg_criteria(df: pd.DataFrame,
+                            criteria_dict: Dict[str, np.ndarray],
+                            clingen_map_pkl: str,
+                            apply_clingen_override: bool = True) -> Tuple[pd.DataFrame, pd.DataFrame]:
     """
     Create a summary column of assigned criteria and a boolean matrix of all criteria.
+
+    THE CLINGEN OVERRIDE, AND WHY IT HAS A SWITCH
+    =============================================
+
+    For a variant ClinGen has curated, ClinGen's applied evidence codes replace
+    the criteria PriVA derived. That is the production behaviour and the default:
+    an expert panel's verdict outranks PriVA's own reasoning about the same
+    variant, so PriVA should report the verdict.
+
+    The override is turned OFF for one purpose only -- benchmarking PriVA
+    against ClinGen-curated variants. With it on, that comparison is circular:
+    PriVA would be scored on how well it reproduces the answers it was just
+    handed, and would agree with ClinGen almost perfectly on exactly the
+    variants used to measure it.
+
+    This is a parameter rather than a block of code to comment in and out.
+    Editing the source to switch between the two modes is what left
+    fix_clingen_term and translate_strength_level looking like dead functions,
+    reachable only from commented-out lines, until they were deleted as
+    uncalled. A caller that wants the benchmark behaviour now says so.
+
+    BOTH HALVES OF THE OVERRIDE
+    ===========================
+
+    The summary string and the criteria matrix have to agree, because the
+    scoring and ranking steps downstream read the matrix, not the string. So
+    the override is applied twice:
+
+        create_criteria_summary   replaces the ACMG_criteria string with
+                                  ClinGen's codes, spelling repaired by
+                                  fix_clingen_term
+        this function             rebuilds the matrix rows for those variants
+                                  from the replaced string, via
+                                  translate_strength_level
+
+    Skipping the second half would leave a variant whose reported criteria say
+    one thing and whose score is computed from another.
 
     Args:
         df: Input DataFrame
         criteria_dict: Dictionary mapping criteria names to boolean arrays
+        clingen_map_pkl: variant_id -> ClinGen applied evidence codes. Required
+            when apply_clingen_override is true; not read at all when it is not.
+        apply_clingen_override: True in production. Pass False to benchmark
+            PriVA against ClinGen-curated variants.
 
     Returns:
         Tuple of:
@@ -114,18 +230,57 @@ def summarize_acmg_criteria(df: pd.DataFrame, criteria_dict: Dict[str, np.ndarra
         if not criteria_matrix[col].isin([0, 1, 2, 3, 4, 5]).all():
             raise ValueError(f"Column {col} has non-integer values")
 
-    # TEMPORARILY COMMENTED OUT: ClinGen evidence inheritance
-    # Uncomment the following lines to re-enable ClinGen evidence lookup
-    # Load ClinGen evidence map
-    # clingen_map = pickle.load(gzip.open(clingen_map_pkl, "rb")) if clingen_map_pkl.endswith(".gz") else pickle.load(open(clingen_map_pkl, "rb"))
-    clingen_map = {}  # Empty map - PriVA will use its own criteria assignments
+    # The map is required when the override is on, and not read when it is off.
+    # A missing file is an error rather than a silent fall-through to PriVA's own
+    # criteria: that would look identical to the benchmark mode in the output,
+    # and nobody reading the result could tell which one they had got.
+    if apply_clingen_override:
+        if not clingen_map_pkl or not os.path.exists(clingen_map_pkl):
+            raise FileNotFoundError(
+                "ClinGen override is enabled but the evidence map is missing: "
+                f"{clingen_map_pkl!r}. Build it with scripts/prepare_clingen_map.py, "
+                "or pass apply_clingen_override=False to benchmark PriVA against "
+                "ClinGen-curated variants."
+            )
+        clingen_map = (
+            pickle.load(gzip.open(clingen_map_pkl, "rb"))
+            if clingen_map_pkl.endswith(".gz")
+            else pickle.load(open(clingen_map_pkl, "rb"))
+        )
+        curated_here = criteria_matrix["variant_id"].isin(clingen_map).sum()
+        logger.info(
+            "ClinGen override ON: %s curated variants in the map, %s of them "
+            "present in this table; their criteria will replace PriVA's",
+            len(clingen_map), int(curated_here),
+        )
+    else:
+        clingen_map = {}
+        logger.info(
+            "ClinGen override OFF: PriVA reports the criteria it derived itself. "
+            "Use this only for benchmarking against ClinGen-curated variants."
+        )
 
     # Add summary column to original DataFrame
     df['ACMG_criteria'] = criteria_matrix.apply(create_criteria_summary, axis=1, criteria_order=criteria_order, clingen_evidence=clingen_map)
 
-    # The criteria matrix is deliberately not overridden with ClinGen evidence.
-    # clingen_map_pkl is accepted so the parameter stays wired through, but
-    # PriVA reports the criteria it derived rather than a curated verdict.
+    # Rebuild the matrix rows for overridden variants from the replaced summary
+    # string, so the matrix the scoring step reads agrees with the criteria the
+    # table reports. Restricted to variants that actually carry ClinGen codes:
+    # a curated variant whose map entry states no codes keeps PriVA's row.
+    if clingen_map:
+        overridden = criteria_matrix["variant_id"].map(
+            lambda v: isinstance(clingen_map.get(v), str) and bool(clingen_map[v].strip())
+        )
+        for col in criteria_order:
+            criteria_matrix.loc[overridden, col] = df.loc[overridden, "ACMG_criteria"].map(
+                lambda x: translate_strength_level(col, x)
+            )
+        logger.info(
+            "ClinGen override applied to %s variants; %s further curated "
+            "variants had no evidence codes recorded and kept PriVA's criteria",
+            int(overridden.sum()),
+            int(criteria_matrix["variant_id"].isin(clingen_map).sum() - overridden.sum()),
+        )
 
     return df, criteria_matrix
 

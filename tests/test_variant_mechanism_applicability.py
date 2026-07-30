@@ -566,8 +566,17 @@ def test_acmg_masks_reject_legacy_gene_level_fallback() -> None:
 
 
 def test_clinvar_gene_lof_gate_requires_pathogenic_and_two_stars() -> None:
-    clinvar = {
-        "GENE_PATH": {
+    # Both ClinVar structures are keyed by transcript, so a transcript-to-gene
+    # map is what makes the answer gene-level.
+    tx2gene = {
+        "ENST_PATH": "GENE_PATH",
+        "ENST_ONE_STAR": "GENE_ONE_STAR",
+        "ENST_CONFLICT": "GENE_CONFLICT",
+        "ENST_SPLICE": "GENE_SPLICE_ONLY",
+        "ENST_SPLICE_ONE_STAR": "GENE_SPLICE_ONE_STAR",
+    }
+    aa_dict = {
+        "ENST_PATH": {
             1: {
                 "p.Ala1Val": {
                     "CLNSIG": ["Likely_pathogenic"],
@@ -575,7 +584,7 @@ def test_clinvar_gene_lof_gate_requires_pathogenic_and_two_stars() -> None:
                 }
             }
         },
-        "GENE_ONE_STAR": {
+        "ENST_ONE_STAR": {
             1: {
                 "p.Ala1Val": {
                     "CLNSIG": ["Pathogenic"],
@@ -583,7 +592,7 @@ def test_clinvar_gene_lof_gate_requires_pathogenic_and_two_stars() -> None:
                 }
             }
         },
-        "GENE_CONFLICT": {
+        "ENST_CONFLICT": {
             1: {
                 "p.Ala1Val": {
                     "CLNSIG": ["Conflicting_classifications_of_pathogenicity"],
@@ -591,9 +600,47 @@ def test_clinvar_gene_lof_gate_requires_pathogenic_and_two_stars() -> None:
                 }
             }
         },
+        # A transcript nothing maps to contributes nothing.
+        "ENST_UNMAPPED": {
+            1: {
+                "p.Ala1Val": {
+                    "CLNSIG": ["Pathogenic"],
+                    "CLNREVSTAT": ["practice_guideline"],
+                }
+            }
+        },
+    }
+    # A canonical splice-site variant carries no HGVSp, so it can only ever
+    # reach the gate through this second structure.
+    splice_dict = {
+        "ENST_SPLICE": [
+            {
+                "hgvsc": "c.1234+1G>A",
+                "consequence": "splice_donor_variant",
+                "clinvar_sig": "Pathogenic",
+                "clinvar_review": "reviewed_by_expert_panel",
+            }
+        ],
+        "ENST_SPLICE_ONE_STAR": [
+            {
+                "hgvsc": "c.1234+1G>A",
+                "consequence": "splice_donor_variant",
+                "clinvar_sig": "Pathogenic",
+                "clinvar_review": "criteria_provided,_single_submitter",
+            }
+        ],
     }
 
-    assert summarize_clinvar_gene_pathogenicity(clinvar) == {"GENE_PATH"}
+    # The amino-acid structure alone cannot see the splice-only gene.
+    assert summarize_clinvar_gene_pathogenicity(
+        tx2gene, clinvar_aa_dict=aa_dict
+    ) == {"GENE_PATH"}
+
+    # Adding the second structure recovers it, and the two-star bar and the
+    # conflicting-classification exclusion still hold across both.
+    assert summarize_clinvar_gene_pathogenicity(
+        tx2gene, clinvar_aa_dict=aa_dict, clinvar_splice_dict=splice_dict
+    ) == {"GENE_PATH", "GENE_SPLICE_ONLY"}
 
 
 def test_scope_review_blocks_automatic_bs2() -> None:

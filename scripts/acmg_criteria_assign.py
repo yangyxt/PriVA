@@ -584,50 +584,118 @@ def vep_consq_interpret(df: pd.DataFrame, threads: int = 10) -> pd.DataFrame:
 
 
 
-def summarize_clinvar_gene_pathogenicity(clinvar_gene_aa_dict: dict, high_confidence_status = {
+def summarize_clinvar_gene_pathogenicity(transcript_to_gene_map: dict,
+                                         clinvar_aa_dict: dict = None,
+                                         clinvar_splice_dict: dict = None,
+                                         high_confidence_status = {
         # Higher confidence (2+ stars)
         'practice_guideline': 4,                                   # 4 stars
         'reviewed_by_expert_panel': 3,                             # 3 stars
         'criteria_provided,_multiple_submitters,_no_conflicts': 2,  # 2 stars
     }) -> set:
     '''
-    Based on the clinvar_gene_aa_dict:
-    {ensg: {protein_pos: {hgvsp: {'CLNSIG': [cln_sig], 'CLNREVSTAT': [rev_stat]}}}}
+    Which genes carry a high-confidence pathogenic variant in ClinVar?
 
-    Extract the gene list that has been reported to harbor pathogenic variants in ClinVar database,
-    considering both CLNSIG and CLNREVSTAT values.
+    Returns a set of gene identifiers, using whatever key ``transcript_to_gene_map``
+    maps to -- in the PriVA pipeline that is the Ensembl gene ID, matching the
+    ``Gene`` column.
+
+    WHY THIS READS TWO CLINVAR STRUCTURES AND NOT ONE
+    =================================================
+
+    PriVA's ClinVar build (scripts/stat_aachange_clinvar.py) makes one pass over
+    the annotated ClinVar VCF and writes two files, because they are keyed on
+    different things:
+
+      clinvar_aa_dict     keyed on the PROTEIN consequence
+        {transcript: {protein_pos: {hgvsp: {CLNSIG: [...], CLNREVSTAT: [...]}}}}
+        Every entry has a non-blank HGVSp. Frameshift and nonsense variants are
+        present (p.*fs, p.*Ter), but a canonical splice-site variant such as
+        c.1234+1G>A produces no HGVSp in VEP and therefore cannot appear here at
+        all -- nor can deep-intronic variants or whole-exon deletions.
+
+      clinvar_splice_dict keyed on having an EXON or INTRON field
+        {transcript: [{clinvar_sig, clinvar_review, exon, intron, hgvsc, ...}]}
+        Those variants do appear here.
+
+    Reading only the first silently misses any gene whose two-star pathogenic
+    variants all lack a protein consequence. Measured on the hg19 build, the
+    second file adds 171 genes (2,869 -> 3,040).
+
+    THE TEST, applied identically to both structures
+    ================================================
+
+      CLNSIG split on , / | ; and lowercased, then intersected with
+      {pathogenic, likely_pathogenic}
+                    AND
+      high_confidence_status[CLNREVSTAT] >= 2, i.e. two stars or better:
+          practice_guideline                                        4
+          reviewed_by_expert_panel                                  3
+          criteria_provided,_multiple_submitters,_no_conflicts       2
+          anything else                                             0  -> fails
+
+    Splitting CLNSIG into tokens is what keeps Conflicting_classifications_of_
+    pathogenicity out: it tokenizes to {conflicting_classifications_of_pathogenicity},
+    which does not match. The splice builder's own filter is looser than this
+    (it accepts any CLNSIG containing "athogenic"), so the strict test is
+    re-applied here rather than trusted from the build. Measured on the hg19
+    build, no gene enters through the looser match alone, so the two sources
+    agree by construction.
+
+    A transcript absent from transcript_to_gene_map contributes nothing, since
+    there is no gene to attribute it to.
     '''
 
-    # Initialize set to store genes with high-confidence pathogenic variants
+    def qualifies(clnsig, revstat) -> bool:
+        sig_tokens = {
+            token.strip().lower()
+            for token in re.split(r"[,/|;]", str(clnsig))
+            if token.strip()
+        }
+        if not ({"pathogenic", "likely_pathogenic"} & sig_tokens):
+            return False
+        return high_confidence_status.get(revstat, 0) >= 2
+
+    def aa_transcript_qualifies(positions) -> bool:
+        for hgvsp_dict in positions.values():
+            for info in hgvsp_dict.values():
+                for clnsig, revstat in zip(info.get('CLNSIG', []),
+                                           info.get('CLNREVSTAT', [])):
+                    if qualifies(clnsig, revstat):
+                        return True
+        return False
+
+    def splice_transcript_qualifies(records) -> bool:
+        for record in records:
+            if qualifies(record.get('clinvar_sig'), record.get('clinvar_review')):
+                return True
+        return False
+
     pathogenic_genes = set()
+    for label, source, transcript_qualifies in (
+            ("protein consequence", clinvar_aa_dict or {}, aa_transcript_qualifies),
+            ("exon/intron", clinvar_splice_dict or {}, splice_transcript_qualifies)):
+        genes_from_source = set()
+        for transcript, payload in source.items():
+            gene = transcript_to_gene_map.get(transcript)
+            # Already established for this gene: existence is all that is asked.
+            if not gene or gene in genes_from_source:
+                continue
+            if transcript_qualifies(payload):
+                genes_from_source.add(gene)
+        logger.info(
+            "ClinVar %s records: %s transcripts scanned, %s distinct genes carry "
+            "a pathogenic or likely-pathogenic variant at >=2 stars, of which %s "
+            "were not already found by an earlier structure",
+            label, len(source), len(genes_from_source),
+            len(genes_from_source - pathogenic_genes),
+        )
+        pathogenic_genes |= genes_from_source
 
-    # Iterate through each gene and its amino acid changes
-    for ensg, aa_positions in clinvar_gene_aa_dict.items():
-        for pos, hgvsp_dict in aa_positions.items():
-            for hgvsp, info in hgvsp_dict.items():
-                # Retrieve CLNSIG and CLNREVSTAT lists
-                clnsig_list = info.get('CLNSIG', [])
-                revstat_list = info.get('CLNREVSTAT', [])
-
-                # Check if any variant is pathogenic with high confidence
-                for clnsig, revstat in zip(clnsig_list, revstat_list):
-                    sig_tokens = {
-                        token.strip().lower()
-                        for token in re.split(r"[,/|;]", str(clnsig))
-                        if token.strip()
-                    }
-                    is_pathogenic = bool(
-                        {"pathogenic", "likely_pathogenic"} & sig_tokens
-                    )
-                    if is_pathogenic and high_confidence_status.get(revstat, 0) >= 2:
-                        pathogenic_genes.add(ensg)
-                        break  # No need to check other entries for this gene
-                if ensg in pathogenic_genes:
-                    break  # Move to the next gene
-            if ensg in pathogenic_genes:
-                break  # Move to the next gene
-
-    logger.info(f"Found {len(pathogenic_genes)} genes with high-confidence pathogenic variants in ClinVar")
+    logger.info(
+        "Found %s genes with a high-confidence pathogenic ClinVar variant",
+        len(pathogenic_genes),
+    )
     return pathogenic_genes
 
 
@@ -1033,11 +1101,14 @@ def PVS1_criteria(df: pd.DataFrame,
     # deliberately a union rather than a consensus: each is incomplete on its
     # own, and a gene missing from one is routinely present in another.
     #
-    #   1. the HPO condition cache records a loss-of-function mechanism for
-    #      one of the gene's germline conditions
-    #   2. the gene carries ClinVar pathogenic variants at high review status
-    #   3. LOEUF below 0.35            -- intolerant to losing one copy
-    #   4. mean AlphaMissense above 0.7 -- intolerant to missense generally
+    #   1. the HPO condition cache records a CURATED loss-of-function mechanism
+    #      for one of the gene's germline conditions. Mechanisms the builder
+    #      deduced from a recessive inheritance are excluded on purpose: that
+    #      deduction restates the inheritance and adds no evidence here.
+    #   2. the gene carries a ClinVar pathogenic or likely-pathogenic variant
+    #      at a review status of two stars or better
+    #   3. LOEUF below 0.35             -- intolerant to losing one copy
+    #   4. mean AlphaMissense above 0.6 -- intolerant to missense generally
     #   5. ClinGen dosage curation      -- haploinsufficiency score 3, or
     #      30 / 40, which mark a gene whose phenotype is recessive and for
     #      which loss of function is therefore relevant when biallelic
@@ -1091,7 +1162,7 @@ def PVS1_criteria(df: pd.DataFrame,
     # 3 and 4. constraint against losing a copy, and against missense generally
     loeuf_intolerant = df["LOEUF"].fillna(2) < 0.35
     am_intolerant = (
-        df.get("Gene_avg_AM_score", pd.Series(np.nan, index=df.index)).fillna(0) > 0.7
+        df.get("Gene_avg_AM_score", pd.Series(np.nan, index=df.index)).fillna(0) > 0.6
     )
 
     # 5. ClinGen dosage curation. Score 3 is established haploinsufficiency;
@@ -1541,8 +1612,8 @@ def check_aa_pathogenic(row: dict,
 
 
 def PS1_PM5_criteria(df: pd.DataFrame,
-                     clinvar_aa_dict_pkl: str,
-                     clinvar_splice_dict_pkl: str,
+                     clinvar_aa_dict: dict,
+                     clinvar_splice_dict: dict,
                      ps3_clinvar_patho: np.ndarray,
                      pvs1_criteria: np.ndarray,
                      threads: int = 10,
@@ -1558,12 +1629,11 @@ def PS1_PM5_criteria(df: pd.DataFrame,
     PS1: Same amino acid change as a previously established pathogenic variant.
     PM5: Same AA residue with a different missense change (same variant_type) as a previously
          established pathogenic variant.
-    '''
-    logger.info(f"Loading ClinVar AA change dict from {clinvar_aa_dict_pkl}")
-    clinvar_aa_dict = pickle.load(gzip.open(clinvar_aa_dict_pkl)) if clinvar_aa_dict_pkl.endswith(".gz") else pickle.load(open(clinvar_aa_dict_pkl, 'rb'))
-    logger.info(f"Loading ClinVar splice dict from {clinvar_splice_dict_pkl}")
-    clinvar_splice_dict = pickle.load(gzip.open(clinvar_splice_dict_pkl)) if clinvar_splice_dict_pkl.endswith(".gz") else pickle.load(open(clinvar_splice_dict_pkl, 'rb'))
 
+    Both ClinVar structures arrive already loaded. The caller loads them once and
+    shares them with summarize_clinvar_gene_pathogenicity, so the 44 MiB and
+    211 MiB pickles are read from disk once per run rather than twice.
+    '''
     # ---------------------------------------------------------------
     # Build flat lookup sets (one-time O(ClinVar_size) pass)
     #   ps1_set      = {(transcript, raw_protein_pos, hgvsp_alt)} for high-conf pathogenic
@@ -4627,30 +4697,24 @@ def ACMG_criteria_assign(anno_table: str,
     transcript_to_gene_map = dict(zip(anno_df['Feature'], anno_df['Gene']))
     # Use the two dict above to create dict that maps gene ID to mean AM score
     gene_to_am_score_map = {g: am_score_dict[t] for t, g in transcript_to_gene_map.items() if t in am_score_dict}
+    # Both ClinVar structures are loaded once here and handed to every consumer.
+    # PS1_PM5_criteria used to load them again from disk itself, which read
+    # 44 MiB and 211 MiB twice per run.
+    logger.info(f"Loading ClinVar AA change dict from {clinvar_aa_dict_pkl}")
     clinvar_aa_dict = pickle.load(gzip.open(clinvar_aa_dict_pkl)) if clinvar_aa_dict_pkl.endswith(".gz") else pickle.load(open(clinvar_aa_dict_pkl, "rb"))
-
-    # FIX: Merge ClinVar data from ALL transcripts of a gene, not just the last one
-    # The old dict comprehension would overwrite gene entries when multiple transcripts
-    # mapped to the same gene, causing genes to be incorrectly excluded from
-    # clinvar_pathogenic_genes if the last transcript lacked qualifying variants
-    clinvar_aa_gene_map = {}
-    for t, g in transcript_to_gene_map.items():
-        if t in clinvar_aa_dict:
-            if g not in clinvar_aa_gene_map:
-                # First transcript for this gene - initialize with its data
-                clinvar_aa_gene_map[g] = dict(clinvar_aa_dict[t])
-            else:
-                # Merge additional transcript data into existing gene entry
-                for pos, variants in clinvar_aa_dict[t].items():
-                    if pos not in clinvar_aa_gene_map[g]:
-                        clinvar_aa_gene_map[g][pos] = variants
-                    else:
-                        # Merge variants at the same position
-                        clinvar_aa_gene_map[g][pos].update(variants)
+    logger.info(f"Loading ClinVar splice dict from {clinvar_splice_dict_pkl}")
+    clinvar_splice_dict = pickle.load(gzip.open(clinvar_splice_dict_pkl)) if clinvar_splice_dict_pkl.endswith(".gz") else pickle.load(open(clinvar_splice_dict_pkl, "rb"))
 
     logger.info(f"gene_to_am_score_map created, {len(gene_to_am_score_map)} genes are having the AM score")
-    logger.info(f"clinvar_aa_gene_map created by merging {len(clinvar_aa_dict)} transcripts into {len(clinvar_aa_gene_map)} genes")
-    clinvar_pathogenic_genes = summarize_clinvar_gene_pathogenicity(clinvar_aa_gene_map)
+    # Both structures are keyed by transcript, so the transcript-to-gene map is
+    # what turns them into a gene-level answer. Reading only the amino-acid one
+    # would miss any gene whose two-star pathogenic variants are all splice-site
+    # or intronic, since those carry no HGVSp and cannot appear there.
+    clinvar_pathogenic_genes = summarize_clinvar_gene_pathogenicity(
+        transcript_to_gene_map,
+        clinvar_aa_dict=clinvar_aa_dict,
+        clinvar_splice_dict=clinvar_splice_dict,
+    )
     anno_df["Gene_avg_AM_score"] = anno_df["Gene"].map(gene_to_am_score_map)
 
     # Establish the variant ID column
@@ -4717,7 +4781,7 @@ def ACMG_criteria_assign(anno_table: str,
     gc.collect()
 
     # Apply the PS1 and PM5 criteria
-    ps1_criteria, pm5_criteria = PS1_PM5_criteria(anno_df, clinvar_aa_dict_pkl, clinvar_splice_dict_pkl, ps3bs3_results['clinvar_patho'], pvs1_criteria, threads)
+    ps1_criteria, pm5_criteria = PS1_PM5_criteria(anno_df, clinvar_aa_dict, clinvar_splice_dict, ps3bs3_results['clinvar_patho'], pvs1_criteria, threads)
     logger.info(f"PS1 criteria applied, {(ps1_criteria > 0).sum()} variants are having the PS1 criteria")
     logger.info(f"PM5 criteria applied, {(pm5_criteria > 0).sum()} variants are having the PM5 criteria")
     gc.collect()

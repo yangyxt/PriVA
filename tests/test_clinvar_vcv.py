@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import hashlib
+import os
 import sys
 from pathlib import Path
 
@@ -15,12 +16,15 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
 from clinvar_vcv import (  # noqa: E402
+    atomic_write_text,
     gofcards_genomic_index_key,
     gofcards_variation_id_index_key,
     index_gofcards_variants,
     load_gofcards_cache,
+    open_text,
     partition_gofcards_variants,
     review_stars,
+    sha256_file,
     stream_parse_clinvar_vcv,
     variant_id_of,
 )
@@ -879,3 +883,67 @@ def test_hgnc_mapping_splits_comma_delimited_aliases(tmp_path: Path) -> None:
 
     assert mapping["H3F3A"]["hgnc_id"] == "HGNC:4764"
     assert mapping["H3F3"]["symbol"] == "H3-3A"
+
+
+def test_atomic_write_matches_a_direct_write_byte_for_byte(tmp_path: Path) -> None:
+    # Publishing through a temporary name must not change the bytes. These
+    # caches are tracked in git, so if the temporary path produced different
+    # compressed output every rebuild would look like a change.
+    payload = {"metadata": {"source": "GoFCards"}, "genes": {}}
+
+    published = tmp_path / "published.json.gz"
+    with atomic_write_text(published) as handle:
+        json.dump(payload, handle, sort_keys=True)
+
+    direct = tmp_path / "direct.json.gz"
+    with open_text(direct, "wt") as handle:
+        json.dump(payload, handle, sort_keys=True)
+
+    assert published.read_bytes() == direct.read_bytes()
+    with open_text(published) as handle:
+        assert json.load(handle) == payload
+
+
+def test_interrupted_write_leaves_the_previous_cache_in_place(tmp_path: Path) -> None:
+    # The reason this helper exists. The injected GoFCards cache used to be
+    # written straight into the live path, so an injection that died partway --
+    # a full disk, a killed job, a parse error late in a 5.8 GB XML -- left a
+    # truncated file exactly where every consumer looks for its input.
+    target = tmp_path / "cache.json.gz"
+    with atomic_write_text(target) as handle:
+        json.dump({"generation": "first"}, handle)
+    intact = target.read_bytes()
+
+    with pytest.raises(RuntimeError, match="died partway"):
+        with atomic_write_text(target) as handle:
+            handle.write('{"generation": "second, but truncat')
+            raise RuntimeError("died partway")
+
+    assert target.read_bytes() == intact
+    with open_text(target) as handle:
+        assert json.load(handle) == {"generation": "first"}
+    # No temporary file is left lying beside the destination either.
+    assert sorted(p.name for p in tmp_path.glob("*.tmp*")) == []
+
+
+def test_atomic_write_handles_an_uncompressed_destination(tmp_path: Path) -> None:
+    target = tmp_path / "plain.json"
+    with atomic_write_text(target) as handle:
+        json.dump({"compressed": False}, handle)
+
+    assert json.loads(target.read_text(encoding="utf-8")) == {"compressed": False}
+    assert sorted(p.name for p in tmp_path.glob("*.tmp*")) == []
+
+
+def test_sha256_file_distinguishes_content_from_timestamp(tmp_path: Path) -> None:
+    # What the re-injection gate relies on: a touched file is not a changed
+    # file, and only a changed file is worth rereading the VCV XML for.
+    path = tmp_path / "injector.py"
+    path.write_text("print('one')\n", encoding="utf-8")
+    before = sha256_file(path)
+
+    os.utime(path, (0, 0))
+    assert sha256_file(path) == before
+
+    path.write_text("print('two')\n", encoding="utf-8")
+    assert sha256_file(path) != before

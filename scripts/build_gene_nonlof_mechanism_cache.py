@@ -37,10 +37,12 @@ from typing import Any, Callable, Iterable, Iterator
 import pandas as pd
 
 from clinvar_vcv import (
+    atomic_write_text,
     gofcards_variant_is_eligible,
     iter_gofcards_variants,
     load_gofcards_cache,
     open_text,
+    sha256_file,
     variant_id_of,
 )
 
@@ -207,14 +209,6 @@ def parse_iso(value: str | None) -> datetime | None:
         return None
 
 
-def sha256_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
-
-
 def md5_file(path: Path) -> str:
     digest = hashlib.md5()  # nosec: provenance checksum, not security
     with path.open("rb") as handle:
@@ -237,19 +231,9 @@ def read_json(path: Path) -> dict[str, Any]:
 
 
 def write_json(path: Path, data: dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    # The temporary name keeps the destination's .gz suffix, because that suffix
-    # is what decides whether the bytes are compressed. Appending .tmp after it
-    # would write plain text into a file named .gz.
-    tmp = (
-        path.with_name(path.name[: -len(".gz")] + ".tmp.gz")
-        if str(path).endswith(".gz")
-        else path.with_suffix(path.suffix + ".tmp")
-    )
-    with open_text(tmp, "wt") as handle:
+    with atomic_write_text(path) as handle:
         json.dump(data, handle, indent=2, sort_keys=True)
         handle.write("\n")
-    tmp.replace(path)
 
 
 class BuildLock:

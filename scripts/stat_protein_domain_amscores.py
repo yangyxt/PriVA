@@ -12,6 +12,50 @@ import pickle
 def nested_defaultdict():
     return defaultdict(nested_defaultdict)
 
+
+def to_plain_dict(obj):
+    """Strip every defaultdict out of a nested structure, keeping the data.
+
+    WHY THE OUTPUT MUST NOT CONTAIN A defaultdict
+    =============================================
+
+    pickle does not store a function; it stores a module name and an attribute
+    name, and looks the pair up on load. A defaultdict therefore pickles a
+    reference to its factory -- and because this file is normally RUN rather
+    than imported, that reference came out as ``__main__.nested_defaultdict``.
+
+    On load, pickle evaluates ``getattr(sys.modules["__main__"], "nested_
+    defaultdict")``, which asks whichever file is the ENTRY POINT of the reading
+    program, not the file calling pickle.load. That made the caches readable
+    from one entry point and not another:
+
+        python am_pick_intolerant_domains.py --pickle_file ...      worked
+          that file imports the factory at its top, and it is __main__
+
+        python prepare_pm1_regions.py ...                           FAILED
+          it imports analyze_domain_data and calls it, so __main__ is
+          prepare_pm1_regions, which never names the factory
+
+    The second is a real path in install_utils.sh, and it raised
+    ``AttributeError: Can't get attribute 'nested_defaultdict'`` the moment the
+    intolerant-domain pickle needed regenerating.
+
+    Converting to plain dicts before dumping removes the reference entirely, so
+    the caches are readable by any program. Nothing is lost: readers use
+    .items(), .values(), .get() and ``in``, so none depends on a missing key
+    being created on access.
+
+    The four deployed protein-domain caches were converted in place on
+    2026-07-30 with contents verified unchanged; this keeps rebuilds clean.
+    """
+    if isinstance(obj, dict):          # covers defaultdict, which subclasses dict
+        return {k: to_plain_dict(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [to_plain_dict(v) for v in obj]
+    if isinstance(obj, tuple):
+        return tuple(to_plain_dict(v) for v in obj)
+    return obj
+
 # VEP DOMAINS sources that are structural mappings, not sequence-homology
 # domain annotations. Filtering them here avoids inflating scores_dict with
 # entries that span most of the protein (PDB/AFDB coordinate mappings) or
@@ -340,7 +384,8 @@ def main(vcf_path, output_pickle, threads=1):
     
     if output_pickle:
         with open(output_pickle, 'wb') as f:
-            pickle.dump(scores_dict, f)
+            pickle.dump(to_plain_dict(scores_dict), f,
+                        protocol=pickle.HIGHEST_PROTOCOL)
         print(f"Saved scores to {output_pickle}", file=sys.stderr)
 
     return scores_dict

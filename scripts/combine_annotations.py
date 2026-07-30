@@ -18,13 +18,13 @@ from typing import List, Dict, Any, Tuple
 from collections import deque
 
 
+# No handler here on purpose. Whoever runs the program owns logging
+# configuration: this file when it is run directly, see the __main__ block at
+# the bottom, and the importing program otherwise. Attaching a handler here as
+# well made every line from this module print twice whenever it was imported
+# alongside a configured entry point, once via that handler and once more after
+# propagating to the root logger.
 logger = logging.getLogger(__name__)
-logger.setLevel(logging.INFO)
-console_handler=logging.StreamHandler()
-console_handler.setLevel(logging.INFO)
-formatter = logging.Formatter("%(levelname)s:%(asctime)s:%(funcName)s:%(lineno)s:%(message)s")
-console_handler.setFormatter(formatter)
-logger.addHandler(console_handler)
 
 
 LEGACY_HPO_ANNOTATION_COLUMNS = (
@@ -879,6 +879,11 @@ def main_combine_annotations(input_vcf: str,
 
 
 if __name__ == "__main__":
+    # Run directly, so this file is the entry point and configures logging.
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(levelname)s:%(asctime)s:%(funcName)s:%(lineno)s:%(message)s",
+    )
     args = ap.ArgumentParser()
     args.add_argument("--input", "-i", type=str, required=True, help="The input VCF file")
     args.add_argument("--output", "-o", type=str, required=False, help="The output tab file", default=None)

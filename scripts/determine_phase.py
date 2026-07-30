@@ -12,13 +12,12 @@ import pandas as pd
 import numpy as np
 import multiprocessing as mp
 
+# No handler here on purpose. This module is only ever imported, never run, so
+# the program that imports it owns logging configuration. Attaching a handler
+# here as well as at the entry point made every line from this module print
+# twice, because the record printed once via that handler and once more after
+# propagating to the root logger.
 logger = logging.getLogger(__name__)
-logger.setLevel(logging.INFO)
-console_handler = logging.StreamHandler()
-console_handler.setLevel(logging.INFO)
-formatter = logging.Formatter("%(levelname)s:%(asctime)s:%(funcName)s:%(lineno)s:%(message)s")
-console_handler.setFormatter(formatter)
-logger.addHandler(console_handler)
 
 
 @dataclass

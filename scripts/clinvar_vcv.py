@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import contextlib
 import gzip
+import hashlib
 import io
 import json
 import re
@@ -153,6 +154,47 @@ def open_text(path: Path | str, mode: str = "rt") -> Iterator[Any]:
     else:
         with path.open(mode, encoding="utf-8") as handle:
             yield handle
+
+
+@contextlib.contextmanager
+def atomic_write_text(path: Path | str) -> Iterator[Any]:
+    """Write a file completely, then move it over ``path`` in a single step.
+
+    A reader of ``path`` sees either the previous complete file or the next
+    complete one, never a half-written prefix. Writing into the live path
+    directly means an interrupted or failed write leaves a truncated file
+    exactly where the rest of the pipeline looks for its input, and these caches
+    take long enough to build that being interrupted is a realistic outcome
+    rather than a theoretical one.
+
+    The temporary name keeps the destination's ``.gz`` suffix. That suffix is
+    what decides whether the bytes are compressed, and identical content has to
+    compress to identical bytes whether it was written to the temporary name or
+    straight to the destination.
+    """
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = (
+        path.with_name(path.name[: -len(".gz")] + ".tmp.gz")
+        if str(path).endswith(".gz")
+        else path.with_suffix(path.suffix + ".tmp")
+    )
+    try:
+        with open_text(tmp, "wt") as handle:
+            yield handle
+        tmp.replace(path)
+    finally:
+        # A failed write leaves the temporary file behind, never the destination.
+        tmp.unlink(missing_ok=True)
+
+
+def sha256_file(path: Path | str) -> str:
+    """Hash a file's contents, for telling a real change from a touched file."""
+    digest = hashlib.sha256()
+    with Path(path).open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def load_gofcards_cache(path: Path) -> dict[str, Any]:

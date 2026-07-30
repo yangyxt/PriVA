@@ -2177,7 +2177,11 @@ for pair in expected_provenance:
     key, _, want = pair.partition("=")
     if not want:
         continue
-    have = meta.get(key)
+    # A dotted key walks into a nested block, so a caller can ask about
+    # "clinvar.injector_sha256" as easily as about a value recorded at the top.
+    have = meta
+    for part in key.split("."):
+        have = have.get(part) if isinstance(have, dict) else None
     if str(have) != want:
         raise SystemExit(
             f"{path} was built with {key}={have!r}, but {want!r} is configured now"
@@ -2304,37 +2308,43 @@ function gofcards_clinvar_injection_install() {
     mkdir -p "$(dirname "${target_json}")" "${workdir}" || return 1
 
     # Reading the weekly VCV XML end to end is the most expensive step in the
-    # mechanism chain, and the installer runs this step on every pass. Redo it
-    # only when the injector or the normalized cache it reads has changed, when
-    # the deployed cache no longer validates, or when that cache has fallen too
-    # far behind the XML.
+    # mechanism chain and the installer runs this step on every pass, so the
+    # question here is only ever "would rereading it change anything".
+    #
+    # It is answered from what the cache records about how it was made, not from
+    # file timestamps. A timestamp says nothing useful: checking out a branch,
+    # copying a tree or touching a file moves it without changing a byte, and
+    # each of those would otherwise have cost hours of rereading. A recorded
+    # content hash that differs means the injector or its input really did
+    # change, which is worth acting on at once -- a fix to the injector should
+    # not have to wait out a refresh interval before it reaches the cache.
+    #
+    # The XML itself is the exception. A new VCV release lands every week and
+    # almost never alters the conditions attached here, so the cache is allowed
+    # to trail it and is refreshed once the gap reaches
+    # gofcards_clinvar_reinjection_lag_days, which is months rather than days.
     local reinject=0
     if [[ "${PRIVA_FORCE_GOFCARDS_CLINVAR_INJECTION:-0}" == "1" ]] || \
        [[ "${PRIVA_FORCE_ALL_CACHES:-0}" == "1" ]] || [[ ! -s ${target_json} ]]; then
         reinject=1
     else
-        local source_file
-        for source_file in "${injector}" "${source_cache}"; do
-            if [[ ${source_file} -nt ${target_json} ]]; then
-                log "GoFCards ClinVar injection input is newer than its cache: ${source_file}"
-                reinject=1
-                break
-            fi
-        done
-        # ClinVar publishes a VCV release every week. Rebuilding against each one
-        # would spend hours of reading for almost no change in the conditions
-        # attached here, so the deployed cache is allowed to trail the XML and is
-        # refreshed once the gap reaches gofcards_clinvar_reinjection_lag_days.
+        local injector_sha256
+        local source_cache_sha256
+        injector_sha256=$(sha256sum "${injector}" | awk '{print $1}')
+        source_cache_sha256=$(sha256sum "${source_cache}" | awk '{print $1}')
+        if ! validate_gofcards_exact_gof_cache "${target_json}" \
+                 "clinvar.injector_sha256=${injector_sha256}" \
+                 "clinvar.source_cache_sha256=${source_cache_sha256}" \
+                 "clinvar.min_review_stars=${min_stars}" >/dev/null 2>&1; then
+            log "Deployed GoFCards cache was not produced by the current injector, input or review-star setting"
+            reinject=1
+        fi
         if [[ ${reinject} -eq 0 ]]; then
             local lag_seconds=$(( $(stat -c %Y "${clinvar_xml}") - $(stat -c %Y "${target_json}") ))
             if (( lag_seconds > lag_days * 86400 )); then
                 log "Deployed GoFCards cache trails the ClinVar VCV XML by $(( lag_seconds / 86400 )) days, past the ${lag_days}-day limit"
                 reinject=1
             fi
-        fi
-        if [[ ${reinject} -eq 0 ]] && ! validate_gofcards_exact_gof_cache "${target_json}" >/dev/null 2>&1; then
-            log "Deployed GoFCards cache failed validation"
-            reinject=1
         fi
     fi
 

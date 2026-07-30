@@ -35,6 +35,7 @@ from typing import Any
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from clinvar_vcv import (  # noqa: E402
+    atomic_write_text,
     flatten_match_audit,
     gofcards_genomic_index_key,
     gofcards_variation_id,
@@ -42,7 +43,7 @@ from clinvar_vcv import (  # noqa: E402
     index_gofcards_variants,
     iter_gofcards_variants,
     load_gofcards_cache,
-    open_text,
+    sha256_file,
     stream_parse_clinvar_vcv,
 )
 
@@ -160,12 +161,21 @@ def main(argv: list[str] | None = None) -> int:
     cache.setdefault("metadata", {})["clinvar"] = {
         "source": str(args.clinvar_vcv),
         "min_review_stars": args.min_review_stars,
+        # What produced this file, by content rather than by timestamp. The
+        # installer compares these against the files it is about to use to
+        # decide whether reading the whole VCV XML again is warranted. A
+        # timestamp cannot answer that: checking out a branch or copying a tree
+        # moves it without changing a byte, and rereading the XML costs hours.
+        "injector_sha256": sha256_file(Path(__file__).resolve()),
+        "source_cache_sha256": sha256_file(args.gofcards_cache),
         **{k: int(v) for k, v in parse_stats.items()},
         **counts,
     }
 
-    args.out_json.parent.mkdir(parents=True, exist_ok=True)
-    with open_text(args.out_json, "wt") as handle:
+    # Published by writing a temporary file and moving it into place. This is
+    # the one GoFCards cache every consumer reads, and writing into it directly
+    # meant an interrupted injection left a truncated file behind.
+    with atomic_write_text(args.out_json) as handle:
         json.dump(cache, handle, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     log("injected: " + "; ".join(f"{k}={v}" for k, v in counts.items()))
 

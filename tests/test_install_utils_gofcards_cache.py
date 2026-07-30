@@ -86,13 +86,14 @@ def _cache(variants: dict | None = None, *, metadata: dict | None = None,
     }
 
 
-def _validate(path: Path) -> subprocess.CompletedProcess[str]:
+def _validate(path: Path, *provenance: str) -> subprocess.CompletedProcess[str]:
     env = os.environ.copy()
     env.update({"PRIVA_INSTALL_UTILS": str(INSTALL_UTILS), "GOFCARDS_CACHE": str(path)})
     return subprocess.run(
         ["bash", "-c",
          'source "$PRIVA_INSTALL_UTILS" >/dev/null; '
-         'validate_gofcards_exact_gof_cache "$GOFCARDS_CACHE"'],
+         'validate_gofcards_exact_gof_cache "$GOFCARDS_CACHE" "$@"',
+         "bash", *provenance],
         check=False, capture_output=True, text=True, env=env,
     )
 
@@ -251,3 +252,61 @@ def test_validator_rejects_cache_with_no_eligible_variant(tmp_path: Path) -> Non
 
     assert result.returncode != 0
     assert "no runtime-eligible variants" in result.stderr
+
+
+# The re-injection gate asks the validator whether the deployed cache was made
+# by the injector, input and settings in use now. Those facts are recorded in a
+# nested block, so the check has to reach into it, and it must be able to tell
+# "recorded and different" from "never recorded at all".
+
+def _injected(**clinvar: object) -> dict:
+    return _cache(metadata={"clinvar": {
+        "injector_sha256": "aaa", "source_cache_sha256": "bbb",
+        "min_review_stars": 2, **clinvar,
+    }})
+
+
+def _write(tmp_path: Path, cache: dict) -> Path:
+    path = tmp_path / "gofcards.json.gz"
+    with gzip.open(path, "wt", encoding="utf-8") as handle:
+        json.dump(cache, handle)
+    return path
+
+
+def test_validator_accepts_matching_nested_provenance(tmp_path: Path) -> None:
+    result = _validate(
+        _write(tmp_path, _injected()),
+        "clinvar.injector_sha256=aaa",
+        "clinvar.source_cache_sha256=bbb",
+        "clinvar.min_review_stars=2",
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
+def test_validator_rejects_a_changed_nested_value(tmp_path: Path) -> None:
+    # A real code change to the injector: the cache must be rebuilt at once
+    # rather than waiting out any refresh interval.
+    result = _validate(
+        _write(tmp_path, _injected()), "clinvar.injector_sha256=a_new_hash"
+    )
+
+    assert result.returncode != 0
+    assert "clinvar.injector_sha256='aaa'" in result.stderr
+
+
+def test_validator_rejects_a_cache_that_recorded_no_provenance(tmp_path: Path) -> None:
+    # A cache built before provenance was recorded cannot prove it is current,
+    # so it is treated as stale rather than assumed good.
+    result = _validate(_write(tmp_path, _cache()), "clinvar.injector_sha256=aaa")
+
+    assert result.returncode != 0
+    assert "clinvar.injector_sha256=None" in result.stderr
+
+
+def test_validator_ignores_a_provenance_pair_with_no_expected_value(tmp_path: Path) -> None:
+    # An unset configuration value says nothing about fitness, so it is skipped
+    # rather than treated as a mismatch.
+    result = _validate(_write(tmp_path, _injected()), "clinvar.injector_sha256=")
+
+    assert result.returncode == 0, result.stderr

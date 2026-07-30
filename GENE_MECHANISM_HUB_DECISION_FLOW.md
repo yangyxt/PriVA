@@ -14,8 +14,8 @@ from `/paedyl01/disk1/yangyxt/PriVA/scripts/acmg_criteria_assign.py`.
 | S2 | `/paedyl01/disk1/yangyxt/PriVA/data/clingen/gene_dosage_sensitivity.hg19.tsv` | Haploinsufficiency and dosage override used by the inheritance decision. |
 | S3 | `/paedyl01/disk1/yangyxt/PriVA/data/loeuf/loeuf_dataset.tsv.gz` | `LOEUF < 0.35` adds broad gene-level LOF support upstream. |
 | S4 | `/paedyl01/disk1/yangyxt/PriVA/data/alphamissense/alphamissense_mean_score.tsv` | Gene-average AlphaMissense score `> 0.564` adds broad gene-level LOF support upstream. |
-| S5 | `/paedyl01/disk1/yangyxt/PriVA/data/gene_pathogenic_mechanism/prepared/gene_pathogenic_mechanism_evidence.tsv` | Strict high/moderate-confidence G2P/DDG2P LOF assertions and their allelic requirements. |
-| S6 | `/paedyl01/disk1/yangyxt/PriVA/data/gene_pathogenic_mechanism/prepared/gene_nonlof_mechanism_curated_assertions.json` | PriVA-local canonical schema-v2 non-LOF gene-condition, GoFCards, and exact matched ClinVar VCV evidence. PriVA uses its broader packaged mechanism cache only before this cache is installed. |
+| S5 | `/paedyl01/disk1/yangyxt/PriVA/data/patho_mechanism/gene_pathogenic_mechanism_evidence.tsv` | Strict high/moderate-confidence G2P/DDG2P LOF assertions and their allelic requirements. |
+| S6 | `/paedyl01/disk1/yangyxt/PriVA/data/patho_mechanism/gene_nonlof_mechanism_curated_assertions.json.gz` | PriVA-local canonical schema-v2 non-LOF gene-condition, GoFCards, and exact matched ClinVar VCV evidence. This is the only mechanism cache the hub reads; the older combined cache it once fell back to is no longer published. |
 | S7 | `/paedyl01/disk1/yangyxt/PriVA/data/gofcards/gofcards_exact_gof_hgvsp.tsv.gz` | Build-time GoFCards normalization and quarantine table. The canonical S6 JSON embeds eligible exact alleles; runtime does not read S7 independently. |
 | S8 | PriVA's two-star-or-higher ClinVar pathogenic-variant gene set | Gene membership adds broad gene-level LOF support upstream. |
 
@@ -118,10 +118,7 @@ matched VCVs occur in 330 genes; 208 of those genes have no matched VCV reaching
 two stars. Review stars measure review quality and consensus, not whether the
 classification itself is pathogenic or benign.
 
-Audit summary:
-
-`/paedyl01/disk1/yangyxt/PriVA/data/gene_pathogenic_mechanism/audits/clinvar_gofcards_review_tier_summary.json`
-
-All matched RCV review tiers:
-
-`/paedyl01/disk1/yangyxt/PriVA/data/gene_pathogenic_mechanism/audits/clinvar_gofcards_all_review_tiers.tsv`
+The review-tier audit is generated on demand by
+`/paedyl01/disk1/yangyxt/PriVA/scripts/audit_clinvar_gofcards_review_tiers.py` and is not kept in the
+repository. It writes a summary and the full matched-RCV table into
+`/paedyl01/disk1/yangyxt/PriVA/data/patho_mechanism/`, where build byproducts are ignored by git.

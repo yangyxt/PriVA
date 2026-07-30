@@ -40,7 +40,7 @@ import pandas as pd
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_CACHE_DIR = PROJECT_ROOT / "data" / "gene_pathogenic_mechanism"
+DEFAULT_CACHE_DIR = PROJECT_ROOT / "data" / "patho_mechanism"
 DEFAULT_SHARED_RAW_DIR = DEFAULT_CACHE_DIR / "raw"
 DEFAULT_DISEASE_SCOPE_REGISTRY = PROJECT_ROOT / "data" / "mondo" / "disease_scope.tsv.gz"
 
@@ -1653,7 +1653,7 @@ def parse_args() -> argparse.Namespace:
         default=str(DEFAULT_SHARED_RAW_DIR),
         help=(
             "Shared raw-data directory used for downloads and parsing. Prepared "
-            "project-specific outputs still go under --cache-dir/prepared. "
+            "project-specific outputs are written flat into --cache-dir. "
             "Expected filenames are exactly: AllG2P.csv, "
             "ClinGen_gene_curation_list_GRCh38.tsv, "
             "gofcards/gofcards_data_download.xlsx, and panelapp_all_panels.json. "
@@ -1702,9 +1702,9 @@ def main() -> int:
         else cache_dir / "raw"
     )
     raw_dir_is_shared = raw_dir != cache_dir / "raw"
-    prepared_dir = cache_dir / "prepared"
-    metadata_dir = cache_dir / "metadata"
-    manifest_path = metadata_dir / "source_manifest.json"
+    # Every output lands directly in the cache directory; the former
+    # prepared/ and metadata/ split only added a folder level.
+    manifest_path = cache_dir / "source_manifest.json"
     lock_path = raw_dir / ".build.lock" if raw_dir_is_shared else cache_dir / ".build.lock"
 
     with BuildLock(lock_path, stale_hours=args.stale_lock_hours):
@@ -1756,7 +1756,7 @@ def main() -> int:
             raw_dir=raw_dir,
             disease_scope_registry=args.disease_scope_registry,
         )
-        evidence_path = prepared_dir / "gene_pathogenic_mechanism_evidence.tsv"
+        evidence_path = cache_dir / "gene_pathogenic_mechanism_evidence.tsv"
         evidence_count = write_gene_pathogenic_mechanism_evidence(
             evidence_path,
             all_evidence_df,
@@ -1769,7 +1769,7 @@ def main() -> int:
         print(f"hgnc_mapping: {len(hgnc_map)} entries", file=sys.stderr)
 
         result = build_unified_json(unified_df, hgnc_map)
-        json_path = prepared_dir / "gene_mechanism_curated_assertions.json"
+        json_path = cache_dir / "gene_mechanism_curated_assertions.json"
         write_json(json_path, result)
         n_genes = result["_meta"]["total_genes"]
         n_unmapped = len(result["_meta"].get("unmapped_symbols", []))
@@ -1779,7 +1779,7 @@ def main() -> int:
         # have been generated. A failed run must remain visibly retryable.
         write_json(manifest_path, manifest)
         manifest_tsv_count = write_source_manifest_tsv(
-            prepared_dir / "source_manifest.tsv",
+            cache_dir / "source_manifest.tsv",
             manifest,
         )
 
@@ -1791,12 +1791,12 @@ def main() -> int:
             "source_manifest_rows": manifest_tsv_count,
             "outputs": {
                 "source_manifest_json": str(manifest_path),
-                "source_manifest_tsv": str(prepared_dir / "source_manifest.tsv"),
+                "source_manifest_tsv": str(cache_dir / "source_manifest.tsv"),
                 "gene_pathogenic_mechanism_evidence": str(evidence_path),
                 "unified_json": str(json_path),
             },
         }
-        write_json(prepared_dir / "run_summary.json", run_summary)
+        write_json(cache_dir / "run_summary.json", run_summary)
         print(json.dumps(run_summary, indent=2, sort_keys=True))
     return 0
 

@@ -322,33 +322,19 @@ DEFAULT_HPO_COLLAPSED = DEFAULT_HPO_ASSERTIONS
 DEFAULT_CLINGEN_DOSAGE = DATA_DIR / "clingen" / "gene_dosage_sensitivity.hg19.tsv"
 DEFAULT_LOEUF_TABLE = DATA_DIR / "loeuf" / "loeuf_dataset.tsv.gz"
 DEFAULT_HPO_CONDITION_MECHANISM_CACHE = (
-    DATA_DIR
-    / "gene_pathogenic_mechanism"
-    / "prepared"
-    / "hpo_condition_mechanism_cache.json.gz"
+    DATA_DIR / "patho_mechanism" / "hpo_condition_mechanism_cache.json.gz"
 )
 HPO_CONDITION_MECHANISM_SCHEMA_VERSION = "1.0"
-PACKAGED_MECHANISM_JSON = (
-    DATA_DIR / "gene_pathogenic_mechanism" / "prepared" / "gene_mechanism_curated_assertions.json"
-)
-CANONICAL_NONLOF_MECHANISM_JSON = (
-    DATA_DIR
-    / "gene_pathogenic_mechanism"
-    / "prepared"
-    / "gene_nonlof_mechanism_curated_assertions.json.gz"
-)
+# The non-LOF cache is the mechanism input. It used to be chosen over an older
+# combined cache only when it existed on disk, but it is the file the repository
+# ships, so that choice had one possible outcome and the other name is gone.
 DEFAULT_MECHANISM_JSON = (
-    CANONICAL_NONLOF_MECHANISM_JSON
-    if CANONICAL_NONLOF_MECHANISM_JSON.exists()
-    else PACKAGED_MECHANISM_JSON
+    DATA_DIR / "patho_mechanism" / "gene_nonlof_mechanism_curated_assertions.json.gz"
 )
 DEFAULT_DDG2P_MECHANISM_EVIDENCE = (
-    DATA_DIR / "gene_pathogenic_mechanism" / "prepared" / "gene_pathogenic_mechanism_evidence.tsv"
+    DATA_DIR / "patho_mechanism" / "gene_pathogenic_mechanism_evidence.tsv"
 )
 DEFAULT_GOFCARDS_EXACT_GOF_HGVSP = DATA_DIR / "gofcards" / "gofcards_exact_gof.json.gz"
-DEFAULT_GOFCARDS_RAW_XLSX = (
-    DATA_DIR / "gene_pathogenic_mechanism" / "raw" / "gofcards" / "gofcards_data_download.xlsx"
-)
 
 LOOKUP_FIELD_PRIORITY = (
     "symbol",

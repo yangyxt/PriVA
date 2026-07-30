@@ -2093,11 +2093,11 @@ function gene_pathogenic_mechanism_cache_install() {
     local evidence_tsv
     local disease_scope_registry
 
-    cache_dir=$(yaml_value_or_default "${config_file}" "gene_mechanism_cache_dir" "${DATA_DIR}/gene_pathogenic_mechanism")
+    cache_dir=$(yaml_value_or_default "${config_file}" "gene_mechanism_cache_dir" "${DATA_DIR}/patho_mechanism")
     raw_dir=$(yaml_value_or_default "${config_file}" "gene_mechanism_raw_dir" "${cache_dir}/raw")
     builder_script=$(yaml_value_or_default "${config_file}" "gene_mechanism_builder_script" "${SCRIPT_DIR}/build_gene_pathogenic_mechanism_cache.py")
-    mechanism_json=$(yaml_value_or_default "${config_file}" "gene_mechanism_json" "${cache_dir}/prepared/gene_mechanism_curated_assertions.json")
-    evidence_tsv=$(yaml_value_or_default "${config_file}" "ddg2p_mechanism_evidence" "${cache_dir}/prepared/gene_pathogenic_mechanism_evidence.tsv")
+    mechanism_json=$(yaml_value_or_default "${config_file}" "gene_mechanism_json" "${cache_dir}/gene_mechanism_curated_assertions.json")
+    evidence_tsv=$(yaml_value_or_default "${config_file}" "ddg2p_mechanism_evidence" "${cache_dir}/gene_pathogenic_mechanism_evidence.tsv")
     disease_scope_registry=$(yaml_value_or_default "${config_file}" "mondo_disease_scope_registry" "${DATA_DIR}/mondo/disease_scope.tsv.gz")
 
     mkdir -p "${cache_dir}" "${raw_dir}" "$(dirname "${mechanism_json}")" || {
@@ -2132,7 +2132,10 @@ function gene_pathogenic_mechanism_cache_install() {
         log "ERROR: Gene mechanism/DDG2P cache validation failed"
         return 1
     }
-    update_yaml "${config_file}" "gene_mechanism_json" "${mechanism_json}"
+    # Only the evidence table is recorded. The combined JSON this builder also
+    # writes is validated above as a check on the build, but nothing downstream
+    # reads it any more, so advertising its path in the configuration would add
+    # a key with no reader.
     update_yaml "${config_file}" "ddg2p_mechanism_evidence" "${evidence_tsv}"
     log "Gene mechanism/DDG2P cache deployed: ${mechanism_json}; ${evidence_tsv}"
 }
@@ -2285,11 +2288,11 @@ function gofcards_clinvar_injection_install() {
     # of which of two caches a consumer meant.
     source_cache="${workdir}/gofcards_exact_gof.normalized.json.gz"
     target_json=$(yaml_value_or_default "${config_file}" "gofcards_exact_gof_cache" "${DATA_DIR}/gofcards/gofcards_exact_gof.json.gz")
-    clinvar_xml=$(yaml_value_or_default "${config_file}" "clinvar_vcv_xml" "${DATA_DIR}/gene_pathogenic_mechanism/raw/clinvar_vcv/ClinVarVCVRelease_00-latest_weekly.xml.gz")
+    clinvar_xml=$(yaml_value_or_default "${config_file}" "clinvar_vcv_xml" "${DATA_DIR}/patho_mechanism/raw/clinvar_vcv/ClinVarVCVRelease_00-latest_weekly.xml.gz")
     min_stars=$(yaml_value_or_default "${config_file}" "clinvar_min_review_stars" "2")
     lag_days=$(yaml_value_or_default "${config_file}" "gofcards_clinvar_reinjection_lag_days" "90")
     stats_json="${workdir}/clinvar_injection_stats.json"
-    audit_tsv=$(yaml_value_or_default "${config_file}" "clinvar_vcv_match_audit" "${DATA_DIR}/gene_pathogenic_mechanism/prepared/clinvar_vcv_gofcards_matches.tsv")
+    audit_tsv=$(yaml_value_or_default "${config_file}" "clinvar_vcv_match_audit" "${DATA_DIR}/patho_mechanism/clinvar_vcv_gofcards_matches.tsv")
 
     [[ -f ${injector} ]] || { log "ERROR: ClinVar injector not found: ${injector}"; return 1; }
     [[ -s ${source_cache} ]] || {
@@ -2523,11 +2526,11 @@ function gene_nonlof_mechanism_cache_install() {
     local gofcards_variants
     local hgnc_table
 
-    cache_dir=$(yaml_value_or_default "${config_file}" "gene_mechanism_cache_dir" "${DATA_DIR}/gene_pathogenic_mechanism")
+    cache_dir=$(yaml_value_or_default "${config_file}" "gene_mechanism_cache_dir" "${DATA_DIR}/patho_mechanism")
     raw_dir=$(yaml_value_or_default "${config_file}" "gene_mechanism_raw_dir" "${cache_dir}/raw")
     builder_script=$(yaml_value_or_default "${config_file}" "gene_nonlof_mechanism_builder_script" "${SCRIPT_DIR}/build_gene_nonlof_mechanism_cache.py")
-    cache_json=$(yaml_value_or_default "${config_file}" "gene_nonlof_mechanism_json" "${cache_dir}/prepared/gene_nonlof_mechanism_curated_assertions.json.gz")
-    schema_json=$(yaml_value_or_default "${config_file}" "gene_nonlof_mechanism_schema" "${cache_dir}/schema/gene_nonlof_mechanism_curated_assertions.schema.json")
+    cache_json=$(yaml_value_or_default "${config_file}" "gene_nonlof_mechanism_json" "${cache_dir}/gene_nonlof_mechanism_curated_assertions.json.gz")
+    schema_json=$(yaml_value_or_default "${config_file}" "gene_nonlof_mechanism_schema" "${cache_dir}/gene_nonlof_mechanism_curated_assertions.schema.json")
     # The one deployed GoFCards cache, which already carries its ClinVar blocks.
     gofcards_variants=$(yaml_value_or_default "${config_file}" "gofcards_exact_gof_cache" "${DATA_DIR}/gofcards/gofcards_exact_gof.json.gz")
     hgnc_table=$(yaml_value_or_default "${config_file}" "hgnc_table" "${DATA_DIR}/hgnc/non_alt_loci_set.tsv")
@@ -2629,15 +2632,13 @@ function hpo_condition_mechanism_cache_install() {
     local mondo_release
 
     builder_script=$(yaml_value_or_default "${config_file}" "hpo_condition_mechanism_builder_script" "${SCRIPT_DIR}/build_hpo_condition_mechanism_cache.py")
-    cache_json=$(yaml_value_or_default "${config_file}" "hpo_condition_mechanism_json" "${DATA_DIR}/gene_pathogenic_mechanism/prepared/hpo_condition_mechanism_cache.json.gz")
+    cache_json=$(yaml_value_or_default "${config_file}" "hpo_condition_mechanism_json" "${DATA_DIR}/patho_mechanism/hpo_condition_mechanism_cache.json.gz")
     hpo_assertions=$(yaml_value_or_default "${config_file}" "hpo_assertions" "${DATA_DIR}/hpo/genes_to_phenotype.assertions.tsv.gz")
-    mechanism_evidence=$(yaml_value_or_default "${config_file}" "ddg2p_mechanism_evidence" "${DATA_DIR}/gene_pathogenic_mechanism/prepared/gene_pathogenic_mechanism_evidence.tsv")
-    # Prefer PriVA's schema-v2 non-LOF cache. The generic key remains a
-    # compatibility fallback for installations that predate the explicit split.
-    mechanism_json=$(yaml_value_or_default "${config_file}" "gene_nonlof_mechanism_json" "")
-    if [[ -z ${mechanism_json} ]]; then
-        mechanism_json=$(yaml_value_or_default "${config_file}" "gene_mechanism_json" "${DATA_DIR}/gene_pathogenic_mechanism/prepared/gene_mechanism_curated_assertions.json")
-    fi
+    mechanism_evidence=$(yaml_value_or_default "${config_file}" "ddg2p_mechanism_evidence" "${DATA_DIR}/patho_mechanism/gene_pathogenic_mechanism_evidence.tsv")
+    # The non-LOF cache is the only mechanism input this builder accepts. The
+    # older combined cache it used to fall back to is no longer published, so
+    # falling back to it could only ever have named a file that is not there.
+    mechanism_json=$(yaml_value_or_default "${config_file}" "gene_nonlof_mechanism_json" "${DATA_DIR}/patho_mechanism/gene_nonlof_mechanism_curated_assertions.json.gz")
     # The one deployed GoFCards cache. Every condition link this builder emits
     # comes from the ClinVar blocks nested inside it.
     gofcards_variants=$(yaml_value_or_default "${config_file}" "gofcards_exact_gof_cache" "${DATA_DIR}/gofcards/gofcards_exact_gof.json.gz")

@@ -49,14 +49,31 @@ sequential per-allele calls to the GoFCards summary endpoint are appended to
 `<gofcards_workdir>/gofcards_summary_cache.jsonl`, and a rerun fetches only the
 alleles missing from it.
 
-**Step 3, ClinVar injection.** Rereads the entire 5.8 GB VCV XML, so it reruns
-when the injector or the normalized intermediate is newer than the deployed
-cache, when that cache fails validation, or when the cache has fallen more than
-`gofcards_clinvar_reinjection_lag_days` (90) behind the XML. That last rule is
-deliberately a lag and not a plain newer-than test: ClinVar publishes a release
-every week, and chasing each one would spend hours rereading for almost no
-change in the conditions attached here.
+**Step 3, ClinVar injection.** Rereads the entire 5.8 GB VCV XML, so the only
+question the gate asks is whether rereading it could change anything.
+
+It answers that from what the cache records about its own making, not from file
+timestamps. The injector writes three facts into `metadata.clinvar`: its own
+`injector_sha256`, the `source_cache_sha256` of the normalized intermediate it
+read, and the `min_review_stars` it applied. Step 3 reruns when any of those
+differs from what is in use now, or when the cache no longer validates. A
+content hash is used rather than a modification time because a timestamp cannot
+distinguish a changed file from a copied or checked-out one, and getting that
+wrong costs hours. When a hash does differ the rebuild happens immediately: a
+correction to the injector should reach the cache at once, not after a waiting
+period.
+
+The XML is the one exception, because it is the one input that changes
+constantly and almost never matters. A new VCV release lands every week and
+rarely alters the conditions attached here, so the cache is allowed to trail it
+and is refreshed once the gap reaches `gofcards_clinvar_reinjection_lag_days`,
+which defaults to 90 days.
+
 `PRIVA_FORCE_GOFCARDS_CLINVAR_INJECTION=1` or `PRIVA_FORCE_ALL_CACHES=1` forces it.
+
+The deployed cache is published by writing a temporary file beside it and moving
+that into place, so an injection that dies partway through leaves the previous
+complete cache untouched rather than a truncated one where every consumer looks.
 
 ## Pipeline position
 

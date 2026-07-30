@@ -14,13 +14,12 @@ import sys
 from combine_annotations import na_value
 from protein_domain_mapping import DomainNormalizer
 
+# No handler here on purpose. Whoever runs the program owns logging
+# configuration: this file when it is run directly, see the __main__ block at
+# the bottom, and the importing program otherwise. Attaching a handler here as
+# well made every line from this module print twice under PriVA's ACMG step,
+# once via that handler and once more after propagating to the root logger.
 logger = logging.getLogger(__name__)
-logger.setLevel(logging.INFO)
-console_handler=logging.StreamHandler()
-console_handler.setLevel(logging.INFO)
-formatter = logging.Formatter("%(levelname)s:%(asctime)s:%(funcName)s:%(lineno)s:%(message)s")
-console_handler.setFormatter(formatter)
-logger.addHandler(console_handler)
 
 
 
@@ -1079,6 +1078,11 @@ def process_cryptic_acceptor(pos_str: str,
 
 
 if __name__ == "__main__":
+    # Run directly, so this file is the entry point and configures logging.
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(levelname)s:%(asctime)s:%(funcName)s:%(lineno)s:%(message)s",
+    )
     parser = ap.ArgumentParser(description="Interpret splicing variants")
     parser.add_argument("--anno_table", required=True, help="Annotation table")
     parser.add_argument("--transcript_domain_map", required=True, help="Transcript domain map, pickle file")

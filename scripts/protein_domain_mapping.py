@@ -15,15 +15,18 @@ import csv
 self_directory = os.path.dirname(os.path.abspath(__file__))
 
 # --- Logger Setup ---
+# ERROR rather than INFO is deliberate: DomainNormalizer runs once per variant
+# row, and its per-row detail would bury everything else in a whole-exome run.
+#
+# No handler here on purpose. Whoever runs the program owns logging
+# configuration: this file when run directly, see the __main__ block at the
+# bottom, and the importing program otherwise. Attaching a handler here as well
+# made records from this module print twice under PriVA's ACMG step -- once via
+# that handler and once more after propagating to the root logger. The
+# `if not logger.handlers` guard below did not prevent that; it only stopped
+# this module from duplicating its OWN handler, and knew nothing about root's.
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.ERROR)
-# Check if handlers already exist to prevent duplication
-if not logger.handlers:
-    console_handler = logging.StreamHandler(sys.stderr) # Log to stderr
-    console_handler.setLevel(logging.ERROR)
-    formatter = logging.Formatter("%(levelname)s:%(asctime)s:%(name)s:%(funcName)s:%(lineno)s:%(message)s")
-    console_handler.setFormatter(formatter)
-    logger.addHandler(console_handler)
 # --- End Logger Setup ---
 
 # --- Constants ---
@@ -656,6 +659,12 @@ def parse_interpro_xml_for_mapping(xml_file_path: str) -> FinalMapping:
 
 # --- Main Execution Block (Sequential Workflow) ---
 if __name__ == "__main__":
+    # Run directly, so this file is the entry point and configures logging.
+    logging.basicConfig(
+        stream=sys.stderr,
+        level=logging.ERROR,
+        format="%(levelname)s:%(asctime)s:%(name)s:%(funcName)s:%(lineno)s:%(message)s",
+    )
     import argparse
 
     parser = argparse.ArgumentParser(

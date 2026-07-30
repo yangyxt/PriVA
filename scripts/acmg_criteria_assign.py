@@ -49,17 +49,37 @@ Several criteria consume another criterion's output, so the sequence is forced:
     identify_inheritance_mode        produces the six inheritance arrays that
                                      PP1, BS1, BS2, BS4, BP2/PM3 and BP5 read
 
-WHY THE PICKLE-FACTORY IMPORT BELOW MUST NOT BE REMOVED
-=======================================================
+WHY _register_clinvar_pickle_factory EXISTS
+===========================================
 
-``nested_defaultdict`` is imported and never called. It is not dead. The
-ClinVar amino-acid and splice pickles were written by a script that held that
-factory in ``__main__``, so they record the global as ``__main__.nested_
-defaultdict``. Because this file is the module executed as ``__main__``,
-importing the name here is what lets ``pickle.load`` resolve it -- for every
-load in the process, not just the ones in this file. Deleting it as an unused
-import breaks loading those two caches at run time, and no unit test would
-catch it, because the tests build their inputs in memory.
+``pickle`` does not store a function; it stores a module name and an attribute
+name, and looks the pair up on load. The ClinVar amino-acid and splice caches
+were written by scripts/stat_aachange_clinvar.py while it ran as ``__main__``,
+so the byte stream records their factory literally as
+``__main__.nested_defaultdict``:
+
+    offset 41:  SHORT_BINUNICODE '__main__'
+    offset 52:  SHORT_BINUNICODE 'nested_defaultdict'
+    offset 73:  STACK_GLOBAL
+
+On load, pickle evaluates ``getattr(sys.modules["__main__"], "nested_
+defaultdict")``. That asks whichever file is the ENTRY POINT, not the file
+calling ``pickle.load``. Simply importing the name into this module is
+therefore not enough on its own -- it works only while this file happens to be
+the entry point:
+
+    python acmg_criteria_assign.py ...      __main__ is this file        works
+    python my_benchmark.py                  __main__ is my_benchmark.py  FAILS
+      from acmg_criteria_assign import ACMG_criteria_assign
+
+The failure is ``AttributeError: Can't get attribute 'nested_defaultdict' on
+<module '__main__' ...>``, raised at run time when the cache is read. No unit
+test catches it, because the tests build their inputs in memory.
+
+So the name is installed into ``__main__`` explicitly instead of assumed to be
+there, which makes cache loading work from any entry point. The real fix is to
+rebuild those two caches so they carry no ``__main__`` reference at all; until
+then this function is what stands between a new driver script and a crash.
 """
 
 import logging
@@ -68,15 +88,13 @@ import gzip
 import mmap
 import gc
 import os
+import sys
 import argparse as ap
 from typing import Tuple
 import pandas as pd
 import numpy as np
 
-# Imported so that pickle can resolve __main__.nested_defaultdict when
-# loading the ClinVar amino-acid and splice caches. Never called directly.
-# See the module docstring before removing it.
-from stat_protein_domain_amscores import nested_defaultdict  # noqa: F401
+from stat_protein_domain_amscores import nested_defaultdict
 from gene_mechanism_hub import (
     DEFAULT_DDG2P_MECHANISM_EVIDENCE,
     DEFAULT_HPO_CONDITION_MECHANISM_CACHE,
@@ -114,12 +132,32 @@ from acmg_scoring import (
 # The handler goes on the ROOT logger, not on this module's own logger.
 # Every criteria module logs to logging.getLogger(__name__) without a handler
 # of its own, so their records reach the console only by propagating to root.
-# Attaching the handler here instead would silence all of them.
+# Attaching the handler here instead would silence all of them -- 111 of the
+# pipeline's 152 log calls live in those modules.
 logging.basicConfig(
     level=logging.INFO,
     format="%(levelname)s:%(asctime)s:%(funcName)s:%(lineno)s:%(message)s",
 )
 logger = logging.getLogger(__name__)
+
+
+def _register_clinvar_pickle_factory() -> None:
+    """Install ``__main__.nested_defaultdict`` so the ClinVar caches can load.
+
+    See the module docstring for why the caches name ``__main__`` and why
+    importing the factory into this module is not sufficient by itself. Called
+    at import time, so any program that reaches the ClinVar caches through this
+    module can read them, whichever file happens to be the entry point.
+
+    Left alone if the entry point already defines the name, so a driver that
+    supplies its own factory keeps it.
+    """
+    main_module = sys.modules.get("__main__")
+    if main_module is not None and not hasattr(main_module, "nested_defaultdict"):
+        main_module.nested_defaultdict = nested_defaultdict
+
+
+_register_clinvar_pickle_factory()
 
 
 def ACMG_criteria_assign(anno_table: str,
@@ -150,7 +188,14 @@ def ACMG_criteria_assign(anno_table: str,
                          pext_penalty_floor: float = 0.8,
                          pext_penalty_shape: float = 0.5,
                          relevant_gene_list: str = None,
-                         dispensable_gene_list: str = None,
+                         # The same constant the CLI defaults to, so calling this
+                         # function directly ranks variants identically to running
+                         # the script. When this defaulted to None it was still
+                         # forwarded to sort_and_rank_variants unconditionally,
+                         # which overrode that function's own default and silently
+                         # skipped the dispensable-gene penalty. Pass None here to
+                         # mean "deliberately no list".
+                         dispensable_gene_list: str = DEFAULT_DISPENSABLE_GENE_LIST,
                          hpo_condition_mechanism_json: str = str(DEFAULT_HPO_CONDITION_MECHANISM_CACHE),
                          gene_mechanism_json: str = str(DEFAULT_MECHANISM_JSON),
                          ddg2p_mechanism_evidence: str = str(DEFAULT_DDG2P_MECHANISM_EVIDENCE),

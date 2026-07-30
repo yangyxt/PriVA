@@ -38,6 +38,18 @@ from acmg_variant_mechanism import _variant_mechanism_masks
 
 self_dir = os.path.dirname(os.path.abspath(__file__))
 data_dir = os.path.join(os.path.dirname(self_dir), "data")
+
+# The ONE definition of this path. sort_and_rank_variants evaluates its default
+# argument when this module is imported, and the CLI in acmg_criteria_assign.py
+# needs the same value for its own default. Spelling the path out in both places
+# is what let them drift apart before.
+#
+# It is also why the default is this constant rather than None. An explicit None
+# passed down from a caller overrides a function's own default, so when the
+# orchestrator's parameter defaulted to None and was forwarded unconditionally,
+# a library call silently skipped the dispensable-gene ranking penalty while the
+# same run through the CLI applied it. None now means "deliberately no list",
+# not "the caller did not say".
 DEFAULT_DISPENSABLE_GENE_LIST = os.path.join(
     data_dir, "dispensable_genes", "dispensable_gene_list.txt"
 )
@@ -467,7 +479,7 @@ def sort_and_rank_variants(df: pd.DataFrame,
                            pext_penalty_floor: float = 0.8,
                            pext_penalty_shape: float = 0.5,
                            relevant_gene_list: str = None,
-                           dispensable_gene_list: str = os.path.join(data_dir, "dispensable_genes", "dispensable_gene_list.txt")) -> pd.DataFrame:
+                           dispensable_gene_list: str = DEFAULT_DISPENSABLE_GENE_LIST) -> pd.DataFrame:
     """
     Sort variants by their maximum ACMG quantitative score and add ranking.
 

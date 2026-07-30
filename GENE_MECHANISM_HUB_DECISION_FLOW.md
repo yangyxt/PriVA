@@ -8,86 +8,161 @@ from `/paedyl01/disk1/yangyxt/PriVA/scripts/acmg_criteria_assign.py`.
 
 ## Source key
 
+The most important distinction in this table is which sources reach the hub and
+which do not. Only S1, S5, S6 and S7 can create a condition history. S2, S3, S4
+and S8 are gene-wide: none of them says which condition a variant acts on, nor by
+what mechanism, so none can create a history. They are read by PVS1's gene gate
+alone and never enter the hub.
+
 | ID | Source or resource | Current role |
 |---|---|---|
-| S1 | `/paedyl01/disk1/yangyxt/PriVA/data/hpo/genes_to_phenotype.assertions.tsv.gz` | Explicit gene-disease inheritance terms from HPO annotations. |
-| S2 | `/paedyl01/disk1/yangyxt/PriVA/data/clingen/gene_dosage_sensitivity.hg19.tsv` | Haploinsufficiency and dosage override used by the inheritance decision. |
-| S3 | `/paedyl01/disk1/yangyxt/PriVA/data/loeuf/loeuf_dataset.tsv.gz` | `LOEUF < 0.35` adds broad gene-level LOF support upstream. |
-| S4 | `/paedyl01/disk1/yangyxt/PriVA/data/alphamissense/alphamissense_mean_score.tsv` | Gene-average AlphaMissense score `> 0.564` adds broad gene-level LOF support upstream. |
-| S5 | `/paedyl01/disk1/yangyxt/PriVA/data/patho_mechanism/gene_pathogenic_mechanism_evidence.tsv` | Strict high/moderate-confidence G2P/DDG2P LOF assertions and their allelic requirements. |
+| S1 | `/paedyl01/disk1/yangyxt/PriVA/data/hpo/genes_to_phenotype.assertions.tsv.gz` | Gene to condition, with the condition's inheritance, penetrance and onset assertions. The backbone of the cache. |
+| S5 | `/paedyl01/disk1/yangyxt/PriVA/data/patho_mechanism/gene_pathogenic_mechanism_evidence.tsv` | Curated G2P/DDG2P mechanisms and their allelic requirements. |
 | S6 | `/paedyl01/disk1/yangyxt/PriVA/data/patho_mechanism/gene_nonlof_mechanism_curated_assertions.json.gz` | PriVA-local canonical schema-v2 non-LOF gene-condition, GoFCards, and exact matched ClinVar VCV evidence. This is the only mechanism cache the hub reads; the older combined cache it once fell back to is no longer published. |
-| S7 | `/paedyl01/disk1/yangyxt/PriVA/data/gofcards/gofcards_exact_gof_hgvsp.tsv.gz` | Build-time GoFCards normalization and quarantine table. The canonical S6 JSON embeds eligible exact alleles; runtime does not read S7 independently. |
-| S8 | PriVA's two-star-or-higher ClinVar pathogenic-variant gene set | Gene membership adds broad gene-level LOF support upstream. |
+| S7 | `/paedyl01/disk1/yangyxt/PriVA/data/gofcards/gofcards_exact_gof.json.gz` | Build-time GoFCards normalization and quarantine. The canonical S6 JSON embeds eligible exact alleles. |
+| S9 | Orphadata | Curated mechanisms per condition, admitted alongside S5. |
+| S2 | `/paedyl01/disk1/yangyxt/PriVA/data/clingen/gene_dosage_sensitivity.hg19.tsv` | Two separate roles. Haploinsufficiency scores 3, 2 and 1 are admitted **into the cache** as a curated LOF mechanism, keyed by MONDO. Scores 3 and 30/40 are also read **by PVS1's gate** as a gene-wide signal. |
+| S3 | `/paedyl01/disk1/yangyxt/PriVA/data/loeuf/loeuf_dataset.tsv.gz` | `LOEUF < 0.35`. Read by PVS1's gate, and by the hub's third inheritance fallback tier only. |
+| S4 | `/paedyl01/disk1/yangyxt/PriVA/data/alphamissense/alphamissense_mean_score.tsv` | Per-transcript `mean_am_pathogenicity`, mapped to genes. `> 0.6` is read by PVS1's gate. |
+| S8 | `clinvar_pathogenic_genes`, computed at run time | Genes carrying a ClinVar pathogenic or likely-pathogenic variant at two stars or better. Read by PVS1's gate. |
 
-PriVA keeps the two JSON configuration roles separate:
-
-- `gene_nonlof_mechanism_json` selects S6, PriVA's schema-v2 non-LOF cache.
-- `gene_mechanism_json` identifies PriVA's broader locally built fallback, which
-  also contains LOF assertions. Older configurations without the explicit
-  non-LOF key remain supported.
+`gene_nonlof_mechanism_json` selects S6. It is the only mechanism-cache
+configuration key; the older `gene_mechanism_json` fallback has been removed
+rather than repointed, because the non-LOF cache is tracked in this repository
+and so that choice had one possible outcome.
 
 ## Implemented variant-level contract
 
 ```text
-gene-condition assertion
-    mechanism: LOF / GOF / DOMINANT_NEGATIVE / TRIPLOSENSITIVITY / UNRESOLVED
-    compact inheritance: recessive / dominant
-    disease, source, and confidence
+gene-condition assertion, from the cache
+    mechanism: LOF / GOF / DOMINANT_NEGATIVE / TRIPLOSENSITIVITY
+               (a history with no mechanism is labelled UNRESOLVED)
+    assertion_basis: curated | deduced
+    inheritance, penetrance, disease, source, confidence
 
-query-variant effect
-    exact_known_GOF: exact normalized GoFCards allele or protein match
-    predicted_LOF_high_confidence: LOFTEE HC/OS, NMD pLoF, or PriVA splice/UTR LOF
-    uncertain: neither of the above
+query-variant mechanism, three scores of 0 / 1 / 2
+    2  exclusively established -- an exact curated allele match, or a
+       transcript destroyed by nonsense-mediated decay. When any mechanism
+       scores 2 the other two are forced to 0.
+    1  plausible from consequence or prediction only
+    0  confidently not this mechanism
+
+variant_effect
+    exact_known_LOF                 decay triggered. Outranks even a curated
+                                    call: there is no protein left to gain a
+                                    function
+    exact_known_GOF                 an exact curated allele
+    exact_known_DOMINANT_NEGATIVE   "+"-joined when both apply
+    predicted_LOF_high_confidence   2 with a LOFTEE HC rescue, otherwise 1
+    uncertain                       no mechanism evidence at all
 
 variant-to-condition applicability
-    applicable: query effect matches the condition mechanism
-    uncertain: inheritance fits but query mechanism is not established
-    incompatible: query effect conflicts with the condition mechanism
+    applicable  the variant's mechanism is established for that history
+    uncertain   the mechanism is possible but not established
 ```
 
-Generic HPO recessive inheritance emits only `recessive`; it does not claim
-autosomal inheritance or a LOF mechanism. It is promoted to `recessive_LOF`
-only when at least one of these gates is present: a pathogenic ClinVar variant
-in the gene with review status of at least two stars, `LOEUF < 0.35`, or gene-
-average AlphaMissense score `> 0.564`. Explicit curated DDG2P/G2P and ClinGen
-mechanisms remain condition-specific evidence.
+`assertion_basis` records whether a curator asserted the mechanism or the cache
+build deduced it. The build writes `deduced` LOF for a recessive condition that
+states no mechanism from any source. That deduction carries inheritance
+everywhere, but PVS1's gate counts only `curated` entries, because the deduction
+restates the inheritance the same record already supplies and so adds no
+independent observation to the one criterion that can reach Very Strong alone.
 
-`var_plausible_patho_mechs` examples are `recessive`, `recessive_LOF`, `recessive_GOF`,
-`dominant`, `dominant_LOF`, `dominant_GOF`, and `dominant_DN`. Source-specific
-allelic wording remains available in `variant_mechanism_applicability_detail`
-for audit but is not repeated in the compact tags. Mechanisms classified as
-incompatible with the query variant are excluded from this column.
+Gene-wide signals do not promote a bare `recessive` tag to `recessive_LOF`. That
+older behaviour is gone: those signals never enter the hub at all.
 
-The primary dataframe fields are:
+`var_plausible_patho_mechs` examples are `recessive`, `recessive_LOF`,
+`recessive_GOF`, `dominant`, `dominant_LOF`, `dominant_GOF`, and `dominant_DN`.
+
+## The fifteen columns attached to every row
 
 ```text
-var_plausible_patho_mechs
-gene_lof_evidence
-variant_effect
-variant_effect_evidence
-variant_effect_conflict
-variant_mechanism_applicable
-variant_mechanism_uncertain
-variant_mechanism_incompatible
-variant_mechanism_applicability_detail
-clinvar_vcv_accessions
-clinvar_rcv_conditions
-clinvar_vcv_max_review_stars
-clinvar_vcv_hgvs
+variant_effect                  variant_lof_score
+variant_gof_score               variant_dn_score
+variant_mechanism_exclusive     variant_exact_mechanisms
+variant_mechanism_applicable    variant_mechanism_uncertain
+variant_condition_ids           variant_condition_histories
+variant_inheritance             variant_inheritance_basis
+variant_x_linked                variant_penetrance
+gene_lof_mechanism_history
 ```
 
-The former `gene_mech_inher_history` output is now
-`var_plausible_patho_mechs` and is produced by the same in-place annotation
-function. PVS1, BS1, BS2, BS4, and ranking require the variant-level fields.
+`variant_condition_histories` keeps one entry per history as
+`condition|mechanism|inheritance|penetrance`, so the pairing between a condition
+and its inheritance and penetrance survives. De-duplicating those three as
+separate lists would make them different lengths and destroy the pairing.
+
+`variant_inheritance_basis` says which of three tiers answered:
+`matched_history` (3,897 genes, 70.0%), `gene_consensus` (879, 15.8%), or
+`gene_constraint` (789, 14.2%). No gene is left without an inheritance.
+
+`gene_lof_mechanism_history` is a property of the gene rather than of the
+variant, and is read only by PVS1.
+
+PVS1, BS1, BS2, BS4, PP1, BP5 and BP2/PM3 require the variant-level fields.
 Missing fields raise an error rather than activating a gene-level or raw-
 annotation fallback.
 
 ## LOFTEE HC and OS
 
-LOFTEE `HC` and `OS` are both treated as high-confidence predicted LOF. `OS`
-means "other splice" and covers predicted disruptions in extended donor or
-acceptor regions as well as newly created donor sites. The original LOFTEE
-category remains in `variant_effect_evidence`, so OS is not collapsed into HC.
+Both count as predicted loss of function, but they are no longer graded the same.
+`OS` means "other splice" and covers predicted disruptions in extended donor or
+acceptor regions as well as newly created donor sites.
+
+`HC` scores 2, and is the one signal that rescues a truncating variant which
+escapes nonsense-mediated decay. `OS` scores 1. The original LOFTEE category
+remains in `variant_effect_evidence`, so OS is not collapsed into HC.
+
+A curated allele still outranks a LOFTEE `HC` call: those are predictions, this
+is a curator's verdict on this exact allele. Whatever the winner outranked is
+recorded in `variant_effect_suppressed_evidence` rather than dropped.
+
+## PVS1 asks two questions and never mixes them
+
+PVS1 is the only criterion that can carry a variant to Likely Pathogenic on its
+own, so its two halves are kept strictly apart.
+
+**Is loss of function a disease mechanism of this gene?** Purely a question about
+the gene. It reads none of the variant's mechanism scores. Any one of five
+independent gene-level sources opens the gate, deliberately a union rather than a
+consensus, because each is incomplete on its own and a gene missing from one is
+routinely present in another:
+
+1. `gene_lof_mechanism_history` — a **curated** LOF in the condition cache
+2. a ClinVar pathogenic or likely-pathogenic variant at two stars or better
+3. `LOEUF < 0.35`
+4. mean AlphaMissense `> 0.6`
+5. ClinGen haploinsufficiency score 3, or 30/40 for a recessive phenotype
+
+**How convincing is this particular null variant?** Decided from the consequence
+— whether decay is triggered, whether an intolerant domain is spanned, what
+fraction of the protein is lost — and not from any mechanism score. Letting the
+mechanism layer pre-compute a verdict here would decide for PVS1 a question that
+is PVS1's own.
+
+The single exception runs the other way: `is_exact_gof` withdraws PVS1 from a
+variant curated as gain of function. It takes evidence away, never grants it.
+
+### Source 2 reads both ClinVar structures
+
+PriVA's ClinVar build writes two files in one pass, keyed on different things.
+The amino-acid file is keyed on the protein consequence, and every entry has a
+non-blank HGVSp. Frameshift and nonsense variants are there, carrying `p.*fs` and
+`p.*Ter`, but a canonical splice-site variant such as `c.1234+1G>A` produces no
+HGVSp in VEP and cannot appear at all — nor can deep-intronic variants or
+whole-exon deletions. The splice file is keyed on having an `EXON` or `INTRON`
+field, so those variants do appear. Reading only the first silently missed any
+gene whose two-star pathogenic variants all lack a protein consequence.
+
+`summarize_clinvar_gene_pathogenicity` reads both, applying one strict test to
+each: `CLNSIG` split on `,` `/` `|` `;`, lowercased, and intersected with
+`{pathogenic, likely_pathogenic}`, with review status at two stars or better.
+Tokenising is what keeps `Conflicting_classifications_of_pathogenicity` out.
+
+Measured on the hg19 build: 2,869 genes to 3,040, and nothing is lost. `VMA21` is
+the clearest case recovered — X-linked myopathy with excessive autophagy, whose
+pathogenic variants sit in the untranslated and first-intron region, so the
+protein-keyed file could never see it.
 
 ## ClinVar hierarchy and review-tier audit
 

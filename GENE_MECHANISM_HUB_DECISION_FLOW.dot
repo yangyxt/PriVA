@@ -2,92 +2,191 @@ digraph priva_gene_mechanism_hub {
   graph [
     rankdir=TB,
     bgcolor="white",
-    pad="0.25",
+    pad="0.3",
     nodesep="0.35",
-    ranksep="0.65",
+    ranksep="0.55",
     fontname="Arial",
-    fontsize=12,
-    label="PriVA condition-specific gene history and query-variant applicability",
+    fontsize=13,
+    compound=true,
+    label="PriVA condition-specific gene history, query-variant mechanism, and what each consumer reads",
     labelloc="t"
   ];
-  node [shape=box, style="rounded,filled", fontname="Arial", fontsize=10, color="#374151", fillcolor="#F9FAFB"];
+  node [shape=box, style="rounded,filled", fontname="Arial", fontsize=10,
+        color="#374151", fillcolor="#F9FAFB", margin="0.14,0.07"];
   edge [fontname="Arial", fontsize=9, color="#6B7280", arrowsize=0.7];
 
-  subgraph cluster_sources {
-    label="Evidence sources";
-    color="#CBD5E1";
+  /* ================================================================
+     BUILD TIME -- one cache is assembled, in a fixed order
+     ================================================================ */
+  subgraph cluster_build {
+    label="BUILD TIME  build_hpo_condition_mechanism_cache.py";
+    fontsize=12;
+    color="#93C5FD";
     style="rounded";
 
-    row [label="Annotated query row\nallele, transcript, consequence,\nLOFTEE, NMD, HPO inheritance", fillcolor="#E0F2FE"];
-    hpo [label="HPO gene-disease inheritance\nallelic requirement only", fillcolor="#DCFCE7"];
-    clingen [label="ClinGen dosage\nHI / AR dosage evidence", fillcolor="#DCFCE7"];
-    constraint [label="Broad gene LOF support\nClinVar pathogenic >=2 stars OR\nLOEUF <0.35 OR mean AM >0.564", fillcolor="#FEF3C7"];
-    ddg2p [label="G2P/DDG2P\ncondition + mechanism +\nallelic requirement", fillcolor="#FCE7F3"];
-    canonical [label="Canonical schema-v2 non-LOF JSON\neligible exact GOF/DN alleles\nplus ClinVar VCV/RCV/SCV", fillcolor="#EDE9FE"];
-    gof_index [label="Compact GoFCards TSV\nbuild-time normalization\nand quarantine", fillcolor="#FFEDD5"];
+    hpo_src   [label="HPO gene-to-phenotype assertions\ldata/hpo/genes_to_phenotype.assertions.tsv.gz\lgene -> condition, with inheritance, penetrance, onset\l", fillcolor="#DCFCE7"];
+    scope     [label="germline-inherited\ndisease?", shape=diamond, height=1.1, fillcolor="#F0FDF4"];
+    mondo     [label="merge conditions sharing a MONDO identifier\lsurviving key OMIM > ORPHA > MONDO\lmost restrictive scope wins\l", fillcolor="#DCFCE7"];
+
+    g2p       [label="G2P / DDG2P\ldata/patho_mechanism/\lgene_pathogenic_mechanism_evidence.tsv\lmechanism + allelic requirement\l", fillcolor="#FCE7F3"];
+    orpha     [label="Orphadata\lmechanism per condition\l", fillcolor="#FCE7F3"];
+    clingen_h [label="ClinGen haploinsufficiency\lscore 3 sufficient / 2 some / 1 little\ldisease identifier is MONDO\l", fillcolor="#FCE7F3"];
+    nonlof    [label="GoFCards exact allele + ClinVar VCV\ldata/patho_mechanism/\lgene_nonlof_mechanism_curated_assertions.json.gz\l", fillcolor="#EDE9FE"];
+
+    curated   [label="assertion_basis = \"curated\"\lLOF / GOF / DOMINANT_NEGATIVE / TRIPLOSENSITIVITY\l", fillcolor="#FDE68A", penwidth=1.6];
+    deduce    [label="condition is recessive AND states no mechanism\l-> LOF,  assertion_basis = \"deduced\"\l", fillcolor="#FEE2E2"];
+
+    cache     [label="data/patho_mechanism/hpo_condition_mechanism_cache.json.gz\lgene -> condition -> { inheritance, penetrance,\lpathogenic_mechanisms{ mechanism -> evidence[] } }\l", fillcolor="#DBEAFE", penwidth=2.0];
+
+    /* the five inputs are independent, so they sit on one row */
+    { rank=same; hpo_src; g2p; orpha; clingen_h; nonlof; }
+
+    hpo_src -> scope;
+    scope -> mondo [label="yes"];
+    g2p -> curated;
+    orpha -> curated;
+    clingen_h -> curated;
+    nonlof -> curated;
+    mondo -> cache;
+    curated -> cache;
+    mondo -> deduce [label="no mechanism\nfrom any source"];
+    deduce -> cache;
   }
 
-  subgraph cluster_history {
-    label="Gene-condition assertion layer";
-    color="#C4B5FD";
-    style="rounded";
-
-    condition [label="mechanism x allelic requirement\n+ disease, source, confidence", fillcolor="#F5F3FF", penwidth=1.5];
-    unresolved [label="HPO inheritance only\nrecessive or dominant\n(no autosomal or LOF claim)", fillcolor="#FEF3C7"];
-    profile [label="var_plausible_patho_mechs\nrecessive / recessive_LOF / recessive_GOF\ndominant / dominant_LOF / dominant_GOF / dominant_DN", fillcolor="#EDE9FE", penwidth=1.5];
-  }
-
-  subgraph cluster_effect {
-    label="Query-variant effect layer";
+  /* ================================================================
+     STEP 1 -- what the query variant itself does
+     ================================================================ */
+  subgraph cluster_step1 {
+    label="STEP 1  the query variant's own mechanism, scored 0 / 1 / 2";
+    fontsize=12;
     color="#FDBA74";
     style="rounded";
 
-    exact [label="Exact canonical GOF/DN\nDNA or protein match?", shape=diamond, fillcolor="#FFF7ED"];
-    gof [label="exact curated GOF and/or DN\nmechanism score 2", fillcolor="#FED7AA"];
-    lof [label="LOFTEE HC or OS, NMD pLoF,\nor PriVA splice/UTR LOF", shape=diamond, fillcolor="#FFF7ED"];
-    predlof [label="predicted_LOF_high_confidence", fillcolor="#FDE68A"];
-    uncertain [label="uncertain", fillcolor="#F3F4F6"];
-    evidence [label="variant_effect_evidence\nretains LOFTEE_HC vs LOFTEE_OS", fillcolor="#FEF3C7"];
+    row       [label="annotated query row, one transcript\lConsequence, NMD, LoF, LoF_filter,\lsplicing_lof, 5UTR_lof, vep_consq_lof\l", fillcolor="#E0F2FE"];
+
+    q_nmd     [label="decay\ntriggered?", shape=diamond, height=1.1, fillcolor="#FFF7ED",
+               tooltip="truncating or splice-frameshift, and NMD does not say escaping"];
+    q_exact   [label="exact curated\nallele match?", shape=diamond, height=1.2, fillcolor="#FFF7ED",
+               tooltip="by HGVSp, then HGVSc, then normalized genomic allele"];
+    q_pred    [label="other predicted\nloss of function?", shape=diamond, height=1.2, fillcolor="#FFF7ED",
+               tooltip="LOFTEE HC or OS, VEP LOF, PriVA splice or 5'UTR LOF"];
+    q_nmd_d   [label="truncating or splice-frameshift,\land NMD does not say \"escaping\"\l", fillcolor="#FFFBEB", style="rounded,filled,dashed", fontsize=9];
+    q_exact_d [label="matched by HGVSp, then HGVSc,\lthen normalized genomic allele\l", fillcolor="#FFFBEB", style="rounded,filled,dashed", fontsize=9];
+    q_pred_d  [label="LOFTEE HC or OS, VEP LOF,\lPriVA splice or 5'UTR LOF\l", fillcolor="#FFFBEB", style="rounded,filled,dashed", fontsize=9];
+    /* each annotation is pinned beside the diamond it explains */
+    { rank=same; q_nmd;   q_nmd_d;   }
+    { rank=same; q_exact; q_exact_d; }
+    { rank=same; q_pred;  q_pred_d;  }
+    q_nmd_d   -> q_nmd   [style=dotted, arrowhead=none, constraint=false];
+    q_exact_d -> q_exact [style=dotted, arrowhead=none, constraint=false];
+    q_pred_d  -> q_pred  [style=dotted, arrowhead=none, constraint=false];
+
+    e_lof     [label="exact_known_LOF\lLOF = 2, exclusive\lthe transcript is destroyed, so there is\lno protein left to gain a function\l", fillcolor="#FDE68A", penwidth=1.6];
+    e_exact   [label="exact_known_GOF\lexact_known_DOMINANT_NEGATIVE\l\"+\"-joined when both apply\lthat mechanism = 2, the others forced to 0\l", fillcolor="#FED7AA", penwidth=1.6];
+    e_pred    [label="predicted_LOF_high_confidence\lLOF = 2 when LOFTEE HC rescues it\lLOF = 1 when the transcript may survive\l", fillcolor="#FEF3C7"];
+    e_unc     [label="uncertain\lall three scores 0\l", fillcolor="#F3F4F6"];
+
+    suppress  [label="variant_effect_suppressed_evidence\lwhatever the winner outranked is recorded,\lnever silently dropped\l", fillcolor="#F3F4F6", style="rounded,filled,dashed"];
+
+    row -> q_nmd;
+    q_nmd -> e_lof [label="yes  (outranks even\na curated call)"];
+    q_nmd -> q_exact [label="no"];
+    q_exact -> e_exact [label="yes"];
+    q_exact -> q_pred [label="no"];
+    q_pred -> e_pred [label="yes"];
+    q_pred -> e_unc [label="no"];
+    e_lof -> suppress [style=dashed];
+    e_exact -> suppress [style=dashed];
   }
 
-  combine [label="Compare query effect with each\ncondition mechanism", fillcolor="#DBEAFE", penwidth=1.8];
-  applicable [label="variant_mechanism_applicable", fillcolor="#D1FAE5"];
-  uncertain_app [label="variant_mechanism_uncertain", fillcolor="#FEF3C7"];
-  incompatible [label="variant_mechanism_incompatible", fillcolor="#FEE2E2"];
+  /* ================================================================
+     STEPS 2 and 3 -- which histories that mechanism reaches
+     ================================================================ */
+  subgraph cluster_step23 {
+    label="STEPS 2 and 3  the gene's germline histories this mechanism reaches";
+    fontsize=12;
+    color="#C4B5FD";
+    style="rounded";
 
-  vcv [label="Canonical exact allele -> nested ClinVar VCV\nVCV accession, RCV condition, stars, HGVS", fillcolor="#E0E7FF", penwidth=1.5];
-  acmg [label="Required variant-level masks\nPVS1, BS1, BS2, BS4 and ranking\nmissing fields raise an error", fillcolor="#F3F4F6", penwidth=1.5];
+    germline  [label="germline-inherited conditions only\lcondition.priva_scope.decision == \"include\"\l", fillcolor="#F5F3FF"];
+    match     [label="keep histories whose mechanism the variant acts by\l\lexact_known_GOF  -> GOF only\lexact_known_DOMINANT_NEGATIVE -> DN only\lexact_known_LOF / predicted_LOF -> LOF only\luncertain -> all three, marked uncertain\l", fillcolor="#F5F3FF", penwidth=1.6];
+    carried   [label="each surviving history reduced to four facts,\land nothing else travels:\l\lmechanism | condition | inheritance | penetrance\l+ x_linked kept separately, never folded in\l", fillcolor="#EDE9FE", penwidth=1.8];
 
-  ddg2p -> condition;
-  canonical -> condition;
-  clingen -> condition;
-  constraint -> condition [label="add LOF upstream"];
-  hpo -> unresolved;
-  unresolved -> condition;
-  condition -> profile;
+    germline -> match;
+    match -> carried;
+  }
 
-  row -> exact;
-  gof_index -> canonical [label="validate + embed\neligible rows"];
-  canonical -> exact;
-  exact -> gof [label="yes"];
-  exact -> lof [label="no"];
-  row -> lof;
-  lof -> predlof [label="yes"];
-  lof -> uncertain [label="no"];
-  gof -> evidence;
-  predlof -> evidence;
-  uncertain -> evidence;
+  /* ================================================================
+     STEP 4 -- attach, with the inheritance fallback ladder
+     ================================================================ */
+  subgraph cluster_step4 {
+    label="STEP 4  attach to the row; no variant is left without an inheritance";
+    fontsize=12;
+    color="#6EE7B7";
+    style="rounded";
 
-  profile -> combine;
-  evidence -> combine;
-  combine -> applicable;
-  combine -> uncertain_app;
-  combine -> incompatible;
-  applicable -> acmg;
-  uncertain_app -> acmg;
-  incompatible -> acmg [style=dashed, label="audit"];
+    lad1      [label="basis = \"matched_history\"      3,897 genes  70.0%\lthe variant's own mechanism reached a history\lthat states the inheritance\l", fillcolor="#D1FAE5"];
+    lad2      [label="basis = \"gene_consensus\"         879 genes  15.8%\levery germline condition of the gene agrees on one\linheritance. Unanimity is what makes it safe\l", fillcolor="#ECFDF5"];
+    lad3      [label="basis = \"gene_constraint\"         789 genes  14.2%\lHPO states no inheritance at all. ClinGen\lhaploinsufficiency 3 OR LOEUF < 0.35 -> dominant,\lotherwise recessive\l", fillcolor="#ECFDF5"];
 
-  gof -> vcv;
-  canonical -> vcv;
-  vcv -> applicable [label="condition enrichment"];
+    outcols   [label="15 columns attached to every row\l\lvariant_effect  variant_lof_score  variant_gof_score  variant_dn_score\lvariant_mechanism_exclusive  variant_exact_mechanisms\lvariant_mechanism_applicable  variant_mechanism_uncertain\lvariant_condition_ids  variant_condition_histories\lvariant_inheritance  variant_inheritance_basis\lvariant_x_linked  variant_penetrance\lgene_lof_mechanism_history\l", fillcolor="#D1FAE5", penwidth=2.0];
+
+    lad1 -> lad2 [label="no history states one"];
+    lad2 -> lad3 [label="the gene disagrees\nwith itself"];
+    lad1 -> outcols;
+    lad2 -> outcols;
+    lad3 -> outcols;
+  }
+
+  /* ================================================================
+     CONSUMERS
+     ================================================================ */
+  subgraph cluster_pvs1 {
+    label="PVS1  two independent questions, deliberately never mixed";
+    fontsize=12;
+    color="#FCA5A5";
+    style="rounded";
+
+    gate      [label="QUESTION 1  is loss of function a disease mechanism OF THIS GENE?\lANY ONE of five gene-level sources opens the gate:\l\l1  gene_lof_mechanism_history -- a CURATED LOF in the condition cache\l   (basis \"deduced\" deliberately does not count here)\l2  a ClinVar pathogenic / likely-pathogenic variant at >= 2 stars\l3  LOEUF < 0.35\l4  mean AlphaMissense > 0.6\l5  ClinGen haploinsufficiency 3, or 30 / 40 for a recessive phenotype\l", fillcolor="#FEE2E2", penwidth=2.0];
+
+    strength  [label="QUESTION 2  how convincing is THIS null variant?\ldecided from the consequence, not from any mechanism score:\l\ltruncating, does not escape decay ................ 4  Very Strong\ltruncating, escapes decay, intolerant domain ..... 3  Strong\ltruncating, escapes decay, >= 10% of protein ..... 3  Strong\ltruncating, escapes decay, <  10% of protein ..... 2  Moderate\lsplice frameshift, not last exon ................. 4  Very Strong\lsplice frameshift, escapes decay ................. 3 / 2 as above\lsplice-induced inframe deletion, inframe deletion  reduced\l5'UTR frameshift, start_lost with no alt start ... assigned\l", fillcolor="#FEF2F2", penwidth=1.6];
+
+    withdraw  [label="is_exact_gof withdraws PVS1\lthe only mechanism score PVS1 reads,\land it takes evidence away, never grants it\l", fillcolor="#F3F4F6", style="rounded,filled,dashed"];
+
+    gate -> strength [label="gate open"];
+    strength -> withdraw [style=dashed];
+  }
+
+  subgraph cluster_other {
+    label="THE OTHER MECHANISM-READING CRITERIA";
+    fontsize=12;
+    color="#CBD5E1";
+    style="rounded";
+
+    masks     [label="_variant_mechanism_masks\l2 columns in, 15 boolean masks out, in two families:\l\lwhat the GENE's history says, split by inheritance\l  has_recessive_compatible  has_dominant_compatible\l  has_{rec,dom}_{lof,gof,dn,unresolved}_history\lwhat THIS VARIANT does\l  is_exact_gof  is_exact_dn  is_exact_nonlof\l  is_predicted_lof  is_uncertain  modern_profile\l\lthere is deliberately NO family conjoining the two\l", fillcolor="#F1F5F9", penwidth=1.6];
+    crits     [label="BS1  BS2  BS4  PP1  BP5  BP2 / PM3\leach decides for itself whether the gene's history\land this variant's effect line up\l", fillcolor="#F8FAFC"];
+
+    masks -> crits;
+  }
+
+  /* clinvar_pathogenic_genes, the one PVS1 source computed at run time */
+  cv_set [label="clinvar_pathogenic_genes\lsummarize_clinvar_gene_pathogenicity reads BOTH\lClinVar structures, because they are keyed differently:\l\lamino-acid map, keyed on the protein consequence\l  every entry has an HGVSp, so a canonical splice-site\l  variant cannot appear in it at all\lsplice map, keyed on having an EXON or INTRON field\l  those variants do appear\l\lone strict test on both: CLNSIG tokenized and matched\lagainst {pathogenic, likely_pathogenic}, review >= 2 stars\l2,869 genes -> 3,040 once both are read\l", fillcolor="#FFEDD5", penwidth=1.6];
+
+  gene_wide [label="GENE-WIDE CONSTRAINT, read ONLY by PVS1's gate\lLOEUF          data/loeuf/loeuf_dataset.tsv.gz\lmean AM        data/alphamissense/alphamissense_mean_score.tsv\lClinGen dosage data/clingen/gene_dosage_sensitivity.hg19.tsv\l\lNone of these says which condition a variant acts on, nor\lby what mechanism, so none of them can create a history.\lThey never enter the hub.\l", fillcolor="#FEF3C7", penwidth=1.6];
+
+  /* ---------------- cross-cluster wiring ---------------- */
+  cache -> germline [ltail=cluster_build, lhead=cluster_step23];
+  e_lof   -> match;
+  e_exact -> match;
+  e_pred  -> match;
+  e_unc   -> match;
+  carried -> lad1 [lhead=cluster_step4];
+
+  outcols -> gate [label="gene_lof_mechanism_history", color="#DC2626", penwidth=1.4];
+  cv_set -> gate [color="#DC2626", penwidth=1.4];
+  gene_wide -> gate [color="#DC2626", penwidth=1.4];
+  row -> strength [label="Consequence, NMD,\nexon and domain span,\nread again directly",
+                   style=dashed, constraint=false, color="#9CA3AF"];
+
+  outcols -> masks [lhead=cluster_other];
 }

@@ -49,37 +49,30 @@ Several criteria consume another criterion's output, so the sequence is forced:
     identify_inheritance_mode        produces the six inheritance arrays that
                                      PP1, BS1, BS2, BS4, BP2/PM3 and BP5 read
 
-WHY _register_clinvar_pickle_factory EXISTS
-===========================================
+THE CLINVAR CACHES NO LONGER DEPEND ON WHO IS __main__
+======================================================
+
+Worth knowing, because it constrained this file until 2026-07-30 and the
+constraint is now gone.
 
 ``pickle`` does not store a function; it stores a module name and an attribute
 name, and looks the pair up on load. The ClinVar amino-acid and splice caches
-were written by scripts/stat_aachange_clinvar.py while it ran as ``__main__``,
-so the byte stream records their factory literally as
-``__main__.nested_defaultdict``:
+held nested ``defaultdict`` objects, and because their builder is normally run
+rather than imported, the byte stream recorded the factory as
+``__main__.nested_defaultdict``. Loading them evaluated
+``getattr(sys.modules["__main__"], "nested_defaultdict")`` -- asking whichever
+file was the ENTRY POINT, not the file calling ``pickle.load``. So the caches
+read correctly only from a program that defined that name itself:
 
-    offset 41:  SHORT_BINUNICODE '__main__'
-    offset 52:  SHORT_BINUNICODE 'nested_defaultdict'
-    offset 73:  STACK_GLOBAL
-
-On load, pickle evaluates ``getattr(sys.modules["__main__"], "nested_
-defaultdict")``. That asks whichever file is the ENTRY POINT, not the file
-calling ``pickle.load``. Simply importing the name into this module is
-therefore not enough on its own -- it works only while this file happens to be
-the entry point:
-
-    python acmg_criteria_assign.py ...      __main__ is this file        works
-    python my_benchmark.py                  __main__ is my_benchmark.py  FAILS
+    python acmg_criteria_assign.py ...                      worked
+    python my_benchmark.py                                  AttributeError
       from acmg_criteria_assign import ACMG_criteria_assign
 
-The failure is ``AttributeError: Can't get attribute 'nested_defaultdict' on
-<module '__main__' ...>``, raised at run time when the cache is read. No unit
-test catches it, because the tests build their inputs in memory.
-
-So the name is installed into ``__main__`` explicitly instead of assumed to be
-there, which makes cache loading work from any entry point. The real fix is to
-rebuild those two caches so they carry no ``__main__`` reference at all; until
-then this function is what stands between a new driver script and a crash.
+The four deployed caches were re-serialized as plain dictionaries, which
+removes the reference. Their contents were verified unchanged: an
+order-independent digest of every key and value matched before and after, for
+all four files. See ``to_plain_dict`` in scripts/stat_aachange_clinvar.py,
+which keeps future rebuilds clean.
 """
 
 import logging
@@ -88,13 +81,10 @@ import gzip
 import mmap
 import gc
 import os
-import sys
 import argparse as ap
 from typing import Tuple
 import pandas as pd
 import numpy as np
-
-from stat_protein_domain_amscores import nested_defaultdict
 from gene_mechanism_hub import (
     DEFAULT_DDG2P_MECHANISM_EVIDENCE,
     DEFAULT_HPO_CONDITION_MECHANISM_CACHE,
@@ -139,25 +129,6 @@ logging.basicConfig(
     format="%(levelname)s:%(asctime)s:%(funcName)s:%(lineno)s:%(message)s",
 )
 logger = logging.getLogger(__name__)
-
-
-def _register_clinvar_pickle_factory() -> None:
-    """Install ``__main__.nested_defaultdict`` so the ClinVar caches can load.
-
-    See the module docstring for why the caches name ``__main__`` and why
-    importing the factory into this module is not sufficient by itself. Called
-    at import time, so any program that reaches the ClinVar caches through this
-    module can read them, whichever file happens to be the entry point.
-
-    Left alone if the entry point already defines the name, so a driver that
-    supplies its own factory keeps it.
-    """
-    main_module = sys.modules.get("__main__")
-    if main_module is not None and not hasattr(main_module, "nested_defaultdict"):
-        main_module.nested_defaultdict = nested_defaultdict
-
-
-_register_clinvar_pickle_factory()
 
 
 def ACMG_criteria_assign(anno_table: str,

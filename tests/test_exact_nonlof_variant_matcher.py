@@ -12,7 +12,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
 from gene_mechanism_hub import GeneMechanismHub  # noqa: E402
-from acmg_criteria_assign import annotate_exact_nonlof_variants  # noqa: E402
+from acmg_variant_mechanism import annotate_exact_nonlof_variants  # noqa: E402
 
 
 def _exact_row(

@@ -310,6 +310,7 @@ import numpy as np
 import pandas as pd
 
 from clinvar_vcv import open_text
+from acmg_inheritance import identify_inheritance_mode_per_row
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 PRIVA_ROOT = SCRIPT_DIR.parent
@@ -2051,8 +2052,6 @@ class GeneMechanismHub:
         gene_mean_am_score: float = np.nan,
     ) -> dict[str, Any]:
         """Return inheritance/HI calls using PriVA's existing inheritance function."""
-        from acmg_criteria_assign import identify_inheritance_mode_per_row
-
         symbol = self._resolved_symbol_key(gene_symbol)
         hpo_record = self._load_hpo().get(symbol, {})
         clingen_record = self._load_clingen().get(symbol, {})
@@ -2106,7 +2105,7 @@ class GeneMechanismHub:
                 "triplosensitivity_description", ""
             ),
             "loeuf": None if isinstance(loeuf, float) and math.isnan(loeuf) else loeuf,
-            "decision_function": "acmg_criteria_assign.identify_inheritance_mode_per_row",
+            "decision_function": "acmg_inheritance.identify_inheritance_mode_per_row",
         }
 
     def gene_summary(self, gene_symbol: Any, *, include_entries: bool = False) -> dict[str, Any]:

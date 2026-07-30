@@ -4,16 +4,16 @@
 
 The only authoritative mechanism JSON remains:
 
-`/paedyl01/disk1/yangyxt/PriVA/data/gene_pathogenic_mechanism/prepared/gene_nonlof_mechanism_curated_assertions.json`
+`/paedyl01/disk1/yangyxt/PriVA/data/patho_mechanism/gene_nonlof_mechanism_curated_assertions.json.gz`
 
 ClinVar VCV evidence is injected into that file. The flattened TSV is only an
 audit view, not a parallel authority:
 
-- `/paedyl01/disk1/yangyxt/PriVA/data/gene_pathogenic_mechanism/prepared/clinvar_vcv_gofcards_matches.tsv`
+- `/paedyl01/disk1/yangyxt/PriVA/data/patho_mechanism/clinvar_vcv_gofcards_matches.tsv` (generated, not kept in the repository)
 
 The machine-readable output contract is:
 
-`/paedyl01/disk1/yangyxt/PriVA/data/gene_pathogenic_mechanism/schema/gene_nonlof_mechanism_curated_assertions.schema.json`
+`/paedyl01/disk1/yangyxt/PriVA/data/patho_mechanism/gene_nonlof_mechanism_curated_assertions.schema.json`
 
 ## Build And Runtime Flow
 
@@ -642,7 +642,7 @@ discovers the newest public `ClinVar_VCV_<version>.xsd` from the XSD index.
 
 The PriVA installer stores the exact XSD and README beside the release under:
 
-`/paedyl01/disk1/yangyxt/PriVA/data/gene_pathogenic_mechanism/raw/clinvar_vcv/format/`
+`/paedyl01/disk1/yangyxt/public_data/gene_pathogenic_mechanism/raw/clinvar_vcv/format/`
 
 Parser-relevant XSD branches are:
 
@@ -810,7 +810,7 @@ MD5-specific `.part` file, verifies the completed MD5, and atomically replaces
 the previous valid release. The exact XSD version, XSD checksum, README
 checksum, XML MD5, XML SHA256, file size, and timestamps are stored in:
 
-`/paedyl01/disk1/yangyxt/PriVA/data/gene_pathogenic_mechanism/metadata/nonlof_source_manifest.json`
+`/paedyl01/disk1/yangyxt/PriVA/data/patho_mechanism/nonlof_source_manifest.json`
 
 The XSD is the structural-format metadata file requested for this integration.
 The README describes release naming/cadence; the companion MD5 describes file

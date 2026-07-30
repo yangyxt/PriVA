@@ -2709,7 +2709,7 @@ def normalize_inheritance(
 
 
 def gene_has_lof_mechanism_history(gene_record: dict[str, Any]) -> bool:
-    """Does this gene cause germline disease by loss of function, per the cache?
+    """Does a curator say this gene causes germline disease by loss of function?
 
     A property of the GENE, deliberately independent of any one variant. PVS1
     asks whether loss of function is an established disease mechanism for the
@@ -2717,16 +2717,28 @@ def gene_has_lof_mechanism_history(gene_record: dict[str, Any]) -> bool:
     particular null variant in front of it. Filtering this by what the query
     variant does would answer a different question and pre-empt that decision.
 
-    Only germline-inherited conditions count, the same gate every other reader
-    applies. Both curated and deduced mechanisms count: the deduction is that a
-    recessive condition with no stated mechanism acts by loss of function,
-    which is exactly the claim PVS1 needs.
+    Two filters, and both are deliberate:
+
+    ``priva_scope.decision == "include"`` -- only germline-inherited disease
+    counts, the same gate every other reader of the cache applies.
+
+    ``assertion_basis == "curated"`` -- only a curator's own claim counts. The
+    cache also holds LOF entries with basis ``deduced``, written by the builder
+    for a recessive condition that states no mechanism at all. That deduction
+    is sound enough to carry inheritance, but it is circular as PVS1 evidence:
+    it says nothing more than "this condition is recessive", which PVS1 already
+    knows from the same record. Only G2P/DDG2P, Orphadata and ClinGen
+    haploinsufficiency reach here.
     """
     for condition in (gene_record.get("conditions") or {}).values():
         if (condition.get("priva_scope") or {}).get("decision") != "include":
             continue
-        if "LOF" in (condition.get("pathogenic_mechanisms") or {}):
-            return True
+        lof = (condition.get("pathogenic_mechanisms") or {}).get("LOF")
+        if not lof:
+            continue
+        for evidence in lof.get("evidence") or []:
+            if (evidence.get("assertion_basis") or "") == "curated":
+                return True
     return False
 
 

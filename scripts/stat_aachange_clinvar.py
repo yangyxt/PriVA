@@ -21,6 +21,44 @@ logger.addHandler(console_handler)
 def nested_defaultdict():
     return defaultdict(nested_defaultdict)
 
+
+def to_plain_dict(obj):
+    """Strip every defaultdict out of a nested structure, keeping the data.
+
+    WHY THE OUTPUT MUST NOT CONTAIN A defaultdict
+    =============================================
+
+    pickle does not store a function; it stores a module name and an attribute
+    name, and looks the pair up on load. A defaultdict therefore pickles a
+    reference to its factory -- and because this file is normally RUN rather
+    than imported, that reference came out as ``__main__.nested_defaultdict``.
+
+    On load, pickle evaluates ``getattr(sys.modules["__main__"], "nested_
+    defaultdict")``, which asks whichever file is the ENTRY POINT of the reading
+    program, not the file calling pickle.load. So the caches could only be read
+    by a program that happened to define that name in its own __main__:
+
+        python acmg_criteria_assign.py ...                      worked
+        python my_benchmark.py                                  AttributeError
+          from acmg_criteria_assign import ACMG_criteria_assign
+
+    Converting to plain dicts before dumping removes the reference entirely, so
+    the caches become readable by any program. Nothing is lost: every consumer
+    reads them with .items(), .values(), .get() and ``in``, and the one direct
+    subscript is short-circuit guarded, so no reader depends on a missing key
+    being created on access.
+
+    The four deployed caches were converted in place on 2026-07-30 with their
+    contents verified unchanged; this keeps future rebuilds clean.
+    """
+    if isinstance(obj, dict):          # covers defaultdict, which subclasses dict
+        return {k: to_plain_dict(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [to_plain_dict(v) for v in obj]
+    if isinstance(obj, tuple):
+        return tuple(to_plain_dict(v) for v in obj)
+    return obj
+
 class AAClinvarCollector:
     def __init__(self, vcf_path: str, logger=logger):
         """Initialize collector with VCF file path."""
@@ -301,13 +339,15 @@ def main(vcf_path, output_pickle, splice_output_pickle=None, n_processes=None):
     # Output the AA changes to a pickle file
     if output_pickle:
         with open(output_pickle, 'wb') as f:
-            pickle.dump(collector.clinvaa_dict, f)
+            pickle.dump(to_plain_dict(collector.clinvaa_dict), f,
+                        protocol=pickle.HIGHEST_PROTOCOL)
         logger.info(f"AA change results saved to {output_pickle}")
-    
+
     # Output the splice data to a pickle file if specified
     if splice_output_pickle:
         with open(splice_output_pickle, 'wb') as f:
-            pickle.dump(collector.splice_dict, f)
+            pickle.dump(to_plain_dict(collector.splice_dict), f,
+                        protocol=pickle.HIGHEST_PROTOCOL)
         logger.info(f"Splice data results saved to {splice_output_pickle}")
 
     return collector.clinvaa_dict, collector.splice_dict

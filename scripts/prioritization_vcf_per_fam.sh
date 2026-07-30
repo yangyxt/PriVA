@@ -162,6 +162,7 @@ function assign_acmg_criteria () {
 	local pp1_vcf=$(read_yaml ${config_file} "pp1_vcf")
 	local pp1_ped=$(read_yaml ${config_file} "pp1_ped")
 	local clingen_map_pkl=$(read_yaml ${config_file} "clingen_map")
+	local apply_clingen_override=$(read_yaml ${config_file} "apply_clingen_override")
 	local gene_dosage_sensitivity=$(read_yaml ${config_file} "gene_dosage_sensitivity")
     local relevant_gene_list=$(read_yaml ${config_file} "relevant_gene_list")
     local dispensable_gene_list=$(read_yaml ${config_file} "dispensable_gene_list")
@@ -187,6 +188,17 @@ function assign_acmg_criteria () {
     check_path ${hpo_condition_mechanism_json} "file" "hpo_condition_mechanism_json" || has_error=1
     # CDS FASTA is optional - fallback to deprecated transcript-based approach if not available
     [[ -f ${cds_fasta_file} ]] && local cds_fasta_arg="--cds_fasta_path ${cds_fasta_file}" || { log "WARNING: CDS FASTA file not found at ${cds_fasta_file}. Alternative start codon detection for start_lost variants will use deprecated transcript-based approach."; local cds_fasta_arg=""; }
+
+    # ClinGen's curated evidence codes replace PriVA's own criteria for any
+    # variant ClinGen has curated. That is the production behaviour, so the
+    # override is only disabled on an explicit false -- a config predating this
+    # key, or a missing key that yq reports as null, keeps it on.
+    if [[ "${apply_clingen_override}" == "false" ]]; then
+        local clingen_override_arg="--ignore_clingen_override"
+        log "ClinGen override DISABLED by config. PriVA will report the criteria it derived itself. This is only correct when benchmarking against ClinGen-curated variants."
+    else
+        local clingen_override_arg=""
+    fi
 
     local assembly=$(read_yaml ${config_file} "assembly")
     if [[ ${assembly} == "hg38" ]]; then
@@ -258,7 +270,7 @@ function assign_acmg_criteria () {
     --expected_incidence ${expected_incidence} \
     --am_score_vcf ${am_score_vcf} \
     --threads ${threads} \
-    --tranx_exon_domain_map_pkl ${tranx_exon_domain_map_pkl} ${ped_arg} ${fam_arg} ${alt_disease_arg} ${mavedb_arg} ${pp1_arg} ${relevant_genes_arg} ${dispensable_genes_arg} ${cds_fasta_arg} ${pext_arg} && \
+    --tranx_exon_domain_map_pkl ${tranx_exon_domain_map_pkl} ${ped_arg} ${fam_arg} ${alt_disease_arg} ${mavedb_arg} ${pp1_arg} ${relevant_genes_arg} ${dispensable_genes_arg} ${cds_fasta_arg} ${pext_arg} ${clingen_override_arg} && \
     display_table ${input_tab} && \
     log "The ACMG criterias are assigned for ${input_tab}, added with three columns: ACMG_quant_score, ACMG_class, ACMG_criteria, and the output matrix is saved to ${output_acmg_mat}" && \
     display_table ${output_acmg_mat} || \

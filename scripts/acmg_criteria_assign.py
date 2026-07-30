@@ -143,6 +143,7 @@ def ACMG_criteria_assign(anno_table: str,
                          ped_table: str = "",
                          alt_disease_vcf: str = "",
                          clingen_map_pkl: str = "",
+                         apply_clingen_override: bool = True,
                          cds_fasta_path: str = "",
                          pext_tissues: str = "",
                          pext_low_expression_cutoff: float = 0.1,
@@ -537,7 +538,10 @@ def ACMG_criteria_assign(anno_table: str,
     }
 
     # Create summary and matrix
-    anno_df, criteria_matrix = summarize_acmg_criteria(anno_df, criteria_dict, clingen_map_pkl)
+    anno_df, criteria_matrix = summarize_acmg_criteria(
+        anno_df, criteria_dict, clingen_map_pkl,
+        apply_clingen_override=apply_clingen_override,
+    )
     for audit_column in (
         "audit_BS1_disease_incidence_gate",
         "audit_BS1_gene_pathogenic_AF_gate",
@@ -591,6 +595,13 @@ if __name__ == "__main__":
     parser.add_argument("--am_score_vcf", type=str, required=False, default=None)
     parser.add_argument("--alt_disease_vcf", type=str, required=False, default=None)
     parser.add_argument("--clingen_map_pkl", type=str, required=False, default=None)
+    parser.add_argument("--ignore_clingen_override", action="store_true",
+                        help="Do NOT let ClinGen's curated evidence codes replace the "
+                             "criteria PriVA derived. Production runs should leave this "
+                             "off: an expert panel's verdict outranks PriVA's own "
+                             "reasoning about the same variant. Use it only when "
+                             "benchmarking PriVA against ClinGen-curated variants, "
+                             "where the override would make the comparison circular.")
     parser.add_argument("--mavedb_metadata_tsv", type=str, required=False, default=None)
     parser.add_argument("--cds_fasta_path", type=str, required=False, default=None,
                         help="Path to Ensembl CDS FASTA file for alternative start codon detection. "
@@ -651,6 +662,7 @@ if __name__ == "__main__":
                                                     ped_table=args.ped_table,
                                                     alt_disease_vcf=args.alt_disease_vcf,
                                                     clingen_map_pkl=args.clingen_map_pkl,
+                                                    apply_clingen_override=not args.ignore_clingen_override,
                                                     cds_fasta_path=args.cds_fasta_path,
                                                     pext_tissues=args.pext_tissues,
                                                     pext_low_expression_cutoff=args.pext_low_expression_cutoff,

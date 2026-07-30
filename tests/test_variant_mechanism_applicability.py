@@ -10,15 +10,15 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
-from acmg_criteria_assign import (  # noqa: E402
-    BS1_criteria,
-    BS2_criteria,
-    BS4_criteria,
-    PP3_BP4_criteria,
-    _variant_mechanism_masks,
+from acmg_bs2_bp5_observation import BS2_criteria  # noqa: E402
+from acmg_consequence import vep_consq_interpret_per_row  # noqa: E402
+from acmg_pm2_bs1_ba1_frequency import BS1_criteria  # noqa: E402
+from acmg_pp1_bs4_bp2_pm3_family import BS4_criteria  # noqa: E402
+from acmg_pp3_bp4_bp7_insilico import PP3_BP4_criteria  # noqa: E402
+from acmg_pvs1_null_variant import (  # noqa: E402
     summarize_clinvar_gene_pathogenicity,
-    vep_consq_interpret_per_row,
 )
+from acmg_variant_mechanism import _variant_mechanism_masks  # noqa: E402
 from gene_mechanism_hub import (  # noqa: E402
     GeneMechanismHub,
     annotate_gene_mechanism_categories,

@@ -46,10 +46,19 @@ PROGRESS.md
 logs/
 /example_test/
 /example/smoke_runs/
-/data/gene_pathogenic_mechanism/raw
-/data/gene_pathogenic_mechanism/metadata/
-/data/gene_pathogenic_mechanism/logs/
+# data/patho_mechanism holds the mechanism caches. Only the files PriVA reads
+# at runtime belong in the repository, so everything there is ignored and the
+# four that are read are named back in. A new build byproduct -- an audit table,
+# a source manifest, a run summary, a downloaded raw tree -- is then ignored by
+# default instead of being committed by accident.
+/data/patho_mechanism/*
+!/data/patho_mechanism/gene_nonlof_mechanism_curated_assertions.json.gz
+!/data/patho_mechanism/gene_nonlof_mechanism_curated_assertions.schema.json
+!/data/patho_mechanism/hpo_condition_mechanism_cache.json.gz
+!/data/patho_mechanism/gene_pathogenic_mechanism_evidence.tsv
 /data/gofcards/build_work/
+/data/gofcards/*.audit.tsv
+/data/gofcards/*.audit.summary.json
 /data/hpo/raw/
 /data/hpo/genes_to_phenotype.assertions.tsv.gz
 /data/mondo/*.obo

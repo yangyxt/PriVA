@@ -20,11 +20,17 @@ TURN THE HUB'S COLUMNS INTO BOOLEAN MASKS
     judgement, and pre-computing one verdict here would decide it for all of
     them at once.
 
+    _variant_condition_masks parses the hub's categorical inheritance and
+    penetrance columns. It is the one adapter used by every criterion that
+    previously received the six gene-level arrays, so exact semicolon-token
+    matching and the incomplete-penetrance gate cannot drift between criteria.
+
 Read by PVS1, BS1, BS2, BS4, BP2/PM3, PP1 and the ranking step.
 """
 
 import logging
 import json
+import re
 import pandas as pd
 import numpy as np
 
@@ -258,6 +264,68 @@ def annotate_exact_nonlof_variants(
     return df
 
 
+def _variant_condition_masks(df: pd.DataFrame) -> dict[str, pd.Series]:
+    """Parse condition-linked inheritance and penetrance categories.
+
+    The mechanism hub has already selected the histories applicable to this
+    variant: compatible known mechanisms plus every included condition whose
+    mechanism is unresolved. Criteria must therefore consume these final
+    categorical columns rather than recomputing a gene-wide answer from HPO.
+
+    Values are semicolon-delimited sets. Matching is token-exact so, for
+    example, ``non_mendelian`` cannot be confused with another substring. Any
+    linked ``incomplete`` value is conservative and wins over simultaneous
+    ``complete`` or ``high`` histories; consumers implement that by gating on
+    ``has_incomplete_penetrance`` first. High penetrance remains its own value
+    and does not activate the lower thresholds reserved for explicit complete
+    penetrance.
+
+    ``non_monogenic`` preserves the old distinction for polygenic, digenic and
+    oligogenic histories, while ``non_mendelian`` represents the literal HPO
+    non-Mendelian category. Both remain visible so each criterion can retain
+    its existing gates.
+    """
+    required = {"variant_inheritance", "variant_penetrance"}
+    missing = sorted(required - set(df.columns))
+    if missing:
+        raise KeyError(
+            "variant-level condition annotations are required; missing columns: "
+            + ", ".join(missing)
+        )
+
+    inheritance = df["variant_inheritance"].fillna("").astype(str).str.lower()
+    penetrance = df["variant_penetrance"].fillna("").astype(str).str.lower()
+
+    def has_token(series: pd.Series, token: str) -> pd.Series:
+        return series.str.contains(
+            rf"(?:^|;){re.escape(token)}(?:;|$)",
+            regex=True,
+        ).astype(bool)
+
+    recessive = has_token(inheritance, "recessive")
+    dominant = has_token(inheritance, "dominant")
+    y_linked = has_token(inheritance, "y_linked")
+    mitochondrial = has_token(inheritance, "mitochondrial")
+    polygenic = has_token(inheritance, "polygenic")
+    digenic = has_token(inheritance, "digenic")
+    oligogenic = has_token(inheritance, "oligogenic")
+    non_mendelian = has_token(inheritance, "non_mendelian")
+
+    return {
+        "has_recessive": recessive,
+        "has_dominant": dominant,
+        "has_y_linked": y_linked,
+        "has_mitochondrial": mitochondrial,
+        "has_dominant_like": (dominant | y_linked | mitochondrial).astype(bool),
+        "has_mendelian": (recessive | dominant | y_linked | mitochondrial).astype(bool),
+        "has_non_monogenic": (polygenic | digenic | oligogenic).astype(bool),
+        "has_non_mendelian": non_mendelian,
+        "has_incomplete_penetrance": has_token(penetrance, "incomplete"),
+        "has_complete_penetrance": has_token(penetrance, "complete"),
+        "has_high_penetrance": has_token(penetrance, "high"),
+    }
+
+
 def _variant_mechanism_masks(
     df: pd.DataFrame,
 ) -> dict[str, pd.Series]:
@@ -341,18 +409,11 @@ def _variant_mechanism_masks(
     disease mechanism OF THE GENE, from five independent gene-level sources,
     and grades a null variant's strength from the consequence itself.
 
-    WHAT THIS TREE DOES NOT DO
-    ==========================
-
-       None of the hub's newer per-variant facts is read at all:
-
-           variant_inheritance          variant_inheritance_basis
-           variant_penetrance           variant_condition_histories
-
-       Inheritance and penetrance still reach the criteria through the
-       gene-level arrays produced by identify_inheritance_mode, at gene
-       resolution, which is what the variant-level chain was built to
-       replace.
+    Inheritance and penetrance are intentionally outside this function. They
+    are parsed from ``variant_inheritance`` and ``variant_penetrance`` by
+    _variant_condition_masks; keeping the two adapters separate preserves the
+    distinction between what the variant does and how the selected conditions
+    are inherited.
     """
     required = {
         "var_plausible_patho_mechs",

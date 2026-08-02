@@ -10,10 +10,12 @@ sys.path.insert(0, str(SCRIPT_DIR))
 
 from combine_annotations import (  # noqa: E402
     HPO_ANNOTATION_COLUMNS,
+    HPO_BS1_BS2_CONTEXT_IDS,
     build_hpo_symbol_map,
     hpo_annotation_for_symbol,
     select_record_hpo_annotations,
 )
+from hpo_penetrance import HPO_PENETRANCE_STATUS_BY_TERM  # noqa: E402
 
 
 def _hpo_table() -> pd.DataFrame:
@@ -202,3 +204,14 @@ def test_scope_filters_flat_hpo_context_but_preserves_audit_assertions() -> None
         "exclude",
         "review",
     }
+
+
+def test_flat_hpo_context_uses_the_shared_penetrance_vocabulary() -> None:
+    assert set(HPO_PENETRANCE_STATUS_BY_TERM) <= HPO_BS1_BS2_CONTEXT_IDS
+    assert "HP:0003587" in HPO_BS1_BS2_CONTEXT_IDS  # Insidious / gradual onset
+    assert "HP:0034857" in HPO_BS1_BS2_CONTEXT_IDS  # Variable age of onset
+
+    # These assertions remain deliberately outside the penetrance gate.
+    assert "HP:0001470" not in HPO_BS1_BS2_CONTEXT_IDS  # Sex-limited expression
+    assert "HP:0003677" not in HPO_BS1_BS2_CONTEXT_IDS  # Slowly progressive
+    assert "HP:0031785" not in HPO_BS1_BS2_CONTEXT_IDS  # Stale insidious ID

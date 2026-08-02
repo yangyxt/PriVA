@@ -1,23 +1,21 @@
 #!/usr/bin/env python3
-"""Shared foundation: how the gene's disease is inherited, and when it starts.
+"""Legacy gene-level inheritance summaries and compatibility helpers.
 
-No ACMG criterion lives here, but almost every benign-supporting one depends
-on it. The arrays this module produces -- recessive, dominant, non-monogenic,
-non-Mendelian, haploinsufficient, incomplete-penetrance -- are threaded by the
-orchestrator into PP1, BS1, BS2, BS4, BP2/PM3 and BP5.
+The six variant-aware ACMG consumers no longer receive the arrays produced
+here. They read the mechanism hub's condition-linked ``variant_inheritance``
+and ``variant_penetrance`` columns. This module remains for the hub's audit
+summary API and for callers that still request a coarse gene-level estimate.
 
     parse_hpo_inheritance              HPO inheritance terms -> one mode
     identify_inheritance_mode_per_row  one variant's mode, using the gene's
                                        mean AlphaMissense score and the
                                        ClinGen dosage call
     identify_inheritance_mode          the same over a whole table, in parallel
-    hpo_onset_modes                    age of onset, which BS2 needs to know
-                                       whether a healthy carrier is old enough
-                                       to be informative
+    hpo_onset_modes                    compatibility bridge using the shared
+                                       penetrance vocabulary
 
-This module imports nothing from the other acmg_* modules. That is what lets
-gene_mechanism_hub.py import identify_inheritance_mode_per_row at the top of
-the file instead of deferring the import inside a method to dodge a cycle.
+The shared HPO vocabulary is deliberately independent of ACMG criteria, so the
+hub can import this audit API without creating a criteria-module cycle.
 """
 
 import logging
@@ -27,24 +25,32 @@ import pandas as pd
 import numpy as np
 from typing import Tuple
 
+from hpo_penetrance import (
+    HPO_INCOMPLETE_PENETRANCE_EQUIVALENT_TERMS,
+    normalize_penetrance_hpo_ids,
+)
+
 
 logger = logging.getLogger(__name__)
 
 
 def hpo_onset_modes(hpo_string):
-    """
-    Checks if an HPO profile suggests early onset WITHOUT known confounding
-    factors like late onset or slow/mild progression, which might affect
-    gnomAD frequency interpretation.
+    """Return whether unaffected-carrier observations are interpretable.
+
+    This is a compatibility bridge for criteria that still read the old
+    gene-wide HPO string.  It uses the same condition-modifier vocabulary as
+    the mechanism hub: delayed or gradual onset and variable expressivity make
+    an apparently unaffected carrier non-informative.  High penetrance,
+    sex-limited expression, and slow progression are deliberately outside that
+    set.
 
     Args:
         hpo_string: A string containing one or more HPO IDs
                     separated by semicolons. Can be None or empty.
 
     Returns:
-        bool: True if at least one 'early_onset' term is present AND
-              no 'late_onset' or 'slow_mild' terms are present.
-              False otherwise.
+        bool: False when an incomplete-penetrance-equivalent HPO term is
+              present, otherwise True.
 
     **Disclaimer:** This check provides a simplified signal based on HPO terms
     related to onset and course. Always interpret gnomAD frequency using
@@ -52,72 +58,15 @@ def hpo_onset_modes(hpo_string):
     disease context (prevalence, inheritance, penetrance, overall severity).
     """
 
-    # --- Define HPO Sets ---
-
-    # 1. List of Early Onset HPO IDs (Onset definitively before age 16)
-    early_onset_hpos = {
-        "HP:0030674",  # Antenatal onset (before birth)
-        "HP:0011460",  # Embryonal onset (first 8 weeks)
-        "HP:0011461",  # Fetal onset (after 8 weeks, before birth)
-        "HP:0003577",  # Congenital onset (present at birth)
-        "HP:0003623",  # Neonatal onset (<= 28 days)
-        "HP:0003593",  # Infantile onset (28 days to 1 year)
-        "HP:0011463",  # Childhood onset (1 to 5 years)
-        "HP:0003621",  # Juvenile onset (5 to 15 years)
-        "HP:0410280",  # Pediatric onset (broader term, 28 days to 15 years)
-    }
-
-    # 2. List of Late Onset HPO IDs (Onset at age 16 or later)
-    late_onset_hpos = {
-        "HP:0003596",  # Middle age onset (40-60 years)
-        "HP:0003584",  # Late onset (>= 60 years)
-    }
-    # "HP:0003581",  # Adult onset (>= 16 years)
-    # "HP:0011462",  # Young adult onset (16-40 years)
-
-    # 3. List of Slow Progression or Mildness HPO IDs
-    #    (Terms suggesting a course potentially compatible with survival/reproduction or reduced severity)
-    slow_mild_hpos = {
-        "HP:0031785",  # Insidious onset (gradual development)
-        "HP:0012829",  # Mild (severity modifier)
-        "HP:0040007",  # Asymptomatic
-    }
-
-    # Backup HPOs
-    # "HP:0003774",  # Slow progression
-    # "HP:0003678",  # Nonprogressive (condition does not worsen over time)
-    # "HP:0011010",  # Chronic (persisting for a long time)
-
-    # Combine the "confounding" factor lists for easier checking
-    # These are terms that, if present, suggest caution is needed with gnomAD filtering
-    confounding_hpos = late_onset_hpos.union(slow_mild_hpos)
-
-    # Initialize flags
-    found_early = False
-    found_confounding = False
-
     if not isinstance(hpo_string, str) or not hpo_string:
-        return True # Invalid input cannot meet criteria
+        return True
 
-    # Process input string
-    potential_hpos = [term.strip() for term in hpo_string.split(';')]
-
-    for hpo_id in potential_hpos:
-        # Basic format check
-        if re.match(r'^HP:\d+$', hpo_id):
-            # Check if it's an early onset term
-            if hpo_id in early_onset_hpos:
-                found_early = True
-            # Check if it's a confounding term (late onset OR slow/mild)
-            if hpo_id in confounding_hpos:
-                found_confounding = True
-                # Optimization: If a confounding term is found, the final result
-                # must be False, so we can stop iterating early.
-                break
-
-    # Evaluate the final condition:
-    # Return True only if an early term was found AND no confounding term was found.
-    return not found_confounding
+    hpo_ids = {
+        term.strip().upper()
+        for term in hpo_string.split(";")
+        if re.match(r"^HP:\d+$", term.strip(), flags=re.IGNORECASE)
+    }
+    return not bool(hpo_ids & HPO_INCOMPLETE_PENETRANCE_EQUIVALENT_TERMS)
 
 
 def parse_hpo_inheritance(row_dict: dict) -> str:
@@ -126,10 +75,12 @@ def parse_hpo_inheritance(row_dict: dict) -> str:
     # These inheritance modes can correspond to 3 different pathogenic mechanisms: LoF, GoF, DN.
     if isinstance(row_dict.get('HPO_IDs', None), str):
         hpo_terms = row_dict['HPO_IDs'].split(";")
-        # HP:0003829: Incomplete penetrance
-        # HP:4000159: Moderate penetrance
-        # HP:4000160: Low penetrance
-        incomplete_penetrance = ("HP:0003829" in hpo_terms) or ("HP:4000159" in hpo_terms) or ("HP:4000160" in hpo_terms)
+        # This remains condition-coarse until all criteria consume the hub's
+        # variant-condition histories, but its vocabulary must not disagree
+        # with the higher-resolution path during that migration.
+        incomplete_penetrance = (
+            normalize_penetrance_hpo_ids(hpo_terms) == "incomplete"
+        )
     else:
         incomplete_penetrance = False
 

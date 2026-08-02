@@ -16,6 +16,7 @@ from gene_mechanism_hub import (  # noqa: E402
     condition_cache_mechanism_entries,
     condition_cache_mechanism_assertions,
     enrich_condition_mechanism_assertion,
+    gene_has_lof_mechanism_history,
     infer_query_variant_effect,
     select_condition_histories_for_variant,
 )
@@ -70,7 +71,7 @@ def test_load_integrated_condition_cache_validates_schema_and_resolves_alias(
         stale_hub._load_condition_cache()
 
 
-def test_condition_cache_assertions_preserve_context_and_exclude_variant_only_gof(
+def test_condition_cache_assertions_preserve_context_and_gof_history(
 ) -> None:
     hpo_assertion = {
         "hpo_id": "HP:0000006",
@@ -303,7 +304,7 @@ def test_build_hpo_condition_index_preserves_assertion_provenance() -> None:
 
     assert by_mondo is by_omim
     assert by_omim["inheritance_modes"] == ["Autosomal dominant inheritance"]
-    assert by_omim["penetrance_hpo_ids"] == ["HP:0003829"]
+    assert by_omim["penetrance_hpo_ids"] == ["HP:0003829", "HP:0003584"]
     assert by_omim["onset_hpo_ids"] == ["HP:0003584"]
     assert by_omim["hpo_assertions"][1] == {
         "hpo_id": "HP:0003829",
@@ -402,6 +403,131 @@ def test_enrich_condition_mechanism_assertion_blocks_unscoped_disease() -> None:
     )
 
 
+def test_mechanism_free_condition_is_unresolved_and_deduced_lof_is_admitted() -> None:
+    base_condition = {
+        "label": "Condition one",
+        "identifiers": {"OMIM": ["OMIM:1"]},
+        "priva_scope": {
+            "decision": "include",
+            "category": "mendelian_non_neoplastic",
+            "review_status": "auto_supported",
+        },
+        "inheritance": {
+            "modes": ["autosomal_recessive"],
+            "assertions": [
+                {
+                    "hpo_id": "HP:0000007",
+                    "frequency": "-",
+                    "evidence": "TAS",
+                    "reference": "OMIM:1",
+                }
+            ],
+        },
+        "penetrance": {
+            "statuses": ["incomplete"],
+            "assertions": [
+                {
+                    "hpo_id": "HP:0003584",
+                    "frequency": "-",
+                    "evidence": "PCS",
+                    "reference": "PMID:1",
+                }
+            ],
+        },
+        "onset": {
+            "terms": ["late"],
+            "assertions": [
+                {
+                    "hpo_id": "HP:0003584",
+                    "frequency": "-",
+                    "evidence": "PCS",
+                    "reference": "PMID:1",
+                }
+            ],
+        },
+        "hpo_assertion_count": 2,
+        "pathogenic_mechanisms": {},
+    }
+    legacy_deduced = json.loads(json.dumps(base_condition))
+    legacy_deduced["label"] = "Legacy condition"
+    legacy_deduced["pathogenic_mechanisms"] = {
+        "LOF": {
+            "evidence": [
+                {
+                    "source": "deduced_from_inheritance",
+                    "source_record_id": "OMIM:2",
+                    "assertion_basis": "deduced",
+                    "mechanism": "LOF",
+                }
+            ]
+        }
+    }
+    review_only = json.loads(json.dumps(base_condition))
+    review_only["priva_scope"]["decision"] = "review"
+
+    assertions = condition_cache_mechanism_assertions(
+        {
+            "conditions": {
+                "OMIM:1": base_condition,
+                "OMIM:2": legacy_deduced,
+                "OMIM:3": review_only,
+            }
+        }
+    )
+
+    by_condition = {row["hpo_disease_id"]: row for row in assertions}
+    assert set(by_condition) == {"OMIM:1", "OMIM:2"}
+    assert by_condition["OMIM:1"]["mechanism"] == "UNRESOLVED"
+    assert by_condition["OMIM:1"]["source"] == "HPO_condition_history"
+    assert by_condition["OMIM:1"]["assertion_basis"] == (
+        "condition_without_explicit_mechanism"
+    )
+    assert by_condition["OMIM:2"]["mechanism"] == "LOF"
+    assert by_condition["OMIM:2"]["source"] == "deduced_from_inheritance"
+    assert by_condition["OMIM:2"]["assertion_basis"] == "deduced"
+    assert all(row["penetrance_hpo_ids"] == ["HP:0003584"] for row in assertions)
+
+    deduced_assertion = by_condition["OMIM:2"]
+    assert select_condition_histories_for_variant(
+        [deduced_assertion], variant_effect="predicted_LOF_high_confidence"
+    ) == [
+        {
+            "mechanism": "LOF",
+            "condition": "OMIM:2",
+            "inheritance": "recessive",
+            "x_linked": False,
+            "penetrance": "incomplete",
+        }
+    ]
+    assert select_condition_histories_for_variant(
+        [deduced_assertion], variant_effect="exact_known_GOF"
+    ) == []
+
+
+def test_deduced_lof_does_not_count_as_pvs1_lof_history() -> None:
+    condition = {
+        "priva_scope": {"decision": "include"},
+        "pathogenic_mechanisms": {
+            "LOF": {
+                "evidence": [
+                    {
+                        "source": "deduced_from_inheritance",
+                        "assertion_basis": "deduced",
+                    }
+                ]
+            }
+        },
+    }
+    gene = {"conditions": {"OMIM:1": condition}}
+
+    assert gene_has_lof_mechanism_history(gene) is False
+
+    condition["pathogenic_mechanisms"]["LOF"]["evidence"].append(
+        {"source": "G2P_DDG2P", "assertion_basis": "curated"}
+    )
+    assert gene_has_lof_mechanism_history(gene) is True
+
+
 def test_select_condition_histories_for_variant_is_mechanism_specific() -> None:
     assertions = [
         {
@@ -422,6 +548,12 @@ def test_select_condition_histories_for_variant_is_mechanism_specific() -> None:
             "hpo_inheritance_modes": ["x_linked_dominant"],
             "penetrance_hpo_ids": [],
         },
+        {
+            "mechanism": "UNRESOLVED",
+            "hpo_disease_id": "OMIM:4",
+            "hpo_inheritance_modes": ["autosomal_recessive"],
+            "penetrance_hpo_ids": ["HP:0003584"],
+        },
     ]
 
     exact_gof = select_condition_histories_for_variant(
@@ -437,12 +569,13 @@ def test_select_condition_histories_for_variant_is_mechanism_specific() -> None:
         variant_effect="uncertain",
     )
 
-    assert [row["mechanism"] for row in exact_gof] == ["GOF"]
-    assert [row["mechanism"] for row in predicted_lof] == ["LOF"]
+    assert [row["mechanism"] for row in exact_gof] == ["GOF", "UNRESOLVED"]
+    assert [row["mechanism"] for row in predicted_lof] == ["LOF", "UNRESOLVED"]
     assert [row["mechanism"] for row in unresolved] == [
         "LOF",
         "GOF",
         "DOMINANT_NEGATIVE",
+        "UNRESOLVED",
     ]
 
     # Each selected history carries the three facts the chain delivers, and
@@ -464,6 +597,36 @@ def test_select_condition_histories_for_variant_is_mechanism_specific() -> None:
     # X-linkage survives as its own fact rather than being folded into the value.
     assert unresolved[2]["inheritance"] == "dominant"
     assert unresolved[2]["x_linked"] is True
+    assert exact_gof[1] == {
+        "mechanism": "UNRESOLVED",
+        "condition": "OMIM:4",
+        "inheritance": "recessive",
+        "x_linked": False,
+        "penetrance": "incomplete",
+    }
+
+
+def test_mixed_mendelian_and_non_monogenic_condition_keeps_both_gates() -> None:
+    histories = select_condition_histories_for_variant(
+        [
+            {
+                "mechanism": "GOF",
+                "hpo_disease_id": "OMIM:1",
+                "allelic_requirement": "monoallelic_autosomal",
+                "hpo_inheritance_modes": [
+                    "Autosomal dominant inheritance",
+                    "Polygenic inheritance",
+                ],
+                "penetrance_hpo_ids": [],
+            }
+        ],
+        variant_effect="exact_known_GOF",
+    )
+
+    assert [(row["inheritance"], row["condition"]) for row in histories] == [
+        ("dominant", "OMIM:1"),
+        ("polygenic", "OMIM:1"),
+    ]
 
 
 def test_exact_gof_suppresses_but_retains_predicted_lof_evidence() -> None:
@@ -508,5 +671,3 @@ def test_nonsense_mediated_decay_outranks_even_a_curated_gof_allele() -> None:
     assert effect["variant_gof_score"] == 0
     assert effect["variant_mechanism_exclusive"] is True
     assert "CANONICAL_EXACT_GOF" in effect["variant_effect_suppressed_evidence"]
-
-

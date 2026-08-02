@@ -17,6 +17,8 @@ import json
 from typing import List, Dict, Any, Tuple
 from collections import deque
 
+from hpo_penetrance import HPO_PENETRANCE_STATUS_BY_TERM
+
 
 # No handler here on purpose. Whoever runs the program owns logging
 # configuration: this file when it is run directly, see the __main__ block at
@@ -79,26 +81,32 @@ HPO_INHERITANCE_TERMS = {
     "HP:0012275": "Autosomal dominant inheritance with maternal imprinting",
     "HP:0034341": "Pseudoautosomal recessive inheritance",
 }
-HPO_BS1_BS2_CONTEXT_IDS = set(HPO_INHERITANCE_TERMS).union(
-    {
-        "HP:0030674",  # Antenatal onset
-        "HP:0011460",  # Embryonal onset
-        "HP:0011461",  # Fetal onset
-        "HP:0003577",  # Congenital onset
-        "HP:0003623",  # Neonatal onset
-        "HP:0003593",  # Infantile onset
-        "HP:0011463",  # Childhood onset
-        "HP:0003621",  # Juvenile onset
-        "HP:0410280",  # Pediatric onset
-        "HP:0003596",  # Middle age onset
-        "HP:0003584",  # Late onset
-        "HP:0031785",  # Insidious onset
+HPO_ONSET_CONTEXT_IDS = {
+    "HP:0030674",  # Antenatal onset
+    "HP:0011460",  # Embryonal onset
+    "HP:0011461",  # Fetal onset
+    "HP:0003577",  # Congenital onset
+    "HP:0003623",  # Neonatal onset
+    "HP:0003593",  # Infantile onset
+    "HP:0011463",  # Childhood onset
+    "HP:0003621",  # Juvenile onset
+    "HP:0410280",  # Pediatric onset
+    "HP:0003581",  # Adult onset
+    "HP:0011462",  # Young adult onset
+    "HP:0003596",  # Middle age onset
+    "HP:0003584",  # Late onset
+    "HP:0034857",  # Highly variable age of onset
+    "HP:0003587",  # Insidious / gradual onset
+}
+HPO_BS1_BS2_CONTEXT_IDS = (
+    set(HPO_INHERITANCE_TERMS)
+    | HPO_ONSET_CONTEXT_IDS
+    | set(HPO_PENETRANCE_STATUS_BY_TERM)
+    | {
+        # Preserved in the flat compatibility annotation. These are not
+        # penetrance equivalents in the variant-condition hub.
         "HP:0012829",  # Mild
         "HP:0040007",  # Asymptomatic
-        "HP:0003829",  # Incomplete penetrance
-        "HP:0034950",  # Complete penetrance
-        "HP:4000159",  # Moderate penetrance
-        "HP:4000160",  # Low penetrance
     }
 )
 

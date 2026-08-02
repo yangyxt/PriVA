@@ -46,6 +46,10 @@ PROGRESS.md
 logs/
 /example_test/
 /example/smoke_runs/
+# Graphify output includes machine-specific interpreter/root markers and a
+# regenerable extraction cache. Keep the portable architecture source in the
+# tracked root-level DOT file instead.
+/scripts/graphify-out/
 # data/patho_mechanism holds the mechanism caches. Only the files PriVA reads
 # at runtime belong in the repository, so everything there is ignored and the
 # four that are read are named back in. A new build byproduct -- an audit table,

@@ -3,9 +3,10 @@
 
 The builder keeps raw source files, records checksums and download/check
 timestamps, and emits ``gene_pathogenic_mechanism_evidence.tsv``. That table is
-a build input to the integrated HPO condition cache; ACMG runtime does not read
-it directly. Exact GoF and dominant-negative allele assertions are built by
-``build_gene_nonlof_mechanism_cache.py`` instead.
+a G2P/Orphadata build input to the integrated HPO condition cache; ACMG runtime
+does not read it directly. ClinGen dosage and exact GoF assertions enter that
+cache through their dedicated inputs. Exact GoF and dominant-negative allele
+assertions are built by ``build_gene_nonlof_mechanism_cache.py`` instead.
 
 The script requires pandas and is invoked by ``install_utils.sh`` as part of
 the complete PriVA installer refresh. When a SOCKS proxy is requested,
@@ -137,6 +138,11 @@ PANELAPP_SPEC = SourceSpec(
     docs_url="https://panelapp.genomicsengland.co.uk/api/v1/panels/",
     parser="panelapp",
 )
+
+CONDITION_EVIDENCE_SOURCE_NAMES = {"g2p_ddg2p", "orphadata_gene_disease"}
+CONDITION_EVIDENCE_SPECS = [
+    source for source in SOURCES if source.name in CONDITION_EVIDENCE_SOURCE_NAMES
+]
 
 def utc_now() -> datetime:
     return datetime.now(timezone.utc)
@@ -1201,7 +1207,14 @@ def write_tsv(
         if col not in data.columns:
             data[col] = ""
     data[columns].to_csv(tmp, sep="\t", index=False)
-    tmp.replace(path)
+    if (
+        path.exists()
+        and path.stat().st_size == tmp.stat().st_size
+        and sha256_file(path) == sha256_file(tmp)
+    ):
+        tmp.unlink()
+    else:
+        tmp.replace(path)
     return len(data)
 
 
@@ -1244,6 +1257,11 @@ def source_url_for_evidence(source: str) -> str:
 
 
 def to_gene_pathogenic_mechanism_evidence(unified: pd.DataFrame) -> pd.DataFrame:
+    if unified.empty or "source" not in unified.columns:
+        return pd.DataFrame(columns=EVIDENCE_COLUMNS)
+    unified = unified.loc[
+        unified["source"].isin({"G2P_DDG2P", "Orphadata"})
+    ].copy()
     if unified.empty:
         return pd.DataFrame(columns=EVIDENCE_COLUMNS)
     evidence = pd.DataFrame(
@@ -1285,7 +1303,7 @@ def parse_all_sources(
     disease_scope_registry: Path | None = DEFAULT_DISEASE_SCOPE_REGISTRY,
 ) -> pd.DataFrame:
     frames: list[pd.DataFrame] = []
-    for spec in [*SOURCES, PANELAPP_SPEC]:
+    for spec in CONDITION_EVIDENCE_SPECS:
         parser_fn = EVIDENCE_PARSERS.get(spec.parser)
         if parser_fn is None:
             continue
@@ -1603,6 +1621,15 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--cache-dir", type=Path, default=DEFAULT_CACHE_DIR)
     parser.add_argument(
+        "--output-tsv",
+        type=Path,
+        default=None,
+        help=(
+            "Canonical condition-mechanism evidence TSV. Defaults to "
+            "<cache-dir>/gene_pathogenic_mechanism_evidence.tsv."
+        ),
+    )
+    parser.add_argument(
         "--disease-scope-registry",
         type=Path,
         default=DEFAULT_DISEASE_SCOPE_REGISTRY,
@@ -1615,8 +1642,8 @@ def parse_args() -> argparse.Namespace:
         "--shared-raw-dir",
         default=str(DEFAULT_SHARED_RAW_DIR),
         help=(
-            "Shared raw-data directory used for downloads and parsing. Prepared "
-            "project-specific outputs are written flat into --cache-dir. "
+            "Shared raw-data directory used for downloads and parsing. Audit "
+            "outputs are written flat into --cache-dir. "
             "Expected filenames are exactly: AllG2P.csv, "
             "ClinGen_gene_curation_list_GRCh38.tsv, "
             "gofcards/gofcards_data_download.xlsx, and panelapp_all_panels.json. "
@@ -1625,12 +1652,6 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument("--force", action="store_true", help="Check/download all sources.")
-    parser.add_argument(
-        "--max-panelapp-panels",
-        type=int,
-        default=None,
-        help="Debug cap for PanelApp panels fetched.",
-    )
     parser.add_argument("--timeout", type=int, default=120)
     parser.add_argument("--retries", type=int, default=3)
     parser.add_argument(
@@ -1675,7 +1696,7 @@ def main() -> int:
         previous_sources = previous_manifest.get("sources", {})
         source_meta: dict[str, Any] = {}
 
-        for source in SOURCES:
+        for source in CONDITION_EVIDENCE_SPECS:
             print(f"checking_source={source.name}", file=sys.stderr)
             source_meta[source.name] = fetch_static_source(
                 source=source,
@@ -1688,18 +1709,6 @@ def main() -> int:
                 download_tool=args.download_tool,
             )
 
-        print(f"checking_source={PANELAPP_SPEC.name}", file=sys.stderr)
-        source_meta[PANELAPP_SPEC.name] = fetch_panelapp(
-            raw_dir=raw_dir,
-            previous_meta=previous_sources,
-            force=args.force,
-            timeout=args.timeout,
-            retries=args.retries,
-            proxy_url=args.proxy_url,
-            download_tool=args.download_tool,
-            max_panels=args.max_panelapp_panels,
-        )
-
         manifest = {
             "schema_version": "1.0",
             "cache_dir": str(cache_dir),
@@ -1709,9 +1718,8 @@ def main() -> int:
             "proxy_mode": "explicit_proxy_url" if args.proxy_url else "environment_or_none",
             "download_tool": args.download_tool,
             "expected_raw_filenames": [
-                source.raw_filename for source in SOURCES
-            ]
-            + [PANELAPP_SPEC.raw_filename],
+                source.raw_filename for source in CONDITION_EVIDENCE_SPECS
+            ],
             "built_at_utc": iso_now(),
             "sources": source_meta,
         }
@@ -1719,7 +1727,11 @@ def main() -> int:
             raw_dir=raw_dir,
             disease_scope_registry=args.disease_scope_registry,
         )
-        evidence_path = cache_dir / "gene_pathogenic_mechanism_evidence.tsv"
+        evidence_path = (
+            args.output_tsv.expanduser().resolve()
+            if args.output_tsv is not None
+            else cache_dir / "gene_pathogenic_mechanism_evidence.tsv"
+        )
         evidence_count = write_gene_pathogenic_mechanism_evidence(
             evidence_path,
             all_evidence_df,

@@ -75,8 +75,8 @@ inference, so everything sourced runs before anything deduced.
 
     4. attach_clingen_haploinsufficiency(genes, clingen_dosage)
        ------------------------------------------------------------------
-       ClinGen's dosage curation. Reads three columns of
-       data/clingen/gene_dosage_sensitivity.hg38.tsv:
+       ClinGen's dosage curation. Reads three columns of the configured
+       gene_dosage_sensitivity TSV (the assembly coordinate is not read):
 
          "#Gene Symbol"
          "Haploinsufficiency Score"
@@ -1406,7 +1406,6 @@ def build_cache_payload(
     *,
     hpo_assertions: str | Path,
     mechanism_evidence: str | Path,
-    mechanism_json: str | Path,
     gofcards_variants: str | Path,
     clingen_dosage: str | Path = DEFAULT_CLINGEN_DOSAGE,
     hpo_release: str = "",
@@ -1432,9 +1431,10 @@ def build_cache_payload(
                 "MONDO": _clean(mondo_release),
             },
             "sources": {
+                "builder_script": _source_metadata(Path(__file__).resolve()),
                 "hpo_assertions": _source_metadata(hpo_assertions),
                 "mechanism_evidence": _source_metadata(mechanism_evidence),
-                "nonlof_mechanism_json": _source_metadata(mechanism_json),
+                "clingen_dosage": _source_metadata(clingen_dosage),
                 "gofcards_variants": _source_metadata(gofcards_variants),
             },
             "build_statistics": {
@@ -1516,6 +1516,58 @@ def load_and_validate_cache(path: str | Path) -> dict[str, int]:
     return validate_cache_payload(payload)
 
 
+def validate_cache_provenance(
+    path: str | Path,
+    *,
+    hpo_assertions: str | Path,
+    mechanism_evidence: str | Path,
+    clingen_dosage: str | Path,
+    gofcards_variants: str | Path,
+    hpo_release: str,
+    mondo_release: str,
+) -> dict[str, int]:
+    """Require a valid cache built from the exact files configured now."""
+    with open_text(path) as handle:
+        payload = json.load(handle)
+    counts = validate_cache_payload(payload)
+    expected_sources = {
+        "builder_script": Path(__file__).resolve(),
+        "hpo_assertions": hpo_assertions,
+        "mechanism_evidence": mechanism_evidence,
+        "clingen_dosage": clingen_dosage,
+        "gofcards_variants": gofcards_variants,
+    }
+    recorded_sources = payload["_meta"].get("sources", {})
+    mismatches = []
+    for name, source in expected_sources.items():
+        actual = _source_metadata(source)
+        recorded = recorded_sources.get(name)
+        if not isinstance(recorded, dict):
+            mismatches.append(f"{name}: missing provenance")
+            continue
+        changed_fields = [
+            field
+            for field in ("path", "size_bytes", "sha256")
+            if recorded.get(field) != actual[field]
+        ]
+        if changed_fields:
+            mismatches.append(f"{name}: changed {','.join(changed_fields)}")
+
+    recorded_releases = payload["_meta"].get("releases", {})
+    for name, expected in (
+        ("HPO", _clean(hpo_release)),
+        ("MONDO", _clean(mondo_release)),
+    ):
+        if recorded_releases.get(name) != expected:
+            mismatches.append(
+                f"{name} release: recorded={recorded_releases.get(name)!r}, "
+                f"configured={expected!r}"
+            )
+    if mismatches:
+        raise ValueError("Cache provenance mismatch: " + "; ".join(mismatches))
+    return counts
+
+
 def write_json_atomic(
     payload: dict[str, Any],
     output: str | Path,
@@ -1576,15 +1628,10 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--hpo-assertions")
     parser.add_argument("--mechanism-evidence")
-    parser.add_argument(
-        "--nonlof-mechanism-json",
-        "--mechanism-json",
-        dest="mechanism_json",
-        help="Shared non-LOF mechanism JSON; --mechanism-json is a compatibility alias.",
-    )
+    parser.add_argument("--clingen-dosage")
     parser.add_argument("--gofcards-variants")
-    parser.add_argument("--hpo-release", default="")
-    parser.add_argument("--mondo-release", default="")
+    parser.add_argument("--hpo-release", default=None)
+    parser.add_argument("--mondo-release", default=None)
     parser.add_argument("--output")
     parser.add_argument(
         "--validate-only",
@@ -1602,12 +1649,37 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
     if args.validate_only:
-        print(json.dumps(load_and_validate_cache(args.validate_only), sort_keys=True))
+        provenance_inputs = (
+            args.hpo_assertions,
+            args.mechanism_evidence,
+            args.clingen_dosage,
+            args.gofcards_variants,
+            args.hpo_release,
+            args.mondo_release,
+        )
+        if any(value is not None for value in provenance_inputs):
+            if any(value is None for value in provenance_inputs):
+                raise SystemExit(
+                    "Provenance validation requires all build inputs and releases"
+                )
+            counts = validate_cache_provenance(
+                args.validate_only,
+                hpo_assertions=args.hpo_assertions,
+                mechanism_evidence=args.mechanism_evidence,
+                clingen_dosage=args.clingen_dosage,
+                gofcards_variants=args.gofcards_variants,
+                hpo_release=args.hpo_release,
+                mondo_release=args.mondo_release,
+            )
+        else:
+            counts = load_and_validate_cache(args.validate_only)
+        print(json.dumps(counts, sort_keys=True))
         return
+    clingen_dosage = args.clingen_dosage or str(DEFAULT_CLINGEN_DOSAGE)
     required = {
         "--hpo-assertions": args.hpo_assertions,
         "--mechanism-evidence": args.mechanism_evidence,
-        "--mechanism-json": args.mechanism_json,
+        "--clingen-dosage": clingen_dosage,
         "--gofcards-variants": args.gofcards_variants,
         "--output": args.output,
     }
@@ -1617,10 +1689,10 @@ def main() -> None:
     payload = build_cache_payload(
         hpo_assertions=args.hpo_assertions,
         mechanism_evidence=args.mechanism_evidence,
-        mechanism_json=args.mechanism_json,
+        clingen_dosage=clingen_dosage,
         gofcards_variants=args.gofcards_variants,
-        hpo_release=args.hpo_release,
-        mondo_release=args.mondo_release,
+        hpo_release=args.hpo_release or "",
+        mondo_release=args.mondo_release or "",
     )
     write_json_atomic(payload, args.output, pretty=args.pretty)
     print(json.dumps(payload["_meta"]["counts"], sort_keys=True))

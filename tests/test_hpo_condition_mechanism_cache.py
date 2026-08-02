@@ -1,4 +1,5 @@
 import json
+import os
 from pathlib import Path
 import sys
 
@@ -15,6 +16,7 @@ from build_hpo_condition_mechanism_cache import (  # noqa: E402
     build_hpo_gene_condition_frame,
     deduce_mechanisms_from_inheritance,
     load_and_validate_cache,
+    validate_cache_provenance,
     write_json_atomic,
 )
 from clinvar_vcv import partition_gofcards_variants  # noqa: E402
@@ -510,13 +512,10 @@ def test_curated_gof_precedes_recessive_lof_deduction(tmp_path: Path) -> None:
         tmp_path / "gofcards.json",
         {"loc_1:10:A->G_grch37": linked},
     )
-    mechanism_json = tmp_path / "mechanisms.json"
-    mechanism_json.write_text(json.dumps({"_meta": {}}), encoding="utf-8")
 
     payload = build_cache_payload(
         hpo_assertions=hpo,
         mechanism_evidence=mechanism,
-        mechanism_json=mechanism_json,
         gofcards_variants=gofcards,
         clingen_dosage=clingen,
     )
@@ -550,14 +549,18 @@ def test_complete_cache_is_validated_and_published_atomically(
         "mechanism_confidence\tdisease_confidence\tpmids\tevidence_url\n",
         encoding="utf-8",
     )
+    clingen = tmp_path / "clingen.tsv"
+    clingen.write_text(
+        "#Gene Symbol\tHaploinsufficiency Score\t"
+        "Haploinsufficiency Description\tHaploinsufficiency Disease ID\n",
+        encoding="utf-8",
+    )
     gofcards = _write_gofcards_cache(tmp_path / "gofcards.json", {})
-    mechanism_json = tmp_path / "mechanisms.json"
-    mechanism_json.write_text(json.dumps({"_meta": {}}), encoding="utf-8")
     output = tmp_path / "cache.json"
     payload = build_cache_payload(
         hpo_assertions=hpo,
         mechanism_evidence=mechanism,
-        mechanism_json=mechanism_json,
+        clingen_dosage=clingen,
         gofcards_variants=gofcards,
         hpo_release="v1",
         mondo_release="v2",
@@ -570,9 +573,71 @@ def test_complete_cache_is_validated_and_published_atomically(
         "HPO": "v1",
         "MONDO": "v2",
     }
+    assert set(payload["_meta"]["sources"]) == {
+        "builder_script",
+        "hpo_assertions",
+        "mechanism_evidence",
+        "clingen_dosage",
+        "gofcards_variants",
+    }
     assert not list(tmp_path.glob(".cache.json.*.tmp"))
 
     original = output.read_bytes()
     with pytest.raises(ValueError, match="schema_version"):
         write_json_atomic({"_meta": {}, "genes": {}}, output)
     assert output.read_bytes() == original
+
+
+def test_cache_provenance_detects_changed_inputs(tmp_path: Path) -> None:
+    hpo = tmp_path / "hpo.tsv"
+    hpo.write_text(
+        HPO_HEADER
+        + "GENE1\tOMIM:1\tHP:0000006\t-\tTAS\tOMIM:1\tMONDO:1\t"
+        "Condition one\tmendelian_non_neoplastic\tinclude\tMONDO_ancestor\t"
+        "MONDO:v1\tauto_supported\n",
+        encoding="utf-8",
+    )
+    mechanism = tmp_path / "mechanism.tsv"
+    mechanism.write_text(
+        "gene_symbol\tsource\tsource_record_id\tsource_condition_id\tmondo_id\t"
+        "disease_scope\tpriva_scope\tscope_review_status\tdisease_label\t"
+        "inheritance\tpatho_mode_raw\tnormalized_mechanisms\t"
+        "mechanism_confidence\tdisease_confidence\tpmids\tevidence_url\n",
+        encoding="utf-8",
+    )
+    clingen = tmp_path / "clingen.tsv"
+    clingen.write_text(
+        "#Gene Symbol\tHaploinsufficiency Score\t"
+        "Haploinsufficiency Description\tHaploinsufficiency Disease ID\n",
+        encoding="utf-8",
+    )
+    gofcards = _write_gofcards_cache(tmp_path / "gofcards.json", {})
+    output = tmp_path / "cache.json"
+    payload = build_cache_payload(
+        hpo_assertions=hpo,
+        mechanism_evidence=mechanism,
+        clingen_dosage=clingen,
+        gofcards_variants=gofcards,
+        hpo_release="v1",
+        mondo_release="v2",
+    )
+    write_json_atomic(payload, output)
+
+    expected = {
+        "hpo_assertions": hpo,
+        "mechanism_evidence": mechanism,
+        "clingen_dosage": clingen,
+        "gofcards_variants": gofcards,
+        "hpo_release": "v1",
+        "mondo_release": "v2",
+    }
+    assert validate_cache_provenance(output, **expected)["genes"] == 1
+
+    touched_timestamp_ns = mechanism.stat().st_mtime_ns + 1_000_000_000
+    os.utime(mechanism, ns=(touched_timestamp_ns, touched_timestamp_ns))
+    assert mechanism.stat().st_mtime_ns == touched_timestamp_ns
+    assert validate_cache_provenance(output, **expected)["genes"] == 1
+
+    mechanism.write_text(mechanism.read_text() + "# changed\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="mechanism_evidence: changed"):
+        validate_cache_provenance(output, **expected)

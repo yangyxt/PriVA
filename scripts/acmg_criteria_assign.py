@@ -20,10 +20,10 @@ WHERE EACH CRITERION LIVES
     acmg_pp3_bp4_bp7_insilico       PP3  BP4  BP7
     acmg_bs2_bp5_observation        BS2  BP5
 
-    acmg_variant_mechanism          shared -- exact curated allele match, and
-                                    the fifteen mechanism masks
+    acmg_variant_mechanism          shared -- exact curated allele match,
+                                    mechanism masks, and categorical
+                                    inheritance/penetrance masks
     acmg_consequence                shared -- VEP consequence, NMD, pext
-    acmg_inheritance                shared -- inheritance mode and age of onset
     acmg_scoring                    combine, score, rank
 
 WHY THE ORDER BELOW IS NOT ARBITRARY
@@ -34,10 +34,11 @@ Several criteria consume another criterion's output, so the sequence is forced:
     annotate_exact_nonlof_variants   must precede the mechanism hub, because
                                      the hub's precedence ladder needs to know
                                      whether a curated allele match exists
-    annotate_gene_mechanism_categories  must precede every mechanism-reading
-                                     criterion; it writes the fifteen columns
-                                     they all require, and a missing column is
-                                     an error rather than a silent default
+    annotate_gene_mechanism_categories  must precede every mechanism- or
+                                     condition-history-reading criterion; it
+                                     writes the per-variant inheritance and
+                                     penetrance contract, and a missing column
+                                     is an error rather than a silent default
     PVS1                             produces loc_intol_domain, which PM1 and
                                      PM4/BP3 both read, and pvs1_criteria,
                                      which PS1/PM5, PM1, PM4/BP3, PP3/BP4 and
@@ -46,8 +47,9 @@ Several criteria consume another criterion's output, so the sequence is forced:
                                      which PS1/PM5, PM1 and PP5/BP6 read
     PM2                              produces pm2_criteria, which BS1, BS2 and
                                      BP2/PM3 read
-    identify_inheritance_mode        produces the six inheritance arrays that
-                                     PP1, BS1, BS2, BS4, BP2/PM3 and BP5 read
+    variant condition histories      replace the old six parallel gene-level
+                                     arrays for PP1, BS1, BS2, BS4, BP2/PM3
+                                     and BP5
 
 THE CLINVAR CACHES NO LONGER DEPEND ON WHO IS __main__
 ======================================================
@@ -86,7 +88,6 @@ from typing import Tuple
 import pandas as pd
 import numpy as np
 from gene_mechanism_hub import (
-    DEFAULT_DDG2P_MECHANISM_EVIDENCE,
     DEFAULT_HPO_CONDITION_MECHANISM_CACHE,
     DEFAULT_MECHANISM_JSON,
     annotate_gene_mechanism_categories,
@@ -94,7 +95,6 @@ from gene_mechanism_hub import (
 
 from acmg_variant_mechanism import annotate_exact_nonlof_variants
 from acmg_consequence import vep_consq_interpret
-from acmg_inheritance import identify_inheritance_mode
 from acmg_pvs1_null_variant import (
     PVS1_criteria,
     summarize_clinvar_gene_pathogenicity,
@@ -168,8 +168,7 @@ def ACMG_criteria_assign(anno_table: str,
                          # mean "deliberately no list".
                          dispensable_gene_list: str = DEFAULT_DISPENSABLE_GENE_LIST,
                          hpo_condition_mechanism_json: str = str(DEFAULT_HPO_CONDITION_MECHANISM_CACHE),
-                         gene_mechanism_json: str = str(DEFAULT_MECHANISM_JSON),
-                         ddg2p_mechanism_evidence: str = str(DEFAULT_DDG2P_MECHANISM_EVIDENCE),
+                         gene_nonlof_mechanism_json: str = str(DEFAULT_MECHANISM_JSON),
                          gnomAD_extreme_rare_threshold: float = 0.0001,
                          expected_incidence: float = 0.001,
                          threads: int = 10) -> Tuple[pd.DataFrame, pd.DataFrame]:
@@ -275,7 +274,7 @@ def ACMG_criteria_assign(anno_table: str,
     annotate_exact_nonlof_variants(
         anno_df,
         context="step3_initial",
-        mechanism_json=gene_mechanism_json,
+        mechanism_json=gene_nonlof_mechanism_json,
     )
 
     # Load the intolerant domains
@@ -288,16 +287,6 @@ def ACMG_criteria_assign(anno_table: str,
             mm = mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ)
             intolerant_domains = pickle.load(mm)
     logger.info(f"Loading the recorded intolerant domains which look alike: {intolerant_domains}")
-
-    # These inheritance arrays remain inputs to criteria such as PM3 and PP1.
-    # They are not mechanism fallbacks for the hub, PVS1, BS1, BS2, BS4, or
-    # ranking.
-    recessive, dominant, non_monogenic, non_mendelian, haplo_insufficient, incomplete_penetrance = identify_inheritance_mode(
-        anno_df,
-        gene_to_am_score_map,
-        gene_dosage_sensitivity,
-        threads,
-    )
 
     anno_df = annotate_gene_mechanism_categories(
         anno_df,
@@ -405,9 +394,6 @@ def ACMG_criteria_assign(anno_table: str,
         anno_df,
         expected_incidence=expected_incidence,
         pm2_criteria=pm2_criteria,
-        non_monogenic=non_monogenic,
-        non_mendelian=non_mendelian,
-        incomplete_penetrance=incomplete_penetrance,
         return_frequency_components=True,
     )
     logger.info(f"BS1 criteria applied, {(bs1_criteria > 0).sum()} variants are having the BS1 criteria")
@@ -447,30 +433,20 @@ def ACMG_criteria_assign(anno_table: str,
         logger.info("No PM2/BS1 frequency conflicts detected")
     gc.collect()
 
-    # Summarize the inheritance mode, first prepare a df composed of recessive, dominant, non_monogenic, non_mendelian, haplo_insufficient, incomplete_penetrance
-    inheritance_df = pd.DataFrame({
-        'recessive': ["recessive" if i else "" for i in recessive],
-        'dominant': ["dominant" if i else "" for i in dominant],
-        'non_monogenic': ["non_monogenic" if i else "" for i in non_monogenic],
-        'non_mendelian': ["non_mendelian" if i else "" for i in non_mendelian],
-        'haplo_insufficient': ["haplo_insufficient" if i else "" for i in haplo_insufficient],
-        'incomplete_penetrance': ["incomplete_penetrance" if i else "" for i in incomplete_penetrance]
-    })
-    logger.info(f"The inheritance_df looks like: \n{inheritance_df[:10].to_string(index=False)}")
-
     # Apply BS2, variant observed in a healthy adult
     bs2_criteria = BS2_criteria(
         anno_df,
-        non_monogenic,
-        non_mendelian,
-        incomplete_penetrance,
         pm2_criteria,
     )
     logger.info(f"BS2 criteria applied, {(bs2_criteria > 0).sum()} variants are having the BS2 criteria")
     gc.collect()
 
     # Apply PP1 criteria, variant is cosegregating with a pathogenic variant in one or more families
-    pp1_criteria = PP1_criteria(anno_df, recessive, dominant, non_monogenic, non_mendelian, incomplete_penetrance, pp1_vcf, pp1_ped)
+    pp1_criteria = PP1_criteria(
+        anno_df,
+        multi_fam_vcf=pp1_vcf,
+        multi_fam_ped=pp1_ped,
+    )
     logger.info(f"PP1 criteria applied, {(pp1_criteria > 0).sum()} variants are having the PP1 criteria")
     gc.collect()
 
@@ -480,9 +456,6 @@ def ACMG_criteria_assign(anno_table: str,
             anno_df,
             ped_df,
             fam_name,
-            non_monogenic,
-            non_mendelian,
-            incomplete_penetrance,
         )
     else:
         logger.warning(f"No ped_table provided, skip the BS4 criteria")
@@ -494,7 +467,11 @@ def ACMG_criteria_assign(anno_table: str,
 
     # Apply BP5, variant found in a sample with known alternative molecular basis for disease
     if alt_disease_vcf:
-        bp5_criteria = BP5_criteria(anno_df, alt_disease_vcf, recessive, dominant, non_monogenic, non_mendelian, incomplete_penetrance, threads)
+        bp5_criteria = BP5_criteria(
+            anno_df,
+            alt_disease_vcf,
+            n_processes=threads,
+        )
     else:
         bp5_criteria = np.array([0] * len(anno_df))
     logger.info(f"BP5 criteria applied, {(bp5_criteria > 0).sum()} variants are having the BP5 criteria")
@@ -512,10 +489,7 @@ def ACMG_criteria_assign(anno_table: str,
                                                       pm2_criteria,
                                                       pvs1_criteria,
                                                       ps1_criteria,
-                                                      ps3_criteria,
-                                                      recessive,
-                                                      dominant,
-                                                      incomplete_penetrance)
+                                                      ps3_criteria)
     else:
         logger.warning(f"No ped_table provided, skip the BP2 and PM3 criteria")
         bp2_criteria, pm3_criteria = np.array([0] * len(anno_df)), np.array([0] * len(anno_df))
@@ -645,17 +619,11 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--gene_nonlof_mechanism_json",
-        "--gene_mechanism_json",
-        dest="gene_mechanism_json",
         type=str,
         required=False,
         default=str(DEFAULT_MECHANISM_JSON),
-        help=(
-            "Schema-v2 non-LOF mechanism assertions JSON. "
-            "--gene_mechanism_json is retained as a compatibility alias."
-        ),
+        help="Schema-v2 exact non-LOF mechanism assertions JSON.",
     )
-    parser.add_argument("--ddg2p_mechanism_evidence", type=str, required=False, default=str(DEFAULT_DDG2P_MECHANISM_EVIDENCE))
     parser.add_argument("--threads", type=int, required=False, default=10)
     args = parser.parse_args()
 
@@ -687,8 +655,7 @@ if __name__ == "__main__":
                                                     relevant_gene_list=args.relevant_gene_list,
                                                     dispensable_gene_list=args.dispensable_gene_list,
                                                     hpo_condition_mechanism_json=args.hpo_condition_mechanism_json,
-                                                    gene_mechanism_json=args.gene_mechanism_json,
-                                                    ddg2p_mechanism_evidence=args.ddg2p_mechanism_evidence,
+                                                    gene_nonlof_mechanism_json=args.gene_nonlof_mechanism_json,
                                                     gnomAD_extreme_rare_threshold=args.gnomAD_extreme_rare_threshold,
                                                     expected_incidence=args.expected_incidence,
                                                     threads=args.threads)

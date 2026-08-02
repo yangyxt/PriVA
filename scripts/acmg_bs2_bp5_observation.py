@@ -5,16 +5,16 @@ Neither is about the molecule. Both ask whether the carriers are consistent
 with the allele causing the disease in question.
 
     BS2  observed in an apparently healthy adult, in a genotype the disease
-         model would require to be affected. Whether a carrier counts as
-         informative depends on the disorder's age of onset, which is why
-         this reads hpo_onset_modes from acmg_inheritance -- a healthy
-         thirty-year-old says nothing about a late-onset disorder.
+         model would require to be affected. Delayed/variable onset is already
+         normalized to the linked condition's ``incomplete`` penetrance value,
+         so a healthy thirty-year-old cannot contradict a late-onset disorder.
     BP5  found in a patient whose disease already has an alternative
          molecular explanation. extract_and_summarize_alt_disease_variants
          builds that cohort from the alternative-disease VCF.
 
-Both are withheld for non-monogenic, non-Mendelian and incomplete-penetrance
-genes, where a healthy carrier or a second diagnosis is not contradictory.
+Both are withheld when a selected history is non-monogenic, non-Mendelian or
+incomplete-penetrance, because a healthy carrier or second diagnosis is then
+not contradictory.
 """
 
 import logging
@@ -25,34 +25,35 @@ import pandas as pd
 import numpy as np
 from io import StringIO
 
-from acmg_inheritance import hpo_onset_modes
-from acmg_variant_mechanism import _variant_mechanism_masks
+from acmg_variant_mechanism import _variant_condition_masks
 
 
 logger = logging.getLogger(__name__)
 
 
-def BS2_criteria(df: pd.DataFrame,
-                 non_monogenic: np.ndarray,
-                 non_mendelian: np.ndarray,
-                 incomplete_penetrance: np.ndarray,
-                 pm2_criteria: np.ndarray) -> pd.Series:
+def BS2_criteria(
+    df: pd.DataFrame,
+    pm2_criteria: np.ndarray,
+) -> pd.Series:
     '''
     BS2: variant observed in apparently healthy adults for a disease expected
     to be penetrant at the observed age. Output keeps the existing PriVA
     strength encoding:
       0 = no BS2, 3 = BS2.
 
-    The decision requires the upstream variant-effect and mechanism-
-    applicability fields. There is no legacy mechanism fallback.
+    The mechanism hub has already selected compatible known condition histories
+    plus every mechanism-unresolved included history. This function reads their
+    categorical inheritance and penetrance directly; there is no gene-wide HPO
+    string or array fallback.
 
     Global gates:
-      - no BS2 for non-monogenic/polygenic, non-Mendelian, incomplete-
-        penetrance, moderate/low-penetrance, or late-onset-compatible rows.
+      - no BS2 for non-monogenic/polygenic, non-Mendelian, or any selected
+        incomplete-equivalent penetrance assertion. That category includes
+        moderate/low penetrance, delayed/variable onset and variable
+        expressivity. High penetrance remains eligible at the standard count.
       - no BS2 while a relevant HPO disease context still requires scope review.
       - if HPO explicitly marks complete penetrance, use lower gnomAD count
-        thresholds (>3 instead of >10), still requiring no incomplete
-        penetrance and no late-onset confounder.
+        thresholds (>3 instead of >10), still requiring no incomplete history.
       - final BS2 is removed when PM2 is assigned.
 
     Healthy observation classes:
@@ -110,39 +111,28 @@ def BS2_criteria(df: pd.DataFrame,
     chrom = _series_or_empty("chrom")
     y_locus = chrom.str.contains("Y", regex=False)
 
-    hpo_ids = _series_or_empty("HPO_IDs")
     scope_review_required = _series_or_empty("HPO_scope_review_required").str.lower().isin(
         {"1", "true", "yes"}
     )
-    not_late_onsets = hpo_ids.map(hpo_onset_modes)
-    complete_penetrance = hpo_ids.str.contains("HP:0034950", regex=False)  # Complete penetrance
-    moderate_to_low_penetrance = (
-        hpo_ids.str.contains("HP:4000159", regex=False)
-        | hpo_ids.str.contains("HP:4000160", regex=False)
-    )
-    valid_model = pd.Series(
-        np.logical_not(non_monogenic)
-        & np.logical_not(non_mendelian),
-        index=df.index,
+    condition_masks = _variant_condition_masks(df)
+    complete_penetrance = condition_masks["has_complete_penetrance"]
+    valid_model = (
+        condition_masks["has_mendelian"]
+        & np.logical_not(condition_masks["has_non_monogenic"])
+        & np.logical_not(condition_masks["has_non_mendelian"])
     )
     baseline_eligible = (
         valid_model
-        & np.logical_not(incomplete_penetrance)
-        & np.logical_not(moderate_to_low_penetrance)
-        & not_late_onsets
+        & np.logical_not(condition_masks["has_incomplete_penetrance"])
         & np.logical_not(scope_review_required)
     )
-    complete_eligible = (
-        valid_model
-        & np.logical_not(incomplete_penetrance)
-        & complete_penetrance
-        & not_late_onsets
-        & np.logical_not(scope_review_required)
-    )
+    complete_eligible = baseline_eligible & complete_penetrance
 
-    mechanism_masks = _variant_mechanism_masks(df)
-    has_recessive_requirement = mechanism_masks["has_recessive_compatible"]
-    dominant_mechanism_compatible = mechanism_masks["has_dominant_compatible"]
+    has_recessive_requirement = condition_masks["has_recessive"]
+    dominant_mechanism_compatible = condition_masks["has_dominant_like"]
+    dominant_without_recessive = (
+        dominant_mechanism_compatible & ~has_recessive_requirement
+    )
 
     gnomad_ac = (_numeric_column("gnomAD_joint_AF") * _numeric_column("gnomAD_joint_AN"))
     gnomad_hom_hemi = _numeric_column("gnomAD_nhomalt_XX") + _numeric_column("gnomAD_nhomalt_XY")
@@ -155,21 +145,24 @@ def BS2_criteria(df: pd.DataFrame,
     control_ac_observed = _numeric_column("control_AC") > 0
     control_hom_observed = _numeric_column("control_nhomalt") > 0
 
-    hom_hemi_evidence = (
-        ((gnomad_hom_hemi > 10) | control_hom_observed)
-        | (complete_penetrance & (gnomad_hom_hemi > 3))
-    )
+    hom_hemi_evidence = (gnomad_hom_hemi > 10) | control_hom_observed
     carrier_evidence = (
-        ((gnomad_ac > 10) | control_ac_observed | y_allele_observed)
-        | (complete_penetrance & ((gnomad_ac > 3) | y_allele_observed))
+        (gnomad_ac > 10) | control_ac_observed | y_allele_observed
+    )
+    complete_hom_hemi_evidence = (gnomad_hom_hemi > 3) | control_hom_observed
+    complete_carrier_evidence = (
+        (gnomad_ac > 3) | control_ac_observed | y_allele_observed
     )
     bs2_standard = baseline_eligible & (
         (has_recessive_requirement & hom_hemi_evidence)
-        | (dominant_mechanism_compatible & (carrier_evidence | hom_hemi_evidence))
+        | (dominant_without_recessive & (carrier_evidence | hom_hemi_evidence))
     )
     bs2_complete_penetrance = complete_eligible & (
-        (has_recessive_requirement & hom_hemi_evidence)
-        | (dominant_mechanism_compatible & (carrier_evidence | hom_hemi_evidence))
+        (has_recessive_requirement & complete_hom_hemi_evidence)
+        | (
+            dominant_without_recessive
+            & (complete_carrier_evidence | complete_hom_hemi_evidence)
+        )
     )
     bs2_criteria = bs2_standard | bs2_complete_penetrance
     bs2_criteria = bs2_criteria & (pm2_criteria == 0)
@@ -227,11 +220,6 @@ def extract_and_summarize_alt_disease_variants(alt_disease_vcf: str, chrom = Non
 
 def BP5_criteria(df: pd.DataFrame,
                  alt_disease_vcf: str,
-                 recessive: np.ndarray,
-                 dominant: np.ndarray,
-                 non_monogenic: np.ndarray,
-                 non_mendelian: np.ndarray,
-                 incomplete_penetrance: np.ndarray,
                  n_processes: int = 1) -> np.ndarray:
     '''
     BP5: variant found in a sample with known alternative molecular basis for disease
@@ -239,22 +227,23 @@ def BP5_criteria(df: pd.DataFrame,
     Logic: If a variant is found in patients with alternative diseases, it suggests benignity
     for the query disease, UNLESS the gene has non-monogenic inheritance or incomplete penetrance.
 
-    For genes with dominant inheritance + monogenic + complete penetrance:
+    For selected dominant, monogenic histories without incomplete penetrance:
     - Variants found in alt disease patients (het or hom) get BP5
 
-    For genes with recessive inheritance + monogenic + complete penetrance:
+    For selected recessive, monogenic histories without incomplete penetrance:
     - Only variants found as homozygous in alt disease patients get BP5
 
-    Optimized version using pre-computed inheritance arrays and vectorized operations
+    The inheritance and penetrance inputs are the hub's condition-linked
+    categorical columns. Known incompatible mechanisms were already removed;
+    unresolved condition histories remain, so this is the highest available
+    resolution without pretending that an unknown mechanism is known.
 
     THE DECISION TREE
     =================
 
-    BP5 reads five gene-level arrays and no variant-level input. Like PP1, the
-    inheritance it reasons about belongs to the gene, not to this variant.
+    BP5 reads two variant-condition columns:
 
-        recessive / dominant / non_monogenic / non_mendelian /
-        incomplete_penetrance          <- from identify_inheritance_mode
+        variant_inheritance / variant_penetrance
               |
               v
         eligible_genes = NOT non_monogenic
@@ -273,17 +262,9 @@ def BP5_criteria(df: pd.DataFrame,
                                     (a heterozygous carrier of a recessive
                                      gene is unremarkable and says nothing)
 
-    WHAT IT WOULD READ INSTEAD
-    ==========================
-
-        variant_inheritance          replaces recessive / dominant
-        variant_inheritance_basis    says whether that came from this
-                                     variant's own matched history, the
-                                     gene's unanimous consensus, or the
-                                     gene's constraint data
-        variant_penetrance           replaces incomplete_penetrance
-        the non-Mendelian inheritance values replace non_monogenic and
-        non_mendelian
+    ``variant_inheritance_basis`` records whether the values came from matched,
+    unresolved, or mixed histories. It is audit provenance, not a reason to
+    change this genotype decision tree.
     '''
     if {"alt_disease_hets", "alt_disease_homs"}.issubset(df.columns):
         logger.info(
@@ -336,18 +317,24 @@ def BP5_criteria(df: pd.DataFrame,
         df['alt_disease_hets'] = df['variant_id'].map(combined_het_dict).fillna(False)
         df['alt_disease_homs'] = df['variant_id'].map(combined_hom_dict).fillna(False)
 
-    # Vectorized BP5 logic
-    # Only apply BP5 to genes with monogenic inheritance and complete penetrance
-    eligible_genes = ~non_monogenic & ~incomplete_penetrance & ~non_mendelian
+    # Only an included monogenic Mendelian history without an incomplete-
+    # equivalent condition makes an alternative diagnosis contradictory.
+    condition_masks = _variant_condition_masks(df)
+    eligible_genes = (
+        condition_masks["has_mendelian"]
+        & ~condition_masks["has_non_monogenic"]
+        & ~condition_masks["has_non_mendelian"]
+        & ~condition_masks["has_incomplete_penetrance"]
+    )
 
     # For dominant genes: any presence (het or hom) in alt disease patients = BP5
-    only_dominant = (dominant | incomplete_penetrance) & ~recessive
+    only_dominant = condition_masks["has_dominant_like"] & ~condition_masks["has_recessive"]
     dominant_bp5 = (only_dominant & \
                    eligible_genes & \
                    (df['alt_disease_hets'] | df['alt_disease_homs']))
 
     # For recessive genes: only homozygous presence in alt disease patients = BP5
-    recessive_bp5 = (recessive | ~incomplete_penetrance) & \
+    recessive_bp5 = condition_masks["has_recessive"] & \
                     eligible_genes & \
                     df['alt_disease_homs']
 
@@ -357,7 +344,11 @@ def BP5_criteria(df: pd.DataFrame,
     bp5_array = np.zeros(len(df), dtype=int)
     bp5_array[bp5_criteria] = 1
 
-    logger.info(f"BP5 criteria applied to {eligible_genes.sum()} variants with monogenic + complete penetrance")
+    logger.info(
+        "BP5 criteria evaluated for %s variants with an interpretable "
+        "monogenic Mendelian history",
+        int(eligible_genes.sum()),
+    )
     logger.info(f"BP5 assigned to {bp5_criteria.sum()} variants found in alternative disease patients")
 
     return bp5_array

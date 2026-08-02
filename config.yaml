@@ -155,9 +155,10 @@ mavedb_file: "/paedyl01/disk1/yangyxt/public_data/VEP_plugins_caches/MaveDB/Mave
 
 # Gene mechanism / DDG2P-G2P cache paths
 # Built by: bash scripts/install_utils.sh gene_pathogenic_mechanism_cache_install config.yaml
-# One flat folder. Only the files PriVA reads at runtime are kept in the
-# repository; build byproducts land beside them and are ignored. The raw
-# download tree is shared outside the repository, so it is named absolutely.
+# One flat folder. Only canonical runtime caches and required cache-build inputs
+# are kept in the repository; audit byproducts land beside them and are ignored.
+# The raw download tree is shared outside the repository, so it is named
+# absolutely.
 gene_mechanism_cache_dir: "/paedyl01/disk1/yangyxt/PriVA/data/patho_mechanism"
 gene_mechanism_raw_dir: "/paedyl01/disk1/yangyxt/public_data/gene_pathogenic_mechanism/raw"
 gene_mechanism_builder_script: "/paedyl01/disk1/yangyxt/PriVA/scripts/build_gene_pathogenic_mechanism_cache.py"

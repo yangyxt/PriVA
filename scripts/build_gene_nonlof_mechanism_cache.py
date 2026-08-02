@@ -1853,6 +1853,15 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--cache-dir", type=Path, default=DEFAULT_CACHE_DIR)
     parser.add_argument(
+        "--output-json",
+        type=Path,
+        default=None,
+        help=(
+            "Canonical non-LOF JSON path. Defaults to the standard filename "
+            "inside --cache-dir."
+        ),
+    )
+    parser.add_argument(
         "--shared-raw-dir",
         default=str(DEFAULT_SHARED_RAW_DIR),
         help=(
@@ -1973,12 +1982,16 @@ def main() -> int:
         else cache_dir / "raw"
     )
     raw_dir_is_shared = raw_dir != cache_dir / "raw"
-    # Everything this builder publishes lands directly in the cache directory.
-    # The former prepared/ and metadata/ split only added a folder level; which
-    # files matter is decided by .gitignore naming the ones PriVA reads.
+    # Metadata lands in the cache directory. The canonical JSON may be placed
+    # elsewhere so the installer can honor the exact path configured for the
+    # production ACMG command.
     manifest_path = cache_dir / NONLOF_SOURCE_MANIFEST_FILENAME
     manifest_tsv_path = cache_dir / NONLOF_SOURCE_MANIFEST_TSV_FILENAME
-    json_path = cache_dir / NONLOF_ASSERTIONS_FILENAME
+    json_path = (
+        args.output_json.expanduser().resolve()
+        if args.output_json is not None
+        else cache_dir / NONLOF_ASSERTIONS_FILENAME
+    )
     summary_path = cache_dir / NONLOF_RUN_SUMMARY_FILENAME
     lock_path = raw_dir / ".build.lock" if raw_dir_is_shared else cache_dir / ".build.lock"
 

@@ -164,7 +164,11 @@ gene_mechanism_raw_dir: "/paedyl01/disk1/yangyxt/public_data/gene_pathogenic_mec
 gene_mechanism_builder_script: "/paedyl01/disk1/yangyxt/PriVA/scripts/build_gene_pathogenic_mechanism_cache.py"
 gene_nonlof_mechanism_builder_script: /paedyl01/disk1/yangyxt/PriVA/scripts/build_gene_nonlof_mechanism_cache.py
 gene_nonlof_mechanism_schema: /paedyl01/disk1/yangyxt/PriVA/data/patho_mechanism/gene_nonlof_mechanism_curated_assertions.schema.json
+# Step 3 reads these two runtime caches directly. The condition-mechanism TSV
+# below is only a build input to the HPO-framed cache.
 gene_nonlof_mechanism_json: /paedyl01/disk1/yangyxt/PriVA/data/patho_mechanism/gene_nonlof_mechanism_curated_assertions.json.gz
+hpo_condition_mechanism_builder_script: /paedyl01/disk1/yangyxt/PriVA/scripts/build_hpo_condition_mechanism_cache.py
+hpo_condition_mechanism_json: /paedyl01/disk1/yangyxt/PriVA/data/patho_mechanism/hpo_condition_mechanism_cache.json.gz
 ddg2p_mechanism_evidence: /paedyl01/disk1/yangyxt/PriVA/data/patho_mechanism/gene_pathogenic_mechanism_evidence.tsv
 hgnc_table: /paedyl01/disk1/yangyxt/PriVA/data/hgnc/non_alt_loci_set.tsv
 g2p_ddg2p_url: "https://www.ebi.ac.uk/gene2phenotype/api/panel/all/download"
@@ -260,7 +264,3 @@ pext_tissues: "Spleen,WholeBlood,Cells_EBV_transformedlymphocytes"  # Immune-rel
 # Auto-populated by install_utils.sh:
 pext_mean_bw: ""                                             # Path to mean pext BigWig file
 pext_tissue_bw_dir: ""                                       # Directory containing tissue-specific BigWig files
-
-hpo_condition_mechanism_builder_script: /paedyl01/disk1/yangyxt/PriVA/scripts/build_hpo_condition_mechanism_cache.py
-
-hpo_condition_mechanism_json: /paedyl01/disk1/yangyxt/PriVA/data/patho_mechanism/hpo_condition_mechanism_cache.json.gz

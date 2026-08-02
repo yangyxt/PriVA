@@ -1997,6 +1997,12 @@ function update_or_append_yaml() {
     local config_file=${1}
     local key=${2}
     local value=${3}
+    local current_value
+
+    current_value=$(read_yaml "${config_file}" "${key}")
+    if [[ ${current_value} == "${value}" ]]; then
+        return 0
+    fi
 
     if grep -Eq "^${key}[[:space:]]*:" "${config_file}"; then
         update_yaml "${config_file}" "${key}" "${value}"
@@ -2039,6 +2045,7 @@ g2p_rows = 0
 g2p_lof_rows = 0
 orphadata_rows = 0
 orphadata_mondo_rows = 0
+unexpected_sources = set()
 with open(evidence_tsv, encoding="utf-8", newline="") as handle:
     reader = csv.DictReader(handle, delimiter="\t")
     missing = sorted(required - set(reader.fieldnames or []))
@@ -2046,18 +2053,26 @@ with open(evidence_tsv, encoding="utf-8", newline="") as handle:
         raise SystemExit(f"{evidence_tsv} missing required columns: {', '.join(missing)}")
     for row in reader:
         row_count += 1
-        if row.get("source") == "G2P_DDG2P":
+        source = row.get("source", "")
+        if source not in {"G2P_DDG2P", "Orphadata"}:
+            unexpected_sources.add(source or "<blank>")
+        if source == "G2P_DDG2P":
             g2p_rows += 1
             normalized = row.get("normalized_mechanisms", "").upper()
             raw = row.get("patho_mode_raw", "").lower()
             if "LOF" in normalized or "loss of function" in raw:
                 g2p_lof_rows += 1
-        if row.get("source") == "Orphadata":
+        if source == "Orphadata":
             orphadata_rows += 1
             if row.get("mondo_id"):
                 orphadata_mondo_rows += 1
 if row_count == 0:
     raise SystemExit(f"{evidence_tsv} contains no evidence rows")
+if unexpected_sources:
+    raise SystemExit(
+        f"{evidence_tsv} contains non-condition sources: "
+        + ", ".join(sorted(unexpected_sources))
+    )
 if g2p_rows == 0:
     raise SystemExit(f"{evidence_tsv} contains no G2P_DDG2P rows")
 if g2p_lof_rows == 0:
@@ -2099,6 +2114,7 @@ function gene_pathogenic_mechanism_cache_install() {
     local -a builder_args=(
         "${builder_script}"
         --cache-dir "${cache_dir}"
+        --output-tsv "${evidence_tsv}"
         --shared-raw-dir "${raw_dir}"
         --disease-scope-registry "${disease_scope_registry}"
         --timeout "${GENE_MECHANISM_TIMEOUT:-120}"
@@ -2122,7 +2138,7 @@ function gene_pathogenic_mechanism_cache_install() {
         log "ERROR: Gene mechanism/DDG2P cache validation failed"
         return 1
     }
-    update_yaml "${config_file}" "ddg2p_mechanism_evidence" "${evidence_tsv}"
+    update_or_append_yaml "${config_file}" "ddg2p_mechanism_evidence" "${evidence_tsv}"
     log "Gene condition-mechanism evidence deployed: ${evidence_tsv}"
 }
 
@@ -2357,8 +2373,8 @@ function gofcards_clinvar_injection_install() {
         log "ERROR: GoFCards cache failed validation after ClinVar injection"
         return 1
     }
-    update_yaml "${config_file}" "gofcards_exact_gof_cache" "${target_json}"
-    update_yaml "${config_file}" "gofcards_clinvar_injector_script" "${injector}"
+    update_or_append_yaml "${config_file}" "gofcards_exact_gof_cache" "${target_json}"
+    update_or_append_yaml "${config_file}" "gofcards_clinvar_injector_script" "${injector}"
     log "GoFCards exact GOF cache deployed (with ClinVar conditions): ${target_json}"
 }
 
@@ -2480,8 +2496,8 @@ function gofcards_exact_gof_cache_install() {
         log "ERROR: GoFCards normalized cache validation failed"
         return 1
     }
-    update_yaml "${config_file}" "gofcards_builder_script" "${builder_script}"
-    update_yaml "${config_file}" "gofcards_mechanism_review_tsv" "${review_tsv}"
+    update_or_append_yaml "${config_file}" "gofcards_builder_script" "${builder_script}"
+    update_or_append_yaml "${config_file}" "gofcards_mechanism_review_tsv" "${review_tsv}"
     log "GoFCards normalized cache built: ${target_tsv}"
 }
 
@@ -2608,10 +2624,11 @@ function gene_nonlof_mechanism_cache_install() {
 function validate_hpo_condition_mechanism_cache() {
     local builder_script=${1}
     local cache_json=${2}
+    shift 2
 
     [[ -f ${builder_script} ]] || { log "ERROR: HPO condition mechanism builder not found: ${builder_script}"; return 1; }
     [[ -s ${cache_json} ]] || { log "ERROR: Missing/empty HPO condition mechanism cache: ${cache_json}"; return 1; }
-    python "${builder_script}" --validate-only "${cache_json}"
+    python "${builder_script}" --validate-only "${cache_json}" "$@"
 }
 
 
@@ -2623,7 +2640,7 @@ function hpo_condition_mechanism_cache_install() {
     local cache_json
     local hpo_assertions
     local mechanism_evidence
-    local mechanism_json
+    local clingen_dosage
     local gofcards_variants
     local hpo_release
     local mondo_release
@@ -2632,10 +2649,7 @@ function hpo_condition_mechanism_cache_install() {
     cache_json=$(yaml_value_or_default "${config_file}" "hpo_condition_mechanism_json" "${DATA_DIR}/patho_mechanism/hpo_condition_mechanism_cache.json.gz")
     hpo_assertions=$(yaml_value_or_default "${config_file}" "hpo_assertions" "${DATA_DIR}/hpo/genes_to_phenotype.assertions.tsv.gz")
     mechanism_evidence=$(yaml_value_or_default "${config_file}" "ddg2p_mechanism_evidence" "${DATA_DIR}/patho_mechanism/gene_pathogenic_mechanism_evidence.tsv")
-    # The non-LOF cache is the only mechanism input this builder accepts. The
-    # older combined cache it used to fall back to is no longer published, so
-    # falling back to it could only ever have named a file that is not there.
-    mechanism_json=$(yaml_value_or_default "${config_file}" "gene_nonlof_mechanism_json" "${DATA_DIR}/patho_mechanism/gene_nonlof_mechanism_curated_assertions.json.gz")
+    clingen_dosage=$(yaml_value_or_default "${config_file}" "gene_dosage_sensitivity" "${DATA_DIR}/clingen/gene_dosage_sensitivity.hg38.tsv")
     # The one deployed GoFCards cache. Every condition link this builder emits
     # comes from the ClinVar blocks nested inside it.
     gofcards_variants=$(yaml_value_or_default "${config_file}" "gofcards_exact_gof_cache" "${DATA_DIR}/gofcards/gofcards_exact_gof.json.gz")
@@ -2645,25 +2659,27 @@ function hpo_condition_mechanism_cache_install() {
     [[ -f ${builder_script} ]] || { log "ERROR: HPO condition mechanism builder not found: ${builder_script}"; return 1; }
     [[ -s ${hpo_assertions} ]] || { log "ERROR: Scoped HPO assertions not found: ${hpo_assertions}"; return 1; }
     [[ -s ${mechanism_evidence} ]] || { log "ERROR: Condition mechanism evidence not found: ${mechanism_evidence}"; return 1; }
-    [[ -s ${mechanism_json} ]] || { log "ERROR: Gene mechanism JSON not found: ${mechanism_json}"; return 1; }
+    [[ -s ${clingen_dosage} ]] || { log "ERROR: ClinGen dosage evidence not found: ${clingen_dosage}"; return 1; }
     [[ -s ${gofcards_variants} ]] || { log "ERROR: GoFCards exact GOF cache not found (run gofcards_clinvar_injection_install first): ${gofcards_variants}"; return 1; }
     mkdir -p "$(dirname "${cache_json}")" || return 1
+
+    local -a provenance_args=(
+        --hpo-assertions "${hpo_assertions}"
+        --mechanism-evidence "${mechanism_evidence}"
+        --clingen-dosage "${clingen_dosage}"
+        --gofcards-variants "${gofcards_variants}"
+        --hpo-release "${hpo_release}"
+        --mondo-release "${mondo_release}"
+    )
 
     local rebuild=0
     if [[ "${PRIVA_FORCE_HPO_MECHANISM_JSON:-0}" == "1" ]] || \
        [[ "${PRIVA_FORCE_ALL_CACHES:-0}" == "1" ]] || [[ ! -s ${cache_json} ]]; then
         rebuild=1
-    else
-        local source_file
-        for source_file in "${builder_script}" "${hpo_assertions}" "${mechanism_evidence}" "${mechanism_json}" "${gofcards_variants}"; do
-            if [[ ${source_file} -nt ${cache_json} ]]; then
-                rebuild=1
-                break
-            fi
-        done
-        if [[ ${rebuild} -eq 0 ]] && ! validate_hpo_condition_mechanism_cache "${builder_script}" "${cache_json}" >/dev/null 2>&1; then
-            rebuild=1
-        fi
+    elif ! validate_hpo_condition_mechanism_cache \
+        "${builder_script}" "${cache_json}" "${provenance_args[@]}" \
+        >/dev/null 2>&1; then
+        rebuild=1
     fi
 
     if [[ ${rebuild} -eq 1 ]]; then
@@ -2671,7 +2687,7 @@ function hpo_condition_mechanism_cache_install() {
         python "${builder_script}" \
             --hpo-assertions "${hpo_assertions}" \
             --mechanism-evidence "${mechanism_evidence}" \
-            --nonlof-mechanism-json "${mechanism_json}" \
+            --clingen-dosage "${clingen_dosage}" \
             --gofcards-variants "${gofcards_variants}" \
             --hpo-release "${hpo_release}" \
             --mondo-release "${mondo_release}" \
@@ -2683,7 +2699,8 @@ function hpo_condition_mechanism_cache_install() {
         log "HPO condition mechanism cache is already current: ${cache_json}"
     fi
 
-    validate_hpo_condition_mechanism_cache "${builder_script}" "${cache_json}" || {
+    validate_hpo_condition_mechanism_cache \
+        "${builder_script}" "${cache_json}" "${provenance_args[@]}" || {
         log "ERROR: HPO condition mechanism cache validation failed"
         return 1
     }

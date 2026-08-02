@@ -118,6 +118,7 @@ def test_failed_rebuild_does_not_advance_source_manifest(
     args = argparse.Namespace(
         validate_only=None,
         cache_dir=cache_dir,
+        output_json=None,
         shared_raw_dir=str(raw_dir),
         gofcards_exact_variants=exact_gofcards,
         hgnc_table=hgnc,
@@ -184,6 +185,7 @@ def test_fetch_sources_only_stops_before_the_build(
     args = argparse.Namespace(
         validate_only=None,
         cache_dir=cache_dir,
+        output_json=None,
         shared_raw_dir=str(raw_dir),
         gofcards_exact_variants=missing_gofcards,
         hgnc_table=hgnc,

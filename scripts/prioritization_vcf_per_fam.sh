@@ -169,6 +169,7 @@ function assign_acmg_criteria () {
     local cds_fasta_file=$(read_yaml ${config_file} "cds_fasta_file")
     local pext_tissues=$(read_yaml ${config_file} "pext_tissues")
     local hpo_condition_mechanism_json=$(read_yaml ${config_file} "hpo_condition_mechanism_json")
+    local gene_nonlof_mechanism_json=$(read_yaml ${config_file} "gene_nonlof_mechanism_json")
 
     local has_error=0
     check_path ${clinvar_aa_dict_pkl} "file" "clinvar_aa_stat" || has_error=1
@@ -184,8 +185,9 @@ function assign_acmg_criteria () {
     check_path ${interpro_entry_map_pkl} "file" "interpro_mapping_pickle" || has_error=1
     check_path ${repeat_region_file} "file" "repeat_region_file" || has_error=1
 	check_path ${clingen_map_pkl} "file" "clingen_map" || has_error=1
-	check_path ${gene_dosage_sensitivity} "file" "gene_dosage_sensitivity" || has_error=1
+    check_path ${gene_dosage_sensitivity} "file" "gene_dosage_sensitivity" || has_error=1
     check_path ${hpo_condition_mechanism_json} "file" "hpo_condition_mechanism_json" || has_error=1
+    check_path ${gene_nonlof_mechanism_json} "file" "gene_nonlof_mechanism_json" || has_error=1
     # CDS FASTA is optional - fallback to deprecated transcript-based approach if not available
     [[ -f ${cds_fasta_file} ]] && local cds_fasta_arg="--cds_fasta_path ${cds_fasta_file}" || { log "WARNING: CDS FASTA file not found at ${cds_fasta_file}. Alternative start codon detection for start_lost variants will use deprecated transcript-based approach."; local cds_fasta_arg=""; }
 
@@ -249,7 +251,7 @@ function assign_acmg_criteria () {
     [[ -f ${dispensable_gene_list} ]] && local dispensable_genes_arg="--dispensable_gene_list ${dispensable_gene_list}" || local dispensable_genes_arg=""
     [[ -n "${pext_tissues}" ]] && [[ "${pext_tissues}" != "null" ]] && local pext_arg="--pext_tissues ${pext_tissues}" || local pext_arg=""
 
-    log "Running ACMG assignment with integrated condition mechanism cache: ${hpo_condition_mechanism_json}"
+    log "Running ACMG assignment with integrated condition cache ${hpo_condition_mechanism_json} and exact non-LOF cache ${gene_nonlof_mechanism_json}"
     python ${acmg_py} \
     --anno_table ${input_tab} \
     --am_score_table ${mean_am_score_table} \
@@ -261,6 +263,7 @@ function assign_acmg_criteria () {
     --intolerant_domains_pkl ${intolerant_domains_pkl} \
     --gene_dosage_sensitivity ${gene_dosage_sensitivity} \
     --hpo_condition_mechanism_json ${hpo_condition_mechanism_json} \
+    --gene_nonlof_mechanism_json ${gene_nonlof_mechanism_json} \
     --am_intol_domains_tsv ${am_intol_domains_tsv} \
     --pm1_regions_pkl ${pm1_regions_pkl} \
     --repeat_region_file ${repeat_region_file} \

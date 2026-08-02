@@ -1,14 +1,11 @@
 #!/usr/bin/env python3
-"""Build PriVA gene-level pathogenic mechanism caches.
+"""Build PriVA's condition-resolved pathogenic-mechanism evidence table.
 
-The cache is designed for PriVA runtime annotation. It keeps raw source files,
-records checksums and download/check timestamps, and emits two ready-to-use
-outputs:
-
-* ``gene_mechanism_curated_assertions.json`` for the broader curated mechanism
-  history, including LOF and non-LOF assertions.
-* ``gene_pathogenic_mechanism_evidence.tsv`` for DDG2P/G2P LoF history used by
-  ``gene_mechanism_hub.py``.
+The builder keeps raw source files, records checksums and download/check
+timestamps, and emits ``gene_pathogenic_mechanism_evidence.tsv``. That table is
+a build input to the integrated HPO condition cache; ACMG runtime does not read
+it directly. Exact GoF and dominant-negative allele assertions are built by
+``build_gene_nonlof_mechanism_cache.py`` instead.
 
 The script requires pandas and is invoked by ``install_utils.sh`` as part of
 the complete PriVA installer refresh. When a SOCKS proxy is requested,
@@ -49,18 +46,7 @@ USER_AGENT = (
     "(local pathogenic-mechanism cache; contact: yangyxt)"
 )
 
-NON_LOF_MECHANISM_LABELS = {
-    "GOF",
-    "ACTIVATING",
-    "DOMINANT_NEGATIVE",
-    "TRIPLOSENSITIVITY",
-    "INCREASED_DOSAGE",
-}
 PANELAPP_NON_LOF_LABEL = "PANELAPP_GREEN_NON_LOF_PATHO_HISTORY"
-PROMPT_EXCEPTION_LABELS = NON_LOF_MECHANISM_LABELS | {
-    "LOF",
-    PANELAPP_NON_LOF_LABEL,
-}
 
 @dataclass(frozen=True)
 class SourceSpec:
@@ -1219,29 +1205,6 @@ def write_tsv(
     return len(data)
 
 
-def filter_prompt_exception_rows(unified: pd.DataFrame) -> pd.DataFrame:
-    """Retain condition mechanisms and established non-LOF history records.
-
-    This cache was originally limited to non-LOF prompt exceptions, while G2P
-    loss-of-function rows were written only to the auxiliary TSV. Condition-
-    resolved runtime selection requires LOF and GOF histories in the same JSON
-    structure, so explicit LOF is now retained alongside the existing GOF,
-    dominant-negative, dosage, and PanelApp records.
-    """
-    if unified.empty:
-        return unified
-    keep = unified["mechanism"].apply(
-        lambda v: bool(set(v.split("|")) & PROMPT_EXCEPTION_LABELS) if v.strip() else False
-    )
-    dropped = len(unified) - keep.sum()
-    if dropped:
-        print(
-            f"filter: dropped {dropped} rows without a supported mechanism",
-            file=sys.stderr,
-        )
-    return unified[keep].reset_index(drop=True)
-
-
 EVIDENCE_COLUMNS = [
     "gene_symbol",
     "source",
@@ -1763,20 +1726,8 @@ def main() -> int:
         )
         print(f"evidence_output: {evidence_count} rows to {evidence_path}", file=sys.stderr)
 
-        unified_df = filter_prompt_exception_rows(all_evidence_df)
-
-        hgnc_map = load_hgnc_mapping(raw_dir / "hgnc_gene_id_map.txt")
-        print(f"hgnc_mapping: {len(hgnc_map)} entries", file=sys.stderr)
-
-        result = build_unified_json(unified_df, hgnc_map)
-        json_path = cache_dir / "gene_mechanism_curated_assertions.json"
-        write_json(json_path, result)
-        n_genes = result["_meta"]["total_genes"]
-        n_unmapped = len(result["_meta"].get("unmapped_symbols", []))
-        print(f"json_output: {n_genes} genes, {n_unmapped} unmapped to {json_path}", file=sys.stderr)
-
-        # Do not advance successful-build provenance until all prepared outputs
-        # have been generated. A failed run must remain visibly retryable.
+        # Do not advance successful-build provenance until the required output
+        # has been generated. A failed run must remain visibly retryable.
         write_json(manifest_path, manifest)
         manifest_tsv_count = write_source_manifest_tsv(
             cache_dir / "source_manifest.tsv",
@@ -1786,14 +1737,12 @@ def main() -> int:
         run_summary = {
             "built_at_utc": manifest["built_at_utc"],
             "cache_dir": str(cache_dir),
-            "total_genes": n_genes,
-            "unmapped_symbols": n_unmapped,
+            "evidence_rows": evidence_count,
             "source_manifest_rows": manifest_tsv_count,
             "outputs": {
                 "source_manifest_json": str(manifest_path),
                 "source_manifest_tsv": str(cache_dir / "source_manifest.tsv"),
                 "gene_pathogenic_mechanism_evidence": str(evidence_path),
-                "unified_json": str(json_path),
             },
         }
         write_json(cache_dir / "run_summary.json", run_summary)

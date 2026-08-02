@@ -9,10 +9,9 @@ sys.path.insert(0, str(ROOT / "scripts"))
 
 from build_gene_pathogenic_mechanism_cache import (  # noqa: E402
     attach_mondo_condition_identity,
-    build_unified_json,
-    filter_prompt_exception_rows,
     parse_g2p,
     parse_orphadata,
+    to_gene_pathogenic_mechanism_evidence,
 )
 
 
@@ -154,7 +153,7 @@ def test_attach_mondo_condition_identity_maps_source_ids_without_overwrite(
     assert result.loc[2, "priva_scope"] == ""
 
 
-def test_condition_mechanism_json_retains_lof_and_stable_disease_identity() -> None:
+def test_condition_mechanism_evidence_retains_stable_disease_identity() -> None:
     unified = pd.DataFrame(
         [
             {
@@ -194,17 +193,17 @@ def test_condition_mechanism_json_retains_lof_and_stable_disease_identity() -> N
         ]
     )
 
-    filtered = filter_prompt_exception_rows(unified)
-    result = build_unified_json(filtered, {})
+    result = to_gene_pathogenic_mechanism_evidence(unified).set_index("gene_symbol")
 
-    assert len(filtered) == 2
-    g2p = result["SYMBOL:GENE1"]["gene_level"][0]["G2P_DDG2P"]
+    assert len(result) == 2
+    g2p = result.loc["GENE1"]
     assert g2p["source_record_id"] == "G2P00001"
     assert g2p["source_condition_id"] == "OMIM:123"
     assert g2p["mondo_id"] == "MONDO:0000123"
-    assert g2p["allelic_requirement"] == "biallelic_autosomal"
+    assert g2p["inheritance"] == "biallelic_autosomal"
+    assert g2p["normalized_mechanisms"] == "LOF"
     assert g2p["priva_scope"] == "include"
-    orphadata = result["SYMBOL:GENE2"]["gene_level"][0]["Orphadata"]
+    orphadata = result.loc["GENE2"]
     assert orphadata["source_condition_id"] == "ORPHA:456"
     assert orphadata["mondo_id"] == "MONDO:0000456"
-    assert orphadata["mechanism"] == "LOF"
+    assert orphadata["normalized_mechanisms"] == "LOF"

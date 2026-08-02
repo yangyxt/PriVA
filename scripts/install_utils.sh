@@ -2006,24 +2006,16 @@ function update_or_append_yaml() {
 }
 
 
-function validate_gene_pathogenic_mechanism_cache() {
-    local mechanism_json=${1}
-    local evidence_tsv=${2}
+function validate_gene_pathogenic_mechanism_evidence() {
+    local evidence_tsv=${1}
 
-    [[ -s ${mechanism_json} ]] || { log "ERROR: Missing/empty gene mechanism JSON: ${mechanism_json}"; return 1; }
     [[ -s ${evidence_tsv} ]] || { log "ERROR: Missing/empty DDG2P/G2P mechanism evidence TSV: ${evidence_tsv}"; return 1; }
 
-    python - "${mechanism_json}" "${evidence_tsv}" <<'PY'
+    python - "${evidence_tsv}" <<'PY'
 import csv
-import json
 import sys
 
-mechanism_json, evidence_tsv = sys.argv[1:3]
-with open(mechanism_json, encoding="utf-8") as handle:
-    payload = json.load(handle)
-gene_count = sum(1 for key in payload if key != "_meta")
-if gene_count == 0:
-    raise SystemExit(f"{mechanism_json} contains no gene entries")
+evidence_tsv = sys.argv[1]
 
 required = {
     "gene_symbol",
@@ -2075,8 +2067,8 @@ if orphadata_rows == 0:
 if orphadata_mondo_rows == 0:
     raise SystemExit(f"{evidence_tsv} contains no MONDO-mapped Orphadata rows")
 print(
-    f"mechanism_json_genes={gene_count}; evidence_rows={row_count}; "
-    f"g2p_rows={g2p_rows}; g2p_lof_rows={g2p_lof_rows}; "
+    f"evidence_rows={row_count}; g2p_rows={g2p_rows}; "
+    f"g2p_lof_rows={g2p_lof_rows}; "
     f"orphadata_rows={orphadata_rows}; "
     f"orphadata_mondo_rows={orphadata_mondo_rows}"
 )
@@ -2089,18 +2081,16 @@ function gene_pathogenic_mechanism_cache_install() {
     local cache_dir
     local raw_dir
     local builder_script
-    local mechanism_json
     local evidence_tsv
     local disease_scope_registry
 
     cache_dir=$(yaml_value_or_default "${config_file}" "gene_mechanism_cache_dir" "${DATA_DIR}/patho_mechanism")
     raw_dir=$(yaml_value_or_default "${config_file}" "gene_mechanism_raw_dir" "${cache_dir}/raw")
     builder_script=$(yaml_value_or_default "${config_file}" "gene_mechanism_builder_script" "${SCRIPT_DIR}/build_gene_pathogenic_mechanism_cache.py")
-    mechanism_json=$(yaml_value_or_default "${config_file}" "gene_mechanism_json" "${cache_dir}/gene_mechanism_curated_assertions.json")
     evidence_tsv=$(yaml_value_or_default "${config_file}" "ddg2p_mechanism_evidence" "${cache_dir}/gene_pathogenic_mechanism_evidence.tsv")
     disease_scope_registry=$(yaml_value_or_default "${config_file}" "mondo_disease_scope_registry" "${DATA_DIR}/mondo/disease_scope.tsv.gz")
 
-    mkdir -p "${cache_dir}" "${raw_dir}" "$(dirname "${mechanism_json}")" || {
+    mkdir -p "${cache_dir}" "${raw_dir}" "$(dirname "${evidence_tsv}")" || {
         log "ERROR: Failed to create gene mechanism cache directories"
         return 1
     }
@@ -2128,16 +2118,12 @@ function gene_pathogenic_mechanism_cache_install() {
         return 1
     }
 
-    validate_gene_pathogenic_mechanism_cache "${mechanism_json}" "${evidence_tsv}" || {
+    validate_gene_pathogenic_mechanism_evidence "${evidence_tsv}" || {
         log "ERROR: Gene mechanism/DDG2P cache validation failed"
         return 1
     }
-    # Only the evidence table is recorded. The combined JSON this builder also
-    # writes is validated above as a check on the build, but nothing downstream
-    # reads it any more, so advertising its path in the configuration would add
-    # a key with no reader.
     update_yaml "${config_file}" "ddg2p_mechanism_evidence" "${evidence_tsv}"
-    log "Gene mechanism/DDG2P cache deployed: ${mechanism_json}; ${evidence_tsv}"
+    log "Gene condition-mechanism evidence deployed: ${evidence_tsv}"
 }
 
 
@@ -2561,6 +2547,7 @@ function gene_nonlof_mechanism_cache_install() {
         --shared-raw-dir "${raw_dir}"
         --gofcards-exact-variants "${gofcards_variants}"
         --hgnc-table "${hgnc_table}"
+        --output-json "${cache_json}"
         --output-schema "${schema_json}"
         --clinvar-min-review-stars "${CLINVAR_GOF_MIN_REVIEW_STARS:-2}"
         --clinvar-max-download-seconds "${CLINVAR_VCV_MAX_DOWNLOAD_SECONDS:-86400}"

@@ -1,16 +1,15 @@
 #!/usr/bin/env python3
-"""Legacy gene-level inheritance summaries and compatibility helpers.
+"""Legacy gene-level inheritance audit and compatibility helpers.
 
 The six variant-aware ACMG consumers no longer receive the arrays produced
 here. They read the mechanism hub's condition-linked ``variant_inheritance``
-and ``variant_penetrance`` columns. This module remains for the hub's audit
-summary API and for callers that still request a coarse gene-level estimate.
+and ``variant_penetrance`` columns. This module remains only for the hub's
+coarse gene-level audit summary and the shared penetrance compatibility check.
 
     parse_hpo_inheritance              HPO inheritance terms -> one mode
     identify_inheritance_mode_per_row  one variant's mode, using the gene's
                                        mean AlphaMissense score and the
                                        ClinGen dosage call
-    identify_inheritance_mode          the same over a whole table, in parallel
     hpo_onset_modes                    compatibility bridge using the shared
                                        penetrance vocabulary
 
@@ -20,10 +19,9 @@ hub can import this audit API without creating a criteria-module cycle.
 
 import logging
 import re
-import multiprocessing as mp
-import pandas as pd
-import numpy as np
 from typing import Tuple
+
+import pandas as pd
 
 from hpo_penetrance import (
     HPO_INCOMPLETE_PENETRANCE_EQUIVALENT_TERMS,
@@ -161,54 +159,3 @@ def identify_inheritance_mode_per_row(row_dict: dict, gene_mean_am_score: float,
         haplo_sufficient=True
 
     return hpo_inheritance['hpo_recessive'], hpo_inheritance['hpo_dominant'], hpo_inheritance['hpo_non_monogenic'], hpo_inheritance['hpo_non_mendelian'], haplo_insufficient, hpo_inheritance['incomplete_penetrance']
-
-
-def identify_inheritance_mode(df: pd.DataFrame,
-                              gene_to_am_score_map: dict,
-                              clingen_dosage_sensitivity: str,
-                              threads: int = 10) -> Tuple[np.ndarray, np.ndarray]:
-    """
-    Identify inheritance mode for each variant in parallel.
-
-    Args:
-        df: DataFrame containing variant information
-        gene_to_am_score_map: Dictionary mapping genes to AM scores
-        threads: Number of CPU threads to use
-
-    Returns:
-        Tuple of boolean arrays (dominant_array, recessive_array)
-    """
-
-    # Convert DataFrame rows to dictionaries for picklable input
-    shrink_df = df.loc[:, ["Feature", "Gene", "SYMBOL", "LOEUF", "HPO_IDs", "HPO_gene_inheritance"]].drop_duplicates()
-    row_dicts = shrink_df.to_dict('records')
-
-    clingen_dosage_df = pd.read_table(clingen_dosage_sensitivity, low_memory=False).dropna(subset=["#Gene Symbol", "Haploinsufficiency Score"])
-    clingen_dosage_map = dict(zip(clingen_dosage_df['#Gene Symbol'], clingen_dosage_df['Haploinsufficiency Score'].astype(int)))
-
-    # Prepare arguments for starmap
-    args = [(row_dict, gene_to_am_score_map.get(row_dict['Gene'], np.nan), clingen_dosage_map.get(row_dict['SYMBOL'], np.nan)) for row_dict in row_dicts]
-
-    # Process in parallel using dictionaries instead of namedtuples
-    threads = min(threads, len(row_dicts), mp.cpu_count()-1)
-    with mp.Pool(threads) as pool:
-        results = pool.starmap(identify_inheritance_mode_per_row, args)
-
-    # Unzip results into separate arrays
-    recessive_array, dominant_array, non_monogenic_array, non_mendelian_array, haplo_insufficient_array, incomplete_penetrance_array = zip(*results)
-    shrink_df['recessive'] = np.array(recessive_array)
-    shrink_df['dominant'] = np.array(dominant_array)
-    shrink_df['non_monogenic'] = np.array(non_monogenic_array)
-    shrink_df['non_mendelian'] = np.array(non_mendelian_array)
-    shrink_df['haplo_insufficient'] = np.array(haplo_insufficient_array)
-    shrink_df['incomplete_penetrance'] = np.array(incomplete_penetrance_array)
-
-    # Map the arrays back to the original DataFrame, we need to use merge, anchor on Feature and Gene
-    merged_df = df.merge(shrink_df, on=["Feature", "Gene", "SYMBOL", "LOEUF", "HPO_IDs", "HPO_gene_inheritance"], how="left")
-    assert merged_df.shape[0] == df.shape[0], f"The number of rows in the merged DataFrame {merged_df.shape[0]} is not equal to the number of rows in the original DataFrame {df.shape[0]}"
-    return merged_df.loc[:, "recessive"].fillna(False).to_numpy(), \
-           merged_df.loc[:, "dominant"].fillna(False).to_numpy(), \
-           merged_df.loc[:, "non_monogenic"].fillna(False).to_numpy(), \
-           merged_df.loc[:, "non_mendelian"].fillna(False).to_numpy(), \
-           merged_df.loc[:, "haplo_insufficient"].fillna(False).to_numpy(), \
-           merged_df.loc[:, "incomplete_penetrance"].fillna(False).to_numpy()

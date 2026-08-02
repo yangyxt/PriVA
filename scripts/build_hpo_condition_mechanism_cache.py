@@ -35,8 +35,8 @@ inference, so everything sourced runs before anything deduced.
        assertion rows behind it:
 
          inheritance.modes      from HPO_INHERITANCE_TERMS (13 HP: terms)
-         penetrance.statuses    from HPO_PENETRANCE_TERMS  (4 HP: terms)
-         onset.terms            from HPO_ONSET_TERMS       (13 HP: terms)
+         penetrance.statuses    from the shared HPO penetrance vocabulary
+         onset.terms            from HPO_ONSET_TERMS
 
     2. _merge_conditions_by_disease(...)   <- inside step 1, before return
        ------------------------------------------------------------------
@@ -104,33 +104,38 @@ inference, so everything sourced runs before anything deduced.
        assertion_basis="curated", mechanism_confidence one of
        sufficient_evidence | some_evidence | little_evidence.
 
-    5. deduce_mechanisms_from_inheritance(genes)             <- LAST
+    5. attach_gofcards_variants(genes, gofcards_variants)
+       ------------------------------------------------------------------
+       Exact curated gain-of-function alleles, nested under the condition
+       their ClinVar record names. Writes assertion_basis="curated".
+
+    6. deduce_mechanisms_from_inheritance(genes)             <- LAST
        ------------------------------------------------------------------
        Only for a condition with priva_scope.decision == "include" that
-       still has NO mechanism from any source above.
+       still has NO mechanism from any curated source above.
 
          inheritance == "recessive"  ->  mechanism = "LOF"
                                          assertion_basis = "deduced"
          anything else               ->  left unresolved
 
-       A recessive disease needs both copies disabled, which is loss of
-       function. A dominant disease carries no such implication -- it can
-       be haploinsufficiency, gain of function, or a dominant-negative
-       effect -- so it is left alone rather than guessed at. Mitochondrial
-       and Y-linked are likewise left alone.
-
-    6. attach_gofcards_variants(genes, gofcards_variants)
-       ------------------------------------------------------------------
-       Exact curated gain-of-function alleles, nested under the condition
-       their ClinVar record names. Writes assertion_basis="curated".
+       This is a high-likelihood working inference for variant-to-condition
+       matching, not an established molecular-mechanism assertion. In
+       particular, PVS1 admits only assertion_basis="curated", so this
+       deduction can never open PVS1's gene-level LOF-history gate.
 
 EVERY MECHANISM SAYS HOW IT WAS ESTABLISHED
 ===========================================
 
-One field on every evidence entry, so a curator's assertion can never be
-mistaken for an inference:
+One field on every mechanism evidence entry distinguishes a curator's
+molecular-mechanism assertion from PriVA's recessive-to-LOF inference:
 
     assertion_basis   "curated" | "deduced"
+
+The deduced value is useful for matching a likely LOF variant to a recessive
+condition, but it is not promoted to evidence that LOF is an established
+disease mechanism. PVS1 therefore ignores it. A condition without either a
+curated mechanism or a recessive inheritance remains unresolved for the
+runtime hub to carry as condition history.
 
     source                        basis      count on current data
     ---------------------------   --------   ---------------------
@@ -172,6 +177,7 @@ from pathlib import Path
 from typing import Any, Iterator, TextIO
 
 from clinvar_vcv import open_text
+from hpo_penetrance import HPO_PENETRANCE_STATUS_BY_TERM
 
 
 SCHEMA_VERSION = "1.0"
@@ -200,12 +206,7 @@ HPO_INHERITANCE_TERMS = {
     "HP:0034341": "pseudoautosomal_recessive",
 }
 
-HPO_PENETRANCE_TERMS = {
-    "HP:0003829": "incomplete",
-    "HP:0034950": "complete",
-    "HP:4000159": "moderate",
-    "HP:4000160": "low",
-}
+HPO_PENETRANCE_TERMS = HPO_PENETRANCE_STATUS_BY_TERM
 
 HPO_ONSET_TERMS = {
     "HP:0030674": "antenatal",
@@ -221,6 +222,8 @@ HPO_ONSET_TERMS = {
     "HP:0011462": "young_adult",
     "HP:0003596": "middle_age",
     "HP:0003584": "late",
+    "HP:0034857": "variable_age",
+    "HP:0003587": "insidious",
 }
 
 HPO_REQUIRED_COLUMNS = {
@@ -850,16 +853,18 @@ def attach_clingen_haploinsufficiency(
 def deduce_mechanisms_from_inheritance(
     genes: dict[str, dict[str, Any]],
 ) -> dict[str, int]:
-    """Give a recessive condition a loss-of-function mechanism when none is stated.
+    """Infer LOF for an included recessive condition with no stated mechanism.
 
-    A recessive disease needs both copies of the gene disabled, so loss of
-    function is what the inheritance itself implies. A dominant disease carries
-    no such implication -- it can be haploinsufficiency, gain of function or a
-    dominant-negative effect -- so it is left unresolved rather than guessed at.
+    Recessive inheritance makes loss of function a strong working hypothesis
+    for matching a query variant to the condition. The record is nevertheless
+    marked ``assertion_basis: deduced`` rather than ``curated``. This distinction
+    is functional: PVS1's gene-level LOF-history gate accepts only curated
+    assertions, while the variant-condition mechanism selector may use this
+    inference.
 
-    The evidence records ``assertion_basis: deduced``, so a reader can always
-    tell an inference from a curator's assertion. This runs last, and only where
-    no mechanism was stated by anyone.
+    This runs after every curated source and never overwrites one. Dominant,
+    mitochondrial, Y-linked, non-Mendelian, and inheritance-unknown conditions
+    remain unresolved rather than receiving a guessed mechanism.
     """
     from gene_mechanism_hub import normalize_inheritance
 
@@ -1410,12 +1415,13 @@ def build_cache_payload(
     """Build the complete single-file cache from prepared PriVA resources."""
     genes = build_hpo_gene_condition_frame(hpo_assertions)
     mechanism_stats = attach_condition_mechanisms(genes, mechanism_evidence)
-    # Curated first, inferred last: ClinGen states a haploinsufficiency verdict
-    # against a MONDO disease, and only where no source states any mechanism at
-    # all does the recessive inheritance imply one.
+    # Curated sources run first. Only after they are exhausted may recessive
+    # inheritance supply a clearly marked, deduced LOF working hypothesis.
+    # PVS1 later admits only curated LOF history, so this inference guides
+    # variant-condition matching without becoming PVS1 evidence.
     clingen_stats = attach_clingen_haploinsufficiency(genes, clingen_dosage)
-    deduced_stats = deduce_mechanisms_from_inheritance(genes)
     variant_stats = attach_gofcards_variants(genes, gofcards_variants)
+    deduced_stats = deduce_mechanisms_from_inheritance(genes)
     genes = dict(sorted(genes.items()))
     payload = {
         "_meta": {
@@ -1434,8 +1440,8 @@ def build_cache_payload(
             "build_statistics": {
                 "mechanisms": mechanism_stats,
                 "clingen_haploinsufficiency": clingen_stats,
-                "deduced_mechanisms": deduced_stats,
                 "variants": variant_stats,
+                "deduced_mechanisms": deduced_stats,
             },
             "counts": _cache_counts(genes),
         },

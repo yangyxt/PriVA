@@ -13,6 +13,7 @@ from build_hpo_condition_mechanism_cache import (  # noqa: E402
     attach_gofcards_variants,
     build_cache_payload,
     build_hpo_gene_condition_frame,
+    deduce_mechanisms_from_inheritance,
     load_and_validate_cache,
     write_json_atomic,
 )
@@ -136,6 +137,55 @@ def test_variant_partition_rejects_a_variant_reviewed_as_loss_of_function() -> N
     assert [(s, v) for s, v, _ in quarantined] == [("CFTR", "loc_7:10:A->G_grch37")]
 
 
+def test_recessive_condition_without_curated_mechanism_gets_deduced_lof() -> None:
+    def condition(mode: str, decision: str = "include") -> dict:
+        return {
+            "label": f"{mode} condition",
+            "priva_scope": {"decision": decision},
+            "inheritance": {"modes": [mode]},
+            "pathogenic_mechanisms": {},
+        }
+
+    genes = {
+        "GENE1": {
+            "conditions": {
+                "OMIM:1": condition("autosomal_recessive"),
+                "OMIM:2": condition("autosomal_dominant"),
+                "OMIM:3": condition("autosomal_recessive", decision="review"),
+            }
+        }
+    }
+
+    stats = deduce_mechanisms_from_inheritance(genes)
+
+    evidence = genes["GENE1"]["conditions"]["OMIM:1"][
+        "pathogenic_mechanisms"
+    ]["LOF"]["evidence"]
+    assert evidence == [
+        {
+            "source": "deduced_from_inheritance",
+            "source_record_id": "OMIM:1",
+            "condition_identifiers": ["OMIM:1"],
+            "condition_label": "autosomal_recessive condition",
+            "mechanism": "LOF",
+            "mechanism_raw": "recessive inheritance implies loss of function",
+            "allelic_requirement": "",
+            "mechanism_confidence": "",
+            "disease_confidence": "",
+            "assertion_basis": "deduced",
+            "source_scope": {"decision": "", "category": "", "review_status": ""},
+            "pmids": [],
+            "evidence_url": "",
+        }
+    ]
+    assert genes["GENE1"]["conditions"]["OMIM:2"]["pathogenic_mechanisms"] == {}
+    assert genes["GENE1"]["conditions"]["OMIM:3"]["pathogenic_mechanisms"] == {}
+    assert stats == {
+        "recessive_conditions_given_lof": 1,
+        "left_unresolved_dominant": 1,
+    }
+
+
 def test_hpo_frame_groups_gene_conditions_and_preserves_axis_evidence(
     tmp_path: Path,
 ) -> None:
@@ -173,6 +223,12 @@ def test_hpo_frame_groups_gene_conditions_and_preserves_axis_evidence(
         "statuses": ["incomplete"],
         "assertions": [
             {
+                "hpo_id": "HP:0003584",
+                "frequency": "1/10",
+                "evidence": "PCS",
+                "reference": "PMID:2",
+            },
+            {
                 "hpo_id": "HP:0003829",
                 "frequency": "2/10",
                 "evidence": "PCS",
@@ -191,6 +247,59 @@ def test_hpo_frame_groups_gene_conditions_and_preserves_axis_evidence(
         "auto_supported",
         "manually_confirmed",
     ]
+
+
+@pytest.mark.parametrize(
+    ("hpo_id", "expected_status", "expected_onset"),
+    [
+        ("HP:0003829", "incomplete", None),
+        ("HP:0003831", "incomplete", None),
+        ("HP:4000159", "moderate", None),
+        ("HP:4000160", "low", None),
+        ("HP:0034857", "incomplete", "variable_age"),
+        ("HP:0003581", "incomplete", "adult"),
+        ("HP:0011462", "incomplete", "young_adult"),
+        ("HP:0003596", "incomplete", "middle_age"),
+        ("HP:0003584", "incomplete", "late"),
+        ("HP:0003587", "incomplete", "insidious"),
+        ("HP:0003828", "incomplete", None),
+        ("HP:0034950", "complete", None),
+        ("HP:4000158", "high", None),
+        ("HP:0001470", None, None),
+        ("HP:0003677", None, None),
+    ],
+)
+def test_penetrance_assertions_stay_linked_to_their_condition(
+    tmp_path: Path,
+    hpo_id: str,
+    expected_status: str | None,
+    expected_onset: str | None,
+) -> None:
+    hpo = tmp_path / "hpo.tsv"
+    hpo.write_text(
+        HPO_HEADER
+        + f"GENE1\tOMIM:1\t{hpo_id}\t-\tTAS\tOMIM:1\tMONDO:1\t"
+        "Condition one\tmendelian_non_neoplastic\tinclude\tMONDO_ancestor\t"
+        "MONDO:v1\tauto_supported\n",
+        encoding="utf-8",
+    )
+
+    condition = build_hpo_gene_condition_frame(hpo)["GENE1"]["conditions"]["OMIM:1"]
+
+    if expected_status is None:
+        assert condition["penetrance"] == {"statuses": [], "assertions": []}
+    else:
+        assert condition["penetrance"]["statuses"] == [expected_status]
+        assert [
+            assertion["hpo_id"]
+            for assertion in condition["penetrance"]["assertions"]
+        ] == [hpo_id]
+
+    if expected_onset is None:
+        assert condition["onset"] == {"terms": [], "assertions": []}
+    else:
+        assert condition["onset"]["terms"] == [expected_onset]
+        assert condition["onset"]["assertions"][0]["hpo_id"] == hpo_id
 
 
 def test_mechanisms_attach_only_through_exact_condition_identifiers(
@@ -343,6 +452,82 @@ def test_gofcards_variants_require_exact_clinvar_hpo_condition_identity(
         "condition_linked_variants": 1,
         "condition_variant_links": 1,
         "unmapped_variants": 1,
+    }
+
+
+def test_curated_gof_precedes_recessive_lof_deduction(tmp_path: Path) -> None:
+    """A curated condition mechanism must prevent the fallback inference."""
+    hpo = tmp_path / "hpo.tsv"
+    hpo.write_text(
+        HPO_HEADER
+        + "GENE1\tOMIM:1\tHP:0000007\t-\tTAS\tOMIM:1\tMONDO:1\t"
+        "Condition one\tmendelian_non_neoplastic\tinclude\tMONDO_ancestor\t"
+        "MONDO:v1;OMIM:1\tauto_supported\n",
+        encoding="utf-8",
+    )
+    mechanism = tmp_path / "mechanism.tsv"
+    mechanism.write_text(
+        "gene_symbol\tsource\tsource_record_id\tsource_condition_id\tmondo_id\t"
+        "disease_scope\tpriva_scope\tscope_review_status\tdisease_label\t"
+        "inheritance\tpatho_mode_raw\tnormalized_mechanisms\t"
+        "mechanism_confidence\tdisease_confidence\tpmids\tevidence_url\n",
+        encoding="utf-8",
+    )
+    clingen = tmp_path / "clingen.tsv"
+    clingen.write_text(
+        "#Gene Symbol\tHaploinsufficiency Score\t"
+        "Haploinsufficiency Description\tHaploinsufficiency Disease ID\n",
+        encoding="utf-8",
+    )
+    linked = _gofcards_variant(
+        "1",
+        10,
+        "Condition one",
+        "PMID:1",
+        clinvar={
+            "vcv_accession": "VCV0001",
+            "variation_id": "ID10",
+            "condition_assertions": [
+                {
+                    "rcv_accession": "RCV0001",
+                    "conditions": [{"name": "Condition one"}],
+                    "matched_scvs": [
+                        {
+                            "trait_mappings": [
+                                {"mapping_ref": "OMIM", "mapping_value": "1"}
+                            ]
+                        }
+                    ],
+                    "germline_classification": {
+                        "clinical_significance": "Pathogenic",
+                        "review_stars": 2,
+                    },
+                }
+            ],
+        },
+    )
+    gofcards = _write_gofcards_cache(
+        tmp_path / "gofcards.json",
+        {"loc_1:10:A->G_grch37": linked},
+    )
+    mechanism_json = tmp_path / "mechanisms.json"
+    mechanism_json.write_text(json.dumps({"_meta": {}}), encoding="utf-8")
+
+    payload = build_cache_payload(
+        hpo_assertions=hpo,
+        mechanism_evidence=mechanism,
+        mechanism_json=mechanism_json,
+        gofcards_variants=gofcards,
+        clingen_dosage=clingen,
+    )
+
+    condition = payload["genes"]["GENE1"]["conditions"]["OMIM:1"]
+    assert set(condition["pathogenic_mechanisms"]) == {"GOF"}
+    assert condition["pathogenic_mechanisms"]["GOF"]["evidence"][0][
+        "source"
+    ] == "GoFCards_exact+ClinVar_VCV"
+    assert payload["_meta"]["build_statistics"]["deduced_mechanisms"] == {
+        "already_had_a_mechanism": 1
     }
 
 

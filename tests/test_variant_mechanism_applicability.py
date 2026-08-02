@@ -452,6 +452,105 @@ def test_variant_level_mechanism_contract(tmp_path: Path) -> None:
     assert "has_lof_mechanism_history" not in masks
 
 
+def test_mechanism_free_condition_is_retained_as_unresolved_history(
+    tmp_path: Path,
+) -> None:
+    sources = _write_fixture_sources(tmp_path)
+    payload = json.loads(sources["condition_cache"].read_text(encoding="utf-8"))
+    condition = payload["genes"]["TESTGOF"]["conditions"]["OMIM:3"]
+    condition["pathogenic_mechanisms"] = {}
+    sources["condition_cache"].write_text(json.dumps(payload), encoding="utf-8")
+    frame = pd.DataFrame(
+        [
+            {
+                "SYMBOL": "TESTGOF",
+                "Gene": "ENSG3",
+                "Consequence": "missense_variant",
+                "LoF": "",
+                "NMD": "",
+                "vep_consq_lof": False,
+                "variant_gof_tag": "GOF",
+            }
+        ]
+    )
+
+    annotated = annotate_gene_mechanism_categories(
+        frame,
+        use_hgnc_package=False,
+        **sources,
+    ).iloc[0]
+
+    assert annotated["variant_effect"] == "exact_known_GOF"
+    assert annotated["variant_inheritance"] == "recessive"
+    assert annotated["variant_inheritance_basis"] == "unresolved_condition_history"
+    assert annotated["variant_condition_ids"] == "OMIM:3"
+    assert annotated["variant_condition_histories"] == (
+        "OMIM:3|UNRESOLVED|recessive|unknown"
+    )
+
+
+def test_known_mechanism_mismatch_does_not_reintroduce_gene_fallback(
+    tmp_path: Path,
+) -> None:
+    sources = _write_fixture_sources(tmp_path)
+    frame = pd.DataFrame(
+        [
+            {
+                "SYMBOL": "TESTGOF",
+                "Gene": "ENSG3",
+                "Consequence": "stop_gained",
+                "LoF": "HC",
+                "NMD": "NMD",
+                "vep_consq_lof": True,
+                "variant_gof_tag": "",
+            }
+        ]
+    )
+
+    annotated = annotate_gene_mechanism_categories(
+        frame,
+        use_hgnc_package=False,
+        **sources,
+    ).iloc[0]
+
+    assert annotated["variant_effect"] == "exact_known_LOF"
+    assert annotated["variant_inheritance"] == ""
+    assert annotated["variant_inheritance_basis"] == "mechanism_mismatch"
+    assert annotated["variant_condition_ids"] == ""
+    assert annotated["variant_penetrance"] == "unknown"
+
+
+def test_review_only_condition_blocks_constraint_fallback(tmp_path: Path) -> None:
+    sources = _write_fixture_sources(tmp_path)
+    payload = json.loads(sources["condition_cache"].read_text(encoding="utf-8"))
+    condition = payload["genes"]["TESTGOF"]["conditions"]["OMIM:3"]
+    condition["priva_scope"]["decision"] = "review"
+    sources["condition_cache"].write_text(json.dumps(payload), encoding="utf-8")
+    frame = pd.DataFrame(
+        [
+            {
+                "SYMBOL": "TESTGOF",
+                "Gene": "ENSG3",
+                "Consequence": "missense_variant",
+                "LoF": "",
+                "NMD": "",
+                "vep_consq_lof": False,
+                "variant_gof_tag": "",
+            }
+        ]
+    )
+
+    annotated = annotate_gene_mechanism_categories(
+        frame,
+        use_hgnc_package=False,
+        **sources,
+    ).iloc[0]
+
+    assert annotated["variant_inheritance"] == ""
+    assert annotated["variant_inheritance_basis"] == "condition_scope_blocked"
+    assert annotated["variant_condition_ids"] == ""
+
+
 def test_gene_wide_lof_signals_remain_audit_only_without_condition_history(
     tmp_path: Path,
 ) -> None:
@@ -663,6 +762,8 @@ def test_scope_review_blocks_automatic_bs2() -> None:
                 "gnomAD_joint_AN": 2000,
                 "gnomAD_nhomalt_XX": 0,
                 "gnomAD_nhomalt_XY": 0,
+                "variant_inheritance": "dominant",
+                "variant_penetrance": "unknown",
             },
             {
                 "chrom": "chr1",
@@ -681,15 +782,13 @@ def test_scope_review_blocks_automatic_bs2() -> None:
                 "gnomAD_joint_AN": 2000,
                 "gnomAD_nhomalt_XX": 0,
                 "gnomAD_nhomalt_XY": 0,
+                "variant_inheritance": "dominant",
+                "variant_penetrance": "unknown",
             },
         ]
     )
-    false = np.array([False, False])
     result = BS2_criteria(
         frame,
-        non_monogenic=false,
-        non_mendelian=false,
-        incomplete_penetrance=false,
         pm2_criteria=np.array([0, 0]),
     )
 
@@ -762,6 +861,8 @@ def _modern_mechanism_rows() -> pd.DataFrame:
             "variant_mechanism_uncertain": ["", "", ""],
             "variant_effect": ["exact_known_GOF"] * 3,
             "variant_gof_tag": ["GOF"] * 3,
+            "variant_inheritance": ["recessive", "recessive", "dominant"],
+            "variant_penetrance": ["unknown", "unknown", "unknown"],
         }
     )
 
@@ -778,22 +879,14 @@ def test_bs1_and_bs2_use_variant_level_allelic_requirement() -> None:
         gnomAD_joint_AF_XY=[0.0, 0.0, 0.0],
         clinvar_patho_gene_max_af=[0.0, 0.0, 0.0],
     )
-    false = np.zeros(len(frame), dtype=bool)
-
     bs1 = BS1_criteria(
         frame,
         pm2_criteria=np.zeros(len(frame), dtype=int),
-        non_monogenic=false,
-        non_mendelian=false,
-        incomplete_penetrance=false,
     )
     assert bs1.tolist() == [0, 3, 3]
 
     bs2 = BS2_criteria(
         frame,
-        non_monogenic=false,
-        non_mendelian=false,
-        incomplete_penetrance=false,
         pm2_criteria=np.zeros(len(frame), dtype=int),
     )
     assert bs2.tolist() == [0, 3, 3]
@@ -811,15 +904,10 @@ def test_bs4_uses_biallelic_gof_as_recessive_requirement() -> None:
             "Sex": ["2", "2"],
         }
     )
-    false = np.zeros(len(frame), dtype=bool)
-
     bs4 = BS4_criteria(
         frame,
         pedigree,
         "F1",
-        non_monogenic=false,
-        non_mendelian=false,
-        incomplete_penetrance=false,
     )
 
     assert bs4.tolist() == [0, 1]

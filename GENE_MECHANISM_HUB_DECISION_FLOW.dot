@@ -8,12 +8,46 @@ digraph priva_gene_mechanism_hub {
     fontname="Arial",
     fontsize=13,
     compound=true,
-    label="PriVA condition-specific gene history, query-variant mechanism, and what each consumer reads",
+    label="PriVA gene-mechanism modules, condition-specific history, query-variant mechanism, and consumers",
     labelloc="t"
   ];
   node [shape=box, style="rounded,filled", fontname="Arial", fontsize=10,
         color="#374151", fillcolor="#F9FAFB", margin="0.14,0.07"];
   edge [fontname="Arial", fontsize=9, color="#6B7280", arrowsize=0.7];
+
+  /* ================================================================
+     MODULE ARCHITECTURE -- only the facade is pipeline-facing
+     ================================================================ */
+  subgraph cluster_architecture {
+    label="MODULE ARCHITECTURE  one-way imports; definition modules are not executed";
+    fontsize=12;
+    color="#94A3B8";
+    style="rounded";
+
+    pipeline  [label="PriVA pipeline and audit callers", fillcolor="#F8FAFC"];
+    hub_py    [label="gene_mechanism_hub.py\ltop-level facade, orchestrator, compatibility API and CLI\l", fillcolor="#DBEAFE", penwidth=2.0];
+    common_py [label="gene_mechanism_common.py\lpaths, vocabularies, output contract, shared normalization\l", fillcolor="#F1F5F9"];
+    cond_py   [label="gene_mechanism_conditions.py\lscope gate, condition assertions, inheritance, penetrance, PVS1 history\l", fillcolor="#DCFCE7"];
+    var_py    [label="gene_mechanism_variants.py\lquery-effect scoring and exact HGVSp / HGVSc / genomic matching\l", fillcolor="#FFEDD5"];
+    res_py    [label="gene_mechanism_resources.py\lHGNC resolution, lazy cache loading, GeneMechanismHub service\l", fillcolor="#EDE9FE"];
+    anno_py   [label="gene_mechanism_annotation.py\lvariant-to-condition selection and DataFrame annotation\l", fillcolor="#FEF3C7"];
+
+    pipeline -> hub_py [label="imports / executes"];
+    hub_py -> common_py;
+    hub_py -> cond_py;
+    hub_py -> var_py;
+    hub_py -> res_py;
+    hub_py -> anno_py;
+    cond_py -> common_py [label="imports"];
+    var_py -> common_py [label="imports"];
+    res_py -> common_py [label="imports"];
+    res_py -> cond_py [label="imports"];
+    res_py -> var_py [label="delegates exact matching"];
+    anno_py -> common_py [label="imports"];
+    anno_py -> cond_py [label="imports"];
+    anno_py -> var_py [label="imports"];
+    anno_py -> res_py [label="composes service"];
+  }
 
   /* ================================================================
      BUILD TIME -- one cache is assembled, in a fixed order
@@ -57,7 +91,7 @@ digraph priva_gene_mechanism_hub {
      STEP 1 -- what the query variant itself does
      ================================================================ */
   subgraph cluster_step1 {
-    label="STEP 1  the query variant's own mechanism, scored 0 / 1 / 2";
+    label="STEP 1  gene_mechanism_variants.py: query mechanism, scored 0 / 1 / 2";
     fontsize=12;
     color="#FDBA74";
     style="rounded";
@@ -103,13 +137,13 @@ digraph priva_gene_mechanism_hub {
      STEPS 2 and 3 -- which histories that mechanism reaches
      ================================================================ */
   subgraph cluster_step23 {
-    label="STEPS 2 and 3  the gene's germline histories this mechanism reaches";
+    label="STEPS 2 and 3  conditions.py + annotation.py: histories this mechanism reaches";
     fontsize=12;
     color="#C4B5FD";
     style="rounded";
 
     germline  [label="germline-inherited conditions only\lcondition.priva_scope.decision == \"include\"\l", fillcolor="#F5F3FF"];
-    match     [label="keep histories whose mechanism the variant acts by\l\lexact_known_GOF  -> GOF only\lexact_known_DOMINANT_NEGATIVE -> DN only\lexact_known_LOF / predicted_LOF -> LOF only\luncertain -> all three, marked uncertain\l", fillcolor="#F5F3FF", penwidth=1.6];
+    match     [label="keep compatible known histories and every UNRESOLVED history\l\lexact_known_GOF -> GOF + UNRESOLVED\lexact_known_DOMINANT_NEGATIVE -> DN + UNRESOLVED\lexact_known_LOF / predicted_LOF -> LOF + UNRESOLVED\luncertain -> all known + UNRESOLVED\l", fillcolor="#F5F3FF", penwidth=1.6];
     carried   [label="each surviving history reduced to four facts,\land nothing else travels:\l\lmechanism | condition | inheritance | penetrance\l+ x_linked kept separately, never folded in\l", fillcolor="#EDE9FE", penwidth=1.8];
 
     germline -> match;
@@ -117,25 +151,27 @@ digraph priva_gene_mechanism_hub {
   }
 
   /* ================================================================
-     STEP 4 -- attach, with the inheritance fallback ladder
+     STEP 4 -- attach, with conservative fallback boundaries
      ================================================================ */
   subgraph cluster_step4 {
-    label="STEP 4  attach to the row; no variant is left without an inheritance";
+    label="STEP 4  gene_mechanism_annotation.py: attach histories without reviving rejected evidence";
     fontsize=12;
     color="#6EE7B7";
     style="rounded";
 
-    lad1      [label="basis = \"matched_history\"      3,897 genes  70.0%\lthe variant's own mechanism reached a history\lthat states the inheritance\l", fillcolor="#D1FAE5"];
-    lad2      [label="basis = \"gene_consensus\"         879 genes  15.8%\levery germline condition of the gene agrees on one\linheritance. Unanimity is what makes it safe\l", fillcolor="#ECFDF5"];
-    lad3      [label="basis = \"gene_constraint\"         789 genes  14.2%\lHPO states no inheritance at all. ClinGen\lhaploinsufficiency 3 OR LOEUF < 0.35 -> dominant,\lotherwise recessive\l", fillcolor="#ECFDF5"];
+    selected  [label="matched_history | unresolved_condition_history\lmatched_and_unresolved_history\lthe basis states exactly which selected histories contributed\l", fillcolor="#D1FAE5"];
+    mismatch  [label="mechanism_mismatch\lexplicit known histories existed, but all were incompatible\l-> leave inheritance and penetrance empty; never merge gene-wide history\l", fillcolor="#FEE2E2"];
+    blocked   [label="condition_scope_blocked\lthe gene has condition records, but none passes priva_scope=include\l-> no automatic fallback\l", fillcolor="#FEE2E2"];
+    consensus [label="gene_consensus\ldefensive support for malformed or legacy included records only;\lrequires every stated germline inheritance to agree\l", fillcolor="#ECFDF5"];
+    constraint [label="gene_constraint\lonly when the gene has no usable condition history and states no\linheritance: ClinGen HI 3 or LOEUF < 0.35 -> dominant, else recessive\lno mechanism or penetrance is invented\l", fillcolor="#ECFDF5"];
 
     outcols   [label="15 columns attached to every row\l\lvariant_effect  variant_lof_score  variant_gof_score  variant_dn_score\lvariant_mechanism_exclusive  variant_exact_mechanisms\lvariant_mechanism_applicable  variant_mechanism_uncertain\lvariant_condition_ids  variant_condition_histories\lvariant_inheritance  variant_inheritance_basis\lvariant_x_linked  variant_penetrance\lgene_lof_mechanism_history\l", fillcolor="#D1FAE5", penwidth=2.0];
 
-    lad1 -> lad2 [label="no history states one"];
-    lad2 -> lad3 [label="the gene disagrees\nwith itself"];
-    lad1 -> outcols;
-    lad2 -> outcols;
-    lad3 -> outcols;
+    selected -> outcols;
+    mismatch -> outcols;
+    blocked -> outcols;
+    consensus -> outcols;
+    constraint -> outcols;
   }
 
   /* ================================================================
@@ -180,7 +216,11 @@ digraph priva_gene_mechanism_hub {
   e_exact -> match;
   e_pred  -> match;
   e_unc   -> match;
-  carried -> lad1 [lhead=cluster_step4];
+  carried -> selected [lhead=cluster_step4];
+  carried -> mismatch [label="known mechanisms all incompatible", style=dashed];
+  germline -> blocked [label="none included", style=dashed];
+  germline -> consensus [label="legacy included record emitted no assertion", style=dashed];
+  consensus -> constraint [label="nothing stated", style=dashed];
 
   outcols -> gate [label="gene_lof_mechanism_history", color="#DC2626", penwidth=1.4];
   cv_set -> gate [color="#DC2626", penwidth=1.4];

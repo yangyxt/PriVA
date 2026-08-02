@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 import sys
 
@@ -12,6 +13,7 @@ from build_gene_pathogenic_mechanism_cache import (  # noqa: E402
     parse_g2p,
     parse_orphadata,
     to_gene_pathogenic_mechanism_evidence,
+    write_gene_pathogenic_mechanism_evidence,
 )
 
 
@@ -207,3 +209,68 @@ def test_condition_mechanism_evidence_retains_stable_disease_identity() -> None:
     assert orphadata["source_condition_id"] == "ORPHA:456"
     assert orphadata["mondo_id"] == "MONDO:0000456"
     assert orphadata["normalized_mechanisms"] == "LOF"
+
+
+def test_unchanged_condition_evidence_is_not_republished(tmp_path: Path) -> None:
+    evidence = pd.DataFrame(
+        [
+            {
+                "gene_symbol": "GENE1",
+                "source": "G2P_DDG2P",
+                "source_record_id": "G2P00001",
+                "source_condition_id": "OMIM:123",
+                "disease": "Condition one",
+                "mechanism": "LOF",
+            }
+        ]
+    )
+    output = tmp_path / "gene_pathogenic_mechanism_evidence.tsv"
+
+    assert write_gene_pathogenic_mechanism_evidence(output, evidence) == 1
+    original = output.read_bytes()
+    stable_timestamp_ns = 1_700_000_000_000_000_000
+    os.utime(output, ns=(stable_timestamp_ns, stable_timestamp_ns))
+
+    assert write_gene_pathogenic_mechanism_evidence(output, evidence) == 1
+    assert output.read_bytes() == original
+    assert output.stat().st_mtime_ns == stable_timestamp_ns
+
+    changed = evidence.copy()
+    changed.loc[0, "mechanism"] = "GOF"
+    assert write_gene_pathogenic_mechanism_evidence(output, changed) == 1
+    assert output.read_bytes() != original
+    assert output.stat().st_mtime_ns != stable_timestamp_ns
+
+
+def test_condition_evidence_excludes_sources_with_dedicated_caches() -> None:
+    unified = pd.DataFrame(
+        [
+            {
+                "gene_symbol": "GENE1",
+                "source": "G2P_DDG2P",
+                "source_condition_id": "OMIM:1",
+                "mechanism": "LOF",
+            },
+            {
+                "gene_symbol": "GENE2",
+                "source": "GoFCards",
+                "mechanism": "GOF",
+            },
+            {
+                "gene_symbol": "GENE3",
+                "source": "ClinGen_Dosage",
+                "mechanism": "LOF",
+            },
+            {
+                "gene_symbol": "GENE4",
+                "source": "PanelApp",
+                "mechanism": "DOMINANT_NEGATIVE",
+            },
+        ]
+    )
+
+    result = to_gene_pathogenic_mechanism_evidence(unified)
+
+    assert result[["gene_symbol", "source"]].to_dict(orient="records") == [
+        {"gene_symbol": "GENE1", "source": "G2P_DDG2P"}
+    ]

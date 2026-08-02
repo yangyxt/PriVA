@@ -14,9 +14,9 @@ sit together.
          in cis with one under any model -- either way the observed allele is
          not what explains the phenotype
 
-All four are gated off for non-monogenic, non-Mendelian and
-incomplete-penetrance genes, where a genotype contradiction is not
-interpretable.
+All four read the mechanism hub's selected condition histories and are gated
+off for non-monogenic, non-Mendelian and incomplete-equivalent penetrance,
+where a genotype contradiction is not interpretable.
 """
 
 import logging
@@ -28,18 +28,16 @@ from scipy import stats
 from determine_phase import determine_cis_trans_relationships
 from find_cosegregation_vars import find_cosegregating_variants
 
-from acmg_variant_mechanism import _variant_mechanism_masks
+from acmg_variant_mechanism import (
+    _variant_condition_masks,
+    _variant_mechanism_masks,
+)
 
 
 logger = logging.getLogger(__name__)
 
 
 def PP1_criteria(df: pd.DataFrame,
-                 recessive: np.ndarray,
-                 dominant: np.ndarray,
-                 non_monogenic: np.ndarray,
-                 non_mendelian: np.ndarray,
-                 incomplete_penetrance: np.ndarray,
                  multi_fam_vcf: str = "",
                  multi_fam_ped: str = "",
                  mode: str = "both",) -> np.ndarray:
@@ -49,13 +47,12 @@ def PP1_criteria(df: pd.DataFrame,
     THE DECISION TREE
     =================
 
-    PP1 reads FIVE gene-level arrays and no variant-level input at all. It is
-    one of the three criteria the variant-level chain has not reached yet, so
-    the inheritance it reasons about is the gene's, not this variant's.
+    PP1 reads the inheritance and penetrance of the condition histories the
+    hub selected for THIS variant. Compatible curated mechanisms contribute at
+    high resolution; mechanism-free included conditions contribute unresolved
+    gene history instead of being discarded or guessed.
 
-        recessive / dominant / non_monogenic / non_mendelian /
-        incomplete_penetrance          <- all from identify_inheritance_mode,
-                                          one verdict per GENE
+        variant_inheritance / variant_penetrance
               |
               v
         recessive_ih = NOT non_monogenic
@@ -78,22 +75,9 @@ def PP1_criteria(df: pd.DataFrame,
               +-- recessive_ih -> pp1_recessive_points -> encoded strength
               +-- dominant_ih  -> pp1_dominant_points  -> encoded strength
 
-    WHAT IT WOULD READ INSTEAD
-    ==========================
-
-    The hub now states, per variant rather than per gene:
-
-        variant_inheritance          recessive | dominant | y_linked |
-                                     mitochondrial | non_mendelian |
-                                     polygenic | digenic | oligogenic
-        variant_inheritance_basis    matched_history | gene_consensus |
-                                     gene_constraint
-        variant_penetrance           complete | incomplete | unknown
-        variant_condition_histories  condition|mechanism|inheritance|penetrance
-
-    The three gates above map onto those directly: non_monogenic and
-    non_mendelian become the non-Mendelian inheritance values, and
-    incomplete_penetrance becomes variant_penetrance == "incomplete".
+    ``high`` penetrance is not treated as incomplete. Delayed/variable onset,
+    low/moderate penetrance and variable expressivity have already been linked
+    to their condition and normalized to ``incomplete`` upstream.
     '''
     pp1_array = np.zeros(len(df), dtype=int)
     if multi_fam_vcf and multi_fam_ped:
@@ -120,8 +104,19 @@ def PP1_criteria(df: pd.DataFrame,
         male_affected_seg_count = df['variant_id'].map(male_affected_segs).fillna(0).astype(int)
         male_control_seg_count = df['variant_id'].map(male_control_segs).fillna(0).astype(int)
 
-        recessive_ih = np.logical_not(non_monogenic) & np.logical_not(non_mendelian) & np.logical_not(incomplete_penetrance) & recessive
-        dominant_ih = np.logical_not(non_monogenic) & np.logical_not(non_mendelian) & np.logical_not(incomplete_penetrance) & dominant & np.logical_not(recessive)
+        condition_masks = _variant_condition_masks(df)
+        valid_model = (
+            condition_masks["has_mendelian"]
+            & ~condition_masks["has_non_monogenic"]
+            & ~condition_masks["has_non_mendelian"]
+            & ~condition_masks["has_incomplete_penetrance"]
+        )
+        recessive_ih = valid_model & condition_masks["has_recessive"]
+        dominant_ih = (
+            valid_model
+            & condition_masks["has_dominant"]
+            & ~condition_masks["has_recessive"]
+        )
 
         pp1_points = [0] * len(df)
         recessive_encode = recessive_ih.astype(int)  # Convert boolean to int for multiplication
@@ -154,17 +149,21 @@ def PP1_criteria(df: pd.DataFrame,
     return pp1_array
 
 
-def BS4_criteria(df: pd.DataFrame, ped_df: pd.DataFrame, fam_name: str,
-                 non_monogenic: np.ndarray,
-                 non_mendelian: np.ndarray,
-                 incomplete_penetrance: np.ndarray) -> pd.Series:
+def BS4_criteria(
+    df: pd.DataFrame,
+    ped_df: pd.DataFrame,
+    fam_name: str,
+) -> pd.Series:
     # BS4: lack of segregation / genotype incompatibility within the submitted
     # family. Output keeps the existing PriVA strength encoding:
     #   0 = no BS4, 1 = BS4_Supporting, 3 = BS4.
     #
-    # Global gates from the previous function still stand: do not assign BS4
-    # for non-monogenic/polygenic, non-Mendelian, or incomplete-penetrance
-    # rows, because genotype contradictions are not interpretable there.
+    # The hub has already limited known histories to mechanisms compatible with
+    # this variant and retained every mechanism-unresolved included condition.
+    # Do not assign BS4 for non-monogenic/polygenic, non-Mendelian, or any
+    # selected incomplete-equivalent penetrance history, because genotype
+    # contradictions are not interpretable there. High penetrance is not in
+    # that blocking category.
     #
     # Recessive and dominant compatibility come only from the upstream compact
     # variant-level assertions.
@@ -266,11 +265,12 @@ def BS4_criteria(df: pd.DataFrame, ped_df: pd.DataFrame, fam_name: str,
     def _series_or_empty(column: str) -> pd.Series:
         return df.get(column, pd.Series("", index=df.index)).fillna("").astype(str)
 
-    valid_model = pd.Series(
-        np.logical_not(non_monogenic)
-        & np.logical_not(non_mendelian)
-        & np.logical_not(incomplete_penetrance),
-        index=df.index,
+    condition_masks = _variant_condition_masks(df)
+    valid_model = (
+        condition_masks["has_mendelian"]
+        & ~condition_masks["has_non_monogenic"]
+        & ~condition_masks["has_non_mendelian"]
+        & ~condition_masks["has_incomplete_penetrance"]
     )
 
     chrom = _series_or_empty("chrom")
@@ -281,7 +281,7 @@ def BS4_criteria(df: pd.DataFrame, ped_df: pd.DataFrame, fam_name: str,
 
     mechanism_masks = _variant_mechanism_masks(df)
 
-    has_recessive_requirement = mechanism_masks["has_recessive_compatible"]
+    has_recessive_requirement = condition_masks["has_recessive"]
     has_any_dominant_history = (
         mechanism_masks["has_dom_lof_history"]
         | mechanism_masks["has_dom_gof_history"]
@@ -297,8 +297,7 @@ def BS4_criteria(df: pd.DataFrame, ped_df: pd.DataFrame, fam_name: str,
     )
     is_nmd_lof = mechanism_masks["is_predicted_lof"]
     dominant_variant_compatible_no_ar = (
-        mechanism_masks["has_dominant_compatible"]
-        & ~has_recessive_requirement
+        condition_masks["has_dominant_like"] & ~has_recessive_requirement
     )
 
     patient_alt_counts = {
@@ -387,9 +386,6 @@ def BP2_PM3_criteria(df: pd.DataFrame,
                      pvs1_criteria: np.ndarray,
                      ps1_criteria: np.ndarray,
                      ps3_criteria: np.ndarray,
-                     is_recessive: np.ndarray,
-                     is_dominant: np.ndarray,
-                     incomplete_penetrance: np.ndarray,
                      threads: int = 1) -> Tuple[pd.Series, pd.Series]:
     # BP2: observed in trans with a pathogenic variant in dominant disease, Or in-cis with a pathogenic variant with any inheritance mode
     # PM3: observed in trans with a pathogenic variant in recessive disease.
@@ -399,9 +395,10 @@ def BP2_PM3_criteria(df: pd.DataFrame,
     #
     # Two criteria of opposite direction share one function because they read
     # the same phase evidence and split on inheritance alone. Both take the
-    # inheritance as GENE-level arrays passed in by the caller
-    # (is_recessive, is_dominant, incomplete_penetrance); neither reads any
-    # variant-level column.
+    # condition-linked inheritance and penetrance selected upstream for this
+    # variant. Known incompatible mechanisms have already been removed, while
+    # included conditions with no explicit mechanism remain as unresolved
+    # histories.
     #
     #   what counts as a pathogenic partner variant:
     #       vep_consq_lof | splicing_lof | 5UTR_lof
@@ -424,15 +421,16 @@ def BP2_PM3_criteria(df: pd.DataFrame,
     #                       PM2 requires the variant to be rare enough for
     #                       that to be meaningful
     #
-    # Note the asymmetry: is_dominant is additionally guarded by
-    # NOT is_recessive, so a gene carrying both models never yields BP2. The
-    # variant-level chain removes the need for that guard, because it reports
-    # the inheritance of the histories THIS variant's mechanism reaches
-    # rather than every model the gene has ever shown.
+    # Note the asymmetry: dominant is additionally guarded by NOT recessive.
+    # This remains necessary when the selected evidence contains unresolved
+    # histories under both models: the improved resolution is used wherever a
+    # mechanism is known, but unknown mechanisms must retain the gene's full
+    # included disease history.
     #
-    # incomplete_penetrance is accepted and used to gate the same way the
-    # other criteria gate on it: a genotype that contradicts the model is not
-    # interpretable when carriers may be unaffected.
+    # Any selected ``incomplete`` value gates both criteria because phase cannot
+    # contradict a model when carriers may be unaffected. The upstream category
+    # also covers low/moderate penetrance, delayed/variable onset, and variable
+    # expressivity; ``high`` remains non-blocking.
     pathogenic = df["vep_consq_lof"] | df["splicing_lof"] | df["5UTR_lof"] | (ps1_criteria & ps3_criteria) | pvs1_criteria
 
     in_cis_pathogenic, in_trans_pathogenic, df = determine_cis_trans_relationships( df,
@@ -443,11 +441,26 @@ def BP2_PM3_criteria(df: pd.DataFrame,
     in_cis_pathogenic = in_cis_pathogenic > 0
     in_trans_pathogenic = in_trans_pathogenic > 0
 
-    bp2_criteria = (in_trans_pathogenic & is_dominant & np.logical_not(is_recessive)) | (in_cis_pathogenic & is_recessive)
-    pm3_criteria = in_trans_pathogenic & (is_recessive) & pm2_criteria
+    condition_masks = _variant_condition_masks(df)
+    is_recessive = condition_masks["has_recessive"]
+    is_dominant = condition_masks["has_dominant_like"]
+    valid_model = (
+        condition_masks["has_mendelian"]
+        & ~condition_masks["has_non_monogenic"]
+        & ~condition_masks["has_non_mendelian"]
+        & ~condition_masks["has_incomplete_penetrance"]
+    )
 
-    bp2_criteria = bp2_criteria & ~incomplete_penetrance
-    pm3_criteria = pm3_criteria & ~incomplete_penetrance
+    bp2_criteria = (
+        (in_trans_pathogenic & is_dominant & np.logical_not(is_recessive))
+        | (in_cis_pathogenic & is_recessive)
+    ) & valid_model
+    pm3_criteria = (
+        in_trans_pathogenic
+        & is_recessive
+        & (np.asarray(pm2_criteria) > 0)
+        & valid_model
+    )
 
     bp2_array = np.zeros(len(df), dtype=int)
     pm3_array = np.zeros(len(df), dtype=int)

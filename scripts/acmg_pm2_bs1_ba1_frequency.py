@@ -23,7 +23,7 @@ import numpy as np
 from typing import Tuple
 from scipy.stats import binom
 
-from acmg_variant_mechanism import _variant_mechanism_masks
+from acmg_variant_mechanism import _variant_condition_masks
 
 
 logger = logging.getLogger(__name__)
@@ -167,20 +167,14 @@ def PM2_criteria(df: pd.DataFrame,
 def BS1_criteria(df: pd.DataFrame,
                  expected_incidence: float = 0.0001,
                  pm2_criteria: np.ndarray = None,
-                 non_monogenic: np.ndarray = None,
-                 non_mendelian: np.ndarray = None,
-                 incomplete_penetrance: np.ndarray = None,
                  return_frequency_components: bool = False):
     '''
     BS1: allele frequency is greater than expected for the disorder.
 
-    This is mechanism-aware through the required upstream variant-effect and
-    applicability fields. Missing variant-level fields are an error.
-
-    Variant state:
-      predicted_LOF = LOFTEE HC/OS, NMD pLoF, or PriVA splice/UTR LOF.
-      exact_GOF = variant-level exact GoFCards GOF match.
-      uncertain = neither predicted_LOF nor exact_GOF.
+    The upstream hub has already selected condition histories compatible with
+    this variant's mechanism and added every included history whose mechanism
+    is unresolved. BS1 therefore reads ``variant_inheritance`` and
+    ``variant_penetrance`` directly; it must not recreate a gene-wide answer.
 
     Dominant frequency model:
       - dominant only: any variant state remains uncertain-compatible.
@@ -205,20 +199,12 @@ def BS1_criteria(df: pd.DataFrame,
         known pathogenic ClinVar variants in that gene.
 
     Global gates:
-      - no BS1 for non-monogenic/polygenic, non-Mendelian, or incomplete-
-        penetrance rows.
+      - no BS1 for non-monogenic/polygenic, non-Mendelian, or any selected
+        incomplete-penetrance-equivalent history. ``high`` is not incomplete.
       - no BS1 while a relevant HPO disease context still requires scope review.
       - PM2 blocks only the gene pathogenic-frequency comparator.
       - A disease-incidence BS1 assignment takes precedence over PM2.
     '''
-    if any(value is None for value in (non_monogenic, non_mendelian, incomplete_penetrance)):
-        raise ValueError(
-            "non_monogenic, non_mendelian, and incomplete_penetrance are required"
-        )
-    non_monogenic = np.asarray(non_monogenic, dtype=bool)
-    non_mendelian = np.asarray(non_mendelian, dtype=bool)
-    incomplete_penetrance = np.asarray(incomplete_penetrance, dtype=bool)
-
     if pm2_criteria is None:
         pm2_present = np.zeros(len(df), dtype=bool)
     else:
@@ -233,9 +219,7 @@ def BS1_criteria(df: pd.DataFrame,
     x_linked = df['chrom'] == "chrX"
     y_locus = df['chrom'] == "chrY"
 
-    non_monogenic_series = pd.Series(non_monogenic, index=df.index).astype(bool)
-    non_mendelian_series = pd.Series(non_mendelian, index=df.index).astype(bool)
-    incomplete_penetrance_series = pd.Series(incomplete_penetrance, index=df.index).astype(bool)
+    condition_masks = _variant_condition_masks(df)
     scope_review_required = _series_or_empty("HPO_scope_review_required").str.lower().isin(
         {"1", "true", "yes"}
     )
@@ -246,28 +230,36 @@ def BS1_criteria(df: pd.DataFrame,
     max_af_larger_incidence = np.where(common_vars.isna(), df['gnomAD_joint_AF'] > expected_incidence, common_vars)
     logger.info(f"There are {max_af_larger_incidence.sum()} variants having their PAF greater than the expected incidence of the disease")
 
-    mechanism_masks = _variant_mechanism_masks(df)
-    has_recessive_requirement = mechanism_masks["has_recessive_compatible"]
-    dominant_frequency_compatible = mechanism_masks["has_dominant_compatible"]
+    has_recessive_requirement = condition_masks["has_recessive"]
+    dominant_frequency_compatible = condition_masks["has_dominant_like"]
+    dominant_without_recessive = (
+        dominant_frequency_compatible & ~has_recessive_requirement
+    )
 
     valid_model = (
-        np.logical_not(non_monogenic_series)
-        & np.logical_not(non_mendelian_series)
-        & np.logical_not(incomplete_penetrance_series)
+        condition_masks["has_mendelian"]
+        & np.logical_not(condition_masks["has_non_monogenic"])
+        & np.logical_not(condition_masks["has_non_mendelian"])
+        & np.logical_not(condition_masks["has_incomplete_penetrance"])
         & np.logical_not(scope_review_required)
     )
 
     # Dominant BS1 uses carrier allele frequency only when the variant is
     # mechanism-compatible and no recessive LoF history is available to explain
     # healthy heterozygous population carriers.
-    autosomal_dominant = autosomal & dominant_frequency_compatible & max_af_larger_incidence & valid_model
-    x_linked_dominant = x_linked & dominant_frequency_compatible & max_af_larger_incidence & valid_model
+    autosomal_dominant = autosomal & dominant_without_recessive & max_af_larger_incidence & valid_model
+    x_linked_dominant = x_linked & dominant_without_recessive & max_af_larger_incidence & valid_model
 
     # Recessive BS1 uses homozygous/hemizygous frequency, not population carrier
     # count, because heterozygous carriers are expected for AR LoF disease.
     autosomal_recessive = autosomal & has_recessive_requirement & (max_ind_incidence > expected_incidence) & valid_model
     x_linked_recessive = x_linked & has_recessive_requirement & ((df['gnomAD_nhomalt_XX'] + df['gnomAD_nhomalt_XY'])/(df['gnomAD_joint_AN']/2) > expected_incidence) & valid_model
-    y_linked = y_locus & max_af_larger_incidence & valid_model
+    y_linked = (
+        y_locus
+        & condition_masks["has_y_linked"]
+        & max_af_larger_incidence
+        & valid_model
+    )
     greater_than_disease_incidence = autosomal_dominant | autosomal_recessive | x_linked_recessive | x_linked_dominant | y_linked
     logger.info(f"There are {greater_than_disease_incidence.sum()} variants having their PAF greater than the expected incidence of the disease")
     gene_max_patho_af = df["clinvar_patho_gene_max_af"].fillna(0)

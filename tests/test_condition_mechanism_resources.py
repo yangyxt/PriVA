@@ -31,8 +31,12 @@ def test_parse_g2p_preserves_assertion_and_condition_identifiers(
                 "disease mim": "612345",
                 "disease MONDO": "MONDO:0012345",
                 "allelic requirement": "monoallelic_autosomal",
+                "cross cutting modifier": (
+                    "typically de novo; typified by incomplete penetrance"
+                ),
                 "confidence": "definitive",
                 "molecular mechanism": "gain of function",
+                "phenotypes": "HP:0003829; HP:0003828; HP:0001250",
                 "publications": "12345678",
             }
         ]
@@ -44,6 +48,12 @@ def test_parse_g2p_preserves_assertion_and_condition_identifiers(
     assert result["source_condition_id"] == "OMIM:612345"
     assert result["mondo_id"] == "MONDO:0012345"
     assert result["mechanism"] == "GOF"
+    assert result["penetrance_raw"] == (
+        "typically de novo; typified by incomplete penetrance"
+    )
+    assert result["penetrance_hpo_ids"] == "HP:0003829"
+    assert result["normalized_penetrance"] == "incomplete"
+    assert result["phenotype_terms"] == "HP:0003829; HP:0003828; HP:0001250"
 
 
 def test_parse_orphadata_keeps_only_assessed_explicit_germline_mechanisms(
@@ -168,6 +178,10 @@ def test_condition_mechanism_evidence_retains_stable_disease_identity() -> None:
                 "mechanism": "LOF",
                 "patho_mode_raw": "loss of function",
                 "inheritance": "biallelic_autosomal",
+                "penetrance_raw": "typified by incomplete penetrance",
+                "penetrance_hpo_ids": "HP:0003829",
+                "normalized_penetrance": "incomplete",
+                "phenotype_terms": "HP:0003829; HP:0001250",
                 "disease_scope": "mendelian_non_neoplastic",
                 "priva_scope": "include",
                 "scope_review_status": "auto_supported",
@@ -204,6 +218,10 @@ def test_condition_mechanism_evidence_retains_stable_disease_identity() -> None:
     assert g2p["mondo_id"] == "MONDO:0000123"
     assert g2p["inheritance"] == "biallelic_autosomal"
     assert g2p["normalized_mechanisms"] == "LOF"
+    assert g2p["penetrance_raw"] == "typified by incomplete penetrance"
+    assert g2p["penetrance_hpo_ids"] == "HP:0003829"
+    assert g2p["normalized_penetrance"] == "incomplete"
+    assert g2p["phenotype_terms"] == "HP:0003829; HP:0001250"
     assert g2p["priva_scope"] == "include"
     orphadata = result.loc["GENE2"]
     assert orphadata["source_condition_id"] == "ORPHA:456"

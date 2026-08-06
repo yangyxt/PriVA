@@ -36,6 +36,11 @@ from typing import Any, Callable, Iterable
 
 import pandas as pd
 
+from hpo_penetrance import (
+    normalize_penetrance_evidence,
+    recognized_penetrance_hpo_ids,
+)
+
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_CACHE_DIR = PROJECT_ROOT / "data" / "patho_mechanism"
@@ -68,7 +73,10 @@ SOURCES: list[SourceSpec] = [
         url="https://www.ebi.ac.uk/gene2phenotype/api/panel/all/download",
         raw_filename="AllG2P.csv",
         refresh_days=30,
-        source_role="gene-disease molecular mechanism, allelic requirement, confidence, PMIDs",
+        source_role=(
+            "gene-disease molecular mechanism, allelic requirement, "
+            "condition-linked penetrance, confidence, PMIDs"
+        ),
         official_update_note=(
             "G2P was redesigned as a Vue SPA in 2025. The old DDG2P.csv.gz "
             "static download URL is gone. Use the new API endpoint: "
@@ -698,6 +706,10 @@ UNIFIED_COLUMNS = [
     "scope_review_status",
     "disease",
     "inheritance",
+    "penetrance_raw",
+    "penetrance_hpo_ids",
+    "normalized_penetrance",
+    "phenotype_terms",
     "confidence",
     "disease_confidence",
     "pmids",
@@ -728,6 +740,10 @@ def make_unified_row(
     scope_review_status: str = "",
     disease: str = "",
     inheritance: str = "",
+    penetrance_raw: str = "",
+    penetrance_hpo_ids: str = "",
+    normalized_penetrance: str = "",
+    phenotype_terms: str = "",
     confidence: str = "",
     disease_confidence: str = "",
     pmids: str = "",
@@ -755,6 +771,10 @@ def make_unified_row(
         "scope_review_status": scope_review_status,
         "disease": disease,
         "inheritance": inheritance,
+        "penetrance_raw": penetrance_raw,
+        "penetrance_hpo_ids": penetrance_hpo_ids,
+        "normalized_penetrance": normalized_penetrance,
+        "phenotype_terms": phenotype_terms,
         "confidence": confidence,
         "disease_confidence": disease_confidence,
         "pmids": pmids,
@@ -793,6 +813,12 @@ def parse_g2p(path: Path) -> pd.DataFrame:
     c_consequence = resolve_column(df, "molecular mechanism", "mutation consequence", "mutation_consequence")
     c_confidence = resolve_column(df, "confidence", "confidence category", "g2p relation label")
     c_inheritance = resolve_column(df, "allelic requirement", "allelic_requirement")
+    c_penetrance_modifier = resolve_column(
+        df,
+        "cross cutting modifier",
+        "cross_cutting_modifier",
+    )
+    c_phenotypes = resolve_column(df, "phenotypes", "phenotype_terms")
     c_pmids = resolve_column(df, "pmids", "publications")
     c_g2p_id = resolve_column(df, "g2p id", "g2p_id")
     c_disease_mim = resolve_column(df, "disease mim", "disease_mim")
@@ -804,6 +830,9 @@ def parse_g2p(path: Path) -> pd.DataFrame:
             continue
         consequence = _val(r, c_consequence)
         confidence = _val(r, c_confidence)
+        penetrance_raw = _val(r, c_penetrance_modifier)
+        phenotype_terms = _val(r, c_phenotypes)
+        penetrance_hpo_ids = recognized_penetrance_hpo_ids(phenotype_terms)
         rows.append(
             make_unified_row(
                 gene_symbol=gene,
@@ -818,6 +847,13 @@ def parse_g2p(path: Path) -> pd.DataFrame:
                 mondo_id=_val(r, c_disease_mondo),
                 disease=_val(r, c_disease),
                 inheritance=_val(r, c_inheritance),
+                penetrance_raw=penetrance_raw,
+                penetrance_hpo_ids=";".join(penetrance_hpo_ids),
+                normalized_penetrance=normalize_penetrance_evidence(
+                    hpo_ids=penetrance_hpo_ids,
+                    raw_values=penetrance_raw,
+                ),
+                phenotype_terms=phenotype_terms,
                 confidence=mechanism_confidence_from_text(confidence),
                 disease_confidence=confidence,
                 pmids=_val(r, c_pmids),
@@ -1229,6 +1265,9 @@ EVIDENCE_COLUMNS = [
     "scope_review_status",
     "disease_label",
     "inheritance",
+    "penetrance_raw",
+    "penetrance_hpo_ids",
+    "normalized_penetrance",
     "patho_mode_raw",
     "normalized_mechanisms",
     "mechanism_confidence",
@@ -1276,6 +1315,9 @@ def to_gene_pathogenic_mechanism_evidence(unified: pd.DataFrame) -> pd.DataFrame
             "scope_review_status": unified.get("scope_review_status", ""),
             "disease_label": unified.get("disease", ""),
             "inheritance": unified.get("inheritance", ""),
+            "penetrance_raw": unified.get("penetrance_raw", ""),
+            "penetrance_hpo_ids": unified.get("penetrance_hpo_ids", ""),
+            "normalized_penetrance": unified.get("normalized_penetrance", ""),
             "patho_mode_raw": unified.get("patho_mode_raw", ""),
             "normalized_mechanisms": unified.get("mechanism", "").astype(str).str.replace("|", ";", regex=False),
             "mechanism_confidence": unified.get("confidence", ""),
@@ -1283,7 +1325,7 @@ def to_gene_pathogenic_mechanism_evidence(unified: pd.DataFrame) -> pd.DataFrame
             "pmids": unified.get("pmids", ""),
             "evidence_url": unified.get("source", "").astype(str).map(source_url_for_evidence),
             "panel_or_submitter": "",
-            "phenotype_terms": "",
+            "phenotype_terms": unified.get("phenotype_terms", ""),
             "notes": unified.get("notes", ""),
         }
     )

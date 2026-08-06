@@ -52,8 +52,9 @@ STEP 1  the variant's own mechanism, as three scores
 
     2   exclusively established -- an exact curated allele match.
         When any mechanism scores 2 the other two are forced to 0.
-    1   plausible -- supported by consequence or prediction only.
-    0   confidently not this mechanism.
+    1   plausible -- either supported by prediction, or not excluded when no
+        mechanism-specific variant evidence exists.
+    0   excluded by a stronger, exclusive variant call.
 
 The scale grades the QUERY VARIANT. It is not a statement about how well
 attested a condition's mechanism is; that is a separate thing, recorded in
@@ -88,7 +89,9 @@ the cache as assertion_basis.
             PRIVA_SPLICE_LOF    splicing_lof is true, frame not shifted
             PRIVA_5UTR_LOF      5UTR_lof is true
 
-        score 0 is reserved for no loss-of-function evidence at all.
+        With no mechanism-specific evidence, LOF, GOF and DN all score 1. The
+        three parallel hypotheses are the uncertainty representation; no
+        variant-side UNRESOLVED mechanism is invented.
 
     THE PRECEDENCE, HIGHEST FIRST
         1. nonsense-mediated decay        effect = "exact_known_LOF"
@@ -102,7 +105,7 @@ the cache as assertion_basis.
            curator's verdict on this exact allele.
         3. other predicted loss           effect = "predicted_LOF_high_confidence"
            2 if LOFTEE rescues it, otherwise 1.
-        4. nothing                        effect = "uncertain"
+        4. nothing                        effect = "uncertain"; LOF=GOF=DN=1
 
     After an exact match these are kept in
     variant_effect_suppressed_evidence but cannot create a competing LOF
@@ -112,27 +115,32 @@ STEP 2  the gene's condition histories, germline disease only
 =============================================================
 
 Read from the HPO condition cache built by
-build_hpo_condition_mechanism_cache.py. A history is admissible only when
+build_hpo_condition_mechanism_cache.py. The builder physically removes every
+condition whose final merged scope decision is ``exclude`` and records a
+per-gene exclusion count. Of the retained conditions, a history is admissible
+only when
 
     condition.priva_scope.decision == "include"
 
-enforced in condition_cache_context. Everything else -- "review",
-"exclude", or unscoped -- is audit only and can never influence a criterion.
+enforced in condition_cache_context. Retained ``review`` or unscoped conditions
+are audit only and can never influence a criterion.
 
 STEP 3  match by mechanism, and carry three things back
 =======================================================
 
 select_condition_histories_for_variant filters histories whose curated or
-deduced mechanism is incompatible with the variant. A condition with no usable
-mechanism assertion is retained as ``UNRESOLVED``, because absence of an
-assertion is not evidence that the condition is irrelevant:
+deduced mechanism is incompatible with the variant. A variant with no LOF,
+GOF, or dominant-negative evidence cannot prove any of those histories
+incompatible, so all three remain plausible. A condition with no usable
+mechanism assertion is retained as ``UNRESOLVED``, because absence of a
+condition-mechanism assertion is not evidence that the condition is irrelevant:
 
     variant_effect                      histories kept
     ---------------------------------   ----------------------------
     exact_known_GOF                     GOF + UNRESOLVED
     exact_known_DOMINANT_NEGATIVE       DOMINANT_NEGATIVE + UNRESOLVED
     predicted_LOF_high_confidence       LOF + UNRESOLVED
-    uncertain                           all known + UNRESOLVED
+    uncertain                           LOF + GOF + DOMINANT_NEGATIVE + UNRESOLVED
 
 Each surviving history is reduced to exactly this, and nothing else travels:
 
@@ -141,32 +149,36 @@ Each surviving history is reduced to exactly this, and nothing else travels:
       "condition":   the OMIM / ORPHA / MONDO identifier,
       "inheritance": see the vocabulary below,
       "x_linked":    True | False,
-      "penetrance":  "complete" | "incomplete" | "unknown",
+      "penetrance":  "complete" | "incomplete" | "",
     }
 
 THE INHERITANCE VOCABULARY, VALUE BY VALUE
 ==========================================
 
-Two source vocabularies describe one fact. G2P states an allelic
-requirement; HPO states an inheritance mode. normalize_inheritance folds
-both, and accepts an HPO mode as either the cache's snake_case key or the
-human-readable label that condition_cache_context substitutes.
+Three source vocabularies contribute different facts. G2P states an allelic
+requirement, HPO states an inheritance mode, and ClinGen HI=3 establishes a
+condition-linked loss-of-function dosage mechanism. ClinGen supplies an
+autosomal monoallelic requirement. On X, condition-linked G2P/HPO inheritance
+wins; an HI=3 condition with neither defaults to X-linked dominant. HI=3 on Y
+remains Y-linked.
 
     delivered value   source values that fold to it
     ---------------   ---------------------------------------------------
     "recessive"       biallelic_autosomal          (G2P)
-                      monoallelic_X_hemizygous     (G2P)
-                      monoallelic_X                (G2P)
                       autosomal_recessive          (HPO)
-                      x_linked_recessive           (HPO)
                       pseudoautosomal_recessive    (HPO)
-                      x_linked                     (HPO, bare -- read as
-                                                    X-linked recessive)
-    "dominant"        monoallelic_autosomal        (G2P)
-                      monoallelic_X_heterozygous   (G2P)
+    "dominant"        monoallelic_autosomal        (G2P or autosomal HI=3)
                       autosomal_dominant           (HPO)
-                      x_linked_dominant            (HPO)
                       autosomal_dominant_maternal_imprinting  (HPO)
+    "x_linked_recessive"
+                      x_linked_recessive           (HPO)
+    "x_linked_dominant"
+                      monoallelic_X_heterozygous   (G2P)
+                      x_linked_dominant            (HPO)
+    "x_linked_unspecified"
+                      monoallelic_X or
+                      monoallelic_X_hemizygous     (G2P observation)
+                      x_linked                     (HPO, unqualified)
     "y_linked"        monoallelic_Y_hemizygous (G2P), y_linked (HPO)
     "mitochondrial"   mitochondrial (both)
     "non_mendelian"   \
@@ -175,14 +187,19 @@ human-readable label that condition_cache_context substitutes.
     "oligogenic"      /
     ""                nothing stated -- 17.3% of assertions
 
-    x_linked is returned SEPARATELY, true when the requirement starts
-    monoallelic_X or any mode starts x_linked. Folding it into the value
-    would erase it, and a hemizygous male affected by one allele is still
-    the recessive pattern.
+    x_linked is also returned as a compatibility flag. Hemizygosity is not an
+    inheritance value; it remains an observation used locally by sex-aware
+    criteria.
 
     Downstream reading of the values:
-        DOMINANT_LIKE_INHERITANCE = {dominant, y_linked, mitochondrial}
-            one allele in a carrier is enough
+        DOMINANT_LIKE_INHERITANCE = {dominant,
+                                     x_linked_dominant,
+                                     y_linked, mitochondrial}
+            one allele in the asserted carrier state is enough
+        x_linked_recessive
+            explicit X-linked recessive history; criteria use XY observations
+        x_linked_unspecified
+            no genotype-based benign shortcut is permitted
         NON_MENDELIAN_INHERITANCE = {non_mendelian, polygenic, digenic,
                                      oligogenic}
             germline but not single-gene. Delivered rather than discarded
@@ -192,14 +209,13 @@ human-readable label that condition_cache_context substitutes.
 THE PENETRANCE VOCABULARY
 =========================
 
-    "incomplete"   literal incomplete/age-dependent/moderate/low penetrance,
-                   delayed or variable onset, or variable expressivity. These
-                   remain distinct HPO assertions in the cache but are
-                   equivalent for judging an apparently unaffected carrier.
-    "complete"     HP:0034950
-    "high"         HP:4000158; deliberately not incomplete
-    "unknown"      nothing stated -- 98.9% of assertions, because HPO
-                   rarely annotates penetrance
+    "incomplete"   literal incomplete/moderate/low penetrance, or late onset.
+                   Other onset terms, age-dependent penetrance, and variable
+                   expressivity remain source context but do not block an
+                   apparently unaffected carrier observation.
+    "complete"     explicit complete or high penetrance
+    ""             nothing usable stated. No third ``unknown`` category is
+                   emitted.
 
     Sex-limited expression (HP:0001470) and slowly progressive disease
     (HP:0003677) are deliberately excluded: the former is not penetrance and
@@ -222,19 +238,20 @@ makes the selected result auditable:
     matched_and_unresolved_history  both kinds contributed
     mechanism_mismatch              known histories existed, but all were
                                     incompatible with this variant
-    condition_scope_blocked         the gene had conditions, but none passed
-                                    the inherited-disease scope gate
+    condition_scope_blocked         retained review conditions or a build-time
+                                    exclusion tombstone blocks fallback
     gene_constraint                 no condition record existed for the gene
 
 The last fallback supplies inheritance only and never a mechanism or
 penetrance. It is not used after a known mechanism mismatch and cannot revive
-a review/excluded condition.
+a retained review condition or a build-pruned exclusion.
 
 STEP 4  what lands on the row
 =============================
 
     var_plausible_patho_mechs        "<inheritance>_<MECHANISM>" tags,
-                                     e.g. "dominant_GOF;recessive_LOF"
+                                     e.g. "dominant_GOF;recessive_LOF" or
+                                     "x_linked_recessive_LOF"
                                      (DOMINANT_NEGATIVE abbreviates to DN)
     variant_effect                   see step 1
     variant_lof_score                0 | 1 | 2
@@ -244,9 +261,9 @@ STEP 4  what lands on the row
     variant_exact_mechanisms         ";"-joined mechanisms scoring 2
     variant_mechanism_applicable     tags whose mechanism is ESTABLISHED
                                      for this variant
-    variant_mechanism_uncertain      tags whose mechanism is only POSSIBLE
-                                     because the variant effect is
-                                     unresolved
+    variant_mechanism_uncertain      tags whose mechanism is only POSSIBLE;
+                                     includes all matched histories when the
+                                     variant has no mechanism-specific evidence
     variant_condition_ids            ";"-joined condition identifiers
     variant_condition_histories      the same facts kept TOGETHER, one
                                      entry per history:
@@ -256,11 +273,11 @@ STEP 4  what lands on the row
         e.g. for a truncating variant in ABCB4, a gene with both a dominant
         and a recessive condition:
 
-        OMIM:600803|LOF|dominant|unknown;OMIM:602347|LOF|recessive|unknown
+        OMIM:600803|LOF|dominant|;OMIM:602347|LOF|recessive|
 
         and for ATP1A2, where a penetrance is actually recorded:
 
-        OMIM:602481|LOF|dominant|incomplete;OMIM:619602|LOF|recessive|unknown
+        OMIM:602481|LOF|dominant|incomplete;OMIM:619602|LOF|recessive|
 
         This column exists because the three flat lists below are each
         de-duplicated separately, so they can have different lengths and a
@@ -271,8 +288,8 @@ STEP 4  what lands on the row
     variant_inheritance             ";"-joined inheritance values
     variant_inheritance_basis       one of the bases documented above
     variant_x_linked                "true" | "false"
-    variant_penetrance              ";"-joined complete | high | incomplete,
-                                    or "unknown". Stated for
+    variant_penetrance              ";"-joined complete | incomplete, or empty.
+                                    Stated for
                                     only 1.0% of assertions, because HPO
                                     rarely annotates penetrance at all.
 

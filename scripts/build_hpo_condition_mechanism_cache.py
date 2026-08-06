@@ -75,10 +75,12 @@ inference, so everything sourced runs before anything deduced.
 
     4. attach_clingen_haploinsufficiency(genes, clingen_dosage)
        ------------------------------------------------------------------
-       ClinGen's dosage curation. Reads three columns of the configured
-       gene_dosage_sensitivity TSV (the assembly coordinate is not read):
+       ClinGen's dosage curation. Reads four columns of the configured
+       gene_dosage_sensitivity TSV (only the chromosome is read from the
+       assembly coordinate):
 
          "#Gene Symbol"
+         "Genomic Location"
          "Haploinsufficiency Score"
          "Haploinsufficiency Disease ID"     <- a MONDO term, 1,255 of 1,257
 
@@ -95,9 +97,14 @@ inference, so everything sourced runs before anything deduced.
            0      NO      No evidence available
           30      NO      Gene associated with autosomal recessive
                           phenotype  -- ClinGen saying haploinsufficiency
-                          does NOT apply; it corroborates step 5, it is
+                          does NOT apply; it corroborates step 6, it is
                           not itself a mechanism
           40      NO      Dosage sensitivity unlikely
+
+       Score 3 supplies ``monoallelic_autosomal`` on chromosomes 1-22. On X,
+       condition-linked G2P/HPO inheritance takes precedence; when neither
+       exists the dosage assertion supplies X-linked dominant. On Y it supplies
+       Y-linked inheritance. Lower scores establish only weaker LOF evidence.
 
        0 and 40 are excluded because they assert the ABSENCE of the
        mechanism rather than any degree of it. Writes mechanism="LOF",
@@ -109,12 +116,13 @@ inference, so everything sourced runs before anything deduced.
        Exact curated gain-of-function alleles, nested under the condition
        their ClinVar record names. Writes assertion_basis="curated".
 
-    6. deduce_mechanisms_from_inheritance(genes)             <- LAST
+    6. deduce_mechanisms_from_inheritance(genes)    <- LAST ENRICHMENT
        ------------------------------------------------------------------
        Only for a condition with priva_scope.decision == "include" that
        still has NO mechanism from any curated source above.
 
-         inheritance == "recessive"  ->  mechanism = "LOF"
+         inheritance == "recessive" or "x_linked_recessive"
+                                      -> mechanism = "LOF"
                                          assertion_basis = "deduced"
          anything else               ->  left unresolved
 
@@ -122,6 +130,18 @@ inference, so everything sourced runs before anything deduced.
        matching, not an established molecular-mechanism assertion. In
        particular, PVS1 admits only assertion_basis="curated", so this
        deduction can never open PVS1's gene-level LOF-history gate.
+
+    7. apply_condition_scope_gate(genes)                     <- FINAL GATE
+       ------------------------------------------------------------------
+       Remove only conditions whose final merged
+       ``priva_scope.decision == "exclude"``. This happens after every
+       enrichment so source-specific evidence cannot bypass the condition's
+       final identity and scope. ``review`` and unscoped records remain in the
+       cache for audit, but runtime does not admit them to criteria.
+
+       Each gene records ``scope_gate.excluded_condition_count``. If pruning
+       removes its only condition, runtime reads that tombstone and blocks the
+       gene-constraint fallback instead of treating the gene as evidence-free.
 
 EVERY MECHANISM SAYS HOW IT WAS ESTABLISHED
 ===========================================
@@ -131,19 +151,19 @@ molecular-mechanism assertion from PriVA's recessive-to-LOF inference:
 
     assertion_basis   "curated" | "deduced"
 
-The deduced value is useful for matching a likely LOF variant to a recessive
-condition, but it is not promoted to evidence that LOF is an established
-disease mechanism. PVS1 therefore ignores it. A condition without either a
-curated mechanism or a recessive inheritance remains unresolved for the
-runtime hub to carry as condition history.
+The deduced value is useful for matching a likely LOF variant to a biallelic or
+explicitly X-linked-recessive condition, but it is not promoted to evidence that LOF
+is an established disease mechanism. PVS1 therefore ignores it. A condition
+without either a curated mechanism or one of those inheritance states remains
+unresolved for the runtime hub to carry as condition history.
 
-    source                        basis      count on current data
-    ---------------------------   --------   ---------------------
-    G2P_DDG2P                     curated    2278
-    Orphadata                     curated     933
-    ClinGen_haploinsufficiency    curated     330
-    GoFCards_exact+ClinVar_VCV    curated     248
-    deduced_from_inheritance      deduced    2342
+    source                        basis      role
+    ---------------------------   --------   -------------------------------
+    G2P_DDG2P                     curated    condition mechanism
+    Orphadata                     curated    condition mechanism
+    ClinGen_haploinsufficiency    curated    condition-specific dosage LOF
+    GoFCards_exact+ClinVar_VCV    curated    exact GOF condition link
+    deduced_from_inheritance      deduced    recessive working hypothesis
 
 Every one of these is admitted by the runtime reader --
 CONDITION_MECHANISM_SOURCES in gene_mechanism_hub.py. Adding a source here
@@ -154,10 +174,11 @@ two lists must be changed together.
 WHAT THE BUILD PRODUCES
 =======================
 
-    conditions                            11,046
-    conditions with a mechanism            5,433
-    conditions with an inheritance          7,156
-    condition-variant links                  248
+    conditions retained                    10,924
+    explicit exclusions removed               122
+    conditions with a mechanism             5,381
+    conditions with an inheritance           7,102
+    condition-variant links                   247
     mechanisms                    LOF | GOF | DOMINANT_NEGATIVE
 """
 
@@ -177,15 +198,18 @@ from pathlib import Path
 from typing import Any, Iterator, TextIO
 
 from clinvar_vcv import open_text
-from hpo_penetrance import HPO_PENETRANCE_STATUS_BY_TERM
+from hpo_penetrance import (
+    HPO_PENETRANCE_STATUS_BY_TERM,
+    normalize_penetrance_values,
+)
 
 
-SCHEMA_VERSION = "1.0"
+SCHEMA_VERSION = "1.2"
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 # ClinGen's dosage curation. Deliberately the GRCh38 copy: the file is a
-# per-gene curation and the two assemblies differ only in the coordinate
-# column, which this build does not read.
+# per-gene curation and only the chromosome token is read from its coordinate,
+# which is stable between assemblies for the supported genes.
 DEFAULT_CLINGEN_DOSAGE = (
     PROJECT_ROOT / "data" / "clingen" / "gene_dosage_sensitivity.hg38.tsv"
 )
@@ -255,6 +279,9 @@ MECHANISM_REQUIRED_COLUMNS = {
     "scope_review_status",
     "disease_label",
     "inheritance",
+    "penetrance_raw",
+    "penetrance_hpo_ids",
+    "normalized_penetrance",
     "patho_mode_raw",
     "normalized_mechanisms",
     "mechanism_confidence",
@@ -365,6 +392,70 @@ def _evidence_record(row: dict[str, str]) -> dict[str, str]:
         "evidence": _clean(row.get("evidence")) or "-",
         "reference": _clean(row.get("reference")) or "-",
     }
+
+
+PENETRANCE_ASSERTION_KEYS = {
+    "source",
+    "source_record_id",
+    "condition_identifiers",
+    "raw_values",
+    "normalized_value",
+    "hpo_ids",
+    "frequency",
+    "evidence",
+    "reference",
+    "evidence_url",
+}
+
+
+def _hpo_penetrance_evidence_record(
+    row: dict[str, str],
+    normalized_value: str,
+) -> dict[str, Any]:
+    """Return the source-neutral penetrance assertion stored in schema 1.2."""
+    hpo_id = _clean(row.get("hpo_id")).upper()
+    condition_identifiers = list(
+        dict.fromkeys(
+            identifier
+            for identifier in (
+                _clean(row.get("disease_id")).upper(),
+                _clean(row.get("mondo_id")).upper(),
+            )
+            if identifier
+        )
+    )
+    source_record_id = "|".join(
+        value
+        for value in (
+            _clean(row.get("disease_id")).upper(),
+            hpo_id,
+            _clean(row.get("reference")),
+        )
+        if value and value != "-"
+    )
+    return {
+        "source": "HPO",
+        "source_record_id": source_record_id,
+        "condition_identifiers": condition_identifiers,
+        "raw_values": [hpo_id] if hpo_id else [],
+        "normalized_value": normalized_value,
+        "hpo_ids": [hpo_id] if hpo_id else [],
+        "frequency": _clean(row.get("frequency")) or "-",
+        "evidence": _clean(row.get("evidence")) or "-",
+        "reference": _clean(row.get("reference")) or "-",
+        "evidence_url": "",
+    }
+
+
+def _penetrance_evidence_key(evidence: dict[str, Any]) -> tuple[str, ...]:
+    return (
+        _clean(evidence.get("source")),
+        _clean(evidence.get("source_record_id")),
+        ";".join(evidence.get("condition_identifiers", []) or []),
+        ";".join(evidence.get("raw_values", []) or []),
+        _clean(evidence.get("normalized_value")),
+        _clean(evidence.get("reference")),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -534,8 +625,12 @@ def _append_hpo_axis_assertion(
     if normalized_value not in condition[axis][value_key]:
         condition[axis][value_key].append(normalized_value)
 
-    evidence = _evidence_record(row)
-    evidence_key = tuple(evidence.values())
+    if axis == "penetrance":
+        evidence = _hpo_penetrance_evidence_record(row, normalized_value)
+        evidence_key = _penetrance_evidence_key(evidence)
+    else:
+        evidence = _evidence_record(row)
+        evidence_key = tuple(evidence.values())
     if evidence_key not in condition["_assertion_keys"][axis]:
         condition["_assertion_keys"][axis].add(evidence_key)
         condition[axis]["assertions"].append(evidence)
@@ -577,7 +672,11 @@ def build_hpo_gene_condition_frame(
             {
                 "summary": {},
                 "conditions": {},
-                "unmapped_evidence": {"mechanisms": [], "variants": {}},
+                "unmapped_evidence": {
+                    "mechanisms": [],
+                    "penetrance": [],
+                    "variants": {},
+                },
             },
         )
         condition = gene["conditions"].setdefault(
@@ -635,14 +734,19 @@ def build_hpo_gene_condition_frame(
                 condition[axis][values_key] = sorted(
                     condition[axis][values_key]
                 )
-                condition[axis]["assertions"].sort(
-                    key=lambda item: (
-                        item["hpo_id"],
-                        item["reference"],
-                        item["evidence"],
-                        item["frequency"],
+                if axis == "penetrance":
+                    condition[axis]["assertions"].sort(
+                        key=_penetrance_evidence_key
                     )
-                )
+                else:
+                    condition[axis]["assertions"].sort(
+                        key=lambda item: (
+                            item["hpo_id"],
+                            item["reference"],
+                            item["evidence"],
+                            item["frequency"],
+                        )
+                    )
         gene["summary"] = _summarize_hpo_gene(gene)
         ordered_genes[symbol] = gene
     return ordered_genes
@@ -658,7 +762,11 @@ def _empty_gene() -> dict[str, Any]:
     return {
         "summary": {},
         "conditions": {},
-        "unmapped_evidence": {"mechanisms": [], "variants": {}},
+        "unmapped_evidence": {
+            "mechanisms": [],
+            "penetrance": [],
+            "variants": {},
+        },
     }
 
 
@@ -700,12 +808,8 @@ def _condition_alias_index(
     }
 
 
-def _mechanism_evidence_record(
-    row: dict[str, str],
-    mechanism: str,
-) -> dict[str, Any]:
-    """Retain mechanism provenance without copying unused source columns."""
-    identifiers = list(
+def _condition_identifiers_from_row(row: dict[str, str]) -> list[str]:
+    return list(
         dict.fromkeys(
             identifier
             for identifier in (
@@ -715,10 +819,17 @@ def _mechanism_evidence_record(
             if identifier
         )
     )
+
+
+def _mechanism_evidence_record(
+    row: dict[str, str],
+    mechanism: str,
+) -> dict[str, Any]:
+    """Retain mechanism provenance without copying unused source columns."""
     return {
         "source": _clean(row.get("source")),
         "source_record_id": _clean(row.get("source_record_id")),
-        "condition_identifiers": identifiers,
+        "condition_identifiers": _condition_identifiers_from_row(row),
         "condition_label": _clean(row.get("disease_label")),
         "mechanism": mechanism,
         "mechanism_raw": _clean(row.get("patho_mode_raw")),
@@ -736,6 +847,61 @@ def _mechanism_evidence_record(
         "pmids": _split_multi(row.get("pmids")),
         "evidence_url": _clean(row.get("evidence_url")),
     }
+
+
+def _source_penetrance_evidence_record(
+    row: dict[str, str],
+) -> dict[str, Any] | None:
+    """Translate one prepared source row to the stable condition-axis schema."""
+    raw_status = _clean(row.get("normalized_penetrance")).lower()
+    if raw_status and raw_status not in {"complete", "incomplete"}:
+        raise ValueError(
+            "Unsupported normalized_penetrance "
+            f"{raw_status!r} for {_clean(row.get('source_record_id')) or '<unknown>'}"
+        )
+    normalized_value = normalize_penetrance_values([raw_status])
+    if not normalized_value:
+        return None
+
+    hpo_ids = [
+        value.upper()
+        for value in _split_multi(row.get("penetrance_hpo_ids"))
+        if value.upper().startswith("HP:")
+    ]
+    raw_values = list(
+        dict.fromkeys(
+            [*_split_multi(row.get("penetrance_raw")), *hpo_ids]
+        )
+    )
+    return {
+        "source": _clean(row.get("source")),
+        "source_record_id": _clean(row.get("source_record_id")),
+        "condition_identifiers": _condition_identifiers_from_row(row),
+        "raw_values": raw_values,
+        "normalized_value": normalized_value,
+        "hpo_ids": hpo_ids,
+        "frequency": "",
+        "evidence": "",
+        "reference": "",
+        "evidence_url": _clean(row.get("evidence_url")),
+    }
+
+
+def _attach_penetrance_to_condition(
+    condition: dict[str, Any],
+    evidence: dict[str, Any],
+) -> None:
+    block = condition.setdefault("penetrance", {"statuses": [], "assertions": []})
+    status = _clean(evidence.get("normalized_value")).lower()
+    if status and status not in block.setdefault("statuses", []):
+        block["statuses"].append(status)
+    existing = {
+        _penetrance_evidence_key(item)
+        for item in block.setdefault("assertions", [])
+        if isinstance(item, dict)
+    }
+    if _penetrance_evidence_key(evidence) not in existing:
+        block["assertions"].append(evidence)
 
 
 def _mechanism_evidence_key(evidence: dict[str, Any]) -> tuple[str, ...]:
@@ -778,6 +944,47 @@ CLINGEN_HAPLOINSUFFICIENCY_SCORES = {
 }
 
 
+def _condition_has_explicit_inheritance(condition: dict[str, Any]) -> bool:
+    if (condition.get("inheritance") or {}).get("modes"):
+        return True
+    return any(
+        _clean(evidence.get("allelic_requirement"))
+        for block in (condition.get("pathogenic_mechanisms") or {}).values()
+        if isinstance(block, dict)
+        for evidence in block.get("evidence", []) or []
+        if isinstance(evidence, dict)
+    )
+
+
+def _clingen_hi3_allelic_requirement(
+    row: dict[str, str],
+    condition: dict[str, Any],
+) -> str:
+    """Translate HI=3 with chromosome and condition-aware precedence.
+
+    Autosomal HI=3 is an independent monoallelic LOF history even when HPO also
+    records a recessive condition.  On X, exact condition-linked G2P/HPO
+    inheritance takes precedence; only a condition with no such assertion gets
+    the ClinGen dosage default of X-linked dominant.  A Y-linked dosage record
+    remains Y-linked.
+    """
+    if _clean(row.get("Haploinsufficiency Score")) != "3":
+        return ""
+
+    chromosome = _clean(row.get("Genomic Location")).split(":", 1)[0].lower()
+    if chromosome.startswith("chr"):
+        chromosome = chromosome[3:]
+    if chromosome.isdigit() and 1 <= int(chromosome) <= 22:
+        return "monoallelic_autosomal"
+    if chromosome == "x":
+        if _condition_has_explicit_inheritance(condition):
+            return ""
+        return "monoallelic_X_heterozygous"
+    if chromosome == "y":
+        return "monoallelic_Y_hemizygous"
+    return ""
+
+
 def attach_clingen_haploinsufficiency(
     genes: dict[str, dict[str, Any]],
     clingen_dosage: str | Path,
@@ -796,6 +1003,7 @@ def attach_clingen_haploinsufficiency(
     stats: Counter[str] = Counter()
     required = {
         "#Gene Symbol",
+        "Genomic Location",
         "Haploinsufficiency Score",
         "Haploinsufficiency Description",
         "Haploinsufficiency Disease ID",
@@ -821,6 +1029,7 @@ def attach_clingen_haploinsufficiency(
             stats["disease_absent_from_the_gene"] += 1
             continue
         for condition in matched:
+            allelic_requirement = _clingen_hi3_allelic_requirement(row, condition)
             had_lof = "LOF" in (condition.get("pathogenic_mechanisms") or {})
             _attach_mechanism_to_condition(
                 condition,
@@ -831,7 +1040,7 @@ def attach_clingen_haploinsufficiency(
                     "condition_label": _clean(row.get("Haploinsufficiency Description")),
                     "mechanism": "LOF",
                     "mechanism_raw": _clean(row.get("Haploinsufficiency Description")),
-                    "allelic_requirement": "",
+                    "allelic_requirement": allelic_requirement,
                     "mechanism_confidence": strength,
                     "disease_confidence": "",
                     "assertion_basis": "curated",
@@ -845,6 +1054,13 @@ def attach_clingen_haploinsufficiency(
                 },
             )
             stats["conditions_matched"] += 1
+            if score == "3":
+                stats[
+                    "hi3_" + (
+                        allelic_requirement
+                        or "allelic_state_deferred_to_condition_evidence"
+                    )
+                ] += 1
             stats["conditions_that_already_had_lof" if had_lof
                   else "conditions_that_gained_lof"] += 1
     return dict(stats)
@@ -853,14 +1069,14 @@ def attach_clingen_haploinsufficiency(
 def deduce_mechanisms_from_inheritance(
     genes: dict[str, dict[str, Any]],
 ) -> dict[str, int]:
-    """Infer LOF for an included recessive condition with no stated mechanism.
+    """Infer LOF for an included biallelic or X-linked-recessive condition.
 
-    Recessive inheritance makes loss of function a strong working hypothesis
-    for matching a query variant to the condition. The record is nevertheless
-    marked ``assertion_basis: deduced`` rather than ``curated``. This distinction
-    is functional: PVS1's gene-level LOF-history gate accepts only curated
-    assertions, while the variant-condition mechanism selector may use this
-    inference.
+    Biallelic or explicitly X-linked-recessive inheritance makes loss of function a
+    strong working hypothesis for matching a query variant to the condition.
+    The record is nevertheless marked ``assertion_basis: deduced`` rather than
+    ``curated``. This distinction is functional: PVS1's gene-level LOF-history
+    gate accepts only curated assertions, while the variant-condition mechanism
+    selector may use this inference.
 
     This runs after every curated source and never overwrites one. Dominant,
     mitochondrial, Y-linked, non-Mendelian, and inheritance-unknown conditions
@@ -879,7 +1095,7 @@ def deduce_mechanisms_from_inheritance(
             inheritance, _x_linked = normalize_inheritance(
                 "", (condition.get("inheritance") or {}).get("modes") or []
             )
-            if inheritance != "recessive":
+            if inheritance not in {"recessive", "x_linked_recessive"}:
                 stats[f"left_unresolved_{inheritance or 'no_inheritance'}"] += 1
                 continue
             _attach_mechanism_to_condition(
@@ -890,7 +1106,9 @@ def deduce_mechanisms_from_inheritance(
                     "condition_identifiers": [condition_key],
                     "condition_label": _clean(condition.get("label")),
                     "mechanism": "LOF",
-                    "mechanism_raw": "recessive inheritance implies loss of function",
+                    "mechanism_raw": (
+                        f"{inheritance} inheritance implies loss of function"
+                    ),
                     "allelic_requirement": "",
                     "mechanism_confidence": "",
                     "disease_confidence": "",
@@ -900,7 +1118,7 @@ def deduce_mechanisms_from_inheritance(
                     "evidence_url": "",
                 },
             )
-            stats["recessive_conditions_given_lof"] += 1
+            stats[f"{inheritance}_conditions_given_lof"] += 1
     return dict(stats)
 
 
@@ -933,6 +1151,9 @@ def _refresh_gene_summary(gene: dict[str, Any]) -> None:
             ),
             "unmapped_mechanism_count": sum(unmapped_counts.values()),
             "unmapped_mechanism_counts": dict(sorted(unmapped_counts.items())),
+            "unmapped_penetrance_count": len(
+                gene["unmapped_evidence"].get("penetrance", [])
+            ),
             "unmapped_variant_count": len(
                 gene["unmapped_evidence"]["variants"]
             ),
@@ -948,14 +1169,26 @@ def attach_condition_mechanisms(
     genes: dict[str, dict[str, Any]],
     mechanism_evidence: str | Path,
 ) -> dict[str, int]:
-    """Attach G2P/Orphadata mechanisms through exact condition identifiers.
+    """Attach G2P/Orphadata condition evidence through exact identifiers.
 
     Returns build statistics so installation validation can distinguish an
     unexpectedly empty source from a legitimate set of unmatched histories.
+    Penetrance is attached independently of molecular mechanism, so a G2P row
+    whose mechanism is still undetermined can still contribute a curated,
+    condition-linked penetrance assertion.
     """
     aliases_by_gene = _condition_alias_index(genes)
-    stats = {"source_rows": 0, "mechanism_records": 0, "matched": 0, "unmapped": 0}
-    seen_unmapped: dict[str, set[tuple[str, ...]]] = defaultdict(set)
+    stats = {
+        "source_rows": 0,
+        "mechanism_records": 0,
+        "mechanisms_matched": 0,
+        "mechanisms_unmapped": 0,
+        "penetrance_records": 0,
+        "penetrance_matched": 0,
+        "penetrance_unmapped": 0,
+    }
+    seen_unmapped_mechanisms: dict[str, set[tuple[str, ...]]] = defaultdict(set)
+    seen_unmapped_penetrance: dict[str, set[tuple[str, ...]]] = defaultdict(set)
 
     for row in _iter_tsv_rows(mechanism_evidence, MECHANISM_REQUIRED_COLUMNS):
         if _clean(row.get("source")) not in CONDITION_MECHANISM_SOURCES:
@@ -965,35 +1198,56 @@ def attach_condition_mechanisms(
         if not symbol:
             continue
         gene = genes.setdefault(symbol, _empty_gene())
+        identifiers = _condition_identifiers_from_row(row)
+        matched_keys = {
+            aliases_by_gene.get(symbol, {}).get(identifier)
+            for identifier in identifiers
+            if aliases_by_gene.get(symbol, {}).get(identifier)
+        }
+        reason = (
+            "conflicting_condition_identifiers"
+            if len(matched_keys) > 1
+            else "no_exact_hpo_condition_identifier"
+        )
+
+        penetrance_evidence = _source_penetrance_evidence_record(row)
+        if penetrance_evidence is not None:
+            stats["penetrance_records"] += 1
+            if len(matched_keys) == 1:
+                condition_key = next(iter(matched_keys))
+                _attach_penetrance_to_condition(
+                    gene["conditions"][condition_key],
+                    penetrance_evidence,
+                )
+                stats["penetrance_matched"] += 1
+            else:
+                identity = _penetrance_evidence_key(penetrance_evidence)
+                if identity not in seen_unmapped_penetrance[symbol]:
+                    seen_unmapped_penetrance[symbol].add(identity)
+                    gene["unmapped_evidence"].setdefault("penetrance", []).append(
+                        {**penetrance_evidence, "reason": reason}
+                    )
+                    stats["penetrance_unmapped"] += 1
+
         mechanisms = _canonical_mechanisms(row.get("normalized_mechanisms"))
         for mechanism in mechanisms:
             stats["mechanism_records"] += 1
             evidence = _mechanism_evidence_record(row, mechanism)
-            matched_keys = {
-                aliases_by_gene.get(symbol, {}).get(identifier)
-                for identifier in evidence["condition_identifiers"]
-                if aliases_by_gene.get(symbol, {}).get(identifier)
-            }
             if len(matched_keys) == 1:
                 condition_key = next(iter(matched_keys))
                 condition = gene["conditions"][condition_key]
                 _attach_mechanism_to_condition(condition, evidence)
                 if not condition["label"] and evidence["condition_label"]:
                     condition["label"] = evidence["condition_label"]
-                stats["matched"] += 1
+                stats["mechanisms_matched"] += 1
                 continue
 
-            reason = (
-                "conflicting_condition_identifiers"
-                if len(matched_keys) > 1
-                else "no_exact_hpo_condition_identifier"
-            )
             unmapped = {**evidence, "reason": reason}
             identity = _mechanism_evidence_key(unmapped)
-            if identity not in seen_unmapped[symbol]:
-                seen_unmapped[symbol].add(identity)
+            if identity not in seen_unmapped_mechanisms[symbol]:
+                seen_unmapped_mechanisms[symbol].add(identity)
                 gene["unmapped_evidence"]["mechanisms"].append(unmapped)
-                stats["unmapped"] += 1
+                stats["mechanisms_unmapped"] += 1
 
     for gene in genes.values():
         for condition in gene["conditions"].values():
@@ -1003,8 +1257,17 @@ def attach_condition_mechanisms(
             for block in condition["pathogenic_mechanisms"].values():
                 block["allelic_requirements"].sort()
                 block["evidence"].sort(key=_mechanism_evidence_key)
+            condition["penetrance"]["statuses"] = sorted(
+                condition["penetrance"]["statuses"]
+            )
+            condition["penetrance"]["assertions"].sort(
+                key=_penetrance_evidence_key
+            )
         gene["unmapped_evidence"]["mechanisms"].sort(
             key=_mechanism_evidence_key
+        )
+        gene["unmapped_evidence"].setdefault("penetrance", []).sort(
+            key=_penetrance_evidence_key
         )
         _refresh_gene_summary(gene)
     return stats
@@ -1342,6 +1605,66 @@ def attach_gofcards_variants(
 
 
 # ---------------------------------------------------------------------------
+# Final condition-scope gate
+# ---------------------------------------------------------------------------
+
+
+def apply_condition_scope_gate(
+    genes: dict[str, dict[str, Any]],
+) -> dict[str, int]:
+    """Remove conditions explicitly established outside PriVA's disease scope.
+
+    This gate runs only after every condition-linked source has been attached, so
+    the final merged ``priva_scope`` decision is the one that controls admission.
+    ``review`` and empty decisions remain available for audit; only ``exclude``
+    is destructive. Missing inheritance or mechanism evidence never becomes a
+    scope exclusion.
+
+    A gene whose only condition is removed must not look like a gene for which no
+    condition was ever known. The per-gene tombstone count lets runtime block its
+    constraint fallback without retaining the excluded condition itself.
+    """
+    stats = {
+        "conditions_examined": 0,
+        "conditions_excluded": 0,
+        "conditions_retained_include": 0,
+        "conditions_retained_review": 0,
+        "conditions_retained_unscoped": 0,
+        "genes_with_excluded_conditions": 0,
+        "genes_left_without_conditions": 0,
+    }
+    for gene in genes.values():
+        conditions = gene.get("conditions")
+        if not isinstance(conditions, dict):
+            conditions = {}
+
+        retained: dict[str, dict[str, Any]] = {}
+        excluded_count = 0
+        for condition_key, condition in conditions.items():
+            stats["conditions_examined"] += 1
+            scope = condition.get("priva_scope") if isinstance(condition, dict) else {}
+            scope = scope if isinstance(scope, dict) else {}
+            decision = _clean(scope.get("decision")).lower()
+            if decision == "exclude":
+                excluded_count += 1
+                stats["conditions_excluded"] += 1
+                continue
+
+            retained[condition_key] = condition
+            retained_key = decision if decision in {"include", "review"} else "unscoped"
+            stats[f"conditions_retained_{retained_key}"] += 1
+
+        gene["conditions"] = dict(sorted(retained.items()))
+        gene["scope_gate"] = {"excluded_condition_count": excluded_count}
+        if excluded_count:
+            stats["genes_with_excluded_conditions"] += 1
+            if not retained:
+                stats["genes_left_without_conditions"] += 1
+        _refresh_gene_summary(gene)
+    return stats
+
+
+# ---------------------------------------------------------------------------
 # Cache assembly, validation, and atomic publication
 # ---------------------------------------------------------------------------
 
@@ -1382,6 +1705,10 @@ def _cache_counts(genes: dict[str, dict[str, Any]]) -> dict[str, int]:
         "genes_with_hpo_conditions": sum(
             bool(gene["conditions"]) for gene in genes.values()
         ),
+        "excluded_conditions": sum(
+            int((gene.get("scope_gate") or {}).get("excluded_condition_count", 0))
+            for gene in genes.values()
+        ),
         "conditions": len(conditions),
         "conditions_with_inheritance": sum(
             bool(condition["inheritance"]["modes"]) for condition in conditions
@@ -1393,6 +1720,10 @@ def _cache_counts(genes: dict[str, dict[str, Any]]) -> dict[str, int]:
         "condition_variant_links": condition_variants,
         "unmapped_mechanisms": sum(
             len(gene["unmapped_evidence"]["mechanisms"])
+            for gene in genes.values()
+        ),
+        "unmapped_penetrance_assertions": sum(
+            len(gene["unmapped_evidence"].get("penetrance", []))
             for gene in genes.values()
         ),
         "unmapped_variants": sum(
@@ -1414,13 +1745,14 @@ def build_cache_payload(
     """Build the complete single-file cache from prepared PriVA resources."""
     genes = build_hpo_gene_condition_frame(hpo_assertions)
     mechanism_stats = attach_condition_mechanisms(genes, mechanism_evidence)
-    # Curated sources run first. Only after they are exhausted may recessive
-    # inheritance supply a clearly marked, deduced LOF working hypothesis.
+    # Curated sources run first. Only after they are exhausted may biallelic or
+    # X-linked-recessive inheritance supplies a marked, deduced LOF hypothesis.
     # PVS1 later admits only curated LOF history, so this inference guides
     # variant-condition matching without becoming PVS1 evidence.
     clingen_stats = attach_clingen_haploinsufficiency(genes, clingen_dosage)
     variant_stats = attach_gofcards_variants(genes, gofcards_variants)
     deduced_stats = deduce_mechanisms_from_inheritance(genes)
+    scope_gate_stats = apply_condition_scope_gate(genes)
     genes = dict(sorted(genes.items()))
     payload = {
         "_meta": {
@@ -1442,6 +1774,7 @@ def build_cache_payload(
                 "clingen_haploinsufficiency": clingen_stats,
                 "variants": variant_stats,
                 "deduced_mechanisms": deduced_stats,
+                "scope_gate": scope_gate_stats,
             },
             "counts": _cache_counts(genes),
         },
@@ -1469,7 +1802,22 @@ def validate_cache_payload(payload: dict[str, Any]) -> dict[str, int]:
         unmapped = gene.get("unmapped_evidence")
         if not isinstance(conditions, dict) or not isinstance(unmapped, dict):
             raise ValueError(f"{symbol} is missing condition or unmapped sections")
+        scope_gate = gene.get("scope_gate")
+        if not isinstance(scope_gate, dict):
+            raise ValueError(f"{symbol} is missing its scope gate record")
+        excluded_count = scope_gate.get("excluded_condition_count")
+        if (
+            not isinstance(excluded_count, int)
+            or isinstance(excluded_count, bool)
+            or excluded_count < 0
+        ):
+            raise ValueError(f"{symbol} has an invalid excluded condition count")
         for condition_key, condition in conditions.items():
+            scope = condition.get("priva_scope")
+            if isinstance(scope, dict) and _clean(scope.get("decision")).lower() == "exclude":
+                raise ValueError(
+                    f"{symbol}/{condition_key} survived the final condition scope gate"
+                )
             identifiers = condition.get("identifiers", {})
             all_identifiers = {
                 identifier
@@ -1480,6 +1828,40 @@ def validate_cache_payload(payload: dict[str, Any]) -> dict[str, int]:
                 raise ValueError(
                     f"{symbol}/{condition_key} canonical key is absent from identifiers"
                 )
+            penetrance = condition.get("penetrance")
+            if not isinstance(penetrance, dict):
+                raise ValueError(f"{symbol}/{condition_key} lacks penetrance axis")
+            statuses = penetrance.get("statuses")
+            assertions = penetrance.get("assertions")
+            if not isinstance(statuses, list) or not set(statuses) <= {
+                "complete",
+                "incomplete",
+            }:
+                raise ValueError(
+                    f"{symbol}/{condition_key} has unsupported penetrance statuses"
+                )
+            if not isinstance(assertions, list):
+                raise ValueError(
+                    f"{symbol}/{condition_key} penetrance assertions must be a list"
+                )
+            for assertion in assertions:
+                if not isinstance(assertion, dict) or set(assertion) != (
+                    PENETRANCE_ASSERTION_KEYS
+                ):
+                    raise ValueError(
+                        f"{symbol}/{condition_key} has an invalid penetrance assertion schema"
+                    )
+                normalized_value = _clean(
+                    assertion.get("normalized_value")
+                ).lower()
+                if normalized_value not in {"complete", "incomplete"}:
+                    raise ValueError(
+                        f"{symbol}/{condition_key} has invalid normalized penetrance"
+                    )
+                if normalized_value not in statuses:
+                    raise ValueError(
+                        f"{symbol}/{condition_key} penetrance assertion is absent from statuses"
+                    )
             for mechanism, block in condition.get(
                 "pathogenic_mechanisms", {}
             ).items():
@@ -1500,12 +1882,30 @@ def validate_cache_payload(payload: dict[str, Any]) -> dict[str, int]:
                 raise ValueError(
                     f"{symbol}/{variant_key} is exact but stored as unmapped"
                 )
+        for assertion in unmapped.get("penetrance", []):
+            if not isinstance(assertion, dict) or not PENETRANCE_ASSERTION_KEYS <= set(
+                assertion
+            ):
+                raise ValueError(
+                    f"{symbol} has an invalid unmapped penetrance assertion"
+                )
 
     actual_counts = _cache_counts(genes)
     recorded_counts = meta.get("counts")
     if recorded_counts != actual_counts:
         raise ValueError(
             f"Cache count mismatch: recorded={recorded_counts}, actual={actual_counts}"
+        )
+    recorded_scope_stats = (meta.get("build_statistics") or {}).get("scope_gate")
+    if not isinstance(recorded_scope_stats, dict):
+        raise ValueError("Cache metadata lacks final condition scope-gate statistics")
+    if recorded_scope_stats.get("conditions_excluded") != actual_counts[
+        "excluded_conditions"
+    ]:
+        raise ValueError(
+            "Cache scope-gate count mismatch: "
+            f"recorded={recorded_scope_stats.get('conditions_excluded')}, "
+            f"actual={actual_counts['excluded_conditions']}"
         )
     return actual_counts
 

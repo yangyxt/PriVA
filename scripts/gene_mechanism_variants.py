@@ -1,7 +1,36 @@
-"""Query-variant mechanism scoring.
+r"""Query-variant mechanism scoring.
 
 Definitions here describe what the current allele plausibly does. Resource
 loading and pipeline orchestration remain outside this module.
+
+The mechanism decision tree is deliberately kept beside its implementation:
+
+    upstream exact-allele annotation
+      canonical non-LOF cache (currently eligible curated GoFCards alleles;
+      ClinVar supplies condition links but pathogenicity alone is not GOF/DN)
+      match route: HGNC symbol + HGVSp, then HGVSc, then normalized allele
+                                |
+                                v
+    transcript-destroying LOF?  stop/frameshift/splice-frameshift + NMD
+      yes -> LOF=2, GOF=0, DN=0                         [exclusive]
+      no
+       |
+       v
+    exact curated GOF or DN score=2?
+      yes -> asserted mechanism(s)=2, all others=0      [exclusive]
+      no
+       |
+       v
+    predicted LOF evidence?
+      LOFTEE HC/OS; VEP LOF consequence; PriVA splice/5UTR LOF;
+      NMD-escaping truncation
+      yes -> LOF=1 or 2; retain only LOF-compatible histories
+      no  -> LOF=1, GOF=1, DN=1; retain every explicit mechanism history
+             plus condition-level UNRESOLVED histories [parallel hypotheses]
+
+Only a score of 2 is exclusive. Three parallel score-1 values mean that the
+variant evidence cannot rule out any of PriVA's supported mechanisms; they are
+not three positive molecular findings.
 """
 
 from __future__ import annotations
@@ -37,7 +66,10 @@ def infer_query_variant_effect(row: dict[str, Any] | pd.Series) -> dict[str, Any
     the allowed mechanism set for this allele. Generic consequence, NMD, or
     LOFTEE signals remain visible as audit evidence but cannot create a competing
     LoF call. Without an exact assertion, prediction-based LoF evidence receives
-    score ``1``. LOFTEE ``OS`` is its other-splice category.
+    score ``1``. LOFTEE ``OS`` is its other-splice category. If none of those
+    observations identifies or excludes a mechanism, all three mechanisms score
+    ``1`` in parallel. That is an uncertainty representation, not positive
+    evidence for three simultaneous effects.
     """
     predicted_lof_evidence: list[str] = []
     loftee_tokens = _split_annotation_tokens(row.get("LoF"))
@@ -124,6 +156,12 @@ def infer_query_variant_effect(row: dict[str, Any] | pd.Series) -> dict[str, Any
         evidence.extend(predicted_lof_evidence)
         effect = "predicted_LOF_high_confidence"
     else:
+        # Absence of a mechanism-specific observation cannot make all known
+        # condition mechanisms incompatible. Parallel score-1 hypotheses retain
+        # LOF, GOF and dominant-negative histories until stronger variant evidence
+        # selects one; condition-level UNRESOLVED histories are retained beside
+        # them by select_condition_histories_for_variant().
+        scores = {mechanism: max(score, 1) for mechanism, score in scores.items()}
         effect = "uncertain"
     exact_mechanisms = _exact_mechanisms_from_effect(effect)
     return {

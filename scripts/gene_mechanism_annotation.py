@@ -12,7 +12,6 @@ from typing import Any
 import pandas as pd
 
 from gene_mechanism_common import (
-    CANONICAL_MECHANISMS,
     DEFAULT_CLINGEN_DOSAGE,
     DEFAULT_HGNC_TABLE,
     DEFAULT_HPO_COLLAPSED,
@@ -20,6 +19,7 @@ from gene_mechanism_common import (
     DEFAULT_LOEUF_TABLE,
     UNRESOLVED_MECHANISM,
     VARIANT_MECHANISM_OUTPUT_COLUMNS,
+    VARIANT_MECHANISM_SCORE_KEYS,
     _clean,
     _deduplicate_by,
     _exact_mechanisms_from_effect,
@@ -28,7 +28,6 @@ from gene_mechanism_conditions import (
     NON_MENDELIAN_INHERITANCE,
     condition_cache_mechanism_assertions,
     gene_has_lof_mechanism_history,
-    gene_inheritance_consensus,
     gene_inheritance_from_constraint,
     normalize_inheritance,
     normalize_inheritance_histories,
@@ -70,15 +69,29 @@ def _compact_profile_tags(assertions: list[dict[str, Any]]) -> list[str]:
             if (tag := _mechanism_profile_tag(assertion))
         )
     )
+    inheritance_values = (
+        "x_linked_recessive",
+        "x_linked_dominant",
+        "x_linked_unspecified",
+        "mitochondrial",
+        "recessive",
+        "dominant",
+        "y_linked",
+    )
+
+    def split_profile_tag(tag: str) -> tuple[str, str]:
+        for inheritance in inheritance_values:
+            prefix = inheritance + "_"
+            if tag.startswith(prefix):
+                return inheritance, tag[len(prefix):]
+        return "", ""
+
+    split_tags = [split_profile_tag(tag) for tag in tags]
     inheritance_with_mechanism = {
-        tag.split("_", 1)[0]
-        for tag in tags
-        if "_" in tag and tag.split("_", 1)[0] in {"recessive", "dominant"}
+        inheritance for inheritance, mechanism in split_tags if mechanism
     }
     qualified_mechanisms = {
-        tag.split("_", 1)[1]
-        for tag in tags
-        if "_" in tag and tag.split("_", 1)[0] in {"recessive", "dominant"}
+        mechanism for _inheritance, mechanism in split_tags if mechanism
     }
     return [
         tag
@@ -104,7 +117,8 @@ def select_condition_histories_for_variant(
     * an exact known GOF or DN allele selects that known mechanism;
     * a high-confidence predicted LOF allele selects curated or deduced LOF
       histories;
-    * an unresolved allele keeps every known history; and
+    * an allele with no mechanism-specific evidence keeps LOF, GOF and DN as
+      parallel plausible hypotheses; and
     * every case also keeps ``UNRESOLVED`` histories, because an absent
       condition-mechanism assertion cannot establish incompatibility.
 
@@ -123,8 +137,10 @@ def select_condition_histories_for_variant(
         allowed = exact_mechanisms
     elif effect == "predicted_LOF_high_confidence":
         allowed = {"LOF"}
+    elif effect == "uncertain":
+        allowed = set(VARIANT_MECHANISM_SCORE_KEYS)
     else:
-        allowed = CANONICAL_MECHANISMS
+        allowed = set()
 
     histories: list[dict[str, Any]] = []
     for assertion in assertions:
@@ -145,7 +161,8 @@ def select_condition_histories_for_variant(
                     "inheritance": inheritance,
                     "x_linked": x_linked,
                     "penetrance": normalize_penetrance(
-                        assertion.get("penetrance_hpo_ids")
+                        assertion.get("penetrance_statuses")
+                        or assertion.get("penetrance_hpo_ids")
                     ),
                 }
             )
@@ -213,8 +230,8 @@ def annotate_gene_mechanism_categories(
     HPO condition cache. Gene-wide signals -- a ClinVar pathogenic history, a
     constrained LOEUF, a high average AlphaMissense score, a ClinGen dosage
     call -- cannot create a condition or molecular mechanism. Constraint is
-    used only as a clearly labelled inheritance fallback when the gene has no
-    condition record at all.
+    used only as a clearly labelled inheritance fallback when no surviving
+    condition history supplies inheritance.
     """
     if symbol_col not in df.columns:
         raise KeyError(f"missing symbol column: {symbol_col}")
@@ -286,62 +303,37 @@ def annotate_gene_mechanism_categories(
         matched_inheritance = list(
             dict.fromkeys(h["inheritance"] for h in histories if h["inheritance"])
         )
-        matched_x_linked = any(h["x_linked"] for h in histories)
-        selected_mechanisms = {
-            _clean(history.get("mechanism")).upper() for history in histories
-        }
-        selected_known = bool(selected_mechanisms - {UNRESOLVED_MECHANISM})
-        selected_unresolved = UNRESOLVED_MECHANISM in selected_mechanisms
-        if histories:
+        row_chromosome = _clean(row.get("chrom", "")).lower().removeprefix("chr")
+        matched_x_linked = (
+            row_chromosome == "x" or any(h["x_linked"] for h in histories)
+        )
+        if matched_inheritance:
+            selected_mechanisms = {
+                _clean(history.get("mechanism")).upper() for history in histories
+            }
+            selected_known = bool(selected_mechanisms - {UNRESOLVED_MECHANISM})
+            selected_unresolved = UNRESOLVED_MECHANISM in selected_mechanisms
             if selected_known and selected_unresolved:
                 basis = "matched_and_unresolved_history"
             elif selected_unresolved:
                 basis = "unresolved_condition_history"
             else:
                 basis = "matched_history"
-        elif assertions:
-            # Usable condition histories existed, but every explicit mechanism
-            # was incompatible with this variant. Falling back to a gene-wide
-            # inheritance here would reintroduce exactly the histories Step 3
-            # rejected, so the empty answer is deliberate.
-            matched_inheritance = []
-            basis = "mechanism_mismatch"
         else:
-            raw_conditions = gene_record.get("conditions", {})
-            raw_conditions = raw_conditions if isinstance(raw_conditions, dict) else {}
-            included_conditions = [
-                condition
-                for condition in raw_conditions.values()
-                if isinstance(condition, dict)
-                and _clean((condition.get("priva_scope") or {}).get("decision")).lower()
-                == "include"
-            ]
-            if raw_conditions and not included_conditions:
-                # A review/excluded condition is audit evidence, not a license
-                # to use constraint as if an inherited disease were established.
-                matched_inheritance = []
-                basis = "condition_scope_blocked"
-            else:
-                # Defensive compatibility for a malformed/legacy included
-                # record that produced no assertion. Current caches normally
-                # reach this branch only when the gene has no condition record.
-                consensus, consensus_x, stated = gene_inheritance_consensus(gene_record)
-                if consensus:
-                    matched_inheritance = [consensus]
-                    matched_x_linked = consensus_x
-                    basis = "gene_consensus"
-                elif stated == 0:
-                    matched_inheritance = [
-                        gene_inheritance_from_constraint(
-                            symbol,
-                            clingen=hub._load_clingen(),
-                            loeuf=hub._load_loeuf(),
-                        )
-                    ]
-                    basis = "gene_constraint"
-                else:
-                    matched_inheritance = []
-                    basis = ""
+            # Scope and mechanism gates apply to individual conditions only.
+            # Once those conditions have been discarded, they cannot veto an
+            # independent gene-level inheritance fallback.
+            inferred_inheritance = gene_inheritance_from_constraint(
+                symbol,
+                clingen=hub._load_clingen(),
+                loeuf=hub._load_loeuf(),
+                chromosome=row.get("chrom", ""),
+            )
+            matched_inheritance = (
+                [inferred_inheritance] if inferred_inheritance else []
+            )
+            matched_x_linked = inferred_inheritance.startswith("x_")
+            basis = "gene_constraint"
 
         variant_outputs["variant_condition_ids"].append(
             ";".join(dict.fromkeys(h["condition"] for h in histories if h["condition"]))
@@ -384,10 +376,9 @@ def annotate_gene_mechanism_categories(
         variant_outputs["variant_penetrance"].append(
             ";".join(
                 dict.fromkeys(
-                    h["penetrance"] for h in histories if h["penetrance"] != "unknown"
+                    h["penetrance"] for h in histories if h["penetrance"]
                 )
             )
-            or "unknown"
         )
 
     out[output_col] = plausible_mechanism_values

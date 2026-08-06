@@ -176,7 +176,7 @@ def BS1_criteria(df: pd.DataFrame,
     is unresolved. BS1 therefore reads ``variant_inheritance`` and
     ``variant_penetrance`` directly; it must not recreate a gene-wide answer.
 
-    Dominant frequency model:
+    Autosomal dominant frequency model:
       - dominant only: any variant state remains uncertain-compatible.
       - dominant_LOF only: predicted LOF or uncertain; exact GOF is excluded.
       - dominant_GOF only: exact GOF only.
@@ -193,6 +193,13 @@ def BS1_criteria(df: pd.DataFrame,
       - A compatible biallelic requirement uses homozygous/hemizygous population frequency, not
         carrier allele count.
 
+    X-linked frequency models:
+      - ``x_linked_recessive`` uses the XY allele frequency. XX carrier
+        frequency is not evidence against that model.
+      - ``x_linked_dominant`` uses the XX allele frequency.
+      - ``x_linked_unspecified`` supplies no disease-incidence BS1 model because
+        the affected allele state is unknown.
+
     Gene pathogenic-frequency comparator:
       - For any valid Mendelian model, BS1 can also be assigned when the
         variant AF is significantly greater than the non-zero maximum AF of
@@ -200,7 +207,7 @@ def BS1_criteria(df: pd.DataFrame,
 
     Global gates:
       - no BS1 for non-monogenic/polygenic, non-Mendelian, or any selected
-        incomplete-penetrance-equivalent history. ``high`` is not incomplete.
+        incomplete-penetrance-equivalent history.
       - no BS1 while a relevant HPO disease context still requires scope review.
       - PM2 blocks only the gene pathogenic-frequency comparator.
       - A disease-incidence BS1 assignment takes precedence over PM2.
@@ -215,25 +222,51 @@ def BS1_criteria(df: pd.DataFrame,
     def _series_or_empty(column: str) -> pd.Series:
         return df.get(column, pd.Series("", index=df.index)).fillna("").astype(str)
 
-    autosomal = (df['chrom'] != "chrX") & (df['chrom'] != "chrY")
-    x_linked = df['chrom'] == "chrX"
-    y_locus = df['chrom'] == "chrY"
+    def _numeric_series(column: str) -> pd.Series:
+        return pd.to_numeric(
+            df.get(column, pd.Series(0, index=df.index)), errors="coerce"
+        ).fillna(0)
+
+    def _frequency_above(column_af: str, column_an: str, threshold: float) -> pd.Series:
+        allele_frequency = _numeric_series(column_af)
+        allele_number = _numeric_series(column_an)
+        _, significant = control_false_neg_rate(
+            allele_frequency,
+            allele_number,
+            af_threshold=threshold,
+            alpha=0.01,
+        )
+        return pd.Series(
+            np.where(significant.isna(), allele_frequency > threshold, significant),
+            index=df.index,
+            dtype=bool,
+        )
+
+    chrom = _series_or_empty("chrom").str.upper().str.removeprefix("CHR")
+    x_linked = chrom.eq("X")
+    y_locus = chrom.eq("Y")
+    mitochondrial_locus = chrom.isin({"M", "MT"})
+    autosomal = ~(x_linked | y_locus | mitochondrial_locus)
 
     condition_masks = _variant_condition_masks(df)
     scope_review_required = _series_or_empty("HPO_scope_review_required").str.lower().isin(
         {"1", "true", "yes"}
     )
 
-    false_neg_rate, common_vars = control_false_neg_rate(df['gnomAD_joint_AF_max'], df['gnomAD_joint_AN_max'], af_threshold=expected_incidence, alpha=0.01)
+    _, common_vars = control_false_neg_rate(df['gnomAD_joint_AF_max'], df['gnomAD_joint_AN_max'], af_threshold=expected_incidence, alpha=0.01)
 
     max_ind_incidence = np.where(df['gnomAD_joint_AN_max']/2 > 10/expected_incidence, df['gnomAD_nhomalt_max']/(df['gnomAD_joint_AN_max']/2), (df['gnomAD_nhomalt_XX'] + df['gnomAD_nhomalt_XY'])/(df['gnomAD_joint_AN']/2))
     max_af_larger_incidence = np.where(common_vars.isna(), df['gnomAD_joint_AF'] > expected_incidence, common_vars)
     logger.info(f"There are {max_af_larger_incidence.sum()} variants having their PAF greater than the expected incidence of the disease")
 
     has_recessive_requirement = condition_masks["has_recessive"]
-    dominant_frequency_compatible = condition_masks["has_dominant_like"]
-    dominant_without_recessive = (
-        dominant_frequency_compatible & ~has_recessive_requirement
+    autosomal_dominant_without_recessive = (
+        condition_masks["has_dominant"] & ~has_recessive_requirement
+    )
+    x_recessive_requirement = condition_masks["has_x_linked_recessive"]
+    x_dominant_requirement = (
+        condition_masks["has_x_linked_dominant"]
+        & ~has_recessive_requirement
     )
 
     valid_model = (
@@ -244,23 +277,57 @@ def BS1_criteria(df: pd.DataFrame,
         & np.logical_not(scope_review_required)
     )
 
-    # Dominant BS1 uses carrier allele frequency only when the variant is
-    # mechanism-compatible and no recessive LoF history is available to explain
-    # healthy heterozygous population carriers.
-    autosomal_dominant = autosomal & dominant_without_recessive & max_af_larger_incidence & valid_model
-    x_linked_dominant = x_linked & dominant_without_recessive & max_af_larger_incidence & valid_model
+    x_xy_af_larger_incidence = _frequency_above(
+        "gnomAD_joint_AF_XY", "gnomAD_joint_AN_XY", expected_incidence
+    )
+    x_xx_af_larger_incidence = _frequency_above(
+        "gnomAD_joint_AF_XX", "gnomAD_joint_AN_XX", expected_incidence
+    )
+
+    # The two explicit X-linked inheritance models use different population
+    # strata. A generic X-linked assertion supplies neither model.
+    autosomal_dominant = (
+        autosomal
+        & autosomal_dominant_without_recessive
+        & max_af_larger_incidence
+        & valid_model
+    )
+    x_linked_recessive = (
+        x_linked
+        & x_recessive_requirement
+        & x_xy_af_larger_incidence
+        & valid_model
+    )
+    x_linked_dominant = (
+        x_linked
+        & x_dominant_requirement
+        & x_xx_af_larger_incidence
+        & valid_model
+    )
 
     # Recessive BS1 uses homozygous/hemizygous frequency, not population carrier
     # count, because heterozygous carriers are expected for AR LoF disease.
     autosomal_recessive = autosomal & has_recessive_requirement & (max_ind_incidence > expected_incidence) & valid_model
-    x_linked_recessive = x_linked & has_recessive_requirement & ((df['gnomAD_nhomalt_XX'] + df['gnomAD_nhomalt_XY'])/(df['gnomAD_joint_AN']/2) > expected_incidence) & valid_model
     y_linked = (
         y_locus
         & condition_masks["has_y_linked"]
         & max_af_larger_incidence
         & valid_model
     )
-    greater_than_disease_incidence = autosomal_dominant | autosomal_recessive | x_linked_recessive | x_linked_dominant | y_linked
+    mitochondrial = (
+        mitochondrial_locus
+        & condition_masks["has_mitochondrial"]
+        & max_af_larger_incidence
+        & valid_model
+    )
+    greater_than_disease_incidence = (
+        autosomal_dominant
+        | autosomal_recessive
+        | x_linked_recessive
+        | x_linked_dominant
+        | y_linked
+        | mitochondrial
+    )
     logger.info(f"There are {greater_than_disease_incidence.sum()} variants having their PAF greater than the expected incidence of the disease")
     gene_max_patho_af = df["clinvar_patho_gene_max_af"].fillna(0)
 
@@ -270,9 +337,23 @@ def BS1_criteria(df: pd.DataFrame,
     greater_than_clinvar_patho_af = greater_than_clinvar_patho_af & (gene_max_patho_af > 0)
     _, greater_than_basic_af = control_false_neg_rate(df['gnomAD_joint_AF_max'], df['gnomAD_joint_AN_max'], af_threshold=0.0001, alpha=0.01)
     greater_than_basic_af = np.where(greater_than_basic_af.isna(), df['gnomAD_joint_AF'] > 0.0001, greater_than_basic_af)
+    x_xy_greater_than_basic_af = _frequency_above(
+        "gnomAD_joint_AF_XY", "gnomAD_joint_AN_XY", 0.0001
+    )
+    x_xx_greater_than_basic_af = _frequency_above(
+        "gnomAD_joint_AF_XX", "gnomAD_joint_AN_XX", 0.0001
+    )
     clinvar_af_model_compatible = valid_model
     disease_incidence_bs1 = np.asarray(
-        greater_than_disease_incidence & greater_than_basic_af,
+        (
+            (autosomal_dominant | autosomal_recessive | y_linked | mitochondrial)
+            & greater_than_basic_af
+        )
+        | (x_linked_recessive & x_xy_greater_than_basic_af)
+        | (
+            x_linked_dominant
+            & x_xx_greater_than_basic_af
+        ),
         dtype=bool,
     )
     gene_pathogenic_af_bs1_candidate = np.asarray(

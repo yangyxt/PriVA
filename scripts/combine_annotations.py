@@ -357,7 +357,11 @@ def extract_record_info(record, var_source_exists: bool, control_ac_exists: bool
         'nhomalt_grpmax_joint': record.info.get('nhomalt_grpmax_joint', [np.nan])[0],
         
         # Sex-specific fields (overall)
+        'AC_joint_XX': record.info.get('AC_joint_XX', [np.nan])[0],
+        'AN_joint_XX': record.info.get('AN_joint_XX', np.nan),
         'AF_joint_XX': record.info.get('AF_joint_XX', [np.nan])[0],
+        'AC_joint_XY': record.info.get('AC_joint_XY', [np.nan])[0],
+        'AN_joint_XY': record.info.get('AN_joint_XY', np.nan),
         'AF_joint_XY': record.info.get('AF_joint_XY', [np.nan])[0],
         'nhomalt_joint_XX': record.info.get('nhomalt_joint_XX', [np.nan])[0],
         'nhomalt_joint_XY': record.info.get('nhomalt_joint_XY', [np.nan])[0],
@@ -468,7 +472,11 @@ def convert_record_to_tab(args: tuple) -> tuple[List[Dict[str, Any]], List[str]]
             "gnomAD_nhomalt_max": record_dict['info']['nhomalt_grpmax_joint'],
             
             # Sex-specific fields (overall)
+            "gnomAD_joint_AC_XX": record_dict['info']['AC_joint_XX'],
+            "gnomAD_joint_AN_XX": record_dict['info']['AN_joint_XX'],
             "gnomAD_joint_AF_XX": record_dict['info']['AF_joint_XX'],
+            "gnomAD_joint_AC_XY": record_dict['info']['AC_joint_XY'],
+            "gnomAD_joint_AN_XY": record_dict['info']['AN_joint_XY'],
             "gnomAD_joint_AF_XY": record_dict['info']['AF_joint_XY'],
             "gnomAD_nhomalt_XX": record_dict['info']['nhomalt_joint_XX'],
             "gnomAD_nhomalt_XY": record_dict['info']['nhomalt_joint_XY'],

@@ -499,11 +499,28 @@ def sort_and_rank_variants(df: pd.DataFrame,
 
     # NOTE: proband_het must be created AFTER filtering to match df's shape
     if ped_df is not None and fam_name is not None:
-        proband = ped_df.loc[(ped_df['#FamilyID'] == fam_name) & (ped_df['Phenotype'].isin(["2", 2])), 'IndividualID'].values[0]
+        proband_row = ped_df.loc[
+            (ped_df['#FamilyID'] == fam_name)
+            & (ped_df['Phenotype'].isin(["2", 2]))
+        ].iloc[0]
+        proband = proband_row['IndividualID']
+        proband_sex = str(proband_row.get("Sex", "")).strip().lower()
+        proband_is_male = proband_sex in {"1", "1.0", "m", "male"}
+        proband_is_female = proband_sex in {"2", "2.0", "f", "female"}
+        if not (proband_is_male or proband_is_female):
+            logger.warning(
+                "Unrecognized pedigree sex %r for proband %s; neither "
+                "X-linked recessive nor X-linked dominant ranking "
+                "compatibility will be assumed",
+                proband_row.get("Sex", ""),
+                proband,
+            )
         proband_het = (df.loc[:, proband].str.count("1") == 1)
     else:
         logger.warning("No ped_table provided, skip the zygosity/inheritance/mechanism compatibility penalty")
         proband = None
+        proband_is_male = False
+        proband_is_female = False
         proband_het = pd.Series([False] * len(df), index=df.index)  # Use Series with matching index
 
     # Control-common penalty: halve sort_index for variants common in control cohort
@@ -518,18 +535,50 @@ def sort_and_rank_variants(df: pd.DataFrame,
     # gene-level fallback is allowed at this stage.
     # ---------------------------------------------------------------------
     mechanism_masks = _variant_mechanism_masks(df)
-    has_dom_lof_compatible = mechanism_masks["has_dominant_compatible"]
+    chrom = df.get("chrom", pd.Series("", index=df.index)).fillna("").astype(str)
+    x_locus = chrom.str.upper().str.replace(r"^CHR", "", regex=True).eq("X")
+    has_single_alt_lof_compatible = (
+        mechanism_masks["has_dom_lof_history"]
+        | mechanism_masks["has_dom_unresolved_history"]
+        | (
+            x_locus
+            & proband_is_male
+            & (
+                mechanism_masks["has_x_recessive_lof_history"]
+                | mechanism_masks["has_x_recessive_unresolved_history"]
+                | mechanism_masks["has_x_dominant_lof_history"]
+                | mechanism_masks["has_x_dominant_unresolved_history"]
+            )
+        )
+        | (
+            x_locus
+            & proband_is_female
+            & (
+                mechanism_masks["has_x_dominant_lof_history"]
+                | mechanism_masks["has_x_dominant_unresolved_history"]
+            )
+        )
+    )
     exact_gof = mechanism_masks["is_exact_gof"]
     asserted_lof_effect = mechanism_masks["is_predicted_lof"]
     dn_without_hi_or_ambiguous = (
-        mechanism_masks["has_dom_dn_history"]
-        & ~mechanism_masks["has_dom_lof_history"]
-        & ~mechanism_masks["has_dom_unresolved_history"]
+        (
+            mechanism_masks["has_dom_dn_history"]
+            | mechanism_masks["has_x_dominant_dn_history"]
+        )
+        & ~(
+            mechanism_masks["has_dom_lof_history"]
+            | mechanism_masks["has_x_dominant_lof_history"]
+        )
+        & ~(
+            mechanism_masks["has_dom_unresolved_history"]
+            | mechanism_masks["has_x_dominant_unresolved_history"]
+        )
     )
     heterozygous_lof_incompatible = (
         asserted_lof_effect
         & ~exact_gof
-        & ~has_dom_lof_compatible
+        & ~has_single_alt_lof_compatible
     )
 
     high_acmg_lof = df["ACMG_quant_score"] > 0.89

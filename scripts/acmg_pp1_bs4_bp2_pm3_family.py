@@ -8,11 +8,11 @@ sit together.
     BS4  the variant fails to segregate -- an affected relative lacks it, or
          an unaffected relative carries it in a pattern the disease model
          forbids
-    PM3  seen in trans with a pathogenic variant in a recessive disorder,
+    PM3  seen in trans with a pathogenic variant in an autosomal recessive disorder,
          which is what a second hit looks like
     BP2  seen in trans with a pathogenic variant in a dominant disorder, or
-         in cis with one under any model -- either way the observed allele is
-         not what explains the phenotype
+         in cis under an autosomal recessive model; single-copy X phase is not
+         treated as biallelic evidence
 
 All four read the mechanism hub's selected condition histories and are gated
 off for non-monogenic, non-Mendelian and incomplete-equivalent penetrance,
@@ -55,29 +55,32 @@ def PP1_criteria(df: pd.DataFrame,
         variant_inheritance / variant_penetrance
               |
               v
-        recessive_ih = NOT non_monogenic
-                     & NOT non_mendelian
-                     & NOT incomplete_penetrance
-                     & recessive
-        dominant_ih  = the same three gates
-                     & dominant
-                     & NOT recessive          <- recessive wins a tie
+        Every state first passes the non-monogenic, non-Mendelian, and
+        incomplete-penetrance gates. Evidence is then counted by affected
+        allele state:
+
+        recessive                  autosomal segregation counts
+        dominant                   autosomal segregation counts
+        x_linked_recessive         male segregation counts
+        x_linked_dominant          male and female segregation counts
+        x_linked_unspecified       no PP1 genotype model
               |
               v
         segregation counts, per family, from find_cosegregating_variants:
               Affected_segregated_inds     Unaffected_segregated_inds
               Male_affected_segregated_inds
               Male_unaffected_segregated_inds     <- used for chrX and chrY
+              Female_affected_segregated_inds
+              Female_unaffected_segregated_inds   <- used for chrX
               |
               v
         autosomal = NOT chrX & NOT chrY & NOT chrM
               |
-              +-- recessive_ih -> pp1_recessive_points -> encoded strength
-              +-- dominant_ih  -> pp1_dominant_points  -> encoded strength
+              +-- each explicit state -> non-overlapping points -> strength
 
-    ``high`` penetrance is not treated as incomplete. Delayed/variable onset,
-    low/moderate penetrance and variable expressivity have already been linked
-    to their condition and normalized to ``incomplete`` upstream.
+    Explicit incomplete, low/moderate penetrance, and late onset have already
+    been linked to their condition and normalized to ``incomplete`` upstream;
+    high penetrance is normalized to ``complete``.
     '''
     pp1_array = np.zeros(len(df), dtype=int)
     if multi_fam_vcf and multi_fam_ped:
@@ -88,6 +91,8 @@ def PP1_criteria(df: pd.DataFrame,
         control_nonhoms = {}
         male_affected_segs = {}
         male_control_segs = {}
+        female_affected_segs = {}
+        female_control_segs = {}
         for variant, stats in cosegregating_variants.items():
             varid_key = str(variant[0]) + ":" + str(variant[1]) + ":" + str(variant[2]) + "-" + str(variant[3])
             affected_segs[varid_key] = stats["Affected_segregated_inds"]
@@ -96,6 +101,12 @@ def PP1_criteria(df: pd.DataFrame,
             control_nonhoms[varid_key] = stats["Unaffected_nonhomo_inds"]
             male_affected_segs[varid_key] = stats["Male_affected_segregated_inds"]
             male_control_segs[varid_key] = stats["Male_unaffected_segregated_inds"]
+            female_affected_segs[varid_key] = stats[
+                "Female_affected_segregated_inds"
+            ]
+            female_control_segs[varid_key] = stats[
+                "Female_unaffected_segregated_inds"
+            ]
 
         affected_seg_count = df['variant_id'].map(affected_segs).fillna(0).astype(int)
         affected_hom_count = df['variant_id'].map(affected_homs).fillna(0).astype(int)
@@ -103,6 +114,8 @@ def PP1_criteria(df: pd.DataFrame,
         control_nonhom_count = df['variant_id'].map(control_nonhoms).fillna(0).astype(int)
         male_affected_seg_count = df['variant_id'].map(male_affected_segs).fillna(0).astype(int)
         male_control_seg_count = df['variant_id'].map(male_control_segs).fillna(0).astype(int)
+        female_affected_seg_count = df['variant_id'].map(female_affected_segs).fillna(0).astype(int)
+        female_control_seg_count = df['variant_id'].map(female_control_segs).fillna(0).astype(int)
 
         condition_masks = _variant_condition_masks(df)
         valid_model = (
@@ -112,6 +125,12 @@ def PP1_criteria(df: pd.DataFrame,
             & ~condition_masks["has_incomplete_penetrance"]
         )
         recessive_ih = valid_model & condition_masks["has_recessive"]
+        x_recessive_ih = valid_model & condition_masks["has_x_linked_recessive"]
+        x_dominant_ih = (
+            valid_model
+            & condition_masks["has_x_linked_dominant"]
+            & ~condition_masks["has_recessive"]
+        )
         dominant_ih = (
             valid_model
             & condition_masks["has_dominant"]
@@ -119,7 +138,9 @@ def PP1_criteria(df: pd.DataFrame,
         )
 
         pp1_points = [0] * len(df)
-        recessive_encode = recessive_ih.astype(int)  # Convert boolean to int for multiplication
+        recessive_encode = recessive_ih.astype(int)
+        x_recessive_encode = x_recessive_ih.astype(int)
+        x_dominant_encode = x_dominant_ih.astype(int)
         dominant_encode = dominant_ih.astype(int)
 
         autosomal = np.logical_not(df["chrom"].str.contains("X") | df["chrom"].str.contains("Y") | df['chrom'].str.contains("M"))
@@ -127,18 +148,38 @@ def PP1_criteria(df: pd.DataFrame,
         autosomal_encode = autosomal.astype(int)
         x_encode = x_chr.astype(int)
 
-        pp1_recessive_points = autosomal_encode * recessive_encode * affected_seg_count * 2 + \
-                               autosomal_encode * recessive_encode * control_seg_count * 0.4 + \
-                               x_encode * recessive_encode * male_affected_seg_count + \
-                               x_encode * recessive_encode * male_control_seg_count
+        pp1_recessive_points = (
+            autosomal_encode * recessive_encode * affected_seg_count * 2
+            + autosomal_encode * recessive_encode * control_seg_count * 0.4
+        )
+        pp1_x_recessive_points = x_encode * x_recessive_encode * (
+            male_affected_seg_count + male_control_seg_count
+        )
 
-        pp1_recessive_encode = np.where(pp1_recessive_points > 0, 0, 1)
-        pp1_dominant_points = pp1_recessive_encode * (dominant_encode * affected_seg_count + \
-                                                      dominant_encode * control_seg_count + \
-                                                      dominant_encode * affected_hom_count + \
-                                                      dominant_encode * control_nonhom_count)
+        pp1_x_dominant_points = (
+            x_encode
+            * x_dominant_encode
+            * (
+                male_affected_seg_count
+                + male_control_seg_count
+                + female_affected_seg_count
+                + female_control_seg_count
+            )
+        )
 
-        pp1_points = pp1_recessive_points + pp1_dominant_points
+        pp1_dominant_points = autosomal_encode * dominant_encode * (
+            affected_seg_count
+            + control_seg_count
+            + affected_hom_count
+            + control_nonhom_count
+        )
+
+        pp1_points = (
+            pp1_recessive_points
+            + pp1_x_recessive_points
+            + pp1_x_dominant_points
+            + pp1_dominant_points
+        )
 
         pp1_array[(pp1_points <= 1.9) & (pp1_points >= 1)] = 1  # Supporting
         pp1_array[(pp1_points >= 2) & (pp1_points <= 3.9)] = 2  # Moderate
@@ -162,17 +203,17 @@ def BS4_criteria(
     # this variant and retained every mechanism-unresolved included condition.
     # Do not assign BS4 for non-monogenic/polygenic, non-Mendelian, or any
     # selected incomplete-equivalent penetrance history, because genotype
-    # contradictions are not interpretable there. High penetrance is not in
-    # that blocking category.
+    # contradictions are not interpretable there.
     #
-    # Recessive and dominant compatibility come only from the upstream compact
+    # Biallelic, X-linked recessive, autosomal dominant, and X-linked dominant
+    # compatibility come only from the upstream compact
     # variant-level assertions.
     #
     # Inputs per variant:
     #   patient_GTs = all affected family members with callable GT.
     #   control_GTs = all unaffected family members with callable GT.
-    #   has_recessive = accepted assertion starts with recessive.
-    #   has_dominant = accepted assertion starts with dominant.
+    #   has_recessive / has_x_linked_recessive identify biallelic/XY models.
+    #   has_dominant / has_x_linked_dominant identify dominant models.
     #   is_predicted_LOF / is_exact_GOF come from variant_effect.
     #
     # Variant compatibility under dominant-only history:
@@ -279,24 +320,56 @@ def BS4_criteria(
     y_linked = chrom.str.contains("Y", regex=False)
     mendelian_locus = autosomal | x_linked | y_linked
 
+    def _sample_has_applicable_model(sample_col: str) -> pd.Series:
+        sex = sex_by_sample.get(sample_col)
+        x_model = pd.Series(False, index=df.index)
+        y_model = pd.Series(False, index=df.index)
+        if sex == 1:
+            x_model = (
+                condition_masks["has_x_linked_recessive"]
+                | condition_masks["has_x_linked_dominant"]
+            )
+            y_model = condition_masks["has_y_linked"]
+        elif sex == 2:
+            x_model = condition_masks["has_x_linked_dominant"]
+        return autosomal | (x_linked & x_model) | (y_linked & y_model)
+
     mechanism_masks = _variant_mechanism_masks(df)
 
     has_recessive_requirement = condition_masks["has_recessive"]
+    has_hom_hemi_requirement = (
+        has_recessive_requirement | condition_masks["has_x_linked_recessive"]
+    )
     has_any_dominant_history = (
         mechanism_masks["has_dom_lof_history"]
         | mechanism_masks["has_dom_gof_history"]
         | mechanism_masks["has_dom_dn_history"]
         | mechanism_masks["has_dom_unresolved_history"]
+        | mechanism_masks["has_x_dominant_lof_history"]
+        | mechanism_masks["has_x_dominant_gof_history"]
+        | mechanism_masks["has_x_dominant_dn_history"]
+        | mechanism_masks["has_x_dominant_unresolved_history"]
     )
-    ar_only = has_recessive_requirement & ~has_any_dominant_history
-    ar_plus_gof_dn_nmd_only = (
-        has_recessive_requirement
-        & (mechanism_masks["has_dom_gof_history"] | mechanism_masks["has_dom_dn_history"])
-        & ~mechanism_masks["has_dom_lof_history"]
-        & ~mechanism_masks["has_dom_unresolved_history"]
+    hom_hemi_only = has_hom_hemi_requirement & ~has_any_dominant_history
+    dominant_gof_dn_history = (
+        mechanism_masks["has_dom_gof_history"]
+        | mechanism_masks["has_dom_dn_history"]
+        | mechanism_masks["has_x_dominant_gof_history"]
+        | mechanism_masks["has_x_dominant_dn_history"]
+    )
+    dominant_lof_or_unresolved_history = (
+        mechanism_masks["has_dom_lof_history"]
+        | mechanism_masks["has_dom_unresolved_history"]
+        | mechanism_masks["has_x_dominant_lof_history"]
+        | mechanism_masks["has_x_dominant_unresolved_history"]
+    )
+    hom_hemi_plus_gof_dn_nmd_only = (
+        has_hom_hemi_requirement
+        & dominant_gof_dn_history
+        & ~dominant_lof_or_unresolved_history
     )
     is_nmd_lof = mechanism_masks["is_predicted_lof"]
-    dominant_variant_compatible_no_ar = (
+    dominant_variant_compatible_no_biallelic = (
         condition_masks["has_dominant_like"] & ~has_recessive_requirement
     )
 
@@ -316,7 +389,13 @@ def BS4_criteria(
         for sample_b in patient_cols[i + 1:]:
             a_alt = patient_alt_counts[sample_a]
             b_alt = patient_alt_counts[sample_b]
-            called = patient_called[sample_a] & patient_called[sample_b] & valid_model
+            called = (
+                patient_called[sample_a]
+                & patient_called[sample_b]
+                & valid_model
+                & _sample_has_applicable_model(sample_a)
+                & _sample_has_applicable_model(sample_b)
+            )
 
             hom_wt = (
                 ((a_alt >= 2) & (b_alt == 0))
@@ -337,15 +416,15 @@ def BS4_criteria(
                 & mendelian_locus
                 & hom_het
                 & (
-                    ar_only
-                    | (ar_plus_gof_dn_nmd_only & is_nmd_lof)
+                    hom_hemi_only
+                    | (hom_hemi_plus_gof_dn_nmd_only & is_nmd_lof)
                 )
             )
             final_criteria = final_criteria | (
                 called
                 & mendelian_locus
                 & het_wt
-                & dominant_variant_compatible_no_ar
+                & dominant_variant_compatible_no_biallelic
             )
 
     # Patient-control comparisons.
@@ -354,7 +433,13 @@ def BS4_criteria(
         p_called = patient_called[patient]
         for control in control_cols:
             c_alt = control_alt_counts[control]
-            called = p_called & control_called[control] & valid_model
+            called = (
+                p_called
+                & control_called[control]
+                & valid_model
+                & _sample_has_applicable_model(patient)
+                & _sample_has_applicable_model(control)
+            )
 
             patient_hom_control_het = (p_alt >= 2) & (c_alt == 1)
             patient_het_control_het = (p_alt == 1) & (c_alt == 1)
@@ -365,13 +450,13 @@ def BS4_criteria(
                 called
                 & mendelian_locus
                 & patient_hom_control_het
-                & dominant_variant_compatible_no_ar
+                & dominant_variant_compatible_no_biallelic
             )
             supporting_criteria = supporting_criteria | (
                 called
                 & mendelian_locus
                 & patient_het_control_het
-                & dominant_variant_compatible_no_ar
+                & dominant_variant_compatible_no_biallelic
             )
 
     bs4_array = np.zeros(len(df), dtype=int)
@@ -387,7 +472,8 @@ def BP2_PM3_criteria(df: pd.DataFrame,
                      ps1_criteria: np.ndarray,
                      ps3_criteria: np.ndarray,
                      threads: int = 1) -> Tuple[pd.Series, pd.Series]:
-    # BP2: observed in trans with a pathogenic variant in dominant disease, Or in-cis with a pathogenic variant with any inheritance mode
+    # BP2: observed in trans with a pathogenic variant in a dominant disease, or
+    # in cis with a pathogenic variant in an autosomal recessive disease.
     # PM3: observed in trans with a pathogenic variant in recessive disease.
     #
     # THE DECISION TREE
@@ -408,18 +494,26 @@ def BP2_PM3_criteria(df: pd.DataFrame,
     #   determine_cis_trans_relationships  ->  in_cis / in_trans
     #             |
     #             +-- BP2, benign supporting
-    #             |     in_trans AND is_dominant AND NOT is_recessive
+    #             |     in_trans AND (autosomal dominant OR
+    #             |                           x_linked_dominant)
+    #             |                    AND NOT autosomal recessive
     #             |         a second pathogenic allele on the other copy is
     #             |         incompatible with dominant disease
-    #             |     OR in_cis AND is_recessive
+    #             |     OR in_cis AND autosomal recessive
     #             |         both hits on one copy leave the other intact, so
     #             |         a recessive disease is not explained
+    #             |     x_linked_recessive is excluded from both branches: a person
+    #             |         with one X copy has no second homolog on which phase
+    #             |         can provide BP2 evidence
     #             |
     #             +-- PM3, pathogenic moderate
     #                   in_trans AND is_recessive AND PM2
     #                       the partner completes a biallelic genotype, and
     #                       PM2 requires the variant to be rare enough for
     #                       that to be meaningful
+    #                   x_linked_recessive is deliberately excluded: a male with one
+    #                       X copy does not need a second allele. Male X variants
+    #                       are also normalized to in-cis by the phase module.
     #
     # Note the asymmetry: dominant is additionally guarded by NOT recessive.
     # This remains necessary when the selected evidence contains unresolved
@@ -429,8 +523,9 @@ def BP2_PM3_criteria(df: pd.DataFrame,
     #
     # Any selected ``incomplete`` value gates both criteria because phase cannot
     # contradict a model when carriers may be unaffected. The upstream category
-    # also covers low/moderate penetrance, delayed/variable onset, and variable
-    # expressivity; ``high`` remains non-blocking.
+    # also covers low/moderate penetrance and late onset; other onset terms,
+    # age-dependent penetrance and variable expressivity are non-blocking; high
+    # penetrance has already normalized to complete.
     pathogenic = df["vep_consq_lof"] | df["splicing_lof"] | df["5UTR_lof"] | (ps1_criteria & ps3_criteria) | pvs1_criteria
 
     in_cis_pathogenic, in_trans_pathogenic, df = determine_cis_trans_relationships( df,
@@ -443,6 +538,7 @@ def BP2_PM3_criteria(df: pd.DataFrame,
 
     condition_masks = _variant_condition_masks(df)
     is_recessive = condition_masks["has_recessive"]
+    is_x_linked_recessive = condition_masks["has_x_linked_recessive"]
     is_dominant = condition_masks["has_dominant_like"]
     valid_model = (
         condition_masks["has_mendelian"]
@@ -452,7 +548,11 @@ def BP2_PM3_criteria(df: pd.DataFrame,
     )
 
     bp2_criteria = (
-        (in_trans_pathogenic & is_dominant & np.logical_not(is_recessive))
+        (
+            in_trans_pathogenic
+            & is_dominant
+            & np.logical_not(is_recessive | is_x_linked_recessive)
+        )
         | (in_cis_pathogenic & is_recessive)
     ) & valid_model
     pm3_criteria = (

@@ -5,8 +5,8 @@ Neither is about the molecule. Both ask whether the carriers are consistent
 with the allele causing the disease in question.
 
     BS2  observed in an apparently healthy adult, in a genotype the disease
-         model would require to be affected. Delayed/variable onset is already
-         normalized to the linked condition's ``incomplete`` penetrance value,
+         model would require to be affected. Late onset is already normalized
+         to the linked condition's ``incomplete`` penetrance value,
          so a healthy thirty-year-old cannot contradict a late-onset disorder.
     BP5  found in a patient whose disease already has an alternative
          molecular explanation. extract_and_summarize_alt_disease_variants
@@ -48,9 +48,10 @@ def BS2_criteria(
 
     Global gates:
       - no BS2 for non-monogenic/polygenic, non-Mendelian, or any selected
-        incomplete-equivalent penetrance assertion. That category includes
-        moderate/low penetrance, delayed/variable onset and variable
-        expressivity. High penetrance remains eligible at the standard count.
+        incomplete-equivalent assertion: incomplete, moderate, or low
+        penetrance, or late onset. Other onset terms, age-dependent penetrance,
+        and variable expressivity do not block. High penetrance is normalized
+        to complete and uses the lower complete-penetrance threshold.
       - no BS2 while a relevant HPO disease context still requires scope review.
       - if HPO explicitly marks complete penetrance, use lower gnomAD count
         thresholds (>3 instead of >10), still requiring no incomplete history.
@@ -61,6 +62,10 @@ def BS2_criteria(
         control_AC > 0, or healthy Y-linked allele observation.
       - hom/hemi evidence = gnomAD_nhomalt_XX + gnomAD_nhomalt_XY above
         threshold, or internal control_nhomalt > 0.
+      - X-linked recessive evidence = gnomAD_nhomalt_XY above threshold.
+      - X-linked dominant evidence = gnomAD XX allele count above
+        threshold. XY observations cannot substitute for XX observations.
+      - an unqualified X-linked history supplies no BS2 observation model.
 
     BS2 decision matrix:
       Variant state:
@@ -108,8 +113,13 @@ def BS2_criteria(
     def _numeric_column(column: str) -> pd.Series:
         return pd.to_numeric(df.get(column, pd.Series(0, index=df.index)), errors="coerce").fillna(0)
 
-    chrom = _series_or_empty("chrom")
-    y_locus = chrom.str.contains("Y", regex=False)
+    chrom = _series_or_empty("chrom").str.upper().str.replace(
+        r"^CHR", "", regex=True
+    )
+    x_locus = chrom.eq("X")
+    y_locus = chrom.eq("Y")
+    mitochondrial_locus = chrom.isin({"M", "MT"})
+    autosomal_locus = ~(x_locus | y_locus | mitochondrial_locus)
 
     scope_review_required = _series_or_empty("HPO_scope_review_required").str.lower().isin(
         {"1", "true", "yes"}
@@ -129,13 +139,26 @@ def BS2_criteria(
     complete_eligible = baseline_eligible & complete_penetrance
 
     has_recessive_requirement = condition_masks["has_recessive"]
-    dominant_mechanism_compatible = condition_masks["has_dominant_like"]
-    dominant_without_recessive = (
-        dominant_mechanism_compatible & ~has_recessive_requirement
+    non_x_single_copy_model = (
+        (
+            autosomal_locus
+            & condition_masks["has_dominant"]
+            & ~has_recessive_requirement
+        )
+        | (y_locus & condition_masks["has_y_linked"])
+        | (mitochondrial_locus & condition_masks["has_mitochondrial"])
+    )
+    x_recessive_model = x_locus & condition_masks["has_x_linked_recessive"]
+    x_dominant_model = (
+        x_locus
+        & condition_masks["has_x_linked_dominant"]
+        & ~has_recessive_requirement
     )
 
     gnomad_ac = (_numeric_column("gnomAD_joint_AF") * _numeric_column("gnomAD_joint_AN"))
     gnomad_hom_hemi = _numeric_column("gnomAD_nhomalt_XX") + _numeric_column("gnomAD_nhomalt_XY")
+    gnomad_x_xy = _numeric_column("gnomAD_nhomalt_XY")
+    gnomad_xx_ac = _numeric_column("gnomAD_joint_AC_XX")
     y_allele_observed = y_locus & (_numeric_column("gnomAD_joint_AF_XY") > 0)
 
     if 'control_AC' in df.columns:
@@ -153,14 +176,25 @@ def BS2_criteria(
     complete_carrier_evidence = (
         (gnomad_ac > 3) | control_ac_observed | y_allele_observed
     )
+    x_xy_evidence = gnomad_x_xy > 10
+    complete_x_xy_evidence = gnomad_x_xy > 3
+    x_xx_evidence = gnomad_xx_ac > 10
+    complete_x_xx_evidence = gnomad_xx_ac > 3
     bs2_standard = baseline_eligible & (
         (has_recessive_requirement & hom_hemi_evidence)
-        | (dominant_without_recessive & (carrier_evidence | hom_hemi_evidence))
+        | (non_x_single_copy_model & (carrier_evidence | hom_hemi_evidence))
+        | (x_recessive_model & x_xy_evidence)
+        | (x_dominant_model & x_xx_evidence)
     )
     bs2_complete_penetrance = complete_eligible & (
         (has_recessive_requirement & complete_hom_hemi_evidence)
+        | (x_recessive_model & complete_x_xy_evidence)
         | (
-            dominant_without_recessive
+            x_dominant_model
+            & complete_x_xx_evidence
+        )
+        | (
+            non_x_single_copy_model
             & (complete_carrier_evidence | complete_hom_hemi_evidence)
         )
     )
@@ -227,11 +261,11 @@ def BP5_criteria(df: pd.DataFrame,
     Logic: If a variant is found in patients with alternative diseases, it suggests benignity
     for the query disease, UNLESS the gene has non-monogenic inheritance or incomplete penetrance.
 
-    For selected dominant, monogenic histories without incomplete penetrance:
+    For selected autosomal dominant or X-linked-dominant histories:
     - Variants found in alt disease patients (het or hom) get BP5
 
-    For selected recessive, monogenic histories without incomplete penetrance:
-    - Only variants found as homozygous in alt disease patients get BP5
+    For selected recessive or X-linked-recessive histories:
+    - Only variants found as homozygous or hemizygous get BP5
 
     The inheritance and penetrance inputs are the hub's condition-linked
     categorical columns. Known incompatible mechanisms were already removed;
@@ -327,14 +361,24 @@ def BP5_criteria(df: pd.DataFrame,
         & ~condition_masks["has_incomplete_penetrance"]
     )
 
-    # For dominant genes: any presence (het or hom) in alt disease patients = BP5
-    only_dominant = condition_masks["has_dominant_like"] & ~condition_masks["has_recessive"]
-    dominant_bp5 = (only_dominant & \
+    # A heterozygous observation is informative for autosomal dominant or
+    # explicitly X-linked-dominant disease. An X-linked-recessive history does
+    # not erase a separate dominant assertion for the same condition.
+    heterozygous_disease = (
+        condition_masks["has_dominant_like"]
+        & ~condition_masks["has_recessive"]
+    )
+    dominant_bp5 = (heterozygous_disease & \
                    eligible_genes & \
                    (df['alt_disease_hets'] | df['alt_disease_homs']))
 
-    # For recessive genes: only homozygous presence in alt disease patients = BP5
-    recessive_bp5 = condition_masks["has_recessive"] & \
+    # Biallelic and X-linked-recessive models require a homozygous/hemizygous
+    # observation. ``alt_disease_homs`` includes AC_Hemi from the input VCF.
+    hom_hemi_disease = (
+        condition_masks["has_recessive"]
+        | condition_masks["has_x_linked_recessive"]
+    )
+    recessive_bp5 = hom_hemi_disease & \
                     eligible_genes & \
                     df['alt_disease_homs']
 

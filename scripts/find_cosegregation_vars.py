@@ -8,10 +8,23 @@ def parse_gt(gt):
     """Parse genotype tuple, handling phasing and missing data."""
     if gt is None:
         return None
-    alleles = [allele for allele in gt if allele != '.']
+    alleles = [allele for allele in gt if allele not in {None, '.'}]
     if not alleles:
         return None
     return alleles
+
+
+def _normalized_sex(gender):
+    value = str(gender).strip().lower()
+    if value in {"1", "1.0", "m", "male"}:
+        return 1
+    if value in {"2", "2.0", "f", "female"}:
+        return 2
+    return None
+
+
+def _normalized_chromosome(chrom):
+    return str(chrom).strip().upper().removeprefix("CHR")
 
 
 
@@ -19,25 +32,30 @@ def check_variant_presence(alleles, gender, chrom):
     """Determine if genotype matches the inheritance mode, considering gender and chromosome."""
     if alleles is None:
         return None
-    variant_count = None if alleles is None else sum(1 for allele in alleles if allele == '1')
-    is_x = 'X' in chrom
-    is_y = 'Y' in chrom
+    variant_count = sum(1 for allele in alleles if str(allele) == '1')
+    chromosome = _normalized_chromosome(chrom)
+    sex = _normalized_sex(gender)
+    is_x = chromosome == 'X'
+    is_y = chromosome == 'Y'
 
     if is_y:
-        if gender == '1':  # Male
+        if sex == 1:
             return variant_count >= 1
-        return False  # Females lack Y chromosome
+        if sex == 2:
+            return False
+        return None
 
     if is_x:
-        if gender == '1':  # Male, haploid X
-            return "Hemizygous" if variant_count == 1 else False
-        else:  # Female
+        if sex == 1:
+            return "Hemizygous" if variant_count >= 1 else False
+        if sex == 2:
             if variant_count > 1:
                 return "Homozygous"
             elif variant_count == 1:
                 return "Heterozygous"
             else:
                 return False
+        return None
 
     # Autosomal (AD or AR)
     if variant_count > 1:
@@ -49,21 +67,27 @@ def check_variant_presence(alleles, gender, chrom):
 
 
 
-def find_cosegregating_variants(vcf_file, ped_file):
-    """Find variants cosegregating under the specified inheritance mode (dominant or recessive).
+def find_cosegregating_variants(vcf_file, ped_file, mode="both"):
+    """Count relatives whose genotypes cosegregate with each variant.
     
     Args:
         vcf_file (str): Path to multi-family VCF file.
         ped_file (str): Path to pedigree file.
+        mode (str): Compatibility selector accepted by the public CLI.
     Returns:
-        set: Variant tuples (chrom, pos, ref, alt) that cosegregate under the mode.
+        dict: Per-variant segregation counts, including explicit male and female
+            counts for sex-linked criteria.
     """
 
     # Load pedigree
     ped_df = pd.read_csv(ped_file, sep='\t', header=None, 
                          names=['FamilyID', 'IndividualID', 'PaternalID', 'MaternalID', 'Sex', 'Phenotype'])
-    ped_df.loc[:, 'Sex'] = ped_df['Sex'].astype(int)
-    ped_df.loc[:, 'Phenotype'] = ped_df['Phenotype'].astype(int)
+    if mode not in {"dominant", "recessive", "both"}:
+        raise ValueError(f"Unsupported cosegregation mode: {mode}")
+    ped_df.loc[:, 'Sex'] = pd.to_numeric(ped_df['Sex'], errors='coerce').astype('Int64')
+    ped_df.loc[:, 'Phenotype'] = pd.to_numeric(
+        ped_df['Phenotype'], errors='coerce'
+    ).astype('Int64')
     families = ped_df.groupby('FamilyID')
 
     # Per-var stats
@@ -79,11 +103,19 @@ def find_cosegregating_variants(vcf_file, ped_file):
             unaffected_segregation_count = 0
             affected_homo_count = 0
             unaffected_nonhomo_count = 0
+            affected_male_segregation_count = 0
+            unaffected_male_segregation_count = 0
+            affected_female_segregation_count = 0
+            unaffected_female_segregation_count = 0
             # Initialize results
             results = { "Affected_segregated_inds": 0,
                         "Unaffected_segregated_inds": 0,
                         "Affected_homozygous_inds": 0,
-                        "Unaffected_nonhomo_inds": 0 }
+                        "Unaffected_nonhomo_inds": 0,
+                        "Male_affected_segregated_inds": 0,
+                        "Male_unaffected_segregated_inds": 0,
+                        "Female_affected_segregated_inds": 0,
+                        "Female_unaffected_segregated_inds": 0 }
     
             for _, family in families:
                 affected = family[family['Phenotype'] == 2][['IndividualID', 'Sex']].values
@@ -101,7 +133,11 @@ def find_cosegregating_variants(vcf_file, ped_file):
                 # Check affected individuals
                 affected_ind_gts = []
                 male_affected_gts = []
+                female_affected_gts = []
                 for ind, gender in affected:
+                    sex = _normalized_sex(gender)
+                    if _normalized_chromosome(chrom) in {"X", "Y"} and sex is None:
+                        continue
                     gt = record.samples[ind]['GT']
                     alleles = parse_gt(gt)
                     presence = check_variant_presence(alleles, gender, chrom)
@@ -110,8 +146,10 @@ def find_cosegregating_variants(vcf_file, ped_file):
                         break
                     else:
                         affected_ind_gts.append(presence)
-                        if gender == 1:
+                        if sex == 1:
                             male_affected_gts.append(presence)
+                        elif sex == 2:
+                            female_affected_gts.append(presence)
 
                 if not all_families_pass:
                     # Early exit if affected individuals do not carry the variant
@@ -121,8 +159,12 @@ def find_cosegregating_variants(vcf_file, ped_file):
                 non_parental_controls_gts = []
                 parental_controls_gts = []
                 male_nonparental_control_gts = []
+                female_nonparental_control_gts = []
 
                 for ind, gender in unaffected:
+                    sex = _normalized_sex(gender)
+                    if _normalized_chromosome(chrom) in {"X", "Y"} and sex is None:
+                        continue
                     gt = record.samples[ind]['GT']
                     alleles = parse_gt(gt)
                     presence = check_variant_presence(alleles, gender, chrom)
@@ -134,8 +176,10 @@ def find_cosegregating_variants(vcf_file, ped_file):
                             parental_controls_gts.append(presence)
                         else:
                             non_parental_controls_gts.append(presence)
-                            if gender == 1:
+                            if sex == 1:
                                 male_nonparental_control_gts.append(presence)
+                            elif sex == 2:
+                                female_nonparental_control_gts.append(presence)
 
                 if not all_families_pass:
                     # Early exit if any unaffected individual carries the variant in disallowed state
@@ -147,7 +191,11 @@ def find_cosegregating_variants(vcf_file, ped_file):
                     affected_segregation_count += len(affected_ind_gts)
                     unaffected_segregation_count += len(non_parental_controls_gts)
                     affected_male_segregation_count += len(male_affected_gts)
-                    unaffected_male_sgregation_count += len(male_nonparental_control_gts)
+                    unaffected_male_segregation_count += len(male_nonparental_control_gts)
+                    affected_female_segregation_count += len(female_affected_gts)
+                    unaffected_female_segregation_count += len(
+                        female_nonparental_control_gts
+                    )
                 elif "Heterozygous" in affected_ind_gts:
                     all_families_pass = False
                 else:
@@ -162,7 +210,9 @@ def find_cosegregating_variants(vcf_file, ped_file):
                 results["Unaffected_segregated_inds"] += unaffected_segregation_count
                 results["Unaffected_nonhomo_inds"] += unaffected_nonhomo_count
                 results["Male_affected_segregated_inds"] += affected_male_segregation_count
-                results["Male_unaffected_segregated_inds"] += unaffected_male_sgregation_count
+                results["Male_unaffected_segregated_inds"] += unaffected_male_segregation_count
+                results["Female_affected_segregated_inds"] += affected_female_segregation_count
+                results["Female_unaffected_segregated_inds"] += unaffected_female_segregation_count
                 per_var_stats[variant] = results
                
     return per_var_stats

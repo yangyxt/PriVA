@@ -199,7 +199,7 @@ def _write_fixture_sources(tmp_path: Path) -> dict[str, Path]:
     condition_cache.write_text(
         json.dumps(
             {
-                "_meta": {"schema_version": "1.0"},
+                "_meta": {"schema_version": "1.2"},
                 "genes": {
                     "TESTLOF": {
                         "conditions": {"OMIM:1": lof_condition},
@@ -236,6 +236,9 @@ def _write_fixture_sources(tmp_path: Path) -> dict[str, Path]:
                 "scope_review_status",
                 "disease_label",
                 "inheritance",
+                "penetrance_raw",
+                "penetrance_hpo_ids",
+                "normalized_penetrance",
                 "patho_mode_raw",
                 "normalized_mechanisms",
                 "mechanism_confidence",
@@ -247,15 +250,15 @@ def _write_fixture_sources(tmp_path: Path) -> dict[str, Path]:
         + "TESTLOF\tG2P_DDG2P\t1\tOMIM:1\tMONDO:1\t"
         "mendelian_non_neoplastic\tinclude\tauto_supported\t"
         "biallelic LOF disorder\t"
-        "biallelic_autosomal\tloss of function\tLOF\thigh\tdefinitive\t1\n"
+        "biallelic_autosomal\t\t\t\tloss of function\tLOF\thigh\tdefinitive\t1\n"
         + "TESTMONO\tG2P_DDG2P\t2\tOMIM:2\tMONDO:2\t"
         "mendelian_non_neoplastic\tinclude\tauto_supported\t"
         "monoallelic LOF disorder\t"
-        "monoallelic_autosomal\tloss of function\tLOF\thigh\tdefinitive\t2\n"
+        "monoallelic_autosomal\t\t\t\tloss of function\tLOF\thigh\tdefinitive\t2\n"
         + "TESTGOF\tG2P_DDG2P\t3\tOMIM:3\tMONDO:3\t"
         "mendelian_non_neoplastic\tinclude\tauto_supported\t"
         "biallelic GOF disorder\t"
-        "biallelic_autosomal\tgain of function\tGOF\thigh\tdefinitive\t3\n",
+        "biallelic_autosomal\t\t\t\tgain of function\tGOF\thigh\tdefinitive\t3\n",
         encoding="utf-8",
     )
 
@@ -350,6 +353,33 @@ def test_loftee_os_enters_splice_pp3_and_blocks_bp4() -> None:
     assert bp4.tolist() == [0, 1]
 
 
+def test_variant_x_linked_tracks_query_locus_independently_of_inheritance(
+    tmp_path: Path,
+) -> None:
+    sources = _write_fixture_sources(tmp_path)
+    frame = pd.DataFrame(
+        [
+            {
+                "SYMBOL": "TESTMONO",
+                "Gene": "ENSG4",
+                "chrom": "chrX",
+                "Consequence": "stop_gained",
+                "LoF": "HC",
+                "NMD": "NMD",
+                "vep_consq_lof": True,
+            }
+        ]
+    )
+
+    annotated = annotate_gene_mechanism_categories(
+        frame,
+        use_hgnc_package=False,
+        **sources,
+    )
+
+    assert annotated.loc[0, "variant_x_linked"] == "true"
+
+
 def test_variant_level_mechanism_contract(tmp_path: Path) -> None:
     sources = _write_fixture_sources(tmp_path)
     frame = pd.DataFrame(
@@ -423,7 +453,7 @@ def test_variant_level_mechanism_contract(tmp_path: Path) -> None:
     assert biallelic_lof["variant_condition_ids"] == "OMIM:1"
     assert biallelic_lof["variant_inheritance"] == "recessive"
     assert biallelic_lof["variant_x_linked"] == "false"
-    assert biallelic_lof["variant_penetrance"] == "unknown"
+    assert biallelic_lof["variant_penetrance"] == ""
 
     biallelic_gof = annotated.loc["TESTGOF"]
     assert biallelic_gof["var_plausible_patho_mechs"] == "recessive_GOF"
@@ -485,11 +515,86 @@ def test_mechanism_free_condition_is_retained_as_unresolved_history(
     assert annotated["variant_inheritance_basis"] == "unresolved_condition_history"
     assert annotated["variant_condition_ids"] == "OMIM:3"
     assert annotated["variant_condition_histories"] == (
-        "OMIM:3|UNRESOLVED|recessive|unknown"
+        "OMIM:3|UNRESOLVED|recessive|"
     )
 
 
-def test_known_mechanism_mismatch_does_not_reintroduce_gene_fallback(
+def test_plain_synonymous_variant_retains_all_plausible_condition_histories(
+    tmp_path: Path,
+) -> None:
+    sources = _write_fixture_sources(tmp_path)
+    frame = pd.DataFrame(
+        [
+            {
+                "SYMBOL": "TESTMONO",
+                "Gene": "ENSG4",
+                "Consequence": "synonymous_variant",
+                "LoF": "",
+                "NMD": "",
+                "vep_consq_lof": False,
+                "splicing_lof": False,
+                "splicing_frameshift": False,
+                "variant_gof_tag": "",
+            }
+        ]
+    )
+
+    annotated = annotate_gene_mechanism_categories(
+        frame,
+        use_hgnc_package=False,
+        **sources,
+    ).iloc[0]
+
+    assert annotated["variant_effect"] == "uncertain"
+    assert annotated["variant_lof_score"] == 1
+    assert annotated["variant_gof_score"] == 1
+    assert annotated["variant_dn_score"] == 1
+    assert annotated["variant_inheritance"] == "dominant"
+    assert annotated["variant_inheritance_basis"] == "matched_history"
+    assert annotated["variant_condition_ids"] == "OMIM:2"
+    assert annotated["variant_condition_histories"] == "OMIM:2|LOF|dominant|"
+    assert annotated["variant_mechanism_uncertain"] == "dominant_LOF"
+
+    masks = _variant_mechanism_masks(pd.DataFrame([annotated]))
+    assert masks["is_uncertain"].iloc[0]
+    assert not masks["is_predicted_lof"].iloc[0]
+
+
+def test_pruned_condition_tombstone_does_not_block_constraint_fallback(
+    tmp_path: Path,
+) -> None:
+    sources = _write_fixture_sources(tmp_path)
+    payload = json.loads(sources["condition_cache"].read_text(encoding="utf-8"))
+    gene = payload["genes"]["TESTGOF"]
+    gene["conditions"] = {}
+    gene["scope_gate"] = {"excluded_condition_count": 1}
+    sources["condition_cache"].write_text(json.dumps(payload), encoding="utf-8")
+    frame = pd.DataFrame(
+        [
+            {
+                "SYMBOL": "TESTGOF",
+                "Gene": "ENSG3",
+                "Consequence": "missense_variant",
+                "LoF": "",
+                "NMD": "",
+                "vep_consq_lof": False,
+                "variant_gof_tag": "",
+            }
+        ]
+    )
+
+    annotated = annotate_gene_mechanism_categories(
+        frame,
+        use_hgnc_package=False,
+        **sources,
+    ).iloc[0]
+
+    assert annotated["variant_inheritance"] == "recessive"
+    assert annotated["variant_inheritance_basis"] == "gene_constraint"
+    assert annotated["variant_condition_ids"] == ""
+
+
+def test_known_mechanism_mismatch_discards_only_the_condition(
     tmp_path: Path,
 ) -> None:
     sources = _write_fixture_sources(tmp_path)
@@ -514,13 +619,13 @@ def test_known_mechanism_mismatch_does_not_reintroduce_gene_fallback(
     ).iloc[0]
 
     assert annotated["variant_effect"] == "exact_known_LOF"
-    assert annotated["variant_inheritance"] == ""
-    assert annotated["variant_inheritance_basis"] == "mechanism_mismatch"
+    assert annotated["variant_inheritance"] == "recessive"
+    assert annotated["variant_inheritance_basis"] == "gene_constraint"
     assert annotated["variant_condition_ids"] == ""
-    assert annotated["variant_penetrance"] == "unknown"
+    assert annotated["variant_penetrance"] == ""
 
 
-def test_review_only_condition_blocks_constraint_fallback(tmp_path: Path) -> None:
+def test_review_only_condition_does_not_block_constraint_fallback(tmp_path: Path) -> None:
     sources = _write_fixture_sources(tmp_path)
     payload = json.loads(sources["condition_cache"].read_text(encoding="utf-8"))
     condition = payload["genes"]["TESTGOF"]["conditions"]["OMIM:3"]
@@ -546,9 +651,54 @@ def test_review_only_condition_blocks_constraint_fallback(tmp_path: Path) -> Non
         **sources,
     ).iloc[0]
 
-    assert annotated["variant_inheritance"] == ""
-    assert annotated["variant_inheritance_basis"] == "condition_scope_blocked"
+    assert annotated["variant_inheritance"] == "recessive"
+    assert annotated["variant_inheritance_basis"] == "gene_constraint"
     assert annotated["variant_condition_ids"] == ""
+
+
+def test_matched_condition_without_inheritance_uses_constraint_fallback(
+    tmp_path: Path,
+) -> None:
+    sources = _write_fixture_sources(tmp_path)
+    payload = json.loads(sources["condition_cache"].read_text(encoding="utf-8"))
+    condition = payload["genes"]["TESTGOF"]["conditions"]["OMIM:3"]
+    condition["inheritance"] = {"modes": [], "assertions": []}
+    condition["penetrance"] = {
+        "statuses": ["incomplete"],
+        "assertions": [],
+    }
+    mechanism = condition["pathogenic_mechanisms"]["GOF"]
+    mechanism["allelic_requirements"] = []
+    for evidence in mechanism["evidence"]:
+        evidence["allelic_requirement"] = ""
+    sources["condition_cache"].write_text(json.dumps(payload), encoding="utf-8")
+    frame = pd.DataFrame(
+        [
+            {
+                "SYMBOL": "TESTGOF",
+                "Gene": "ENSG3",
+                "Consequence": "missense_variant",
+                "LoF": "",
+                "NMD": "",
+                "vep_consq_lof": False,
+                "variant_gof_tag": "GOF",
+            }
+        ]
+    )
+
+    annotated = annotate_gene_mechanism_categories(
+        frame,
+        use_hgnc_package=False,
+        **sources,
+    ).iloc[0]
+
+    assert annotated["variant_inheritance"] == "recessive"
+    assert annotated["variant_inheritance_basis"] == "gene_constraint"
+    assert annotated["variant_condition_ids"] == "OMIM:3"
+    assert annotated["variant_condition_histories"] == (
+        "OMIM:3|GOF|unknown|incomplete"
+    )
+    assert annotated["variant_penetrance"] == "incomplete"
 
 
 def test_gene_wide_lof_signals_remain_audit_only_without_condition_history(
@@ -763,7 +913,7 @@ def test_scope_review_blocks_automatic_bs2() -> None:
                 "gnomAD_nhomalt_XX": 0,
                 "gnomAD_nhomalt_XY": 0,
                 "variant_inheritance": "dominant",
-                "variant_penetrance": "unknown",
+                "variant_penetrance": "",
             },
             {
                 "chrom": "chr1",
@@ -783,7 +933,7 @@ def test_scope_review_blocks_automatic_bs2() -> None:
                 "gnomAD_nhomalt_XX": 0,
                 "gnomAD_nhomalt_XY": 0,
                 "variant_inheritance": "dominant",
-                "variant_penetrance": "unknown",
+                "variant_penetrance": "",
             },
         ]
     )
@@ -843,6 +993,88 @@ def test_gene_hub_does_not_reintroduce_excluded_hpo_inheritance(
     assert summary["hpo_scope_excluded_disease_ids"] == "OMIM:EXCLUDED"
 
 
+def test_gene_hub_keeps_x_g2p_state_separate_from_clingen_hi3(
+    tmp_path: Path,
+) -> None:
+    sources = _write_fixture_sources(tmp_path)
+    cache = json.loads(sources["condition_cache"].read_text(encoding="utf-8"))
+    condition = cache["genes"]["TESTMONO"]["conditions"]["OMIM:2"]
+    condition["inheritance"]["modes"] = ["x_linked_dominant"]
+    condition["pathogenic_mechanisms"]["LOF"]["evidence"][0][
+        "allelic_requirement"
+    ] = "monoallelic_X_heterozygous"
+    sources["condition_cache"].write_text(json.dumps(cache), encoding="utf-8")
+    pd.DataFrame(
+        [
+            {
+                "#Gene Symbol": "TESTMONO",
+                "Genomic Location": "chrX:100-200",
+                "Haploinsufficiency Score": "3",
+                "Haploinsufficiency Description": "Sufficient evidence",
+                "Triplosensitivity Score": "0",
+                "Triplosensitivity Description": "No evidence",
+            }
+        ]
+    ).to_csv(sources["clingen_dosage"], sep="\t", index=False)
+
+    summary = GeneMechanismHub(
+        use_hgnc_package=False,
+        **sources,
+    ).known_inheritance_mode("TESTMONO")
+
+    assert summary["dominant"] is False
+    assert summary["recessive"] is False
+    assert summary["x_linked_dominant"] is True
+    assert summary["haplo_insufficient"] is True
+    assert summary["ddg2p_lof_history"][
+        "ddg2p_lof_x_linked_dominant"
+    ] is True
+    assert summary["ddg2p_lof_history"]["ddg2p_lof_inheritance_counts"] == {
+        "monoallelic_X_heterozygous": 1
+    }
+
+
+def test_gene_hub_reads_x_clingen_hi3_from_included_condition_cache(
+    tmp_path: Path,
+) -> None:
+    sources = _write_fixture_sources(tmp_path)
+    cache = json.loads(sources["condition_cache"].read_text(encoding="utf-8"))
+    condition = cache["genes"]["TESTMONO"]["conditions"]["OMIM:2"]
+    condition["inheritance"] = {"modes": [], "assertions": []}
+    lof_block = condition["pathogenic_mechanisms"]["LOF"]
+    lof_block["allelic_requirements"] = ["monoallelic_X_heterozygous"]
+    evidence = lof_block["evidence"][0]
+    evidence["source"] = "ClinGen_haploinsufficiency"
+    evidence["source_record_id"] = "TESTMONO|OMIM:2"
+    evidence["allelic_requirement"] = "monoallelic_X_heterozygous"
+    sources["condition_cache"].write_text(json.dumps(cache), encoding="utf-8")
+    pd.DataFrame(
+        [
+            {
+                "#Gene Symbol": "TESTMONO",
+                "Genomic Location": "chrX:100-200",
+                "Haploinsufficiency Score": "3",
+                "Haploinsufficiency Description": "Sufficient evidence",
+                "Triplosensitivity Score": "0",
+                "Triplosensitivity Description": "No evidence",
+            }
+        ]
+    ).to_csv(sources["clingen_dosage"], sep="\t", index=False)
+
+    summary = GeneMechanismHub(
+        use_hgnc_package=False,
+        **sources,
+    ).known_inheritance_mode("TESTMONO")
+
+    assert summary["dominant"] is False
+    assert summary["recessive"] is False
+    assert summary["x_linked_dominant"] is True
+    assert summary["x_linked_recessive"] is False
+    assert summary["x_linked_unspecified"] is False
+    assert summary["haplo_insufficient"] is True
+    assert summary["ddg2p_lof_history"]["has_ddg2p_lof_history"] is False
+
+
 def _modern_mechanism_rows() -> pd.DataFrame:
     return pd.DataFrame(
         {
@@ -862,7 +1094,7 @@ def _modern_mechanism_rows() -> pd.DataFrame:
             "variant_effect": ["exact_known_GOF"] * 3,
             "variant_gof_tag": ["GOF"] * 3,
             "variant_inheritance": ["recessive", "recessive", "dominant"],
-            "variant_penetrance": ["unknown", "unknown", "unknown"],
+            "variant_penetrance": ["", "", ""],
         }
     )
 

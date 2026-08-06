@@ -18,7 +18,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-from acmg_inheritance import identify_inheritance_mode_per_row
+from acmg_inheritance import identify_inheritance_mode_per_row, parse_hpo_inheritance
 from clinvar_vcv import open_text
 from gene_mechanism_common import (
     CANONICAL_MECHANISMS,
@@ -27,6 +27,9 @@ from gene_mechanism_common import (
     DDG2P_DOMINANT_LOF_INHERITANCE,
     DDG2P_LOF_RAW_VALUES,
     DDG2P_RECESSIVE_LOF_INHERITANCE,
+    DDG2P_X_LINKED_DOMINANT_LOF_INHERITANCE,
+    DDG2P_X_LINKED_UNSPECIFIED_LOF_INHERITANCE,
+    DDG2P_Y_LINKED_LOF_INHERITANCE,
     DDG2P_USABLE_DISEASE_CONFIDENCE,
     DDG2P_USABLE_MECHANISM_CONFIDENCE,
     DEFAULT_CLINGEN_DOSAGE,
@@ -55,6 +58,7 @@ from gene_mechanism_conditions import (
     condition_cache_mechanism_assertions,
     condition_cache_mechanism_entries,
     enrich_condition_mechanism_assertion,
+    normalize_inheritance_histories,
 )
 from gene_mechanism_variants import ExactVariantMatcher
 
@@ -581,6 +585,7 @@ class GeneMechanismHub:
             if not symbol:
                 continue
             record = {
+                "genomic_location": _clean(row.get("Genomic Location")),
                 "haploinsufficiency_score": _safe_int(row.get("Haploinsufficiency Score")),
                 "haploinsufficiency_description": _clean(
                     row.get("Haploinsufficiency Description")
@@ -867,7 +872,9 @@ class GeneMechanismHub:
             and _clean(entry.get("disease_confidence")).lower()
             in DDG2P_USABLE_DISEASE_CONFIDENCE
         ]
-        inheritance_counts = Counter(_clean(entry.get("inheritance")) for entry in entries)
+        inheritance_counts = Counter(
+            _clean(entry.get("allelic_requirement")) for entry in entries
+        )
         recessive = any(
             inheritance in DDG2P_RECESSIVE_LOF_INHERITANCE
             for inheritance in inheritance_counts
@@ -876,12 +883,27 @@ class GeneMechanismHub:
             inheritance in DDG2P_DOMINANT_LOF_INHERITANCE
             for inheritance in inheritance_counts
         )
+        x_linked_dominant = any(
+            inheritance in DDG2P_X_LINKED_DOMINANT_LOF_INHERITANCE
+            for inheritance in inheritance_counts
+        )
+        x_linked_unspecified = any(
+            inheritance in DDG2P_X_LINKED_UNSPECIFIED_LOF_INHERITANCE
+            for inheritance in inheritance_counts
+        )
+        y_linked = any(
+            inheritance in DDG2P_Y_LINKED_LOF_INHERITANCE
+            for inheritance in inheritance_counts
+        )
         out: dict[str, Any] = {
             "input_symbol": _clean(gene_symbol),
             "symbol": symbol,
             "has_ddg2p_lof_history": bool(entries),
             "ddg2p_lof_recessive": recessive,
             "ddg2p_lof_dominant": dominant,
+            "ddg2p_lof_x_linked_dominant": x_linked_dominant,
+            "ddg2p_lof_x_linked_unspecified": x_linked_unspecified,
+            "ddg2p_lof_y_linked": y_linked,
             "ddg2p_lof_inheritance_counts": dict(sorted(inheritance_counts.items())),
             "ddg2p_lof_disease_count": len({entry.get("disease", "") for entry in entries if entry.get("disease", "")}),
         }
@@ -895,13 +917,30 @@ class GeneMechanismHub:
         *,
         gene_mean_am_score: float = np.nan,
     ) -> dict[str, Any]:
-        """Return inheritance/HI calls using PriVA's existing inheritance function."""
+        """Return coarse inheritance/HI calls plus condition-cache histories."""
         symbol = self._resolved_symbol_key(gene_symbol)
         hpo_record = self._load_hpo().get(symbol, {})
         clingen_record = self._load_clingen().get(symbol, {})
         loeuf = self._load_loeuf().get(symbol, np.nan)
         clingen_hi_score = clingen_record.get("haploinsufficiency_score")
         ddg2p_lof = self.ddg2p_lof_history(symbol)
+        condition_assertions = condition_cache_mechanism_assertions(
+            self._load_condition_cache().get(symbol, {})
+        )
+        condition_inheritance: set[str] = set()
+        condition_lof_inheritance: set[str] = set()
+        for assertion in condition_assertions:
+            normalized = {
+                inheritance
+                for inheritance, _ in normalize_inheritance_histories(
+                    assertion.get("allelic_requirement", ""),
+                    assertion.get("hpo_inheritance_modes", ()),
+                )
+                if inheritance
+            }
+            condition_inheritance.update(normalized)
+            if _clean(assertion.get("mechanism")).upper() == "LOF":
+                condition_lof_inheritance.update(normalized)
 
         row_dict = {
             "Gene": symbol,
@@ -910,22 +949,40 @@ class GeneMechanismHub:
             "HPO_IDs": hpo_record.get("hpo_id", ""),
             "HPO_gene_inheritance": hpo_record.get("inheritance_modes") or None,
         }
+        hpo_inheritance = parse_hpo_inheritance(row_dict)
         result = identify_inheritance_mode_per_row(
             row_dict,
             gene_mean_am_score,
             clingen_hi_score,
+            chromosome=clingen_record.get("genomic_location", ""),
         )
         recessive, dominant, non_monogenic, non_mendelian, haplo_insufficient, incomplete = result
-        effective_recessive = bool(recessive) or bool(ddg2p_lof["ddg2p_lof_recessive"])
-        effective_dominant = bool(dominant) or bool(ddg2p_lof["ddg2p_lof_dominant"])
-        effective_haplo = bool(haplo_insufficient) or bool(ddg2p_lof["ddg2p_lof_dominant"])
+        hpo_inheritance = hpo_inheritance if isinstance(hpo_inheritance, dict) else {}
+        effective_recessive = bool(recessive) or "recessive" in condition_inheritance
+        effective_dominant = bool(dominant) or "dominant" in condition_inheritance
+        effective_haplo = bool(haplo_insufficient) or bool(
+            condition_lof_inheritance & {"dominant", "x_linked_dominant"}
+        )
         return {
             "input_symbol": _clean(gene_symbol),
             "symbol": symbol,
             "recessive": effective_recessive,
             "dominant": effective_dominant,
-            "non_monogenic": bool(non_monogenic),
-            "non_mendelian": bool(non_mendelian),
+            "x_linked_recessive": bool(
+                hpo_inheritance.get("hpo_x_linked_recessive")
+            ) or "x_linked_recessive" in condition_inheritance,
+            "x_linked_dominant": bool(
+                hpo_inheritance.get("hpo_x_linked_dominant")
+            ) or "x_linked_dominant" in condition_inheritance,
+            "x_linked_unspecified": bool(
+                hpo_inheritance.get("hpo_x_linked_unspecified")
+            ) or "x_linked_unspecified" in condition_inheritance,
+            "y_linked": "y_linked" in condition_inheritance,
+            "non_monogenic": bool(non_monogenic) or bool(
+                condition_inheritance & {"digenic", "oligogenic", "polygenic"}
+            ),
+            "non_mendelian": bool(non_mendelian)
+            or "non_mendelian" in condition_inheritance,
             "haplo_insufficient": effective_haplo,
             "incomplete_penetrance": bool(incomplete),
             "hpo_inheritance_modes": hpo_record.get("inheritance_modes", ""),

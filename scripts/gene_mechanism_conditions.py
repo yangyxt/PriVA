@@ -24,25 +24,20 @@ from gene_mechanism_common import (
     _clean,
     _deduplicate_by,
 )
-from hpo_penetrance import normalize_penetrance_hpo_ids
+from hpo_penetrance import normalize_penetrance_values
 
 
 def _hpo_inheritance_flags(inheritance_modes: Any) -> dict[str, bool]:
     """Parse the HPO inheritance mode text used by the collapsed gene table."""
     modes = {_clean(part) for part in _clean(inheritance_modes).split(";") if _clean(part)}
     return {
-        "recessive": bool(
-            {
-                "Autosomal recessive inheritance",
-                "X-linked recessive inheritance",
-                "X-linked inheritance",
-            }
-            & modes
-        ),
+        "recessive": "Autosomal recessive inheritance" in modes,
+        "x_linked_recessive": "X-linked recessive inheritance" in modes,
+        "x_linked_dominant": "X-linked dominant inheritance" in modes,
+        "x_linked_unspecified": "X-linked inheritance" in modes,
         "dominant": bool(
             {
                 "Autosomal dominant inheritance",
-                "X-linked dominant inheritance",
                 "Y-linked inheritance",
             }
             & modes
@@ -168,8 +163,9 @@ ASSERTION_IDENTITY_FIELDS = (
 def _hpo_allelic_requirements(inheritance_modes: Any) -> set[str]:
     """Collapse HPO inheritance to the supported compact assertion vocabulary.
 
-    HPO establishes only a broad dominant or recessive history here. It does
-    not establish autosomal/X-linked dosage or a molecular mechanism.
+    HPO supplies a condition-linked inheritance mode, not a molecular
+    mechanism. Preserve explicit X-linked dominant/recessive assertions while
+    keeping a merely observed hemizygous G2P state out of this HPO adapter.
     """
     modes = {
         _clean(part)
@@ -177,22 +173,43 @@ def _hpo_allelic_requirements(inheritance_modes: Any) -> set[str]:
         if _clean(part)
     }
     requirements: set[str] = set()
-    if {
-        "Autosomal recessive inheritance",
-        "X-linked inheritance",
-        "X-linked recessive inheritance",
-        "Pseudoautosomal recessive inheritance",
-    } & modes:
+    if "Autosomal recessive inheritance" in modes:
+        requirements.add("biallelic_autosomal")
+    if "Pseudoautosomal recessive inheritance" in modes:
         requirements.add("recessive")
+    if "X-linked recessive inheritance" in modes:
+        requirements.add("x_linked_recessive")
+    if "X-linked dominant inheritance" in modes:
+        requirements.add("x_linked_dominant")
+    if "X-linked inheritance" in modes:
+        requirements.add("x_linked_unspecified")
     if {
         "Autosomal dominant inheritance",
         "Autosomal dominant inheritance with maternal imprinting",
-        "X-linked dominant inheritance",
-        "Y-linked inheritance",
     } & modes:
-        requirements.add("dominant")
+        requirements.add("monoallelic_autosomal")
+    if "Y-linked inheritance" in modes:
+        requirements.add("monoallelic_Y_hemizygous")
     if "Mitochondrial inheritance" in modes:
         requirements.add("mitochondrial")
+    return requirements
+
+
+def _condition_allelic_requirements(
+    condition: dict[str, Any],
+    hpo_inheritance_modes: Any,
+) -> set[str]:
+    """Collect condition-linked inheritance without inventing an allele state."""
+    requirements = _hpo_allelic_requirements(hpo_inheritance_modes)
+    for block in (condition.get("pathogenic_mechanisms") or {}).values():
+        if not isinstance(block, dict):
+            continue
+        for evidence in block.get("evidence", []) or []:
+            if not isinstance(evidence, dict):
+                continue
+            requirement = _clean(evidence.get("allelic_requirement"))
+            if requirement:
+                requirements.add(requirement)
     return requirements
 
 
@@ -230,7 +247,7 @@ def condition_cache_context(
 
     axis_assertions: list[dict[str, str]] = []
     axis_seen: set[str] = set()
-    for axis in (inheritance, penetrance, onset):
+    for axis in (inheritance, onset):
         for raw_assertion in axis.get("assertions", []) or []:
             if not isinstance(raw_assertion, dict):
                 continue
@@ -245,6 +262,35 @@ def condition_cache_context(
                 axis_seen.add(key)
                 axis_assertions.append(hpo_assertion)
 
+    penetrance_assertions = [
+        dict(assertion)
+        for assertion in penetrance.get("assertions", []) or []
+        if isinstance(assertion, dict)
+    ]
+    penetrance_hpo_ids = list(
+        dict.fromkeys(
+            _clean(hpo_id)
+            for assertion in penetrance_assertions
+            if _clean(assertion.get("source")).upper() == "HPO"
+            for hpo_id in assertion.get("hpo_ids", []) or []
+            if _clean(hpo_id)
+        )
+    )
+    for assertion in penetrance_assertions:
+        if _clean(assertion.get("source")).upper() != "HPO":
+            continue
+        for hpo_id in assertion.get("hpo_ids", []) or []:
+            hpo_assertion = {
+                "hpo_id": _clean(hpo_id),
+                "frequency": _clean(assertion.get("frequency")),
+                "evidence": _clean(assertion.get("evidence")),
+                "reference": _clean(assertion.get("reference")),
+            }
+            key = json.dumps(hpo_assertion, sort_keys=True, separators=(",", ":"))
+            if key not in axis_seen:
+                axis_seen.add(key)
+                axis_assertions.append(hpo_assertion)
+
     return {
         "hpo_match_status": "matched_gene_and_condition",
         "hpo_disease_id": _clean(condition_key),
@@ -253,11 +299,13 @@ def condition_cache_context(
         "priva_scope": "include",
         "scope_review_status": _clean(scope.get("review_status")),
         "hpo_inheritance_modes": hpo_inheritance_modes,
-        "penetrance_hpo_ids": [
-            _clean(item.get("hpo_id"))
-            for item in penetrance.get("assertions", []) or []
-            if isinstance(item, dict) and _clean(item.get("hpo_id"))
+        "penetrance_statuses": [
+            _clean(status).lower()
+            for status in penetrance.get("statuses", []) or []
+            if _clean(status)
         ],
+        "penetrance_assertions": penetrance_assertions,
+        "penetrance_hpo_ids": penetrance_hpo_ids,
         "onset_hpo_ids": [
             _clean(item.get("hpo_id"))
             for item in onset.get("assertions", []) or []
@@ -274,7 +322,7 @@ def condition_cache_mechanism_entries(
     """Flatten one integrated gene record for hub summaries and audits.
 
     Unlike automatic assertion selection, this audit view retains mechanisms
-    from review/excluded conditions and evidence that could not be joined to an
+    from review conditions and evidence that could not be joined to an
     HPO condition. Scope and condition-link status remain explicit on every
     row. Exact GoFCards alleles are emitted at ``variant_level`` and never
     converted into gene-level mechanism evidence.
@@ -462,9 +510,10 @@ def condition_cache_mechanism_assertions(
     ``include`` and retains the condition's inheritance, penetrance, onset, and
     assertion provenance beside every mechanism record.
 
-    An included recessive condition with no curated molecular mechanism may
-    carry the cache builder's ``deduced_from_inheritance`` LOF assertion. It is
-    exposed here for ordinary variant-to-condition matching, with its
+    An included biallelic or explicitly X-linked-recessive condition with no curated
+    molecular mechanism may carry the cache builder's
+    ``deduced_from_inheritance`` LOF assertion. It is exposed here for ordinary
+    variant-to-condition matching, with its
     ``assertion_basis="deduced"`` provenance intact. PVS1 reads a separate
     curated-only view and therefore cannot mistake this inference for evidenced
     LOF history.
@@ -524,7 +573,8 @@ def condition_cache_mechanism_assertions(
                     )
                     requirement = _clean(evidence.get("allelic_requirement"))
                     requirements = [requirement] if requirement else sorted(
-                        _hpo_allelic_requirements(
+                        _condition_allelic_requirements(
+                            condition,
                             ";".join(common["hpo_inheritance_modes"])
                         )
                     )
@@ -573,7 +623,10 @@ def condition_cache_mechanism_assertions(
         # records; a non-Mendelian or unstated mode stays in the HPO list and is
         # normalized later without inventing an allelic requirement.
         requirements = sorted(
-            _hpo_allelic_requirements(";".join(common["hpo_inheritance_modes"]))
+            _condition_allelic_requirements(
+                condition,
+                ";".join(common["hpo_inheritance_modes"]),
+            )
         ) or [""]
         for requirement in requirements:
             assertions.append(
@@ -698,9 +751,17 @@ def enrich_condition_mechanism_assertion(
 _INHERITANCE_LABEL_TO_KEY = {
     label.lower(): key for key, label in HPO_CACHE_INHERITANCE_LABELS.items()
 }
-# Downstream treats these three the same way: one allele in a carrier is
-# enough for the condition to appear.
-DOMINANT_LIKE_INHERITANCE = {"dominant", "y_linked", "mitochondrial"}
+DOMINANT_LIKE_INHERITANCE = {
+    "dominant",
+    "x_linked_dominant",
+    "y_linked",
+    "mitochondrial",
+}
+X_LINKED_INHERITANCE = {
+    "x_linked_recessive",
+    "x_linked_dominant",
+    "x_linked_unspecified",
+}
 # Germline, but not single-gene. Delivered rather than discarded, so that
 # benign-supporting criteria are not assigned easily against them.
 NON_MENDELIAN_INHERITANCE = {
@@ -715,18 +776,24 @@ def normalize_inheritance(
     allelic_requirement: Any = "",
     hpo_inheritance_modes: Any = (),
 ) -> tuple[str, bool]:
-    """Reduce the two source vocabularies to one value plus an X-linked flag.
+    """Reduce source vocabularies to inheritance, not observed allele state.
 
     Two sources describe the same fact in different words: G2P states an
     allelic requirement (``biallelic_autosomal``, ``monoallelic_X_hemizygous``)
     and HPO states an inheritance mode (``autosomal_recessive``,
-    ``x_linked_dominant``). Both fold to the same answer.
+    ``x_linked_dominant``). Equivalent assertions normalize to the same explicit
+    state.
 
-    The delivered value is ``recessive`` or ``dominant`` wherever that question
-    has an answer, because that is what the criteria reason about. Being on the
-    X chromosome is a separate fact and is returned separately: folding it into
-    the value would erase it, and a hemizygous male affected by one allele is
-    still the recessive pattern.
+    Autosomal requirements reduce to ``recessive`` or ``dominant``. X-linked
+    assertions retain one of three inheritance states:
+
+    ``x_linked_recessive``
+        a source explicitly states X-linked recessive inheritance;
+    ``x_linked_dominant``
+        a source explicitly states X-linked dominant inheritance; or
+    ``x_linked_unspecified``
+        the source says only X-linked, or reports an X-hemizygous observation
+        without asserting dominant versus recessive inheritance.
 
     ``y_linked`` and ``mitochondrial`` are delivered as themselves rather than
     forced into dominant; downstream treats them the same as dominant.
@@ -748,7 +815,7 @@ def normalize_inheritance(
         )
         if _clean(mode)
     ]
-    x_linked = requirement.startswith("monoallelic_x") or any(
+    x_linked = requirement in X_LINKED_INHERITANCE or requirement.startswith("monoallelic_x") or any(
         mode.startswith("x_linked") for mode in modes
     )
 
@@ -762,11 +829,16 @@ def normalize_inheritance(
             if mode in NON_MENDELIAN_INHERITANCE:
                 return mode, x_linked
 
-    if requirement == "recessive" or requirement.startswith("biallelic_") or requirement in {
-        "monoallelic_x",
-        "monoallelic_x_hemizygous",
-    }:
+    if requirement == "recessive" or requirement.startswith("biallelic_"):
         return "recessive", x_linked
+    if requirement == "x_linked_recessive":
+        return "x_linked_recessive", True
+    if requirement in {"x_linked_dominant", "monoallelic_x_heterozygous"}:
+        return "x_linked_dominant", True
+    if requirement == "x_linked_unspecified" or requirement.startswith(
+        "monoallelic_x"
+    ):
+        return "x_linked_unspecified", True
     if requirement == "dominant":
         return "dominant", x_linked
     if requirement == "mitochondrial":
@@ -779,15 +851,16 @@ def normalize_inheritance(
         return "dominant", x_linked
 
     for mode in mendelian_modes:
-        if mode in {"autosomal_recessive", "x_linked_recessive", "pseudoautosomal_recessive"}:
+        if mode in {"autosomal_recessive", "pseudoautosomal_recessive"}:
             return "recessive", x_linked
-        # A bare "x_linked" with no recessive or dominant qualifier reads as
-        # X-linked recessive.
+        if mode == "x_linked_recessive":
+            return "x_linked_recessive", True
+        if mode == "x_linked_dominant":
+            return "x_linked_dominant", True
         if mode == "x_linked":
-            return "recessive", True
+            return "x_linked_unspecified", True
         if mode in {
             "autosomal_dominant",
-            "x_linked_dominant",
             "autosomal_dominant_maternal_imprinting",
         }:
             return "dominant", x_linked
@@ -869,8 +942,14 @@ def gene_has_lof_mechanism_history(gene_record: dict[str, Any]) -> bool:
         if not lof:
             continue
         for evidence in lof.get("evidence") or []:
-            if (evidence.get("assertion_basis") or "") == "curated":
-                return True
+            if (evidence.get("assertion_basis") or "") != "curated":
+                continue
+            if _clean(evidence.get("source")) == "ClinGen_haploinsufficiency" and (
+                _clean(evidence.get("mechanism_confidence"))
+                != "sufficient_evidence"
+            ):
+                continue
+            return True
     return False
 
 
@@ -882,11 +961,9 @@ def gene_inheritance_consensus(gene_record: dict[str, Any]) -> tuple[str, bool, 
     an ``UNRESOLVED`` history upstream. It is retained defensively for malformed
     or legacy cache records that fail to produce any assertion.
 
-    Unanimity is what makes it safe. A gene carrying both a dominant and a
-    recessive condition is deliberately given nothing here, because there the
-    question genuinely has two answers and only the per-history match can choose
-    between them. Measured on the current cache: 2,772 genes are unanimously
-    recessive, 1,453 unanimously dominant, and 501 are mixed.
+    Unanimity is what makes it safe. A gene carrying more than one inheritance
+    or X-linked allele state is deliberately given nothing here, because only
+    the per-history match can choose between them.
 
     Conditions that are not germline-inherited disease never contribute, so a
     review-scoped or excluded condition cannot donate its inheritance here.
@@ -918,6 +995,7 @@ def gene_inheritance_from_constraint(
     *,
     clingen: dict[str, dict[str, Any]],
     loeuf: dict[str, float],
+    chromosome: Any = "",
 ) -> str:
     """Last resort for a gene HPO says nothing about: read the constraint data.
 
@@ -926,7 +1004,8 @@ def gene_inheritance_from_constraint(
     anywhere. Rather than deliver nothing, the inheritance is inferred from
     whether the gene tolerates losing one copy:
 
-        dominant   ClinGen haploinsufficiency score 3, or LOEUF below 0.35.
+        dominant   On an autosome, ClinGen haploinsufficiency score 3, or LOEUF
+                   below 0.35.
                    Either is a statement that one lost copy already causes
                    disease, which is the dominant pattern.
         recessive  otherwise, as the default. Most disease genes are recessive,
@@ -937,14 +1016,31 @@ def gene_inheritance_from_constraint(
     signal, 6 only the ClinGen one, 9 both -- so requiring both would reduce
     the rule to 9 genes. Either is therefore enough.
 
+        x_linked_dominant
+                   On chromosome X, a ClinGen HI=3 assertion establishes the
+                   dosage-sensitive dominant fallback.
+        x_linked_unspecified
+                   On chromosome X without HI=3, constraint alone does not
+                   establish dominant versus recessive inheritance.
+
     No mechanism accompanies this. We do not know what a variant must do to
-    cause disease here, only how many copies must be affected.
+    cause disease here, only the limited inheritance information above.
     """
+    normalized_chromosome = _clean(chromosome).lower().removeprefix("chr")
     score = clingen.get(symbol, {}).get("haploinsufficiency_score")
     try:
         haploinsufficient = int(str(score)) == 3
     except (TypeError, ValueError):
         haploinsufficient = False
+    if normalized_chromosome == "x":
+        return (
+            "x_linked_dominant"
+            if haploinsufficient
+            else "x_linked_unspecified"
+        )
+    if normalized_chromosome == "y":
+        return "y_linked" if haploinsufficient else ""
+
     constraint = loeuf.get(symbol, float("nan"))
     constrained = (
         isinstance(constraint, (int, float))
@@ -954,13 +1050,11 @@ def gene_inheritance_from_constraint(
     return "dominant" if haploinsufficient or constrained else "recessive"
 
 
-def normalize_penetrance(penetrance_hpo_ids: Any = ()) -> str:
-    """Reduce condition-linked HPO assertions to PriVA's four categories.
+def normalize_penetrance(values: Any = ()) -> str:
+    """Return binary condition penetrance, with incomplete taking precedence.
 
-    The shared vocabulary deliberately treats delayed or gradual onset and
-    variable expressivity as ``incomplete`` for the downstream observation
-    question, while preserving high penetrance as ``high``.  The cache retains
-    every original HPO identifier, so this normalization does not replace the
-    curator's assertion or detach it from its condition.
+    Values may be schema-1.2 cache statuses or legacy HPO IDs. Empty means that
+    no usable assertion exists; PriVA no longer emits a redundant ``unknown``
+    penetrance category.
     """
-    return normalize_penetrance_hpo_ids(penetrance_hpo_ids)
+    return normalize_penetrance_values(values)

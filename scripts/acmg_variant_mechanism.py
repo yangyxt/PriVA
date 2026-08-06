@@ -275,10 +275,9 @@ def _variant_condition_masks(df: pd.DataFrame) -> dict[str, pd.Series]:
     Values are semicolon-delimited sets. Matching is token-exact so, for
     example, ``non_mendelian`` cannot be confused with another substring. Any
     linked ``incomplete`` value is conservative and wins over simultaneous
-    ``complete`` or ``high`` histories; consumers implement that by gating on
-    ``has_incomplete_penetrance`` first. High penetrance remains its own value
-    and does not activate the lower thresholds reserved for explicit complete
-    penetrance.
+    ``complete`` histories; consumers implement that by gating on
+    ``has_incomplete_penetrance`` first. Upstream normalizes high penetrance to
+    complete and emits an empty value when no usable assertion exists.
 
     ``non_monogenic`` preserves the old distinction for polygenic, digenic and
     oligogenic histories, while ``non_mendelian`` represents the literal HPO
@@ -304,6 +303,9 @@ def _variant_condition_masks(df: pd.DataFrame) -> dict[str, pd.Series]:
 
     recessive = has_token(inheritance, "recessive")
     dominant = has_token(inheritance, "dominant")
+    x_linked_recessive = has_token(inheritance, "x_linked_recessive")
+    x_linked_dominant = has_token(inheritance, "x_linked_dominant")
+    x_linked_unspecified = has_token(inheritance, "x_linked_unspecified")
     y_linked = has_token(inheritance, "y_linked")
     mitochondrial = has_token(inheritance, "mitochondrial")
     polygenic = has_token(inheritance, "polygenic")
@@ -314,15 +316,27 @@ def _variant_condition_masks(df: pd.DataFrame) -> dict[str, pd.Series]:
     return {
         "has_recessive": recessive,
         "has_dominant": dominant,
+        "has_x_linked_recessive": x_linked_recessive,
+        "has_x_linked_dominant": x_linked_dominant,
+        "has_x_linked_unspecified": x_linked_unspecified,
         "has_y_linked": y_linked,
         "has_mitochondrial": mitochondrial,
-        "has_dominant_like": (dominant | y_linked | mitochondrial).astype(bool),
-        "has_mendelian": (recessive | dominant | y_linked | mitochondrial).astype(bool),
+        "has_dominant_like": (
+            dominant | x_linked_dominant | y_linked | mitochondrial
+        ).astype(bool),
+        "has_mendelian": (
+            recessive
+            | dominant
+            | x_linked_recessive
+            | x_linked_dominant
+            | x_linked_unspecified
+            | y_linked
+            | mitochondrial
+        ).astype(bool),
         "has_non_monogenic": (polygenic | digenic | oligogenic).astype(bool),
         "has_non_mendelian": non_mendelian,
         "has_incomplete_penetrance": has_token(penetrance, "incomplete"),
         "has_complete_penetrance": has_token(penetrance, "complete"),
-        "has_high_penetrance": has_token(penetrance, "high"),
     }
 
 
@@ -371,10 +385,11 @@ def _variant_mechanism_masks(
         is_exact_gof        variant_gof_score == 2, or effect names GOF
         is_exact_dn         variant_dn_score  == 2, or effect names DN
         is_exact_nonlof     either of the two above
-        is_predicted_lof    variant_lof_score >= 1, or effect ==
-                            "predicted_LOF_high_confidence". True for BOTH
-                            grades; read the score itself to tell them apart.
         is_uncertain        effect == "uncertain"
+        is_predicted_lof    not uncertain, and variant_lof_score >= 1 (or
+                            effect == "predicted_LOF_high_confidence"). True
+                            for BOTH actual LOF-prediction grades; read the
+                            score itself to tell them apart.
         modern_profile      the row carries any history at all
 
     There is deliberately no third family conjoining the two. Whether the
@@ -386,8 +401,9 @@ def _variant_mechanism_masks(
     ==============================
 
     Predicted loss of function is graded, and is_predicted_lof deliberately
-    does NOT carry that grade -- it is true for both levels. A consumer that
-    wants the distinction reads variant_lof_score:
+    does NOT carry that grade -- it is true for both evidence-backed levels. A
+    consumer that wants the distinction reads variant_lof_score together with
+    variant_effect:
 
         2   the transcript is destroyed. Either nonsense-mediated decay is
             triggered -- a truncating variant, or a splice variant that
@@ -396,7 +412,10 @@ def _variant_mechanism_masks(
         1   loss of function is plausible but the transcript may survive:
             escapes decay without a LOFTEE rescue, LOFTEE_OS, a splice
             change that does not shift the frame, a 5'UTR change.
-        0   no loss-of-function evidence at all.
+        1   also appears when variant_effect is ``uncertain``. In that case LOF,
+            GOF and DN all score 1 as parallel hypotheses, and
+            is_predicted_lof remains false because no LOF observation exists.
+        0   the mechanism was excluded by a stronger, exclusive variant call.
 
     Decay-triggered loss of function IS exclusive, and outranks even a
     curated gain-of-function allele: a destroyed transcript makes no protein
@@ -435,6 +454,15 @@ def _variant_mechanism_masks(
 
     rec_accepted = accepted.str.contains(r"(?:^|;)recessive(?:_[^;]+)?(?:;|$)", regex=True)
     dom_accepted = accepted.str.contains(r"(?:^|;)dominant(?:_[^;]+)?(?:;|$)", regex=True)
+    x_recessive_accepted = accepted.str.contains(
+        r"(?:^|;)x_linked_recessive(?:_[^;]+)?(?:;|$)", regex=True
+    )
+    x_dominant_accepted = accepted.str.contains(
+        r"(?:^|;)x_linked_dominant(?:_[^;]+)?(?:;|$)", regex=True
+    )
+    x_unspecified_accepted = accepted.str.contains(
+        r"(?:^|;)x_linked_unspecified(?:_[^;]+)?(?:;|$)", regex=True
+    )
 
     def profile_mechanism(inheritance: str, mechanism: str) -> pd.Series:
         return profile.str.contains(
@@ -450,6 +478,24 @@ def _variant_mechanism_masks(
     has_dom_gof_history = profile_mechanism("dominant", "GOF")
     has_dom_dn_history = profile_mechanism("dominant", "DN")
     has_dom_unresolved_history = profile.str.contains(r"(?:^|;)dominant(?:;|$)", regex=True)
+    has_x_recessive_lof_history = profile_mechanism("x_linked_recessive", "LOF")
+    has_x_recessive_gof_history = profile_mechanism("x_linked_recessive", "GOF")
+    has_x_recessive_dn_history = profile_mechanism("x_linked_recessive", "DN")
+    has_x_recessive_unresolved_history = profile.str.contains(
+        r"(?:^|;)x_linked_recessive(?:;|$)", regex=True
+    )
+    has_x_dominant_lof_history = profile_mechanism(
+        "x_linked_dominant", "LOF"
+    )
+    has_x_dominant_gof_history = profile_mechanism(
+        "x_linked_dominant", "GOF"
+    )
+    has_x_dominant_dn_history = profile_mechanism(
+        "x_linked_dominant", "DN"
+    )
+    has_x_dominant_unresolved_history = profile.str.contains(
+        r"(?:^|;)x_linked_dominant(?:;|$)", regex=True
+    )
 
     effect = text_series("variant_effect")
     lof_score = pd.to_numeric(
@@ -475,11 +521,13 @@ def _variant_mechanism_masks(
             regex=True,
         )
     )
-    # Any graded loss of function counts as predicted here: 1 for a transcript
-    # that escapes nonsense-mediated decay, 2 for one that does not. Consumers
-    # wanting the distinction read variant_lof_score directly.
-    is_predicted_lof = lof_score.ge(1) | effect.eq("predicted_LOF_high_confidence")
     is_uncertain = effect.eq("uncertain")
+    # Score 1 has two meanings that variant_effect keeps distinct: actual but
+    # non-exclusive LOF evidence, or one of three parallel hypotheses when no
+    # mechanism can be ruled out. Only the former is a predicted LOF variant.
+    is_predicted_lof = ~is_uncertain & (
+        lof_score.ge(1) | effect.eq("predicted_LOF_high_confidence")
+    )
 
     return {
         "modern_profile": has_profile,
@@ -490,6 +538,9 @@ def _variant_mechanism_masks(
         "is_uncertain": is_uncertain.astype(bool),
         "has_recessive_compatible": rec_accepted.astype(bool),
         "has_dominant_compatible": dom_accepted.astype(bool),
+        "has_x_linked_recessive_compatible": x_recessive_accepted.astype(bool),
+        "has_x_linked_dominant_compatible": x_dominant_accepted.astype(bool),
+        "has_x_linked_unspecified_compatible": x_unspecified_accepted.astype(bool),
         "has_rec_lof_history": has_rec_lof_history.astype(bool),
         "has_rec_gof_history": has_rec_gof_history.astype(bool),
         "has_rec_dn_history": has_rec_dn_history.astype(bool),
@@ -498,4 +549,12 @@ def _variant_mechanism_masks(
         "has_dom_gof_history": has_dom_gof_history.astype(bool),
         "has_dom_dn_history": has_dom_dn_history.astype(bool),
         "has_dom_unresolved_history": has_dom_unresolved_history.astype(bool),
+        "has_x_recessive_lof_history": has_x_recessive_lof_history.astype(bool),
+        "has_x_recessive_gof_history": has_x_recessive_gof_history.astype(bool),
+        "has_x_recessive_dn_history": has_x_recessive_dn_history.astype(bool),
+        "has_x_recessive_unresolved_history": has_x_recessive_unresolved_history.astype(bool),
+        "has_x_dominant_lof_history": has_x_dominant_lof_history.astype(bool),
+        "has_x_dominant_gof_history": has_x_dominant_gof_history.astype(bool),
+        "has_x_dominant_dn_history": has_x_dominant_dn_history.astype(bool),
+        "has_x_dominant_unresolved_history": has_x_dominant_unresolved_history.astype(bool),
     }

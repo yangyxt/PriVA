@@ -30,7 +30,7 @@ DEFAULT_LOEUF_TABLE = DATA_DIR / "loeuf" / "loeuf_dataset.tsv.gz"
 DEFAULT_HPO_CONDITION_MECHANISM_CACHE = (
     DATA_DIR / "patho_mechanism" / "hpo_condition_mechanism_cache.json.gz"
 )
-HPO_CONDITION_MECHANISM_SCHEMA_VERSION = "1.0"
+HPO_CONDITION_MECHANISM_SCHEMA_VERSION = "1.2"
 # The non-LOF cache is the mechanism input. It used to be chosen over an older
 # combined cache only when it existed on disk, but it is the file the repository
 # ships, so that choice had one possible outcome and the other name is gone.
@@ -73,8 +73,9 @@ VARIANT_MECHANISM_SCORE_KEYS = ("LOF", "GOF", "DOMINANT_NEGATIVE")
 # variant in the gene a gain-of-function history -- does not arise, because
 # select_condition_histories_for_variant keeps only the histories the query
 # variant's own mechanism reaches. A predicted loss-of-function allele never
-# sees the gain-of-function history; an unresolved one sees it as possible,
-# not established, which is exactly what it is.
+# sees the gain-of-function history. When no mechanism-specific variant evidence
+# exists, LOF, GOF and DN remain parallel score-1 hypotheses, so all three kinds
+# of asserted history remain visible beside mechanism-unresolved conditions.
 CONDITION_MECHANISM_SOURCES = {
     "G2P_DDG2P",
     "Orphadata",
@@ -93,6 +94,9 @@ CONDITION_MECHANISM_EVIDENCE_COLUMNS = {
     "scope_review_status",
     "disease_label",
     "inheritance",
+    "penetrance_raw",
+    "penetrance_hpo_ids",
+    "normalized_penetrance",
     "patho_mode_raw",
     "normalized_mechanisms",
     "mechanism_confidence",
@@ -159,14 +163,18 @@ DDG2P_USABLE_MECHANISM_CONFIDENCE = {"high", "moderate"}
 DDG2P_USABLE_DISEASE_CONFIDENCE = {"definitive", "strong", "moderate"}
 DDG2P_RECESSIVE_LOF_INHERITANCE = {
     "biallelic_autosomal",
-    "monoallelic_X",
-    "monoallelic_X_hemizygous",
 }
 DDG2P_DOMINANT_LOF_INHERITANCE = {
     "monoallelic_autosomal",
-    "monoallelic_X_heterozygous",
-    "monoallelic_Y_hemizygous",
 }
+DDG2P_X_LINKED_DOMINANT_LOF_INHERITANCE = {
+    "monoallelic_X_heterozygous"
+}
+DDG2P_X_LINKED_UNSPECIFIED_LOF_INHERITANCE = {
+    "monoallelic_X",
+    "monoallelic_X_hemizygous",
+}
+DDG2P_Y_LINKED_LOF_INHERITANCE = {"monoallelic_Y_hemizygous"}
 VARIANT_MECHANISM_OUTPUT_COLUMNS = (
     # Step 1 -- the variant's own mechanism, as three scores.
     "variant_effect",

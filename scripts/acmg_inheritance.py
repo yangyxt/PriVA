@@ -6,7 +6,8 @@ here. They read the mechanism hub's condition-linked ``variant_inheritance``
 and ``variant_penetrance`` columns. This module remains only for the hub's
 coarse gene-level audit summary and the shared penetrance compatibility check.
 
-    parse_hpo_inheritance              HPO inheritance terms -> one mode
+    parse_hpo_inheritance              HPO inheritance terms -> explicit flags,
+                                       including X-linked allele states
     identify_inheritance_mode_per_row  one variant's mode, using the gene's
                                        mean AlphaMissense score and the
                                        ClinGen dosage call
@@ -37,10 +38,10 @@ def hpo_onset_modes(hpo_string):
 
     This is a compatibility bridge for criteria that still read the old
     gene-wide HPO string.  It uses the same condition-modifier vocabulary as
-    the mechanism hub: delayed or gradual onset and variable expressivity make
-    an apparently unaffected carrier non-informative.  High penetrance,
-    sex-limited expression, and slow progression are deliberately outside that
-    set.
+    the mechanism hub: explicit incomplete, moderate, or low penetrance and
+    late onset make an apparently unaffected carrier non-informative. Other
+    onset terms, age-dependent penetrance, and variable expressivity are
+    deliberately outside that blocking set.
 
     Args:
         hpo_string: A string containing one or more HPO IDs
@@ -90,30 +91,41 @@ def parse_hpo_inheritance(row_dict: dict) -> str:
 
     non_monogenic_set = {"Digenic inheritance", "Oligogenic inheritance", "Polygenic inheritance"}  # In most cases, these indicate compound heterozygous variants
     non_mendelian_set = {"Non-Mendelian inheritance"}  # Includes epigenetic modifications
-    dominant_set = {"Autosomal dominant inheritance", "Autosomal dominant inheritance with maternal imprinting", "X-linked dominant inheritance"}
-    # Treat generic X-linked inheritance as recessive by default. Male chrX
-    # hemizygosity is handled later by sex-aware allele-state normalization.
-    recessive_set = {"Autosomal recessive inheritance", "X-linked recessive inheritance", "X-linked inheritance"}
+    dominant_set = {
+        "Autosomal dominant inheritance",
+        "Autosomal dominant inheritance with maternal imprinting",
+    }
+    recessive_set = {"Autosomal recessive inheritance"}
 
-    # HPO recessive
+    # Autosomal HPO states remain separate from the X-linked allele states.
     hpo_recessive = any([ hpo in recessive_set for hpo in hpo_inheritances ])
-    # HPO dominant
     hpo_dominant = any([ hpo in dominant_set for hpo in hpo_inheritances ])
     # HPO non monogenic
     hpo_non_monogenic = any([ hpo in non_monogenic_set for hpo in hpo_inheritances ])
     # HPO non mendelian
     hpo_non_mendelian = any([ hpo in non_mendelian_set for hpo in hpo_inheritances ])
+    hpo_x_linked_recessive = "X-linked recessive inheritance" in hpo_inheritances
+    hpo_x_linked_dominant = "X-linked dominant inheritance" in hpo_inheritances
+    hpo_x_linked_unspecified = "X-linked inheritance" in hpo_inheritances
 
     return {
             'hpo_recessive': hpo_recessive,
             'hpo_dominant': hpo_dominant,
             'hpo_non_monogenic': hpo_non_monogenic,
             'hpo_non_mendelian': hpo_non_mendelian,
+            'hpo_x_linked_recessive': hpo_x_linked_recessive,
+            'hpo_x_linked_dominant': hpo_x_linked_dominant,
+            'hpo_x_linked_unspecified': hpo_x_linked_unspecified,
             'incomplete_penetrance': incomplete_penetrance
             }
 
 
-def identify_inheritance_mode_per_row(row_dict: dict, gene_mean_am_score: float, clingen_curate_score: int = None) -> Tuple[bool, bool, bool, bool, bool, bool]:
+def identify_inheritance_mode_per_row(
+    row_dict: dict,
+    gene_mean_am_score: float,
+    clingen_curate_score: int = None,
+    chromosome: str = "",
+) -> Tuple[bool, bool, bool, bool, bool, bool]:
     # We need to use three fields of the table to determine the inheritance mode:
     # 1. Gene
     # 2. LOEUF
@@ -129,14 +141,20 @@ def identify_inheritance_mode_per_row(row_dict: dict, gene_mean_am_score: float,
 
     clingen_recessive = None
     clingen_dominant = None
+    normalized_chromosome = (
+        str(chromosome).strip().lower().split(":", 1)[0].removeprefix("chr")
+    )
+    sex_chromosome = normalized_chromosome in {"x", "y"}
     if clingen_curate_score:
         logger.debug(f"Using ClinGen curated dosage sensitivity to determine inheritance mode for {row_dict['Gene']}, the ClinGen record looks like this: \n{clingen_curate_score}\n")
         if clingen_curate_score == 3:
-            clingen_recessive = False
-            clingen_dominant = True
+            if not sex_chromosome:
+                clingen_recessive = False
+                clingen_dominant = True
             haplo_insufficient = True
         elif clingen_curate_score == 30 or clingen_curate_score == 40:
-            clingen_recessive = True
+            if not sex_chromosome:
+                clingen_recessive = True
             haplo_insufficient = False
             haplo_sufficient = True
             # Cannot modify hpo_dominant because it might relates to GOF variants
@@ -144,14 +162,25 @@ def identify_inheritance_mode_per_row(row_dict: dict, gene_mean_am_score: float,
     hpo_inheritance = parse_hpo_inheritance(row_dict)
     if isinstance(hpo_inheritance, bool):
         logger.debug(f"No HPO inheritance information for {row_dict['Gene']}, using LOEUF: {row_dict['LOEUF']} and AM score: {gene_mean_am_score} to determine inheritance mode. The haploinsufficiency is {haplo_insufficient} and haplosufficiency is {haplo_sufficient}")
+        if sex_chromosome:
+            return False, False, False, False, haplo_insufficient, hpo_inheritance
         recessive = clingen_recessive if clingen_recessive is not None else haplo_sufficient
         dominant = clingen_dominant if clingen_dominant is not None else haplo_insufficient
         return recessive, dominant, False, False, haplo_insufficient, hpo_inheritance
 
-    if clingen_recessive is not None:
+    has_x_specific_history = any(
+        hpo_inheritance[key]
+        for key in (
+            "hpo_x_linked_recessive",
+            "hpo_x_linked_dominant",
+            "hpo_x_linked_unspecified",
+        )
+    )
+
+    if clingen_recessive is not None and not has_x_specific_history:
         hpo_inheritance['hpo_recessive'] = clingen_recessive
 
-    if clingen_dominant is not None:
+    if clingen_dominant is not None and not has_x_specific_history:
         hpo_inheritance['hpo_dominant'] = clingen_dominant
 
     if hpo_inheritance['hpo_recessive']:

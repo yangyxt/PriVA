@@ -70,7 +70,7 @@ def PP3_BP4_criteria(df: pd.DataFrame, pvs1_criteria: np.ndarray = None, high_co
     # Missing CADD remains no evidence, and this is not a universal benign cutoff.
     cadd_bp4_phred_cutoff = 15.0
     cadd_phred_low = cadd_phred.notna() & (cadd_phred < cadd_bp4_phred_cutoff)
-    cadd_reg_phred_low = cadd_reg_phred.notna() & (cadd_reg_phred < cadd_bp4_phred_cutoff)
+    cadd_reg_phred_not_high = ~(cadd_reg_phred >= cadd_bp4_phred_cutoff).fillna(False)
     splice_computational_lof = df['splicing_lof'].fillna(False) | loftee_splice_lof
 
     # BP4: variant is reported benign
@@ -95,7 +95,7 @@ def PP3_BP4_criteria(df: pd.DataFrame, pvs1_criteria: np.ndarray = None, high_co
         splice_computational_lof
     ) & splice_variant & cadd_phred_low
     utr_benign = np.logical_not(df['5UTR_lof'].fillna(False)) & five_utr_variant
-    other_benign = np.logical_not(df['vep_consq_lof'].fillna(False)) & cadd_phred_low & cadd_reg_phred_low & np.logical_not(splice_variant) & np.logical_not(missense_variant) & np.logical_not(five_utr_variant)
+    other_benign = np.logical_not(df['vep_consq_lof'].fillna(False)) & cadd_phred_low & cadd_reg_phred_not_high & np.logical_not(splice_variant) & np.logical_not(missense_variant) & np.logical_not(five_utr_variant)
     bp4_criteria = missense_benign | splice_benign | utr_benign | other_benign
     clinvar_patho = df['CLNSIG'].fillna("").str.contains('athogenic') & (df['CLNREVSTAT'].map(high_confidence_status, na_action="ignore") >= 2)
     bp4_criteria = bp4_criteria & ~clinvar_patho

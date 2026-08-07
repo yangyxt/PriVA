@@ -236,15 +236,22 @@ makes the selected result auditable:
     matched_history                 compatible curated or deduced histories
     unresolved_condition_history   mechanism-free condition histories only
     matched_and_unresolved_history  both kinds contributed
-    mechanism_mismatch              known histories existed, but all were
-                                    incompatible with this variant
+    mechanism_mismatch              variant is exclusive GOF or DN
+                                    (lof_score == 0) and no surviving condition
+                                    history supplied inheritance; gene
+                                    constraint is LOF-specific and does not
+                                    apply to a non-LOF variant
     condition_scope_blocked         retained review conditions or a build-time
                                     exclusion tombstone blocks fallback
-    gene_constraint                 no condition record existed for the gene
+    gene_constraint                 no surviving condition history supplied
+                                    inheritance AND the variant is plausibly
+                                    LOF (lof_score >= 1); the LOF-specific
+                                    constraint signal (LOEUF / ClinGen HI) is
+                                    used as a last resort
 
-The last fallback supplies inheritance only and never a mechanism or
-penetrance. It is not used after a known mechanism mismatch and cannot revive
-a retained review condition or a build-pruned exclusion.
+The gene_constraint fallback supplies inheritance only and never a mechanism
+or penetrance. It applies only when the variant itself is plausibly LOF;
+an exclusive GOF or DN variant emits mechanism_mismatch instead.
 
 STEP 4  what lands on the row
 =============================

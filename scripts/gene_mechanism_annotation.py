@@ -319,10 +319,12 @@ def annotate_gene_mechanism_categories(
                 basis = "unresolved_condition_history"
             else:
                 basis = "matched_history"
-        else:
-            # Scope and mechanism gates apply to individual conditions only.
-            # Once those conditions have been discarded, they cannot veto an
-            # independent gene-level inheritance fallback.
+        elif histories:
+            # Conditions were matched by mechanism but none of them stated an
+            # inheritance. The condition was compatible with this variant; only
+            # the inheritance field was absent from the curated record. Gene
+            # constraint fills the gap as a last resort regardless of variant
+            # mechanism, because there was no mechanism mismatch here.
             inferred_inheritance = gene_inheritance_from_constraint(
                 symbol,
                 clingen=hub._load_clingen(),
@@ -334,6 +336,28 @@ def annotate_gene_mechanism_categories(
             )
             matched_x_linked = inferred_inheritance.startswith("x_")
             basis = "gene_constraint"
+        else:
+            # No conditions survived Step 3 at all. Gene constraint
+            # (LOEUF / ClinGen HI) is LOF-specific: it applies only when the
+            # variant is plausibly LOF (lof_score >= 1). An exclusive GOF or DN
+            # variant (lof_score == 0) emits mechanism_mismatch because gene
+            # constraint says nothing about GOF or DN inheritance.
+            if effect_call["variant_lof_score"] >= 1:
+                inferred_inheritance = gene_inheritance_from_constraint(
+                    symbol,
+                    clingen=hub._load_clingen(),
+                    loeuf=hub._load_loeuf(),
+                    chromosome=row.get("chrom", ""),
+                )
+                matched_inheritance = (
+                    [inferred_inheritance] if inferred_inheritance else []
+                )
+                matched_x_linked = inferred_inheritance.startswith("x_")
+                basis = "gene_constraint"
+            else:
+                matched_inheritance = []
+                matched_x_linked = row_chromosome == "x"
+                basis = "mechanism_mismatch"
 
         variant_outputs["variant_condition_ids"].append(
             ";".join(dict.fromkeys(h["condition"] for h in histories if h["condition"]))

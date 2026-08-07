@@ -87,8 +87,12 @@ def PP3_BP4_criteria(df: pd.DataFrame, pvs1_criteria: np.ndarray = None, high_co
     # Both criteria assess similar aspects of variant impact (LoF prediction), and using
     # them together leads to overestimation of pathogenicity.
     if pvs1_criteria is not None:
-        pp3_criteria = pp3_criteria & (pvs1_criteria < 4)
-        logger.info(f"PP3 double-counting prevention: blocked {(pvs1_criteria > 0).sum()} variants with PVS1")
+        # Extended to block PP3 also when PVS1 is Strong (>=3), not only Very Strong (>=4).
+        # PVS1_Strong on NMD-escaping truncating variants and PVS1_Very_Strong both already
+        # capture the LOFTEE HC / vep_consq_lof signal that PP3 re-uses, so co-applying PP3
+        # at PVS1_Strong still double-counts the same underlying LOF evidence.
+        pp3_criteria = pp3_criteria & (pvs1_criteria < 3)
+        logger.info(f"PP3 double-counting prevention: blocked {(pvs1_criteria >= 3).sum()} variants with PVS1_Strong or stronger")
 
     missense_benign = (primateai < 0.8).fillna(True) & (am_pathogenicity < 0.564).fillna(True) & missense_variant
     splice_benign = np.logical_not(

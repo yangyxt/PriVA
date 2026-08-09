@@ -73,7 +73,27 @@ def PM1_criteria(df: pd.DataFrame,
     missense_damaging = df["am_class"].fillna("").str.contains('athogenic') | (df['PrimateAI'].fillna(0) > 0.9)
     logger.info(f"There are {missense_damaging.sum()} missense variants that are considered damaging by AlphaMissense and PrimateAI")
 
-    missense_benign = df["am_class"].fillna("").str.contains('benign') & (df['PrimateAI'].fillna(1.0) < 0.5)
+    # AM-benign suppression of PM1.
+    #
+    # Two independent ways for AlphaMissense to call a substitution benign:
+    #   1. the categorical label (am_class contains 'benign'), and
+    #   2. the numeric score below the same 0.564 cutoff BP4 uses for
+    #      missense_benign in acmg_pp3_bp4_bp7_insilico.py.
+    # The label alone misses 'ambiguous' rows whose score is clearly benign, and
+    # misses rows where am_class is absent but am_pathogenicity is populated.
+    #
+    # PrimateAI acts only as a veto when it positively disagrees (>= 0.8, matching
+    # BP4's threshold). A MISSING PrimateAI score must not veto an AM-benign call:
+    # the previous `fillna(1.0) < 0.5` turned absent PrimateAI evidence into an
+    # assertion of damage, so any AM-benign variant lacking PrimateAI still fired PM1.
+    am_pathogenicity_num = pd.to_numeric(df["am_pathogenicity"], errors='coerce')
+    primateai_num = pd.to_numeric(df["PrimateAI"], errors='coerce')
+    am_says_benign = (
+        df["am_class"].fillna("").str.contains('benign')
+        | (am_pathogenicity_num < 0.564)
+    )
+    primateai_not_damaging = ~(primateai_num >= 0.8).fillna(False)
+    missense_benign = am_says_benign & primateai_not_damaging
     logger.info(f"There are {missense_benign.sum()} missense variants that are considered benign by AlphaMissense and PrimateAI")
     if clinvar_patho is not None:
         missense_damaging = missense_damaging | clinvar_patho

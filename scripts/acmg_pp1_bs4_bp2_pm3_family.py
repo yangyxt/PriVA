@@ -28,10 +28,7 @@ from scipy import stats
 from determine_phase import determine_cis_trans_relationships
 from find_cosegregation_vars import find_cosegregating_variants
 
-from acmg_variant_mechanism import (
-    _variant_condition_masks,
-    _variant_mechanism_masks,
-)
+from acmg_variant_mechanism import _variant_condition_masks
 
 
 logger = logging.getLogger(__name__)
@@ -194,76 +191,126 @@ def BS4_criteria(
     df: pd.DataFrame,
     ped_df: pd.DataFrame,
     fam_name: str,
-) -> pd.Series:
-    # BS4: lack of segregation / genotype incompatibility within the submitted
-    # family. Output keeps the existing PriVA strength encoding:
-    #   0 = no BS4, 1 = BS4_Supporting, 3 = BS4.
-    #
-    # The hub has already limited known histories to mechanisms compatible with
-    # this variant and retained every mechanism-unresolved included condition.
-    # Do not assign BS4 for non-monogenic/polygenic, non-Mendelian, or any
-    # selected incomplete-equivalent penetrance history, because genotype
-    # contradictions are not interpretable there.
-    #
-    # Biallelic, X-linked recessive, autosomal dominant, and X-linked dominant
-    # compatibility come only from the upstream compact
-    # variant-level assertions.
-    #
-    # Inputs per variant:
-    #   patient_GTs = all affected family members with callable GT.
-    #   control_GTs = all unaffected family members with callable GT.
-    #   has_recessive / has_x_linked_recessive identify biallelic/XY models.
-    #   has_dominant / has_x_linked_dominant identify dominant models.
-    #   is_predicted_LOF / is_exact_GOF come from variant_effect.
-    #
-    # Variant compatibility under dominant-only history:
-    #   dominant only           -> any variant state remains uncertain-compatible.
-    #   dominant_LOF only       -> predicted LOF or uncertain; exact GOF excluded.
-    #   dominant_GOF only       -> exact_GOF only.
-    #   dominant_DN only        -> ambiguous only; PriVA has no exact DN DB.
-    #   dominant_GOF + DN       -> exact_GOF or ambiguous; NMD_LOF excluded.
-    #   dominant_LOF + GOF/DN   -> any variant state can be interpreted under
-    #                              at least one dominant history.
-    #
-    # Sex-chromosome variants use the same tree after sex-aware allele-state
-    # normalization: male chrX/chrY with any ALT allele is treated as hom/hemi
-    # (2), female chrX remains diploid (0/1/2), female chrY is non-informative,
-    # and non-sex chromosomes remain unchanged.
-    #
-    # Patient-patient comparison:
-    #   1. hom patient vs WT patient -> BS4.
-    #   2. hom patient vs het patient:
-    #      - recessive only -> BS4_Supporting.
-    #      - recessive + dominant_GOF/DN + predicted LOF, with no dominant_LOF
-    #        or unresolved dominant history -> BS4_Supporting. The heterozygous
-    #        affected genotype is incompatible with AR, and the NMD_LOF query
-    #        variant is not compatible with GOF/DN.
-    #      - recessive + dominant_GOF/DN + uncertain -> no BS4; uncertainty
-    #        cannot rule out a dominant DN/GOF-compatible mechanism.
-    #      - recessive + dominant_LOF or unresolved dominant -> no BS4.
-    #      - dominant-only history -> no BS4, because both affected individuals
-    #        carry ALT and dominant disease only requires one ALT allele.
-    #   3. het patient vs WT patient:
-    #      - no recessive history + dominant-compatible variant -> BS4.
-    #      - recessive history present -> no BS4, because the heterozygous affected
-    #        genotype may reflect a second allele not represented by this row or
-    #        a dominant-compatible history.
-    #   4. het patient vs het patient -> no BS4.
-    #
-    # Patient-control comparison:
-    #   5. hom patient vs WT control -> no BS4.
-    #   6. hom patient vs het control:
-    #      - recessive history present -> no BS4; a healthy heterozygous carrier
-    #        is segregation-compatible for a recessive LoF model.
-    #      - no recessive history + dominant-compatible variant -> BS4_Supporting.
-    #   7. carrier patient vs hom/hemi control -> BS4.
-    #   8. het patient vs WT control -> no BS4.
-    #      Unaffected WT relatives are segregation-compatible for a dominant
-    #      heterozygous disease model and are not contradictory for AR logic.
-    #   9. het patient vs het control:
-    #      - recessive history present -> no BS4, even when dominant history also
-    #        exists, because a healthy heterozygous carrier can fit the AR model.
-    #      - no recessive history + dominant-compatible variant -> BS4_Supporting.
+) -> np.ndarray:
+    '''
+    BS4: lack of segregation within the submitted family.
+
+    Returns an int array over ``df`` rows: 0 = no BS4, 1 = BS4_Supporting,
+    3 = BS4. Only family ``fam_name`` in ``ped_df`` is read; an absent family,
+    or one with no affected sample present as a column of ``df``, yields all
+    zeros. Where branches of both strengths fire for a row, 3 wins.
+
+    BS4 asks whether a relative's genotype dose contradicts the inherited model
+    given their affected status. Five of the six branches answer that from dose
+    and inheritance alone. Mechanism enters one branch only, and only to decide
+    whether a single contradiction counts as supporting evidence.
+
+    GENOTYPE DOSE
+    =============
+
+    Dose is the count of ``1`` alleles in the GT field, the part of the sample
+    column before the first colon. Only the first ALT allele is counted, so a
+    ``2/2`` call scores 0. A sample is callable when its GT contains no ``.``
+    and at least one ``0`` or ``1``, which also excludes ``2/2``.
+
+    Sex from the pedigree, 1 = male and 2 = female, then rewrites dose by
+    locus:
+
+        male, chrX or chrY      any ALT is promoted to dose 2, because a
+                                hemizygote carries a full dose.
+        female, chrY            never callable, so non-informative.
+        female, chrX            left diploid, 0/1/2.
+        any sex, autosome       left diploid, 0/1/2.
+
+    Unparseable or absent sex leaves a sample judgeable on autosomes only.
+
+    WHICH PAIRS ARE COMPARED
+    ========================
+
+    Every affected-affected pair and every affected-unaffected pair is examined
+    independently, and one qualifying pair anywhere in the family flags the
+    variant. A pair is examined only when both members are callable, the row
+    passes the history gate, and the locus is one both members can be judged
+    on:
+
+        autosome    always.
+        chrX        for a male, requires x_linked_recessive or
+                    x_linked_dominant history; for a female, requires
+                    x_linked_dominant history only, since a female
+                    heterozygote under an X-linked recessive model is an
+                    expected carrier.
+        chrY        males with y_linked history only; females excluded.
+
+    Mitochondrial variants are out of scope entirely: the locus test admits
+    only autosomes, chrX and chrY.
+
+    The history gate requires a Mendelian history and rejects non-monogenic
+    (polygenic, digenic, oligogenic), literal non-Mendelian, and
+    incomplete-penetrance histories, the last because a healthy carrier of a
+    partly penetrant allele contradicts nothing. There is no
+    ``HPO_scope_review_required`` gate here, unlike BS1 and BS2.
+
+    THE SIX BRANCHES THAT FIRE
+    ==========================
+
+    Affected versus affected, both members carrying this row:
+
+        1. one hom, one WT                                          -> BS4
+           No inheritance gate beyond the history and locus gates. No single
+           Mendelian model explains two affected relatives at doses 2 and 0.
+        2. one hom, one het                             -> BS4_Supporting
+           Requires a hom/hemi requirement with no dominant history of any
+           kind, so nothing explains the heterozygote.
+        3. one het, one WT                                          -> BS4
+           Requires dominant-like history, defined below.
+
+    Affected versus unaffected:
+
+        4. affected dose >= 1, unaffected dose >= 2                 -> BS4
+           No inheritance gate. Note the sex normalization above makes a
+           healthy male hemizygote on chrX dose 2, so he reaches this branch.
+        5. affected hom, unaffected het                 -> BS4_Supporting
+           Requires dominant-like history.
+        6. affected het, unaffected het                 -> BS4_Supporting
+           Requires dominant-like history.
+
+    Every other dose combination yields nothing, by omission rather than by an
+    explicit rule: affected het against affected het, affected hom against
+    unaffected WT, and affected het against unaffected WT are each
+    segregation-compatible with some model.
+
+    "Dominant-like history" is read from ``variant_inheritance``: dominant,
+    x_linked_dominant, y_linked or mitochondrial, minus any autosomal-recessive
+    requirement. Two consequences follow. The mitochondrial member is
+    unreachable, because chrM fails the locus test. And x_linked_recessive is
+    not excluded, so a gene carrying both x_linked_recessive and
+    x_linked_dominant history reaches branches 3, 5 and 6, while branch 2
+    treats that same x_linked_recessive history as a biallelic requirement.
+
+    Branch 2 also reads ``variant_inheritance`` for the "any dominant history"
+    question. All other inputs to BS4 come from the same column — and from
+    ``variant_penetrance``, the pedigree, the locus, and the genotype. BS4
+    reads no mechanism column.
+
+    Why mechanism does not enter here: upstream
+    ``select_condition_histories_for_variant`` selects histories by variant
+    effect and delivers the result through ``variant_inheritance``. By the time
+    BS4 runs, the inheritance already reflects which conditions and mechanisms
+    are compatible with this variant. Re-reading the mechanism column to
+    confirm variant-history compatibility would duplicate that work, and would
+    observe a different and narrower fact: what tags exist in
+    ``var_plausible_patho_mechs``, rather than what inheritance was actually
+    selected for this variant. The segregation question is purely about whether
+    the observed genotype dose is consistent with the inherited model, which is
+    an inheritance and dose question.
+
+    Required columns
+    ----------------
+    Only ``variant_inheritance`` and ``variant_penetrance`` raise KeyError if
+    absent. ``chrom`` defaults to empty when absent, treating every locus as
+    autosomal. ``ped_df`` must carry ``#FamilyID``, ``IndividualID``,
+    ``Phenotype`` (2 = affected, 1 = unaffected) and ``Sex``.
+    '''
     fam_ped_df = ped_df.loc[ped_df['#FamilyID'] == fam_name, :].copy()
     if fam_ped_df.empty:
         bs4_array = np.zeros(len(df), dtype=int)
@@ -334,41 +381,29 @@ def BS4_criteria(
             x_model = condition_masks["has_x_linked_dominant"]
         return autosomal | (x_linked & x_model) | (y_linked & y_model)
 
-    mechanism_masks = _variant_mechanism_masks(df)
-
     has_recessive_requirement = condition_masks["has_recessive"]
     has_hom_hemi_requirement = (
         has_recessive_requirement | condition_masks["has_x_linked_recessive"]
     )
     has_any_dominant_history = (
-        mechanism_masks["has_dom_lof_history"]
-        | mechanism_masks["has_dom_gof_history"]
-        | mechanism_masks["has_dom_dn_history"]
-        | mechanism_masks["has_dom_unresolved_history"]
-        | mechanism_masks["has_x_dominant_lof_history"]
-        | mechanism_masks["has_x_dominant_gof_history"]
-        | mechanism_masks["has_x_dominant_dn_history"]
-        | mechanism_masks["has_x_dominant_unresolved_history"]
+        condition_masks["has_dominant"] | condition_masks["has_x_linked_dominant"]
     )
     hom_hemi_only = has_hom_hemi_requirement & ~has_any_dominant_history
-    dominant_gof_dn_history = (
-        mechanism_masks["has_dom_gof_history"]
-        | mechanism_masks["has_dom_dn_history"]
-        | mechanism_masks["has_x_dominant_gof_history"]
-        | mechanism_masks["has_x_dominant_dn_history"]
+
+    # For branch 3 (affected het vs affected WT), require dominant-like with no
+    # biallelic requirement of any kind. X-linked recessive counts as a biallelic
+    # requirement here — if the gene has both x_linked_dominant and x_linked_recessive,
+    # an affected person with zero copies visible may be explained by the recessive route.
+    dominant_compatible_affected_vs_affected = (
+        condition_masks["has_dominant_like"] & ~has_hom_hemi_requirement
     )
-    dominant_lof_or_unresolved_history = (
-        mechanism_masks["has_dom_lof_history"]
-        | mechanism_masks["has_dom_unresolved_history"]
-        | mechanism_masks["has_x_dominant_lof_history"]
-        | mechanism_masks["has_x_dominant_unresolved_history"]
-    )
-    hom_hemi_plus_gof_dn_nmd_only = (
-        has_hom_hemi_requirement
-        & dominant_gof_dn_history
-        & ~dominant_lof_or_unresolved_history
-    )
-    is_nmd_lof = mechanism_masks["is_predicted_lof"]
+
+    # For branches 5 & 6 (affected vs unaffected), require dominant-like with no
+    # *autosomal* biallelic requirement. X-linked recessive is NOT excluded here,
+    # because the contradiction is in the affected/unaffected status at the same dose,
+    # not in missing genotype data. A female with one X-linked copy being affected
+    # contradicts the recessive reading, and being unaffected contradicts the dominant
+    # reading — no single model explains both.
     dominant_variant_compatible_no_biallelic = (
         condition_masks["has_dominant_like"] & ~has_recessive_requirement
     )
@@ -415,16 +450,13 @@ def BS4_criteria(
                 called
                 & mendelian_locus
                 & hom_het
-                & (
-                    hom_hemi_only
-                    | (hom_hemi_plus_gof_dn_nmd_only & is_nmd_lof)
-                )
+                & hom_hemi_only
             )
             final_criteria = final_criteria | (
                 called
                 & mendelian_locus
                 & het_wt
-                & dominant_variant_compatible_no_biallelic
+                & dominant_compatible_affected_vs_affected
             )
 
     # Patient-control comparisons.
@@ -471,7 +503,7 @@ def BP2_PM3_criteria(df: pd.DataFrame,
                      pvs1_criteria: np.ndarray,
                      ps1_criteria: np.ndarray,
                      ps3_criteria: np.ndarray,
-                     threads: int = 1) -> Tuple[pd.Series, pd.Series]:
+                     threads: int = 1) -> Tuple[np.ndarray, np.ndarray]:
     # BP2: observed in trans with a pathogenic variant in a dominant disease, or
     # in cis with a pathogenic variant in an autosomal recessive disease.
     # PM3: observed in trans with a pathogenic variant in recessive disease.

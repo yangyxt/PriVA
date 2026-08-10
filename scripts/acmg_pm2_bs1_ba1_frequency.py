@@ -113,8 +113,16 @@ def control_false_neg_rate(
         )
 
     # --- Decision ---
-    reject_h0 = p_values <= alpha
-    logger.info(f"There are {reject_h0.sum()} variants having their p-value less than {alpha}, {reject_h0.isna().sum()} datapoints are NA")
+    # Three outcomes, not two. A plain ``p_values <= alpha`` would fold "the
+    # test could not be run" into "the test said no", because a comparison
+    # against NaN is False. Callers need to tell those apart so they can fall
+    # back to a direct frequency comparison, so the undecidable rows carry NA.
+    reject_h0 = (p_values <= alpha).astype("boolean").mask(p_values.isna())
+    logger.info(
+        f"There are {int(reject_h0.sum())} variants having their p-value less than {alpha}, "
+        f"{int(reject_h0.isna().sum())} datapoints are NA (no allele number or no frequency, "
+        "test undecidable)"
+    )
 
     return p_values, reject_h0
 
@@ -171,46 +179,124 @@ def BS1_criteria(df: pd.DataFrame,
     '''
     BS1: allele frequency is greater than expected for the disorder.
 
-    The upstream hub has already selected condition histories compatible with
-    this variant's mechanism and added every included history whose mechanism
-    is unresolved. BS1 therefore reads ``variant_inheritance`` and
-    ``variant_penetrance`` directly; it must not recreate a gene-wide answer.
+    Returns an int array over ``df`` rows: 0 = no BS1, 3 = BS1. When
+    ``return_frequency_components`` is true, returns that array plus a dict of
+    the three per-route boolean masks described under "Returned components".
 
-    Autosomal dominant frequency model:
-      - dominant only: any variant state remains uncertain-compatible.
-      - dominant_LOF only: predicted LOF or uncertain; exact GOF is excluded.
-      - dominant_GOF only: exact GOF only.
-      - dominant_DN only: uncertain only; PriVA has no exact DN database.
-      - dominant_GOF + dominant_DN: exact GOF or uncertain; predicted LOF excluded.
-      - dominant_LOF + dominant_GOF/DN: any variant state can be interpreted
-        under at least one dominant history.
-      - Any compatible biallelic requirement plus dominant history: do not use carrier AF for
-        BS1, because heterozygous population observations may simply be
-        recessive carriers. Use the recessive homozygous/hemizygous frequency
-        model instead.
+    Inheritance and penetrance are read from ``variant_inheritance`` and
+    ``variant_penetrance`` through ``_variant_condition_masks``, which raises
+    KeyError if either column is absent. Those columns already hold the
+    condition histories the upstream hub attached to this variant, so BS1 does
+    not recompute a gene-wide answer and consults no HPO array.
 
-    Recessive frequency model:
-      - A compatible biallelic requirement uses homozygous/hemizygous population frequency, not
-        carrier allele count.
+    Pathogenic mechanism is not an input, and this function never calls
+    ``_variant_mechanism_masks``. What BS1 tests is a maximum credible allele
+    frequency, whose parameters are disease incidence, heterogeneity and
+    penetrance. Whether an allele acts by loss of function, gain of function or
+    a dominant-negative effect does not change how common it may be among
+    unaffected people.
 
-    X-linked frequency models:
-      - ``x_linked_recessive`` uses the XY allele frequency. XX carrier
-        frequency is not evidence against that model.
-      - ``x_linked_dominant`` uses the XX allele frequency.
-      - ``x_linked_unspecified`` supplies no disease-incidence BS1 model because
-        the affected allele state is unknown.
+    HOW SIGNIFICANCE IS DECIDED
+    ===========================
 
-    Gene pathogenic-frequency comparator:
-      - For any valid Mendelian model, BS1 can also be assigned when the
-        variant AF is significantly greater than the non-zero maximum AF of
-        known pathogenic ClinVar variants in that gene.
+    Every frequency comparison except the autosomal-recessive one goes through
+    ``control_false_neg_rate``: a one-sided binomial test of the observed
+    allele count against the route's threshold, at alpha = 0.01. The point
+    estimate being above the threshold is not sufficient; the excess must be
+    significant given the allele number, so small-cohort strata cannot produce
+    BS1 on their own.
 
-    Global gates:
-      - no BS1 for non-monogenic/polygenic, non-Mendelian, or any selected
-        incomplete-penetrance-equivalent history.
-      - no BS1 while a relevant HPO disease context still requires scope review.
-      - PM2 blocks only the gene pathogenic-frequency comparator.
-      - A disease-incidence BS1 assignment takes precedence over PM2.
+    That test returns three outcomes, not two: yes, no, and undecidable. A row
+    whose allele number is zero, or whose frequency is missing, cannot be
+    tested at all and comes back undecidable rather than counting as a "no".
+    Each route then falls back to comparing ``gnomAD_joint_AF`` against its
+    threshold directly, unweighted by any sample size. A row with neither a
+    testable stratum nor a joint frequency gets no BS1.
+
+    The one exception to the fallback is the gene pathogenic-frequency route:
+    it falls back only where the gene actually has a pathogenic frequency above
+    zero to be compared against, since a gene with none is not a candidate for
+    that route in the first place.
+
+    The autosomal-recessive route is a different exception: it compares an
+    estimated homozygote frequency to ``expected_incidence`` directly, with no
+    test and therefore no fallback.
+
+    TWO INDEPENDENT ROUTES TO BS1
+    =============================
+
+    BS1 fires if either route fires. Both additionally require the variant to
+    clear an absolute floor of AF > 0.0001, tested in the same stratum the
+    route uses. With the default ``expected_incidence`` of 0.0001 that floor
+    coincides with the incidence threshold; passing a rarer incidence leaves
+    the floor in force as the binding constraint.
+
+    Route 1, disease incidence. The locus and the inherited model must agree,
+    and each pairing reads its own population stratum:
+
+        autosomal + dominant history, no biallelic requirement
+            carrier allele frequency (``gnomAD_joint_AF``/``AN``). A dominant
+            history that also carries any recessive requirement is excluded
+            here, because population heterozygotes may simply be recessive
+            carriers; such genes are served by the recessive route instead.
+        autosomal + recessive history
+            estimated homozygote frequency, not carrier count. Uses
+            ``gnomAD_nhomalt_max`` over the max-population sample when that
+            sample is large enough to expect ten homozygotes, otherwise
+            ``nhomalt_XX + nhomalt_XY`` over the joint sample.
+        chrX + x_linked_recessive
+            the XY stratum. XX carrier frequency is not evidence against this
+            model.
+        chrX + x_linked_dominant, no biallelic requirement
+            the XX stratum.
+        chrY + y_linked, chrM + mitochondrial
+            carrier allele frequency.
+
+    ``x_linked_unspecified`` supplies no route, because the affected allele
+    state is unknown. A history whose locus does not match, such as a dominant
+    history on chrX, likewise supplies no route.
+
+    Route 2, gene pathogenic-frequency comparator. For any valid Mendelian
+    model, BS1 also fires when the variant frequency significantly exceeds
+    ``clinvar_patho_gene_max_af``, the maximum frequency among known pathogenic
+    ClinVar variants in that gene. Genes with no such variant have the value 0
+    and are excluded. This route uses the joint max stratum regardless of
+    inheritance, and it is the only route PM2 can block.
+
+    GATES APPLIED TO BOTH ROUTES
+    ============================
+
+    A row must carry a Mendelian history and must not carry a non-monogenic
+    (polygenic, digenic, oligogenic) history, a literal non-Mendelian history,
+    an incomplete-penetrance history, or a set ``HPO_scope_review_required``
+    flag. Upstream folds moderate penetrance, low penetrance and late onset
+    into the ``incomplete`` token, so those block here too.
+
+    RELATIONSHIP WITH PM2
+    =====================
+
+    ``pm2_criteria`` is optional; omitting it treats PM2 as absent everywhere.
+    Where PM2 is present it suppresses route 2 only, leaving route 1 intact.
+    BS1 does not modify PM2 itself. The reverse precedence, in which a
+    disease-incidence BS1 backs PM2 down to 0, is applied by the caller in
+    ``acmg_criteria_assign`` using the components below.
+
+    Returned components
+    -------------------
+        disease_incidence_bs1               route 1 fired
+        gene_pathogenic_af_bs1              route 2 fired and PM2 was absent
+        gene_pathogenic_af_blocked_by_pm2   route 2 would have fired but PM2
+                                            was present
+
+    Required columns
+    ----------------
+    ``variant_inheritance``, ``variant_penetrance``, ``gnomAD_joint_AF``,
+    ``gnomAD_joint_AF_max``, ``gnomAD_joint_AN``, ``gnomAD_joint_AN_max``,
+    ``gnomAD_nhomalt_max``, ``gnomAD_nhomalt_XX``, ``gnomAD_nhomalt_XY`` and
+    ``clinvar_patho_gene_max_af`` raise if absent. ``chrom``,
+    ``HPO_scope_review_required`` and the four XX/XY frequency columns default
+    to empty or zero when absent, which silently removes the X-linked routes
+    and treats every locus as autosomal.
     '''
     if pm2_criteria is None:
         pm2_present = np.zeros(len(df), dtype=bool)
@@ -256,8 +342,15 @@ def BS1_criteria(df: pd.DataFrame,
     _, common_vars = control_false_neg_rate(df['gnomAD_joint_AF_max'], df['gnomAD_joint_AN_max'], af_threshold=expected_incidence, alpha=0.01)
 
     max_ind_incidence = np.where(df['gnomAD_joint_AN_max']/2 > 10/expected_incidence, df['gnomAD_nhomalt_max']/(df['gnomAD_joint_AN_max']/2), (df['gnomAD_nhomalt_XX'] + df['gnomAD_nhomalt_XY'])/(df['gnomAD_joint_AN']/2))
-    max_af_larger_incidence = np.where(common_vars.isna(), df['gnomAD_joint_AF'] > expected_incidence, common_vars)
-    logger.info(f"There are {max_af_larger_incidence.sum()} variants having their PAF greater than the expected incidence of the disease")
+    # Where the max-population stratum had no allele number to test, fall back to
+    # the joint frequency. fillna(False) then covers a row that has neither.
+    max_af_larger_incidence = (
+        common_vars
+        .mask(common_vars.isna(), df['gnomAD_joint_AF'] > expected_incidence)
+        .fillna(False)
+        .astype(bool)
+    )
+    logger.info(f"There are {int(max_af_larger_incidence.sum())} variants having their PAF greater than the expected incidence of the disease")
 
     has_recessive_requirement = condition_masks["has_recessive"]
     autosomal_dominant_without_recessive = (
@@ -332,11 +425,26 @@ def BS1_criteria(df: pd.DataFrame,
     gene_max_patho_af = df["clinvar_patho_gene_max_af"].fillna(0)
 
     _, greater_than_clinvar_patho_af = control_false_neg_rate(df['gnomAD_joint_AF_max'], df['gnomAD_joint_AN_max'], af_threshold=gene_max_patho_af, alpha=0.01)
-    greater_than_clinvar_patho_af = np.where(greater_than_clinvar_patho_af.isna() & (gene_max_patho_af > 0), df['gnomAD_joint_AF'] > gene_max_patho_af, greater_than_clinvar_patho_af)
-    greater_than_clinvar_patho_af = np.where(np.isnan(greater_than_clinvar_patho_af), False, greater_than_clinvar_patho_af)
+    # Fall back only where the gene actually has a pathogenic frequency to beat;
+    # a gene with none is not a candidate for this route, so an undecidable test
+    # there stays False rather than being compared against zero.
+    greater_than_clinvar_patho_af = (
+        greater_than_clinvar_patho_af
+        .mask(
+            greater_than_clinvar_patho_af.isna() & (gene_max_patho_af > 0),
+            df['gnomAD_joint_AF'] > gene_max_patho_af,
+        )
+        .fillna(False)
+        .astype(bool)
+    )
     greater_than_clinvar_patho_af = greater_than_clinvar_patho_af & (gene_max_patho_af > 0)
     _, greater_than_basic_af = control_false_neg_rate(df['gnomAD_joint_AF_max'], df['gnomAD_joint_AN_max'], af_threshold=0.0001, alpha=0.01)
-    greater_than_basic_af = np.where(greater_than_basic_af.isna(), df['gnomAD_joint_AF'] > 0.0001, greater_than_basic_af)
+    greater_than_basic_af = (
+        greater_than_basic_af
+        .mask(greater_than_basic_af.isna(), df['gnomAD_joint_AF'] > 0.0001)
+        .fillna(False)
+        .astype(bool)
+    )
     x_xy_greater_than_basic_af = _frequency_above(
         "gnomAD_joint_AF_XY", "gnomAD_joint_AN_XY", 0.0001
     )
@@ -377,13 +485,23 @@ def BS1_criteria(df: pd.DataFrame,
     return bs1_array
 
 
-def BA1_criteria(anno_df: pd.DataFrame) -> pd.Series:
+def BA1_criteria(anno_df: pd.DataFrame) -> np.ndarray:
     """
     Apply BA1 criteria to the annotation DataFrame.
+
+    Returns an int array over ``anno_df`` rows: 0 = no BA1, 5 = BA1. A variant
+    is BA1 when its frequency is significantly above 5%. Where the max-population
+    stratum has no allele number to test, the joint frequency is compared to 5%
+    directly; where neither is available the variant is not BA1.
     """
     false_neg_rate, common_vars = control_false_neg_rate(anno_df['gnomAD_joint_AF_max'], anno_df['gnomAD_joint_AN_max'], af_threshold=0.05, alpha=0.01)
-    ba1_criteria = np.where(common_vars.isna(), anno_df['gnomAD_joint_AF'] > 0.05, common_vars)
-    logger.info(f"BA1 criteria applied, {ba1_criteria.sum()} variants are having the BA1 criteria")
+    ba1_criteria = (
+        common_vars
+        .mask(common_vars.isna(), anno_df['gnomAD_joint_AF'] > 0.05)
+        .fillna(False)
+        .astype(bool)
+    )
+    logger.info(f"BA1 criteria applied, {int(ba1_criteria.sum())} variants are having the BA1 criteria")
 
     ba1_array = np.zeros(len(anno_df), dtype=int)
     ba1_array[ba1_criteria] = 5

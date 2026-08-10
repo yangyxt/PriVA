@@ -353,23 +353,41 @@ def _variant_mechanism_masks(
     =================
 
     Every criterion that reasons about mechanism reads its inputs from here,
-    so this is the single place the hub's output becomes ACMG-usable. Two
-    columns come in; fifteen boolean masks go out, in two families.
+    so this is the single place the hub's output becomes ACMG-usable. Five
+    columns come in; 27 boolean masks go out, in two families.
 
         var_plausible_patho_mechs      "dominant_GOF;recessive_LOF"
         variant_effect                 exact_known_* | predicted_LOF_high_
                                        confidence | uncertain
               |
-              |  (a KeyError is raised if either is absent -- there is
+              |  (a KeyError is raised if either of those two is absent --
               |   deliberately no silent default)
+              |
+        variant_lof_score              0 | 1 | 2
+        variant_gof_score              0 | 2
+        variant_dn_score               0 | 2
+              |
+              |  (these three DO default to 0 when absent, so a caller that
+              |   forgets them gets "no exact evidence" rather than an error)
               v
 
     FAMILY 1  what the GENE's condition history says, split by inheritance
     ---------------------------------------------------------------------
     Read out of var_plausible_patho_mechs by matching the tag text.
 
-        has_recessive_compatible     any tag starting "recessive"
-        has_dominant_compatible      any tag starting "dominant"
+    Five collapsed masks, each true for the bare tag OR any mechanism suffix.
+    These are the ones to reach for when a criterion only needs to know that
+    an inheritance is present at all:
+
+        has_recessive_compatible                "recessive" +/- suffix
+        has_dominant_compatible                 "dominant" +/- suffix
+        has_x_linked_recessive_compatible       "x_linked_recessive" +/- suffix
+        has_x_linked_dominant_compatible        "x_linked_dominant" +/- suffix
+        has_x_linked_unspecified_compatible     "x_linked_unspecified" +/- suffix
+
+    Sixteen exact-tag masks, four per inheritance. Reach for these only when
+    the specific mechanism matters; ORing all four of a group together just
+    reproduces the collapsed mask above it.
 
         has_rec_lof_history          tag == "recessive_LOF"
         has_rec_gof_history          tag == "recessive_GOF"
@@ -379,6 +397,19 @@ def _variant_mechanism_masks(
         has_dom_gof_history          tag == "dominant_GOF"
         has_dom_dn_history           tag == "dominant_DN"
         has_dom_unresolved_history   bare "dominant", no mechanism suffix
+        has_x_recessive_lof_history        tag == "x_linked_recessive_LOF"
+        has_x_recessive_gof_history        tag == "x_linked_recessive_GOF"
+        has_x_recessive_dn_history         tag == "x_linked_recessive_DN"
+        has_x_recessive_unresolved_history bare "x_linked_recessive"
+        has_x_dominant_lof_history         tag == "x_linked_dominant_LOF"
+        has_x_dominant_gof_history         tag == "x_linked_dominant_GOF"
+        has_x_dominant_dn_history          tag == "x_linked_dominant_DN"
+        has_x_dominant_unresolved_history  bare "x_linked_dominant"
+
+    The tag vocabulary is closed at four values per inheritance: upstream
+    ``_mechanism_profile_tag`` emits the bare inheritance for an unresolved
+    mechanism, and rewrites DOMINANT_NEGATIVE to DN. That is what makes each
+    collapsed mask exactly equal to the OR of its four exact masks.
 
     FAMILY 2  what THIS VARIANT does, from variant_effect and the scores
     -------------------------------------------------------------------

@@ -34,78 +34,99 @@ logger = logging.getLogger(__name__)
 def BS2_criteria(
     df: pd.DataFrame,
     pm2_criteria: np.ndarray,
-) -> pd.Series:
+) -> np.ndarray:
     '''
-    BS2: variant observed in apparently healthy adults for a disease expected
-    to be penetrant at the observed age. Output keeps the existing PriVA
-    strength encoding:
-      0 = no BS2, 3 = BS2.
+    BS2: variant observed in apparently healthy individuals at a genotype dose
+    incompatible with the inherited model.
 
-    The mechanism hub has already selected compatible known condition histories
-    plus every mechanism-unresolved included history. This function reads their
-    categorical inheritance and penetrance directly; there is no gene-wide HPO
-    string or array fallback.
+    Returns an int array over ``df`` rows: 0 = no BS2, 3 = BS2. ``pm2_criteria``
+    is required and must be an array over the same rows.
 
-    Global gates:
-      - no BS2 for non-monogenic/polygenic, non-Mendelian, or any selected
-        incomplete-equivalent assertion: incomplete, moderate, or low
-        penetrance, or late onset. Other onset terms, age-dependent penetrance,
-        and variable expressivity do not block. High penetrance is normalized
-        to complete and uses the lower complete-penetrance threshold.
-      - no BS2 while a relevant HPO disease context still requires scope review.
-      - if HPO explicitly marks complete penetrance, use lower gnomAD count
-        thresholds (>3 instead of >10), still requiring no incomplete history.
-      - final BS2 is removed when PM2 is assigned.
+    Inheritance and penetrance are read from ``variant_inheritance`` and
+    ``variant_penetrance`` through ``_variant_condition_masks``, which raises
+    KeyError if either column is absent. Those columns already hold the
+    condition histories the upstream hub attached to this variant, so BS2 does
+    not recompute a gene-wide answer and consults no HPO array.
 
-    Healthy observation classes:
-      - carrier evidence = gnomAD allele count above threshold, internal
-        control_AC > 0, or healthy Y-linked allele observation.
-      - hom/hemi evidence = gnomAD_nhomalt_XX + gnomAD_nhomalt_XY above
-        threshold, or internal control_nhomalt > 0.
-      - X-linked recessive evidence = gnomAD_nhomalt_XY above threshold.
-      - X-linked dominant evidence = gnomAD XX allele count above
-        threshold. XY observations cannot substitute for XX observations.
-      - an unqualified X-linked history supplies no BS2 observation model.
+    Pathogenic mechanism is not an input. This module imports only
+    ``_variant_condition_masks``, and no branch below distinguishes a
+    loss-of-function variant from a gain-of-function or dominant-negative one.
+    The question BS2 asks is whether a healthy person carries more copies of
+    the allele than the inherited model tolerates, which is a statement about
+    dose and inheritance alone.
 
-    BS2 decision matrix:
-      Variant state:
-        predicted_LOF = LOFTEE HC/OS, NMD pLoF, or PriVA splice/UTR LOF.
-        exact_GOF = variant-level exact GoFCards GOF match.
-        uncertain = neither predicted_LOF nor exact_GOF.
+    WHAT COUNTS AS A HEALTHY OBSERVATION
+    ====================================
 
-      Important DN limitation:
-        dominant_DN is currently curated condition history only. PriVA has no
-        variant-level DN database, so there is no exact_DN variant state. DN
-        history is treated as compatible with ambiguous variants only; NMD_LOF
-        and exact_GOF are not treated as DN-compatible.
+    Two sources contribute, and either is sufficient:
 
-      Matrix values are PriVA strengths: 0 = no BS2, 3 = BS2.
-      Every "no healthy evidence" combination is 0.
+        gnomAD          a count above a threshold, which is > 10 normally and
+                        > 3 when the history asserts complete penetrance.
+        control cohort  ``control_AC`` or ``control_nhomalt`` above zero, when
+                        the user supplied a control VCF. Any observation counts;
+                        no threshold and no penetrance relaxation apply.
 
-      mechanism profile                   carrier NMD  carrier GOF  carrier amb  hom NMD  hom GOF  hom amb
-      no usable history                             0            0            0        0        0        0
-      recessive only                                0            0            0        3        3        3
-      dominant only                                 3            3            3        3        3        3
-      dominant_LOF only                             3            0            3        3        0        3
-      dominant_GOF only                             0            3            0        0        3        0
-      dominant_DN only                              0            0            3        0        0        3
-      dominant_GOF + dominant_DN                    0            3            3        0        3        3
-      dominant_LOF + dominant_GOF/DN                3            3            3        3        3        3
-      recessive + any dominant history              0            0            0        3        3        3
+    The observation is read from a different stratum per model:
 
-      Consequences:
-        - GOF_only_NMD_control_AC and DN_only_NMD_control_AC are 0.
-        - GOF_only_ambiguous_control_AC is 0.
-        - DN_only_ambiguous_control_AC is 3.
-        - DN-only ambiguous carrier/hom evidence is BS2-compatible; NMD_LOF is
-          not DN-compatible, and exact_GOF is not treated as DN evidence.
-        - dominant only means dominant inheritance without a curated
-          LOF/GOF/DN mechanism and without recessive history; healthy carrier or
-          hom/hemi evidence is BS2-compatible regardless of query consequence.
-        - dominant_LOF healthy carriers are BS2 unless the exact variant is already
-          ascertained as GOF.
-        - If recessive history is present, carrier-only evidence is not BS2 even
-          when dominant history is also present; hom/hemi evidence remains BS2.
+        carrier         ``gnomAD_joint_AF`` x ``gnomAD_joint_AN``, or
+                        ``control_AC`` > 0, or a chrY variant with a non-zero
+                        XY frequency.
+        hom/hemi        ``gnomAD_nhomalt_XX`` + ``gnomAD_nhomalt_XY``, or
+                        ``control_nhomalt`` > 0.
+        XY hemizygous   ``gnomAD_nhomalt_XY`` alone.
+        XX carrier      ``gnomAD_joint_AC_XX`` alone.
+
+    WHICH OBSERVATION EACH MODEL ACCEPTS
+    ====================================
+
+        recessive history
+            hom/hemi evidence only. A healthy heterozygote is expected under a
+            biallelic model and is never BS2. This route is not gated on locus,
+            so an autosomal-recessive history also admits hom/hemi evidence for
+            a variant on chrX.
+        autosomal + dominant history, no recessive requirement
+            carrier or hom/hemi evidence. One copy in a healthy person already
+            contradicts a dominant model.
+        chrY + y_linked, chrM + mitochondrial
+            same single-copy treatment as autosomal dominant.
+        chrX + x_linked_recessive
+            healthy XY hemizygotes only. XX carriers are expected.
+        chrX + x_linked_dominant, no recessive requirement
+            healthy XX carriers only. XY observations cannot substitute.
+
+    A history whose locus does not match supplies no route, and
+    ``x_linked_unspecified`` supplies none at all because the contradicting
+    dose is unknown. When a gene carries both recessive and dominant history
+    the recessive reading wins: carrier-only evidence is not BS2, while
+    hom/hemi evidence still is.
+
+    GATES
+    =====
+
+    A row must carry a Mendelian history and must not carry a non-monogenic
+    (polygenic, digenic, oligogenic) history, a literal non-Mendelian history,
+    an incomplete-penetrance history, or a set ``HPO_scope_review_required``
+    flag. Upstream folds moderate penetrance, low penetrance and late onset
+    into the ``incomplete`` token, so those block here too; other onset terms
+    and variable expressivity do not.
+
+    Penetrance therefore acts twice, in opposite directions. An ``incomplete``
+    token blocks BS2 outright, because a healthy carrier of a partly penetrant
+    allele is not contradictory. A ``complete`` token, which upstream also uses
+    for high penetrance, relaxes the gnomAD thresholds from > 10 to > 3.
+
+    Finally, BS2 is withdrawn wherever PM2 is set. The caller in
+    ``acmg_criteria_assign`` passes the PM2 array after a disease-incidence BS1
+    has already backed PM2 down, so a variant common enough for BS1 does not
+    lose BS2 to the PM2 it no longer holds.
+
+    Required columns
+    ----------------
+    Only ``variant_inheritance`` and ``variant_penetrance`` raise if absent.
+    ``chrom``, ``HPO_scope_review_required``, every gnomAD column and both
+    control columns default to empty or zero, so a missing frequency column
+    silently yields no evidence and a missing ``chrom`` treats every locus as
+    autosomal.
     '''
     def _series_or_empty(column: str) -> pd.Series:
         return df.get(column, pd.Series("", index=df.index)).fillna("").astype(str)
@@ -162,7 +183,7 @@ def BS2_criteria(
     y_allele_observed = y_locus & (_numeric_column("gnomAD_joint_AF_XY") > 0)
 
     if 'control_AC' in df.columns:
-        logger.warning("Seems user has provided a control cohort VCF, using mechanism-aware control allele counts to assign BS2 criteria")
+        logger.warning("Seems user has provided a control cohort VCF, using control allele counts to assign BS2 criteria")
     if 'control_nhomalt' in df.columns:
         logger.warning("Seems user has provided a control cohort VCF, using control homozygous counts to assign BS2 criteria")
     control_ac_observed = _numeric_column("control_AC") > 0

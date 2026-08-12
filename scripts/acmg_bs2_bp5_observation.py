@@ -60,11 +60,24 @@ def BS2_criteria(
 
     Two sources contribute, and either is sufficient:
 
-        gnomAD          a count above a threshold, which is > 10 normally and
-                        > 3 when the history asserts complete penetrance.
+        gnomAD          for carrier counts, > 10 normally and > 3 when the
+                        history asserts complete penetrance. For homozygote
+                        counts the threshold is not a fixed number: it is the
+                        count Hardy-Weinberg predicts at a carrier allele
+                        frequency of 1e-3, that is cohort_individuals x 1e-6,
+                        relaxed to 3e-4 (cohort_individuals x 9e-8) under
+                        complete penetrance. At least one observed homozygote
+                        is required in either case.
         control cohort  ``control_AC`` or ``control_nhomalt`` above zero, when
                         the user supplied a control VCF. Any observation counts;
                         no threshold and no penetrance relaxation apply.
+
+    Why the homozygote threshold is stated as a frequency: homozygote count is
+    roughly cohort size times allele frequency squared, so a flat "> 10" is a
+    much stricter test than it looks. In a cohort of this size it demands a
+    carrier frequency near 3.5e-3, about 35 times the 1e-4 the single-copy
+    models use, and it moves with every gnomAD release. Naming the carrier
+    frequency makes the requirement explicit and keeps it stable.
 
     The observation is read from a different stratum per model:
 
@@ -113,7 +126,8 @@ def BS2_criteria(
     Penetrance therefore acts twice, in opposite directions. An ``incomplete``
     token blocks BS2 outright, because a healthy carrier of a partly penetrant
     allele is not contradictory. A ``complete`` token, which upstream also uses
-    for high penetrance, relaxes the gnomAD thresholds from > 10 to > 3.
+    for high penetrance, relaxes the gnomAD thresholds: carrier counts from > 10
+    to > 3, and the homozygote carrier-frequency basis from 1e-3 to 3e-4.
 
     Finally, BS2 is withdrawn wherever PM2 is set. The caller in
     ``acmg_criteria_assign`` passes the PM2 array after a disease-incidence BS1
@@ -182,6 +196,19 @@ def BS2_criteria(
     gnomad_xx_ac = _numeric_column("gnomAD_joint_AC_XX")
     y_allele_observed = y_locus & (_numeric_column("gnomAD_joint_AF_XY") > 0)
 
+    # The homozygote threshold is expressed as an equivalent carrier allele
+    # frequency rather than a fixed count. A flat "> 10 homozygotes" is a far
+    # stricter test than it appears: homozygote count is roughly cohort size
+    # times AF squared, so > 10 in this cohort needs a carrier AF near 3.5e-3,
+    # about 35 times the 1e-4 the single-copy models use. Deriving the count
+    # from a stated carrier AF keeps the requirement explicit and makes it
+    # scale with cohort size instead of with gnomAD's release.
+    BS2_HOM_CARRIER_AF = 1e-3
+    BS2_HOM_CARRIER_AF_COMPLETE = 3e-4
+    gnomad_individuals = _numeric_column("gnomAD_joint_AN") / 2.0
+    hom_hemi_min = gnomad_individuals * (BS2_HOM_CARRIER_AF ** 2)
+    hom_hemi_min_complete = gnomad_individuals * (BS2_HOM_CARRIER_AF_COMPLETE ** 2)
+
     if 'control_AC' in df.columns:
         logger.warning("Seems user has provided a control cohort VCF, using control allele counts to assign BS2 criteria")
     if 'control_nhomalt' in df.columns:
@@ -189,13 +216,27 @@ def BS2_criteria(
     control_ac_observed = _numeric_column("control_AC") > 0
     control_hom_observed = _numeric_column("control_nhomalt") > 0
 
-    hom_hemi_evidence = (gnomad_hom_hemi > 10) | control_hom_observed
+    # A cohort with no called alleles yields a zero threshold, which any count
+    # would clear, so require at least one observed homozygote as well.
+    hom_hemi_evidence = (
+        (gnomad_hom_hemi > hom_hemi_min) & (gnomad_hom_hemi > 0)
+    ) | control_hom_observed
     carrier_evidence = (
         (gnomad_ac > 10) | control_ac_observed | y_allele_observed
     )
-    complete_hom_hemi_evidence = (gnomad_hom_hemi > 3) | control_hom_observed
+    complete_hom_hemi_evidence = (
+        (gnomad_hom_hemi > hom_hemi_min_complete) & (gnomad_hom_hemi > 0)
+    ) | control_hom_observed
     complete_carrier_evidence = (
         (gnomad_ac > 3) | control_ac_observed | y_allele_observed
+    )
+    logger.info(
+        "BS2 homozygote thresholds from carrier AF %g (complete: %g): median required "
+        "count %.2f (complete %.2f); rows clearing it: %d standard, %d complete",
+        BS2_HOM_CARRIER_AF, BS2_HOM_CARRIER_AF_COMPLETE,
+        float(np.nanmedian(hom_hemi_min)) if len(hom_hemi_min) else float("nan"),
+        float(np.nanmedian(hom_hemi_min_complete)) if len(hom_hemi_min_complete) else float("nan"),
+        int(hom_hemi_evidence.sum()), int(complete_hom_hemi_evidence.sum()),
     )
     x_xy_evidence = gnomad_x_xy > 10
     complete_x_xy_evidence = gnomad_x_xy > 3

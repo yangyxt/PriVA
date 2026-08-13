@@ -67,7 +67,7 @@ function main_workflow() {
 
     if [[ -f "$config_file" ]]; then
         log "Using config file: $config_file"
-        local -a config_keys=(input_vcf assembly vep_cache_dir output_dir ref_genome threads af_cutoff gnomad_vcf_chrX clinvar_vcf vep_plugins_dir vep_plugins_cachedir hub_vcf_file hub_cadd_file control_vcf ped_file)
+        local -a config_keys=(input_vcf assembly vep_cache_dir output_dir ref_genome threads af_cutoff gnomad_vcf_chrX clinvar_vcf vep_plugins_dir vep_plugins_cachedir hub_vcf_file hub_cadd_file control_vcf ped_file control_vcf_optional)
         for key in "${config_keys[@]}"; do
             # Need to remove the quotes around the value
             config_args[$key]="$(read_yaml ${config_file} ${key})"
@@ -90,6 +90,7 @@ function main_workflow() {
     local clinvar_vcf="${clinvar_vcf:-${config_args[clinvar_vcf]}}"
     local control_vcf="${control_vcf:-${config_args[control_vcf]}}"
     local ped_file="${ped_file:-${config_args[ped_file]}}"
+    local control_vcf_optional="${control_vcf_optional:-${config_args[control_vcf_optional]:-false}}"
     local vep_plugins_dir="${vep_plugins_dir:-${config_args[vep_plugins_dir]}}"
     local vep_plugins_cachedir="${vep_plugins_cachedir:-${config_args[vep_plugins_cachedir]}}"
     
@@ -249,7 +250,8 @@ function main_workflow() {
         "${anno_vcf}" \
         "${control_vcf}" \
         "${ped_file}" \
-        "${threads}" || { \
+        "${threads}" \
+        "${control_vcf_optional}" || { \
         log "Failed to add control VCF allele annotation on ${anno_vcf}. Quit now"
         return 1; }
 
@@ -643,6 +645,7 @@ function anno_control_vcf_allele() {
     local control_vcf=$2
     local ped_file=${3:-""}
     local threads=${4:-1}
+    local control_vcf_optional=${5:-false}
     local tmp_tag=$(randomID)
     # Output will initially be temporary, then moved to replace input_vcf
     local output_vcf=${input_vcf/.vcf.gz/.${tmp_tag}.vcf.gz}
@@ -656,6 +659,12 @@ function anno_control_vcf_allele() {
         log "WARNING: control_vcf is not provided or not a valid file. Attempting fallback using control samples from cohort VCF."
         control_vcf=$(compute_control_stats_from_cohort "${input_vcf}" "${ped_file}" "${threads}")
         if [[ $? -ne 0 ]] || [[ -z "${control_vcf}" ]]; then
+            if [[ "${control_vcf_optional}" == "true" ]]; then
+                # Control annotation is explicitly optional (e.g. benchmark
+                # cohorts with only affected samples): skip instead of aborting.
+                log "WARNING: Could not derive control stats from cohort VCF either. Skipping control allele annotation (control_vcf_optional=true)."
+                return 0
+            fi
             log "ERROR: Could not derive control stats from cohort VCF either. Aborting control allele annotation."
             return 1
         fi

@@ -24,6 +24,20 @@ log "The folder storing scripts is ${SCRIPT_DIR}, the base folder for used scrip
 
 
 
+# Move the annotated VCF to its final output location. When the input VCF
+# already sits in output_dir (e.g. the ClinVar benchmark setup), source and
+# target are the same file and mv fails with "are the same file", so skip
+# the move in that case.
+function finalize_anno_vcf() {
+    local src=$1
+    local dst=$2
+    if [[ "${src}" -ef "${dst}" ]]; then
+        log "Annotated VCF already at ${dst}; skip the move"
+        return 0
+    fi
+    mv "${src}" "${dst}"
+}
+
 function main_workflow() {
     # Define local variables first
     local input_vcf \
@@ -287,7 +301,7 @@ function main_workflow() {
             ls -lht ${cadd_output} && \
             chmod 444 ${cadd_output} && \
             log "All variants have cached CADD scores, results copied to ${cadd_output}, skipping CADD calculation" && \
-            mv ${anno_vcf} ${final_anno_vcf} && \
+            finalize_anno_vcf ${anno_vcf} ${final_anno_vcf} && \
             check_vcf_validity ${final_anno_vcf} && \
             chmod 444 ${final_anno_vcf} && \
             log "Now successfully save the annotated VCF file to ${final_anno_vcf}" || \
@@ -307,7 +321,7 @@ function main_workflow() {
                 # Merge covered and newly calculated scores
                 merge_cadd_results "${cadd_covered_tsv}" "${anno_vcf/.vcf*/.cadd.new.tsv}" "${cadd_output}" && \
                 update_hub_cadd "${anno_vcf/.vcf*/.cadd.new.tsv}" "${hub_cadd_file}" && \
-                mv ${anno_vcf} ${final_anno_vcf} && \
+                finalize_anno_vcf ${anno_vcf} ${final_anno_vcf} && \
                 check_vcf_validity ${final_anno_vcf} && \
                 chmod 444 ${final_anno_vcf} && \
                 chmod 444 ${cadd_output} || \
@@ -330,7 +344,7 @@ function main_workflow() {
     else
         # Original CADD calculation without caching
         Calculate_CADD "${anno_vcf}" "${config_file}" "${cadd_output}" && \
-        mv ${anno_vcf} ${final_anno_vcf} && \
+        finalize_anno_vcf ${anno_vcf} ${final_anno_vcf} && \
         check_vcf_validity ${final_anno_vcf} && \
         chmod 444 ${final_anno_vcf} && \
         chmod 444 ${cadd_output} || \

@@ -83,12 +83,17 @@ def read_and_standardize_chrom(file_path,
         return df.select(["Chrom", "Pos", "Ref", "Alt"])
 
     force_schema = {"#Chrom": pl.Utf8, "Chrom": pl.Utf8, "column_1": pl.Utf8}
+    # Read every column as a string (infer_schema_length=0 disables dtype inference).
+    # The full CADD TSV has ~135 columns, some with mixed int/float values (e.g.
+    # 'cHmm_E2' holds '0.5' beyond the sampled rows), so schema inference raises
+    # "could not parse '0.5' as dtype 'i64'" on re-seed. Downstream only uses the
+    # six key columns and casts them to Utf8 anyway, so a string read is lossless.
     df = pl.read_csv(
         file_path,
         separator=separator,
         has_header=has_header,
         null_values=list(null_values),
-        infer_schema_length=100000,
+        infer_schema_length=0,
         schema_overrides=force_schema,
     )
     if "#Chrom" in df.columns:

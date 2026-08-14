@@ -29,6 +29,7 @@ import logging
 import re
 import pickle
 import gzip
+import json
 import os
 import pandas as pd
 import numpy as np
@@ -407,11 +408,28 @@ def span_functional_domains(row,
     return func_domain, exon_frequent_patho
 
 
+def load_non_lof_gene_set(nonlof_mechanism_json: str) -> set:
+    """Load the gene symbols whose curated pathogenic mechanism is non-LoF only.
+
+    Reads the non-LoF mechanism cache (gene_nonlof_mechanism_curated_assertions.json.gz,
+    built by build_gene_nonlof_mechanism_cache.py) and returns the set of gene symbols
+    it names. These are genes whose disease mechanism is gain-of-function, dominant
+    negative, or triplosensitivity -- loss of function is NOT the curated mechanism, so
+    PVS1 should be withheld. The list overrides the statistical LoF proxies (LOEUF /
+    mean AlphaMissense); only an established ClinGen haploinsufficiency call (HI score 3)
+    overrides it.
+    """
+    with gzip.open(nonlof_mechanism_json, "rb") as f:
+        data = json.load(f)
+    return {entry.get("symbol") for entry in data.values() if entry.get("symbol")}
+
+
 def PVS1_criteria(df: pd.DataFrame,
                   clinvar_patho_exon_af_stat: str,
                   interpro_entry_map_pkl: str,
                   clinvar_pathogenic_genes: set = None,
                   gene_dosage_sensitivity: str = None,
+                  nonlof_mechanism_json: str = None,
                   intolerant_domains: set = [],
                   tranx_exon_domain_map_pkl: str = None,
                   proband_gt_col: str = None,
@@ -533,6 +551,23 @@ def PVS1_criteria(df: pd.DataFrame,
     clingen_hi = clingen_hi_score == 3
     clingen_ar = clingen_hi_score.isin([30, 40])
 
+    # Withhold PVS1 from genes whose only curated pathogenic mechanism is non-LoF
+    # (GOF / dominant negative / triplosensitivity). Only the "only non-LoF" subset is
+    # blocked: a gene in the non-LoF list that ALSO has a curated LoF history is mixed
+    # (both mechanisms) and keeps PVS1. The non-LoF list overrides the statistical LoF
+    # proxies (LOEUF / mean AlphaMissense): a gene with low LOEUF or high AM but a
+    # curated non-LoF mechanism stays non-LoF. Only an established ClinGen
+    # haploinsufficiency call (HI score 3) overrides the list.
+    non_lof_gene = pd.Series(False, index=df.index)
+    if nonlof_mechanism_json and os.path.exists(nonlof_mechanism_json):
+        non_lof_gene = df["SYMBOL"].isin(load_non_lof_gene_set(nonlof_mechanism_json))
+    only_non_lof = non_lof_gene & ~hpo_lof_history
+    non_lof_blocked = only_non_lof & ~clingen_hi
+    logger.info(
+        "PVS1 non-LoF gene list: %s of %s variants in non-LoF genes (%s only-non-LoF), %s blocked",
+        int(non_lof_gene.sum()), len(df), int(only_non_lof.sum()), int(non_lof_blocked.sum()),
+    )
+
     lof_mechanism = (
         hpo_lof_history
         | clinvar_pathogenic
@@ -540,7 +575,7 @@ def PVS1_criteria(df: pd.DataFrame,
         | am_intolerant
         | clingen_hi
         | clingen_ar
-    )
+    ) & ~non_lof_blocked
     logger.info(
         "PVS1 LoF mechanism gate: %s of %s variants pass. "
         "HPO condition history %s, ClinVar pathogenic gene %s, "

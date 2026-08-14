@@ -416,8 +416,8 @@ def load_non_lof_gene_set(nonlof_mechanism_json: str) -> set:
     it names. These are genes whose disease mechanism is gain-of-function, dominant
     negative, or triplosensitivity -- loss of function is NOT the curated mechanism, so
     PVS1 should be withheld. The list overrides the statistical LoF proxies (LOEUF /
-    mean AlphaMissense); only an established ClinGen haploinsufficiency call (HI score 3)
-    overrides it.
+    mean AlphaMissense) and the mechanism-agnostic ClinVar 2-star pathogenic signal;
+    only an established ClinGen haploinsufficiency call (HI score 3) overrides it.
     """
     with gzip.open(nonlof_mechanism_json, "rb") as f:
         data = json.load(f)
@@ -555,9 +555,10 @@ def PVS1_criteria(df: pd.DataFrame,
     # (GOF / dominant negative / triplosensitivity). Only the "only non-LoF" subset is
     # blocked: a gene in the non-LoF list that ALSO has a curated LoF history is mixed
     # (both mechanisms) and keeps PVS1. The non-LoF list overrides the statistical LoF
-    # proxies (LOEUF / mean AlphaMissense): a gene with low LOEUF or high AM but a
-    # curated non-LoF mechanism stays non-LoF. Only an established ClinGen
-    # haploinsufficiency call (HI score 3) overrides the list.
+    # proxies (LOEUF / mean AlphaMissense) and the mechanism-agnostic ClinVar 2-star
+    # pathogenic signal (ClinVar does not tag LoF vs non-LoF). Only an established
+    # ClinGen haploinsufficiency call (HI score 3), which is an explicit LoF call,
+    # overrides the list.
     non_lof_gene = pd.Series(False, index=df.index)
     if nonlof_mechanism_json and os.path.exists(nonlof_mechanism_json):
         non_lof_gene = df["SYMBOL"].isin(load_non_lof_gene_set(nonlof_mechanism_json))

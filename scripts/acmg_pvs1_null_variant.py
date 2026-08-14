@@ -629,7 +629,10 @@ def PVS1_criteria(df: pd.DataFrame,
     inframe_dels = df['Consequence'].str.contains("inframe_deletion")
     large_indels = (df["ref"].str.len() > 50) | (df["alt"].str.len() > 50) | df['EXON'].fillna("").str.match(r'^\d+-\d+/\d+$')
 
-    pvs1_criteria[inframe_dels & intolerant_domains & large_indels] = 3
+    # An in-frame deletion spanning an intolerant domain only counts as a null
+    # (PVS1) if LoF is actually the disease mechanism for the gene; otherwise it
+    # falls through to PM4.
+    pvs1_criteria[inframe_dels & intolerant_domains & large_indels & lof_mechanism] = 3
     pvs1_criteria[inframe_dels & lof_mechanism & ~intolerant_domains & exon_rare_patho_afs & large_indels & (truncate_frac >= 0.1) & (pvs1_criteria < 3)] = 3
     pvs1_criteria[inframe_dels & lof_mechanism & ~intolerant_domains & exon_rare_patho_afs & large_indels & (truncate_frac < 0.1) & (pvs1_criteria < 2)] = 2
 

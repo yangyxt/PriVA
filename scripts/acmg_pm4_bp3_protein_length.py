@@ -147,6 +147,16 @@ def PM4_BP3_criteria(df: pd.DataFrame,
     stop_loss_variants = df["Consequence"].str.contains("stop_lost").fillna(False)
     logger.info(f"PM4_BP3_criteria: {stop_loss_variants.sum()} stop-loss variants (always get PM4)")
 
+    # NMD-escaping truncating variants (frameshift / stop-gained in the last exon)
+    # still translate a truncated protein, so ClinGen treats them as a length change
+    # (PM4) rather than a null variant (PVS1). The `pvs1_criteria < 2` gate below
+    # keeps them from double-counting when PVS1 is still present (LoF gene).
+    nmd_escaping_trunc = (df['Consequence'].fillna("").str.contains("frameshift") |
+                          df['Consequence'].fillna("").str.contains("stop_gained")) & \
+                         (df['NMD'].fillna(".").str.contains("escaping") |
+                          df['LoF_filter'].fillna(".").str.contains("END_TRUNC"))
+    logger.info(f"PM4_BP3_criteria: {nmd_escaping_trunc.sum()} NMD-escaping truncating variants")
+
     # =========================================================================
     # Step 4: Identify variants with functional domain involvement
     # =========================================================================
@@ -175,7 +185,7 @@ def PM4_BP3_criteria(df: pd.DataFrame,
     # - OR stop-loss variants (always get PM4)
     pm4_inframe_eligible = all_inframe & ~exclude_from_pm4 & \
                            (~in_repetitive_region | has_functional_domain)
-    pm4_eligible = pm4_inframe_eligible | stop_loss_variants
+    pm4_eligible = pm4_inframe_eligible | stop_loss_variants | nmd_escaping_trunc
 
     # BP3 logic:
     # - In-frame indels that are: IN repeat AND NOT in functional domain

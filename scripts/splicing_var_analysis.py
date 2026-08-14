@@ -135,6 +135,23 @@ def splicing_altering_per_row(row,
         logger.info(f"Canonical splice site variant detected at {row.get('chrom', '?')}:{row.get('pos', '?')}, "
                    f"consequence={consequence}, treating as LoF by default, last_exon_only={last_exon_only}")
         return True, True, True, False, True, 0, 0, "", last_exon_only
+
+    if 'splice_acceptor_variant' in consequence:
+        # Canonical splice acceptor site variants are always LoF, mirroring the
+        # donor branch above. Check if it's the last intron (affects last exon
+        # only -> NMD escape).
+        last_exon_only = False
+        if intron_pos and total_exons:
+            try:
+                current_intron = int(intron_pos.split('/')[0].split('-')[0])
+                if current_intron == total_exons - 1:
+                    last_exon_only = True
+                    logger.info(f"Canonical splice acceptor variant in last intron ({intron_pos}), NMD escape likely")
+            except (ValueError, IndexError):
+                pass
+        logger.info(f"Canonical splice acceptor variant detected at {row.get('chrom', '?')}:{row.get('pos', '?')}, "
+                   f"consequence={consequence}, treating as LoF by default, last_exon_only={last_exon_only}")
+        return True, True, True, False, True, 0, 0, "", last_exon_only
     
     transcript_id = row['Feature']
     splicevault_events = row['SpliceVault_top_events']

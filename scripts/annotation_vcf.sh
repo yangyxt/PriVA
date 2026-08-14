@@ -479,8 +479,11 @@ function anno_agg_gnomAD_data () {
     # Maximum values across populations (no sex-specific versions available)
     local max_fields=",.INFO/AC_grpmax_joint,.INFO/AF_grpmax_joint,.INFO/AN_grpmax_joint,.INFO/nhomalt_grpmax_joint"
 
-    # Sex-specific fields (overall)
-    local sex_fields=",.INFO/AF_joint_XX,.INFO/AF_joint_XY,.INFO/nhomalt_joint_XX,.INFO/nhomalt_joint_XY"
+    # Sex-specific fields (overall). AC/AN by sex are required by the sex-aware
+    # ACMG evidence gates added in commit 111952f (combine_annotations.py reads
+    # AC_joint_XX/AN_joint_XX/AC_joint_XY/AN_joint_XY); without them pysam raises
+    # "Invalid header" during prioritization.
+    local sex_fields=",.INFO/AC_joint_XX,.INFO/AN_joint_XX,.INFO/AC_joint_XY,.INFO/AN_joint_XY,.INFO/AF_joint_XX,.INFO/AF_joint_XY,.INFO/nhomalt_joint_XX,.INFO/nhomalt_joint_XY"
 
     # Major population frequencies
     local -a pop_codes=("nfe" "eas" "afr" "amr" "asj" "fin" "sas" "mid" "remaining")

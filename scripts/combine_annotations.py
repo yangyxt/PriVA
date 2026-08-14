@@ -340,6 +340,25 @@ def parse_csq_field(csq_field: Tuple[str, ...], csq_fields: List[str], logger: l
     return anno_dict
 
 
+def _safe_info(record, key, default=np.nan, first=False):
+    """Fetch an INFO field, tolerating fields absent from the VCF header.
+
+    pysam raises ``ValueError: Invalid header`` when a key is not defined in the
+    header instead of returning the default. Older annotation products (e.g. the
+    2026-07 cohort VCFs) lack the sex-specific gnomAD AC/AN fields required since
+    commit 111952f, so treat a missing field as ``default``.
+    """
+    try:
+        value = record.info.get(key)
+    except ValueError:
+        return default
+    if value is None:
+        return default
+    if first:
+        return value[0] if len(value) else default
+    return value
+
+
 def extract_record_info(record, var_source_exists: bool, control_ac_exists: bool):
     """Extract necessary information from a VariantRecord object"""
     # Initialize the info dictionary
@@ -356,15 +375,16 @@ def extract_record_info(record, var_source_exists: bool, control_ac_exists: bool
         'AN_grpmax_joint': record.info.get('AN_grpmax_joint', [np.nan])[0],
         'nhomalt_grpmax_joint': record.info.get('nhomalt_grpmax_joint', [np.nan])[0],
         
-        # Sex-specific fields (overall)
-        'AC_joint_XX': record.info.get('AC_joint_XX', [np.nan])[0],
-        'AN_joint_XX': record.info.get('AN_joint_XX', np.nan),
-        'AF_joint_XX': record.info.get('AF_joint_XX', [np.nan])[0],
-        'AC_joint_XY': record.info.get('AC_joint_XY', [np.nan])[0],
-        'AN_joint_XY': record.info.get('AN_joint_XY', np.nan),
-        'AF_joint_XY': record.info.get('AF_joint_XY', [np.nan])[0],
-        'nhomalt_joint_XX': record.info.get('nhomalt_joint_XX', [np.nan])[0],
-        'nhomalt_joint_XY': record.info.get('nhomalt_joint_XY', [np.nan])[0],
+        # Sex-specific fields (overall). _safe_info tolerates headers that lack the
+        # sex-specific AC/AN fields (pre-111952f annotation products).
+        'AC_joint_XX': _safe_info(record, 'AC_joint_XX', np.nan, first=True),
+        'AN_joint_XX': _safe_info(record, 'AN_joint_XX', np.nan, first=False),
+        'AF_joint_XX': _safe_info(record, 'AF_joint_XX', np.nan, first=True),
+        'AC_joint_XY': _safe_info(record, 'AC_joint_XY', np.nan, first=True),
+        'AN_joint_XY': _safe_info(record, 'AN_joint_XY', np.nan, first=False),
+        'AF_joint_XY': _safe_info(record, 'AF_joint_XY', np.nan, first=True),
+        'nhomalt_joint_XX': _safe_info(record, 'nhomalt_joint_XX', np.nan, first=True),
+        'nhomalt_joint_XY': _safe_info(record, 'nhomalt_joint_XY', np.nan, first=True),
         
         # ClinVar information
         'CLNDN': ",".join(record.info.get('CLNDN', [""])),

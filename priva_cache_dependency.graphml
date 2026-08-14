@@ -1,0 +1,349 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<graphml xmlns="http://graphml.graphdrawing.org/xmlns">
+  <desc>PriVA cache dependency graph. NODE kinds: data=cache file, dir=user-specified directory, runtime=cohort input/output, install=install-time function (shell or python that builds a cache), prod=runtime function (annotation/filter/ACMG). EDGE kinds: generates=function->data, input=data->function, invokes=function->function (parent calls child).</desc>
+  <key id="d_kind"   for="node" attr.name="kind"   attr.type="string"/>
+  <key id="d_script" for="node" attr.name="script" attr.type="string"/>
+  <key id="d_label"  for="node" attr.name="label"  attr.type="string"/>
+  <key id="d_desc"   for="node" attr.name="desc"   attr.type="string"/>
+  <key id="e_label"  for="edge" attr.name="label"  attr.type="string"/>
+  <graph id="G" edgedefault="directed">
+    <node id="data:all_intolerant_domains"><data key="d_kind">data</data><data key="d_label">DAS all intolerant domains</data><data key="d_desc">all_intolerant_domains.hg19.pkl</data></node>
+    <node id="data:alphamissense_intolerant_domains"><data key="d_kind">data</data><data key="d_label">AM domain tolerance TSV</data><data key="d_desc">domain_tolerance_analysis.hg19.tsv</data></node>
+    <node id="data:alphamissense_intolerant_motifs"><data key="d_kind">data</data><data key="d_label">AM intolerant motifs</data><data key="d_desc">AlphaMissense_hg19.kde.pkl</data></node>
+    <node id="data:alphamissense_pd_stat"><data key="d_kind">data</data><data key="d_label">AM protein-domain stats</data><data key="d_desc">AlphaMissense_hg19.vep.prot.domain.stats.pkl</data></node>
+    <node id="data:alphamissense_prescore"><data key="d_kind">data</data><data key="d_label">AlphaMissense prescore</data><data key="d_desc">AlphaMissense_hg19.tsv.gz</data></node>
+    <node id="data:alphamissense_tranx_domain_map"><data key="d_kind">data</data><data key="d_label">AM transcript-domain map</data><data key="d_desc">transcript_pp_domain_mapping.hg19.pkl</data></node>
+    <node id="data:alphamissense_vcf"><data key="d_kind">data</data><data key="d_label">AlphaMissense VCF</data><data key="d_desc">AlphaMissense_hg19.vcf.gz</data></node>
+    <node id="data:alphamissense_vep_vcf"><data key="d_kind">data</data><data key="d_label">AlphaMissense VEP VCF</data><data key="d_desc">AlphaMissense_hg19.vep.vcf.gz</data></node>
+    <node id="data:cadd_base_dir"><data key="d_kind">dir</data><data key="d_label">CADD scripts + cache</data><data key="d_desc">CADD-scripts-1.7.2</data></node>
+    <node id="data:cadd_prescore"><data key="d_kind">data</data><data key="d_label">CADD prescores (SNV+indel inclAnno)</data><data key="d_desc">whole_genome_SNVs_inclAnno.tsv.gz + indel_inclAnno.tsv.gz</data></node>
+    <node id="data:cds_fasta_file"><data key="d_kind">data</data><data key="d_label">Ensembl CDS FASTA</data><data key="d_desc">Homo_sapiens.GRCh37.cds.all.fa.gz</data></node>
+    <node id="data:clingen_map"><data key="d_kind">data</data><data key="d_label">ClinGen map</data><data key="d_desc">clingen_map.hg19.pkl.gz</data></node>
+    <node id="data:clinvar_aa_stat"><data key="d_kind">data</data><data key="d_label">ClinVar aa-change stat</data><data key="d_desc">clinvar.hg19.vep.aa_change.stats.pkl</data></node>
+    <node id="data:clinvar_gene_stat"><data key="d_kind">data</data><data key="d_label">ClinVar 2-star gene stat</data><data key="d_desc">clinvar_2star_stats.pkl.gz</data></node>
+    <node id="data:clinvar_patho_af_stat"><data key="d_kind">data</data><data key="d_label">ClinVar patho AF stat</data><data key="d_desc">clinvar.hg19.vep.patho_af_stat.pkl</data></node>
+    <node id="data:clinvar_patho_exon_af_stat"><data key="d_kind">data</data><data key="d_label">ClinVar patho exon-AF stat</data><data key="d_desc">clinvar.hg19.vep.patho_exon_af_stat.pkl</data></node>
+    <node id="data:clinvar_splice_stat"><data key="d_kind">data</data><data key="d_label">ClinVar splice-change stat</data><data key="d_desc">clinvar.hg19.vep.splice_change.stats.pkl</data></node>
+    <node id="data:clinvar_vcf"><data key="d_kind">data</data><data key="d_label">ClinVar VEP VCF</data><data key="d_desc">clinvar.hg19.vep.vcf.gz</data></node>
+    <node id="data:clinvar_vcv_xml"><data key="d_kind">data</data><data key="d_label">ClinVar VCV weekly XML</data><data key="d_desc">ClinVarVCVRelease_00-latest_weekly.xml.gz</data></node>
+    <node id="data:conda_env"><data key="d_kind">data</data><data key="d_label">priva_acmg conda env</data><data key="d_desc">env priva_acmg</data></node>
+    <node id="data:conda_env_yaml"><data key="d_kind">data</data><data key="d_label">acmg_conda_rough.yml</data><data key="d_desc">acmg_conda_rough.yml</data></node>
+    <node id="data:conservation_file"><data key="d_kind">data</data><data key="d_label">GERP conservation bw</data><data key="d_desc">gerp_conservation_scores.homo_sapiens.GRCh37.bw</data></node>
+    <node id="data:contig_map"><data key="d_kind">data</data><data key="d_label">GRC-&gt;ucsc contig map</data><data key="d_desc">GRC_to_ucsc.contig.map.txt</data></node>
+    <node id="data:ddg2p_mechanism_evidence"><data key="d_kind">data</data><data key="d_label">DDG2P/G2P evidence TSV</data><data key="d_desc">gene_pathogenic_mechanism_evidence.tsv</data></node>
+    <node id="data:gene_dosage_sensitivity"><data key="d_kind">data</data><data key="d_label">ClinGen dosage sensitivity</data><data key="d_desc">gene_dosage_sensitivity.hg19.tsv</data></node>
+    <node id="data:gene_mechanism_cache_dir"><data key="d_kind">dir</data><data key="d_label">gene mechanism cache</data><data key="d_desc">data/patho_mechanism</data></node>
+    <node id="data:gene_mechanism_raw_dir"><data key="d_kind">dir</data><data key="d_label">gene mechanism raw</data><data key="d_desc">gene_pathogenic_mechanism/raw</data></node>
+    <node id="data:gene_nonlof_mechanism_json"><data key="d_kind">data</data><data key="d_label">gene non-LOF mechanism JSON</data><data key="d_desc">gene_nonlof_mechanism_curated_assertions.json.gz</data></node>
+    <node id="data:gene_nonlof_mechanism_schema"><data key="d_kind">data</data><data key="d_label">gene non-LOF schema</data><data key="d_desc">gene_nonlof_mechanism_curated_assertions.schema.json</data></node>
+    <node id="data:gnomad_vcf_chrX"><data key="d_kind">data</data><data key="d_label">gnomAD v4.1 VCFs</data><data key="d_desc">gnomad.joint.v4.1.sites.hg19.chrX.vcf.gz</data></node>
+    <node id="data:gofcards_exact_gof_cache"><data key="d_kind">data</data><data key="d_label">GoFCards exact-GOF cache</data><data key="d_desc">gofcards_exact_gof.json.gz</data></node>
+    <node id="data:gofcards_hg19_to_hg38_chain"><data key="d_kind">data</data><data key="d_label">hg19-&gt;hg38 chain</data><data key="d_desc">hg19ToHg38.over.chain</data></node>
+    <node id="data:gofcards_hg38_fasta"><data key="d_kind">data</data><data key="d_label">hg38 FASTA (GoFCards)</data><data key="d_desc">ucsc.hg38.fasta</data></node>
+    <node id="data:gofcards_mechanism_review_tsv"><data key="d_kind">data</data><data key="d_label">GoFCards mechanism review</data><data key="d_desc">gofcards_mechanism_reviews.tsv</data></node>
+    <node id="data:hcseeker_spots_tsv"><data key="d_kind">data</data><data key="d_label">HCSeeker hotspots</data><data key="d_desc">HC_spots.hg19.tsv</data></node>
+    <node id="data:hg38_hg19_chain"><data key="d_kind">data</data><data key="d_label">hg38ToHg19 chain</data><data key="d_desc">hg38ToHg19.over.chain.gz</data></node>
+    <node id="data:hgnc_table"><data key="d_kind">data</data><data key="d_label">HGNC non-alt-loci table</data><data key="d_desc">non_alt_loci_set.tsv</data></node>
+    <node id="data:hpo_assertions"><data key="d_kind">data</data><data key="d_label">HPO gene-phenotype assertions</data><data key="d_desc">genes_to_phenotype.assertions.tsv.gz</data></node>
+    <node id="data:hpo_condition_mechanism_json"><data key="d_kind">data</data><data key="d_label">HPO condition-mechanism JSON</data><data key="d_desc">hpo_condition_mechanism_cache.json.gz</data></node>
+    <node id="data:human_ancestor_fasta"><data key="d_kind">data</data><data key="d_label">LoFtee human ancestor FA</data><data key="d_desc">human_ancestor.fa.gz</data></node>
+    <node id="data:interpro_mapping_pickle"><data key="d_kind">data</data><data key="d_label">InterPro entry mapping</data><data key="d_desc">Interpro_entry_mapping.pkl.gz</data></node>
+    <node id="data:loeuf_prescore"><data key="d_kind">data</data><data key="d_label">LOEUF prescore</data><data key="d_desc">loeuf_dataset.tsv.gz</data></node>
+    <node id="data:loftee_conservation_file"><data key="d_kind">data</data><data key="d_label">LoFtee GERP sql</data><data key="d_desc">phylocsf_gerp.sql</data></node>
+    <node id="data:loftee_repo"><data key="d_kind">dir</data><data key="d_label">LoFtee repo</data><data key="d_desc">loftee-hg19</data></node>
+    <node id="data:mavedb_file"><data key="d_kind">data</data><data key="d_label">MaveDB variants</data><data key="d_desc">MaveDB_variants.hg38.tsv.gz</data></node>
+    <node id="data:mondo_disease_scope_overrides"><data key="d_kind">data</data><data key="d_label">MONDO scope overrides</data><data key="d_desc">disease_scope_overrides.tsv</data></node>
+    <node id="data:mondo_disease_scope_registry"><data key="d_kind">data</data><data key="d_label">MONDO disease scope</data><data key="d_desc">disease_scope.tsv.gz</data></node>
+    <node id="data:mondo_obo"><data key="d_kind">data</data><data key="d_label">MONDO obo</data><data key="d_desc">mondo-simple.obo</data></node>
+    <node id="data:pext_mean_bw"><data key="d_kind">data</data><data key="d_label">pext mean BigWig</data><data key="d_desc">pext mean BigWig</data></node>
+    <node id="data:pext_tissue_bw_dir"><data key="d_kind">dir</data><data key="d_label">pext tissue BigWigs</data><data key="d_desc">pext tissue BigWig dir</data></node>
+    <node id="data:pm1_regions_pkl"><data key="d_kind">data</data><data key="d_label">PM1 regions</data><data key="d_desc">pm1_regions.hg19.pkl</data></node>
+    <node id="data:primateai_prescore"><data key="d_kind">data</data><data key="d_label">PrimateAI prescore</data><data key="d_desc">PrimateAI_scores_v0.2_GRCh37_sorted.tsv.bgz</data></node>
+    <node id="data:ref_genome"><data key="d_kind">data</data><data key="d_label">ucsc ref FASTA</data><data key="d_desc">ucsc.hg19.fasta</data></node>
+    <node id="data:rmc_tsv"><data key="d_kind">data</data><data key="d_label">gnomAD RMC flat TSV</data><data key="d_desc">gnomad_v2.1.1_rmc_flat.hg19.tsv</data></node>
+    <node id="data:spliceai_indel_prescore"><data key="d_kind">data</data><data key="d_label">SpliceAI indel prescore</data><data key="d_desc">spliceai_scores.raw.indel.hg19.vcf.gz</data></node>
+    <node id="data:spliceai_snv_prescore"><data key="d_kind">data</data><data key="d_label">SpliceAI SNV prescore</data><data key="d_desc">spliceai_scores.raw.snv.hg19.vcf.gz</data></node>
+    <node id="data:splicevault_prescore"><data key="d_kind">data</data><data key="d_label">SpliceVault prescore</data><data key="d_desc">SpliceVault_data_GRCh37.tsv.gz</data></node>
+    <node id="data:utr_annotator_file"><data key="d_kind">data</data><data key="d_label">UTRAnnotator cache</data><data key="d_desc">uORF_5UTR_GRCh37_PUBLIC.txt</data></node>
+    <node id="data:vep_cache"><data key="d_kind">dir</data><data key="d_label">VEP cache</data><data key="d_desc">VEP_caches</data></node>
+    <node id="data:vep_plugins"><data key="d_kind">dir</data><data key="d_label">VEP plugins</data><data key="d_desc">VEP_plugins</data></node>
+    <node id="data:vep_plugins_cachedir"><data key="d_kind">dir</data><data key="d_label">VEP plugin caches</data><data key="d_desc">VEP_plugins_caches</data></node>
+    <node id="runtime:acmg_result"><data key="d_kind">runtime</data><data key="d_label">ACMG classification</data><data key="d_desc">final prioritized ACMG table</data></node>
+    <node id="runtime:alt_disease_vcf"><data key="d_kind">runtime</data><data key="d_label">alt-disease VCF</data><data key="d_desc">alternative disease patients</data></node>
+    <node id="runtime:annotated_vcf"><data key="d_kind">runtime</data><data key="d_label">annotated cohort VCF</data><data key="d_desc">VEP+CADD+gnomAD annotated output</data></node>
+    <node id="runtime:filtered_vcf"><data key="d_kind">runtime</data><data key="d_label">filtered cohort VCF</data><data key="d_desc">per-family filtered output</data></node>
+    <node id="runtime:input_vcf"><data key="d_kind">runtime</data><data key="d_label">input cohort VCF</data><data key="d_desc">cohort input VCF</data></node>
+    <node id="runtime:ped_file"><data key="d_kind">runtime</data><data key="d_label">PED file</data><data key="d_desc">cohort pedigree</data></node>
+    <node id="func:AlphaMissense_anno"><data key="d_kind">install</data><data key="d_label">AlphaMissense_anno</data><data key="d_script">install_utils.sh</data></node>
+    <node id="func:AlphaMissense_anno_gnomAD"><data key="d_kind">install</data><data key="d_label">AlphaMissense_anno_gnomAD</data><data key="d_script">install_utils.sh</data></node>
+    <node id="func:AlphaMissense_install"><data key="d_kind">install</data><data key="d_label">AlphaMissense_install</data><data key="d_script">install_utils.sh</data></node>
+    <node id="func:AlphaMissense_pick_intolerant_domains"><data key="d_kind">install</data><data key="d_label">AlphaMissense_pick_intolerant_domains</data><data key="d_script">install_utils.sh</data></node>
+    <node id="func:AlphaMissense_pick_missense_constrained_segments"><data key="d_kind">install</data><data key="d_label">AlphaMissense_pick_missense_constrained_segments</data><data key="d_script">install_utils.sh</data></node>
+    <node id="func:AlphaMissense_stat"><data key="d_kind">install</data><data key="d_label">AlphaMissense_stat</data><data key="d_script">install_utils.sh</data></node>
+    <node id="func:CADD_install"><data key="d_kind">install</data><data key="d_label">CADD_install</data><data key="d_script">install_utils.sh</data></node>
+    <node id="func:CDS_FASTA_install"><data key="d_kind">install</data><data key="d_label">CDS_FASTA_install</data><data key="d_script">install_utils.sh</data></node>
+    <node id="func:ClinGen_deploy"><data key="d_kind">install</data><data key="d_label">ClinGen_deploy</data><data key="d_script">install_utils.sh</data></node>
+    <node id="func:ClinVar_AA_stat"><data key="d_kind">install</data><data key="d_label">ClinVar_AA_stat</data><data key="d_script">install_utils.sh</data></node>
+    <node id="func:ClinVar_Gene_stat"><data key="d_kind">install</data><data key="d_label">ClinVar_Gene_stat</data><data key="d_script">install_utils.sh</data></node>
+    <node id="func:ClinVar_VCF_deploy"><data key="d_kind">install</data><data key="d_label">ClinVar_VCF_deploy</data><data key="d_script">install_utils.sh</data></node>
+    <node id="func:ClinVar_patho_AF_stat"><data key="d_kind">install</data><data key="d_label">ClinVar_patho_AF_stat</data><data key="d_script">install_utils.sh</data></node>
+    <node id="func:Conservation_install"><data key="d_kind">install</data><data key="d_label">Conservation_install</data><data key="d_script">install_utils.sh</data></node>
+    <node id="func:InterPro_parsing"><data key="d_kind">install</data><data key="d_label">InterPro_parsing</data><data key="d_script">install_utils.sh</data></node>
+    <node id="func:LOEUF_install"><data key="d_kind">install</data><data key="d_label">LOEUF_install</data><data key="d_script">install_utils.sh</data></node>
+    <node id="func:LoFtee_install"><data key="d_kind">install</data><data key="d_label">LoFtee_install</data><data key="d_script">install_utils.sh</data></node>
+    <node id="func:MaveDB_deployment"><data key="d_kind">install</data><data key="d_label">MaveDB_deployment</data><data key="d_script">install_utils.sh</data></node>
+    <node id="func:MaveDB_install"><data key="d_kind">install</data><data key="d_label">MaveDB_install</data><data key="d_script">install_utils.sh</data></node>
+    <node id="func:PrimateAI_install"><data key="d_kind">install</data><data key="d_label">PrimateAI_install</data><data key="d_script">install_utils.sh</data></node>
+    <node id="func:SpliceAI_install"><data key="d_kind">install</data><data key="d_label">SpliceAI_install</data><data key="d_script">install_utils.sh</data></node>
+    <node id="func:SpliceVault_install"><data key="d_kind">install</data><data key="d_label">SpliceVault_install</data><data key="d_script">install_utils.sh</data></node>
+    <node id="func:UTRAnnotator_install"><data key="d_kind">install</data><data key="d_label">UTRAnnotator_install</data><data key="d_script">install_utils.sh</data></node>
+    <node id="func:VEP_plugins_install"><data key="d_kind">install</data><data key="d_label">VEP_plugins_install</data><data key="d_script">install_utils.sh</data></node>
+    <node id="func:acmg_criteria_assign.py"><data key="d_kind">prod</data><data key="d_label">acmg_criteria_assign</data><data key="d_script">acmg_criteria_assign.py</data></node>
+    <node id="func:acmg_pm1_pp2_bp1_missense.py"><data key="d_kind">prod</data><data key="d_label">acmg_pm1_pp2_bp1_missense</data><data key="d_script">acmg_pm1_pp2_bp1_missense.py</data></node>
+    <node id="func:acmg_pm2_bs1_ba1_frequency.py"><data key="d_kind">prod</data><data key="d_label">acmg_pm2_bs1_ba1_frequency</data><data key="d_script">acmg_pm2_bs1_ba1_frequency.py</data></node>
+    <node id="func:acmg_pvs1_null_variant.py"><data key="d_kind">prod</data><data key="d_label">acmg_pvs1_null_variant</data><data key="d_script">acmg_pvs1_null_variant.py</data></node>
+    <node id="func:alphmis_tsv2vcf.py"><data key="d_kind">install</data><data key="d_label">alphmis_tsv2vcf</data><data key="d_script">alphmis_tsv2vcf.py</data></node>
+    <node id="func:am_pick_intolerant_domains.py"><data key="d_kind">install</data><data key="d_label">am_pick_intolerant_domains</data><data key="d_script">am_pick_intolerant_domains.py</data></node>
+    <node id="func:am_pick_missense_constrained_segments.py"><data key="d_kind">install</data><data key="d_label">am_pick_missense_constrained_segments</data><data key="d_script">am_pick_missense_constrained_segments.py</data></node>
+    <node id="func:annotation_vcf.sh"><data key="d_kind">prod</data><data key="d_label">annotation_vcf (annotate)</data><data key="d_script">annotation_vcf.sh</data></node>
+    <node id="func:basic_vep_annotation"><data key="d_kind">install</data><data key="d_label">basic_vep_annotation</data><data key="d_script">install_utils.sh</data></node>
+    <node id="func:build_gene_nonlof_mechanism_cache.py"><data key="d_kind">install</data><data key="d_label">build_gene_nonlof_mechanism_cache</data><data key="d_script">build_gene_nonlof_mechanism_cache.py</data></node>
+    <node id="func:build_gene_pathogenic_mechanism_cache.py"><data key="d_kind">install</data><data key="d_label">build_gene_pathogenic_mechanism_cache</data><data key="d_script">build_gene_pathogenic_mechanism_cache.py</data></node>
+    <node id="func:build_gofcards_exact_gof_cache.py"><data key="d_kind">install</data><data key="d_label">build_gofcards_exact_gof_cache</data><data key="d_script">build_gofcards_exact_gof_cache.py</data></node>
+    <node id="func:build_hpo_condition_mechanism_cache.py"><data key="d_kind">install</data><data key="d_label">build_hpo_condition_mechanism_cache</data><data key="d_script">build_hpo_condition_mechanism_cache.py</data></node>
+    <node id="func:build_mondo_disease_scope.py"><data key="d_kind">install</data><data key="d_label">build_mondo_disease_scope</data><data key="d_script">build_mondo_disease_scope.py</data></node>
+    <node id="func:clinvar_stat_variants.py"><data key="d_kind">install</data><data key="d_label">clinvar_stat_variants</data><data key="d_script">clinvar_stat_variants.py</data></node>
+    <node id="func:collapse_HPO_anno.py"><data key="d_kind">install</data><data key="d_label">collapse_HPO_anno</data><data key="d_script">collapse_HPO_anno.py</data></node>
+    <node id="func:conda_install_vep"><data key="d_kind">install</data><data key="d_label">conda_install_vep</data><data key="d_script">install_utils.sh</data></node>
+    <node id="func:convert_splicevault_hg38_to_hg19"><data key="d_kind">install</data><data key="d_label">convert_splicevault_hg38_to_hg19</data><data key="d_script">install_utils.sh</data></node>
+    <node id="func:filtration_vcf_per_fam.sh"><data key="d_kind">prod</data><data key="d_label">filtration_vcf_per_fam (filter)</data><data key="d_script">filtration_vcf_per_fam.sh</data></node>
+    <node id="func:gene_mechanism_common.py"><data key="d_kind">prod</data><data key="d_label">gene_mechanism_common</data><data key="d_script">gene_mechanism_common.py</data></node>
+    <node id="func:gene_nonlof_mechanism_cache_install"><data key="d_kind">install</data><data key="d_label">gene_nonlof_mechanism_cache_install</data><data key="d_script">install_utils.sh</data></node>
+    <node id="func:gene_pathogenic_mechanism_cache_install"><data key="d_kind">install</data><data key="d_label">gene_pathogenic_mechanism_cache_install</data><data key="d_script">install_utils.sh</data></node>
+    <node id="func:gnomAD_install"><data key="d_kind">install</data><data key="d_label">gnomAD_install</data><data key="d_script">install_utils.sh</data></node>
+    <node id="func:gnomAD_liftover"><data key="d_kind">install</data><data key="d_label">gnomAD_liftover</data><data key="d_script">install_utils.sh</data></node>
+    <node id="func:gofcards_clinvar_injection_install"><data key="d_kind">install</data><data key="d_label">gofcards_clinvar_injection_install</data><data key="d_script">install_utils.sh</data></node>
+    <node id="func:gofcards_exact_gof_cache_install"><data key="d_kind">install</data><data key="d_label">gofcards_exact_gof_cache_install</data><data key="d_script">install_utils.sh</data></node>
+    <node id="func:hpo_condition_mechanism_cache_install"><data key="d_kind">install</data><data key="d_label">hpo_condition_mechanism_cache_install</data><data key="d_script">install_utils.sh</data></node>
+    <node id="func:inject_clinvar_into_gofcards.py"><data key="d_kind">install</data><data key="d_label">inject_clinvar_into_gofcards</data><data key="d_script">inject_clinvar_into_gofcards.py</data></node>
+    <node id="func:mechanism_resource_install"><data key="d_kind">install</data><data key="d_label">mechanism_resource_install</data><data key="d_script">install_utils.sh</data></node>
+    <node id="func:mondo_hpo_scope_install"><data key="d_kind">install</data><data key="d_label">mondo_hpo_scope_install</data><data key="d_script">install_utils.sh</data></node>
+    <node id="func:pext_install"><data key="d_kind">install</data><data key="d_label">pext_install</data><data key="d_script">install_utils.sh</data></node>
+    <node id="func:prepare_pm1_regions.py"><data key="d_kind">install</data><data key="d_label">prepare_pm1_regions</data><data key="d_script">prepare_pm1_regions.py</data></node>
+    <node id="func:prepare_pm1_regions_fn"><data key="d_kind">install</data><data key="d_label">prepare_pm1_regions</data><data key="d_script">install_utils.sh</data></node>
+    <node id="func:prioritization_vcf_per_fam.sh"><data key="d_kind">prod</data><data key="d_label">prioritization_vcf_per_fam (ACMG)</data><data key="d_script">prioritization_vcf_per_fam.sh</data></node>
+    <node id="func:reference_genome_install"><data key="d_kind">install</data><data key="d_label">reference_genome_install</data><data key="d_script">install_utils.sh</data></node>
+    <node id="func:splicing_var_analysis.py"><data key="d_kind">prod</data><data key="d_label">splicing_var_analysis</data><data key="d_script">splicing_var_analysis.py</data></node>
+    <node id="func:stat_aachange_clinvar.py"><data key="d_kind">install</data><data key="d_label">stat_aachange_clinvar</data><data key="d_script">stat_aachange_clinvar.py</data></node>
+    <node id="func:stat_exon_patho_afs.py"><data key="d_kind">install</data><data key="d_label">stat_exon_patho_afs</data><data key="d_script">stat_exon_patho_afs.py</data></node>
+    <node id="func:stat_gene_patho_afs.py"><data key="d_kind">install</data><data key="d_label">stat_gene_patho_afs</data><data key="d_script">stat_gene_patho_afs.py</data></node>
+    <node id="func:stat_protein_domain_amscores.py"><data key="d_kind">install</data><data key="d_label">stat_protein_domain_amscores</data><data key="d_script">stat_protein_domain_amscores.py</data></node>
+    <node id="func:utr_anno_interpret.py"><data key="d_kind">prod</data><data key="d_label">utr_anno_interpret</data><data key="d_script">utr_anno_interpret.py</data></node>
+    <node id="func:vep_cache_api_install"><data key="d_kind">install</data><data key="d_label">vep_cache_api_install</data><data key="d_script">install_utils.sh</data></node>
+    <edge source="func:reference_genome_install" target="data:ref_genome"><data key="e_label">generates</data></edge>
+    <edge source="data:conda_env_yaml" target="func:conda_install_vep"><data key="e_label">input</data></edge>
+    <edge source="func:conda_install_vep" target="data:conda_env"><data key="e_label">generates</data></edge>
+    <edge source="data:vep_cache" target="func:vep_cache_api_install"><data key="e_label">input</data></edge>
+    <edge source="data:vep_plugins" target="func:VEP_plugins_install"><data key="e_label">input</data></edge>
+    <edge source="data:vep_plugins_cachedir" target="func:VEP_plugins_install"><data key="e_label">input</data></edge>
+    <edge source="func:VEP_plugins_install" target="func:UTRAnnotator_install"><data key="e_label">invokes</data></edge>
+    <edge source="func:VEP_plugins_install" target="func:LOEUF_install"><data key="e_label">invokes</data></edge>
+    <edge source="func:VEP_plugins_install" target="func:AlphaMissense_install"><data key="e_label">invokes</data></edge>
+    <edge source="func:VEP_plugins_install" target="func:AlphaMissense_anno"><data key="e_label">invokes</data></edge>
+    <edge source="func:VEP_plugins_install" target="func:AlphaMissense_pick_missense_constrained_segments"><data key="e_label">invokes</data></edge>
+    <edge source="func:VEP_plugins_install" target="func:SpliceAI_install"><data key="e_label">invokes</data></edge>
+    <edge source="func:VEP_plugins_install" target="func:SpliceVault_install"><data key="e_label">invokes</data></edge>
+    <edge source="func:VEP_plugins_install" target="func:MaveDB_install"><data key="e_label">invokes</data></edge>
+    <edge source="func:VEP_plugins_install" target="func:PrimateAI_install"><data key="e_label">invokes</data></edge>
+    <edge source="func:VEP_plugins_install" target="func:Conservation_install"><data key="e_label">invokes</data></edge>
+    <edge source="data:ref_genome" target="func:basic_vep_annotation"><data key="e_label">input</data></edge>
+    <edge source="data:vep_cache" target="func:basic_vep_annotation"><data key="e_label">input</data></edge>
+    <edge source="data:vep_plugins" target="func:basic_vep_annotation"><data key="e_label">input</data></edge>
+    <edge source="func:LoFtee_install" target="data:loftee_repo"><data key="e_label">generates</data></edge>
+    <edge source="func:LoFtee_install" target="data:human_ancestor_fasta"><data key="e_label">generates</data></edge>
+    <edge source="func:LoFtee_install" target="data:loftee_conservation_file"><data key="e_label">generates</data></edge>
+    <edge source="func:UTRAnnotator_install" target="data:utr_annotator_file"><data key="e_label">generates</data></edge>
+    <edge source="func:LOEUF_install" target="data:loeuf_prescore"><data key="e_label">generates</data></edge>
+    <edge source="func:SpliceAI_install" target="data:spliceai_snv_prescore"><data key="e_label">generates</data></edge>
+    <edge source="func:SpliceAI_install" target="data:spliceai_indel_prescore"><data key="e_label">generates</data></edge>
+    <edge source="func:SpliceVault_install" target="func:convert_splicevault_hg38_to_hg19"><data key="e_label">invokes</data></edge>
+    <edge source="func:convert_splicevault_hg38_to_hg19" target="data:splicevault_prescore"><data key="e_label">generates</data></edge>
+    <edge source="func:PrimateAI_install" target="data:primateai_prescore"><data key="e_label">generates</data></edge>
+    <edge source="func:Conservation_install" target="data:conservation_file"><data key="e_label">generates</data></edge>
+    <edge source="func:CADD_install" target="data:cadd_base_dir"><data key="e_label">generates</data></edge>
+    <edge source="func:CADD_install" target="data:cadd_prescore"><data key="e_label">generates</data></edge>
+    <edge source="func:MaveDB_install" target="func:MaveDB_deployment"><data key="e_label">invokes</data></edge>
+    <edge source="func:MaveDB_deployment" target="data:mavedb_file"><data key="e_label">generates</data></edge>
+    <edge source="func:pext_install" target="data:pext_mean_bw"><data key="e_label">generates</data></edge>
+    <edge source="func:pext_install" target="data:pext_tissue_bw_dir"><data key="e_label">generates</data></edge>
+    <edge source="func:gnomAD_install" target="func:gnomAD_liftover"><data key="e_label">invokes</data></edge>
+    <edge source="data:hg38_hg19_chain" target="func:gnomAD_liftover"><data key="e_label">input</data></edge>
+    <edge source="func:gnomAD_liftover" target="data:gnomad_vcf_chrX"><data key="e_label">generates</data></edge>
+    <edge source="func:InterPro_parsing" target="data:interpro_mapping_pickle"><data key="e_label">generates</data></edge>
+    <edge source="func:ClinGen_deploy" target="data:clingen_map"><data key="e_label">generates</data></edge>
+    <edge source="func:ClinGen_deploy" target="data:gene_dosage_sensitivity"><data key="e_label">generates</data></edge>
+    <edge source="func:CDS_FASTA_install" target="data:cds_fasta_file"><data key="e_label">generates</data></edge>
+    <edge source="data:contig_map" target="func:ClinVar_VCF_deploy"><data key="e_label">input</data></edge>
+    <edge source="data:ref_genome" target="func:ClinVar_VCF_deploy"><data key="e_label">input</data></edge>
+    <edge source="data:vep_cache" target="func:ClinVar_VCF_deploy"><data key="e_label">input</data></edge>
+    <edge source="data:spliceai_snv_prescore" target="func:ClinVar_VCF_deploy"><data key="e_label">input</data></edge>
+    <edge source="data:spliceai_indel_prescore" target="func:ClinVar_VCF_deploy"><data key="e_label">input</data></edge>
+    <edge source="data:gnomad_vcf_chrX" target="func:ClinVar_VCF_deploy"><data key="e_label">input</data></edge>
+    <edge source="func:ClinVar_VCF_deploy" target="func:basic_vep_annotation"><data key="e_label">invokes</data></edge>
+    <edge source="func:ClinVar_VCF_deploy" target="data:clinvar_vcf"><data key="e_label">generates</data></edge>
+    <edge source="data:clinvar_vcf" target="func:ClinVar_Gene_stat"><data key="e_label">input</data></edge>
+    <edge source="func:ClinVar_Gene_stat" target="func:clinvar_stat_variants.py"><data key="e_label">invokes</data></edge>
+    <edge source="data:clinvar_vcf" target="func:clinvar_stat_variants.py"><data key="e_label">input</data></edge>
+    <edge source="func:clinvar_stat_variants.py" target="data:clinvar_gene_stat"><data key="e_label">generates</data></edge>
+    <edge source="data:clinvar_vcf" target="func:ClinVar_AA_stat"><data key="e_label">input</data></edge>
+    <edge source="func:ClinVar_AA_stat" target="func:stat_aachange_clinvar.py"><data key="e_label">invokes</data></edge>
+    <edge source="data:clinvar_vcf" target="func:stat_aachange_clinvar.py"><data key="e_label">input</data></edge>
+    <edge source="func:stat_aachange_clinvar.py" target="data:clinvar_aa_stat"><data key="e_label">generates</data></edge>
+    <edge source="func:stat_aachange_clinvar.py" target="data:clinvar_splice_stat"><data key="e_label">generates</data></edge>
+    <edge source="data:clinvar_vcf" target="func:ClinVar_patho_AF_stat"><data key="e_label">input</data></edge>
+    <edge source="func:ClinVar_patho_AF_stat" target="func:stat_gene_patho_afs.py"><data key="e_label">invokes</data></edge>
+    <edge source="func:ClinVar_patho_AF_stat" target="func:stat_exon_patho_afs.py"><data key="e_label">invokes</data></edge>
+    <edge source="data:clinvar_vcf" target="func:stat_gene_patho_afs.py"><data key="e_label">input</data></edge>
+    <edge source="data:clinvar_vcf" target="func:stat_exon_patho_afs.py"><data key="e_label">input</data></edge>
+    <edge source="func:stat_gene_patho_afs.py" target="data:clinvar_patho_af_stat"><data key="e_label">generates</data></edge>
+    <edge source="func:stat_exon_patho_afs.py" target="data:clinvar_patho_exon_af_stat"><data key="e_label">generates</data></edge>
+    <edge source="func:AlphaMissense_install" target="data:alphamissense_prescore"><data key="e_label">generates</data></edge>
+    <edge source="data:alphamissense_prescore" target="func:AlphaMissense_anno"><data key="e_label">input</data></edge>
+    <edge source="data:ref_genome" target="func:AlphaMissense_anno"><data key="e_label">input</data></edge>
+    <edge source="data:vep_cache" target="func:AlphaMissense_anno"><data key="e_label">input</data></edge>
+    <edge source="data:conservation_file" target="func:AlphaMissense_anno"><data key="e_label">input</data></edge>
+    <edge source="func:AlphaMissense_anno" target="func:alphmis_tsv2vcf.py"><data key="e_label">invokes</data></edge>
+    <edge source="data:alphamissense_prescore" target="func:alphmis_tsv2vcf.py"><data key="e_label">input</data></edge>
+    <edge source="func:alphmis_tsv2vcf.py" target="data:alphamissense_vcf"><data key="e_label">generates</data></edge>
+    <edge source="func:AlphaMissense_anno" target="func:basic_vep_annotation"><data key="e_label">invokes</data></edge>
+    <edge source="data:alphamissense_vcf" target="func:basic_vep_annotation"><data key="e_label">input</data></edge>
+    <edge source="func:basic_vep_annotation" target="data:alphamissense_vep_vcf"><data key="e_label">generates</data></edge>
+    <edge source="data:alphamissense_vep_vcf" target="func:AlphaMissense_pick_missense_constrained_segments"><data key="e_label">input</data></edge>
+    <edge source="func:AlphaMissense_pick_missense_constrained_segments" target="func:am_pick_missense_constrained_segments.py"><data key="e_label">invokes</data></edge>
+    <edge source="data:alphamissense_vep_vcf" target="func:am_pick_missense_constrained_segments.py"><data key="e_label">input</data></edge>
+    <edge source="data:hcseeker_spots_tsv" target="func:am_pick_missense_constrained_segments.py"><data key="e_label">input</data></edge>
+    <edge source="data:rmc_tsv" target="func:am_pick_missense_constrained_segments.py"><data key="e_label">input</data></edge>
+    <edge source="func:am_pick_missense_constrained_segments.py" target="data:alphamissense_intolerant_motifs"><data key="e_label">generates</data></edge>
+    <edge source="data:alphamissense_vep_vcf" target="func:AlphaMissense_stat"><data key="e_label">input</data></edge>
+    <edge source="func:AlphaMissense_stat" target="func:stat_protein_domain_amscores.py"><data key="e_label">invokes</data></edge>
+    <edge source="data:alphamissense_vep_vcf" target="func:stat_protein_domain_amscores.py"><data key="e_label">input</data></edge>
+    <edge source="func:stat_protein_domain_amscores.py" target="data:alphamissense_pd_stat"><data key="e_label">generates</data></edge>
+    <edge source="data:alphamissense_vep_vcf" target="func:AlphaMissense_anno_gnomAD"><data key="e_label">input</data></edge>
+    <edge source="data:gnomad_vcf_chrX" target="func:AlphaMissense_anno_gnomAD"><data key="e_label">input</data></edge>
+    <edge source="func:AlphaMissense_pick_intolerant_domains" target="func:am_pick_intolerant_domains.py"><data key="e_label">invokes</data></edge>
+    <edge source="data:alphamissense_pd_stat" target="func:am_pick_intolerant_domains.py"><data key="e_label">input</data></edge>
+    <edge source="data:alphamissense_vep_vcf" target="func:am_pick_intolerant_domains.py"><data key="e_label">input</data></edge>
+    <edge source="data:hcseeker_spots_tsv" target="func:am_pick_intolerant_domains.py"><data key="e_label">input</data></edge>
+    <edge source="data:clinvar_vcf" target="func:am_pick_intolerant_domains.py"><data key="e_label">input</data></edge>
+    <edge source="func:am_pick_intolerant_domains.py" target="data:alphamissense_tranx_domain_map"><data key="e_label">generates</data></edge>
+    <edge source="func:am_pick_intolerant_domains.py" target="data:alphamissense_intolerant_domains"><data key="e_label">generates</data></edge>
+    <edge source="func:am_pick_intolerant_domains.py" target="data:all_intolerant_domains"><data key="e_label">generates</data></edge>
+    <edge source="func:prepare_pm1_regions_fn" target="func:prepare_pm1_regions.py"><data key="e_label">invokes</data></edge>
+    <edge source="data:all_intolerant_domains" target="func:prepare_pm1_regions.py"><data key="e_label">input</data></edge>
+    <edge source="data:hcseeker_spots_tsv" target="func:prepare_pm1_regions.py"><data key="e_label">input</data></edge>
+    <edge source="data:rmc_tsv" target="func:prepare_pm1_regions.py"><data key="e_label">input</data></edge>
+    <edge source="data:alphamissense_pd_stat" target="func:prepare_pm1_regions.py"><data key="e_label">input</data></edge>
+    <edge source="func:prepare_pm1_regions.py" target="data:pm1_regions_pkl"><data key="e_label">generates</data></edge>
+    <edge source="func:mechanism_resource_install" target="func:gene_pathogenic_mechanism_cache_install"><data key="e_label">invokes</data></edge>
+    <edge source="func:mechanism_resource_install" target="func:gene_nonlof_mechanism_cache_install"><data key="e_label">invokes</data></edge>
+    <edge source="func:mechanism_resource_install" target="func:hpo_condition_mechanism_cache_install"><data key="e_label">invokes</data></edge>
+    <edge source="func:mechanism_resource_install" target="func:gofcards_exact_gof_cache_install"><data key="e_label">invokes</data></edge>
+    <edge source="func:mechanism_resource_install" target="func:gofcards_clinvar_injection_install"><data key="e_label">invokes</data></edge>
+    <edge source="func:mechanism_resource_install" target="func:mondo_hpo_scope_install"><data key="e_label">invokes</data></edge>
+    <edge source="func:gene_pathogenic_mechanism_cache_install" target="data:gene_mechanism_raw_dir"><data key="e_label">generates</data></edge>
+    <edge source="func:gene_pathogenic_mechanism_cache_install" target="func:build_gene_pathogenic_mechanism_cache.py"><data key="e_label">invokes</data></edge>
+    <edge source="data:gene_mechanism_raw_dir" target="func:build_gene_pathogenic_mechanism_cache.py"><data key="e_label">input</data></edge>
+    <edge source="func:build_gene_pathogenic_mechanism_cache.py" target="data:gene_mechanism_cache_dir"><data key="e_label">generates</data></edge>
+    <edge source="func:build_gene_pathogenic_mechanism_cache.py" target="data:ddg2p_mechanism_evidence"><data key="e_label">generates</data></edge>
+    <edge source="data:hgnc_table" target="func:gene_nonlof_mechanism_cache_install"><data key="e_label">input</data></edge>
+    <edge source="func:gene_nonlof_mechanism_cache_install" target="func:build_gene_nonlof_mechanism_cache.py"><data key="e_label">invokes</data></edge>
+    <edge source="data:hgnc_table" target="func:build_gene_nonlof_mechanism_cache.py"><data key="e_label">input</data></edge>
+    <edge source="data:ddg2p_mechanism_evidence" target="func:build_gene_nonlof_mechanism_cache.py"><data key="e_label">input</data></edge>
+    <edge source="data:gene_nonlof_mechanism_schema" target="func:build_gene_nonlof_mechanism_cache.py"><data key="e_label">input</data></edge>
+    <edge source="func:build_gene_nonlof_mechanism_cache.py" target="data:gene_nonlof_mechanism_json"><data key="e_label">generates</data></edge>
+    <edge source="func:hpo_condition_mechanism_cache_install" target="func:build_hpo_condition_mechanism_cache.py"><data key="e_label">invokes</data></edge>
+    <edge source="data:gene_nonlof_mechanism_json" target="func:build_hpo_condition_mechanism_cache.py"><data key="e_label">input</data></edge>
+    <edge source="data:hpo_assertions" target="func:build_hpo_condition_mechanism_cache.py"><data key="e_label">input</data></edge>
+    <edge source="func:build_hpo_condition_mechanism_cache.py" target="data:hpo_condition_mechanism_json"><data key="e_label">generates</data></edge>
+    <edge source="func:gofcards_exact_gof_cache_install" target="func:build_gofcards_exact_gof_cache.py"><data key="e_label">invokes</data></edge>
+    <edge source="data:gofcards_mechanism_review_tsv" target="func:build_gofcards_exact_gof_cache.py"><data key="e_label">input</data></edge>
+    <edge source="data:hgnc_table" target="func:build_gofcards_exact_gof_cache.py"><data key="e_label">input</data></edge>
+    <edge source="data:gofcards_hg19_to_hg38_chain" target="func:build_gofcards_exact_gof_cache.py"><data key="e_label">input</data></edge>
+    <edge source="data:gofcards_hg38_fasta" target="func:build_gofcards_exact_gof_cache.py"><data key="e_label">input</data></edge>
+    <edge source="func:build_gofcards_exact_gof_cache.py" target="data:gofcards_exact_gof_cache"><data key="e_label">generates</data></edge>
+    <edge source="func:gofcards_clinvar_injection_install" target="func:inject_clinvar_into_gofcards.py"><data key="e_label">invokes</data></edge>
+    <edge source="data:clinvar_vcv_xml" target="func:inject_clinvar_into_gofcards.py"><data key="e_label">input</data></edge>
+    <edge source="data:gofcards_exact_gof_cache" target="func:inject_clinvar_into_gofcards.py"><data key="e_label">input</data></edge>
+    <edge source="func:inject_clinvar_into_gofcards.py" target="data:gofcards_exact_gof_cache"><data key="e_label">generates</data></edge>
+    <edge source="func:mondo_hpo_scope_install" target="func:collapse_HPO_anno.py"><data key="e_label">invokes</data></edge>
+    <edge source="func:mondo_hpo_scope_install" target="func:build_mondo_disease_scope.py"><data key="e_label">invokes</data></edge>
+    <edge source="func:mondo_hpo_scope_install" target="data:mondo_obo"><data key="e_label">generates</data></edge>
+    <edge source="func:collapse_HPO_anno.py" target="data:hpo_assertions"><data key="e_label">generates</data></edge>
+    <edge source="data:mondo_obo" target="func:build_mondo_disease_scope.py"><data key="e_label">input</data></edge>
+    <edge source="data:mondo_disease_scope_overrides" target="func:build_mondo_disease_scope.py"><data key="e_label">input</data></edge>
+    <edge source="func:build_mondo_disease_scope.py" target="data:mondo_disease_scope_registry"><data key="e_label">generates</data></edge>
+    <edge source="runtime:input_vcf" target="func:annotation_vcf.sh"><data key="e_label">input</data></edge>
+    <edge source="runtime:ped_file" target="func:annotation_vcf.sh"><data key="e_label">input</data></edge>
+    <edge source="func:annotation_vcf.sh" target="runtime:annotated_vcf"><data key="e_label">generates</data></edge>
+    <edge source="runtime:annotated_vcf" target="func:filtration_vcf_per_fam.sh"><data key="e_label">input</data></edge>
+    <edge source="func:filtration_vcf_per_fam.sh" target="runtime:filtered_vcf"><data key="e_label">generates</data></edge>
+    <edge source="runtime:filtered_vcf" target="func:prioritization_vcf_per_fam.sh"><data key="e_label">input</data></edge>
+    <edge source="func:prioritization_vcf_per_fam.sh" target="runtime:acmg_result"><data key="e_label">generates</data></edge>
+    <edge source="func:prioritization_vcf_per_fam.sh" target="func:acmg_criteria_assign.py"><data key="e_label">invokes</data></edge>
+    <edge source="func:acmg_criteria_assign.py" target="func:splicing_var_analysis.py"><data key="e_label">invokes</data></edge>
+    <edge source="func:acmg_criteria_assign.py" target="func:utr_anno_interpret.py"><data key="e_label">invokes</data></edge>
+    <edge source="func:acmg_criteria_assign.py" target="func:acmg_pvs1_null_variant.py"><data key="e_label">invokes</data></edge>
+    <edge source="func:acmg_criteria_assign.py" target="func:gene_mechanism_common.py"><data key="e_label">invokes</data></edge>
+    <edge source="data:conservation_file" target="func:annotation_vcf.sh"><data key="e_label">input</data></edge>
+    <edge source="data:alphamissense_prescore" target="func:annotation_vcf.sh"><data key="e_label">input</data></edge>
+    <edge source="data:spliceai_snv_prescore" target="func:annotation_vcf.sh"><data key="e_label">input</data></edge>
+    <edge source="data:spliceai_indel_prescore" target="func:annotation_vcf.sh"><data key="e_label">input</data></edge>
+    <edge source="data:cadd_base_dir" target="func:annotation_vcf.sh"><data key="e_label">input</data></edge>
+    <edge source="data:cadd_prescore" target="func:annotation_vcf.sh"><data key="e_label">input</data></edge>
+    <edge source="data:utr_annotator_file" target="func:annotation_vcf.sh"><data key="e_label">input</data></edge>
+    <edge source="data:loeuf_prescore" target="func:annotation_vcf.sh"><data key="e_label">input</data></edge>
+    <edge source="data:loftee_repo" target="func:annotation_vcf.sh"><data key="e_label">input</data></edge>
+    <edge source="data:human_ancestor_fasta" target="func:annotation_vcf.sh"><data key="e_label">input</data></edge>
+    <edge source="data:loftee_conservation_file" target="func:annotation_vcf.sh"><data key="e_label">input</data></edge>
+    <edge source="data:splicevault_prescore" target="func:annotation_vcf.sh"><data key="e_label">input</data></edge>
+    <edge source="data:primateai_prescore" target="func:annotation_vcf.sh"><data key="e_label">input</data></edge>
+    <edge source="data:gnomad_vcf_chrX" target="func:annotation_vcf.sh"><data key="e_label">input</data></edge>
+    <edge source="data:clinvar_vcf" target="func:annotation_vcf.sh"><data key="e_label">input</data></edge>
+    <edge source="data:mavedb_file" target="func:annotation_vcf.sh"><data key="e_label">input</data></edge>
+    <edge source="data:cds_fasta_file" target="func:annotation_vcf.sh"><data key="e_label">input</data></edge>
+    <edge source="data:vep_cache" target="func:annotation_vcf.sh"><data key="e_label">input</data></edge>
+    <edge source="data:vep_plugins" target="func:annotation_vcf.sh"><data key="e_label">input</data></edge>
+    <edge source="data:vep_plugins_cachedir" target="func:annotation_vcf.sh"><data key="e_label">input</data></edge>
+    <edge source="data:ref_genome" target="func:annotation_vcf.sh"><data key="e_label">input</data></edge>
+    <edge source="data:pext_mean_bw" target="func:annotation_vcf.sh"><data key="e_label">input</data></edge>
+    <edge source="data:pext_tissue_bw_dir" target="func:annotation_vcf.sh"><data key="e_label">input</data></edge>
+    <edge source="data:all_intolerant_domains" target="func:acmg_criteria_assign.py"><data key="e_label">input</data></edge>
+    <edge source="data:alphamissense_intolerant_domains" target="func:acmg_criteria_assign.py"><data key="e_label">input</data></edge>
+    <edge source="data:alphamissense_vcf" target="func:acmg_criteria_assign.py"><data key="e_label">input</data></edge>
+    <edge source="runtime:alt_disease_vcf" target="func:acmg_criteria_assign.py"><data key="e_label">input</data></edge>
+    <edge source="data:clingen_map" target="func:acmg_criteria_assign.py"><data key="e_label">input</data></edge>
+    <edge source="data:clinvar_aa_stat" target="func:acmg_criteria_assign.py"><data key="e_label">input</data></edge>
+    <edge source="data:clinvar_gene_stat" target="func:acmg_criteria_assign.py"><data key="e_label">input</data></edge>
+    <edge source="data:clinvar_patho_af_stat" target="func:acmg_criteria_assign.py"><data key="e_label">input</data></edge>
+    <edge source="data:clinvar_patho_exon_af_stat" target="func:acmg_criteria_assign.py"><data key="e_label">input</data></edge>
+    <edge source="data:clinvar_splice_stat" target="func:acmg_criteria_assign.py"><data key="e_label">input</data></edge>
+    <edge source="data:gene_dosage_sensitivity" target="func:acmg_criteria_assign.py"><data key="e_label">input</data></edge>
+    <edge source="data:gene_nonlof_mechanism_json" target="func:acmg_criteria_assign.py"><data key="e_label">input</data></edge>
+    <edge source="data:hpo_condition_mechanism_json" target="func:acmg_criteria_assign.py"><data key="e_label">input</data></edge>
+    <edge source="data:interpro_mapping_pickle" target="func:acmg_criteria_assign.py"><data key="e_label">input</data></edge>
+    <edge source="data:gene_mechanism_cache_dir" target="func:acmg_criteria_assign.py"><data key="e_label">input</data></edge>
+    <edge source="data:pm1_regions_pkl" target="func:acmg_pm1_pp2_bp1_missense.py"><data key="e_label">input</data></edge>
+    <edge source="data:clinvar_patho_af_stat" target="func:acmg_pm2_bs1_ba1_frequency.py"><data key="e_label">input</data></edge>
+    <edge source="data:gene_dosage_sensitivity" target="func:acmg_pvs1_null_variant.py"><data key="e_label">input</data></edge>
+    <edge source="data:cds_fasta_file" target="func:acmg_pvs1_null_variant.py"><data key="e_label">input</data></edge>
+    <edge source="data:alphamissense_tranx_domain_map" target="func:splicing_var_analysis.py"><data key="e_label">input</data></edge>
+    <edge source="data:alphamissense_tranx_domain_map" target="func:utr_anno_interpret.py"><data key="e_label">input</data></edge>
+    <edge source="data:alphamissense_tranx_domain_map" target="func:acmg_pvs1_null_variant.py"><data key="e_label">input</data></edge>
+    <edge source="data:gofcards_exact_gof_cache" target="func:gene_mechanism_common.py"><data key="e_label">input</data></edge>
+    <edge source="data:gofcards_exact_gof_cache" target="func:acmg_pvs1_null_variant.py"><data key="e_label">input</data></edge>
+    <edge source="data:mondo_disease_scope_registry" target="func:gene_mechanism_common.py"><data key="e_label">input</data></edge>
+    <edge source="data:hgnc_table" target="func:gene_mechanism_common.py"><data key="e_label">input</data></edge>
+    <edge source="data:hpo_assertions" target="func:gene_mechanism_common.py"><data key="e_label">input</data></edge>
+    <edge source="data:loeuf_prescore" target="func:gene_mechanism_common.py"><data key="e_label">input</data></edge>
+  </graph>
+</graphml>

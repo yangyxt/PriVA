@@ -78,3 +78,12 @@ logs/
 /*.vcf.gz
 /*.png
 !/PriVA_figure1.png
+
+# Cache/resource dependency graph — review aids, regenerated on demand. The
+# generators and their outputs are not PriVA runtime artifacts.
+/docs/cache_dependency_graph.md
+/scripts/build_cache_dependency_graph.py
+/scripts/build_staleness_graph.py
+/priva_cache_dependency.graphml
+/priva_cache_dependency.dot
+/priva_cache_dependency_staleness.dot

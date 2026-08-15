@@ -121,25 +121,18 @@ def PM1_criteria(df: pd.DataFrame,
 
 
     consq = df["Consequence"].fillna("").astype(str)
-    nmd = df["NMD"].fillna(".").astype(str)
-    lof_filter = df.get("LoF_filter", pd.Series(".", index=df.index)).fillna(".").astype(str)
-
-    truncating = (
-        consq.str.contains("stop_gained", regex=False)
-        | consq.str.contains("frameshift", regex=False)
-    )
-
-    non_nmd_truncating = truncating & (
-        nmd.str.contains("escaping", regex=False)
-        | lof_filter.str.contains("END_TRUNC", regex=False)
-    )
 
     inframe_indels = (
         consq.str.contains("inframe_deletion", regex=False)
         | consq.str.contains("inframe_insertion", regex=False)
     )
 
-    indels = inframe_indels | non_nmd_truncating
+    # PM1 reflects regional intolerance to missense/in-frame changes.
+    # Non-NMD-truncating variants (NMD-escaping or END_TRUNC stop_gained/
+    # frameshift) are LoF-like; crediting them with PM1 from HCSeeker/RMC/
+    # DAS region coverage was inflating their pathogenicity score.  They are
+    # intentionally excluded from PM1 region coverage.
+    indels = inframe_indels
 
     pvs1_double_count = pvs1_criteria >= 2
     pm1_criteria = ( hcseeker_hit & ((missense & ~missense_benign) | indels) ) | \

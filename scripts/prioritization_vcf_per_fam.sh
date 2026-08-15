@@ -216,13 +216,16 @@ function assign_acmg_criteria () {
     
     # Define acmg_py before skip check so we can include it in timestamp comparison
     local acmg_py=${SCRIPT_DIR}/acmg_criteria_assign.py
-    
+    local acmg_pm1_py=${SCRIPT_DIR}/acmg_pm1_pp2_bp1_missense.py
+
     # Test whether the function can be skipped
     # Skip if: input_tab is newer than all data files, output exists and is newer than input,
-    # AND output is newer than acmg_criteria_assign.py (so script updates trigger re-run)
+    # AND output is newer than acmg_criteria_assign.py and the PM1 criteria module
+    # (so script updates trigger re-run).
     [[ -f ${input_tab} ]] && \
     [[ -f ${output_acmg_mat} ]] && \
     [[ ${output_acmg_mat} -nt ${acmg_py} ]] && \
+    [[ ${output_acmg_mat} -nt ${acmg_pm1_py} ]] && \
     [[ ${input_tab} -nt ${mean_am_score_table} ]] && \
     [[ ${input_tab} -nt ${clinvar_aa_dict_pkl} ]] && \
     [[ ${input_tab} -nt ${clinvar_splice_dict_pkl} ]] && \

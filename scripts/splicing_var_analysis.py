@@ -91,18 +91,19 @@ def splicing_altering_per_row(row,
     2. In-frame retention, can be induced by exon skipping, cryptic donor/acceptor activation.
     3. In-frame truncation, can be induced by exon skipping, cryptic donor/acceptor activation.
     '''
-    # ============================================================================
-    # FIX: Canonical splice site variants (+1/+2 donor GT, -1/-2 acceptor AG)
-    # should ALWAYS be treated as LoF regardless of SpliceAI/SpliceVault scores.
-    # VEP's splice_donor_variant and splice_acceptor_variant consequences are
-    # specifically defined as variants within the 2bp invariant dinucleotides.
-    # ============================================================================
+    # Canonical splice site variants (+1/+2 donor GT, -1/-2 acceptor AG) are
+    # null variants regardless of SpliceAI/SpliceVault scores. VEP tags a wider
+    # intronic region as splice_donor_variant / splice_acceptor_variant (for
+    # example multi-base deletions reaching +3..+8), so the shortcut is gated on
+    # the variant actually touching the +-1/+-2 dinucleotide
+    # (_touches_canonical_splice_site). Non-canonical variants fall through to
+    # the SpliceAI/SpliceVault path below.
     consequence = str(row.get('Consequence', ''))
-    
+
     # Parse exon/intron positions to get total exon count for NMD escape determination
     intron_pos = None if na_value(row['INTRON']) else row['INTRON']
     exon_pos = None if na_value(row['EXON']) else row['EXON']
-    
+
     # Determine total exons from exon_pos or intron_pos (format: "N/M")
     total_exons = None
     if exon_pos:
@@ -116,10 +117,10 @@ def splicing_altering_per_row(row,
             total_exons = int(intron_pos.split('/')[1]) + 1
         except (ValueError, IndexError):
             pass
-    
-    if 'splice_donor_variant' in consequence:
-        # Canonical splice site variants are always LoF
-        # But check if it's the last intron (affects last exon only -> NMD escape)
+
+    if ('splice_donor_variant' in consequence or 'splice_acceptor_variant' in consequence) \
+            and _touches_canonical_splice_site(row):
+        # Check if it's the last intron (affects last exon only -> NMD escape)
         last_exon_only = False
         if intron_pos and total_exons:
             try:
@@ -127,7 +128,7 @@ def splicing_altering_per_row(row,
                 # Last intron = total_exons - 1, affects only the last exon
                 if current_intron == total_exons - 1:
                     last_exon_only = True
-                    logger.info(f"Canonical splice donor variant in last intron ({intron_pos}), NMD escape likely")
+                    logger.info(f"Canonical splice variant in last intron ({intron_pos}), NMD escape likely")
             except (ValueError, IndexError):
                 pass
         # Return: (lof, len_changing, frameshift, span_intol_domain, ten_percent_protein,
@@ -136,23 +137,6 @@ def splicing_altering_per_row(row,
                    f"consequence={consequence}, treating as LoF by default, last_exon_only={last_exon_only}")
         return True, True, True, False, True, 0, 0, "", last_exon_only
 
-    if 'splice_acceptor_variant' in consequence:
-        # Canonical splice acceptor site variants are always LoF, mirroring the
-        # donor branch above. Check if it's the last intron (affects last exon
-        # only -> NMD escape).
-        last_exon_only = False
-        if intron_pos and total_exons:
-            try:
-                current_intron = int(intron_pos.split('/')[0].split('-')[0])
-                if current_intron == total_exons - 1:
-                    last_exon_only = True
-                    logger.info(f"Canonical splice acceptor variant in last intron ({intron_pos}), NMD escape likely")
-            except (ValueError, IndexError):
-                pass
-        logger.info(f"Canonical splice acceptor variant detected at {row.get('chrom', '?')}:{row.get('pos', '?')}, "
-                   f"consequence={consequence}, treating as LoF by default, last_exon_only={last_exon_only}")
-        return True, True, True, False, True, 0, 0, "", last_exon_only
-    
     transcript_id = row['Feature']
     splicevault_events = row['SpliceVault_top_events']
     spliceai_delta = float(row['SpliceVault_SpliceAI_delta'])
@@ -488,8 +472,54 @@ def parse_hgvsc_splice_position(hgvsc: str,
         return result
 
 
+def _touches_canonical_splice_site(row) -> bool:
+    """True when the variant changes the canonical +-1/+-2 splice dinucleotide.
 
-def SpliceAI_interpretation(DS_AG, 
+    HGVSc intronic offsets are transcript-oriented (VEP already flips
+    reverse-strand genes), so this check is strand-independent. A variant
+    touches the canonical site when either:
+
+      * one of its intronic offsets is +1/+2 (donor) or -1/-2 (acceptor), or
+      * it is a range whose endpoints sit on opposite sides of a splice junction
+        (one exonic, one intronic), which by definition crosses +-1/+-2.
+
+    VEP tags a wider intronic region as splice_donor_variant /
+    splice_acceptor_variant (for example a multi-base deletion at +3..+8).
+    Those carry no +-1/+-2 offset and no junction crossing, so they are rejected
+    here and fall through to the SpliceAI/SpliceVault path. This predicate is
+    intentionally separate from parse_hgvsc_splice_position's
+    overlapping_canonical_site field, whose strand-dependent distance math makes
+    it unsuitable for this gate.
+    """
+    hgvsc = row.get('HGVSc')
+    consequence = str(row.get('Consequence', ''))
+    if not isinstance(hgvsc, str) or ':c.' not in hgvsc:
+        return False
+    coding = hgvsc.split(':c.', 1)[1]
+    # 5' UTR (negative cDNA coordinate) and 3' UTR (asterisk) splice variants are
+    # not coding-region null variants; leave them to the 5UTR path / SpliceAI.
+    if coding.startswith('-') or '*' in coding:
+        return False
+    is_donor = 'splice_donor_variant' in consequence
+    target = {1, 2} if is_donor else {-1, -2}
+
+    # 1) an intronic offset that is exactly +-1/+-2
+    offsets = [int(s + d) for s, d in re.findall(r'([+-])(\d+)', coding)]
+    if any(o in target for o in offsets):
+        return True
+
+    # 2) a range deletion/insertion/duplication crossing a splice junction
+    #    (one endpoint exonic, the other intronic) always spans +-1/+-2
+    if '_' in coding:
+        sides = coding.split('_')
+        if len(sides) == 2:
+            intronic = [bool(re.search(r'[+-]\d+', s)) for s in sides]
+            if any(intronic) and not all(intronic):
+                return True
+    return False
+
+
+def SpliceAI_interpretation(DS_AG,
                             DS_AL, 
                             DS_DG, 
                             DS_DL, 

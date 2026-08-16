@@ -33,6 +33,37 @@ from acmg_variant_mechanism import _variant_condition_masks
 
 logger = logging.getLogger(__name__)
 
+HIGH_CONFIDENCE_STATUS = {
+    "practice_guideline": 4,
+    "reviewed_by_expert_panel": 3,
+    "criteria_provided,_multiple_submitters,_no_conflicts": 2,
+}
+
+
+def _gene_max_patho_hom_freq(df: pd.DataFrame) -> dict:
+    """Gene -> max observed homozygote frequency among 2-star Pathogenic ClinVar variants.
+
+    The frequency is estimated from the max-population homozygote count when
+    that stratum has at least 10,000 called individuals, otherwise from the
+    joint homozygote count.
+    """
+    clnsig = df.get("CLNSIG", pd.Series("", index=df.index)).fillna("").astype(str)
+    clnrev = df.get("CLNREVSTAT", pd.Series("", index=df.index)).fillna("").astype(str)
+    patho = clnsig.str.contains("athogenic", regex=False) & clnrev.map(HIGH_CONFIDENCE_STATUS, na_action="ignore").ge(2)
+    g = df.loc[patho].copy()
+    if g.empty:
+        return {}
+    n_max = pd.to_numeric(g.get("gnomAD_joint_AN_max", pd.Series(np.nan, index=g.index)), errors="coerce") / 2.0
+    hom_max = pd.to_numeric(g.get("gnomAD_nhomalt_max", pd.Series(np.nan, index=g.index)), errors="coerce")
+    n_joint = pd.to_numeric(g.get("gnomAD_joint_AN", pd.Series(np.nan, index=g.index)), errors="coerce") / 2.0
+    hom_joint = (pd.to_numeric(g.get("gnomAD_nhomalt_XX", pd.Series(0, index=g.index)), errors="coerce").fillna(0)
+                 + pd.to_numeric(g.get("gnomAD_nhomalt_XY", pd.Series(0, index=g.index)), errors="coerce").fillna(0))
+    use_max = n_max > 10_000
+    hom_freq = pd.Series(np.where(use_max, hom_max / n_max, hom_joint / n_joint), index=g.index)
+    hom_freq = pd.to_numeric(hom_freq, errors="coerce")
+    gene_col = g.get("Gene", pd.Series("", index=g.index)).fillna("")
+    return hom_freq.groupby(gene_col).max().to_dict()
+
 
 def control_false_neg_rate(
     allele_frequencies: pd.Series,
@@ -279,6 +310,39 @@ def _rare_af_binomial(df: pd.DataFrame, cutoff) -> np.ndarray:
     return rare.to_numpy(dtype=bool)
 
 
+def _rare_hom_binomial(df: pd.DataFrame, cutoff) -> np.ndarray:
+    """PM2 recessive rarity via a joint homozygote-count lower-tail binomial test
+    plus a max-population homozygote-frequency veto.
+
+    ``cutoff`` is a homozygote frequency threshold.  The positive evidence is
+    the joint homozygote count; a reliable max-population stratum with raw
+    homozygote frequency above the cutoff vetoes rarity.
+    """
+    threshold = cutoff if isinstance(cutoff, pd.Series) else pd.Series(cutoff, index=df.index)
+    threshold = pd.to_numeric(threshold, errors="coerce").clip(0, 1).fillna(0)
+
+    n_joint = pd.to_numeric(df["gnomAD_joint_AN"], errors="coerce") / 2.0
+    hom_joint = (pd.to_numeric(df["gnomAD_nhomalt_XX"], errors="coerce").fillna(0)
+                 + pd.to_numeric(df["gnomAD_nhomalt_XY"], errors="coerce").fillna(0))
+    hom_freq_joint = hom_joint / n_joint
+
+    _, rare_joint = control_false_positive_rate(
+        hom_freq_joint, n_joint, af_threshold=threshold, alpha=0.01,
+    )
+    rare = rare_joint.fillna(False).astype(bool)
+
+    with np.errstate(divide="ignore", invalid="ignore"):
+        reliable_max_pop = (df["gnomAD_joint_AN_max"] / 2.0) >= (1.0 / threshold)
+    hom_freq_max = (pd.to_numeric(df["gnomAD_nhomalt_max"], errors="coerce")
+                    / (pd.to_numeric(df["gnomAD_joint_AN_max"], errors="coerce") / 2.0))
+    max_pop_too_common = reliable_max_pop & (hom_freq_max > threshold)
+    rare = rare & ~max_pop_too_common.fillna(False).astype(bool)
+
+    own_af_missing = df["gnomAD_joint_AF_max"].isna() & df["gnomAD_joint_AF"].isna()
+    rare = rare | own_af_missing
+    return rare.to_numpy(dtype=bool)
+
+
 def PM2_criteria(df: pd.DataFrame,
                  clinvar_patho_af_stat: str,
                  clinvar_patho_exon_af_stat: str,
@@ -291,21 +355,52 @@ def PM2_criteria(df: pd.DataFrame,
     df.loc[:, "Gene"] = df["Gene"].fillna(np.nan)
     gene_max_patho_af = df['Gene'].map(lambda gene: clinvar_patho_af_dict.get(gene, {"af": 0}).get('af', 0))
     df["clinvar_patho_gene_max_af"] = gene_max_patho_af
+    gene_max_patho_hom_freq_dict = _gene_max_patho_hom_freq(df)
+    df["clinvar_patho_gene_max_hom_freq"] = df["Gene"].map(lambda g: gene_max_patho_hom_freq_dict.get(g, 0))
 
     clinvar_patho_exon_af_stat_dict = pickle.load(gzip.open(clinvar_patho_exon_af_stat)) if clinvar_patho_exon_af_stat.endswith(".gz") else pickle.load(open(clinvar_patho_exon_af_stat, 'rb'))
     df["exon_patho_median_af"] = df.apply(lambda row: clinvar_patho_exon_af_stat_dict.get(row['Feature'], {}).get(row["EXON"], (np.nan,))[0], axis=1)
     df["exon_patho_max_af"] = df.apply(lambda row: clinvar_patho_exon_af_stat_dict.get(row['Feature'], {}).get(row["EXON"], (np.nan,np.nan,np.nan))[2], axis=1)
 
     # Main PM2 arms now use a lower-tail binomial test, so a variant is
-    # called rare only when the observed allele count is significantly below
-    # the rarity threshold.  The 1e-7 "absent" arm keeps the direct frequency
-    # comparison because a binomial test at alpha=0.01 would never fire at
-    # gnomAD sample sizes.
+    # called rare only when the observed count is significantly below the
+    # VCEP-style rarity threshold: one order of magnitude below the
+    # inheritance-compatible disease-incidence proxy.  The 1e-7 "absent" arm
+    # keeps the direct frequency comparison because a binomial test at
+    # alpha=0.01 would never fire at gnomAD sample sizes.
+    condition_masks = _variant_condition_masks(df)
+    has_dominant = condition_masks["has_dominant"].to_numpy(dtype=bool)
+    has_recessive = condition_masks["has_recessive"].to_numpy(dtype=bool)
+
+    gene_af = df["clinvar_patho_gene_max_af"].fillna(0)
+    gene_hom = df["clinvar_patho_gene_max_hom_freq"].fillna(0)
+    pm2_af_threshold = pd.Series(
+        np.where(gene_af > 0, gene_af / 10.0, gnomAD_extreme_rare_threshold),
+        index=df.index,
+    )
+    pm2_hom_threshold = pd.Series(
+        np.where(gene_hom > 0, gene_hom / 10.0, np.nan),
+        index=df.index,
+    )
+
+    pm2_af_rare = _rare_af_binomial(df, pm2_af_threshold)
+    pm2_hom_rare = np.zeros(len(df), dtype=bool)
+    recessive_with_threshold = has_recessive & (gene_hom.to_numpy() > 0)
+    if recessive_with_threshold.any():
+        sub_idx = df.index[recessive_with_threshold]
+        pm2_hom_rare[recessive_with_threshold] = _rare_hom_binomial(
+            df.loc[sub_idx], pm2_hom_threshold.loc[sub_idx]
+        )
+
+    # Mixed inheritance: test both modes and fire if either meets.
+    use_af_route = has_dominant | ~has_recessive
+    use_hom_route = has_recessive
+    gnomAD_AF_rare = (pm2_af_rare & use_af_route) | (pm2_hom_rare & use_hom_route)
+
     pm2_supporting_exon = _rare_af_binomial(df, "exon_patho_max_af")
     pm2_supporting_gene = _rare_af_binomial(df, "clinvar_patho_gene_max_af")
 
     pm2_supporting = np.where((df["exon_patho_max_af"] == 0) | df["exon_patho_max_af"].isna(), pm2_supporting_gene, pm2_supporting_exon)
-    gnomAD_AF_rare = _rare_af_binomial(df, gnomAD_extreme_rare_threshold)
     pm2_supporting = np.where((df["clinvar_patho_gene_max_af"] == 0) | df["clinvar_patho_gene_max_af"].isna(), gnomAD_AF_rare, pm2_supporting)
 
     pm2_moderate = _rare_af_binomial(df, "exon_patho_median_af") & gnomAD_AF_rare
@@ -384,21 +479,19 @@ def BS1_criteria(df: pd.DataFrame,
     Route 1, disease incidence. The locus and the inherited model must agree,
     and each pairing reads its own population stratum:
 
-        autosomal + dominant history, no biallelic requirement
-            carrier allele frequency (``gnomAD_joint_AF``/``AN``). A dominant
-            history that also carries any recessive requirement is excluded
-            here, because population heterozygotes may simply be recessive
-            carriers; such genes are served by the recessive route instead.
+        autosomal + dominant history
+            carrier allele frequency (``gnomAD_joint_AF``/``AN``), tested
+            against the gene-specific dominant incidence proxy (max 2-star
+            pathogenic AF) when available, otherwise ``expected_incidence``.
+            Mixed genes are tested under both modes; the dominant route is
+            not suppressed by a coexisting recessive requirement.
         autosomal + recessive history
-            observed homozygote count, not carrier count. Uses
-            ``gnomAD_nhomalt_max`` over the max-population sample when that
-            sample has at least 10,000 called individuals (AN_max/2 > 10,000),
-            otherwise ``nhomalt_XX + nhomalt_XY`` over the joint sample.  The
-            stratum-selection gate is fixed and does not change with
-            ``expected_incidence``.  BS1 fires when the count is significantly
-            too high under the one-sided binomial test
-            P(X >= x | n, p=expected_incidence) at alpha = 0.01 and the
-            observed homozygote frequency exceeds the 0.0001 floor.
+            observed homozygote count, not carrier count, tested against the
+            gene-specific recessive incidence proxy (max 2-star pathogenic
+            homozygote frequency) when available, otherwise
+            ``expected_incidence``.  Both the max-population and joint
+            homozygote counts are tested, and BS1 fires if either count is
+            significantly too high.
         chrX + x_linked_recessive
             the XY stratum. XX carrier frequency is not evidence against this
             model.
@@ -494,6 +587,25 @@ def BS1_criteria(df: pd.DataFrame,
         {"1", "true", "yes"}
     )
 
+    # These columns are normally added by PM2_criteria.  If BS1_criteria is
+    # called standalone, derive them so the per-row thresholds still work.
+    if "clinvar_patho_gene_max_af" not in df.columns:
+        df = df.copy()
+        df["clinvar_patho_gene_max_af"] = 0.0
+    if "clinvar_patho_gene_max_hom_freq" not in df.columns:
+        df = df.copy()
+        hom_dict = _gene_max_patho_hom_freq(df)
+        df["clinvar_patho_gene_max_hom_freq"] = df["Gene"].map(lambda g: hom_dict.get(g, 0)).fillna(0)
+
+    # VCEP-style per-row incidence proxies: gene max pathogenic AF for
+    # carrier/dominant routes, gene max pathogenic homozygote frequency for
+    # the recessive route.  Variants in genes without a 2-star pathogenic
+    # comparator keep the global expected-incidence default.
+    gene_af = df["clinvar_patho_gene_max_af"].fillna(0)
+    gene_hom = df["clinvar_patho_gene_max_hom_freq"].fillna(0)
+    bs1_af_threshold = pd.Series(np.where(gene_af > 0, gene_af, expected_incidence), index=df.index)
+    bs1_hom_threshold = pd.Series(np.where(gene_hom > 0, gene_hom, expected_incidence), index=df.index)
+
     # Bonferroni alpha for the two correlated frequency strata (max-pop and
     # joint).  Testing both and OR-ing them gives BS1 the intended "too common
     # in either the most affected population or the total population" behavior
@@ -501,17 +613,17 @@ def BS1_criteria(df: pd.DataFrame,
     bonferroni_alpha = 0.01 / 2
     _, common_max = control_false_neg_rate(
         df['gnomAD_joint_AF_max'], df['gnomAD_joint_AN_max'],
-        af_threshold=expected_incidence, alpha=bonferroni_alpha,
+        af_threshold=bs1_af_threshold, alpha=bonferroni_alpha,
     )
     _, common_joint = control_false_neg_rate(
         df['gnomAD_joint_AF'], df['gnomAD_joint_AN'],
-        af_threshold=expected_incidence, alpha=bonferroni_alpha,
+        af_threshold=bs1_af_threshold, alpha=bonferroni_alpha,
     )
     common_vars = common_max.fillna(False) | common_joint.fillna(False)
     # If both strata are undecidable, keep the old point-estimate fallback on
     # the joint frequency.
     both_na = common_max.isna() & common_joint.isna()
-    common_vars = common_vars | (both_na & (df['gnomAD_joint_AF'] > expected_incidence))
+    common_vars = common_vars | (both_na & (df['gnomAD_joint_AF'] > bs1_af_threshold))
 
     # Autosomal recessive BS1: test the homozygote count in both the max-pop
     # and joint strata; fire if either is significantly above the incidence
@@ -528,7 +640,7 @@ def BS1_criteria(df: pd.DataFrame,
         testable = n_arr > 0
         if testable.any():
             k = np.maximum(x_arr[testable] - 1, 0)
-            pval[testable] = binom.sf(k, n_arr[testable], expected_incidence)
+            pval[testable] = binom.sf(k, n_arr[testable], bs1_hom_threshold.to_numpy()[testable])
             pval[testable & (x_arr == 0)] = 1.0
         hom_freq = x / n.replace(0, np.nan)
         return np.asarray((hom_freq > 0.0001) & (pval <= bonferroni_alpha), dtype=bool)
@@ -538,9 +650,8 @@ def BS1_criteria(df: pd.DataFrame,
     logger.info(f"There are {int(max_af_larger_incidence.sum())} variants having their PAF greater than the expected incidence of the disease")
 
     has_recessive_requirement = condition_masks["has_recessive"]
-    autosomal_dominant_without_recessive = (
-        condition_masks["has_dominant"] & ~has_recessive_requirement
-    )
+    # Mixed genes are tested under both inheritance modes; fire if either meets.
+    autosomal_dominant_route = condition_masks["has_dominant"]
     x_recessive_requirement = condition_masks["has_x_linked_recessive"]
     x_dominant_requirement = (
         condition_masks["has_x_linked_dominant"]
@@ -566,7 +677,7 @@ def BS1_criteria(df: pd.DataFrame,
     # strata. A generic X-linked assertion supplies neither model.
     autosomal_dominant = (
         autosomal
-        & autosomal_dominant_without_recessive
+        & autosomal_dominant_route
         & max_af_larger_incidence
         & valid_model
     )

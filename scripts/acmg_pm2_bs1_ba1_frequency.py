@@ -239,29 +239,44 @@ def gnomAD_rare_AF(df: pd.DataFrame, cutoff: float) -> np.ndarray:
 
 
 def _rare_af_binomial(df: pd.DataFrame, cutoff) -> np.ndarray:
-    """PM2 rarity via one-sided lower-tail binomial test.
+    """PM2 rarity via a joint-sample lower-tail binomial test plus a max-pop veto.
 
-    Uses the max-population stratum when it is testable; otherwise falls back
-    to the joint gnomAD stratum.  A scalar ``cutoff`` is applied to all rows;
-    a string names a per-row comparator column.
+    The positive evidence for rarity is the **joint total sample**: PM2 fires
+    only when the joint allele count is significantly below the cutoff.  A
+    reliable max-population stratum then acts as a veto: if its raw AF is
+    already above the cutoff, the variant is visibly common in some population
+    and PM2 is withheld even if the joint sample is significantly rare.
+
+    A scalar ``cutoff`` is applied to all rows; a string names a per-row
+    comparator column.  Missing comparator values are coerced to zero so the
+    binomial helper can run; threshold=0 yields p=1 and therefore no PM2 from
+    this arm (the PM2 caller then applies the arm fallbacks).
     """
     threshold = cutoff if not isinstance(cutoff, str) else df[cutoff]
     if isinstance(threshold, pd.Series):
-        # Missing per-row comparator values mean "no comparator": the PM2
-        # caller replaces those rows with a fallback arm.  Coerce to a
-        # numeric series so the binomial helper can run; threshold=0 yields
-        # p=1 and therefore no PM2 from this arm.
         threshold = pd.to_numeric(threshold, errors='coerce').clip(0, 1).fillna(0)
-    _, rare_max = control_false_positive_rate(
-        df['gnomAD_joint_AF_max'], df['gnomAD_joint_AN_max'],
-        af_threshold=threshold, alpha=0.01,
-    )
+
+    # Positive evidence: joint total sample, one lower-tail binomial test.
     _, rare_joint = control_false_positive_rate(
         df['gnomAD_joint_AF'], df['gnomAD_joint_AN'],
         af_threshold=threshold, alpha=0.01,
     )
-    rare = rare_max.mask(rare_max.isna(), rare_joint)
-    return rare.fillna(False).astype(bool).to_numpy()
+    rare = rare_joint.fillna(False).astype(bool)
+
+    # Veto: a reliable max-population stratum with raw AF above the cutoff.
+    threshold_series = threshold if isinstance(threshold, pd.Series) else pd.Series(threshold, index=df.index)
+    with np.errstate(divide='ignore', invalid='ignore'):
+        reliable_max_pop = df['gnomAD_joint_AN_max'] >= (1.0 / threshold_series)
+    max_pop_too_common = reliable_max_pop & (df['gnomAD_joint_AF_max'] > threshold_series)
+    rare = rare & ~max_pop_too_common.fillna(False).astype(bool)
+
+    # A variant with no gnomAD AF call at all (both joint and max-pop strata
+    # missing) is absent from the database.  Absence is direct evidence of
+    # rarity; the binomial test cannot be computed, so assign PM2 directly
+    # instead of treating the missing value as undecidable.
+    own_af_missing = df['gnomAD_joint_AF_max'].isna() & df['gnomAD_joint_AF'].isna()
+    rare = rare | own_af_missing
+    return rare.to_numpy(dtype=bool)
 
 
 def PM2_criteria(df: pd.DataFrame,
@@ -330,30 +345,32 @@ def BS1_criteria(df: pd.DataFrame,
     HOW SIGNIFICANCE IS DECIDED
     ===========================
 
-    Every frequency comparison except the autosomal-recessive one goes through
-    ``control_false_neg_rate``: a one-sided binomial test of the observed
-    allele count against the route's threshold, at alpha = 0.01. The point
-    estimate being above the threshold is not sufficient; the excess must be
-    significant given the allele number, so small-cohort strata cannot produce
-    BS1 on their own.
+    For each disease-incidence route, the max-population stratum and the joint
+    total-population stratum are both tested with ``control_false_neg_rate``
+    (one-sided binomial test of the observed allele count against the route's
+    threshold) at Bonferroni alpha = 0.01 / 2.  BS1 fires if either stratum
+    is significantly too common, which gives the intended "too common in the
+    most affected population or in the total population" behavior while
+    controlling the family-wise Type I error.  The point estimate being above
+    the threshold is not sufficient; the excess must be significant given the
+    allele number, so small-cohort strata cannot produce BS1 on their own.
 
     That test returns three outcomes, not two: yes, no, and undecidable. A row
     whose allele number is zero, or whose frequency is missing, cannot be
     tested at all and comes back undecidable rather than counting as a "no".
-    Each route then falls back to comparing ``gnomAD_joint_AF`` against its
-    threshold directly, unweighted by any sample size. A row with neither a
+    If both strata are undecidable, the route falls back to comparing
+    ``gnomAD_joint_AF`` against its threshold directly.  A row with neither a
     testable stratum nor a joint frequency gets no BS1.
 
-    The one exception to the fallback is the gene pathogenic-frequency route:
-    it falls back only where the gene actually has a pathogenic frequency above
-    zero to be compared against, since a gene with none is not a candidate for
-    that route in the first place.
+    The gene pathogenic-frequency route is the one exception to the joint
+    fallback: it falls back only where the gene actually has a pathogenic
+    frequency above zero to be compared against, since a gene with none is not
+    a candidate for that route in the first place.
 
-    The autosomal-recessive route uses a one-sided binomial test on the
-    observed homozygote count against ``expected_incidence``, like the other
-    incidence-based routes.  The count is read from the max-population stratum
-    when that stratum is large enough to be trusted, otherwise from the joint
-    sample.
+    The autosomal-recessive route tests the observed homozygote count with the
+    same one-sided binomial test and the same Bonferroni alpha, separately for
+    the max-population homozygote count and the joint homozygote count; BS1
+    fires if either count is significantly too high.
 
     TWO INDEPENDENT ROUTES TO BS1
     =============================
@@ -477,46 +494,47 @@ def BS1_criteria(df: pd.DataFrame,
         {"1", "true", "yes"}
     )
 
-    _, common_vars = control_false_neg_rate(df['gnomAD_joint_AF_max'], df['gnomAD_joint_AN_max'], af_threshold=expected_incidence, alpha=0.01)
+    # Bonferroni alpha for the two correlated frequency strata (max-pop and
+    # joint).  Testing both and OR-ing them gives BS1 the intended "too common
+    # in either the most affected population or the total population" behavior
+    # while keeping the family-wise Type I error at 0.01.
+    bonferroni_alpha = 0.01 / 2
+    _, common_max = control_false_neg_rate(
+        df['gnomAD_joint_AF_max'], df['gnomAD_joint_AN_max'],
+        af_threshold=expected_incidence, alpha=bonferroni_alpha,
+    )
+    _, common_joint = control_false_neg_rate(
+        df['gnomAD_joint_AF'], df['gnomAD_joint_AN'],
+        af_threshold=expected_incidence, alpha=bonferroni_alpha,
+    )
+    common_vars = common_max.fillna(False) | common_joint.fillna(False)
+    # If both strata are undecidable, keep the old point-estimate fallback on
+    # the joint frequency.
+    both_na = common_max.isna() & common_joint.isna()
+    common_vars = common_vars | (both_na & (df['gnomAD_joint_AF'] > expected_incidence))
 
-    # The max-population homozygote estimate is only used when that stratum
-    # has enough called individuals to be trusted.  This is a sample-size gate
-    # for the estimator, not part of the incidence threshold, so it is fixed.
-    hom_max_pop_min_individuals = 10_000  # AN_max/2, i.e. called individuals
-    use_max_pop_hom = (df['gnomAD_joint_AN_max'] / 2) > hom_max_pop_min_individuals
-    hom_n_individuals = pd.Series(
-        np.where(use_max_pop_hom, df['gnomAD_joint_AN_max'] / 2, df['gnomAD_joint_AN'] / 2),
-        index=df.index,
-    )
-    hom_observed = pd.Series(
-        np.where(use_max_pop_hom, df['gnomAD_nhomalt_max'], df['gnomAD_nhomalt_XX'] + df['gnomAD_nhomalt_XY']),
-        index=df.index,
-    )
-    hom_n_individuals = pd.to_numeric(hom_n_individuals, errors='coerce').fillna(0).clip(lower=0).astype(int)
-    hom_observed = pd.to_numeric(hom_observed, errors='coerce').fillna(0).clip(lower=0).astype(int)
+    # Autosomal recessive BS1: test the homozygote count in both the max-pop
+    # and joint strata; fire if either is significantly above the incidence
+    # threshold at Bonferroni alpha/2.
+    n_max = pd.to_numeric(df['gnomAD_joint_AN_max'] / 2, errors='coerce').fillna(0).clip(lower=0).astype(int)
+    x_max = pd.to_numeric(df['gnomAD_nhomalt_max'], errors='coerce').fillna(0).clip(lower=0).astype(int)
+    n_joint = pd.to_numeric(df['gnomAD_joint_AN'] / 2, errors='coerce').fillna(0).clip(lower=0).astype(int)
+    x_joint = pd.to_numeric(df['gnomAD_nhomalt_XX'] + df['gnomAD_nhomalt_XY'], errors='coerce').fillna(0).clip(lower=0).astype(int)
 
-    # One-sided binomial test: P(X >= x | n, p=expected_incidence).  BS1 fires
-    # only when the observed homozygote count is too high to be a chance
-    # observation under the rare-disease model.  This controls the Type I
-    # error -- falsely calling a truly rare variant common.
-    hom_freq = hom_observed / hom_n_individuals.replace(0, np.nan)
-    n_arr = hom_n_individuals.to_numpy(dtype=int)
-    x_arr = hom_observed.to_numpy(dtype=int)
-    pval_arr = np.full(len(df), np.nan)
-    testable = n_arr > 0
-    if testable.any():
-        k = np.maximum(x_arr[testable] - 1, 0)
-        pval_arr[testable] = binom.sf(k, n_arr[testable], expected_incidence)
-        pval_arr[testable & (x_arr == 0)] = 1.0
-    recessive_hom_bs1 = (hom_freq > 0.0001) & (pval_arr <= 0.01)
-    # Where the max-population stratum had no allele number to test, fall back to
-    # the joint frequency. fillna(False) then covers a row that has neither.
-    max_af_larger_incidence = (
-        common_vars
-        .mask(common_vars.isna(), df['gnomAD_joint_AF'] > expected_incidence)
-        .fillna(False)
-        .astype(bool)
-    )
+    def _hom_bs1(n: pd.Series, x: pd.Series) -> np.ndarray:
+        n_arr = n.to_numpy(dtype=int)
+        x_arr = x.to_numpy(dtype=int)
+        pval = np.full(len(df), np.nan)
+        testable = n_arr > 0
+        if testable.any():
+            k = np.maximum(x_arr[testable] - 1, 0)
+            pval[testable] = binom.sf(k, n_arr[testable], expected_incidence)
+            pval[testable & (x_arr == 0)] = 1.0
+        hom_freq = x / n.replace(0, np.nan)
+        return np.asarray((hom_freq > 0.0001) & (pval <= bonferroni_alpha), dtype=bool)
+
+    recessive_hom_bs1 = _hom_bs1(n_max, x_max) | _hom_bs1(n_joint, x_joint)
+    max_af_larger_incidence = common_vars.fillna(False).astype(bool)
     logger.info(f"There are {int(max_af_larger_incidence.sum())} variants having their PAF greater than the expected incidence of the disease")
 
     has_recessive_requirement = condition_masks["has_recessive"]
@@ -605,19 +623,14 @@ def BS1_criteria(df: pd.DataFrame,
         .astype(bool)
     )
     greater_than_clinvar_patho_af = greater_than_clinvar_patho_af & (gene_max_patho_af > 0)
-    _, greater_than_basic_af = control_false_neg_rate(df['gnomAD_joint_AF_max'], df['gnomAD_joint_AN_max'], af_threshold=0.0001, alpha=0.01)
+    # Absolute floor for BS1: raw AF must exceed 0.0001 in at least one of
+    # the two strata that the route consulted.
     greater_than_basic_af = (
-        greater_than_basic_af
-        .mask(greater_than_basic_af.isna(), df['gnomAD_joint_AF'] > 0.0001)
-        .fillna(False)
-        .astype(bool)
+        (df['gnomAD_joint_AF_max'] > 0.0001)
+        | (df['gnomAD_joint_AF'] > 0.0001)
     )
-    x_xy_greater_than_basic_af = _frequency_above(
-        "gnomAD_joint_AF_XY", "gnomAD_joint_AN_XY", 0.0001
-    )
-    x_xx_greater_than_basic_af = _frequency_above(
-        "gnomAD_joint_AF_XX", "gnomAD_joint_AN_XX", 0.0001
-    )
+    x_xy_greater_than_basic_af = _numeric_series("gnomAD_joint_AF_XY") > 0.0001
+    x_xx_greater_than_basic_af = _numeric_series("gnomAD_joint_AF_XX") > 0.0001
     clinvar_af_model_compatible = valid_model
     disease_incidence_bs1 = np.asarray(
         (

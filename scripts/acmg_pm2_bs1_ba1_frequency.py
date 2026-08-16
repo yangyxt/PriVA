@@ -242,8 +242,10 @@ def BS1_criteria(df: pd.DataFrame,
         autosomal + recessive history
             estimated homozygote frequency, not carrier count. Uses
             ``gnomAD_nhomalt_max`` over the max-population sample when that
-            sample is large enough to expect ten homozygotes, otherwise
-            ``nhomalt_XX + nhomalt_XY`` over the joint sample.
+            sample has at least 10,000 called individuals (AN_max/2 > 10,000),
+            otherwise ``nhomalt_XX + nhomalt_XY`` over the joint sample.  The
+            stratum-selection gate is fixed and does not change with
+            ``expected_incidence``.
         chrX + x_linked_recessive
             the XY stratum. XX carrier frequency is not evidence against this
             model.
@@ -341,7 +343,15 @@ def BS1_criteria(df: pd.DataFrame,
 
     _, common_vars = control_false_neg_rate(df['gnomAD_joint_AF_max'], df['gnomAD_joint_AN_max'], af_threshold=expected_incidence, alpha=0.01)
 
-    max_ind_incidence = np.where(df['gnomAD_joint_AN_max']/2 > 10/expected_incidence, df['gnomAD_nhomalt_max']/(df['gnomAD_joint_AN_max']/2), (df['gnomAD_nhomalt_XX'] + df['gnomAD_nhomalt_XY'])/(df['gnomAD_joint_AN']/2))
+    # The max-population homozygote estimate is only used when that stratum
+    # has enough called individuals to be trusted.  This is a sample-size gate
+    # for the estimator, not part of the incidence threshold, so it is fixed.
+    hom_max_pop_min_individuals = 10_000  # AN_max/2, i.e. called individuals
+    max_ind_incidence = np.where(
+        df['gnomAD_joint_AN_max']/2 > hom_max_pop_min_individuals,
+        df['gnomAD_nhomalt_max']/(df['gnomAD_joint_AN_max']/2),
+        (df['gnomAD_nhomalt_XX'] + df['gnomAD_nhomalt_XY'])/(df['gnomAD_joint_AN']/2)
+    )
     # Where the max-population stratum had no allele number to test, fall back to
     # the joint frequency. fillna(False) then covers a row that has neither.
     max_af_larger_incidence = (

@@ -8,11 +8,16 @@ One axis, three thresholds, read from gnomAD.
     BA1  above 5% in any reasonably sized population -- stand-alone benign
 
 control_false_neg_rate is shared by BS1 and BA1. It asks whether the observed
-allele number is large enough for an observed frequency to be trusted: at low
+allele count is high enough for an observed frequency to be trusted: at low
 coverage a variant can look rare simply because few alleles were called, and
 calling that benign-supporting would be an error. BS1 is mechanism-aware
 through the variant-level assertions; BA1 is not, because at 5% no disease
 mechanism makes a pathogenic call defensible.
+
+control_false_positive_rate is the PM2 mirror: a one-sided lower-tail
+binomial test that rejects "the variant is common enough" only when the
+observed allele count is significantly below the rarity threshold. The
+1e-7 "absent" arm remains a direct frequency comparison with an AN guard.
 """
 
 import logging
@@ -127,7 +132,102 @@ def control_false_neg_rate(
     return p_values, reject_h0
 
 
+def control_false_positive_rate(
+    allele_frequencies: pd.Series,
+    allele_numbers: pd.Series,
+    af_threshold = 0.0001,
+    alpha: float = 0.01
+) -> Tuple[pd.Series, pd.Series]:
+    """
+    Performs a one-sided lower-tail binomial test for rarity/absence.
+
+    This is the PM2 mirror of ``control_false_neg_rate``.  The null
+    hypothesis is that the true frequency is at or above ``af_threshold``
+    (the variant is not rare enough for PM2), and we reject it only when the
+    observed allele count is significantly below the expectation under the
+    null.  That controls the error PM2 cares about: falsely treating a
+    common variant as rare.
+
+    Args:
+        allele_frequencies: observed allele frequencies.
+        allele_numbers: observed allele numbers.
+        af_threshold: rarity threshold(s); scalar, Series, or ndarray.
+        alpha: significance level. Default 0.01.
+
+    Returns:
+        Tuple[pd.Series, pd.Series]: p_values and reject_h0 decisions.
+    """
+    if not isinstance(allele_frequencies, pd.Series):
+        allele_frequencies = pd.Series(allele_frequencies)
+    if not isinstance(allele_numbers, pd.Series):
+        allele_numbers = pd.Series(allele_numbers)
+
+    if len(allele_frequencies) != len(allele_numbers):
+        raise ValueError("Input Series must have the same length.")
+
+    if isinstance(af_threshold, (float, int)):
+        af_thresh_series = pd.Series(af_threshold, index=allele_frequencies.index)
+    elif isinstance(af_threshold, np.ndarray):
+        if len(af_threshold) != len(allele_frequencies):
+            raise ValueError("If af_threshold is an array, it must have the same length as allele_frequencies.")
+        af_thresh_series = pd.Series(af_threshold, index=allele_frequencies.index)
+    elif isinstance(af_threshold, pd.Series):
+        af_thresh_series = af_threshold
+        if len(af_thresh_series) != len(allele_frequencies):
+            raise ValueError("If af_threshold is a Series, it must have the same length as allele_frequencies.")
+    else:
+        raise TypeError("af_threshold must be a float, int, pandas Series, or numpy array.")
+
+    af_thresh_series = pd.to_numeric(af_thresh_series, errors='coerce').clip(0, 1)
+    if af_thresh_series.isnull().any():
+        raise ValueError("Non-numeric values found in af_threshold Series/array after coercion.")
+
+    an = pd.to_numeric(allele_numbers, errors='coerce')
+    an = an.fillna(0).astype(int)
+    an[an < 0] = 0
+
+    af = pd.to_numeric(allele_frequencies, errors='coerce')
+    af = af.clip(0, 1)
+
+    ac_float = np.where(np.isnan(af), 0, af * an)
+    ac_observed = np.where(np.isnan(ac_float), 0, np.round(ac_float).astype(int))
+    ac_observed = np.minimum(ac_observed, an)
+    ac_observed[an == 0] = 0
+
+    valid_mask = (an > 0) & (~af.isna()) & (~allele_numbers.isna())
+
+    p_values = pd.Series(np.nan, index=allele_frequencies.index)
+
+    # A threshold of zero cannot be rejected (there is no meaningful
+    # "significantly below zero"), and the fallback callers use for
+    # zero-valued comparators replaces this result anyway.
+    p_values.loc[valid_mask & (af_thresh_series == 0)] = 1.0
+
+    mask_testable = valid_mask & (af_thresh_series > 0)
+    if mask_testable.any():
+        thresholds_to_use = af_thresh_series[mask_testable].values
+        p_values.loc[mask_testable] = binom.cdf(
+            k=ac_observed[mask_testable],
+            n=an[mask_testable],
+            p=thresholds_to_use,
+        )
+
+    reject_h0 = (p_values <= alpha).astype("boolean").mask(p_values.isna())
+    logger.info(
+        f"There are {int(reject_h0.sum())} variants whose allele count is significantly below the rarity threshold, "
+        f"{int(reject_h0.isna().sum())} datapoints are NA (no allele number or no frequency, "
+        "test undecidable)"
+    )
+
+    return p_values, reject_h0
+
+
 def gnomAD_rare_AF(df: pd.DataFrame, cutoff: float) -> np.ndarray:
+    """Direct frequency comparison with an AN guard.
+
+    Retained for the PM2 "absent at 1e-7" arm, where a lower-tail binomial
+    test at alpha=0.01 would never fire at gnomAD sample sizes.
+    """
     if isinstance(cutoff, float):
         return np.where(df['gnomAD_joint_AN_max'].fillna(1000000) >= 1/cutoff, \
                         df['gnomAD_joint_AF_max'].fillna(0) <= cutoff, \
@@ -136,6 +236,32 @@ def gnomAD_rare_AF(df: pd.DataFrame, cutoff: float) -> np.ndarray:
         return np.where(df['gnomAD_joint_AN_max'].fillna(1000000) >= 1/(df[cutoff].fillna(10e-6)), \
                         df['gnomAD_joint_AF_max'].fillna(0) <= df[cutoff].fillna(0), \
                         df['gnomAD_joint_AF'].fillna(0) <= df[cutoff].fillna(0))
+
+
+def _rare_af_binomial(df: pd.DataFrame, cutoff) -> np.ndarray:
+    """PM2 rarity via one-sided lower-tail binomial test.
+
+    Uses the max-population stratum when it is testable; otherwise falls back
+    to the joint gnomAD stratum.  A scalar ``cutoff`` is applied to all rows;
+    a string names a per-row comparator column.
+    """
+    threshold = cutoff if not isinstance(cutoff, str) else df[cutoff]
+    if isinstance(threshold, pd.Series):
+        # Missing per-row comparator values mean "no comparator": the PM2
+        # caller replaces those rows with a fallback arm.  Coerce to a
+        # numeric series so the binomial helper can run; threshold=0 yields
+        # p=1 and therefore no PM2 from this arm.
+        threshold = pd.to_numeric(threshold, errors='coerce').clip(0, 1).fillna(0)
+    _, rare_max = control_false_positive_rate(
+        df['gnomAD_joint_AF_max'], df['gnomAD_joint_AN_max'],
+        af_threshold=threshold, alpha=0.01,
+    )
+    _, rare_joint = control_false_positive_rate(
+        df['gnomAD_joint_AF'], df['gnomAD_joint_AN'],
+        af_threshold=threshold, alpha=0.01,
+    )
+    rare = rare_max.mask(rare_max.isna(), rare_joint)
+    return rare.fillna(False).astype(bool).to_numpy()
 
 
 def PM2_criteria(df: pd.DataFrame,
@@ -155,14 +281,19 @@ def PM2_criteria(df: pd.DataFrame,
     df["exon_patho_median_af"] = df.apply(lambda row: clinvar_patho_exon_af_stat_dict.get(row['Feature'], {}).get(row["EXON"], (np.nan,))[0], axis=1)
     df["exon_patho_max_af"] = df.apply(lambda row: clinvar_patho_exon_af_stat_dict.get(row['Feature'], {}).get(row["EXON"], (np.nan,np.nan,np.nan))[2], axis=1)
 
-    pm2_supporting_exon = gnomAD_rare_AF(df, "exon_patho_max_af")
-    pm2_supporting_gene = gnomAD_rare_AF(df, "clinvar_patho_gene_max_af")
+    # Main PM2 arms now use a lower-tail binomial test, so a variant is
+    # called rare only when the observed allele count is significantly below
+    # the rarity threshold.  The 1e-7 "absent" arm keeps the direct frequency
+    # comparison because a binomial test at alpha=0.01 would never fire at
+    # gnomAD sample sizes.
+    pm2_supporting_exon = _rare_af_binomial(df, "exon_patho_max_af")
+    pm2_supporting_gene = _rare_af_binomial(df, "clinvar_patho_gene_max_af")
 
     pm2_supporting = np.where((df["exon_patho_max_af"] == 0) | df["exon_patho_max_af"].isna(), pm2_supporting_gene, pm2_supporting_exon)
-    gnomAD_AF_rare = gnomAD_rare_AF(df, gnomAD_extreme_rare_threshold)
+    gnomAD_AF_rare = _rare_af_binomial(df, gnomAD_extreme_rare_threshold)
     pm2_supporting = np.where((df["clinvar_patho_gene_max_af"] == 0) | df["clinvar_patho_gene_max_af"].isna(), gnomAD_AF_rare, pm2_supporting)
 
-    pm2_moderate = gnomAD_rare_AF(df, "exon_patho_median_af") & gnomAD_AF_rare
+    pm2_moderate = _rare_af_binomial(df, "exon_patho_median_af") & gnomAD_AF_rare
     gnomAD_absent = gnomAD_rare_AF(df, 1e-7)
     pm2_moderate = np.where((df["exon_patho_median_af"] == 0) | df["exon_patho_median_af"].isna(), gnomAD_absent, pm2_moderate)
 

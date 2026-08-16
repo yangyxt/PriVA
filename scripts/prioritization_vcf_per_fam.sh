@@ -152,6 +152,9 @@ function assign_acmg_criteria () {
     local alt_disease_vcf=$(read_yaml ${config_file} "alt_disease_vcf")
     local gnomAD_extreme_rare_threshold=$(read_yaml ${config_file} "extreme_rare_PAF")
     local expected_incidence=$(read_yaml ${config_file} "exp_disease_incidence")
+    if [[ -z "${expected_incidence}" || "${expected_incidence}" == "null" ]]; then
+        expected_incidence=0.0001
+    fi
     local am_score_vcf=$(read_yaml ${config_file} "alphamissense_vcf")
     local clinvar_patho_af_stat=$(read_yaml ${config_file} "clinvar_patho_af_stat")
     local clinvar_patho_exon_af_stat=$(read_yaml ${config_file} "clinvar_patho_exon_af_stat")

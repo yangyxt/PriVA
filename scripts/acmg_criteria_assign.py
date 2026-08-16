@@ -170,7 +170,7 @@ def ACMG_criteria_assign(anno_table: str,
                          hpo_condition_mechanism_json: str = str(DEFAULT_HPO_CONDITION_MECHANISM_CACHE),
                          gene_nonlof_mechanism_json: str = str(DEFAULT_MECHANISM_JSON),
                          gnomAD_extreme_rare_threshold: float = 0.0001,
-                         expected_incidence: float = 0.001,
+                         expected_incidence: float = 0.0001,
                          threads: int = 10) -> Tuple[pd.DataFrame, pd.DataFrame]:
     """
     Main function to assign ACMG criteria.
@@ -608,7 +608,7 @@ if __name__ == "__main__":
                         help="Power transform shape for sub-cutoff PEXT ranking penalty.")
     parser.add_argument("--repeat_region_file", type=str, required=True)
     parser.add_argument("--gnomAD_extreme_rare_threshold", type=float, required=False, default=0.0001)
-    parser.add_argument("--expected_incidence", type=float, required=False, default=0.001)
+    parser.add_argument("--expected_incidence", type=float, required=False, default=0.0001)
     parser.add_argument("--relevant_gene_list", type=str, required=False, default=None)
     parser.add_argument("--dispensable_gene_list", type=str, required=False, default=DEFAULT_DISPENSABLE_GENE_LIST)
     parser.add_argument(

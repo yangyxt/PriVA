@@ -29,7 +29,7 @@ hub_vcf_file: "hg19.anno.vcf.gz"    # hub file name for annotation caching
 hub_cadd_file: "hg19.cadd.tsv.gz"    # hub file name for CADD annotation caching
 
 extreme_rare_PAF: 0.0001
-exp_disease_incidence: 0.001
+exp_disease_incidence: 0.0001
 threads: 20          # Total threads for annotation / non-family steps
 threads_per_fam: 4   # Threads for EACH family filtering/prioritization job
 af_cutoff: 0.05      # Allele frequency cutoff for common variants

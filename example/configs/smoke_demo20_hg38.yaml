@@ -17,7 +17,7 @@ hub_file_dir: example/smoke_data
 hub_vcf_file: example/smoke_data/hg38/resources/hg38.demo20.hub.anno.vcf.gz
 hub_cadd_file: example/smoke_data/hg38/resources/hg38.demo20.hub.cadd.tsv
 extreme_rare_PAF: 0.0001
-exp_disease_incidence: 0.001
+exp_disease_incidence: 0.0001
 threads: 2
 threads_per_fam: 1
 af_cutoff: 0.05

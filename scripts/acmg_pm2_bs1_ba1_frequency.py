@@ -218,9 +218,11 @@ def BS1_criteria(df: pd.DataFrame,
     zero to be compared against, since a gene with none is not a candidate for
     that route in the first place.
 
-    The autosomal-recessive route is a different exception: it compares an
-    estimated homozygote frequency to ``expected_incidence`` directly, with no
-    test and therefore no fallback.
+    The autosomal-recessive route uses a one-sided binomial test on the
+    observed homozygote count against ``expected_incidence``, like the other
+    incidence-based routes.  The count is read from the max-population stratum
+    when that stratum is large enough to be trusted, otherwise from the joint
+    sample.
 
     TWO INDEPENDENT ROUTES TO BS1
     =============================
@@ -240,12 +242,15 @@ def BS1_criteria(df: pd.DataFrame,
             here, because population heterozygotes may simply be recessive
             carriers; such genes are served by the recessive route instead.
         autosomal + recessive history
-            estimated homozygote frequency, not carrier count. Uses
+            observed homozygote count, not carrier count. Uses
             ``gnomAD_nhomalt_max`` over the max-population sample when that
             sample has at least 10,000 called individuals (AN_max/2 > 10,000),
             otherwise ``nhomalt_XX + nhomalt_XY`` over the joint sample.  The
             stratum-selection gate is fixed and does not change with
-            ``expected_incidence``.
+            ``expected_incidence``.  BS1 fires when the count is significantly
+            too high under the one-sided binomial test
+            P(X >= x | n, p=expected_incidence) at alpha = 0.01 and the
+            observed homozygote frequency exceeds the 0.0001 floor.
         chrX + x_linked_recessive
             the XY stratum. XX carrier frequency is not evidence against this
             model.
@@ -347,11 +352,32 @@ def BS1_criteria(df: pd.DataFrame,
     # has enough called individuals to be trusted.  This is a sample-size gate
     # for the estimator, not part of the incidence threshold, so it is fixed.
     hom_max_pop_min_individuals = 10_000  # AN_max/2, i.e. called individuals
-    max_ind_incidence = np.where(
-        df['gnomAD_joint_AN_max']/2 > hom_max_pop_min_individuals,
-        df['gnomAD_nhomalt_max']/(df['gnomAD_joint_AN_max']/2),
-        (df['gnomAD_nhomalt_XX'] + df['gnomAD_nhomalt_XY'])/(df['gnomAD_joint_AN']/2)
+    use_max_pop_hom = (df['gnomAD_joint_AN_max'] / 2) > hom_max_pop_min_individuals
+    hom_n_individuals = pd.Series(
+        np.where(use_max_pop_hom, df['gnomAD_joint_AN_max'] / 2, df['gnomAD_joint_AN'] / 2),
+        index=df.index,
     )
+    hom_observed = pd.Series(
+        np.where(use_max_pop_hom, df['gnomAD_nhomalt_max'], df['gnomAD_nhomalt_XX'] + df['gnomAD_nhomalt_XY']),
+        index=df.index,
+    )
+    hom_n_individuals = pd.to_numeric(hom_n_individuals, errors='coerce').fillna(0).clip(lower=0).astype(int)
+    hom_observed = pd.to_numeric(hom_observed, errors='coerce').fillna(0).clip(lower=0).astype(int)
+
+    # One-sided binomial test: P(X >= x | n, p=expected_incidence).  BS1 fires
+    # only when the observed homozygote count is too high to be a chance
+    # observation under the rare-disease model.  This controls the Type I
+    # error -- falsely calling a truly rare variant common.
+    hom_freq = hom_observed / hom_n_individuals.replace(0, np.nan)
+    n_arr = hom_n_individuals.to_numpy(dtype=int)
+    x_arr = hom_observed.to_numpy(dtype=int)
+    pval_arr = np.full(len(df), np.nan)
+    testable = n_arr > 0
+    if testable.any():
+        k = np.maximum(x_arr[testable] - 1, 0)
+        pval_arr[testable] = binom.sf(k, n_arr[testable], expected_incidence)
+        pval_arr[testable & (x_arr == 0)] = 1.0
+    recessive_hom_bs1 = (hom_freq > 0.0001) & (pval_arr <= 0.01)
     # Where the max-population stratum had no allele number to test, fall back to
     # the joint frequency. fillna(False) then covers a row that has neither.
     max_af_larger_incidence = (
@@ -408,9 +434,9 @@ def BS1_criteria(df: pd.DataFrame,
         & valid_model
     )
 
-    # Recessive BS1 uses homozygous/hemizygous frequency, not population carrier
+    # Recessive BS1 uses the homozygous/hemizygous count, not population carrier
     # count, because heterozygous carriers are expected for AR LoF disease.
-    autosomal_recessive = autosomal & has_recessive_requirement & (max_ind_incidence > expected_incidence) & valid_model
+    autosomal_recessive = autosomal & has_recessive_requirement & recessive_hom_bs1 & valid_model
     y_linked = (
         y_locus
         & condition_masks["has_y_linked"]

@@ -105,7 +105,7 @@ evidence remain review-required rather than being assumed somatic-only. Manual
 decisions are stored in `data/mondo/disease_scope_overrides.tsv` and take
 precedence when the registry is rebuilt.
 
-## Reviewer smoke test
+## Smoke test
 
 The smoke test is a small end-to-end demo for checking that PriVA can run on the current machine. It uses curated demo assets in `example/smoke_data/` and does not run the full production annotation-resource installation.
 

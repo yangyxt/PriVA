@@ -1,12 +1,12 @@
 # PriVA
 
-A comprehensive pipeline for ACMG-based variant prioritization in genetic analysis.
+A comprehensive pipeline for ACMG/AMP-based variant interpretation and variant prioritization in genetic analysis.
 
 ## Overview
 
-This repository contains scripts and configuration files for running an automated variant prioritization pipeline based on ACMG guidelines. The pipeline integrates multiple annotation resources to evaluate variant pathogenicity and prioritize variants for clinical interpretation.
+This repository contains scripts and configuration files for an automated variant prioritization pipeline based on the ACMG/AMP guidelines. PriVA combines transcript-level annotation, population and functional data, gene-disease mechanism and inheritance context, and family information to evaluate ACMG/AMP criteria and produce ranked variant lists for each family. Annotation resources are deployed once and can be refreshed; each cohort run then performs annotation, family-level filtering, criteria matching, and prioritization.
 
-![PriVA Workflow](PriVA_figure1.png)
+![PriVA workflow (Figure 1)](PriVA_figure1.png)
 
 ## Requirements
 

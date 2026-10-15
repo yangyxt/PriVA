@@ -43,6 +43,18 @@ def main():
     args = parser.parse_args()
     config = yaml.safe_load(args.config.read_text())
     resources = [{"key": key, "path": config.get(key), "status": inspect(config.get(key))} for key in RUNTIME_KEYS]
+    source_root = Path(config["gene_mechanism_builder_script"]).parents[1]
+    relative_resources = {
+        "clinvar_gene_stat_used_by_shell": source_root / "data/ClinVar" / Path(config["clinvar_gene_stat"]).name,
+        "interpro_mapping_pickle": source_root / "data/InterPro" / Path(config["interpro_mapping_pickle"]).name,
+        "loeuf_used_by_shell": source_root / "data/loeuf" / Path(config["loeuf_prescore"]).name,
+        "repeat_regions_used_by_shell": source_root / "data/repeats" / Path(config["repeat_region_file_name"]).name,
+        "alphamissense_mean_used_by_shell": source_root / "data/alphamissense/alphamissense_mean_score.tsv",
+        "hgnc_used_by_scientific_code": source_root / "data/hgnc/non_alt_loci_set.tsv",
+        "dispensable_genes_default": source_root / "data/dispensable_genes/dispensable_gene_list.txt",
+    }
+    for key, path in relative_resources.items():
+        resources.append({"key": key, "path": str(path), "status": inspect(path)})
     if config.get("pext_enabled"):
         resources.append({"key": "pext_mean_bw", "path": config.get("pext_mean_bw"), "status": inspect(config.get("pext_mean_bw"))})
     vep_info = Path(config["vep_cache_dir"]) / "homo_sapiens_merged" / (str(config["vep_installed_version"]) + "_GRCh37") / "info.txt"

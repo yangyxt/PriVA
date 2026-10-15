@@ -10,7 +10,7 @@ This repository contains scripts and configuration files for an automated varian
 
 ## Requirements
 
-- Conda/Mamba for environment management
+- Micromamba, Mamba, or Conda for environment management
 - Sufficient disk space for annotation resources (>1TB)
 - Reference genome file
 
@@ -27,25 +27,52 @@ The github repository includes an one-stop installation BASH script (`scripts/in
 
 **Carefully read comments in `config.yaml` to prepare for execution of install_utils.sh and PriVA**
 
-Create the environment once, then rerun `main_install` whenever PriVA's source
-caches should be checked for updates.
-Create and configure the conda environment (expected name `priva_acmg`):
-   ```bash
-   bash scripts/install_utils.sh conda_install_vep acmg_conda.yml # Make sure the environment name in env.yaml is 'priva_acmg' or activate it manually later
-   ```
+`main_install` detects an available Micromamba, Mamba, or Conda executable,
+then checks for the fixed environment `priva_acmg`. If absent, it creates that
+environment from the repository's `acmg_conda_rough.yml`; if present, it reuses
+it. The installer activates and checks the environment before reading the
+project configuration with its `yq` and continuing resource installation.
+The bundled environment includes `yq`, so it is not needed beforehand.
 
-The first installation is assembly-specific. The same commands are safe to
-rerun: existing large resources are validated or reused, while refreshable
-sources are checked according to their configured update intervals.
-1. Install VEP and its plugins:
-   ```bash
-   bash scripts/install_utils.sh vep_cache_api_install --VEP_CACHEDIR /path/to/cache --VEP_ASSEMBLY GRCh37/GRCh38
-   ```
+```bash
+bash scripts/install_utils.sh main_install path/to/config.yaml
+```
 
-2. Install annotation resources:
-   ```bash
-   bash scripts/install_utils.sh main_install path/to/config.yaml
-   ```
+The environment file and name are built into the installer; the only argument
+is the project configuration, which specifies resource paths and settings.
+The legacy `conda_env_yaml` configuration value is ignored. Existing environments
+are checked for required tools and VEP packages; an incomplete environment stops
+installation with an error. Miniconda installations are detected through their
+`conda` executable.
+
+Executable discovery checks `MAMBA_EXE`, then `micromamba`/`mamba` on `PATH`,
+then `CONDA_EXE`/`conda`. It retains the selected executable or wrapper path.
+Conda-backed Mamba installations use their sibling Conda for activation and saved
+environment variables. Keep the manager's root, package cache, and environment
+directories configured to the intended storage location. The installer does not
+initialize shell profiles or choose a new manager root.
+
+To prepare only the environment, the existing entry point remains available:
+
+```bash
+bash scripts/install_utils.sh conda_install_vep
+```
+
+Activation inside a child installer does not activate the caller's shell. Enter
+the environment yourself before invoking individual resource functions directly.
+The first resource installation remains assembly-specific; configure and prepare
+its reference and other settings before running the full installer. With
+`cache_root`, the six selected resource directories are created automatically.
+
+Startup regression tests use isolated fake managers and do not install packages
+or download resources:
+
+```bash
+python -m unittest discover -s tests -p test_install_utils_bootstrap.py -v
+```
+
+Installer startup updated 2026-09-13. Implementation and helper metadata are in
+`scripts/README.md`; regression-test metadata are in `tests/README.md`.
 
 `main_install` also deploys the gene-mechanism resources used by ACMG step 3 in
 dependency order: pinned HPO/MONDO data, the broader LOF/non-LOF mechanism
@@ -136,13 +163,59 @@ The `config.yaml` file in the PriVA repo contains all the parameters you need. M
 
 - TEMPORARY DIRECTORY: `tmp_dir`, used to store the temp folder and file.
 - REF GENOME ASSEMBLY: `assembly` (e.g., hg19, hg38), `ref_genome`, path to the corresponding FASTA file.
-- ANNOTATION CACHE DIRECTORIES: 
-   Paths to VEP cache (`vep_cache_dir`), plugins (`vep_plugins_dir` for plugin executables, `vep_plugins_cachedir` for plugin caches), 
-   gnomAD (`gnomad_vcf_dir` for gnomAD vcf storage), 
-   ClinVar (`clinvar_vcf_dir` for ClinVar related cache storage), 
-   CADD (`cadd_parent_dir` for CADD script and cache storage)
+- ANNOTATION CACHE ROOT: `cache_root`, an absolute storage path for the six resource groups below.
 
-After specifying these directory paths, you are good to execute the `install_utils.sh` to let it do the installation for you.
+```yaml
+cache_root: /stornext/snfs170/next-gen/scratch/yangyxt/caches
+
+# Optional; omit the mapping or individual entries to use these defaults.
+cache_folders:
+  vep_cache: VEP_cache
+  vep_plugin: VEP_plugin
+  vep_plugin_cache: VEP_plugin_cache
+  gnomad: gnomAD
+  clinvar: ClinVar
+  cadd: CADD
+```
+
+Each directory is `cache_root` plus its folder name. Use single folder names
+containing letters, digits, underscores, dots or hyphens, starting with a letter,
+digit or underscore. The root must be an absolute path without spaces or shell
+characters, as required by the existing resource commands. The folder mapping
+must be indented as shown; unknown entries and nested/absolute folder paths fail.
+
+After environment activation, the installer resolves the six directories, creates
+them as needed and saves `vep_cache_dir`, `vep_plugins_dir`,
+`vep_plugins_cachedir`, `gnomad_vcf_dir`, `clinvar_vcf_dir` and `cadd_parent_dir`
+for the existing resource and annotation functions. Treat those full paths as
+installer-maintained values when `cache_root` is set. Saved resource file paths
+beneath the previous directories are updated to the selected root/folder names;
+explicit resource paths outside those directories remain unchanged. Files are
+not moved or copied. Rerun installation after changing the root or folder names
+to prepare/reuse resources at the new destinations before running annotation.
+
+CADD uses the selected `CADD` folder without asking to store data in the package
+manager's environment. Its required `CADD-scripts-<version>/data/` structure is
+preserved beneath that folder. SpliceAI/PrimateAI manual-download prompts remain.
+Reference FASTA, temporary storage and resource groups outside these six keep
+their existing settings. Configurations without `cache_root` retain legacy full
+paths and the previous CADD storage prompt.
+
+After activating the environment, preview resolution without changing files or
+creating folders, or prepare only the folder configuration before invoking an
+individual resource function:
+
+```bash
+bash scripts/install_utils.sh priva_configure_cache_paths config.yaml --check
+bash scripts/install_utils.sh priva_configure_cache_paths config.yaml
+```
+
+Updated 2026-09-14: `config.yaml` documents the cache root and optional folder
+names and contains the corresponding HGSC resource paths. `scripts/install_utils.sh`
+resolves those paths and makes CADD follow the selected directory; the environment
+startup work from 2026-09-13 is preserved. No annotation resources were installed
+as part of this code change. Additional metadata is in `scripts/README.md` and
+`tests/README.md`.
 
 **Special annotation resources need manual download**
 There are 2 annotation resource (SpliceAI, PrimateAI) need manual download from Illumina
@@ -170,7 +243,7 @@ The recommended way to run the pipeline is using Snakemake, which manages depend
 
 **Prerequisites:**
 
-1. Activate Conda Environment: Ensure the `priva_acmg` conda environment (or the one created during installation) is activated:
+1. Activate Conda Environment: Ensure the `priva_acmg` conda environment is activated:
    ```bash
    conda activate priva_acmg
    ```

@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 
-SELF=$(realpath ${BASH_SOURCE[0]})
-SELF_DIR=$(dirname ${SELF})
-BASE_DIR=$(dirname ${SELF_DIR})
+SELF=$(realpath "${BASH_SOURCE[0]}")
+SELF_DIR=$(dirname "${SELF}")
+BASE_DIR=$(dirname "${SELF_DIR}")
 ARGPARSE=${SELF_DIR}/argparse.bash
 # This script is just a function pool, used to store commonly shared functions
 

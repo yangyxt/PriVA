@@ -8,9 +8,9 @@
 
 # Maintainer: yangyxt@gmail.com, yangyxt@hku.hk
 
-SELF_SCRIPT="$(realpath ${BASH_SOURCE[0]})"
+SELF_SCRIPT="$(realpath "${BASH_SOURCE[0]}")"
 SCRIPT_DIR="$(dirname "${SELF_SCRIPT}")"
-BASE_DIR="$(dirname ${SCRIPT_DIR})"
+BASE_DIR="$(dirname "${SCRIPT_DIR}")"
 if [[ ${BASE_DIR} == "/" ]]; then BASE_DIR=""; fi
 DATA_DIR="${BASE_DIR}/data"
 

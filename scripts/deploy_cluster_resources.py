@@ -68,7 +68,22 @@ def reference(args, manifest):
     folder = args.cache_root / "references"
     compressed = download(manifest["reference"]["url"], folder / "ucsc.hg19.fasta.gz", manifest["reference"]["md5"])
     target = folder / "ucsc.hg19.fasta"
-    if not target.exists():
+    if target.exists():
+        measured = checksum(target)
+        receipt = args.state_dir / "reference.ready.json"
+        previous = json.loads(receipt.read_text()) if receipt.exists() else {}
+        if previous.get("archive_md5") == manifest["reference"]["md5"] and previous.get("sha256") == measured:
+            pass
+        else:
+            # Validate an older unmanaged FASTA against the verified archive,
+            # without silently blessing whatever happens to be at its path.
+            expected = hashlib.sha256()
+            with gzip.open(compressed, "rb") as stream:
+                for block in iter(lambda: stream.read(8 * 1024 * 1024), b""):
+                    expected.update(block)
+            if measured != expected.hexdigest():
+                raise RuntimeError("Existing hg19 FASTA does not match the verified archive")
+    else:
         partial = target.with_name(target.name + ".partial")
         with gzip.open(compressed, "rb") as src, partial.open("wb") as dest:
             shutil.copyfileobj(src, dest, 8 * 1024 * 1024)
@@ -116,6 +131,18 @@ def cadd_runtime(args, manifest):
         partial = image.with_name(image.name + ".partial")
         run(["apptainer", "pull", "--force", partial, manifest["cadd"]["image"]], env=environment)
         partial.replace(image)
+        write_json(folder / "image.origin.json", {"image_source": manifest["cadd"]["image"], "image_sha256": checksum(image)})
+    else:
+        # The original deployment writes cadd-runtime.ready.json; subsequent
+        # deployments also preserve the origin before import qualification.
+        origin = folder / "image.origin.json"
+        if not origin.exists():
+            origin = args.state_dir / "cadd-runtime.ready.json"
+        if not origin.exists():
+            raise RuntimeError("Existing CADD image has no verified source receipt")
+        previous = json.loads(origin.read_text())
+        if previous.get("image_source") != manifest["cadd"]["image"] or previous.get("image_sha256") != checksum(image):
+            raise RuntimeError("Existing CADD image differs from its verified source receipt")
     run(["apptainer", "exec", "--cleanenv", image,
          "/conda-envs/fe7049a03d989a2faa6d7688f5987d09/bin/python", "-c",
          "import sys, sklearn, numpy, pandas; print(sys.version); print(sklearn.__version__)"], env=environment)

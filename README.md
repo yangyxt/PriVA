@@ -2,6 +2,18 @@
 
 A comprehensive pipeline for ACMG/AMP-based variant interpretation and variant prioritization in genetic analysis.
 
+## Nextflow / Rust migration branch
+
+This branch develops a Nextflow compatibility workflow around the existing
+scientific scripts, followed by parity-gated Rust/Polars replacements. See
+[execution and deployment](docs/nextflow_migration.md) and
+[Rust scope and exact comparison](docs/rust-migration.md). The frozen reference
+is commit `09223ef`; no real-family equality is claimed until the selected
+family and complete cache set pass the comparison. `main.nf`, `modules/local/*`
+and `bin/priva_task.py` isolate tasks; `bin/priva-compare` checks exact results;
+`rust/*` contains the experimental final-order module. Existing scientific shell
+and Python files remain the reference during this first milestone.
+
 ## Overview
 
 This repository contains scripts and configuration files for an automated variant prioritization pipeline based on the ACMG/AMP guidelines. PriVA combines transcript-level annotation, population and functional data, gene-disease mechanism and inheritance context, and family information to evaluate ACMG/AMP criteria and produce ranked variant lists for each family. Annotation resources are deployed once and can be refreshed; each cohort run then performs annotation, family-level filtering, criteria matching, and prioritization.

@@ -1,0 +1,168 @@
+#!/usr/bin/env python3
+"""Strict acceptance comparison independent of the pandas/Polars implementations.
+
+Every parsed TSV field, header position and row position must agree. Numeric
+strings are deliberately not coerced, rounded or compared with a tolerance.
+The ACMG matrix has no transcript key in legacy PriVA: repeated variant IDs are
+identified by their occurrence in the ORIGINAL matrix order, never deduplicated.
+"""
+
+import argparse
+from collections import Counter
+import csv
+import hashlib
+import json
+from pathlib import Path
+import sys
+
+# Annotation fields can exceed the csv module's small default field limit.
+csv.field_size_limit(2**31 - 1)
+
+
+CRITERIA = (
+    "PVS1 PS1 PS2 PS3 PS4 PM1 PM2 PM3 PM4 PM5 PM6 PP1 PP2 PP3 PP4 PP5 "
+    "BA1 BS1 BS2 BS3 BS4 BP1 BP2 BP3 BP4 BP5 BP6 BP7"
+).split()
+FINAL_REQUIRED = (
+    "variant_id chrom pos ref alt sort_index variant_rank ACMG_criteria "
+    "ACMG_quant_score ACMG_class"
+).split()
+
+
+def read_table(path, kind):
+    """Read strings verbatim; do not apply pandas NA or numeric inference."""
+    path = Path(path)
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    result = {"path": str(path), "sha256": digest.hexdigest(), "header": [], "rows": []}
+    if path.stat().st_size == 0:
+        result["zero_byte"] = True
+        return result
+    with path.open(encoding="utf-8", newline="") as handle:
+        reader = csv.reader(handle, delimiter="\t", strict=True)
+        header = next(reader)
+        if not header or any(not name for name in header) or len(set(header)) != len(header):
+            raise ValueError(f"{kind}: empty or duplicate header names in {path}")
+        required = FINAL_REQUIRED if kind == "final" else ["variant_id", *CRITERIA]
+        missing = sorted(set(required) - set(header))
+        if missing:
+            raise ValueError(f"{kind}: missing required columns {missing} in {path}")
+        rows = []
+        for line, row in enumerate(reader, 2):
+            if len(row) != len(header):
+                raise ValueError(f"{kind}: row {line} has {len(row)} fields, expected {len(header)} in {path}")
+            rows.append(row)
+    result.update(header=header, rows=rows, zero_byte=False)
+    return result
+
+
+def row_keys(table, kind):
+    """Occurrence keys preserve even indistinguishable duplicate rows."""
+    if not table["header"]:
+        return []
+    columns = ["variant_id"]
+    if kind == "final":
+        columns += ["chrom", "pos", "ref", "alt"]
+        if "Feature" in table["header"]:
+            columns.append("Feature")
+    positions = [table["header"].index(column) for column in columns]
+    counts = Counter()
+    keys = []
+    for row in table["rows"]:
+        key = tuple(row[pos] for pos in positions)
+        counts[key] += 1
+        keys.append((*key, counts[key]))
+    return keys
+
+
+def compare_table(reference, candidate, kind, max_differences=20):
+    differences = []
+    count = 0
+
+    def difference(detail):
+        nonlocal count
+        count += 1
+        if len(differences) < max_differences:
+            differences.append(detail)
+
+    if reference["zero_byte"] != candidate["zero_byte"]:
+        difference({"type": "empty_representation", "reference_zero_byte": reference["zero_byte"],
+                    "candidate_zero_byte": candidate["zero_byte"]})
+    if reference["header"] != candidate["header"]:
+        difference({"type": "header", "reference": reference["header"], "candidate": candidate["header"]})
+    if len(reference["rows"]) != len(candidate["rows"]):
+        difference({"type": "row_count", "reference": len(reference["rows"]),
+                    "candidate": len(candidate["rows"])})
+    ref_keys, candidate_keys = row_keys(reference, kind), row_keys(candidate, kind)
+    if Counter(ref_keys) != Counter(candidate_keys):
+        difference({"type": "row_key_multiset", "missing": list((Counter(ref_keys) - Counter(candidate_keys)).elements())[:max_differences],
+                    "extra": list((Counter(candidate_keys) - Counter(ref_keys)).elements())[:max_differences]})
+    if reference["header"] == candidate["header"]:
+        for index, (ref, cand) in enumerate(zip(reference["rows"], candidate["rows"]), 1):
+            if ref_keys[index - 1] != candidate_keys[index - 1]:
+                difference({"type": "row_order", "row": index, "reference_key": ref_keys[index - 1],
+                            "candidate_key": candidate_keys[index - 1]})
+            for column, ref_value, cand_value in zip(reference["header"], ref, cand):
+                if ref_value != cand_value:
+                    difference({"type": "cell", "row": index, "key": ref_keys[index - 1],
+                                "column": column, "reference": ref_value, "candidate": cand_value})
+    return {"identical": count == 0, "difference_count": count, "differences": differences,
+            "reference_rows": len(reference["rows"]), "candidate_rows": len(candidate["rows"]),
+            "reference_sha256": reference["sha256"], "candidate_sha256": candidate["sha256"],
+            "byte_identical": reference["sha256"] == candidate["sha256"]}
+
+
+def compare_outputs(reference_final, candidate_final, reference_acmg, candidate_acmg,
+                    allow_empty=False, max_differences=20):
+    tables = [read_table(reference_final, "final"), read_table(candidate_final, "final"),
+              read_table(reference_acmg, "acmg"), read_table(candidate_acmg, "acmg")]
+    if any(not table["rows"] for table in tables) and not allow_empty:
+        raise ValueError("empty results cannot establish family parity; use --allow-empty only for an explicitly expected empty fixture")
+    # Legacy all-empty runs are zero-byte pairs. Mixed emptiness cannot certify a run.
+    if any(table["zero_byte"] for table in tables) and not all(table["zero_byte"] for table in tables):
+        raise ValueError("a zero-byte result requires all four files to be zero-byte")
+    final = compare_table(tables[0], tables[1], "final", max_differences)
+    acmg = compare_table(tables[2], tables[3], "acmg", max_differences)
+    return {"schema_version": 1, "identical": final["identical"] and acmg["identical"],
+            "policy": "all TSV fields, header order and row order exact; no numeric tolerance or missing-value normalization",
+            "matrix_identity": "variant_id plus original-order occurrence (legacy matrix does not retain Feature)",
+            "final": final, "acmg": acmg}
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--reference-final", required=True, type=Path)
+    parser.add_argument("--candidate-final", required=True, type=Path)
+    parser.add_argument("--reference-acmg", required=True, type=Path)
+    parser.add_argument("--candidate-acmg", required=True, type=Path)
+    parser.add_argument("--allow-empty", action="store_true")
+    parser.add_argument("--max-differences", type=int, default=20)
+    parser.add_argument("--report", type=Path, help="Write JSON report; otherwise print JSON to stdout")
+    args = parser.parse_args(argv)
+    if args.max_differences < 1:
+        parser.error("--max-differences must be positive")
+    if args.report:
+        inputs = (args.reference_final, args.candidate_final, args.reference_acmg, args.candidate_acmg)
+        if any(args.report.resolve() == path.resolve()
+               or (args.report.exists() and path.exists() and args.report.samefile(path))
+               for path in inputs):
+            parser.error("report must not overwrite an input")
+    try:
+        report = compare_outputs(args.reference_final, args.candidate_final, args.reference_acmg,
+                                 args.candidate_acmg, args.allow_empty, args.max_differences)
+        code = 0 if report["identical"] else 1
+    except (OSError, ValueError, csv.Error, UnicodeError, StopIteration) as error:
+        report = {"schema_version": 1, "identical": False, "error": str(error)}
+        code = 2
+    output = json.dumps(report, indent=2, ensure_ascii=False) + "\n"
+    if args.report:
+        args.report.write_text(output, encoding="utf-8")
+    else:
+        sys.stdout.write(output)
+    return code
+
+
+if __name__ == "__main__":
+    sys.exit(main())

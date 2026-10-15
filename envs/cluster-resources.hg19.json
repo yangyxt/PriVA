@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "assembly": "GRCh37",
+  "reference": {
+    "url": "https://hgdownload.soe.ucsc.edu/goldenPath/hg19/bigZips/hg19.fa.gz",
+    "md5": "806c02398f5ac5da8ffd6da2d1d5d1a9",
+    "checksum_source": "https://hgdownload.soe.ucsc.edu/goldenPath/hg19/bigZips/md5sum.txt"
+  },
+  "vep": {
+    "version": "113.2",
+    "cache_release": "113",
+    "url": "https://ftp.ensembl.org/pub/release-113/variation/indexed_vep_cache/homo_sapiens_merged_vep_113_GRCh37.tar.gz",
+    "bytes": 19752389249,
+    "bsd_sum": [54611, 19289443],
+    "checksum_source": "https://ftp.ensembl.org/pub/release-113/variation/indexed_vep_cache/CHECKSUMS"
+  },
+  "cadd": {
+    "source_commit": "1fead0c1e02d3f0a8599bdb04e6b3a2dd70b4866",
+    "source_url": "https://github.com/kircherlab/CADD-scripts.git",
+    "image": "docker://visze/cadd-scripts-v1_7@sha256:5774cde9ab918c0726ab0cf443b25789b0d8bea2deb1173772ba6e2707528a2c",
+    "annotation_url": "https://krishna.gs.washington.edu/download/CADD/v1.7/GRCh37/GRCh37_v1.7.tar.gz",
+    "annotation_md5": "22549309c65de8d25e903695aa4f749f",
+    "prescore_url_root": "https://krishna.gs.washington.edu/download/CADD/v1.7/GRCh37/",
+    "prescores": {
+      "whole_genome_SNVs_inclAnno.tsv.gz": "1b89cfd7da4e2a8f336c1ec33a6f44eb",
+      "whole_genome_SNVs_inclAnno.tsv.gz.tbi": "b3f770e0ba669e23c65a109b8221a1b5",
+      "gnomad.genomes-exomes.r4.0.indel_inclAnno.tsv.gz": "07c5744cea86d5ba77e493e75fcccdb6",
+      "gnomad.genomes-exomes.r4.0.indel_inclAnno.tsv.gz.tbi": "3827c4dfb1c7bddaea3cd672373cbdcc"
+    },
+    "checksum_source": "https://kircherlab.bihealth.org/download/CADD/v1.7/GRCh37/MD5SUMs",
+    "checksum_note": "Publisher indel checksum differs from historical PriVA config.yaml; this is a newly deployed resource identity, not proof of historical cache equality."
+  }
+}

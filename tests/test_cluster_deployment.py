@@ -1,9 +1,11 @@
 """Installation integrity tests; no network, solver or production caches."""
 import hashlib
+import gzip
 import importlib.util
 from pathlib import Path
 import tempfile
 import unittest
+from types import SimpleNamespace
 from unittest.mock import patch
 
 SPEC = importlib.util.spec_from_file_location(
@@ -52,6 +54,47 @@ class DownloadIntegrity(unittest.TestCase):
         with patch.object(resources, "run", self.fake_transfer), self.assertRaises(RuntimeError):
             resources.download("https://example.invalid/data", self.destination, expected_size=42)
         self.assertFalse(self.destination.exists())
+
+
+class ReuseIntegrity(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name)
+        self.args = SimpleNamespace(cache_root=self.root / "cache", state_dir=self.root / "state",
+                                    software_root=self.root / "software", tmp_root=self.root / "tmp",
+                                    samtools="samtools")
+        self.args.state_dir.mkdir()
+
+    def test_changed_existing_fasta_is_rejected_against_archive(self):
+        folder = self.args.cache_root / "references"
+        folder.mkdir(parents=True)
+        original = b">chr1\nACGT\n"
+        (folder / "ucsc.hg19.fasta").write_bytes(b">chr1\nAAAA\n")
+        archive = folder / "ucsc.hg19.fasta.gz"
+        with gzip.open(archive, "wb") as stream:
+            stream.write(original)
+        manifest = {"reference": {"url": "https://example.invalid/ref", "md5": resources.checksum(archive, "md5")}}
+        with self.assertRaisesRegex(RuntimeError, "does not match"):
+            resources.reference(self.args, manifest)
+
+    def test_unidentified_existing_image_is_rejected(self):
+        folder = self.args.software_root / "cadd-1.7.2"
+        folder.mkdir(parents=True)
+        (folder / "cadd-upstream-0.1.1.sif").write_bytes(b"unverified image")
+        with patch.object(resources, "source", return_value=self.root), self.assertRaisesRegex(RuntimeError, "no verified"):
+            resources.cadd_runtime(self.args, {"cadd": {"image": "docker://example@sha256:abc"}})
+
+    def test_mutated_existing_image_is_rejected(self):
+        folder = self.args.software_root / "cadd-1.7.2"
+        folder.mkdir(parents=True)
+        image = folder / "cadd-upstream-0.1.1.sif"
+        image.write_bytes(b"original image")
+        origin = {"image_source": "docker://example@sha256:abc", "image_sha256": resources.checksum(image)}
+        resources.write_json(folder / "image.origin.json", origin)
+        image.write_bytes(b"changed image")
+        with patch.object(resources, "source", return_value=self.root), self.assertRaisesRegex(RuntimeError, "differs"):
+            resources.cadd_runtime(self.args, {"cadd": {"image": origin["image_source"]}})
 
 
 if __name__ == "__main__":

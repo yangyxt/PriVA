@@ -1,5 +1,10 @@
 # PriVA tests
 
+Cluster deployment integrity: `test_cluster_deployment.py` checks atomic
+publication, corruption rejection, unchanged-cache reuse, and rejection of
+unidentified or modified FASTA/container resources without network or solver
+operations. Real installation qualification is recorded separately by Slurm.
+
 Updated: 2026-09-14. Existing test modules cover the workflows and data contracts
 identified by their module docstrings. This inventory records the startup tests
 added alongside the installer change; other upstream tests are unchanged.

@@ -11,3 +11,11 @@ changed for installer startup; other upstream scripts retain their prior roles.
 | common_bash_utils.sh | Shared shell helpers; quote source-path discovery so loading the installer works from directories containing spaces. | Targeted compatibility change, 2026-09-13. |
 | annotation_vcf.sh | Annotation workflow functions loaded by the installer; quote source-path discovery. | Targeted compatibility change, 2026-09-13. |
 | README.md | Change inventory and pointers to existing script documentation. | Added 2026-09-13. |
+
+Cluster deployment, 2026-10-15: `install_cluster.sh` and
+`check_cluster_environment.py` create/check an isolated `priva_acmg` environment,
+export a resolved package lock, and deploy an explicitly committed scientific
+source snapshot. `envs/priva-cluster.yml` preserves the key scientific versions
+from the bundled environment export and includes missing cache-builder imports.
+CADD retains its separate upstream Python environments. A successful software
+check does not establish annotation-cache readiness or family-result equality.

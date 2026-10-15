@@ -5,6 +5,7 @@ The JSON profiles are trusted installation configuration, not untrusted inputs.
 Resource locking is a separate installation action. Analysis never installs data.
 """
 import argparse
+import configparser
 import gzip
 import hashlib
 import json
@@ -15,6 +16,8 @@ import subprocess
 import sys
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / 'bin'))
+import cadd_shared_vep
 PIN = '1fead0c1e02d3f0a8599bdb04e6b3a2dd70b4866'
 ALIASES = {'hg19': 'GRCh37', 'GRCh37': 'GRCh37', 'hg38': 'GRCh38', 'GRCh38': 'GRCh38'}
 
@@ -43,7 +46,7 @@ def write_json(path, value):
 
 
 def source_identity():
-    paths = ['bin/cadd_task.py', 'bin/cadd/upstream_annotate.sh',
+    paths = ['bin/cadd_task.py', 'bin/cadd_shared_vep.py', 'bin/cadd/upstream_annotate.sh',
              'bin/cadd/upstream_calculate.sh', 'cadd.nf',
              'modules/local/cadd_upstream.nf', 'conf/cadd.config', 'nextflow.config',
              'conf/cadd/GRCh37.reference.json', 'conf/cadd/GRCh38.reference.json']
@@ -129,13 +132,18 @@ def lock_resources(args):
                       'resource_manifest_sha256': digest(args.output)}))
 
 
-def verify_resources(p, stage):
+def verify_manifest_identity(p):
     path = Path(p['resource_manifest_path'])
     if not path.is_absolute() or digest(path) != p['contract']['resource_manifest_sha256']:
         raise ContractError('Locked resource manifest checksum differs')
     m = read_json(path)
     if m.get('schema_version') != 1 or m.get('assembly') != p['contract']['assembly']:
         raise ContractError('Resource manifest schema/assembly differs')
+    return m
+
+
+def verify_resources(p, stage):
+    m = verify_manifest_identity(p)
     if stage not in m.get('resources', {}):
         raise ContractError('Resource manifest lacks stage: ' + stage)
     expected = m['resources'][stage]
@@ -152,7 +160,7 @@ def verify_resources(p, stage):
     # Every directly configured data path must be covered by the locked inventory.
     for key, value in env.items():
         if key in ['CADD_SOURCE_ROOT', 'CADD_ASSEMBLY', 'CADD_ENSEMBL_DB', 'CADD_ESM_MODELS',
-                   'CADD_ESM_BATCH_SIZE', 'CADD_PYTHON2', 'CADD_VEP', 'CADD_ESM_PYTHON',
+                   'CADD_ESM_BATCH_SIZE', 'CADD_ANNOTATION_INPUT', 'CADD_PYTHON2', 'CADD_VEP', 'CADD_ESM_PYTHON',
                    'CADD_REGSEQ_PYTHON', 'CADD_MMSPLICE_PYTHON', 'CADD_BGZIP', 'CADD_TABIX']:
             continue
         candidate = Path(value).resolve(strict=True)
@@ -161,6 +169,49 @@ def verify_resources(p, stage):
         if candidate.is_dir() and not any(candidate in Path(name).parents for name in current):
             raise ContractError('Configured data directory is outside locked resources: ' + key)
     return expected
+
+
+def verify_annotation_sources(p, inventory_records):
+    cfg = configparser.ConfigParser(interpolation=None)
+    cfg.read(p['annotation']['env']['CADD_REFERENCE_CONFIG'])
+    expected = read_json(ROOT / 'conf/cadd' / (p['contract']['assembly'] + '.reference.json'))['annotation']['required_annotations']
+    if not cfg.has_section('Annotations') or set(dict(cfg.items('Annotations'))) != set(expected):
+        raise ContractError('Reference config omits or adds model annotation sources')
+    values = dict(cfg.items('Path'))
+    if values['roottype'].lower() in ['v', 'var', 'env']:
+        if values['rootdir'] != 'CADD':
+            raise ContractError('Reference config must use explicit CADD root or an absolute resource root')
+        root = p['annotation']['env']['CADD_SOURCE_ROOT']
+    else:
+        root = values['rootdir']
+        if not Path(root).is_absolute():
+            raise ContractError('Reference config resource root must be absolute')
+    base = root + values['annodir']
+    reference = Path(base + values['reference'])
+    required = [reference, Path(str(reference) + '.fai')]
+    for name, kind in expected.items():
+        value = cfg.get('Annotations', name)
+        if kind == 'computed':
+            if value != 'True':
+                raise ContractError('Required computed annotation is disabled: ' + name)
+            continue
+        if value in ['True', 'Ignore', 'False', '']:
+            raise ContractError('Required annotation resource is disabled: ' + name)
+        path = Path(base + value)
+        required.append(path)
+        if kind == 'tabix':
+            required.append(Path(str(path) + '.tbi'))
+        if kind == 'tabix-list':
+            entries = [line.strip() for line in path.read_text().splitlines() if line.strip()]
+            if not entries:
+                raise ContractError('Annotation tabix source list is empty: ' + name)
+            for entry in entries:
+                member = path.parent / entry
+                required.extend([member, Path(str(member) + '.tbi')])
+    for path in required:
+        resolved = path.resolve(strict=True)
+        if not resolved.is_file() or str(resolved) not in inventory_records:
+            raise ContractError('Required annotation source/index is outside locked resources: ' + str(path))
 
 
 def verify_source(env):
@@ -189,7 +240,9 @@ def stage_preflight(p, stage, stub=False):
     if any(not key.startswith('CADD_') or not isinstance(value, str) for key, value in env.items()):
         raise ContractError('Backend environment must contain only string CADD_* entries')
     verify_source(env)
-    verify_resources(p, stage)
+    resources = verify_resources(p, stage)
+    if stage == 'annotation':
+        verify_annotation_sources(p, resources)
     verified = set()
     for asset in cfg.get('verify_files', []):
         path = Path(asset['path'])
@@ -264,10 +317,11 @@ def verify_bundle(bundle, p, stub=False):
     return table, receipt
 
 
-def run_backend(p, stage, source, output, work):
+def run_backend(p, stage, source, output, work, annotation_source='shared-vep'):
     cfg = p[stage]
     env = {k: v for k, v in os.environ.items() if not k.startswith('CADD_')}
     env.update(cfg['env'])
+    env['CADD_ANNOTATION_INPUT'] = annotation_source
     env.pop('PYTHONPATH', None)
     env.pop('PYTHONHOME', None)
     env.update(CADD_ASSEMBLY=p['contract']['assembly'], PYTHONDONTWRITEBYTECODE='1', PYTHONNOUSERSITE='1')
@@ -294,7 +348,16 @@ def execute(args):
     before = source_identity()
     profile_before = digest(args.profile)
     stage = 'calculation' if args.command == 'calculate' else 'annotation'
-    stage_preflight(p, stage, args.stub)
+    annotation_source = getattr(args, 'annotation_source', 'shared-vep')
+    if args.command == 'import-annotations':
+        if not args.stub:
+            verify_manifest_identity(p)
+    else:
+        stage_preflight(p, stage, args.stub)
+    shared_provenance = None
+    shared_vcf = None
+    if args.command == 'annotate' and annotation_source == 'shared-vep':
+        shared_vcf, shared_provenance = cadd_shared_vep.verify(args.input, p, args.stub)
     out = Path(args.output)
     if out.exists():
         raise ContractError('Output exists; use a fresh task directory')
@@ -302,7 +365,7 @@ def execute(args):
     work = out.parent / (out.name + '.work')
     work.mkdir()
     columns = p['contract']['columns']
-    source = Path(args.input)
+    source = shared_vcf or Path(args.input)
     if args.command == 'calculate':
         source, _ = verify_bundle(source, p, args.stub)
         input_before = digest(source)
@@ -331,19 +394,33 @@ def execute(args):
         if args.command == 'annotate':
             raw = work / 'raw.anno.tsv.gz'
             if args.stub:
-                fields = ['NA'] * len(columns)
-                for name, value in [('Chrom', '1'), ('Pos', '100'), ('Ref', 'A'), ('Alt', 'G'),
-                                    ('Type', 'SNV'), ('Consequence', 'NON_SYNONYMOUS')]:
-                    fields[columns.index(name)] = value
+                feature_rows = cadd_shared_vep.expected_features(shared_vcf) if shared_vcf else [('1', '100', 'A', 'G', 'NA')]
                 with gzip.open(raw, 'wt') as handle:
-                    handle.write('#' + '\t'.join(columns) + '\n' + '\t'.join(fields) + '\n')
+                    handle.write('#' + '\t'.join(columns) + '\n')
+                    for chrom, pos, ref, alt, feature in feature_rows:
+                        fields = ['NA'] * len(columns)
+                        for name, value in [('Chrom', chrom), ('Pos', pos), ('Ref', ref), ('Alt', alt),
+                                            ('Type', 'SNV'), ('Consequence', 'NON_SYNONYMOUS'), ('FeatureID', feature)]:
+                            fields[columns.index(name)] = value
+                        handle.write('\t'.join(fields) + '\n')
             else:
-                run_backend(p, stage, source, raw, work)
+                run_backend(p, stage, source, raw, work, annotation_source)
         output = out / 'annotations.tsv.gz'
         count = canonicalize(raw, output, columns)
+        if shared_vcf is not None:
+            cadd_shared_vep.verify_feature_join(shared_vcf, rows(output, columns), columns)
         result = receipt(p, args.profile, stage if args.command == 'annotate' else args.command,
                          source, output, count, args.stub, before)
-    stage_preflight(p, stage, args.stub)
+    if args.command == 'import-annotations':
+        if not args.stub:
+            verify_manifest_identity(p)
+    else:
+        stage_preflight(p, stage, args.stub)
+    if shared_provenance is not None:
+        _, after_shared = cadd_shared_vep.verify(args.input, p, args.stub)
+        if after_shared != shared_provenance:
+            raise ContractError('Shared VEP inputs changed during execution')
+        result.update(shared_provenance)
     if digest(source) != input_before or digest(args.profile) != profile_before:
         raise ContractError('Input or profile changed during execution')
     # A manifest is the completion marker; failed work retains diagnostics only.
@@ -357,12 +434,18 @@ def preflight(args):
     for stage in stages:
         stage_preflight(p, stage, args.stub)
     source = Path(args.input)
+    annotation_source = getattr(args, 'annotation_source', 'shared-vep')
+    shared_provenance = None
+    if args.mode != 'calculate' and annotation_source == 'shared-vep':
+        source, shared_provenance = cadd_shared_vep.verify(source, p, args.stub)
     if args.mode == 'calculate':
         source, _ = verify_bundle(source, p, args.stub)
     identity = {'schema_version': 1, 'mode': args.mode, 'stub': bool(args.stub),
                 'input_sha256': digest(source), 'profile_sha256': digest(args.profile),
                 'contract': p['contract'], 'software_id': p['software_id'],
-                'adapter_source': source_identity()}
+                'adapter_source': source_identity(), 'annotation_source': annotation_source}
+    if shared_provenance is not None:
+        identity['shared_vep'] = shared_provenance
     if args.mode == 'calculate':
         identity['input_manifest_sha256'] = digest(Path(args.input) / 'manifest.json')
     root = Path(args.output)
@@ -393,6 +476,9 @@ def parser():
         cmd.add_argument('--input', required=True, help='VCF, complete table, or annotation bundle according to command')
         cmd.add_argument('--output', required=True)
         cmd.add_argument('--stub', action='store_true')
+        if name in ['annotate', 'preflight']:
+            cmd.add_argument('--annotation-source', choices=['shared-vep', 'reference-vcf'], default='shared-vep',
+                             help='Production reuses qualified PriVA VEP; reference-vcf explicitly reruns VEP for validation only')
         if name == 'preflight':
             cmd.add_argument('--mode', choices=['annotate', 'calculate', 'full'], required=True)
         cmd.set_defaults(func=preflight if name == 'preflight' else execute)
@@ -403,7 +489,7 @@ def main():
     args = parser().parse_args()
     try:
         args.func(args)
-    except (ContractError, OSError, KeyError, TypeError, json.JSONDecodeError, subprocess.CalledProcessError) as error:
+    except (ContractError, cadd_shared_vep.SharedVepError, OSError, KeyError, TypeError, json.JSONDecodeError, subprocess.CalledProcessError) as error:
         print('PriVA CADD contract: ' + str(error), file=sys.stderr)
         return 2
     return 0

@@ -2,6 +2,7 @@
 """Mocked offline integration: no biological inference or cache downloads."""
 import copy
 import contextlib
+import configparser
 import io
 import gzip
 import hashlib
@@ -56,7 +57,7 @@ elif name=='annotateVEPvcf.py':
     print('#'+'\t'.join(columns))
     if not os.environ.get('MOCK_EMPTY'):
         fields=['NA']*len(columns)
-        for key,value in [('Chrom','1'),('Pos','100'),('Ref','A'),('Alt','G'),('Type','SNV'),('Consequence','NON_SYNONYMOUS')]:fields[columns.index(key)]=value
+        for key,value in [('Chrom','1'),('Pos','100'),('Ref','A'),('Alt','G'),('Type','SNV'),('Consequence','NON_SYNONYMOUS'),('FeatureID',os.environ.get('MOCK_FEATURE_ID','NA'))]:fields[columns.index(key)]=value
         print('\t'.join(fields))
 elif name=='trackTransformation.py':
     text=sys.stdin.read()
@@ -137,8 +138,27 @@ class UpstreamCadd(unittest.TestCase):
         self.addCleanup(self.environment.stop)
         self.vcf = self.root / 'input.vcf'
         self.vcf.write_text('##fileformat=VCFv4.2\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\n1\t100\t.\tA\tG\t.\t.\t.\n')
+        self.make_reference_config()
         self.save()
         self.lock()
+
+    def make_reference_config(self):
+        self.p['annotation']['required_annotations'] = json.loads((ROOT/'conf/cadd'/(self.p['contract']['assembly']+'.reference.json')).read_text())['annotation']['required_annotations']
+        cfg = configparser.ConfigParser()
+        cfg['Path'] = {'roottype':'path','rootdir':str(self.assets),'annodir':'','reference':'/reference.fa'}
+        cfg['Annotations'] = {}
+        for index,(name,kind) in enumerate(self.p['annotation']['required_annotations'].items()):
+            if kind == 'computed':
+                cfg['Annotations'][name] = 'True'
+            else:
+                path = self.assets / ('track-' + str(index) + ('.gz' if kind=='tabix' else '.txt'))
+                path.write_text('Mock track\n' if kind!='tabix-list' else 'mock.list.member.gz\n')
+                cfg['Annotations'][name] = '/' + path.name
+                if kind=='tabix':Path(str(path)+'.tbi').write_text('Mock index\n')
+                if kind=='tabix-list':
+                    (self.assets/'mock.list.member.gz').write_text('Mock track\n')
+                    (self.assets/'mock.list.member.gz.tbi').write_text('Mock index\n')
+        with open(self.assets/'references.cfg','w') as handle:cfg.write(handle)
 
     def save(self):
         self.profile.write_text(json.dumps(self.p))
@@ -154,7 +174,7 @@ class UpstreamCadd(unittest.TestCase):
     def run_task(self, command, input_path, name, stub=False):
         output=self.root/name
         C.execute(argparse_namespace(command=command,profile=str(self.profile),assembly=self.p['contract']['assembly'],
-            input=str(input_path),output=str(output),stub=stub))
+            input=str(input_path),output=str(output),stub=stub,annotation_source='reference-vcf'))
         return output
 
     def calls(self):
@@ -165,7 +185,7 @@ class UpstreamCadd(unittest.TestCase):
             with self.subTest(assembly=assembly):
                 self.p['contract'].update(assembly=assembly,columns=json.loads((ROOT/'conf/cadd'/f'{assembly}.reference.json').read_text())['contract']['columns'])
                 self.columns.write_text(json.dumps(self.p['contract']['columns']))
-                self.save();self.lock();self.events.write_text('')
+                self.make_reference_config();self.save();self.lock();self.events.write_text('')
                 bundle=self.run_task('annotate',self.vcf,assembly+'-anno')
                 expected=['VCF2vepVCF.py','vep','esmScore_missense_av_fast.py','esmScore_frameshift_av.py','esmScore_inFrame_av.py','predictVariants.py']
                 if assembly=='GRCh38':expected+=['tabix','MMSplice.py']
@@ -235,9 +255,90 @@ class UpstreamCadd(unittest.TestCase):
         self.p.pop('stub');self.save()
         with self.assertRaisesRegex(C.ContractError,'Stub'):self.run_task('calculate',bundle,'calc')
 
+    def shared_fixture(self):
+        shared = self.root/'shared-vep'
+        shared.mkdir()
+        cols = C.cadd_shared_vep.REQUIRED_CSQ
+        values = {key:'' for key in cols}
+        values.update(Allele='G',Consequence='missense_variant',Feature_type='Transcript',Feature='ENST0001')
+        text = '##fileformat=VCFv4.2\n##INFO=<ID=CSQ,Number=.,Type=String,Description="Consequence. Format: ' + '|'.join(cols) + '">\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\n1\t100\t.\tA\tG\t.\t.\tCSQ=' + '|'.join(values[key] for key in cols) + '\n'
+        with gzip.open(shared/'vep.vcf.gz','wt') as handle:handle.write(text)
+        original = self.root/'single-priva-vep.vcf'
+        original.write_text(text)
+        proof = self.root/'selection-proof.json'
+        proof.write_text(json.dumps({'scope':'synthetic-test-only','cases':1}))
+        qualification = self.root/'selection-qualification.json'
+        qualification.write_text(json.dumps({'schema_version':1,'status':'qualified','assembly':'GRCh37',
+            'vep_release':'110','transcript_release':'110','selection':'cadd-per-gene','adapter_id':'mock-adapter',
+            'stub':False,'checks':{'per_gene_selection':'exact','feature_id_joins':'exact','variant_representation':'exact','missingness':'preserved'},
+            'evidence':{'path':str(proof),'sha256':C.digest(proof)}}))
+        settings = self.p['annotation']['shared_vep']
+        settings.update(adapter_id='mock-adapter',qualification={'path':str(qualification),'sha256':C.digest(qualification)})
+        receipt = {'schema_version':1,'stage':'cadd-shared-vep-view','assembly':'GRCh37',
+            'profile_id':self.p['profile_id'],'resource_manifest_sha256':self.p['contract']['resource_manifest_sha256'],
+            'vep_release':'110','transcript_release':'110','selection':'cadd-per-gene','adapter_id':'mock-adapter',
+            'qualification_sha256':C.digest(qualification),'stub':False,
+            'source_vep':{'path':str(original),'sha256':C.digest(original)},
+            'output_sha256':C.digest(shared/'vep.vcf.gz'),'expected_annotation_rows':1}
+        (shared/'manifest.json').write_text(json.dumps(receipt))
+        self.save()
+        return shared
+
+    def test_shared_vep_never_runs_prepare_or_vep(self):
+        shared=self.shared_fixture()
+        with patch.dict(os.environ,{'MOCK_FEATURE_ID':'ENST0001'}):
+            C.execute(argparse_namespace(command='annotate',profile=str(self.profile),assembly='GRCh37',
+                input=str(shared),output=str(self.root/'shared-result'),stub=False,annotation_source='shared-vep'))
+        self.assertEqual(self.calls(),['esmScore_missense_av_fast.py','esmScore_frameshift_av.py','esmScore_inFrame_av.py','predictVariants.py','annotateVEPvcf.py'])
+        receipt=json.loads((self.root/'shared-result/manifest.json').read_text())
+        self.assertEqual(receipt['input_manifest_sha256'],C.digest(shared/'manifest.json'))
+
+    def test_unqualified_shared_vep_and_release_mismatch_rejected(self):
+        with self.assertRaisesRegex(C.cadd_shared_vep.SharedVepError,'unqualified'):
+            C.cadd_shared_vep.verify(self.root,self.p)
+        shared=self.shared_fixture()
+        self.p['annotation']['shared_vep']['esm_transcript_release']='113'
+        with self.assertRaisesRegex(C.cadd_shared_vep.SharedVepError,'releases differ'):
+            C.cadd_shared_vep.verify(shared,self.p)
+
+    def test_shared_vep_feature_join_mismatch_fails_completion(self):
+        shared=self.shared_fixture()
+        with patch.dict(os.environ,{'MOCK_FEATURE_ID':'WRONG'}):
+            with self.assertRaisesRegex(C.cadd_shared_vep.SharedVepError,'FeatureID join'):
+                C.execute(argparse_namespace(command='annotate',profile=str(self.profile),assembly='GRCh37',
+                    input=str(shared),output=str(self.root/'bad-feature'),stub=False,annotation_source='shared-vep'))
+        self.assertFalse((self.root/'bad-feature/manifest.json').exists())
+
+    def test_missing_csq_field_and_changed_source_are_rejected(self):
+        shared=self.shared_fixture()
+        text=gzip.open(shared/'vep.vcf.gz','rt').read().replace('SIFT','REMOVED')
+        with gzip.open(shared/'vep.vcf.gz','wt') as handle:handle.write(text)
+        with self.assertRaisesRegex(C.cadd_shared_vep.SharedVepError,'required CSQ'):
+            list(C.cadd_shared_vep.expected_features(shared/'vep.vcf.gz'))
+        with self.assertRaisesRegex(C.cadd_shared_vep.SharedVepError,'view changed'):
+            C.cadd_shared_vep.verify(shared,self.p)
+
+    def test_disabled_source_or_missing_index_is_not_variant_missingness(self):
+        cfg=configparser.ConfigParser();cfg.read(self.assets/'references.cfg')
+        cfg.set('Annotations','grantham','Ignore')
+        with open(self.assets/'references.cfg','w') as handle:cfg.write(handle)
+        self.lock()
+        with self.assertRaisesRegex(C.ContractError,'resource is disabled'):
+            C.stage_preflight(self.p,'annotation')
+        self.make_reference_config();self.lock()
+        missing=next(self.assets.glob('track-*.gz.tbi'));missing.unlink();self.lock()
+        with self.assertRaises(FileNotFoundError):C.stage_preflight(self.p,'annotation')
+
+    def test_import_calculate_profile_needs_no_annotation_resources(self):
+        bundle=self.run_task('annotate',self.vcf,'anno')
+        del self.p['annotation'];self.save()
+        (self.assets/'references.cfg').unlink()
+        imported=self.run_task('import-annotations',bundle/'annotations.tsv.gz','imported')
+        self.run_task('calculate',imported,'calc')
+
     def test_output_identity_guard_is_uncached(self):
         args=argparse_namespace(profile=str(self.profile),assembly='GRCh37',stub=False,mode='annotate',
-            input=str(self.vcf),output=str(self.root/'published'))
+            input=str(self.vcf),output=str(self.root/'published'),annotation_source='reference-vcf')
         with contextlib.redirect_stdout(io.StringIO()):
             C.preflight(args);C.preflight(args)
         self.p['software_id']='different';self.save()

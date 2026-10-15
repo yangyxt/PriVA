@@ -22,8 +22,16 @@ require_env() { [[ -n "${!1:-}" ]] || die "required environment variable is miss
 require_file() { [[ -f "$1" && -r "$1" ]] || die "required file is not readable: $1"; }
 require_program() { command -v -- "$1" >/dev/null 2>&1 || die "executable is unavailable: $1"; }
 
-for key in CADD_SOURCE_ROOT CADD_PYTHON2 CADD_ASSEMBLY CADD_VEP CADD_VEP_CACHE \
-    CADD_ENSEMBL_DB CADD_ESM_PYTHON CADD_ESM_MODEL_DIR CADD_ESM_MODELS \
+CADD_ANNOTATION_INPUT=${CADD_ANNOTATION_INPUT:-shared-vep}
+case "$CADD_ANNOTATION_INPUT" in shared-vep|reference-vcf) ;; *) die "unsupported annotation input mode" ;; esac
+if [[ "$CADD_ANNOTATION_INPUT" == reference-vcf ]]; then
+    for key in CADD_VEP CADD_VEP_CACHE CADD_ENSEMBL_DB; do require_env "$key"; done
+    [[ "$CADD_ENSEMBL_DB" =~ ^[1-9][0-9]*$ ]] || die "CADD_ENSEMBL_DB must be a positive release number"
+    require_program "$CADD_VEP"
+    [[ -d "$CADD_VEP_CACHE" ]] || die "VEP cache directory is missing: $CADD_VEP_CACHE"
+fi
+
+for key in CADD_SOURCE_ROOT CADD_PYTHON2 CADD_ASSEMBLY CADD_ESM_PYTHON CADD_ESM_MODEL_DIR CADD_ESM_MODELS \
     CADD_ESM_TRANSCRIPTS CADD_REGSEQ_PYTHON CADD_REGSEQ_MODEL \
     CADD_REGSEQ_WEIGHTS CADD_REGSEQ_REFERENCE CADD_REGSEQ_GENOME \
     CADD_REFERENCE_CONFIG; do
@@ -43,8 +51,7 @@ CADD_BGZIP=${CADD_BGZIP:-bgzip}
 CADD_TABIX=${CADD_TABIX:-tabix}
 CADD_ESM_BATCH_SIZE=${CADD_ESM_BATCH_SIZE:-1}
 [[ "$CADD_ESM_BATCH_SIZE" =~ ^[1-9][0-9]*$ ]] || die 'CADD_ESM_BATCH_SIZE must be positive'
-[[ "$CADD_ENSEMBL_DB" =~ ^[1-9][0-9]*$ ]] || die 'CADD_ENSEMBL_DB must be a positive release number'
-for program in git gzip sort uniq mktemp cat "$CADD_PYTHON2" "$CADD_VEP" \
+for program in git gzip sort uniq mktemp cat "$CADD_PYTHON2" \
     "$CADD_ESM_PYTHON" "$CADD_REGSEQ_PYTHON" "$CADD_BGZIP"; do
     require_program "$program"
 done
@@ -64,7 +71,6 @@ for file in "$scripts/VCF2vepVCF.py" "$scripts/annotateVEPvcf.py" \
     "$CADD_REGSEQ_GENOME" "$CADD_REFERENCE_CONFIG"; do
     require_file "$file"
 done
-[[ -d "$CADD_VEP_CACHE" ]] || die "VEP cache directory is missing: $CADD_VEP_CACHE"
 [[ -d "$CADD_ESM_MODEL_DIR" ]] || die "ESM hub directory is missing: $CADD_ESM_MODEL_DIR"
 
 # torch.hub.set_dir expects the parent of checkpoints/. Check local model
@@ -94,16 +100,20 @@ read_input() {
     case "$input" in *.gz) gzip -cd -- "$input" ;; *) cat -- "$input" ;; esac
 }
 
-# Preserve prepare → VEP → missense ESM → frameshift ESM → in-frame ESM
-# → RegSeq → GRCh38 MMSplice → track collection. No prescore lookup occurs.
-read_input | "$CADD_PYTHON2" "$scripts/VCF2vepVCF.py" \
-    | sort -k1,1 -k2,2n -k4,4 -k5,5 | uniq > "$stage/prepared.vcf"
-"$CADD_VEP" --quiet --cache --offline --dir "$CADD_VEP_CACHE" \
-    --buffer 1000 --no_stats --species homo_sapiens \
-    --db_version="$CADD_ENSEMBL_DB" --assembly "$CADD_ASSEMBLY" \
-    --format vcf --regulatory --sift b --polyphen b --per_gene --ccds --domains \
-    --numbers --canonical --total_length --vcf --force_overwrite --output_file STDOUT \
-    < "$stage/prepared.vcf" | "$CADD_BGZIP" -c > "$stage/vep.vcf.gz"
+# Production consumes the qualified CADD view from PriVA's single official VEP
+# run. Re-running VEP is available only as explicit reference validation.
+if [[ "$CADD_ANNOTATION_INPUT" == reference-vcf ]]; then
+    read_input | "$CADD_PYTHON2" "$scripts/VCF2vepVCF.py" \
+        | sort -k1,1 -k2,2n -k4,4 -k5,5 | uniq > "$stage/prepared.vcf"
+    "$CADD_VEP" --quiet --cache --offline --dir "$CADD_VEP_CACHE" \
+        --buffer 1000 --no_stats --species homo_sapiens \
+        --db_version="$CADD_ENSEMBL_DB" --assembly "$CADD_ASSEMBLY" \
+        --format vcf --regulatory --sift b --polyphen b --per_gene --ccds --domains \
+        --numbers --canonical --total_length --vcf --force_overwrite --output_file STDOUT \
+        < "$stage/prepared.vcf" | "$CADD_BGZIP" -c > "$stage/vep.vcf.gz"
+else
+    read_input | "$CADD_BGZIP" -c > "$stage/vep.vcf.gz"
+fi
 
 "$CADD_ESM_PYTHON" "$scripts/lib/tools/esmScore/esmScore_missense_av_fast.py" \
     --input "$stage/vep.vcf.gz" --transcripts "$CADD_ESM_TRANSCRIPTS" \

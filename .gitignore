@@ -1,4 +1,9 @@
 .snakemake/
+.nextflow/
+.nextflow.log*
+/work/
+/results/
+/rust/target/
 # Python cache files and directories - comprehensive patterns
 __pycache__/
 *.py[cod]

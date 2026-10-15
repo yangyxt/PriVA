@@ -1,0 +1,27 @@
+{
+  "schema_version": 1,
+  "assembly": "GRCh37",
+  "vep_release": "113",
+  "repositories": [
+    {"url": "https://github.com/Ensembl/VEP_plugins.git", "commit": "10054085053745b62ab20129f13cd02f06f7e183", "path": "VEP_plugin"},
+    {"url": "https://github.com/Ensembl/UTRannotator.git", "commit": "40e30db003d72435eb3744ee747029294abbcf3a", "path": "VEP_plugin_cache/UTRannotator"},
+    {"url": "https://github.com/konradjk/loftee.git", "commit": "c7a87dffe3b96a729d299ca3ccb1c25db7b44e30", "path": "VEP_plugin/LoFtee_repos/loftee-hg19"}
+  ],
+  "files": [
+    {"url": "https://storage.googleapis.com/dm_alphamissense/AlphaMissense_hg19.tsv.gz", "path": "VEP_plugin_cache/AlphaMissense/AlphaMissense_hg19.tsv.gz", "bytes": 622293310, "md5": "3f14fba08c60b09a90a2ae14b7802e4c", "tabix": ["-s", "1", "-b", "2", "-e", "2", "-S", "1"]},
+    {"url": "https://s3.amazonaws.com/bcbio_nextgen/human_ancestor.fa.gz", "path": "VEP_plugin_cache/LoFtee/hg19/human_ancestor.fa.gz", "bytes": 874804773},
+    {"url": "https://s3.amazonaws.com/bcbio_nextgen/human_ancestor.fa.gz.fai", "path": "VEP_plugin_cache/LoFtee/hg19/human_ancestor.fa.gz.fai", "bytes": 736},
+    {"url": "https://personal.broadinstitute.org/konradk/loftee_data/GRCh37/phylocsf_gerp.sql.gz", "path": "VEP_plugin_cache/LoFtee/hg19/phylocsf_gerp.sql.gz", "bytes": 103185096, "gunzip_to": "VEP_plugin_cache/LoFtee/hg19/phylocsf_gerp.sql"},
+    {"url": "https://hgdownload.soe.ucsc.edu/gbdb/hg19/bbi/All_hg19_RS.bw", "path": "VEP_plugin_cache/Conservation/gerp_conservation_scores.homo_sapiens.GRCh37.bw", "bytes": 7580335760},
+    {"url": "https://ftp.ensembl.org/pub/grch37/release-113/fasta/homo_sapiens/cds/Homo_sapiens.GRCh37.cds.all.fa.gz", "path": "VEP_plugin_cache/Ensembl_CDS/Homo_sapiens.GRCh37.cds.all.fa.gz", "bytes": 19998205},
+    {"url": "https://ftp.ensembl.org/pub/grch37/release-113/fasta/homo_sapiens/pep/Homo_sapiens.GRCh37.pep.all.fa.gz", "path": "VEP_plugin_cache/Ensembl_113/Homo_sapiens.GRCh37.pep.all.fa.gz", "bytes": 12772801},
+    {"url": "https://ftp.ensembl.org/pub/grch37/release-113/gtf/homo_sapiens/Homo_sapiens.GRCh37.87.gtf.gz", "path": "VEP_plugin_cache/Ensembl_113/Homo_sapiens.GRCh37.87.gtf.gz", "bytes": 42400095}
+  ],
+  "scope": "Shared official VEP113 plugin inputs. Ensembl GRCh37 release-113 publishes the GRCh37.87 GTF; transcript compatibility with the shared CADD adapter still requires qualification. Files without publisher cryptographic hashes are recorded with local SHA256, not represented as publisher-hash verified.",
+  "pending": [
+    {"resource": "SpliceAI v1 SNV+indel prescores", "reason": "Original installer requires Illumina BaseSpace access or user-provided files; no omission authorized."},
+    {"resource": "PrimateAI v0.2 prescores", "reason": "Original installer requires Illumina BaseSpace access or user-provided files; no omission authorized."},
+    {"resource": "MaveDB hg19 plugin", "reason": "Original installer omits this assembly-specific VEP resource; dependent calculation policy needs the user's resource-by-resource discussion."},
+    {"resource": "Shared VEP to CADD annotation adapter", "reason": "Needs matching transcript views, complete feature table, and comparison; downloaded resources alone do not qualify it."}
+  ]
+}

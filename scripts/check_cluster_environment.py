@@ -44,7 +44,7 @@ def check(spec):
             failures.append(f"Cannot import {name}: {error}")
     executables = {}
     for name in ("vep", "vep_install", "python", "snakemake", "bcftools", "samtools",
-                 "bedtools", "bgzip", "tabix", "yq", "parallel", "sambamba", "seqtk"):
+                 "bedtools", "bgzip", "tabix", "yq", "parallel", "sambamba", "seqtk", "tsv-pretty"):
         executable = shutil.which(name)
         if not executable or not Path(executable).is_relative_to(prefix):
             failures.append(f"Missing environment-local executable: {name}")
@@ -55,7 +55,7 @@ def check(spec):
         try:
             run = subprocess.run(command, text=True, capture_output=True, timeout=60)
             if run.returncode:
-                failures.append(f"{' '.join(command)}: {run.stderr[-1500:]}")
+                failures.append(f"{' '.join(command)}: {run.stderr[:2500]}")
         except (OSError, subprocess.TimeoutExpired) as error:
             failures.append(f"{' '.join(command)}: {error}")
     if failures:

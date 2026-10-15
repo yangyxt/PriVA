@@ -8,6 +8,7 @@ manager=${MAMBA_EXE:-/stornext/snfs170/next-gen/scratch/yangyxt/mamba/bin/microm
 usage() {
     cat <<'EOF'
 Usage: install_cluster.sh environment STATE_DIRECTORY
+       install_cluster.sh repair-environment STATE_DIRECTORY
        install_cluster.sh source SNAPSHOT_DIRECTORY [REFERENCE_COMMIT]
 
 environment installs/checks the isolated priva_acmg environment and writes a
@@ -19,7 +20,7 @@ EOF
 }
 
 case ${1:-} in
-environment)
+environment|repair-environment)
     [[ $# == 2 ]] || { usage >&2; exit 64; }
     state_dir=$2
     mkdir -p -- "$state_dir"
@@ -29,6 +30,10 @@ environment)
     env_spec="$script_root/envs/priva-cluster.yml"
     if ! "$manager" env list | awk '$1 == "priva_acmg" { found=1 } END { exit !found }'; then
         "$manager" env create --name priva_acmg --file "$env_spec" --yes --strict-channel-priority
+    elif [[ $1 == repair-environment ]]; then
+        # Deliberate repair fills missing dependencies while preserving all
+        # installed packages and the scientific versions in the specification.
+        "$manager" install --name priva_acmg --file "$env_spec" --yes --strict-channel-priority --freeze-installed
     fi
     activation=$("$manager" shell activate --shell bash --name priva_acmg)
     eval "$activation"

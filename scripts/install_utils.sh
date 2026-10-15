@@ -1,59 +1,258 @@
 #! /usr/bin/env bash
-SCRIPT_DIR=$(dirname $(realpath ${BASH_SOURCE[0]}))
-DATA_DIR=$(dirname ${SCRIPT_DIR})/data
-BASE_DIR=$(dirname ${SCRIPT_DIR})
-source ${SCRIPT_DIR}/common_bash_utils.sh
-source ${SCRIPT_DIR}/annotation_vcf.sh
+SCRIPT_DIR=$(dirname "$(realpath "${BASH_SOURCE[0]}")")
+BASE_DIR=$(dirname "${SCRIPT_DIR}")
+DATA_DIR=${BASE_DIR}/data
+source "${SCRIPT_DIR}/common_bash_utils.sh"
+source "${SCRIPT_DIR}/annotation_vcf.sh"
 log "The base directory is ${BASE_DIR}, the scripts directory is ${SCRIPT_DIR}"
 
 
-function conda_install_vep() {
-    local env_yaml=${1}
+function priva_find_env_manager() {
+    local candidate
+    # MAMBA_EXE also finds an initialized Micromamba wrapper outside PATH.
+    # Keep its path: a wrapper may intentionally control caches and storage.
+    for candidate in "${MAMBA_EXE:-}" "$(type -P micromamba)" \
+                     "$(type -P mamba)" "${CONDA_EXE:-}" "$(type -P conda)"; do
+        [[ -n ${candidate} && -x ${candidate} ]] || continue
+        case "${candidate##*/}" in
+            micromamba*) PRIVA_ENV_MANAGER_KIND=micromamba ;;
+            mamba*) PRIVA_ENV_MANAGER_KIND=mamba ;;
+            conda*) PRIVA_ENV_MANAGER_KIND=conda ;;
+            *) continue ;;
+        esac
+        PRIVA_ENV_MANAGER=${candidate}
+        PRIVA_ENV_ACTIVATOR=${candidate}
+        PRIVA_ENV_ACTIVATOR_KIND=${PRIVA_ENV_MANAGER_KIND}
+        # Older Mamba installations delegate activation/configuration to the
+        # Conda executable in the same installation, not an unrelated PATH entry.
+        if [[ ${PRIVA_ENV_MANAGER_KIND} == mamba && -x ${candidate%/*}/conda ]]; then
+            PRIVA_ENV_ACTIVATOR=${candidate%/*}/conda
+            PRIVA_ENV_ACTIVATOR_KIND=conda
+        fi
+        log "Using ${PRIVA_ENV_MANAGER_KIND}: ${PRIVA_ENV_MANAGER}"
+        return 0
+    done
+    log "ERROR: Install micromamba, mamba, or conda and expose its executable through PATH, MAMBA_EXE, or CONDA_EXE."
+    return 1
+}
 
-    # Extract the env name from the env.yaml file
-    local env_name=$(head -1 ${env_yaml} | awk -F ': ' '{print $2;}')
-    log "The environment name to-be setup according to the ${env_yaml} file is ${env_name}"
-    [[ -z ${env_name} ]] && { log "Failed to extract the env name from the ${env_yaml} file"; return 1; }
 
-    # Test if mamba is available
-    if ! command -v mamba &> /dev/null; then
-        log "mamba is not installed, please install mamba first"
-        return 1
-    fi
+function priva_activate_env() {
+    local env_name=${1}
+    local activation
+    [[ -n ${PRIVA_ENV_MANAGER:-} ]] || priva_find_env_manager || return 1
 
-    # Before do anything, we can check whether the env_name is already installed and check several key packages in the env if already installed
-    if [[ $(mamba env list | grep ${env_name}) =~ ${env_name} ]]; then
-        log "The environment ${env_name} is already installed"
-        local skip_env_creation=1
+    # Evaluate activation code in this shell; no interactive alias or profile
+    # initialization is required, and the selected wrapper remains in use.
+    if [[ ${PRIVA_ENV_ACTIVATOR_KIND} == conda ]]; then
+        activation=$("${PRIVA_ENV_ACTIVATOR}" shell.bash activate "${env_name}") || return 1
     else
-        log "The environment ${env_name} is not installed"
-        local skip_env_creation=0
+        activation=$("${PRIVA_ENV_ACTIVATOR}" shell activate --shell bash --name "${env_name}") || return 1
     fi
+    eval "${activation}" || return 1
+    [[ -n ${CONDA_PREFIX:-} && ${CONDA_PREFIX##*/} == "${env_name}" ]] || {
+        log "ERROR: Activation did not select the requested environment ${env_name}."
+        return 1
+    }
+}
 
-    # Test if several key packages are installed
-    if [[ ${skip_env_creation} -eq 1 ]]; then
-        mamba_activate ${env_name}
-        # The to be checked packages are: ensembl-vep, perl-bio-procedural, perl-bioperl
-        if [[ $(mamba list | grep ensembl-vep) =~ ensembl-vep ]] && \
-           [[ $(mamba list | grep perl-bio-procedural) =~ perl-bio-procedural ]] && \
-           [[ $(mamba list | grep perl-bioperl) =~ perl-bioperl ]] && \
-           [[ $(which vep) =~ ${CONDA_PREFIX} ]]; then
-            log "The key packages are already installed in the environment ${env_name}"
-        else
-            log "The key packages are not installed in the environment ${env_name}"
+
+function priva_env_vars_set() {
+    local assignment
+    [[ -n ${CONDA_PREFIX:-} ]] || { log "ERROR: Activate a PriVA environment first."; return 1; }
+    [[ -n ${PRIVA_ENV_MANAGER:-} ]] || priva_find_env_manager || return 1
+    "${PRIVA_ENV_ACTIVATOR}" env config vars set --prefix "${CONDA_PREFIX}" "$@" || return 1
+    # Make the saved settings effective immediately for the remaining steps.
+    for assignment in "$@"; do
+        export "${assignment}" || return 1
+    done
+}
+
+
+function conda_install_vep() {
+    # Retain this public function name for existing callers of the installer.
+    local -r env_yaml="${BASE_DIR}/acmg_conda_rough.yml"
+    local -r env_name=priva_acmg
+    local environments packages tool executable
+    [[ $# -eq 0 ]] || {
+        log "ERROR: conda_install_vep takes no arguments; it uses PriVA's bundled environment."
+        return 2
+    }
+    [[ -r ${env_yaml} ]] || { log "ERROR: Environment file not readable: ${env_yaml}"; return 1; }
+
+    # The repository file and environment name are fixed. No YAML parser is
+    # needed until this environment has supplied yq.
+    priva_find_env_manager || return 1
+    environments=$("${PRIVA_ENV_MANAGER}" env list) || return 1
+    if ! awk -v name="${env_name}" '$1 == name { found = 1 } END { exit !found }' <<< "${environments}"; then
+        log "Creating environment ${env_name} from ${env_yaml}"
+        "${PRIVA_ENV_MANAGER}" env create --name "${env_name}" --file "${env_yaml}" --yes || return 1
+    else
+        log "Reusing existing environment ${env_name}"
+    fi
+    priva_activate_env "${env_name}" || return 1
+
+    # yq and samtools must be usable before main_install reads configuration
+    # or prepares the reference; do not accidentally use the parent environment.
+    for tool in yq samtools vep; do
+        executable=$(type -P "${tool}")
+        if [[ -z ${executable} || ${executable} != "${CONDA_PREFIX}/"* ]]; then
+            log "ERROR: ${env_name} is missing its own ${tool}; update it from ${env_yaml}."
             return 1
         fi
-    fi
+    done
+    packages=$("${PRIVA_ENV_MANAGER}" list --name "${env_name}") || return 1
+    for tool in ensembl-vep perl-bio-procedural perl-bioperl; do
+        if ! awk -v name="${tool}" '$1 == name { found = 1 } END { exit !found }' <<< "${packages}"; then
+            log "ERROR: ${env_name} is missing package ${tool}; update it from ${env_yaml}."
+            return 1
+        fi
+    done
+    PRIVA_INSTALL_ENV_NAME=${env_name}
+    log "Environment ${env_name} is ready; yq is available before configuration parsing."
+}
 
-    # You need to separately install the ensembl-vep and perl-bio-procedural packages
-    # because Bio::Perl module is migrated from perl-bioperl to perl-bio-procedural since perl-bioperl 1.7.3
-    # Or you can directly install the env from our env.yaml file
-    if [[ ${skip_env_creation} -eq 0 ]]; then
-        mamba env create -f ${env_yaml} && \
-        mamba_activate ${env_name} && \
-        [[ $(which vep) =~ ${CONDA_PREFIX} ]] && log "The VEP binaries are successfully linked to the conda env ${env_name}" || \
-        { log "The VEP binaries are not linked to the conda env ${env_name}, please run the function vep_bin_check manually"; return 1; }
-    fi
+
+function priva_configure_cache_paths() {
+    # Run after environment activation: yq supplies JSON; Python handles paths
+    # without evaluating YAML values as shell code. --check makes no changes.
+    local config_file=${1}
+    local mode=${2:-write}
+    local cache_root config_json
+    cache_root=$(yq '.cache_root' "${config_file}") || return 1
+    [[ -z ${cache_root} || ${cache_root} == null || ${cache_root} == '""' ]] && return 0
+    config_json=$(yq '.' "${config_file}") || return 1
+    python - "${config_file}" "${config_json}" "${mode}" <<'PRIVA_CACHE_PY'
+import json
+from pathlib import Path
+import posixpath
+import re
+import sys
+
+
+DEFAULT_CACHE_FOLDERS = {
+    "vep_cache": ("VEP_cache", "vep_cache_dir"),
+    "vep_plugin": ("VEP_plugin", "vep_plugins_dir"),
+    "vep_plugin_cache": ("VEP_plugin_cache", "vep_plugins_cachedir"),
+    "gnomad": ("gnomAD", "gnomad_vcf_dir"),
+    "clinvar": ("ClinVar", "clinvar_vcf_dir"),
+    "cadd": ("CADD", "cadd_parent_dir"),
+}
+
+CACHE_FILE_KEYS = {
+    "gnomad_vcf_chrX", "clinvar_vcf", "clinvar_aa_stat",
+    "clinvar_splice_stat", "clinvar_patho_af_stat", "clinvar_patho_exon_af_stat",
+    "clinvar_gene_stat", "utr_annotator_file", "loftee_parent_dir", "loftee_repo",
+    "human_ancestor_fasta", "loftee_conservation_file", "gerp_bigwig",
+    "alphamissense_prescore", "alphamissense_vcf", "alphamissense_vep_vcf",
+    "alphamissense_pd_stat", "alphamissense_tranx_domain_map",
+    "alphamissense_intolerant_domains", "alphamissense_intolerant_motifs",
+    "all_intolerant_domains", "pm1_regions_pkl", "conservation_file",
+    "splicevault_prescore", "primateai_prescore", "spliceai_snv_prescore",
+    "spliceai_indel_prescore", "cds_fasta_file", "mavedb_file",
+    "pext_mean_bw", "pext_tissue_bw_dir", "cadd_base_dir",
+}
+
+
+def resolve_cache_paths(config):
+    """Resolve six folders and relocate saved paths beneath their old roots."""
+    if not isinstance(config, dict):
+        raise ValueError("The configuration must be a YAML mapping")
+    root = config.get("cache_root")
+    if root is None or root == "":
+        return {}, {}  # Preserve legacy configurations with full directory paths.
+    if not isinstance(root, str) or not re.fullmatch(r"/[A-Za-z0-9_./-]+", root):
+        raise ValueError("cache_root must be an absolute path without spaces or shell characters")
+    root = posixpath.normpath(root)
+    if not root.strip("/"):
+        raise ValueError("cache_root must name a dedicated cache directory")
+
+    folders = config.get("cache_folders")
+    if folders is None:
+        folders = {}
+    if not isinstance(folders, dict):
+        raise ValueError("cache_folders must be a YAML mapping of resource names to folder names")
+    unknown = set(folders) - set(DEFAULT_CACHE_FOLDERS)
+    if unknown:
+        raise ValueError("Unknown cache_folders entries: " + ", ".join(map(str, unknown)))
+    if set(config) & set(DEFAULT_CACHE_FOLDERS):
+        raise ValueError("Indent resource folder names beneath cache_folders")
+
+    directories = {}
+    previous_roots = []
+    for resource, (default_name, key) in DEFAULT_CACHE_FOLDERS.items():
+        name = folders.get(resource, default_name)
+        if not isinstance(name, str) or not re.fullmatch(r"[A-Za-z0-9_][A-Za-z0-9_.-]*", name):
+            raise ValueError(f"cache_folders.{resource} must be one folder name, not a path")
+        directories[key] = posixpath.join(root, name)
+        old = config.get(key)
+        if isinstance(old, str) and old.startswith("/"):
+            old = posixpath.normpath(old)
+            if old != "/":
+                previous_roots.append((old, directories[key]))
+
+    # Check the longest old root first, in case plugin folders were nested.
+    previous_roots.sort(key=lambda pair: len(pair[0]), reverse=True)
+    updates = dict(directories)
+    for key in CACHE_FILE_KEYS:
+        value = config.get(key)
+        if not isinstance(value, str) or not value.startswith("/"):
+            continue
+        for old, new in previous_roots:
+            if value == old or value.startswith(old + "/"):
+                updates[key] = new + value[len(old):]
+                break
+    return directories, updates
+
+
+def render_cache_config(text, updates):
+    """Replace top-level path scalars, retaining unrelated settings/comments."""
+    for key, value in sorted(updates.items()):
+        pattern = re.compile(r"^(" + re.escape(key) + r"[ \t]*:)[^\n]*$", re.MULTILINE)
+        matches = list(pattern.finditer(text))
+        if len(matches) > 1:
+            raise ValueError(f"Duplicate configuration key: {key}")
+        comment = ""
+        if matches:
+            old_value = matches[0].group(0).split(":", 1)[1].strip()
+            scalar = re.fullmatch(r'''(?:"(?:\\.|[^"\\])*"|'(?:''|[^'])*'|[^#]*?)(\s+#.*)?''', old_value)
+            if scalar and scalar.group(1):
+                comment = scalar.group(1)
+        replacement = key + ": " + json.dumps(value) + comment
+        if matches:
+            text = pattern.sub(lambda match: replacement, text)
+        else:
+            text = text.rstrip("\n") + "\n" + replacement + "\n"
+    return text
+
+
+def configure_cache_paths(config_file, config, mode):
+    if mode not in ("write", "--check"):
+        raise ValueError("Use priva_configure_cache_paths CONFIG [--check]")
+    directories, updates = resolve_cache_paths(config)
+    if mode == "--check":
+        print(json.dumps(updates, indent=2, sort_keys=True))
+        return
+    if not updates:
+        return
+    path = Path(config_file)
+    original = path.read_text()
+    updated = render_cache_config(original, updates)
+    for directory in directories.values():
+        Path(directory).mkdir(parents=True, exist_ok=True)
+    if updated != original:
+        path.write_text(updated)
+    for key, directory in directories.items():
+        print(f"{key}: {directory}")
+
+
+if __name__ == "__main__":
+    try:
+        configure_cache_paths(sys.argv[1], json.loads(sys.argv[2]), sys.argv[3])
+    except (OSError, ValueError) as error:
+        print(f"ERROR: {error}", file=sys.stderr)
+        sys.exit(1)
+PRIVA_CACHE_PY
 }
 
 
@@ -122,7 +321,7 @@ function vep_cache_api_install() {
 
     # The VEP_DESTDIR is the directory used to access installed PERL dependencies. Usually you need to specify the current conda env perl installation location for site-packages
     [[ $CONDA_PREFIX =~ envs ]] && \
-    log "currently in a conda env $(basename $CONDA_PREFIX)" || \
+    log "currently in a conda env $(basename "$CONDA_PREFIX")" || \
     { log "Not encouraged to install the VEP dependencies directly in the conda base env. So quit with error."; return 1; }
 
     [[ ${VEP_ASSEMBLY} =~ "hg19" ]] && VEP_ASSEMBLY="GRCh37"
@@ -152,7 +351,7 @@ function vep_cache_api_install() {
     [[ -f ${VEP_PLUGINSDIR}/MaveDB.pm ]] && \
     { log "The PERL5LIB value and PATH value already include ${VEP_DESTDIR} and ${VEP_PLUGINSDIR}, indicating the following installation process has already been succesfully performed. Skip the function for now."; return 0; }
 
-    local conda_env_name=$(basename $CONDA_PREFIX)
+    local conda_env_name=$(basename "$CONDA_PREFIX")
     [[ ${VEP_DESTDIR} =~ ${conda_env_name} ]] && log "The dest dir is set to the directory (${VEP_DESTDIR}) where perl modules are installed by conda" || \
     { log "Since the function is designed to perform follow up installation of VEP upon the installation of VEP dependencies via conda, we only accept installing VEP API at the perl module installation location previously used by conda"; return 1; }
 
@@ -166,14 +365,14 @@ function vep_cache_api_install() {
     # Execute the command
     # After executing the command, we need to bind the new PERL5LIB value with the current conda env
     log "Now we start to install the VEP api and downloading caches (which might take a while to finish). So pls be patient, here is the command we are going to execute: ${cmd}"
-    $cmd && \
-    [[ ! ${PERL5LIB} == *${VEP_DESTDIR}* ]] && conda env config vars set PERL5LIB="$VEP_DESTDIR:$VEP_PLUGINSDIR" || log "The PERL5LIB value is already bound with the current conda env ${CONDA_ENV_NAME}"
-    [[ ! ${PATH} == *${VEP_DESTDIR}* ]] && conda env config vars set PATH="$VEP_DESTDIR:$VEP_DESTDIR/htslib:$PATH" || log "The PATH value is already bound with the current conda env ${CONDA_ENV_NAME}"
-    log "Now we have bound the new PERL5LIB value (adding ${VEP_DESTDIR} and ${VEP_PLUGINSDIR} to the PERL5LIB) with the current conda env ${CONDA_ENV_NAME}" && \
-    log "Now we have bound the new PATH value (adding ${VEP_DESTDIR} to the PATH) with the current conda env ${CONDA_ENV_NAME}" && \
-    mamba_deactivate && \
-    mamba_activate ${conda_env_name} || \
-    { log "Failed to install the VEP api and download caches"; return 1; }
+    $cmd || { log "Failed to install the VEP API and download caches"; return 1; }
+    if [[ ":${PERL5LIB:-}:" != *":${VEP_DESTDIR}:"* || ":${PERL5LIB:-}:" != *":${VEP_PLUGINSDIR}:"* ]]; then
+        priva_env_vars_set PERL5LIB="$VEP_DESTDIR:$VEP_PLUGINSDIR${PERL5LIB:+:$PERL5LIB}" || return 1
+    fi
+    if [[ ":${PATH}:" != *":${VEP_DESTDIR}:"* ]]; then
+        priva_env_vars_set PATH="$VEP_DESTDIR:$VEP_DESTDIR/htslib:$PATH" || return 1
+    fi
+    log "VEP environment settings saved and applied to ${conda_env_name}."
 }
 
 
@@ -186,11 +385,11 @@ function VEP_plugins_install() {
 
 
     [[ $CONDA_PREFIX =~ "envs" ]] && \
-    log "currently in a conda env $(basename $CONDA_PREFIX)" || \
+    log "currently in a conda env $(basename "$CONDA_PREFIX")" || \
     { [[ -z ${conda_env_name} ]] && log "Not encouraged to install the VEP plugins directly in the conda base env. So quit with error." && return 1; }
 
     if [[ -z ${conda_env_name} ]]; then
-        local conda_env_name=$(basename $CONDA_PREFIX)
+        local conda_env_name=$(basename "$CONDA_PREFIX")
     fi
 
     # Install VEP plugins
@@ -397,66 +596,66 @@ EOF
 function CADD_install() {
     local config_file=${1}
     local assembly=${2}
+    local cache_root cadd_version reply
+    local CADD_script CADD_base_dir CADD_parent_dir=""
 
+    priva_configure_cache_paths "${config_file}" || return 1
     [[ -z ${assembly} ]] && assembly=$(read_yaml "${config_file}" "assembly")
     [[ ${assembly} == "hg19" ]] && assembly="GRCh37"
     [[ ${assembly} == "hg38" ]] && assembly="GRCh38"
-    local CADD_script
+    cadd_version=$(read_yaml "${config_file}" "cadd_version")
+    cache_root=$(read_yaml "${config_file}" "cache_root")
 
-    # Running CADD requires 4 big parts of preparations:
-    # 1. snakemake (solved by conda environment)
-    # 2. CADD dependencies (solved by conda environment)
-    # 3. CADD genome annotation file (need to download)
-    # 4. CADD prescores (need to download)
-
-    CADD_script=$(find ${CONDA_PREFIX}/ -type f -name "CADD.sh")
-    if [[ -z ${CADD_script} ]] || [[ ! -f ${CADD_script} ]]; then
-        log "Cannot find the CADD script in the conda environment. Expect a pre-installed CADD via conda (should be included in the conda env yaml file)"
-        return 1
-    fi
-
-    local CADD_cache_dir=$(dirname ${CADD_script})/data
-    local cadd_version=$(read_yaml "${config_file}" "cadd_version")
-    # Note that by default, CADD will use the CADD cache file in the conda environment
-    # Ask the user whether they want to use the default CADD cache directory to store the genome annotation file and the prescores.
-    read -p "Do you want to use the default CADD cache directory ${CADD_cache_dir} to store the genome annotation file and the prescores which could be take up to 1TB space? (yes or no)"
-    if [[ ${REPLY} =~ "yes" ]] || [[ ${REPLY} =~ "y" ]] || [[ ${REPLY} =~ "Y" ]] || [[ ${REPLY} =~ "Yes" ]] || [[ ${REPLY} =~ "YES" ]]; then
-        local CADD_prescore_dir=${CADD_cache_dir}/prescored
-        local CADD_anno_dir=${CADD_cache_dir}/annotations
-        update_yaml ${config_file} "cadd_base_dir" "$(dirname ${CADD_script})"
+    if [[ -n ${cache_root} && ${cache_root} != null ]]; then
+        # A selected cache root is authoritative; do not prompt to store the
+        # large CADD data inside the package-manager environment instead.
+        CADD_parent_dir=$(read_yaml "${config_file}" "cadd_parent_dir")
     else
-        read -p "In this case, you need to download the CADD repo as a zip file and unzip it to a local directory and all the cache files will be store in that directory. Please specify the absolute path to the directory (or return empty path and rely on config.yaml path): "
-        local CADD_parent_dir=${REPLY}
-        [[ ! -d ${CADD_parent_dir} ]] && CADD_parent_dir=$(read_yaml "${config_file}" "cadd_parent_dir")
-        [[ ! -d ${CADD_parent_dir} ]] && { log "The CADD parent directory ${CADD_parent_dir} does not exist, please check the file"; return 1; }
-
-        # Check if the CADD scripts directory exists, if not, download the zip file and unzip it
-        local CADD_base_dir=$(find ${CADD_parent_dir}/ -maxdepth 1 -type d -name "CADD-scripts-*${cadd_version#v}*" -print | head -n1)
-        if [[ ! -d ${CADD_base_dir} ]]; then
-            log "The CADD scripts directory is not found under ${CADD_parent_dir}, now we start to download and unzip the CADD scripts"
-            local CADD_zip_download_url=$(read_yaml "${config_file}" "cadd_zip_download_url") && \
-            wget ${CADD_zip_download_url} -O ${CADD_parent_dir}/CADD-scripts.zip && \
-            unzip ${CADD_parent_dir}/CADD-scripts.zip -d ${CADD_parent_dir}/ && \
-            rm ${CADD_parent_dir}/CADD-scripts.zip && \
-            CADD_base_dir=$(find ${CADD_parent_dir}/ -maxdepth 1 -type d -name "CADD-scripts-*${cadd_version#v}*" -print | head -n1)
-        else
-            log "The CADD scripts directory is already downloaded at ${CADD_base_dir}, skip the downloading process"
-        fi
-
-        # Get the base folder name from the unzipped directory
-        [[ -z ${CADD_base_dir} ]] && { log "Could not find CADD scripts directory"; return 1; }
-        update_yaml ${config_file} "cadd_base_dir" "${CADD_base_dir}" && \
-        log "Now the CADD base directory is ${CADD_base_dir} and it's updated to the config file ${config_file}"
-        local CADD_script="${CADD_base_dir}/CADD.sh" && \
-        local CADD_cache_dir="${CADD_base_dir}/data" && \
-        local CADD_prescore_dir="${CADD_cache_dir}/prescored" && \
-        local CADD_anno_dir="${CADD_cache_dir}/annotations" && \
-        log "Now the CADD script is ${CADD_script}, the CADD cache directory is ${CADD_cache_dir}, the CADD prescore directory is ${CADD_prescore_dir}, the CADD annotation directory is ${CADD_anno_dir}"
-        
-
-        log "CADD installation process completed successfully."
+        # Preserve the previous interactive behavior for legacy configurations.
+        CADD_script=$(find "${CONDA_PREFIX}/" -type f -name CADD.sh -print -quit)
+        [[ -f ${CADD_script} ]] || {
+            log "Cannot find CADD.sh in the active environment"
+            return 1
+        }
+        CADD_base_dir=$(dirname "${CADD_script}")
+        read -r -p "Store CADD data in ${CADD_base_dir}/data? (yes or no) " reply
+        case "${reply}" in
+            y|Y|yes|Yes|YES) ;;
+            *)
+                read -r -p "CADD parent directory (empty uses cadd_parent_dir): " CADD_parent_dir
+                [[ -d ${CADD_parent_dir} ]] || CADD_parent_dir=$(read_yaml "${config_file}" "cadd_parent_dir")
+                [[ -d ${CADD_parent_dir} ]] || {
+                    log "The CADD parent directory does not exist: ${CADD_parent_dir}"
+                    return 1
+                }
+                ;;
+        esac
     fi
 
+    if [[ -n ${CADD_parent_dir} ]]; then
+        CADD_base_dir=$(find "${CADD_parent_dir}/" -maxdepth 1 -type d -name "CADD-scripts-*${cadd_version#v}*" -print -quit)
+        if [[ -z ${CADD_base_dir} ]]; then
+            local archive="${CADD_parent_dir}/CADD-scripts.zip"
+            local url
+            url=$(read_yaml "${config_file}" "cadd_zip_download_url")
+            wget "${url}" -O "${archive}" &&
+                unzip "${archive}" -d "${CADD_parent_dir}/" &&
+                rm "${archive}" || return 1
+            CADD_base_dir=$(find "${CADD_parent_dir}/" -maxdepth 1 -type d -name "CADD-scripts-*${cadd_version#v}*" -print -quit)
+        fi
+    fi
+
+    CADD_script="${CADD_base_dir}/CADD.sh"
+    [[ -f ${CADD_script} ]] || {
+        log "CADD.sh was not found in the selected CADD installation: ${CADD_base_dir}"
+        return 1
+    }
+    update_or_append_yaml "${config_file}" "cadd_base_dir" "${CADD_base_dir}" || return 1
+    local CADD_cache_dir="${CADD_base_dir}/data"
+    local CADD_prescore_dir="${CADD_cache_dir}/prescored"
+    local CADD_anno_dir="${CADD_cache_dir}/annotations"
+    mkdir -p "${CADD_anno_dir}" "${CADD_prescore_dir}/${assembly}_${cadd_version}/incl_anno" || return 1
+    log "CADD data directory: ${CADD_cache_dir}"
 
     # Now we start downloading the CADD genome annotations corresponding to the assembly version
     if [[ ${assembly} == "GRCh37" ]] || [[ ${assembly} == "hg19" ]]; then
@@ -1547,7 +1746,7 @@ function LoFtee_install() {
         if [[ ! -d ${loftee_repo} ]]; then
             git clone https://github.com/konradjk/loftee.git ${loftee_repo} && \
             update_yaml "${config}" "loftee_repo" "${loftee_repo}" && \
-            conda env config vars set PERL5LIB="${loftee_repo}/:$PERL5LIB" && \
+            priva_env_vars_set PERL5LIB="${loftee_repo}/:${PERL5LIB:-}" && \
             log "The LOFTEE repository for hg19/GRCh37 is installed at ${loftee_repo} and the PERL5LIB is set to ${PERL5LIB}"
         elif [[ -d ${loftee_repo} ]] && [[ -f ${loftee_repo}/.git ]]; then
             cd ${loftee_repo} && \
@@ -1569,7 +1768,7 @@ function LoFtee_install() {
             git checkout grch38 && \
             git pull && \
             update_yaml "${config}" "loftee_repo" "${loftee_repo}" && \
-            conda env config vars set PERL5LIB="${loftee_repo}/:$PERL5LIB" && \
+            priva_env_vars_set PERL5LIB="${loftee_repo}/:${PERL5LIB:-}" && \
             log "The LOFTEE repository for hg38/GRCh38 is installed at ${loftee_repo} and the PERL5LIB is set to ${PERL5LIB}"
         elif [[ -d ${loftee_repo} ]] && [[ -f ${loftee_repo}/.git ]]; then
             cd ${loftee_repo} && \
@@ -2938,19 +3137,36 @@ function mechanism_resource_install() {
 
 
 function main_install() {
-    local config_file=${1}
+    if [[ $# -eq 1 && ( ${1:-} == -h || ${1:-} == --help ) ]]; then
+        printf 'Usage: bash scripts/install_utils.sh main_install CONFIG\n'
+        printf 'Creates or reuses priva_acmg from %s/acmg_conda_rough.yml.\n' "${BASE_DIR}"
+        printf 'The environment is activated before yq reads CONFIG.\n'
+        return 0
+    fi
+    [[ $# -eq 1 && ${1:-} != -* && -r ${1:-} ]] || {
+        log "ERROR: Supply exactly one readable CONFIG file; see main_install --help."
+        return 2
+    }
+    local config_file
+    config_file=$(realpath "$1") || return 1
+
+    # Prepare the bundled environment before parsing the project configuration.
+    conda_install_vep || return 1
+    local conda_env_name=${PRIVA_INSTALL_ENV_NAME}
+
+    # Resolve/create the selected folders before checking VEP destinations.
+    # Existing resource functions and annotation commands read the saved keys.
+    priva_configure_cache_paths "${config_file}" || return 1
 
     local has_error=0
     local skip_vep_install=0
     [[ "${PRIVA_SMOKE_SKIP_VEP:-0}" == "1" ]] && skip_vep_install=1
     # Read configuration
-    local conda_env_yaml=${BASE_DIR}/$(basename $(read_yaml "$config_file" "conda_env_yaml"))
     local vep_cache_dir=$(read_yaml "$config_file" "vep_cache_dir")
     local vep_plugins_dir=$(read_yaml "$config_file" "vep_plugins_dir")
     local assembly=$(read_yaml "$config_file" "assembly")
     local ref_fasta=$(read_yaml "$config_file" "ref_genome")
     local vep_plugins_cachedir=$(read_yaml "$config_file" "vep_plugins_cachedir")
-    [[ -f ${conda_env_yaml} ]] || { log "The conda env yaml file ${conda_env_yaml} is not found, please check the file"; has_error=1; }
     if [[ ${skip_vep_install} -eq 0 ]]; then
         [[ -d ${vep_cache_dir} ]] || { log "The cache directory for VEP ${vep_cache_dir} is not found, please check the file"; has_error=1; }
         [[ -d ${vep_plugins_dir} ]] || { log "The plugins directory for VEP ${vep_plugins_dir} is not found, please check the file"; has_error=1; }
@@ -2962,19 +3178,6 @@ function main_install() {
     { log "Failed to deploy/index configured reference genome"; return 1; }
     ref_fasta=$(read_yaml "$config_file" "ref_genome")
     [[ -f ${ref_fasta} ]] || { log "The reference genome fasta file ${ref_fasta} is not found, please check the file"; return 1; }
-
-    # Perform installation steps
-    # 1. Install the conda env
-    conda_install_vep "${conda_env_yaml}" || \
-    { log "Failed to install the conda env"; return 1; }
-
-    # Test whether currently the conda env is activated
-    local conda_env_name=$(head -1 ${conda_env_yaml} | awk -F ': ' '{print $2;}')
-    if [[ ${CONDA_PREFIX} =~ ${conda_env_name} ]] && [[ ! -z ${conda_env_name} ]]; then
-        log "The conda env $conda_env_name is already activated"
-    else
-        conda activate $conda_env_name
-    fi
 
     if [[ ${skip_vep_install} -eq 1 ]]; then
         log "PRIVA_SMOKE_SKIP_VEP=1: skipping VEP API/cache, VEP plugins, and LoFtee installation; smoke inputs must already contain complete CSQ annotations."
@@ -3067,6 +3270,6 @@ function main_install() {
 
 
 
-if [[ "${#BASH_SOURCE[@]}" -eq 1 ]]; then
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
     "$@"
 fi

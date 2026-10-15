@@ -19,3 +19,13 @@ source snapshot. `envs/priva-cluster.yml` preserves the key scientific versions
 from the bundled environment export and includes missing cache-builder imports.
 CADD retains its separate upstream Python environments. A successful software
 check does not establish annotation-cache readiness or family-result equality.
+
+`deploy_cluster_{resources,plugin_inputs,gnomad}.py` installs independent,
+resumable resource groups from the reviewed `envs/cluster-*.json` manifests.
+`prepare_cluster_config.py` rewrites old-host paths into a separate deployment
+config with empty family inputs. `cadd_container_exec.sh` provides original
+CADD Python environment entry points; its VEP110 entry is for reference
+qualification only. Production annotation shares the official PriVA VEP113.
+The resource stages keep SpliceAI/PrimateAI imports, unsupported-assembly policy,
+shared CADD transcript qualification, and downstream cache builds explicit.
+Successful downloads alone do not constitute a qualified complete pipeline.

@@ -12,12 +12,12 @@ process CADD_UPSTREAM_ANNOTATE {
     script:
     """
     export OMP_NUM_THREADS=${task.cpus} OPENBLAS_NUM_THREADS=${task.cpus} MKL_NUM_THREADS=${task.cpus} NUMEXPR_NUM_THREADS=${task.cpus}
-    python3 ${quoteCadd(meta.source_root + '/bin/cadd_task.py')} annotate --profile ${quoteCadd(profile)} --assembly ${quoteCadd(meta.assembly)} --input ${quoteCadd(vcf)} --output annotation_bundle
+    python3 ${quoteCadd(meta.source_root + '/bin/cadd_task.py')} annotate --profile ${quoteCadd(profile)} --assembly ${quoteCadd(meta.assembly)} --input ${quoteCadd(vcf)} --output annotation_bundle --annotation-source ${quoteCadd(meta.annotation_source)}
     """
     stub:
     """
     export OMP_NUM_THREADS=${task.cpus} OPENBLAS_NUM_THREADS=${task.cpus} MKL_NUM_THREADS=${task.cpus} NUMEXPR_NUM_THREADS=${task.cpus}
-    python3 ${quoteCadd(meta.source_root + '/bin/cadd_task.py')} annotate --profile ${quoteCadd(profile)} --assembly ${quoteCadd(meta.assembly)} --input ${quoteCadd(vcf)} --output annotation_bundle --stub
+    python3 ${quoteCadd(meta.source_root + '/bin/cadd_task.py')} annotate --profile ${quoteCadd(profile)} --assembly ${quoteCadd(meta.assembly)} --input ${quoteCadd(vcf)} --output annotation_bundle --annotation-source ${quoteCadd(meta.annotation_source)} --stub
     """
 }
 

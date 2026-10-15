@@ -62,6 +62,11 @@ git-annex metadata after all writers finish. Keep Nextflow controller state and
 task work together for resume. Neither an output directory nor a Git commit
 contains all state needed to resume an interrupted pipeline.
 
+Save/materialize analysis inputs with DataLad before the first production
+launch and keep their storage identity stable. Annexing inputs afterwards can
+change resolved paths or modification times and invalidate the recorded run
+identity. The synthetic resume assertion was made before evidence archival.
+
 Existing reference/cache directories can remain under `yangyxt/caches`; analysis
 must not rebuild or alter them. A host-side metadata check through Slurm job
 1514363 on 2026-10-15 found only README files

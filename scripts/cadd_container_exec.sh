@@ -15,8 +15,10 @@ esac
 [[ -s $image ]] || { echo "CADD runtime image has not finished installation: $image" >&2; exit 69; }
 export APPTAINERENV_PREPEND_PATH="$prefix/bin"
 export APPTAINERENV_CONDA_PREFIX="$prefix"
-export APPTAINERENV_OMP_NUM_THREADS="${SLURM_CPUS_PER_TASK:-1}"
+export APPTAINERENV_OMP_NUM_THREADS="${OMP_NUM_THREADS:-${SLURM_CPUS_PER_TASK:-1}}"
 export APPTAINERENV_OPENBLAS_NUM_THREADS=1
+export APPTAINERENV_PYTHONDONTWRITEBYTECODE=1
+export APPTAINERENV_PYTHONNOUSERSITE=1
 if [[ -n ${CADD:-} ]]; then export APPTAINERENV_CADD=$CADD; fi
 if [[ -n ${TMPDIR:-} ]]; then export APPTAINERENV_TMPDIR=$TMPDIR; fi
 # Source/cache files are shared read-only. Analysis staging/results are under

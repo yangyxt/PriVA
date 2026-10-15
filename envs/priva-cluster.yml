@@ -43,6 +43,8 @@ dependencies:
   - perl-bioperl
   - perl-bio-bigfile
   - perl-dbd-sqlite
+  - perl-list-moreutils=0.430
+  - perl-list-moreutils-xs=0.430
   - perl-compress-raw-zlib>=2.201
   - yq=3.4.3
   - git

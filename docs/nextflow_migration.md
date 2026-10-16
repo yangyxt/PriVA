@@ -265,9 +265,12 @@ checks. Keep the acquired hg38 v1 originals without changing the GRCh38 upgrade
 profile. Both PrimateAI v0.2 originals are acquired and passed gzip/header checks
 under `yangyxt/caches/PrimateAI_v0_2/`. Their hg19 installer import remains pending:
 the original formatter can hide a child-sort failure and register a truncated,
-validly indexed file. An independent exact source-to-formatted validation gate
-must pass before receipt publication or promotion; successful original formatting
-logic and row order stay unchanged. Resource-specific imports and readiness
+validly indexed file. The importer now reconstructs the expected uncompressed
+table with the original header/sort rules and checks every child exit and every
+output byte before receipt publication. All 14 validator and 30 import fixtures
+pass, including the demonstrated truncation. Actual full-cache import is queued
+as Slurm 1514620 after 1514615; successful original formatting logic and row order
+stay unchanged. Resource-specific imports and readiness
 checks keep this pending status independent from SpliceAI. Do not duplicate
 downloads, require CLI authentication for this acquisition, or use incomplete files.
 PrimateAI validated import, hg19 MaveDB policy, derived calibration caches and

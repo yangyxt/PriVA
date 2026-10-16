@@ -4,6 +4,10 @@
 //! Gene associations are adapter-derived from caller-verified, exact source-region /
 //! GENCODE context, not publisher-supplied per-gene predictions. The deployment driver
 //! must bind that context, original tables and executable to their provenance hashes.
+//! Multiple context IDs with the same chromosome/symbol/strand retain every gene
+//! interval but emit one symbol per native prediction row: the upstream prediction
+//! is gene-unconditioned. Opposite-strand symbol contexts remain unsupported. Source
+//! prediction rows are never coalesced, including duplicate allele/strand rows.
 //! No ACMG threshold, CADD feature or existing scientific module is changed here.
 //!
 //! Schema audited against Illumina/SpliceAI2 1dcd2a1882a8223095e7529982ae70bcb658340a
@@ -15,7 +19,7 @@
 //! not be reflected again on the minus strand. All selected lexemes are preserved.
 
 use crate::cli::{Result, invalid};
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fs::{File, OpenOptions};
 use std::io::{self, BufRead, BufReader, BufWriter, Write};
 
@@ -159,21 +163,25 @@ fn genes_for_chrom<G: BufRead>(mut reader: G, chrom: &str) -> Result<Vec<Gene>> 
                 return Err(invalid(format!("duplicate gene context ID {}", fields[0])));
             }
             // The official VEP plugin keys matching records by symbol alone.
-            // Multiple IDs sharing a chromosome/symbol are outside this initial
-            // contract, even on opposite strands or nonoverlapping intervals.
+            // Multiple same-strand IDs refer to one gene-unconditioned prediction
+            // at a source POS; retain all intervals and coalesce output labels only.
+            // Opposite strands can carry different predictions, so reject those
+            // symbol contexts even when their intervals do not overlap.
             // Across chromosomes (including PAR X/Y symbols) there is no collision.
-            if let Some(prior) = symbols.insert(
+            let gene_strand = strand(fields[4])?;
+            if let Some((prior_id, prior_strand)) = symbols.insert(
                 (fields[1].to_owned(), fields[5].to_owned()),
-                fields[0].to_owned(),
+                (fields[0].to_owned(), gene_strand),
             ) {
-                return Err(invalid(format!(
-                    "ambiguous symbol {} on {} maps to IDs {prior} and {}",
-                    fields[5], fields[1], fields[0]
-                )));
+                if prior_strand != gene_strand {
+                    return Err(invalid(format!(
+                        "ambiguous symbol {} on {} has opposite-strand context IDs {prior_id} and {}",
+                        fields[5], fields[1], fields[0]
+                    )));
+                }
             }
             let start = positive_coordinate(fields[2])?;
             let end = positive_coordinate(fields[3])?;
-            let gene_strand = strand(fields[4])?;
             if start > end {
                 return Err(invalid("gene_start exceeds gene_end"));
             }
@@ -250,6 +258,10 @@ fn write_header<W: Write>(writer: &mut W) -> Result<()> {
         "##SpliceAI2GeneAssociation=adapter_derived_exact_source_region_GENCODE_context_and_model_strand"
     )?;
     writeln!(writer, "##SpliceAI2PublisherGeneSpecificPrediction=false")?;
+    writeln!(
+        writer,
+        "##SpliceAI2SymbolPolicy=coalesce_same_strand_context_labels_per_source_row_keep_all_gene_ID_intervals"
+    )?;
     writeln!(writer, "##SpliceAI2RecommendedThresholds=0.1,0.25,0.5")?;
     writeln!(
         writer,
@@ -385,15 +397,10 @@ pub fn project<G: BufRead, R: BufRead, W: Write>(
                 next_gene += 1;
             }
             active.retain(|gene| gene.end >= pos);
-            let mut matched = BTreeMap::new();
+            let mut matched = BTreeSet::new();
             for gene in &active {
                 if gene.strand == model_strand {
-                    if let Some(prior) = matched.insert(&gene.name, &gene.id) {
-                        return Err(invalid(format!(
-                            "ambiguous symbol {} maps to IDs {prior} and {} at this locus/strand",
-                            gene.name, gene.id
-                        )));
-                    }
+                    matched.insert(&gene.name);
                 }
             }
             if matched.is_empty() {
@@ -401,7 +408,7 @@ pub fn project<G: BufRead, R: BufRead, W: Write>(
                     "no verified gene interval contains source POS on the model strand",
                 ));
             }
-            for (name, _) in matched {
+            for name in matched {
                 writeln!(
                     output,
                     "{}\t{}\t.\t{}\t{}\t.\t.\tSpliceAI={}|{}|{}|{}|{}|{}|{}|{}|{}|{}",

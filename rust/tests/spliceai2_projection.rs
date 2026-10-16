@@ -178,28 +178,113 @@ fn no_matching_gene_or_opposite_strand_only_fails() {
 }
 
 #[test]
-fn same_symbol_different_ids_is_ambiguous() {
-    let context = genes("G1\tchr1\t1\t30\t+\tSAME\nG2\tchr1\t1\t30\t+\tSAME\n");
-    assert!(
-        run(&context, &table(&[row()]), VariantKind::Snv, false)
-            .unwrap_err()
-            .contains("ambiguous symbol SAME")
+fn same_symbol_same_strand_overlap_keeps_all_intervals_and_emits_once() {
+    let context = genes("G1\tchr1\t1\t30\t+\tSAME\nG2\tchr1\t15\t50\t+\tSAME\n");
+    let rows: Vec<_> = [5, 20, 40]
+        .into_iter()
+        .map(|pos| {
+            let mut r = row();
+            set(&mut r, "pos", &pos.to_string());
+            r
+        })
+        .collect();
+    let (out, stats) = run(&context, &table(&rows), VariantKind::Snv, false).unwrap();
+    assert_eq!(
+        stats,
+        Statistics {
+            input_rows: 3,
+            output_records: 3
+        }
+    );
+    assert_eq!(out.matches("|SAME|").count(), 3);
+    assert_eq!(
+        out.lines()
+            .map(|line| line.split('\t').nth(1).unwrap())
+            .collect::<Vec<_>>(),
+        ["5", "20", "40"]
     );
 }
 
 #[test]
-fn symbol_collision_rejected_across_strands_and_nonoverlapping_loci() {
-    for second in ["G2\tchr1\t1\t30\t-\tSAME\n", "G2\tchr1\t50\t90\t+\tSAME\n"] {
+fn same_chromosome_symbol_opposite_strands_rejected_even_without_overlap() {
+    for second in ["G2\tchr1\t1\t30\t-\tSAME\n", "G2\tchr1\t50\t90\t-\tSAME\n"] {
         let context = genes(&("G1\tchr1\t1\t30\t+\tSAME\n".to_owned() + second));
         assert!(
             run(&context, &table(&[row()]), VariantKind::Snv, false)
                 .unwrap_err()
-                .contains("ambiguous symbol SAME on chr1")
+                .contains("ambiguous symbol SAME on chr1 has opposite-strand context IDs")
         );
     }
     let context =
-        genes("G1\tchr1\t1\t30\t+\tSAME\nG2\tchrX\t50\t90\t+\tSAME\nG3\tchrY\t50\t90\t+\tSAME\n");
+        genes("G1\tchr1\t1\t30\t+\tSAME\nG2\tchrX\t50\t90\t-\tSAME\nG3\tchrY\t50\t90\t+\tSAME\n");
     assert!(run(&context, &table(&[row()]), VariantKind::Snv, false).is_ok());
+}
+
+#[test]
+fn same_symbol_same_strand_nonoverlapping_intervals_are_retained() {
+    let context = genes("G1\tchr1\t1\t30\t+\tSAME\nG2\tchr1\t50\t90\t+\tSAME\n");
+    let mut next = row();
+    set(&mut next, "pos", "60");
+    let (out, stats) = run(&context, &table(&[row(), next]), VariantKind::Snv, false).unwrap();
+    assert_eq!(
+        stats,
+        Statistics {
+            input_rows: 2,
+            output_records: 2
+        }
+    );
+    assert_eq!(out.matches("|SAME|").count(), 2);
+    let mut gap = row();
+    set(&mut gap, "pos", "40");
+    assert!(
+        run(&context, &table(&[gap]), VariantKind::Snv, false)
+            .unwrap_err()
+            .contains("no verified gene interval")
+    );
+}
+
+#[test]
+fn coalescing_context_labels_preserves_prediction_rows_order_and_duplicate_guard() {
+    let context =
+        genes("G1\tchr1\t1\t30\t+\tZETA\nG2\tchr1\t15\t50\t+\tZETA\nG3\tchr1\t1\t30\t+\tALPHA\n");
+    let mut alternate = row();
+    set(&mut alternate, "alt", "G");
+    let (out, stats) = run(
+        &context,
+        &table(&[row(), alternate]),
+        VariantKind::Snv,
+        false,
+    )
+    .unwrap();
+    assert_eq!(
+        stats,
+        Statistics {
+            input_rows: 2,
+            output_records: 4
+        }
+    );
+    assert_eq!(
+        out.lines()
+            .map(|line| line
+                .split('\t')
+                .nth(7)
+                .unwrap()
+                .split('|')
+                .take(2)
+                .collect::<Vec<_>>())
+            .collect::<Vec<_>>(),
+        [
+            vec!["SpliceAI=C", "ALPHA"],
+            vec!["SpliceAI=C", "ZETA"],
+            vec!["SpliceAI=G", "ALPHA"],
+            vec!["SpliceAI=G", "ZETA"]
+        ]
+    );
+    assert!(
+        run(&context, &table(&[row(), row()]), VariantKind::Snv, false)
+            .unwrap_err()
+            .contains("duplicate allele + model strand")
+    );
 }
 
 #[test]

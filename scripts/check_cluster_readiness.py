@@ -68,7 +68,7 @@ def main():
         "software_qualified": "environment.ready.json" in receipts,
         "resources": resources, "completed_stage_receipts": receipts,
         "blockers": [
-            {"resource": "SpliceAI v1 + PrimateAI v0.2", "action": "Import the original licensed prescore files from user-provided paths or the intended BaseSpace account; do not drop their annotation/criteria."},
+            {"resource": "SpliceAI v1 + PrimateAI v0.2", "action": "Authorized MBP browser acquisition is in progress under caches/SpliceAI_v1 and caches/PrimateAI_v0_2. Wait for explicit final-ready paths, validate the matching assembly, then import through the original installer. Do not duplicate downloads or require another CLI login."},
             {"resource": "MaveDB hg19", "action": "Discuss the unavailable assembly-specific annotation and each dependent calculation before omission."},
             {"resource": "Shared PriVA/CADD official VEP113", "action": "Qualify one annotation pass, transcript/peptide/GTF views and complete feature mapping. Packaged CADD VEP110 is reference-only."},
             {"resource": "Derived calibration caches", "action": "Complete gnomAD hg19 liftover, AlphaMissense/ClinVar statistics and other configured cache builders after inputs finish."},

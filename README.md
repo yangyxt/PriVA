@@ -4,15 +4,29 @@ A comprehensive pipeline for ACMG/AMP-based variant interpretation and variant p
 
 ## Nextflow / Rust migration branch
 
-This branch develops a Nextflow compatibility workflow around the existing
-scientific scripts, followed by parity-gated Rust/Polars replacements. See
-[execution and deployment](docs/nextflow_migration.md) and
-[Rust scope and exact comparison](docs/rust-migration.md). The frozen reference
-is commit `09223ef`; no real-family equality is claimed until the selected
-family and complete cache set pass the comparison. `main.nf`, `modules/local/*`
-and `bin/priva_task.py` isolate tasks; `bin/priva-compare` checks exact results;
-`rust/*` contains the experimental final-order module. Existing scientific shell
-and Python files remain the reference during this first milestone.
+This branch develops a Nextflow workflow and one opt-in `priva` Rust/Polars
+binary, with faithful function order and exact comparison to source `09223ef`.
+See [execution and deployment](docs/nextflow_migration.md) and
+[Rust scope and exact comparison](docs/rust-migration.md).
+
+```text
+One official VEP run → PriVA annotation view → family interpretation / Rust ports
+                    ↘ CADD feature enrichment → complete annotation artifact
+                       → pinned standalone cadd-rs → original Python raw + PHRED
+```
+
+`main.nf` isolates existing PriVA tasks; `cadd.nf` develops independent annotation
+and calculation stages. Shared-VEP transcript selection and complete feature
+mapping must be qualified before production activation. CADD retains its original
+Python calculation, scientific dependencies and models. Profile first; enable
+Python optimizations only after exact score/row/order/missingness/failure checks
+and measured timing/memory comparisons against the pinned unmodified reference.
+
+Rust currently covers final ordering and a bounded criteria-summary/posterior
+interface, not all criterion assignment. Cluster software installation has passed;
+cache deployment and calibration are still in progress. Synthetic checks, real
+CADD model tests, public benchmark acceptance and family acceptance are distinct.
+The public benchmark and supplied-family exact ACMG/ranking gates remain pending.
 
 ## Overview
 

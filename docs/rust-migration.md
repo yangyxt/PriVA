@@ -128,6 +128,33 @@ refresh cache files during either run. Use isolated writable task directories
 around the existing immutable resources. VCF hub state must be disabled for both
 runs or frozen and qualified for the identical cohort/control input.
 
+## Source-faithful summary and posterior milestone
+
+The same crate now exposes `priva score-criteria`, with function modules for
+`fix_clingen_term`, `translate_strength_level`, `create_criteria_summary` and
+`calculate_posterior_probability`. It consumes all 28 **already assigned** integer
+criteria (0–5). ClinGen pickle loading and evidence-map resolution remain upstream;
+the caller either explicitly disables override or supplies resolved per-row strings.
+Only the source defaults (prior 0.1, exponential base 2, odds 350) are qualified.
+
+```text
+Validate typed input → summarize all rows → replace one criterion across all rows
+                     → repeat criteria in source order → posterior → serialize
+```
+
+The column-outer override order preserves which malformed row fails first.
+Integer BA1 zero versus a mixed floating column's `0.0` and the original empty
+DataFrame failure are part of the contract. No criterion assignment, ranking
+penalties or full family interpretation are claimed by this interface.
+
+The installed reference environment (Python 3.12.3, NumPy 1.26.4, pandas 2.2.3)
+passed **19,754 exact parsed-cell rows**, **16 failure/overwrite cases**, **9 Rust
+tests**, and the existing **60 terminal-order cases + 5 rejections**. The scoring
+oracle checks source SHA256
+`9111a76e3fc94a064e14d97b535bb1dd2132f7c61836f8e8892477d4c5e69646`.
+Use `rust/tests/differential_scoring.py` with the built `priva` executable.
+These synthetic tests do not qualify complete ACMG assignment or family results.
+
 ## Port order and boundaries
 
 | Stage | Python scope | Rust/Polars replacement and gate |

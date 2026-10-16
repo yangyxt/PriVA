@@ -262,11 +262,15 @@ The user has confirmed all four licensed SpliceAI v1 VCFs and indexes complete,
 with basic parser/index checks, under `yangyxt/caches/SpliceAI_v1/`. Import the
 current hg19 pair through the real `install_utils.sh` prompts after full integrity
 checks. Keep the acquired hg38 v1 originals without changing the GRCh38 upgrade
-profile. PrimateAI acquisition still needs BaseSpace browser sign-in; its approved
-root is `yangyxt/caches/PrimateAI_v0_2/`. Resource-specific imports and readiness
-checks keep its pending status independent from SpliceAI. Do not duplicate
+profile. Both PrimateAI v0.2 originals are acquired and passed gzip/header checks
+under `yangyxt/caches/PrimateAI_v0_2/`. Their hg19 installer import remains pending:
+the original formatter can hide a child-sort failure and register a truncated,
+validly indexed file. An independent exact source-to-formatted validation gate
+must pass before receipt publication or promotion; successful original formatting
+logic and row order stay unchanged. Resource-specific imports and readiness
+checks keep this pending status independent from SpliceAI. Do not duplicate
 downloads, require CLI authentication for this acquisition, or use incomplete files.
-PrimateAI completion, hg19 MaveDB policy, derived calibration caches and
+PrimateAI validated import, hg19 MaveDB policy, derived calibration caches and
 shared-VEP/CADD qualification remain explicit gates. Current scheduler
 status and exact completed test counts are maintained in the project README,
 not inferred from this implementation checkpoint.

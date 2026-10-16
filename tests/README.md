@@ -25,6 +25,16 @@ installer prevent a completion receipt. These tests require the installed
 `priva_acmg` tools (`bgzip`, `tabix`, `yq`) and PyYAML; they never read the
 MBP-managed downloads or perform real licensed-cache imports.
 
+The licensed-import fixtures do not require Git history: each current checkout
+script is accepted only when its SHA256 equals the recorded bytes of installer
+`054b4944055054148005016192647a8ed0384eef`. The four hashes are in
+`REFERENCE_SHA256` in the test module. A changed source fails before creating the
+fixture snapshot; there is no fallback to a newer installer. If these scripts
+later change, explicitly retain/review the frozen oracle rather than replacing
+its identity silently. CI installs Ubuntu's `tabix` package (including `bgzip`)
+and `yq`, records their package versions, and retains real installer fixture
+execution. This test tooling does not qualify production scientific software.
+
 Cluster deployment integrity: `test_cluster_deployment.py` checks atomic
 publication, corruption rejection, unchanged-cache reuse, and rejection of
 unidentified or modified FASTA/container resources without network or solver

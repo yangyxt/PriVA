@@ -23,7 +23,10 @@ main() {
     mkdir -p "$diagnostic/source" "$diagnostic/bin" "$diagnostic/manager" "$diagnostic/tmp"
     git -C "$repo" archive "$revision" | tar -xf - -C "$diagnostic/source"
     printf '%s\n' "$revision" > "$diagnostic/source/REFERENCE_COMMIT"
-    sha256sum "$diagnostic/source/scripts/install_utils.sh" "$state/environment.explicit.txt" "$state/environment.ready.json"
+    sha256sum "$diagnostic/source/scripts/install_utils.sh" "$state/environment.ready.json"
+    /stornext/snfs170/next-gen/scratch/yangyxt/mamba/bin/micromamba env export --name priva_acmg --explicit > "$diagnostic/environment.conda-explicit.txt"
+    grep -qx '@EXPLICIT' "$diagnostic/environment.conda-explicit.txt"
+    sha256sum "$diagnostic/environment.conda-explicit.txt"
     cat > "$diagnostic/bin/micromamba" <<'MANAGER'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -32,7 +35,7 @@ exec env MAMBA_ROOT_PREFIX="$diagnostic/manager" CONDA_ENVS_PATH="$diagnostic/ma
 MANAGER
     chmod +x "$diagnostic/bin/micromamba"
     export MAMBA_EXE="$diagnostic/bin/micromamba"
-    "$MAMBA_EXE" create --name priva_acmg --file "$state/environment.explicit.txt" --always-copy --offline --yes
+    "$MAMBA_EXE" create --name priva_acmg --file "$diagnostic/environment.conda-explicit.txt" --always-copy --offline --yes
     activation=$("$MAMBA_EXE" shell activate --shell bash --name priva_acmg)
     eval "$activation"
     [[ $CONDA_PREFIX == "$diagnostic/manager/envs/priva_acmg" ]] || return 66

@@ -13,10 +13,17 @@ Conservation ordering/reuse, and the configured AlphaMissense motif output.
 External tools are replaced for these orchestration tests; they do not claim
 scientific liftover or annotation equivalence.
 
-`test_cluster_licensed_import.py` adds five preflight checks: incomplete or
-unconfirmed acquisitions, mismatched assemblies, missing resource roles, and
-an existing output config all stop before licensed cache access or replacement.
-These checks do not read the MBP-managed downloads or perform actual imports.
+`test_cluster_licensed_import.py` covers explicit resource subsets and the
+unchanged combined default. Tiny synthetic BGZF/index fixtures run the frozen
+installer functions and verify resource selection, receipt scope, unchanged
+unselected configuration, and preserved source bytes. Preflight cases reject
+incomplete/unconfirmed acquisitions, missing or extra roles, wrong assemblies,
+wrong cache roots or variant types, partial filenames, missing/escaped indexes,
+size/checksum mismatches, and existing destinations. Source/index mutations during checksum
+stop before config creation or installer invocation; mutations during the
+installer prevent a completion receipt. These tests require the installed
+`priva_acmg` tools (`bgzip`, `tabix`, `yq`) and PyYAML; they never read the
+MBP-managed downloads or perform real licensed-cache imports.
 
 Cluster deployment integrity: `test_cluster_deployment.py` checks atomic
 publication, corruption rejection, unchanged-cache reuse, and rejection of

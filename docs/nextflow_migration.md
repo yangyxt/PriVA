@@ -97,15 +97,18 @@ All 24 SNV chromosomes (`chr1`–`chr22`, `chrX`, `chrY`) and 23 indel chromosom
 are exactly `SpliceAI2_GRCh38_{snv,indel}_chr*.tsv.gz`. Partial names/targets,
 downloading inventories, missing/extra/duplicate shards and wrong hashes fail.
 The scored-region parser requires exactly
-`gene_id,chrom,gene_start,gene_end,strand` as tab-separated columns; real publisher
-schema/interval qualification remains a required acquisition-time check.
+`gene_id,chrom,gene_start,gene_end,strand` as tab-separated columns; the complete
+real publisher table has now passed the exact interval qualification below.
 
-For each region, exact GENCODE gene ID, contig, bounds, strand and protein-coding
-biotype must agree. No version stripping or symbol aliases are used. One global
-0-based-half-open or 1-based-closed source convention must explain every region;
-the resulting context is 1-based closed. Same-chromosome symbol-to-multiple-ID
-ambiguities fail, including nonoverlapping/opposite-strand cases; cross-chromosome
-symbols do not collide in the plugin lookup.
+Match each publisher stable gene ID uniquely to the exact GENCODE v48 gene feature, requiring identical contig, bounds, strand and protein-coding biotype. Only the numeric version in ENSG IDs is removed for lookup; preserve any _PAR_Y suffix and retain the full versioned GTF ID in the context. Reject aliases, ambiguous versions and mismatches. One coordinate convention must match every region; the complete real table is verified as 1-based closed.
+
+The declared GTF grammar is `(ENSG[0-9]{11})\.[0-9]+(_PAR_Y)?`; for
+example, `ENSG00000123456.7_PAR_Y` maps to stable key
+`ENSG00000123456_PAR_Y`, while retaining the full versioned ID. Exact-ID
+matches are also accepted. This is not gene-symbol aliasing.
+
+Join each source POS and model strand to every containing verified gene. Retain all gene IDs and intervals; coalesce only same-chromosome, same-strand context labels to one VCF line per distinct symbol per native prediction, in lexical symbol order. Never merge or omit source prediction rows. Reject opposite-strand same-symbol contexts, unmapped records and duplicate variant+strand inputs. POS containment does not imply that the whole deletion span or predicted splice sites lie inside the gene. Cross-chromosome symbols do not collide in plugin lookup.
+GENCODE documents [version and PAR identifiers](https://www.gencodegenes.org/pages/data_format.html).
 
 Rust validates every native column and streams ascending positions. It attaches
 each source POS/model strand to all containing verified genes, emits symbols in
@@ -130,7 +133,9 @@ is **58,971,717 bytes**, SHA256
 Publisher MD5 `3eb94f7f200b42eb85d56b3afae5b0e7`, gzip integrity and release/header
 checks passed. Resource receipt:
 `yangyxt_dt/projects/PriVA_upgrade/deployment/spliceai2-gencode48.ready.json`.
-This does not establish scored-region agreement or complete cache conversion.
+Download job 1514724 completed with exit 0 in 36m59s: all 47 final score shards are present and no partial files remain. The complete 20,083-row scored-region table passed a separate exact GENCODE48 metadata check under Slurm: 20,083 unique stable-ID mappings, 1-based-closed coordinates, ten same-strand duplicate-symbol groups and zero ID/bounds/strand/biotype mismatches. All versioned gene IDs remain in the context. The 840,490-byte region file has SHA256 293d2b45ac19778fb907aaa3cb8bfc7c10f518855c5096d36f9061b413109d76 and also matches pinned publisher Git blob 6d293e9e2f694f33115ce94bf18b786d6dcb8d5f. Closed metadata evidence is under yangyxt_dt/projects/PriVA_upgrade/validation/spliceai2-real-context-20261015/. The complete execution manifest is constructed and saved in DataLad commit 5f5946b. Full-file checksum revalidation, complete score conversion and real indexed-VEP qualification remain pending; download completion is not scientific readiness.
+
+The earlier anonymous publisher inventory is retained at yangyxt_dt/projects/PriVA_upgrade/deployment/spliceai2-publisher-inventory-cd1b8b8.json: 47 shards total 348,102,852,751 bytes, with content hashes redacted in that API response. The checksum handoff is now resolved: caches/README.md records all 47 expected SHA256 values recovered from authenticated raw Git-LFS pointer metadata at the pinned dataset revision, plus complete VERIFIED acquisition receipts. Every full download matched the expected bytes/hash before its final rename. Content SHA256 values are distinct from Git pointer-blob OIDs. Full deployment revalidation and conversion remain separate. The publisher gene-table construction code was not available in the inspected source, so stable-ID matching is an explicit validated adapter rule, not a claim about the publisher’s stripping algorithm.
 Sources: [GENCODE v48](https://www.gencodegenes.org/human/release_48.html),
 [publisher MD5 inventory](https://ftp.ebi.ac.uk/pub/databases/gencode/Gencode_human/release_48/MD5SUMS).
 
@@ -162,10 +167,17 @@ the full installer rejects this as an installation receipt. It is not a way to
 activate an incomplete cache. Converter/source/compression/index failures prevent
 a completion receipt; PID-only cancellation behavior is not qualified here.
 
+Current qualification: Rust source 225aa4a (integration 32212d7) passed 32 projection plus 9 existing tests. The final Python suite passed 197 tests, zero failures/skips, in 190.847 seconds at f8de4b32beaf3bf5185ef53f75be162833055153: 169 installer/deployment tests (including 25 driver tests), 20 Nextflow adapter tests and 8 BGZ-validator tests. Bash/YAML/diff checks passed. Its log is yangyxt_dt/projects/PriVA_upgrade/logs/spliceai2-final-integration-20261015.log.
+
+Bounded real-cache check: 256 SNV plus 256 indel prefix rows from chr1, all positive-strand, passed an independent column-name-based full-record/order oracle and real bgzip/tabix queries with zero mismatches. Verifier f8de4b3 first checked the debug converter from 225aa4a; receipt: yangyxt_dt/projects/PriVA_upgrade/validation/spliceai2-real-projection-225aa4a-debug/receipt.json. The same 512 source rows were independently rechecked against the installed optimized release with zero mismatches; this remains 512 unique rows, not 1,024. This is real precomputed-row conversion, not model inference, whole-cache coverage, full VEP execution, public-sample or supplied-family acceptance.
+
+Optimized converter installed: source 225aa4aa774b4be7f53576e1cde56af71e67bd2c, executable SHA256 bbc3b7288ed2ea63f1f8455ed87b8a9d08c7bc1fe0a562c1d6134525e2a12dc6, at yangyxt/softwares/priva-tools-225aa4a/bin/priva. Installation checks detected a stale shared Cargo release artifact before deployment; a forced package rebuild and installed smoke check corrected it, and the receipt retains the failed attempt. All 25 driver cases passed again against the installed release. Unique suite totals remain 197 Python and 41 Rust tests; reruns are not additional cases. Full preparation job 1514732 is running on c81o-03 with 4 CPUs, 16 GB and a seven-day limit. It freezes installer f8de4b3 and the installed optimized converter; the submitted wrapper SHA256 is 3914a77aa9972a1f1a74e48b727fee74af92c9763e2da900fa9e9bc978395263. It writes yangyxt/caches/VEP_plugin_cache/SpliceAI2/GRCh38 using the isolated config yangyxt/softwares/priva-cluster-grch38-spliceai2/config.yaml. The complete execution manifest yangyxt_dt/projects/PriVA_upgrade/deployment/spliceai2-GRCh38.downloads-complete.json and its handoff were saved in DataLad commit 5f5946b before launch. Full checksum revalidation/conversion success and real VEP/scientific acceptance remain pending.
+
 The [official-plugin harness](spliceai2-plugin-audit.md) passed 11 subtests / 38
 assertions using real plugin/Ensembl allele matching and synthetic candidates.
 Its tabix and light VEP objects are fixtures; no reference, real index or full VEP
-execution is exercised. Rust source `428ce4c` (integrated as `c432668`) passed
+execution is exercised. Historical checks before the stable-ID/same-strand-symbol
+policy update: Rust source `428ce4c` (integrated as `c432668`) passed
 30 projection plus 9 existing tests. The combined Slurm run passed **165 tests**
 with zero failures/skips in 85.702 seconds: 119 existing/route, 14 runtime guards,
 21 driver and 11 deployment tests. The driver suite uses real Rust, bgzip and
@@ -177,7 +189,7 @@ uncommitted-file hashes, not a later checkout, identify the tested driver.
 Bash/YAML/diff checks also passed. No completed real 47-shard conversion,
 v2 ACMG/CADD activation or supplied-family parity is claimed.
 
-Nextflow activation guard: shared bin/priva_task.py validation rejects explicit v2 scientific configuration in the launch/task path, including preannotated import/resume, and rejects SpliceAI2-marked input headers. Namespaced prepared-resource metadata remains allowed. A separate adapter suite passed 20 tests (16 existing + 4 new) under Slurm, covering launch and all three task phases before output; this is separate from the 165 installer/deployment tests. Unmarked external preannotated artifacts still require pinned scientific-profile provenance: predictor version cannot be inferred from numeric scores.
+Nextflow activation guard: shared bin/priva_task.py validation rejects explicit v2 scientific configuration in the launch/task path, including preannotated import/resume, and rejects SpliceAI2-marked input headers. Namespaced prepared-resource metadata remains allowed. The 20-test adapter suite (16 existing + 4 new) passed under Slurm, covering launch and all three task phases before output. It is included once in the current 197-test total and was separate from the historical 165 installer/deployment tests. Unmarked external preannotated artifacts still require pinned scientific-profile provenance: predictor version cannot be inferred from numeric scores.
 
 ## Frozen source and branch
 
@@ -422,13 +434,15 @@ PrimateAI import 1514620 both completed with exit 0 and valid receipts. The latt
 retains the original formatter and exact external source-to-formatted validation,
 including every child exit and full decompressed output comparison. The earlier
 queued-import checkpoint is superseded; cancelled job 1514618 never ran. Original
-hg38 files stay retained and unselected. Main-config promotion is separately
-tracked and does not follow automatically from an import receipt.
+hg38 files stay retained and unselected. Separate main-config promotion has now
+updated only the three selected hg19 resource-path keys with a receipt; scientific
+VEP/family qualification remains pending.
 
-GENCODE48 is verified for the separate SpliceAI2 preparation route; the final
-scored-region TSV remains absent at the latest metadata check, and full v2
-conversion is pending. gnomAD derived job 1514601 failed extension validation for
-`.vcf.bgz`; its repair is separate. AlphaMissense 1514589 remains held for the
+SpliceAI2 download job 1514724 completed and all 20,083 real scored regions
+passed exact GENCODE48 context validation; full deployment revalidation, complete conversion
+and indexed-VEP qualification remain pending. gnomAD job 1514601 failed extension
+validation for `.vcf.bgz`; replacement 1514729 is running with the minimal fix
+(eight focused tests passed). AlphaMissense 1514589 remains held for the
 original NM-to-ENST mapping. Hg19 MaveDB policy, derived calibration caches and
 shared-VEP/CADD qualification remain explicit gates. Do not duplicate the
 owner-managed acquisition or consume partial files. No scientific evidence has

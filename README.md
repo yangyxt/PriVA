@@ -30,8 +30,10 @@ cache deployment and calibration are still in progress. Synthetic checks, real
 CADD model tests, public benchmark acceptance and family acceptance are distinct.
 The public benchmark and supplied-family exact ACMG/ranking gates remain pending.
 
-The actual installer reproduced and fixed VEP's unattended false success; the
-corrected run reached the pinned cache download. Full cache deployment continues.
+The actual installer reproduced and fixed VEP's unattended false success. The
+separate reference/VEP deployment job 1514579 has now completed (0:0) at
+2026-10-16T08:21:30Z; deployment evidence is recorded below. Full installation
+and scientific qualification remain pending.
 Both 18-row CADD assembly fixtures now match original Python exactly through
 Nextflow. One `NaN` edge still changes the wrapper exit status when original
 Python emits a malformed table; this mismatch remains reported and unaccepted.
@@ -68,23 +70,33 @@ files remain retained and unselected. Separate main-config promotion updated onl
 the three selected hg19 resource-path keys with a receipt; scientific qualification
 remains pending. gnomAD job 1514601 failed its `.vcf.bgz` extension validation;
 replacement 1514729 is running with the minimal fix (eight focused tests passed).
-AlphaMissense 1514589
-remains held for the original NM-to-ENST mapping. No evidence is silently omitted.
+AlphaMissense 1514589 remains PENDING with reason `JobHeldUser` for the
+original NM-to-ENST mapping. VEP completion does not resolve that prerequisite
+or authorize a RefSeq/MANE substitute. No evidence is silently omitted.
 The [installation dependency ledger](docs/installation-dependency-ledger-09223ef.md)
 records the ordered calibration recipe and separates bundled ClinVar baseline
 statistics from its currently unqualified fresh-build path.
 
-Resource update, **2026-10-16T08:03:30Z**:
+Resource update, **2026-10-16T08:46:04Z** (SpliceAI2/held-job check around 08:45Z):
 
 | Installation work | Verified state | Remaining gate |
 | --- | --- | --- |
+| Reference + VEP113 merged cache 1514579 | COMPLETED (0:0) at 2026-10-16T08:21:30Z after 8 h 39 m 49 s. Both stage receipts are deployed. Full archive checks, FASTA/index samples and bounded canonical-cache layout/header checks passed at 08:46:04Z, using frozen `fc21869`. The existing config already selects the reference and cache. | No real VEP/plugin annotation was run by this audit. Shared-VEP/CADD, public-sample and supplied-family acceptance remain pending. AlphaMissense remains held for the original NM-to-ENST mapping. |
 | CADD prescore recovery 1514744 | COMPLETED (0:0), 13 m 15 s, with a deployed receipt for the four Washington GRCh37 v1.7 files. Existing SNV/index and indel bytes passed full MD5 rechecks; only the missing matching index was downloaded. Real indexed-pair checks passed all 24 contigs in each SNV/indel pair. Source `20774bd` has 20 deployment and 31 licensed-import fixture tests passed. | Deployment and bounded indexed access are verified. Real VEP/model, shared-annotation, public-sample and supplied-family acceptance remain pending. |
 | SpliceVault 1514603 | COMPLETED (0:0) at 2026-10-16T07:03:13Z; the original release113-to-GRCh37 derived resource is built, verified and already configured. | Real VEP use, scientific qualification and supplied-family acceptance remain pending. |
 
 The [deployment checkpoint](docs/nextflow_migration.md#current-cluster-build-checkpoint)
-records the recovery guards, closed test evidence and SpliceVault verification.
+records the reference/VEP audit, recovery guards, closed test evidence and SpliceVault verification.
+Reference/VEP job 1514579 used frozen source
+`fc2186901029acc88cd41bb004828778c1fd1cb8`, distinct from the CADD recovery source.
+DataLad `80bb1f0` records its closed receipts/log and
+`validation/vep-reference-receipt-verified-1514579.json`, with descriptive metadata
+recorded and all five selected paths clean.
 Recovery source `20774bd` passed [CI 38869590348](https://github.com/yangyxt/PriVA/actions/runs/38869590348).
 DataLad `9e70725` records the closed recovery receipt/log and indexed-pair report/log.
+The documentation base `b171466c31d9e695af22c943e824f024b238b482` passed
+[CI 38871801476](https://github.com/yangyxt/PriVA/actions/runs/38871801476), checked
+at 08:46:31Z; these documentation edits are subsequent.
 Installation progress leaves the original-Python pin and experimental-backend
 acceptance boundaries above unchanged.
 
@@ -121,8 +133,9 @@ complete 20,083-region stable-ID join passed with exact bounds/strand/biotype.
 Full GTF IDs/versions and `_PAR_Y` remain in context; ten same-strand symbol
 groups coalesce labels only per prediction, while opposite-strand symbol contexts
 fail. The execution manifest is complete and saved in DataLad commit 5f5946b.
-All 47 full source SHA256 checks passed in frozen job 1514732, which has started
-projecting SNV chr1; complete conversion and indexed-VEP checks remain pending.
+All 47 full source SHA256 checks passed in frozen job 1514732. At the bounded
+2026-10-16 ~08:45Z scheduler/log check it was RUNNING on c81o-03 and its log
+had reached SNV chr4; complete conversion and indexed-VEP checks remain pending.
 
 ```text
 Assembly → decompressed headers → VCF passthrough / native84 adapter
@@ -164,7 +177,9 @@ inference, whole-cache, full VEP, public-sample or family acceptance.
 All 47 publisher SHA256 values and VERIFIED acquisition receipts are now supplied
 in [caches/README.md](../../caches/README.md). The complete execution manifest and handoff were saved in DataLad commit 5f5946b before launch. Full preparation job
 1514732 is running on c81o-03 (4 CPUs, 16 GB, 7 days), using frozen installer f8de4b3 and
-the isolated GRCh38 preparation config; all 47 full source SHA256 checks passed and SNV chr1 projection started; complete conversion is pending. Optimized
+the isolated GRCh38 preparation config; all 47 full source SHA256 checks passed.
+The bounded 2026-10-16 ~08:45Z check confirmed RUNNING and a log through SNV
+chr4; complete conversion is pending. Optimized
 source 225aa4aa774b4be7f53576e1cde56af71e67bd2c is installed at
 `yangyxt/softwares/priva-tools-225aa4a/bin/priva`, SHA256
 `bbc3b7288ed2ea63f1f8455ed87b8a9d08c7bc1fe0a562c1d6134525e2a12dc6`.

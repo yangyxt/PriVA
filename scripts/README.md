@@ -30,6 +30,26 @@ The resource stages keep SpliceAI/PrimateAI imports, unsupported-assembly policy
 shared CADD transcript qualification, and downstream cache builds explicit.
 Successful downloads alone do not constitute a qualified complete pipeline.
 
+Reference/VEP deployment, 2026-10-16: **1514579 COMPLETED (0:0)** at
+08:21:30Z after 8 h 39 m 49 s, using 2 CPUs / 8 GB; batch MaxRSS was
+28,420 KiB. Frozen source `fc2186901029acc88cd41bb004828778c1fd1cb8`
+produced deployed `deployment/{reference,vep}.ready.json` receipts with manifest
+SHA256 `b61cbeb328bceac5b72b8a7f55205976848de58cb988b78c816c38cdb3769b84`.
+The 08:46:04Z audit passed full archive hashes, pinned publisher checksums and full FASTA SHA256,
+93 FASTA headers / 279 indexed positions, all 6,278 expected canonical-cache
+entries, 146 sampled transcript/regulatory chunk headers and 25 variation/CSI
+magic pairs. The extracted cache payloads were not fully rehashed, and no real
+VEP/plugin annotation was run. The existing isolated config already selects the
+reference and VEP cache; no config edit was required. The closed-log command and
+frozen code are verified, while the submitted wrapper was unavailable.
+Scientific/shared-CADD, public-sample and family qualification remain pending.
+AlphaMissense stays held for the original mapping as described below.
+DataLad `80bb1f0` records the receipts, closed
+`logs/cluster-reference-vep_1514579.log`,
+`validation/vep-reference-receipt-verified-1514579.json` and data-project README:
+five selected paths, four added/updated, with metadata recorded and selected
+paths clean. The read-only audit used Slurm allocation 1514363.
+
 CADD prescore recovery, 2026-10-16: source
 `20774bd56a706d8b82a5640bf23b758216544136` binds the Washington GRCh37 v1.7
 download root and `MD5SUMs` to the historical indel data MD5
@@ -65,8 +85,10 @@ not establish the existing output's mapping provenance. Fresh calculations
 recheck mapping hash and file identity before completion/config updates.
 The mapping is neither selected nor downloaded here: its positional ENST/NM
 columns and scientific provenance still need approval. Scientific Python is
-unchanged, and held job `1514589` remains an older frozen submission; updating
-this wrapper does not update that job or authorize its release.
+unchanged, and held job `1514589` remains an older frozen submission: PENDING,
+`JobHeldUser`, even after VEP job 1514579 completed. Updating this wrapper does
+not update that job or authorize its release. The original mapping remains
+required; a RefSeq/MANE substitute is not qualified.
 
 `diagnose_cluster_install.sbatch`
 runs the unchanged historical `main_install` in a separate writable prefix,
@@ -198,8 +220,9 @@ All 20,083 real regions passed the stable-ID/GENCODE48 join, retaining full
 versions and `_PAR_Y`; ten same-strand symbol groups retain all IDs/intervals
 and coalesce labels only per prediction. Opposite-strand symbol contexts fail.
 The execution manifest is complete and saved in DataLad commit 5f5946b.
-All 47 full source SHA256 checks passed in frozen job 1514732, which has begun
-projecting SNV chr1; complete conversion and indexed-VEP qualification remain pending. Publisher expected SHA256 values and VERIFIED acquisition receipts for
+All 47 full source SHA256 checks passed in frozen job 1514732. At the bounded
+2026-10-16 ~08:45Z scheduler/log check it was RUNNING on c81o-03 and its log
+had reached SNV chr4; complete conversion and indexed-VEP qualification remain pending. Publisher expected SHA256 values and VERIFIED acquisition receipts for
 all 47 shards are now supplied in [caches/README.md](../../../caches/README.md);
 there is no missing-publisher-checksum blocker. Current Rust 225aa4a passed 32
 projection + 9 existing tests; Python f8de4b3 passed 197 tests with zero failures/skips.
@@ -213,5 +236,5 @@ the frozen checkpoint had 197 Python/41 Rust tests and 512 rows; current interfa
 release artifact was detected before deployment; forced rebuilding and installed
 smoke checks corrected it, with the failure retained in the receipt. Full preparation job 1514732 is running on c81o-03 (4 CPUs, 16 GB, 7 days) using frozen
 installer f8de4b3, this converter and the isolated GRCh38 config. The manifest/
-handoff were saved in DataLad commit 5f5946b before launch; all 47 full source SHA256 checks passed and SNV chr1 projection started; complete conversion remains pending.
+handoff were saved in DataLad commit 5f5946b before launch; all 47 full source SHA256 checks passed. The bounded 2026-10-16 ~08:45Z check confirmed RUNNING and a log through SNV chr4; complete conversion remains pending.
 Original licensed source and derived views remain local under their resource terms.

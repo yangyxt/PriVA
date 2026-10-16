@@ -123,7 +123,7 @@ is **58,971,717 bytes**, SHA256
 Publisher MD5 `3eb94f7f200b42eb85d56b3afae5b0e7`, gzip integrity and release/header
 checks passed. Resource receipt:
 `yangyxt_dt/projects/PriVA_upgrade/deployment/spliceai2-gencode48.ready.json`.
-Download job 1514724 completed with exit 0 in 36m59s: all 47 final score shards are present and no partial files remain. The complete 20,083-row scored-region table passed a separate exact GENCODE48 metadata check under Slurm: 20,083 unique stable-ID mappings, 1-based-closed coordinates, ten same-strand duplicate-symbol groups and zero ID/bounds/strand/biotype mismatches. All versioned gene IDs remain in the context. The 840,490-byte region file has SHA256 293d2b45ac19778fb907aaa3cb8bfc7c10f518855c5096d36f9061b413109d76 and also matches pinned publisher Git blob 6d293e9e2f694f33115ce94bf18b786d6dcb8d5f. Closed metadata evidence is under yangyxt_dt/projects/PriVA_upgrade/validation/spliceai2-real-context-20261015/. The complete execution manifest is constructed and saved in DataLad commit 5f5946b. Frozen job 1514732 has passed all 47 full source SHA256 checks and begun projecting SNV chr1. Complete score conversion and real indexed-VEP qualification remain pending; source verification is not scientific readiness.
+Download job 1514724 completed with exit 0 in 36m59s: all 47 final score shards are present and no partial files remain. The complete 20,083-row scored-region table passed a separate exact GENCODE48 metadata check under Slurm: 20,083 unique stable-ID mappings, 1-based-closed coordinates, ten same-strand duplicate-symbol groups and zero ID/bounds/strand/biotype mismatches. All versioned gene IDs remain in the context. The 840,490-byte region file has SHA256 293d2b45ac19778fb907aaa3cb8bfc7c10f518855c5096d36f9061b413109d76 and also matches pinned publisher Git blob 6d293e9e2f694f33115ce94bf18b786d6dcb8d5f. Closed metadata evidence is under yangyxt_dt/projects/PriVA_upgrade/validation/spliceai2-real-context-20261015/. The complete execution manifest is constructed and saved in DataLad commit 5f5946b. Frozen job 1514732 has passed all 47 full source SHA256 checks. At the bounded 2026-10-16 ~08:45Z scheduler/log check it was RUNNING on c81o-03 and its log had reached SNV chr4. Complete score conversion and real indexed-VEP qualification remain pending; source verification is not scientific readiness.
 
 The earlier anonymous publisher inventory is retained at yangyxt_dt/projects/PriVA_upgrade/deployment/spliceai2-publisher-inventory-cd1b8b8.json: 47 shards total 348,102,852,751 bytes, with content hashes redacted in that API response. The checksum handoff is now resolved: caches/README.md records all 47 expected SHA256 values recovered from authenticated raw Git-LFS pointer metadata at the pinned dataset revision, plus complete VERIFIED acquisition receipts. Every full download matched the expected bytes/hash before its final rename. Content SHA256 values are distinct from Git pointer-blob OIDs. Frozen job 1514732 has now passed full source SHA256 revalidation; completed conversion remains a separate pending result. The publisher gene-table construction code was not available in the inspected source, so stable-ID matching is an explicit validated adapter rule, not a claim about the publisher’s stripping algorithm.
 Sources: [GENCODE v48](https://www.gencodegenes.org/human/release_48.html),
@@ -162,7 +162,7 @@ Frozen pre-simplification qualification: Rust source 225aa4a (integration 32212d
 
 Bounded real-cache check: 256 SNV plus 256 indel prefix rows from chr1, all positive-strand, passed an independent column-name-based full-record/order oracle and real bgzip/tabix queries with zero mismatches. Verifier f8de4b3 first checked the debug converter from 225aa4a; receipt: yangyxt_dt/projects/PriVA_upgrade/validation/spliceai2-real-projection-225aa4a-debug/receipt.json. The same 512 source rows were independently rechecked against the installed optimized release with zero mismatches; this remains 512 unique rows, not 1,024. This is real precomputed-row conversion, not model inference, whole-cache coverage, full VEP execution, public-sample or supplied-family acceptance.
 
-Optimized converter installed: source 225aa4aa774b4be7f53576e1cde56af71e67bd2c, executable SHA256 bbc3b7288ed2ea63f1f8455ed87b8a9d08c7bc1fe0a562c1d6134525e2a12dc6, at yangyxt/softwares/priva-tools-225aa4a/bin/priva. Installation checks detected a stale shared Cargo release artifact before deployment; a forced package rebuild and installed smoke check corrected it, and the receipt retains the failed attempt. All 25 driver cases passed again against the installed release. That frozen checkpoint had 197 Python and 41 Rust tests; the new interface has 239 Python tests with the same 41-test Rust evidence. Reruns are not additional cases. Full preparation job 1514732 is running on c81o-03 with 4 CPUs, 16 GB and a seven-day limit. It freezes installer f8de4b3 and the installed optimized converter; the submitted wrapper SHA256 is 3914a77aa9972a1f1a74e48b727fee74af92c9763e2da900fa9e9bc978395263. It writes yangyxt/caches/VEP_plugin_cache/SpliceAI2/GRCh38 using the isolated config yangyxt/softwares/priva-cluster-grch38-spliceai2/config.yaml. The complete execution manifest yangyxt_dt/projects/PriVA_upgrade/deployment/spliceai2-GRCh38.downloads-complete.json and its handoff were saved in DataLad commit 5f5946b before launch. The frozen job passed all 47 full source SHA256 checks and started projecting SNV chr1; no complete conversion receipt exists yet. Full conversion and real VEP/scientific acceptance remain pending.
+Optimized converter installed: source 225aa4aa774b4be7f53576e1cde56af71e67bd2c, executable SHA256 bbc3b7288ed2ea63f1f8455ed87b8a9d08c7bc1fe0a562c1d6134525e2a12dc6, at yangyxt/softwares/priva-tools-225aa4a/bin/priva. Installation checks detected a stale shared Cargo release artifact before deployment; a forced package rebuild and installed smoke check corrected it, and the receipt retains the failed attempt. All 25 driver cases passed again against the installed release. That frozen checkpoint had 197 Python and 41 Rust tests; the new interface has 239 Python tests with the same 41-test Rust evidence. Reruns are not additional cases. Full preparation job 1514732 is running on c81o-03 with 4 CPUs, 16 GB and a seven-day limit. It freezes installer f8de4b3 and the installed optimized converter; the submitted wrapper SHA256 is 3914a77aa9972a1f1a74e48b727fee74af92c9763e2da900fa9e9bc978395263. It writes yangyxt/caches/VEP_plugin_cache/SpliceAI2/GRCh38 using the isolated config yangyxt/softwares/priva-cluster-grch38-spliceai2/config.yaml. The complete execution manifest yangyxt_dt/projects/PriVA_upgrade/deployment/spliceai2-GRCh38.downloads-complete.json and its handoff were saved in DataLad commit 5f5946b before launch. The frozen job passed all 47 full source SHA256 checks; the bounded 2026-10-16 ~08:45Z check confirmed RUNNING and a log through SNV chr4. No complete conversion receipt exists yet. Full conversion and real VEP/scientific acceptance remain pending.
 
 The [official-plugin harness](spliceai2-plugin-audit.md) passed 11 subtests / 38
 assertions using real plugin/Ensembl allele matching and synthetic candidates.
@@ -446,6 +446,46 @@ is a historical URL inventory, not a valid restore file. The pinned resource ins
 inactive and write stage receipts. `scripts/check_cluster_readiness.py` reports
 remaining gaps without equating file presence with scientific qualification.
 
+Reference/VEP **1514579 COMPLETED (0:0)** at
+**2026-10-16T03:21:30-05:00 = 08:21:30Z**, after **8 h 39 m 49 s**, with
+2 CPUs / 8 GB and batch MaxRSS **28,420 KiB**. It used frozen source
+`fc2186901029acc88cd41bb004828778c1fd1cb8`, whose deployment Python and manifest
+were byte-identical to the audited files. `deployment/{reference,vep}.ready.json`
+both record deployed status, job 1514579 and manifest SHA256
+`b61cbeb328bceac5b72b8a7f55205976848de58cb988b78c816c38cdb3769b84`.
+This run is independent of later CADD recovery source `20774bd`.
+
+```text
+1514579 COMPLETED → reference + VEP113 stage receipts → deployment audit passed
+                  ↘ AlphaMissense 1514589 held → original NM-to-ENST still needed
+Deployed resources → real VEP/plugins + shared-CADD + public/family gates pending
+```
+
+The **08:46:04Z** audit passed full archive hashes, pinned publisher checksums, full FASTA SHA256,
+all 93 FASTA headers and 279 first/middle/last indexed-base checks. The reference
+contains 3,137,161,264 bases. Canonical VEP cache layout has all 6,278 expected
+entries across 25 contigs: 3,114 transcript/regulatory bin pairs plus 25
+variation/CSI pairs. Sampled checks passed 146 transcript/regulatory gzip chunk
+headers and all 25 variation gzip/CSI magic pairs; extracted payloads were not
+fully rehashed. Cache metadata identifies GRCh37, release113, GENCODE19 and
+RefSeq105.20220307; the frozen manifest pins official VEP113.2. The isolated
+config already uses `yangyxt/caches/references/ucsc.hg19.fasta` and
+`yangyxt/caches/VEP_cache`; no config edit was needed. Closed-log command and
+frozen source provenance were verified, but the submitted wrapper could not be
+retrieved. No real VEP/plugin annotation, scientific, public-sample or family
+qualification follows from this installation audit. See the
+[detailed reference/VEP audit](../../../projects/PriVA_upgrade/README.md#vep-reference-deployment-1514579).
+
+DataLad **80bb1f0** records five selected closed paths under
+`yangyxt_dt/projects/PriVA_upgrade/`: its README,
+`deployment/{reference,vep}.ready.json`,
+`logs/cluster-reference-vep_1514579.log` and
+`validation/vep-reference-receipt-verified-1514579.json`.
+Four paths were added/updated; the reference receipt was already tracked and
+unchanged. Descriptive metadata was recorded for all five and selected paths
+are clean. The read-only audit used Slurm allocation 1514363; no active
+SpliceAI2/gnomAD artifacts were included in the save.
+
 Approved CADD prescore recovery **1514744 COMPLETED (0:0)** at
 **2026-10-16T08:02:48Z**, after **13 m 15 s**, on analysis-cpa1. It used
 1 CPU / 2 GB / 2 h on copy; batch MaxRSS was 25,760 KiB. It ran
@@ -519,8 +559,9 @@ Recovery source `20774bd56a706d8b82a5640bf23b758216544136` also passed
 [CI 38869590348](https://github.com/yangyxt/PriVA/actions/runs/38869590348).
 CI success is separate from the completed resource checks and deployed receipt.
 
-VEP/cache archives, CADD annotations/prescores and gnomAD inputs are separate
-Slurm jobs; completed shared-plugin and HPO/pext stages do not imply full readiness.
+Reference/VEP deployment 1514579 is closed; CADD annotations/prescores and
+gnomAD inputs have separate Slurm stages. Completed shared-plugin and HPO/pext
+stages do not imply full readiness.
 The original SpliceAI v1 and PrimateAI collections are acquired under
 `yangyxt/caches/{SpliceAI_v1,PrimateAI_v0_2}`. Hg19 SpliceAI import 1514615 and
 PrimateAI import 1514620 both completed with exit 0 and valid receipts. The latter
@@ -535,8 +576,11 @@ SpliceAI2 download job 1514724 completed and all 20,083 real scored regions
 passed exact GENCODE48 context validation; full conversion
 and indexed-VEP qualification remain pending. gnomAD job 1514601 failed extension
 validation for `.vcf.bgz`; replacement 1514729 is running with the minimal fix
-(eight focused tests passed). AlphaMissense 1514589 remains held for the
-original NM-to-ENST mapping. Hg19 MaveDB policy, derived calibration caches and
+(eight focused tests passed). At the bounded 2026-10-16 ~08:45Z check,
+SpliceAI2 1514732 remained RUNNING on c81o-03 with a log through SNV chr4,
+and AlphaMissense 1514589 remained PENDING, `JobHeldUser`, for the original
+NM-to-ENST mapping. VEP completion does not authorize its release or a
+RefSeq/MANE substitution. Hg19 MaveDB policy, derived calibration caches and
 shared-VEP/CADD qualification remain explicit gates. Do not duplicate the
 owner-managed acquisition or consume partial files. No scientific evidence has
 been silently excluded.

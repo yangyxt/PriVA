@@ -24,10 +24,10 @@
     "prescores": {
       "whole_genome_SNVs_inclAnno.tsv.gz": "1b89cfd7da4e2a8f336c1ec33a6f44eb",
       "whole_genome_SNVs_inclAnno.tsv.gz.tbi": "b3f770e0ba669e23c65a109b8221a1b5",
-      "gnomad.genomes-exomes.r4.0.indel_inclAnno.tsv.gz": "07c5744cea86d5ba77e493e75fcccdb6",
-      "gnomad.genomes-exomes.r4.0.indel_inclAnno.tsv.gz.tbi": "3827c4dfb1c7bddaea3cd672373cbdcc"
+      "gnomad.genomes-exomes.r4.0.indel_inclAnno.tsv.gz": "3d88f8fde9df07060b4f8fe07a0d5d5d",
+      "gnomad.genomes-exomes.r4.0.indel_inclAnno.tsv.gz.tbi": "c583ed9f852c9896081205c3523f9f23"
     },
-    "checksum_source": "https://kircherlab.bihealth.org/download/CADD/v1.7/GRCh37/MD5SUMs",
-    "checksum_note": "Publisher indel checksum differs from historical PriVA config.yaml; this is a newly deployed resource identity, not proof of historical cache equality."
+    "checksum_source": "https://krishna.gs.washington.edu/download/CADD/v1.7/GRCh37/MD5SUMs",
+    "checksum_note": "Washington GRCh37 v1.7 prescore data/index identities: SNV and indel data MD5s match PriVA 09223ef config.yaml; corresponding tabix index MD5s are pinned from the same Washington MD5SUMs. The Berlin mirror has different indel data/index byte identities."
   }
 }

@@ -33,10 +33,18 @@ def download(url, destination, md5=None, expected_size=None):
     destination.parent.mkdir(parents=True, exist_ok=True)
     partial = destination.with_name(destination.name + ".partial")
     candidate = destination if destination.exists() else partial
+    measured_md5 = None
     if candidate == partial:
-        run(["curl", "--fail", "--location", "--retry", "3", "--connect-timeout", "60",
-             "--continue-at", "-", "--output", partial, url])
-    if md5 and checksum(candidate, "md5") != md5:
+        # A completed transfer can remain unpublished after an interrupted or
+        # checksum-failed run. Verify its full identity before attempting HTTP
+        # resume, which can reject an already complete file with HTTP 416.
+        if md5 and partial.exists():
+            measured_md5 = checksum(partial, "md5")
+        if not md5 or measured_md5 != md5:
+            run(["curl", "--fail", "--location", "--retry", "3", "--connect-timeout", "60",
+                 "--continue-at", "-", "--output", partial, url])
+            measured_md5 = None
+    if md5 and (measured_md5 or checksum(candidate, "md5")) != md5:
         raise RuntimeError(f"Checksum mismatch: {candidate}; retained for investigation")
     if expected_size and candidate.stat().st_size != expected_size:
         raise RuntimeError(f"Unexpected size: {candidate}")

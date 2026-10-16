@@ -37,10 +37,13 @@ Nextflow. One `NaN` edge still changes the wrapper exit status when original
 Python emits a malformed table; this mismatch remains reported and unaccepted.
 
 The separate experimental CADD batching branch has passed 44 exact original
-transformation comparisons and 3 helper cancellation cases. Full scoring and
-timing/memory benchmarks continue under Slurm; production remains pinned to
-standalone `4194be3`. These helper checks do not qualify complete scoring,
-outer-wrapper cancellation, shared annotation or family interpretation.
+transformation comparisons and 3 helper cancellation cases. Completed Slurm
+benchmark 1514607 passed all 24 paired synthetic trials, including 96 exact
+intermediate/final-table comparisons. At 100,008 rows, median calculation time
+fell from 556–578 seconds to about 279 seconds, with similar sampled summed
+process-tree RSS (this estimate can count shared pages repeatedly). These results
+do not qualify shared annotation, failure behavior, public data or families.
+The tested integration remains pinned to standalone `4194be3`.
 The later wrapper audit failed PID-only SIGTERM cleanup for the experimental
 shell, profiler and standalone CLI; process-group termination passed and the
 audit reaped all remaining children. The candidate remains disabled.
@@ -49,10 +52,13 @@ SpliceAI v1 originals and indexes for both assemblies are confirmed downloaded.
 The current hg19 pair is undergoing full verification and original-installer
 registration in Slurm 1514615. Both PrimateAI v0.2 originals are now acquired
 under `yangyxt/caches/PrimateAI_v0_2/` and passed acquisition gzip/header checks.
-The hg19 import is pending: job 1514618 was held before execution after a fixture
-showed the original formatter could register a truncated result following a
-child-sort failure. An independent exact source-to-formatted comparison is being
-added before any import receipt or production registration. The hg38 original
+The hg19 import is queued as Slurm 1514620 after SpliceAI job 1514615. It replaces
+cancelled, never-run job 1514618: a fixture showed the original formatter could
+register a truncated result following a child-sort failure. The importer now
+requires an independent exact source-to-formatted byte comparison and checks
+every validation child exit before publishing a receipt. All 14 validator and
+30 import fixtures pass; actual full-cache verification/import is still pending.
+The hg38 original
 remains available without changing the selected scientific profile.
 The AlphaMissense build is held for a separate missing original NM-to-ENST
 mapping table. No annotation or evidence branch has been silently disabled.

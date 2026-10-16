@@ -52,7 +52,6 @@ jobs:
       OPENBLAS_NUM_THREADS: '1'
       OMP_NUM_THREADS: '1'
       CARGO_TERM_COLOR: always
-      CARGO_TARGET_DIR: ${{ runner.temp }}/priva-cargo
     steps:
       # Official release tags and commit objects verified on 2026-10-15:
       # https://github.com/actions/checkout/releases/tag/v7.0.1
@@ -61,6 +60,9 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+
+      - name: Select build directory after the runner starts
+        run: echo "CARGO_TARGET_DIR=$RUNNER_TEMP/priva-cargo" >> "$GITHUB_ENV"
 
       - name: Install the differential-test Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0

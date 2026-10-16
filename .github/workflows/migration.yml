@@ -99,6 +99,7 @@ jobs:
           python -m unittest discover -s tests -p 'test_install_utils_bootstrap.py' -v
           python -m unittest discover -s tests -p 'test_install_utils_resources.py' -v
           python -m unittest discover -s tests -p 'test_install_utils_spliceai2.py' -v
+          python -m unittest discover -s tests -p 'test_spliceai_cache_input.py' -v
           python -m unittest discover -s tests -p 'test_spliceai2_runtime_guard.py' -v
           python -m unittest discover -s tests -p 'test_vcf_bgz_validation.py' -v
           python -m unittest discover -s tests/cadd -p 'test_upstream.py' -v

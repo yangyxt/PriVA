@@ -433,7 +433,7 @@ function VEP_plugins_install() {
     { log "Failed to pick missense constrained segments from the AlphaMissense prescore file"; return 1; }
 
     # Then install SpliceAI
-    SpliceAI_profile_install "${config_file}" "${VEP_PLUGINSCACHEDIR}" "${VEP_PLUGINSDIR}" || \
+    SpliceAI_install "${config_file}" "${VEP_PLUGINSCACHEDIR}" "${VEP_PLUGINSDIR}" || \
     { log "Failed to install SpliceAI"; return 1; }
 
     # Followed by SpliceVault
@@ -490,31 +490,35 @@ function SpliceAI_install() {
     local PLUGIN_CACHEDIR=${2}
     local PLUGIN_DIR=${3}
 
-    local snv_prescore=$(read_yaml ${config_file} "spliceai_snv_prescore")
-    local indel_prescore=$(read_yaml ${config_file} "spliceai_indel_prescore")
+    local assembly_version=$(read_yaml "${config_file}" assembly)
+    local snv_prescore=$(read_yaml "${config_file}" "spliceai_snv_prescore")
+    local indel_prescore=$(read_yaml "${config_file}" "spliceai_indel_prescore")
+    case "${assembly_version}" in
+        hg19|GRCh37|hg38|GRCh38) ;;
+        *) log "Not supported assembly version: ${assembly_version}"; return 1 ;;
+    esac
+    [[ -f ${SCRIPT_DIR}/spliceai_cache_input.py ]] || {
+        log "The SpliceAI cache format helper is missing from this source snapshot."
+        return 1
+    }
 
-    [[ -f ${snv_prescore} ]] && [[ -f ${indel_prescore} ]] && \
-    log "The prescores for the SpliceAI plugin are already downloaded, skip the installation process" && return 0
+    if [[ -f "${snv_prescore}" && -f "${indel_prescore}" ]]; then
+        python "${SCRIPT_DIR}/spliceai_cache_input.py" install --config "${config_file}" \
+            --cache-dir "${PLUGIN_CACHEDIR}" --snv "${snv_prescore}" --indel "${indel_prescore}"
+        return $?
+    fi
 
-    log "You need to download the prescores yourself to ${PLUGIN_CACHEDIR}/SpliceAI by registering a free BaseSequence Account from Illumina. Note that the downloaded files are pretty large (around 200 GB) and might take hours to days to complete the downloading process."
-    log "For details, read ${PLUGIN_DIR}/SpliceAI.pm"
-    log "The following steps are necessary before running this plugin:
-
-        The files with the annotations for all possible substitutions (snv), 1 base insertions
-        and 1-4 base deletions (indel) within genes are available here:
-        https://basespace.illumina.com/s/otSPW8hnhaZR
-
-        GRCh37:
-        tabix -p vcf spliceai_scores.raw.snv.hg37.vcf.gz
-        tabix -p vcf spliceai_scores.raw.indel.hg37.vcf.gz
-
-        GRCh38:
-        tabix -p vcf spliceai_scores.raw.snv.hg38.vcf.gz
-        tabix -p vcf spliceai_scores.raw.indel.hg38.vcf.gz
-
-        The plugin can then be run:
-        ./vep -i variations.vcf --plugin SpliceAI,snv=/path/to/spliceai_scores.raw.snv.hg38.vcf.gz,indel=/path/to/spliceai_scores.raw.indel.hg38.vcf.gz
-        ./vep -i variations.vcf --plugin SpliceAI,snv=/path/to/spliceai_scores.raw.snv.hg38.vcf.gz,indel=/path/to/spliceai_scores.raw.indel.hg38.vcf.gz,cutoff=0.5 "
+    if [[ ${assembly_version} == hg19 || ${assembly_version} == GRCh37 ]]; then
+        log "GRCh37 installation uses SpliceAI v1. Download its assembly-matched SNV and indel VCF caches through your authorized Illumina BaseSpace account before continuing."
+        log "Publisher data: https://basespace.illumina.com/s/otSPW8hnhaZR"
+        log "Index each completed compressed VCF with tabix -p vcf before supplying its absolute path."
+        log "For the official VEP plugin input fields, read ${PLUGIN_DIR}/SpliceAI.pm"
+    else
+        log "GRCh38 installation uses SpliceAI2 v2.0. Complete the publisher-authorized downloads of all native score shards and gene-context resources before continuing."
+        log "Publisher data: https://huggingface.co/datasets/illumina-ai/SpliceAI2-data/tree/cd1b8b82bcef9c97ac3b3b9a24f0de3a5bbf77f9"
+        log "Provide an SNV and an indel input from the complete cache. Decompressed headers determine VCF pass-through or native TSV preparation; the download manifest remains a sidecar."
+        log "For the official VEP plugin input fields, read ${PLUGIN_DIR}/SpliceAI.pm"
+    fi
     # Prepare a command waiting for the user to download the prescores and put them into the corresponding directory
     # Waiting for user's confirmation (yes or no) to finish the installation properly, we dont need to offer the cmd directly because such downloading will need them to register account and login, which is not convenient to put in the script
     [[ ! -d ${PLUGIN_CACHEDIR} ]] && { log "The cache directory ${PLUGIN_CACHEDIR}/SpliceAI is not found, please check the file"; return 1; }
@@ -529,7 +533,6 @@ function SpliceAI_install() {
             log "The file ${snv_pre_score_file} does not exist"
             return 1
         fi
-        update_yaml ${config_file} "spliceai_snv_prescore" "${snv_pre_score_file}"
         read -p "Please specify the absolute path to the indel prescore file, remember the file should correspond to the assembly version of your VEP installation"
         local indel_pre_score_file=${REPLY}
         if [[ ! -f ${indel_pre_score_file} ]]; then
@@ -537,8 +540,9 @@ function SpliceAI_install() {
             return 1
         fi
         log "Now we start to install the SpliceAI plugin"
-        # We need to return the prescore file paths to the outside of the function
-        update_yaml ${config_file} "spliceai_indel_prescore" "${indel_pre_score_file}"
+        # Validate both staged inputs before atomically updating the original two keys.
+        python "${SCRIPT_DIR}/spliceai_cache_input.py" install --config "${config_file}" \
+            --cache-dir "${PLUGIN_CACHEDIR}" --snv "${snv_pre_score_file}" --indel "${indel_pre_score_file}" || return 1
     else
         log "Please download the prescores for the SpliceAI plugin first"
         return 1
@@ -597,19 +601,29 @@ def inspect_paths(value):
             inspect_paths(item)
 
 inspect_paths(data)
+if output.exists():
+    if not output.is_dir() or any(path.name.startswith('.building-') for path in output.iterdir()):
+        raise SystemExit('SpliceAI2 output is incomplete or still being prepared; refusing reuse.')
+    if not (output / 'adapter.ready.json').exists() and any(output.iterdir()):
+        raise SystemExit('SpliceAI2 output has no completed receipt; refusing duplicate conversion.')
 print(hashlib.sha256(content).hexdigest(), hashlib.sha256(raw).hexdigest())
 PY
     ) || return 1
     read -r config_sha manifest_sha <<< "${identities}"
-    [[ -f ${SCRIPT_DIR}/spliceai2_to_vep_vcf.py ]] || {
-        log "ERROR: The SpliceAI2 deployment driver is absent from this source snapshot."
-        return 1
-    }
-    log "Preparing SpliceAI2 GRCh38 from the complete source manifest; no download or v1 fallback is performed."
-    python "${SCRIPT_DIR}/spliceai2_to_vep_vcf.py" \
-        --manifest "${manifest}" --assembly GRCh38 --output-dir "${output_dir}" \
-        --receipt "${receipt}" --priva-bin "${converter}" || return 1
+    if [[ -e ${receipt} || -L ${receipt} ]]; then
+        log "Reusing the completed SpliceAI2 receipt after verification; no conversion is started."
+    else
+        [[ -f ${SCRIPT_DIR}/spliceai2_to_vep_vcf.py ]] || {
+            log "ERROR: The SpliceAI2 deployment driver is absent from this source snapshot."
+            return 1
+        }
+        log "Preparing SpliceAI2 GRCh38 from the complete source manifest; no download or v1 fallback is performed."
+        python "${SCRIPT_DIR}/spliceai2_to_vep_vcf.py" \
+            --manifest "${manifest}" --assembly GRCh38 --output-dir "${output_dir}" \
+            --receipt "${receipt}" --priva-bin "${converter}" || return 1
+    fi
     python - "${config_file}" "${manifest}" "${output_dir}" "${receipt}" "${config_sha}" "${manifest_sha}" <<'PY'
+import fcntl
 import hashlib
 import json
 import os
@@ -646,6 +660,15 @@ no_links_or_partial(output)
 no_links_or_partial(receipt)
 if receipt.parent != output or not receipt.is_file() or receipt.stat().st_size == 0:
     raise SystemExit('SpliceAI2 requires a nonempty regular adapter receipt under OUTPUT_DIR.')
+lock_path = output / '.install.lock'
+no_links_or_partial(lock_path)
+lock = lock_path.open('a')
+try:
+    fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+except BlockingIOError:
+    raise SystemExit('SpliceAI2 preparation is active; refusing receipt reuse.')
+if any(path.name.startswith('.building-') for path in output.iterdir()):
+    raise SystemExit('SpliceAI2 output is incomplete or still being prepared; refusing reuse.')
 tracked = {receipt: identity(receipt), manifest: identity(manifest), config: identity(config)}
 data = json.loads(receipt.read_bytes())
 if not isinstance(data, dict):
@@ -694,12 +717,8 @@ for role in ('snv', 'indel'):
             raise SystemExit('SpliceAI2 output SHA256 mismatch: ' + str(path))
 
 updates = {
-    'spliceai2_snv_prescore': paths['snv'],
-    'spliceai2_indel_prescore': paths['indel'],
-    'spliceai2_adapter_receipt': str(receipt),
-    'spliceai2_status': 'prepared_annotation_only',
-    'spliceai2_version': '2.0',
-    'spliceai2_assembly': 'GRCh38',
+    'spliceai_snv_prescore': paths['snv'],
+    'spliceai_indel_prescore': paths['indel'],
 }
 settings = yaml.safe_load(original)
 text = original.decode()
@@ -718,8 +737,8 @@ if modified != dict(settings, **updates):
 for path, before in tracked.items():
     if identity(path) != before:
         raise SystemExit('SpliceAI2 verification input changed: ' + str(path))
-# Preserve all existing keys/comments except the six preparation metadata keys.
-# The requested spliceai_profile and active generic v1 paths are never changed.
+# Preserve all existing keys/comments except the original two cache paths.
+# Preparation provenance and scientific status remain in the sidecar receipt.
 name = None
 try:
     with tempfile.NamedTemporaryFile(mode='w', dir=config.parent, prefix=config.name + '.', delete=False) as stream:
@@ -734,58 +753,6 @@ finally:
         os.unlink(name)
 print('SpliceAI2 preparation recorded; scientific activation remains pending.', flush=True)
 PY
-}
-
-
-function SpliceAI_profile_install() {
-    local config_file=${1}
-    local PLUGIN_CACHEDIR=${2}
-    local PLUGIN_DIR=${3}
-    local assembly profile snv indel manifest converter
-    [[ -f ${config_file} && -r ${config_file} ]] || {
-        log "ERROR: A readable PriVA config is required for SpliceAI profile selection."
-        return 1
-    }
-    assembly=$(read_yaml "${config_file}" assembly)
-    case "${assembly}" in
-        hg19|GRCh37) assembly=GRCh37 ;;
-        hg38|GRCh38) assembly=GRCh38 ;;
-        *) log "ERROR: Unsupported SpliceAI assembly: ${assembly}"; return 1 ;;
-    esac
-    profile=$(read_yaml "${config_file}" spliceai_profile)
-    if [[ -z ${profile} || ${profile} == null || ${profile} == auto ]]; then
-        if [[ ${assembly} == GRCh37 ]]; then
-            profile=v1
-        else
-            snv=$(read_yaml "${config_file}" spliceai_snv_prescore)
-            indel=$(read_yaml "${config_file}" spliceai_indel_prescore)
-            if [[ ( -n ${snv} && ${snv} != null ) || ( -n ${indel} && ${indel} != null ) ]]; then
-                log "ERROR: Existing GRCh38 SpliceAI paths require an explicit spliceai_profile (v1 reference or v2 preparation); refusing an implicit upgrade."
-                return 1
-            fi
-            profile=v2
-        fi
-    fi
-    case "${profile}" in
-        v1)
-            # Preserve the original import/reuse behavior and its prompt order.
-            SpliceAI_install "${config_file}" "${PLUGIN_CACHEDIR}" "${PLUGIN_DIR}" || return 1
-            return 0
-            ;;
-        v2)
-            [[ ${assembly} == GRCh38 ]] || {
-                log "ERROR: SpliceAI2 is available only for hg38/GRCh38; no fallback is performed."
-                return 1
-            }
-            manifest=$(read_yaml "${config_file}" spliceai2_manifest)
-            converter=$(read_yaml "${config_file}" spliceai2_converter_bin)
-            [[ -n ${converter} && ${converter} != null ]] || converter=priva
-            SpliceAI2_install "${config_file}" "${manifest}" "${PLUGIN_CACHEDIR}/SpliceAI2/GRCh38" "${converter}" || return 1
-            log "ERROR: SpliceAI2 cache preparation is complete; scientific activation is pending. PriVA criteria and legacy CADD must not consume this profile."
-            return 2
-            ;;
-        *) log "ERROR: Unknown spliceai_profile: ${profile}; choose v1 or v2 explicitly."; return 1 ;;
-    esac
 }
 
 

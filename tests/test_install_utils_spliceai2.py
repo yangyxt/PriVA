@@ -1,4 +1,4 @@
-"""Assembly/profile routing without real caches, downloads, or scientific claims."""
+"""Two-path installation, atomic registration, and verified receipt reuse."""
 import contextlib
 import hashlib
 import io
@@ -19,139 +19,158 @@ INSTALLER = ROOT / 'scripts/install_utils.sh'
 FROZEN_INSTALLER = ROOT / 'tests/fixtures/installer-054b494/scripts/install_utils.sh'
 
 
-class SpliceAIProfileRoutes(unittest.TestCase):
+class SpliceAIInstallerInputs(unittest.TestCase):
+    """Shell prompt/staging contract; shared-helper format tests live separately."""
     def setUp(self):
-        self.temporary = tempfile.TemporaryDirectory(prefix='spliceai2_route_', dir=ROOT / 'tests')
+        self.temporary = tempfile.TemporaryDirectory(prefix='spliceai_input_', dir=ROOT / 'tests')
         self.addCleanup(self.temporary.cleanup)
         self.folder = Path(self.temporary.name)
+        scripts = self.folder / 'source/scripts'
+        scripts.mkdir(parents=True)
+        for name in ('install_utils.sh', 'common_bash_utils.sh', 'annotation_vcf.sh'):
+            shutil.copyfile(ROOT / 'scripts' / name, scripts / name)
+        self.installer = scripts / 'install_utils.sh'
         self.config = self.folder / 'config.yaml'
-        self.calls = self.folder / 'calls.txt'
-        self.installer = INSTALLER
+        self.calls = self.folder / 'calls.json'
+        self.prompts = self.folder / 'prompts.txt'
+        self.cache = self.folder / 'cache with spaces'
+        self.plugins = self.folder / 'plugins'
+        self.cache.mkdir()
+        self.plugins.mkdir()
+        self.snv = self.folder / 'snv with spaces.vcf.gz'
+        self.indel = self.folder / 'indel with spaces.vcf.gz'
+        self.snv.write_bytes(b'fixture: helper owns decompressed-header validation')
+        self.indel.write_bytes(b'fixture: helper owns decompressed-header validation')
+        self.helper = scripts / 'spliceai_cache_input.py'
+        self.helper.write_text(FAKE_INPUT_HELPER)
         self.env = dict(os.environ, TEST_CONFIG=str(self.config), TEST_FOLDER=str(self.folder),
-                        TEST_CALLS=str(self.calls))
+                        TEST_CALLS=str(self.calls), TEST_PROMPTS=str(self.prompts),
+                        TEST_SNV=str(self.snv), TEST_INDEL=str(self.indel))
+        self.configure()
 
-    def configure(self, assembly='hg38', **extra):
-        self.config.write_text(yaml.safe_dump(dict(assembly=assembly, **extra), sort_keys=False))
+    def configure(self, assembly='hg19', **extra):
+        self.config.write_text(yaml.safe_dump(dict(assembly=assembly, unrelated='keep', **extra), sort_keys=False))
+        self.env['TEST_ORIGINAL_CONFIG_SHA'] = hashlib.sha256(self.config.read_bytes()).hexdigest()
         return self.config.read_bytes()
 
     def shell(self, body):
         return subprocess.run(['bash', '-c', 'source "$1"; ' + body, 'test', str(self.installer)],
                               env=self.env, text=True, capture_output=True)
 
-    def dispatch(self, v1_exit=0, v2_exit=0):
-        return self.shell('''
-            SpliceAI_install() { printf '%s\\n' v1 "$@" >> "$TEST_CALLS"; return ''' + str(v1_exit) + '''; }
-            SpliceAI2_install() { printf '%s\\n' v2 "$@" >> "$TEST_CALLS"; return ''' + str(v2_exit) + '''; }
-            SpliceAI_profile_install "$TEST_CONFIG" "$TEST_FOLDER/cache with spaces" "$TEST_FOLDER/plugins"
+    def invoke(self):
+        return self.shell(r'''
+            answers=("${TEST_CONFIRM:-yes}" "$TEST_SNV" "$TEST_INDEL")
+            position=0
+            read() { printf '%s\n' "$*" >> "$TEST_PROMPTS"; REPLY=${answers[$position]}; position=$((position+1)); }
+            SpliceAI_install "$TEST_CONFIG" "$TEST_FOLDER/cache with spaces" "$TEST_FOLDER/plugins"
         ''')
 
-    def test_legacy_v1_function_bytes_remain_unchanged(self):
-        def function(path):
-            return path.read_bytes().split(b'function SpliceAI_install() {', 1)[1].split(b'\n}\n', 1)[0]
-        self.assertEqual(function(INSTALLER), function(FROZEN_INSTALLER))
+    def test_frozen_original_oracle_hash_is_not_rewritten(self):
         self.assertEqual(hashlib.sha256(FROZEN_INSTALLER.read_bytes()).hexdigest(),
                          '80107edcc5ec845e591a87957e230fa586c2a480746c904cac3d4a84e209a81f')
 
-    def test_hg19_and_grch37_default_to_unchanged_v1(self):
-        for assembly in ('hg19', 'GRCh37'):
+    def test_fresh_assembly_guidance_preserves_three_prompts_and_stages_both_paths(self):
+        for assembly in ('hg19', 'GRCh37', 'hg38', 'GRCh38'):
             with self.subTest(assembly=assembly):
-                self.calls.unlink(missing_ok=True)
-                original = self.configure(assembly)
-                result = self.dispatch()
+                self.prompts.unlink(missing_ok=True)
+                self.configure(assembly)
+                result = self.invoke()
                 self.assertEqual(result.returncode, 0, result.stderr)
-                self.assertEqual(self.calls.read_text().splitlines(),
-                                 ['v1', str(self.config), str(self.folder / 'cache with spaces'),
-                                  str(self.folder / 'plugins')])
-                self.assertEqual(self.config.read_bytes(), original)
+                prompts = self.prompts.read_text().splitlines()
+                self.assertEqual(len(prompts), 3)
+                self.assertIn('finished downloading', prompts[0])
+                self.assertIn('snv prescore file', prompts[1])
+                self.assertIn('indel prescore file', prompts[2])
+                calls = json.loads(self.calls.read_text())
+                self.assertEqual(calls, dict(command='install', config=str(self.config),
+                                            cache_dir=str(self.cache), snv=str(self.snv), indel=str(self.indel)))
+                self.assertEqual(yaml.safe_load(self.config.read_bytes()), dict(assembly=assembly,
+                                 unrelated='keep', spliceai_snv_prescore=str(self.snv), spliceai_indel_prescore=str(self.indel)))
+                self.assertIn('SpliceAI2 v2.0' if assembly in ('hg38', 'GRCh38') else 'SpliceAI v1', result.stderr)
 
-    def test_fresh_hg38_and_grch38_default_to_v2_then_stop_activation(self):
-        for assembly in ('hg38', 'GRCh38'):
-            for profile in (None, 'auto'):
-                with self.subTest(assembly=assembly, profile=profile):
-                    self.calls.unlink(missing_ok=True)
-                    extra = {'spliceai_profile': profile} if profile else {}
-                    original = self.configure(assembly, spliceai2_manifest='/complete manifest.json', **extra)
-                    result = self.dispatch()
-                    self.assertEqual(result.returncode, 2, result.stderr)
-                    self.assertIn('scientific activation is pending', result.stderr)
-                    self.assertEqual(self.calls.read_text().splitlines(),
-                                     ['v2', str(self.config), '/complete manifest.json',
-                                      str(self.folder / 'cache with spaces/SpliceAI2/GRCh38'), 'priva'])
-                    self.assertEqual(self.config.read_bytes(), original)
-
-    def test_explicit_grch38_v1_reference_is_preserved(self):
-        self.configure('GRCh38', spliceai_profile='v1', spliceai_snv_prescore='/old/snv.vcf.gz')
-        result = self.dispatch()
+    def test_existing_configured_paths_are_validated_by_helper_without_prompts(self):
+        self.configure('GRCh38', spliceai_snv_prescore=str(self.snv), spliceai_indel_prescore=str(self.indel))
+        result = self.invoke()
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(self.calls.read_text().splitlines()[0], 'v1')
+        self.assertFalse(self.prompts.exists())
+        self.assertTrue(self.calls.exists())
 
-    def test_hg19_v2_is_rejected_without_calling_either_route(self):
-        self.configure('hg19', spliceai_profile='v2')
-        result = self.dispatch()
+    def test_missing_second_input_never_partially_registers_first(self):
+        original = self.config.read_bytes()
+        self.indel.unlink()
+        result = self.invoke()
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn('no fallback', result.stderr)
+        self.assertEqual(self.config.read_bytes(), original)
         self.assertFalse(self.calls.exists())
+        self.assertEqual(len(self.prompts.read_text().splitlines()), 3)
 
-    def test_unlabelled_existing_grch38_paths_are_ambiguous_even_if_absent(self):
-        for key in ('spliceai_snv_prescore', 'spliceai_indel_prescore'):
-            for profile in (None, 'auto'):
-                with self.subTest(key=key, profile=profile):
-                    extra = {'spliceai_profile': profile} if profile else {}
-                    original = self.configure('hg38', **{key: '/missing/old-cache.vcf.gz'}, **extra)
-                    result = self.dispatch()
-                    self.assertNotEqual(result.returncode, 0)
-                    self.assertIn('explicit spliceai_profile', result.stderr)
-                    self.assertFalse(self.calls.exists())
-                    self.assertEqual(self.config.read_bytes(), original)
+    def test_missing_first_input_retains_original_early_failure_order(self):
+        original = self.config.read_bytes()
+        self.snv.unlink()
+        result = self.invoke()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(self.config.read_bytes(), original)
+        self.assertFalse(self.calls.exists())
+        self.assertEqual(len(self.prompts.read_text().splitlines()), 2)
 
-    def test_explicit_v2_passes_converter_and_keeps_active_paths_untouched(self):
-        original = self.configure('hg38', spliceai_profile='v2', spliceai2_manifest='/source.json',
-                                  spliceai2_converter_bin='/pinned bin/priva',
-                                  spliceai_snv_prescore='/v1/snv', spliceai_indel_prescore='/v1/indel')
-        result = self.dispatch()
-        self.assertEqual(result.returncode, 2, result.stderr)
-        self.assertEqual(self.calls.read_text().splitlines()[-1], '/pinned bin/priva')
+    def test_declined_download_confirmation_changes_nothing(self):
+        original = self.config.read_bytes()
+        self.env['TEST_CONFIRM'] = 'no'
+        result = self.invoke()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(self.config.read_bytes(), original)
+        self.assertFalse(self.calls.exists())
+        self.assertEqual(len(self.prompts.read_text().splitlines()), 1)
+
+    def test_helper_failure_never_registers_paths(self):
+        original = self.config.read_bytes()
+        self.env['TEST_HELPER_FAIL'] = '1'
+        result = self.invoke()
+        self.assertNotEqual(result.returncode, 0)
         self.assertEqual(self.config.read_bytes(), original)
 
-    def test_v2_preparation_stops_plugin_install_at_the_original_spliceai_stage(self):
-        self.configure('hg38')
-        result = self.shell('''
+    def test_unknown_assembly_or_missing_helper_fails_before_prompts(self):
+        self.configure('hg37')
+        self.assertNotEqual(self.invoke().returncode, 0)
+        self.assertFalse(self.prompts.exists())
+        self.configure('hg19')
+        self.helper.unlink()
+        self.assertNotEqual(self.invoke().returncode, 0)
+        self.assertFalse(self.prompts.exists())
+
+    def test_original_plugin_stage_order_is_retained(self):
+        result = self.shell(r'''
             CONDA_PREFIX="$TEST_FOLDER/envs/priva_acmg"
-            for name in UTRAnnotator_install LOEUF_install Conservation_install AlphaMissense_install AlphaMissense_anno AlphaMissense_pick_missense_constrained_segments SpliceVault_install MaveDB_install PrimateAI_install; do
-                eval "$name() { printf '%s\\n' '$name' >> \"\\$TEST_CALLS\"; }"
+            for name in UTRAnnotator_install LOEUF_install Conservation_install AlphaMissense_install AlphaMissense_anno AlphaMissense_pick_missense_constrained_segments SpliceAI_install SpliceVault_install MaveDB_install PrimateAI_install; do
+                eval "$name() { printf '%s\n' '$name' >> \"\$TEST_CALLS\"; }"
             done
-            SpliceAI2_install() { printf 'SpliceAI2_install\\n' >> "$TEST_CALLS"; }
             VEP_plugins_install plugins caches hg38 "$TEST_CONFIG" priva_acmg
         ''')
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn('scientific activation is pending', result.stderr)
+        self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(self.calls.read_text().splitlines(), [
             'UTRAnnotator_install', 'LOEUF_install', 'Conservation_install',
             'AlphaMissense_install', 'AlphaMissense_anno',
-            'AlphaMissense_pick_missense_constrained_segments', 'SpliceAI2_install'])
+            'AlphaMissense_pick_missense_constrained_segments', 'SpliceAI_install',
+            'SpliceVault_install', 'MaveDB_install', 'PrimateAI_install'])
+        self.assertNotIn('SpliceAI_profile_install', INSTALLER.read_text())
 
-    def test_unknown_profile_and_assembly_fail_closed(self):
-        for assembly, profile in [('hg37', 'v1'), ('hg38', 'v3')]:
-            with self.subTest(assembly=assembly, profile=profile):
-                self.configure(assembly, spliceai_profile=profile)
-                result = self.dispatch()
-                self.assertNotEqual(result.returncode, 0)
-                self.assertFalse(self.calls.exists())
 
-    def test_missing_config_fails_before_any_import(self):
-        result = self.dispatch()
-        self.assertNotEqual(result.returncode, 0)
-        self.assertFalse(self.calls.exists())
-
-    def test_failed_selected_route_never_falls_back(self):
-        for assembly, v1_exit, v2_exit in [('hg19', 41, 0), ('hg38', 0, 42)]:
-            with self.subTest(assembly=assembly):
-                self.calls.unlink(missing_ok=True)
-                self.configure(assembly)
-                result = self.dispatch(v1_exit, v2_exit)
-                self.assertEqual(result.returncode, 1)
-                self.assertEqual(self.calls.read_text().splitlines().count('v1') +
-                                 self.calls.read_text().splitlines().count('v2'), 1)
+FAKE_INPUT_HELPER = r'''
+import argparse, hashlib, json, os
+from pathlib import Path
+import yaml
+p=argparse.ArgumentParser()
+p.add_argument('command', choices=['install'])
+for key in ('config','cache-dir','snv','indel'):p.add_argument('--'+key,required=True)
+a=p.parse_args()
+config=Path(a.config)
+assert hashlib.sha256(config.read_bytes()).hexdigest()==os.environ['TEST_ORIGINAL_CONFIG_SHA'], 'Installer updated config before validating both inputs'
+Path(os.environ['TEST_CALLS']).write_text(json.dumps(vars(a)))
+if os.environ.get('TEST_HELPER_FAIL'):raise SystemExit(17)
+settings=yaml.safe_load(config.read_bytes())
+settings.update(spliceai_snv_prescore=a.snv,spliceai_indel_prescore=a.indel)
+tmp=config.with_suffix('.tmp');tmp.write_text(yaml.safe_dump(settings,sort_keys=False));tmp.replace(config)
+'''
 
 
 FAKE_DRIVER = r'''
@@ -276,7 +295,6 @@ class SpliceAI2Preparation(unittest.TestCase):
         self.driver.write_text(FAKE_DRIVER)
         self.config = self.folder / 'config.yaml'
         self.config.write_text('# Keep original settings and comments.\nassembly: hg38\n'
-                               'spliceai_profile: v1 # keep the active reference selector\n'
                                'spliceai_snv_prescore: /existing/v1-snv.vcf.gz\n'
                                'spliceai_indel_prescore: /existing/v1-indel.vcf.gz\n'
                                'unrelated: "ampersand & literal"\n')
@@ -298,20 +316,20 @@ class SpliceAI2Preparation(unittest.TestCase):
                                'test', str(self.installer), str(self.config), str(self.manifest),
                                str(self.output), converter], env=self.env, text=True, capture_output=True)
 
-    def test_verified_preparation_registers_only_six_namespaced_keys(self):
+    def test_verified_preparation_registers_only_original_two_keys(self):
         self.config.chmod(0o640)
         result = self.invoke()
         self.assertEqual(result.returncode, 0, result.stderr)
         after = yaml.safe_load(self.config.read_text())
         before = yaml.safe_load(self.original)
-        self.assertEqual({key: after[key] for key in before}, before)
-        self.assertEqual(set(after) - set(before), {
-            'spliceai2_snv_prescore', 'spliceai2_indel_prescore', 'spliceai2_adapter_receipt',
-            'spliceai2_status', 'spliceai2_version', 'spliceai2_assembly'})
-        self.assertEqual(after['spliceai2_status'], 'prepared_annotation_only')
-        self.assertEqual(after['spliceai2_assembly'], 'GRCh38')
-        self.assertEqual(after['spliceai2_version'], '2.0')
-        self.assertTrue(self.config.read_bytes().startswith(self.original))
+        self.assertEqual(set(after), set(before))
+        self.assertEqual({key: value for key, value in after.items()
+                          if key not in ('spliceai_snv_prescore', 'spliceai_indel_prescore')},
+                         {key: value for key, value in before.items()
+                          if key not in ('spliceai_snv_prescore', 'spliceai_indel_prescore')})
+        self.assertEqual(after['spliceai_snv_prescore'], str(self.output / 'snv.vcf.gz'))
+        self.assertEqual(after['spliceai_indel_prescore'], str(self.output / 'indel.vcf.gz'))
+        self.assertTrue(self.config.read_bytes().startswith(b'# Keep original settings and comments.\n'))
         self.assertEqual(self.config.stat().st_mode & 0o777, 0o640)
         calls = json.loads(self.calls.read_text())
         self.assertEqual(calls, dict(manifest=str(self.manifest), assembly='GRCh38',
@@ -435,18 +453,63 @@ class SpliceAI2Preparation(unittest.TestCase):
         self.assertEqual(changed, [True])
         self.assertEqual(self.config.read_bytes(), self.original)
 
-    def test_replacing_preparation_metadata_preserves_other_values(self):
-        self.config.write_bytes(self.original + b'spliceai2_status: old\nspliceai2_version: "old"\n')
+    def test_completed_receipt_reuse_never_invokes_converter(self):
+        self.assertEqual(self.invoke().returncode, 0)
+        self.calls.unlink()
+        self.driver.unlink()
+        self.config.write_bytes(self.original)
         result = self.invoke()
         self.assertEqual(result.returncode, 0, result.stderr)
-        after = yaml.safe_load(self.config.read_text())
-        self.assertEqual(after['spliceai2_status'], 'prepared_annotation_only')
-        self.assertEqual(after['spliceai2_version'], '2.0')
-        self.assertEqual(after['spliceai_profile'], 'v1')
-        self.assertEqual(self.config.read_text().count('spliceai2_status:'), 1)
+        self.assertFalse(self.calls.exists())
+        self.assertIn('Reusing the completed', result.stderr)
+        self.assertEqual(yaml.safe_load(self.config.read_bytes())['spliceai_snv_prescore'],
+                         str(self.output / 'snv.vcf.gz'))
 
-    def test_duplicate_preparation_key_rejected_without_rewriting_config(self):
-        self.config.write_bytes(self.original + b'spliceai2_status: one\nspliceai2_status: two\n')
+    def test_invalid_existing_receipt_is_rejected_without_duplicate_conversion(self):
+        self.assertEqual(self.invoke().returncode, 0)
+        self.calls.unlink()
+        self.config.write_bytes(self.original)
+        (self.output / 'adapter.ready.json').write_text('{}')
+        result = self.invoke()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertFalse(self.calls.exists())
+        self.assertEqual(self.config.read_bytes(), self.original)
+
+    def test_incomplete_existing_output_is_not_overwritten(self):
+        self.output.mkdir()
+        pending = self.output / 'unfinished.vcf.gz'
+        pending.write_bytes(b'not complete')
+        result = self.invoke()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertFalse(self.calls.exists())
+        self.assertEqual(pending.read_bytes(), b'not complete')
+        self.assertEqual(self.config.read_bytes(), self.original)
+
+    def test_building_directory_prevents_reuse_even_with_receipt(self):
+        self.assertEqual(self.invoke().returncode, 0)
+        self.calls.unlink()
+        self.config.write_bytes(self.original)
+        (self.output / '.building-active').mkdir()
+        result = self.invoke()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertFalse(self.calls.exists())
+        self.assertEqual(self.config.read_bytes(), self.original)
+
+    def test_active_install_lock_prevents_receipt_reuse(self):
+        import fcntl
+        self.assertEqual(self.invoke().returncode, 0)
+        self.calls.unlink()
+        self.config.write_bytes(self.original)
+        with (self.output / '.install.lock').open('a') as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            result = self.invoke()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('preparation is active', result.stderr)
+        self.assertFalse(self.calls.exists())
+        self.assertEqual(self.config.read_bytes(), self.original)
+
+    def test_duplicate_original_path_key_rejected_without_rewriting_config(self):
+        self.config.write_bytes(self.original + b'spliceai_snv_prescore: duplicate\n')
         original = self.config.read_bytes()
         result = self.invoke()
         self.assertNotEqual(result.returncode, 0)

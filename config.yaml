@@ -112,14 +112,9 @@ cadd_base_dir: /stornext/snfs170/next-gen/scratch/yangyxt/caches/CADD/CADD-scrip
 # The PrimateAI plugin prescore file
 primateai_prescore: /stornext/snfs170/next-gen/scratch/yangyxt/caches/VEP_plugin_cache/PrimateAI/hg19/PrimateAI_scores_v0.2_GRCh37_sorted.tsv.bgz
 
-# The SpliceAI plugin cache file, snv and indel
-# Installation selection: auto uses v1 for hg19/GRCh37 and prepares v2 for
-# hg38/GRCh38. Explicit v1 preserves a GRCh38 reference profile. V2 preparation
-# uses separate spliceai2_* keys; legacy ACMG/CADD activation is not qualified.
-# spliceai_profile: auto
-# spliceai2_manifest: /absolute/path/to/confirmed-source-manifest.json
-# spliceai2_converter_bin: /absolute/path/to/priva
-# Main installer destination: VEP plugin cache directory / SpliceAI2 / GRCh38.
+# The SpliceAI plugin cache files. Fresh GRCh37 installs use v1; GRCh38 uses v2.
+# Installation detects decompressed headers: VCF is passed through; native v2
+# TSV is prepared for the unchanged VEP plugin. Provenance stays in sidecars.
 spliceai_snv_prescore: /stornext/snfs170/next-gen/scratch/yangyxt/caches/VEP_plugin_cache/SpliceAI/hg19/spliceai_scores.raw.snv.hg19.vcf.gz
 spliceai_indel_prescore: /stornext/snfs170/next-gen/scratch/yangyxt/caches/VEP_plugin_cache/SpliceAI/hg19/spliceai_scores.raw.indel.hg19.vcf.gz
 ####################################################Above will be determined manually by your reply by install_utils.sh####################################################

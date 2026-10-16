@@ -25,7 +25,8 @@ class SpliceAI2RuntimeGuard(unittest.TestCase):
         self.folder = Path(self.temporary.name)
         self.scripts = self.folder / 'source/scripts'
         self.scripts.mkdir(parents=True)
-        for name in ('annotation_vcf.sh', 'common_bash_utils.sh', 'anno_vep_args', 'anno_main_args'):
+        for name in ('annotation_vcf.sh', 'common_bash_utils.sh', 'anno_vep_args', 'anno_main_args',
+                     'spliceai_cache_input.py'):
             shutil.copyfile(ROOT / 'scripts' / name, self.scripts / name)
         self.script = self.scripts / 'annotation_vcf.sh'
         # Parser fixture retains the argument-to-local-variable behavior needed
@@ -81,21 +82,18 @@ class SpliceAI2RuntimeGuard(unittest.TestCase):
         self.assertEqual(hashlib.sha256(REFERENCE.read_bytes()).hexdigest(),
                          '6b7ad6fd8eb118841cf36819193f7ce2ee14363432c66f0da75d7788c2d8d280')
 
-    def test_active_v2_profile_and_generic_versions_reject_before_resource_access(self):
-        self.snv.unlink()
-        self.indel.unlink()
-        for key, value in [('spliceai_profile', 'v2'), ('spliceai_resource_version', '2.0'),
-                           ('spliceai_version', 2), ('spliceai_profile', 'V2.0')]:
-            with self.subTest(key=key, value=value):
-                self.settings[key] = value
-                result = self.guard()
-                self.assertNotEqual(result.returncode, 0)
-                self.assertIn('ACMG/ClinVar criteria and CADD feature use are not qualified', result.stderr)
-                del self.settings[key]
+    def test_native_tsv_at_original_keys_is_not_a_qualified_scientific_resource(self):
+        columns = ['chrom', 'pos', 'ref', 'alt', 'strand']
+        for effect in ('donor_gain', 'donor_loss', 'acceptor_gain', 'acceptor_loss'):
+            columns += [f'{effect}_{field}_{rank}' for field in ('delta_score', 'ref_score', 'alt_score', 'dist') for rank in range(3)]
+        for effect in ('jxn_gain', 'jxn_loss'):
+            columns += [f'{effect}_{field}_{rank}' for field in ('delta_score', 'ref_score', 'alt_score', 'donor_dist', 'acceptor_dist') for rank in range(3)]
+        self.snv.write_bytes(gzip.compress(('\t'.join(columns + ['spliceai2_summary_score']) + '\n').encode()))
+        result = self.guard()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('ACMG/ClinVar criteria and CADD feature use are not qualified', result.stderr)
 
-    def test_prepared_namespaced_v2_cache_does_not_disable_v1(self):
-        self.settings.update(spliceai_profile='v1', spliceai2_status='prepared_annotation_only',
-                             spliceai2_version='2.0', spliceai2_snv_prescore='/separate/v2-snv.vcf.gz')
+    def test_v1_uses_only_original_two_keys(self):
         result = self.guard()
         self.assertEqual(result.returncode, 0, result.stderr)
 
@@ -111,11 +109,13 @@ class SpliceAI2RuntimeGuard(unittest.TestCase):
                         self.assertIn('Resource: ' + str(path), result.stderr)
                         path.write_bytes(gzip.compress(HEADER))
 
-    def test_explicit_v1_selector_cannot_override_actual_v2_header(self):
-        self.settings['spliceai_profile'] = 'v1'
+    def test_assembly_cannot_override_actual_v2_header(self):
         self.snv.write_bytes(gzip.compress(HEADER.replace(b'#CHROM', V2_MARKERS[0] + b'\n#CHROM')))
-        result = self.guard()
-        self.assertNotEqual(result.returncode, 0)
+        for assembly in ('hg19', 'GRCh37', 'hg38', 'GRCh38'):
+            with self.subTest(assembly=assembly):
+                self.settings['assembly'] = assembly
+                result = self.guard()
+                self.assertNotEqual(result.returncode, 0)
 
     def test_effective_cli_paths_take_precedence_over_config_paths(self):
         v2 = self.folder / 'override.vcf.gz'
@@ -155,7 +155,7 @@ class SpliceAI2RuntimeGuard(unittest.TestCase):
                 self.snv.write_bytes(gzip.compress(text))
                 result = self.guard()
                 self.assertNotEqual(result.returncode, 0)
-                self.assertIn('Cannot verify SpliceAI within', result.stderr)
+                self.assertIn('Cannot verify the SpliceAI cache header', result.stderr)
 
     def test_unreadable_truncated_and_incomplete_headers_fail_closed(self):
         for data in (b'not a VCF\n', b'##fileformat=VCFv4.2\n', b'\x1f\x8b\x08'):
@@ -165,8 +165,8 @@ class SpliceAI2RuntimeGuard(unittest.TestCase):
                 self.assertNotEqual(result.returncode, 0)
                 self.assertIn('SpliceAI', result.stderr)
 
-    def test_main_v2_intent_stops_before_tools_or_hub_creation(self):
-        self.settings['spliceai_profile'] = 'v2'
+    def test_main_v2_resource_stops_before_tools_or_hub_creation(self):
+        self.snv.write_bytes(gzip.compress(HEADER.replace(b'#CHROM', V2_MARKERS[0] + b'\n#CHROM')))
         self.save_config()
         result = self.run_shell('''
             bcftools() { printf 'bcftools\\n' >> "$TEST_TRACE"; }

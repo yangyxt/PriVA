@@ -258,8 +258,14 @@ remaining gaps without equating file presence with scientific qualification.
 
 VEP/cache archives, CADD annotations/prescores and gnomAD inputs are separate
 Slurm jobs; completed shared-plugin and HPO/pext stages do not imply full readiness.
-SpliceAI v1 and PrimateAI licensed inputs, hg19 MaveDB policy, derived calibration
-caches and shared-VEP/CADD qualification remain explicit gates. Current scheduler
+The MBP assistant manages licensed SpliceAI v1 and PrimateAI downloads through
+the user's browser access in job 1514597. Source roots are
+`yangyxt/caches/SpliceAI_v1/` and `yangyxt/caches/PrimateAI_v0_2/`.
+Wait for its explicit verified final-ready paths, then supply matching-assembly
+originals at `install_utils.sh` cache prompts. Do not duplicate downloads,
+require CLI authentication for this acquisition, or use incomplete files.
+Their completion, hg19 MaveDB policy, derived calibration caches and
+shared-VEP/CADD qualification remain explicit gates. Current scheduler
 status and exact completed test counts are maintained in the project README,
 not inferred from this implementation checkpoint.
 

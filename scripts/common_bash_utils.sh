@@ -382,8 +382,9 @@ function check_vcf_index {
     local input_vcf=${1}
     
     # Determine file type and preferred index format
-    if [[ ${input_vcf} =~ \.vcf\.gz$ ]]; then
-        # For .vcf.gz files: prefer .tbi, but accept .csi if that's what exists
+    if [[ ${input_vcf} =~ \.vcf\.(gz|bgz)$ ]]; then
+        # BGZF VCF may use .vcf.gz or the official gnomAD .vcf.bgz suffix.
+        # Preserve the same .tbi preference and .csi acceptance for both.
         local tbi_file="${input_vcf}.tbi"
         local csi_file="${input_vcf}.csi"
         

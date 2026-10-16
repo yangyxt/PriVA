@@ -7,6 +7,12 @@ checks unattended, release-pinned cache/plugin flags. The actual Slurm rerun
 reached the correct VEP113 GRCh37 archive download and stopped at a deliberate
 timeout; that checkpoint does not establish complete installation.
 
+`test_install_utils_resources.py` adds nine small command/fixture checks for
+configured-reference propagation, all-chromosome scheduling, failure barriers,
+Conservation ordering/reuse, and the configured AlphaMissense motif output.
+External tools are replaced for these orchestration tests; they do not claim
+scientific liftover or annotation equivalence.
+
 Cluster deployment integrity: `test_cluster_deployment.py` checks atomic
 publication, corruption rejection, unchanged-cache reuse, and rejection of
 unidentified or modified FASTA/container resources without network or solver

@@ -43,3 +43,11 @@ prompt exiting zero on noninteractive EOF and PriVA continuing without a cache.
 `install_utils.sh` now preserves the installed Conda API, requests cache/plugins
 for that exact release with updates disabled, and validates required files
 before recording success. The original diagnostic source remains unchanged.
+
+Subsequent installer corrections pass the configured GRCh37 FASTA to gnomAD
+liftover, schedule all chr1–22/X/Y, stop after transfer/liftover failures, and
+install Conservation before AlphaMissense annotation. Conservation reuse no
+longer fails or replaces an existing configured path. AlphaMissense motif
+output uses the cluster configuration instead of the retired host prefix.
+The scientific Python calculations and per-chromosome transforms are unchanged;
+full derived-cache qualification still awaits upstream resource completion.

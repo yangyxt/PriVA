@@ -47,7 +47,8 @@ def write_json(path, value):
 
 
 def source_identity():
-    paths = ['bin/cadd_task.py', 'bin/cadd_shared_vep.py', 'bin/cadd_standalone.py', 'bin/cadd/upstream_annotate.sh',
+    paths = ['bin/cadd_task.py', 'bin/cadd_shared_vep.py', 'bin/cadd_standalone.py',
+             'bin/cadd_select_view.py', 'bin/cadd/CaddSelection.pm', 'bin/cadd/upstream_annotate.sh',
              'bin/cadd/upstream_calculate.sh', 'cadd.nf',
              'modules/local/cadd_upstream.nf', 'conf/cadd.config', 'nextflow.config',
              'conf/cadd/GRCh37.reference.json', 'conf/cadd/GRCh38.reference.json']

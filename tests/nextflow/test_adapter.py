@@ -69,6 +69,27 @@ class AdapterContracts(unittest.TestCase):
         with self.assertRaises(adapter.ContractError):
             adapter.read_config(path)
 
+    def test_spliceai2_scientific_config_rejected_but_prepared_metadata_allowed(self):
+        path = self.folder / "profile.yaml"
+        for key in ("spliceai_profile", "spliceai_resource_version", "spliceai_version"):
+            for value in ("v2", "2", "2.0", "v2.0"):
+                path.write_text(adapter.yaml.safe_dump({"assembly": "hg38", key: value}))
+                with self.assertRaisesRegex(adapter.ContractError, "not qualified for v2"):
+                    adapter.read_config(path)
+        settings = {"assembly": "hg38", "spliceai_profile": "v1", "spliceai2_version": "2.0",
+                    "spliceai2_status": "prepared_annotation_only", "spliceai2_snv_prescore": "/prepared/view.vcf.gz"}
+        path.write_text(adapter.yaml.safe_dump(settings))
+        self.assertEqual(adapter.read_config(path), settings)
+
+    def test_spliceai2_marked_annotated_input_rejected_before_sample_parsing(self):
+        path = self.folder / "input.vcf.gz"
+        for marker in ("##SpliceAI2Version=2", "##source=PriVA_SpliceAI2_projection"):
+            with gzip.open(path, "wt") as stream:
+                stream.write("##fileformat=VCFv4.2\n" + marker + "\n")
+                stream.write("#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tchild\n")
+            with self.assertRaisesRegex(adapter.ContractError, "SpliceAI2-marked"):
+                adapter.vcf_samples(path)
+
     def test_missing_and_relative_cache_paths_fail(self):
         for value in ("missing/cache", str(self.folder / "missing"), "", "/path with space/cache"):
             with self.assertRaises(adapter.ContractError):
@@ -184,6 +205,29 @@ class AdapterContracts(unittest.TestCase):
         resource.write_bytes(b"changed after completed cached run")
         with self.assertRaisesRegex(adapter.ContractError, "Resource changed"):
             adapter.launch(args)
+
+    def test_preannotated_v2_launch_rejected_before_output_creation(self):
+        args, _ = self.make_launch_contract()
+        path = Path(args.config)
+        path.write_text(path.read_text() + "spliceai_profile: v2\n")
+        with self.assertRaisesRegex(adapter.ContractError, "not qualified for v2"):
+            adapter.launch(args)
+        self.assertFalse(Path(args.outdir).exists())
+
+    def test_preannotated_v2_task_rejected_before_output_or_legacy_commands(self):
+        args, _ = self.make_launch_contract()
+        bundle = self.folder / "v2-bundle"
+        bundle.mkdir()
+        (bundle / "legacy.yaml").write_text(Path(args.config).read_text() + "spliceai_profile: v2\n")
+        (bundle / "resources.json").write_text(Path(args.resources).read_text())
+        (bundle / "contract.json").write_text(json.dumps({"mode": "annotated", "stub": False,
+            "legacy_root": args.legacy_root, "source_digest": args.source_digest,
+            "vcf_hub_mode": "off", "cadd_hub_mode": "copy"}))
+        for phase in ("annotation", "filtration", "prioritization"):
+            with working_directory(self.folder):
+                with self.assertRaisesRegex(adapter.ContractError, "not qualified for v2"):
+                    adapter.run(SimpleNamespace(bundle=str(bundle), phase=phase, cpus=1, stub=False))
+            self.assertFalse((self.folder / "result").exists())
 
     def test_output_directory_rejects_changed_family_identity(self):
         args, _ = self.make_launch_contract()

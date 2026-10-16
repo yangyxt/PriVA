@@ -44,7 +44,13 @@ outer-wrapper cancellation, shared annotation or family interpretation.
 
 SpliceAI v1 originals and indexes for both assemblies are confirmed downloaded.
 The current hg19 pair is undergoing full verification and original-installer
-registration in Slurm 1514615; PrimateAI still needs BaseSpace browser sign-in.
+registration in Slurm 1514615. Both PrimateAI v0.2 originals are now acquired
+under `yangyxt/caches/PrimateAI_v0_2/` and passed acquisition gzip/header checks.
+The hg19 import is pending: job 1514618 was held before execution after a fixture
+showed the original formatter could register a truncated result following a
+child-sort failure. An independent exact source-to-formatted comparison is being
+added before any import receipt or production registration. The hg38 original
+remains available without changing the selected scientific profile.
 The AlphaMissense build is held for a separate missing original NM-to-ENST
 mapping table. No annotation or evidence branch has been silently disabled.
 The [installation dependency ledger](docs/installation-dependency-ledger-09223ef.md)

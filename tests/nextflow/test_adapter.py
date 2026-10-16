@@ -1,5 +1,6 @@
 import contextlib
 import gzip
+import hashlib
 import importlib.util
 import json
 import os
@@ -29,6 +30,21 @@ class AdapterContracts(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory(dir=ROOT / "tests/nextflow")
         self.addCleanup(self.temp.cleanup)
         self.folder = Path(self.temp.name)
+
+    def test_source_digest_uses_nextflow_path_string_order(self):
+        source = self.folder / "source-order"
+        (source / "conf/cadd").mkdir(parents=True)
+        for name, content in (("conf/cadd.config", "flat\n"),
+                              ("conf/cadd/profile.json", "nested\n"),
+                              ("main.nf", "main\n"),
+                              ("nextflow.config", "settings\n")):
+            (source / name).write_text(content)
+        # Explicit lexical path order, including the dot/slash prefix collision
+        # that made the Java and Python provenance digests disagree in CI.
+        expected = hashlib.sha256(
+            b"conf/cadd.config\0flat\nconf/cadd/profile.json\0nested\n"
+            b"main.nf\0main\nnextflow.config\0settings\n").hexdigest()
+        self.assertEqual(adapter.source_digest(source), expected)
 
     def test_ped_preserves_cohort_context_and_selects_family(self):
         path = self.folder / "cohort.ped"

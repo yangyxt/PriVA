@@ -47,6 +47,9 @@ The current hg19 pair is undergoing full verification and original-installer
 registration in Slurm 1514615; PrimateAI still needs BaseSpace browser sign-in.
 The AlphaMissense build is held for a separate missing original NM-to-ENST
 mapping table. No annotation or evidence branch has been silently disabled.
+The [installation dependency ledger](docs/installation-dependency-ledger-09223ef.md)
+records the ordered calibration recipe and separates bundled ClinVar baseline
+statistics from its currently unqualified fresh-build path.
 
 ## Overview
 

@@ -1,5 +1,6 @@
 """Synthetic header/routing checks; no score conversion or full-cache claims."""
 import gzip
+import fcntl
 import hashlib
 import importlib.util
 import json
@@ -204,6 +205,24 @@ class PairAndInstallTests(Fixture):
         self.assertEqual(self.config.read_bytes(), before)
         run.assert_not_called()
 
+    def test_staging_vcf_direct_or_symlink_never_registers(self):
+        for folder_name in (".building", ".building-active"):
+            folder = self.folder / folder_name
+            folder.mkdir()
+            staged = folder / "scores"
+            staged.write_text(VCF)
+            # The alias itself is outside a staging-named path; resolution must
+            # still reject its target before either key can be registered.
+            alias = self.folder / ("alias" + folder_name.replace(".", "_"))
+            alias.symlink_to(staged)
+            for selected in (staged, alias):
+                before = self.config.read_bytes()
+                with self.subTest(path=str(selected)), mock.patch.object(CACHE.subprocess, "run") as run:
+                    with self.assertRaisesRegex(ValueError, "staging"):
+                        CACHE.install(self.config, self.folder, selected, self.indel)
+                run.assert_not_called()
+                self.assertEqual(self.config.read_bytes(), before)
+
     def test_config_assembly_change_during_validation_is_rejected(self):
         original = CACHE.validate_pair
 
@@ -237,6 +256,98 @@ class PairAndInstallTests(Fixture):
         self.assertEqual(result.returncode, 2)
         self.assertIn("Invalid YAML config", result.stderr)
         self.assertNotIn("Traceback", result.stderr)
+
+
+class CompletedProjectionTests(Fixture):
+    def setUp(self):
+        super().setUp()
+        self.snv = self.write("snv.vcf.gz", self.header("##reference=GRCh38\n##SpliceAI2Version=2\n"), True)
+        self.indel = self.write("indel.vcf.gz", self.header("##reference=GRCh38\n##SpliceAI2Version=2\n"), True)
+        outputs = {}
+        for role, path in (("snv", self.snv), ("indel", self.indel)):
+            index = self.write(path.name + ".tbi", "synthetic index: not an indexing acceptance test")
+            outputs[role] = {"path": str(path), "index_path": str(index), "bytes": path.stat().st_size,
+                             "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+                             "index_sha256": hashlib.sha256(index.read_bytes()).hexdigest()}
+        self.receipt = self.folder / "adapter.ready.json"
+        self.document = {"schema_version": 1, "resource": "SpliceAI2", "version": "2.0", "assembly": "GRCh38",
+                         "status": "prepared_annotation_only", "coverage": "complete_published",
+                         "scientific_qualified": False, "source_revision": CACHE.REVISION,
+                         "source_manifest_sha256": "a" * 64, "outputs": outputs}
+        self.save_receipt()
+
+    def save_receipt(self):
+        self.receipt.write_text(json.dumps(self.document))
+
+    def assert_registration_rejected(self, pattern=None):
+        before = self.config.read_bytes()
+        with mock.patch.object(CACHE.subprocess, "run") as run:
+            with self.assertRaises((ValueError, OSError)) as raised:
+                CACHE.install(self.config, self.folder, self.snv, self.indel)
+        if pattern:
+            self.assertIn(pattern, str(raised.exception))
+        run.assert_not_called()
+        self.assertEqual(self.config.read_bytes(), before)
+
+    def test_completed_v2_vcfs_pass_without_conversion_or_byte_changes(self):
+        before = [path.read_bytes() for path in (self.snv, self.indel)]
+        with mock.patch.object(CACHE.subprocess, "run") as run:
+            self.assertEqual(CACHE.install(self.config, self.folder, self.snv, self.indel)["format"], "vcf_spliceai2")
+        run.assert_not_called()
+        self.assertEqual([path.read_bytes() for path in (self.snv, self.indel)], before)
+
+    def test_v2_final_vcf_without_ready_receipt_cannot_register(self):
+        self.receipt.unlink()
+        self.assert_registration_rejected()
+
+    def test_pending_build_directory_even_with_ready_receipt_rejected(self):
+        for name in (".building", ".building-pending"):
+            path = self.folder / name
+            path.mkdir()
+            self.assert_registration_rejected("pending .building")
+            path.rmdir()
+
+    def test_wrong_pair_subset_receipt_or_wrong_source_identity_rejected(self):
+        original = json.loads(json.dumps(self.document))
+        for key, value in (("coverage", "validation_subset"), ("status", "building"),
+                           ("assembly", "GRCh37"), ("source_revision", "wrong"),
+                           ("source_manifest_sha256", None)):
+            self.document = {**original, key: value}
+            self.save_receipt()
+            with self.subTest(key=key):
+                self.assert_registration_rejected()
+        self.document = original
+        self.document["outputs"]["snv"], self.document["outputs"]["indel"] = (
+            self.document["outputs"]["indel"], self.document["outputs"]["snv"])
+        self.save_receipt()
+        self.assert_registration_rejected("not its completed receipt output")
+
+    def test_output_size_or_wrong_index_membership_rejected(self):
+        original = dict(self.document["outputs"]["snv"])
+        self.document["outputs"]["snv"]["bytes"] += 1
+        self.save_receipt()
+        self.assert_registration_rejected("size does not match")
+        self.document["outputs"]["snv"] = {**original, "index_path": str(self.indel) + ".tbi"}
+        self.save_receipt()
+        self.assert_registration_rejected("index does not match")
+
+    def test_receipt_and_index_mutation_before_registration_rejected(self):
+        original = CACHE._register_vcfs
+        for path in (self.receipt, Path(str(self.snv) + ".tbi")):
+            initial = path.read_bytes()
+
+            def mutate(*args):
+                path.write_bytes(initial + b" ")
+                return original(*args)
+
+            with self.subTest(path=path.name), mock.patch.object(CACHE, "_register_vcfs", side_effect=mutate):
+                self.assert_registration_rejected("changed after validation")
+            path.write_bytes(initial)
+
+    def test_active_driver_lock_blocks_vcf_registration(self):
+        with (self.folder / ".install.lock").open("a") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            self.assert_registration_rejected("preparation is active")
 
 
 class ManifestTests(Fixture):

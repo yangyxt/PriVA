@@ -81,8 +81,8 @@ jobs:
         # YAML CLI used by the unchanged shell installer. No real caches run.
         run: |
           sudo apt-get update
-          sudo apt-get install --no-install-recommends --yes tabix yq
-          dpkg-query --show --showformat='${Package} ${Version}\n' tabix yq
+          sudo apt-get install --no-install-recommends --yes tabix bcftools yq
+          dpkg-query --show --showformat='${Package} ${Version}\n' tabix bcftools yq
           command -v bgzip tabix yq
           bgzip --version
           tabix --version
@@ -100,6 +100,7 @@ jobs:
           python -m unittest discover -s tests -p 'test_install_utils_resources.py' -v
           python -m unittest discover -s tests -p 'test_install_utils_spliceai2.py' -v
           python -m unittest discover -s tests -p 'test_spliceai2_runtime_guard.py' -v
+          python -m unittest discover -s tests -p 'test_vcf_bgz_validation.py' -v
           python -m unittest discover -s tests/cadd -p 'test_upstream.py' -v
           python -m unittest discover -s tests/cadd -p 'test_selection_view.py' -v
 

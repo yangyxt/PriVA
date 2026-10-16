@@ -209,8 +209,10 @@ The standalone scorer must run all four original stages: transformation,
 prediction, consequence hierarchy and PHRED conversion. The previous standalone
 pin `79d767a` included native hierarchy/PHRED and is a historical experiment;
 candidate `4194be3` runs all four original Python stages and passes contract
-tests. Its pinned source/binary bridge is implemented; real-model qualification
-is still required before production activation.
+tests. Both 18-row upstream assembly fixtures match direct original Python
+exactly through features, raw scores, hierarchy and PHRED, including full rows
+and order. Both real Nextflow calculation routes and one cached resume pass.
+Shared annotation and broad scientific qualification remain pending.
 Keep the original numerical libraries, other scientific packages and model
 assets pinned. An optimized Python backend must be explicitly selected.
 
@@ -226,6 +228,23 @@ assets pinned. An optimized Python backend must be explicitly selected.
 Upstream model fixtures qualify calculation only. They do not satisfy public-data
 annotation acceptance or family acceptance. Keep failed optimization experiments
 and their mismatch reports; retain the unmodified executable reference.
+
+The nonfinite edge suite found one explicit CLI mismatch: original PHRED code
+prints a diagnostic into stdout for raw `nan` and exits zero; the standalone
+preserves the output bytes but rejects the malformed table and exits one.
+This failure-behavior gate remains failed. Compare original and optimized Python
+at the same scorer boundary, retaining stdout/stderr, exit/signal and malformed
+outputs. Record artifact validation separately; do not call malformed output a
+valid score artifact. Independent profiling of passing model inputs continues.
+
+`CaddSelection.pm` delegates selection to official VEP methods and emits native
+ordinals while keeping every PriVA transcript row. `cadd_select_view.py` validates
+coverage/context before recovering the CADD view. Its 25 Python and 18 native
+method fixture checks establish mechanics only. The policy fragment leaves the
+CADD transcript source pool unqualified: Ensembl-only needs RefSeq-only overlap
+handling; Ensembl plus RefSeq needs compatible peptide/GTF/model coverage. Neither
+is activated by default. PriVA's merged cache and `use_transcript_ref` remain
+fixed, and their CADD-derived profile requires separate qualification.
 
 ## Current cluster build checkpoint
 
@@ -251,3 +270,8 @@ prompt, pins the cache release, retains official Conda VEP/API and checks cache
 and plugin outputs. All 28 bootstrap tests pass. Corrected real rerun 1514593
 reached the intended VEP113 GRCh37 download, then deliberately timed out (124);
 that bounded checkpoint is not a complete installation.
+
+Nine additional installer orchestration regressions pass after correcting the
+gnomAD reference argument and all-chromosome scheduling, failure barriers,
+Conservation-before-AlphaMissense ordering, Conservation reuse and configured
+motif output. Scientific Python calculations remain unchanged.

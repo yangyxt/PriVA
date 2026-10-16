@@ -82,7 +82,9 @@ jobs:
           python -m unittest discover -s tests -p 'test_nextflow_parity.py' -v
           python -m unittest discover -s tests -p 'test_cluster_deployment.py' -v
           python -m unittest discover -s tests -p 'test_install_utils_bootstrap.py' -v
+          python -m unittest discover -s tests -p 'test_install_utils_resources.py' -v
           python -m unittest discover -s tests/cadd -p 'test_upstream.py' -v
+          python -m unittest discover -s tests/cadd -p 'test_selection_view.py' -v
 
       - name: Install the pinned Rust toolchain
         run: rustup toolchain install 1.90.0 --profile minimal --component rustfmt

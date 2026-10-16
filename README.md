@@ -28,6 +28,12 @@ cache deployment and calibration are still in progress. Synthetic checks, real
 CADD model tests, public benchmark acceptance and family acceptance are distinct.
 The public benchmark and supplied-family exact ACMG/ranking gates remain pending.
 
+The actual installer reproduced and fixed VEP's unattended false success; the
+corrected run reached the pinned cache download. Full cache deployment continues.
+Both 18-row CADD assembly fixtures now match original Python exactly through
+Nextflow. One `NaN` edge still changes the wrapper exit status when original
+Python emits a malformed table; this mismatch remains reported and unaccepted.
+
 ## Overview
 
 This repository contains scripts and configuration files for an automated variant prioritization pipeline based on the ACMG/AMP guidelines. PriVA combines transcript-level annotation, population and functional data, gene-disease mechanism and inheritance context, and family information to evaluate ACMG/AMP criteria and produce ranked variant lists for each family. Annotation resources are deployed once and can be refreshed; each cohort run then performs annotation, family-level filtering, criteria matching, and prioritization.

@@ -12,6 +12,33 @@ SPEC = importlib.util.spec_from_file_location(
     "resources", Path(__file__).resolve().parents[1] / "scripts/deploy_cluster_resources.py")
 resources = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(resources)
+READINESS_SPEC = importlib.util.spec_from_file_location(
+    "readiness", Path(__file__).resolve().parents[1] / "scripts/check_cluster_readiness.py")
+readiness = importlib.util.module_from_spec(READINESS_SPEC)
+READINESS_SPEC.loader.exec_module(readiness)
+
+
+class IndependentLicensedReadiness(unittest.TestCase):
+    def test_imported_spliceai_does_not_clear_missing_primateai(self):
+        records = [{"key": key, "status": "present_not_scientifically_qualified"}
+                   for key in ("spliceai_snv_prescore", "spliceai_indel_prescore")]
+        records.append({"key": "primateai_prescore", "status": "missing"})
+        blockers = readiness.licensed_blockers(records)
+        self.assertEqual([item["resource"] for item in blockers], ["PrimateAI v0.2"])
+        self.assertEqual(blockers[0]["unavailable_config_keys"], ["primateai_prescore"])
+
+    def test_missing_indel_keeps_spliceai_blocked(self):
+        records = [{"key": key, "status": "present_not_scientifically_qualified"}
+                   for key in ("spliceai_snv_prescore", "primateai_prescore")]
+        blockers = readiness.licensed_blockers(records)
+        self.assertEqual([item["resource"] for item in blockers], ["SpliceAI v1"])
+        self.assertEqual(blockers[0]["unavailable_config_keys"], ["spliceai_indel_prescore"])
+
+    def test_all_present_only_clears_installation_blockers(self):
+        records = [{"key": key, "status": "present_not_scientifically_qualified"}
+                   for key in ("spliceai_snv_prescore", "spliceai_indel_prescore", "primateai_prescore")]
+        self.assertEqual(readiness.licensed_blockers(records), [])
+        self.assertTrue(all(item["status"] == "present_not_scientifically_qualified" for item in records))
 
 
 class DownloadIntegrity(unittest.TestCase):

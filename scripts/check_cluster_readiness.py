@@ -35,6 +35,21 @@ def inspect(path):
     return "present_not_scientifically_qualified"
 
 
+def licensed_blockers(resources):
+    """Report each missing configured cache independently; presence is not qualification."""
+    statuses = {item["key"]: item["status"] for item in resources}
+    groups = (
+        ("SpliceAI v1", ("spliceai_snv_prescore", "spliceai_indel_prescore"),
+         "Register the confirmed matching-assembly SNV/indel originals from caches/SpliceAI_v1 through the real installer after integrity checks. Do not duplicate the browser acquisition."),
+        ("PrimateAI v0.2", ("primateai_prescore",),
+         "Obtain the licensed original through the authorized BaseSpace browser acquisition, then confirm completion and import the matching assembly from caches/PrimateAI_v0_2. Keep dependent scientific annotation gated; a missing whole cache is not an ordinary missing variant score."),
+    )
+    return [{"resource": label, "action": action, "unavailable_config_keys": missing}
+            for label, keys, action in groups
+            if (missing := [key for key in keys
+                            if statuses.get(key) != "present_not_scientifically_qualified"])]
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", type=Path, required=True)
@@ -67,8 +82,7 @@ def main():
         "status": "incomplete_installation", "config": str(args.config),
         "software_qualified": "environment.ready.json" in receipts,
         "resources": resources, "completed_stage_receipts": receipts,
-        "blockers": [
-            {"resource": "SpliceAI v1 + PrimateAI v0.2", "action": "Authorized MBP browser acquisition is in progress under caches/SpliceAI_v1 and caches/PrimateAI_v0_2. Wait for explicit final-ready paths, validate the matching assembly, then import through the original installer. Do not duplicate downloads or require another CLI login."},
+        "blockers": licensed_blockers(resources) + [
             {"resource": "MaveDB hg19", "action": "Discuss the unavailable assembly-specific annotation and each dependent calculation before omission."},
             {"resource": "Shared PriVA/CADD official VEP113", "action": "Qualify one annotation pass, transcript/peptide/GTF views and complete feature mapping. Packaged CADD VEP110 is reference-only."},
             {"resource": "Derived calibration caches", "action": "Complete gnomAD hg19 liftover, AlphaMissense/ClinVar statistics and other configured cache builders after inputs finish."},

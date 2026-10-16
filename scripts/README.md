@@ -37,11 +37,19 @@ download root and `MD5SUMs` to the historical indel data MD5
 `c583ed9f852c9896081205c3523f9f23`. `deploy_cluster_resources.py` fully hashes
 an existing partial before attempting HTTP resume; only a matching MD5 can
 skip HTTP. Existing final files are fully rehashed, size gates remain active,
-and publication stays atomic after verification. Job 1514744 was RUNNING on
-analysis-cpa1 at 2026-10-16T07:50Z, using the frozen `priva-cluster-tools-20774bd`
-snapshot; its first phase rechecks the 602,910,809,417-byte SNV file and existing
-index, then verifies/reuses the 11,003,494,781-byte indel partial and fetches the
-missing Washington index. A successful ready receipt remains pending.
+and publication stays atomic after verification. Job 1514744 COMPLETED (0:0)
+at 2026-10-16T08:02:48Z after 13 m 15 s on analysis-cpa1, using the frozen
+`priva-cluster-tools-20774bd` snapshot. It fully rehashed and reused the
+602,910,809,417-byte SNV file, existing SNV index and 11,003,494,781-byte indel
+partial, then atomically published the indel file. The only HTTP transfer was
+the matching 2,644,685-byte Washington indel index, which passed its MD5.
+`cadd-prescores.ready.json` records deployed status, job 1514744 and manifest
+SHA256 `add789be1ce0180fd0d246175c4289f5f4f2989acd8364e8aa0f36b38c0ff59a`.
+Bounded real indexed-pair validation passed in Slurm step 1514363.262 at
+08:03:30Z: pysam 0.22.1 verified all 24 contigs in each SNV/indel pair, matching
+135-column schemas and exact-coordinate refetches. It did not repeat full-body
+MD5/CRC. DataLad `9e70725` records the closed receipt/log/report evidence;
+real VEP/model, public-sample, shared-annotation and family acceptance remain pending.
 The earlier `fc21869` snapshot and failed 1514581 evidence remain unchanged.
 All 20 deployment and 31 licensed-import fixture tests pass; the missing frozen
 `054b494` helper fixture was restored with its existing SHA256 unchanged.

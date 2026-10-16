@@ -446,8 +446,9 @@ is a historical URL inventory, not a valid restore file. The pinned resource ins
 inactive and write stage receipts. `scripts/check_cluster_readiness.py` reports
 remaining gaps without equating file presence with scientific qualification.
 
-At **2026-10-16T07:50Z**, approved CADD prescore recovery **1514744 was RUNNING**
-on analysis-cpa1, started 07:49:33Z with 1 CPU / 2 GB / 2 h on copy. It uses
+Approved CADD prescore recovery **1514744 COMPLETED (0:0)** at
+**2026-10-16T08:02:48Z**, after **13 m 15 s**, on analysis-cpa1. It used
+1 CPU / 2 GB / 2 h on copy; batch MaxRSS was 25,760 KiB. It ran
 frozen source `20774bd56a706d8b82a5640bf23b758216544136` under
 `yangyxt/softwares/priva-cluster-tools-20774bd`. The GRCh37 v1.7 manifest now
 binds Washington's download root and `MD5SUMs` to historical `09223ef` indel MD5
@@ -456,16 +457,28 @@ binds Washington's download root and `MD5SUMs` to historical `09223ef` indel MD5
 `fc21869` cross-mirror manifest remain historical evidence.
 
 ```text
-Existing SNV + index → full MD5 recheck
-Completed indel partial → full MD5 → reuse bytes without HTTP → atomic final
-Missing Washington index → fetch + MD5 → stage ready receipt
-1514744 RUNNING at 07:50Z → completed prescore deployment still pending
+Existing SNV + index → full MD5 recheck → reused
+Completed indel partial → full MD5 → no HTTP → atomic final publication
+Matching Washington index → only download + MD5 → deployed ready receipt
+1514744 COMPLETED → real SNV/indel indexed access verified on all 24 contigs
 ```
 
-The existing SNV is 602,910,809,417 bytes; the retained indel partial is
-11,003,494,781 bytes. Only a full MD5 match skips partial-file HTTP resume;
-size gates remain active and every existing final file is rehashed. No ready
-receipt is claimed before all four prescore files pass. All 20 deployment and
+The 602,910,809,417-byte SNV file, existing SNV index and 11,003,494,781-byte
+indel bytes were fully rehashed and reused. The log contains one curl transfer,
+for the matching 2,644,685-byte Washington indel index. Only a full MD5 match
+skips partial-file HTTP resume; size gates remain active and every existing
+final file is rehashed. `deployment/cadd-prescores.ready.json` records deployed
+status, job 1514744 and manifest SHA256
+`add789be1ce0180fd0d246175c4289f5f4f2989acd8364e8aa0f36b38c0ff59a`.
+Bounded real indexed-pair validation passed in Slurm step 1514363.262 at
+08:03:30Z with pysam 0.22.1: 24 contigs per SNV/indel pair, matching 135-column
+schemas and RawScore/PHRED in one-based columns 134/135. Every contig's first
+row and exact-coordinate refetch passed; bounded queries returned 114 SNV and
+41 indel rows. Manifest/receipt/data/index stat identities stayed stable,
+expected receipt/pins matched and no `.partial` remained. This bounded audit
+did not repeat full-body MD5/CRC; recovery supplies the full MD5 evidence.
+The main config already uses matching Washington URLs/MD5s and the recovered
+`cadd_base_dir`; no config mutation was required. All 20 deployment and
 31 licensed-import fixture tests pass. Initial evidence retains 21 failures
 from a missing frozen helper; restoring the exact `054b494` helper preserved
 the existing expected SHA256. Closed logs use
@@ -492,12 +505,19 @@ remain pending.
 
 DataLad `80e4163` records the SpliceVault receipt/log/verification record,
 data-project README and both closed recovery test logs, with metadata recorded
-and all six selected paths clean. The live 1514744 log and future prescore
-receipt are excluded.
+and all six selected paths clean. That earlier save excluded the then-active
+1514744 log and not-yet-published prescore receipt.
+
+DataLad `9e70725` now records five selected closed paths: the data-project README,
+`deployment/cadd-prescores.ready.json`, `logs/cluster-cadd-prescores-recovery_1514744.log`,
+`logs/cadd-prescore-pair-check-1514744.log` and
+`validation/cadd-prescore-pairs-1514744.json`. Metadata is recorded and those
+selected paths are clean. Indexed access does not establish real VEP/model,
+shared-annotation, public-sample or family qualification.
 
 Recovery source `20774bd56a706d8b82a5640bf23b758216544136` also passed
 [CI 38869590348](https://github.com/yangyxt/PriVA/actions/runs/38869590348).
-CI success does not establish completion of the active prescore recovery.
+CI success is separate from the completed resource checks and deployed receipt.
 
 VEP/cache archives, CADD annotations/prescores and gnomAD inputs are separate
 Slurm jobs; completed shared-plugin and HPO/pext stages do not imply full readiness.

@@ -70,6 +70,17 @@ without changing expected hashes. Both closed logs follow
 and include before/after tested source hashes. These are installation fixtures;
 real resource, VEP, model and family qualification are recorded separately.
 
+Real recovery 1514744 subsequently COMPLETED (0:0) at
+2026-10-16T08:02:48Z with all four full MD5 checks and a deployed receipt.
+It reused the existing SNV/index and indel bytes; only the matching indel index
+was downloaded. Bounded real indexed-pair validation passed in Slurm step
+1514363.262 at 08:03:30Z: 24 contigs per pair, matching 135-column schemas,
+every contig's first row/exact-coordinate refetch, stable file stat identities,
+expected receipt/pins and no remaining partials. This audit did not repeat
+full-body MD5/CRC; the completed recovery supplies full MD5 evidence.
+DataLad `9e70725` records the closed receipt/log/report evidence. These checks
+remain separate from the 51 fixture tests and from real VEP/model/family qualification.
+
 Updated: 2026-09-14. Existing test modules cover the workflows and data contracts
 identified by their module docstrings. This inventory records the startup tests
 added alongside the installer change; other upstream tests are unchanged.

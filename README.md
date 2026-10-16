@@ -74,16 +74,17 @@ The [installation dependency ledger](docs/installation-dependency-ledger-09223ef
 records the ordered calibration recipe and separates bundled ClinVar baseline
 statistics from its currently unqualified fresh-build path.
 
-Resource update, **2026-10-16T07:50Z**:
+Resource update, **2026-10-16T08:03:30Z**:
 
 | Installation work | Verified state | Remaining gate |
 | --- | --- | --- |
-| CADD prescore recovery 1514744 | RUNNING on analysis-cpa1 from frozen `20774bd56a706d8b82a5640bf23b758216544136`. The manifest now pins the historical Washington GRCh37 v1.7 data/index pair; 20 deployment and 31 licensed-import fixture tests pass. | Full MD5 revalidation of existing files, verified partial publication and the matching index must finish before a prescore ready receipt. |
+| CADD prescore recovery 1514744 | COMPLETED (0:0), 13 m 15 s, with a deployed receipt for the four Washington GRCh37 v1.7 files. Existing SNV/index and indel bytes passed full MD5 rechecks; only the missing matching index was downloaded. Real indexed-pair checks passed all 24 contigs in each SNV/indel pair. Source `20774bd` has 20 deployment and 31 licensed-import fixture tests passed. | Deployment and bounded indexed access are verified. Real VEP/model, shared-annotation, public-sample and supplied-family acceptance remain pending. |
 | SpliceVault 1514603 | COMPLETED (0:0) at 2026-10-16T07:03:13Z; the original release113-to-GRCh37 derived resource is built, verified and already configured. | Real VEP use, scientific qualification and supplied-family acceptance remain pending. |
 
 The [deployment checkpoint](docs/nextflow_migration.md#current-cluster-build-checkpoint)
 records the recovery guards, closed test evidence and SpliceVault verification.
 Recovery source `20774bd` passed [CI 38869590348](https://github.com/yangyxt/PriVA/actions/runs/38869590348).
+DataLad `9e70725` records the closed recovery receipt/log and indexed-pair report/log.
 Installation progress leaves the original-Python pin and experimental-backend
 acceptance boundaries above unchanged.
 

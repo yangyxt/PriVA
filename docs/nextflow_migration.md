@@ -174,8 +174,10 @@ reused all four tasks with `-resume`, preserved an additional cohort sample,
 and rejected output reuse with a changed software identity. Successful evidence
 is in the data project's `validation/nextflow-integration-v3/{validation,logs}`;
 its `work/` tree remains available for resume. These artificial fixtures are
-not a real-family test. The GitHub Actions workflow repeats these contract
-checks but has not been dispatched or run remotely during this implementation.
+not a real-family test. GitHub Actions later passed the expanded contract, Rust and both Nextflow
+stub suites at `56b7762` ([run 38828310089](https://github.com/yangyxt/PriVA/actions/runs/38828310089)).
+The integrated source-digest ordering regression was fixed and 16 adapter checks
+passed. These CI checks contain no scientific annotation or real-family analysis.
 
 The driver must run in a valid allocation/approved service. On HGSC analysis
 nodes, work exceeding any of 2 CPUs, 4 GB or 2 minutes belongs in Slurm. Local
@@ -206,7 +208,9 @@ identical table; their distinct receipt schemas are not interchangeable.
 The standalone scorer must run all four original stages: transformation,
 prediction, consequence hierarchy and PHRED conversion. The previous standalone
 pin `79d767a` included native hierarchy/PHRED and is a historical experiment;
-a new reviewed all-Python revision is required before production integration.
+candidate `4194be3` runs all four original Python stages and passes contract
+tests. Its pinned source/binary bridge is implemented; real-model qualification
+is still required before production activation.
 Keep the original numerical libraries, other scientific packages and model
 assets pinned. An optimized Python backend must be explicitly selected.
 
@@ -226,8 +230,9 @@ and their mismatch reports; retain the unmodified executable reference.
 ## Current cluster build checkpoint
 
 Installed `priva_acmg` software passed import and executable checks after adding
-missing VEP Perl helpers. Its explicit package export and readiness receipt are
-stored in the data project's `deployment/`. The pinned resource installers under
+missing VEP Perl helpers. Its readiness receipt and restorable `environment.conda-explicit.txt` lock are
+stored in the data project's `deployment/`. The earlier `environment.explicit.txt`
+is a historical URL inventory, not a valid restore file. The pinned resource installers under
 `scripts/deploy_cluster_*.py` verify content identity, keep partial downloads
 inactive and write stage receipts. `scripts/check_cluster_readiness.py` reports
 remaining gaps without equating file presence with scientific qualification.
@@ -238,3 +243,11 @@ SpliceAI v1 and PrimateAI licensed inputs, hg19 MaveDB policy, derived calibrati
 caches and shared-VEP/CADD qualification remain explicit gates. Current scheduler
 status and exact completed test counts are maintained in the project README,
 not inferred from this implementation checkpoint.
+
+The actual original `main_install` was reproduced in Slurm 1514592 with an
+isolated copied environment. VEP's update prompt exited zero on batch EOF,
+leaving its cache/plugins absent while PriVA continued. The fix disables that
+prompt, pins the cache release, retains official Conda VEP/API and checks cache
+and plugin outputs. All 28 bootstrap tests pass. Corrected real rerun 1514593
+reached the intended VEP113 GRCh37 download, then deliberately timed out (124);
+that bounded checkpoint is not a complete installation.

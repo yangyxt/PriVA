@@ -234,9 +234,12 @@ pub(crate) fn run() -> Result<()> {
     if args.get(1).map(String::as_str) == Some("score-criteria") {
         return crate::acmg_scoring::score_table::dispatch(&args[2..]);
     }
+    if args.get(1).map(String::as_str) == Some("spliceai2-vcf") {
+        return crate::spliceai2::dispatch(&args[2..]);
+    }
     if args.len() != 6 || args[1] != "final-order" || args[4] != "--chrom-type" {
         return Err(invalid(
-            "usage: priva final-order INPUT.tsv NEW_OUTPUT.tsv --chrom-type string|integer\n       priva score-criteria INPUT.tsv NEW_OUTPUT.tsv --no-clingen-override\n       priva score-criteria INPUT.tsv NEW_OUTPUT.tsv --clingen-evidence-column COLUMN\nOpt-in boundaries only; criteria must already be assigned, and final-order additionally requires sort_index.",
+            "usage: priva final-order INPUT.tsv NEW_OUTPUT.tsv --chrom-type string|integer\n       priva score-criteria INPUT.tsv NEW_OUTPUT.tsv --no-clingen-override\n       priva score-criteria INPUT.tsv NEW_OUTPUT.tsv --clingen-evidence-column COLUMN\n       priva spliceai2-vcf --help\nOpt-in boundaries only; criteria must already be assigned, and final-order additionally requires sort_index. SpliceAI2 is an annotation-only projection.",
         ));
     }
     final_order(Path::new(&args[2]), Path::new(&args[3]), &args[5])

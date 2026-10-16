@@ -88,6 +88,7 @@ jobs:
         run: |
           python -m unittest discover -s tests/nextflow -p 'test_adapter.py' -v
           python -m unittest discover -s tests -p 'test_nextflow_parity.py' -v
+          python -m unittest discover -s tests -p 'test_cluster_alpha.py' -v
 
       - name: Install the pinned Rust toolchain
         run: rustup toolchain install 1.90.0 --profile minimal --component rustfmt

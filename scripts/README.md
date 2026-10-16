@@ -30,8 +30,21 @@ The resource stages keep SpliceAI/PrimateAI imports, unsupported-assembly policy
 shared CADD transcript qualification, and downstream cache builds explicit.
 Successful downloads alone do not constitute a qualified complete pipeline.
 
-`build_cluster_alpha.sbatch` runs the original AlphaMissense cache stages after
-an explicit scheduler dependency on the VEP cache job. `diagnose_cluster_install.sbatch`
+`build_cluster_alpha.sbatch` requires five arguments: `LOG CONFIG SOURCE_PREFIX
+APPROVED_NM_TO_ENST_TSV SHA256`, plus an explicit scheduler dependency on the
+VEP cache job. Missing or changed mapping data fails before activation or
+annotation. The wrapper verifies the frozen `09223ef` installer and motif
+Python hashes, runs original `AlphaMissense_anno`, then preserves the motif
+helper's option order/defaults with explicit `--nm_to_enst_tsv`. It retains the
+original timestamp reuse predicates and reports reuse separately; reuse does
+not establish the existing output's mapping provenance. Fresh calculations
+recheck mapping hash and file identity before completion/config updates.
+The mapping is neither selected nor downloaded here: its positional ENST/NM
+columns and scientific provenance still need approval. Scientific Python is
+unchanged, and held job `1514589` remains an older frozen submission; updating
+this wrapper does not update that job or authorize its release.
+
+`diagnose_cluster_install.sbatch`
 runs the unchanged historical `main_install` in a separate writable prefix,
 using real copies of the exact package lock and a bounded runtime. A timeout is
 an operator checkpoint, not successful installation. The restorable package

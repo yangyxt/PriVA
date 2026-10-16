@@ -18,6 +18,7 @@ import sys
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'bin'))
 import cadd_shared_vep
+import cadd_standalone
 PIN = '1fead0c1e02d3f0a8599bdb04e6b3a2dd70b4866'
 ALIASES = {'hg19': 'GRCh37', 'GRCh37': 'GRCh37', 'hg38': 'GRCh38', 'GRCh38': 'GRCh38'}
 
@@ -46,7 +47,7 @@ def write_json(path, value):
 
 
 def source_identity():
-    paths = ['bin/cadd_task.py', 'bin/cadd_shared_vep.py', 'bin/cadd/upstream_annotate.sh',
+    paths = ['bin/cadd_task.py', 'bin/cadd_shared_vep.py', 'bin/cadd_standalone.py', 'bin/cadd/upstream_annotate.sh',
              'bin/cadd/upstream_calculate.sh', 'cadd.nf',
              'modules/local/cadd_upstream.nf', 'conf/cadd.config', 'nextflow.config',
              'conf/cadd/GRCh37.reference.json', 'conf/cadd/GRCh38.reference.json']
@@ -253,6 +254,8 @@ def stage_preflight(p, stage, stub=False):
         for key in ['CADD_IMPUTE_CONFIG', 'CADD_MODEL', 'CADD_PHRED_TABLE']:
             if Path(env[key]).resolve() not in verified:
                 raise ContractError(key + ' must be bound to a verified immutable asset')
+    if stage == 'calculation' and cfg.get('standalone'):
+        cadd_standalone.verify(cfg['standalone'])
     for key in ['CADD_PYTHON2', 'CADD_VEP', 'CADD_ESM_PYTHON', 'CADD_REGSEQ_PYTHON',
                 'CADD_MMSPLICE_PYTHON', 'CADD_BGZIP', 'CADD_TABIX']:
         if key in env and (not Path(env[key]).is_absolute() or not os.access(env[key], os.X_OK)):
@@ -355,6 +358,7 @@ def execute(args):
     else:
         stage_preflight(p, stage, args.stub)
     shared_provenance = None
+    standalone_provenance = None
     shared_vcf = None
     if args.command == 'annotate' and annotation_source == 'shared-vep':
         shared_vcf, shared_provenance = cadd_shared_vep.verify(args.input, p, args.stub)
@@ -375,6 +379,8 @@ def execute(args):
                 handle.write('#' + '\t'.join(columns + ['RawScore', 'PHRED']) + '\n')
                 for fields in rows(source, columns):
                     handle.write('\t'.join(fields + ['0.000000', '0']) + '\n')
+        elif p['calculation'].get('standalone'):
+            standalone_provenance = cadd_standalone.execute(p, args.input, scored, work)
         else:
             run_backend(p, stage, source, scored, work)
         count = 0
@@ -388,6 +394,9 @@ def execute(args):
             raise ContractError('Calculation dropped annotation rows')
         result = receipt(p, args.profile, stage, source, scored, count, args.stub, before)
         result['input_manifest_sha256'] = digest(Path(args.input) / 'manifest.json')
+        if standalone_provenance is not None:
+            result['standalone'] = standalone_provenance
+            result['implementation'] = 'pinned-cadd-rs-interface; all-four-calculation-stages-upstream-python'
     else:
         input_before = digest(source)
         raw = source
@@ -489,7 +498,7 @@ def main():
     args = parser().parse_args()
     try:
         args.func(args)
-    except (ContractError, cadd_shared_vep.SharedVepError, OSError, KeyError, TypeError, json.JSONDecodeError, subprocess.CalledProcessError) as error:
+    except (ContractError, cadd_shared_vep.SharedVepError, cadd_standalone.StandaloneError, OSError, KeyError, TypeError, json.JSONDecodeError, subprocess.CalledProcessError) as error:
         print('PriVA CADD contract: ' + str(error), file=sys.stderr)
         return 2
     return 0

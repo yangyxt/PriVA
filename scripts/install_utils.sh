@@ -419,6 +419,10 @@ function VEP_plugins_install() {
     LOEUF_install ${config_file} ${ASSEMBLY_VERSION} || \
     { log "Failed to install LOEUF"; return 1; }
 
+    # AlphaMissense_anno consumes Conservation; deploy it before that stage.
+    Conservation_install "${config_file}" "${VEP_PLUGINSCACHEDIR}" "${ASSEMBLY_VERSION}" || \
+    { log "Failed to install Conservation file"; return 1; }
+
     # Then install AlphaMissense
     AlphaMissense_install ${config_file} ${VEP_PLUGINSCACHEDIR} ${ASSEMBLY_VERSION} ${VEP_PLUGINSDIR} || \
     { log "Failed to install AlphaMissense"; return 1; }
@@ -445,10 +449,6 @@ function VEP_plugins_install() {
     { log "Failed to install PrimateAI"; return 1; }
 
 
-    # Install Conservation file if assembly version is hg38
-    log "Now we start to install the conservation file"
-    local conservation_file=$(Conservation_install ${config_file} ${VEP_PLUGINSCACHEDIR} ${ASSEMBLY_VERSION}) || \
-    { log "Failed to install Conservation file"; return 1; }
 }
 
 
@@ -1004,17 +1004,20 @@ function AlphaMissense_anno() {
 
 function AlphaMissense_pick_missense_constrained_segments() {
     local config_file=${1}
-    local intolerant_motif_prefix=${2}
+    local intolerant_motif_prefix=${2:-}
     local pick_intolerant_motifs_py=${SCRIPT_DIR}/am_pick_missense_constrained_segments.py
     local assembly=$(read_yaml ${config_file} "assembly")
+    local alphamissense_intolerant_motifs=$(read_yaml ${config_file} "alphamissense_intolerant_motifs")
 
     if [[ -z ${intolerant_motif_prefix} ]]; then
-        log "The intolerant motif prefix is not provided, we will use the default prefix: /paedyl01/disk1/yangyxt/public_data/VEP_plugins_caches/AlphaMissense/AlphaMissense_hg19.kde"
-        local intolerant_motif_prefix="/paedyl01/disk1/yangyxt/public_data/VEP_plugins_caches/AlphaMissense/AlphaMissense_${assembly}.kde"
+        if [[ -n $alphamissense_intolerant_motifs && $alphamissense_intolerant_motifs != null ]]; then
+            intolerant_motif_prefix=${alphamissense_intolerant_motifs%.pkl}
+        else
+            intolerant_motif_prefix="$(read_yaml "$config_file" vep_plugins_cachedir)/AlphaMissense/AlphaMissense_${assembly}.kde"
+        fi
     fi
 
     local alphamissense_vep_vcf=$(read_yaml ${config_file} "alphamissense_vep_vcf")
-    local alphamissense_intolerant_motifs=$(read_yaml ${config_file} "alphamissense_intolerant_motifs")
     local threads=$(read_yaml ${config_file} "threads")
     [[ -f ${alphamissense_intolerant_motifs} ]] && \
     [[ ${alphamissense_intolerant_motifs} -nt ${alphamissense_vep_vcf} ]] && \
@@ -1023,9 +1026,10 @@ function AlphaMissense_pick_missense_constrained_segments() {
     return 0 || \
     log "The AlphaMissense intolerant motifs file ${alphamissense_intolerant_motifs} is not generated, we will generate it"
 
-    [[ -d $(dirname ${alphamissense_intolerant_motifs}) ]] || \
-    log "The directory $(dirname ${alphamissense_intolerant_motifs}) does not exist, we will use the prefix ${intolerant_motif_prefix}" && \
-    local alphamissense_intolerant_motifs="${intolerant_motif_prefix}.pkl"
+    if [[ -z $alphamissense_intolerant_motifs || $alphamissense_intolerant_motifs == null || ! -d $(dirname "$alphamissense_intolerant_motifs") ]]; then
+        alphamissense_intolerant_motifs="${intolerant_motif_prefix}.pkl"
+    fi
+    mkdir -p "$(dirname "$alphamissense_intolerant_motifs")" || return 1
 
     python ${pick_intolerant_motifs_py} \
     --vcf_path ${alphamissense_vep_vcf} \
@@ -1164,17 +1168,23 @@ function LOEUF_install() {
 
 function gnomAD_install() {
     local config_file=${1}
-    local assembly=${2}
-    # Assembly is the fasta file path
-    # If assembly is not provided, we will use GRCh38 assembly
-
-    if [[ -z ${assembly} ]]; then
-        local assembly="GRCh38"
-    fi
+    local hg19_fasta=${2:-$(read_yaml "${config_file}" "ref_genome")}
+    local assembly=$(read_yaml "${config_file}" "assembly")
+    # Historical callers pass either a reference path or an assembly label.
+    case "$hg19_fasta" in
+        hg19|GRCh37|hg38|GRCh38)
+            assembly=$hg19_fasta
+            hg19_fasta=$(read_yaml "${config_file}" "ref_genome") ;;
+    esac
+    case "$assembly" in
+        hg19|GRCh37)
+            [[ -s "$hg19_fasta" ]] || { log "ERROR: GRCh37 reference is missing: $hg19_fasta"; return 1; } ;;
+        hg38|GRCh38) ;;
+        *) log "ERROR: Unsupported gnomAD target assembly: $assembly"; return 1 ;;
+    esac
 
     # We need to iterate over all chromosomes to check if the files are already downloaded and valid
     local -a chromosomes=( 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 X Y )
-    # local -a chromosomes=( "22" "X" "Y" )
     local gnomAD_vcf_dir=$(read_yaml ${config_file} "gnomad_vcf_dir")
 
     for chr in "${chromosomes[@]}"; do
@@ -1188,7 +1198,8 @@ function gnomAD_install() {
         else
             log "The gnomAD v4.1 file for chr${chr} (${gnomAD_vcf_dir}/gnomad.joint.v4.1.sites.chr${chr}.vcf.bgz) is not downloaded or not updated, now we start to download the files"
             wget https://storage.googleapis.com/gcp-public-data--gnomad/release/4.1/vcf/joint/gnomad.joint.v4.1.sites.chr${chr}.vcf.bgz -O ${gnomAD_vcf_dir}/gnomad.joint.v4.1.sites.chr${chr}.vcf.bgz && \
-            wget https://storage.googleapis.com/gcp-public-data--gnomad/release/4.1/vcf/joint/gnomad.joint.v4.1.sites.chr${chr}.vcf.bgz.tbi -O ${gnomAD_vcf_dir}/gnomad.joint.v4.1.sites.chr${chr}.vcf.bgz.tbi
+            wget https://storage.googleapis.com/gcp-public-data--gnomad/release/4.1/vcf/joint/gnomad.joint.v4.1.sites.chr${chr}.vcf.bgz.tbi -O ${gnomAD_vcf_dir}/gnomad.joint.v4.1.sites.chr${chr}.vcf.bgz.tbi || \
+            { log "Failed to download gnomAD chromosome ${chr}"; return 1; }
         fi
     done
 
@@ -1201,7 +1212,7 @@ function gnomAD_install() {
         gnomAD_liftover \
         ${gnomAD_vcf_dir}/gnomad.joint.v4.1.sites.chr1.vcf.bgz \
         ${chain_file} \
-        ${hg19_fasta} 4 && \
+        "${hg19_fasta}" 4 && \
         log "The gnomAD v4.1 files are liftovered to hg19 assembly and saved to ${gnomAD_vcf_dir}" && \
         parallel -j4 bash ${SCRIPT_DIR}/common_bash_utils.sh check_vcf_validity ${gnomAD_vcf_dir}/gnomad.joint.v4.1.sites.hg19.chr{}.vcf.gz ::: "${chromosomes[@]}" && \
         update_yaml ${config_file} "gnomad_vcf_chrX" "${gnomAD_vcf_dir}/gnomad.joint.v4.1.sites.hg19.chrX.vcf.gz" || \
@@ -1286,8 +1297,7 @@ function gnomAD_liftover() {
     local suffix_hg38_vcf=$(basename ${hg38_vcf_chr1/*.chr1./})
 
     local hg19_dir=$(dirname ${hg38_vcf_chr1})/hg19
-    # local -a hg38_chrs=( "chr1" "chr2" "chr3" "chr4" "chr5" "chr6" "chr7" "chr8" "chr9" "chr10" "chr11" "chr12" "chr13" "chr14" "chr15" "chr16" "chr17" "chr18" "chr19" "chr20" "chr21" "chr22" "chrX" "chrY" )
-    local -a hg38_chrs=( "chr22" "chrX" "chrY" )
+    local -a hg38_chrs=( chr{1..22} chrX chrY )
 
     for chr in "${hg38_chrs[@]}"; do
         [[ -d ${hg19_dir}/${chr} ]] || mkdir -p ${hg19_dir}/${chr}
@@ -1306,7 +1316,8 @@ function gnomAD_liftover() {
     ${basename_hg38_vcf}.{}.${suffix_hg38_vcf} \
     ${hg19_dir}/{} \
     ${hg19_fasta} \
-    ${chain_file} ::: "${hg38_chrs[@]}"
+    ${chain_file} ::: "${hg38_chrs[@]}" || \
+    { log "Failed to liftover one or more gnomAD chromosomes; refusing partial concatenation"; return 1; }
 
     for chr in "${hg38_chrs[@]}"; do
         local -a tmp_vcfs=($(ls ${hg19_dir}/*/*${chr}.*vcf.gz))
@@ -1604,32 +1615,25 @@ function Conservation_install() {
         return 1
     fi
 
-    if [[ ! -d ${CACHEDIR} ]]; then
-        mkdir -p ${CACHEDIR}
-    fi
-
-    if [[ ! -d ${CACHEDIR}/Conservation ]]; then
-        mkdir -p ${CACHEDIR}/Conservation
-    fi
-
     local existed_file=$(read_yaml "${config}" "conservation_file")
-
-    if [[ ${assembly_version} == "GRCh38" ]]; then
-        [[ ! -f ${existed_file} ]] && \
-        wget http://ftp.ensembl.org/pub/current_compara/conservation_scores/91_mammals.gerp_conservation_score/gerp_conservation_scores.homo_sapiens.${assembly_version}.bw -O ${CACHEDIR}/Conservation/gerp_conservation_scores.homo_sapiens.${assembly_version}.bw && \
-        log "The conservation scores for ${assembly_version} assembly version are downloaded to ${CACHEDIR}/Conservation" && \
-        update_yaml "${config}" "conservation_file" "${CACHEDIR}/Conservation/gerp_conservation_scores.homo_sapiens.${assembly_version}.bw" || \
-        { log "Failed to download the conservation scores for ${assembly_version} assembly version"; return 1; }
-    elif [[ ${assembly_version} == "GRCh37" ]]; then
-        [[ ! -f ${existed_file} ]] && \
-        wget http://hgdownload.soe.ucsc.edu/gbdb/hg19/bbi/All_hg19_RS.bw -O ${CACHEDIR}/Conservation/gerp_conservation_scores.homo_sapiens.${assembly_version}.bw
-        log "The conservation scores for ${assembly_version} assembly version are downloaded to ${CACHEDIR}/Conservation" && \
-        update_yaml "${config}" "conservation_file" "${CACHEDIR}/Conservation/gerp_conservation_scores.homo_sapiens.${assembly_version}.bw" || \
-        { log "Failed to download the conservation scores for ${assembly_version} assembly version"; return 1; }
-    else
-        log "Currently we only support GRCh37 and GRCh38 assembly versions"
-        return 1
+    if [[ -s "$existed_file" ]]; then
+        log "Reusing the configured Conservation file: $existed_file"
+        return 0
     fi
+    local target="${CACHEDIR}/Conservation/gerp_conservation_scores.homo_sapiens.${assembly_version}.bw"
+    local url
+    if [[ ${assembly_version} == "GRCh38" ]]; then
+        url="https://ftp.ensembl.org/pub/current_compara/conservation_scores/91_mammals.gerp_conservation_score/gerp_conservation_scores.homo_sapiens.${assembly_version}.bw"
+    else
+        url="https://hgdownload.soe.ucsc.edu/gbdb/hg19/bbi/All_hg19_RS.bw"
+    fi
+    mkdir -p "${CACHEDIR}/Conservation" || return 1
+    wget -c "$url" -O "${target}.partial" || \
+        { log "Failed to download Conservation for ${assembly_version}"; return 1; }
+    [[ -s "${target}.partial" ]] || { log "ERROR: Empty Conservation download"; return 1; }
+    mv "${target}.partial" "$target" || return 1
+    update_yaml "$config" conservation_file "$target" || return 1
+    log "Conservation for ${assembly_version} is deployed to $target"
 }
 
 

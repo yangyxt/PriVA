@@ -13,6 +13,11 @@ Conservation ordering/reuse, and the configured AlphaMissense motif output.
 External tools are replaced for these orchestration tests; they do not claim
 scientific liftover or annotation equivalence.
 
+`test_cluster_licensed_import.py` adds five preflight checks: incomplete or
+unconfirmed acquisitions, mismatched assemblies, missing resource roles, and
+an existing output config all stop before licensed cache access or replacement.
+These checks do not read the MBP-managed downloads or perform actual imports.
+
 Cluster deployment integrity: `test_cluster_deployment.py` checks atomic
 publication, corruption rejection, unchanged-cache reuse, and rejection of
 unidentified or modified FASTA/container resources without network or solver

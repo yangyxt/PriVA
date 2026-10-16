@@ -67,3 +67,14 @@ and byte size. Job 1514603 freezes the same installer revision, uses a separate
 config, and records reference/chain/source/output identities on completion.
 It reserves eight CPUs for the original sort command; the newer publisher hg19
 table is kept separate from this baseline conversion.
+
+`import_cluster_licensed.sbatch` is prepared but not submitted. It waits for the
+MBP acquisition owner's explicit final-ready paths under
+`caches/{SpliceAI_v1,PrimateAI_v0_2}`. Its completion JSON must contain
+`status: downloads_complete`, `confirmed_by`, the matching `assembly`, and
+`files` entries named `spliceai_snv`, `spliceai_indel`, and `primateai`, each with
+an absolute `path` and optional acquisition `bytes`/`sha256`. The job validates
+the files/indexes, feeds the original installer prompts, and writes a separate
+config. SpliceAI stays in its shared location; original PrimateAI TSVs are kept
+and the original formatter creates sibling sorted BGZF/index files. No download,
+second authentication, or main-config replacement occurs in this import stage.

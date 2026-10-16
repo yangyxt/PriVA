@@ -86,7 +86,7 @@ class InstallerResources(unittest.TestCase):
     def plugin_stubs(self):
         return '''
             CONDA_PREFIX="$TEST_FOLDER/envs/priva_acmg"
-            for name in UTRAnnotator_install LOEUF_install AlphaMissense_install AlphaMissense_pick_missense_constrained_segments SpliceAI_profile_install SpliceVault_install MaveDB_install PrimateAI_install; do
+            for name in UTRAnnotator_install LOEUF_install AlphaMissense_install AlphaMissense_pick_missense_constrained_segments SpliceAI_install SpliceVault_install MaveDB_install PrimateAI_install; do
                 eval "$name() { :; }"
             done
             AlphaMissense_anno() { printf 'ANNOTATION\\n'; }

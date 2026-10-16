@@ -69,17 +69,28 @@ class AdapterContracts(unittest.TestCase):
         with self.assertRaises(adapter.ContractError):
             adapter.read_config(path)
 
-    def test_spliceai2_scientific_config_rejected_but_prepared_metadata_allowed(self):
+    def test_spliceai2_at_original_keys_rejected_by_actual_header(self):
         path = self.folder / "profile.yaml"
-        for key in ("spliceai_profile", "spliceai_resource_version", "spliceai_version"):
-            for value in ("v2", "2", "2.0", "v2.0"):
-                path.write_text(adapter.yaml.safe_dump({"assembly": "hg38", key: value}))
+        cache = self.folder / "scores.any_extension"
+        for key in ("spliceai_snv_prescore", "spliceai_indel_prescore"):
+            for compressed in (False, True):
+                header = b"##fileformat=VCFv4.2\n##SpliceAI2Version=2\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\n"
+                cache.write_bytes(gzip.compress(header) if compressed else header)
+                path.write_text(adapter.yaml.safe_dump({"assembly": "hg38", key: str(cache)}))
                 with self.assertRaisesRegex(adapter.ContractError, "not qualified for v2"):
                     adapter.read_config(path)
-        settings = {"assembly": "hg38", "spliceai_profile": "v1", "spliceai2_version": "2.0",
-                    "spliceai2_status": "prepared_annotation_only", "spliceai2_snv_prescore": "/prepared/view.vcf.gz"}
+        cache.write_bytes(b"##fileformat=VCFv4.2\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\n")
+        settings = {"assembly": "hg38", "spliceai_snv_prescore": str(cache), "spliceai_indel_prescore": str(cache)}
         path.write_text(adapter.yaml.safe_dump(settings))
         self.assertEqual(adapter.read_config(path), settings)
+
+    def test_invalid_configured_cache_header_fails_closed(self):
+        cache = self.folder / "bad-header.vcf"
+        cache.write_text("not a VCF\n")
+        config = self.folder / "config.yaml"
+        config.write_text(adapter.yaml.safe_dump({"assembly": "hg19", "spliceai_snv_prescore": str(cache)}))
+        with self.assertRaisesRegex(adapter.ContractError, "Cannot verify spliceai_snv_prescore header"):
+            adapter.read_config(config)
 
     def test_spliceai2_marked_annotated_input_rejected_before_sample_parsing(self):
         path = self.folder / "input.vcf.gz"
@@ -209,7 +220,9 @@ class AdapterContracts(unittest.TestCase):
     def test_preannotated_v2_launch_rejected_before_output_creation(self):
         args, _ = self.make_launch_contract()
         path = Path(args.config)
-        path.write_text(path.read_text() + "spliceai_profile: v2\n")
+        cache = self.folder / "v2.vcf"
+        cache.write_text("##fileformat=VCFv4.2\n##SpliceAI2Version=2\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\n")
+        path.write_text(path.read_text() + "spliceai_snv_prescore: " + str(cache) + "\n")
         with self.assertRaisesRegex(adapter.ContractError, "not qualified for v2"):
             adapter.launch(args)
         self.assertFalse(Path(args.outdir).exists())
@@ -218,7 +231,9 @@ class AdapterContracts(unittest.TestCase):
         args, _ = self.make_launch_contract()
         bundle = self.folder / "v2-bundle"
         bundle.mkdir()
-        (bundle / "legacy.yaml").write_text(Path(args.config).read_text() + "spliceai_profile: v2\n")
+        cache = self.folder / "v2.vcf"
+        cache.write_text("##fileformat=VCFv4.2\n##SpliceAI2Version=2\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\n")
+        (bundle / "legacy.yaml").write_text(Path(args.config).read_text() + "spliceai_indel_prescore: " + str(cache) + "\n")
         (bundle / "resources.json").write_text(Path(args.resources).read_text())
         (bundle / "contract.json").write_text(json.dumps({"mode": "annotated", "stub": False,
             "legacy_root": args.legacy_root, "source_digest": args.source_digest,

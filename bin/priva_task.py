@@ -19,6 +19,9 @@ import sys
 
 import yaml
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+from spliceai_cache_input import inspect_header
+
 ASSEMBLY = {"hg19": "hg19", "GRCh37": "hg19", "hg38": "hg38", "GRCh38": "hg38"}
 PRIORITY_KEYS = (
     "clinvar_aa_stat", "clinvar_splice_stat", "all_intolerant_domains",
@@ -123,12 +126,19 @@ def read_config(path):
         raise ContractError("Legacy config must be a YAML mapping")
     if config.get("assembly") not in ASSEMBLY:
         raise ContractError("Config assembly must be hg19/hg38/GRCh37/GRCh38")
-    # Annotated imports skip the annotation shell, so enforce the scientific
-    # activation boundary in this shared loader as well (including resume/tasks).
-    for key in ("spliceai_profile", "spliceai_resource_version", "spliceai_version"):
-        value = str(config.get(key, "")).strip().lower()
-        if value in {"v2", "2"} or value.startswith(("v2.", "2.")):
-            raise ContractError("SpliceAI2 is prepared for annotation inspection only; legacy PriVA ACMG/ClinVar criteria are not qualified for v2. Use the original v1 scientific profile.")
+    # Annotated imports skip the annotation shell. Inspect the actual resources
+    # at the original two keys here too, including cached launches and tasks;
+    # an installer setting cannot confer scientific qualification.
+    for key in ("spliceai_snv_prescore", "spliceai_indel_prescore"):
+        value = config.get(key)
+        if not value or not isinstance(value, str) or not Path(value).is_file():
+            continue  # Keep existing missing-resource diagnostics at their stage.
+        try:
+            detected = inspect_header(value)
+        except (OSError, EOFError, ValueError) as error:
+            raise ContractError(f"Cannot verify {key} header: {error}") from error
+        if detected["format"] != "vcf_v1":
+            raise ContractError("SpliceAI2 is prepared for annotation inspection only; legacy PriVA ACMG/ClinVar criteria are not qualified for v2. Use original v1 resources for this scientific reference.")
     return config
 
 

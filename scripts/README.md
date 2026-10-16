@@ -60,3 +60,10 @@ The completion receipt requires every final VCF/index, its expected indexed
 chromosome, and a successful indexed query; this does not establish family or
 ACMG parity. The initial queued job is 1514601 after source job 1514584, using
 installer `054b4944055054148005016192647a8ed0384eef`.
+
+`build_cluster_splicevault.sbatch` runs the original GRCh38-to-GRCh37 conversion
+against the release113 SpliceVault input after checking its publisher checksum
+and byte size. Job 1514603 freezes the same installer revision, uses a separate
+config, and records reference/chain/source/output identities on completion.
+It reserves eight CPUs for the original sort command; the newer publisher hg19
+table is kept separate from this baseline conversion.

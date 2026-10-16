@@ -41,6 +41,9 @@ transformation comparisons and 3 helper cancellation cases. Full scoring and
 timing/memory benchmarks continue under Slurm; production remains pinned to
 standalone `4194be3`. These helper checks do not qualify complete scoring,
 outer-wrapper cancellation, shared annotation or family interpretation.
+The later wrapper audit failed PID-only SIGTERM cleanup for the experimental
+shell, profiler and standalone CLI; process-group termination passed and the
+audit reaped all remaining children. The candidate remains disabled.
 
 SpliceAI v1 originals and indexes for both assemblies are confirmed downloaded.
 The current hg19 pair is undergoing full verification and original-installer

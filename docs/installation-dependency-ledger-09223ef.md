@@ -29,7 +29,7 @@ flowchart TD
 
 PrimateAI is not consumed by the steps above. Its absence still blocks full-family annotation and acceptance; this ledger proposes no missing-resource policy. ClinVar basic VEP uses SpliceAI, not PrimateAI ([frozen call, lines 1476–1484][clinvar-install]; [basic VEP, lines 1375–1412][basic-vep]).
 
-**Source identity and navigation.** Scientific statements use commit `09223ef5a8b0ceb4c6d61055c6eefe62b51ba903`. The deployment installer examined is `054b4944055054148005016192647a8ed0384eef`; its mapping calls still omit the explicit option ([motif, line 1034][fixed-motif]; [PM1, line 1138][fixed-pm1]). Current-tree navigation: [installer](../scripts/install_utils.sh#L1034), [motif parser](../scripts/am_pick_missense_constrained_segments.py#L433), [PM1 parser](../scripts/prepare_pm1_regions.py#L43), [ClinVar generator](../scripts/clinvar_stat_variants.py#L304). These moving links are navigation only; frozen links and hashes below govern the audit.
+**Source identity and navigation.** Scientific statements use commit `09223ef5a8b0ceb4c6d61055c6eefe62b51ba903`. The deployment installer examined is `054b4944055054148005016192647a8ed0384eef`; its mapping calls still omit the explicit option ([motif, line 1034][fixed-motif]; [PM1, line 1138][fixed-pm1]). Those two remote links use the byte-identical integrated installer at `f1f628bd0d38397ae421060e26a061bae900f2de`; its SHA256 matches the deployment installer below. Current-tree navigation: [installer](../scripts/install_utils.sh#L1034), [motif parser](../scripts/am_pick_missense_constrained_segments.py#L433), [PM1 parser](../scripts/prepare_pm1_regions.py#L43), [ClinVar generator](../scripts/clinvar_stat_variants.py#L304). These moving links are navigation only; frozen links and hashes below govern the audit.
 
 **Ordered recipe.** `INSTALL` means the reviewed installer script, `SOURCE` the frozen scientific source directory, and `CFG` the qualified hg19 installation configuration. Commands are entrypoint specifications, not a record that these steps ran. Check cache identities, assembly, required fields and complete indexes before using existence/mtime-based reuse guards.
 
@@ -69,7 +69,7 @@ python "$SOURCE/scripts/am_pick_missense_constrained_segments.py" \
   --vcf_path "$AM_VEP_VCF" \
   --rmc_tsv "$SOURCE/data/gnomAD_RMC/gnomad_v2.1.1_rmc_flat.hg19.tsv" \
   --hcseeker_tsv "$SOURCE/data/HCSeeker/HC_spots.hg19.tsv" \
-  --nm_to_enst_tsv "$VERIFIED_MAPPING" --output "$MOTIF_PKL" --processes "$THREADS"
+  --output "$MOTIF_PKL" --processes "$THREADS" --nm_to_enst_tsv "$VERIFIED_MAPPING"
 
 python "$SOURCE/scripts/prepare_pm1_regions.py" \
   --config "$CFG" --output "$PM1_PKL" --assembly hg19 --threads "$THREADS" \
@@ -111,8 +111,8 @@ This ledger records a source audit and installation gates. It changes no scienti
 
 [clinvar-install]: https://github.com/yangyxt/PriVA/blob/09223ef5a8b0ceb4c6d61055c6eefe62b51ba903/scripts/install_utils.sh#L1463
 [basic-vep]: https://github.com/yangyxt/PriVA/blob/09223ef5a8b0ceb4c6d61055c6eefe62b51ba903/scripts/install_utils.sh#L1368
-[fixed-motif]: https://github.com/yangyxt/PriVA/blob/054b4944055054148005016192647a8ed0384eef/scripts/install_utils.sh#L1034
-[fixed-pm1]: https://github.com/yangyxt/PriVA/blob/054b4944055054148005016192647a8ed0384eef/scripts/install_utils.sh#L1138
+[fixed-motif]: https://github.com/yangyxt/PriVA/blob/f1f628bd0d38397ae421060e26a061bae900f2de/scripts/install_utils.sh#L1034
+[fixed-pm1]: https://github.com/yangyxt/PriVA/blob/f1f628bd0d38397ae421060e26a061bae900f2de/scripts/install_utils.sh#L1138
 [am-anno]: https://github.com/yangyxt/PriVA/blob/09223ef5a8b0ceb4c6d61055c6eefe62b51ba903/scripts/install_utils.sh#L947
 [am-gnomad]: https://github.com/yangyxt/PriVA/blob/09223ef5a8b0ceb4c6d61055c6eefe62b51ba903/scripts/install_utils.sh#L1823
 [am-stat]: https://github.com/yangyxt/PriVA/blob/09223ef5a8b0ceb4c6d61055c6eefe62b51ba903/scripts/install_utils.sh#L1024

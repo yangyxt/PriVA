@@ -83,6 +83,8 @@ If a valid pedigree table is provided, please note:
 
 ## SpliceAI2 GRCh38 preparation
 
+Current installation direction: keep only the original spliceai_snv_prescore and spliceai_indel_prescore YAML keys. Choose assembly once at installation: fresh GRCh37 uses v1 and fresh GRCh38 uses v2. Inspect decompressed headers automatically: an existing compatible VCF passes through; native 84-column SpliceAI2 TSV invokes the narrow adapter. A prepared pair is registered under the two original keys and installation succeeds. Resource/model identity, hashes, schema and qualification remain in sidecars and cache headers, without extra selector or converter YAML switches. Existing compatible GRCh38 v1 VCF pairs pass through; fresh GRCh38 installations select v2. Wrong assembly, mixed input types and failed v2 preparation never trigger a fallback.
+
 The [preparation route](docs/nextflow_migration.md#spliceai2-preparation) keeps the
 original 84-column tables and creates a separate top0 VCF for the official plugin,
 using exact scored-region/GENCODE48 gene context. The Rust converter streams rows;
@@ -93,16 +95,35 @@ complete 20,083-region stable-ID join passed with exact bounds/strand/biotype.
 Full GTF IDs/versions and `_PAR_Y` remain in context; ten same-strand symbol
 groups coalesce labels only per prediction, while opposite-strand symbol contexts
 fail. The execution manifest is complete and saved in DataLad commit 5f5946b.
-Full-file revalidation, complete conversion and indexed-VEP checks remain pending.
+All 47 full source SHA256 checks passed in frozen job 1514732, which has started
+projecting SNV chr1; complete conversion and indexed-VEP checks remain pending.
 
 ```text
-Pinned native v2 + verified v48 context → prepared top0 VCF + receipt
-                                      → separate scientific activation gate
+Assembly → decompressed headers → VCF passthrough / native84 adapter
+                                → indexed VCF pair / two original YAML keys
+                                → sidecars + cache-header scientific gate
 ```
 
-`SpliceAI2_install CONFIG MANIFEST OUTPUT_DIR [PRIVA_BIN]` registers only
-namespaced preparation metadata. The profile installer stops with status 2 after
-v2 preparation; `prepared_annotation_only` does not activate ACMG interpretation.
+The simplified installer succeeds after preparing/registering the indexed pair
+under the two original resource keys; provenance stays in sidecars.
+
+SpliceAI_install invokes scripts/spliceai_cache_input.py install automatically, retaining the existing prompts and two resource keys. The helper detects gzip by magic bytes, then classifies a bounded decompressed header as vcf_v1, vcf_spliceai2 or the exact native 84-column SpliceAI2 TSV schema; filenames, extensions and score magnitudes do not select the predictor. An unmarked VCF receives the legacy-compatible vcf_v1 routing label; that label alone does not prove predictor identity. Existing compatible VCF pairs pass through, including existing GRCh38 v1; fresh GRCh38 selects v2. Wrong assembly, mixed types or failing v2 preparation fail without fallback. SpliceAI2 VCF passthrough additionally requires a completed adjacent adapter.ready.json with exact SNV/indel/index membership and complete published-catalogue status; it performs no conversion. Reject .partial or .building path components, including symlink targets, and refuse in-progress preparation or staged outputs. A final VCF renamed before receipt publication is not ready. V1 VCF passthrough requires no additional adapter receipt.
+
+```bash
+python scripts/spliceai_cache_input.py install --config CONFIG --cache-dir CACHE_DIR --snv SNV --indel INDEL
+```
+
+For native TSV, the helper discovers the fixed adjacent SpliceAI2_GRCh38.downloads-complete.json sidecar. The selected SNV/indel inputs must match their manifest roles and the full 47-shard catalogue. It calls the existing low-level SpliceAI2_install to prepare or reuse a fully validated receipt, then updates only spliceai_snv_prescore and spliceai_indel_prescore. The pinned priva converter is resolved through PATH; no YAML converter or manifest option is added. Provenance and scientific qualification remain in sidecars/cache headers. The fixed adjacent sidecar is published at yangyxt/caches/SpliceAI2_GRCh38.downloads-complete.json, SHA256 fbc6c9fcd1859d6f1605f9343d5659b8420d7397c4152da19daab34c6194e49d. The PATH entry yangyxt/softwares/bin/priva resolves to the verified optimized 225aa4a converter. This changes no YAML keys beyond the original two paths.
+
+Two-key interface qualification: code 35779c4578509ce01218a052a8e7e1d8a785a75b passed 239 Python tests, zero failures/errors/skips, in 190.848 seconds: 39 helper, 25 installer, 14 runtime-guard, 21 Nextflow-adapter and 140 existing deployment/driver/BGZ tests. The installer-shell cases mock the helper boundary; they are not real conversion evidence. Log: yangyxt_dt/projects/PriVA_upgrade/logs/spliceai-two-key-integration-20261016.log. This supersedes the earlier 197-test interface checkpoint without adding its count; unchanged Rust evidence remains 41 tests and the earlier real-projection evidence remains 512 unique rows.
+
+Earlier remote CI at eb16493 passed [Actions 38852306750](https://github.com/yangyxt/PriVA/actions/runs/38852306750). The new 35779c4 source has passed local checks; its push/remote CI are not yet recorded at this checkpoint.
+
+Actual resource checks used final helper SHA256 f69d6ea8d6179d68ae44cad849b3c6c7912a879f05e305a36acffba09c81bb88: all 47 native TSV and four v1 VCF headers classified correctly, including assembly metadata. Real SpliceAI_install reused the existing v1 pair for hg19/GRCh37 and hg38/GRCh38 with configuration bytes, inode and mtime unchanged and resource stat identities unchanged. Receipt: yangyxt_dt/projects/PriVA_upgrade/validation/spliceai-two-key-real-install-20261016/receipt.json. These are bounded header/reuse checks, not new body checksums, full VEP execution or model/scientific qualification.
+
+Nextflow stub verification passed all four scenarios: raw input, resume with all four tasks cached, preannotated input and stale-environment rejection. Log: yangyxt_dt/projects/PriVA_upgrade/logs/spliceai-two-key-nextflow-20261016.log; retained validation/log artifacts: validation/spliceai-two-key-nextflow-20261016/ under that data project. The run used code 35779c4 plus the documentation state at execution; its recorded source_digest identifies that exact state. Subsequent documentation edits are not attributed to the run.
+
+Frozen-run boundary: job 1514732 continues unchanged with installer f8de4b3 and the previously verified converter. Its prior explicit-manifest/six-key interface is historical execution provenance, not the new installation contract. After successful completion, validated output artifacts may be imported through the two original keys; do not attribute those artifacts or the 197 Python tests to the new dispatcher. The new two-key interface is qualified separately at 35779c4; full scientific acceptance remains pending.
 GRCh37 v1 and legacy CADD masked-v1 inputs remain unchanged. The real-plugin
 boundary harness passed 11 subtests / 38 assertions with synthetic tabix/VEP
 objects. Historical checks before the stable-ID/same-strand-symbol update: Rust
@@ -117,23 +138,18 @@ inference, whole-cache, full VEP, public-sample or family acceptance.
 All 47 publisher SHA256 values and VERIFIED acquisition receipts are now supplied
 in [caches/README.md](../../caches/README.md). The complete execution manifest and handoff were saved in DataLad commit 5f5946b before launch. Full preparation job
 1514732 is running on c81o-03 (4 CPUs, 16 GB, 7 days), using frozen installer f8de4b3 and
-the isolated GRCh38 preparation config; full checksum/conversion success is pending. Optimized
+the isolated GRCh38 preparation config; all 47 full source SHA256 checks passed and SNV chr1 projection started; complete conversion is pending. Optimized
 source 225aa4aa774b4be7f53576e1cde56af71e67bd2c is installed at
 `yangyxt/softwares/priva-tools-225aa4a/bin/priva`, SHA256
 `bbc3b7288ed2ea63f1f8455ed87b8a9d08c7bc1fe0a562c1d6134525e2a12dc6`.
 The installed release passed the same 25 driver cases and same 512 real-prefix
-rows again with zero mismatches; unique totals stay 197 Python, 41 Rust and 512
-rows. A stale shared Cargo artifact was caught before deployment, rebuilt and
+rows again with zero mismatches; the frozen checkpoint had 197 Python, 41 Rust and 512 rows; the new interface
+has 239 Python tests, with unchanged 41 Rust tests and 512 unique rows. A stale shared Cargo artifact was caught before deployment, rebuilt and
 checked at the installed path; the receipt retains that failed attempt. Full
 conversion and real VEP/scientific acceptance remain pending. See the linked route
 for the exact manifest, GTF/plugin identities, commands and pending gates.
 
-The shared Nextflow adapter also rejects explicit v2 scientific configuration
-and SpliceAI2-marked preannotated inputs. Its 20-test adapter suite
-passed and is included once in the current 197-test total; it was separate from
-the historical 165-test installer/deployment total. Unmarked
-external annotations still require pinned profile provenance; numeric scores do
-not identify their predictor version.
+Scientific boundary for the simplified installer: inspect the actual selected cache headers and sidecar provenance to prevent unqualified v2 scientific use, including preannotated import and resume; no new enable/disable YAML toggle is introduced. Successful installation is separate from v2 ACMG/ClinVar, full VEP, public-sample and supplied-family acceptance. Unmarked external annotations still require pinned scientific provenance because predictor version cannot be inferred from numeric values. The runtime guards now inspect actual cache headers at the two original keys, including preannotated launch/task paths; the current 21 Nextflow-adapter and 14 runtime-guard tests are included once in the 239-test total. Earlier f8de4b3 checks remain historical; scientific acceptance is still pending.
 
 ## Installation
 

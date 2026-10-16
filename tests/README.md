@@ -32,9 +32,11 @@ installer prevent a completion receipt. These tests require the installed
 `priva_acmg` tools (`bgzip`, `tabix`, `yq`) and PyYAML; they never read the
 MBP-managed downloads or perform real licensed-cache imports.
 
-The licensed-import fixtures do not require Git history: each current checkout
-script is accepted only when its SHA256 equals the recorded bytes of installer
-`054b4944055054148005016192647a8ed0384eef`. The four hashes are in
+The licensed-import fixtures do not require Git history:
+`fixtures/installer-054b494/scripts/*` retains the exact oracle, and each script
+must match the recorded bytes of installer
+`054b4944055054148005016192647a8ed0384eef`. A current-checkout fallback is accepted
+only when its SHA256 still matches that historical oracle. The four hashes are in
 `REFERENCE_SHA256` in the test module. A changed source fails before creating the
 fixture snapshot; there is no fallback to a newer installer. If these scripts
 later change, explicitly retain/review the frozen oracle rather than replacing
@@ -53,10 +55,20 @@ requires exact validation to prevent its otherwise false-success receipt.
 Neither suite formats a production cache. PID-only SIGTERM cleanup is not
 claimed by these tests.
 
-Cluster deployment integrity: `test_cluster_deployment.py` checks atomic
-publication, corruption rejection, unchanged-cache reuse, and rejection of
-unidentified or modified FASTA/container resources without network or solver
-operations. Real installation qualification is recorded separately by Slurm.
+Cluster deployment integrity: `test_cluster_deployment.py` checks the pinned
+Washington GRCh37 v1.7 data/index pair and matching checksum-source host/release,
+atomic publication, full-MD5 reuse of a completed partial without HTTP,
+incomplete/corrupt partials, size gates and full rechecking of existing finals.
+It also rejects unidentified or modified FASTA/container resources without
+network or solver operations. At source `20774bd56a706d8b82a5640bf23b758216544136`,
+all **20 deployment + 31 licensed-import tests passed** in Slurm step
+1514363.254. The initial run retained 21 licensed-fixture failures caused by a
+missing historical helper; the exact `054b494` helper was restored with SHA256
+`c5e345f6f3af31aff1e2a724e248f0f32a1085afe7b347183022196b359ea6cf`,
+without changing expected hashes. Both closed logs follow
+`yangyxt_dt/projects/PriVA_upgrade/logs/cadd-prescore-recovery-tests-20261016{,-final}.log`
+and include before/after tested source hashes. These are installation fixtures;
+real resource, VEP, model and family qualification are recorded separately.
 
 Updated: 2026-09-14. Existing test modules cover the workflows and data contracts
 identified by their module docstrings. This inventory records the startup tests

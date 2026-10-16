@@ -30,6 +30,22 @@ The resource stages keep SpliceAI/PrimateAI imports, unsupported-assembly policy
 shared CADD transcript qualification, and downstream cache builds explicit.
 Successful downloads alone do not constitute a qualified complete pipeline.
 
+CADD prescore recovery, 2026-10-16: source
+`20774bd56a706d8b82a5640bf23b758216544136` binds the Washington GRCh37 v1.7
+download root and `MD5SUMs` to the historical indel data MD5
+`3d88f8fde9df07060b4f8fe07a0d5d5d` and matching index MD5
+`c583ed9f852c9896081205c3523f9f23`. `deploy_cluster_resources.py` fully hashes
+an existing partial before attempting HTTP resume; only a matching MD5 can
+skip HTTP. Existing final files are fully rehashed, size gates remain active,
+and publication stays atomic after verification. Job 1514744 was RUNNING on
+analysis-cpa1 at 2026-10-16T07:50Z, using the frozen `priva-cluster-tools-20774bd`
+snapshot; its first phase rechecks the 602,910,809,417-byte SNV file and existing
+index, then verifies/reuses the 11,003,494,781-byte indel partial and fetches the
+missing Washington index. A successful ready receipt remains pending.
+The earlier `fc21869` snapshot and failed 1514581 evidence remain unchanged.
+All 20 deployment and 31 licensed-import fixture tests pass; the missing frozen
+`054b494` helper fixture was restored with its existing SHA256 unchanged.
+
 `build_cluster_alpha.sbatch` requires five arguments: `LOG CONFIG SOURCE_PREFIX
 APPROVED_NM_TO_ENST_TSV SHA256`, plus an explicit scheduler dependency on the
 VEP cache job. Missing or changed mapping data fails before activation or
@@ -78,10 +94,22 @@ focused checks passed. Scientific transformations are unchanged.
 
 `build_cluster_splicevault.sbatch` runs the original GRCh38-to-GRCh37 conversion
 against the release113 SpliceVault input after checking its publisher checksum
-and byte size. Job 1514603 freezes the same installer revision, uses a separate
-config, and records reference/chain/source/output identities on completion.
-It reserves eight CPUs for the original sort command; the newer publisher hg19
-table is kept separate from this baseline conversion.
+and byte size. Job 1514603 COMPLETED (0:0) at 2026-10-16T07:03:13Z after
+6 h 24 m 15 s, using installer `054b494` and scientific baseline `09223ef`.
+The `splicevault-hg19.ready.json` receipt records `derived_resource_built` for
+GRCh37. Seven SHA256 checks passed with stable identities: source, output,
+index, reference, chain, converter and job config. Publisher BSD sum
+`[57027, 863191]`, full `bgzip -t` CRC and pysam 0.22.1 queries across all 24
+indexed contigs passed. The 12-field source/output headers agree with the plugin
+layout; no real VEP/plugin run was performed. The output has 144,086,759
+rows from 144,094,769 source rows minus 8,010 original CrossMap misses;
+the original mapping policy was preserved. The main config already points to
+this output, so no config promotion was needed. Its source URL uses
+`current_variation`; the actual job config pinned release113. Frozen
+implementation and receipt were verified, but no submitted wrapper-hash archive
+was found, so the full submitted wrapper was not reconstructed. Real VEP,
+scientific and family qualification remain pending. The newer publisher hg19
+table remains separate from this baseline conversion.
 
 `import_cluster_licensed.sbatch` registers explicitly confirmed acquisitions under
 `caches/{SpliceAI_v1,PrimateAI_v0_2}`. The optional ninth argument is the resource

@@ -81,7 +81,9 @@ def source_digest(root):
                      if path.is_file() and not path.name.endswith(".pyc") and "__pycache__" not in str(path))
     files.extend(root / name for name in ("main.nf", "nextflow.config"))
     digest = hashlib.sha256()
-    for path in sorted(files):
+    # Match Nextflow's full path-string ordering. Path objects sort by parts,
+    # which incorrectly puts conf/cadd/profile.json before conf/cadd.config.
+    for path in sorted(files, key=lambda path: path.as_posix()):
         digest.update(str(path.relative_to(root)).encode())
         digest.update(b"\0")
         digest.update(path.read_bytes())

@@ -369,8 +369,8 @@ identical table; their distinct receipt schemas are not interchangeable.
 The standalone scorer must run all four original stages: transformation,
 prediction, consequence hierarchy and PHRED conversion. The previous standalone
 pin `79d767a` included native hierarchy/PHRED and is a historical experiment;
-candidate `4194be3` runs all four original Python stages and passes contract
-tests. Both 18-row upstream assembly fixtures match direct original Python
+tested integration pin `4194be32320292cb8acd290ee0210c19456e2573` runs all four
+original Python stages and passes contract tests. Both 18-row upstream assembly fixtures match direct original Python
 exactly through features, raw scores, hierarchy and PHRED, including full rows
 and order. Both real Nextflow calculation routes and one cached resume pass.
 Shared annotation and broad scientific qualification remain pending.
@@ -396,7 +396,36 @@ preserves the output bytes but rejects the malformed table and exits one.
 This failure-behavior gate remains failed. Compare original and optimized Python
 at the same scorer boundary, retaining stdout/stderr, exit/signal and malformed
 outputs. Record artifact validation separately; do not call malformed output a
-valid score artifact. Independent profiling of passing model inputs continues.
+valid score artifact.
+
+<a id="cadd-baseline-profile-1514598"></a>
+
+**Closed baseline profiling — 1514598:** FAILED (1:0), 2 h 21 m 24 s,
+ended **2026-10-16T02:51:05Z** (scheduler 2026-10-15T21:51:05-05:00).
+Frozen harness `e3b7818ed4362fda089a6928a184e3c4cf6ea894` completed ten reports:
+bundled 18-row fixtures for both assemblies and three repeats at 1,008 / 10,008 /
+100,008 rows for each assembly. Across 20 assembly evaluations, **80/80 exact
+decompressed-feature/raw/hierarchy/final-table comparisons matched**, with zero
+table mismatches. All six recorded implementation/runtime identities stayed
+unchanged in all ten reports; executable SHA256 remained
+`873e9c1ed784b416027a1b209a60d7ad69bdcdb5d34009c3a0a0b6a279ffda6e`.
+
+Four of five PHRED-only synthetic edges passed. The only recorded mismatch is
+`nan`: stdout bytes match, original exit 0 becomes wrapper exit 1, and no
+completed score artifact exists. The bundled report records acceptance=false;
+nine scaled reports record true only for bounded model inputs. The shell saved
+the first failure, completed all nine scaled invocations, then exited 1. The
+measurements completed; there was no crash, OOM or timeout. Evidence is retained
+under the data project's `validation/cadd-original-profile-e3b7818-1514598/` and
+`logs/cadd-original-profile_1514598.log`. The tested integration remains the
+pinned original-Python backend above. The NaN CLI and experimental PID-only
+cancellation gates remain failed, the experimental candidate stays disabled,
+and public-data/supplied-family acceptance remains pending. This reconciliation
+does not retry or activate a backend.
+
+DataLad commits `9e0600a` and `1c20795` record 781 closed run artifacts, the job
+log and data-project README: 783 selected paths, locally available, with metadata
+updated. No scorer rerun or result change was needed.
 
 `CaddSelection.pm` delegates selection to official VEP methods and emits native
 ordinals while keeping every PriVA transcript row. `cadd_select_view.py` validates

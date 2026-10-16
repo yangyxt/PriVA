@@ -76,6 +76,18 @@ jobs:
           python -m pip install --only-binary=:all: 'numpy==1.26.4' 'pandas==2.2.3' 'PyYAML==6.0.3'
           python -m pip check
 
+      - name: Install command tools for synthetic installer fixtures
+        # Ubuntu's tabix package supplies both bgzip and tabix; yq supplies the
+        # YAML CLI used by the unchanged shell installer. No real caches run.
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends --yes tabix yq
+          dpkg-query --show --showformat='${Package} ${Version}\n' tabix yq
+          command -v bgzip tabix yq
+          bgzip --version
+          tabix --version
+          yq --version
+
       - name: Validate adapters and strict result comparison
         run: |
           python -m unittest discover -s tests/nextflow -p 'test_adapter.py' -v

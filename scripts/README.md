@@ -29,3 +29,11 @@ qualification only. Production annotation shares the official PriVA VEP113.
 The resource stages keep SpliceAI/PrimateAI imports, unsupported-assembly policy,
 shared CADD transcript qualification, and downstream cache builds explicit.
 Successful downloads alone do not constitute a qualified complete pipeline.
+
+`build_cluster_alpha.sbatch` runs the original AlphaMissense cache stages after
+an explicit scheduler dependency on the VEP cache job. `diagnose_cluster_install.sbatch`
+runs the unchanged historical `main_install` in a separate writable prefix,
+using real copies of the exact package lock and a bounded runtime. A timeout is
+an operator checkpoint, not successful installation. The restorable package
+lock is `environment.conda-explicit.txt`; the earlier `environment.explicit.txt`
+is retained only as a historical package URL inventory.

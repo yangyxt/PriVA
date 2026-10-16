@@ -68,13 +68,30 @@ config, and records reference/chain/source/output identities on completion.
 It reserves eight CPUs for the original sort command; the newer publisher hg19
 table is kept separate from this baseline conversion.
 
-`import_cluster_licensed.sbatch` is prepared but not submitted. It waits for the
-MBP acquisition owner's explicit final-ready paths under
-`caches/{SpliceAI_v1,PrimateAI_v0_2}`. Its completion JSON must contain
-`status: downloads_complete`, `confirmed_by`, the matching `assembly`, and
-`files` entries named `spliceai_snv`, `spliceai_indel`, and `primateai`, each with
-an absolute `path` and optional acquisition `bytes`/`sha256`. The job validates
-the files/indexes, feeds the original installer prompts, and writes a separate
-config. SpliceAI stays in its shared location; original PrimateAI TSVs are kept
-and the original formatter creates sibling sorted BGZF/index files. No download,
-second authentication, or main-config replacement occurs in this import stage.
+`import_cluster_licensed.sbatch` registers explicitly confirmed acquisitions under
+`caches/{SpliceAI_v1,PrimateAI_v0_2}`. The optional ninth argument is the resource
+selection: `all` (the original default), `spliceai`, or `primateai`. It still runs
+the frozen `install_utils.sh` functions; selecting SpliceAI calls only
+`SpliceAI_install` and requires both SNV and indel VCFs with their indexes.
+SpliceAI v1 downloads are now owner-confirmed complete; PrimateAI acquisition is
+still pending. This script does not download or authenticate.
+
+The confirmation JSON requires `status: downloads_complete`, `confirmed_by`,
+matching `assembly`, and exactly the selected `files` roles: `spliceai_snv` plus
+`spliceai_indel` for SpliceAI, `primateai` for PrimateAI, or all three for `all`.
+Each file entry contains an absolute `path` and optional acquisition
+`bytes`/`sha256`. Optional `resources` must match the selection (`["spliceai"]`
+for the current partial import); completion refers only to those resources.
+The job reports each hash, gzip and index-check stage and verifies source
+size/timestamps/inode from before the first checksum through import completion.
+
+Registration writes a separate config and verifies every unselected key remains
+unchanged. SpliceAI stays in its shared location; selected raw PrimateAI TSVs
+retain their original bytes while the original formatter creates sibling BGZF
+and index files. Receipt names are `licensed-caches-ASSEMBLY.ready.json` for
+`all` and `licensed-caches-ASSEMBLY-RESOURCE.ready.json` for a subset. Subset
+receipts use `selected_licensed_inputs_imported`, list the registered resources,
+and mark others `not_selected_unverified`; they do not establish complete
+licensed-resource deployment. Main-config promotion and scientific VEP/family
+qualification remain separate. A SpliceAI-only submission can override the
+combined formatter allocation with `--cpus-per-task=2 --mem=8G --time=1-00:00:00`.

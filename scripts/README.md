@@ -132,13 +132,27 @@ The existing shared importer lock is retained.
 
 ## SpliceAI2 annotation-only preparation
 
+Current installation direction: keep only the original spliceai_snv_prescore and spliceai_indel_prescore YAML keys. Choose assembly once at installation: fresh GRCh37 uses v1 and fresh GRCh38 uses v2. Inspect decompressed headers automatically: an existing compatible VCF passes through; native 84-column SpliceAI2 TSV invokes the narrow adapter. A prepared pair is registered under the two original keys and installation succeeds. Resource/model identity, hashes, schema and qualification remain in sidecars and cache headers, without extra selector or converter YAML switches. Existing compatible GRCh38 v1 VCF pairs pass through; fresh GRCh38 installations select v2. Wrong assembly, mixed input types and failed v2 preparation never trigger a fallback.
+
 `spliceai2_to_vep_vcf.py` verifies a complete pinned source manifest, qualifies
 scored-gene intervals against exact GENCODE48, and invokes `priva spliceai2-vcf`
 through mature `gzip`/`bgzip`/`tabix` processes. It preserves originals and publishes
 the receipt last; it performs no acquisition or scientific activation.
-`install_utils.sh SpliceAI2_install CONFIG MANIFEST OUTPUT_DIR [PRIVA_BIN]` verifies
-the full receipt and registers only six namespaced `spliceai2_*` preparation keys.
-The assembly-profile route retains hg19 v1 and stops after hg38 v2 preparation.
+SpliceAI_install invokes scripts/spliceai_cache_input.py install automatically, retaining the existing prompts and two resource keys. The helper detects gzip by magic bytes, then classifies a bounded decompressed header as vcf_v1, vcf_spliceai2 or the exact native 84-column SpliceAI2 TSV schema; filenames, extensions and score magnitudes do not select the predictor. An unmarked VCF receives the legacy-compatible vcf_v1 routing label; that label alone does not prove predictor identity. Existing compatible VCF pairs pass through, including existing GRCh38 v1; fresh GRCh38 selects v2. Wrong assembly, mixed types or failing v2 preparation fail without fallback. SpliceAI2 VCF passthrough additionally requires a completed adjacent adapter.ready.json with exact SNV/indel/index membership and complete published-catalogue status; it performs no conversion. Reject .partial or .building path components, including symlink targets, and refuse in-progress preparation or staged outputs. A final VCF renamed before receipt publication is not ready. V1 VCF passthrough requires no additional adapter receipt.
+
+```bash
+python scripts/spliceai_cache_input.py install --config CONFIG --cache-dir CACHE_DIR --snv SNV --indel INDEL
+```
+
+For native TSV, the helper discovers the fixed adjacent SpliceAI2_GRCh38.downloads-complete.json sidecar. The selected SNV/indel inputs must match their manifest roles and the full 47-shard catalogue. It calls the existing low-level SpliceAI2_install to prepare or reuse a fully validated receipt, then updates only spliceai_snv_prescore and spliceai_indel_prescore. The pinned priva converter is resolved through PATH; no YAML converter or manifest option is added. Provenance and scientific qualification remain in sidecars/cache headers. The fixed adjacent sidecar is published at yangyxt/caches/SpliceAI2_GRCh38.downloads-complete.json, SHA256 fbc6c9fcd1859d6f1605f9343d5659b8420d7397c4152da19daab34c6194e49d. The PATH entry yangyxt/softwares/bin/priva resolves to the verified optimized 225aa4a converter. This changes no YAML keys beyond the original two paths.
+
+Two-key interface qualification: code 35779c4578509ce01218a052a8e7e1d8a785a75b passed 239 Python tests, zero failures/errors/skips, in 190.848 seconds: 39 helper, 25 installer, 14 runtime-guard, 21 Nextflow-adapter and 140 existing deployment/driver/BGZ tests. The installer-shell cases mock the helper boundary; they are not real conversion evidence. Log: yangyxt_dt/projects/PriVA_upgrade/logs/spliceai-two-key-integration-20261016.log. This supersedes the earlier 197-test interface checkpoint without adding its count; unchanged Rust evidence remains 41 tests and the earlier real-projection evidence remains 512 unique rows.
+
+Actual resource checks used final helper SHA256 f69d6ea8d6179d68ae44cad849b3c6c7912a879f05e305a36acffba09c81bb88: all 47 native TSV and four v1 VCF headers classified correctly, including assembly metadata. Real SpliceAI_install reused the existing v1 pair for hg19/GRCh37 and hg38/GRCh38 with configuration bytes, inode and mtime unchanged and resource stat identities unchanged. Receipt: yangyxt_dt/projects/PriVA_upgrade/validation/spliceai-two-key-real-install-20261016/receipt.json. These are bounded header/reuse checks, not new body checksums, full VEP execution or model/scientific qualification.
+
+Nextflow stub verification passed all four scenarios: raw input, resume with all four tasks cached, preannotated input and stale-environment rejection. Log: yangyxt_dt/projects/PriVA_upgrade/logs/spliceai-two-key-nextflow-20261016.log; retained validation/log artifacts: validation/spliceai-two-key-nextflow-20261016/ under that data project. The run used code 35779c4 plus the documentation state at execution; its recorded source_digest identifies that exact state. Subsequent documentation edits are not attributed to the run.
+
+Frozen-run boundary: job 1514732 continues unchanged with installer f8de4b3 and the previously verified converter. Its prior explicit-manifest/six-key interface is historical execution provenance, not the new installation contract. After successful completion, validated output artifacts may be imported through the two original keys; do not attribute those artifacts or the 197 Python tests to the new dispatcher. The new two-key interface is qualified separately at 35779c4; full scientific acceptance remains pending.
 
 The [route reference](../docs/nextflow_migration.md#spliceai2-preparation) provides
 commands, the exact JSON manifest contract, all 47 required shards, verified
@@ -148,8 +162,8 @@ All 20,083 real regions passed the stable-ID/GENCODE48 join, retaining full
 versions and `_PAR_Y`; ten same-strand symbol groups retain all IDs/intervals
 and coalesce labels only per prediction. Opposite-strand symbol contexts fail.
 The execution manifest is complete and saved in DataLad commit 5f5946b.
-Full-file revalidation, complete conversion and indexed-VEP qualification remain
-pending. Publisher expected SHA256 values and VERIFIED acquisition receipts for
+All 47 full source SHA256 checks passed in frozen job 1514732, which has begun
+projecting SNV chr1; complete conversion and indexed-VEP qualification remain pending. Publisher expected SHA256 values and VERIFIED acquisition receipts for
 all 47 shards are now supplied in [caches/README.md](../../../caches/README.md);
 there is no missing-publisher-checksum blocker. Current Rust 225aa4a passed 32
 projection + 9 existing tests; Python f8de4b3 passed 197 tests with zero failures/skips.
@@ -159,9 +173,9 @@ full-VEP qualification. Optimized source 225aa4aa774b4be7f53576e1cde56af71e67bd2
 is installed at `yangyxt/softwares/priva-tools-225aa4a/bin/priva`, SHA256
 `bbc3b7288ed2ea63f1f8455ed87b8a9d08c7bc1fe0a562c1d6134525e2a12dc6`.
 Installed-release reruns passed the same 25 driver cases and same 512 source rows;
-unique totals remain 197 Python/41 Rust tests and 512 rows. A stale shared Cargo
+the frozen checkpoint had 197 Python/41 Rust tests and 512 rows; current interface coverage is 239 Python tests, with unchanged 41 Rust tests and 512 unique rows. A stale shared Cargo
 release artifact was detected before deployment; forced rebuilding and installed
 smoke checks corrected it, with the failure retained in the receipt. Full preparation job 1514732 is running on c81o-03 (4 CPUs, 16 GB, 7 days) using frozen
 installer f8de4b3, this converter and the isolated GRCh38 config. The manifest/
-handoff were saved in DataLad commit 5f5946b before launch; full checksum/conversion success remains pending.
+handoff were saved in DataLad commit 5f5946b before launch; all 47 full source SHA256 checks passed and SNV chr1 projection started; complete conversion remains pending.
 Original licensed source and derived views remain local under their resource terms.

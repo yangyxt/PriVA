@@ -86,8 +86,9 @@ table is kept separate from this baseline conversion.
 selection: `all` (the original default), `spliceai`, or `primateai`. It still runs
 the frozen `install_utils.sh` functions; selecting SpliceAI calls only
 `SpliceAI_install` and requires both SNV and indel VCFs with their indexes.
-SpliceAI v1 downloads are now owner-confirmed complete; PrimateAI acquisition is
-still pending. This script does not download or authenticate.
+Both original collections are acquired. Hg19 SpliceAI job 1514615 and PrimateAI
+job 1514620 completed with valid import receipts; main-config promotion remains
+separately tracked. This script does not download or authenticate.
 
 The confirmation JSON requires `status: downloads_complete`, `confirmed_by`,
 matching `assembly`, and exactly the selected `files` roles: `spliceai_snv` plus
@@ -126,3 +127,20 @@ preformatted BGZF without its raw source is marked `raw_parity_verified: false`.
 Raw originals and successfully formatted bytes are never rewritten by this
 validator; failed validation leaves no completion receipt or main-config change.
 The existing shared importer lock is retained.
+
+## SpliceAI2 annotation-only preparation
+
+`spliceai2_to_vep_vcf.py` verifies a complete pinned source manifest, qualifies
+scored-gene intervals against exact GENCODE48, and invokes `priva spliceai2-vcf`
+through mature `gzip`/`bgzip`/`tabix` processes. It preserves originals and publishes
+the receipt last; it performs no acquisition or scientific activation.
+`install_utils.sh SpliceAI2_install CONFIG MANIFEST OUTPUT_DIR [PRIVA_BIN]` verifies
+the full receipt and registers only six namespaced `spliceai2_*` preparation keys.
+The assembly-profile route retains hg19 v1 and stops after hg38 v2 preparation.
+
+The [route reference](../docs/nextflow_migration.md#spliceai2-preparation) provides
+commands, the exact JSON manifest contract, all 47 required shards, verified
+GENCODE48 and plugin identities, output patterns and the explicit subset-test
+boundary. GENCODE48 acquisition is complete; no full SpliceAI2 conversion or
+scientific qualification is claimed. Original licensed source and derived cache
+views remain local under their resource terms.

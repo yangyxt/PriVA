@@ -42,6 +42,12 @@ timing/memory benchmarks continue under Slurm; production remains pinned to
 standalone `4194be3`. These helper checks do not qualify complete scoring,
 outer-wrapper cancellation, shared annotation or family interpretation.
 
+SpliceAI v1 originals and indexes for both assemblies are confirmed downloaded.
+The current hg19 pair is undergoing full verification and original-installer
+registration in Slurm 1514615; PrimateAI still needs BaseSpace browser sign-in.
+The AlphaMissense build is held for a separate missing original NM-to-ENST
+mapping table. No annotation or evidence branch has been silently disabled.
+
 ## Overview
 
 This repository contains scripts and configuration files for an automated variant prioritization pipeline based on the ACMG/AMP guidelines. PriVA combines transcript-level annotation, population and functional data, gene-disease mechanism and inheritance context, and family information to evaluate ACMG/AMP criteria and produce ranked variant lists for each family. Annotation resources are deployed once and can be refreshed; each cohort run then performs annotation, family-level filtering, criteria matching, and prioritization.

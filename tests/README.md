@@ -211,4 +211,11 @@ versioned GTF IDs remain retained. Closed evidence is under
 `yangyxt_dt/projects/PriVA_upgrade/validation/spliceai2-real-context-20261015/`.
 This checks gene context, not score conversion or indexed-VEP execution.
 
-Scientific boundary for the simplified installer: inspect the actual selected cache headers and sidecar provenance to prevent unqualified v2 scientific use, including preannotated import and resume; no new enable/disable YAML toggle is introduced. Successful installation is separate from v2 ACMG/ClinVar, full VEP, public-sample and supplied-family acceptance. Unmarked external annotations still require pinned scientific provenance because predictor version cannot be inferred from numeric values. The runtime guards now inspect actual cache headers at the two original keys, including preannotated launch/task paths; the current 21 Nextflow-adapter and 14 runtime-guard tests are included once in the 239-test total. Earlier f8de4b3 checks remain historical; scientific acceptance is still pending.
+Scientific boundary for the simplified installer: inspect the actual selected cache headers and sidecar provenance to prevent unqualified v2 scientific use, including preannotated import and resume; no new enable/disable YAML toggle is introduced. Successful installation is separate from v2 ACMG/ClinVar, full VEP, public-sample and supplied-family acceptance. Unmarked external annotations still require pinned scientific provenance because predictor version cannot be inferred from numeric values. The runtime guards now inspect actual cache headers at the two original keys, including preannotated launch/task paths; the earlier `35779c4` checkpoint included 21 Nextflow-adapter and 14 runtime-guard tests once in its 239-test total; the focused PED checks below are a later, separate test run. Earlier f8de4b3 checks remain historical; scientific acceptance is still pending.
+
+PED compatibility, 2026-10-16: the Nextflow adapter accepts phenotype `0/-9`
+as missing affection and preserves sex, parent IDs, PED bytes and family row
+order. Added generic adapter regressions cover both missing parental states,
+full-cohort sample membership, invalid codes and the affected-first guard.
+Scientific filtering and sex-dependent interpretation remain unchanged; these
+contract checks do not establish scientific family acceptance.

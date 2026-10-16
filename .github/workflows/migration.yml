@@ -98,6 +98,8 @@ jobs:
           python -m unittest discover -s tests -p 'test_cluster_primate_validation.py' -v
           python -m unittest discover -s tests -p 'test_install_utils_bootstrap.py' -v
           python -m unittest discover -s tests -p 'test_install_utils_resources.py' -v
+          python -m unittest discover -s tests -p 'test_install_utils_spliceai2.py' -v
+          python -m unittest discover -s tests -p 'test_spliceai2_runtime_guard.py' -v
           python -m unittest discover -s tests/cadd -p 'test_upstream.py' -v
           python -m unittest discover -s tests/cadd -p 'test_selection_view.py' -v
 
@@ -109,6 +111,10 @@ jobs:
           cargo +1.90.0 fmt --manifest-path rust/Cargo.toml --check
           cargo +1.90.0 build --manifest-path rust/Cargo.toml --locked --jobs 1
           cargo +1.90.0 test --manifest-path rust/Cargo.toml --locked --jobs 1
+
+      - name: Test SpliceAI2 preparation with real Rust, BGZF and tabix
+        # Synthetic scores and GENCODE context; no model or full-cache acceptance.
+        run: PRIVA_SPLICEAI2_BIN="$CARGO_TARGET_DIR/debug/priva" python -m unittest discover -s tests -p 'test_spliceai2_deployment.py' -v
 
       - name: Compare the actual legacy terminal sorting block with Rust
         # This tests group maxima, ordering and ranks only. Full score/criteria

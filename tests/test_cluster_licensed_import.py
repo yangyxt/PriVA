@@ -33,7 +33,11 @@ REFERENCE_SHA256 = {
 def copy_frozen_scripts(destination, checkout=ROOT):
     contents = {}
     for name, expected in REFERENCE_SHA256.items():
-        content = (checkout / 'scripts' / name).read_bytes()
+        # The installer now has an independent v2 route. Its historical v1
+        # oracle stays immutable and remains available in shallow/exported CI.
+        fixture = checkout / 'tests/fixtures/installer-054b494/scripts' / name
+        source = fixture if fixture.is_file() else checkout / 'scripts' / name
+        content = source.read_bytes()
         actual = hashlib.sha256(content).hexdigest()
         if actual != expected:
             raise AssertionError(
@@ -265,6 +269,15 @@ class LicensedImportFixtures(unittest.TestCase):
         script = self.source / 'scripts/install_utils.sh'
         script.write_bytes(script.read_bytes() + b'\n# unexpected revision\n')
         destination = self.folder / 'rejected_snapshot/scripts'
+        with self.assertRaisesRegex(AssertionError, 'Frozen installer reference mismatch'):
+            copy_frozen_scripts(destination, checkout=self.source)
+        self.assertFalse(destination.exists())
+
+    def test_corrupt_packaged_reference_does_not_fall_back_to_current_scripts(self):
+        fixture = self.source / 'tests/fixtures/installer-054b494/scripts/install_utils.sh'
+        fixture.parent.mkdir(parents=True)
+        fixture.write_bytes((self.source / 'scripts/install_utils.sh').read_bytes() + b'\n# corrupt packaged oracle\n')
+        destination = self.folder / 'rejected_packaged_snapshot/scripts'
         with self.assertRaisesRegex(AssertionError, 'Frozen installer reference mismatch'):
             copy_frozen_scripts(destination, checkout=self.source)
         self.assertFalse(destination.exists())

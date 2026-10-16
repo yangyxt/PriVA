@@ -332,23 +332,24 @@ function vep_cache_api_install() {
     local VEP_DESTDIR=$(perl -e 'print join("\n", @INC);' | grep site_perl | head -1)
     [[ $(echo $PERL5LIB) =~ "${VEP_DESTDIR}" ]] && \
     [[ $(echo $PATH) =~ "${VEP_DESTDIR}" ]] && \
-    [[ $(echo $PERL5LIB}) =~ "${VEP_PLUGINSDIR}" ]] && \
+    [[ $(echo $PERL5LIB) =~ "${VEP_PLUGINSDIR}" ]] && \
     [[ -d ${VEP_CACHEDIR}/homo_sapiens_merged/${VEP_VERSION}_${VEP_ASSEMBLY} ]] && \
     [[ -d ${VEP_CACHEDIR}/homo_sapiens_merged/${VEP_VERSION}_${VEP_ASSEMBLY}/1 ]] && \
-    [[ -f ${VEP_CACHEDIR}/homo_sapiens_merged/${VEP_VERSION}_${VEP_ASSEMBLY}/1/all_vars.gz ]] && \
-    [[ -f ${VEP_CACHEDIR}/homo_sapiens_merged/${VEP_VERSION}_${VEP_ASSEMBLY}/chr_synonyms.txt ]] && \
-    [[ -f ${VEP_PLUGINSDIR}/SpliceVault.pm ]] && \
-    [[ -f ${VEP_PLUGINSDIR}/SpliceAI.pm ]] && \
-    [[ -f ${VEP_PLUGINSDIR}/UTRAnnotator.pm ]] && \
-    [[ -f ${VEP_PLUGINSDIR}/AlphaMissense.pm ]] && \
-    [[ -f ${VEP_PLUGINSDIR}/GO.pm ]] && \
-    [[ -f ${VEP_PLUGINSDIR}/Phenotypes.pm ]] && \
-    [[ -f ${VEP_PLUGINSDIR}/Conservation.pm ]] && \
-    [[ -f ${VEP_PLUGINSDIR}/LOEUF.pm ]] && \
-    [[ -f ${VEP_PLUGINSDIR}/SameCodon.pm ]] && \
-    [[ -f ${VEP_PLUGINSDIR}/NMD.pm ]] && \
-    [[ -f ${VEP_PLUGINSDIR}/PrimateAI.pm ]] && \
-    [[ -f ${VEP_PLUGINSDIR}/MaveDB.pm ]] && \
+    [[ -s ${VEP_CACHEDIR}/homo_sapiens_merged/${VEP_VERSION}_${VEP_ASSEMBLY}/info.txt ]] && \
+    [[ -s ${VEP_CACHEDIR}/homo_sapiens_merged/${VEP_VERSION}_${VEP_ASSEMBLY}/1/all_vars.gz ]] && \
+    [[ -s ${VEP_CACHEDIR}/homo_sapiens_merged/${VEP_VERSION}_${VEP_ASSEMBLY}/chr_synonyms.txt ]] && \
+    [[ -s ${VEP_PLUGINSDIR}/SpliceVault.pm ]] && \
+    [[ -s ${VEP_PLUGINSDIR}/SpliceAI.pm ]] && \
+    [[ -s ${VEP_PLUGINSDIR}/UTRAnnotator.pm ]] && \
+    [[ -s ${VEP_PLUGINSDIR}/AlphaMissense.pm ]] && \
+    [[ -s ${VEP_PLUGINSDIR}/GO.pm ]] && \
+    [[ -s ${VEP_PLUGINSDIR}/Phenotypes.pm ]] && \
+    [[ -s ${VEP_PLUGINSDIR}/Conservation.pm ]] && \
+    [[ -s ${VEP_PLUGINSDIR}/LOEUF.pm ]] && \
+    [[ -s ${VEP_PLUGINSDIR}/SameCodon.pm ]] && \
+    [[ -s ${VEP_PLUGINSDIR}/NMD.pm ]] && \
+    [[ -s ${VEP_PLUGINSDIR}/PrimateAI.pm ]] && \
+    [[ -s ${VEP_PLUGINSDIR}/MaveDB.pm ]] && \
     { log "The PERL5LIB value and PATH value already include ${VEP_DESTDIR} and ${VEP_PLUGINSDIR}, indicating the following installation process has already been succesfully performed. Skip the function for now."; return 0; }
 
     local conda_env_name=$(basename "$CONDA_PREFIX")

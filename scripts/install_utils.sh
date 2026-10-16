@@ -355,17 +355,33 @@ function vep_cache_api_install() {
     [[ ${VEP_DESTDIR} =~ ${conda_env_name} ]] && log "The dest dir is set to the directory (${VEP_DESTDIR}) where perl modules are installed by conda" || \
     { log "Since the function is designed to perform follow up installation of VEP upon the installation of VEP dependencies via conda, we only accept installing VEP API at the perl module installation location previously used by conda"; return 1; }
 
-    # Construct the command
-    local cmd="vep_install -d ${VEP_DESTDIR} --AUTO acp -s homo_sapiens_merged --NO_HTSLIB --NO_BIOPERL --CONVERT"
-    [[ -n "$VEP_CACHEDIR" ]] && cmd+=" --CACHEDIR $VEP_CACHEDIR"
-    [[ -n "$VEP_ASSEMBLY" ]] && cmd+=" --ASSEMBLY $VEP_ASSEMBLY"
-    [[ -n "$VEP_PLUGINS" ]] && [[ $VEP_PLUGINS != "empty" ]] && cmd+=" --PLUGINS $VEP_PLUGINS,SpliceAI,SpliceVault,UTRAnnotator,AlphaMissense,GO,Phenotypes,Conservation,LOEUF,SameCodon,NMD,PrimateAI,MaveDB" || cmd+=" --PLUGINS SpliceAI,SpliceVault,UTRAnnotator,AlphaMissense,GO,Phenotypes,Conservation,LOEUF,SameCodon,NMD,PrimateAI,MaveDB"
-    [[ -n "$VEP_PLUGINSDIR" ]] && cmd+=" --PLUGINSDIR $VEP_PLUGINSDIR"
+    # Conda already supplied VEP and its API. Install only cache/plugins, with
+    # no newer-release prompt: VEP's update prompt exits zero on batch EOF.
+    # Reinstalling the API would also overwrite Conda-managed Perl packages.
+    local required_plugins=SpliceAI,SpliceVault,UTRAnnotator,AlphaMissense,GO,Phenotypes,Conservation,LOEUF,SameCodon,NMD,PrimateAI,MaveDB
+    local -a cmd=(vep_install -d "$VEP_DESTDIR" --AUTO cp --NO_UPDATE
+                  --CACHE_VERSION "$VEP_VERSION" -s homo_sapiens_merged
+                  --NO_HTSLIB --NO_BIOPERL --CONVERT)
+    [[ -n "$VEP_CACHEDIR" ]] && cmd+=(--CACHEDIR "$VEP_CACHEDIR")
+    [[ -n "$VEP_ASSEMBLY" ]] && cmd+=(--ASSEMBLY "$VEP_ASSEMBLY")
+    [[ -n "$VEP_PLUGINS" && "$VEP_PLUGINS" != empty ]] && required_plugins="$VEP_PLUGINS,$required_plugins"
+    cmd+=(--PLUGINS "$required_plugins")
+    [[ -n "$VEP_PLUGINSDIR" ]] && cmd+=(--PLUGINSDIR "$VEP_PLUGINSDIR")
 
     # Execute the command
     # After executing the command, we need to bind the new PERL5LIB value with the current conda env
-    log "Now we start to install the VEP api and downloading caches (which might take a while to finish). So pls be patient, here is the command we are going to execute: ${cmd}"
-    $cmd || { log "Failed to install the VEP API and download caches"; return 1; }
+    log "Installing cache/plugins for the existing VEP ${VEP_VERSION}: ${cmd[*]}"
+    "${cmd[@]}" || { log "Failed to install the VEP API and download caches"; return 1; }
+    local expected cache_directory="$VEP_CACHEDIR/homo_sapiens_merged/${VEP_VERSION}_${VEP_ASSEMBLY}"
+    for expected in "$cache_directory/info.txt" "$cache_directory/chr_synonyms.txt" \
+                    "$cache_directory/1/all_vars.gz"; do
+        [[ -s "$expected" ]] || { log "ERROR: VEP installer exited without required cache file: $expected"; return 1; }
+    done
+    local -a plugin_names
+    IFS=, read -r -a plugin_names <<< "$required_plugins"
+    for expected in "${plugin_names[@]}"; do
+        [[ -s "$VEP_PLUGINSDIR/$expected.pm" ]] || { log "ERROR: VEP installer exited without required plugin: $VEP_PLUGINSDIR/$expected.pm"; return 1; }
+    done
     if [[ ":${PERL5LIB:-}:" != *":${VEP_DESTDIR}:"* || ":${PERL5LIB:-}:" != *":${VEP_PLUGINSDIR}:"* ]]; then
         priva_env_vars_set PERL5LIB="$VEP_DESTDIR:$VEP_PLUGINSDIR${PERL5LIB:+:$PERL5LIB}" || return 1
     fi
@@ -3184,7 +3200,10 @@ function main_install() {
     else
         # 2. Install VEP
         # Update config with installation results
-        local vep_version=$(vep --help | grep "ensembl-vep" | awk '{print $NF}' | awk -F '.' '{print $1}')
+        local vep_help vep_version
+        vep_help=$(vep --help 2>&1) || { log "ERROR: Installed Conda VEP/API is not runnable: ${vep_help}"; return 1; }
+        vep_version=$(grep "ensembl-vep" <<< "$vep_help" | awk '{print $NF}' | awk -F '.' '{print $1}')
+        [[ $vep_version =~ ^[0-9]+$ ]] || { log "ERROR: Could not identify the installed VEP release"; return 1; }
         # Update config with installation results
         update_yaml "$config_file" "vep_installed_version" "$vep_version"
 

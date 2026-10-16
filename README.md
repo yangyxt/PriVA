@@ -24,6 +24,19 @@ Python calculation, scientific dependencies and models. Profile first; enable
 Python optimizations only after exact score/row/order/missingness/failure checks
 and measured timing/memory comparisons against the pinned unmodified reference.
 
+The supplied **GRCh38 trio is delivered for input/implementation testing**;
+input staging and packet metadata checks are complete. Twenty-five focused
+adapter tests and eight packet metadata checks pass; multi-sample import remains pending.
+Its separate single-sample VCFs are
+not jointly genotyped. The workflow needs one multi-sample family VCF; import
+remains to be implemented and validated. No merge or missing-call imputation
+has been performed. A tested genotype-preserving merge may support implementation
+parity when labeled nonjoint, with missing calls unknown. Unknown PED affection
+does not supply phenotype-1 controls.
+Input/control contracts, documented sex and qualified GRCh38 resources remain
+acceptance gates; see the [current acceptance gate](docs/nextflow_migration.md#current-acceptance-gate).
+No family annotation/ranking acceptance or public 1000 Genomes acceptance is claimed.
+
 Rust currently covers final ordering and a bounded criteria-summary/posterior
 interface, not all criterion assignment. Cluster software installation has passed;
 cache deployment and calibration are still in progress. Synthetic checks, real
@@ -81,7 +94,7 @@ Resource update, **2026-10-16T08:46:04Z** (SpliceAI2/held-job check around 08:45
 
 | Installation work | Verified state | Remaining gate |
 | --- | --- | --- |
-| Reference + VEP113 merged cache 1514579 | COMPLETED (0:0) at 2026-10-16T08:21:30Z after 8 h 39 m 49 s. Both stage receipts are deployed. Full archive checks, FASTA/index samples and bounded canonical-cache layout/header checks passed at 08:46:04Z, using frozen `fc21869`. The existing config already selects the reference and cache. | No real VEP/plugin annotation was run by this audit. Shared-VEP/CADD, public-sample and supplied-family acceptance remain pending. AlphaMissense remains held for the original NM-to-ENST mapping. |
+| GRCh37 reference + VEP113 merged cache 1514579 | COMPLETED (0:0) at 2026-10-16T08:21:30Z after 8 h 39 m 49 s. Both stage receipts are deployed. Full archive checks, FASTA/index samples and bounded canonical-cache layout/header checks passed at 08:46:04Z, using frozen `fc21869`. The existing config already selects the reference and cache. | No real VEP/plugin annotation was run by this audit. Shared-VEP/CADD, public-sample and supplied-family acceptance remain pending. AlphaMissense remains held for the original NM-to-ENST mapping. |
 | CADD prescore recovery 1514744 | COMPLETED (0:0), 13 m 15 s, with a deployed receipt for the four Washington GRCh37 v1.7 files. Existing SNV/index and indel bytes passed full MD5 rechecks; only the missing matching index was downloaded. Real indexed-pair checks passed all 24 contigs in each SNV/indel pair. Source `20774bd` has 20 deployment and 31 licensed-import fixture tests passed. | Deployment and bounded indexed access are verified. Real VEP/model, shared-annotation, public-sample and supplied-family acceptance remain pending. |
 | SpliceVault 1514603 | COMPLETED (0:0) at 2026-10-16T07:03:13Z; the original release113-to-GRCh37 derived resource is built, verified and already configured. | Real VEP use, scientific qualification and supplied-family acceptance remain pending. |
 
@@ -190,7 +203,7 @@ checked at the installed path; the receipt retains that failed attempt. Full
 conversion and real VEP/scientific acceptance remain pending. See the linked route
 for the exact manifest, GTF/plugin identities, commands and pending gates.
 
-Scientific boundary for the simplified installer: inspect the actual selected cache headers and sidecar provenance to prevent unqualified v2 scientific use, including preannotated import and resume; no new enable/disable YAML toggle is introduced. Successful installation is separate from v2 ACMG/ClinVar, full VEP, public-sample and supplied-family acceptance. Unmarked external annotations still require pinned scientific provenance because predictor version cannot be inferred from numeric values. The runtime guards now inspect actual cache headers at the two original keys, including preannotated launch/task paths; the current 21 Nextflow-adapter and 14 runtime-guard tests are included once in the 239-test total. Earlier f8de4b3 checks remain historical; scientific acceptance is still pending.
+Scientific boundary for the simplified installer: inspect the actual selected cache headers and sidecar provenance to prevent unqualified v2 scientific use, including preannotated import and resume; no new enable/disable YAML toggle is introduced. Successful installation is separate from v2 ACMG/ClinVar, full VEP, public-sample and supplied-family acceptance. Unmarked external annotations still require pinned scientific provenance because predictor version cannot be inferred from numeric values. The runtime guards now inspect actual cache headers at the two original keys, including preannotated launch/task paths; the earlier 35779c4 checkpoint included 21 Nextflow-adapter and 14 runtime-guard tests once in its 239-test total. The later 25 focused PED-adapter tests are separate evidence; the full suite has not been rerun. Earlier f8de4b3 checks remain historical; scientific acceptance is still pending.
 
 ## Installation
 

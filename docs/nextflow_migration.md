@@ -162,7 +162,7 @@ Frozen pre-simplification qualification: Rust source 225aa4a (integration 32212d
 
 Bounded real-cache check: 256 SNV plus 256 indel prefix rows from chr1, all positive-strand, passed an independent column-name-based full-record/order oracle and real bgzip/tabix queries with zero mismatches. Verifier f8de4b3 first checked the debug converter from 225aa4a; receipt: yangyxt_dt/projects/PriVA_upgrade/validation/spliceai2-real-projection-225aa4a-debug/receipt.json. The same 512 source rows were independently rechecked against the installed optimized release with zero mismatches; this remains 512 unique rows, not 1,024. This is real precomputed-row conversion, not model inference, whole-cache coverage, full VEP execution, public-sample or supplied-family acceptance.
 
-Optimized converter installed: source 225aa4aa774b4be7f53576e1cde56af71e67bd2c, executable SHA256 bbc3b7288ed2ea63f1f8455ed87b8a9d08c7bc1fe0a562c1d6134525e2a12dc6, at yangyxt/softwares/priva-tools-225aa4a/bin/priva. Installation checks detected a stale shared Cargo release artifact before deployment; a forced package rebuild and installed smoke check corrected it, and the receipt retains the failed attempt. All 25 driver cases passed again against the installed release. That frozen checkpoint had 197 Python and 41 Rust tests; the new interface has 239 Python tests with the same 41-test Rust evidence. Reruns are not additional cases. Full preparation job 1514732 is running on c81o-03 with 4 CPUs, 16 GB and a seven-day limit. It freezes installer f8de4b3 and the installed optimized converter; the submitted wrapper SHA256 is 3914a77aa9972a1f1a74e48b727fee74af92c9763e2da900fa9e9bc978395263. It writes yangyxt/caches/VEP_plugin_cache/SpliceAI2/GRCh38 using the isolated config yangyxt/softwares/priva-cluster-grch38-spliceai2/config.yaml. The complete execution manifest yangyxt_dt/projects/PriVA_upgrade/deployment/spliceai2-GRCh38.downloads-complete.json and its handoff were saved in DataLad commit 5f5946b before launch. The frozen job passed all 47 full source SHA256 checks; the bounded 2026-10-16 ~08:45Z check confirmed RUNNING and a log through SNV chr4. No complete conversion receipt exists yet. Full conversion and real VEP/scientific acceptance remain pending.
+Optimized converter installed: source 225aa4aa774b4be7f53576e1cde56af71e67bd2c, executable SHA256 bbc3b7288ed2ea63f1f8455ed87b8a9d08c7bc1fe0a562c1d6134525e2a12dc6, at yangyxt/softwares/priva-tools-225aa4a/bin/priva. Installation checks detected a stale shared Cargo release artifact before deployment; a forced package rebuild and installed smoke check corrected it, and the receipt retains the failed attempt. All 25 driver cases passed again against the installed release. That frozen checkpoint had 197 Python and 41 Rust tests; the separately tested 35779c4 interface had 239 Python tests with the same 41-test Rust evidence. Reruns are not additional cases. Full preparation job 1514732 is running on c81o-03 with 4 CPUs, 16 GB and a seven-day limit. It freezes installer f8de4b3 and the installed optimized converter; the submitted wrapper SHA256 is 3914a77aa9972a1f1a74e48b727fee74af92c9763e2da900fa9e9bc978395263. It writes yangyxt/caches/VEP_plugin_cache/SpliceAI2/GRCh38 using the isolated config yangyxt/softwares/priva-cluster-grch38-spliceai2/config.yaml. The complete execution manifest yangyxt_dt/projects/PriVA_upgrade/deployment/spliceai2-GRCh38.downloads-complete.json and its handoff were saved in DataLad commit 5f5946b before launch. The frozen job passed all 47 full source SHA256 checks; the bounded 2026-10-16 ~08:45Z check confirmed RUNNING and a log through SNV chr4. No complete conversion receipt exists yet. Full conversion and real VEP/scientific acceptance remain pending.
 
 The [official-plugin harness](spliceai2-plugin-audit.md) passed 11 subtests / 38
 assertions using real plugin/Ensembl allele matching and synthetic candidates.
@@ -180,7 +180,7 @@ uncommitted-file hashes, not a later checkout, identify the tested driver.
 Bash/YAML/diff checks also passed. No completed real 47-shard conversion,
 v2 ACMG/CADD activation or supplied-family parity is claimed.
 
-Scientific boundary for the simplified installer: inspect the actual selected cache headers and sidecar provenance to prevent unqualified v2 scientific use, including preannotated import and resume; no new enable/disable YAML toggle is introduced. Successful installation is separate from v2 ACMG/ClinVar, full VEP, public-sample and supplied-family acceptance. Unmarked external annotations still require pinned scientific provenance because predictor version cannot be inferred from numeric values. The runtime guards now inspect actual cache headers at the two original keys, including preannotated launch/task paths; the current 21 Nextflow-adapter and 14 runtime-guard tests are included once in the 239-test total. Earlier f8de4b3 checks remain historical; scientific acceptance is still pending.
+Scientific boundary for the simplified installer: inspect the actual selected cache headers and sidecar provenance to prevent unqualified v2 scientific use, including preannotated import and resume; no new enable/disable YAML toggle is introduced. Successful installation is separate from v2 ACMG/ClinVar, full VEP, public-sample and supplied-family acceptance. Unmarked external annotations still require pinned scientific provenance because predictor version cannot be inferred from numeric values. The runtime guards now inspect actual cache headers at the two original keys, including preannotated launch/task paths; the earlier 35779c4 checkpoint included 21 Nextflow-adapter and 14 runtime-guard tests once in its 239-test total. The later 25 focused PED-adapter tests are separate evidence; the full suite has not been rerun. Earlier f8de4b3 checks remain historical; scientific acceptance is still pending.
 
 ## Frozen source and branch
 
@@ -198,11 +198,55 @@ approved `yangyxt` root. See [Rust scope and parity](rust-migration.md).
 
 ## Current acceptance gate
 
-The user will supply the family VCF/PED, assembly, working configuration and
-existing result or its producing software environment. Until then, no real-family
-analysis or identical ACMG/ranking result is claimed. A historic result qualifies
-as a reference only when its source, software, parameters and resource identities
-are established; otherwise regenerate with the frozen source.
+The supplied GRCh38 trio has been delivered for **input/implementation testing**;
+input staging and packet metadata checks are complete.
+Delivery is separate from
+scientific acceptance. The packet has separate single-sample small-variant VCFs,
+not a jointly genotyped family VCF; it does not establish structural-variant validation.
+
+**Delivered packet → intake / input contract → qualified GRCh38 profile → exact comparison.**
+
+The workflow currently accepts **one multi-sample family VCF**; multi-sample import
+remains to be implemented and validated. No merge or missing-call imputation has
+been performed. A tested genotype-preserving merge can support implementation
+parity when missing calls stay unknown and the output is labeled nonjoint. A union
+of sample-header IDs is metadata validation only; clinical genotype confidence
+remains a separate gate. PED unknown codes remain unknown:
+phenotype `0`/`-9` is neither patient (`2`) nor control (`1`), and sex `0` is unknown.
+The narrow adapter correction for unknown affection passed 25 focused tests;
+eight actual-packet metadata checks also pass. The in-memory union of header IDs
+passes PED validation, while every single-sample VCF correctly rejects full-PED
+membership. This does not import genotypes or create a merged VCF. The six audited
+scientific files remain unchanged from `09223ef`.
+Original annotation requires phenotype-1 controls; supply an external control VCF
+or separately qualify a `control_vcf_optional` profile choice before that stage.
+No control setting has changed. Preserve source behavior, including Y-based sex
+inference in phase code and the de novo non-male branch; documented sex remains
+a gate for sex-dependent acceptance.
+
+| GRCh38 component | Existing evidence | Gate before scientific use |
+| --- | --- | --- |
+| Profile, reference and VEP | Official VEP 113.2 is installed; the full local profile and merged cache are hg19/GRCh37. A GENCODE50 primary FASTA exists separately. | Qualify the input-reference relationship, GRCh38 FASTA/index and merged VEP cache; create a locked GRCh38 scientific profile. Do not select the GENCODE50 FASTA or hg19 cache by assembly label alone. |
+| Splicing | All 47 SpliceAI2 v2.0 shards are acquired. Preparation 1514732 was RUNNING on c81o-03 at the 09:06Z scheduler check; no final adapter receipt exists. GENCODE48 readiness covers the GTF only. | Finish conversion/index publication, then real VEP and v2 scientific/threshold qualification. Retained hg38 v1 originals do not authorize a fallback; CADD legacy masked-v1 features remain separate. |
+| Other plugin resources | UTRannotator hg38 table and SpliceVault GRCh38 source exist; SpliceVault has no tabix index. PrimateAI hg38 original exists without its formatted/indexed view. | Prepare/verify matching-assembly lookup views and missing AlphaMissense, Conservation, LOFTEE, pext and Ensembl CDS/peptide resources. |
+| Population and derived caches | gnomAD v4.1 GRCh38 source/index receipt lists all 48 files; bounded filename/size checks matched 876,878,719,126 bytes. | Qualify profile use and complete ClinVar/AlphaMissense/domain/PM1 calibration. Original NM-to-ENST mapping remains unresolved; AlphaMissense 1514589 stays held. Bundled baseline statistics are separate provenance. |
+| Complete CADD annotation | GRCh38 annotation archive and prescore pairs are absent locally; the shared-VEP113 transcript choice and 151-column feature contract remain unqualified. | Supply the full matching reference, feature tracks and ESM/RegSeq/MMSplice assets, then qualify shared annotation. GRCh37 completed receipts do not qualify GRCh38. |
+| CADD calculation | Upstream v1.7.2 source includes GRCh38 v1.7 imputation/model/PHRED assets; 18-row completed-annotation calculation fixtures match original Python. | This is calculation-only evidence, not family annotation or acceptance. Keep standalone `4194be3`, original Python and the disabled experimental backend; existing failure gates remain open. |
+
+This readiness audit used plans/configuration, declared receipts and bounded
+host metadata in allocation 1514363 through **2026-10-16T09:07Z**, without a new
+resource-body checksum or annotation run. The full deployed configuration remains
+hg19; the separate GRCh38 configuration prepares SpliceAI2 only. Official VEP is
+113.2, with plugins pinned at `10054085053745b62ab20129f13cd02f06f7e183`.
+CADD source v1.7.2 is `1fead0c1e02d3f0a8599bdb04e6b3a2dd70b4866`; original
+Python 2.7.13 / NumPy 1.16.5 / pandas 0.24.2 / scikit-learn 0.20.4 remains selected.
+The shared official VEP → complete CADD features → original Python design and
+standalone `4194be3` pin are unchanged; the experimental backend remains disabled.
+The public 1000 Genomes annotation/scoring benchmark is a separate pending gate.
+
+A historic result qualifies as a reference only when its source, software,
+parameters and resource identities are established; otherwise regenerate with
+the frozen source after the input/resource gates pass.
 
 Use the same input bytes, phenotype/sex/proband context, original cohort/control
 context, resource releases, numerical settings and ClinGen override on both sides.
@@ -384,7 +428,7 @@ assets pinned. An optimized Python backend must be explicitly selected.
 | Exactness | Raw and PHRED scores, full FeatureID rows, cell values/order, duplicates, missingness, intermediate numerics and failures; every mismatch reported with no tolerance relaxation. |
 | Edges | Empty/header-only, missing features, duplicates, transcript tiers/ties, PHRED boundaries, nonfinite/malformed values, failures and whole-variant chunk boundaries. |
 | Public benchmark — pending | Later pin a 1000 Genomes sample or agreed dataset; record assembly, release/accession, hashes, selection, sample/variant/transcript coverage and exclusions. Validate both annotation and scoring. |
-| Family — pending | User-supplied family with identical fixed resources/profile; exact ACMG criteria, scores and ranking. |
+| Family — delivered for input tests; scientific gate pending | Qualify the single-VCF/control/metadata contract and GRCh38 profile, then compare exact ACMG criteria, scores and ranking under identical resources. |
 
 Upstream model fixtures qualify calculation only. They do not satisfy public-data
 annotation acceptance or family acceptance. Keep failed optimization experiments

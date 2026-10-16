@@ -320,8 +320,9 @@ def validate_ped(path, family, samples):
         raise ContractError("PED sample identifier contains unsupported shell characters")
     if set(ids) - set(samples):
         raise ContractError("Every PED sample must be present in the VCF")
-    if any(row[4] not in {"0", "1", "2"} or row[5] not in {"1", "2"} for row in rows):
-        raise ContractError("PED requires sex 0/1/2 and known affected status 1/2")
+    # Missing affection is neither affected nor unaffected in the legacy science.
+    if any(row[4] not in {"0", "1", "2"} or row[5] not in {"-9", "0", "1", "2"} for row in rows):
+        raise ContractError("PED requires sex 0/1/2 and phenotype -9/0/1/2")
     if selected[0][5] != "2":
         raise ContractError("Legacy PriVA requires the affected proband first; PED order is never rewritten")
     return [row[1] for row in selected]

@@ -53,15 +53,61 @@ class AdapterContracts(unittest.TestCase):
         self.assertEqual(adapter.validate_ped(path, "FAM", ["child", "dad", "mom", "other"]), ["child", "mom", "dad"])
         self.assertEqual(path.read_text(), text)
 
-    def test_ped_rejects_missing_family_samples_unknown_phenotype_and_wrong_proband(self):
+    def test_ped_preserves_missing_parent_phenotypes_and_family_order(self):
+        path = self.folder / "cohort.ped"
+        samples = ["dad", "other", "child", "mom"]
+        for mother_phenotype, father_phenotype in (("-9", "-9"), ("0", "0"), ("-9", "0"), ("0", "-9")):
+            with self.subTest(mother=mother_phenotype, father=father_phenotype):
+                contents = ("OTHER\tother\t0\t0\t2\t2\n"
+                            "FAM\tchild\tdad\tmom\t0\t2\n"
+                            f"FAM\tmom\t0\t0\t2\t{mother_phenotype}\n"
+                            f"FAM\tdad\t0\t0\t1\t{father_phenotype}\n").encode()
+                path.write_bytes(contents)
+                self.assertEqual(adapter.validate_ped(path, "FAM", samples), ["child", "mom", "dad"])
+                self.assertEqual(path.read_bytes(), contents)
+                self.assertEqual(samples, ["dad", "other", "child", "mom"])
+
+    def test_ped_rejects_missing_family_samples_invalid_phenotype_and_wrong_proband(self):
         path = self.folder / "family.ped"
         for contents, samples in [("FAM\tchild\t0\t0\t1\t2\n", []),
                                   ("OTHER\tchild\t0\t0\t1\t2\n", ["child"]),
-                                  ("FAM\tchild\t0\t0\t1\t0\n", ["child"]),
+                                  ("FAM\tchild\t0\t0\t1\t3\n", ["child"]),
                                   ("FAM\tchild\t0\t0\t1\t1\n", ["child"])]:
             path.write_text(contents)
             with self.assertRaises(adapter.ContractError):
                 adapter.validate_ped(path, "FAM", samples)
+
+    def test_ped_missing_phenotypes_do_not_relax_full_cohort_sample_membership(self):
+        path = self.folder / "cohort.ped"
+        path.write_text("OTHER\tother\t0\t0\t2\t0\n"
+                        "FAM\tchild\tdad\tmom\t0\t2\n"
+                        "FAM\tmom\t0\t0\t2\t-9\n"
+                        "FAM\tdad\t0\t0\t1\t0\n")
+        for samples in (["child"], ["child", "mom"], ["child", "mom", "dad"]):
+            with self.subTest(samples=samples):
+                with self.assertRaisesRegex(adapter.ContractError, "Every PED sample"):
+                    adapter.validate_ped(path, "FAM", samples)
+
+    def test_ped_missing_phenotypes_do_not_reorder_first_affected_proband(self):
+        path = self.folder / "family.ped"
+        for mother_phenotype in ("-9", "0", "1"):
+            with self.subTest(mother=mother_phenotype):
+                contents = (f"FAM\tmom\t0\t0\t2\t{mother_phenotype}\n"
+                            "FAM\tchild\tdad\tmom\t0\t2\n"
+                            "FAM\tdad\t0\t0\t1\t-9\n").encode()
+                path.write_bytes(contents)
+                with self.assertRaisesRegex(adapter.ContractError, "affected proband first"):
+                    adapter.validate_ped(path, "FAM", ["child", "mom", "dad"])
+                self.assertEqual(path.read_bytes(), contents)
+
+    def test_ped_still_rejects_invalid_sex_and_phenotype_codes(self):
+        path = self.folder / "family.ped"
+        for sex, phenotype in (("3", "-9"), ("-9", "0"), ("2", "3"), ("2", "-1"), ("2", ".")):
+            with self.subTest(sex=sex, phenotype=phenotype):
+                path.write_text("FAM\tchild\t0\tmom\t0\t2\n"
+                                f"FAM\tmom\t0\t0\t{sex}\t{phenotype}\n")
+                with self.assertRaisesRegex(adapter.ContractError, "PED requires sex"):
+                    adapter.validate_ped(path, "FAM", ["child", "mom"])
 
     def test_duplicate_yaml_is_not_silently_overwritten(self):
         path = self.folder / "bad.yaml"

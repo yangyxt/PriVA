@@ -38,8 +38,11 @@ environment|repair-environment)
     activation=$("$manager" shell activate --shell bash --name priva_acmg)
     eval "$activation"
     export OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=${SLURM_CPUS_PER_TASK:-1} MPLBACKEND=Agg
-    "$manager" list --name priva_acmg --explicit > "$state_dir/environment.explicit.txt.partial"
-    mv -- "$state_dir/environment.explicit.txt.partial" "$state_dir/environment.explicit.txt"
+    # `list --explicit` is a human-facing URL inventory in Micromamba 2.8;
+    # only `env export --explicit` emits @EXPLICIT plus package checksums.
+    "$manager" env export --name priva_acmg --explicit > "$state_dir/environment.conda-explicit.txt.partial"
+    grep -qx '@EXPLICIT' "$state_dir/environment.conda-explicit.txt.partial"
+    mv -- "$state_dir/environment.conda-explicit.txt.partial" "$state_dir/environment.conda-explicit.txt"
     python "$script_root/scripts/check_cluster_environment.py" --spec "$env_spec" --output "$state_dir/environment.ready.json"
     ;;
 source)

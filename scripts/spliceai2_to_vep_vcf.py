@@ -73,8 +73,8 @@ def text_stream(path):
 
 
 def gene_context(regions, gtf, destination):
-    """Require exact gene IDs and bounds, not symbol aliases or guessed intervals."""
-    genes, description = {}, []
+    """Resolve explicit Ensembl stable IDs, then require exact release/context."""
+    genes, stable_ids, description = {}, {}, []
     with text_stream(gtf) as stream:
         for number, line in enumerate(stream, 1):
             if line.startswith("#"):
@@ -93,10 +93,15 @@ def gene_context(regions, gtf, destination):
             require(gene_id not in genes, f"Duplicate GTF gene ID: {gene_id}")
             genes[gene_id] = (fields[0], int(fields[3]), int(fields[4]), fields[6], symbol,
                               attributes.get("gene_type"))
+            match = re.fullmatch(r"(ENSG[0-9]{11})\.[0-9]+(_PAR_Y)?", gene_id)
+            if match:
+                stable_id = match[1] + (match[2] or "")
+                stable_ids.setdefault(stable_id, []).append(gene_id)
     description = "".join(description)
     require("GRCh38" in description and "version 48" in description,
             "Gene mapping requires the original GRCh38 GENCODE version 48 GTF")
-    rows, conventions, seen, symbols = [], set(), set(), {}
+    rows, conventions, seen, resolved_seen, symbols = [], set(), set(), set(), {}
+    stable_matches = 0
     with text_stream(regions) as stream:
         reader = csv.DictReader(stream, delimiter="\t")
         require(reader.fieldnames == REGION_COLUMNS, "Unexpected publisher scored-region schema")
@@ -105,8 +110,16 @@ def gene_context(regions, gtf, destination):
             gene_id = row["gene_id"]
             require(gene_id not in seen, f"Duplicate scored-region gene: {gene_id}")
             seen.add(gene_id)
-            require(gene_id in genes, f"No exact GENCODE48 gene ID: {gene_id}; version stripping/aliases are not allowed")
-            chrom, start, end, strand, name, gene_type = genes[gene_id]
+            resolved_id = gene_id
+            if gene_id not in genes:
+                candidates = stable_ids.get(gene_id, [])
+                require(len(candidates) == 1,
+                        f"No exact or unique GENCODE48 stable gene ID: {gene_id}; aliases/ambiguous versions are not allowed")
+                resolved_id = candidates[0]
+                stable_matches += 1
+            require(resolved_id not in resolved_seen, f"Multiple source IDs resolve to one GENCODE gene: {resolved_id}")
+            resolved_seen.add(resolved_id)
+            chrom, start, end, strand, name, gene_type = genes[resolved_id]
             require(chrom == row["chrom"] and strand == row["strand"], f"Gene contig/strand mismatch: {gene_id}")
             require(gene_type == "protein_coding", f"Scored region is not a GENCODE48 protein-coding gene: {gene_id}")
             raw_start, raw_end = int(row["gene_start"]), int(row["gene_end"])
@@ -114,10 +127,11 @@ def gene_context(regions, gtf, destination):
             conventions.add("1-based-closed" if raw_start == start else "0-based-half-open")
             require(chrom in CHROMS and strand in ("+", "-") and 0 < start <= end, f"Unsupported gene context: {gene_id}")
             require(not re.search(r"[\s|;,=]", name), f"Gene symbol cannot be represented safely in the plugin: {gene_id}")
-            require((chrom, name) not in symbols or symbols[chrom, name] == gene_id,
-                    f"Multiple gene IDs share a symbol on {chrom}: {name}; plugin matching would be ambiguous")
-            symbols[chrom, name] = gene_id
-            rows.append((gene_id, chrom, start, end, strand, name))
+            prior = symbols.setdefault((chrom, name), {"strand": strand, "ids": []})
+            require(prior["strand"] == strand,
+                    f"Opposite-strand genes share a symbol on {chrom}: {name}; plugin matching would be ambiguous")
+            prior["ids"].append(resolved_id)
+            rows.append((resolved_id, chrom, start, end, strand, name))
     require(rows and len(conventions) == 1, "Empty or mixed-coordinate scored-region table")
     rows.sort(key=lambda row: (CHROMS.index(row[1]), row[2], row[3], row[0]))
     with destination.open("x", newline="") as stream:
@@ -125,7 +139,12 @@ def gene_context(regions, gtf, destination):
         writer.writerow(CONTEXT_COLUMNS)
         writer.writerows(rows)
     return {"genes": len(rows), "source_coordinates": conventions.pop(),
-            "context_coordinates": "1-based-closed", "gene_id_matching": "exact",
+            "context_coordinates": "1-based-closed",
+            "gene_id_matching": "unique-GENCODE48-stable-ID-with-exact-context" if stable_matches else "exact",
+            "stable_id_matches": stable_matches,
+            "versioned_gene_ids_retained": True,
+            "same_strand_symbol_groups": sum(len(group["ids"]) > 1 for group in symbols.values()),
+            "symbol_projection": "One unchanged prediction per distinct symbol per native row; all same-strand gene IDs/intervals retained in context. Opposite-strand same-symbol contexts rejected.",
             "join": "source variant position and model strand within verified scored-gene intervals",
             "scope": "Adapter-derived gene association, not a publisher gene-conditioned prediction. Predicted sites may lie outside the associated gene; no effects are filtered."}
 

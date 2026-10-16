@@ -65,7 +65,7 @@ class GeneContextTests(GeneFixture, unittest.TestCase):
 
     def test_no_silent_gene_version_stripping(self):
         self.regions.write_text(self.regions.read_text().replace("GENE1.1", "GENE1"))
-        with self.assertRaisesRegex(ValueError, "No exact GENCODE48 gene ID"):
+        with self.assertRaisesRegex(ValueError, "No exact or unique GENCODE48 stable gene ID"):
             self.build()
 
     def test_gene_bounds_and_strand_mismatches_rejected(self):
@@ -86,9 +86,33 @@ class GeneContextTests(GeneFixture, unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "Duplicate scored-region gene"):
             self.build()
 
-    def test_same_symbol_different_gene_ids_on_one_chromosome_rejected(self):
+    def test_same_symbol_opposite_strand_gene_ids_on_one_chromosome_rejected(self):
         self.gtf.write_bytes(gzip.compress(gzip.decompress(self.gtf.read_bytes()).replace(b"FIXTURE_B", b"FIXTURE_A")))
-        with self.assertRaisesRegex(ValueError, "Multiple gene IDs share a symbol"):
+        with self.assertRaisesRegex(ValueError, "Opposite-strand genes share a symbol"):
+            self.build()
+
+    def test_same_symbol_same_strand_retains_every_gene_context(self):
+        self.regions.write_text(self.regions.read_text().replace("\t-\n", "\t+\n"))
+        self.gtf.write_bytes(gzip.compress(gzip.decompress(self.gtf.read_bytes()).replace(b"FIXTURE_B", b"FIXTURE_A").replace(b"\t-\t", b"\t+\t")))
+        report = self.build()
+        self.assertEqual(report["same_strand_symbol_groups"], 1)
+        self.assertEqual(len(self.context.read_text().splitlines()), 3)
+
+    def test_publisher_stable_ids_resolve_unique_versioned_ids_without_losing_par_y(self):
+        self.regions.write_text(self.regions.read_text().replace("GENE1.1", "ENSG00000186092").replace("GENE2.2", "ENSG00000124333_PAR_Y"))
+        self.gtf.write_bytes(gzip.compress(gzip.decompress(self.gtf.read_bytes()).replace(b"GENE1.1", b"ENSG00000186092.7").replace(b"GENE2.2", b"ENSG00000124333.9_PAR_Y")))
+        report = self.build()
+        self.assertEqual(report["stable_id_matches"], 2)
+        self.assertEqual(report["gene_id_matching"], "unique-GENCODE48-stable-ID-with-exact-context")
+        self.assertIn("ENSG00000186092.7\t", self.context.read_text())
+        self.assertIn("ENSG00000124333.9_PAR_Y\t", self.context.read_text())
+
+    def test_ambiguous_stable_id_versions_rejected(self):
+        self.regions.write_text(self.regions.read_text().replace("GENE1.1", "ENSG00000186092"))
+        content = gzip.decompress(self.gtf.read_bytes()).decode().replace("GENE1.1", "ENSG00000186092.7")
+        content += content.splitlines()[1].replace("ENSG00000186092.7", "ENSG00000186092.8") + "\n"
+        self.gtf.write_bytes(gzip.compress(content.encode()))
+        with self.assertRaisesRegex(ValueError, "aliases/ambiguous versions"):
             self.build()
 
     def test_partial_symlink_target_rejected(self):
@@ -221,6 +245,24 @@ class DeploymentTests(GeneFixture, unittest.TestCase):
                 self.prepare()
         self.assertFalse(self.args.receipt.exists())
         self.assertEqual(list(self.output.glob("*.vcf.gz*")), [])
+
+    def test_real_projection_coalesces_identical_symbol_context_without_losing_predictions(self):
+        self.require_converter()
+        self.regions.write_text(self.regions.read_text().replace("\t-\n", "\t+\n"))
+        self.gtf.write_bytes(gzip.compress(gzip.decompress(self.gtf.read_bytes()).replace(b"FIXTURE_B", b"FIXTURE_A").replace(b"\t-\t", b"\t+\t")))
+        self.document.update(scored_regions=self.item(self.regions),
+                             gencode_gtf={"release": "GENCODE48", **self.item(self.gtf)})
+        self.manifest.write_text(json.dumps(self.document))
+        report = self.prepare()
+        self.assertEqual(report["gene_context"]["genes"], 2)
+        self.assertEqual(report["gene_context"]["same_strand_symbol_groups"], 1)
+        for kind in ("snv", "indel"):
+            rows = subprocess.check_output(["tabix", report["outputs"][kind]["path"], "chr1:10-20"], text=True).splitlines()
+            self.assertEqual(len(rows), 2)
+            self.assertEqual(report["statistics"][kind][0]["input_rows"], 2)
+            self.assertEqual(report["statistics"][kind][0]["output_records"], 2)
+            self.assertIn("|FIXTURE_A|0.25|", rows[0])
+            self.assertIn("|FIXTURE_A|0.09|", rows[1])
 
     def test_full_47_shard_stream_has_one_header_and_exact_indexed_contigs(self):
         self.require_converter()

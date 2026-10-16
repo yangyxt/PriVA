@@ -29,7 +29,7 @@ name=Path(args[0]).name if args and args[0].endswith('.py') else Path(sys.argv[0
 if name=='git':
     if args[2:]==['rev-parse','HEAD']:
         print(os.environ.get('MOCK_REVISION','1fead0c1e02d3f0a8599bdb04e6b3a2dd70b4866'));sys.exit(0)
-    if args[2:]==['diff','--quiet','HEAD','--','src','config']:
+    if args[2:] in [['diff','--quiet','HEAD','--','src','config'],['diff','--quiet','HEAD','--','.']]:
         sys.exit(int(os.environ.get('MOCK_DIRTY','0')))
     if args[2:]==['ls-files','--others','--exclude-standard','--','src','config']:
         print(os.environ.get('MOCK_UNTRACKED',''));sys.exit(0)
@@ -75,6 +75,28 @@ elif name=='tabix':Path(args[-1]+'.tbi').touch()
 else:
     source=flag('--variants') if '--variants' in args else flag('--input')
     Path(flag('--output')).write_bytes(Path(source).read_bytes())
+'''
+
+
+MOCK_STANDALONE = r'''
+import gzip,hashlib,json,os,shutil,sys
+from pathlib import Path
+args=sys.argv[1:]
+def value(key):return args[args.index(key)+1]
+def sha(path):return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+profile=Path(value('--profile'));p=json.loads(profile.read_text())
+out=Path(value('--output'));out.mkdir(parents=True)
+if args[0]=='import-annotations':
+    original=Path(value('--input'));output=out/'annotations.tsv.gz';shutil.copyfile(original,output)
+    receipt={'stage':'annotation','contract':p['contract'],'input_sha256':sha(original),'output_sha256':sha(output),'engine_sha256':sha(sys.argv[0])}
+else:
+    bundle=Path(value('--annotations'));annotations=bundle/'annotations.tsv.gz';output=out/'scores.tsv'
+    with gzip.open(annotations,'rt') as source,open(output,'w') as dest:
+        for index,line in enumerate(source):dest.write(line.rstrip()+'\t'+('RawScore\tPHRED' if index==0 else '1.500000\t12.3')+'\n')
+    receipt={'stage':'calculation','implementation':os.environ.get('MOCK_STANDALONE_IMPL','configured complete Python calculation; native postprocessing disabled'),
+        'engine_sha256':sha(sys.argv[0]),'profile_sha256':sha(profile),'profile_id':p['profile_id'],'contract':p['contract'],
+        'input_sha256':sha(annotations),'input_manifest_sha256':sha(bundle/'manifest.json'),'output_sha256':sha(output)}
+(out/'manifest.json').write_text(json.dumps(receipt))
 '''
 
 
@@ -335,6 +357,46 @@ class UpstreamCadd(unittest.TestCase):
         (self.assets/'references.cfg').unlink()
         imported=self.run_task('import-annotations',bundle/'annotations.tsv.gz','imported')
         self.run_task('calculate',imported,'calc')
+
+    def standalone_pin(self):
+        program=self.root/'cadd-rs'
+        program.write_text('#!'+sys.executable+'\n'+MOCK_STANDALONE)
+        program.chmod(0o755)
+        self.p['calculation']['standalone']={'program':str(program),'sha256':C.digest(program),'source_root':str(self.source),'revision':C.PIN}
+        self.save()
+        return program
+
+    def test_standalone_bridge_preserves_both_receipts(self):
+        bundle=self.run_task('annotate',self.vcf,'anno')
+        self.standalone_pin()
+        result=self.run_task('calculate',bundle,'standalone-calc')
+        receipt=json.loads((result/'manifest.json').read_text())
+        self.assertEqual(receipt['standalone']['original_annotation_manifest_sha256'],C.digest(bundle/'manifest.json'))
+        self.assertEqual(receipt['standalone']['implementation'],C.cadd_standalone.IMPLEMENTATION)
+        self.assertTrue((self.root/'standalone-calc.work/standalone-annotations/manifest.json').is_file())
+
+    def test_standalone_bridge_rejects_old_hybrid_and_wrong_binary(self):
+        bundle=self.run_task('annotate',self.vcf,'anno')
+        program=self.standalone_pin()
+        with patch.dict(os.environ,{'MOCK_STANDALONE_IMPL':'configured transform/inference backend; native Rust hierarchy/PHRED'}):
+            with self.assertRaisesRegex(C.cadd_standalone.StandaloneError,'all-Python contract'):
+                self.run_task('calculate',bundle,'hybrid')
+        self.assertFalse((self.root/'hybrid/manifest.json').exists())
+        program.write_text(program.read_text()+'\n# changed\n')
+        with self.assertRaisesRegex(C.cadd_standalone.StandaloneError,'checksum'):
+            self.run_task('calculate',bundle,'wrong-binary')
+
+    def test_qualification_reports_every_field_and_missing_row(self):
+        spec=importlib.util.spec_from_file_location('qualification',ROOT/'tests/cadd/qualify_calculation.py')
+        qualification=importlib.util.module_from_spec(spec);spec.loader.exec_module(qualification)
+        columns=['Chrom','Pos']
+        left=self.root/'left.tsv';right=self.root/'right.tsv';report=self.root/'differences.jsonl'
+        left.write_text('#Chrom\tPos\n2\t200\n')
+        right.write_text('#Chrom\tPos\n1\t100\n3\t300\n')
+        self.assertEqual(qualification.compare_tables(left,right,columns,report),3)
+        differences=[json.loads(line) for line in report.read_text().splitlines()]
+        self.assertEqual([row.get('column') for row in differences[:2]],['Chrom','Pos'])
+        self.assertEqual(differences[-1]['kind'],'missing_actual_row')
 
     def test_output_identity_guard_is_uncached(self):
         args=argparse_namespace(profile=str(self.profile),assembly='GRCh37',stub=False,mode='annotate',

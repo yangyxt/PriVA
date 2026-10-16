@@ -20,7 +20,7 @@ workdir=$3
 for key in CADD_SOURCE_ROOT CADD_PYTHON2 CADD_IMPUTE_CONFIG CADD_MODEL CADD_PHRED_TABLE; do
     [[ -n "${!key:-}" ]] || die "required environment variable is missing: $key"
 done
-for program in git gzip mktemp cat "$CADD_PYTHON2"; do
+for program in git gzip mktemp cat tee "$CADD_PYTHON2"; do
     command -v -- "$program" >/dev/null 2>&1 || die "executable is unavailable: $program"
 done
 expected_commit=1fead0c1e02d3f0a8599bdb04e6b3a2dd70b4866
@@ -48,7 +48,10 @@ gzip -cd -- "$annotations" \
     | "$CADD_PYTHON2" "$scripts/trackTransformation.py" -b \
         -c "$CADD_IMPUTE_CONFIG" -o "$stage/features.csv.gz" --noheader
 "$CADD_PYTHON2" "$scripts/predictSKmodel.py" \
-    -i "$stage/features.csv.gz" -m "$CADD_MODEL" -a "$annotations" | "$CADD_PYTHON2" "$scripts/max_line_hierarchy.py" --all \
+    -i "$stage/features.csv.gz" -m "$CADD_MODEL" -a "$annotations" \
+    | tee "$stage/raw.tsv" \
+    | "$CADD_PYTHON2" "$scripts/max_line_hierarchy.py" --all \
+    | tee "$stage/hierarchy.tsv" \
     | "$CADD_PYTHON2" "$scripts/appendPHREDscore.py" -t "$CADD_PHRED_TABLE" \
     > "$stage/scored.tsv"
 # All four scientific stages above are original, pinned upstream Python.

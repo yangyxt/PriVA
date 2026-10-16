@@ -38,6 +38,74 @@ function finalize_anno_vcf() {
     mv "${src}" "${dst}"
 }
 
+
+function priva_require_legacy_spliceai() {
+    # A prepared v2 cache is not an approved replacement for the original
+    # ACMG/ClinVar thresholds or CADD features. Inspect headers only, never rows.
+    python - "$@" <<'PY'
+import gzip
+from pathlib import Path
+import sys
+import yaml
+
+message = ('SpliceAI2 is prepared for annotation inspection only. Legacy PriVA '
+           'ACMG/ClinVar criteria and CADD feature use are not qualified; '
+           'select the original SpliceAI v1 profile and resources.')
+config = Path(sys.argv[1])
+settings = yaml.safe_load(config.read_bytes()) if config.is_file() else {}
+if settings is None:
+    settings = {}
+if not isinstance(settings, dict):
+    raise SystemExit('Cannot verify the SpliceAI profile: PriVA config must be a mapping.')
+
+def version2(value):
+    value = str(value).strip().lower()
+    return value in ('v2', '2') or value.startswith(('v2.', '2.'))
+
+if any(version2(settings.get(key, '')) for key in
+       ('spliceai_profile', 'spliceai_resource_version', 'spliceai_version')):
+    raise SystemExit(message)
+keys = ('spliceai_snv_prescore', 'spliceai_indel_prescore')
+paths = sys.argv[2:] if len(sys.argv) > 2 else [settings.get(key) for key in keys]
+for value in paths:
+    if value in (None, '', 'null'):
+        continue
+    path = Path(value)
+    if not path.is_file():
+        continue  # Preserve the existing missing-resource diagnostics.
+    before = path.stat()
+    try:
+        with path.open('rb') as raw:
+            compressed = raw.read(2) == b'\x1f\x8b'
+            raw.seek(0)
+            stream = gzip.GzipFile(fileobj=raw) if compressed else raw
+            try:
+                consumed = 0
+                for _ in range(4096):
+                    line = stream.readline(min(65537, 1048577 - consumed))
+                    consumed += len(line)
+                    if len(line) > 65536 or consumed > 1048576:
+                        raise SystemExit('Cannot verify SpliceAI within the bounded VCF header: ' + str(path))
+                    if line.startswith(b'##SpliceAI2') or line.rstrip(b'\r\n') == b'##source=PriVA_SpliceAI2_projection':
+                        raise SystemExit(message + ' Resource: ' + str(path))
+                    if line.startswith(b'#CHROM\t'):
+                        break
+                    if not line or not line.startswith(b'##'):
+                        raise SystemExit('Cannot verify a complete SpliceAI VCF header: ' + str(path))
+                else:
+                    raise SystemExit('Cannot verify SpliceAI within 4096 header lines: ' + str(path))
+            finally:
+                if compressed:
+                    stream.close()
+    except (OSError, EOFError) as error:
+        raise SystemExit('Cannot read the SpliceAI VCF header: ' + str(path) + ': ' + str(error))
+    after = path.stat()
+    if (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns, before.st_ctime_ns) != \
+       (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns, after.st_ctime_ns):
+        raise SystemExit('SpliceAI resource changed during header verification: ' + str(path))
+PY
+}
+
 function main_workflow() {
     # Define local variables first
     local input_vcf \
@@ -63,6 +131,7 @@ function main_workflow() {
 
     # Process config file
     local config_file="${config:-${BASE_DIR}/config.yaml}"
+    priva_require_legacy_spliceai "${config_file}" || return 1
     local -A config_args
 
     if [[ -f "$config_file" ]]; then
@@ -851,6 +920,8 @@ function anno_VEP_data() {
     local pext_mean_bw="${pext_mean_bw:-${config_args[pext_mean_bw]}}"
     local pext_tissue_bw_dir="${pext_tissue_bw_dir:-${config_args[pext_tissue_bw_dir]}}"
     local pext_tissues="${pext_tissues:-${config_args[pext_tissues]}}"
+
+    priva_require_legacy_spliceai "${config_file}" "${spliceai_snv_prescore}" "${spliceai_indel_prescore}" || return 1
 
     # Validate inputs
     local has_error=0

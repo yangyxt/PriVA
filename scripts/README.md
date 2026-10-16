@@ -37,3 +37,9 @@ using real copies of the exact package lock and a bounded runtime. A timeout is
 an operator checkpoint, not successful installation. The restorable package
 lock is `environment.conda-explicit.txt`; the earlier `environment.explicit.txt`
 is retained only as a historical package URL inventory.
+
+The real historical `main_install` diagnostic exposed VEP's newer-release
+prompt exiting zero on noninteractive EOF and PriVA continuing without a cache.
+`install_utils.sh` now preserves the installed Conda API, requests cache/plugins
+for that exact release with updates disabled, and validates required files
+before recording success. The original diagnostic source remains unchanged.

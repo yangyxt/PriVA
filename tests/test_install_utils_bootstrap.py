@@ -309,6 +309,20 @@ class InstallerBootstrapTests(unittest.TestCase):
         self.assertIn("Failed to install the VEP API", result.stderr)
         self.assertFalse(any(call[1:5] == ["env", "config", "vars", "set"] for call in self.calls()))
 
+    def test_vep_zero_exit_without_cache_is_not_success(self):
+        self.manager("micromamba")
+        result = self.run_shell('''
+            conda_install_vep || exit
+            getopt() { printf -- '--VEP_VERSION 113 --VEP_ASSEMBLY GRCh37 --VEP_CACHEDIR /missing-cache --VEP_PLUGINSDIR /missing-plugins --\\n'; }
+            perl() { printf '%s/lib/site_perl\\n' "$CONDA_PREFIX"; }
+            vep_install() { printf 'VEP_ARGS=%s\\n' "$*"; return 0; }
+            vep_cache_api_install --VEP_VERSION 113
+        ''')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("--AUTO cp --NO_UPDATE --CACHE_VERSION 113", result.stdout)
+        self.assertIn("without required cache file", result.stderr)
+        self.assertFalse(any(call[1:5] == ["env", "config", "vars", "set"] for call in self.calls()))
+
 
 class CachePathTests(unittest.TestCase):
     """Exercise cache configuration entirely in memory; no test folders/files."""

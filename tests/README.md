@@ -93,7 +93,9 @@ they do not convert the licensed 47-shard catalogue or qualify v2 ACMG evidence.
 
 `rust/tests/spliceai2_projection.rs` covers the native 84-column contract, exact
 top0 string projection, POS/model-strand gene joins, duplicate/ambiguity rejection
-and CLI behavior. Final integrated test totals belong to their producing source
+and CLI behavior. The revised policy retains all context IDs/intervals and
+coalesces only same-strand symbol labels within each source prediction; opposite-
+strand symbol conflicts and duplicate native predictions still fail. Final integrated test totals belong to their producing source
 revision; the tests do not establish full VEP lookup coverage.
 
 `spliceai2/test_official_plugin.pl` passed 11 subtests / 38 assertions against the
@@ -122,7 +124,8 @@ distinguishes complete published coverage from bounded subset fixtures and
 scientific activation. No GPU/model inference or new resource downloads are
 required for the synthetic checks.
 
-Verified combined run: **165 tests passed, zero failures/skips, 85.702 seconds**
+Historical combined run before the stable-ID/same-strand-symbol policy update:
+**165 tests passed, zero failures/skips, 85.702 seconds**
 (119 existing/route + 14 runtime guards + 21 driver + 11 deployment). The driver
 suite used real Rust/bgzip/tabix with synthetic scores/context/plugin identity,
 including a complete 47-shard fixture and CRC/mutation failures. Its retained log
@@ -131,5 +134,30 @@ records integration `ad9af5d` and tested driver/test content hashes. Separately,
 Rust source `428ce4c` passed 30 projection + 9 existing tests, and the pinned
 Perl harness passed 11 subtests / 38 assertions. These totals have different
 boundaries and do not establish real resource conversion or scientific parity.
+Current Rust 225aa4a (integration 32212d7) passed 32 projection + 9 existing tests.
+The final Python suite at f8de4b32beaf3bf5185ef53f75be162833055153 passed 197 tests,
+zero failures/skips, in 190.847 seconds: 169 installer/deployment (including 25 driver)
++ 20 Nextflow adapter + 8 BGZ-validator. Log:
+`yangyxt_dt/projects/PriVA_upgrade/logs/spliceai2-final-integration-20261015.log`.
 
-Nextflow activation guard: shared bin/priva_task.py validation rejects explicit v2 scientific configuration in the launch/task path, including preannotated import/resume, and rejects SpliceAI2-marked input headers. Namespaced prepared-resource metadata remains allowed. A separate adapter suite passed 20 tests (16 existing + 4 new) under Slurm, covering launch and all three task phases before output; this is separate from the 165 installer/deployment tests. Unmarked external preannotated artifacts still require pinned scientific-profile provenance: predictor version cannot be inferred from numeric scores.
+Bounded real-cache check: 256 SNV plus 256 indel prefix rows from chr1, all positive-strand, passed an independent column-name-based full-record/order oracle and real bgzip/tabix queries with zero mismatches. Verifier f8de4b3 first checked the debug converter from 225aa4a; receipt: yangyxt_dt/projects/PriVA_upgrade/validation/spliceai2-real-projection-225aa4a-debug/receipt.json. The same 512 source rows were independently rechecked against the installed optimized release with zero mismatches; this remains 512 unique rows, not 1,024. This is real precomputed-row conversion, not model inference, whole-cache coverage, full VEP execution, public-sample or supplied-family acceptance.
+
+Installed release: source 225aa4aa774b4be7f53576e1cde56af71e67bd2c at
+`yangyxt/softwares/priva-tools-225aa4a/bin/priva`, SHA256
+`bbc3b7288ed2ea63f1f8455ed87b8a9d08c7bc1fe0a562c1d6134525e2a12dc6`.
+The same 25 driver cases passed again against this release. Unique suite totals
+remain 197 Python and 41 Rust tests. A stale shared Cargo artifact was detected
+before installation; forced rebuilding and an installed smoke check corrected
+it, while the receipt retains the failed attempt. The complete execution manifest/handoff were saved in DataLad commit 5f5946b
+before launch. Full preparation job 1514732 is running on c81o-03 with frozen installer f8de4b3 and the
+installed release (4 CPUs, 16 GB, 7 days); these reruns and the submission do not
+establish full-cache checksum/conversion success or VEP qualification.
+
+Separately, the
+complete real metadata check passed 20,083 unique stable-ID/context mappings,
+zero ID/bounds/strand/biotype mismatches and ten same-strand symbol groups; all
+versioned GTF IDs remain retained. Closed evidence is under
+`yangyxt_dt/projects/PriVA_upgrade/validation/spliceai2-real-context-20261015/`.
+This checks gene context, not score conversion or indexed-VEP execution.
+
+Nextflow activation guard: shared bin/priva_task.py validation rejects explicit v2 scientific configuration in the launch/task path, including preannotated import/resume, and rejects SpliceAI2-marked input headers. Namespaced prepared-resource metadata remains allowed. The 20-test adapter suite (16 existing + 4 new) passed under Slurm, covering launch and all three task phases before output. It is included once in the current 197-test total and was separate from the historical 165 installer/deployment tests. Unmarked external preannotated artifacts still require pinned scientific-profile provenance: predictor version cannot be inferred from numeric scores.

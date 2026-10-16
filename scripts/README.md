@@ -71,8 +71,10 @@ runs all 24 original per-chromosome liftover transformations. GRCh38 source
 `.vcf.bgz{,.tbi}` files remain separate from new hg19 outputs and intermediates.
 The completion receipt requires every final VCF/index, its expected indexed
 chromosome, and a successful indexed query; this does not establish family or
-ACMG parity. The initial queued job is 1514601 after source job 1514584, using
-installer `054b4944055054148005016192647a8ed0384eef`.
+ACMG parity. Initial job 1514601 used installer
+`054b4944055054148005016192647a8ed0384eef` and failed `.vcf.bgz` extension
+validation. Replacement 1514729 is running with the minimal validation fix; eight
+focused checks passed. Scientific transformations are unchanged.
 
 `build_cluster_splicevault.sbatch` runs the original GRCh38-to-GRCh37 conversion
 against the release113 SpliceVault input after checking its publisher checksum
@@ -87,8 +89,8 @@ selection: `all` (the original default), `spliceai`, or `primateai`. It still ru
 the frozen `install_utils.sh` functions; selecting SpliceAI calls only
 `SpliceAI_install` and requires both SNV and indel VCFs with their indexes.
 Both original collections are acquired. Hg19 SpliceAI job 1514615 and PrimateAI
-job 1514620 completed with valid import receipts; main-config promotion remains
-separately tracked. This script does not download or authenticate.
+job 1514620 completed with valid import receipts; the separate three-key hg19
+main-config promotion is also complete with a receipt. This script does not download or authenticate.
 
 The confirmation JSON requires `status: downloads_complete`, `confirmed_by`,
 matching `assembly`, and exactly the selected `files` roles: `spliceai_snv` plus
@@ -141,6 +143,25 @@ The assembly-profile route retains hg19 v1 and stops after hg38 v2 preparation.
 The [route reference](../docs/nextflow_migration.md#spliceai2-preparation) provides
 commands, the exact JSON manifest contract, all 47 required shards, verified
 GENCODE48 and plugin identities, output patterns and the explicit subset-test
-boundary. GENCODE48 acquisition is complete; no full SpliceAI2 conversion or
-scientific qualification is claimed. Original licensed source and derived cache
-views remain local under their resource terms.
+boundary. Downloads are complete (1514724; 47 final shards, zero partials).
+All 20,083 real regions passed the stable-ID/GENCODE48 join, retaining full
+versions and `_PAR_Y`; ten same-strand symbol groups retain all IDs/intervals
+and coalesce labels only per prediction. Opposite-strand symbol contexts fail.
+The execution manifest is complete and saved in DataLad commit 5f5946b.
+Full-file revalidation, complete conversion and indexed-VEP qualification remain
+pending. Publisher expected SHA256 values and VERIFIED acquisition receipts for
+all 47 shards are now supplied in [caches/README.md](../../../caches/README.md);
+there is no missing-publisher-checksum blocker. Current Rust 225aa4a passed 32
+projection + 9 existing tests; Python f8de4b3 passed 197 tests with zero failures/skips.
+A separate 512-row real prefix check (chr1 positive strand only) preserved every
+projected record/order and passed bgzip/tabix queries; this is not full-cache or
+full-VEP qualification. Optimized source 225aa4aa774b4be7f53576e1cde56af71e67bd2c
+is installed at `yangyxt/softwares/priva-tools-225aa4a/bin/priva`, SHA256
+`bbc3b7288ed2ea63f1f8455ed87b8a9d08c7bc1fe0a562c1d6134525e2a12dc6`.
+Installed-release reruns passed the same 25 driver cases and same 512 source rows;
+unique totals remain 197 Python/41 Rust tests and 512 rows. A stale shared Cargo
+release artifact was detected before deployment; forced rebuilding and installed
+smoke checks corrected it, with the failure retained in the receipt. Full preparation job 1514732 is running on c81o-03 (4 CPUs, 16 GB, 7 days) using frozen
+installer f8de4b3, this converter and the isolated GRCh38 config. The manifest/
+handoff were saved in DataLad commit 5f5946b before launch; full checksum/conversion success remains pending.
+Original licensed source and derived views remain local under their resource terms.

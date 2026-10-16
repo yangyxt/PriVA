@@ -52,9 +52,11 @@ SpliceAI v1 originals/indexes and both PrimateAI v0.2 originals are acquired.
 The hg19 SpliceAI import 1514615 and PrimateAI import 1514620 completed with
 exit 0 and valid receipts. The PrimateAI receipt includes exact external
 source-to-formatted validation; cancelled job 1514618 never ran. Original hg38
-files remain retained and unselected. Main-config promotion and scientific
-qualification remain pending. gnomAD derived job 1514601 failed its `.vcf.bgz`
-extension validation and is being repaired separately. AlphaMissense 1514589
+files remain retained and unselected. Separate main-config promotion updated only
+the three selected hg19 resource-path keys with a receipt; scientific qualification
+remains pending. gnomAD job 1514601 failed its `.vcf.bgz` extension validation;
+replacement 1514729 is running with the minimal fix (eight focused tests passed).
+AlphaMissense 1514589
 remains held for the original NM-to-ENST mapping. No evidence is silently omitted.
 The [installation dependency ledger](docs/installation-dependency-ledger-09223ef.md)
 records the ordered calibration recipe and separates bundled ClinVar baseline
@@ -86,7 +88,12 @@ original 84-column tables and creates a separate top0 VCF for the official plugi
 using exact scored-region/GENCODE48 gene context. The Rust converter streams rows;
 the Python deployment driver verifies the 47-shard manifest and controls
 `gzip`/`bgzip`/`tabix`. It downloads nothing. GENCODE48 has passed its resource
-checks; full score conversion and real indexed-VEP qualification are pending.
+checks. Download job 1514724 completed (47 final shards, zero partials), and the
+complete 20,083-region stable-ID join passed with exact bounds/strand/biotype.
+Full GTF IDs/versions and `_PAR_Y` remain in context; ten same-strand symbol
+groups coalesce labels only per prediction, while opposite-strand symbol contexts
+fail. The execution manifest is complete and saved in DataLad commit 5f5946b.
+Full-file revalidation, complete conversion and indexed-VEP checks remain pending.
 
 ```text
 Pinned native v2 + verified v48 context → prepared top0 VCF + receipt
@@ -98,14 +105,33 @@ namespaced preparation metadata. The profile installer stops with status 2 after
 v2 preparation; `prepared_annotation_only` does not activate ACMG interpretation.
 GRCh37 v1 and legacy CADD masked-v1 inputs remain unchanged. The real-plugin
 boundary harness passed 11 subtests / 38 assertions with synthetic tabix/VEP
-objects. Rust passed 30 new plus 9 existing tests; the integrated installer/driver
-run passed 165 tests with zero failures/skips, including real Rust/bgzip/tabix
-on synthetic inputs. These are not full VEP or real-cache qualification. See the linked route
+objects. Historical checks before the stable-ID/same-strand-symbol update: Rust
+passed 30 new plus 9 existing tests; the integrated installer/driver run passed 165 tests with zero failures/skips, including real Rust/bgzip/tabix
+on synthetic inputs. These historical totals remain tied to their producing source.
+Current Rust 225aa4a passed 32 projection + 9 existing tests; Python f8de4b3 passed
+197 tests with zero failures/skips (169 installer/deployment + 20 adapter + 8 BGZ).
+A bounded real-cache check passed 256 SNV + 256 indel chr1 positive-strand rows
+with exact full-record/order and bgzip/tabix checks. It does not establish model
+inference, whole-cache, full VEP, public-sample or family acceptance.
+
+All 47 publisher SHA256 values and VERIFIED acquisition receipts are now supplied
+in [caches/README.md](../../caches/README.md). The complete execution manifest and handoff were saved in DataLad commit 5f5946b before launch. Full preparation job
+1514732 is running on c81o-03 (4 CPUs, 16 GB, 7 days), using frozen installer f8de4b3 and
+the isolated GRCh38 preparation config; full checksum/conversion success is pending. Optimized
+source 225aa4aa774b4be7f53576e1cde56af71e67bd2c is installed at
+`yangyxt/softwares/priva-tools-225aa4a/bin/priva`, SHA256
+`bbc3b7288ed2ea63f1f8455ed87b8a9d08c7bc1fe0a562c1d6134525e2a12dc6`.
+The installed release passed the same 25 driver cases and same 512 real-prefix
+rows again with zero mismatches; unique totals stay 197 Python, 41 Rust and 512
+rows. A stale shared Cargo artifact was caught before deployment, rebuilt and
+checked at the installed path; the receipt retains that failed attempt. Full
+conversion and real VEP/scientific acceptance remain pending. See the linked route
 for the exact manifest, GTF/plugin identities, commands and pending gates.
 
 The shared Nextflow adapter also rejects explicit v2 scientific configuration
-and SpliceAI2-marked preannotated inputs. Its separate 20-test adapter suite
-passed; this is not included in the 165-test installer/deployment total. Unmarked
+and SpliceAI2-marked preannotated inputs. Its 20-test adapter suite
+passed and is included once in the current 197-test total; it was separate from
+the historical 165-test installer/deployment total. Unmarked
 external annotations still require pinned profile provenance; numeric scores do
 not identify their predictor version.
 

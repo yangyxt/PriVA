@@ -7,6 +7,8 @@ also remain usable on GRCh38. Neither classification nor registration qualifies
 SpliceAI2 for the unchanged ACMG/CADD scientific contracts.
 """
 import argparse
+import contextlib
+import fcntl
 import gzip
 import json
 import os
@@ -58,9 +60,13 @@ def _identity(path):
 
 def _complete_path(path):
     path = Path(path).absolute()
-    require(not any(".partial" in part.lower() for part in path.parts), f"Incomplete input path: {path}")
+    def unfinished(part):
+        part = part.lower()
+        return ".partial" in part or part == ".building" or part.startswith(".building-")
+
+    require(not any(unfinished(part) for part in path.parts), f"Incomplete/staging input path: {path}")
     resolved = path.resolve(strict=True)
-    require(not any(".partial" in part.lower() for part in resolved.parts), f"Incomplete input target: {path}")
+    require(not any(unfinished(part) for part in resolved.parts), f"Incomplete/staging input target: {path}")
     require(resolved.is_file() and resolved.stat().st_size > 0, f"Input is not a nonempty regular file: {path}")
     return resolved
 
@@ -239,6 +245,62 @@ def discover_manifest(snv, indel):
     return path
 
 
+@contextlib.contextmanager
+def _completed_projection(snv, indel):
+    """Cheap publication check, not a repeat of the driver's full SHA checks."""
+    selected = {"snv": _complete_path(snv), "indel": _complete_path(indel)}
+    folders = {path.parent for path in selected.values()}
+    require(len(folders) == 1, "SpliceAI2 VCF pair must share one completed adapter receipt")
+    folder = folders.pop()
+    receipt = _complete_path(folder / "adapter.ready.json")
+    require(receipt == folder / "adapter.ready.json", "Adapter receipt must be a regular adjacent file, not a symlink")
+    # Hold the driver's own lock across the two-key registration. A completed
+    # receipt is published last; a final VCF alone is not a completion signal.
+    lock_path = folder / ".install.lock"
+    require(not lock_path.is_symlink(), "Adapter installation lock must not be a symlink")
+    with lock_path.open("a") as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            raise ValueError("SpliceAI2 preparation is active; refusing VCF registration") from exc
+        require(not any(path.name == ".building" or path.name.startswith(".building-") for path in folder.iterdir()),
+                "SpliceAI2 output has a pending .building directory")
+        before = _identity(receipt)
+        require(before[2] <= MAX_HEADER, "Adapter receipt exceeds bounded size limit")
+        data = json.loads(receipt.read_text(), object_pairs_hook=_unique_object)
+        require(isinstance(data, dict), "Adapter receipt must be an object")
+        expected = {"schema_version": 1, "resource": "SpliceAI2", "version": "2.0", "assembly": "GRCh38",
+                    "status": "prepared_annotation_only", "coverage": "complete_published",
+                    "scientific_qualified": False, "source_revision": REVISION}
+        require(all(type(data.get(key)) is type(value) and data[key] == value for key, value in expected.items()),
+                "SpliceAI2 VCF requires a completed full GRCh38 adapter receipt")
+        require(isinstance(data.get("source_manifest_sha256"), str) and
+                re.fullmatch(r"[0-9a-f]{64}", data["source_manifest_sha256"]), "Adapter receipt lacks source manifest identity")
+        outputs = data.get("outputs")
+        require(isinstance(outputs, dict) and set(outputs) == {"snv", "indel"}, "Adapter receipt needs both output roles")
+        tracked, seen = [(str(receipt), receipt, before)], set()
+        for role, target in selected.items():
+            item = outputs[role]
+            require(isinstance(item, dict), "Invalid adapter output entry")
+            for key, checksum in (("path", "sha256"), ("index_path", "index_sha256")):
+                name = item.get(key)
+                require(isinstance(name, str) and Path(name).is_absolute(), "Adapter output paths must be absolute")
+                path = _complete_path(name)
+                require(path.parent == folder and path not in seen, "Adapter outputs must be distinct files beside their receipt")
+                require(isinstance(item.get(checksum), str) and re.fullmatch(r"[0-9a-f]{64}", item[checksum]),
+                        "Adapter output lacks recorded SHA256")
+                if key == "path":
+                    require(path == target, f"Selected {role} VCF is not its completed receipt output")
+                    require(type(item.get("bytes")) is int and item["bytes"] == path.stat().st_size,
+                            "Adapter VCF size does not match receipt")
+                else:
+                    require(name == item["path"] + ".tbi", "Adapter index does not match its VCF")
+                seen.add(path)
+                tracked.append((name, path, _identity(path)))
+        _unchanged_inputs(tracked)
+        yield tracked
+
+
 def _config(path):
     import yaml  # Existing installer dependency; header inspection is stdlib-only.
     path = _complete_path(path)
@@ -314,7 +376,10 @@ def _unchanged_inputs(inputs):
 
 def install(config, cache_dir, snv, indel):
     config_path, config_before, _, _, data = _config(config)
-    inputs = [(name, _complete_path(name), _identity(_complete_path(name))) for name in (snv, indel)]
+    inputs = []
+    for name in (snv, indel):
+        resolved = _complete_path(name)
+        inputs.append((name, resolved, _identity(resolved)))
     report = validate_pair(data.get("assembly"), snv, indel)
     if report["format"] == "spliceai2_tsv":
         manifest = discover_manifest(snv, indel)
@@ -327,7 +392,10 @@ def install(config, cache_dir, snv, indel):
         subprocess.run(command, check=True)
     else:
         require(Path(config).resolve(strict=True) == config_path, "Config target changed after cache validation")
-        _register_vcfs(config, snv, indel, config_before, inputs)
+        with contextlib.ExitStack() as contexts:
+            if report["format"] == "vcf_spliceai2":
+                inputs.extend(contexts.enter_context(_completed_projection(snv, indel)))
+            _register_vcfs(config, snv, indel, config_before, inputs)
     return report
 
 

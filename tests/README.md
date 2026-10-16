@@ -13,6 +13,13 @@ Conservation ordering/reuse, and the configured AlphaMissense motif output.
 External tools are replaced for these orchestration tests; they do not claim
 scientific liftover or annotation equivalence.
 
+`test_cluster_alpha.py` checks mapping preflight before annotation, source
+identity rejection, the original checksum-pinned motif command's option order,
+updated VCF propagation, timestamp reuse without overwrite, and failure/status
+propagation. Mapping hash or metadata changes during work prevent completion.
+These are command/fixture tests; annotation and motif computation are replaced,
+and no mapping resource or scientific result is qualified by them.
+
 `test_cluster_licensed_import.py` covers explicit resource subsets and the
 unchanged combined default. Tiny synthetic BGZF/index fixtures run the frozen
 installer functions and verify resource selection, receipt scope, unchanged

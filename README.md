@@ -7,7 +7,9 @@ A comprehensive pipeline for ACMG/AMP-based variant interpretation and variant p
 This branch develops a Nextflow workflow and one opt-in `priva` Rust/Polars
 binary, with faithful function order and exact comparison to source `09223ef`.
 See [execution and deployment](docs/nextflow_migration.md) and
-[Rust scope and exact comparison](docs/rust-migration.md).
+[Rust scope and exact comparison](docs/rust-migration.md). The
+[frozen ranking ledger](docs/ranking-source-ledger-09223ef.md) maps remaining
+control/ranking mutations, SciPy dependencies and parser/failure contracts.
 
 ```text
 One official VEP run → PriVA annotation view → family interpretation / Rust ports
@@ -33,6 +35,12 @@ corrected run reached the pinned cache download. Full cache deployment continues
 Both 18-row CADD assembly fixtures now match original Python exactly through
 Nextflow. One `NaN` edge still changes the wrapper exit status when original
 Python emits a malformed table; this mismatch remains reported and unaccepted.
+
+The separate experimental CADD batching branch has passed 44 exact original
+transformation comparisons and 3 helper cancellation cases. Full scoring and
+timing/memory benchmarks continue under Slurm; production remains pinned to
+standalone `4194be3`. These helper checks do not qualify complete scoring,
+outer-wrapper cancellation, shared annotation or family interpretation.
 
 ## Overview
 

@@ -1,11 +1,25 @@
 # Nextflow and Rust migration
 
-The first implementation isolates the existing annotation, family filtration and
-prioritization scripts in Nextflow tasks. Scientific Python remains the reference
-implementation. All PriVA-owned pandas operations are targeted for Rust/Polars
-replacement in independently tested stages; the new Rust final-order command is
-opt-in and is not a replacement for the ACMG classifier yet. Mature external
-tools and their existing shell wrappers remain in use.
+The target combines one official VEP annotation pass, complete CADD feature
+enrichment and the original CADD Python scoring path. PriVA-owned functions move
+to one Rust/Polars binary under exact source-order contracts. Shell adapters and
+mature scientific tools remain in use.
+
+```mermaid
+flowchart LR
+  I[VCF + fixed scientific profile] --> V[One official VEP run]
+  V --> P[PriVA transcript view]
+  V --> C[CADD transcript view + mature feature tools]
+  C --> A[Complete checked annotation artifact]
+  A --> S[Pinned cadd-rs interface / original Python raw + PHRED]
+  P --> R[PriVA interpretation / staged Rust modules]
+  S --> R
+  R --> G[Exact ACMG + ordering acceptance]
+```
+
+The current compatibility workflow remains gated for raw annotation. A tested
+stub route is not a complete production shared-VEP adapter. Do not activate it
+until resource, transcript-selection, model and acceptance gates pass.
 
 ## Frozen source and branch
 
@@ -169,28 +183,58 @@ tasks and the JVM share the parent allocation; set process resources to leave
 capacity for the driver. A 12 GB or greater CADD task does not fit the current
 10 GB interactive allocation and needs its own adequately sized allocation.
 
-## CADD and Rust
+## Shared VEP and original CADD calculation
 
-The pinned upstream CADD-scripts version is **1.7.2**, while the scientific score
-model is **1.7**. CADD combines Python, a Bash launcher, Snakemake, VEP and several
-model/annotation dependencies. Its novel-variant route cannot run from score
-tables alone. Keep the official scorer packaged and pinned for cache misses.
+CADD scripts **1.7.2** are pinned at
+`1fead0c1e02d3f0a8599bdb04e6b3a2dd70b4866`; the score model is **1.7**.
+Production annotation reuses PriVA's official VEP run, then mature upstream
+ESM/RegSeq/MMSplice and non-VEP track enrichment produce the complete feature
+artifact. Validate assembly, schema, missingness, all required resources, exact
+FeatureID joins and order. Qualify CADD's transcript selection without removing
+PriVA transcript rows. The separate original-VEP route is a reference-only
+qualification tool. VEP113 peptide/GTF compatibility requires evidence; directory
+names alone cannot establish it.
 
-A future Rust cache reader can retrieve exact existing records first, followed
-by the official scorer for misses. Cache-only mode must report missing variants
-and fail when completeness is required. PriVA currently consumes `PHRED` and
-`FeatureID` plus allele coordinates from CADD's annotation-rich output, with
-`PHRED` converted to float32; a score-only lookup is not an equivalent interface.
-Preserve source annotation rows, normalization, assembly and duplicate semantics.
+`cadd.nf -c conf/cadd.config --cadd_mode full|annotate|calculate` exposes separate
+stages. See its `--help` and pinned profile templates under `conf/cadd/` for the
+implemented contract. Profiles must be configured and qualified; templates do
+not constitute installed resources. Calculate-only consumes a completed artifact
+and requires no annotation cache installation. A validated bridge to the pinned
+standalone `cadd-rs` interface must preserve both receipt identities and the
+identical table; their distinct receipt schemas are not interchangeable.
 
-[Echtvar](https://github.com/brentp/echtvar) is a Rust annotation tool with CADD
-prescore examples, not a full replacement for CADD's scorer. Its encoded schema
-and numeric precision need explicit evaluation before adoption. A search of
-upstream/public Rust tooling found no maintained full CADD scorer port; this is
-not proof that no experimental implementation exists. See the pinned
-[CADD workflow](https://github.com/kircherlab/CADD-scripts/blob/v1.7.2/Snakefile).
+The standalone scorer must run all four original stages: transformation,
+prediction, consequence hierarchy and PHRED conversion. The previous standalone
+pin `79d767a` included native hierarchy/PHRED and is a historical experiment;
+a new reviewed all-Python revision is required before production integration.
+Keep the original numerical libraries, other scientific packages and model
+assets pinned. An optimized Python backend must be explicitly selected.
 
-Shipping the CADD software in an image can make caches the only separately
-mounted user-managed component; the software still has to exist inside it.
-Full CADD reimplementation is a separate scientific validation project from
-porting PriVA-owned pandas code.
+| Qualification | Required evidence |
+| --- | --- |
+| Profiling | Per-stage and total elapsed/CPU time, peak RSS, inputs/source/environment/resource/profile hashes, fixed CPU/thread limits. Repeat reference and candidate fairly; report setup and warm/cold effects. |
+| Measured changes | NumPy/pandas vectorization, batching or independent parallel work only for an observed bottleneck; source operation/mutation order and failure behavior remain fixed. |
+| Exactness | Raw and PHRED scores, full FeatureID rows, cell values/order, duplicates, missingness, intermediate numerics and failures; every mismatch reported with no tolerance relaxation. |
+| Edges | Empty/header-only, missing features, duplicates, transcript tiers/ties, PHRED boundaries, nonfinite/malformed values, failures and whole-variant chunk boundaries. |
+| Public benchmark — pending | Later pin a 1000 Genomes sample or agreed dataset; record assembly, release/accession, hashes, selection, sample/variant/transcript coverage and exclusions. Validate both annotation and scoring. |
+| Family — pending | User-supplied family with identical fixed resources/profile; exact ACMG criteria, scores and ranking. |
+
+Upstream model fixtures qualify calculation only. They do not satisfy public-data
+annotation acceptance or family acceptance. Keep failed optimization experiments
+and their mismatch reports; retain the unmodified executable reference.
+
+## Current cluster build checkpoint
+
+Installed `priva_acmg` software passed import and executable checks after adding
+missing VEP Perl helpers. Its explicit package export and readiness receipt are
+stored in the data project's `deployment/`. The pinned resource installers under
+`scripts/deploy_cluster_*.py` verify content identity, keep partial downloads
+inactive and write stage receipts. `scripts/check_cluster_readiness.py` reports
+remaining gaps without equating file presence with scientific qualification.
+
+VEP/cache archives, CADD annotations/prescores and gnomAD inputs are separate
+Slurm jobs; completed shared-plugin and HPO/pext stages do not imply full readiness.
+SpliceAI v1 and PrimateAI licensed inputs, hg19 MaveDB policy, derived calibration
+caches and shared-VEP/CADD qualification remain explicit gates. Current scheduler
+status and exact completed test counts are maintained in the project README,
+not inferred from this implementation checkpoint.

@@ -85,7 +85,7 @@ def main():
         "blockers": licensed_blockers(resources) + [
             {"resource": "MaveDB hg19", "action": "Discuss the unavailable assembly-specific annotation and each dependent calculation before omission."},
             {"resource": "Shared PriVA/CADD official VEP113", "action": "Qualify one annotation pass, transcript/peptide/GTF views and complete feature mapping. Packaged CADD VEP110 is reference-only."},
-            {"resource": "Derived calibration caches", "action": "Complete gnomAD hg19 liftover, AlphaMissense/ClinVar statistics and other configured cache builders after inputs finish."},
+            {"resource": "Derived calibration caches", "action": "Complete gnomAD hg19 liftover, AlphaMissense/ClinVar statistics and other configured cache builders after inputs finish. AlphaMissense motif and PM1 generation require the original NM-to-ENST mapping passed explicitly; do not rely on the legacy external default or substitute MANE without qualification."},
             {"resource": "Family acceptance", "action": "User will provide family paths. Compare exact variant ordering and ACMG judgments with the same completed cache snapshot."},
         ],
         "note": "Presence checks and completed download receipts are not end-to-end validation. Run this command on the host, outside filename-filtered AI views.",

@@ -1,9 +1,11 @@
 """Preflight barriers must run before reading any licensed cache file."""
 import contextlib
+import gzip
 import hashlib
 import io
 import json
 import os
+import shutil
 from pathlib import Path
 import subprocess
 import sys
@@ -253,6 +255,8 @@ class LicensedImportFixtures(unittest.TestCase):
         receipt = json.loads(self.call_import('primateai').read_text())
         self.assertEqual([cmd[4] for cmd in receipt['commands']], ['PrimateAI_install'])
         self.assertEqual(receipt['resource_status']['spliceai'], 'not_selected_unverified')
+        self.assertEqual(receipt['primateai_validation']['status'], 'preformatted_input_only')
+        self.assertFalse(receipt['primateai_validation']['raw_parity_verified'])
         result = yaml.safe_load(self.config.read_text())
         self.assertEqual(result['spliceai_snv_prescore'], 'old_snv')
         self.assertEqual(result['spliceai_indel_prescore'], 'old_indel')
@@ -264,6 +268,57 @@ class LicensedImportFixtures(unittest.TestCase):
         with self.assertRaisesRegex(AssertionError, 'Frozen installer reference mismatch'):
             copy_frozen_scripts(destination, checkout=self.source)
         self.assertFalse(destination.exists())
+
+    def add_raw_primate(self):
+        root = self.cache / 'PrimateAI_v0_2'
+        root.mkdir()
+        path = root / 'PrimateAI_scores_v0.2.tsv.gz'
+        header = ''.join('# metadata ' + str(i) + '\n' for i in range(1, 11))
+        text = header + '\nchr\tpos\tref\talt\tscore\nchr1\t1\tA\tC\t0.1\nchr1\t2\tA\tG\t0.2\nchr1\t3\tC\tT\t0.3\n'
+        path.write_bytes(gzip.compress(text.encode()))
+        self.confirmed['resources'] = ['primateai']
+        self.confirmed['files'] = {'primateai': {'path': str(path)}}
+        return path
+
+    def test_raw_primate_exact_validation_gates_the_receipt(self):
+        raw = self.add_raw_primate()
+        raw_bytes = raw.read_bytes()
+        with mock.patch.dict(os.environ, {'TMPDIR': str(self.folder),
+                                         'PRIVA_LICENSED_IMPORT_WRAPPER_SHA256': 'a' * 64}):
+            receipt = json.loads(self.call_import('primateai').read_text())
+        self.assertEqual(receipt['primateai_validation']['status'], 'exact_uncompressed_match')
+        self.assertTrue(receipt['primateai_validation']['raw_parity_verified'])
+        self.assertEqual(receipt['submitted_wrapper_sha256'], 'a' * 64)
+        self.assertEqual(raw.read_bytes(), raw_bytes)
+        self.assertEqual(list(self.folder.glob('primateai-exact-*')), [])
+
+    def test_actual_formatter_partial_sort_false_success_never_publishes_receipt(self):
+        raw = self.add_raw_primate()
+        original = raw.read_bytes()
+        fake_bin = self.folder / 'fault-bin'
+        fake_bin.mkdir()
+        marker = self.folder / 'original-sort-failed'
+        sorter = fake_bin / 'sort'
+        real_sort = shutil.which('sort')
+        sorter.write_text('#!/usr/bin/env bash\n'
+                          f'if [[ $1 == --version || -e {marker} ]]; then exec {real_sort} "$@"; fi\n'
+                          f'touch {marker}\n'
+                          'IFS= read -r first || exit 23\ncat >/dev/null\nprintf "%s\\n" "$first"\nexit 23\n')
+        sorter.chmod(0o755)
+        with mock.patch.dict(os.environ, {'PATH': str(fake_bin) + ':' + os.environ['PATH'],
+                                         'TMPDIR': str(self.folder)}):
+            with self.assertRaisesRegex(RuntimeError, 'byte_compare exited 1'):
+                self.call_import('primateai')
+        # Original formatter registered an indexed, valid-looking partial file.
+        # Exact external validation must reject it despite that false success.
+        self.assertTrue(self.config.exists())
+        derived = Path(yaml.safe_load(self.config.read_text())['primateai_prescore'])
+        self.assertTrue(Path(str(derived) + '.tbi').exists())
+        self.assertEqual(len([r for r in gzip.decompress(derived.read_bytes()).splitlines()
+                             if r and not r.startswith(b'#')]), 1)
+        self.assertEqual(raw.read_bytes(), original)
+        self.assertEqual(list(self.folder.glob('*.ready.json')), [])
+        self.assertEqual(list(self.folder.glob('primateai-exact-*')), [])
 
     def test_resource_path_must_be_absolute(self):
         self.confirmed['files']['spliceai_indel']['path'] = 'relative.vcf.gz'

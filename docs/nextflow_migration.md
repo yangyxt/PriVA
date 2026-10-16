@@ -446,6 +446,59 @@ is a historical URL inventory, not a valid restore file. The pinned resource ins
 inactive and write stage receipts. `scripts/check_cluster_readiness.py` reports
 remaining gaps without equating file presence with scientific qualification.
 
+At **2026-10-16T07:50Z**, approved CADD prescore recovery **1514744 was RUNNING**
+on analysis-cpa1, started 07:49:33Z with 1 CPU / 2 GB / 2 h on copy. It uses
+frozen source `20774bd56a706d8b82a5640bf23b758216544136` under
+`yangyxt/softwares/priva-cluster-tools-20774bd`. The GRCh37 v1.7 manifest now
+binds Washington's download root and `MD5SUMs` to historical `09223ef` indel MD5
+`3d88f8fde9df07060b4f8fe07a0d5d5d` and matching index MD5
+`c583ed9f852c9896081205c3523f9f23`. The earlier failed 1514581 and frozen
+`fc21869` cross-mirror manifest remain historical evidence.
+
+```text
+Existing SNV + index → full MD5 recheck
+Completed indel partial → full MD5 → reuse bytes without HTTP → atomic final
+Missing Washington index → fetch + MD5 → stage ready receipt
+1514744 RUNNING at 07:50Z → completed prescore deployment still pending
+```
+
+The existing SNV is 602,910,809,417 bytes; the retained indel partial is
+11,003,494,781 bytes. Only a full MD5 match skips partial-file HTTP resume;
+size gates remain active and every existing final file is rehashed. No ready
+receipt is claimed before all four prescore files pass. All 20 deployment and
+31 licensed-import fixture tests pass. Initial evidence retains 21 failures
+from a missing frozen helper; restoring the exact `054b494` helper preserved
+the existing expected SHA256. Closed logs use
+`logs/cadd-prescore-recovery-tests-20261016{,-final}.log` under the data project
+and record the exact tested source hashes. This is installation validation,
+separate from the retained original-Python scorer, real VEP/model and family gates.
+
+SpliceVault **1514603 COMPLETED (0:0)** at **2026-10-16T07:03:13Z** after
+6 h 24 m 15 s. `deployment/splicevault-hg19.ready.json` records
+`derived_resource_built` for GRCh37, using frozen installer `054b494` and
+scientific baseline `09223ef`. Seven stable SHA256 checks cover source, output,
+index, reference, chain, converter and job config. Publisher BSD sum
+`[57027, 863191]`, full output `bgzip -t` CRC and pysam 0.22.1 exact-coordinate
+queries on all 24 indexed contigs passed. The 12-field source/output headers
+agree with the plugin layout; no real VEP/plugin run was performed.
+144,094,769 source rows minus 8,010 original CrossMap misses give 144,086,759
+indexed output rows; the original mapping policy is unchanged. The main config
+already points to this output, so the resource is built, verified and configured
+without config promotion. Its source URL uses `current_variation`, while the
+actual job config pinned release113. Frozen implementation and receipt were
+verified; no submitted wrapper-hash archive was found, so full wrapper
+reconstruction remains unavailable. Real VEP, scientific and family acceptance
+remain pending.
+
+DataLad `80e4163` records the SpliceVault receipt/log/verification record,
+data-project README and both closed recovery test logs, with metadata recorded
+and all six selected paths clean. The live 1514744 log and future prescore
+receipt are excluded.
+
+Recovery source `20774bd56a706d8b82a5640bf23b758216544136` also passed
+[CI 38869590348](https://github.com/yangyxt/PriVA/actions/runs/38869590348).
+CI success does not establish completion of the active prescore recovery.
+
 VEP/cache archives, CADD annotations/prescores and gnomAD inputs are separate
 Slurm jobs; completed shared-plugin and HPO/pext stages do not imply full readiness.
 The original SpliceAI v1 and PrimateAI collections are acquired under

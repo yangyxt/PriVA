@@ -74,6 +74,19 @@ The [installation dependency ledger](docs/installation-dependency-ledger-09223ef
 records the ordered calibration recipe and separates bundled ClinVar baseline
 statistics from its currently unqualified fresh-build path.
 
+Resource update, **2026-10-16T07:50Z**:
+
+| Installation work | Verified state | Remaining gate |
+| --- | --- | --- |
+| CADD prescore recovery 1514744 | RUNNING on analysis-cpa1 from frozen `20774bd56a706d8b82a5640bf23b758216544136`. The manifest now pins the historical Washington GRCh37 v1.7 data/index pair; 20 deployment and 31 licensed-import fixture tests pass. | Full MD5 revalidation of existing files, verified partial publication and the matching index must finish before a prescore ready receipt. |
+| SpliceVault 1514603 | COMPLETED (0:0) at 2026-10-16T07:03:13Z; the original release113-to-GRCh37 derived resource is built, verified and already configured. | Real VEP use, scientific qualification and supplied-family acceptance remain pending. |
+
+The [deployment checkpoint](docs/nextflow_migration.md#current-cluster-build-checkpoint)
+records the recovery guards, closed test evidence and SpliceVault verification.
+Recovery source `20774bd` passed [CI 38869590348](https://github.com/yangyxt/PriVA/actions/runs/38869590348).
+Installation progress leaves the original-Python pin and experimental-backend
+acceptance boundaries above unchanged.
+
 ## Overview
 
 This repository contains scripts and configuration files for an automated variant prioritization pipeline based on the ACMG/AMP guidelines. PriVA combines transcript-level annotation, population and functional data, gene-disease mechanism and inheritance context, and family information to evaluate ACMG/AMP criteria and produce ranked variant lists for each family. Annotation resources are deployed once and can be refreshed; each cohort run then performs annotation, family-level filtering, criteria matching, and prioritization.

@@ -17,6 +17,32 @@ ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / 'scripts/import_cluster_licensed.sbatch'
 BODY = SCRIPT.read_text().split("<<'PY'\n", 1)[1].split('\nPY\n', 1)[0]
 
+# Exact bytes audited from this historical installer revision. CI uses a shallow
+# checkout and must neither require the worker Git object nor silently change it.
+REFERENCE_REVISION = '054b4944055054148005016192647a8ed0384eef'
+REFERENCE_SHA256 = {
+    'install_utils.sh': '80107edcc5ec845e591a87957e230fa586c2a480746c904cac3d4a84e209a81f',
+    'common_bash_utils.sh': '4cd2cffed0d6a46d1280eac97b918c1dd6c717c881dc41b0a819fbecaed439b9',
+    'annotation_vcf.sh': '6b7ad6fd8eb118841cf36819193f7ce2ee14363432c66f0da75d7788c2d8d280',
+    'deploy_cluster_resources.py': 'c5e345f6f3af31aff1e2a724e248f0f32a1085afe7b347183022196b359ea6cf',
+}
+
+
+def copy_frozen_scripts(destination, checkout=ROOT):
+    contents = {}
+    for name, expected in REFERENCE_SHA256.items():
+        content = (checkout / 'scripts' / name).read_bytes()
+        actual = hashlib.sha256(content).hexdigest()
+        if actual != expected:
+            raise AssertionError(
+                f'Frozen installer reference mismatch: {name}: expected {expected}, got {actual}. '
+                f'Reference is {REFERENCE_REVISION}; review and preserve its source bytes '
+                'before changing this oracle. No current-source fallback is permitted.')
+        contents[name] = content
+    destination.mkdir(parents=True)
+    for name, content in contents.items():
+        (destination / name).write_bytes(content)
+
 
 class LicensedImportPreflight(unittest.TestCase):
     def setUp(self):
@@ -112,7 +138,7 @@ class LicensedImportPreflight(unittest.TestCase):
 
 class LicensedImportFixtures(unittest.TestCase):
     """Tiny BGZF fixtures exercise actual frozen installer prompts; no licensed files."""
-    REVISION = '054b4944055054148005016192647a8ed0384eef'
+    REVISION = REFERENCE_REVISION
 
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory(prefix='licensed_fixture_', dir=ROOT / 'tests')
@@ -120,10 +146,7 @@ class LicensedImportFixtures(unittest.TestCase):
         self.folder = Path(self.temporary.name)
         self.source = self.folder / 'frozen'
         scripts = self.source / 'scripts'
-        scripts.mkdir(parents=True)
-        for name in ('install_utils.sh', 'common_bash_utils.sh', 'annotation_vcf.sh', 'deploy_cluster_resources.py'):
-            (scripts / name).write_bytes(subprocess.check_output(
-                ['git', '-C', str(ROOT), 'show', self.REVISION + ':scripts/' + name]))
+        copy_frozen_scripts(scripts)
         self.cache = self.folder / 'caches'
         spliceai = self.cache / 'SpliceAI_v1'
         spliceai.mkdir(parents=True)
@@ -233,6 +256,14 @@ class LicensedImportFixtures(unittest.TestCase):
         result = yaml.safe_load(self.config.read_text())
         self.assertEqual(result['spliceai_snv_prescore'], 'old_snv')
         self.assertEqual(result['spliceai_indel_prescore'], 'old_indel')
+
+    def test_reference_mismatch_stops_before_creating_a_fixture_snapshot(self):
+        script = self.source / 'scripts/install_utils.sh'
+        script.write_bytes(script.read_bytes() + b'\n# unexpected revision\n')
+        destination = self.folder / 'rejected_snapshot/scripts'
+        with self.assertRaisesRegex(AssertionError, 'Frozen installer reference mismatch'):
+            copy_frozen_scripts(destination, checkout=self.source)
+        self.assertFalse(destination.exists())
 
     def test_resource_path_must_be_absolute(self):
         self.confirmed['files']['spliceai_indel']['path'] = 'relative.vcf.gz'

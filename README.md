@@ -36,6 +36,17 @@ Both 18-row CADD assembly fixtures now match original Python exactly through
 Nextflow. One `NaN` edge still changes the wrapper exit status when original
 Python emits a malformed table; this mismatch remains reported and unaccepted.
 
+Baseline profiling **1514598 is closed: FAILED (1:0)**, 2 h 21 m 24 s,
+ended **2026-10-16T02:51:05Z** (scheduler 2026-10-15T21:51:05-05:00).
+Frozen harness `e3b7818ed4362fda089a6928a184e3c4cf6ea894` completed all ten
+reports: 20 assembly evaluations and **80/80 exact model-table comparisons**,
+zero table mismatches. The only recorded mismatch is the NaN PHRED CLI exit:
+four of five synthetic edges passed; NaN stdout bytes match, but exit 0 becomes
+1 without a completed artifact. The bundled report keeps acceptance=false;
+nine scaled reports pass only their bounded model inputs. The shell retained
+that first failure, completed all nine scaled invocations, then exited 1.
+See the [closed-run provenance](docs/nextflow_migration.md#cadd-baseline-profile-1514598).
+
 The separate experimental CADD batching branch has passed 44 exact original
 transformation comparisons and 3 helper cancellation cases. Completed Slurm
 benchmark 1514607 passed all 24 paired synthetic trials, including 96 exact
@@ -43,7 +54,8 @@ intermediate/final-table comparisons. At 100,008 rows, median calculation time
 fell from 556–578 seconds to about 279 seconds, with similar sampled summed
 process-tree RSS (this estimate can count shared pages repeatedly). These results
 do not qualify shared annotation, failure behavior, public data or families.
-The tested integration remains pinned to standalone `4194be3`.
+The tested original-Python integration remains pinned to standalone
+`4194be32320292cb8acd290ee0210c19456e2573`.
 The later wrapper audit failed PID-only SIGTERM cleanup for the experimental
 shell, profiler and standalone CLI; process-group termination passed and the
 audit reaped all remaining children. The candidate remains disabled.
@@ -117,7 +129,7 @@ For native TSV, the helper discovers the fixed adjacent SpliceAI2_GRCh38.downloa
 
 Two-key interface qualification: code 35779c4578509ce01218a052a8e7e1d8a785a75b passed 239 Python tests, zero failures/errors/skips, in 190.848 seconds: 39 helper, 25 installer, 14 runtime-guard, 21 Nextflow-adapter and 140 existing deployment/driver/BGZ tests. The installer-shell cases mock the helper boundary; they are not real conversion evidence. Log: yangyxt_dt/projects/PriVA_upgrade/logs/spliceai-two-key-integration-20261016.log. This supersedes the earlier 197-test interface checkpoint without adding its count; unchanged Rust evidence remains 41 tests and the earlier real-projection evidence remains 512 unique rows.
 
-Earlier remote CI at eb16493 passed [Actions 38852306750](https://github.com/yangyxt/PriVA/actions/runs/38852306750). The new 35779c4 source has passed local checks; its push/remote CI are not yet recorded at this checkpoint.
+Remote CI for integrated source `2cc8ecb5326f19a35bb86fc4fd98cc1cf4d61963` passed [Actions 38854687155](https://github.com/yangyxt/PriVA/actions/runs/38854687155). The earlier eb16493 run also passed; the f5fc377 run was cancelled after being superseded. Local two-key interface evidence remains tied to its tested 35779c4 source.
 
 Actual resource checks used final helper SHA256 f69d6ea8d6179d68ae44cad849b3c6c7912a879f05e305a36acffba09c81bb88: all 47 native TSV and four v1 VCF headers classified correctly, including assembly metadata. Real SpliceAI_install reused the existing v1 pair for hg19/GRCh37 and hg38/GRCh38 with configuration bytes, inode and mtime unchanged and resource stat identities unchanged. Receipt: yangyxt_dt/projects/PriVA_upgrade/validation/spliceai-two-key-real-install-20261016/receipt.json. These are bounded header/reuse checks, not new body checksums, full VEP execution or model/scientific qualification.
 

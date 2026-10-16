@@ -81,6 +81,7 @@ jobs:
           python -m unittest discover -s tests/nextflow -p 'test_adapter.py' -v
           python -m unittest discover -s tests -p 'test_nextflow_parity.py' -v
           python -m unittest discover -s tests -p 'test_cluster_deployment.py' -v
+          python -m unittest discover -s tests -p 'test_install_utils_bootstrap.py' -v
           python -m unittest discover -s tests/cadd -p 'test_upstream.py' -v
 
       - name: Install the pinned Rust toolchain

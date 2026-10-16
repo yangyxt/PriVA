@@ -108,3 +108,21 @@ and mark others `not_selected_unverified`; they do not establish complete
 licensed-resource deployment. Main-config promotion and scientific VEP/family
 qualification remain separate. A SpliceAI-only submission can override the
 combined formatter allocation with `--cpus-per-task=2 --mem=8G --time=1-00:00:00`.
+
+Raw PrimateAI imports additionally require exact external reconstruction before
+publishing a receipt. The original `054b494` formatter is unchanged. The
+validator preserves the first 11 records after the original `sed` operations,
+adds AWK's final newline where needed, and runs the exact GNU sort arguments
+with the inherited locale. It explicitly checks each child, then compares the
+entire uncompressed derived stream byte-for-byte with `cmp`, including EOF.
+This catches the demonstrated partial-sort false success that gzip/index
+checks alone miss. One additional sort and a temporary uncompressed reference
+under the job's `TMPDIR` are required; normal success/failure paths reap owned
+children and remove temporary files. Slurm cancellation remains separate.
+
+Receipts record matched bytes, validation command/tool/locale identities,
+source/output stability and the SHA256 of the submitted batch script. A supplied
+preformatted BGZF without its raw source is marked `raw_parity_verified: false`.
+Raw originals and successfully formatted bytes are never rewritten by this
+validator; failed validation leaves no completion receipt or main-config change.
+The existing shared importer lock is retained.

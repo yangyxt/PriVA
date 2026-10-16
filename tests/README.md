@@ -42,6 +42,17 @@ its identity silently. CI installs Ubuntu's `tabix` package (including `bgzip`)
 and `yq`, records their package versions, and retains real installer fixture
 execution. This test tooling does not qualify production scientific software.
 
+`test_cluster_primate_validation.py` compares the validator with the literal
+original formatting pipeline, including duplicated/tied rows, header/blank/CRLF
+handling and unterminated records. Dropped/replaced rows, changed ordering,
+leading/trailing byte differences, partial-sort errors, source/derived gzip
+errors and changed file identities must fail; owned children are reaped and
+scratch removed on tested failure paths. The licensed-import suite also runs
+an actual frozen formatter with an injected partial-output sort failure and
+requires exact validation to prevent its otherwise false-success receipt.
+Neither suite formats a production cache. PID-only SIGTERM cleanup is not
+claimed by these tests.
+
 Cluster deployment integrity: `test_cluster_deployment.py` checks atomic
 publication, corruption rejection, unchanged-cache reuse, and rejection of
 unidentified or modified FASTA/container resources without network or solver

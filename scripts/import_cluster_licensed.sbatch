@@ -31,12 +31,17 @@ main() {
     mkdir -p "$TMPDIR"
     exec 9> "$state_dir/licensed-cache-import.install.lock"
     flock -n 9
+    submitted_sha=$(sha256sum -- "${BASH_SOURCE[0]}")
+    export PRIVA_LICENSED_IMPORT_WRAPPER_SHA256=${submitted_sha%% *}
     python - "$source_dest" "$revision" "$template" "$config" "$confirmation" "$state_dir" "$resource_set" <<'PY'
+import contextlib
 import json
 import os
 from pathlib import Path
+import signal
 import subprocess
 import sys
+import tempfile
 import yaml
 CACHE_ROOT = Path('/stornext/snfs170/next-gen/scratch/yangyxt/caches')
 RESOURCE_ROLES = {'spliceai': ('spliceai_snv', 'spliceai_indel'), 'primateai': ('primateai',)}
@@ -66,6 +71,136 @@ def file_identity(path):
 def require_stable_inputs(identities):
     for path, previous in identities.items():
         require(file_identity(path) == previous, f'Original shared input changed: {path}')
+
+
+def validate_primateai_format(raw, formatted):
+    """Reconstruct the original uncompressed stream and compare every byte.
+
+    A private temporary output avoids pipe deadlock: the only streamed writer
+    feeds sort's stdin while sort writes an ordinary file. No scientific source
+    or successful formatter output is modified.
+    """
+    identities = {path: file_identity(path) for path in (raw, formatted)}
+    tool_versions = {}
+    for tool, option in (('gunzip', '--version'), ('sed', '--version'), ('sort', '--version'),
+                         ('cmp', '--version'), ('awk', '-Wversion')):
+        output = subprocess.check_output([tool, option], stderr=subprocess.STDOUT, text=True)
+        tool_versions[tool] = output.splitlines()[0]
+    require(tool_versions['sort'].startswith('sort (GNU coreutils)'),
+            'Exact PrimateAI validation requires the original GNU sort implementation')
+    locale = {key: os.environ.get(key) for key in ('LANG', 'LC_ALL', 'LC_COLLATE', 'LC_CTYPE', 'LC_NUMERIC')}
+    commands, statuses = [], {}
+    # Actual jobs set TMPDIR under PriVA_upgrade; fixture calls stay beside raw.
+    temporary_root = os.environ.get('TMPDIR') or str(raw.parent)
+    progress('primateai: exact reference reconstruction start (one independent sort)')
+    with tempfile.TemporaryDirectory(prefix='primateai-exact-', dir=temporary_root) as temporary:
+        temporary = Path(temporary)
+        expected = temporary / 'expected.tsv'
+        environment = dict(os.environ, TMPDIR=str(temporary))
+        children = []
+        with contextlib.ExitStack() as stack:
+            def start(label, command, **kwargs):
+                errors = stack.enter_context((temporary / (label + '.stderr')).open('w+b'))
+                process = subprocess.Popen(command, stderr=errors, env=environment,
+                                           start_new_session=True, **kwargs)
+                children.append((label, process, errors))
+                commands.append({'stage': label, 'argv': command})
+                return process
+
+            def checked_wait(label, process, errors):
+                status = process.wait()
+                statuses[label] = status
+                if status:
+                    errors.flush()
+                    errors.seek(0)
+                    detail = errors.read(2048).decode('utf-8', errors='replace').strip()
+                    raise RuntimeError(f'PrimateAI validation {label} exited {status}: {detail}')
+
+            try:
+                source = start('source_gunzip', ['gunzip', '-cf', str(raw)], stdout=subprocess.PIPE)
+                prefix = start('prefix_header', ['sed', '12s/.*/#&/'], stdin=source.stdout,
+                               stdout=subprocess.PIPE)
+                source.stdout.close()
+                filtered = start('remove_empty', ['sed', '/^$/d'], stdin=prefix.stdout,
+                                 stdout=subprocess.PIPE)
+                prefix.stdout.close()
+                header_records = 0
+                with expected.open('wb') as stream:
+                    for _ in range(11):
+                        record = filtered.stdout.readline()
+                        if not record:
+                            break
+                        # Original awk print appends ORS even to an unterminated
+                        # input record. Preserve CR and whitespace-only records.
+                        stream.write(record if record.endswith(b'\n') else record + b'\n')
+                        header_records += 1
+                    stream.flush()
+                    sorter = start('sort', ['sort', '-k1,1', '-k', '2,2n', '-V'],
+                                   stdin=subprocess.PIPE, stdout=stream)
+                    try:
+                        for record in filtered.stdout:
+                            sorter.stdin.write(record if record.endswith(b'\n') else record + b'\n')
+                    finally:
+                        filtered.stdout.close()
+                        sorter.stdin.close()
+                    # Explicitly collect every exit, including sort; pipefail
+                    # could not observe the original AWK child sorter.
+                    failures = []
+                    for label, process, errors in children:
+                        try:
+                            checked_wait(label, process, errors)
+                        except RuntimeError as error:
+                            failures.append(str(error))
+                    require(not failures, '; '.join(failures))
+                matched_bytes = expected.stat().st_size
+                progress(f'primateai: reference children succeeded; comparing {matched_bytes} uncompressed bytes')
+                derived = start('derived_gunzip', ['gunzip', '-cf', str(formatted)], stdout=subprocess.PIPE)
+                compare = start('byte_compare', ['cmp', '--silent', '--', str(expected), '-'],
+                                stdin=derived.stdout, stdout=subprocess.DEVNULL)
+                derived.stdout.close()
+                # A mismatch exits cmp early; finally terminates/reaps the
+                # decompressor instead of waiting on a blocked output pipe.
+                label, process, errors = children[-1]
+                checked_wait(label, process, errors)
+                label, process, errors = children[-2]
+                checked_wait(label, process, errors)
+                for path, before in identities.items():
+                    require(file_identity(path) == before,
+                            f'PrimateAI input/output changed during exact validation: {path}')
+            finally:
+                # Terminate each owned process group, then reap every child on
+                # comparison/decompression/sort failures or Python exceptions.
+                # PID-only SIGTERM is not intercepted; Slurm cancellation uses
+                # its separate whole-job process cleanup.
+                for _, process, _ in children:
+                    if process.poll() is None:
+                        try:
+                            os.killpg(process.pid, signal.SIGTERM)
+                        except ProcessLookupError:
+                            pass
+                for _, process, _ in children:
+                    try:
+                        process.wait(timeout=3)
+                    except subprocess.TimeoutExpired:
+                        try:
+                            os.killpg(process.pid, signal.SIGKILL)
+                        except ProcessLookupError:
+                            pass
+                        process.wait(timeout=3)
+                    for stream in (process.stdin, process.stdout):
+                        if stream is not None and not stream.closed:
+                            try:
+                                stream.close()
+                            except OSError:
+                                pass  # A failed/terminated reader can close its pipe early.
+    progress('primateai: exact uncompressed byte comparison passed; temporary reference removed')
+    return {
+        'status': 'exact_uncompressed_match', 'raw_parity_verified': True,
+        'raw': str(raw), 'formatted': str(formatted), 'matched_uncompressed_bytes': matched_bytes,
+        'header_records': header_records, 'commands': commands, 'exit_statuses': statuses,
+        'tool_versions': tool_versions, 'locale': locale,
+        'raw_identity': identities[raw], 'formatted_identity': identities[formatted],
+        'scope': 'Entire original raw-to-formatted uncompressed byte stream matched, including duplicate/tie order and EOF; all validation children succeeded. Scientific annotation qualification remains separate.'}
 
 
 def import_resources(source, revision, template, config_path, confirmation_path, state,
@@ -176,9 +311,20 @@ def import_resources(source, revision, template, config_path, confirmation_path,
         require(contigs, f'No indexed chromosomes: {path}')
         subprocess.run(['tabix', str(path), contigs[0] + ':1-1'], stdout=subprocess.DEVNULL, check=True)
         progress(f'{key}: post-import indexed checks complete')
+    primate_validation = None
+    validated_derived = {}
+    if 'primateai' in selected:
+        validated_derived = {path: file_identity(path) for path in (formatted, Path(str(formatted) + '.tbi'))}
+        if primate.name.endswith('.tsv.gz'):
+            primate_validation = validate_primateai_format(primate, formatted)
+        else:
+            primate_validation = {
+                'status': 'preformatted_input_only', 'raw_parity_verified': False,
+                'scope': 'Supplied BGZF/index validated, but no original raw TSV was supplied for exact reconstruction.'}
     receipt = {
         'status': 'licensed_inputs_imported' if resource_set == 'all' else 'selected_licensed_inputs_imported',
         'assembly': assembly, 'installer_revision': revision,
+        'submitted_wrapper_sha256': os.environ.get('PRIVA_LICENSED_IMPORT_WRAPPER_SHA256'),
         'selected_resources': selected,
         'resource_status': {name: 'imported' if name in selected else 'not_selected_unverified'
                             for name in RESOURCE_ROLES},
@@ -190,9 +336,12 @@ def import_resources(source, revision, template, config_path, confirmation_path,
         'scope': 'Original installer prompts import only the selected resources. Unselected resources are unverified. Licensed originals preserved. Main config has not been changed; VEP/family scientific qualification remains separate.'}
     if 'primateai' in selected:
         progress('primateai: formatted output and index SHA256 start')
+        receipt['primateai_validation'] = primate_validation
         receipt.update(formatted_primateai=str(formatted), formatted_primateai_sha256=checksum(formatted),
                        formatted_primateai_index_sha256=checksum(Path(str(formatted) + '.tbi')))
     require_stable_inputs(before)  # Also reject changes during installer/output verification.
+    for path, previous in validated_derived.items():
+        require(file_identity(path) == previous, f'Verified PrimateAI output changed: {path}')
     write_json(receipt_path, receipt)
     progress('Published ' + str(receipt_path))
     return receipt_path

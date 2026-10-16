@@ -51,3 +51,12 @@ longer fails or replaces an existing configured path. AlphaMissense motif
 output uses the cluster configuration instead of the retired host prefix.
 The scientific Python calculations and per-chromosome transforms are unchanged;
 full derived-cache qualification still awaits upstream resource completion.
+
+`build_cluster_gnomad.sbatch` waits for the verified source-download job, archives
+an exact installer commit, checks the frozen config and reference identity, then
+runs all 24 original per-chromosome liftover transformations. GRCh38 source
+`.vcf.bgz{,.tbi}` files remain separate from new hg19 outputs and intermediates.
+The completion receipt requires every final VCF/index, its expected indexed
+chromosome, and a successful indexed query; this does not establish family or
+ACMG parity. The initial queued job is 1514601 after source job 1514584, using
+installer `054b4944055054148005016192647a8ed0384eef`.

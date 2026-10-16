@@ -1,5 +1,12 @@
 # PriVA tests
 
+Installer diagnosis, 2026-10-15: all 28 checks in
+`test_install_utils_bootstrap.py` pass, including the regression that a zero
+VEP-installer exit without cache files must not record success. The test also
+checks unattended, release-pinned cache/plugin flags. The actual Slurm rerun
+reached the correct VEP113 GRCh37 archive download and stopped at a deliberate
+timeout; that checkpoint does not establish complete installation.
+
 Cluster deployment integrity: `test_cluster_deployment.py` checks atomic
 publication, corruption rejection, unchanged-cache reuse, and rejection of
 unidentified or modified FASTA/container resources without network or solver

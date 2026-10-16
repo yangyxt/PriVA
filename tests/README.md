@@ -81,3 +81,55 @@ PYTHONDONTWRITEBYTECODE=1 python tests/test_install_utils_bootstrap.py CachePath
 
 The full discovery command above also runs InstallerBootstrapTests, which creates
 temporary files/directories; obtain fixture approval before running it.
+
+## SpliceAI2 preparation checks
+
+`test_spliceai2_deployment.py` exercises manifest completeness/identity checks,
+GENCODE context agreement, source preservation, conversion/index/report failures
+and preparation receipts with synthetic fixtures. `test_install_utils_spliceai2.py`
+checks assembly/profile routing, unchanged v1 behavior, full-receipt registration
+and refusal to activate the new scientific profile. These are preparation tests;
+they do not convert the licensed 47-shard catalogue or qualify v2 ACMG evidence.
+
+`rust/tests/spliceai2_projection.rs` covers the native 84-column contract, exact
+top0 string projection, POS/model-strand gene joins, duplicate/ambiguity rejection
+and CLI behavior. Final integrated test totals belong to their producing source
+revision; the tests do not establish full VEP lookup coverage.
+
+`spliceai2/test_official_plugin.pl` passed 11 subtests / 38 assertions against the
+actual pinned release-113 plugin and Ensembl allele matcher. It also rejects a
+wrong plugin identity before loading. Only tabix candidates/file registration and
+light VEP objects are fixtures; real reference/cache/index retrieval is not
+exercised. See [the audit](../docs/spliceai2-plugin-audit.md) for hashes and runtime
+instructions. Synthetic records contain no licensed cache rows.
+
+```bash
+PRIVA_SPLICEAI2_BIN=/absolute/built/priva \
+  python -m unittest discover -s tests -p test_spliceai2_deployment.py -v
+python -m unittest discover -s tests -p test_install_utils_spliceai2.py -v
+python -m unittest discover -s tests -p test_spliceai2_runtime_guard.py -v
+cargo test --manifest-path rust/Cargo.toml --locked --test spliceai2_projection
+# Requires installed pinned official VEP/plugin modules and priva_acmg Perl:
+perl tests/spliceai2/test_official_plugin.pl \
+  --plugin-file /absolute/VEP_plugin/SpliceAI.pm \
+  --vep-lib /absolute/priva_acmg/share/ensembl-vep-113.2-0
+```
+
+The driver integration cases skip when `PRIVA_SPLICEAI2_BIN` is absent; set it
+to the reviewed real converter to reproduce the no-skip result. Use a Slurm
+allocation on this cluster. The [preparation reference](../docs/nextflow_migration.md#spliceai2-preparation)
+distinguishes complete published coverage from bounded subset fixtures and
+scientific activation. No GPU/model inference or new resource downloads are
+required for the synthetic checks.
+
+Verified combined run: **165 tests passed, zero failures/skips, 85.702 seconds**
+(119 existing/route + 14 runtime guards + 21 driver + 11 deployment). The driver
+suite used real Rust/bgzip/tabix with synthetic scores/context/plugin identity,
+including a complete 47-shard fixture and CRC/mutation failures. Its retained log
+`yangyxt_dt/projects/PriVA_upgrade/logs/spliceai2-install-integration-20261015.log`
+records integration `ad9af5d` and tested driver/test content hashes. Separately,
+Rust source `428ce4c` passed 30 projection + 9 existing tests, and the pinned
+Perl harness passed 11 subtests / 38 assertions. These totals have different
+boundaries and do not establish real resource conversion or scientific parity.
+
+Nextflow activation guard: shared bin/priva_task.py validation rejects explicit v2 scientific configuration in the launch/task path, including preannotated import/resume, and rejects SpliceAI2-marked input headers. Namespaced prepared-resource metadata remains allowed. A separate adapter suite passed 20 tests (16 existing + 4 new) under Slurm, covering launch and all three task phases before output; this is separate from the 165 installer/deployment tests. Unmarked external preannotated artifacts still require pinned scientific-profile provenance: predictor version cannot be inferred from numeric scores.

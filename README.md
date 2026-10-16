@@ -48,20 +48,14 @@ The later wrapper audit failed PID-only SIGTERM cleanup for the experimental
 shell, profiler and standalone CLI; process-group termination passed and the
 audit reaped all remaining children. The candidate remains disabled.
 
-SpliceAI v1 originals and indexes for both assemblies are confirmed downloaded.
-The current hg19 pair is undergoing full verification and original-installer
-registration in Slurm 1514615. Both PrimateAI v0.2 originals are now acquired
-under `yangyxt/caches/PrimateAI_v0_2/` and passed acquisition gzip/header checks.
-The hg19 import is queued as Slurm 1514620 after SpliceAI job 1514615. It replaces
-cancelled, never-run job 1514618: a fixture showed the original formatter could
-register a truncated result following a child-sort failure. The importer now
-requires an independent exact source-to-formatted byte comparison and checks
-every validation child exit before publishing a receipt. All 14 validator and
-30 import fixtures pass; actual full-cache verification/import is still pending.
-The hg38 original
-remains available without changing the selected scientific profile.
-The AlphaMissense build is held for a separate missing original NM-to-ENST
-mapping table. No annotation or evidence branch has been silently disabled.
+SpliceAI v1 originals/indexes and both PrimateAI v0.2 originals are acquired.
+The hg19 SpliceAI import 1514615 and PrimateAI import 1514620 completed with
+exit 0 and valid receipts. The PrimateAI receipt includes exact external
+source-to-formatted validation; cancelled job 1514618 never ran. Original hg38
+files remain retained and unselected. Main-config promotion and scientific
+qualification remain pending. gnomAD derived job 1514601 failed its `.vcf.bgz`
+extension validation and is being repaired separately. AlphaMissense 1514589
+remains held for the original NM-to-ENST mapping. No evidence is silently omitted.
 The [installation dependency ledger](docs/installation-dependency-ledger-09223ef.md)
 records the ordered calibration recipe and separates bundled ClinVar baseline
 statistics from its currently unqualified fresh-build path.
@@ -84,6 +78,36 @@ If a valid pedigree table is provided, please note:
 1. The family sample ID should be consistent between the pedigree table and the VCF file.
 2. The proband of the family should stay as the first record of the family in the pedigree table
 3. Every family should have a unique identifier in the pedigree table
+
+## SpliceAI2 GRCh38 preparation
+
+The [preparation route](docs/nextflow_migration.md#spliceai2-preparation) keeps the
+original 84-column tables and creates a separate top0 VCF for the official plugin,
+using exact scored-region/GENCODE48 gene context. The Rust converter streams rows;
+the Python deployment driver verifies the 47-shard manifest and controls
+`gzip`/`bgzip`/`tabix`. It downloads nothing. GENCODE48 has passed its resource
+checks; full score conversion and real indexed-VEP qualification are pending.
+
+```text
+Pinned native v2 + verified v48 context → prepared top0 VCF + receipt
+                                      → separate scientific activation gate
+```
+
+`SpliceAI2_install CONFIG MANIFEST OUTPUT_DIR [PRIVA_BIN]` registers only
+namespaced preparation metadata. The profile installer stops with status 2 after
+v2 preparation; `prepared_annotation_only` does not activate ACMG interpretation.
+GRCh37 v1 and legacy CADD masked-v1 inputs remain unchanged. The real-plugin
+boundary harness passed 11 subtests / 38 assertions with synthetic tabix/VEP
+objects. Rust passed 30 new plus 9 existing tests; the integrated installer/driver
+run passed 165 tests with zero failures/skips, including real Rust/bgzip/tabix
+on synthetic inputs. These are not full VEP or real-cache qualification. See the linked route
+for the exact manifest, GTF/plugin identities, commands and pending gates.
+
+The shared Nextflow adapter also rejects explicit v2 scientific configuration
+and SpliceAI2-marked preannotated inputs. Its separate 20-test adapter suite
+passed; this is not included in the 165-test installer/deployment total. Unmarked
+external annotations still require pinned profile provenance; numeric scores do
+not identify their predictor version.
 
 ## Installation
 

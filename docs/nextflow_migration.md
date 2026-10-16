@@ -21,6 +21,164 @@ The current compatibility workflow remains gated for raw annotation. A tested
 stub route is not a complete production shared-VEP adapter. Do not activate it
 until resource, transcript-selection, model and acceptance gates pass.
 
+<a id="spliceai2-preparation"></a>
+
+## SpliceAI2 GRCh38 preparation and manifest
+
+This route prepares an annotation-only view for the retained official SpliceAI
+VEP plugin. It preserves the native 84-column tables and emits top0 scores with
+adapter-derived gene context. It does not activate PriVA ACMG interpretation or
+replace CADD’s legacy masked-v1 features. GRCh37/hg19 keeps the original v1 route.
+
+```text
+Completed native score shards ────────────────┐
+Official scored regions + exact GENCODE48 ── verify ── Rust POS/strand join
+                                                     ↓
+                        BGZF VCF + tabix + preparation receipt
+                                                     ↓
+                          separate indexed-VEP / scientific activation gates
+```
+
+Run preparation inside a suitable Slurm allocation with the pinned `priva`
+executable and `gzip`, `bgzip`, `tabix` on PATH. The driver uses Python's standard
+library; installer config registration additionally uses the existing PyYAML
+runtime. It performs no download or model inference. The output location must be
+new: existing prepared outputs are not overwritten.
+
+```bash
+# Registration writes only namespaced spliceai2_* preparation metadata.
+bash scripts/install_utils.sh SpliceAI2_install \
+  /absolute/grch38-preparation.config.yaml \
+  /absolute/spliceai2.downloads-complete.json \
+  /absolute/new/SpliceAI2/GRCh38 \
+  /absolute/pinned/priva
+
+# Standalone preparation; does not edit a PriVA config.
+python scripts/spliceai2_to_vep_vcf.py \
+  --manifest /absolute/spliceai2.downloads-complete.json \
+  --assembly GRCh38 --priva-bin /absolute/pinned/priva \
+  --output-dir /absolute/new/SpliceAI2/GRCh38 \
+  --receipt /absolute/new/SpliceAI2/GRCh38/adapter.ready.json \
+  --threads 2
+```
+
+The separate preparation config can select:
+
+```yaml
+assembly: GRCh38
+spliceai_profile: v2
+spliceai2_manifest: /absolute/spliceai2.downloads-complete.json
+spliceai2_converter_bin: /absolute/pinned/priva
+```
+
+Do not change an active hg19 config for this operation. Fresh GRCh38 resolves to
+v2; existing generic GRCh38 SpliceAI paths require explicit `spliceai_profile`
+selection. Explicit `v1` preserves the reference route. Requesting v2 on hg19
+fails without fallback. After successful v2 preparation, the assembly-profile
+installer deliberately returns status **2**, stopping scientific activation.
+Calling `SpliceAI2_install` directly can succeed in preparation/registration;
+that success still does not qualify downstream analysis.
+
+The acquisition owner supplies a JSON manifest with these exact fields:
+
+| Field | Required type/value |
+| --- | --- |
+| `schema_version` | Integer `1` |
+| `resource`, `version`, `assembly` | Strings `SpliceAI2`, `2.0`, `GRCh38` |
+| `source_revision` | `cd1b8b82bcef9c97ac3b3b9a24f0de3a5bbf77f9` |
+| `status`, `confirmed_by` | `downloads_complete`; nonempty owner confirmation string |
+| `files` | Array of 47 unique shard objects; each has `kind` (`snv` or `indel`), `chrom`, absolute `path`, positive integer `bytes`, lowercase 64-hex `sha256` |
+| `scored_regions` | Object with absolute `path`, positive integer `bytes`, lowercase 64-hex `sha256` |
+| `gencode_gtf` | Same file identity object, plus `release: GENCODE48` |
+| `vep_spliceai_plugin` | Same file identity object, with pinned plugin SHA256 below |
+
+All 24 SNV chromosomes (`chr1`–`chr22`, `chrX`, `chrY`) and 23 indel chromosomes
+(the same set without `chrY`) are mandatory for full preparation. Source basenames
+are exactly `SpliceAI2_GRCh38_{snv,indel}_chr*.tsv.gz`. Partial names/targets,
+downloading inventories, missing/extra/duplicate shards and wrong hashes fail.
+The scored-region parser requires exactly
+`gene_id,chrom,gene_start,gene_end,strand` as tab-separated columns; real publisher
+schema/interval qualification remains a required acquisition-time check.
+
+For each region, exact GENCODE gene ID, contig, bounds, strand and protein-coding
+biotype must agree. No version stripping or symbol aliases are used. One global
+0-based-half-open or 1-based-closed source convention must explain every region;
+the resulting context is 1-based closed. Same-chromosome symbol-to-multiple-ID
+ambiguities fail, including nonoverlapping/opposite-strand cases; cross-chromosome
+symbols do not collide in the plugin lookup.
+
+Rust validates every native column and streams ascending positions. It attaches
+each source POS/model strand to all containing verified genes, emits symbols in
+lexical order, and preserves source POS/REF/ALT and selected numerical strings.
+The projected INFO contains only one `SpliceAI=ALT|SYMBOL|eight-values` entry per
+VCF line, ordered AG/AL/DG/DL scores then AG/AL/DG/DL distances. It does not apply
+masking, normalization, strand flipping, cutoffs or score recalculation. The
+native top3/junction/reference/alternate/summary fields remain in the originals.
+Ref/alt probabilities are checked in [0,1], directional deltas in [-1,1]; this
+retains the original signed top-k calculation and literal `-0.0` values.
+
+The pinned model takes sequence, strand and allele lengths, not gene identity.
+The attached gene label is derived context, not gene-conditioned inference; a
+predicted splice site may lie outside the containing gene. V2 metadata thresholds
+0.1/0.25/0.5 are not ACMG evidence strengths. Missing coverage is not zero and does
+not trigger a v1 fallback.
+
+Verified GTF acquisition: job **1514725** completed successfully. File
+`/stornext/snfs170/next-gen/scratch/yangyxt/caches/gene_annotations/gencode.v48.annotation.gtf.gz`
+is **58,971,717 bytes**, SHA256
+`37a298c2b57e41988cfe12667134106523c69c24a1807347679d19e88aa1f4a9`.
+Publisher MD5 `3eb94f7f200b42eb85d56b3afae5b0e7`, gzip integrity and release/header
+checks passed. Resource receipt:
+`yangyxt_dt/projects/PriVA_upgrade/deployment/spliceai2-gencode48.ready.json`.
+This does not establish scored-region agreement or complete cache conversion.
+Sources: [GENCODE v48](https://www.gencodegenes.org/human/release_48.html),
+[publisher MD5 inventory](https://ftp.ebi.ac.uk/pub/databases/gencode/Gencode_human/release_48/MD5SUMS).
+
+The installed official plugin is release113 commit
+`10054085053745b62ab20129f13cd02f06f7e183`, SHA256
+`500a534c403bcbcc15753718768f0a1f352cc6b93f9119e5eba25745f7205b9a`.
+The separately inspected SpliceAI2 source is commit
+`1dcd2a1882a8223095e7529982ae70bcb658340a`; it is not established as the code
+revision that produced the pinned dataset. Original and derived score resources
+retain [Illumina's terms](https://github.com/Illumina/SpliceAI2/blob/1dcd2a1882a8223095e7529982ae70bcb658340a/LICENSE),
+including redistribution/public-tool restrictions; this route does not publish
+resources or enable a public lookup service.
+
+Successful full preparation publishes
+`SpliceAI2_GRCh38.{snv,indel}.vep.vcf.gz{,.tbi}` and
+`SpliceAI2_GRCh38.gene_context.tsv`, followed by `adapter.ready.json` last.
+The receipt records source/driver/converter/tool identities, row counts, mapping
+convention, hashes and `status: prepared_annotation_only`,
+`coverage: complete_published`, `scientific_qualified: false`. The latter coverage
+means the published catalogue, not every possible indel or genome region.
+Registration verifies output/index hashes and writes only
+`spliceai2_{snv_prescore,indel_prescore,adapter_receipt,status,version,assembly}`;
+active generic SpliceAI paths and unrelated config values are preserved.
+
+For bounded fixtures only, the direct driver accepts `--validation-subset` with
+at least one SNV and one indel shard. It emits
+`status: validated_subset_annotation_only`, `coverage: validation_subset`;
+the full installer rejects this as an installation receipt. It is not a way to
+activate an incomplete cache. Converter/source/compression/index failures prevent
+a completion receipt; PID-only cancellation behavior is not qualified here.
+
+The [official-plugin harness](spliceai2-plugin-audit.md) passed 11 subtests / 38
+assertions using real plugin/Ensembl allele matching and synthetic candidates.
+Its tabix and light VEP objects are fixtures; no reference, real index or full VEP
+execution is exercised. Rust source `428ce4c` (integrated as `c432668`) passed
+30 projection plus 9 existing tests. The combined Slurm run passed **165 tests**
+with zero failures/skips in 85.702 seconds: 119 existing/route, 14 runtime guards,
+21 driver and 11 deployment tests. The driver suite uses real Rust, bgzip and
+tabix with synthetic scores/context/plugin identity, including full 47-shard
+concatenation and CRC/mutation failures. Log
+`yangyxt_dt/projects/PriVA_upgrade/logs/spliceai2-install-integration-20261015.log`
+records integration `ad9af5d` and exact driver/test content hashes; those
+uncommitted-file hashes, not a later checkout, identify the tested driver.
+Bash/YAML/diff checks also passed. No completed real 47-shard conversion,
+v2 ACMG/CADD activation or supplied-family parity is claimed.
+
+Nextflow activation guard: shared bin/priva_task.py validation rejects explicit v2 scientific configuration in the launch/task path, including preannotated import/resume, and rejects SpliceAI2-marked input headers. Namespaced prepared-resource metadata remains allowed. A separate adapter suite passed 20 tests (16 existing + 4 new) under Slurm, covering launch and all three task phases before output; this is separate from the 165 installer/deployment tests. Unmarked external preannotated artifacts still require pinned scientific-profile provenance: predictor version cannot be inferred from numeric scores.
+
 ## Frozen source and branch
 
 - Branch: `feature/nextflow-rust-migration`.
@@ -258,25 +416,23 @@ remaining gaps without equating file presence with scientific qualification.
 
 VEP/cache archives, CADD annotations/prescores and gnomAD inputs are separate
 Slurm jobs; completed shared-plugin and HPO/pext stages do not imply full readiness.
-The user has confirmed all four licensed SpliceAI v1 VCFs and indexes complete,
-with basic parser/index checks, under `yangyxt/caches/SpliceAI_v1/`. Import the
-current hg19 pair through the real `install_utils.sh` prompts after full integrity
-checks. Keep the acquired hg38 v1 originals without changing the GRCh38 upgrade
-profile. Both PrimateAI v0.2 originals are acquired and passed gzip/header checks
-under `yangyxt/caches/PrimateAI_v0_2/`. Their hg19 installer import remains pending:
-the original formatter can hide a child-sort failure and register a truncated,
-validly indexed file. The importer now reconstructs the expected uncompressed
-table with the original header/sort rules and checks every child exit and every
-output byte before receipt publication. All 14 validator and 30 import fixtures
-pass, including the demonstrated truncation. Actual full-cache import is queued
-as Slurm 1514620 after 1514615; successful original formatting logic and row order
-stay unchanged. Resource-specific imports and readiness
-checks keep this pending status independent from SpliceAI. Do not duplicate
-downloads, require CLI authentication for this acquisition, or use incomplete files.
-PrimateAI validated import, hg19 MaveDB policy, derived calibration caches and
-shared-VEP/CADD qualification remain explicit gates. Current scheduler
-status and exact completed test counts are maintained in the project README,
-not inferred from this implementation checkpoint.
+The original SpliceAI v1 and PrimateAI collections are acquired under
+`yangyxt/caches/{SpliceAI_v1,PrimateAI_v0_2}`. Hg19 SpliceAI import 1514615 and
+PrimateAI import 1514620 both completed with exit 0 and valid receipts. The latter
+retains the original formatter and exact external source-to-formatted validation,
+including every child exit and full decompressed output comparison. The earlier
+queued-import checkpoint is superseded; cancelled job 1514618 never ran. Original
+hg38 files stay retained and unselected. Main-config promotion is separately
+tracked and does not follow automatically from an import receipt.
+
+GENCODE48 is verified for the separate SpliceAI2 preparation route; the final
+scored-region TSV remains absent at the latest metadata check, and full v2
+conversion is pending. gnomAD derived job 1514601 failed extension validation for
+`.vcf.bgz`; its repair is separate. AlphaMissense 1514589 remains held for the
+original NM-to-ENST mapping. Hg19 MaveDB policy, derived calibration caches and
+shared-VEP/CADD qualification remain explicit gates. Do not duplicate the
+owner-managed acquisition or consume partial files. No scientific evidence has
+been silently excluded.
 
 The actual original `main_install` was reproduced in Slurm 1514592 with an
 isolated copied environment. VEP's update prompt exited zero on batch EOF,

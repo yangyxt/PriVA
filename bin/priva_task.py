@@ -123,6 +123,12 @@ def read_config(path):
         raise ContractError("Legacy config must be a YAML mapping")
     if config.get("assembly") not in ASSEMBLY:
         raise ContractError("Config assembly must be hg19/hg38/GRCh37/GRCh38")
+    # Annotated imports skip the annotation shell, so enforce the scientific
+    # activation boundary in this shared loader as well (including resume/tasks).
+    for key in ("spliceai_profile", "spliceai_resource_version", "spliceai_version"):
+        value = str(config.get(key, "")).strip().lower()
+        if value in {"v2", "2"} or value.startswith(("v2.", "2.")):
+            raise ContractError("SpliceAI2 is prepared for annotation inspection only; legacy PriVA ACMG/ClinVar criteria are not qualified for v2. Use the original v1 scientific profile.")
     return config
 
 
@@ -277,6 +283,8 @@ def verify_manifest(manifest, config_path, root, mode, vcf_hub_mode, cadd_hub_mo
 def vcf_samples(path):
     with gzip.open(path, "rt") as handle:
         for line in handle:
+            if line.startswith("##SpliceAI2") or line.rstrip("\r\n") == "##source=PriVA_SpliceAI2_projection":
+                raise ContractError("SpliceAI2-marked input is not qualified for legacy PriVA criteria")
             if line.startswith("#CHROM\t"):
                 fields = line.rstrip("\n").split("\t")
                 if len(fields) < 10 or fields[8] != "FORMAT":

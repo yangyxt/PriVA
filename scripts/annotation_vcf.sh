@@ -817,6 +817,201 @@ function prepare_vcf_add_varID {
 
 
 function anno_VEP_data() {
+    # This public runtime entry point always retains scientific qualification.
+    _priva_anno_VEP_data "$@"
+}
+
+
+function anno_VEP_cache_candidate() {
+    # Installation may prepare a cache before scientific qualification. Limit
+    # arguments to the owned input/config and execution size so its receipt
+    # describes every scientific setting actually passed to the shared VEP body.
+    local -a candidate_args=("$@")
+    local candidate_config= candidate_input=
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --config|--input_vcf|--threads)
+                [[ $# -ge 2 && -n "$2" ]] || { log "Missing value for candidate option $1"; return 1; }
+                [[ "$1" != --config ]] || candidate_config=$2
+                [[ "$1" != --input_vcf ]] || candidate_input=$2
+                shift 2 ;;
+            --help|-h)
+                printf '%s\n' 'Usage: bash annotation_vcf.sh anno_VEP_cache_candidate --config CONFIG --input_vcf MANAGED_VCF [--threads N]'
+                return 0 ;;
+            *) log "Unsupported ClinVar candidate option: $1"; return 1 ;;
+        esac
+    done
+    [[ -n "$candidate_config" && -n "$candidate_input" ]] || { log "Candidate preparation requires --config and --input_vcf"; return 1; }
+    _priva_anno_VEP_data "${candidate_args[@]}"
+}
+
+
+function anno_VEP_cache_worker() {
+    # User, 2026-10-23 CT: "You can specify the fork per chr, then multiple chr
+    # in parallel." The coordinator owns partitioning, candidate receipts,
+    # gathering and publication. This worker only produces one raw VEP output
+    # and its own stats; failed/partial outputs are retained for inspection.
+    local worker_config= worker_input= priva_worker_output= priva_worker_stats= worker_forks=
+    local -A seen=()
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --config|--input-vcf|--output-vcf|--stats-file|--forks)
+                [[ $# -ge 2 && -n "$2" && -z "${seen[$1]:-}" ]] || { log "Missing or repeated worker option: $1"; return 1; }
+                seen[$1]=1
+                case "$1" in
+                    --config) worker_config=$2 ;;
+                    --input-vcf) worker_input=$2 ;;
+                    --output-vcf) priva_worker_output=$2 ;;
+                    --stats-file) priva_worker_stats=$2 ;;
+                    --forks) worker_forks=$2 ;;
+                esac
+                shift 2 ;;
+            --help|-h)
+                printf '%s\n' 'Usage: bash annotation_vcf.sh anno_VEP_cache_worker --config CONFIG --input-vcf CHROM_VCF --output-vcf NEW_RAW_VCF --stats-file NEW_STATS --forks N'
+                return 0 ;;
+            *) log "Unsupported VEP worker option: $1"; return 1 ;;
+        esac
+    done
+    [[ -n "$worker_config" && -n "$worker_input" && -n "$priva_worker_output" && -n "$priva_worker_stats" && -n "$worker_forks" ]] || { log "VEP worker requires explicit config, input, output, stats and forks"; return 1; }
+    python - "$worker_config" "$worker_input" "$priva_worker_output" "$priva_worker_stats" "$worker_forks" "${SLURM_CPUS_PER_TASK-unset}" <<'PY_VALIDATE' || return 1
+import os
+from pathlib import Path
+import re
+import stat
+import sys
+
+config, source, output, stats = map(Path, sys.argv[1:5])
+forks, cpus = sys.argv[5:7]
+if not re.fullmatch(r"[1-9][0-9]*", forks):
+    raise SystemExit("VEP worker forks must be a positive integer")
+# Official VEP116.3 Runner.pm dd158c1e... uses active_forks <= fork_number
+# at lines495/501: at most forks+1 children plus the parent need forks+2 CPUs.
+if cpus != "unset":
+    if not re.fullmatch(r"[1-9][0-9]*", cpus) or int(forks) + 2 > int(cpus):
+        raise SystemExit("VEP worker requires forks + one additional child + parent CPU within SLURM_CPUS_PER_TASK")
+if any(not path.is_absolute() for path in (config, source, output, stats)):
+    raise SystemExit("VEP worker paths must be absolute")
+for path in (config, source):
+    if not stat.S_ISREG(path.lstat().st_mode) or not os.access(path, os.R_OK):
+        raise SystemExit("VEP worker requires a readable regular input/config: " + str(path))
+if output.suffix != ".vcf" or output == stats:
+    raise SystemExit("VEP worker needs a plain .vcf output and a distinct stats path")
+for path in (output, stats):
+    parent = path.parent
+    if (path != Path(os.path.normpath(path)) or parent.resolve(strict=True) != parent
+            or not parent.is_dir() or parent.stat().st_uid != os.getuid()):
+        raise SystemExit("VEP worker output parents must be existing owned directories without symlink aliases")
+    if os.path.lexists(path):
+        raise SystemExit("VEP worker output/stats must be fresh: " + str(path))
+PY_VALIDATE
+    # Keep the worker's execution settings local. The shared body derives its
+    # purpose from this direct caller, never from an environment override.
+    _priva_anno_VEP_data --config "$worker_config" --input_vcf "$worker_input" --threads "$worker_forks"
+}
+
+
+function anno_VEP_cache_candidate_phase() {
+    # Whole-candidate lifecycle only: chromosome inputs are not selected managed
+    # ClinVar VCFs. Execution settings belong in the coordinator's own receipt.
+    local phase= phase_config= phase_input=
+    local -A seen=()
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --config|--input-vcf|--phase)
+                [[ $# -ge 2 && -n "$2" && -z "${seen[$1]:-}" ]] || { log "Missing or repeated candidate phase option: $1"; return 1; }
+                seen[$1]=1
+                case "$1" in
+                    --config) phase_config=$2 ;;
+                    --input-vcf) phase_input=$2 ;;
+                    --phase) phase=$2 ;;
+                esac
+                shift 2 ;;
+            --help|-h)
+                printf '%s\n' 'Usage: bash annotation_vcf.sh anno_VEP_cache_candidate_phase --config CONFIG --input-vcf MANAGED_VCF --phase begin|complete'
+                return 0 ;;
+            *) log "Unsupported candidate phase option: $1"; return 1 ;;
+        esac
+    done
+    [[ -n "$phase_config" && -n "$phase_input" && ( "$phase" == begin || "$phase" == complete ) ]] || { log "Candidate phase requires explicit config, managed input and begin|complete"; return 1; }
+    python "${SCRIPT_DIR}/clinvar_gene_refresh.py" "candidate-${phase}" \
+        --config "$phase_config" --source-root "$BASE_DIR" --input-vcf "$phase_input"
+}
+
+
+function _priva_run_VEP_command() {
+    # Resolved scientific/plugin variables remain in the shared caller's local
+    # scope. Only input/output/stats and fork execution settings vary by worker.
+    local input_vcf= output_vcf= stats_file= threads=
+    while [[ $# -gt 0 ]]; do
+        [[ $# -ge 2 && -n "$2" ]] || return 1
+        case "$1" in
+            --input-vcf) input_vcf=$2 ;;
+            --output-vcf) output_vcf=$2 ;;
+            --stats-file) stats_file=$2 ;;
+            --forks) threads=$2 ;;
+            *) return 1 ;;
+        esac
+        shift 2
+    done
+    [[ -n "$input_vcf" && -n "$output_vcf" && -n "$stats_file" && -n "$threads" ]] || return 1
+
+    log "Running VEP annotation with the command below:"
+    log "vep -i ${input_vcf} --format vcf --verbose --vcf --species homo_sapiens --use_transcript_ref --assembly ${assembly} --cache --offline --merged --domains --hgvs --numbers --symbol --canonical --total_length --variant_class --gene_phenotype --stats_file ${stats_file} --fork ${threads} --buffer_size 10000 --fasta ${ref_genome} --dir_cache ${vep_cache_dir} --dir_plugins '${vep_plugins_dir} ${loftee_repo}' -plugin UTRAnnotator,file=${utr_annotator_file} -plugin LOEUF,file=${loeuf_prescore},match_by=transcript -plugin AlphaMissense,file=${alphamissense_prescore} -plugin LoF,loftee_path:${loftee_repo},human_ancestor_fa:${human_ancestor_fasta}${loftee_conservation_argument}${loftee_gerp_bw_argument} -plugin SpliceAI,snv=${spliceai_snv_prescore},indel=${spliceai_indel_prescore},cutoff=0.5 -plugin PrimateAI,${primateai_prescore} -plugin SpliceVault,file=${splicevault_prescore} -plugin Conservation,${conservation_file},MAX -plugin NMD ${mavedb_argument} ${pext_arguments} --force_overwrite -o ${output_vcf}"
+    if [[ -n $cadd_profile ]]; then
+        local cadd_logged_options
+        printf -v cadd_logged_options '%q ' "${cadd_vep_environment[@]}" vep "${cadd_vep_args[@]}"
+        log "Qualified CADD profile ${cadd_profile}; additional plugin directory:${cadd_plugin_dir}; exact added invocation settings: ${cadd_logged_options}"
+    fi
+
+    # Run VEP annotation
+    "${cadd_vep_environment[@]}" vep -i "${input_vcf}" \
+    --format vcf \
+    --verbose \
+    --vcf \
+    --species homo_sapiens \
+    --use_transcript_ref \
+    --assembly ${assembly} \
+    --cache \
+    --offline \
+    --merged \
+    --domains \
+    --hgvs \
+    --numbers \
+    --symbol \
+    --canonical \
+    --total_length \
+    --variant_class \
+    --gene_phenotype \
+    --stats_file "${stats_file}" \
+    --fork "${threads}" \
+    --buffer_size 10000 \
+    --fasta ${ref_genome} \
+    --dir_cache ${vep_cache_dir} \
+    --dir_plugins "${vep_plugins_dir} ${loftee_repo}${cadd_plugin_dir}" \
+    -plugin UTRAnnotator,file=${utr_annotator_file} \
+    -plugin LOEUF,file=${loeuf_prescore},match_by=transcript \
+    -plugin AlphaMissense,file=${alphamissense_prescore} \
+    -plugin LoF,loftee_path:${loftee_repo},human_ancestor_fa:${human_ancestor_fasta}${loftee_conservation_argument}${loftee_gerp_bw_argument} \
+    -plugin SpliceAI,snv=${spliceai_snv_prescore},indel=${spliceai_indel_prescore},cutoff=0.5 \
+    -plugin PrimateAI,${primateai_prescore} \
+    -plugin SpliceVault,file=${splicevault_prescore} \
+    -plugin Conservation,${conservation_file},MAX \
+    -plugin NMD ${mavedb_argument} \
+    ${pext_arguments} \
+    "${cadd_vep_args[@]}" \
+    --force_overwrite \
+    -o "${output_vcf}"
+}
+
+
+function _priva_anno_VEP_data() {
+    # Private shared command body. Direct calls retain the runtime guard.
+    local priva_vep_purpose=runtime
+    case "${FUNCNAME[1]:-}" in
+        anno_VEP_cache_candidate) priva_vep_purpose=cache_candidate ;;
+        anno_VEP_cache_worker) priva_vep_purpose=cache_worker ;;
+    esac
+    local cadd_profile=""
     # Declare local variables first
     local input_vcf \
           config \
@@ -891,7 +1086,12 @@ function anno_VEP_data() {
     local pext_tissue_bw_dir="${pext_tissue_bw_dir:-${config_args[pext_tissue_bw_dir]}}"
     local pext_tissues="${pext_tissues:-${config_args[pext_tissues]}}"
 
-    priva_require_legacy_spliceai "${config_file}" "${spliceai_snv_prescore}" "${spliceai_indel_prescore}" || return 1
+    if [[ "$priva_vep_purpose" == cache_candidate ]]; then
+        python "${SCRIPT_DIR}/clinvar_gene_refresh.py" candidate-begin \
+            --config "$config_file" --source-root "$BASE_DIR" --input-vcf "$input_vcf" || return 1
+    elif [[ "$priva_vep_purpose" == runtime ]]; then
+        priva_require_legacy_spliceai "${config_file}" "${spliceai_snv_prescore}" "${spliceai_indel_prescore}" || return 1
+    fi
 
     # Validate inputs
     local has_error=0
@@ -984,58 +1184,62 @@ function anno_VEP_data() {
     # - NMD, from VEP plugin NMD
     # - am_pathogenicity & am_class, from VEP plugin AlphaMissense
     # - SpliceAI_pred_DS_AG, SpliceAI_pred_DS_AL, SpliceAI_pred_DS_DG, SpliceAI_pred_DS_DL, SpliceAI_pred_DP_AG, SpliceAI_pred_DP_AL, SpliceAI_pred_DP_DG, SpliceAI_pred_DP_DL, from VEP plugin SpliceAI
-    check_vcf_infotags ${input_vcf} "CSQ" && \
-    [[ ${input_vcf} -nt ${SELF_SCRIPT} ]] && \
-    log "The input vcf ${input_vcf} is already annotated by VEP. Skip this step" && \
-    return 0
+    if [[ "$priva_vep_purpose" == runtime ]] && check_vcf_infotags "$input_vcf" CSQ; then
+        if [[ -n $cadd_profile ]]; then
+            # Old CSQs cannot acquire native ordinals after the fact. Reuse a
+            # complete qualified source or fail; never launch a second VEP.
+            python "${SCRIPT_DIR}/cadd_shared_workflow.py" verify-source --config "$config_file" \
+                --profile "$cadd_profile" --input "$input_vcf" || return 1
+            return 0
+        fi
+        if [[ ${input_vcf} -nt ${SELF_SCRIPT} ]]; then
+            log "The input vcf ${input_vcf} is already annotated by VEP. Skip this step"
+            return 0
+        fi
+    fi
 
-    local tmp_tag=$(randomID)
-    local output_vcf=${input_vcf/.vcf*/.${tmp_tag}.vcf}
+    local -a cadd_vep_args=() cadd_vep_environment=()
+    local cadd_plugin_dir="" cadd_settings
+    if [[ -n $cadd_profile ]]; then
+        [[ "$priva_vep_purpose" == runtime ]] || { log "CADD activation is not an installer-cache operation"; return 1; }
+        cadd_settings=$(python "${SCRIPT_DIR}/cadd_shared_workflow.py" vep-options \
+            --config "$config_file" --profile "$cadd_profile") || return 1
+        local -a cadd_values
+        mapfile -t cadd_values <<< "$cadd_settings"
+        [[ ${#cadd_values[@]} -eq 4 ]] || return 1
+        cadd_plugin_dir=" ${cadd_values[0]}"
+        cadd_vep_args=(--regulatory --sift b --polyphen b --ccds --cache_version "${cadd_values[2]}"
+            --plugin "CaddSelection,cadd_transcript_sources=${cadd_values[1]}")
+        cadd_vep_environment=(env "PERL_HASH_SEED=${cadd_values[3]}" PERL_PERTURB_KEYS=0)
+    fi
 
-    log "Running VEP annotation with the command below:"
-    log "vep -i ${input_vcf} --format vcf --verbose --vcf --species homo_sapiens --use_transcript_ref --assembly ${assembly} --cache --offline --merged --domains --hgvs --numbers --symbol --canonical --total_length --variant_class --gene_phenotype --stats_file ${input_vcf/.vcf*/.vep.stats.html} --fork ${threads} --buffer_size 10000 --fasta ${ref_genome} --dir_cache ${vep_cache_dir} --dir_plugins ${vep_plugins_dir} -plugin UTRAnnotator,file=${utr_annotator_file} -plugin LOEUF,file=${loeuf_prescore},match_by=transcript -plugin AlphaMissense,file=${alphamissense_prescore} -plugin LoF,loftee_path:${loftee_repo},human_ancestor_fa:${human_ancestor_fasta}${loftee_conservation_argument}${loftee_gerp_bw_argument} -plugin SpliceAI,snv=${spliceai_snv_prescore},indel=${spliceai_indel_prescore},cutoff=0.5 -plugin PrimateAI,${primateai_prescore} -plugin SpliceVault,file=${splicevault_prescore} -plugin Conservation,${conservation_file},MAX -plugin NMD ${mavedb_argument} ${pext_arguments} --force_overwrite -o ${output_vcf}"
+    local output_vcf stats_file
+    if [[ "$priva_vep_purpose" == cache_worker ]]; then
+        output_vcf=$priva_worker_output
+        stats_file=$priva_worker_stats
+    else
+        local tmp_tag=$(randomID)
+        output_vcf=${input_vcf/.vcf*/.${tmp_tag}.vcf}
+        stats_file=${input_vcf/.vcf*/.vep.stats.html}
+    fi
+    _priva_run_VEP_command --input-vcf "$input_vcf" --output-vcf "$output_vcf" \
+        --stats-file "$stats_file" --forks "$threads" || return $?
+    [[ "$priva_vep_purpose" != cache_worker ]] || return 0
 
-    # Run VEP annotation
-    vep -i ${input_vcf} \
-    --format vcf \
-    --verbose \
-    --vcf \
-    --species homo_sapiens \
-    --use_transcript_ref \
-    --assembly ${assembly} \
-    --cache \
-    --offline \
-    --merged \
-    --domains \
-    --hgvs \
-    --numbers \
-    --symbol \
-    --canonical \
-    --total_length \
-    --variant_class \
-    --gene_phenotype \
-    --stats_file ${input_vcf/.vcf*/.vep.stats.html} \
-    --fork ${threads} \
-    --buffer_size 10000 \
-    --fasta ${ref_genome} \
-    --dir_cache ${vep_cache_dir} \
-    --dir_plugins ${vep_plugins_dir},${loftee_repo} \
-    -plugin UTRAnnotator,file=${utr_annotator_file} \
-    -plugin LOEUF,file=${loeuf_prescore},match_by=transcript \
-    -plugin AlphaMissense,file=${alphamissense_prescore} \
-    -plugin LoF,loftee_path:${loftee_repo},human_ancestor_fa:${human_ancestor_fasta}${loftee_conservation_argument}${loftee_gerp_bw_argument} \
-    -plugin SpliceAI,snv=${spliceai_snv_prescore},indel=${spliceai_indel_prescore},cutoff=0.5 \
-    -plugin PrimateAI,${primateai_prescore} \
-    -plugin SpliceVault,file=${splicevault_prescore} \
-    -plugin Conservation,${conservation_file},MAX \
-    -plugin NMD ${mavedb_argument} \
-    ${pext_arguments} \
-    --force_overwrite \
-    -o ${output_vcf} && \
     bcftools sort -Oz -o ${input_vcf/.vcf*/.vcf.gz} ${output_vcf} && \
     tabix -f -p vcf ${input_vcf/.vcf*/.vcf.gz} && \
     announce_remove_tmps ${output_vcf} && \
-    display_vcf ${input_vcf/.vcf*/.vcf.gz}
+    display_vcf ${input_vcf/.vcf*/.vcf.gz} || return $?
+
+    if [[ -n $cadd_profile ]]; then
+        python "${SCRIPT_DIR}/cadd_shared_workflow.py" verify-source --config "$config_file" \
+            --profile "$cadd_profile" --input "${input_vcf/.vcf*/.vcf.gz}" || return 1
+    fi
+
+    if [[ "$priva_vep_purpose" == cache_candidate ]]; then
+        python "${SCRIPT_DIR}/clinvar_gene_refresh.py" candidate-complete \
+            --config "$config_file" --source-root "$BASE_DIR" --input-vcf "$input_vcf" || return 1
+    fi
 }
 
 

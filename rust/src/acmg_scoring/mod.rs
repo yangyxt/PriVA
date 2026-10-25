@@ -7,6 +7,8 @@ pub mod calculate_posterior_probability;
 pub mod create_criteria_summary;
 pub mod fix_clingen_term;
 pub(crate) mod score_table;
+pub mod terminal_order;
+pub(crate) mod terminal_order_transport;
 pub mod translate_strength_level;
 
 pub const CRITERIA_ORDER: [&str; 28] = [

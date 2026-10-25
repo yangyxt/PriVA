@@ -208,3 +208,84 @@ scientific Python, installer or production backend changed in this task.
 
 ---
 
+**R8 procedure addendum — 24 October 2026 CT**
+
+The opt-in `priva terminal-order` procedure extends the terminal boundary only.
+Its input is the actual frame after R7, with all earlier scores already computed.
+The existing `final-order` command retains its original interface and body.
+
+```mermaid
+flowchart LR
+    P[Unchanged Python C1–R7] --> E[Actual R8-entry frame]
+    E --> T[Opt-in Rust terminal-order]
+    T --> O[Permutation, maxima, ranks and column plan]
+    E --> B[Original payload and opaque axes]
+    O --> G[Gather original buffers in that order]
+    B --> G
+```
+
+The procedure returns source-row positions rather than reconstructing pandas
+payloads. Its generic index tokens and opaque axis descriptor survive unchanged;
+duplicate/gapped labels and MultiIndex labels never become join keys. The test
+adapter gathers the original frame, overwrites/appends `variant_rank` at the
+source position and removes `max_variant_score`, then compares complete ordered
+columns/index/dtypes/null masks/float bits/attrs with the actual Python output.
+The original R8 excerpt's temporary-column mutation is retained separately.
+
+| Boundary | Declared supported domain and behavior |
+| --- | --- |
+| Scores | `sort_index`: NumPy `float64`, `int64`, `uint64`, or nullable `Float64`, `Int64`, `UInt64`. Reduction retains native integers. Only source-observed NumPy integer transform promotion for excluded coordinate groups converts maxima to float64; nullable integer masks retain their native dtype. Raw ACMG scores retain their declared primitive dtype for the second sort key. |
+| Coordinate keys | Homogeneous text (`object`/`string`), 64-bit signed/unsigned/float primitives, their listed nullable forms, or NumPy bool. Missing keys exclude the group maximum; every source row remains. Object text keys support None and float NaN, with `Cell::Null` meaning None; object-coordinate `pd.NA` requires Python. Unmasked nullable-float NaN and inconsistent dtype/cell pairs fail closed. |
+| Variant IDs | Optional; primitive text/numeric/bool columns with source missingness and first-appearance ranking. Missing IDs rank zero and consume no rank. Repeated IDs can span coordinates. Absent IDs preserve exact colon-join collisions for text/integer/bool coordinates. Floating-coordinate equality preserves signed zero/NaN spelling; floating coordinates combined with colon-bearing text explicitly defer to Python. |
+| Order and columns | Maximum score↓, raw ACMG score↓, chrom↑, pos↑, ref↑, alt↑; fully tied rows retain source order. Maxima skip NaNs, all-missing groups remain missing, and the first tied zero retains its sign. Overwritten columns keep their positions, a new rank appends, and the temporary maximum is removed. |
+| Fallback | Mixed arbitrary objects, duplicate/nonstring column labels, categorical/Arrow/time/complex/float32 and other undeclared key/score dtypes require unchanged Python. A deferral is never counted as an exact Rust match. Payload buffers remain caller owned; this is an opt-in primitive transport and permutation contract. |
+
+The first R8 oracle contains 91 cases: 85 successful full-ranker checkpoint/final
+pairs (including additional unchanged full-ranker cases) and six original R8-only
+missing-column failures. Its source and package identities come from the closed
+full-ranking oracle above. A separate 15-case integer supplement retains the
+actual nullable-Int64 full-ranker checkpoint and executes the original R8
+statements on signed/unsigned 64-bit limits, neighbors above 2^53, excluded
+coordinate groups, all-missing nullable groups and empty frames. These extra
+isolated R8 inputs do not establish that preceding scoring stages produce them.
+
+`rust/source_functions.tsv` now also records the already implemented
+`_variant_mechanism_masks` function's verified SHA256
+`687cd5b4932fb29b07726133fe9c4fa1c6f70fa884655019eecd05a713fbb86b`
+(full function L343–591, file `c7e8da80…`). Its existing 27-mask primitive contract
+is unchanged. The R8 row records the full ranker function hash `8aa29d9a…` while
+explicitly limiting its source statements to L668–697. Neither row activates
+ranking integration, Python/family dispatch or a production backend.
+
+Final comparison closure 1514363.3253 completed 0:0 at 8:25:25 PM CDT. Primary
+R8 results are **84 exact outputs, six original failures, one deliberate Python
+fallback** (mixed object chromosome keys). The integer supplement has **15 exact
+outputs, zero failures and zero fallbacks**; it includes a repeat of the actual
+Int64 full-ranker checkpoint. No deferred case is counted as a Rust match.
+
+All 97 Rust tests (including 13 R8 tests), 5,786 PEXT scalar results/18 source
+errors, condition/mechanism comparisons, 19,754 scoring rows/16 failure cases and
+the existing 60 `final-order` fixtures/five rejections passed. The compiled
+binary is SHA256
+`89906494b5918727d7a980383efd25105352d898e909c8cc1418a535e80cb68d`.
+Compilation/Rust tests used source manifest
+`7087433f95b682302277a59c4d9b816f856591dc5bff763453f898794249077f`;
+the final comparator/closure harness manifest is
+`39fc412a2d1a2f2dfa8b9a0ec8daef2224f6afacb47acc294b7c6c20da835ac5`.
+The harness verifies unchanged Rust/scientific source before reusing that binary.
+
+Failed 1524435 (unsupported integer checkpoint) and 1524441 (empty RangeIndex
+expanded by the test adapter), the narrower successful 1524440, and all earlier
+extractor attempts remain separate. The empty-frame adapter now retains the
+actual source axis; no Rust numeric change was needed for that correction.
+Whole job 1524441 remains FAILED even though its compilation/Rust tests passed.
+Final evidence is under
+`/stornext/snfs170/next-gen/scratch/yangyxt_dt/projects/PriVA_upgrade/validation/rust-terminal-order-20261024-v{1,2,3,4,5,6}`,
+with logs in the corresponding data-side `logs/rust-terminal-order-*` pattern;
+build/Cargo caches are separate under the data-side `build/rust-terminal-order-*`.
+These later optional sources are distinct from main installation 1524420's
+6:39 PM CT snapshot. Full C1–R7 Rust integration, installation/family/public
+scientific acceptance and production activation remain outside this work.
+
+---
+

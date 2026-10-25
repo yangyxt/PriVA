@@ -234,6 +234,9 @@ pub(crate) fn run() -> Result<()> {
     if args.get(1).map(String::as_str) == Some("coerce-pext") {
         return crate::acmg_consequence::transport::dispatch(&args[2..]);
     }
+    if args.get(1).map(String::as_str) == Some("terminal-order") {
+        return crate::acmg_scoring::terminal_order_transport::dispatch(&args[2..]);
+    }
     if args.get(1).map(String::as_str) == Some("mechanism-masks") {
         return crate::acmg_variant_mechanism::transport::dispatch(&args[2..]);
     }

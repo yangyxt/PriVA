@@ -2891,6 +2891,46 @@ function AlphaMissense_anno_gnomAD() {
 }
 
 
+function validate_cds_fasta() {
+    # Read the same plain/gzip format as AlternativeStartCodonDetector without
+    # creating its runtime pickle or changing any sequence interpretation.
+    python - "$1" "$2" <<'PRIVA_CDS_VALIDATE_PY'
+import gzip
+from pathlib import Path
+import re
+import sys
+
+path = Path(sys.argv[1])
+assembly = {"hg19": "GRCh37", "GRCh37": "GRCh37", "hg38": "GRCh38", "GRCh38": "GRCh38"}[sys.argv[2]]
+opener = gzip.open if str(path).endswith(".gz") else open
+records = 0
+has_sequence = False
+with opener(path, "rt", encoding="utf-8") as handle:
+    for line in handle:
+        line = line.strip()
+        if not line:
+            continue
+        if line.startswith(">"):
+            if records and not has_sequence:
+                raise ValueError(f"CDS FASTA contains an empty sequence: {path}")
+            if not line[1:].strip():
+                raise ValueError(f"CDS FASTA contains an empty header: {path}")
+            declared = set(re.findall(r"\bGRCh(?:37|38)\b", line))
+            if declared and declared != {assembly}:
+                raise ValueError(f"CDS FASTA header conflicts with {assembly}: {path}")
+            records += 1
+            has_sequence = False
+        else:
+            if not records:
+                raise ValueError(f"Not a CDS FASTA: {path}")
+            has_sequence = True
+if not records or not has_sequence:
+    raise ValueError(f"CDS FASTA has no complete sequence: {path}")
+print(f"Validated CDS FASTA structure: {path}; records={records}")
+PRIVA_CDS_VALIDATE_PY
+}
+
+
 function CDS_FASTA_install() {
     # Download Ensembl CDS FASTA file for alternative start codon detection
     # Per ClinGen SVI guidelines (PMC6185798), for start_lost variants we need to check
@@ -2899,55 +2939,68 @@ function CDS_FASTA_install() {
     local assembly=$(read_yaml "${config_file}" "assembly")
     local vep_plugins_cachedir=$(read_yaml "${config_file}" "vep_plugins_cachedir")
     
-    local cds_fasta_dir="${vep_plugins_cachedir}/Ensembl_CDS"
-    mkdir -p "${cds_fasta_dir}"
+    local release
+    release=$(read_yaml "$config_file" vep_installed_version)
+    [[ "$release" =~ ^[1-9][0-9]*$ ]] || {
+        log "ERROR: CDS installation requires numeric vep_installed_version."
+        return 1
+    }
+    local cds_fasta_dir="${vep_plugins_cachedir}/Ensembl_CDS/release-${release}"
     
     local cds_fasta_file
     local cds_fasta_url
     
-    # Set URLs based on assembly version
-    # Using "current" URLs that automatically point to the latest Ensembl release
-    # Note: Using HTTPS instead of FTP for better reliability
+    # Pin new downloads to the selected VEP release. A moving current_fasta URL
+    # can otherwise silently change transcript sequences on a later installation.
+    # GRCh37 keeps its upstream annotation-base75 lineage within that release.
     if [[ ${assembly} == "GRCh38" ]] || [[ ${assembly} == "hg38" ]]; then
-        # GRCh38 uses current_fasta directory (always latest release)
-        cds_fasta_url="https://ftp.ensembl.org/pub/current_fasta/homo_sapiens/cds/Homo_sapiens.GRCh38.cds.all.fa.gz"
+        cds_fasta_url="https://ftp.ensembl.org/pub/release-${release}/fasta/homo_sapiens/cds/Homo_sapiens.GRCh38.cds.all.fa.gz"
         cds_fasta_file="${cds_fasta_dir}/Homo_sapiens.GRCh38.cds.all.fa.gz"
     elif [[ ${assembly} == "GRCh37" ]] || [[ ${assembly} == "hg19" ]]; then
-        # GRCh37 uses grch37/current directory (frozen annotations at release-75, but current structure)
-        cds_fasta_url="https://ftp.ensembl.org/pub/grch37/current/fasta/homo_sapiens/cds/Homo_sapiens.GRCh37.cds.all.fa.gz"
+        cds_fasta_url="https://ftp.ensembl.org/pub/grch37/release-${release}/fasta/homo_sapiens/cds/Homo_sapiens.GRCh37.cds.all.fa.gz"
         cds_fasta_file="${cds_fasta_dir}/Homo_sapiens.GRCh37.cds.all.fa.gz"
     else
         log "Unsupported assembly version: ${assembly}. Only GRCh37/hg19 and GRCh38/hg38 are supported."
         return 1
     fi
     
-    # Check if file already exists and is valid
-    if [[ -f "${cds_fasta_file}" ]] && [[ -s "${cds_fasta_file}" ]]; then
-        # Verify it's a valid gzipped file
-        if gzip -t "${cds_fasta_file}" 2>/dev/null; then
-            log "CDS FASTA file already exists and is valid: ${cds_fasta_file}"
-            update_yaml "${config_file}" "cds_fasta_file" "${cds_fasta_file}"
+    local configured_cds
+    configured_cds=$(read_yaml "${config_file}" "cds_fasta_file")
+    if [[ -n "$configured_cds" && "$configured_cds" != null ]]; then
+        if [[ -e "$configured_cds" || -L "$configured_cds" ]]; then
+            validate_cds_fasta "$configured_cds" "$assembly" || return 1
+            log "Reusing validated configured CDS FASTA without changing its path: $configured_cds"
             return 0
-        else
-            log "Existing CDS FASTA file is corrupted, re-downloading..."
-            rm -f "${cds_fasta_file}"
         fi
+        [[ "$(realpath -m "$configured_cds")" == "$(realpath -m "$cds_fasta_file")" ]] || \
+            { log "ERROR: Missing explicit CDS FASTA: $configured_cds; restore that selected input"; return 1; }
     fi
+
+    if [[ -e "${cds_fasta_file}" || -L "${cds_fasta_file}" ]]; then
+        validate_cds_fasta "$cds_fasta_file" "$assembly" || \
+            { log "ERROR: Invalid managed CDS FASTA retained: $cds_fasta_file; recover it explicitly"; return 1; }
+        update_or_append_yaml "${config_file}" "cds_fasta_file" "${cds_fasta_file}" || return 1
+        log "CDS FASTA file already exists and is valid: ${cds_fasta_file}"
+        return 0
+    fi
+    mkdir -p "${cds_fasta_dir}" || return 1
     
     # Download the file
     log "Downloading Ensembl CDS FASTA for ${assembly} from: ${cds_fasta_url}"
     log "This file is ~50MB and will be used for alternative start codon detection in start_lost variants"
     
-    wget -c "${cds_fasta_url}" -O "${cds_fasta_file}" || {
+    [[ ! -L "${cds_fasta_file}.partial.gz" ]] || { log "ERROR: Refusing symlinked CDS staging file"; return 1; }
+    wget -c "${cds_fasta_url}" -O "${cds_fasta_file}.partial.gz" || {
         log "Failed to download CDS FASTA file from ${cds_fasta_url}"
-        log "You can manually download it and place it at: ${cds_fasta_file}"
+        log "Failed bytes retained at ${cds_fasta_file}.partial.gz"
         return 1
     }
     
     # Verify download
-    if gzip -t "${cds_fasta_file}" 2>/dev/null; then
+    if validate_cds_fasta "${cds_fasta_file}.partial.gz" "$assembly"; then
+        mv -- "${cds_fasta_file}.partial.gz" "${cds_fasta_file}" || return 1
         log "CDS FASTA file downloaded and verified: ${cds_fasta_file}"
-        update_yaml "${config_file}" "cds_fasta_file" "${cds_fasta_file}"
+        update_or_append_yaml "${config_file}" "cds_fasta_file" "${cds_fasta_file}" || return 1
         
         # Pre-generate cache by running the Python script
         log "Pre-generating CDS sequence cache (this may take a minute)..."
@@ -2958,10 +3011,42 @@ function CDS_FASTA_install() {
         
         return 0
     else
-        log "Downloaded file is corrupted: ${cds_fasta_file}"
-        rm -f "${cds_fasta_file}"
+        log "ERROR: Invalid downloaded CDS FASTA retained at ${cds_fasta_file}.partial.gz; recover it explicitly"
         return 1
     fi
+}
+
+
+function priva_clingen_download() {
+    local url="" output="" kind=""
+    while [[ $# -gt 0 ]]; do
+        case $1 in
+            --url|--output|--kind)
+                [[ $# -ge 2 ]] || return 2
+                case $1 in --url) url=$2 ;; --output) output=$2 ;; --kind) kind=$2 ;; esac
+                shift 2 ;;
+            *) log "ERROR: Use priva_clingen_download --url URL --output FILE --kind KIND"; return 2 ;;
+        esac
+    done
+    [[ -n $url && -n $output && -n $kind && ! -d $output ]] || return 2
+    mkdir -p -- "$(dirname -- "$output")" || return 1
+    local staged
+    staged=$(mktemp "${output}.download.XXXXXX") || return 1
+    # A fresh sibling is never resumed into canonical/user-selected bytes.
+    wget -c "$url" -O "$staged" || {
+        log "Failed to download ClinGen source; prior file unchanged, retained stage: $staged"
+        return 1
+    }
+    [[ -s $staged ]] || { log "The downloaded ClinGen resource is missing or empty; retained stage: $staged"; return 1; }
+    python "${SCRIPT_DIR}/mechanism_source_input.py" validate --input "$staged" --kind "$kind" || {
+        log "Invalid downloaded ClinGen source; prior file unchanged, retained stage: $staged"
+        return 1
+    }
+    python "${SCRIPT_DIR}/mechanism_source_input.py" record-source --input "$staged" --url "$url" || return 1
+    [[ ! -L ${output}.source.pending.json && ! -d ${output}.source.pending.json ]] || return 1
+    mv -T -- "${staged}.source.json" "${output}.source.pending.json" &&
+    mv -T -- "$staged" "$output" &&
+    mv -T -- "${output}.source.pending.json" "${output}.source.json"
 }
 
 
@@ -2969,39 +3054,121 @@ function ClinGen_deploy() {
     local config_file=${1}
     local assembly=$(read_yaml "${config_file}" "assembly")
     local clinvar_vcf=$(read_yaml "${config_file}" "clinvar_vcf")
+    local bundle_assembly
+    bundle_assembly=$(priva_bundle_assembly "$assembly") || return 1
 
     # if the local file is at least 1 month old, then download the latest version, otherwise use the local file
     local clingen_url="https://erepo.clinicalgenome.org/evrepo/api/summary/classifications/download"
     local clingen_dir=${DATA_DIR}/clingen
-    if [[ ! -f ${clingen_dir}/clingen_erepo.tsv ]] || [[ ! $(find ${clingen_dir}/clingen_erepo.tsv -mtime -30) ]]; then
+    local configured_map configured_dosage clingen_map dosage_file
+    configured_map=$(read_yaml "$config_file" clingen_map)
+    configured_dosage=$(read_yaml "$config_file" gene_dosage_sensitivity)
+    clingen_map=${clingen_dir}/clingen_map.${bundle_assembly}.pkl.gz
+    dosage_file=${clingen_dir}/gene_dosage_sensitivity.${bundle_assembly}.tsv
+    if [[ "$configured_map" == /* ]]; then
+        clingen_map=$configured_map
+        clingen_dir=$(dirname "$clingen_map")
+    fi
+    [[ "$configured_dosage" != /* ]] || dosage_file=$configured_dosage
+    local reuse_map=0 reuse_dosage=0
+    local -a bundled_force=()
+    [[ ${PRIVA_FORCE_ALL_CACHES:-0} != 1 ]] || bundled_force+=(--force)
+    if priva_bundled_cache_reuse --key clingen_map --assembly "$bundle_assembly" --path "$clingen_map" "${bundled_force[@]}"; then
+        reuse_map=1
+        [[ "$configured_map" == "$clingen_map" ]] || update_yaml "$config_file" clingen_map "$clingen_map" || return 1
+    else [[ $? -eq 1 ]] || return 1; fi
+    if priva_bundled_cache_reuse --key gene_dosage_sensitivity --assembly "$bundle_assembly" --path "$dosage_file" "${bundled_force[@]}"; then
+        reuse_dosage=1
+        [[ "$configured_dosage" == "$dosage_file" ]] || update_yaml "$config_file" gene_dosage_sensitivity "$dosage_file" || return 1
+    else [[ $? -eq 1 ]] || return 1; fi
+
+    if [[ $reuse_map -eq 0 ]]; then
+    mkdir -p "$clingen_dir" || return 1
+    local erepo_file=${clingen_dir}/clingen_erepo.tsv
+    if [[ "$(realpath -ms -- "$erepo_file")" == "$(realpath -ms -- "${DATA_DIR}/clingen/clingen_erepo.tsv")" ||
+          ( ! -e "$erepo_file" && ! -L "$erepo_file" ) ]] && \
+       priva_bundled_cache_reuse --key clingen_erepo --path "${DATA_DIR}/clingen/clingen_erepo.tsv"; then
+        erepo_file=${DATA_DIR}/clingen/clingen_erepo.tsv
+        local download=0
+        local bundled_erepo=1
+    elif [[ ! -f ${clingen_dir}/clingen_erepo.tsv ]] || [[ ! $(find "${clingen_dir}/clingen_erepo.tsv" -mtime -30) ]]; then
         local download=1
     else
         local download=0
     fi
 
-    if [[ ${download} -eq 1 ]]; then
-        wget -c ${clingen_url} -O ${clingen_dir}/clingen_erepo.tsv
+    if [[ ${bundled_erepo:-0} -eq 0 && ( -e ${erepo_file}.source.pending.json || -L ${erepo_file}.source.pending.json ) ]]; then
+        [[ -f ${erepo_file}.source.pending.json && ! -L ${erepo_file}.source.pending.json ]] || return 1
+        python "${SCRIPT_DIR}/mechanism_source_input.py" check-source --input "$erepo_file" --url "$clingen_url" \
+            --receipt "${erepo_file}.source.pending.json" --metadata-only || return 1
+        if python "${SCRIPT_DIR}/mechanism_source_input.py" check-source --input "$erepo_file" --url "$clingen_url" --receipt "${erepo_file}.source.pending.json"; then
+            mv -T -- "${erepo_file}.source.pending.json" "${erepo_file}.source.json" || return 1
+        else download=1; fi
     fi
 
-    python ${SCRIPT_DIR}/prepare_clingen_map.py \
-    -v ${clinvar_vcf} \
-    -t ${clingen_dir}/clingen_erepo.tsv \
-    -o ${clingen_dir}/clingen_map.${assembly}.pkl.gz && \
-    update_yaml "${config_file}" "clingen_map" "${clingen_dir}/clingen_map.${assembly}.pkl.gz"
+    if [[ ${download} -eq 1 ]]; then
+        priva_clingen_download --url "${clingen_url}" --output "${clingen_dir}/clingen_erepo.tsv" --kind clingen_erepo || \
+        { log "Failed to download the ClinGen eRepo resource"; return 1; }
+    fi
+    [[ -s "$erepo_file" ]] || \
+    { log "The ClinGen eRepo resource is missing or empty"; return 1; }
 
+    python "${SCRIPT_DIR}/prepare_clingen_map.py" \
+    -v "${clinvar_vcf}" \
+    -t "${erepo_file}" \
+    -o "${clingen_map}" && \
+    update_yaml "${config_file}" "clingen_map" "${clingen_map}" || \
+    { log "Failed to prepare or configure the ClinGen map"; return 1; }
+
+    fi
+
+    if [[ $reuse_dosage -eq 0 ]]; then
     # Download the dosage sensitivity file
     [[ ${assembly} =~ "GRCh38" ]] || [[ ${assembly} =~ "hg38" ]] && local url_assembly=GRCh38 || :
     [[ ${assembly} =~ "GRCh37" ]] || [[ ${assembly} =~ "hg19" ]] && local url_assembly=GRCh37 || :
 
-    if [[ ! -f ${clingen_dir}/gene_dosage_sensitivity.${assembly}.tsv ]] || [[ ! $(find ${clingen_dir}/gene_dosage_sensitivity.${assembly}.tsv -mtime -30) ]]; then
-        wget -c http://ftp.clinicalgenome.org/ClinGen_gene_curation_list_${url_assembly}.tsv -O ${clingen_dir}/gene_dosage_sensitivity.${assembly}.tsv
+    local dosage_url="http://ftp.clinicalgenome.org/ClinGen_gene_curation_list_${url_assembly}.tsv"
+    if [[ $url_assembly == GRCh38 ]]; then
+        dosage_url=$(yaml_value_or_default "$config_file" clingen_dosage_grch38_url "$dosage_url") || return 1
+    fi
+    mkdir -p "$(dirname "$dosage_file")" || return 1
+    local dosage_identity_changed=0
+    if [[ -e ${dosage_file}.source.pending.json || -L ${dosage_file}.source.pending.json ]]; then
+        [[ -f ${dosage_file}.source.pending.json && ! -L ${dosage_file}.source.pending.json ]] || return 1
+        python "${SCRIPT_DIR}/mechanism_source_input.py" check-source --input "$dosage_file" --url "$dosage_url" \
+            --receipt "${dosage_file}.source.pending.json" --metadata-only || return 1
+        if python "${SCRIPT_DIR}/mechanism_source_input.py" check-source --input "$dosage_file" --url "$dosage_url" --receipt "${dosage_file}.source.pending.json"; then
+            mv -T -- "${dosage_file}.source.pending.json" "${dosage_file}.source.json" || return 1
+        else dosage_identity_changed=1; fi
+    fi
+    if [[ -e ${dosage_file}.source.json || -L ${dosage_file}.source.json ]]; then
+        python "${SCRIPT_DIR}/mechanism_source_input.py" check-source --input "$dosage_file" --url "$dosage_url" || dosage_identity_changed=1
+    elif [[ $dosage_identity_changed -eq 0 && -e $dosage_file && $dosage_url != "http://ftp.clinicalgenome.org/ClinGen_gene_curation_list_${url_assembly}.tsv" &&
+            $dosage_url != "https://ftp.clinicalgenome.org/ClinGen_gene_curation_list_${url_assembly}.tsv" ]]; then
+        log "ERROR: Existing selected ClinGen dosage has no receipt for the nondefault URL; preserve that input and select a new managed output for acquisition."
+        return 1
+    fi
+    if [[ $dosage_identity_changed -eq 1 || ! -f "$dosage_file" ]] || [[ ! $(find "$dosage_file" -mtime -30) ]]; then
+        priva_clingen_download --url "$dosage_url" --output "$dosage_file" --kind clingen_dosage_runtime || \
+        { log "Failed to download the ClinGen dosage sensitivity resource"; return 1; }
     else
-        log "The dosage sensitivity file ${clingen_dir}/gene_dosage_sensitivity.${assembly}.tsv is already downloaded"
+        log "The dosage sensitivity file ${dosage_file} is already downloaded"
     fi
 
-    mawk -F '\t' '$1 !~ /^#/ {print;} $1 ~ /^#Gene/{print;}' ${clingen_dir}/gene_dosage_sensitivity.${assembly}.tsv > ${clingen_dir}/gene_dosage_sensitivity.${assembly}.tsv.clean && \
-    mv ${clingen_dir}/gene_dosage_sensitivity.${assembly}.tsv.clean ${clingen_dir}/gene_dosage_sensitivity.${assembly}.tsv && \
-    update_yaml "${config_file}" "gene_dosage_sensitivity" "${clingen_dir}/gene_dosage_sensitivity.${assembly}.tsv"
+    [[ -s "$dosage_file" ]] || \
+    { log "The ClinGen dosage sensitivity resource is missing or empty"; return 1; }
+    # This filter uses POSIX awk syntax and does not require a separate mawk executable.
+    awk -F '\t' '$1 !~ /^#/ {print;} $1 ~ /^#Gene/{print;}' "$dosage_file" > "${dosage_file}.clean" && \
+    mv "${dosage_file}.clean" "$dosage_file" || \
+    { log "Failed to prepare the ClinGen dosage sensitivity resource"; return 1; }
+    # Preserve an acquired source receipt across the original header filter.
+    # Existing unreceipted manual/default tables are never assigned guessed provenance.
+    if [[ -f ${dosage_file}.source.json ]]; then
+        python "${SCRIPT_DIR}/mechanism_source_input.py" record-source --input "$dosage_file" --url "$dosage_url" || return 1
+    fi
+    update_yaml "${config_file}" "gene_dosage_sensitivity" "${dosage_file}" || \
+    { log "Failed to prepare or configure the ClinGen dosage sensitivity resource"; return 1; }
+    fi
 }
 
 
@@ -3282,6 +3449,9 @@ function gene_pathogenic_mechanism_cache_install() {
     raw_dir=$(yaml_value_or_default "${config_file}" "gene_mechanism_raw_dir" "${cache_dir}/raw")
     builder_script=$(yaml_value_or_default "${config_file}" "gene_mechanism_builder_script" "${SCRIPT_DIR}/build_gene_pathogenic_mechanism_cache.py")
     evidence_tsv=$(yaml_value_or_default "${config_file}" "ddg2p_mechanism_evidence" "${cache_dir}/gene_pathogenic_mechanism_evidence.tsv")
+    local -a bundled_args=(--key ddg2p_mechanism_evidence --path "$evidence_tsv")
+    [[ ${PRIVA_FORCE_GENE_MECHANISM_CACHE:-0} != 1 && ${PRIVA_FORCE_ALL_CACHES:-0} != 1 ]] || bundled_args+=(--force)
+    if priva_bundled_cache_reuse "${bundled_args[@]}"; then return 0; else [[ $? -eq 1 ]] || return 1; fi
     disease_scope_registry=$(yaml_value_or_default "${config_file}" "mondo_disease_scope_registry" "${DATA_DIR}/mondo/disease_scope.tsv.gz")
 
     mkdir -p "${cache_dir}" "${raw_dir}" "$(dirname "${evidence_tsv}")" || {
@@ -3307,6 +3477,13 @@ function gene_pathogenic_mechanism_cache_install() {
         builder_args+=(--proxy-url "${PROXY_URL}" --download-tool auto)
     fi
 
+    # URL selection is used only by this acquisition/build route; bundled reuse returned above.
+    local source_key source_value
+    for source_key in g2p_ddg2p_url orphadata_gene_disease_url; do
+        source_value=$(yaml_value_or_default "$config_file" "$source_key" "") || return 1
+        [[ -z $source_value ]] || builder_args+=("--${source_key//_/-}" "$source_value")
+    done
+
     log "Checking and rebuilding PriVA gene mechanism/DDG2P cache as required"
     python "${builder_args[@]}" || {
         log "ERROR: Failed to build gene mechanism/DDG2P cache"
@@ -3317,7 +3494,7 @@ function gene_pathogenic_mechanism_cache_install() {
         log "ERROR: Gene mechanism/DDG2P cache validation failed"
         return 1
     }
-    update_or_append_yaml "${config_file}" "ddg2p_mechanism_evidence" "${evidence_tsv}"
+    update_or_append_yaml "${config_file}" "ddg2p_mechanism_evidence" "${evidence_tsv}" || return 1
     log "Gene condition-mechanism evidence deployed: ${evidence_tsv}"
 }
 
@@ -3473,11 +3650,16 @@ function gofcards_clinvar_injection_install() {
     # of which of two caches a consumer meant.
     source_cache="${workdir}/gofcards_exact_gof.normalized.json.gz"
     target_json=$(yaml_value_or_default "${config_file}" "gofcards_exact_gof_cache" "${DATA_DIR}/gofcards/gofcards_exact_gof.json.gz")
+    local -a bundled_args=(--key gofcards_exact_gof_cache --path "$target_json")
+    [[ ${PRIVA_FORCE_GOFCARDS_CLINVAR_INJECTION:-0} != 1 && ${PRIVA_FORCE_ALL_CACHES:-0} != 1 ]] || bundled_args+=(--force)
+    if priva_bundled_cache_reuse "${bundled_args[@]}"; then return 0; else [[ $? -eq 1 ]] || return 1; fi
     clinvar_xml=$(yaml_value_or_default "${config_file}" "clinvar_vcv_xml" "${DATA_DIR}/patho_mechanism/raw/clinvar_vcv/ClinVarVCVRelease_00-latest_weekly.xml.gz")
     min_stars=$(yaml_value_or_default "${config_file}" "clinvar_min_review_stars" "2")
     lag_days=$(yaml_value_or_default "${config_file}" "gofcards_clinvar_reinjection_lag_days" "90")
     stats_json="${workdir}/clinvar_injection_stats.json"
-    audit_tsv=$(yaml_value_or_default "${config_file}" "clinvar_vcv_match_audit" "${DATA_DIR}/patho_mechanism/clinvar_vcv_gofcards_matches.tsv")
+    # The audit is a derived companion of the managed GoFCards build. Main
+    # supplies its configured cache-root path; direct callers use their workdir.
+    audit_tsv=$(yaml_value_or_default "${config_file}" "clinvar_vcv_match_audit" "${workdir}/clinvar_vcv_gofcards_matches.tsv")
 
     [[ -f ${injector} ]] || { log "ERROR: ClinVar injector not found: ${injector}"; return 1; }
     [[ -s ${source_cache} ]] || {
@@ -3485,6 +3667,21 @@ function gofcards_clinvar_injection_install() {
         return 1
     }
     [[ -s ${clinvar_xml} ]] || { log "ERROR: ClinVar VCV XML not found: ${clinvar_xml}"; return 1; }
+
+    local configured_raw_dir managed_clinvar_xml custom_vcv_sha256="" custom_vcv_identity="" digest_output
+    local -a vcv_digest_arg=()
+    configured_raw_dir=$(yaml_value_or_default "${config_file}" "gene_mechanism_raw_dir" \
+        "$(yaml_value_or_default "${config_file}" "gene_mechanism_cache_dir" "${DATA_DIR}/patho_mechanism")/raw")
+    managed_clinvar_xml="${configured_raw_dir}/clinvar_vcv/ClinVarVCVRelease_00-latest_weekly.xml.gz"
+    if [[ "$(realpath -ms "$clinvar_xml")" != "$(realpath -ms "$managed_clinvar_xml")" ]]; then
+        custom_vcv_identity=$(stat -Lc '%d:%i:%s:%y:%z' "$clinvar_xml") || return 1
+        digest_output=$(sha256sum -- "$clinvar_xml") || return 1
+        custom_vcv_sha256=${digest_output%% *}
+        [[ "$custom_vcv_sha256" =~ ^[0-9a-f]{64}$ ]] || return 1
+        [[ "$(stat -Lc '%d:%i:%s:%y:%z' "$clinvar_xml")" == "$custom_vcv_identity" ]] || \
+            { log "ERROR: Explicit ClinVar VCV XML changed while hashing; wait for its writer"; return 1; }
+        vcv_digest_arg=(--clinvar-vcv-sha256 "$custom_vcv_sha256")
+    fi
 
     mkdir -p "$(dirname "${target_json}")" "${workdir}" || return 1
 
@@ -3520,6 +3717,14 @@ function gofcards_clinvar_injection_install() {
             log "Deployed GoFCards cache was not produced by the current injector, input or review-star setting"
             reinject=1
         fi
+        # Bind custom selections to both path and bytes. The managed weekly
+        # source retains its existing refresh lag without additional hashing.
+        if [[ -n "$custom_vcv_sha256" ]] && \
+           ! validate_gofcards_exact_gof_cache "${target_json}" "clinvar.source=${clinvar_xml}" \
+                "clinvar.source_sha256=${custom_vcv_sha256}" >/dev/null 2>&1; then
+            log "Deployed GoFCards cache cites different explicit ClinVar VCV input bytes/path"
+            reinject=1
+        fi
         if [[ ${reinject} -eq 0 ]]; then
             local lag_seconds=$(( $(stat -c %Y "${clinvar_xml}") - $(stat -c %Y "${target_json}") ))
             if (( lag_seconds > lag_days * 86400 )); then
@@ -3534,6 +3739,7 @@ function gofcards_clinvar_injection_install() {
         python "${injector}" \
             --gofcards-cache "${source_cache}" \
             --clinvar-vcv "${clinvar_xml}" \
+            "${vcv_digest_arg[@]}" \
             --out-json "${target_json}" \
             --min-review-stars "${min_stars}" \
             --audit-tsv "${audit_tsv}" \
@@ -3552,9 +3758,58 @@ function gofcards_clinvar_injection_install() {
         log "ERROR: GoFCards cache failed validation after ClinVar injection"
         return 1
     }
-    update_or_append_yaml "${config_file}" "gofcards_exact_gof_cache" "${target_json}"
-    update_or_append_yaml "${config_file}" "gofcards_clinvar_injector_script" "${injector}"
+    if [[ -n "$custom_vcv_sha256" ]]; then
+        [[ "$(stat -Lc '%d:%i:%s:%y:%z' "$clinvar_xml")" == "$custom_vcv_identity" ]] || \
+            { log "ERROR: Explicit ClinVar VCV XML changed during cache preparation; configuration not updated"; return 1; }
+        validate_gofcards_exact_gof_cache "$target_json" "clinvar.source=${clinvar_xml}" \
+            "clinvar.source_sha256=${custom_vcv_sha256}" || return 1
+    fi
+    update_or_append_yaml "${config_file}" "gofcards_exact_gof_cache" "${target_json}" || return 1
+    update_or_append_yaml "${config_file}" "gofcards_clinvar_injector_script" "${injector}" || return 1
     log "GoFCards exact GOF cache deployed (with ClinVar conditions): ${target_json}"
+}
+
+
+function gofcards_vep_caches_install() {
+    local config_file=${1}
+    local cache_dir version assembly directory plugins_dir
+    cache_dir=$(read_yaml "${config_file}" "vep_cache_dir")
+    version=$(read_yaml "${config_file}" "vep_installed_version")
+    [[ -n ${cache_dir} && ${cache_dir} != null && ${version} =~ ^[0-9]+$ ]] || {
+        log "ERROR: GoFCards requires the configured VEP cache directory and numeric release"
+        return 1
+    }
+    # Check every existing requested cache before acquiring either missing one.
+    for assembly in GRCh37 GRCh38; do
+        directory="${cache_dir%/}/homo_sapiens_merged/${version}_${assembly}"
+        if [[ -e ${directory} || -L ${directory} ]]; then
+            priva_validate_vep_cache "${directory}" "${assembly}" || {
+                log "ERROR: Existing GoFCards VEP ${version} ${assembly} cache is incomplete or mismatched; retained: ${directory}"
+                return 1
+            }
+        fi
+    done
+    for assembly in GRCh37 GRCh38; do
+        directory="${cache_dir%/}/homo_sapiens_merged/${version}_${assembly}"
+        if [[ ! -e ${directory} ]]; then
+            [[ ${PRIVA_SMOKE_SKIP_VEP:-0} != 1 ]] || {
+                log "ERROR: Smoke mode cannot acquire a missing GoFCards VEP cache: ${directory}"
+                return 1
+            }
+            plugins_dir=$(read_yaml "${config_file}" "vep_plugins_dir")
+            [[ -n ${plugins_dir} && ${plugins_dir} != null ]] || {
+                log "ERROR: Configure the VEP plugin directory before GoFCards cache preparation"
+                return 1
+            }
+            mkdir -p -- "${cache_dir}" "${plugins_dir}" || return 1
+            vep_cache_api_install --VEP_VERSION "${version}" --VEP_CACHEDIR "${cache_dir}" \
+                --VEP_PLUGINSDIR "${plugins_dir}" --VEP_ASSEMBLY "${assembly}" || return 1
+        fi
+        priva_validate_vep_cache "${directory}" "${assembly}" || {
+            log "ERROR: GoFCards requires a complete VEP ${version} ${assembly} merged cache: ${directory}"
+            return 1
+        }
+    done
 }
 
 
@@ -3563,7 +3818,18 @@ function gofcards_exact_gof_cache_install() {
     # The whole pipeline is one script; see docs/GOFCARDS_NORMALIZATION_METHODS.md
     # for why the reference check and the liftover are separate gates.
     local config_file=${1}
+    local mode=${2:-build}
+    [[ ${mode} == build || ${mode} == --main-preflight ]] || {
+        log "ERROR: Use gofcards_exact_gof_cache_install CONFIG [--main-preflight]"
+        return 2
+    }
     [[ -f ${config_file} ]] || { log "ERROR: Config file not found: ${config_file}"; return 1; }
+
+    local bundled_target
+    bundled_target=$(yaml_value_or_default "${config_file}" gofcards_exact_gof_cache "${DATA_DIR}/gofcards/gofcards_exact_gof.json.gz")
+    local -a bundled_args=(--key gofcards_exact_gof_cache --path "$bundled_target")
+    [[ ${PRIVA_FORCE_GOFCARDS_CACHE:-0} != 1 && ${PRIVA_FORCE_ALL_CACHES:-0} != 1 ]] || bundled_args+=(--force)
+    if priva_bundled_cache_reuse "${bundled_args[@]}"; then return 0; else [[ $? -eq 1 ]] || return 1; fi
 
     local builder_script
     local target_tsv
@@ -3588,11 +3854,24 @@ function gofcards_exact_gof_cache_install() {
     # GoFCards cache, and it is the finished one.
     target_tsv="${workdir}/gofcards_exact_gof.normalized.json.gz"
 
-    hg19_fasta=$(read_yaml "${config_file}" "ref_genome")
+    # GoFCards always normalizes both assemblies, independently of the cohort
+    # assembly. A GRCh38 ref_genome must never be labelled as its hg19 FASTA.
+    hg19_fasta=$(yaml_value_or_default "${config_file}" "gofcards_hg19_fasta" "")
     hg38_fasta=$(yaml_value_or_default "${config_file}" "gofcards_hg38_fasta" "")
     chain_file=$(yaml_value_or_default "${config_file}" "gofcards_hg19_to_hg38_chain" "${DATA_DIR}/liftOver/hg19ToHg38.over.chain")
     vep_cache_dir=$(read_yaml "${config_file}" "vep_cache_dir")
     vep_version=$(yaml_value_or_default "${config_file}" "vep_installed_version" "")
+    if [[ ${mode} == --main-preflight ]]; then
+        local selected_cache_root selected_cache_folder
+        selected_cache_root=$(yaml_value_or_default "${config_file}" "cache_root" "")
+        if [[ -n ${selected_cache_root} ]]; then
+            selected_cache_folder=$(yaml_value_or_default "${config_file}" "cache_folders.vep_cache" "VEP_cache")
+            vep_cache_dir="${selected_cache_root%/}/${selected_cache_folder}"
+        fi
+    fi
+    if [[ ${mode} == --main-preflight && ${PRIVA_SMOKE_SKIP_VEP:-0} != 1 ]]; then
+        priva_verify_vep_release "${vep_version}" || return 1
+    fi
     hgnc_table=$(yaml_value_or_default "${config_file}" "hgnc_table" "${DATA_DIR}/hgnc/non_alt_loci_set.tsv")
     review_tsv=$(yaml_value_or_default "${config_file}" "gofcards_mechanism_review_tsv" "${DATA_DIR}/gofcards/gofcards_mechanism_reviews.tsv")
     stats_json="${workdir}/gofcards_build_stats.json"
@@ -3641,14 +3920,34 @@ function gofcards_exact_gof_cache_install() {
         return 0
     fi
 
+    [[ -f "$review_tsv" && -s "$review_tsv" ]] || {
+        log "ERROR: GoFCards rebuild requires the selected nonempty mechanism review: $review_tsv; restore that input."
+        return 1
+    }
+    local prerequisite_stage=gofcards
+    [[ ${mode} == --main-preflight ]] && prerequisite_stage=gofcards-main
+    local -a prerequisite_args=(--stage "${prerequisite_stage}" --vep-version "${vep_version}"
+        --allow-pinned-reference-defaults --source-root "${BASE_DIR}")
+    # This build route prepares both exact-release caches after references.
+    [[ ${PRIVA_SMOKE_SKIP_VEP:-0} == 1 ]] || prerequisite_args+=(--allow-missing-merged-caches)
+    python "${SCRIPT_DIR}/installer_prerequisites.py" "${config_file}" \
+        "${prerequisite_args[@]}" || return 1
     [[ -f ${builder_script} ]] || { log "ERROR: GoFCards builder not found: ${builder_script}"; return 1; }
-    [[ -s ${hg19_fasta} ]] || { log "ERROR: GRCh37 FASTA not found for GoFCards build: ${hg19_fasta}"; return 1; }
-    [[ -s ${hg38_fasta} ]] || { log "ERROR: GRCh38 FASTA not found for GoFCards build; set gofcards_hg38_fasta"; return 1; }
-    [[ -s ${chain_file} ]] || { log "ERROR: hg19->hg38 chain file not found: ${chain_file}"; return 1; }
+    [[ ${mode} == --main-preflight ]] && return 0
     [[ -s ${hgnc_table} ]] || { log "ERROR: HGNC complete-set table not found: ${hgnc_table}"; return 1; }
     command -v vep >/dev/null 2>&1 || { log "ERROR: vep is not on PATH"; return 1; }
     command -v bcftools >/dev/null 2>&1 || { log "ERROR: bcftools is not on PATH"; return 1; }
     command -v CrossMap >/dev/null 2>&1 || { log "ERROR: CrossMap is not on PATH; install it into the PriVA environment"; return 1; }
+
+    # Acquire normalization inputs only for an actual build. A current validated
+    # cache reuses its existing source identity without requiring these inputs.
+    gofcards_reference_install "${config_file}" || return 1
+    hg19_fasta=$(read_yaml "${config_file}" "gofcards_hg19_fasta")
+    hg38_fasta=$(read_yaml "${config_file}" "gofcards_hg38_fasta")
+    chain_file=$(read_yaml "${config_file}" "gofcards_hg19_to_hg38_chain")
+    gofcards_vep_caches_install "${config_file}" || return 1
+    python "${SCRIPT_DIR}/installer_prerequisites.py" "${config_file}" --stage gofcards \
+        --vep-version "${vep_version}" --source-root "${BASE_DIR}" || return 1
 
     mkdir -p "$(dirname "${target_tsv}")" "${workdir}" || return 1
 
@@ -3716,6 +4015,7 @@ function gene_nonlof_mechanism_cache_install() {
     local schema_json
     local gofcards_variants
     local hgnc_table
+    local configured_clinvar_xml managed_clinvar_xml selected_custom_vcv=0
 
     cache_dir=$(yaml_value_or_default "${config_file}" "gene_mechanism_cache_dir" "${DATA_DIR}/patho_mechanism")
     raw_dir=$(yaml_value_or_default "${config_file}" "gene_mechanism_raw_dir" "${cache_dir}/raw")
@@ -3724,7 +4024,27 @@ function gene_nonlof_mechanism_cache_install() {
     schema_json=$(yaml_value_or_default "${config_file}" "gene_nonlof_mechanism_schema" "${cache_dir}/gene_nonlof_mechanism_curated_assertions.schema.json")
     # The one deployed GoFCards cache, which already carries its ClinVar blocks.
     gofcards_variants=$(yaml_value_or_default "${config_file}" "gofcards_exact_gof_cache" "${DATA_DIR}/gofcards/gofcards_exact_gof.json.gz")
+    local -a bundled_args=(--key gene_nonlof_mechanism_json --path "$cache_json")
+    [[ ${PRIVA_FORCE_NONLOF_MECHANISM_CACHE:-0} != 1 && ${PRIVA_FORCE_ALL_CACHES:-0} != 1 ]] || bundled_args+=(--force)
+    if priva_bundled_cache_reuse "${bundled_args[@]}"; then
+        if [[ $mode == build ]]; then return 0; fi
+        # An external GoFCards output still needs the VCV source fetch, even
+        # when the independent final non-LOF input is already bundled.
+        local -a bundled_gof_args=(--key gofcards_exact_gof_cache --path "$gofcards_variants")
+        [[ ${PRIVA_FORCE_GOFCARDS_CACHE:-0} != 1 && ${PRIVA_FORCE_GOFCARDS_CLINVAR_INJECTION:-0} != 1 && \
+           ${PRIVA_FORCE_ALL_CACHES:-0} != 1 ]] || bundled_gof_args+=(--force)
+        if priva_bundled_cache_reuse "${bundled_gof_args[@]}"; then return 0; else [[ $? -eq 1 ]] || return 1; fi
+    else
+        [[ $? -eq 1 ]] || return 1
+    fi
     hgnc_table=$(yaml_value_or_default "${config_file}" "hgnc_table" "${DATA_DIR}/hgnc/non_alt_loci_set.tsv")
+    managed_clinvar_xml="${raw_dir}/clinvar_vcv/ClinVarVCVRelease_00-latest_weekly.xml.gz"
+    configured_clinvar_xml=$(yaml_value_or_default "${config_file}" "clinvar_vcv_xml" "")
+    if [[ -n "$configured_clinvar_xml" ]] && \
+       [[ "$(realpath -ms "$configured_clinvar_xml")" != "$(realpath -ms "$managed_clinvar_xml")" ]]; then
+        [[ -s "$configured_clinvar_xml" ]] || { log "ERROR: Missing explicit ClinVar VCV XML: $configured_clinvar_xml; restore that selected input"; return 1; }
+        selected_custom_vcv=1
+    fi
 
     [[ -f ${builder_script} ]] || { log "ERROR: Non-LOF builder not found: ${builder_script}"; return 1; }
     [[ -s ${schema_json} ]] || { log "ERROR: Non-LOF schema not found: ${schema_json}"; return 1; }
@@ -3749,6 +4069,7 @@ function gene_nonlof_mechanism_cache_install() {
         --timeout "${GENE_MECHANISM_TIMEOUT:-120}"
         --retries "${GENE_MECHANISM_RETRIES:-3}"
     )
+    [[ "$selected_custom_vcv" -eq 0 ]] || builder_args+=(--clinvar-vcv "$configured_clinvar_xml")
     if [[ "${PRIVA_FORCE_NONLOF_MECHANISM_CACHE:-0}" == "1" ]] || \
        [[ "${PRIVA_FORCE_ALL_CACHES:-0}" == "1" ]]; then
         builder_args+=(--force)
@@ -3756,6 +4077,13 @@ function gene_nonlof_mechanism_cache_install() {
     if [[ -n "${PROXY_URL:-}" ]]; then
         builder_args+=(--proxy-url "${PROXY_URL}" --download-tool auto)
     fi
+
+    # URL selection is used only by this acquisition/build route; bundled reuse returned above.
+    local source_key source_value
+    for source_key in g2p_ddg2p_url clingen_dosage_grch38_url panelapp_panels_url; do
+        source_value=$(yaml_value_or_default "$config_file" "$source_key" "") || return 1
+        [[ -z $source_value ]] || builder_args+=("--${source_key//_/-}" "$source_value")
+    done
 
     if [[ ${mode} == "sources-only" ]]; then
         builder_args+=(--fetch-sources-only)
@@ -3769,19 +4097,16 @@ function gene_nonlof_mechanism_cache_install() {
     }
 
     if [[ ${mode} == "sources-only" ]]; then
-        # The builder downloads into <raw_dir>/<source filename>, so that is
-        # where the XML actually is. Record it under the key the injection step
-        # reads, and only when the configured value names a different file, so a
-        # deliberate equivalent path is left untouched.
-        local fetched_clinvar_xml="${raw_dir}/clinvar_vcv/ClinVarVCVRelease_00-latest_weekly.xml.gz"
+        # Register the managed source the builder fetched, or retain the exact
+        # explicit input it validated. The injection step reads this same key.
+        local fetched_clinvar_xml="$managed_clinvar_xml"
+        [[ "$selected_custom_vcv" -eq 0 ]] || fetched_clinvar_xml="$configured_clinvar_xml"
         [[ -s ${fetched_clinvar_xml} ]] || {
             log "ERROR: ClinVar VCV XML missing after the source fetch: ${fetched_clinvar_xml}"
             return 1
         }
-        local configured_clinvar_xml
-        configured_clinvar_xml=$(yaml_value_or_default "${config_file}" "clinvar_vcv_xml" "")
         if [[ $(readlink -f "${configured_clinvar_xml}") != $(readlink -f "${fetched_clinvar_xml}") ]]; then
-            update_or_append_yaml "${config_file}" "clinvar_vcv_xml" "${fetched_clinvar_xml}"
+            update_or_append_yaml "${config_file}" "clinvar_vcv_xml" "${fetched_clinvar_xml}" || return 1
         fi
         log "PriVA non-LOF mechanism sources staged; ClinVar VCV XML ready: ${fetched_clinvar_xml}"
         return 0
@@ -3793,9 +4118,9 @@ function gene_nonlof_mechanism_cache_install() {
         return 1
     }
 
-    update_or_append_yaml "${config_file}" "gene_nonlof_mechanism_builder_script" "${builder_script}"
-    update_or_append_yaml "${config_file}" "gene_nonlof_mechanism_schema" "${schema_json}"
-    update_or_append_yaml "${config_file}" "gene_nonlof_mechanism_json" "${cache_json}"
+    update_or_append_yaml "${config_file}" "gene_nonlof_mechanism_builder_script" "${builder_script}" || return 1
+    update_or_append_yaml "${config_file}" "gene_nonlof_mechanism_schema" "${schema_json}" || return 1
+    update_or_append_yaml "${config_file}" "gene_nonlof_mechanism_json" "${cache_json}" || return 1
     log "PriVA non-LOF mechanism cache deployed: ${cache_json}"
 }
 
@@ -3826,6 +4151,9 @@ function hpo_condition_mechanism_cache_install() {
 
     builder_script=$(yaml_value_or_default "${config_file}" "hpo_condition_mechanism_builder_script" "${SCRIPT_DIR}/build_hpo_condition_mechanism_cache.py")
     cache_json=$(yaml_value_or_default "${config_file}" "hpo_condition_mechanism_json" "${DATA_DIR}/patho_mechanism/hpo_condition_mechanism_cache.json.gz")
+    local -a bundled_args=(--key hpo_condition_mechanism_json --path "$cache_json")
+    [[ ${PRIVA_FORCE_HPO_MECHANISM_JSON:-0} != 1 && ${PRIVA_FORCE_ALL_CACHES:-0} != 1 ]] || bundled_args+=(--force)
+    if priva_bundled_cache_reuse "${bundled_args[@]}"; then return 0; else [[ $? -eq 1 ]] || return 1; fi
     hpo_assertions=$(yaml_value_or_default "${config_file}" "hpo_assertions" "${DATA_DIR}/hpo/genes_to_phenotype.assertions.tsv.gz")
     mechanism_evidence=$(yaml_value_or_default "${config_file}" "ddg2p_mechanism_evidence" "${DATA_DIR}/patho_mechanism/gene_pathogenic_mechanism_evidence.tsv")
     clingen_dosage=$(yaml_value_or_default "${config_file}" "gene_dosage_sensitivity" "${DATA_DIR}/clingen/gene_dosage_sensitivity.hg38.tsv")
@@ -3883,8 +4211,8 @@ function hpo_condition_mechanism_cache_install() {
         log "ERROR: HPO condition mechanism cache validation failed"
         return 1
     }
-    update_or_append_yaml "${config_file}" "hpo_condition_mechanism_builder_script" "${builder_script}"
-    update_or_append_yaml "${config_file}" "hpo_condition_mechanism_json" "${cache_json}"
+    update_or_append_yaml "${config_file}" "hpo_condition_mechanism_builder_script" "${builder_script}" || return 1
+    update_or_append_yaml "${config_file}" "hpo_condition_mechanism_json" "${cache_json}" || return 1
     log "HPO condition mechanism cache deployed: ${cache_json}"
 }
 
@@ -4045,10 +4373,13 @@ function mondo_hpo_scope_install() {
         python "${hpo_builder}" "${hpo_genes}" "${hpo_hpoa}" "${hpo_base_assertions}" || return 1
     fi
 
+    # The builder publishes the registry before scoped assertions. If the second
+    # publication failed, retry the pair rather than accepting older assertions.
     local rebuild_scope=0
     if [[ ${rebuild_hpo} -eq 1 ]] || [[ "${PRIVA_FORCE_MONDO_CACHE:-0}" == "1" ]] || \
        [[ "${PRIVA_FORCE_ALL_CACHES:-0}" == "1" ]] || \
        [[ ! -s ${scope_registry} ]] || [[ ! -s ${hpo_assertions} ]] || \
+       [[ ${scope_registry} -nt ${hpo_assertions} ]] || \
        [[ ${mondo_obo} -nt ${scope_registry} ]] || [[ ${hpo_base_assertions} -nt ${scope_registry} ]] || \
        [[ ${scope_builder} -nt ${scope_registry} ]] || [[ ${scope_overrides} -nt ${scope_registry} ]]; then
         rebuild_scope=1
@@ -4067,9 +4398,9 @@ function mondo_hpo_scope_install() {
     fi
 
     validate_mondo_hpo_scope_cache "${mondo_obo}" "${scope_registry}" "${hpo_assertions}" || return 1
-    update_yaml "${config_file}" "hpo_assertions" "${hpo_assertions}"
-    update_yaml "${config_file}" "mondo_obo" "${mondo_obo}"
-    update_yaml "${config_file}" "mondo_disease_scope_registry" "${scope_registry}"
+    update_yaml "${config_file}" "hpo_assertions" "${hpo_assertions}" || return 1
+    update_yaml "${config_file}" "mondo_obo" "${mondo_obo}" || return 1
+    update_yaml "${config_file}" "mondo_disease_scope_registry" "${scope_registry}" || return 1
     log "MONDO/HPO disease-scope resources deployed: ${scope_registry}; ${hpo_assertions}"
 }
 

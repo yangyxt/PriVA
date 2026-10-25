@@ -28,13 +28,16 @@ import tempfile
 import time
 import urllib.error
 import urllib.request
+import urllib.parse
 import xml.etree.ElementTree as ET
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterable
 
 import pandas as pd
+
+from mechanism_source_input import source_url, validate_source_payload
 
 from hpo_penetrance import (
     normalize_penetrance_evidence,
@@ -151,6 +154,36 @@ CONDITION_EVIDENCE_SOURCE_NAMES = {"g2p_ddg2p", "orphadata_gene_disease"}
 CONDITION_EVIDENCE_SPECS = [
     source for source in SOURCES if source.name in CONDITION_EVIDENCE_SOURCE_NAMES
 ]
+
+DEFAULT_SOURCES = tuple(SOURCES)
+DEFAULT_PANELAPP_SPEC = PANELAPP_SPEC
+DEFAULT_SOURCE_URLS = {source.name: source.url for source in (*DEFAULT_SOURCES, DEFAULT_PANELAPP_SPEC)}
+
+
+def configure_source_urls(args) -> None:
+    """Select explicit URLs without changing parsers, refresh rules or source scope."""
+    global SOURCES, PANELAPP_SPEC, CONDITION_EVIDENCE_SPECS
+    fields = {'g2p_ddg2p': 'g2p_ddg2p_url', 'orphadata_gene_disease': 'orphadata_gene_disease_url'}
+    def selected(spec):
+        value = getattr(args, fields.get(spec.name, ""), None)
+        return replace(spec, url=source_url(value or spec.url))
+    SOURCES = [selected(spec) for spec in DEFAULT_SOURCES]
+    PANELAPP_SPEC = selected(DEFAULT_PANELAPP_SPEC)
+    CONDITION_EVIDENCE_SPECS = [source for source in SOURCES if source.name in CONDITION_EVIDENCE_SOURCE_NAMES]
+
+
+def source_identity_matches(source: SourceSpec, metadata: dict, raw_path: Path | None = None) -> bool:
+    """Legacy unreceipted bytes retain default-only reuse; changed URLs must fetch."""
+    previous = metadata.get("url")
+    matches = previous == source.url or (not previous and source.url == DEFAULT_SOURCE_URLS.get(source.name))
+    if matches and raw_path is not None and metadata.get("sha256"):
+        matches = raw_path.is_file() and sha256_file(raw_path) == metadata["sha256"]
+    return matches
+
+
+def custom_source(source: SourceSpec) -> bool:
+    return source.url != DEFAULT_SOURCE_URLS.get(source.name, source.url)
+
 
 def utc_now() -> datetime:
     return datetime.now(timezone.utc)
@@ -386,7 +419,8 @@ def fetch_static_source(
     old_meta = previous_meta.get(source.name, {})
     if old_meta.get("raw_path") != str(raw_path):
         old_meta = {}
-    if source_is_fresh(raw_path, old_meta, source.refresh_days, force):
+    identity_matches = source_identity_matches(source, old_meta, raw_path)
+    if source_is_fresh(raw_path, old_meta, source.refresh_days, force or not identity_matches):
         return update_metadata_for_file(
             source=source,
             raw_path=raw_path,
@@ -404,9 +438,11 @@ def fetch_static_source(
             proxy_url=proxy_url,
             download_tool=download_tool,
         )
+        if custom_source(source) or not identity_matches:
+            validate_source_payload(tmp, source.parser)
         new_sha = sha256_file(tmp)
         old_sha = old_meta.get("sha256")
-        if raw_path.exists() and old_sha == new_sha:
+        if identity_matches and raw_path.exists() and old_sha == new_sha:
             tmp.unlink()
             status = "checked_same_checksum"
         else:
@@ -421,6 +457,8 @@ def fetch_static_source(
     except Exception as error:  # noqa: BLE001 - preserve cache and report source error
         if tmp.exists():
             tmp.unlink()
+        if custom_source(source) or not identity_matches:
+            raise RuntimeError(f"Selected source {source.name} ({source.url}) failed; prior bytes preserved: {error}") from error
         if raw_path.exists():
             meta = update_metadata_for_file(
                 source=source,
@@ -523,7 +561,8 @@ def fetch_panelapp(
     old_meta = previous_meta.get(source.name, {})
     if old_meta.get("raw_path") != str(raw_path):
         old_meta = {}
-    if source_is_fresh(raw_path, old_meta, source.refresh_days, force):
+    identity_matches = source_identity_matches(source, old_meta, raw_path)
+    if source_is_fresh(raw_path, old_meta, source.refresh_days, force or not identity_matches):
         return update_metadata_for_file(
             source=source,
             raw_path=raw_path,
@@ -542,6 +581,11 @@ def fetch_panelapp(
                 proxy_url=proxy_url,
                 download_tool=download_tool,
             )
+            if (custom_source(source) or not identity_matches) and (not isinstance(payload, dict)
+                    or not isinstance(payload.get("results"), list)
+                    or any(not isinstance(row, dict) or not row.get("id") for row in payload["results"])
+                    or payload.get("next") is not None and not isinstance(payload["next"], str)):
+                raise ValueError("Selected PanelApp URL must provide the original results/next list schema")
             panels.extend(payload.get("results", []))
             next_url = payload.get("next")
             if max_panels is not None and len(panels) >= max_panels:
@@ -553,10 +597,8 @@ def fetch_panelapp(
             panel_id = panel.get("id")
             if not panel_id:
                 continue
-            detail_url = (
-                f"https://panelapp.genomicsengland.co.uk/api/v1/panels/"
-                f"{panel_id}/?format=json"
-            )
+            detail_url = urllib.parse.urljoin(source.url.split("?", 1)[0].rstrip("/") + "/",
+                                               f"{panel_id}/?format=json")
             try:
                 detail = fetch_json(
                     detail_url,
@@ -565,7 +607,16 @@ def fetch_panelapp(
                     proxy_url=proxy_url,
                     download_tool=download_tool,
                 )
+                if custom_source(source) or not identity_matches:
+                    if (not isinstance(detail, dict) or not isinstance(detail.get("genes"), list)
+                            or any(not isinstance(gene, dict)
+                                   or gene.get("gene_data") is not None and not isinstance(gene["gene_data"], dict)
+                                   or gene.get("publications") is not None and not isinstance(gene["publications"], list)
+                                   for gene in detail.get("genes", []))):
+                        raise ValueError("Selected PanelApp detail must retain the original genes/gene_data/publications schema")
             except Exception as error:  # noqa: BLE001
+                if custom_source(source) or not identity_matches:
+                    raise
                 detail = {
                     **panel,
                     "genes": [],
@@ -588,7 +639,7 @@ def fetch_panelapp(
             handle.write("\n")
         new_sha = sha256_file(tmp)
         old_sha = old_meta.get("sha256")
-        if raw_path.exists() and old_sha == new_sha:
+        if identity_matches and raw_path.exists() and old_sha == new_sha:
             tmp.unlink()
             status = "checked_same_checksum"
         else:
@@ -596,6 +647,8 @@ def fetch_panelapp(
             status = "updated" if old_sha else "downloaded"
         return update_metadata_for_file(source, raw_path, status, old_sha)
     except Exception as error:  # noqa: BLE001
+        if custom_source(source) or not identity_matches:
+            raise RuntimeError(f"Selected source {source.name} ({source.url}) failed; prior bytes preserved: {error}") from error
         if raw_path.exists():
             return update_metadata_for_file(
                 source, raw_path, "using_existing_after_download_error", old_meta.get("sha256"), str(error)
@@ -1355,6 +1408,8 @@ def parse_all_sources(
         try:
             frames.append(parser_fn(raw_path))
         except Exception as exc:  # noqa: BLE001
+            if custom_source(spec):
+                raise ValueError(f"Incompatible selected source {spec.name} ({spec.url}): {exc}") from exc
             print(f"parse_error source={spec.name}: {exc}", file=sys.stderr)
             continue
     unified = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame(columns=UNIFIED_COLUMNS)
@@ -1716,11 +1771,16 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument("--stale-lock-hours", type=float, default=24.0)
+    parser.add_argument("--g2p-ddg2p-url", default=None, type=source_url,
+                        help="Explicit source URL; retains the original publisher schema and source role.")
+    parser.add_argument("--orphadata-gene-disease-url", default=None, type=source_url,
+                        help="Explicit source URL; retains the original publisher schema and source role.")
     return parser.parse_args()
 
 
 def main() -> int:
     args = parse_args()
+    configure_source_urls(args)
     cache_dir = args.cache_dir.resolve()
     raw_dir = (
         Path(args.shared_raw_dir).expanduser().resolve()

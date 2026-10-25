@@ -28,13 +28,17 @@ import tempfile
 import time
 import urllib.error
 import urllib.request
+import urllib.parse
+import xml.etree.ElementTree as ET
 from collections import Counter, defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterable, Iterator
 
 import pandas as pd
+
+from mechanism_source_input import source_url, validate_source_payload
 
 from clinvar_vcv import (
     atomic_write_text,
@@ -191,6 +195,35 @@ CLINVAR_VCV_SPEC = SourceSpec(
 
 CLINVAR_XML_README_URL = "https://ftp.ncbi.nlm.nih.gov/pub/clinvar/xml/_README"
 CLINVAR_XSD_INDEX_URL = "https://ftp.ncbi.nlm.nih.gov/pub/clinvar/xsd_public/"
+
+DEFAULT_SOURCES = tuple(SOURCES)
+DEFAULT_PANELAPP_SPEC = PANELAPP_SPEC
+DEFAULT_SOURCE_URLS = {source.name: source.url for source in (*DEFAULT_SOURCES, DEFAULT_PANELAPP_SPEC)}
+
+
+def configure_source_urls(args) -> None:
+    """Select explicit URLs without changing parsers, refresh rules or source scope."""
+    global SOURCES, PANELAPP_SPEC
+    fields = {'g2p_ddg2p': 'g2p_ddg2p_url', 'clingen_dosage_gene_grch38': 'clingen_dosage_grch38_url', 'panelapp_all_panels': 'panelapp_panels_url'}
+    def selected(spec):
+        value = getattr(args, fields.get(spec.name, ""), None)
+        return replace(spec, url=source_url(value or spec.url))
+    SOURCES = [selected(spec) for spec in DEFAULT_SOURCES]
+    PANELAPP_SPEC = selected(DEFAULT_PANELAPP_SPEC)
+
+
+def source_identity_matches(source: SourceSpec, metadata: dict, raw_path: Path | None = None) -> bool:
+    """Legacy unreceipted bytes retain default-only reuse; changed URLs must fetch."""
+    previous = metadata.get("url")
+    matches = previous == source.url or (not previous and source.url == DEFAULT_SOURCE_URLS.get(source.name))
+    if matches and raw_path is not None and metadata.get("sha256"):
+        matches = raw_path.is_file() and sha256_file(raw_path) == metadata["sha256"]
+    return matches
+
+
+def custom_source(source: SourceSpec) -> bool:
+    return source.url != DEFAULT_SOURCE_URLS.get(source.name, source.url)
+
 
 def utc_now() -> datetime:
     return datetime.now(timezone.utc)
@@ -419,7 +452,8 @@ def fetch_static_source(
     old_meta = previous_meta.get(source.name, {})
     if old_meta.get("raw_path") != str(raw_path):
         old_meta = {}
-    if source_is_fresh(raw_path, old_meta, source.refresh_days, force):
+    identity_matches = source_identity_matches(source, old_meta, raw_path)
+    if source_is_fresh(raw_path, old_meta, source.refresh_days, force or not identity_matches):
         return update_metadata_for_file(
             source=source,
             raw_path=raw_path,
@@ -437,9 +471,11 @@ def fetch_static_source(
             proxy_url=proxy_url,
             download_tool=download_tool,
         )
+        if custom_source(source) or not identity_matches:
+            validate_source_payload(tmp, source.parser)
         new_sha = sha256_file(tmp)
         old_sha = old_meta.get("sha256")
-        if raw_path.exists() and old_sha == new_sha:
+        if identity_matches and raw_path.exists() and old_sha == new_sha:
             tmp.unlink()
             status = "checked_same_checksum"
         else:
@@ -454,6 +490,8 @@ def fetch_static_source(
     except Exception as error:  # noqa: BLE001 - preserve cache and report source error
         if tmp.exists():
             tmp.unlink()
+        if custom_source(source) or not identity_matches:
+            raise RuntimeError(f"Selected source {source.name} ({source.url}) failed; prior bytes preserved: {error}") from error
         if raw_path.exists():
             meta = update_metadata_for_file(
                 source=source,
@@ -533,6 +571,86 @@ def _parse_remote_md5(text: str) -> str:
     if not match:
         raise ValueError(f"Could not parse ClinVar companion MD5: {text[:200]!r}")
     return match.group(1).lower()
+
+
+def selected_clinvar_vcv_metadata(path: Path) -> dict[str, Any]:
+    """Validate a supplied VCV stream and record local identity, never a publisher claim."""
+    path = path.expanduser().absolute()
+    if not path.is_file() or path.stat().st_size == 0:
+        raise ValueError(f"Missing or empty explicit ClinVar VCV XML: {path}")
+
+    def identity():
+        stat = path.stat()
+        return (stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns)
+
+    before = identity()
+    sha256 = hashlib.sha256()
+    md5 = hashlib.md5()
+    with path.open("rb") as handle:
+        for block in iter(lambda: handle.read(1024 * 1024), b""):
+            sha256.update(block)
+            md5.update(block)
+    records = 0
+    root_tag = None
+    root_element = None
+    declared_release_date = None
+    opener = gzip.open if str(path).endswith(".gz") else open
+    with opener(path, "rb") as handle:
+        for event, element in ET.iterparse(handle, events=("start", "end")):
+            tag = element.tag.rsplit("}", 1)[-1]
+            if root_tag is None:
+                root_tag = tag
+                root_element = element
+                if root_tag != "ClinVarVariationRelease":
+                    raise ValueError(f"Not a ClinVar VCV XML release: {path}; root={root_tag}")
+                declared_release_date = element.get("ReleaseDate")
+            if event == "end":
+                if tag == "VariationArchive":
+                    if not str(element.get("VariationID", "")).isdigit():
+                        raise ValueError(f"ClinVar VCV record lacks a numeric VariationID: {path}")
+                    records += 1
+                    root_element.clear()
+                element.clear()
+    if not records:
+        raise ValueError(f"ClinVar VCV XML contains no VariationArchive records: {path}")
+    if identity() != before:
+        raise ValueError(f"Explicit ClinVar VCV XML changed during validation: {path}; wait for its writer")
+    return {
+        "name": CLINVAR_VCV_SPEC.name,
+        "url": None,
+        "md5_url": None,
+        "remote_md5": None,
+        "raw_path": str(path),
+        "source_role": CLINVAR_VCV_SPEC.source_role,
+        "parser": CLINVAR_VCV_SPEC.parser,
+        "source_mode": "explicit_local_input",
+        "publisher_identity_verified": False,
+        "status": "validated_explicit_local_input",
+        "last_checked_at_utc": iso_now(),
+        "size_bytes": before[2],
+        "sha256": sha256.hexdigest(),
+        "md5": md5.hexdigest(),
+        "file_mtime_utc": file_mtime_iso(path),
+        "xml_root": root_tag,
+        "declared_release_date": declared_release_date,
+        "variation_archive_records": records,
+        "error": "",
+    }
+
+
+def require_selected_clinvar_injection(metadata: dict[str, Any], gofcards_path: Path) -> None:
+    """Bind explicit-source provenance to the evidence this builder actually consumes."""
+    injected = load_gofcards_cache(gofcards_path).get("metadata", {}).get("clinvar", {})
+    source = injected.get("source")
+    if (
+        not isinstance(source, str)
+        or str(Path(source).expanduser().absolute()) != metadata["raw_path"]
+        or injected.get("source_sha256") != metadata["sha256"]
+    ):
+        raise ValueError(
+            "Explicit ClinVar VCV XML path/SHA256 does not match the injected GoFCards cache; "
+            "run injection with this selected input before the full non-LOF build"
+        )
 
 
 def fetch_clinvar_vcv(
@@ -720,6 +838,8 @@ def carry_forward_source_metadata(
     """Carry a non-ClinVar source through a ClinVar-only refresh unchanged."""
     raw_path = raw_dir / source.raw_filename
     old = dict(previous_meta.get(source.name, {}))
+    if not source_identity_matches(source, old, raw_path):
+        raise ValueError(f"ClinVar-only refresh cannot change selected source URL: {source.name}; run a complete refresh")
     old.update(
         {
             "name": source.name,
@@ -814,7 +934,8 @@ def fetch_panelapp(
     old_meta = previous_meta.get(source.name, {})
     if old_meta.get("raw_path") != str(raw_path):
         old_meta = {}
-    if source_is_fresh(raw_path, old_meta, source.refresh_days, force):
+    identity_matches = source_identity_matches(source, old_meta, raw_path)
+    if source_is_fresh(raw_path, old_meta, source.refresh_days, force or not identity_matches):
         return update_metadata_for_file(
             source=source,
             raw_path=raw_path,
@@ -833,6 +954,11 @@ def fetch_panelapp(
                 proxy_url=proxy_url,
                 download_tool=download_tool,
             )
+            if (custom_source(source) or not identity_matches) and (not isinstance(payload, dict)
+                    or not isinstance(payload.get("results"), list)
+                    or any(not isinstance(row, dict) or not row.get("id") for row in payload["results"])
+                    or payload.get("next") is not None and not isinstance(payload["next"], str)):
+                raise ValueError("Selected PanelApp URL must provide the original results/next list schema")
             panels.extend(payload.get("results", []))
             next_url = payload.get("next")
             if max_panels is not None and len(panels) >= max_panels:
@@ -844,10 +970,8 @@ def fetch_panelapp(
             panel_id = panel.get("id")
             if not panel_id:
                 continue
-            detail_url = (
-                f"https://panelapp.genomicsengland.co.uk/api/v1/panels/"
-                f"{panel_id}/?format=json"
-            )
+            detail_url = urllib.parse.urljoin(source.url.split("?", 1)[0].rstrip("/") + "/",
+                                               f"{panel_id}/?format=json")
             try:
                 detail = fetch_json(
                     detail_url,
@@ -856,7 +980,16 @@ def fetch_panelapp(
                     proxy_url=proxy_url,
                     download_tool=download_tool,
                 )
+                if custom_source(source) or not identity_matches:
+                    if (not isinstance(detail, dict) or not isinstance(detail.get("genes"), list)
+                            or any(not isinstance(gene, dict)
+                                   or gene.get("gene_data") is not None and not isinstance(gene["gene_data"], dict)
+                                   or gene.get("publications") is not None and not isinstance(gene["publications"], list)
+                                   for gene in detail.get("genes", []))):
+                        raise ValueError("Selected PanelApp detail must retain the original genes/gene_data/publications schema")
             except Exception as error:  # noqa: BLE001
+                if custom_source(source) or not identity_matches:
+                    raise
                 detail = {
                     **panel,
                     "genes": [],
@@ -879,7 +1012,7 @@ def fetch_panelapp(
             handle.write("\n")
         new_sha = sha256_file(tmp)
         old_sha = old_meta.get("sha256")
-        if raw_path.exists() and old_sha == new_sha:
+        if identity_matches and raw_path.exists() and old_sha == new_sha:
             tmp.unlink()
             status = "checked_same_checksum"
         else:
@@ -887,6 +1020,8 @@ def fetch_panelapp(
             status = "updated" if old_sha else "downloaded"
         return update_metadata_for_file(source, raw_path, status, old_sha)
     except Exception as error:  # noqa: BLE001
+        if custom_source(source) or not identity_matches:
+            raise RuntimeError(f"Selected source {source.name} ({source.url}) failed; prior bytes preserved: {error}") from error
         if raw_path.exists():
             return update_metadata_for_file(
                 source, raw_path, "using_existing_after_download_error", old_meta.get("sha256"), str(error)
@@ -1360,6 +1495,8 @@ def parse_all_sources(raw_dir: Path) -> pd.DataFrame:
         try:
             frames.append(parser_fn(raw_path))
         except Exception as exc:  # noqa: BLE001
+            if custom_source(spec):
+                raise ValueError(f"Incompatible selected source {spec.name} ({spec.url}): {exc}") from exc
             print(f"parse_error source={spec.name}: {exc}", file=sys.stderr)
             continue
     unified = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame(columns=UNIFIED_COLUMNS)
@@ -1892,6 +2029,12 @@ def parse_args() -> argparse.Namespace:
         help="Draft 2020-12 schema required before canonical JSON replacement.",
     )
     parser.add_argument(
+        "--clinvar-vcv",
+        type=Path,
+        default=None,
+        help="Use this exact supplied VCV XML instead of acquiring the managed weekly source; record local identity only.",
+    )
+    parser.add_argument(
         "--clinvar-min-review-stars",
         type=int,
         choices=[2, 3, 4],
@@ -1959,11 +2102,18 @@ def parse_args() -> argparse.Namespace:
         help="Validate an existing canonical non-LOF JSON and exit.",
     )
     parser.add_argument("--stale-lock-hours", type=float, default=24.0)
+    parser.add_argument("--g2p-ddg2p-url", default=None, type=source_url,
+                        help="Explicit source URL; retains the original publisher schema and source role.")
+    parser.add_argument("--clingen-dosage-grch38-url", default=None, type=source_url,
+                        help="Explicit source URL; retains the original publisher schema and source role.")
+    parser.add_argument("--panelapp-panels-url", default=None, type=source_url,
+                        help="Explicit source URL; retains the original publisher schema and source role.")
     return parser.parse_args()
 
 
 def main() -> int:
     args = parse_args()
+    configure_source_urls(args)
     if args.validate_only:
         canonical = read_json(args.validate_only.resolve())
         if not canonical:
@@ -1975,6 +2125,11 @@ def main() -> int:
         )
         return 0
 
+    selected_vcv = getattr(args, "clinvar_vcv", None)
+    # Validate an explicit input before any upstream acquisition or cache write.
+    selected_vcv_meta = selected_clinvar_vcv_metadata(selected_vcv) if selected_vcv is not None else None
+    if selected_vcv_meta is not None and not args.fetch_sources_only:
+        require_selected_clinvar_injection(selected_vcv_meta, args.gofcards_exact_variants)
     cache_dir = args.cache_dir.resolve()
     raw_dir = (
         Path(args.shared_raw_dir).expanduser().resolve()
@@ -2035,16 +2190,19 @@ def main() -> int:
             )
 
         print(f"checking_source={CLINVAR_VCV_SPEC.name}", file=sys.stderr)
-        source_meta[CLINVAR_VCV_SPEC.name] = fetch_clinvar_vcv(
-            raw_dir=raw_dir,
-            previous_meta=previous_sources,
-            force=args.force,
-            timeout=args.timeout,
-            retries=args.retries,
-            proxy_url=args.proxy_url,
-            download_tool=args.download_tool,
-            max_download_seconds=args.clinvar_max_download_seconds,
-        )
+        if selected_vcv_meta is not None:
+            source_meta[CLINVAR_VCV_SPEC.name] = selected_vcv_meta
+        else:
+            source_meta[CLINVAR_VCV_SPEC.name] = fetch_clinvar_vcv(
+                raw_dir=raw_dir,
+                previous_meta=previous_sources,
+                force=args.force,
+                timeout=args.timeout,
+                retries=args.retries,
+                proxy_url=args.proxy_url,
+                download_tool=args.download_tool,
+                max_download_seconds=args.clinvar_max_download_seconds,
+            )
 
         manifest = {
             "schema_version": "2.0",
@@ -2061,6 +2219,9 @@ def main() -> int:
             "built_at_utc": iso_now(),
             "sources": source_meta,
         }
+        if selected_vcv_meta is not None:
+            manifest["expected_raw_filenames"].remove(CLINVAR_VCV_SPEC.raw_filename)
+            manifest["selected_clinvar_vcv_path"] = selected_vcv_meta["raw_path"]
         if args.fetch_sources_only:
             # Stop before any build input is hashed. On a first install the
             # GoFCards cache hashed just below does not exist yet: ClinVar
@@ -2124,6 +2285,8 @@ def main() -> int:
                 for name, metadata in sorted(source_meta.items())
             },
         }
+        if selected_vcv_meta is not None:
+            build_inputs["selected_clinvar_vcv_path"] = selected_vcv_meta["raw_path"]
         manifest["build_inputs"] = build_inputs
         if (
             not args.force

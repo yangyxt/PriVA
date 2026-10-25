@@ -1,6 +1,6 @@
 # GoFCards cache: schema reference
 
-Deployed artifact: `/paedyl01/disk1/yangyxt/PriVA/data/gofcards/gofcards_exact_gof.json.gz`
+Deployed artifact: `data/gofcards/gofcards_exact_gof.json.gz`
 
 There is exactly one deployed GoFCards cache, and it already carries its ClinVar
 conditions. It is built in two steps, the first of which writes a build
@@ -8,10 +8,10 @@ intermediate rather than a second deliverable:
 
 | Step | Script | Writes |
 | --- | --- | --- |
-| `gofcards_exact_gof_cache_install` | `/paedyl01/disk1/yangyxt/PriVA/scripts/build_gofcards_exact_gof_cache.py` | `<gofcards_workdir>/gofcards_exact_gof.normalized.json.gz` (intermediate) |
-| `gofcards_clinvar_injection_install` | `/paedyl01/disk1/yangyxt/PriVA/scripts/inject_clinvar_into_gofcards.py` | `data/gofcards/gofcards_exact_gof.json.gz` (deployed) |
+| `gofcards_exact_gof_cache_install` | `scripts/build_gofcards_exact_gof_cache.py` | `<gofcards_workdir>/gofcards_exact_gof.normalized.json.gz` (intermediate) |
+| `gofcards_clinvar_injection_install` | `scripts/inject_clinvar_into_gofcards.py` | `data/gofcards/gofcards_exact_gof.json.gz` (deployed) |
 
-Both are functions in `/paedyl01/disk1/yangyxt/PriVA/scripts/install_utils.sh`.
+Both are functions in `scripts/install_utils.sh`.
 The split exists so a ClinVar refresh does not force the VEP pipeline to rerun,
 not because two caches are published.
 
@@ -504,7 +504,7 @@ assertion (a variant plus one paper), not a variant. 3,161 workbook rows describ
 | `pmid` | single PubMed identifier |
 | `pscore` | GoFCards P score for this record |
 | `disease` | GoFCards "Disorder involved" |
-| `function` | free text — **not reliably scoped to this variant**; see the limitations section of `/paedyl01/disk1/yangyxt/PriVA/docs/GOFCARDS_NORMALIZATION_METHODS.md` |
+| `function` | free text — **not reliably scoped to this variant**; see the limitations section of `docs/GOFCARDS_NORMALIZATION_METHODS.md` |
 | `pathway` | GoFCards "Pathways proteins involved" |
 | `animal_model`, `cell_model` | `Y` / `N` |
 | `source_order` | row number in the public workbook |
@@ -539,7 +539,7 @@ Ensembl and its RefSeq member and PriVA may annotate with either.
 ```python
 import gzip, json
 cache = json.load(gzip.open(
-    "/paedyl01/disk1/yangyxt/PriVA/data/gofcards/gofcards_exact_gof.json.gz", "rt"))
+    "data/gofcards/gofcards_exact_gof.json.gz", "rt"))
 
 for vid, variant in cache["genes"]["BRAF"]["variants"].items():
     if variant["record"]["eligibility"]["status"] != "eligible":

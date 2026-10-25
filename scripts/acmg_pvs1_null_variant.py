@@ -37,6 +37,7 @@ from typing import Tuple
 
 from alternative_start_codon import adjust_pvs1_for_start_lost, get_detector
 from protein_domain_mapping import DomainNormalizer
+from interpro_mapping_io import load_interpro_mapping
 
 from acmg_consequence import truncate_fraction
 from acmg_variant_mechanism import _variant_mechanism_masks
@@ -589,7 +590,7 @@ def PVS1_criteria(df: pd.DataFrame,
 
     # Load the necessary dict file
     clinvar_patho_exon_af_dict = pickle.load(gzip.open(clinvar_patho_exon_af_stat)) if clinvar_patho_exon_af_stat.endswith(".gz") else pickle.load(open(clinvar_patho_exon_af_stat, 'rb'))
-    interpro_entry_map_dict = pickle.load(gzip.open(interpro_entry_map_pkl)) if interpro_entry_map_pkl.endswith(".gz") else pickle.load(open(interpro_entry_map_pkl, 'rb'))
+    interpro_entry_map_dict = load_interpro_mapping(interpro_entry_map_pkl)
     tranx_pp_domain_map = pickle.load(gzip.open(tranx_exon_domain_map_pkl)) if tranx_exon_domain_map_pkl.endswith(".gz") else pickle.load(open(tranx_exon_domain_map_pkl, 'rb'))
     dm_instance = DomainNormalizer()
     intolerant_domains, exon_rare_patho_afs = zip(*df.apply(span_functional_domains, axis=1, dm_instance=dm_instance,

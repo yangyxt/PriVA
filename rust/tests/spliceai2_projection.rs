@@ -557,6 +557,151 @@ fn insertions_deletions_and_complex_indels_remain_exactly_anchored() {
 }
 
 #[test]
+fn publisher_indel_mnv_preserves_minus_strand_genomic_allele_and_score_lexemes() {
+    // The failed publisher row's allele/position/strand shape, with invented
+    // scores and context: no licensed prediction values are embedded here.
+    let context = genes("G1\tchr1\t957100\t957200\t+\tPLUS\nG2\tchr1\t957100\t957200\t-\tMINUS\n");
+    let mut r = row();
+    for (column, value) in [
+        ("pos", "957127"),
+        ("ref", "GG"),
+        ("alt", "AA"),
+        ("strand", "-"),
+        ("acceptor_gain_delta_score_0", "1.00e-1"),
+        ("acceptor_loss_delta_score_0", "0.2000"),
+        ("donor_gain_delta_score_0", "-0.30"),
+        ("donor_loss_delta_score_0", "4e-1"),
+        ("spliceai2_summary_score", "0.4"),
+        ("acceptor_gain_dist_0", "-0013"),
+        ("acceptor_loss_dist_0", "00014"),
+        ("donor_gain_dist_0", "-0"),
+        ("donor_loss_dist_0", "12"),
+    ] {
+        set(&mut r, column, value);
+    }
+    let (out, stats) = run(&context, &table(&[r]), VariantKind::Indel, false).unwrap();
+    assert_eq!(
+        out,
+        "chr1\t957127\t.\tGG\tAA\t.\t.\tSpliceAI=AA|MINUS|1.00e-1|0.2000|-0.30|4e-1|-0013|00014|-0|12\n"
+    );
+    assert_eq!(
+        stats,
+        Statistics {
+            input_rows: 1,
+            output_records: 1
+        }
+    );
+}
+
+#[test]
+fn indel_shard_mnvs_keep_source_order_among_indels_and_both_model_strands() {
+    let cases = [
+        ("20", "GG", "AA", "-", "MINUS"),
+        ("20", "T", "TA", "+", "PLUS"),
+        ("20", "GG", "AA", "+", "PLUS"),
+        ("20", "CC", "TT", "-", "MINUS"),
+        ("20", "GGT", "GG", "-", "MINUS"),
+        ("21", "AC", "AT", "+", "PLUS"),
+    ];
+    let rows: Vec<_> = cases
+        .iter()
+        .map(|(pos, reference, alternate, model_strand, _)| {
+            let mut r = row();
+            for (column, value) in [
+                ("pos", *pos),
+                ("ref", *reference),
+                ("alt", *alternate),
+                ("strand", *model_strand),
+            ] {
+                set(&mut r, column, value);
+            }
+            r
+        })
+        .collect();
+    let (out, stats) = run(
+        &genes(DEFAULT_GENES),
+        &table(&rows),
+        VariantKind::Indel,
+        false,
+    )
+    .unwrap();
+    let expected: String = cases
+        .iter()
+        .map(|(pos, reference, alternate, _, symbol)| {
+            format!(
+                "chr1\t{pos}\t.\t{reference}\t{alternate}\t.\t.\tSpliceAI={alternate}|{symbol}|0.10|0.20|0.30|0.40|-13|14|-11|12\n"
+            )
+        })
+        .collect();
+    assert_eq!(out, expected);
+    assert_eq!(
+        stats,
+        Statistics {
+            input_rows: 6,
+            output_records: 6
+        }
+    );
+}
+
+#[test]
+fn mnvs_still_require_valid_native_fields_gene_context_and_unique_sorted_keys() {
+    let mut mnv = row();
+    set(&mut mnv, "ref", "GG");
+    set(&mut mnv, "alt", "AA");
+    set(&mut mnv, "strand", "-");
+    for (column, value, message) in [
+        ("ref", "AA", "REF equals ALT"),
+        ("alt", "AN", "alleles must be"),
+        ("strand", ".", "expected model/gene strand"),
+        ("jxn_loss_ref_score_2", "NaN", "jxn_loss_ref_score_2"),
+        ("spliceai2_summary_score", "0.41", "summary_score differs"),
+    ] {
+        let mut bad = mnv.clone();
+        set(&mut bad, column, value);
+        let error = run(
+            &genes(DEFAULT_GENES),
+            &table(&[bad]),
+            VariantKind::Indel,
+            false,
+        )
+        .unwrap_err();
+        assert!(error.contains(message), "{column}={value:?}: {error}");
+    }
+    assert!(
+        run(
+            &genes("G1\tchr1\t10\t100\t+\tPLUS\n"),
+            &table(&[mnv.clone()]),
+            VariantKind::Indel,
+            false
+        )
+        .unwrap_err()
+        .contains("no verified gene interval")
+    );
+    assert!(
+        run(
+            &genes(DEFAULT_GENES),
+            &table(&[mnv.clone(), mnv.clone()]),
+            VariantKind::Indel,
+            false
+        )
+        .unwrap_err()
+        .contains("native TSV line 3: duplicate allele + model strand")
+    );
+    let mut next = mnv.clone();
+    set(&mut next, "pos", "21");
+    assert!(
+        run(
+            &genes(DEFAULT_GENES),
+            &table(&[next, mnv]),
+            VariantKind::Indel,
+            false
+        )
+        .unwrap_err()
+        .contains("coordinates are not ascending")
+    );
+}
+
+#[test]
 fn variant_kind_mismatch_rejected() {
     let mut r = row();
     set(&mut r, "alt", "CT");
@@ -574,15 +719,7 @@ fn variant_kind_mismatch_rejected() {
     let mut r = row();
     set(&mut r, "ref", "AC");
     set(&mut r, "alt", "GT");
-    assert!(
-        run(
-            &genes(DEFAULT_GENES),
-            &table(&[r]),
-            VariantKind::Indel,
-            false
-        )
-        .is_err()
-    );
+    rejects(r, "snv input requires");
 }
 
 #[test]

@@ -17,6 +17,8 @@
 //! absolute value or clipping: they are in [-1,1], whereas ref/alt probabilities
 //! are in [0,1]. Genomic distance signs are already restored by upstream and must
 //! not be reflected again on the minus strand. All selected lexemes are preserved.
+//! Variant kind identifies the publisher's shard: its indel tables also contain
+//! multi-base substitutions, which retain their intact scored genomic alleles.
 
 use crate::cli::{Result, invalid};
 use std::collections::{BTreeSet, HashMap, HashSet};
@@ -24,7 +26,7 @@ use std::fs::{File, OpenOptions};
 use std::io::{self, BufRead, BufReader, BufWriter, Write};
 
 const CONTEXT_HEADER: &str = "gene_id\tchrom\tgene_start\tgene_end\tstrand\tgene_name";
-const USAGE: &str = "usage: priva spliceai2-vcf --genes CONTEXT.tsv --chrom chr1 --kind snv|indel --input PATH_OR_- --output NEW_PATH_OR_- [--no-header]\nInput is uncompressed native 84-column SpliceAI2 TSV; every shard requires its TSV header.\nContext: gene_id,chrom,gene_start,gene_end,strand,gene_name (tab-separated; 1-based closed).\nThe deployment driver must verify exact source-region/GENCODE identities and retain all original fields.\nOutput is an annotation-only, lossy top0 VCF view; no scoring or ACMG activation is implied.\nOutput files must not exist. On error partial output is not a completed artifact.\n--no-header suppresses only the output VCF header for later chromosome shards.";
+const USAGE: &str = "usage: priva spliceai2-vcf --genes CONTEXT.tsv --chrom chr1 --kind snv|indel --input PATH_OR_- --output NEW_PATH_OR_- [--no-header]\nInput is uncompressed native 84-column SpliceAI2 TSV; every shard requires its TSV header.\nKind selects the publisher's shard: indel includes multi-base substitutions; scored genomic alleles remain intact.\nContext: gene_id,chrom,gene_start,gene_end,strand,gene_name (tab-separated; 1-based closed).\nThe deployment driver must verify exact source-region/GENCODE identities and retain all original fields.\nOutput is an annotation-only, lossy top0 VCF view; no scoring or ACMG activation is implied.\nOutput files must not exist. On error partial output is not a completed artifact.\n--no-header suppresses only the output VCF header for later chromosome shards.";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum VariantKind {
@@ -357,8 +359,10 @@ pub fn project<G: BufRead, R: BufRead, W: Write>(
                 VariantKind::Snv if fields[2].len() != 1 || fields[3].len() != 1 => {
                     return Err(invalid("snv input requires one-base REF and ALT"));
                 }
-                VariantKind::Indel if fields[2].len() == fields[3].len() => {
-                    return Err(invalid("indel input requires unequal REF/ALT lengths"));
+                VariantKind::Indel if fields[2].len() == 1 && fields[3].len() == 1 => {
+                    return Err(invalid(
+                        "indel input requires at least one multi-base allele",
+                    ));
                 }
                 _ => (),
             }

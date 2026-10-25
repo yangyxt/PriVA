@@ -10,6 +10,9 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
+import stat
+import tempfile
 from pathlib import Path
 
 import pandas as pd
@@ -216,7 +219,20 @@ def write_gene_disease_hpo_assertions(
         assertions = annotate_hpo_assertions(assertions, registry)
     output_path = Path(output_file)
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    assertions.to_csv(output_path, sep="\t", index=False)
+    # Preserve prior complete bytes if pandas fails after a partial write. Keep
+    # the original basename/suffix so inferred compression and gzip headers are
+    # unchanged; only this invocation's staging directory is cleaned on failure.
+    try:
+        previous_mode = stat.S_IMODE(output_path.stat().st_mode)
+    except FileNotFoundError:
+        previous_mode = None
+    with tempfile.TemporaryDirectory(prefix="." + output_path.name + ".write-",
+                                     dir=output_path.parent) as temporary:
+        staged = Path(temporary) / output_path.name
+        assertions.to_csv(staged, sep="\t", index=False)
+        if previous_mode is not None:
+            staged.chmod(previous_mode)
+        os.replace(staged, output_path)
     logger.info("Wrote assertion table to %s", output_path)
     return assertions
 

@@ -42,7 +42,12 @@ class AlternativeStartCodonDetector:
             cache_pkl_path: Optional path to cache the parsed CDS sequences
         """
         self.cds_fasta_path = cds_fasta_path
-        self.cache_pkl_path = cache_pkl_path or cds_fasta_path.replace('.fa.gz', '.cds_cache.pkl.gz')
+        # Derive the adjacent cache from the filename suffix only. A plain or
+        # generically named gzip FASTA must never become its own pickle cache.
+        default_cache_path = (cds_fasta_path[:-len('.fa.gz')] + '.cds_cache.pkl.gz'
+                              if cds_fasta_path.endswith('.fa.gz')
+                              else cds_fasta_path + '.cds_cache.pkl.gz')
+        self.cache_pkl_path = cache_pkl_path or default_cache_path
         self.cds_sequences = {}
         self.transcript_to_key = {}
         

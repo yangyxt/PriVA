@@ -148,3 +148,79 @@ def test_scope_is_attached_to_every_assertion(tmp_path: Path) -> None:
     assert len(annotated) == len(assertions)
     assert annotated["priva_scope"].isna().sum() == 0
     assert set(annotated["priva_scope"]) == {"include", "exclude", "review"}
+
+
+def test_failed_second_publication_is_rebuilt_on_warm_retry(tmp_path):
+    import json
+    import os
+    import subprocess
+    from unittest import TestCase, mock
+    import build_mondo_disease_scope as subject
+    mondo = _write_mondo(tmp_path)
+    raw = tmp_path / "raw"
+    raw.mkdir()
+    assertions = _write_assertions(raw)
+    frame = pd.read_csv(assertions, sep="\t")
+    base = raw / "genes_to_phenotype.assertions.base.tsv.gz"
+    frame.to_csv(base, sep="\t", index=False)
+    registry, scoped = tmp_path / "registry.tsv.gz", tmp_path / "scoped.tsv.gz"
+    subject.build_and_write_resources(mondo, base, registry, annotated_assertions_output=scoped)
+    old_scoped = scoped.read_bytes()
+    frame.loc[len(frame)] = ["GENE7", "OMIM:7", "HP:0000006", "-", "TAS", "OMIM:7"]
+    frame.to_csv(base, sep="\t", index=False)
+    actual_replace = os.replace
+    def fail_second(source, destination):
+        if Path(destination) == scoped:
+            raise OSError("injected second publication failure")
+        return actual_replace(source, destination)
+    with mock.patch.object(subject.os, "replace", fail_second):
+        with TestCase().assertRaisesRegex(OSError, "second publication"):
+            subject.build_and_write_resources(mondo, base, registry, annotated_assertions_output=scoped)
+    assert scoped.read_bytes() == old_scoped
+    assert len(pd.read_csv(registry, sep="\t")) == 7
+    assert len(pd.read_csv(scoped, sep="\t")) == 6
+    for name in ("genes_to_phenotype.txt", "phenotype.hpoa"):
+        path = raw / name
+        path.write_text("local raw fixture unused by warm route\n")
+        os.utime(path, ns=(1, 1))
+    config = tmp_path / "config.json"
+    selected = {"hpo_raw_dir": str(raw), "hpo_assertions": str(scoped), "mondo_obo": str(mondo),
+                "mondo_disease_scope_registry": str(registry),
+                "mondo_disease_scope_overrides": str(tmp_path / "absent-overrides.tsv")}
+    config.write_text(json.dumps(selected))
+    script = r'''
+source "$1"
+read_yaml() { "$TEST_PYTHON" -c 'import json,sys;print(json.load(open(sys.argv[1])).get(sys.argv[2],""))' "$@"; }
+update_yaml() { "$TEST_PYTHON" -c 'import json,sys;p,k,v=sys.argv[1:];d=json.load(open(p));d[k]=v;open(p,"w").write(json.dumps(d))' "$@"; }
+download_resource_atomic() { echo UNEXPECTED_DOWNLOAD >&2; return 98; }
+wget() { echo UNEXPECTED_DOWNLOAD >&2; return 98; }
+python() {
+    if [[ "${FORBID_BUILD:-0}" == 1 && "$1" == */build_mondo_disease_scope.py ]]; then
+        echo UNEXPECTED_BUILD >&2; return 97
+    fi
+    "$TEST_PYTHON" "$@"
+}
+mondo_hpo_scope_install "$2"
+'''
+    env = {key: value for key, value in os.environ.items() if not key.startswith("PRIVA_FORCE_")}
+    env.update(TEST_PYTHON=sys.executable, PYTHONDONTWRITEBYTECODE="1")
+    command = ["bash", "-c", script, "fixture", str(ROOT / "scripts/install_utils.sh"), str(config)]
+    retry = subprocess.run(command, env=env, text=True, capture_output=True, timeout=45)
+    assert retry.returncode == 0, retry.stderr
+    assert "UNEXPECTED" not in retry.stdout + retry.stderr
+    assert len(pd.read_csv(registry, sep="\t")) == 7
+    assert len(pd.read_csv(scoped, sep="\t")) == 7
+    expected = subject.annotate_hpo_assertions(frame.astype(str), subject.build_disease_scope_registry(mondo, base))
+    actual = pd.read_csv(scoped, sep="\t", dtype=str, keep_default_na=False)
+    pd.testing.assert_frame_equal(actual, expected.astype(str))
+    def identity(path):
+        value = path.stat()
+        # Validation reads may update atime; publication identity must not change.
+        return value.st_ino, value.st_size, value.st_mtime_ns, value.st_ctime_ns, value.st_mode
+    before = {path: (path.read_bytes(), identity(path)) for path in (registry, scoped, config)}
+    warm = subprocess.run(command, env=dict(env, FORBID_BUILD="1"), text=True, capture_output=True, timeout=45)
+    assert warm.returncode == 0, warm.stderr
+    assert "UNEXPECTED" not in warm.stdout + warm.stderr
+    for path in (registry, scoped):
+        assert (path.read_bytes(), identity(path)) == before[path]
+    assert config.read_bytes() == before[config][0]

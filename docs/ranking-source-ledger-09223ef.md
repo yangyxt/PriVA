@@ -612,3 +612,78 @@ or family dispatch are unchanged. This later source is separate from main
 public-benchmark qualification.
 
 
+## Current progress — R5→R6 gene weights, 25 October 2026 CT
+
+The opt-in `priva ranking-gene-weights` procedure ports only original
+L599–616. Its in-memory API consumes current R5-entry buffers and the existing
+R4 mask through `Penalty::from_compatibility`; the R2 context and R4 warnings,
+logs and mechanism calculations are retained at their earlier source positions.
+
+```mermaid
+flowchart LR
+    R4[Current R4 buffers and penalty mask] --> D[Dispensable file: 0.9 or 1.0]
+    D --> M1[First score multiplication]
+    M1 --> G[Relevant file: 1.2 or 1.0]
+    G --> M2[Second score multiplication]
+    M2 --> R6[Third multiplication on the existing compatibility mask]
+    R6 --> R7[Original R7 remains separate]
+```
+
+A list argument of `None` disables that branch. A selected empty or comment-only
+file enables it, creates/resets its index column and multiplies by 1.0. Existing
+column positions, exact symbols/case, duplicate/gapped axes, raw Boolean null
+bits, signed zero and nonfinite score bits remain explicit. The three
+multiplications are separate; their floating order is not combined.
+
+The supported domain is at most one million rows, flat opaque axes, an exactly
+aligned Boolean/nullable-Boolean R4 mask, native float64 scores/compatibility,
+and a literal ASCII plain-text gene-file subset. That parser preserves file
+order/duplicates before set membership and the original comment behavior.
+Inference-sensitive NA/numeric/Boolean tokens, quotes/tabs/whitespace/encoding
+or compression routes, unsupported symbols/objects/dtypes, ambiguous consumed
+labels, dtype promotion, two-NaN operands and MultiIndex behavior defer to the
+actual original pandas block. No arbitrary pandas-object or parser parity is
+claimed. Preflight plans the entire block before mutation; fallback executes
+original L599–616 once on unchanged current buffers. It never repeats prior
+warnings/C1–C5/R3/R4 or a multiplier already applied.
+
+The original-only oracle has **203 cases: 175 outputs and 28 source failures**,
+including 77 genuine full-function L599/L621 checkpoints and 126 edges. Eleven
+preceding failures remain outside this boundary. The first naming-collision
+capture and the test-only Rust Unicode-format failure are retained. The initial
+147-test build, **1524546/.0**, remains **FAILED** because its comparator exposed
+an exact fallback pickle difference: promoted Float64Dtype lacked the captured
+process cache's `index_class` entry. Typed outputs, events, bits and warnings
+already matched; that byte mismatch was not waived.
+
+Read-only opcode/alias tracing and actual source execution prove the context:
+original `rank_nullable_Float64` populates the registry via R8 `sort_values`
+L673. Cold and source-initialized original R5 calls retain their distinct pickle
+hashes. The successor records that genuine, separate full-source fixture before
+any paired R5 buffer or Rust case. No cache reset/manual warming or earlier-stage
+replay on the tested buffers occurs.
+
+**1514363.3624 completed 0:0 at 12:24:56 AM CDT:** **120 exact Rust outputs and
+83 explicit original-Python fallbacks**, including all 28 original failures;
+zero mismatches. Intermediates, input mutation pickle/aliases, ordered columns,
+axes/attrs/flags, warnings and raw float/null bits match. The 147 Cargo passes
+(136 existing + 11 new) and binary are reused from the immutable failed attempt
+under exact unchanged Rust/tests/toolchain pins; only comparator/validator
+changed. Prior Python differentials are bound to byte-identical earlier bodies
+and their closed R4 result rather than repeated.
+
+Binary SHA256: `17ddcefc824ba9cc9f87d6c22ddaa3774e95743b11f6670b463528b14607130f`.
+Compiled-source pins: `22772fde81adc449e6533d7b934ca9f16cf9e6cddda42177ba87d00a74b848df`.
+Final comparison-source pins: `6763d46bd8bf1969f6437482e280b4c21bfd942243cf5de2695ddd5d287cefa4`.
+Original oracle manifest: `a585166765c2d6fe5859ffe380f2040f30d253bf8525be9be179a49f32312947`.
+
+Sources/docs remain in this checkout. All states, failed attempts, package
+context proofs, frozen sources/binaries and comparisons stay under
+`/stornext/snfs170/next-gen/scratch/yangyxt_dt/projects/PriVA_upgrade/validation/rust-ranking-gene-weights-20261024-v{1,2}`;
+logs use `logs/rust-ranking-gene-weights-*`, with Cargo/targets under the separate
+`build/rust-ranking-gene-weights-*`. C1–C5/SciPy, R7, scientific Python, installers
+and production/family dispatch are unchanged. This optional source is later than
+main 1524420's frozen sources; neither its install acceptance nor these procedure
+fixtures qualify full ranking, family data or public benchmarks.
+
+

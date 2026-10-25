@@ -249,6 +249,9 @@ pub(crate) fn run() -> Result<()> {
     if args.get(1).map(String::as_str) == Some("ranking-compatibility") {
         return crate::acmg_scoring::ranking_compatibility_transport::dispatch(&args[2..]);
     }
+    if args.get(1).map(String::as_str) == Some("ranking-gene-weights") {
+        return crate::acmg_scoring::ranking_gene_weights_transport::dispatch(&args[2..]);
+    }
     if args.get(1).map(String::as_str) == Some("mechanism-masks") {
         return crate::acmg_variant_mechanism::transport::dispatch(&args[2..]);
     }

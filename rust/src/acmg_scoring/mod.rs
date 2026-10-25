@@ -12,6 +12,8 @@ pub mod pedigree_context;
 pub(crate) mod pedigree_context_transport;
 pub mod ranking_compatibility;
 pub(crate) mod ranking_compatibility_transport;
+pub mod ranking_gene_weights;
+pub(crate) mod ranking_gene_weights_transport;
 pub mod ranking_setup;
 pub(crate) mod ranking_setup_transport;
 pub(crate) mod score_table;

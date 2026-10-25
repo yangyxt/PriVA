@@ -4,6 +4,8 @@ on:
   pull_request:
     paths:
       - '.github/workflows/migration.yml'
+      - 'config.yaml'
+      - 'cache_resources.json'
       - 'main.nf'
       - 'cadd.nf'
       - 'nextflow.config'
@@ -18,6 +20,8 @@ on:
   push:
     paths:
       - '.github/workflows/migration.yml'
+      - 'config.yaml'
+      - 'cache_resources.json'
       - 'main.nf'
       - 'cadd.nf'
       - 'nextflow.config'
@@ -81,12 +85,13 @@ jobs:
         # YAML CLI used by the unchanged shell installer. No real caches run.
         run: |
           sudo apt-get update
-          sudo apt-get install --no-install-recommends --yes tabix bcftools yq
-          dpkg-query --show --showformat='${Package} ${Version}\n' tabix bcftools yq
-          command -v bgzip tabix yq
+          sudo apt-get install --no-install-recommends --yes tabix bcftools yq parallel
+          dpkg-query --show --showformat='${Package} ${Version}\n' tabix bcftools yq parallel
+          command -v bgzip tabix yq parallel
           bgzip --version
           tabix --version
           yq --version
+          parallel --version
 
       - name: Validate adapters and strict result comparison
         run: |
@@ -97,7 +102,21 @@ jobs:
           python -m unittest discover -s tests -p 'test_cluster_alpha.py' -v
           python -m unittest discover -s tests -p 'test_cluster_primate_validation.py' -v
           python -m unittest discover -s tests -p 'test_install_utils_bootstrap.py' -v
+          python -m unittest discover -s tests -p 'test_bootstrap_nextflow_runtime.py' -v
+          python -m unittest discover -s tests -p 'test_nextflow_driver_install.py' -v
           python -m unittest discover -s tests -p 'test_install_utils_resources.py' -v
+          python -m unittest discover -s tests -p 'test_cadd_runtime_install.py' -v
+          python -m unittest discover -s tests -p 'test_cadd_transcript_resources.py' -v
+          python -m unittest discover -s tests -p 'test_clingen_source_acquisition.py' -v
+          python -m unittest discover -s tests -p 'test_gnomad_annotation_failures.py' -v
+          python -m unittest discover -s tests -p 'test_alphamissense_cache.py' -v
+          python -m unittest discover -s tests -p 'test_alphamissense_annotation_header.py' -v
+          python -m unittest discover -s tests -p 'test_alpha_configured_outputs.py' -v
+          python -m unittest discover -s tests -p 'test_mapping_artifact_routes.py' -v
+          python -m unittest discover -s tests -p 'test_mapped_artifact_publish.py' -v
+          python -m unittest discover -s tests -p 'test_install_resource_boundaries.py' -v
+          python -m unittest discover -s tests -p 'test_install_utils_explicit_plugin_inputs.py' -v
+          python -m unittest discover -s tests -p 'test_indexed_plugin_cache.py' -v
           python -m unittest discover -s tests -p 'test_install_utils_spliceai2.py' -v
           python -m unittest discover -s tests -p 'test_spliceai_cache_input.py' -v
           python -m unittest discover -s tests -p 'test_spliceai2_runtime_guard.py' -v
@@ -116,7 +135,13 @@ jobs:
 
       - name: Test SpliceAI2 preparation with real Rust, BGZF and tabix
         # Synthetic scores and GENCODE context; no model or full-cache acceptance.
-        run: PRIVA_SPLICEAI2_BIN="$CARGO_TARGET_DIR/debug/priva" python -m unittest discover -s tests -p 'test_spliceai2_deployment.py' -v
+        run: |
+          converter=$(python scripts/spliceai2_to_vep_vcf.py build-converter --tools-dir "$RUNNER_TEMP/spliceai2-install-tools" --rustc "$(rustup which --toolchain 1.90.0 rustc)" | tail -n 1)
+          export PRIVA_SPLICEAI2_INSTALL_BIN="$converter"
+          export PRIVA_SPLICEAI2_REFERENCE_BIN="$CARGO_TARGET_DIR/debug/priva"
+          python -m unittest discover -s tests -p 'test_spliceai2_converter.py' -v
+          python -m unittest discover -s tests -p 'test_spliceai2_deployment.py' -v
+          python -m unittest discover -s tests -p 'test_spliceai2_relocation.py' -v
 
       - name: Compare the actual legacy terminal sorting block with Rust
         # This tests group maxima, ordering and ranks only. Full score/criteria

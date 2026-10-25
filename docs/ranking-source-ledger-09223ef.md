@@ -444,3 +444,88 @@ does not establish complete ranking, family or public scientific acceptance.
 
 ---
 
+**R3 control multiplication procedure addendum — 24 October 2026 CT**
+
+The opt-in `priva control-multiply` procedure covers only original L528:
+`df.loc[:, "sort_index"] = df.loc[:, "sort_index"] * df.loc[:, "control_common_index"]`.
+The Rust function mutates the existing score column in memory and returns its
+original column position. The CLI is a typed validation boundary; future ordered
+workflow composition must call the function in memory.
+
+```mermaid
+flowchart LR
+    C[Actual Python C1–C5 and SciPy] --> B[Current post-control buffers]
+    B --> S{Qualified R3 inputs}
+    S -->|yes| R[Only L528 multiplication and assignment]
+    S -->|defer| P[Original Python L528 on current buffers]
+    R --> N[Later original stages]
+    P --> N
+```
+
+The qualified domain uses native `float64` operands, flat opaque axes and at most
+1,000,000 rows, preserving the pinned pandas standard NumPy-expression route.
+It retains raw floating bits, signed zero, supported nonfinite results, source
+row/index order, duplicate or gapped index labels, existing score-column position
+and untouched payload/metadata buffers. Required column lookup keeps the left
+`sort_index` failure before the right `control_common_index` failure. Duplicate
+required labels, other dtype/promotion routes, MultiIndex assignment warnings,
+larger numexpr-eligible inputs and unsupported objects retain Python. Actual
+full-ranker `Int64` and nullable `Float64` checkpoints remain deferred.
+
+Two NaN operands also defer atomically, before any row changes. Failed attempt
+1524518 retained 12 payload/sign/quieting mismatches in a 169-row edge case;
+40 actual-source sweeps found 24 cases with such mismatches, all confined to
+two-NaN operands. Neither semantic NaN equality nor a guessed payload preference
+was accepted. A dedicated Rust test checks that this rejection leaves preceding
+finite and signaling-NaN cells unchanged.
+
+The preimplementation oracle retains 116 cases: 80 normal actual Python C1–C5
+returns matched to the full-ranker's R4 entry or R3 failure, plus 36 source edge
+probes. One preceding C1–C5 failure is retained separately and never counted as a
+Rust-boundary case. C1–C5/SciPy calls, numerical settings and later multiplications
+remain the original Python source; no factors are combined or reordered.
+
+Attempt 1524519 passed all 127 Rust tests, then failed the fallback capture
+comparison. Its replay loaded an entry pickle whose equal cache-key strings
+lost their aliases to newly created dtype-cache keys. Independent object-graph
+and pickle-opcode checks identify exactly `numpy_dtype` and `kind`: the genuine
+Float64/Int64 caches share each key object; the rehydrated entry does not. Values,
+array bits, warnings and dtype objects agree. The extra 17 pickle bytes describe
+capture/provenance string aliases, which the scientific statement does not test.
+No byte waiver or cache reset was used: the corrected comparator reconstructs
+the producing prepared state and its original entry observation, proves
+preflight nonmutation, and matches the complete immediate after-pickle exactly.
+This observer reconstruction is fixture instrumentation, not production coercion.
+
+Final 1524524/.0 completed 0:0 at **10:54 PM CDT** with **88 exact Rust outputs,
+three original failures and 25 deliberate Python fallbacks**, zero mismatches.
+Six fallbacks reproduce original exceptions and remain in the fallback count.
+Each fallback executes only L528 on the current buffers and matches full output,
+warnings, exception phase and immediate before/after state. Later integration
+must use that stage fallback, or select the full Python backend before any prior
+stage runs; it must never replay prior warnings, C1–C5 or earlier mutations.
+
+The binary is unchanged from 1524519's completed compilation/Rust-test phase:
+SHA256 `4d333d705b94331b332bfecfa9ef20e178acec86704368c82c66c974ab6a681f`.
+That whole job and 1524518 remain FAILED. Build pins are
+`cbf656166b699f5fc1f2319129f39e079309dc67129301d245d245a2cb429a06`;
+final comparison pins are
+`992ab82800d687dc1db0a2acae0c353138bb0ef534b16b221d2adb717dea246f`.
+All 127 Rust tests include nine R3 tests. Final validation reran R2 (197 exact,
+53 failures, 28 fallbacks), R1 (117/8/4), R8 (84/6/1 plus 15 exact integer
+outputs), PEXT (5,786 scalar results/18 errors), condition/mechanism, scoring
+(19,754 parsed-cell rows) and old `final-order` (60 cases/five rejections).
+
+Maintained sources and this ledger stay here. All oracle states, failed attempts,
+cache-alias/NaN diagnoses, snapshots, binary and comparisons are under
+`/stornext/snfs170/next-gen/scratch/yangyxt_dt/projects/PriVA_upgrade/validation/rust-control-multiply-20261024-v1`;
+logs use data-side `logs/rust-control-multiply-*`, with Cargo/targets separately
+under `build/rust-control-multiply-*`. Existing R1/R2/R8 behavior and tests remain
+unchanged; the R2 typed reader gained only crate visibility for reuse. Scientific
+Python, installers and production/family dispatch are unchanged. This module is
+separate from main 1524420's frozen 6:39 PM CT source and does not qualify the
+complete R3 dtype domain, full ranking, a family or the public benchmark.
+
+
+---
+

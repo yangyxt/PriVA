@@ -4,6 +4,8 @@
 //! Scalar functions retain their source boundaries. This does not assign evidence,
 //! load pickle resources, calculate ranking penalties or qualify a family run.
 pub mod calculate_posterior_probability;
+pub mod control_multiply;
+pub(crate) mod control_multiply_transport;
 pub mod create_criteria_summary;
 pub mod fix_clingen_term;
 pub mod pedigree_context;

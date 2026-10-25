@@ -155,6 +155,54 @@ oracle checks source SHA256
 Use `rust/tests/differential_scoring.py` with the built `priva` executable.
 These synthetic tests do not qualify complete ACMG assignment or family results.
 
+## Variant mechanism masks: opt-in typed boundary
+
+`rust/src/acmg_variant_mechanism/` implements the 27 ordered outputs of
+`_variant_mechanism_masks` from `09223ef`, with the original Python still selected
+for production. The module follows the original evaluation order:
+
+```text
+Required columns → profile/history masks → effect text
+                 → whole-column LOF → GOF → DN conversion → 27 Boolean masks
+```
+
+`priva mechanism-masks --input typed.csv --output new.csv` is an explicit test
+transport, not a replacement for pandas TSV inference. Its named dtype options
+retain object/string/nullable Int64, Float64 and boolean distinctions. The library
+also offers `from_polars` with explicit pandas dtype metadata and separately
+retained index labels/names. Unsupported Polars dtypes return `UnfinishedParity`,
+including empty or entirely null columns; there is no production dispatch.
+
+Frozen build **1515451** completed successfully on 2026-10-18: **9 Rust tests** and
+**133 actual-Python oracle cases / 2,349 rows** passed, including **21 exact expected
+errors**. The reference was Python 3.12.3, pandas 2.2.3 and NumPy 1.26.4; the
+unchanged Python file SHA256 is
+`c7e8da80ca0ec47fb38a5fd1d965641c1791189cb0d25a651253f44508d0bf26`.
+The tested Rust executable SHA256 is
+`c0280abb5125184a7994be84e1dd8887bb9e5c4a85e058c3e6303ea11a5ffcb4`.
+Cases cover tag/newline/Unicode-whitespace behavior, numeric thresholds and
+column-wide inference, optional columns, duplicate/gapped labels, failure order,
+input nonmutation and nullable empty-string versus missing-value behavior.
+The translated numeric parser retains pandas source/version attribution and the
+upstream BSD license in `PANDAS_LICENSE` beside the module.
+
+This is bounded typed-input agreement, **not full pandas-object, ranking or family
+parity**. The CSV transport does not prove pandas Index subclasses/levels or all
+Series metadata; heterogeneous duplicate-name dtypes are not representable by its
+per-name dtype options. The library preserves caller-supplied labels/names, and
+unit tests check selected Series-name semantics, but production read-table dtype
+inference and arbitrary object/categorical/temporal inputs remain unqualified.
+SciPy/control-frequency/ranking calculations are outside this module.
+
+Frozen source is under
+`/stornext/snfs170/next-gen/scratch/yangyxt/git_repos/PriVA-install-snapshots/rust_mechanism_masks_20261018_v4`.
+Closed oracles, comparisons, executables and logs are under
+`/stornext/snfs170/next-gen/scratch/yangyxt_dt/projects/PriVA_upgrade`, using
+`validation/rust-mechanism-masks-{20261018-v7,comparison-20261018-v4}`,
+`build/rust-mechanism-masks-20261018-v4` and matching `logs/`/`deployment/` records.
+Earlier offline dependency failure and expanded-oracle mismatches remain retained;
+their narrower passes do not qualify the final source.
+
 ## Port order and boundaries
 
 | Stage | Python scope | Rust/Polars replacement and gate |

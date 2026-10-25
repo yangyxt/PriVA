@@ -231,6 +231,9 @@ pub(crate) fn run() -> Result<()> {
         );
         return Ok(());
     }
+    if args.get(1).map(String::as_str) == Some("mechanism-masks") {
+        return crate::acmg_variant_mechanism::transport::dispatch(&args[2..]);
+    }
     if args.get(1).map(String::as_str) == Some("score-criteria") {
         return crate::acmg_scoring::score_table::dispatch(&args[2..]);
     }

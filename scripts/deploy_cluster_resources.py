@@ -1,18 +1,33 @@
 #!/usr/bin/env python3
 """Resumable, separately locked cluster resource stages for the GRCh37 baseline."""
 import argparse
+from datetime import datetime, timezone
 import fcntl
 import gzip
 import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import tempfile
 from urllib.parse import urlparse
 
 REPO = Path(__file__).resolve().parents[1]
+import importlib.util
+
+_RUNTIME_SPEC = importlib.util.spec_from_file_location(
+    "priva_cadd_runtime", Path(__file__).with_name("cadd_runtime.py"))
+_RUNTIME = importlib.util.module_from_spec(_RUNTIME_SPEC)
+_RUNTIME_SPEC.loader.exec_module(_RUNTIME)
+CADD_ENVIRONMENTS = _RUNTIME.CADD_ENVIRONMENTS
+CADD_ENTRY_POINTS = _RUNTIME.CADD_ENTRY_POINTS
+ESM_MODELS = _RUNTIME.ESM_MODELS
+install_cadd_entry_points = _RUNTIME.install_cadd_entry_points
+readable_asset = _RUNTIME.readable_asset
+cadd_asset_readiness = _RUNTIME.cadd_asset_readiness
+check_cadd_environments = _RUNTIME.check_cadd_environments
 
 
 def run(command, **kwargs):
@@ -68,7 +83,7 @@ def source(args, manifest):
     actual = subprocess.check_output(["git", "-C", str(destination), "rev-parse", "HEAD"], text=True).strip()
     if actual != manifest["cadd"]["source_commit"]:
         raise RuntimeError("CADD source revision does not match pinned manifest")
-    run(["git", "-C", destination, "diff", "--quiet", "HEAD", "--", "src", "config", "envs", "Snakefile"])
+    run(["git", "-C", destination, "diff", "--quiet", "HEAD", "--", "src", "config", "envs", "Snakefile", "data/models"])
     return destination
 
 
@@ -135,11 +150,17 @@ def cadd_runtime(args, manifest):
     environment["APPTAINER_CACHEDIR"] = str(folder / "image-cache")
     environment["APPTAINER_TMPDIR"] = str(args.tmp_root / "cadd-apptainer")
     Path(environment["APPTAINER_TMPDIR"]).mkdir(parents=True, exist_ok=True)
+    probe_home = args.tmp_root / "cadd-runtime-checks"
+    probe_home.mkdir(parents=True, exist_ok=True)
+    environment.update({"APPTAINERENV_MPLCONFIGDIR": str(probe_home / "matplotlib"),
+                        "OMP_NUM_THREADS": "1"})
+    print(f"CADD runtime producer: {Path(__file__).resolve()}; SHA256 {checksum(Path(__file__))}", flush=True)
     if not image.exists():
         partial = image.with_name(image.name + ".partial")
         run(["apptainer", "pull", "--force", partial, manifest["cadd"]["image"]], env=environment)
         partial.replace(image)
-        write_json(folder / "image.origin.json", {"image_source": manifest["cadd"]["image"], "image_sha256": checksum(image)})
+        image_sha256 = checksum(image)
+        write_json(folder / "image.origin.json", {"image_source": manifest["cadd"]["image"], "image_sha256": image_sha256})
     else:
         # The original deployment writes cadd-runtime.ready.json; subsequent
         # deployments also preserve the origin before import qualification.
@@ -149,12 +170,24 @@ def cadd_runtime(args, manifest):
         if not origin.exists():
             raise RuntimeError("Existing CADD image has no verified source receipt")
         previous = json.loads(origin.read_text())
-        if previous.get("image_source") != manifest["cadd"]["image"] or previous.get("image_sha256") != checksum(image):
+        image_sha256 = checksum(image)
+        if previous.get("image_source") != manifest["cadd"]["image"] or previous.get("image_sha256") != image_sha256:
             raise RuntimeError("Existing CADD image differs from its verified source receipt")
-    run(["apptainer", "exec", "--cleanenv", image,
-         "/conda-envs/fe7049a03d989a2faa6d7688f5987d09/bin/python", "-c",
-         "import sys, sklearn, numpy, pandas; print(sys.version); print(sklearn.__version__)"], env=environment)
-    return {"source": str(location), "image": str(image), "image_sha256": checksum(image), "image_source": manifest["cadd"]["image"]}
+    image_stat = image.stat()
+    wrappers = install_cadd_entry_points(folder)
+    environments = check_cadd_environments(folder, environment)
+    assets = cadd_asset_readiness(location, folder)
+    current = image.stat()
+    if (image_stat.st_ino, image_stat.st_size, image_stat.st_mtime_ns) != (current.st_ino, current.st_size, current.st_mtime_ns):
+        raise RuntimeError("CADD image changed during runtime verification")
+    return {"source": str(location), "source_commit": manifest["cadd"].get("source_commit"),
+            "image": str(image), "image_sha256": image_sha256, "image_source": manifest["cadd"]["image"],
+            "wrappers": wrappers, "environments": environments, "assets": assets,
+            "checked_utc": datetime.now(timezone.utc).isoformat(),
+            "producer": {"path": str(Path(__file__).resolve()), "sha256": checksum(Path(__file__)),
+                         "wrapper_source_sha256": checksum(Path(__file__).with_name("cadd_container_exec.sh"))},
+            "qualification": {"runtime": "imports_routes_and_asset_readability_only",
+                              "model_inference_performed": False, "shared_vep_qualified": False}}
 
 
 def cadd_annotations(args, manifest):
@@ -194,7 +227,11 @@ def main():
     parser.add_argument("--state-dir", type=Path, required=True)
     parser.add_argument("--tmp-root", type=Path, required=True)
     parser.add_argument("--samtools", default="samtools")
+    parser.add_argument("--runtime-receipt", type=Path,
+                        help="Optional separate cadd-runtime receipt; preserve an earlier deployment record")
     args = parser.parse_args()
+    if args.runtime_receipt is not None and args.stage != "cadd-runtime":
+        parser.error("--runtime-receipt is only valid for cadd-runtime")
     manifest = json.loads(args.manifest.read_text())
     if manifest["assembly"] != "GRCh37":
         parser.error("This reviewed installer currently supports the GRCh37 baseline only")
@@ -210,7 +247,8 @@ def main():
         result = function(args, manifest)
         result.update({"stage": args.stage, "status": "deployed", "slurm_job_id": os.environ.get("SLURM_JOB_ID"),
                        "manifest_sha256": checksum(args.manifest)})
-        write_json(args.state_dir / (args.stage + ".ready.json"), result)
+        receipt = args.runtime_receipt or args.state_dir / (args.stage + ".ready.json")
+        write_json(receipt, result)
         print(json.dumps(result), flush=True)
 
 

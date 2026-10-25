@@ -130,7 +130,8 @@ def native_context(profile):
     return hashlib.sha256(json.dumps(context, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
 
 
-def verify(bundle, profile, stub=False):
+def verify_profile(profile, stub=False):
+    """Check qualification without creating artifacts or requiring a VEP bundle."""
     settings = profile.get('annotation', {}).get('shared_vep')
     if not settings or not settings.get('qualification'):
         raise SharedVepError('Shared VEP selection is unqualified: qualify the CADD --per_gene view, transcript release and FeatureID joins first')
@@ -159,6 +160,12 @@ def verify(bundle, profile, stub=False):
     proof = evidence.get('evidence', {})
     if not proof.get('path') or sha256(proof['path']) != proof.get('sha256'):
         raise SharedVepError('Shared VEP qualification evidence is unavailable or changed')
+    return settings, context_sha
+
+
+def verify(bundle, profile, stub=False):
+    settings, context_sha = verify_profile(profile, stub)
+    release, qualification = settings['transcript_release'], settings['qualification']
     receipt_path = Path(bundle) / 'manifest.json'
     receipt = json_file(receipt_path)
     for key, value in {'schema_version': 1, 'stage': 'cadd-shared-vep-view',

@@ -23,9 +23,39 @@ export APPTAINERENV_PYTHONDONTWRITEBYTECODE=1
 export APPTAINERENV_PYTHONNOUSERSITE=1
 if [[ -n ${CADD:-} ]]; then export APPTAINERENV_CADD=$CADD; fi
 if [[ -n ${TMPDIR:-} ]]; then export APPTAINERENV_TMPDIR=$TMPDIR; fi
-# Source/cache files are shared read-only. Analysis staging/results are under
-# the user's separately authorized data root; no copy of the caches is made.
+# Bind selected resource paths, including symlink destinations, instead of a
+# site-specific home/data root. Analysis staging remains writable.
+readonly_paths=("$runtime_root")
+if [[ -n ${CADD:-} && -d $CADD ]]; then
+    readonly_paths+=("$CADD" "$(dirname -- "$(dirname -- "$CADD")")")
+fi
+for name in ${!CADD_@}; do
+    value=${!name}
+    if [[ $value == /* && -e $value ]]; then
+        resolved=$(realpath -e -- "$value")
+        [[ -f $resolved ]] && resolved=$(dirname -- "$resolved")
+        readonly_paths+=("$resolved" "$(dirname -- "$resolved")")
+    fi
+done
+for value in "$@"; do
+    if [[ $value == /* && -e $value ]]; then
+        resolved=$(realpath -e -- "$value")
+        [[ -f $resolved ]] && resolved=$(dirname -- "$resolved")
+        readonly_paths+=("$resolved")
+    fi
+done
+bind_args=()
+declare -A bound=()
+for value in "${readonly_paths[@]}"; do
+    [[ -n ${bound[$value]:-} ]] && continue
+    [[ $value != *:* && $value != *,* ]] || { echo 'Apptainer resource paths cannot contain colon or comma' >&2; exit 64; }
+    bind_args+=(--bind "$value:$value:ro")
+    bound[$value]=1
+done
+for value in "$PWD" "${TMPDIR:-$PWD}"; do
+    [[ -d $value && $value != *:* && $value != *,* ]] || { echo 'Invalid CADD staging directory' >&2; exit 64; }
+    bind_args+=(--bind "$value:$value:rw")
+done
 exec apptainer exec --cleanenv --no-home \
-    --bind /stornext/snfs170/next-gen/scratch/yangyxt:/stornext/snfs170/next-gen/scratch/yangyxt:ro \
-    --bind /stornext/snfs170/next-gen/scratch/yangyxt_dt/projects/PriVA_upgrade:/stornext/snfs170/next-gen/scratch/yangyxt_dt/projects/PriVA_upgrade:rw \
+    "${bind_args[@]}" \
     "$image" "$prefix/bin/$executable" "$@"

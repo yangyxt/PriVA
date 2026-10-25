@@ -33,7 +33,13 @@ sub selection_context {
         # Merged/RefSeq pools and transcript-reference correction differ from
         # the original CADD reference defaults. They are explicit profile
         # inputs requiring qualification, never silently treated as equivalent.
-        annotation_options => {map {$_ => defined($config->{$_}) ? "$config->{$_}" : ''}
+        # 24 October 2026 CT: official distance is an ARRAY. Copy its exact
+        # ordered values into provenance; stringification records a process
+        # address and prevents durable exact-context validation. Config and
+        # native selection are untouched; old address contexts remain rejected.
+        annotation_options => {map {$_ =>
+            $_ eq 'distance' && ref($config->{$_}) eq 'ARRAY' ? [@{$config->{$_}}]
+            : defined($config->{$_}) ? "$config->{$_}" : ''}
             qw(assembly cache_version db_version merged refseq use_transcript_ref minimal distance
                regulatory sift polyphen ccds domains numbers canonical total_length)},
     };

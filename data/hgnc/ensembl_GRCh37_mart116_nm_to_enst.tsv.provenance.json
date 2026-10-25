@@ -1,0 +1,109 @@
+{
+  "annotation_base_release": 75,
+  "assembly": "GRCh37.p13",
+  "attributes": [
+    "ensembl_gene_id",
+    "ensembl_transcript_id",
+    "hgnc_symbol",
+    "uniprotswissprot",
+    "refseq_mrna"
+  ],
+  "bytes": 5084679,
+  "completion_stamp_verified": true,
+  "dataset": "hsapiens_gene_ensembl",
+  "endpoint": "https://grch37.ensembl.org/biomart/martservice",
+  "header": [
+    "Gene stable ID",
+    "Transcript stable ID",
+    "HGNC symbol",
+    "UniProtKB/Swiss-Prot ID",
+    "RefSeq mRNA ID"
+  ],
+  "mart": "ENSEMBL_MART_ENSEMBL",
+  "mart_release": 116,
+  "metadata_after": {
+    "dataset_record": [
+      "TableSet",
+      "hsapiens_gene_ensembl",
+      "Human genes (GRCh37.p13)",
+      "1",
+      "GRCh37.p13",
+      "200",
+      "50000",
+      "default",
+      "2022-01-29 13:33:38"
+    ],
+    "datasets_tsv": " \nTableSet\thsapiens_gene_ensembl\tHuman genes (GRCh37.p13)\t1\tGRCh37.p13\t200\t50000\tdefault\t2022-01-29 13:33:38\n",
+    "registry_record": {
+      "database": "ensembl_mart_116",
+      "default": "1",
+      "displayName": "Ensembl Genes 116",
+      "host": "grch37.ensembl.org",
+      "includeDatasets": "",
+      "martUser": "",
+      "name": "ENSEMBL_MART_ENSEMBL",
+      "path": "/biomart/martservice",
+      "port": "80",
+      "serverVirtualSchema": "default",
+      "visible": "1"
+    },
+    "registry_xml": "\n<MartRegistry>\n  <MartURLLocation database=\"ensembl_mart_116\" default=\"1\" displayName=\"Ensembl Genes 116\" host=\"grch37.ensembl.org\" includeDatasets=\"\" martUser=\"\" name=\"ENSEMBL_MART_ENSEMBL\" path=\"/biomart/martservice\" port=\"80\" serverVirtualSchema=\"default\" visible=\"1\" />\n  <MartURLLocation database=\"sequence_mart_116\" default=\"\" displayName=\"Sequence\" host=\"grch37.ensembl.org\" includeDatasets=\"\" martUser=\"\" name=\"ENSEMBL_MART_SEQUENCE\" path=\"/biomart/martservice\" port=\"80\" serverVirtualSchema=\"default\" visible=\"\" />\n  <MartURLLocation database=\"ontology_mart_116\" default=\"\" displayName=\"Ontology\" host=\"grch37.ensembl.org\" includeDatasets=\"\" martUser=\"\" name=\"ENSEMBL_MART_ONTOLOGY\" path=\"/biomart/martservice\" port=\"80\" serverVirtualSchema=\"default\" visible=\"\" />\n  <MartURLLocation database=\"genomic_features_mart_116\" default=\"\" displayName=\"Genomic features 116\" host=\"grch37.ensembl.org\" includeDatasets=\"\" martUser=\"\" name=\"ENSEMBL_MART_GENOMIC\" path=\"/biomart/martservice\" port=\"80\" serverVirtualSchema=\"default\" visible=\"\" />\n  <MartURLLocation database=\"snp_mart_116\" default=\"\" displayName=\"Ensembl Variation 116\" host=\"grch37.ensembl.org\" includeDatasets=\"\" martUser=\"\" name=\"ENSEMBL_MART_SNP\" path=\"/biomart/martservice\" port=\"80\" serverVirtualSchema=\"default\" visible=\"1\" />\n  <MartURLLocation database=\"regulation_mart_116\" default=\"\" displayName=\"Ensembl Regulation 116\" host=\"grch37.ensembl.org\" includeDatasets=\"\" martUser=\"\" name=\"ENSEMBL_MART_FUNCGEN\" path=\"/biomart/martservice\" port=\"80\" serverVirtualSchema=\"default\" visible=\"1\" />\n</MartRegistry>\n"
+  },
+  "metadata_before": {
+    "dataset_record": [
+      "TableSet",
+      "hsapiens_gene_ensembl",
+      "Human genes (GRCh37.p13)",
+      "1",
+      "GRCh37.p13",
+      "200",
+      "50000",
+      "default",
+      "2022-01-29 13:33:38"
+    ],
+    "datasets_tsv": " \nTableSet\thsapiens_gene_ensembl\tHuman genes (GRCh37.p13)\t1\tGRCh37.p13\t200\t50000\tdefault\t2022-01-29 13:33:38\n",
+    "registry_record": {
+      "database": "ensembl_mart_116",
+      "default": "1",
+      "displayName": "Ensembl Genes 116",
+      "host": "grch37.ensembl.org",
+      "includeDatasets": "",
+      "martUser": "",
+      "name": "ENSEMBL_MART_ENSEMBL",
+      "path": "/biomart/martservice",
+      "port": "80",
+      "serverVirtualSchema": "default",
+      "visible": "1"
+    },
+    "registry_xml": "\n<MartRegistry>\n  <MartURLLocation database=\"ensembl_mart_116\" default=\"1\" displayName=\"Ensembl Genes 116\" host=\"grch37.ensembl.org\" includeDatasets=\"\" martUser=\"\" name=\"ENSEMBL_MART_ENSEMBL\" path=\"/biomart/martservice\" port=\"80\" serverVirtualSchema=\"default\" visible=\"1\" />\n  <MartURLLocation database=\"sequence_mart_116\" default=\"\" displayName=\"Sequence\" host=\"grch37.ensembl.org\" includeDatasets=\"\" martUser=\"\" name=\"ENSEMBL_MART_SEQUENCE\" path=\"/biomart/martservice\" port=\"80\" serverVirtualSchema=\"default\" visible=\"\" />\n  <MartURLLocation database=\"ontology_mart_116\" default=\"\" displayName=\"Ontology\" host=\"grch37.ensembl.org\" includeDatasets=\"\" martUser=\"\" name=\"ENSEMBL_MART_ONTOLOGY\" path=\"/biomart/martservice\" port=\"80\" serverVirtualSchema=\"default\" visible=\"\" />\n  <MartURLLocation database=\"genomic_features_mart_116\" default=\"\" displayName=\"Genomic features 116\" host=\"grch37.ensembl.org\" includeDatasets=\"\" martUser=\"\" name=\"ENSEMBL_MART_GENOMIC\" path=\"/biomart/martservice\" port=\"80\" serverVirtualSchema=\"default\" visible=\"\" />\n  <MartURLLocation database=\"snp_mart_116\" default=\"\" displayName=\"Ensembl Variation 116\" host=\"grch37.ensembl.org\" includeDatasets=\"\" martUser=\"\" name=\"ENSEMBL_MART_SNP\" path=\"/biomart/martservice\" port=\"80\" serverVirtualSchema=\"default\" visible=\"1\" />\n  <MartURLLocation database=\"regulation_mart_116\" default=\"\" displayName=\"Ensembl Regulation 116\" host=\"grch37.ensembl.org\" includeDatasets=\"\" martUser=\"\" name=\"ENSEMBL_MART_FUNCGEN\" path=\"/biomart/martservice\" port=\"80\" serverVirtualSchema=\"default\" visible=\"1\" />\n</MartRegistry>\n"
+  },
+  "producer_script_path": "/stornext/snfs170/next-gen/scratch/yangyxt/projects/PriVA_upgrade/scripts/biomart_nm_to_enst_acquisition_20261016.py",
+  "producer_script_sha256": "944e3881be3f550c2cbcba554e3851f74839e78b83b0a1d569ddcfcdabd793f3",
+  "query_sha256": "990a09b455e98c582bd3ace6c2651b234bf65a6b9177f61340246069d0f2d3de",
+  "query_xml": "<?xml version=\"1.0\" encoding=\"UTF-8\"?><!DOCTYPE Query><Query virtualSchemaName=\"default\" formatter=\"TSV\" header=\"1\" uniqueRows=\"0\" count=\"\" datasetConfigVersion=\"0.6\" completionStamp=\"1\"><Dataset name=\"hsapiens_gene_ensembl\" interface=\"default\"><Attribute name=\"ensembl_gene_id\" /><Attribute name=\"ensembl_transcript_id\" /><Attribute name=\"hgnc_symbol\" /><Attribute name=\"uniprotswissprot\" /><Attribute name=\"refseq_mrna\" /></Dataset></Query>",
+  "raw_bytes": 5084689,
+  "raw_sha256": "65c6913ea468ab2f94b0db517d4c2f4693f38c6fa0dfa416002748a53a79ff49",
+  "retrieved_utc": "2026-10-16T14:25:23.425647+00:00",
+  "sha256": "f730640e2411807e7bc38dad141acafc16c3ffca5e4d8ef500976ebd586ddbc7",
+  "slurm_job_id": "1514785",
+  "source_id": "ensembl-grch37-mart116",
+  "statistics": {
+    "completion_stamp_verified": true,
+    "duplicate_full_rows": 179,
+    "duplicate_nm_enst_rows": 72,
+    "genes": 23393,
+    "max_enst_per_nm": 10,
+    "nm_accessions": 35555,
+    "nm_rows": 35884,
+    "nm_with_multiple_enst": 177,
+    "non_nm_refseq_accessions": [
+      "NC_000016"
+    ],
+    "non_nm_refseq_rows": 1,
+    "rows": 109530,
+    "rows_without_nm": 73646,
+    "rows_without_refseq": 73645,
+    "transcripts": 104763,
+    "unique_nm_enst_pairs": 35812
+  }
+}

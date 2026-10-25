@@ -6,6 +6,8 @@
 pub mod calculate_posterior_probability;
 pub mod create_criteria_summary;
 pub mod fix_clingen_term;
+pub mod pedigree_context;
+pub(crate) mod pedigree_context_transport;
 pub mod ranking_setup;
 pub(crate) mod ranking_setup_transport;
 pub(crate) mod score_table;

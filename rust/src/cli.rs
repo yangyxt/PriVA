@@ -240,6 +240,9 @@ pub(crate) fn run() -> Result<()> {
     if args.get(1).map(String::as_str) == Some("rank-setup") {
         return crate::acmg_scoring::ranking_setup_transport::dispatch(&args[2..]);
     }
+    if args.get(1).map(String::as_str) == Some("pedigree-context") {
+        return crate::acmg_scoring::pedigree_context_transport::dispatch(&args[2..]);
+    }
     if args.get(1).map(String::as_str) == Some("mechanism-masks") {
         return crate::acmg_variant_mechanism::transport::dispatch(&args[2..]);
     }

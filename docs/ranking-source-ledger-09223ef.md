@@ -361,3 +361,86 @@ R2–R7/C1 numerical integration or family/public qualification changed.
 
 ---
 
+**R2 pedigree context procedure addendum — 24 October 2026 CT**
+
+The opt-in `priva pedigree-context` procedure covers original
+`sort_and_rank_variants` L501–524 only. It returns a selected pedigree source
+position, proband/sex flags, the whole-sample-string heterozygosity mask and a
+structured warning descriptor. All control/scoring arithmetic stays in Python.
+
+```mermaid
+flowchart LR
+    R1[Original R1 frame and pedigree] --> R2[R2 primitive context and mask]
+    R2 --> A[Gather original row and restore opaque metadata]
+    A --> R3[Unchanged Python R3 onward]
+```
+
+Selection retains the first matching affected row in original pedigree order,
+with exact family equality and `Phenotype.isin(["2", 2])` behavior in the declared
+primitive domain. Python `None` disables this branch; `pd.NA` does not. The mask
+counts ASCII `1` across the **entire sample string**, including FORMAT suffixes;
+it does not parse GT. Missing/duplicate sample lookup, no affected row, absent
+columns and unsupported string-accessor failures preserve the source phase and
+supported exception type/message. Unknown-sex warnings precede a later sample
+failure, as in the source.
+
+The typed boundary carries original source positions and opaque axes/metadata.
+The adapter constructs the selected row through a one-row DataFrame take before
+`iloc[0]`, matching source `PED.loc[mask].iloc[0]`; direct `PED.iloc[position]`
+changed the encoded row-name scalar type in the captured RangeIndex case. Every
+supported selected row is compared in full, including scalar types, index,
+attributes and flags. Masks retain Series name/index/dtype/attributes/flags and
+separate raw Boolean data and null bits. In particular, missing Python-storage
+StringDtype inputs retain the source's true Boolean data bits beneath their null
+mask. The no-pedigree mask has fresh metadata and an object dtype when empty.
+Supported inputs remain unchanged byte-for-byte in the immediate pickle check.
+
+Supported sample inputs are primitive `object`, Python-storage `string`, and
+declared NumPy `float64`/`int64`/`uint64`/`bool` (including their source accessor
+errors). Pedigree family columns use primitive Python-object/string semantics;
+large Python integer/float equality avoids lossy integer-to-float conversion.
+Native numeric family columns and NumPy family scalar/object identities defer
+to Python. Numeric nullable sample accessors also defer: actual untraced source
+execution warms the cold pandas dtype caches in two empty UInt64/Float64 failure
+cases, changing serialization without changing values. Both before/after states
+remain retained. Nontext selected IDs, ambiguous pedigree labels, arbitrary
+objects and undeclared dtype/cell combinations are explicit Python boundaries.
+
+Sex output is limited to the two membership predicates and the original warning
+descriptor/arguments. The oracle retains actual Unicode-lowered text; Rust does
+not claim to export an identical internal normalized string. The source witness
+checks all Unicode code points and the 29 Python strip characters for these
+ASCII predicate tokens. No arbitrary Python object or pandas dtype-cache parity
+is claimed, and a deferred case is never counted as an exact Rust match.
+
+The first three actual-source oracle captures predate Rust implementation; the
+fourth adds ten explicit family-type fallback probes before qualification. The
+final oracle has 278 cases (208 source values/70 source exceptions), bound to
+the full-ranker R3-entry locals or R2 failure. Final 1524517/.0 completed 0:0 at
+10:00 PM CDT: **197 exact outputs, 53 original failures and 28 deliberate Python
+fallbacks**, with zero mismatches. All R1/R8, PEXT, condition/mechanism, scoring
+and old `final-order` differential regressions passed again.
+
+The unchanged binary SHA256 is
+`715506b6e28dbc0ae078dfe4d4445553f6ac199328d6aae1de3838a60604e22a`.
+All 118 Rust tests (13 R2 tests) passed in 1524516.0, whose later differential
+adapter check failed; that whole job remains FAILED. The earlier 1524515
+empty-selection iterator panic and 1524516 row-construction failure are preserved.
+Final validation reuses only the completed compilation/Rust-test phase after
+checking identical Rust/scientific/prior-test sources, then reruns every
+differential phase. Build pins are
+`3e93ce03a1dcf20ccd0b5bdef77cfad130b297e70a253b0115302a7b8089c20a`;
+final test pins are
+`952349b4c0ad19697d2af6d572eca7bcaacf6e4e7031936da0161fec0be5d70e`.
+
+Maintained source/tests/docs are in this checkout. All oracle states, mutation
+replays, failed attempts, snapshots, binaries and comparison outputs are under
+`/stornext/snfs170/next-gen/scratch/yangyxt_dt/projects/PriVA_upgrade/validation/rust-pedigree-context-20261024-v{1,2,3,4}`;
+logs use data-side `logs/rust-pedigree-context-*`, with Cargo/targets separately
+under `build/rust-pedigree-context-*`. R1/R8 algorithms/tests, scientific Python,
+installer sources and production/family dispatch are unchanged. This later
+optional module is separate from main 1524420's frozen 6:39 PM CT sources and
+does not establish complete ranking, family or public scientific acceptance.
+
+---
+

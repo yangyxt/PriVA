@@ -49,13 +49,17 @@ def liftover_coordinates(input_vcf: str, output_vcf: str, input_bed: str,
                         output_bed: str, chain_file: str, reference_fasta: str):
     """Perform liftover for both VCF and BED files"""
     # Liftover VCF
-    cmd_vcf = f"CrossMap vcf --chromid l {chain_file} {input_vcf} {reference_fasta} {output_vcf}"
-    subprocess.run(cmd_vcf, shell=True, check=True)
+    # Selected reference/chain filenames may contain spaces or quotes. Keep
+    # their identities as arguments without changing CrossMap's flags/order.
+    cmd_vcf = ["CrossMap", "vcf", "--chromid", "l", chain_file, input_vcf,
+               reference_fasta, output_vcf]
+    subprocess.run(cmd_vcf, check=True)
 
     # Liftover BED
     unmap_bed = output_bed.replace('.bed', '.unmap.bed')
-    cmd_bed = f"CrossMap bed --chromid l --unmap-file {unmap_bed} {chain_file} {input_bed} {output_bed}"
-    subprocess.run(cmd_bed, shell=True, check=True)
+    cmd_bed = ["CrossMap", "bed", "--chromid", "l", "--unmap-file", unmap_bed,
+               chain_file, input_bed, output_bed]
+    subprocess.run(cmd_bed, check=True)
 
 
 def process_and_update_chunk(chunk: pd.DataFrame, chain_file: str, reference_fasta: str,

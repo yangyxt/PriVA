@@ -11,7 +11,7 @@ flowchart LR
   V --> P[PriVA transcript view]
   V --> C[CADD transcript view + mature feature tools]
   C --> A[Complete checked annotation artifact]
-  A --> S[Pinned cadd-rs interface / original Python raw + PHRED]
+  A --> S[Pinned upstream CADD Python raw + PHRED]
   P --> R[PriVA interpretation / staged Rust modules]
   S --> R
   R --> G[Exact ACMG + ordering acceptance]
@@ -20,6 +20,35 @@ flowchart LR
 The current compatibility workflow remains gated for raw annotation. A tested
 stub route is not a complete production shared-VEP adapter. Do not activate it
 until resource, transcript-selection, model and acceptance gates pass.
+
+## Optional read-only task profile
+
+`Nextflow stages inputs → task_readonly shell → read-only host/cache view + writable task directory → Nextflow publishes outputs`
+
+Add `task_readonly` to the `local` or `slurm` profile list on a Linux host with
+working Bubblewrap. The selected profile participates in the run identity, so
+changing it cannot silently reuse the same output directory. Staged inputs use
+symlinks; pre-existing hard-linked files and special files in the writable task
+directory are rejected. Task-local temporary/cache directories remain writable;
+shared resources, source, HOME and package/model paths remain read-only. The
+child has no network access. A denied write fails explicitly.
+
+Job1524526 completed0:0 on24October2026 CT:35 adapter/boundary tests, actual
+filesystem write-denial checks, exact exit-code propagation, raw/resume/annotated
+stubs and profile-change rejection passed. Five published synthetic payloads
+matched the default profile byte for byte; all four resume tasks were cached.
+Failed1524525 is retained: a redundant parameter default disagreed with the
+selected profile; identity now derives directly from that profile. No extra
+user parameter is needed. Combined Apptainer execution, real scientific/model
+tasks, family acceptance and public-data acceptance remain unqualified. The
+existing raw-annotation gate remains in place.
+
+Source is here in `bin/priva_task_boundary.py` and `conf/task_readonly.config`.
+The maintained run/collect controller is
+`/stornext/snfs170/next-gen/scratch/yangyxt/projects/PriVA_upgrade/scripts/nextflow_readonly_check_20261024.py`;
+closed synthetic runtime/log evidence is under
+`/stornext/snfs170/next-gen/scratch/yangyxt_dt/projects/PriVA_upgrade/validation/nextflow-readonly-check-20261024-v{1,2}/`
+and the matching data-side `logs/nextflow-readonly-check-*` files.
 
 <a id="spliceai2-preparation"></a>
 
@@ -58,7 +87,7 @@ SpliceAI_install invokes scripts/spliceai_cache_input.py install automatically, 
 python scripts/spliceai_cache_input.py install --config CONFIG --cache-dir CACHE_DIR --snv SNV --indel INDEL
 ```
 
-For native TSV, the helper discovers the fixed adjacent SpliceAI2_GRCh38.downloads-complete.json sidecar. The selected SNV/indel inputs must match their manifest roles and the full 47-shard catalogue. The existing low-level SpliceAI2_install preparation/reuse path performs full checksum verification and prepares or reuses a validated receipt, then updates only spliceai_snv_prescore and spliceai_indel_prescore. The pinned priva converter is resolved through PATH; no YAML converter or manifest option is added. Provenance and scientific qualification remain in sidecars/cache headers. The fixed adjacent sidecar is published at yangyxt/caches/SpliceAI2_GRCh38.downloads-complete.json, SHA256 fbc6c9fcd1859d6f1605f9343d5659b8420d7397c4152da19daab34c6194e49d. The PATH entry yangyxt/softwares/bin/priva resolves to the verified optimized 225aa4a converter. This changes no YAML keys beyond the original two paths.
+For native TSV, the helper discovers the fixed adjacent SpliceAI2_GRCh38.downloads-complete.json sidecar. The selected SNV/indel inputs must match their manifest roles and the full 47-shard catalogue. The existing low-level SpliceAI2_install preparation/reuse path performs full checksum verification and prepares or reuses a validated receipt, then updates only spliceai_snv_prescore and spliceai_indel_prescore. The installation driver builds/reuses the standalone scripts/spliceai2_converter.rs tool; no production priva executable or extra YAML option is required. Provenance and scientific qualification remain in sidecars/cache headers. The fixed adjacent sidecar is published at yangyxt/caches/SpliceAI2_GRCh38.downloads-complete.json, SHA256 fbc6c9fcd1859d6f1605f9343d5659b8420d7397c4152da19daab34c6194e49d. Historical conversion used the PATH entry yangyxt/softwares/bin/priva and the optimized225aa4a converter; new preparation records the separate installation tool identity. This changes no YAML keys beyond the original two paths.
 
 Two-key interface qualification: code 35779c4578509ce01218a052a8e7e1d8a785a75b passed 239 Python tests, zero failures/errors/skips, in 190.848 seconds: 39 helper, 25 installer, 14 runtime-guard, 21 Nextflow-adapter and 140 existing deployment/driver/BGZ tests. The installer-shell cases mock the helper boundary; they are not real conversion evidence. Log: yangyxt_dt/projects/PriVA_upgrade/logs/spliceai-two-key-integration-20261016.log. This supersedes the earlier 197-test interface checkpoint without adding its count; unchanged Rust evidence remains 41 tests and the earlier real-projection evidence remains 512 unique rows.
 
@@ -300,17 +329,29 @@ filter policy intact; the host check is recorded in `logs/cache-path-check.log`.
 
 ## Driver installation
 
-`scripts/bootstrap_nextflow_runtime.sh /absolute/new/prefix` installs the official
-Nextflow **25.10.4** standalone distribution and Temurin **21.0.12.1+1** JRE for
-Linux x86_64, verifying the pinned upstream SHA-256 digests before extraction.
-It refuses an existing prefix and makes no shell-startup changes. An interrupted
-prefix is incomplete; inspect it and choose a new prefix for a retry.
-
-The installed local launcher is:
+`bash scripts/install_utils.sh main_install CONFIG` now calls the pinned driver
+bootstrap after manual-cache/configuration/bundled-snapshot preflight and before
+reference/resource acquisition. It derives the destination from the existing
+`cache_root` key; no extra YAML setting or shell-startup change is required:
 
 ```
-/stornext/snfs170/next-gen/scratch/yangyxt/softwares/priva-nextflow-25.10.4/bin/nextflow
+CACHE_ROOT/runtime/priva-nextflow-25.10.4/bin/nextflow
 ```
+
+The modular helper is `bash scripts/bootstrap_nextflow_runtime.sh install --prefix
+/absolute/runtime-prefix`; `check --prefix` verifies an existing installation.
+The main installer resolves an existing root alias after the shared resolver's
+lexical normalization; linked runtime/staging children remain refused. YAML is
+not rewritten for this resolution.
+The old single absolute-prefix invocation remains compatible. It installs official
+Nextflow **25.10.4** and Temurin **21.0.12.1+1** for Linux x86_64 with the same pinned
+upstream SHA-256 digests. Installation reuses verified complete bytes, retains
+interrupted owned downloads for retry, builds privately and publishes the complete
+directory. Invalid or unrelated existing files fail with their contents retained.
+Rerun the same install command after an interruption; never treat a partial build
+as ready. The historical HGSC launcher under
+`/stornext/snfs170/next-gen/scratch/yangyxt/softwares/priva-nextflow-25.10.4/`
+remains preserved; it is separate from the new config-derived destination.
 
 It selects strict parser v2, a private `NXF_HOME`, and a bounded driver JVM.
 This installs the workflow driver only. The legacy scientific environment,
@@ -332,9 +373,9 @@ and a new output directory. Preannotated mode also requires the matching CADD
 annotation TSV; an arbitrary score-only table is insufficient.
 
 **Current deployment gate:** real raw-VCF annotation is deliberately refused
-until CADD is qualified with enforced read-only shared resources and fully
-prepared software. The unchanged official launcher may otherwise create Conda
-environments under the shared CADD tree. Raw stubs test wiring only. The first
+until the shared-VEP CADD feature path is qualified with enforced read-only
+shared resources and fully prepared software. The installed runtime uses the
+original upstream Python calculation without Snakemake. Raw stubs test wiring only. The first
 real compatibility run can start from the original annotated cohort VCF and
 paired CADD TSV when its complete prioritization caches and software are ready.
 This gate is an outstanding implementation/deployment step, not evidence that
@@ -399,18 +440,18 @@ ESM/RegSeq/MMSplice and non-VEP track enrichment produce the complete feature
 artifact. Validate assembly, schema, missingness, all required resources, exact
 FeatureID joins and order. Qualify CADD's transcript selection without removing
 PriVA transcript rows. The separate original-VEP route is a reference-only
-qualification tool. VEP113 peptide/GTF compatibility requires evidence; directory
-names alone cannot establish it.
+qualification tool. Each VEP/model profile's peptide/GTF compatibility requires
+evidence; directory names alone cannot establish it.
 
 `cadd.nf -c conf/cadd.config --cadd_mode full|annotate|calculate` exposes separate
 stages. See its `--help` and pinned profile templates under `conf/cadd/` for the
 implemented contract. Profiles must be configured and qualified; templates do
 not constitute installed resources. Calculate-only consumes a completed artifact
-and requires no annotation cache installation. A validated bridge to the pinned
-standalone `cadd-rs` interface must preserve both receipt identities and the
-identical table; their distinct receipt schemas are not interchangeable.
+and requires no annotation cache installation. The active calculation route uses
+the pinned upstream CADD Python stages directly. The former `cadd-rs` experiment
+is suspended and is not an installation, execution or migration dependency.
 
-The standalone scorer must run all four original stages: transformation,
+The Python scorer must run all four original stages: transformation,
 prediction, consequence hierarchy and PHRED conversion. The previous standalone
 pin `79d767a` included native hierarchy/PHRED and is a historical experiment;
 tested integration pin `4194be32320292cb8acd290ee0210c19456e2573` runs all four

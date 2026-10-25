@@ -1,4 +1,5 @@
 //! Source-mapped PriVA modules; production remains on the reference backend.
+pub mod acmg_consequence;
 pub mod acmg_scoring;
 pub mod acmg_variant_mechanism;
 mod cli;

@@ -12,6 +12,8 @@ from collections import defaultdict
 import json
 import os
 import csv
+import stat
+import tempfile
 self_directory = os.path.dirname(os.path.abspath(__file__))
 
 # --- Logger Setup ---
@@ -234,6 +236,7 @@ class DomainNormalizer():
             self.logger.info(f"Comparison report saved successfully to {output_path}")
         except Exception as e:
             self.logger.exception(f"Failed to generate or save comparison report to {output_path}")
+            raise
 
     def load_curated_mappings(self, json_file_path = os.path.join(os.path.dirname(self_directory), 'data', 'InterPro', 'InterPro_domain_norm_map.json')) -> None:
         """ Loads the manually curated mappings from a JSON file. """
@@ -632,6 +635,7 @@ def parse_interpro_xml_for_mapping(xml_file_path: str) -> FinalMapping:
 
                     except Exception as inner_e:
                          logger.exception(f"Error processing details for InterPro entry near count {interpro_entry_count} (ID: {ipr_id})")
+                         raise
                     finally:
                          elem.clear()
 
@@ -644,17 +648,43 @@ def parse_interpro_xml_for_mapping(xml_file_path: str) -> FinalMapping:
         logger.info(f"Processed {interpro_entry_count} InterPro entries.")
         logger.info(f"Created mapping dictionary with {len(member_to_interpro_map)} unique member signature keys.")
         logger.info(f"Total time: {end_time - start_time:.2f} seconds.")
+        if not member_to_interpro_map:
+            raise ValueError("No usable InterPro member mappings were generated")
         return dict(member_to_interpro_map)
 
     except FileNotFoundError:
         logger.error(f"Error: File not found at {xml_file_path}")
-        return {}
+        raise
     except ET.ParseError as e:
         logger.exception(f"Error: Failed to parse XML file")
-        return {}
+        raise
     except Exception as e:
         logger.exception(f"An unexpected error occurred during file processing")
-        return {}
+        raise
+
+
+def _write_interpro_mapping_atomic(mapping_data: FinalMapping, output_path: str) -> None:
+    """Publish the original pickle bytes only after writing and closing succeed.
+
+    A unique same-parent directory confines cleanup to this invocation. A normal
+    open retains ordinary umask behavior for new outputs; an existing output's
+    mode is applied to its replacement. The final path remains untouched until
+    os.replace succeeds, including on partial dump, flush or close failures.
+    """
+    destination = os.path.abspath(output_path)
+    try:
+        previous_mode = stat.S_IMODE(os.stat(destination).st_mode)
+    except FileNotFoundError:
+        previous_mode = None
+    with tempfile.TemporaryDirectory(prefix="." + os.path.basename(destination) + ".write-",
+                                     dir=os.path.dirname(destination)) as temporary:
+        staged = os.path.join(temporary, os.path.basename(destination))
+        with open(staged, 'wb') as f_out:
+            pickle.dump(mapping_data, f_out, protocol=pickle.HIGHEST_PROTOCOL)
+            f_out.flush()
+        if previous_mode is not None:
+            os.chmod(staged, previous_mode)
+        os.replace(staged, destination)
 
 
 # --- Main Execution Block (Sequential Workflow) ---
@@ -722,14 +752,13 @@ if __name__ == "__main__":
         logger.info(f"\n--- Step 3: Saving Full Mapping Data ---")
         logger.info(f"Saving mapping data ({len(mapping_data)} keys) to {args.mapping_output}...")
         try:
-            with open(args.mapping_output, 'wb') as f_out:
-                pickle.dump(mapping_data, f_out, protocol=pickle.HIGHEST_PROTOCOL)
+            _write_interpro_mapping_atomic(mapping_data, args.mapping_output)
             logger.info(f"Save successful to {args.mapping_output}")
         except Exception as e:
             logger.error(f"Error saving mapping data - {e}", exc_info=True)
-            # Decide if this error is fatal or not
-            # sys.exit(1) # Optionally exit if saving fails
+            sys.exit(1)
     else:
-        logger.warning("No InterPro mapping data was generated in Step 2, likely due to errors.")
+        logger.error("No InterPro mapping data was generated in Step 2, likely due to errors.")
+        sys.exit(1)
 
     logger.info("\n--- Script Finished ---")

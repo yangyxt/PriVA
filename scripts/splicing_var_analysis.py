@@ -13,6 +13,7 @@ import sys
 
 from combine_annotations import na_value
 from protein_domain_mapping import DomainNormalizer
+from interpro_mapping_io import load_interpro_mapping
 
 # No handler here on purpose. Whoever runs the program owns logging
 # configuration: this file when it is run directly, see the __main__ block at
@@ -34,7 +35,7 @@ def splicing_interpretation(anno_table,
 
     intolerant_domains = pickle.load(gzip.open(intolerant_domains_pkl, 'rb')) if intolerant_domains_pkl.endswith('.gz') else pickle.load(open(intolerant_domains_pkl, 'rb'))
     transcript_domain_map = pickle.load(gzip.open(transcript_domain_map_pkl, 'rb')) if transcript_domain_map_pkl.endswith('.gz') else pickle.load(open(transcript_domain_map_pkl, 'rb'))
-    interpro_entry_map_dict = pickle.load(gzip.open(interpro_entry_map_pkl, 'rb')) if interpro_entry_map_pkl.endswith('.gz') else pickle.load(open(interpro_entry_map_pkl, 'rb'))
+    interpro_entry_map_dict = load_interpro_mapping(interpro_entry_map_pkl)
 
     dm_instance = DomainNormalizer()
     # Create partial function with fixed arguments

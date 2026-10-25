@@ -36,3 +36,6 @@ dependencies:
   - anaconda::scikit-learn
   - seqtk
   - polars
+  # Imported unconditionally by the domain/statistics and annotation readers.
+  - diptest
+  - pyarrow

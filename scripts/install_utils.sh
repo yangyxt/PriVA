@@ -1,10 +1,172 @@
 #! /usr/bin/env bash
-SCRIPT_DIR=$(dirname $(realpath ${BASH_SOURCE[0]}))
-DATA_DIR=$(dirname ${SCRIPT_DIR})/data
-BASE_DIR=$(dirname ${SCRIPT_DIR})
-source ${SCRIPT_DIR}/common_bash_utils.sh
-source ${SCRIPT_DIR}/annotation_vcf.sh
+SCRIPT_DIR=$(dirname "$(realpath "${BASH_SOURCE[0]}")")
+BASE_DIR=$(dirname "${SCRIPT_DIR}")
+DATA_DIR=${BASE_DIR}/data
+source "${SCRIPT_DIR}/common_bash_utils.sh"
+source "${SCRIPT_DIR}/annotation_vcf.sh"
 log "The base directory is ${BASE_DIR}, the scripts directory is ${SCRIPT_DIR}"
+
+
+function priva_find_env_manager() {
+    local candidate
+    # MAMBA_EXE also finds an initialized Micromamba wrapper outside PATH.
+    # Keep its path: a wrapper may intentionally control caches and storage.
+    for candidate in "${MAMBA_EXE:-}" "$(type -P micromamba)" \
+                     "$(type -P mamba)" "${CONDA_EXE:-}" "$(type -P conda)"; do
+        [[ -n ${candidate} && -x ${candidate} ]] || continue
+        case "${candidate##*/}" in
+            micromamba*) PRIVA_ENV_MANAGER_KIND=micromamba ;;
+            mamba*) PRIVA_ENV_MANAGER_KIND=mamba ;;
+            conda*) PRIVA_ENV_MANAGER_KIND=conda ;;
+            *) continue ;;
+        esac
+        PRIVA_ENV_MANAGER=${candidate}
+        PRIVA_ENV_ACTIVATOR=${candidate}
+        PRIVA_ENV_ACTIVATOR_KIND=${PRIVA_ENV_MANAGER_KIND}
+        # Older Mamba installations delegate activation/configuration to the
+        # Conda executable in the same installation, not an unrelated PATH entry.
+        if [[ ${PRIVA_ENV_MANAGER_KIND} == mamba && -x ${candidate%/*}/conda ]]; then
+            PRIVA_ENV_ACTIVATOR=${candidate%/*}/conda
+            PRIVA_ENV_ACTIVATOR_KIND=conda
+        fi
+        log "Using ${PRIVA_ENV_MANAGER_KIND}: ${PRIVA_ENV_MANAGER}"
+        return 0
+    done
+    log "ERROR: Install micromamba, mamba, or conda and expose its executable through PATH, MAMBA_EXE, or CONDA_EXE."
+    return 1
+}
+
+
+function priva_activate_env() {
+    local env_name=${1}
+    local activation
+    [[ -n ${PRIVA_ENV_MANAGER:-} ]] || priva_find_env_manager || return 1
+
+    # Evaluate activation code in this shell; no interactive alias or profile
+    # initialization is required, and the selected wrapper remains in use.
+    if [[ ${PRIVA_ENV_ACTIVATOR_KIND} == conda ]]; then
+        activation=$("${PRIVA_ENV_ACTIVATOR}" shell.bash activate "${env_name}") || return 1
+    else
+        activation=$("${PRIVA_ENV_ACTIVATOR}" shell activate --shell bash --name "${env_name}") || return 1
+    fi
+    eval "${activation}" || return 1
+    [[ -n ${CONDA_PREFIX:-} && ${CONDA_PREFIX##*/} == "${env_name}" ]] || {
+        log "ERROR: Activation did not select the requested environment ${env_name}."
+        return 1
+    }
+}
+
+
+function priva_env_vars_set() {
+    local assignment
+    [[ -n ${CONDA_PREFIX:-} ]] || { log "ERROR: Activate a PriVA environment first."; return 1; }
+    [[ -n ${PRIVA_ENV_MANAGER:-} ]] || priva_find_env_manager || return 1
+    "${PRIVA_ENV_ACTIVATOR}" env config vars set --prefix "${CONDA_PREFIX}" "$@" || return 1
+    # Make the saved settings effective immediately for the remaining steps.
+    for assignment in "$@"; do
+        export "${assignment}" || return 1
+    done
+}
+
+
+function priva_requested_vep_release() {
+    # Read this ordinary top-level YAML scalar before the environment supplies
+    # yq. Reject aliases, expressions, duplicates and patch versions.
+    local config_file=$1 line value release=""
+    local scalar='^([1-9][0-9]*|"[1-9][0-9]*"|'\''[1-9][0-9]*'\'')[[:space:]]*(#.*)?$'
+    local quoted_key="^[[:space:]]*['\"]vep_installed_version['\"][[:space:]]*:"
+    while IFS= read -r line || [[ -n $line ]]; do
+        if [[ $line =~ $quoted_key || $line =~ ^(---|\.\.\.)([[:space:]]|$) ]]; then
+            log "ERROR: Use one ordinary YAML document and an unquoted top-level vep_installed_version key."
+            return 2
+        fi
+        [[ $line =~ ^vep_installed_version[[:space:]]*:[[:space:]]*(.*)$ ]] || continue
+        [[ -z $release ]] || {
+            log "ERROR: Duplicate vep_installed_version in $config_file."
+            return 2
+        }
+        value=${BASH_REMATCH[1]}
+        [[ $value =~ $scalar ]] || {
+            log "ERROR: vep_installed_version must be a numeric major VEP release, such as 113 or 116."
+            return 2
+        }
+        release=${BASH_REMATCH[1]}
+        release=${release//\"/}
+        release=${release//\'/}
+    done < "$config_file"
+    [[ -n $release ]] || {
+        log "ERROR: Set the top-level vep_installed_version in $config_file to the numeric major VEP release to install."
+        return 2
+    }
+    printf '%s\n' "$release"
+}
+
+
+function priva_install_basic_paths() {
+    [[ $# -eq 2 && ${1:-} == --config && -r ${2:-} ]] || {
+        log "ERROR: Use priva_install_basic_paths --config CONFIG."
+        return 2
+    }
+    # The environment supplies the full YAML reader later. These four ordinary
+    # top-level scalars are checked without evaluating config text as shell code.
+    local config_file=$2 line key value previous_basic=""
+    local -A selected=() seen=()
+    local -a problems=()
+    local scalar='^([/A-Za-z0-9_.-]+|"[/A-Za-z0-9_.-]*"|'\''[/A-Za-z0-9_.-]*'\'')[[:space:]]*(#.*)?$'
+    while IFS= read -r line || [[ -n $line ]]; do
+        if [[ ! $line =~ ^(cache_root|tmp_dir|assembly)[[:space:]]*:[[:space:]]*(.*)$ ]]; then
+            if [[ -n $previous_basic && $line =~ ^[[:space:]]+[^[:space:]#] ]]; then
+                problems+=("$previous_basic must fit on one ordinary YAML scalar line")
+            fi
+            [[ ! $line =~ ^[^[:space:]#] ]] || previous_basic=""
+            continue
+        fi
+        key=${BASH_REMATCH[1]}
+        value=${BASH_REMATCH[2]}
+        previous_basic=$key
+        [[ -z ${seen[$key]:-} ]] || { log "ERROR: Duplicate $key in $config_file."; return 2; }
+        seen[$key]=1
+        if [[ -z $value || $value =~ ^(#.*)?$ ]]; then
+            selected[$key]=""
+        elif [[ $value =~ $scalar ]]; then
+            value=${BASH_REMATCH[1]}
+            value=${value//\"/}
+            value=${value//\'/}
+            selected[$key]=$value
+        else
+            problems+=("$key must be an ordinary top-level scalar without spaces or shell characters")
+        fi
+    done < "$config_file"
+    for key in cache_root tmp_dir; do
+        value=${selected[$key]:-}
+        if [[ $value != /* ]] || [[ $(realpath -ms -- "$value") == / ]]; then
+            problems+=("set $key to an absolute, dedicated storage directory")
+        elif [[ ! -d $value ]]; then
+            problems+=("$key must be an existing directory on this host: $value; create it or correct the configured path before installation")
+        fi
+    done
+    case ${selected[assembly]:-} in
+        hg19|GRCh37|hg38|GRCh38) ;;
+        *) problems+=("set assembly to hg19/GRCh37 or hg38/GRCh38") ;;
+    esac
+    priva_requested_vep_release "$config_file" >/dev/null || problems+=("set vep_installed_version to a numeric major release")
+    if [[ ${#problems[@]} -gt 0 ]]; then
+        log "ERROR: Complete the basic installation settings in $config_file before environment setup:"
+        printf '  - %s\n' "${problems[@]}" >&2
+        return 2
+    fi
+    PRIVA_INSTALL_TMPDIR=${selected[tmp_dir]}
+}
+
+
+function priva_configure_portable_paths() {
+    [[ $# -eq 2 && ${1:-} == --config ]] || {
+        log "ERROR: Use priva_configure_portable_paths --config CONFIG."
+        return 2
+    }
+    python "${SCRIPT_DIR}/installer_config_paths.py" resolve \
+        --config "$2" --source-root "${BASE_DIR}"
+}
 
 
 function conda_install_vep() {
@@ -54,6 +216,55 @@ function conda_install_vep() {
         [[ $(which vep) =~ ${CONDA_PREFIX} ]] && log "The VEP binaries are successfully linked to the conda env ${env_name}" || \
         { log "The VEP binaries are not linked to the conda env ${env_name}, please run the function vep_bin_check manually"; return 1; }
     fi
+}
+
+
+function priva_configure_cache_paths() {
+    # Plan from original configured sources. The centralized helper adopts their
+    # bytes/known companions before selecting managed paths; --check is read-only.
+    local config_file=${1}
+    local mode=${2:-write}
+    local cache_root config_json
+    cache_root=$(yq '.cache_root' "${config_file}") || return 1
+    [[ -z ${cache_root} || ${cache_root} == null || ${cache_root} == '""' ]] && return 0
+    config_json=$(yq '.' "${config_file}") || return 1
+    python - "${config_file}" "${config_json}" "${mode}" "${SCRIPT_DIR}/installer_config_paths.py" <<'PRIVA_CACHE_PY'
+import importlib.util
+import json
+from pathlib import Path
+import sys
+
+
+def path_helper():
+    global _PATH_HELPER
+    if '_PATH_HELPER' not in globals():
+        spec = importlib.util.spec_from_file_location('priva_install_cache_paths', CONFIG_PATHS_HELPER)
+        _PATH_HELPER = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(_PATH_HELPER)
+    return _PATH_HELPER
+
+
+def resolve_cache_paths(config):
+    return path_helper().resolve_cache_paths(config, Path(CONFIG_PATHS_HELPER).parent.parent)
+
+
+def render_cache_config(text, updates):
+    return path_helper().render_config(text, updates)
+
+
+def configure_cache_paths(config_file, config, mode):
+    return path_helper().configure_cache_paths(config_file, config, mode,
+                                              Path(CONFIG_PATHS_HELPER).parent.parent)
+
+
+if __name__ == '__main__':
+    try:
+        CONFIG_PATHS_HELPER = sys.argv[4]
+        configure_cache_paths(sys.argv[1], json.loads(sys.argv[2]), sys.argv[3])
+    except (OSError, ValueError) as error:
+        print(f'ERROR: {error}', file=sys.stderr)
+        sys.exit(1)
+PRIVA_CACHE_PY
 }
 
 
@@ -783,6 +994,15 @@ function AlphaMissense_anno() {
     display_vcf ${alphamissense_prescore/.tsv/.vep.vcf} && \
     update_yaml ${config_file} "alphamissense_vep_vcf" "${alphamissense_prescore/.tsv/.vep.vcf}" && \
     log "The AlphaMissense VCF file ${alphamissense_prescore/.tsv/.vep.vcf} is annotated by VEP and saved to ${alphamissense_vcf}"
+}
+
+
+function priva_bundle_assembly() {
+    case "${1:-}" in
+        hg19|GRCh37) printf '%s\n' hg19 ;;
+        hg38|GRCh38) printf '%s\n' hg38 ;;
+        *) log "Unsupported bundled-data assembly: ${1:-}"; return 1 ;;
+    esac
 }
 
 
@@ -2109,6 +2329,45 @@ PY
 }
 
 
+function priva_bundled_cache_reuse() {
+    # Callable directly as an installer subcommand; only these original tracked
+    # canonical filenames receive the bundled existence/nonzero policy.
+    local key="" selected="" assembly="" force=0 relative canonical
+    while [[ $# -gt 0 ]]; do
+        case $1 in
+            --key) [[ $# -ge 2 ]] || return 2; key=$2; shift 2 ;;
+            --path) [[ $# -ge 2 ]] || return 2; selected=$2; shift 2 ;;
+            --assembly) [[ $# -ge 2 ]] || return 2; assembly=$2; shift 2 ;;
+            --force) force=1; shift ;;
+            *) log "ERROR: Use priva_bundled_cache_reuse --key KEY --path PATH [--assembly hg19|hg38] [--force]."; return 2 ;;
+        esac
+    done
+    case $key in
+        gofcards_exact_gof_cache) relative=gofcards/gofcards_exact_gof.json.gz ;;
+        gene_nonlof_mechanism_json) relative=patho_mechanism/gene_nonlof_mechanism_curated_assertions.json.gz ;;
+        hpo_condition_mechanism_json) relative=patho_mechanism/hpo_condition_mechanism_cache.json.gz ;;
+        ddg2p_mechanism_evidence) relative=patho_mechanism/gene_pathogenic_mechanism_evidence.tsv ;;
+        clingen_map|gene_dosage_sensitivity)
+            case $assembly in hg19|hg38) ;; *) log "ERROR: Select a canonical assembly for bundled ClinGen data."; return 2 ;; esac
+            if [[ $key == clingen_map ]]; then relative=clingen/clingen_map.${assembly}.pkl.gz
+            else relative=clingen/gene_dosage_sensitivity.${assembly}.tsv; fi ;;
+        clingen_erepo) relative=clingen/clingen_erepo.tsv ;;
+        *) log "ERROR: Unknown bundled resource key: $key"; return 2 ;;
+    esac
+    [[ -n $selected ]] || return 2
+    canonical=${DATA_DIR}/${relative}
+    [[ "$(realpath -ms -- "$selected")" == "$(realpath -ms -- "$canonical")" ]] || return 1
+    if [[ $force -eq 1 ]]; then
+        log "ERROR: Force cannot overwrite bundled $key: $canonical; select an explicit data-side output for that key."
+        return 2
+    fi
+    [[ "$(realpath -m -- "$selected")" == "$(realpath -ms -- "$canonical")" && \
+       -f "$selected" && -s "$selected" ]] || return 1
+    log "Reusing nonempty bundled $key: $selected"
+    return 0
+}
+
+
 function gene_pathogenic_mechanism_cache_install() {
     local config_file=${1}
     local cache_dir
@@ -2934,6 +3193,15 @@ function mechanism_resource_install() {
     gofcards_clinvar_injection_install "${config_file}" || return 1
     gene_nonlof_mechanism_cache_install "${config_file}" || return 1
     hpo_condition_mechanism_cache_install "${config_file}" || return 1
+}
+
+
+function bundled_snapshot_install() {
+    [[ $# -eq 1 ]] || { log "ERROR: Use bundled_snapshot_install CONFIG"; return 2; }
+    # Fixed Git data are already deployed by cloning PriVA. Check only that
+    # each selected input exists and is nonempty; do not parse/refresh bundles.
+    python "${SCRIPT_DIR}/installer_prerequisites.py" "$1" \
+        --source-root "${BASE_DIR}" --stage snapshots
 }
 
 

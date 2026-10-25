@@ -730,31 +730,35 @@ function SpliceAI_install() {
     local PLUGIN_CACHEDIR=${2}
     local PLUGIN_DIR=${3}
 
-    local snv_prescore=$(read_yaml ${config_file} "spliceai_snv_prescore")
-    local indel_prescore=$(read_yaml ${config_file} "spliceai_indel_prescore")
+    local assembly_version=$(read_yaml "${config_file}" assembly)
+    local snv_prescore=$(read_yaml "${config_file}" "spliceai_snv_prescore")
+    local indel_prescore=$(read_yaml "${config_file}" "spliceai_indel_prescore")
+    case "${assembly_version}" in
+        hg19|GRCh37|hg38|GRCh38) ;;
+        *) log "Not supported assembly version: ${assembly_version}"; return 1 ;;
+    esac
+    [[ -f ${SCRIPT_DIR}/spliceai_cache_input.py ]] || {
+        log "The SpliceAI cache format helper is missing from this source snapshot."
+        return 1
+    }
 
-    [[ -f ${snv_prescore} ]] && [[ -f ${indel_prescore} ]] && \
-    log "The prescores for the SpliceAI plugin are already downloaded, skip the installation process" && return 0
+    if [[ -f "${snv_prescore}" && -f "${indel_prescore}" ]]; then
+        python "${SCRIPT_DIR}/spliceai_cache_input.py" install --config "${config_file}" \
+            --cache-dir "${PLUGIN_CACHEDIR}" --snv "${snv_prescore}" --indel "${indel_prescore}"
+        return $?
+    fi
 
-    log "You need to download the prescores yourself to ${PLUGIN_CACHEDIR}/SpliceAI by registering a free BaseSequence Account from Illumina. Note that the downloaded files are pretty large (around 200 GB) and might take hours to days to complete the downloading process."
-    log "For details, read ${PLUGIN_DIR}/SpliceAI.pm"
-    log "The following steps are necessary before running this plugin:
-
-        The files with the annotations for all possible substitutions (snv), 1 base insertions
-        and 1-4 base deletions (indel) within genes are available here:
-        https://basespace.illumina.com/s/otSPW8hnhaZR
-
-        GRCh37:
-        tabix -p vcf spliceai_scores.raw.snv.hg37.vcf.gz
-        tabix -p vcf spliceai_scores.raw.indel.hg37.vcf.gz
-
-        GRCh38:
-        tabix -p vcf spliceai_scores.raw.snv.hg38.vcf.gz
-        tabix -p vcf spliceai_scores.raw.indel.hg38.vcf.gz
-
-        The plugin can then be run:
-        ./vep -i variations.vcf --plugin SpliceAI,snv=/path/to/spliceai_scores.raw.snv.hg38.vcf.gz,indel=/path/to/spliceai_scores.raw.indel.hg38.vcf.gz
-        ./vep -i variations.vcf --plugin SpliceAI,snv=/path/to/spliceai_scores.raw.snv.hg38.vcf.gz,indel=/path/to/spliceai_scores.raw.indel.hg38.vcf.gz,cutoff=0.5 "
+    if [[ ${assembly_version} == hg19 || ${assembly_version} == GRCh37 ]]; then
+        log "GRCh37 installation uses SpliceAI v1. Download its assembly-matched SNV and indel VCF caches through your authorized Illumina BaseSpace account before continuing."
+        log "Publisher data: https://basespace.illumina.com/s/otSPW8hnhaZR"
+        log "Index each completed compressed VCF with tabix -p vcf before supplying its absolute path."
+        log "For the official VEP plugin input fields, read ${PLUGIN_DIR}/SpliceAI.pm"
+    else
+        log "GRCh38 installation uses SpliceAI2 v2.0. Complete the publisher-authorized downloads of all native score shards and gene-context resources before continuing."
+        log "Publisher data: https://huggingface.co/datasets/illumina-ai/SpliceAI2-data/tree/cd1b8b82bcef9c97ac3b3b9a24f0de3a5bbf77f9"
+        log "Provide an SNV and an indel input from the complete cache. Decompressed headers determine VCF pass-through or native TSV preparation; the download manifest remains a sidecar."
+        log "For the official VEP plugin input fields, read ${PLUGIN_DIR}/SpliceAI.pm"
+    fi
     # Prepare a command waiting for the user to download the prescores and put them into the corresponding directory
     # Waiting for user's confirmation (yes or no) to finish the installation properly, we dont need to offer the cmd directly because such downloading will need them to register account and login, which is not convenient to put in the script
     [[ ! -d ${PLUGIN_CACHEDIR} ]] && { log "The cache directory ${PLUGIN_CACHEDIR}/SpliceAI is not found, please check the file"; return 1; }
@@ -769,7 +773,6 @@ function SpliceAI_install() {
             log "The file ${snv_pre_score_file} does not exist"
             return 1
         fi
-        update_yaml ${config_file} "spliceai_snv_prescore" "${snv_pre_score_file}"
         read -p "Please specify the absolute path to the indel prescore file, remember the file should correspond to the assembly version of your VEP installation"
         local indel_pre_score_file=${REPLY}
         if [[ ! -f ${indel_pre_score_file} ]]; then
@@ -777,14 +780,222 @@ function SpliceAI_install() {
             return 1
         fi
         log "Now we start to install the SpliceAI plugin"
-        # We need to return the prescore file paths to the outside of the function
-        update_yaml ${config_file} "spliceai_indel_prescore" "${indel_pre_score_file}"
+        # Validate both staged inputs before atomically updating the original two keys.
+        python "${SCRIPT_DIR}/spliceai_cache_input.py" install --config "${config_file}" \
+            --cache-dir "${PLUGIN_CACHEDIR}" --snv "${snv_pre_score_file}" --indel "${indel_pre_score_file}" || return 1
     else
         log "Please download the prescores for the SpliceAI plugin first"
         return 1
     fi
 }
 
+
+
+function SpliceAI2_install() {
+    # Preparation only. The official VEP plugin stays in place; scientific
+    # criteria/CADD activation is a separate qualification gate.
+    [[ $# -eq 3 || $# -eq 4 ]] || {
+        log "ERROR: SpliceAI2_install CONFIG MANIFEST OUTPUT_DIR [INSTALL_CONVERTER_BIN]"
+        return 2
+    }
+    local config_file=$1 manifest=$2 output_dir=$3 converter=${4:-}
+    local receipt="${output_dir}/adapter.ready.json" identities config_sha manifest_sha
+    identities=$(python - "${config_file}" "${manifest}" "${output_dir}" <<'PY'
+import hashlib
+import json
+import os
+from pathlib import Path
+import sys
+import yaml
+
+config, manifest, output = map(Path, sys.argv[1:])
+content = config.read_bytes()
+settings = yaml.safe_load(content)
+if not isinstance(settings, dict) or settings.get('assembly') not in ('hg38', 'GRCh38'):
+    raise SystemExit('SpliceAI2 preparation requires hg38/GRCh38; no fallback is performed.')
+if not manifest.is_absolute() or not output.is_absolute():
+    raise SystemExit('SpliceAI2 manifest and output directory must be absolute paths.')
+
+def partial(path):
+    return any('.partial' in part.lower() for part in Path(path).parts)
+
+if (partial(manifest) or partial(output) or manifest.resolve() != manifest
+        or output.resolve() != output or Path(os.path.abspath(output)) != output or not manifest.is_file()):
+    raise SystemExit('SpliceAI2 requires a complete regular manifest and a non-partial output path.')
+raw = manifest.read_bytes()
+data = json.loads(raw)
+if (not isinstance(data, dict) or data.get('status') != 'downloads_complete'
+        or not isinstance(data.get('confirmed_by'), str) or not data['confirmed_by'].strip()
+        or data.get('assembly') != 'GRCh38' or data.get('version') != '2.0'
+        or data.get('source_revision') != 'cd1b8b82bcef9c97ac3b3b9a24f0de3a5bbf77f9'):
+    raise SystemExit('SpliceAI2 requires an owner-confirmed complete GRCh38 v2.0 source manifest at the pinned revision.')
+
+def inspect_paths(value):
+    if isinstance(value, dict):
+        for key, item in value.items():
+            if key == 'path' and (not isinstance(item, str) or partial(item)):
+                raise SystemExit('SpliceAI2 does not consume .partial source paths.')
+            inspect_paths(item)
+    elif isinstance(value, list):
+        for item in value:
+            inspect_paths(item)
+
+inspect_paths(data)
+if output.exists():
+    if not output.is_dir() or any(path.name.startswith('.building-') for path in output.iterdir()):
+        raise SystemExit('SpliceAI2 output is incomplete or still being prepared; refusing reuse.')
+    if not (output / 'adapter.ready.json').exists() and any(output.iterdir()):
+        raise SystemExit('SpliceAI2 output has no completed receipt; refusing duplicate conversion.')
+print(hashlib.sha256(content).hexdigest(), hashlib.sha256(raw).hexdigest())
+PY
+    ) || return 1
+    read -r config_sha manifest_sha <<< "${identities}"
+    if [[ -e ${receipt} || -L ${receipt} ]]; then
+        log "Reusing the completed SpliceAI2 receipt after verification; no conversion is started."
+    else
+        [[ -f ${SCRIPT_DIR}/spliceai2_to_vep_vcf.py ]] || {
+            log "ERROR: The SpliceAI2 deployment driver is absent from this source snapshot."
+            return 1
+        }
+        log "Preparing SpliceAI2 GRCh38 from the complete source manifest; no score download or v1 fallback is performed."
+        local -a converter_args=()
+        [[ -z ${converter} ]] || converter_args=(--converter-bin "${converter}")
+        python "${SCRIPT_DIR}/spliceai2_to_vep_vcf.py" prepare \
+            --manifest "${manifest}" --assembly GRCh38 --output-dir "${output_dir}" \
+            --receipt "${receipt}" "${converter_args[@]}" || return 1
+    fi
+    python - "${config_file}" "${manifest}" "${output_dir}" "${receipt}" "${config_sha}" "${manifest_sha}" <<'PY'
+import fcntl
+import hashlib
+import json
+import os
+from pathlib import Path
+import re
+import stat
+import sys
+import tempfile
+import yaml
+
+config, manifest, output, receipt = map(Path, sys.argv[1:5])
+config_sha, manifest_sha = sys.argv[5:7]
+
+def identity(path):
+    value = path.stat()
+    return (value.st_dev, value.st_ino, value.st_size, value.st_mtime_ns, value.st_ctime_ns)
+
+def sha256(path):
+    print('SpliceAI2: verify SHA256 ' + str(path), flush=True)
+    digest = hashlib.sha256()
+    with path.open('rb') as stream:
+        for block in iter(lambda: stream.read(8 * 1024 * 1024), b''):
+            digest.update(block)
+    return digest.hexdigest()
+
+def no_links_or_partial(path):
+    if not path.is_absolute() or Path(os.path.abspath(path)) != path:
+        raise SystemExit('SpliceAI2 receipt paths must be absolute and canonical.')
+    for part in (path, *path.parents):
+        if '.partial' in part.name.lower() or part.is_symlink():
+            raise SystemExit('SpliceAI2 refuses symlinks or .partial paths: ' + str(path))
+
+no_links_or_partial(output)
+no_links_or_partial(receipt)
+if receipt.parent != output or not receipt.is_file() or receipt.stat().st_size == 0:
+    raise SystemExit('SpliceAI2 requires a nonempty regular adapter receipt under OUTPUT_DIR.')
+lock_path = output / '.install.lock'
+no_links_or_partial(lock_path)
+lock = lock_path.open('a')
+try:
+    fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+except BlockingIOError:
+    raise SystemExit('SpliceAI2 preparation is active; refusing receipt reuse.')
+if any(path.name.startswith('.building-') for path in output.iterdir()):
+    raise SystemExit('SpliceAI2 output is incomplete or still being prepared; refusing reuse.')
+tracked = {receipt: identity(receipt), manifest: identity(manifest), config: identity(config)}
+data = json.loads(receipt.read_bytes())
+if not isinstance(data, dict):
+    raise SystemExit('SpliceAI2 adapter receipt must be an object.')
+expected = dict(schema_version=1, resource='SpliceAI2', version='2.0', assembly='GRCh38',
+                status='prepared_annotation_only', scientific_qualified=False,
+                coverage='complete_published',
+                source_revision='cd1b8b82bcef9c97ac3b3b9a24f0de3a5bbf77f9',
+                source_manifest_sha256=manifest_sha)
+for key, value in expected.items():
+    if data.get(key) != value or type(data.get(key)) is not type(value):
+        raise SystemExit('SpliceAI2 receipt does not qualify full cache preparation: ' + key)
+if sha256(manifest) != manifest_sha:
+    raise SystemExit('SpliceAI2 source manifest changed during preparation.')
+original = config.read_bytes()
+if hashlib.sha256(original).hexdigest() != config_sha:
+    raise SystemExit('PriVA config changed during SpliceAI2 preparation; refusing to overwrite it.')
+outputs = data.get('outputs')
+if not isinstance(outputs, dict) or set(outputs) != {'snv', 'indel'}:
+    raise SystemExit('SpliceAI2 receipt requires both SNV and indel outputs.')
+paths = {}
+seen = set()
+for role in ('snv', 'indel'):
+    item = outputs[role]
+    if not isinstance(item, dict):
+        raise SystemExit('SpliceAI2 output entry must be an object: ' + role)
+    for key, checksum_key in (('path', 'sha256'), ('index_path', 'index_sha256')):
+        value, checksum = item.get(key), item.get(checksum_key)
+        if not isinstance(value, str) or not isinstance(checksum, str) or not re.fullmatch('[0-9a-f]{64}', checksum):
+            raise SystemExit('SpliceAI2 output path/checksum is missing or invalid: ' + role)
+        path = Path(value)
+        no_links_or_partial(path)
+        if output not in path.parents or not path.is_file() or path.stat().st_size == 0 or path in seen:
+            raise SystemExit('SpliceAI2 output must be a distinct nonempty regular file under OUTPUT_DIR: ' + str(path))
+        seen.add(path)
+        tracked[path] = identity(path)
+        if key == 'path':
+            if type(item.get('bytes')) is not int or item['bytes'] != path.stat().st_size:
+                raise SystemExit('SpliceAI2 output size mismatch: ' + role)
+            if not path.name.endswith(('.vcf.gz', '.vcf.bgz')):
+                raise SystemExit('SpliceAI2 output must have a BGZF VCF filename: ' + role)
+            paths[role] = str(path)
+        elif value != item['path'] + '.tbi':
+            raise SystemExit('SpliceAI2 tabix index must match its VCF path: ' + role)
+        if sha256(path) != checksum:
+            raise SystemExit('SpliceAI2 output SHA256 mismatch: ' + str(path))
+
+updates = {
+    'spliceai_snv_prescore': paths['snv'],
+    'spliceai_indel_prescore': paths['indel'],
+}
+settings = yaml.safe_load(original)
+text = original.decode()
+for key, value in updates.items():
+    pattern = re.compile(r'^' + re.escape(key) + r':[^\r\n]*', re.MULTILINE)
+    if len(pattern.findall(text)) > 1:
+        raise SystemExit('Duplicate SpliceAI2 config key: ' + key)
+    replacement = key + ': ' + json.dumps(value)
+    if pattern.search(text):
+        text = pattern.sub(lambda match: replacement, text)
+    else:
+        text = text + ('' if not text or text.endswith('\n') else '\n') + replacement + '\n'
+modified = yaml.safe_load(text)
+if modified != dict(settings, **updates):
+    raise SystemExit('SpliceAI2 config update would alter unrelated settings; refusing it.')
+for path, before in tracked.items():
+    if identity(path) != before:
+        raise SystemExit('SpliceAI2 verification input changed: ' + str(path))
+# Preserve all existing keys/comments except the original two cache paths.
+# Preparation provenance and scientific status remain in the sidecar receipt.
+name = None
+try:
+    with tempfile.NamedTemporaryFile(mode='w', dir=config.parent, prefix=config.name + '.', delete=False) as stream:
+        name = stream.name
+        stream.write(text)
+        stream.flush()
+        os.fsync(stream.fileno())
+    os.chmod(name, stat.S_IMODE(config.stat().st_mode))
+    os.replace(name, config)
+finally:
+    if name and os.path.exists(name):
+        os.unlink(name)
+print('SpliceAI2 preparation recorded; scientific activation remains pending.', flush=True)
+PY
+}
 
 
 function convert_splicevault_hg38_to_hg19() {

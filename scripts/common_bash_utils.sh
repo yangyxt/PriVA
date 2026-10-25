@@ -1209,27 +1209,66 @@ function parse_ped_file() {
 
 
 function check_parallel_joblog {
-    local ret_code=$(echo $?)
-    local job_log=${1}
-
-    # compatible with the GNU parallel joblog format
-    # print failed job commands to stdout
-
-    local job_num=$(tail -n +2 ${job_log} | wc -l)
-    local -a fail_job_ids=($(tail -n +2 ${job_log} | awk -F '\t' '$7 != "0"{print $1;}'))
-    log ": Parallel job log is $(ls -lh ${job_log})"
-    if [[ ${#fail_job_ids[@]} -gt 0 ]]; then
-        >&2 cat ${job_log}
-        log ": According to ${job_log}: totally ${job_num} jobs were running in parallel, ${#fail_job_ids[@]} of the parallel jobs failed, get a return code of ${ret_code}, the commands are:"
-        for id in "${fail_job_ids[@]}"; do
-            >&2 awk -F '\t' '$1 == "'${id}'"{printf "%s\n", $NF;}' ${job_log}
-        done
-    else
-        log ": All parellel jobs are finished without an error."
-        >&2 cat ${job_log}
+    local ret_code=$?
+    local job_log="" expected_jobs="" status
+    # Keep the existing one-path interface; named options make explicit status
+    # and expected job counts available to callers that know their shard set.
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --job-log) [[ $# -ge 2 && -z $job_log ]] || return 2; job_log=$2; shift 2 ;;
+            --expected-jobs) [[ $# -ge 2 && -z $expected_jobs ]] || return 2; expected_jobs=$2; shift 2 ;;
+            --exit-status) [[ $# -ge 2 ]] || return 2; ret_code=$2; shift 2 ;;
+            -*) log "Use check_parallel_joblog --job-log FILE [--expected-jobs N] [--exit-status N]"; return 2 ;;
+            *) [[ -z $job_log ]] || return 2; job_log=$1; shift ;;
+        esac
+    done
+    [[ $ret_code =~ ^[0-9]+$ && ${#ret_code} -le 3 ]] || return 2
+    ret_code=$((10#$ret_code))
+    [[ $ret_code -le 255 ]] || return 2
+    [[ -z $expected_jobs || $expected_jobs =~ ^[1-9][0-9]*$ ]] || return 2
+    if [[ $ret_code -ne 0 ]]; then
+        log "GNU Parallel failed with exit status $ret_code; its joblog cannot make that run successful."
+        return "$ret_code"
     fi
+    [[ -f $job_log && -s $job_log ]] || {
+        log "Missing or empty GNU Parallel joblog: $job_log"
+        return 1
+    }
 
-    return ${#fail_job_ids[@]}
+    if awk -F '\t' -v expected="$expected_jobs" '
+        NR == 1 {
+            if (NF != 9 || $1 != "Seq" || $2 != "Host" || $3 != "Starttime" ||
+                $4 != "JobRuntime" || $5 != "Send" || $6 != "Receive" ||
+                $7 != "Exitval" || $8 != "Signal" || $9 != "Command") bad = 1
+            next
+        }
+        {
+            jobs++
+            if (NF < 9 || $1 !~ /^[1-9][0-9]*$/ || seen[$1]++ ||
+                $2 == "" || $3 == "" || $4 == "" || $5 == "" || $6 == "" ||
+                $7 !~ /^[0-9]+$/ || $7 > 255 ||
+                $8 !~ /^[0-9]+$/ || $8 > 127 || $9 == "" ||
+                (expected != "" && $1 > expected)) bad = 1
+            if (first_failure == 0 && ($7 != 0 || $8 != 0))
+                first_failure = ($8 != 0 ? 128 + $8 : $7)
+        }
+        END {
+            if (bad || jobs == 0 || (expected != "" && jobs != expected)) {
+                print "Malformed, empty or incomplete GNU Parallel joblog" > "/dev/stderr"
+                exit 2
+            }
+            if (first_failure != 0) {
+                print "GNU Parallel joblog records a failed or signalled job" > "/dev/stderr"
+                exit first_failure
+            }
+        }
+    ' "$job_log"; then
+        log "All expected GNU Parallel jobs completed without an error: $job_log"
+    else
+        status=$?
+        log "GNU Parallel joblog validation failed: $job_log (status $status)"
+        return "$status"
+    fi
 }
 
 

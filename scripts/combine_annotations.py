@@ -574,12 +574,17 @@ def convert_record_to_tab(args: tuple) -> tuple[List[Dict[str, Any]], List[str]]
         return [], list(collector.log_buffer), time.time() - start_time
 
 
-def arg_generator(vcf_file, threads, cadd_phred_dict, hpo_symbol_map):
+def arg_generator(vcf_file, threads, cadd_phred_dict, hpo_symbol_map, require_clinvar_csq=True):
     with pysam.VariantFile(vcf_file) as vcf_file:
         # Extract the VEP CSQ field description from the header
         csq_fields = vcf_file.header.info['CSQ'].description.split('Format: ')[1].split('|')
         symbol_field_index = csq_fields.index("SYMBOL")
-        clinvar_csq_fields = vcf_file.header.info['CLNCSQ'].description.split('Format: ')[1].split('|')
+        if require_clinvar_csq or 'CLNCSQ' in vcf_file.header.info:
+            clinvar_csq_fields = vcf_file.header.info['CLNCSQ'].description.split('Format: ')[1].split('|')
+        else:
+            # ClinVar source-cache statistics use CSQ itself; CLNCSQ is an unused
+            # annotation of matched ClinVar consequences in ordinary samples.
+            clinvar_csq_fields = ()
         var_source_exists = "VARIANT_SOURCE" in vcf_file.header.info
         control_ac_exists = "control_AC" in vcf_file.header.info
         # Convert records to dictionaries before multiprocessing
@@ -601,13 +606,13 @@ def arg_generator(vcf_file, threads, cadd_phred_dict, hpo_symbol_map):
                     ) )
 
 
-def convert_vcf_to_tab(input_vcf: str, threads=4, cadd_phred_dict: dict = None, hpo_symbol_map: dict = None, chunk_size: int = 20000) -> pd.DataFrame:
+def convert_vcf_to_tab(input_vcf: str, threads=4, cadd_phred_dict: dict = None, hpo_symbol_map: dict = None, chunk_size: int = 20000, *, require_clinvar_csq: bool = True) -> pd.DataFrame:
     est_anno_count = subprocess.run(f'bcftools query -f "%INFO/CSQ\\n" {input_vcf} | tr \',\' \'\\n\' | wc -l', shell=True, capture_output=True, text=True).stdout.strip()
     est_anno_count = int(est_anno_count)
     logger.info(f"The VCF file {input_vcf} has {est_anno_count} transcript_level annotations")
     
     try:
-        record_args = arg_generator(input_vcf, threads, cadd_phred_dict, hpo_symbol_map)
+        record_args = arg_generator(input_vcf, threads, cadd_phred_dict, hpo_symbol_map, require_clinvar_csq)
         varcount = 0
         anno_record_count = 0
         batch_run_time = np.zeros(5000, dtype=np.float16)

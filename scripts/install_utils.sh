@@ -3390,6 +3390,30 @@ function mechanism_resource_install() {
 }
 
 
+function nm_to_enst_mapping_install() {
+    local config_file=${1}
+    local target
+    target=$(python "${SCRIPT_DIR}/installer_prerequisites.py" "${config_file}" \
+        --source-root "${BASE_DIR}" --stage mapping-target) || return 1
+    if [[ ! -e ${target} ]]; then
+        local source_id
+        source_id=$(python "${SCRIPT_DIR}/installer_prerequisites.py" "${config_file}" \
+            --source-root "${BASE_DIR}" --stage mapping-source) || return 1
+        local raw_output=${2:-${target}.biomart.raw.tsv}
+        python "${SCRIPT_DIR}/biomart_nm_to_enst.py" fetch \
+            --source "${source_id}" --output "${target}" --raw-output "${raw_output}" || return 1
+        # Newly acquired bytes are not a previously bundled table, even when
+        # a legacy no-root invocation downloads into its source-root pathname.
+        python "${SCRIPT_DIR}/biomart_nm_to_enst.py" verify "${target}" \
+            --assembly "$(read_yaml "${config_file}" assembly)" || return 1
+    fi
+    target=$(python "${SCRIPT_DIR}/installer_prerequisites.py" "${config_file}" \
+        --source-root "${BASE_DIR}" --stage mapping --print-mapping) || return 1
+    update_or_append_yaml "${config_file}" "nm_to_enst_tsv" "${target}" || return 1
+    log "Validated NM-to-ENST mapping selected: ${target}"
+}
+
+
 function bundled_snapshot_install() {
     [[ $# -eq 1 ]] || { log "ERROR: Use bundled_snapshot_install CONFIG"; return 2; }
     # Fixed Git data are already deployed by cloning PriVA. Check only that

@@ -58,3 +58,15 @@ genomic liftover is inappropriate. Instead, protein-coordinate transfer is used:
 - HCSeeker was developed using ClinVar data; benchmark analyses using HCSeeker anchors
   for ClinVar-derived validation could introduce circularity. Use for bandwidth calibration
   only, not as independent validation ground truth.
+
+BioMart coverage audit, 2026-10-16: the separately acquired GRCh37.p13 mart116
+mapping covers 1,469 of the 1,549 hg19 rows (882/911 hotspots, 587/638 coldspots),
+representing 754/805 bare NM accessions. The unchanged consumers skip 80 unmapped
+rows (29 hotspot, 51 coldspot), affecting the available HCSeeker calibration/PM1
+contribution; no replacement or transcript choice was invented. Mapping/table
+multiplicity and row order are retained. This audit does not establish new
+protein-sequence identity or equivalence to the unavailable original mapping.
+See [the mapping provenance](../../README.md#biomart-mapping) for the exact source,
+5,084,679-byte table SHA256 and scientific gates. The current hg38 TSV contains
+1,670 data rows (a measured correction to the earlier narrative count); the new
+GRCh37 mapping is not authorized as a GRCh38 fallback.

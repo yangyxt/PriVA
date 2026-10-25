@@ -212,16 +212,3 @@ that cannot establish an upper bound.
 - Chow S, et al. Diagnosis of systemic mastocytosis with cryptic deletion of TET2
   and DNMT3A resulting from unbalanced translocation. *Br J Haematol.*
   2024;205:961-966. PMID: 38702998; DOI: 10.1111/bjh.19501.
-
-## Frozen provenance for the superseded build
-
-The cache deployed before this workflow was produced on 2026-07-07 by a separate
-repository that queried a per-allele GoFCards summary endpoint for GRCh38
-coordinates. That endpoint is no longer used: it was the source of eleven GRCh38
-records that failed reference validation, and everything else it supplied was
-either duplicated elsewhere (`gofcards_variant_id` was identical to the allele
-key for all rows), recoverable from VEP (`rsID`), or never exported (ClinVar
-fields). Its inputs, VEP outputs, and audit logs are retained unchanged under
-`/paedyl01/disk1/yangyxt/gofcards_hg38_normalizer/work_20260707_full/` and
-`/paedyl01/disk1/yangyxt/gofcards_hg38_normalizer/audit/` as the audit trail for
-that superseded build.

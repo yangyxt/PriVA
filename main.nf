@@ -32,7 +32,7 @@ Optional: --mode raw|annotated --cadd ANNOTATED.cadd.tsv --vcf_index VCF.vcf.gz.
 The annotated mode requires its matching CADD TSV. The full cohort PED and VCF
 are retained for annotation; only the selected family is prioritized. Preserve
 the original proband-first PED row order. Use -stub-run only for wiring tests.
-See docs/nextflow_migration.md for the frozen baseline and parity requirements.'''
+See README.md for configuration, outputs and scientific-profile requirements.'''
     } else {
         ['input', 'ped', 'family', 'assembly', 'legacy_config', 'resource_manifest', 'software_id', 'outdir'].each { key ->
             if (!params[key]) error "Required parameter --${key} is missing"

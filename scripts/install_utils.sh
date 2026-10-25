@@ -2078,124 +2078,36 @@ function pext_install() {
 }
 
 
-function reference_genome_install() {
+function priva_prepare_reference_resources() {
+    [[ $# -eq 2 && -r ${1:-} ]] || {
+        log "ERROR: Supply one readable CONFIG file to the reference installer."
+        return 2
+    }
     local config_file=${1}
-    local assembly=$(read_yaml "${config_file}" "assembly")
-    local ref_fasta=$(read_yaml "${config_file}" "ref_genome")
-    local ucsc_assembly=""
-    local ref_hint=$(echo "${ref_fasta}" | tr '[:upper:]' '[:lower:]')
+    local scope=${2}
+    # The helper quotes paths and saves them only after all inputs are ready.
+    python "${SCRIPT_DIR}/reference_resources.py" install "${config_file}" \
+        --data-dir "${DATA_DIR}" --scope "${scope}" --write-config --use-cache-root
+}
 
-    if [[ ${assembly} == "hg19" ]] || [[ ${assembly} == "GRCh37" ]]; then
-        ucsc_assembly="hg19"
-    elif [[ ${assembly} == "hg38" ]] || [[ ${assembly} == "GRCh38" ]]; then
-        ucsc_assembly="hg38"
-    elif [[ ${ref_hint} =~ hg19 ]] || [[ ${ref_hint} =~ grch37 ]]; then
-        ucsc_assembly="hg19"
-    elif [[ ${ref_hint} =~ hg38 ]] || [[ ${ref_hint} =~ grch38 ]]; then
-        ucsc_assembly="hg38"
-    else
-        log "ERROR: Unsupported assembly/ref label. assembly=${assembly}, ref_genome=${ref_fasta}. Supported labels: hg19, GRCh37, hg38, GRCh38"
-        return 1
-    fi
 
-    local ref_fasta_url=""
-    if [[ ${ucsc_assembly} == "hg19" ]]; then
-        ref_fasta_url="https://hgdownload.soe.ucsc.edu/goldenPath/hg19/bigZips/hg19.fa.gz"
-    else
-        ref_fasta_url="https://hgdownload.soe.ucsc.edu/goldenPath/hg38/bigZips/hg38.fa.gz"
-    fi
+function reference_genome_install() {
+    # Preserve an explicitly selected original (including DRAGEN); download
+    # pinned UCSC bytes only at the standard destination for a missing default.
+    priva_prepare_reference_resources "${1:-}" selected
+}
 
-    if [[ -z ${ref_fasta} ]] || [[ ${ref_fasta} == "null" ]]; then
-        ref_fasta="${DATA_DIR}/reference/ucsc.${ucsc_assembly}.fasta"
-        update_yaml "${config_file}" "ref_genome" "${ref_fasta}"
-        log "ref_genome was empty; set to default path: ${ref_fasta}"
-    fi
 
-    local ref_dir=$(dirname "${ref_fasta}")
-    mkdir -p "${ref_dir}" || { log "ERROR: Failed to create reference genome directory ${ref_dir}"; return 1; }
+function assembly_references_install() {
+    # Direct entry point for both assembly FASTAs and their samtools .fai indexes.
+    # GoFCards keys reuse a supplied selected-assembly reference when left empty.
+    priva_prepare_reference_resources "${1:-}" both
+}
 
-    if ! command -v samtools >/dev/null 2>&1; then
-        log "ERROR: samtools is required but not found in PATH"
-        return 1
-    fi
 
-    if [[ ! -f ${ref_fasta} ]]; then
-        local downloader=""
-        if command -v wget >/dev/null 2>&1; then
-            downloader="wget"
-        elif command -v curl >/dev/null 2>&1; then
-            downloader="curl"
-        else
-            log "ERROR: Either wget or curl is required to download ${ucsc_assembly} reference FASTA"
-            return 1
-        fi
-
-        if ! command -v gzip >/dev/null 2>&1; then
-            log "ERROR: gzip is required but not found in PATH"
-            return 1
-        fi
-        if ! command -v gunzip >/dev/null 2>&1; then
-            log "ERROR: gunzip is required but not found in PATH"
-            return 1
-        fi
-
-        local tmp_gz="${ref_fasta}.download.$$.gz"
-        local tmp_fasta="${ref_fasta}.download.$$"
-        rm -f "${tmp_gz}" "${tmp_fasta}"
-
-        log "Downloading UCSC ${ucsc_assembly} reference FASTA from ${ref_fasta_url}"
-        if [[ ${downloader} == "wget" ]]; then
-            wget -c "${ref_fasta_url}" -O "${tmp_gz}" || {
-                rm -f "${tmp_gz}" "${tmp_fasta}"
-                log "ERROR: Failed to download reference FASTA from ${ref_fasta_url}"
-                return 1
-            }
-        else
-            curl -L "${ref_fasta_url}" -o "${tmp_gz}" || {
-                rm -f "${tmp_gz}" "${tmp_fasta}"
-                log "ERROR: Failed to download reference FASTA from ${ref_fasta_url}"
-                return 1
-            }
-        fi
-
-        gzip -t "${tmp_gz}" || {
-            rm -f "${tmp_gz}" "${tmp_fasta}"
-            log "ERROR: Downloaded reference FASTA archive is corrupted: ${tmp_gz}"
-            return 1
-        }
-
-        gunzip -c "${tmp_gz}" > "${tmp_fasta}" || {
-            rm -f "${tmp_gz}" "${tmp_fasta}"
-            log "ERROR: Failed to decompress downloaded archive ${tmp_gz}"
-            return 1
-        }
-        [[ -s ${tmp_fasta} ]] || {
-            rm -f "${tmp_gz}" "${tmp_fasta}"
-            log "ERROR: Decompressed FASTA is empty: ${tmp_fasta}"
-            return 1
-        }
-
-        mv "${tmp_fasta}" "${ref_fasta}" || {
-            rm -f "${tmp_gz}" "${tmp_fasta}"
-            log "ERROR: Failed to move FASTA into place at ${ref_fasta}"
-            return 1
-        }
-        rm -f "${tmp_gz}"
-        log "Reference FASTA deployed to ${ref_fasta}"
-    else
-        log "Reference FASTA already exists: ${ref_fasta}"
-    fi
-
-    local ref_fai="${ref_fasta}.fai"
-    if [[ ! -f ${ref_fai} ]] || [[ ${ref_fasta} -nt ${ref_fai} ]]; then
-        log "Building FASTA index with samtools faidx: ${ref_fasta}"
-        samtools faidx "${ref_fasta}" || {
-            log "ERROR: Failed to create FASTA index ${ref_fai}"
-            return 1
-        }
-    else
-        log "Reference FASTA index already up-to-date: ${ref_fai}"
-    fi
+function gofcards_reference_install() {
+    # Both FASTAs/indexes plus the pinned forward hg19-to-hg38 UCSC chain.
+    priva_prepare_reference_resources "${1:-}" gofcards
 }
 
 

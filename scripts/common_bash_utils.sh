@@ -382,7 +382,7 @@ function check_vcf_index {
     local input_vcf=${1}
     
     # Determine file type and preferred index format
-    if [[ ${input_vcf} =~ \.vcf\.gz$ ]]; then
+    if [[ ${input_vcf} =~ \.vcf\.(gz|bgz)$ ]]; then
         # For .vcf.gz files: prefer .tbi, but accept .csi if that's what exists
         local tbi_file="${input_vcf}.tbi"
         local csi_file="${input_vcf}.csi"

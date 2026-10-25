@@ -946,7 +946,8 @@ function crossmap_liftover_hg382hg19 {
         display_vcf ${input_vcf/.bgz/.gz} && \
         local input_vcf=${input_vcf/.bgz/.gz} && \
         bcftools index -f -t ${input_vcf} && \
-        ls -lh ${input_vcf}*
+        ls -lh ${input_vcf}* || \
+        { log "Failed to prepare BGZF gnomAD input for CrossMap"; return 1; }
     fi
 
     if [[ -z ${output_vcf} ]]; then

@@ -499,6 +499,100 @@ function preprocess_vcf() {
 
 
 
+function anno_agg_gnomAD_index() {
+    local input_vcf="" force=0 stage canonical alias
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --input-vcf) [[ $# -ge 2 ]] || return 2; input_vcf=$2; shift 2 ;;
+            --force) force=1; shift ;;
+            *) log "Use anno_agg_gnomAD_index --input-vcf VCF [--force]"; return 2 ;;
+        esac
+    done
+    [[ -n $input_vcf && -f $input_vcf && -s $input_vcf ]] || return 1
+    [[ ! -d $input_vcf.tbi ]] || return 1
+    if [[ $force -eq 0 && -f $input_vcf.tbi && -s $input_vcf.tbi && ! $input_vcf.tbi -ot $input_vcf ]]; then
+        return 0
+    fi
+    # Build beside an alias so a failed repair cannot replace the current TBI.
+    stage=$(mktemp -d "$(dirname "$input_vcf")/.gnomad-index.XXXXXX") || return $?
+    canonical=$(realpath -e "$input_vcf") || return $?
+    alias="$stage/$(basename "$input_vcf")"
+    ln -s "$canonical" "$alias" || return $?
+    tabix -f -p vcf "$alias" || return $?
+    tabix -l "$alias" > /dev/null || return $?
+    mv -T "$alias.tbi" "$input_vcf.tbi" || return $?
+    unlink "$alias" && rmdir "$stage"
+}
+
+function anno_agg_gnomAD_split() {
+    local input_vcf="" chr="" split_stage split_output
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --input-vcf) [[ $# -ge 2 ]] || return 2; input_vcf=$2; shift 2 ;;
+            --chromosome) [[ $# -ge 2 ]] || return 2; chr=$2; shift 2 ;;
+            *) log "Use anno_agg_gnomAD_split --input-vcf VCF --chromosome CHROM"; return 2 ;;
+        esac
+    done
+    [[ -n $input_vcf && -f $input_vcf && $chr =~ chr[0-9XY]+ ]] || return 2
+    split_output="${input_vcf/.vcf*/.${chr}.vcf.gz}"
+    [[ ! -d $split_output.tbi ]] || return 1
+    if [[ ! -f $split_output || $split_output -ot $input_vcf ]]; then
+        split_stage=$(mktemp -d "$(dirname "${input_vcf}")/.gnomad-split.XXXXXX") || return $?
+        (set -o pipefail
+         bcftools view -r "${chr}" -Ou "${input_vcf}" | \
+         bcftools sort -Oz -o "${split_stage}/${split_output##*/}") || return $?
+        tabix -f -p vcf "${split_stage}/${split_output##*/}" || return $?
+        check_vcf_validity "${split_stage}/${split_output##*/}" || return $?
+        mv "${split_stage}/${split_output##*/}" "${split_output}" && \
+        mv -T "${split_stage}/${split_output##*/}.tbi" "${split_output}.tbi" && \
+        rmdir "${split_stage}" || return $?
+    fi
+    if [[ ! -f $split_output.tbi || $split_output.tbi -ot $split_output ]]; then
+        tabix -f -p vcf "${split_output}" || return $?
+    fi
+    check_vcf_validity "${split_output}"
+}
+
+
+function anno_agg_gnomAD_chromosome() {
+    local input_vcf="" gnomad_vcf="" output_vcf="" columns="" stage
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --input-vcf) [[ $# -ge 2 ]] || return 2; input_vcf=$2; shift 2 ;;
+            --gnomad-vcf) [[ $# -ge 2 ]] || return 2; gnomad_vcf=$2; shift 2 ;;
+            --output-vcf) [[ $# -ge 2 ]] || return 2; output_vcf=$2; shift 2 ;;
+            --columns) [[ $# -ge 2 ]] || return 2; columns=$2; shift 2 ;;
+            *) log "Use anno_agg_gnomAD_chromosome --input-vcf VCF --gnomad-vcf VCF --output-vcf VCF --columns FIELDS"; return 2 ;;
+        esac
+    done
+    [[ -n $input_vcf && -n $gnomad_vcf && -n $output_vcf && -n $columns &&
+       $output_vcf != "$input_vcf" && $output_vcf != "$gnomad_vcf" ]] || return 2
+    local publication_pending="$output_vcf.gnomAD.publish.pending"
+    [[ ! -d $output_vcf.tbi ]] || return 1
+    [[ ! -L $publication_pending && ( ! -e $publication_pending || -f $publication_pending ) ]] || return 1
+    if [[ -f $output_vcf && -e $publication_pending ]]; then
+        anno_agg_gnomAD_index --input-vcf "$output_vcf" --force || return $?
+        check_vcf_validity "$output_vcf" || return $?
+        rm -- "$publication_pending" || return $?
+    fi
+    if [[ -f $output_vcf && ! $output_vcf -ot $input_vcf && ! $output_vcf -ot $gnomad_vcf ]]; then
+        anno_agg_gnomAD_index --input-vcf "$output_vcf" || return $?
+        check_vcf_validity "$output_vcf"
+        return $?
+    fi
+    # A failed or interrupted producer must leave only a hidden stage, never a
+    # plausible canonical shard that a retry could accept on mtime alone.
+    stage=$(mktemp -d "$(dirname "$output_vcf")/.gnomad-annotation.XXXXXX") || return $?
+    local staged="$stage/$(basename "$output_vcf")"
+    bcftools annotate -a "$gnomad_vcf" -c "$columns" -Oz -o "$staged" "$input_vcf" || return $?
+    tabix -f -p vcf "$staged" || return $?
+    check_vcf_validity "$staged" || return $?
+    printf '%s\n' "$output_vcf" > "$stage/publication.pending" &&
+    mv "$stage/publication.pending" "$publication_pending" &&
+    mv "$staged" "$output_vcf" && mv -T "$staged.tbi" "$output_vcf.tbi" &&
+    rm -- "$publication_pending" && rmdir "$stage"
+}
+
 function anno_agg_gnomAD_data () {
     local input_vcf=${1}
     local threads=${2}
@@ -512,6 +606,16 @@ function anno_agg_gnomAD_data () {
         log "The input vcf ${input_vcf} is not a gzipped vcf file. Quit with Error!"
         return 1;
     }
+
+    local publication_pending="$input_vcf.gnomAD.publish.pending"
+    [[ ! -L $publication_pending && ( ! -e $publication_pending || -f $publication_pending ) ]] || return 1
+    if [[ -e $publication_pending ]]; then
+        anno_agg_gnomAD_index --input-vcf "$input_vcf" --force || return $?
+        check_vcf_validity "$input_vcf" || return $?
+        rm -- "$publication_pending" || return $?
+    else
+        anno_agg_gnomAD_index --input-vcf "$input_vcf" || return $?
+    fi
 
     # Core frequency fields
     local core_fields=".INFO/AC_joint,.INFO/AN_joint,.INFO/AF_joint,.INFO/nhomalt_joint"
@@ -540,7 +644,10 @@ function anno_agg_gnomAD_data () {
         return 1
     }
 
-    check_vcf_infotags ${input_vcf} "${core_fields}${max_fields}${sex_fields}${pop_af_fields}${pop_nhomalt_fields}" && \
+    # Header IDs are bare names; .INFO/ belongs only to bcftools -c columns.
+    local readiness_fields="${core_fields}${max_fields}${sex_fields}${pop_af_fields}${pop_nhomalt_fields}"
+    readiness_fields=${readiness_fields//.INFO\//}
+    check_vcf_infotags "$input_vcf" "$readiness_fields" && \
     log "The input vcf ${input_vcf} already contains the INFO tags ${core_fields}${max_fields}${sex_fields}${pop_af_fields}${pop_nhomalt_fields}. We do not need to add them again" && \
     return 0 || \
     log "The input vcf ${input_vcf} does not contain the INFO tags ${core_fields}${max_fields}${sex_fields}${pop_af_fields}${pop_nhomalt_fields}. We need to add them"
@@ -549,48 +656,103 @@ function anno_agg_gnomAD_data () {
     # We also make sure no variants in alternative contigs are included in the input VCF
     # The used gnomAD vcf files should be the ones with joint AF information from both exome and genome datasets
 
-    local -a chr_chroms
-    # Step 1: Extract all the chromosome names from the input vcf
-    mapfile -t chr_chroms < <(bcftools query -f '%CHROM\n' ${input_vcf} | uniq -)
+    local chromosome_list
+    local -a chr_chroms=()
+    # A process substitution hides the producer's exit status from mapfile.
+    chromosome_list=$(set -o pipefail; bcftools query -f '%CHROM\n' "${input_vcf}" | uniq -) || return $?
+    [[ -z "${chromosome_list}" ]] || mapfile -t chr_chroms <<< "${chromosome_list}"
     log "The chromosome names extracted from the input vcf are: ${chr_chroms[*]}"
 
     # Step 2: Further split the main-contig-variants file to multiple single-contig variant files
-    local -a valid_chroms
+    local -a valid_chroms=()
     for chr in "${chr_chroms[@]}"; do
         if [[ ${chr} =~ chr[0-9XY]+ ]]; then
-            if [[ ! -f ${input_vcf/.vcf*/.${chr}.vcf.gz} ]] || [[ ${input_vcf/.vcf*/.${chr}.vcf.gz} -ot ${input_vcf} ]]; then
-                bcftools view -r ${chr} -Ou ${input_vcf} | \
-                bcftools sort -Oz -o ${input_vcf/.vcf*/.${chr}.vcf.gz}
-            fi
-            if [[ ! -f ${input_vcf/.vcf*/.${chr}.vcf.gz.tbi} ]] || [[ ${input_vcf/.vcf*/.${chr}.vcf.gz.tbi} -ot ${input_vcf/.vcf*/.${chr}.vcf.gz} ]]; then
-                tabix -f -p vcf ${input_vcf/.vcf*/.${chr}.vcf.gz}
-            fi
-            check_vcf_validity ${input_vcf/.vcf*/.${chr}.vcf.gz} && \
-            valid_chroms+=( ${chr} )
+            valid_chroms+=( "${chr}" )
         else
             log "WARNING!!! The chromosome ${chr} is not supported by gnomAD now. Currently only support chr1 to chrY. Skip this chromosome"
         fi
     done
     log "The valid chromosomes are: ${valid_chroms[*]}"
+    [[ ${#valid_chroms[@]} -gt 0 ]] || {
+        log "No supported chromosomes are available for gnomAD annotation."
+        return 1
+    }
+
+    # 2026-10-23 CT: only an owned ClinVar cold-recovery journal requests this
+    # engineering hook. Use the unchanged literal selection, including matching
+    # noncanonical names, before any mtime-only split/annotation reuse.
+    if [[ -n ${PRIVA_CLINVAR_RECOVERY_CONFIG:-} ]]; then
+        local -a recovery_chromosomes=()
+        for chr in "${valid_chroms[@]}"; do recovery_chromosomes+=(--chromosome "$chr"); done
+        python "${SCRIPT_DIR}/clinvar_gene_refresh.py" retire-shards \
+            --config "$PRIVA_CLINVAR_RECOVERY_CONFIG" --source-root "${SCRIPT_DIR}/.." \
+            --input-vcf "$input_vcf" "${recovery_chromosomes[@]}" || return $?
+    fi
+
+    # 2026-10-22 CT: parallelize only preparation. Each unchanged view | sort
+    # pipeline has two CPU processes; bound their count by config and Slurm.
+    # One pipeline retains the original serial behavior for a one-CPU request.
+    local split_cpus=$threads split_workers split_job split_job_log
+    [[ $split_cpus =~ ^[1-9][0-9]*$ ]] || return 2
+    if [[ -n ${SLURM_CPUS_PER_TASK:-} ]]; then
+        [[ $SLURM_CPUS_PER_TASK =~ ^[1-9][0-9]*$ ]] || return 2
+        (( SLURM_CPUS_PER_TASK >= split_cpus )) || split_cpus=$SLURM_CPUS_PER_TASK
+    fi
+    split_workers=$((split_cpus / 2))
+    (( split_workers > 0 )) || split_workers=1
+    printf -v split_job 'bash %q anno_agg_gnomAD_split --input-vcf %q --chromosome {}' \
+        "${SELF_SCRIPT}" "${input_vcf}"
+    split_job_log=$(mktemp "${input_vcf/.vcf*/}.gnomAD.split.XXXXXX.log") || return $?
+    # "soon" stops new starts on failure and waits for every running worker.
+    parallel -j "${split_workers}" --halt soon,fail=1 --joblog "${split_job_log}" \
+        "${split_job}" ::: "${valid_chroms[@]}" || return $?
+    check_parallel_joblog --job-log "${split_job_log}" \
+        --expected-jobs "${#valid_chroms[@]}" --exit-status 0 || return $?
 
     # Step 3: Perform annotation with bcftools annotate to add the INFO fields from gnomAD vcfs to the input splitted vcfs
     export gnomad_vcf_chrX
     local gnomad_vcf_suffix=${gnomad_vcf_chrX/*.chrX.vcf/}
-    parallel -j ${threads} --dry-run "if [[ ! -f ${input_vcf/.vcf*/}.{}.gnomAD.vcf.gz ]] || [[ ${input_vcf/.vcf*/}.{}.gnomAD.vcf.gz -ot ${input_vcf/.vcf*/}.{}.vcf.gz ]] || [[ ${input_vcf/.vcf*/}.{}.gnomAD.vcf.gz -ot ${gnomad_vcf_chrX/.chrX.vcf*gz/}.{}.vcf${gnomad_vcf_suffix} ]]; then bcftools annotate -a ${gnomad_vcf_chrX/.chrX.vcf*gz/}.{}.vcf${gnomad_vcf_suffix} -c ${core_fields}${max_fields}${sex_fields}${pop_af_fields}${pop_nhomalt_fields} -Oz -o ${input_vcf/.vcf*/}.{}.gnomAD.vcf.gz ${input_vcf/.vcf*/}.{}.vcf.gz; fi" ::: "${valid_chroms[@]}" && \
-    parallel -j ${threads} --joblog ${input_vcf/.vcf*/.gnomAD.log} "if [[ ! -f ${input_vcf/.vcf*/}.{}.gnomAD.vcf.gz ]] || [[ ${input_vcf/.vcf*/}.{}.gnomAD.vcf.gz -ot ${input_vcf/.vcf*/}.{}.vcf.gz ]] || [[ ${input_vcf/.vcf*/}.{}.gnomAD.vcf.gz -ot ${gnomad_vcf_chrX/.chrX.vcf*gz/}.{}.vcf${gnomad_vcf_suffix} ]]; then bcftools annotate -a ${gnomad_vcf_chrX/.chrX.vcf*gz/}.{}.vcf${gnomad_vcf_suffix} -c ${core_fields}${max_fields}${sex_fields}${pop_af_fields}${pop_nhomalt_fields} -Oz -o ${input_vcf/.vcf*/}.{}.gnomAD.vcf.gz ${input_vcf/.vcf*/}.{}.vcf.gz; fi" ::: "${valid_chroms[@]}"; \
-    check_parallel_joblog ${input_vcf/.vcf*/.gnomAD.log} || { \
-    log "Failed to add aggregated gnomAD annotation on ${input_vcf}. Quit now"
-    return 1; }
+    local annotation_job
+    printf -v annotation_job 'bash %q anno_agg_gnomAD_chromosome --input-vcf %q.{}.vcf.gz --gnomad-vcf %q.{}.vcf%q --output-vcf %q.{}.gnomAD.vcf.gz --columns %q' \
+        "${SELF_SCRIPT}" "${input_vcf/.vcf*/}" "${gnomad_vcf_chrX/.chrX.vcf*gz/}" \
+        "${gnomad_vcf_suffix}" "${input_vcf/.vcf*/}" \
+        "${core_fields}${max_fields}${sex_fields}${pop_af_fields}${pop_nhomalt_fields}"
+    parallel -j "${threads}" --dry-run "${annotation_job}" ::: "${valid_chroms[@]}" || return $?
+    local job_log=${input_vcf/.vcf*/.gnomAD.log}
+    : > "${job_log}" || return $?
+    parallel -j "${threads}" --joblog "${job_log}" "${annotation_job}" ::: "${valid_chroms[@]}" || return $?
+    check_parallel_joblog --job-log "${job_log}" \
+        --expected-jobs "${#valid_chroms[@]}" --exit-status 0 || return $?
 
-    # Merge the annotated vcfs together (including the alt-contig-variants file) to form into the output vcf
-    # We can filter on AF here
-    bcftools concat -Ou ${input_vcf/.vcf*/.chr*.gnomAD.vcf.gz} | \
-    bcftools sort -Oz -o ${output_vcf} && \
-    tabix -f -p vcf ${output_vcf} && \
-    mv ${output_vcf} ${input_vcf} && \
-    mv ${output_vcf}.tbi ${input_vcf}.tbi && \
-    rm -f ${input_vcf/.vcf*/.chr*.gnomAD.vcf.gz} && \
-    rm -f ${input_vcf/.vcf*/.chr*.gnomAD.vcf.gz.tbi}
+    # Keep the original shell-glob concat order, but accept only the shards
+    # selected for this invocation. Unrelated leftovers must not be published.
+    local shard
+    local -A expected_shards=()
+    local -a annotated_vcfs=()
+    for chr in "${valid_chroms[@]}"; do
+        shard="${input_vcf/.vcf*/}.${chr}.gnomAD.vcf.gz"
+        check_vcf_validity "${shard}" || return $?
+        expected_shards["${shard}"]=1
+    done
+    for shard in "${input_vcf/.vcf*/}".chr*.gnomAD.vcf.gz; do
+        [[ ${expected_shards["${shard}"]:-} == 1 ]] && annotated_vcfs+=( "${shard}" )
+    done
+    [[ ${#annotated_vcfs[@]} -eq ${#expected_shards[@]} ]] || {
+        log "Expected gnomAD annotation shards are missing from the concat inputs."
+        return 1
+    }
+
+    (set -o pipefail
+     bcftools concat -Ou "${annotated_vcfs[@]}" | \
+     bcftools sort -Oz -o "${output_vcf}") || return $?
+    tabix -f -p vcf "${output_vcf}" || return $?
+    check_vcf_validity "${output_vcf}" || return $?
+    printf '%s\n' "$input_vcf" > "$output_vcf.publish.pending" && \
+    mv "$output_vcf.publish.pending" "$publication_pending" && \
+    mv "${output_vcf}" "${input_vcf}" && \
+    mv -T "${output_vcf}.tbi" "${input_vcf}.tbi" && \
+    rm -- "$publication_pending" && \
+    rm -f -- "${annotated_vcfs[@]}" "${annotated_vcfs[@]/%/.tbi}"
 
 }
 

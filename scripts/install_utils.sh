@@ -1550,6 +1550,28 @@ function LOEUF_install() {
 }
 
 
+function priva_reverse_chain_file() {
+    [[ $# -eq 1 ]] || { log "ERROR: Use priva_reverse_chain_file CONFIG"; return 2; }
+    local selected
+    selected=$(read_yaml "$1" hg38_hg19_chain) || return 1
+    case "$selected" in
+        ""|null) selected="${DATA_DIR}/liftover/hg38ToHg19.over.chain.gz" ;;
+        /*) ;;
+        *)
+            [[ "$selected" =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]*$ ]] || {
+                log "ERROR: hg38_hg19_chain must be a bundled filename or an absolute supplied path."
+                return 1
+            }
+            selected="${DATA_DIR}/liftover/${selected}" ;;
+    esac
+    [[ -f "$selected" && -s "$selected" ]] || {
+        log "ERROR: Selected hg38_hg19_chain is missing or empty; no replacement selected: $selected"
+        return 1
+    }
+    printf '%s\n' "$selected"
+}
+
+
 function gnomAD_install() {
     local config_file=${1}
     local hg19_fasta=${2:-$(read_yaml "${config_file}" "ref_genome")}
@@ -1567,9 +1589,35 @@ function gnomAD_install() {
         *) log "ERROR: Unsupported gnomAD target assembly: $assembly"; return 1 ;;
     esac
 
+    local selected_gnomad canonical_gnomad gnomad_vcf_dir
+    selected_gnomad=$(read_yaml "$config_file" gnomad_vcf_chrX) || return 1
+    gnomad_vcf_dir=$(read_yaml "$config_file" gnomad_vcf_dir) || return 1
+    canonical_gnomad=$(python "${SCRIPT_DIR}/gnomad_cache.py" default-path \
+        --cache-dir "$gnomad_vcf_dir" --assembly "$assembly") || return 1
+    if [[ -n "$selected_gnomad" && "$selected_gnomad" != null ]]; then
+        if [[ "$(realpath -ms -- "$selected_gnomad")" != "$(realpath -ms -- "$canonical_gnomad")" ]]; then
+            # A selected target-assembly family is an input, not a request to
+            # fetch another release or lift already selected target coordinates.
+            python "${SCRIPT_DIR}/gnomad_cache.py" validate --chr-x "$selected_gnomad" \
+                --assembly "$assembly" --reference "$hg19_fasta" >/dev/null || return 1
+            log "Reusing the selected complete indexed gnomAD family without changing its bytes: $selected_gnomad"
+            return 0
+        elif [[ -f "$selected_gnomad" ]] && \
+             python "${SCRIPT_DIR}/gnomad_cache.py" validate --chr-x "$selected_gnomad" \
+                 --assembly "$assembly" --reference "$hg19_fasta" >/dev/null 2>&1; then
+            log "Reusing the complete managed gnomAD target-assembly family: $selected_gnomad"
+            return 0
+        fi
+    fi
+
+    local chain_file=""
+    if [[ "$assembly" == hg19 || "$assembly" == GRCh37 ]]; then
+        chain_file=$(priva_reverse_chain_file "$config_file") || return 1
+    fi
+
     # We need to iterate over all chromosomes to check if the files are already downloaded and valid
     local -a chromosomes=( 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 X Y )
-    local gnomAD_vcf_dir=$(read_yaml ${config_file} "gnomad_vcf_dir")
+    local gnomAD_vcf_dir=$(read_yaml "${config_file}" "gnomad_vcf_dir")
 
     for chr in "${chromosomes[@]}"; do
         log "About to download the gnomAD v4.1 files for chr${chr} from the url https://storage.googleapis.com/gcp-public-data--gnomad/release/4.1/vcf/joint/gnomad.joint.v4.1.sites.chr${chr}.vcf.bgz"
@@ -1577,32 +1625,34 @@ function gnomAD_install() {
             log "The gnomAD v4.1 file for chr${chr} is already downloaded to ${gnomAD_vcf_dir} and updated"
             if [[ ${gnomAD_vcf_dir}/gnomad.joint.v4.1.sites.chr${chr}.vcf.bgz.tbi -ot ${gnomAD_vcf_dir}/gnomad.joint.v4.1.sites.chr${chr}.vcf.bgz ]]; then
                 log "The index file is not updated, now we start to index the file"
-                tabix -f -p vcf ${gnomAD_vcf_dir}/gnomad.joint.v4.1.sites.chr${chr}.vcf.bgz
+                tabix -f -p vcf ${gnomAD_vcf_dir}/gnomad.joint.v4.1.sites.chr${chr}.vcf.bgz || \
+                { log "Failed to index gnomAD chromosome ${chr}"; return 1; }
             fi
         else
             log "The gnomAD v4.1 file for chr${chr} (${gnomAD_vcf_dir}/gnomad.joint.v4.1.sites.chr${chr}.vcf.bgz) is not downloaded or not updated, now we start to download the files"
             wget https://storage.googleapis.com/gcp-public-data--gnomad/release/4.1/vcf/joint/gnomad.joint.v4.1.sites.chr${chr}.vcf.bgz -O ${gnomAD_vcf_dir}/gnomad.joint.v4.1.sites.chr${chr}.vcf.bgz && \
             wget https://storage.googleapis.com/gcp-public-data--gnomad/release/4.1/vcf/joint/gnomad.joint.v4.1.sites.chr${chr}.vcf.bgz.tbi -O ${gnomAD_vcf_dir}/gnomad.joint.v4.1.sites.chr${chr}.vcf.bgz.tbi || \
             { log "Failed to download gnomAD chromosome ${chr}"; return 1; }
+            check_vcf_validity "${gnomAD_vcf_dir}/gnomad.joint.v4.1.sites.chr${chr}.vcf.bgz" || \
+            { log "Downloaded gnomAD chromosome ${chr} is invalid"; return 1; }
         fi
     done
 
     log "The gnomAD v4.1 files are already downloaded to ${gnomAD_vcf_dir}, remember that the VCF records are 1-based and currently mapped to hg38 assembly"
 
     if [[ ${assembly} =~ "GRCh37" ]] || [[ ${assembly} =~ "hg19" ]]; then
-        local chain_file=${BASE_DIR}/data/liftover/hg38ToHg19.over.chain.gz
         log "Since the gnomAD v4.1 files are currently mapped to hg38 assembly, we need to liftover the files to hg19 assembly, the chain file is ${chain_file}"
 
         gnomAD_liftover \
         ${gnomAD_vcf_dir}/gnomad.joint.v4.1.sites.chr1.vcf.bgz \
-        ${chain_file} \
+        "${chain_file}" \
         "${hg19_fasta}" 4 && \
         log "The gnomAD v4.1 files are liftovered to hg19 assembly and saved to ${gnomAD_vcf_dir}" && \
         parallel -j4 bash ${SCRIPT_DIR}/common_bash_utils.sh check_vcf_validity ${gnomAD_vcf_dir}/gnomad.joint.v4.1.sites.hg19.chr{}.vcf.gz ::: "${chromosomes[@]}" && \
-        update_yaml ${config_file} "gnomad_vcf_chrX" "${gnomAD_vcf_dir}/gnomad.joint.v4.1.sites.hg19.chrX.vcf.gz" || \
+        update_yaml "${config_file}" "gnomad_vcf_chrX" "${gnomAD_vcf_dir}/gnomad.joint.v4.1.sites.hg19.chrX.vcf.gz" || \
         { log "Failed to liftover the gnomAD v4.1 files to hg19 assembly"; return 1; }
     else
-        update_yaml ${config_file} "gnomad_vcf_chrX" "${gnomAD_vcf_dir}/gnomad.joint.v4.1.sites.chrX.vcf.bgz"
+        update_yaml "${config_file}" "gnomad_vcf_chrX" "${gnomAD_vcf_dir}/gnomad.joint.v4.1.sites.chrX.vcf.bgz"
     fi
 }
 
@@ -1644,18 +1694,24 @@ function gnomAD_liftover_per_chromosome() {
     { log "Failed to liftover the gnomAD v4.1 VCF file ${hg38_vcf} from hg38 to hg19 assembly"; return 1; }
 
     # Now we need to split the VCF file by chromosome as some variants from different chromosomes are mixed in the result hg19 VCF file
-    local -a hg19_chrs=($(bcftools query -f '%CHROM\n' ${hg19_vcf/.${chrom}/.mixed} | sort - | uniq - ))
+    local hg19_chr_list
+    hg19_chr_list=$(set -o pipefail; bcftools query -f '%CHROM\n' "${hg19_vcf/.${chrom}/.mixed}" | sort - | uniq -) || \
+    { log "Failed to read chromosomes from the lifted gnomAD VCF file"; return 1; }
+    [[ -n "$hg19_chr_list" ]] || { log "The lifted gnomAD VCF file has no chromosomes"; return 1; }
+    local -a hg19_chrs=( $hg19_chr_list )
     log "There are ${#hg19_chrs[@]} chromosomes in the hg19 VCF file ${hg19_vcf/.${chrom}/.mixed}: ${hg19_chrs[*]}"
 
     for chr in "${hg19_chrs[@]}"; do
         if [[ ${chr} == "${chrom}" ]]; then
             bcftools view -Oz -o ${hg19_vcf} ${hg19_vcf/.${chrom}/.mixed} "${chr}" && \
             bcftools index -f -t ${hg19_vcf} && \
-            display_vcf ${hg19_vcf}
+            display_vcf ${hg19_vcf} || \
+            { log "Failed to split or index lifted gnomAD chromosome ${chr}"; return 1; }
         else
             bcftools view -Oz -o ${hg19_vcf/.${chrom}/.${chr}} ${hg19_vcf/.${chrom}/.mixed} "${chr}" && \
             bcftools index -f -t ${hg19_vcf/.${chrom}/.${chr}} && \
-            display_vcf ${hg19_vcf/.${chrom}/.${chr}}
+            display_vcf ${hg19_vcf/.${chrom}/.${chr}} || \
+            { log "Failed to split or index lifted gnomAD chromosome ${chr}"; return 1; }
         fi
     done
 
@@ -1671,6 +1727,9 @@ function gnomAD_liftover() {
     local hg19_fasta=${3}
     local threads=${4}
 
+    [[ -s "$hg19_fasta" ]] || { log "ERROR: GRCh37 reference is missing: $hg19_fasta"; return 1; }
+    [[ -s "$chain_file" ]] || { log "ERROR: Liftover chain is missing: $chain_file"; return 1; }
+
     local self_script=$(realpath ${BASH_SOURCE[0]})
 
     if [[ -z ${threads} ]]; then
@@ -1684,7 +1743,7 @@ function gnomAD_liftover() {
     local -a hg38_chrs=( chr{1..22} chrX chrY )
 
     for chr in "${hg38_chrs[@]}"; do
-        [[ -d ${hg19_dir}/${chr} ]] || mkdir -p ${hg19_dir}/${chr}
+        [[ -d ${hg19_dir}/${chr} ]] || mkdir -p ${hg19_dir}/${chr} || return 1
     done
 
     parallel -j ${threads} --dry-run \
@@ -1716,6 +1775,7 @@ function gnomAD_liftover() {
             { log "Failed to concat the VCF files ${tmp_vcfs[*]} to ${hg19_vcf}, please check the folder $(dirname ${hg19_vcf})"; return 1; } }
         else
             log "No VCF files found for chromosome ${chr} at hg19 in folder ${hg19_dir}"
+            return 1
         fi
     done
 }

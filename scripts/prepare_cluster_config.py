@@ -2,18 +2,22 @@
 """Generate a separate installation config without touching the source config."""
 import argparse
 from pathlib import Path
+import re
 import yaml
 
 
 def transform(config, source_root, cache_root, data_root, threads):
     config = dict(config)
+    vep_release = str(config.get("vep_installed_version", ""))
+    if not re.fullmatch(r"[1-9][0-9]*", vep_release):
+        raise ValueError("vep_installed_version must be a numeric VEP major release")
     for key, value in config.items():
         if isinstance(value, str) and value.startswith("/paedyl01/disk1/yangyxt/PriVA/"):
             config[key] = str(source_root / value.split("/PriVA/", 1)[1])
     config.update({
         "assembly": "hg19", "tmp_dir": str(data_root / "tmp"),
         "ref_genome": str(cache_root / "references/ucsc.hg19.fasta"),
-        "cache_root": str(cache_root), "vep_installed_version": "113",
+        "cache_root": str(cache_root), "vep_installed_version": vep_release,
         "input_vcf": "", "ped_file": "", "alt_disease_vcf": "",
         "control_vcf": "", "pp1_vcf": "", "pp1_ped": "",
         "output_dir": str(data_root / "results"),

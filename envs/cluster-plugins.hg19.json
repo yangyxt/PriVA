@@ -1,9 +1,9 @@
 {
   "schema_version": 1,
   "assembly": "GRCh37",
-  "vep_release": "113",
+  "vep_release": "116",
   "repositories": [
-    {"url": "https://github.com/Ensembl/VEP_plugins.git", "commit": "10054085053745b62ab20129f13cd02f06f7e183", "path": "VEP_plugin"},
+    {"url": "https://github.com/Ensembl/VEP_plugins.git", "commit": "59b34e58b41c052e220b2476c829e692d28b794d", "path": "VEP_plugin"},
     {"url": "https://github.com/Ensembl/UTRannotator.git", "commit": "40e30db003d72435eb3744ee747029294abbcf3a", "path": "VEP_plugin_cache/UTRannotator"},
     {"url": "https://github.com/konradjk/loftee.git", "commit": "c7a87dffe3b96a729d299ca3ccb1c25db7b44e30", "path": "VEP_plugin/LoFtee_repos/loftee-hg19"}
   ],
@@ -17,7 +17,7 @@
     {"url": "https://ftp.ensembl.org/pub/grch37/release-113/fasta/homo_sapiens/pep/Homo_sapiens.GRCh37.pep.all.fa.gz", "path": "VEP_plugin_cache/Ensembl_113/Homo_sapiens.GRCh37.pep.all.fa.gz", "bytes": 12772801},
     {"url": "https://ftp.ensembl.org/pub/grch37/release-113/gtf/homo_sapiens/Homo_sapiens.GRCh37.87.gtf.gz", "path": "VEP_plugin_cache/Ensembl_113/Homo_sapiens.GRCh37.87.gtf.gz", "bytes": 42400095}
   ],
-  "scope": "Shared official VEP113 plugin inputs. Ensembl GRCh37 release-113 publishes the GRCh37.87 GTF; transcript compatibility with the shared CADD adapter still requires qualification. Files without publisher cryptographic hashes are recorded with local SHA256, not represented as publisher-hash verified.",
+  "scope": "Official VEP116 plugin sources with retained assembly/model inputs. Transcript CDS/peptide/GTF URLs below remain explicitly pinned to Ensembl GRCh37 release113 (GRCh37.87 GTF); compatibility with VEP116 and the shared CADD adapter still requires qualification. Files without publisher cryptographic hashes are recorded with local SHA256, not represented as publisher-hash verified.",
   "pending": [
     {"resource": "SpliceAI v1 SNV+indel prescores", "reason": "Original installer requires Illumina BaseSpace access or user-provided files; no omission authorized."},
     {"resource": "PrimateAI v0.2 prescores", "reason": "Original installer requires Illumina BaseSpace access or user-provided files; no omission authorized."},

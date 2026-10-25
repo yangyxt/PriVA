@@ -7,12 +7,12 @@
     "checksum_source": "https://hgdownload.soe.ucsc.edu/goldenPath/hg19/bigZips/md5sum.txt"
   },
   "vep": {
-    "version": "113.2",
-    "cache_release": "113",
-    "url": "https://ftp.ensembl.org/pub/release-113/variation/indexed_vep_cache/homo_sapiens_merged_vep_113_GRCh37.tar.gz",
-    "bytes": 19752389249,
-    "bsd_sum": [54611, 19289443],
-    "checksum_source": "https://ftp.ensembl.org/pub/release-113/variation/indexed_vep_cache/CHECKSUMS"
+    "version": "116.3",
+    "cache_release": "116",
+    "url": "https://ftp.ensembl.org/pub/release-116/variation/indexed_vep_cache/homo_sapiens_merged_vep_116_GRCh37.tar.gz",
+    "bytes": 26547166965,
+    "bsd_sum": [52663, 25924968],
+    "checksum_source": "https://ftp.ensembl.org/pub/release-116/variation/indexed_vep_cache/CHECKSUMS"
   },
   "cadd": {
     "source_commit": "1fead0c1e02d3f0a8599bdb04e6b3a2dd70b4866",

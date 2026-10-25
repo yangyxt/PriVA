@@ -1,5 +1,7 @@
 # Cluster deployment of PriVA's Python reference implementation.
-# Scientific versions below come from acmg_conda.yml at 09223ef. Additional
+# Python scientific versions below come from acmg_conda.yml at 09223ef.
+# VEP116.3 is the user-selected replacement profile (2026-10-16); annotation
+# and downstream calibration qualification are still required. Additional
 # cache-builder dependencies were absent from that export; resolve once and
 # retain environment.explicit.txt before accepting results. CADD has its own
 # upstream environments and is intentionally not installed into Python 3.12.
@@ -9,7 +11,7 @@ channels:
   - bioconda
 dependencies:
   - python=3.12.3
-  - ensembl-vep=113.2
+  - ensembl-vep=116.3
   - snakemake=8.25.2
   - numpy=1.26.4
   - pandas=2.2.3

@@ -4490,6 +4490,38 @@ function bundled_snapshot_install() {
 }
 
 
+function Nextflow_runtime_install() {
+    [[ $# -eq 1 && -r ${1:-} ]] || {
+        log "ERROR: Use Nextflow_runtime_install CONFIG"
+        return 2
+    }
+    local cache_root runtime_prefix
+    cache_root=$(read_yaml "$1" cache_root) || return 1
+    [[ ${cache_root} == /* && -d ${cache_root} ]] || {
+        log "ERROR: Configure an existing absolute cache_root before installing Nextflow."
+        return 1
+    }
+    # Basic storage preflight permits an existing root alias. Resolve that
+    # selected root only; the helper still rejects symlinked runtime/staging
+    # children so a managed installation cannot redirect itself elsewhere.
+    # Match the cache resolver's lexical normalization before following links.
+    cache_root=$(realpath -ms -- "${cache_root}") || return 1
+    cache_root=$(realpath -e -- "${cache_root}") || return 1
+    [[ ${cache_root} != / ]] || {
+        log "ERROR: cache_root must resolve to a dedicated storage directory."
+        return 1
+    }
+    # The workflow driver is part of the Nextflow checkout's one-command
+    # installation. Its private JRE leaves VEP and the scientific environments
+    # unchanged; a completed driver does not activate the raw-workflow gate.
+    # Reuse/download/recovery and exact upstream pins live in the small helper.
+    runtime_prefix="${cache_root%/}/runtime/priva-nextflow-25.10.4"
+    bash "${SCRIPT_DIR}/bootstrap_nextflow_runtime.sh" install \
+        --prefix "${runtime_prefix}" || return 1
+    log "Nextflow driver ready: ${runtime_prefix}/bin/nextflow"
+}
+
+
 function main_install() {
     if [[ $# -eq 1 && ( ${1:-} == -h || ${1:-} == --help ) ]]; then
         printf 'Usage: bash scripts/install_utils.sh main_install CONFIG\n'

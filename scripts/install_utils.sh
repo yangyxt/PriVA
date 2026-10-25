@@ -795,10 +795,10 @@ function SpliceAI2_install() {
     # Preparation only. The official VEP plugin stays in place; scientific
     # criteria/CADD activation is a separate qualification gate.
     [[ $# -eq 3 || $# -eq 4 ]] || {
-        log "ERROR: SpliceAI2_install CONFIG MANIFEST OUTPUT_DIR [PRIVA_BIN]"
+        log "ERROR: SpliceAI2_install CONFIG MANIFEST OUTPUT_DIR [INSTALL_CONVERTER_BIN]"
         return 2
     }
-    local config_file=$1 manifest=$2 output_dir=$3 converter=${4:-priva}
+    local config_file=$1 manifest=$2 output_dir=$3 converter=${4:-}
     local receipt="${output_dir}/adapter.ready.json" identities config_sha manifest_sha
     identities=$(python - "${config_file}" "${manifest}" "${output_dir}" <<'PY'
 import hashlib
@@ -857,10 +857,12 @@ PY
             log "ERROR: The SpliceAI2 deployment driver is absent from this source snapshot."
             return 1
         }
-        log "Preparing SpliceAI2 GRCh38 from the complete source manifest; no download or v1 fallback is performed."
-        python "${SCRIPT_DIR}/spliceai2_to_vep_vcf.py" \
+        log "Preparing SpliceAI2 GRCh38 from the complete source manifest; no score download or v1 fallback is performed."
+        local -a converter_args=()
+        [[ -z ${converter} ]] || converter_args=(--converter-bin "${converter}")
+        python "${SCRIPT_DIR}/spliceai2_to_vep_vcf.py" prepare \
             --manifest "${manifest}" --assembly GRCh38 --output-dir "${output_dir}" \
-            --receipt "${receipt}" --priva-bin "${converter}" || return 1
+            --receipt "${receipt}" "${converter_args[@]}" || return 1
     fi
     python - "${config_file}" "${manifest}" "${output_dir}" "${receipt}" "${config_sha}" "${manifest_sha}" <<'PY'
 import fcntl

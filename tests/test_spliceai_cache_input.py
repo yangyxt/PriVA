@@ -148,6 +148,14 @@ class HeaderTests(Fixture):
 
 
 class PairAndInstallTests(Fixture):
+    def setUp(self):
+        super().setUp()
+        # These cases isolate atomic registration/header routing. Real BGZF
+        # and tabix pairing are covered in V1IndexTests below.
+        patcher = mock.patch.object(CACHE, "_validate_v1_indexes", return_value=[])
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
     def test_existing_v1_vcf_both_assemblies_pass_without_conversion(self):
         for assembly in ("hg19", "GRCh37", "hg38", "GRCh38"):
             self.assertEqual(CACHE.validate_pair(assembly, self.snv, self.indel)["format"], "vcf_v1")
@@ -367,7 +375,7 @@ class ManifestTests(Fixture):
             result = CACHE.install(self.config, self.folder / "cache", self.snv, self.indel)
         self.assertEqual(result["format"], "spliceai2_tsv")
         run.assert_called_once_with(["bash", str(ROOT / "scripts/install_utils.sh"), "SpliceAI2_install", str(self.config),
-                                     str(self.manifest), str(self.folder / "cache/SpliceAI2/GRCh38"), "priva"], check=True)
+                                     str(self.manifest), str(self.folder / "cache/SpliceAI2/GRCh38")], check=True)
         self.assertEqual(self.config.read_bytes(), before)
 
     def test_absent_manifest_no_conversion_or_fallback(self):
@@ -437,6 +445,53 @@ class ManifestTests(Fixture):
                 CACHE.install(self.config, self.folder, self.snv, self.indel)
         run.assert_not_called()
 
+
+
+
+class V1IndexTests(Fixture):
+    def setUp(self):
+        super().setUp()
+        import pysam
+        self.pysam = pysam
+        self.snv = self.indexed("snv", "chr1", 10)
+        self.indel = self.indexed("indel", "chr1", 20)
+
+    def indexed(self, name, contig, position):
+        text = self.write(name + ".vcf", VCF + f"{contig}\t{position}\t.\tA\tC\t.\tPASS\t.\n")
+        path = Path(str(text) + ".gz")
+        self.pysam.tabix_compress(str(text), str(path), force=True)
+        self.pysam.tabix_index(str(path), preset="vcf", force=True)
+        return path
+
+    def test_original_bytes_and_indexes_remain_unchanged(self):
+        paths = [self.snv, self.indel, Path(str(self.snv) + ".tbi"), Path(str(self.indel) + ".tbi")]
+        before = {p: (p.read_bytes(), CACHE._identity(p)) for p in paths}
+        CACHE.install(self.config, self.folder, self.snv, self.indel)
+        self.assertEqual(before, {p: (p.read_bytes(), CACHE._identity(p)) for p in paths})
+
+    def test_missing_empty_corrupt_or_other_contig_index_never_registers(self):
+        index = Path(str(self.indel) + ".tbi")
+        other = self.indexed("other", "chr2", 30)
+        for content in (None, b"", b"not an index", Path(str(other) + ".tbi").read_bytes()):
+            with self.subTest(content=None if content is None else len(content)):
+                index.unlink(missing_ok=True)
+                if content is not None:
+                    index.write_bytes(content)
+                before = self.config.read_bytes()
+                with self.assertRaises(ValueError):
+                    CACHE.install(self.config, self.folder, self.snv, self.indel)
+                self.assertEqual(before, self.config.read_bytes())
+
+    def test_index_change_before_registration_is_rejected(self):
+        original = CACHE._validate_v1_indexes
+        def mutate(*args):
+            result = original(*args)
+            Path(str(self.snv) + ".tbi").write_bytes(b"changed after validation")
+            return result
+        before = self.config.read_bytes()
+        with mock.patch.object(CACHE, "_validate_v1_indexes", side_effect=mutate), self.assertRaisesRegex(ValueError, "Cache input changed"):
+            CACHE.install(self.config, self.folder, self.snv, self.indel)
+        self.assertEqual(before, self.config.read_bytes())
 
 if __name__ == "__main__":
     unittest.main()

@@ -52,7 +52,8 @@ from spliceai_cache_input import inspect_header
 
 message = ('SpliceAI2 is prepared for annotation inspection only. Legacy PriVA '
            'ACMG/ClinVar criteria and CADD feature use are not qualified; '
-           'use the original SpliceAI v1 resources for this scientific reference.')
+           'complete qualification for the selected scientific profile; '
+           'GRCh38 installation must not fall back automatically to SpliceAI v1.')
 config = Path(sys.argv[2])
 settings = yaml.safe_load(config.read_bytes()) if config.is_file() else {}
 if settings is None:

@@ -182,8 +182,10 @@ from pathlib import Path
 import subprocess
 
 parser = argparse.ArgumentParser()
-for flag in ('manifest', 'assembly', 'output-dir', 'receipt', 'priva-bin'):
+parser.add_argument('command', choices=['prepare'])
+for flag in ('manifest', 'assembly', 'output-dir', 'receipt'):
     parser.add_argument('--' + flag, required=True)
+parser.add_argument('--converter-bin')
 args = parser.parse_args()
 Path(os.environ['TEST_CALLS']).write_text(json.dumps(vars(args)))
 mode = os.environ.get('TEST_ADAPTER_MODE', 'valid')
@@ -310,7 +312,7 @@ class SpliceAI2Preparation(unittest.TestCase):
         self.calls = self.folder / 'calls.json'
         self.env = dict(os.environ, TEST_CONFIG=str(self.config), TEST_CALLS=str(self.calls))
 
-    def invoke(self, mode='valid', converter='/pinned bin/priva'):
+    def invoke(self, mode='valid', converter='/pinned bin/spliceai2-converter'):
         self.env['TEST_ADAPTER_MODE'] = mode
         return subprocess.run(['bash', '-c', 'source "$1"; SpliceAI2_install "$2" "$3" "$4" "$5"',
                                'test', str(self.installer), str(self.config), str(self.manifest),
@@ -332,11 +334,18 @@ class SpliceAI2Preparation(unittest.TestCase):
         self.assertTrue(self.config.read_bytes().startswith(b'# Keep original settings and comments.\n'))
         self.assertEqual(self.config.stat().st_mode & 0o777, 0o640)
         calls = json.loads(self.calls.read_text())
-        self.assertEqual(calls, dict(manifest=str(self.manifest), assembly='GRCh38',
+        self.assertEqual(calls, dict(command='prepare', manifest=str(self.manifest), assembly='GRCh38',
                                      output_dir=str(self.output), receipt=str(self.output / 'adapter.ready.json'),
-                                     priva_bin='/pinned bin/priva'))
+                                     converter_bin='/pinned bin/spliceai2-converter'))
         self.assertEqual(result.stdout.count('verify SHA256'), 5)
         self.assertIn('activation remains pending', result.stdout)
+
+    def test_default_route_omits_production_converter_argument(self):
+        result = self.invoke(converter='')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        calls = json.loads(self.calls.read_text())
+        self.assertEqual(calls['command'], 'prepare')
+        self.assertIsNone(calls['converter_bin'])
 
     def test_invalid_receipts_never_register_cache_paths(self):
         for mode in ('no_receipt', 'malformed_receipt', 'nonobject_receipt', 'subset', 'wrong_assembly', 'wrong_version', 'wrong_revision', 'wrong_manifest',

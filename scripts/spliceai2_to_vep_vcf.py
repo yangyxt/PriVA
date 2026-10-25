@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Prepare a verified, annotation-only SpliceAI2 view; never activate ACMG policy.
 
-Rust performs the row conversion. This deployment helper verifies immutable
+The standalone installation Rust tool performs the row conversion. This helper verifies immutable
 inputs, qualifies gene context against the same GENCODE release, and manages
 the mature gzip/bgzip/tabix tools. Original 84-column tables remain authoritative.
 """
@@ -16,15 +16,23 @@ from pathlib import Path
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 
 REVISION = "cd1b8b82bcef9c97ac3b3b9a24f0de3a5bbf77f9"
-PLUGIN_SHA256 = "500a534c403bcbcc15753718768f0a1f352cc6b93f9119e5eba25745f7205b9a"
+QUALIFIED_PLUGINS = {
+    "500a534c403bcbcc15753718768f0a1f352cc6b93f9119e5eba25745f7205b9a": {
+        "release": "113", "allele_matching": "Ensembl get_matched_variant_alleles normalization"},
+    "d08ce7d8c2e6b3229cef638beff145e465e224f0e3fcd43fd49d501ebc2740b1": {
+        "release": "116", "allele_matching": "Exact position/REF/ALT after VF indel conversion and VF-strand orientation"},
+}
 CHROMS = [f"chr{i}" for i in range(1, 23)] + ["chrX", "chrY"]
 PUBLISHED = {(kind, chrom) for kind in ("snv", "indel") for chrom in CHROMS
              if (kind, chrom) != ("indel", "chrY")}
 REGION_COLUMNS = ["gene_id", "chrom", "gene_start", "gene_end", "strand"]
 CONTEXT_COLUMNS = REGION_COLUMNS + ["gene_name"]
+MIN_RUST_VERSION = (1, 70, 0)  # is_some_and/is_ok_and; no edition-2024 requirement.
+ISOLATED_RUST_VERSION = "1.90.0"
 
 
 def require(condition, message):
@@ -43,6 +51,108 @@ def digest(path):
 def identity(path):
     s = path.stat()
     return (s.st_dev, s.st_ino, s.st_size, s.st_mtime_ns, s.st_ctime_ns)
+
+
+def compiler_identity(executable):
+    """Return the actual compatible compiler identity, or None."""
+    if not executable:
+        return None
+    executable = shutil.which(str(executable))
+    if not executable:
+        return None
+    # Keep the rustc filename: rustup and other multicall shims dispatch by argv[0].
+    path = Path(executable).absolute()
+    try:
+        version = subprocess.check_output([str(path), "--version"], text=True, stderr=subprocess.STDOUT).strip()
+        sysroot = subprocess.check_output([str(path), "--print", "sysroot"], text=True, stderr=subprocess.STDOUT).strip()
+    except (OSError, subprocess.SubprocessError):
+        return None
+    match = re.match(r"rustc ([0-9]+)\.([0-9]+)\.([0-9]+)(?:\s|$)", version)
+    if not match or tuple(map(int, match.groups())) < MIN_RUST_VERSION:
+        return None
+    compiler = Path(sysroot) / "bin/rustc"
+    if not compiler.is_file():
+        return None
+    compiler = compiler.resolve(strict=True)
+    return {"path": str(path), "version": version, "executable": str(compiler),
+            "sha256": digest(compiler), "invocation_sha256": digest(path), "sysroot": sysroot}
+
+
+def installation_compiler(tools_dir, rustc=None):
+    """Use a compatible host compiler or acquire a private pinned Conda compiler."""
+    compiler = compiler_identity(rustc or "rustc")
+    if compiler:
+        return compiler
+    require(rustc is None, "The explicit --rustc must be an executable Rust 1.70+ compiler")
+    prefix = tools_dir / ("rust-" + ISOLATED_RUST_VERSION)
+    with (tools_dir / ".compiler.lock").open("a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        compiler = compiler_identity(prefix / "bin/rustc")
+        if compiler:
+            require(compiler["version"].split()[1] == ISOLATED_RUST_VERSION,
+                    "The private compiler prefix does not match pinned Rust " + ISOLATED_RUST_VERSION)
+            return compiler
+        require(not prefix.exists(), "The isolated Rust prefix is incomplete; explicit recovery is required: " + str(prefix))
+        candidates = [os.environ.get("MAMBA_EXE"), os.environ.get("CONDA_EXE"), "mamba", "micromamba", "conda"]
+        manager = next((resolved for candidate in candidates if candidate
+                        for resolved in [shutil.which(candidate)] if resolved), None)
+        require(manager, "SpliceAI2 installation needs a compatible rustc or the existing Conda/Mamba manager")
+        print("Installing isolated SpliceAI2 build compiler: " + str(prefix), flush=True)
+        package_env = dict(os.environ, CONDA_PKGS_DIRS=str(tools_dir / ".conda-pkgs"))
+        subprocess.run([manager, "create", "--yes", "--prefix", str(prefix), "--override-channels",
+                        "--channel", "conda-forge", "rust=" + ISOLATED_RUST_VERSION],
+                       env=package_env, check=True)
+        compiler = compiler_identity(prefix / "bin/rustc")
+        require(compiler and compiler["version"].split()[1] == ISOLATED_RUST_VERSION,
+                "The isolated compiler did not provide pinned Rust " + ISOLATED_RUST_VERSION)
+        return compiler
+
+
+def build_converter(tools_dir, rustc=None):
+    """Build/cache only the std-only installation converter; never invoke Cargo."""
+    source = complete_file(Path(__file__).resolve().with_name("spliceai2_converter.rs"))
+    before = identity(source)
+    source_sha = digest(source)
+    require(identity(source) == before, "Installation converter source changed during hashing")
+    tools_dir = Path(tools_dir).absolute()
+    require(not any(parent.is_symlink() for parent in (tools_dir, *tools_dir.parents)),
+            "Installation tool paths must not traverse symlinks")
+    tools_dir.mkdir(parents=True, exist_ok=True)
+    destination = tools_dir / source_sha
+    executable = destination / "spliceai2-converter"
+    with (tools_dir / ".build.lock").open("a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        if destination.exists():
+            receipt = destination / "build.ready.json"
+            require(receipt.is_file() and executable.is_file() and os.access(executable, os.X_OK),
+                    "Incomplete installation converter cache: " + str(destination))
+            metadata = json.loads(receipt.read_text())
+            require(metadata.get("schema_version") == 1 and metadata.get("source_sha256") == source_sha
+                    and metadata.get("binary_sha256") == digest(executable),
+                    "Installation converter cache identity mismatch: " + str(destination))
+            return executable
+        compiler = installation_compiler(tools_dir, rustc=rustc)
+        compiler_inputs = {Path(compiler[key]): identity(Path(compiler[key])) for key in ("path", "executable")}
+        with tempfile.TemporaryDirectory(prefix=".building-", dir=tools_dir) as temporary:
+            stage = Path(temporary)
+            binary = stage / executable.name
+            command = [compiler["path"], "--edition=2021", "-O", "-C", "codegen-units=1", "--crate-name", "spliceai2_converter",
+                       str(source), "-o", str(binary)]
+            print("Building standalone SpliceAI2 installation converter", flush=True)
+            subprocess.run(command, check=True)
+            require(identity(source) == before, "Installation converter source changed during compilation")
+            require(all(identity(path) == original for path, original in compiler_inputs.items()),
+                    "Installation compiler changed during compilation")
+            require(subprocess.check_output([str(binary), "--version"], text=True).strip()
+                    == "spliceai2-converter 1 (installation-only; Rust std)",
+                    "Unexpected installation converter identity")
+            (stage / "build.ready.json").write_text(json.dumps({
+                "schema_version": 1, "role": "installation_only", "source_path": str(source),
+                "source_sha256": source_sha, "binary_sha256": digest(binary), "compiler": compiler,
+                "command": command, "cargo_dependencies": [],
+            }, indent=2) + "\n")
+            stage.rename(destination)
+    return executable
 
 
 def complete_file(path):
@@ -66,6 +176,13 @@ def verified_file(item, identities):
     require(identity(path) == before, f"Input changed during verification: {path}")
     identities[path] = before
     return path
+
+
+def verified_plugin(item, identities):
+    path = verified_file(item, identities)
+    sha256 = item["sha256"]
+    require(sha256 in QUALIFIED_PLUGINS, "Unqualified official plugin revision")
+    return {"path": str(path), "sha256": sha256, **QUALIFIED_PLUGINS[sha256]}
 
 
 def text_stream(path):
@@ -178,7 +295,7 @@ def convert_kind(kind, entries, context, target, converter, threads, tools):
                 print(f"Projecting {kind} {item['chrom']}", flush=True)
                 source = subprocess.Popen([tools["gzip"], "-dc", str(item["resolved_path"])], stdout=subprocess.PIPE)
                 processes.append(source)
-                command = [str(converter), "spliceai2-vcf", "--genes", str(context), "--chrom", item["chrom"],
+                command = [str(converter), "project", "--genes", str(context), "--chrom", item["chrom"],
                            "--kind", kind, "--input", "-", "--output", "-"]
                 if index:
                     command.append("--no-header")
@@ -237,13 +354,7 @@ def prepare(args):
         complete_file(item["path"])  # Cheap completeness checks before large reads.
     regions = verified_file(manifest["scored_regions"], identities)
     gtf = verified_file(manifest["gencode_gtf"], identities)
-    plugin = verified_file(manifest["vep_spliceai_plugin"], identities)
-    require(manifest["vep_spliceai_plugin"]["sha256"] == PLUGIN_SHA256, "Unqualified official plugin revision")
-    converter_name = shutil.which(str(args.priva_bin))
-    require(converter_name, "Build the Rust priva executable and supply --priva-bin")
-    converter = complete_file(Path(converter_name).absolute())
-    identities[converter] = identity(converter)
-    converter_sha = digest(converter)
+    plugin = verified_plugin(manifest["vep_spliceai_plugin"], identities)
     tool_identities, tools = {}, {}
     for name in ("gzip", "bgzip", "tabix"):
         executable = shutil.which(name)
@@ -259,6 +370,20 @@ def prepare(args):
         require(not any(".partial" in part.lower() or part == ".." for part in path.parts), "Incomplete/noncanonical output path")
         require(not any(parent.is_symlink() for parent in (path, *path.parents)), "Output paths must not traverse symlinks")
     require(receipt_path.parent.resolve() == folder.resolve(), "Receipt must be directly inside the output directory")
+    if args.converter_bin:
+        converter_name = shutil.which(str(args.converter_bin))
+        require(converter_name, "The explicit --converter-bin installation tool is not executable")
+        converter = complete_file(Path(converter_name).absolute())
+        converter_info = {"role": "explicit_converter_override"}
+    else:
+        source = complete_file(driver.with_name("spliceai2_converter.rs"))
+        identities[source] = identity(source)
+        converter = build_converter(folder.parent / ".tools" / "spliceai2-converter")
+        build_receipt = converter.parent / "build.ready.json"
+        converter_info = {"role": "standalone_installation", "source_sha256": digest(source),
+                          "build_receipt": str(build_receipt), "build_receipt_sha256": digest(build_receipt)}
+    identities[converter] = identity(converter)
+    converter_info.update(path=str(converter), sha256=digest(converter))
     folder.mkdir(parents=True, exist_ok=True)
     final_paths = [folder / f"SpliceAI2_GRCh38.{kind}.vep.vcf.gz{suffix}" for kind in ("snv", "indel") for suffix in ("", ".tbi")]
     context_name = "SpliceAI2_GRCh38.gene_context.tsv"
@@ -291,8 +416,8 @@ def prepare(args):
                 "source_files": [{k: v for k, v in item.items() if k != "resolved_path"} for item in files],
                 "scored_regions": manifest["scored_regions"], "gencode_gtf": manifest["gencode_gtf"],
                 "gene_context": {"path": str(folder / context.name), "sha256": digest(context), **mapping},
-                "vep_spliceai_plugin": {"path": str(plugin), "sha256": PLUGIN_SHA256},
-                "converter": {"path": str(converter), "sha256": converter_sha}, "tools": tool_identities,
+                "vep_spliceai_plugin": plugin,
+                "converter": converter_info, "tools": tool_identities,
                 "driver_sha256": driver_sha, "slurm_job_id": os.environ.get("SLURM_JOB_ID"),
                 "thresholds": {"high_recall": 0.1, "balanced": 0.25, "high_precision": 0.5},
                 "projection": "Unchanged top0 site delta/distance strings only, one allele/gene per VCF record. No cutoff filtering, score recomputation, masking, normalization or strand flipping. Original 84-column tables retain all top3/junction/reference/alternate/summary values.",
@@ -313,16 +438,34 @@ def prepare(args):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--manifest", type=Path, required=True)
-    parser.add_argument("--assembly", required=True)
-    parser.add_argument("--output-dir", type=Path, required=True)
-    parser.add_argument("--receipt", type=Path, required=True)
-    parser.add_argument("--priva-bin", default="priva")
-    parser.add_argument("--threads", type=int, default=1)
-    parser.add_argument("--validation-subset", action="store_true", help="Explicit bounded test; never produces an installable full-cache receipt")
-    args = parser.parse_args()
+    commands = parser.add_subparsers(dest="command", required=True)
+    prepare_parser = commands.add_parser("prepare", help="Verify inputs and publish annotation-only VCFs")
+    prepare_parser.add_argument("--manifest", type=Path, required=True)
+    prepare_parser.add_argument("--assembly", required=True)
+    prepare_parser.add_argument("--output-dir", type=Path, required=True)
+    prepare_parser.add_argument("--receipt", type=Path, required=True)
+    prepare_parser.add_argument("--converter-bin", help="Explicit standalone installation converter; default builds/caches the bundled source")
+    prepare_parser.add_argument("--threads", type=int, default=1)
+    prepare_parser.add_argument("--validation-subset", action="store_true", help="Explicit bounded test; never produces an installable full-cache receipt")
+    build_parser = commands.add_parser("build-converter", help="Build or reuse the installation converter without processing score data")
+    build_parser.add_argument("--tools-dir", type=Path, required=True)
+    build_parser.add_argument("--rustc", help="Explicit compatible Rust compiler; default acquires an isolated compiler if needed")
+    context_parser = commands.add_parser("gene-context", help="Resolve pinned scored regions against GENCODE48")
+    context_parser.add_argument("--regions", type=Path, required=True)
+    context_parser.add_argument("--gtf", type=Path, required=True)
+    context_parser.add_argument("--output", type=Path, required=True)
+    argv = sys.argv[1:]
+    # Preserve the previous prepare-only flags interface while exposing procedures.
+    if argv and argv[0].startswith("--") and argv[0] != "--help":
+        argv = ["prepare", *argv]
+    args = parser.parse_args(argv)
     try:
-        prepare(args)
+        if args.command == "build-converter":
+            print(build_converter(args.tools_dir, rustc=args.rustc))
+        elif args.command == "gene-context":
+            print(json.dumps(gene_context(args.regions, args.gtf, args.output)))
+        else:
+            prepare(args)
     except (ValueError, OSError, subprocess.SubprocessError, KeyError) as error:
         parser.exit(1, f"SpliceAI2 preparation failed: {error}\n")
 

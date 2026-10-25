@@ -20,7 +20,8 @@ V2_MARKERS = (b'##SpliceAI2Version=2', b'##source=PriVA_SpliceAI2_projection',
 
 class SpliceAI2RuntimeGuard(unittest.TestCase):
     def setUp(self):
-        self.temporary = tempfile.TemporaryDirectory(prefix='spliceai2_guard_', dir=ROOT / 'tests')
+        self.temporary = tempfile.TemporaryDirectory(prefix='spliceai2_guard_',
+            dir=os.environ.get('PRIVA_TEST_TMPDIR', os.environ.get('TMPDIR')))
         self.addCleanup(self.temporary.cleanup)
         self.folder = Path(self.temporary.name)
         self.scripts = self.folder / 'source/scripts'
@@ -57,7 +58,7 @@ class SpliceAI2RuntimeGuard(unittest.TestCase):
                              hub_vcf_file=str(self.folder / 'never-create-hub/hub.vcf.gz'),
                              hub_cadd_file=str(self.folder / 'never-create-cadd/hub.tsv.gz'),
                              ref_genome='/reference.fa', vep_cache_dir='/cache', vep_plugins_dir='/plugins',
-                             vep_plugins_cachedir='/plugin-cache', threads=4, loeuf_prescore='loeuf.tsv.gz',
+                             vep_plugins_cachedir='/plugin-cache', loftee_repo='/loftee', threads=4, loeuf_prescore='loeuf.tsv.gz',
                              pext_enabled=False)
         self.env = dict(os.environ, TEST_CONFIG=str(self.config), TEST_TRACE=str(self.trace),
                         TEST_INPUT=str(self.input), TEST_SNV=str(self.snv), TEST_INDEL=str(self.indel))
@@ -188,7 +189,7 @@ class SpliceAI2RuntimeGuard(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertFalse(self.trace.exists())
 
-    def test_v1_vep_and_following_command_arguments_match_frozen_source_exactly(self):
+    def test_v1_arguments_match_frozen_source_with_reviewed_plugin_directory_fix(self):
         body = '''
             check_path() { return 0; }
             check_vcf_infotags() { return 1; }
@@ -210,7 +211,16 @@ class SpliceAI2RuntimeGuard(unittest.TestCase):
         self.script.write_bytes(REFERENCE.read_bytes())
         original = self.run_shell(body)
         self.assertEqual(original.returncode, 0, original.stderr)
-        self.assertEqual(self.trace.read_bytes(), current_trace)
+        original_trace = self.trace.read_bytes()
+        # The reviewed VEP116 loader repair changes this single argument from
+        # one nonexistent comma-joined path to VEP's whitespace-separated list.
+        # Every other argument and following command remains byte-exact; this
+        # trace fixture is not a scientific equality claim across VEP profiles.
+        old_directory = b'--dir_plugins\n/plugins,/loftee\n'
+        corrected_directory = b'--dir_plugins\n/plugins /loftee\n'
+        self.assertEqual(original_trace.count(old_directory), 1)
+        self.assertEqual(current_trace.count(corrected_directory), 1)
+        self.assertEqual(original_trace.replace(old_directory, corrected_directory, 1), current_trace)
 
 
 if __name__ == '__main__':

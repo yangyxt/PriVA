@@ -29,7 +29,7 @@ def native_columns():
 
 class GeneFixture:
     def setUp(self):
-        self.temp = tempfile.TemporaryDirectory(prefix="spliceai2_deploy_", dir=ROOT / "tests")
+        self.temp = tempfile.TemporaryDirectory(prefix="spliceai2_deploy_", dir=os.environ.get("PRIVA_TEST_TMPDIR", ROOT / "tests"))
         self.addCleanup(self.temp.cleanup)
         self.folder = Path(self.temp.name)
         self.regions = self.folder / "regions.tsv"
@@ -132,7 +132,8 @@ class DeploymentTests(GeneFixture, unittest.TestCase):
         self.plugin = self.folder / "SpliceAI.pm"
         self.plugin.write_text("synthetic identity fixture; not an executed plugin\n")
         self.addCleanup(mock.patch.stopall)
-        mock.patch.object(DEPLOY, "PLUGIN_SHA256", DEPLOY.digest(self.plugin)).start()
+        mock.patch.object(DEPLOY, "QUALIFIED_PLUGINS", {
+            DEPLOY.digest(self.plugin): {"release": "fixture", "allele_matching": "not executed"}}).start()
         self.manifest = self.folder / "confirmed.json"
         self.files = []
         for kind in ("snv", "indel"):
@@ -156,7 +157,7 @@ class DeploymentTests(GeneFixture, unittest.TestCase):
         self.manifest.write_text(json.dumps(self.document))
         self.output = self.folder / "prepared"
         self.args = argparse.Namespace(manifest=self.manifest, assembly="GRCh38", output_dir=self.output,
-                                       receipt=self.output / "adapter.ready.json", priva_bin=os.environ.get("PRIVA_SPLICEAI2_BIN", sys.executable),
+                                       receipt=self.output / "adapter.ready.json", converter_bin=os.environ.get("PRIVA_SPLICEAI2_INSTALL_BIN", sys.executable),
                                        threads=1, validation_subset=True)
 
     @staticmethod
@@ -168,8 +169,8 @@ class DeploymentTests(GeneFixture, unittest.TestCase):
             return DEPLOY.prepare(self.args)
 
     def require_converter(self):
-        if not os.environ.get("PRIVA_SPLICEAI2_BIN"):
-            self.skipTest("Set PRIVA_SPLICEAI2_BIN to the built real Rust priva for deployment integration")
+        if not os.environ.get("PRIVA_SPLICEAI2_INSTALL_BIN"):
+            self.skipTest("Set PRIVA_SPLICEAI2_INSTALL_BIN to the standalone installation converter for deployment integration")
 
     def test_unconfirmed_input_rejected_before_sources(self):
         self.document["status"] = "downloading"
@@ -218,6 +219,9 @@ class DeploymentTests(GeneFixture, unittest.TestCase):
         report = self.prepare()
         self.assertEqual(report["status"], "validated_subset_annotation_only")
         self.assertFalse(report["scientific_qualified"])
+        self.assertEqual(report["vep_spliceai_plugin"], {
+            "path": str(self.plugin), "sha256": DEPLOY.digest(self.plugin),
+            "release": "fixture", "allele_matching": "not executed"})
         self.assertEqual(report["thresholds"], {"high_recall": .1, "balanced": .25, "high_precision": .5})
         for kind in ("snv", "indel"):
             artifact = Path(report["outputs"][kind]["path"])
@@ -230,6 +234,20 @@ class DeploymentTests(GeneFixture, unittest.TestCase):
         for path, content in originals.items():
             self.assertEqual(path.read_bytes(), content)
         self.assertEqual(list(self.output.glob(".building-*")), [])
+
+    def test_default_preparation_builds_and_records_its_own_installation_converter(self):
+        self.require_converter()
+        self.args.converter_bin = None
+        with mock.patch.object(DEPLOY, "build_converter", wraps=DEPLOY.build_converter) as build:
+            report = self.prepare()
+        build.assert_called_once_with(self.output.parent / ".tools" / "spliceai2-converter")
+        converter = report["converter"]
+        self.assertEqual(converter["role"], "standalone_installation")
+        self.assertEqual(converter["source_sha256"], DEPLOY.digest(ROOT / "scripts/spliceai2_converter.rs"))
+        receipt = json.loads(Path(converter["build_receipt"]).read_text())
+        self.assertEqual(receipt["cargo_dependencies"], [])
+        self.assertEqual(receipt["binary_sha256"], converter["sha256"])
+        self.assertFalse(report["scientific_qualified"])
 
     def test_changed_source_during_projection_never_publishes_receipt(self):
         self.require_converter()

@@ -1,0 +1,1583 @@
+{
+  "schema_version": 1,
+  "reviewed_on": "2026-10-19",
+  "scope": "PriVA-nextflow resource lifecycle and refresh inventory; original PriVA resource entries plus the pinned Nextflow and Java runtime used only by this checkout.",
+  "definitions": {
+    "maintained": "Upstream feed or versioned distribution for which a refresh route should be retained; not a promise of constant maintenance or update frequency. Evidence/cadence uncertainty is recorded per resource.",
+    "snapshot": "Selected artifact is fixed for this profile. Reuse a bundled copy if provided; external/licensed snapshots remain external and are not made redistributable.",
+    "derived": "Built by PriVA from named dependencies; rebuilding preserves source scientific logic and records changed inputs."
+  },
+  "defaults": {
+    "bundled_reuse": "existence_and_nonzero_only",
+    "automatic_updates": "No new automatic update except the explicitly enabled ClinVar gene-stat age rule; existing external refresh behavior remains unchanged.",
+    "url_templates": "Discovery/documentation, not proof arbitrary versions exist or are compatible. Consult current installer/pin manifests.",
+    "scientific_acceptance": "Resource deployment and refresh do not establish public/family or changed-profile qualification.",
+    "credentials": "No credentials, access tokens or signed URLs belong in this map.",
+    "install_vs_refresh": "install_entrypoints records acquisition/reuse procedures; refresh.entrypoints records procedures to retain for maintained feeds/derived rebuilds. Fixed snapshots have no routine refresh function."
+  },
+  "resources": {
+    "nextflow_runtime": {
+      "title": "Pinned Nextflow driver and Temurin Java runtime",
+      "lifecycle": "snapshot",
+      "storage": "external",
+      "config_keys": [
+        "cache_root"
+      ],
+      "bundled_paths": [],
+      "source": {
+        "kind": "pinned_release_artifacts",
+        "pins_file": "scripts/bootstrap_nextflow_runtime.sh",
+        "nextflow_url": "https://github.com/nextflow-io/nextflow/releases/download/v25.10.4/nextflow-25.10.4-dist",
+        "java_url": "https://github.com/adoptium/temurin21-binaries/releases/download/jdk-21.0.12.1%2B1/OpenJDK21U-jre_x64_linux_hotspot_21.0.12.1_1.tar.gz"
+      },
+      "selected_profile": {
+        "nextflow": "25.10.4",
+        "temurin_jre": "21.0.12.1+1",
+        "platform": "linux_x64"
+      },
+      "refresh": {
+        "keep_function": false,
+        "automatic": false,
+        "policy": "explicit_pinned_runtime_revision_only",
+        "entrypoints": []
+      },
+      "depends_on": [],
+      "notes": "Nextflow checkout only. main_install calls Nextflow_runtime_install, which installs or reuses checksum-pinned artifacts under cache_root/runtime/priva-nextflow-25.10.4. The bootstrap script owns the exact URL/SHA256 pins; this inventory does not select or upgrade versions. No scientific workflow is run by driver deployment.",
+      "install_entrypoints": [
+        "Nextflow_runtime_install"
+      ],
+      "maintenance_evidence": {
+        "basis": "selected_pinned_installer_artifacts",
+        "cadence": "explicit_revision_only",
+        "note": "Snapshot describes the selected runtime, not the upstream project's release cadence. Original PriVA has no Nextflow runtime dependency."
+      }
+    },
+    "genome_reference": {
+      "title": "Reference FASTA and indexes",
+      "lifecycle": "snapshot",
+      "storage": "external",
+      "config_keys": [
+        "ref_genome",
+        "gofcards_hg19_fasta",
+        "gofcards_hg38_fasta"
+      ],
+      "bundled_paths": [],
+      "source": {
+        "kind": "assembly_pinned_urls",
+        "url_template": "https://hgdownload.soe.ucsc.edu/goldenPath/{ucsc_assembly}/bigZips/{ucsc_assembly}.fa.gz",
+        "pins_file": "scripts/reference_resources.py"
+      },
+      "refresh": {
+        "keep_function": false,
+        "automatic": false,
+        "policy": "selected_assembly_only",
+        "entrypoints": []
+      },
+      "depends_on": [],
+      "notes": "Existing explicit reference identity wins. Original UCSC bigZips is not a substitute for a selected DRAGEN graph/analysis-set reference.",
+      "install_entrypoints": [
+        "reference_genome_install",
+        "assembly_references_install"
+      ],
+      "maintenance_evidence": {
+        "basis": "selected_artifact_and_existing_installer_route",
+        "cadence": "not_verified",
+        "note": "Classification records PriVA policy, not a guarantee that the publisher will maintain or republish this data."
+      }
+    },
+    "liftover": {
+      "title": "Assembly chains and contig maps",
+      "lifecycle": "snapshot",
+      "storage": "bundled_or_external",
+      "config_keys": [
+        "gofcards_hg19_to_hg38_chain",
+        "hg38_hg19_chain"
+      ],
+      "bundled_paths": [
+        "data/liftover/*"
+      ],
+      "source": {
+        "kind": "assembly_pinned_urls",
+        "url": "https://hgdownload.soe.ucsc.edu/goldenPath/hg19/liftOver/hg19ToHg38.over.chain.gz",
+        "pins_file": "scripts/reference_resources.py"
+      },
+      "refresh": {
+        "keep_function": false,
+        "automatic": false,
+        "policy": "selected_assembly_only",
+        "entrypoints": []
+      },
+      "depends_on": [],
+      "notes": "Retain original chain direction. The reverse chain reuses the genuine Git bundle or an explicitly supplied absolute source adopted beneath cache_root; no alternate chain is substituted.",
+      "install_entrypoints": [
+        "gofcards_reference_install",
+        "gnomAD_install",
+        "SpliceVault_install"
+      ],
+      "maintenance_evidence": {
+        "basis": "selected_artifact_and_existing_installer_route",
+        "cadence": "not_verified",
+        "note": "Classification records PriVA policy, not a guarantee that the publisher will maintain or republish this data."
+      }
+    },
+    "vep_cache": {
+      "title": "Official merged VEP cache",
+      "lifecycle": "maintained",
+      "storage": "external",
+      "config_keys": [
+        "vep_installed_version",
+        "vep_cache_dir"
+      ],
+      "bundled_paths": [],
+      "source": {
+        "kind": "versioned_url",
+        "url_template": "https://ftp.ensembl.org/pub/release-{release}/variation/vep/homo_sapiens_merged_vep_{release}_{assembly}.tar.gz",
+        "documentation": "https://www.ensembl.org/info/docs/tools/vep/script/vep_cache.html"
+      },
+      "refresh": {
+        "keep_function": true,
+        "automatic": false,
+        "policy": "configured_vep_release",
+        "entrypoints": [
+          "vep_cache_api_install"
+        ]
+      },
+      "depends_on": [
+        "genome_reference"
+      ],
+      "notes": "Versioned URL is a discovery pattern, not a guarantee every future release/assembly is available. Installer verifies requested major.",
+      "selected_profile": {
+        "release": "116",
+        "assemblies": [
+          "GRCh37",
+          "GRCh38"
+        ]
+      },
+      "install_entrypoints": [
+        "vep_cache_api_install"
+      ],
+      "maintenance_evidence": {
+        "basis": "publisher_versioned_release_documentation",
+        "cadence": "release_based",
+        "url": "https://static.ensembl.org/info/docs/tools/vep/script/vep_download.html"
+      }
+    },
+    "vep_plugins": {
+      "title": "Official VEP plugins",
+      "lifecycle": "maintained",
+      "storage": "external",
+      "config_keys": [
+        "vep_plugins_dir",
+        "vep_installed_version",
+        "vep_plugins_cachedir"
+      ],
+      "bundled_paths": [],
+      "source": {
+        "kind": "versioned_git",
+        "repository": "https://github.com/Ensembl/VEP_plugins",
+        "ref_template": "release/{release}",
+        "pins_file": "scripts/vep_plugins_release.py"
+      },
+      "refresh": {
+        "keep_function": true,
+        "automatic": false,
+        "policy": "configured_vep_release",
+        "entrypoints": [
+          "vep_cache_api_install"
+        ]
+      },
+      "depends_on": [
+        "vep_cache"
+      ],
+      "notes": "Keep official upstream plugins and requested release; no Rust replacement. Official plugin source acquisition and release verification belong to vep_cache_api_install; VEP_plugins_install prepares the separate plugin resource caches.",
+      "install_entrypoints": [
+        "vep_cache_api_install"
+      ],
+      "maintenance_evidence": {
+        "basis": "publisher_versioned_release_documentation",
+        "cadence": "release_based",
+        "url": "https://static.ensembl.org/info/docs/tools/vep/script/vep_download.html"
+      }
+    },
+    "nm_to_enst": {
+      "title": "BioMart NM-to-ENST transcript mapping",
+      "lifecycle": "derived",
+      "storage": "bundled_or_external",
+      "config_keys": [
+        "nm_to_enst_tsv"
+      ],
+      "bundled_paths": [
+        "data/hgnc/ensembl_*_nm_to_enst.tsv"
+      ],
+      "source": {
+        "kind": "registered_release_sources",
+        "url_template": "https://ftp.ensembl.org/pub/release-{release}/mysql/ensembl_mart_{release}/",
+        "grch37_mart_url": "https://grch37.ensembl.org/biomart/martservice",
+        "pins_file": "scripts/biomart_nm_to_enst.py"
+      },
+      "refresh": {
+        "keep_function": true,
+        "automatic": false,
+        "policy": "registered_assembly_vep_profile",
+        "entrypoints": [
+          "nm_to_enst_mapping_install"
+        ]
+      },
+      "depends_on": [
+        "vep_cache"
+      ],
+      "notes": "Reuse bundled selected mapping if present. GRCh37 mart116 retains base75 lineage. GRCh38 FTP116 is a distinct candidate; order/multiplicity preserved, scientific coordinate qualification separate.",
+      "install_entrypoints": [
+        "nm_to_enst_mapping_install"
+      ],
+      "maintenance_evidence": {
+        "basis": "selected_artifact_and_existing_installer_route",
+        "cadence": "not_verified",
+        "note": "Classification records PriVA policy, not a guarantee that the publisher will maintain or republish this data."
+      }
+    },
+    "clinvar_vcf": {
+      "title": "ClinVar variants",
+      "lifecycle": "maintained",
+      "storage": "external",
+      "config_keys": [
+        "clinvar_vcf",
+        "clinvar_vcf_dir"
+      ],
+      "bundled_paths": [],
+      "source": {
+        "kind": "latest_and_dated_url",
+        "latest_url_template": "https://ftp.ncbi.nlm.nih.gov/pub/clinvar/vcf_{assembly}/clinvar.vcf.gz",
+        "dated_url_template": "https://ftp.ncbi.nlm.nih.gov/pub/clinvar/vcf_{assembly}/clinvar_{date}.vcf.gz",
+        "release_date_field": "##fileDate",
+        "documentation": "https://www.ncbi.nlm.nih.gov/clinvar/docs/downloads/"
+      },
+      "refresh": {
+        "keep_function": true,
+        "automatic": false,
+        "policy": "clinvar_gene_age_policy",
+        "entrypoints": [
+          "ClinVar_install",
+          "ClinVar_VCF_deploy"
+        ]
+      },
+      "depends_on": [
+        "vep_cache",
+        "vep_plugins",
+        "gnomad",
+        "alphamissense_prescores",
+        "primateai",
+        "splicevault",
+        "conservation",
+        "loftee",
+        "utrannotator",
+        "loeuf",
+        "pext"
+      ],
+      "notes": "Discover latest header date, then pin actual acquired bytes. Explicit incompatible inputs must not be silently replaced. Dated publication availability must be checked.",
+      "assembly_dependencies": {
+        "GRCh37": [
+          "spliceai_v1"
+        ],
+        "GRCh38": [
+          "spliceai_v2"
+        ]
+      },
+      "install_entrypoints": [
+        "ClinVar_install",
+        "ClinVar_VCF_deploy"
+      ],
+      "maintenance_evidence": {
+        "basis": "publisher_documentation",
+        "cadence": "weekly; only some releases archived",
+        "url": "https://www.ncbi.nlm.nih.gov/clinvar/docs/downloads/"
+      }
+    },
+    "clinvar_variant_summary": {
+      "title": "ClinVar variant_summary",
+      "lifecycle": "maintained",
+      "storage": "external",
+      "config_keys": [],
+      "bundled_paths": [],
+      "source": {
+        "kind": "latest_url",
+        "url": "https://ftp.ncbi.nlm.nih.gov/pub/clinvar/tab_delimited/variant_summary.txt.gz",
+        "documentation": "https://www.ncbi.nlm.nih.gov/clinvar/docs/downloads/"
+      },
+      "refresh": {
+        "keep_function": true,
+        "automatic": false,
+        "policy": "on_clinvar_gene_rebuild",
+        "entrypoints": [
+          "ClinVar_install"
+        ]
+      },
+      "depends_on": [],
+      "notes": "Record publisher checksum and acquired identity independently; a local filename is not proof of release concordance with the VCF.",
+      "install_entrypoints": [
+        "ClinVar_install"
+      ],
+      "maintenance_evidence": {
+        "basis": "publisher_documentation",
+        "cadence": "weekly; only some releases archived",
+        "url": "https://www.ncbi.nlm.nih.gov/clinvar/docs/downloads/"
+      }
+    },
+    "mane_select": {
+      "title": "MANE transcript mapping",
+      "lifecycle": "maintained",
+      "storage": "bundled_or_external",
+      "config_keys": [],
+      "bundled_paths": [
+        "data/MANE/MANE.GRCh38.v1.4.summary.txt.gz"
+      ],
+      "source": {
+        "kind": "versioned_url",
+        "url": "https://ftp.ncbi.nlm.nih.gov/refseq/MANE/MANE_human/release_1.4/MANE.GRCh38.v1.4.summary.txt.gz",
+        "url_template": "https://ftp.ncbi.nlm.nih.gov/refseq/MANE/MANE_human/release_{version}/MANE.GRCh38.v{version}.summary.txt.gz"
+      },
+      "refresh": {
+        "keep_function": true,
+        "automatic": false,
+        "policy": "pinned_version_on_rebuild",
+        "entrypoints": [
+          "ClinVar_install"
+        ]
+      },
+      "depends_on": [],
+      "notes": "MANE version change requires a deliberate profile update. The original generator retains exact transcript matching.",
+      "selected_profile": {
+        "version": "1.4"
+      },
+      "install_entrypoints": [
+        "ClinVar_install"
+      ],
+      "maintenance_evidence": {
+        "basis": "selected_artifact_and_existing_installer_route",
+        "cadence": "not_verified",
+        "note": "Classification records PriVA policy, not a guarantee that the publisher will maintain or republish this data."
+      }
+    },
+    "clinvar_gene_statistics": {
+      "title": "ClinVar gene statistics",
+      "lifecycle": "derived",
+      "storage": "bundled_or_generated",
+      "config_keys": [
+        "clinvar_gene_stat"
+      ],
+      "bundled_paths": [
+        "data/ClinVar/clinvar_2star_stats.pkl.gz"
+      ],
+      "source": {
+        "kind": "derived",
+        "builder": "scripts/clinvar_stat_variants.py"
+      },
+      "refresh": {
+        "keep_function": true,
+        "automatic": true,
+        "policy": "latest_filedate_vs_bundled_mtime",
+        "entrypoints": [
+          "ClinVar_install",
+          "ClinVar_Gene_stat_regenerate"
+        ],
+        "threshold_months": 3,
+        "comparison": "latest_fileDate >= add_calendar_months(UTC_date(bundled_mtime), threshold_months)",
+        "month_end": "clamp",
+        "failure": "report_and_fail_without_selecting_partial_output"
+      },
+      "depends_on": [
+        "clinvar_vcf",
+        "clinvar_variant_summary",
+        "mane_select"
+      ],
+      "notes": "User-authorized metadata-age exception: preserve bundled baseline; build a separate managed result and select its full path only on success. No bundled content/schema/checksum validation.",
+      "install_entrypoints": [
+        "ClinVar_install",
+        "ClinVar_Gene_stat_regenerate"
+      ],
+      "maintenance_evidence": {
+        "basis": "selected_artifact_and_existing_installer_route",
+        "cadence": "not_verified",
+        "note": "Classification records PriVA policy, not a guarantee that the publisher will maintain or republish this data."
+      }
+    },
+    "clinvar_derived_statistics": {
+      "title": "ClinVar amino-acid, splice and population AF statistics",
+      "lifecycle": "derived",
+      "storage": "generated",
+      "config_keys": [
+        "clinvar_aa_stat",
+        "clinvar_splice_stat",
+        "clinvar_patho_af_stat",
+        "clinvar_patho_exon_af_stat"
+      ],
+      "bundled_paths": [],
+      "source": {
+        "kind": "derived",
+        "builders": [
+          "scripts/stat_aachange_clinvar.py",
+          "scripts/stat_gene_patho_afs.py",
+          "scripts/stat_exon_patho_afs.py"
+        ]
+      },
+      "refresh": {
+        "keep_function": true,
+        "automatic": false,
+        "policy": "selected_inputs_change",
+        "entrypoints": [
+          "ClinVar_AA_stat",
+          "ClinVar_patho_AF_stat"
+        ]
+      },
+      "depends_on": [
+        "clinvar_vcf",
+        "gnomad"
+      ],
+      "notes": "Retain original processing/filter order; do not treat this inventory as a new automatic refresh scheduler.",
+      "install_entrypoints": [
+        "ClinVar_AA_stat",
+        "ClinVar_patho_AF_stat"
+      ],
+      "maintenance_evidence": {
+        "basis": "selected_artifact_and_existing_installer_route",
+        "cadence": "not_verified",
+        "note": "Classification records PriVA policy, not a guarantee that the publisher will maintain or republish this data."
+      }
+    },
+    "clinvar_vcv": {
+      "title": "ClinVar VCV XML",
+      "lifecycle": "maintained",
+      "storage": "external",
+      "config_keys": [
+        "clinvar_vcv_xml"
+      ],
+      "bundled_paths": [],
+      "source": {
+        "kind": "latest_url",
+        "url": "https://ftp.ncbi.nlm.nih.gov/pub/clinvar/xml/weekly_release/ClinVarVCVRelease_00-latest_weekly.xml.gz",
+        "documentation": "https://www.ncbi.nlm.nih.gov/clinvar/docs/downloads/"
+      },
+      "refresh": {
+        "keep_function": true,
+        "automatic": false,
+        "policy": "existing_vcv_reuse_policy",
+        "entrypoints": [
+          "gene_nonlof_mechanism_cache_install"
+        ]
+      },
+      "depends_on": [],
+      "notes": "Existing caller policy and selected XML identity remain authoritative; records feed mechanism/GoFCards conditions.",
+      "install_entrypoints": [
+        "gene_nonlof_mechanism_cache_install"
+      ],
+      "maintenance_evidence": {
+        "basis": "publisher_documentation",
+        "cadence": "weekly; only some releases archived",
+        "url": "https://www.ncbi.nlm.nih.gov/clinvar/docs/downloads/"
+      }
+    },
+    "gnomad": {
+      "title": "gnomAD joint population variants",
+      "lifecycle": "maintained",
+      "storage": "external",
+      "config_keys": [
+        "gnomad_vcf_dir",
+        "gnomad_vcf_chrX"
+      ],
+      "bundled_paths": [],
+      "source": {
+        "kind": "versioned_url",
+        "url_template": "https://storage.googleapis.com/gcp-public-data--gnomad/release/{version}/vcf/joint/gnomad.joint.v{version}.sites.chr{chromosome}.vcf.bgz",
+        "documentation": "https://gnomad.broadinstitute.org/downloads"
+      },
+      "refresh": {
+        "keep_function": true,
+        "automatic": false,
+        "policy": "explicit_release_change",
+        "entrypoints": [
+          "gnomAD_install",
+          "gnomAD_liftover"
+        ]
+      },
+      "depends_on": [
+        "genome_reference",
+        "liftover"
+      ],
+      "notes": "Current installer is pinned to4.1; template documents future route, not arbitrary release support.",
+      "selected_profile": {
+        "version": "4.1",
+        "source_assembly": "GRCh38",
+        "GRCh37": "original PriVA liftover"
+      },
+      "install_entrypoints": [
+        "gnomAD_install",
+        "gnomAD_liftover"
+      ],
+      "maintenance_evidence": {
+        "basis": "selected_artifact_and_existing_installer_route",
+        "cadence": "not_verified",
+        "note": "Classification records PriVA policy, not a guarantee that the publisher will maintain or republish this data."
+      }
+    },
+    "alphamissense_prescores": {
+      "title": "AlphaMissense publisher prescores",
+      "lifecycle": "snapshot",
+      "storage": "external",
+      "config_keys": [
+        "alphamissense_prescore"
+      ],
+      "bundled_paths": [],
+      "source": {
+        "kind": "fixed_snapshot_url",
+        "url_template": "https://storage.googleapis.com/dm_alphamissense/AlphaMissense_{ucsc_assembly}.tsv.gz",
+        "documentation": "https://github.com/google-deepmind/alphamissense"
+      },
+      "refresh": {
+        "keep_function": false,
+        "automatic": false,
+        "policy": "reuse_selected_snapshot",
+        "entrypoints": []
+      },
+      "depends_on": [],
+      "notes": "A stable URL is not evidence of a rolling latest service. Preserve selected original scores. External original files use AlphaMissense_install; they are not repository-bundled snapshots.",
+      "install_entrypoints": [
+        "AlphaMissense_install"
+      ],
+      "maintenance_evidence": {
+        "basis": "fixed_selected_snapshot_policy",
+        "cadence": "not_verified",
+        "note": "Classification records PriVA policy, not a guarantee that the publisher will maintain or republish this data."
+      }
+    },
+    "alphamissense_derived": {
+      "title": "AlphaMissense annotation, motifs, domains and PM1",
+      "lifecycle": "derived",
+      "storage": "generated",
+      "config_keys": [
+        "alphamissense_vcf",
+        "alphamissense_vep_vcf",
+        "alphamissense_vep_base_vcf",
+        "alphamissense_pd_stat",
+        "alphamissense_intolerant_domains",
+        "alphamissense_intolerant_motifs",
+        "all_intolerant_domains",
+        "pm1_regions_pkl",
+        "alphamissense_tranx_domain_map"
+      ],
+      "bundled_paths": [],
+      "source": {
+        "kind": "derived",
+        "builders": [
+          "scripts/am_pick_missense_constrained_segments.py",
+          "scripts/stat_protein_domain_amscores.py",
+          "scripts/prepare_pm1_regions.py"
+        ]
+      },
+      "refresh": {
+        "keep_function": true,
+        "automatic": false,
+        "policy": "selected_inputs_change",
+        "entrypoints": [
+          "AlphaMissense_anno",
+          "AlphaMissense_anno_gnomAD",
+          "AlphaMissense_pick_missense_constrained_segments",
+          "AlphaMissense_stat",
+          "AlphaMissense_pick_intolerant_domains",
+          "prepare_pm1_regions"
+        ]
+      },
+      "depends_on": [
+        "alphamissense_prescores",
+        "vep_cache",
+        "nm_to_enst",
+        "gnomad",
+        "clinvar_derived_statistics",
+        "interpro",
+        "pm1_support"
+      ],
+      "notes": "Original scientific operation and mutation order remain fixed within a profile. DAS intermediate metadata requires a completed association with the selected VCF, assembly and extraction source; unassociated or changed-source intermediates regenerate atomically from that input. The outer installer records successful multi-output publication separately. These engineering receipts do not qualify a scientific profile.",
+      "install_entrypoints": [
+        "AlphaMissense_anno",
+        "AlphaMissense_anno_gnomAD",
+        "AlphaMissense_pick_missense_constrained_segments",
+        "AlphaMissense_stat",
+        "AlphaMissense_pick_intolerant_domains",
+        "prepare_pm1_regions"
+      ],
+      "maintenance_evidence": {
+        "basis": "selected_artifact_and_existing_installer_route",
+        "cadence": "not_verified",
+        "note": "Classification records PriVA policy, not a guarantee that the publisher will maintain or republish this data."
+      }
+    },
+    "spliceai_v1": {
+      "title": "SpliceAI v1 original scores",
+      "lifecycle": "snapshot",
+      "storage": "manual_external",
+      "config_keys": [
+        "spliceai_snv_prescore",
+        "spliceai_indel_prescore"
+      ],
+      "bundled_paths": [],
+      "source": {
+        "kind": "manual_portal",
+        "url": "https://basespace.illumina.com/s/otSPW8hnhaZR",
+        "documentation": "https://github.com/Illumina/SpliceAI"
+      },
+      "refresh": {
+        "keep_function": false,
+        "automatic": false,
+        "policy": "manual_snapshot_reuse",
+        "entrypoints": []
+      },
+      "depends_on": [],
+      "notes": "Licensed originals remain user-supplied; do not bundle/redistribute by inference. Retained GRCh38 v1 originals do not authorize a v2 fallback. CADD legacy features remain separate.",
+      "selected_profile": {
+        "PriVA_assembly": "GRCh37",
+        "version": "v1"
+      },
+      "install_entrypoints": [
+        "SpliceAI_install"
+      ],
+      "maintenance_evidence": {
+        "basis": "fixed_selected_snapshot_policy",
+        "cadence": "not_verified",
+        "note": "Classification records PriVA policy, not a guarantee that the publisher will maintain or republish this data."
+      }
+    },
+    "spliceai_v2": {
+      "title": "SpliceAI2 original scores and VEP adapter output",
+      "lifecycle": "snapshot",
+      "storage": "manual_external",
+      "config_keys": [
+        "spliceai_snv_prescore",
+        "spliceai_indel_prescore"
+      ],
+      "bundled_paths": [],
+      "source": {
+        "kind": "manual_portal",
+        "url": "https://huggingface.co/datasets/illumina-ai/SpliceAI2-data",
+        "revision": "cd1b8b82bcef9c97ac3b3b9a24f0de3a5bbf77f9",
+        "subdirectory": "precomputed_scores_v2.0/GRCh38"
+      },
+      "refresh": {
+        "keep_function": false,
+        "automatic": false,
+        "policy": "manual_snapshot_reuse",
+        "entrypoints": []
+      },
+      "depends_on": [],
+      "notes": "Detect TSV/VCF header using existing keys. Preserve allele/gene/score/threshold provenance; full scientific qualification pending. Manual source/license policy is unchanged.",
+      "selected_profile": {
+        "PriVA_assembly": "GRCh38",
+        "version": "2.0"
+      },
+      "install_entrypoints": [
+        "SpliceAI_install",
+        "SpliceAI2_install"
+      ],
+      "maintenance_evidence": {
+        "basis": "fixed_selected_snapshot_policy",
+        "cadence": "not_verified",
+        "note": "Classification records PriVA policy, not a guarantee that the publisher will maintain or republish this data."
+      }
+    },
+    "primateai": {
+      "title": "PrimateAI v0.2 prescores",
+      "lifecycle": "snapshot",
+      "storage": "manual_external",
+      "config_keys": [
+        "primateai_prescore"
+      ],
+      "bundled_paths": [],
+      "source": {
+        "kind": "manual_portal",
+        "url": "https://basespace.illumina.com/s/yYGFdGih1rXL",
+        "documentation": "https://github.com/Illumina/PrimateAI"
+      },
+      "refresh": {
+        "keep_function": false,
+        "automatic": false,
+        "policy": "manual_snapshot_reuse",
+        "entrypoints": []
+      },
+      "depends_on": [],
+      "notes": "Use assembly-matching original manually acquired files; newer model names do not authorize substitution.",
+      "selected_profile": {
+        "version": "0.2"
+      },
+      "install_entrypoints": [
+        "PrimateAI_install"
+      ],
+      "maintenance_evidence": {
+        "basis": "fixed_selected_snapshot_policy",
+        "cadence": "not_verified",
+        "note": "Classification records PriVA policy, not a guarantee that the publisher will maintain or republish this data."
+      }
+    },
+    "conservation": {
+      "title": "Conservation plugin GERP track",
+      "lifecycle": "snapshot",
+      "storage": "external",
+      "config_keys": [
+        "conservation_file",
+        "conservation_GRCh38_url"
+      ],
+      "bundled_paths": [],
+      "source": {
+        "kind": "assembly_pinned_urls",
+        "urls": {
+          "GRCh37": "https://hgdownload.soe.ucsc.edu/gbdb/hg19/bbi/All_hg19_RS.bw",
+          "GRCh38": "https://ftp.ensembl.org/pub/release-114/compara/conservation_scores/91_mammals.gerp_conservation_score/gerp_conservation_scores.homo_sapiens.GRCh38.bw"
+        }
+      },
+      "refresh": {
+        "keep_function": false,
+        "automatic": false,
+        "policy": "explicit_profile_change",
+        "entrypoints": []
+      },
+      "depends_on": [],
+      "notes": "GRCh38 release114 91-mammal candidate is separate from VEP116 and LoFTEE GERP; no silent92-mammal replacement.",
+      "install_entrypoints": [
+        "Conservation_install"
+      ],
+      "maintenance_evidence": {
+        "basis": "selected_artifact_and_existing_installer_route",
+        "cadence": "not_verified",
+        "note": "Classification records PriVA policy, not a guarantee that the publisher will maintain or republish this data."
+      }
+    },
+    "loftee": {
+      "title": "LOFTEE ancestor, GERP SQL and GRCh38 BigWig",
+      "lifecycle": "snapshot",
+      "storage": "external",
+      "config_keys": [
+        "loftee_repo",
+        "human_ancestor_fasta",
+        "loftee_conservation_file",
+        "gerp_bigwig"
+      ],
+      "bundled_paths": [],
+      "source": {
+        "kind": "assembly_pinned_urls",
+        "documentation": "https://github.com/konradjk/loftee",
+        "url_template": "https://personal.broadinstitute.org/konradk/loftee_data/{assembly}/{filename}",
+        "route_source": "scripts/install_utils.sh:LoFtee_install"
+      },
+      "refresh": {
+        "keep_function": false,
+        "automatic": false,
+        "policy": "explicit_profile_change",
+        "entrypoints": []
+      },
+      "depends_on": [
+        "vep_plugins"
+      ],
+      "notes": "Use assembly-specific exact objects from installer; GRCh37 ancestor uses the recorded bcbio source, so the generic template is not universal.",
+      "install_entrypoints": [
+        "LoFtee_install"
+      ],
+      "maintenance_evidence": {
+        "basis": "selected_artifact_and_existing_installer_route",
+        "cadence": "not_verified",
+        "note": "Classification records PriVA policy, not a guarantee that the publisher will maintain or republish this data."
+      }
+    },
+    "loeuf": {
+      "title": "LOEUF plugin dataset",
+      "lifecycle": "snapshot",
+      "storage": "bundled",
+      "config_keys": [
+        "loeuf_prescore"
+      ],
+      "bundled_paths": [
+        "data/loeuf/*"
+      ],
+      "source": {
+        "kind": "bundled"
+      },
+      "refresh": {
+        "keep_function": false,
+        "automatic": false,
+        "policy": "bundled_reuse_only",
+        "entrypoints": []
+      },
+      "depends_on": [],
+      "notes": "Existence/nonzero only for repository bundles.",
+      "install_entrypoints": [
+        "LOEUF_install"
+      ],
+      "maintenance_evidence": {
+        "basis": "fixed_selected_snapshot_policy",
+        "cadence": "not_verified",
+        "note": "Classification records PriVA policy, not a guarantee that the publisher will maintain or republish this data."
+      }
+    },
+    "utrannotator": {
+      "title": "UTRAnnotator uORF data",
+      "lifecycle": "maintained",
+      "storage": "external",
+      "config_keys": [
+        "utr_annotator_file"
+      ],
+      "bundled_paths": [],
+      "source": {
+        "kind": "versioned_git",
+        "repository": "https://github.com/Ensembl/UTRannotator"
+      },
+      "refresh": {
+        "keep_function": true,
+        "automatic": false,
+        "policy": "explicit_profile_change",
+        "entrypoints": [
+          "UTRAnnotator_install"
+        ]
+      },
+      "depends_on": [
+        "vep_plugins"
+      ],
+      "notes": "Keep a deliberate source revision; installation is not a rolling-data freshness guarantee.",
+      "install_entrypoints": [
+        "UTRAnnotator_install"
+      ],
+      "maintenance_evidence": {
+        "basis": "selected_artifact_and_existing_installer_route",
+        "cadence": "not_verified",
+        "note": "Classification records PriVA policy, not a guarantee that the publisher will maintain or republish this data."
+      }
+    },
+    "splicevault": {
+      "title": "SpliceVault observations",
+      "lifecycle": "maintained",
+      "storage": "external",
+      "config_keys": [
+        "splicevault_url",
+        "splicevault_prescore"
+      ],
+      "bundled_paths": [],
+      "source": {
+        "kind": "latest_url",
+        "url": "https://ftp.ensembl.org/pub/current_variation/SpliceVault/SpliceVault_data_GRCh38.tsv.gz"
+      },
+      "refresh": {
+        "keep_function": true,
+        "automatic": false,
+        "policy": "explicit_source_refresh",
+        "entrypoints": [
+          "SpliceVault_install"
+        ]
+      },
+      "depends_on": [
+        "liftover"
+      ],
+      "notes": "Record retrieved identity; hg19 retains original coordinate conversion, without claiming identical coverage.",
+      "install_entrypoints": [
+        "SpliceVault_install"
+      ],
+      "maintenance_evidence": {
+        "basis": "selected_artifact_and_existing_installer_route",
+        "cadence": "not_verified",
+        "note": "Classification records PriVA policy, not a guarantee that the publisher will maintain or republish this data."
+      }
+    },
+    "mavedb": {
+      "title": "MaveDB plugin data and curated interpretation",
+      "lifecycle": "maintained",
+      "storage": "bundled_or_external",
+      "config_keys": [
+        "mavedb_url",
+        "mavedb_file"
+      ],
+      "bundled_paths": [
+        "data/MaveDB/*"
+      ],
+      "source": {
+        "kind": "latest_url",
+        "url": "https://ftp.ensembl.org/pub/current_variation/MaveDB/MaveDB_variants.tsv.gz"
+      },
+      "refresh": {
+        "keep_function": true,
+        "automatic": false,
+        "policy": "explicit_source_refresh",
+        "entrypoints": [
+          "MaveDB_install"
+        ]
+      },
+      "depends_on": [],
+      "notes": "Curated bundled assay interpretation remains a fixed snapshot; upstream data changes need separate qualification.",
+      "selected_profile": {
+        "GRCh37": "omitted by user instruction",
+        "GRCh38": "retained"
+      },
+      "install_entrypoints": [
+        "MaveDB_install"
+      ],
+      "maintenance_evidence": {
+        "basis": "selected_artifact_and_existing_installer_route",
+        "cadence": "not_verified",
+        "note": "Classification records PriVA policy, not a guarantee that the publisher will maintain or republish this data."
+      }
+    },
+    "pext": {
+      "title": "GTEx/gnomAD pext tracks",
+      "lifecycle": "snapshot",
+      "storage": "external",
+      "config_keys": [
+        "pext_mean_bw",
+        "pext_tissue_bw_dir",
+        "pext_tissues"
+      ],
+      "bundled_paths": [],
+      "source": {
+        "kind": "fixed_snapshot_url",
+        "route_source": "scripts/common_bash_utils.sh:get_pext_base_url",
+        "documentation": "https://gnomad.broadinstitute.org/downloads"
+      },
+      "refresh": {
+        "keep_function": false,
+        "automatic": false,
+        "policy": "selected_assembly_tissues_only",
+        "entrypoints": []
+      },
+      "depends_on": [],
+      "notes": "Per-assembly filenames/tissue sets are fixed by current helper; no automatic replacement by newer GTEx.",
+      "selected_profile": {
+        "expression": "GTEx v10"
+      },
+      "install_entrypoints": [
+        "pext_install"
+      ],
+      "maintenance_evidence": {
+        "basis": "selected_artifact_and_existing_installer_route",
+        "cadence": "not_verified",
+        "note": "Classification records PriVA policy, not a guarantee that the publisher will maintain or republish this data."
+      }
+    },
+    "ensembl_cds": {
+      "title": "Ensembl CDS FASTA",
+      "lifecycle": "maintained",
+      "storage": "external",
+      "config_keys": [
+        "cds_fasta_file"
+      ],
+      "bundled_paths": [],
+      "source": {
+        "kind": "latest_and_versioned_url",
+        "urls": {
+          "GRCh38": "https://ftp.ensembl.org/pub/current_fasta/homo_sapiens/cds/Homo_sapiens.GRCh38.cds.all.fa.gz",
+          "GRCh37": "https://ftp.ensembl.org/pub/grch37/current/fasta/homo_sapiens/cds/Homo_sapiens.GRCh37.cds.all.fa.gz"
+        },
+        "versioned_url_template": "https://ftp.ensembl.org/pub/release-{release}/fasta/homo_sapiens/cds/Homo_sapiens.{assembly}.cds.all.fa.gz",
+        "url_template": "https://ftp.ensembl.org/pub/release-{release}/fasta/homo_sapiens/cds/Homo_sapiens.GRCh38.cds.all.fa.gz",
+        "grch37_url_template": "https://ftp.ensembl.org/pub/grch37/release-{release}/fasta/homo_sapiens/cds/Homo_sapiens.GRCh37.cds.all.fa.gz"
+      },
+      "refresh": {
+        "keep_function": true,
+        "automatic": false,
+        "policy": "configured_vep_release_preserve_explicit_identity",
+        "entrypoints": [
+          "CDS_FASTA_install"
+        ]
+      },
+      "depends_on": [
+        "vep_cache"
+      ],
+      "notes": "Existing supplied FASTA identity wins. GRCh37 current URL retains historical annotation lineage; versioned route must be checked per assembly.",
+      "install_entrypoints": [
+        "CDS_FASTA_install"
+      ],
+      "maintenance_evidence": {
+        "basis": "selected_artifact_and_existing_installer_route",
+        "cadence": "not_verified",
+        "note": "Classification records PriVA policy, not a guarantee that the publisher will maintain or republish this data."
+      }
+    },
+    "cadd_annotations": {
+      "title": "CADD annotation bundle and prescores",
+      "lifecycle": "maintained",
+      "storage": "external",
+      "config_keys": [
+        "cadd_base_dir",
+        "cadd_parent_dir",
+        "cadd_version"
+      ],
+      "bundled_paths": [],
+      "source": {
+        "kind": "versioned_url",
+        "url_template": "https://krishna.gs.washington.edu/download/CADD/{version}/{assembly}/{filename}",
+        "pin_keys": "config.yaml cadd_*_url and matching cadd_*_md5",
+        "documentation": "https://github.com/kircherlab/CADD-scripts"
+      },
+      "refresh": {
+        "keep_function": true,
+        "automatic": false,
+        "policy": "coordinated_cadd_release",
+        "entrypoints": [
+          "CADD_install"
+        ]
+      },
+      "depends_on": [],
+      "notes": "Keep same-publisher data/index pins. GRCh38 annotation bundle currently uses Berlin; individual prescores use Washington. Template alone must not mix source identities.",
+      "selected_profile": {
+        "data_version": "v1.7"
+      },
+      "install_entrypoints": [
+        "CADD_install"
+      ],
+      "maintenance_evidence": {
+        "basis": "selected_artifact_and_existing_installer_route",
+        "cadence": "not_verified",
+        "note": "Classification records PriVA policy, not a guarantee that the publisher will maintain or republish this data."
+      }
+    },
+    "cadd_candidate_transcripts": {
+      "title": "Selected-release CADD candidate peptide and GTF resources",
+      "lifecycle": "maintained",
+      "storage": "external",
+      "config_keys": [
+        "cache_root",
+        "assembly",
+        "vep_installed_version",
+        "ref_genome"
+      ],
+      "bundled_paths": [],
+      "source": {
+        "kind": "versioned_url",
+        "urls": {
+          "GRCh38_peptide": "https://ftp.ensembl.org/pub/release-{release}/fasta/homo_sapiens/pep/Homo_sapiens.GRCh38.pep.all.fa.gz",
+          "GRCh37_peptide": "https://ftp.ensembl.org/pub/grch37/release-{release}/fasta/homo_sapiens/pep/Homo_sapiens.GRCh37.pep.all.fa.gz",
+          "GRCh38_gtf": "https://ftp.ensembl.org/pub/release-{release}/gtf/homo_sapiens/Homo_sapiens.GRCh38.{release}.gtf.gz"
+        },
+        "checksums": "Sibling CHECKSUMS files use publisher BSD sums; local SHA256 receipts record acquired identities."
+      },
+      "refresh": {
+        "keep_function": true,
+        "automatic": false,
+        "policy": "configured_vep_release_candidate_requires_separate_qualification",
+        "entrypoints": [
+          "CADD_runtime_install"
+        ]
+      },
+      "depends_on": [
+        "vep_cache",
+        "genome_reference"
+      ],
+      "notes": "Annotation/both installation acquires or reuses a managed candidate; calculate-only needs no transcript resources. Completed matching receipts support offline reuse. Explicit adopt supports already verified publisher acquisitions. Changed or mismatched finals are preserved and rejected, not replaced. GRCh37 retains annotation-base75 lineage and no MMSplice GTF; GRCh38 uses the selected release peptide and GTF. This candidate does not activate shared-VEP CADD scoring or change pinned scientific packages/models.",
+      "selected_profile": {
+        "release_from": "config.yaml vep_installed_version",
+        "assemblies": [
+          "GRCh37",
+          "GRCh38"
+        ],
+        "GRCh37_annotation_base_release": "75",
+        "qualification": "pending"
+      },
+      "install_entrypoints": [
+        "CADD_runtime_install"
+      ],
+      "maintenance_evidence": {
+        "basis": "publisher_versioned_release_checksum_endpoints",
+        "cadence": "release_based",
+        "note": "Release116 checksum endpoints were checked. Unavailable future release/assembly pairs fail without fallback."
+      }
+    },
+    "cadd_refseq_candidate": {
+      "title": "Pinned RefSeq candidate files for merged CADD transcript coverage",
+      "lifecycle": "snapshot",
+      "storage": "external",
+      "config_keys": ["cache_root", "assembly", "vep_installed_version", "vep_cache_dir"],
+      "bundled_paths": [],
+      "source": {
+        "kind": "pinned_source",
+        "directory_url": "https://ftp.ncbi.nlm.nih.gov/genomes/all/annotation_releases/9606/GCF_000001405.40-RS_2025_08/",
+        "manifest": "md5checksums.txt",
+        "pins_file": "scripts/cadd_refseq_resources.py",
+        "files": ["genomic.gff.gz", "protein.faa.gz", "rna.fna.gz", "assembly_report.txt"],
+        "checksums": "Exact publisher MD5 and byte length, frozen identity-encoded manifest, and local SHA256."
+      },
+      "refresh": {
+        "keep_function": false,
+        "automatic": false,
+        "policy": "fixed_refseq_release_candidate_requires_separate_qualification",
+        "entrypoints": []
+      },
+      "depends_on": ["vep_cache"],
+      "notes": "Separate experimental acquisition, not a main_install stage or an active CADD profile. Files live under cache_root/references/RefSeq/GRCh38/GCF_000001405.40-RS_2025_08. Requires the matching configured merged VEP116 source; no release fallback. This external 242277346-byte snapshot is not Git-bundled. Acquisition does not establish transcript, translation, coordinate, feature or scoring compatibility.",
+      "selected_profile": {
+        "assembly": "GRCh38",
+        "vep_release": "116",
+        "refseq_release": "GCF_000001405.40-RS_2025_08",
+        "qualification": "pending",
+        "production_activation": false
+      },
+      "install_entrypoints": [],
+      "acquisition_commands": [
+        "python scripts/cadd_refseq_resources.py plan --config CONFIG",
+        "python scripts/cadd_refseq_resources.py acquire --config CONFIG",
+        "python scripts/cadd_refseq_resources.py check --config CONFIG"
+      ],
+      "maintenance_evidence": {
+        "basis": "installed_merged_cache_source_and_matching_publisher_archive",
+        "cadence": "fixed_snapshot",
+        "note": "The four pinned originals and local verification completed in Slurm1515736 on 2026-10-19; sequence and feature qualification are separate."
+      }
+    },
+    "cadd_models_runtime": {
+      "title": "Original CADD Python runtime, model and PHRED assets",
+      "lifecycle": "snapshot",
+      "storage": "external",
+      "config_keys": [
+        "cadd_base_dir"
+      ],
+      "bundled_paths": [],
+      "source": {
+        "kind": "pinned_source",
+        "repository": "https://github.com/kircherlab/CADD-scripts",
+        "revision": "1fead0c1e02d3f0a8599bdb04e6b3a2dd70b4866",
+        "pins_file": "scripts/cadd_runtime_pins.json"
+      },
+      "refresh": {
+        "keep_function": false,
+        "automatic": false,
+        "policy": "coordinated_cadd_release",
+        "entrypoints": []
+      },
+      "depends_on": [
+        "cadd_annotations"
+      ],
+      "notes": "Transformation, model, ESM/RegSeq/MMSplice and PHRED assets form one pinned scientific bundle; cadd-rs is suspended.",
+      "selected_profile": {
+        "code_version": "1.7.2",
+        "scoring": "original upstream Python"
+      },
+      "install_entrypoints": [
+        "CADD_runtime_install"
+      ],
+      "maintenance_evidence": {
+        "basis": "selected_artifact_and_existing_installer_route",
+        "cadence": "not_verified",
+        "note": "Classification records PriVA policy, not a guarantee that the publisher will maintain or republish this data."
+      }
+    },
+    "interpro": {
+      "title": "InterPro mapping and curated domain tables",
+      "lifecycle": "maintained",
+      "storage": "bundled_or_generated",
+      "config_keys": [
+        "interpro_xml_gz_url",
+        "interpro_mapping_pickle"
+      ],
+      "bundled_paths": [
+        "data/InterPro/*"
+      ],
+      "source": {
+        "kind": "latest_url",
+        "url": "https://ftp.ebi.ac.uk/pub/databases/interpro/current_release/interpro.xml.gz"
+      },
+      "refresh": {
+        "keep_function": true,
+        "automatic": false,
+        "policy": "bundled_reuse_or_explicit_refresh",
+        "entrypoints": [
+          "InterPro_parsing"
+        ]
+      },
+      "depends_on": [],
+      "notes": "Upstream release stream is maintained; selected bundled mapping/curation remains a snapshot reused without content checks.",
+      "install_entrypoints": [
+        "InterPro_parsing"
+      ],
+      "maintenance_evidence": {
+        "basis": "selected_artifact_and_existing_installer_route",
+        "cadence": "not_verified",
+        "note": "Classification records PriVA policy, not a guarantee that the publisher will maintain or republish this data."
+      }
+    },
+    "clingen": {
+      "title": "ClinGen eRepo map and gene dosage",
+      "lifecycle": "maintained",
+      "storage": "bundled_or_generated",
+      "config_keys": [
+        "clingen_map",
+        "gene_dosage_sensitivity",
+        "clingen_dosage_grch38_url"
+      ],
+      "bundled_paths": [
+        "data/clingen/*"
+      ],
+      "source": {
+        "kind": "latest_urls",
+        "urls": {
+          "erepo": "https://erepo.clinicalgenome.org/evrepo/api/summary/classifications/download",
+          "dosage_template": "https://ftp.clinicalgenome.org/ClinGen_gene_curation_list_{assembly}.tsv"
+        }
+      },
+      "refresh": {
+        "keep_function": true,
+        "automatic": false,
+        "policy": "bundled_reuse_or_existing_external_refresh",
+        "entrypoints": [
+          "ClinGen_deploy"
+        ]
+      },
+      "depends_on": [],
+      "notes": "Canonical bundled map/source is reused by existence/nonzero. Existing external-source precedence/refresh policy stays unchanged.",
+      "install_entrypoints": [
+        "ClinGen_deploy"
+      ],
+      "maintenance_evidence": {
+        "basis": "selected_artifact_and_existing_installer_route",
+        "cadence": "not_verified",
+        "note": "Classification records PriVA policy, not a guarantee that the publisher will maintain or republish this data."
+      }
+    },
+    "hpo": {
+      "title": "HPO release and gene assertions",
+      "lifecycle": "maintained",
+      "storage": "bundled_or_generated",
+      "config_keys": [
+        "hpo_release",
+        "hpo_genes_to_phenotype_url",
+        "hpo_phenotype_hpoa_url",
+        "hpo_assertions"
+      ],
+      "bundled_paths": [
+        "data/hpo/*"
+      ],
+      "source": {
+        "kind": "versioned_url",
+        "url_template": "https://github.com/obophenotype/human-phenotype-ontology/releases/download/{release}/{filename}"
+      },
+      "refresh": {
+        "keep_function": true,
+        "automatic": false,
+        "policy": "explicit_pinned_release_change",
+        "entrypoints": [
+          "mondo_hpo_scope_install"
+        ]
+      },
+      "depends_on": [],
+      "notes": "Change release and provenance together; no automatic latest replacement.",
+      "selected_profile": {
+        "release": "v2026-06-23"
+      },
+      "install_entrypoints": [
+        "mondo_hpo_scope_install"
+      ],
+      "maintenance_evidence": {
+        "basis": "selected_artifact_and_existing_installer_route",
+        "cadence": "not_verified",
+        "note": "Classification records PriVA policy, not a guarantee that the publisher will maintain or republish this data."
+      }
+    },
+    "mondo": {
+      "title": "MONDO ontology and disease scope",
+      "lifecycle": "maintained",
+      "storage": "bundled_or_generated",
+      "config_keys": [
+        "mondo_release",
+        "mondo_url",
+        "mondo_sha256",
+        "mondo_obo",
+        "mondo_disease_scope_registry"
+      ],
+      "bundled_paths": [
+        "data/mondo/disease_scope_overrides.tsv"
+      ],
+      "source": {
+        "kind": "versioned_url",
+        "url_template": "https://github.com/monarch-initiative/mondo/releases/download/{release}/mondo-simple.obo"
+      },
+      "refresh": {
+        "keep_function": true,
+        "automatic": false,
+        "policy": "explicit_pinned_release_change",
+        "entrypoints": [
+          "mondo_hpo_scope_install"
+        ]
+      },
+      "depends_on": [
+        "hpo"
+      ],
+      "notes": "Update version, URL and checksum together. Bundled scope overrides remain manually curated.",
+      "selected_profile": {
+        "release": "v2026-07-06"
+      },
+      "install_entrypoints": [
+        "mondo_hpo_scope_install"
+      ],
+      "maintenance_evidence": {
+        "basis": "selected_artifact_and_existing_installer_route",
+        "cadence": "not_verified",
+        "note": "Classification records PriVA policy, not a guarantee that the publisher will maintain or republish this data."
+      }
+    },
+    "gene_mechanism_sources": {
+      "title": "G2P, Orphadata and optional PanelApp sources",
+      "lifecycle": "maintained",
+      "storage": "external",
+      "config_keys": [
+        "g2p_ddg2p_url",
+        "orphadata_gene_disease_url",
+        "panelapp_panels_url"
+      ],
+      "bundled_paths": [],
+      "source": {
+        "kind": "latest_urls",
+        "urls": {
+          "g2p": "https://www.ebi.ac.uk/gene2phenotype/api/panel/all/download",
+          "orphadata": "https://www.orphadata.com/data/xml/en_product6.xml",
+          "panelapp": "https://panelapp.genomicsengland.co.uk/api/v1/panels/"
+        }
+      },
+      "refresh": {
+        "keep_function": true,
+        "automatic": false,
+        "policy": "existing_source_refresh_policy",
+        "entrypoints": [
+          "gene_pathogenic_mechanism_cache_install",
+          "gene_nonlof_mechanism_cache_install"
+        ]
+      },
+      "depends_on": [],
+      "notes": "Source availability and downstream evidence coverage must be recorded; no guessed replacement datasets.",
+      "install_entrypoints": [
+        "gene_pathogenic_mechanism_cache_install",
+        "gene_nonlof_mechanism_cache_install"
+      ],
+      "maintenance_evidence": {
+        "basis": "selected_artifact_and_existing_installer_route",
+        "cadence": "not_verified",
+        "note": "Classification records PriVA policy, not a guarantee that the publisher will maintain or republish this data."
+      }
+    },
+    "gofcards": {
+      "title": "GoFCards normalized exact-GOF and ClinVar conditions",
+      "lifecycle": "derived",
+      "storage": "bundled_or_generated",
+      "config_keys": [
+        "gofcards_public_excel_url",
+        "gofcards_exact_gof_cache",
+        "gofcards_refresh_days",
+        "gofcards_clinvar_reinjection_lag_days",
+        "clinvar_vcv_match_audit"
+      ],
+      "bundled_paths": [
+        "data/gofcards/gofcards_exact_gof.json.gz",
+        "data/gofcards/gofcards_mechanism_reviews.tsv"
+      ],
+      "source": {
+        "kind": "latest_url",
+        "url": "https://download.genemed.tech/upload/GainFunCards/gofcards_data_download.xlsx"
+      },
+      "refresh": {
+        "keep_function": true,
+        "automatic": false,
+        "policy": "bundled_reuse_or_existing_external_refresh",
+        "entrypoints": [
+          "gofcards_exact_gof_cache_install",
+          "gofcards_clinvar_injection_install"
+        ]
+      },
+      "depends_on": [
+        "genome_reference",
+        "liftover",
+        "vep_cache",
+        "clinvar_vcv",
+        "curated_gene_tables"
+      ],
+      "notes": "Keep existing external 180-day rebuild/90-day reinjection configuration; these are days, unlike the new three-calendar-month gene-stat rule. This map does not enable a new scheduler.",
+      "install_entrypoints": [
+        "gofcards_exact_gof_cache_install",
+        "gofcards_clinvar_injection_install"
+      ],
+      "maintenance_evidence": {
+        "basis": "selected_artifact_and_existing_installer_route",
+        "cadence": "not_verified",
+        "note": "Classification records PriVA policy, not a guarantee that the publisher will maintain or republish this data."
+      }
+    },
+    "gene_mechanism_caches": {
+      "title": "Gene/non-LOF/HPO-condition mechanism tables",
+      "lifecycle": "derived",
+      "storage": "bundled_or_generated",
+      "config_keys": [
+        "ddg2p_mechanism_evidence",
+        "gene_nonlof_mechanism_json",
+        "hpo_condition_mechanism_json"
+      ],
+      "bundled_paths": [
+        "data/patho_mechanism/*"
+      ],
+      "source": {
+        "kind": "derived",
+        "builders": [
+          "scripts/build_gene_pathogenic_mechanism_cache.py",
+          "scripts/build_gene_nonlof_mechanism_cache.py",
+          "scripts/build_hpo_condition_mechanism_cache.py"
+        ]
+      },
+      "refresh": {
+        "keep_function": true,
+        "automatic": false,
+        "policy": "bundled_reuse_or_explicit_rebuild",
+        "entrypoints": [
+          "gene_pathogenic_mechanism_cache_install",
+          "gene_nonlof_mechanism_cache_install",
+          "hpo_condition_mechanism_cache_install"
+        ]
+      },
+      "depends_on": [
+        "gene_mechanism_sources",
+        "clingen",
+        "clinvar_vcv",
+        "gofcards",
+        "hpo",
+        "mondo",
+        "curated_gene_tables"
+      ],
+      "notes": "Reuse bundled snapshot when present; an upstream refresh does not authorize silently changing downstream scientific interpretation.",
+      "install_entrypoints": [
+        "gene_pathogenic_mechanism_cache_install",
+        "gene_nonlof_mechanism_cache_install",
+        "hpo_condition_mechanism_cache_install"
+      ],
+      "maintenance_evidence": {
+        "basis": "selected_artifact_and_existing_installer_route",
+        "cadence": "not_verified",
+        "note": "Classification records PriVA policy, not a guarantee that the publisher will maintain or republish this data."
+      }
+    },
+    "pm1_support": {
+      "title": "HCSeeker, RMC and original AlphaMissense gene means",
+      "lifecycle": "snapshot",
+      "storage": "bundled",
+      "config_keys": [],
+      "bundled_paths": [
+        "data/HCSeeker/HC_spots.*.tsv",
+        "data/gnomAD_RMC/gnomad_v2.1.1_rmc_flat.*.tsv",
+        "data/alphamissense/alphamissense_mean_score.tsv"
+      ],
+      "source": {
+        "kind": "bundled",
+        "provenance_files": [
+          "data/HCSeeker/README.md",
+          "data/gnomAD_RMC/README.md"
+        ]
+      },
+      "refresh": {
+        "keep_function": false,
+        "automatic": false,
+        "policy": "bundled_reuse_only",
+        "entrypoints": []
+      },
+      "depends_on": [],
+      "notes": "Fixed publication-derived inputs; no unverified latest URLs or replacement thresholds.",
+      "install_entrypoints": [
+        "bundled_snapshot_install"
+      ],
+      "maintenance_evidence": {
+        "basis": "fixed_selected_snapshot_policy",
+        "cadence": "not_verified",
+        "note": "Classification records PriVA policy, not a guarantee that the publisher will maintain or republish this data."
+      }
+    },
+    "curated_gene_tables": {
+      "title": "HGNC, dispensable genes and manual mechanism/scope reviews",
+      "lifecycle": "snapshot",
+      "storage": "bundled",
+      "config_keys": [
+        "hgnc_table",
+        "gofcards_mechanism_review_tsv",
+        "mondo_disease_scope_overrides",
+        "gene_nonlof_mechanism_schema",
+        "dispensable_gene_list"
+      ],
+      "bundled_paths": [
+        "data/hgnc/non_alt_loci_set.tsv",
+        "data/dispensable_genes/*",
+        "data/gofcards/gofcards_mechanism_reviews.tsv",
+        "data/mondo/disease_scope_overrides.tsv",
+        "data/patho_mechanism/*.schema.json"
+      ],
+      "source": {
+        "kind": "bundled"
+      },
+      "refresh": {
+        "keep_function": false,
+        "automatic": false,
+        "policy": "bundled_reuse_only",
+        "entrypoints": []
+      },
+      "depends_on": [],
+      "notes": "HGNC upstream is maintained, but this selected bundled table is an explicit snapshot. Curated rows require deliberate review, not unattended replacement.",
+      "install_entrypoints": [
+        "bundled_snapshot_install"
+      ],
+      "maintenance_evidence": {
+        "basis": "fixed_selected_snapshot_policy",
+        "cadence": "not_verified",
+        "note": "Classification records PriVA policy, not a guarantee that the publisher will maintain or republish this data."
+      }
+    },
+    "repeat_regions": {
+      "title": "Assembly repeat-region BEDs",
+      "lifecycle": "snapshot",
+      "storage": "bundled",
+      "config_keys": [
+        "repeat_region_file_name"
+      ],
+      "bundled_paths": [
+        "data/repeats/*"
+      ],
+      "source": {
+        "kind": "bundled"
+      },
+      "refresh": {
+        "keep_function": false,
+        "automatic": false,
+        "policy": "bundled_reuse_only",
+        "entrypoints": []
+      },
+      "depends_on": [],
+      "notes": "Use the selected assembly bundle; no upstream refresh route is currently qualified.",
+      "install_entrypoints": [
+        "bundled_snapshot_install"
+      ],
+      "maintenance_evidence": {
+        "basis": "fixed_selected_snapshot_policy",
+        "cadence": "not_verified",
+        "note": "Classification records PriVA policy, not a guarantee that the publisher will maintain or republish this data."
+      }
+    },
+    "vep_interpretation_tables": {
+      "title": "PriVA consequence interpretation lookup",
+      "lifecycle": "snapshot",
+      "storage": "bundled",
+      "config_keys": [],
+      "bundled_paths": [
+        "data/vep/*"
+      ],
+      "source": {
+        "kind": "bundled"
+      },
+      "refresh": {
+        "keep_function": false,
+        "automatic": false,
+        "policy": "bundled_reuse_only",
+        "entrypoints": []
+      },
+      "depends_on": [],
+      "notes": "Scientific interpretation policy is not a moving annotation resource.",
+      "install_entrypoints": [
+        "bundled_snapshot_install"
+      ],
+      "maintenance_evidence": {
+        "basis": "fixed_selected_snapshot_policy",
+        "cadence": "not_verified",
+        "note": "Classification records PriVA policy, not a guarantee that the publisher will maintain or republish this data."
+      }
+    }
+  }
+}

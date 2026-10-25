@@ -69,6 +69,106 @@ function priva_env_vars_set() {
 }
 
 
+function priva_requested_vep_release() {
+    # Read this ordinary top-level YAML scalar before the environment supplies
+    # yq. Reject aliases, expressions, duplicates and patch versions.
+    local config_file=$1 line value release=""
+    local scalar='^([1-9][0-9]*|"[1-9][0-9]*"|'\''[1-9][0-9]*'\'')[[:space:]]*(#.*)?$'
+    local quoted_key="^[[:space:]]*['\"]vep_installed_version['\"][[:space:]]*:"
+    while IFS= read -r line || [[ -n $line ]]; do
+        if [[ $line =~ $quoted_key || $line =~ ^(---|\.\.\.)([[:space:]]|$) ]]; then
+            log "ERROR: Use one ordinary YAML document and an unquoted top-level vep_installed_version key."
+            return 2
+        fi
+        [[ $line =~ ^vep_installed_version[[:space:]]*:[[:space:]]*(.*)$ ]] || continue
+        [[ -z $release ]] || {
+            log "ERROR: Duplicate vep_installed_version in $config_file."
+            return 2
+        }
+        value=${BASH_REMATCH[1]}
+        [[ $value =~ $scalar ]] || {
+            log "ERROR: vep_installed_version must be a numeric major VEP release, such as 113 or 116."
+            return 2
+        }
+        release=${BASH_REMATCH[1]}
+        release=${release//\"/}
+        release=${release//\'/}
+    done < "$config_file"
+    [[ -n $release ]] || {
+        log "ERROR: Set the top-level vep_installed_version in $config_file to the numeric major VEP release to install."
+        return 2
+    }
+    printf '%s\n' "$release"
+}
+
+
+function priva_install_basic_paths() {
+    [[ $# -eq 2 && ${1:-} == --config && -r ${2:-} ]] || {
+        log "ERROR: Use priva_install_basic_paths --config CONFIG."
+        return 2
+    }
+    # The environment supplies the full YAML reader later. These four ordinary
+    # top-level scalars are checked without evaluating config text as shell code.
+    local config_file=$2 line key value previous_basic=""
+    local -A selected=() seen=()
+    local -a problems=()
+    local scalar='^([/A-Za-z0-9_.-]+|"[/A-Za-z0-9_.-]*"|'\''[/A-Za-z0-9_.-]*'\'')[[:space:]]*(#.*)?$'
+    while IFS= read -r line || [[ -n $line ]]; do
+        if [[ ! $line =~ ^(cache_root|tmp_dir|assembly)[[:space:]]*:[[:space:]]*(.*)$ ]]; then
+            if [[ -n $previous_basic && $line =~ ^[[:space:]]+[^[:space:]#] ]]; then
+                problems+=("$previous_basic must fit on one ordinary YAML scalar line")
+            fi
+            [[ ! $line =~ ^[^[:space:]#] ]] || previous_basic=""
+            continue
+        fi
+        key=${BASH_REMATCH[1]}
+        value=${BASH_REMATCH[2]}
+        previous_basic=$key
+        [[ -z ${seen[$key]:-} ]] || { log "ERROR: Duplicate $key in $config_file."; return 2; }
+        seen[$key]=1
+        if [[ -z $value || $value =~ ^(#.*)?$ ]]; then
+            selected[$key]=""
+        elif [[ $value =~ $scalar ]]; then
+            value=${BASH_REMATCH[1]}
+            value=${value//\"/}
+            value=${value//\'/}
+            selected[$key]=$value
+        else
+            problems+=("$key must be an ordinary top-level scalar without spaces or shell characters")
+        fi
+    done < "$config_file"
+    for key in cache_root tmp_dir; do
+        value=${selected[$key]:-}
+        if [[ $value != /* ]] || [[ $(realpath -ms -- "$value") == / ]]; then
+            problems+=("set $key to an absolute, dedicated storage directory")
+        elif [[ ! -d $value ]]; then
+            problems+=("$key must be an existing directory on this host: $value; create it or correct the configured path before installation")
+        fi
+    done
+    case ${selected[assembly]:-} in
+        hg19|GRCh37|hg38|GRCh38) ;;
+        *) problems+=("set assembly to hg19/GRCh37 or hg38/GRCh38") ;;
+    esac
+    priva_requested_vep_release "$config_file" >/dev/null || problems+=("set vep_installed_version to a numeric major release")
+    if [[ ${#problems[@]} -gt 0 ]]; then
+        log "ERROR: Complete the basic installation settings in $config_file before environment setup:"
+        printf '  - %s\n' "${problems[@]}" >&2
+        return 2
+    fi
+    PRIVA_INSTALL_TMPDIR=${selected[tmp_dir]}
+}
+
+
+function priva_configure_portable_paths() {
+    [[ $# -eq 2 && ${1:-} == --config ]] || {
+        log "ERROR: Use priva_configure_portable_paths --config CONFIG."
+        return 2
+    }
+    python "${SCRIPT_DIR}/installer_config_paths.py" resolve \
+        --config "$2" --source-root "${BASE_DIR}"
+}
+
+
 function conda_install_vep() {
     # Retain this public function name for existing callers of the installer.
     local -r env_yaml="${BASE_DIR}/acmg_conda_rough.yml"
@@ -114,143 +214,49 @@ function conda_install_vep() {
 
 
 function priva_configure_cache_paths() {
-    # Run after environment activation: yq supplies JSON; Python handles paths
-    # without evaluating YAML values as shell code. --check makes no changes.
+    # Plan from original configured sources. The centralized helper adopts their
+    # bytes/known companions before selecting managed paths; --check is read-only.
     local config_file=${1}
     local mode=${2:-write}
     local cache_root config_json
     cache_root=$(yq '.cache_root' "${config_file}") || return 1
     [[ -z ${cache_root} || ${cache_root} == null || ${cache_root} == '""' ]] && return 0
     config_json=$(yq '.' "${config_file}") || return 1
-    python - "${config_file}" "${config_json}" "${mode}" <<'PRIVA_CACHE_PY'
+    python - "${config_file}" "${config_json}" "${mode}" "${SCRIPT_DIR}/installer_config_paths.py" <<'PRIVA_CACHE_PY'
+import importlib.util
 import json
 from pathlib import Path
-import posixpath
-import re
 import sys
 
 
-DEFAULT_CACHE_FOLDERS = {
-    "vep_cache": ("VEP_cache", "vep_cache_dir"),
-    "vep_plugin": ("VEP_plugin", "vep_plugins_dir"),
-    "vep_plugin_cache": ("VEP_plugin_cache", "vep_plugins_cachedir"),
-    "gnomad": ("gnomAD", "gnomad_vcf_dir"),
-    "clinvar": ("ClinVar", "clinvar_vcf_dir"),
-    "cadd": ("CADD", "cadd_parent_dir"),
-}
-
-CACHE_FILE_KEYS = {
-    "gnomad_vcf_chrX", "clinvar_vcf", "clinvar_aa_stat",
-    "clinvar_splice_stat", "clinvar_patho_af_stat", "clinvar_patho_exon_af_stat",
-    "clinvar_gene_stat", "utr_annotator_file", "loftee_parent_dir", "loftee_repo",
-    "human_ancestor_fasta", "loftee_conservation_file", "gerp_bigwig",
-    "alphamissense_prescore", "alphamissense_vcf", "alphamissense_vep_vcf",
-    "alphamissense_pd_stat", "alphamissense_tranx_domain_map",
-    "alphamissense_intolerant_domains", "alphamissense_intolerant_motifs",
-    "all_intolerant_domains", "pm1_regions_pkl", "conservation_file",
-    "splicevault_prescore", "primateai_prescore", "spliceai_snv_prescore",
-    "spliceai_indel_prescore", "cds_fasta_file", "mavedb_file",
-    "pext_mean_bw", "pext_tissue_bw_dir", "cadd_base_dir",
-}
+def path_helper():
+    global _PATH_HELPER
+    if '_PATH_HELPER' not in globals():
+        spec = importlib.util.spec_from_file_location('priva_install_cache_paths', CONFIG_PATHS_HELPER)
+        _PATH_HELPER = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(_PATH_HELPER)
+    return _PATH_HELPER
 
 
 def resolve_cache_paths(config):
-    """Resolve six folders and relocate saved paths beneath their old roots."""
-    if not isinstance(config, dict):
-        raise ValueError("The configuration must be a YAML mapping")
-    root = config.get("cache_root")
-    if root is None or root == "":
-        return {}, {}  # Preserve legacy configurations with full directory paths.
-    if not isinstance(root, str) or not re.fullmatch(r"/[A-Za-z0-9_./-]+", root):
-        raise ValueError("cache_root must be an absolute path without spaces or shell characters")
-    root = posixpath.normpath(root)
-    if not root.strip("/"):
-        raise ValueError("cache_root must name a dedicated cache directory")
-
-    folders = config.get("cache_folders")
-    if folders is None:
-        folders = {}
-    if not isinstance(folders, dict):
-        raise ValueError("cache_folders must be a YAML mapping of resource names to folder names")
-    unknown = set(folders) - set(DEFAULT_CACHE_FOLDERS)
-    if unknown:
-        raise ValueError("Unknown cache_folders entries: " + ", ".join(map(str, unknown)))
-    if set(config) & set(DEFAULT_CACHE_FOLDERS):
-        raise ValueError("Indent resource folder names beneath cache_folders")
-
-    directories = {}
-    previous_roots = []
-    for resource, (default_name, key) in DEFAULT_CACHE_FOLDERS.items():
-        name = folders.get(resource, default_name)
-        if not isinstance(name, str) or not re.fullmatch(r"[A-Za-z0-9_][A-Za-z0-9_.-]*", name):
-            raise ValueError(f"cache_folders.{resource} must be one folder name, not a path")
-        directories[key] = posixpath.join(root, name)
-        old = config.get(key)
-        if isinstance(old, str) and old.startswith("/"):
-            old = posixpath.normpath(old)
-            if old != "/":
-                previous_roots.append((old, directories[key]))
-
-    # Check the longest old root first, in case plugin folders were nested.
-    previous_roots.sort(key=lambda pair: len(pair[0]), reverse=True)
-    updates = dict(directories)
-    for key in CACHE_FILE_KEYS:
-        value = config.get(key)
-        if not isinstance(value, str) or not value.startswith("/"):
-            continue
-        for old, new in previous_roots:
-            if value == old or value.startswith(old + "/"):
-                updates[key] = new + value[len(old):]
-                break
-    return directories, updates
+    return path_helper().resolve_cache_paths(config, Path(CONFIG_PATHS_HELPER).parent.parent)
 
 
 def render_cache_config(text, updates):
-    """Replace top-level path scalars, retaining unrelated settings/comments."""
-    for key, value in sorted(updates.items()):
-        pattern = re.compile(r"^(" + re.escape(key) + r"[ \t]*:)[^\n]*$", re.MULTILINE)
-        matches = list(pattern.finditer(text))
-        if len(matches) > 1:
-            raise ValueError(f"Duplicate configuration key: {key}")
-        comment = ""
-        if matches:
-            old_value = matches[0].group(0).split(":", 1)[1].strip()
-            scalar = re.fullmatch(r'''(?:"(?:\\.|[^"\\])*"|'(?:''|[^'])*'|[^#]*?)(\s+#.*)?''', old_value)
-            if scalar and scalar.group(1):
-                comment = scalar.group(1)
-        replacement = key + ": " + json.dumps(value) + comment
-        if matches:
-            text = pattern.sub(lambda match: replacement, text)
-        else:
-            text = text.rstrip("\n") + "\n" + replacement + "\n"
-    return text
+    return path_helper().render_config(text, updates)
 
 
 def configure_cache_paths(config_file, config, mode):
-    if mode not in ("write", "--check"):
-        raise ValueError("Use priva_configure_cache_paths CONFIG [--check]")
-    directories, updates = resolve_cache_paths(config)
-    if mode == "--check":
-        print(json.dumps(updates, indent=2, sort_keys=True))
-        return
-    if not updates:
-        return
-    path = Path(config_file)
-    original = path.read_text()
-    updated = render_cache_config(original, updates)
-    for directory in directories.values():
-        Path(directory).mkdir(parents=True, exist_ok=True)
-    if updated != original:
-        path.write_text(updated)
-    for key, directory in directories.items():
-        print(f"{key}: {directory}")
+    return path_helper().configure_cache_paths(config_file, config, mode,
+                                              Path(CONFIG_PATHS_HELPER).parent.parent)
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     try:
+        CONFIG_PATHS_HELPER = sys.argv[4]
         configure_cache_paths(sys.argv[1], json.loads(sys.argv[2]), sys.argv[3])
     except (OSError, ValueError) as error:
-        print(f"ERROR: {error}", file=sys.stderr)
+        print(f'ERROR: {error}', file=sys.stderr)
         sys.exit(1)
 PRIVA_CACHE_PY
 }
@@ -1208,6 +1214,15 @@ function AlphaMissense_anno() {
     display_vcf ${alphamissense_prescore/.tsv/.vep.vcf} && \
     update_yaml ${config_file} "alphamissense_vep_vcf" "${alphamissense_prescore/.tsv/.vep.vcf}" && \
     log "The AlphaMissense VCF file ${alphamissense_prescore/.tsv/.vep.vcf} is annotated by VEP and saved to ${alphamissense_vcf}"
+}
+
+
+function priva_bundle_assembly() {
+    case "${1:-}" in
+        hg19|GRCh37) printf '%s\n' hg19 ;;
+        hg38|GRCh38) printf '%s\n' hg38 ;;
+        *) log "Unsupported bundled-data assembly: ${1:-}"; return 1 ;;
+    esac
 }
 
 
@@ -2538,6 +2553,45 @@ PY
 }
 
 
+function priva_bundled_cache_reuse() {
+    # Callable directly as an installer subcommand; only these original tracked
+    # canonical filenames receive the bundled existence/nonzero policy.
+    local key="" selected="" assembly="" force=0 relative canonical
+    while [[ $# -gt 0 ]]; do
+        case $1 in
+            --key) [[ $# -ge 2 ]] || return 2; key=$2; shift 2 ;;
+            --path) [[ $# -ge 2 ]] || return 2; selected=$2; shift 2 ;;
+            --assembly) [[ $# -ge 2 ]] || return 2; assembly=$2; shift 2 ;;
+            --force) force=1; shift ;;
+            *) log "ERROR: Use priva_bundled_cache_reuse --key KEY --path PATH [--assembly hg19|hg38] [--force]."; return 2 ;;
+        esac
+    done
+    case $key in
+        gofcards_exact_gof_cache) relative=gofcards/gofcards_exact_gof.json.gz ;;
+        gene_nonlof_mechanism_json) relative=patho_mechanism/gene_nonlof_mechanism_curated_assertions.json.gz ;;
+        hpo_condition_mechanism_json) relative=patho_mechanism/hpo_condition_mechanism_cache.json.gz ;;
+        ddg2p_mechanism_evidence) relative=patho_mechanism/gene_pathogenic_mechanism_evidence.tsv ;;
+        clingen_map|gene_dosage_sensitivity)
+            case $assembly in hg19|hg38) ;; *) log "ERROR: Select a canonical assembly for bundled ClinGen data."; return 2 ;; esac
+            if [[ $key == clingen_map ]]; then relative=clingen/clingen_map.${assembly}.pkl.gz
+            else relative=clingen/gene_dosage_sensitivity.${assembly}.tsv; fi ;;
+        clingen_erepo) relative=clingen/clingen_erepo.tsv ;;
+        *) log "ERROR: Unknown bundled resource key: $key"; return 2 ;;
+    esac
+    [[ -n $selected ]] || return 2
+    canonical=${DATA_DIR}/${relative}
+    [[ "$(realpath -ms -- "$selected")" == "$(realpath -ms -- "$canonical")" ]] || return 1
+    if [[ $force -eq 1 ]]; then
+        log "ERROR: Force cannot overwrite bundled $key: $canonical; select an explicit data-side output for that key."
+        return 2
+    fi
+    [[ "$(realpath -m -- "$selected")" == "$(realpath -ms -- "$canonical")" && \
+       -f "$selected" && -s "$selected" ]] || return 1
+    log "Reusing nonempty bundled $key: $selected"
+    return 0
+}
+
+
 function gene_pathogenic_mechanism_cache_install() {
     local config_file=${1}
     local cache_dir
@@ -3363,6 +3417,15 @@ function mechanism_resource_install() {
     gofcards_clinvar_injection_install "${config_file}" || return 1
     gene_nonlof_mechanism_cache_install "${config_file}" || return 1
     hpo_condition_mechanism_cache_install "${config_file}" || return 1
+}
+
+
+function bundled_snapshot_install() {
+    [[ $# -eq 1 ]] || { log "ERROR: Use bundled_snapshot_install CONFIG"; return 2; }
+    # Fixed Git data are already deployed by cloning PriVA. Check only that
+    # each selected input exists and is nonempty; do not parse/refresh bundles.
+    python "${SCRIPT_DIR}/installer_prerequisites.py" "$1" \
+        --source-root "${BASE_DIR}" --stage snapshots
 }
 
 

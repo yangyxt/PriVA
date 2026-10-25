@@ -1452,7 +1452,10 @@ function validate_pext_tissues() {
     fi
     
     # Get valid tissues for this assembly
-    local -a valid_tissues
+    # Bash locals are dynamically scoped: keep parsing from replacing a
+    # caller's scalar tissues setting with only the first array element.
+    local -a valid_tissues tissues
+    local tissue
     mapfile -t valid_tissues < <(get_valid_pext_tissues "$assembly")
     
     # Parse and validate each tissue
@@ -1485,6 +1488,8 @@ function get_pext_tissues_array() {
     # Parses comma-delimited tissue names and returns as array (one per line)
     # Input: comma-delimited tissue names from config
     local tissue_string="$1"
+    local -a tissues
+    local tissue
     
     if [[ -z "$tissue_string" ]] || [[ "$tissue_string" == "null" ]]; then
         return 0

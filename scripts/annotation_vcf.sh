@@ -473,7 +473,7 @@ function preprocess_vcf() {
         log "The input vcf is detected to map variants to GRC assemblies instead of UCSC assemblies" && \
         liftover_from_GRCh_to_ucsc \
         ${input_vcf/.vcf*/.primary.vcf.gz} \
-        ${BASE_DIR}/data/liftover/ucsc_to_GRC.contig.map.tsv \
+        ${BASE_DIR}/data/liftover/GRC_to_ucsc.contig.map.txt \
         ${input_vcf/.vcf*/.ucsc.vcf.gz}
     else
         cp -f ${input_vcf/.vcf*/.primary.vcf.gz} ${input_vcf/.vcf*/.ucsc.vcf.gz}

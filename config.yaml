@@ -1,15 +1,19 @@
 # config.yaml
+# First install: create cache_root and tmp_dir directories on this host, then set their absolute paths,
+# then select assembly and the requested VEP major. No workflow inputs are needed yet.
+# Empty managed resource keys below are filled by main_install. Explicit input identities are
+# preserved; external caches are adopted beneath cache_root before managed paths are saved.
 
 ####################################################Prepare these paths before running the install_utils.sh script####################################################
-tmp_dir: "/paedyl01/disk1/yangyxt/test_tmp/test_acmg"
+tmp_dir: ""
 assembly: hg19   # Change this you need to re-run the install_utils.sh script
-ref_genome: "/paedyl01/disk1/yangyxt/indexed_genome/ucsc.hg19.fasta"  # Be consistent of the assembly tag
-conda_env_yaml: "acmg_conda_rough.yml"  # Included in the GitHub repo, not recommend to change
-conda_env_name: "priva_acmg"   # If choose alternative env name, pls update the yaml file accordingly that will be used by the install_utils.sh script
+ref_genome: ""  # Optional existing indexed assembly-correct FASTA; empty uses managed UCSC acquisition.
+conda_env_yaml: "acmg_conda_rough.yml"  # main_install uses this bundled environment definition.
+conda_env_name: "priva_acmg"   # main_install prepares the fixed priva_acmg environment.
 hg38_hg19_chain: "hg38ToHg19.over.chain.gz"   # Included in the GitHub repo, not recommend to change
 
-# Choose one root for the six annotation-resource folders below.
-cache_root: /stornext/snfs170/next-gen/scratch/yangyxt/caches
+# Required data/cache storage root, also used for generated HPO/mechanism resources.
+cache_root: ""
 
 # Optional: omit this mapping, or individual entries, to use these defaults.
 # Values are single folder names directly beneath cache_root.
@@ -23,22 +27,24 @@ cache_folders:
 
 # Resolved directory paths: maintained by install_utils.sh; do not edit these
 # when cache_root is set. Saved resource paths beneath them follow root/name changes.
-gnomad_vcf_dir: "/stornext/snfs170/next-gen/scratch/yangyxt/caches/gnomAD"  # The directory to store the gnomAD related annotation resources
-clinvar_vcf_dir: "/stornext/snfs170/next-gen/scratch/yangyxt/caches/ClinVar"  # The directory to store the ClinVar related annotation resources
-vep_installed_version: "113"
-vep_cache_dir: "/stornext/snfs170/next-gen/scratch/yangyxt/caches/VEP_cache"  # the cache directory for VEP
-vep_plugins_dir: "/stornext/snfs170/next-gen/scratch/yangyxt/caches/VEP_plugin"  # the directory containing the VEP plugins executable files
-vep_plugins_cachedir: "/stornext/snfs170/next-gen/scratch/yangyxt/caches/VEP_plugin_cache"   # the directory for storing the VEP plugin caches
-cadd_parent_dir: "/stornext/snfs170/next-gen/scratch/yangyxt/caches/CADD"  # The parent directory to store the CADD scripts and cache files
+gnomad_vcf_dir: ""  # The directory to store the gnomAD related annotation resources
+clinvar_vcf_dir: ""  # The directory to store the ClinVar related annotation resources
+vep_installed_version: "116"  # Requested VEP major release; software/plugins/cache must match.
+vep_cache_dir: ""  # the cache directory for VEP
+vep_plugins_dir: ""  # the directory containing the VEP plugins executable files
+vep_plugins_cachedir: ""   # the directory for storing the VEP plugin caches
+cadd_parent_dir: ""  # The parent directory to store the CADD scripts and cache files
 ####################################################Ready to RUN install_utils.sh script####################################################
 
 
 ####################################################Prepare these paths before running PriVA workflow####################################################
-input_vcf: "/paedyl01/disk1/yangyxt/test_acmg_auto/TEST_FAM.filtered.vcf.gz"  # Below we specify the input vcf file in absolute paths
-ped_file: "/paedyl01/disk1/yangyxt/test_acmg_auto/TEST_FAM.ped"  # The PED file containing the identical sample set included in the input VCF file
-output_dir: "/paedyl01/disk1/yangyxt/test_acmg_auto"  # Output directory in absolute paths, per-family outputs will be stored directly in it
+# input_vcf and output_dir are required for a workflow run, not for installation.
+# Select cohort/PED/hub paths here before running; optional cohort inputs may stay empty.
+input_vcf: ""  # Below we specify the input vcf file in absolute paths
+ped_file: ""  # The PED file containing the identical sample set included in the input VCF file
+output_dir: ""  # Output directory in absolute paths, per-family outputs will be stored directly in it
 
-hub_file_dir: "/paedyl01/disk1/yangyxt/ngs_summary"   # the directory for storing the hub files for annotation caching
+hub_file_dir: ""   # the directory for storing the hub files for annotation caching
 hub_vcf_file: "hg19.anno.vcf.gz"    # hub file name for annotation caching
 hub_cadd_file: "hg19.cadd.tsv.gz"    # hub file name for CADD annotation caching
 
@@ -48,7 +54,7 @@ threads: 20          # Total threads for annotation / non-family steps
 threads_per_fam: 4   # Threads for EACH family filtering/prioritization job
 af_cutoff: 0.05      # Allele frequency cutoff for common variants
 
-alt_disease_vcf: "/paedyl01/disk1/yangyxt/public_data/ShortStatue/ShortStature.hg19.vcf.gz"  # abs path to the VCF file containing the variants from alternative disease patients, make sure it is left-normalized and biallelic, optional
+alt_disease_vcf: ""  # abs path to the VCF file containing the variants from alternative disease patients, make sure it is left-normalized and biallelic, optional
 control_vcf: ""   # VCF file containing the variants from control individuals, make sure it is left-normalized and biallelic, optional
 pp1_vcf: ""      # Cohort VCF file containing patients and their family members for PP1 (cosegregation), optional
 pp1_ped: ""      # PED file for the PP1 cohort VCF file, optional
@@ -57,52 +63,56 @@ pp1_ped: ""      # PED file for the PP1 cohort VCF file, optional
 
 ####################################################Below paths will be determined automatically by install_utils.sh####################################################
 # Below we specify the path to the gnomAD vcf file for chromosome X and we'll use that template to deduce the paths to other chromosome VCF files, the paths should be relatively constant
-gnomad_vcf_chrX: "/stornext/snfs170/next-gen/scratch/yangyxt/caches/gnomAD/gnomad.joint.v4.1.sites.hg19.chrX.vcf.gz"
+gnomad_vcf_chrX: ""
 
 # Below we specify the path to the ClinVar VCF file, the path should be relatively constant
-clinvar_vcf: "/stornext/snfs170/next-gen/scratch/yangyxt/caches/ClinVar/clinvar.hg19.vep.vcf.gz"
-clinvar_aa_stat: "/stornext/snfs170/next-gen/scratch/yangyxt/caches/ClinVar/clinvar.hg19.vep.aa_change.stats.pkl"
-clinvar_splice_stat: "/stornext/snfs170/next-gen/scratch/yangyxt/caches/ClinVar/clinvar.hg19.vep.splice_change.stats.pkl"
-clinvar_patho_af_stat: "/stornext/snfs170/next-gen/scratch/yangyxt/caches/ClinVar/clinvar.hg19.vep.patho_af_stat.pkl"
-clinvar_patho_exon_af_stat: "/stornext/snfs170/next-gen/scratch/yangyxt/caches/ClinVar/clinvar.hg19.vep.patho_exon_af_stat.pkl"
+clinvar_vcf: ""
+clinvar_aa_stat: ""
+clinvar_splice_stat: ""
+clinvar_patho_af_stat: ""
+clinvar_patho_exon_af_stat: ""
 clinvar_gene_stat: "clinvar_2star_stats.pkl.gz"
 
 # The UTRAnnotator plugin cache file
-utr_annotator_file: "/stornext/snfs170/next-gen/scratch/yangyxt/caches/VEP_plugin_cache/UTRannotator/uORF_5UTR_GRCh37_PUBLIC.txt"
+utr_annotator_file: ""
 # The LOEUF plugin cache file
-loeuf_prescore: "loeuf_dataset.tsv.gz"
+loeuf_prescore: ""
 
 # The LOFTEE plugin cache file and LOFTEE repository
-loftee_parent_dir: "/stornext/snfs170/next-gen/scratch/yangyxt/caches/VEP_plugin/LoFtee_repos"
-loftee_repo: "/stornext/snfs170/next-gen/scratch/yangyxt/caches/VEP_plugin/LoFtee_repos/loftee-hg19"
-human_ancestor_fasta: "/stornext/snfs170/next-gen/scratch/yangyxt/caches/VEP_plugin_cache/LoFtee/hg19/human_ancestor.fa.gz"
-loftee_conservation_file: "/stornext/snfs170/next-gen/scratch/yangyxt/caches/VEP_plugin_cache/LoFtee/hg19/phylocsf_gerp.sql"  # The GERP SQL file must not be compressed.
+loftee_parent_dir: ""
+loftee_repo: ""
+human_ancestor_fasta: ""
+loftee_conservation_file: ""  # The GERP SQL file must not be compressed.
 gerp_bigwig: "" # Below is only available for GRCh38
 
 # The AlphaMissense plugin cache file
-alphamissense_prescore: /stornext/snfs170/next-gen/scratch/yangyxt/caches/VEP_plugin_cache/AlphaMissense/AlphaMissense_hg19.tsv.gz
-alphamissense_vcf: /stornext/snfs170/next-gen/scratch/yangyxt/caches/VEP_plugin_cache/AlphaMissense/AlphaMissense_hg19.vcf.gz
-alphamissense_vep_vcf: /stornext/snfs170/next-gen/scratch/yangyxt/caches/VEP_plugin_cache/AlphaMissense/AlphaMissense_hg19.vep.vcf.gz
-alphamissense_pd_stat: /stornext/snfs170/next-gen/scratch/yangyxt/caches/VEP_plugin_cache/AlphaMissense/AlphaMissense_hg19.vep.prot.domain.stats.pkl
-alphamissense_tranx_domain_map: /stornext/snfs170/next-gen/scratch/yangyxt/caches/VEP_plugin_cache/AlphaMissense/transcript_pp_domain_mapping.hg19.pkl
-alphamissense_intolerant_domains: /stornext/snfs170/next-gen/scratch/yangyxt/caches/VEP_plugin_cache/AlphaMissense/domain_tolerance_analysis.hg19.tsv
-alphamissense_intolerant_motifs: /stornext/snfs170/next-gen/scratch/yangyxt/caches/VEP_plugin_cache/AlphaMissense/AlphaMissense_hg19.kde.pkl
+alphamissense_prescore: ""
+alphamissense_vcf: ""
+alphamissense_vep_vcf: ""
+# Managed complete pre-gnomAD annotation used by motifs; derived automatically.
+alphamissense_vep_base_vcf: ""
+alphamissense_pd_stat: ""
+alphamissense_tranx_domain_map: ""
+alphamissense_intolerant_domains: ""
+alphamissense_intolerant_motifs: ""
 
 # Final intolerant domains combining results from AlphaMissense and ClinVar
-all_intolerant_domains: /stornext/snfs170/next-gen/scratch/yangyxt/caches/VEP_plugin_cache/AlphaMissense/all_intolerant_domains.hg19.pkl
+all_intolerant_domains: ""
 
 # Combined PM1 regions (DAS + HCSeeker + RMC)
-pm1_regions_pkl: /stornext/snfs170/next-gen/scratch/yangyxt/caches/VEP_plugin_cache/AlphaMissense/pm1_regions.hg19.pkl
+pm1_regions_pkl: ""
 
 # The Conservation cache file
-conservation_file: /stornext/snfs170/next-gen/scratch/yangyxt/caches/VEP_plugin_cache/Conservation/gerp_conservation_scores.homo_sapiens.GRCh37.bw
+# GRCh38 new-install candidate pin; scientific/profile qualification remains separate.
+conservation_GRCh38_url: https://ftp.ensembl.org/pub/release-114/compara/conservation_scores/91_mammals.gerp_conservation_score/gerp_conservation_scores.homo_sapiens.GRCh38.bw
+conservation_file: ""
 
 # The SpliceVault plugin cache file
 splicevault_url: "https://ftp.ensembl.org/pub/current_variation/SpliceVault/SpliceVault_data_GRCh38.tsv.gz"
-splicevault_prescore: "/stornext/snfs170/next-gen/scratch/yangyxt/caches/VEP_plugin_cache/SpliceVault/SpliceVault_data_GRCh37.tsv.gz"
+splicevault_prescore: ""
 
 # CADD directory storing its executable and cache files
-cadd_base_dir: /stornext/snfs170/next-gen/scratch/yangyxt/caches/CADD/CADD-scripts-1.7.2
+cadd_base_dir: ""
 ####################################################Above paths will be determined automatically by install_utils.sh####################################################
 
 
@@ -110,41 +120,48 @@ cadd_base_dir: /stornext/snfs170/next-gen/scratch/yangyxt/caches/CADD/CADD-scrip
 # These cache files are too large you need to register a free account in Illumina to download them upon prompt of the install_utils.sh execution(size up to several hundreds of GB)
 
 # The PrimateAI plugin prescore file
-primateai_prescore: /stornext/snfs170/next-gen/scratch/yangyxt/caches/VEP_plugin_cache/PrimateAI/hg19/PrimateAI_scores_v0.2_GRCh37_sorted.tsv.bgz
+primateai_prescore: ""
 
 # The SpliceAI plugin cache files. Fresh GRCh37 installs use v1; GRCh38 uses v2.
 # Installation detects decompressed headers: VCF is passed through; native v2
 # TSV is prepared for the unchanged VEP plugin. Provenance stays in sidecars.
-spliceai_snv_prescore: /stornext/snfs170/next-gen/scratch/yangyxt/caches/VEP_plugin_cache/SpliceAI/hg19/spliceai_scores.raw.snv.hg19.vcf.gz
-spliceai_indel_prescore: /stornext/snfs170/next-gen/scratch/yangyxt/caches/VEP_plugin_cache/SpliceAI/hg19/spliceai_scores.raw.indel.hg19.vcf.gz
+spliceai_snv_prescore: ""
+spliceai_indel_prescore: ""
 ####################################################Above will be determined manually by your reply by install_utils.sh####################################################
 
 
 
 ####################################################Below are constant values, please report issue when one of them fails####################################################
-repeat_region_file_name: "ucsc.hg19.fasta.repeat.bed.gz"  # Included in the GitHub repo, can be customized if needed
+repeat_region_file_name: ""  # Included in the GitHub repo, can be customized if needed
 
 # Below we specify the path to the CADD base directory
 cadd_zip_download_url: "https://github.com/kircherlab/CADD-scripts/archive/refs/tags/v1.7.2.zip"
+# Direct installer: keep each data/index checksum paired with its configured source.
+cadd_GRCh37_anno_url: "https://krishna.gs.washington.edu/download/CADD/v1.7/GRCh37/GRCh37_v1.7.tar.gz"
 cadd_GRCh37_anno_md5: "22549309c65de8d25e903695aa4f749f"
+cadd_GRCh38_anno_url: "https://kircherlab.bihealth.org/download/CADD/v1.7/GRCh38/GRCh38_v1.7.tar.gz"
 cadd_GRCh38_anno_md5: "205d3e702df3565efb424e2ca80c9d25"
 cadd_GRCh37_snv_anno_url: "https://krishna.gs.washington.edu/download/CADD/v1.7/GRCh37/whole_genome_SNVs_inclAnno.tsv.gz"
 cadd_GRCh37_snv_anno_md5: "1b89cfd7da4e2a8f336c1ec33a6f44eb"
+cadd_GRCh37_snv_anno_tbi_md5: "b3f770e0ba669e23c65a109b8221a1b5"
 cadd_GRCh37_indel_anno_url: "https://krishna.gs.washington.edu/download/CADD/v1.7/GRCh37/gnomad.genomes-exomes.r4.0.indel_inclAnno.tsv.gz"
 cadd_GRCh37_indel_anno_md5: "3d88f8fde9df07060b4f8fe07a0d5d5d"
+cadd_GRCh37_indel_anno_tbi_md5: "c583ed9f852c9896081205c3523f9f23"
 cadd_GRCh38_snv_anno_url: "https://krishna.gs.washington.edu/download/CADD/v1.7/GRCh38/whole_genome_SNVs_inclAnno.tsv.gz"
 cadd_GRCh38_snv_anno_md5: "ed9d3e029686375e2ac80e96b5d0067a"
+cadd_GRCh38_snv_anno_tbi_md5: "a9b180069151c2253866dabea11d7ce7"  # Washington MD5SUMs, paired with the data URL above.
 cadd_GRCh38_indel_anno_url: "https://krishna.gs.washington.edu/download/CADD/v1.7/GRCh38/gnomad.genomes.r4.0.indel_inclAnno.tsv.gz"
 cadd_GRCh38_indel_anno_md5: "00ce2d2431a6ec3324b23ff625f4e0cd"
+cadd_GRCh38_indel_anno_tbi_md5: "7622175d25edc73e53fcae3df1c07f0a"  # Washington MD5SUMs, paired with the data URL above.
 cadd_version: "v1.7"
 
 # InterPro paths
 interpro_xml_gz_url: "https://ftp.ebi.ac.uk/pub/databases/interpro/current_release/interpro.xml.gz"
-interpro_mapping_pickle: "Interpro_entry_mapping.pkl.gz"
+interpro_mapping_pickle: ""
 
 # ClinGen paths
-clingen_map: "/paedyl01/disk1/yangyxt/PriVA/data/clingen/clingen_map.hg19.pkl.gz"
-gene_dosage_sensitivity: "/paedyl01/disk1/yangyxt/PriVA/data/clingen/gene_dosage_sensitivity.hg19.tsv"
+clingen_map: ""
+gene_dosage_sensitivity: ""
 
 # For any variant ClinGen has curated, ClinGen's applied evidence codes replace
 # the criteria PriVA derived. This is the production setting: an expert panel's
@@ -163,30 +180,28 @@ apply_clingen_override: true
 # Download URLs (always latest via "current" symlinks, installed by install_utils.sh):
 #   GRCh38: https://ftp.ensembl.org/pub/current_fasta/homo_sapiens/cds/Homo_sapiens.GRCh38.cds.all.fa.gz
 #   GRCh37: https://ftp.ensembl.org/pub/grch37/current/fasta/homo_sapiens/cds/Homo_sapiens.GRCh37.cds.all.fa.gz
-cds_fasta_file: "/stornext/snfs170/next-gen/scratch/yangyxt/caches/VEP_plugin_cache/Ensembl_CDS/Homo_sapiens.GRCh37.cds.all.fa.gz"
+cds_fasta_file: ""
 
 # MaveDB paths
 mavedb_url: "https://ftp.ensembl.org/pub/current_variation/MaveDB/MaveDB_variants.tsv.gz"
-mavedb_file: "/stornext/snfs170/next-gen/scratch/yangyxt/caches/VEP_plugin_cache/MaveDB/MaveDB_variants.hg38.tsv.gz"
+mavedb_file: ""  # User-approved hg19/GRCh37 omission, 2026-10-16; hg38 keeps its own route.
 
 # Gene mechanism / DDG2P-G2P cache paths
 # Built by: bash scripts/install_utils.sh gene_pathogenic_mechanism_cache_install config.yaml
-# One flat folder. Only canonical runtime caches and required cache-build inputs
-# are kept in the repository; audit byproducts land beside them and are ignored.
-# The raw download tree is shared outside the repository, so it is named
-# absolutely.
-gene_mechanism_cache_dir: "/paedyl01/disk1/yangyxt/PriVA/data/patho_mechanism"
-gene_mechanism_raw_dir: "/paedyl01/disk1/yangyxt/public_data/gene_pathogenic_mechanism/raw"
-gene_mechanism_builder_script: "/paedyl01/disk1/yangyxt/PriVA/scripts/build_gene_pathogenic_mechanism_cache.py"
-gene_nonlof_mechanism_builder_script: /paedyl01/disk1/yangyxt/PriVA/scripts/build_gene_nonlof_mechanism_cache.py
-gene_nonlof_mechanism_schema: /paedyl01/disk1/yangyxt/PriVA/data/patho_mechanism/gene_nonlof_mechanism_curated_assertions.schema.json
+# Empty output/raw paths use cache_root/patho_mechanism; builders and curated
+# tables below resolve relative to this checkout. Explicit selections remain unchanged.
+gene_mechanism_cache_dir: ""
+gene_mechanism_raw_dir: ""
+gene_mechanism_builder_script: "scripts/build_gene_pathogenic_mechanism_cache.py"
+gene_nonlof_mechanism_builder_script: "scripts/build_gene_nonlof_mechanism_cache.py"
+gene_nonlof_mechanism_schema: "data/patho_mechanism/gene_nonlof_mechanism_curated_assertions.schema.json"
 # Step 3 reads these two runtime caches directly. The condition-mechanism TSV
 # below is only a build input to the HPO-framed cache.
-gene_nonlof_mechanism_json: /paedyl01/disk1/yangyxt/PriVA/data/patho_mechanism/gene_nonlof_mechanism_curated_assertions.json.gz
-hpo_condition_mechanism_builder_script: /paedyl01/disk1/yangyxt/PriVA/scripts/build_hpo_condition_mechanism_cache.py
-hpo_condition_mechanism_json: /paedyl01/disk1/yangyxt/PriVA/data/patho_mechanism/hpo_condition_mechanism_cache.json.gz
-ddg2p_mechanism_evidence: /paedyl01/disk1/yangyxt/PriVA/data/patho_mechanism/gene_pathogenic_mechanism_evidence.tsv
-hgnc_table: /paedyl01/disk1/yangyxt/PriVA/data/hgnc/non_alt_loci_set.tsv
+gene_nonlof_mechanism_json: ""
+hpo_condition_mechanism_builder_script: "scripts/build_hpo_condition_mechanism_cache.py"
+hpo_condition_mechanism_json: ""
+ddg2p_mechanism_evidence: ""
+hgnc_table: "data/hgnc/non_alt_loci_set.tsv"
 g2p_ddg2p_url: "https://www.ebi.ac.uk/gene2phenotype/api/panel/all/download"
 orphadata_gene_disease_url: "https://www.orphadata.com/data/xml/en_product6.xml"
 clingen_dosage_grch38_url: "https://ftp.clinicalgenome.org/ClinGen_gene_curation_list_GRCh38.tsv"
@@ -203,7 +218,7 @@ panelapp_panels_url: "https://panelapp.genomicsengland.co.uk/api/v1/panels/"
 #   bash scripts/install_utils.sh gofcards_exact_gof_cache_install     config.yaml
 #   bash scripts/install_utils.sh gene_nonlof_mechanism_cache_install  config.yaml sources-only
 #   bash scripts/install_utils.sh gofcards_clinvar_injection_install   config.yaml
-gofcards_exact_gof_cache: /paedyl01/disk1/yangyxt/PriVA/data/gofcards/gofcards_exact_gof.json.gz
+gofcards_exact_gof_cache: ""
 gofcards_public_excel_url: "https://download.genemed.tech/upload/GainFunCards/gofcards_data_download.xlsx"
 # Longest the normalized cache may go without being rebuilt to pick up a new
 # GoFCards release. It is an upper bound only: the installer also rebuilds as
@@ -215,31 +230,41 @@ gofcards_refresh_days: "180"
 # re-injection reads the whole 5.8 GB file, so chasing every release costs hours
 # for almost no change. Three months.
 gofcards_clinvar_reinjection_lag_days: "90"
-gofcards_workdir: "/paedyl01/disk1/yangyxt/PriVA/data/gofcards/build_work"
-gofcards_hg38_fasta: "/paedyl01/disk1/yangyxt/indexed_genome/hg38/ucsc.hg38.fasta"
-gofcards_hg19_to_hg38_chain: "/paedyl01/disk1/yangyxt/public_data/liftOver/hg19ToHg38.over.chain"
-gofcards_clinvar_injector_script: "/paedyl01/disk1/yangyxt/PriVA/scripts/inject_clinvar_into_gofcards.py"
-clinvar_vcv_xml: "/paedyl01/disk1/yangyxt/public_data/gene_pathogenic_mechanism/raw/clinvar_vcv/ClinVarVCVRelease_00-latest_weekly.xml.gz"
-gofcards_builder_script: "/paedyl01/disk1/yangyxt/PriVA/scripts/build_gofcards_exact_gof_cache.py"
-gofcards_mechanism_review_tsv: "/paedyl01/disk1/yangyxt/PriVA/data/gofcards/gofcards_mechanism_reviews.tsv"
+gofcards_workdir: ""
+# AlphaMissense/PM1 five-column NM-to-ENST mapping. An explicit supplied path is retained.
+# null selects the pinned assembly/release mapping under cache_root/data/hgnc:
+# hg19/GRCh37 uses BioMart GRCh37.p13 mart116 (annotation base75); GRCh38
+# with VEP116 uses the pinned FTP116 mapping. Legacy VEP113 keeps its mapping.
+# Other automatic combinations require an explicit compatible supplied mapping.
+# These are new mapping sources, not an identity claim for the unavailable original.
+nm_to_enst_tsv: null
+# GoFCards requires indexed references for BOTH assemblies; empty paths use
+# the existing managed-reference planner under cache_root/reference and liftOver.
+gofcards_hg19_fasta: null
+gofcards_hg38_fasta: ""
+gofcards_hg19_to_hg38_chain: ""
+gofcards_clinvar_injector_script: "scripts/inject_clinvar_into_gofcards.py"
+clinvar_vcv_xml: ""
+gofcards_builder_script: "scripts/build_gofcards_exact_gof_cache.py"
+gofcards_mechanism_review_tsv: "data/gofcards/gofcards_mechanism_reviews.tsv"
 
 # HPO/MONDO disease-scope resources
 # Built by: bash scripts/install_utils.sh mondo_hpo_scope_install config.yaml
 # Releases are pinned so a normal reinstall is reproducible. Update the release,
 # URL, and checksum together when intentionally refreshing MONDO.
 hpo_release: "v2026-06-23"
-hpo_raw_dir: "/paedyl01/disk1/yangyxt/PriVA/data/hpo/raw/v2026-06-23"
+hpo_raw_dir: ""
 hpo_genes_to_phenotype_url: "https://github.com/obophenotype/human-phenotype-ontology/releases/download/v2026-06-23/genes_to_phenotype.txt"
 hpo_phenotype_hpoa_url: "https://github.com/obophenotype/human-phenotype-ontology/releases/download/v2026-06-23/phenotype.hpoa"
-hpo_assertion_builder_script: "/paedyl01/disk1/yangyxt/PriVA/scripts/collapse_HPO_anno.py"
-hpo_assertions: /paedyl01/disk1/yangyxt/PriVA/data/hpo/genes_to_phenotype.assertions.tsv.gz
+hpo_assertion_builder_script: "scripts/collapse_HPO_anno.py"
+hpo_assertions: ""
 mondo_release: "v2026-07-06"
 mondo_url: "https://github.com/monarch-initiative/mondo/releases/download/v2026-07-06/mondo-simple.obo"
 mondo_sha256: "7e28f3fba97b2f474b70dba54d9b719d07c3d84e5e682189146a05dbedf755aa"
-mondo_obo: /paedyl01/disk1/yangyxt/PriVA/data/mondo/mondo-simple.v2026-07-06.obo
-mondo_scope_builder_script: "/paedyl01/disk1/yangyxt/PriVA/scripts/build_mondo_disease_scope.py"
-mondo_disease_scope_registry: /paedyl01/disk1/yangyxt/PriVA/data/mondo/disease_scope.tsv.gz
-mondo_disease_scope_overrides: "/paedyl01/disk1/yangyxt/PriVA/data/mondo/disease_scope_overrides.tsv"
+mondo_obo: ""
+mondo_scope_builder_script: "scripts/build_mondo_disease_scope.py"
+mondo_disease_scope_registry: ""
+mondo_disease_scope_overrides: "data/mondo/disease_scope_overrides.tsv"
 
 
 ####################################################pext (proportion expressed across transcripts) Configuration####################################################

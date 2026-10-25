@@ -289,3 +289,75 @@ scientific acceptance and production activation remain outside this work.
 
 ---
 
+**R1 setup procedure addendum — 24 October 2026 CT**
+
+The separate opt-in `priva rank-setup` procedure covers only original
+`sort_and_rank_variants` L492–498. Earlier and later ranking arithmetic, PED
+selection and the real SciPy/NumPy paths stay in Python.
+
+```mermaid
+flowchart LR
+    I[Original frame and opaque axes] --> P[R1 Rust row and column plan]
+    P --> C[Copy original buffers in the emitted positions]
+    C --> R[Unchanged Python R2 onward]
+```
+
+The plan preserves the original copy, ordered removal of the two legacy fields,
+raw `ACMG_quant_score` column copy and exact, case-sensitive `protein_coding`
+filter. It returns source row positions and ordered source-column positions;
+existing `sort_index` is overwritten in place or appended when absent. The
+adapter gathers every emitted column directly from original buffers, including
+unrelated duplicate labels. It preserves dtype, null masks, float bits, column
+positions, attributes and actual empty/gapped/duplicate/MultiIndex axes; neither
+axis tokens nor labels become join keys. Missing score lookup precedes missing
+BIOTYPE lookup even on empty frames. Inputs remain unchanged.
+
+The primitive contract accepts `object` containing the existing Cell primitives,
+Python-storage `string`, NumPy `float64`/`int64`/`uint64`/`bool`, and nullable
+`Float64`/`Int64`/`UInt64`/`boolean`. Scores are copied without float conversion or
+arithmetic. Exact text matches alone survive; supported missing and nontext
+BIOTYPE values are excluded. Unmasked nullable-float NaN, inconsistent cells,
+undeclared dtypes and arbitrary Python objects require unchanged Python.
+Duplicate `ACMG_quant_score`, `BIOTYPE` or `sort_index` labels also explicitly
+defer; the original pandas duplicate-label broadcast/error behavior is not
+claimed as Rust parity. Unrelated duplicate labels retain their positions.
+
+The preimplementation oracle executes the four actual source statements and
+checks their boundary against the closed full-ranker's R2-entry checkpoints or
+R1 failures. Its 129 cases retain 118 source outputs, 11 source failures and
+unchanged immediate input pickle bytes. It adds exact-token, raw-score dtype,
+nullable/nonfinite, existing-column and opaque-axis cases without executing
+later scientific calculations. `rust/source_functions.tsv` records full function
+SHA256 `8aa29d9a…` and explicitly limits this module to L492–498.
+
+Final focused comparison 1514363.3308 completed 0:0 at 9:01:32 PM CDT:
+**117 exact outputs, eight original failures and four deliberate Python
+fallbacks**, with zero mismatches. Every successful output applies the complete
+emitted column plan. The eight supported failures preserve original type/message
+and create no output. A fallback is never counted as an exact Rust match.
+
+Build and regressions 1524493.0 completed 0:0: all 105 Rust tests (eight R1 tests),
+R8 primary 84 exact outputs/six source failures/one Python fallback, R8 integer
+15 exact outputs, PEXT 5,786 scalar results/18 source errors, condition/mechanism
+and scoring comparisons, and the existing 60 `final-order` cases/five rejections
+passed. Binary SHA256 is
+`0cc79a5ec6acf276e34a746b9f5ae8039bfd480b4771d1a44bac67ffdde7cd98`.
+The build source manifest is
+`6ea71662be654d802d6a708b71174333cb8d0eead3f9012b685b835d0eb81713`;
+the final test manifest is
+`e6185428c3deaab3c30ad137a8eec06574432ecacff48b174d513cccd91268ca`.
+The follow-up changed only the comparator and validation harness, verifies every
+Rust/scientific/prior-test source unchanged and reuses the completed binary and
+regressions. Both first-pass and strengthened checks remain retained.
+
+Maintained source/tests/docs stay in this checkout. All oracle pickles, typed
+states, snapshots, binary, comparison results and logs are under
+`/stornext/snfs170/next-gen/scratch/yangyxt_dt/projects/PriVA_upgrade/{validation/rust-ranking-setup-20261024-v1,logs/rust-ranking-setup-*}`;
+Cargo/target products stay separately under data-side `build/rust-ranking-setup-*`.
+The preceding R8 algorithm/tests and old `final-order` body are unchanged.
+These optional sources are separate from main installation 1524420's frozen
+6:39 PM CT snapshot. No scientific Python, installer, production dispatch,
+R2–R7/C1 numerical integration or family/public qualification changed.
+
+---
+

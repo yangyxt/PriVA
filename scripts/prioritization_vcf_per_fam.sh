@@ -22,28 +22,40 @@ function prepare_combined_tab () {
     local input_vcf=${1}  # This input VCF file should be annotated with many things
     local CADD_anno_file=${2}
     local threads=${3}
+    local config_file=${4:-}
 
     local output_tab=${input_vcf/.vcf*/.tsv}
     local hpo_tab=${BASE_DIR}/data/hpo/genes_to_phenotype.assertions.tsv.gz
+    if [[ -n "$config_file" ]]; then
+        [[ -r "$config_file" ]] || { log "The configuration file is not readable: $config_file"; return 1; }
+        local configured_hpo
+        configured_hpo=$(read_yaml "$config_file" hpo_assertions) || return 1
+        if [[ -n "$configured_hpo" && "$configured_hpo" != null ]]; then
+            hpo_tab=$configured_hpo
+        fi
+    fi
+    [[ -s "$hpo_tab" && -f "$hpo_tab" ]] || \
+    { log "The selected HPO assertions file is missing or empty: $hpo_tab"; return 1; }
 
-	check_vcf_validity ${input_vcf} || \
+	check_vcf_validity "${input_vcf}" || \
 	{ log "The input VCF file ${input_vcf} is not valid, please check the VCF file"; return 1; }
 
     [[ -f ${output_tab} ]] && \
     [[ ${output_tab} -nt ${input_vcf} ]] && \
     [[ ${output_tab} -nt ${hpo_tab} ]] && \
+    [[ -z "$config_file" || "$output_tab" -nt "$config_file" ]] && \
     [[ ${output_tab} -nt ${SCRIPT_DIR}/combine_annotations.py ]] && \
-    check_table_column ${output_tab} "vep_consq_lof" && \
+    check_table_column "${output_tab}" "vep_consq_lof" && \
     { log "The combined annotation table ${output_tab} is up to date, skip the conversion"; return 0; } || \
     { log "The combined annotation table ${output_tab} is outdated, start the conversion"; }
 
-    python ${SCRIPT_DIR}/combine_annotations.py \
-    -i ${input_vcf} \
-    -c ${CADD_anno_file} \
-    -o ${output_tab} \
-    -p ${hpo_tab} \
-    -t ${threads} && \
-    display_table ${output_tab}
+    python "${SCRIPT_DIR}/combine_annotations.py" \
+    -i "${input_vcf}" \
+    -c "${CADD_anno_file}" \
+    -o "${output_tab}" \
+    -p "${hpo_tab}" \
+    -t "${threads}" && \
+    display_table "${output_tab}"
 }
 
 
@@ -146,7 +158,12 @@ function assign_acmg_criteria () {
     local clinvar_splice_dict_pkl=$(read_yaml ${config_file} "clinvar_splice_stat")
     local intolerant_domains_pkl=$(read_yaml ${config_file} "all_intolerant_domains")
 	local am_intol_domains_tsv=$(read_yaml ${config_file} "alphamissense_intolerant_domains")
-    local clinvar_gene_stat_pkl=${DATA_DIR}/ClinVar/$(basename $(read_yaml ${config_file} "clinvar_gene_stat"))
+    local clinvar_gene_stat_pkl
+    clinvar_gene_stat_pkl=$(read_yaml "${config_file}" "clinvar_gene_stat")
+    case "${clinvar_gene_stat_pkl}" in
+        */*) ;;  # Explicit absolute or caller-relative path.
+        *) clinvar_gene_stat_pkl=${DATA_DIR}/ClinVar/${clinvar_gene_stat_pkl} ;;
+    esac
     local tranx_exon_domain_map_pkl=$(read_yaml ${config_file} "alphamissense_tranx_domain_map")
     local pm1_regions_pkl=$(read_yaml ${config_file} "pm1_regions_pkl")
     local alt_disease_vcf=$(read_yaml ${config_file} "alt_disease_vcf")
@@ -179,7 +196,7 @@ function assign_acmg_criteria () {
     check_path ${clinvar_splice_dict_pkl} "file" "clinvar_splice_stat" || has_error=1
     check_path ${intolerant_domains_pkl} "file" "all_intolerant_domains" || has_error=1
     check_path ${am_intol_domains_tsv} "file" "alphamissense_intolerant_domains" || has_error=1
-    check_path ${clinvar_gene_stat_pkl} "file" "clinvar_gene_stat" || has_error=1
+    check_path "${clinvar_gene_stat_pkl}" "file" "clinvar_gene_stat" || has_error=1
     check_path ${pm1_regions_pkl} "file" "pm1_regions_pkl" || has_error=1
     check_path ${am_score_vcf} "file" "alphamissense_vcf" || has_error=1
     check_path ${tranx_exon_domain_map_pkl} "file" "alphamissense_tranx_domain_map" || has_error=1
@@ -192,7 +209,8 @@ function assign_acmg_criteria () {
     check_path ${hpo_condition_mechanism_json} "file" "hpo_condition_mechanism_json" || has_error=1
     check_path ${gene_nonlof_mechanism_json} "file" "gene_nonlof_mechanism_json" || has_error=1
     # CDS FASTA is optional - fallback to deprecated transcript-based approach if not available
-    [[ -f ${cds_fasta_file} ]] && local cds_fasta_arg="--cds_fasta_path ${cds_fasta_file}" || { log "WARNING: CDS FASTA file not found at ${cds_fasta_file}. Alternative start codon detection for start_lost variants will use deprecated transcript-based approach."; local cds_fasta_arg=""; }
+    local -a cds_fasta_arg=()
+    [[ -f ${cds_fasta_file} ]] && cds_fasta_arg=(--cds_fasta_path "$cds_fasta_file") || log "WARNING: CDS FASTA file not found at ${cds_fasta_file}. Alternative start codon detection for start_lost variants will use deprecated transcript-based approach."
 
     # ClinGen's curated evidence codes replace PriVA's own criteria for any
     # variant ClinGen has curated. That is the production behaviour, so the
@@ -206,7 +224,7 @@ function assign_acmg_criteria () {
     fi
 
     local assembly=$(read_yaml ${config_file} "assembly")
-    if [[ ${assembly} == "hg38" ]]; then
+    if [[ ${assembly} == "hg38" || ${assembly} == "GRCh38" ]]; then
         local mavedb_metadata_tsv=${BASE_DIR}/data/MaveDB/assay_mapping_result.neutral_bands.tsv
         check_path ${mavedb_metadata_tsv} "file" "mavedb_assay_metadata" || has_error=1
         local mavedb_arg="--mavedb_metadata_tsv ${mavedb_metadata_tsv}"
@@ -273,13 +291,13 @@ function assign_acmg_criteria () {
     --am_intol_domains_tsv ${am_intol_domains_tsv} \
     --pm1_regions_pkl ${pm1_regions_pkl} \
     --repeat_region_file ${repeat_region_file} \
-    --clinvar_gene_stat_pkl ${clinvar_gene_stat_pkl} \
+    --clinvar_gene_stat_pkl "${clinvar_gene_stat_pkl}" \
     --clingen_map_pkl ${clingen_map_pkl} \
     --gnomAD_extreme_rare_threshold ${gnomAD_extreme_rare_threshold} \
     --expected_incidence ${expected_incidence} \
     --am_score_vcf ${am_score_vcf} \
     --threads ${threads} \
-    --tranx_exon_domain_map_pkl ${tranx_exon_domain_map_pkl} ${ped_arg} ${fam_arg} ${alt_disease_arg} ${mavedb_arg} ${pp1_arg} ${relevant_genes_arg} ${dispensable_genes_arg} ${cds_fasta_arg} ${pext_arg} ${clingen_override_arg} && \
+    --tranx_exon_domain_map_pkl ${tranx_exon_domain_map_pkl} ${ped_arg} ${fam_arg} ${alt_disease_arg} ${mavedb_arg} ${pp1_arg} ${relevant_genes_arg} ${dispensable_genes_arg} "${cds_fasta_arg[@]}" ${pext_arg} ${clingen_override_arg} && \
     display_table ${input_tab} && \
     log "The ACMG criterias are assigned for ${input_tab}, added with three columns: ACMG_quant_score, ACMG_class, ACMG_criteria, and the output matrix is saved to ${output_acmg_mat}" && \
     display_table ${output_acmg_mat} || \
@@ -309,7 +327,7 @@ function main_prioritization () {
 
 
     # Read the expected number of threads
-    local threads=$(read_yaml ${config_file} "threads_per_fam")
+    local threads=$(read_yaml "${config_file}" "threads_per_fam")
     log "The number of threads is set to ${threads} for the current family ${fam_name} and input VCF file ${input_vcf}"
 
     # Preprocess step, convert the annotated VCF to a Table with transcript specific annotations as rows
@@ -323,8 +341,8 @@ function main_prioritization () {
             cadd_tsv=${family_specific_cadd}
         else
             # Fall back to original CADD file from config
-            local output_dir=$(read_yaml ${config_file} "output_dir")
-            local input_vcf=$(read_yaml ${config_file} "input_vcf")
+            local output_dir=$(read_yaml "${config_file}" "output_dir")
+            local input_vcf=$(read_yaml "${config_file}" "input_vcf")
             cadd_tsv=${output_dir}/$(basename ${input_vcf/.vcf*/.anno.cadd.tsv})
             log "Family-specific CADD not found, using original CADD file: ${cadd_tsv}"
         fi
@@ -345,9 +363,10 @@ function main_prioritization () {
     log "The CADD annotation file ${cadd_tsv} is not empty, start the prioritization"
 	
     prepare_combined_tab \
-    ${input_vcf} \
-    ${cadd_tsv} \
-    ${threads} && \
+    "${input_vcf}" \
+    "${cadd_tsv}" \
+    "${threads}" \
+    "${config_file}" && \
     [[ -f ${input_tab} ]] || \
     { log "Failed to prepare the combined annotation table"; return 1; }
 
@@ -355,7 +374,7 @@ function main_prioritization () {
     [[ -z ${fam_name} ]] && local fam_arg="" || local fam_arg="-f ${fam_name}"
     assign_acmg_criteria \
     -i ${input_tab} \
-    -c ${config_file} \
+    -c "${config_file}" \
     -t ${threads} ${fam_arg} || \
     { log "Failed to assign the ACMG criterias"; return 1; }
 

@@ -4427,6 +4427,60 @@ function nm_to_enst_mapping_install() {
 }
 
 
+function priva_manual_cache_inputs() {
+    [[ $# -eq 2 && ${1:-} == --config && -r ${2:-} ]] || {
+        log "ERROR: Use priva_manual_cache_inputs --config CONFIG."
+        return 2
+    }
+    local -a arguments=("${2}" --source-root "${BASE_DIR}" --stage manual-inputs)
+    # Collect publisher-required paths before any resource acquisition or
+    # whole-table annotation. Batch runs fail with the missing keys instead of
+    # reaching an unanswered prompt hours later; interactive users keep prompts.
+    [[ ! -t 0 ]] || arguments+=(--prompt)
+    python "${SCRIPT_DIR}/installer_prerequisites.py" "${arguments[@]}"
+}
+
+
+function priva_install_prerequisites() {
+    local config_file=${1}
+    python "${SCRIPT_DIR}/installer_prerequisites.py" "${config_file}" --source-root "${BASE_DIR}" \
+        --allow-missing-bundled-mapping --allow-missing-bundled-clinvar || return 1
+    # The selected reference is always needed. The GoFCards preflight below
+    # checks both assemblies only when the normalized cache requires a build.
+    python "${SCRIPT_DIR}/reference_resources.py" preflight "${config_file}" \
+        --data-dir "${DATA_DIR}" --scope selected --use-cache-root || return 1
+    gofcards_exact_gof_cache_install "${config_file}" --main-preflight || return 1
+}
+
+
+function priva_prepare_install_config() {
+    [[ $# -eq 2 && ${1:-} == --config ]] || {
+        log "ERROR: Use priva_prepare_install_config --config CONFIG."
+        return 2
+    }
+    local config_file=$2
+    # Plan with the original managed-root resolver, then validate the effective
+    # destinations without rewriting selected config/custom input paths on failure.
+    local planning_config managed_updates
+    planning_config=$(mktemp "${TMPDIR}/priva-install-plan.XXXXXX.yaml") || return 1
+    managed_updates=$(priva_configure_cache_paths "${config_file}" --check) || \
+        { rm -f -- "${planning_config}"; return 1; }
+    python "${SCRIPT_DIR}/installer_config_paths.py" resolve --config "${config_file}" \
+        --source-root "${BASE_DIR}" --managed-updates-json "${managed_updates}" \
+        --output "${planning_config}" || { rm -f -- "${planning_config}"; return 1; }
+    priva_install_prerequisites "${planning_config}" || \
+        { rm -f -- "${planning_config}"; return 1; }
+    rm -f -- "${planning_config}" || return 1
+
+    # Resolve/create the selected folders before checking VEP destinations.
+    # Existing resource functions and annotation commands read the saved keys.
+    priva_configure_cache_paths "${config_file}" || return 1
+    priva_configure_portable_paths --config "${config_file}" || return 1
+    nm_to_enst_mapping_install "${config_file}" || return 1
+
+}
+
+
 function bundled_snapshot_install() {
     [[ $# -eq 1 ]] || { log "ERROR: Use bundled_snapshot_install CONFIG"; return 2; }
     # Fixed Git data are already deployed by cloning PriVA. Check only that
@@ -4437,19 +4491,46 @@ function bundled_snapshot_install() {
 
 
 function main_install() {
-    local config_file=${1}
+    if [[ $# -eq 1 && ( ${1:-} == -h || ${1:-} == --help ) ]]; then
+        printf 'Usage: bash scripts/install_utils.sh main_install CONFIG\n'
+        printf 'Selects the numeric major vep_installed_version in CONFIG.\n'
+        printf 'Requires existing cache_root and tmp_dir directories plus assembly before environment setup.\n'
+        printf 'Creates priva_acmg from %s/acmg_conda_rough.yml or changes its VEP release.\n' "${BASE_DIR}"
+        printf 'The environment supplies yq after the bootstrap release scalar is checked.\n'
+        return 0
+    fi
+    [[ $# -eq 1 && ${1:-} != -* && -r ${1:-} ]] || {
+        log "ERROR: Supply exactly one readable CONFIG file; see main_install --help."
+        return 2
+    }
+    local config_file
+    config_file=$(realpath "$1") || return 1
+
+    # Reject incomplete portable settings before any package/environment change.
+    priva_install_basic_paths --config "${config_file}" || return 1
+    export TMPDIR=${PRIVA_INSTALL_TMPDIR}
+
+    # Prepare the bundled environment before parsing the full configuration.
+    conda_install_vep "${config_file}" || return 1
+    local conda_env_name=${PRIVA_INSTALL_ENV_NAME}
+
+    # The existing smoke route omits VEP/plugins entirely and has no manual
+    # plugin-cache requirement. Real installation must check those inputs first.
+    if [[ ${PRIVA_SMOKE_SKIP_VEP:-0} != 1 ]]; then
+        priva_manual_cache_inputs --config "${config_file}" || return 1
+    fi
+    priva_prepare_install_config --config "${config_file}" || return 1
+    bundled_snapshot_install "${config_file}" || return 1
 
     local has_error=0
     local skip_vep_install=0
     [[ "${PRIVA_SMOKE_SKIP_VEP:-0}" == "1" ]] && skip_vep_install=1
     # Read configuration
-    local conda_env_yaml=${BASE_DIR}/$(basename $(read_yaml "$config_file" "conda_env_yaml"))
     local vep_cache_dir=$(read_yaml "$config_file" "vep_cache_dir")
     local vep_plugins_dir=$(read_yaml "$config_file" "vep_plugins_dir")
     local assembly=$(read_yaml "$config_file" "assembly")
     local ref_fasta=$(read_yaml "$config_file" "ref_genome")
     local vep_plugins_cachedir=$(read_yaml "$config_file" "vep_plugins_cachedir")
-    [[ -f ${conda_env_yaml} ]] || { log "The conda env yaml file ${conda_env_yaml} is not found, please check the file"; has_error=1; }
     if [[ ${skip_vep_install} -eq 0 ]]; then
         [[ -d ${vep_cache_dir} ]] || { log "The cache directory for VEP ${vep_cache_dir} is not found, please check the file"; has_error=1; }
         [[ -d ${vep_plugins_dir} ]] || { log "The plugins directory for VEP ${vep_plugins_dir} is not found, please check the file"; has_error=1; }
@@ -4462,27 +4543,13 @@ function main_install() {
     ref_fasta=$(read_yaml "$config_file" "ref_genome")
     [[ -f ${ref_fasta} ]] || { log "The reference genome fasta file ${ref_fasta} is not found, please check the file"; return 1; }
 
-    # Perform installation steps
-    # 1. Install the conda env
-    conda_install_vep "${conda_env_yaml}" || \
-    { log "Failed to install the conda env"; return 1; }
-
-    # Test whether currently the conda env is activated
-    local conda_env_name=$(head -1 ${conda_env_yaml} | awk -F ': ' '{print $2;}')
-    if [[ ${CONDA_PREFIX} =~ ${conda_env_name} ]] && [[ ! -z ${conda_env_name} ]]; then
-        log "The conda env $conda_env_name is already activated"
-    else
-        conda activate $conda_env_name
-    fi
-
     if [[ ${skip_vep_install} -eq 1 ]]; then
         log "PRIVA_SMOKE_SKIP_VEP=1: skipping VEP API/cache, VEP plugins, and LoFtee installation; smoke inputs must already contain complete CSQ annotations."
     else
-        # 2. Install VEP
-        # Update config with installation results
-        local vep_version=$(vep --help | grep "ensembl-vep" | awk '{print $NF}' | awk -F '.' '{print $1}')
-        # Update config with installation results
-        update_yaml "$config_file" "vep_installed_version" "$vep_version"
+        # The requested release is an input; never replace it with PATH's VEP.
+        local vep_version
+        vep_version=$(read_yaml "$config_file" "vep_installed_version")
+        priva_verify_vep_release "$vep_version" || return 1
 
         # Install VEP API and caches and plugins first
         vep_cache_api_install \
@@ -4499,66 +4566,65 @@ function main_install() {
         ${vep_plugins_dir} \
         ${vep_plugins_cachedir} \
         ${assembly} \
-        ${config_file} \
+        "${config_file}" \
         ${conda_env_name} || \
         { log "Failed to install VEP plugins"; return 1; }
 
         # Install LOFTEE separately despite it is also a VEP plugin
-        LoFtee_install ${vep_plugins_cachedir} ${config_file} || \
+        LoFtee_install ${vep_plugins_cachedir} "${config_file}" || \
         { log "Failed to install LOFTEE"; return 1; }
     fi
 
     # 4. Install gnomAD VCF (basically download bgzipped VCF files)
-    gnomAD_install ${config_file} ${ref_fasta} || \
+    gnomAD_install "${config_file}" "${ref_fasta}" || \
     { log "Failed to install gnomAD VCF"; return 1; }
-    AlphaMissense_anno_gnomAD ${config_file} || \
+    AlphaMissense_anno_gnomAD "${config_file}" || \
     { log "Failed to annotate gnomAD data to AlphaMissense VCF"; return 1; }
 
     # 5. Install InterPro mapping pickle
-    InterPro_parsing ${config_file} || \
+    InterPro_parsing "${config_file}" || \
     { log "Failed to install InterPro mapping pickle"; return 1; }
 
+    # Full ClinVar VEP annotation consumes enabled pext tracks. Prepare them
+    # before its first use so missing tracks cannot be silently omitted.
+    pext_install \
+    "${config_file}" || \
+    { log "Failed to install pext BigWig files"; return 1; }
+
     # 6. Install ClinVar VCF
-    ClinVar_VCF_deploy ${config_file} || \
-    { log "Failed to install ClinVar VCF"; return 1; }
-    ClinVar_AA_stat ${config_file} || \
-    { log "Failed to stat ClinVar per AA change"; return 1; }
-    ClinVar_Gene_stat ${config_file} || \
-    { log "Failed to stat ClinVar records per gene"; return 1; }
-    AlphaMissense_stat ${config_file} || \
+    ClinVar_install --config "${config_file}" || \
+    { log "Failed to install ClinVar annotations/statistics"; return 1; }
+    AlphaMissense_stat "${config_file}" || \
     { log "Failed to generate the AlphaMissense statistics JSON file"; return 1; }
-    AlphaMissense_pick_intolerant_domains ${config_file} || \
+    AlphaMissense_pick_intolerant_domains "${config_file}" || \
     { log "Failed to pick intolerant domains from AlphaMissense"; return 1; }
-    prepare_pm1_regions ${config_file} || \
+    prepare_pm1_regions "${config_file}" || \
     { log "Failed to prepare PM1 regions pickle"; return 1; }
-    ClinVar_patho_AF_stat ${config_file} || \
+    ClinVar_patho_AF_stat "${config_file}" || \
     { log "Failed to stat ClinVar pathogenic variants per allele frequency"; return 1; }
 
 
     # 7. Install CADD prescores
     CADD_install \
-    ${config_file} \
+    "${config_file}" \
     ${assembly} || \
     { log "Failed to install CADD prescores"; return 1; }
+    CADD_runtime_install "${config_file}" both || \
+    { log "Failed to install pinned CADD runtime and model assets"; return 1; }
 
     # 8. ClinGen install
     ClinGen_deploy \
-    ${config_file} || \
+    "${config_file}" || \
     { log "Failed to deploy ClinGen data"; return 1; }
 
     # 9. Install Ensembl CDS FASTA for alternative start codon detection
     CDS_FASTA_install \
-    ${config_file} || \
+    "${config_file}" || \
     { log "Failed to install CDS FASTA for alternative start codon detection"; return 1; }
-
-    # 10. Install pext (proportion expressed across transcripts) BigWig files
-    pext_install \
-    ${config_file} || \
-    { log "Failed to install pext BigWig files"; return 1; }
 
     # 11. Install pinned HPO/MONDO, condition mechanisms, and exact GoFCards
     mechanism_resource_install \
-        ${config_file} || \
+        "${config_file}" || \
     { log "Failed to install HPO/MONDO or mechanism resources"; return 1; }
     
     log "Congratulations! The installation is completed!"
@@ -4566,6 +4632,6 @@ function main_install() {
 
 
 
-if [[ "${#BASH_SOURCE[@]}" -eq 1 ]]; then
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
     "$@"
 fi

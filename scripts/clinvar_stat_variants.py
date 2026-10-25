@@ -7,6 +7,7 @@ import gzip
 import re
 
 from combine_annotations import convert_vcf_to_tab
+from clinvar_annotation_contract import validate_header
 
 
 logger = logging.getLogger(__name__)
@@ -18,14 +19,14 @@ console_handler.setFormatter(formatter)
 logger.addHandler(console_handler)
 
 
-def offer_clinvar_alleleid_to_transcript_map(clinvar_tab: str = "/paedyl01/disk1/yangyxt/public_data/clinvar/tab_delimited/variant_summary.txt.gz",
-                                            mane_tranx_tab: str = "/paedyl01/disk1/yangyxt/PriVA/data/MANE/MANE.GRCh38.v1.4.summary.txt.gz"):
+def offer_clinvar_alleleid_to_transcript_map(clinvar_tab: str,
+                                            mane_tranx_tab: str):
 
     # URL for updated clinvar tab: https://ftp.ncbi.nlm.nih.gov/pub/clinvar/tab_delimited/variant_summary.txt.gz
     # URL for updated MANE tab: https://ftp.ncbi.nlm.nih.gov/refseq/MANE/MANE_human/release_1.4/MANE.GRCh38.v1.4.summary.txt.gz
 
     clinvar_df = pd.read_table(clinvar_tab, low_memory=False)
-    hg38_clinvar_df = clinvar_df[clinvar_df["Assembly"] == "GRCh38"]
+    hg38_clinvar_df = clinvar_df.loc[clinvar_df["Assembly"] == "GRCh38"].copy()
     hg38_clinvar_df["Tranx_RefSeq_ID"] = hg38_clinvar_df["Name"].str.extract(r'(NM_\d+\.\d+)')[0]
 
     mane_tranx_df = pd.read_table(mane_tranx_tab, low_memory=False)
@@ -35,6 +36,16 @@ def offer_clinvar_alleleid_to_transcript_map(clinvar_tab: str = "/paedyl01/disk1
     hg38_clinvar_df["Tranx_Ensembl_ID"] = hg38_clinvar_df["Tranx_RefSeq_ID"].map(refseq_to_ensembl)
     allele_id_to_tranx = dict(zip(hg38_clinvar_df["#AlleleID"], hg38_clinvar_df["Tranx_Ensembl_ID"].str.split(".", expand=True).iloc[:, 0]))
     return allele_id_to_tranx
+
+
+def _number_or_nan(value):
+    """Keep absent plugin scores absent, including pandas nullable scalars."""
+    return float("nan") if pd.isna(value) else float(value)
+
+
+def _text_or_nan(value):
+    """Use the reader's existing missing-text sentinel for nullable scalars."""
+    return "nan" if pd.isna(value) else str(value)
 
 
 def extract_allele_id_map(clinvar_vcf: str):
@@ -224,7 +235,7 @@ def per_gene_stat(gene_df: pd.DataFrame):
         variant_id = str(row["variant_id"])
         ensembl_gene_id = str(row["Gene"])
         transcript = str(row["Feature"])
-        domains = [ensembl_gene_id + ":" + domain for domain in str(row["DOMAINS"]).split("&") if "nan" not in domain]
+        domains = [ensembl_gene_id + ":" + domain for domain in _text_or_nan(row["DOMAINS"]).split("&") if "nan" not in domain]
         if transcript not in protein_coding_transcripts:
             continue
         gene_stat_dict["transcripts"][transcript]["clinvar_variants"].add(variant_id)
@@ -243,19 +254,19 @@ def per_gene_stat(gene_df: pd.DataFrame):
                 gene_stat_dict["domains"][domain]["clinvar_not_pathogenic"].add(variant_id)
 
         # Use SpliceAI and SpliceVault to identify splicing brought AA changes
-        spliceai_delta = float(row["SpliceVault_SpliceAI_delta"])
-        splicing_stat = analyze_splice_event(str(row["SpliceVault_top_events"]), spliceai_delta)
+        spliceai_delta = _number_or_nan(row["SpliceVault_SpliceAI_delta"])
+        splicing_stat = analyze_splice_event(_text_or_nan(row["SpliceVault_top_events"]), spliceai_delta)
     
         # Identify putative NMD variants
         loftee_tokens = {
             token.strip().upper()
-            for token in re.split(r"[&,;|]", str(row["LoF"] or ""))
+            for token in re.split(r"[&,;|]", _text_or_nan(row["LoF"]))
             if token.strip()
         }
         vep_consq_lof = bool({"HC", "OS"} & loftee_tokens) and (
             "escape" not in str(row["NMD"])
         )
-        splic_donor_loss = float(row["SpliceAI_pred_DS_DL"]) > 0.5
+        splic_donor_loss = _number_or_nan(row["SpliceAI_pred_DS_DL"]) > 0.5
         putative_nmd = vep_consq_lof or splic_donor_loss
         if putative_nmd:
             gene_stat_dict["putative_nmd_variants"].add(variant_id)
@@ -303,12 +314,19 @@ def per_gene_stat(gene_df: pd.DataFrame):
 
 def main_stat_variants( clinvar_anno_vcf: str, 
                         output_pickle: str,
-                        threads=10 ):
-    combined_df = convert_vcf_to_tab(clinvar_anno_vcf, threads)
+                        threads=10,
+                        *,
+                        clinvar_tab: str,
+                        mane_tranx_tab: str ):
+    validate_header(clinvar_anno_vcf, "gene")
+    combined_df = convert_vcf_to_tab(
+        clinvar_anno_vcf, threads, cadd_phred_dict={}, hpo_symbol_map={},
+        require_clinvar_csq=False,
+    )
     combined_df["variant_id"] = combined_df["chrom"] + "_" + combined_df["pos"].astype(str) + "_" + combined_df["ref"] + "_" + combined_df["alt"]
 
     # First we need to identify the corresponding transcript for each variant in ClinVar
-    allele_id_to_tranx = offer_clinvar_alleleid_to_transcript_map()
+    allele_id_to_tranx = offer_clinvar_alleleid_to_transcript_map(clinvar_tab, mane_tranx_tab)
     var_id_to_allele_id = extract_allele_id_map(clinvar_anno_vcf)
 
     combined_df["allele_id"] = combined_df["variant_id"].map(var_id_to_allele_id)
@@ -337,7 +355,14 @@ if __name__ == "__main__":
     parser.add_argument("-v", "--clinvar_anno_vcf", type=str, required=True)
     parser.add_argument("-o", "--output_pickle", type=str, required=True)
     parser.add_argument("-t", "--threads", type=int, default=10)
+    parser.add_argument("--clinvar-summary", required=True,
+                        help="Pinned ClinVar variant_summary.txt.gz used for AlleleID/transcript mapping")
+    parser.add_argument("--mane-summary", required=True,
+                        help="Pinned MANE summary (the reference build used MANE GRCh38 v1.4)")
     args = parser.parse_args()
 
     # This script needs to first annotate the updated GRCh38 ClinVar VCF with annotation_vcf.sh to generate the annotated vcf
-    main_stat_variants(args.clinvar_anno_vcf, args.output_pickle, args.threads)
+    main_stat_variants(
+        args.clinvar_anno_vcf, args.output_pickle, args.threads,
+        clinvar_tab=args.clinvar_summary, mane_tranx_tab=args.mane_summary,
+    )

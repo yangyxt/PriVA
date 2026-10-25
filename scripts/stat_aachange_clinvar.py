@@ -244,7 +244,7 @@ class AAClinvarCollector:
             
         except Exception as e:
             self.logger.error(f"Error processing chromosome {chromosome}: {e}")
-            return ({}, {})
+            raise  # Pool.map must fail before either output is published.
 
     def collect_data(self, n_processes=None):
         """Process VCF file and collect both AA changes and splice data in parallel."""

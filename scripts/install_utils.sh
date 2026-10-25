@@ -2108,153 +2108,268 @@ function basic_vep_annotation() {
 
 
 
+function ClinVar_install() {
+    [[ $# -eq 2 && ${1:-} == --config ]] || {
+        log "ERROR: Use ClinVar_install --config CONFIG."
+        return 2
+    }
+    # The helper checks official fileDate before deciding whether a completed
+    # managed VCF is reusable. It calls the original scientific stage functions
+    # on a private configuration and selects new statistics only after success.
+    python "${SCRIPT_DIR}/clinvar_gene_refresh.py" install \
+        --config "$2" --source-root "${BASE_DIR}"
+}
+
+
 function ClinVar_VCF_deploy() {
+    local config_file=${1:?Supply CONFIG [--source-vcf PINNED_RAW_VCF]}
+    shift
+    # 2026-10-23 CT: owned annotation reuse requires its bounded VEP/assembly
+    # header. Keep mismatched/unknown generations before the original rebuild.
+    python "${SCRIPT_DIR}/clinvar_gene_refresh.py" deploy \
+        --config "$config_file" --source-root "$BASE_DIR" "$@"
+}
+
+
+function _ClinVar_VCF_deploy() {
+    # Internal scientific body; the public entry holds its distinct target lock.
     local config_file=${1}
+    shift
+    local pinned_source=""
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --source-vcf)
+                [[ $# -ge 2 && -n $2 ]] || { log "ERROR: --source-vcf requires a completed VCF path"; return 2; }
+                pinned_source=$2
+                shift 2
+                ;;
+            *) log "ERROR: Use ClinVar_VCF_deploy CONFIG [--source-vcf PINNED_RAW_VCF]"; return 2 ;;
+        esac
+    done
     local contig_map=${DATA_DIR}/liftover/GRC_to_ucsc.contig.map.txt
-
-    [[ ! -f ${contig_map} ]] && { log "The contig map file ${contig_map} is not found, please check the file"; return 1; }
-
-    local CACHEDIR=$(read_yaml ${config_file} "clinvar_vcf_dir")
-    local assembly_version=$(read_yaml ${config_file} "assembly")
-
-    if [[ ${assembly_version} == "hg19" ]] || [[ ${assembly_version} == "GRCh37" ]]; then
-        local assembly_version="GRCh37"
-    elif [[ ${assembly_version} == "hg38" ]] || [[ ${assembly_version} == "GRCh38" ]]; then
-        local assembly_version="GRCh38"
-    else
-        log "Currently we only support hg19 and hg38 assemblies"
-        return 1
+    local contract=${SCRIPT_DIR}/clinvar_annotation_contract.py
+    local refresh=${SCRIPT_DIR}/clinvar_gene_refresh.py
+    [[ -f "$contig_map" ]] || { log "The contig map file ${contig_map} is not found"; return 1; }
+    local CACHEDIR assembly_version ucsc_assembly_version clinvar_vcf threads assembly
+    CACHEDIR=$(read_yaml "$config_file" "clinvar_vcf_dir")
+    assembly=$(read_yaml "$config_file" "assembly")
+    case "$assembly" in
+        hg19|GRCh37) assembly_version=GRCh37; ucsc_assembly_version=hg19 ;;
+        hg38|GRCh38) assembly_version=GRCh38; ucsc_assembly_version=hg38 ;;
+        *) log "Currently we only support hg19 and hg38 assemblies"; return 1 ;;
+    esac
+    mkdir -p "$CACHEDIR" || return 1
+    local configured_vcf default_vcf explicit_input=0
+    configured_vcf=$(read_yaml "$config_file" "clinvar_vcf")
+    default_vcf=${CACHEDIR}/clinvar.${ucsc_assembly_version}.vep.vcf.gz
+    case "$configured_vcf" in
+        ""|null) clinvar_vcf=$default_vcf ;;
+        /*|*/*)
+            clinvar_vcf=$configured_vcf
+            [[ "$(realpath -m "$clinvar_vcf")" == "$(realpath -m "$default_vcf")" ]] || explicit_input=1
+            ;;
+        *)
+            clinvar_vcf=${CACHEDIR}/${configured_vcf}
+            [[ "$(realpath -m "$clinvar_vcf")" == "$(realpath -m "$default_vcf")" ]] || explicit_input=1
+            ;;
+    esac
+    threads=$(read_yaml "$config_file" "threads")
+    if [[ $explicit_input -eq 1 ]]; then
+        [[ -z $pinned_source ]] || { log "ERROR: A pinned raw source cannot replace an explicitly selected annotated ClinVar VCF"; return 1; }
+        python "$refresh" check-header --config "$config_file" --source-root "$BASE_DIR" > /dev/null || return 1
+        # The generic validity helper may repair an owned cache from a sibling
+        # VCF. Explicit custom inputs are checked without repair or replacement.
+        [[ -s "$clinvar_vcf" ]] && bcftools view -h "$clinvar_vcf" >/dev/null && \
+        python "$contract" "$clinvar_vcf" --stage complete || \
+            { log "ERROR: Explicit ClinVar input is missing or lacks complete annotations: $clinvar_vcf; prepare it separately"; return 1; }
+        case "$clinvar_vcf" in
+            *.gz|*.bgz) bgzip -t "$clinvar_vcf" || return 1 ;;
+        esac
+        log "Reusing complete explicit ClinVar input without modifying it: $clinvar_vcf"
+        return 0
     fi
-
-    if [[ ${assembly_version} == "GRCh37" ]] || [[ ${assembly_version} == "hg19" ]]; then
-        local ucsc_assembly_version="hg19"
-    elif [[ ${assembly_version} == "GRCh38" ]] || [[ ${assembly_version} == "hg38" ]]; then
-        local ucsc_assembly_version="hg38"
-    else
-        log "Currently we only support hg19 and hg38 assemblies"
-        return 1
+    if check_vcf_validity "$clinvar_vcf" && \
+       python "$refresh" check-header --config "$config_file" --source-root "$BASE_DIR" > /dev/null && \
+       python "$contract" "$clinvar_vcf" --stage complete; then
+        update_yaml "$config_file" "clinvar_vcf" "$clinvar_vcf" || return 1
+        log "Reusing ClinVar VCF with the complete statistics annotation contract: $clinvar_vcf"
+        return 0
     fi
-
-    if [[ ! -d ${CACHEDIR} ]]; then
-        mkdir -p ${CACHEDIR}
+    # A completed VEP stage is reusable while population annotation waits.
+    if ! { check_vcf_validity "$clinvar_vcf" && \
+           python "$refresh" check-header --config "$config_file" --source-root "$BASE_DIR" > /dev/null && \
+           python "$contract" "$clinvar_vcf" --stage vep; }; then
+        local -a source_args=()
+        [[ -z $pinned_source ]] || source_args=(--source-vcf "$pinned_source")
+        python "$refresh" retire-owned --config "$config_file" --source-root "$BASE_DIR" "${source_args[@]}" || return 1
+        local source_vcf=${CACHEDIR}/clinvar.${assembly_version}.vcf.gz
+        local converted_vcf=${CACHEDIR}/clinvar.${ucsc_assembly_version}.vcf.gz
+        if [[ -n $pinned_source ]]; then
+            [[ -s $pinned_source && -s ${pinned_source}.tbi ]] || { log "ERROR: Pinned ClinVar source and matching index must both exist"; return 1; }
+            cp -- "$pinned_source" "$source_vcf" || return 1
+            cp -- "${pinned_source}.tbi" "${source_vcf}.tbi" || return 1
+        else
+            download_resource_atomic "https://ftp.ncbi.nlm.nih.gov/pub/clinvar/vcf_${assembly_version}/clinvar.vcf.gz" "$source_vcf" || return 1
+            download_resource_atomic "https://ftp.ncbi.nlm.nih.gov/pub/clinvar/vcf_${assembly_version}/clinvar.vcf.gz.tbi" "${source_vcf}.tbi" || return 1
+        fi
+        liftover_from_ucsc_to_GRCh "$source_vcf" "$contig_map" "$converted_vcf" || return 1
+        check_vcf_validity "$converted_vcf" || return 1
+        clinvar_vcf=${CACHEDIR}/clinvar.${ucsc_assembly_version}.vep.vcf.gz
+        cp -- "$converted_vcf" "$clinvar_vcf" || return 1
+        cp -- "${converted_vcf}.tbi" "${clinvar_vcf}.tbi" || return 1
+        # Use the original complete VEP operation and original plugin order;
+        # basic_vep_annotation lacks LoF/NMD/SpliceVault required for regeneration.
+        # Prepare a cache candidate with the original official VEP invocation.
+        # Deployment does not activate a changed scientific profile.
+        bash "${SCRIPT_DIR}/annotation_vcf.sh" anno_VEP_cache_candidate \
+            --input_vcf "$clinvar_vcf" --config "$config_file" --threads "$threads" || return 1
+        check_vcf_validity "$clinvar_vcf" || return 1
+        python "$refresh" check-header --config "$config_file" --source-root "$BASE_DIR" > /dev/null || return 1
+        python "$contract" "$clinvar_vcf" --stage vep || return 1
     fi
-
-    local clinvar_vcf=${CACHEDIR}/$(basename $(read_yaml ${config_file} "clinvar_vcf"))
-    local vep_cache_dir=$(read_yaml ${config_file} "vep_cache_dir")
-    local vep_plugins_dir=$(read_yaml ${config_file} "vep_plugins_dir")
-    local threads=$(read_yaml ${config_file} "threads")
-    local ref_genome=$(read_yaml ${config_file} "ref_genome")
-    local assembly=$(read_yaml ${config_file} "assembly")
-    local spliceai_snv_prescore=$(read_yaml ${config_file} "spliceai_snv_prescore")
-    local spliceai_indel_prescore=$(read_yaml ${config_file} "spliceai_indel_prescore")
-
-    check_vcf_validity ${clinvar_vcf} && \
-    check_vcf_infotags ${clinvar_vcf} "CSQ" && \
-    check_vcf_infotags ${clinvar_vcf} "AF_grpmax_joint" && \
-    log "The ClinVar VCF file ${clinvar_vcf} is already downloaded and annotated by VEP. Skip the following steps" && return 0
-
-    wget https://ftp.ncbi.nlm.nih.gov/pub/clinvar/vcf_${assembly_version}/clinvar.vcf.gz -O ${CACHEDIR}/clinvar.${assembly_version}.vcf.gz && \
-    wget https://ftp.ncbi.nlm.nih.gov/pub/clinvar/vcf_${assembly_version}/clinvar.vcf.gz.tbi -O ${CACHEDIR}/clinvar.${assembly_version}.vcf.gz.tbi && \
-    log "The ClinVar VCF file is downloaded to ${CACHEDIR}/clinvar.${assembly_version}.vcf.gz" && \
-    liftover_from_ucsc_to_GRCh \
-    ${CACHEDIR}/clinvar.${assembly_version}.vcf.gz \
-    ${contig_map} \
-    ${CACHEDIR}/clinvar.${ucsc_assembly_version}.vcf.gz && \
-    check_vcf_validity ${CACHEDIR}/clinvar.${ucsc_assembly_version}.vcf.gz && \
-    basic_vep_annotation \
-    -i ${CACHEDIR}/clinvar.${ucsc_assembly_version}.vcf.gz \
-    -a ${assembly} \
-    -r ${ref_genome} \
-    -c ${vep_cache_dir} \
-    -t ${threads} \
-    -p ${vep_plugins_dir} \
-    -s ${spliceai_snv_prescore} \
-    -d ${spliceai_indel_prescore} && \
-    check_vcf_validity ${CACHEDIR}/clinvar.${ucsc_assembly_version}.vep.vcf.gz && \
-    local gnomad_vcf_chrX=$(read_yaml ${config_file} "gnomad_vcf_chrX") && \
-    bash ${SCRIPT_DIR}/annotation_vcf.sh \
-    anno_agg_gnomAD_data \
-    ${CACHEDIR}/clinvar.${ucsc_assembly_version}.vep.vcf.gz \
-    ${threads} \
-    ${assembly} \
-    ${gnomad_vcf_chrX} && \
-    update_yaml ${config_file} "clinvar_vcf" "${CACHEDIR}/clinvar.${ucsc_assembly_version}.vep.vcf.gz"
+    local gnomad_vcf_chrX
+    gnomad_vcf_chrX=$(read_yaml "$config_file" "gnomad_vcf_chrX")
+    PRIVA_CLINVAR_RECOVERY_CONFIG="$config_file" \
+        bash "${SCRIPT_DIR}/annotation_vcf.sh" anno_agg_gnomAD_data \
+            "$clinvar_vcf" "$threads" "$assembly" "$gnomad_vcf_chrX" || return 1
+    python "$contract" "$clinvar_vcf" --stage complete || return 1
+    python "$refresh" check-header --config "$config_file" --source-root "$BASE_DIR" > /dev/null || return 1
+    update_yaml "$config_file" "clinvar_vcf" "$clinvar_vcf"
 }
 
 
 function ClinVar_Gene_stat () {
     local config_file=${1}
+    local configured_stat
+    configured_stat=$(yaml_value_or_default "${config_file}" "clinvar_gene_stat" "clinvar_2star_stats.pkl.gz")
+    local clinvar_stat
+    case "$configured_stat" in
+        /*|*/*) clinvar_stat=$configured_stat ;;
+        *) clinvar_stat="${DATA_DIR}/ClinVar/${configured_stat}" ;;
+    esac
+    # Low-level selected-file reuse. ClinVar_install owns date-triggered refresh
+    # and never replaces the original bundled artifact.
+    python "${SCRIPT_DIR}/installer_prerequisites.py" "${config_file}" \
+        --source-root "${BASE_DIR}" --stage clinvar || return 1
+    update_or_append_yaml "${config_file}" "clinvar_gene_stat" "${clinvar_stat}" || return 1
+    log "Reusing selected ClinVar gene statistics: ${clinvar_stat}"
+}
 
-    local clinvar_stat=${DATA_DIR}/ClinVar/$(basename $(read_yaml ${config_file} "clinvar_gene_stat"))
-    local clinvar_vcf=$(read_yaml ${config_file} "clinvar_vcf")
-    local threads=$(read_yaml ${config_file} "threads")
 
-    [[ -f ${clinvar_stat} ]] && \
-    log "The clinvar stat file ${clinvar_stat} is already generated. Skip this step" && return 0
-
-    local clinvar_stat=${DATA_DIR}/ClinVar/clinvar_2star_stats.pkl.gz
-    local clinvar_stat_py=${SCRIPT_DIR}/clinvar_stat_variants.py
-
-    check_path ${clinvar_vcf} || \
-    { log "The clinvar vcf file ${clinvar_vcf} is not found, please check the file"; return 1; }
-
-    log "Running command: python ${clinvar_stat_py} -v ${clinvar_vcf} -o ${clinvar_stat} -t ${threads}"
-    python ${clinvar_stat_py} \
-    -v ${clinvar_vcf} \
-    -o ${clinvar_stat} \
-    -t ${threads} && \
-    update_yaml ${config_file} "clinvar_gene_stat" "${clinvar_stat}"
+function ClinVar_Gene_stat_regenerate () {
+    local config_file=${1:?Supply CONFIG SUMMARY MANE OUTPUT for a separate candidate}
+    local clinvar_summary=${2:?Supply the pinned ClinVar variant_summary table}
+    local mane_summary=${3:?Supply the pinned MANE summary table}
+    local output_candidate=${4:?Supply a separate candidate output ending in .pkl.gz}
+    local clinvar_vcf threads configured_stat baseline
+    clinvar_vcf=$(read_yaml "$config_file" "clinvar_vcf")
+    threads=$(read_yaml "$config_file" "threads")
+    configured_stat=$(yaml_value_or_default "$config_file" "clinvar_gene_stat" "clinvar_2star_stats.pkl.gz")
+    baseline=${DATA_DIR}/ClinVar/$(basename "$configured_stat")
+    [[ "$output_candidate" == *.pkl.gz ]] || { log "ERROR: Candidate output must end in .pkl.gz"; return 1; }
+    if [[ "$(realpath -m "$output_candidate")" == "$(realpath -m "$baseline")" ]] || \
+       { [[ "$configured_stat" == /* ]] && [[ "$(realpath -m "$output_candidate")" == "$(realpath -m "$configured_stat")" ]]; } || \
+       [[ "$(realpath -m "$output_candidate")" == "$(realpath -m "${DATA_DIR}/ClinVar/clinvar_2star_stats.pkl.gz")" ]] || \
+       { [[ -e "$output_candidate" && -e "$baseline" ]] && [[ "$output_candidate" -ef "$baseline" ]]; }; then
+        log "ERROR: Explicit regeneration requires an output separate from the bundled/configured gene-statistics baseline"
+        return 1
+    fi
+    [[ -s "$clinvar_summary" && -s "$mane_summary" ]] || { log "ERROR: Explicit ClinVar summary and MANE inputs must both exist"; return 1; }
+    python "${SCRIPT_DIR}/clinvar_annotation_contract.py" "$clinvar_vcf" --stage gene || return 1
+    mkdir -p "$(dirname "$output_candidate")" || return 1
+    local temporary=${output_candidate%.gz}.partial.$(randomID).gz
+    python "${SCRIPT_DIR}/clinvar_stat_variants.py" \
+        --clinvar_anno_vcf "$clinvar_vcf" --output_pickle "$temporary" --threads "$threads" \
+        --clinvar-summary "$clinvar_summary" --mane-summary "$mane_summary" || return 1
+    python "${SCRIPT_DIR}/clinvar_annotation_contract.py" "$temporary" --cache-kind gene || return 1
+    mv -- "$temporary" "$output_candidate" || return 1
+    log "Generated separate candidate ClinVar gene statistics: $output_candidate"
 }
 
 
 function ClinVar_AA_stat () {
     local config_file=${1}
-
-    local clinvar_aa_stat=$(read_yaml ${config_file} "clinvar_aa_stat")
-    local clinvar_splice_stat=$(read_yaml ${config_file} "clinvar_splice_stat")
-    local clinvar_vcf=$(read_yaml ${config_file} "clinvar_vcf")
-    local threads=$(read_yaml ${config_file} "threads")
-    
-    [[ -f ${clinvar_aa_stat} ]] && \
-    [[ ${clinvar_aa_stat} -nt ${clinvar_vcf} ]] && \
-    [[ -f ${clinvar_splice_stat} ]] && \
-    [[ ${clinvar_splice_stat} -nt ${clinvar_vcf} ]] && \
-    log "The clinvar AA stat file ${clinvar_aa_stat} and splice stat file ${clinvar_splice_stat} are already generated. Skip this step" && \
-    return 0 || \
-    log "The clinvar AA stat file ${clinvar_aa_stat} and/or splice stat file ${clinvar_splice_stat} are not ready, start generating them"
-
-    local clinvar_aa_stat_py=${SCRIPT_DIR}/stat_aachange_clinvar.py
-
-    log "Running command: python ${clinvar_aa_stat_py} ${clinvar_vcf} ${clinvar_vcf/.vcf*/.aa_change.stats.pkl}"
-    python ${clinvar_aa_stat_py} \
-    ${clinvar_vcf} \
-    ${clinvar_vcf/.vcf*/.aa_change.stats.pkl} \
-    ${clinvar_vcf/.vcf*/.splice_change.stats.pkl} \
-    ${threads} && \
-    update_yaml ${config_file} "clinvar_aa_stat" "${clinvar_vcf/.vcf*/.aa_change.stats.pkl}" && \
-    update_yaml ${config_file} "clinvar_splice_stat" "${clinvar_vcf/.vcf*/.splice_change.stats.pkl}"
+    local clinvar_aa_stat clinvar_splice_stat clinvar_vcf threads
+    local contract=${SCRIPT_DIR}/clinvar_annotation_contract.py
+    clinvar_aa_stat=$(read_yaml "$config_file" "clinvar_aa_stat")
+    clinvar_splice_stat=$(read_yaml "$config_file" "clinvar_splice_stat")
+    clinvar_vcf=$(read_yaml "$config_file" "clinvar_vcf")
+    threads=$(read_yaml "$config_file" "threads")
+    python "$contract" "$clinvar_vcf" --stage aa || return 1
+    local receipt=${clinvar_aa_stat}.pair.ready.json
+    if [[ -s "$clinvar_aa_stat" && "$clinvar_aa_stat" -nt "$clinvar_vcf" && \
+          -s "$clinvar_splice_stat" && "$clinvar_splice_stat" -nt "$clinvar_vcf" ]] && \
+       python "$contract" "$clinvar_aa_stat" --cache-kind aa && \
+       python "$contract" "$clinvar_splice_stat" --cache-kind splice && \
+       python "$contract" pair-check --vcf "$clinvar_vcf" --config "$config_file" \
+           --producer "${SCRIPT_DIR}/stat_aachange_clinvar.py" \
+           --aa "$clinvar_aa_stat" --splice "$clinvar_splice_stat" --receipt "$receipt"; then
+        log "Reusing validated ClinVar AA and splice statistics"
+        return 0
+    fi
+    # Preserve configured managed destinations while keeping the original
+    # paired builder and validation order. Publish neither result on failure.
+    local aa splice
+    aa=$(yaml_value_or_default "$config_file" clinvar_aa_stat "${clinvar_vcf/.vcf*/.aa_change.stats.pkl}") || return 1
+    splice=$(yaml_value_or_default "$config_file" clinvar_splice_stat "${clinvar_vcf/.vcf*/.splice_change.stats.pkl}") || return 1
+    [[ $aa != "$splice" && $aa != "$clinvar_vcf" && $splice != "$clinvar_vcf" ]] || {
+        log "ERROR: ClinVar AA/splice outputs must be distinct from each other and the input VCF."
+        return 1
+    }
+    mkdir -p -- "$(dirname -- "$aa")" "$(dirname -- "$splice")" || return 1
+    local tag=$(randomID)
+    local temporary_aa=${aa}.partial.${tag}
+    local temporary_splice=${splice}.partial.${tag}
+    receipt=${aa}.pair.ready.json
+    local captured=${temporary_aa}.inputs.json
+    python "$contract" pair-capture --vcf "$clinvar_vcf" --config "$config_file" \
+        --producer "${SCRIPT_DIR}/stat_aachange_clinvar.py" \
+        --aa "$aa" --splice "$splice" --receipt "$receipt" --captured "$captured" || return 1
+    python "${SCRIPT_DIR}/stat_aachange_clinvar.py" "$clinvar_vcf" \
+        "$temporary_aa" "$temporary_splice" "$threads" || return 1
+    python "$contract" "$temporary_aa" --cache-kind aa || return 1
+    python "$contract" "$temporary_splice" --cache-kind splice || return 1
+    # A paired completion is published only after both moves and YAML writes.
+    # Failed builders retain the previous files; failed publication never leaves
+    # an old ready association eligible for reuse.
+    rm -f -- "$receipt" || return 1
+    mv -- "$temporary_aa" "$aa" || return 1
+    mv -- "$temporary_splice" "$splice" || return 1
+    update_yaml "$config_file" "clinvar_aa_stat" "$aa" || return 1
+    update_yaml "$config_file" "clinvar_splice_stat" "$splice" || return 1
+    python "$contract" pair-complete --vcf "$clinvar_vcf" --config "$config_file" \
+        --producer "${SCRIPT_DIR}/stat_aachange_clinvar.py" \
+        --aa "$aa" --splice "$splice" --receipt "$receipt" --captured "$captured" || return 1
+    rm -f -- "$captured"
 }
-
 
 
 function ClinVar_patho_AF_stat () {
     local config_file=${1}
-    local clinvar_vcf=$(read_yaml ${config_file} "clinvar_vcf")
-    local threads=$(read_yaml ${config_file} "threads")
-    local assembly=$(read_yaml ${config_file} "assembly")
-    local gene_pickle=$(read_yaml ${config_file} "clinvar_patho_af_stat")
-    local exon_pickle=$(read_yaml ${config_file} "clinvar_patho_exon_af_stat")
-
-    python ${SCRIPT_DIR}/stat_gene_patho_afs.py \
-    ${clinvar_vcf} \
-    ${clinvar_vcf/.vcf*/.patho_af_stat.pkl} \
-    ${threads} && \
-    update_yaml ${config_file} "clinvar_patho_af_stat" "${clinvar_vcf/.vcf*/.patho_af_stat.pkl}" && \
-    python ${SCRIPT_DIR}/stat_exon_patho_afs.py \
-    --vcf_path ${clinvar_vcf} \
-    --output ${clinvar_vcf/.vcf*/.patho_exon_af_stat.pkl} \
-    --threads ${threads} && \
-    update_yaml ${config_file} "clinvar_patho_exon_af_stat" "${clinvar_vcf/.vcf*/.patho_exon_af_stat.pkl}"
+    local clinvar_vcf threads
+    local contract=${SCRIPT_DIR}/clinvar_annotation_contract.py
+    clinvar_vcf=$(read_yaml "$config_file" "clinvar_vcf")
+    threads=$(read_yaml "$config_file" "threads")
+    local gene_pickle exon_pickle
+    gene_pickle=$(yaml_value_or_default "$config_file" clinvar_patho_af_stat "${clinvar_vcf/.vcf*/.patho_af_stat.pkl}")
+    exon_pickle=$(yaml_value_or_default "$config_file" clinvar_patho_exon_af_stat "${clinvar_vcf/.vcf*/.patho_exon_af_stat.pkl}")
+    # 2026-10-23 CDT: reject AF output aliases before mkdir or scientific writes.
+    python "$contract" af-paths-check --vcf "$clinvar_vcf" --config "$config_file" \
+        --gene "$gene_pickle" --exon "$exon_pickle" || return 1
+    python "$contract" "$clinvar_vcf" --stage af || return 1
+    mkdir -p -- "$(dirname -- "$gene_pickle")" "$(dirname -- "$exon_pickle")" || return 1
+    local tag=$(randomID)
+    local temporary_gene=${gene_pickle}.partial.${tag}
+    local temporary_exon=${exon_pickle}.partial.${tag}
+    python "${SCRIPT_DIR}/stat_gene_patho_afs.py" "$clinvar_vcf" "$temporary_gene" "$threads" || return 1
+    python "$contract" "$temporary_gene" --cache-kind gene-af || return 1
+    python "${SCRIPT_DIR}/stat_exon_patho_afs.py" --vcf_path "$clinvar_vcf" \
+        --output "$temporary_exon" --threads "$threads" || return 1
+    python "$contract" "$temporary_exon" --cache-kind exon-af || return 1
+    mv -- "$temporary_gene" "$gene_pickle" || return 1
+    mv -- "$temporary_exon" "$exon_pickle" || return 1
+    update_yaml "$config_file" "clinvar_patho_af_stat" "$gene_pickle" || return 1
+    update_yaml "$config_file" "clinvar_patho_exon_af_stat" "$exon_pickle"
 }
 
 

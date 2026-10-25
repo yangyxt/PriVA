@@ -166,7 +166,9 @@ def interpret_utr_annotation(row: pd.Series,
     for consequence, annotation in zip(consequences, annotations):
         is_lof, frameshift, length_changing, span_intol_domain = False, False, False, False
         # Updated consequence values based on UTRAnnotator documentation
-        if '5_prime_UTR_premature_start_codon_gain_variant' in consequences:
+        # 2026-10-24 CT: dispatch each paired effect independently; another
+        # effect's start-gain label must not reinterpret this effect's details.
+        if '5_prime_UTR_premature_start_codon_gain_variant' in consequence:
             is_lof, frameshift, length_changing = interpret_uAUG_gained(annotation)
         elif '5_prime_UTR_uORF_stop_codon_loss_variant' in consequence:
             is_lof, frameshift, length_changing = interpret_uSTOP_lost(annotation)

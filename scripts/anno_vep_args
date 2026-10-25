@@ -18,3 +18,4 @@ parser.add_argument('--loftee_conservation_file', help='LoFTEE conservation file
 parser.add_argument('--gerp_bigwig', help='LoFTEE gerp bigwig file')
 parser.add_argument('--human_ancestor_fasta', help='LoFTEE human ancestor fasta file')
 parser.add_argument('--loftee_repo', help='LoFTEE repository')
+parser.add_argument('--cadd-profile', dest='cadd_profile', help='Runtime-only qualified native CADD selection profile; never used by installer cache builds')

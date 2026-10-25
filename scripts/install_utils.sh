@@ -169,53 +169,221 @@ function priva_configure_portable_paths() {
 }
 
 
-function conda_install_vep() {
-    local env_yaml=${1}
-
-    # Extract the env name from the env.yaml file
-    local env_name=$(head -1 ${env_yaml} | awk -F ': ' '{print $2;}')
-    log "The environment name to-be setup according to the ${env_yaml} file is ${env_name}"
-    [[ -z ${env_name} ]] && { log "Failed to extract the env name from the ${env_yaml} file"; return 1; }
-
-    # Test if mamba is available
-    if ! command -v mamba &> /dev/null; then
-        log "mamba is not installed, please install mamba first"
+function priva_installed_vep_release() {
+    local help release
+    help=$(vep --help 2>&1) || {
+        log "ERROR: Installed VEP is not runnable: $help"
         return 1
-    fi
+    }
+    release=$(awk '/ensembl-vep[[:space:]]/ {print $NF; exit}' <<< "$help")
+    release=${release%%.*}
+    [[ $release =~ ^[1-9][0-9]*$ ]] || {
+        log "ERROR: Could not identify the installed VEP release."
+        return 1
+    }
+    printf '%s\n' "$release"
+}
 
-    # Before do anything, we can check whether the env_name is already installed and check several key packages in the env if already installed
-    if [[ $(mamba env list | grep ${env_name}) =~ ${env_name} ]]; then
-        log "The environment ${env_name} is already installed"
-        local skip_env_creation=1
+
+function priva_verify_vep_release() {
+    local requested=$1 tool executable resolved vep_dir installer_dir actual api installer
+    [[ $requested =~ ^[1-9][0-9]*$ ]] || {
+        log "ERROR: VEP release must be a numeric major release."
+        return 2
+    }
+    for tool in vep vep_install perl; do
+        executable=$(type -P "$tool")
+        [[ -n ${CONDA_PREFIX:-} && $executable == "$CONDA_PREFIX/"* ]] || {
+            log "ERROR: $tool must come from the activated PriVA environment."
+            return 1
+        }
+        resolved=$(realpath "$executable") || return 1
+        [[ $resolved == "$CONDA_PREFIX/"* ]] || {
+            log "ERROR: $tool resolves outside the activated PriVA environment."
+            return 1
+        }
+        case $tool in
+            vep) vep_dir=${resolved%/*} ;;
+            vep_install) installer_dir=${resolved%/*} ;;
+        esac
+    done
+    actual=$(priva_installed_vep_release) || return 1
+    # Match VEP's own Perl search paths; inherited PERL5LIB must not make an
+    # older API or install helper appear compatible merely because PATH changed.
+    api=$(perl -I"$vep_dir/modules" -I"$vep_dir" -MBio::EnsEMBL::ApiVersion \
+        -e 'print Bio::EnsEMBL::ApiVersion::software_version()') || {
+        log "ERROR: Cannot load the Ensembl API for requested VEP $requested."
+        return 1
+    }
+    installer=$(perl -I"$installer_dir/modules" -MBio::EnsEMBL::VEP::Utils=get_version_data \
+        -e 'my $v = get_version_data($ARGV[0]."/.version")->{"ensembl-vep"}{"release"}; $v =~ s{^release/}{}; print $v' \
+        "$installer_dir") || {
+        log "ERROR: Cannot identify the VEP install helper release."
+        return 1
+    }
+    [[ $actual == "$requested" && $api == "$requested" && $installer == "$requested" ]] || {
+        log "ERROR: Requested VEP $requested; executable=$actual, API=$api, installer=$installer. Repair the environment; the requested release will not be overwritten."
+        return 1
+    }
+}
+
+
+function conda_install_vep() {
+    # Retain this public function name for existing callers of the installer.
+    local -r env_yaml="${BASE_DIR}/acmg_conda_rough.yml"
+    local -r env_name=priva_acmg
+    local environments packages tool executable requested="" current="" selected_yaml=$env_yaml
+    local temporary_yaml="" create_status=0
+    [[ $# -le 1 && ( $# -eq 0 || ( ${1:-} != -* && -r ${1:-} ) ) ]] || {
+        log "ERROR: Use conda_install_vep [CONFIG]; it uses PriVA's bundled environment."
+        return 2
+    }
+    [[ -r $env_yaml ]] || { log "ERROR: Environment file not readable: $env_yaml"; return 1; }
+    [[ $# -eq 0 ]] || requested=$(priva_requested_vep_release "$1") || return 2
+
+    # No-argument callers retain the bundled environment's legacy behavior.
+    # CONFIG supplies only a major release; it cannot execute shell or YAML code.
+    priva_find_env_manager || return 1
+    environments=$("$PRIVA_ENV_MANAGER" env list) || return 1
+    if ! awk -v name="$env_name" '$1 == name { found = 1 } END { exit !found }' <<< "$environments"; then
+        if [[ -n $requested ]]; then
+            temporary_yaml=$(mktemp "${TMPDIR:-/tmp}/priva-vep-env.XXXXXX.yml") || return 1
+            if ! awk -v release="$requested" '
+                /^[[:space:]]*-[[:space:]]*ensembl-vep([[:space:]<>=!].*)?$/ {
+                    sub(/ensembl-vep.*/, "ensembl-vep=" release ".*"); found++
+                }
+                { print }
+                END { exit found != 1 }
+            ' "$env_yaml" > "$temporary_yaml"; then
+                rm -f -- "$temporary_yaml"
+                log "ERROR: Expected one ensembl-vep dependency in $env_yaml."
+                return 1
+            fi
+            selected_yaml=$temporary_yaml
+        fi
+        log "Creating environment $env_name from $env_yaml${requested:+ for VEP $requested}"
+        "$PRIVA_ENV_MANAGER" env create --name "$env_name" --file "$selected_yaml" --yes || create_status=$?
+        [[ -z $temporary_yaml ]] || rm -f -- "$temporary_yaml"
+        [[ $create_status -eq 0 ]] || {
+            log "ERROR: Could not create $env_name${requested:+ with VEP $requested}; the requested release may be unavailable or incompatible with the bundled dependencies."
+            return 1
+        }
     else
-        log "The environment ${env_name} is not installed"
-        local skip_env_creation=0
+        log "Reusing existing environment $env_name"
     fi
+    priva_activate_env "$env_name" || return 1
 
-    # Test if several key packages are installed
-    if [[ ${skip_env_creation} -eq 1 ]]; then
-        mamba_activate ${env_name}
-        # The to be checked packages are: ensembl-vep, perl-bio-procedural, perl-bioperl
-        if [[ $(mamba list | grep ensembl-vep) =~ ensembl-vep ]] && \
-           [[ $(mamba list | grep perl-bio-procedural) =~ perl-bio-procedural ]] && \
-           [[ $(mamba list | grep perl-bioperl) =~ perl-bioperl ]] && \
-           [[ $(which vep) =~ ${CONDA_PREFIX} ]]; then
-            log "The key packages are already installed in the environment ${env_name}"
-        else
-            log "The key packages are not installed in the environment ${env_name}"
+    # yq and samtools must be usable before main_install reads configuration
+    # or prepares the reference; do not accidentally use the parent environment.
+    for tool in yq samtools vep python; do
+        executable=$(type -P "${tool}")
+        if [[ -z ${executable} || ${executable} != "${CONDA_PREFIX}/"* ]]; then
+            log "ERROR: ${env_name} is missing its own ${tool}; update it from ${env_yaml}."
             return 1
         fi
+    done
+    packages=$("${PRIVA_ENV_MANAGER}" list --name "${env_name}") || return 1
+    for tool in ensembl-vep perl-bio-procedural perl-bioperl; do
+        if ! awk -v name="${tool}" '$1 == name { found = 1 } END { exit !found }' <<< "${packages}"; then
+            log "ERROR: ${env_name} is missing package ${tool}; update it from ${env_yaml}."
+            return 1
+        fi
+    done
+    # 2026-10-23 CT: these imports are unconditional in PriVA's domain and
+    # ClinVar readers. Detect missing/broken modules before costly annotation,
+    # including when an older environment is reused. Do not upgrade its
+    # scientific packages implicitly; fresh environments declare both modules.
+    # Isolated mode excludes user-site/PYTHONPATH substitutes for env packages.
+    if ! "$CONDA_PREFIX/bin/python" -I -c 'import diptest, pyarrow'; then
+        log "ERROR: ${env_name} cannot import required diptest/pyarrow; repair it from ${env_yaml} before retrying. No resource annotation was started."
+        return 1
     fi
+    if [[ -n $requested ]]; then
+        # Now that yq is available, reject an ambiguous/malformed full document
+        # before changing an already installed environment.
+        local parsed_requested
+        parsed_requested=$(yq '.vep_installed_version' "$1") || {
+            log "ERROR: Could not parse the installer configuration; the existing environment was not changed."
+            return 2
+        }
+        [[ $parsed_requested == "$requested" || $parsed_requested == "\"$requested\"" ]] || {
+            log "ERROR: YAML vep_installed_version does not match its top-level numeric scalar."
+            return 2
+        }
+        current=$(priva_installed_vep_release) || return 1
+        if [[ $current != "$requested" ]]; then
+            log "Changing $env_name VEP release $current to requested release $requested."
+            local constraints install_status=0
+            constraints=$(mktemp "${TMPDIR:-/tmp}/priva-vep-pins.XXXXXX") || return 1
+            "$PRIVA_ENV_MANAGER" list --prefix "$CONDA_PREFIX" --json > "$constraints" || {
+                rm -f -- "$constraints"
+                return 1
+            }
+            # Exact name/version/build constraints keep every other Conda
+            # package fixed. Do not freeze installed packages as well:
+            # Micromamba can then freeze the targeted VEP package itself.
+            if ! python - "$constraints" <<'PRIVA_VEP_PINS_PY'
+import json
+from pathlib import Path
+import re
+import sys
 
-    # You need to separately install the ensembl-vep and perl-bio-procedural packages
-    # because Bio::Perl module is migrated from perl-bioperl to perl-bio-procedural since perl-bioperl 1.7.3
-    # Or you can directly install the env from our env.yaml file
-    if [[ ${skip_env_creation} -eq 0 ]]; then
-        mamba env create -f ${env_yaml} && \
-        mamba_activate ${env_name} && \
-        [[ $(which vep) =~ ${CONDA_PREFIX} ]] && log "The VEP binaries are successfully linked to the conda env ${env_name}" || \
-        { log "The VEP binaries are not linked to the conda env ${env_name}, please run the function vep_bin_check manually"; return 1; }
+path = Path(sys.argv[1])
+try:
+    records = json.loads(path.read_text())
+    if isinstance(records, dict):
+        records = records.get("packages")
+    if not isinstance(records, list) or not records:
+        raise ValueError("package list must be a nonempty JSON array")
+    pins = {}
+    for record in records:
+        if not isinstance(record, dict):
+            raise ValueError("installed package records must be JSON objects")
+        name = record["name"]
+        build = record.get("build_string") or record.get("build")
+        if (record.get("channel") == "pypi" or record.get("platform") == "pypi"
+                or build == "pypi_0" or name == "ensembl-vep"):
+            continue
+        version = record["version"]
+        if not all(isinstance(value, str) and re.fullmatch(r"[A-Za-z0-9_.+!-]+", value)
+                   for value in (name, version, build)):
+            raise ValueError(f"cannot pin installed package {name}")
+        if name in pins:
+            raise ValueError(f"duplicate installed package {name}")
+        pins[name] = f"{name}={version}={build}"
+    if not pins:
+        raise ValueError("no installed Conda dependencies could be pinned")
+    path.write_text("\n".join(pins[name] for name in sorted(pins)) + "\n")
+except (OSError, ValueError, KeyError, TypeError) as exc:
+    print(f"ERROR: Cannot preserve installed Conda packages while changing VEP: {exc}", file=sys.stderr)
+    sys.exit(1)
+PRIVA_VEP_PINS_PY
+            then
+                rm -f -- "$constraints"
+                return 1
+            fi
+            local config_json
+            config_json=$(yq '.' "$1") || { rm -f -- "$constraints"; return 1; }
+            python "$SCRIPT_DIR/vep_plugins_release.py" transition \
+                --transition-file "$CONDA_PREFIX/.priva-vep-release-transition.json" \
+                --from-release "$current" --release "$requested" --config-json "$config_json" || {
+                rm -f -- "$constraints"
+                return 1
+            }
+            "$PRIVA_ENV_MANAGER" install --name "$env_name" --yes \
+                --file "$constraints" --channel conda-forge --channel bioconda \
+                "ensembl-vep=$requested.*" || install_status=$?
+            rm -f -- "$constraints"
+            [[ $install_status -eq 0 ]] || {
+                log "ERROR: VEP $requested is unavailable or incompatible with the exactly pinned installed dependencies; the requested release will not be overwritten."
+                return 1
+            }
+            priva_activate_env "$env_name" || return 1
+        fi
+        priva_verify_vep_release "$requested" || return 1
     fi
+    PRIVA_INSTALL_ENV_NAME=$env_name
+    log "Environment $env_name is ready; yq is available before configuration parsing."
 }
 
 
@@ -268,6 +436,23 @@ PRIVA_CACHE_PY
 }
 
 
+function priva_validate_vep_cache() {
+    local directory=$1 assembly=$2 expected
+    for expected in info.txt chr_synonyms.txt 1/all_vars.gz; do
+        [[ -s $directory/$expected ]] || return 1
+    done
+    [[ -s $directory/1/all_vars.gz.csi || -s $directory/1/all_vars.gz.tbi ]] || return 1
+    # Official cache info has assembly/species, but no release field. The
+    # requested release is selected by the containing release_assembly path.
+    awk -v assembly="$assembly" '
+        $1 == "assembly" { correct_assembly = ($2 == assembly) }
+        $1 == "species" { correct_species = ($2 == "homo_sapiens") }
+        $1 == "var_type" { converted = ($2 == "tabix") }
+        END { exit !(correct_assembly && correct_species && converted) }
+    ' "$directory/info.txt"
+}
+
+
 function vep_cache_api_install() {
     local VEP_CACHEDIR=""
     local VEP_ASSEMBLY=""
@@ -277,7 +462,7 @@ function vep_cache_api_install() {
     local VEP_PLUGINSCACHEDIR=""
 
     local TEMP
-    TEMP=$(getopt -o hc:y:r:p:v: --long help,VEP_CACHEDIR:,VEP_ASSEMBLY:,VEP_PLUGINSDIR:,VEP_PLUGINSCACHEDIR:,VEP_PLUGINS:,VEP_VERSION: -- "$@")
+    TEMP=$(getopt -o hc:y:r:p:v:g: --long help,VEP_CACHEDIR:,VEP_ASSEMBLY:,VEP_PLUGINSDIR:,VEP_PLUGINSCACHEDIR:,VEP_PLUGINS:,VEP_VERSION: -- "$@")
 
     if [[ $? != 0 ]]; then return 1; fi
 
@@ -333,58 +518,90 @@ function vep_cache_api_install() {
 
     # The VEP_DESTDIR is the directory used to access installed PERL dependencies. Usually you need to specify the current conda env perl installation location for site-packages
     [[ $CONDA_PREFIX =~ envs ]] && \
-    log "currently in a conda env $(basename $CONDA_PREFIX)" || \
+    log "currently in a conda env $(basename "$CONDA_PREFIX")" || \
     { log "Not encouraged to install the VEP dependencies directly in the conda base env. So quit with error."; return 1; }
 
     [[ ${VEP_ASSEMBLY} =~ "hg19" ]] && VEP_ASSEMBLY="GRCh37"
     [[ ${VEP_ASSEMBLY} =~ "hg38" ]] && VEP_ASSEMBLY="GRCh38"
 
-    # Test the PERL5LIB value and PATH value to see if they already include the VEP_DESTDIR and VEP_PLUGINSDIR
-    # If yes for both, then we can directly skip the follow up installation of VEP API
-    local VEP_DESTDIR=$(perl -e 'print join("\n", @INC);' | grep site_perl | head -1)
-    [[ $(echo $PERL5LIB) =~ "${VEP_DESTDIR}" ]] && \
-    [[ $(echo $PATH) =~ "${VEP_DESTDIR}" ]] && \
-    [[ $(echo $PERL5LIB}) =~ "${VEP_PLUGINSDIR}" ]] && \
-    [[ -d ${VEP_CACHEDIR}/homo_sapiens_merged/${VEP_VERSION}_${VEP_ASSEMBLY} ]] && \
-    [[ -d ${VEP_CACHEDIR}/homo_sapiens_merged/${VEP_VERSION}_${VEP_ASSEMBLY}/1 ]] && \
-    [[ -f ${VEP_CACHEDIR}/homo_sapiens_merged/${VEP_VERSION}_${VEP_ASSEMBLY}/1/all_vars.gz ]] && \
-    [[ -f ${VEP_CACHEDIR}/homo_sapiens_merged/${VEP_VERSION}_${VEP_ASSEMBLY}/chr_synonyms.txt ]] && \
-    [[ -f ${VEP_PLUGINSDIR}/SpliceVault.pm ]] && \
-    [[ -f ${VEP_PLUGINSDIR}/SpliceAI.pm ]] && \
-    [[ -f ${VEP_PLUGINSDIR}/UTRAnnotator.pm ]] && \
-    [[ -f ${VEP_PLUGINSDIR}/AlphaMissense.pm ]] && \
-    [[ -f ${VEP_PLUGINSDIR}/GO.pm ]] && \
-    [[ -f ${VEP_PLUGINSDIR}/Phenotypes.pm ]] && \
-    [[ -f ${VEP_PLUGINSDIR}/Conservation.pm ]] && \
-    [[ -f ${VEP_PLUGINSDIR}/LOEUF.pm ]] && \
-    [[ -f ${VEP_PLUGINSDIR}/SameCodon.pm ]] && \
-    [[ -f ${VEP_PLUGINSDIR}/NMD.pm ]] && \
-    [[ -f ${VEP_PLUGINSDIR}/PrimateAI.pm ]] && \
-    [[ -f ${VEP_PLUGINSDIR}/MaveDB.pm ]] && \
-    { log "The PERL5LIB value and PATH value already include ${VEP_DESTDIR} and ${VEP_PLUGINSDIR}, indicating the following installation process has already been succesfully performed. Skip the function for now."; return 0; }
+    priva_verify_vep_release "$VEP_VERSION" || return 1
+    [[ $VEP_ASSEMBLY == GRCh37 || $VEP_ASSEMBLY == GRCh38 ]] || {
+        log "ERROR: Select hg19/GRCh37 or hg38/GRCh38 for the VEP cache."
+        return 2
+    }
+    [[ -d $VEP_CACHEDIR && -d $VEP_PLUGINSDIR ]] || {
+        log "ERROR: VEP cache and plugin directories must exist before installation."
+        return 1
+    }
+    local VEP_DESTDIR conda_env_name
+    VEP_DESTDIR=$(perl -e 'print join("\n", @INC);' | grep site_perl | head -1)
+    conda_env_name=$(basename "$CONDA_PREFIX")
+    [[ -n $VEP_DESTDIR && $VEP_DESTDIR == "$CONDA_PREFIX/"* ]] || {
+        log "ERROR: VEP dependencies must use the activated environment's Perl module directory."
+        return 1
+    }
 
-    local conda_env_name=$(basename $CONDA_PREFIX)
-    [[ ${VEP_DESTDIR} =~ ${conda_env_name} ]] && log "The dest dir is set to the directory (${VEP_DESTDIR}) where perl modules are installed by conda" || \
-    { log "Since the function is designed to perform follow up installation of VEP upon the installation of VEP dependencies via conda, we only accept installing VEP API at the perl module installation location previously used by conda"; return 1; }
-
-    # Construct the command
-    local cmd="vep_install -d ${VEP_DESTDIR} --AUTO acp -s homo_sapiens_merged --NO_HTSLIB --NO_BIOPERL --CONVERT"
-    [[ -n "$VEP_CACHEDIR" ]] && cmd+=" --CACHEDIR $VEP_CACHEDIR"
-    [[ -n "$VEP_ASSEMBLY" ]] && cmd+=" --ASSEMBLY $VEP_ASSEMBLY"
-    [[ -n "$VEP_PLUGINS" ]] && [[ $VEP_PLUGINS != "empty" ]] && cmd+=" --PLUGINS $VEP_PLUGINS,SpliceAI,SpliceVault,UTRAnnotator,AlphaMissense,GO,Phenotypes,Conservation,LOEUF,SameCodon,NMD,PrimateAI,MaveDB" || cmd+=" --PLUGINS SpliceAI,SpliceVault,UTRAnnotator,AlphaMissense,GO,Phenotypes,Conservation,LOEUF,SameCodon,NMD,PrimateAI,MaveDB"
-    [[ -n "$VEP_PLUGINSDIR" ]] && cmd+=" --PLUGINSDIR $VEP_PLUGINSDIR"
-
-    # Execute the command
-    # After executing the command, we need to bind the new PERL5LIB value with the current conda env
-    log "Now we start to install the VEP api and downloading caches (which might take a while to finish). So pls be patient, here is the command we are going to execute: ${cmd}"
-    $cmd && \
-    [[ ! ${PERL5LIB} == *${VEP_DESTDIR}* ]] && conda env config vars set PERL5LIB="$VEP_DESTDIR:$VEP_PLUGINSDIR" || log "The PERL5LIB value is already bound with the current conda env ${CONDA_ENV_NAME}"
-    [[ ! ${PATH} == *${VEP_DESTDIR}* ]] && conda env config vars set PATH="$VEP_DESTDIR:$VEP_DESTDIR/htslib:$PATH" || log "The PATH value is already bound with the current conda env ${CONDA_ENV_NAME}"
-    log "Now we have bound the new PERL5LIB value (adding ${VEP_DESTDIR} and ${VEP_PLUGINSDIR} to the PERL5LIB) with the current conda env ${CONDA_ENV_NAME}" && \
-    log "Now we have bound the new PATH value (adding ${VEP_DESTDIR} to the PATH) with the current conda env ${CONDA_ENV_NAME}" && \
-    mamba_deactivate && \
-    mamba_activate ${conda_env_name} || \
-    { log "Failed to install the VEP api and download caches"; return 1; }
+    local required_plugins=SpliceAI,SpliceVault,UTRAnnotator,AlphaMissense,GO,Phenotypes,Conservation,LOEUF,SameCodon,NMD,PrimateAI,MaveDB
+    [[ -n $VEP_PLUGINS && $VEP_PLUGINS != empty ]] && required_plugins="$VEP_PLUGINS,$required_plugins"
+    local receipt_helper="$SCRIPT_DIR/vep_plugins_release.py"
+    local cache_directory="$VEP_CACHEDIR/homo_sapiens_merged/${VEP_VERSION}_$VEP_ASSEMBLY"
+    local automatic="" staging="" status=0
+    # The upstream installer skips any existing cache directory, including
+    # incomplete downloads. Refuse to delete or pretend to repair such a cache.
+    if [[ -e $cache_directory ]]; then
+        priva_validate_vep_cache "$cache_directory" "$VEP_ASSEMBLY" || {
+            log "ERROR: Existing VEP $VEP_VERSION cache is incomplete or mismatched: $cache_directory. Restore the matching manual cache or select another cache directory; no cache was deleted."
+            return 1
+        }
+    else
+        automatic=c
+    fi
+    if ! python "$receipt_helper" check --directory "$VEP_PLUGINSDIR" \
+            --release "$VEP_VERSION" --plugins "$required_plugins" >/dev/null 2>&1; then
+        automatic+=p
+        staging=$(mktemp -d "${VEP_PLUGINSDIR%/}.install-$VEP_VERSION.XXXXXX") || return 1
+    fi
+    if [[ -n $automatic ]]; then
+        # This verified install helper sources official plugins from
+        # VEP_plugins/release/$API_VERSION; CACHE_VERSION selects the cache.
+        local -a cmd=(vep_install -d "$VEP_DESTDIR" --AUTO "$automatic" --NO_UPDATE
+                      --CACHE_VERSION "$VEP_VERSION" -s homo_sapiens_merged
+                      --NO_HTSLIB --NO_BIOPERL --CONVERT
+                      --CACHEDIR "$VEP_CACHEDIR" --ASSEMBLY "$VEP_ASSEMBLY")
+        if [[ -n $staging ]]; then
+            cmd+=(--PLUGINS "$required_plugins" --PLUGINSDIR "$staging"
+                  --PLUGINURL https://raw.githubusercontent.com/Ensembl/VEP_plugins)
+        fi
+        log "Installing VEP $VEP_VERSION cache/plugins for $VEP_ASSEMBLY."
+        "${cmd[@]}" || status=$?
+        if [[ $status -ne 0 ]]; then
+            [[ -z $staging ]] || rm -rf -- "$staging"
+            log "ERROR: Failed to install the VEP cache/plugins for release $VEP_VERSION; verify that the requested release and assembly are available."
+            return 1
+        fi
+    fi
+    priva_validate_vep_cache "$cache_directory" "$VEP_ASSEMBLY" || {
+        [[ -z $staging ]] || rm -rf -- "$staging"
+        log "ERROR: VEP installer exited without required cache files or matching assembly/species: $cache_directory"
+        return 1
+    }
+    if [[ -n $staging ]]; then
+        local -a receipt_args=(install --directory "$VEP_PLUGINSDIR" --release "$VEP_VERSION"
+                               --plugins "$required_plugins" --stage "$staging"
+                               --transition-file "$CONDA_PREFIX/.priva-vep-release-transition.json")
+        python "$receipt_helper" "${receipt_args[@]}" || status=$?
+        rm -rf -- "$staging"
+        [[ $status -eq 0 ]] || return 1
+    fi
+    if [[ ":${PERL5LIB:-}:" != *":${VEP_DESTDIR}:"* || ":${PERL5LIB:-}:" != *":${VEP_PLUGINSDIR}:"* ]]; then
+        priva_env_vars_set PERL5LIB="$VEP_DESTDIR:$VEP_PLUGINSDIR${PERL5LIB:+:$PERL5LIB}" || return 1
+    fi
+    if [[ ":$PATH:" != *":${VEP_DESTDIR}:"* ]]; then
+        priva_env_vars_set PATH="$VEP_DESTDIR:$VEP_DESTDIR/htslib:$PATH" || return 1
+    fi
+    python "$receipt_helper" clear-transition --directory "$VEP_PLUGINSDIR" --release "$VEP_VERSION" \
+        --transition-file "$CONDA_PREFIX/.priva-vep-release-transition.json" || return 1
+    log "VEP $VEP_VERSION cache/plugins validated; environment settings applied to $conda_env_name."
 }
 
 
@@ -397,82 +614,110 @@ function VEP_plugins_install() {
 
 
     [[ $CONDA_PREFIX =~ "envs" ]] && \
-    log "currently in a conda env $(basename $CONDA_PREFIX)" || \
+    log "currently in a conda env $(basename "$CONDA_PREFIX")" || \
     { [[ -z ${conda_env_name} ]] && log "Not encouraged to install the VEP plugins directly in the conda base env. So quit with error." && return 1; }
 
     if [[ -z ${conda_env_name} ]]; then
-        local conda_env_name=$(basename $CONDA_PREFIX)
+        local conda_env_name=$(basename "$CONDA_PREFIX")
     fi
 
     # Install VEP plugins
     # First install UTRAnnotator
     log "The Cache directory to store the requried annotation files for VEP Plugins is ${VEP_PLUGINSCACHEDIR}"
-    UTRAnnotator_install ${config_file} ${VEP_PLUGINSCACHEDIR} || \
+    UTRAnnotator_install "${config_file}" ${VEP_PLUGINSCACHEDIR} || \
     { log "Failed to install UTRAnnotator"; return 1; }
 
     # Then install LOEUF
-    LOEUF_install ${config_file} ${ASSEMBLY_VERSION} || \
+    LOEUF_install "${config_file}" ${ASSEMBLY_VERSION} || \
     { log "Failed to install LOEUF"; return 1; }
 
+    # AlphaMissense_anno consumes Conservation; deploy it before that stage.
+    Conservation_install "${config_file}" "${VEP_PLUGINSCACHEDIR}" "${ASSEMBLY_VERSION}" || \
+    { log "Failed to install Conservation file"; return 1; }
+
     # Then install AlphaMissense
-    AlphaMissense_install ${config_file} ${VEP_PLUGINSCACHEDIR} ${ASSEMBLY_VERSION} ${VEP_PLUGINSDIR} || \
+    AlphaMissense_install "${config_file}" ${VEP_PLUGINSCACHEDIR} ${ASSEMBLY_VERSION} ${VEP_PLUGINSDIR} || \
     { log "Failed to install AlphaMissense"; return 1; }
     # Then annotate the AlphaMissense prescore file to vcf file
-    AlphaMissense_anno ${config_file} || \
+    AlphaMissense_anno "${config_file}" || \
     { log "Failed to convert the AlphaMissense prescore file to vcf file and annotate protein domains to it"; return 1; }
-    AlphaMissense_pick_missense_constrained_segments ${config_file} || \
+    AlphaMissense_pick_missense_constrained_segments "${config_file}" || \
     { log "Failed to pick missense constrained segments from the AlphaMissense prescore file"; return 1; }
 
     # Then install SpliceAI
-    SpliceAI_install ${config_file} ${VEP_PLUGINSCACHEDIR} ${VEP_PLUGINSDIR} || \
+    SpliceAI_install "${config_file}" ${VEP_PLUGINSCACHEDIR} ${VEP_PLUGINSDIR} || \
     { log "Failed to install SpliceAI"; return 1; }
 
     # Followed by SpliceVault
-    SpliceVault_install ${config_file} ${VEP_PLUGINSCACHEDIR} ${SCRIPT_DIR} || \
+    SpliceVault_install "${config_file}" ${VEP_PLUGINSCACHEDIR} ${SCRIPT_DIR} || \
     { log "Failed to install SpliceVault"; return 1; }
 
     # Followed by MaveDB
-    MaveDB_install ${config_file} ${VEP_PLUGINSCACHEDIR} || \
+    MaveDB_install "${config_file}" ${VEP_PLUGINSCACHEDIR} || \
     { log "Failed to install MaveDB"; return 1; }
 
     # Last, install PrimateAI
-    PrimateAI_install ${config_file} ${VEP_PLUGINSCACHEDIR} ${VEP_PLUGINSDIR} || \
+    PrimateAI_install "${config_file}" ${VEP_PLUGINSCACHEDIR} ${VEP_PLUGINSDIR} || \
     { log "Failed to install PrimateAI"; return 1; }
 
 
-    # Install Conservation file if assembly version is hg38
-    log "Now we start to install the conservation file"
-    local conservation_file=$(Conservation_install ${config_file} ${VEP_PLUGINSCACHEDIR} ${ASSEMBLY_VERSION}) || \
-    { log "Failed to install Conservation file"; return 1; }
 }
 
 
 function UTRAnnotator_install() {
     local config_file=${1}
     local PLUGIN_CACHEDIR=${2}
-    local assembly_version=$(read_yaml ${config_file} "assembly")
+    local assembly_version=$(read_yaml "${config_file}" "assembly")
 
-    local utr_annotator_file=$(read_yaml ${config_file} "utr_annotator_file")
-    [[ -f ${utr_annotator_file} ]] && \
+    local default_file
+    case "$assembly_version" in
+        hg19|GRCh37) default_file="${PLUGIN_CACHEDIR}/UTRannotator/uORF_5UTR_GRCh37_PUBLIC.txt" ;;
+        hg38|GRCh38) default_file="${PLUGIN_CACHEDIR}/UTRannotator/uORF_5UTR_GRCh38_PUBLIC.txt" ;;
+        *) log "Not supported assembly version: ${assembly_version}"; return 1 ;;
+    esac
+    local utr_annotator_file=$(read_yaml "${config_file}" "utr_annotator_file")
+    [[ -s ${utr_annotator_file} && -f ${utr_annotator_file} ]] && \
     log "The UTRAnnotator plugin is already downloaded for both hg19 and hg38 assemblies" && return 0
+
+    [[ -z "$utr_annotator_file" || "$utr_annotator_file" == null ||
+       "$(realpath -m "$utr_annotator_file")" == "$(realpath -m "$default_file")" ]] || \
+        { log "The selected UTRAnnotator input is missing or empty: $utr_annotator_file"; return 1; }
+    if [[ -s "$default_file" && -f "$default_file" ]]; then
+        update_yaml "$config_file" utr_annotator_file "$default_file" || return 1
+        return 0
+    fi
+    [[ ! -e "$default_file" ]] || \
+        { log "The UTRAnnotator resource is missing or empty: $default_file"; return 1; }
 
     [[ ! -d ${PLUGIN_CACHEDIR} ]] && { log "The cache directory ${PLUGIN_CACHEDIR} is not found, please check the file"; return 1; }
 
     if [[ ! -d ${PLUGIN_CACHEDIR}/UTRannotator ]] || \
        [[ ! -f ${PLUGIN_CACHEDIR}/UTRannotator/uORF_5UTR_GRCh38_PUBLIC.txt ]] || \
        [[ ! -f ${PLUGIN_CACHEDIR}/UTRannotator/uORF_5UTR_GRCh37_PUBLIC.txt ]]; then
-        cd ${PLUGIN_CACHEDIR} && \
-        git clone https://github.com/Ensembl/UTRannotator && \
-        log "${PLUGIN_CACHEDIR}/UTRannotator/uORF_5UTR_GRCh37_PUBLIC.txt and ${PLUGIN_CACHEDIR}/UTRannotator/uORF_5UTR_GRCh38_PUBLIC.txt are well-downloaded, remember to specify them when using UTRAnnotator"
+        [[ ! -e "${PLUGIN_CACHEDIR}/UTRannotator" && ! -L "${PLUGIN_CACHEDIR}/UTRannotator" ]] || \
+            { log "The selected UTRAnnotator directory is occupied and incomplete: ${PLUGIN_CACHEDIR}/UTRannotator"; return 1; }
+        local clone_stage
+        clone_stage=$(mktemp -d "${PLUGIN_CACHEDIR}/.UTRannotator.clone.XXXXXX") || return 1
+        ( cd "$clone_stage" && git clone https://github.com/Ensembl/UTRannotator ) || \
+            { log "Failed to download the UTRAnnotator resources; retained stage: $clone_stage"; return 1; }
+        [[ -s "$clone_stage/UTRannotator/$(basename "$default_file")" ]] || \
+            { log "The UTRAnnotator resource is missing or empty; retained stage: $clone_stage"; return 1; }
+        mv -T "$clone_stage/UTRannotator" "${PLUGIN_CACHEDIR}/UTRannotator" && rmdir "$clone_stage" && \
+        log "${PLUGIN_CACHEDIR}/UTRannotator/uORF_5UTR_GRCh37_PUBLIC.txt and ${PLUGIN_CACHEDIR}/UTRannotator/uORF_5UTR_GRCh38_PUBLIC.txt are well-downloaded, remember to specify them when using UTRAnnotator" || \
+        { log "Failed to download the UTRAnnotator resources"; return 1; }
         log "A typical command syntax would be: vep -i variations.vcf --plugin UTRAnnotator,file=${PLUGIN_CACHEDIR}/UTRannotator/uORF_starts_ends_GRCh38_PUBLIC.txt"
     else
         log "The UTRannotator plugin is already downloaded for both hg19 and hg38 assemblies"
     fi
 
     if [[ ${assembly_version} =~ "GRCh37" ]] || [[ ${assembly_version} =~ "hg19" ]]; then
-        update_yaml ${config_file} "utr_annotator_file" "${PLUGIN_CACHEDIR}/UTRannotator/uORF_5UTR_GRCh37_PUBLIC.txt"
+        [[ -s ${PLUGIN_CACHEDIR}/UTRannotator/uORF_5UTR_GRCh37_PUBLIC.txt ]] || \
+        { log "The GRCh37 UTRAnnotator resource is missing or empty"; return 1; }
+        update_yaml "${config_file}" "utr_annotator_file" "${PLUGIN_CACHEDIR}/UTRannotator/uORF_5UTR_GRCh37_PUBLIC.txt"
     elif [[ ${assembly_version} =~ "GRCh38" ]] || [[ ${assembly_version} =~ "hg38" ]]; then
-        update_yaml ${config_file} "utr_annotator_file" "${PLUGIN_CACHEDIR}/UTRannotator/uORF_5UTR_GRCh38_PUBLIC.txt"
+        [[ -s ${PLUGIN_CACHEDIR}/UTRannotator/uORF_5UTR_GRCh38_PUBLIC.txt ]] || \
+        { log "The GRCh38 UTRAnnotator resource is missing or empty"; return 1; }
+        update_yaml "${config_file}" "utr_annotator_file" "${PLUGIN_CACHEDIR}/UTRannotator/uORF_5UTR_GRCh38_PUBLIC.txt"
     else
         log "Not supported assembly version: ${assembly_version}"
         return 1
@@ -1365,12 +1610,14 @@ function basic_vep_annotation() {
 
     # If config file is provided, read values from it if not already set
     if [[ -n "${config_file}" ]] && [[ -f "${config_file}" ]]; then
-        [[ -z "${assembly}" ]] && assembly=$(read_yaml ${config_file} "assembly")
-        [[ -z "${ref_genome}" ]] && ref_genome=$(read_yaml ${config_file} "ref_genome")
-        [[ -z "${vep_cache_dir}" ]] && vep_cache_dir=$(read_yaml ${config_file} "vep_cache_dir")
-        [[ -z "${threads}" ]] && threads=$(read_yaml ${config_file} "threads")
-        [[ -z "${vep_plugins_dir}" ]] && vep_plugins_dir=$(read_yaml ${config_file} "vep_plugins_dir")
+        [[ -z "${assembly}" ]] && assembly=$(read_yaml "${config_file}" "assembly")
+        [[ -z "${ref_genome}" ]] && ref_genome=$(read_yaml "${config_file}" "ref_genome")
+        [[ -z "${vep_cache_dir}" ]] && vep_cache_dir=$(read_yaml "${config_file}" "vep_cache_dir")
+        [[ -z "${threads}" ]] && threads=$(read_yaml "${config_file}" "threads")
+        [[ -z "${vep_plugins_dir}" ]] && vep_plugins_dir=$(read_yaml "${config_file}" "vep_plugins_dir")
     fi
+
+    priva_require_legacy_spliceai "${config_file:-${BASE_DIR}/config.yaml}" "${spliceai_snv_prescore}" "${spliceai_indel_prescore}" || return 1
 
     # Validate required parameters
     if [[ -z "${input_vcf}" ]]; then
@@ -2035,104 +2282,63 @@ function ClinGen_deploy() {
 
 # Main installation function
 function pext_install() {
-    # Downloads pext (proportion expressed across transcripts) BigWig files from UCSC
-    # Mean pext file is always downloaded if pext_enabled=true
-    # Tissue-specific files are downloaded if pext_tissues is specified
-    # Files are stored in assembly-specific subdirectories (hg19/ or hg38/)
-    local config_file="$1"
-    
-    # Read config values
-    local pext_enabled=$(read_yaml "$config_file" "pext_enabled")
-    local pext_tissues=$(read_yaml "$config_file" "pext_tissues")
-    local vep_plugins_cachedir=$(read_yaml "$config_file" "vep_plugins_cachedir")
-    local assembly=$(read_yaml "$config_file" "assembly")
-    
-    # Skip if pext not enabled
-    if [[ "$pext_enabled" != "true" ]]; then
-        log "pext annotation disabled (pext_enabled != true), skipping download"
-        return 0
+    local config_file=$1 enabled tissues cache assembly ucsc
+    enabled=$(read_yaml "$config_file" pext_enabled) || return 1
+    [[ "$enabled" == true ]] || { log "pext annotation disabled, skipping download"; return 0; }
+    tissues=$(read_yaml "$config_file" pext_tissues) || return 1
+    cache=$(read_yaml "$config_file" vep_plugins_cachedir) || return 1
+    assembly=$(read_yaml "$config_file" assembly) || return 1
+    case "$assembly" in
+        hg19|GRCh37) ucsc=hg19 ;;
+        hg38|GRCh38) ucsc=hg38 ;;
+        *) log "ERROR: Unsupported assembly for pext: $assembly"; return 1 ;;
+    esac
+    # Validate requests before directory creation, download or config mutation.
+    if [[ -n "$tissues" && "$tissues" != null ]]; then
+        validate_pext_tissues "$tissues" "$ucsc" || return 1
     fi
-    
-    # Validate and normalize assembly name
-    local ucsc_assembly
-    if [[ "$assembly" == "hg19" ]] || [[ "$assembly" == "GRCh37" ]]; then
-        ucsc_assembly="hg19"
-    elif [[ "$assembly" == "hg38" ]] || [[ "$assembly" == "GRCh38" ]]; then
-        ucsc_assembly="hg38"
-    else
-        log "ERROR: Unsupported assembly for pext: $assembly"
-        return 1
+    local base_url mean_filename default_dir mean_bw tissue_dir selected_mean selected_tissues
+    base_url=$(get_pext_base_url "$ucsc") || return 1
+    mean_filename=$(get_pext_mean_filename "$ucsc") || return 1
+    default_dir="${cache}/pext/${ucsc}"
+    selected_mean=$(read_yaml "$config_file" pext_mean_bw) || return 1
+    selected_tissues=$(read_yaml "$config_file" pext_tissue_bw_dir) || return 1
+    mean_bw=$selected_mean tissue_dir=$selected_tissues
+    [[ -n "$mean_bw" && "$mean_bw" != null ]] || mean_bw="${default_dir}/${mean_filename}"
+    [[ -n "$tissue_dir" && "$tissue_dir" != null ]] || tissue_dir=$default_dir
+    if [[ ! -s "$mean_bw" || ! -f "$mean_bw" ]]; then
+        [[ ! -e "$mean_bw" && "$(realpath -m "$mean_bw")" == "$(realpath -m "${default_dir}/${mean_filename}")" ]] || \
+            { log "ERROR: Selected mean pext input is missing or empty: $mean_bw"; return 1; }
     fi
-    
-    # Get base URL and mean filename for this assembly
-    local base_url=$(get_pext_base_url "$ucsc_assembly")
-    local mean_filename=$(get_pext_mean_filename "$ucsc_assembly")
-    
-    # Create assembly-specific pext directory under VEP plugins cache
-    # Structure: pext/{hg19,hg38}/mean.bw and pext/{hg19,hg38}/tissues/*.bw
-    local pext_base_dir="${vep_plugins_cachedir}/pext"
-    local pext_dir="${pext_base_dir}/${ucsc_assembly}"
-    mkdir -p "$pext_dir" || {
-        log "ERROR: Failed to create pext directory: $pext_dir"
-        return 1
-    }
-    log "pext files for ${ucsc_assembly} will be stored in: $pext_dir"
-    
-    # Always download mean_proportion/exp_prop_mean BigWig
-    local mean_bw="${pext_dir}/${mean_filename}"
-    if [[ ! -f "$mean_bw" ]]; then
-        log "Downloading mean pext file: ${mean_filename} for ${ucsc_assembly}..."
-        wget -q --show-progress -O "$mean_bw" "${base_url}/${mean_filename}" || {
-            log "ERROR: Failed to download ${mean_filename} from ${base_url}"
-            rm -f "$mean_bw"
-            return 1
-        }
-        log "Downloaded: $mean_bw ($(ls -lh "$mean_bw" | awk '{print $5}'))"
-    else
-        log "Mean pext file already exists: $mean_bw"
+    local -a selected=()
+    if [[ -n "$tissues" && "$tissues" != null ]]; then
+        mapfile -t selected < <(get_pext_tissues_array "$tissues")
     fi
-    
-    # Update config with mean_bw path and tissue directory
-    update_yaml "$config_file" "pext_mean_bw" "$mean_bw"
-    update_yaml "$config_file" "pext_tissue_bw_dir" "$pext_dir"
-    
-    # Download tissue-specific files if specified
-    if [[ -n "$pext_tissues" ]] && [[ "$pext_tissues" != "null" ]]; then
-        # Validate tissue names first
-        validate_pext_tissues "$pext_tissues" "$ucsc_assembly" || {
-            log "ERROR: Invalid tissue names in pext_tissues config, aborting pext installation"
-            return 1
-        }
-        
-        # Create tissues subdirectory under assembly-specific folder
-        local tissue_bw_dir="${pext_dir}/tissues"
-        mkdir -p "$tissue_bw_dir"
-        
-        # Download each tissue file
-        local -a tissues
-        mapfile -t tissues < <(get_pext_tissues_array "$pext_tissues")
-        
-        for tissue in "${tissues[@]}"; do
-            local tissue_bw="${tissue_bw_dir}/${tissue}.bw"
-            
-            if [[ ! -f "$tissue_bw" ]]; then
-                log "Downloading tissue pext file: ${tissue}.bw for ${ucsc_assembly}..."
-                wget -q --show-progress -O "$tissue_bw" "${base_url}/${tissue}.bw" || {
-                    log "ERROR: Failed to download ${tissue}.bw from ${base_url}"
-                    rm -f "$tissue_bw"
-                    return 1
-                }
-                log "Downloaded: $tissue_bw ($(ls -lh "$tissue_bw" | awk '{print $5}'))"
-            else
-                log "Tissue pext file already exists: $tissue_bw"
-            fi
-        done
-        
-        log "Downloaded ${#tissues[@]} tissue-specific pext files to $tissue_bw_dir"
+    local tissue target
+    # Custom tissue roots are selected sources. Only the standard managed root
+    # may acquire missing publisher files.
+    for tissue in "${selected[@]}"; do
+        target="${tissue_dir}/tissues/${tissue}.bw"
+        if [[ ! -s "$target" || ! -f "$target" ]]; then
+            [[ ! -e "$target" && "$(realpath -m "$tissue_dir")" == "$(realpath -m "$default_dir")" ]] || \
+                { log "ERROR: Selected tissue pext input is missing or empty: $target"; return 1; }
+        fi
+    done
+    [[ -d "$tissue_dir" || "$(realpath -m "$tissue_dir")" == "$(realpath -m "$default_dir")" ]] || \
+        { log "ERROR: Selected pext tissue directory is missing: $tissue_dir"; return 1; }
+    if [[ ! -s "$mean_bw" ]]; then
+        download_resource_atomic "${base_url}/${mean_filename}" "$mean_bw" || return 1
     fi
-    
-    log "pext data installation complete for ${ucsc_assembly}"
-    return 0
+    for tissue in "${selected[@]}"; do
+        target="${tissue_dir}/tissues/${tissue}.bw"
+        if [[ ! -s "$target" ]]; then
+            download_resource_atomic "${base_url}/${tissue}.bw" "$target" || return 1
+        fi
+    done
+    mkdir -p "$tissue_dir" || return 1
+    [[ "$mean_bw" == "$selected_mean" ]] || update_yaml "$config_file" pext_mean_bw "$mean_bw" || return 1
+    [[ "$tissue_dir" == "$selected_tissues" ]] || update_yaml "$config_file" pext_tissue_bw_dir "$tissue_dir" || return 1
+    log "pext data installation complete for ${ucsc}"
 }
 
 

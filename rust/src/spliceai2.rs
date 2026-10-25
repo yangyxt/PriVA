@@ -275,7 +275,7 @@ fn write_header<W: Write>(writer: &mut W) -> Result<()> {
     writeln!(writer, "##contig=<ID=chrX>\n##contig=<ID=chrY>")?;
     writeln!(
         writer,
-        "##INFO=<ID=SpliceAI,Number=.,Type=String,Description=\"SpliceAI2 top0 projection; adapter-derived gene association, not publisher per-gene prediction. ALLELE|SYMBOL|DS_AG|DS_AL|DS_DG|DS_DL|DP_AG|DP_AL|DP_DG|DP_DL\">"
+        "##INFO=<ID=SpliceAI,Number=.,Type=String,Description=\"SpliceAI2 v2.0 top0 projection; SpliceAIv2.0 is the official plugin compatibility version token. Adapter-derived gene association, not publisher per-gene prediction. ALLELE|SYMBOL|DS_AG|DS_AL|DS_DG|DS_DL|DP_AG|DP_AL|DP_DG|DP_DL\">"
     )?;
     writeln!(writer, "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO")?;
     Ok(())

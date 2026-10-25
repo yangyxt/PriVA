@@ -768,6 +768,50 @@ fn output_header_is_complete_and_marks_lossy_annotation_only_view() {
 }
 
 #[test]
+fn official_plugin_version_token_preserves_model_identity_and_every_body_row() {
+    for (kind, reference, alternate) in [
+        (VariantKind::Snv, "A", "C"),
+        (VariantKind::Indel, "A", "AC"),
+        (VariantKind::Indel, "GG", "AA"),
+    ] {
+        let mut native = row();
+        set(&mut native, "ref", reference);
+        set(&mut native, "alt", alternate);
+        let input = table(&[native]);
+        let (headed, _) = run(&genes(DEFAULT_GENES), &input, kind, true).unwrap();
+        let (body, _) = run(&genes(DEFAULT_GENES), &input, kind, false).unwrap();
+        let info = headed
+            .lines()
+            .find(|line| line.starts_with("##INFO=<ID=SpliceAI,"))
+            .unwrap();
+        assert!(info.contains("SpliceAI2 v2.0 top0 projection"));
+        assert!(info.contains("SpliceAIv2.0 is the official plugin compatibility version token"));
+        // The official116 plugin scans INFO descriptions with
+        // (SpliceAIv[\d.]+); it does not read ##SpliceAI2Version.
+        let version: String = info
+            .split_once("SpliceAIv")
+            .unwrap()
+            .1
+            .chars()
+            .take_while(|character| character.is_ascii_digit() || *character == '.')
+            .collect();
+        assert_eq!(version, "2.0");
+        assert!(headed.contains("##source=PriVA_SpliceAI2_projection\n"));
+        assert!(headed.contains("##SpliceAI2Version=2\n"));
+        assert!(headed.contains("##SpliceAI2ProjectionLossy=true\n"));
+        assert!(headed.contains("##SpliceAI2PublisherGeneSpecificPrediction=false\n"));
+        assert!(headed.contains("##SpliceAI2Policy=annotation_only_no_ACMG_or_CADD_activation\n"));
+        assert_eq!(
+            headed
+                .lines()
+                .filter(|line| !line.starts_with('#'))
+                .collect::<Vec<_>>(),
+            body.lines().collect::<Vec<_>>()
+        );
+    }
+}
+
+#[test]
 fn crlf_and_unterminated_final_row_do_not_change_field_strings() {
     let text = table(&[row()]);
     let (expected, _) = run(&genes(DEFAULT_GENES), &text, VariantKind::Snv, false).unwrap();

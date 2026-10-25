@@ -18,8 +18,8 @@ import sys
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'bin'))
 import cadd_shared_vep
-import cadd_standalone
 PIN = '1fead0c1e02d3f0a8599bdb04e6b3a2dd70b4866'
+PYTHON_CALCULATION_SHA256 = '18d10c4533fc9275a12d0ac675b55903b2ee835d4c6f31de2a3a86452c26382d'
 ALIASES = {'hg19': 'GRCh37', 'GRCh37': 'GRCh37', 'hg38': 'GRCh38', 'GRCh38': 'GRCh38'}
 
 
@@ -46,12 +46,18 @@ def write_json(path, value):
         handle.write('\n')
 
 
-def source_identity():
-    paths = ['bin/cadd_task.py', 'bin/cadd_shared_vep.py', 'bin/cadd_standalone.py',
+def source_identity(scope='nextflow'):
+    paths = ['bin/cadd_task.py', 'bin/cadd_shared_vep.py',
              'bin/cadd_select_view.py', 'bin/cadd/CaddSelection.pm', 'bin/cadd/upstream_annotate.sh',
              'bin/cadd/upstream_calculate.sh', 'cadd.nf',
              'modules/local/cadd_upstream.nf', 'conf/cadd.config', 'nextflow.config',
              'conf/cadd/GRCh37.reference.json', 'conf/cadd/GRCh38.reference.json']
+    if scope == 'native':
+        paths = [name for name in paths if name not in
+                 ('cadd.nf', 'modules/local/cadd_upstream.nf', 'conf/cadd.config', 'nextflow.config')]
+        paths += ['scripts/cadd_native.py', 'scripts/cadd_runtime.py']
+    elif scope != 'nextflow':
+        raise ContractError('Unknown CADD source identity scope')
     return {name: digest(ROOT / name) for name in paths}
 
 
@@ -168,7 +174,7 @@ def verify_resources(p, stage):
         candidate = Path(value).resolve(strict=True)
         if candidate.is_file() and str(candidate) not in current:
             raise ContractError('Configured data file is outside locked resources: ' + key)
-        if candidate.is_dir() and not any(candidate in Path(name).parents for name in current):
+        if candidate.is_dir() and not set(inventory([value])).issubset(current):
             raise ContractError('Configured data directory is outside locked resources: ' + key)
     return expected
 
@@ -233,6 +239,8 @@ def verify_source(env):
 
 
 def stage_preflight(p, stage, stub=False):
+    if stage == 'calculation' and 'standalone' in p.get(stage, {}):
+        raise ContractError('The Rust CADD branch is suspended; use the original Python calculation route')
     if stub:
         return
     if stage not in p:
@@ -255,8 +263,12 @@ def stage_preflight(p, stage, stub=False):
         for key in ['CADD_IMPUTE_CONFIG', 'CADD_MODEL', 'CADD_PHRED_TABLE']:
             if Path(env[key]).resolve() not in verified:
                 raise ContractError(key + ' must be bound to a verified immutable asset')
-    if stage == 'calculation' and cfg.get('standalone'):
-        cadd_standalone.verify(cfg['standalone'])
+        if cfg.get('program'):
+            program = Path(cfg['program'])
+            if (not program.is_absolute() or program.is_symlink() or not os.access(program, os.X_OK)
+                    or cfg.get('program_sha256') != PYTHON_CALCULATION_SHA256
+                    or digest(program) != PYTHON_CALCULATION_SHA256):
+                raise ContractError('Installed calculation program must be the pinned original Python route')
     for key in ['CADD_PYTHON2', 'CADD_VEP', 'CADD_ESM_PYTHON', 'CADD_REGSEQ_PYTHON',
                 'CADD_MMSPLICE_PYTHON', 'CADD_BGZIP', 'CADD_TABIX']:
         if key in env and (not Path(env[key]).is_absolute() or not os.access(env[key], os.X_OK)):
@@ -330,12 +342,14 @@ def run_backend(p, stage, source, output, work, annotation_source='shared-vep'):
     env.pop('PYTHONHOME', None)
     env.update(CADD_ASSEMBLY=p['contract']['assembly'], PYTHONDONTWRITEBYTECODE='1', PYTHONNOUSERSITE='1')
     script = ROOT / 'bin/cadd' / ('upstream_' + ('annotate' if stage == 'annotation' else 'calculate') + '.sh')
+    if stage == 'calculation' and cfg.get('program'):
+        script = Path(cfg['program'])
     subprocess.run(['bash', str(script), str(Path(source).resolve()), str(Path(output).resolve()),
                     str(Path(work).resolve())], env=env, check=True)
 
 
-def receipt(p, profile, stage, source, output, count, stub, before):
-    if source_identity() != before:
+def receipt(p, profile, stage, source, output, count, stub, before, source_scope='nextflow'):
+    if source_identity(source_scope) != before:
         raise ContractError('CADD adapter source changed during task')
     return {'schema_version': 1, 'stage': stage, 'stub': bool(stub),
             'profile_id': p['profile_id'], 'profile_kind': p['profile_kind'],
@@ -347,9 +361,9 @@ def receipt(p, profile, stage, source, output, count, stub, before):
                                'upstream-python-annotation' if stage == 'annotation' else 'declared-complete-table-import')}
 
 
-def execute(args):
+def execute(args, *, source_scope='nextflow', work_dir=None):
     p = load_profile(args.profile, args.assembly, args.stub)
-    before = source_identity()
+    before = source_identity(source_scope)
     profile_before = digest(args.profile)
     stage = 'calculation' if args.command == 'calculate' else 'annotation'
     annotation_source = getattr(args, 'annotation_source', 'shared-vep')
@@ -359,7 +373,6 @@ def execute(args):
     else:
         stage_preflight(p, stage, args.stub)
     shared_provenance = None
-    standalone_provenance = None
     shared_vcf = None
     if args.command == 'annotate' and annotation_source == 'shared-vep':
         shared_vcf, shared_provenance = cadd_shared_vep.verify(args.input, p, args.stub)
@@ -367,7 +380,7 @@ def execute(args):
     if out.exists():
         raise ContractError('Output exists; use a fresh task directory')
     out.mkdir(parents=True)
-    work = out.parent / (out.name + '.work')
+    work = Path(work_dir) if work_dir is not None else out.parent / (out.name + '.work')
     work.mkdir()
     columns = p['contract']['columns']
     source = shared_vcf or Path(args.input)
@@ -380,8 +393,6 @@ def execute(args):
                 handle.write('#' + '\t'.join(columns + ['RawScore', 'PHRED']) + '\n')
                 for fields in rows(source, columns):
                     handle.write('\t'.join(fields + ['0.000000', '0']) + '\n')
-        elif p['calculation'].get('standalone'):
-            standalone_provenance = cadd_standalone.execute(p, args.input, scored, work)
         else:
             run_backend(p, stage, source, scored, work)
         count = 0
@@ -393,11 +404,8 @@ def execute(args):
             count += 1
         if next(original_rows, None) is not None:
             raise ContractError('Calculation dropped annotation rows')
-        result = receipt(p, args.profile, stage, source, scored, count, args.stub, before)
+        result = receipt(p, args.profile, stage, source, scored, count, args.stub, before, source_scope)
         result['input_manifest_sha256'] = digest(Path(args.input) / 'manifest.json')
-        if standalone_provenance is not None:
-            result['standalone'] = standalone_provenance
-            result['implementation'] = 'pinned-cadd-rs-interface; all-four-calculation-stages-upstream-python'
     else:
         input_before = digest(source)
         raw = source
@@ -420,7 +428,7 @@ def execute(args):
         if shared_vcf is not None:
             cadd_shared_vep.verify_feature_join(shared_vcf, rows(output, columns), columns)
         result = receipt(p, args.profile, stage if args.command == 'annotate' else args.command,
-                         source, output, count, args.stub, before)
+                         source, output, count, args.stub, before, source_scope)
     if args.command == 'import-annotations':
         if not args.stub:
             verify_manifest_identity(p)
@@ -499,7 +507,7 @@ def main():
     args = parser().parse_args()
     try:
         args.func(args)
-    except (ContractError, cadd_shared_vep.SharedVepError, cadd_standalone.StandaloneError, OSError, KeyError, TypeError, json.JSONDecodeError, subprocess.CalledProcessError) as error:
+    except (ContractError, cadd_shared_vep.SharedVepError, OSError, KeyError, TypeError, json.JSONDecodeError, subprocess.CalledProcessError) as error:
         print('PriVA CADD contract: ' + str(error), file=sys.stderr)
         return 2
     return 0

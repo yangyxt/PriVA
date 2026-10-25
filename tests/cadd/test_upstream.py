@@ -78,26 +78,6 @@ else:
 '''
 
 
-MOCK_STANDALONE = r'''
-import gzip,hashlib,json,os,shutil,sys
-from pathlib import Path
-args=sys.argv[1:]
-def value(key):return args[args.index(key)+1]
-def sha(path):return hashlib.sha256(Path(path).read_bytes()).hexdigest()
-profile=Path(value('--profile'));p=json.loads(profile.read_text())
-out=Path(value('--output'));out.mkdir(parents=True)
-if args[0]=='import-annotations':
-    original=Path(value('--input'));output=out/'annotations.tsv.gz';shutil.copyfile(original,output)
-    receipt={'stage':'annotation','contract':p['contract'],'input_sha256':sha(original),'output_sha256':sha(output),'engine_sha256':sha(sys.argv[0])}
-else:
-    bundle=Path(value('--annotations'));annotations=bundle/'annotations.tsv.gz';output=out/'scores.tsv'
-    with gzip.open(annotations,'rt') as source,open(output,'w') as dest:
-        for index,line in enumerate(source):dest.write(line.rstrip()+'\t'+('RawScore\tPHRED' if index==0 else '1.500000\t12.3')+'\n')
-    receipt={'stage':'calculation','implementation':os.environ.get('MOCK_STANDALONE_IMPL','configured complete Python calculation; native postprocessing disabled'),
-        'engine_sha256':sha(sys.argv[0]),'profile_sha256':sha(profile),'profile_id':p['profile_id'],'contract':p['contract'],
-        'input_sha256':sha(annotations),'input_manifest_sha256':sha(bundle/'manifest.json'),'output_sha256':sha(output)}
-(out/'manifest.json').write_text(json.dumps(receipt))
-'''
 
 
 class UpstreamCadd(unittest.TestCase):
@@ -358,33 +338,36 @@ class UpstreamCadd(unittest.TestCase):
         imported=self.run_task('import-annotations',bundle/'annotations.tsv.gz','imported')
         self.run_task('calculate',imported,'calc')
 
-    def standalone_pin(self):
-        program=self.root/'cadd-rs'
-        program.write_text('#!'+sys.executable+'\n'+MOCK_STANDALONE)
+    def test_suspended_standalone_profile_fails_before_any_binary_or_output(self):
+        bundle = self.run_task('annotate', self.vcf, 'anno')
+        marker = self.root / 'suspended-binary-was-run'
+        program = self.root / 'suspended-cadd-rs'
+        program.write_text('#!/usr/bin/env bash\ntouch "' + str(marker) + '"\n')
         program.chmod(0o755)
-        self.p['calculation']['standalone']={'program':str(program),'sha256':C.digest(program),'source_root':str(self.source),'revision':C.PIN}
+        self.p['calculation']['standalone'] = {'program': str(program), 'sha256': C.digest(program)}
         self.save()
-        return program
+        with self.assertRaisesRegex(C.ContractError, 'Rust CADD branch is suspended'):
+            self.run_task('calculate', bundle, 'suspended')
+        self.assertFalse((self.root / 'suspended').exists())
+        # A real profile deliberately fails the existing stub/profile gate first.
+        # The stage guard must also reject this route when called in stub mode.
+        with self.assertRaisesRegex(C.ContractError, 'Rust CADD branch is suspended'):
+            C.stage_preflight(self.p, 'calculation', stub=True)
+        self.assertFalse(marker.exists())
 
-    def test_standalone_bridge_preserves_both_receipts(self):
-        bundle=self.run_task('annotate',self.vcf,'anno')
-        self.standalone_pin()
-        result=self.run_task('calculate',bundle,'standalone-calc')
-        receipt=json.loads((result/'manifest.json').read_text())
-        self.assertEqual(receipt['standalone']['original_annotation_manifest_sha256'],C.digest(bundle/'manifest.json'))
-        self.assertEqual(receipt['standalone']['implementation'],C.cadd_standalone.IMPLEMENTATION)
-        self.assertTrue((self.root/'standalone-calc.work/standalone-annotations/manifest.json').is_file())
-
-    def test_standalone_bridge_rejects_old_hybrid_and_wrong_binary(self):
-        bundle=self.run_task('annotate',self.vcf,'anno')
-        program=self.standalone_pin()
-        with patch.dict(os.environ,{'MOCK_STANDALONE_IMPL':'configured transform/inference backend; native Rust hierarchy/PHRED'}):
-            with self.assertRaisesRegex(C.cadd_standalone.StandaloneError,'all-Python contract'):
-                self.run_task('calculate',bundle,'hybrid')
-        self.assertFalse((self.root/'hybrid/manifest.json').exists())
-        program.write_text(program.read_text()+'\n# changed\n')
-        with self.assertRaisesRegex(C.cadd_standalone.StandaloneError,'checksum'):
-            self.run_task('calculate',bundle,'wrong-binary')
+    def test_python_route_has_no_standalone_source_dependency_and_receipt(self):
+        self.assertEqual((ROOT / 'scripts/cadd_python_calculate.sh').read_bytes(),
+                         (ROOT / 'bin/cadd/upstream_calculate.sh').read_bytes())
+        self.assertNotIn('bin/cadd_standalone.py', C.source_identity())
+        self.assertFalse(hasattr(C, 'cadd_standalone'))
+        bundle = self.run_task('annotate', self.vcf, 'anno')
+        self.events.write_text('')
+        result = self.run_task('calculate', bundle, 'python-calc')
+        self.assertEqual(self.calls(), ['trackTransformation.py', 'predictSKmodel.py',
+                                        'max_line_hierarchy.py', 'appendPHREDscore.py'])
+        receipt = json.loads((result / 'manifest.json').read_text())
+        self.assertEqual(receipt['implementation'], 'all-four-calculation-stages-upstream-python')
+        self.assertNotIn('standalone', receipt)
 
     def test_qualification_reports_every_field_and_missing_row(self):
         spec=importlib.util.spec_from_file_location('qualification',ROOT/'tests/cadd/qualify_calculation.py')

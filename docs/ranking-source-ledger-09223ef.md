@@ -143,3 +143,68 @@ ranking or family parity.
 Only the representative in-memory probes above were executed during this audit.
 The comprehensive oracle capture, Rust extensions, complete family run and
 scientific equivalence checks remain to be performed.
+
+---
+
+**Current progress addendum — 24 October 2026 CT**
+
+The preceding audit retains its original scope. The synthetic full-ranking and
+control Python oracle is now captured by
+[ranking_control_oracle.py](../rust/tests/ranking_control_oracle.py), exposing
+named `prepare`, `capture` and `validate` procedures. It freezes fourteen actual
+`09223ef` modules and the separate harness, imports the unchanged ranking and
+control functions, and observes original source frames and real SciPy
+CDF/PPF calls. Production parser evidence executes five original AST statements;
+the re-sort cases execute the complete original `resort_family` function.
+Criterion assignment is outside this capture.
+
+Final `ranking-control-oracle-20261024-v3` contains 165 cases: 117 successful
+results and 48 original exceptions. Every case matches an independent untraced
+execution, including ordered columns/index/dtypes/null masks/scalar float bits,
+immediate pre/post-execution input pickle hashes, returned-object identity and
+file effects. All 341 validation checks passed. The source checkpoints retain
+route masks, actual k/n arrays, SciPy CDF/Beta arguments and returns, sequential
+ranking multiplications, PEXT selection/transform, coordinate maxima, sort and
+factorization results, and the first uncaught source failure phase. The matrix
+covers all 16 control-column presence patterns, fractional/negative/missing and
+nonfinite routed inputs, strict threshold neighbors, R1–R8, duplicate/gapped
+indices, PED/full-sample-string behavior, overlapping gene lists, tissue
+fallback, null coordinate groups/IDs and existing column positions.
+
+The installed runtime is Python 3.12.3, pandas 2.2.3, NumPy 1.26.4 and SciPy 1.14.1.
+The record pins 528 installed Conda package/build metadata entries, 141 loaded
+native files, four SciPy public/private wrapper functions and the two compiled
+CDF/PPF ufunc identities. Gene-list fixture bytes and resolved scientific
+arguments are retained per case. Source manifest SHA256
+`9e63fb73e49c9f8ce700b0abd3e588702d2489c5430059e76c5d5b723eabb46a`;
+capture SHA256
+`db919b02f8738da60f85d16e0a7ed2bb53f8eaaf6047ed8f4db912fe4938508c`;
+native/package identity record SHA256
+`4875c99bc4acb58ff78c0210942561383bcb31839eee4ade2e0eae280237d9bc`.
+Native capture 1514363.3175 and validation 1514363.3182 completed 0:0;
+validation finished at 7:44:59 PM CDT. Source text/function/AST hashes, complete
+typed observations, pickles, traces, source logs and validation receipts reside
+under
+`/stornext/snfs170/next-gen/scratch/yangyxt_dt/projects/PriVA_upgrade/validation/ranking-control-oracle-20261024-v3`;
+outer logs use the corresponding data-side `logs/ranking-control-oracle-*`
+pattern. Maintained harness and documentation remain in this checkout.
+
+Two observations refine the future integration contract. In mixed count/AF
+fixtures, the original AF assignment at L447 produces an object-dtype `common`
+Series and a FutureWarning; C4 then raises IndexError at L460 after writing
+`control_common`. This partial mutation/failure is retained. Separately, pandas
+deep copies share lazy dtype caches: preliminary v1 exposed an input-pickle
+observer mismatch at nullable Float64. Final paired executions load the same
+prepared pickle bytes into independent objects, retain the cache mutations and
+compare immediate pre/post-source serialization. Actual exception objects are
+retained while tracing, so a handled PEXT ValueError cannot be confused with a
+later uncaught R8 failure. Failed v1 capture/diagnostic logs and the superseded
+v2 preparation remain preserved alongside final evidence.
+
+This is Python oracle groundwork. The existing optional Rust helpers remain
+separate; full ranking/control Rust integration, complete criterion assignment,
+installation, family and public scientific qualification remain pending. No
+scientific Python, installer or production backend changed in this task.
+
+---
+

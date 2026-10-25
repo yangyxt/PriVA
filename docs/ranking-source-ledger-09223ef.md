@@ -687,3 +687,91 @@ main 1524420's frozen sources; neither its install acceptance nor these procedur
 fixtures qualify full ranking, family data or public benchmarks.
 
 
+## Current progress — R7 PEXT modulation, 25 October 2026 CT
+
+The opt-in `priva ranking-pext` procedure implements only original L621–665.
+Its in-memory `ranking_pext` API consumes current R6 output and the existing R4
+mask through `Modulation::from_compatibility`; it does not repeat earlier stages.
+The CLI transports are fixtures for this API, not a production process per line.
+
+```mermaid
+flowchart LR
+    R6[Current R6 buffers and R4 mask] --> S[First requested tissue or PEXT_MEAN]
+    S --> C[Existing scalar parser: fill and clip]
+    C --> P[Divide and clip; original Series power dispatch]
+    P --> W[Separate product, sum and where]
+    W --> M[Multiply only current R4-selected rows]
+    M --> R8[Current R8 terminal-order interface]
+```
+
+Only the first nonempty tissue is considered; a missing first tissue falls back
+to `PEXT_MEAN` without trying later tissues. No selected PEXT column skips all
+parameter/mask/score validation and preserves any existing PEXT index. Source
+parameter order, Unicode strip/hyphen behavior, logs, existing column positions,
+raw Boolean/null bits and each separate floating operation are retained.
+
+The supported applied route has 1–1,000,000 rows, flat opaque axes, an aligned
+bool/nullable-Boolean mask, native float64 scores, finite valid float parameters
+and explicitly preserved original pandas-map scalar identities. Tissue input is
+a genuine `None` (`Cell::Null`) or UTF-8 string; `pd.NA` is a distinct unsupported
+option. The existing `coerce_pext_value` module handles qualified primitives,
+including Python-versus-NumPy bool, float32 origins, exact tokens/Unicode float
+parsing and ordered NaN/zero behavior. Unsupported objects/dtypes, empty applied
+columns, score promotion/warnings, MultiIndex/alignment, invalid parameter types
+and nonfinite parameters retain original Python. A nonfinite parameter accepted
+by the source is not relabelled invalid. Native rejection is atomic; fallback
+runs only original L621–665 once on the unchanged current buffers.
+
+The root's original-only oracle retains 170 cases, including 75 genuine
+full-function L621/L668 observations, and 13 separate preceding failures. The
+transport capture checks all 170 exactly and adds 31 edges: **201 cases, 168
+original outputs and 33 original failures**. A profile observer records actual
+arguments to the original scalar parser, preserving pandas boxing rather than
+inferring it from flattened cells.
+
+Three failed attempts remain visible. **1524551** failed on a fixture's incorrect
+no-pedigree R4 log-count expectation. **1524552** passed all 161 tests but failed
+an exact output-local pickle: its adapter used equal label strings instead of
+reusing the original column-name object. Source-equivalent metadata constructors
+now preserve Series names, tissue-token identities and selected-column aliases.
+**1514363.3687** then exposed an intermediate power mismatch at a strict cutoff
+neighbor; matching final output did not waive that failure.
+
+R7 passes a Series to `np.power`. The installed pandas dispatches that binary
+ufunc to `operator.pow`; NumPy's scalar array-power route selects positive at
+exponent 1, sqrt at 0.5 and square at 2, with generic power otherwise. This is
+supported by the pinned [pandas 2.2.3 source](https://raw.githubusercontent.com/pandas-dev/pandas/v2.2.3/pandas/core/arraylike.py)
+and [NumPy 1.26.4 source](https://raw.githubusercontent.com/numpy/numpy/v1.26.4/numpy/core/src/multiarray/number.c).
+The original ndarray-only probe remains correct in its scope: generic `powf`
+matched its 807,012 values, while the half-power candidate differed 32 times.
+The separate actual-Series probe reuses those 252 cases/807,012 input values:
+generic `powf` differs 32 times, while the original scalar dispatch matches
+exactly at opt-level 0 and 2. Installed wrappers/C extensions, actual call traces,
+all mismatches and both scopes remain frozen. No blanket sqrt substitution,
+FMA, algebraic combination or tolerance is used.
+
+**1524555/.0 completed 0:0 at 1:17:21 AM CDT:** **162 Cargo tests** (147 existing
+plus 15 R7), **154 exact native outputs and 47 explicit Python fallbacks**, of
+which 33 reproduce original source failures. Zero mismatches across all 201.
+The checks retain input/output-local pickle bytes and aliases, every original
+local and numerical intermediate, raw float/null bits, dtypes/axes/attrs/flags,
+ordered columns, logs, warnings and first failure/partial mutation. The fresh
+build took 2m09s with native-step MaxRSS 849,380 KiB; this is fixture resource
+accounting, not a pipeline benchmark. Earlier bodies/tests remain byte-identical;
+prior Python differential suites are bound to their closed proof, not repeated.
+
+Binary SHA256: `cb0d6f8d21ec399319a09aca9be56dafda4f52d58074e94aa0a1ca0303bdb54c`.
+Final compiled-source pins: `5bb5cbac07892e41e15627118d72a5f8632dacd3af10e27c04b6a0f19697f801`.
+Transport oracle: `739a3c6fdcbad01314237b5cd5e0d7210dbd5e8d82c7e977ebc40041a7f27b04`.
+Actual-Series dispatch proof: `6fa9c7b144790c045895c04fa56666667a100bed502d068a69e394fbd2a1f883`.
+
+Source/tests/docs remain in this checkout, with maintained diagnostic/oracle
+controllers under `/stornext/snfs170/next-gen/scratch/yangyxt/projects/PriVA_upgrade/scripts`.
+All generated evidence and failures are under
+`/stornext/snfs170/next-gen/scratch/yangyxt_dt/projects/PriVA_upgrade/validation/{rust-ranking-pext,ranking-pext-*}-20261025-v1`,
+with matching data-side logs and separate `caches/runtime/ranking-pext-build-*`
+Cargo/targets. Original scientific Python, C1–C5/SciPy, earlier multiplications,
+installers and production/family dispatch are unchanged. This optional source
+postdates completed main 1524420 and the 12:43 AM review-v9 snapshot; neither
+those installer results nor these procedure fixtures establish full-ranking,
+family or public qualification.

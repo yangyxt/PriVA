@@ -72,6 +72,12 @@ def sha256(path):
     return digest.hexdigest()
 
 
+def cds_cache_path(fasta):
+    value = str(fasta)
+    return Path(value[:-len(".fa.gz")] + ".cds_cache.pkl.gz"
+                if value.endswith(".fa.gz") else value + ".cds_cache.pkl.gz")
+
+
 def json_digest(value):
     return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
@@ -116,7 +122,17 @@ def software_readiness(mode):
 
 def require_qualified_execution(mode, stub):
     if mode == "raw" and not stub:
-        raise ContractError("Real raw annotation is gated: the unchanged CADD launcher may create Conda environments inside shared caches. Qualify enforced read-only cache/container execution before enabling this entry point. The first acceptance run can use annotated mode with the original paired CADD TSV.")
+        raise ContractError("Real raw annotation is gated: shared official-VEP/CADD feature compatibility and enforced read-only cache/task isolation have not passed acceptance. Installation does not qualify this route. Annotated mode requires the original paired annotation/CADD artifacts from a pinned compatible scientific profile.")
+
+
+def require_task_boundary(boundary):
+    # 24 October 2026 CT: the opt-in shell view is part of the run identity.
+    # This environment check detects an omitted profile; it is not an attestation
+    # or permission to clear real-model/scientific acceptance gates.
+    if boundary not in ("off", "bwrap"):
+        raise ContractError("Unsupported task boundary")
+    if boundary == "bwrap" and os.environ.get("PRIVA_TASK_BOUNDARY") != "bwrap-readonly-v1":
+        raise ContractError("The requested read-only task boundary is not active")
 
 
 def read_config(path):
@@ -167,10 +183,15 @@ def runtime_resources(config, root, mode, vcf_hub_mode="off", cadd_hub_mode="cop
             paths[key] = checked_path(config[key], key)
     if bool(config.get("pp1_vcf")) != bool(config.get("pp1_ped")):
         raise ContractError("pp1_vcf and pp1_ped must be supplied together")
+    selected_hpo = config.get("hpo_assertions")
+    hpo_path = root / "data/hpo/genes_to_phenotype.assertions.tsv.gz" if selected_hpo in (None, "", "null") else selected_hpo
+    selected_gene_stat = str(config.get("clinvar_gene_stat") or "")
+    gene_stat_path = (Path(selected_gene_stat).absolute() if "/" in selected_gene_stat
+                      else root / "data/ClinVar" / selected_gene_stat)
     fixed = {
-        "hpo_assertions_used_by_shell": root / "data/hpo/genes_to_phenotype.assertions.tsv.gz",
+        "hpo_assertions_used_by_shell": hpo_path,
         "alphamissense_mean_used_by_shell": root / "data/alphamissense/alphamissense_mean_score.tsv",
-        "clinvar_gene_stat_used_by_shell": root / "data/ClinVar" / Path(str(config.get("clinvar_gene_stat", ""))).name,
+        "clinvar_gene_stat_used_by_shell": gene_stat_path,
         "repeat_regions_used_by_shell": root / "data/repeats" / Path(str(config.get("repeat_region_file_name", ""))).name,
         "hgnc_used_by_scientific_code": root / "data/hgnc/non_alt_loci_set.tsv",
     }
@@ -212,8 +233,8 @@ def runtime_resources(config, root, mode, vcf_hub_mode="off", cadd_hub_mode="cop
     if "cds_fasta_file" in paths:
         # Copy this mutable lazy cache into each prioritization task; don't write
         # a newly parsed pickle beside the shared FASTA.
-        cache = Path(str(paths["cds_fasta_file"]).replace(".fa.gz", ".cds_cache.pkl.gz"))
-        if cache != paths["cds_fasta_file"] and cache.exists():
+        cache = cds_cache_path(paths["cds_fasta_file"])
+        if cache.exists():
             paths["cds_parsed_cache"] = checked_path(str(cache), "cds_parsed_cache")
     for key, path in list(paths.items()):
         if str(path).endswith((".vcf.gz", ".vcf.bgz")):
@@ -338,6 +359,8 @@ def validate_cadd(path):
 
 def validate(args):
     require_qualified_execution(args.mode, args.stub)
+    boundary = getattr(args, "task_boundary", "off")
+    require_task_boundary(boundary)
     config = read_config(args.config)
     for value in (args.family, args.base):
         if not SAFE_ID.fullmatch(value):
@@ -368,7 +391,7 @@ def validate(args):
     contract = {"schema_version": 1, "family": args.family, "base": args.base,
                 "assembly": ASSEMBLY[args.assembly], "mode": args.mode, "legacy_root": str(root),
                 "source_digest": args.source_digest, "software_id": args.software_id,
-                "resource_bundle_id": manifest.get("bundle_id", "stub"),
+                "resource_bundle_id": manifest.get("bundle_id", "stub"), "task_boundary": boundary,
                 "vcf_hub_mode": args.vcf_hub_mode, "cadd_hub_mode": args.cadd_hub_mode,
                 "samples": samples, "family_samples": family_samples, "stub": args.stub,
                 "input_sha256": sha256(args.vcf), "ped_sha256": sha256(args.ped),
@@ -396,7 +419,8 @@ def launch(args):
                    "input_index": inventory_record(Path(args.vcf_index).resolve()),
                    "provided_cadd": inventory_record(Path(args.cadd).resolve()) if args.cadd else None,
                    "vcf_hub_mode": args.vcf_hub_mode, "cadd_hub_mode": args.cadd_hub_mode,
-                   "annotation_cpus": args.annotation_cpus, "family_cpus": args.family_cpus, "stub": args.stub}
+                   "annotation_cpus": args.annotation_cpus, "family_cpus": args.family_cpus, "stub": args.stub,
+                   "task_boundary": getattr(args, "task_boundary", "off")}
     marker = {"run_identity": json_digest(fingerprint), "contract": fingerprint}
     outdir = Path(args.outdir).resolve()
     outdir.mkdir(parents=True, exist_ok=True)
@@ -443,9 +467,9 @@ def private_config(bundle, contract, phase, cpus):
         if str(source).endswith((".vcf.gz", ".vcf.bgz")):
             copy_writable(str(source) + ".tbi", str(dest) + ".tbi")
         if key == "cds_fasta_file":
-            original_cache = Path(source.replace(".fa.gz", ".cds_cache.pkl.gz"))
-            if original_cache != Path(source) and original_cache.exists():
-                copy_writable(original_cache, str(dest).replace(".fa.gz", ".cds_cache.pkl.gz"))
+            original_cache = cds_cache_path(source)
+            if original_cache.exists():
+                copy_writable(original_cache, cds_cache_path(dest))
     if phase == "annotation" and contract["mode"] == "raw":
         original = read_config(bundle / "legacy.yaml")
         for key, option in (("hub_vcf_file", "vcf_hub_mode"), ("hub_cadd_file", "cadd_hub_mode")):
@@ -473,6 +497,7 @@ def run(args):
     bundle = Path(args.bundle)
     contract = json.loads((bundle / "contract.json").read_text())
     require_qualified_execution(contract["mode"], args.stub)
+    require_task_boundary(contract.get("task_boundary", "off"))
     if bool(contract["stub"]) != bool(args.stub):
         raise ContractError("Stub and real task contracts cannot be mixed")
     if args.cpus < 1:
@@ -562,6 +587,7 @@ def parser():
         validate_cmd.add_argument("--" + key, required=True)
     validate_cmd.add_argument("--cadd")
     validate_cmd.add_argument("--stub", action="store_true")
+    validate_cmd.add_argument("--task-boundary", choices=["off", "bwrap"], default="off")
     validate_cmd.set_defaults(func=validate)
     launch_cmd = sub.add_parser("launch", help="Uncached launch-time resource verification and output identity guard")
     for key in ("vcf", "vcf-index", "ped", "config", "resources", "family", "assembly", "mode", "legacy-root", "source-digest", "software-id", "vcf-hub-mode", "cadd-hub-mode", "outdir"):
@@ -570,6 +596,7 @@ def parser():
     launch_cmd.add_argument("--family-cpus", type=int, required=True)
     launch_cmd.add_argument("--cadd")
     launch_cmd.add_argument("--stub", action="store_true")
+    launch_cmd.add_argument("--task-boundary", choices=["off", "bwrap"], default="off")
     launch_cmd.set_defaults(func=launch)
     run_cmd = sub.add_parser("run")
     run_cmd.add_argument("--phase", choices=["annotation", "filtration", "prioritization"], required=True)

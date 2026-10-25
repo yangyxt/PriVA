@@ -41,6 +41,12 @@ See docs/nextflow_migration.md for the frozen baseline and parity requirements.'
         if (!(params.assembly in ['hg19', 'hg38', 'GRCh37', 'GRCh38'])) error 'Unsupported --assembly'
         if (!(params.vcf_hub_mode in ['off', 'qualified-copy'])) error 'Unsupported --vcf_hub_mode'
         if (!(params.cadd_hub_mode in ['off', 'copy'])) error 'Unsupported --cadd_hub_mode'
+        def readonlyProfile = workflow.profile.tokenize(',').contains('task_readonly')
+        // 24 October 2026 CT: derive identity from the selected profile itself.
+        // A separate params default can override an included profile assignment
+        // (observed with pinned 25.10.4), leaving its shell and identity at odds.
+        def taskBoundary = readonlyProfile ? 'bwrap' : 'off'
+        if (readonlyProfile && workflow.profile.tokenize(',').contains('apptainer')) error 'Combined task_readonly/apptainer execution is not qualified; choose one profile'
         if (workflow.profile.tokenize(',').contains('test') && !workflow.stubRun) error 'The test profile requires -stub-run and is never a scientific acceptance run'
         if (workflow.profile.tokenize(',').contains('apptainer') && !params.container_image) error 'The apptainer profile requires --container_image pinned to a tested image'
         if (params.mode == 'annotated' && !params.cadd) error '--mode annotated requires the matching --cadd TSV'
@@ -55,7 +61,7 @@ See docs/nextflow_migration.md for the frozen baseline and parity requirements.'
         def meta = [id: params.family, base: base, assembly: params.assembly, mode: params.mode,
                     source_root: sourceRoot.toString(), source_digest: sourceDigest(sourceRoot),
                     software_id: params.software_id.toString(), vcf_hub_mode: params.vcf_hub_mode,
-                    cadd_hub_mode: params.cadd_hub_mode]
+                    cadd_hub_mode: params.cadd_hub_mode, task_boundary: taskBoundary]
         // This check executes outside the task cache. A fully cached -resume
         // still verifies external resources and the published run identity.
         def launchCommand = ['python3', "${sourceRoot}/bin/priva_task.py", 'launch',
@@ -68,6 +74,7 @@ See docs/nextflow_migration.md for the frozen baseline and parity requirements.'
             '--legacy-root', meta.source_root, '--source-digest', meta.source_digest,
             '--software-id', meta.software_id, '--vcf-hub-mode', meta.vcf_hub_mode.toString(),
             '--cadd-hub-mode', meta.cadd_hub_mode.toString(), '--outdir', params.outdir.toString(),
+            '--task-boundary', meta.task_boundary.toString(),
             '--annotation-cpus', params.annotation_cpus.toString(), '--family-cpus', params.family_cpus.toString()]
         if (params.cadd) launchCommand.addAll(['--cadd', file(params.cadd, checkIfExists: true).toString()])
         if (workflow.stubRun) launchCommand.add('--stub')

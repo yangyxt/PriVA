@@ -8,12 +8,12 @@ process VALIDATE_FAMILY {
     script:
     def caddArg = cadd ? '--cadd provided.cadd.tsv' : ''
     """
-    python3 '${meta.source_root}/bin/priva_task.py' validate --vcf '${vcf}' --vcf-index '${vcf_index}' --ped '${ped}' --config '${config}' --resources '${resources}' --family '${meta.id}' --base '${meta.base}' --assembly '${meta.assembly}' --mode '${meta.mode}' --legacy-root '${meta.source_root}' --source-digest '${meta.source_digest}' --software-id '${meta.software_id.replace("'", "'\\''")}' --vcf-hub-mode '${meta.vcf_hub_mode}' --cadd-hub-mode '${meta.cadd_hub_mode}' ${caddArg}
+    python3 '${meta.source_root}/bin/priva_task.py' validate --vcf '${vcf}' --vcf-index '${vcf_index}' --ped '${ped}' --config '${config}' --resources '${resources}' --family '${meta.id}' --base '${meta.base}' --assembly '${meta.assembly}' --mode '${meta.mode}' --legacy-root '${meta.source_root}' --source-digest '${meta.source_digest}' --software-id '${meta.software_id.replace("'", "'\\''")}' --vcf-hub-mode '${meta.vcf_hub_mode}' --cadd-hub-mode '${meta.cadd_hub_mode}' --task-boundary '${meta.task_boundary}' ${caddArg}
     """
     stub:
     def caddArg = cadd ? '--cadd provided.cadd.tsv' : ''
     """
-    python3 '${meta.source_root}/bin/priva_task.py' validate --vcf '${vcf}' --vcf-index '${vcf_index}' --ped '${ped}' --config '${config}' --resources '${resources}' --family '${meta.id}' --base '${meta.base}' --assembly '${meta.assembly}' --mode '${meta.mode}' --legacy-root '${meta.source_root}' --source-digest '${meta.source_digest}' --software-id stub --vcf-hub-mode '${meta.vcf_hub_mode}' --cadd-hub-mode '${meta.cadd_hub_mode}' ${caddArg} --stub
+    python3 '${meta.source_root}/bin/priva_task.py' validate --vcf '${vcf}' --vcf-index '${vcf_index}' --ped '${ped}' --config '${config}' --resources '${resources}' --family '${meta.id}' --base '${meta.base}' --assembly '${meta.assembly}' --mode '${meta.mode}' --legacy-root '${meta.source_root}' --source-digest '${meta.source_digest}' --software-id stub --vcf-hub-mode '${meta.vcf_hub_mode}' --cadd-hub-mode '${meta.cadd_hub_mode}' --task-boundary '${meta.task_boundary}' ${caddArg} --stub
     """
 }
 

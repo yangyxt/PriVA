@@ -38,7 +38,6 @@ function finalize_anno_vcf() {
     mv "${src}" "${dst}"
 }
 
-
 function priva_require_legacy_spliceai() {
     # A prepared v2 cache is not an approved replacement for the original
     # ACMG/ClinVar thresholds or CADD features. Inspect headers only, never rows.

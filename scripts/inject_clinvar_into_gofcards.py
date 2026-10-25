@@ -27,6 +27,7 @@ from __future__ import annotations
 import argparse
 import gzip
 import json
+import re
 import sys
 from collections import Counter
 from pathlib import Path
@@ -131,6 +132,8 @@ def main(argv: list[str] | None = None) -> int:
                         help="normalized GoFCards cache produced by build_gofcards_exact_gof_cache.py")
     parser.add_argument("--clinvar-vcv", required=True, type=Path,
                         help="ClinVar VariationArchive XML (optionally gzipped)")
+    parser.add_argument("--clinvar-vcv-sha256", default=None,
+                        help="Require this exact local XML SHA256 before and after injection; used for explicit custom inputs")
     parser.add_argument("--out-json", required=True, type=Path,
                         help="gzipped JSON with a clinvar block nested per matched variant")
     parser.add_argument("--min-review-stars", type=int, default=2, choices=(2, 3, 4))
@@ -141,6 +144,19 @@ def main(argv: list[str] | None = None) -> int:
 
     if not args.clinvar_vcv.exists() or args.clinvar_vcv.stat().st_size == 0:
         raise SystemExit(f"ClinVar VCV is required and was not found: {args.clinvar_vcv}")
+
+    def source_identity():
+        stat = args.clinvar_vcv.stat()
+        return (stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns)
+
+    expected_sha256 = args.clinvar_vcv_sha256
+    source_before = None
+    if expected_sha256 is not None:
+        if not re.fullmatch(r"[0-9a-f]{64}", expected_sha256):
+            parser.error("--clinvar-vcv-sha256 must be a lowercase SHA256 digest")
+        source_before = source_identity()
+        if sha256_file(args.clinvar_vcv) != expected_sha256 or source_identity() != source_before:
+            raise SystemExit(f"Explicit ClinVar VCV XML checksum/identity mismatch before injection: {args.clinvar_vcv}")
 
     # Parsed once. Both indexes are built over that same parsed object, so the
     # file is not read three times and the two indexes point at the very same
@@ -155,6 +171,12 @@ def main(argv: list[str] | None = None) -> int:
         args.clinvar_vcv, lookup, min_review_stars=args.min_review_stars,
         variation_id_lookup=by_variation_id,
     )
+    if expected_sha256 is not None and (
+        source_identity() != source_before
+        or sha256_file(args.clinvar_vcv) != expected_sha256
+        or source_identity() != source_before
+    ):
+        raise SystemExit(f"Explicit ClinVar VCV XML changed during injection; output not published: {args.clinvar_vcv}")
     log(f"ClinVar returned {len(matches)} matched records")
 
     counts = inject(cache, matches)
@@ -171,6 +193,8 @@ def main(argv: list[str] | None = None) -> int:
         **{k: int(v) for k, v in parse_stats.items()},
         **counts,
     }
+    if expected_sha256 is not None:
+        cache["metadata"]["clinvar"]["source_sha256"] = expected_sha256
 
     # Published by writing a temporary file and moving it into place. This is
     # the one GoFCards cache every consumer reads, and writing into it directly

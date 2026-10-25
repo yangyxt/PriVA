@@ -116,7 +116,7 @@ def process_chromosome(chromosome, vcf_path, csq_fields, high_confidence_status)
         
     except Exception as e:
         logger.error(f"Error processing chromosome {chromosome}: {e}")
-        return {}
+        raise  # Pool.map must not publish statistics from an incomplete chromosome.
 
 def calculate_stats(transcript_exon_raw_afs):
     """
@@ -191,8 +191,7 @@ def main():
                 csq_fields['EXON'] = csq_fields['exon']
                 
         if 'Transcript' not in csq_fields or 'EXON' not in csq_fields:
-            logger.error("Required CSQ fields not found in VCF header")
-            return
+            raise ValueError("Required CSQ fields not found in VCF header")
         
         # Get list of chromosomes
         chromosomes = list(vcf.header.contigs)

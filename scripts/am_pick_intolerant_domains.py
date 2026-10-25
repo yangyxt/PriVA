@@ -18,6 +18,8 @@ import diptest
 import pysam
 
 from protein_domain_mapping import DomainNormalizer
+from interpro_mapping_io import load_interpro_mapping
+from domain_metadata_cache import load_or_extract_domain_metadata
 from stat_protein_domain_amscores import nested_defaultdict, _NON_DOMAIN_SOURCES
 self_directory = os.path.dirname(os.path.abspath(__file__))
 
@@ -374,7 +376,8 @@ def visualize_domain_distribution(scores_dict: dict, output_dir: str, threads: i
     # Process domains in parallel
     n_cores = min(threads, len(domain_data))  # Don't use more cores than tasks
     logger.info(f"Processing {len(domain_data)} domains using {n_cores} cores")
-    with mp.Pool(n_cores) as pool:
+    # Spawn independent tasks without inheriting the genome-wide score model.
+    with mp.get_context('spawn').Pool(n_cores) as pool:
         results = list(pool.imap_unordered(visualize_single_domain, domain_data))
     
     # Filter out None results
@@ -511,7 +514,7 @@ def rescue_bimodal_go_mf_domains(tolerant_domains, domain_scores, fixed_composit
         tasks.append((dp, domain_scores[dp], candidate_composites[i], n_permutations, task_seed))
 
     dip_results = {}
-    with mp.Pool(n_cores) as pool:
+    with mp.get_context('spawn').Pool(n_cores) as pool:
         for res in pool.imap_unordered(_dip_rescue_worker, tasks):
             domain_path, result = res
             dip_results[domain_path] = result
@@ -641,7 +644,7 @@ def rescue_non_gomf_domains(tolerant_domains, domain_scores, fixed_composite,
         tasks.append((dp, domain_scores[dp], candidate_composites[i], n_permutations, task_seed))
 
     dip_results = {}
-    with mp.Pool(n_cores) as pool:
+    with mp.get_context('spawn').Pool(n_cores) as pool:
         for res in pool.imap_unordered(_dip_rescue_worker, tasks):
             domain_path, result = res
             dip_results[domain_path] = result
@@ -924,7 +927,7 @@ def extract_domain_metadata_parallel(vcf_path, target_domains=None, threads=1):
     logger.info(f"[DOMAIN_META] Extracting metadata from {len(chroms)} chromosomes "
                 f"with {n_workers} workers")
 
-    with mp.Pool(n_workers) as pool:
+    with mp.get_context('spawn').Pool(n_workers) as pool:
         results = pool.map(_extract_metadata_worker,
                            [(vcf_path, c, target_domains) for c in chroms])
 
@@ -1347,7 +1350,8 @@ def analyze_domain_data(pickle_file: str,
                        hcseeker_spots_tsv: str = None,
                        clinvar_vcf: str = None,
                        coldspot_overlap_threshold: float = 0.6,
-                       common_af_threshold: float = 0.05):
+                       common_af_threshold: float = 0.05,
+                       interpro_mapping_pickle: str = None):
     """
     Analyze domain data from the pickle file and apply post-KS filters.
 
@@ -1362,6 +1366,7 @@ def analyze_domain_data(pickle_file: str,
         clinvar_vcf: Path to clinvar.{assembly}.vep.vcf.gz (None = skip Filter 2)
         coldspot_overlap_threshold: Overlap fraction threshold for Filter 1 (default 0.5)
         common_af_threshold: AF threshold for Filter 3 (default 0.05)
+        interpro_mapping_pickle: Selected mapping path (None retains the bundled default)
     """
     # Create output directory
     os.makedirs(output_dir, exist_ok=True)
@@ -1388,8 +1393,11 @@ def analyze_domain_data(pickle_file: str,
     domain_scores = visualize_domain_distribution(scores_dict, output_dir, threads, assembly)
     dm_instance = DomainNormalizer()
 
-    interpro_map_pickle = os.path.join(os.path.dirname(self_directory), 'data', 'InterPro', 'Interpro_entry_mapping.pkl.gz')
-    interpro_map_dict = pickle.load(gzip.open(interpro_map_pickle, 'rb'))
+    # Standalone callers retain the original bundle; explicit selections never
+    # fall back to it. Compression comes from bytes, not the legacy suffix.
+    interpro_map_pickle = (os.path.join(os.path.dirname(self_directory), 'data', 'InterPro', 'Interpro_entry_mapping.pkl.gz')
+                           if interpro_mapping_pickle is None else interpro_mapping_pickle)
+    interpro_map_dict = load_interpro_mapping(interpro_map_pickle)
 
     functional_map = os.path.join(os.path.dirname(self_directory), 'data', 'InterPro', 'curated_InterPro_func_domains.tsv.gz')
     func_map_df = pd.read_table(functional_map, low_memory=False)
@@ -1400,21 +1408,11 @@ def analyze_domain_data(pickle_file: str,
     domain_metadata = None
     if am_vcf is not None:
         domain_meta_cache = os.path.join(output_dir, f'domain_metadata.{assembly}.pkl')
-        if os.path.exists(domain_meta_cache):
-            logger.info(f"[DOMAIN_META] Loading cached metadata from {domain_meta_cache}")
-            with open(domain_meta_cache, 'rb') as f:
-                domain_metadata = pickle.load(f)
-            # Validate cache has prot_length
-            sample_meta = next(iter(domain_metadata.values()), {}) if domain_metadata else {}
-            if sample_meta.get('prot_length') is None:
-                logger.warning(f"[DOMAIN_META] Stale cache (no prot_length), regenerating...")
-                domain_metadata = None
-        if domain_metadata is None:
-            logger.info(f"[DOMAIN_META] Extracting from AM VCF: {am_vcf}")
-            domain_metadata = extract_domain_metadata_parallel(am_vcf, threads=threads)
-            with open(domain_meta_cache, 'wb') as f:
-                pickle.dump(domain_metadata, f)
-            logger.info(f"[DOMAIN_META] Cached {len(domain_metadata)} domains to {domain_meta_cache}")
+        domain_metadata = load_or_extract_domain_metadata(
+            cache_path=domain_meta_cache, vcf_path=am_vcf, assembly=assembly,
+            extractor=lambda: extract_domain_metadata_parallel(am_vcf, threads=threads),
+            source_paths=(__file__, os.path.join(self_directory, 'stat_protein_domain_amscores.py')),
+            logger=logger)
 
     # Pick out the reference (curated functional) domains
     ref_domain_scores = {
@@ -1500,7 +1498,7 @@ def analyze_domain_data(pickle_file: str,
         tasks.append((domain_path, scores, composite, task_cap, seed))
 
     if n_tasks > 0:
-        with mp.Pool(n_cores) as pool:
+        with mp.get_context('spawn').Pool(n_cores) as pool:
             for res in pool.imap_unordered(process_domain_ks, tasks):
                 domain_path, result = res
                 ks_results[domain_path] = result
@@ -1706,12 +1704,18 @@ def analyze_domain_data(pickle_file: str,
             pickle.dump(excluded_sets, f)
         logger.info(f"Saved excluded domain sets to {excluded_pickle}")
 
+    # Early scientific skip paths leave older outputs in place. Only the full
+    # completed write sequence may authorize callers to publish/reuse results.
+    return True
+
 
 
 if __name__ == '__main__':
     parser = ap.ArgumentParser(description='Analyze domain data from the pickle file.')
     parser.add_argument('--pickle_file', required=True, help='Path to the pickle file containing scores_dict')
     parser.add_argument('--output_dir', required=True, help='Directory to save analysis outputs')
+    parser.add_argument('--interpro_mapping_pickle', '--interpro-mapping-pickle', default=None,
+                        help='Selected InterPro mapping; omitted uses the original bundled path')
     parser.add_argument('--threads', type=int, default=62, help='Number of threads for parallel processing (default: 12)')
     parser.add_argument('--assembly', type=str, default='hg19', help='Assembly version, either hg19 or hg38')
     parser.add_argument('--am_vcf', type=str, default=None,
@@ -1728,7 +1732,7 @@ if __name__ == '__main__':
                         help='FDR threshold for KS test significance (default: 0.05)')
     args = parser.parse_args()
 
-    analyze_domain_data(args.pickle_file,
+    completed = analyze_domain_data(args.pickle_file,
                         args.output_dir,
                         args.threads,
                         fdr_threshold=args.fdr_threshold,
@@ -1737,4 +1741,8 @@ if __name__ == '__main__':
                         hcseeker_spots_tsv=args.hcseeker_spots_tsv,
                         clinvar_vcf=args.clinvar_vcf,
                         coldspot_overlap_threshold=args.coldspot_overlap_threshold,
-                        common_af_threshold=args.common_af_threshold)
+                        common_af_threshold=args.common_af_threshold,
+                        interpro_mapping_pickle=args.interpro_mapping_pickle)
+    if completed is not True:
+        logger.error("DAS analysis did not complete; required outputs were not regenerated.")
+        raise SystemExit(1)

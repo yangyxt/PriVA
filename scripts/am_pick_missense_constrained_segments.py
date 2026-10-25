@@ -120,6 +120,7 @@ def _parse_chromosome(args_tuple):
         vcf.close()
     except Exception as e:
         logging.getLogger("mcs").error(f"Error on chr {chromosome}: {e}")
+        raise  # Pool.map must not publish statistics from an incomplete chromosome.
     return list(chrom_variants.items())
 
 

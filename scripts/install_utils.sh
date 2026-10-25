@@ -1263,69 +1263,35 @@ function MaveDB_install() {
 
 
 function AlphaMissense_install() {
-    local config_file=${1}
-    local PLUGIN_CACHEDIR=${2}
-    local ASSEMBLY_VERSION=${3}
-    local PLUGIN_DIR=${4}
-
-    log "For details, read ${PLUGIN_DIR}/AlphaMissense.pm"
-    local hg19_url="https://storage.googleapis.com/dm_alphamissense/AlphaMissense_hg19.tsv.gz"
-    local hg38_url="https://storage.googleapis.com/dm_alphamissense/AlphaMissense_hg38.tsv.gz"
-
-    local alphamissense_prescore=$(read_yaml ${config_file} "alphamissense_prescore")
-    [[ -f ${alphamissense_prescore} ]] && \
-    log "The prescore file for the AlphaMissense plugin is already downloaded, skip the installation process" && return 0
-
-    if [[ ! -d ${PLUGIN_CACHEDIR} ]]; then
-        mkdir -p ${PLUGIN_CACHEDIR}
-    fi
-
-    if [[ ! -d ${PLUGIN_CACHEDIR}/AlphaMissense ]]; then
-        mkdir -p ${PLUGIN_CACHEDIR}/AlphaMissense
-    fi
-
-    if [[ -f ${PLUGIN_CACHEDIR}/AlphaMissense/AlphaMissense_hg19.tsv.gz ]] && [[ ${PLUGIN_CACHEDIR}/AlphaMissense/AlphaMissense_hg19.tsv.gz -ot ${PLUGIN_CACHEDIR}/AlphaMissense/AlphaMissense_hg19.tsv.gz.tbi ]]; then
-        log "The AlphaMissense_hg19.tsv.gz is already downloaded to ${PLUGIN_CACHEDIR}"
+    # Named options are preferred; retain the existing four-argument caller.
+    local config_file="" PLUGIN_CACHEDIR="" ASSEMBLY_VERSION="" PLUGIN_DIR=""
+    if [[ $# -eq 4 && $1 != --* ]]; then
+        config_file=$1 PLUGIN_CACHEDIR=$2 ASSEMBLY_VERSION=$3 PLUGIN_DIR=$4
     else
-        wget ${hg19_url} -O ${PLUGIN_CACHEDIR}/AlphaMissense/AlphaMissense_hg19.tsv.gz && \
-        tabix -s 1 -b 2 -e 2 -f -S 1 ${PLUGIN_CACHEDIR}/AlphaMissense/AlphaMissense_hg19.tsv.gz || \
-        { log "Failed to index the AlphaMissense_hg19.tsv.gz file, this might be due to the downloading file format not correct. Now we need you to download the file manually by opening the url ${hg19_url} in your browser and save the file to ${PLUGIN_CACHEDIR}/AlphaMissense/AlphaMissense_hg19.tsv.gz"; \
-          read -p "Have you finished downloading the file? (yes or no)"; \
-          if [[ ${REPLY} =~ "yes" ]] || [[ ${REPLY} =~ "y" ]] || [[ ${REPLY} =~ "Y" ]] || [[ ${REPLY} =~ "Yes" ]] || [[ ${REPLY} =~ "YES" ]]; then
-            log "Now we start to index the file"
-            tabix -s 1 -b 2 -e 2 -f -S 1 ${PLUGIN_CACHEDIR}/AlphaMissense/AlphaMissense_hg19.tsv.gz
-          else
-            log "Please download the file first"
-            return 1
-          fi
-        }
+        while [[ $# -gt 0 ]]; do
+            [[ $# -ge 2 ]] || { log "ERROR: AlphaMissense_install needs a value for $1"; return 2; }
+            case "$1" in
+                --config) config_file=$2 ;;
+                --cache-dir) PLUGIN_CACHEDIR=$2 ;;
+                --assembly) ASSEMBLY_VERSION=$2 ;;
+                --plugins-dir) PLUGIN_DIR=$2 ;;
+                *) log "ERROR: Use AlphaMissense_install --config CONFIG --cache-dir DIR --assembly ASSEMBLY [--plugins-dir DIR]."; return 2 ;;
+            esac
+            shift 2
+        done
     fi
-
-    if [[ -f ${PLUGIN_CACHEDIR}/AlphaMissense/AlphaMissense_hg38.tsv.gz ]] && [[ ${PLUGIN_CACHEDIR}/AlphaMissense/AlphaMissense_hg38.tsv.gz -ot ${PLUGIN_CACHEDIR}/AlphaMissense/AlphaMissense_hg38.tsv.gz.tbi ]]; then
-        log "The AlphaMissense_hg38.tsv.gz is already downloaded to ${PLUGIN_CACHEDIR}"
-    else
-        wget ${hg38_url} -O ${PLUGIN_CACHEDIR}/AlphaMissense/AlphaMissense_hg38.tsv.gz && \
-        tabix -s 1 -b 2 -e 2 -f -S 1 ${PLUGIN_CACHEDIR}/AlphaMissense/AlphaMissense_hg38.tsv.gz || \
-        { log "Failed to index the AlphaMissense_hg38.tsv.gz file, this might be due to the downloading file format not correct. Now we need you to download the file manually by opening the url ${hg38_url} in your browser and save the file to ${PLUGIN_CACHEDIR}/AlphaMissense/AlphaMissense_hg38.tsv.gz"; \
-          read -p "Have you finished downloading the file? (yes or no)"; \
-          if [[ ${REPLY} =~ "yes" ]] || [[ ${REPLY} =~ "y" ]] || [[ ${REPLY} =~ "Y" ]] || [[ ${REPLY} =~ "Yes" ]] || [[ ${REPLY} =~ "YES" ]]; then
-            log "Now we start to index the file"
-            tabix -s 1 -b 2 -e 2 -f -S 1 ${PLUGIN_CACHEDIR}/AlphaMissense/AlphaMissense_hg38.tsv.gz
-          else
-            log "Please download the file first"
-            return 1
-          fi
-        }
-    fi
-
-    if [[ ${ASSEMBLY_VERSION} == "GRCh37" ]] || [[ ${ASSEMBLY_VERSION} == "hg19" ]]; then
-        update_yaml ${config_file} "alphamissense_prescore" "${PLUGIN_CACHEDIR}/AlphaMissense/AlphaMissense_hg19.tsv.gz"
-    elif [[ ${ASSEMBLY_VERSION} == "GRCh38" ]] || [[ ${ASSEMBLY_VERSION} == "hg38" ]]; then
-        update_yaml ${config_file} "alphamissense_prescore" "${PLUGIN_CACHEDIR}/AlphaMissense/AlphaMissense_hg38.tsv.gz"
-    else
-        log "Not supported assembly version: ${ASSEMBLY_VERSION}"
-        return 1
-    fi
+    [[ -n $config_file && -n $PLUGIN_CACHEDIR && -n $ASSEMBLY_VERSION ]] || {
+        log "ERROR: AlphaMissense_install requires config, cache-dir and assembly."
+        return 2
+    }
+    local configured selected
+    configured=$(read_yaml "$config_file" alphamissense_prescore) || return 1
+    local -a source_args=()
+    [[ -z $configured || $configured == null ]] || source_args=(--source "$configured")
+    selected=$(python "${SCRIPT_DIR}/alphamissense_cache.py" install \
+        --cache-dir "$PLUGIN_CACHEDIR" --assembly "$ASSEMBLY_VERSION" "${source_args[@]}") || return 1
+    update_yaml "$config_file" alphamissense_prescore "$selected" || return 1
+    log "AlphaMissense original prescore and tabix index are ready: $selected"
 }
 
 
@@ -1333,41 +1299,82 @@ function AlphaMissense_install() {
 function AlphaMissense_anno() {
     local config_file=${1}
 
-    local alphamissense_prescore=$(read_yaml ${config_file} "alphamissense_prescore")
-    local alphamissense_vcf=$(read_yaml ${config_file} "alphamissense_vcf")
-    local alphamissense_vep_vcf=$(read_yaml ${config_file} "alphamissense_vep_vcf")
-    local conservation_file=$(read_yaml ${config_file} "conservation_file")
+    local alphamissense_prescore=$(read_yaml "${config_file}" "alphamissense_prescore")
+    local alphamissense_vcf=$(read_yaml "${config_file}" "alphamissense_vcf")
+    local alphamissense_vep_vcf=$(read_yaml "${config_file}" "alphamissense_vep_vcf")
+    local base_helper=${SCRIPT_DIR}/alphamissense_annotation_base.py
+    local alphamissense_vep_base_vcf
+    alphamissense_vep_base_vcf=$(python "$base_helper" path --config "$config_file" --source-root "$BASE_DIR") || return 1
+    local conservation_file=$(read_yaml "${config_file}" "conservation_file")
+    local assembly vep_major
+    assembly=$(read_yaml "$config_file" assembly) || return 1
+    vep_major=$(read_yaml "$config_file" vep_installed_version) || return 1
+    [[ "$vep_major" =~ ^[1-9][0-9]*$ ]] || {
+        log "ERROR: AlphaMissense annotation requires the configured numeric VEP major."
+        return 1
+    }
 
 
-    check_vcf_validity ${alphamissense_vcf} && \
-    [[ ${alphamissense_vcf} -nt ${alphamissense_prescore} ]] && \
-    check_vcf_validity ${alphamissense_vep_vcf} && \
-    [[ ${alphamissense_vep_vcf} -nt ${alphamissense_vcf} ]] && \
-    check_vcf_infotags ${alphamissense_vep_vcf} "CSQ" && \
-    [[ ${alphamissense_vep_vcf} -nt ${SCRIPT_DIR}/install_utils.sh ]] && \
-    log "The AlphaMissense VCF file ${alphamissense_vcf} is already annotated by VEP to ${alphamissense_vep_vcf}. Skip this step" && return 0
-    
+    # 2026-10-22 CT: preserve the original converter -> VEP -> motif -> AF order.
+    # Motifs need the complete pre-AF annotation (including chrM); AF may replace
+    # only the independent runtime copy. Bind actual science, not this whole
+    # installer's mtime, so unrelated engineering edits cannot repeat full VEP.
+    python "$base_helper" recover --config "$config_file" --source-root "$BASE_DIR" || return 1
+    if python "$base_helper" check --config "$config_file" --source-root "$BASE_DIR"; then
+        if ! { check_vcf_validity "$alphamissense_vep_vcf" && \
+               { [[ "$alphamissense_vep_vcf" -nt "$alphamissense_vep_base_vcf" ]] || \
+                 python "$base_helper" runtime-associated --config "$config_file" --source-root "$BASE_DIR"; } && \
+               check_vcf_infotags "$alphamissense_vep_vcf" CSQ && \
+               python "${SCRIPT_DIR}/alphamissense_cache.py" check-annotation \
+                   --input "$alphamissense_vep_vcf" --assembly "$assembly" --vep-major "$vep_major" > /dev/null; }; then
+            python "$base_helper" restore --config "$config_file" --source-root "$BASE_DIR" || return 1
+        fi
+        [[ $(read_yaml "$config_file" alphamissense_vep_base_vcf) == "$alphamissense_vep_base_vcf" ]] || \
+            update_yaml "$config_file" alphamissense_vep_base_vcf "$alphamissense_vep_base_vcf" || return 1
+        log "The complete AlphaMissense VEP annotation matches its scientific producer and inputs; reusing $alphamissense_vep_base_vcf"
+        return 0
+    fi
 
+
+    [[ -n $alphamissense_vcf && $alphamissense_vcf != null && -n $alphamissense_vep_vcf && $alphamissense_vep_vcf != null ]] || {
+        log "ERROR: Configure managed alphamissense_vcf and alphamissense_vep_vcf destinations."
+        return 1
+    }
     local convert_py=${SCRIPT_DIR}/alphmis_tsv2vcf.py
-    python ${convert_py} \
-    ${alphamissense_prescore} \
-    ${alphamissense_prescore/.tsv/.vcf} && \
-    local vep_cache_dir=$(read_yaml ${config_file} "vep_cache_dir") && \
-    local threads=$(read_yaml ${config_file} "threads") && \
-    local ref_genome=$(read_yaml ${config_file} "ref_genome") && \
-    local assembly=$(read_yaml ${config_file} "assembly") && \
-    local vep_plugins_dir=$(read_yaml ${config_file} "vep_plugins_dir") && \
+    local vep_cache_dir=$(read_yaml "$config_file" vep_cache_dir)
+    local threads=$(read_yaml "$config_file" threads)
+    local ref_genome=$(read_yaml "$config_file" ref_genome)
+    local vep_plugins_dir=$(read_yaml "$config_file" vep_plugins_dir)
+    mkdir -p "$(dirname "$alphamissense_vcf")" "$(dirname "$alphamissense_vep_vcf")" "$(dirname "$alphamissense_vep_base_vcf")" || return 1
+    local stage converted annotated
+    stage=$(mktemp -d "$(dirname "$alphamissense_vcf")/.alphamissense-anno.XXXXXX") || return 1
+    converted="$stage/AlphaMissense.vcf.gz"
+    annotated="$stage/AlphaMissense.vep.vcf.gz"
+    python "$base_helper" capture --config "$config_file" --source-root "$BASE_DIR" \
+        --output "$stage/annotation-inputs.json" || return 1
+    # Keep the original scientific converter and VEP procedure. A stage keeps
+    # outputs beside the managed destinations, never beside an external input.
+    python "$convert_py" "$alphamissense_prescore" "$converted" && \
+    check_vcf_validity "$converted" && \
     basic_vep_annotation \
-    -i ${alphamissense_prescore/.tsv/.vcf} \
-    -a ${assembly} \
-    -r ${ref_genome} \
-    -c ${vep_cache_dir} \
-    -t ${threads} \
-    -p ${vep_plugins_dir} \
-    -v ${conservation_file} && \
-    display_vcf ${alphamissense_prescore/.tsv/.vep.vcf} && \
-    update_yaml ${config_file} "alphamissense_vep_vcf" "${alphamissense_prescore/.tsv/.vep.vcf}" && \
-    log "The AlphaMissense VCF file ${alphamissense_prescore/.tsv/.vep.vcf} is annotated by VEP and saved to ${alphamissense_vcf}"
+    -i "$converted" -a "$assembly" -r "$ref_genome" -c "$vep_cache_dir" \
+    -t "$threads" -p "$vep_plugins_dir" -v "$conservation_file" && \
+    check_vcf_validity "$annotated" && check_vcf_infotags "$annotated" CSQ && \
+    python "${SCRIPT_DIR}/alphamissense_cache.py" check-annotation \
+        --input "$annotated" --assembly "$assembly" --vep-major "$vep_major" > /dev/null || {
+        log "ERROR: AlphaMissense conversion/annotation failed; incomplete stage retained at $stage"
+        return 1
+    }
+    python "$base_helper" publish --config "$config_file" --source-root "$BASE_DIR" \
+        --staged-converted "$converted" --staged-annotation "$annotated" --expected-inputs "$stage/annotation-inputs.json" || return 1
+    if [[ -f $stage/AlphaMissense.vep.stats.html ]]; then
+        mv "$stage/AlphaMissense.vep.stats.html" "${alphamissense_vep_vcf/.vcf*/.stats.html}" || return 1
+    fi
+    rmdir "$stage" 2>/dev/null || log "Retained AlphaMissense annotation auxiliary files at $stage"
+    update_yaml "$config_file" alphamissense_vcf "$alphamissense_vcf" && \
+    update_yaml "$config_file" alphamissense_vep_base_vcf "$alphamissense_vep_base_vcf" && \
+    update_yaml "$config_file" alphamissense_vep_vcf "$alphamissense_vep_vcf" && \
+    log "AlphaMissense converted VCF and VEP annotation are ready at the configured managed destinations."
 }
 
 
@@ -1384,8 +1391,9 @@ function AlphaMissense_pick_missense_constrained_segments() {
     local config_file=${1}
     local intolerant_motif_prefix=${2:-}
     local pick_intolerant_motifs_py=${SCRIPT_DIR}/am_pick_missense_constrained_segments.py
-    local assembly=$(read_yaml ${config_file} "assembly")
-    local alphamissense_intolerant_motifs=$(read_yaml ${config_file} "alphamissense_intolerant_motifs")
+    local assembly
+    assembly=$(priva_bundle_assembly "$(read_yaml "${config_file}" "assembly")") || return 1
+    local alphamissense_intolerant_motifs=$(read_yaml "${config_file}" "alphamissense_intolerant_motifs")
 
     if [[ -z ${intolerant_motif_prefix} ]]; then
         if [[ -n $alphamissense_intolerant_motifs && $alphamissense_intolerant_motifs != null ]]; then
@@ -1395,104 +1403,269 @@ function AlphaMissense_pick_missense_constrained_segments() {
         fi
     fi
 
-    local alphamissense_vep_vcf=$(read_yaml ${config_file} "alphamissense_vep_vcf")
-    local threads=$(read_yaml ${config_file} "threads")
-    [[ -f ${alphamissense_intolerant_motifs} ]] && \
-    [[ ${alphamissense_intolerant_motifs} -nt ${alphamissense_vep_vcf} ]] && \
-    [[ ${alphamissense_intolerant_motifs} -nt ${pick_intolerant_motifs_py} ]] && \
-    log "The AlphaMissense intolerant motifs file ${alphamissense_intolerant_motifs} is already generated, skip this step" && \
-    return 0 || \
-    log "The AlphaMissense intolerant motifs file ${alphamissense_intolerant_motifs} is not generated, we will generate it"
-
+    local base_helper=${SCRIPT_DIR}/alphamissense_annotation_base.py
+    local alphamissense_vep_vcf
+    alphamissense_vep_vcf=$(python "$base_helper" path --config "$config_file" --source-root "$BASE_DIR") || return 1
+    python "$base_helper" check --config "$config_file" --source-root "$BASE_DIR" || return 1
+    local threads=$(read_yaml "${config_file}" "threads")
     if [[ -z $alphamissense_intolerant_motifs || $alphamissense_intolerant_motifs == null || ! -d $(dirname "$alphamissense_intolerant_motifs") ]]; then
         alphamissense_intolerant_motifs="${intolerant_motif_prefix}.pkl"
     fi
+    local nm_to_enst_tsv
+    nm_to_enst_tsv=$(python "${SCRIPT_DIR}/installer_prerequisites.py" "${config_file}" \
+        --source-root "${BASE_DIR}" --stage mapping --print-mapping) || return 1
+    local -a mapping_inputs=(
+        --input "${DATA_DIR}/gnomAD_RMC/gnomad_v2.1.1_rmc_flat.${assembly}.tsv"
+        --input "${DATA_DIR}/HCSeeker/HC_spots.${assembly}.tsv"
+    )
+    local -a publication_args=(
+        --config "$config_file" --producer "$pick_intolerant_motifs_py"
+        --mapping "$nm_to_enst_tsv" --kind motifs --assembly "$assembly"
+        --cache-root "$(read_yaml "$config_file" cache_root)"
+        --output-dir "$(read_yaml "$config_file" vep_plugins_cachedir)/AlphaMissense"
+        --annotation-base "$alphamissense_vep_vcf"
+        "${mapping_inputs[@]}"
+    )
+    # Finish only our own completed two-file transaction before normal receipt gates.
+    python "${SCRIPT_DIR}/mapped_artifact_publish.py" recover \
+        --artifact "$alphamissense_intolerant_motifs" "${publication_args[@]}" || return 1
+    local original_motifs=$alphamissense_intolerant_motifs
+    if [[ -e "$alphamissense_intolerant_motifs" || -L "$alphamissense_intolerant_motifs" ||
+          -e "${alphamissense_intolerant_motifs}.nm_to_enst.json" || -L "${alphamissense_intolerant_motifs}.nm_to_enst.json" ]]; then
+        alphamissense_intolerant_motifs=$(python "${SCRIPT_DIR}/biomart_nm_to_enst.py" artifact-route \
+            --artifact "$alphamissense_intolerant_motifs" --mapping "$nm_to_enst_tsv" \
+            --cache-root "$(read_yaml "$config_file" cache_root)" \
+            --output-dir "$(read_yaml "$config_file" vep_plugins_cachedir)/AlphaMissense" \
+            --assembly "$assembly" --kind motifs --print-path "${mapping_inputs[@]}") || return 1
+    fi
+    if [[ -s "$alphamissense_intolerant_motifs" ]] && \
+       python "$base_helper" motif-check --config "$config_file" --source-root "$BASE_DIR" \
+           --artifact "$alphamissense_intolerant_motifs"; then
+        [[ "$alphamissense_intolerant_motifs" == "$original_motifs" ]] || \
+            update_yaml "$config_file" alphamissense_intolerant_motifs "$alphamissense_intolerant_motifs" || return 1
+        log "The AlphaMissense intolerant motifs file ${alphamissense_intolerant_motifs} is already generated, skip this step"
+        return 0
+    fi
+    log "The AlphaMissense intolerant motifs file ${alphamissense_intolerant_motifs} is not generated, we will generate it"
+
+    local mapping_identity
+    mapping_identity=$(python "${SCRIPT_DIR}/biomart_nm_to_enst.py" identity \
+        "${nm_to_enst_tsv}" "${mapping_inputs[@]}") || return 1
+
     mkdir -p "$(dirname "$alphamissense_intolerant_motifs")" || return 1
 
-    python ${pick_intolerant_motifs_py} \
-    --vcf_path ${alphamissense_vep_vcf} \
-    --rmc_tsv ${SCRIPT_DIR}/../data/gnomAD_RMC/gnomad_v2.1.1_rmc_flat.${assembly}.tsv \
-    --hcseeker_tsv ${SCRIPT_DIR}/../data/HCSeeker/HC_spots.${assembly}.tsv \
-    --output ${alphamissense_intolerant_motifs} \
-    --processes ${threads} && \
-    update_yaml ${config_file} "alphamissense_intolerant_motifs" "${alphamissense_intolerant_motifs}" && \
+    python "${SCRIPT_DIR}/mapped_artifact_publish.py" run \
+    --artifact "$alphamissense_intolerant_motifs" --expected-identity "$mapping_identity" \
+    "${publication_args[@]}" -- \
+    --vcf_path "$alphamissense_vep_vcf" \
+    --rmc_tsv "${SCRIPT_DIR}/../data/gnomAD_RMC/gnomad_v2.1.1_rmc_flat.${assembly}.tsv" \
+    --hcseeker_tsv "${SCRIPT_DIR}/../data/HCSeeker/HC_spots.${assembly}.tsv" \
+    --nm_to_enst_tsv "${nm_to_enst_tsv}" \
+    --output "$alphamissense_intolerant_motifs" \
+    --processes "$threads" && \
+    update_yaml "${config_file}" "alphamissense_intolerant_motifs" "${alphamissense_intolerant_motifs}" && \
     log "The AlphaMissense intolerant motifs file is generated and saved to ${alphamissense_intolerant_motifs}"
 }
 
 
 function AlphaMissense_stat() {
     local config_file=${1}
-    local alphamissense_stat=$(read_yaml ${config_file} "alphamissense_pd_stat")
-    local alphamissense_vcf=$(read_yaml ${config_file} "alphamissense_vep_vcf")
+    local alphamissense_stat=$(read_yaml "${config_file}" "alphamissense_pd_stat")
+    local alphamissense_vcf=$(read_yaml "${config_file}" "alphamissense_vep_vcf")
     local stat_py=${SCRIPT_DIR}/stat_protein_domain_amscores.py
-    local threads=$(read_yaml ${config_file} "threads")
+    local cache_root
+    cache_root=$(read_yaml "$config_file" cache_root) || return 1
+    [[ $cache_root == / ]] || cache_root=${cache_root%/}
 
-    [[ -f ${alphamissense_stat} ]] && \
-    [[ ${alphamissense_stat} -nt ${alphamissense_vcf} ]] && \
-    [[ ${alphamissense_stat} -nt ${stat_py} ]] && \
-    log "The AlphaMissense statistics JSON file ${alphamissense_stat} is already generated, skip this step" && \
-    return 0 || \
-    log "The AlphaMissense statistics JSON file ${alphamissense_stat} is not generated or updated, we will generate it"
+    # 2026-10-24 CT: a completed unmodified original producer is independent of
+    # the optional chromosome merger. Its own receipt must never masquerade as
+    # a builder .complete.json. Invalid/pending original receipts fail closed;
+    # only exit 3 (no original ownership sidecars) falls through to other routes.
+    local original_status=0
+    python "${SCRIPT_DIR}/alphamissense_original_cache.py" check \
+        --source-script "$stat_py" --input-vcf "$alphamissense_vcf" \
+        --output-pickle "$alphamissense_stat" --cache-root "$cache_root" || original_status=$?
+    if [[ $original_status == 0 ]]; then
+        log "The completed original AlphaMissense statistics pickle is ready at $alphamissense_stat"
+        return 0
+    elif [[ $original_status != 3 ]]; then
+        log "ERROR: Original AlphaMissense publication needs review or interrupted-import recovery."
+        return "$original_status"
+    fi
 
-    python ${stat_py} \
-    ${alphamissense_vcf} \
-    ${alphamissense_vcf/.vcf*/.prot.domain.stats.pkl} \
-    ${threads:-1} && \
-    update_yaml ${config_file} "alphamissense_pd_stat" "${alphamissense_vcf/.vcf*/.prot.domain.stats.pkl}" && \
-    log "The AlphaMissense statistics pickle file ${alphamissense_vcf/.vcf*/.prot.domain.stats.pkl} is generated and saved to ${alphamissense_stat}"
+    # Keep the existing reuse route for explicitly selected outside-root data.
+    # Managed builds instead require the builder's completed publication receipt.
+    if [[ $cache_root != / && $alphamissense_stat != "$cache_root/"* && -s $alphamissense_stat &&
+          $alphamissense_stat -nt $alphamissense_vcf && $alphamissense_stat -nt $stat_py ]]; then
+        log "The selected AlphaMissense statistics pickle $alphamissense_stat is already generated, skip this step"
+        return 0
+    fi
+
+    [[ -n $alphamissense_stat && $alphamissense_stat != null ]] || {
+        log "ERROR: Configure the managed alphamissense_pd_stat destination."
+        return 1
+    }
+    # 2026-10-24 CT: the full 22-worker Pool.map exceeded 96 GiB. The installation
+    # helper reuses the unchanged scientific collector, retains completed literal
+    # chromosomes, and merges/finalizes genes in the original mutation order.
+    # Its conservative local default is one collector; its named chromosome entry
+    # point also permits independent Slurm jobs without a production Rust binary.
+    log "Checking or building the AlphaMissense domain-statistics pickle with chromosome checkpoints"
+    python "${SCRIPT_DIR}/alphamissense_domain_cache.py" build \
+        --source-script "$stat_py" --input-vcf "$alphamissense_vcf" \
+        --output-pickle "$alphamissense_stat" --cache-root "$cache_root" && \
+    update_yaml "$config_file" alphamissense_pd_stat "$alphamissense_stat" && \
+    log "The AlphaMissense statistics pickle is ready at $alphamissense_stat"
 }
 
 
 function AlphaMissense_pick_intolerant_domains() {
     local config_file=${1}
 
-    local assembly=$(read_yaml ${config_file} "assembly")
-    local alphamissense_pd_stat=$(read_yaml ${config_file} "alphamissense_pd_stat")
-    local alphamissense_tranx_domain_map=$(read_yaml ${config_file} "alphamissense_tranx_domain_map")
-    local alphamissense_intolerant_domains=$(read_yaml ${config_file} "alphamissense_intolerant_domains")
+    local assembly
+    assembly=$(priva_bundle_assembly "$(read_yaml "${config_file}" "assembly")") || return 1
+    local alphamissense_pd_stat=$(read_yaml "$config_file" "alphamissense_pd_stat")
+    local alphamissense_tranx_domain_map=$(read_yaml "$config_file" "alphamissense_tranx_domain_map")
+    local alphamissense_intolerant_domains=$(read_yaml "$config_file" "alphamissense_intolerant_domains")
     local pick_intolerant_domains_py=${SCRIPT_DIR}/am_pick_intolerant_domains.py
+    local alphamissense_dir
+    alphamissense_dir=$(dirname "$alphamissense_pd_stat")
+    alphamissense_intolerant_domains=$(yaml_value_or_default "$config_file" alphamissense_intolerant_domains \
+        "${alphamissense_dir}/domain_tolerance_analysis.${assembly}.tsv") || return 1
+    alphamissense_tranx_domain_map=$(yaml_value_or_default "$config_file" alphamissense_tranx_domain_map \
+        "${alphamissense_dir}/transcript_pp_domain_mapping.${assembly}.pkl") || return 1
+    local all_intolerant_domains
+    all_intolerant_domains=$(yaml_value_or_default "$config_file" all_intolerant_domains \
+        "${alphamissense_dir}/all_intolerant_domains.${assembly}.pkl") || return 1
 
-    [[ -f ${alphamissense_intolerant_domains} ]] && \
-    [[ ${alphamissense_intolerant_domains} -nt ${alphamissense_pd_stat} ]] && \
-    [[ -f ${alphamissense_tranx_domain_map} ]] && \
-    [[ ${alphamissense_tranx_domain_map} -nt ${alphamissense_pd_stat} ]] && \
-    [[ ${alphamissense_intolerant_domains} -nt ${pick_intolerant_domains_py} ]] && \
-    log "The AlphaMissense intolerant domains file ${alphamissense_intolerant_domains} is already generated, skip this step" && return 0
-
-    local threads=$(read_yaml ${config_file} "threads")
-    local alphamissense_dir=$(dirname ${alphamissense_pd_stat})
+    local threads=$(read_yaml "$config_file" "threads")
+    mkdir -p "$alphamissense_dir" || return 1
 
     # Post-KS filter inputs
-    local alphamissense_vep_vcf=$(read_yaml ${config_file} "alphamissense_vep_vcf")
+    local alphamissense_vep_vcf=$(read_yaml "$config_file" "alphamissense_vep_vcf")
     local hcseeker_spots_tsv=${DATA_DIR}/HCSeeker/HC_spots.${assembly}.tsv
-    local clinvar_vcf=$(read_yaml ${config_file} "clinvar_vcf")
+    local clinvar_vcf=$(read_yaml "$config_file" "clinvar_vcf")
 
     # Build optional filter flags
-    local filter_flags=""
+    local -a filter_flags=()
     if [[ -f ${alphamissense_vep_vcf} ]] && [[ -f ${hcseeker_spots_tsv} ]]; then
-        filter_flags+=" --am_vcf ${alphamissense_vep_vcf}"
-        filter_flags+=" --hcseeker_spots_tsv ${hcseeker_spots_tsv}"
+        filter_flags+=(--am_vcf "$alphamissense_vep_vcf" --hcseeker_spots_tsv "$hcseeker_spots_tsv")
         log "Filter 1 (coldspot overlap) enabled: am_vcf=${alphamissense_vep_vcf}, hcseeker=${hcseeker_spots_tsv}"
     else
         log "Filter 1 (coldspot overlap) skipped: am_vcf or hcseeker_spots_tsv not found"
     fi
     if [[ -f ${clinvar_vcf} ]]; then
-        filter_flags+=" --clinvar_vcf ${clinvar_vcf}"
+        filter_flags+=(--clinvar_vcf "$clinvar_vcf")
         log "Filter 2 (benign ClinVar) enabled: clinvar_vcf=${clinvar_vcf}"
     else
         log "Filter 2 (benign ClinVar) skipped: clinvar_vcf not found"
     fi
 
-    log "Running DAS intolerant domain analysis: python ${pick_intolerant_domains_py} --pickle_file ${alphamissense_pd_stat} --threads ${threads} --output_dir ${alphamissense_dir}${filter_flags}"
-    python ${pick_intolerant_domains_py} \
-    --assembly ${assembly} \
-    --pickle_file ${alphamissense_pd_stat} \
-    --threads ${threads} \
-    --output_dir ${alphamissense_dir} \
-    ${filter_flags} && \
-    update_yaml ${config_file} "alphamissense_intolerant_domains" "${alphamissense_dir}/domain_tolerance_analysis.${assembly}.tsv" && \
-    update_yaml ${config_file} "alphamissense_tranx_domain_map" "${alphamissense_dir}/transcript_pp_domain_mapping.${assembly}.pkl" && \
-    update_yaml ${config_file} "all_intolerant_domains" "${alphamissense_dir}/all_intolerant_domains.${assembly}.pkl" && \
+    local interpro_mapping_pickle
+    interpro_mapping_pickle=$(read_yaml "$config_file" interpro_mapping_pickle) || return 1
+    local completion_state=${SCRIPT_DIR}/das_install_state.py
+    local completion_receipt=${alphamissense_dir}/domain_analysis.${assembly}.install.json
+    # 2026-10-24 CT: equal source content in PriVA/PriVA-nextflow must not force
+    # another full DAS calculation because checkout paths/inodes differ. Keep
+    # scientific data identities strict, original argument order unchanged and
+    # genuinely bundled resources on the user's existence/nonzero-only policy.
+    local -a state_inputs=(--profile "$assembly"
+        --input "$alphamissense_pd_stat"
+        --source "analysis=$pick_intolerant_domains_py" --source "completion=$completion_state"
+        --source "mapping-io=${SCRIPT_DIR}/interpro_mapping_io.py"
+        --source "domain-mapping=${SCRIPT_DIR}/protein_domain_mapping.py"
+        --source "statistics=${SCRIPT_DIR}/stat_protein_domain_amscores.py"
+        --source "domain-metadata=${SCRIPT_DIR}/domain_metadata_cache.py"
+        --parameter "threads=$threads"
+        --parameter "coldspot-enabled=$([[ -f $alphamissense_vep_vcf && -f $hcseeker_spots_tsv ]] && printf true || printf false)"
+        --parameter "benign-enabled=$([[ -f $clinvar_vcf ]] && printf true || printf false)")
+    local bundled_mapping=${DATA_DIR}/InterPro/Interpro_entry_mapping.pkl.gz
+    if [[ "$(realpath -ms -- "$interpro_mapping_pickle")" == "$(realpath -ms -- "$bundled_mapping")" &&
+          "$(realpath -m -- "$interpro_mapping_pickle")" == "$(realpath -ms -- "$bundled_mapping")" ]]; then
+        state_inputs+=(--bundled "interpro-mapping=$interpro_mapping_pickle")
+    else
+        state_inputs+=(--input "$interpro_mapping_pickle")
+    fi
+    local bundled_role bundled_path
+    for bundled_role in domain-normalization functional-domains; do
+        if [[ $bundled_role == domain-normalization ]]; then
+            bundled_path=${BASE_DIR}/data/InterPro/InterPro_domain_norm_map.json
+        else
+            bundled_path=${BASE_DIR}/data/InterPro/curated_InterPro_func_domains.tsv.gz
+        fi
+        if [[ "$(realpath -m -- "$bundled_path")" == "$(realpath -ms -- "$bundled_path")" ]]; then
+            state_inputs+=(--bundled "$bundled_role=$bundled_path")
+        else
+            state_inputs+=(--input "$bundled_path")
+        fi
+    done
+    if [[ -f ${alphamissense_vep_vcf} && -f ${hcseeker_spots_tsv} ]]; then
+        state_inputs+=(--input "$alphamissense_vep_vcf")
+        if [[ "$(realpath -m -- "$hcseeker_spots_tsv")" == "$(realpath -ms -- "$hcseeker_spots_tsv")" ]]; then
+            state_inputs+=(--bundled "hcseeker-spots=$hcseeker_spots_tsv")
+        else
+            state_inputs+=(--input "$hcseeker_spots_tsv")
+        fi
+    fi
+    [[ ! -f ${clinvar_vcf} ]] || state_inputs+=(--input "$clinvar_vcf")
+    local -a state_outputs=(--output "$alphamissense_intolerant_domains"
+        --output "$alphamissense_tranx_domain_map" --output "$all_intolerant_domains")
+    # DAS writes several files in sequence and can fail after any of them. Even
+    # three fresh, nonempty outputs cannot establish successful completion.
+    # A receipt is valid only after the entire command, publication and YAML
+    # updates succeeded. Legacy unreceipted derived outputs rebuild once.
+    if python "$completion_state" check --receipt "$completion_receipt" \
+        "${state_inputs[@]}" "${state_outputs[@]}"; then
+        # Standalone callers may leave equivalent default output keys unset.
+        # Restore only differing selections; valid warm reuse never reruns DAS.
+        local key selected_value current_value
+        local -a output_keys=(alphamissense_intolerant_domains alphamissense_tranx_domain_map all_intolerant_domains)
+        local -a output_values=("$alphamissense_intolerant_domains" "$alphamissense_tranx_domain_map" "$all_intolerant_domains")
+        local output_index
+        for output_index in 0 1 2; do
+            key=${output_keys[$output_index]}
+            selected_value=${output_values[$output_index]}
+            current_value=$(read_yaml "$config_file" "$key") || return 1
+            [[ "$current_value" == "$selected_value" ]] || \
+                update_yaml "$config_file" "$key" "$selected_value" || return 1
+        done
+        log "The AlphaMissense domain build is complete for these inputs; reusing $completion_receipt"
+        return 0
+    fi
+    local expected_inputs
+    expected_inputs=$(python "$completion_state" capture "${state_inputs[@]}") || return 1
+    rm -f -- "$completion_receipt" || return 1
+
+    log "Running original DAS intolerant domain analysis in $alphamissense_dir"
+    python "$pick_intolerant_domains_py" \
+    --assembly "$assembly" \
+    --pickle_file "$alphamissense_pd_stat" \
+    --interpro_mapping_pickle "$interpro_mapping_pickle" \
+    --threads "$threads" \
+    --output_dir "$alphamissense_dir" \
+    "${filter_flags[@]}" || return 1
+
+    # The scientific program writes its original canonical filenames. Preserve
+    # their bytes while honoring each configured managed publication path.
+    local -a produced=(
+        "${alphamissense_dir}/domain_tolerance_analysis.${assembly}.tsv"
+        "${alphamissense_dir}/transcript_pp_domain_mapping.${assembly}.pkl"
+        "${alphamissense_dir}/all_intolerant_domains.${assembly}.pkl"
+    )
+    local -a selected=("$alphamissense_intolerant_domains" "$alphamissense_tranx_domain_map" "$all_intolerant_domains")
+    local item
+    for item in 0 1 2; do
+        [[ -s ${produced[$item]} ]] || { log "ERROR: Missing AlphaMissense domain output: ${produced[$item]}"; return 1; }
+    done
+    for item in 0 1 2; do
+        mkdir -p -- "$(dirname -- "${selected[$item]}")" || return 1
+        [[ ${produced[$item]} == "${selected[$item]}" ]] || mv -- "${produced[$item]}" "${selected[$item]}" || return 1
+    done
+    update_yaml "$config_file" alphamissense_intolerant_domains "$alphamissense_intolerant_domains" && \
+    update_yaml "$config_file" alphamissense_tranx_domain_map "$alphamissense_tranx_domain_map" && \
+    update_yaml "$config_file" all_intolerant_domains "$all_intolerant_domains" && \
+    python "$completion_state" record --receipt "$completion_receipt" \
+        "${state_inputs[@]}" "${state_outputs[@]}" --expected-inputs "$expected_inputs" && \
     log "DAS intolerant domains analysis complete. Outputs saved to ${alphamissense_dir}"
 }
 
@@ -1500,26 +1673,67 @@ function AlphaMissense_pick_intolerant_domains() {
 function prepare_pm1_regions() {
     local config_file=${1}
     local prepare_pm1_py=${SCRIPT_DIR}/prepare_pm1_regions.py
-    local assembly=$(read_yaml ${config_file} "assembly")
-    local threads=$(read_yaml ${config_file} "threads")
-    local alphamissense_dir=$(dirname $(read_yaml ${config_file} "alphamissense_pd_stat"))
-    local pm1_regions_pkl="${alphamissense_dir}/pm1_regions.${assembly}.pkl"
-    local all_intolerant_pkl="${alphamissense_dir}/all_intolerant_domains.${assembly}.pkl"
+    local assembly
+    assembly=$(priva_bundle_assembly "$(read_yaml "${config_file}" "assembly")") || return 1
+    local threads=$(read_yaml "${config_file}" "threads")
+    local alphamissense_dir pm1_regions_pkl all_intolerant_pkl
+    alphamissense_dir=$(dirname -- "$(read_yaml "$config_file" "alphamissense_pd_stat")")
+    # The portable resolver owns destinations; do not infer a new output beside
+    # a supplied input and silently discard the user's configured output key.
+    pm1_regions_pkl=$(yaml_value_or_default "$config_file" pm1_regions_pkl "${alphamissense_dir}/pm1_regions.${assembly}.pkl")
+    all_intolerant_pkl=$(yaml_value_or_default "$config_file" all_intolerant_domains "${alphamissense_dir}/all_intolerant_domains.${assembly}.pkl")
+    mkdir -p -- "$(dirname -- "$pm1_regions_pkl")" || return 1
 
-    [[ -f ${pm1_regions_pkl} ]] && \
-    [[ ${pm1_regions_pkl} -nt ${prepare_pm1_py} ]] && \
-    [[ ${pm1_regions_pkl} -nt ${all_intolerant_pkl} ]] && \
-    log "The PM1 regions file ${pm1_regions_pkl} is already generated, skip this step" && \
-    return 0 || \
+    local nm_to_enst_tsv
+    nm_to_enst_tsv=$(python "${SCRIPT_DIR}/installer_prerequisites.py" "${config_file}" \
+        --source-root "${BASE_DIR}" --stage mapping --print-mapping) || return 1
+    local -a mapping_inputs=(
+        --input "${DATA_DIR}/gnomAD_RMC/gnomad_v2.1.1_rmc_flat.${assembly}.tsv"
+        --input "${DATA_DIR}/HCSeeker/HC_spots.${assembly}.tsv"
+    )
+    local -a publication_args=(
+        --config "$config_file" --producer "$prepare_pm1_py"
+        --mapping "$nm_to_enst_tsv" --kind pm1 --assembly "$assembly"
+        --cache-root "$(read_yaml "$config_file" cache_root)"
+        --output-dir "$(read_yaml "$config_file" vep_plugins_cachedir)/AlphaMissense"
+        "${mapping_inputs[@]}"
+    )
+    python "${SCRIPT_DIR}/mapped_artifact_publish.py" recover \
+        --artifact "$pm1_regions_pkl" "${publication_args[@]}" || return 1
+    local original_pm1=$pm1_regions_pkl
+    if [[ -e "$pm1_regions_pkl" || -L "$pm1_regions_pkl" ||
+          -e "${pm1_regions_pkl}.nm_to_enst.json" || -L "${pm1_regions_pkl}.nm_to_enst.json" ]]; then
+        pm1_regions_pkl=$(python "${SCRIPT_DIR}/biomart_nm_to_enst.py" artifact-route \
+            --artifact "$pm1_regions_pkl" --mapping "$nm_to_enst_tsv" \
+            --cache-root "$(read_yaml "$config_file" cache_root)" \
+            --output-dir "$(read_yaml "$config_file" vep_plugins_cachedir)/AlphaMissense" \
+            --assembly "$assembly" --kind pm1 --print-path "${mapping_inputs[@]}") || return 1
+    fi
+
+    if [[ -f "$pm1_regions_pkl" && "$pm1_regions_pkl" -nt "$prepare_pm1_py" &&
+          "$pm1_regions_pkl" -nt "$all_intolerant_pkl" ]]; then
+        [[ "$pm1_regions_pkl" == "$original_pm1" ]] || \
+            update_yaml "$config_file" pm1_regions_pkl "$pm1_regions_pkl" || return 1
+        log "The PM1 regions file ${pm1_regions_pkl} is already generated, skip this step"
+        return 0
+    fi
     log "Preparing PM1 regions (DAS + HCSeeker + RMC) …"
 
-    python ${prepare_pm1_py} \
-    --config ${config_file} \
-    --output ${pm1_regions_pkl} \
-    --assembly ${assembly} \
-    --threads ${threads} \
+    local mapping_identity
+    mapping_identity=$(python "${SCRIPT_DIR}/biomart_nm_to_enst.py" identity \
+        "${nm_to_enst_tsv}" "${mapping_inputs[@]}") || return 1
+
+    mkdir -p "$(dirname -- "$pm1_regions_pkl")" || return 1
+    python "${SCRIPT_DIR}/mapped_artifact_publish.py" run \
+    --artifact "$pm1_regions_pkl" --expected-identity "$mapping_identity" \
+    "${publication_args[@]}" -- \
+    --config "$config_file" \
+    --output "$pm1_regions_pkl" \
+    --assembly "$assembly" \
+    --threads "$threads" \
+    --nm_to_enst_tsv "${nm_to_enst_tsv}" \
     --skip_das && \
-    update_yaml ${config_file} "pm1_regions_pkl" "${pm1_regions_pkl}" && \
+    update_yaml "${config_file}" "pm1_regions_pkl" "${pm1_regions_pkl}" && \
     log "PM1 regions saved to ${pm1_regions_pkl}"
 }
 
@@ -2554,10 +2768,10 @@ function AlphaMissense_anno_gnomAD() {
     
     log "Running anno_agg_gnomAD_data ${alphamissense_vep_vcf} ${threads} ${assembly} ${gnomAD_vcf_chrX} to annotate gnomAD data to AlphaMissense VCF"
     anno_agg_gnomAD_data \
-    ${alphamissense_vep_vcf} \
-    ${threads} \
-    ${assembly} \
-    ${gnomAD_vcf_chrX} && \
+    "$alphamissense_vep_vcf" \
+    "$threads" \
+    "$assembly" \
+    "$gnomAD_vcf_chrX" && \
     update_yaml "${config_file}" "alphamissense_vep_vcf" "${alphamissense_vep_vcf}"
 }
 

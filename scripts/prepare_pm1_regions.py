@@ -234,7 +234,7 @@ def run_das_pipeline(
     from am_pick_intolerant_domains import analyze_domain_data
 
     logger.info("DAS: running intolerant-domain pipeline …")
-    analyze_domain_data(
+    completed = analyze_domain_data(
         pickle_file,
         output_dir,
         threads,
@@ -242,7 +242,10 @@ def run_das_pipeline(
         am_vcf=am_vcf,
         hcseeker_spots_tsv=hcseeker_tsv,
         clinvar_vcf=clinvar_vcf,
+        interpro_mapping_pickle=config.get("interpro_mapping_pickle"),
     )
+    if completed is not True:
+        raise RuntimeError("DAS analysis did not complete; previous domain outputs cannot be used")
 
     with open(pkl_path, "rb") as fh:
         domains = pickle.load(fh)
@@ -277,12 +280,11 @@ def prepare_pm1_regions(args):
 
     # --- Arm 1: DAS intolerant domains ---
     if args.skip_das:
-        das_pkl = config.get(
-            "all_intolerant_domains",
-            os.path.join(
+        # 2026-10-24 CT: an unfilled managed YAML key uses the same default as
+        # the installer; preserve any explicitly selected nonempty path.
+        das_pkl = config.get("all_intolerant_domains") or os.path.join(
                 os.path.dirname(config.get("alphamissense_pd_stat", "")),
                 f"all_intolerant_domains.{assembly}.pkl",
-            ),
         )
         if not os.path.isfile(das_pkl):
             logger.error("--skip_das set but %s not found", das_pkl)

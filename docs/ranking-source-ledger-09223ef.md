@@ -529,3 +529,86 @@ complete R3 dtype domain, full ranking, a family or the public benchmark.
 
 ---
 
+**R4 compatibility procedure addendum — 24 October 2026 CT**
+
+The opt-in `priva ranking-compatibility` procedure covers original L537–597 only.
+Its in-memory API consumes the existing R2 context and calls the qualified
+`_variant_mechanism_masks` helper at R4. Compatibility multiplication remains
+at R6, after the two gene-list multiplications.
+
+```mermaid
+flowchart LR
+    C[Actual Python C1–C5] --> R3[Original-position R3 control multiplication]
+    R2[Current R2 sex and raw heterozygosity mask] --> R4[R4 masks, INFO counts, compatibility column]
+    R3 --> R4
+    R4 --> R5[Later original gene-list multiplications]
+    R5 --> R6[Later original compatibility multiplication]
+```
+
+This map shows source order and optional procedure boundaries, not an activated
+production dispatcher. R4 writes compatibility 1.0 followed by 0.9 on the exact
+penalty rows; it never multiplies `sort_index`. Raw ACMG score, source sex flags,
+whole-sample-string R2 heterozygosity and exact history/effect tags remain intact.
+X means uppercased chromosome text with one leading `CHR` removed, then exact
+`X` equality. A captured CPython Unicode witness supports the predicate without
+claiming general Unicode uppercase equivalence.
+
+The qualified domain includes aligned native or nullable-Boolean R2 masks
+(including raw data beneath null flags), empty object masks, native numeric raw
+scores, declared primitive mechanism fields and textual/native integer/Boolean
+chromosome columns. The API returns source metadata origins and the existing
+column position; callers retain opaque axes, attrs and flags. Alias roles resolve
+to the same underlying masks: exact GOF, asserted LOF, and PEXT/high-score masks
+are not independently recomputed. Required helper errors precede chromosome and
+raw-score lookups. A first failure retains its category/message and source line;
+its original partial locals remain in the oracle.
+
+Other mask representations, index alignment, nullable helper/raw-score cache
+routes, ambiguous later labels, unsupported chromosome conversion and arbitrary
+objects defer to original R4 on **current buffers**. Those fallbacks retain
+partial mutation, warnings, logs, exceptions and immediate state exactly. They do
+not reload a snapshot or replay R2 warnings, C1–C5 or R3. A future full-Python
+fallback must instead be selected before any prior Rust stage executes.
+
+The preimplementation oracle has 147 cases: 80 genuine full-function L537/L599
+boundaries and 67 edges, retaining 124 original outputs and 23 source failures.
+Eight preceding-stage failures remain separate. Original scientific arguments,
+source/helper/package identities, exact INFO messages/counts, all ordered masks,
+raw Boolean/null storage, metadata, source aliases and immediate mutation states
+are retained. The original observer deduplicates unchanged states across phase
+labels; the first capture's R5-label assumption failed and remains preserved.
+Its successor verifies the actual L599 boundary directly. Later captures make
+inherited INFO logging and the direct-current-buffer observation API explicit.
+
+First Rust attempt 1524529 passed 135 tests, then failed on exactly three attrs
+fields for an existing GOF column. The actual masks, raw bits, names, indices,
+flags, INFO counts and immediate input pickle already matched. Diagnostic
+1514363.3528 identifies the exact difference: `pd.to_numeric` constructs a fresh
+Series, so exact-GOF/non-LOF metadata stays fresh even when its input column exists.
+The corrected metadata plan and a new regression preserve this source behavior;
+the raw-score comparison was also placed after the original history/effect masks.
+That whole failed attempt and its binary remain immutable.
+
+Final **1524530/.0 completed 0:0 at 11:41:28 PM CDT**: **103 exact Rust outputs,
+nine original failures and 35 deliberate Python fallbacks**, zero mismatches.
+Fourteen fallbacks reproduce source failures and remain in the fallback count.
+All 136 Rust tests (nine R4 tests) passed in this fresh build. All prior R3, R2,
+R1, R8/integer, PEXT, condition/mechanism, scoring and old-final-order comparisons
+passed again. The binary SHA256 is
+`108181d687fbf59439b6f25005167aaf4001e53d3f26774677691e694728f872`;
+source pins are
+`684246afd4b69eb78d5457358e1d5f755e0afd9ce14919db08ae58d543e07b3e`,
+and oracle manifest is
+`0b8fe35cad05d9c960423430a0fa149844c9e62d66c4e69d14fd6eb8c2ce653e`.
+
+Maintained sources/docs stay here. All oracle states, failed attempts, actual
+full-source boundaries, diagnostics, snapshots, binaries and comparisons are at
+`/stornext/snfs170/next-gen/scratch/yangyxt_dt/projects/PriVA_upgrade/validation/rust-ranking-compatibility-20261024-v{1,2,3,4}`;
+logs use data-side `logs/rust-ranking-compatibility-*`, with build/Cargo/targets
+separately under `build/rust-ranking-compatibility-*`. Earlier procedure/helper
+bodies and tests, scientific Python, C1–C5/SciPy, R6, installers and production
+or family dispatch are unchanged. This later source is separate from main
+1524420's frozen 6:39 PM CT snapshot and provides no complete-ranking, family or
+public-benchmark qualification.
+
+

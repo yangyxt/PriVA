@@ -13,3 +13,4 @@ parser.add_argument('--vep_plugins_dir', help='Path to the VEP plugins directory
 parser.add_argument('--vep_plugins_cachedir', help='Path to the VEP plugin cache directory', required=False)
 parser.add_argument('--hub_vcf_file', help='Path to the hub VCF file for caching annotated variants', required=False)
 parser.add_argument('--hub_cadd_file', help='Path to the hub TSV file for caching CADD scores', required=False)
+parser.add_argument('--cadd-profile', dest='cadd_profile', help='Explicit qualified shared-VEP/native-Python CADD profile', required=False)

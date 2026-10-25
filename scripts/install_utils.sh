@@ -1063,7 +1063,7 @@ EOF
 
 function CADD_install() {
     local config_file=${1}
-    local assembly=${2}
+    local assembly=${2:-}
     local cache_root cadd_version reply
     local CADD_script CADD_base_dir CADD_parent_dir=""
 
@@ -1073,12 +1073,16 @@ function CADD_install() {
     [[ ${assembly} == "hg38" ]] && assembly="GRCh38"
     cadd_version=$(read_yaml "${config_file}" "cadd_version")
     cache_root=$(read_yaml "${config_file}" "cache_root")
+    # The planner may have adopted a supplied tree beneath a nested managed
+    # path. Keep that exact selection instead of rediscovering a sibling.
+    CADD_base_dir=$(read_yaml "${config_file}" "cadd_base_dir") || return 1
+    [[ ${CADD_base_dir} == null ]] && CADD_base_dir=""
 
     if [[ -n ${cache_root} && ${cache_root} != null ]]; then
         # A selected cache root is authoritative; do not prompt to store the
         # large CADD data inside the package-manager environment instead.
         CADD_parent_dir=$(read_yaml "${config_file}" "cadd_parent_dir")
-    else
+    elif [[ -z ${CADD_base_dir} ]]; then
         # Preserve the previous interactive behavior for legacy configurations.
         CADD_script=$(find "${CONDA_PREFIX}/" -type f -name CADD.sh -print -quit)
         [[ -f ${CADD_script} ]] || {
@@ -1096,98 +1100,68 @@ function CADD_install() {
                     log "The CADD parent directory does not exist: ${CADD_parent_dir}"
                     return 1
                 }
+                # This was an environment discovery, not a configured source;
+                # honor the user's alternate parent below.
+                CADD_base_dir=""
                 ;;
         esac
     fi
 
-    if [[ -n ${CADD_parent_dir} ]]; then
+    if [[ -n ${CADD_base_dir} ]]; then
+        # Only the absent documented managed default is an automatic source
+        # acquisition. Existing/invalid and custom selected paths are retained.
+        if [[ ! -e ${CADD_base_dir} && ! -L ${CADD_base_dir} &&
+              -n ${cache_root} && ${cache_root} != null &&
+              ${CADD_base_dir%/} == "${CADD_parent_dir%/}/CADD-scripts-1.7.2" ]]; then
+            python "${SCRIPT_DIR}/cadd_runtime_install.py" --config "${config_file}" \
+                --source-only --source "${CADD_base_dir}" || return 1
+        fi
+    elif [[ -n ${CADD_parent_dir} ]]; then
         CADD_base_dir=$(find "${CADD_parent_dir}/" -maxdepth 1 -type d -name "CADD-scripts-*${cadd_version#v}*" -print -quit)
         if [[ -z ${CADD_base_dir} ]]; then
-            local archive="${CADD_parent_dir}/CADD-scripts.zip"
-            local url
-            url=$(read_yaml "${config_file}" "cadd_zip_download_url")
-            wget "${url}" -O "${archive}" &&
-                unzip "${archive}" -d "${CADD_parent_dir}/" &&
-                rm "${archive}" || return 1
-            CADD_base_dir=$(find "${CADD_parent_dir}/" -maxdepth 1 -type d -name "CADD-scripts-*${cadd_version#v}*" -print -quit)
+            # The complete runtime requires the reviewed Git revision. Acquire
+            # it only for the matching configured upstream archive identity;
+            # custom archives and existing non-Git trees are never replaced.
+            CADD_base_dir="${CADD_parent_dir}/CADD-scripts-1.7.2"
+            python "${SCRIPT_DIR}/cadd_runtime_install.py" --config "${config_file}" \
+                --source-only --source "${CADD_base_dir}" || return 1
         fi
     fi
 
     CADD_script="${CADD_base_dir}/CADD.sh"
     [[ -f ${CADD_script} ]] || {
-        log "CADD.sh was not found in the selected CADD installation: ${CADD_base_dir}"
+        log "CADD.sh was not found in the selected CADD installation; selected path retained: ${CADD_base_dir}"
         return 1
     }
     update_or_append_yaml "${config_file}" "cadd_base_dir" "${CADD_base_dir}" || return 1
     local CADD_cache_dir="${CADD_base_dir}/data"
-    local CADD_prescore_dir="${CADD_cache_dir}/prescored"
-    local CADD_anno_dir="${CADD_cache_dir}/annotations"
-    mkdir -p "${CADD_anno_dir}" "${CADD_prescore_dir}/${assembly}_${cadd_version}/incl_anno" || return 1
     log "CADD data directory: ${CADD_cache_dir}"
-
-    # Now we start downloading the CADD genome annotations corresponding to the assembly version
-    if [[ ${assembly} == "GRCh37" ]] || [[ ${assembly} == "hg19" ]]; then
-        if [[ ! -d ${CADD_anno_dir}/GRCh37_${cadd_version} ]]; then
-            wget -c https://kircherlab.bihealth.org/download/CADD/v1.7/GRCh37/GRCh37_v1.7.tar.gz -O ${CADD_anno_dir}/GRCh37_v1.7.tar.gz && \
-            md5sum ${CADD_anno_dir}/GRCh37_v1.7.tar.gz | grep -q $(read_yaml "${config_file}" "cadd_GRCh37_anno_md5") && \
-            tar -xzvf ${CADD_anno_dir}/GRCh37_v1.7.tar.gz -C ${CADD_anno_dir}/ && \
-            rm ${CADD_anno_dir}/GRCh37_v1.7.tar.gz
-        else
-            log "The CADD genome annotation for GRCh37_${cadd_version} is already downloaded, skip the downloading process"
-        fi
-    elif [[ ${assembly} == "GRCh38" ]] || [[ ${assembly} == "hg38" ]]; then
-        if [[ ! -d ${CADD_anno_dir}/GRCh38_${cadd_version} ]]; then
-            wget -c https://kircherlab.bihealth.org/download/CADD/v1.7/GRCh38/GRCh38_v1.7.tar.gz -O ${CADD_anno_dir}/GRCh38_v1.7.tar.gz && \
-            md5sum ${CADD_anno_dir}/GRCh38_v1.7.tar.gz | grep -q $(read_yaml "${config_file}" "cadd_GRCh38_anno_md5") && \
-            tar -xzvf ${CADD_anno_dir}/GRCh38_v1.7.tar.gz -C ${CADD_anno_dir}/ && \
-            rm ${CADD_anno_dir}/GRCh38_v1.7.tar.gz
-        else
-            log "The CADD genome annotation for GRCh38_${cadd_version} is already downloaded, skip the downloading process"
-        fi
-    else
-        log "Not supported assembly version: ${assembly}"
-        return 1
-    fi
-
-
-    # Now we start downloading the CADD prescores corresponding to the assembly version
-    local snv_prescore_url
-    local indel_prescore_url
-    local snv_prescore_md5
-    local indel_prescore_md5
-    if [[ ${assembly} == "GRCh37" ]] || [[ ${assembly} == "hg19" ]]; then
-        snv_prescore_url=$(read_yaml "${config_file}" "cadd_GRCh37_snv_anno_url")
-        indel_prescore_url=$(read_yaml "${config_file}" "cadd_GRCh37_indel_anno_url")
-        snv_prescore_md5=$(read_yaml "${config_file}" "cadd_GRCh37_snv_anno_md5")
-        indel_prescore_md5=$(read_yaml "${config_file}" "cadd_GRCh37_indel_anno_md5")
-    elif [[ ${assembly} == "GRCh38" ]] || [[ ${assembly} == "hg38" ]]; then
-        snv_prescore_url=$(read_yaml "${config_file}" "cadd_GRCh38_snv_anno_url")
-        indel_prescore_url=$(read_yaml "${config_file}" "cadd_GRCh38_indel_anno_url")
-        snv_prescore_md5=$(read_yaml "${config_file}" "cadd_GRCh38_snv_anno_md5")
-        indel_prescore_md5=$(read_yaml "${config_file}" "cadd_GRCh38_indel_anno_md5")
-    fi
-    log "Now the CADD prescore URL for ${assembly} is ${snv_prescore_url} and ${indel_prescore_url}"
-
-    local snv_file_name=$(basename ${snv_prescore_url})
-    local indel_file_name=$(basename ${indel_prescore_url})
-
-    if [[ ! -f ${CADD_prescore_dir}/${assembly}_${cadd_version}/incl_anno/${snv_file_name} ]]; then
-        wget -c ${snv_prescore_url} -O ${CADD_prescore_dir}/${assembly}_${cadd_version}/incl_anno/${snv_file_name} && \
-        md5sum ${CADD_prescore_dir}/${assembly}_${cadd_version}/incl_anno/${snv_file_name} | grep -q ${snv_prescore_md5} && \
-        wget -c ${snv_prescore_url}.tbi -O ${CADD_prescore_dir}/${assembly}_${cadd_version}/incl_anno/${snv_file_name}.tbi
-    else
-        log "The CADD prescore for ${assembly} is already downloaded at ${CADD_prescore_dir}/${assembly}_${cadd_version}/incl_anno/${snv_file_name}, skip the downloading process"
-    fi
-
-    if [[ ! -f ${CADD_prescore_dir}/${assembly}_${cadd_version}/incl_anno/${indel_file_name} ]]; then
-        wget -c ${indel_prescore_url} -O ${CADD_prescore_dir}/${assembly}_${cadd_version}/incl_anno/${indel_file_name} && \
-        md5sum ${CADD_prescore_dir}/${assembly}_${cadd_version}/incl_anno/${indel_file_name} | grep -q ${indel_prescore_md5} && \
-        wget -c ${indel_prescore_url}.tbi -O ${CADD_prescore_dir}/${assembly}_${cadd_version}/incl_anno/${indel_file_name}.tbi
-    else
-        log "The CADD prescore for ${assembly} is already downloaded at ${CADD_prescore_dir}/${assembly}_${cadd_version}/incl_anno/${indel_file_name}, skip the downloading process"
-    fi
+    # Validate every configured data/index identity independently. The helper
+    # stages downloads and annotation extraction, and refuses existing mismatches.
+    local config_json
+    config_json=$(yq '.' "${config_file}") || return 1
+    python "${SCRIPT_DIR}/cadd_cache_install.py" --config-json "${config_json}" \
+        --assembly "${assembly}" --base-dir "${CADD_base_dir}" || return 1
 }
 
+
+
+function CADD_runtime_install() {
+    [[ $# -ge 1 && $# -le 2 && -r ${1:-} ]] || {
+        log "Usage: CADD_runtime_install CONFIG [annotate|calculate|both]"
+        return 2
+    }
+    local config_file=${1} stage=${2:-both} config_json
+    case "${stage}" in
+        annotate|calculate|both) ;;
+        *) log "Invalid CADD runtime stage: ${stage}"; return 2 ;;
+    esac
+    config_json=$(yq '.' "${config_file}") || return 1
+    # Install pinned runtimes/assets only. This does not activate shared-VEP
+    # feature enrichment or the experimental calculation backend.
+    python "${SCRIPT_DIR}/cadd_runtime_install.py" \
+        --config-json "${config_json}" --stage "${stage}" || return 1
+}
 
 
 function PrimateAI_install() {

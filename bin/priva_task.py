@@ -409,6 +409,9 @@ def launch(args):
     config = read_config(args.config)
     if ASSEMBLY[config["assembly"]] != ASSEMBLY[args.assembly]:
         raise ContractError("Requested assembly disagrees with legacy config")
+    if not args.stub:
+        task_thread_settings(config, "annotation", args.mode, args.annotation_cpus)
+        task_thread_settings(config, "filtration", args.mode, args.family_cpus)
     manifest = json.loads(Path(args.resources).read_text())
     if not args.stub:
         verify_manifest(manifest, args.config, root, args.mode, args.vcf_hub_mode, args.cadd_hub_mode)
@@ -445,8 +448,33 @@ def copy_writable(source, destination):
     return destination.absolute()
 
 
+def task_thread_settings(config, phase, mode, cpus):
+    """Keep scientific worker settings distinct from the task allocation."""
+    if type(cpus) is not int or cpus < 1:
+        raise ContractError("Allocated cpus must be a positive integer")
+    settings = {key: config.get(key, cpus) for key in ("threads", "threads_per_fam")}
+    if phase == "annotation" and mode != "raw":
+        return settings  # This phase imports an existing annotation artifact.
+    key = "threads" if phase == "annotation" else "threads_per_fam"
+    if phase == "annotation" and key not in config:
+        raise ContractError("Raw annotation requires explicit legacy-config threads")
+    value = settings[key]
+    if isinstance(value, bool) or not re.fullmatch(r"[0-9]+", str(value)) or int(value) < 1:
+        raise ContractError(f"Legacy-config {key} must be a positive integer")
+    # 26 October 2026 CT: preserve the fixed scientific profile. Allocating24
+    # CPUs must not rewrite a qualified --fork22 invocation into --fork24.
+    # Verified VEP116 Runner.pm can spawn N+1 children in addition to its parent;
+    # reserve that headroom for raw annotation. Its scientific eligibility gate
+    # remains closed independently; this does not qualify another VEP release.
+    required = int(value) + (2 if phase == "annotation" else 0)
+    if cpus < required:
+        raise ContractError(f"{phase} needs at least {required} allocated CPUs to preserve {key}={value}")
+    return settings
+
+
 def private_config(bundle, contract, phase, cpus):
     config = read_config(bundle / "legacy.yaml")
+    thread_settings = task_thread_settings(config, phase, contract["mode"], cpus)
     result = Path("result").absolute()
     result.mkdir(exist_ok=True)
     temp = Path("tmp").absolute()
@@ -454,7 +482,7 @@ def private_config(bundle, contract, phase, cpus):
     config.update(input_vcf=str(result / (contract["base"] + ".vcf.gz")),
                   output_dir=str(result), tmp_dir=str(temp),
                   ped_file=str(copy_writable(bundle / "family.ped", result / "family.ped")),
-                  threads=cpus, threads_per_fam=cpus, assembly=contract["assembly"],
+                  **thread_settings, assembly=contract["assembly"],
                   hub_vcf_file="", hub_cadd_file="", hub_file_dir=str(result / "private_hubs"))
     for key in OPTIONAL_INPUTS:
         source = config.get(key)
@@ -509,6 +537,7 @@ def run(args):
         manifest = json.loads((bundle / "resources.json").read_text())
         verify_manifest(manifest, bundle / "legacy.yaml", root, contract["mode"],
                         contract["vcf_hub_mode"], contract["cadd_hub_mode"])
+        task_thread_settings(read_config(bundle / "legacy.yaml"), args.phase, contract["mode"], args.cpus)
     result = Path("result").absolute()
     result.mkdir(exist_ok=False)
     base = contract["base"]

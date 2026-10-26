@@ -13,13 +13,10 @@ COMMAND_SHA = '569619479a4267693bc2f9caca56cc12761d8abb87ee3a232138b0624ae57b99'
 
 
 def original_motif_command():
-    # This exact invocation block is shared by scientific09223ef and the fixed
-    # checkout. Its explicit hash prevents silently switching the oracle.
-    source = (ROOT / 'scripts/install_utils.sh').read_text()
-    start = source.index('function AlphaMissense_pick_missense_constrained_segments()')
-    start = source.index('    python ${pick_intolerant_motifs_py}', start)
-    end = source.index(' &&', start)
-    block = source[start:end]
+    # Exact invocation from install_utils.sh at scientific source
+    # 09223ef5a8b0ceb4c6d61055c6eefe62b51ba903. Today's installer has a separate
+    # publication route; it cannot supply this historical wrapper's oracle.
+    block = (ROOT / 'tests/fixtures/alpha_motif_command_09223ef.sh').read_text()
     if hashlib.sha256(block.encode()).hexdigest() != COMMAND_SHA:
         raise AssertionError('Frozen motif command block changed; review source provenance')
     return shlex.split(block.replace('\\\n', ''))

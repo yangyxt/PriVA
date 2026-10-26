@@ -383,7 +383,7 @@ NULL_POLICY = "SQL NULL and empty strings remain distinct in SQLite and both ser
 
 
 def source():
-    """A separate explicitly selectable source; it is never an assembly default."""
+    """A distinct pinned source for the explicit GRCh38/VEP116 profile."""
     return {"source_id": SOURCE_ID, "basename": BASENAME, "relative_path": RELATIVE_PATH,
             "assembly": ASSEMBLY, "mart_release": 116, "annotation_base_release": 116,
             "aliases": ("hg38", "GRCh38", ASSEMBLY),
@@ -430,6 +430,31 @@ def make_provenance(mapping, validate_table, operation):
             "provenance_basis": "Exact reviewed table snapshot and fixed FTP source/method pins, first extracted by Slurm1515184; registration does not imply a new download or scientific acceptance."}
 
 
+def portable_provenance(record):
+    """Keep source/method facts without a registration host or run history."""
+    keys = (*specification(), "bytes", "sha256", "statistics")
+    return {**{key: record[key] for key in keys},
+            "metadata_kind": "priva_bundled_mapping_snapshot", "metadata_schema_version": 1}
+
+
+def runtime_receipt(record, workspace, basename):
+    """Publish a unique full acquisition receipt outside repository data."""
+    workspace = Path(workspace)
+    require(not workspace.resolve().is_relative_to(Path(__file__).resolve().parents[1]),
+            "BioMart acquisition workspace must be outside the checkout")
+    descriptor, name = tempfile.mkstemp(prefix=basename + ".acquisition.", suffix=".json.part", dir=workspace)
+    with os.fdopen(descriptor, "w") as handle:
+        json.dump(record, handle, indent=2, sort_keys=True)
+        handle.write("\n")
+        handle.flush()
+        os.fsync(handle.fileno())
+    partial = Path(name)
+    destination = partial.with_suffix("")
+    os.link(partial, destination)  # Atomic publication, never replaces another receipt.
+    partial.unlink()
+    return destination
+
+
 def verify_record(mapping, record, validate_table, assembly=None):
     if assembly is not None:
         require(assembly in source()["aliases"], f"FTP GRCh38 mapping cannot be used for {assembly}")
@@ -442,9 +467,13 @@ def verify_record(mapping, record, validate_table, assembly=None):
             "FTP provenance must not claim an online BioMart response or completion stamp")
     require(record.get("bytes") == EXPECTED_BYTES and record.get("sha256") == EXPECTED_SHA256,
             "FTP provenance table identity differs")
-    require(record.get("operation") in ("registered_existing_exact_snapshot", "projected_from_verified_ftp_sources"), "Unknown FTP resource operation")
-    producer_sha256 = record.get("registration_producer_sha256")
-    require(isinstance(producer_sha256, str) and re.fullmatch(r"[0-9a-f]{64}", producer_sha256), "Missing FTP registration producer identity")
+    if record.get("metadata_kind") == "priva_bundled_mapping_snapshot":
+        require(type(record.get("metadata_schema_version")) is int and record["metadata_schema_version"] == 1,
+                "Unknown bundled FTP metadata schema")
+    else:
+        require(record.get("operation") in ("registered_existing_exact_snapshot", "projected_from_verified_ftp_sources"), "Unknown FTP resource operation")
+        producer_sha256 = record.get("registration_producer_sha256")
+        require(isinstance(producer_sha256, str) and re.fullmatch(r"[0-9a-f]{64}", producer_sha256), "Missing FTP registration producer identity")
     require(record.get("statistics") == table_identity(mapping, validate_table), "FTP provenance statistics differ")
     return record
 
@@ -474,7 +503,10 @@ def install(output, resource_dir, validate_table, timeout=600, attempts=3):
             atomic_json(metadata_path, record)
             return verify(output, validate_table, ASSEMBLY)
         require(not metadata_path.exists() and not metadata_path.is_symlink(), "Missing FTP table has existing provenance; restore it explicitly")
+        require(resource_dir is not None, "New FTP acquisition requires an external resource_dir")
         root = Path(resource_dir)
+        require(not root.resolve().is_relative_to(Path(__file__).resolve().parents[1]),
+                "BioMart acquisition workspace must be outside the checkout")
         raw = root / "raw"
         raw.mkdir(parents=True, exist_ok=True)
         for name in PINS:
@@ -508,6 +540,11 @@ def install(output, resource_dir, validate_table, timeout=600, attempts=3):
         finally:
             db.close()
         record = make_provenance(temporary, validate_table, "projected_from_verified_ftp_sources")
+        canonical = Path(__file__).resolve().parents[1] / RELATIVE_PATH
+        if (Path(os.path.abspath(output)) == canonical and not output.is_symlink()
+                and output.resolve() == canonical):
+            runtime_receipt(record, root, output.name)
+            record = portable_provenance(record)
         # Same-parent hard linking is atomic and refuses replacement. Preserve
         # staged data and source dumps if verification or publication fails.
         os.link(temporary, output)

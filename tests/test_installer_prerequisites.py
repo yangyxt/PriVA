@@ -215,7 +215,7 @@ class InstallerPrerequisites(unittest.TestCase):
         files = [
             "HCSeeker/HC_spots.hg38.tsv", "gnomAD_RMC/gnomad_v2.1.1_rmc_flat.hg38.tsv",
             "alphamissense/alphamissense_mean_score.tsv", "vep/csq_interpretations.tsv",
-            "repeats/ucsc.hg38.fasta.repeat.bed.gz", "hgnc/non_alt_loci_set.tsv",
+            "repeats/ucsc.hg38.fasta.repeat.bed.gz", "hgnc/hgnc_non_alt_loci_set_sha256_890b18743cc8.tsv",
             "dispensable_genes/dispensable_gene_list.txt", "gofcards/gofcards_mechanism_reviews.tsv",
             "mondo/disease_scope_overrides.tsv",
             "patho_mechanism/gene_nonlof_mechanism_curated_assertions.schema.json",
@@ -688,6 +688,7 @@ print("CALL:"+json.dumps(args))
 
     def test_missing_selected_bundle_is_fetched_with_only_the_explicit_pin(self):
         self.config["assembly"] = "hg19"
+        self.config["tmp_dir"] = str(self.folder / "raw-workspace")
         self.config.pop("nm_to_enst_tsv")
         self.env["TEST_COMPLETED_MAPPING"] = str(ROOT / PREREQS.BIOMART.RELATIVE_PATH)
         result = self.run_shell('''
@@ -706,6 +707,7 @@ print("CALL:"+json.dumps(args))
         self.assertIn("UPDATE:nm_to_enst_tsv", result.stdout)
 
     def test_missing_grch38_bundle_fetches_only_release113_then_verifies(self):
+        self.config["tmp_dir"] = str(self.folder / "raw-workspace")
         self.config.pop("nm_to_enst_tsv")
         source = PREREQS.BIOMART.source_for_assembly("hg38")
         self.env["TEST_COMPLETED_MAPPING"] = str(ROOT / source["relative_path"])
@@ -729,6 +731,7 @@ print("CALL:"+json.dumps(args))
 
     def test_failed_or_malformed_mapping_fetch_never_updates_configuration(self):
         self.config["assembly"] = "hg19"
+        self.config["tmp_dir"] = str(self.folder / "raw-workspace")
         self.config.pop("nm_to_enst_tsv")
         result = self.run_shell('''
             BASE_DIR="$TEST_FOLDER/selected_source"

@@ -29,7 +29,7 @@ FOLDERS = {
 }
 BUNDLED_PATHS = {
     "conda_env_yaml": "acmg_conda_rough.yml",
-    "hgnc_table": "data/hgnc/non_alt_loci_set.tsv",
+    "hgnc_table": "data/hgnc/hgnc_non_alt_loci_set_sha256_890b18743cc8.tsv",
     "dispensable_gene_list": "data/dispensable_genes/dispensable_gene_list.txt",
     "gene_mechanism_builder_script": "scripts/build_gene_pathogenic_mechanism_cache.py",
     "gene_nonlof_mechanism_builder_script": "scripts/build_gene_nonlof_mechanism_cache.py",
@@ -146,7 +146,6 @@ def resource_groups(config: dict, directories: dict[str, str]) -> dict[str, Path
         root / "LOEUF": ("loeuf_prescore",),
         root / "reference": ("ref_genome", "gofcards_hg19_fasta", "gofcards_hg38_fasta"),
         root / "liftOver": ("gofcards_hg19_to_hg38_chain", "hg38_hg19_chain"),
-        root / "data/hgnc": ("nm_to_enst_tsv",),
         root / "patho_mechanism": ("gene_mechanism_cache_dir", "gene_mechanism_raw_dir",
             "gene_nonlof_mechanism_json", "hpo_condition_mechanism_json", "ddg2p_mechanism_evidence",
             "clinvar_vcv_match_audit"),
@@ -157,7 +156,7 @@ def resource_groups(config: dict, directories: dict[str, str]) -> dict[str, Path
     }
     for folder, keys in groups.items():
         result.update({key: folder for key in keys})
-    for key in REPLACEMENT_TABLE_KEYS:
+    for key in REPLACEMENT_TABLE_KEYS - {"hgnc_table"}:
         result[key] = root / Path(BUNDLED_PATHS[key]).parent
     return result
 
@@ -174,6 +173,8 @@ def bundled_resource(key: str, value: str, source_root: Path | None) -> Path | N
     if key == "hg38_hg19_chain":
         value = str(reverse_chain_source(value, source_root))
     options = [relative[key]] if key in relative else []
+    if key == "hgnc_table":
+        options.append("data/hgnc/non_alt_loci_set.tsv")
     if key == "loeuf_prescore":
         options = ["data/loeuf/loeuf_dataset.tsv.gz", "data/loeuf/loeuf_dataset_hg38.tsv.gz"]
     if key in ("clingen_map", "gene_dosage_sensitivity"):
@@ -182,24 +183,22 @@ def bundled_resource(key: str, value: str, source_root: Path | None) -> Path | N
     selected = Path(value)
     for name in options:
         bundled = source_root / name
+        expected = source_root.resolve() / name
+        if (key == "hgnc_table" and name == "data/hgnc/non_alt_loci_set.tsv"
+                and bundled.is_symlink() and os.readlink(bundled) == Path(BUNDLED_PATHS[key]).name):
+            expected = source_root.resolve() / BUNDLED_PATHS[key]
         legacy_basename = (key in ("clinvar_gene_stat", "interpro_mapping_pickle")
                            and len(selected.parts) == 1 and selected.name == bundled.name
                            and not selected.is_file())
         alias = selected == Path(name) or legacy_basename
-        if ((alias or selected.absolute().resolve() == bundled.resolve())
-                and bundled.resolve() == source_root.resolve() / name
+        same_source = selected.absolute().resolve() == bundled.resolve()
+        if key == "hgnc_table":
+            logical = selected if selected.is_absolute() else source_root / selected
+            same_source = Path(os.path.abspath(logical)) == Path(os.path.abspath(bundled))
+        if ((alias or same_source)
+                and bundled.resolve() == expected
                 and bundled.is_file() and bundled.stat().st_size > 0):
             return bundled
-    if key == "nm_to_enst_tsv" and selected.is_absolute():
-        try:
-            name = selected.relative_to(source_root)
-        except ValueError:
-            return None
-        if (name.parts[:2] == ("data", "hgnc") and selected.resolve() == source_root.resolve() / name
-                and selected.is_file() and selected.stat().st_size > 0
-                and subprocess.run(["git", "-C", str(source_root), "ls-files", "--error-unmatch", str(name)],
-                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0):
-            return selected
     return None
 
 
@@ -341,6 +340,15 @@ def resolve_cache_paths(config: dict, source_root: Path | None = None) -> tuple[
             and Path(snv).is_file() and Path(indel).is_file()):
         spliceai_inspector().validate_pair(config["assembly"], snv, indel)
     updates = dict(directories)
+    # Mapping tables are selected scientific inputs, not managed cache outputs.
+    # Keep explicit cache-side versions and their adjacent receipts in place.
+    for key in ("nm_to_enst_tsv", "hgnc_table"):
+        mapping = config.get(key)
+        if mapping not in EMPTY:
+            if not isinstance(mapping, str):
+                raise ValueError(f"{key} must be a path string")
+            if source_root is not None and not Path(mapping).is_absolute():
+                updates[key] = str(Path(os.path.abspath(source_root / mapping)))
     for key, folder in resource_groups(config, directories).items():
         value = config.get(key)
         if value in EMPTY:
@@ -387,6 +395,14 @@ def resolve_cache_paths(config: dict, source_root: Path | None = None) -> tuple[
 
 def adoption_plan(config: dict, updates: dict[str, str], source_root: Path) -> list[dict[str, str]]:
     """Capture explicit source identities before any configuration remapping."""
+    for key in ("nm_to_enst_tsv", "hgnc_table"):
+        mapping = config.get(key)
+        if mapping not in EMPTY:
+            if not isinstance(mapping, str):
+                raise ValueError(f"{key} must be a path string")
+            selected = Path(mapping) if Path(mapping).is_absolute() else source_root / mapping
+            if not selected.is_file() or selected.stat().st_size == 0:
+                raise ValueError(f"Explicit {key} source is missing/empty; refusing to substitute another dataset/release: {selected}")
     plan = []
     cache_keys = resource_groups(config, {key: updates.get(key, config.get(key)) for _, key in FOLDERS.values()})
     automatic = automatic_source_paths(config, updates, source_root)

@@ -171,7 +171,9 @@
         "nm_to_enst_tsv"
       ],
       "bundled_paths": [
-        "data/hgnc/ensembl_*_nm_to_enst.tsv"
+        "data/hgnc/ensembl_GRCh37_mart116_nm_to_enst.tsv",
+        "data/hgnc/ensembl_GRCh38_mart113_nm_to_enst.tsv",
+        "data/hgnc/ensembl_GRCh38_mart116_ftp_candidate.tsv"
       ],
       "source": {
         "kind": "registered_release_sources",
@@ -190,7 +192,7 @@
       "depends_on": [
         "vep_cache"
       ],
-      "notes": "Reuse bundled selected mapping if present. GRCh37 mart116 retains base75 lineage. GRCh38 FTP116 is a distinct candidate; order/multiplicity preserved, scientific coordinate qualification separate.",
+      "notes": "Small pinned mapping versions remain in repository data/hgnc, including missing default destinations; raw acquisition uses an external BioMart workspace. Preserve explicitly selected external mappings and their provenance in place. Bundled reuse checks existence/nonzero only. GRCh37 mart116 retains base75 lineage. GRCh38 FTP116 is a distinct candidate; order/multiplicity preserved, scientific coordinate qualification separate.",
       "install_entrypoints": [
         "nm_to_enst_mapping_install"
       ],
@@ -1459,6 +1461,7 @@
         "dispensable_gene_list"
       ],
       "bundled_paths": [
+        "data/hgnc/hgnc_non_alt_loci_set_sha256_890b18743cc8.tsv",
         "data/hgnc/non_alt_loci_set.tsv",
         "data/dispensable_genes/*",
         "data/gofcards/gofcards_mechanism_reviews.tsv",
@@ -1475,7 +1478,7 @@
         "entrypoints": []
       },
       "depends_on": [],
-      "notes": "HGNC upstream is maintained, but this selected bundled table is an explicit snapshot. Curated rows require deliberate review, not unattended replacement.",
+      "notes": "HGNC upstream is maintained, but this bundled master snapshot has unknown publisher/Ensembl release and a content-hash versioned filename; its legacy filename is a compatibility link to the same bytes. It is separate from assembly/release-specific NM-to-ENST mappings. Curated rows require deliberate review, not unattended replacement.",
       "install_entrypoints": [
         "bundled_snapshot_install"
       ],

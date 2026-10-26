@@ -210,7 +210,7 @@ announce_remove_tmps() { return 0; }
         self.settings["repeat_region_file_name"] = "custom.reviewed.repeat.bed.gz"
         paths = ["HCSeeker/HC_spots.hg19.tsv", "gnomAD_RMC/gnomad_v2.1.1_rmc_flat.hg19.tsv",
                  "alphamissense/alphamissense_mean_score.tsv", "vep/csq_interpretations.tsv",
-                 "repeats/custom.reviewed.repeat.bed.gz", "hgnc/non_alt_loci_set.tsv",
+                 "repeats/custom.reviewed.repeat.bed.gz", "hgnc/hgnc_non_alt_loci_set_sha256_890b18743cc8.tsv",
                  "dispensable_genes/dispensable_gene_list.txt", "gofcards/gofcards_mechanism_reviews.tsv",
                  "mondo/disease_scope_overrides.tsv", "patho_mechanism/gene_nonlof_mechanism_curated_assertions.schema.json"]
         for relative in paths:

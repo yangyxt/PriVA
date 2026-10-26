@@ -121,7 +121,7 @@ class FTPProvenance(unittest.TestCase):
         self.path.unlink()
         with patch.object(F, "acquire", side_effect=ValueError("Publisher checksum changed")):
             with self.assertRaisesRegex(ValueError, "checksum changed"):
-                B.acquire(self.path, source_id=F.SOURCE_ID)
+                B.acquire(self.path, source_id=F.SOURCE_ID, resource_dir=self.root / 'ftp-work')
         self.assertFalse(self.path.exists())
         self.assertFalse(self.metadata.exists())
 

@@ -160,8 +160,8 @@ def validate_nm_to_enst(value: str, assembly: str | None = None, source_root: Pa
     if named is not None and assembly is not None and assembly not in named["aliases"]:
         raise ValueError(f"Pinned BioMart mapping {path.name} is not compatible with {assembly}")
     if BIOMART.is_bundled_mapping(path, source_root):
-        # Existing genuine bundled data follow the user's existence/nonzero
-        # policy. External symlink targets and new FTP resources remain checked.
+        # All canonical bundled snapshots follow existence/nonzero reuse.
+        # Explicit external files and linked payloads retain strict validation.
         return
     metadata = checked_path(str(BIOMART.provenance_path(path)), "nm_to_enst_tsv provenance")
     if metadata.exists() or metadata.is_symlink() or path.name in BIOMART.PINNED_BASENAMES:
@@ -186,18 +186,26 @@ def _mapping_default_source(config: dict) -> dict:
 
 
 def _mapping_default_path(config: dict, source_root: Path, selected: dict) -> Path:
-    bundled = Path(os.path.abspath(source_root / selected["relative_path"]))
-    if os.path.lexists(bundled):
-        return bundled  # Reuse an existing selected source; never overwrite it.
+    # Small pinned mapping versions belong to source data, including before
+    # first acquisition. They are never generated beneath cache_root/data.
+    return Path(os.path.abspath(source_root / selected["relative_path"]))
+
+
+def mapping_workspace(config: dict, source_root: Path) -> Path:
+    """Plan raw acquisition outside the checkout, without creating anything."""
     root = config.get("cache_root")
     if root in (None, "", "null"):
-        return Path(os.path.abspath(source_root / selected["relative_path"]))
-    if not isinstance(root, str):
-        raise ValueError("cache_root must be a path string")
+        root = config.get("tmp_dir")
+    if root in (None, "", "null") or not isinstance(root, str):
+        raise ValueError("Set cache_root or tmp_dir for an external BioMart acquisition workspace")
     root = Path(root)
     if not root.is_absolute():
         root = source_root / root
-    return Path(os.path.abspath(root / selected["relative_path"]))
+    workspace = Path(os.path.abspath(root / "BioMart" / _mapping_default_source(config)["source_id"]))
+    if workspace.resolve().is_relative_to(source_root.resolve()):
+        raise ValueError("BioMart acquisition workspace must be outside the checkout")
+    checked_path(str(workspace), "BioMart acquisition workspace")
+    return workspace
 
 
 def nm_to_enst_path(config: dict, source_root: Path) -> Path:
@@ -356,7 +364,7 @@ def validate_bundled_snapshots(config: dict, source_root: Path) -> None:
         source_root / "data/repeats" / repeat_name,
     ]
     for key, relative in (
-        ("hgnc_table", "data/hgnc/non_alt_loci_set.tsv"),
+        ("hgnc_table", "data/hgnc/hgnc_non_alt_loci_set_sha256_890b18743cc8.tsv"),
         ("dispensable_gene_list", "data/dispensable_genes/dispensable_gene_list.txt"),
         ("gofcards_mechanism_review_tsv", "data/gofcards/gofcards_mechanism_reviews.tsv"),
         ("mondo_disease_scope_overrides", "data/mondo/disease_scope_overrides.tsv"),
@@ -459,7 +467,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("config", type=Path)
     parser.add_argument("--source-root", type=Path, default=Path(__file__).resolve().parents[1])
-    parser.add_argument("--stage", choices=("main", "manual-inputs", "snapshots", "mapping", "mapping-target", "mapping-source", "clinvar", "gofcards", "gofcards-main"), default="main")
+    parser.add_argument("--stage", choices=("main", "manual-inputs", "snapshots", "mapping", "mapping-target", "mapping-source", "mapping-workspace", "clinvar", "gofcards", "gofcards-main"), default="main")
     parser.add_argument("--prompt", action="store_true",
                         help="Manual-inputs stage only: interactively collect unset paths and save them together")
     parser.add_argument("--print-mapping", action="store_true", help="Print the validated resolved mapping path")
@@ -505,6 +513,8 @@ def main() -> int:
             print(nm_to_enst_path(config, args.source_root))
         elif args.stage == "mapping-source":
             print(mapping_fetch_source(config, args.source_root))
+        elif args.stage == "mapping-workspace":
+            print(mapping_workspace(config, args.source_root))
         elif args.stage == "clinvar":
             validate_selected_clinvar_stats(config, args.source_root)
         else:

@@ -33,7 +33,7 @@ DEFAULT_NONLOF_JSON = (
     / "patho_mechanism"
     / "gene_nonlof_mechanism_curated_assertions.json.gz"
 )
-DEFAULT_HGNC = PRIVA_ROOT / "data" / "hgnc" / "non_alt_loci_set.tsv"
+DEFAULT_HGNC = PRIVA_ROOT / "data" / "hgnc" / "hgnc_non_alt_loci_set_sha256_890b18743cc8.tsv"
 DEFAULT_OUTPUT = (
     PRIVA_ROOT / "data" / "gofcards" / "gofcards_gene_source_coverage.audit.tsv"
 )

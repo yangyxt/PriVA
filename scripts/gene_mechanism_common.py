@@ -21,7 +21,7 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 PRIVA_ROOT = SCRIPT_DIR.parent
 DATA_DIR = PRIVA_ROOT / "data"
 
-DEFAULT_HGNC_TABLE = DATA_DIR / "hgnc" / "non_alt_loci_set.tsv"
+DEFAULT_HGNC_TABLE = DATA_DIR / "hgnc" / "hgnc_non_alt_loci_set_sha256_890b18743cc8.tsv"
 DEFAULT_HPO_ASSERTIONS = DATA_DIR / "hpo" / "genes_to_phenotype.assertions.tsv.gz"
 # Keep the existing constructor argument name while migrating its file schema.
 DEFAULT_HPO_COLLAPSED = DEFAULT_HPO_ASSERTIONS

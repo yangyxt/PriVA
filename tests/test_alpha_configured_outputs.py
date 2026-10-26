@@ -46,6 +46,25 @@ python() {
         printf 'STAT:%s:%s\n' "$2" "$3" >> "$TEST_EVENTS"
         [[ $TEST_FAILURE != stat ]] || return 73
         printf 'statistics fixture\n' > "$3"
+    elif [[ $1 == */alphamissense_domain_cache.py ]]; then
+        # Stub the checkpoint build boundary, retaining the original producer
+        # stub and its failure. Cache/receipt semantics have dedicated tests.
+        [[ ${2:-} == build ]] || return 96
+        shift 2
+        local producer= input= output=
+        while [[ $# -gt 0 ]]; do
+            case "$1" in
+                --source-script) producer=$2 ;;
+                --input-vcf) input=$2 ;;
+                --output-pickle) output=$2 ;;
+                --cache-root) : ;;
+                *) return 97 ;;
+            esac
+            shift 2
+        done
+        [[ $producer == */stat_protein_domain_amscores.py && -n $input && -n $output ]] || return 98
+        mkdir -p "$(dirname "$output")" || return
+        python "$producer" "$input" "$output"
     elif [[ $1 == */alphamissense_cache.py && ${2:-} != check-annotation ]]; then
         printf 'RAW:%s\n' "$*" >> "$TEST_EVENTS"
         printf '%s/AlphaMissense/AlphaMissense_hg38.tsv.gz\n' "$TEST_CACHE"
@@ -228,7 +247,8 @@ class AlphaConfiguredOutputs(unittest.TestCase):
         target.write_bytes(b"retain previous statistic")
         os.utime(target, (1, 1))
         result = self.invoke('AlphaMissense_stat "$TEST_CONFIG"', "stat")
-        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(result.returncode, 73, result.stderr)
+        self.assertIn("STAT:", self.events.read_text())
         self.assertEqual(target.read_bytes(), b"retain previous statistic")
         self.assertNotIn("UPDATE:", self.events.read_text())
 

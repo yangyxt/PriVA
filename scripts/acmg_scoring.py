@@ -479,12 +479,15 @@ def sort_and_rank_variants(df: pd.DataFrame,
                            pext_penalty_floor: float = 0.8,
                            pext_penalty_shape: float = 0.5,
                            relevant_gene_list: str = None,
-                           dispensable_gene_list: str = DEFAULT_DISPENSABLE_GENE_LIST) -> pd.DataFrame:
+                           dispensable_gene_list: str = DEFAULT_DISPENSABLE_GENE_LIST,
+                           terminal_order_binary: str = None) -> pd.DataFrame:
     """
     Sort variants by their maximum ACMG quantitative score and add ranking.
 
     Args:
         df: DataFrame with ACMG_quant_score column and variant information
+        terminal_order_binary: Explicit opt-in PriVA Rust CLI for final ordering
+            only. None retains Python; unsupported inputs use the original tail.
 
     Returns:
         DataFrame sorted by variant's max ACMG score with added variant rank column
@@ -663,6 +666,15 @@ def sort_and_rank_variants(df: pd.DataFrame,
             pext_penalty_floor,
             pext_penalty_shape,
         )
+
+    # 26 October 2026 CT: integrate only the existing R8 native boundary after
+    # all original C1-C5/R1-R7 statements. Keep Python as the default and retain
+    # these original statements verbatim for atomic current-frame fallback.
+    if terminal_order_binary is not None:
+        from priva_rust_terminal_order import try_terminal_order
+        native_order = try_terminal_order(df, terminal_order_binary)
+        if native_order is not None:
+            return native_order
 
     # Group by variant coordinates to get max score per variant
     variant_groups = df.groupby(['chrom', 'pos', 'ref', 'alt'])

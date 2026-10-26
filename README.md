@@ -45,6 +45,11 @@ and selects the configured VEP major. A separate VEP installation call is not
 required. Rerun the same command to reuse compatible completed resources and
 continue interrupted preparation.
 
+For the matching official VEP116 UTRAnnotator module, the installer deploys
+deterministic reporting of all calculated UTR effects and retains the original
+module and patch. The biological calculations are unchanged; other VEP releases
+are left unchanged. See [`data/vep`](data/vep/README.md).
+
 The cache tree shows default folder names, YAML-controlled assembly/release
 parts, and whether each resource is downloaded, calculated, manually supplied,
 or bundled. Bundled snapshots stay in the checkout; acquired and derived caches

@@ -18,6 +18,12 @@ flowchart LR
 
 Use Linux, Bash, standard GNU tools, network access and Micromamba, Mamba or Conda. Begin configuration in the checkout; run analyses from an external directory as shown below. Choose storage with capacity for genome-wide resources and temporary builds; some cache stages require substantial memory. Use paths without spaces or shell metacharacters.
 
+The tree below shows the default storage locations and how each resource is prepared. Blue path names and tokens follow the YAML configuration; the labels distinguish downloads, builds, manual inputs, bundled snapshots and package exports. Bundled data stay in the checkout; fresh CADD environments use the existing Mamba root.
+
+[![PriVA installation tree showing bundled data, separate Mamba environments, configurable cache paths and scratch space, with resource preparation labels.](docs/installation_layout.svg)](docs/installation_layout.svg)
+
+[Open the full-size SVG](docs/installation_layout.svg). Supplied originals are preserved; managed copies and converted outputs use the configured cache folders. Explicit reference/mapping paths and completed legacy software retain their selected locations.
+
 1. Copy the configuration:
 
    ```bash

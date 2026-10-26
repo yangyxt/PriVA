@@ -155,12 +155,19 @@ example 24 CPUs for 22 configured forks; raw execution remains gated.
 
 Managed VEP116 mappings use Ensembl BioMart116; GRCh37 retains its GRCh37 annotation-base75 lineage and is not a GRCh38 fallback. [HCSeeker](data/HCSeeker/README.md) originates in GRCh38 protein space; [gnomAD RMC](data/gnomAD_RMC/README.md) originates in GRCh37, with derived opposite-assembly protein-coordinate tables. [GoFCards](data/gofcards/README.md) starts from GRCh37 variant records and includes derived GRCh38 representations; exact variant evidence is not a whole-gene mechanism assertion. Preserve assembly, transcript and source provenance when choosing these resources.
 
-CADD uses the original Python implementation. Optional PriVA-owned Rust procedures have declared typed input boundaries; the family workflow still uses Python. To build the procedure CLI with the pinned Rust toolchain:
+CADD uses the original Python implementation. ACMG criteria and the default ranking path retain Python. Optional PriVA-owned Rust procedures have declared typed input boundaries. To build the procedure CLI with the pinned Rust toolchain:
 
 ```bash
 export CARGO_TARGET_DIR="$PRIVA_RUNS/rust-build"
 (cd "$PRIVA_ROOT/rust" && cargo build --release --locked)
 "$CARGO_TARGET_DIR/release/priva" coerce-pext --help
 ```
+
+To opt into the ranking bridge, set `priva_ranking_binary` in the runtime YAML
+to the absolute executable path before creating the resource manifest. The
+manifest pins its content, including on cached resume; changing the executable
+requires a new manifest and output directory. Unsupported ranking inputs use
+the original Python path. This option does not qualify a new scientific profile
+or enable raw execution.
 
 See [LICENSE](LICENSE) for Apache 2.0 with the Commons Clause condition and commercial licensing, including clinical/diagnostic applications. Third-party resources retain their own terms, including the [CADD license](bin/cadd/CADD-LICENSE).

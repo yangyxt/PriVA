@@ -556,6 +556,19 @@ function vep_cache_api_install() {
     else
         automatic=c
     fi
+    # Finish our exact interrupted UTR transaction before ordinary plugin
+    # checks: a published module with the old receipt intentionally fails check.
+    # Letting install run first would mistake that recoverable state for an
+    # unrelated customization and prevent the installer from resuming.
+    if [[ -e "$VEP_PLUGINSDIR/.priva-utr-reporting.pending.json" || \
+          -L "$VEP_PLUGINSDIR/.priva-utr-reporting.pending.json" ]]; then
+        [[ $VEP_VERSION == 116 ]] || {
+            log "ERROR: Complete the pending UTR116 reporting installation before changing VEP release."
+            return 1
+        }
+        python "$receipt_helper" ensure-utr-reporting --directory "$VEP_PLUGINSDIR" \
+            --release "$VEP_VERSION" || return 1
+    fi
     if ! python "$receipt_helper" check --directory "$VEP_PLUGINSDIR" \
             --release "$VEP_VERSION" --plugins "$required_plugins" >/dev/null 2>&1; then
         automatic+=p
@@ -593,6 +606,11 @@ function vep_cache_api_install() {
         rm -rf -- "$staging"
         [[ $status -eq 0 ]] || return 1
     fi
+    # Reproduce the already approved deterministic UTR116 reporting repair.
+    # The helper pins both upstream and installed bytes, retains originals,
+    # and leaves other releases unchanged rather than guessing compatibility.
+    python "$receipt_helper" ensure-utr-reporting --directory "$VEP_PLUGINSDIR" \
+        --release "$VEP_VERSION" || return 1
     if [[ ":${PERL5LIB:-}:" != *":${VEP_DESTDIR}:"* || ":${PERL5LIB:-}:" != *":${VEP_PLUGINSDIR}:"* ]]; then
         priva_env_vars_set PERL5LIB="$VEP_DESTDIR:$VEP_PLUGINSDIR${PERL5LIB:+:$PERL5LIB}" || return 1
     fi

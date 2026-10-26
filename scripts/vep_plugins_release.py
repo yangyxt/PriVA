@@ -2,6 +2,8 @@
 """Validate and record official VEP plugin releases without touching other files."""
 
 import argparse
+import difflib
+import fcntl
 import hashlib
 import json
 import os
@@ -14,6 +16,10 @@ import tempfile
 
 REPOSITORY = "https://raw.githubusercontent.com/Ensembl/VEP_plugins"
 RECEIPT = ".priva-vep-plugins.json"
+UTR_PROFILE = "utrannotator-116-all-effects-20261024-v1"
+UTR_UPSTREAM_SHA = "a002fe5a654845627ce2d1f08b4f475db41a051e24002f862f4fc4f4c18d60b0"
+UTR_INSTALLED_SHA = "0e4814fb71c9cc1af48a70830ae33434ba620e517f94ed8436979510484e9138"
+UTR_REPORTING_MODULE = Path(__file__).resolve().parents[1] / "data/vep/UTRAnnotator116_all_effects.pm"
 
 
 def digest(path):
@@ -75,6 +81,134 @@ def write_receipt(path, value):
         os.replace(temporary, path)
     finally:
         temporary.unlink(missing_ok=True)
+
+
+def ensure_utr_reporting(directory, release):
+    """Reproduce only the approved VEP116 reporting profile, without recalculation.
+
+    User, 2026-10-24 CT: "So maybe you can modify the pm file directly installed
+    in this cluster ?" The approved change reports all already-calculated UTR
+    effects deterministically. It does not change the five biological methods.
+    2026-10-26 CT: make those exact installed bytes reproducible by the installer;
+    never infer compatibility with another upstream source or release. Existing
+    recorded installations keep their original backup paths and receipt bytes.
+    """
+    if release != "116":
+        return {"status": "not_applicable", "release": release}
+    target, receipt_path = directory / "UTRAnnotator.pm", directory / RECEIPT
+    pending = directory / ".priva-utr-reporting.pending.json"
+    lock = directory / ".priva-utr-reporting.lock"
+    if any(path.is_symlink() for path in (target, receipt_path, pending, lock)):
+        raise ValueError("Refusing symlinked UTR reporting installation files")
+    # A valid completed installation is a read-only no-op, including on this
+    # cluster's existing recorded patch. Do not create a new lock/backup there.
+    prior = load_receipt(directory)
+    patches = prior.get("local_patches", {})
+    if (prior.get("release") == release
+            and prior.get("source") == f"{REPOSITORY}/release/{release}"
+            and isinstance(prior.get("plugins"), dict)
+            and prior["plugins"].get("UTRAnnotator.pm") == UTR_UPSTREAM_SHA
+            and isinstance(patches, dict)
+            and isinstance(patches.get("UTRAnnotator.pm"), dict)
+            and patches["UTRAnnotator.pm"].get("profile") == UTR_PROFILE
+            and patches["UTRAnnotator.pm"].get("installed_sha256") == UTR_INSTALLED_SHA
+            and not pending.exists()
+            and local_patch_matches(directory, prior, "UTRAnnotator.pm")):
+        return {"status": "reused", "profile": UTR_PROFILE}
+    with lock.open("a") as guard:
+        fcntl.flock(guard, fcntl.LOCK_EX)
+        receipt = load_receipt(directory)
+        if (receipt.get("release") != release
+                or receipt.get("source") != f"{REPOSITORY}/release/{release}"
+                or not isinstance(receipt.get("plugins"), dict)
+                or receipt["plugins"].get("UTRAnnotator.pm") != UTR_UPSTREAM_SHA):
+            raise ValueError("UTR reporting fix requires the pinned official VEP116 module; files were preserved")
+        patches = receipt.get("local_patches", {})
+        if not isinstance(patches, dict) or ("UTRAnnotator.pm" in patches
+                                            and not isinstance(patches["UTRAnnotator.pm"], dict)):
+            raise ValueError("Malformed UTR reporting patch receipt; files were preserved")
+        recorded = patches.get("UTRAnnotator.pm")
+        if recorded:
+            if (recorded.get("profile") != UTR_PROFILE
+                    or recorded.get("installed_sha256") != UTR_INSTALLED_SHA
+                    or not local_patch_matches(directory, receipt, "UTRAnnotator.pm")):
+                raise ValueError("Existing UTR reporting patch differs from the approved profile; files were preserved")
+            if pending.exists():
+                recovery = json.loads(pending.read_text())
+                if (not isinstance(recovery, dict)
+                        or set(recovery) != {"receipt_before", "receipt_after"}
+                        or recovery["receipt_after"] != receipt
+                        or not isinstance(recovery["receipt_before"], dict)):
+                    raise ValueError("Conflicting UTR reporting recovery receipt; files were preserved")
+                before = recovery["receipt_before"]
+                old_patches = before.get("local_patches", {})
+                if not isinstance(old_patches, dict) or "UTRAnnotator.pm" in old_patches:
+                    raise ValueError("Conflicting UTR reporting recovery origin; files were preserved")
+                expected = json.loads(json.dumps(before))
+                expected.setdefault("local_patches", {})["UTRAnnotator.pm"] = recorded
+                if expected != receipt:
+                    raise ValueError("Conflicting UTR reporting recovery origin; files were preserved")
+                pending.unlink()
+            return {"status": "reused", "profile": UTR_PROFILE}
+        before_sha = digest(receipt_path)
+        observed_sha = digest(target)
+        if observed_sha not in (UTR_UPSTREAM_SHA, UTR_INSTALLED_SHA):
+            raise ValueError("UTRAnnotator differs from the pinned original; files were preserved")
+        recovery = json.loads(pending.read_text()) if pending.exists() else None
+        if pending.exists() and (not isinstance(recovery, dict)
+                                 or set(recovery) != {"receipt_before", "receipt_after"}):
+            raise ValueError("Malformed UTR reporting recovery receipt; files were preserved")
+        if observed_sha == UTR_INSTALLED_SHA and recovery is None:
+            raise ValueError("Unrecorded UTR reporting customization; files were preserved")
+        # This is bundled executable source, not a downloaded annotation table.
+        # Its output hash proves identity to the already approved plugin profile.
+        candidate = UTR_REPORTING_MODULE.read_bytes()
+        if hashlib.sha256(candidate).hexdigest() != UTR_INSTALLED_SHA:
+            raise ValueError("Bundled UTR reporting implementation does not reproduce the approved profile")
+        folder = directory / ".priva-local-patches" / "UTRAnnotator116_all_effects"
+        if folder.is_symlink() or folder.parent.is_symlink():
+            raise ValueError("Refusing a symlinked UTR patch backup directory")
+        original, patch_file = folder / "UTRAnnotator.original.pm", folder / "UTRAnnotator_all_effects.patch"
+        upstream = target.read_bytes() if observed_sha == UTR_UPSTREAM_SHA else original.read_bytes()
+        if hashlib.sha256(upstream).hexdigest() != UTR_UPSTREAM_SHA:
+            raise ValueError("UTR reporting recovery original differs; files were preserved")
+        patch = "".join(difflib.unified_diff(
+            upstream.decode().splitlines(True), candidate.decode().splitlines(True),
+            fromfile="UTRAnnotator.original.pm", tofile="UTRAnnotator.pm")).encode()
+        metadata = {"profile": UTR_PROFILE, "upstream_sha256": UTR_UPSTREAM_SHA,
+                    "installed_sha256": UTR_INSTALLED_SHA,
+                    "original_file": str(original), "patch_file": str(patch_file),
+                    "patch_sha256": hashlib.sha256(patch).hexdigest()}
+        updated = json.loads(json.dumps(receipt))
+        updated.setdefault("local_patches", {})["UTRAnnotator.pm"] = metadata
+        transaction = {"receipt_before": receipt, "receipt_after": updated}
+        if recovery is not None and recovery != transaction:
+            raise ValueError("UTR reporting recovery context changed; files were preserved")
+        folder.mkdir(parents=True, exist_ok=True)
+        for path, contents in ((original, upstream), (patch_file, patch)):
+            if path.is_symlink() or (path.exists() and path.read_bytes() != contents):
+                raise ValueError(f"Conflicting UTR reporting backup; file was preserved: {path}")
+            if not path.exists():
+                with path.open("xb") as handle:
+                    handle.write(contents)
+        # Record the exact recoverable transaction before either live write.
+        write_receipt(pending, transaction)
+        if digest(receipt_path) != before_sha or digest(target) != observed_sha:
+            raise ValueError("UTR reporting files changed during preparation; live files were preserved")
+        if observed_sha == UTR_UPSTREAM_SHA:
+            with tempfile.NamedTemporaryFile(dir=directory, prefix=".priva-utr-", delete=False) as handle:
+                temporary = Path(handle.name)
+                handle.write(candidate)
+            try:
+                temporary.chmod(target.stat().st_mode & 0o777)
+                os.replace(temporary, target)
+            finally:
+                temporary.unlink(missing_ok=True)
+        write_receipt(receipt_path, updated)
+        if not local_patch_matches(directory, load_receipt(directory), "UTRAnnotator.pm"):
+            raise ValueError("UTR reporting publication is incomplete; recovery receipt was retained")
+        pending.unlink()
+        return {"status": "installed", "profile": UTR_PROFILE}
 
 
 def capture_transition(path, config, previous, release):
@@ -206,7 +340,7 @@ def install(directory, release, names, stage, transition_file=None):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("mode", choices=("check", "install", "transition", "clear-transition"))
+    parser.add_argument("mode", choices=("check", "install", "transition", "clear-transition", "ensure-utr-reporting"))
     parser.add_argument("--directory", type=Path)
     parser.add_argument("--release", required=True)
     parser.add_argument("--plugins", default="")
@@ -228,6 +362,11 @@ def main():
         if args.mode == "clear-transition":
             if matching_transition(args.transition_file, args.directory, args.release):
                 args.transition_file.unlink()
+            return 0
+        if args.mode == "ensure-utr-reporting":
+            if not args.directory.is_dir():
+                raise ValueError(f"VEP plugin directory does not exist: {args.directory}")
+            print(json.dumps(ensure_utr_reporting(args.directory, args.release), sort_keys=True))
             return 0
         names = list(dict.fromkeys(args.plugins.split(",")))
         if not names or any(not re.fullmatch(r"[A-Za-z][A-Za-z0-9_]*", name) for name in names):

@@ -311,12 +311,22 @@ class InstallerResources(unittest.TestCase):
                 esac
             }
             python() {
-                if [[ $1 == */installer_prerequisites.py || $1 == */biomart_nm_to_enst.py ]]; then
-                    "$TEST_PYTHON" "$@"
-                else
-                    printf 'PYTHON:%s\\n' "$*"
-                    "$TEST_PYTHON" -c 'import sys; from pathlib import Path; args=sys.argv[1:]; Path(args[args.index("--output")+1]).write_text("fixture output\\n")' "$@"
-                fi
+                case "$1" in
+                    */installer_prerequisites.py|*/biomart_nm_to_enst.py) "$TEST_PYTHON" "$@" ;;
+                    */alphamissense_annotation_base.py)
+                        case "$2" in
+                            path) printf '%s/input.vcf.gz\\n' "$TEST_FOLDER" ;;
+                            check) return 0 ;;
+                            motif-check) return 1 ;; # Exercise fresh generation.
+                            *) return 97 ;;
+                        esac ;;
+                    */mapped_artifact_publish.py)
+                        [[ $2 != recover ]] || return 0
+                        [[ $2 == run ]] || return 98
+                        printf 'PYTHON:%s\\n' "$*"
+                        "$TEST_PYTHON" -c 'import sys; from pathlib import Path; args=sys.argv[1:]; Path(args[args.index("--output")+1]).write_text("fixture output\\n")' "$@" ;;
+                    *) return 99 ;;
+                esac
             }
             update_yaml() { printf 'UPDATE:%s\\n' "$*"; }
             AlphaMissense_pick_missense_constrained_segments "$TEST_MAPPING_CONFIG"

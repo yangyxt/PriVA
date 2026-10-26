@@ -155,6 +155,32 @@ class NativeCadd(unittest.TestCase):
         self.write(metadata.parent/'unexpected-package.json', b'{}\n')
         with self.assertRaisesRegex(RuntimeError, 'package membership'): N.check(self.config, path)
 
+    def test_named_prefix_binding_uses_exact_route_metadata_and_rejects_drift(self):
+        manager = self.root/'mamba'
+        shutil.rmtree(self.runtime)  # Only the old tiny fixture, to model a fresh host.
+        self.runtime = manager/'share/priva/cadd-1.7.2'
+        self.seed()
+        mappings = self.runtime/'native-prefixes'; mappings.mkdir()
+        for name, value in self.record['runtime']['environments'].items():
+            prefix = manager/'envs'/name
+            prefix.parent.mkdir(parents=True, exist_ok=True)
+            Path(value['prefix']).rename(prefix)  # Move only tiny test fixtures.
+            value['prefix'] = str(prefix)
+            (mappings/(name+'.prefix')).write_text(str(prefix)+'\n')
+        self.receipt.write_bytes(N.encoded(self.record))
+        path, profile = self.install()
+        self.assertEqual(path.parent, self.runtime/'profiles')
+        self.assertFalse((self.cache/'runtime/cadd-1.7.2').exists())
+        self.assertEqual(N.check(self.config, path), profile)
+        before = {item.name:(item.stat().st_ino, item.read_bytes()) for item in path.parent.iterdir()}
+        with mock.patch('subprocess.run', side_effect=AssertionError('No solve, probe or inference')):
+            self.assertEqual(N.install_profile(self.config, self.receipt)['path'], str(path))
+            N.install_profile(self.config, self.receipt, verify_only=True)
+        self.assertEqual(before, {item.name:(item.stat().st_ino, item.read_bytes()) for item in path.parent.iterdir()})
+        (mappings/'cadd-python2.prefix').write_text(str(self.root/'other/envs/cadd-python2')+'\n')
+        with self.assertRaisesRegex(T.ContractError, 'prefix differs'):
+            N.check(self.config, path)
+
     def test_native_source_identity_has_no_nextflow_dependency_or_implicit_fallback(self):
         identity = T.source_identity('native')
         self.assertIn('scripts/cadd_native.py', identity)

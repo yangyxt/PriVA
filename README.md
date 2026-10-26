@@ -136,6 +136,11 @@ The example `inputs/` paths are relative to the external `PRIVA_RUNS` directory;
 | `-profile task_readonly` | Optional Linux Bubblewrap task filesystem boundary; it cannot be combined with `apptainer` and does not enable raw execution |
 | `-profile test -stub-run` | Synthetic wiring only; its outputs are not scientific results |
 
+Keep scientific worker counts in the legacy configuration's `threads` and
+`threads_per_fam`; set task CPU allocations independently. Family tasks need at
+least `threads_per_fam` CPUs. Raw VEP profiles need `threads + 2` CPUs, for
+example 24 CPUs for 22 configured forks; raw execution remains gated.
+
 ## Read the outputs
 
 | Directory | Contents |

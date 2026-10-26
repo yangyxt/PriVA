@@ -490,8 +490,8 @@ def sort_and_rank_variants(df: pd.DataFrame,
         terminal_order_binary: Explicit opt-in PriVA Rust CLI for final ordering
             only. None retains Python; unsupported inputs use the original tail.
         ranking_binary: Explicit opt-in single PriVA Rust CLI for the integrated
-            R1 setup, R2 pedigree context, R3 control multiplication and R8
-            ordering. Other stages retain their original Python.
+            R1 setup, R2 pedigree context, R3 control multiplication, R4
+            compatibility masks and R8 ordering. Other stages retain Python.
 
     Returns:
         DataFrame sorted by variant's max ACMG score with added variant rank column
@@ -585,56 +585,77 @@ def sort_and_rank_variants(df: pd.DataFrame,
     # not provide a dominant-compatible assertion. No raw annotation or
     # gene-level fallback is allowed at this stage.
     # ---------------------------------------------------------------------
-    mechanism_masks = _variant_mechanism_masks(df)
-    chrom = df.get("chrom", pd.Series("", index=df.index)).fillna("").astype(str)
-    x_locus = chrom.str.upper().str.replace(r"^CHR", "", regex=True).eq("X")
-    has_single_alt_lof_compatible = (
-        mechanism_masks["has_dom_lof_history"]
-        | mechanism_masks["has_dom_unresolved_history"]
-        | (
-            x_locus
-            & proband_is_male
-            & (
-                mechanism_masks["has_x_recessive_lof_history"]
-                | mechanism_masks["has_x_recessive_unresolved_history"]
-                | mechanism_masks["has_x_dominant_lof_history"]
-                | mechanism_masks["has_x_dominant_unresolved_history"]
-            )
-        )
-        | (
-            x_locus
-            & proband_is_female
-            & (
-                mechanism_masks["has_x_dominant_lof_history"]
-                | mechanism_masks["has_x_dominant_unresolved_history"]
-            )
-        )
-    )
-    exact_gof = mechanism_masks["is_exact_gof"]
-    asserted_lof_effect = mechanism_masks["is_predicted_lof"]
-    dn_without_hi_or_ambiguous = (
-        (
-            mechanism_masks["has_dom_dn_history"]
-            | mechanism_masks["has_x_dominant_dn_history"]
-        )
-        & ~(
+    # 26 October 2026 CT: R4 plans consume the actual current R2 context
+    # and post-R3 frame. Complete validation precedes the unchanged INFO call
+    # and both original assignments below. Fallback executes only this block.
+    native_compatibility = None
+    if ranking_binary is not None:
+        from priva_rust_ranking_compatibility import try_ranking_compatibility
+        native_compatibility = try_ranking_compatibility(
+            df, proband_is_male, proband_is_female, proband_het, ranking_binary)
+    if native_compatibility is None:
+        mechanism_masks = _variant_mechanism_masks(df)
+        chrom = df.get("chrom", pd.Series("", index=df.index)).fillna("").astype(str)
+        x_locus = chrom.str.upper().str.replace(r"^CHR", "", regex=True).eq("X")
+        has_single_alt_lof_compatible = (
             mechanism_masks["has_dom_lof_history"]
-            | mechanism_masks["has_x_dominant_lof_history"]
+            | mechanism_masks["has_dom_unresolved_history"]
+            | (
+                x_locus
+                & proband_is_male
+                & (
+                    mechanism_masks["has_x_recessive_lof_history"]
+                    | mechanism_masks["has_x_recessive_unresolved_history"]
+                    | mechanism_masks["has_x_dominant_lof_history"]
+                    | mechanism_masks["has_x_dominant_unresolved_history"]
+                )
+            )
+            | (
+                x_locus
+                & proband_is_female
+                & (
+                    mechanism_masks["has_x_dominant_lof_history"]
+                    | mechanism_masks["has_x_dominant_unresolved_history"]
+                )
+            )
         )
-        & ~(
-            mechanism_masks["has_dom_unresolved_history"]
-            | mechanism_masks["has_x_dominant_unresolved_history"]
+        exact_gof = mechanism_masks["is_exact_gof"]
+        asserted_lof_effect = mechanism_masks["is_predicted_lof"]
+        dn_without_hi_or_ambiguous = (
+            (
+                mechanism_masks["has_dom_dn_history"]
+                | mechanism_masks["has_x_dominant_dn_history"]
+            )
+            & ~(
+                mechanism_masks["has_dom_lof_history"]
+                | mechanism_masks["has_x_dominant_lof_history"]
+            )
+            & ~(
+                mechanism_masks["has_dom_unresolved_history"]
+                | mechanism_masks["has_x_dominant_unresolved_history"]
+            )
         )
-    )
-    heterozygous_lof_incompatible = (
-        asserted_lof_effect
-        & ~exact_gof
-        & ~has_single_alt_lof_compatible
-    )
+        heterozygous_lof_incompatible = (
+            asserted_lof_effect
+            & ~exact_gof
+            & ~has_single_alt_lof_compatible
+        )
 
-    high_acmg_lof = df["ACMG_quant_score"] > 0.89
-    compatibility_penalty_rows = high_acmg_lof & proband_het & heterozygous_lof_incompatible
-    pext_modulation_rows = high_acmg_lof
+        high_acmg_lof = df["ACMG_quant_score"] > 0.89
+        compatibility_penalty_rows = high_acmg_lof & proband_het & heterozygous_lof_incompatible
+        pext_modulation_rows = high_acmg_lof
+    else:
+        mechanism_masks = native_compatibility['mechanism_masks']
+        chrom = native_compatibility['chrom']
+        x_locus = native_compatibility['x_locus']
+        has_single_alt_lof_compatible = native_compatibility['has_single_alt_lof_compatible']
+        exact_gof = native_compatibility['exact_gof']
+        asserted_lof_effect = native_compatibility['asserted_lof_effect']
+        dn_without_hi_or_ambiguous = native_compatibility['dn_without_hi_or_ambiguous']
+        heterozygous_lof_incompatible = native_compatibility['heterozygous_lof_incompatible']
+        high_acmg_lof = native_compatibility['high_acmg_lof']
+        compatibility_penalty_rows = native_compatibility['compatibility_penalty_rows']
+        pext_modulation_rows = native_compatibility['pext_modulation_rows']
 
     logger.info(
         "Zygosity/inheritance/mechanism compatibility signals for ranking: "

@@ -197,16 +197,21 @@ def annotation_resources(config, assembly, source, cache_root, verify_only=False
                      ("archive_url", url), ("archive_md5", md5.lower()))),
                 "CADD annotation receipt does not match configured assembly/source/checksum")
         require(archive.is_file(), f"Verified CADD archive is missing: {archive}")
-        require(cache.identity(archive) == previous.get("archive_identity")
+        archive_raw = cache.identity(archive)
+        archive_identity = cache.receipt_identity(archive)
+        require(cache.identity_matches(archive, previous.get("archive_identity"))
                 or cache.checksum(archive) == md5.lower(), "Existing CADD annotation archive changed")
         cache.verify_receipt(target, previous)
+        require(cache.identity(archive) == archive_raw and cache.receipt_identity(archive) == archive_identity,
+                "CADD annotation archive changed during verification")
     else:
         # This is the same lock held by frozen GRCh38 deployment 1515113.
         with locked(source / "data/.priva-cadd.install.lock"):
             cache.annotations(resources, folder, archive_path=archive)
         previous = json.loads(member_receipt.read_text())
+        archive_identity = cache.receipt_identity(archive)
     return {"path": str(target), "archive": str(archive), "archive_md5": md5.lower(),
-            "archive_identity": cache.identity(archive), "member_receipt": str(member_receipt),
+            "archive_identity": archive_identity, "member_receipt": str(member_receipt),
             "member_receipt_sha256": sha256(member_receipt),
             "verified_members": len(previous["members"]),
             "integrity": "publisher_md5_and_extracted_member_sha256"}

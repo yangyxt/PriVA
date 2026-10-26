@@ -553,7 +553,7 @@ class RuntimeInstaller(unittest.TestCase):
         self.assertEqual(env_file.stat().st_mtime_ns, before.st_mtime_ns)
         self.assertEqual(list(env_file.parent.iterdir()), [env_file])
 
-    def test_external_annotation_receipt_allows_runtime_install_without_source_writes(self):
+    def external_annotation_fixture(self, typed=False):
         source = self.root / "old-cache/CADD/CADD-scripts-1.7.2"
         target = source / "data/annotations/GRCh37_v1.7"
         (target / "vep").mkdir(parents=True)
@@ -572,14 +572,58 @@ class RuntimeInstaller(unittest.TestCase):
                   "archive_identity": installer.cache.identity(archive), "members": {
                       "vep": {"kind": "directory"}, "vep/fixture.txt": {"kind": "file",
                           "identity": installer.cache.identity(asset), "sha256": installer.sha256(asset)}}}
-        (receipt_root / "GRCh37.members.ready.json").write_text(json.dumps(record))
+        if typed:
+            record["archive_identity"] = installer.cache.receipt_identity(archive)
+            record["members"]["vep/fixture.txt"]["identity"] = installer.cache.receipt_identity(asset)
+        receipt = receipt_root / "GRCh37.members.ready.json"
+        receipt.write_text(json.dumps(record))
+        return source, target, asset, archive, receipt_root, config, receipt
+
+    def test_external_annotation_receipt_allows_runtime_install_without_source_writes(self):
+        source, target, asset, archive, receipt_root, config, receipt = self.external_annotation_fixture()
         before = installer.cache.identity(asset)
-        with patch.object(installer.cache, "annotations", side_effect=AssertionError("no source writes/acquisition")):
+        ready_before = receipt.read_bytes(), installer.cache.identity(receipt)
+        with patch.object(installer.cache, "annotations", side_effect=AssertionError("no source writes/acquisition")), \
+                patch.object(installer.cache, "checksum", side_effect=self.metadata_hash_only(receipt)):
             result = installer.annotation_resources(config, "GRCh37", source, self.root / "new-cache",
                                                     receipt_root=receipt_root)
         self.assertEqual(result["archive"], str(archive))
+        self.assertEqual(result["archive_identity"], installer.cache.receipt_identity(archive))
         self.assertEqual(installer.cache.identity(asset), before)
+        self.assertEqual((receipt.read_bytes(), installer.cache.identity(receipt)), ready_before)
         self.assertFalse((target / installer.cache.RECEIPT).exists())
+
+    def metadata_hash_only(self, receipt):
+        original = installer.cache.checksum
+        def checksum(path, algorithm="md5"):
+            self.assertEqual((path, algorithm), (receipt, "sha256"), "annotation payload must not be rehashed")
+            return original(path, algorithm)
+        return checksum
+
+    def test_verify_only_reuses_typed_archive_and_member_identities_without_writes(self):
+        source, target, asset, archive, receipt_root, config, receipt = self.external_annotation_fixture(typed=True)
+        before = {path:installer.cache.identity(path) for path in (archive, asset, receipt)}
+        ready_bytes = receipt.read_bytes()
+        with patch.object(installer.cache, "annotations", side_effect=AssertionError("verify-only cannot publish")), \
+                patch.object(installer.cache, "checksum", side_effect=self.metadata_hash_only(receipt)):
+            result = installer.annotation_resources(config, "GRCh37", source, self.root / "new-cache",
+                                                    verify_only=True, receipt_root=receipt_root)
+        self.assertEqual(result["archive_identity"], json.loads(ready_bytes)["archive_identity"])
+        self.assertEqual({path:installer.cache.identity(path) for path in before}, before)
+        self.assertEqual(receipt.read_bytes(), ready_bytes)
+        self.assertFalse((target/installer.cache.RECEIPT).exists())
+
+    def test_unknown_archive_identity_requires_md5_in_read_only_runtime_verification(self):
+        source, target, asset, archive, receipt_root, config, receipt = self.external_annotation_fixture(typed=True)
+        value = json.loads(receipt.read_text())
+        value["archive_identity"] = {"kind":"unknown-future-format"}
+        receipt.write_text(json.dumps(value))
+        before = receipt.read_bytes(), installer.cache.identity(receipt)
+        with patch.object(installer.cache, "checksum", wraps=installer.cache.checksum) as hashed:
+            installer.annotation_resources(config, "GRCh37", source, self.root/"new-cache",
+                                           verify_only=True, receipt_root=receipt_root)
+        self.assertEqual([value.args for value in hashed.call_args_list], [(archive,), (receipt, "sha256")])
+        self.assertEqual((receipt.read_bytes(), installer.cache.identity(receipt)), before)
 
     def test_unfinished_annotation_never_publishes_stage_receipt(self):
         with self.assertRaisesRegex(RuntimeError, "unfinished archive"):

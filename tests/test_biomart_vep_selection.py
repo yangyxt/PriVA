@@ -48,30 +48,32 @@ class MappingReleaseSelection(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'explicit.*nm_to_enst_tsv'):
                 B.source_for_assembly('hg38', release)
 
-    def test_null_116_default_uses_cache_root_and_existing_fetch_interface(self):
+    def test_null_116_default_uses_repository_data_even_before_acquisition(self):
         config = {'assembly': 'hg38', 'vep_installed_version': '116', 'cache_root': str(self.root / 'payloads'), 'nm_to_enst_tsv': None}
         before = dict(config)
-        target = self.root / 'payloads/data/hgnc' / B.FTP.BASENAME
+        target = self.root / 'data/hgnc' / B.FTP.BASENAME
         self.assertEqual(P.nm_to_enst_path(config, self.root), target)
         self.assertEqual(P.mapping_fetch_source(config, self.root), B.FTP.SOURCE_ID)
         self.assertEqual(config, before)
         self.assertFalse(target.parent.exists())
+        self.assertFalse((self.root / 'payloads').exists())
         with mock.patch.object(P, 'validate_selected_clinvar_stats'):
             P.validate_main(config, self.root, allow_missing_bundled_mapping=True)
 
     def test_genuine_existing_bundle_reuses_only_nonzero_existence(self):
-        selected = self.root / B.GRCH38_RELATIVE_PATH
-        selected.parent.mkdir(parents=True)
-        selected.write_bytes(b'original bundled bytes; intentionally not schema-validated')
-        config = {'assembly': 'hg38', 'vep_installed_version': '113', 'cache_root': str(self.root / 'cache')}
-        with mock.patch.object(B, 'verify_pinned', side_effect=AssertionError('extra validation forbidden')):
-            self.assertEqual(P.validate_mapping(config, self.root), selected)
-        self.assertFalse((self.root / 'cache').exists())
-        selected.write_bytes(b'')
-        with self.assertRaises(ValueError):
-            P.validate_mapping(config, self.root)
+        for assembly, release in (('hg19', '116'), ('hg38', '113'), ('hg38', '116')):
+            selected = self.root / B.source_for_assembly(assembly, release)['relative_path']
+            selected.parent.mkdir(parents=True, exist_ok=True)
+            selected.write_bytes(b'opaque bundled bytes; intentionally not schema-validated')
+            config = {'assembly': assembly, 'vep_installed_version': release, 'cache_root': str(self.root / 'cache')}
+            with mock.patch.object(B, 'verify_pinned', side_effect=AssertionError('extra validation forbidden')):
+                self.assertEqual(P.validate_mapping(config, self.root), selected)
+            self.assertFalse((self.root / 'cache').exists())
+            selected.write_bytes(b'')
+            with self.assertRaises(ValueError):
+                P.validate_mapping(config, self.root)
 
-    def test_external_symlink_and_new_ftp_resource_keep_full_validation(self):
+    def test_external_symlink_and_external_ftp_resource_keep_full_validation(self):
         selected = self.root / B.GRCH38_RELATIVE_PATH
         selected.parent.mkdir(parents=True)
         external = self.root / 'external.tsv'
@@ -82,8 +84,8 @@ class MappingReleaseSelection(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'external must validate'):
                 P.validate_mapping(config, self.root)
             strict.assert_called_once()
-        ftp = selected.with_name(B.FTP.BASENAME)
-        ftp.write_bytes(b'new FTP download, never an original bundle')
+        ftp = self.root / B.FTP.BASENAME
+        ftp.write_bytes(b'explicit external FTP snapshot, outside canonical bundle path')
         config['nm_to_enst_tsv'] = str(ftp)
         with mock.patch.object(B, 'verify_pinned', side_effect=ValueError('FTP must validate')):
             with self.assertRaisesRegex(ValueError, 'FTP must validate'):
@@ -94,7 +96,7 @@ class MappingReleaseSelection(unittest.TestCase):
         self.assertEqual(P.nm_to_enst_path(config, self.root), self.root / B.GRCH38_RELATIVE_PATH)
         self.assertEqual(P.mapping_fetch_source(config, self.root), B.GRCH38_SOURCE_ID)
         config['cache_root'] = 'payloads'
-        self.assertEqual(P.nm_to_enst_path(config, self.root), self.root / 'payloads' / B.GRCH38_RELATIVE_PATH)
+        self.assertEqual(P.nm_to_enst_path(config, self.root), self.root / B.GRCH38_RELATIVE_PATH)
 
     def test_explicit_path_bypasses_release_selection_but_not_assembly(self):
         table = self.root / 'selected.tsv'

@@ -57,7 +57,7 @@ DEFAULT_SHARED_RAW_DIR = DEFAULT_CACHE_DIR / "raw"
 DEFAULT_GOFCARDS_EXACT_VARIANTS = (
     PROJECT_ROOT / "data" / "gofcards" / "gofcards_exact_gof.json.gz"
 )
-DEFAULT_HGNC_TABLE = PROJECT_ROOT / "data" / "hgnc" / "non_alt_loci_set.tsv"
+DEFAULT_HGNC_TABLE = PROJECT_ROOT / "data" / "hgnc" / "hgnc_non_alt_loci_set_sha256_890b18743cc8.tsv"
 NONLOF_ASSERTIONS_FILENAME = "gene_nonlof_mechanism_curated_assertions.json.gz"
 NONLOF_ASSERTIONS_SCHEMA_FILENAME = (
     "gene_nonlof_mechanism_curated_assertions.schema.json"

@@ -28,7 +28,7 @@ def test_portable_defaults_stay_inside_priva() -> None:
         ROOT / "data" / "gofcards" / "gofcards_exact_gof.json.gz"
     )
     assert nonlof.DEFAULT_HGNC_TABLE == (
-        ROOT / "data" / "hgnc" / "non_alt_loci_set.tsv"
+        ROOT / "data" / "hgnc" / "hgnc_non_alt_loci_set_sha256_890b18743cc8.tsv"
     )
     assert "llm_gene_reranker" not in str(nonlof.DEFAULT_CACHE_DIR)
 

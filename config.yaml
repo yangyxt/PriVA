@@ -201,7 +201,7 @@ gene_nonlof_mechanism_json: ""
 hpo_condition_mechanism_builder_script: "scripts/build_hpo_condition_mechanism_cache.py"
 hpo_condition_mechanism_json: ""
 ddg2p_mechanism_evidence: ""
-hgnc_table: "data/hgnc/non_alt_loci_set.tsv"
+hgnc_table: "data/hgnc/hgnc_non_alt_loci_set_sha256_890b18743cc8.tsv"
 g2p_ddg2p_url: "https://www.ebi.ac.uk/gene2phenotype/api/panel/all/download"
 orphadata_gene_disease_url: "https://www.orphadata.com/data/xml/en_product6.xml"
 clingen_dosage_grch38_url: "https://ftp.clinicalgenome.org/ClinGen_gene_curation_list_GRCh38.tsv"
@@ -232,11 +232,12 @@ gofcards_refresh_days: "180"
 gofcards_clinvar_reinjection_lag_days: "90"
 gofcards_workdir: ""
 # AlphaMissense/PM1 five-column NM-to-ENST mapping. An explicit supplied path is retained.
-# null selects the pinned assembly/release mapping under cache_root/data/hgnc:
+# null selects the pinned assembly/release mapping bundled under data/hgnc:
 # hg19/GRCh37 uses BioMart GRCh37.p13 mart116 (annotation base75); GRCh38
 # with VEP116 uses the pinned FTP116 mapping. Legacy VEP113 keeps its mapping.
 # Other automatic combinations require an explicit compatible supplied mapping.
 # These are new mapping sources, not an identity claim for the unavailable original.
+# Raw acquisition work stays outside the checkout under cache_root/BioMart.
 nm_to_enst_tsv: null
 # GoFCards requires indexed references for BOTH assemblies; empty paths use
 # the existing managed-reference planner under cache_root/reference and liftOver.

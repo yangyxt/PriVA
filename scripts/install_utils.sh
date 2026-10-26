@@ -3848,7 +3848,7 @@ function gofcards_exact_gof_cache_install() {
     if [[ ${mode} == --main-preflight && ${PRIVA_SMOKE_SKIP_VEP:-0} != 1 ]]; then
         priva_verify_vep_release "${vep_version}" || return 1
     fi
-    hgnc_table=$(yaml_value_or_default "${config_file}" "hgnc_table" "${DATA_DIR}/hgnc/non_alt_loci_set.tsv")
+    hgnc_table=$(yaml_value_or_default "${config_file}" "hgnc_table" "${DATA_DIR}/hgnc/hgnc_non_alt_loci_set_sha256_890b18743cc8.tsv")
     review_tsv=$(yaml_value_or_default "${config_file}" "gofcards_mechanism_review_tsv" "${DATA_DIR}/gofcards/gofcards_mechanism_reviews.tsv")
     stats_json="${workdir}/gofcards_build_stats.json"
 
@@ -4013,7 +4013,7 @@ function gene_nonlof_mechanism_cache_install() {
     else
         [[ $? -eq 1 ]] || return 1
     fi
-    hgnc_table=$(yaml_value_or_default "${config_file}" "hgnc_table" "${DATA_DIR}/hgnc/non_alt_loci_set.tsv")
+    hgnc_table=$(yaml_value_or_default "${config_file}" "hgnc_table" "${DATA_DIR}/hgnc/hgnc_non_alt_loci_set_sha256_890b18743cc8.tsv")
     managed_clinvar_xml="${raw_dir}/clinvar_vcv/ClinVarVCVRelease_00-latest_weekly.xml.gz"
     configured_clinvar_xml=$(yaml_value_or_default "${config_file}" "clinvar_vcv_xml" "")
     if [[ -n "$configured_clinvar_xml" ]] && \
@@ -4414,9 +4414,18 @@ function nm_to_enst_mapping_install() {
         local source_id
         source_id=$(python "${SCRIPT_DIR}/installer_prerequisites.py" "${config_file}" \
             --source-root "${BASE_DIR}" --stage mapping-source) || return 1
-        local raw_output=${2:-${target}.biomart.raw.tsv}
-        python "${SCRIPT_DIR}/biomart_nm_to_enst.py" fetch \
-            --source "${source_id}" --output "${target}" --raw-output "${raw_output}" || return 1
+        local workspace
+        workspace=$(python "${SCRIPT_DIR}/installer_prerequisites.py" "${config_file}" \
+            --source-root "${BASE_DIR}" --stage mapping-workspace) || return 1
+        if [[ ${source_id} == ensembl-grch38-mart116-ftp ]]; then
+            python "${SCRIPT_DIR}/biomart_nm_to_enst.py" fetch \
+                --source "${source_id}" --output "${target}" --resource-dir "${workspace}" || return 1
+        else
+            local raw_output=${2:-${workspace}/${target##*/}.biomart.raw.tsv}
+            mkdir -p "${workspace}" || return 1
+            python "${SCRIPT_DIR}/biomart_nm_to_enst.py" fetch \
+                --source "${source_id}" --output "${target}" --raw-output "${raw_output}" || return 1
+        fi
         # Newly acquired bytes are not a previously bundled table, even when
         # a legacy no-root invocation downloads into its source-root pathname.
         python "${SCRIPT_DIR}/biomart_nm_to_enst.py" verify "${target}" \

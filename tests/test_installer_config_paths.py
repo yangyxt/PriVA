@@ -245,8 +245,9 @@ class PortableConfigPaths(unittest.TestCase):
                       cds_fasta_file=str(external), gene_mechanism_cache_dir=str(external),
                       gene_mechanism_builder_script=str(external), nm_to_enst_tsv=str(external))
         updates = PATHS.portable_updates(config, ROOT)
-        for key in ("clingen_map", "hpo_assertions", "ref_genome", "cds_fasta_file", "gene_mechanism_cache_dir", "nm_to_enst_tsv"):
+        for key in ("clingen_map", "hpo_assertions", "ref_genome", "cds_fasta_file", "gene_mechanism_cache_dir"):
             self.assertTrue(Path(updates[key]).is_relative_to(self.cache))
+        self.assertNotIn("nm_to_enst_tsv", updates)
         self.assertNotIn("gene_mechanism_builder_script", updates)
         self.assertTrue(Path(updates["gene_mechanism_raw_dir"]).is_relative_to(self.cache))
         self.assertFalse(external.exists())

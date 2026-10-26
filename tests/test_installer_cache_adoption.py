@@ -98,7 +98,7 @@ class CacheAdoptionTests(unittest.TestCase):
         self.assertEqual(self.config.read_bytes(), before)
         self.assertFalse(self.cache.exists())
 
-    def test_custom_replacement_tables_are_copied_and_missing_selections_fail(self):
+    def test_custom_replacement_tables_preserve_selected_hgnc_and_missing_selections_fail(self):
         for key in sorted(PATHS.REPLACEMENT_TABLE_KEYS):
             with self.subTest(key=key):
                 source = self.folder / (key + ".selected")
@@ -107,9 +107,14 @@ class CacheAdoptionTests(unittest.TestCase):
                 self.write()
                 self.resolve()
                 target = Path(yaml.safe_load(self.config.read_text())[key])
-                self.assertTrue(target.is_relative_to(self.cache))
+                if key == "hgnc_table":
+                    self.assertEqual(target, source)
+                    self.assertEqual(target.stat().st_ino, source.stat().st_ino)
+                    self.assertFalse((self.cache / "data/hgnc").exists())
+                else:
+                    self.assertTrue(target.is_relative_to(self.cache))
+                    self.assertNotEqual(target.stat().st_ino, source.stat().st_ino)
                 self.assertEqual(target.read_bytes(), source.read_bytes())
-                self.assertNotEqual(target.stat().st_ino, source.stat().st_ino)
                 source.unlink()
                 self.write()
                 before = self.config.read_bytes()

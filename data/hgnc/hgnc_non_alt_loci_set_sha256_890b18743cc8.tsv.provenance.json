@@ -1,0 +1,13 @@
+{
+  "assembly_binding": null,
+  "bytes": 16441525,
+  "ensembl_release": null,
+  "filename": "hgnc_non_alt_loci_set_sha256_890b18743cc8.tsv",
+  "legacy_filename": "non_alt_loci_set.tsv",
+  "metadata_kind": "priva_bundled_hgnc_master_snapshot",
+  "metadata_schema_version": 1,
+  "publisher_release": null,
+  "release_note": "HGNC master snapshot; publisher date/release and assembly binding are not recorded. This is separate from the Ensembl NM-to-ENST mappings.",
+  "sha256": "890b18743cc8138a1f613b34b1c60bb71f3f0067d9c6ac4c2ea434b2d8a93171",
+  "snapshot_version": "sha256:890b18743cc8138a1f613b34b1c60bb71f3f0067d9c6ac4c2ea434b2d8a93171"
+}

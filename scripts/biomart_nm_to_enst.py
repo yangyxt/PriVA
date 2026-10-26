@@ -301,12 +301,19 @@ def acquire(output: Path, raw_output: Path | None = None, *, timeout: float = 60
             raise ValueError("FTP116 source conflicts with the selected pinned mapping filename")
         # raw_output belongs to the service method. The existing installer may
         # pass it, but an FTP projection never manufactures a service response.
-        return FTP.install(output, resource_dir or output.parent / ".biomart116_ftp",
+        if (resource_dir is None and not os.path.lexists(output)
+                and not os.path.lexists(provenance_path(output))):
+            raise ValueError("New FTP acquisition requires --resource-dir outside the checkout")
+        if resource_dir is not None and not os.path.lexists(output):
+            external_acquisition_path(resource_dir)
+        return FTP.install(output, resource_dir,
                            validate_table, timeout, attempts)
     if raw_output is None:
         raise ValueError("Online BioMart acquisition requires its raw_output destination")
     if resource_dir is not None:
         raise ValueError("resource_dir is specific to the FTP source")
+    if not os.path.lexists(output):
+        external_acquisition_path(raw_output)
     _source(source_id)
     output.parent.mkdir(parents=True, exist_ok=True)
     # Lock the existing directory inode: no persistent lock/state file, and
@@ -386,6 +393,21 @@ def _acquire_locked(output: Path, raw_output: Path, *, timeout: float, attempts:
               "raw_bytes": raw_partial.stat().st_size, "raw_sha256": sha256(raw_partial)}
     os.replace(raw_partial, raw_output)
     os.replace(table_partial, output)
+    if is_bundled_mapping(output):
+        # The full acquisition record stays beside its external raw export;
+        # source data contains portable publisher/method facts only. This is
+        # reached only for a newly acquired table, never an existing sidecar.
+        runtime_receipt(record, raw_output.parent, output.name)
+        record = {key: value for key, value in record.items()
+                  if key not in ("retrieved_utc", "producer_script_path", "slurm_job_id")}
+        record.update(metadata_kind="priva_bundled_mapping_snapshot", metadata_schema_version=1,
+                      acquisition_method="online_biomart",
+                      order_policy="Preserve BioMart response row order.",
+                      multiplicity_policy="uniqueRows=0; retain duplicate rows and blank RefSeq fields.",
+                      scientific_qualified=False, production_selected=False,
+                      original_biomart_export_identity=False,
+                      original_biomart_response_order_identity=False,
+                      online_query_executed=True)
     atomic_json(provenance_path(output), record)
     verify_pinned(output, source["assembly"])
     print(f"Completed export; provenance receipt closed: {provenance_path(output)}", flush=True)
@@ -393,13 +415,27 @@ def _acquire_locked(output: Path, raw_output: Path, *, timeout: float, attempts:
     return record
 
 
+def runtime_receipt(record: dict, workspace: Path, basename: str) -> Path:
+    """Keep each acquisition's full runtime provenance outside source data."""
+    external_acquisition_path(workspace)
+    return FTP.runtime_receipt(record, workspace, basename)
+
+
+def external_acquisition_path(path: Path) -> None:
+    """Keep raw exports, FTP dumps and projection databases outside source data."""
+    root = Path(__file__).resolve().parents[1]
+    if path.resolve().is_relative_to(root.resolve()):
+        raise ValueError("BioMart acquisition workspace must be outside the checkout")
+
+
 def is_bundled_mapping(mapping: Path, source_root: Path | None = None) -> bool:
-    """Recognize existing original bundles without trusting external link targets."""
+    """Recognize canonical bundles without trusting symlinked source bytes."""
     root = source_root or Path(__file__).resolve().parents[1]
     logical = Path(os.path.abspath(mapping))
-    return (logical.name in (BASENAME, GRCH38_BASENAME)
+    return (logical.name in PINNED_BASENAMES
             and logical == Path(os.path.abspath(root / "data/hgnc" / logical.name))
-            and logical.resolve().is_relative_to(root.resolve() / "data/hgnc"))
+            and not logical.is_symlink()
+            and logical.resolve() == root.resolve() / "data/hgnc" / logical.name)
 
 
 def mapping_identity(mapping: Path, inputs: list[Path] | tuple = ()) -> dict:
@@ -491,7 +527,6 @@ def changed_mapping_target(*, identity: dict, cache_root: Path, output_dir: Path
                                   relative=Path("nm-to-enst") / assembly / kind / key / names[kind])
 
 
-
 def artifact_route(*, artifact: Path, mapping: Path, cache_root: Path,
                    output_dir: Path, assembly: str, kind: str,
                    inputs: list[Path] | tuple = ()) -> Path:
@@ -529,7 +564,7 @@ def main() -> int:
     fetch.add_argument("--source", choices=(SOURCE_ID, GRCH38_SOURCE_ID, FTP.SOURCE_ID), required=True)
     fetch.add_argument("--output", type=Path, required=True)
     fetch.add_argument("--raw-output", type=Path, help="Raw response destination for online BioMart sources")
-    fetch.add_argument("--resource-dir", type=Path, help="FTP raw dumps/projection work directory; defaults beside the mapping")
+    fetch.add_argument("--resource-dir", type=Path, help="External FTP raw dumps/projection workspace; required for new acquisition")
     fetch.add_argument("--timeout", type=float, default=600)
     fetch.add_argument("--attempts", type=int, default=3)
     verify = commands.add_parser("verify")

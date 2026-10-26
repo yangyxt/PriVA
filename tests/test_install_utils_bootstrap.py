@@ -207,7 +207,10 @@ elif tool == "vep_install":
         (directory / "plugin_config.txt").write_text("official fixture release " + selected_release + "\n")
         for name in option("--PLUGINS").split(","):
             if name != os.environ.get("PRIVA_TEST_OMIT_PLUGIN"):
-                (directory / (name + ".pm")).write_text("package " + name + ";\n# official fixture release " + selected_release + "\n1;\n")
+                if name == "UTRAnnotator" and selected_release == "116":
+                    (directory / (name + ".pm")).write_bytes(Path(os.environ["PRIVA_TEST_UTR116_ORIGINAL"]).read_bytes())
+                else:
+                    (directory / (name + ".pm")).write_text("package " + name + ";\n# official fixture release " + selected_release + "\n1;\n")
 '''
 
 
@@ -245,6 +248,7 @@ class InstallerBootstrapTests(unittest.TestCase):
             "PATH": str(self.bin), "PRIVA_TEST_ROOT": str(self.directory),
             "PRIVA_TEST_TOOL_TEMPLATE": str(self.tool_template),
             "PRIVA_TEST_PYTHON_TEMPLATE": str(self.python_template),
+            "PRIVA_TEST_UTR116_ORIGINAL": str(ROOT / "tests/fixtures/UTRAnnotator116.original.pm"),
             "PRIVA_SMOKE_SKIP_VEP": "1", "TMPDIR": str(self.directory),
         })
 
@@ -488,6 +492,56 @@ class InstallerBootstrapTests(unittest.TestCase):
         self.assertIn("Failed to install the VEP cache/plugins", result.stderr)
         self.assertFalse(any(call[1:5] == ["env", "config", "vars", "set"] for call in self.calls()))
         self.assertFalse(list(self.directory.glob("plugins.install-*")))
+
+    def test_installer_retry_recovers_utr_receipt_failure_before_regular_plugin_install(self):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("utr_retry_fixture", ROOT / "scripts/vep_plugins_release.py")
+        helper = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(helper)
+        self.select_release("116")
+        self.manager("micromamba")
+        first = self.run_cache(release="116")
+        self.assertEqual(first.returncode, 0, first.stderr)
+        plugins = self.directory / "plugins"
+        target, receipt_file = plugins / "UTRAnnotator.pm", plugins / helper.RECEIPT
+        receipt = helper.load_receipt(plugins)
+        original = Path(receipt["local_patches"].pop("UTRAnnotator.pm")["original_file"])
+        receipt.pop("local_patches")
+        target.write_bytes(original.read_bytes())
+        helper.write_receipt(receipt_file, receipt)
+        write = helper.write_receipt
+        def fail_receipt(path, value):
+            if path == receipt_file:
+                raise OSError("simulated live receipt failure")
+            return write(path, value)
+        with mock.patch.object(helper, "write_receipt", side_effect=fail_receipt):
+            with self.assertRaises(OSError):
+                helper.ensure_utr_reporting(plugins, "116")
+        self.assertFalse(helper.matches(plugins, helper.load_receipt(plugins), "116", ["UTRAnnotator"]))
+        before = len([call for call in self.calls() if call[0] == "vep_install"])
+        retried = self.run_cache(release="116")
+        self.assertEqual(retried.returncode, 0, retried.stderr)
+        self.assertEqual(len([call for call in self.calls() if call[0] == "vep_install"]), before)
+        self.assertFalse((plugins / ".priva-utr-reporting.pending.json").exists())
+        self.assertEqual(helper.digest(target), helper.UTR_INSTALLED_SHA)
+        self.assertEqual(helper.digest(original), helper.UTR_UPSTREAM_SHA)
+
+    def test_malformed_utr_recovery_stops_installer_before_live_replacement(self):
+        self.select_release("116")
+        self.manager("micromamba")
+        first = self.run_cache(release="116")
+        self.assertEqual(first.returncode, 0, first.stderr)
+        plugins = self.directory / "plugins"
+        pending = plugins / ".priva-utr-reporting.pending.json"
+        pending.write_text("null\n")
+        watched = (pending, plugins / "UTRAnnotator.pm", plugins / ".priva-vep-plugins.json")
+        before = [path.read_bytes() for path in watched]
+        calls = len([call for call in self.calls() if call[0] == "vep_install"])
+        retried = self.run_cache(release="116")
+        self.assertNotEqual(retried.returncode, 0)
+        self.assertIn("recovery receipt", retried.stderr)
+        self.assertEqual([path.read_bytes() for path in watched], before)
+        self.assertEqual(len([call for call in self.calls() if call[0] == "vep_install"]), calls)
 
     def test_vep_zero_exit_without_cache_is_not_success(self):
         self.manager("micromamba")

@@ -51,7 +51,7 @@ CADD_BGZIP=${CADD_BGZIP:-bgzip}
 CADD_TABIX=${CADD_TABIX:-tabix}
 CADD_ESM_BATCH_SIZE=${CADD_ESM_BATCH_SIZE:-1}
 [[ "$CADD_ESM_BATCH_SIZE" =~ ^[1-9][0-9]*$ ]] || die 'CADD_ESM_BATCH_SIZE must be positive'
-for program in git gzip sort uniq mktemp cat "$CADD_PYTHON2" \
+for program in git gzip sort uniq mktemp mkdir ln cat "$CADD_PYTHON2" \
     "$CADD_ESM_PYTHON" "$CADD_REGSEQ_PYTHON" "$CADD_BGZIP"; do
     require_program "$program"
 done
@@ -92,6 +92,16 @@ if [[ "$CADD_ASSEMBLY" == GRCh38 ]]; then
 fi
 
 stage=$(mktemp -d "$workdir/annotation.XXXXXXXX")
+# Original Torch loaders call mkdir(checkpoints) even for cached models.
+# Give that cache bookkeeping task-local storage while preserving every pinned
+# checkpoint target and the original ordered model arguments (26 Oct 2026 CT).
+configured_esm_hub=$(cd -- "$CADD_ESM_MODEL_DIR" && pwd -P)
+task_esm_hub="$stage/esm-hub"
+mkdir -p -- "$task_esm_hub/checkpoints"
+for model in "${model_names[@]}"; do
+    task_checkpoint="$task_esm_hub/checkpoints/$model.pt"
+    [[ -L "$task_checkpoint" ]] || ln -s -- "$configured_esm_hub/checkpoints/$model.pt" "$task_checkpoint"
+done
 # Keep all intermediate data and tool temporary files in the caller's scratch.
 export TMPDIR="$stage"
 export CADD="$CADD_SOURCE_ROOT"
@@ -117,17 +127,17 @@ fi
 
 "$CADD_ESM_PYTHON" "$scripts/lib/tools/esmScore/esmScore_missense_av_fast.py" \
     --input "$stage/vep.vcf.gz" --transcripts "$CADD_ESM_TRANSCRIPTS" \
-    --model-directory "$CADD_ESM_MODEL_DIR" "${model_args[@]}" \
+    --model-directory "$task_esm_hub" "${model_args[@]}" \
     --output "$stage/esm_missense.vcf.gz" --batch-size "$CADD_ESM_BATCH_SIZE" \
     > "$stage/esm_missense.log" 2>&1
 "$CADD_ESM_PYTHON" "$scripts/lib/tools/esmScore/esmScore_frameshift_av.py" \
     --input "$stage/esm_missense.vcf.gz" --transcripts "$CADD_ESM_TRANSCRIPTS" \
-    --model-directory "$CADD_ESM_MODEL_DIR" "${model_args[@]}" \
+    --model-directory "$task_esm_hub" "${model_args[@]}" \
     --output "$stage/esm_frameshift.vcf.gz" --batch-size "$CADD_ESM_BATCH_SIZE" \
     > "$stage/esm_frameshift.log" 2>&1
 "$CADD_ESM_PYTHON" "$scripts/lib/tools/esmScore/esmScore_inFrame_av.py" \
     --input "$stage/esm_frameshift.vcf.gz" --transcripts "$CADD_ESM_TRANSCRIPTS" \
-    --model-directory "$CADD_ESM_MODEL_DIR" "${model_args[@]}" \
+    --model-directory "$task_esm_hub" "${model_args[@]}" \
     --output "$stage/esm.vcf.gz" --batch-size "$CADD_ESM_BATCH_SIZE" \
     > "$stage/esm_inframe.log" 2>&1
 "$CADD_REGSEQ_PYTHON" "$scripts/lib/tools/regulatorySequence/predictVariants.py" \

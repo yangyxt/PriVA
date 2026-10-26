@@ -328,10 +328,19 @@ def annotations(resources, folder, archive_path=None):
     ready = {"schema": 1, "assembly": resources["assembly"], "version": resources["version"],
              "archive_url": source, "archive_md5": md5,
              "archive_identity": identity(archive_path), "members": members}
+    ready_bytes = (json.dumps(ready, indent=2, sort_keys=True) + "\n").encode("utf-8")
+    # 2026-10-26 CT: verified reuse must not invalidate a pinned runtime merely
+    # by replacing its byte-identical readiness receipt. All archive/member
+    # checks above still run. Compare the on-disk bytes, not the parsed receipt:
+    # verify_receipt() updates member identities in that dictionary in place.
+    ready_path = published / RECEIPT
+    if (staging is None and ready_path.is_file() and not ready_path.is_symlink()
+            and ready_path.read_bytes() == ready_bytes):
+        print(f"Verified CADD annotations: {target}", flush=True)
+        return
     try:
-        with tempfile.NamedTemporaryFile(mode="w", prefix=RECEIPT + ".", dir=published, delete=False) as output:
-            json.dump(ready, output, indent=2, sort_keys=True)
-            output.write("\n")
+        with tempfile.NamedTemporaryFile(mode="wb", prefix=RECEIPT + ".", dir=published, delete=False) as output:
+            output.write(ready_bytes)
             receipt_path = Path(output.name)
         receipt_path.replace(published / RECEIPT)
         if staging:

@@ -44,13 +44,20 @@ def load(name, path):
     return module
 
 
+def _ranker_definition(tree):
+    definitions = [node for node in tree.body if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+                   and node.name == 'sort_and_rank_variants']
+    assert len(definitions) == 1
+    definition = definitions[0]
+    assert isinstance(definition, ast.FunctionDef) and not definition.decorator_list
+    return definition
+
+
 def source_proof(reference, candidate):
     original = ast.parse((reference / 'scripts/acmg_scoring.py').read_text())
     updated = ast.parse((candidate / 'scripts/acmg_scoring.py').read_text())
-    ref = next(node for node in original.body if isinstance(node, ast.FunctionDef)
-               and node.name == 'sort_and_rank_variants')
-    new = next(node for node in updated.body if isinstance(node, ast.FunctionDef)
-               and node.name == ref.name)
+    ref = _ranker_definition(original)
+    new = _ranker_definition(updated)
     ref, new = copy.deepcopy(ref), copy.deepcopy(new)
     assert [node.arg for node in new.args.args[-2:]] == ['terminal_order_binary', 'ranking_binary']
     for _ in range(2):

@@ -1,5 +1,7 @@
 """R3 atomic product, current-buffer fallback and original control ordering."""
+import ast
 import csv
+import importlib.util
 from pathlib import Path
 import pickle
 import subprocess
@@ -66,6 +68,26 @@ def response(command, *, bits=('3fe0000000000000', '8000000000000000'), target=1
 
 
 class ControlMultiplyBridgeTests(unittest.TestCase):
+    def test_ranker_guard_accepts_one_synchronous_top_level_definition(self):
+        path = ROOT / 'rust/tests/terminal_order_bridge_compare.py'
+        spec = importlib.util.spec_from_file_location('ranking_source_guard', path)
+        harness = importlib.util.module_from_spec(spec); spec.loader.exec_module(harness)
+        tree = ast.parse('def outer():\n    def sort_and_rank_variants():\n        pass\n'
+                         'def sort_and_rank_variants(df):\n    return df\n')
+        definition = harness._ranker_definition(tree)
+        self.assertIs(definition, tree.body[1])
+
+    def test_ranker_guard_rejects_missing_duplicate_async_and_decorated_definitions(self):
+        path = ROOT / 'rust/tests/terminal_order_bridge_compare.py'
+        spec = importlib.util.spec_from_file_location('ranking_source_guard', path)
+        harness = importlib.util.module_from_spec(spec); spec.loader.exec_module(harness)
+        definition = 'def sort_and_rank_variants(df):\n    return df\n'
+        cases = ['', definition + definition, 'async ' + definition,
+                 '@private_guard\n' + definition, definition + 'async ' + definition]
+        for source in cases:
+            with self.subTest(source=source), self.assertRaises(AssertionError):
+                harness._ranker_definition(ast.parse(source))
+
     def test_default_and_r8_only_never_enter_r3_adapter(self):
         with patch.object(bridge, 'try_control_multiply') as product, patch.object(
                 terminal, 'try_terminal_order', return_value=None):

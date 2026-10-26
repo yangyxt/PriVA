@@ -171,7 +171,8 @@ def ACMG_criteria_assign(anno_table: str,
                          gene_nonlof_mechanism_json: str = str(DEFAULT_MECHANISM_JSON),
                          gnomAD_extreme_rare_threshold: float = 0.0001,
                          expected_incidence: float = 0.0001,
-                         threads: int = 10) -> Tuple[pd.DataFrame, pd.DataFrame]:
+                         threads: int = 10,
+                         ranking_binary: str = None) -> Tuple[pd.DataFrame, pd.DataFrame]:
     """
     Main function to assign ACMG criteria.
     Returns both annotated DataFrame and criteria matrix.
@@ -551,15 +552,30 @@ def ACMG_criteria_assign(anno_table: str,
     anno_df["ACMG_class"] = acmg_class
 
     # Sort and rank variants
-    anno_df = sort_and_rank_variants(anno_df,
-                                     ped_df,
-                                     fam_name,
-                                     pext_tissues=pext_tissues,
-                                     pext_low_expression_cutoff=pext_low_expression_cutoff,
-                                     pext_penalty_floor=pext_penalty_floor,
-                                     pext_penalty_shape=pext_penalty_shape,
-                                     relevant_gene_list=relevant_gene_list,
-                                     dispensable_gene_list=dispensable_gene_list)
+    # 26 October 2026 CT: expose the separately qualified optional ranker at
+    # the original call boundary. Criteria, writes and default call stay in
+    # their original order; no earlier scientific calculation is replayed.
+    if ranking_binary is None:
+        anno_df = sort_and_rank_variants(anno_df,
+                                         ped_df,
+                                         fam_name,
+                                         pext_tissues=pext_tissues,
+                                         pext_low_expression_cutoff=pext_low_expression_cutoff,
+                                         pext_penalty_floor=pext_penalty_floor,
+                                         pext_penalty_shape=pext_penalty_shape,
+                                         relevant_gene_list=relevant_gene_list,
+                                         dispensable_gene_list=dispensable_gene_list)
+    else:
+        anno_df = sort_and_rank_variants(anno_df,
+                                         ped_df,
+                                         fam_name,
+                                         pext_tissues=pext_tissues,
+                                         pext_low_expression_cutoff=pext_low_expression_cutoff,
+                                         pext_penalty_floor=pext_penalty_floor,
+                                         pext_penalty_shape=pext_penalty_shape,
+                                         relevant_gene_list=relevant_gene_list,
+                                         dispensable_gene_list=dispensable_gene_list,
+                                         ranking_binary=ranking_binary)
     # Save the annotated table to replace the input anno_table
     anno_df.to_csv(anno_table, sep="\t", index=False)
 
@@ -626,6 +642,8 @@ if __name__ == "__main__":
         help="Schema-v2 exact non-LOF mechanism assertions JSON.",
     )
     parser.add_argument("--threads", type=int, required=False, default=10)
+    parser.add_argument("--ranking_binary", type=str, required=False, default=None,
+                        help="Optional qualified PriVA Rust ranker; criteria and unsupported ranking inputs retain Python.")
     args = parser.parse_args()
 
     anno_df, criteria_matrix = ACMG_criteria_assign(args.anno_table,
@@ -659,4 +677,5 @@ if __name__ == "__main__":
                                                     gene_nonlof_mechanism_json=args.gene_nonlof_mechanism_json,
                                                     gnomAD_extreme_rare_threshold=args.gnomAD_extreme_rare_threshold,
                                                     expected_incidence=args.expected_incidence,
-                                                    threads=args.threads)
+                                                    threads=args.threads,
+                                                    ranking_binary=args.ranking_binary)

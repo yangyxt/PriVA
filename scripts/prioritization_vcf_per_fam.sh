@@ -190,6 +190,19 @@ function assign_acmg_criteria () {
     local pext_tissues=$(read_yaml ${config_file} "pext_tissues")
     local hpo_condition_mechanism_json=$(read_yaml ${config_file} "hpo_condition_mechanism_json")
     local gene_nonlof_mechanism_json=$(read_yaml ${config_file} "gene_nonlof_mechanism_json")
+    local priva_ranking_binary
+    priva_ranking_binary=$(read_yaml "${config_file}" "priva_ranking_binary") || return 1
+    local -a ranking_args=()
+    if [[ -n "${priva_ranking_binary}" && "${priva_ranking_binary}" != "null" ]]; then
+        # 26 October 2026 CT: the optional native ranker is a runtime input,
+        # never the installer-only SpliceAI converter or a CADD replacement.
+        if [[ "${priva_ranking_binary}" != /* || ! "${priva_ranking_binary}" =~ ^[A-Za-z0-9_./:+-]+$ ||
+              ! -f "${priva_ranking_binary}" || ! -s "${priva_ranking_binary}" || ! -x "${priva_ranking_binary}" ]]; then
+            log "ERROR: priva_ranking_binary must be an existing executable at an absolute supported path."
+            return 1
+        fi
+        ranking_args=(--ranking_binary "${priva_ranking_binary}")
+    fi
 
     local has_error=0
     check_path ${clinvar_aa_dict_pkl} "file" "clinvar_aa_stat" || has_error=1
@@ -243,6 +256,9 @@ function assign_acmg_criteria () {
     # Skip if: input_tab is newer than all data files, output exists and is newer than input,
     # AND output is newer than acmg_criteria_assign.py and the PM1 criteria module
     # (so script updates trigger re-run).
+    # Legacy timestamps do not identify the selected binary. Native opt-in
+    # therefore executes this boundary; Nextflow can reuse its hashed task.
+    [[ ${#ranking_args[@]} -eq 0 ]] && \
     [[ -f ${input_tab} ]] && \
     [[ -f ${output_acmg_mat} ]] && \
     [[ ${output_acmg_mat} -nt ${acmg_py} ]] && \
@@ -297,7 +313,7 @@ function assign_acmg_criteria () {
     --expected_incidence ${expected_incidence} \
     --am_score_vcf ${am_score_vcf} \
     --threads ${threads} \
-    --tranx_exon_domain_map_pkl ${tranx_exon_domain_map_pkl} ${ped_arg} ${fam_arg} ${alt_disease_arg} ${mavedb_arg} ${pp1_arg} ${relevant_genes_arg} ${dispensable_genes_arg} "${cds_fasta_arg[@]}" ${pext_arg} ${clingen_override_arg} && \
+    --tranx_exon_domain_map_pkl ${tranx_exon_domain_map_pkl} ${ped_arg} ${fam_arg} ${alt_disease_arg} ${mavedb_arg} ${pp1_arg} ${relevant_genes_arg} ${dispensable_genes_arg} "${cds_fasta_arg[@]}" ${pext_arg} ${clingen_override_arg} "${ranking_args[@]}" && \
     display_table ${input_tab} && \
     log "The ACMG criterias are assigned for ${input_tab}, added with three columns: ACMG_quant_score, ACMG_class, ACMG_criteria, and the output matrix is saved to ${output_acmg_mat}" && \
     display_table ${output_acmg_mat} || \

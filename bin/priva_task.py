@@ -181,6 +181,11 @@ def runtime_resources(config, root, mode, vcf_hub_mode="off", cadd_hub_mode="cop
     for key in OPTIONAL_INPUTS:
         if config.get(key):
             paths[key] = checked_path(config[key], key)
+    if config.get("priva_ranking_binary"):
+        binary = checked_path(config["priva_ranking_binary"], "priva_ranking_binary")
+        if not binary.is_file() or binary.stat().st_size == 0 or not os.access(binary, os.X_OK):
+            raise ContractError("priva_ranking_binary must be a nonempty executable file")
+        paths["priva_ranking_binary"] = binary
     if bool(config.get("pp1_vcf")) != bool(config.get("pp1_ped")):
         raise ContractError("pp1_vcf and pp1_ped must be supplied together")
     selected_hpo = config.get("hpo_assertions")
@@ -254,10 +259,28 @@ def inventory_record(path, checksum=False):
     return record
 
 
+def ranking_binary_record(path):
+    """Pin executable bytes even when large annotation caches use stat reuse."""
+    path = Path(path)
+    def identity(value):
+        return (value.st_dev, value.st_ino, value.st_mode, value.st_size,
+                value.st_mtime_ns, value.st_ctime_ns, value.st_nlink)
+    before = (identity(path.lstat()), identity(path.stat()), str(path.resolve(strict=True)))
+    if not path.is_file() or path.stat().st_size == 0 or not os.access(path, os.X_OK):
+        raise ContractError("priva_ranking_binary must be a nonempty executable file")
+    record = inventory_record(path, checksum=True)
+    after = (identity(path.lstat()), identity(path.stat()), str(path.resolve(strict=True)))
+    if before != after:
+        raise ContractError("priva_ranking_binary changed during identity capture")
+    record["executable_mode"] = before[1][2] & 0o777
+    return record
+
+
 def inventory(paths, checksum=False):
     records = {}
     for key, path in sorted(paths.items()):
-        records[key] = inventory_record(path, checksum)
+        records[key] = (ranking_binary_record(path) if key == "priva_ranking_binary"
+                        else inventory_record(path, checksum))
         if path.is_dir():
             # Include every dependency below directory resources without hashing
             # TB of bytes by default. Symlinks are recorded and their target stat
@@ -280,7 +303,9 @@ def build_manifest(args):
     paths = runtime_resources(config, root, args.mode, args.vcf_hub_mode, args.cadd_hub_mode)
     payload = {"schema_version": 1, "assembly": ASSEMBLY[config["assembly"]], "mode": args.mode,
                "config_sha256": sha256(args.config), "legacy_root": str(root),
-               "identity_kind": "sha256" if args.checksum else "size-mtime-inventory",
+               "identity_kind": ("sha256" if args.checksum else
+                                 "size-mtime-inventory+ranking-sha256" if "priva_ranking_binary" in paths
+                                 else "size-mtime-inventory"),
                "vcf_hub_mode": args.vcf_hub_mode, "cadd_hub_mode": args.cadd_hub_mode,
                "resources": inventory(paths, args.checksum)}
     payload["bundle_id"] = json_digest(payload)
@@ -305,7 +330,8 @@ def verify_manifest(manifest, config_path, root, mode, vcf_hub_mode, cadd_hub_mo
     if set(current) != set(manifest["resources"]):
         raise ContractError("Resource inventory membership changed; freeze and rebuild manifest")
     for key, record in current.items():
-        expected_record = {k: v for k, v in manifest["resources"][key].items() if k != "sha256"}
+        expected_record = {k: v for k, v in manifest["resources"][key].items()
+                           if k != "sha256" or key == "priva_ranking_binary"}
         if record != expected_record:
             raise ContractError(f"Resource changed since manifest creation: {key}")
     return paths

@@ -240,7 +240,8 @@ class SharedWorkflowTests(unittest.TestCase):
         before={path.name:path.read_bytes() for path in candidates.iterdir()}
         with self.assertRaisesRegex(M.WorkflowError,'--cadd-profile or config cadd_profile') as error:
             M.selection(argparse.Namespace(profile=None),{'cache_root':str(self.root),'assembly':'GRCh38'})
-        self.assertIn(str(candidates),str(error.exception))
+        self.assertIn('CADD installation receipt',str(error.exception))
+        self.assertNotIn(str(candidates),str(error.exception))
         self.assertEqual({path.name:path.read_bytes() for path in candidates.iterdir()},before)
 
     def test_same_position_alt_miss_extraction_preserves_original_exact_rows(self):

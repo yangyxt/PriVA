@@ -53,6 +53,40 @@ CADD_ENVIRONMENTS = {
 CADD_ENTRY_POINTS = (*CADD_ENVIRONMENTS, "cadd-vep")
 ESM_MODELS = tuple(f"esm1v_t33_650M_UR90S_{number}" for number in range(1, 6))
 LEGACY_CONTAINER_WRAPPER_SHA256 = "b28824617dbb6c0df12a441162c5abfc2d93b63d78746b92f729f020ebd50827"
+LEGACY_NATIVE_WRAPPER_SHA256 = "1e143c5d7eb963b2b858f627557aa476b2542d65f5b1877b1793ba0442ac3f9c"
+
+
+def native_environment_prefix(folder, name):
+    """Read an immutable named-prefix route, with the original layout fallback.
+
+    A declared mapping must be complete and regular; a broken mapping must never
+    silently route to an older prefix. Ready receipts independently bind the
+    returned path to the unchanged upstream environment/package constraints.
+    """
+    folder = Path(folder)
+    if name not in CADD_ENVIRONMENTS:
+        raise RuntimeError(f"Unknown native CADD environment: {name}")
+    directory = folder / "native-prefixes"
+    if not os.path.lexists(directory):
+        return folder / "envs" / name
+    path = directory / (name + ".prefix")
+    if directory.is_symlink() or not directory.is_dir() or path.is_symlink() or not path.is_file():
+        raise RuntimeError(f"Native CADD prefix metadata is incomplete or linked: {path}; retained")
+    payload = path.read_text()
+    prefix = Path(payload.rstrip("\n"))
+    if (payload != str(prefix) + "\n" or not prefix.is_absolute()
+            or prefix.name != name or prefix.parent.name != "envs"
+            or ".." in prefix.parts or "\r" in payload or "\n" in str(prefix)):
+        raise RuntimeError(f"Invalid native CADD prefix metadata: {path}; retained")
+    return prefix
+
+
+def native_wrapper_matches(path, folder):
+    """Retain the measured old wrapper only where its original routes apply."""
+    return (path.is_file() and not path.is_symlink() and os.access(path, os.X_OK)
+            and (path.read_bytes() == Path(__file__).with_name("cadd_native_exec.sh").read_bytes()
+                 or (not os.path.lexists(Path(folder) / "native-prefixes")
+                     and checksum(path) == LEGACY_NATIVE_WRAPPER_SHA256)))
 
 
 def container_wrapper_matches(path):
@@ -74,6 +108,8 @@ def install_cadd_entry_points(folder, native=False, names=None):
     selected = tuple(names) if names is not None else CADD_ENTRY_POINTS
     if (not native and wrapper.exists() and container_wrapper_matches(wrapper)):
         payload = wrapper.read_bytes()  # Keep an explicitly selected reference immutable.
+    if native and wrapper.exists() and native_wrapper_matches(wrapper, folder):
+        payload = wrapper.read_bytes()  # Completed legacy native runtimes stay immutable too.
     if wrapper.is_symlink() or (wrapper.exists() and wrapper.read_bytes() != payload):
         raise RuntimeError(f"Existing CADD wrapper differs from the reviewed source: {wrapper}")
     for name in selected:
@@ -218,7 +254,7 @@ def check_cadd_environments(folder, environment, names=None, include_vep=True, n
         if name not in selected:
             continue
         if native:
-            prefix = str(folder / "envs" / name)
+            prefix = str(native_environment_prefix(folder, name))
             if name == "cadd-python2":
                 modules = (*modules, "vcf", "statistics")
         # Blocking sockets prevents package checks from fetching missing models.

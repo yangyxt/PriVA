@@ -256,7 +256,7 @@ def install_profile(config, receipt_path, verify_only=False):
         vep_fasta_index=T.record(str(config['ref_genome']) + '.fai') if config.get('ref_genome') else None)
     manifest = {'schema_version': 1, 'assembly': assembly,
                 'resources': {stage: T.inventory(profile[stage]['resource_roots']) for stage in ('annotation', 'calculation')}}
-    directory = cache_root / 'runtime/cadd-1.7.2/profiles'
+    directory = runtime_root / 'profiles'
     for parent in (directory, directory.parent, directory.parent.parent):
         require(not parent.is_symlink(), 'Refusing linked native CADD deployment directory: ' + str(parent))
     manifest_sha = hashlib.sha256(encoded(manifest)).hexdigest()
@@ -296,7 +296,7 @@ def check(config, profile_path):
     environments = record['runtime']['environments']
     require(set(environments) == set(wrappers['entry_points']), 'Native environment/entry-point membership differs')
     for name, value in environments.items():
-        require(Path(value['prefix']) == wrapper.parent.parent / 'envs' / name,
+        require(Path(value['prefix']) == R.native_environment_prefix(wrapper.parent.parent, name),
                 'Native environment prefix differs from the verified interpreter route')
         require(T.digest(value['receipt']) == value['sha256'], 'Native environment receipt changed: ' + name)
         R.verify_native_environment(value['prefix'], T.read_json(value['receipt']))

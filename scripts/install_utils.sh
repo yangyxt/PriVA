@@ -1159,8 +1159,10 @@ function CADD_runtime_install() {
     config_json=$(yq '.' "${config_file}") || return 1
     # Install pinned runtimes/assets only. This does not activate shared-VEP
     # feature enrichment or the experimental calculation backend.
+    local -a manager_args=()
+    [[ -z ${PRIVA_ENV_MANAGER:-} ]] || manager_args=(--package-manager "${PRIVA_ENV_MANAGER}")
     python "${SCRIPT_DIR}/cadd_runtime_install.py" \
-        --config-json "${config_json}" --stage "${stage}" || return 1
+        --config-json "${config_json}" --stage "${stage}" "${manager_args[@]}" || return 1
 }
 
 

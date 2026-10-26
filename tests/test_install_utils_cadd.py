@@ -266,6 +266,40 @@ class CaddCacheTests(unittest.TestCase):
         self.assertNotIn(self.annotation().with_name("GRCh37_v1.7.tar.gz"), hashed)
         self.assertEqual(len(hashed), 4)  # Existing prescore data and indexes still get MD5 gates.
 
+    def test_verified_reuse_preserves_receipt_and_annotation_identities_for_both_assemblies(self):
+        for assembly in ("GRCh37", "GRCh38"):
+            with self.subTest(assembly=assembly):
+                config = self.config if assembly == "GRCh37" else self.make_config(assembly)
+                self.install(config, assembly)
+                target = self.annotation(assembly)
+                paths = [target, *target.rglob("*")]
+                before = {path: CADD.identity(path) for path in paths}
+                receipt_bytes = (target / CADD.RECEIPT).read_bytes()
+                with mock.patch.object(CADD, "verify_receipt", wraps=CADD.verify_receipt) as verify, \
+                        mock.patch.object(CADD.tempfile, "NamedTemporaryFile", side_effect=AssertionError("unchanged receipt must not be republished")), \
+                        mock.patch.object(CADD, "urlopen", side_effect=AssertionError("no download")):
+                    self.install(config, assembly)
+                verify.assert_called_once()
+                self.assertEqual(before, {path: CADD.identity(path) for path in paths})
+                self.assertEqual((target / CADD.RECEIPT).read_bytes(), receipt_bytes)
+                self.assertEqual(set(target.rglob("*")), set(paths[1:]))
+
+    def test_verified_archive_identity_change_updates_receipt_then_reuses_it(self):
+        self.install()
+        archive = self.annotation().with_name("GRCh37_v1.7.tar.gz")
+        receipt_path = self.annotation() / CADD.RECEIPT
+        before = receipt_path.read_bytes()
+        stat = archive.stat()
+        os.utime(archive, ns=(stat.st_atime_ns, stat.st_mtime_ns + 1_000_000_000))
+        with mock.patch.object(CADD, "checksum", wraps=CADD.checksum) as hash_file:
+            self.install()
+        self.assertIn(archive, [Path(call.args[0]) for call in hash_file.call_args_list])
+        self.assertNotEqual(receipt_path.read_bytes(), before)
+        self.assertEqual(json.loads(receipt_path.read_bytes())["archive_identity"], CADD.identity(archive))
+        published = CADD.identity(receipt_path), receipt_path.read_bytes()
+        self.install()
+        self.assertEqual((CADD.identity(receipt_path), receipt_path.read_bytes()), published)
+
     def test_changed_identity_rechecks_content_and_refuses_changed_annotations(self):
         self.install()
         target = self.annotation() / "track.txt"
@@ -277,12 +311,19 @@ class CaddCacheTests(unittest.TestCase):
     def test_identical_bytes_with_changed_identity_are_verified_and_receipt_updated(self):
         self.install()
         target = self.annotation() / "track.txt"
-        target.write_bytes(target.read_bytes())
+        receipt_path = self.annotation() / CADD.RECEIPT
+        before = receipt_path.read_bytes()
+        stat = target.stat()
+        os.utime(target, ns=(stat.st_atime_ns, stat.st_mtime_ns + 1_000_000_000))
         with mock.patch.object(CADD, "checksum", wraps=CADD.checksum) as hash_file:
             self.install()
         self.assertIn(target, [Path(call.args[0]) for call in hash_file.call_args_list])
         receipt = json.loads((self.annotation() / CADD.RECEIPT).read_text())
         self.assertEqual(receipt["members"]["track.txt"]["identity"], CADD.identity(target))
+        self.assertNotEqual(receipt_path.read_bytes(), before)
+        published = CADD.identity(receipt_path), receipt_path.read_bytes()
+        self.install()
+        self.assertEqual((CADD.identity(receipt_path), receipt_path.read_bytes()), published)
 
     def test_missing_receipt_member_is_refused(self):
         self.install()

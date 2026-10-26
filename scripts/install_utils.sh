@@ -4533,6 +4533,17 @@ function Nextflow_runtime_install() {
 }
 
 
+function priva_export_installed_environment() {
+    [[ $# -eq 2 && ${1:-} == --config && -r ${2:-} ]] || {
+        log "ERROR: Use priva_export_installed_environment --config CONFIG."
+        return 2
+    }
+    [[ -n ${PRIVA_ENV_MANAGER:-} ]] || priva_find_env_manager || return 1
+    python "${SCRIPT_DIR}/installed_environment.py" export-installation \
+        --config "$2" --manager "${PRIVA_ENV_MANAGER}"
+}
+
+
 function main_install() {
     if [[ $# -eq 1 && ( ${1:-} == -h || ${1:-} == --help ) ]]; then
         printf 'Usage: bash scripts/install_utils.sh main_install CONFIG\n'
@@ -4673,6 +4684,8 @@ function main_install() {
         "${config_file}" || \
     { log "Failed to install HPO/MONDO or mechanism resources"; return 1; }
     
+    priva_export_installed_environment --config "${config_file}" || \
+    { log "Failed to export the installed PriVA/CADD package environments"; return 1; }
     log "Congratulations! The installation is completed!"
 }
 

@@ -43,6 +43,22 @@ bash "$PRIVA_ROOT/scripts/install_utils.sh" main_install "$PRIVA_CONFIG"
 
 This prepares `priva_acmg`, reuses bundled snapshots, acquires/builds other resources beneath `cache_root`, and updates managed paths in the selected configuration. It also installs the pinned Nextflow25.10.4 driver and private JRE beneath `cache_root/runtime/priva-nextflow-25.10.4`. No family input is required at this stage. Rerun the same command to reuse completed preparation.
 
+CADD raw/PHRED calculation uses the separate `cadd-python2` Mamba environment with the original upstream Python and scientific packages. Each task runs its interpreter in a child process, then continues in `priva_acmg`; no manual activation or switch back is required. Failures propagate to the calling task while the main environment remains intact.
+
+```text
+priva_acmg → CADD Python child process → priva_acmg
+```
+
+Fresh native installs place `cadd-*` environments beside `priva_acmg` under the existing Mamba root and their launch wrappers under that root's `share/priva/cadd-1.7.2/`. Completed older installations are reused in place. CADD annotation feature tools additionally retain their separately pinned `cadd-esm-python`, `cadd-regseq-python` and, for GRCh38, `cadd-mmsplice-python` environments.
+
+At completion, the installer exports the packages actually installed, including version/build pins and pip dependencies, to `cache_root/priva_acmg.installed.yml` and `cache_root/cadd-*.installed.yml`. These portable YAML files omit host prefixes and environment variables. To repeat only this export:
+
+```bash
+bash "$PRIVA_ROOT/scripts/install_utils.sh" priva_export_installed_environment --config "$PRIVA_CONFIG"
+```
+
+Small HGNC snapshots and assembly/release-specific transcript mappings remain bundled under [`data/hgnc`](data/hgnc/README.md). Default installation selects the mapping for the configured assembly and VEP major; explicitly supplied mappings stay selected. Different versions have distinct filenames.
+
 Activate `priva_acmg` using the chosen environment manager. Set these shell variables to your existing cache directory and a durable directory for run products:
 
 ```bash

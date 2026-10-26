@@ -49,6 +49,11 @@ bash "$PRIVA_ROOT/scripts/install_utils.sh" main_install "$PRIVA_CONFIG"
 
 This prepares `priva_acmg`, reuses bundled snapshots, acquires/builds other resources beneath `cache_root`, and updates managed paths in the selected configuration. It also installs the pinned Nextflow25.10.4 driver and private JRE beneath `cache_root/runtime/priva-nextflow-25.10.4`. No family input is required at this stage. Rerun the same command to reuse completed preparation.
 
+For the matching official VEP116 UTRAnnotator module, the installer deploys
+deterministic reporting of all calculated UTR effects and retains the original
+module and patch. The biological calculations are unchanged; other VEP releases
+are left unchanged. See [`data/vep`](data/vep/README.md).
+
 CADD raw/PHRED calculation uses the separate `cadd-python2` Mamba environment with the original upstream Python and scientific packages. Each task runs its interpreter in a child process, then continues in `priva_acmg`; no manual activation or switch back is required. Failures propagate to the calling task while the main environment remains intact.
 
 ```text

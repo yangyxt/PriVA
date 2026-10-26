@@ -99,6 +99,7 @@ jobs:
           python -m unittest discover -s tests/nextflow -p 'test_cpu_contract.py' -v
           python -m unittest discover -s tests -p 'test_nextflow_parity.py' -v
           python -m unittest discover -s tests -p 'test_rust_rank_setup_bridge.py' -v
+          python -m unittest discover -s tests -p 'test_rust_pedigree_context_bridge.py' -v
           python -m unittest discover -s tests -p 'test_rust_terminal_order_bridge.py' -v
           python -m unittest discover -s tests -p 'test_cluster_deployment.py' -v
           python -m unittest discover -s tests -p 'test_cluster_licensed_import.py' -v

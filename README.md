@@ -124,12 +124,25 @@ precedence when the registry is rebuilt.
 
 ## Smoke test
 
-The curated 20-variant assets in `example/smoke_data/` are for interface checks;
-they do not install production resources or qualify scientific outputs.
-`example/run_smoke_test.sh` requires an activated PriVA environment and a
-compatible prepared configuration, supplied as its second argument. The bundled
-demo configurations do not select a qualified current CADD profile, so they
-are not a ready-to-run test of the current raw-annotation route.
+The smoke test uses the bundled 20-variant annotation/CADD fixtures in
+`example/smoke_data/` and runs PriVA's filtering, ACMG assignment, and ranking.
+Activate `priva_acmg` first. If needed, create it with
+`mamba env create -f acmg_conda_rough.yml`; full resource installation is not
+required for this prepared-input test.
+
+```bash
+conda activate priva_acmg  # Or use your Mamba/Micromamba activation command.
+./example/run_smoke_test.sh hg19
+./example/run_smoke_test.sh hg38
+```
+
+Each run creates a fresh temporary directory and prints its output path. Add
+`--output-dir /path/to/empty/smoke-directory` to choose an external destination;
+existing results and bundled inputs are preserved. Named `run`, `prepare`, and
+`validate` subcommands are also available; see `--help`.
+
+This is a sites-only fixture test. New VEP annotation, original CADD model
+calculation, and family/public-data acceptance remain separate checks.
 
 The smoke test does not require Git LFS on current `main`; all current smoke assets are stored as normal Git files.
 

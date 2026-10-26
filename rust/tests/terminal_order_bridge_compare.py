@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Compare complete original ranking with the optional native R8 bridge.
+"""Compare complete original ranking with optional R1/R2/R8 bridges.
 
 compare --reference SOURCE_ROOT --candidate SOURCE_ROOT --binary FILE
         --output NEW_DIRECTORY
@@ -13,6 +13,7 @@ attributes and label flags; original failures and logs are compared as well.
 """
 import argparse
 import ast
+from contextlib import nullcontext
 import copy
 import hashlib
 import importlib.util
@@ -26,6 +27,7 @@ import subprocess
 import sys
 import traceback
 import warnings
+from unittest.mock import patch
 
 import numpy as np
 import pandas as pd
@@ -72,6 +74,34 @@ if ranking_binary is not None:
     assert ast.dump(ast.Module(body=setup.body, type_ignores=[]), include_attributes=False) == ast.dump(
         ast.Module(body=ref.body[:4], type_ignores=[]), include_attributes=False)
     new.body[:3] = setup.body
+    context_dispatch = ast.parse('''native_context = None
+if ranking_binary is not None:
+    from priva_rust_pedigree_context import try_pedigree_context
+    native_context = try_pedigree_context(df, ped_df, fam_name, ranking_binary)
+''').body
+    assert ast.dump(ast.Module(body=new.body[4:6], type_ignores=[]), include_attributes=False) == ast.dump(
+        ast.Module(body=context_dispatch, type_ignores=[]), include_attributes=False)
+    context = new.body[6]
+    assert isinstance(context, ast.If) and ast.unparse(context.test) == 'native_context is None'
+    assert ast.dump(ast.Module(body=context.body, type_ignores=[]), include_attributes=False) == ast.dump(
+        ast.Module(body=[ref.body[4]], type_ignores=[]), include_attributes=False)
+    accepted = ast.parse('''proband = native_context['proband']
+proband_row = native_context['proband_row']
+proband_is_male = native_context['proband_is_male']
+proband_is_female = native_context['proband_is_female']
+proband_het = native_context['proband_het']
+if native_context['source_warning'] == 'unknown_sex':
+    pass
+elif native_context['source_warning'] == 'no_pedigree':
+    pass
+''').body
+    # Warning calls are taken from the frozen original statement, including
+    # their real argument expressions and order; no reconstructed log text.
+    accepted[-1].body = [copy.deepcopy(ref.body[4].body[5].body[0])]
+    accepted[-1].orelse[0].body = [copy.deepcopy(ref.body[4].orelse[0])]
+    assert ast.dump(ast.Module(body=context.orelse, type_ignores=[]), include_attributes=False) == ast.dump(
+        ast.Module(body=accepted, type_ignores=[]), include_attributes=False)
+    new.body[4:7] = context.body
     hooks = [node for node in new.body if isinstance(node, ast.If)
              and ast.unparse(node.test) == 'terminal_order_binary is not None or ranking_binary is not None']
     assert len(hooks) == 1
@@ -90,7 +120,8 @@ if ranking_binary is not None:
     assert ast.dump(original, include_attributes=False) == ast.dump(updated, include_attributes=False)
     return dict(reference_scoring_sha256=sha(reference / 'scripts/acmg_scoring.py'),
                 candidate_scoring_sha256=sha(candidate / 'scripts/acmg_scoring.py'),
-                all_original_statements_and_prior_source_order_unchanged=True)
+                all_original_statements_and_prior_source_order_unchanged=True,
+                original_R2_statement_and_warning_calls_exact=True)
 
 
 def extra_cases(helper):
@@ -133,21 +164,37 @@ def call_case(scoring, case, mode, binary, helper, native_stages='r8'):
     source_calls = []
     native_calls = []
     setup_calls = []
+    pedigree_calls = []
+    r2_contexts = []
     def profile(pyframe, event, arg):
         if event == 'call' and pyframe.f_code.co_name in (
                 'compute_control_common', '_variant_mechanism_masks', 'coerce_pext_value'):
             source_calls.append(pyframe.f_code.co_name)
+            if pyframe.f_code.co_name == 'compute_control_common':
+                local = pyframe.f_back.f_locals
+                keys = ['proband', 'proband_is_male', 'proband_is_female', 'proband_het']
+                if local['ped_df'] is not None and local['fam_name'] is not None:
+                    keys.append('proband_row')
+                r2_contexts.append({key: helper.encode(local[key]) for key in keys})
         if event == 'return' and pyframe.f_code.co_name == 'try_terminal_order' and (
                 Path(pyframe.f_code.co_filename).name == 'priva_rust_terminal_order.py'):
             native_calls.append(arg is not None)
         if event == 'return' and pyframe.f_code.co_name == 'try_rank_setup' and (
                 Path(pyframe.f_code.co_filename).name == 'priva_rust_rank_setup.py'):
             setup_calls.append(arg is not None)
+        if event == 'return' and pyframe.f_code.co_name == 'try_pedigree_context' and (
+                Path(pyframe.f_code.co_filename).name == 'priva_rust_pedigree_context.py'):
+            pedigree_calls.append(arg is not None)
     if mode == 'native':
         # Observe returns through the existing profiler. Do not import the
         # adapter early: the real ranker first imports it at its R8 entry after
         # original C1-C5/R1-R7, including in the first cold-context native call.
-        kwargs['ranking_binary' if native_stages == 'r1-r8' else 'terminal_order_binary'] = str(binary)
+        kwargs['ranking_binary' if native_stages in ('r1-r8', 'r1-r2-r8') else 'terminal_order_binary'] = str(binary)
+    # Explicit test control only. The integrated public argument always enables
+    # every implemented stage; this labelled mode forces R2's original fallback
+    # to keep the preceding R1/R8 control available without a production switch.
+    force_r2 = mode == 'native' and native_stages == 'r1-r8'
+    control = patch('priva_rust_pedigree_context.try_pedigree_context', return_value=None) if force_r2 else nullcontext(None)
     log = io.StringIO()
     handler = logging.StreamHandler(log)
     handler.setFormatter(logging.Formatter('%(levelname)s %(name)s %(message)s'))
@@ -158,7 +205,7 @@ def call_case(scoring, case, mode, binary, helper, native_stages='r8'):
     previous = sys.getprofile()
     output, error = None, None
     try:
-        with warnings.catch_warnings(record=True) as caught:
+        with warnings.catch_warnings(record=True) as caught, control as forced:
             warnings.simplefilter('always')
             sys.setprofile(profile)
             try:
@@ -173,10 +220,12 @@ def call_case(scoring, case, mode, binary, helper, native_stages='r8'):
     finally:
         root_logger.removeHandler(handler)
         root_logger.setLevel(old_level)
+    forced_calls = forced.call_count if force_r2 else 0
     return dict(name=case['name'], output=helper.encode(output), exception=error,
         input_after=helper.encode(data), pedigree_after=helper.encode(pedigree), source_calls=source_calls,
         warnings=[dict(type=helper.typename(value.message), message=str(value.message)) for value in caught],
-        log=log.getvalue(), native_calls=native_calls, setup_calls=setup_calls)
+        log=log.getvalue(), native_calls=native_calls, setup_calls=setup_calls,
+        pedigree_calls=pedigree_calls, forced_r2_fallback_calls=forced_calls, r2_contexts=r2_contexts)
 
 
 def worker(args):
@@ -204,14 +253,29 @@ def compare(args):
     helper = load('complete_ranking_fixture_builder', args.reference / 'rust/tests/ranking_control_oracle.py')
     matrix, _ = helper.case_matrix(args.output)
     cases = [case for case in matrix if case['kind'] == 'ranking'] + list(extra_cases(helper))
-    if args.native_stages == 'r1-r8':
+    if args.native_stages in ('r1-r8', 'r1-r2-r8'):
         setup = load('unchanged_R1_fixture_builder', args.candidate / 'rust/tests/ranking_setup_oracle.py')
         cases.extend(dict(name='r1_complete_' + name, kind='ranking', frame=frame, ped=None,
                           kwargs=dict(fam_name=None, dispensable_gene_list=None),
                           tags=['complete-ranker-r1-integration']) for name, frame in setup.extras(helper))
+    if args.native_stages == 'r1-r2-r8':
+        pedigree = load('unchanged_R2_fixture_builder', args.candidate / 'rust/tests/pedigree_context_oracle.py')
+        for name, entry, ped, family in pedigree.extras():
+            # Lift the pre-existing standalone R2 inputs into a full original
+            # ranker frame; retain every R2 column, dtype, axis and scalar.
+            data = helper.base_frame(len(entry))
+            data.index = entry.index
+            data = data.drop(columns=[column for column in data.columns if column in entry.columns])
+            data = pd.concat([data, entry], axis=1)
+            data.columns.name = entry.columns.name
+            data.attrs = copy.deepcopy(entry.attrs)
+            data.flags.allows_duplicate_labels = entry.flags.allows_duplicate_labels
+            cases.append(dict(name='r2_complete_' + name, kind='ranking', frame=data, ped=ped,
+                kwargs=dict(fam_name=family, dispensable_gene_list=None),
+                tags=['complete-ranker-r2-integration']))
     prepared = args.output / 'cases.pkl'
     prepared.write_bytes(pickle.dumps(cases, protocol=5))
-    reports, comparisons = {}, []
+    reports, comparisons, mismatches = {}, [], []
     failure = None
     try:
         for profile in ['fresh', 'source-bootstrap']:
@@ -235,35 +299,57 @@ def compare(args):
                 for expected, observed in zip(reference, actual):
                     native_calls = observed.pop('native_calls')
                     setup_calls = observed.pop('setup_calls')
-                    wanted = {key: value for key, value in expected.items() if key not in ('native_calls', 'setup_calls')}
-                    assert observed == wanted, (profile, label, expected['name'],
-                        [key for key in wanted if observed[key] != wanted[key]])
+                    pedigree_calls = observed.pop('pedigree_calls')
+                    forced_r2_calls = observed.pop('forced_r2_fallback_calls')
+                    wanted = {key: value for key, value in expected.items() if key not in (
+                        'native_calls', 'setup_calls', 'pedigree_calls', 'forced_r2_fallback_calls')}
+                    exact = observed == wanted
+                    if not exact:
+                        mismatches.append(dict(profile=profile, mode=label, name=expected['name'],
+                            fields=[key for key in wanted if observed[key] != wanted[key]],
+                            reference_report='reference-' + profile + '.json',
+                            candidate_report=label + '-' + profile + '.json'))
                     comparisons.append(dict(name=expected['name'], profile=profile, mode=label,
-                        exact=True, native_used=bool(native_calls and native_calls[0]),
+                        exact=exact, native_used=bool(native_calls and native_calls[0]),
                         fallback=bool(native_calls and not native_calls[0]),
                         setup_native_used=bool(setup_calls and setup_calls[0]),
                         setup_fallback=bool(setup_calls and not setup_calls[0]),
+                        pedigree_native_used=bool(pedigree_calls and pedigree_calls[0]),
+                        pedigree_fallback=bool(pedigree_calls and not pedigree_calls[0]),
+                        forced_r2_fallback_calls=forced_r2_calls,
                         original_exception=expected['exception'] is not None,
                         earlier_failure_did_not_reach_R8=expected['exception'] is not None and not native_calls))
         native = [item for item in comparisons if item['mode'] == 'native']
         assert any(item['native_used'] for item in native), 'no genuine native complete-function result'
         assert any(item['fallback'] for item in native), 'no genuine current-buffer Python fallback'
         assert any(item['earlier_failure_did_not_reach_R8'] for item in native)
-        if args.native_stages == 'r1-r8':
+        if args.native_stages in ('r1-r8', 'r1-r2-r8'):
             assert any(item['setup_native_used'] for item in native), 'no genuine native R1 complete-function result'
             assert any(item['setup_fallback'] for item in native), 'no genuine current-buffer R1 fallback'
+        if args.native_stages == 'r1-r8':
+            assert any(item['forced_r2_fallback_calls'] for item in native), 'R2 control did not execute the original fallback'
+            assert not any(item['pedigree_native_used'] for item in native), 'R1/R8 control published native R2'
+        if args.native_stages == 'r1-r2-r8':
+            assert any(item['pedigree_native_used'] for item in native), 'no genuine native R2 complete-function result'
+            assert any(item['pedigree_fallback'] for item in native), 'no genuine current-buffer R2 fallback'
+            assert not any(item['forced_r2_fallback_calls'] for item in native), 'full R2 mode used a forced fallback'
+        assert not mismatches, ('complete-ranker mismatches', len(mismatches), mismatches)
     except Exception as error:
         failure = dict(type=type(error).__name__, message=str(error))
         raise
     finally:
         native = [item for item in comparisons if item['mode'] == 'native']
         summary = dict(successful=failure is None, failure=failure, source_proof=proof,
+            mismatches=mismatches,
             cases=len(cases), profiles=['fresh', 'source-bootstrap'], exact_comparisons=len(comparisons),
             native_outputs=sum(item['native_used'] for item in native),
             Python_fallbacks=sum(item['fallback'] for item in native),
             native_stages=args.native_stages,
             setup_native_outputs=sum(item['setup_native_used'] for item in native),
             setup_Python_fallbacks=sum(item['setup_fallback'] for item in native),
+            pedigree_native_outputs=sum(item['pedigree_native_used'] for item in native),
+            pedigree_Python_fallbacks=sum(item['pedigree_fallback'] for item in native),
+            forced_R2_control_fallback_calls=sum(item['forced_r2_fallback_calls'] for item in native),
             original_failures=sum(item['original_exception'] for item in native),
             earlier_failures_without_native_call=sum(item['earlier_failure_did_not_reach_R8'] for item in native),
             binary_sha256=sha(args.binary), fixture_sha256=sha(prepared),
@@ -279,14 +365,14 @@ def main():
     command = sub.add_parser('compare')
     for name in ['reference', 'candidate', 'binary', 'output']:
         command.add_argument('--' + name, required=True, type=Path)
-    command.add_argument('--native-stages', choices=['r8', 'r1-r8'], default='r8')
+    command.add_argument('--native-stages', choices=['r8', 'r1-r8', 'r1-r2-r8'], default='r8')
     command = sub.add_parser('worker')
     for name in ['source', 'reference', 'cases', 'output']:
         command.add_argument('--' + name, required=True, type=Path)
     command.add_argument('--binary', type=Path)
     command.add_argument('--mode', required=True, choices=['python', 'native'])
     command.add_argument('--profile', required=True, choices=['fresh', 'source-bootstrap'])
-    command.add_argument('--native-stages', choices=['r8', 'r1-r8'], default='r8')
+    command.add_argument('--native-stages', choices=['r8', 'r1-r8', 'r1-r2-r8'], default='r8')
     args = parser.parse_args()
     globals()[args.procedure](args)
 

@@ -490,7 +490,8 @@ def sort_and_rank_variants(df: pd.DataFrame,
         terminal_order_binary: Explicit opt-in PriVA Rust CLI for final ordering
             only. None retains Python; unsupported inputs use the original tail.
         ranking_binary: Explicit opt-in single PriVA Rust CLI for the integrated
-            R1 setup and R8 ordering. Other stages retain their original Python.
+            R1 setup, R2 pedigree context and R8 ordering. Other stages retain
+            their original Python.
 
     Returns:
         DataFrame sorted by variant's max ACMG score with added variant rank column
@@ -514,16 +515,45 @@ def sort_and_rank_variants(df: pd.DataFrame,
         df = native_setup
 
     # NOTE: proband_het must be created AFTER filtering to match df's shape
-    if ped_df is not None and fam_name is not None:
-        proband_row = ped_df.loc[
-            (ped_df['#FamilyID'] == fam_name)
-            & (ped_df['Phenotype'].isin(["2", 2]))
-        ].iloc[0]
-        proband = proband_row['IndividualID']
-        proband_sex = str(proband_row.get("Sex", "")).strip().lower()
-        proband_is_male = proband_sex in {"1", "1.0", "m", "male"}
-        proband_is_female = proband_sex in {"2", "2.0", "f", "female"}
-        if not (proband_is_male or proband_is_female):
+    # 26 October 2026 CT: optional R2 context after R1 and before control
+    # calculations. A rejected request executes this original statement intact;
+    # accepted context emits the original warning before entering control code.
+    native_context = None
+    if ranking_binary is not None:
+        from priva_rust_pedigree_context import try_pedigree_context
+        native_context = try_pedigree_context(df, ped_df, fam_name, ranking_binary)
+    if native_context is None:
+        if ped_df is not None and fam_name is not None:
+            proband_row = ped_df.loc[
+                (ped_df['#FamilyID'] == fam_name)
+                & (ped_df['Phenotype'].isin(["2", 2]))
+            ].iloc[0]
+            proband = proband_row['IndividualID']
+            proband_sex = str(proband_row.get("Sex", "")).strip().lower()
+            proband_is_male = proband_sex in {"1", "1.0", "m", "male"}
+            proband_is_female = proband_sex in {"2", "2.0", "f", "female"}
+            if not (proband_is_male or proband_is_female):
+                logger.warning(
+                    "Unrecognized pedigree sex %r for proband %s; neither "
+                    "X-linked recessive nor X-linked dominant ranking "
+                    "compatibility will be assumed",
+                    proband_row.get("Sex", ""),
+                    proband,
+                )
+            proband_het = (df.loc[:, proband].str.count("1") == 1)
+        else:
+            logger.warning("No ped_table provided, skip the zygosity/inheritance/mechanism compatibility penalty")
+            proband = None
+            proband_is_male = False
+            proband_is_female = False
+            proband_het = pd.Series([False] * len(df), index=df.index)  # Use Series with matching index
+    else:
+        proband = native_context['proband']
+        proband_row = native_context['proband_row']
+        proband_is_male = native_context['proband_is_male']
+        proband_is_female = native_context['proband_is_female']
+        proband_het = native_context['proband_het']
+        if native_context['source_warning'] == 'unknown_sex':
             logger.warning(
                 "Unrecognized pedigree sex %r for proband %s; neither "
                 "X-linked recessive nor X-linked dominant ranking "
@@ -531,13 +561,8 @@ def sort_and_rank_variants(df: pd.DataFrame,
                 proband_row.get("Sex", ""),
                 proband,
             )
-        proband_het = (df.loc[:, proband].str.count("1") == 1)
-    else:
-        logger.warning("No ped_table provided, skip the zygosity/inheritance/mechanism compatibility penalty")
-        proband = None
-        proband_is_male = False
-        proband_is_female = False
-        proband_het = pd.Series([False] * len(df), index=df.index)  # Use Series with matching index
+        elif native_context['source_warning'] == 'no_pedigree':
+            logger.warning("No ped_table provided, skip the zygosity/inheritance/mechanism compatibility penalty")
 
     # Control-common penalty: halve sort_index for variants common in control cohort
     df = compute_control_common(df, proband)

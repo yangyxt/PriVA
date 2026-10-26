@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Compare complete original ranking with optional R1/R2/R8 bridges.
+"""Compare complete original ranking with optional R1/R2/R3/R8 bridges.
 
 compare --reference SOURCE_ROOT --candidate SOURCE_ROOT --binary FILE
         --output NEW_DIRECTORY
@@ -102,6 +102,20 @@ elif native_context['source_warning'] == 'no_pedigree':
     assert ast.dump(ast.Module(body=context.orelse, type_ignores=[]), include_attributes=False) == ast.dump(
         ast.Module(body=accepted, type_ignores=[]), include_attributes=False)
     new.body[4:7] = context.body
+    product_dispatch = ast.parse('''native_product = None
+if ranking_binary is not None:
+    from priva_rust_control_multiply import try_control_multiply
+    native_product = try_control_multiply(df, ranking_binary)
+''').body
+    assert ast.dump(ast.Module(body=new.body[6:8], type_ignores=[]), include_attributes=False) == ast.dump(
+        ast.Module(body=product_dispatch, type_ignores=[]), include_attributes=False)
+    product = new.body[8]
+    assert isinstance(product, ast.If) and ast.unparse(product.test) == 'native_product is None'
+    assert ast.dump(ast.Module(body=product.body, type_ignores=[]), include_attributes=False) == ast.dump(
+        ast.Module(body=[ref.body[6]], type_ignores=[]), include_attributes=False)
+    assert ast.dump(ast.Module(body=product.orelse, type_ignores=[]), include_attributes=False) == ast.dump(
+        ast.parse('df.loc[:, "sort_index"] = native_product'), include_attributes=False)
+    new.body[6:9] = product.body
     hooks = [node for node in new.body if isinstance(node, ast.If)
              and ast.unparse(node.test) == 'terminal_order_binary is not None or ranking_binary is not None']
     assert len(hooks) == 1
@@ -121,7 +135,8 @@ elif native_context['source_warning'] == 'no_pedigree':
     return dict(reference_scoring_sha256=sha(reference / 'scripts/acmg_scoring.py'),
                 candidate_scoring_sha256=sha(candidate / 'scripts/acmg_scoring.py'),
                 all_original_statements_and_prior_source_order_unchanged=True,
-                original_R2_statement_and_warning_calls_exact=True)
+                original_R2_statement_and_warning_calls_exact=True,
+                original_R3_statement_and_control_call_order_exact=True)
 
 
 def extra_cases(helper):
@@ -165,7 +180,9 @@ def call_case(scoring, case, mode, binary, helper, native_stages='r8'):
     native_calls = []
     setup_calls = []
     pedigree_calls = []
+    product_calls = []
     r2_contexts = []
+    r3_outputs = []
     def profile(pyframe, event, arg):
         if event == 'call' and pyframe.f_code.co_name in (
                 'compute_control_common', '_variant_mechanism_masks', 'coerce_pext_value'):
@@ -176,6 +193,11 @@ def call_case(scoring, case, mode, binary, helper, native_stages='r8'):
                 if local['ped_df'] is not None and local['fam_name'] is not None:
                     keys.append('proband_row')
                 r2_contexts.append({key: helper.encode(local[key]) for key in keys})
+            elif pyframe.f_code.co_name == '_variant_mechanism_masks' and (
+                    pyframe.f_back.f_code.co_name == 'sort_and_rank_variants'):
+                # Observe actual R4 entry after R3's real assignment, without
+                # warming pandas metadata before the original multiplication.
+                r3_outputs.append(helper.encode(pyframe.f_back.f_locals['df']))
         if event == 'return' and pyframe.f_code.co_name == 'try_terminal_order' and (
                 Path(pyframe.f_code.co_filename).name == 'priva_rust_terminal_order.py'):
             native_calls.append(arg is not None)
@@ -185,16 +207,23 @@ def call_case(scoring, case, mode, binary, helper, native_stages='r8'):
         if event == 'return' and pyframe.f_code.co_name == 'try_pedigree_context' and (
                 Path(pyframe.f_code.co_filename).name == 'priva_rust_pedigree_context.py'):
             pedigree_calls.append(arg is not None)
+        if event == 'return' and pyframe.f_code.co_name == 'try_control_multiply' and (
+                Path(pyframe.f_code.co_filename).name == 'priva_rust_control_multiply.py'):
+            product_calls.append(arg is not None)
     if mode == 'native':
         # Observe returns through the existing profiler. Do not import the
         # adapter early: the real ranker first imports it at its R8 entry after
         # original C1-C5/R1-R7, including in the first cold-context native call.
-        kwargs['ranking_binary' if native_stages in ('r1-r8', 'r1-r2-r8') else 'terminal_order_binary'] = str(binary)
+        kwargs['ranking_binary' if native_stages != 'r8' else 'terminal_order_binary'] = str(binary)
     # Explicit test control only. The integrated public argument always enables
     # every implemented stage; this labelled mode forces R2's original fallback
     # to keep the preceding R1/R8 control available without a production switch.
     force_r2 = mode == 'native' and native_stages == 'r1-r8'
     control = patch('priva_rust_pedigree_context.try_pedigree_context', return_value=None) if force_r2 else nullcontext(None)
+    # Keep each earlier staged control genuine, without a production switch or
+    # claiming the newly integrated R3 algorithm ran in its preceding modes.
+    force_r3 = mode == 'native' and native_stages in ('r1-r8', 'r1-r2-r8')
+    product_control = patch('priva_rust_control_multiply.try_control_multiply', return_value=None) if force_r3 else nullcontext(None)
     log = io.StringIO()
     handler = logging.StreamHandler(log)
     handler.setFormatter(logging.Formatter('%(levelname)s %(name)s %(message)s'))
@@ -205,7 +234,7 @@ def call_case(scoring, case, mode, binary, helper, native_stages='r8'):
     previous = sys.getprofile()
     output, error = None, None
     try:
-        with warnings.catch_warnings(record=True) as caught, control as forced:
+        with warnings.catch_warnings(record=True) as caught, control as forced, product_control as forced_product:
             warnings.simplefilter('always')
             sys.setprofile(profile)
             try:
@@ -221,11 +250,13 @@ def call_case(scoring, case, mode, binary, helper, native_stages='r8'):
         root_logger.removeHandler(handler)
         root_logger.setLevel(old_level)
     forced_calls = forced.call_count if force_r2 else 0
+    forced_product_calls = forced_product.call_count if force_r3 else 0
     return dict(name=case['name'], output=helper.encode(output), exception=error,
         input_after=helper.encode(data), pedigree_after=helper.encode(pedigree), source_calls=source_calls,
         warnings=[dict(type=helper.typename(value.message), message=str(value.message)) for value in caught],
         log=log.getvalue(), native_calls=native_calls, setup_calls=setup_calls,
-        pedigree_calls=pedigree_calls, forced_r2_fallback_calls=forced_calls, r2_contexts=r2_contexts)
+        pedigree_calls=pedigree_calls, forced_r2_fallback_calls=forced_calls, r2_contexts=r2_contexts,
+        product_calls=product_calls, forced_r3_fallback_calls=forced_product_calls, r3_outputs=r3_outputs)
 
 
 def worker(args):
@@ -253,12 +284,12 @@ def compare(args):
     helper = load('complete_ranking_fixture_builder', args.reference / 'rust/tests/ranking_control_oracle.py')
     matrix, _ = helper.case_matrix(args.output)
     cases = [case for case in matrix if case['kind'] == 'ranking'] + list(extra_cases(helper))
-    if args.native_stages in ('r1-r8', 'r1-r2-r8'):
+    if args.native_stages != 'r8':
         setup = load('unchanged_R1_fixture_builder', args.candidate / 'rust/tests/ranking_setup_oracle.py')
         cases.extend(dict(name='r1_complete_' + name, kind='ranking', frame=frame, ped=None,
                           kwargs=dict(fam_name=None, dispensable_gene_list=None),
                           tags=['complete-ranker-r1-integration']) for name, frame in setup.extras(helper))
-    if args.native_stages == 'r1-r2-r8':
+    if args.native_stages in ('r1-r2-r8', 'r1-r2-r3-r8'):
         pedigree = load('unchanged_R2_fixture_builder', args.candidate / 'rust/tests/pedigree_context_oracle.py')
         for name, entry, ped, family in pedigree.extras():
             # Lift the pre-existing standalone R2 inputs into a full original
@@ -273,6 +304,26 @@ def compare(args):
             cases.append(dict(name='r2_complete_' + name, kind='ranking', frame=data, ped=ped,
                 kwargs=dict(fam_name=family, dispensable_gene_list=None),
                 tags=['complete-ranker-r2-integration']))
+    if args.native_stages == 'r1-r2-r3-r8':
+        multiply = load('unchanged_R3_fixture_builder', args.candidate / 'rust/tests/control_multiply_oracle.py')
+        for name, entry in multiply.examples():
+            # Lift the existing standalone seeds through the complete ranker.
+            # R1 derives sort_index from the seed's original operand dtype;
+            # actual C1-C5 may overwrite control_common_index as originally
+            # specified. Never substitute a precomputed control return.
+            data = helper.base_frame(len(entry))
+            data.index = entry.index
+            data = data.drop(columns=[column for column in data.columns if column in entry.columns])
+            data = pd.concat([data, entry], axis=1)
+            if 'sort_index' in entry.columns:
+                position = list(entry.columns).index('sort_index')
+                data['ACMG_quant_score'] = entry.iloc[:, position]
+            data.columns.name = entry.columns.name
+            data.attrs = copy.deepcopy(entry.attrs)
+            data.flags.allows_duplicate_labels = entry.flags.allows_duplicate_labels
+            cases.append(dict(name='r3_complete_' + name, kind='ranking', frame=data, ped=None,
+                kwargs=dict(fam_name=None, dispensable_gene_list=None),
+                tags=['complete-ranker-r3-seed-through-original-R1-and-C1-C5']))
     prepared = args.output / 'cases.pkl'
     prepared.write_bytes(pickle.dumps(cases, protocol=5))
     reports, comparisons, mismatches = {}, [], []
@@ -301,8 +352,11 @@ def compare(args):
                     setup_calls = observed.pop('setup_calls')
                     pedigree_calls = observed.pop('pedigree_calls')
                     forced_r2_calls = observed.pop('forced_r2_fallback_calls')
+                    product_calls = observed.pop('product_calls')
+                    forced_r3_calls = observed.pop('forced_r3_fallback_calls')
                     wanted = {key: value for key, value in expected.items() if key not in (
-                        'native_calls', 'setup_calls', 'pedigree_calls', 'forced_r2_fallback_calls')}
+                        'native_calls', 'setup_calls', 'pedigree_calls', 'forced_r2_fallback_calls',
+                        'product_calls', 'forced_r3_fallback_calls')}
                     exact = observed == wanted
                     if not exact:
                         mismatches.append(dict(profile=profile, mode=label, name=expected['name'],
@@ -317,22 +371,32 @@ def compare(args):
                         pedigree_native_used=bool(pedigree_calls and pedigree_calls[0]),
                         pedigree_fallback=bool(pedigree_calls and not pedigree_calls[0]),
                         forced_r2_fallback_calls=forced_r2_calls,
+                        product_native_used=bool(product_calls and product_calls[0]),
+                        product_fallback=bool(product_calls and not product_calls[0]),
+                        forced_r3_fallback_calls=forced_r3_calls,
                         original_exception=expected['exception'] is not None,
                         earlier_failure_did_not_reach_R8=expected['exception'] is not None and not native_calls))
         native = [item for item in comparisons if item['mode'] == 'native']
         assert any(item['native_used'] for item in native), 'no genuine native complete-function result'
         assert any(item['fallback'] for item in native), 'no genuine current-buffer Python fallback'
         assert any(item['earlier_failure_did_not_reach_R8'] for item in native)
-        if args.native_stages in ('r1-r8', 'r1-r2-r8'):
+        if args.native_stages != 'r8':
             assert any(item['setup_native_used'] for item in native), 'no genuine native R1 complete-function result'
             assert any(item['setup_fallback'] for item in native), 'no genuine current-buffer R1 fallback'
         if args.native_stages == 'r1-r8':
             assert any(item['forced_r2_fallback_calls'] for item in native), 'R2 control did not execute the original fallback'
             assert not any(item['pedigree_native_used'] for item in native), 'R1/R8 control published native R2'
-        if args.native_stages == 'r1-r2-r8':
+        if args.native_stages in ('r1-r2-r8', 'r1-r2-r3-r8'):
             assert any(item['pedigree_native_used'] for item in native), 'no genuine native R2 complete-function result'
             assert any(item['pedigree_fallback'] for item in native), 'no genuine current-buffer R2 fallback'
             assert not any(item['forced_r2_fallback_calls'] for item in native), 'full R2 mode used a forced fallback'
+        if args.native_stages in ('r1-r8', 'r1-r2-r8'):
+            assert any(item['forced_r3_fallback_calls'] for item in native), 'R3 control did not execute the original fallback'
+            assert not any(item['product_native_used'] for item in native), 'preceding control published native R3'
+        if args.native_stages == 'r1-r2-r3-r8':
+            assert any(item['product_native_used'] for item in native), 'no genuine native R3 complete-function product'
+            assert any(item['product_fallback'] for item in native), 'no genuine current-buffer R3 fallback'
+            assert not any(item['forced_r3_fallback_calls'] for item in native), 'full R3 mode used a forced fallback'
         assert not mismatches, ('complete-ranker mismatches', len(mismatches), mismatches)
     except Exception as error:
         failure = dict(type=type(error).__name__, message=str(error))
@@ -350,6 +414,9 @@ def compare(args):
             pedigree_native_outputs=sum(item['pedigree_native_used'] for item in native),
             pedigree_Python_fallbacks=sum(item['pedigree_fallback'] for item in native),
             forced_R2_control_fallback_calls=sum(item['forced_r2_fallback_calls'] for item in native),
+            control_multiply_native_outputs=sum(item['product_native_used'] for item in native),
+            control_multiply_Python_fallbacks=sum(item['product_fallback'] for item in native),
+            forced_R3_control_fallback_calls=sum(item['forced_r3_fallback_calls'] for item in native),
             original_failures=sum(item['original_exception'] for item in native),
             earlier_failures_without_native_call=sum(item['earlier_failure_did_not_reach_R8'] for item in native),
             binary_sha256=sha(args.binary), fixture_sha256=sha(prepared),
@@ -365,14 +432,14 @@ def main():
     command = sub.add_parser('compare')
     for name in ['reference', 'candidate', 'binary', 'output']:
         command.add_argument('--' + name, required=True, type=Path)
-    command.add_argument('--native-stages', choices=['r8', 'r1-r8', 'r1-r2-r8'], default='r8')
+    command.add_argument('--native-stages', choices=['r8', 'r1-r8', 'r1-r2-r8', 'r1-r2-r3-r8'], default='r8')
     command = sub.add_parser('worker')
     for name in ['source', 'reference', 'cases', 'output']:
         command.add_argument('--' + name, required=True, type=Path)
     command.add_argument('--binary', type=Path)
     command.add_argument('--mode', required=True, choices=['python', 'native'])
     command.add_argument('--profile', required=True, choices=['fresh', 'source-bootstrap'])
-    command.add_argument('--native-stages', choices=['r8', 'r1-r8', 'r1-r2-r8'], default='r8')
+    command.add_argument('--native-stages', choices=['r8', 'r1-r8', 'r1-r2-r8', 'r1-r2-r3-r8'], default='r8')
     args = parser.parse_args()
     globals()[args.procedure](args)
 

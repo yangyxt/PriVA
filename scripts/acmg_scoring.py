@@ -490,8 +490,8 @@ def sort_and_rank_variants(df: pd.DataFrame,
         terminal_order_binary: Explicit opt-in PriVA Rust CLI for final ordering
             only. None retains Python; unsupported inputs use the original tail.
         ranking_binary: Explicit opt-in single PriVA Rust CLI for the integrated
-            R1 setup, R2 pedigree context and R8 ordering. Other stages retain
-            their original Python.
+            R1 setup, R2 pedigree context, R3 control multiplication and R8
+            ordering. Other stages retain their original Python.
 
     Returns:
         DataFrame sorted by variant's max ACMG score with added variant rank column
@@ -566,7 +566,17 @@ def sort_and_rank_variants(df: pd.DataFrame,
 
     # Control-common penalty: halve sort_index for variants common in control cohort
     df = compute_control_common(df, proband)
-    df.loc[:, "sort_index"] = df.loc[:, "sort_index"] * df.loc[:, "control_common_index"]
+    # 26 October 2026 CT: only the post-control float64 product is optional.
+    # Keep C1-C5 above, once, and the original current-buffer statement intact
+    # on fallback. Validate the whole product before the single .loc assignment.
+    native_product = None
+    if ranking_binary is not None:
+        from priva_rust_control_multiply import try_control_multiply
+        native_product = try_control_multiply(df, ranking_binary)
+    if native_product is None:
+        df.loc[:, "sort_index"] = df.loc[:, "sort_index"] * df.loc[:, "control_common_index"]
+    else:
+        df.loc[:, "sort_index"] = native_product
 
     # ---------------------------------------------------------------------
     # Zygosity / inheritance / mechanism compatibility penalty.

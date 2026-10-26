@@ -1,0 +1,299 @@
+<?xml version='1.0' encoding='utf-8'?>
+<svg xmlns="http://www.w3.org/2000/svg" role="img" version="1.1" aria-labelledby="installation-title installation-description" width="1180" height="2713" viewBox="0 0 1180 2713">
+  <title id="installation-title">PriVA installation: storage roots, configurable names and resource preparation</title>
+  <desc id="installation-description">Default destinations for a fresh installation. Set existing cache_root and tmp_dir paths, assembly and VEP major. The checkout holds bundled snapshots, the existing Mamba root holds separate environments, cache_root holds downloaded and derived resources, and tmp_dir holds scratch work. Blue path names and brace tokens are selected by YAML. D means automatic download, B build, M manual publisher files, R repository bundle, E installed-package export. Supplied originals are preserved; explicit reference/mapping paths and completed legacy software retain their selected locations. Managed copies and converted outputs use the configured cache folders. The diagram does not establish scientific-profile qualification.</desc>
+  <rect x="0" y="0" width="1180" height="2713" rx="0" fill="#f5f8fb" stroke="#f5f8fb" />
+  <text x="32" y="44" fill="#1c3346" font-size="30" font-weight="700" font-family="DejaVu Sans, sans-serif">Where PriVA installs its resources</text>
+  <text x="33" y="75" fill="#51677a" font-size="18" font-weight="400" font-family="DejaVu Sans, sans-serif">Four storage roots · default names shown · resources prepared as needed</text>
+  <rect x="24" y="96" width="1132" height="155" rx="12" fill="#eaf3fb" stroke="#cfdfec" />
+  <text x="46" y="126" fill="#1c3346" font-size="19" font-weight="700" font-family="DejaVu Sans, sans-serif">Before main_install: choose existing paths and the annotation profile</text>
+  <text x="46" y="158" fill="#075ca8" font-size="18" font-weight="700" font-family="DejaVu Sans Mono, monospace">cache_root + tmp_dir</text>
+  <text x="320" y="158" fill="#1c3346" font-size="16" font-weight="400" font-family="DejaVu Sans, sans-serif" data-max-x="1130">Existing writable absolute directories; installation stops if either is invalid.</text>
+  <text x="46" y="188" fill="#075ca8" font-size="18" font-weight="700" font-family="DejaVu Sans Mono, monospace">assembly</text>
+  <text x="160" y="188" fill="#1c3346" font-size="16" font-weight="400" font-family="DejaVu Sans, sans-serif">hg19 / GRCh37 or hg38 / GRCh38 (default hg19)</text>
+  <text x="690" y="188" fill="#075ca8" font-size="16" font-weight="700" font-family="DejaVu Sans Mono, monospace">vep_installed_version</text>
+  <text x="950" y="188" fill="#1c3346" font-size="16" font-weight="400" font-family="DejaVu Sans, sans-serif">default "116"</text>
+  <text x="46" y="220" fill="#1c3346" font-size="16" font-weight="700" font-family="DejaVu Sans, sans-serif">Manual publisher file paths:</text>
+  <text x="310" y="220" fill="#1c3346" font-size="15" font-weight="400" font-family="DejaVu Sans Mono, monospace" data-max-x="1130">primateai_prescore · spliceai_snv_prescore · spliceai_indel_prescore</text>
+  <rect x="24" y="270" width="268" height="69" rx="12" fill="white" stroke="#d5e0e8" />
+  <text x="39" y="297" fill="#1c3346" font-size="18" font-weight="700" font-family="DejaVu Sans, sans-serif">CHECKOUT</text>
+  <text x="39" y="322" fill="#51677a" font-size="15" font-weight="400" font-family="DejaVu Sans, sans-serif">Bundled data</text>
+  <rect x="312" y="270" width="268" height="69" rx="12" fill="white" stroke="#d5e0e8" />
+  <text x="327" y="297" fill="#1c3346" font-size="18" font-weight="700" font-family="DejaVu Sans, sans-serif">MAMBA ROOT</text>
+  <text x="327" y="322" fill="#51677a" font-size="15" font-weight="400" font-family="DejaVu Sans, sans-serif">Installed software</text>
+  <rect x="600" y="270" width="268" height="69" rx="12" fill="white" stroke="#d5e0e8" />
+  <text x="615" y="297" fill="#075ca8" font-size="18" font-weight="700" font-family="DejaVu Sans, sans-serif">cache_root</text>
+  <text x="615" y="322" fill="#51677a" font-size="15" font-weight="400" font-family="DejaVu Sans, sans-serif">Downloaded / derived data</text>
+  <rect x="888" y="270" width="268" height="69" rx="12" fill="white" stroke="#d5e0e8" />
+  <text x="903" y="297" fill="#075ca8" font-size="18" font-weight="700" font-family="DejaVu Sans, sans-serif">tmp_dir</text>
+  <text x="903" y="322" fill="#51677a" font-size="15" font-weight="400" font-family="DejaVu Sans, sans-serif">Scratch space</text>
+  <text x="33" y="365" fill="#51677a" font-size="16" font-weight="400" font-family="DejaVu Sans, sans-serif">Blue = YAML-controlled path/name/token.   D Download    B Build    M Manual input    R Bundled    E Export</text>
+  <rect x="24" y="388" width="1132" height="1076" rx="12" fill="white" stroke="#d5e0e8" />
+  <text x="47" y="419" fill="#075ca8" font-size="23" font-weight="700" font-family="DejaVu Sans Mono, monospace" data-max-x="1140">&lt;cache_root&gt;/</text>
+  <text x="48" y="445" fill="#51677a" font-size="15.5" font-weight="400" font-family="DejaVu Sans, sans-serif" data-max-x="1140">Persistent managed resource destinations. The six blue top-level names can be changed through cache_folders.</text>
+  <line x1="48" y1="461" x2="1130" y2="461" stroke="#d5e0e8" />
+  <path d="M56 471 V483 H65" fill="none" stroke="#a9bac7" stroke-width="1.5" />
+  <text x="68" y="488" fill="#1c3346" font-size="17" font-weight="400" font-family="DejaVu Sans Mono, monospace" data-max-x="654"><tspan fill="#075ca8" font-weight="700">VEP_cache</tspan><tspan fill="#1c3346" font-weight="400">/</tspan></text>
+  <text x="676" y="488" fill="#51677a" font-size="16" font-weight="400" font-family="DejaVu Sans, sans-serif" data-max-x="1064">cache_folders.vep_cache; default shown</text>
+  <rect x="1073" y="471" width="25" height="23" rx="5" fill="#e4f2fb" stroke="#e4f2fb" />
+  <text x="1079.5" y="488" fill="#075b8b" font-size="15" font-weight="700" font-family="DejaVu Sans, sans-serif">D</text>
+  <path d="M76 501 V513 H85" fill="none" stroke="#a9bac7" stroke-width="1.5" />
+  <text x="88" y="518" fill="#1c3346" font-size="17" font-weight="400" font-family="DejaVu Sans Mono, monospace" data-max-x="654"><tspan fill="#1c3346" font-weight="400">homo_sapiens_merged/</tspan><tspan fill="#075ca8" font-weight="700">{vep}</tspan><tspan fill="#1c3346" font-weight="400">_</tspan><tspan fill="#075ca8" font-weight="700">{GRCh}</tspan><tspan fill="#1c3346" font-weight="400">/</tspan></text>
+  <text x="676" y="518" fill="#51677a" font-size="16" font-weight="400" font-family="DejaVu Sans, sans-serif" data-max-x="1064">Official merged cache for assembly/release.</text>
+  <rect x="1073" y="501" width="25" height="23" rx="5" fill="#e4f2fb" stroke="#e4f2fb" />
+  <text x="1079.5" y="518" fill="#075b8b" font-size="15" font-weight="700" font-family="DejaVu Sans, sans-serif">D</text>
+  <path d="M56 531 V543 H65" fill="none" stroke="#a9bac7" stroke-width="1.5" />
+  <text x="68" y="548" fill="#1c3346" font-size="17" font-weight="400" font-family="DejaVu Sans Mono, monospace" data-max-x="654"><tspan fill="#075ca8" font-weight="700">VEP_plugin</tspan><tspan fill="#1c3346" font-weight="400">/</tspan></text>
+  <text x="676" y="548" fill="#51677a" font-size="16" font-weight="400" font-family="DejaVu Sans, sans-serif" data-max-x="1064">Official plugins matching the VEP release.</text>
+  <rect x="1073" y="531" width="25" height="23" rx="5" fill="#e4f2fb" stroke="#e4f2fb" />
+  <text x="1079.5" y="548" fill="#075b8b" font-size="15" font-weight="700" font-family="DejaVu Sans, sans-serif">D</text>
+  <path d="M76 561 V573 H85" fill="none" stroke="#a9bac7" stroke-width="1.5" />
+  <text x="88" y="578" fill="#1c3346" font-size="17" font-weight="400" font-family="DejaVu Sans Mono, monospace" data-max-x="654"><tspan fill="#1c3346" font-weight="400">LoFtee_repos/loftee-</tspan><tspan fill="#075ca8" font-weight="700">{assembly}</tspan><tspan fill="#1c3346" font-weight="400">/</tspan></text>
+  <text x="676" y="578" fill="#51677a" font-size="16" font-weight="400" font-family="DejaVu Sans, sans-serif" data-max-x="1064">Assembly-specific LOFTEE source branch.</text>
+  <rect x="1073" y="561" width="25" height="23" rx="5" fill="#e4f2fb" stroke="#e4f2fb" />
+  <text x="1079.5" y="578" fill="#075b8b" font-size="15" font-weight="700" font-family="DejaVu Sans, sans-serif">D</text>
+  <path d="M56 591 V603 H65" fill="none" stroke="#a9bac7" stroke-width="1.5" />
+  <text x="68" y="608" fill="#1c3346" font-size="17" font-weight="400" font-family="DejaVu Sans Mono, monospace" data-max-x="654"><tspan fill="#075ca8" font-weight="700">VEP_plugin_cache</tspan><tspan fill="#1c3346" font-weight="400">/</tspan></text>
+  <text x="676" y="608" fill="#51677a" font-size="16" font-weight="400" font-family="DejaVu Sans, sans-serif" data-max-x="1064">Shared data used by VEP plugins.</text>
+  <path d="M76 621 V633 H85" fill="none" stroke="#a9bac7" stroke-width="1.5" />
+  <text x="88" y="638" fill="#1c3346" font-size="17" font-weight="400" font-family="DejaVu Sans Mono, monospace" data-max-x="654"><tspan fill="#1c3346" font-weight="400">AlphaMissense/</tspan></text>
+  <text x="676" y="638" fill="#51677a" font-size="16" font-weight="400" font-family="DejaVu Sans, sans-serif" data-max-x="1064">Full prescores are external, downloaded here.</text>
+  <rect x="1073" y="621" width="25" height="23" rx="5" fill="#e4f2fb" stroke="#e4f2fb" />
+  <text x="1079.5" y="638" fill="#075b8b" font-size="15" font-weight="700" font-family="DejaVu Sans, sans-serif">D</text>
+  <path d="M96 651 V663 H105" fill="none" stroke="#a9bac7" stroke-width="1.5" />
+  <text x="108" y="668" fill="#1c3346" font-size="17" font-weight="400" font-family="DejaVu Sans Mono, monospace" data-max-x="654"><tspan fill="#1c3346" font-weight="400">AlphaMissense_</tspan><tspan fill="#075ca8" font-weight="700">{ucsc}</tspan><tspan fill="#1c3346" font-weight="400">.tsv.gz</tspan></text>
+  <text x="676" y="668" fill="#51677a" font-size="16" font-weight="400" font-family="DejaVu Sans, sans-serif" data-max-x="1064">Original publisher table + prepared index.</text>
+  <rect x="1073" y="651" width="25" height="23" rx="5" fill="#e4f2fb" stroke="#e4f2fb" />
+  <text x="1079.5" y="668" fill="#075b8b" font-size="15" font-weight="700" font-family="DejaVu Sans, sans-serif">D</text>
+  <rect x="1102" y="651" width="25" height="23" rx="5" fill="#eeeafb" stroke="#eeeafb" />
+  <text x="1108.5" y="668" fill="#61429a" font-size="15" font-weight="700" font-family="DejaVu Sans, sans-serif">B</text>
+  <path d="M96 681 V693 H105" fill="none" stroke="#a9bac7" stroke-width="1.5" />
+  <text x="108" y="698" fill="#1c3346" font-size="17" font-weight="400" font-family="DejaVu Sans Mono, monospace" data-max-x="654"><tspan fill="#1c3346" font-weight="400">*.vep*.vcf.gz, *.pkl, *.tsv</tspan></text>
+  <text x="676" y="698" fill="#51677a" font-size="16" font-weight="400" font-family="DejaVu Sans, sans-serif" data-max-x="1064">VEP / gnomAD / domain / DAS / PM1 builds.</text>
+  <rect x="1073" y="681" width="25" height="23" rx="5" fill="#eeeafb" stroke="#eeeafb" />
+  <text x="1079.5" y="698" fill="#61429a" font-size="15" font-weight="700" font-family="DejaVu Sans, sans-serif">B</text>
+  <path d="M76 711 V723 H85" fill="none" stroke="#a9bac7" stroke-width="1.5" />
+  <text x="88" y="728" fill="#1c3346" font-size="17" font-weight="400" font-family="DejaVu Sans Mono, monospace" data-max-x="654"><tspan fill="#1c3346" font-weight="400">PrimateAI/, SpliceAI/</tspan></text>
+  <text x="676" y="728" fill="#51677a" font-size="16" font-weight="400" font-family="DejaVu Sans, sans-serif" data-max-x="1064">Supplied originals → index or TSV adapter.</text>
+  <text x="676" y="750" fill="#51677a" font-size="16" font-weight="400" font-family="DejaVu Sans, sans-serif" data-max-x="1064">GRCh37: SpliceAI v1; GRCh38: v2.0.</text>
+  <rect x="1073" y="711" width="25" height="23" rx="5" fill="#fff0d5" stroke="#fff0d5" />
+  <text x="1079.5" y="728" fill="#885716" font-size="15" font-weight="700" font-family="DejaVu Sans, sans-serif">M</text>
+  <rect x="1102" y="711" width="25" height="23" rx="5" fill="#eeeafb" stroke="#eeeafb" />
+  <text x="1108.5" y="728" fill="#61429a" font-size="15" font-weight="700" font-family="DejaVu Sans, sans-serif">B</text>
+  <path d="M76 763 V775 H85" fill="none" stroke="#a9bac7" stroke-width="1.5" />
+  <text x="88" y="780" fill="#1c3346" font-size="17" font-weight="400" font-family="DejaVu Sans Mono, monospace" data-max-x="654"><tspan fill="#1c3346" font-weight="400">UTRannotator/, LoFtee/</tspan><tspan fill="#075ca8" font-weight="700">{assembly}</tspan><tspan fill="#1c3346" font-weight="400">/</tspan></text>
+  <text x="676" y="780" fill="#51677a" font-size="16" font-weight="400" font-family="DejaVu Sans, sans-serif" data-max-x="1064">uORF, ancestor and conservation resources.</text>
+  <rect x="1073" y="763" width="25" height="23" rx="5" fill="#e4f2fb" stroke="#e4f2fb" />
+  <text x="1079.5" y="780" fill="#075b8b" font-size="15" font-weight="700" font-family="DejaVu Sans, sans-serif">D</text>
+  <path d="M76 793 V805 H85" fill="none" stroke="#a9bac7" stroke-width="1.5" />
+  <text x="88" y="810" fill="#1c3346" font-size="17" font-weight="400" font-family="DejaVu Sans Mono, monospace" data-max-x="654"><tspan fill="#1c3346" font-weight="400">Conservation/, SpliceVault/</tspan></text>
+  <text x="676" y="810" fill="#51677a" font-size="16" font-weight="400" font-family="DejaVu Sans, sans-serif" data-max-x="1064">Assembly-matched conservation/splice tracks.</text>
+  <rect x="1073" y="793" width="25" height="23" rx="5" fill="#e4f2fb" stroke="#e4f2fb" />
+  <text x="1079.5" y="810" fill="#075b8b" font-size="15" font-weight="700" font-family="DejaVu Sans, sans-serif">D</text>
+  <path d="M76 823 V835 H85" fill="none" stroke="#a9bac7" stroke-width="1.5" />
+  <text x="88" y="840" fill="#1c3346" font-size="17" font-weight="400" font-family="DejaVu Sans Mono, monospace" data-max-x="654"><tspan fill="#1c3346" font-weight="400">pext/</tspan><tspan fill="#075ca8" font-weight="700">{ucsc}</tspan><tspan fill="#1c3346" font-weight="400">/, MaveDB/</tspan></text>
+  <text x="676" y="840" fill="#51677a" font-size="16" font-weight="400" font-family="DejaVu Sans, sans-serif" data-max-x="1064">pext if enabled; MaveDB omitted for GRCh37.</text>
+  <rect x="1073" y="823" width="25" height="23" rx="5" fill="#e4f2fb" stroke="#e4f2fb" />
+  <text x="1079.5" y="840" fill="#075b8b" font-size="15" font-weight="700" font-family="DejaVu Sans, sans-serif">D</text>
+  <rect x="1102" y="823" width="25" height="23" rx="5" fill="#eeeafb" stroke="#eeeafb" />
+  <text x="1108.5" y="840" fill="#61429a" font-size="15" font-weight="700" font-family="DejaVu Sans, sans-serif">B</text>
+  <path d="M76 853 V865 H85" fill="none" stroke="#a9bac7" stroke-width="1.5" />
+  <text x="88" y="870" fill="#1c3346" font-size="17" font-weight="400" font-family="DejaVu Sans Mono, monospace" data-max-x="654"><tspan fill="#1c3346" font-weight="400">Ensembl_CDS/release-</tspan><tspan fill="#075ca8" font-weight="700">{vep}</tspan><tspan fill="#1c3346" font-weight="400">/</tspan></text>
+  <text x="676" y="870" fill="#51677a" font-size="16" font-weight="400" font-family="DejaVu Sans, sans-serif" data-max-x="1064">Assembly/release CDS FASTA.</text>
+  <rect x="1073" y="853" width="25" height="23" rx="5" fill="#e4f2fb" stroke="#e4f2fb" />
+  <text x="1079.5" y="870" fill="#075b8b" font-size="15" font-weight="700" font-family="DejaVu Sans, sans-serif">D</text>
+  <path d="M56 883 V895 H65" fill="none" stroke="#a9bac7" stroke-width="1.5" />
+  <text x="68" y="900" fill="#1c3346" font-size="17" font-weight="400" font-family="DejaVu Sans Mono, monospace" data-max-x="654"><tspan fill="#075ca8" font-weight="700">gnomAD</tspan><tspan fill="#1c3346" font-weight="400">/</tspan></text>
+  <text x="676" y="900" fill="#51677a" font-size="16" font-weight="400" font-family="DejaVu Sans, sans-serif" data-max-x="1064">Download; GRCh37 liftover/merge if needed.</text>
+  <rect x="1073" y="883" width="25" height="23" rx="5" fill="#e4f2fb" stroke="#e4f2fb" />
+  <text x="1079.5" y="900" fill="#075b8b" font-size="15" font-weight="700" font-family="DejaVu Sans, sans-serif">D</text>
+  <rect x="1102" y="883" width="25" height="23" rx="5" fill="#eeeafb" stroke="#eeeafb" />
+  <text x="1108.5" y="900" fill="#61429a" font-size="15" font-weight="700" font-family="DejaVu Sans, sans-serif">B</text>
+  <path d="M56 913 V925 H65" fill="none" stroke="#a9bac7" stroke-width="1.5" />
+  <text x="68" y="930" fill="#1c3346" font-size="17" font-weight="400" font-family="DejaVu Sans Mono, monospace" data-max-x="654"><tspan fill="#075ca8" font-weight="700">ClinVar</tspan><tspan fill="#1c3346" font-weight="400">/</tspan></text>
+  <text x="676" y="930" fill="#51677a" font-size="16" font-weight="400" font-family="DejaVu Sans, sans-serif" data-max-x="1064">ClinVar download → VEP + AA/splice/AF stats.</text>
+  <rect x="1073" y="913" width="25" height="23" rx="5" fill="#e4f2fb" stroke="#e4f2fb" />
+  <text x="1079.5" y="930" fill="#075b8b" font-size="15" font-weight="700" font-family="DejaVu Sans, sans-serif">D</text>
+  <rect x="1102" y="913" width="25" height="23" rx="5" fill="#eeeafb" stroke="#eeeafb" />
+  <text x="1108.5" y="930" fill="#61429a" font-size="15" font-weight="700" font-family="DejaVu Sans, sans-serif">B</text>
+  <path d="M56 943 V955 H65" fill="none" stroke="#a9bac7" stroke-width="1.5" />
+  <text x="68" y="960" fill="#1c3346" font-size="17" font-weight="400" font-family="DejaVu Sans Mono, monospace" data-max-x="654"><tspan fill="#075ca8" font-weight="700">CADD</tspan><tspan fill="#1c3346" font-weight="400">/CADD-scripts-1.7.2/data/</tspan></text>
+  <text x="676" y="960" fill="#51677a" font-size="16" font-weight="400" font-family="DejaVu Sans, sans-serif" data-max-x="1064">Pinned upstream source + shared CADD assets.</text>
+  <rect x="1073" y="943" width="25" height="23" rx="5" fill="#e4f2fb" stroke="#e4f2fb" />
+  <text x="1079.5" y="960" fill="#075b8b" font-size="15" font-weight="700" font-family="DejaVu Sans, sans-serif">D</text>
+  <path d="M76 973 V985 H85" fill="none" stroke="#a9bac7" stroke-width="1.5" />
+  <text x="88" y="990" fill="#1c3346" font-size="17" font-weight="400" font-family="DejaVu Sans Mono, monospace" data-max-x="654"><tspan fill="#1c3346" font-weight="400">annotations/</tspan><tspan fill="#075ca8" font-weight="700">{GRCh}</tspan><tspan fill="#1c3346" font-weight="400">_</tspan><tspan fill="#075ca8" font-weight="700">{cadd}</tspan><tspan fill="#1c3346" font-weight="400">/</tspan></text>
+  <text x="676" y="990" fill="#51677a" font-size="16" font-weight="400" font-family="DejaVu Sans, sans-serif" data-max-x="1064">CADD-specific tracks and feature-model assets.</text>
+  <rect x="1073" y="973" width="25" height="23" rx="5" fill="#e4f2fb" stroke="#e4f2fb" />
+  <text x="1079.5" y="990" fill="#075b8b" font-size="15" font-weight="700" font-family="DejaVu Sans, sans-serif">D</text>
+  <path d="M76 1003 V1015 H85" fill="none" stroke="#a9bac7" stroke-width="1.5" />
+  <text x="88" y="1020" fill="#1c3346" font-size="17" font-weight="400" font-family="DejaVu Sans Mono, monospace" data-max-x="654"><tspan fill="#1c3346" font-weight="400">prescored/</tspan><tspan fill="#075ca8" font-weight="700">{GRCh}</tspan><tspan fill="#1c3346" font-weight="400">_</tspan><tspan fill="#075ca8" font-weight="700">{cadd}</tspan><tspan fill="#1c3346" font-weight="400">/incl_anno/</tspan></text>
+  <text x="676" y="1020" fill="#51677a" font-size="16" font-weight="400" font-family="DejaVu Sans, sans-serif" data-max-x="1064">SNV/indel tables and paired tabix indexes.</text>
+  <rect x="1073" y="1003" width="25" height="23" rx="5" fill="#e4f2fb" stroke="#e4f2fb" />
+  <text x="1079.5" y="1020" fill="#075b8b" font-size="15" font-weight="700" font-family="DejaVu Sans, sans-serif">D</text>
+  <path d="M76 1033 V1045 H85" fill="none" stroke="#a9bac7" stroke-width="1.5" />
+  <text x="88" y="1050" fill="#1c3346" font-size="17" font-weight="400" font-family="DejaVu Sans Mono, monospace" data-max-x="654"><tspan fill="#1c3346" font-weight="400">models/</tspan><tspan fill="#075ca8" font-weight="700">{GRCh}</tspan><tspan fill="#1c3346" font-weight="400">/</tspan></text>
+  <text x="676" y="1050" fill="#51677a" font-size="16" font-weight="400" font-family="DejaVu Sans, sans-serif" data-max-x="1064">Original raw model and PHRED conversion.</text>
+  <rect x="1073" y="1033" width="25" height="23" rx="5" fill="#e4f2fb" stroke="#e4f2fb" />
+  <text x="1079.5" y="1050" fill="#075b8b" font-size="15" font-weight="700" font-family="DejaVu Sans, sans-serif">D</text>
+  <path d="M56 1063 V1075 H65" fill="none" stroke="#a9bac7" stroke-width="1.5" />
+  <text x="68" y="1080" fill="#1c3346" font-size="17" font-weight="400" font-family="DejaVu Sans Mono, monospace" data-max-x="654"><tspan fill="#1c3346" font-weight="400">reference/ucsc.</tspan><tspan fill="#075ca8" font-weight="700">{ucsc}</tspan><tspan fill="#1c3346" font-weight="400">.fasta</tspan></text>
+  <text x="676" y="1080" fill="#51677a" font-size="16" font-weight="400" font-family="DejaVu Sans, sans-serif" data-max-x="1064">Download UCSC FASTA; build indexes.</text>
+  <text x="676" y="1102" fill="#51677a" font-size="16" font-weight="400" font-family="DejaVu Sans, sans-serif" data-max-x="1064">A supplied ref_genome keeps its path.</text>
+  <rect x="1073" y="1063" width="25" height="23" rx="5" fill="#e4f2fb" stroke="#e4f2fb" />
+  <text x="1079.5" y="1080" fill="#075b8b" font-size="15" font-weight="700" font-family="DejaVu Sans, sans-serif">D</text>
+  <rect x="1102" y="1063" width="25" height="23" rx="5" fill="#eeeafb" stroke="#eeeafb" />
+  <text x="1108.5" y="1080" fill="#61429a" font-size="15" font-weight="700" font-family="DejaVu Sans, sans-serif">B</text>
+  <path d="M56 1115 V1127 H65" fill="none" stroke="#a9bac7" stroke-width="1.5" />
+  <text x="68" y="1132" fill="#1c3346" font-size="17" font-weight="400" font-family="DejaVu Sans Mono, monospace" data-max-x="654"><tspan fill="#1c3346" font-weight="400">liftOver/</tspan></text>
+  <text x="676" y="1132" fill="#51677a" font-size="16" font-weight="400" font-family="DejaVu Sans, sans-serif" data-max-x="1064">Required cross-assembly chain resources.</text>
+  <rect x="1073" y="1115" width="25" height="23" rx="5" fill="#e4f2fb" stroke="#e4f2fb" />
+  <text x="1079.5" y="1132" fill="#075b8b" font-size="15" font-weight="700" font-family="DejaVu Sans, sans-serif">D</text>
+  <path d="M56 1145 V1157 H65" fill="none" stroke="#a9bac7" stroke-width="1.5" />
+  <text x="68" y="1162" fill="#1c3346" font-size="17" font-weight="400" font-family="DejaVu Sans Mono, monospace" data-max-x="654"><tspan fill="#1c3346" font-weight="400">InterPro/, ClinGen/</tspan></text>
+  <text x="676" y="1162" fill="#51677a" font-size="16" font-weight="400" font-family="DejaVu Sans, sans-serif" data-max-x="1064">Managed fallback if a bundle is unavailable.</text>
+  <rect x="1073" y="1145" width="25" height="23" rx="5" fill="#e4f2fb" stroke="#e4f2fb" />
+  <text x="1079.5" y="1162" fill="#075b8b" font-size="15" font-weight="700" font-family="DejaVu Sans, sans-serif">D</text>
+  <rect x="1102" y="1145" width="25" height="23" rx="5" fill="#eeeafb" stroke="#eeeafb" />
+  <text x="1108.5" y="1162" fill="#61429a" font-size="15" font-weight="700" font-family="DejaVu Sans, sans-serif">B</text>
+  <path d="M56 1175 V1187 H65" fill="none" stroke="#a9bac7" stroke-width="1.5" />
+  <text x="68" y="1192" fill="#1c3346" font-size="17" font-weight="400" font-family="DejaVu Sans Mono, monospace" data-max-x="654"><tspan fill="#1c3346" font-weight="400">patho_mechanism/, gofcards/</tspan></text>
+  <text x="676" y="1192" fill="#51677a" font-size="16" font-weight="400" font-family="DejaVu Sans, sans-serif" data-max-x="1064">Raw inputs + derived mechanism/GoF caches.</text>
+  <text x="676" y="1214" fill="#51677a" font-size="16" font-weight="400" font-family="DejaVu Sans, sans-serif" data-max-x="1064">Existing bundled snapshots remain in checkout.</text>
+  <rect x="1073" y="1175" width="25" height="23" rx="5" fill="#e4f2fb" stroke="#e4f2fb" />
+  <text x="1079.5" y="1192" fill="#075b8b" font-size="15" font-weight="700" font-family="DejaVu Sans, sans-serif">D</text>
+  <rect x="1102" y="1175" width="25" height="23" rx="5" fill="#eeeafb" stroke="#eeeafb" />
+  <text x="1108.5" y="1192" fill="#61429a" font-size="15" font-weight="700" font-family="DejaVu Sans, sans-serif">B</text>
+  <path d="M56 1227 V1239 H65" fill="none" stroke="#a9bac7" stroke-width="1.5" />
+  <text x="68" y="1244" fill="#1c3346" font-size="17" font-weight="400" font-family="DejaVu Sans Mono, monospace" data-max-x="654"><tspan fill="#1c3346" font-weight="400">hpo/raw/</tspan><tspan fill="#075ca8" font-weight="700">{hpo}</tspan><tspan fill="#1c3346" font-weight="400">/, mondo/</tspan></text>
+  <text x="676" y="1244" fill="#51677a" font-size="16" font-weight="400" font-family="DejaVu Sans, sans-serif" data-max-x="1064">Pinned ontologies → assertion/scope tables.</text>
+  <text x="676" y="1266" fill="#51677a" font-size="16" font-weight="400" font-family="DejaVu Sans, sans-serif" data-max-x="1064">MONDO file: mondo-simple.{mondo}.obo</text>
+  <rect x="1073" y="1227" width="25" height="23" rx="5" fill="#e4f2fb" stroke="#e4f2fb" />
+  <text x="1079.5" y="1244" fill="#075b8b" font-size="15" font-weight="700" font-family="DejaVu Sans, sans-serif">D</text>
+  <rect x="1102" y="1227" width="25" height="23" rx="5" fill="#eeeafb" stroke="#eeeafb" />
+  <text x="1108.5" y="1244" fill="#61429a" font-size="15" font-weight="700" font-family="DejaVu Sans, sans-serif">B</text>
+  <path d="M56 1279 V1291 H65" fill="none" stroke="#a9bac7" stroke-width="1.5" />
+  <text x="68" y="1296" fill="#1c3346" font-size="17" font-weight="400" font-family="DejaVu Sans Mono, monospace" data-max-x="654"><tspan fill="#1c3346" font-weight="400">BioMart/</tspan></text>
+  <text x="676" y="1296" fill="#51677a" font-size="16" font-weight="400" font-family="DejaVu Sans, sans-serif" data-max-x="1064">External raw workspace if a mapping is absent.</text>
+  <text x="676" y="1318" fill="#51677a" font-size="16" font-weight="400" font-family="DejaVu Sans, sans-serif" data-max-x="1064">Completed small tables go into checkout/data.</text>
+  <rect x="1073" y="1279" width="25" height="23" rx="5" fill="#e4f2fb" stroke="#e4f2fb" />
+  <text x="1079.5" y="1296" fill="#075b8b" font-size="15" font-weight="700" font-family="DejaVu Sans, sans-serif">D</text>
+  <rect x="1102" y="1279" width="25" height="23" rx="5" fill="#eeeafb" stroke="#eeeafb" />
+  <text x="1108.5" y="1296" fill="#61429a" font-size="15" font-weight="700" font-family="DejaVu Sans, sans-serif">B</text>
+  <path d="M56 1331 V1343 H65" fill="none" stroke="#a9bac7" stroke-width="1.5" />
+  <text x="68" y="1348" fill="#1c3346" font-size="17" font-weight="400" font-family="DejaVu Sans Mono, monospace" data-max-x="654"><tspan fill="#1c3346" font-weight="400">*.installed.yml</tspan></text>
+  <text x="676" y="1348" fill="#51677a" font-size="16" font-weight="400" font-family="DejaVu Sans, sans-serif" data-max-x="1064">Actual installed PriVA/CADD package exports.</text>
+  <rect x="1073" y="1331" width="25" height="23" rx="5" fill="#e9eef3" stroke="#e9eef3" />
+  <text x="1079.5" y="1348" fill="#44576b" font-size="15" font-weight="700" font-family="DejaVu Sans, sans-serif">E</text>
+  <path d="M56 1361 V1373 H65" fill="none" stroke="#a9bac7" stroke-width="1.5" />
+  <text x="68" y="1378" fill="#1c3346" font-size="17" font-weight="400" font-family="DejaVu Sans Mono, monospace" data-max-x="654"><tspan fill="#1c3346" font-weight="400">runtime/priva-nextflow-25.10.4/</tspan></text>
+  <text x="676" y="1378" fill="#51677a" font-size="16" font-weight="400" font-family="DejaVu Sans, sans-serif" data-max-x="1064">Nextflow driver + JRE; this checkout only.</text>
+  <rect x="1073" y="1361" width="25" height="23" rx="5" fill="#e4f2fb" stroke="#e4f2fb" />
+  <text x="1079.5" y="1378" fill="#075b8b" font-size="15" font-weight="700" font-family="DejaVu Sans, sans-serif">D</text>
+  <text x="48" y="1412" fill="#51677a" font-size="15" font-weight="400" font-family="DejaVu Sans, sans-serif" data-max-x="1130">Bundled snapshots are reused in place; these destinations do not require duplicate copies.</text>
+  <text x="48" y="1435" fill="#51677a" font-size="15" font-weight="400" font-family="DejaVu Sans, sans-serif" data-max-x="1130">Supplied originals are preserved; managed copies/conversions use these folders. Reference/mapping overrides stay selected.</text>
+  <rect x="24" y="1484" width="1132" height="478" rx="12" fill="white" stroke="#d5e0e8" />
+  <text x="47" y="1515" fill="#1c3346" font-size="23" font-weight="700" font-family="DejaVu Sans Mono, monospace" data-max-x="1140">&lt;checkout&gt;/</text>
+  <text x="48" y="1541" fill="#51677a" font-size="15.5" font-weight="400" font-family="DejaVu Sans, sans-serif" data-max-x="1140">Source and bundled data belong to the Git checkout; genome-wide downloaded caches do not.</text>
+  <line x1="48" y1="1557" x2="1130" y2="1557" stroke="#d5e0e8" />
+  <path d="M56 1567 V1579 H65" fill="none" stroke="#a9bac7" stroke-width="1.5" />
+  <text x="68" y="1584" fill="#1c3346" font-size="17" font-weight="400" font-family="DejaVu Sans Mono, monospace" data-max-x="654"><tspan fill="#1c3346" font-weight="400">scripts/install_utils.sh</tspan></text>
+  <text x="676" y="1584" fill="#51677a" font-size="16" font-weight="400" font-family="DejaVu Sans, sans-serif" data-max-x="1064">main_install entry point.</text>
+  <path d="M56 1597 V1609 H65" fill="none" stroke="#a9bac7" stroke-width="1.5" />
+  <text x="68" y="1614" fill="#1c3346" font-size="17" font-weight="400" font-family="DejaVu Sans Mono, monospace" data-max-x="654"><tspan fill="#1c3346" font-weight="400">config.yaml, cache_resources.json</tspan></text>
+  <text x="676" y="1614" fill="#51677a" font-size="16" font-weight="400" font-family="DejaVu Sans, sans-serif" data-max-x="1064">Config template + resource lifecycle map.</text>
+  <path d="M56 1627 V1639 H65" fill="none" stroke="#a9bac7" stroke-width="1.5" />
+  <text x="68" y="1644" fill="#1c3346" font-size="17" font-weight="400" font-family="DejaVu Sans Mono, monospace" data-max-x="654"><tspan fill="#1c3346" font-weight="400">data/</tspan></text>
+  <text x="676" y="1644" fill="#51677a" font-size="16" font-weight="400" font-family="DejaVu Sans, sans-serif" data-max-x="1064">Bundled snapshots; reused in the checkout.</text>
+  <rect x="1073" y="1627" width="25" height="23" rx="5" fill="#e2f3ea" stroke="#e2f3ea" />
+  <text x="1079.5" y="1644" fill="#176345" font-size="15" font-weight="700" font-family="DejaVu Sans, sans-serif">R</text>
+  <path d="M76 1657 V1669 H85" fill="none" stroke="#a9bac7" stroke-width="1.5" />
+  <text x="88" y="1674" fill="#1c3346" font-size="17" font-weight="400" font-family="DejaVu Sans Mono, monospace" data-max-x="654"><tspan fill="#1c3346" font-weight="400">hgnc/</tspan></text>
+  <text x="676" y="1674" fill="#51677a" font-size="16" font-weight="400" font-family="DejaVu Sans, sans-serif" data-max-x="1064">Default mapping selected by assembly/VEP.</text>
+  <rect x="1073" y="1657" width="25" height="23" rx="5" fill="#e2f3ea" stroke="#e2f3ea" />
+  <text x="1079.5" y="1674" fill="#176345" font-size="15" font-weight="700" font-family="DejaVu Sans, sans-serif">R</text>
+  <path d="M96 1687 V1699 H105" fill="none" stroke="#a9bac7" stroke-width="1.5" />
+  <text x="108" y="1704" fill="#1c3346" font-size="17" font-weight="400" font-family="DejaVu Sans Mono, monospace" data-max-x="654"><tspan fill="#1c3346" font-weight="400">ensembl_GRCh37_mart116_nm_to_enst.tsv</tspan></text>
+  <text x="676" y="1704" fill="#51677a" font-size="16" font-weight="400" font-family="DejaVu Sans, sans-serif" data-max-x="1064">GRCh37 / mart116 (annotation-base75 lineage).</text>
+  <rect x="1073" y="1687" width="25" height="23" rx="5" fill="#e2f3ea" stroke="#e2f3ea" />
+  <text x="1079.5" y="1704" fill="#176345" font-size="15" font-weight="700" font-family="DejaVu Sans, sans-serif">R</text>
+  <path d="M96 1717 V1729 H105" fill="none" stroke="#a9bac7" stroke-width="1.5" />
+  <text x="108" y="1734" fill="#1c3346" font-size="17" font-weight="400" font-family="DejaVu Sans Mono, monospace" data-max-x="654"><tspan fill="#1c3346" font-weight="400">ensembl_GRCh38_mart113_nm_to_enst.tsv</tspan></text>
+  <text x="676" y="1734" fill="#51677a" font-size="16" font-weight="400" font-family="DejaVu Sans, sans-serif" data-max-x="1064">GRCh38 / VEP113.</text>
+  <rect x="1073" y="1717" width="25" height="23" rx="5" fill="#e2f3ea" stroke="#e2f3ea" />
+  <text x="1079.5" y="1734" fill="#176345" font-size="15" font-weight="700" font-family="DejaVu Sans, sans-serif">R</text>
+  <path d="M96 1747 V1759 H105" fill="none" stroke="#a9bac7" stroke-width="1.5" />
+  <text x="108" y="1764" fill="#1c3346" font-size="17" font-weight="400" font-family="DejaVu Sans Mono, monospace" data-max-x="654"><tspan fill="#1c3346" font-weight="400">ensembl_GRCh38_mart116_ftp_candidate.tsv</tspan></text>
+  <text x="676" y="1764" fill="#51677a" font-size="16" font-weight="400" font-family="DejaVu Sans, sans-serif" data-max-x="1064">GRCh38 / VEP116; distinct pinned FTP source.</text>
+  <rect x="1073" y="1747" width="25" height="23" rx="5" fill="#e2f3ea" stroke="#e2f3ea" />
+  <text x="1079.5" y="1764" fill="#176345" font-size="15" font-weight="700" font-family="DejaVu Sans, sans-serif">R</text>
+  <path d="M96 1777 V1789 H105" fill="none" stroke="#a9bac7" stroke-width="1.5" />
+  <text x="108" y="1794" fill="#1c3346" font-size="17" font-weight="400" font-family="DejaVu Sans Mono, monospace" data-max-x="654"><tspan fill="#1c3346" font-weight="400">hgnc_non_alt_loci_set_sha256_890b18743cc8.tsv</tspan></text>
+  <text x="676" y="1794" fill="#51677a" font-size="16" font-weight="400" font-family="DejaVu Sans, sans-serif" data-max-x="1064">HGNC master: content-versioned snapshot.</text>
+  <text x="676" y="1816" fill="#51677a" font-size="16" font-weight="400" font-family="DejaVu Sans, sans-serif" data-max-x="1064">Publisher/Ensembl release is unknown.</text>
+  <rect x="1073" y="1777" width="25" height="23" rx="5" fill="#e2f3ea" stroke="#e2f3ea" />
+  <text x="1079.5" y="1794" fill="#176345" font-size="15" font-weight="700" font-family="DejaVu Sans, sans-serif">R</text>
+  <path d="M76 1829 V1841 H85" fill="none" stroke="#a9bac7" stroke-width="1.5" />
+  <text x="88" y="1846" fill="#1c3346" font-size="17" font-weight="400" font-family="DejaVu Sans Mono, monospace" data-max-x="654"><tspan fill="#1c3346" font-weight="400">ClinVar/, InterPro/, loeuf/, repeats/</tspan></text>
+  <text x="676" y="1846" fill="#51677a" font-size="16" font-weight="400" font-family="DejaVu Sans, sans-serif" data-max-x="1064">Bundled statistics/mappings/constraint/repeats.</text>
+  <rect x="1073" y="1829" width="25" height="23" rx="5" fill="#e2f3ea" stroke="#e2f3ea" />
+  <text x="1079.5" y="1846" fill="#176345" font-size="15" font-weight="700" font-family="DejaVu Sans, sans-serif">R</text>
+  <path d="M76 1859 V1871 H85" fill="none" stroke="#a9bac7" stroke-width="1.5" />
+  <text x="88" y="1876" fill="#1c3346" font-size="17" font-weight="400" font-family="DejaVu Sans Mono, monospace" data-max-x="654"><tspan fill="#1c3346" font-weight="400">HCSeeker/, gnomAD_RMC/, gofcards/, ...</tspan></text>
+  <text x="676" y="1876" fill="#51677a" font-size="16" font-weight="400" font-family="DejaVu Sans, sans-serif" data-max-x="1064">Protein regions, GoF and mechanism snapshots.</text>
+  <rect x="1073" y="1859" width="25" height="23" rx="5" fill="#e2f3ea" stroke="#e2f3ea" />
+  <text x="1079.5" y="1876" fill="#176345" font-size="15" font-weight="700" font-family="DejaVu Sans, sans-serif">R</text>
+  <text x="48" y="1910" fill="#51677a" font-size="15" font-weight="400" font-family="DejaVu Sans, sans-serif" data-max-x="1130">An explicit nm_to_enst_tsv stays selected. Other assembly/release pairs need a compatible supplied mapping.</text>
+  <text x="48" y="1933" fill="#51677a" font-size="15" font-weight="400" font-family="DejaVu Sans, sans-serif" data-max-x="1130">ClinVar gene stats reuse the bundle; an eligible ≥3-month-newer ClinVar source triggers managed regeneration.</text>
+  <rect x="24" y="1982" width="1132" height="336" rx="12" fill="white" stroke="#d5e0e8" />
+  <text x="47" y="2013" fill="#1c3346" font-size="23" font-weight="700" font-family="DejaVu Sans Mono, monospace" data-max-x="1140">&lt;existing Mamba root&gt;/</text>
+  <text x="48" y="2039" fill="#51677a" font-size="15.5" font-weight="400" font-family="DejaVu Sans, sans-serif" data-max-x="1140">Discovered from the existing environment manager; no extra storage-root YAML key.</text>
+  <line x1="48" y1="2055" x2="1130" y2="2055" stroke="#d5e0e8" />
+  <path d="M56 2065 V2077 H65" fill="none" stroke="#a9bac7" stroke-width="1.5" />
+  <text x="68" y="2082" fill="#1c3346" font-size="17" font-weight="400" font-family="DejaVu Sans Mono, monospace" data-max-x="654"><tspan fill="#1c3346" font-weight="400">envs/priva_acmg/</tspan></text>
+  <text x="676" y="2082" fill="#51677a" font-size="16" font-weight="400" font-family="DejaVu Sans, sans-serif" data-max-x="1064">PriVA scientific environment, including VEP.</text>
+  <rect x="1073" y="2065" width="25" height="23" rx="5" fill="#e4f2fb" stroke="#e4f2fb" />
+  <text x="1079.5" y="2082" fill="#075b8b" font-size="15" font-weight="700" font-family="DejaVu Sans, sans-serif">D</text>
+  <path d="M56 2095 V2107 H65" fill="none" stroke="#a9bac7" stroke-width="1.5" />
+  <text x="68" y="2112" fill="#1c3346" font-size="17" font-weight="400" font-family="DejaVu Sans Mono, monospace" data-max-x="654"><tspan fill="#1c3346" font-weight="400">envs/cadd-python2/</tspan></text>
+  <text x="676" y="2112" fill="#51677a" font-size="16" font-weight="400" font-family="DejaVu Sans, sans-serif" data-max-x="1064">Separate original CADD raw/PHRED scorer.</text>
+  <rect x="1073" y="2095" width="25" height="23" rx="5" fill="#e4f2fb" stroke="#e4f2fb" />
+  <text x="1079.5" y="2112" fill="#075b8b" font-size="15" font-weight="700" font-family="DejaVu Sans, sans-serif">D</text>
+  <path d="M56 2125 V2137 H65" fill="none" stroke="#a9bac7" stroke-width="1.5" />
+  <text x="68" y="2142" fill="#1c3346" font-size="17" font-weight="400" font-family="DejaVu Sans Mono, monospace" data-max-x="654"><tspan fill="#1c3346" font-weight="400">envs/cadd-esm-python/</tspan></text>
+  <text x="676" y="2142" fill="#51677a" font-size="16" font-weight="400" font-family="DejaVu Sans, sans-serif" data-max-x="1064">Pinned ESM feature dependencies.</text>
+  <rect x="1073" y="2125" width="25" height="23" rx="5" fill="#e4f2fb" stroke="#e4f2fb" />
+  <text x="1079.5" y="2142" fill="#075b8b" font-size="15" font-weight="700" font-family="DejaVu Sans, sans-serif">D</text>
+  <path d="M56 2155 V2167 H65" fill="none" stroke="#a9bac7" stroke-width="1.5" />
+  <text x="68" y="2172" fill="#1c3346" font-size="17" font-weight="400" font-family="DejaVu Sans Mono, monospace" data-max-x="654"><tspan fill="#1c3346" font-weight="400">envs/cadd-regseq-python/</tspan></text>
+  <text x="676" y="2172" fill="#51677a" font-size="16" font-weight="400" font-family="DejaVu Sans, sans-serif" data-max-x="1064">Pinned regulatory-sequence dependencies.</text>
+  <rect x="1073" y="2155" width="25" height="23" rx="5" fill="#e4f2fb" stroke="#e4f2fb" />
+  <text x="1079.5" y="2172" fill="#075b8b" font-size="15" font-weight="700" font-family="DejaVu Sans, sans-serif">D</text>
+  <path d="M56 2185 V2197 H65" fill="none" stroke="#a9bac7" stroke-width="1.5" />
+  <text x="68" y="2202" fill="#1c3346" font-size="17" font-weight="400" font-family="DejaVu Sans Mono, monospace" data-max-x="654"><tspan fill="#1c3346" font-weight="400">envs/cadd-mmsplice-python/</tspan></text>
+  <text x="676" y="2202" fill="#51677a" font-size="16" font-weight="400" font-family="DejaVu Sans, sans-serif" data-max-x="1064">Pinned MMSplice dependencies for GRCh38.</text>
+  <rect x="1073" y="2185" width="25" height="23" rx="5" fill="#e4f2fb" stroke="#e4f2fb" />
+  <text x="1079.5" y="2202" fill="#075b8b" font-size="15" font-weight="700" font-family="DejaVu Sans, sans-serif">D</text>
+  <path d="M56 2215 V2227 H65" fill="none" stroke="#a9bac7" stroke-width="1.5" />
+  <text x="68" y="2232" fill="#1c3346" font-size="17" font-weight="400" font-family="DejaVu Sans Mono, monospace" data-max-x="654"><tspan fill="#1c3346" font-weight="400">share/priva/cadd-1.7.2/</tspan></text>
+  <text x="676" y="2232" fill="#51677a" font-size="16" font-weight="400" font-family="DejaVu Sans, sans-serif" data-max-x="1064">Wrappers, prefix routes, receipts and profiles.</text>
+  <rect x="1073" y="2215" width="25" height="23" rx="5" fill="#eeeafb" stroke="#eeeafb" />
+  <text x="1079.5" y="2232" fill="#61429a" font-size="15" font-weight="700" font-family="DejaVu Sans, sans-serif">B</text>
+  <text x="48" y="2266" fill="#51677a" font-size="15" font-weight="400" font-family="DejaVu Sans, sans-serif" data-max-x="1130">Scoring: priva_acmg → original CADD Python child process → priva_acmg. No manual activation switch.</text>
+  <text x="48" y="2289" fill="#51677a" font-size="15" font-weight="400" font-family="DejaVu Sans, sans-serif" data-max-x="1130">The parent environment stays intact on success or failure; failures propagate. Legacy owned prefixes are reused.</text>
+  <rect x="24" y="2338" width="1132" height="185" rx="12" fill="white" stroke="#d5e0e8" />
+  <text x="47" y="2369" fill="#075ca8" font-size="23" font-weight="700" font-family="DejaVu Sans Mono, monospace" data-max-x="1140">&lt;tmp_dir&gt;/</text>
+  <text x="48" y="2395" fill="#51677a" font-size="15.5" font-weight="400" font-family="DejaVu Sans, sans-serif" data-max-x="1140">Temporary tool work and cache-building scratch; no family input is needed to install.</text>
+  <line x1="48" y1="2411" x2="1130" y2="2411" stroke="#d5e0e8" />
+  <path d="M56 2421 V2433 H65" fill="none" stroke="#a9bac7" stroke-width="1.5" />
+  <text x="68" y="2438" fill="#1c3346" font-size="17" font-weight="400" font-family="DejaVu Sans Mono, monospace" data-max-x="654"><tspan fill="#1c3346" font-weight="400">temporary build work/</tspan></text>
+  <text x="676" y="2438" fill="#51677a" font-size="16" font-weight="400" font-family="DejaVu Sans, sans-serif" data-max-x="1064">Some resumable cache staging stays beside</text>
+  <text x="676" y="2460" fill="#51677a" font-size="16" font-weight="400" font-family="DejaVu Sans, sans-serif" data-max-x="1064">its destination rather than under tmp_dir.</text>
+  <text x="48" y="2494" fill="#51677a" font-size="15" font-weight="400" font-family="DejaVu Sans, sans-serif" data-max-x="1130">Choose input_vcf, ped_file and output_dir separately when preparing an analysis run.</text>
+  <rect x="24" y="2543" width="1132" height="149" rx="12" fill="#eaf3fb" stroke="#cfdfec" />
+  <text x="46" y="2572" fill="#1c3346" font-size="19" font-weight="700" font-family="DejaVu Sans, sans-serif">Path tokens and defaults</text>
+  <text x="46" y="2601" fill="#075ca8" font-size="16" font-weight="400" font-family="DejaVu Sans, sans-serif" data-max-x="1132">{vep} = vep_installed_version (116); {ucsc} = hg19 or hg38; {GRCh} = GRCh37 or GRCh38.</text>
+  <text x="46" y="2627" fill="#075ca8" font-size="16" font-weight="400" font-family="DejaVu Sans, sans-serif" data-max-x="1132">{ucsc}/{GRCh} are normalized from assembly; {assembly} keeps its configured spelling (default hg19).</text>
+  <text x="46" y="2653" fill="#075ca8" font-size="15" font-weight="400" font-family="DejaVu Sans, sans-serif" data-max-x="1132">{cadd} = cadd_version (v1.7, pinned); {hpo} = hpo_release (v2026-06-23); {mondo} = mondo_release (v2026-07-06).</text>
+  <text x="46" y="2678" fill="#51677a" font-size="15" font-weight="400" font-family="DejaVu Sans, sans-serif" data-max-x="1132">Installation prepares resources. A changed annotation/scoring profile still requires its separate scientific qualification.</text>
+</svg>

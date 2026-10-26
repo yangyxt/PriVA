@@ -17,6 +17,12 @@ flowchart LR
 
 Use Linux x86-64, Bash, standard GNU tools, network access and Micromamba, Mamba or Conda. Begin in this checkout; the commands below move to an external run directory before launching Nextflow. Keep source, input and storage paths free of spaces or shell metacharacters. Genome-wide resource acquisition and cache building need suitable disk, memory and batch resources.
 
+The tree below shows the default storage locations and how each resource is prepared. Blue path names and tokens follow the YAML configuration; the labels distinguish downloads, builds, manual inputs, bundled snapshots and package exports. Bundled data stay in the checkout; fresh CADD environments use the existing Mamba root. The Nextflow driver and JRE have their own cache-root entry.
+
+[![PriVA-nextflow installation tree showing bundled data, separate Mamba environments, configurable cache paths, the Nextflow driver and scratch space, with resource preparation labels.](docs/installation_layout.svg)](docs/installation_layout.svg)
+
+[Open the full-size SVG](docs/installation_layout.svg). Supplied originals are preserved; managed copies and converted outputs use the configured cache folders. Explicit reference/mapping paths and completed legacy software retain their selected locations.
+
 ```bash
 PRIVA_ROOT="$(pwd)"
 cp "$PRIVA_ROOT/config.yaml" ../priva-nextflow.local.yaml

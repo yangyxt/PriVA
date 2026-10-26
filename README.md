@@ -50,6 +50,22 @@ The installer creates or prepares `priva_acmg`, uses bundled snapshots where sup
 
 Activate `priva_acmg` with the environment manager used for installation before running analysis, for example `micromamba activate priva_acmg` or `conda activate priva_acmg`.
 
+CADD raw/PHRED calculation uses the separate `cadd-python2` Mamba environment with the original upstream Python and scientific packages. The workflow runs its interpreter in a child process, then continues in `priva_acmg`; no manual activation or switch back is required. Failures propagate to the calling task while the main environment remains intact.
+
+```text
+priva_acmg → CADD Python child process → priva_acmg
+```
+
+Fresh native installs place `cadd-*` environments beside `priva_acmg` under the existing Mamba root and their launch wrappers under that root's `share/priva/cadd-1.7.2/`. Completed older installations are reused in place. CADD annotation feature tools additionally retain their separately pinned `cadd-esm-python`, `cadd-regseq-python` and, for GRCh38, `cadd-mmsplice-python` environments.
+
+At completion, the installer exports the packages actually installed, including version/build pins and pip dependencies, to `cache_root/priva_acmg.installed.yml` and `cache_root/cadd-*.installed.yml`. These portable YAML files omit host prefixes and environment variables. To repeat only this export:
+
+```bash
+bash "$PRIVA_ROOT/scripts/install_utils.sh" priva_export_installed_environment --config "$PRIVA_CONFIG"
+```
+
+Small HGNC snapshots and assembly/release-specific transcript mappings remain bundled under [`data/hgnc`](data/hgnc/README.md). Default installation selects the mapping for the configured assembly and VEP major; explicitly supplied mappings stay selected. Different versions have distinct filenames.
+
 ## Prepare inputs
 
 Create an external run directory, then run analysis from there:

@@ -480,7 +480,8 @@ def sort_and_rank_variants(df: pd.DataFrame,
                            pext_penalty_shape: float = 0.5,
                            relevant_gene_list: str = None,
                            dispensable_gene_list: str = DEFAULT_DISPENSABLE_GENE_LIST,
-                           terminal_order_binary: str = None) -> pd.DataFrame:
+                           terminal_order_binary: str = None,
+                           ranking_binary: str = None) -> pd.DataFrame:
     """
     Sort variants by their maximum ACMG quantitative score and add ranking.
 
@@ -488,17 +489,29 @@ def sort_and_rank_variants(df: pd.DataFrame,
         df: DataFrame with ACMG_quant_score column and variant information
         terminal_order_binary: Explicit opt-in PriVA Rust CLI for final ordering
             only. None retains Python; unsupported inputs use the original tail.
+        ranking_binary: Explicit opt-in single PriVA Rust CLI for the integrated
+            R1 setup and R8 ordering. Other stages retain their original Python.
 
     Returns:
         DataFrame sorted by variant's max ACMG score with added variant rank column
     """
-    df = df.copy()
-    for stale_col in ("haplo_insuf_index", "zygosity_inheritance_mechanism_index"):
-        if stale_col in df.columns:
-            df = df.drop(columns=[stale_col])
+    # 26 October 2026 CT: optional R1 plan, before the original PED/control
+    # stages. The adapter keeps the caller unchanged on fallback. Preserve all
+    # four original statements and their order in the default/fallback branch.
+    native_setup = None
+    if ranking_binary is not None:
+        from priva_rust_rank_setup import try_rank_setup
+        native_setup = try_rank_setup(df, ranking_binary)
+    if native_setup is None:
+        df = df.copy()
+        for stale_col in ("haplo_insuf_index", "zygosity_inheritance_mechanism_index"):
+            if stale_col in df.columns:
+                df = df.drop(columns=[stale_col])
 
-    df["sort_index"] = df.loc[:, "ACMG_quant_score"]
-    df = df.loc[df["BIOTYPE"] == "protein_coding", :]
+        df["sort_index"] = df.loc[:, "ACMG_quant_score"]
+        df = df.loc[df["BIOTYPE"] == "protein_coding", :]
+    else:
+        df = native_setup
 
     # NOTE: proband_het must be created AFTER filtering to match df's shape
     if ped_df is not None and fam_name is not None:
@@ -670,9 +683,10 @@ def sort_and_rank_variants(df: pd.DataFrame,
     # 26 October 2026 CT: integrate only the existing R8 native boundary after
     # all original C1-C5/R1-R7 statements. Keep Python as the default and retain
     # these original statements verbatim for atomic current-frame fallback.
-    if terminal_order_binary is not None:
+    if terminal_order_binary is not None or ranking_binary is not None:
         from priva_rust_terminal_order import try_terminal_order
-        native_order = try_terminal_order(df, terminal_order_binary)
+        native_order = try_terminal_order(
+            df, terminal_order_binary if terminal_order_binary is not None else ranking_binary)
         if native_order is not None:
             return native_order
 

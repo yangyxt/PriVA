@@ -1151,7 +1151,7 @@ function _priva_run_VEP_command() {
     fi
 
     # Run VEP annotation
-    "${cadd_vep_environment[@]}" vep -i "${input_vcf}" \
+    local -a priva_vep_command=("${cadd_vep_environment[@]}" vep -i "${input_vcf}" \
     --format vcf \
     --verbose \
     --vcf \
@@ -1187,7 +1187,14 @@ function _priva_run_VEP_command() {
     ${pext_arguments} \
     "${cadd_vep_args[@]}" \
     --force_overwrite \
-    -o "${output_vcf}"
+    -o "${output_vcf}")
+    if [[ -n $cadd_profile ]]; then
+        python "${SCRIPT_DIR}/cadd_shared_workflow.py" verify-vep-invocation \
+            --config "$config_file" --profile "$cadd_profile" \
+            --input "$input_vcf" --output "$output_vcf" --stats "$stats_file" \
+            -- "${priva_vep_command[@]}" || return $?
+    fi
+    "${priva_vep_command[@]}"
 }
 
 

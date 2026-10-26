@@ -256,13 +256,13 @@ class SharedWorkflowTests(unittest.TestCase):
         self.assertEqual([M.key(row) for row in rows],[('chr1','10','A','T')])
         self.assertEqual(rows[0][7],self.row(alt='T',chrom='chr1')[7])
 
-    def shell_fixture(self, purpose, *, existing_csq=False):
+    def shell_fixture(self, purpose, *, existing_csq=False, reject_invocation=False):
         scripts=self.root/'shell-scripts'; scripts.mkdir()
         binary=self.root/'shell-bin'; binary.mkdir()
         (scripts/'argparse.bash').write_text('argparse() { while [[ $# -gt 0 ]]; do case "$1" in --input_vcf) input_vcf=$2;; --config) config=$2;; --threads) threads=$2;; --cadd-profile) cadd_profile=$2;; esac; shift 2; done; }\n')
         for name in ('anno_vep_args',): (scripts/name).write_text('# fixture parser uses named inputs\n')
         helper=scripts/'cadd_shared_workflow.py'
-        helper.write_text('import sys\nif sys.argv[1]=="vep-options": print("/fixture/plugins\\nEnsembl\\n116\\n0")\nelif sys.argv[1]=="verify-source" and '+repr(existing_csq)+': raise SystemExit(2)\n')
+        helper.write_text('import json,os,pathlib,sys\nif sys.argv[1]=="vep-options": print("/fixture/plugins\\nEnsembl\\n116\\n0")\nelif sys.argv[1]=="verify-source" and '+repr(existing_csq)+': raise SystemExit(2)\nelif sys.argv[1]=="verify-vep-invocation":\n pathlib.Path(os.environ["FIXTURE"],"verified-vep-argv.json").write_text(json.dumps(sys.argv[sys.argv.index("--")+1:]))\n if '+repr(reject_invocation)+': raise SystemExit(71)\n')
         (scripts/'clinvar_gene_refresh.py').write_text('# fixture-only installer receipt endpoint\n')
         (self.root/'input.vcf').write_text('##fileformat=VCFv4.2\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\n1\t10\t.\tA\tG\t.\t.\t.\n')
         (self.root/'input.vcf.gz').write_bytes(b'fixture; subprocess VCF tools are mocks')
@@ -301,6 +301,14 @@ tabix() { touch -- "${@: -1}.tbi"; }
         self.assertTrue(any(item.startswith('SpliceAI,') for item in argv))
         self.assertNotIn('--per_gene',argv); self.assertNotIn('--pick',argv)
         self.assertEqual(observed['hash_seed'],'0')
+        verified=M.read_json(self.root/'verified-vep-argv.json')
+        self.assertEqual(verified, ['env','PERL_HASH_SEED=0','PERL_PERTURB_KEYS=0','vep',*argv])
+
+    def test_rejected_actual_invocation_never_starts_vep(self):
+        result=self.shell_fixture('anno_VEP_data',reject_invocation=True)
+        self.assertEqual(result.returncode,71,result.stderr)
+        self.assertTrue((self.root/'verified-vep-argv.json').is_file())
+        self.assertFalse((self.root/'vep-argv.json').exists())
 
     def test_installer_candidate_does_not_activate_cadd_options(self):
         result=self.shell_fixture('anno_VEP_cache_candidate')
@@ -328,6 +336,123 @@ tabix() { touch -- "${@: -1}.tbi"; }
         self.assertEqual(logged['profile_sha256'],M.digest(profile_path))
         self.assertEqual(logged['selection_context_sha256'],'a'*64)
         self.assertEqual(logged['annotation_options'],{'regulatory':'1'})
+
+
+class FullPrivaVepContractTests(unittest.TestCase):
+    """Scientific-profile provenance checks use private tiny files, not models."""
+    def setUp(self):
+        self.temporary=tempfile.TemporaryDirectory(prefix='cadd-full-invocation-',
+            dir=os.environ.get('PRIVA_TEST_TMPDIR',os.environ.get('TMPDIR')))
+        self.addCleanup(self.temporary.cleanup); self.root=Path(self.temporary.name)
+        self.binary=self.root/'bin'; self.binary.mkdir()
+        self.vep=self.binary/'vep'; self.vep.write_text('#!/bin/sh\nexit 99\n'); self.vep.chmod(0o755)
+        self.environment=mock.patch.dict(os.environ,PATH=str(self.binary)+':'+os.environ['PATH'])
+        self.environment.start(); self.addCleanup(self.environment.stop)
+        self.module=self.root/'FixturePlugin.pm'; self.module.write_text('# tiny test source\n')
+        self.resource=self.root/'scientific-resource'; self.resource.write_text('tiny explicit fixture\n')
+        self.config={key:None for key in M.PRIVA_VEP_CONFIGURATION_KEYS}
+        self.config.update(assembly='GRCh38',vep_installed_version='116',threads=2)
+        self.command=['env','PERL_HASH_SEED=0','PERL_PERTURB_KEYS=0','vep',
+            '-i',str(self.root/'input.vcf'),'--stats_file',str(self.root/'stats.html'),
+            '--fork','2','--buffer_size','10000','--plugin','FixturePlugin,file=exact',
+            '-o',str(self.root/'output.vcf')]
+        stat=self.resource.stat()
+        self.block={'schema_version':1,'configuration':dict(self.config),
+            'sources':{name:M.digest(ROOT/name) for name in M.PRIVA_VEP_SOURCES},
+            'invocation':self.normalized(self.command),
+            'executable':{'path':str(self.vep.resolve()),'sha256':M.digest(self.vep)},
+            'plugin_modules':{str(self.module):M.digest(self.module)},
+            'resource_roots':[str(self.resource)],
+            'resources':{str(self.resource):{'path':str(self.resource.resolve()),'size':stat.st_size,'mtime_ns':stat.st_mtime_ns}}}
+        # This is deliberately not a scientific qualification receipt. The
+        # independent native preflight validates that separate schema later.
+        self.evidence=self.root/'fixture-invocation-binding.json'
+        M.save(self.evidence,{'fixture_only':True,'priva_vep_contract_sha256':M.json_hash(self.block)})
+        self.profile={'priva_vep':self.block,'annotation':{'shared_vep':{
+            'selection_context':{'perl_hash_seed':'0','perl_perturb_keys':'0'},
+            'qualification':{'path':str(self.evidence),'sha256':M.digest(self.evidence)}}}}
+
+    def normalized(self, command):
+        return M.normalized_vep_invocation(command,self.root/'input.vcf',self.root/'output.vcf',self.root/'stats.html')
+
+    def arguments(self, command=None):
+        return argparse.Namespace(input=str(self.root/'input.vcf'),output=str(self.root/'output.vcf'),
+            stats=str(self.root/'stats.html'),vep_command=list(command or self.command))
+
+    def test_valid_explicit_contract_and_same_actual_tokens_pass_without_execution(self):
+        self.assertEqual(M.verify_priva_vep_profile(self.config,self.profile),self.block)
+        fixture=(self.config,self.root/'profile.json',self.profile,None,None,None)
+        with mock.patch.object(M,'preflight',return_value=fixture), mock.patch.object(M.subprocess,'run',side_effect=AssertionError('No VEP/model')):
+            M.verify_vep_invocation(self.arguments())
+        self.assertFalse((self.root/'output.vcf').exists())
+
+    def test_only_exact_task_destinations_can_change(self):
+        changed=list(self.command)
+        for flag,name in (('-i','different input.vcf'),('-o','different output.vcf'),('--stats_file','different stats.html')):
+            changed[changed.index(flag)+1]=str(self.root/name)
+        actual=M.normalized_vep_invocation(changed,self.root/'different input.vcf',
+            self.root/'different output.vcf',self.root/'different stats.html')
+        self.assertEqual(actual,self.block['invocation'])
+        with self.assertRaisesRegex(M.WorkflowError,'destination differs'): self.normalized(changed)
+
+    def test_cli_plugin_fork_buffer_order_and_seed_drift_are_rejected(self):
+        fixture=(self.config,self.root/'profile.json',self.profile,None,None,None)
+        changes=[]
+        for flag,value in (('--plugin','OtherPlugin,file=exact'),('--fork','3'),('--buffer_size','1000')):
+            row=list(self.command); row[row.index(flag)+1]=value; changes.append(row)
+        row=list(self.command); row[1]='PERL_HASH_SEED=1'; changes.append(row)
+        row=list(self.command); row[1],row[2]=row[2],row[1]; changes.append(row)
+        row=list(self.command); offset=row.index('--plugin'); row[offset:offset+2]=['--plugin','ExtraPlugin',*row[offset:offset+2]]; changes.append(row)
+        with mock.patch.object(M,'preflight',return_value=fixture):
+            for changed in changes:
+                with self.subTest(command=changed),self.assertRaises(M.WorkflowError):
+                    M.verify_vep_invocation(self.arguments(changed))
+
+    def test_missing_context_duplicate_task_options_and_implicit_seed_fail(self):
+        for changed in (self.command[3:], [*self.command,'-i',str(self.root/'input.vcf')],
+                        ['env','PERL_HASH_SEED=0','PERL_HASH_SEED=0',*self.command[3:]]):
+            with self.subTest(command=changed),self.assertRaises(M.WorkflowError): self.normalized(changed)
+
+    def test_config_source_plugin_resource_and_executable_drift_fail_closed(self):
+        config=dict(self.config,threads=3)
+        with self.assertRaisesRegex(M.WorkflowError,'Configured PriVA'): M.verify_priva_vep_profile(config,self.profile)
+        digest=M.digest
+        def changed_source(path):
+            return '0'*64 if Path(path)==ROOT/'scripts/annotation_vcf.sh' else digest(path)
+        with mock.patch.object(M,'digest',side_effect=changed_source),self.assertRaisesRegex(M.WorkflowError,'command/resolution source'):
+            M.verify_priva_vep_profile(self.config,self.profile)
+        original=self.module.read_bytes(); self.module.write_bytes(original+b'# drift\n')
+        with self.assertRaisesRegex(M.WorkflowError,'plugin source'): M.verify_priva_vep_profile(self.config,self.profile)
+        self.module.write_bytes(original)
+        self.resource.write_text('changed tiny fixture resource\n')
+        with self.assertRaisesRegex(M.WorkflowError,'scientific resource'): M.verify_priva_vep_profile(self.config,self.profile)
+        # Restore its exact pinned timestamp before the independent executable check.
+        self.resource.write_text('tiny explicit fixture\n')
+        os.utime(self.resource,ns=(self.resource.stat().st_atime_ns,self.block['resources'][str(self.resource)]['mtime_ns']))
+        self.vep.write_text('#!/bin/sh\nexit 98\n')
+        with self.assertRaisesRegex(M.WorkflowError,'executable differs'): M.verify_priva_vep_profile(self.config,self.profile)
+
+    def test_qualification_must_bind_the_entire_exact_invocation_contract(self):
+        changed=json.loads(json.dumps(self.profile)); changed['priva_vep']['invocation']['arguments'].append('--verbose')
+        with self.assertRaisesRegex(M.WorkflowError,'independent selection qualification'):
+            M.verify_priva_vep_profile(self.config,changed)
+
+    def test_resource_directory_membership_drift_is_rejected(self):
+        folder=self.root/'cache-members'; folder.mkdir()
+        member=folder/'original'; member.write_text('tiny cache member\n')
+        task=M.native_modules()[0]
+        self.block['resource_roots'].append(str(folder))
+        self.block['resources']=task.inventory(self.block['resource_roots'])
+        self.evidence.write_text(json.dumps({'fixture_only':True,'priva_vep_contract_sha256':M.json_hash(self.block)}))
+        self.profile['annotation']['shared_vep']['qualification']['sha256']=M.digest(self.evidence)
+        M.verify_priva_vep_profile(self.config,self.profile)
+        (folder/'unexpected').write_text('unqualified extra cache member\n')
+        with self.assertRaisesRegex(M.WorkflowError,'resource membership'):
+            M.verify_priva_vep_profile(self.config,self.profile)
+
+    def test_absent_full_contract_is_rejected_before_any_scientific_work(self):
+        with self.assertRaisesRegex(M.WorkflowError,'unqualified'):
+            M.verify_priva_vep_profile(self.config,{'annotation':{'shared_vep':{}}})
 
 
 if __name__ == '__main__': unittest.main()

@@ -29,6 +29,20 @@ ROOT = Path(__file__).resolve().parents[1]
 POLICY = 'upstream-v1.7.2-inclAnno-v1'
 CHECKS = {'prepared_allele_mapping': 'exact', 'publisher_import': 'exact',
           'novel_feature_joins': 'exact', 'source_order': 'preserved', 'missingness': 'preserved'}
+PRIVA_VEP_CONFIGURATION_KEYS = (
+    'assembly', 'vep_installed_version', 'ref_genome', 'vep_cache_dir',
+    'vep_plugins_dir', 'vep_plugins_cachedir', 'threads', 'utr_annotator_file',
+    'loeuf_prescore', 'alphamissense_prescore', 'spliceai_snv_prescore',
+    'spliceai_indel_prescore', 'splicevault_prescore', 'primateai_prescore',
+    'loftee_repo', 'human_ancestor_fasta', 'loftee_conservation_file',
+    'gerp_bigwig', 'conservation_file', 'mavedb_file', 'pext_enabled',
+    'pext_mean_bw', 'pext_tissue_bw_dir', 'pext_tissues',
+)
+PRIVA_VEP_SOURCES = (
+    'scripts/annotation_vcf.sh', 'scripts/anno_vep_args',
+    'scripts/argparse.bash', 'scripts/common_bash_utils.sh',
+    'scripts/cadd_shared_workflow.py',
+)
 
 
 class WorkflowError(ValueError):
@@ -121,6 +135,111 @@ def native_modules():
     return task, shared, view, native
 
 
+def normalized_vep_invocation(command, source, output, stats):
+    """Retain every actual token except the three task-specific destinations.
+
+    The production shell passes the same array that it subsequently executes.
+    Do not reconstruct defaults or use shell/eval parsing of configuration.
+    """
+    command = list(command)
+    if command[:1] == ['--']:
+        command = command[1:]
+    require(len(command) > 4 and command[0] == 'env' and command[3] == 'vep',
+            'Qualified PriVA VEP requires the explicit env/Perl context invocation')
+    require(command[1].startswith('PERL_HASH_SEED=') and command[2] == 'PERL_PERTURB_KEYS=0',
+            'Qualified PriVA VEP environment token order differs')
+    environment = {}
+    for token in command[1:3]:
+        require('=' in token, 'Incomplete explicit PriVA VEP environment')
+        name, value = token.split('=', 1)
+        require(name not in environment, 'Repeated explicit PriVA VEP environment')
+        environment[name] = value
+    require(set(environment) == {'PERL_HASH_SEED', 'PERL_PERTURB_KEYS'}
+            and environment['PERL_HASH_SEED'] and environment['PERL_PERTURB_KEYS'] == '0',
+            'Qualified PriVA VEP requires explicit hash seed and perturbation zero')
+    arguments = command[3:]
+    for flag, actual, marker in (('-i', source, '@INPUT@'), ('-o', output, '@OUTPUT@'),
+                                 ('--stats_file', stats, '@STATS@')):
+        require(arguments.count(flag) == 1, 'Missing or repeated PriVA VEP task option: ' + flag)
+        index = arguments.index(flag) + 1
+        require(index < len(arguments) and arguments[index] == str(actual),
+                'PriVA VEP task destination differs: ' + flag)
+        arguments[index] = marker
+    execution = {}
+    for flag, name in (('--fork', 'fork'), ('--buffer_size', 'buffer_size')):
+        require(arguments.count(flag) == 1, 'Missing or repeated PriVA VEP execution option: ' + flag)
+        index = arguments.index(flag) + 1
+        require(index < len(arguments) and arguments[index].isdigit() and int(arguments[index]) > 0,
+                'PriVA VEP execution option must be an explicit positive integer: ' + flag)
+        execution[name] = int(arguments[index])
+    return {'environment': environment, 'arguments': arguments, 'execution': execution}
+
+
+def verify_priva_vep_profile(config, profile):
+    """Verify a separately qualified full invocation, without changing caches.
+
+    These are scientific-profile bindings, not installer checks for repository
+    snapshots. Installation and bundled-data adoption retain their own policy.
+    """
+    block = profile.get('priva_vep')
+    require(isinstance(block, dict) and block.get('schema_version') == 1,
+            'Full PriVA shared VEP invocation is unqualified: bind its actual source, options and resources')
+    expected_config = {key: config.get(key) for key in PRIVA_VEP_CONFIGURATION_KEYS}
+    require(block.get('configuration') == expected_config,
+            'Configured PriVA VEP settings differ from the qualified full invocation')
+    require(block.get('sources') == {name: digest(ROOT / name) for name in PRIVA_VEP_SOURCES},
+            'PriVA VEP command/resolution source differs from the qualified full invocation')
+    invocation = block.get('invocation', {})
+    context = profile['annotation']['shared_vep']['selection_context']
+    require(invocation.get('environment') == {'PERL_HASH_SEED': context['perl_hash_seed'],
+                                             'PERL_PERTURB_KEYS': context['perl_perturb_keys']},
+            'Full PriVA VEP invocation differs from the qualified native Perl context')
+    arguments = invocation.get('arguments')
+    require(isinstance(arguments, list) and all(isinstance(item, str) for item in arguments),
+            'Qualified full PriVA VEP argument array is missing')
+    # Validate the captured contract itself with the same token checks used at
+    # execution. Placeholders occur only in the three explicit task positions.
+    replay = normalized_vep_invocation(
+        ['env'] + [name + '=' + invocation['environment'][name]
+                   for name in ('PERL_HASH_SEED', 'PERL_PERTURB_KEYS')] + arguments,
+        '@INPUT@', '@OUTPUT@', '@STATS@')
+    require(replay == invocation, 'Qualified PriVA VEP invocation is not a complete typed token contract')
+    require(invocation['execution']['buffer_size'] == 10000,
+            'Qualified PriVA VEP buffer differs from the actual production command')
+    program = shutil.which('vep')
+    executable = block.get('executable', {})
+    require(program and str(Path(program).resolve()) == executable.get('path')
+            and digest(program) == executable.get('sha256'),
+            'PriVA VEP executable differs from the qualified full invocation')
+    modules = block.get('plugin_modules', {})
+    require(isinstance(modules, dict) and modules, 'Qualified PriVA VEP plugin sources are missing')
+    for path, checksum in modules.items():
+        require(Path(path).is_absolute() and digest(path) == checksum,
+                'PriVA VEP plugin source differs from its qualified invocation: ' + path)
+    resources = block.get('resources', {})
+    require(isinstance(resources, dict) and resources, 'Qualified PriVA VEP resource identities are missing')
+    for path, expected in resources.items():
+        resolved = Path(path).resolve(strict=True)
+        stat = resolved.stat()
+        require(resolved.is_file() and expected == {'path': str(resolved), 'size': stat.st_size,
+                                                   'mtime_ns': stat.st_mtime_ns},
+                'PriVA VEP scientific resource differs from its qualified invocation: ' + path)
+    roots = block.get('resource_roots')
+    require(isinstance(roots, list) and roots and all(isinstance(path, str) for path in roots),
+            'Qualified PriVA VEP resource membership roots are missing')
+    task = native_modules()[0]
+    require(task.inventory(roots) == resources,
+            'PriVA VEP scientific resource membership differs from its qualified invocation')
+    settings = profile['annotation']['shared_vep']
+    qualification = settings.get('qualification') or {}
+    require(qualification.get('path') and digest(qualification['path']) == qualification.get('sha256'),
+            'Qualified full PriVA VEP selection receipt is missing or changed')
+    evidence = read_json(qualification['path'])
+    require(evidence.get('priva_vep_contract_sha256') == json_hash(block),
+            'Full PriVA VEP invocation is not bound to its independent selection qualification')
+    return block
+
+
 def selection(args, config):
     selected = args.profile or config.get('cadd_profile')
     if not selected:
@@ -182,11 +301,20 @@ def preflight(args):
     require(isinstance(config, dict), 'CONFIG must be a YAML mapping')
     profile_path = selection(args, config)
     task, shared, view, native = native_modules()
+    profile = task.load_profile(profile_path, task.ALIASES.get(config.get('assembly')))
+    verify_priva_vep_profile(config, profile)
     profile = native.preflight(config, profile_path)
     block, original = check_prescoring(profile, task)
     require(Path(config.get('tmp_dir', '')).is_absolute() and Path(config['tmp_dir']).is_dir(),
             'Configured tmp_dir must be an existing absolute directory')
     return config, profile_path, profile, block, original, (task, shared, view, native)
+
+
+def verify_vep_invocation(args):
+    config, _, profile, _, _, _ = preflight(args)
+    expected = verify_priva_vep_profile(config, profile)['invocation']
+    actual = normalized_vep_invocation(args.vep_command, args.input, args.output, args.stats)
+    require(actual == expected, 'Actual PriVA VEP invocation differs from the qualified full profile')
 
 
 def native_rows(source, profile, modules, temporary):
@@ -569,14 +697,17 @@ def extract_misses(args):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest='command', required=True)
-    for name in ('preflight', 'vep-options', 'verify-source', 'calculate', 'hub-check', 'hub-record', 'extract-misses'):
+    for name in ('preflight', 'vep-options', 'verify-vep-invocation', 'verify-source', 'calculate', 'hub-check', 'hub-record', 'extract-misses'):
         command = commands.add_parser(name)
         command.add_argument('--config', required=True)
         command.add_argument('--profile')
-        if name in ('verify-source', 'calculate', 'extract-misses'):
+        if name in ('verify-source', 'verify-vep-invocation', 'calculate', 'extract-misses'):
             command.add_argument('--input', required=True)
-        if name in ('calculate', 'extract-misses'):
+        if name in ('calculate', 'verify-vep-invocation', 'extract-misses'):
             command.add_argument('--output', required=True)
+        if name == 'verify-vep-invocation':
+            command.add_argument('--stats', required=True)
+            command.add_argument('vep_command', nargs=argparse.REMAINDER)
         if name in ('hub-check', 'hub-record'):
             command.add_argument('--hub', required=True)
         if name == 'extract-misses':
@@ -587,6 +718,8 @@ def main(argv=None):
             print(preflight(args)[1])
         elif args.command == 'vep-options':
             vep_options(args)
+        elif args.command == 'verify-vep-invocation':
+            verify_vep_invocation(args)
         elif args.command == 'verify-source':
             verify_source(args)
         elif args.command == 'calculate':

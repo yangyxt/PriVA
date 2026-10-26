@@ -23,6 +23,11 @@ class RuntimeInstaller(unittest.TestCase):
                                                      dir=os.environ.get("PRIVA_TEST_TMPDIR", os.environ.get("TMPDIR")))
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name)
+        self.mamba = self.root / "mamba"
+        selected = patch.dict(os.environ, CONDA_PREFIX=str(self.mamba / "envs/priva_acmg"),
+                              MAMBA_ROOT_PREFIX=str(self.mamba))
+        selected.start()
+        self.addCleanup(selected.stop)
         self.manifest = ROOT / "scripts/cadd_runtime_pins.json"
         self.pins = installer.load_pins(self.manifest)
         self.args = installer.arguments(["--config-json", "{}", "--stage", "calculate",
@@ -47,13 +52,13 @@ class RuntimeInstaller(unittest.TestCase):
         with patch("sys.stderr", io.StringIO()), self.assertRaises(SystemExit):
             installer.arguments(["--config-json", "{}", "--stage", "score"])
 
-    def test_legacy_source_without_cache_root_anchors_defaults_below_source(self):
+    def test_legacy_source_without_cache_root_keeps_software_beside_priva(self):
         args = installer.arguments(["--config-json", "{}"])
         source = self.root / "legacy/CADD-scripts-1.7.2"
         paths = installer.installation_paths({"cadd_base_dir": str(source)}, args)
-        self.assertEqual(paths, (None, source, source / ".priva-runtime",
-                                source / ".priva-runtime/receipts", source / ".priva-runtime/receipts/tmp",
-                                source / ".priva-runtime/bin/cadd-python-calculate"))
+        runtime = self.mamba / "share/priva/cadd-1.7.2"
+        self.assertEqual(paths, (None, source, runtime, runtime / "receipts", runtime / "receipts/tmp",
+                                runtime / "bin/cadd-python-calculate"))
         self.assertFalse(source.exists())
 
     def test_missing_empty_or_null_root_never_uses_cwd_without_selected_source(self):
@@ -72,15 +77,16 @@ class RuntimeInstaller(unittest.TestCase):
         self.assertEqual(paths[3], self.args.state_dir)
         self.assertEqual(paths[5], self.args.calculation_program)
 
-    def test_fresh_configured_root_keeps_runtime_within_selected_cache_root(self):
+    def test_fresh_configured_root_keeps_data_in_cache_and_runtime_beside_priva(self):
         args = installer.arguments(["--config-json", "{}"])
         cache_root = self.root / "caches"
         paths = installer.installation_paths({"cache_root": str(cache_root)}, args)
         self.assertEqual(paths[0], cache_root)
         self.assertEqual(paths[1], cache_root / "CADD/CADD-scripts-1.7.2")
-        self.assertEqual(paths[2], cache_root / "runtime/cadd-1.7.2")
-        self.assertEqual(paths[4], cache_root / "runtime/cadd-1.7.2/receipts/tmp")
-        self.assertEqual(paths[5], cache_root / "runtime/cadd-1.7.2/bin/cadd-python-calculate")
+        runtime = self.mamba / "share/priva/cadd-1.7.2"
+        self.assertEqual(paths[2], runtime)
+        self.assertEqual(paths[4], runtime / "receipts/tmp")
+        self.assertEqual(paths[5], runtime / "bin/cadd-python-calculate")
         self.assertFalse(cache_root.exists())
 
     def test_configured_tmp_dir_selects_scratch_without_creating_it(self):
@@ -125,7 +131,7 @@ class RuntimeInstaller(unittest.TestCase):
         image.write_bytes(b"manual image")
         args = installer.arguments(["--config-json", "{}"])
         paths = installer.installation_paths({"cache_root": str(cache_root)}, args, self.pins)
-        self.assertEqual(paths[2], cache_root / "runtime/cadd-1.7.2")
+        self.assertEqual(paths[2], self.mamba / "share/priva/cadd-1.7.2")
         self.assertEqual(image.read_bytes(), b"manual image")
         self.assertFalse(cache_root.exists())
 
@@ -354,7 +360,7 @@ class RuntimeInstaller(unittest.TestCase):
         env_file.parent.mkdir(parents=True)
         env_file.write_text("dependencies: [python=2.7.13]\n")
         folder = self.root / "native-runtime"
-        prefix = folder / "envs/cadd-python2"
+        prefix = self.mamba / "envs/cadd-python2"
         def install_prefix(command, **kwargs):
             (prefix / "bin").mkdir(parents=True)
             (prefix / "bin/python").write_text("fixture interpreter")
@@ -367,7 +373,7 @@ class RuntimeInstaller(unittest.TestCase):
             self.assertEqual(record["backend"], "native")
             self.assertEqual(run.call_count, 1)
             self.assertIn("python=2.7.13=0", run.call_args.args[0])
-            self.assertIn(str(folder / "mamba"), run.call_args.args[0])
+            self.assertIn(str(self.mamba), run.call_args.args[0])
             self.assertEqual(run.call_args.kwargs["env"]["PIP_CACHE_DIR"], str(folder / "pip-cache"))
         with patch.object(installer, "run", side_effect=AssertionError("no package solve")):
             installer.native_environments(folder, source, ("cadd-python2",), self.root / "tmp",
@@ -398,7 +404,7 @@ class RuntimeInstaller(unittest.TestCase):
         original.parent.mkdir(parents=True)
         original.write_text("dependencies: [python=2.7.13]\n")
         folder = self.root / "runtime"
-        prefix = folder / "envs/cadd-python2"
+        prefix = self.mamba / "envs/cadd-python2"
         def install_prefix(command, **kwargs):
             (prefix / "bin").mkdir(parents=True)
             (prefix / "bin/python").write_text("fixture interpreter")
@@ -486,13 +492,13 @@ class RuntimeInstaller(unittest.TestCase):
                             "dependencies:\n  - python\n  - numpy\n  - pip\n"
                             "  - pip: [fair-esm==2.0.0]\n")
         folder = self.root / "runtime"
-        prefix = folder / "envs/cadd-esm-python"
+        prefix = self.mamba / "envs/cadd-esm-python"
         calls = []
         def install_prefix(command, **kwargs):
             calls.append(command)
             self.assertNotIn("PYTHONHOME", kwargs["env"])
             self.assertNotIn("PYTHONPATH", kwargs["env"])
-            self.assertEqual(kwargs["env"]["CONDA_PKGS_DIRS"], str(folder / "mamba/pkgs"))
+            self.assertEqual(kwargs["env"]["CONDA_PKGS_DIRS"], str(self.mamba / "pkgs"))
             self.assertEqual(kwargs["env"]["CONDA_CHANNEL_PRIORITY"], "flexible")
             if len(calls) == 1:
                 self.assertNotIn("--no-rc", command)
@@ -521,13 +527,13 @@ class RuntimeInstaller(unittest.TestCase):
         ready = json.loads((folder / "native-state/cadd-esm-python.ready.json").read_text())
         self.assertEqual(ready["pip_command"], calls[1])
 
-    def test_native_feature_yaml_stays_under_cache_and_retains_reference_distribution_pin(self):
+    def test_native_feature_yaml_stays_under_runtime_and_retains_reference_distribution_pin(self):
         source = self.root / "source"
         env_file = source / "envs/regulatorySequence.yml"
         env_file.parent.mkdir(parents=True)
         env_file.write_text("channels: [bioconda, conda-forge, nodefaults]\ndependencies: [seqiolib]\n")
         folder = self.root / "runtime"
-        prefix = folder / "envs/cadd-regseq-python"
+        prefix = self.mamba / "envs/cadd-regseq-python"
         def install_prefix(command, **kwargs):
             staged = Path(command[command.index("--file") + 1])
             self.assertTrue(staged.is_relative_to(folder))

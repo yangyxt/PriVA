@@ -255,7 +255,7 @@ def recognized_legacy_runtime(folder, state, pins):
 
 
 def installation_paths(config, args, pins=None):
-    """Anchor legacy configurations to their selected source, never an empty root."""
+    """Reuse owned legacy runtimes; fresh native software belongs to Mamba."""
     configured_root = config.get("cache_root")
     require(configured_root is None or isinstance(configured_root, str), "cache_root must be a path string")
     cache_root = Path(configured_root.strip()).absolute() if configured_root and configured_root.strip() else None
@@ -269,7 +269,33 @@ def installation_paths(config, args, pins=None):
     source = Path(selected_source).absolute()
     folder = args.runtime_dir
     if folder is None:
-        folder = cache_root / "runtime/cadd-1.7.2" if cache_root else source / ".priva-runtime"
+        legacy = cache_root / "runtime/cadd-1.7.2" if cache_root else source / ".priva-runtime"
+        if args.backend == "container":
+            folder = legacy
+        elif os.path.lexists(legacy):
+            require(not legacy.is_symlink() and legacy.is_dir() and legacy_native_owned(legacy),
+                    f"Existing CADD runtime is not an owned native installation: {legacy}; retained. "
+                    "Select a legacy container explicitly, or review the existing path")
+            folder = legacy
+        else:
+            root = native_root_prefix(args.package_manager)
+            require(cache_root is None or not root.is_relative_to(cache_root),
+                    "New CADD environments must use the existing Mamba root outside cache_root")
+            folder = root / "share/priva/cadd-1.7.2"
+    folder = Path(folder).absolute()
+    if select_backend(args, folder) != "container":
+        if os.path.lexists(folder):
+            require(not folder.is_symlink() and folder.is_dir(), f"Unmanaged existing CADD runtime retained: {folder}")
+            require(os.path.lexists(folder / "native-prefixes") or legacy_native_owned(folder),
+                    f"Unmanaged existing CADD runtime retained: {folder}")
+        if os.path.lexists(folder / "native-prefixes"):
+            root = runtime.native_environment_prefix(folder, "cadd-python2").parent.parent
+            require(cache_root is None or not root.is_relative_to(cache_root),
+                    "New CADD environments must use the existing Mamba root outside cache_root")
+        elif not legacy_native_owned(folder):
+            root = native_root_prefix(args.package_manager)
+            require(cache_root is None or not root.is_relative_to(cache_root),
+                    "New CADD environments must use the existing Mamba root outside cache_root")
     state = args.state_dir or folder / "receipts"
     # Explicit CLI/environment scratch wins; main_install's configured tmp_dir
     # precedes the historical fallback for configurations without that key.
@@ -292,7 +318,7 @@ def native_environment_plan(folder, source, name, pins):
     """Describe original YAML bytes and measured scientific package constraints."""
     definition = pins["native"]["environments"][name]
     env_file = source / definition["environment_file"]
-    plan = {"schema_version": 1, "name": name, "prefix": str(folder / "envs" / name),
+    plan = {"schema_version": 1, "name": name, "prefix": str(runtime.native_environment_prefix(folder, name)),
             "source_commit": pins["source_commit"], "environment_file": str(env_file),
             "environment_sha256": sha256(env_file), "specs": definition.get("specs", []),
             "channels": definition.get("channels", [])}
@@ -314,12 +340,79 @@ def native_package_manager(selected=None):
     raise RuntimeError("Native CADD installation requires the existing micromamba, mamba or conda executable")
 
 
-def native_install_commands(manager, operation, folder, prefix, definition, staged):
+def native_root_prefix(manager=None):
+    """Derive the existing manager root without creating a nested root/cache.
+
+    Activated named environments identify their shared root directly. Otherwise
+    use the selected manager's existing root, never a CADD-specific bootstrap.
+    The bounded manager info query does not solve, install or activate anything.
+    """
+    active = os.environ.get("CONDA_PREFIX", "")
+    if active and Path(active).is_absolute() and Path(active).parent.name == "envs":
+        root = Path(active).parent.parent
+    elif os.environ.get("MAMBA_ROOT_PREFIX"):
+        root = Path(os.environ["MAMBA_ROOT_PREFIX"])
+    else:
+        manager = native_package_manager(manager)
+        environment = dict(os.environ)
+        environment.pop("PYTHONHOME", None)
+        environment.pop("PYTHONPATH", None)
+        result = subprocess.run([manager, "info", "--json"], check=True, capture_output=True,
+                                text=True, timeout=30, env=environment)
+        info = json.loads(result.stdout)
+        selected = info.get("root_prefix") or info.get("root prefix") or info.get("base environment")
+        require(isinstance(selected, str) and bool(selected.strip()),
+                "The selected CADD package manager did not report its existing root prefix")
+        root = Path(selected)
+    require(root.is_absolute() and ".." not in root.parts and "\n" not in str(root) and "\r" not in str(root),
+            "The existing Mamba root prefix must be an absolute ordinary path")
+    return root
+
+
+def legacy_native_owned(folder):
+    """An interrupted/completed old plan remains selected, including corruption."""
+    state = Path(folder) / "native-state"
+    require(not state.is_symlink(), f"Linked native CADD state is not an owned runtime: {state}; retained")
+    return any(os.path.lexists(state / (name + suffix)) for name in runtime.CADD_ENVIRONMENTS
+               for suffix in (".plan.json", ".ready.json"))
+
+
+def prepare_native_prefixes(folder, manager=None, verify_only=False):
+    """Publish only new, immutable plain prefix data; never relocate old envs."""
+    directory = folder / "native-prefixes"
+    if os.path.lexists(directory):
+        prefixes = [runtime.native_environment_prefix(folder, name) for name in runtime.CADD_ENVIRONMENTS]
+        roots = {path.parent.parent for path in prefixes}
+        require(len(roots) == 1, "Native CADD prefix metadata uses inconsistent manager roots; retained")
+        return roots.pop()
+    if legacy_native_owned(folder):
+        return folder / "mamba"
+    wrapper = folder / "bin/cadd-native-exec"
+    require(not os.path.lexists(folder / "envs") and not os.path.lexists(wrapper),
+            f"Unmanaged existing CADD environment/runtime retained: {folder}")
+    require(not verify_only, f"Native CADD prefix metadata is not installed: {directory}")
+    root = native_root_prefix(manager)
+    folder.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix=".native-prefixes-", dir=folder) as temporary:
+        staged = Path(temporary) / "prefixes"
+        staged.mkdir()
+        for name in runtime.CADD_ENVIRONMENTS:
+            path = staged / (name + ".prefix")
+            path.write_text(str(root / "envs" / name) + "\n")
+            path.chmod(0o444)
+        # The caller's runtime installation lock serializes publication. An
+        # existing nonempty/linked mapping is never overwritten or repaired.
+        require(not os.path.lexists(directory), f"Native CADD prefix metadata appeared concurrently: {directory}")
+        staged.rename(directory)
+    return root
+
+
+def native_install_commands(manager, operation, folder, prefix, definition, staged, manager_root=None):
     """Use each manager's supported CLI, preserving upstream Conda/pip ownership."""
     kind = Path(manager).name
     if kind.startswith("micromamba"):
         command = [manager, operation, "--yes", "--no-rc", "--no-env", "--root-prefix",
-                   str(folder / "mamba"), "--prefix", str(prefix)]
+                   str(manager_root or folder / "mamba"), "--prefix", str(prefix)]
         if definition.get("specs"):
             command += ["--override-channels", "--channel-priority", "flexible"]
             for channel in definition["channels"]:
@@ -376,12 +469,19 @@ def native_environments(folder, source, names, temporary, pins, verify_only=Fals
     retain the measured reference. Completed prefixes are never solved again;
     incomplete installer-owned prefixes resume using install, retaining bytes.
     """
+    folder = Path(folder)
+    require(not folder.is_symlink(), f"Linked CADD runtime retained: {folder}")
+    manager_root = prepare_native_prefixes(folder, manager, verify_only)
+    wrapper = folder / "bin/cadd-native-exec"
+    require(not os.path.lexists(wrapper) or runtime.native_wrapper_matches(wrapper, folder),
+            f"Existing CADD wrapper differs from the reviewed source: {wrapper}; retained")
     environment = dict(os.environ)
     environment.pop("PYTHONHOME", None)
     environment.pop("PYTHONPATH", None)
-    environment.update(MAMBA_ROOT_PREFIX=str(folder / "mamba"),
-                       CONDA_PKGS_DIRS=str(folder / "mamba/pkgs"),
-                       CONDA_ENVS_PATH=str(folder / "envs"), CONDA_CHANNEL_PRIORITY="flexible",
+    environment.update(MAMBA_ROOT_PREFIX=str(manager_root),
+                       CONDA_PKGS_DIRS=str(manager_root / "pkgs"),
+                       CONDA_ENVS_PATH=str(runtime.native_environment_prefix(folder, names[0]).parent),
+                       CONDA_CHANNEL_PRIORITY="flexible",
                        PIP_CACHE_DIR=str(folder / "pip-cache"),
                        XDG_CACHE_HOME=str(folder / "runtime-cache"),
                        MPLCONFIGDIR=str(folder / "runtime-cache/matplotlib"),
@@ -396,11 +496,14 @@ def native_environments(folder, source, names, temporary, pins, verify_only=Fals
     records = {}
     for name in names:
         definition = pins["native"]["environments"][name]
-        prefix = folder / "envs" / name
+        prefix = runtime.native_environment_prefix(folder, name)
         env_file = source / definition["environment_file"]
         plan = native_environment_plan(folder, source, name, pins)
         planned = state / (name + ".plan.json")
         ready = state / (name + ".ready.json")
+        for path in (planned, ready):
+            require(not path.is_symlink() and (not os.path.lexists(path) or path.is_file()),
+                    f"Native CADD ownership receipt is not a regular file: {path}; retained")
         if ready.is_file():
             record = json.loads(ready.read_text())
             # Authorized cache relocation changes this descriptive source path,
@@ -434,7 +537,8 @@ def native_environments(folder, source, names, temporary, pins, verify_only=Fals
                 else:
                     with staged.open("xb") as stream:
                         stream.write(env_file.read_bytes())
-            command, pip_command = native_install_commands(manager, operation, folder, prefix, definition, staged)
+            command, pip_command = native_install_commands(manager, operation, folder, prefix, definition, staged,
+                                                          manager_root=manager_root)
             run(command, env=environment)
             if pip_command:
                 pip_environment = dict(environment, CONDA_PREFIX=str(prefix),
@@ -452,6 +556,48 @@ def native_environments(folder, source, names, temporary, pins, verify_only=Fals
         records[name] = {"prefix": str(prefix), "receipt": str(ready), "sha256": sha256(ready)}
     routes = runtime.install_cadd_entry_points(folder, native=True, names=names)
     return {"backend": "native", "wrappers": routes, "environments": records}, environment
+
+
+def installed_prefixes(config, args, pins):
+    """Read-only export API: complete native prefixes, with no solve or writes."""
+    _, source, folder, state, _, _ = installation_paths(config, args, pins)
+    backend = select_backend(args, folder)
+    if backend == "container":
+        # Enumeration does not rehash an image or establish runtime/scientific
+        # acceptance. Keep the explicitly selected, origin-bound old route and
+        # export no fictional host environments from inside that image.
+        require(recognized_legacy_runtime(folder, state, pins), "Selected CADD container is not installed")
+        wrapper = folder / "bin/cadd-container-exec"
+        require(runtime.container_wrapper_matches(wrapper), "CADD container interpreter wrapper differs; retained")
+        for name in runtime.CADD_ENTRY_POINTS:
+            route = wrapper.parent / name
+            require(route.is_symlink() and os.readlink(route) == wrapper.name,
+                    f"CADD container interpreter route differs: {route}; retained")
+        return {"runtime_dir": str(folder), "backend": backend, "environments": {}}
+    environments = {}
+    for name in runtime.CADD_ENVIRONMENTS:
+        ready = folder / "native-state" / (name + ".ready.json")
+        planned = ready.with_name(name + ".plan.json")
+        if not os.path.lexists(ready):
+            require(not os.path.lexists(planned), f"Native CADD environment has an unfinished plan: {name}; retained")
+            continue
+        require(ready.is_file() and not ready.is_symlink(), f"Native CADD ready receipt is not regular: {ready}")
+        record = json.loads(ready.read_text())
+        plan = native_environment_plan(folder, source, name, pins)
+        identity = lambda value: {key: item for key, item in value.items() if key != "environment_file"}
+        require(identity(record.get("plan", {})) == identity(plan),
+                f"Native CADD environment plan differs: {name}; retained")
+        prefix = runtime.native_environment_prefix(folder, name)
+        runtime.verify_native_environment(prefix, record)
+        environments[name] = {"prefix": str(prefix), "ready_receipt": str(ready)}
+    if environments:
+        wrapper = folder / "bin/cadd-native-exec"
+        require(runtime.native_wrapper_matches(wrapper, folder), "Native CADD interpreter wrapper differs; retained")
+        for name in environments:
+            route = wrapper.parent / name
+            require(route.is_symlink() and os.readlink(route) == wrapper.name,
+                    f"Native CADD interpreter route differs: {route}; retained")
+    return {"runtime_dir": str(folder), "backend": backend, "environments": environments}
 
 
 def install(config, args, pins):
@@ -562,6 +708,8 @@ def arguments(argv=None):
 
 
 def main(argv=None):
+    argv = list(sys.argv[1:] if argv is None else argv)
+    procedure = argv.pop(0) if argv and argv[0] in ("install", "prefixes") else "install"
     args = arguments(argv)
     try:
         if args.config_json is not None:
@@ -571,7 +719,10 @@ def main(argv=None):
             config = yaml.safe_load(args.config.read_text())
         require(isinstance(config, dict), "CADD configuration must be a mapping")
         pins = load_pins(args.manifest)
-        if args.source_only:
+        if procedure == "prefixes":
+            require(not args.source_only, "prefixes is a read-only installed-environment query")
+            print(json.dumps(installed_prefixes(config, args, pins), sort_keys=True), flush=True)
+        elif args.source_only:
             require(args.source is not None, "--source-only requires --source")
             require(config.get("cadd_zip_download_url") == pins.get("source_archive_url"),
                     "Configured CADD archive is not the reviewed v1.7.2 source; "

@@ -124,9 +124,8 @@ def native_modules():
 def selection(args, config):
     selected = args.profile or config.get('cadd_profile')
     if not selected:
-        candidates = Path(config.get('cache_root', '<cache_root>')) / 'runtime/cadd-1.7.2/profiles'
         raise WorkflowError('Select an explicitly qualified CADD profile with --cadd-profile or config cadd_profile; '
-                            'installed candidates: ' + str(candidates))
+                            'candidate paths are recorded in the CADD installation receipt')
     path = Path(selected)
     require(path.is_absolute() and path.is_file(), 'CADD profile is missing; install resources, then explicitly qualify the runtime profile')
     wanted = config.get('cadd_profile_sha256')

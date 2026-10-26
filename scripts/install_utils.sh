@@ -1608,7 +1608,15 @@ function AlphaMissense_pick_intolerant_domains() {
     # three fresh, nonempty outputs cannot establish successful completion.
     # A receipt is valid only after the entire command, publication and YAML
     # updates succeeded. Legacy unreceipted derived outputs rebuild once.
+    # 2026-10-26 CT: preserve a completed original DAS producer when a separate
+    # closed proof establishes identical ordered ClinVar consumer inputs. The
+    # optional sidecar admits only that one input replacement; every other
+    # dependency/output stays strict. No sidecar is inferred or created here.
     if python "$completion_state" check --receipt "$completion_receipt" \
+        "${state_inputs[@]}" "${state_outputs[@]}" || \
+       python "${SCRIPT_DIR}/das_input_continuity.py" check \
+        --receipt "$completion_receipt" \
+        --continuity "${completion_receipt}.clinvar-continuity.json" \
         "${state_inputs[@]}" "${state_outputs[@]}"; then
         # Standalone callers may leave equivalent default output keys unset.
         # Restore only differing selections; valid warm reuse never reruns DAS.

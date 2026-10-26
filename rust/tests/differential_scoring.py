@@ -26,6 +26,16 @@ import pandas as pd
 
 ROOT = Path(__file__).resolve().parents[2]
 SOURCE_SHA256 = "9111a76e3fc94a064e14d97b535bb1dd2132f7c61836f8e8892477d4c5e69646"
+# Exact source segments from acmg_scoring.py at 09223ef5a8b0ceb4c6d61055c6eefe62b51ba903
+# (whole-file SHA above). Only these functions enter the compiled oracle; later
+# ranking changes outside this scope do not change its source or calculations.
+REFERENCE_FUNCTION_SHA256 = {
+    "fix_clingen_term": "cc637a3aa3cd9aa3b93ddeb1aed59fcd5ed726d263f35eac142e9ae80a4e61dc",
+    "translate_strength_level": "80f7e9ca08b66eff8440862d41880167de76a5dc21046511a5495888e95cf5f7",
+    "create_criteria_summary": "f9e8e5a4ee6e9c8f73577e71e3a00872263e566684a50381b38397536351df24",
+    "summarize_acmg_criteria": "137af5bb5a6f90b0270bc94d53c0d9f6ff62160d1aca28a596f96dcb99876a0a",
+    "calculate_posterior_probability": "64ec17b5dd7d28a2404dedbe6c459709920d93e051a9e4bb6c273a7e7224320d",
+}
 CRITERIA = ["PVS1", "PS1", "PS2", "PS3", "PS4", "PM1", "PM2", "PM3", "PM4", "PM5", "PM6",
             "PP1", "PP2", "PP3", "PP4", "PP5", "BA1", "BS1", "BS2", "BS3", "BS4", "BP1",
             "BP2", "BP3", "BP4", "BP5", "BP6", "BP7"]
@@ -34,16 +44,22 @@ CRITERIA = ["PVS1", "PS1", "PS2", "PS3", "PS4", "PM1", "PM2", "PM3", "PM4", "PM5
 def reference_functions():
     source = (ROOT / "scripts/acmg_scoring.py").read_bytes()
     actual_sha = hashlib.sha256(source).hexdigest()
-    if actual_sha != SOURCE_SHA256:
-        raise AssertionError(f"reference source changed: expected {SOURCE_SHA256}, found {actual_sha}")
-    names = {"fix_clingen_term", "translate_strength_level", "create_criteria_summary",
-             "summarize_acmg_criteria", "calculate_posterior_probability"}
-    nodes = [node for node in ast.parse(source).body
-             if isinstance(node, ast.FunctionDef) and node.name in names]
-    assert {node.name for node in nodes} == names
+    text = source.decode("utf-8")
+    nodes = [node for node in ast.parse(text).body
+             if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+             and node.name in REFERENCE_FUNCTION_SHA256]
+    if len(nodes) != len(REFERENCE_FUNCTION_SHA256) or {node.name for node in nodes} != set(REFERENCE_FUNCTION_SHA256):
+        raise AssertionError("Frozen scoring functions must each have one top-level definition")
+    for node in nodes:
+        if not isinstance(node, ast.FunctionDef) or node.decorator_list:
+            raise AssertionError(f"Frozen scoring function has an unsupported definition: {node.name}")
+        segment_sha = hashlib.sha256(ast.get_source_segment(text, node).encode("utf-8")).hexdigest()
+        if segment_sha != REFERENCE_FUNCTION_SHA256[node.name]:
+            raise AssertionError(f"Frozen scoring function source changed: {node.name}")
     namespace = {"pd": pd, "np": np, "Dict": Dict, "Tuple": Tuple, "os": os,
                  "gzip": gzip, "pickle": pickle, "logger": logging.getLogger("frozen-scoring")}
     exec(compile(ast.Module(body=nodes, type_ignores=[]), "frozen-acmg-scoring", "exec"), namespace)
+    print(f"current_whole_source_sha256={actual_sha}; exact_historical_functions={len(nodes)}")
     return namespace
 
 
@@ -225,7 +241,7 @@ def run(binary):
         failures += 1
 
     print(f"PASS: {comparisons} exact parsed-cell differential rows (ClinGen OFF/ON), {failures} failure/overwrite cases including empty source failure")
-    print(f"source_commit=09223ef5a8b0ceb4c6d61055c6eefe62b51ba903 source_sha256={SOURCE_SHA256}")
+    print(f"historical_reference_commit=09223ef5a8b0ceb4c6d61055c6eefe62b51ba903 historical_whole_source_sha256={SOURCE_SHA256}")
     print(f"pandas={pd.__version__} numpy={np.__version__}; default model only; NOT criterion-assignment or family parity")
 
 

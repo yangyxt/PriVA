@@ -1,0 +1,146 @@
+{
+  "acquisition_method": "ensembl_mysql_ftp",
+  "annotation_base_release": 116,
+  "assembly": "GRCh38.p14",
+  "attributes": [
+    "ensembl_gene_id",
+    "ensembl_transcript_id",
+    "hgnc_symbol",
+    "uniprotswissprot",
+    "refseq_mrna"
+  ],
+  "bytes": 28785905,
+  "dataset": "hsapiens_gene_ensembl",
+  "dataset_xml_sha256": "a5afb502ad97bada17f9fd4cdc3886be18ba8b237f3b896568793eb0cdd74fa7",
+  "header": [
+    "Gene stable ID",
+    "Transcript stable ID",
+    "HGNC symbol",
+    "UniProtKB/Swiss-Prot ID",
+    "RefSeq mRNA ID"
+  ],
+  "mart_release": 116,
+  "metadata_kind": "priva_bundled_mapping_snapshot",
+  "metadata_schema_version": 1,
+  "multiplicity_policy": "No DISTINCT, row filtering or deduplication; retain each raw dimension combination.",
+  "null_policy": "SQL NULL and empty strings remain distinct in SQLite and both serialize as empty TSV fields.",
+  "online_query_executed": false,
+  "order_policy": "Raw translation-main ordinal, then raw HGNC, SwissProt and RefSeq dimension ordinals; this is a new deterministic order.",
+  "original_biomart_export_identity": false,
+  "original_biomart_response_order_identity": false,
+  "production_selected": false,
+  "query_sha256": "d9810b981e8cdc2213b26004cde9ebf7910f1d0a1a11b5340fb1ee9ec5c24c41",
+  "query_sql": "SELECT m.stable_id_1023, m.stable_id_1066, h.display_label_1074,\n u.dbprimary_acc_1074, r.dbprimary_acc_1074\nFROM main AS m\nLEFT JOIN hgnc AS h ON h.gene_id_1020_key=m.gene_id_1020_key\nLEFT JOIN swissprot AS u ON u.translation_id_1068_key=m.translation_id_1068_key\nLEFT JOIN refseq AS r ON r.transcript_id_1064_key=m.transcript_id_1064_key\nORDER BY m.__row, h.__row, u.__row, r.__row",
+  "raw_sources": [
+    {
+      "bytes": 3377160,
+      "name": "CHECKSUMS",
+      "publisher_bsd_sum_blocks": null,
+      "sha256": "da42353dbc969077a61022369c472af4eeea10bcde712599a4c94133d7d8be23",
+      "url": "https://ftp.ensembl.org/pub/release-116/mysql/ensembl_mart_116/CHECKSUMS"
+    },
+    {
+      "bytes": 2847327,
+      "name": "ensembl_mart_116.sql.gz",
+      "publisher_bsd_sum_blocks": [
+        42829,
+        2781
+      ],
+      "sha256": "b615058721edb820e9d4f60da7a21b1bad9088a03fb36047e901b944009d9bf3",
+      "url": "https://ftp.ensembl.org/pub/release-116/mysql/ensembl_mart_116/ensembl_mart_116.sql.gz"
+    },
+    {
+      "bytes": 7126,
+      "name": "meta_conf__dataset__main.txt.gz",
+      "publisher_bsd_sum_blocks": [
+        12617,
+        7
+      ],
+      "sha256": "d285b195abdd99db3fe6054d37d5e42f3ed7fe4aa8b80d521c991f12b64f939a",
+      "url": "https://ftp.ensembl.org/pub/release-116/mysql/ensembl_mart_116/meta_conf__dataset__main.txt.gz"
+    },
+    {
+      "bytes": 34552278,
+      "name": "meta_conf__xml__dm.txt.gz",
+      "publisher_bsd_sum_blocks": [
+        45435,
+        33743
+      ],
+      "sha256": "e2b351aea776b65e78a1896a2c4d21d756b8c2771df7db467020f78eb2dcde59",
+      "url": "https://ftp.ensembl.org/pub/release-116/mysql/ensembl_mart_116/meta_conf__xml__dm.txt.gz"
+    },
+    {
+      "bytes": 35666730,
+      "name": "hsapiens_gene_ensembl__transcript__main.txt.gz",
+      "publisher_bsd_sum_blocks": [
+        6815,
+        34831
+      ],
+      "sha256": "7e712dd865bae7a5bff38304b6e56a8bc092074586538d2f7d37c7fdd038a3cd",
+      "url": "https://ftp.ensembl.org/pub/release-116/mysql/ensembl_mart_116/hsapiens_gene_ensembl__transcript__main.txt.gz"
+    },
+    {
+      "bytes": 47541608,
+      "name": "hsapiens_gene_ensembl__translation__main.txt.gz",
+      "publisher_bsd_sum_blocks": [
+        6440,
+        46428
+      ],
+      "sha256": "ea5f780ce729004cff0f701928e2e82adedfea310470e822842da052b4118692",
+      "url": "https://ftp.ensembl.org/pub/release-116/mysql/ensembl_mart_116/hsapiens_gene_ensembl__translation__main.txt.gz"
+    },
+    {
+      "bytes": 1006750,
+      "name": "hsapiens_gene_ensembl__ox_hgnc__dm.txt.gz",
+      "publisher_bsd_sum_blocks": [
+        4596,
+        984
+      ],
+      "sha256": "9e5b491ffbbbeaf8e73f107165de31e40d801eb4819b7bf319e60ca58a6ae48f",
+      "url": "https://ftp.ensembl.org/pub/release-116/mysql/ensembl_mart_116/hsapiens_gene_ensembl__ox_hgnc__dm.txt.gz"
+    },
+    {
+      "bytes": 1707967,
+      "name": "hsapiens_gene_ensembl__ox_uniprotswissprot__dm.txt.gz",
+      "publisher_bsd_sum_blocks": [
+        47451,
+        1668
+      ],
+      "sha256": "0816c3b1ebbb09427f8de7847f0e154bc53e0f9d6159ee626cd2cf5ad35939f9",
+      "url": "https://ftp.ensembl.org/pub/release-116/mysql/ensembl_mart_116/hsapiens_gene_ensembl__ox_uniprotswissprot__dm.txt.gz"
+    },
+    {
+      "bytes": 2357614,
+      "name": "hsapiens_gene_ensembl__ox_refseq_mrna__dm.txt.gz",
+      "publisher_bsd_sum_blocks": [
+        47156,
+        2303
+      ],
+      "sha256": "ac79d31b8fd4a3461b720f7057eba302e6732a5898f90bf070d988eac306d242",
+      "url": "https://ftp.ensembl.org/pub/release-116/mysql/ensembl_mart_116/hsapiens_gene_ensembl__ox_refseq_mrna__dm.txt.gz"
+    }
+  ],
+  "schema_sha256": "b615058721edb820e9d4f60da7a21b1bad9088a03fb36047e901b944009d9bf3",
+  "scientific_qualified": false,
+  "sha256": "dfae01f608b6a9093c2b351ca3fe162af0aacc363fa4a09ba2e4dd5de4850243",
+  "source_database": "ensembl_mart_116",
+  "source_id": "ensembl-grch38-mart116-ftp",
+  "source_root": "https://ftp.ensembl.org/pub/release-116/mysql/ensembl_mart_116/",
+  "statistics": {
+    "completion_stamp_verified": null,
+    "duplicate_full_rows": 66,
+    "duplicate_nm_enst_rows": 90,
+    "genes": 86411,
+    "max_enst_per_nm": 42,
+    "nm_accessions": 69679,
+    "nm_rows": 77748,
+    "nm_with_multiple_enst": 4126,
+    "non_nm_refseq_accessions": [],
+    "non_nm_refseq_rows": 0,
+    "rows": 691498,
+    "rows_without_nm": 613750,
+    "rows_without_refseq": 613750,
+    "transcripts": 670670,
+    "unique_nm_enst_pairs": 77658
+  }
+}

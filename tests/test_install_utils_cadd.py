@@ -1,5 +1,6 @@
 """Tiny CADD cache fixtures only; no publisher downloads or real cache access."""
 import contextlib
+import errno
 import hashlib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import importlib.util
@@ -12,6 +13,7 @@ import sys
 import tarfile
 import tempfile
 import threading
+from types import SimpleNamespace
 import unittest
 from unittest import mock
 
@@ -119,7 +121,7 @@ class CaddCacheTests(unittest.TestCase):
         self.assertFalse(self.annotation().with_name(legacy.name).exists())
         self.assertEqual(legacy.read_bytes(), original)
         receipt = json.loads((self.annotation() / CADD.RECEIPT).read_text())
-        self.assertEqual(receipt["archive_identity"], CADD.identity(legacy))
+        self.assertEqual(receipt["archive_identity"], CADD.receipt_identity(legacy))
         self.assertNotIn(self.config["cadd_GRCh37_anno_url"],
                          [call.args[0].full_url for call in fetch.call_args_list])
 
@@ -266,6 +268,168 @@ class CaddCacheTests(unittest.TestCase):
         self.assertNotIn(self.annotation().with_name("GRCh37_v1.7.tar.gz"), hashed)
         self.assertEqual(len(hashed), 4)  # Existing prescore data and indexes still get MD5 gates.
 
+    def node_metadata(self, device):
+        """Simulate another client's device number without changing the object."""
+        raw_identity, fstat = CADD.identity, CADD.os.fstat
+        def raw(path):
+            value = raw_identity(path)
+            value[0] = device
+            return value
+        def descriptor(fd):
+            value = fstat(fd)
+            return SimpleNamespace(st_dev=device, **{name:getattr(value, name) for name in
+                ("st_ino", "st_size", "st_mtime_ns", "st_ctime_ns", "st_mode")})
+        stack = contextlib.ExitStack()
+        stack.enter_context(mock.patch.object(CADD, "identity", side_effect=raw))
+        stack.enter_context(mock.patch.object(CADD.os, "fstat", side_effect=descriptor))
+        return stack
+
+    def test_portable_reuse_preserves_receipt_across_device_and_node_changes(self):
+        with mock.patch.object(CADD, "_filesystem_id", return_value=1234):
+            self.install()
+            receipt_path = self.annotation() / CADD.RECEIPT
+            before = receipt_path.read_bytes(), CADD.identity(receipt_path)
+            with self.node_metadata(987654), \
+                    mock.patch.object(CADD.socket, "gethostname", return_value="other-node"), \
+                    mock.patch.object(CADD, "checksum", wraps=CADD.checksum) as hashed, \
+                    mock.patch.object(CADD.tempfile, "NamedTemporaryFile", side_effect=AssertionError("no republication")):
+                self.install()
+            self.assertEqual((receipt_path.read_bytes(), CADD.identity(receipt_path)), before)
+            self.assertEqual(len(hashed.call_args_list), 4)
+            self.assertTrue(all(self.prescore().parent == Path(call.args[0]).parent for call in hashed.call_args_list))
+
+    def test_zero_or_unavailable_fsid_receipts_are_node_bound(self):
+        path = self.sources / "GRCh37_v1.7.tar.gz"
+        for metadata in (SimpleNamespace(f_fsid=0), SimpleNamespace()):
+            with self.subTest(metadata=metadata), mock.patch.object(CADD.os, "fstatvfs", return_value=metadata):
+                with mock.patch.object(CADD.socket, "gethostname", return_value="node-a"):
+                    stored = CADD.receipt_identity(path)
+                    self.assertEqual(stored, {"kind":"node-raw6-v1", "node":"node-a", "stat":CADD.identity(path)})
+                    self.assertTrue(CADD.identity_matches(path, stored))
+                with mock.patch.object(CADD.socket, "gethostname", return_value="node-b"):
+                    self.assertFalse(CADD.identity_matches(path, stored))
+
+    def test_unsupported_fsid_falls_back_but_io_errors_propagate(self):
+        path = self.sources / "GRCh37_v1.7.tar.gz"
+        with mock.patch.object(CADD.os, "fstatvfs", side_effect=OSError(errno.EOPNOTSUPP, "unsupported")):
+            self.assertEqual(CADD.receipt_identity(path)["kind"], "node-raw6-v1")
+        with mock.patch.object(CADD.os, "fstatvfs", side_effect=OSError(errno.EIO, "unavailable storage")):
+            with self.assertRaises(OSError):
+                CADD.receipt_identity(path)
+
+    def test_symlink_identity_uses_its_own_filesystem_even_with_missing_target(self):
+        link = self.directory / "link"
+        link.symlink_to("missing-target")
+        def filesystem(fd):
+            self.assertTrue(CADD.stat.S_ISLNK(os.fstat(fd).st_mode))
+            return 1234
+        with mock.patch.object(CADD, "_filesystem_id", side_effect=filesystem) as captured:
+            stored = CADD.receipt_identity(link)
+        if hasattr(os, "O_PATH"):
+            captured.assert_called_once()
+            self.assertEqual(stored, {"kind":"statvfs-fsid-v1", "fsid":"1234", "stat":CADD.identity(link)[1:]})
+        else:
+            captured.assert_not_called()
+            self.assertEqual(stored["kind"], "node-raw6-v1")
+        self.assertTrue(link.is_symlink())
+        self.assertFalse(link.exists())
+
+    def test_unknown_malformed_and_changed_identities_cannot_skip_archive_md5(self):
+        path = self.sources / "GRCh37_v1.7.tar.gz"
+        with mock.patch.object(CADD, "_filesystem_id", return_value=1234):
+            known = CADD.receipt_identity(path)
+            malformed = [None, {}, {"kind":"future-v2"},
+                         dict(known, fsid="0"), dict(known, fsid="01234"), dict(known, fsid=1234),
+                         dict(known, stat=[True]+known["stat"][1:]), dict(known, extra="unknown"),
+                         {"kind":"node-raw6-v1", "node":True, "stat":CADD.identity(path)},
+                         [True]+CADD.identity(path)[1:]]
+            for index in range(5):
+                changed = list(known["stat"]); changed[index] += 1
+                malformed.append(dict(known, stat=changed))
+            malformed.append(dict(known, fsid="5678"))
+            for stored in malformed:
+                with self.subTest(stored=stored), mock.patch.object(CADD, "checksum", wraps=CADD.checksum) as hashed:
+                    with self.assertRaisesRegex(ValueError, "checksum mismatch"):
+                        CADD.download("https://fixture.invalid/archive", path, "0"*32, stored)
+                    hashed.assert_called_once_with(path)
+
+    def test_legacy_raw6_migration_requires_the_complete_tuple(self):
+        self.install()
+        receipt_path = self.annotation() / CADD.RECEIPT
+        archive = self.annotation().with_name("GRCh37_v1.7.tar.gz")
+        asset = self.annotation() / "track.txt"
+        def legacy(device_mismatch):
+            record = json.loads(receipt_path.read_text())
+            record["archive_identity"] = CADD.identity(archive)
+            for name, entry in record["members"].items():
+                if entry["kind"] == "file":
+                    entry["identity"] = CADD.identity(self.annotation()/name)
+            if device_mismatch:
+                record["archive_identity"][0] += 1
+                record["members"]["track.txt"]["identity"][0] += 1
+            receipt_path.write_text(json.dumps(record))
+        legacy(False)
+        with mock.patch.object(CADD, "checksum", wraps=CADD.checksum) as hashed:
+            self.install()
+        self.assertEqual(len(hashed.call_args_list), 4)
+        self.assertIsInstance(json.loads(receipt_path.read_text())["archive_identity"], dict)
+        legacy(True)
+        with mock.patch.object(CADD, "checksum", wraps=CADD.checksum) as hashed:
+            self.install()
+        self.assertIn(mock.call(archive), hashed.call_args_list)
+        self.assertIn(mock.call(asset, "sha256"), hashed.call_args_list)
+        self.assertEqual(len(hashed.call_args_list), 6)
+
+    def test_fsid_change_reverifies_archive_and_updates_receipt(self):
+        with mock.patch.object(CADD, "_filesystem_id", return_value=1234):
+            self.install()
+        with mock.patch.object(CADD, "_filesystem_id", return_value=5678), \
+                mock.patch.object(CADD, "checksum", wraps=CADD.checksum) as hashed:
+            self.install()
+        self.assertIn(mock.call(self.annotation().with_name("GRCh37_v1.7.tar.gz")), hashed.call_args_list)
+        receipt = json.loads((self.annotation()/CADD.RECEIPT).read_text())
+        self.assertEqual(receipt["archive_identity"]["fsid"], "5678")
+        self.assertEqual(receipt["members"]["track.txt"]["identity"]["fsid"], "5678")
+
+    def test_identity_race_fails_without_blessing_a_local_fallback(self):
+        path = self.sources / "GRCh37_v1.7.tar.gz"
+        def race(_fd):
+            value = path.stat()
+            os.utime(path, ns=(value.st_atime_ns, value.st_mtime_ns+1_000_000_000))
+            return None
+        with mock.patch.object(CADD, "_filesystem_id", side_effect=race), \
+                self.assertRaisesRegex(ValueError, "changed during identity verification"):
+            CADD.receipt_identity(path)
+
+    def test_path_replacement_during_identity_capture_is_refused(self):
+        path = self.sources / "GRCh37_v1.7.tar.gz"
+        replacement = path.with_name("replacement")
+        replacement.write_bytes(path.read_bytes())
+        def race(_fd):
+            replacement.replace(path)
+            return 1234
+        with mock.patch.object(CADD, "_filesystem_id", side_effect=race), \
+                self.assertRaisesRegex(ValueError, "changed during identity verification"):
+            CADD.receipt_identity(path)
+
+    def test_member_metadata_race_preserves_existing_ready_receipt(self):
+        self.install()
+        receipt_path = self.annotation()/CADD.RECEIPT
+        before = receipt_path.read_bytes(), CADD.identity(receipt_path)
+        asset = self.annotation()/"track.txt"
+        inode = asset.stat().st_ino
+        original = CADD._filesystem_id
+        def race(fd):
+            value = original(fd)
+            if os.fstat(fd).st_ino == inode:
+                current = asset.stat()
+                os.utime(asset, ns=(current.st_atime_ns, current.st_mtime_ns+1_000_000_000))
+            return value
+        with mock.patch.object(CADD, "_filesystem_id", side_effect=race), \
+                self.assertRaisesRegex(ValueError, "changed during identity verification"):
+            self.install()
+        self.assertEqual((receipt_path.read_bytes(), CADD.identity(receipt_path)), before)
+
     def test_verified_reuse_preserves_receipt_and_annotation_identities_for_both_assemblies(self):
         for assembly in ("GRCh37", "GRCh38"):
             with self.subTest(assembly=assembly):
@@ -295,7 +459,7 @@ class CaddCacheTests(unittest.TestCase):
             self.install()
         self.assertIn(archive, [Path(call.args[0]) for call in hash_file.call_args_list])
         self.assertNotEqual(receipt_path.read_bytes(), before)
-        self.assertEqual(json.loads(receipt_path.read_bytes())["archive_identity"], CADD.identity(archive))
+        self.assertEqual(json.loads(receipt_path.read_bytes())["archive_identity"], CADD.receipt_identity(archive))
         published = CADD.identity(receipt_path), receipt_path.read_bytes()
         self.install()
         self.assertEqual((CADD.identity(receipt_path), receipt_path.read_bytes()), published)
@@ -319,7 +483,7 @@ class CaddCacheTests(unittest.TestCase):
             self.install()
         self.assertIn(target, [Path(call.args[0]) for call in hash_file.call_args_list])
         receipt = json.loads((self.annotation() / CADD.RECEIPT).read_text())
-        self.assertEqual(receipt["members"]["track.txt"]["identity"], CADD.identity(target))
+        self.assertEqual(receipt["members"]["track.txt"]["identity"], CADD.receipt_identity(target))
         self.assertNotEqual(receipt_path.read_bytes(), before)
         published = CADD.identity(receipt_path), receipt_path.read_bytes()
         self.install()
@@ -339,6 +503,21 @@ class CaddCacheTests(unittest.TestCase):
         self.config["cadd_GRCh37_anno_url"] = archive.as_uri()
         self.config["cadd_GRCh37_anno_md5"] = md5(archive.read_bytes())
         with self.assertRaises(tarfile.TarError):
+            self.install()
+        self.assertFalse(self.annotation().exists())
+        self.assertEqual(list(self.annotation().parent.glob(".cadd-extract-*")), [])
+
+    def test_archive_metadata_change_after_real_extraction_removes_staging(self):
+        extract = CADD.verify_or_extract
+        def extract_then_change_archive(archive, target, extracting):
+            members = extract(archive, target, extracting)
+            self.assertTrue(extracting)
+            self.assertTrue((target/"vep/cache.txt").is_file())
+            value = archive.stat()
+            os.utime(archive, ns=(value.st_atime_ns, value.st_mtime_ns+1_000_000_000))
+            return members
+        with mock.patch.object(CADD, "verify_or_extract", side_effect=extract_then_change_archive), \
+                self.assertRaisesRegex(ValueError, "CADD cache changed during verification"):
             self.install()
         self.assertFalse(self.annotation().exists())
         self.assertEqual(list(self.annotation().parent.glob(".cadd-extract-*")), [])

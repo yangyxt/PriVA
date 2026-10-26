@@ -5,6 +5,7 @@ This helper prepares caches only. URLs and separate data/index MD5s come from
 the caller's configuration; it does not select a model, mirror, or replacement.
 """
 import argparse
+import errno
 import fcntl
 import hashlib
 import http.client
@@ -14,6 +15,8 @@ from pathlib import Path, PurePosixPath
 import posixpath
 import re
 import shutil
+import socket
+import stat
 import sys
 import tarfile
 import tempfile
@@ -35,6 +38,88 @@ def identity(path):
     value = path.lstat()
     return [value.st_dev, value.st_ino, value.st_size, value.st_mtime_ns,
             value.st_ctime_ns, value.st_mode]
+
+
+def _filesystem_id(descriptor):
+    try:
+        value = getattr(os.fstatvfs(descriptor), "f_fsid", None)
+    except AttributeError:
+        return None
+    except OSError as error:
+        if error.errno in (errno.ENOSYS, errno.ENOTSUP, errno.EOPNOTSUPP):
+            return None
+        raise
+    require(value is None or (type(value) is int and value >= 0),
+            "Invalid filesystem ID while verifying CADD cache")
+    return value or None
+
+
+def _receipt_identity(path):
+    """Bind receipt metadata to one object without reading its payload."""
+    path = Path(path)
+    before = identity(path)
+    descriptor = None
+    fsid = None
+    # 2026-10-26 CT: device numbers are local to an HGSC client mount. O_PATH
+    # plus O_NOFOLLOW binds fstatvfs to the object itself, including a symlink,
+    # rather than accidentally recording its target's filesystem. Other Unix
+    # platforms can use a regular-file descriptor; links use node-local raw6.
+    if hasattr(os, "O_PATH"):
+        descriptor = os.open(path, os.O_PATH | os.O_NOFOLLOW | os.O_CLOEXEC)
+    elif not stat.S_ISLNK(before[-1]):
+        descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+                             | getattr(os, "O_CLOEXEC", 0))
+    if descriptor is not None:
+        try:
+            def descriptor_identity():
+                value = os.fstat(descriptor)
+                return [value.st_dev, value.st_ino, value.st_size, value.st_mtime_ns,
+                        value.st_ctime_ns, value.st_mode]
+            require(descriptor_identity() == before,
+                    f"CADD cache changed during identity verification: {path}")
+            fsid = _filesystem_id(descriptor)
+            require(descriptor_identity() == before,
+                    f"CADD cache changed during identity verification: {path}")
+        finally:
+            os.close(descriptor)
+    require(identity(path) == before,
+            f"CADD cache changed during identity verification: {path}")
+    if fsid is not None:
+        record = {"kind": "statvfs-fsid-v1", "fsid": str(fsid), "stat": before[1:]}
+    else:
+        record = {"kind": "node-raw6-v1", "node": socket.gethostname(), "stat": before}
+    return before, record
+
+
+def receipt_identity(path):
+    """Return a tagged portable identity, or an explicitly node-bound fallback."""
+    return _receipt_identity(path)[1]
+
+
+def _identity_matches(current_raw, current_record, stored):
+    def integers(value, length):
+        return isinstance(value, list) and len(value) == length and all(type(item) is int for item in value)
+    if integers(stored, 6):
+        # Legacy receipt migration requires every original field, including
+        # st_dev. Never infer a portable binding by dropping that field.
+        return current_raw == stored
+    if not isinstance(stored, dict):
+        return False
+    if stored.get("kind") == "statvfs-fsid-v1":
+        valid = (set(stored) == {"kind", "fsid", "stat"} and integers(stored.get("stat"), 5)
+                 and isinstance(stored.get("fsid"), str)
+                 and re.fullmatch(r"[1-9][0-9]*", stored["fsid"]))
+    elif stored.get("kind") == "node-raw6-v1":
+        valid = (set(stored) == {"kind", "node", "stat"} and integers(stored.get("stat"), 6)
+                 and isinstance(stored.get("node"), str) and bool(stored["node"]))
+    else:
+        return False
+    return bool(valid and stored == current_record)
+
+
+def identity_matches(path, stored):
+    """Match one known representation strictly; unknown records require hashes."""
+    return _identity_matches(*_receipt_identity(path), stored)
 
 
 def checksum(path, algorithm="md5"):
@@ -110,10 +195,13 @@ def download(source, destination, md5, verified_identity=None):
     partial = destination.with_name(destination.name + ".partial")
     if os.path.lexists(destination):
         require(destination.is_file(), f"Existing CADD cache is not a regular file: {destination}")
-        require((not destination.is_symlink() and identity(destination) == verified_identity)
+        before, current = _receipt_identity(destination)
+        require((not destination.is_symlink() and _identity_matches(before, current, verified_identity))
                 or checksum(destination) == md5,
                 f"CADD checksum mismatch: {destination}; existing bytes retained. "
                 "Check the configured source/checksum and move the file aside explicitly before retrying.")
+        require(_receipt_identity(destination) == (before, current),
+                f"CADD cache changed during verification: {destination}")
         return destination
     require(not partial.is_symlink() and (not partial.exists() or partial.is_file()),
             f"CADD staging path is not a regular file: {partial}")
@@ -200,7 +288,7 @@ def verify_or_extract(archive_path, target, extract):
                     path.symlink_to(member.linkname)
                 require(path.is_symlink() and os.readlink(path) == member.linkname,
                         f"Existing CADD annotation link differs from the archive: {path}")
-                members[name] = {"kind": "symlink", "link": member.linkname, "identity": identity(path)}
+                members[name] = {"kind": "symlink", "link": member.linkname, "identity": receipt_identity(path)}
             elif member.isfile() or member.islnk():
                 if not extract:
                     require(path.is_file() and not path.is_symlink()
@@ -235,7 +323,9 @@ def verify_or_extract(archive_path, target, extract):
                 require(extract or checksum(path, "sha256") == expected,
                         f"Existing CADD annotation differs from the verified archive: {path}; bytes retained")
                 require(identity(path) == before, f"CADD annotation changed during verification: {path}")
-                members[name] = {"kind": "file", "sha256": expected, "identity": before}
+                member_raw, member_identity = _receipt_identity(path)
+                require(member_raw == before, f"CADD annotation changed during verification: {path}")
+                members[name] = {"kind": "file", "sha256": expected, "identity": member_identity}
             else:
                 raise ValueError(f"Unsupported CADD archive member: {member.name}")
     require((target / "vep").is_dir() and any(item["kind"] == "file" for item in members.values()),
@@ -243,7 +333,7 @@ def verify_or_extract(archive_path, target, extract):
     # A later archive hardlink can change an earlier inode's ctime.
     for name, entry in members.items():
         if entry["kind"] == "file":
-            entry["identity"] = identity(target / name)
+            entry["identity"] = receipt_identity(target / name)
     return members
 
 
@@ -262,19 +352,22 @@ def verify_receipt(target, receipt):
         elif kind == "symlink":
             require(path.is_symlink() and os.readlink(path) == entry.get("link"),
                     f"Existing CADD annotation link changed: {path}; bytes retained")
-            entry["identity"] = identity(path)
+            before, current = _receipt_identity(path)
+            require(os.readlink(path) == entry.get("link") and identity(path) == before,
+                    f"Existing CADD annotation link changed: {path}; bytes retained")
+            entry["identity"] = current
         else:
             require(kind == "file" and path.is_file() and not path.is_symlink(),
                     f"Incomplete existing CADD annotations: {path}")
             require(isinstance(entry.get("sha256"), str)
                     and re.fullmatch(r"[0-9a-f]{64}", entry["sha256"]),
                     f"Invalid member checksum in CADD annotation receipt: {name}")
-            before = identity(path)
-            if before != entry.get("identity"):
+            before, current = _receipt_identity(path)
+            if not _identity_matches(before, current, entry.get("identity")):
                 require(checksum(path, "sha256") == entry.get("sha256"),
                         f"Existing CADD annotation changed: {path}; bytes retained")
-                require(identity(path) == before, f"CADD annotation changed during verification: {path}")
-                entry["identity"] = before
+            require(_receipt_identity(path) == (before, current), f"CADD annotation changed during verification: {path}")
+            entry["identity"] = current
     require((target / "vep").is_dir() and any(item["kind"] == "file" for item in members.values()),
             f"Incomplete existing CADD annotations: {target}")
     return members
@@ -308,7 +401,11 @@ def annotations(resources, folder, archive_path=None):
                 ("archive_md5", md5), ("archive_url", source))):
             receipt = None
     known_archive = receipt.get("archive_identity") if receipt else None
+    archive_before = _receipt_identity(archive_path) if os.path.lexists(archive_path) else None
     download(source, archive_path, md5, known_archive)
+    archive_raw, archive_identity = _receipt_identity(archive_path)
+    require(archive_before is None or archive_before == (archive_raw, archive_identity),
+            f"CADD cache changed during verification: {archive_path}")
     folder.mkdir(parents=True, exist_ok=True)
     if os.path.lexists(target):
         require(target.is_dir() and not target.is_symlink(),
@@ -325,20 +422,22 @@ def annotations(resources, folder, archive_path=None):
         except Exception:
             shutil.rmtree(staging)
             raise
-    ready = {"schema": 1, "assembly": resources["assembly"], "version": resources["version"],
-             "archive_url": source, "archive_md5": md5,
-             "archive_identity": identity(archive_path), "members": members}
-    ready_bytes = (json.dumps(ready, indent=2, sort_keys=True) + "\n").encode("utf-8")
-    # 2026-10-26 CT: verified reuse must not invalidate a pinned runtime merely
-    # by replacing its byte-identical readiness receipt. All archive/member
-    # checks above still run. Compare the on-disk bytes, not the parsed receipt:
-    # verify_receipt() updates member identities in that dictionary in place.
-    ready_path = published / RECEIPT
-    if (staging is None and ready_path.is_file() and not ready_path.is_symlink()
-            and ready_path.read_bytes() == ready_bytes):
-        print(f"Verified CADD annotations: {target}", flush=True)
-        return
     try:
+        ready = {"schema": 1, "assembly": resources["assembly"], "version": resources["version"],
+                 "archive_url": source, "archive_md5": md5,
+                 "archive_identity": archive_identity, "members": members}
+        require(_receipt_identity(archive_path) == (archive_raw, archive_identity),
+                f"CADD cache changed during verification: {archive_path}")
+        ready_bytes = (json.dumps(ready, indent=2, sort_keys=True) + "\n").encode("utf-8")
+        # 2026-10-26 CT: verified reuse must not invalidate a pinned runtime merely
+        # by replacing its byte-identical readiness receipt. All archive/member
+        # checks above still run. Compare the on-disk bytes, not the parsed receipt:
+        # verify_receipt() updates member identities in that dictionary in place.
+        ready_path = published / RECEIPT
+        if (staging is None and ready_path.is_file() and not ready_path.is_symlink()
+                and ready_path.read_bytes() == ready_bytes):
+            print(f"Verified CADD annotations: {target}", flush=True)
+            return
         with tempfile.NamedTemporaryFile(mode="wb", prefix=RECEIPT + ".", dir=published, delete=False) as output:
             output.write(ready_bytes)
             receipt_path = Path(output.name)

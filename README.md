@@ -155,7 +155,14 @@ example 24 CPUs for 22 configured forks; raw execution remains gated.
 
 Managed VEP116 mappings use Ensembl BioMart116; GRCh37 retains its GRCh37 annotation-base75 lineage and is not a GRCh38 fallback. [HCSeeker](data/HCSeeker/README.md) originates in GRCh38 protein space; [gnomAD RMC](data/gnomAD_RMC/README.md) originates in GRCh37, with derived opposite-assembly protein-coordinate tables. [GoFCards](data/gofcards/README.md) starts from GRCh37 variant records and includes derived GRCh38 representations; exact variant evidence is not a whole-gene mechanism assertion. Preserve assembly, transcript and source provenance when choosing these resources.
 
-CADD uses the original Python implementation. ACMG criteria and the default ranking path retain Python. Optional PriVA-owned Rust procedures have declared typed input boundaries. To build the procedure CLI with the pinned Rust toolchain:
+CADD uses the original Python implementation. ACMG criteria and the default ranking path retain Python. Optional PriVA-owned Rust procedures have declared typed input boundaries. `main_install` deploys their source-bound CLI beneath `cache_root/runtime/priva-rust/<identity>/bin/priva` without selecting a ranking backend. Inspect its executable path and build record with:
+
+```bash
+python "$PRIVA_ROOT/scripts/bootstrap_priva_rust.py" check \
+  --source-root "$PRIVA_ROOT" --cache-root "$PRIVA_CACHE"
+```
+
+For a manual build with the pinned Rust toolchain:
 
 ```bash
 export CARGO_TARGET_DIR="$PRIVA_RUNS/rust-build"

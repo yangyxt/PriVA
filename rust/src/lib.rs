@@ -3,6 +3,7 @@ pub mod acmg_consequence;
 pub mod acmg_scoring;
 pub mod acmg_variant_mechanism;
 mod cli;
+pub mod pedigree_filtration;
 pub mod pm4_bp3;
 pub mod spliceai2;
 

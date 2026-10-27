@@ -120,6 +120,7 @@ jobs:
           python -m unittest discover -s tests -p 'test_install_utils_resources.py' -v
           python -m unittest discover -s tests -p 'test_cadd_runtime_install.py' -v
           python -m unittest discover -s tests -p 'test_cadd_transcript_resources.py' -v
+          python -m unittest discover -s tests -p 'test_cadd_io_integration.py' -v
           python -m unittest discover -s tests -p 'test_clingen_source_acquisition.py' -v
           python -m unittest discover -s tests -p 'test_gnomad_annotation_failures.py' -v
           python -m unittest discover -s tests -p 'test_alphamissense_cache.py' -v

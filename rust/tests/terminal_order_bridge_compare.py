@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Compare complete original ranking with optional R1/R2/R3/R4/R8 bridges.
+"""Compare complete original ranking with optional R1/R2/R3/R4/R5-R6/R8 bridges.
 
 compare --reference SOURCE_ROOT --candidate SOURCE_ROOT --binary FILE
         --output NEW_DIRECTORY
@@ -7,8 +7,8 @@ worker --source SOURCE_ROOT --reference SOURCE_ROOT --cases FILE
        --mode python|native --profile fresh|source-bootstrap --output FILE
        [--binary FILE]
 
-The Python reference is frozen before the adapter exists. C1-C5 and R1-R7 stay
-source-executed. Outputs retain ordered axes, dtype/null storage, IEEE bits,
+The Python reference is frozen before the adapter exists. C1-C5 and R7 stay
+source-executed; each preceding ranking stage retains its exact fallback. Outputs retain ordered axes, dtype/null storage, IEEE bits,
 attributes and label flags; original failures and logs are compared as well.
 R4 replaces only the original mechanism-helper call at its source position;
 raw call traces remain recorded and its one explicit replacement is checked.
@@ -145,6 +145,33 @@ if ranking_binary is not None:
     assert ast.dump(ast.Module(body=compatibility.orelse, type_ignores=[]), include_attributes=False) == ast.dump(
         ast.Module(body=accepted_compatibility, type_ignores=[]), include_attributes=False)
     new.body[7:10] = compatibility.body
+    weights_dispatch = ast.parse('''native_weights = None
+if ranking_binary is not None:
+    from priva_rust_gene_weights import try_gene_weights, gene_membership
+    native_weights = try_gene_weights(
+        df, dispensable_gene_list, relevant_gene_list, compatibility_penalty_rows, ranking_binary)
+''').body
+    assert ast.dump(ast.Module(body=new.body[21:23], type_ignores=[]), include_attributes=False) == ast.dump(
+        ast.Module(body=weights_dispatch, type_ignores=[]), include_attributes=False)
+    weights = new.body[23]
+    assert isinstance(weights, ast.If) and ast.unparse(weights.test) == 'native_weights is None'
+    assert ast.dump(ast.Module(body=weights.body, type_ignores=[]), include_attributes=False) == ast.dump(
+        ast.Module(body=ref.body[21:24], type_ignores=[]), include_attributes=False)
+    accepted_weights = ast.parse('''if dispensable_gene_list is not None:
+    dispensable_genes = native_weights['dispensable_genes']
+    df["dispensable_gene_index"] = 1.0
+    df.loc[gene_membership(df, native_weights['dispensable_selected']), "dispensable_gene_index"] = 0.9
+    df.loc[:, "sort_index"] = native_weights['dispensable_product']
+if relevant_gene_list is not None:
+    relevant_genes = native_weights['relevant_genes']
+    df["relevant_gene_index"] = 1.0
+    df.loc[gene_membership(df, native_weights['relevant_selected']), "relevant_gene_index"] = 1.2
+    df.loc[:, "sort_index"] = native_weights['relevant_product']
+df.loc[compatibility_penalty_rows, "sort_index"] = native_weights['compatibility_product']
+''').body
+    assert ast.dump(ast.Module(body=weights.orelse, type_ignores=[]), include_attributes=False) == ast.dump(
+        ast.Module(body=accepted_weights, type_ignores=[]), include_attributes=False)
+    new.body[21:24] = weights.body
     hooks = [node for node in new.body if isinstance(node, ast.If)
              and ast.unparse(node.test) == 'terminal_order_binary is not None or ranking_binary is not None']
     assert len(hooks) == 1
@@ -166,7 +193,8 @@ if ranking_binary is not None:
                 all_original_statements_and_prior_source_order_unchanged=True,
                 original_R2_statement_and_warning_calls_exact=True,
                 original_R3_statement_and_control_call_order_exact=True,
-                original_R4_block_INFO_and_two_assignment_order_exact=True)
+                original_R4_block_INFO_and_two_assignment_order_exact=True,
+                original_R5_R6_statements_and_three_product_order_exact=True)
 
 
 def extra_cases(helper):
@@ -214,6 +242,17 @@ def _source_call_projection(raw, replacements, compatibility_calls):
     return [raw[0], '_variant_mechanism_masks', *raw[1:]]
 
 
+def _gene_parser_projection(raw, replacements, calls, enabled):
+    """Keep raw parser calls; permit only explicit enabled native replacements."""
+    assert len(calls) <= 1
+    assert enabled in ([], ['dispensable'], ['relevant'], ['dispensable', 'relevant'])
+    if calls == [True]:
+        assert not raw and replacements == enabled
+        return list(enabled)
+    assert not replacements
+    return raw
+
+
 def call_case(scoring, case, mode, binary, helper, native_stages='r8'):
     # A fresh load retains the actual prepared input, without normalizing dtypes
     # or reading metadata before the source function starts.
@@ -230,6 +269,9 @@ def call_case(scoring, case, mode, binary, helper, native_stages='r8'):
     r3_outputs = []
     r4_outputs = []
     r4_entry_seen = False
+    gene_calls, gene_parser_calls, gene_parser_replacements = [], [], []
+    r5_snapshots, gene_enabled = [], []
+    r5_entry_seen, r6_finished = False, False
     source = ast.parse(Path(scoring.__file__).read_text())
     ranker = _ranker_definition(source)
     info_lines = [node.lineno for node in ranker.body if isinstance(node, ast.Expr)
@@ -240,8 +282,57 @@ def call_case(scoring, case, mode, binary, helper, native_stages='r8'):
             part.value.startswith('Zygosity/inheritance/mechanism compatibility signals for ranking: ')
             for part in node.value.args[0].values)]
     assert len(info_lines) == 1
+    ranker_code = scoring.sort_and_rank_variants.__code__
+    weight_dispatch = [node for node in ranker.body if isinstance(node, ast.If)
+                       and ast.unparse(node.test) == 'native_weights is None']
+    original_weights = weight_dispatch[0].body if weight_dispatch else [
+        node for node in ranker.body if isinstance(node, ast.If)
+        and ast.unparse(node.test) in ('dispensable_gene_list is not None', 'relevant_gene_list is not None')]
+    if not weight_dispatch:
+        original_weights.append(ranker.body[ranker.body.index(original_weights[-1]) + 1])
+    assert len(original_weights) == 3
+    entry_line = next(node.lineno for node in ranker.body if isinstance(node, ast.Assign)
+                      and any(isinstance(target, ast.Name) and target.id == 'native_weights' for target in node.targets)) if weight_dispatch else original_weights[0].lineno
+    checkpoint_lines = {original_weights[1].lineno: 'after_dispensable',
+                        original_weights[2].lineno: 'after_relevant'}
+    if weight_dispatch:
+        checkpoint_lines.update({weight_dispatch[0].orelse[1].lineno: 'after_dispensable',
+                                 weight_dispatch[0].orelse[2].lineno: 'after_relevant'})
+    following_line = next(node.lineno for node in ranker.body if isinstance(node, ast.Assign)
+                          and any(isinstance(target, ast.Name) and target.id == 'pext_col_to_use' for target in node.targets))
+    parser_lines = {branch.body[0].lineno: role for branch, role in
+                    zip(original_weights[:2], ('dispensable', 'relevant'))}
+    read_table_code = scoring.pd.read_table.__code__
+    def snapshot(local, stage):
+        keys = ('df', 'dispensable_gene_list', 'relevant_gene_list',
+                'compatibility_penalty_rows', 'dispensable_genes', 'relevant_genes')
+        # Observe without dtype encoding inside the source execution. In
+        # particular, encoding nullable metadata here could warm pandas state
+        # before the exact multiplication being compared.
+        values = {name: local[name] for name in keys if name in local}
+        values['mask_index_is_frame_index'] = local['compatibility_penalty_rows'].index is local['df'].index
+        r5_snapshots.append((stage, pickle.dumps(values, protocol=5)))
+    def trace(pyframe, event, arg):
+        nonlocal r5_entry_seen, r6_finished
+        if pyframe.f_code is ranker_code:
+            if event == 'line' and pyframe.f_lineno == entry_line and not r5_entry_seen:
+                r5_entry_seen = True
+                gene_enabled.extend(role for role, name in (('dispensable', 'dispensable_gene_list'),
+                    ('relevant', 'relevant_gene_list')) if pyframe.f_locals[name] is not None)
+                snapshot(pyframe.f_locals, 'entry')
+            elif event == 'line' and r5_entry_seen and pyframe.f_lineno in checkpoint_lines:
+                snapshot(pyframe.f_locals, checkpoint_lines[pyframe.f_lineno])
+            elif event == 'line' and pyframe.f_lineno == following_line and r5_entry_seen:
+                snapshot(pyframe.f_locals, 'after_compatibility'); r6_finished = True
+            elif event == 'return' and r5_entry_seen and not r6_finished:
+                snapshot(pyframe.f_locals, 'failure')
+        return trace
     def profile(pyframe, event, arg):
         nonlocal r4_entry_seen
+        if event == 'call' and pyframe.f_code is read_table_code and pyframe.f_back is not None and (
+                pyframe.f_back.f_code is ranker_code):
+            assert pyframe.f_back.f_lineno in parser_lines
+            gene_parser_calls.append(parser_lines[pyframe.f_back.f_lineno])
         if event == 'call' and pyframe.f_code.co_name in (
                 'compute_control_common', '_variant_mechanism_masks', 'coerce_pext_value'):
             source_calls.append(pyframe.f_code.co_name)
@@ -292,6 +383,11 @@ def call_case(scoring, case, mode, binary, helper, native_stages='r8'):
             compatibility_calls.append(arg is not None)
             if arg is not None:
                 compatibility_replacements.append(dict(position=len(source_calls), name='_variant_mechanism_masks'))
+        if event == 'return' and pyframe.f_code.co_name == 'try_gene_weights' and (
+                Path(pyframe.f_code.co_filename).name == 'priva_rust_gene_weights.py'):
+            gene_calls.append(arg is not None)
+            if arg is not None:
+                gene_parser_replacements.extend(gene_enabled)
     if mode == 'native':
         # Observe returns through the existing profiler. Do not import the
         # adapter early: the real ranker first imports it at its R8 entry after
@@ -308,6 +404,8 @@ def call_case(scoring, case, mode, binary, helper, native_stages='r8'):
     product_control = patch('priva_rust_control_multiply.try_control_multiply', return_value=None) if force_r3 else nullcontext(None)
     force_r4 = mode == 'native' and native_stages in ('r1-r8', 'r1-r2-r8', 'r1-r2-r3-r8')
     compatibility_control = patch('priva_rust_ranking_compatibility.try_ranking_compatibility', return_value=None) if force_r4 else nullcontext(None)
+    force_genes = mode == 'native' and native_stages not in ('r8', 'r1-r2-r3-r4-r5-r6-r8')
+    gene_control = patch('priva_rust_gene_weights.try_gene_weights', return_value=None) if force_genes else nullcontext(None)
     log = io.StringIO()
     handler = logging.StreamHandler(log)
     handler.setFormatter(logging.Formatter('%(levelname)s %(name)s %(message)s'))
@@ -315,12 +413,13 @@ def call_case(scoring, case, mode, binary, helper, native_stages='r8'):
     old_level = root_logger.level
     root_logger.setLevel(logging.INFO)
     root_logger.addHandler(handler)
-    previous = sys.getprofile()
+    previous, previous_trace = sys.getprofile(), sys.gettrace()
     output, error = None, None
     try:
-        with warnings.catch_warnings(record=True) as caught, control as forced, product_control as forced_product, compatibility_control as forced_compatibility:
+        with warnings.catch_warnings(record=True) as caught, control as forced, product_control as forced_product, compatibility_control as forced_compatibility, gene_control as forced_genes:
             warnings.simplefilter('always')
             sys.setprofile(profile)
+            sys.settrace(trace)
             try:
                 output = scoring.sort_and_rank_variants(data, pedigree, **kwargs)
             except Exception as failure:
@@ -329,6 +428,7 @@ def call_case(scoring, case, mode, binary, helper, native_stages='r8'):
                         traceback.extract_tb(failure.__traceback__) if Path(row.filename).name in
                         ['acmg_scoring.py', 'acmg_consequence.py', 'acmg_variant_mechanism.py']])
             finally:
+                sys.settrace(previous_trace)
                 sys.setprofile(previous)
     finally:
         root_logger.removeHandler(handler)
@@ -343,7 +443,11 @@ def call_case(scoring, case, mode, binary, helper, native_stages='r8'):
         pedigree_calls=pedigree_calls, forced_r2_fallback_calls=forced_calls, r2_contexts=r2_contexts,
         product_calls=product_calls, forced_r3_fallback_calls=forced_product_calls, r3_outputs=r3_outputs,
         compatibility_calls=compatibility_calls, forced_r4_fallback_calls=forced_compatibility_calls,
-        compatibility_replacements=compatibility_replacements, r4_outputs=r4_outputs)
+        compatibility_replacements=compatibility_replacements, r4_outputs=r4_outputs,
+        gene_calls=gene_calls, forced_gene_fallback_calls=forced_genes.call_count if force_genes else 0,
+        gene_parser_calls=gene_parser_calls, gene_parser_replacements=gene_parser_replacements,
+        gene_enabled=gene_enabled,
+        r5_states=[dict(stage=stage, locals=helper.encode(pickle.loads(value))) for stage, value in r5_snapshots])
 
 
 def worker(args):
@@ -376,7 +480,7 @@ def compare(args):
         cases.extend(dict(name='r1_complete_' + name, kind='ranking', frame=frame, ped=None,
                           kwargs=dict(fam_name=None, dispensable_gene_list=None),
                           tags=['complete-ranker-r1-integration']) for name, frame in setup.extras(helper))
-    if args.native_stages in ('r1-r2-r8', 'r1-r2-r3-r8', 'r1-r2-r3-r4-r8'):
+    if args.native_stages in ('r1-r2-r8', 'r1-r2-r3-r8', 'r1-r2-r3-r4-r8', 'r1-r2-r3-r4-r5-r6-r8'):
         pedigree = load('unchanged_R2_fixture_builder', args.candidate / 'rust/tests/pedigree_context_oracle.py')
         for name, entry, ped, family in pedigree.extras():
             # Lift the pre-existing standalone R2 inputs into a full original
@@ -391,7 +495,7 @@ def compare(args):
             cases.append(dict(name='r2_complete_' + name, kind='ranking', frame=data, ped=ped,
                 kwargs=dict(fam_name=family, dispensable_gene_list=None),
                 tags=['complete-ranker-r2-integration']))
-    if args.native_stages in ('r1-r2-r3-r8', 'r1-r2-r3-r4-r8'):
+    if args.native_stages in ('r1-r2-r3-r8', 'r1-r2-r3-r4-r8', 'r1-r2-r3-r4-r5-r6-r8'):
         multiply = load('unchanged_R3_fixture_builder', args.candidate / 'rust/tests/control_multiply_oracle.py')
         for name, entry in multiply.examples():
             # Lift the existing standalone seeds through the complete ranker.
@@ -411,7 +515,7 @@ def compare(args):
             cases.append(dict(name='r3_complete_' + name, kind='ranking', frame=data, ped=None,
                 kwargs=dict(fam_name=None, dispensable_gene_list=None),
                 tags=['complete-ranker-r3-seed-through-original-R1-and-C1-C5']))
-    if args.native_stages == 'r1-r2-r3-r4-r8':
+    if args.native_stages in ('r1-r2-r3-r4-r8', 'r1-r2-r3-r4-r5-r6-r8'):
         compatibility = load('unchanged_R4_fixture_builder', args.candidate / 'rust/tests/ranking_compatibility_oracle.py')
         for name, (entry, male, female, heterozygosity) in compatibility.extras():
             # Lift the historical frame seeds through actual R1/R2/C1-C5/R3.
@@ -435,6 +539,32 @@ def compare(args):
                 kwargs=dict(fam_name='R4', dispensable_gene_list=None),
                 tags=['complete-ranker-r4-seed-through-original-upstream-stages',
                       'current-R2-mask-recomputed-by-original-source']))
+    if args.native_stages == 'r1-r2-r3-r4-r5-r6-r8':
+        genes = load('unchanged_R5_R6_fixture_builder', args.candidate / 'rust/tests/ranking_gene_weights_oracle.py')
+        for name, (entry, dispensable, relevant, penalty) in genes.extras(args.output):
+            # Lift historical seeds through every actual preceding stage. The
+            # old stage-only mask seeds the sample; R2/R4 recompute the actual
+            # current mask. Direct nullable/IEEE storage is proved separately.
+            data = helper.base_frame(len(entry))
+            data.index = entry.index
+            data = data.drop(columns=[column for column in data.columns if column in entry.columns])
+            data = pd.concat([data, entry], axis=1)
+            if 'sort_index' in entry.columns:
+                position = list(entry.columns).index('sort_index')
+                data['ACMG_quant_score'] = entry.iloc[:, position]
+            sample = ['0/1' if value is True or isinstance(value, np.bool_) and value else
+                      None if value is None or value is pd.NA else '0/0' for value in penalty]
+            data['R5_PROBAND'] = pd.Series(sample, index=data.index,
+                dtype='string' if str(penalty.dtype) == 'boolean' else 'object')
+            data.columns.name = entry.columns.name
+            data.attrs = copy.deepcopy(entry.attrs)
+            data.flags.allows_duplicate_labels = entry.flags.allows_duplicate_labels
+            ped = pd.DataFrame({'#FamilyID': ['R5'], 'IndividualID': ['R5_PROBAND'],
+                                'Phenotype': ['2'], 'Sex': ['1']})
+            cases.append(dict(name='r5_complete_' + name, kind='ranking', frame=data, ped=ped,
+                kwargs=dict(fam_name='R5', dispensable_gene_list=dispensable, relevant_gene_list=relevant),
+                tags=['complete-ranker-r5-r6-seed-through-original-upstream-stages',
+                      'current-R2-and-R4-mask-recomputed-by-original-source']))
     prepared = args.output / 'cases.pkl'
     prepared.write_bytes(pickle.dumps(cases, protocol=5))
     reports, comparisons, mismatches = {}, [], []
@@ -468,12 +598,19 @@ def compare(args):
                     compatibility_calls = observed.pop('compatibility_calls')
                     forced_r4_calls = observed.pop('forced_r4_fallback_calls')
                     replacements = observed.pop('compatibility_replacements')
+                    gene_calls = observed.pop('gene_calls')
+                    forced_gene_calls = observed.pop('forced_gene_fallback_calls')
+                    parser_replacements = observed.pop('gene_parser_replacements')
+                    raw_parser_calls = observed['gene_parser_calls']
+                    observed['gene_parser_calls'] = _gene_parser_projection(
+                        raw_parser_calls, parser_replacements, gene_calls, observed['gene_enabled'])
                     raw_source_calls = observed['source_calls']
                     observed['source_calls'] = _source_call_projection(raw_source_calls, replacements, compatibility_calls)
                     wanted = {key: value for key, value in expected.items() if key not in (
                         'native_calls', 'setup_calls', 'pedigree_calls', 'forced_r2_fallback_calls',
                         'product_calls', 'forced_r3_fallback_calls', 'compatibility_calls',
-                        'forced_r4_fallback_calls', 'compatibility_replacements')}
+                        'forced_r4_fallback_calls', 'compatibility_replacements', 'gene_calls',
+                        'forced_gene_fallback_calls', 'gene_parser_replacements')}
                     exact = observed == wanted
                     if not exact:
                         mismatches.append(dict(profile=profile, mode=label, name=expected['name'],
@@ -495,6 +632,10 @@ def compare(args):
                         compatibility_fallback=bool(compatibility_calls and not compatibility_calls[0]),
                         forced_r4_fallback_calls=forced_r4_calls,
                         actual_source_calls=raw_source_calls, explicit_native_R4_replacements=replacements,
+                        gene_native_used=bool(gene_calls and gene_calls[0]),
+                        gene_fallback=bool(gene_calls and not gene_calls[0]),
+                        forced_gene_fallback_calls=forced_gene_calls,
+                        actual_gene_parser_calls=raw_parser_calls, explicit_native_gene_parser_replacements=parser_replacements,
                         original_exception=expected['exception'] is not None,
                         earlier_failure_did_not_reach_R8=expected['exception'] is not None and not native_calls))
         native = [item for item in comparisons if item['mode'] == 'native']
@@ -507,24 +648,31 @@ def compare(args):
         if args.native_stages == 'r1-r8':
             assert any(item['forced_r2_fallback_calls'] for item in native), 'R2 control did not execute the original fallback'
             assert not any(item['pedigree_native_used'] for item in native), 'R1/R8 control published native R2'
-        if args.native_stages in ('r1-r2-r8', 'r1-r2-r3-r8', 'r1-r2-r3-r4-r8'):
+        if args.native_stages in ('r1-r2-r8', 'r1-r2-r3-r8', 'r1-r2-r3-r4-r8', 'r1-r2-r3-r4-r5-r6-r8'):
             assert any(item['pedigree_native_used'] for item in native), 'no genuine native R2 complete-function result'
             assert any(item['pedigree_fallback'] for item in native), 'no genuine current-buffer R2 fallback'
             assert not any(item['forced_r2_fallback_calls'] for item in native), 'full R2 mode used a forced fallback'
         if args.native_stages in ('r1-r8', 'r1-r2-r8'):
             assert any(item['forced_r3_fallback_calls'] for item in native), 'R3 control did not execute the original fallback'
             assert not any(item['product_native_used'] for item in native), 'preceding control published native R3'
-        if args.native_stages in ('r1-r2-r3-r8', 'r1-r2-r3-r4-r8'):
+        if args.native_stages in ('r1-r2-r3-r8', 'r1-r2-r3-r4-r8', 'r1-r2-r3-r4-r5-r6-r8'):
             assert any(item['product_native_used'] for item in native), 'no genuine native R3 complete-function product'
             assert any(item['product_fallback'] for item in native), 'no genuine current-buffer R3 fallback'
             assert not any(item['forced_r3_fallback_calls'] for item in native), 'full R3 mode used a forced fallback'
         if args.native_stages in ('r1-r8', 'r1-r2-r8', 'r1-r2-r3-r8'):
             assert any(item['forced_r4_fallback_calls'] for item in native), 'R4 control did not execute the original fallback'
             assert not any(item['compatibility_native_used'] for item in native), 'preceding control published native R4'
-        if args.native_stages == 'r1-r2-r3-r4-r8':
+        if args.native_stages in ('r1-r2-r3-r4-r8', 'r1-r2-r3-r4-r5-r6-r8'):
             assert any(item['compatibility_native_used'] for item in native), 'no genuine native R4 complete-function plan'
             assert any(item['compatibility_fallback'] for item in native), 'no genuine current-buffer R4 fallback'
             assert not any(item['forced_r4_fallback_calls'] for item in native), 'full R4 mode used a forced fallback'
+        if args.native_stages not in ('r8', 'r1-r2-r3-r4-r5-r6-r8'):
+            assert any(item['forced_gene_fallback_calls'] for item in native), 'R5/R6 control did not execute original fallback'
+            assert not any(item['gene_native_used'] for item in native), 'preceding control published native R5/R6'
+        if args.native_stages == 'r1-r2-r3-r4-r5-r6-r8':
+            assert any(item['gene_native_used'] for item in native), 'no genuine native R5/R6 complete-function plan'
+            assert any(item['gene_fallback'] for item in native), 'no genuine current-buffer R5/R6 fallback'
+            assert not any(item['forced_gene_fallback_calls'] for item in native), 'full R5/R6 mode forced fallback'
         assert not mismatches, ('complete-ranker mismatches', len(mismatches), mismatches)
     except Exception as error:
         failure = dict(type=type(error).__name__, message=str(error))
@@ -549,6 +697,10 @@ def compare(args):
             compatibility_Python_fallbacks=sum(item['compatibility_fallback'] for item in native),
             forced_R4_control_fallback_calls=sum(item['forced_r4_fallback_calls'] for item in native),
             explicit_native_R4_helper_replacements=sum(len(item['explicit_native_R4_replacements']) for item in native),
+            gene_weights_native_outputs=sum(item['gene_native_used'] for item in native),
+            gene_weights_Python_fallbacks=sum(item['gene_fallback'] for item in native),
+            forced_R5_R6_control_fallback_calls=sum(item['forced_gene_fallback_calls'] for item in native),
+            explicit_native_gene_parser_replacements=sum(len(item['explicit_native_gene_parser_replacements']) for item in native),
             original_failures=sum(item['original_exception'] for item in native),
             earlier_failures_without_native_call=sum(item['earlier_failure_did_not_reach_R8'] for item in native),
             binary_sha256=sha(args.binary), fixture_sha256=sha(prepared),
@@ -564,14 +716,14 @@ def main():
     command = sub.add_parser('compare')
     for name in ['reference', 'candidate', 'binary', 'output']:
         command.add_argument('--' + name, required=True, type=Path)
-    command.add_argument('--native-stages', choices=['r8', 'r1-r8', 'r1-r2-r8', 'r1-r2-r3-r8', 'r1-r2-r3-r4-r8'], default='r8')
+    command.add_argument('--native-stages', choices=['r8', 'r1-r8', 'r1-r2-r8', 'r1-r2-r3-r8', 'r1-r2-r3-r4-r8', 'r1-r2-r3-r4-r5-r6-r8'], default='r8')
     command = sub.add_parser('worker')
     for name in ['source', 'reference', 'cases', 'output']:
         command.add_argument('--' + name, required=True, type=Path)
     command.add_argument('--binary', type=Path)
     command.add_argument('--mode', required=True, choices=['python', 'native'])
     command.add_argument('--profile', required=True, choices=['fresh', 'source-bootstrap'])
-    command.add_argument('--native-stages', choices=['r8', 'r1-r8', 'r1-r2-r8', 'r1-r2-r3-r8', 'r1-r2-r3-r4-r8'], default='r8')
+    command.add_argument('--native-stages', choices=['r8', 'r1-r8', 'r1-r2-r8', 'r1-r2-r3-r8', 'r1-r2-r3-r4-r8', 'r1-r2-r3-r4-r5-r6-r8'], default='r8')
     args = parser.parse_args()
     globals()[args.procedure](args)
 

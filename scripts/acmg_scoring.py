@@ -491,7 +491,8 @@ def sort_and_rank_variants(df: pd.DataFrame,
             only. None retains Python; unsupported inputs use the original tail.
         ranking_binary: Explicit opt-in single PriVA Rust CLI for the integrated
             R1 setup, R2 pedigree context, R3 control multiplication, R4
-            compatibility masks and R8 ordering. Other stages retain Python.
+            compatibility masks, ordered R5/R6 weights and R8 ordering.
+            Other stages retain Python.
 
     Returns:
         DataFrame sorted by variant's max ACMG score with added variant rank column
@@ -668,24 +669,45 @@ def sort_and_rank_variants(df: pd.DataFrame,
     df["zygosity_inheritance_mechanism_compatibility"] = 1.0
     df.loc[compatibility_penalty_rows, "zygosity_inheritance_mechanism_compatibility"] = 0.9
 
-    if dispensable_gene_list is not None:
-        dispensable_genes = pd.read_table(dispensable_gene_list, header=None, names=["SYMBOL"], comment="#") # Skip the header row starting with #
-        dispensable_genes = set(dispensable_genes["SYMBOL"].tolist())
-        df["dispensable_gene_index"] = 1.0
-        df.loc[df["SYMBOL"].isin(dispensable_genes), "dispensable_gene_index"] = 0.9
-        df.loc[:, "sort_index"] = df.loc[:, "sort_index"] * df.loc[:, "dispensable_gene_index"]
+    # 26 October 2026 CT: plan R5 then R6 only on the current post-R4
+    # buffers. Validate every step before mutation; fallback never replays
+    # pedigree warnings, controls, R3 or R4.
+    native_weights = None
+    if ranking_binary is not None:
+        from priva_rust_gene_weights import try_gene_weights, gene_membership
+        native_weights = try_gene_weights(
+            df, dispensable_gene_list, relevant_gene_list, compatibility_penalty_rows, ranking_binary)
+    if native_weights is None:
+        if dispensable_gene_list is not None:
+            dispensable_genes = pd.read_table(dispensable_gene_list, header=None, names=["SYMBOL"], comment="#") # Skip the header row starting with #
+            dispensable_genes = set(dispensable_genes["SYMBOL"].tolist())
+            df["dispensable_gene_index"] = 1.0
+            df.loc[df["SYMBOL"].isin(dispensable_genes), "dispensable_gene_index"] = 0.9
+            df.loc[:, "sort_index"] = df.loc[:, "sort_index"] * df.loc[:, "dispensable_gene_index"]
 
-    if relevant_gene_list is not None:
-        relevant_genes = pd.read_table(relevant_gene_list, header=None, names=["SYMBOL"], comment="#") # Skip the header row starting with #
-        relevant_genes = set(relevant_genes["SYMBOL"].tolist())
-        df["relevant_gene_index"] = 1.0
-        df.loc[df["SYMBOL"].isin(relevant_genes), "relevant_gene_index"] = 1.2  # Prioritize the variants in relevant genes
-        df.loc[:, "sort_index"] = df.loc[:, "sort_index"] * df.loc[:, "relevant_gene_index"]
+        if relevant_gene_list is not None:
+            relevant_genes = pd.read_table(relevant_gene_list, header=None, names=["SYMBOL"], comment="#") # Skip the header row starting with #
+            relevant_genes = set(relevant_genes["SYMBOL"].tolist())
+            df["relevant_gene_index"] = 1.0
+            df.loc[df["SYMBOL"].isin(relevant_genes), "relevant_gene_index"] = 1.2  # Prioritize the variants in relevant genes
+            df.loc[:, "sort_index"] = df.loc[:, "sort_index"] * df.loc[:, "relevant_gene_index"]
 
-    df.loc[compatibility_penalty_rows, "sort_index"] = (
-        df.loc[compatibility_penalty_rows, "sort_index"]
-        * df.loc[compatibility_penalty_rows, "zygosity_inheritance_mechanism_compatibility"]
-    )
+        df.loc[compatibility_penalty_rows, "sort_index"] = (
+            df.loc[compatibility_penalty_rows, "sort_index"]
+            * df.loc[compatibility_penalty_rows, "zygosity_inheritance_mechanism_compatibility"]
+        )
+    else:
+        if dispensable_gene_list is not None:
+            dispensable_genes = native_weights['dispensable_genes']
+            df["dispensable_gene_index"] = 1.0
+            df.loc[gene_membership(df, native_weights['dispensable_selected']), "dispensable_gene_index"] = 0.9
+            df.loc[:, "sort_index"] = native_weights['dispensable_product']
+        if relevant_gene_list is not None:
+            relevant_genes = native_weights['relevant_genes']
+            df["relevant_gene_index"] = 1.0
+            df.loc[gene_membership(df, native_weights['relevant_selected']), "relevant_gene_index"] = 1.2
+            df.loc[:, "sort_index"] = native_weights['relevant_product']
+        df.loc[compatibility_penalty_rows, "sort_index"] = native_weights['compatibility_product']
 
     # Apply pext-based expression modulation if pext columns are available
     # Low pext = variant in low-expression region = deprioritize for LoF interpretation

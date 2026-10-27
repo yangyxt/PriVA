@@ -113,6 +113,7 @@ jobs:
           python -m unittest discover -s tests -p 'test_installed_environment.py' -v
           python -m unittest discover -s tests -p 'test_bootstrap_nextflow_runtime.py' -v
           python -m unittest discover -s tests -p 'test_nextflow_driver_install.py' -v
+          python -m unittest discover -s tests -p 'test_priva_rust_install.py' -v
           python -m unittest discover -s tests -p 'test_install_utils_resources.py' -v
           python -m unittest discover -s tests -p 'test_cadd_runtime_install.py' -v
           python -m unittest discover -s tests -p 'test_cadd_transcript_resources.py' -v

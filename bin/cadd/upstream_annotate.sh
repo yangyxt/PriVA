@@ -140,7 +140,9 @@ fi
     --model-directory "$task_esm_hub" "${model_args[@]}" \
     --output "$stage/esm.vcf.gz" --batch-size "$CADD_ESM_BATCH_SIZE" \
     > "$stage/esm_inframe.log" 2>&1
-"$CADD_REGSEQ_PYTHON" "$scripts/lib/tools/regulatorySequence/predictVariants.py" \
+PYTHONUTF8=1 "$CADD_REGSEQ_PYTHON" "$(dirname -- "${BASH_SOURCE[0]}")/io_transport.py" \
+    regseq --bgzip "$CADD_BGZIP" --work-dir "$stage" -- \
+    "$scripts/lib/tools/regulatorySequence/predictVariants.py" \
     --variants "$stage/esm.vcf.gz" --model "$CADD_REGSEQ_MODEL" \
     --weights "$CADD_REGSEQ_WEIGHTS" --reference "$CADD_REGSEQ_REFERENCE" \
     --genome "$CADD_REGSEQ_GENOME" --output "$stage/regseq.vcf.gz" \
@@ -149,7 +151,9 @@ fi
 annotation_vcf="$stage/regseq.vcf.gz"
 if [[ "$CADD_ASSEMBLY" == GRCh38 ]]; then
     "$CADD_TABIX" -p vcf "$stage/regseq.vcf.gz"
-    KERAS_BACKEND=tensorflow "$CADD_MMSPLICE_PYTHON" "$scripts/lib/tools/MMSplice.py" \
+    PYTHONIOENCODING=utf-8 KERAS_BACKEND=tensorflow "$CADD_MMSPLICE_PYTHON" \
+        "$(dirname -- "${BASH_SOURCE[0]}")/io_transport.py" \
+        mmsplice --input "$stage/regseq.vcf.gz" -- "$scripts/lib/tools/MMSplice.py" \
         -i "$stage/regseq.vcf.gz" -g "$CADD_MMSPLICE_GTF" -f "$CADD_REFERENCE_FASTA" \
         | grep -v '^Variant(CHROM=' | "$CADD_BGZIP" -c > "$stage/mmsplice.vcf.gz"
     annotation_vcf="$stage/mmsplice.vcf.gz"

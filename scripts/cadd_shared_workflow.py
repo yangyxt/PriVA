@@ -71,6 +71,7 @@ def adapter_identity():
              'scripts/anno_main_args', 'scripts/anno_vep_args', 'scripts/common_bash_utils.sh',
              'bin/cadd_task.py', 'bin/cadd_shared_vep.py', 'bin/cadd_select_view.py',
              'bin/cadd/CaddSelection.pm', 'bin/cadd/upstream_annotate.sh', 'bin/cadd/upstream_calculate.sh',
+             'bin/cadd/io_transport.py',
              'conf/cadd/GRCh37.reference.json', 'conf/cadd/GRCh38.reference.json')
     return {name: digest(ROOT / name) for name in names}
 

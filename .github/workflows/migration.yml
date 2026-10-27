@@ -85,13 +85,20 @@ jobs:
         # YAML CLI used by the unchanged shell installer. No real caches run.
         run: |
           sudo apt-get update
-          sudo apt-get install --no-install-recommends --yes tabix bcftools yq parallel
-          dpkg-query --show --showformat='${Package} ${Version}\n' tabix bcftools yq parallel
-          command -v bgzip tabix yq parallel
+          sudo apt-get install --no-install-recommends --yes tabix bcftools yq parallel bedtools g++ zlib1g-dev
+          dpkg-query --show --showformat='${Package} ${Version}\n' tabix bcftools yq parallel bedtools
+          command -v bgzip tabix yq parallel bedtools
           bgzip --version
           tabix --version
           yq --version
           parallel --version
+          # Upstream pybedtools 0.10.0 ships a source distribution and requires
+          # Cython<3. Keep its legacy build tools separate from scientific pins.
+          python -m pip install --only-binary=:all: 'setuptools==75.8.0' 'wheel==0.45.1' 'Cython==0.29.37'
+          python -m pip install --no-build-isolation --no-deps 'pybedtools==0.10.0'
+          python -m pip check
+          test "$(bedtools --version)" = 'bedtools v2.31.1'
+          python -c 'import pybedtools; assert pybedtools.__version__ == "0.10.0"'
 
       - name: Validate adapters and strict result comparison
         run: |
@@ -99,6 +106,9 @@ jobs:
           python -m unittest discover -s tests/nextflow -p 'test_cpu_contract.py' -v
           python -m unittest discover -s tests -p 'test_nextflow_parity.py' -v
           python -m unittest discover -s tests -p 'test_rust_rank_setup_bridge.py' -v
+          python -m unittest discover -s tests -p 'test_rust_pedigree_filtration.py' -v
+          python -m unittest discover -s tests -p 'test_rust_pedigree_filtration_caller.py' -v
+          python -m unittest discover -s tests -p 'test_rust_pedigree_transition.py' -v
           python -m unittest discover -s tests -p 'test_rust_pedigree_context_bridge.py' -v
           python -m unittest discover -s tests -p 'test_rust_control_multiply_bridge.py' -v
           python -m unittest discover -s tests -p 'test_rust_ranking_compatibility_bridge.py' -v
@@ -106,6 +116,7 @@ jobs:
           python -m unittest discover -s tests -p 'test_rust_pext_bridge.py' -v
           python -m unittest discover -s tests -p 'test_rust_criteria_summary_bridge.py' -v
           python -m unittest discover -s tests -p 'test_rust_posterior_bridge.py' -v
+          python -m unittest discover -s tests -p 'test_rust_pm4_bp3_bridge.py' -v
           python -m unittest discover -s tests -p 'test_rust_ranking_caller.py' -v
           python -m unittest discover -s tests -p 'test_rust_terminal_order_bridge.py' -v
           python -m unittest discover -s tests -p 'test_cluster_deployment.py' -v
@@ -164,6 +175,11 @@ jobs:
 
       - name: Compare bounded summary and posterior modules with frozen Python
         run: python rust/tests/differential_scoring.py "$CARGO_TARGET_DIR/debug/priva"
+
+      - name: Compare PM4 and BP3 with original Python and real bedtools
+        # Temporary synthetic inputs; actual interval tools and native command
+        # are mandatory. This does not establish family or clinical acceptance.
+        run: python rust/tests/pm4_bp3_compare.py --binary "$CARGO_TARGET_DIR/debug/priva"
 
       - name: Install the checksum-pinned Nextflow and Java runtime
         run: |

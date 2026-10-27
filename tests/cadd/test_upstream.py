@@ -26,6 +26,10 @@ from pathlib import Path
 import gzip,json,os,sys
 args=sys.argv[1:]
 name=Path(args[0]).name if args and args[0].endswith('.py') else Path(sys.argv[0]).name
+if name=='io_transport.py':
+    # Execute the real transport; only the upstream scientific tools are fake.
+    # Re-exec also applies the wrapper's command-local UTF-8 interpreter mode.
+    os.execv(sys.executable,[sys.executable,'-B']+args)
 if name=='git':
     if args[2:]==['rev-parse','HEAD']:
         print(os.environ.get('MOCK_REVISION','1fead0c1e02d3f0a8599bdb04e6b3a2dd70b4866'));sys.exit(0)
@@ -71,6 +75,11 @@ elif name=='predictSKmodel.py':
             print(line.rstrip()+'\t'+('RawScore' if index==0 else '1.500000'))
 elif name=='MMSplice.py':
     with gzip.open(flag('-i'),'rt') as f:sys.stdout.write(f.read())
+elif name=='predictVariants.py':
+    # Upstream RegSeq writes plain text; the real helper compresses it later.
+    with gzip.open(flag('--variants'),'rt',encoding='utf-8') as source:
+        with open(flag('--output'),'x',encoding='utf-8') as target:
+            target.write(source.read())
 elif name=='tabix':Path(args[-1]+'.tbi').touch()
 else:
     source=flag('--variants') if '--variants' in args else flag('--input')
@@ -101,7 +110,8 @@ class UpstreamCadd(unittest.TestCase):
                      'lib/tools/esmScore/esmScore_inFrame_av.py', 'lib/tools/regulatorySequence/predictVariants.py']:
             path = self.source / 'src/scripts' / name
             path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text('# Mock placeholder, never executed.\n')
+            path.write_text(MOCK if name in ['lib/tools/MMSplice.py',
+                'lib/tools/regulatorySequence/predictVariants.py'] else '# Mock placeholder, never executed.\n')
         self.assets = self.root / 'assets'
         self.assets.mkdir()
         for name in ['peptides.fa', 'regseq.json', 'weights.h5', 'reference.fa', 'reference.fa.fai',
@@ -193,6 +203,8 @@ class UpstreamCadd(unittest.TestCase):
                 if assembly=='GRCh38':expected+=['tabix','MMSplice.py']
                 expected+=['annotateVEPvcf.py']
                 self.assertEqual(self.calls(),expected)
+                plain,=list((self.root/(assembly+'-anno.work')).glob('annotation.*/regseq-utf8-*/regseq.vcf'))
+                self.assertEqual(plain.read_bytes(),gzip.decompress((plain.parent.parent/'regseq.vcf.gz').read_bytes()))
                 with gzip.open(bundle/'annotations.tsv.gz','rt') as f:self.assertFalse(f.read().startswith('##'))
                 self.events.write_text('')
                 result=self.run_task('calculate',bundle,assembly+'-calc')

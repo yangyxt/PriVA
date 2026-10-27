@@ -155,7 +155,7 @@ def create_criteria_summary(row, criteria_order=None, clingen_evidence=None):
 def summarize_acmg_criteria(df: pd.DataFrame,
                             criteria_dict: Dict[str, np.ndarray],
                             clingen_map_pkl: str,
-                            apply_clingen_override: bool = True) -> Tuple[pd.DataFrame, pd.DataFrame]:
+                            apply_clingen_override: bool = True, *, summary_binary=None) -> Tuple[pd.DataFrame, pd.DataFrame]:
     """
     Create a summary column of assigned criteria and a boolean matrix of all criteria.
 
@@ -272,6 +272,26 @@ def summarize_acmg_criteria(df: pd.DataFrame,
             "Use this only for benchmarking against ClinGen-curated variants."
         )
 
+    if summary_binary is not None:
+        # Optional summary-only native plan after all original construction,
+        # validation, loading and logs. A rejected plan changes no current data.
+        from priva_rust_criteria_summary import try_criteria_summary
+        _summary_plan = try_criteria_summary(df, criteria_matrix, clingen_map, summary_binary,
+            source_functions=(summarize_acmg_criteria, create_criteria_summary,
+                              fix_clingen_term, translate_strength_level))
+        if _summary_plan is not None:
+            df['ACMG_criteria'] = _summary_plan.summary
+            if clingen_map:
+                overridden = _summary_plan.overridden
+                for col in criteria_order:
+                    criteria_matrix.loc[overridden, col] = _summary_plan.updates[col]
+                logger.info(
+                    "ClinGen override applied to %s variants; %s further curated "
+                    "variants had no evidence codes recorded and kept PriVA's criteria",
+                    int(overridden.sum()),
+                    int(criteria_matrix["variant_id"].isin(clingen_map).sum() - overridden.sum()),
+                )
+            return df, criteria_matrix
     # Add summary column to original DataFrame
     df['ACMG_criteria'] = criteria_matrix.apply(create_criteria_summary, axis=1, criteria_order=criteria_order, clingen_evidence=clingen_map)
 

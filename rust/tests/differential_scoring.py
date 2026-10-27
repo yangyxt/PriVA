@@ -23,6 +23,7 @@ from typing import Dict, Tuple
 
 import numpy as np
 import pandas as pd
+from criteria_summary_source import historical_summary_source
 
 ROOT = Path(__file__).resolve().parents[2]
 SOURCE_SHA256 = "9111a76e3fc94a064e14d97b535bb1dd2132f7c61836f8e8892477d4c5e69646"
@@ -50,15 +51,19 @@ def reference_functions():
              and node.name in REFERENCE_FUNCTION_SHA256]
     if len(nodes) != len(REFERENCE_FUNCTION_SHA256) or {node.name for node in nodes} != set(REFERENCE_FUNCTION_SHA256):
         raise AssertionError("Frozen scoring functions must each have one top-level definition")
+    executed = []
     for node in nodes:
         if not isinstance(node, ast.FunctionDef) or node.decorator_list:
             raise AssertionError(f"Frozen scoring function has an unsupported definition: {node.name}")
-        segment_sha = hashlib.sha256(ast.get_source_segment(text, node).encode("utf-8")).hexdigest()
+        segment = (historical_summary_source(text) if node.name == "summarize_acmg_criteria"
+                   else ast.get_source_segment(text, node))
+        segment_sha = hashlib.sha256(segment.encode("utf-8")).hexdigest()
         if segment_sha != REFERENCE_FUNCTION_SHA256[node.name]:
             raise AssertionError(f"Frozen scoring function source changed: {node.name}")
+        executed.append(ast.parse(segment).body[0] if node.name == "summarize_acmg_criteria" else node)
     namespace = {"pd": pd, "np": np, "Dict": Dict, "Tuple": Tuple, "os": os,
                  "gzip": gzip, "pickle": pickle, "logger": logging.getLogger("frozen-scoring")}
-    exec(compile(ast.Module(body=nodes, type_ignores=[]), "frozen-acmg-scoring", "exec"), namespace)
+    exec(compile(ast.Module(body=executed, type_ignores=[]), "frozen-acmg-scoring", "exec"), namespace)
     print(f"current_whole_source_sha256={actual_sha}; exact_historical_functions={len(nodes)}")
     return namespace
 

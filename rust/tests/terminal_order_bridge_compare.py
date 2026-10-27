@@ -35,6 +35,8 @@ from types import SimpleNamespace
 import numpy as np
 import pandas as pd
 
+from criteria_summary_source import definition as summary_definition, historical_summary_source
+
 STAGES = ['r8', 'r1-r8', 'r1-r2-r8', 'r1-r2-r3-r8', 'r1-r2-r3-r4-r8',
           'r1-r2-r3-r4-r5-r6-r8', 'r1-r2-r3-r4-r5-r6-r7-r8']
 FULL_PEXT = STAGES[-1]
@@ -60,9 +62,25 @@ def _ranker_definition(tree):
     return definition
 
 
+
+def summary_proof_source(text):
+    """Restore only the recognized summary seam for whole-module comparison.
+
+    The returned text is proof-only. Workers continue to import the actual
+    candidate file and call its actual source-pinned functions.
+    """
+    restored = historical_summary_source(text)
+    current = ast.get_source_segment(text, summary_definition(ast.parse(text)))
+    assert text.count(current) == 1
+    return text.replace(current, restored, 1)
+
+
 def source_proof(reference, candidate):
-    original = ast.parse((reference / 'scripts/acmg_scoring.py').read_text())
-    updated = ast.parse((candidate / 'scripts/acmg_scoring.py').read_text())
+    reference_text = (reference / 'scripts/acmg_scoring.py').read_text()
+    candidate_text = (candidate / 'scripts/acmg_scoring.py').read_text()
+    assert historical_summary_source(reference_text) == historical_summary_source(candidate_text)
+    original = ast.parse(reference_text)
+    updated = ast.parse(summary_proof_source(candidate_text))
     ref = _ranker_definition(original)
     new = _ranker_definition(updated)
     ref, new = copy.deepcopy(ref), copy.deepcopy(new)
@@ -225,6 +243,7 @@ df.loc[pext_modulation_rows, "sort_index"] = pext_score_product(df, pext_modulat
     return dict(reference_scoring_sha256=sha(reference / 'scripts/acmg_scoring.py'),
                 candidate_scoring_sha256=sha(candidate / 'scripts/acmg_scoring.py'),
                 all_original_statements_and_prior_source_order_unchanged=True,
+                optional_summary_dispatch_and_keyword_verified=True,
                 original_R2_statement_and_warning_calls_exact=True,
                 original_R3_statement_and_control_call_order_exact=True,
                 original_R4_block_INFO_and_two_assignment_order_exact=True,

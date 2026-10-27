@@ -267,6 +267,9 @@ pub(crate) fn run() -> Result<()> {
     if args.get(1).map(String::as_str) == Some("criteria-summary") {
         return crate::acmg_scoring::criteria_summary::dispatch(&args[2..]);
     }
+    if args.get(1).map(String::as_str) == Some("posterior-probability") {
+        return crate::acmg_scoring::posterior_transport::dispatch(&args[2..]);
+    }
     if args.get(1).map(String::as_str) == Some("spliceai2-vcf") {
         return crate::spliceai2::dispatch(&args[2..]);
     }

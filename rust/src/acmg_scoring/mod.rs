@@ -11,6 +11,7 @@ pub mod criteria_summary;
 pub mod fix_clingen_term;
 pub mod pedigree_context;
 pub(crate) mod pedigree_context_transport;
+pub(crate) mod posterior_transport;
 pub mod ranking_compatibility;
 pub(crate) mod ranking_compatibility_transport;
 pub mod ranking_gene_weights;

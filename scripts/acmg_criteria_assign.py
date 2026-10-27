@@ -557,7 +557,20 @@ def ACMG_criteria_assign(anno_table: str,
     criteria_matrix.to_csv(output_matrix, sep="\t", index=False)
 
     # Apply quantification using ACMG_criteria column and use that to sort the variants
-    posterior_probability, acmg_class = zip(*criteria_matrix.apply(calculate_posterior_probability, axis=1))
+    # The explicit native opt-in also permits the separately qualified default
+    # posterior procedure. The original matrix write precedes admission; the
+    # original current-buffer expression owns every unsupported/failure case.
+    if ranking_binary is None:
+        posterior_probability, acmg_class = zip(*criteria_matrix.apply(calculate_posterior_probability, axis=1))
+    else:
+        from priva_rust_posterior import try_posterior_probability
+        posterior_plan = try_posterior_probability(
+            criteria_matrix, ranking_binary, source_function=calculate_posterior_probability,
+        )
+        if posterior_plan is None:
+            posterior_probability, acmg_class = zip(*criteria_matrix.apply(calculate_posterior_probability, axis=1))
+        else:
+            posterior_probability, acmg_class = zip(*posterior_plan)
     anno_df["ACMG_quant_score"] = posterior_probability
     anno_df["ACMG_class"] = acmg_class
 
@@ -653,7 +666,7 @@ if __name__ == "__main__":
     )
     parser.add_argument("--threads", type=int, required=False, default=10)
     parser.add_argument("--ranking_binary", type=str, required=False, default=None,
-                        help="Optional qualified PriVA Rust summary and ranker; criterion assignment, posterior calculation, and unsupported inputs retain Python.")
+                        help="Optional qualified PriVA Rust summaries, default-model posteriors and ranking; criterion assignment, control statistics and unsupported inputs retain Python.")
     args = parser.parse_args()
 
     anno_df, criteria_matrix = ACMG_criteria_assign(args.anno_table,

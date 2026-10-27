@@ -21,6 +21,7 @@ import unittest
 from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "scripts"))
 spec = importlib.util.spec_from_file_location("ranking_caller_task", ROOT / "bin/priva_task.py")
 adapter = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(adapter)
@@ -56,6 +57,30 @@ def ranking_dispatch(function, procedure="sort_and_rank_variants"):
     return candidates[0]
 
 
+def posterior_dispatch(function):
+    expected = ast.parse('''
+if ranking_binary is None:
+    posterior_probability, acmg_class = zip(*criteria_matrix.apply(calculate_posterior_probability, axis=1))
+else:
+    from priva_rust_posterior import try_posterior_probability
+    posterior_plan = try_posterior_probability(
+        criteria_matrix, ranking_binary, source_function=calculate_posterior_probability,
+    )
+    if posterior_plan is None:
+        posterior_probability, acmg_class = zip(*criteria_matrix.apply(calculate_posterior_probability, axis=1))
+    else:
+        posterior_probability, acmg_class = zip(*posterior_plan)
+''').body[0]
+    candidates = [node for node in function.body if isinstance(node, ast.If)
+                  and ast.dump(node.test) == ast.dump(expected.test)
+                  and node.body and isinstance(node.body[0], ast.Assign)
+                  and [ast.dump(target) for target in node.body[0].targets]
+                  == [ast.dump(target) for target in expected.body[0].targets]]
+    if len(candidates) != 1 or ast.dump(candidates[0]) != ast.dump(expected):
+        raise AssertionError("Unexpected posterior default/native/fallback seam")
+    return candidates[0]
+
+
 def historical_caller(function):
     function = copy.deepcopy(function)
     if (function.args.args[-1].arg != "ranking_binary"
@@ -81,6 +106,9 @@ def historical_caller(function):
             raise AssertionError("Default/native original arguments differ")
         position = function.body.index(dispatch)
         function.body[position:position + 1] = dispatch.body
+    dispatch = posterior_dispatch(function)
+    position = function.body.index(dispatch)
+    function.body[position:position + 1] = dispatch.body
     if ast_digest(function) != "fba4729cf524acc543df0d45a493007d7dc7f1e39ffb1bb8be4c474fac8330be":
         raise AssertionError("Historical ACMG calculations/publication order changed")
     return function
@@ -119,6 +147,121 @@ class RankingCallBoundary(unittest.TestCase):
         for name, function in cases:
             with self.subTest(name=name), self.assertRaises(AssertionError):
                 historical_caller(function)
+
+    def test_restoration_rejects_changed_duplicate_relocated_or_replayed_posterior_seams(self):
+        original = caller_function(acmg_tree())
+        cases = []
+        changed = copy.deepcopy(original)
+        posterior_dispatch(changed).body = [ast.Pass()]
+        cases.append(changed)
+        changed = copy.deepcopy(original)
+        posterior_dispatch(changed).orelse[1].value.keywords[0].value = ast.Constant(None)
+        cases.append(changed)
+        changed = copy.deepcopy(original)
+        posterior_dispatch(changed).orelse[2].body[0].value = ast.Constant(None)
+        cases.append(changed)
+        changed = copy.deepcopy(original)
+        dispatch = posterior_dispatch(changed)
+        changed.body.insert(changed.body.index(dispatch), copy.deepcopy(dispatch))
+        cases.append(changed)
+        changed = copy.deepcopy(original)
+        dispatch = posterior_dispatch(changed)
+        position = changed.body.index(dispatch)
+        changed.body[position - 1], changed.body[position] = dispatch, changed.body[position - 1]
+        cases.append(changed)
+        changed = copy.deepcopy(original)
+        dispatch = posterior_dispatch(changed)
+        dispatch.orelse.insert(0, copy.deepcopy(dispatch.body[0]))
+        cases.append(changed)
+        for function in cases:
+            with self.assertRaises(AssertionError):
+                historical_caller(function)
+
+    def test_actual_posterior_default_native_and_fallback_keep_original_apply_zip_contract(self):
+        import priva_rust_posterior
+        boundary = posterior_dispatch(caller_function(acmg_tree()))
+        rows = ((0.1, "Uncertain Significance"), (0, "Benign"))
+        for binary, native_plan in ((None, None), ("qualified", rows), ("qualified", None)):
+            current = SimpleNamespace(apply=mock.Mock(return_value=rows))
+            helper = object()
+            namespace = dict(ranking_binary=binary, criteria_matrix=current, calculate_posterior_probability=helper)
+            with mock.patch.object(priva_rust_posterior, "try_posterior_probability", return_value=native_plan) as native:
+                exec(compile(ast.Module(body=[copy.deepcopy(boundary)], type_ignores=[]), "actual-posterior-boundary", "exec"), namespace)
+            self.assertEqual(namespace["posterior_probability"], (0.1, 0))
+            self.assertEqual(namespace["acmg_class"], ("Uncertain Significance", "Benign"))
+            if binary is None:
+                native.assert_not_called()
+            else:
+                native.assert_called_once_with(current, binary, source_function=helper)
+            if native_plan is None:
+                current.apply.assert_called_once_with(helper, axis=1)
+            else:
+                current.apply.assert_not_called()
+
+    def test_matrix_write_failure_precedes_posterior_admission_or_apply(self):
+        import priva_rust_posterior
+        function = caller_function(acmg_tree())
+        dispatch = posterior_dispatch(function)
+        start = function.body.index(dispatch) - 1
+        write = function.body[start]
+        self.assertIsInstance(write, ast.Expr)
+        self.assertEqual(ast.unparse(write.value.func), "criteria_matrix.to_csv")
+        body = function.body[start:-1]
+        for binary in (None, "qualified"):
+            current = SimpleNamespace(to_csv=mock.Mock(side_effect=RuntimeError("matrix write failed")), apply=mock.Mock())
+            namespace = dict(criteria_matrix=current, output_matrix="fixture.acmg.tsv", ranking_binary=binary)
+            with mock.patch.object(priva_rust_posterior, "try_posterior_probability") as native, \
+                    self.assertRaisesRegex(RuntimeError, "^matrix write failed$"):
+                exec(compile(ast.Module(body=copy.deepcopy(body), type_ignores=[]), "actual-matrix-write-before-posterior", "exec"), namespace)
+            current.to_csv.assert_called_once_with("fixture.acmg.tsv", sep="\t", index=False)
+            current.apply.assert_not_called()
+            native.assert_not_called()
+
+    def test_empty_or_failed_apply_stops_after_matrix_write_before_either_score_publication(self):
+        import priva_rust_posterior
+        function = caller_function(acmg_tree())
+        dispatch = posterior_dispatch(function)
+        body = function.body[function.body.index(dispatch) - 1:-1]
+        for binary in (None, "qualified"):
+            for empty in (True, False):
+                apply = mock.Mock(return_value=[]) if empty else mock.Mock(side_effect=RuntimeError("row failed"))
+                current = SimpleNamespace(to_csv=mock.Mock(), apply=apply)
+                frame, rank, helper = mock.MagicMock(), mock.Mock(), object()
+                namespace = dict(criteria_matrix=current, output_matrix="fixture.acmg.tsv", ranking_binary=binary,
+                    anno_df=frame, sort_and_rank_variants=rank, calculate_posterior_probability=helper)
+                with mock.patch.object(priva_rust_posterior, "try_posterior_probability", return_value=None), \
+                        self.assertRaises(ValueError if empty else RuntimeError):
+                    exec(compile(ast.Module(body=copy.deepcopy(body), type_ignores=[]), "actual-posterior-error-order", "exec"), namespace)
+                current.to_csv.assert_called_once()
+                current.apply.assert_called_once_with(helper, axis=1)
+                frame.__setitem__.assert_not_called()
+                rank.assert_not_called()
+
+    def test_score_publication_precedes_class_failure_without_replaying_matrix_or_apply(self):
+        import priva_rust_posterior
+        function = caller_function(acmg_tree())
+        dispatch = posterior_dispatch(function)
+        body = function.body[function.body.index(dispatch) - 1:-1]
+        rows = ((0.1, "Uncertain Significance"), (0, "Benign"))
+        for binary in (None, "qualified"):
+            calls = []
+            class Frame:
+                def __setitem__(self, name, value):
+                    calls.append((name, value))
+                    if name == "ACMG_class":
+                        raise RuntimeError("class publication failed")
+            current = SimpleNamespace(to_csv=mock.Mock(), apply=mock.Mock(return_value=rows))
+            rank = mock.Mock()
+            namespace = dict(criteria_matrix=current, output_matrix="fixture.acmg.tsv", ranking_binary=binary,
+                anno_df=Frame(), sort_and_rank_variants=rank, calculate_posterior_probability=object())
+            with mock.patch.object(priva_rust_posterior, "try_posterior_probability", return_value=rows), \
+                    self.assertRaisesRegex(RuntimeError, "^class publication failed$"):
+                exec(compile(ast.Module(body=copy.deepcopy(body), type_ignores=[]), "actual-two-posterior-publications", "exec"), namespace)
+            self.assertEqual(calls, [("ACMG_quant_score", (0.1, 0)),
+                                     ("ACMG_class", ("Uncertain Significance", "Benign"))])
+            current.to_csv.assert_called_once()
+            self.assertEqual(current.apply.call_count, int(binary is None))
+            rank.assert_not_called()
 
     def test_actual_summary_call_uses_current_frame_and_dictionary_once(self):
         boundary = ranking_dispatch(caller_function(acmg_tree()), "summarize_acmg_criteria")

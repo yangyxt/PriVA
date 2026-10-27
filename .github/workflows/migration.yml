@@ -104,6 +104,7 @@ jobs:
           python -m unittest discover -s tests -p 'test_rust_ranking_compatibility_bridge.py' -v
           python -m unittest discover -s tests -p 'test_rust_gene_weights_bridge.py' -v
           python -m unittest discover -s tests -p 'test_rust_pext_bridge.py' -v
+          python -m unittest discover -s tests -p 'test_rust_criteria_summary_bridge.py' -v
           python -m unittest discover -s tests -p 'test_rust_ranking_caller.py' -v
           python -m unittest discover -s tests -p 'test_rust_terminal_order_bridge.py' -v
           python -m unittest discover -s tests -p 'test_cluster_deployment.py' -v

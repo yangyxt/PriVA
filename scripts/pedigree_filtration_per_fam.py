@@ -292,11 +292,21 @@ if __name__ == '__main__':
     parser.add_argument("-p", "--ped_table", type=str, help="The path to the table of pedigree info", required=True)
     parser.add_argument("-f", "--target_fam", type=str, help="The Family ID of the target fam in this batch", required=True)
     parser.add_argument("-o", "--output", type=str, help="The path to the output VCF", required=True)
+    # 2026-10-27: explicit, separately qualified complete-filter backend only.
+    # The original twelve definitions/default route remain the Python oracle.
+    parser.add_argument("--pedigree-binary", type=str, default=None,
+                        help="Opt in to the native pedigree filter using this executable")
     
     args=parser.parse_args()
-    pedigree_filter(vcf_path=args.vcf,
-                    ped_path=args.ped_table,
-                    target_fam=args.target_fam,
-                    output=args.output)
+    if args.pedigree_binary:
+        from priva_rust_pedigree_filtration import pedigree_filter as native_pedigree_filter
+        native_pedigree_filter(vcf_path=args.vcf, ped_path=args.ped_table,
+                               target_fam=args.target_fam, output=args.output,
+                               binary=args.pedigree_binary, namespace=globals())
+    else:
+        pedigree_filter(vcf_path=args.vcf,
+                        ped_path=args.ped_table,
+                        target_fam=args.target_fam,
+                        output=args.output)
     
     

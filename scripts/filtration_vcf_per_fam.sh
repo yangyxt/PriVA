@@ -17,14 +17,16 @@ source ${SCRIPT_DIR}/common_bash_utils.sh
 
 
 function filter_allele_based_on_pedigree_data {
-    local OPTIND i o p f
-    while getopts i:o::p::f:: args
+    local OPTIND i o p f b
+    local pedigree_binary
+    while getopts i:o::p::f::b: args
     do
         case ${args} in
             i) local input_vcf=$OPTARG ;;
             p) local pedfile=$OPTARG ;;
             o) local output_vcf=$OPTARG ;;
             f) local family_name=$OPTARG ;;
+            b) pedigree_binary=$OPTARG ;;
             *) echo "No argument passed. At least pass an argument specifying the family ID" ;;
         esac
     done
@@ -44,6 +46,19 @@ function filter_allele_based_on_pedigree_data {
        return 0;
     fi
 
+    # 2026-10-27: pedigree selection is independent of the ranking binary.
+    # Empty selection preserves the original argv, warm guard and Python path.
+    local -a pedigree_native_args=()
+    if [[ -n "${pedigree_binary}" && "${pedigree_binary}" != "null" ]]; then
+        if [[ "${pedigree_binary}" != /* || ! "${pedigree_binary}" =~ ^[A-Za-z0-9_./:+-]+$ ||
+              ! -f "${pedigree_binary}" || ! -s "${pedigree_binary}" || ! -x "${pedigree_binary}" ]]; then
+            log "ERROR: priva_pedigree_binary must be an existing executable at an absolute supported path."
+            return 1
+        fi
+        pedigree_native_args=(--pedigree-binary "${pedigree_binary}")
+        log "Explicit native pedigree filter: ${pedigree_binary}"
+    fi
+
     log "Start filtering the records where patients GT are the same with controls GT info"
     log "Running commands: python3 ${SCRIPT_DIR}/pedigree_filtration_per_fam.py \
     -v ${input_vcf} \
@@ -55,7 +70,7 @@ function filter_allele_based_on_pedigree_data {
     -v ${input_vcf} \
     -p ${pedfile} \
     -f ${family_name} \
-    -o ${output_vcf} && \
+    -o ${output_vcf} "${pedigree_native_args[@]}" && \
     tabix -p vcf -f ${output_vcf} && \
     display_vcf ${output_vcf} || { \
     log "Failed to filter the records where patients GT are the same with controls GT info"; \
@@ -179,11 +194,17 @@ function main_filtration () {
     # Filter the variants based on the pedigree information\
     if [[ -f ${ped_file} ]]; then
         # Optional operation based on pedigree information
+        local priva_pedigree_binary
+        local -a pedigree_backend_args=()
+        priva_pedigree_binary=$(read_yaml "${config_file}" "priva_pedigree_binary") || return 1
+        if [[ -n "${priva_pedigree_binary}" && "${priva_pedigree_binary}" != "null" ]]; then
+            pedigree_backend_args=(-b "${priva_pedigree_binary}")
+        fi
         filter_allele_based_on_pedigree_data \
         -i ${fam_vcf} \
         -p ${ped_file} \
         -f ${fam_name} \
-        -o ${fam_vcf/.vcf*/.filtered.vcf.gz} && \
+        -o ${fam_vcf/.vcf*/.filtered.vcf.gz} "${pedigree_backend_args[@]}" && \
         local filtered_vcf=${fam_vcf/.vcf*/.filtered.vcf.gz} || \
         { log "Failed to filter the variants based on the pedigree information"; return 1; }
     else

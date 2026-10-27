@@ -186,6 +186,11 @@ def runtime_resources(config, root, mode, vcf_hub_mode="off", cadd_hub_mode="cop
         if not binary.is_file() or binary.stat().st_size == 0 or not os.access(binary, os.X_OK):
             raise ContractError("priva_ranking_binary must be a nonempty executable file")
         paths["priva_ranking_binary"] = binary
+    if config.get("priva_pedigree_binary"):
+        binary = checked_path(config["priva_pedigree_binary"], "priva_pedigree_binary")
+        if not binary.is_file() or binary.stat().st_size == 0 or not os.access(binary, os.X_OK):
+            raise ContractError("priva_pedigree_binary must be a nonempty executable file")
+        paths["priva_pedigree_binary"] = binary
     if bool(config.get("pp1_vcf")) != bool(config.get("pp1_ped")):
         raise ContractError("pp1_vcf and pp1_ped must be supplied together")
     selected_hpo = config.get("hpo_assertions")
@@ -261,17 +266,22 @@ def inventory_record(path, checksum=False):
 
 def ranking_binary_record(path):
     """Pin executable bytes even when large annotation caches use stat reuse."""
+    return executable_record(path, "priva_ranking_binary")
+
+
+def executable_record(path, key):
+    """The optional pedigree executable has its own independently selected key."""
     path = Path(path)
     def identity(value):
         return (value.st_dev, value.st_ino, value.st_mode, value.st_size,
                 value.st_mtime_ns, value.st_ctime_ns, value.st_nlink)
     before = (identity(path.lstat()), identity(path.stat()), str(path.resolve(strict=True)))
     if not path.is_file() or path.stat().st_size == 0 or not os.access(path, os.X_OK):
-        raise ContractError("priva_ranking_binary must be a nonempty executable file")
+        raise ContractError(f"{key} must be a nonempty executable file")
     record = inventory_record(path, checksum=True)
     after = (identity(path.lstat()), identity(path.stat()), str(path.resolve(strict=True)))
     if before != after:
-        raise ContractError("priva_ranking_binary changed during identity capture")
+        raise ContractError(f"{key} changed during identity capture")
     record["executable_mode"] = before[1][2] & 0o777
     return record
 
@@ -280,6 +290,7 @@ def inventory(paths, checksum=False):
     records = {}
     for key, path in sorted(paths.items()):
         records[key] = (ranking_binary_record(path) if key == "priva_ranking_binary"
+                        else executable_record(path, key) if key == "priva_pedigree_binary"
                         else inventory_record(path, checksum))
         if path.is_dir():
             # Include every dependency below directory resources without hashing
@@ -308,6 +319,8 @@ def build_manifest(args):
                                  else "size-mtime-inventory"),
                "vcf_hub_mode": args.vcf_hub_mode, "cadd_hub_mode": args.cadd_hub_mode,
                "resources": inventory(paths, args.checksum)}
+    if not args.checksum and "priva_pedigree_binary" in paths:
+        payload["identity_kind"] += "+pedigree-sha256"
     payload["bundle_id"] = json_digest(payload)
     write_json(args.output, payload)
 
@@ -331,7 +344,7 @@ def verify_manifest(manifest, config_path, root, mode, vcf_hub_mode, cadd_hub_mo
         raise ContractError("Resource inventory membership changed; freeze and rebuild manifest")
     for key, record in current.items():
         expected_record = {k: v for k, v in manifest["resources"][key].items()
-                           if k != "sha256" or key == "priva_ranking_binary"}
+                           if k != "sha256" or key in ("priva_ranking_binary", "priva_pedigree_binary")}
         if record != expected_record:
             raise ContractError(f"Resource changed since manifest creation: {key}")
     return paths

@@ -352,7 +352,14 @@ def ACMG_criteria_assign(anno_table: str,
     # Apply PM4 and BP3 criteria together (mutually exclusive)
     # PM4: in-frame indels NOT in repetitive region OR in functional domain (or stop-loss)
     # BP3: in-frame indels IN repetitive region WITHOUT functional domain
-    pm4_criteria, bp3_criteria, in_repeat_vars = PM4_BP3_criteria(anno_df, pvs1_criteria, repeat_region_file, loc_intol_domain)
+    if ranking_binary is None:
+        pm4_criteria, bp3_criteria, in_repeat_vars = PM4_BP3_criteria(anno_df, pvs1_criteria, repeat_region_file, loc_intol_domain)
+    else:
+        from priva_rust_pm4_bp3 import PM4_BP3_criteria as pm4_bp3_with_native
+        pm4_criteria, bp3_criteria, in_repeat_vars = pm4_bp3_with_native(
+            anno_df, pvs1_criteria, repeat_region_file, loc_intol_domain,
+            ranking_binary=ranking_binary,
+        )
     anno_df["variant_in_repeat_region"] = in_repeat_vars
     gc.collect()
     logger.info(f"PM4 criteria applied, {(pm4_criteria > 0).sum()} variants are having the PM4 criteria")

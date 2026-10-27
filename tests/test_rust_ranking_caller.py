@@ -81,6 +81,26 @@ else:
     return candidates[0]
 
 
+def pm4_bp3_dispatch(function):
+    expected = ast.parse('''
+if ranking_binary is None:
+    pm4_criteria, bp3_criteria, in_repeat_vars = PM4_BP3_criteria(anno_df, pvs1_criteria, repeat_region_file, loc_intol_domain)
+else:
+    from priva_rust_pm4_bp3 import PM4_BP3_criteria as pm4_bp3_with_native
+    pm4_criteria, bp3_criteria, in_repeat_vars = pm4_bp3_with_native(
+        anno_df, pvs1_criteria, repeat_region_file, loc_intol_domain,
+        ranking_binary=ranking_binary,
+    )
+''').body[0]
+    candidates = [node for node in function.body if isinstance(node, ast.If)
+                  and node.body and isinstance(node.body[0], ast.Assign)
+                  and [ast.dump(target) for target in node.body[0].targets]
+                  == [ast.dump(target) for target in expected.body[0].targets]]
+    if len(candidates) != 1 or ast.dump(candidates[0]) != ast.dump(expected):
+        raise AssertionError("Unexpected PM4/BP3 default/native seam")
+    return candidates[0]
+
+
 def historical_caller(function):
     function = copy.deepcopy(function)
     if (function.args.args[-1].arg != "ranking_binary"
@@ -88,6 +108,9 @@ def historical_caller(function):
         raise AssertionError("Unexpected optional caller argument")
     function.args.args.pop()
     function.args.defaults.pop()
+    dispatch = pm4_bp3_dispatch(function)
+    position = function.body.index(dispatch)
+    function.body[position:position + 1] = dispatch.body
     for procedure, keyword in (("summarize_acmg_criteria", "summary_binary"),
                                ("sort_and_rank_variants", "ranking_binary")):
         dispatch = ranking_dispatch(function, procedure)
@@ -118,6 +141,99 @@ class RankingCallBoundary(unittest.TestCase):
     def test_existing_criteria_calculation_and_write_order_are_unchanged(self):
         restored = historical_caller(caller_function(acmg_tree()))
         self.assertEqual(ast_digest(restored), "fba4729cf524acc543df0d45a493007d7dc7f1e39ffb1bb8be4c474fac8330be")
+
+    def test_restoration_rejects_changed_duplicate_relocated_or_replayed_pm4_bp3(self):
+        original = caller_function(acmg_tree())
+        cases = []
+        changed = copy.deepcopy(original)
+        pm4_bp3_dispatch(changed).body = [ast.Pass()]
+        cases.append(changed)
+        changed = copy.deepcopy(original)
+        pm4_bp3_dispatch(changed).orelse[1].value.keywords[-1].value = ast.Constant(None)
+        cases.append(changed)
+        changed = copy.deepcopy(original)
+        dispatch = pm4_bp3_dispatch(changed)
+        changed.body.insert(changed.body.index(dispatch), copy.deepcopy(dispatch))
+        cases.append(changed)
+        changed = copy.deepcopy(original)
+        dispatch = pm4_bp3_dispatch(changed)
+        position = changed.body.index(dispatch)
+        changed.body[position], changed.body[position + 1] = changed.body[position + 1], dispatch
+        cases.append(changed)
+        changed = copy.deepcopy(original)
+        dispatch = pm4_bp3_dispatch(changed)
+        dispatch.orelse.insert(0, copy.deepcopy(dispatch.body[0]))
+        cases.append(changed)
+        for function in cases:
+            with self.assertRaises(AssertionError):
+                historical_caller(function)
+
+    def test_actual_pm4_bp3_call_publication_gc_and_logs_keep_their_order(self):
+        import numpy as np
+        function = caller_function(acmg_tree())
+        boundary = pm4_bp3_dispatch(function)
+        start = function.body.index(boundary)
+        body = function.body[start:start + 5]
+        for binary in (None, "qualified"):
+            events, arguments, publications = [], [], {}
+            outputs = (np.array([2, 0]), np.array([0, 1]), object())
+            class Frame:
+                def __setitem__(self, name, value):
+                    events.append("publish:" + name)
+                    publications[name] = value
+            frame, pvs, regions, domain = Frame(), object(), object(), object()
+            def capture(route):
+                def call(*args, **kwargs):
+                    events.append(route)
+                    arguments.append((args, kwargs))
+                    return outputs
+                return call
+            namespace = dict(ranking_binary=binary, anno_df=frame, pvs1_criteria=pvs,
+                repeat_region_file=regions, loc_intol_domain=domain,
+                PM4_BP3_criteria=capture("original"),
+                gc=SimpleNamespace(collect=lambda: events.append("gc")),
+                logger=SimpleNamespace(info=lambda message: events.append("log:" + message)))
+            facade = SimpleNamespace(PM4_BP3_criteria=capture("native"))
+            with mock.patch.dict(sys.modules, {"priva_rust_pm4_bp3": facade}):
+                exec(compile(ast.Module(body=copy.deepcopy(body), type_ignores=[]),
+                             "actual-pm4-bp3-publication", "exec"), namespace)
+            self.assertEqual(events, ["original" if binary is None else "native",
+                "publish:variant_in_repeat_region", "gc",
+                "log:PM4 criteria applied, 1 variants are having the PM4 criteria",
+                "log:BP3 criteria applied, 1 variants are having the BP3 criteria"])
+            self.assertEqual(arguments, [((frame, pvs, regions, domain),
+                {} if binary is None else {"ranking_binary": binary})])
+            self.assertIs(publications["variant_in_repeat_region"], outputs[2])
+            for name, value in zip(("pm4_criteria", "bp3_criteria", "in_repeat_vars"), outputs):
+                self.assertIs(namespace[name], value)
+
+    def test_pm4_bp3_failure_does_not_replay_or_publish_later_results(self):
+        function = caller_function(acmg_tree())
+        boundary = pm4_bp3_dispatch(function)
+        start = function.body.index(boundary)
+        body = function.body[start:start + 5]
+        for binary in (None, "qualified"):
+            for outputs in (None, (object(), object())):
+                frame, collect, info = mock.MagicMock(), mock.Mock(), mock.Mock()
+                error = ValueError("original phase failure")
+                selected = mock.Mock(side_effect=error) if outputs is None else mock.Mock(return_value=outputs)
+                unused = mock.Mock()
+                namespace = dict(ranking_binary=binary, anno_df=frame, pvs1_criteria=object(),
+                    repeat_region_file=object(), loc_intol_domain=object(),
+                    PM4_BP3_criteria=selected if binary is None else unused,
+                    gc=SimpleNamespace(collect=collect), logger=SimpleNamespace(info=info))
+                facade = SimpleNamespace(PM4_BP3_criteria=unused if binary is None else selected)
+                with mock.patch.dict(sys.modules, {"priva_rust_pm4_bp3": facade}), \
+                        self.assertRaises(ValueError) as caught:
+                    exec(compile(ast.Module(body=copy.deepcopy(body), type_ignores=[]),
+                                 "actual-pm4-bp3-failure", "exec"), namespace)
+                if outputs is None:
+                    self.assertIs(caught.exception, error)
+                selected.assert_called_once()
+                unused.assert_not_called()
+                frame.__setitem__.assert_not_called()
+                collect.assert_not_called()
+                info.assert_not_called()
 
     def test_restoration_rejects_skipped_reordered_duplicate_or_changed_summary_dispatch(self):
         original = caller_function(acmg_tree())

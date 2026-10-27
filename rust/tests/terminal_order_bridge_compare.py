@@ -546,6 +546,10 @@ def compare(args):
             # old stage-only mask seeds the sample; R2/R4 recompute the actual
             # current mask. Direct nullable/IEEE storage is proved separately.
             data = helper.base_frame(len(entry))
+            # R1/R4 regenerate scores and compatibility, but never SYMBOL.
+            # Preserve the old gene seed's omitted consumed column.
+            if 'SYMBOL' not in entry.columns:
+                data = data.drop(columns='SYMBOL')
             data.index = entry.index
             data = data.drop(columns=[column for column in data.columns if column in entry.columns])
             data = pd.concat([data, entry], axis=1)

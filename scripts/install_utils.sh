@@ -4559,6 +4559,28 @@ function Nextflow_runtime_install() {
 }
 
 
+function PriVA_rust_install() {
+    [[ $# -eq 2 && ${1:-} == --config && -r ${2:-} ]] || {
+        log "ERROR: Use PriVA_rust_install --config CONFIG"
+        return 2
+    }
+    local cache_root
+    cache_root=$(read_yaml "$2" cache_root) || return 1
+    [[ ${cache_root} == /* && -d ${cache_root} ]] || {
+        log "ERROR: Configure an existing absolute cache_root before installing the optional PriVA CLI."
+        return 1
+    }
+    # Match the established Nextflow root-alias normalization. The small helper
+    # rejects symlinked managed children and records the actual build profile;
+    # installing this executable never selects a ranking or raw-workflow backend.
+    cache_root=$(realpath -ms -- "${cache_root}") || return 1
+    cache_root=$(realpath -e -- "${cache_root}") || return 1
+    [[ ${cache_root} != / ]] || { log "ERROR: cache_root must resolve to dedicated storage."; return 1; }
+    python "${SCRIPT_DIR}/bootstrap_priva_rust.py" install \
+        --source-root "${BASE_DIR}" --cache-root "${cache_root}" || return 1
+}
+
+
 function priva_export_installed_environment() {
     [[ $# -eq 2 && ${1:-} == --config && -r ${2:-} ]] || {
         log "ERROR: Use priva_export_installed_environment --config CONFIG."
@@ -4578,6 +4600,7 @@ function main_install() {
         printf 'Creates priva_acmg from %s/acmg_conda_rough.yml or changes its VEP release.\n' "${BASE_DIR}"
         printf 'The environment supplies yq after the bootstrap release scalar is checked.\n'
         printf 'Installs the pinned Nextflow driver and private JRE under cache_root/runtime.\n'
+        printf 'Installs the managed PriVA Rust CLI under cache_root/runtime without selecting a backend.\n'
         return 0
     fi
     [[ $# -eq 1 && ${1:-} != -* && -r ${1:-} ]] || {
@@ -4604,6 +4627,8 @@ function main_install() {
     bundled_snapshot_install "${config_file}" || return 1
     Nextflow_runtime_install "${config_file}" || \
     { log "Failed to install the pinned Nextflow driver and private JRE"; return 1; }
+    PriVA_rust_install --config "${config_file}" || \
+    { log "Failed to install the managed PriVA Rust CLI"; return 1; }
 
     local has_error=0
     local skip_vep_install=0

@@ -1,7 +1,7 @@
 """Installer dispatch fixtures, without Java, downloads or scientific work.
 
-Exercise the real main_install and Nextflow_runtime_install functions. Only the
-driver's subprocess and unrelated acquisition stages are stubbed. The separate
+Exercise the real main_install and runtime install functions. Only the
+runtime helpers' subprocesses and unrelated acquisition stages are stubbed. The separate
 bootstrap suite checks driver installation/recovery; these tests establish its
 place in main_install, config-derived destination and failure propagation.
 """
@@ -25,11 +25,16 @@ record_call() {
 read_yaml() {
     "$TEST_PYTHON" -c 'import json,sys; v=json.load(open(sys.argv[1])).get(sys.argv[2]); print("null" if v is None else v)' "$1" "$2"
 }
-# Intercept only the external driver helper. No real network/JVM in this suite.
+# Intercept only the external runtime helpers. No network/JVM/Cargo here.
 bash() {
     [[ $1 == "$SCRIPT_DIR/bootstrap_nextflow_runtime.sh" ]] || return 98
     record_call driver "$@"
     return "${DRIVER_STATUS:-0}"
+}
+python() {
+    [[ $1 == "$SCRIPT_DIR/bootstrap_priva_rust.py" ]] || return 98
+    record_call rust "$@"
+    return "${RUST_STATUS:-0}"
 }
 '''
 MAIN_FIXTURES = r'''
@@ -77,6 +82,10 @@ class NextflowDriverInstallTests(unittest.TestCase):
     def expected_driver_call(self):
         return ["driver", str(ROOT / "scripts/bootstrap_nextflow_runtime.sh"),
                 "install", "--prefix", str(self.cache / "runtime/priva-nextflow-25.10.4")]
+
+    def expected_rust_call(self):
+        return ["rust", str(ROOT / "scripts/bootstrap_priva_rust.py"), "install",
+                "--source-root", str(ROOT), "--cache-root", str(self.cache)]
 
     def test_direct_install_uses_config_root_and_named_helper_interface(self):
         for suffix in ("", "/"):
@@ -143,11 +152,12 @@ class NextflowDriverInstallTests(unittest.TestCase):
                 self.assertEqual(result.returncode, 2)
                 self.assertEqual(calls, [])
 
-    def test_main_orders_driver_after_preflight_and_before_reference(self):
+    def test_main_orders_runtimes_after_preflight_and_before_reference(self):
         result, calls = self.run_fixture(MAIN_FIXTURES)
         self.assertEqual(result.returncode, 1)  # Reference fixture intentionally stops.
-        self.assertEqual([row[0] for row in calls], ["manual", "config", "bundles", "driver", "reference"])
+        self.assertEqual([row[0] for row in calls], ["manual", "config", "bundles", "driver", "rust", "reference"])
         self.assertEqual(calls[3], self.expected_driver_call())
+        self.assertEqual(calls[4], self.expected_rust_call())
         self.assertEqual(calls[-1][1:], [str(self.config)])
 
     def test_driver_failure_stops_main_before_reference_or_success(self):
@@ -156,6 +166,14 @@ class NextflowDriverInstallTests(unittest.TestCase):
         self.assertEqual([row[0] for row in calls], ["manual", "config", "bundles", "driver"])
         self.assertIn("Failed to install the pinned Nextflow driver", result.stderr + result.stdout)
         self.assertNotIn("Nextflow driver ready", result.stderr + result.stdout)
+
+    def test_rust_failure_stops_main_before_reference_or_success(self):
+        result, calls = self.run_fixture(MAIN_FIXTURES, RUST_STATUS="73")
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual([row[0] for row in calls], ["manual", "config", "bundles", "driver", "rust"])
+        self.assertEqual(calls[-1], self.expected_rust_call())
+        self.assertIn("Failed to install the managed PriVA Rust CLI", result.stderr + result.stdout)
+        self.assertNotIn("All installations completed successfully", result.stderr + result.stdout)
 
     def test_preflight_failure_prevents_driver_and_resource_work(self):
         for variable, expected in (("MANUAL_STATUS", ["manual"]),

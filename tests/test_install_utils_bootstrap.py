@@ -294,6 +294,7 @@ class InstallerBootstrapTests(unittest.TestCase):
             priva_prepare_install_config() { return 0; }
             bundled_snapshot_install() { return 0; }
             Nextflow_runtime_install() { return 0; }  # Driver acquisition has separate fixtures.
+            PriVA_rust_install() { return 0; }  # Rust deployment has separate fixtures.
             reference_genome_install() { printf 'REFERENCE_STAGE_REACHED\n'; return 73; }
             main_install "$@"
         ''', *args)
@@ -680,6 +681,8 @@ class InstallerBootstrapTests(unittest.TestCase):
             priva_configure_cache_paths() { [[ ${2:-} != --check ]] || printf '%s' '{}'; return 0; }
             priva_configure_portable_paths() { return 0; }
             Nextflow_runtime_install() { return 0; }  # Release-forwarding fixture only.
+            PriVA_rust_install() { return 0; }  # Release-forwarding fixture only.
+            bundled_snapshot_install() { return 0; }  # Release-forwarding fixture only.
             reference_genome_install() { return 0; }
             update_yaml() { printf 'UNEXPECTED_CONFIG_UPDATE\n'; return 1; }
             vep_cache_api_install() { printf 'CACHE_ARGS=%s\n' "$*"; return 73; }

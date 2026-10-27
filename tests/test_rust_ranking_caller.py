@@ -1,4 +1,4 @@
-"""Exercise optional ranking dispatch and executable identity, without model inference.
+"""Exercise optional summary/ranking dispatch and executable identity, without model inference.
 
 The AST pins protect the existing ACMG calculations and write order. Temporary
 files and the executable below are dispatch fixtures, not scientific inputs.
@@ -34,37 +34,135 @@ def acmg_tree():
     return ast.parse((ROOT / "scripts/acmg_criteria_assign.py").read_text())
 
 
-def ranking_dispatch(function):
+def caller_function(tree):
+    nodes = [node for node in tree.body if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+             and node.name == "ACMG_criteria_assign"]
+    if len(nodes) != 1 or type(nodes[0]) is not ast.FunctionDef or nodes[0].decorator_list:
+        raise AssertionError("Expected one undecorated synchronous ACMG caller")
+    return nodes[0]
+
+
+def ranking_dispatch(function, procedure="sort_and_rank_variants"):
+    if procedure not in ("sort_and_rank_variants", "summarize_acmg_criteria"):
+        raise AssertionError("Unrecognized optional procedure")
     candidates = [node for node in function.body if isinstance(node, ast.If)
-                  and ast.dump(node.test) == ast.dump(ast.parse("ranking_binary is None", mode="eval").body)]
+                  and ast.dump(node.test) == ast.dump(ast.parse("ranking_binary is None", mode="eval").body)
+                  and node.body and isinstance(node.body[0], ast.Assign)
+                  and isinstance(node.body[0].value, ast.Call)
+                  and isinstance(node.body[0].value.func, ast.Name)
+                  and node.body[0].value.func.id == procedure]
     if len(candidates) != 1:
-        raise AssertionError("Expected one explicit default/native ranking boundary")
+        raise AssertionError("Expected one explicit default/native " + procedure + " boundary")
     return candidates[0]
+
+
+def historical_caller(function):
+    function = copy.deepcopy(function)
+    if (function.args.args[-1].arg != "ranking_binary"
+            or ast.dump(function.args.defaults[-1]) != "Constant(value=None)"):
+        raise AssertionError("Unexpected optional caller argument")
+    function.args.args.pop()
+    function.args.defaults.pop()
+    for procedure, keyword in (("summarize_acmg_criteria", "summary_binary"),
+                               ("sort_and_rank_variants", "ranking_binary")):
+        dispatch = ranking_dispatch(function, procedure)
+        if len(dispatch.body) != 1 or len(dispatch.orelse) != 1:
+            raise AssertionError("Unexpected optional procedure statements")
+        original_call = dispatch.body[0]
+        native_call = copy.deepcopy(dispatch.orelse[0])
+        if not isinstance(native_call, ast.Assign) or not isinstance(native_call.value, ast.Call):
+            raise AssertionError("Unexpected optional call")
+        keywords = native_call.value.keywords
+        if (not keywords or keywords[-1].arg != keyword
+                or ast.dump(keywords[-1].value) != "Name(id='ranking_binary', ctx=Load())"):
+            raise AssertionError("Unexpected optional executable forwarding")
+        keywords.pop()
+        if ast.dump(native_call) != ast.dump(original_call):
+            raise AssertionError("Default/native original arguments differ")
+        position = function.body.index(dispatch)
+        function.body[position:position + 1] = dispatch.body
+    if ast_digest(function) != "fba4729cf524acc543df0d45a493007d7dc7f1e39ffb1bb8be4c474fac8330be":
+        raise AssertionError("Historical ACMG calculations/publication order changed")
+    return function
 
 
 class RankingCallBoundary(unittest.TestCase):
     def test_existing_criteria_calculation_and_write_order_are_unchanged(self):
-        tree = acmg_tree()
-        functions = [node for node in tree.body if isinstance(node, ast.FunctionDef)
-                     and node.name == "ACMG_criteria_assign"]
-        self.assertEqual(len(functions), 1)
-        function = copy.deepcopy(functions[0])
-        self.assertEqual(function.args.args[-1].arg, "ranking_binary")
-        self.assertEqual(ast.dump(function.args.defaults[-1]), "Constant(value=None)")
-        function.args.args.pop()
-        function.args.defaults.pop()
-        dispatch = ranking_dispatch(function)
-        self.assertEqual(len(dispatch.body), 1)
-        self.assertEqual(len(dispatch.orelse), 1)
-        original_call = dispatch.body[0]
-        native_call = copy.deepcopy(dispatch.orelse[0])
-        native_keywords = native_call.value.keywords
-        self.assertEqual(native_keywords[-1].arg, "ranking_binary")
-        self.assertEqual(ast.dump(native_keywords[-1].value), "Name(id='ranking_binary', ctx=Load())")
-        native_keywords.pop()
-        self.assertEqual(ast.dump(native_call), ast.dump(original_call))
-        function.body[function.body.index(dispatch):function.body.index(dispatch) + 1] = dispatch.body
-        self.assertEqual(ast_digest(function), "fba4729cf524acc543df0d45a493007d7dc7f1e39ffb1bb8be4c474fac8330be")
+        restored = historical_caller(caller_function(acmg_tree()))
+        self.assertEqual(ast_digest(restored), "fba4729cf524acc543df0d45a493007d7dc7f1e39ffb1bb8be4c474fac8330be")
+
+    def test_restoration_rejects_skipped_reordered_duplicate_or_changed_summary_dispatch(self):
+        original = caller_function(acmg_tree())
+        cases = []
+        changed = copy.deepcopy(original)
+        ranking_dispatch(changed, "summarize_acmg_criteria").body = [ast.Pass()]
+        cases.append(("skipped", changed))
+        changed = copy.deepcopy(original)
+        ranking_dispatch(changed, "summarize_acmg_criteria").orelse[0].value.keywords[-1].value = ast.Constant(None)
+        cases.append(("wrong_binary", changed))
+        changed = copy.deepcopy(original)
+        dispatch = ranking_dispatch(changed, "summarize_acmg_criteria")
+        changed.body.insert(changed.body.index(dispatch), copy.deepcopy(dispatch))
+        cases.append(("duplicate", changed))
+        changed = copy.deepcopy(original)
+        dispatch = ranking_dispatch(changed, "summarize_acmg_criteria")
+        changed.body.remove(dispatch)
+        position = next(i for i, node in enumerate(changed.body) if isinstance(node, ast.For)
+                        and isinstance(node.target, ast.Name) and node.target.id == "audit_column")
+        changed.body.insert(position + 1, dispatch)
+        cases.append(("after_audit_publication", changed))
+        changed = copy.deepcopy(original)
+        dispatch = ranking_dispatch(changed, "summarize_acmg_criteria")
+        for branch in (dispatch.body, dispatch.orelse):
+            branch[0].value.keywords[0].value = ast.Constant(False)
+        cases.append(("changed_historical_override", changed))
+        for name, function in cases:
+            with self.subTest(name=name), self.assertRaises(AssertionError):
+                historical_caller(function)
+
+    def test_actual_summary_call_uses_current_frame_and_dictionary_once(self):
+        boundary = ranking_dispatch(caller_function(acmg_tree()), "summarize_acmg_criteria")
+        for binary in (None, "/qualified/bin/priva"):
+            calls = []
+            returned = object(), object()
+            def capture(*args, **kwargs):
+                calls.append((args, kwargs))
+                return returned
+            variables = {node.id: object() for node in ast.walk(boundary) if isinstance(node, ast.Name)}
+            original = dict(variables)
+            variables.update(summarize_acmg_criteria=capture, ranking_binary=binary)
+            exec(compile(ast.Module(body=[copy.deepcopy(boundary)], type_ignores=[]), "actual-summary-boundary", "exec"), variables)
+            self.assertEqual(len(calls), 1)
+            self.assertIs(variables["anno_df"], returned[0])
+            self.assertIs(variables["criteria_matrix"], returned[1])
+            self.assertEqual(calls[0][0], tuple(original[name] for name in ("anno_df", "criteria_dict", "clingen_map_pkl")))
+            self.assertIs(calls[0][1]["apply_clingen_override"], original["apply_clingen_override"])
+            self.assertEqual("summary_binary" in calls[0][1], binary is not None)
+            if binary is not None:
+                self.assertIs(calls[0][1]["summary_binary"], binary)
+
+    def test_summary_failure_stops_before_matrix_posterior_ranking_and_final_write(self):
+        function = caller_function(acmg_tree())
+        dispatch = ranking_dispatch(function, "summarize_acmg_criteria")
+        self.assertIsInstance(function.body[-1], ast.Return)
+        body = function.body[function.body.index(dispatch):-1]
+        for binary in (None, "/qualified/bin/priva"):
+            variables = {node.id: object() for statement in body for node in ast.walk(statement)
+                         if isinstance(node, ast.Name)}
+            data = SimpleNamespace(to_csv=mock.Mock())
+            current_matrix = SimpleNamespace(to_csv=mock.Mock())
+            summary = mock.Mock(side_effect=RuntimeError("fixture summary failed"))
+            posterior, rank = mock.Mock(), mock.Mock()
+            variables.update(anno_df=data, criteria_matrix=current_matrix, ranking_binary=binary,
+                             summarize_acmg_criteria=summary, calculate_posterior_probability=posterior,
+                             sort_and_rank_variants=rank)
+            with self.assertRaisesRegex(RuntimeError, "^fixture summary failed$"):
+                exec(compile(ast.Module(body=copy.deepcopy(body), type_ignores=[]), "actual-summary-through-writes", "exec"), variables)
+            summary.assert_called_once()
+            self.assertIs(variables["anno_df"], data)
+            self.assertIs(variables["criteria_matrix"], current_matrix)
+            data.to_csv.assert_not_called(); current_matrix.to_csv.assert_not_called()
+            posterior.assert_not_called(); rank.assert_not_called()
 
     def test_cli_preserves_all_existing_arguments(self):
         main = copy.deepcopy(next(node for node in acmg_tree().body if isinstance(node, ast.If)
@@ -203,6 +301,17 @@ class RankingExecutableIdentity(unittest.TestCase):
         self.alter_bytes_preserving_size_mtime_mode()
         with self.assertRaisesRegex(adapter.ContractError, "Resource changed.*priva_ranking_binary"):
             self.verify(selected)
+
+    def test_summary_helper_content_is_part_of_task_source_identity(self):
+        helper = self.repo / "scripts/priva_rust_criteria_summary.py"
+        helper.write_bytes(b"fixture_value = 1\n")
+        before = helper.stat()
+        previous = adapter.source_digest(self.repo)
+        helper.write_bytes(b"fixture_value = 2\n")
+        os.utime(helper, ns=(before.st_atime_ns, before.st_mtime_ns))
+        self.assertEqual(helper.stat().st_size, before.st_size)
+        self.assertEqual(helper.stat().st_mtime_ns, before.st_mtime_ns)
+        self.assertNotEqual(adapter.source_digest(self.repo), previous)
 
     def test_invalid_binary_is_not_replaced_or_ignored(self):
         paths = (self.folder / "missing", self.folder / "empty", self.folder / "not-executable", self.folder / "directory")

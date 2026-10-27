@@ -530,10 +530,20 @@ def ACMG_criteria_assign(anno_table: str,
     }
 
     # Create summary and matrix
-    anno_df, criteria_matrix = summarize_acmg_criteria(
-        anno_df, criteria_dict, clingen_map_pkl,
-        apply_clingen_override=apply_clingen_override,
-    )
+    # 27 October 2026 CT: the explicit Rust opt-in selects the qualified
+    # summary subprocedure as well as ranking. Keep default arguments and
+    # matrix publication/posterior/ranking order at their original boundaries.
+    if ranking_binary is None:
+        anno_df, criteria_matrix = summarize_acmg_criteria(
+            anno_df, criteria_dict, clingen_map_pkl,
+            apply_clingen_override=apply_clingen_override,
+        )
+    else:
+        anno_df, criteria_matrix = summarize_acmg_criteria(
+            anno_df, criteria_dict, clingen_map_pkl,
+            apply_clingen_override=apply_clingen_override,
+            summary_binary=ranking_binary,
+        )
     for audit_column in (
         "audit_BS1_disease_incidence_gate",
         "audit_BS1_gene_pathogenic_AF_gate",
@@ -643,7 +653,7 @@ if __name__ == "__main__":
     )
     parser.add_argument("--threads", type=int, required=False, default=10)
     parser.add_argument("--ranking_binary", type=str, required=False, default=None,
-                        help="Optional qualified PriVA Rust ranker; criteria and unsupported ranking inputs retain Python.")
+                        help="Optional qualified PriVA Rust summary and ranker; criterion assignment, posterior calculation, and unsupported inputs retain Python.")
     args = parser.parse_args()
 
     anno_df, criteria_matrix = ACMG_criteria_assign(args.anno_table,

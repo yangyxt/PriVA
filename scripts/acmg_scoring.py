@@ -491,8 +491,8 @@ def sort_and_rank_variants(df: pd.DataFrame,
             only. None retains Python; unsupported inputs use the original tail.
         ranking_binary: Explicit opt-in single PriVA Rust CLI for the integrated
             R1 setup, R2 pedigree context, R3 control multiplication, R4
-            compatibility masks, ordered R5/R6 weights and R8 ordering.
-            Other stages retain Python.
+            compatibility masks, ordered R5/R6 weights, R7 expression
+            modulation and R8 ordering. Other stages retain Python.
 
     Returns:
         DataFrame sorted by variant's max ACMG score with added variant rank column
@@ -737,18 +737,33 @@ def sort_and_rank_variants(df: pd.DataFrame,
 
         # Cummings 2020 used PEXT < 0.1 as the low-expression bin.
         # Bound the ranking penalty so PEXT cannot overwhelm ACMG evidence.
-        pext_numeric = df[pext_col_to_use].map(coerce_pext_value).fillna(1.0).clip(0, 1)
-        scaled_pext = (pext_numeric / pext_low_expression_cutoff).clip(0, 1)
-        df["pext_sort_index"] = np.where(
-            pext_numeric >= pext_low_expression_cutoff,
-            1.0,
-            pext_penalty_floor + (1.0 - pext_penalty_floor) * np.power(scaled_pext, pext_penalty_shape)
-        )
-        # Historical PriVA behavior applied PEXT modulation to high ACMG-score rows.
-        df.loc[pext_modulation_rows, "sort_index"] = (
-            df.loc[pext_modulation_rows, "sort_index"]
-            * df.loc[pext_modulation_rows, "pext_sort_index"]
-        )
+        # 26 October 2026 CT: R7 consumes current post-R5/R6 buffers and the
+        # original R4 PEXT mask. Selection, validation and logs stay ordered;
+        # rejection executes these original four statements once in place.
+        native_pext = None
+        if ranking_binary is not None:
+            from priva_rust_pext import try_pext, pext_score_product
+            native_pext = try_pext(df, pext_col_to_use, pext_tissues,
+                pext_low_expression_cutoff, pext_penalty_floor, pext_penalty_shape,
+                pext_modulation_rows, ranking_binary)
+        if native_pext is None:
+            pext_numeric = df[pext_col_to_use].map(coerce_pext_value).fillna(1.0).clip(0, 1)
+            scaled_pext = (pext_numeric / pext_low_expression_cutoff).clip(0, 1)
+            df["pext_sort_index"] = np.where(
+                pext_numeric >= pext_low_expression_cutoff,
+                1.0,
+                pext_penalty_floor + (1.0 - pext_penalty_floor) * np.power(scaled_pext, pext_penalty_shape)
+            )
+            # Historical PriVA behavior applied PEXT modulation to high ACMG-score rows.
+            df.loc[pext_modulation_rows, "sort_index"] = (
+                df.loc[pext_modulation_rows, "sort_index"]
+                * df.loc[pext_modulation_rows, "pext_sort_index"]
+            )
+        else:
+            pext_numeric = native_pext['pext_numeric']
+            scaled_pext = native_pext['scaled_pext']
+            df["pext_sort_index"] = native_pext['pext_sort_index']
+            df.loc[pext_modulation_rows, "sort_index"] = pext_score_product(df, pext_modulation_rows, native_pext)
         logger.info(
             "Applied pext-based sort modulation using %s "
             "(cutoff=%s, floor=%s, shape=%s)",

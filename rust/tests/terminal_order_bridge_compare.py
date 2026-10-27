@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Compare complete original ranking with optional R1/R2/R3/R4/R5-R6/R8 bridges.
+"""Compare complete original ranking with optional source-ordered R1-R8 bridges.
 
 compare --reference SOURCE_ROOT --candidate SOURCE_ROOT --binary FILE
         --output NEW_DIRECTORY
@@ -7,8 +7,8 @@ worker --source SOURCE_ROOT --reference SOURCE_ROOT --cases FILE
        --mode python|native --profile fresh|source-bootstrap --output FILE
        [--binary FILE]
 
-The Python reference is frozen before the adapter exists. C1-C5 and R7 stay
-source-executed; each preceding ranking stage retains its exact fallback. Outputs retain ordered axes, dtype/null storage, IEEE bits,
+The Python reference is frozen before the adapters exist. C1-C5 stay
+source-executed; each ranking stage retains its exact fallback. Outputs retain ordered axes, dtype/null storage, IEEE bits,
 attributes and label flags; original failures and logs are compared as well.
 R4 replaces only the original mechanism-helper call at its source position;
 raw call traces remain recorded and its one explicit replacement is checked.
@@ -30,9 +30,14 @@ import sys
 import traceback
 import warnings
 from unittest.mock import patch
+from types import SimpleNamespace
 
 import numpy as np
 import pandas as pd
+
+STAGES = ['r8', 'r1-r8', 'r1-r2-r8', 'r1-r2-r3-r8', 'r1-r2-r3-r4-r8',
+          'r1-r2-r3-r4-r5-r6-r8', 'r1-r2-r3-r4-r5-r6-r7-r8']
+FULL_PEXT = STAGES[-1]
 
 
 def sha(path):
@@ -172,6 +177,35 @@ df.loc[compatibility_penalty_rows, "sort_index"] = native_weights['compatibility
     assert ast.dump(ast.Module(body=weights.orelse, type_ignores=[]), include_attributes=False) == ast.dump(
         ast.Module(body=accepted_weights, type_ignores=[]), include_attributes=False)
     new.body[21:24] = weights.body
+    # R7 retains original selection, logs and conditional parameter checks.
+    # Only the four numeric/publication statements have an atomic plan branch.
+    reference_pext = ref.body[27]
+    updated_pext = new.body[27]
+    assert isinstance(reference_pext, ast.If) and isinstance(updated_pext, ast.If)
+    assert ast.unparse(reference_pext.test) == ast.unparse(updated_pext.test) == 'pext_col_to_use is not None'
+    pext_dispatch = ast.parse('''native_pext = None
+if ranking_binary is not None:
+    from priva_rust_pext import try_pext, pext_score_product
+    native_pext = try_pext(df, pext_col_to_use, pext_tissues,
+        pext_low_expression_cutoff, pext_penalty_floor, pext_penalty_shape,
+        pext_modulation_rows, ranking_binary)
+''').body
+    assert ast.dump(ast.Module(body=updated_pext.body[:3], type_ignores=[]), include_attributes=False) == ast.dump(
+        ast.Module(body=reference_pext.body[:3], type_ignores=[]), include_attributes=False)
+    assert ast.dump(ast.Module(body=updated_pext.body[3:5], type_ignores=[]), include_attributes=False) == ast.dump(
+        ast.Module(body=pext_dispatch, type_ignores=[]), include_attributes=False)
+    pext = updated_pext.body[5]
+    assert isinstance(pext, ast.If) and ast.unparse(pext.test) == 'native_pext is None'
+    assert ast.dump(ast.Module(body=pext.body, type_ignores=[]), include_attributes=False) == ast.dump(
+        ast.Module(body=reference_pext.body[3:7], type_ignores=[]), include_attributes=False)
+    accepted_pext = ast.parse('''pext_numeric = native_pext['pext_numeric']
+scaled_pext = native_pext['scaled_pext']
+df["pext_sort_index"] = native_pext['pext_sort_index']
+df.loc[pext_modulation_rows, "sort_index"] = pext_score_product(df, pext_modulation_rows, native_pext)
+''').body
+    assert ast.dump(ast.Module(body=pext.orelse, type_ignores=[]), include_attributes=False) == ast.dump(
+        ast.Module(body=accepted_pext, type_ignores=[]), include_attributes=False)
+    updated_pext.body[3:6] = pext.body
     hooks = [node for node in new.body if isinstance(node, ast.If)
              and ast.unparse(node.test) == 'terminal_order_binary is not None or ranking_binary is not None']
     assert len(hooks) == 1
@@ -194,7 +228,8 @@ df.loc[compatibility_penalty_rows, "sort_index"] = native_weights['compatibility
                 original_R2_statement_and_warning_calls_exact=True,
                 original_R3_statement_and_control_call_order_exact=True,
                 original_R4_block_INFO_and_two_assignment_order_exact=True,
-                original_R5_R6_statements_and_three_product_order_exact=True)
+                original_R5_R6_statements_and_three_product_order_exact=True,
+                original_R7_selection_validation_logs_and_two_assignment_order_exact=True)
 
 
 def extra_cases(helper):
@@ -253,6 +288,20 @@ def _gene_parser_projection(raw, replacements, calls, enabled):
     return raw
 
 
+def _pext_call_projection(raw, projected, replacements, calls):
+    """Permit only a complete native replacement of the original map calls."""
+    assert len(calls) <= 1
+    if calls == [True]:
+        assert len(replacements) == 1
+        row = replacements[0]
+        assert row['position'] == len(raw) and row['name'] == 'coerce_pext_value'
+        assert type(row['count']) is int and row['count'] > 0
+        assert projected == ['compute_control_common', '_variant_mechanism_masks']
+        return projected + ['coerce_pext_value'] * row['count']
+    assert not replacements
+    return projected
+
+
 def call_case(scoring, case, mode, binary, helper, native_stages='r8'):
     # A fresh load retains the actual prepared input, without normalizing dtypes
     # or reading metadata before the source function starts.
@@ -272,6 +321,8 @@ def call_case(scoring, case, mode, binary, helper, native_stages='r8'):
     gene_calls, gene_parser_calls, gene_parser_replacements = [], [], []
     r5_snapshots, gene_enabled = [], []
     r5_entry_seen, r6_finished = False, False
+    pext_calls, pext_replacements, r7_snapshots = [], [], []
+    r7_entry_seen, r7_finished = False, False
     source = ast.parse(Path(scoring.__file__).read_text())
     ranker = _ranker_definition(source)
     info_lines = [node.lineno for node in ranker.body if isinstance(node, ast.Expr)
@@ -303,6 +354,18 @@ def call_case(scoring, case, mode, binary, helper, native_stages='r8'):
     parser_lines = {branch.body[0].lineno: role for branch, role in
                     zip(original_weights[:2], ('dispensable', 'relevant'))}
     read_table_code = scoring.pd.read_table.__code__
+    pext_clause = next(node for node in ranker.body if isinstance(node, ast.If)
+                       and ast.unparse(node.test) == 'pext_col_to_use is not None')
+    pext_dispatch = [node for node in pext_clause.body if isinstance(node, ast.If)
+                     and ast.unparse(node.test) == 'native_pext is None']
+    original_pext = pext_dispatch[0].body if pext_dispatch else pext_clause.body[3:7]
+    assert len(original_pext) == 4
+    pext_entry_line = next(node.lineno for node in pext_clause.body if isinstance(node, ast.Assign)
+        and any(isinstance(target, ast.Name) and target.id == 'native_pext' for target in node.targets)) if pext_dispatch else original_pext[0].lineno
+    pext_target_lines = {original_pext[-1].lineno}
+    if pext_dispatch:
+        pext_target_lines.add(pext_dispatch[0].orelse[-1].lineno)
+    pext_done_line = pext_clause.body[-1].lineno
     def snapshot(local, stage):
         keys = ('df', 'dispensable_gene_list', 'relevant_gene_list',
                 'compatibility_penalty_rows', 'dispensable_genes', 'relevant_genes')
@@ -312,8 +375,16 @@ def call_case(scoring, case, mode, binary, helper, native_stages='r8'):
         values = {name: local[name] for name in keys if name in local}
         values['mask_index_is_frame_index'] = local['compatibility_penalty_rows'].index is local['df'].index
         r5_snapshots.append((stage, pickle.dumps(values, protocol=5)))
+    def pext_snapshot(local, stage):
+        keys = ('df', 'pext_tissues', 'pext_tissue_list', 'first_tissue_col', 'pext_col_to_use',
+            'pext_low_expression_cutoff', 'pext_penalty_floor', 'pext_penalty_shape',
+            'pext_modulation_rows', 'pext_numeric', 'scaled_pext')
+        values = {name: local[name] for name in keys if name in local}
+        values['mask_index_is_frame_index'] = local['pext_modulation_rows'].index is local['df'].index
+        values['mask_is_high_acmg_lof'] = local['pext_modulation_rows'] is local['high_acmg_lof']
+        r7_snapshots.append((stage, pickle.dumps(values, protocol=5)))
     def trace(pyframe, event, arg):
-        nonlocal r5_entry_seen, r6_finished
+        nonlocal r5_entry_seen, r6_finished, r7_entry_seen, r7_finished
         if pyframe.f_code is ranker_code:
             if event == 'line' and pyframe.f_lineno == entry_line and not r5_entry_seen:
                 r5_entry_seen = True
@@ -326,6 +397,14 @@ def call_case(scoring, case, mode, binary, helper, native_stages='r8'):
                 snapshot(pyframe.f_locals, 'after_compatibility'); r6_finished = True
             elif event == 'return' and r5_entry_seen and not r6_finished:
                 snapshot(pyframe.f_locals, 'failure')
+            if event == 'line' and pyframe.f_lineno == pext_entry_line and not r7_entry_seen:
+                r7_entry_seen = True; pext_snapshot(pyframe.f_locals, 'entry')
+            elif event == 'line' and r7_entry_seen and pyframe.f_lineno in pext_target_lines:
+                pext_snapshot(pyframe.f_locals, 'after_target')
+            elif event == 'line' and r7_entry_seen and pyframe.f_lineno == pext_done_line:
+                pext_snapshot(pyframe.f_locals, 'after_score'); r7_finished = True
+            elif event == 'return' and r7_entry_seen and not r7_finished:
+                pext_snapshot(pyframe.f_locals, 'failure')
         return trace
     def profile(pyframe, event, arg):
         nonlocal r4_entry_seen
@@ -388,6 +467,12 @@ def call_case(scoring, case, mode, binary, helper, native_stages='r8'):
             gene_calls.append(arg is not None)
             if arg is not None:
                 gene_parser_replacements.extend(gene_enabled)
+        if event == 'return' and pyframe.f_code.co_name == 'try_pext' and (
+                Path(pyframe.f_code.co_filename).name == 'priva_rust_pext.py'):
+            pext_calls.append(arg is not None)
+            if arg is not None:
+                pext_replacements.append(dict(position=len(source_calls), name='coerce_pext_value',
+                                              count=len(pyframe.f_locals['frame'])))
     if mode == 'native':
         # Observe returns through the existing profiler. Do not import the
         # adapter early: the real ranker first imports it at its R8 entry after
@@ -404,8 +489,10 @@ def call_case(scoring, case, mode, binary, helper, native_stages='r8'):
     product_control = patch('priva_rust_control_multiply.try_control_multiply', return_value=None) if force_r3 else nullcontext(None)
     force_r4 = mode == 'native' and native_stages in ('r1-r8', 'r1-r2-r8', 'r1-r2-r3-r8')
     compatibility_control = patch('priva_rust_ranking_compatibility.try_ranking_compatibility', return_value=None) if force_r4 else nullcontext(None)
-    force_genes = mode == 'native' and native_stages not in ('r8', 'r1-r2-r3-r4-r5-r6-r8')
+    force_genes = mode == 'native' and native_stages not in ('r8', 'r1-r2-r3-r4-r5-r6-r8', FULL_PEXT)
     gene_control = patch('priva_rust_gene_weights.try_gene_weights', return_value=None) if force_genes else nullcontext(None)
+    force_pext = mode == 'native' and native_stages not in ('r8', FULL_PEXT)
+    pext_control = patch('priva_rust_pext.try_pext', return_value=None) if force_pext else nullcontext(None)
     log = io.StringIO()
     handler = logging.StreamHandler(log)
     handler.setFormatter(logging.Formatter('%(levelname)s %(name)s %(message)s'))
@@ -416,7 +503,7 @@ def call_case(scoring, case, mode, binary, helper, native_stages='r8'):
     previous, previous_trace = sys.getprofile(), sys.gettrace()
     output, error = None, None
     try:
-        with warnings.catch_warnings(record=True) as caught, control as forced, product_control as forced_product, compatibility_control as forced_compatibility, gene_control as forced_genes:
+        with warnings.catch_warnings(record=True) as caught, control as forced, product_control as forced_product, compatibility_control as forced_compatibility, gene_control as forced_genes, pext_control as forced_pext:
             warnings.simplefilter('always')
             sys.setprofile(profile)
             sys.settrace(trace)
@@ -447,7 +534,10 @@ def call_case(scoring, case, mode, binary, helper, native_stages='r8'):
         gene_calls=gene_calls, forced_gene_fallback_calls=forced_genes.call_count if force_genes else 0,
         gene_parser_calls=gene_parser_calls, gene_parser_replacements=gene_parser_replacements,
         gene_enabled=gene_enabled,
-        r5_states=[dict(stage=stage, locals=helper.encode(pickle.loads(value))) for stage, value in r5_snapshots])
+        r5_states=[dict(stage=stage, locals=helper.encode(pickle.loads(value))) for stage, value in r5_snapshots],
+        pext_calls=pext_calls, forced_pext_fallback_calls=forced_pext.call_count if force_pext else 0,
+        pext_replacements=pext_replacements,
+        r7_states=[dict(stage=stage, locals=helper.encode(pickle.loads(value))) for stage, value in r7_snapshots])
 
 
 def worker(args):
@@ -480,7 +570,7 @@ def compare(args):
         cases.extend(dict(name='r1_complete_' + name, kind='ranking', frame=frame, ped=None,
                           kwargs=dict(fam_name=None, dispensable_gene_list=None),
                           tags=['complete-ranker-r1-integration']) for name, frame in setup.extras(helper))
-    if args.native_stages in ('r1-r2-r8', 'r1-r2-r3-r8', 'r1-r2-r3-r4-r8', 'r1-r2-r3-r4-r5-r6-r8'):
+    if args.native_stages in ('r1-r2-r8', 'r1-r2-r3-r8', 'r1-r2-r3-r4-r8', 'r1-r2-r3-r4-r5-r6-r8', FULL_PEXT):
         pedigree = load('unchanged_R2_fixture_builder', args.candidate / 'rust/tests/pedigree_context_oracle.py')
         for name, entry, ped, family in pedigree.extras():
             # Lift the pre-existing standalone R2 inputs into a full original
@@ -495,7 +585,7 @@ def compare(args):
             cases.append(dict(name='r2_complete_' + name, kind='ranking', frame=data, ped=ped,
                 kwargs=dict(fam_name=family, dispensable_gene_list=None),
                 tags=['complete-ranker-r2-integration']))
-    if args.native_stages in ('r1-r2-r3-r8', 'r1-r2-r3-r4-r8', 'r1-r2-r3-r4-r5-r6-r8'):
+    if args.native_stages in ('r1-r2-r3-r8', 'r1-r2-r3-r4-r8', 'r1-r2-r3-r4-r5-r6-r8', FULL_PEXT):
         multiply = load('unchanged_R3_fixture_builder', args.candidate / 'rust/tests/control_multiply_oracle.py')
         for name, entry in multiply.examples():
             # Lift the existing standalone seeds through the complete ranker.
@@ -515,7 +605,7 @@ def compare(args):
             cases.append(dict(name='r3_complete_' + name, kind='ranking', frame=data, ped=None,
                 kwargs=dict(fam_name=None, dispensable_gene_list=None),
                 tags=['complete-ranker-r3-seed-through-original-R1-and-C1-C5']))
-    if args.native_stages in ('r1-r2-r3-r4-r8', 'r1-r2-r3-r4-r5-r6-r8'):
+    if args.native_stages in ('r1-r2-r3-r4-r8', 'r1-r2-r3-r4-r5-r6-r8', FULL_PEXT):
         compatibility = load('unchanged_R4_fixture_builder', args.candidate / 'rust/tests/ranking_compatibility_oracle.py')
         for name, (entry, male, female, heterozygosity) in compatibility.extras():
             # Lift the historical frame seeds through actual R1/R2/C1-C5/R3.
@@ -539,7 +629,7 @@ def compare(args):
                 kwargs=dict(fam_name='R4', dispensable_gene_list=None),
                 tags=['complete-ranker-r4-seed-through-original-upstream-stages',
                       'current-R2-mask-recomputed-by-original-source']))
-    if args.native_stages == 'r1-r2-r3-r4-r5-r6-r8':
+    if args.native_stages in ('r1-r2-r3-r4-r5-r6-r8', FULL_PEXT):
         genes = load('unchanged_R5_R6_fixture_builder', args.candidate / 'rust/tests/ranking_gene_weights_oracle.py')
         for name, (entry, dispensable, relevant, penalty) in genes.extras(args.output):
             # Lift historical seeds through every actual preceding stage. The
@@ -569,6 +659,32 @@ def compare(args):
                 kwargs=dict(fam_name='R5', dispensable_gene_list=dispensable, relevant_gene_list=relevant),
                 tags=['complete-ranker-r5-r6-seed-through-original-upstream-stages',
                       'current-R2-and-R4-mask-recomputed-by-original-source']))
+    if args.native_stages == FULL_PEXT:
+        pext = load('unchanged_R7_fixture_builder', args.candidate / 'rust/tests/ranking_pext_oracle.py')
+        def r7_base(values=None):
+            values = ['.02', '.1', None, '-0&0'] if values is None else values
+            frame = pd.DataFrame({'PEXT_MEAN': values, 'sort_index': [.95] * len(values)})
+            return frame, '', .1, .8, .5, pd.Series([True] * len(frame), index=frame.index)
+        for name, (entry, tissues, cutoff, floor, shape, old_mask) in pext.extra_cases(SimpleNamespace(base=r7_base)):
+            data = helper.base_frame(len(entry))
+            # R4 recreates the actual high-ACMG PEXT mask. Do not substitute
+            # the historical stage-only mask or restore a deliberately absent
+            # PEXT column from the generic complete-ranker base frame.
+            data = data.drop(columns=[label for label in data.columns
+                if str(label).startswith('PEXT_') and label not in entry.columns])
+            data.index = entry.index
+            data = data.drop(columns=[label for label in data.columns if label in entry.columns])
+            data = pd.concat([data, entry], axis=1)
+            if 'sort_index' in entry.columns:
+                data['ACMG_quant_score'] = entry.iloc[:, list(entry.columns).index('sort_index')]
+            data.columns.name = entry.columns.name
+            data.attrs = copy.deepcopy(entry.attrs)
+            data.flags.allows_duplicate_labels = entry.flags.allows_duplicate_labels
+            cases.append(dict(name='r7_complete_' + name, kind='ranking', frame=data, ped=None,
+                kwargs=dict(fam_name=None, dispensable_gene_list=None, pext_tissues=tissues,
+                    pext_low_expression_cutoff=cutoff, pext_penalty_floor=floor, pext_penalty_shape=shape),
+                tags=['complete-ranker-r7-seed-through-original-upstream-stages',
+                      'actual-R4-high-ACMG-PEXT-mask-recomputed-by-original-source']))
     prepared = args.output / 'cases.pkl'
     prepared.write_bytes(pickle.dumps(cases, protocol=5))
     reports, comparisons, mismatches = {}, [], []
@@ -604,17 +720,22 @@ def compare(args):
                     replacements = observed.pop('compatibility_replacements')
                     gene_calls = observed.pop('gene_calls')
                     forced_gene_calls = observed.pop('forced_gene_fallback_calls')
+                    pext_calls = observed.pop('pext_calls')
+                    forced_pext_calls = observed.pop('forced_pext_fallback_calls')
+                    pext_replacements = observed.pop('pext_replacements')
                     parser_replacements = observed.pop('gene_parser_replacements')
                     raw_parser_calls = observed['gene_parser_calls']
                     observed['gene_parser_calls'] = _gene_parser_projection(
                         raw_parser_calls, parser_replacements, gene_calls, observed['gene_enabled'])
                     raw_source_calls = observed['source_calls']
                     observed['source_calls'] = _source_call_projection(raw_source_calls, replacements, compatibility_calls)
+                    observed['source_calls'] = _pext_call_projection(raw_source_calls, observed['source_calls'], pext_replacements, pext_calls)
                     wanted = {key: value for key, value in expected.items() if key not in (
                         'native_calls', 'setup_calls', 'pedigree_calls', 'forced_r2_fallback_calls',
                         'product_calls', 'forced_r3_fallback_calls', 'compatibility_calls',
                         'forced_r4_fallback_calls', 'compatibility_replacements', 'gene_calls',
-                        'forced_gene_fallback_calls', 'gene_parser_replacements')}
+                        'forced_gene_fallback_calls', 'gene_parser_replacements', 'pext_calls',
+                        'forced_pext_fallback_calls', 'pext_replacements')}
                     exact = observed == wanted
                     if not exact:
                         mismatches.append(dict(profile=profile, mode=label, name=expected['name'],
@@ -640,6 +761,9 @@ def compare(args):
                         gene_fallback=bool(gene_calls and not gene_calls[0]),
                         forced_gene_fallback_calls=forced_gene_calls,
                         actual_gene_parser_calls=raw_parser_calls, explicit_native_gene_parser_replacements=parser_replacements,
+                        pext_native_used=bool(pext_calls and pext_calls[0]),
+                        pext_fallback=bool(pext_calls and not pext_calls[0]),
+                        forced_pext_fallback_calls=forced_pext_calls, explicit_native_pext_replacements=pext_replacements,
                         original_exception=expected['exception'] is not None,
                         earlier_failure_did_not_reach_R8=expected['exception'] is not None and not native_calls))
         native = [item for item in comparisons if item['mode'] == 'native']
@@ -652,31 +776,38 @@ def compare(args):
         if args.native_stages == 'r1-r8':
             assert any(item['forced_r2_fallback_calls'] for item in native), 'R2 control did not execute the original fallback'
             assert not any(item['pedigree_native_used'] for item in native), 'R1/R8 control published native R2'
-        if args.native_stages in ('r1-r2-r8', 'r1-r2-r3-r8', 'r1-r2-r3-r4-r8', 'r1-r2-r3-r4-r5-r6-r8'):
+        if args.native_stages in ('r1-r2-r8', 'r1-r2-r3-r8', 'r1-r2-r3-r4-r8', 'r1-r2-r3-r4-r5-r6-r8', FULL_PEXT):
             assert any(item['pedigree_native_used'] for item in native), 'no genuine native R2 complete-function result'
             assert any(item['pedigree_fallback'] for item in native), 'no genuine current-buffer R2 fallback'
             assert not any(item['forced_r2_fallback_calls'] for item in native), 'full R2 mode used a forced fallback'
         if args.native_stages in ('r1-r8', 'r1-r2-r8'):
             assert any(item['forced_r3_fallback_calls'] for item in native), 'R3 control did not execute the original fallback'
             assert not any(item['product_native_used'] for item in native), 'preceding control published native R3'
-        if args.native_stages in ('r1-r2-r3-r8', 'r1-r2-r3-r4-r8', 'r1-r2-r3-r4-r5-r6-r8'):
+        if args.native_stages in ('r1-r2-r3-r8', 'r1-r2-r3-r4-r8', 'r1-r2-r3-r4-r5-r6-r8', FULL_PEXT):
             assert any(item['product_native_used'] for item in native), 'no genuine native R3 complete-function product'
             assert any(item['product_fallback'] for item in native), 'no genuine current-buffer R3 fallback'
             assert not any(item['forced_r3_fallback_calls'] for item in native), 'full R3 mode used a forced fallback'
         if args.native_stages in ('r1-r8', 'r1-r2-r8', 'r1-r2-r3-r8'):
             assert any(item['forced_r4_fallback_calls'] for item in native), 'R4 control did not execute the original fallback'
             assert not any(item['compatibility_native_used'] for item in native), 'preceding control published native R4'
-        if args.native_stages in ('r1-r2-r3-r4-r8', 'r1-r2-r3-r4-r5-r6-r8'):
+        if args.native_stages in ('r1-r2-r3-r4-r8', 'r1-r2-r3-r4-r5-r6-r8', FULL_PEXT):
             assert any(item['compatibility_native_used'] for item in native), 'no genuine native R4 complete-function plan'
             assert any(item['compatibility_fallback'] for item in native), 'no genuine current-buffer R4 fallback'
             assert not any(item['forced_r4_fallback_calls'] for item in native), 'full R4 mode used a forced fallback'
-        if args.native_stages not in ('r8', 'r1-r2-r3-r4-r5-r6-r8'):
+        if args.native_stages not in ('r8', 'r1-r2-r3-r4-r5-r6-r8', FULL_PEXT):
             assert any(item['forced_gene_fallback_calls'] for item in native), 'R5/R6 control did not execute original fallback'
             assert not any(item['gene_native_used'] for item in native), 'preceding control published native R5/R6'
-        if args.native_stages == 'r1-r2-r3-r4-r5-r6-r8':
+        if args.native_stages in ('r1-r2-r3-r4-r5-r6-r8', FULL_PEXT):
             assert any(item['gene_native_used'] for item in native), 'no genuine native R5/R6 complete-function plan'
             assert any(item['gene_fallback'] for item in native), 'no genuine current-buffer R5/R6 fallback'
             assert not any(item['forced_gene_fallback_calls'] for item in native), 'full R5/R6 mode forced fallback'
+        if args.native_stages not in ('r8', FULL_PEXT):
+            assert any(item['forced_pext_fallback_calls'] for item in native), 'R7 control did not execute original fallback'
+            assert not any(item['pext_native_used'] for item in native), 'preceding control published native R7'
+        if args.native_stages == FULL_PEXT:
+            assert any(item['pext_native_used'] for item in native), 'no genuine native R7 complete-function plan'
+            assert any(item['pext_fallback'] for item in native), 'no genuine current-buffer R7 fallback'
+            assert not any(item['forced_pext_fallback_calls'] for item in native), 'full R7 mode forced fallback'
         assert not mismatches, ('complete-ranker mismatches', len(mismatches), mismatches)
     except Exception as error:
         failure = dict(type=type(error).__name__, message=str(error))
@@ -705,6 +836,10 @@ def compare(args):
             gene_weights_Python_fallbacks=sum(item['gene_fallback'] for item in native),
             forced_R5_R6_control_fallback_calls=sum(item['forced_gene_fallback_calls'] for item in native),
             explicit_native_gene_parser_replacements=sum(len(item['explicit_native_gene_parser_replacements']) for item in native),
+            pext_native_outputs=sum(item['pext_native_used'] for item in native),
+            pext_Python_fallbacks=sum(item['pext_fallback'] for item in native),
+            forced_R7_control_fallback_calls=sum(item['forced_pext_fallback_calls'] for item in native),
+            explicit_native_R7_map_replacements=sum(len(item['explicit_native_pext_replacements']) for item in native),
             original_failures=sum(item['original_exception'] for item in native),
             earlier_failures_without_native_call=sum(item['earlier_failure_did_not_reach_R8'] for item in native),
             binary_sha256=sha(args.binary), fixture_sha256=sha(prepared),
@@ -720,14 +855,14 @@ def main():
     command = sub.add_parser('compare')
     for name in ['reference', 'candidate', 'binary', 'output']:
         command.add_argument('--' + name, required=True, type=Path)
-    command.add_argument('--native-stages', choices=['r8', 'r1-r8', 'r1-r2-r8', 'r1-r2-r3-r8', 'r1-r2-r3-r4-r8', 'r1-r2-r3-r4-r5-r6-r8'], default='r8')
+    command.add_argument('--native-stages', choices=STAGES, default='r8')
     command = sub.add_parser('worker')
     for name in ['source', 'reference', 'cases', 'output']:
         command.add_argument('--' + name, required=True, type=Path)
     command.add_argument('--binary', type=Path)
     command.add_argument('--mode', required=True, choices=['python', 'native'])
     command.add_argument('--profile', required=True, choices=['fresh', 'source-bootstrap'])
-    command.add_argument('--native-stages', choices=['r8', 'r1-r8', 'r1-r2-r8', 'r1-r2-r3-r8', 'r1-r2-r3-r4-r8', 'r1-r2-r3-r4-r5-r6-r8'], default='r8')
+    command.add_argument('--native-stages', choices=STAGES, default='r8')
     args = parser.parse_args()
     globals()[args.procedure](args)
 

@@ -75,15 +75,21 @@ def _input(frame, mask, enabled, root):
     if type(mask) is not pd.Series or mask.index is not frame.index or not (
             _plain_metadata(mask.name) and _plain_metadata(mask.attrs)):
         raise ValueError('unaligned/custom R4 mask requires Python')
-    dtype = str(mask.dtype)
-    if dtype == 'boolean' and type(mask.array) is pd.arrays.BooleanArray:
-        data, nulls = mask.array._data, mask.array._mask
+    mask_array = mask.array
+    if type(mask_array) not in (pd.arrays.BooleanArray, pd.arrays.NumpyExtensionArray):
+        raise ValueError('custom mask storage requires Python')
+    mask_dtype = mask.dtype
+    if type(mask_dtype) is pd.BooleanDtype and type(mask_array) is pd.arrays.BooleanArray:
+        dtype = 'boolean'
+        data, nulls = mask_array._data, mask_array._mask
         if type(data) is not np.ndarray or type(nulls) is not np.ndarray or (
                 data.dtype != np.dtype('bool') or nulls.dtype != np.dtype('bool')):
             raise ValueError('raw R4 Boolean storage requires Python')
-    elif dtype == 'bool' and mask.dtype == np.dtype('bool'):
+    elif type(mask_dtype) is type(np.dtype('bool')) and mask_dtype == np.dtype('bool'):
+        dtype = 'bool'
         data, nulls = mask.to_numpy(copy=False), np.zeros(len(mask), dtype=bool)
-    elif dtype == 'object' and not len(mask):
+    elif type(mask_dtype) is type(np.dtype('object')) and mask_dtype == np.dtype('object') and not len(mask):
+        dtype = 'object'
         data = nulls = np.empty(0, dtype=bool)
     else:
         raise ValueError('R4 mask dtype requires Python')
@@ -91,7 +97,13 @@ def _input(frame, mask, enabled, root):
     for name in consumed:
         position = names.index(name)
         source = frame.iloc[:, position]
-        source_dtype = str(source.dtype)
+        array = source.array
+        if type(array) not in (pd.arrays.NumpyExtensionArray, pd.arrays.StringArray):
+            raise ValueError('custom consumed storage requires Python')
+        source_dtype = source.dtype
+        if type(source_dtype) not in tuple(type(np.dtype(value)) for value in ('object', 'bool', 'int64', 'uint64', 'float64')) + (pd.StringDtype,):
+            raise ValueError('custom consumed dtype requires Python')
+        source_dtype = str(source_dtype)
         if name in (_SCORE, _COMPATIBILITY):
             if source.dtype != np.dtype('float64') or type(source.dtype) is not type(np.dtype('float64')):
                 raise ValueError('native float64 operands required')
@@ -102,7 +114,7 @@ def _input(frame, mask, enabled, root):
         if name == 'SYMBOL' and not _plain_metadata(frame[name].attrs):
             raise ValueError('custom source-Series metadata requires Python')
         dtypes[position] = source_dtype
-        columns[position] = [_cell(value) for value in source.array]
+        columns[position] = [_cell(value) for value in array]
     with (root / 'input.csv').open('x', newline='') as stream:
         writer = csv.writer(stream)
         writer.writerow(['index_kind', 'index_value'] +

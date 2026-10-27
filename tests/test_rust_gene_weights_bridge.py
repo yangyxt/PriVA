@@ -349,6 +349,42 @@ class GeneWeightsBridgeTests(unittest.TestCase):
             outcomes.append((failure.exception.args, current[0]))
         self.assertEqual(outcomes[0][0], outcomes[1][0]); pd.testing.assert_frame_equal(outcomes[0][1], outcomes[1][1], check_exact=True)
 
+    def test_custom_consumed_array_dtype_callbacks_defer_before_original_file_failure(self):
+        callbacks = []
+        class CustomDtype(pd.StringDtype):
+            def __str__(self):
+                callbacks.append('dtype str'); return super().__str__()
+        class CustomArray(pd.arrays.StringArray):
+            @property
+            def dtype(self):
+                callbacks.append('dtype getter'); return CustomDtype()
+        for name in ('SYMBOL', 'sort_index'):
+            data = entry(); data[name] = pd.Series(CustomArray(np.array(['A'] * 4, dtype=object)), index=data.index)
+            penalty = mask(data); callbacks.clear()
+            with self.subTest(column=name), patch.object(bridge.subprocess, 'run') as native:
+                self.assertIsNone(bridge.try_gene_weights(data, self.root / 'missing.txt', None, penalty, 'native'))
+                native.assert_not_called(); self.assertEqual(callbacks, [])
+            with self.assertRaises(FileNotFoundError): original(data, self.root / 'missing.txt', None, penalty)
+            self.assertEqual(callbacks, [])
+
+    def test_custom_mask_array_dtype_callbacks_defer_before_original_file_failure(self):
+        callbacks = []
+        class CustomDtype(pd.BooleanDtype):
+            def __str__(self):
+                callbacks.append('dtype str'); return super().__str__()
+        class CustomArray(pd.arrays.BooleanArray):
+            @property
+            def dtype(self):
+                callbacks.append('dtype getter'); return CustomDtype()
+        data = entry()
+        penalty = pd.Series(CustomArray(np.array([True, False, True, False]), np.array([False] * 4)), index=data.index)
+        callbacks.clear()
+        with patch.object(bridge.subprocess, 'run') as native:
+            self.assertIsNone(bridge.try_gene_weights(data, self.root / 'missing.txt', None, penalty, 'native'))
+            native.assert_not_called(); self.assertEqual(callbacks, [])
+        with self.assertRaises(FileNotFoundError): original(data, self.root / 'missing.txt', None, penalty)
+        self.assertEqual(callbacks, [])
+
     def test_parser_projection_requires_one_complete_enabled_replacement(self):
         spec = importlib.util.spec_from_file_location('r5_parser_guard', ROOT / 'rust/tests/terminal_order_bridge_compare.py')
         harness = importlib.util.module_from_spec(spec); spec.loader.exec_module(harness)

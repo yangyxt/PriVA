@@ -777,6 +777,25 @@ function check_vcf_assembly_version () {
 }
 
 
+function check_fasta_assembly_version () {
+    # Tell hg19/hg38 from the chr1 length in the FASTA index, the same rule
+    # used for VCF headers, so references named by release (e.g. the managed
+    # GRCh38_*.fa) are recognized. Without an index, fall back to the file name.
+    local fasta_file=${1}
+    local chr1_size=""
+    [[ -f ${fasta_file}.fai ]] && \
+    chr1_size=$(awk -F '\t' '$1 == "chr1" || $1 == "1" {print $2; exit}' ${fasta_file}.fai)
+
+    if [[ ${chr1_size} == "249250621" ]]; then
+        echo "hg19"
+    elif [[ ${chr1_size} == "248956422" ]]; then
+        echo "hg38"
+    elif [[ $(basename ${fasta_file}) =~ (hg19|hg38) ]]; then
+        echo "${BASH_REMATCH[1]}"
+    fi
+}
+
+
 function liftover_from_GRCh_to_ucsc () {
     # Only designed for lifting over GRCh37 to hg19 or GRCh38 to hg38
     local input_vcf=${1}

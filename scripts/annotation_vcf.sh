@@ -457,7 +457,7 @@ function preprocess_vcf() {
     if [[ -z ${ref_genome} ]]; then
         log "User does not specify the ref genome fasta file. Cant proceed now. Quit with Error!"
         return 1;
-    elif [[ ! -z ${vcf_assembly} ]] && [[ ! ${ref_genome} =~ ${vcf_assembly} ]]; then
+    elif [[ ! -z ${vcf_assembly} ]] && [[ $(check_fasta_assembly_version ${ref_genome}) != ${vcf_assembly} ]]; then
         log "User specified ref_genome fasta file ${ref_genome} seems not match with the VCF used assembly ${vcf_assembly}. Quit with Error"
         return 1;
     fi

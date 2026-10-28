@@ -18,7 +18,7 @@ INSTALLER = ROOT / "scripts/install_utils.sh"
 STAGES = ["VEP_plugins_install", "LoFtee_install", "gnomAD_install", "AlphaMissense_anno_gnomAD",
           "InterPro_parsing", "pext_install", "ClinVar_install", "AlphaMissense_stat", "AlphaMissense_pick_intolerant_domains",
           "prepare_pm1_regions", "ClinVar_patho_AF_stat", "CADD_install", "CADD_runtime_install",
-          "ClinGen_deploy", "CDS_FASTA_install", "mechanism_resource_install"]
+          "CADD_upstream_check", "ClinGen_deploy", "CDS_FASTA_install", "mechanism_resource_install"]
 PLUGINS = ["UTRAnnotator_install", "LOEUF_install", "Conservation_install", "AlphaMissense_install",
            "AlphaMissense_anno", "AlphaMissense_pick_missense_constrained_segments", "SpliceAI_install",
            "SpliceVault_install", "MaveDB_install", "PrimateAI_install"]
@@ -40,7 +40,9 @@ class ConfigFilenameSpaces(unittest.TestCase):
         self.root = Path(self.temp.name)
         self.ref = self.root / "selected reference.fa"
         self.ref.write_text(">chr1\nA\n")
-        self.config = {"assembly": "hg38", "vep_installed_version": 116, "ref_genome": str(self.ref)}
+        # A selected profile keeps the shared-VEP runtime stage in the dispatch.
+        self.config = {"assembly": "hg38", "vep_installed_version": 116, "ref_genome": str(self.ref),
+                       "cadd_profile": "selected profile.json"}
         for key in ("cache_root", "tmp_dir", "vep_cache_dir", "vep_plugins_dir", "vep_plugins_cachedir"):
             path = self.root / key
             path.mkdir()
@@ -68,6 +70,7 @@ bundled_snapshot_install() { :; }
 reference_genome_install() { :; }
 priva_verify_vep_release() { :; }
 vep_cache_api_install() { :; }
+priva_export_installed_environment() { :; }
 '''
         return setup + "\n".join(name + '() { record_call ' + name + ' "$@"; }' for name in STAGES) + '\nmain_install "$CONFIG"\n'
 

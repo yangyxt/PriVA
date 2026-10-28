@@ -67,7 +67,7 @@ class CaddRuntimeShellTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual(args, [])
 
-    def main_route(self, code):
+    def main_route(self, code, profile="/fixture/qualified profile.json"):
         return self.shell(r'''
             # Substitute expensive installer stages; retain real main ordering
             # and runtime hook. This is a shell fixture, not an installation.
@@ -84,12 +84,13 @@ class CaddRuntimeShellTests(unittest.TestCase):
                 case "$2" in
                     ref_genome) printf '%s\n' "$1" ;;
                     assembly) printf 'hg38\n' ;;
+                    cadd_profile) printf '%s\n' "$TEST_CADD_PROFILE" ;;
                 esac
             }
             CADD_install() { printf 'CACHE_STAGE\n'; }
             ClinGen_deploy() { printf 'AFTER_RUNTIME\n'; }
             main_install "$2"
-        ''', TEST_HELPER_EXIT=str(code))
+        ''', TEST_HELPER_EXIT=str(code), TEST_CADD_PROFILE=profile)
 
     def test_main_calls_both_after_cache_install(self):
         result, args = self.main_route(0)
@@ -97,6 +98,16 @@ class CaddRuntimeShellTests(unittest.TestCase):
         self.assertIn("CACHE_STAGE", result.stdout)
         self.assertIn("AFTER_RUNTIME", result.stdout)
         self.assertEqual(args[-2:], ["--stage", "both"])
+
+    def test_main_skips_runtime_without_selected_profile(self):
+        # Upstream CADD.sh needs none of the shared-VEP runtime; yq reports an
+        # absent key as null. A failing helper would stop main_install.
+        for profile in ("", "null"):
+            with self.subTest(profile=profile):
+                result, args = self.main_route(73, profile)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertIn("AFTER_RUNTIME", result.stdout)
+                self.assertEqual(args, [])
 
     def test_main_stops_on_runtime_install_failure(self):
         result, args = self.main_route(73)

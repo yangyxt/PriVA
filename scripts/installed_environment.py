@@ -188,7 +188,14 @@ def export_environment(*, config_file, manager, name='priva_acmg', prefix=None):
 
 
 def export_installation(*, config_file, manager):
-    """Export PriVA and each completed CADD environment without activating them."""
+    """Export PriVA and each completed CADD environment without activating them.
+
+    The separate native scorer must exist only when cadd_profile selects the
+    shared-VEP route; upstream CADD.sh deploys its own rule environments.
+    """
+    config = yaml.safe_load(Path(config_file).read_text())
+    profile = config.get('cadd_profile') if isinstance(config, dict) else None
+    shared_vep = isinstance(profile, str) and profile not in ('', 'null')
     helper = Path(__file__).with_name('cadd_runtime_install.py')
     completed = subprocess.run([sys.executable, str(helper), 'prefixes', '--config', str(config_file),
                                 '--package-manager', str(manager)], capture_output=True, text=True)
@@ -201,7 +208,7 @@ def export_installation(*, config_file, manager):
         raise ValueError('Unknown installed CADD environment backend')
     environments = layout.get('environments', {})
     core = environments.get('cadd-python2', {})
-    if backend == 'native' and (not core.get('prefix') or not Path(core['prefix'], 'conda-meta/history').is_file()):
+    if shared_vep and backend == 'native' and (not core.get('prefix') or not Path(core['prefix'], 'conda-meta/history').is_file()):
         raise ValueError('The separate CADD scorer environment is not installed')
     exports = [export_environment(config_file=config_file, manager=manager)]
     for name, record in environments.items():

@@ -64,6 +64,10 @@ workflow runs upstream `CADD.sh` (see [Running PriVA](#running-priva)); a
 qualified shared-VEP profile instead uses the separate `cadd-python2` Mamba
 environment. Both run as child processes while the workflow continues in
 `priva_acmg`; users do not need to switch environments manually.
+`main_install` installs the shared-VEP route's pinned CADD environments and ESM
+model files only when `cadd_profile` is set; otherwise it skips them, and
+`bash scripts/install_utils.sh CADD_runtime_install CONFIG` installs them later,
+before a profile is qualified.
 Its feature tools retain their pinned environments. Fresh installs use the
 existing Mamba root, and completed older installations are reused in place.
 At completion, `cache_root/*.installed.yml` records the actually installed

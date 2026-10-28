@@ -120,11 +120,24 @@ class InstalledEnvironment(unittest.TestCase):
                          ['priva_acmg', 'cadd-python2', 'cadd-esm-python'])
 
     def test_installation_does_not_claim_an_absent_cadd_environment(self):
+        self.config.write_text(yaml.safe_dump(dict(cache_root=str(self.root), cadd_profile='/selected/profile.json')))
         result = subprocess.CompletedProcess([], 0, '{"environments":{}}', '')
         with patch.object(EXPORT.subprocess, 'run', return_value=result), \
                 patch.object(EXPORT, 'export_environment', side_effect=AssertionError('no export before core exists')):
             with self.assertRaisesRegex(ValueError, 'not installed'):
                 EXPORT.export_installation(config_file=self.config, manager='micromamba')
+
+    def test_installation_without_profile_exports_priva_when_no_cadd_runtime(self):
+        # Upstream CADD.sh needs no separate scorer, so its absence is not an error.
+        for profile in (None, '', 'null'):
+            with self.subTest(profile=profile):
+                self.config.write_text(yaml.safe_dump(dict(cache_root=str(self.root), cadd_profile=profile)))
+                result = subprocess.CompletedProcess([], 0, '{"environments":{"cadd-python2":{"prefix":"/absent"}}}', '')
+                with patch.object(EXPORT.subprocess, 'run', return_value=result), \
+                        patch.object(EXPORT, 'export_environment', return_value=self.root / 'priva_acmg.installed.yml') as export:
+                    self.assertEqual(len(EXPORT.export_installation(config_file=self.config, manager='micromamba')), 1)
+                self.assertEqual(export.call_count, 1)
+                self.assertNotIn('prefix', export.call_args.kwargs)
 
     def test_explicit_verified_container_exports_no_fictitious_mamba_environment(self):
         result = subprocess.CompletedProcess([], 0, '{"backend":"container","environments":{}}', '')

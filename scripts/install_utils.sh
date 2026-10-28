@@ -4705,8 +4705,16 @@ function main_install() {
     "${config_file}" \
     ${assembly} || \
     { log "Failed to install CADD prescores"; return 1; }
-    CADD_runtime_install "${config_file}" both || \
-    { log "Failed to install pinned CADD runtime and model assets"; return 1; }
+    # The pinned per-stage CADD runtime serves only the shared-VEP route. Without
+    # a selected cadd_profile, upstream CADD.sh deploys its own environments below.
+    local cadd_profile
+    cadd_profile=$(read_yaml "${config_file}" "cadd_profile") || return 1
+    if [[ -n ${cadd_profile} && ${cadd_profile} != null ]]; then
+        CADD_runtime_install "${config_file}" both || \
+        { log "Failed to install pinned CADD runtime and model assets"; return 1; }
+    else
+        log "No cadd_profile is selected; skipping the shared-VEP CADD runtime. Install it with: bash ${SCRIPT_DIR}/install_utils.sh CADD_runtime_install CONFIG"
+    fi
     CADD_upstream_check "${config_file}" || \
     { log "Failed to verify upstream CADD.sh on its bundled test input"; return 1; }
 

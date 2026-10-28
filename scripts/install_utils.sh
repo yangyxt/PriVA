@@ -1164,6 +1164,54 @@ function CADD_install() {
 
 
 
+function CADD_upstream_check() {
+    # Run upstream CADD.sh once on its bundled test input. This creates its
+    # conda rule environments during installation rather than at the first
+    # analysis, and compares variant raw/PHRED scores with upstream's expected
+    # output for the configured assembly.
+    local config_file=${1}
+    local cadd_base_dir tmp_dir assembly threads genome_tag work
+    cadd_base_dir=$(read_yaml "${config_file}" "cadd_base_dir") || return 1
+    tmp_dir=$(read_yaml "${config_file}" "tmp_dir") || return 1
+    assembly=$(read_yaml "${config_file}" "assembly") || return 1
+    threads=$(read_yaml "${config_file}" "threads")
+    [[ ${threads} =~ ^[1-9][0-9]*$ ]] || threads=1
+    case ${assembly} in
+        hg19|GRCh37) genome_tag=GRCh37 ;;
+        hg38|GRCh38) genome_tag=GRCh38 ;;
+        *) log "Unsupported assembly for CADD: ${assembly}"; return 1 ;;
+    esac
+    local expected=${cadd_base_dir}/test/output_inclAnno_${genome_tag}.tsv.gz
+    [[ -x ${cadd_base_dir}/CADD.sh && -f ${cadd_base_dir}/test/input.vcf.gz && -f ${expected} ]] || {
+        log "Upstream CADD.sh or its bundled test files are missing under ${cadd_base_dir}"
+        return 1
+    }
+    # Snakemake inside CADD.sh needs a conda executable to deploy them.
+    command -v conda > /dev/null 2>&1 || { log "CADD.sh needs a conda executable on PATH to deploy its environments"; return 1; }
+    work=$(mktemp -d "${tmp_dir}/cadd_upstream_check.XXXXXX") || return 1
+    log "Checking upstream CADD.sh with: ${cadd_base_dir}/CADD.sh -c ${threads} -a -m -g ${genome_tag}"
+    TMPDIR=${tmp_dir} "${cadd_base_dir}/CADD.sh" -c "${threads}" -a -m -g "${genome_tag}" \
+        -o "${work}/output.tsv.gz" "${cadd_base_dir}/test/input.vcf.gz" || {
+        log "Upstream CADD.sh failed on its bundled test input; evidence kept in ${work}"
+        return 1
+    }
+    # PriVA consumes PHRED, the last column. Compare variant identities and
+    # PHRED exactly; RawScore (second last) can differ from upstream's published
+    # test output in its last printed decimal, so those rows are only counted.
+    local raw_differences
+    if diff <(zcat "${expected}" | awk -F '\t' '$1 !~ /^#/{print $1, $2, $3, $4, $NF}') \
+            <(zcat "${work}/output.tsv.gz" | awk -F '\t' '$1 !~ /^#/{print $1, $2, $3, $4, $NF}') > /dev/null; then
+        raw_differences=$(diff <(zcat "${expected}" | awk -F '\t' '$1 !~ /^#/{print $(NF-1)}') \
+            <(zcat "${work}/output.tsv.gz" | awk -F '\t' '$1 !~ /^#/{print $(NF-1)}') | grep -c '^<')
+        log "Upstream CADD.sh reproduced its bundled ${genome_tag} test PHRED scores (RawScore differs on ${raw_differences} rows)"
+        rm -rf "${work}"
+    else
+        log "Upstream CADD.sh scores differ from its bundled ${genome_tag} test output; evidence kept in ${work}"
+        return 1
+    fi
+}
+
+
 function CADD_runtime_install() {
     [[ $# -ge 1 && $# -le 2 && -r ${1:-} ]] || {
         log "Usage: CADD_runtime_install CONFIG [annotate|calculate|both]"
@@ -4659,6 +4707,8 @@ function main_install() {
     { log "Failed to install CADD prescores"; return 1; }
     CADD_runtime_install "${config_file}" both || \
     { log "Failed to install pinned CADD runtime and model assets"; return 1; }
+    CADD_upstream_check "${config_file}" || \
+    { log "Failed to verify upstream CADD.sh on its bundled test input"; return 1; }
 
     # 8. ClinGen install
     ClinGen_deploy \

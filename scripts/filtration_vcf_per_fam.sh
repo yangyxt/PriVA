@@ -272,7 +272,9 @@ function filter_cadd_based_on_vcf () {
     local vcf_variants="${tmp_dir}/vcf_variants.txt"
     local filtered_cadd="${tmp_dir}/filtered_cadd.tsv"
     
-    # Extract variant positions from VCF (remove chr prefix to match CADD format)
+    # Extract variant positions from VCF. CADD tables keep upstream GRCh contig
+    # names (19) unless a hub merge standardized them (chr19), so both sides
+    # are compared without the chr prefix below.
     log "Extracting variant positions from VCF..."
     bcftools query -f '%CHROM\t%POS\t%REF\t%ALT\n' ${input_vcf} > ${vcf_variants}
     
@@ -294,6 +296,7 @@ function filter_cadd_based_on_vcf () {
         while ((getline line < vcf_file) > 0) {
             split(line, fields, "\t")
             chrom = fields[1]
+            sub(/^chr/, "", chrom)
             pos = fields[2] 
             ref = fields[3]
             alt = fields[4]
@@ -305,7 +308,9 @@ function filter_cadd_based_on_vcf () {
     }
     NR > 1 {  # Skip header (already written)
         # Create key from CADD table row
-        key = $1"\t"$2"\t"$3"\t"$4
+        chrom = $1
+        sub(/^chr/, "", chrom)
+        key = chrom"\t"$2"\t"$3"\t"$4
         if (key in vcf_variants) {
             print $0
         }

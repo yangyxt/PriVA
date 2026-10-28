@@ -59,9 +59,11 @@ use `cache_root`. Optional `cache_folders` entries rename its six main folders.
 
 [Open the full-size cache tree](docs/installation_layout.svg).
 
-CADD retains the original upstream Python raw/PHRED calculation in its separate
-`cadd-python2` Mamba environment. The workflow invokes it as a child process and
-continues in `priva_acmg`; users do not need to switch environments manually.
+CADD retains the original upstream Python raw/PHRED calculation. By default the
+workflow runs upstream `CADD.sh` (see [Running PriVA](#running-priva)); a
+qualified shared-VEP profile instead uses the separate `cadd-python2` Mamba
+environment. Both run as child processes while the workflow continues in
+`priva_acmg`; users do not need to switch environments manually.
 Its feature tools retain their pinned environments. Fresh installs use the
 existing Mamba root, and completed older installations are reused in place.
 At completion, `cache_root/*.installed.yml` records the actually installed
@@ -199,9 +201,15 @@ There are also items in `config.yaml` that needs to be specified for each PriVA 
 
 The recommended way to run the pipeline is using Snakemake, which manages dependencies and execution order.
 
-Raw annotation requires an explicitly selected, compatible `cadd_profile` with
-both annotation and scoring qualification evidence accepted by the runtime.
-Installation alone does not activate that profile. Keep assembly, transcript
+CADD scores come from the upstream `CADD.sh` in `cadd_base_dir`, which performs
+its own annotation and the original raw/PHRED scoring. Its Snakemake workflow
+needs a `conda` executable on `PATH` to create the pinned rule environments
+under `cadd_base_dir/envs/conda`; `main_install` creates them by scoring CADD's
+bundled test variants. A separately installed conda belongs after the activated
+`priva_acmg` environment on `PATH`, so that its own Python cannot shadow the
+CADD environments. Setting `cadd_profile` selects the shared-VEP route instead. That
+route requires a profile with accepted annotation and scoring qualification
+evidence, which installation alone does not create; keep assembly, transcript
 mapping, model assets, and SpliceAI generation consistent with it.
 
 **Prerequisites:**

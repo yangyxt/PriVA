@@ -622,7 +622,18 @@ function anno_agg_gnomAD_chromosome() {
     # plausible canonical shard that a retry could accept on mtime alone.
     stage=$(mktemp -d "$(dirname "$output_vcf")/.gnomad-annotation.XXXXXX") || return $?
     local staged="$stage/$(basename "$output_vcf")"
-    bcftools annotate -a "$gnomad_vcf" -c "$columns" -Oz -o "$staged" "$input_vcf" || return $?
+    # Without a region, bcftools reads the whole gnomAD chromosome file however
+    # few input records there are. Restrict both readers to the span of this
+    # single-contig shard; every input record lies inside it, so rows, INFO
+    # values and order are unchanged.
+    local span
+    span=$(bcftools query -f '%CHROM\t%POS\n' "$input_vcf" | \
+        awk -F '\t' 'NR == 1 {contig = $1; first = $2; last = $2}
+                     {if ($1 != contig) mixed = 1; if ($2 < first) first = $2; if ($2 > last) last = $2}
+                     END {if (NR > 0 && !mixed) printf "%s:%s-%s", contig, first, last}') || return $?
+    local -a span_args=()
+    [[ -z $span ]] || span_args=(-r "$span")
+    bcftools annotate -a "$gnomad_vcf" -c "$columns" "${span_args[@]}" -Oz -o "$staged" "$input_vcf" || return $?
     tabix -f -p vcf "$staged" || return $?
     check_vcf_validity "$staged" || return $?
     printf '%s\n' "$output_vcf" > "$stage/publication.pending" &&

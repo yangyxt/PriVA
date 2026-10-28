@@ -176,7 +176,7 @@ class ClinVarRegenerationTests(unittest.TestCase):
     def test_full_annotation_uses_one_native_glob_directory_list_and_same_plugin_order(self):
         source = (ROOT / "scripts/annotation_vcf.sh").read_text()
         function = source.split("function anno_VEP_data() {", 1)[1].split("function Calculate_CADD", 1)[0]
-        command = function.split("    vep -i ${input_vcf}", 1)[1]
+        command = function.split('vep -i "${input_vcf}"', 1)[1]
         line = next(value.strip().rstrip("\\").strip() for value in command.splitlines()
                     if value.strip().startswith("--dir_plugins "))
         shell = ('vep_plugins_dir=/configured/plugins; loftee_repo=/configured/loftee; '

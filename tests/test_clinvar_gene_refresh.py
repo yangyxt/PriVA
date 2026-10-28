@@ -489,6 +489,7 @@ ClinGen_deploy() { :; }
 CDS_FASTA_install() { :; }
 pext_install() { :; }
 mechanism_resource_install() { :; }
+priva_export_installed_environment() { :; }
 main_install "$TEST_CONFIG"
 '''
         result = subprocess.run(["bash", "-c", script, "fixture", str(ROOT / "scripts/install_utils.sh")],

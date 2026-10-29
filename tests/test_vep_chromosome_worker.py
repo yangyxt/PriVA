@@ -30,6 +30,8 @@ FUNCTION_SHA = "f887aa2298360af1779eb9ad28a0fbd737093c66d73e10658af4950bd385415e
 SHELL = r'''
 load_script() { source "$1"; }
 load_script "$WORKER_SCRIPT" >/dev/null || exit
+# The frozen serial oracle predates the rename of its SpliceAI header check.
+priva_require_legacy_spliceai() { priva_check_spliceai_versions "$@"; }
 [[ "$WORKER_ORACLE" != 1 ]] || source "$WORKER_ORACLE_PATH"
 check_path() { return 0; }
 check_vcf_infotags() { [[ "${WORKER_EXISTING_CSQ:-0}" == 1 ]]; }
@@ -306,7 +308,7 @@ class VEPChromosomeWorkerTests(unittest.TestCase):
         self.assertFalse(refresh.candidate_receipt_path(shard, pending=True).exists())
 
     def test_environment_cannot_turn_private_runtime_into_worker(self):
-        # A direct private call retains the original guard even when callers
+        # A direct private call stays a runtime annotation even when callers
         # export purpose/output values; this fixture deliberately uses v2.
         write_vcf(self.snv, version2=True)
         write_vcf(self.indel, version2=True)
@@ -314,9 +316,9 @@ class VEPChromosomeWorkerTests(unittest.TestCase):
             "--input_vcf", self.input, "--threads", 9], env={
                 "priva_vep_purpose": "cache_worker", "priva_worker_output": str(self.output),
                 "priva_worker_stats": str(self.stats)})
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn("not qualified", result.stderr)
-        self.assertFalse(self.trace.exists())
+        self.assertIn("SpliceAI2 cutoffs", result.stderr)
+        self.assertFalse(self.output.exists())
+        self.assertFalse(self.stats.exists())
 
 
 if __name__ == "__main__":

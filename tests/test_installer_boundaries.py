@@ -14,18 +14,20 @@ class InstallerBoundaryTests(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.folder = Path(self.temp.name)
 
-    def test_basic_vep_never_uses_unqualified_spliceai2_in_calibration(self):
+    def test_basic_vep_refuses_mixed_spliceai_versions_before_vep(self):
         cache = self.folder / 'scores.vcf'
         cache.write_text('##fileformat=VCFv4.2\n##SpliceAI2Version=2\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\n')
+        v1 = self.folder / 'v1_scores.vcf'
+        v1.write_text('##fileformat=VCFv4.2\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\n')
         config = self.folder / 'config.yaml'
         config.write_text('assembly: hg38\n')
         result = subprocess.run(['bash', '-c', """
             source "$1" >/dev/null
             vep() { printf 'UNEXPECTED_VEP\n'; return 99; }
-            basic_vep_annotation -i unused.vcf -f "$2" -s "$3" -d "$3"
-        """, 'test', str(ROOT / 'scripts/install_utils.sh'), str(config), str(cache)], text=True, capture_output=True)
+            basic_vep_annotation -i unused.vcf -f "$2" -s "$3" -d "$4"
+        """, 'test', str(ROOT / 'scripts/install_utils.sh'), str(config), str(cache), str(v1)], text=True, capture_output=True)
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn('ACMG/ClinVar criteria and CADD feature use are not qualified', result.stderr)
+        self.assertIn('different versions', result.stderr)
         self.assertNotIn('UNEXPECTED_VEP', result.stdout)
 
     def test_failed_bgz_conversion_stops_before_crossmap(self):

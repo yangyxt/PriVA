@@ -29,7 +29,8 @@ def splicing_interpretation(anno_table,
                             intolerant_domains_pkl, 
                             interpro_entry_map_pkl,
                             spliceai_cutoff = 0.8, 
-                            threads = 12):
+                            threads = 12,
+                            acceptor_rescue_cutoff = 0.5):
     """Process annotation table in parallel to interpret splicing effects"""
     anno_df = pd.read_table(anno_table, low_memory=False)
 
@@ -44,10 +45,11 @@ def splicing_interpretation(anno_table,
                          intolerant_domains=intolerant_domains,
                          interpro_entry_map_dict=interpro_entry_map_dict,
                          spliceai_cutoff=spliceai_cutoff,
+                         acceptor_rescue_cutoff=acceptor_rescue_cutoff,
                          dm_instance=dm_instance)
     
     # Get number of CPU cores (leave some free for other processes)
-    logger.info(f"Processing {len(anno_df)} variants using {threads} cores, spliceai_cutoff is {spliceai_cutoff}")
+    logger.info(f"Processing {len(anno_df)} variants using {threads} cores, spliceai_cutoff is {spliceai_cutoff}, acceptor_rescue_cutoff is {acceptor_rescue_cutoff}")
     
     # Process rows in parallel
     with mp.Pool(threads) as pool:
@@ -83,7 +85,8 @@ def splicing_altering_per_row(row,
                               intolerant_domains,
                               interpro_entry_map_dict,
                               dm_instance = None,
-                              spliceai_cutoff = 0.8):
+                              spliceai_cutoff = 0.8,
+                              acceptor_rescue_cutoff = 0.5):
     '''
     Basically, we just refer to SpliceVault top-4 events and SpliceAI delta scores.
 
@@ -191,6 +194,7 @@ def splicing_altering_per_row(row,
                                                                                                                                                                                                                                             var_pos = var_pos,
                                                                                                                                                                                                                                             strand = strand,
                                                                                                                                                                                                                                             cutoff = spliceai_cutoff,
+                                                                                                                                                                                                                                            acceptor_rescue_cutoff = acceptor_rescue_cutoff,
                                                                                                                                                                                                                                             interpro_entry_map_dict = interpro_entry_map_dict,
                                                                                                                                                                                                                                             dm_instance = dm_instance)
 
@@ -540,7 +544,8 @@ def SpliceAI_interpretation(DS_AG,
                             strand = "1",
                             cutoff = 0.8,
                             interpro_entry_map_dict = None,
-                            dm_instance = None) -> tuple:
+                            dm_instance = None,
+                            acceptor_rescue_cutoff = 0.5) -> tuple:
     '''
     Expect to return a tuple of boolean values(is_harmful, length_changing)
     Regarding DP values, negative values means the site is upstream of the variant site,
@@ -633,7 +638,7 @@ def SpliceAI_interpretation(DS_AG,
 
         if abs(canonical_as_offset) <= 1:
             length_changing = True
-            if DS_AG > 0.5:
+            if DS_AG > acceptor_rescue_cutoff:
                 # See whether SpliceAI can find a nearby acceptor site that can rescue the lost acceptor site
                 canonical_as_offset = 0
                 if parse_result is not None:
@@ -1137,9 +1142,15 @@ if __name__ == "__main__":
     parser.add_argument("--intolerant_domains", required=True, help="Intolerant domains, pickle file")
     parser.add_argument("--interpro_entry_map_pkl", required=True, help="InterPro entry map, pickle file")
     parser.add_argument("--threads", default=12, type=int, help="Number of threads")
+    parser.add_argument("--config", default=None,
+                        help="PriVA config; its SpliceAI score files select the SpliceAI v1 or SpliceAI2 cutoffs")
     args = parser.parse_args()
+    from spliceai_cutoffs import cutoffs_for_config
+    cutoffs = cutoffs_for_config(args.config)
     splicing_interpretation(args.anno_table, 
                             args.transcript_domain_map, 
                             args.intolerant_domains, 
                             args.interpro_entry_map_pkl,
-                            threads=args.threads)
+                            spliceai_cutoff=cutoffs["splice_altering"],
+                            threads=args.threads,
+                            acceptor_rescue_cutoff=cutoffs["nearby_acceptor_rescue"])

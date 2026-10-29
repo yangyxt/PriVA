@@ -38,42 +38,11 @@ function finalize_anno_vcf() {
     mv "${src}" "${dst}"
 }
 
-function priva_require_legacy_spliceai() {
-    # A prepared v2 cache is not an approved replacement for the original
-    # ACMG/ClinVar thresholds or CADD features. Inspect headers only, never rows.
-    python - "${SCRIPT_DIR}" "$@" <<'PY'
-from pathlib import Path
-import sys
-import yaml
-
-sys.path.insert(0, sys.argv[1])
-from spliceai_cache_input import inspect_header
-
-message = ('SpliceAI2 is prepared for annotation inspection only. Legacy PriVA '
-           'ACMG/ClinVar criteria and CADD feature use are not qualified; '
-           'complete qualification for the selected scientific profile; '
-           'GRCh38 installation must not fall back automatically to SpliceAI v1.')
-config = Path(sys.argv[2])
-settings = yaml.safe_load(config.read_bytes()) if config.is_file() else {}
-if settings is None:
-    settings = {}
-if not isinstance(settings, dict):
-    raise SystemExit('Cannot verify SpliceAI resources: PriVA config must be a mapping.')
-keys = ('spliceai_snv_prescore', 'spliceai_indel_prescore')
-paths = sys.argv[3:] if len(sys.argv) > 3 else [settings.get(key) for key in keys]
-for value in paths:
-    if value in (None, '', 'null'):
-        continue
-    path = Path(value)
-    if not path.is_file():
-        continue  # Preserve the existing missing-resource diagnostics.
-    try:
-        detected = inspect_header(path)
-    except (OSError, EOFError, ValueError) as error:
-        raise SystemExit('Cannot verify the SpliceAI cache header: ' + str(path) + ': ' + str(error))
-    if detected['format'] != 'vcf_v1':
-        raise SystemExit(message + ' Resource: ' + str(path))
-PY
+function priva_check_spliceai_versions() {
+    # SpliceAI v1 and SpliceAI2 score VCFs are both accepted; the splicing and
+    # ACMG steps apply each version's own cutoffs (spliceai_cutoffs.py). The SNV
+    # and indel files must be the same version. Inspect headers only, never rows.
+    python "${SCRIPT_DIR}/spliceai_cutoffs.py" "$@" >&2
 }
 
 function main_workflow() {
@@ -101,7 +70,7 @@ function main_workflow() {
 
     # Process config file
     local config_file="${config:-${BASE_DIR}/config.yaml}"
-    priva_require_legacy_spliceai "${config_file}" || return 1
+    priva_check_spliceai_versions "${config_file}" || return 1
     local -A config_args
 
     if [[ -f "$config_file" ]]; then
@@ -1258,7 +1227,7 @@ function _priva_anno_VEP_data() {
         python "${SCRIPT_DIR}/clinvar_gene_refresh.py" candidate-begin \
             --config "$config_file" --source-root "$BASE_DIR" --input-vcf "$input_vcf" || return 1
     elif [[ "$priva_vep_purpose" == runtime ]]; then
-        priva_require_legacy_spliceai "${config_file}" "${spliceai_snv_prescore}" "${spliceai_indel_prescore}" || return 1
+        priva_check_spliceai_versions "${config_file}" "${spliceai_snv_prescore}" "${spliceai_indel_prescore}" || return 1
     fi
 
     # Validate inputs

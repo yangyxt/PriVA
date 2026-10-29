@@ -633,7 +633,7 @@
         "entrypoints": []
       },
       "depends_on": [],
-      "notes": "Licensed originals remain user-supplied; do not bundle/redistribute by inference. Retained GRCh38 v1 originals do not authorize a v2 fallback. CADD legacy features remain separate.",
+      "notes": "Licensed originals remain user-supplied; do not bundle/redistribute by inference. GRCh38 v1 originals may be selected through the same two keys and keep PriVA's original SpliceAI cutoffs; the installer never falls back to them automatically. CADD legacy features remain separate.",
       "selected_profile": {
         "PriVA_assembly": "GRCh37",
         "version": "v1"
@@ -669,7 +669,7 @@
         "entrypoints": []
       },
       "depends_on": [],
-      "notes": "Detect TSV/VCF header using existing keys. Preserve allele/gene/score/threshold provenance; full scientific qualification pending. Manual source/license policy is unchanged.",
+      "notes": "Detect TSV/VCF header using existing keys. Preserve allele/gene/score/threshold provenance. PriVA's splicing and ACMG rules apply SpliceAI2 cutoffs calibrated against SpliceAI v1 on ClinVar SNVs (scripts/spliceai_cutoffs.py). Manual source/license policy is unchanged.",
       "selected_profile": {
         "PriVA_assembly": "GRCh38",
         "version": "2.0"

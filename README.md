@@ -11,7 +11,7 @@ flowchart LR
     R --> O[Variants + ranked tables + provenance]
 ```
 
-**Real `--mode raw` execution is disabled**, including after successful installation. The executable path is the compatibility interface for preannotated inputs: it requires the complete original VCF/CADD pair from a compatible scientific profile, not arbitrary annotations. Prepared SpliceAI2 caches are for annotation inspection and do not qualify legacy ACMG/ClinVar/CADD use. Installation, stub execution and successful scheduling do not establish family or scientific-profile qualification.
+**Real `--mode raw` execution is disabled**, including after successful installation. The executable path is the compatibility interface for preannotated inputs: it requires the complete original VCF/CADD pair from a compatible scientific profile, not arbitrary annotations. SpliceAI v1 and prepared SpliceAI2 caches each use their own splicing and ACMG cutoffs ([spliceai_cutoffs.py](scripts/spliceai_cutoffs.py)); SpliceAI2 cutoffs were calibrated on ClinVar against SpliceAI v1. Installation, stub execution and successful scheduling do not establish family or scientific-profile qualification.
 
 ## Install
 
@@ -88,7 +88,7 @@ The cache path is read from the installed configuration. Keep this external laun
 - Supply one BGZF `*.vcf.gz` with its adjacent `.tbi`, complete compatible `CSQ` annotations, and the matching uncompressed transcript-aware CADD TSV. Its first row needs unique `#Chrom`, `Pos`, `Ref`, `Alt`, `PHRED` and `FeatureID` columns. Preserve any additional original columns.
 - Retain the full cohort VCF and pedigree; select one family through `--family`. Every PED sample must occur in the VCF, sample identifiers must be unique, and family/sample names must be safe file-name tokens.
 - Use a tab-delimited PED with at least the standard six columns: family, individual, father, mother, sex, phenotype. Put the affected proband first within the selected family. Sex is `0` unknown, `1` male or `2` female; phenotype is `0`/`-9` unknown, `1` unaffected or `2` affected. Unknown values remain unknown.
-- Match `--assembly`, the installed configuration, annotations and resources. Keep the legacy scientific profile, transcript mappings and original SpliceAI-v1 interpretation compatible; do not substitute a v2-marked input.
+- Match `--assembly`, the installed configuration, annotations and resources. Keep the legacy scientific profile and transcript mappings compatible. The SpliceAI SNV and indel files must be the same version (v1 or SpliceAI2); each version uses its own cutoffs.
 
 Create a manifest of the existing resources. This inventories resources; it does not install them or qualify a new scientific profile:
 

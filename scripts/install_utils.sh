@@ -2132,7 +2132,7 @@ function basic_vep_annotation() {
         [[ -z "${vep_plugins_dir}" ]] && vep_plugins_dir=$(read_yaml "${config_file}" "vep_plugins_dir")
     fi
 
-    priva_require_legacy_spliceai "${config_file:-${BASE_DIR}/config.yaml}" "${spliceai_snv_prescore}" "${spliceai_indel_prescore}" || return 1
+    priva_check_spliceai_versions "${config_file:-${BASE_DIR}/config.yaml}" "${spliceai_snv_prescore}" "${spliceai_indel_prescore}" || return 1
 
     # Validate required parameters
     if [[ -z "${input_vcf}" ]]; then
@@ -2375,7 +2375,7 @@ function ClinVar_Gene_stat_regenerate () {
     local temporary=${output_candidate%.gz}.partial.$(randomID).gz
     python "${SCRIPT_DIR}/clinvar_stat_variants.py" \
         --clinvar_anno_vcf "$clinvar_vcf" --output_pickle "$temporary" --threads "$threads" \
-        --clinvar-summary "$clinvar_summary" --mane-summary "$mane_summary" || return 1
+        --clinvar-summary "$clinvar_summary" --mane-summary "$mane_summary" --config "$config_file" || return 1
     python "${SCRIPT_DIR}/clinvar_annotation_contract.py" "$temporary" --cache-kind gene || return 1
     mv -- "$temporary" "$output_candidate" || return 1
     log "Generated separate candidate ClinVar gene statistics: $output_candidate"

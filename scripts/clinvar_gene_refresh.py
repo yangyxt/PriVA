@@ -374,11 +374,11 @@ def candidate_route(source_root: Path) -> dict:
     script = source_root / "scripts/annotation_vcf.sh"
     text = script.read_text()
     functions = ("anno_VEP_data", "anno_VEP_cache_candidate", "_priva_anno_VEP_data",
-                 "priva_require_legacy_spliceai")
+                 "priva_check_spliceai_versions")
     for name in functions:
         if not re.search(r"^function " + re.escape(name) + r"\(\) \{", text, re.M):
             raise ValueError(f"ClinVar candidate preparation entry point is missing: {name}")
-    guard = re.search(r"^function priva_require_legacy_spliceai\(\) \{.*?^\}", text, re.M | re.S)
+    guard = re.search(r"^function priva_check_spliceai_versions\(\) \{.*?^\}", text, re.M | re.S)
     return {"kind": CANDIDATE_KIND, "status": "preparation_route_available_inputs_not_checked",
             "scientific_qualified": False, "source": identity(script),
             "helper_source": identity(source_root / "scripts/clinvar_gene_refresh.py"),

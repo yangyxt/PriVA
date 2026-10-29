@@ -142,7 +142,7 @@ def analyze_splice_event(event_str: str, spliceai_delta_score: float) -> dict:
     return stat_dict
 
 
-def per_gene_stat(gene_df: pd.DataFrame):
+def per_gene_stat(gene_df: pd.DataFrame, donor_loss_cutoff: float = 0.5):
     """
     Calculate statistics for each gene, only keep high review status variants
     
@@ -266,7 +266,7 @@ def per_gene_stat(gene_df: pd.DataFrame):
         vep_consq_lof = bool({"HC", "OS"} & loftee_tokens) and (
             "escape" not in str(row["NMD"])
         )
-        splic_donor_loss = _number_or_nan(row["SpliceAI_pred_DS_DL"]) > 0.5
+        splic_donor_loss = _number_or_nan(row["SpliceAI_pred_DS_DL"]) > donor_loss_cutoff
         putative_nmd = vep_consq_lof or splic_donor_loss
         if putative_nmd:
             gene_stat_dict["putative_nmd_variants"].add(variant_id)
@@ -317,7 +317,8 @@ def main_stat_variants( clinvar_anno_vcf: str,
                         threads=10,
                         *,
                         clinvar_tab: str,
-                        mane_tranx_tab: str ):
+                        mane_tranx_tab: str,
+                        donor_loss_cutoff: float = 0.5 ):
     validate_header(clinvar_anno_vcf, "gene")
     combined_df = convert_vcf_to_tab(
         clinvar_anno_vcf, threads, cadd_phred_dict={}, hpo_symbol_map={},
@@ -337,7 +338,7 @@ def main_stat_variants( clinvar_anno_vcf: str,
     groupby_gene = refined_df.groupby("Gene", as_index=False)
     total_stat_dict = {}
     for gene, gene_df in groupby_gene:
-        gene_stat_dict = per_gene_stat(gene_df)
+        gene_stat_dict = per_gene_stat(gene_df, donor_loss_cutoff)
         if gene_stat_dict is not None:
             logger.info(f"Processed {gene} with {len(gene_df)} variants")
             total_stat_dict[gene] = gene_stat_dict
@@ -359,10 +360,14 @@ if __name__ == "__main__":
                         help="Pinned ClinVar variant_summary.txt.gz used for AlleleID/transcript mapping")
     parser.add_argument("--mane-summary", required=True,
                         help="Pinned MANE summary (the reference build used MANE GRCh38 v1.4)")
+    parser.add_argument("--config", default=None,
+                        help="PriVA config; its SpliceAI score files select the SpliceAI v1 or SpliceAI2 cutoffs")
     args = parser.parse_args()
+    from spliceai_cutoffs import cutoffs_for_config
 
     # This script needs to first annotate the updated GRCh38 ClinVar VCF with annotation_vcf.sh to generate the annotated vcf
     main_stat_variants(
         args.clinvar_anno_vcf, args.output_pickle, args.threads,
         clinvar_tab=args.clinvar_summary, mane_tranx_tab=args.mane_summary,
+        donor_loss_cutoff=cutoffs_for_config(args.config)["donor_loss_putative_nmd"],
     )

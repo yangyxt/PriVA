@@ -111,6 +111,7 @@ from acmg_pp1_bs4_bp2_pm3_family import (
     PP1_criteria,
 )
 from acmg_pp3_bp4_bp7_insilico import BP7_criteria, PP3_BP4_criteria
+from spliceai_cutoffs import CUTOFFS as SPLICEAI_CUTOFFS, cutoffs_for_config
 from acmg_bs2_bp5_observation import BP5_criteria, BS2_criteria
 from acmg_scoring import (
     DEFAULT_DISPENSABLE_GENE_LIST,
@@ -172,7 +173,8 @@ def ACMG_criteria_assign(anno_table: str,
                          gnomAD_extreme_rare_threshold: float = 0.0001,
                          expected_incidence: float = 0.0001,
                          threads: int = 10,
-                         ranking_binary: str = None) -> Tuple[pd.DataFrame, pd.DataFrame]:
+                         ranking_binary: str = None,
+                         spliceai_cutoffs: dict = SPLICEAI_CUTOFFS["vcf_v1"]) -> Tuple[pd.DataFrame, pd.DataFrame]:
     """
     Main function to assign ACMG criteria.
     Returns both annotated DataFrame and criteria matrix.
@@ -325,7 +327,8 @@ def ACMG_criteria_assign(anno_table: str,
     gc.collect()
 
     # Apply the PS1 and PM5 criteria
-    ps1_criteria, pm5_criteria = PS1_PM5_criteria(anno_df, clinvar_aa_dict, clinvar_splice_dict, ps3bs3_results['clinvar_patho'], pvs1_criteria, threads)
+    ps1_criteria, pm5_criteria = PS1_PM5_criteria(anno_df, clinvar_aa_dict, clinvar_splice_dict, ps3bs3_results['clinvar_patho'], pvs1_criteria, threads,
+                                                  spliceai_cutoff=spliceai_cutoffs["known_pathogenic_comparison"])
     logger.info(f"PS1 criteria applied, {(ps1_criteria > 0).sum()} variants are having the PS1 criteria")
     logger.info(f"PM5 criteria applied, {(pm5_criteria > 0).sum()} variants are having the PM5 criteria")
     gc.collect()
@@ -366,7 +369,8 @@ def ACMG_criteria_assign(anno_table: str,
     gc.collect()
     # Apply PP3 criteria, predicted to be deleterious by in-silico tools
     # Pass pvs1_criteria to prevent double-counting per ClinGen SVI guidelines
-    pp3_criteria, bp4_criteria = PP3_BP4_criteria(anno_df, pvs1_criteria)
+    pp3_criteria, bp4_criteria = PP3_BP4_criteria(anno_df, pvs1_criteria,
+                                                  spliceai_no_impact_cutoff=spliceai_cutoffs["no_splicing_impact"])
     # bp4_criteria = bp4_criteria & ~bs3_criteria
     logger.info(f"BP4 criteria applied, {(bp4_criteria > 0).sum()} variants are having the BP4 criteria")
     logger.info(f"PP3 criteria applied, {(pp3_criteria > 0).sum()} variants are having the PP3 criteria")
@@ -667,6 +671,8 @@ if __name__ == "__main__":
     parser.add_argument("--threads", type=int, required=False, default=10)
     parser.add_argument("--ranking_binary", type=str, required=False, default=None,
                         help="Optional qualified PriVA Rust summaries, default-model posteriors and ranking; criterion assignment, control statistics and unsupported inputs retain Python.")
+    parser.add_argument("--config", type=str, required=False, default=None,
+                        help="PriVA config; its SpliceAI score files select the SpliceAI v1 or SpliceAI2 cutoffs")
     args = parser.parse_args()
 
     anno_df, criteria_matrix = ACMG_criteria_assign(args.anno_table,
@@ -701,4 +707,5 @@ if __name__ == "__main__":
                                                     gnomAD_extreme_rare_threshold=args.gnomAD_extreme_rare_threshold,
                                                     expected_incidence=args.expected_incidence,
                                                     threads=args.threads,
-                                                    ranking_binary=args.ranking_binary)
+                                                    ranking_binary=args.ranking_binary,
+                                                    spliceai_cutoffs=cutoffs_for_config(args.config))

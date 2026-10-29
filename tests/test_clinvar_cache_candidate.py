@@ -1,4 +1,4 @@
-"""Bounded installation candidates do not activate the production SpliceAI2 route."""
+"""Bounded ClinVar installation candidates stay separate from runtime annotation."""
 from __future__ import annotations
 
 import json
@@ -113,7 +113,7 @@ PY
         result = refresh.candidate_route(ROOT)
         self.assertEqual(result["status"], "preparation_route_available_inputs_not_checked")
         self.assertIs(result["scientific_qualified"], False)
-        self.assertEqual(result["runtime_guard_sha256"], "060b7534790bf5552e45cd6912886df6df4c422c336746a126f6d220fed9eeff")
+        self.assertEqual(result["runtime_guard_sha256"], "7adeabcab3037d248cc1460fd065bc5220158a4c5d4e9f106065568b925b5eac")
         self.assertEqual(result["helper_source"], refresh.identity(ROOT / "scripts/clinvar_gene_refresh.py"))
 
     def test_profile_binds_loeuf_path_actually_selected_by_original_vep_shell(self):
@@ -126,7 +126,7 @@ PY
         self.assertNotIn(self.settings["loeuf_prescore"], files)
         self.assertNotIn("sha256", files[actual])
 
-    def test_managed_v2_candidate_finishes_without_runtime_activation(self):
+    def test_managed_v2_candidate_finishes_and_runtime_cannot_rewrite_its_receipt(self):
         self.v2()
         config_before = self.config.read_bytes()
         result = self.shell(env={"CANDIDATE_TAGS_ALREADY_PRESENT": "1"})
@@ -143,10 +143,14 @@ PY
         # execute even though the fixture's tag check says already annotated.
         self.assertTrue(self.trace.exists())
         self.trace.unlink()
+        ready = refresh.candidate_receipt_path(self.vcf).read_bytes()
+        # Runtime accepts SpliceAI2 with its own cutoffs; an exported purpose
+        # still cannot turn it into a candidate preparation.
         runtime = self.shell("anno_VEP_data", env={"priva_vep_purpose": "cache_candidate"})
-        self.assertNotEqual(runtime.returncode, 0)
-        self.assertIn("not qualified", runtime.stderr)
-        self.assertFalse(self.trace.exists())
+        self.assertEqual(runtime.returncode, 0, runtime.stdout + runtime.stderr)
+        self.assertIn("SpliceAI2 cutoffs", runtime.stderr)
+        self.assertEqual(refresh.candidate_receipt_path(self.vcf).read_bytes(), ready)
+        self.assertFalse(refresh.candidate_receipt_path(self.vcf, pending=True).exists())
 
     def test_candidate_uses_original_vep_arguments_and_cutoff(self):
         result = self.shell()
@@ -165,9 +169,10 @@ PY
     def test_private_entry_cannot_take_candidate_mode_from_environment(self):
         self.v2()
         result = self.shell("_priva_anno_VEP_data", env={"priva_vep_purpose": "cache_candidate"})
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn("not qualified", result.stderr)
-        self.assertFalse(self.trace.exists())
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("SpliceAI2 cutoffs", result.stderr)
+        self.assertFalse(refresh.candidate_receipt_path(self.vcf).exists())
+        self.assertFalse(refresh.candidate_receipt_path(self.vcf, pending=True).exists())
 
     def test_candidate_rejects_scientific_cli_overrides(self):
         result = self.shell(extra=("--spliceai_snv_prescore", str(self.snv)))

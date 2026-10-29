@@ -226,7 +226,7 @@ priva_install_prerequisites() { gofcards_exact_gof_cache_install "$1" --main-pre
 bundled_snapshot_install() { :; }
 nm_to_enst_mapping_install() { :; }
 priva_configure_cache_paths() { :; }
-for function in reference_genome_install VEP_plugins_install LoFtee_install gnomAD_install AlphaMissense_anno_gnomAD InterPro_parsing ClinVar_VCF_deploy ClinVar_AA_stat ClinVar_Gene_stat AlphaMissense_stat AlphaMissense_pick_intolerant_domains prepare_pm1_regions ClinVar_patho_AF_stat CADD_install CADD_runtime_install CADD_upstream_check ClinGen_deploy CDS_FASTA_install pext_install; do
+for function in reference_genome_install VEP_plugins_install LoFtee_install gnomAD_install AlphaMissense_anno_gnomAD InterPro_parsing ClinVar_VCF_deploy ClinVar_AA_stat ClinVar_Gene_stat AlphaMissense_stat AlphaMissense_pick_intolerant_domains prepare_pm1_regions ClinVar_patho_AF_stat CADD_install CADD_upstream_check ClinGen_deploy CDS_FASTA_install pext_install; do
  eval "$function() { :; }"
 done
 ClinVar_install() { [[ $# -eq 2 && $1 == --config && $2 == "$TEST_CONFIG" ]]; }

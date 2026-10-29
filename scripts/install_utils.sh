@@ -1079,89 +1079,148 @@ EOF
 
 
 
+function CADD_download() {
+    # Download URL to TARGET once. A stopped download resumes from TARGET.part,
+    # and TARGET appears only after its MD5 matches, so a later run never takes
+    # a partial or corrupt file for a finished one. An existing TARGET is kept.
+    local url=${1}
+    local target=${2}
+    local md5=${3:-}
+
+    [[ -f ${target} ]] && { log "${target} is already downloaded, skip the downloading process"; return 0; }
+    mkdir -p "$(dirname "${target}")" || return 1
+    log "Downloading ${url} to ${target}"
+    if command -v wget > /dev/null 2>&1; then
+        wget -c "${url}" -O "${target}.part"
+    else
+        curl -fL -C - "${url}" -o "${target}.part"
+    fi || { log "The download of ${url} stopped; rerun to resume ${target}.part"; return 1; }
+    if [[ -n ${md5} && ${md5} != null ]]; then
+        [[ $(md5sum "${target}.part" | cut -d ' ' -f 1) == "${md5}" ]] || {
+            log "The MD5 of ${target}.part differs from ${md5}; delete that file and rerun to download it again"
+            return 1
+        }
+    fi
+    mv -f "${target}.part" "${target}"
+}
+
+
 function CADD_install() {
+    # Install upstream CADD-scripts and its data the original way: each piece is
+    # downloaded only when it is missing and its MD5 is checked once, right after
+    # the download. Then PriVA's faster copies of two CADD scripts
+    # (scripts/cadd_scripts) are installed and each prescored table gets a finer
+    # index. CADD.sh itself, its Snakemake workflow and all its data stay upstream's.
     local config_file=${1}
     local assembly=${2:-}
-    local cache_root cadd_version reply
-    local CADD_script CADD_base_dir CADD_parent_dir=""
+    local cadd_version cadd_parent_dir cadd_base_dir cadd_zip_url unpack_parent unpacked staging
 
     priva_configure_cache_paths "${config_file}" || return 1
     [[ -z ${assembly} ]] && assembly=$(read_yaml "${config_file}" "assembly")
     [[ ${assembly} == "hg19" ]] && assembly="GRCh37"
     [[ ${assembly} == "hg38" ]] && assembly="GRCh38"
-    cadd_version=$(read_yaml "${config_file}" "cadd_version")
-    cache_root=$(read_yaml "${config_file}" "cache_root")
-    # The planner may have adopted a supplied tree beneath a nested managed
-    # path. Keep that exact selection instead of rediscovering a sibling.
-    CADD_base_dir=$(read_yaml "${config_file}" "cadd_base_dir") || return 1
-    [[ ${CADD_base_dir} == null ]] && CADD_base_dir=""
+    [[ ${assembly} == "GRCh37" || ${assembly} == "GRCh38" ]] || { log "Not supported assembly version: ${assembly}"; return 1; }
+    cadd_version=$(read_yaml "${config_file}" "cadd_version") || return 1
+    cadd_base_dir=$(read_yaml "${config_file}" "cadd_base_dir") || return 1
+    [[ ${cadd_base_dir} == null ]] && cadd_base_dir=""
+    cadd_parent_dir=$(read_yaml "${config_file}" "cadd_parent_dir") || return 1
+    [[ ${cadd_parent_dir} == null ]] && cadd_parent_dir=""
 
-    if [[ -n ${cache_root} && ${cache_root} != null ]]; then
-        # A selected cache root is authoritative; do not prompt to store the
-        # large CADD data inside the package-manager environment instead.
-        CADD_parent_dir=$(read_yaml "${config_file}" "cadd_parent_dir")
-    elif [[ -z ${CADD_base_dir} ]]; then
-        # Preserve the previous interactive behavior for legacy configurations.
-        CADD_script=$(find "${CONDA_PREFIX}/" -type f -name CADD.sh -print -quit)
-        [[ -f ${CADD_script} ]] || {
-            log "Cannot find CADD.sh in the active environment"
+    # 1. CADD-scripts: the configured folder, a release already unpacked under
+    #    cadd_parent_dir, or the configured release zip unpacked there.
+    if [[ -z ${cadd_base_dir} && -d ${cadd_parent_dir} ]]; then
+        cadd_base_dir=$(find "${cadd_parent_dir}/" -maxdepth 1 -type d -name "CADD-scripts-*${cadd_version#v}*" -print -quit)
+    fi
+    if [[ -n ${cadd_base_dir} && -e ${cadd_base_dir} ]]; then
+        [[ -f ${cadd_base_dir}/CADD.sh ]] || {
+            log "CADD.sh was not found in ${cadd_base_dir}; the folder is retained. Point cadd_base_dir at a CADD-scripts folder"
             return 1
         }
-        CADD_base_dir=$(dirname "${CADD_script}")
-        read -r -p "Store CADD data in ${CADD_base_dir}/data? (yes or no) " reply
-        case "${reply}" in
-            y|Y|yes|Yes|YES) ;;
-            *)
-                read -r -p "CADD parent directory (empty uses cadd_parent_dir): " CADD_parent_dir
-                [[ -d ${CADD_parent_dir} ]] || CADD_parent_dir=$(read_yaml "${config_file}" "cadd_parent_dir")
-                [[ -d ${CADD_parent_dir} ]] || {
-                    log "The CADD parent directory does not exist: ${CADD_parent_dir}"
-                    return 1
-                }
-                # This was an environment discovery, not a configured source;
-                # honor the user's alternate parent below.
-                CADD_base_dir=""
-                ;;
-        esac
+        log "The CADD scripts directory is already at ${cadd_base_dir}, skip the downloading process"
+    else
+        command -v unzip > /dev/null 2>&1 || { log "unzip is required to unpack the CADD scripts"; return 1; }
+        cadd_zip_url=$(read_yaml "${config_file}" "cadd_zip_download_url") || return 1
+        unpack_parent=${cadd_parent_dir}
+        [[ -n ${cadd_base_dir} ]] && unpack_parent=$(dirname "${cadd_base_dir}")
+        [[ -n ${unpack_parent} ]] || { log "Set cadd_parent_dir (or cache_root) for the CADD scripts and data"; return 1; }
+        mkdir -p "${unpack_parent}" && \
+        staging=$(mktemp -d "${unpack_parent}/.cadd-scripts.XXXXXX") && \
+        CADD_download "${cadd_zip_url}" "${staging}/CADD-scripts.zip" && \
+        unzip -q "${staging}/CADD-scripts.zip" -d "${staging}" || { log "Failed to download or unpack ${cadd_zip_url}"; return 1; }
+        unpacked=$(find "${staging}/" -mindepth 1 -maxdepth 1 -type d -name "CADD-scripts-*" -print -quit)
+        [[ -f ${unpacked}/CADD.sh ]] || { log "The archive ${cadd_zip_url} has no CADD-scripts folder; it stays in ${staging}"; return 1; }
+        [[ -n ${cadd_base_dir} ]] || cadd_base_dir=${unpack_parent}/$(basename "${unpacked}")
+        mv "${unpacked}" "${cadd_base_dir}" && \
+        rm -f "${staging:?}/CADD-scripts.zip" && \
+        rmdir "${staging}" || { log "Failed to move the CADD scripts into ${cadd_base_dir}"; return 1; }
+    fi
+    update_or_append_yaml "${config_file}" "cadd_base_dir" "${cadd_base_dir}" || return 1
+    log "Now the CADD base directory is ${cadd_base_dir} and it's updated to the config file ${config_file}"
+
+    # 2. Genome annotations: unpacked into a staging folder and moved into place
+    #    only when complete; the archive is removed afterwards.
+    local anno_dir=${cadd_base_dir}/data/annotations
+    local anno_name=${assembly}_${cadd_version}
+    if [[ -d ${anno_dir}/${anno_name} ]]; then
+        log "The CADD genome annotation ${anno_dir}/${anno_name} is already present, skip the downloading process"
+    else
+        CADD_download "$(read_yaml "${config_file}" "cadd_${assembly}_anno_url")" \
+            "${anno_dir}/${anno_name}.tar.gz" \
+            "$(read_yaml "${config_file}" "cadd_${assembly}_anno_md5")" || return 1
+        staging=$(mktemp -d "${anno_dir}/.extract.XXXXXX") || return 1
+        log "Unpacking ${anno_dir}/${anno_name}.tar.gz"
+        tar -xzf "${anno_dir}/${anno_name}.tar.gz" -C "${staging}" && \
+        [[ -d ${staging}/${anno_name} ]] && \
+        mv "${staging}/${anno_name}" "${anno_dir}/${anno_name}" && \
+        rmdir "${staging}" && \
+        rm -f "${anno_dir:?}/${anno_name:?}.tar.gz" || {
+            log "Failed to unpack ${anno_dir}/${anno_name}.tar.gz; the partial copy stays in ${staging}"
+            return 1
+        }
     fi
 
-    if [[ -n ${CADD_base_dir} ]]; then
-        # Only the absent documented managed default is an automatic source
-        # acquisition. Existing/invalid and custom selected paths are retained.
-        if [[ ! -e ${CADD_base_dir} && ! -L ${CADD_base_dir} &&
-              -n ${cache_root} && ${cache_root} != null &&
-              ${CADD_base_dir%/} == "${CADD_parent_dir%/}/CADD-scripts-1.7.2" ]]; then
-            python "${SCRIPT_DIR}/cadd_runtime_install.py" --config "${config_file}" \
-                --source-only --source "${CADD_base_dir}" || return 1
-        fi
-    elif [[ -n ${CADD_parent_dir} ]]; then
-        CADD_base_dir=$(find "${CADD_parent_dir}/" -maxdepth 1 -type d -name "CADD-scripts-*${cadd_version#v}*" -print -quit)
-        if [[ -z ${CADD_base_dir} ]]; then
-            # The complete runtime requires the reviewed Git revision. Acquire
-            # it only for the matching configured upstream archive identity;
-            # custom archives and existing non-Git trees are never replaced.
-            CADD_base_dir="${CADD_parent_dir}/CADD-scripts-1.7.2"
-            python "${SCRIPT_DIR}/cadd_runtime_install.py" --config "${config_file}" \
-                --source-only --source "${CADD_base_dir}" || return 1
-        fi
-    fi
+    # 3. Prescored variants (SNVs and indels) with their tabix indexes
+    local prescored_dir=${cadd_base_dir}/data/prescored/${anno_name}/incl_anno
+    local kind url
+    for kind in snv indel; do
+        url=$(read_yaml "${config_file}" "cadd_${assembly}_${kind}_anno_url") || return 1
+        CADD_download "${url}" "${prescored_dir}/$(basename "${url}")" \
+            "$(read_yaml "${config_file}" "cadd_${assembly}_${kind}_anno_md5")" && \
+        CADD_download "${url}.tbi" "${prescored_dir}/$(basename "${url}").tbi" \
+            "$(read_yaml "${config_file}" "cadd_${assembly}_${kind}_anno_tbi_md5")" || return 1
+    done
 
-    CADD_script="${CADD_base_dir}/CADD.sh"
-    [[ -f ${CADD_script} ]] || {
-        log "CADD.sh was not found in the selected CADD installation; selected path retained: ${CADD_base_dir}"
-        return 1
-    }
-    update_or_append_yaml "${config_file}" "cadd_base_dir" "${CADD_base_dir}" || return 1
-    local CADD_cache_dir="${CADD_base_dir}/data"
-    log "CADD data directory: ${CADD_cache_dir}"
-    # Validate every configured data/index identity independently. The helper
-    # stages downloads and annotation extraction, and refuses existing mismatches.
-    local config_json
-    config_json=$(yq '.' "${config_file}") || return 1
-    python "${SCRIPT_DIR}/cadd_cache_install.py" --config-json "${config_json}" \
-        --assembly "${assembly}" --base-dir "${CADD_base_dir}" || return 1
+    # 4. PriVA's faster copies of the prescore lookup and MMSplice scripts
+    python "${SCRIPT_DIR}/cadd_scripts_install.py" --source "${cadd_base_dir}" || return 1
+
+    # 5. A position index for each prescored table, used by that lookup
+    CADD_prescore_index "${prescored_dir}" "$(read_yaml "${config_file}" "threads")" || return 1
 }
 
+
+function CADD_prescore_index() {
+    # Upstream's .tbi index has 16 kb windows, so each lookup unpacks up to 16 kb
+    # of rows (tens of MB of text in the genome-wide SNV table) to reach one
+    # position. scripts/cadd_prescore_index.py writes TABLE.posidx, from which
+    # PriVA's extract_scored.py starts a few BGZF blocks before any position.
+    # It reads each table once and publishes the index atomically.
+    local prescored_dir=${1}
+    local threads=${2:-1}
+    local table
+    [[ ${threads} =~ ^[1-9][0-9]*$ ]] || threads=1
+    for table in "${prescored_dir}"/*.tsv.gz; do
+        [[ -f ${table} ]] || continue
+        if python "${SCRIPT_DIR}/cadd_prescore_index.py" check "${table}"; then
+            log "The position index ${table}.posidx is already present, skip indexing"
+            continue
+        fi
+        log "Building the position index ${table}.posidx with ${threads} threads; this reads the whole table once"
+        python "${SCRIPT_DIR}/cadd_prescore_index.py" build "${table}" --threads "${threads}" || {
+            log "Failed to index ${table}; nothing was published"
+            return 1
+        }
+    done
+}
 
 
 function CADD_upstream_check() {
@@ -1189,8 +1248,12 @@ function CADD_upstream_check() {
     # Snakemake inside CADD.sh needs a conda executable to deploy them.
     command -v conda > /dev/null 2>&1 || { log "CADD.sh needs a conda executable on PATH to deploy its environments"; return 1; }
     work=$(mktemp -d "${tmp_dir}/cadd_upstream_check.XXXXXX") || return 1
+    # PriVA's MMSplice copy saves its exon table here during this first run.
+    local exon_tables=${cadd_base_dir}/data/annotations/${genome_tag}_v1.7/mmsplice
+    [[ -d ${exon_tables} ]] || exon_tables=""
     log "Checking upstream CADD.sh with: ${cadd_base_dir}/CADD.sh -c ${threads} -a -m -g ${genome_tag}"
-    TMPDIR=${tmp_dir} "${cadd_base_dir}/CADD.sh" -c "${threads}" -a -m -g "${genome_tag}" \
+    TMPDIR=${tmp_dir} PRIVA_CADD_MMSPLICE_EXON_CACHE=${exon_tables} \
+    "${cadd_base_dir}/CADD.sh" -c "${threads}" -a -m -g "${genome_tag}" \
         -o "${work}/output.tsv.gz" "${cadd_base_dir}/test/input.vcf.gz" || {
         log "Upstream CADD.sh failed on its bundled test input; evidence kept in ${work}"
         return 1
@@ -1212,24 +1275,6 @@ function CADD_upstream_check() {
 }
 
 
-function CADD_runtime_install() {
-    [[ $# -ge 1 && $# -le 2 && -r ${1:-} ]] || {
-        log "Usage: CADD_runtime_install CONFIG [annotate|calculate|both]"
-        return 2
-    }
-    local config_file=${1} stage=${2:-both} config_json
-    case "${stage}" in
-        annotate|calculate|both) ;;
-        *) log "Invalid CADD runtime stage: ${stage}"; return 2 ;;
-    esac
-    config_json=$(yq '.' "${config_file}") || return 1
-    # Install pinned runtimes/assets only. This does not activate shared-VEP
-    # feature enrichment or the experimental calculation backend.
-    local -a manager_args=()
-    [[ -z ${PRIVA_ENV_MANAGER:-} ]] || manager_args=(--package-manager "${PRIVA_ENV_MANAGER}")
-    python "${SCRIPT_DIR}/cadd_runtime_install.py" \
-        --config-json "${config_json}" --stage "${stage}" "${manager_args[@]}" || return 1
-}
 
 
 function PrimateAI_install() {
@@ -4705,16 +4750,6 @@ function main_install() {
     "${config_file}" \
     ${assembly} || \
     { log "Failed to install CADD prescores"; return 1; }
-    # The pinned per-stage CADD runtime serves only the shared-VEP route. Without
-    # a selected cadd_profile, upstream CADD.sh deploys its own environments below.
-    local cadd_profile
-    cadd_profile=$(read_yaml "${config_file}" "cadd_profile") || return 1
-    if [[ -n ${cadd_profile} && ${cadd_profile} != null ]]; then
-        CADD_runtime_install "${config_file}" both || \
-        { log "Failed to install pinned CADD runtime and model assets"; return 1; }
-    else
-        log "No cadd_profile is selected; skipping the shared-VEP CADD runtime. Install it with: bash ${SCRIPT_DIR}/install_utils.sh CADD_runtime_install CONFIG"
-    fi
     CADD_upstream_check "${config_file}" || \
     { log "Failed to verify upstream CADD.sh on its bundled test input"; return 1; }
 

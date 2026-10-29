@@ -1,4 +1,4 @@
-"""Fixture-only checks of the CADD route used when no qualified profile is selected.
+"""Fixture-only checks of PriVA's upstream CADD.sh call (Calculate_CADD).
 
 A stub CADD.sh records its arguments; no CADD environment or model is run.
 """
@@ -14,6 +14,7 @@ BIN = Path('/stornext/snfs170/next-gen/scratch/yangyxt/mamba/envs/priva_acmg/bin
 
 CADD_STUB = '''#!/usr/bin/env bash
 printf '%s\\n' "$@" > "$FIXTURE/cadd-argv.txt"
+printf '%s' "${PRIVA_CADD_MMSPLICE_EXON_CACHE-unset}" > "$FIXTURE/cadd-exon-tables.txt"
 while getopts ':o:g:c:r:amqpd' option; do [[ $option == o ]] && out=$OPTARG; done
 printf '## CADD fixture\\n#Chrom\\tPos\\tRef\\tAlt\\tRawScore\\tPHRED\\n1\\t10\\tA\\tG\\t0.5\\t12.0\\n' | gzip -c > "$out"
 '''
@@ -38,9 +39,8 @@ class UpstreamCaddRouteTests(unittest.TestCase):
         script = self.root / 'cadd/CADD.sh'
         script.write_text(CADD_STUB)
         script.chmod(0o755)
-        # The qualified-profile helper must never be reached on this route.
-        (self.root / 'scripts/cadd_shared_workflow.py').write_text(
-            'import pathlib, os\npathlib.Path(os.environ["FIXTURE"], "profile-helper-called").touch()\n')
+        self.exon_tables = self.root / 'cadd/data/annotations/GRCh38_v1.7/mmsplice'
+        self.exon_tables.mkdir(parents=True)
         (self.root / 'input.vcf.gz').write_bytes(b'fixture input')
         (self.root / 'config.yaml').write_text('assembly: hg38\n')
 
@@ -67,7 +67,8 @@ class UpstreamCaddRouteTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(argv, ['-c', '2', '-a', '-p', '-m', '-d', '-g', 'GRCh38', '-o',
                                 str(self.root / 'output.cadd.tsv.gz'), str(self.root / 'input.nochr.vcf.gz')])
-        self.assertFalse((self.root / 'profile-helper-called').exists())
+        # PriVA's MMSplice copy saves and reloads its exon table beside CADD's GTF.
+        self.assertEqual((self.root / 'cadd-exon-tables.txt').read_text(), str(self.exon_tables))
         # The consumer receives the plain table without CADD's ## header lines.
         self.assertEqual((self.root / 'output.cadd.tsv').read_text().splitlines()[0],
                          '#Chrom\tPos\tRef\tAlt\tRawScore\tPHRED')
@@ -78,7 +79,6 @@ class UpstreamCaddRouteTests(unittest.TestCase):
         self.assertIn('needs a conda executable', result.stderr)
         self.assertEqual(argv, [])
         self.assertFalse((self.root / 'output.cadd.tsv').exists())
-        self.assertFalse((self.root / 'profile-helper-called').exists())
 
 
 if __name__ == '__main__':

@@ -17,8 +17,7 @@ ROOT = Path(__file__).resolve().parents[1]
 INSTALLER = ROOT / "scripts/install_utils.sh"
 STAGES = ["VEP_plugins_install", "LoFtee_install", "gnomAD_install", "AlphaMissense_anno_gnomAD",
           "InterPro_parsing", "pext_install", "ClinVar_install", "AlphaMissense_stat", "AlphaMissense_pick_intolerant_domains",
-          "prepare_pm1_regions", "ClinVar_patho_AF_stat", "CADD_install", "CADD_runtime_install",
-          "CADD_upstream_check", "ClinGen_deploy", "CDS_FASTA_install", "mechanism_resource_install"]
+          "prepare_pm1_regions", "ClinVar_patho_AF_stat", "CADD_install", "CADD_upstream_check", "ClinGen_deploy", "CDS_FASTA_install", "mechanism_resource_install"]
 PLUGINS = ["UTRAnnotator_install", "LOEUF_install", "Conservation_install", "AlphaMissense_install",
            "AlphaMissense_anno", "AlphaMissense_pick_missense_constrained_segments", "SpliceAI_install",
            "SpliceVault_install", "MaveDB_install", "PrimateAI_install"]
@@ -40,9 +39,7 @@ class ConfigFilenameSpaces(unittest.TestCase):
         self.root = Path(self.temp.name)
         self.ref = self.root / "selected reference.fa"
         self.ref.write_text(">chr1\nA\n")
-        # A selected profile keeps the shared-VEP runtime stage in the dispatch.
-        self.config = {"assembly": "hg38", "vep_installed_version": 116, "ref_genome": str(self.ref),
-                       "cadd_profile": "selected profile.json"}
+        self.config = {"assembly": "hg38", "vep_installed_version": 116, "ref_genome": str(self.ref)}
         for key in ("cache_root", "tmp_dir", "vep_cache_dir", "vep_plugins_dir", "vep_plugins_cachedir"):
             path = self.root / key
             path.mkdir()
@@ -84,7 +81,7 @@ priva_export_installed_environment() { :; }
                 expected.update(VEP_plugins_install=[self.config['vep_plugins_dir'], self.config['vep_plugins_cachedir'], 'hg38', str(config), 'priva_acmg'],
                                 LoFtee_install=[self.config['vep_plugins_cachedir'], str(config)],
                                 gnomAD_install=[str(config), str(self.ref)], ClinVar_install=['--config', str(config)],
-                                CADD_install=[str(config), 'hg38'], CADD_runtime_install=[str(config), 'both'])
+                                CADD_install=[str(config), 'hg38'])
                 for name, *args in calls:
                     self.assertEqual(args, expected[name], name)
 

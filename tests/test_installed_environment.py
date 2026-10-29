@@ -1,4 +1,4 @@
-"""Installed-package export and child-only CADD environment routing checks."""
+"""Installed-package export checks for PriVA and upstream CADD.sh environments."""
 import importlib.util
 import hashlib
 import json
@@ -16,9 +16,6 @@ ROOT = Path(__file__).resolve().parents[1]
 SPEC = importlib.util.spec_from_file_location('installed_environment_test', ROOT / 'scripts/installed_environment.py')
 EXPORT = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(EXPORT)
-RUNTIME_SPEC = importlib.util.spec_from_file_location('cadd_environment_route_test', ROOT / 'scripts/cadd_runtime.py')
-RUNTIME = importlib.util.module_from_spec(RUNTIME_SPEC)
-RUNTIME_SPEC.loader.exec_module(RUNTIME)
 
 
 class InstalledEnvironment(unittest.TestCase):
@@ -104,86 +101,39 @@ class InstalledEnvironment(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'different environment'):
             EXPORT.package_document(document, prefix.name)
 
-    def test_installation_exports_only_completed_cadd_prefixes(self):
-        environments = {}
-        for name, present in (('cadd-python2', True), ('cadd-esm-python', True), ('cadd-mmsplice-python', False)):
-            prefix = self.root / name
-            if present:
-                (prefix / 'conda-meta').mkdir(parents=True)
-                (prefix / 'conda-meta/history').write_text('fixture installed packages')
-            environments[name] = {'prefix': str(prefix)}
-        result = subprocess.CompletedProcess([], 0, json.dumps({'environments': environments}), '')
-        with patch.object(EXPORT.subprocess, 'run', return_value=result), \
-                patch.object(EXPORT, 'export_environment', return_value=self.root / 'export.yml') as export:
+    def cadd_environment(self, base, recipe, content, complete=True):
+        # Snakemake's folder name: MD5 of envs/conda's real path and the recipe bytes.
+        (base / 'envs').mkdir(parents=True, exist_ok=True)
+        (base / 'envs' / recipe).write_bytes(content)
+        root = os.path.realpath(base / 'envs/conda')
+        prefix = base / 'envs/conda' / (hashlib.md5(root.encode() + content).hexdigest() + '_')
+        (prefix / 'conda-meta').mkdir(parents=True)
+        (prefix / 'conda-meta/history').write_text('fixture installed packages')
+        if complete:
+            Path(str(prefix) + '.env_setup_done').write_text('')
+        return prefix
+
+    def test_installation_exports_priva_and_completed_cadd_sh_environments(self):
+        base = self.root / 'CADD-scripts-1.7.2'
+        vep = self.cadd_environment(base, 'vep.yml', b'name: vep\n')
+        minimal = self.cadd_environment(base, 'environment_minimal.yml', b'name: cadd-minimal\n')
+        self.cadd_environment(base, 'esm.yml', b'name: esm_annotate\n', complete=False)
+        (base / 'envs/mmsplice.yml').write_bytes(b'name: mmsplice\n')
+        self.config.write_text(yaml.safe_dump(dict(cache_root=str(self.root), cadd_base_dir=str(base))))
+        self.assertEqual(list(EXPORT.cadd_environments(yaml.safe_load(self.config.read_text()))),
+                         [('cadd-environment_minimal', minimal), ('cadd-vep', vep)])
+        with patch.object(EXPORT, 'export_environment', return_value=self.root / 'export.yml') as export:
             self.assertEqual(len(EXPORT.export_installation(config_file=self.config, manager='micromamba')), 3)
-        self.assertEqual([call.kwargs.get('name', 'priva_acmg') for call in export.call_args_list],
-                         ['priva_acmg', 'cadd-python2', 'cadd-esm-python'])
+        self.assertEqual([(call.kwargs.get('name', 'priva_acmg'), call.kwargs.get('prefix')) for call in export.call_args_list],
+                         [('priva_acmg', None), ('cadd-environment_minimal', minimal), ('cadd-vep', vep)])
 
-    def test_installation_does_not_claim_an_absent_cadd_environment(self):
-        self.config.write_text(yaml.safe_dump(dict(cache_root=str(self.root), cadd_profile='/selected/profile.json')))
-        result = subprocess.CompletedProcess([], 0, '{"environments":{}}', '')
-        with patch.object(EXPORT.subprocess, 'run', return_value=result), \
-                patch.object(EXPORT, 'export_environment', side_effect=AssertionError('no export before core exists')):
-            with self.assertRaisesRegex(ValueError, 'not installed'):
-                EXPORT.export_installation(config_file=self.config, manager='micromamba')
-
-    def test_installation_without_profile_exports_priva_when_no_cadd_runtime(self):
-        # Upstream CADD.sh needs no separate scorer, so its absence is not an error.
-        for profile in (None, '', 'null'):
-            with self.subTest(profile=profile):
-                self.config.write_text(yaml.safe_dump(dict(cache_root=str(self.root), cadd_profile=profile)))
-                result = subprocess.CompletedProcess([], 0, '{"environments":{"cadd-python2":{"prefix":"/absent"}}}', '')
-                with patch.object(EXPORT.subprocess, 'run', return_value=result), \
-                        patch.object(EXPORT, 'export_environment', return_value=self.root / 'priva_acmg.installed.yml') as export:
+    def test_installation_without_cadd_environments_exports_priva_only(self):
+        for base in (None, '', 'null', str(self.root / 'absent')):
+            with self.subTest(base=base):
+                self.config.write_text(yaml.safe_dump(dict(cache_root=str(self.root), cadd_base_dir=base)))
+                with patch.object(EXPORT, 'export_environment', return_value=self.root / 'export.yml') as export:
                     self.assertEqual(len(EXPORT.export_installation(config_file=self.config, manager='micromamba')), 1)
-                self.assertEqual(export.call_count, 1)
                 self.assertNotIn('prefix', export.call_args.kwargs)
-
-    def test_explicit_verified_container_exports_no_fictitious_mamba_environment(self):
-        result = subprocess.CompletedProcess([], 0, '{"backend":"container","environments":{}}', '')
-        with patch.object(EXPORT.subprocess, 'run', return_value=result), \
-                patch.object(EXPORT, 'export_environment', return_value=self.root / 'priva_acmg.installed.yml') as export:
-            self.assertEqual(len(EXPORT.export_installation(config_file=self.config, manager='micromamba')), 1)
-        self.assertEqual(export.call_count, 1)
-        self.assertNotIn('prefix', export.call_args.kwargs)
-
-    def test_unknown_runtime_backend_is_not_exported(self):
-        result = subprocess.CompletedProcess([], 0, '{"backend":"unknown","environments":{}}', '')
-        with patch.object(EXPORT.subprocess, 'run', return_value=result), \
-                patch.object(EXPORT, 'export_environment', side_effect=AssertionError('no export for unknown backend')):
-            with self.assertRaisesRegex(ValueError, 'Unknown'):
-                EXPORT.export_installation(config_file=self.config, manager='micromamba')
-
-    def test_cadd_child_preserves_main_environment_on_success_and_failure(self):
-        # A real wrapper and Bash process execute a labelled interpreter fixture;
-        # this checks context/exit behavior, not scientific CADD calculation.
-        folder = self.root / 'cadd'
-        folder.mkdir()
-        prefix = folder / 'envs/cadd-python2'
-        (prefix / 'bin').mkdir(parents=True)
-        python = prefix / 'bin/python'
-        python.write_text('#!/usr/bin/env bash\n'
-            'printf "CHILD_PREFIX=%s\\n" "$CONDA_PREFIX"\n'
-            'printf "CHILD_PYTHONPATH=%s\\n" "${PYTHONPATH-unset}"\n'
-            'exit "$1"\n')
-        python.chmod(0o755)
-        routes = RUNTIME.install_cadd_entry_points(folder, native=True, names=('cadd-python2',))
-        program = routes['entry_points']['cadd-python2']
-        body = ('before_path=$PATH\n'
-                '"$1" "$2"\n'
-                'status=$?\n'
-                '[[ $CONDA_PREFIX == /fixture/priva_acmg && $PYTHONPATH == main_modules && $PATH == "$before_path" ]] || exit 99\n'
-                'printf "MAIN_RESTORED\\n"\n'
-                'exit "$status"\n')
-        for code in (0, 72):
-            with self.subTest(code=code):
-                result = subprocess.run(['bash', '--noprofile', '--norc', '-c', body, 'test', program, str(code)],
-                    env=dict(os.environ, CONDA_PREFIX='/fixture/priva_acmg', PYTHONPATH='main_modules'),
-                    capture_output=True, text=True)
-                self.assertEqual(result.returncode, code, result.stderr)
-                self.assertIn('CHILD_PREFIX=' + str(prefix), result.stdout)
-                self.assertIn('CHILD_PYTHONPATH=unset', result.stdout)
-                self.assertIn('MAIN_RESTORED', result.stdout)
 
 
 class ManagedInstalledEnvironment(unittest.TestCase):

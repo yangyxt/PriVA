@@ -4,6 +4,8 @@ pub mod acmg_scoring;
 pub mod acmg_variant_mechanism;
 mod cli;
 pub mod spliceai2;
+pub mod variant_ids;
+mod vcf_text;
 
 pub fn main_entry() {
     if let Err(error) = cli::run() {

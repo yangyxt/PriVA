@@ -173,8 +173,8 @@ def ACMG_criteria_assign(anno_table: str,
                          gnomAD_extreme_rare_threshold: float = 0.0001,
                          expected_incidence: float = 0.0001,
                          threads: int = 10,
-                         ranking_binary: str = None,
-                         spliceai_cutoffs: dict = SPLICEAI_CUTOFFS["vcf_v1"]) -> Tuple[pd.DataFrame, pd.DataFrame]:
+                         spliceai_cutoffs: dict = SPLICEAI_CUTOFFS["vcf_v1"],
+                         ranking_binary: str = None) -> Tuple[pd.DataFrame, pd.DataFrame]:
     """
     Main function to assign ACMG criteria.
     Returns both annotated DataFrame and criteria matrix.
@@ -707,5 +707,5 @@ if __name__ == "__main__":
                                                     gnomAD_extreme_rare_threshold=args.gnomAD_extreme_rare_threshold,
                                                     expected_incidence=args.expected_incidence,
                                                     threads=args.threads,
-                                                    ranking_binary=args.ranking_binary,
-                                                    spliceai_cutoffs=cutoffs_for_config(args.config))
+                                                    spliceai_cutoffs=cutoffs_for_config(args.config),
+                                                    ranking_binary=args.ranking_binary)

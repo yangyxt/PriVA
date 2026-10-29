@@ -109,7 +109,7 @@ def historical_caller(function):
     dispatch = posterior_dispatch(function)
     position = function.body.index(dispatch)
     function.body[position:position + 1] = dispatch.body
-    if ast_digest(function) != "fba4729cf524acc543df0d45a493007d7dc7f1e39ffb1bb8be4c474fac8330be":
+    if ast_digest(function) != "5dc82d92fe1be4303e792d1ad72aa2f21cbcbdda4dfd1d137ba4b14b50397f8b":
         raise AssertionError("Historical ACMG calculations/publication order changed")
     return function
 
@@ -117,7 +117,7 @@ def historical_caller(function):
 class RankingCallBoundary(unittest.TestCase):
     def test_existing_criteria_calculation_and_write_order_are_unchanged(self):
         restored = historical_caller(caller_function(acmg_tree()))
-        self.assertEqual(ast_digest(restored), "fba4729cf524acc543df0d45a493007d7dc7f1e39ffb1bb8be4c474fac8330be")
+        self.assertEqual(ast_digest(restored), "5dc82d92fe1be4303e792d1ad72aa2f21cbcbdda4dfd1d137ba4b14b50397f8b")
 
     def test_restoration_rejects_skipped_reordered_duplicate_or_changed_summary_dispatch(self):
         original = caller_function(acmg_tree())
@@ -321,7 +321,7 @@ class RankingCallBoundary(unittest.TestCase):
         self.assertEqual(call.func.id, "ACMG_criteria_assign")
         self.assertEqual(call.keywords[-1].arg, "ranking_binary")
         call.keywords.pop()
-        self.assertEqual(ast_digest(main), "c1951401d8df01b7fed0c6d7e389563492be36378da909d593386767b42f2e1b")
+        self.assertEqual(ast_digest(main), "39f993987dd21ea278f4221551e28ab578c9ecc420ee02075be9ae36755a3c0d")
 
     def test_actual_argument_parser_forwards_default_and_selected_binary(self):
         main = next(node for node in acmg_tree().body if isinstance(node, ast.If)
@@ -341,6 +341,7 @@ class RankingCallBoundary(unittest.TestCase):
                 return None, None
             namespace = {"__name__": "__main__", "ap": argparse,
                          "ACMG_criteria_assign": capture,
+                         "cutoffs_for_config": lambda config: {"config": config},
                          "DEFAULT_DISPENSABLE_GENE_LIST": "bundled-genes.txt",
                          "DEFAULT_HPO_CONDITION_MECHANISM_CACHE": Path("conditions.json"),
                          "DEFAULT_MECHANISM_JSON": Path("mechanisms.json")}

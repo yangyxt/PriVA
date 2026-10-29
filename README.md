@@ -178,4 +178,4 @@ retain Python; unsupported inputs use their original Python
 path. Omitting the key retains the Python defaults. This option does not qualify a new scientific profile
 or enable raw execution.
 
-See [LICENSE](LICENSE) for Apache 2.0 with the Commons Clause condition and commercial licensing, including clinical/diagnostic applications. Third-party resources retain their own terms, including the [CADD license](bin/cadd/CADD-LICENSE).
+See [LICENSE](LICENSE) for Apache 2.0 with the Commons Clause condition and commercial licensing, including clinical/diagnostic applications. Third-party resources retain their own terms, including the [CADD license](scripts/cadd_scripts/CADD-LICENSE).

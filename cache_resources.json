@@ -960,7 +960,7 @@
       }
     },
     "cadd_annotations": {
-      "title": "CADD annotation bundle and prescores",
+      "title": "CADD-scripts, its annotation bundle and prescores",
       "lifecycle": "maintained",
       "storage": "external",
       "config_keys": [
@@ -984,141 +984,12 @@
         ]
       },
       "depends_on": [],
-      "notes": "Keep same-publisher data/index pins. GRCh38 annotation bundle currently uses Berlin; individual prescores use Washington. Template alone must not mix source identities.",
+      "notes": "Keep same-publisher data/index pins. GRCh38 annotation bundle currently uses Berlin; individual prescores use Washington. Template alone must not mix source identities. CADD_install downloads each file only when missing (MD5 checked once), installs PriVA's copies of extract_scored.py and MMSplice.py (scripts/cadd_scripts) over the reviewed upstream bytes, and builds TABLE.posidx beside each prescored table (scripts/cadd_prescore_index.py); CADD_upstream_check builds CADD.sh's environments.",
       "selected_profile": {
         "data_version": "v1.7"
       },
       "install_entrypoints": [
         "CADD_install"
-      ],
-      "maintenance_evidence": {
-        "basis": "selected_artifact_and_existing_installer_route",
-        "cadence": "not_verified",
-        "note": "Classification records PriVA policy, not a guarantee that the publisher will maintain or republish this data."
-      }
-    },
-    "cadd_candidate_transcripts": {
-      "title": "Selected-release CADD candidate peptide and GTF resources",
-      "lifecycle": "maintained",
-      "storage": "external",
-      "config_keys": [
-        "cache_root",
-        "assembly",
-        "vep_installed_version",
-        "ref_genome"
-      ],
-      "bundled_paths": [],
-      "source": {
-        "kind": "versioned_url",
-        "urls": {
-          "GRCh38_peptide": "https://ftp.ensembl.org/pub/release-{release}/fasta/homo_sapiens/pep/Homo_sapiens.GRCh38.pep.all.fa.gz",
-          "GRCh37_peptide": "https://ftp.ensembl.org/pub/grch37/release-{release}/fasta/homo_sapiens/pep/Homo_sapiens.GRCh37.pep.all.fa.gz",
-          "GRCh38_gtf": "https://ftp.ensembl.org/pub/release-{release}/gtf/homo_sapiens/Homo_sapiens.GRCh38.{release}.gtf.gz"
-        },
-        "checksums": "Sibling CHECKSUMS files use publisher BSD sums; local SHA256 receipts record acquired identities."
-      },
-      "refresh": {
-        "keep_function": true,
-        "automatic": false,
-        "policy": "configured_vep_release_candidate_requires_separate_qualification",
-        "entrypoints": [
-          "CADD_runtime_install"
-        ]
-      },
-      "depends_on": [
-        "vep_cache",
-        "genome_reference"
-      ],
-      "notes": "Annotation/both installation acquires or reuses a managed candidate; calculate-only needs no transcript resources. Completed matching receipts support offline reuse. Explicit adopt supports already verified publisher acquisitions. Changed or mismatched finals are preserved and rejected, not replaced. GRCh37 retains annotation-base75 lineage and no MMSplice GTF; GRCh38 uses the selected release peptide and GTF. This candidate does not activate shared-VEP CADD scoring or change pinned scientific packages/models.",
-      "selected_profile": {
-        "release_from": "config.yaml vep_installed_version",
-        "assemblies": [
-          "GRCh37",
-          "GRCh38"
-        ],
-        "GRCh37_annotation_base_release": "75",
-        "qualification": "pending"
-      },
-      "install_entrypoints": [
-        "CADD_runtime_install"
-      ],
-      "maintenance_evidence": {
-        "basis": "publisher_versioned_release_checksum_endpoints",
-        "cadence": "release_based",
-        "note": "Release116 checksum endpoints were checked. Unavailable future release/assembly pairs fail without fallback."
-      }
-    },
-    "cadd_refseq_candidate": {
-      "title": "Pinned RefSeq candidate files for merged CADD transcript coverage",
-      "lifecycle": "snapshot",
-      "storage": "external",
-      "config_keys": ["cache_root", "assembly", "vep_installed_version", "vep_cache_dir"],
-      "bundled_paths": [],
-      "source": {
-        "kind": "pinned_source",
-        "directory_url": "https://ftp.ncbi.nlm.nih.gov/genomes/all/annotation_releases/9606/GCF_000001405.40-RS_2025_08/",
-        "manifest": "md5checksums.txt",
-        "pins_file": "scripts/cadd_refseq_resources.py",
-        "files": ["genomic.gff.gz", "protein.faa.gz", "rna.fna.gz", "assembly_report.txt"],
-        "checksums": "Exact publisher MD5 and byte length, frozen identity-encoded manifest, and local SHA256."
-      },
-      "refresh": {
-        "keep_function": false,
-        "automatic": false,
-        "policy": "fixed_refseq_release_candidate_requires_separate_qualification",
-        "entrypoints": []
-      },
-      "depends_on": ["vep_cache"],
-      "notes": "Separate experimental acquisition, not a main_install stage or an active CADD profile. Files live under cache_root/references/RefSeq/GRCh38/GCF_000001405.40-RS_2025_08. Requires the matching configured merged VEP116 source; no release fallback. This external 242277346-byte snapshot is not Git-bundled. Acquisition does not establish transcript, translation, coordinate, feature or scoring compatibility.",
-      "selected_profile": {
-        "assembly": "GRCh38",
-        "vep_release": "116",
-        "refseq_release": "GCF_000001405.40-RS_2025_08",
-        "qualification": "pending",
-        "production_activation": false
-      },
-      "install_entrypoints": [],
-      "acquisition_commands": [
-        "python scripts/cadd_refseq_resources.py plan --config CONFIG",
-        "python scripts/cadd_refseq_resources.py acquire --config CONFIG",
-        "python scripts/cadd_refseq_resources.py check --config CONFIG"
-      ],
-      "maintenance_evidence": {
-        "basis": "installed_merged_cache_source_and_matching_publisher_archive",
-        "cadence": "fixed_snapshot",
-        "note": "The four pinned originals and local verification completed in Slurm1515736 on 2026-10-19; sequence and feature qualification are separate."
-      }
-    },
-    "cadd_models_runtime": {
-      "title": "Original CADD Python runtime, model and PHRED assets",
-      "lifecycle": "snapshot",
-      "storage": "external",
-      "config_keys": [
-        "cadd_base_dir"
-      ],
-      "bundled_paths": [],
-      "source": {
-        "kind": "pinned_source",
-        "repository": "https://github.com/kircherlab/CADD-scripts",
-        "revision": "1fead0c1e02d3f0a8599bdb04e6b3a2dd70b4866",
-        "pins_file": "scripts/cadd_runtime_pins.json"
-      },
-      "refresh": {
-        "keep_function": false,
-        "automatic": false,
-        "policy": "coordinated_cadd_release",
-        "entrypoints": []
-      },
-      "depends_on": [
-        "cadd_annotations"
-      ],
-      "notes": "Transformation, model, ESM/RegSeq/MMSplice and PHRED assets form one pinned scientific bundle; cadd-rs is suspended.",
-      "selected_profile": {
-        "code_version": "1.7.2",
-        "scoring": "original upstream Python"
-      },
-      "install_entrypoints": [
-        "CADD_runtime_install"
       ],
       "maintenance_evidence": {
         "basis": "selected_artifact_and_existing_installer_route",

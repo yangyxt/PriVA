@@ -54,15 +54,15 @@ deterministic reporting of all calculated UTR effects and retains the original
 module and patch. The biological calculations are unchanged; other VEP releases
 are left unchanged. See [`data/vep`](data/vep/README.md).
 
-CADD raw/PHRED calculation uses the separate `cadd-python2` Mamba environment with the original upstream Python and scientific packages. Each task runs its interpreter in a child process, then continues in `priva_acmg`; no manual activation or switch back is required. Failures propagate to the calling task while the main environment remains intact.
+CADD scores come from upstream `CADD.sh` (CADD-scripts v1.7.2) with all of CADD's own data. `main_install` installs it the original way, each file downloaded only when missing with its MD5 checked once, then replaces two of its scripts with PriVA's faster copies in [`scripts/cadd_scripts`](scripts/cadd_scripts/README.md): the prescore lookup starts from a position index built once beside each prescored table, and MMSplice reloads a saved exon table. Both write the same output as upstream. `CADD.sh` runs as a child process whose Snakemake builds its own environments under `cadd_base_dir/envs/conda`; its Snakemake needs a `conda` program (24.7.1 or later) on `PATH`. The standalone `cadd.nf` runs the same `CADD.sh` on one VCF and writes the CADD table that `--mode annotated` accepts:
 
-```text
-priva_acmg → CADD Python child process → priva_acmg
+```bash
+nextflow run "$PRIVA_ROOT/cadd.nf" -c "$PRIVA_ROOT/conf/cadd.config" \
+  --input "$(realpath inputs/cohort.vcf.gz)" --assembly GRCh38 \
+  --cadd_base_dir "$PRIVA_CACHE/CADD/CADD-scripts-1.7.2" --outdir "$(realpath cadd_out)"
 ```
 
-Fresh native installs place `cadd-*` environments beside `priva_acmg` under the existing Mamba root and their launch wrappers under that root's `share/priva/cadd-1.7.2/`. Completed older installations are reused in place. CADD annotation feature tools additionally retain their separately pinned `cadd-esm-python`, `cadd-regseq-python` and, for GRCh38, `cadd-mmsplice-python` environments.
-
-At completion, the installer exports the packages actually installed, including version/build pins and pip dependencies, to `cache_root/priva_acmg.installed.yml` and `cache_root/cadd-*.installed.yml`. These portable YAML files omit host prefixes and environment variables. To repeat only this export:
+At completion, the installer exports the packages actually installed, including version/build pins and pip dependencies, to `cache_root/priva_acmg.installed.yml` and, for each environment `CADD.sh` built, `cache_root/cadd-*.installed.yml`. These portable YAML files omit host prefixes and environment variables. To repeat only this export:
 
 ```bash
 bash "$PRIVA_ROOT/scripts/install_utils.sh" priva_export_installed_environment --config "$PRIVA_CONFIG"

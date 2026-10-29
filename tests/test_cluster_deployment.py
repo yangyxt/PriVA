@@ -206,24 +206,6 @@ class ReuseIntegrity(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "does not match"):
             resources.reference(self.args, manifest)
 
-    def test_unidentified_existing_image_is_rejected(self):
-        folder = self.args.software_root / "cadd-1.7.2"
-        folder.mkdir(parents=True)
-        (folder / "cadd-upstream-0.1.1.sif").write_bytes(b"unverified image")
-        with patch.object(resources, "source", return_value=self.root), self.assertRaisesRegex(RuntimeError, "no verified"):
-            resources.cadd_runtime(self.args, {"cadd": {"image": "docker://example@sha256:abc"}})
-
-    def test_mutated_existing_image_is_rejected(self):
-        folder = self.args.software_root / "cadd-1.7.2"
-        folder.mkdir(parents=True)
-        image = folder / "cadd-upstream-0.1.1.sif"
-        image.write_bytes(b"original image")
-        origin = {"image_source": "docker://example@sha256:abc", "image_sha256": resources.checksum(image)}
-        resources.write_json(folder / "image.origin.json", origin)
-        image.write_bytes(b"changed image")
-        with patch.object(resources, "source", return_value=self.root), self.assertRaisesRegex(RuntimeError, "differs"):
-            resources.cadd_runtime(self.args, {"cadd": {"image": origin["image_source"]}})
-
 
 if __name__ == "__main__":
     unittest.main()

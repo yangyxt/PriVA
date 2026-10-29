@@ -118,9 +118,6 @@ jobs:
           python -m unittest discover -s tests -p 'test_nextflow_driver_install.py' -v
           python -m unittest discover -s tests -p 'test_priva_rust_install.py' -v
           python -m unittest discover -s tests -p 'test_install_utils_resources.py' -v
-          python -m unittest discover -s tests -p 'test_cadd_runtime_install.py' -v
-          python -m unittest discover -s tests -p 'test_cadd_transcript_resources.py' -v
-          python -m unittest discover -s tests -p 'test_cadd_io_integration.py' -v
           python -m unittest discover -s tests -p 'test_clingen_source_acquisition.py' -v
           python -m unittest discover -s tests -p 'test_gnomad_annotation_failures.py' -v
           python -m unittest discover -s tests -p 'test_alphamissense_cache.py' -v
@@ -135,8 +132,6 @@ jobs:
           python -m unittest discover -s tests -p 'test_spliceai_cache_input.py' -v
           python -m unittest discover -s tests -p 'test_spliceai2_runtime_guard.py' -v
           python -m unittest discover -s tests -p 'test_vcf_bgz_validation.py' -v
-          python -m unittest discover -s tests/cadd -p 'test_upstream.py' -v
-          python -m unittest discover -s tests/cadd -p 'test_selection_view.py' -v
 
       - name: Install the pinned Rust toolchain
         run: rustup toolchain install 1.90.0 --profile minimal --component rustfmt
@@ -188,11 +183,11 @@ jobs:
             "$RUNNER_TEMP/priva-nextflow-runtime/bin/nextflow" \
             "$RUNNER_TEMP/priva-nextflow-stub"
 
-      - name: Test independent CADD routes with synthetic artifacts
+      - name: Test the standalone upstream CADD.sh workflow wiring
         env:
           NXF_OFFLINE: 'true'
         run: |
-          bash tests/cadd/run_stub.sh \
+          bash tests/nextflow/run_cadd_stub.sh \
             "$RUNNER_TEMP/priva-nextflow-runtime/bin/nextflow" \
             "$RUNNER_TEMP/priva-cadd-stub"
 

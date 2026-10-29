@@ -669,7 +669,7 @@
         "entrypoints": []
       },
       "depends_on": [],
-      "notes": "Detect TSV/VCF header using existing keys. Preserve allele/gene/score/threshold provenance. PriVA's splicing and ACMG rules apply SpliceAI2 cutoffs calibrated against SpliceAI v1 on ClinVar SNVs (scripts/spliceai_cutoffs.py). Manual source/license policy is unchanged.",
+      "notes": "Detect TSV/VCF header using existing keys. Preserve allele/gene/score/threshold provenance. PriVA's splicing and ACMG rules apply the SpliceAI2 authors' recommended thresholds (scripts/spliceai_cutoffs.py). Manual source/license policy is unchanged.",
       "selected_profile": {
         "PriVA_assembly": "GRCh38",
         "version": "2.0"

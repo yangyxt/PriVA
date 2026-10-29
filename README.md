@@ -11,7 +11,7 @@ flowchart LR
     R --> O[Variants + ranked tables + provenance]
 ```
 
-**Real `--mode raw` execution is disabled**, including after successful installation. The executable path is the compatibility interface for preannotated inputs: it requires the complete original VCF/CADD pair from a compatible scientific profile, not arbitrary annotations. SpliceAI v1 and prepared SpliceAI2 caches each use their own splicing and ACMG cutoffs ([spliceai_cutoffs.py](scripts/spliceai_cutoffs.py)); SpliceAI2 cutoffs were calibrated on ClinVar against SpliceAI v1. Installation, stub execution and successful scheduling do not establish family or scientific-profile qualification.
+**Real `--mode raw` execution is disabled**, including after successful installation. The executable path is the compatibility interface for preannotated inputs: it requires the complete original VCF/CADD pair from a compatible scientific profile, not arbitrary annotations. SpliceAI v1 and prepared SpliceAI2 caches each use their own splicing and ACMG cutoffs ([spliceai_cutoffs.py](scripts/spliceai_cutoffs.py)); SpliceAI2 uses its authors' recommended thresholds (0.1, 0.25 and 0.5 in place of SpliceAI v1's 0.2, 0.5 and 0.8). Installation, stub execution and successful scheduling do not establish family or scientific-profile qualification.
 
 ## Install
 

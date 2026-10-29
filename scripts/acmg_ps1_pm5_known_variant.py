@@ -28,7 +28,8 @@ logger = logging.getLogger(__name__)
 
 def check_splice_pathogenic(row: dict,
                             clinvar_tranx_splice_dict_list: list,
-                            pvs1_strength: int) -> bool:
+                            pvs1_strength: int,
+                            spliceai_cutoff: float = 0.5) -> bool:
     '''
     Check if a variant's splice change matches a known pathogenic variant.
     The dict is prepared by the script stat_aachange_clinvar.py
@@ -77,7 +78,7 @@ def check_splice_pathogenic(row: dict,
     var_spliceai_ds_dl = row.get('SpliceAI_pred_DS_DL', np.nan)
 
     delta_scores = abs(var_spliceai_ds_ag), abs(var_spliceai_ds_al), abs(var_spliceai_ds_dg), abs(var_spliceai_ds_dl)
-    if all(ds < 0.5 for ds in delta_scores):
+    if all(ds < spliceai_cutoff for ds in delta_scores):
         return False
 
     # Find the biggest delta score index in delta_scores
@@ -147,6 +148,7 @@ def PS1_PM5_criteria(df: pd.DataFrame,
                      ps3_clinvar_patho: np.ndarray,
                      pvs1_criteria: np.ndarray,
                      threads: int = 10,
+                     spliceai_cutoff: float = 0.5,
                      high_confidence_status = {
                                                 'practice_guideline': 4,                                   # 4 stars
                                                 'reviewed_by_expert_panel': 3,                             # 3 stars
@@ -241,7 +243,7 @@ def PS1_PM5_criteria(df: pd.DataFrame,
         records_subset = df.iloc[fallback_idx].to_dict('records')
         args = [(records_subset[i],
                  clinvar_splice_dict.get(records_subset[i].get('Feature', ''), []),
-                 pvs1_criteria[fallback_idx[i]]) for i in range(len(records_subset))]
+                 pvs1_criteria[fallback_idx[i]], spliceai_cutoff) for i in range(len(records_subset))]
         chunk_size = max(len(args) // (threads * 4), 1)
         with mp.Pool(threads) as pool:
             fallback_results = pool.starmap(check_splice_pathogenic, args, chunksize=chunk_size)

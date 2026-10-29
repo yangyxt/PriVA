@@ -25,7 +25,7 @@ def PP3_BP4_criteria(df: pd.DataFrame, pvs1_criteria: np.ndarray = None, high_co
         'practice_guideline': 4,                                   # 4 stars
         'reviewed_by_expert_panel': 3,                             # 3 stars
         'criteria_provided,_multiple_submitters,_no_conflicts': 2,  # 2 stars
-    }) -> pd.Series:
+    }, spliceai_no_impact_cutoff: float = 0.1) -> pd.Series:
     # PP3: predicted to be deleterious by in-silico tools
     # Including PrimateAI (Missense), CADD, AlphaMissense (Missense), VEP, SpliceAI, SpliceVault, UTRAnnotator
 
@@ -73,14 +73,15 @@ def PP3_BP4_criteria(df: pd.DataFrame, pvs1_criteria: np.ndarray = None, high_co
     cadd_reg_phred_not_high = ~(cadd_reg_phred >= cadd_bp4_phred_cutoff).fillna(False)
     splice_computational_lof = df['splicing_lof'].fillna(False) | loftee_splice_lof
     # SpliceAI benign: when SpliceAI data is present and the max delta score across all four
-    # directions (AG/AL/DG/DL) is below 0.1, the variant has no predicted splicing impact.
+    # directions (AG/AL/DG/DL) is below 0.1 (SpliceAI v1; see spliceai_cutoffs.py for
+    # SpliceAI2), the variant has no predicted splicing impact.
     # This is an independent benign signal; it should be available regardless of CADD.
     _spliceai_ds_cols = ['SpliceAI_pred_DS_AG', 'SpliceAI_pred_DS_AL',
                          'SpliceAI_pred_DS_DG', 'SpliceAI_pred_DS_DL']
     _spliceai_max_delta = pd.concat(
         [pd.to_numeric(df[c], errors='coerce') for c in _spliceai_ds_cols], axis=1
     ).max(axis=1)
-    spliceai_no_impact = _spliceai_max_delta.notna() & (_spliceai_max_delta < 0.1)
+    spliceai_no_impact = _spliceai_max_delta.notna() & (_spliceai_max_delta < spliceai_no_impact_cutoff)
 
     # BP4: variant is reported benign
     pp3_criteria = ((primateai > 0.8) & missense_variant) | \

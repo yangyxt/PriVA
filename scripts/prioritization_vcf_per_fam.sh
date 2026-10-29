@@ -74,6 +74,7 @@ function interpret_splicing_annotations () {
     [[ ${input_tab} -nt ${alphamissense_tranx_domain_map} ]] && \
     [[ ${input_tab} -nt ${intolerant_domains} ]] && \
     [[ ${input_tab} -nt ${splicing_py} ]] && \
+    [[ ${input_tab} -nt ${SCRIPT_DIR}/spliceai_cutoffs.py ]] && \
     check_table_column ${input_tab} "splicing_lof" && \
     check_table_column ${input_tab} "splicing_len_changing" && \
     check_table_column ${input_tab} "splicing_canonical_offset" && \
@@ -86,6 +87,7 @@ function interpret_splicing_annotations () {
     --transcript_domain_map ${alphamissense_tranx_domain_map} \
     --intolerant_domains ${intolerant_domains} \
     --interpro_entry_map_pkl ${interpro_entry_map_pkl} \
+    --config ${config_file} \
     --threads ${threads} && \
     display_table ${input_tab} && \
     log "The splicing interpretations are saved to ${input_tab}, added with two columns: splicing_lof and splicing_len_changing"
@@ -248,6 +250,7 @@ function assign_acmg_criteria () {
     [[ -f ${output_acmg_mat} ]] && \
     [[ ${output_acmg_mat} -nt ${acmg_py} ]] && \
     [[ ${output_acmg_mat} -nt ${acmg_pm1_py} ]] && \
+    [[ ${output_acmg_mat} -nt ${SCRIPT_DIR}/spliceai_cutoffs.py ]] && \
     [[ ${input_tab} -nt ${mean_am_score_table} ]] && \
     [[ ${input_tab} -nt ${clinvar_aa_dict_pkl} ]] && \
     [[ ${input_tab} -nt ${clinvar_splice_dict_pkl} ]] && \
@@ -295,6 +298,7 @@ function assign_acmg_criteria () {
     --clingen_map_pkl ${clingen_map_pkl} \
     --gnomAD_extreme_rare_threshold ${gnomAD_extreme_rare_threshold} \
     --expected_incidence ${expected_incidence} \
+    --config ${config_file} \
     --threads ${threads} \
     --tranx_exon_domain_map_pkl ${tranx_exon_domain_map_pkl} ${ped_arg} ${fam_arg} ${alt_disease_arg} ${mavedb_arg} ${pp1_arg} ${relevant_genes_arg} ${dispensable_genes_arg} "${cds_fasta_arg[@]}" ${pext_arg} ${clingen_override_arg} && \
     display_table ${input_tab} && \

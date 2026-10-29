@@ -21,7 +21,7 @@ intermediate files of the step before it.
 
 ### 1. Steps that prepare each sample's variants (variant IDs, VCF to table, CADD hub cache, family filtering, SpliceAI version check)
 
-7 files, 2,887 lines.
+7 files, 2,883 lines.
 
 | Script | Lines | Status |
 | --- | ---: | --- |
@@ -31,7 +31,7 @@ intermediate files of the step before it.
 | `scripts/hpo_penetrance.py` | 143 | Python |
 | `scripts/pedigree_filtration_per_fam.py` | 302 | Python |
 | `scripts/spliceai_cache_input.py` | 703 | Python |
-| `scripts/spliceai_cutoffs.py` | 120 | Python |
+| `scripts/spliceai_cutoffs.py` | 116 | Python |
 
 ### 2. Steps that interpret splicing and UTR effects for each sample
 
@@ -79,7 +79,7 @@ intermediate files of the step before it.
 
 ### 4. Scripts that build reference data once, at installation
 
-32 files, 20,330 lines.
+31 files, 20,058 lines.
 
 | Script | Lines | Status |
 | --- | ---: | --- |
@@ -110,7 +110,6 @@ intermediate files of the step before it.
 | `scripts/prepare_clingen_map.py` | 64 | Python |
 | `scripts/prepare_pm1_regions.py` | 397 | Python |
 | `scripts/resort_step3_only.py` | 76 | Python |
-| `scripts/spliceai2_cutoff_calibration.py` | 272 | Python |
 | `scripts/stat_aachange_clinvar.py` | 371 | Python |
 | `scripts/stat_exon_patho_afs.py` | 238 | Python |
 | `scripts/stat_gene_patho_afs.py` | 216 | Python |

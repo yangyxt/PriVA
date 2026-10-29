@@ -1,35 +1,31 @@
 """SpliceAI cutoffs for PriVA's splicing and ACMG rules, by score version.
 
-PriVA's rules were written for SpliceAI v1 scores. SpliceAI2 scores the same
-variants lower, so each rule has its own SpliceAI2 cutoff. Each SpliceAI2 cutoff
-makes the mistake its rule must avoid as often as SpliceAI v1 does at the
-original cutoff. This was measured on the 988,870 benign and 3,988 pathogenic
-ClinVar single-nucleotide variants (2026-10-19 release, 1+ review stars) that
-change no amino acid (intronic or synonymous) and are scored by both versions.
+PriVA's rules were written for SpliceAI v1 scores. SpliceAI2 (Jaganathan et al.,
+"A unified framework for quantitative splicing and transcript prediction", 2026)
+reports the same four delta scores, and its authors recommend their own
+thresholds on the largest of them (their summary score). Their README maps each
+threshold to the SpliceAI v1 tier it replaces:
 
-  rule (where)                     mistake held at the v1 rate     v1    SpliceAI2
-  splice_altering                  benign flagged: 0.059%          0.8   0.54
-    (SpliceAI_interpretation, feeds PVS1/PP3)
-  nearby_acceptor_rescue           no ClinVar truth exists; the    0.5   0.45
-    (SpliceAI_interpretation)      cutoff best reproducing v1's
-                                   own calls is used
-  known_pathogenic_comparison      benign passing: 0.30%           0.5   0.26
-    (PS1 splice comparison)
-  no_splicing_impact               pathogenic called "no splicing  0.1   0.07
-    (BP4)                          impact": 7.0%
-  donor_loss_putative_nmd          benign counted: 0.058%          0.5   0.34
-    (ClinVar gene statistics built at installation)
+  tier                      SpliceAI v1   SpliceAI2
+  high recall                  0.2          0.1
+  balance of both              0.5          0.25
+  high precision               0.8          0.5
 
-At these cutoffs SpliceAI2 also catches more pathogenic variants than SpliceAI
-v1 (splice-altering: 63% versus 43%). 95% bootstrap intervals are within
-0.02 of each value except nearby_acceptor_rescue (0.38-0.52). Reproduce with
-spliceai2_cutoff_calibration.py, which reads only the public ClinVar VCF and the
-two score files.
+The manuscript calls variants scoring above 0.1 predicted splice-altering and
+prioritises disease variants at 0.25. Each PriVA rule takes the SpliceAI2
+threshold of the tier its SpliceAI v1 cutoff belongs to:
+
+  rule (where)                                       v1    SpliceAI2
+  splice_altering (SpliceAI_interpretation, PVS1/PP3) 0.8   0.5   high precision
+  nearby_acceptor_rescue (SpliceAI_interpretation)    0.5   0.25  balance
+  known_pathogenic_comparison (PS1)                   0.5   0.25  balance
+  no_splicing_impact (BP4; score below the cutoff)    0.1   0.1   not predicted
+                                                                  splice-altering
+  donor_loss_putative_nmd (ClinVar gene statistics)   0.5   0.25  balance
 
 The version comes from the headers of the configured spliceai_snv_prescore and
 spliceai_indel_prescore files, which must be the same version and match the
-configured assembly (SpliceAI2 is GRCh38 only). Indels use the cutoffs measured
-on single-nucleotide variants.
+configured assembly (SpliceAI2 is GRCh38 only). Indels use the same cutoffs.
 
 Command line: spliceai_cutoffs.py CONFIG [SNV_VCF INDEL_VCF]
 prints the version and its cutoffs, or exits with an error when the files differ.
@@ -50,11 +46,11 @@ CUTOFFS = {
         "donor_loss_putative_nmd": 0.5,
     },
     "vcf_spliceai2": {
-        "splice_altering": 0.54,
-        "nearby_acceptor_rescue": 0.45,
-        "known_pathogenic_comparison": 0.26,
-        "no_splicing_impact": 0.07,
-        "donor_loss_putative_nmd": 0.34,
+        "splice_altering": 0.5,
+        "nearby_acceptor_rescue": 0.25,
+        "known_pathogenic_comparison": 0.25,
+        "no_splicing_impact": 0.1,
+        "donor_loss_putative_nmd": 0.25,
     },
 }
 VERSION_NAMES = {"vcf_v1": "SpliceAI v1", "vcf_spliceai2": "SpliceAI2"}

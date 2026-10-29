@@ -178,9 +178,9 @@ Incomplete files must not be supplied.
 GRCh37/hg19 uses SpliceAI v1; GRCh38/hg38 installation prepares SpliceAI2.
 The decompressed header identifies the input format: VCF inputs are reused;
 SpliceAI2 TSVs are automatically adapted to indexed VCF without changing the
-existing YAML keys. SpliceAI2 scores the same variants lower than SpliceAI v1,
-so PriVA's splicing and ACMG rules use separate SpliceAI2 cutoffs, calibrated on
-ClinVar variants scored by both versions ([spliceai_cutoffs.py](scripts/spliceai_cutoffs.py)).
+existing YAML keys. PriVA's splicing and ACMG rules apply the thresholds the
+SpliceAI2 authors recommend (0.1, 0.25 and 0.5 in place of SpliceAI v1's 0.2, 0.5
+and 0.8; see [spliceai_cutoffs.py](scripts/spliceai_cutoffs.py)).
 SpliceAI v1 GRCh38 files can still be used by pointing the same two keys at them;
 the SNV and indel files must be the same version.
 

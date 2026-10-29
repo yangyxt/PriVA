@@ -52,10 +52,12 @@ class SpliceAICutoffTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "configured assembly is GRCh37"):
             cutoffs_for_config(self.config(V2_HEADER, V2_HEADER, assembly="hg19"))
 
-    def test_spliceai2_has_a_cutoff_for_every_rule(self):
-        self.assertEqual(set(CUTOFFS["vcf_spliceai2"]), set(CUTOFFS["vcf_v1"]))
-        for value in CUTOFFS["vcf_spliceai2"].values():
-            self.assertTrue(0 < value < 1)
+    def test_spliceai2_uses_the_authors_thresholds_for_every_rule(self):
+        # SpliceAI2 authors: 0.1 high recall, 0.25 balance, 0.5 high precision
+        # (in place of SpliceAI v1's 0.2, 0.5 and 0.8).
+        self.assertEqual(CUTOFFS["vcf_spliceai2"], {"splice_altering": 0.5, "nearby_acceptor_rescue": 0.25,
+                                                    "known_pathogenic_comparison": 0.25, "no_splicing_impact": 0.1,
+                                                    "donor_loss_putative_nmd": 0.25})
 
     def test_no_splicing_impact_uses_the_given_cutoff(self):
         # One splice-region variant whose CADD score is neither low nor high, so

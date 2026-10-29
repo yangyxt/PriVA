@@ -1,7 +1,9 @@
 # Converting PriVA's Python scripts to Rust
 
 Goal (decided 2026-10-29): every customized PriVA Python script becomes part of the `priva` Rust
-binary built from this folder. This file lists every script, the order of conversion and its status.
+binary built from this folder, except PriVA's replacements inside upstream CADD and the one-off
+research tools and examples, which stay in Python. This file lists every script, the order of
+conversion and its status.
 
 ## How each script is converted, in time order
 
@@ -170,30 +172,32 @@ intermediate files of the step before it.
 | `scripts/priva_rust_ranking_compatibility.py` | 232 | Python |
 | `scripts/priva_rust_terminal_order.py` | 209 | Python |
 
-### Waiting for a decision: PriVA's replacements inside upstream CADD
+### Kept in Python: PriVA's replacements inside upstream CADD
 
 4 files, 795 lines.
 
 | Script | Lines | Status |
 | --- | ---: | --- |
-| `scripts/cadd_prescore_index.py` | 172 | Python |
-| `scripts/cadd_scripts/MMSplice.py` | 256 | Python |
-| `scripts/cadd_scripts/extract_scored.py` | 272 | Python |
-| `scripts/cadd_scripts_install.py` | 95 | Python |
+| `scripts/cadd_prescore_index.py` | 172 | Stays in Python |
+| `scripts/cadd_scripts/MMSplice.py` | 256 | Stays in Python |
+| `scripts/cadd_scripts/extract_scored.py` | 272 | Stays in Python |
+| `scripts/cadd_scripts_install.py` | 95 | Stays in Python |
 
-### Waiting for a decision: one-off research tools and examples
+### Kept in Python: one-off research tools and examples
 
 5 files, 1,241 lines.
 
 | Script | Lines | Status |
 | --- | ---: | --- |
-| `data/InterPro/gemini_interpro_func_classifier.py` | 425 | Python |
-| `data/MaveDB/cal_mavedb_neutral_bands.py` | 272 | Python |
-| `data/MaveDB/gpt_mavedb_assay_mapper.py` | 282 | Python |
-| `data/MaveDB/pretify_json.py` | 55 | Python |
-| `example/smoke_test.py` | 207 | Python |
+| `data/InterPro/gemini_interpro_func_classifier.py` | 425 | Stays in Python |
+| `data/MaveDB/cal_mavedb_neutral_bands.py` | 272 | Stays in Python |
+| `data/MaveDB/gpt_mavedb_assay_mapper.py` | 282 | Stays in Python |
+| `data/MaveDB/pretify_json.py` | 55 | Stays in Python |
+| `example/smoke_test.py` | 207 | Stays in Python |
 
-## Waiting for a decision
+## Kept in Python (decided 2026-10-29)
+
+These two groups stay in Python; every other script above is converted.
 
 - `scripts/cadd_scripts/MMSplice.py` runs the MMSplice neural network (TensorFlow) inside upstream
   CADD's own environment, and `extract_scored.py` replaces a script inside upstream CADD's workflow.

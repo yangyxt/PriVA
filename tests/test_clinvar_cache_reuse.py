@@ -228,6 +228,10 @@ class ClinVarOwnedCacheTests(unittest.TestCase):
     def test_newer_wrong_profile_plain_repair_is_retained_before_body_can_replace_gzip(self):
         write_vcf(self.target)
         plain = write_vcf(Path(str(self.target)[:-3]), major="113")
+        # Back-to-back writes can share a timestamp on network filesystems;
+        # make the plain sibling explicitly newer, as this case requires.
+        newer = self.target.stat().st_mtime_ns + 1_000_000_000
+        os.utime(plain, ns=(newer, newer))
         old = {path: path.read_bytes() for path in (self.target, plain)}
         def rebuild(*args):
             self.assertFalse(plain.exists())

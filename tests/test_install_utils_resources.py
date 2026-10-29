@@ -1,9 +1,9 @@
 """Installer dependency/command contracts without downloads or scientific runs."""
 import os
-import sys
 import json
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
 import unittest
 

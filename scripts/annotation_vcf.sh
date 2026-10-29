@@ -92,7 +92,6 @@ function main_workflow() {
           vep_plugins_cachedir \
           hub_vcf_file \
           hub_cadd_file \
-          cadd_profile \
           ped_file
 
     # Source the argparse.bash script
@@ -107,7 +106,7 @@ function main_workflow() {
 
     if [[ -f "$config_file" ]]; then
         log "Using config file: $config_file"
-        local -a config_keys=(input_vcf assembly vep_cache_dir output_dir ref_genome threads af_cutoff gnomad_vcf_chrX clinvar_vcf vep_plugins_dir vep_plugins_cachedir hub_vcf_file hub_cadd_file cadd_profile control_vcf ped_file control_vcf_optional)
+        local -a config_keys=(input_vcf assembly vep_cache_dir output_dir ref_genome threads af_cutoff gnomad_vcf_chrX clinvar_vcf vep_plugins_dir vep_plugins_cachedir hub_vcf_file hub_cadd_file control_vcf ped_file control_vcf_optional)
         for key in "${config_keys[@]}"; do
             # Need to remove the quotes around the value
             config_args[$key]="$(read_yaml ${config_file} ${key})"
@@ -137,19 +136,6 @@ function main_workflow() {
     # Simplify hub caching settings, remove hub_enabled
     local hub_vcf_file="${hub_vcf_file:-${config_args[hub_vcf_file]}}"
     local hub_cadd_file="${hub_cadd_file:-${config_args[hub_cadd_file]}}"
-    local cadd_profile="${cadd_profile:-${config_args[cadd_profile]}}"
-    [[ $cadd_profile != null ]] || cadd_profile=""
-    local -a cadd_profile_args=()
-    [[ -z $cadd_profile ]] || cadd_profile_args=(--profile "$cadd_profile")
-    # Resource installation is not scientific activation. Validate the explicit
-    # profile and both qualifications before preprocessing or hub mutation.
-    cadd_profile=$(python "${SCRIPT_DIR}/cadd_shared_workflow.py" preflight \
-        --config "$config_file" "${cadd_profile_args[@]}") || return 1
-    local selected_hub
-    for selected_hub in "$hub_vcf_file" "$hub_cadd_file"; do
-        [[ -z $selected_hub ]] || python "${SCRIPT_DIR}/cadd_shared_workflow.py" hub-check \
-            --config "$config_file" --profile "$cadd_profile" --hub "$selected_hub" || return 1
-    done
 
     # Create hub directories if needed, simplified
     if [[ -n "${hub_vcf_file}" ]]; then
@@ -244,8 +230,6 @@ function main_workflow() {
                [[ $(count_vcf_records "${covered_vcf}") -ge ${total_count} ]] && \
                [[ ${covered_vcf} -nt ${anno_vcf} ]] && \
                [[ "$(bcftools query -l ${covered_vcf})" == "$(bcftools query -l ${anno_vcf})" ]]; then
-                python "${SCRIPT_DIR}/cadd_shared_workflow.py" verify-source --config "$config_file" \
-                    --profile "$cadd_profile" --input "$covered_vcf" || return 1
                 log "The covered vcf file ${covered_vcf} contains all variants in the input vcf ${input_vcf}."
             
                 # Use covered variants as final result
@@ -266,8 +250,6 @@ function main_workflow() {
                [[ ${uncovered_vcf} -nt ${anno_vcf} ]] && \
                check_vcf_validity "${uncovered_vcf}" && \
                clean_vcf_multiallelics "${uncovered_vcf}" "${ref_genome}" "${threads}"; then
-                python "${SCRIPT_DIR}/cadd_shared_workflow.py" verify-source --config "$config_file" \
-                    --profile "$cadd_profile" --input "$covered_vcf" || return 1
                 log "Found cached variants and uncovered variants, will only annotate uncovered variants, save anno_vcf path ${anno_vcf} as variable ${tmp_anno_vcf} for downstream analysis"
                 log "Save uncovered_vcf path ${uncovered_vcf} as variable anno_vcf for downstream analysis"
                 
@@ -321,8 +303,7 @@ function main_workflow() {
         --vep_cache_dir ${vep_cache_dir} \
         --vep_plugins_dir ${vep_plugins_dir} \
         --vep_plugins_cachedir ${vep_plugins_cachedir} \
-        --threads ${threads} \
-        --cadd-profile "$cadd_profile" || { \
+        --threads ${threads} || { \
         log "Failed to add VEP annotation on ${anno_vcf}. Quit now"
         return 1; }
         
@@ -333,8 +314,6 @@ function main_workflow() {
             # Update hub VCF with newly annotated variants
             log "Updating hub VCF ${hub_vcf_file} with newly annotated variants ${tmp_anno_vcf}"
             update_hub_vcf "${newly_annotated_vcf}" "${hub_vcf_file}" "${threads}" && \
-            python "${SCRIPT_DIR}/cadd_shared_workflow.py" hub-record --config "$config_file" \
-                --profile "$cadd_profile" --hub "$hub_vcf_file" && \
             log "Successfully update hub VCF ${hub_vcf_file} with newly annotated variants ${newly_annotated_vcf}" || {
                 log "Failed to update hub VCF ${hub_vcf_file} with newly annotated variants ${newly_annotated_vcf}. Quit now"
                 return 1
@@ -357,7 +336,7 @@ function main_workflow() {
         local cadd_uncovered_vcf="${anno_vcf/.vcf*/.cadd.uncovered.vcf.gz}"
         
         log "Checking for cached CADD scores in ${hub_cadd_file} with command: find_cached_cadd_variants ${anno_vcf} ${hub_cadd_file} ${cadd_covered_tsv} ${cadd_uncovered_vcf}"
-        if find_cached_cadd_variants "${anno_vcf}" "${hub_cadd_file}" "${cadd_covered_tsv}" "${cadd_uncovered_vcf}" "${threads}" "$config_file" "$cadd_profile"; then
+        if find_cached_cadd_variants "${anno_vcf}" "${hub_cadd_file}" "${cadd_covered_tsv}" "${cadd_uncovered_vcf}" "${threads}"; then
             # All variants are covered - copy to output
             cp "${cadd_covered_tsv}" "${cadd_output}" && \
             ls -lht ${cadd_output} && \
@@ -377,7 +356,7 @@ function main_workflow() {
             # Some variants need CADD calculation
             if check_vcf_validity "${cadd_uncovered_vcf}" 1 ${samples}; then
                 # Calculate CADD for uncovered variants
-                Calculate_CADD "${cadd_uncovered_vcf}" "${config_file}" "${anno_vcf/.vcf*/.cadd.new.tsv}" "$cadd_profile" || {
+                Calculate_CADD "${cadd_uncovered_vcf}" "${config_file}" "${anno_vcf/.vcf*/.cadd.new.tsv}" || {
                     log "Failed to calculate CADD scores. Quit now"
                     return 1
                 }
@@ -385,8 +364,6 @@ function main_workflow() {
                 # Merge covered and newly calculated scores
                 merge_cadd_results "${cadd_covered_tsv}" "${anno_vcf/.vcf*/.cadd.new.tsv}" "${cadd_output}" && \
                 update_hub_cadd "${anno_vcf/.vcf*/.cadd.new.tsv}" "${hub_cadd_file}" && \
-                python "${SCRIPT_DIR}/cadd_shared_workflow.py" hub-record --config "$config_file" \
-                    --profile "$cadd_profile" --hub "$hub_cadd_file" && \
                 finalize_anno_vcf ${anno_vcf} ${final_anno_vcf} && \
                 check_vcf_validity ${final_anno_vcf} && \
                 chmod 444 ${final_anno_vcf} && \
@@ -409,7 +386,7 @@ function main_workflow() {
         fi
     else
         # Original CADD calculation without caching
-        Calculate_CADD "${anno_vcf}" "${config_file}" "${cadd_output}" "$cadd_profile" && \
+        Calculate_CADD "${anno_vcf}" "${config_file}" "${cadd_output}" && \
         finalize_anno_vcf ${anno_vcf} ${final_anno_vcf} && \
         check_vcf_validity ${final_anno_vcf} && \
         chmod 444 ${final_anno_vcf} && \
@@ -457,7 +434,7 @@ function preprocess_vcf() {
     if [[ -z ${ref_genome} ]]; then
         log "User does not specify the ref genome fasta file. Cant proceed now. Quit with Error!"
         return 1;
-    elif [[ ! -z ${vcf_assembly} ]] && [[ ! ${ref_genome} =~ ${vcf_assembly} ]]; then
+    elif [[ ! -z ${vcf_assembly} ]] && [[ $(check_fasta_assembly_version ${ref_genome}) != ${vcf_assembly} ]]; then
         log "User specified ref_genome fasta file ${ref_genome} seems not match with the VCF used assembly ${vcf_assembly}. Quit with Error"
         return 1;
     fi
@@ -608,7 +585,18 @@ function anno_agg_gnomAD_chromosome() {
     # plausible canonical shard that a retry could accept on mtime alone.
     stage=$(mktemp -d "$(dirname "$output_vcf")/.gnomad-annotation.XXXXXX") || return $?
     local staged="$stage/$(basename "$output_vcf")"
-    bcftools annotate -a "$gnomad_vcf" -c "$columns" -Oz -o "$staged" "$input_vcf" || return $?
+    # Without a region, bcftools reads the whole gnomAD chromosome file however
+    # few input records there are. Restrict both readers to the span of this
+    # single-contig shard; every input record lies inside it, so rows, INFO
+    # values and order are unchanged.
+    local span
+    span=$(bcftools query -f '%CHROM\t%POS\n' "$input_vcf" | \
+        awk -F '\t' 'NR == 1 {contig = $1; first = $2; last = $2}
+                     {if ($1 != contig) mixed = 1; if ($2 < first) first = $2; if ($2 > last) last = $2}
+                     END {if (NR > 0 && !mixed) printf "%s:%s-%s", contig, first, last}') || return $?
+    local -a span_args=()
+    [[ -z $span ]] || span_args=(-r "$span")
+    bcftools annotate -a "$gnomad_vcf" -c "$columns" "${span_args[@]}" -Oz -o "$staged" "$input_vcf" || return $?
     tabix -f -p vcf "$staged" || return $?
     check_vcf_validity "$staged" || return $?
     printf '%s\n' "$output_vcf" > "$stage/publication.pending" &&
@@ -1144,14 +1132,9 @@ function _priva_run_VEP_command() {
 
     log "Running VEP annotation with the command below:"
     log "vep -i ${input_vcf} --format vcf --verbose --vcf --species homo_sapiens --use_transcript_ref --assembly ${assembly} --cache --offline --merged --domains --hgvs --numbers --symbol --canonical --total_length --variant_class --gene_phenotype --stats_file ${stats_file} --fork ${threads} --buffer_size 10000 --fasta ${ref_genome} --dir_cache ${vep_cache_dir} --dir_plugins '${vep_plugins_dir} ${loftee_repo}' -plugin UTRAnnotator,file=${utr_annotator_file} -plugin LOEUF,file=${loeuf_prescore},match_by=transcript -plugin AlphaMissense,file=${alphamissense_prescore} -plugin LoF,loftee_path:${loftee_repo},human_ancestor_fa:${human_ancestor_fasta}${loftee_conservation_argument}${loftee_gerp_bw_argument} -plugin SpliceAI,snv=${spliceai_snv_prescore},indel=${spliceai_indel_prescore},cutoff=0.5 -plugin PrimateAI,${primateai_prescore} -plugin SpliceVault,file=${splicevault_prescore} -plugin Conservation,${conservation_file},MAX -plugin NMD ${mavedb_argument} ${pext_arguments} --force_overwrite -o ${output_vcf}"
-    if [[ -n $cadd_profile ]]; then
-        local cadd_logged_options
-        printf -v cadd_logged_options '%q ' "${cadd_vep_environment[@]}" vep "${cadd_vep_args[@]}"
-        log "Qualified CADD profile ${cadd_profile}; additional plugin directory:${cadd_plugin_dir}; exact added invocation settings: ${cadd_logged_options}"
-    fi
 
     # Run VEP annotation
-    local -a priva_vep_command=("${cadd_vep_environment[@]}" vep -i "${input_vcf}" \
+    vep -i "${input_vcf}" \
     --format vcf \
     --verbose \
     --vcf \
@@ -1174,7 +1157,7 @@ function _priva_run_VEP_command() {
     --buffer_size 10000 \
     --fasta ${ref_genome} \
     --dir_cache ${vep_cache_dir} \
-    --dir_plugins "${vep_plugins_dir} ${loftee_repo}${cadd_plugin_dir}" \
+    --dir_plugins "${vep_plugins_dir} ${loftee_repo}" \
     -plugin UTRAnnotator,file=${utr_annotator_file} \
     -plugin LOEUF,file=${loeuf_prescore},match_by=transcript \
     -plugin AlphaMissense,file=${alphamissense_prescore} \
@@ -1185,16 +1168,8 @@ function _priva_run_VEP_command() {
     -plugin Conservation,${conservation_file},MAX \
     -plugin NMD ${mavedb_argument} \
     ${pext_arguments} \
-    "${cadd_vep_args[@]}" \
     --force_overwrite \
-    -o "${output_vcf}")
-    if [[ -n $cadd_profile ]]; then
-        python "${SCRIPT_DIR}/cadd_shared_workflow.py" verify-vep-invocation \
-            --config "$config_file" --profile "$cadd_profile" \
-            --input "$input_vcf" --output "$output_vcf" --stats "$stats_file" \
-            -- "${priva_vep_command[@]}" || return $?
-    fi
-    "${priva_vep_command[@]}"
+    -o "${output_vcf}"
 }
 
 
@@ -1205,7 +1180,6 @@ function _priva_anno_VEP_data() {
         anno_VEP_cache_candidate) priva_vep_purpose=cache_candidate ;;
         anno_VEP_cache_worker) priva_vep_purpose=cache_worker ;;
     esac
-    local cadd_profile=""
     # Declare local variables first
     local input_vcf \
           config \
@@ -1379,32 +1353,10 @@ function _priva_anno_VEP_data() {
     # - am_pathogenicity & am_class, from VEP plugin AlphaMissense
     # - SpliceAI_pred_DS_AG, SpliceAI_pred_DS_AL, SpliceAI_pred_DS_DG, SpliceAI_pred_DS_DL, SpliceAI_pred_DP_AG, SpliceAI_pred_DP_AL, SpliceAI_pred_DP_DG, SpliceAI_pred_DP_DL, from VEP plugin SpliceAI
     if [[ "$priva_vep_purpose" == runtime ]] && check_vcf_infotags "$input_vcf" CSQ; then
-        if [[ -n $cadd_profile ]]; then
-            # Old CSQs cannot acquire native ordinals after the fact. Reuse a
-            # complete qualified source or fail; never launch a second VEP.
-            python "${SCRIPT_DIR}/cadd_shared_workflow.py" verify-source --config "$config_file" \
-                --profile "$cadd_profile" --input "$input_vcf" || return 1
-            return 0
-        fi
         if [[ ${input_vcf} -nt ${SELF_SCRIPT} ]]; then
             log "The input vcf ${input_vcf} is already annotated by VEP. Skip this step"
             return 0
         fi
-    fi
-
-    local -a cadd_vep_args=() cadd_vep_environment=()
-    local cadd_plugin_dir="" cadd_settings
-    if [[ -n $cadd_profile ]]; then
-        [[ "$priva_vep_purpose" == runtime ]] || { log "CADD activation is not an installer-cache operation"; return 1; }
-        cadd_settings=$(python "${SCRIPT_DIR}/cadd_shared_workflow.py" vep-options \
-            --config "$config_file" --profile "$cadd_profile") || return 1
-        local -a cadd_values
-        mapfile -t cadd_values <<< "$cadd_settings"
-        [[ ${#cadd_values[@]} -eq 4 ]] || return 1
-        cadd_plugin_dir=" ${cadd_values[0]}"
-        cadd_vep_args=(--regulatory --sift b --polyphen b --ccds --cache_version "${cadd_values[2]}"
-            --plugin "CaddSelection,cadd_transcript_sources=${cadd_values[1]}")
-        cadd_vep_environment=(env "PERL_HASH_SEED=${cadd_values[3]}" PERL_PERTURB_KEYS=0)
     fi
 
     local output_vcf stats_file
@@ -1425,11 +1377,6 @@ function _priva_anno_VEP_data() {
     announce_remove_tmps ${output_vcf} && \
     display_vcf ${input_vcf/.vcf*/.vcf.gz} || return $?
 
-    if [[ -n $cadd_profile ]]; then
-        python "${SCRIPT_DIR}/cadd_shared_workflow.py" verify-source --config "$config_file" \
-            --profile "$cadd_profile" --input "${input_vcf/.vcf*/.vcf.gz}" || return 1
-    fi
-
     if [[ "$priva_vep_purpose" == cache_candidate ]]; then
         python "${SCRIPT_DIR}/clinvar_gene_refresh.py" candidate-complete \
             --config "$config_file" --source-root "$BASE_DIR" --input-vcf "$input_vcf" || return 1
@@ -1439,15 +1386,75 @@ function _priva_anno_VEP_data() {
 
 
 function Calculate_CADD {
-    [[ $# -ge 2 && $# -le 4 ]] || { log "Use Calculate_CADD INPUT CONFIG [OUTPUT [QUALIFIED_PROFILE]]"; return 2; }
-    local input_vcf=$1 config_file=$2 output_file=${3:-${1/.vcf*/.cadd.tsv}} profile=${4:-}
-    # Preserve the historical consumer's plain TSV path. Reuse is checked by
-    # closed input/profile/resource receipts, never only by an output mtime.
-    output_file=${output_file%.gz}
-    local -a profile_args=()
-    [[ -z $profile ]] || profile_args=(--profile "$profile")
-    python "${SCRIPT_DIR}/cadd_shared_workflow.py" calculate --config "$config_file" \
-        --input "$input_vcf" --output "$output_file" "${profile_args[@]}" || return 1
+    # Upstream CADD.sh performs its own annotation and scoring and writes the
+    # raw/PHRED table consumed downstream.
+    local input_vcf=${1}
+    local config_file=${2}
+    local output_file=${3}
+    local threads=$(read_yaml ${config_file} "threads")
+    local cadd_base_dir=$(read_yaml ${config_file} "cadd_base_dir")
+    local assembly=$(read_yaml ${config_file} "assembly")
+    local tmp_dir=$(read_yaml ${config_file} "tmp_dir")
+    local cadd_script=${cadd_base_dir}/CADD.sh
+
+    [[ -x ${cadd_script} ]] || { log "CADD.sh is missing from cadd_base_dir ${cadd_base_dir}; run main_install"; return 1; }
+    # Snakemake inside CADD.sh deploys the pinned rule environments (-m keeps
+    # them conda-only) and needs a conda executable even when one is active.
+    command -v conda > /dev/null 2>&1 || { log "CADD.sh needs a conda executable on PATH to deploy its environments"; return 1; }
+    check_vcf_validity ${input_vcf} || { \
+    log "The input vcf file ${input_vcf} is not valid. Please check the file"; return 1; }
+
+    #Run CADD and CADD only output gzipped file.
+    [[ -z ${output_file} ]] && output_file=${input_vcf/.vcf*/.cadd.tsv.gz}
+    [[ ! ${output_file} =~ \.gz$ ]] && output_file=${output_file}.gz  # Ensure the output file is gzipped
+
+    # Check if the output file is valid and updated. If so, skip this function
+    [[ -f ${output_file/.gz/} ]] && [[ ${output_file/.gz/} -nt ${input_vcf} ]] && { \
+    log "Output file ${output_file} is valid and updated. Skip this function for now."; \
+    return 0; }
+
+    # First convert UCSC-style chr names to GRCh-style
+    local nochr_vcf=${input_vcf/.vcf*/.nochr.vcf.gz}
+    [[ ${nochr_vcf} == ${input_vcf} ]] && nochr_vcf=${input_vcf/.bcf*/.nochr.vcf.gz} || log "${nochr_vcf} is set up correctly"
+    liftover_from_ucsc_to_GRCh \
+    ${input_vcf} \
+    "${BASE_DIR}/data/liftover/ucsc_to_GRC.contig.map.tsv" \
+    ${nochr_vcf} || { \
+    log "Failed to convert chromosome names from UCSC to GRCh style for ${input_vcf}. Quit now";
+    return 1; }
+
+    # Determine the genome tag based on the assembly
+    if [[ ${assembly} == "GRCh37" ]] || [[ ${assembly} == "hg19" ]]; then
+        local genome_tag="GRCh37"
+    elif [[ ${assembly} == "GRCh38" ]] || [[ ${assembly} == "hg38" ]]; then
+        local genome_tag="GRCh38"
+    else
+        log "The assembly ${assembly} is not supported. Please check the config file ${config_file}"
+        return 1;
+    fi
+
+    # Run CADD
+
+    # PriVA's MMSplice copy (installed by main_install) reloads its exon table
+    # from here instead of reading the GTF again; upstream's file ignores it.
+    local exon_tables=${cadd_base_dir}/data/annotations/${genome_tag}_v1.7/mmsplice
+    [[ -d ${exon_tables} ]] || exon_tables=""
+
+    log "Running CADD script ${cadd_script} with the following command"
+    log "${cadd_script} -c ${threads} -a -p -m -d -g ${genome_tag} -o ${output_file} ${nochr_vcf}"
+    export TMPDIR=${tmp_dir}
+    PRIVA_CADD_MMSPLICE_EXON_CACHE=${exon_tables} \
+    ${cadd_script} \
+    -c ${threads} \
+    -a -p -m -d \
+    -g ${genome_tag} \
+    -o ${output_file} \
+    ${nochr_vcf} && \
+    gunzip -f ${output_file} && \
+    mawk -F '\t' '$1 !~ /^##/{print;}' ${output_file/.gz/} > ${output_file/.gz/}.tmp && \
+    mv ${output_file/.gz/}.tmp ${output_file/.gz/} && \
+    display_table ${output_file/.gz/} || { \
+    log "Failed to run CADD on ${input_vcf}. Quit now"; return 1; }
 }
 
 
@@ -1647,8 +1654,6 @@ function find_cached_cadd_variants() {
     local output_covered_tsv=$3
     local output_uncovered_vcf=$4
     local threads=${5}
-    local config_file=${6:-} profile=${7:-}
-    [[ -n $config_file && -n $profile ]] || { log "CADD hub lookup requires a qualified profile/config"; return 2; }
 
     if [[ -z ${threads} ]]; then
         threads=1
@@ -1694,8 +1699,11 @@ function find_cached_cadd_variants() {
     local -a uncovered_chrs=($(cut -f 1 ${uncovered_pos} | sort -u))
     
     # Extract uncovered variants from VCF using exact position matching
-    python "${SCRIPT_DIR}/cadd_shared_workflow.py" extract-misses --config "$config_file" \
-    --profile "$profile" --input "$input_vcf" --covered "$output_covered_tsv" --output "$output_uncovered_vcf" && \
+    parallel_extract_variants \
+    ${uncovered_pos} \
+    ${input_vcf} \
+    ${threads} \
+    ${output_uncovered_vcf} && \
     display_vcf ${output_uncovered_vcf} || \
     { log "Failed to extract uncovered variants from ${input_vcf} using ${uncovered_pos}. Return with error."; return 2; }
     

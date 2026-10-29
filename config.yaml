@@ -56,6 +56,7 @@ af_cutoff: 0.05      # Allele frequency cutoff for common variants
 
 alt_disease_vcf: ""  # abs path to the VCF file containing the variants from alternative disease patients, make sure it is left-normalized and biallelic, optional
 control_vcf: ""   # VCF file containing the variants from control individuals, make sure it is left-normalized and biallelic, optional
+control_vcf_optional: false   # true skips control allele annotation when neither control_vcf nor unaffected (phenotype 1) cohort samples provide controls; false stops annotation
 pp1_vcf: ""      # Cohort VCF file containing patients and their family members for PP1 (cosegregation), optional
 pp1_ped: ""      # PED file for the PP1 cohort VCF file, optional
 ####################################################You can adjust above argument values for each cohort####################################################

@@ -220,11 +220,13 @@ python() {
         result = self.run_shell(r'''
 conda_install_vep() { PRIVA_INSTALL_ENV_NAME=priva_acmg; }
 priva_install_basic_paths() { PRIVA_INSTALL_TMPDIR="${TEST_CONFIG%/*}"; }
+priva_manual_cache_inputs() { :; }
 priva_prepare_install_config() { priva_install_prerequisites "$2"; }
 priva_install_prerequisites() { gofcards_exact_gof_cache_install "$1" --main-preflight; }
+bundled_snapshot_install() { :; }
 nm_to_enst_mapping_install() { :; }
 priva_configure_cache_paths() { :; }
-for function in reference_genome_install VEP_plugins_install LoFtee_install gnomAD_install AlphaMissense_anno_gnomAD InterPro_parsing ClinVar_VCF_deploy ClinVar_AA_stat ClinVar_Gene_stat AlphaMissense_stat AlphaMissense_pick_intolerant_domains prepare_pm1_regions ClinVar_patho_AF_stat CADD_install CADD_runtime_install ClinGen_deploy CDS_FASTA_install pext_install; do
+for function in Nextflow_runtime_install reference_genome_install VEP_plugins_install LoFtee_install gnomAD_install AlphaMissense_anno_gnomAD InterPro_parsing ClinVar_VCF_deploy ClinVar_AA_stat ClinVar_Gene_stat AlphaMissense_stat AlphaMissense_pick_intolerant_domains prepare_pm1_regions ClinVar_patho_AF_stat CADD_install CADD_upstream_check ClinGen_deploy CDS_FASTA_install pext_install; do
  eval "$function() { :; }"
 done
 ClinVar_install() { [[ $# -eq 2 && $1 == --config && $2 == "$TEST_CONFIG" ]]; }

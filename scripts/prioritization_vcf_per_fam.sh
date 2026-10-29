@@ -172,7 +172,9 @@ function assign_acmg_criteria () {
     if [[ -z "${expected_incidence}" || "${expected_incidence}" == "null" ]]; then
         expected_incidence=0.0001
     fi
-    local am_score_vcf=$(read_yaml ${config_file} "alphamissense_vcf")
+    # The ACMG CLI retains --am_score_vcf for compatibility but never reads it.
+    # Runtime uses the prepared CSQ scores and derived domain caches below;
+    # requiring the full installation-only AlphaMissense VCF blocks valid reuse.
     local clinvar_patho_af_stat=$(read_yaml ${config_file} "clinvar_patho_af_stat")
     local clinvar_patho_exon_af_stat=$(read_yaml ${config_file} "clinvar_patho_exon_af_stat")
     local interpro_entry_map_pkl=$(read_yaml ${config_file} "interpro_mapping_pickle")
@@ -211,7 +213,6 @@ function assign_acmg_criteria () {
     check_path ${am_intol_domains_tsv} "file" "alphamissense_intolerant_domains" || has_error=1
     check_path "${clinvar_gene_stat_pkl}" "file" "clinvar_gene_stat" || has_error=1
     check_path ${pm1_regions_pkl} "file" "pm1_regions_pkl" || has_error=1
-    check_path ${am_score_vcf} "file" "alphamissense_vcf" || has_error=1
     check_path ${tranx_exon_domain_map_pkl} "file" "alphamissense_tranx_domain_map" || has_error=1
     check_path ${clinvar_patho_af_stat} "file" "clinvar_patho_af_stat" || has_error=1
     check_path ${clinvar_patho_exon_af_stat} "file" "clinvar_patho_exon_af_stat" || has_error=1
@@ -269,7 +270,6 @@ function assign_acmg_criteria () {
     [[ ${input_tab} -nt ${intolerant_domains_pkl} ]] && \
     [[ ${input_tab} -nt ${am_intol_domains_tsv} ]] && \
     [[ ${input_tab} -nt ${clinvar_gene_stat_pkl} ]] && \
-    [[ ${input_tab} -nt ${am_score_vcf} ]] && \
     [[ ${input_tab} -nt ${clinvar_patho_af_stat} ]] && \
     [[ ${input_tab} -nt ${clinvar_patho_exon_af_stat} ]] && \
     [[ ${input_tab} -nt ${interpro_entry_map_pkl} ]] && \
@@ -311,7 +311,6 @@ function assign_acmg_criteria () {
     --clingen_map_pkl ${clingen_map_pkl} \
     --gnomAD_extreme_rare_threshold ${gnomAD_extreme_rare_threshold} \
     --expected_incidence ${expected_incidence} \
-    --am_score_vcf ${am_score_vcf} \
     --threads ${threads} \
     --tranx_exon_domain_map_pkl ${tranx_exon_domain_map_pkl} ${ped_arg} ${fam_arg} ${alt_disease_arg} ${mavedb_arg} ${pp1_arg} ${relevant_genes_arg} ${dispensable_genes_arg} "${cds_fasta_arg[@]}" ${pext_arg} ${clingen_override_arg} "${ranking_args[@]}" && \
     display_table ${input_tab} && \

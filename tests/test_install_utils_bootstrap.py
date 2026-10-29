@@ -1109,36 +1109,34 @@ class CachePathTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
 
     def test_cadd_uses_configured_parent_without_prompt_or_environment_search(self):
-        script = '''
-            source "$1" >/dev/null || exit
-            priva_configure_cache_paths() { return 0; }
-            read_yaml() {
-                case "$2" in
-                    cache_root) printf '/scratch/caches' ;;
-                    cadd_parent_dir) printf '/scratch/caches/Custom_CADD' ;;
-                    cadd_version) printf 'v1.7' ;;
-                    cadd_zip_download_url) printf 'https://github.com/kircherlab/CADD-scripts/archive/refs/tags/v1.7.2.zip' ;;
-                esac
-            }
-            read() { printf 'UNEXPECTED_PROMPT\\n' >&2; return 90; }
-            find() { printf 'FIND %s\\n' "$1" >&2; }
-            python() { printf 'SOURCE_HELPER %s\\n' "$*"; return 73; }
-            wget() { printf 'UNEXPECTED_ZIP_DOWNLOAD\\n'; return 90; }
-            unzip() { printf 'UNEXPECTED_UNZIP\\n'; return 90; }
-            CADD_install unused hg38
-        '''
-        result = subprocess.run(["bash", "--noprofile", "--norc", "-c", script,
-                                 "bash", str(INSTALLER)], capture_output=True, text=True, timeout=10)
-        self.assertNotIn("UNEXPECTED_PROMPT", result.stdout + result.stderr)
-        searches = [line for line in result.stderr.splitlines() if line.startswith("FIND ")]
-        self.assertEqual(searches, ["FIND /scratch/caches/Custom_CADD/"])
-        self.assertEqual(result.stdout.strip(),
-                         f"SOURCE_HELPER {INSTALLER.parent / 'cadd_runtime_install.py'} "
-                         "--config unused --source-only --source "
-                         "/scratch/caches/Custom_CADD/CADD-scripts-1.7.2")
-        self.assertNotEqual(result.returncode, 0)
-        self.assertNotIn("UNEXPECTED_ZIP_DOWNLOAD", result.stdout + result.stderr)
-        self.assertNotIn("UNEXPECTED_UNZIP", result.stdout + result.stderr)
+        # Without a CADD folder under cadd_parent_dir, CADD_install downloads the
+        # configured release zip there; it never prompts or searches the environment.
+        with tempfile.TemporaryDirectory() as parent:
+            script = r'''
+                source "$1" >/dev/null || exit
+                priva_configure_cache_paths() { return 0; }
+                read_yaml() {
+                    case "$2" in
+                        cadd_parent_dir) printf '%s' "$TEST_PARENT" ;;
+                        cadd_version) printf 'v1.7' ;;
+                        cadd_zip_download_url) printf 'https://github.com/kircherlab/CADD-scripts/archive/refs/tags/v1.7.2.zip' ;;
+                    esac
+                }
+                read() { printf 'UNEXPECTED_PROMPT\n' >&2; return 90; }
+                wget() { printf 'WGET %s %s\n' "$2" "$4"; return 90; }
+                unzip() { printf 'UNEXPECTED_UNZIP\n'; return 90; }
+                CADD_install unused hg38
+            '''
+            result = subprocess.run(["bash", "--noprofile", "--norc", "-c", script,
+                                     "bash", str(INSTALLER)], env=dict(os.environ, TEST_PARENT=parent),
+                                    capture_output=True, text=True, timeout=10)
+            self.assertNotIn("UNEXPECTED_PROMPT", result.stdout + result.stderr)
+            downloads = [line.split() for line in result.stdout.splitlines() if line.startswith("WGET ")]
+            self.assertEqual(len(downloads), 1)
+            self.assertEqual(downloads[0][1], "https://github.com/kircherlab/CADD-scripts/archive/refs/tags/v1.7.2.zip")
+            self.assertTrue(downloads[0][2].startswith(parent + "/.cadd-scripts."))
+            self.assertNotEqual(result.returncode, 0)
+            self.assertNotIn("UNEXPECTED_UNZIP", result.stdout + result.stderr)
 
 
 if __name__ == "__main__":

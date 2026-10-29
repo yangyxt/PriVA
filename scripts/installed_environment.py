@@ -4,7 +4,8 @@
 export --config CONFIG --manager MAMBA_OR_CONDA [--name priva_acmg] [--prefix PREFIX]
 The portable YAML is written to cache_root/<name>.installed.yml. It describes
 the selected environment only; it makes no claim about other CADD environments.
-export-installation exports PriVA and every completed native CADD environment.
+export-installation exports PriVA and every completed environment that
+upstream CADD.sh's Snakemake workflow built under cadd_base_dir/envs/conda.
 """
 import argparse
 import hashlib
@@ -187,28 +188,31 @@ def export_environment(*, config_file, manager, name='priva_acmg', prefix=None):
     return output
 
 
+def cadd_environments(config):
+    """Yield (name, prefix) for each completed environment of upstream CADD.sh.
+
+    CADD.sh lets Snakemake build one environment per recipe in envs/ under
+    envs/conda. Snakemake names each folder after the MD5 of that folder's real
+    path and the recipe's bytes, and writes FOLDER.env_setup_done when the
+    environment is complete.
+    """
+    base = config.get('cadd_base_dir') if isinstance(config, dict) else None
+    if not isinstance(base, str) or not base or base == 'null':
+        return
+    recipes = Path(base) / 'envs'
+    root = os.path.realpath(recipes / 'conda')
+    for recipe in sorted(recipes.glob('*.yml')):
+        prefix = recipes / 'conda' / (hashlib.md5(root.encode() + recipe.read_bytes()).hexdigest() + '_')
+        if (prefix / 'conda-meta/history').is_file() and Path(str(prefix) + '.env_setup_done').exists():
+            yield 'cadd-' + recipe.stem, prefix
+
+
 def export_installation(*, config_file, manager):
-    """Export PriVA and each completed CADD environment without activating them."""
-    helper = Path(__file__).with_name('cadd_runtime_install.py')
-    completed = subprocess.run([sys.executable, str(helper), 'prefixes', '--config', str(config_file),
-                                '--package-manager', str(manager)], capture_output=True, text=True)
-    if completed.returncode:
-        raise ValueError('Could not resolve the installed CADD environment prefixes')
-    import json
-    layout = json.loads(completed.stdout)
-    backend = layout.get('backend', 'native')
-    if backend not in ('native', 'container'):
-        raise ValueError('Unknown installed CADD environment backend')
-    environments = layout.get('environments', {})
-    core = environments.get('cadd-python2', {})
-    if backend == 'native' and (not core.get('prefix') or not Path(core['prefix'], 'conda-meta/history').is_file()):
-        raise ValueError('The separate CADD scorer environment is not installed')
+    """Export PriVA and each completed CADD.sh environment without activating them."""
+    config = yaml.safe_load(Path(config_file).read_text())
     exports = [export_environment(config_file=config_file, manager=manager)]
-    for name, record in environments.items():
-        prefix = Path(record['prefix'])
-        if (prefix / 'conda-meta/history').is_file():
-            exports.append(export_environment(config_file=config_file, manager=manager,
-                                               name=name, prefix=prefix))
+    for name, prefix in cadd_environments(config):
+        exports.append(export_environment(config_file=config_file, manager=manager, name=name, prefix=prefix))
     return exports
 
 
@@ -220,7 +224,7 @@ def main():
     command.add_argument('--manager', required=True)
     command.add_argument('--name', default='priva_acmg')
     command.add_argument('--prefix', type=Path, help='Export an installed prefix without activating it')
-    installation = commands.add_parser('export-installation', help='Export PriVA and completed separate CADD environments')
+    installation = commands.add_parser('export-installation', help='Export PriVA and the completed CADD.sh environments')
     installation.add_argument('--config', type=Path, required=True)
     installation.add_argument('--manager', required=True)
     args = parser.parse_args()

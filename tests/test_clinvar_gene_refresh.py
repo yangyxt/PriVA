@@ -484,11 +484,12 @@ AlphaMissense_pick_intolerant_domains() { :; }
 prepare_pm1_regions() { :; }
 ClinVar_patho_AF_stat() { printf 'CLINVAR_AF\n'; }
 CADD_install() { :; }
-CADD_runtime_install() { :; }
+CADD_upstream_check() { :; }
 ClinGen_deploy() { :; }
 CDS_FASTA_install() { :; }
 pext_install() { :; }
 mechanism_resource_install() { :; }
+priva_export_installed_environment() { :; }
 main_install "$TEST_CONFIG"
 '''
         result = subprocess.run(["bash", "-c", script, "fixture", str(ROOT / "scripts/install_utils.sh")],

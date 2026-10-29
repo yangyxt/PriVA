@@ -2,6 +2,7 @@
 pub mod acmg_consequence;
 pub mod acmg_scoring;
 pub mod acmg_variant_mechanism;
+pub mod cadd_hub;
 mod cli;
 pub mod spliceai2;
 pub mod variant_ids;

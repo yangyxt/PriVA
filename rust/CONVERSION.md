@@ -27,7 +27,7 @@ intermediate files of the step before it.
 
 | Script | Lines | Status |
 | --- | ---: | --- |
-| `scripts/cadd_hub_util.py` | 533 | Python |
+| `scripts/cadd_hub_util.py` | 533 | Rust `priva cadd-hub`: identical files and exit codes on 20 synthetic cases covering every match, update and merge path, on 2,032,185 public CADD GRCh38 v1.7 rows (chr19:1.0-1.3 Mb) and on the BH14233 trio slice's CADD table (2026-10-29). Unlike the Python script's polars, it also runs on HGSC nodes without AVX2. The shell still calls Python until group 1 is complete. |
 | `scripts/combine_annotations.py` | 936 | Python |
 | `scripts/generate_varID_for_vcf.py` | 150 | Rust `priva variant-ids`: byte-identical output, encode and decode, on pysam edge cases, 4,597,985 public ClinVar records and the BH14233 trio slice (2026-10-29). The shell still calls Python until group 1 is complete. |
 | `scripts/hpo_penetrance.py` | 143 | Python |

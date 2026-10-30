@@ -65,14 +65,14 @@ thread starts.
 | `scripts/acmg_consequence.py` | 196 | Python |
 | `scripts/acmg_criteria_assign.py` | 711 | Python |
 | `scripts/acmg_inheritance.py` | 190 | Python |
-| `scripts/acmg_pm1_pp2_bp1_missense.py` | 307 | Python |
+| `scripts/acmg_pm1_pp2_bp1_missense.py` | 307 | Rust module `acmg_pm1_pp2_bp1_missense` (`pm1_criteria`, `pp2_bp1_criteria`, `analyze_bp1_pp2`), compared with the Python functions through `priva acmg-step` (2026-10-30): PM1 on 89 synthetic cases (85 identical, 4 failing in both; plain and gzip region pickles, sets, frozensets and lists of residues, odd `Protein_position` texts and types); PP2/BP1 on 50 synthetic cases, all identical; `analyze_bp1_pp2` for all 10,016 genes of the installed ClinVar gene statistics, identical; the BH14233 trio slice identical for both (PM1 18, PP2 1, BP1 0). Waits for `stats.rs` (thread T5): the 2x2 chi-square and Fisher p-values (598 distinct tables over the installed statistics, 1 gene on the trio slice) were supplied from SciPy in these comparisons; the step itself calls `stats::chi2_contingency_2x2` and `stats::fisher_exact_greater`. Refused: two genes whose statistics name one `ensembl_id` with different results (Python's answer depends on process completion order), non-ASCII digits in `Protein_position`. |
 | `scripts/acmg_pm2_bs1_ba1_frequency.py` | 799 | Python |
-| `scripts/acmg_pm4_bp3_protein_length.py` | 224 | Python |
+| `scripts/acmg_pm4_bp3_protein_length.py` | 224 | Rust module `acmg_pm4_bp3_protein_length` (2026-10-30): the repeat-region test is native (regions sorted per chromosome with a running maximum of ends) instead of pybedtools; identical to `bedtools intersect -wa -f 1 -u` 2.31.1 on 20,000 intervals placed around region edges of the installed GRCh38 repeat BED. PM4/BP3 on 90 synthetic cases: 81 identical, 9 failing in both; the BH14233 trio slice identical (PM4 17, BP3 0, 3,242 variants in repeats). Refused: empty regions (bedtools widens them), positions below 1, an empty or missing `ref`, names `to_csv` would quote. |
 | `scripts/acmg_pp1_bs4_bp2_pm3_family.py` | 602 | Python |
-| `scripts/acmg_pp3_bp4_bp7_insilico.py` | 139 | Python |
+| `scripts/acmg_pp3_bp4_bp7_insilico.py` | 139 | Rust module `acmg_pp3_bp4_bp7_insilico` (2026-10-30), with the boolean-mask rules the T6 modules share (pandas' `&`/`|` on `object` masks holding NaN, `np.logical_not`, `fillna` downcasting). PP3/BP4 on 178 synthetic cases: 166 identical, 11 failing in both, 1 refused (a text `PrimateAI` column, which `pd.to_numeric` would parse); BP7 on 179: 174 identical, 5 failing in both; the BH14233 trio slice identical (PP3 1, BP4 587, BP7 11). Refused: number columns read through `to_numeric` that are text, `~` of an `object` boolean Series. |
 | `scripts/acmg_ps1_pm5_known_variant.py` | 288 | Python |
 | `scripts/acmg_ps2_pm6_denovo.py` | 215 | Python |
-| `scripts/acmg_ps3_bs3_pp5_bp6_reported.py` | 258 | Python |
+| `scripts/acmg_ps3_bs3_pp5_bp6_reported.py` | 258 | Rust module `acmg_ps3_bs3_pp5_bp6_reported` (2026-10-30), including the frame `df.apply(axis=1)` returns (its `infer_objects` re-typing is reproduced). PS3/BS3 on 128 synthetic cases with the shipped and a synthetic MaveDB metadata table: 114 identical, 12 failing in both, 2 refused (an assay family that is missing, which Python groups by NaN identity); PP5/BP6 on 120, all identical; the BH14233 trio slice identical for both (the slice has no MaveDB URNs; BP6 93). Refused: empty tables and tables without an `object` column on the MaveDB path, mixed or nullable columns there. |
 | `scripts/acmg_pvs1_null_variant.py` | 721 | Python |
 | `scripts/acmg_scoring.py` | 836 | Python |
 | `scripts/acmg_variant_mechanism.py` | 591 | Python |
@@ -86,7 +86,7 @@ thread starts.
 | `scripts/gene_mechanism_hub.py` | 541 | Python |
 | `scripts/gene_mechanism_resources.py` | 1,028 | Python |
 | `scripts/gene_mechanism_variants.py` | 642 | Python |
-| `scripts/mavedb_interpreter.py` | 842 | Python |
+| `scripts/mavedb_interpreter.py` | 842 | Rust module `mavedb_interpreter` (`pick_interpreter_from_metadata` and the 13 family interpreters; the free-text `notes` are not built): call, standardized score, reason, PS3/BS3 flags and raised errors identical for 61,561 queries over every row of the shipped metadata (scores at and next to each band edge and percentile, zeros, infinities, NaN) and 2,873 queries over 122 synthetic rows with odd bands, flags, families and enum names (2026-10-30). |
 
 ### 4. Scripts that build reference data once, at installation
 

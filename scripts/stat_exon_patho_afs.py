@@ -126,7 +126,10 @@ def calculate_stats(transcript_exon_raw_afs):
         transcript_exon_raw_afs: Dictionary mapping transcript to exon to list of AFs
         
     Returns:
-        Dictionary with transcript -> exon -> (median, mean, max, min, np.array)
+        Dictionary with transcript -> exon -> (median, mean, max, min, tuple of AFs)
+
+    The AFs are stored as a plain tuple of floats rather than a numpy array, so
+    the pickle holds plain data only and loads without numpy.
     """
     results = {}
     
@@ -146,7 +149,8 @@ def calculate_stats(transcript_exon_raw_afs):
             min_af = float(np.min(afs_array))
             
             # Store results
-            results[transcript][exon] = (median_af, mean_af, max_af, min_af, afs_array)
+            results[transcript][exon] = (median_af, mean_af, max_af, min_af,
+                                         tuple(float(af) for af in afs_array))
     
     return results
 

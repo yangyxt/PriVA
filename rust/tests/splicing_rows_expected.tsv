@@ -1,0 +1,160 @@
+True	True	False	False	True	0	0	3	False
+True	True	True	True	False	3.0	0	2	False
+True	True	True	False	True	0	0		False
+True	True	True	False	True	-3.0	-1.0	10	True
+True	True	True	False	True	0	0		False
+ERROR	ValueError
+True	True	False	False	True	0	0	3,4,5	False
+True	True	True	False	False	44.0	1.0	5	False
+False	False	False	False	False	0	13.0		False
+False	True	False	False	False	51.0	0	2	False
+ERROR	ValueError
+True	True	True	False	True	0	0		False
+True	False	True	False	False	0	0		True
+True	True	True	False	False	1.0	-32.0	1	False
+False	True	False	False	False	0	0		False
+False	False	False	False	False	0	0	4	False
+False	False	False	False	False	0	0		False
+True	True	True	False	False	-17.0	0	1	False
+True	True	True	True	False	0	4.0	4,5,6	False
+True	True	True	False	True	16.0	0	4,10	True
+False	False	False	False	False	1.0	0	10	True
+False	True	False	False	False	0	0	2,5	True
+False	False	False	False	False	2.0	0		True
+False	True	False	False	False	-9.0	0	1,5,6	False
+False	False	False	False	False	0	0		False
+ERROR	ValueError
+False	False	False	False	False	0	0	4	False
+ERROR	ValueError
+False	False	False	False	False	0	0		False
+False	False	False	False	False	0	0	4	False
+False	False	False	False	False	0	0		False
+ERROR	ValueError
+True	True	False	True	False	0	0	2	False
+True	True	True	False	True	14.0	0		False
+ERROR	ValueError
+False	True	False	False	False	0	16.0	2	False
+True	True	False	True	False	-3.0	-5.0	4,5	False
+ERROR	ValueError
+True	True	True	False	True	0	0		False
+ERROR	ValueError
+True	True	True	False	False	40.0	12.0	1,2,3,5	True
+False	False	False	False	False	0	0		True
+False	False	False	False	False	0	0	1,3,4	False
+False	True	False	False	False	0	0	1,3,4,10	True
+True	True	True	False	True	0	0.0		False
+False	False	False	False	False	0	0	5,6,7	False
+ERROR	ValueError
+False	False	False	False	False	0	0		False
+ERROR	ValueError
+False	False	False	False	False	0	0		True
+True	True	True	False	False	-4.0	0	2	False
+True	True	True	False	True	-61.0	0	5,6,10	True
+True	True	True	False	False	0	0	3,4	False
+True	True	True	False	False	0	4.0	1,5,6,7	False
+True	True	True	False	False	4.0	0	1,2	False
+True	False	True	False	False	-7.0	-4.0		False
+False	False	False	False	False	-9.0	0	1	False
+ERROR	ValueError
+ERROR	ValueError
+True	False	True	False	False	0	-5.0		False
+ERROR	ValueError
+True	True	True	True	True	-10.0	1.0	4	False
+False	False	False	False	False	0	0		False
+False	False	False	False	False	0	0		False
+False	False	False	False	False	0	0		True
+ERROR	ValueError
+False	True	False	False	False	0	0	4	False
+True	True	True	False	True	0	0	2,3,4	False
+True	True	True	False	False	0	0		False
+True	True	True	False	False	40.0	0		False
+True	True	True	False	False	3.0	0	5	True
+True	True	True	False	False	3.0	-59.0	1	False
+False	True	False	False	False	-30.0	0	4,5,6	False
+True	True	True	False	False	0	0	5	False
+False	False	False	False	False	0	0		False
+False	False	False	False	False	0	0		False
+False	True	False	False	False	-60.0	0	10	True
+True	True	True	False	False	-26.0	0	2	True
+False	False	False	False	False	0	0	4	False
+False	True	False	False	False	0	43.0	1,4	False
+True	True	False	True	False	0	0	4	False
+True	True	True	False	True	0	0	3,4,5	False
+True	True	False	False	True	0	0	4	False
+False	False	False	False	False	0	6.0		True
+ERROR	ValueError
+True	True	True	False	True	0	0		False
+False	False	False	False	False	0	0		True
+False	False	False	False	False	0	0		True
+True	True	True	True	True	0	0	4,5	True
+False	False	False	False	False	0	0		False
+True	True	True	False	True	0	0		False
+True	True	True	False	True	0	0		False
+True	True	True	False	False	0	5.0	2	False
+True	False	False	True	False	0	0	5	True
+False	False	False	False	False	0	0		False
+False	False	False	False	False	0	0	5	True
+False	False	False	False	False	6.0	0	1	False
+True	True	False	False	True	0	0	5	True
+True	False	True	False	False	5.0	0	4	False
+ERROR	ValueError
+True	True	True	False	True	0	0		False
+False	False	False	False	False	0	0	5	True
+True	True	True	False	True	-37.0	-2.0	1,2,3,4	False
+False	False	False	False	False	0	0		False
+False	True	False	False	False	0	0	2,10	True
+True	True	False	False	True	54.0	0		True
+False	False	False	False	False	0	0		False
+True	True	True	False	True	-27.0	1.0	5	True
+ERROR	ValueError
+False	False	False	False	False	0	0		True
+False	False	False	False	False	0	0		False
+False	False	False	False	False	0	0	2,3	False
+True	True	True	False	True	0	0		False
+ERROR	ValueError
+False	False	False	False	False	0	0		False
+False	True	False	False	False	0	0	1,2,3	False
+False	False	False	False	False	0	0		True
+ERROR	ValueError
+True	False	False	True	False	0	0	2	False
+True	False	True	False	False	-29.0	7.0	1	False
+False	False	False	False	False	0	0		False
+False	False	False	False	False	0	0		False
+False	False	False	False	False	0	0		False
+True	True	True	False	True	0	0		False
+False	False	False	False	False	0	0	10	True
+False	False	False	False	False	0	-32.0	1	False
+ERROR	ValueError
+False	False	False	False	False	0	14.0		False
+True	True	True	False	False	41.0	-2.0	1	False
+False	False	False	False	False	0	0		False
+False	False	False	False	False	0	0		False
+False	False	False	False	False	0	-5.0		False
+True	True	False	False	True	0	0	2,3,4,5	False
+False	False	False	False	False	0	0	2	False
+False	False	False	False	False	0	2.0	1	False
+ERROR	ValueError
+False	True	False	False	False	0	0	1	False
+True	True	True	False	True	0	-1.0	3,4	False
+True	False	False	True	False	0	0	2	False
+False	True	False	False	False	0	0	3	False
+True	True	True	False	False	0	0	4,5,6	True
+True	True	False	True	True	0	-19.0	5,6,7,10	True
+True	True	True	False	False	4.0	4.0		True
+ERROR	ValueError
+True	True	False	False	True	-30.0	0		False
+False	False	False	False	False	-2.0	0		False
+True	False	False	True	False	0	0	5	True
+False	False	False	False	False	0	nan		True
+ERROR	ValueError
+True	True	True	False	True	-5.0	11.0	1,3,4,5	False
+True	True	True	False	True	0	0	1,2	False
+False	False	False	False	False	0	0		False
+True	True	True	True	False	0	0	5	False
+ERROR	ValueError
+False	False	False	False	False	-1.0	0		False
+False	False	False	False	False	0	-71.0		False
+True	True	True	True	True	0	0	2,4,5,6	False
+True	True	True	False	False	0	0		False
+True	True	True	False	True	0	0		False
+False	False	False	False	False	0	nan		False

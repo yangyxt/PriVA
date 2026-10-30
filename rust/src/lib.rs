@@ -13,6 +13,8 @@ mod pickle_reader;
 pub mod protein_domain_mapping;
 mod python_text;
 pub mod spliceai2;
+mod splicing_cutoffs;
+pub mod splicing_var_analysis;
 pub mod variant_ids;
 mod vcf_text;
 

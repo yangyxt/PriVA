@@ -41,9 +41,9 @@ intermediate files of the step before it.
 
 | Script | Lines | Status |
 | --- | ---: | --- |
-| `scripts/interpro_mapping_io.py` | 54 | Python |
-| `scripts/protein_domain_mapping.py` | 764 | Python |
-| `scripts/splicing_var_analysis.py` | 1,156 | Python |
+| `scripts/interpro_mapping_io.py` | 54 | Rust `priva interpro-mapping inspect` and the pickle reader that `priva splicing-analysis` uses (draft of 2026-10-30, written without a compiler; build, tests and the comparison with the Python script are still to run on HGSC). The reader is a restricted pickle reader that accepts plain data only and names the opcode it refuses. The shell still calls Python until group 2 is complete. |
+| `scripts/protein_domain_mapping.py` | 764 | Python for its installer command line (`--vcf --xml --report --mapping_output`, which builds the InterPro pickle). Its lookup class `DomainNormalizer` (VEP domain to InterPro entry, functional or not) is Rust library code in `rust/src/protein_domain_mapping.rs`, used by `priva splicing-analysis` (draft of 2026-10-30, not yet built or compared). |
+| `scripts/splicing_var_analysis.py` | 1,156 | Rust `priva splicing-analysis` (draft of 2026-10-30, written without a compiler; build, tests and the comparison with the Python script on synthetic tables and the BH14233 trio slice are still to run on HGSC). It reads and writes the table the way pandas does and takes the same options. The shell still calls Python until group 2 is complete. |
 | `scripts/utr_anno_interpret.py` | 278 | Python |
 
 ### 3. ACMG decision steps (criterion assignment, scoring and ranking for each sample)

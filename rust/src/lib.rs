@@ -4,6 +4,8 @@ pub mod acmg_scoring;
 pub mod acmg_variant_mechanism;
 pub mod cadd_hub;
 mod cli;
+pub mod combine_annotations;
+pub mod hpo_penetrance;
 pub mod pedigree_filter;
 pub mod spliceai2;
 pub mod variant_ids;

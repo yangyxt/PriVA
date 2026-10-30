@@ -291,9 +291,15 @@ pub(crate) fn run() -> Result<()> {
     if args.get(1).map(String::as_str) == Some("interpro-mapping") {
         return crate::interpro_mapping_io::dispatch(&args[2..]);
     }
+    if args.get(1).map(String::as_str) == Some("spliceai-cache-input") {
+        return crate::spliceai_cache_input::dispatch(&args[2..]);
+    }
+    if args.get(1).map(String::as_str) == Some("spliceai-cutoffs") {
+        return crate::spliceai_cutoffs::dispatch(&args[2..]);
+    }
     if args.len() != 6 || args[1] != "final-order" || args[4] != "--chrom-type" {
         return Err(invalid(
-            "usage: priva final-order INPUT.tsv NEW_OUTPUT.tsv --chrom-type string|integer\n       priva score-criteria INPUT.tsv NEW_OUTPUT.tsv --no-clingen-override\n       priva score-criteria INPUT.tsv NEW_OUTPUT.tsv --clingen-evidence-column COLUMN\n       priva spliceai2-vcf --help\n       priva variant-ids -m {encode,decode} -i INPUT_VCF [-o OUTPUT_VCF]\n       priva pedigree-filter -v VCF -p PED_TABLE -f TARGET_FAM -o OUTPUT_VCF\n       priva combine-annotations -i INPUT_VCF -c CADD_TABLE -p HPO_TABLE [-o OUTPUT_TABLE] [-t THREADS]\n       priva splicing-analysis --help\n       priva interpro-mapping inspect --input INPUT\n       priva cadd-hub --help\nOpt-in boundaries only; criteria must already be assigned, and final-order additionally requires sort_index. SpliceAI2 is an annotation-only projection.",
+            "usage: priva final-order INPUT.tsv NEW_OUTPUT.tsv --chrom-type string|integer\n       priva score-criteria INPUT.tsv NEW_OUTPUT.tsv --no-clingen-override\n       priva score-criteria INPUT.tsv NEW_OUTPUT.tsv --clingen-evidence-column COLUMN\n       priva spliceai2-vcf --help\n       priva variant-ids -m {encode,decode} -i INPUT_VCF [-o OUTPUT_VCF]\n       priva pedigree-filter -v VCF -p PED_TABLE -f TARGET_FAM -o OUTPUT_VCF\n       priva combine-annotations -i INPUT_VCF -c CADD_TABLE -p HPO_TABLE [-o OUTPUT_TABLE] [-t THREADS]\n       priva splicing-analysis --help\n       priva interpro-mapping inspect --input INPUT\n       priva spliceai-cache-input {install|adopt-prepared} --help\n       priva spliceai-cutoffs CONFIG [SNV_VCF INDEL_VCF]\n       priva cadd-hub --help\nOpt-in boundaries only; criteria must already be assigned, and final-order additionally requires sort_index. SpliceAI2 is an annotation-only projection.",
         ));
     }
     final_order(Path::new(&args[2]), Path::new(&args[3]), &args[5])

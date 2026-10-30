@@ -9,7 +9,7 @@
 //!
 //! Known gap: Python also reads non-ASCII decimal digits (for example
 //! full-width digits) in `int()` and `float()`; these readers do not.
-use crate::acmg_scoring::python_strip;
+pub(crate) use crate::acmg_scoring::python_strip;
 
 /// Removes the underscores Python allows between two digits (`1_000`); any
 /// other underscore makes the text invalid.
@@ -145,6 +145,51 @@ pub(crate) fn sum_floats(values: &[f64]) -> f64 {
     total
 }
 
+/// `str.isspace()` for one character: Unicode white space plus U+001C to U+001F.
+pub(crate) fn is_python_space(c: char) -> bool {
+    matches!(
+        c,
+        '\t' | '\n'
+            | '\u{b}'
+            | '\u{c}'
+            | '\r'
+            | '\u{1c}'
+            | '\u{1d}'
+            | '\u{1e}'
+            | '\u{1f}'
+            | ' '
+            | '\u{85}'
+            | '\u{a0}'
+            | '\u{1680}'
+            | '\u{2000}'..='\u{200a}'
+            | '\u{2028}'
+            | '\u{2029}'
+            | '\u{202f}'
+            | '\u{205f}'
+            | '\u{3000}'
+    )
+}
+
+/// `int(text)` for a base-10 string: surrounding white space, an optional
+/// sign, ASCII digits with single underscores between them. Digits of other
+/// scripts, which Python also accepts, are not supported and give `None`.
+pub(crate) fn python_int(text: &str) -> Option<i128> {
+    let body = python_strip(text);
+    let (negative, digits) = match body.strip_prefix('-') {
+        Some(rest) => (true, rest),
+        None => (false, body.strip_prefix('+').unwrap_or(body)),
+    };
+    if digits.is_empty() || digits.starts_with('_') || digits.ends_with('_') || digits.contains("__") {
+        return None;
+    }
+    if !digits.bytes().all(|byte| byte.is_ascii_digit() || byte == b'_') {
+        return None;
+    }
+    let cleaned: String = digits.chars().filter(|c| *c != '_').collect();
+    let value: i128 = cleaned.parse().ok()?;
+    Some(if negative { -value } else { value })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -209,5 +254,25 @@ mod tests {
         assert_eq!(sum_floats(&[0.1, 0.2, 0.3]), 0.6);
         assert_eq!(sum_floats(&[0.1; 10]), 1.0);
         assert_eq!(sum_floats(&[0.02, 0.006]), 0.02 + 0.006);
+    }
+
+    #[test]
+    fn strip_uses_python_white_space() {
+        assert_eq!(python_strip("\u{1c} a b\u{a0}\n"), "a b");
+        assert_eq!(python_strip("   "), "");
+    }
+
+    #[test]
+    fn int_follows_python_rules() {
+        assert_eq!(python_int(" 12 "), Some(12));
+        assert_eq!(python_int("-0_7"), Some(-7));
+        assert_eq!(python_int("+5"), Some(5));
+        assert_eq!(python_int("1__0"), None);
+        assert_eq!(python_int("_1"), None);
+        assert_eq!(python_int("1_"), None);
+        assert_eq!(python_int("1.0"), None);
+        assert_eq!(python_int(""), None);
+        assert_eq!(python_int("0x10"), None);
+        assert_eq!(python_int("007"), Some(7));
     }
 }

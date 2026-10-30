@@ -61,8 +61,10 @@ type Outcome<T> = std::result::Result<T, String>;
 fn na_value(cell: &Cell) -> bool {
     match cell {
         Cell::Missing => true,
-        Cell::Text(text) => ["NaN", "nan", "na", "NA", "NAN", "None", "none", "", ".", "-"]
-            .contains(text),
+        Cell::Text(text) => [
+            "NaN", "nan", "na", "NA", "NAN", "None", "none", "", ".", "-",
+        ]
+        .contains(text),
         Cell::Float(number) => number.is_nan(),
         Cell::Int(_) | Cell::Bool(_) => false,
     }
@@ -86,14 +88,14 @@ fn cell_float(cell: &Cell) -> Outcome<f64> {
         Cell::Int(number) => Ok(*number as f64),
         Cell::Float(number) => Ok(*number),
         Cell::Bool(flag) => Ok(if *flag { 1.0 } else { 0.0 }),
-        Cell::Text(text) => {
-            parse_float(text).ok_or_else(|| format!("ValueError: could not convert {text:?} to float"))
-        }
+        Cell::Text(text) => parse_float(text)
+            .ok_or_else(|| format!("ValueError: could not convert {text:?} to float")),
     }
 }
 
 fn text_int(text: &str) -> Outcome<i64> {
-    parse_int(text).ok_or_else(|| format!("ValueError: invalid literal for int() with base 10: {text:?}"))
+    parse_int(text)
+        .ok_or_else(|| format!("ValueError: invalid literal for int() with base 10: {text:?}"))
 }
 
 /// `int(value)`.
@@ -132,7 +134,9 @@ impl<'a> Position<'a> {
         }
         match cell {
             Cell::Text(text) => Position::Text(text),
-            Cell::Int(number) => Position::Other { truthy: number != 0 },
+            Cell::Int(number) => Position::Other {
+                truthy: number != 0,
+            },
             Cell::Float(number) => Position::Other {
                 truthy: number != 0.0,
             },
@@ -167,7 +171,9 @@ fn first_number(text: &str) -> Outcome<i64> {
 fn number_pair(text: &str) -> Outcome<(i64, i64)> {
     let parts: Vec<&str> = text.split('/').collect();
     if parts.len() != 2 {
-        return Err(format!("ValueError: {text:?} does not split into two numbers"));
+        return Err(format!(
+            "ValueError: {text:?} does not split into two numbers"
+        ));
     }
     Ok((text_int(parts[0])?, text_int(parts[1])?))
 }
@@ -204,7 +210,9 @@ fn cds_total_of_event(cds_pos: &Position, lenient_start: bool) -> Outcome<Option
     };
     let parts: Vec<&str> = text.split('/').collect();
     if parts.len() != 2 {
-        return Err(format!("ValueError: {text:?} does not split into two parts"));
+        return Err(format!(
+            "ValueError: {text:?} does not split into two parts"
+        ));
     }
     let (start, total) = (parts[0], parts[1]);
     if start.contains('-') {
@@ -268,7 +276,11 @@ fn signed_value(text: &[u8], number: SignedNumber) -> Outcome<i128> {
         .ok()
         .and_then(|digits| digits.parse().ok())
         .ok_or_else(|| "an HGVSc offset is not a number".to_owned())?;
-    Ok(if number.negative { -magnitude } else { magnitude })
+    Ok(if number.negative {
+        -magnitude
+    } else {
+        magnitude
+    })
 }
 
 /// The ways `\d+` can match at `start`, longest first.
@@ -671,9 +683,7 @@ struct ExonFlags {
 impl Resources {
     /// The domain paths of one exon of a transcript in the map, if both are in it.
     fn domains_of(&self, transcript: Option<&str>, exon: i64) -> Option<&Vec<String>> {
-        self.exon_domains
-            .get(transcript?)?
-            .get(&exon.to_string())
+        self.exon_domains.get(transcript?)?.get(&exon.to_string())
     }
 
     fn is_intolerant(&self, domains: &[String]) -> bool {
@@ -693,7 +703,9 @@ impl Resources {
         let mut functional = false;
         for path in domains {
             let annotation = path.split_once(':').map_or(path.as_str(), |(_, rest)| rest);
-            if self.normalizer.interpret_functionality(annotation, &self.interpro)?
+            if self
+                .normalizer
+                .interpret_functionality(annotation, &self.interpro)?
                 == Functionality::Functional
             {
                 functional = true;
@@ -920,9 +932,8 @@ fn spliceai_interpretation(context: &Context, input: &SpliceAiInput) -> Outcome<
         gain_offset: Offset::Zero,
         loss_offset: Offset::Zero,
     };
-    let parse = || {
-        parse_hgvsc_splice_position(input.hgvsc.as_deref(), &input.strand, input.var_pos, 1)
-    };
+    let parse =
+        || parse_hgvsc_splice_position(input.hgvsc.as_deref(), &input.strand, input.var_pos, 1);
     // The distance when the variant lies in a region of the given type.
     let distance_in = |parsed: &Option<SplicePosition>, wanted: VariantType| -> Option<f64> {
         let parsed = parsed.as_ref()?;
@@ -1103,7 +1114,9 @@ fn process_exon_skipping(
     if pos_str.contains('-') {
         let parts: Vec<&str> = pos_str.split('-').collect();
         if parts.len() != 2 {
-            return Err(format!("ValueError: {pos_str:?} is not a range of two exons"));
+            return Err(format!(
+                "ValueError: {pos_str:?} is not a range of two exons"
+            ));
         }
         let (start, end) = (text_int(parts[0])?, text_int(parts[1])?);
         if end.saturating_sub(start) > 10_000_000 {
@@ -1334,7 +1347,8 @@ fn splicevault_interpretation(
     };
     // A flag is set when its events carry over 30% of the samples and outweigh
     // the events without it twenty to one.
-    let decides = |with: f64, without: f64| odds_ratio(with, without) >= 20.0 && with > 0.3 && confident;
+    let decides =
+        |with: f64, without: f64| odds_ratio(with, without) >= 20.0 && with > 0.3 && confident;
     let harmful = fraction_sum(&analyses, |a| a.is_harmful);
     let not_harmful = fraction_sum(&analyses, |a| !a.is_harmful);
     let changing = fraction_sum(&analyses, |a| a.length_changing);
@@ -1369,7 +1383,13 @@ fn splicevault_interpretation(
 /// be a range such as `1-3`; `None` (False) when it does not parse.
 fn is_last_intron(intron_pos: &Position, total_exons: i64) -> Outcome<bool> {
     let text = intron_pos.text()?;
-    let first = text.split('/').next().unwrap_or("").split('-').next().unwrap_or("");
+    let first = text
+        .split('/')
+        .next()
+        .unwrap_or("")
+        .split('-')
+        .next()
+        .unwrap_or("");
     Ok(parse_int(first).is_some_and(|current| current == total_exons - 1))
 }
 
@@ -1379,7 +1399,9 @@ fn analyze_row(context: &Context, row: usize) -> Outcome<RowResult> {
     let consequence_cell = columns
         .consequence
         .map(|index| context.table.cell(index, row));
-    let consequence = consequence_cell.as_ref().map_or_else(String::new, cell_text);
+    let consequence = consequence_cell
+        .as_ref()
+        .map_or_else(String::new, cell_text);
 
     let intron_pos = Position::from_cell(context.required("INTRON", columns.intron, row)?);
     let exon_pos = Position::from_cell(context.required("EXON", columns.exon, row)?);
@@ -1427,12 +1449,10 @@ fn analyze_row(context: &Context, row: usize) -> Outcome<RowResult> {
 
     let feature = context.required("Feature", columns.feature, row)?;
     let events = context.required("SpliceVault_top_events", columns.events, row)?;
-    let spliceai_delta = cell_float(&context.required(
-        "SpliceVault_SpliceAI_delta",
-        columns.delta,
-        row,
-    )?)?;
-    let cds_pos = Position::from_cell(context.required("CDS_position", columns.cds_position, row)?);
+    let spliceai_delta =
+        cell_float(&context.required("SpliceVault_SpliceAI_delta", columns.delta, row)?)?;
+    let cds_pos =
+        Position::from_cell(context.required("CDS_position", columns.cds_position, row)?);
     let transcript = match feature {
         Cell::Text(text) => Some(text),
         _ => None,
@@ -1504,7 +1524,11 @@ fn analyze_row(context: &Context, row: usize) -> Outcome<RowResult> {
     // NMD escape: the effect reaches only the last exon.
     let mut last_exon_only = false;
     if has_total && !all_affected.is_empty() {
-        let numbers: BTreeSet<i64> = all_affected.iter().copied().filter(|exon| *exon >= 0).collect();
+        let numbers: BTreeSet<i64> = all_affected
+            .iter()
+            .copied()
+            .filter(|exon| *exon >= 0)
+            .collect();
         if !numbers.is_empty() && numbers == BTreeSet::from([total_exons.unwrap_or(0)]) {
             last_exon_only = true;
         }
@@ -1514,7 +1538,13 @@ fn analyze_row(context: &Context, row: usize) -> Outcome<RowResult> {
     }
     if !last_exon_only && exon_pos.truthy() && has_total {
         let text = exon_pos.text()?;
-        let first = text.split('/').next().unwrap_or("").split('-').next().unwrap_or("");
+        let first = text
+            .split('/')
+            .next()
+            .unwrap_or("")
+            .split('-')
+            .next()
+            .unwrap_or("");
         last_exon_only = parse_int(first).is_some_and(|current| Some(current) == total_exons);
     }
 
@@ -1591,7 +1621,9 @@ fn parse_options(args: &[String]) -> Result<Parsed> {
             return Ok(Parsed::Help);
         }
         if !argument.starts_with("--") || argument == "--" {
-            return Err(invalid(format!("unrecognized arguments: {argument}\n{USAGE}")));
+            return Err(invalid(format!(
+                "unrecognized arguments: {argument}\n{USAGE}"
+            )));
         }
         let (name, inline) = match argument.split_once('=') {
             Some((name, value)) => (name, Some(value.to_owned())),
@@ -1726,7 +1758,9 @@ fn splicing_interpretation(options: &Options, cutoffs: Cutoffs) -> Result<()> {
         normalizer: DomainNormalizer::new()?,
     };
     if options.threads < 1 {
-        return Err(invalid("ValueError: Number of processes must be at least 1"));
+        return Err(invalid(
+            "ValueError: Number of processes must be at least 1",
+        ));
     }
     eprintln!(
         "Processing {} variants using {} cores, spliceai_cutoff is {}, acceptor_rescue_cutoff is {}",
@@ -1737,7 +1771,9 @@ fn splicing_interpretation(options: &Options, cutoffs: Cutoffs) -> Result<()> {
     );
     if table.rows == 0 {
         // zip(*[]) cannot be unpacked into nine names.
-        return Err(invalid("ValueError: not enough values to unpack (expected 9, got 0)"));
+        return Err(invalid(
+            "ValueError: not enough values to unpack (expected 9, got 0)",
+        ));
     }
     let results = {
         let context = Context {
@@ -1747,11 +1783,21 @@ fn splicing_interpretation(options: &Options, cutoffs: Cutoffs) -> Result<()> {
             splice_altering_cutoff: cutoffs.splice_altering,
             acceptor_rescue_cutoff: cutoffs.nearby_acceptor_rescue,
         };
-        judge_rows(&context, usize::try_from(options.threads).unwrap_or(usize::MAX)).map_err(invalid)?
+        judge_rows(
+            &context,
+            usize::try_from(options.threads).unwrap_or(usize::MAX),
+        )
+        .map_err(invalid)?
     };
     table.set_column("splicing_lof", bool_column(&results, |r| r.lof));
-    table.set_column("splicing_len_changing", bool_column(&results, |r| r.len_changing));
-    table.set_column("splicing_frameshift", bool_column(&results, |r| r.frameshift));
+    table.set_column(
+        "splicing_len_changing",
+        bool_column(&results, |r| r.len_changing),
+    );
+    table.set_column(
+        "splicing_frameshift",
+        bool_column(&results, |r| r.frameshift),
+    );
     table.set_column(
         "splicing_span_intol_domain",
         bool_column(&results, |r| r.span_intol_domain),
@@ -1818,138 +1864,462 @@ mod tests {
     const EXPECTED: &str = include_str!("../tests/splicing_rows_expected.tsv");
 
     // (hgvsc, strand, expected) from the Python function with var_pos 1000, var_length 1
-    const POSITIONS: &[(&str, &str, Option<(VariantType, Option<i128>, Option<i128>, bool, bool)>)] = &[
-        ("ENST1:c.116+1G>A", "1", Some((VariantType::DonorRegion, Some(0), Some(999), false, true))),
-        ("ENST1:c.1897-4A>G", "1", Some((VariantType::AcceptorRegion, Some(-2), Some(1004), false, false))),
-        ("ENST1:c.459+2dup", "1", Some((VariantType::DonorRegion, Some(0), Some(999), false, true))),
-        ("ENST1:c.3354-1del", "1", Some((VariantType::AcceptorRegion, Some(0), Some(1002), false, true))),
-        ("ENST1:c.3646_3646+3del", "1", Some((VariantType::DonorRegion, Some(1), Some(998), false, true))),
-        ("ENST1:c.207+1_207+2del", "1", Some((VariantType::DonorRegion, Some(0), Some(999), false, true))),
-        ("ENST1:c.44-7_44-5del", "1", Some((VariantType::AcceptorRegion, Some(4), Some(1006), false, true))),
-        ("ENST1:c.4644+12_4644+13insTA", "1", Some((VariantType::DonorRegion, Some(11), Some(988), false, true))),
-        ("ENST1:c.248-4_248-3insAAGTTTT", "1", Some((VariantType::AcceptorRegion, Some(-2), Some(1004), false, false))),
-        ("ENST1:c.2746-17_2746-14dup", "1", Some((VariantType::AcceptorRegion, Some(13), Some(1015), false, true))),
+    const POSITIONS: &[(
+        &str,
+        &str,
+        Option<(VariantType, Option<i128>, Option<i128>, bool, bool)>,
+    )] = &[
+        (
+            "ENST1:c.116+1G>A",
+            "1",
+            Some((VariantType::DonorRegion, Some(0), Some(999), false, true)),
+        ),
+        (
+            "ENST1:c.1897-4A>G",
+            "1",
+            Some((
+                VariantType::AcceptorRegion,
+                Some(-2),
+                Some(1004),
+                false,
+                false,
+            )),
+        ),
+        (
+            "ENST1:c.459+2dup",
+            "1",
+            Some((VariantType::DonorRegion, Some(0), Some(999), false, true)),
+        ),
+        (
+            "ENST1:c.3354-1del",
+            "1",
+            Some((
+                VariantType::AcceptorRegion,
+                Some(0),
+                Some(1002),
+                false,
+                true,
+            )),
+        ),
+        (
+            "ENST1:c.3646_3646+3del",
+            "1",
+            Some((VariantType::DonorRegion, Some(1), Some(998), false, true)),
+        ),
+        (
+            "ENST1:c.207+1_207+2del",
+            "1",
+            Some((VariantType::DonorRegion, Some(0), Some(999), false, true)),
+        ),
+        (
+            "ENST1:c.44-7_44-5del",
+            "1",
+            Some((
+                VariantType::AcceptorRegion,
+                Some(4),
+                Some(1006),
+                false,
+                true,
+            )),
+        ),
+        (
+            "ENST1:c.4644+12_4644+13insTA",
+            "1",
+            Some((VariantType::DonorRegion, Some(11), Some(988), false, true)),
+        ),
+        (
+            "ENST1:c.248-4_248-3insAAGTTTT",
+            "1",
+            Some((
+                VariantType::AcceptorRegion,
+                Some(-2),
+                Some(1004),
+                false,
+                false,
+            )),
+        ),
+        (
+            "ENST1:c.2746-17_2746-14dup",
+            "1",
+            Some((
+                VariantType::AcceptorRegion,
+                Some(13),
+                Some(1015),
+                false,
+                true,
+            )),
+        ),
         ("ENST1:c.100_101del", "1", None),
         ("ENST1:c.100G>A", "1", None),
         ("ENST1:c.*10+2A>G", "1", None),
-        ("ENST1:c.-5+2A>G", "1", Some((VariantType::DonorRegion, Some(1), Some(998), false, true))),
-        ("ENST1:c.10-3_10+4del", "1", Some((VariantType::Spanning, None, None, true, false))),
+        (
+            "ENST1:c.-5+2A>G",
+            "1",
+            Some((VariantType::DonorRegion, Some(1), Some(998), false, true)),
+        ),
+        (
+            "ENST1:c.10-3_10+4del",
+            "1",
+            Some((VariantType::Spanning, None, None, true, false)),
+        ),
         ("ENST1:c.1_2insA", "1", None),
-        ("ENST1:c.88+1_88+2delinsAT", "1", Some((VariantType::DonorRegion, Some(0), Some(999), false, true))),
-        ("ENST1:c.5+1A>G:c.7-2del", "1", Some((VariantType::DonorRegion, Some(0), Some(999), false, true))),
+        (
+            "ENST1:c.88+1_88+2delinsAT",
+            "1",
+            Some((VariantType::DonorRegion, Some(0), Some(999), false, true)),
+        ),
+        (
+            "ENST1:c.5+1A>G:c.7-2del",
+            "1",
+            Some((VariantType::DonorRegion, Some(0), Some(999), false, true)),
+        ),
         ("x", "1", None),
-        ("ENST1:c.7-1_7-1insG", "1", Some((VariantType::AcceptorRegion, Some(1), Some(1001), false, true))),
-        ("ENST1:c.7_7+1insG", "1", Some((VariantType::DonorRegion, Some(-1), Some(1000), false, true))),
-        ("ENST1:c.12+3_12-3dup", "1", Some((VariantType::Spanning, None, None, true, false))),
-        ("ENST1:c.9-1G>T", "1", Some((VariantType::AcceptorRegion, Some(1), Some(1001), false, true))),
-        ("ENST1:c.1+9del", "1", Some((VariantType::DonorRegion, Some(7), Some(992), false, true))),
-        ("ENST1:c.007+005A>G", "1", Some((VariantType::DonorRegion, Some(4), Some(995), false, true))),
-        ("ENST1:c.150+10_151-10delinsA", "1", Some((VariantType::Spanning, None, None, true, false))),
-        ("ENST1:c.500-2_500-1del", "1", Some((VariantType::AcceptorRegion, Some(0), Some(1002), false, true))),
-        ("ENST1:c.116+1G>A", "-1", Some((VariantType::DonorRegion, Some(1), Some(1001), false, true))),
-        ("ENST1:c.1897-4A>G", "-1", Some((VariantType::AcceptorRegion, Some(3), Some(996), false, true))),
-        ("ENST1:c.459+2dup", "-1", Some((VariantType::DonorRegion, Some(-1), Some(1003), false, true))),
-        ("ENST1:c.3354-1del", "-1", Some((VariantType::AcceptorRegion, Some(-1), Some(1000), false, true))),
-        ("ENST1:c.3646_3646+3del", "-1", Some((VariantType::DonorRegion, Some(-2), Some(1004), false, false))),
-        ("ENST1:c.207+1_207+2del", "-1", Some((VariantType::DonorRegion, Some(-1), Some(1003), false, true))),
-        ("ENST1:c.44-7_44-5del", "-1", Some((VariantType::AcceptorRegion, Some(3), Some(1004), false, true))),
-        ("ENST1:c.4644+12_4644+13insTA", "-1", Some((VariantType::DonorRegion, Some(-11), Some(1013), false, false))),
-        ("ENST1:c.248-4_248-3insAAGTTTT", "-1", Some((VariantType::AcceptorRegion, Some(2), Some(997), false, true))),
-        ("ENST1:c.2746-17_2746-14dup", "-1", Some((VariantType::AcceptorRegion, Some(12), Some(1013), false, true))),
+        (
+            "ENST1:c.7-1_7-1insG",
+            "1",
+            Some((
+                VariantType::AcceptorRegion,
+                Some(1),
+                Some(1001),
+                false,
+                true,
+            )),
+        ),
+        (
+            "ENST1:c.7_7+1insG",
+            "1",
+            Some((VariantType::DonorRegion, Some(-1), Some(1000), false, true)),
+        ),
+        (
+            "ENST1:c.12+3_12-3dup",
+            "1",
+            Some((VariantType::Spanning, None, None, true, false)),
+        ),
+        (
+            "ENST1:c.9-1G>T",
+            "1",
+            Some((
+                VariantType::AcceptorRegion,
+                Some(1),
+                Some(1001),
+                false,
+                true,
+            )),
+        ),
+        (
+            "ENST1:c.1+9del",
+            "1",
+            Some((VariantType::DonorRegion, Some(7), Some(992), false, true)),
+        ),
+        (
+            "ENST1:c.007+005A>G",
+            "1",
+            Some((VariantType::DonorRegion, Some(4), Some(995), false, true)),
+        ),
+        (
+            "ENST1:c.150+10_151-10delinsA",
+            "1",
+            Some((VariantType::Spanning, None, None, true, false)),
+        ),
+        (
+            "ENST1:c.500-2_500-1del",
+            "1",
+            Some((
+                VariantType::AcceptorRegion,
+                Some(0),
+                Some(1002),
+                false,
+                true,
+            )),
+        ),
+        (
+            "ENST1:c.116+1G>A",
+            "-1",
+            Some((VariantType::DonorRegion, Some(1), Some(1001), false, true)),
+        ),
+        (
+            "ENST1:c.1897-4A>G",
+            "-1",
+            Some((VariantType::AcceptorRegion, Some(3), Some(996), false, true)),
+        ),
+        (
+            "ENST1:c.459+2dup",
+            "-1",
+            Some((VariantType::DonorRegion, Some(-1), Some(1003), false, true)),
+        ),
+        (
+            "ENST1:c.3354-1del",
+            "-1",
+            Some((
+                VariantType::AcceptorRegion,
+                Some(-1),
+                Some(1000),
+                false,
+                true,
+            )),
+        ),
+        (
+            "ENST1:c.3646_3646+3del",
+            "-1",
+            Some((VariantType::DonorRegion, Some(-2), Some(1004), false, false)),
+        ),
+        (
+            "ENST1:c.207+1_207+2del",
+            "-1",
+            Some((VariantType::DonorRegion, Some(-1), Some(1003), false, true)),
+        ),
+        (
+            "ENST1:c.44-7_44-5del",
+            "-1",
+            Some((
+                VariantType::AcceptorRegion,
+                Some(3),
+                Some(1004),
+                false,
+                true,
+            )),
+        ),
+        (
+            "ENST1:c.4644+12_4644+13insTA",
+            "-1",
+            Some((
+                VariantType::DonorRegion,
+                Some(-11),
+                Some(1013),
+                false,
+                false,
+            )),
+        ),
+        (
+            "ENST1:c.248-4_248-3insAAGTTTT",
+            "-1",
+            Some((VariantType::AcceptorRegion, Some(2), Some(997), false, true)),
+        ),
+        (
+            "ENST1:c.2746-17_2746-14dup",
+            "-1",
+            Some((
+                VariantType::AcceptorRegion,
+                Some(12),
+                Some(1013),
+                false,
+                true,
+            )),
+        ),
         ("ENST1:c.100_101del", "-1", None),
         ("ENST1:c.100G>A", "-1", None),
         ("ENST1:c.*10+2A>G", "-1", None),
-        ("ENST1:c.-5+2A>G", "-1", Some((VariantType::DonorRegion, Some(0), Some(1002), false, true))),
-        ("ENST1:c.10-3_10+4del", "-1", Some((VariantType::Spanning, None, None, true, false))),
+        (
+            "ENST1:c.-5+2A>G",
+            "-1",
+            Some((VariantType::DonorRegion, Some(0), Some(1002), false, true)),
+        ),
+        (
+            "ENST1:c.10-3_10+4del",
+            "-1",
+            Some((VariantType::Spanning, None, None, true, false)),
+        ),
         ("ENST1:c.1_2insA", "-1", None),
-        ("ENST1:c.88+1_88+2delinsAT", "-1", Some((VariantType::DonorRegion, Some(-1), Some(1003), false, true))),
-        ("ENST1:c.5+1A>G:c.7-2del", "-1", Some((VariantType::DonorRegion, Some(1), Some(1001), false, true))),
+        (
+            "ENST1:c.88+1_88+2delinsAT",
+            "-1",
+            Some((VariantType::DonorRegion, Some(-1), Some(1003), false, true)),
+        ),
+        (
+            "ENST1:c.5+1A>G:c.7-2del",
+            "-1",
+            Some((VariantType::DonorRegion, Some(1), Some(1001), false, true)),
+        ),
         ("x", "-1", None),
-        ("ENST1:c.7-1_7-1insG", "-1", Some((VariantType::AcceptorRegion, Some(0), Some(999), false, true))),
-        ("ENST1:c.7_7+1insG", "-1", Some((VariantType::DonorRegion, Some(1), Some(1001), false, true))),
-        ("ENST1:c.12+3_12-3dup", "-1", Some((VariantType::Spanning, None, None, true, false))),
-        ("ENST1:c.9-1G>T", "-1", Some((VariantType::AcceptorRegion, Some(0), Some(999), false, true))),
-        ("ENST1:c.1+9del", "-1", Some((VariantType::DonorRegion, Some(-8), Some(1010), false, false))),
-        ("ENST1:c.007+005A>G", "-1", Some((VariantType::DonorRegion, Some(-3), Some(1005), false, false))),
-        ("ENST1:c.150+10_151-10delinsA", "-1", Some((VariantType::Spanning, None, None, true, false))),
-        ("ENST1:c.500-2_500-1del", "-1", Some((VariantType::AcceptorRegion, Some(-1), Some(1000), false, true))),
+        (
+            "ENST1:c.7-1_7-1insG",
+            "-1",
+            Some((VariantType::AcceptorRegion, Some(0), Some(999), false, true)),
+        ),
+        (
+            "ENST1:c.7_7+1insG",
+            "-1",
+            Some((VariantType::DonorRegion, Some(1), Some(1001), false, true)),
+        ),
+        (
+            "ENST1:c.12+3_12-3dup",
+            "-1",
+            Some((VariantType::Spanning, None, None, true, false)),
+        ),
+        (
+            "ENST1:c.9-1G>T",
+            "-1",
+            Some((VariantType::AcceptorRegion, Some(0), Some(999), false, true)),
+        ),
+        (
+            "ENST1:c.1+9del",
+            "-1",
+            Some((VariantType::DonorRegion, Some(-8), Some(1010), false, false)),
+        ),
+        (
+            "ENST1:c.007+005A>G",
+            "-1",
+            Some((VariantType::DonorRegion, Some(-3), Some(1005), false, false)),
+        ),
+        (
+            "ENST1:c.150+10_151-10delinsA",
+            "-1",
+            Some((VariantType::Spanning, None, None, true, false)),
+        ),
+        (
+            "ENST1:c.500-2_500-1del",
+            "-1",
+            Some((
+                VariantType::AcceptorRegion,
+                Some(-1),
+                Some(1000),
+                false,
+                true,
+            )),
+        ),
     ];
-    const POSITION_ERRORS: &[(&str, &str)] = &[
-        ("ENST1:c.100+0A>G", "1"),
-        ("ENST1:c.100+0A>G", "-1"),
-    ];
-// strand 0: ENST1:c.10-3_10-1del raises ValueError
-// strand 0: ENST1:c.116+1G>A None
-// strand 0: ENST1:c.3354-1del None
+    const POSITION_ERRORS: &[(&str, &str)] =
+        &[("ENST1:c.100+0A>G", "1"), ("ENST1:c.100+0A>G", "-1")];
+    // strand 0: ENST1:c.10-3_10-1del raises ValueError
+    // strand 0: ENST1:c.116+1G>A None
+    // strand 0: ENST1:c.3354-1del None
     // (hgvsc, consequence, expected) from _touches_canonical_splice_site
     const TOUCHES: &[(&str, &str, bool)] = &[
         ("ENST1:c.116+1G>A", "splice_donor_variant", true),
         ("ENST1:c.116+1G>A", "splice_acceptor_variant", false),
-        ("ENST1:c.116+1G>A", "splice_donor_variant&splice_acceptor_variant", true),
+        (
+            "ENST1:c.116+1G>A",
+            "splice_donor_variant&splice_acceptor_variant",
+            true,
+        ),
         ("ENST1:c.116+1G>A", "intron_variant", false),
         ("ENST1:c.116+2G>A", "splice_donor_variant", true),
         ("ENST1:c.116+2G>A", "splice_acceptor_variant", false),
-        ("ENST1:c.116+2G>A", "splice_donor_variant&splice_acceptor_variant", true),
+        (
+            "ENST1:c.116+2G>A",
+            "splice_donor_variant&splice_acceptor_variant",
+            true,
+        ),
         ("ENST1:c.116+2G>A", "intron_variant", false),
         ("ENST1:c.116+3G>A", "splice_donor_variant", false),
         ("ENST1:c.116+3G>A", "splice_acceptor_variant", false),
-        ("ENST1:c.116+3G>A", "splice_donor_variant&splice_acceptor_variant", false),
+        (
+            "ENST1:c.116+3G>A",
+            "splice_donor_variant&splice_acceptor_variant",
+            false,
+        ),
         ("ENST1:c.116+3G>A", "intron_variant", false),
         ("ENST1:c.116-1G>A", "splice_donor_variant", false),
         ("ENST1:c.116-1G>A", "splice_acceptor_variant", true),
-        ("ENST1:c.116-1G>A", "splice_donor_variant&splice_acceptor_variant", false),
+        (
+            "ENST1:c.116-1G>A",
+            "splice_donor_variant&splice_acceptor_variant",
+            false,
+        ),
         ("ENST1:c.116-1G>A", "intron_variant", true),
         ("ENST1:c.116-2G>A", "splice_donor_variant", false),
         ("ENST1:c.116-2G>A", "splice_acceptor_variant", true),
-        ("ENST1:c.116-2G>A", "splice_donor_variant&splice_acceptor_variant", false),
+        (
+            "ENST1:c.116-2G>A",
+            "splice_donor_variant&splice_acceptor_variant",
+            false,
+        ),
         ("ENST1:c.116-2G>A", "intron_variant", true),
         ("ENST1:c.116-3G>A", "splice_donor_variant", false),
         ("ENST1:c.116-3G>A", "splice_acceptor_variant", false),
-        ("ENST1:c.116-3G>A", "splice_donor_variant&splice_acceptor_variant", false),
+        (
+            "ENST1:c.116-3G>A",
+            "splice_donor_variant&splice_acceptor_variant",
+            false,
+        ),
         ("ENST1:c.116-3G>A", "intron_variant", false),
         ("ENST1:c.116+5_116+8del", "splice_donor_variant", false),
         ("ENST1:c.116+5_116+8del", "splice_acceptor_variant", false),
-        ("ENST1:c.116+5_116+8del", "splice_donor_variant&splice_acceptor_variant", false),
+        (
+            "ENST1:c.116+5_116+8del",
+            "splice_donor_variant&splice_acceptor_variant",
+            false,
+        ),
         ("ENST1:c.116+5_116+8del", "intron_variant", false),
         ("ENST1:c.116-5_116+2del", "splice_donor_variant", true),
         ("ENST1:c.116-5_116+2del", "splice_acceptor_variant", false),
-        ("ENST1:c.116-5_116+2del", "splice_donor_variant&splice_acceptor_variant", true),
+        (
+            "ENST1:c.116-5_116+2del",
+            "splice_donor_variant&splice_acceptor_variant",
+            true,
+        ),
         ("ENST1:c.116-5_116+2del", "intron_variant", false),
         ("ENST1:c.100_116+1del", "splice_donor_variant", true),
         ("ENST1:c.100_116+1del", "splice_acceptor_variant", true),
-        ("ENST1:c.100_116+1del", "splice_donor_variant&splice_acceptor_variant", true),
+        (
+            "ENST1:c.100_116+1del",
+            "splice_donor_variant&splice_acceptor_variant",
+            true,
+        ),
         ("ENST1:c.100_116+1del", "intron_variant", true),
         ("ENST1:c.100_101del", "splice_donor_variant", false),
         ("ENST1:c.100_101del", "splice_acceptor_variant", false),
-        ("ENST1:c.100_101del", "splice_donor_variant&splice_acceptor_variant", false),
+        (
+            "ENST1:c.100_101del",
+            "splice_donor_variant&splice_acceptor_variant",
+            false,
+        ),
         ("ENST1:c.100_101del", "intron_variant", false),
         ("ENST1:c.-5+1A>G", "splice_donor_variant", false),
         ("ENST1:c.-5+1A>G", "splice_acceptor_variant", false),
-        ("ENST1:c.-5+1A>G", "splice_donor_variant&splice_acceptor_variant", false),
+        (
+            "ENST1:c.-5+1A>G",
+            "splice_donor_variant&splice_acceptor_variant",
+            false,
+        ),
         ("ENST1:c.-5+1A>G", "intron_variant", false),
         ("ENST1:c.*5+1A>G", "splice_donor_variant", false),
         ("ENST1:c.*5+1A>G", "splice_acceptor_variant", false),
-        ("ENST1:c.*5+1A>G", "splice_donor_variant&splice_acceptor_variant", false),
+        (
+            "ENST1:c.*5+1A>G",
+            "splice_donor_variant&splice_acceptor_variant",
+            false,
+        ),
         ("ENST1:c.*5+1A>G", "intron_variant", false),
         ("ENST1:c.116+01G>A", "splice_donor_variant", true),
         ("ENST1:c.116+01G>A", "splice_acceptor_variant", false),
-        ("ENST1:c.116+01G>A", "splice_donor_variant&splice_acceptor_variant", true),
+        (
+            "ENST1:c.116+01G>A",
+            "splice_donor_variant&splice_acceptor_variant",
+            true,
+        ),
         ("ENST1:c.116+01G>A", "intron_variant", false),
         ("ENST1:c.116+1_116+2del", "splice_donor_variant", true),
         ("ENST1:c.116+1_116+2del", "splice_acceptor_variant", false),
-        ("ENST1:c.116+1_116+2del", "splice_donor_variant&splice_acceptor_variant", true),
+        (
+            "ENST1:c.116+1_116+2del",
+            "splice_donor_variant&splice_acceptor_variant",
+            true,
+        ),
         ("ENST1:c.116+1_116+2del", "intron_variant", false),
         ("ENST1:c.9-2_10del", "splice_donor_variant", true),
         ("ENST1:c.9-2_10del", "splice_acceptor_variant", true),
-        ("ENST1:c.9-2_10del", "splice_donor_variant&splice_acceptor_variant", true),
+        (
+            "ENST1:c.9-2_10del",
+            "splice_donor_variant&splice_acceptor_variant",
+            true,
+        ),
         ("ENST1:c.9-2_10del", "intron_variant", true),
         ("ENST1:c.9-2_9-1_10del", "splice_donor_variant", false),
         ("ENST1:c.9-2_9-1_10del", "splice_acceptor_variant", true),
-        ("ENST1:c.9-2_9-1_10del", "splice_donor_variant&splice_acceptor_variant", false),
+        (
+            "ENST1:c.9-2_9-1_10del",
+            "splice_donor_variant&splice_acceptor_variant",
+            false,
+        ),
         ("ENST1:c.9-2_9-1_10del", "intron_variant", true),
         ("ENST1:c.88+0A>G", "splice_donor_variant", false),
         ("ENST1:c.88+0A>G", "splice_acceptor_variant", false),
-        ("ENST1:c.88+0A>G", "splice_donor_variant&splice_acceptor_variant", false),
+        (
+            "ENST1:c.88+0A>G",
+            "splice_donor_variant&splice_acceptor_variant",
+            false,
+        ),
         ("ENST1:c.88+0A>G", "intron_variant", false),
         ("", "splice_donor_variant", false),
         ("", "splice_acceptor_variant", false),
@@ -1957,7 +2327,11 @@ mod tests {
         ("", "intron_variant", false),
         ("no colon c.116+1G>A", "splice_donor_variant", false),
         ("no colon c.116+1G>A", "splice_acceptor_variant", false),
-        ("no colon c.116+1G>A", "splice_donor_variant&splice_acceptor_variant", false),
+        (
+            "no colon c.116+1G>A",
+            "splice_donor_variant&splice_acceptor_variant",
+            false,
+        ),
         ("no colon c.116+1G>A", "intron_variant", false),
     ];
 
@@ -2080,7 +2454,13 @@ mod tests {
                 }
             }
         }
-        assert_eq!(stopped, expected.iter().filter(|line| line.starts_with("ERROR")).count());
+        assert_eq!(
+            stopped,
+            expected
+                .iter()
+                .filter(|line| line.starts_with("ERROR"))
+                .count()
+        );
     }
 
     #[test]
@@ -2097,7 +2477,10 @@ mod tests {
             last_exon_only: false,
         };
         let zeros = [result(Offset::Zero), result(Offset::Zero)];
-        assert_eq!(offset_column(&zeros, |r| r.gain_offset), Column::Int(vec![0, 0]));
+        assert_eq!(
+            offset_column(&zeros, |r| r.gain_offset),
+            Column::Int(vec![0, 0])
+        );
         let mixed = [result(Offset::Zero), result(Offset::Value(-3.0))];
         assert_eq!(
             offset_column(&mixed, |r| r.gain_offset),
@@ -2109,8 +2492,14 @@ mod tests {
     fn options_are_read_like_argparse() {
         let args = |items: &[&str]| -> Vec<String> { strings(items) };
         let required = [
-            "--anno_table", "t.tsv", "--transcript_domain_map", "m.pkl", "--intolerant_domains",
-            "d.pkl.gz", "--interpro_entry_map_pkl", "i.pkl.gz",
+            "--anno_table",
+            "t.tsv",
+            "--transcript_domain_map",
+            "m.pkl",
+            "--intolerant_domains",
+            "d.pkl.gz",
+            "--interpro_entry_map_pkl",
+            "i.pkl.gz",
         ];
         let Parsed::Run(options) = parse_options(&args(&required)).unwrap() else {
             panic!("a complete command line runs")
@@ -2135,7 +2524,9 @@ mod tests {
         let mut dash = required.to_vec();
         dash.extend(["--threads", "-x"]);
         assert!(parse_options(&args(&dash)).is_err());
-        assert!(is_negative_number("-5") && is_negative_number("-.5") && is_negative_number("-5.5"));
+        assert!(
+            is_negative_number("-5") && is_negative_number("-.5") && is_negative_number("-5.5")
+        );
         assert!(!is_negative_number("-") && !is_negative_number("-5.") && !is_negative_number("5"));
     }
 }

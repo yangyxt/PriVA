@@ -69,7 +69,9 @@ struct ConfigValues {
 }
 
 fn unsupported(why: &str) -> Box<dyn std::error::Error> {
-    invalid(format!("the config uses YAML this reader does not handle: {why}"))
+    invalid(format!(
+        "the config uses YAML this reader does not handle: {why}"
+    ))
 }
 
 /// The text of a YAML scalar on one line: quoted, plain, or null.
@@ -141,7 +143,9 @@ fn scalar(raw: &str, key: &str) -> Result<Option<String>> {
     if matches!(
         lower.as_str(),
         "true" | "false" | "yes" | "no" | "on" | "off" | "y" | "n"
-    ) || (plain.bytes().all(|b| b.is_ascii_digit() || b"+-._eE".contains(&b))
+    ) || (plain
+        .bytes()
+        .all(|b| b.is_ascii_digit() || b"+-._eE".contains(&b))
         && plain.bytes().any(|b| b.is_ascii_digit()))
     {
         return Err(unsupported(&format!("a non-text value for {key}")));
@@ -162,8 +166,13 @@ fn read_config(path: Option<&str>) -> Result<ConfigValues> {
             None | Some('#') => continue,
             Some('\t') => return Err(unsupported("a tab at the start of a line")),
             Some(' ') => continue,
-            Some('-' | '?' | '[' | '{' | '&' | '*' | '!' | '|' | '>' | '\'' | '"' | '%' | '@' | '`') => {
-                return Err(unsupported(&format!("line {} starts with an indicator", number + 1)));
+            Some(
+                '-' | '?' | '[' | '{' | '&' | '*' | '!' | '|' | '>' | '\'' | '"' | '%' | '@' | '`',
+            ) => {
+                return Err(unsupported(&format!(
+                    "line {} starts with an indicator",
+                    number + 1
+                )));
             }
             _ => {}
         }
@@ -172,21 +181,28 @@ fn read_config(path: Option<&str>) -> Result<ConfigValues> {
         }
         let (key, rest) = match line.find(':') {
             Some(position)
-                if position + 1 == line.len()
-                    || line[position + 1..].starts_with([' ', '\t']) =>
+                if position + 1 == line.len() || line[position + 1..].starts_with([' ', '\t']) =>
             {
                 (&line[..position], &line[position + 1..])
             }
-            _ => return Err(unsupported(&format!("line {} is not a key: value line", number + 1))),
+            _ => {
+                return Err(unsupported(&format!(
+                    "line {} is not a key: value line",
+                    number + 1
+                )));
+            }
         };
         let key = key.trim_end();
-        if matches!(key, "spliceai_snv_prescore" | "spliceai_indel_prescore" | "assembly") {
+        if matches!(
+            key,
+            "spliceai_snv_prescore" | "spliceai_indel_prescore" | "assembly"
+        ) {
             let value = scalar(rest, key)?;
             // A key with no value whose next line is indented holds a nested section.
             if value.is_none() && rest.trim().is_empty() {
-                let next = lines[number + 1..]
-                    .iter()
-                    .find(|candidate| !candidate.trim().is_empty() && !candidate.trim_start().starts_with('#'));
+                let next = lines[number + 1..].iter().find(|candidate| {
+                    !candidate.trim().is_empty() && !candidate.trim_start().starts_with('#')
+                });
                 if next.is_some_and(|candidate| candidate.starts_with([' ', '\t'])) {
                     return Err(unsupported(&format!("{key} holds a nested section")));
                 }
@@ -261,9 +277,15 @@ fn complete_path(path: &str) -> Result<std::path::PathBuf> {
             _ => false,
         })
     };
-    require(!named(&absolute), &format!("Incomplete/staging input path: {path}"))?;
+    require(
+        !named(&absolute),
+        &format!("Incomplete/staging input path: {path}"),
+    )?;
     let resolved = fs::canonicalize(path)?;
-    require(!named(&resolved), &format!("Incomplete/staging input target: {path}"))?;
+    require(
+        !named(&resolved),
+        &format!("Incomplete/staging input target: {path}"),
+    )?;
     let metadata = fs::metadata(&resolved)?;
     require(
         metadata.is_file() && metadata.len() > 0,
@@ -510,7 +532,9 @@ fn inspect_header(path: &str) -> Result<Header> {
             }
             let version_ok = line
                 .strip_prefix("##fileformat=VCFv4.")
-                .is_some_and(|minor| minor.len() == 1 && matches!(minor.as_bytes()[0], b'0'..=b'5'));
+                .is_some_and(|minor| {
+                    minor.len() == 1 && matches!(minor.as_bytes()[0], b'0'..=b'5')
+                });
             require(
                 version_ok,
                 "Unsupported cache header: expected VCF or exact 84-column SpliceAI2 TSV",
@@ -576,7 +600,10 @@ fn inspect_header(path: &str) -> Result<Header> {
         assemblies.dedup();
         versions.sort_unstable();
         versions.dedup();
-        require(assemblies.len() <= 1, "Conflicting assembly metadata in VCF header")?;
+        require(
+            assemblies.len() <= 1,
+            "Conflicting assembly metadata in VCF header",
+        )?;
         require(versions.len() <= 1, "Conflicting SpliceAI version metadata")?;
         let version_two = versions.contains(&2);
         require(
@@ -589,10 +616,11 @@ fn inspect_header(path: &str) -> Result<Header> {
             } else {
                 Format::VcfV1
             },
-            assembly: assemblies
-                .first()
-                .copied()
-                .or(if version_two { Some("GRCh38") } else { None }),
+            assembly: assemblies.first().copied().or(if version_two {
+                Some("GRCh38")
+            } else {
+                None
+            }),
         });
         break;
     }
@@ -680,7 +708,8 @@ mod tests {
     use std::io::Write;
 
     fn temporary(name: &str, bytes: &[u8]) -> String {
-        let path = std::env::temp_dir().join(format!("priva_cutoffs_{}_{name}", std::process::id()));
+        let path =
+            std::env::temp_dir().join(format!("priva_cutoffs_{}_{name}", std::process::id()));
         File::create(&path).unwrap().write_all(bytes).unwrap();
         path.to_string_lossy().into_owned()
     }
@@ -706,7 +735,12 @@ mod tests {
             assert!(read_config(Some(&path)).is_err(), "{refused}");
         }
         assert!(read_config(None).unwrap().snv.is_none());
-        assert!(read_config(Some("/definitely/not/here.yaml")).unwrap().snv.is_none());
+        assert!(
+            read_config(Some("/definitely/not/here.yaml"))
+                .unwrap()
+                .snv
+                .is_none()
+        );
     }
 
     #[test]
@@ -718,7 +752,10 @@ mod tests {
 
     #[test]
     fn header_parts_follow_the_python_regular_expressions() {
-        assert_eq!(assemblies_in("hg19 and GRCh38.p1").unwrap(), ["GRCh37", "GRCh38"]);
+        assert_eq!(
+            assemblies_in("hg19 and GRCh38.p1").unwrap(),
+            ["GRCh37", "GRCh38"]
+        );
         assert!(assemblies_in("xhg19 hg191").unwrap().is_empty());
         let contig: Vec<char> = "ID=chr1,length=5,assembly=\"GRCh38\"".chars().collect();
         assert_eq!(contig_assemblies(&contig), ["\"GRCh38\""]);
@@ -732,7 +769,10 @@ mod tests {
         assert!(is_dotted_version("2.1.0", &['2']));
         assert!(!is_dotted_version("2.", &['2']));
         assert!(!is_dotted_version("3", &['1', '2']));
-        assert_eq!(metadata("##source=a=b").unwrap(), ("source".to_owned(), "a=b".to_owned()));
+        assert_eq!(
+            metadata("##source=a=b").unwrap(),
+            ("source".to_owned(), "a=b".to_owned())
+        );
         assert!(metadata("##source=").is_err());
         assert!(metadata("##INFO=<ID=A,Description=\"x\">").is_ok());
         assert!(metadata("##INFO=<ID=A,Description=\"x>").is_err());
@@ -756,12 +796,32 @@ mod tests {
             temporary("run.yaml", text.as_bytes())
         };
         let cutoffs = |path: &str| cutoffs_for_config(Some(path));
-        assert_eq!(cutoffs(&config(&v1, &v1, "hg38")).unwrap().splice_altering, 0.8);
-        assert_eq!(cutoffs(&config(&v2, &v2, "hg38")).unwrap().splice_altering, 0.5);
-        assert_eq!(cutoffs(&config(&v2, &v2, "hg38")).unwrap().nearby_acceptor_rescue, 0.25);
-        assert!(cutoffs(&config(&v1, &v2, "hg38")).is_err(), "different versions");
-        assert!(cutoffs(&config(&v1, &v1, "hg19")).is_err(), "assembly differs");
-        assert!(cutoffs(&config(&v2, &v2, "hg19")).is_err(), "SpliceAI2 is GRCh38 only");
+        assert_eq!(
+            cutoffs(&config(&v1, &v1, "hg38")).unwrap().splice_altering,
+            0.8
+        );
+        assert_eq!(
+            cutoffs(&config(&v2, &v2, "hg38")).unwrap().splice_altering,
+            0.5
+        );
+        assert_eq!(
+            cutoffs(&config(&v2, &v2, "hg38"))
+                .unwrap()
+                .nearby_acceptor_rescue,
+            0.25
+        );
+        assert!(
+            cutoffs(&config(&v1, &v2, "hg38")).is_err(),
+            "different versions"
+        );
+        assert!(
+            cutoffs(&config(&v1, &v1, "hg19")).is_err(),
+            "assembly differs"
+        );
+        assert!(
+            cutoffs(&config(&v2, &v2, "hg19")).is_err(),
+            "SpliceAI2 is GRCh38 only"
+        );
         assert!(cutoffs(&config(&v2, "", "hg38")).is_ok());
     }
 }

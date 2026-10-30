@@ -144,7 +144,9 @@ pub(crate) struct DomainInfo<'a> {
 pub(crate) fn data_directory() -> PathBuf {
     match std::env::var_os("PRIVA_DATA_DIR") {
         Some(folder) if !folder.is_empty() => PathBuf::from(folder),
-        _ => Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("data"),
+        _ => Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("data"),
     }
 }
 
@@ -233,7 +235,10 @@ impl JsonParser<'_> {
             self.position += word.len();
             Ok(value)
         } else {
-            Err(invalid(format!("JSON: unexpected text at byte {}", self.position)))
+            Err(invalid(format!(
+                "JSON: unexpected text at byte {}",
+                self.position
+            )))
         }
     }
 
@@ -246,7 +251,10 @@ impl JsonParser<'_> {
             Some(b'f') => self.keyword("false", Json::Bool(false)),
             Some(b'n') => self.keyword("null", Json::Null),
             Some(b'-' | b'0'..=b'9') => self.number(),
-            _ => Err(invalid(format!("JSON: unexpected text at byte {}", self.position))),
+            _ => Err(invalid(format!(
+                "JSON: unexpected text at byte {}",
+                self.position
+            ))),
         }
     }
 
@@ -273,7 +281,12 @@ impl JsonParser<'_> {
                     self.position += 1;
                     return Ok(Json::Object(pairs));
                 }
-                _ => return Err(invalid(format!("JSON: expected , or }} at byte {}", self.position))),
+                _ => {
+                    return Err(invalid(format!(
+                        "JSON: expected , or }} at byte {}",
+                        self.position
+                    )));
+                }
             }
         }
     }
@@ -296,7 +309,12 @@ impl JsonParser<'_> {
                     self.position += 1;
                     return Ok(Json::Array(items));
                 }
-                _ => return Err(invalid(format!("JSON: expected , or ] at byte {}", self.position))),
+                _ => {
+                    return Err(invalid(format!(
+                        "JSON: expected , or ] at byte {}",
+                        self.position
+                    )));
+                }
             }
         }
     }
@@ -456,8 +474,9 @@ struct Pattern {
 
 impl Pattern {
     fn compile(pattern: &str) -> Lookup<Pattern> {
-        let unsupported =
-            |why: &str| format!("the regular expression {pattern:?} is outside the supported subset ({why})");
+        let unsupported = |why: &str| {
+            format!("the regular expression {pattern:?} is outside the supported subset ({why})")
+        };
         let chars: Vec<char> = pattern.chars().collect();
         let mut items = Vec::new();
         let mut groups = 0;
@@ -596,7 +615,8 @@ fn run(
         }
         Item::End => {
             // `$` matches at the end, or before one final line break.
-            let at_end = position == text.len() || (position + 1 == text.len() && text[position] == '\n');
+            let at_end =
+                position == text.len() || (position + 1 == text.len() && text[position] == '\n');
             at_end && run(rest, text, position, spans, starts, end)
         }
         Item::Atom(atom, minimum, maximum) => {
@@ -794,7 +814,9 @@ impl DomainNormalizer {
             .ok_or_else(|| "KeyError: '__default__'".to_owned())?;
         let rule = self.vep_to_interpro_rules.get(database).unwrap_or(default);
         if !matches!(rule, Json::Object(_)) {
-            return Err(format!("the accession rule for {database} is not an object"));
+            return Err(format!(
+                "the accession rule for {database} is not an object"
+            ));
         }
         let rule_type = rule.get("rule_type").and_then(Json::as_text);
         let mut normalized = accession.to_owned();
@@ -889,11 +911,9 @@ impl DomainNormalizer {
         mapping: &InterproMapping,
     ) -> Lookup<Functionality> {
         let info = self.query_interpro_entry_vep_anno(annotation, mapping)?;
-        if info
-            .vep_domains
-            .iter()
-            .any(|domain| FUNCTIONAL_PREDICTED_DOMAINS.contains(&domain.split(':').next().unwrap_or("")))
-        {
+        if info.vep_domains.iter().any(|domain| {
+            FUNCTIONAL_PREDICTED_DOMAINS.contains(&domain.split(':').next().unwrap_or(""))
+        }) {
             return Ok(Functionality::Functional);
         }
         match info.interpro_entries {
@@ -1045,13 +1065,30 @@ mod tests {
     #[test]
     fn accessions_are_normalised_by_the_curated_rules() {
         let norm = normalizer(&[]);
-        let pair = |database: &str, accession: &str| norm.normalize_vep_to_interpro(database, accession).unwrap();
-        assert_eq!(pair("Pfam", "PF00533"), Some(("PFAM".into(), "PF00533".into())));
-        assert_eq!(pair("PANTHER", "PTHR10000:SF12"), Some(("PANTHER".into(), "PTHR10000".into())));
+        let pair = |database: &str, accession: &str| {
+            norm.normalize_vep_to_interpro(database, accession).unwrap()
+        };
+        assert_eq!(
+            pair("Pfam", "PF00533"),
+            Some(("PFAM".into(), "PF00533".into()))
+        );
+        assert_eq!(
+            pair("PANTHER", "PTHR10000:SF12"),
+            Some(("PANTHER".into(), "PTHR10000".into()))
+        );
         assert_eq!(pair("PANTHER", "other"), None);
-        assert_eq!(pair("Gene3D", "1.10.8.10"), Some(("CATHGENE3D".into(), "G3DSA:1.10.8.10".into())));
-        assert_eq!(pair("Superfamily", "SSF46955"), Some(("SSF".into(), "SSF46955".into())));
-        assert_eq!(pair("TIGRFAM", "TIGR00001"), Some(("NCBIFAM".into(), "TIGR00001".into())));
+        assert_eq!(
+            pair("Gene3D", "1.10.8.10"),
+            Some(("CATHGENE3D".into(), "G3DSA:1.10.8.10".into()))
+        );
+        assert_eq!(
+            pair("Superfamily", "SSF46955"),
+            Some(("SSF".into(), "SSF46955".into()))
+        );
+        assert_eq!(
+            pair("TIGRFAM", "TIGR00001"),
+            Some(("NCBIFAM".into(), "TIGR00001".into()))
+        );
         assert_eq!(pair("Unheard", "x"), None);
         assert_eq!(pair("Pfam", ""), None);
         // The JSON's "comment" entries are real keys of the mapping.
@@ -1070,7 +1107,11 @@ mod tests {
         let greedy = Pattern::compile("a(.*)b(.?)$").unwrap();
         assert_eq!(
             greedy.match_start("axxbxb"),
-            Some(vec![Some("axxbxb".into()), Some("xxbx".into()), Some("".into())])
+            Some(vec![
+                Some("axxbxb".into()),
+                Some("xxbx".into()),
+                Some("".into())
+            ])
         );
         assert_eq!(
             greedy.match_start("ab"),
@@ -1083,7 +1124,9 @@ mod tests {
 
     #[test]
     fn json_is_read_like_python() {
-        let value = parse_json("{\"a\": [1, 2.5e1, \"x\\u00e9\\ud83d\\ude00\\n\", null, true], \"a\": {}}").unwrap();
+        let value =
+            parse_json("{\"a\": [1, 2.5e1, \"x\\u00e9\\ud83d\\ude00\\n\", null, true], \"a\": {}}")
+                .unwrap();
         assert_eq!(value.get("a"), Some(&Json::Object(Vec::new())));
         assert!(parse_json("{\"a\": 01}").is_err());
         assert!(parse_json("{\"a\": 1,}").is_err());
@@ -1114,9 +1157,15 @@ mod tests {
                 vec!["last".into()],
             ]
         );
-        assert_eq!(csv_rows("\"ab\"cd\te\t"), vec![vec!["abcd".to_owned(), "e".into(), String::new()]]);
+        assert_eq!(
+            csv_rows("\"ab\"cd\te\t"),
+            vec![vec!["abcd".to_owned(), "e".into(), String::new()]]
+        );
         // The end of the text closes an unfinished quoted field.
-        assert_eq!(csv_rows("a\t\"open"), vec![vec!["a".to_owned(), "open".into()]]);
+        assert_eq!(
+            csv_rows("a\t\"open"),
+            vec![vec!["a".to_owned(), "open".into()]]
+        );
         let rows = "id\ta\tb\tc\td\te\tf\tg\tstatus\nIPR1\t1\t2\t3\t4\t5\t6\t7\tyes\nIPR1\t1\t2\t3\t4\t5\t6\t7\tno\n";
         let curated = parse_curated_rows(rows).unwrap();
         assert_eq!(curated.get("IPR1").map(String::as_str), Some("no"));
@@ -1135,18 +1184,65 @@ mod tests {
         };
         // Curated status comes first.
         let curated: HashMap<String, String> = [("IPR9".to_owned(), "no".to_owned())].into();
-        assert!(!is_functional_domain(&entry("IPR9", "Domain", "Kinase", "Protein kinase", GoTerms::NotAList), Some(&curated)).unwrap());
+        assert!(
+            !is_functional_domain(
+                &entry(
+                    "IPR9",
+                    "Domain",
+                    "Kinase",
+                    "Protein kinase",
+                    GoTerms::NotAList
+                ),
+                Some(&curated)
+            )
+            .unwrap()
+        );
         // Rule 1: GO terms count only when each is a list.
-        assert!(plain("a", "b", "Domain", GoTerms::List(vec![go("molecular_function", "x")])));
-        assert!(plain("a", "b", "Domain", GoTerms::List(vec![go("biological_process", "Signaling pathway")])));
-        assert!(!plain("a", "b", "Domain", GoTerms::List(vec![go("biological_process", "pigment")])));
-        assert!(!plain("a", "b", "Domain", GoTerms::List(vec![GoTerm::Skipped])));
+        assert!(plain(
+            "a",
+            "b",
+            "Domain",
+            GoTerms::List(vec![go("molecular_function", "x")])
+        ));
+        assert!(plain(
+            "a",
+            "b",
+            "Domain",
+            GoTerms::List(vec![go("biological_process", "Signaling pathway")])
+        ));
+        assert!(!plain(
+            "a",
+            "b",
+            "Domain",
+            GoTerms::List(vec![go("biological_process", "pigment")])
+        ));
+        assert!(!plain(
+            "a",
+            "b",
+            "Domain",
+            GoTerms::List(vec![GoTerm::Skipped])
+        ));
         // Rule 2: names.
-        assert!(plain("Kringle", "Protein kinase-like", "Domain", GoTerms::NotAList));
+        assert!(plain(
+            "Kringle",
+            "Protein kinase-like",
+            "Domain",
+            GoTerms::NotAList
+        ));
         assert!(plain("x", "Serine hydrolase", "Domain", GoTerms::NotAList));
         assert!(plain("x", "Homeobox", "Domain", GoTerms::NotAList));
-        assert!(plain("x", "RNA helicase domain", "Domain", GoTerms::NotAList));
-        assert!(plain("x", "a DNA-binding thing", "Domain", GoTerms::NotAList));
+        assert!(plain(
+            "x",
+            "RNA helicase domain",
+            "Domain",
+            GoTerms::NotAList
+        ));
+        assert!(plain(
+            "x",
+            "a DNA-binding thing",
+            "Domain",
+            GoTerms::NotAList
+        ));
         assert!(!plain("x", "Plain thing", "Domain", GoTerms::NotAList));
         // Rule 3: type.
         assert!(plain("x", "Plain thing", "PTM", GoTerms::NotAList));
@@ -1159,8 +1255,28 @@ mod tests {
     fn functionality_follows_vep_predictions_then_interpro_entries() {
         let norm = normalizer(&[]);
         let mapping = InterproMapping::from_entries(vec![
-            ("PFAM", "PF1", vec![entry("IPR1", "Domain", "x", "Protein kinase", GoTerms::NotAList)]),
-            ("PFAM", "PF2", vec![entry("IPR2", "Family", "x", "Plain thing", GoTerms::NotAList)]),
+            (
+                "PFAM",
+                "PF1",
+                vec![entry(
+                    "IPR1",
+                    "Domain",
+                    "x",
+                    "Protein kinase",
+                    GoTerms::NotAList,
+                )],
+            ),
+            (
+                "PFAM",
+                "PF2",
+                vec![entry(
+                    "IPR2",
+                    "Family",
+                    "x",
+                    "Plain thing",
+                    GoTerms::NotAList,
+                )],
+            ),
             ("PFAM", "PF3", vec![InterproEntry::Unusable]),
         ]);
         let judge = |annotation: &str| norm.interpret_functionality(annotation, &mapping);
@@ -1168,10 +1284,22 @@ mod tests {
         assert_eq!(judge("Pfam:PF2"), Ok(Functionality::Unknown));
         assert_eq!(judge("Pfam:PF9"), Ok(Functionality::Missing));
         assert_eq!(judge("something odd"), Ok(Functionality::Missing));
-        assert_eq!(judge("Transmembrane_helices:TMhelix"), Ok(Functionality::Functional));
-        assert_eq!(judge("Low_complexity_(Seg):seg"), Ok(Functionality::Missing));
-        assert_eq!(judge("Low_complexity_(Seg):seg&Pfam:PF2"), Ok(Functionality::Unknown));
-        assert_eq!(judge("Pfam:PF3"), Err("ValueError: Invalid entry data format".to_owned()));
+        assert_eq!(
+            judge("Transmembrane_helices:TMhelix"),
+            Ok(Functionality::Functional)
+        );
+        assert_eq!(
+            judge("Low_complexity_(Seg):seg"),
+            Ok(Functionality::Missing)
+        );
+        assert_eq!(
+            judge("Low_complexity_(Seg):seg&Pfam:PF2"),
+            Ok(Functionality::Unknown)
+        );
+        assert_eq!(
+            judge("Pfam:PF3"),
+            Err("ValueError: Invalid entry data format".to_owned())
+        );
         // Entries are visited in sorted order, so the functional one answers first.
         assert_eq!(judge("Pfam:PF1&Pfam:PF3"), Ok(Functionality::Functional));
     }
@@ -1181,9 +1309,15 @@ mod tests {
         let norm = DomainNormalizer::new().unwrap();
         assert_eq!(norm.curated_functionality.len(), 47678);
         assert_eq!(
-            norm.curated_functionality.get("IPR000001").map(String::as_str),
+            norm.curated_functionality
+                .get("IPR000001")
+                .map(String::as_str),
             Some("yes")
         );
-        assert!(norm.normalize_vep_to_interpro("Pfam", "PF00001").unwrap().is_some());
+        assert!(
+            norm.normalize_vep_to_interpro("Pfam", "PF00001")
+                .unwrap()
+                .is_some()
+        );
     }
 }

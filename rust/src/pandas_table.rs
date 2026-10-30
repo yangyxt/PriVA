@@ -34,25 +34,8 @@ use std::sync::OnceLock;
 
 /// The spellings pandas reads as missing (`STR_NA_VALUES` of pandas 2.2).
 const NA_VALUES: [&str; 19] = [
-    "",
-    "#N/A",
-    "#N/A N/A",
-    "#NA",
-    "-1.#IND",
-    "-1.#QNAN",
-    "-NaN",
-    "-nan",
-    "1.#IND",
-    "1.#QNAN",
-    "<NA>",
-    "N/A",
-    "NA",
-    "NULL",
-    "NaN",
-    "None",
-    "n/a",
-    "nan",
-    "null",
+    "", "#N/A", "#N/A N/A", "#NA", "-1.#IND", "-1.#QNAN", "-NaN", "-nan", "1.#IND", "1.#QNAN",
+    "<NA>", "N/A", "NA", "NULL", "NaN", "None", "n/a", "nan", "null",
 ];
 
 /// One value of a table, as Python sees it in a row of `DataFrame.iterrows()`.
@@ -567,7 +550,9 @@ fn infer_column(tokens: Vec<String>) -> Result<Column> {
         if any_missing {
             return Ok(Column::BoolOrMissing(flags));
         }
-        return Ok(Column::Bool(flags.into_iter().map(|flag| flag == Some(true)).collect()));
+        return Ok(Column::Bool(
+            flags.into_iter().map(|flag| flag == Some(true)).collect(),
+        ));
     }
 
     // 4. Text.

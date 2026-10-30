@@ -265,7 +265,9 @@ pub(crate) fn load(bytes: &[u8]) -> Result<Value> {
             0x80 => {
                 let version = reader.byte()?;
                 if version > 5 {
-                    return Err(invalid(format!("pickle protocol {version} is not supported")));
+                    return Err(invalid(format!(
+                        "pickle protocol {version} is not supported"
+                    )));
                 }
             }
             0x95 => {
@@ -412,10 +414,9 @@ pub(crate) fn load(bytes: &[u8]) -> Result<Value> {
             }
             b'h' | b'j' => {
                 let index = reader.unsigned(if opcode == b'h' { 1 } else { 4 })?;
-                let item = memo
-                    .get(&index)
-                    .cloned()
-                    .ok_or_else(|| invalid(format!("BINGET at byte {offset} names an unset memo slot")))?;
+                let item = memo.get(&index).cloned().ok_or_else(|| {
+                    invalid(format!("BINGET at byte {offset} names an unset memo slot"))
+                })?;
                 stack.push(item);
             }
             _ => return Err(rejected(opcode, offset)),
@@ -486,7 +487,9 @@ mod tests {
         assert_eq!(value.length(), Some(9));
         let Value::Dict(dict) = value else { panic!() };
         let dict = dict.borrow();
-        let Value::List(ints) = entry(&dict, "ints") else { panic!() };
+        let Value::List(ints) = entry(&dict, "ints") else {
+            panic!()
+        };
         let ints: Vec<i64> = ints
             .borrow()
             .iter()
@@ -496,7 +499,9 @@ mod tests {
             })
             .collect();
         assert_eq!(ints, [0, 7, 300, 70000, 1 << 40, -5, -300, -(1 << 40)]);
-        let Value::Tuple(floats) = entry(&dict, "floats") else { panic!() };
+        let Value::Tuple(floats) = entry(&dict, "floats") else {
+            panic!()
+        };
         assert!(matches!(floats[0], Value::Float(number) if number == 0.1));
         assert!(matches!(floats[2], Value::Float(number) if number == f64::INFINITY));
         assert_eq!(entry(&dict, "text").as_str(), Some("é中"));
@@ -504,13 +509,21 @@ mod tests {
         assert_eq!(entry(&dict, "members").length(), Some(2));
         assert_eq!(entry(&dict, "frozen").type_name(), "frozenset");
         assert_eq!(entry(&dict, "flags").length(), Some(3));
-        let Value::Tuple(key) = &dict.entries[0].0 else { panic!() };
+        let Value::Tuple(key) = &dict.entries[0].0 else {
+            panic!()
+        };
         assert_eq!(key[0].as_str(), Some("PFAM"));
-        let Value::List(entries) = &dict.entries[0].1 else { panic!() };
+        let Value::List(entries) = &dict.entries[0].1 else {
+            panic!()
+        };
         let entries = entries.borrow();
-        let Value::Tuple(domain) = &entries[0] else { panic!() };
+        let Value::Tuple(domain) = &entries[0] else {
+            panic!()
+        };
         assert_eq!(domain.len(), 6);
-        let Value::List(go_terms) = &domain[4] else { panic!() };
+        let Value::List(go_terms) = &domain[4] else {
+            panic!()
+        };
         assert_eq!(go_terms.borrow().len(), 1);
     }
 
@@ -521,10 +534,16 @@ mod tests {
         let bytes = from_hex(
             "80049528000000000000007d94288c056669727374945d94284b014b02658c067365636f6e649468028c01749468028594752e",
         );
-        let Value::Dict(dict) = load(&bytes).unwrap() else { panic!() };
+        let Value::Dict(dict) = load(&bytes).unwrap() else {
+            panic!()
+        };
         let dict = dict.borrow();
-        let Value::List(first) = entry(&dict, "first") else { panic!() };
-        let Value::List(second) = entry(&dict, "second") else { panic!() };
+        let Value::List(first) = entry(&dict, "first") else {
+            panic!()
+        };
+        let Value::List(second) = entry(&dict, "second") else {
+            panic!()
+        };
         assert!(Rc::ptr_eq(first, second));
         assert_eq!(first.borrow().len(), 2);
     }
@@ -539,8 +558,13 @@ mod tests {
     #[test]
     fn anything_else_is_refused_by_name() {
         // GLOBAL builtins set, as protocol 2 writes a set.
-        let error = load(b"\x80\x02cbuiltins\nset\nq\x00.").unwrap_err().to_string();
-        assert!(error.contains("GLOBAL") && error.contains("byte 2"), "{error}");
+        let error = load(b"\x80\x02cbuiltins\nset\nq\x00.")
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("GLOBAL") && error.contains("byte 2"),
+            "{error}"
+        );
         assert!(load(b"\x80\x04N").is_err(), "no STOP");
         assert!(load(b"\x80\x06N.").is_err(), "protocol 6");
         assert!(load(b"not a pickle").is_err());
@@ -551,9 +575,12 @@ mod tests {
     fn dict_keys_follow_python_equality() {
         // {1: "a", 1.0: "b", True: "c"} is one entry whose key stays 1 and value is "c".
         let mut dict = Dict::default();
-        dict.insert(Value::Int(1), Value::Str(Rc::from("a"))).unwrap();
-        dict.insert(Value::Float(1.0), Value::Str(Rc::from("b"))).unwrap();
-        dict.insert(Value::Bool(true), Value::Str(Rc::from("c"))).unwrap();
+        dict.insert(Value::Int(1), Value::Str(Rc::from("a")))
+            .unwrap();
+        dict.insert(Value::Float(1.0), Value::Str(Rc::from("b")))
+            .unwrap();
+        dict.insert(Value::Bool(true), Value::Str(Rc::from("c")))
+            .unwrap();
         assert_eq!(dict.entries.len(), 1);
         assert!(matches!(dict.entries[0].0, Value::Int(1)));
         assert_eq!(dict.entries[0].1.as_str(), Some("c"));

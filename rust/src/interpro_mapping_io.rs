@@ -106,7 +106,9 @@ fn entry_from_value(value: &Value) -> InterproEntry {
         return InterproEntry::Unusable;
     };
     let go_terms = match &fields[4] {
-        Value::List(items) => GoTerms::List(items.borrow().iter().map(go_term_from_value).collect()),
+        Value::List(items) => {
+            GoTerms::List(items.borrow().iter().map(go_term_from_value).collect())
+        }
         _ => GoTerms::NotAList,
     };
     InterproEntry::Usable(UsableEntry {
@@ -221,7 +223,10 @@ pub(crate) fn inspect_mapping(path: &str) -> Result<String> {
 }
 
 pub(crate) fn dispatch(args: &[String]) -> Result<()> {
-    if args == ["--help"] || args == ["-h"] || args == ["inspect", "--help"] || args == ["inspect", "-h"]
+    if args == ["--help"]
+        || args == ["-h"]
+        || args == ["inspect", "--help"]
+        || args == ["inspect", "-h"]
     {
         println!("{USAGE}");
         return Ok(());
@@ -317,7 +322,9 @@ mod tests {
             panic!("a six-item tuple of text and a list is usable")
         };
         assert_eq!(usable.id, "IPR000001");
-        let GoTerms::List(terms) = &usable.go_terms else { panic!() };
+        let GoTerms::List(terms) = &usable.go_terms else {
+            panic!()
+        };
         assert!(matches!(terms[0], GoTerm::Skipped));
         assert!(matches!(
             &terms[1],
@@ -325,7 +332,10 @@ mod tests {
         ));
         let short = Value::Tuple(Rc::new(vec![text("a"), text("b")]));
         assert!(matches!(entry_from_value(&short), InterproEntry::Unusable));
-        assert!(matches!(entry_from_value(&text("x")), InterproEntry::Unusable));
+        assert!(matches!(
+            entry_from_value(&text("x")),
+            InterproEntry::Unusable
+        ));
     }
 
     #[test]
@@ -334,7 +344,10 @@ mod tests {
             .join("InterPro")
             .join("Interpro_entry_mapping.pkl.gz");
         let line = inspect_mapping(&path.to_string_lossy()).unwrap();
-        assert!(line.starts_with("{\"entries\": 60301, \"input\": "), "{line}");
+        assert!(
+            line.starts_with("{\"entries\": 60301, \"input\": "),
+            "{line}"
+        );
         assert!(line.ends_with("\"value_type\": \"dict\"}"), "{line}");
         let mapping = load_interpro_mapping(&path).unwrap();
         let entries = mapping.get("PFAM", "PF00001").unwrap();

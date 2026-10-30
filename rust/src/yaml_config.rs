@@ -3,7 +3,10 @@
 //! It handles what those files contain and refuses everything else loudly
 //! instead of guessing:
 //! - a block mapping at column 0 whose keys are plain names (letters, digits,
-//!   `_`, `.`, `-`), with `#` comments and blank lines;
+//!   `_`, `.`, `-`) or double- or single-quoted names on one line (spaces may
+//!   come between a name and its colon), with `#`
+//!   comments and blank lines, after at most one byte order mark and one
+//!   `---` line (the scanner skips the mark and it takes no column);
 //! - values that are plain, single-quoted or double-quoted scalars on one
 //!   line, resolved to a null, a boolean, an integer, another typed scalar or
 //!   a string the way PyYAML's `safe_load` does;
@@ -12,9 +15,12 @@
 //!   (kept as text, since callers only need to leave them untouched);
 //! - the byte span of each scalar value, so a caller can replace just that
 //!   span and keep every comment, quote and line ending around it.
-//! Anything else (anchors, tags, block scalars, multi-line scalars, tabs,
-//! quoted keys, several documents, deeper nesting) is reported as
-//! `Unsupported`; text PyYAML itself would refuse is `Invalid`.
+//! Anything else (anchors, aliases, tags, block scalars, multi-line scalars,
+//! keys with spaces or other punctuation, deeper nesting) is reported as
+//! `Unsupported`: it may be valid YAML that this reader chooses not to guess
+//! at, so callers must refuse it loudly. Text PyYAML itself refuses (a tab where
+//! a token starts, a second `---` document, a flow list that is not closed)
+//! is `Invalid`.
 use crate::json_text;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -35,10 +41,113 @@ impl Scalar {
             Scalar::Null => "None".to_owned(),
             Scalar::Bool(true) => "True".to_owned(),
             Scalar::Bool(false) => "False".to_owned(),
-            Scalar::Int(text) | Scalar::Other(text) => text.clone(),
+            Scalar::Int(text) => text.clone(),
+            Scalar::Other(text) => other_repr(text),
             Scalar::Str(text) => python_str_repr(text),
         }
     }
+
+    /// `type(value).__name__` of the value `safe_load` would produce.
+    pub(crate) fn python_type_name(&self) -> &'static str {
+        match self {
+            Scalar::Null => "NoneType",
+            Scalar::Bool(_) => "bool",
+            Scalar::Int(_) => "int",
+            Scalar::Str(_) => "str",
+            Scalar::Other(text) => {
+                if is_float(text) {
+                    "float"
+                } else if is_timestamp(text) {
+                    if text.len() == 10 { "date" } else { "datetime" }
+                } else {
+                    "int"
+                }
+            }
+        }
+    }
+}
+
+/// `repr()` of an integer written in another base or with `:` groups, of a
+/// float, or of a date, as PyYAML's constructors build them. A timestamp with a
+/// time of day and the merge and value markers (`<<`, `=`) are given as written.
+fn other_repr(text: &str) -> String {
+    if is_float(text) {
+        if let Some(value) = float_value(text) {
+            return crate::json_text::python_float_repr(value);
+        }
+    } else if is_other_integer(text) {
+        if let Some(value) = integer_value(text) {
+            return value.to_string();
+        }
+    } else if is_timestamp(text) && text.len() == 10 {
+        let number = |part: &str| part.parse::<u32>().ok();
+        if let (Some(year), Some(month), Some(day)) = (
+            number(&text[..4]),
+            number(&text[5..7]),
+            number(&text[8..10]),
+        ) {
+            return format!("datetime.date({year}, {month}, {day})");
+        }
+    }
+    text.to_owned()
+}
+
+/// `construct_yaml_float`
+fn float_value(text: &str) -> Option<f64> {
+    let cleaned: String = text
+        .chars()
+        .filter(|c| *c != '_')
+        .collect::<String>()
+        .to_lowercase();
+    let (sign, body) = match cleaned.strip_prefix('-') {
+        Some(rest) => (-1.0, rest),
+        None => (1.0, cleaned.strip_prefix('+').unwrap_or(&cleaned)),
+    };
+    let value = if body == ".inf" {
+        f64::INFINITY
+    } else if body == ".nan" {
+        f64::NAN
+    } else if body.contains(':') {
+        let mut total = 0.0;
+        let mut base = 1.0;
+        for part in body.split(':').rev() {
+            total += part.parse::<f64>().ok()? * base;
+            base *= 60.0;
+        }
+        total
+    } else {
+        body.parse::<f64>().ok()?
+    };
+    Some(sign * value)
+}
+
+/// `construct_yaml_int` for the forms that are not plain decimal numbers.
+fn integer_value(text: &str) -> Option<i128> {
+    let cleaned: String = text.chars().filter(|c| *c != '_').collect();
+    let (sign, body) = match cleaned.strip_prefix('-') {
+        Some(rest) => (-1, rest),
+        None => (1, cleaned.strip_prefix('+').unwrap_or(&cleaned)),
+    };
+    let value = if body == "0" {
+        0
+    } else if let Some(digits) = body.strip_prefix("0b") {
+        i128::from_str_radix(digits, 2).ok()?
+    } else if let Some(digits) = body.strip_prefix("0x") {
+        i128::from_str_radix(digits, 16).ok()?
+    } else if body.starts_with('0') {
+        i128::from_str_radix(body, 8).ok()?
+    } else if body.contains(':') {
+        let mut total: i128 = 0;
+        let mut base: i128 = 1;
+        for part in body.split(':').rev() {
+            total += part.parse::<i128>().ok()? * base;
+            base *= 60;
+        }
+        total
+    } else {
+        body.parse::<i128>().ok()?
+    };
+    Some(sign * value)
 }
 
 /// Python's `repr()` of a string: single quotes unless the text holds a single
@@ -76,6 +185,85 @@ pub(crate) enum ConfigValue {
     Scalar(Scalar),
     /// A nested block or a flow list, kept as the text it was written as.
     Opaque(String),
+}
+
+impl ConfigValue {
+    /// Python's `repr()` of the value `safe_load` would produce: a list or dict
+    /// of resolved scalars for a nested block or a flow list.
+    pub(crate) fn python_repr(&self) -> String {
+        match self {
+            ConfigValue::Scalar(scalar) => scalar.python_repr(),
+            ConfigValue::Opaque(text) => opaque_repr(text).unwrap_or_else(|| text.clone()),
+        }
+    }
+
+    /// `type(value).__name__`
+    pub(crate) fn python_type_name(&self) -> &'static str {
+        match self {
+            ConfigValue::Scalar(scalar) => scalar.python_type_name(),
+            ConfigValue::Opaque(text) => {
+                let first = text.trim_start().chars().next();
+                let is_list = text.starts_with('[') || first == Some('-');
+                if is_list { "list" } else { "dict" }
+            }
+        }
+    }
+}
+
+/// The scalar a one-line nested entry holds.
+fn entry_scalar(entry: &str) -> Option<Scalar> {
+    match inline_value(entry) {
+        Ok((ConfigValue::Scalar(scalar), _)) => Some(scalar),
+        _ => None,
+    }
+}
+
+/// `repr()` of the list or dict an opaque value stands for.
+fn opaque_repr(text: &str) -> Option<String> {
+    if text == "{}" {
+        return Some("{}".to_owned());
+    }
+    if let Some(inner) = text
+        .strip_prefix('[')
+        .and_then(|rest| rest.strip_suffix(']'))
+    {
+        let mut items: Vec<&str> = inner.split(',').collect();
+        if items.len() > 1 && items[items.len() - 1].trim().is_empty() {
+            items.pop();
+        }
+        if items.len() == 1 && items[0].trim().is_empty() {
+            return Some("[]".to_owned());
+        }
+        let parts: Vec<String> = items
+            .iter()
+            .map(|item| resolve_plain(item.trim()).python_repr())
+            .collect();
+        return Some(format!("[{}]", parts.join(", ")));
+    }
+    let lines = split_lines(text);
+    let mut list: Vec<String> = Vec::new();
+    let mut pairs: Vec<(String, String)> = Vec::new();
+    for line in lines.iter().filter(|line| !line.is_skippable()) {
+        let content = &line.text[line.indent..];
+        if line.is_list_item() {
+            let entry = content[1..].trim_start_matches(' ');
+            list.push(entry_scalar(entry)?.python_repr());
+        } else {
+            let length = key_length(content)?;
+            let key = resolve_plain(content[..length].trim_end_matches(' ')).python_repr();
+            let value = entry_scalar(content[length + 1..].trim_start_matches(' '))?.python_repr();
+            // A repeated key keeps its first position and its last value.
+            match pairs.iter_mut().find(|(name, _)| *name == key) {
+                Some(slot) => slot.1 = value,
+                None => pairs.push((key, value)),
+            }
+        }
+    }
+    if !list.is_empty() {
+        return Some(format!("[{}]", list.join(", ")));
+    }
+    let parts: Vec<String> = pairs.iter().map(|(k, v)| format!("{k}: {v}")).collect();
+    Some(format!("{{{}}}", parts.join(", ")))
 }
 
 #[derive(Debug, Clone)]
@@ -210,15 +398,40 @@ fn is_printable(c: char) -> bool {
 
 /// Reads a configuration file's text.
 pub(crate) fn parse_config(text: &str) -> Result<Parsed, YamlError> {
-    if text.starts_with('\u{feff}') {
-        return unsupported("a byte order mark");
+    // PyYAML skips one byte order mark at the very start of the text. The
+    // mark counts as a character in the positions it reports but not as a
+    // column, so the rest is read as if it were not there and the byte spans
+    // are moved back by the mark's length.
+    if let Some(body) = text.strip_prefix('\u{feff}') {
+        let mark = '\u{feff}'.len_utf8();
+        return Ok(match parse_body(body)? {
+            Parsed::Mapping(mut document) => {
+                for entry in &mut document.entries {
+                    entry.value_start += mark;
+                    entry.value_end += mark;
+                }
+                Parsed::Mapping(document)
+            }
+            other => other,
+        });
     }
+    parse_body(text)
+}
+
+/// A `---` line, alone or followed only by a comment.
+fn is_document_start(line: &Line<'_>) -> bool {
+    if line.indent != 0 {
+        return false;
+    }
+    let content = line.text.trim_end_matches(' ');
+    content == "---"
+        || (content.starts_with("--- ") && content[4..].trim_start_matches(' ').starts_with('#'))
+}
+
+fn parse_body(text: &str) -> Result<Parsed, YamlError> {
     for (index, c) in text.char_indices() {
         if !is_printable(c) {
             return invalid("unacceptable character in the stream");
-        }
-        if c == '\t' {
-            return unsupported("a tab character");
         }
         if matches!(c, '\u{85}' | '\u{2028}' | '\u{2029}') {
             return unsupported("a line break other than LF or CRLF");
@@ -232,6 +445,14 @@ pub(crate) fn parse_config(text: &str) -> Result<Parsed, YamlError> {
     while first < lines.len() && lines[first].is_skippable() {
         first += 1;
     }
+    // One explicit document start may come before the content; PyYAML reads
+    // what follows it as the document (and nothing after it as an empty one).
+    if first < lines.len() && is_document_start(&lines[first]) {
+        first += 1;
+        while first < lines.len() && lines[first].is_skippable() {
+            first += 1;
+        }
+    }
     if first == lines.len() {
         return Ok(Parsed::Empty);
     }
@@ -244,12 +465,10 @@ pub(crate) fn parse_config(text: &str) -> Result<Parsed, YamlError> {
         if content == "[]" || content == "{}" {
             return Ok(Parsed::Empty);
         }
-        if content == "---"
-            || content.starts_with("--- ")
-            || content == "..."
-            || content.starts_with('%')
-        {
-            return unsupported("a document marker or directive");
+        if content == "..." || content.starts_with("--- ") || content.starts_with('%') {
+            return unsupported(
+                "a document end marker, a document start with content, or a directive",
+            );
         }
     }
     let mut entries = Vec::new();
@@ -260,22 +479,16 @@ pub(crate) fn parse_config(text: &str) -> Result<Parsed, YamlError> {
             index += 1;
             continue;
         }
+        if is_document_start(line) {
+            return invalid("expected a single document in the stream");
+        }
         if line.indent != 0 {
             return unsupported("a mapping that does not start at column 0");
         }
-        let key_len = match key_length(line.text) {
-            Some(length) => length,
-            None => {
-                return if line.text.starts_with('"') || line.text.starts_with('\'') {
-                    unsupported("a quoted or complex key")
-                } else if line.is_list_item() {
-                    invalid("sequence entries are not allowed here")
-                } else {
-                    unsupported("a line that is not a plain key followed by a colon")
-                };
-            }
+        let (key, key_len) = match key_token(line.text)? {
+            Some(found) => found,
+            None => return Err(not_a_key(line)),
         };
-        let key = line.text[..key_len].to_owned();
         let after_colon = line.start + key_len + 1;
         let rest = &line.text[key_len + 1..];
         let spaces = rest.len() - rest.trim_start_matches(' ').len();
@@ -331,7 +544,80 @@ pub(crate) fn parse_config(text: &str) -> Result<Parsed, YamlError> {
     Ok(Parsed::Mapping(ConfigDocument { entries }))
 }
 
-/// Length of a plain key followed by a colon and a space or the line end.
+/// Why a line that is not a key could not be read.
+fn not_a_key(line: &Line<'_>) -> YamlError {
+    let content = &line.text[line.indent..];
+    if has_stray_tab(content) {
+        return tab_error();
+    }
+    if line.is_list_item() {
+        return YamlError::Invalid("sequence entries are not allowed here".to_owned());
+    }
+    // A plain word with no colon at all cannot be a key or a value here.
+    if content.starts_with(|c: char| c.is_ascii_alphanumeric() || c == '_')
+        && !content.contains(':')
+    {
+        return YamlError::Invalid("could not find expected ':'".to_owned());
+    }
+    YamlError::Unsupported(
+        "a line that is not a plain or quoted key followed by a colon".to_owned(),
+    )
+}
+
+fn tab_error() -> YamlError {
+    YamlError::Invalid("found character '\\t' that cannot start any token".to_owned())
+}
+
+/// Whether a tab shows up where PyYAML looks for the next token. Tabs inside
+/// comments and quoted text are fine, so the search stops at either.
+fn has_stray_tab(text: &str) -> bool {
+    let mut previous = ' ';
+    for c in text.chars() {
+        if c == '"' || c == '\'' || (c == '#' && previous == ' ') {
+            return false;
+        }
+        if c == '\t' {
+            return true;
+        }
+        previous = c;
+    }
+    false
+}
+
+/// A PyYAML simple key has to end within 1024 characters of where it starts.
+const MAX_KEY_CHARACTERS: usize = 1024;
+
+/// The key at the start of a line and the byte position of the colon after it.
+/// A key is a plain name or a quoted scalar, then optional spaces, then a colon
+/// followed by a space or the line end.
+fn key_token(text: &str) -> Result<Option<(String, usize)>, YamlError> {
+    let (name, colon) = if text.starts_with('"') || text.starts_with('\'') {
+        let (name, length) = if text.starts_with('"') {
+            scan_double(text)?
+        } else {
+            scan_single(text)?
+        };
+        let rest = &text[length..];
+        let spaces = rest.len() - rest.trim_start_matches(' ').len();
+        let after = &rest[spaces..];
+        if !(after == ":" || after.starts_with(": ")) {
+            return Ok(None);
+        }
+        (name, length + spaces)
+    } else {
+        match key_length(text) {
+            Some(colon) => (text[..colon].trim_end_matches(' ').to_owned(), colon),
+            None => return Ok(None),
+        }
+    };
+    if text[..colon].chars().count() > MAX_KEY_CHARACTERS {
+        return Err(YamlError::Invalid("could not find expected ':'".to_owned()));
+    }
+    Ok(Some((name, colon)))
+}
+
+/// Position of the colon after a plain key (letters, digits, `_`, `.`, `-`) and
+/// optional spaces, when a space or the line end follows the colon.
 fn key_length(text: &str) -> Option<usize> {
     let bytes = text.as_bytes();
     if bytes.is_empty() || !(bytes[0].is_ascii_alphanumeric() || bytes[0] == b'_') {
@@ -341,6 +627,9 @@ fn key_length(text: &str) -> Option<usize> {
     while length < bytes.len()
         && (bytes[length].is_ascii_alphanumeric() || matches!(bytes[length], b'_' | b'.' | b'-'))
     {
+        length += 1;
+    }
+    while length < bytes.len() && bytes[length] == b' ' {
         length += 1;
     }
     if length < bytes.len() && bytes[length] == b':' {
@@ -379,7 +668,13 @@ fn nested_block(lines: &[Line<'_>], from: usize) -> Result<(String, usize), Yaml
         } else {
             let length = match key_length(content) {
                 Some(length) => length,
-                None => return unsupported("a nested entry that is not a plain key"),
+                None => {
+                    return Err(if has_stray_tab(content) {
+                        tab_error()
+                    } else {
+                        YamlError::Unsupported("a nested entry that is not a plain key".to_owned())
+                    });
+                }
             };
             content[length + 1..].trim_start_matches(' ')
         };
@@ -445,6 +740,9 @@ fn plain(body: &str) -> Result<(ConfigValue, usize), YamlError> {
         None => body.len(),
     };
     let text = body[..end].trim_end_matches(' ');
+    if text.contains('\t') {
+        return Err(tab_error());
+    }
     if text.contains(": ") || text.ends_with(':') {
         return invalid("mapping values are not allowed here");
     }
@@ -546,6 +844,9 @@ fn scan_flow(body: &str) -> Result<(ConfigValue, usize), YamlError> {
         }
     };
     let inner = &body[1..end];
+    if inner.contains('\t') {
+        return Err(tab_error());
+    }
     if inner.contains(['[', '{', '"', '\'', '#']) {
         return unsupported("a nested or quoted flow collection");
     }
@@ -912,10 +1213,18 @@ mod tests {
             ("a: |\n  text\n", false),
             ("a: &anchor x\n", false),
             ("a: x\n  continued\n", false),
-            ("a:\tb\n", false),
-            ("\"a\": 1\n", false),
+            ("a:\tb\n", true),
+            ("a: b\t\n", true),
+            ("\tb: 1\n", true),
+            ("a: [x,\ty]\n", true),
             ("a: {b: 1}\n", false),
-            ("---\na: 1\n", false),
+            ("--- a: 1\n", false),
+            ("a: 1\n---\nb: 2\n", true),
+            ("---\n---\na: 1\n", true),
+            ("a: 1\nword\n", true),
+            ("a: 1\nmy key: 2\n", false),
+            ("\"a\" b: 1\n", false),
+            ("\"a\":b\n", false),
             ("a: 1\n- b\n", true),
         ] {
             match parse_config(text) {
@@ -927,6 +1236,89 @@ mod tests {
     }
 
     #[test]
+    fn a_byte_order_mark_and_a_document_start_are_skipped() {
+        let text = "\u{feff}# top\n---\nassembly: hg38\nsnv: old\n";
+        let document = mapping(text);
+        assert_eq!(
+            document.scalar("assembly"),
+            Some(&Scalar::Str("hg38".into()))
+        );
+        // The spans refer to the text with the mark in front.
+        let snv = document.entry("snv").unwrap();
+        assert_eq!(&text[snv.value_start..snv.value_end], "old");
+        let marked = mapping("---   # note\nassembly: hg38\n");
+        assert_eq!(marked.scalar("assembly"), Some(&Scalar::Str("hg38".into())));
+        assert!(matches!(parse_config("---\n"), Ok(Parsed::Empty)));
+        assert!(matches!(parse_config("\u{feff}"), Ok(Parsed::Empty)));
+        assert!(matches!(parse_config("---\n- a\n"), Ok(Parsed::List)));
+        assert!(matches!(parse_config("---\n[]\n"), Ok(Parsed::Empty)));
+        // A mark that is not first is an ordinary character of a plain value.
+        let inside = mapping("a: \u{feff}b\n");
+        assert_eq!(inside.scalar("a"), Some(&Scalar::Str("\u{feff}b".into())));
+    }
+
+    #[test]
+    fn quoted_keys_are_names_like_plain_ones() {
+        let text = "\"assembly\": hg38\n'it''s': 1 # c\n\"a\\u0062c\":\nplain: 2\n";
+        let document = mapping(text);
+        assert_eq!(
+            document.scalar("assembly"),
+            Some(&Scalar::Str("hg38".into()))
+        );
+        assert_eq!(document.scalar("it's"), Some(&Scalar::Int("1".into())));
+        assert_eq!(document.scalar("abc"), Some(&Scalar::Null));
+        let entry = document.entry("assembly").unwrap();
+        assert_eq!(&text[entry.value_start..entry.value_end], "hg38");
+        assert!(mapping("assembly: a\n\"assembly\": b\n").has_duplicate_keys());
+        let spaced = mapping("plain : 1\n\"quoted\"  : 2\n");
+        assert_eq!(spaced.scalar("plain"), Some(&Scalar::Int("1".into())));
+        assert_eq!(spaced.scalar("quoted"), Some(&Scalar::Int("2".into())));
+        let long_key = format!("\"{}\": 1\n", "k".repeat(1024));
+        assert!(matches!(
+            parse_config(&long_key),
+            Err(YamlError::Invalid(_))
+        ));
+        let limit_key = format!("{}: 1\n", "k".repeat(1024));
+        assert!(matches!(parse_config(&limit_key), Ok(Parsed::Mapping(_))));
+    }
+
+    #[test]
+    fn tabs_in_comments_and_quotes_are_fine() {
+        let document = mapping("a: \"x\ty\" # note\tmore\n# line\twith tab\nb: c # d\te\n");
+        assert_eq!(document.scalar("a"), Some(&Scalar::Str("x\ty".into())));
+        assert_eq!(document.scalar("b"), Some(&Scalar::Str("c".into())));
+    }
+
+    #[test]
+    fn nested_values_have_python_reprs_and_type_names() {
+        let document = mapping(
+            "a: [hg38, 5]\nb:\n  name: hg38\n  n: 2\nc:\n- x\n- null\nd: []\ne: {}\nf: 1.5\ng: 2024-01-02\nh: 0x1f\n",
+        );
+        let repr = |key: &str| document.get(key).unwrap().python_repr();
+        let kind = |key: &str| document.get(key).unwrap().python_type_name();
+        assert_eq!(repr("a"), "['hg38', 5]");
+        assert_eq!(repr("b"), "{'name': 'hg38', 'n': 2}");
+        assert_eq!(repr("c"), "['x', None]");
+        assert_eq!(repr("d"), "[]");
+        assert_eq!(repr("e"), "{}");
+        assert_eq!(
+            [
+                kind("a"),
+                kind("b"),
+                kind("c"),
+                kind("d"),
+                kind("e"),
+                kind("f"),
+                kind("g"),
+                kind("h")
+            ],
+            [
+                "list", "dict", "list", "list", "dict", "float", "date", "int"
+            ]
+        );
+    }
+
+    #[test]
     fn python_repr_of_strings_and_scalars() {
         assert_eq!(python_str_repr("hg37"), "'hg37'");
         assert_eq!(python_str_repr("it's"), "\"it's\"");
@@ -934,6 +1326,19 @@ mod tests {
         assert_eq!(Scalar::Null.python_repr(), "None");
         assert_eq!(Scalar::Bool(false).python_repr(), "False");
         assert_eq!(Scalar::Int("38".into()).python_repr(), "38");
+        assert_eq!(resolve_plain("0x26").python_repr(), "38");
+        assert_eq!(resolve_plain("0755").python_repr(), "493");
+        assert_eq!(resolve_plain("-0b101").python_repr(), "-5");
+        assert_eq!(resolve_plain("1:30").python_repr(), "90");
+        assert_eq!(resolve_plain("1_0.50").python_repr(), "10.5");
+        assert_eq!(resolve_plain("1.0e+2").python_repr(), "100.0");
+        assert_eq!(resolve_plain("-.inf").python_repr(), "-inf");
+        assert_eq!(resolve_plain(".NaN").python_repr(), "nan");
+        assert_eq!(resolve_plain("1:30.5").python_repr(), "90.5");
+        assert_eq!(
+            resolve_plain("2024-01-02").python_repr(),
+            "datetime.date(2024, 1, 2)"
+        );
     }
 
     #[test]

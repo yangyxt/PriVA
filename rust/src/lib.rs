@@ -13,6 +13,7 @@ pub mod pedigree_filter;
 mod pickle_reader;
 pub mod protein_domain_mapping;
 mod python_args;
+mod python_io;
 mod python_text;
 mod sha256;
 pub mod spliceai2;

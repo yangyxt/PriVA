@@ -8,8 +8,11 @@
 //! the scripts' `_unique_object` hook does. Writing follows `json.dumps`
 //! (`", "` and `": "` separators, or one item per line with `indent=2`,
 //! `ensure_ascii` on by default, keys in insertion order or sorted).
-//! Numbers with a fraction or exponent are read but cannot be written back,
-//! because Python's float printing is not reproduced; the receipts hold none.
+//! Numbers with a fraction or exponent are written the way `float.__repr__`
+//! prints them (shortest digits that read back the same, exponent form below
+//! 1e-4 and from 1e16 up); `NaN`, `Infinity` and `-Infinity` as `json.dumps` does.
+//! Parse errors carry the text Python's `JSONDecodeError` shows:
+//! `<message>: line L column C (char N)`, with N counted in characters.
 use std::fmt::Write as _;
 
 #[derive(Debug, Clone)]
@@ -17,14 +20,15 @@ pub(crate) enum Json {
     Null,
     Bool(bool),
     Int(i128),
-    /// The value and the text it was written as.
-    Float(f64, String),
+    Float(f64),
     Str(String),
     Array(Vec<Json>),
     Object(Vec<(String, Json)>),
 }
 
 const MAX_DEPTH: usize = 400;
+const LONE_SURROGATE: &str = "lone surrogate in a string is not supported";
+const TOO_DEEP: &str = "JSON nested too deeply";
 
 impl Json {
     pub(crate) fn get(&self, key: &str) -> Option<&Json> {
@@ -66,7 +70,7 @@ pub(crate) fn py_equal(left: &Json, right: &Json) -> bool {
         match value {
             Json::Bool(flag) => Some(if *flag { 1.0 } else { 0.0 }),
             Json::Int(int) => Some(*int as f64),
-            Json::Float(float, _) => Some(*float),
+            Json::Float(float) => Some(*float),
             _ => None,
         }
     }
@@ -74,6 +78,9 @@ pub(crate) fn py_equal(left: &Json, right: &Json) -> bool {
         (Json::Null, Json::Null) => true,
         (Json::Str(a), Json::Str(b)) => a == b,
         (Json::Int(a), Json::Int(b)) => a == b,
+        // Every NaN `json.loads` returns is the one object `NaN`, and containers
+        // compare identical items as equal.
+        (Json::Float(a), Json::Float(b)) => a == b || (a.is_nan() && b.is_nan()),
         (Json::Array(a), Json::Array(b)) => {
             a.len() == b.len() && a.iter().zip(b.iter()).all(|(x, y)| py_equal(x, y))
         }
@@ -91,6 +98,57 @@ pub(crate) fn py_equal(left: &Json, right: &Json) -> bool {
     }
 }
 
+/// Whether a parse message is this tool's refusal of something Python reads
+/// (an integer beyond 128 bits, a lone surrogate) or fails on in its own way
+/// (nesting too deep for the interpreter), as opposed to a `JSONDecodeError`.
+pub(crate) fn is_refusal(message: &str) -> bool {
+    message.starts_with("integer too large for this tool")
+        || message == LONE_SURROGATE
+        || message == TOO_DEEP
+}
+
+/// A parse failure: Python's message and, when Python shows one, the byte
+/// offset (in the UTF-8 text) the error points at.
+struct Problem {
+    message: String,
+    position: Option<usize>,
+}
+
+fn problem<T>(message: &str, position: usize) -> Result<T, Problem> {
+    Err(Problem {
+        message: message.to_owned(),
+        position: Some(position),
+    })
+}
+
+fn plain_problem<T>(message: &str) -> Result<T, Problem> {
+    Err(Problem {
+        message: message.to_owned(),
+        position: None,
+    })
+}
+
+impl Problem {
+    /// `JSONDecodeError.__str__`: line and column count from 1, the offset
+    /// counts characters, and the column is the distance from the last line break.
+    fn describe(&self, text: &str) -> String {
+        let Some(byte) = self.position else {
+            return self.message.clone();
+        };
+        let before = &text[..byte.min(text.len())];
+        let offset = before.chars().count();
+        let line = before.matches('\n').count() + 1;
+        let column = match before.rfind('\n') {
+            Some(newline) => before[newline + 1..].chars().count() + 1,
+            None => offset + 1,
+        };
+        format!(
+            "{}: line {line} column {column} (char {offset})",
+            self.message
+        )
+    }
+}
+
 struct Parser<'a> {
     bytes: &'a [u8],
     text: &'a str,
@@ -101,8 +159,12 @@ struct Parser<'a> {
 /// Parses a whole document. With `reject_duplicate_keys`, a key repeated in one
 /// object is an error naming the key (`Duplicate manifest key: ...`).
 pub(crate) fn parse(text: &str, reject_duplicate_keys: bool) -> Result<Json, String> {
+    parse_document(text, reject_duplicate_keys).map_err(|failure| failure.describe(text))
+}
+
+fn parse_document(text: &str, reject_duplicate_keys: bool) -> Result<Json, Problem> {
     if text.starts_with('\u{feff}') {
-        return Err("Unexpected UTF-8 BOM (decode using utf-8-sig)".to_owned());
+        return problem("Unexpected UTF-8 BOM (decode using utf-8-sig)", 0);
     }
     let mut parser = Parser {
         bytes: text.as_bytes(),
@@ -114,7 +176,7 @@ pub(crate) fn parse(text: &str, reject_duplicate_keys: bool) -> Result<Json, Str
     let value = parser.value(0)?;
     parser.skip_whitespace();
     if parser.pos != parser.bytes.len() {
-        return Err(format!("Extra data: char {}", parser.pos));
+        return problem("Extra data", parser.pos);
     }
     Ok(value)
 }
@@ -132,38 +194,34 @@ impl<'a> Parser<'a> {
         self.bytes.get(self.pos).copied()
     }
 
-    fn expect_word(&mut self, word: &str, value: Json) -> Result<Json, String> {
+    fn expect_word(&mut self, word: &str, value: Json) -> Result<Json, Problem> {
         if self.text[self.pos..].starts_with(word) {
             self.pos += word.len();
             Ok(value)
         } else {
-            Err(format!("Expecting value: char {}", self.pos))
+            problem("Expecting value", self.pos)
         }
     }
 
-    fn value(&mut self, depth: usize) -> Result<Json, String> {
+    fn value(&mut self, depth: usize) -> Result<Json, Problem> {
         if depth > MAX_DEPTH {
-            return Err("JSON nested too deeply".to_owned());
+            return plain_problem(TOO_DEEP);
         }
         match self.peek() {
-            None => Err(format!("Expecting value: char {}", self.pos)),
+            None => problem("Expecting value", self.pos),
             Some(b'"') => Ok(Json::Str(self.string()?)),
             Some(b'{') => self.object(depth),
             Some(b'[') => self.array(depth),
             Some(b'n') => self.expect_word("null", Json::Null),
             Some(b't') => self.expect_word("true", Json::Bool(true)),
             Some(b'f') => self.expect_word("false", Json::Bool(false)),
-            Some(b'N') => self.expect_word("NaN", Json::Float(f64::NAN, "NaN".to_owned())),
-            Some(b'I') => self.expect_word(
-                "Infinity",
-                Json::Float(f64::INFINITY, "Infinity".to_owned()),
-            ),
-            Some(b'-') if self.text[self.pos..].starts_with("-Infinity") => self.expect_word(
-                "-Infinity",
-                Json::Float(f64::NEG_INFINITY, "-Infinity".to_owned()),
-            ),
+            Some(b'N') => self.expect_word("NaN", Json::Float(f64::NAN)),
+            Some(b'I') => self.expect_word("Infinity", Json::Float(f64::INFINITY)),
+            Some(b'-') if self.text[self.pos..].starts_with("-Infinity") => {
+                self.expect_word("-Infinity", Json::Float(f64::NEG_INFINITY))
+            }
             Some(b'-') | Some(b'0'..=b'9') => self.number(),
-            Some(_) => Err(format!("Expecting value: char {}", self.pos)),
+            Some(_) => problem("Expecting value", self.pos),
         }
     }
 
@@ -175,7 +233,7 @@ impl<'a> Parser<'a> {
         self.pos - start
     }
 
-    fn number(&mut self) -> Result<Json, String> {
+    fn number(&mut self) -> Result<Json, Problem> {
         let start = self.pos;
         if self.peek() == Some(b'-') {
             self.pos += 1;
@@ -187,7 +245,7 @@ impl<'a> Parser<'a> {
             }
             _ => {
                 self.pos = start;
-                return Err(format!("Expecting value: char {start}"));
+                return problem("Expecting value", start);
             }
         }
         let mut is_float = false;
@@ -214,34 +272,47 @@ impl<'a> Parser<'a> {
         }
         let literal = &self.text[start..self.pos];
         if is_float {
-            let value: f64 = literal
-                .parse()
-                .map_err(|_| format!("Expecting value: char {start}"))?;
-            Ok(Json::Float(value, literal.to_owned()))
+            let value: f64 = match literal.parse() {
+                Ok(value) => value,
+                Err(_) => return problem("Expecting value", start),
+            };
+            Ok(Json::Float(value))
         } else {
-            let value: i128 = literal
-                .parse()
-                .map_err(|_| format!("integer too large for this tool: {literal}"))?;
+            // Python integers have no size limit; this tool refuses what i128 cannot hold.
+            let value: i128 = match literal.parse() {
+                Ok(value) => value,
+                Err(_) => {
+                    return plain_problem(&format!("integer too large for this tool: {literal}"));
+                }
+            };
             Ok(Json::Int(value))
         }
     }
 
-    fn hex4(&mut self) -> Result<u32, String> {
+    /// The four hex digits after a `\\u` at `u_position`. Python points its error at
+    /// the `u`, and also refuses digits that end the text (no closing quote can follow).
+    fn hex4(&mut self, u_position: usize) -> Result<u32, Problem> {
         let end = self.pos + 4;
-        if end > self.bytes.len() {
-            return Err(format!("Invalid \\uXXXX escape: char {}", self.pos));
+        if end >= self.bytes.len() {
+            return problem("Invalid \\uXXXX escape", u_position);
         }
         let slice = &self.bytes[self.pos..end];
         if !slice.iter().all(|b| b.is_ascii_hexdigit()) {
-            return Err(format!("Invalid \\uXXXX escape: char {}", self.pos));
+            return problem("Invalid \\uXXXX escape", u_position);
         }
-        let digits = std::str::from_utf8(slice).map_err(|_| "Invalid \\uXXXX escape".to_owned())?;
+        let Ok(digits) = std::str::from_utf8(slice) else {
+            return problem("Invalid \\uXXXX escape", u_position);
+        };
         self.pos = end;
-        u32::from_str_radix(digits, 16).map_err(|_| "Invalid \\uXXXX escape".to_owned())
+        match u32::from_str_radix(digits, 16) {
+            Ok(code) => Ok(code),
+            Err(_) => problem("Invalid \\uXXXX escape", u_position),
+        }
     }
 
-    fn string(&mut self) -> Result<String, String> {
-        // self.pos is at the opening quote.
+    fn string(&mut self) -> Result<String, Problem> {
+        // self.pos is at the opening quote; Python reports an unfinished string there.
+        let begin = self.pos;
         self.pos += 1;
         let mut out = String::new();
         loop {
@@ -249,12 +320,7 @@ impl<'a> Parser<'a> {
             let mut chars = rest.chars();
             let c = match chars.next() {
                 Some(c) => c,
-                None => {
-                    return Err(format!(
-                        "Unterminated string starting at: char {}",
-                        self.pos
-                    ));
-                }
+                None => return problem("Unterminated string starting at", begin),
             };
             self.pos += c.len_utf8();
             match c {
@@ -262,7 +328,7 @@ impl<'a> Parser<'a> {
                 '\\' => {
                     let escape = match self.peek() {
                         Some(b) => b,
-                        None => return Err("Unterminated string".to_owned()),
+                        None => return problem("Unterminated string starting at", begin),
                     };
                     self.pos += 1;
                     match escape {
@@ -275,48 +341,40 @@ impl<'a> Parser<'a> {
                         b'r' => out.push('\r'),
                         b't' => out.push('\t'),
                         b'u' => {
-                            let first = self.hex4()?;
+                            let first = self.hex4(self.pos - 1)?;
                             let code = if (0xd800..0xdc00).contains(&first) {
                                 if self.text[self.pos..].starts_with("\\u") {
                                     self.pos += 2;
-                                    let second = self.hex4()?;
+                                    let second = self.hex4(self.pos - 1)?;
                                     if !(0xdc00..0xe000).contains(&second) {
-                                        return Err("lone surrogate in a string is not supported"
-                                            .to_owned());
+                                        return plain_problem(LONE_SURROGATE);
                                     }
                                     0x10000 + ((first - 0xd800) << 10) + (second - 0xdc00)
                                 } else {
-                                    return Err(
-                                        "lone surrogate in a string is not supported".to_owned()
-                                    );
+                                    return plain_problem(LONE_SURROGATE);
                                 }
                             } else if (0xdc00..0xe000).contains(&first) {
-                                return Err(
-                                    "lone surrogate in a string is not supported".to_owned()
-                                );
+                                return plain_problem(LONE_SURROGATE);
                             } else {
                                 first
                             };
                             match char::from_u32(code) {
                                 Some(c) => out.push(c),
-                                None => return Err("Invalid \\uXXXX escape".to_owned()),
+                                None => return problem("Invalid \\uXXXX escape", self.pos - 1),
                             }
                         }
-                        _ => return Err(format!("Invalid \\escape: char {}", self.pos - 2)),
+                        _ => return problem("Invalid \\escape", self.pos - 2),
                     }
                 }
                 c if (c as u32) < 0x20 => {
-                    return Err(format!(
-                        "Invalid control character at: char {}",
-                        self.pos - 1
-                    ));
+                    return problem("Invalid control character at", self.pos - 1);
                 }
                 c => out.push(c),
             }
         }
     }
 
-    fn array(&mut self, depth: usize) -> Result<Json, String> {
+    fn array(&mut self, depth: usize) -> Result<Json, Problem> {
         self.pos += 1;
         let mut items = Vec::new();
         self.skip_whitespace();
@@ -334,12 +392,12 @@ impl<'a> Parser<'a> {
                     self.pos += 1;
                     return Ok(Json::Array(items));
                 }
-                _ => return Err(format!("Expecting ',' delimiter: char {}", self.pos)),
+                _ => return problem("Expecting ',' delimiter", self.pos),
             }
         }
     }
 
-    fn object(&mut self, depth: usize) -> Result<Json, String> {
+    fn object(&mut self, depth: usize) -> Result<Json, Problem> {
         self.pos += 1;
         let mut items: Vec<(String, Json)> = Vec::new();
         self.skip_whitespace();
@@ -350,22 +408,22 @@ impl<'a> Parser<'a> {
         loop {
             self.skip_whitespace();
             if self.peek() != Some(b'"') {
-                return Err(format!(
-                    "Expecting property name enclosed in double quotes: char {}",
-                    self.pos
-                ));
+                return problem(
+                    "Expecting property name enclosed in double quotes",
+                    self.pos,
+                );
             }
             let key = self.string()?;
             self.skip_whitespace();
             if self.peek() != Some(b':') {
-                return Err(format!("Expecting ':' delimiter: char {}", self.pos));
+                return problem("Expecting ':' delimiter", self.pos);
             }
             self.pos += 1;
             self.skip_whitespace();
             let value = self.value(depth + 1)?;
             if let Some(slot) = items.iter_mut().find(|(name, _)| *name == key) {
                 if self.reject_duplicates {
-                    return Err(format!("Duplicate manifest key: {key}"));
+                    return plain_problem(&format!("Duplicate manifest key: {key}"));
                 }
                 slot.1 = value;
             } else {
@@ -378,9 +436,68 @@ impl<'a> Parser<'a> {
                     self.pos += 1;
                     return Ok(Json::Object(items));
                 }
-                _ => return Err(format!("Expecting ',' delimiter: char {}", self.pos)),
+                _ => return problem("Expecting ',' delimiter", self.pos),
             }
         }
+    }
+}
+
+/// `float.__repr__`: the shortest digits that read back as the same number,
+/// written plainly for decimal exponents from -4 to 15 and as `1e-05` or
+/// `1.5e+16` outside that range, with `.0` after a whole number.
+pub(crate) fn python_float_repr(value: f64) -> String {
+    if value.is_nan() {
+        return "nan".to_owned();
+    }
+    if value.is_infinite() {
+        return if value < 0.0 { "-inf" } else { "inf" }.to_owned();
+    }
+    let sign = if value.is_sign_negative() { "-" } else { "" };
+    // Rust prints the shortest round-trip digits as `d.ddde<exponent>`.
+    let scientific = format!("{:e}", value.abs());
+    let (mantissa, exponent) = scientific.split_once('e').unwrap_or((&scientific[..], "0"));
+    let exponent: i32 = exponent.parse().unwrap_or(0);
+    let digits: String = mantissa.chars().filter(|c| *c != '.').collect();
+    // Python's `decpt`: the value is 0.<digits> times ten to this power.
+    let point = exponent + 1;
+    let length = digits.len() as i32;
+    let body = if point <= -4 || point > 16 {
+        let fraction = if length > 1 {
+            format!(".{}", &digits[1..])
+        } else {
+            String::new()
+        };
+        let power = point - 1;
+        let power_sign = if power < 0 { '-' } else { '+' };
+        format!(
+            "{}{}e{}{:02}",
+            &digits[..1],
+            fraction,
+            power_sign,
+            power.abs()
+        )
+    } else if point <= 0 {
+        format!("0.{}{}", "0".repeat((-point) as usize), digits)
+    } else if point >= length {
+        format!("{}{}.0", digits, "0".repeat((point - length) as usize))
+    } else {
+        format!(
+            "{}.{}",
+            &digits[..point as usize],
+            &digits[point as usize..]
+        )
+    };
+    format!("{sign}{body}")
+}
+
+/// A float as `json.dumps` writes it: `repr`, except `NaN` and the infinities.
+fn float_text(value: f64) -> String {
+    if value.is_nan() {
+        "NaN".to_owned()
+    } else if value.is_infinite() {
+        if value < 0.0 { "-Infinity" } else { "Infinity" }.to_owned()
+    } else {
+        python_float_repr(value)
     }
 }
 
@@ -436,11 +553,7 @@ fn write_value(
         Json::Int(int) => {
             let _ = write!(out, "{int}");
         }
-        Json::Float(_, text) => {
-            return Err(format!(
-                "a JSON number with a fraction or exponent ({text}) cannot be written back by this tool"
-            ));
-        }
+        Json::Float(float) => out.push_str(&float_text(*float)),
         Json::Str(text) => out.push_str(&quote(text, ensure_ascii)),
         Json::Array(items) => {
             if items.is_empty() {
@@ -555,7 +668,7 @@ mod tests {
 
     #[test]
     fn python_json_quirks_are_followed() {
-        assert!(matches!(parse("NaN", false), Ok(Json::Float(_, _))));
+        assert!(matches!(parse("NaN", false), Ok(Json::Float(_))));
         assert!(parse("[1,]", false).is_err());
         assert!(parse("{\"a\": 1,}", false).is_err());
         assert!(parse("01", false).is_err());
@@ -566,7 +679,91 @@ mod tests {
             parse(" [1, 2.5e3, -0] ", false),
             Ok(Json::Array(_))
         ));
-        assert!(dumps(&parse("[1.5]", false).unwrap(), false).is_err());
+        assert_eq!(
+            dumps(
+                &parse("[1.5, 0.250, 1e-5, 2E+16, -0.0, 7.0]", false).unwrap(),
+                false
+            )
+            .unwrap(),
+            "[1.5, 0.25, 1e-05, 2e+16, -0.0, 7.0]"
+        );
+    }
+
+    #[test]
+    fn floats_print_like_python_repr() {
+        for (value, text) in [
+            (0.0, "0.0"),
+            (0.1, "0.1"),
+            (0.25, "0.25"),
+            (1.0, "1.0"),
+            (100.0, "100.0"),
+            (123456789.0, "123456789.0"),
+            (1e15, "1000000000000000.0"),
+            (1e16, "1e+16"),
+            (1.5e16, "1.5e+16"),
+            (123456789012345680.0, "1.2345678901234568e+17"),
+            (0.0001, "0.0001"),
+            (0.00001, "1e-05"),
+            (0.00012345, "0.00012345"),
+            (1.5e-7, "1.5e-07"),
+            (1e100, "1e+100"),
+            (5e-324, "5e-324"),
+            (1.7976931348623157e308, "1.7976931348623157e+308"),
+            (0.30000000000000004, "0.30000000000000004"),
+            (-2.5, "-2.5"),
+        ] {
+            assert_eq!(python_float_repr(value), text, "{value:e}");
+        }
+        assert_eq!(float_text(f64::NAN), "NaN");
+        assert_eq!(float_text(f64::NEG_INFINITY), "-Infinity");
+        assert_eq!(
+            parse("1e400", false).map(|v| dumps(&v, false).unwrap()),
+            Ok("Infinity".to_owned())
+        );
+    }
+
+    #[test]
+    fn parse_errors_name_line_column_and_character_like_python() {
+        assert_eq!(
+            parse("", false).unwrap_err(),
+            "Expecting value: line 1 column 1 (char 0)"
+        );
+        assert_eq!(
+            parse("{bad}", false).unwrap_err(),
+            "Expecting property name enclosed in double quotes: line 1 column 2 (char 1)"
+        );
+        assert_eq!(
+            parse("{\n  \"a\": \u{e9},\n}", false).unwrap_err(),
+            "Expecting value: line 2 column 8 (char 9)"
+        );
+        assert_eq!(
+            parse("\u{feff}{}", false).unwrap_err(),
+            "Unexpected UTF-8 BOM (decode using utf-8-sig): line 1 column 1 (char 0)"
+        );
+        assert_eq!(
+            parse("{} x", false).unwrap_err(),
+            "Extra data: line 1 column 4 (char 3)"
+        );
+        assert_eq!(
+            parse("[\"abc", false).unwrap_err(),
+            "Unterminated string starting at: line 1 column 2 (char 1)"
+        );
+        assert_eq!(
+            parse("\"\\q\"", false).unwrap_err(),
+            "Invalid \\escape: line 1 column 2 (char 1)"
+        );
+        assert_eq!(
+            parse("\"\\u12G4\"", false).unwrap_err(),
+            "Invalid \\uXXXX escape: line 1 column 3 (char 2)"
+        );
+        assert_eq!(
+            parse("{\"a\" 1}", false).unwrap_err(),
+            "Expecting ':' delimiter: line 1 column 6 (char 5)"
+        );
+        assert_eq!(
+            parse("[1 2]", false).unwrap_err(),
+            "Expecting ',' delimiter: line 1 column 4 (char 3)"
+        );
     }
 
     #[test]
@@ -584,6 +781,13 @@ mod tests {
         assert!(py_equal(&a, &b));
         let c = parse("{\"x\": true, \"y\": [1, 3]}", false).unwrap();
         assert!(!py_equal(&a, &c));
+    }
+
+    #[test]
+    fn nan_items_are_equal_inside_containers() {
+        let a = parse("{\"x\": [NaN, 1.5]}", false).unwrap();
+        let b = parse("{\"x\": [NaN, 1.5]}", false).unwrap();
+        assert!(py_equal(&a, &b));
     }
 
     #[test]

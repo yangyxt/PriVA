@@ -15,7 +15,9 @@
 //! construct it does not support stops the run with exit code 1 (the script
 //! also exits with 1 for YAML it cannot parse).
 use crate::cli::Result;
-use crate::spliceai_cache_input::{Done, Failure, canonical_assembly, inspect_header};
+use crate::spliceai_cache_input::{
+    Done, Failure, canonical_assembly, inspect_header, python_utf8_decode,
+};
 use crate::yaml_config::{self, ConfigValue, Parsed, Scalar, YamlError};
 use std::path::Path;
 
@@ -142,13 +144,6 @@ impl Setting {
     }
 }
 
-fn setting_repr(value: &ConfigValue) -> String {
-    match value {
-        ConfigValue::Scalar(scalar) => scalar.python_repr(),
-        ConfigValue::Opaque(text) => text.clone(),
-    }
-}
-
 /// The SpliceAI version of the given score files. Files that are unset or
 /// missing are skipped so the annotation step can report them; with neither
 /// present the original SpliceAI v1 cutoffs apply.
@@ -161,7 +156,7 @@ fn score_version(snv: &Setting, indel: &Setting, assembly: &Setting) -> Done<Sco
             Setting::Other(value) => {
                 return Err(Failure::Rejected(format!(
                     "Unsupported assembly: {}",
-                    setting_repr(value)
+                    value.python_repr()
                 )));
             }
             Setting::Absent => None,
@@ -174,11 +169,13 @@ fn score_version(snv: &Setting, indel: &Setting, assembly: &Setting) -> Done<Sco
         }
         let path = match setting {
             Setting::Text(text) => text,
-            _ => {
-                return Err(Failure::Crash(
-                    "TypeError: expected str, bytes or os.PathLike object".to_owned(),
-                ));
+            Setting::Other(value) => {
+                return Err(Failure::Crash(format!(
+                    "TypeError: argument should be a str or an os.PathLike object where __fspath__ returns a str, not '{}'",
+                    value.python_type_name()
+                )));
             }
+            Setting::Absent => continue,
         };
         if !Path::new(path).is_file() {
             continue;
@@ -243,10 +240,12 @@ fn read_config(config_path: Option<&str>) -> Done<Settings> {
         Some(path) if !path.is_empty() && Path::new(path).is_file() => path,
         _ => return Ok(unset),
     };
-    let bytes = std::fs::read(path)?;
-    let text = String::from_utf8(bytes).map_err(|error| {
-        Failure::Rejected(format!("'utf-8' codec can't decode the file: {error}"))
-    })?;
+    let bytes = std::fs::read(path).map_err(|error| Failure::os(&error, Path::new(path)))?;
+    // `Path.read_text()` decodes as UTF-8 and reads every line break as `\n`.
+    let text = python_utf8_decode(&bytes)
+        .map_err(Failure::Rejected)?
+        .replace("\r\n", "\n")
+        .replace('\r', "\n");
     match yaml_config::parse_config(&text) {
         Ok(Parsed::Mapping(document)) => Ok(Settings {
             snv: Setting::from_config(document.get("spliceai_snv_prescore")),

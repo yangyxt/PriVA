@@ -7,8 +7,8 @@
 //! - `install --config C --cache-dir D --snv S --indel I`: reads only the
 //!   bounded header of each score file (gzip is found by its magic bytes, not
 //!   its name); a native SpliceAI2 table is handed to `install_utils.sh
-//!   SpliceAI2_install` (found in `--script-dir`, or `PRIVA_SCRIPT_DIR`, an
-//!   addition to the Python options because Rust has no `__file__`); a
+//!   SpliceAI2_install` (found in the folder named by the environment variable
+//!   `PRIVA_SCRIPT_DIR`, because Rust has no `__file__`; no option is added); a
 //!   SpliceAI2 VCF must have its completed adapter receipt, a SpliceAI v1 VCF
 //!   its tabix index, which must return the file's first record; then the two
 //!   `spliceai_*_prescore` values of the YAML configuration are replaced in
@@ -19,28 +19,49 @@
 //!   record, and publishes the folder with one rename.
 //! The report is printed as sorted JSON on one line. Exit codes follow the
 //! script: 2 for a rejected input (a ValueError or OSError in Python), 1 for
-//! an error the script does not handle (a traceback in Python) and for a
-//! failed helper script, 0 on success.
+//! an error the script does not handle (a traceback in Python), the helper
+//! script's own exit code when `install_utils.sh` fails, 0 on success.
+//!
+//! The command line is the script's `argparse` parser reproduced (see the
+//! command line section below): same options, abbreviations, usage lines, help
+//! texts and error messages, with the program name `priva spliceai-cache-input`.
 //!
 //! Library functions for later conversions: `inspect_header`,
 //! `canonical_assembly`, `Header`.
 //!
-//! Differences from the Python script, all outside what callers parse:
-//! error texts for operating-system errors and YAML syntax errors are worded
-//! differently; the copied files do not get the extended attributes that
-//! `shutil.copystat` copies (permissions and times are copied); the tabix
-//! lookup is done by this crate instead of pysam; zlib and gzip errors that
-//! Python reports as tracebacks in the index check are reported as rejections.
+//! Differences from the Python script (checked by `spliceai_cache_parity.py`):
+//! - YAML that PyYAML reads but this tool does not (anchors, aliases, tags, block
+//!   scalars, multi-line scalars, keys with spaces or other punctuation, nesting
+//!   deeper than one block) is refused with exit code 1 and a message saying so,
+//!   where the script goes on (or fails in its own way). The real `config.yaml`
+//!   files hold none of them. A byte order mark, a leading `---` line, quoted
+//!   keys and tabs inside comments and quoted text are read as PyYAML reads them;
+//! - for text PyYAML itself refuses, the exit code agrees (2 here, 1 for the
+//!   cutoffs script) but PyYAML's multi-line diagnostic is replaced by one line;
+//! - `install_utils.sh` is looked up in the folder named by the environment
+//!   variable `PRIVA_SCRIPT_DIR` (the script finds it beside itself); without
+//!   it a native-table install stops with exit code 1;
+//! - for a corrupt deflate stream the script prints zlib's reason ("invalid
+//!   distance too far back"); here the reason is generic. A damaged gzip header
+//!   or trailer, a missing end and trailing bytes read as Python reads them;
+//! - the first record is decoded on its own, while Python decodes 8 KiB chunks,
+//!   so a bad byte after the first line is not noticed and the position in a
+//!   decode error counts from the start of the record;
+//! - the tabix lookup is done by this crate instead of pysam; every index it
+//!   cannot read gets htslib's "Invalid argument" line and pysam's message;
+//! - the copied files do not get the extended attributes that
+//!   `shutil.copystat` copies (permissions and times are copied);
+//! - JSON integers beyond 128 bits, lone surrogates in JSON strings and nesting
+//!   deeper than 400 levels are refused with exit code 1.
 use crate::cli::Result;
 use crate::json_text::{self, Json};
-use crate::python_args::{self, Parsed};
+use crate::python_io::{self, COMPRESSED_FILE_ENDED, GzipFailure, PythonGzipReader};
 use crate::python_text::{is_python_space, python_int, python_strip};
 use crate::sha256::{Sha256, sha256_file, sha256_hex};
 use crate::tabix_index;
 use crate::yaml_config::{
     self, ConfigDocument, ConfigValue, Parsed as YamlParsed, Scalar, YamlError, python_str_repr,
 };
-use flate2::read::MultiGzDecoder;
 use std::collections::{HashMap, HashSet};
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, BufRead, BufReader, Read, Write};
@@ -49,7 +70,6 @@ use std::path::{Component, Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-const USAGE: &str = "usage: priva spliceai-cache-input install --config CONFIG --cache-dir CACHE_DIR --snv SNV --indel INDEL [--script-dir DIR]\n       priva spliceai-cache-input adopt-prepared --source-dir SOURCE_DIR --output-dir OUTPUT_DIR --cache-root CACHE_ROOT";
 const MAX_LINE: usize = 64 * 1024;
 const MAX_HEADER: usize = 1024 * 1024;
 const MAX_LINES: usize = 4096;
@@ -92,9 +112,14 @@ fn os_error_text(error: &io::Error) -> String {
     }
 }
 
+/// `bytes.decode("utf-8")` with the text of Python's `UnicodeDecodeError` as the error.
+pub(crate) fn python_utf8_decode(bytes: &[u8]) -> std::result::Result<String, String> {
+    python_io::decode_utf8(bytes).map(str::to_owned)
+}
+
 impl Failure {
     /// An operating-system error about a path, worded as Python words it.
-    fn os(error: &io::Error, path: &Path) -> Failure {
+    pub(crate) fn os(error: &io::Error, path: &Path) -> Failure {
         Failure::Rejected(format!(
             "{}: {}",
             os_error_text(error),
@@ -262,6 +287,11 @@ fn is_lower_hex_64(text: &str) -> bool {
             .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
 
+/// `Path.resolve(strict=True)`: an error names the first component that cannot be examined.
+fn resolve_strict(path: &Path) -> Done<PathBuf> {
+    python_io::resolve_strict(path).map_err(|(error, named)| Failure::os(&error, &named))
+}
+
 /// The resolved path of a complete, non-empty regular file; never a staging path.
 fn complete_path(path: &Path) -> Done<PathBuf> {
     let absolute = absolute_path(path);
@@ -269,7 +299,7 @@ fn complete_path(path: &Path) -> Done<PathBuf> {
         !has_unfinished_part(&absolute),
         &format!("Incomplete/staging input path: {}", absolute.display()),
     )?;
-    let resolved = fs::canonicalize(&absolute).map_err(|error| Failure::os(&error, &absolute))?;
+    let resolved = resolve_strict(&absolute)?;
     require(
         !has_unfinished_part(&resolved),
         &format!("Incomplete/staging input target: {}", absolute.display()),
@@ -581,7 +611,7 @@ fn inspect_header_limited(path: &Path, limits: &Limits) -> Done<Header> {
     let compressed = starts_with_gzip_magic(&resolved)?;
     let file = File::open(&resolved).map_err(|error| Failure::os(&error, &resolved))?;
     let mut stream: Box<dyn BufRead> = if compressed {
-        Box::new(BufReader::new(MultiGzDecoder::new(file)))
+        Box::new(BufReader::new(PythonGzipReader::new(file)))
     } else {
         Box::new(BufReader::new(file))
     };
@@ -591,14 +621,23 @@ fn inspect_header_limited(path: &Path, limits: &Limits) -> Done<Header> {
             resolved.display()
         ))
     };
+    // The script reports EOFError, UnicodeError and zlib.error as a corrupt
+    // header; BadGzipFile and operating-system errors are OSErrors it lets through.
+    let read_failure = |error: io::Error| -> Failure {
+        match GzipFailure::of(&error) {
+            Some(GzipFailure::EndOfFile) => corrupt(COMPRESSED_FILE_ENDED.to_owned()),
+            Some(GzipFailure::Zlib(text)) => corrupt(text.clone()),
+            Some(GzipFailure::Bad(text)) => Failure::Rejected(text.clone()),
+            None => Failure::Rejected(os_error_text(&error)),
+        }
+    };
     let native_header = native_columns().join("\t");
     let mut assemblies: Vec<&'static str> = Vec::new();
     let mut versions: Vec<u8> = Vec::new();
     let mut total = 0usize;
     let mut result: Option<Header> = None;
     for number in 1..=limits.lines {
-        let raw = read_bounded_line(stream.as_mut(), limits.line + 1)
-            .map_err(|error| corrupt(error.to_string()))?;
+        let raw = read_bounded_line(stream.as_mut(), limits.line + 1).map_err(&read_failure)?;
         require(!raw.is_empty(), "Missing complete VCF/SpliceAI2 header")?;
         total += raw.len();
         require(
@@ -613,7 +652,7 @@ fn inspect_header_limited(path: &Path, limits: &Limits) -> Done<Header> {
         if bytes.last() == Some(&b'\r') {
             bytes = &bytes[..bytes.len() - 1];
         }
-        let line = std::str::from_utf8(bytes).map_err(|error| corrupt(error.to_string()))?;
+        let line = python_io::decode_utf8(bytes).map_err(&corrupt)?;
         require(
             !line
                 .chars()
@@ -730,10 +769,8 @@ fn inspect_header_limited(path: &Path, limits: &Limits) -> Done<Header> {
     };
     // Also finds a truncated gzip footer for header-only files; it checks no record.
     let mut one = [0u8; 1];
-    stream
-        .read(&mut one)
-        .map_err(|error| corrupt(error.to_string()))?;
-    let again = fs::canonicalize(path).map_err(|error| Failure::os(&error, path))?;
+    stream.read(&mut one).map_err(&read_failure)?;
+    let again = resolve_strict(path)?;
     require(
         identity(&resolved)? == before && again == resolved,
         &format!("Input changed during header inspection: {}", path.display()),
@@ -794,27 +831,59 @@ fn report_json(report: &PairReport) -> Json {
 
 // ---------------------------------------------------------------- JSON files
 
+/// A `JSONDecodeError` is a rejection (exit 2); what this tool refuses to read is not.
 fn json_error(error: String) -> Failure {
-    Failure::Rejected(error)
+    if json_text::is_refusal(&error) {
+        Failure::Crash(error)
+    } else {
+        Failure::Rejected(error)
+    }
 }
 
+/// `json.loads(path.read_text())`: the file is decoded as UTF-8 (a byte order
+/// mark is an error) and every line break is read as `\n`.
 fn read_json(path: &Path, reject_duplicates: bool) -> Done<Json> {
     let bytes = fs::read(path).map_err(|error| Failure::os(&error, path))?;
-    json_from_bytes(&bytes, reject_duplicates)
+    json_from_file_bytes(&bytes, reject_duplicates)
 }
 
+/// `json.loads(text)` for the bytes of a file read with `read_text()`.
+fn json_from_file_bytes(bytes: &[u8], reject_duplicates: bool) -> Done<Json> {
+    let text = python_io::decode_utf8(bytes)
+        .map_err(Failure::Rejected)?
+        .replace("\r\n", "\n")
+        .replace('\r', "\n");
+    json_text::parse(&text, reject_duplicates).map_err(json_error)
+}
+
+/// `json.loads(data)` for bytes: Python decodes them as UTF-8 and drops a leading byte order mark.
 fn json_from_bytes(bytes: &[u8], reject_duplicates: bool) -> Done<Json> {
-    let text = std::str::from_utf8(bytes).map_err(|error| {
-        Failure::Rejected(format!("'utf-8' codec can't decode the document: {error}"))
-    })?;
+    let body = bytes.strip_prefix(b"\xef\xbb\xbf").unwrap_or(bytes);
+    let text = python_io::decode_utf8(body).map_err(Failure::Rejected)?;
     json_text::parse(text, reject_duplicates).map_err(json_error)
+}
+
+/// `type(value).__name__` of the Python value a JSON document gives.
+fn json_type_name(value: &Json) -> &'static str {
+    match value {
+        Json::Null => "NoneType",
+        Json::Bool(_) => "bool",
+        Json::Int(_) => "int",
+        Json::Float(_) => "float",
+        Json::Str(_) => "str",
+        Json::Array(_) => "list",
+        Json::Object(_) => "dict",
+    }
 }
 
 /// `value.get(key)` where a missing key gives `None`.
 fn dict_get<'a>(value: &'a Json, key: &str) -> Done<Option<&'a Json>> {
     match value {
         Json::Object(_) => Ok(value.get(key)),
-        _ => crash("AttributeError: the value has no attribute 'get'"),
+        other => crash(format!(
+            "AttributeError: '{}' object has no attribute 'get'",
+            json_type_name(other)
+        )),
     }
 }
 
@@ -825,7 +894,12 @@ fn dict_index<'a>(value: &'a Json, key: &str) -> Done<&'a Json> {
             Some(found) => Ok(found),
             None => crash(format!("KeyError: {}", python_str_repr(key))),
         },
-        _ => crash("TypeError: the value is not subscriptable by a string"),
+        Json::Array(_) => crash("TypeError: list indices must be integers or slices, not str"),
+        Json::Str(_) => crash("TypeError: string indices must be integers, not 'str'"),
+        other => crash(format!(
+            "TypeError: '{}' object is not subscriptable",
+            json_type_name(other)
+        )),
     }
 }
 
@@ -833,10 +907,14 @@ fn is_string(value: Option<&Json>) -> bool {
     matches!(value, Some(Json::Str(_)))
 }
 
+/// The text of a value the script hands to `Path(...)`.
 fn string_of(value: &Json) -> Done<&str> {
     match value {
         Json::Str(text) => Ok(text),
-        _ => crash("TypeError: expected str, bytes or os.PathLike object"),
+        other => crash(format!(
+            "TypeError: argument should be a str or an os.PathLike object where __fspath__ returns a str, not '{}'",
+            json_type_name(other)
+        )),
     }
 }
 
@@ -991,7 +1069,7 @@ struct Tracked {
 fn unchanged_inputs(inputs: &[Tracked]) -> Done<()> {
     for item in inputs {
         let requested = Path::new(&item.requested);
-        let again = fs::canonicalize(requested).map_err(|error| Failure::os(&error, requested))?;
+        let again = resolve_strict(requested)?;
         let now = identity(&item.resolved)?;
         require(
             again == item.resolved && now == item.before,
@@ -1192,7 +1270,12 @@ fn relocated_receipt(original: &Json, destination: &Path, relocation: &Json) -> 
     let mut value = original.clone();
     let outputs = match dict_index(&value, "outputs")? {
         Json::Object(items) => items.clone(),
-        _ => return crash("AttributeError: the value has no attribute 'values'"),
+        other => {
+            return crash(format!(
+                "AttributeError: '{}' object has no attribute 'values'",
+                json_type_name(other)
+            ));
+        }
     };
     let mut moved: Vec<(String, Json)> = Vec::new();
     for (role, item) in outputs {
@@ -1526,7 +1609,7 @@ pub(crate) fn adopt_completed_projection(
         source_dir.is_absolute() && cache_root.is_absolute() && cache_dir.is_absolute(),
         "Prepared cache adoption paths must be absolute",
     )?;
-    let source = fs::canonicalize(source_dir).map_err(|error| Failure::os(&error, source_dir))?;
+    let source = resolve_strict(source_dir)?;
     let canonical_names = lexical_normalize(cache_root) == cache_root
         && lexical_normalize(cache_dir) == cache_dir
         && !cache_dir.components().any(|part| {
@@ -1681,7 +1764,7 @@ pub(crate) fn adopt_completed_projection(
         let copied_path = destination.join("adapter.ready.json");
         let copied_text =
             fs::read(&copied_path).map_err(|error| Failure::os(&error, &copied_path))?;
-        let copied = json_from_bytes(&copied_text, false)?;
+        let copied = json_from_file_bytes(&copied_text, false)?;
         let recorded = match dict_get(&copied, "relocation")? {
             Some(found) => dict_get(found, "original_receipt_sha256")?,
             None => None,
@@ -1818,16 +1901,20 @@ fn read_config(config: &Path) -> Done<ConfigRead> {
     let path = complete_path(config)?;
     let before = identity(&path)?;
     let bytes = fs::read(&path).map_err(|error| Failure::os(&error, &path))?;
-    let text = String::from_utf8(bytes).map_err(|error| {
-        Failure::Rejected(format!(
-            "'utf-8' codec can't decode the configuration: {error}"
-        ))
-    })?;
+    // `path.open(newline="")` decodes as UTF-8 and keeps the line breaks as written.
+    let text = python_utf8_decode(&bytes).map_err(Failure::Rejected)?;
     let document = match yaml_config::parse_config(&text) {
         Ok(YamlParsed::Mapping(document)) => document,
         Ok(_) => return reject("Expected a block-mapping YAML config"),
-        Err(error @ YamlError::Invalid(_)) | Err(error @ YamlError::Unsupported(_)) => {
+        Err(error @ YamlError::Invalid(_)) => {
             return reject(format!("Invalid YAML config: {error}"));
+        }
+        // YAML that PyYAML reads but this reader does not (anchors, aliases, tags,
+        // block scalars, multi-line scalars, keys with spaces, deeper nesting) is
+        // refused with exit code 1, so that it is not mistaken for the exit code 2
+        // the script gives text that PyYAML itself refuses.
+        Err(error @ YamlError::Unsupported(_)) => {
+            return crash(format!("YAML error: {error}"));
         }
     };
     require(
@@ -1978,16 +2065,21 @@ fn check_first_record(path: &Path, index_path: &Path) -> Done<()> {
             other => other,
         }
     };
-    if !starts_with_gzip_magic(path)? {
-        return Err(wrap("Not a gzipped file".to_owned()));
-    }
     let file = File::open(path).map_err(|error| Failure::os(&error, path))?;
-    let mut stream = BufReader::new(MultiGzDecoder::new(file));
+    let mut stream = BufReader::new(PythonGzipReader::new(file));
+    // The script lets zlib.error escape as a traceback (exit 1); EOFError,
+    // BadGzipFile and operating-system errors are reported as rejections.
+    let read_failure = |error: io::Error| -> Failure {
+        match GzipFailure::of(&error) {
+            Some(GzipFailure::Zlib(text)) => Failure::Crash(format!("zlib.error: {text}")),
+            Some(other) => wrap(other.to_string()),
+            None => wrap(os_error_text(&error)),
+        }
+    };
     let mut line_bytes: Vec<u8> = Vec::new();
     let mut found_record = false;
     for _ in 0..=MAX_LINES {
-        let line = read_bounded_line(&mut stream, MAX_LINE + 1)
-            .map_err(|error| wrap(error.to_string()))?;
+        let line = read_bounded_line(&mut stream, MAX_LINE + 1).map_err(&read_failure)?;
         require(
             line.len() <= MAX_LINE,
             &format!(
@@ -2016,7 +2108,10 @@ fn check_first_record(path: &Path, index_path: &Path) -> Done<()> {
             path.display()
         )));
     }
-    let text = String::from_utf8(line_bytes).map_err(|error| wrap(error.to_string()))?;
+    // The script decodes in 8 KiB chunks, so a bad byte beyond the first line
+    // can fail it earlier, and a position counts from the start of its chunk;
+    // here only the first record is decoded and the position counts from its start.
+    let text = python_io::decode_utf8(&line_bytes).map_err(&wrap)?;
     let line = text.trim_end_matches(['\r', '\n']);
     let fields: Vec<&str> = line.split('\t').collect();
     require(
@@ -2038,7 +2133,22 @@ fn check_first_record(path: &Path, index_path: &Path) -> Done<()> {
         &format!("Invalid first SpliceAI VCF position: {}", path.display()),
     )
     .map_err(&unwrap_failure)?;
-    let index = tabix_index::read_index(index_path).map_err(&wrap)?;
+    // pysam reports every unreadable index with this one message, naming the data
+    // file, after htslib has written its own line about the index to stderr
+    // ("Invalid argument" is the reason htslib gives for an index it cannot parse).
+    let index = match tabix_index::read_index(index_path) {
+        Ok(index) => index,
+        Err(_) => {
+            eprintln!(
+                "[E::hts_idx_load3] Could not load local index file '{}' : Invalid argument",
+                index_path.display()
+            );
+            return Err(wrap(format!(
+                "could not open index for `{}`",
+                path.display()
+            )));
+        }
+    };
     require(
         index.names.iter().any(|name| name == fields[0]),
         &format!(
@@ -2123,13 +2233,7 @@ fn validate_v1_indexes(snv: &str, indel: &str) -> Done<Vec<Tracked>> {
 
 // ---------------------------------------------------------------- install
 
-fn install(
-    config: &str,
-    cache_dir: &str,
-    snv: &str,
-    indel: &str,
-    script_dir: Option<&str>,
-) -> Done<PairReport> {
+fn install(config: &str, cache_dir: &str, snv: &str, indel: &str) -> Done<PairReport> {
     let read = read_config(Path::new(config))?;
     let mut inputs: Vec<Tracked> = Vec::new();
     for name in [snv, indel] {
@@ -2145,24 +2249,23 @@ fn install(
     let report = validate_pair(assembly, Path::new(snv), Path::new(indel))?;
     if report.format == "spliceai2_tsv" {
         let manifest = discover_manifest(Path::new(snv), Path::new(indel))?;
-        let script_dir = match script_dir {
-            Some(folder) => folder.to_owned(),
-            None => match std::env::var("PRIVA_SCRIPT_DIR") {
-                Ok(folder) if !folder.is_empty() => folder,
-                _ => {
-                    return reject(
-                        "preparing a native SpliceAI2 table needs --script-dir (the folder holding install_utils.sh) or PRIVA_SCRIPT_DIR",
-                    );
-                }
-            },
+        // The script finds install_utils.sh beside itself. A compiled program has no
+        // such place, so the folder comes from the environment; without it the run
+        // stops with exit code 1 (a refusal, not the script's exit code 2).
+        let script_dir = match std::env::var("PRIVA_SCRIPT_DIR") {
+            Ok(folder) if !folder.is_empty() => folder,
+            _ => {
+                return crash(
+                    "preparing a native SpliceAI2 table needs the environment variable PRIVA_SCRIPT_DIR set to the folder holding install_utils.sh",
+                );
+            }
         };
         let helper = Path::new(&script_dir).join("install_utils.sh");
         let output = absolute_path(Path::new(cache_dir))
             .join("SpliceAI2")
             .join("GRCh38");
         let config_absolute = absolute_path(Path::new(config));
-        let again =
-            fs::canonicalize(config).map_err(|error| Failure::os(&error, Path::new(config)))?;
+        let again = resolve_strict(Path::new(config))?;
         require(
             again == read.path && identity(&read.path)? == read.before,
             "Config changed after cache validation",
@@ -2183,8 +2286,7 @@ fn install(
             }));
         }
     } else {
-        let again =
-            fs::canonicalize(config).map_err(|error| Failure::os(&error, Path::new(config)))?;
+        let again = resolve_strict(Path::new(config))?;
         require(
             again == read.path,
             "Config target changed after cache validation",
@@ -2214,11 +2316,227 @@ fn install(
 }
 
 // ---------------------------------------------------------------- command line
+//
+// The script's `argparse` parser, reproduced with the program name this
+// command has (`priva spliceai-cache-input`): the same options and abbreviations,
+// the same order of checks, the same usage lines and help texts (worded and
+// wrapped as argparse does at 80 columns), and the same error messages. The
+// script's `install` takes exactly `--config --cache-dir --snv --indel`; the
+// folder holding `install_utils.sh`, which Python finds beside the script, is
+// taken from the environment variable PRIVA_SCRIPT_DIR instead of an option,
+// so that the options (and what an abbreviation such as `--s` stands for) are
+// the script's own.
 
-fn usage_error(message: &str) -> ! {
-    eprintln!("{USAGE}");
-    eprintln!("priva spliceai-cache-input: error: {message}");
+const PROGRAM: &str = "priva spliceai-cache-input";
+const MAIN_USAGE: &str = "usage: priva spliceai-cache-input [-h] {install,adopt-prepared} ...";
+const INSTALL_USAGE: &str = "usage: priva spliceai-cache-input install [-h] --config CONFIG --cache-dir\n                                          CACHE_DIR --snv SNV --indel INDEL";
+const ADOPT_USAGE: &str = "usage: priva spliceai-cache-input adopt-prepared [-h] --source-dir SOURCE_DIR\n                                                 --output-dir OUTPUT_DIR\n                                                 --cache-root CACHE_ROOT";
+const MAIN_HELP: &str = "\nInspect existing SpliceAI inputs; convert only confirmed native SpliceAI2\ntables. Header classification reads bounded headers, not variant rows or\nwhole-file CRCs. Explicit prepared-cache adoption streams original/copy SHA256\nonce and preserves the original receipt; it does not rerun the converter or\nqualify scientific use. Fresh installation guidance is assembly-specific;\nexisting compatible v1 VCFs also remain usable on GRCh38. Neither\nclassification nor registration qualifies SpliceAI2 for the unchanged\nACMG/CADD scientific contracts.\n\npositional arguments:\n  {install,adopt-prepared}\n    adopt-prepared      Copy a completed SpliceAI2 cache into managed storage\n                        without conversion\n\noptions:\n  -h, --help            show this help message and exit\n";
+const INSTALL_HELP: &str = "\noptions:\n  -h, --help            show this help message and exit\n  --config CONFIG\n  --cache-dir CACHE_DIR\n  --snv SNV\n  --indel INDEL\n";
+const ADOPT_HELP: &str = "\noptions:\n  -h, --help            show this help message and exit\n  --source-dir SOURCE_DIR\n  --output-dir OUTPUT_DIR\n  --cache-root CACHE_ROOT\n";
+const COMMANDS: &str = "'install', 'adopt-prepared'";
+
+/// One of the script's sub-commands.
+struct SubCommand {
+    name: &'static str,
+    usage: &'static str,
+    help: &'static str,
+    /// The required options, without their dashes, in the order they are declared.
+    options: &'static [&'static str],
+}
+
+const INSTALL: SubCommand = SubCommand {
+    name: "install",
+    usage: INSTALL_USAGE,
+    help: INSTALL_HELP,
+    options: &["config", "cache-dir", "snv", "indel"],
+};
+
+const ADOPT_PREPARED: SubCommand = SubCommand {
+    name: "adopt-prepared",
+    usage: ADOPT_USAGE,
+    help: ADOPT_HELP,
+    options: &["source-dir", "output-dir", "cache-root"],
+};
+
+/// `parser.error(message)`: the usage, then the message, exit code 2.
+fn argparse_error(usage: &str, program: &str, message: &str) -> ! {
+    eprintln!("{usage}");
+    eprintln!("{program}: error: {message}");
     std::process::exit(2)
+}
+
+/// How argparse reads one argument string.
+enum Token {
+    /// A value or a command word.
+    Plain,
+    /// An option: the position of the option it names among the parser's option
+    /// strings (`None` when the parser does not know it) and an explicit value.
+    Option(Option<usize>, Option<String>),
+}
+
+/// argparse's `_negative_number_matcher`: `-5`, `-5.5` and `-.5`.
+fn is_negative_number(text: &str) -> bool {
+    let Some(body) = text.strip_prefix('-') else {
+        return false;
+    };
+    let digits = |part: &str| !part.is_empty() && part.chars().all(|c| c.is_ascii_digit());
+    match body.split_once('.') {
+        Some((whole, fraction)) => (whole.is_empty() || digits(whole)) && digits(fraction),
+        None => digits(body),
+    }
+}
+
+/// `ArgumentParser._parse_optional` for a parser with these option strings
+/// (`-h`, `--help` and the long options). An ambiguous abbreviation is an error message.
+fn classify_token(text: &str, strings: &[String]) -> std::result::Result<Token, String> {
+    if !text.starts_with('-') {
+        return Ok(Token::Plain);
+    }
+    if let Some(found) = strings.iter().position(|name| name == text) {
+        return Ok(Token::Option(Some(found), None));
+    }
+    if text.len() == 1 {
+        return Ok(Token::Plain);
+    }
+    if let Some((name, value)) = text.split_once('=') {
+        if let Some(found) = strings.iter().position(|known| known == name) {
+            return Ok(Token::Option(Some(found), Some(value.to_owned())));
+        }
+    }
+    // Abbreviations: a long option may be shortened, a short one may carry its value.
+    let mut matches: Vec<(usize, Option<String>)> = Vec::new();
+    if text.starts_with("--") {
+        let (prefix, value) = match text.split_once('=') {
+            Some((prefix, value)) => (prefix, Some(value.to_owned())),
+            None => (text, None),
+        };
+        for (position, name) in strings.iter().enumerate() {
+            if name.starts_with(prefix) {
+                matches.push((position, value.clone()));
+            }
+        }
+    } else {
+        let short: String = text.chars().take(2).collect();
+        let attached: String = text.chars().skip(2).collect();
+        for (position, name) in strings.iter().enumerate() {
+            if *name == short {
+                matches.push((position, Some(attached.clone())));
+            } else if name.starts_with(text) {
+                matches.push((position, None));
+            }
+        }
+    }
+    if matches.len() > 1 {
+        let names: Vec<&str> = matches
+            .iter()
+            .map(|(at, _)| strings[*at].as_str())
+            .collect();
+        return Err(format!(
+            "ambiguous option: {text} could match {}",
+            names.join(", ")
+        ));
+    }
+    if let Some((position, value)) = matches.pop() {
+        return Ok(Token::Option(Some(position), value));
+    }
+    if is_negative_number(text) || text.contains(' ') {
+        return Ok(Token::Plain);
+    }
+    Ok(Token::Option(None, None))
+}
+
+/// `-h` was asked for (in a short or abbreviated spelling, with a value attached or not).
+fn help_requested(text: &str, explicit: &Option<String>) -> bool {
+    // `--help=x` is an error; `-hx` shows the help and keeps `-x` as an extra.
+    explicit.is_none() || !text.starts_with("--")
+}
+
+fn print_help(usage: &str, body: &str) -> ! {
+    print!("{usage}\n{body}");
+    std::process::exit(0)
+}
+
+/// What the sub-command's parser found: its option values and the arguments it did not use.
+struct SubParsed {
+    values: HashMap<String, String>,
+    extras: Vec<String>,
+}
+
+fn parse_sub_command(command: &SubCommand, args: &[String]) -> SubParsed {
+    let program = format!("{PROGRAM} {}", command.name);
+    let fail = |message: &str| -> ! { argparse_error(command.usage, &program, message) };
+    let mut strings: Vec<String> = vec!["-h".to_owned(), "--help".to_owned()];
+    strings.extend(command.options.iter().map(|name| format!("--{name}")));
+    // First every argument is read as an option or a plain word; after `--`
+    // everything is plain. An ambiguous abbreviation stops here.
+    let mut kinds: Vec<Option<Token>> = Vec::with_capacity(args.len());
+    let mut after_separator = false;
+    for text in args {
+        if after_separator {
+            kinds.push(Some(Token::Plain));
+        } else if text == "--" {
+            after_separator = true;
+            kinds.push(None);
+        } else {
+            match classify_token(text, &strings) {
+                Ok(kind) => kinds.push(Some(kind)),
+                Err(message) => fail(&message),
+            }
+        }
+    }
+    let mut values: HashMap<String, String> = HashMap::new();
+    let mut extras: Vec<String> = Vec::new();
+    let mut index = 0;
+    while index < args.len() {
+        let (position, explicit) = match &kinds[index] {
+            Some(Token::Option(Some(position), explicit)) => (*position, explicit.clone()),
+            Some(Token::Option(None, _)) | Some(Token::Plain) | None => {
+                extras.push(args[index].clone());
+                index += 1;
+                continue;
+            }
+        };
+        index += 1;
+        if position < 2 {
+            if help_requested(&args[index - 1], &explicit) {
+                print_help(command.usage, command.help);
+            }
+            fail(&format!(
+                "argument -h/--help: ignored explicit argument {}",
+                python_str_repr(explicit.as_deref().unwrap_or(""))
+            ));
+        }
+        let name = strings[position].clone();
+        let value = match explicit {
+            Some(value) => value,
+            None => {
+                // One plain word follows. An option does not take `--` as its separator
+                // (argparse leaves it out of an option's pattern), so `--config -- x` fails.
+                if index < args.len() && matches!(kinds[index], Some(Token::Plain)) {
+                    let value = args[index].clone();
+                    index += 1;
+                    value
+                } else {
+                    fail(&format!("argument {name}: expected one argument"))
+                }
+            }
+        };
+        values.insert(name[2..].to_owned(), value);
+    }
+    let missing: Vec<String> = command
+        .options
+        .iter()
+        .filter(|name| !values.contains_key(**name))
+        .map(|name| format!("--{name}"))
+        .collect();
+    if !missing.is_empty() {
+        fail(&format!(
+            "the following arguments are required: {}",
+            missing.join(", ")
+        ));
+    }
+    SubParsed { values, extras }
 }
 
 fn finish(outcome: Done<Json>) -> Result<()> {
@@ -2249,44 +2567,68 @@ fn finish(outcome: Done<Json>) -> Result<()> {
 }
 
 pub(crate) fn dispatch(args: &[String]) -> Result<()> {
-    let Some(command) = args.first() else {
-        usage_error("the following arguments are required: command");
-    };
-    if command == "-h" || command == "--help" {
-        println!("{USAGE}");
-        return Ok(());
-    }
-    static INSTALL_OPTIONS: [&str; 5] = ["config", "cache-dir", "snv", "indel", "script-dir"];
-    static INSTALL_REQUIRED: [&str; 4] = ["config", "cache-dir", "snv", "indel"];
-    static ADOPT_OPTIONS: [&str; 3] = ["source-dir", "output-dir", "cache-root"];
-    let (names, required): (&[&str], &[&str]) = if command == "install" {
-        (&INSTALL_OPTIONS[..], &INSTALL_REQUIRED[..])
-    } else if command == "adopt-prepared" {
-        (&ADOPT_OPTIONS[..], &ADOPT_OPTIONS[..])
-    } else {
-        usage_error(&format!(
-            "argument command: invalid choice: {} (choose from 'install', 'adopt-prepared')",
-            python_str_repr(command)
+    let main_strings: Vec<String> = vec!["-h".to_owned(), "--help".to_owned()];
+    let main_fail = |message: &str| -> ! { argparse_error(MAIN_USAGE, PROGRAM, message) };
+    let invalid_choice = |word: &str| -> ! {
+        main_fail(&format!(
+            "argument command: invalid choice: {} (choose from {COMMANDS})",
+            python_str_repr(word)
         ))
     };
-    let values = match python_args::parse_long_options(&args[1..], names) {
-        Ok(Parsed::Help) => {
-            println!("{USAGE}");
-            return Ok(());
+    // Options before the command word are the main parser's: only the help is
+    // known, anything else is set aside and reported once the command has run.
+    let mut main_extras: Vec<String> = Vec::new();
+    let mut found: Option<usize> = None;
+    let mut index = 0;
+    while index < args.len() {
+        let text = &args[index];
+        if text == "--" {
+            if index + 1 < args.len() {
+                invalid_choice("--");
+            }
+            break;
         }
-        Ok(Parsed::Values(values)) => values,
-        Err(message) => usage_error(&message),
-    };
-    if let Err(message) = python_args::require_options(&values, required) {
-        usage_error(&message);
+        match classify_token(text, &main_strings) {
+            Ok(Token::Plain) => {
+                found = Some(index);
+                break;
+            }
+            Ok(Token::Option(Some(_), explicit)) => {
+                if help_requested(text, &explicit) {
+                    print_help(MAIN_USAGE, MAIN_HELP);
+                }
+                main_fail(&format!(
+                    "argument -h/--help: ignored explicit argument {}",
+                    python_str_repr(explicit.as_deref().unwrap_or(""))
+                ));
+            }
+            Ok(Token::Option(None, _)) => main_extras.push(text.clone()),
+            Err(message) => main_fail(&message),
+        }
+        index += 1;
     }
-    if command == "install" {
+    let Some(at) = found else {
+        main_fail("the following arguments are required: command");
+    };
+    let command = match args[at].as_str() {
+        "install" => INSTALL,
+        "adopt-prepared" => ADOPT_PREPARED,
+        other => invalid_choice(other),
+    };
+    let SubParsed { values, extras } = parse_sub_command(&command, &args[at + 1..]);
+    main_extras.extend(extras);
+    if !main_extras.is_empty() {
+        main_fail(&format!(
+            "unrecognized arguments: {}",
+            main_extras.join(" ")
+        ));
+    }
+    if command.name == "install" {
         let report = install(
             &values["config"],
             &values["cache-dir"],
             &values["snv"],
             &values["indel"],
-            values.get("script-dir").map(String::as_str),
         );
         finish(report.map(|report| report_json(&report)))
     } else {
@@ -2644,6 +2986,120 @@ mod tests {
             copy_verified_member(&source, &wrong, &"0".repeat(64)),
             Err(Failure::Rejected(message)) if message.contains("SHA256 differs")
         ));
+        let _ = fs::remove_dir_all(&folder);
+    }
+    #[test]
+    fn command_lines_are_read_like_argparse() {
+        let strings: Vec<String> = [
+            "-h",
+            "--help",
+            "--config",
+            "--cache-dir",
+            "--snv",
+            "--indel",
+        ]
+        .iter()
+        .map(|name| name.to_string())
+        .collect();
+        let named = |text: &str| match classify_token(text, &strings) {
+            Ok(Token::Option(Some(at), explicit)) => Some((at, explicit)),
+            _ => None,
+        };
+        assert_eq!(named("--config"), Some((2, None)));
+        assert_eq!(named("--conf"), Some((2, None)));
+        assert_eq!(named("--snv=x=y"), Some((4, Some("x=y".to_owned()))));
+        assert_eq!(named("--he"), Some((1, None)));
+        assert_eq!(named("-hx"), Some((0, Some("x".to_owned()))));
+        assert!(matches!(
+            classify_token("--bogus", &strings),
+            Ok(Token::Option(None, None))
+        ));
+        assert!(matches!(classify_token("-5", &strings), Ok(Token::Plain)));
+        assert!(matches!(classify_token("-.5", &strings), Ok(Token::Plain)));
+        assert!(matches!(classify_token("-x y", &strings), Ok(Token::Plain)));
+        assert!(matches!(classify_token("-", &strings), Ok(Token::Plain)));
+        assert!(matches!(classify_token("", &strings), Ok(Token::Plain)));
+        assert_eq!(
+            classify_token("--c", &strings).err().unwrap(),
+            "ambiguous option: --c could match --config, --cache-dir"
+        );
+        let words =
+            |items: &[&str]| -> Vec<String> { items.iter().map(|item| item.to_string()).collect() };
+        let parsed = parse_sub_command(
+            &INSTALL,
+            &words(&[
+                "--conf",
+                "a",
+                "--cache-dir=b",
+                "--indel",
+                "",
+                "--snv",
+                "c",
+                "--",
+                "stray",
+                "--bogus",
+            ]),
+        );
+        assert_eq!(parsed.values["config"], "a");
+        assert_eq!(parsed.values["cache-dir"], "b");
+        assert_eq!(parsed.values["snv"], "c");
+        assert_eq!(parsed.values["indel"], "");
+        assert_eq!(parsed.extras, words(&["--", "stray", "--bogus"]));
+    }
+
+    #[test]
+    fn receipts_with_decimal_numbers_are_written_back() {
+        let original = json_text::parse(
+            "{\"outputs\": {}, \"gene_context\": {\"path\": \"/o/g.tsv\"}, \"thresholds\": {\"balanced\": 0.250, \"low\": 1e-5}}",
+            true,
+        )
+        .unwrap();
+        let relocation = json_text::parse("{\"kind\": \"k\"}", true).unwrap();
+        let moved = relocated_receipt(&original, Path::new("/n"), &relocation).unwrap();
+        let text = json_text::dumps(&moved, false).unwrap();
+        assert!(
+            text.contains("\"thresholds\": {\"balanced\": 0.25, \"low\": 1e-05}"),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn damaged_headers_give_the_scripts_texts() {
+        let folder = scratch("damaged");
+        let packed = write_text(&folder, "ok.gz", VCF_HEADER, true);
+        let good = fs::read(&packed).unwrap();
+        let message = |name: &str, bytes: &[u8]| -> String {
+            let path = folder.join(name);
+            fs::write(&path, bytes).unwrap();
+            match inspect_header(&path) {
+                Err(Failure::Rejected(message)) => message,
+                other => panic!("{name}: {other:?}"),
+            }
+        };
+        let cut = message("cut.gz", &good[..good.len() - 6]);
+        assert!(cut.starts_with("Corrupt/truncated cache header: "), "{cut}");
+        assert!(
+            cut.ends_with(&format!(": {COMPRESSED_FILE_ENDED}")),
+            "{cut}"
+        );
+        let mut garbage = good.clone();
+        garbage.extend_from_slice(b"garbage");
+        assert_eq!(
+            message("garbage.gz", &garbage),
+            "Not a gzipped file (b'ga')"
+        );
+        let mut method = good.clone();
+        method[2] = 9;
+        assert_eq!(message("method.gz", &method), "Unknown compression method");
+        let mut bytes = b"##fileformat=VCFv4.2\n##source=".to_vec();
+        bytes.extend_from_slice(b"\xff\n");
+        let coded = message("coded", &bytes);
+        assert!(
+            coded.ends_with(
+                "'utf-8' codec can't decode byte 0xff in position 9: invalid start byte"
+            ),
+            "{coded}"
+        );
         let _ = fs::remove_dir_all(&folder);
     }
 }

@@ -300,6 +300,26 @@ fn duplicate_context_ids_fail_even_if_rows_identical() {
 }
 
 #[test]
+fn one_gene_id_under_two_names_emits_both_on_its_interval() {
+    let context = genes("G1\tchr1\t1\t30\t+\tOLD\nG1\tchr1\t1\t30\t+\tNEW\n");
+    let (output, stats) = run(&context, &table(&[row()]), VariantKind::Snv, false).unwrap();
+    let names: Vec<_> = output
+        .lines()
+        .map(|line| line.split('|').nth(1).unwrap())
+        .collect();
+    assert_eq!(names, ["NEW", "OLD"]);
+    assert_eq!(stats.output_records, 2);
+    for second in ["G1\tchr1\t1\t31\t+\tNEW\n", "G1\tchr1\t1\t30\t-\tNEW\n"] {
+        let context = genes(&("G1\tchr1\t1\t30\t+\tOLD\n".to_owned() + second));
+        assert!(
+            run(&context, &table(&[row()]), VariantKind::Snv, false)
+                .unwrap_err()
+                .contains("duplicate gene context ID G1 with a different interval or strand")
+        );
+    }
+}
+
+#[test]
 fn malformed_context_rejected() {
     for body in [
         "G1\tchr1\t0\t30\t+\tGENE\n",

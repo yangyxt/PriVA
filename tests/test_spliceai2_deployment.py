@@ -40,9 +40,20 @@ class GeneFixture:
             content += f'chr1\tfixture\tgene\t10\t30\t.\t{strand}\t.\tgene_id "{gene}"; gene_name "{name}"; gene_type "protein_coding"; tag "one"; tag "two";\n'
         self.gtf.write_bytes(gzip.compress(content.encode()))
         self.context = self.folder / "context.tsv"
+        # VEP's release: newer gene versions, same names until a test renames one.
+        self.release = self.folder / "gencode.v50.annotation.gff3.gz"
+        content = "##gff-version 3\n#description: GRCh38, version 50 (Ensembl fixture)\n"
+        for gene, name, strand in (("GENE1.2", "FIXTURE_A", "+"), ("GENE2.3", "FIXTURE_B", "-")):
+            content += f"chr1\tfixture\tgene\t10\t30\t.\t{strand}\t.\tID={gene};gene_id={gene};gene_type=protein_coding;gene_name={name}\n"
+        content += "chr1\tfixture\ttranscript\t10\t30\t.\t+\t.\tID=TX1.1;Parent=GENE1.2;gene_id=GENE1.2;gene_name=TRANSCRIPT_ROW\n"
+        self.release.write_bytes(gzip.compress(content.encode()))
 
-    def build(self):
-        return DEPLOY.gene_context(self.regions, self.gtf, self.context)
+    def rename_in_release(self, old, new):
+        self.release.write_bytes(gzip.compress(gzip.decompress(self.release.read_bytes()).replace(old, new)))
+
+    def build(self, release=None):
+        names = DEPLOY.vep_release_names(self.release, "fixture") if release else None
+        return DEPLOY.gene_context(self.regions, self.gtf, self.context, names)
 
 
 class GeneContextTests(GeneFixture, unittest.TestCase):
@@ -115,6 +126,48 @@ class GeneContextTests(GeneFixture, unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "aliases/ambiguous versions"):
             self.build()
 
+    def test_vep_release_name_adds_a_row_only_for_a_renamed_gene(self):
+        self.rename_in_release(b"gene_name=FIXTURE_A", b"gene_name=FIXTURE_A_NEW")
+        report = self.build(release=True)
+        self.assertEqual(self.context.read_text().splitlines()[1:], [
+            "GENE1.1\tchr1\t10\t30\t+\tFIXTURE_A", "GENE1.1\tchr1\t10\t30\t+\tFIXTURE_A_NEW",
+            "GENE2.2\tchr1\t10\t30\t-\tFIXTURE_B"])
+        self.assertEqual((report["genes"], report["context_rows"]), (2, 3))
+        self.assertEqual(report["vep_release_names"], {
+            "same_name": 1, "not_found": 0, "strand_differs": 0,
+            "renamed": [["GENE1.1", "FIXTURE_A", "FIXTURE_A_NEW"]], "skipped_name_conflicts": []})
+
+    def test_vep_release_names_read_from_gtf_as_from_gff3(self):
+        self.rename_in_release(b"gene_name=FIXTURE_A", b"gene_name=FIXTURE_A_NEW")
+        lines = gzip.decompress(self.release.read_bytes()).decode().splitlines()
+        gtf = ["##description: GRCh38, version 50 (Ensembl fixture)"]
+        for line in lines[2:]:
+            fields = line.split("\t")
+            attributes = dict(item.split("=", 1) for item in fields[8].split(";"))
+            fields[8] = "".join(f'{key} "{attributes[key]}"; ' for key in ("gene_id", "gene_name"))
+            gtf.append("\t".join(fields))
+        self.release = self.folder / "gencode.v50.annotation.gtf.gz"
+        self.release.write_bytes(gzip.compress(("\n".join(gtf) + "\n").encode()))
+        self.assertEqual(self.build(release=True)["vep_release_names"]["renamed"],
+                         [["GENE1.1", "FIXTURE_A", "FIXTURE_A_NEW"]])
+
+    def test_vep_release_name_used_by_another_scored_gene_is_skipped(self):
+        self.rename_in_release(b"gene_name=FIXTURE_A", b"gene_name=FIXTURE_B")
+        report = self.build(release=True)
+        self.assertEqual(report["context_rows"], 2)
+        self.assertEqual(report["vep_release_names"]["skipped_name_conflicts"], [["GENE1.1", "FIXTURE_A", "FIXTURE_B"]])
+
+    def test_missing_or_moved_genes_keep_only_their_gencode48_name(self):
+        self.rename_in_release(b"gene_id=GENE2.3", b"gene_id=OTHER.3")
+        self.rename_in_release(b"\t+\t.\tID=GENE1.2", b"\t-\t.\tID=GENE1.2")
+        report = self.build(release=True)
+        self.assertEqual(report["context_rows"], 2)
+        self.assertEqual((report["vep_release_names"]["not_found"], report["vep_release_names"]["strand_differs"]), (1, 1))
+
+    def test_vep_release_annotation_of_another_ensembl_release_rejected(self):
+        with self.assertRaisesRegex(ValueError, "Ensembl release 115"):
+            DEPLOY.vep_release_names(self.release, "115")
+
     def test_partial_symlink_target_rejected(self):
         partial = self.folder / "source.partial"
         partial.write_text("unfinished")
@@ -153,6 +206,7 @@ class DeploymentTests(GeneFixture, unittest.TestCase):
                          "resource": "SpliceAI2", "version": "2.0", "assembly": "GRCh38", "source_revision": DEPLOY.REVISION,
                          "files": self.files, "scored_regions": self.item(self.regions),
                          "gencode_gtf": {"release": "GENCODE48", **self.item(self.gtf)},
+                         "vep_gene_annotation": {"release": "GENCODE50", **self.item(self.release)},
                          "vep_spliceai_plugin": self.item(self.plugin)}
         self.manifest.write_text(json.dumps(self.document))
         self.output = self.folder / "prepared"
@@ -206,6 +260,25 @@ class DeploymentTests(GeneFixture, unittest.TestCase):
         self.args.validation_subset = False
         with self.assertRaisesRegex(ValueError, "all 47 published shards"):
             self.prepare()
+
+    def test_missing_vep_release_annotation_rejected(self):
+        del self.document["vep_gene_annotation"]
+        self.manifest.write_text(json.dumps(self.document))
+        with self.assertRaisesRegex(ValueError, "VEP's Ensembl release is required"):
+            self.prepare()
+
+    def test_real_projection_scores_a_renamed_gene_under_both_names(self):
+        self.require_converter()
+        self.rename_in_release(b"gene_name=FIXTURE_A", b"gene_name=FIXTURE_A_NEW")
+        self.document["vep_gene_annotation"].update(self.item(self.release))
+        self.manifest.write_text(json.dumps(self.document))
+        report = self.prepare()
+        self.assertEqual(report["gene_context"]["vep_release_names"]["renamed"], [["GENE1.1", "FIXTURE_A", "FIXTURE_A_NEW"]])
+        for kind in ("snv", "indel"):
+            rows = subprocess.check_output(["tabix", report["outputs"][kind]["path"], "chr1:10-20"], text=True).splitlines()
+            self.assertEqual([row.split("|")[1] for row in rows], ["FIXTURE_A", "FIXTURE_A_NEW"] * 2)
+            self.assertEqual(rows[0].split("|", 2)[2], rows[1].split("|", 2)[2])
+            self.assertEqual(report["statistics"][kind][0]["output_records"], 4)
 
     def test_source_checksum_mismatch_rejected(self):
         self.document["files"][0]["sha256"] = "0" * 64

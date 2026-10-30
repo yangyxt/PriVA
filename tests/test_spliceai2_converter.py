@@ -144,10 +144,10 @@ class ProjectionTests(unittest.TestCase):
             "PLUS_DUP\tchr1\t10\t30\t+\tALPHA\n"
             "MINUS\tchr1\t10\t30\t-\tMINUS\n")
 
-    def invoke(self, rows, *, kind="snv", reference=False, header=False):
+    def invoke(self, rows, *, kind="snv", reference=False, header=False, genes=None):
         command = [str(self.reference if reference else self.converter),
                    "spliceai2-vcf" if reference else "project",
-                   "--genes", str(self.genes), "--chrom", "chr1", "--kind", kind,
+                   "--genes", str(genes or self.genes), "--chrom", "chr1", "--kind", kind,
                    "--input", "-", "--output", "-"]
         if not header:
             command.append("--no-header")
@@ -191,6 +191,23 @@ class ProjectionTests(unittest.TestCase):
                 result = self.invoke(rows)
                 self.assertEqual(result.returncode, 2)
                 self.assertIn(b"native TSV line", result.stderr)
+
+    def test_one_gene_id_under_two_names_emits_both_and_other_repeats_fail(self):
+        genes = self.folder / "renamed_genes.tsv"
+        header = "gene_id\tchrom\tgene_start\tgene_end\tstrand\tgene_name\nGENE1.1\tchr1\t10\t30\t+\tOLD_NAME\n"
+        genes.write_text(header + "GENE1.1\tchr1\t10\t30\t+\tNEW_NAME\n")
+        result = self.invoke([row(), row(pos="12")], genes=genes)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        lines = result.stdout.decode().splitlines()
+        self.assertEqual([line.split("|")[1] for line in lines], ["NEW_NAME", "OLD_NAME", "NEW_NAME", "OLD_NAME"])
+        self.assertTrue(all(line.split("|", 2)[2] == lines[0].split("|", 2)[2] for line in lines))
+        for second in ("GENE1.1\tchr1\t10\t30\t+\tOLD_NAME\n", "GENE1.1\tchr1\t10\t31\t+\tNEW_NAME\n",
+                       "GENE1.1\tchr1\t10\t30\t-\tNEW_NAME\n"):
+            with self.subTest(second=second):
+                genes.write_text(header + second)
+                result = self.invoke([row()], genes=genes)
+                self.assertEqual(result.returncode, 2)
+                self.assertIn(b"duplicate gene context ID GENE1.1", result.stderr)
 
     def test_valid_streams_and_diagnostics_match_frozen_production_converter(self):
         if not self.reference:

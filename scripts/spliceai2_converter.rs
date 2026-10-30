@@ -8,7 +8,8 @@
 //! must bind that context, original tables and executable to their provenance hashes.
 //! Multiple context IDs with the same chromosome/symbol/strand retain every gene
 //! interval but emit one symbol per native prediction row: the upstream prediction
-//! is gene-unconditioned. Opposite-strand symbol contexts remain unsupported. Source
+//! is gene-unconditioned. Opposite-strand symbol contexts remain unsupported. A gene
+//! ID may repeat with another name (VEP's release name) on the same interval. Source
 //! prediction rows are never coalesced, including duplicate allele/strand rows.
 //! No ACMG threshold, CADD feature or existing scientific module is changed here.
 //!
@@ -147,7 +148,8 @@ fn genes_for_chrom<G: BufRead>(mut reader: G, chrom: &str) -> Result<Vec<Gene>> 
             "gene context requires exact header {CONTEXT_HEADER:?}"
         )));
     }
-    let mut ids = HashSet::new();
+    let mut places = HashMap::new();
+    let mut labels = HashSet::new();
     let mut symbols = HashMap::new();
     let mut genes = Vec::new();
     let mut line_number = 1;
@@ -163,8 +165,21 @@ fn genes_for_chrom<G: BufRead>(mut reader: G, chrom: &str) -> Result<Vec<Gene>> 
                     "unsupported gene ID, gene symbol or chromosome in context",
                 ));
             }
-            if !ids.insert(fields[0].to_owned()) {
-                return Err(invalid(format!("duplicate gene context ID {}", fields[0])));
+            // A repeated ID labels the same gene interval with a second name.
+            let place = fields[1..5].join("\t");
+            if let Some(prior) = places.insert(fields[0].to_owned(), place.clone()) {
+                if prior != place {
+                    return Err(invalid(format!(
+                        "duplicate gene context ID {} with a different interval or strand",
+                        fields[0]
+                    )));
+                }
+            }
+            if !labels.insert((fields[0].to_owned(), fields[5].to_owned())) {
+                return Err(invalid(format!(
+                    "duplicate gene context ID {} with name {}",
+                    fields[0], fields[5]
+                )));
             }
             // The official VEP plugin keys matching records by symbol alone.
             // Multiple same-strand IDs refer to one gene-unconditioned prediction

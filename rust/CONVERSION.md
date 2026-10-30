@@ -119,7 +119,7 @@ intermediate files of the step before it.
 
 ### 5. Installer and cluster deployment helpers
 
-22 files, 6,141 lines.
+22 files, 6,211 lines.
 
 | Script | Lines | Status |
 | --- | ---: | --- |
@@ -141,7 +141,7 @@ intermediate files of the step before it.
 | `scripts/mechanism_source_input.py` | 155 | Python |
 | `scripts/prepare_cluster_config.py` | 69 | Python |
 | `scripts/reference_resources.py` | 470 | Python |
-| `scripts/spliceai2_to_vep_vcf.py` | 474 | Python |
+| `scripts/spliceai2_to_vep_vcf.py` | 544 | Python |
 | `scripts/vep_chromosome_cache.py` | 450 | Python |
 | `scripts/vep_chromosome_jobs.py` | 375 | Python |
 | `scripts/vep_plugins_release.py` | 390 | Python |

@@ -31,7 +31,7 @@ intermediate files of the step before it.
 | `scripts/combine_annotations.py` | 936 | Python |
 | `scripts/generate_varID_for_vcf.py` | 150 | Rust `priva variant-ids`: byte-identical output, encode and decode, on pysam edge cases, 4,597,985 public ClinVar records and the BH14233 trio slice (2026-10-29). The shell still calls Python until group 1 is complete. |
 | `scripts/hpo_penetrance.py` | 143 | Python |
-| `scripts/pedigree_filtration_per_fam.py` | 302 | Python |
+| `scripts/pedigree_filtration_per_fam.py` | 302 | Rust `priva pedigree-filter`: identical outputs and exit codes on 20 synthetic cases (every GT combination of a four-person family on chr1, chrX and chrY under 13 pedigree layouts, alleles beyond a record's ALT alleles, the error cases and a rerun on its own output), the repository's TEST_FAM, the BH14233 trio slice and 4,597,985 public ClinVar GRCh38 records given made-up genotypes (2026-10-29). Like the Python script under pysam, it stops when the pedigree names a family member who is not a VCF sample. The shell still calls Python until group 1 is complete. |
 | `scripts/spliceai_cache_input.py` | 703 | Python |
 | `scripts/spliceai_cutoffs.py` | 116 | Python |
 

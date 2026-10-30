@@ -19,9 +19,41 @@ use flate2::read::MultiGzDecoder;
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::fs::File;
+use std::hash::{BuildHasherDefault, Hasher};
 use std::io::Read;
 use std::path::Path;
 use std::rc::Rc;
+
+/// A fast hasher (FNV-1a for text, a multiplication for numbers) for the
+/// lookup tables below. They only hold keys read from the file being loaded,
+/// so there is nothing to defend against, and the standard hasher costs more
+/// than the rest of the reading on a pickle with millions of entries.
+struct QuickHasher(u64);
+
+impl Default for QuickHasher {
+    fn default() -> Self {
+        QuickHasher(0xcbf2_9ce4_8422_2325)
+    }
+}
+
+impl Hasher for QuickHasher {
+    fn finish(&self) -> u64 {
+        self.0
+    }
+
+    fn write(&mut self, bytes: &[u8]) {
+        for byte in bytes {
+            self.0 = (self.0 ^ u64::from(*byte)).wrapping_mul(0x0000_0100_0000_01b3);
+        }
+    }
+
+    fn write_u64(&mut self, number: u64) {
+        self.0 = (self.0 ^ number).wrapping_mul(0x9e37_79b9_7f4a_7c15);
+    }
+}
+
+type QuickMap<K, V> = HashMap<K, V, BuildHasherDefault<QuickHasher>>;
+type QuickSet<K> = HashSet<K, BuildHasherDefault<QuickHasher>>;
 
 #[derive(Clone, Debug)]
 pub(crate) enum Value {
@@ -40,7 +72,7 @@ pub(crate) enum Value {
 #[derive(Debug, Default)]
 pub(crate) struct Dict {
     pub(crate) entries: Vec<(Value, Value)>,
-    positions: HashMap<String, usize>,
+    positions: QuickMap<String, usize>,
 }
 
 impl Dict {
@@ -55,12 +87,22 @@ impl Dict {
         }
         Ok(())
     }
+
+    /// `dict[key]` for a key Python considers equal to `key`; an error for a
+    /// key that cannot be hashed.
+    pub(crate) fn get(&self, key: &Value) -> Result<Option<&Value>> {
+        let identity = identity(key)?;
+        Ok(self
+            .positions
+            .get(&identity)
+            .map(|&position| &self.entries[position].1))
+    }
 }
 
 #[derive(Debug, Default)]
 pub(crate) struct Set {
     pub(crate) items: Vec<Value>,
-    seen: HashSet<String>,
+    seen: QuickSet<String>,
 }
 
 impl Set {
@@ -69,6 +111,11 @@ impl Set {
             self.items.push(item);
         }
         Ok(())
+    }
+
+    /// `item in set`; an error for an item that cannot be hashed.
+    pub(crate) fn contains(&self, item: &Value) -> Result<bool> {
+        Ok(self.seen.contains(&identity(item)?))
     }
 }
 
@@ -152,6 +199,28 @@ impl Value {
             Value::Str(text) => Some(&**text),
             _ => None,
         }
+    }
+
+    /// Python's `bool(value)`.
+    pub(crate) fn is_truthy(&self) -> bool {
+        match self {
+            Value::None => false,
+            Value::Bool(flag) => *flag,
+            Value::Int(number) => *number != 0,
+            Value::Float(number) => *number != 0.0,
+            Value::Str(text) => !text.is_empty(),
+            _ => self.length() != Some(0),
+        }
+    }
+
+    /// Python's `self == other` for values that can be hashed (so `1`, `1.0`
+    /// and `True` are equal); an error for a list, dict or set.
+    pub(crate) fn python_equals(&self, other: &Value) -> Result<bool> {
+        let not_a_number = |value: &Value| matches!(value, Value::Float(number) if number.is_nan());
+        if not_a_number(self) || not_a_number(other) {
+            return Ok(false);
+        }
+        Ok(identity(self)? == identity(other)?)
     }
 }
 
@@ -257,7 +326,7 @@ pub(crate) fn load(bytes: &[u8]) -> Result<Value> {
     let mut reader = Reader { bytes, position: 0 };
     let mut stack: Vec<Value> = Vec::new();
     let mut marks: Vec<usize> = Vec::new();
-    let mut memo: HashMap<u64, Value> = HashMap::new();
+    let mut memo: QuickMap<u64, Value> = QuickMap::default();
     loop {
         let offset = reader.position;
         let opcode = reader.byte()?;
@@ -569,6 +638,68 @@ mod tests {
         assert!(load(b"\x80\x06N.").is_err(), "protocol 6");
         assert!(load(b"not a pickle").is_err());
         assert!(load(b"").is_err());
+    }
+
+    #[test]
+    fn lookups_truthiness_and_equality_follow_python() {
+        let mut dict = Dict::default();
+        dict.insert(Value::Int(1), Value::Str(Rc::from("one")))
+            .unwrap();
+        dict.insert(Value::Str(Rc::from("k")), Value::None).unwrap();
+        assert_eq!(
+            dict.get(&Value::Float(1.0)).unwrap().unwrap().as_str(),
+            Some("one")
+        );
+        assert_eq!(
+            dict.get(&Value::Bool(true)).unwrap().unwrap().as_str(),
+            Some("one")
+        );
+        assert!(dict.get(&Value::Str(Rc::from("1"))).unwrap().is_none());
+        assert!(matches!(
+            dict.get(&Value::Str(Rc::from("k"))).unwrap(),
+            Some(Value::None)
+        ));
+        assert!(dict.get(&Value::Float(f64::NAN)).unwrap().is_none());
+        assert!(
+            dict.get(&Value::List(Rc::new(RefCell::new(Vec::new()))))
+                .is_err()
+        );
+        let mut set = Set::default();
+        set.insert(Value::Str(Rc::from("g:a"))).unwrap();
+        assert!(set.contains(&Value::Str(Rc::from("g:a"))).unwrap());
+        assert!(!set.contains(&Value::Str(Rc::from("g:b"))).unwrap());
+        assert!(!set.contains(&Value::Int(0)).unwrap());
+        assert!(set.contains(&Value::Tuple(Rc::new(Vec::new()))).is_ok());
+        let empty_list = Value::List(Rc::new(RefCell::new(Vec::new())));
+        let full_tuple = Value::Tuple(Rc::new(vec![Value::None]));
+        for (value, expected) in [
+            (Value::None, false),
+            (Value::Bool(false), false),
+            (Value::Int(0), false),
+            (Value::Int(-3), true),
+            (Value::Float(0.0), false),
+            (Value::Float(f64::NAN), true),
+            (Value::Str(Rc::from("")), false),
+            (Value::Str(Rc::from("0")), true),
+            (empty_list.clone(), false),
+            (full_tuple, true),
+            (Value::Dict(Rc::new(RefCell::new(dict))), true),
+            (Value::Set(Rc::new(RefCell::new(Set::default()))), false),
+        ] {
+            assert_eq!(value.is_truthy(), expected, "{value:?}");
+        }
+        assert!(Value::Int(1).python_equals(&Value::Float(1.0)).unwrap());
+        assert!(
+            !Value::Int(1)
+                .python_equals(&Value::Str(Rc::from("1")))
+                .unwrap()
+        );
+        assert!(
+            !Value::Float(f64::NAN)
+                .python_equals(&Value::Float(f64::NAN))
+                .unwrap()
+        );
+        assert!(empty_list.python_equals(&Value::Int(1)).is_err());
     }
 
     #[test]

@@ -21,8 +21,11 @@
 //!
 //! Not reproduced, and refused with an error rather than guessed: a data row
 //! with more fields than the header (pandas may then use the first column as
-//! the index), an integer that does not fit 64 bits, a quoted field that is
-//! never closed, input that is not UTF-8, and compressions other than gzip.
+//! the index), a column in which the first value that does not parse as a
+//! 64-bit integer starts with more digits than a signed 64-bit integer holds
+//! (pandas then reads the column as unsigned integers, or keeps the text of
+//! every value), a quoted field that is never closed, input that is not
+//! UTF-8, and compressions other than gzip.
 use crate::cli::{Result, invalid};
 use crate::python_text::float_repr;
 use flate2::read::MultiGzDecoder;
@@ -289,6 +292,8 @@ enum IntegerToken {
 }
 
 /// pandas' `str_to_int64`: optional blanks, a sign, digits, optional blanks.
+/// Like the C code it reports an overflow as soon as the digits run past the
+/// 64-bit range, before it looks at the characters that follow them.
 fn integer_token(token: &str) -> IntegerToken {
     let bytes = token.as_bytes();
     let mut position = 0;
@@ -302,12 +307,16 @@ fn integer_token(token: &str) -> IntegerToken {
     if position >= bytes.len() || !bytes[position].is_ascii_digit() {
         return IntegerToken::Invalid;
     }
+    let limit = if negative {
+        1_u128 << 63
+    } else {
+        (1_u128 << 63) - 1
+    };
     let mut magnitude: u128 = 0;
     while position < bytes.len() && bytes[position].is_ascii_digit() {
         magnitude = magnitude * 10 + u128::from(bytes[position] - b'0');
-        if magnitude > u128::from(u64::MAX) {
-            // Keep reading only to tell an invalid token from an overflow.
-            magnitude = u128::from(u64::MAX) + 1;
+        if magnitude > limit {
+            return IntegerToken::Overflow;
         }
         position += 1;
     }
@@ -317,20 +326,91 @@ fn integer_token(token: &str) -> IntegerToken {
     if position != bytes.len() {
         return IntegerToken::Invalid;
     }
-    let limit = if negative {
-        1_u128 << 63
-    } else {
-        (1_u128 << 63) - 1
-    };
-    if magnitude > limit {
-        return IntegerToken::Overflow;
-    }
     let value = if negative {
         (magnitude as i128).wrapping_neg() as i64
     } else {
         magnitude as i64
     };
     IntegerToken::Value(value)
+}
+
+enum UnsignedToken {
+    /// A sign of `-`: pandas does not look at the rest of the token.
+    Negative,
+    Value,
+    Overflow,
+    Invalid,
+}
+
+/// pandas' `str_to_uint64`, which it tries on a column after a value ran past
+/// the signed 64-bit range.
+fn unsigned_token(token: &str) -> UnsignedToken {
+    let bytes = token.as_bytes();
+    let mut position = 0;
+    while position < bytes.len() && is_space(bytes[position]) {
+        position += 1;
+    }
+    if position < bytes.len() && bytes[position] == b'-' {
+        return UnsignedToken::Negative;
+    }
+    if position < bytes.len() && bytes[position] == b'+' {
+        position += 1;
+    }
+    if position >= bytes.len() || !bytes[position].is_ascii_digit() {
+        return UnsignedToken::Invalid;
+    }
+    let mut magnitude: u128 = 0;
+    while position < bytes.len() && bytes[position].is_ascii_digit() {
+        magnitude = magnitude * 10 + u128::from(bytes[position] - b'0');
+        if magnitude > u128::from(u64::MAX) {
+            return UnsignedToken::Overflow;
+        }
+        position += 1;
+    }
+    while position < bytes.len() && is_space(bytes[position]) {
+        position += 1;
+    }
+    if position != bytes.len() {
+        return UnsignedToken::Invalid;
+    }
+    UnsignedToken::Value
+}
+
+/// The first part of a token, for a message.
+fn shortened(token: &str) -> String {
+    let mut text: String = token.chars().take(40).collect();
+    if text.len() < token.len() {
+        text.push_str("...");
+    }
+    format!("{text:?}")
+}
+
+/// What pandas does when the first value of a column that is not a 64-bit
+/// integer runs past the signed 64-bit range: it tries the whole column as
+/// unsigned integers. The column ends up unsigned integers or text (in which
+/// case every value keeps its original spelling) unless that first unsigned
+/// failure is not an overflow, and then pandas goes on to floats as usual.
+/// Only that last outcome is reproduced; the others are refused.
+fn refuse_unless_float_follows(
+    tokens: &[String],
+    missing: &[bool],
+    overflowing: &str,
+) -> Result<()> {
+    for (token, absent) in tokens.iter().zip(missing) {
+        if *absent {
+            continue;
+        }
+        match unsigned_token(token) {
+            UnsignedToken::Negative | UnsignedToken::Value => {}
+            UnsignedToken::Overflow => break,
+            UnsignedToken::Invalid => return Ok(()),
+        }
+    }
+    Err(invalid(format!(
+        "the value {} lies outside the signed 64-bit integer range, where pandas reads a column \
+         as unsigned integers or keeps its text; the table reader does not reproduce that",
+        shortened(overflowing)
+    )))
 }
 
 /// 1e0 to 1e308, each the double nearest to the power of ten, as in pandas' table.
@@ -350,6 +430,11 @@ fn power_of_ten(exponent: usize) -> f64 {
 /// pandas' `precise_xstrtod` (`float_precision=None`): up to 17 digits are
 /// accumulated in a double and then scaled once by a power of ten. `None` where
 /// pandas reports an error, which makes the column text.
+///
+/// Two details of the C code matter for odd exponents. It reads at most 17
+/// digits of an exponent (a longer one leaves digits behind, so the token
+/// fails), and it adds them up in a 32-bit `int`, so a very long exponent wraps
+/// around: `1e999999999999` is read as 0.0 and `1e4294967296` as 1.0.
 fn precise_xstrtod(token: &str) -> Option<f64> {
     let bytes = token.as_bytes();
     let length = bytes.len();
@@ -366,15 +451,15 @@ fn precise_xstrtod(token: &str) -> Option<f64> {
     }
     let max_digits = 17;
     let mut number = 0.0_f64;
-    let mut exponent: i64 = 0;
+    let mut exponent: i32 = 0;
     let mut digits = 0;
-    let mut decimals: i64 = 0;
+    let mut decimals: i32 = 0;
     while position < length && bytes[position].is_ascii_digit() {
         if digits < max_digits {
             number = number * 10.0 + f64::from(bytes[position] - b'0');
             digits += 1;
         } else {
-            exponent += 1;
+            exponent = exponent.wrapping_add(1);
         }
         position += 1;
     }
@@ -391,7 +476,7 @@ fn precise_xstrtod(token: &str) -> Option<f64> {
                 position += 1;
             }
         }
-        exponent -= decimals;
+        exponent = exponent.wrapping_sub(decimals);
     }
     if digits == 0 {
         return None;
@@ -409,11 +494,12 @@ fn precise_xstrtod(token: &str) -> Option<f64> {
             position += 1;
         }
         let mut exponent_digits = 0;
-        let mut written: i64 = 0;
-        while position < length && bytes[position].is_ascii_digit() {
+        let mut written: i32 = 0;
+        while exponent_digits < max_digits && position < length && bytes[position].is_ascii_digit()
+        {
             written = written
-                .saturating_mul(10)
-                .saturating_add(i64::from(bytes[position] - b'0'));
+                .wrapping_mul(10)
+                .wrapping_add(i32::from(bytes[position] - b'0'));
             exponent_digits += 1;
             position += 1;
         }
@@ -422,9 +508,9 @@ fn precise_xstrtod(token: &str) -> Option<f64> {
             return None;
         }
         exponent = if exponent_negative {
-            exponent.saturating_sub(written)
+            exponent.wrapping_sub(written)
         } else {
-            exponent.saturating_add(written)
+            exponent.wrapping_add(written)
         };
     }
     if exponent > 308 {
@@ -486,10 +572,9 @@ fn infer_column(tokens: Vec<String>) -> Result<Column> {
         match integer_token(token) {
             IntegerToken::Value(value) => integers.push(value),
             IntegerToken::Overflow => {
-                return Err(invalid(format!(
-                    "the integer {token:?} does not fit 64 bits, which is outside the supported \
-                     range of the table reader"
-                )));
+                refuse_unless_float_follows(&tokens, &missing, token)?;
+                all_integers = false;
+                break;
             }
             IntegerToken::Invalid => {
                 all_integers = false;
@@ -501,10 +586,17 @@ fn infer_column(tokens: Vec<String>) -> Result<Column> {
         if !any_missing {
             return Ok(Column::Int(integers));
         }
+        // pandas marks a missing integer with the smallest int64, so that value is lost too.
         let floats = integers
             .iter()
             .zip(&missing)
-            .map(|(value, absent)| if *absent { f64::NAN } else { *value as f64 })
+            .map(|(value, absent)| {
+                if *absent || *value == i64::MIN {
+                    f64::NAN
+                } else {
+                    *value as f64
+                }
+            })
             .collect();
         return Ok(Column::Float(floats));
     }
@@ -537,13 +629,14 @@ fn infer_column(tokens: Vec<String>) -> Result<Column> {
             flags.push(None);
             continue;
         }
-        match token.as_str() {
-            "True" | "TRUE" | "true" => flags.push(Some(true)),
-            "False" | "FALSE" | "false" => flags.push(Some(false)),
-            _ => {
-                all_flags = false;
-                break;
-            }
+        // pandas compares with `strcasecmp`, so every capitalisation counts.
+        if token.eq_ignore_ascii_case("true") {
+            flags.push(Some(true));
+        } else if token.eq_ignore_ascii_case("false") {
+            flags.push(Some(false));
+        } else {
+            all_flags = false;
+            break;
         }
     }
     if all_flags {
@@ -781,6 +874,118 @@ mod tests {
         assert_eq!(float_token("0.30000000000000004"), Some(0.3));
         assert_eq!(float_token("0.1234567"), Some(0.1234567));
         assert!(float_token("1e-320").is_some());
+    }
+
+    #[test]
+    fn exponents_follow_the_c_parser() {
+        // At most 17 exponent digits are read, leading zeros included.
+        assert_eq!(float_token(&format!("1e{}5", "0".repeat(16))), Some(1e5));
+        assert_eq!(float_token(&format!("1e{}5", "0".repeat(17))), None);
+        // The digits are added up in a 32-bit integer that wraps around.
+        assert_eq!(float_token("1e999999999999"), Some(0.0));
+        assert_eq!(float_token("1e-999999999999"), None);
+        assert_eq!(float_token("1e4294967296"), Some(1.0));
+        assert_eq!(float_token("1e4294967297"), Some(10.0));
+        assert_eq!(float_token("1e-4294967295"), Some(10.0));
+        assert_eq!(float_token("1e2147483647"), None);
+        assert_eq!(float_token("1e2147483648"), Some(0.0));
+        assert_eq!(float_token("1e-2147483649"), None);
+        assert_eq!(float_token("1e11111111111111111"), None);
+        assert_eq!(float_token("0e999999"), None);
+        assert_eq!(float_token("0e-999999"), Some(0.0));
+    }
+
+    fn single_column(values: &[&str]) -> Result<Column> {
+        let table = parse_table(&format!("x\n{}\n", values.join("\n")))?;
+        Ok(table.columns.into_iter().next().unwrap())
+    }
+
+    #[test]
+    fn numbers_past_the_signed_range_are_floats_or_refused() {
+        let wide = "1".repeat(21);
+        let float_text = |values: &[&str]| match single_column(values).unwrap() {
+            Column::Float(numbers) => numbers.iter().map(|n| float_repr(*n)).collect::<Vec<_>>(),
+            other => panic!("not a float column: {other:?}"),
+        };
+        // A float with 19 or 20 digits still fits the unsigned range, so pandas reads a float.
+        assert_eq!(
+            float_text(&["9223372036854775808.5"]),
+            ["9.223372036854778e+18"]
+        );
+        assert_eq!(
+            float_text(&["+11111111111111111111.5"]),
+            ["1.1111111111111113e+19"]
+        );
+        assert_eq!(
+            float_text(&["-9223372036854775808.5"]),
+            ["-9.223372036854778e+18"]
+        );
+        // After a value that is no integer, a long digit string is only a float.
+        assert_eq!(
+            float_text(&["1.5", &format!("{}.5", "1".repeat(30))]),
+            ["1.5", "1.1111111111111112e+29"]
+        );
+        assert_eq!(
+            float_text(&["1.5", &"1".repeat(30)]),
+            ["1.5", "1.1111111111111112e+29"]
+        );
+        assert_eq!(
+            single_column(&["abc", &"1".repeat(30)]).unwrap(),
+            Column::Text(vec![Some("abc".into()), Some("1".repeat(30))])
+        );
+        // Everything else past the signed range is read by pandas as unsigned integers or text.
+        for values in [
+            vec![format!("{wide}.5")],
+            vec![format!("-{}.5", "1".repeat(20))],
+            vec!["-9223372036854775809.5".to_owned()],
+            vec!["9223372036854775808".to_owned()],
+            vec!["18446744073709551616.5".to_owned()],
+            vec!["1".repeat(30), "1.5".to_owned()],
+            vec!["1".to_owned(), "1".repeat(30)],
+            vec![format!("{}.5", "1".repeat(30)), "abc".to_owned()],
+        ] {
+            let refs: Vec<&str> = values.iter().map(String::as_str).collect();
+            let error = single_column(&refs).unwrap_err().to_string();
+            assert!(error.contains("64-bit"), "{values:?}: {error}");
+        }
+    }
+
+    #[test]
+    fn booleans_are_matched_without_regard_to_case() {
+        assert_eq!(
+            single_column(&["tRuE", "fAlSe", "TRUE", "false"]).unwrap(),
+            Column::Bool(vec![true, false, true, false])
+        );
+        assert!(matches!(
+            single_column(&["True ", "False"]).unwrap(),
+            Column::Text(_)
+        ));
+        assert!(matches!(
+            single_column(&["T", "F"]).unwrap(),
+            Column::Text(_)
+        ));
+    }
+
+    #[test]
+    fn floats_that_are_exact_ties_print_with_the_even_digit() {
+        assert_eq!(
+            round_trip("x\n129.14285278320312\n100.10678100585938\n111111111111111.12\n"),
+            "x\n129.14285278320312\n100.10678100585938\n111111111111111.12\n"
+        );
+    }
+
+    #[test]
+    fn the_smallest_int64_is_the_missing_marker_of_an_integer_column_with_gaps() {
+        assert_eq!(
+            single_column(&["-9223372036854775808", "7"]).unwrap(),
+            Column::Int(vec![i64::MIN, 7])
+        );
+        let Column::Float(numbers) = single_column(&["-9223372036854775808", "7", "NA"]).unwrap()
+        else {
+            panic!()
+        };
+        assert!(numbers[0].is_nan() && numbers[2].is_nan());
+        assert_eq!(numbers[1], 7.0);
     }
 
     #[test]

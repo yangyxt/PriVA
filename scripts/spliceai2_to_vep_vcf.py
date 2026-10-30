@@ -4,6 +4,8 @@
 The standalone installation Rust tool performs the row conversion. This helper verifies immutable
 inputs, qualifies gene context against the same GENCODE release, and manages
 the mature gzip/bgzip/tabix tools. Original 84-column tables remain authoritative.
+The official plugin attaches a score only when its gene name equals VEP's, so each
+gene is also labelled with its name in the GENCODE release of VEP's Ensembl release.
 """
 import argparse
 import csv
@@ -18,6 +20,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+from urllib.parse import unquote
 
 REVISION = "cd1b8b82bcef9c97ac3b3b9a24f0de3a5bbf77f9"
 QUALIFIED_PLUGINS = {
@@ -189,7 +192,38 @@ def text_stream(path):
     return gzip.open(path, "rt", encoding="utf-8", newline="") if path.suffix == ".gz" else path.open(encoding="utf-8", newline="")
 
 
-def gene_context(regions, gtf, destination):
+def unversioned(gene_id):
+    return re.sub(r"\.[0-9]+(_PAR_Y)?$", "", gene_id)
+
+
+def vep_release_names(annotation, ensembl_release):
+    """Gene names VEP reports, from the GENCODE GTF or GFF3 of VEP's Ensembl release."""
+    gff3 = annotation.name.endswith((".gff3", ".gff3.gz"))
+    require(gff3 or annotation.name.endswith((".gtf", ".gtf.gz")), "The VEP-release gene annotation must be a GTF or GFF3")
+    names, description = {}, []
+    with text_stream(annotation) as stream:
+        for number, line in enumerate(stream, 1):
+            if line.startswith("#"):
+                description.append(line)
+                continue
+            fields = line.rstrip("\r\n").split("\t")
+            require(len(fields) == 9, f"Invalid VEP-release annotation row {number}")
+            if fields[2] != "gene":
+                continue
+            if gff3:
+                attributes = {key: unquote(value) for key, value in (item.split("=", 1) for item in fields[8].split(";") if item)}
+            else:
+                attributes = dict(re.findall(r'(\w+) "([^"\n]*)";', fields[8]))
+            gene_id, symbol = attributes.get("gene_id"), attributes.get("gene_name")
+            require(gene_id and symbol, f"VEP-release annotation gene lacks ID/name at {number}")
+            names.setdefault((unversioned(gene_id), fields[0]), set()).add((fields[6], symbol))
+    description = "".join(description)
+    require("GRCh38" in description and f"(Ensembl {ensembl_release})" in description,
+            f"VEP gene names require the GRCh38 GENCODE annotation of Ensembl release {ensembl_release}")
+    return names
+
+
+def gene_context(regions, gtf, destination, release_names=None):
     """Resolve explicit Ensembl stable IDs, then require exact release/context."""
     genes, stable_ids, description = {}, {}, []
     with text_stream(gtf) as stream:
@@ -250,18 +284,44 @@ def gene_context(regions, gtf, destination):
             prior["ids"].append(resolved_id)
             rows.append((resolved_id, chrom, start, end, strand, name))
     require(rows and len(conventions) == 1, "Empty or mixed-coordinate scored-region table")
-    rows.sort(key=lambda row: (CHROMS.index(row[1]), row[2], row[3], row[0]))
+    genes_scored, release = len(rows), None
+    if release_names is not None:
+        # A second row with the same gene ID, interval and strand carries the VEP
+        # release's name. A name another scored gene uses on that chromosome is
+        # skipped, so no score moves to a different gene's transcripts.
+        release = {"same_name": 0, "not_found": 0, "strand_differs": 0, "renamed": [], "skipped_name_conflicts": []}
+        held, proposed = {(row[1], row[5]) for row in rows}, {}
+        for row in rows:
+            found = release_names.get((unversioned(row[0]), row[1]), set())
+            if len(found) != 1:
+                release["not_found"] += 1
+                continue
+            (strand, name), = found
+            if strand != row[4]:
+                release["strand_differs"] += 1
+            elif name == row[5]:
+                release["same_name"] += 1
+            else:
+                proposed.setdefault((row[1], name), []).append(row)
+        for (chrom, name), owners in sorted(proposed.items()):
+            if len(owners) > 1 or (chrom, name) in held or re.search(r"[\s|;,=]", name):
+                release["skipped_name_conflicts"] += [[owner[0], owner[5], name] for owner in owners]
+                continue
+            rows.append(owners[0][:5] + (name,))
+            release["renamed"].append([owners[0][0], owners[0][5], name])
+    rows.sort(key=lambda row: (CHROMS.index(row[1]), row[2], row[3], row[0], row[5]))
     with destination.open("x", newline="") as stream:
         writer = csv.writer(stream, delimiter="\t", lineterminator="\n")
         writer.writerow(CONTEXT_COLUMNS)
         writer.writerows(rows)
-    return {"genes": len(rows), "source_coordinates": conventions.pop(),
+    return {"genes": genes_scored, "context_rows": len(rows), "vep_release_names": release,
+            "source_coordinates": conventions.pop(),
             "context_coordinates": "1-based-closed",
             "gene_id_matching": "unique-GENCODE48-stable-ID-with-exact-context" if stable_matches else "exact",
             "stable_id_matches": stable_matches,
             "versioned_gene_ids_retained": True,
             "same_strand_symbol_groups": sum(len(group["ids"]) > 1 for group in symbols.values()),
-            "symbol_projection": "One unchanged prediction per distinct symbol per native row; all same-strand gene IDs/intervals retained in context. Opposite-strand same-symbol contexts rejected.",
+            "symbol_projection": "One unchanged prediction per distinct symbol per native row, under the GENCODE48 name and, when it differs, the VEP release's name of the same gene ID; all same-strand gene IDs/intervals retained in context. Opposite-strand same-symbol contexts rejected.",
             "join": "source variant position and model strand within verified scored-gene intervals",
             "scope": "Adapter-derived gene association, not a publisher gene-conditioned prediction. Predicted sites may lie outside the associated gene; no effects are filtered."}
 
@@ -340,6 +400,8 @@ def prepare(args):
             manifest.get("assembly") == "GRCh38" and manifest.get("source_revision") == REVISION,
             "Wrong source version/assembly/revision")
     require(manifest.get("gencode_gtf", {}).get("release") == "GENCODE48", "Pinned GENCODE48 GTF is required")
+    require(isinstance(manifest.get("vep_gene_annotation"), dict),
+            "A pinned GENCODE GTF/GFF3 of VEP's Ensembl release is required so renamed genes keep their scores")
     files = manifest.get("files", [])
     pairs = [(item["kind"], item["chrom"]) for item in files]
     require(len(set(pairs)) == len(pairs) and set(pairs) <= PUBLISHED and pairs, "Duplicate/unsupported source shards")
@@ -354,6 +416,7 @@ def prepare(args):
         complete_file(item["path"])  # Cheap completeness checks before large reads.
     regions = verified_file(manifest["scored_regions"], identities)
     gtf = verified_file(manifest["gencode_gtf"], identities)
+    vep_annotation = verified_file(manifest["vep_gene_annotation"], identities)
     plugin = verified_plugin(manifest["vep_spliceai_plugin"], identities)
     tool_identities, tools = {}, {}
     for name in ("gzip", "bgzip", "tabix"):
@@ -394,7 +457,8 @@ def prepare(args):
         with tempfile.TemporaryDirectory(prefix=".building-", dir=folder) as temporary:
             stage = Path(temporary)
             context = stage / context_name
-            mapping = gene_context(regions, gtf, context)
+            # PriVA installs the plugin and the VEP cache from the same Ensembl release.
+            mapping = gene_context(regions, gtf, context, vep_release_names(vep_annotation, plugin["release"]))
             for item in files:
                 item["resolved_path"] = verified_file(item, identities)
             outputs, statistics = {}, {}
@@ -415,13 +479,14 @@ def prepare(args):
                 "source_manifest_sha256": manifest_sha, "outputs": outputs, "statistics": statistics,
                 "source_files": [{k: v for k, v in item.items() if k != "resolved_path"} for item in files],
                 "scored_regions": manifest["scored_regions"], "gencode_gtf": manifest["gencode_gtf"],
+                "vep_gene_annotation": manifest["vep_gene_annotation"],
                 "gene_context": {"path": str(folder / context.name), "sha256": digest(context), **mapping},
                 "vep_spliceai_plugin": plugin,
                 "converter": converter_info, "tools": tool_identities,
                 "driver_sha256": driver_sha, "slurm_job_id": os.environ.get("SLURM_JOB_ID"),
                 "thresholds": {"high_recall": 0.1, "balanced": 0.25, "high_precision": 0.5},
                 "projection": "Unchanged top0 site delta/distance strings only, one allele/gene per VCF record. No cutoff filtering, score recomputation, masking, normalization or strand flipping. Original 84-column tables retain all top3/junction/reference/alternate/summary values.",
-                "coverage_limits": "GENCODE48 protein-coding scored regions; population-observed indels; no published chrY indel shard. Missing coverage is not zero score.",
+                "coverage_limits": "GENCODE48 protein-coding scored regions; population-observed indels; no published chrY indel shard; the plugin cannot score transcripts whose gene has no name in the VEP cache. Missing coverage is not zero score.",
                 "license": {"source": f"https://huggingface.co/datasets/illumina-ai/SpliceAI2-data/tree/{REVISION}",
                             "note": "Original and derived score resources retain Illumina SpliceAI2 terms; no redistribution or public service is enabled by this adapter."},
                 "activation": "Preparation only. Legacy PriVA ACMG/ClinVar/SpliceVault and CADD v1 feature contracts are not qualified for substitution."}
@@ -454,6 +519,8 @@ def main():
     context_parser.add_argument("--regions", type=Path, required=True)
     context_parser.add_argument("--gtf", type=Path, required=True)
     context_parser.add_argument("--output", type=Path, required=True)
+    context_parser.add_argument("--vep-annotation", type=Path, help="GENCODE GTF/GFF3 of VEP's Ensembl release; adds its gene names")
+    context_parser.add_argument("--ensembl-release", help="VEP's Ensembl release, required with --vep-annotation")
     argv = sys.argv[1:]
     # Preserve the previous prepare-only flags interface while exposing procedures.
     if argv and argv[0].startswith("--") and argv[0] != "--help":
@@ -463,7 +530,10 @@ def main():
         if args.command == "build-converter":
             print(build_converter(args.tools_dir, rustc=args.rustc))
         elif args.command == "gene-context":
-            print(json.dumps(gene_context(args.regions, args.gtf, args.output)))
+            require((args.vep_annotation is None) == (args.ensembl_release is None),
+                    "--vep-annotation and --ensembl-release go together")
+            names = args.vep_annotation and vep_release_names(args.vep_annotation, args.ensembl_release)
+            print(json.dumps(gene_context(args.regions, args.gtf, args.output, names)))
         else:
             prepare(args)
     except (ValueError, OSError, subprocess.SubprocessError, KeyError) as error:

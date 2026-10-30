@@ -178,7 +178,13 @@ Incomplete files must not be supplied.
 GRCh37/hg19 uses SpliceAI v1; GRCh38/hg38 installation prepares SpliceAI2.
 The decompressed header identifies the input format: VCF inputs are reused;
 SpliceAI2 TSVs are automatically adapted to indexed VCF without changing the
-existing YAML keys. PriVA's splicing and ACMG rules apply the thresholds the
+existing YAML keys. The official VEP SpliceAI plugin attaches a score only when
+its gene name equals the transcript's gene name in VEP's cache, so the adapter
+also writes each score under the gene's name in the GENCODE release of VEP's
+Ensembl release when a gene was renamed (for example CENPJ, now CPAP). The
+SpliceAI2 source manifest pins that annotation, a GENCODE GTF or GFF3 whose
+header names GRCh38 and VEP's Ensembl release, as `vep_gene_annotation`.
+PriVA's splicing and ACMG rules apply the thresholds the
 SpliceAI2 authors recommend (0.1, 0.25 and 0.5 in place of SpliceAI v1's 0.2, 0.5
 and 0.8; see [spliceai_cutoffs.py](scripts/spliceai_cutoffs.py)).
 SpliceAI v1 GRCh38 files can still be used by pointing the same two keys at them;

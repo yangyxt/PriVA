@@ -83,7 +83,10 @@ impl Cutoffs {
         [
             ("splice_altering", self.splice_altering),
             ("nearby_acceptor_rescue", self.nearby_acceptor_rescue),
-            ("known_pathogenic_comparison", self.known_pathogenic_comparison),
+            (
+                "known_pathogenic_comparison",
+                self.known_pathogenic_comparison,
+            ),
             ("no_splicing_impact", self.no_splicing_impact),
             ("donor_loss_putative_nmd", self.donor_loss_putative_nmd),
         ]
@@ -241,8 +244,9 @@ fn read_config(config_path: Option<&str>) -> Done<Settings> {
         _ => return Ok(unset),
     };
     let bytes = std::fs::read(path)?;
-    let text = String::from_utf8(bytes)
-        .map_err(|error| Failure::Rejected(format!("'utf-8' codec can't decode the file: {error}")))?;
+    let text = String::from_utf8(bytes).map_err(|error| {
+        Failure::Rejected(format!("'utf-8' codec can't decode the file: {error}"))
+    })?;
     match yaml_config::parse_config(&text) {
         Ok(Parsed::Mapping(document)) => Ok(Settings {
             snv: Setting::from_config(document.get("spliceai_snv_prescore")),
@@ -250,7 +254,9 @@ fn read_config(config_path: Option<&str>) -> Done<Settings> {
             assembly: Setting::from_config(document.get("assembly")),
         }),
         Ok(Parsed::Empty) => Ok(unset),
-        Ok(Parsed::List) => Err(Failure::Rejected("PriVA config must be a mapping".to_owned())),
+        Ok(Parsed::List) => Err(Failure::Rejected(
+            "PriVA config must be a mapping".to_owned(),
+        )),
         Err(error @ YamlError::Invalid(_)) | Err(error @ YamlError::Unsupported(_)) => {
             Err(Failure::Crash(format!("YAML error: {error}")))
         }
@@ -277,7 +283,10 @@ fn describe(version: ScoreVersion) -> String {
 fn run(args: &[String]) -> Done<ScoreVersion> {
     let settings = read_config(Some(args[0].as_str()))?;
     let (snv, indel) = if args.len() == 3 {
-        (Setting::Text(args[1].clone()), Setting::Text(args[2].clone()))
+        (
+            Setting::Text(args[1].clone()),
+            Setting::Text(args[2].clone()),
+        )
     } else {
         (settings.snv.clone(), settings.indel.clone())
     };
@@ -315,8 +324,7 @@ mod tests {
     use std::path::PathBuf;
 
     const HEADER: &str = "##fileformat=VCFv4.2\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\n";
-    const V2_HEADER: &str =
-        "##fileformat=VCFv4.2\n##SpliceAI2Version=2\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\n";
+    const V2_HEADER: &str = "##fileformat=VCFv4.2\n##SpliceAI2Version=2\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\n";
 
     fn scratch(name: &str) -> PathBuf {
         let folder = std::env::temp_dir().join(format!(
@@ -372,13 +380,18 @@ mod tests {
         let folder = scratch("refused");
         let mixed = config(&folder, V2_HEADER, HEADER, "hg38");
         match cutoffs_for_config(Some(&mixed)) {
-            Err(Failure::Rejected(message)) => assert!(message.contains("different versions"), "{message}"),
+            Err(Failure::Rejected(message)) => {
+                assert!(message.contains("different versions"), "{message}")
+            }
             other => panic!("{other:?}"),
         }
         let wrong = config(&folder, V2_HEADER, V2_HEADER, "hg19");
         match cutoffs_for_config(Some(&wrong)) {
             Err(Failure::Rejected(message)) => {
-                assert!(message.contains("configured assembly is GRCh37"), "{message}")
+                assert!(
+                    message.contains("configured assembly is GRCh37"),
+                    "{message}"
+                )
             }
             other => panic!("{other:?}"),
         }
@@ -399,7 +412,11 @@ mod tests {
 
     #[test]
     fn unset_settings_are_skipped() {
-        for unset in [Setting::Absent, Setting::Text(String::new()), Setting::Text("null".into())] {
+        for unset in [
+            Setting::Absent,
+            Setting::Text(String::new()),
+            Setting::Text("null".into()),
+        ] {
             assert!(unset.is_unset());
             assert_eq!(
                 score_version(&unset, &unset, &unset).unwrap(),

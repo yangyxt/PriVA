@@ -121,7 +121,8 @@ pub(crate) fn parse(text: &str, reject_duplicate_keys: bool) -> Result<Json, Str
 
 impl<'a> Parser<'a> {
     fn skip_whitespace(&mut self) {
-        while self.pos < self.bytes.len() && matches!(self.bytes[self.pos], b' ' | b'\t' | b'\n' | b'\r')
+        while self.pos < self.bytes.len()
+            && matches!(self.bytes[self.pos], b' ' | b'\t' | b'\n' | b'\r')
         {
             self.pos += 1;
         }
@@ -248,7 +249,12 @@ impl<'a> Parser<'a> {
             let mut chars = rest.chars();
             let c = match chars.next() {
                 Some(c) => c,
-                None => return Err(format!("Unterminated string starting at: char {}", self.pos)),
+                None => {
+                    return Err(format!(
+                        "Unterminated string starting at: char {}",
+                        self.pos
+                    ));
+                }
             };
             self.pos += c.len_utf8();
             match c {
@@ -275,14 +281,19 @@ impl<'a> Parser<'a> {
                                     self.pos += 2;
                                     let second = self.hex4()?;
                                     if !(0xdc00..0xe000).contains(&second) {
-                                        return Err("lone surrogate in a string is not supported".to_owned());
+                                        return Err("lone surrogate in a string is not supported"
+                                            .to_owned());
                                     }
                                     0x10000 + ((first - 0xd800) << 10) + (second - 0xdc00)
                                 } else {
-                                    return Err("lone surrogate in a string is not supported".to_owned());
+                                    return Err(
+                                        "lone surrogate in a string is not supported".to_owned()
+                                    );
                                 }
                             } else if (0xdc00..0xe000).contains(&first) {
-                                return Err("lone surrogate in a string is not supported".to_owned());
+                                return Err(
+                                    "lone surrogate in a string is not supported".to_owned()
+                                );
                             } else {
                                 first
                             };
@@ -295,7 +306,10 @@ impl<'a> Parser<'a> {
                     }
                 }
                 c if (c as u32) < 0x20 => {
-                    return Err(format!("Invalid control character at: char {}", self.pos - 1));
+                    return Err(format!(
+                        "Invalid control character at: char {}",
+                        self.pos - 1
+                    ));
                 }
                 c => out.push(c),
             }
@@ -508,7 +522,10 @@ mod tests {
     fn documents_round_trip_in_python_layout() {
         let value = object(vec![
             ("b", Json::Int(2)),
-            ("a", Json::Array(vec![Json::Bool(true), Json::Null, Json::Str("x\"y".into())])),
+            (
+                "a",
+                Json::Array(vec![Json::Bool(true), Json::Null, Json::Str("x\"y".into())]),
+            ),
             ("empty", object(vec![])),
         ]);
         assert_eq!(
@@ -545,7 +562,10 @@ mod tests {
         assert!(parse("\"a\nb\"", false).is_err());
         assert!(parse("{} x", false).is_err());
         assert!(parse("\u{feff}{}", false).is_err());
-        assert!(matches!(parse(" [1, 2.5e3, -0] ", false), Ok(Json::Array(_))));
+        assert!(matches!(
+            parse(" [1, 2.5e3, -0] ", false),
+            Ok(Json::Array(_))
+        ));
         assert!(dumps(&parse("[1.5]", false).unwrap(), false).is_err());
     }
 

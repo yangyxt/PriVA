@@ -244,7 +244,11 @@ pub(crate) fn parse_config(text: &str) -> Result<Parsed, YamlError> {
         if content == "[]" || content == "{}" {
             return Ok(Parsed::Empty);
         }
-        if content == "---" || content.starts_with("--- ") || content == "..." || content.starts_with('%') {
+        if content == "---"
+            || content.starts_with("--- ")
+            || content == "..."
+            || content.starts_with('%')
+        {
             return unsupported("a document marker or directive");
         }
     }
@@ -593,10 +597,12 @@ fn is_other_integer(text: &str) -> bool {
     let rest = without_sign(text);
     let bytes = rest.as_bytes();
     if let Some(digits) = rest.strip_prefix("0b") {
-        return !digits.is_empty() && all_bytes(digits.as_bytes(), |b| matches!(b, b'0' | b'1' | b'_'));
+        return !digits.is_empty()
+            && all_bytes(digits.as_bytes(), |b| matches!(b, b'0' | b'1' | b'_'));
     }
     if let Some(digits) = rest.strip_prefix("0x") {
-        return !digits.is_empty() && all_bytes(digits.as_bytes(), |b| b.is_ascii_hexdigit() || b == b'_');
+        return !digits.is_empty()
+            && all_bytes(digits.as_bytes(), |b| b.is_ascii_hexdigit() || b == b'_');
     }
     if bytes.len() >= 2 && bytes[0] == b'0' {
         return all_bytes(&bytes[1..], |b| matches!(b, b'0'..=b'7' | b'_'));
@@ -608,7 +614,10 @@ fn is_other_integer(text: &str) -> bool {
 fn is_sexagesimal_integer(text: &str) -> bool {
     let mut parts = text.split(':');
     let head = parts.next().unwrap_or("").as_bytes();
-    if head.is_empty() || !(b'1'..=b'9').contains(&head[0]) || !all_bytes(&head[1..], is_digit_or_underscore) {
+    if head.is_empty()
+        || !(b'1'..=b'9').contains(&head[0])
+        || !all_bytes(&head[1..], is_digit_or_underscore)
+    {
         return false;
     }
     sexagesimal_groups(parts)
@@ -705,7 +714,10 @@ fn is_timestamp(text: &str) -> bool {
     let mut position = 5;
     let take_digits = |position: &mut usize, minimum: usize, maximum: usize| -> bool {
         let start = *position;
-        while *position < bytes.len() && bytes[*position].is_ascii_digit() && *position - start < maximum {
+        while *position < bytes.len()
+            && bytes[*position].is_ascii_digit()
+            && *position - start < maximum
+        {
             *position += 1;
         }
         *position - start >= minimum
@@ -782,7 +794,11 @@ pub(crate) fn resolve_plain(text: &str) -> Scalar {
         let negative = text.starts_with('-');
         return match digits.parse::<i128>() {
             Ok(0) => Scalar::Int("0".to_owned()),
-            Ok(value) => Scalar::Int(if negative { format!("-{value}") } else { value.to_string() }),
+            Ok(value) => Scalar::Int(if negative {
+                format!("-{value}")
+            } else {
+                value.to_string()
+            }),
             Err(_) => Scalar::Other(text.to_owned()),
         };
     }
@@ -840,7 +856,10 @@ mod tests {
         assert_eq!(&text[assembly.value_start..assembly.value_end], "hg38");
         let indel = document.entry("indel").unwrap();
         assert_eq!(indel.value_start, indel.value_end);
-        assert_eq!(&text[..indel.value_start], "# top\r\nassembly: hg38\r\nsnv: \"old\" # c\r\nindel:");
+        assert_eq!(
+            &text[..indel.value_start],
+            "# top\r\nassembly: hg38\r\nsnv: \"old\" # c\r\nindel:"
+        );
     }
 
     #[test]
@@ -849,10 +868,18 @@ mod tests {
         let document = mapping(text);
         assert_eq!(
             document.get("cache_folders"),
-            Some(&ConfigValue::Opaque("  vep: VEP\n  gnomad: gnomAD # c\n".into()))
+            Some(&ConfigValue::Opaque(
+                "  vep: VEP\n  gnomad: gnomAD # c\n".into()
+            ))
         );
-        assert_eq!(document.get("other"), Some(&ConfigValue::Opaque("[one, two]".into())));
-        assert_eq!(document.get("list"), Some(&ConfigValue::Opaque("- x\n- y\n".into())));
+        assert_eq!(
+            document.get("other"),
+            Some(&ConfigValue::Opaque("[one, two]".into()))
+        );
+        assert_eq!(
+            document.get("list"),
+            Some(&ConfigValue::Opaque("- x\n- y\n".into()))
+        );
         assert_eq!(document.scalar("last"), Some(&Scalar::Str("z".into())));
     }
 
@@ -867,7 +894,10 @@ mod tests {
     #[test]
     fn empty_and_list_documents_are_told_apart() {
         assert!(matches!(parse_config(""), Ok(Parsed::Empty)));
-        assert!(matches!(parse_config("# only a comment\n\n"), Ok(Parsed::Empty)));
+        assert!(matches!(
+            parse_config("# only a comment\n\n"),
+            Ok(Parsed::Empty)
+        ));
         assert!(matches!(parse_config("{}\n"), Ok(Parsed::Empty)));
         assert!(matches!(parse_config("- a\n- b\n"), Ok(Parsed::List)));
     }
@@ -909,7 +939,10 @@ mod tests {
     #[test]
     fn double_quoted_escapes_follow_json_and_yaml() {
         let document = mapping("a: \"p\\\\q\\\"r\\n\\u00e9\\x41\"\n");
-        assert_eq!(document.scalar("a"), Some(&Scalar::Str("p\\q\"r\n\u{e9}A".into())));
+        assert_eq!(
+            document.scalar("a"),
+            Some(&Scalar::Str("p\\q\"r\n\u{e9}A".into()))
+        );
         assert_eq!(quoted_for_yaml("a\"b\\c"), "\"a\\\"b\\\\c\"");
     }
 }

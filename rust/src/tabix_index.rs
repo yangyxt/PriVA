@@ -191,7 +191,12 @@ impl BgzfReader {
         if filled == 0 {
             return Ok(());
         }
-        if filled < fixed.len() || fixed[0] != 0x1f || fixed[1] != 0x8b || fixed[2] != 8 || fixed[3] & 4 == 0 {
+        if filled < fixed.len()
+            || fixed[0] != 0x1f
+            || fixed[1] != 0x8b
+            || fixed[2] != 8
+            || fixed[3] & 4 == 0
+        {
             return Err("the VCF is not a bgzip file".to_owned());
         }
         let extra_length = u16::from_le_bytes([fixed[10], fixed[11]]) as usize;
@@ -203,7 +208,11 @@ impl BgzfReader {
         let mut at = 0;
         while at + 4 <= extra.len() {
             let sub_length = u16::from_le_bytes([extra[at + 2], extra[at + 3]]) as usize;
-            if extra[at] == b'B' && extra[at + 1] == b'C' && sub_length == 2 && at + 6 <= extra.len() {
+            if extra[at] == b'B'
+                && extra[at + 1] == b'C'
+                && sub_length == 2
+                && at + 6 <= extra.len()
+            {
                 total_size = Some(u16::from_le_bytes([extra[at + 4], extra[at + 5]]) as usize + 1);
             }
             at += 4 + sub_length;
@@ -289,7 +298,8 @@ impl BgzfReader {
 }
 
 fn column<'a>(fields: &[&'a str], wanted: i32) -> Result<&'a str, String> {
-    let slot = usize::try_from(wanted - 1).map_err(|_| "the tabix index names no column".to_owned())?;
+    let slot =
+        usize::try_from(wanted - 1).map_err(|_| "the tabix index names no column".to_owned())?;
     fields
         .get(slot)
         .copied()

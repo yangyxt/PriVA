@@ -118,11 +118,7 @@ fn crash<T>(message: impl Into<String>) -> Done<T> {
 }
 
 fn require(condition: bool, message: &str) -> Done<()> {
-    if condition {
-        Ok(())
-    } else {
-        reject(message)
-    }
+    if condition { Ok(()) } else { reject(message) }
 }
 
 // ---------------------------------------------------------------- paths
@@ -333,7 +329,10 @@ pub(crate) fn canonical_assembly(assembly: &str) -> Done<&'static str> {
     match assembly.to_lowercase().as_str() {
         "hg19" | "grch37" => Ok("GRCh37"),
         "hg38" | "grch38" => Ok("GRCh38"),
-        _ => reject(format!("Unsupported assembly: {}", python_str_repr(assembly))),
+        _ => reject(format!(
+            "Unsupported assembly: {}",
+            python_str_repr(assembly)
+        )),
     }
 }
 
@@ -341,7 +340,9 @@ pub(crate) fn canonical_assembly(assembly: &str) -> Done<&'static str> {
 fn canonical_assembly_of_config(value: Option<&ConfigValue>) -> Done<&'static str> {
     match value {
         Some(ConfigValue::Scalar(Scalar::Str(text))) => canonical_assembly(text),
-        Some(ConfigValue::Scalar(other)) => reject(format!("Unsupported assembly: {}", other.python_repr())),
+        Some(ConfigValue::Scalar(other)) => {
+            reject(format!("Unsupported assembly: {}", other.python_repr()))
+        }
         Some(ConfigValue::Opaque(text)) => reject(format!("Unsupported assembly: {text}")),
         None => reject("Unsupported assembly: None"),
     }
@@ -435,8 +436,8 @@ fn mentions_spliceai2(value: &str) -> bool {
         if start + needle.len() > chars.len() {
             break;
         }
-        let matches_name =
-            (0..needle.len()).all(|offset| chars[start + offset].to_ascii_lowercase() == needle[offset]);
+        let matches_name = (0..needle.len())
+            .all(|offset| chars[start + offset].to_ascii_lowercase() == needle[offset]);
         if !matches_name {
             continue;
         }
@@ -710,11 +711,16 @@ fn inspect_header_limited(path: &Path, limits: &Limits) -> Done<Header> {
             "SpliceAI2 VCF conflicts with GRCh37 assembly",
         )?;
         result = Some(Header {
-            format: if version_two { "vcf_spliceai2" } else { "vcf_v1" },
-            assembly: assemblies
-                .first()
-                .copied()
-                .or(if version_two { Some("GRCh38") } else { None }),
+            format: if version_two {
+                "vcf_spliceai2"
+            } else {
+                "vcf_v1"
+            },
+            assembly: assemblies.first().copied().or(if version_two {
+                Some("GRCh38")
+            } else {
+                None
+            }),
         });
         break;
     }
@@ -850,7 +856,10 @@ fn is_published(kind: &str, chrom: &str) -> bool {
 
 /// The adjacent downloads-complete manifest of two native tables, after a cheap check of all 47 shards.
 fn discover_manifest(snv: &Path, indel: &Path) -> Done<PathBuf> {
-    let selected = [("snv", complete_path(snv)?), ("indel", complete_path(indel)?)];
+    let selected = [
+        ("snv", complete_path(snv)?),
+        ("indel", complete_path(indel)?),
+    ];
     let mut candidates: Vec<PathBuf> = Vec::new();
     for (_, path) in &selected {
         let candidate = path.parent().unwrap_or(Path::new("/")).join(MANIFEST_NAME);
@@ -955,7 +964,10 @@ fn discover_manifest(snv: &Path, indel: &Path) -> Done<PathBuf> {
         "Full manifest requires all 47 published shards",
     )?;
     for (kind, target) in &selected {
-        let listed = paths.get(target).map(|role| role.0 == *kind).unwrap_or(false);
+        let listed = paths
+            .get(target)
+            .map(|role| role.0 == *kind)
+            .unwrap_or(false);
         require(
             listed,
             &format!("Selected {kind} input is absent from its manifest role"),
@@ -1014,7 +1026,10 @@ fn has_expected_receipt_fields(data: &Json) -> bool {
 /// Cheap publication check of a SpliceAI2 VCF pair: the completed receipt of
 /// its folder, no pending build, outputs that match the receipt.
 fn completed_projection(snv: &Path, indel: &Path, require_existing_lock: bool) -> Done<Projection> {
-    let selected = [("snv", complete_path(snv)?), ("indel", complete_path(indel)?)];
+    let selected = [
+        ("snv", complete_path(snv)?),
+        ("indel", complete_path(indel)?),
+    ];
     let folder = selected[0]
         .1
         .parent()
@@ -1038,14 +1053,19 @@ fn completed_projection(snv: &Path, indel: &Path, require_existing_lock: bool) -
     )?;
     if require_existing_lock {
         require(
-            fs::metadata(&lock_path).map(|m| m.is_file()).unwrap_or(false),
+            fs::metadata(&lock_path)
+                .map(|m| m.is_file())
+                .unwrap_or(false),
             "Original completed adapter must already contain its installation lock",
         )?;
     }
     let lock = if require_existing_lock {
         File::open(&lock_path)
     } else {
-        OpenOptions::new().append(true).create(true).open(&lock_path)
+        OpenOptions::new()
+            .append(true)
+            .create(true)
+            .open(&lock_path)
     }
     .map_err(|error| Failure::os(&error, &lock_path))?;
     match lock.try_lock() {
@@ -1252,7 +1272,10 @@ fn relocation_provenance(folder: &Path, receipt: &Path, data: &Json) -> Done<Vec
     let receipt_sha = sha256_file(receipt).map_err(|error| Failure::os(&error, receipt))?;
     let binds_both = dict_get(&record, "kind")?.and_then(Json::as_str) == Some(RELOCATION_KIND)
         && dict_get(&record, "status")?.and_then(Json::as_str) == Some("complete")
-        && matches!(dict_get(&record, "scientific_qualified")?, Some(Json::Bool(false)))
+        && matches!(
+            dict_get(&record, "scientific_qualified")?,
+            Some(Json::Bool(false))
+        )
         && dict_get(&record, "original_receipt_sha256")?.and_then(Json::as_str)
             == relocation
                 .get("original_receipt_sha256")
@@ -1343,8 +1366,11 @@ fn copy_times_and_mode(source: &Path, destination: &Path) -> Done<()> {
     }
     file.set_times(times)
         .map_err(|error| Failure::os(&error, destination))?;
-    fs::set_permissions(destination, fs::Permissions::from_mode(metadata.mode() & 0o7777))
-        .map_err(|error| Failure::os(&error, destination))
+    fs::set_permissions(
+        destination,
+        fs::Permissions::from_mode(metadata.mode() & 0o7777),
+    )
+    .map_err(|error| Failure::os(&error, destination))
 }
 
 /// Copies one member, resuming an owned partial copy, and checks it against the original SHA-256.
@@ -1612,7 +1638,10 @@ pub(crate) fn adopt_completed_projection(
         context_path.clone(),
         string_of(dict_index(&context, "sha256")?)?.to_owned(),
     ));
-    let distinct_names: HashSet<String> = members.iter().map(|(path, _)| file_name_text(path)).collect();
+    let distinct_names: HashSet<String> = members
+        .iter()
+        .map(|(path, _)| file_name_text(path))
+        .collect();
     require(
         distinct_names.len() == 5,
         "Prepared cache members must have distinct filenames",
@@ -1626,7 +1655,8 @@ pub(crate) fn adopt_completed_projection(
     let original_sha = sha256_hex(&original);
     let parent = destination.parent().unwrap_or(Path::new("/")).to_path_buf();
     fs::create_dir_all(&parent).map_err(|error| Failure::os(&error, &parent))?;
-    let adoption_lock_path = parent.join(format!(".{}.adoption.lock", file_name_text(&destination)));
+    let adoption_lock_path =
+        parent.join(format!(".{}.adoption.lock", file_name_text(&destination)));
     let adoption_lock = OpenOptions::new()
         .append(true)
         .create(true)
@@ -1649,7 +1679,8 @@ pub(crate) fn adopt_completed_projection(
             "Prepared adoption destination is occupied",
         )?;
         let copied_path = destination.join("adapter.ready.json");
-        let copied_text = fs::read(&copied_path).map_err(|error| Failure::os(&error, &copied_path))?;
+        let copied_text =
+            fs::read(&copied_path).map_err(|error| Failure::os(&error, &copied_path))?;
         let copied = json_from_bytes(&copied_text, false)?;
         let recorded = match dict_get(&copied, "relocation")? {
             Some(found) => dict_get(found, "original_receipt_sha256")?,
@@ -1660,8 +1691,10 @@ pub(crate) fn adopt_completed_projection(
             "Prepared adoption destination belongs to a different original receipt",
         )?;
         let copied_outputs = dict_index(&copied, "outputs")?;
-        let copied_snv = string_of(dict_index(dict_index(copied_outputs, "snv")?, "path")?)?.to_owned();
-        let copied_indel = string_of(dict_index(dict_index(copied_outputs, "indel")?, "path")?)?.to_owned();
+        let copied_snv =
+            string_of(dict_index(dict_index(copied_outputs, "snv")?, "path")?)?.to_owned();
+        let copied_indel =
+            string_of(dict_index(dict_index(copied_outputs, "indel")?, "path")?)?.to_owned();
         {
             let _destination_lock =
                 completed_projection(Path::new(&copied_snv), Path::new(&copied_indel), false)?;
@@ -1675,7 +1708,10 @@ pub(crate) fn adopt_completed_projection(
             ("kind".to_owned(), Json::Str(RELOCATION_KIND.to_owned())),
             ("status".to_owned(), Json::Str("reused".to_owned())),
             ("destination".to_owned(), Json::Str(path_text(&destination))),
-            ("original_receipt_sha256".to_owned(), Json::Str(original_sha)),
+            (
+                "original_receipt_sha256".to_owned(),
+                Json::Str(original_sha),
+            ),
         ]));
     }
     let stage = parent.join(format!(
@@ -1763,7 +1799,8 @@ pub(crate) fn adopt_completed_projection(
     fs::rename(&stage, &destination).map_err(|error| Failure::os(&error, &destination))?;
     let moved_outputs = dict_index(&relocated, "outputs")?;
     let moved_snv = string_of(dict_index(dict_index(moved_outputs, "snv")?, "path")?)?.to_owned();
-    let moved_indel = string_of(dict_index(dict_index(moved_outputs, "indel")?, "path")?)?.to_owned();
+    let moved_indel =
+        string_of(dict_index(dict_index(moved_outputs, "indel")?, "path")?)?.to_owned();
     let _published = completed_projection(Path::new(&moved_snv), Path::new(&moved_indel), false)?;
     Ok(record)
 }
@@ -1782,7 +1819,9 @@ fn read_config(config: &Path) -> Done<ConfigRead> {
     let before = identity(&path)?;
     let bytes = fs::read(&path).map_err(|error| Failure::os(&error, &path))?;
     let text = String::from_utf8(bytes).map_err(|error| {
-        Failure::Rejected(format!("'utf-8' codec can't decode the configuration: {error}"))
+        Failure::Rejected(format!(
+            "'utf-8' codec can't decode the configuration: {error}"
+        ))
     })?;
     let document = match yaml_config::parse_config(&text) {
         Ok(YamlParsed::Mapping(document)) => document,
@@ -1795,10 +1834,7 @@ fn read_config(config: &Path) -> Done<ConfigRead> {
         !document.has_duplicate_keys(),
         "Duplicate/unsupported YAML config key",
     )?;
-    require(
-        identity(&path)? == before,
-        "Config changed during reading",
-    )?;
+    require(identity(&path)? == before, "Config changed during reading")?;
     Ok(ConfigRead {
         path,
         before,
@@ -1852,7 +1888,11 @@ fn register_vcfs(
                         .map(is_python_space)
                         .unwrap_or(false);
                 let prefix = if spaced { "" } else { " " };
-                changes.push((entry.value_start, entry.value_end, format!("{prefix}{quoted}")));
+                changes.push((
+                    entry.value_start,
+                    entry.value_end,
+                    format!("{prefix}{quoted}"),
+                ));
             }
         }
     }
@@ -1872,7 +1912,12 @@ fn register_vcfs(
         Ok(YamlParsed::Mapping(document)) => document,
         _ => return crash("the updated configuration is not a YAML mapping"),
     };
-    let mut keys: Vec<&str> = read.document.entries.iter().map(|e| e.key.as_str()).collect();
+    let mut keys: Vec<&str> = read
+        .document
+        .entries
+        .iter()
+        .map(|e| e.key.as_str())
+        .collect();
     for (key, _) in &selected {
         if !keys.contains(key) {
             keys.push(*key);
@@ -1945,7 +1990,10 @@ fn check_first_record(path: &Path, index_path: &Path) -> Done<()> {
             .map_err(|error| wrap(error.to_string()))?;
         require(
             line.len() <= MAX_LINE,
-            &format!("SpliceAI record exceeds validation bound: {}", path.display()),
+            &format!(
+                "SpliceAI record exceeds validation bound: {}",
+                path.display()
+            ),
         )
         .map_err(&unwrap_failure)?;
         if !line.is_empty() && line[0] != b'#' {
@@ -2002,23 +2050,30 @@ fn check_first_record(path: &Path, index_path: &Path) -> Done<()> {
     let mut found = false;
     let mut bound_error: Option<String> = None;
     let begin = (position - 1) as i64;
-    let outcome = tabix_index::fetch_lines(path, &index, fields[0], begin, begin + 1, &mut |number, row| {
-        if number >= 10000 {
-            bound_error = Some(format!(
-                "SpliceAI index query exceeds validation bound: {}",
-                path.display()
-            ));
-            return Err("query bound".to_owned());
-        }
-        if !row.is_ascii() {
-            return Err("an indexed row is not ASCII text".to_owned());
-        }
-        if row == line.as_bytes() {
-            found = true;
-            return Ok(true);
-        }
-        Ok(false)
-    });
+    let outcome = tabix_index::fetch_lines(
+        path,
+        &index,
+        fields[0],
+        begin,
+        begin + 1,
+        &mut |number, row| {
+            if number >= 10000 {
+                bound_error = Some(format!(
+                    "SpliceAI index query exceeds validation bound: {}",
+                    path.display()
+                ));
+                return Err("query bound".to_owned());
+            }
+            if !row.is_ascii() {
+                return Err("an indexed row is not ASCII text".to_owned());
+            }
+            if row == line.as_bytes() {
+                found = true;
+                return Ok(true);
+            }
+            Ok(false)
+        },
+    );
     if let Some(message) = bound_error {
         return Err(wrap(message));
     }
@@ -2106,7 +2161,8 @@ fn install(
             .join("SpliceAI2")
             .join("GRCh38");
         let config_absolute = absolute_path(Path::new(config));
-        let again = fs::canonicalize(config).map_err(|error| Failure::os(&error, Path::new(config)))?;
+        let again =
+            fs::canonicalize(config).map_err(|error| Failure::os(&error, Path::new(config)))?;
         require(
             again == read.path && identity(&read.path)? == read.before,
             "Config changed after cache validation",
@@ -2127,7 +2183,8 @@ fn install(
             }));
         }
     } else {
-        let again = fs::canonicalize(config).map_err(|error| Failure::os(&error, Path::new(config)))?;
+        let again =
+            fs::canonicalize(config).map_err(|error| Failure::os(&error, Path::new(config)))?;
         require(
             again == read.path,
             "Config target changed after cache validation",
@@ -2135,10 +2192,22 @@ fn install(
         if report.format == "vcf_spliceai2" {
             let projection = completed_projection(Path::new(snv), Path::new(indel), false)?;
             inputs.extend(projection.tracked.iter().cloned());
-            register_vcfs(Path::new(config), Path::new(snv), Path::new(indel), read.before, &inputs)?;
+            register_vcfs(
+                Path::new(config),
+                Path::new(snv),
+                Path::new(indel),
+                read.before,
+                &inputs,
+            )?;
         } else {
             inputs.extend(validate_v1_indexes(snv, indel)?);
-            register_vcfs(Path::new(config), Path::new(snv), Path::new(indel), read.before, &inputs)?;
+            register_vcfs(
+                Path::new(config),
+                Path::new(snv),
+                Path::new(indel),
+                read.before,
+                &inputs,
+            )?;
         }
     }
     Ok(report)
@@ -2235,7 +2304,8 @@ mod tests {
     use flate2::Compression;
     use flate2::write::GzEncoder;
 
-    const VCF_HEADER: &str = "##fileformat=VCFv4.2\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\n";
+    const VCF_HEADER: &str =
+        "##fileformat=VCFv4.2\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\n";
 
     fn scratch(name: &str) -> PathBuf {
         static NEXT: AtomicU64 = AtomicU64::new(0);
@@ -2288,19 +2358,41 @@ mod tests {
     fn headers_are_classified() {
         assert_eq!(
             header_of(VCF_HEADER).unwrap(),
-            Header { format: "vcf_v1", assembly: None }
+            Header {
+                format: "vcf_v1",
+                assembly: None
+            }
         );
         let native = format!("{}\n", native_columns().join("\t"));
         assert_eq!(
             header_of(&native).unwrap(),
-            Header { format: "spliceai2_tsv", assembly: Some("GRCh38") }
+            Header {
+                format: "spliceai2_tsv",
+                assembly: Some("GRCh38")
+            }
         );
         for (metadata, format, assembly) in [
-            ("##reference=file:///refs/hg19.fa\n", "vcf_v1", Some("GRCh37")),
-            ("##contig=<ID=1,length=10,assembly=\"GRCh38.p14\">\n", "vcf_v1", Some("GRCh38")),
-            ("##source=PriVA_SpliceAI2_projection\n", "vcf_spliceai2", Some("GRCh38")),
+            (
+                "##reference=file:///refs/hg19.fa\n",
+                "vcf_v1",
+                Some("GRCh37"),
+            ),
+            (
+                "##contig=<ID=1,length=10,assembly=\"GRCh38.p14\">\n",
+                "vcf_v1",
+                Some("GRCh38"),
+            ),
+            (
+                "##source=PriVA_SpliceAI2_projection\n",
+                "vcf_spliceai2",
+                Some("GRCh38"),
+            ),
             ("##SpliceAI2Version=2\n", "vcf_spliceai2", Some("GRCh38")),
-            ("##SpliceAIVersion=2.0\n##reference=GRCh38\n", "vcf_spliceai2", Some("GRCh38")),
+            (
+                "##SpliceAIVersion=2.0\n##reference=GRCh38\n",
+                "vcf_spliceai2",
+                Some("GRCh38"),
+            ),
         ] {
             assert_eq!(
                 header_of(&with_metadata(metadata)).unwrap(),
@@ -2330,7 +2422,10 @@ mod tests {
             VCF_HEADER.trim_end().to_owned(),
             VCF_HEADER.replace("POS", "PO\u{0}S"),
         ] {
-            assert!(matches!(header_of(&text), Err(Failure::Rejected(_))), "{text:?}");
+            assert!(
+                matches!(header_of(&text), Err(Failure::Rejected(_))),
+                "{text:?}"
+            );
         }
     }
 
@@ -2346,7 +2441,10 @@ mod tests {
         let mut bytes = fs::read(&packed).unwrap();
         bytes.truncate(bytes.len() - 6);
         fs::write(&truncated, bytes).unwrap();
-        assert!(matches!(inspect_header(&truncated), Err(Failure::Rejected(_))));
+        assert!(matches!(
+            inspect_header(&truncated),
+            Err(Failure::Rejected(_))
+        ));
         let staged = folder.join("scores.partial.gz");
         fs::write(&staged, "x").unwrap();
         assert!(matches!(
@@ -2361,9 +2459,30 @@ mod tests {
         let folder = scratch("limits");
         let path = write_text(&folder, "scores", VCF_HEADER, false);
         for (limits, expected) in [
-            (Limits { line: 10, header: MAX_HEADER, lines: MAX_LINES }, "bounded"),
-            (Limits { line: MAX_LINE, header: 50, lines: MAX_LINES }, "bounded"),
-            (Limits { line: MAX_LINE, header: MAX_HEADER, lines: 1 }, "bounded"),
+            (
+                Limits {
+                    line: 10,
+                    header: MAX_HEADER,
+                    lines: MAX_LINES,
+                },
+                "bounded",
+            ),
+            (
+                Limits {
+                    line: MAX_LINE,
+                    header: 50,
+                    lines: MAX_LINES,
+                },
+                "bounded",
+            ),
+            (
+                Limits {
+                    line: MAX_LINE,
+                    header: MAX_HEADER,
+                    lines: 1,
+                },
+                "bounded",
+            ),
         ] {
             match inspect_header_limited(&path, &limits) {
                 Err(Failure::Rejected(message)) => assert!(message.contains(expected), "{message}"),
@@ -2420,8 +2539,15 @@ mod tests {
         assert_eq!(path_name("/a/b/"), "b");
         assert_eq!(path_name("/"), "");
         assert_eq!(path_name("a/.."), "..");
-        assert_eq!(lexical_normalize(Path::new("/a/./b/../c//d")), PathBuf::from("/a/c/d"));
-        assert!(is_unfinished("X.PARTIAL.gz") && is_unfinished(".building-x") && !is_unfinished("build"));
+        assert_eq!(
+            lexical_normalize(Path::new("/a/./b/../c//d")),
+            PathBuf::from("/a/c/d")
+        );
+        assert!(
+            is_unfinished("X.PARTIAL.gz")
+                && is_unfinished(".building-x")
+                && !is_unfinished("build")
+        );
     }
 
     #[test]
@@ -2465,15 +2591,27 @@ mod tests {
         register_vcfs(&config, &snv, &indel, settled, &[]).unwrap();
         assert_eq!(identity(&config).unwrap(), settled);
         // Missing keys are added, empty ones filled, comments kept.
-        fs::write(&config, "assembly: hg38\nspliceai_snv_prescore: # keep\nspliceai_indel_prescore:\n").unwrap();
+        fs::write(
+            &config,
+            "assembly: hg38\nspliceai_snv_prescore: # keep\nspliceai_indel_prescore:\n",
+        )
+        .unwrap();
         let again = identity(&fs::canonicalize(&config).unwrap()).unwrap();
         register_vcfs(&config, &snv, &indel, again, &[]).unwrap();
         let text = fs::read_to_string(&config).unwrap();
-        assert!(text.contains("# keep") && text.contains(&path_text(&snv)) && text.contains(&path_text(&indel)));
+        assert!(
+            text.contains("# keep")
+                && text.contains(&path_text(&snv))
+                && text.contains(&path_text(&indel))
+        );
         fs::write(&config, "assembly: hg38").unwrap();
         let last = identity(&fs::canonicalize(&config).unwrap()).unwrap();
         register_vcfs(&config, &snv, &indel, last, &[]).unwrap();
-        assert!(fs::read_to_string(&config).unwrap().starts_with("assembly: hg38\nspliceai_snv_prescore: "));
+        assert!(
+            fs::read_to_string(&config)
+                .unwrap()
+                .starts_with("assembly: hg38\nspliceai_snv_prescore: ")
+        );
         let _ = fs::remove_dir_all(&folder);
     }
 
@@ -2487,7 +2625,10 @@ mod tests {
         let record = copy_verified_member(&source, &target, &sha).unwrap();
         assert_eq!(fs::read_to_string(&target).unwrap(), "0123456789abcdef");
         assert!(!folder.join("stage_member.bin.copying").exists());
-        assert_eq!(record.get("bytes").map(|v| matches!(v, Json::Int(16))), Some(true));
+        assert_eq!(
+            record.get("bytes").map(|v| matches!(v, Json::Int(16))),
+            Some(true)
+        );
         // A second call finds the finished copy and verifies it.
         copy_verified_member(&source, &target, &sha).unwrap();
         // A partial prefix that differs from the original is refused.

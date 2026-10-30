@@ -108,7 +108,10 @@ pub(crate) fn parse_long_options(args: &[String], names: &[&str]) -> Result<Pars
         values.insert(name.to_owned(), value);
     }
     if !unrecognized.is_empty() {
-        return Err(format!("unrecognized arguments: {}", unrecognized.join(" ")));
+        return Err(format!(
+            "unrecognized arguments: {}",
+            unrecognized.join(" ")
+        ));
     }
     Ok(Parsed::Values(values))
 }

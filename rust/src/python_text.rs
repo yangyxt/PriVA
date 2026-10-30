@@ -161,12 +161,8 @@ pub(crate) fn is_python_space(c: char) -> bool {
             | '\u{85}'
             | '\u{a0}'
             | '\u{1680}'
-            | '\u{2000}'..='\u{200a}'
-            | '\u{2028}'
-            | '\u{2029}'
-            | '\u{202f}'
-            | '\u{205f}'
-            | '\u{3000}'
+            | '\u{2000}'
+            ..='\u{200a}' | '\u{2028}' | '\u{2029}' | '\u{202f}' | '\u{205f}' | '\u{3000}'
     )
 }
 
@@ -179,10 +175,17 @@ pub(crate) fn python_int(text: &str) -> Option<i128> {
         Some(rest) => (true, rest),
         None => (false, body.strip_prefix('+').unwrap_or(body)),
     };
-    if digits.is_empty() || digits.starts_with('_') || digits.ends_with('_') || digits.contains("__") {
+    if digits.is_empty()
+        || digits.starts_with('_')
+        || digits.ends_with('_')
+        || digits.contains("__")
+    {
         return None;
     }
-    if !digits.bytes().all(|byte| byte.is_ascii_digit() || byte == b'_') {
+    if !digits
+        .bytes()
+        .all(|byte| byte.is_ascii_digit() || byte == b'_')
+    {
         return None;
     }
     let cleaned: String = digits.chars().filter(|c| *c != '_').collect();

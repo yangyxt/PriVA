@@ -285,7 +285,7 @@ fn pedigree_filter(vcf: &Path, ped: &Path, target: &str, output: &Path) -> Resul
 }
 
 /// The next line without its line ending, or `None` at the end of the input.
-fn next_line<'a>(
+pub(crate) fn next_line<'a>(
     reader: &mut dyn BufRead,
     buffer: &'a mut Vec<u8>,
     number: &mut usize,
@@ -427,7 +427,7 @@ fn filter_records(
 
 /// GT text as pysam's allele tuple: an allele beyond the record's alleles is
 /// missing, like `.`.
-fn parse_gt(value: &str, alleles_in_record: u32) -> Result<Genotype> {
+pub(crate) fn parse_gt(value: &str, alleles_in_record: u32) -> Result<Genotype> {
     if value.is_empty() || value == "." {
         return Ok(vec![None]);
     }

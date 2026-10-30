@@ -50,6 +50,15 @@ intermediate files of the step before it.
 
 26 files, 13,704 lines.
 
+Shared base laid down on 2026-10-30 before seven threads convert these scripts in parallel:
+the module skeleton `rust/src/acmg_step/` (one module per script, `priva acmg-assign` registered,
+`priva acmg-step` to compare one function with Python on exact pandas frames), the table layer
+(`pandas_table` read options of the step, the `object`, `Int64` and `boolean` column types, and
+`pandas_polars`, which moves typed columns to polars where polars gives pandas' result), the fixed
+cross-thread signatures and the probes of the real resource files. `rust/GROUP3_BASE.md` records the
+design, the call-by-call choice between polars and own code, the probe results and where each
+thread starts.
+
 | Script | Lines | Status |
 | --- | ---: | --- |
 | `scripts/acmg_bs2_bp5_observation.py` | 460 | Python |

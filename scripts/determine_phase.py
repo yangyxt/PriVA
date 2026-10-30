@@ -486,14 +486,17 @@ def determine_cis_trans_relationships(
     gene_groups = variants_df.groupby('Gene', sort=False)
     arg_iter = ((gene, group, patient_info) for gene, group in gene_groups)
 
-    # ── imap_unordered streams results; pool.map materializes everything ──
+    # ── imap streams results; pool.map materializes everything ──
     # pool.map() converts the generator to a list → all 10k+ gene DataFrames
-    # held in memory + pickled for IPC.  imap_unordered with chunksize keeps
-    # memory bounded and reduces serialization overhead.
+    # held in memory + pickled for IPC.  imap with chunksize keeps memory
+    # bounded and reduces serialization overhead.  It returns genes in groupby
+    # order, not in finishing order: a variant_id analysed under two genes
+    # takes the later gene's phase, the same as a single-process run, so the
+    # result does not depend on the number of processes or their timing.
     pool = None
     if num_processes and num_processes > 1 and len(uniq_genes) > 1:
         pool = mp.Pool(num_processes)
-        results = pool.imap_unordered(process_gene_wrapper, arg_iter, chunksize=100)
+        results = pool.imap(process_gene_wrapper, arg_iter, chunksize=100)
     else:
         results = map(process_gene_wrapper, arg_iter)
 

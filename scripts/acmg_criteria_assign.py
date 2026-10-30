@@ -598,6 +598,10 @@ if __name__ == "__main__":
                              "benchmarking PriVA against ClinGen-curated variants, "
                              "where the override would make the comparison circular.")
     parser.add_argument("--mavedb_metadata_tsv", type=str, required=False, default=None)
+    parser.add_argument("--pp1_vcf", type=str, required=False, default="",
+                        help="Multi-family VCF for PP1 cosegregation; used together with --pp1_ped")
+    parser.add_argument("--pp1_ped", type=str, required=False, default="",
+                        help="Pedigree table of the families in --pp1_vcf")
     parser.add_argument("--cds_fasta_path", type=str, required=False, default=None,
                         help="Path to Ensembl CDS FASTA file for alternative start codon detection. "
                              "Download from: ftp://ftp.ensembl.org/pub/release-112/fasta/homo_sapiens/cds/")
@@ -648,6 +652,8 @@ if __name__ == "__main__":
                                                     args.tranx_exon_domain_map_pkl,
                                                     args.repeat_region_file,
                                                     args.gene_dosage_sensitivity,
+                                                    pp1_vcf=args.pp1_vcf,
+                                                    pp1_ped=args.pp1_ped,
                                                     mavedb_metadata_tsv=args.mavedb_metadata_tsv,
                                                     fam_name=args.fam_name,
                                                     ped_table=args.ped_table,

@@ -332,6 +332,21 @@ def downstream_domain_impact(protein_pos_str, tranx_id, tranx_pp_domain_map, int
     return False
 
 
+def exon_patho_af_entry(clinvar_patho_exon_af_dict, tranx_id, exon_number, default=(0, )):
+    '''
+    Look up one exon of a transcript in the ClinVar exon AF cache by its number.
+
+    The cache keys are VEP's EXON text, "<exon>/<exons in the transcript>" (for
+    example "4/36"), so a bare number such as 4 or "4" never matches. The
+    transcript's exon count is taken from its own cache keys.
+    '''
+    exons = clinvar_patho_exon_af_dict.get(tranx_id, {})
+    total = next((key.split("/")[1] for key in exons if "/" in key), None)
+    if total is None:
+        return default
+    return exons.get(f"{int(exon_number)}/{total}", default)
+
+
 def downstream_exon_patho_af(row, clinvar_patho_exon_af_dict, logic="any", threshold=0.01):
     exon_str = row['EXON']
     affected_exons = set([])
@@ -347,7 +362,7 @@ def downstream_exon_patho_af(row, clinvar_patho_exon_af_dict, logic="any", thres
     tranx_id = row['Feature']
     affected_exons_patho_af = set([])
     for exon in affected_exons:
-        affected_exons_patho_af.add(clinvar_patho_exon_af_dict.get(tranx_id, {}).get(exon, (0, ))[0])
+        affected_exons_patho_af.add(exon_patho_af_entry(clinvar_patho_exon_af_dict, tranx_id, exon)[0])
 
     if logic == "any":
         return any(float(epa) < threshold for epa in affected_exons_patho_af)
@@ -378,7 +393,7 @@ def span_functional_domains(row,
     elif row["5UTR_lof"] or row["5UTR_frameshift"] or row["5UTR_len_changing"]:
         func_domain = row["5UTR_span_intol_domain"]
         affected_exons = {"1"}
-        affected_exon_patho_af = { exon: clinvar_patho_exon_af_dict.get(row['Feature'], {}).get(exon, (0, ))[0] for exon in affected_exons }
+        affected_exon_patho_af = { exon: exon_patho_af_entry(clinvar_patho_exon_af_dict, row['Feature'], exon)[0] for exon in affected_exons }
         logger.info(f"For variant {row['chrom']}:{row['pos']} with transcript {row['Feature']}, the affected exons are: {affected_exons}, and the pathogenic AFs are: {affected_exon_patho_af}")
         exon_frequent_patho = any(float(epa) < exon_patho_af_threshold for epa in affected_exon_patho_af.values())
     elif row["splicing_lof"] or row["splicing_frameshift"] or row["splicing_len_changing"]:
@@ -388,7 +403,7 @@ def span_functional_domains(row,
         affected_exons = {e.strip() for e in affected_exons_raw if e and e.strip() and e.strip().isdigit()}
 
         if affected_exons:
-            affected_exon_patho_af = { exon: clinvar_patho_exon_af_dict.get(row['Feature'], {}).get(exon, (0, ))[0] for exon in affected_exons }
+            affected_exon_patho_af = { exon: exon_patho_af_entry(clinvar_patho_exon_af_dict, row['Feature'], exon)[0] for exon in affected_exons }
             logger.info(f"For variant {row['chrom']}:{row['pos']} with transcript {row['Feature']}, the affected exons are: {affected_exons}, and the pathogenic AFs are: {affected_exon_patho_af}")
             # For splicing-induced exon skipping: if ANY affected exon is important (rare patho variants),
             # treat as significant deletion per ClinGen PVS1 exon deletion logic

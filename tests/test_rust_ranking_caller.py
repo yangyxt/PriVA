@@ -321,7 +321,7 @@ class RankingCallBoundary(unittest.TestCase):
         self.assertEqual(call.func.id, "ACMG_criteria_assign")
         self.assertEqual(call.keywords[-1].arg, "ranking_binary")
         call.keywords.pop()
-        self.assertEqual(ast_digest(main), "39f993987dd21ea278f4221551e28ab578c9ecc420ee02075be9ae36755a3c0d")
+        self.assertEqual(ast_digest(main), "d76235b4c7c68224df80d122187ce4ac060a08520e0eab6dbb41648eb18a3e31")
 
     def test_actual_argument_parser_forwards_default_and_selected_binary(self):
         main = next(node for node in acmg_tree().body if isinstance(node, ast.If)

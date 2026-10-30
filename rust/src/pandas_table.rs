@@ -26,6 +26,19 @@
 //! (pandas then reads the column as unsigned integers, or keeps the text of
 //! every value), a quoted field that is never closed, input that is not
 //! UTF-8, and compressions other than gzip.
+//!
+//! The ACMG step also reads with these `read_table` options (`ReadOptions`):
+//! `dtype=str` (every value stays text), `keep_default_na=False` (no value is
+//! missing; the empty fields that pad a short row stay empty text), `header=None`
+//! with `names=[...]`, `usecols` by position or by name (the file's column order
+//! is kept, as pandas keeps it) and `comment="#"` (the rest of a line after an
+//! unquoted `#` is dropped; a line that is only a comment is skipped).
+//!
+//! Besides the column types the reader produces, a column can hold what the
+//! step's pandas code makes later: an `object` column that mixes text, numbers,
+//! booleans and missing values (`Column::Object`), and the nullable `Int64` and
+//! `boolean` columns (`Column::NullableInt`, `Column::NullableBool`). The
+//! module `pandas_polars` moves typed columns to polars and back.
 use crate::cli::{Result, invalid};
 use crate::python_text::float_repr;
 use flate2::read::MultiGzDecoder;
@@ -52,6 +65,20 @@ pub(crate) enum Cell<'a> {
     Bool(bool),
 }
 
+/// One value of a pandas `object` column that mixes kinds of values.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum ObjectValue {
+    /// The float `nan`, which is how pandas marks a missing value it creates.
+    Nan,
+    /// Python's `None`. It prints and counts as missing like `nan`, but some
+    /// pandas calls tell the two apart (`isin([None])` does not match `nan`).
+    None,
+    Text(String),
+    Int(i64),
+    Float(f64),
+    Bool(bool),
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum Column {
     Int(Vec<i64>),
@@ -62,6 +89,12 @@ pub(crate) enum Column {
     BoolOrMissing(Vec<Option<bool>>),
     /// pandas' object column of text; `None` is a missing value.
     Text(Vec<Option<String>>),
+    /// pandas' object column of any other mix of values.
+    Object(Vec<ObjectValue>),
+    /// pandas' nullable `Int64` column; `None` is `pd.NA`.
+    NullableInt(Vec<Option<i64>>),
+    /// pandas' nullable `boolean` column; `None` is `pd.NA`.
+    NullableBool(Vec<Option<bool>>),
 }
 
 impl Column {
@@ -72,9 +105,14 @@ impl Column {
             Column::Bool(values) => values.len(),
             Column::BoolOrMissing(values) => values.len(),
             Column::Text(values) => values.len(),
+            Column::Object(values) => values.len(),
+            Column::NullableInt(values) => values.len(),
+            Column::NullableBool(values) => values.len(),
         }
     }
 
+    /// The value at `row`. `nan`, `None` and `pd.NA` are all `Cell::Missing`;
+    /// code that must tell them apart looks at the column itself.
     pub(crate) fn cell(&self, row: usize) -> Cell<'_> {
         match self {
             Column::Int(values) => Cell::Int(values[row]),
@@ -87,7 +125,7 @@ impl Column {
                 }
             }
             Column::Bool(values) => Cell::Bool(values[row]),
-            Column::BoolOrMissing(values) => match values[row] {
+            Column::BoolOrMissing(values) | Column::NullableBool(values) => match values[row] {
                 Some(flag) => Cell::Bool(flag),
                 None => Cell::Missing,
             },
@@ -95,11 +133,59 @@ impl Column {
                 Some(text) => Cell::Text(text.as_str()),
                 None => Cell::Missing,
             },
+            Column::Object(values) => match &values[row] {
+                ObjectValue::Nan | ObjectValue::None => Cell::Missing,
+                ObjectValue::Text(text) => Cell::Text(text.as_str()),
+                ObjectValue::Int(number) => Cell::Int(*number),
+                ObjectValue::Float(number) if number.is_nan() => Cell::Missing,
+                ObjectValue::Float(number) => Cell::Float(*number),
+                ObjectValue::Bool(flag) => Cell::Bool(*flag),
+            },
+            Column::NullableInt(values) => match values[row] {
+                Some(number) => Cell::Int(number),
+                None => Cell::Missing,
+            },
+        }
+    }
+
+    /// The pandas dtype name (`str(series.dtype)`).
+    pub(crate) fn dtype_name(&self) -> &'static str {
+        match self {
+            Column::Int(_) => "int64",
+            Column::Float(_) => "float64",
+            Column::Bool(_) => "bool",
+            Column::BoolOrMissing(_) | Column::Text(_) | Column::Object(_) => "object",
+            Column::NullableInt(_) => "Int64",
+            Column::NullableBool(_) => "boolean",
+        }
+    }
+
+    /// `series.isna()`: NaN, `None` and `pd.NA` are missing.
+    pub(crate) fn missing_mask(&self) -> Vec<bool> {
+        (0..self.len())
+            .map(|row| self.cell(row) == Cell::Missing)
+            .collect()
+    }
+
+    /// The rows at `rows`, in that order (`series.iloc[rows]`).
+    pub(crate) fn take(&self, rows: &[usize]) -> Column {
+        fn pick<T: Clone>(values: &[T], rows: &[usize]) -> Vec<T> {
+            rows.iter().map(|row| values[*row].clone()).collect()
+        }
+        match self {
+            Column::Int(values) => Column::Int(pick(values, rows)),
+            Column::Float(values) => Column::Float(pick(values, rows)),
+            Column::Bool(values) => Column::Bool(pick(values, rows)),
+            Column::BoolOrMissing(values) => Column::BoolOrMissing(pick(values, rows)),
+            Column::Text(values) => Column::Text(pick(values, rows)),
+            Column::Object(values) => Column::Object(pick(values, rows)),
+            Column::NullableInt(values) => Column::NullableInt(pick(values, rows)),
+            Column::NullableBool(values) => Column::NullableBool(pick(values, rows)),
         }
     }
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub(crate) struct Table {
     pub(crate) names: Vec<String>,
     pub(crate) columns: Vec<Column>,
@@ -115,6 +201,21 @@ impl Table {
         self.columns[column].cell(row)
     }
 
+    /// `df[name]`: the first column of that name, or the error pandas raises
+    /// (`KeyError: 'name'`), so a missing column stops the step as it does in Python.
+    pub(crate) fn column(&self, name: &str) -> Result<&Column> {
+        match self.column_index(name) {
+            Some(index) => Ok(&self.columns[index]),
+            None => Err(invalid(format!("KeyError: '{name}'"))),
+        }
+    }
+
+    /// `name in df.columns`.
+    #[allow(dead_code)]
+    pub(crate) fn has_column(&self, name: &str) -> bool {
+        self.column_index(name).is_some()
+    }
+
     /// `df[name] = values`: replaces a column in place or appends a new one.
     pub(crate) fn set_column(&mut self, name: &str, column: Column) {
         assert_eq!(column.len(), self.rows, "a new column must fill every row");
@@ -126,10 +227,77 @@ impl Table {
             }
         }
     }
+
+    /// The rows at `rows`, in that order, for a filter (`df[mask]`), a sort or
+    /// `drop_duplicates`. Row labels are not kept; the step never writes them.
+    pub(crate) fn take_rows(&self, rows: &[usize]) -> Table {
+        Table {
+            names: self.names.clone(),
+            columns: self
+                .columns
+                .iter()
+                .map(|column| column.take(rows))
+                .collect(),
+            rows: rows.len(),
+        }
+    }
+
+    /// `df[mask]` for a mask without missing values.
+    #[allow(dead_code)]
+    pub(crate) fn filter_rows(&self, mask: &[bool]) -> Table {
+        assert_eq!(mask.len(), self.rows, "a row mask must cover every row");
+        let rows: Vec<usize> = (0..self.rows).filter(|row| mask[*row]).collect();
+        self.take_rows(&rows)
+    }
 }
 
 fn is_na(token: &str) -> bool {
     NA_VALUES.contains(&token)
+}
+
+/// Where the column names come from (`header=0` or `header=None, names=[...]`).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) enum Header {
+    /// The first line names the columns (pandas' default).
+    #[default]
+    FirstLine,
+    /// `header=None, names=[...]`: every line is data.
+    Names(Vec<String>),
+}
+
+/// `usecols`: which columns of the file to keep.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum UseColumns {
+    /// `usecols=range(n)` or a list of positions in the file.
+    Positions(Vec<usize>),
+    /// `usecols=[name, ...]`; the columns keep the file's order.
+    Names(Vec<String>),
+}
+
+/// The `pd.read_table` options the ACMG step uses; the default is
+/// `pd.read_table(path, low_memory=False)`.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct ReadOptions {
+    /// `dtype=str`: no column type inference, every value stays text.
+    pub(crate) all_text: bool,
+    /// `keep_default_na`: whether pandas' missing-value spellings are missing.
+    pub(crate) keep_default_na: bool,
+    pub(crate) header: Header,
+    pub(crate) use_columns: Option<UseColumns>,
+    /// `comment="#"`: the byte that starts a comment.
+    pub(crate) comment: Option<u8>,
+}
+
+impl Default for ReadOptions {
+    fn default() -> Self {
+        ReadOptions {
+            all_text: false,
+            keep_default_na: true,
+            header: Header::FirstLine,
+            use_columns: None,
+            comment: None,
+        }
+    }
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -139,6 +307,8 @@ enum State {
     InField,
     InQuotedField,
     QuoteInQuotedField,
+    /// After a comment byte: the rest of the line is dropped.
+    InComment,
 }
 
 fn end_field(fields: &mut Vec<String>, field: &mut Vec<u8>) -> Result<()> {
@@ -158,8 +328,14 @@ fn end_record(
 }
 
 /// Splits the text into records of fields, as the pandas C tokenizer does, and
-/// hands each record to `emit`.
-fn tokenize(text: &str, mut emit: impl FnMut(Vec<String>) -> Result<()>) -> Result<()> {
+/// hands each record to `emit`. With a `comment` byte, an unquoted comment byte
+/// ends the record (a record that has not started is skipped) and the rest of
+/// its line is dropped.
+fn tokenize(
+    text: &str,
+    comment: Option<u8>,
+    mut emit: impl FnMut(Vec<String>) -> Result<()>,
+) -> Result<()> {
     let bytes = text.as_bytes();
     let mut state = State::StartRecord;
     let mut fields: Vec<String> = Vec::new();
@@ -168,7 +344,25 @@ fn tokenize(text: &str, mut emit: impl FnMut(Vec<String>) -> Result<()>) -> Resu
     while index < bytes.len() {
         let byte = bytes[index];
         let terminator = byte == b'\n' || byte == b'\r';
+        if comment == Some(byte)
+            && matches!(
+                state,
+                State::StartRecord | State::StartField | State::InField
+            )
+        {
+            if state != State::StartRecord {
+                end_record(&mut fields, &mut field, &mut emit)?;
+            }
+            state = State::InComment;
+            index += 1;
+            continue;
+        }
         match state {
+            State::InComment => {
+                if terminator {
+                    state = State::StartRecord;
+                }
+            }
             State::StartRecord => {
                 if terminator {
                     index += 1;
@@ -236,7 +430,7 @@ fn tokenize(text: &str, mut emit: impl FnMut(Vec<String>) -> Result<()>) -> Resu
         index += 1;
     }
     match state {
-        State::StartRecord => Ok(()),
+        State::StartRecord | State::InComment => Ok(()),
         State::InQuotedField => Err(invalid("the table ends inside a quoted field")),
         State::StartField | State::InField | State::QuoteInQuotedField => {
             end_record(&mut fields, &mut field, &mut emit)
@@ -553,12 +747,16 @@ fn float_token(token: &str) -> Option<f64> {
     }
 }
 
-/// The column type pandas infers for these tokens.
-fn infer_column(tokens: Vec<String>) -> Result<Column> {
+/// The column type pandas infers for these tokens; `missing_spellings` says
+/// whether pandas' missing-value spellings count as missing (`keep_default_na`).
+fn infer_column(tokens: Vec<String>, missing_spellings: bool) -> Result<Column> {
     if tokens.is_empty() {
         return Ok(Column::Text(Vec::new()));
     }
-    let missing: Vec<bool> = tokens.iter().map(|token| is_na(token)).collect();
+    let missing: Vec<bool> = tokens
+        .iter()
+        .map(|token| missing_spellings && is_na(token))
+        .collect();
     let any_missing = missing.iter().any(|flag| *flag);
 
     // 1. Integers (every value that is not missing).
@@ -659,43 +857,133 @@ fn infer_column(tokens: Vec<String>) -> Result<Column> {
 }
 
 /// Reads a table from text already decoded as UTF-8.
+#[allow(dead_code)]
 pub(crate) fn parse_table(text: &str) -> Result<Table> {
+    parse_table_with(text, &ReadOptions::default())
+}
+
+/// Reads a table from text already decoded as UTF-8, with `pd.read_table` options.
+pub(crate) fn parse_table_with(text: &str, options: &ReadOptions) -> Result<Table> {
     let text = text.strip_prefix('\u{feff}').unwrap_or(text);
-    let mut names: Option<Vec<String>> = None;
-    let mut tokens: Vec<Vec<String>> = Vec::new();
-    let mut rows = 0;
-    tokenize(text, |record| {
-        match &names {
-            None => {
-                let header = column_names(record);
-                tokens = vec![Vec::new(); header.len()];
-                names = Some(header);
-            }
-            Some(header) => {
-                if record.len() > header.len() {
-                    return Err(invalid(format!(
-                        "data row {} has {} fields but the header has {}",
-                        rows + 1,
-                        record.len(),
-                        header.len()
-                    )));
-                }
-                let width = record.len();
-                for (column, field) in tokens.iter_mut().zip(record) {
-                    column.push(field);
-                }
-                for column in tokens.iter_mut().skip(width) {
-                    column.push(String::new());
-                }
-                rows += 1;
-            }
+    let mut names: Option<Vec<String>> = match &options.header {
+        Header::FirstLine => None,
+        Header::Names(given) => Some(given.clone()),
+    };
+    // With `usecols` a row may be longer than the columns named; without it
+    // pandas would turn the extra leading fields into the row index.
+    let mut width: Option<usize> = match (&options.header, &options.use_columns) {
+        (Header::Names(_), Some(UseColumns::Positions(positions))) => {
+            Some(positions.iter().max().map_or(0, |last| last + 1))
         }
+        (Header::Names(given), _) => Some(given.len()),
+        (Header::FirstLine, _) => None,
+    };
+    let mut tokens: Vec<Vec<String>> = vec![Vec::new(); width.unwrap_or(0)];
+    let mut rows = 0;
+    tokenize(text, options.comment, |record| {
+        let Some(expected) = width else {
+            let header = column_names(record);
+            tokens = vec![Vec::new(); header.len()];
+            width = Some(header.len());
+            names = Some(header);
+            return Ok(());
+        };
+        let longest = match options.use_columns {
+            Some(UseColumns::Positions(_)) if matches!(options.header, Header::Names(_)) => {
+                usize::MAX
+            }
+            _ => expected,
+        };
+        if record.len() > longest {
+            return Err(invalid(format!(
+                "data row {} has {} fields but the header has {}",
+                rows + 1,
+                record.len(),
+                expected
+            )));
+        }
+        let filled = record.len().min(expected);
+        for (column, field) in tokens.iter_mut().zip(record) {
+            column.push(field);
+        }
+        for column in tokens.iter_mut().skip(filled) {
+            column.push(String::new());
+        }
+        rows += 1;
         Ok(())
     })?;
-    let names = names.ok_or_else(|| invalid("no columns to parse from the table"))?;
+    let mut names = names.ok_or_else(|| invalid("no columns to parse from the table"))?;
+    if let (Header::Names(given), Some(UseColumns::Positions(positions))) =
+        (&options.header, &options.use_columns)
+    {
+        let mut kept = positions.clone();
+        kept.sort_unstable();
+        kept.dedup();
+        if kept.len() != given.len() {
+            return Err(invalid(
+                "names and usecols must name the same number of columns",
+            ));
+        }
+        // The names go to the kept columns in the file's order.
+        let mut kept_tokens = Vec::with_capacity(kept.len());
+        for position in &kept {
+            kept_tokens.push(std::mem::take(&mut tokens[*position]));
+        }
+        tokens = kept_tokens;
+        names = given.clone();
+    } else if let Some(use_columns) = &options.use_columns {
+        let kept: Vec<usize> = match use_columns {
+            UseColumns::Positions(positions) => {
+                if let Some(outside) = positions.iter().find(|position| **position >= names.len()) {
+                    return Err(invalid(format!(
+                        "usecols position {outside} is outside the {} columns of the table",
+                        names.len()
+                    )));
+                }
+                (0..names.len())
+                    .filter(|index| positions.contains(index))
+                    .collect()
+            }
+            UseColumns::Names(wanted) => {
+                let absent: Vec<&String> =
+                    wanted.iter().filter(|name| !names.contains(name)).collect();
+                if !absent.is_empty() {
+                    return Err(invalid(format!(
+                        "ValueError: Usecols do not match columns, columns expected but not found: {absent:?}"
+                    )));
+                }
+                (0..names.len())
+                    .filter(|index| wanted.contains(&names[*index]))
+                    .collect()
+            }
+        };
+        let mut kept_tokens = Vec::with_capacity(kept.len());
+        let mut kept_names = Vec::with_capacity(kept.len());
+        for index in kept {
+            kept_tokens.push(std::mem::take(&mut tokens[index]));
+            kept_names.push(names[index].clone());
+        }
+        tokens = kept_tokens;
+        names = kept_names;
+    }
     let mut columns = Vec::with_capacity(names.len());
     for column in tokens {
-        columns.push(infer_column(column)?);
+        columns.push(if options.all_text {
+            Column::Text(
+                column
+                    .into_iter()
+                    .map(|token| {
+                        if options.keep_default_na && is_na(&token) {
+                            None
+                        } else {
+                            Some(token)
+                        }
+                    })
+                    .collect(),
+            )
+        } else {
+            infer_column(column, options.keep_default_na)?
+        });
     }
     Ok(Table {
         names,
@@ -706,6 +994,11 @@ pub(crate) fn parse_table(text: &str) -> Result<Table> {
 
 /// `pd.read_table(path, low_memory=False)`.
 pub(crate) fn read_table(path: &Path) -> Result<Table> {
+    read_table_with(path, &ReadOptions::default())
+}
+
+/// `pd.read_table(path, low_memory=False, ...)` with the options given.
+pub(crate) fn read_table_with(path: &Path, options: &ReadOptions) -> Result<Table> {
     let name = path.to_string_lossy().to_lowercase();
     let mut bytes = Vec::new();
     let mut file = File::open(path)?;
@@ -724,7 +1017,7 @@ pub(crate) fn read_table(path: &Path) -> Result<Table> {
     }
     let text = String::from_utf8(bytes)
         .map_err(|_| invalid(format!("{}: not UTF-8 text", path.display())))?;
-    parse_table(&text)
+    parse_table_with(&text, options)
 }
 
 fn write_field(out: &mut impl Write, text: &str, only_column: bool) -> std::io::Result<()> {
@@ -752,6 +1045,12 @@ pub(crate) fn write_table_to(out: &mut impl Write, table: &Table) -> std::io::Re
     }
     out.write_all(b"\n")?;
     for row in 0..table.rows {
+        if only_column && table.columns[0].cell(row) == Cell::Missing {
+            // A missing value is written as an empty field, which csv.writer
+            // quotes when it is the whole row.
+            out.write_all(b"\"\"\n")?;
+            continue;
+        }
         for (index, column) in table.columns.iter().enumerate() {
             if index > 0 {
                 out.write_all(b"\t")?;
@@ -777,6 +1076,29 @@ pub(crate) fn write_table_to(out: &mut impl Write, table: &Table) -> std::io::Re
                         write_field(out, text, only_column)?;
                     }
                 }
+                Column::Object(values) => match &values[row] {
+                    ObjectValue::Nan | ObjectValue::None => {}
+                    ObjectValue::Text(text) => write_field(out, text, only_column)?,
+                    ObjectValue::Int(number) => write!(out, "{number}")?,
+                    // `str()` of a Python float; NaN is written as missing.
+                    ObjectValue::Float(number) => {
+                        if !number.is_nan() {
+                            out.write_all(float_repr(*number).as_bytes())?;
+                        }
+                    }
+                    ObjectValue::Bool(true) => out.write_all(b"True")?,
+                    ObjectValue::Bool(false) => out.write_all(b"False")?,
+                },
+                Column::NullableInt(values) => {
+                    if let Some(number) = values[row] {
+                        write!(out, "{number}")?;
+                    }
+                }
+                Column::NullableBool(values) => match values[row] {
+                    Some(true) => out.write_all(b"True")?,
+                    Some(false) => out.write_all(b"False")?,
+                    None => {}
+                },
             }
         }
         out.write_all(b"\n")?;
@@ -1030,5 +1352,144 @@ mod tests {
         let mut out = Vec::new();
         write_table_to(&mut out, &single).unwrap();
         assert_eq!(String::from_utf8(out).unwrap(), "a\n\"\"\n");
+    }
+
+    fn texts(column: &Column) -> Vec<Option<&str>> {
+        let Column::Text(values) = column else {
+            panic!("not a text column: {column:?}")
+        };
+        values.iter().map(|value| value.as_deref()).collect()
+    }
+
+    // The expected values below are what pandas 2.2.3 returned for the same
+    // text (group 3 probe, `probe_pandas_semantics.py`).
+    #[test]
+    fn short_rows_follow_the_missing_value_options() {
+        let text = "a\tb\tc\n1\t\n2\tNA\tx\n";
+        let all_text = ReadOptions {
+            all_text: true,
+            keep_default_na: false,
+            ..ReadOptions::default()
+        };
+        let table = parse_table_with(text, &all_text).unwrap();
+        assert_eq!(texts(&table.columns[0]), [Some("1"), Some("2")]);
+        assert_eq!(texts(&table.columns[1]), [Some(""), Some("NA")]);
+        assert_eq!(texts(&table.columns[2]), [Some(""), Some("x")]);
+        let with_na = ReadOptions {
+            all_text: true,
+            ..ReadOptions::default()
+        };
+        let table = parse_table_with(text, &with_na).unwrap();
+        assert_eq!(texts(&table.columns[1]), [None, None]);
+        assert_eq!(texts(&table.columns[2]), [None, Some("x")]);
+        let typed = ReadOptions {
+            keep_default_na: false,
+            ..ReadOptions::default()
+        };
+        let table = parse_table_with(text, &typed).unwrap();
+        assert_eq!(table.columns[0], Column::Int(vec![1, 2]));
+        assert_eq!(texts(&table.columns[1]), [Some(""), Some("NA")]);
+        let numbers = parse_table_with("x\n007\n1.50\n", &all_text).unwrap();
+        assert_eq!(texts(&numbers.columns[0]), [Some("007"), Some("1.50")]);
+    }
+
+    #[test]
+    fn headerless_pedigree_keeps_six_columns() {
+        let names: Vec<String> = [
+            "#FamilyID",
+            "IndividualID",
+            "PaternalID",
+            "MaternalID",
+            "Sex",
+            "Phenotype",
+        ]
+        .map(str::to_owned)
+        .to_vec();
+        let options = ReadOptions {
+            all_text: true,
+            keep_default_na: false,
+            header: Header::Names(names.clone()),
+            use_columns: Some(UseColumns::Positions((0..6).collect())),
+            comment: None,
+        };
+        let table = parse_table_with("F\tI\t0\t0\t1\t2\textra\nF\tJ\t0\t0\t2\n", &options).unwrap();
+        assert_eq!(table.names, names);
+        assert_eq!(texts(&table.columns[1]), [Some("I"), Some("J")]);
+        assert_eq!(texts(&table.columns[5]), [Some("2"), Some("")]);
+    }
+
+    #[test]
+    fn comments_names_and_usecols_follow_pandas() {
+        let gene_list = ReadOptions {
+            header: Header::Names(vec!["SYMBOL".into()]),
+            comment: Some(b'#'),
+            ..ReadOptions::default()
+        };
+        let table =
+            parse_table_with("#comment\nGENE1\nGENE2 # tail\n\n#x\nGENE3\n", &gene_list).unwrap();
+        assert_eq!(
+            texts(&table.columns[0]),
+            [Some("GENE1"), Some("GENE2 "), Some("GENE3")]
+        );
+        // A second field would become the row index in pandas: refused.
+        assert!(parse_table_with("GENE1\tx\n", &gene_list).is_err());
+        let by_name = ReadOptions {
+            all_text: true,
+            use_columns: Some(UseColumns::Names(vec!["a".into(), "c".into()])),
+            ..ReadOptions::default()
+        };
+        let table = parse_table_with("x\tc\tb\ta\n1\t2\t3\t4\n", &by_name).unwrap();
+        assert_eq!(table.names, ["c", "a"]);
+        assert_eq!(texts(&table.columns[1]), [Some("4")]);
+        let error = parse_table_with("x\tc\n1\t2\n", &by_name)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("Usecols do not match columns"), "{error}");
+        // A quoted comment byte is text.
+        let quoted = parse_table_with("a\n\"x#y\"\n", &gene_list).unwrap();
+        assert_eq!(texts(&quoted.columns[0]), [Some("a"), Some("x#y")]);
+    }
+
+    #[test]
+    fn later_column_types_are_written_like_to_csv() {
+        let table = Table {
+            names: vec!["x".into(), "y".into(), "o".into()],
+            columns: vec![
+                Column::NullableInt(vec![Some(1), None]),
+                Column::NullableBool(vec![Some(true), None]),
+                Column::Object(vec![
+                    ObjectValue::Float(1e-5),
+                    ObjectValue::Text(String::new()),
+                ]),
+            ],
+            rows: 2,
+        };
+        let mut out = Vec::new();
+        write_table_to(&mut out, &table).unwrap();
+        assert_eq!(
+            String::from_utf8(out).unwrap(),
+            "x\ty\to\n1\tTrue\t1e-05\n\t\t\n"
+        );
+        let single = Table {
+            names: vec!["a".into()],
+            columns: vec![Column::Float(vec![f64::NAN, 1.0])],
+            rows: 2,
+        };
+        let mut out = Vec::new();
+        write_table_to(&mut out, &single).unwrap();
+        assert_eq!(String::from_utf8(out).unwrap(), "a\n\"\"\n1.0\n");
+        assert_eq!(table.columns[0].dtype_name(), "Int64");
+        assert_eq!(table.columns[2].missing_mask(), [false, false]);
+        assert_eq!(
+            table.take_rows(&[1]).columns[0],
+            Column::NullableInt(vec![None])
+        );
+        assert!(
+            table
+                .column("absent")
+                .unwrap_err()
+                .to_string()
+                .contains("KeyError")
+        );
     }
 }

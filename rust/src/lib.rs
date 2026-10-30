@@ -8,6 +8,7 @@ pub mod combine_annotations;
 pub mod hpo_penetrance;
 pub mod interpro_mapping_io;
 mod json_text;
+mod pandas_polars;
 mod pandas_table;
 pub mod pedigree_filter;
 mod pickle_reader;

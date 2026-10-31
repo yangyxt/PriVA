@@ -251,6 +251,36 @@ impl Table {
     }
 }
 
+/// Python's `repr()` of a text: single quotes unless the text holds one and no
+/// double quote; backslashes, the chosen quote and control characters escaped.
+fn python_text_repr(text: &str) -> String {
+    let quote = if text.contains('\'') && !text.contains('"') {
+        '"'
+    } else {
+        '\''
+    };
+    let mut out = String::with_capacity(text.len() + 2);
+    out.push(quote);
+    for c in text.chars() {
+        match c {
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if c == quote => {
+                out.push('\\');
+                out.push(c);
+            }
+            c if (c as u32) < 0x20 || c as u32 == 0x7f => {
+                out.push_str(&format!("\\x{:02x}", c as u32))
+            }
+            c => out.push(c),
+        }
+    }
+    out.push(quote);
+    out
+}
+
 fn is_na(token: &str) -> bool {
     NA_VALUES.contains(&token)
 }
@@ -958,8 +988,13 @@ pub(crate) fn parse_table_with(text: &str, options: &ReadOptions) -> Result<Tabl
                 let absent: Vec<&String> =
                     wanted.iter().filter(|name| !names.contains(name)).collect();
                 if !absent.is_empty() {
+                    // pandas prints the list as Python does; it collects the names from a
+                    // set, so with more than one its order varies (here: the order asked for).
+                    let listed: Vec<String> =
+                        absent.iter().map(|name| python_text_repr(name)).collect();
                     return Err(invalid(format!(
-                        "ValueError: Usecols do not match columns, columns expected but not found: {absent:?}"
+                        "ValueError: Usecols do not match columns, columns expected but not found: [{}]",
+                        listed.join(", ")
                     )));
                 }
                 (0..names.len())
@@ -1463,7 +1498,12 @@ mod tests {
         let error = parse_table_with("x\tc\n1\t2\n", &by_name)
             .unwrap_err()
             .to_string();
-        assert!(error.contains("Usecols do not match columns"), "{error}");
+        assert!(
+            error.ends_with("Usecols do not match columns, columns expected but not found: ['a']"),
+            "{error}"
+        );
+        assert_eq!(python_text_repr("it's"), "\"it's\"");
+        assert_eq!(python_text_repr("a'\"\\\t"), "'a\\'\"\\\\\\t'");
         // A quoted comment byte is text.
         let quoted = parse_table_with("a\n\"x#y\"\n", &gene_list).unwrap();
         assert_eq!(texts(&quoted.columns[0]), [Some("a"), Some("x#y")]);

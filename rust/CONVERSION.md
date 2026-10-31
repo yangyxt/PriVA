@@ -30,6 +30,19 @@ and `PRIVA_SCRIPT_DIR` at the checkout. An output older than the program is reco
 Nextflow resource manifest pins the program's SHA-256. The Python scripts stay in `scripts/`;
 reverting one "Call priva ..." commit restores that group's Python command lines.
 
+Whole-workflow check (2026-10-31, HGSC, cluster folder
+`PriVA_upgrade/validation/rust_caller_switch_20261031/`): the Snakemake workflow on the BH14233
+chr19 1-3.5 Mb trio slice, once from 82737ca (Python callers) and once with the switched callers
+and the managed `priva` built by the installer's cold build, each on its own copy of the input
+VCF, 8 CPUs. The annotated, family and family-filtered VCFs (7,761, 7,761 and 378 records) are
+identical after `bcftools view --no-version` apart from the dated `##bcftools_*Command` and
+`##VEP` provenance lines; the CADD tables (13,824 and 672 rows) and the final ranked table
+(4,670 rows) are byte-identical; the ACMG matrix (7,363 rows) has the same rows in another order:
+the Python route's `combine_annotations.py` with 4 workers returned the records out of VCF order
+(56 steps back), while the Rust route keeps the family VCF's order. No row gets PM5 under either
+rule. 1,054 s with the Python callers, 621 s with `priva`. The CADD hub was not configured, so
+`priva cadd-hub` was not exercised here (it was compared on its own on 2026-10-29).
+
 ## Scripts
 
 ### 1. Steps that prepare each sample's variants (variant IDs, VCF to table, CADD hub cache, family filtering, SpliceAI version check)

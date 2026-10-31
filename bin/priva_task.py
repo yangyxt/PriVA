@@ -24,7 +24,7 @@ from spliceai_cache_input import inspect_header
 
 ASSEMBLY = {"hg19": "hg19", "GRCh37": "hg19", "hg38": "hg38", "GRCh38": "hg38"}
 PRIORITY_KEYS = (
-    "clinvar_aa_stat", "clinvar_splice_stat", "all_intolerant_domains",
+    "clinvar_aa_stat", "clinvar_splice_stat", "clinvar_pm5_index", "all_intolerant_domains",
     "alphamissense_intolerant_domains", "pm1_regions_pkl", "alphamissense_vcf",
     "alphamissense_tranx_domain_map", "clinvar_patho_af_stat", "clinvar_patho_exon_af_stat",
     "interpro_mapping_pickle", "clingen_map", "gene_dosage_sensitivity",

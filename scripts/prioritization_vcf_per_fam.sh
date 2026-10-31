@@ -157,6 +157,8 @@ function assign_acmg_criteria () {
     local ped_table=$(read_yaml ${config_file} "ped_file")
     local clinvar_aa_dict_pkl=$(read_yaml ${config_file} "clinvar_aa_stat")
     local clinvar_splice_dict_pkl=$(read_yaml ${config_file} "clinvar_splice_stat")
+    # PM5's residue rules of 30 October 2026 read this index (install_utils.sh ClinVar_PM5_index).
+    local clinvar_pm5_index=$(read_yaml ${config_file} "clinvar_pm5_index")
     local intolerant_domains_pkl=$(read_yaml ${config_file} "all_intolerant_domains")
 	local am_intol_domains_tsv=$(read_yaml ${config_file} "alphamissense_intolerant_domains")
     local clinvar_gene_stat_pkl
@@ -210,6 +212,7 @@ function assign_acmg_criteria () {
     local has_error=0
     check_path ${clinvar_aa_dict_pkl} "file" "clinvar_aa_stat" || has_error=1
     check_path ${clinvar_splice_dict_pkl} "file" "clinvar_splice_stat" || has_error=1
+    check_path ${clinvar_pm5_index} "file" "clinvar_pm5_index" || has_error=1
     check_path ${intolerant_domains_pkl} "file" "all_intolerant_domains" || has_error=1
     check_path ${am_intol_domains_tsv} "file" "alphamissense_intolerant_domains" || has_error=1
     check_path "${clinvar_gene_stat_pkl}" "file" "clinvar_gene_stat" || has_error=1
@@ -249,26 +252,21 @@ function assign_acmg_criteria () {
 
     [[ ${has_error} -eq 1 ]] && \
     { log "Failed to offer the valid required files for the ACMG criteria assignment"; return 1; }
-    
-    # Define acmg_py before skip check so we can include it in timestamp comparison
-    local acmg_py=${SCRIPT_DIR}/acmg_criteria_assign.py
-    local acmg_pm1_py=${SCRIPT_DIR}/acmg_pm1_pp2_bp1_missense.py
+    priva_resolve_binary "${config_file}" || return 1
 
     # Test whether the function can be skipped
     # Skip if: input_tab is newer than all data files, output exists and is newer than input,
-    # AND output is newer than acmg_criteria_assign.py and the PM1 criteria module
-    # (so script updates trigger re-run).
+    # AND output is newer than the priva program (so a rebuilt program triggers a re-run).
     # Legacy timestamps do not identify the selected binary. Native opt-in
     # therefore executes this boundary; Nextflow can reuse its hashed task.
     [[ ${#ranking_args[@]} -eq 0 ]] && \
     [[ -f ${input_tab} ]] && \
     [[ -f ${output_acmg_mat} ]] && \
-    [[ ${output_acmg_mat} -nt ${acmg_py} ]] && \
-    [[ ${output_acmg_mat} -nt ${acmg_pm1_py} ]] && \
-    [[ ${output_acmg_mat} -nt ${SCRIPT_DIR}/spliceai_cutoffs.py ]] && \
+    [[ ${output_acmg_mat} -nt ${PRIVA_BIN} ]] && \
     [[ ${input_tab} -nt ${mean_am_score_table} ]] && \
     [[ ${input_tab} -nt ${clinvar_aa_dict_pkl} ]] && \
     [[ ${input_tab} -nt ${clinvar_splice_dict_pkl} ]] && \
+    [[ ${input_tab} -nt ${clinvar_pm5_index} ]] && \
     [[ ${input_tab} -nt ${intolerant_domains_pkl} ]] && \
     [[ ${input_tab} -nt ${am_intol_domains_tsv} ]] && \
     [[ ${input_tab} -nt ${clinvar_gene_stat_pkl} ]] && \
@@ -294,13 +292,14 @@ function assign_acmg_criteria () {
     [[ -n "${pext_tissues}" ]] && [[ "${pext_tissues}" != "null" ]] && local pext_arg="--pext_tissues ${pext_tissues}" || local pext_arg=""
 
     log "Running ACMG assignment with integrated condition cache ${hpo_condition_mechanism_json} and exact non-LOF cache ${gene_nonlof_mechanism_json}"
-    python ${acmg_py} \
+    "${PRIVA_BIN}" acmg-assign \
     --anno_table ${input_tab} \
     --am_score_table ${mean_am_score_table} \
     --clinvar_patho_af_stat ${clinvar_patho_af_stat} \
     --clinvar_patho_exon_af_stat ${clinvar_patho_exon_af_stat} \
     --clinvar_aa_dict_pkl ${clinvar_aa_dict_pkl} \
     --clinvar_splice_dict_pkl ${clinvar_splice_dict_pkl} \
+    --clinvar_pm5_index ${clinvar_pm5_index} \
     --interpro_entry_map_pkl ${interpro_entry_map_pkl} \
     --intolerant_domains_pkl ${intolerant_domains_pkl} \
     --gene_dosage_sensitivity ${gene_dosage_sensitivity} \

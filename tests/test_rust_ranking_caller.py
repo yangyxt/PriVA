@@ -557,8 +557,7 @@ class RankingShellDispatch(unittest.TestCase):
             root = Path(folder)
             old = root / "old.fixture"
             old.write_text("fixture\n")
-            for name in ("data/alphamissense/alphamissense_mean_score.tsv", "data/repeats/repeats.bed",
-                         "scripts/acmg_criteria_assign.py", "scripts/acmg_pm1_pp2_bp1_missense.py"):
+            for name in ("data/alphamissense/alphamissense_mean_score.tsv", "data/repeats/repeats.bed"):
                 path = root / name
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_text("fixture\n")
@@ -573,9 +572,15 @@ class RankingShellDispatch(unittest.TestCase):
             binary = root / "fixture-ranker"
             binary.write_text("#!/bin/sh\nexit 0\n")
             binary.chmod(0o555)
+            calls = root / "argv.bin"
+            events = root / "events.txt"
+            # The ACMG step is priva acmg-assign; this stand-in records its arguments.
+            program = root / "priva"
+            program.write_text("#!/bin/sh\nprintf '%s\\0' \"$@\" > " + shlex.quote(str(calls))
+                               + "\necho acmg >> " + shlex.quote(str(events)) + "\n")
+            program.chmod(0o555)
+            os.utime(program, ns=(1_000_000_000, 1_000_000_000))
             for selected, expected_return, expected_call in (("null", 0, False), (str(binary), 0, True), (str(root / "missing"), 1, False)):
-                calls = root / "argv.bin"
-                events = root / "events.txt"
                 calls.unlink(missing_ok=True)
                 events.unlink(missing_ok=True)
                 prelude = "\n".join([
@@ -587,18 +592,18 @@ class RankingShellDispatch(unittest.TestCase):
                     'interpret_utr_annotations() { echo utr >> "$EVENTS"; }',
                     'check_path() { return 0; }', 'check_table_column() { return 0; }',
                     'check_vcf_validity() { return 1; }', 'log() { :; }', 'display_table() { :; }',
-                    'python() { printf "%s\\0" "$@" > "$CALLS"; echo python >> "$EVENTS"; }', function,
+                    "priva_resolve_binary() { PRIVA_BIN=" + shlex.quote(str(program)) + "; }", function,
                     "assign_acmg_criteria -i " + shlex.quote(str(input_table)) + " -c " + shlex.quote(str(old)) + " -f FAM -t 1",
                 ])
                 result = subprocess.run(["bash", "-s"], input=prelude, capture_output=True, text=True, timeout=30)
                 self.assertEqual(result.returncode, expected_return, result.stderr)
                 self.assertEqual(calls.exists(), expected_call)
-                self.assertEqual(events.read_text().splitlines(), ["splicing", "utr"] + (["python"] if expected_call else []))
+                self.assertEqual(events.read_text().splitlines(), ["splicing", "utr"] + (["acmg"] if expected_call else []))
                 if expected_call:
                     argv = calls.read_bytes().rstrip(b"\0").decode().split("\0")
                     self.assertEqual(argv.count("--ranking_binary"), 1)
                     self.assertEqual(argv[argv.index("--ranking_binary") + 1], selected)
-                    self.assertEqual(argv[0], str(root / "scripts/acmg_criteria_assign.py"))
+                    self.assertEqual(argv[0], "acmg-assign")
 
 
 if __name__ == "__main__":

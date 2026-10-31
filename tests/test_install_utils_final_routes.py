@@ -453,7 +453,9 @@ interpret_utr_annotations() { return 0; }
 check_path() { return 0; }
 check_vcf_validity() { return 1; }
 display_table() { return 0; }
-python() { event acmg "$@"; }
+# The ACMG step is priva acmg-assign; this stand-in records its arguments.
+priva_resolve_binary() { PRIVA_BIN=priva_stand_in; }
+priva_stand_in() { event acmg "$@"; }
 '''
         for compressed in (True, False):
             with self.subTest(compressed=compressed):
@@ -521,7 +523,9 @@ interpret_utr_annotations() { return 0; }
 check_path() { return 0; }
 check_vcf_validity() { return 1; }
 display_table() { return 0; }
-python() { event acmg "$@"; }
+# The ACMG step is priva acmg-assign; this stand-in records its arguments.
+priva_resolve_binary() { PRIVA_BIN=priva_stand_in; }
+priva_stand_in() { event acmg "$@"; }
 '''
         for assembly in ("hg38", "GRCh38"):
             self.events.write_text("")

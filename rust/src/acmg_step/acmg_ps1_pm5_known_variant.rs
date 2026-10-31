@@ -19,7 +19,7 @@ use super::acmg_pm5_residue_rules::{
 };
 use super::acmg_pp3_bp4_bp7_insilico::harness_options;
 use super::acmg_pp3_bp4_bp7_insilico::pandas_masks::{high_confidence_review, python_str};
-use super::gene_mechanism_variants::CapturedResolver;
+use super::gene_mechanism_resources::harness_resolver;
 use super::pickle_dict_stream::{Item, TextDict, visit_top_level_dict};
 use super::types::{AcmgError, HarnessCall, StepOutput, not_converted};
 use crate::cli::{Result, invalid};
@@ -770,7 +770,7 @@ pub(crate) fn run_harness(function: &str, call: &HarnessCall) -> Result<Table> {
                     )?
                 }
                 _ => {
-                    let resolver = CapturedResolver::from_options(options)?;
+                    let resolver = harness_resolver(options)?;
                     let mut gain_of_function = CuratedGainOfFunction::new(
                         harness_options::required_text(options, "mechanism_json")?,
                         &resolver,
@@ -805,7 +805,7 @@ pub(crate) fn run_harness(function: &str, call: &HarnessCall) -> Result<Table> {
             ))
         }
         "pm5_gain_of_function" => {
-            let resolver = CapturedResolver::from_options(options)?;
+            let resolver = harness_resolver(options)?;
             let mut gain_of_function = CuratedGainOfFunction::new(
                 harness_options::required_text(options, "mechanism_json")?,
                 &resolver,

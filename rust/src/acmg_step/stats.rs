@@ -1343,7 +1343,7 @@ fn hypergeometric_pdf_factorial(x: u64, r: u64, n: u64, big_n: u64) -> f64 {
         unchecked_factorial(x),
         unchecked_factorial(n - x),
         unchecked_factorial(r - x),
-        unchecked_factorial(big_n - n - r + x),
+        unchecked_factorial(big_n + x - n - r),
     ];
     let mut i = 0;
     let mut j = 0;
@@ -1439,7 +1439,7 @@ fn hypergeometric_pdf_prime(x: u64, r: u64, n: u64, big_n: u64) -> f64 {
             prime_powers -= (x / base) as i64;
             prime_powers -= ((n - x) / base) as i64;
             prime_powers -= ((r - x) / base) as i64;
-            prime_powers -= ((big_n - n - r + x) / base) as i64;
+            prime_powers -= ((big_n + x - n - r) / base) as i64;
             base *= prime;
         }
         if prime_powers != 0 {
@@ -1507,7 +1507,7 @@ fn hypergeometric_pdf_lanczos(x: u64, r: u64, n: u64, big_n: u64) -> f64 {
         1.0 / (x as f64 + g + 0.5),
         1.0 / ((n - x) as f64 + g + 0.5),
         1.0 / ((r - x) as f64 + g + 0.5),
-        1.0 / ((big_n - n - r + x) as f64 + g + 0.5),
+        1.0 / ((big_n + x - n - r) as f64 + g + 0.5),
     ];
     let mut exponents = [
         n as f64 + 0.5,
@@ -1518,7 +1518,7 @@ fn hypergeometric_pdf_lanczos(x: u64, r: u64, n: u64, big_n: u64) -> f64 {
         x as f64 + 0.5,
         (n - x) as f64 + 0.5,
         (r - x) as f64 + 0.5,
-        (big_n - n - r + x) as f64 + 0.5,
+        (big_n + x - n - r) as f64 + 0.5,
     ];
     let mut base_e_factors = [-1i32, -1, -1, -1, 1, 1, 1, 1, 1];
     // std::sort with "larger exponent first": libstdc++ uses insertion sort for 9 elements,
@@ -1593,7 +1593,7 @@ fn hypergeometric_pdf_lanczos(x: u64, r: u64, n: u64, big_n: u64) -> f64 {
             * l((x + 1) as f64)
             * l((n - x + 1) as f64)
             * l((r - x + 1) as f64)
-            * l((big_n - n - r + x + 1) as f64));
+            * l((big_n + x + 1 - n - r) as f64));
     result
 }
 

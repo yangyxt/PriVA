@@ -8,7 +8,11 @@
 //!   is not a negative number and holds no space;
 //! - a repeated option keeps its last value;
 //! - arguments that no option takes are reported together at the end;
-//! - `-h` or `--help` stops the parsing and asks for the usage text.
+//! - `-h` or `--help` stops the parsing and asks for the usage text;
+//! - an `action="store_true"` flag takes no value: present, it is true; given
+//!   one with `--flag=value`, argparse stops with "ignored explicit argument";
+//!   the word after it is not its value (a word no option takes is unrecognized).
+//!   Prefixes are matched over the value options and the flags together.
 //! The caller checks which options are required and exits with code 2 on an error.
 use std::collections::HashMap;
 
@@ -71,14 +75,40 @@ fn match_option<'a>(given: &str, names: &[&'a str]) -> Result<Option<&'a str>, S
 
 /// Parses `args` against the long option `names` (written without the dashes).
 pub(crate) fn parse_long_options(args: &[String], names: &[&str]) -> Result<Parsed, String> {
-    let mut values: HashMap<String, String> = HashMap::new();
+    parse_long_options_with_flags(args, names, &[])
+}
+
+/// Parses `args` against the long options `names`, which take a value, and the
+/// `store_true` flags `flags` (all written without the dashes). A flag that was
+/// given appears in the result with an empty value; one that was not is absent.
+pub(crate) fn parse_long_options_with_flags(
+    args: &[String],
+    names: &[&str],
+    flags: &[&str],
+) -> Result<Parsed, String> {
+    Ok(match parse_long_option_occurrences(args, names, flags)? {
+        None => Parsed::Help,
+        Some(occurrences) => Parsed::Values(occurrences.into_iter().collect()),
+    })
+}
+
+/// Like `parse_long_options_with_flags`, but every occurrence of an option in
+/// command-line order (`None` for help): argparse converts each occurrence's value
+/// with the option's `type`, so a caller converting values checks them all.
+pub(crate) fn parse_long_option_occurrences(
+    args: &[String],
+    names: &[&str],
+    flags: &[&str],
+) -> Result<Option<Vec<(String, String)>>, String> {
+    let all: Vec<&str> = names.iter().chain(flags).copied().collect();
+    let mut values: Vec<(String, String)> = Vec::new();
     let mut unrecognized: Vec<String> = Vec::new();
     let mut index = 0;
     while index < args.len() {
         let token = &args[index];
         index += 1;
         if token == "-h" || token == "--help" {
-            return Ok(Parsed::Help);
+            return Ok(None);
         }
         if !token.starts_with("--") || token == "--" {
             unrecognized.push(token.clone());
@@ -88,13 +118,22 @@ pub(crate) fn parse_long_options(args: &[String], names: &[&str]) -> Result<Pars
             Some((name, value)) => (name.to_owned(), Some(value.to_owned())),
             None => (token.clone(), None),
         };
-        let name = match match_option(&given, names)? {
+        let name = match match_option(&given, &all)? {
             Some(name) => name,
             None => {
                 unrecognized.push(token.clone());
                 continue;
             }
         };
+        if flags.contains(&name) {
+            if let Some(value) = inline {
+                return Err(format!(
+                    "argument --{name}: ignored explicit argument '{value}'"
+                ));
+            }
+            values.push((name.to_owned(), String::new()));
+            continue;
+        }
         let value = match inline {
             Some(value) => value,
             None => match args.get(index) {
@@ -105,7 +144,7 @@ pub(crate) fn parse_long_options(args: &[String], names: &[&str]) -> Result<Pars
                 _ => return Err(format!("argument --{name}: expected one argument")),
             },
         };
-        values.insert(name.to_owned(), value);
+        values.push((name.to_owned(), value));
     }
     if !unrecognized.is_empty() {
         return Err(format!(
@@ -113,7 +152,7 @@ pub(crate) fn parse_long_options(args: &[String], names: &[&str]) -> Result<Pars
             unrecognized.join(" ")
         ));
     }
-    Ok(Parsed::Values(values))
+    Ok(Some(values))
 }
 
 /// The error for required options that are absent, in the order given.
@@ -182,6 +221,82 @@ mod tests {
     fn unknown_arguments_are_reported_together() {
         let error = values(&["--a", "1", "stray", "--zzz"], &["a"]).unwrap_err();
         assert_eq!(error, "unrecognized arguments: stray --zzz");
+    }
+
+    fn with_flags(items: &[&str]) -> Result<HashMap<String, String>, String> {
+        let names = ["clingen_map_pkl", "threads", "interpro_entry_map_pkl"];
+        match parse_long_options_with_flags(&strings(items), &names, &["ignore_clingen_override"])?
+        {
+            Parsed::Values(values) => Ok(values),
+            Parsed::Help => Err("help".to_owned()),
+        }
+    }
+
+    #[test]
+    fn a_store_true_flag_takes_no_value() {
+        let given = with_flags(&["--ignore_clingen_override", "--threads", "4"]).unwrap();
+        assert_eq!(given["ignore_clingen_override"], "");
+        assert_eq!(given["threads"], "4");
+        assert!(
+            !with_flags(&["--threads", "4"])
+                .unwrap()
+                .contains_key("ignore_clingen_override")
+        );
+        // A unique prefix names the flag; prefixes are matched over flags and value options.
+        assert!(
+            with_flags(&["--ig"])
+                .unwrap()
+                .contains_key("ignore_clingen_override")
+        );
+        assert_eq!(
+            with_flags(&["--i"]).unwrap_err(),
+            "ambiguous option: --i could match --interpro_entry_map_pkl, --ignore_clingen_override"
+        );
+        // The flag does not take the next word, which no option takes then.
+        assert_eq!(
+            with_flags(&["--ignore_clingen_override", "yes"]).unwrap_err(),
+            "unrecognized arguments: yes"
+        );
+        // An explicit value, even an empty one, is an error.
+        assert_eq!(
+            with_flags(&["--ignore_clingen_override=1"]).unwrap_err(),
+            "argument --ignore_clingen_override: ignored explicit argument '1'"
+        );
+        assert!(with_flags(&["--ignore_clingen_override="]).is_err());
+        // A value option still refuses the flag as its value.
+        assert_eq!(
+            with_flags(&["--clingen_map_pkl", "--ignore_clingen_override"]).unwrap_err(),
+            "argument --clingen_map_pkl: expected one argument"
+        );
+        // Repeating the flag is allowed.
+        assert!(
+            with_flags(&["--ignore_clingen_override", "--ignore_clingen_override"])
+                .unwrap()
+                .contains_key("ignore_clingen_override")
+        );
+    }
+
+    #[test]
+    fn occurrences_keep_the_command_line_order() {
+        let found = parse_long_option_occurrences(
+            &strings(&["--threads", "x", "--ignore", "--threads=4"]),
+            &["threads"],
+            &["ignore_clingen_override"],
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(
+            found,
+            vec![
+                ("threads".to_owned(), "x".to_owned()),
+                ("ignore_clingen_override".to_owned(), String::new()),
+                ("threads".to_owned(), "4".to_owned()),
+            ]
+        );
+        assert_eq!(
+            parse_long_option_occurrences(&strings(&["--help"]), &["threads"], &[]).unwrap(),
+            None
+        );
     }
 
     #[test]

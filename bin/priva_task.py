@@ -39,6 +39,10 @@ ANNOTATION_KEYS = (
 )
 OPTIONAL_INPUTS = ("control_vcf", "alt_disease_vcf", "pp1_vcf", "pp1_ped",
                    "relevant_gene_list", "dispensable_gene_list", "cds_fasta_file")
+# Executables whose bytes are pinned by SHA-256 even when large caches use stat
+# reuse: priva_binary runs the converted pipeline steps from the shell scripts;
+# priva_ranking_binary is the optional ranking bridge of the Python ACMG step.
+EXECUTABLE_KEYS = ("priva_binary", "priva_ranking_binary")
 SAFE_PATH = re.compile(r"^[A-Za-z0-9_./:+-]+$")
 SAFE_ID = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.-]*$")
 
@@ -99,7 +103,7 @@ def source_digest(root):
     return digest.hexdigest()
 
 
-def software_readiness(mode):
+def software_readiness(mode, priva_binary=None):
     required = ["bash", "python", "python3", "bcftools", "tabix", "yq", "parallel", "tsv-pretty"]
     if mode == "raw":
         required += ["vep", "samtools", "conda"]
@@ -117,6 +121,13 @@ def software_readiness(mode):
     # The shell invokes python (not necessarily the adapter's python3), so check
     # the interpreter that will actually load the unchanged scientific modules.
     subprocess.run(["python", "-c", "import pandas,numpy,pysam,yaml,scipy"], check=True)
+    if priva_binary is not None:
+        # The same check as priva_resolve_binary in scripts/common_bash_utils.sh.
+        result = subprocess.run([str(priva_binary), "--version"], text=True, capture_output=True, timeout=30)
+        if result.returncode != 0 or not result.stdout.startswith("priva "):
+            raise ContractError("priva_binary is not a working PriVA program (priva --version failed)")
+        versions["priva"] = {"executable": str(Path(priva_binary).resolve()),
+                             "version_output": result.stdout[:4096], "version_exit_code": result.returncode}
     return versions
 
 
@@ -181,11 +192,13 @@ def runtime_resources(config, root, mode, vcf_hub_mode="off", cadd_hub_mode="cop
     for key in OPTIONAL_INPUTS:
         if config.get(key):
             paths[key] = checked_path(config[key], key)
-    if config.get("priva_ranking_binary"):
-        binary = checked_path(config["priva_ranking_binary"], "priva_ranking_binary")
-        if not binary.is_file() or binary.stat().st_size == 0 or not os.access(binary, os.X_OK):
-            raise ContractError("priva_ranking_binary must be a nonempty executable file")
-        paths["priva_ranking_binary"] = binary
+    for key in EXECUTABLE_KEYS:
+        # priva_binary is required: every phase after annotation runs it.
+        if key == "priva_binary" or config.get(key):
+            binary = checked_path(config.get(key), key)
+            if not binary.is_file() or binary.stat().st_size == 0 or not os.access(binary, os.X_OK):
+                raise ContractError(f"{key} must be a nonempty executable file")
+            paths[key] = binary
     if bool(config.get("pp1_vcf")) != bool(config.get("pp1_ped")):
         raise ContractError("pp1_vcf and pp1_ped must be supplied together")
     selected_hpo = config.get("hpo_assertions")
@@ -259,7 +272,7 @@ def inventory_record(path, checksum=False):
     return record
 
 
-def ranking_binary_record(path):
+def executable_record(path, key):
     """Pin executable bytes even when large annotation caches use stat reuse."""
     path = Path(path)
     def identity(value):
@@ -267,11 +280,11 @@ def ranking_binary_record(path):
                 value.st_mtime_ns, value.st_ctime_ns, value.st_nlink)
     before = (identity(path.lstat()), identity(path.stat()), str(path.resolve(strict=True)))
     if not path.is_file() or path.stat().st_size == 0 or not os.access(path, os.X_OK):
-        raise ContractError("priva_ranking_binary must be a nonempty executable file")
+        raise ContractError(f"{key} must be a nonempty executable file")
     record = inventory_record(path, checksum=True)
     after = (identity(path.lstat()), identity(path.stat()), str(path.resolve(strict=True)))
     if before != after:
-        raise ContractError("priva_ranking_binary changed during identity capture")
+        raise ContractError(f"{key} changed during identity capture")
     record["executable_mode"] = before[1][2] & 0o777
     return record
 
@@ -279,7 +292,7 @@ def ranking_binary_record(path):
 def inventory(paths, checksum=False):
     records = {}
     for key, path in sorted(paths.items()):
-        records[key] = (ranking_binary_record(path) if key == "priva_ranking_binary"
+        records[key] = (executable_record(path, key) if key in EXECUTABLE_KEYS
                         else inventory_record(path, checksum))
         if path.is_dir():
             # Include every dependency below directory resources without hashing
@@ -303,9 +316,7 @@ def build_manifest(args):
     paths = runtime_resources(config, root, args.mode, args.vcf_hub_mode, args.cadd_hub_mode)
     payload = {"schema_version": 1, "assembly": ASSEMBLY[config["assembly"]], "mode": args.mode,
                "config_sha256": sha256(args.config), "legacy_root": str(root),
-               "identity_kind": ("sha256" if args.checksum else
-                                 "size-mtime-inventory+ranking-sha256" if "priva_ranking_binary" in paths
-                                 else "size-mtime-inventory"),
+               "identity_kind": "sha256" if args.checksum else "size-mtime-inventory+executable-sha256",
                "vcf_hub_mode": args.vcf_hub_mode, "cadd_hub_mode": args.cadd_hub_mode,
                "resources": inventory(paths, args.checksum)}
     payload["bundle_id"] = json_digest(payload)
@@ -331,7 +342,7 @@ def verify_manifest(manifest, config_path, root, mode, vcf_hub_mode, cadd_hub_mo
         raise ContractError("Resource inventory membership changed; freeze and rebuild manifest")
     for key, record in current.items():
         expected_record = {k: v for k, v in manifest["resources"][key].items()
-                           if k != "sha256" or key == "priva_ranking_binary"}
+                           if k != "sha256" or key in EXECUTABLE_KEYS}
         if record != expected_record:
             raise ContractError(f"Resource changed since manifest creation: {key}")
     return paths
@@ -407,8 +418,8 @@ def validate(args):
         raise ContractError("Source changed after Nextflow launch; freeze the checkout before retrying")
     versions = {}
     if not args.stub:
-        verify_manifest(manifest, args.config, root, args.mode, args.vcf_hub_mode, args.cadd_hub_mode)
-        versions = software_readiness(args.mode)
+        paths = verify_manifest(manifest, args.config, root, args.mode, args.vcf_hub_mode, args.cadd_hub_mode)
+        versions = software_readiness(args.mode, paths["priva_binary"])
         subprocess.run(["bcftools", "index", "--nrecords", args.vcf], check=True, stdout=subprocess.DEVNULL)
     bundle = Path("bundle")
     bundle.mkdir(exist_ok=False)
@@ -561,8 +572,8 @@ def run(args):
         raise ContractError("Scientific or adapter source changed after validation; task refused")
     if not args.stub:
         manifest = json.loads((bundle / "resources.json").read_text())
-        verify_manifest(manifest, bundle / "legacy.yaml", root, contract["mode"],
-                        contract["vcf_hub_mode"], contract["cadd_hub_mode"])
+        paths = verify_manifest(manifest, bundle / "legacy.yaml", root, contract["mode"],
+                                contract["vcf_hub_mode"], contract["cadd_hub_mode"])
         task_thread_settings(read_config(bundle / "legacy.yaml"), args.phase, contract["mode"], args.cpus)
     result = Path("result").absolute()
     result.mkdir(exist_ok=False)
@@ -597,6 +608,8 @@ def run(args):
     else:
         config_path, temp = private_config(bundle, contract, args.phase, args.cpus)
         env = os.environ.copy()
+        # The pinned program, whatever PRIVA_BINARY the submitting shell exported.
+        env.update(PRIVA_BINARY=str(paths["priva_binary"]))
         env.update(TMPDIR=str(temp), TMP=str(temp), TEMP=str(temp), PYTHONDONTWRITEBYTECODE="1",
                    OMP_NUM_THREADS=str(args.cpus), OPENBLAS_NUM_THREADS=str(args.cpus),
                    MKL_NUM_THREADS=str(args.cpus), NUMEXPR_NUM_THREADS=str(args.cpus))

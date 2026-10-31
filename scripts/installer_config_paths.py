@@ -65,7 +65,7 @@ FORCE_KEYS = {
 # missing derived destinations are built by their existing scientific procedures.
 GENERATED_CACHE_KEYS = {
     "clinvar_vcf", "clinvar_aa_stat", "clinvar_splice_stat", "clinvar_patho_af_stat",
-    "clinvar_patho_exon_af_stat", "clinvar_gene_stat", "alphamissense_vcf",
+    "clinvar_patho_exon_af_stat", "clinvar_pm5_index", "clinvar_gene_stat", "alphamissense_vcf",
     "alphamissense_vep_vcf", "alphamissense_vep_base_vcf", "alphamissense_pd_stat", "alphamissense_tranx_domain_map",
     "alphamissense_intolerant_domains", "alphamissense_intolerant_motifs",
     "all_intolerant_domains", "pm1_regions_pkl", "interpro_mapping_pickle",
@@ -128,7 +128,7 @@ def resource_groups(config: dict, directories: dict[str, str]) -> dict[str, Path
             "alphamissense_pd_stat", "alphamissense_tranx_domain_map", "alphamissense_intolerant_domains",
             "alphamissense_intolerant_motifs", "all_intolerant_domains", "pm1_regions_pkl"),
         Path(directories["clinvar_vcf_dir"]): ("clinvar_vcf", "clinvar_aa_stat", "clinvar_splice_stat",
-            "clinvar_patho_af_stat", "clinvar_patho_exon_af_stat", "clinvar_gene_stat"),
+            "clinvar_patho_af_stat", "clinvar_patho_exon_af_stat", "clinvar_pm5_index", "clinvar_gene_stat"),
         Path(directories["gnomad_vcf_dir"]): ("gnomad_vcf_chrX",),
         plugin / "UTRannotator": ("utr_annotator_file",),
         plugin / "LoFtee": ("human_ancestor_fasta", "loftee_conservation_file", "gerp_bigwig"),
@@ -679,7 +679,8 @@ def _portable_defaults(config: dict, source_root: Path) -> dict[str, str]:
     for key, suffix in (("clinvar_aa_stat", "aa_change.stats.pkl"),
                         ("clinvar_splice_stat", "splice_change.stats.pkl"),
                         ("clinvar_patho_af_stat", "patho_af_stat.pkl"),
-                        ("clinvar_patho_exon_af_stat", "patho_exon_af_stat.pkl")):
+                        ("clinvar_patho_exon_af_stat", "patho_exon_af_stat.pkl"),
+                        ("clinvar_pm5_index", "pm5_index.tsv.gz")):
         fill(key, str(effective["clinvar_vcf"]).removesuffix(".vcf.gz") + "." + suffix)
     # Preserve this baseline marker even when absent/empty. The existing
     # ClinVar refresh procedure recognizes it and selects a managed candidate.

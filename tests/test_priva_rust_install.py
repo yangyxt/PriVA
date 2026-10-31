@@ -50,6 +50,8 @@ debug = 0
 ''')
         (self.source / "rust/Cargo.lock").write_text("version = 4\n")
         (self.source / "rust/rust-toolchain.toml").write_text('[toolchain]\nchannel = "1.90.0"\nprofile = "minimal"\n')
+        (self.source / "data/liftover").mkdir(parents=True)
+        (self.source / "data/liftover/GRC_to_ucsc.contig.map.txt").write_text("1 chr1\n")
         self.cache = self.folder / "cache"; self.cache.mkdir()
         self.binary = self.folder / "qualified-priva"; self.binary.write_bytes(elf()); self.binary.chmod(0o700)
         self.pins_path = self.folder / "pins.json"; self.validation_path = self.folder / "validation.json"
@@ -338,6 +340,8 @@ debug = 0
         calls = []
         def cargo(argv, **kwargs):
             calls.append((argv, kwargs)); env = kwargs["env"]
+            # include_str! in rust/src/cadd_hub.rs reads this file at compile time.
+            self.assertEqual((kwargs["cwd"] / "../data/liftover/GRC_to_ucsc.contig.map.txt").read_text(), "1 chr1\n")
             path = Path(env["CARGO_TARGET_DIR"]) / "release/priva"
             path.parent.mkdir(parents=True); path.write_bytes(elf(b"cold")); path.chmod(0o700)
             kwargs["stdout"].write(b"synthetic compiler log\n")
@@ -430,37 +434,59 @@ class ShellInstallTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory(dir=os.environ.get("PRIVA_TEST_TMPDIR", os.environ.get("TMPDIR")))
         self.addCleanup(self.temp.cleanup); self.folder = Path(self.temp.name)
 
-    def run_shell(self, extra="", status=0, alias=False):
+    def run_shell(self, extra="", status=0, alias=False, binary=None):
         cache = self.folder / "cache"; cache.mkdir(exist_ok=True)
         selected = cache
         if alias:
             selected = self.folder / "alias"; selected.symlink_to(cache.name, target_is_directory=True)
-        config = self.folder / "selected.json"; config.write_text(json.dumps(dict(cache_root=str(selected))))
-        calls = self.folder / "calls.json"; before = config.read_bytes()
+        if binary is None:
+            binary = self.folder / "managed-priva"; binary.write_text("#!/bin/sh\n"); binary.chmod(0o555)
+        config = self.folder / "selected.yaml"
+        config.write_text(f"cache_root: {selected}\npriva_binary: \"\"\n")
+        calls = self.folder / "calls.json"
         script = r'''
 source "$INSTALLER" >/dev/null || exit
-read_yaml() { "$TEST_PYTHON" -c 'import json,sys;print(json.load(open(sys.argv[1]))[sys.argv[2]])' "$1" "$2"; }
-python() { "$TEST_PYTHON" -c 'import json,os,sys;open(os.environ["CALLS"],"w").write(json.dumps(sys.argv[1:]))' "$@"; return "$HELPER_STATUS"; }
+read_yaml() { "$TEST_PYTHON" -c 'import sys,yaml;print(yaml.safe_load(open(sys.argv[1]))[sys.argv[2]])' "$1" "$2"; }
+python() { "$TEST_PYTHON" -c 'import json,os,sys;open(os.environ["CALLS"],"w").write(json.dumps(sys.argv[1:]));print(json.dumps({"binary": os.environ["BINARY"], "ready": True}))' "$@"; return "$HELPER_STATUS"; }
 PriVA_rust_install --config "$CONFIG" ''' + extra
         env = {key: value for key, value in os.environ.items() if not key.startswith("BASH_FUNC_") and key not in ("BASH_ENV", "ENV")}
         env.update(INSTALLER=str(ROOT / "scripts/install_utils.sh"), TEST_PYTHON=sys.executable,
-                   CONFIG=str(config), CALLS=str(calls), HELPER_STATUS=str(status))
+                   CONFIG=str(config), CALLS=str(calls), HELPER_STATUS=str(status), BINARY=str(binary))
         result = subprocess.run(["bash", "-c", script], env=env, capture_output=True, text=True)
-        self.assertEqual(config.read_bytes(), before)
-        return result, json.loads(calls.read_text()) if calls.exists() else None, cache
+        return result, json.loads(calls.read_text()) if calls.exists() else None, cache, config
 
     def test_actual_shell_function_forwards_only_current_source_and_normalized_cache(self):
-        result, calls, cache = self.run_shell(alias=True)
+        result, calls, cache, config = self.run_shell(alias=True)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(calls, [str(ROOT / "scripts/bootstrap_priva_rust.py"), "install", "--source-root", str(ROOT), "--cache-root", str(cache)])
+        # The pipeline scripts find the program through this key.
+        self.assertEqual(config.read_text().splitlines()[1], f"priva_binary: {self.folder / 'managed-priva'}")
 
     def test_helper_failure_propagates(self):
-        result, _, _ = self.run_shell(status=73)
+        result, _, _, config = self.run_shell(status=73)
         self.assertEqual(result.returncode, 1)
+        self.assertIn('priva_binary: ""', config.read_text())
+
+    def test_reported_path_must_be_an_executable(self):
+        missing = self.folder / "missing-priva"
+        result, _, _, config = self.run_shell(binary=missing)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn('priva_binary: ""', config.read_text())
 
     def test_extra_arguments_refused_before_helper(self):
-        result, calls, _ = self.run_shell(extra="--cache-root /foreign")
+        result, calls, _, _ = self.run_shell(extra="--cache-root /foreign")
         self.assertEqual(result.returncode, 2); self.assertIsNone(calls)
+
+    def test_every_compiled_in_file_is_copied_by_the_cold_build(self):
+        # include_str!/include_bytes! outside the test modules must name files the
+        # cold build copies (rust/src or SOURCE_FIXED); otherwise the build stops.
+        import re
+        listed = set(B.source_state(ROOT)["files"])
+        for path in sorted((ROOT / "rust/src").rglob("*.rs")):
+            code = path.read_text().split("#[cfg(test)]\nmod tests {", 1)[0]
+            for name in re.findall(r'include_(?:str|bytes)!\("([^"]+)"\)', code):
+                target = os.path.normpath(os.path.join(os.path.dirname(path.relative_to(ROOT)), name))
+                self.assertIn(target, listed, f"{path.relative_to(ROOT)} compiles in {name}")
 
     def test_main_calls_rust_once_after_driver_without_backend_mutation(self):
         source = (ROOT / "scripts/install_utils.sh").read_text()
@@ -469,7 +495,11 @@ PriVA_rust_install --config "$CONFIG" ''' + extra
         self.assertLess(main.index('Nextflow_runtime_install "${config_file}"'), main.index('PriVA_rust_install --config'))
         self.assertLess(main.index('PriVA_rust_install --config'), main.index('reference_genome_install "${config_file}"'))
         function = source.split("function PriVA_rust_install() {", 1)[1].split("\n}\n", 1)[0]
-        for forbidden in ('update_yaml', 'priva_ranking_binary', 'PRIVA_RUST', 'export ', 'PATH='):
+        # It saves the program's path as priva_binary and nothing else: no ranking
+        # selection, environment or PATH change.
+        self.assertEqual(function.count('update_or_append_yaml'), 1)
+        self.assertIn('update_or_append_yaml "$2" priva_binary "${binary}"', function)
+        for forbidden in ('priva_ranking_binary', 'PRIVA_RUST', 'export ', 'PATH='):
             self.assertNotIn(forbidden, function)
 
 

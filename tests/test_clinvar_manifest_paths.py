@@ -49,7 +49,11 @@ class ClinVarManifestPaths(unittest.TestCase):
         self.source = self.folder / "source"
         resource = self.folder / "resource.txt"
         resource.write_text("unrelated routing fixture\n")
+        priva = self.folder / "priva"
+        priva.write_text("#!/bin/sh\necho 'priva 0.1.0 (fixture)'\n")
+        priva.chmod(0o755)
         self.config = {key: str(resource) for key in adapter.PRIORITY_KEYS}
+        self.config.update(priva_binary=str(priva))
         self.config.update(assembly="hg19", vep_installed_version="116", clinvar_gene_stat="baseline.pkl.gz",
                            repeat_region_file_name="repeat.bed.gz", dispensable_gene_list=str(resource),
                            vep_cache_dir=str(self.folder / "cache"),

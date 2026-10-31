@@ -47,6 +47,54 @@ function update_yaml() {
 }
 
 
+# The folder of this file, kept apart from SELF_DIR, which sourcing scripts may reuse.
+PRIVA_SOURCE_SCRIPT_DIR=$(dirname "$(realpath "${BASH_SOURCE[0]}")")
+
+# Finds the compiled PriVA program `priva` (built from rust/ by
+# scripts/bootstrap_priva_rust.py during main_install, which saves its path as
+# priva_binary) and sets PRIVA_BIN to it. Looked up in this order: the
+# environment variable PRIVA_BINARY, the key priva_binary of CONFIG, then `priva`
+# on PATH. Every function that runs `priva` calls this first, because the
+# functions are also entered directly (tests, Nextflow tasks, the smoke example).
+function priva_resolve_binary() {
+    local config_file=${1:-}
+    local candidate="" origin=""
+    if [[ -n ${PRIVA_BINARY:-} ]]; then
+        candidate=${PRIVA_BINARY}
+        origin="the environment variable PRIVA_BINARY"
+    elif [[ -n ${config_file} && -f ${config_file} ]]; then
+        candidate=$(read_yaml "${config_file}" "priva_binary") || return 1
+        [[ ${candidate} == "null" ]] && candidate=""
+        origin="priva_binary in ${config_file}"
+    fi
+    if [[ -z ${candidate} ]]; then
+        candidate=$(command -v priva) || candidate=""
+        origin="priva on PATH"
+    fi
+    if [[ -z ${candidate} ]]; then
+        log "ERROR: The PriVA program priva was not found. Run main_install, or set priva_binary in the configuration file, or set PRIVA_BINARY."
+        return 1
+    fi
+    if [[ ${candidate} != /* || ! ${candidate} =~ ^[A-Za-z0-9_./:+-]+$ ||
+          ! -f ${candidate} || ! -s ${candidate} || ! -x ${candidate} ]]; then
+        log "ERROR: ${origin} must be an existing executable at an absolute path without spaces or shell characters: ${candidate}"
+        return 1
+    fi
+    local version
+    version=$("${candidate}" --version 2> /dev/null) || version=""
+    if [[ ${version} != "priva "* ]]; then
+        log "ERROR: ${candidate} (${origin}) is not the PriVA program; its --version printed: ${version}"
+        return 1
+    fi
+    PRIVA_BIN=${candidate}
+    # The program reads PriVA's bundled data/ folder and runs install_utils.sh
+    # (SpliceAI2 tables) from these two folders. Point both at this checkout, as
+    # the Python scripts did by their own location.
+    export PRIVA_DATA_DIR="$(dirname "${PRIVA_SOURCE_SCRIPT_DIR}")/data"
+    export PRIVA_SCRIPT_DIR="${PRIVA_SOURCE_SCRIPT_DIR}"
+}
+
+
 function mamba_activate {
     local env_name=${1}
     mamba activate ${env_name} 2> /dev/null || { \

@@ -9,7 +9,7 @@ import yaml
 
 RUNTIME_KEYS = (
     "ref_genome", "gnomad_vcf_chrX", "clinvar_vcf", "clinvar_aa_stat",
-    "clinvar_splice_stat", "clinvar_patho_af_stat", "clinvar_patho_exon_af_stat",
+    "clinvar_splice_stat", "clinvar_patho_af_stat", "clinvar_patho_exon_af_stat", "clinvar_pm5_index",
     "utr_annotator_file", "human_ancestor_fasta", "loftee_conservation_file",
     "alphamissense_prescore", "alphamissense_vep_vcf", "alphamissense_pd_stat",
     "alphamissense_tranx_domain_map", "alphamissense_intolerant_domains",

@@ -235,8 +235,12 @@ class AdapterContracts(unittest.TestCase):
             path.write_bytes(b"synthetic resource fixture")
         cache = self.folder / "resource.pkl"
         cache.write_bytes(b"same fixed resource")
+        priva = self.folder / "priva"
+        priva.write_text("#!/bin/sh\necho 'priva 0.1.0 (fixture)'\n")
+        priva.chmod(0o755)
         config = {key: str(cache) for key in adapter.PRIORITY_KEYS}
-        config.update(assembly="hg19", clinvar_gene_stat="gene.pkl", repeat_region_file_name="repeats.bed.gz")
+        config.update(assembly="hg19", clinvar_gene_stat="gene.pkl", repeat_region_file_name="repeats.bed.gz",
+                      priva_binary=str(priva))
         config_path = self.folder / "legacy.yaml"
         config_path.write_text(adapter.yaml.safe_dump(config))
         manifest_path = self.folder / "resources.json"

@@ -38,7 +38,12 @@ HOST = "x86_64-unknown-linux-gnu"
 RUSTUP_URL = "https://static.rust-lang.org/rustup/archive/1.28.2/" + HOST + "/rustup-init"
 RUSTUP_SHA256 = "20a06e644b0d9bd2fbdbfd52d42540bdde820ea7df86e92e533c073da0cdd43c"
 IMPORTED_PROFILE = "test/dev, opt-level=0, debug=0; no fast-math"
-SOURCE_FIXED = ("rust/Cargo.toml", "rust/Cargo.lock", "rust/rust-toolchain.toml")
+# The crate also compiles in data files from outside rust/ (include_str! in
+# rust/src/cadd_hub.rs reads the contig name map). A cold build copies only the
+# files listed here and rust/src, so every such file must be listed: it is then
+# copied into the build folder and part of the build identity.
+SOURCE_FIXED = ("rust/Cargo.toml", "rust/Cargo.lock", "rust/rust-toolchain.toml",
+                "data/liftover/GRC_to_ucsc.contig.map.txt")
 
 
 def require(ok, message):

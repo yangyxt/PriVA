@@ -2468,6 +2468,40 @@ function ClinVar_patho_AF_stat () {
 }
 
 
+function ClinVar_PM5_index () {
+    # PM5 in priva acmg-assign follows the residue rules of 30 October 2026, which
+    # need each confident pathogenic ClinVar change's consequence, NMD status and
+    # residue span. The amino-acid statistics do not hold these, so the program
+    # indexes the VEP-annotated ClinVar VCF itself (clinvar_pm5_index).
+    local config_file=${1}
+    local clinvar_vcf index
+    local contract=${SCRIPT_DIR}/clinvar_annotation_contract.py
+    clinvar_vcf=$(read_yaml "$config_file" "clinvar_vcf")
+    [[ -s ${clinvar_vcf} ]] || { log "ERROR: The VEP-annotated ClinVar VCF is missing: ${clinvar_vcf}"; return 1; }
+    priva_resolve_binary "$config_file" || return 1
+    index=$(yaml_value_or_default "$config_file" clinvar_pm5_index "${clinvar_vcf/.vcf*/.pm5_index.tsv.gz}") || return 1
+    [[ ${index} == /*.tsv.gz && ${index} != "${clinvar_vcf}" ]] || {
+        log "ERROR: clinvar_pm5_index must be an absolute .tsv.gz path separate from the ClinVar VCF: ${index}"
+        return 1
+    }
+    # A new ClinVar VCF or a new build of the program makes a new index.
+    if [[ -s ${index} && ${index} -nt ${clinvar_vcf} && ${index} -nt ${PRIVA_BIN} ]]; then
+        log "Reusing the ClinVar PM5 index ${index}"
+        update_or_append_yaml "$config_file" clinvar_pm5_index "$index"
+        return
+    fi
+    python "$contract" "$clinvar_vcf" --stage vep || return 1
+    mkdir -p -- "$(dirname -- "$index")" || return 1
+    local temporary=${index%.tsv.gz}.partial.$(randomID).tsv.gz
+    "${PRIVA_BIN}" clinvar-pm5-index --vcf "$clinvar_vcf" --output "$temporary" || {
+        rm -f -- "$temporary"
+        return 1
+    }
+    mv -- "$temporary" "$index" || return 1
+    update_or_append_yaml "$config_file" clinvar_pm5_index "$index"
+}
+
+
 
 function Conservation_install() {
     local config=${1}
@@ -4660,7 +4694,7 @@ function PriVA_rust_install() {
     local cache_root
     cache_root=$(read_yaml "$2" cache_root) || return 1
     [[ ${cache_root} == /* && -d ${cache_root} ]] || {
-        log "ERROR: Configure an existing absolute cache_root before installing the optional PriVA CLI."
+        log "ERROR: Configure an existing absolute cache_root before installing the PriVA CLI."
         return 1
     }
     # Match the established Nextflow root-alias normalization. The small helper
@@ -4669,8 +4703,18 @@ function PriVA_rust_install() {
     cache_root=$(realpath -ms -- "${cache_root}") || return 1
     cache_root=$(realpath -e -- "${cache_root}") || return 1
     [[ ${cache_root} != / ]] || { log "ERROR: cache_root must resolve to dedicated storage."; return 1; }
-    python "${SCRIPT_DIR}/bootstrap_priva_rust.py" install \
-        --source-root "${BASE_DIR}" --cache-root "${cache_root}" || return 1
+    local receipt binary
+    receipt=$(python "${SCRIPT_DIR}/bootstrap_priva_rust.py" install \
+        --source-root "${BASE_DIR}" --cache-root "${cache_root}") || return 1
+    # The pipeline scripts run the converted steps with this program; they find
+    # it through priva_binary (priva_resolve_binary in common_bash_utils.sh).
+    binary=$(read_yaml <(printf '%s\n' "${receipt}") binary) || return 1
+    [[ ${binary} == /* && -f ${binary} && -x ${binary} ]] || {
+        log "ERROR: The PriVA CLI installer did not report an executable: ${binary}"
+        return 1
+    }
+    update_or_append_yaml "$2" priva_binary "${binary}" || return 1
+    log "PriVA CLI ready and saved as priva_binary: ${binary}"
 }
 
 
@@ -4693,7 +4737,7 @@ function main_install() {
         printf 'Creates priva_acmg from %s/acmg_conda_rough.yml or changes its VEP release.\n' "${BASE_DIR}"
         printf 'The environment supplies yq after the bootstrap release scalar is checked.\n'
         printf 'Installs the pinned Nextflow driver and private JRE under cache_root/runtime.\n'
-        printf 'Installs the managed PriVA Rust CLI under cache_root/runtime without selecting a backend.\n'
+        printf 'Installs the managed PriVA Rust CLI under cache_root/runtime and saves its path as priva_binary.\n'
         return 0
     fi
     [[ $# -eq 1 && ${1:-} != -* && -r ${1:-} ]] || {
@@ -4803,6 +4847,8 @@ function main_install() {
     { log "Failed to prepare PM1 regions pickle"; return 1; }
     ClinVar_patho_AF_stat "${config_file}" || \
     { log "Failed to stat ClinVar pathogenic variants per allele frequency"; return 1; }
+    ClinVar_PM5_index "${config_file}" || \
+    { log "Failed to index the confident pathogenic ClinVar variants for PM5"; return 1; }
 
 
     # 7. Install CADD prescores

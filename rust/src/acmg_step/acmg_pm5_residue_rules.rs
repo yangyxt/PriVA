@@ -290,6 +290,45 @@ pub(crate) fn build_pm5_index(vcf: &str, output: &str) -> Result<usize> {
     Ok(rows)
 }
 
+const INDEX_USAGE: &str = "usage: priva clinvar-pm5-index --vcf CLINVAR_VEP_VCF --output INDEX";
+
+/// `priva clinvar-pm5-index --vcf VCF --output INDEX`: `build_pm5_index` as its own command,
+/// for the installer, which keeps the index with the other ClinVar caches (`clinvar_pm5_index`).
+pub(crate) fn dispatch_index(args: &[String]) -> Result<()> {
+    if args == ["--help"] || args == ["-h"] {
+        println!("{INDEX_USAGE}");
+        return Ok(());
+    }
+    let (vcf, output) = index_options(args)?;
+    let rows = build_pm5_index(vcf, output)?;
+    eprintln!("priva clinvar-pm5-index: wrote {rows} index rows to {output}");
+    Ok(())
+}
+
+/// The two options of `priva clinvar-pm5-index`, each given once.
+fn index_options(args: &[String]) -> Result<(&str, &str)> {
+    let mut vcf = None;
+    let mut output = None;
+    let mut rest = args.iter();
+    while let Some(name) = rest.next() {
+        let slot = match name.as_str() {
+            "--vcf" => &mut vcf,
+            "--output" => &mut output,
+            _ => return Err(invalid(format!("unknown option {name}\n{INDEX_USAGE}"))),
+        };
+        let value = rest
+            .next()
+            .ok_or_else(|| invalid(format!("{name} needs a value\n{INDEX_USAGE}")))?;
+        if slot.replace(value.as_str()).is_some() {
+            return Err(invalid(format!("{name} is given twice\n{INDEX_USAGE}")));
+        }
+    }
+    match (vcf, output) {
+        (Some(vcf), Some(output)) => Ok((vcf, output)),
+        _ => Err(invalid(INDEX_USAGE)),
+    }
+}
+
 /// The confident pathogenic ClinVar protein changes of the table's transcripts.
 #[derive(Debug, Default)]
 pub(crate) struct Pm5Index {
@@ -522,6 +561,25 @@ pub(crate) fn pm5_rule(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn index_command_takes_its_two_options_once() {
+        let args = |items: &[&str]| items.iter().map(|item| item.to_string()).collect::<Vec<_>>();
+        let given = args(&["--output", "index.tsv.gz", "--vcf", "clinvar.vcf.gz"]);
+        assert_eq!(
+            index_options(&given).unwrap(),
+            ("clinvar.vcf.gz", "index.tsv.gz")
+        );
+        let wrong_forms: [&[&str]; 4] = [
+            &["--vcf", "clinvar.vcf.gz"],
+            &["--vcf", "a", "--vcf", "b", "--output", "c"],
+            &["--vcf", "a", "--output"],
+            &["--vcf=a", "--output", "c"],
+        ];
+        for wrong in wrong_forms {
+            assert!(index_options(&args(wrong)).is_err(), "{wrong:?}");
+        }
+    }
 
     fn entry(consequence: &str, position: &str, hgvsp: &str, escapes_nmd: bool) -> Pm5Entry {
         Pm5Entry {

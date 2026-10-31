@@ -63,6 +63,8 @@ pp1_ped: ""      # PED file for the PP1 cohort VCF file, optional
 
 
 ####################################################Below paths will be determined automatically by install_utils.sh####################################################
+# The compiled PriVA program (priva) that runs the converted pipeline steps; saved by main_install (PriVA_rust_install)
+priva_binary: ""
 # Below we specify the path to the gnomAD vcf file for chromosome X and we'll use that template to deduce the paths to other chromosome VCF files, the paths should be relatively constant
 gnomad_vcf_chrX: ""
 
@@ -72,6 +74,7 @@ clinvar_aa_stat: ""
 clinvar_splice_stat: ""
 clinvar_patho_af_stat: ""
 clinvar_patho_exon_af_stat: ""
+clinvar_pm5_index: ""  # Built by install_utils.sh ClinVar_PM5_index (priva clinvar-pm5-index) from clinvar_vcf; read by priva acmg-assign for PM5
 clinvar_gene_stat: "clinvar_2star_stats.pkl.gz"
 
 # The UTRAnnotator plugin cache file

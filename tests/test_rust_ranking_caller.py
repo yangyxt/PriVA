@@ -404,6 +404,10 @@ class RankingExecutableIdentity(unittest.TestCase):
         self.binary = self.folder / "fixture-ranker"
         self.binary.write_bytes(b"#!/bin/sh\nexit 0\n")
         self.binary.chmod(0o555)
+        self.priva = self.folder / "fixture-priva"
+        self.priva.write_bytes(b"#!/bin/sh\necho 'priva 0.1.0 (fixture)'\n")
+        self.priva.chmod(0o555)
+        self.config["priva_binary"] = str(self.priva)
         self.config_path = self.folder / "config.yaml"
         self.manifest_path = self.folder / "resources.json"
 
@@ -433,10 +437,12 @@ class RankingExecutableIdentity(unittest.TestCase):
 
     def test_default_inventory_and_optional_content_pin(self):
         default = self.manifest(selected=False)
-        self.assertEqual(default["identity_kind"], "size-mtime-inventory")
+        self.assertEqual(default["identity_kind"], "size-mtime-inventory+executable-sha256")
         self.assertNotIn("priva_ranking_binary", self.verify(default))
+        self.assertEqual(default["resources"]["priva_binary"]["sha256"],
+                         hashlib.sha256(self.priva.read_bytes()).hexdigest())
         selected = self.manifest()
-        self.assertEqual(selected["identity_kind"], "size-mtime-inventory+ranking-sha256")
+        self.assertEqual(selected["identity_kind"], "size-mtime-inventory+executable-sha256")
         binary = selected["resources"]["priva_ranking_binary"]
         self.assertEqual(binary["sha256"], hashlib.sha256(self.binary.read_bytes()).hexdigest())
         self.assertEqual(binary["executable_mode"], 0o555)
@@ -445,6 +451,17 @@ class RankingExecutableIdentity(unittest.TestCase):
         self.alter_bytes_preserving_size_mtime_mode()
         with self.assertRaisesRegex(adapter.ContractError, "Resource changed.*priva_ranking_binary"):
             self.verify(selected)
+
+    def test_pipeline_program_is_required_and_content_pinned(self):
+        self.config.pop("priva_binary")
+        with self.assertRaisesRegex(adapter.ContractError, "priva_binary"):
+            adapter.runtime_resources(self.config, self.repo, "annotated")
+        self.config["priva_binary"] = str(self.priva)
+        manifest = self.manifest(selected=False)
+        self.priva.chmod(0o755)
+        self.priva.write_bytes(self.priva.read_bytes().replace(b"0.1.0", b"0.1.1"))
+        with self.assertRaisesRegex(adapter.ContractError, "Resource changed.*priva_binary"):
+            self.verify(manifest)
 
     def test_summary_helper_content_is_part_of_task_source_identity(self):
         helper = self.repo / "scripts/priva_rust_criteria_summary.py"
@@ -479,7 +496,7 @@ class RankingExecutableIdentity(unittest.TestCase):
             return digest
         with mock.patch.object(adapter, "sha256", side_effect=change):
             with self.assertRaisesRegex(adapter.ContractError, "changed during identity capture"):
-                adapter.ranking_binary_record(self.binary)
+                adapter.executable_record(self.binary, "priva_ranking_binary")
 
     def test_relaunch_checks_binary_before_cached_run_identity(self):
         self.manifest()

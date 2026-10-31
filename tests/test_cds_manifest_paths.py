@@ -28,9 +28,13 @@ class CDSManifestPaths(unittest.TestCase):
         self.source = self.folder / "source"
         resource = self.folder / "resource.txt"
         resource.write_text("fixture\n")
+        priva = self.folder / "priva"
+        priva.write_text("#!/bin/sh\necho 'priva 0.1.0 (fixture)'\n")
+        priva.chmod(0o755)
         self.config = {key: str(resource) for key in adapter.PRIORITY_KEYS}
         self.config.update(assembly="hg19", clinvar_gene_stat="baseline.pkl.gz",
-                           repeat_region_file_name="repeat.bed.gz", dispensable_gene_list=str(resource))
+                           repeat_region_file_name="repeat.bed.gz", dispensable_gene_list=str(resource),
+                           priva_binary=str(priva))
         for relative in ("data/hpo/genes_to_phenotype.assertions.tsv.gz",
                          "data/alphamissense/alphamissense_mean_score.tsv", "data/ClinVar/baseline.pkl.gz",
                          "data/repeats/repeat.bed.gz", "data/hgnc/non_alt_loci_set.tsv"):

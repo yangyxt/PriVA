@@ -47,7 +47,7 @@ Obtain restricted publisher files under their own registration and license terms
 bash "$PRIVA_ROOT/scripts/install_utils.sh" main_install "$PRIVA_CONFIG"
 ```
 
-This prepares `priva_acmg`, reuses bundled snapshots, acquires/builds other resources beneath `cache_root`, and updates managed paths in the selected configuration. It also installs the pinned Nextflow25.10.4 driver and private JRE beneath `cache_root/runtime/priva-nextflow-25.10.4`. No family input is required at this stage. Rerun the same command to reuse completed preparation.
+This prepares `priva_acmg`, reuses bundled snapshots, acquires/builds other resources beneath `cache_root`, and updates managed paths in the selected configuration. It also installs the pinned Nextflow25.10.4 driver and private JRE beneath `cache_root/runtime/priva-nextflow-25.10.4`. It builds the PriVA program `priva` (saved as `priva_binary`) and the ClinVar PM5 index (saved as `clinvar_pm5_index`); see [the PriVA program](#scientific-resources-and-the-priva-program). No family input is required at this stage. Rerun the same command to reuse completed preparation.
 
 For the matching official VEP116 UTRAnnotator module, the installer deploys
 deterministic reporting of all calculated UTR effects and retains the original
@@ -151,31 +151,30 @@ example 24 CPUs for 22 configured forks; raw execution remains gated.
 
 `ACMG_criteria` records applied evidence; `ACMG_quant_score` is the posterior under PriVA's ACMG model; `ACMG_class` is its classification. `sort_index` additionally includes control, inheritance, gene-list and expression weighting. Read `variant_rank` with allele/variant identifiers and transcript columns, since several transcript rows can represent one variant. The default `apply_clingen_override: true` uses curated ClinGen criteria in place of PriVA-derived criteria where available. These outputs support evidence review, not a diagnosis by themselves.
 
-## Scientific resources and optional Rust tools
+## Scientific resources and the PriVA program
 
 Managed VEP116 mappings use Ensembl BioMart116; GRCh37 retains its GRCh37 annotation-base75 lineage and is not a GRCh38 fallback. [HCSeeker](data/HCSeeker/README.md) originates in GRCh38 protein space; [gnomAD RMC](data/gnomAD_RMC/README.md) originates in GRCh37, with derived opposite-assembly protein-coordinate tables. [GoFCards](data/gofcards/README.md) starts from GRCh37 variant records and includes derived GRCh38 representations; exact variant evidence is not a whole-gene mechanism assertion. Preserve assembly, transcript and source provenance when choosing these resources.
 
-CADD uses the original Python implementation. Criterion assignment and control statistics retain Python/SciPy; criteria summaries, posterior calculation and ranking default to Python. Optional PriVA-owned Rust procedures have declared typed input boundaries. `main_install` deploys their source-bound CLI beneath `cache_root/runtime/priva-rust/<identity>/bin/priva` without selecting a backend. Inspect its executable path and build record with:
+PriVA's own pipeline steps run in one compiled program, `priva`, built from [`rust/`](rust/CONVERSION.md): variant IDs, the CADD hub cache, family filtering, the combined annotation table, the SpliceAI version check and cache registration, splicing and UTR interpretation, and the whole ACMG step (criteria, scoring and ranking). CADD scores come from upstream `CADD.sh`. [`rust/CONVERSION.md`](rust/CONVERSION.md) records how each step was compared with the Python script it replaces. PM5 deliberately follows residue rules that the Python script does not have; it reads an index of the confident pathogenic ClinVar protein changes (`clinvar_pm5_index`), which `main_install` builds from the VEP-annotated ClinVar VCF.
+
+`main_install` builds `priva` beneath `cache_root/runtime/priva-rust/<identity>/bin/priva` and saves that path as `priva_binary` in the configuration. The pipeline scripts look for the program in this order: the environment variable `PRIVA_BINARY`, the configuration key `priva_binary`, then `priva` on `PATH`. Snakemake runs recompute an output that is older than the program. The Nextflow resource manifest pins the program's SHA-256; a rebuilt program needs a new manifest and output directory. Inspect the installed program and its build record with:
 
 ```bash
 python "$PRIVA_ROOT/scripts/bootstrap_priva_rust.py" check \
   --source-root "$PRIVA_ROOT" --cache-root "$PRIVA_CACHE"
 ```
 
-For a manual build with the pinned Rust toolchain:
+For a manual build with the pinned Rust toolchain, then select it for one shell session:
 
 ```bash
 export CARGO_TARGET_DIR="$PRIVA_RUNS/rust-build"
-(cd "$PRIVA_ROOT/rust" && cargo build --release --locked)
-"$CARGO_TARGET_DIR/release/priva" coerce-pext --help
+(cd "$PRIVA_ROOT/rust" && cargo build --release --locked --bin priva)
+export PRIVA_BINARY="$CARGO_TARGET_DIR/release/priva"
+"$PRIVA_BINARY" --version
 ```
 
-To opt into the criteria-summary, default-model posterior and ranking bridges, set `priva_ranking_binary` in the runtime YAML
-to the absolute executable path before creating the resource manifest. The
-manifest pins its content, including on cached resume; changing the executable
-requires a new manifest and output directory. Matrix construction and validation
-retain Python; unsupported inputs use their original Python
-path. Omitting the key retains the Python defaults. This option does not qualify a new scientific profile
-or enable raw execution.
+The Python scripts remain in `scripts/`. To run a step with its Python script again, revert the commit that switched it (titled "Call priva for the per-sample preparation steps", "Call priva for the splicing and UTR interpretation" or "Call priva acmg-assign for the ACMG step"); each restores the Python command lines and their freshness checks together, and the outputs of the two routes are interchangeable. Use a new output folder after switching either way.
+
+`priva_ranking_binary` selected Rust ranking bridges inside the Python ACMG step; `priva acmg-assign` accepts the option and does not need it.
 
 See [LICENSE](LICENSE) for Apache 2.0 with the Commons Clause condition and commercial licensing, including clinical/diagnostic applications. Third-party resources retain their own terms, including the [CADD license](scripts/cadd_scripts/CADD-LICENSE).

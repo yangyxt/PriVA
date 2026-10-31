@@ -6,7 +6,10 @@
 //!   once the step is Rust), defaults, the `store_true` flag `--ignore_clingen_override`, the
 //!   `type=float` and `type=int` conversions of every occurrence, and exit status 2 for a usage
 //!   error. A number written with non-ASCII digits or spaces, which Python's `float()` and
-//!   `int()` may read, is refused with exit 1.
+//!   `int()` may read, is refused with exit 1. One option is Rust's own: `--clinvar_pm5_index`,
+//!   the index of confident pathogenic ClinVar protein changes the owner's PM5 rules read
+//!   (built by `priva acmg-step acmg_ps1_pm5_known_variant build_pm5_index`); without it the
+//!   step stops at PS1/PM5.
 //! - `run_step` is `ACMG_criteria_assign` in the script's order: the table read and
 //!   de-duplicated, `vep_consq_interpret`, the AlphaMissense mean scores, the pedigree (with the
 //!   headerless fallback) and its proband, `Gene_avg_AM_score` and `variant_id`, the exact-allele
@@ -14,13 +17,10 @@
 //!   (`<table without its last suffix>.acmg.tsv`, written before the posterior), the posterior,
 //!   the ranking, and the table written over the input. A failure after the matrix is written
 //!   leaves the matrix and the untouched input table, as in Python.
-//! - The hub (thread T2), the criteria of threads T3, T5, T6 and T7, `stats` (T5) and the
-//!   ranking (T3) are called directly. The functions of thread T4, still converting (the
-//!   ClinVar dictionaries, the gene summary, PVS1, PS1/PM5), go through the `pending` module
-//!   below, one function each with the inputs the Python call takes; until they land they
-//!   stop the step with "not converted". The comparison harness can instead hand them the
-//!   outputs a recording Python run wrote (`Source::Recorded`), so the converted parts are
-//!   compared on the real table now.
+//! - Every criterion is the converted function of its thread: the hub (T2), the ClinVar
+//!   dictionaries, the gene summary, PVS1 and PS1/PM5 (T4), the criteria of T3, T5, T6 and T7,
+//!   `stats` (T5) and the ranking (T3). PM5 differs from Python on purpose (the owner's rules
+//!   of 2026-10-30); everything else reproduces the script.
 //! - `read_ped`, `proband`, `am_score_dict`, `transcript_to_gene_map`, `gene_avg_am_score`,
 //!   `variant_id` and `frequency_audit` are the script's inline code; refused where pandas'
 //!   behaviour depends on odd column types (noted at each).
@@ -29,11 +29,19 @@ use super::acmg_consequence::vep_consq_interpret;
 use super::acmg_pm1_pp2_bp1_missense::{PValues, load_pickle, pm1_criteria, pp2_bp1_criteria};
 use super::acmg_pm2_bs1_ba1_frequency::{ba1_criteria, bs1_criteria, pm2_criteria};
 use super::acmg_pm4_bp3_protein_length::pm4_bp3_criteria;
+use super::acmg_pm5_residue_rules::{CuratedGainOfFunction, Pm5Index};
 use super::acmg_pp1_bs4_bp2_pm3_family::{bp2_pm3_criteria, bs4_criteria, pp1_criteria};
 use super::acmg_pp3_bp4_bp7_insilico::pandas_masks::python_str;
 use super::acmg_pp3_bp4_bp7_insilico::{bp7_criteria, pp3_bp4_criteria};
+use super::acmg_ps1_pm5_known_variant::{
+    ClinvarKnownVariants, ps1_pm5_criteria, table_transcripts,
+};
 use super::acmg_ps2_pm6_denovo::ps2_pm6_criteria;
 use super::acmg_ps3_bs3_pp5_bp6_reported::{pp5_bp6_criteria, ps3_bs3_criteria};
+use super::acmg_pvs1_null_variant::{
+    IntolerantDomains, Pvs1Arguments, pvs1_criteria, summarize_clinvar_gene_pathogenicity,
+    transcript_gene_map,
+};
 use super::acmg_scoring::{
     RankingOptions, posterior_columns, sort_and_rank_variants, summarize_acmg_criteria,
 };
@@ -52,11 +60,11 @@ use crate::pandas_table::{
     Cell, Column, Header, ObjectValue, ReadOptions, Table, UseColumns, read_table, read_table_with,
     write_table,
 };
-use crate::pickle_reader;
 use crate::protein_domain_mapping::data_directory;
 use crate::python_args::{self, parse_long_option_occurrences};
 use crate::python_text::{parse_float, python_int};
 use crate::spliceai_cutoffs::{Cutoffs, cutoffs_for_config};
+use crate::yaml_config::{ConfigValue, Parsed, Scalar, parse_config};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
@@ -73,7 +81,7 @@ enum Kind {
 
 /// The parser's options in the order the script adds them (argparse lists ambiguous
 /// prefixes and missing required options in this order); `true` marks a required one.
-const OPTIONS: [(&str, Kind, bool); 37] = [
+const OPTIONS: [(&str, Kind, bool); 38] = [
     ("anno_table", Kind::Text, true),
     ("am_score_table", Kind::Text, true),
     ("ped_table", Kind::Text, false),
@@ -111,6 +119,8 @@ const OPTIONS: [(&str, Kind, bool); 37] = [
     ("threads", Kind::Int, false),
     ("config", Kind::Text, false),
     ("ranking_binary", Kind::Text, false),
+    // Rust only: the confident pathogenic ClinVar protein changes PM5's rules read.
+    ("clinvar_pm5_index", Kind::Text, false),
 ];
 
 /// The argparse usage line under the program name `priva acmg-assign`.
@@ -301,6 +311,7 @@ pub(crate) fn parse_arguments(
         },
         ranking_binary: text("ranking_binary"),
         config: text("config"),
+        clinvar_pm5_index: text("clinvar_pm5_index"),
     })
 }
 
@@ -642,6 +653,22 @@ fn zeros(rows: usize) -> Column {
 
 // ------------------------------------------------------------------------------ the step
 
+/// The assembly PM5's gain-of-function lookup gives the curated allele matcher: the
+/// configuration's `assembly`, else `hg38` (the PM5 index is built from GRCh38 ClinVar).
+fn pm5_assembly(config: Option<&str>) -> String {
+    let text = config
+        .filter(|path| !path.is_empty())
+        .and_then(|path| std::fs::read_to_string(path).ok());
+    if let Some(text) = text
+        && let Ok(Parsed::Mapping(document)) = parse_config(&text)
+        && let Some(ConfigValue::Scalar(Scalar::Str(assembly))) = document.get("assembly")
+        && !assembly.trim().is_empty()
+    {
+        return assembly.trim().to_owned();
+    }
+    "hg38".to_owned()
+}
+
 /// The resolver handed to `annotate_exact_nonlof_variants` when no row has a symbol, where
 /// Python builds no hub and the function returns before matching.
 struct NoSymbols;
@@ -658,13 +685,12 @@ impl SymbolResolver for NoSymbols {
 
 /// `ACMG_criteria_assign(...)` with the parsed command line, in the script's order; the
 /// final table, which is also written over the input.
-pub(crate) fn run_step(
-    args: &StepArguments,
-    cutoffs: &Cutoffs,
-    source: &pending::Source<'_>,
-) -> Result<Table> {
+pub(crate) fn run_step(args: &StepArguments, cutoffs: &Cutoffs) -> Result<Table> {
     let read = read_table(Path::new(&args.anno_table))?;
     let kept = pandas_polars::drop_duplicates_first(&read, None)?;
+    // PVS1 reads its LoF gate by pandas index label, which drop_duplicates() leaves gapped.
+    let row_labels: Option<Vec<i64>> =
+        (kept.len() != read.rows).then(|| kept.iter().map(|row| *row as i64).collect());
     let mut table = if kept.len() == read.rows {
         read
     } else {
@@ -677,13 +703,14 @@ pub(crate) fn run_step(
     vep_consq_interpret(&mut table, args.threads)?;
 
     let am_scores = read_table(Path::new(&args.am_score_table))?;
-    let (ped, proband) = match args.ped_table.as_deref() {
+    // The proband is looked up for its ValueError; PVS1 no longer reads its genotype column.
+    let ped = match args.ped_table.as_deref() {
         Some(path) if !path.is_empty() => {
             let ped = read_ped(path)?;
-            let proband = proband(&ped, args.fam_name.as_deref())?;
-            (Some(ped), Some(proband))
+            proband(&ped, args.fam_name.as_deref())?;
+            Some(ped)
         }
-        _ => (None, None),
+        _ => None,
     };
     let family = match (&ped, args.fam_name.as_deref()) {
         (Some(ped), Some(fam_name)) => Some((ped, fam_name)),
@@ -693,13 +720,15 @@ pub(crate) fn run_step(
     let am_score_dict = am_score_dict(&am_scores)?;
     let transcript_to_gene = transcript_to_gene_map(&table)?;
     let gene_scores = gene_to_am_score_map(&transcript_to_gene, &am_score_dict);
-    let clinvar = pending::load_clinvar_dicts(
-        source,
+    // Both ClinVar dictionaries, for the table's transcripts (`Feature.astype(str)`).
+    let transcripts = table_transcripts(&table)?;
+    let known = ClinvarKnownVariants::load(
         &args.clinvar_aa_dict_pkl,
         &args.clinvar_splice_dict_pkl,
+        Some(&transcripts),
     )?;
     let pathogenic_genes =
-        pending::summarize_clinvar_gene_pathogenicity(source, &transcript_to_gene, &clinvar)?;
+        summarize_clinvar_gene_pathogenicity(&transcript_gene_map(&table)?, &known);
     let gene_avg = gene_avg_am_score(&table, &gene_scores)?;
     table.set_column("Gene_avg_AM_score", gene_avg);
     let variant_ids = variant_id(&table)?;
@@ -709,7 +738,7 @@ pub(crate) fn run_step(
     let needs_hub = table.column_index("SYMBOL").is_some_and(|index| {
         (0..table.rows).any(|row| !clean(Some(table.cell(index, row))).is_empty())
     });
-    let hub = if needs_hub {
+    let mut hub = if needs_hub {
         Some(GeneMechanismHub::new(HubPaths::default())?)
     } else {
         None
@@ -719,14 +748,10 @@ pub(crate) fn run_step(
         None => &NoSymbols,
     };
     annotate_exact_nonlof_variants(&mut table, None, &args.gene_nonlof_mechanism_json, resolver)?;
-    drop(hub);
 
     // The script maps the file into memory and unpickles it; a `.gz` name maps the
-    // compressed bytes, which fail to unpickle.
-    let intolerant_domains = pickle_reader::load(&pickle_reader::read_file(
-        Path::new(&args.intolerant_domains_pkl),
-        false,
-    )?)?;
+    // compressed bytes, which fail to unpickle (refused here).
+    let intolerant_domains = IntolerantDomains::load(&args.intolerant_domains_pkl)?;
 
     // `annotate_gene_mechanism_categories(anno_df, condition_cache=..., symbol_col="SYMBOL",
     // use_hgnc_package=False)`: the other hub files are the repository's.
@@ -741,19 +766,18 @@ pub(crate) fn run_step(
     )?;
     table.column("variant_effect")?;
 
-    let pvs1_output = pending::pvs1_criteria(
-        source,
+    let pvs1_output = pvs1_criteria(
         &table,
-        &pending::Pvs1Inputs {
+        &Pvs1Arguments {
             clinvar_patho_exon_af_stat: &args.clinvar_patho_exon_af_stat,
             interpro_entry_map_pkl: &args.interpro_entry_map_pkl,
             clinvar_pathogenic_genes: &pathogenic_genes,
-            gene_dosage_sensitivity: &args.gene_dosage_sensitivity,
-            nonlof_mechanism_json: &args.gene_nonlof_mechanism_json,
+            gene_dosage_sensitivity: Some(&args.gene_dosage_sensitivity),
+            nonlof_mechanism_json: Some(&args.gene_nonlof_mechanism_json),
             intolerant_domains: &intolerant_domains,
-            tranx_exon_domain_map_pkl: &args.tranx_exon_domain_map_pkl,
-            proband_gt_col: proband.as_deref(),
+            tranx_exon_domain_map_pkl: Some(&args.tranx_exon_domain_map_pkl),
             cds_fasta_path: args.cds_fasta_path.as_deref(),
+            row_labels: row_labels.as_deref(),
         },
     )?;
     apply_columns(&mut table, &pvs1_output)?;
@@ -768,15 +792,34 @@ pub(crate) fn run_step(
     let clinvar_patho = bool_values(&passed_on(&ps3_bs3, "clinvar_patho")?, "clinvar_patho")?;
     let clinvar_benign = bool_values(&passed_on(&ps3_bs3, "clinvar_benign")?, "clinvar_benign")?;
 
-    let ps1_pm5 = pending::ps1_pm5_criteria(
-        source,
+    // PS1 is Python's; PM5 follows the owner's Rust-only rules over the PM5 index, with gain of
+    // function from the non-LoF mechanism cache through the hub's HGNC resolver.
+    let pm5_index_path = args.clinvar_pm5_index.as_deref().ok_or_else(|| {
+        invalid(
+            "refused: PM5's rules need --clinvar_pm5_index (built by priva acmg-step \
+             acmg_ps1_pm5_known_variant build_pm5_index from the VEP-annotated ClinVar VCF)",
+        )
+    })?;
+    let pm5_index = Pm5Index::read(pm5_index_path, &transcripts)?;
+    if hub.is_none() {
+        hub = Some(GeneMechanismHub::new(HubPaths::default())?);
+    }
+    let mut gain_of_function = CuratedGainOfFunction::new(
+        &args.gene_nonlof_mechanism_json,
+        hub.as_ref().expect("built above"),
+        &pm5_assembly(args.config.as_deref()),
+    );
+    let ps1_pm5 = ps1_pm5_criteria(
         &table,
-        &clinvar,
-        &clinvar_patho,
+        &known,
+        &pm5_index,
+        &mut gain_of_function,
         &pvs1_values,
         args.threads,
         cutoffs.known_pathogenic_comparison,
     )?;
+    drop(gain_of_function);
+    drop((pm5_index, known, hub));
     apply_columns(&mut table, &ps1_pm5)?;
 
     let (ps2, pm6) = match family {
@@ -969,177 +1012,9 @@ pub(crate) fn dispatch(args: &[String]) -> Result<()> {
         Ok(cutoffs) => cutoffs,
         Err(failure) => fail(format!("SpliceAI cutoffs: {failure:?}")),
     };
-    match run_step(&parsed, &cutoffs, &pending::Source::Unconverted) {
+    match run_step(&parsed, &cutoffs) {
         Ok(_) => Ok(()),
         Err(error) => fail(error),
-    }
-}
-
-// ------------------------------------------------------------------------------ pending
-
-/// The calls into thread T4, which is still converting its scripts (the ClinVar dictionaries,
-/// `summarize_clinvar_gene_pathogenicity`, PVS1, PS1/PM5). Each function takes what the Python
-/// call takes. Until the thread lands, `Source::Unconverted` stops the step with "not
-/// converted"; the merge replaces each body by the real call and removes its recorded branch.
-///
-/// `Source::Recorded(folder)` is for the comparison harness only (`priva acmg-step
-/// acmg_criteria_assign ACMG_criteria_assign`): a Python run of the step with these functions
-/// wrapped wrote, per function, its returned arrays (`<function>.returns.frame`) and the table
-/// columns it added or changed (`<function>.columns.frame`).
-pub(crate) mod pending {
-    use super::super::frame_file::read_frame;
-    use super::super::types::{StepOutput, not_converted};
-    use super::Column;
-    use crate::cli::{Result, invalid};
-    use crate::pandas_table::Table;
-    use crate::pickle_reader::Value;
-    use std::path::Path;
-
-    pub(crate) enum Source<'a> {
-        Unconverted,
-        Recorded(&'a Path),
-    }
-
-    /// The two ClinVar dictionaries (`aa_change.stats.pkl`, `splice_change.stats.pkl`); T4
-    /// decides their Rust shape (GROUP3_BASE.md, section 8.2).
-    pub(crate) struct ClinvarDicts;
-
-    /// `summarize_clinvar_gene_pathogenicity`'s set of gene IDs (T4).
-    pub(crate) struct PathogenicGenes;
-
-    /// What `PVS1_criteria` takes besides the table.
-    pub(crate) struct Pvs1Inputs<'a> {
-        pub(crate) clinvar_patho_exon_af_stat: &'a str,
-        pub(crate) interpro_entry_map_pkl: &'a str,
-        pub(crate) clinvar_pathogenic_genes: &'a PathogenicGenes,
-        pub(crate) gene_dosage_sensitivity: &'a str,
-        pub(crate) nonlof_mechanism_json: &'a str,
-        pub(crate) intolerant_domains: &'a Value,
-        pub(crate) tranx_exon_domain_map_pkl: &'a str,
-        pub(crate) proband_gt_col: Option<&'a str>,
-        pub(crate) cds_fasta_path: Option<&'a str>,
-    }
-
-    /// The returned arrays and changed columns a recording Python run wrote for `function`.
-    fn recorded(folder: &Path, function: &str) -> Result<(Table, Table)> {
-        let returns = read_frame(&folder.join(format!("{function}.returns.frame")))?;
-        let columns = read_frame(&folder.join(format!("{function}.columns.frame")))?;
-        Ok((returns, columns))
-    }
-
-    /// A `StepOutput` from a recording: `criteria` and `passed` name return frame columns.
-    fn recorded_output(
-        folder: &Path,
-        function: &str,
-        criteria: &[&'static str],
-        passed: &[&str],
-    ) -> Result<StepOutput> {
-        let (returns, columns) = recorded(folder, function)?;
-        let take = |name: &str| -> Result<Column> {
-            returns.column(name).cloned().map_err(|_| {
-                invalid(format!(
-                    "the recording of {function} has no returned {name}"
-                ))
-            })
-        };
-        Ok(StepOutput {
-            criteria: criteria
-                .iter()
-                .map(|name| Ok((*name, take(name)?)))
-                .collect::<Result<_>>()?,
-            columns: columns.names.into_iter().zip(columns.columns).collect(),
-            passed_on: passed
-                .iter()
-                .map(|name| Ok(((*name).to_owned(), take(name)?)))
-                .collect::<Result<_>>()?,
-        })
-    }
-
-    pub(crate) fn load_clinvar_dicts(
-        source: &Source<'_>,
-        aa: &str,
-        splice: &str,
-    ) -> Result<ClinvarDicts> {
-        match source {
-            Source::Recorded(_) => Ok(ClinvarDicts),
-            Source::Unconverted => {
-                let _ = (aa, splice);
-                Err(not_converted(
-                    "acmg_criteria_assign",
-                    "load of the ClinVar dictionaries (thread T4)",
-                ))
-            }
-        }
-    }
-
-    pub(crate) fn summarize_clinvar_gene_pathogenicity(
-        source: &Source<'_>,
-        transcript_to_gene: &[(Option<String>, Option<String>)],
-        clinvar: &ClinvarDicts,
-    ) -> Result<PathogenicGenes> {
-        match source {
-            Source::Recorded(_) => Ok(PathogenicGenes),
-            Source::Unconverted => {
-                let _ = (transcript_to_gene, clinvar);
-                Err(not_converted(
-                    "acmg_pvs1_null_variant",
-                    "summarize_clinvar_gene_pathogenicity",
-                ))
-            }
-        }
-    }
-
-    /// `PVS1_criteria(df, ...)` (T4): `PVS1` and the passed-on `locate_intol_domains`, and the
-    /// `alt_start_*` columns it may add.
-    pub(crate) fn pvs1_criteria(
-        source: &Source<'_>,
-        table: &Table,
-        inputs: &Pvs1Inputs<'_>,
-    ) -> Result<StepOutput> {
-        match source {
-            Source::Recorded(folder) => recorded_output(
-                folder,
-                "PVS1_criteria",
-                &["PVS1"],
-                &["locate_intol_domains"],
-            ),
-            Source::Unconverted => {
-                let _ = (table, inputs);
-                Err(not_converted("acmg_pvs1_null_variant", "PVS1_criteria"))
-            }
-        }
-    }
-
-    /// `PS1_PM5_criteria(df, clinvar_aa_dict, clinvar_splice_dict, clinvar_patho, pvs1_criteria,
-    /// threads, spliceai_cutoff=...)` (T4).
-    pub(crate) fn ps1_pm5_criteria(
-        source: &Source<'_>,
-        table: &Table,
-        clinvar: &ClinvarDicts,
-        clinvar_patho: &[bool],
-        pvs1_criteria: &[i64],
-        threads: i64,
-        spliceai_cutoff: f64,
-    ) -> Result<StepOutput> {
-        match source {
-            Source::Recorded(folder) => {
-                recorded_output(folder, "PS1_PM5_criteria", &["PS1", "PM5"], &[])
-            }
-            Source::Unconverted => {
-                let _ = (
-                    table,
-                    clinvar,
-                    clinvar_patho,
-                    pvs1_criteria,
-                    threads,
-                    spliceai_cutoff,
-                );
-                Err(not_converted(
-                    "acmg_ps1_pm5_known_variant",
-                    "PS1_PM5_criteria",
-                ))
-            }
-        }
     }
 }
 
@@ -1287,6 +1162,7 @@ fn parsed_frame(argv: &[String]) -> Result<Table> {
         ("threads", ObjectValue::Int(parsed.threads)),
         ("config", text(&parsed.config)),
         ("ranking_binary", text(&parsed.ranking_binary)),
+        ("clinvar_pm5_index", text(&parsed.clinvar_pm5_index)),
     ];
     let (names, values) = values
         .into_iter()
@@ -1307,9 +1183,8 @@ fn parsed_frame(argv: &[String]) -> Result<Table> {
 /// - `frequency_audit`, on a frame of `PM2`, `BS1`, `disease_incidence_bs1`,
 ///   `gene_pathogenic_af_bs1`, `gene_pathogenic_af_blocked_by_pm2`: a frame of `PM2` after the
 ///   back-down and the five audit columns;
-/// - `ACMG_criteria_assign`, options `argv` and `substitutes` (the folder of a recording
-///   Python run): the step with the pending functions taken from the recording; the result is
-///   the final table (also written over `--anno_table`, with the matrix beside it).
+/// - `ACMG_criteria_assign`, option `argv`: the whole step; the result is the final table (also
+///   written over `--anno_table`, with the matrix beside it).
 pub(crate) fn run_harness(function: &str, call: &HarnessCall) -> Result<Table> {
     let options = &call.options;
     let single = |name: &str, column: Column| Table {
@@ -1361,10 +1236,9 @@ pub(crate) fn run_harness(function: &str, call: &HarnessCall) -> Result<Table> {
                 Ok(parsed) => parsed,
                 Err(error) => return Err(invalid(format!("the command line fails: {error:?}"))),
             };
-            let folder = PathBuf::from(text_option(options, "substitutes")?);
             let cutoffs = cutoffs_for_config(parsed.config.as_deref().map(Path::new))
                 .map_err(|failure| invalid(format!("SpliceAI cutoffs: {failure:?}")))?;
-            run_step(&parsed, &cutoffs, &pending::Source::Recorded(&folder))
+            run_step(&parsed, &cutoffs)
         }
         _ => Err(not_converted("acmg_criteria_assign", function)),
     }

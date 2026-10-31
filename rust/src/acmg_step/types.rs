@@ -163,6 +163,9 @@ pub(crate) struct StepArguments {
     /// The Python step's opt-in Rust ranking; meaningless once the step is Rust.
     pub(crate) ranking_binary: Option<String>,
     pub(crate) config: Option<String>,
+    /// Rust only (`--clinvar_pm5_index`): the PM5 index of confident pathogenic ClinVar protein
+    /// changes that the owner's PM5 rules read (`acmg_pm5_residue_rules`).
+    pub(crate) clinvar_pm5_index: Option<String>,
 }
 
 /// The values `infer_query_variant_effect` (gene_mechanism_variants.py, thread

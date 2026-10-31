@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -17,6 +18,9 @@ sys.path.insert(0, str(ROOT / "scripts"))
 import clinvar_gene_refresh as refresh
 import clinvar_annotation_contract as contract
 import spliceai_cache_input as spliceai
+
+# The SpliceAI check of the VEP functions runs priva spliceai-cutoffs.
+PRIVA = os.environ.get("PRIVA_BINARY") or shutil.which("priva")
 
 
 def write_vcf(path, *, annotated=False, version2=False):
@@ -102,7 +106,10 @@ PY
 }
 "$2" --config "$CANDIDATE_CONFIG" --input_vcf "$CANDIDATE_INPUT" --threads 1 "${@:3}"
 '''
-        environment = dict(os.environ, CANDIDATE_CONFIG=str(self.config), CANDIDATE_INPUT=str(self.vcf),
+        if not PRIVA:
+            self.skipTest("needs the priva program: set PRIVA_BINARY")
+        environment = dict(os.environ, PRIVA_BINARY=os.path.abspath(PRIVA),
+                           CANDIDATE_CONFIG=str(self.config), CANDIDATE_INPUT=str(self.vcf),
                            CANDIDATE_TRACE=str(self.trace), CANDIDATE_ANNOTATED=str(self.annotated))
         if env:
             environment.update(env)
@@ -113,7 +120,7 @@ PY
         result = refresh.candidate_route(ROOT)
         self.assertEqual(result["status"], "preparation_route_available_inputs_not_checked")
         self.assertIs(result["scientific_qualified"], False)
-        self.assertEqual(result["runtime_guard_sha256"], "7adeabcab3037d248cc1460fd065bc5220158a4c5d4e9f106065568b925b5eac")
+        self.assertEqual(result["runtime_guard_sha256"], "72971e477c8cd2a814dacfa5b2d5d75fe4f27f68e704b3190cd960b64706e387")
         self.assertEqual(result["helper_source"], refresh.identity(ROOT / "scripts/clinvar_gene_refresh.py"))
 
     def test_profile_binds_loeuf_path_actually_selected_by_original_vep_shell(self):

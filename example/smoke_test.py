@@ -13,6 +13,7 @@ from collections import Counter
 import csv
 import gzip
 import math
+import os
 from pathlib import Path
 import shutil
 import subprocess
@@ -171,6 +172,10 @@ def run(args) -> None:
     for tool in ("bash", "python", "yq", "bcftools", "tabix", "snakemake"):
         if not shutil.which(tool):
             raise ValueError(f"Activate the PriVA environment; missing executable: {tool}")
+    # The pipeline scripts run the converted steps with the priva program.
+    if not (os.environ.get("PRIVA_BINARY") or shutil.which("priva")):
+        raise ValueError("Set PRIVA_BINARY to the priva program (main_install saves its path as priva_binary) "
+                         "or put priva on PATH.")
     path = prepare(args)
     print(f"Prepared-fixture smoke test: {path}", flush=True)
     subprocess.run(["snakemake", "--snakefile", str(ROOT / "example/smoke.Snakefile"),

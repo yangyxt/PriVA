@@ -755,13 +755,15 @@ function SpliceAI_install() {
         hg19|GRCh37|hg38|GRCh38) ;;
         *) log "Not supported assembly version: ${assembly_version}"; return 1 ;;
     esac
-    [[ -f ${SCRIPT_DIR}/spliceai_cache_input.py ]] || {
-        log "The SpliceAI cache format helper is missing from this source snapshot."
+    # priva spliceai-cache-input runs install_utils.sh from PRIVA_SCRIPT_DIR, which
+    # priva_resolve_binary sets to this checkout's scripts folder.
+    priva_resolve_binary "${config_file}" || {
+        log "The SpliceAI cache format helper (priva spliceai-cache-input) is not available."
         return 1
     }
 
     if [[ -f "${snv_prescore}" && -f "${indel_prescore}" ]]; then
-        python "${SCRIPT_DIR}/spliceai_cache_input.py" install --config "${config_file}" \
+        "${PRIVA_BIN}" spliceai-cache-input install --config "${config_file}" \
             --cache-dir "${PLUGIN_CACHEDIR}" --snv "${snv_prescore}" --indel "${indel_prescore}"
         return $?
     fi
@@ -799,7 +801,7 @@ function SpliceAI_install() {
         fi
         log "Now we start to install the SpliceAI plugin"
         # Validate both staged inputs before atomically updating the original two keys.
-        python "${SCRIPT_DIR}/spliceai_cache_input.py" install --config "${config_file}" \
+        "${PRIVA_BIN}" spliceai-cache-input install --config "${config_file}" \
             --cache-dir "${PLUGIN_CACHEDIR}" --snv "${snv_pre_score_file}" --indel "${indel_pre_score_file}" || return 1
     else
         log "Please download the prescores for the SpliceAI plugin first"

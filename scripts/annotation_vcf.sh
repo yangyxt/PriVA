@@ -40,9 +40,10 @@ function finalize_anno_vcf() {
 
 function priva_check_spliceai_versions() {
     # SpliceAI v1 and SpliceAI2 score VCFs are both accepted; the splicing and
-    # ACMG steps apply each version's own cutoffs (spliceai_cutoffs.py). The SNV
+    # ACMG steps apply each version's own cutoffs (priva spliceai-cutoffs). The SNV
     # and indel files must be the same version. Inspect headers only, never rows.
-    python "${SCRIPT_DIR}/spliceai_cutoffs.py" "$@" >&2
+    priva_resolve_binary "${1:-}" || return 1
+    "${PRIVA_BIN}" spliceai-cutoffs "$@" >&2
 }
 
 function main_workflow() {
@@ -949,7 +950,8 @@ function prepare_vcf_add_varID {
         local output_vcf=${input_vcf/.vcf/.id.vcf}
     fi
 
-    python3 ${SCRIPT_DIR}/generate_varID_for_vcf.py \
+    priva_resolve_binary "${config_file:-}" || return 1
+    "${PRIVA_BIN}" variant-ids \
     -m encode \
     -i ${input_vcf} \
     -o ${output_vcf}
@@ -1637,12 +1639,12 @@ function find_cached_cadd_variants() {
     local uncovered_pos=$(mktemp --tmpdir="$TMPDIR" uncovered_pos.XXXXXX.tsv)
     touch "${uncovered_pos}"
     
-    # Extract matching variants from CADD TSV using Python script
-    
+    # Extract matching variants from CADD TSV with priva cadd-hub
+    priva_resolve_binary "${config_file:-}" || return 2
     log "Using the below command to match variants in CADD hub TSV"
-    log "python ${SCRIPT_DIR}/cadd_hub_util.py match --hub ${hub_cadd_file} --pos ${pos_file} --covered ${output_covered_tsv} --uncovered ${uncovered_pos}"
+    log "${PRIVA_BIN} cadd-hub match --hub ${hub_cadd_file} --pos ${pos_file} --covered ${output_covered_tsv} --uncovered ${uncovered_pos}"
     
-    python ${SCRIPT_DIR}/cadd_hub_util.py match \
+    "${PRIVA_BIN}" cadd-hub match \
         --hub "${hub_cadd_file}" \
         --pos "${pos_file}" \
         --covered "${output_covered_tsv}" \
@@ -1714,9 +1716,10 @@ function update_hub_cadd() {
     }
     
     # Update hub CADD TSV with new scores
+    priva_resolve_binary "${config_file:-}" || return 1
     log "Using the below command to update CADD hub TSV"
-    log "python ${SCRIPT_DIR}/cadd_hub_util.py update --new ${new_cadd_tsv} --hub ${hub_cadd_file}"
-    python ${SCRIPT_DIR}/cadd_hub_util.py update --new "${new_cadd_tsv}" --hub "${hub_cadd_file}" || return 1
+    log "${PRIVA_BIN} cadd-hub update --new ${new_cadd_tsv} --hub ${hub_cadd_file}"
+    "${PRIVA_BIN}" cadd-hub update --new "${new_cadd_tsv}" --hub "${hub_cadd_file}" || return 1
     log "Updated CADD hub TSV ${hub_cadd_file}"
 }
 
@@ -1727,10 +1730,11 @@ function merge_cadd_results() {
     local output_tsv=$3
     
     # Merge covered and new CADD scores
+    priva_resolve_binary "${config_file:-}" || return 1
     log "Using the below command to merge CADD results"
-    log "python ${SCRIPT_DIR}/cadd_hub_util.py merge --covered ${covered_tsv} --new ${new_cadd_tsv} --output ${output_tsv}"
+    log "${PRIVA_BIN} cadd-hub merge --covered ${covered_tsv} --new ${new_cadd_tsv} --output ${output_tsv}"
 
-    python ${SCRIPT_DIR}/cadd_hub_util.py merge \
+    "${PRIVA_BIN}" cadd-hub merge \
         --covered "${covered_tsv}" \
         --new "${new_cadd_tsv}" \
         --output "${output_tsv}"

@@ -39,17 +39,18 @@ function prepare_combined_tab () {
 
 	check_vcf_validity "${input_vcf}" || \
 	{ log "The input VCF file ${input_vcf} is not valid, please check the VCF file"; return 1; }
+    priva_resolve_binary "${config_file}" || return 1
 
     [[ -f ${output_tab} ]] && \
     [[ ${output_tab} -nt ${input_vcf} ]] && \
     [[ ${output_tab} -nt ${hpo_tab} ]] && \
     [[ -z "$config_file" || "$output_tab" -nt "$config_file" ]] && \
-    [[ ${output_tab} -nt ${SCRIPT_DIR}/combine_annotations.py ]] && \
+    [[ ${output_tab} -nt ${PRIVA_BIN} ]] && \
     check_table_column "${output_tab}" "vep_consq_lof" && \
     { log "The combined annotation table ${output_tab} is up to date, skip the conversion"; return 0; } || \
     { log "The combined annotation table ${output_tab} is outdated, start the conversion"; }
 
-    python "${SCRIPT_DIR}/combine_annotations.py" \
+    "${PRIVA_BIN}" combine-annotations \
     -i "${input_vcf}" \
     -c "${CADD_anno_file}" \
     -o "${output_tab}" \

@@ -41,9 +41,12 @@ class SpliceAIInstallerInputs(unittest.TestCase):
         self.indel = self.folder / 'indel with spaces.vcf.gz'
         self.snv.write_bytes(b'fixture: helper owns decompressed-header validation')
         self.indel.write_bytes(b'fixture: helper owns decompressed-header validation')
-        self.helper = scripts / 'spliceai_cache_input.py'
-        self.helper.write_text(FAKE_INPUT_HELPER)
-        self.env = dict(os.environ, TEST_CONFIG=str(self.config), TEST_FOLDER=str(self.folder),
+        # A stand-in for the priva program's spliceai-cache-input command.
+        self.helper = scripts / 'priva'
+        self.helper.write_text('#!' + sys.executable + '\n' + FAKE_INPUT_HELPER)
+        self.helper.chmod(0o755)
+        self.env = dict(os.environ, PRIVA_BINARY=str(self.helper), TEST_SCRIPT_DIR=str(scripts.resolve()),
+                        TEST_CONFIG=str(self.config), TEST_FOLDER=str(self.folder),
                         TEST_CALLS=str(self.calls), TEST_PROMPTS=str(self.prompts),
                         TEST_SNV=str(self.snv), TEST_INDEL=str(self.indel))
         self.configure()
@@ -156,9 +159,14 @@ class SpliceAIInstallerInputs(unittest.TestCase):
 
 
 FAKE_INPUT_HELPER = r'''
-import argparse, hashlib, json, os
+import argparse, hashlib, json, os, sys
 from pathlib import Path
 import yaml
+if sys.argv[1:]==['--version']:print('priva 0.1.0 (fixture)');raise SystemExit(0)
+assert sys.argv[1]=='spliceai-cache-input', sys.argv
+# The command runs install_utils.sh from this folder for SpliceAI2 tables.
+assert os.environ['PRIVA_SCRIPT_DIR']==os.environ['TEST_SCRIPT_DIR'], os.environ.get('PRIVA_SCRIPT_DIR')
+del sys.argv[1]
 p=argparse.ArgumentParser()
 p.add_argument('command', choices=['install'])
 for key in ('config','cache-dir','snv','indel'):p.add_argument('--'+key,required=True)

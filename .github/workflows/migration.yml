@@ -130,7 +130,6 @@ jobs:
           python -m unittest discover -s tests -p 'test_indexed_plugin_cache.py' -v
           python -m unittest discover -s tests -p 'test_install_utils_spliceai2.py' -v
           python -m unittest discover -s tests -p 'test_spliceai_cache_input.py' -v
-          python -m unittest discover -s tests -p 'test_spliceai2_runtime_guard.py' -v
           python -m unittest discover -s tests -p 'test_vcf_bgz_validation.py' -v
 
       - name: Install the pinned Rust toolchain
@@ -141,6 +140,15 @@ jobs:
           cargo +1.90.0 fmt --manifest-path rust/Cargo.toml --check
           cargo +1.90.0 build --manifest-path rust/Cargo.toml --locked --jobs 1
           cargo +1.90.0 test --manifest-path rust/Cargo.toml --locked --jobs 1
+
+      - name: Test the shell callers with the built priva program
+        # The pipeline scripts run the converted steps with priva; these tests
+        # call the real shell functions and skip without PRIVA_BINARY.
+        run: |
+          export PRIVA_BINARY="$CARGO_TARGET_DIR/debug/priva"
+          python -m unittest discover -s tests -p 'test_spliceai2_runtime_guard.py' -v
+          python -m unittest discover -s tests -p 'test_hpo_runtime_paths.py' -v
+          python -m unittest discover -s tests -p 'test_preprocess_contig_mapping.py' -v
 
       - name: Test SpliceAI2 preparation with real Rust, BGZF and tabix
         # Synthetic scores and GENCODE context; no model or full-cache acceptance.

@@ -64,7 +64,7 @@ function interpret_splicing_annotations () {
     local input_tab=${1}
     local config_file=${2}
     local threads=${3}
-    local splicing_py=${SCRIPT_DIR}/splicing_var_analysis.py
+    priva_resolve_binary "${config_file}" || return 1
 
     local alphamissense_tranx_domain_map=$(read_yaml ${config_file} "alphamissense_tranx_domain_map")
     local intolerant_domains=$(read_yaml ${config_file} "all_intolerant_domains")
@@ -74,8 +74,7 @@ function interpret_splicing_annotations () {
     [[ ${input_tab} -nt ${interpro_entry_map_pkl} ]] && \
     [[ ${input_tab} -nt ${alphamissense_tranx_domain_map} ]] && \
     [[ ${input_tab} -nt ${intolerant_domains} ]] && \
-    [[ ${input_tab} -nt ${splicing_py} ]] && \
-    [[ ${input_tab} -nt ${SCRIPT_DIR}/spliceai_cutoffs.py ]] && \
+    [[ ${input_tab} -nt ${PRIVA_BIN} ]] && \
     check_table_column ${input_tab} "splicing_lof" && \
     check_table_column ${input_tab} "splicing_len_changing" && \
     check_table_column ${input_tab} "splicing_canonical_offset" && \
@@ -83,7 +82,7 @@ function interpret_splicing_annotations () {
     return 0 || \
     log "The input table ${input_tab} is outdated, start the splicing interpretation"
 
-    python ${splicing_py} \
+    "${PRIVA_BIN}" splicing-analysis \
     --anno_table ${input_tab} \
     --transcript_domain_map ${alphamissense_tranx_domain_map} \
     --intolerant_domains ${intolerant_domains} \
@@ -100,8 +99,7 @@ function interpret_utr_annotations () {
     local input_tab=${1}
     local config_file=${2}
     local threads=${3}
-
-    local utr_py=${SCRIPT_DIR}/utr_anno_interpret.py
+    priva_resolve_binary "${config_file}" || return 1
 
     local alphamissense_tranx_domain_map=$(read_yaml ${config_file} "alphamissense_tranx_domain_map")
     log "The alphamissense_tranx_domain_map is: ${alphamissense_tranx_domain_map}"
@@ -111,14 +109,14 @@ function interpret_utr_annotations () {
     [[ -f ${input_tab} ]] && \
     [[ ${input_tab} -nt ${alphamissense_tranx_domain_map} ]] && \
     [[ ${input_tab} -nt ${intolerant_domains} ]] && \
-    [[ ${input_tab} -nt ${utr_py} ]] && \
+    [[ ${input_tab} -nt ${PRIVA_BIN} ]] && \
     check_table_column ${input_tab} "5UTR_lof" && \
     check_table_column ${input_tab} "5UTR_length_changing" && \
     log "The input table ${input_tab} is up to date, skip the UTR interpretation" && \
     return 0 || \
     log "The input table ${input_tab} is outdated, start the UTR interpretation"
 
-    python ${utr_py} \
+    "${PRIVA_BIN}" utr-anno-interpret \
     --variants_table ${input_tab} \
     --domain_map ${alphamissense_tranx_domain_map} \
     --intolerant_domains ${intolerant_domains} && \

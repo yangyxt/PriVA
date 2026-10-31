@@ -14,8 +14,9 @@
 //!   (`<table without its last suffix>.acmg.tsv`, written before the posterior), the posterior,
 //!   the ranking, and the table written over the input. A failure after the matrix is written
 //!   leaves the matrix and the untouched input table, as in Python.
-//! - The criteria of threads T3, T6 and T7 and T3's ranking are called directly. Those of
-//!   threads still converting (T2 hub, T4 PVS1/PS1/PM5, T5 PM2/BS1/BA1/BS2/BP5) go through the
+//! - The hub of thread T2, the criteria of threads T3, T6 and T7 and T3's ranking are called
+//!   directly. Those of threads still converting (T4 PVS1/PS1/PM5, T5 PM2/BS1/BA1/BS2/BP5) go
+//!   through the
 //!   `pending` module below, one function each with the inputs the Python call takes; until
 //!   their thread lands they stop the step with "not converted". The comparison harness can
 //!   instead hand them the outputs a recording Python run wrote (`Source::Recorded`), so the
@@ -37,8 +38,12 @@ use super::acmg_scoring::{
     RankingOptions, posterior_columns, sort_and_rank_variants_with, summarize_acmg_criteria,
 };
 use super::acmg_variant_mechanism::annotate_exact_nonlof_variants;
+use super::gene_mechanism_annotation::annotate_gene_mechanism_categories;
+use super::gene_mechanism_common::clean;
+use super::gene_mechanism_resources::{GeneMechanismHub, HubPaths};
 use super::types::{
-    AcmgError, HarnessCall, MATRIX_AUDIT_COLUMNS, StepArguments, StepOutput, not_converted,
+    AcmgError, HarnessCall, MATRIX_AUDIT_COLUMNS, StepArguments, StepOutput, SymbolResolver,
+    not_converted,
 };
 use crate::cli::{Result, invalid};
 use crate::json_text::Json;
@@ -637,6 +642,20 @@ fn zeros(rows: usize) -> Column {
 
 // ------------------------------------------------------------------------------ the step
 
+/// The resolver handed to `annotate_exact_nonlof_variants` when no row has a symbol, where
+/// Python builds no hub and the function returns before matching.
+struct NoSymbols;
+
+impl SymbolResolver for NoSymbols {
+    fn resolve_symbol(&self, _gene_symbol: Cell<'_>) -> Result<String> {
+        Err(invalid("no HGNC resolver: the table has no gene symbol"))
+    }
+
+    fn try_resolve_symbol(&self, gene_symbol: Cell<'_>) -> String {
+        clean(Some(gene_symbol))
+    }
+}
+
 /// `ACMG_criteria_assign(...)` with the parsed command line, in the script's order; the
 /// final table, which is also written over the input.
 pub(crate) fn run_step(
@@ -685,13 +704,22 @@ pub(crate) fn run_step(
     table.set_column("Gene_avg_AM_score", gene_avg);
     let variant_ids = variant_id(&table)?;
     table.set_column("variant_id", variant_ids);
-    let resolver = pending::mechanism_resolver(source, &args.gene_nonlof_mechanism_json)?;
-    annotate_exact_nonlof_variants(
-        &mut table,
-        None,
-        &args.gene_nonlof_mechanism_json,
-        resolver.as_ref(),
-    )?;
+    // `annotate_exact_nonlof_variants` builds `GeneMechanismHub(mechanism_json=...,
+    // use_hgnc_package=False)` (which reads the HGNC table) only when a row has a symbol.
+    let needs_hub = table.column_index("SYMBOL").is_some_and(|index| {
+        (0..table.rows).any(|row| !clean(Some(table.cell(index, row))).is_empty())
+    });
+    let hub = if needs_hub {
+        Some(GeneMechanismHub::new(HubPaths::default())?)
+    } else {
+        None
+    };
+    let resolver: &dyn SymbolResolver = match &hub {
+        Some(hub) => hub,
+        None => &NoSymbols,
+    };
+    annotate_exact_nonlof_variants(&mut table, None, &args.gene_nonlof_mechanism_json, resolver)?;
+    drop(hub);
 
     // The script maps the file into memory and unpickles it; a `.gz` name maps the
     // compressed bytes, which fail to unpickle.
@@ -700,10 +728,16 @@ pub(crate) fn run_step(
         false,
     )?)?;
 
-    table = pending::annotate_gene_mechanism_categories(
-        source,
-        table,
-        &args.hpo_condition_mechanism_json,
+    // `annotate_gene_mechanism_categories(anno_df, condition_cache=..., symbol_col="SYMBOL",
+    // use_hgnc_package=False)`: the other hub files are the repository's.
+    table = annotate_gene_mechanism_categories(
+        &table,
+        HubPaths {
+            condition_cache: args.hpo_condition_mechanism_json.clone(),
+            ..HubPaths::default()
+        },
+        "SYMBOL",
+        "var_plausible_patho_mechs",
     )?;
     table.column("variant_effect")?;
 
@@ -951,8 +985,8 @@ pub(crate) fn dispatch(args: &[String]) -> Result<()> {
 
 // ------------------------------------------------------------------------------ pending
 
-/// The calls into threads that are still converting their scripts (thread T2: the hub; T4:
-/// PVS1, PS1/PM5 and the ClinVar dictionaries; T5: BA1, PM2, BS1, BS2, BP5 and `stats`, which
+/// The calls into threads that are still converting their scripts (thread T4: PVS1, PS1/PM5
+/// and the ClinVar dictionaries; T5: BA1, PM2, BS1, BS2, BP5 and `stats`, which
 /// T3's `compute_control_common` in the ranking calls). Each function takes what the Python call
 /// takes. Until the thread lands, `Source::Unconverted` stops the step with "not converted";
 /// the merge replaces each body by the real call and removes the function's recorded branch.
@@ -960,13 +994,12 @@ pub(crate) fn dispatch(args: &[String]) -> Result<()> {
 /// `Source::Recorded(folder)` is for the comparison harness only (`priva acmg-step
 /// acmg_criteria_assign ACMG_criteria_assign`): a Python run of the step with these functions
 /// wrapped wrote, per function, its returned arrays (`<function>.returns.frame`) and the table
-/// columns it added or changed (`<function>.columns.frame`), the HGNC resolutions of the
-/// symbols (`symbols.json`) and the SciPy p-values of PP2 (`pvalues.json`).
+/// columns it added or changed (`<function>.columns.frame`) and the SciPy p-values of PP2
+/// (`pvalues.json`).
 pub(crate) mod pending {
     use super::super::acmg_pm1_pp2_bp1_missense::PValues;
     use super::super::frame_file::read_frame;
-    use super::super::gene_mechanism_variants::CapturedResolver;
-    use super::super::types::{StepOutput, SymbolResolver, not_converted};
+    use super::super::types::{StepOutput, not_converted};
     use super::Column;
     use crate::cli::{Result, invalid};
     use crate::json_text::{self, Json};
@@ -1064,72 +1097,6 @@ pub(crate) mod pending {
                 Err(not_converted(
                     "acmg_pvs1_null_variant",
                     "summarize_clinvar_gene_pathogenicity",
-                ))
-            }
-        }
-    }
-
-    /// The hub's HGNC resolver, `GeneMechanismHub(mechanism_json=..., use_hgnc_package=False)`
-    /// (T2). Python builds it inside `annotate_exact_nonlof_variants` only when a row has a
-    /// symbol; the merge should keep it lazy if building it can fail.
-    pub(crate) fn mechanism_resolver(
-        source: &Source<'_>,
-        mechanism_json: &str,
-    ) -> Result<Box<dyn SymbolResolver>> {
-        match source {
-            Source::Recorded(folder) => {
-                let text = std::fs::read_to_string(folder.join("symbols.json"))?;
-                let options = json_text::parse(&text, true).map_err(invalid)?;
-                Ok(Box::new(CapturedResolver::from_options(&options)?))
-            }
-            Source::Unconverted => {
-                let _ = mechanism_json;
-                Err(not_converted(
-                    "gene_mechanism_resources",
-                    "GeneMechanismHub (thread T2)",
-                ))
-            }
-        }
-    }
-
-    /// `annotate_gene_mechanism_categories(df, condition_cache=..., symbol_col="SYMBOL",
-    /// use_hgnc_package=False)` (T2): the table with the hub's columns.
-    pub(crate) fn annotate_gene_mechanism_categories(
-        source: &Source<'_>,
-        mut table: Table,
-        condition_cache: &str,
-    ) -> Result<Table> {
-        match source {
-            Source::Recorded(folder) => {
-                let function = "annotate_gene_mechanism_categories";
-                let (_, columns) = recorded(folder, function)?;
-                for (name, column) in columns.names.iter().zip(columns.columns) {
-                    table.set_column(name, column);
-                }
-                let order = std::fs::read_to_string(folder.join(format!("{function}.names.json")))?;
-                let expected: Vec<String> = match json_text::parse(&order, true).map_err(invalid)? {
-                    Json::Array(items) => items
-                        .iter()
-                        .map(|item| {
-                            item.as_str()
-                                .map(str::to_owned)
-                                .ok_or_else(|| invalid("names are texts"))
-                        })
-                        .collect::<Result<_>>()?,
-                    _ => return Err(invalid("the recorded column names are a list")),
-                };
-                if expected != table.names {
-                    return Err(invalid(
-                        "the hub's recorded column order differs from the table's",
-                    ));
-                }
-                Ok(table)
-            }
-            Source::Unconverted => {
-                let _ = (table, condition_cache);
-                Err(not_converted(
-                    "gene_mechanism_annotation",
-                    "annotate_gene_mechanism_categories",
                 ))
             }
         }

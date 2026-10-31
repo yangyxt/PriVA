@@ -2,7 +2,8 @@
 //! splice dictionaries.
 //!
 //! `ps1_pm5_criteria` is `PS1_PM5_criteria`, `check_splice_pathogenic` the per-row splice
-//! fallback. The two ClinVar pickles are read once by `ClinvarKnownVariants::load` (the step
+//! fallback. PS1 is Python's. PM5 follows the owner's rules of 30 October 2026, which apply to
+//! Rust only (`acmg_pm5_residue_rules`), so it differs from Python's PM5 on purpose. The two ClinVar pickles are read once by `ClinvarKnownVariants::load` (the step
 //! loads them once and shares them with `summarize_clinvar_gene_pathogenicity` of PVS1).
 //!
 //! The pickles hold 6.2 M (amino-acid) and 5.0 M (splice) ClinVar records; read whole they take
@@ -12,11 +13,13 @@
 //! Every amino-acid entry is still checked, because PS1_PM5_criteria reads all of them. Shapes
 //! other than the installed ones (probe of 2026-10-30: text keys, lists of text, an int `pos`,
 //! a dict of text for `splice_ai`) are refused with a message naming the transcript.
-//!
-//! Python's `get_variant_type` (acmg_consequence.py, thread T1) is copied here as
-//! `variant_type_of_hgvsp` until that module lands; the integration replaces the copy with it.
+use super::acmg_pm5_residue_rules::{
+    ChangeKind, CuratedGainOfFunction, GainOfFunction, ListedGainOfFunction, Pm5Entry, Pm5Index,
+    ProteinChange, build_pm5_index, pm5_rule, protein_change,
+};
 use super::acmg_pp3_bp4_bp7_insilico::harness_options;
 use super::acmg_pp3_bp4_bp7_insilico::pandas_masks::{high_confidence_review, python_str};
+use super::gene_mechanism_variants::CapturedResolver;
 use super::pickle_dict_stream::{Item, TextDict, visit_top_level_dict};
 use super::types::{AcmgError, HarnessCall, StepOutput, not_converted};
 use crate::cli::{Result, invalid};
@@ -59,8 +62,6 @@ struct AminoAcidTranscript {
     positions: HashSet<Rc<str>>,
     /// `(position, HGVSp)` of high-confidence pathogenic entries (`ps1_set`).
     same_change: HashSet<(Rc<str>, Rc<str>)>,
-    /// `(position, variant type)` of the same entries (`pm5_residues`).
-    same_residue: HashSet<(Rc<str>, &'static str)>,
 }
 
 /// One record of the splice dict, as check_splice_pathogenic reads it.
@@ -209,15 +210,6 @@ fn decode_amino_acid_transcript(
             }
             let pairs = || significances.iter().zip(&statuses);
             if !keep {
-                // Only the HGVSp's type can fail (non-ASCII text), and only for these entries.
-                let high_confidence = pairs().any(|(significance, status)| {
-                    let stars = review_stars(status);
-                    (significance.contains("Pathogenic") && stars >= 2)
-                        || (&**significance == "Likely_pathogenic" && stars >= 3)
-                });
-                if high_confidence {
-                    variant_type_of_hgvsp(hgvsp)?;
-                }
                 continue;
             }
             if pairs().any(|(significance, status)| gene_level_pathogenic(significance, status)) {
@@ -232,9 +224,6 @@ fn decode_amino_acid_transcript(
                 decoded
                     .same_change
                     .insert((position.clone(), hgvsp.clone()));
-                if let Some(kind) = variant_type_of_hgvsp(hgvsp)? {
-                    decoded.same_residue.insert((position.clone(), kind));
-                }
             }
         }
     }
@@ -300,100 +289,6 @@ fn decode_splice_transcript(
         });
     }
     Ok(decoded)
-}
-
-// ------------------------------------------------------------------ get_variant_type
-
-/// `\w` of Python's `re` for ASCII text.
-fn is_word(byte: u8) -> bool {
-    byte.is_ascii_alphanumeric() || byte == b'_'
-}
-
-/// `re.search(r'p\.\w+\d+' + suffix, text)` for ASCII text: some `p.` is followed by two or
-/// more word characters whose last one is a digit, and then by the suffix.
-fn search_word_digits_then(text: &[u8], suffix: impl Fn(&[u8]) -> bool) -> bool {
-    (0..text.len().saturating_sub(1))
-        .filter(|start| &text[*start..*start + 2] == b"p.")
-        .any(|start| {
-            let body = start + 2;
-            let run_end = body
-                + text[body..]
-                    .iter()
-                    .take_while(|byte| is_word(**byte))
-                    .count();
-            // The suffix starts at `at`; `\w+\d+` covers text[body..at].
-            (body + 2..=run_end).any(|at| text[at - 1].is_ascii_digit() && suffix(&text[at..]))
-        })
-}
-
-/// `re.search(r'p\.[A-Z][a-z]+\d+[A-Z][a-z]+$', text)` for ASCII text (`$` also matches before
-/// a final line break).
-fn search_missense(text: &[u8]) -> bool {
-    let end = if text.ends_with(b"\n") {
-        text.len() - 1
-    } else {
-        text.len()
-    };
-    (0..end.saturating_sub(1))
-        .filter(|start| &text[*start..*start + 2] == b"p.")
-        .any(|start| {
-            let rest = &text[start + 2..end];
-            let mut index = 0;
-            let mut run = |test: fn(&u8) -> bool, at_least: usize| -> bool {
-                let count = rest[index..].iter().take_while(|byte| test(byte)).count();
-                index += count;
-                count >= at_least
-            };
-            run(u8::is_ascii_uppercase, 1)
-                && run(u8::is_ascii_lowercase, 1)
-                && run(u8::is_ascii_digit, 1)
-                && run(u8::is_ascii_uppercase, 1)
-                && run(u8::is_ascii_lowercase, 1)
-                && index == rest.len()
-        })
-}
-
-/// `get_variant_type(hgvsp)` (acmg_consequence.py) for a text: `nonsense`, `frameshift`,
-/// `delins`, `deletion`, `insertion_type`, `missense` or `None`. Copied until thread T1's
-/// `acmg_consequence` module lands. Non-ASCII text is refused (Python's `\w` and `\d` would
-/// read letters and digits of other scripts).
-pub(crate) fn variant_type_of_hgvsp(hgvsp: &str) -> Result<Option<&'static str>> {
-    if !hgvsp.is_ascii() {
-        return Err(invalid(format!(
-            "HGVSp {hgvsp:?} holds non-ASCII text; Python's \\w and \\d are not reproduced there"
-        )));
-    }
-    let text = hgvsp.rsplit(':').next().unwrap_or("").as_bytes();
-    let starts = |prefix: &'static [u8]| move |rest: &[u8]| rest.starts_with(prefix);
-    let kind = if search_word_digits_then(text, starts(b"Ter"))
-        || search_word_digits_then(text, starts(b"*"))
-    {
-        Some("nonsense")
-    } else if search_word_digits_then(text, starts(b"fs"))
-        || search_word_digits_then(text, |rest| {
-            rest.len() >= 6
-                && matches!(rest[0], b'F' | b'f')
-                && rest[1] == b's'
-                && matches!(rest[2], b'T' | b't')
-                && &rest[3..5] == b"er"
-                && rest[5].is_ascii_digit()
-        })
-    {
-        Some("frameshift")
-    } else if search_word_digits_then(text, starts(b"delins")) {
-        Some("delins")
-    } else if search_word_digits_then(text, starts(b"del")) {
-        Some("deletion")
-    } else if search_word_digits_then(text, starts(b"dup"))
-        || search_word_digits_then(text, starts(b"ins"))
-    {
-        Some("insertion_type")
-    } else if search_missense(text) {
-        Some("missense")
-    } else {
-        None
-    };
-    Ok(kind)
 }
 
 // ------------------------------------------------------------------ check_splice_pathogenic
@@ -687,10 +582,15 @@ pub(crate) fn table_transcripts(table: &Table) -> Result<HashSet<String>> {
 }
 
 /// `PS1_PM5_criteria(df, clinvar_aa_dict, clinvar_splice_dict, ps3_clinvar_patho,
-/// pvs1_criteria, threads, spliceai_cutoff)`: `(PS1, PM5)`, int64 strengths.
+/// pvs1_criteria, threads, spliceai_cutoff)`: `(PS1, PM5)`, int64 strengths. PS1 is Python's;
+/// PM5 is the owner's rules (`acmg_pm5_residue_rules`) over `pm5_index`, given only where PS1
+/// is 0 and the row has no identical confident ClinVar change, and to a truncating variant only
+/// where PVS1 is 0. `pm5_rule` (handed on, not a table column) names the rule of each PM5.
 pub(crate) fn ps1_pm5_criteria(
     table: &Table,
     known: &ClinvarKnownVariants,
+    pm5_index: &Pm5Index,
+    gain_of_function: &mut dyn GainOfFunction,
     pvs1_criteria: &[i64],
     threads: i64,
     spliceai_cutoff: f64,
@@ -712,7 +612,6 @@ pub(crate) fn ps1_pm5_criteria(
         .collect();
 
     let mut ps1_eligible = vec![false; rows];
-    let mut pm5_eligible = vec![false; rows];
     let mut splice_fallback = vec![false; rows];
     for row in 0..rows {
         let found = known.amino_acid.get(&feature[row]);
@@ -720,18 +619,6 @@ pub(crate) fn ps1_pm5_criteria(
         let change: Rc<str> = Rc::from(hgvsp[row].as_str());
         ps1_eligible[row] =
             found.is_some_and(|found| found.same_change.contains(&(position.clone(), change)));
-        let kind = if no_hgvsp[row] {
-            None
-        } else {
-            variant_type_of_hgvsp(&hgvsp[row])?
-        };
-        let residue = match (found, kind) {
-            (Some(found), Some(kind)) => found.same_residue.contains(&(position.clone(), kind)),
-            _ => false,
-        };
-        // `str.contains('synonymous')` on the str values.
-        let synonymous = consequence[row].contains("synonymous");
-        pm5_eligible[row] = residue && !synonymous && !ps1_eligible[row];
         let in_clinvar = found.is_some() || known.splice.contains_key(&feature[row]);
         let position_known = found.is_some_and(|found| found.positions.contains(&position));
         splice_fallback[row] = in_clinvar && (no_hgvsp[row] || !position_known);
@@ -789,6 +676,7 @@ pub(crate) fn ps1_pm5_criteria(
 
     let mut ps1 = vec![0_i64; rows];
     let mut pm5 = vec![0_i64; rows];
+    let mut pm5_rules: Vec<Option<String>> = vec![Some(String::new()); rows];
     for row in 0..rows {
         let splice = splice_results[row];
         if ps1_eligible[row] || splice == SpliceMatch::Ps1 {
@@ -801,21 +689,43 @@ pub(crate) fn ps1_pm5_criteria(
         if clnsig_pathogenic[row] && high_review[row] {
             ps1[row] = 0;
         }
-        if pm5_eligible[row] && ps1[row] == 0 {
-            pm5[row] = 2;
+        if ps1[row] != 0 || ps1_eligible[row] {
+            continue;
+        }
+        let Some(query) = protein_change(&consequence[row], &raw_pp[row], &hgvsp[row]) else {
+            continue;
+        };
+        if query.kind.truncating() && pvs1_criteria[row] > 0 {
+            continue;
+        }
+        let query_hgvsp = (!no_hgvsp[row]).then_some(hgvsp[row].as_str());
+        for entry in pm5_index.entries(&feature[row]) {
+            if let Some(rule) = pm5_rule(entry, &query, query_hgvsp, gain_of_function) {
+                pm5[row] = 2;
+                pm5_rules[row] = Some(rule.label().to_owned());
+                break;
+            }
         }
     }
     Ok(StepOutput {
         criteria: vec![("PS1", Column::Int(ps1)), ("PM5", Column::Int(pm5))],
-        ..StepOutput::default()
+        columns: Vec::new(),
+        passed_on: vec![("pm5_rule".to_owned(), Column::Text(pm5_rules))],
     })
 }
 
 /// `priva acmg-step acmg_ps1_pm5_known_variant <function>`:
 ///
 /// - `PS1_PM5_criteria`, options `clinvar_aa_dict_pkl`, `clinvar_splice_dict_pkl`,
-///   `pvs1_criteria` (list of ints), `threads` (default 10), `spliceai_cutoff` (default 0.5):
-///   a frame of `PS1`, `PM5` (int64);
+///   `clinvar_pm5_index`, `pvs1_criteria` (list of ints), `threads` (default 10),
+///   `spliceai_cutoff` (default 0.5), and gain of function either as `gof_hgvsp` (a list of
+///   HGVSp) or from `mechanism_json` with `symbols` (the hub's resolutions, as
+///   `gene_mechanism_variants` takes them) and `assembly` (default hg38): a frame of `PS1`,
+///   `PM5` (int64) and `pm5_rule` (text);
+/// - `build_pm5_index`, options `vcf` and `index`: writes the PM5 index of the VEP-annotated
+///   ClinVar VCF; a frame of its row count;
+/// - `pm5_gain_of_function` on a frame of `symbol`, `hgvsp`, `hgvsc`, `chrom`, `pos`, `ref`,
+///   `alt` (text), options `mechanism_json`, `symbols`, `assembly`: a frame of `gof` (bool);
 /// - `check_splice_pathogenic`, options `clinvar_splice_dict_pkl` (and an amino-acid pickle,
 ///   read but unused), `pvs1_criteria`, `spliceai_cutoff`: a frame of `result` (text: `False`,
 ///   `PS1`, `PS1_Moderate` or `PS1_Supporting`), one per row, each row given the records of its
@@ -836,9 +746,102 @@ pub(crate) fn run_harness(function: &str, call: &HarnessCall) -> Result<Table> {
     match function {
         "PS1_PM5_criteria" => {
             let known = load()?;
+            let pm5_index = Pm5Index::read(
+                harness_options::required_text(options, "clinvar_pm5_index")?,
+                &table_transcripts(table)?,
+            )?;
             let threads = harness_options::float(options, "threads")?.unwrap_or(10.0) as i64;
-            let output = ps1_pm5_criteria(table, &known, &pvs1, threads, cutoff)?;
-            Ok(harness_options::criteria_frame(&output, table.rows))
+            let output = match options.get("gof_hgvsp") {
+                Some(crate::json_text::Json::Array(items)) => {
+                    let listed = items
+                        .iter()
+                        .map(|item| item.as_str().map(str::to_owned))
+                        .collect::<Option<HashSet<String>>>()
+                        .ok_or_else(|| invalid("gof_hgvsp must be a list of texts"))?;
+                    let mut gain_of_function = ListedGainOfFunction(listed);
+                    ps1_pm5_criteria(
+                        table,
+                        &known,
+                        &pm5_index,
+                        &mut gain_of_function,
+                        &pvs1,
+                        threads,
+                        cutoff,
+                    )?
+                }
+                _ => {
+                    let resolver = CapturedResolver::from_options(options)?;
+                    let mut gain_of_function = CuratedGainOfFunction::new(
+                        harness_options::required_text(options, "mechanism_json")?,
+                        &resolver,
+                        harness_options::text(options, "assembly")?.unwrap_or("hg38"),
+                    );
+                    ps1_pm5_criteria(
+                        table,
+                        &known,
+                        &pm5_index,
+                        &mut gain_of_function,
+                        &pvs1,
+                        threads,
+                        cutoff,
+                    )?
+                }
+            };
+            let mut frame = harness_options::criteria_frame(&output, table.rows);
+            frame.names.push("pm5_rule".to_owned());
+            frame
+                .columns
+                .push(output.passed_on("pm5_rule").cloned().expect("pm5_rule"));
+            Ok(frame)
+        }
+        "build_pm5_index" => {
+            let rows = build_pm5_index(
+                harness_options::required_text(options, "vcf")?,
+                harness_options::required_text(options, "index")?,
+            )?;
+            Ok(harness_options::frame(
+                vec![("rows".to_owned(), Column::Int(vec![rows as i64]))],
+                1,
+            ))
+        }
+        "pm5_gain_of_function" => {
+            let resolver = CapturedResolver::from_options(options)?;
+            let mut gain_of_function = CuratedGainOfFunction::new(
+                harness_options::required_text(options, "mechanism_json")?,
+                &resolver,
+                harness_options::text(options, "assembly")?.unwrap_or("hg38"),
+            );
+            let text = |name: &str, row: usize| -> Result<String> {
+                Ok(match table.column(name)?.cell(row) {
+                    Cell::Text(text) => text.to_owned(),
+                    _ => String::new(),
+                })
+            };
+            let mut flags = Vec::with_capacity(table.rows);
+            for row in 0..table.rows {
+                let entry = Pm5Entry {
+                    change: ProteinChange {
+                        kind: ChangeKind::Missense,
+                        first: 1,
+                        last: 1,
+                    },
+                    hgvsp: text("hgvsp", row)?,
+                    escapes_nmd: false,
+                    symbol: text("symbol", row)?,
+                    hgvsc: text("hgvsc", row)?,
+                    genomic: [
+                        text("chrom", row)?,
+                        text("pos", row)?,
+                        text("ref", row)?,
+                        text("alt", row)?,
+                    ],
+                };
+                flags.push(gain_of_function.is_gain_of_function(&entry));
+            }
+            Ok(harness_options::frame(
+                vec![("gof".to_owned(), Column::Bool(flags))],
+                table.rows,
+            ))
         }
         "check_splice_pathogenic" => {
             let known = load()?;
@@ -900,34 +903,6 @@ pub(crate) fn run_harness(function: &str, call: &HarnessCall) -> Result<Table> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn variant_types_follow_the_python_patterns() {
-        let kind = |text: &str| variant_type_of_hgvsp(text).unwrap();
-        assert_eq!(kind("ENSP1.1:p.Arg123Ter"), Some("nonsense"));
-        assert_eq!(kind("p.Arg123*"), Some("nonsense"));
-        assert_eq!(kind("p.R1Ter"), Some("nonsense"));
-        // `\w+\d+` needs two characters, the last a digit.
-        assert_eq!(kind("p.1Ter"), None);
-        // The patterns need a digit right before "fs", so VEP's usual frameshift HGVSp
-        // (an amino acid between the position and "fs") is no frameshift to Python either.
-        assert_eq!(kind("p.Asn3264LeufsTer12"), None);
-        assert_eq!(kind("p.Gly123fs"), Some("frameshift"));
-        assert_eq!(kind("p.Gly123FsTer5"), Some("frameshift"));
-        assert_eq!(kind("p.Gly123FsTer"), None);
-        assert_eq!(kind("p.Ala123delinsGly"), Some("delins"));
-        assert_eq!(kind("p.Ala123_Gly125del"), Some("deletion"));
-        assert_eq!(kind("p.Ala123dup"), Some("insertion_type"));
-        assert_eq!(kind("p.Ala123_Gly124insTrp"), Some("insertion_type"));
-        assert_eq!(kind("p.Ala123Gly"), Some("missense"));
-        assert_eq!(kind("p.Ala123Gly\n"), Some("missense"));
-        assert_eq!(kind("p.Ala123Gly\n\n"), None);
-        assert_eq!(kind("p.Ala123="), None);
-        assert_eq!(kind("p.Leu12%3D"), None);
-        assert_eq!(kind("x:p.Ala123Gly:p.Arg5Ter"), Some("nonsense"));
-        assert_eq!(kind("p.Ala123Gly p.Arg1Cys"), Some("missense"));
-        assert!(variant_type_of_hgvsp("p.Ala١٢٣Gly").is_err());
-    }
 
     #[test]
     fn gene_level_test_tokenizes_clnsig() {

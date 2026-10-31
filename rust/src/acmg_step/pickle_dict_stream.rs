@@ -357,12 +357,18 @@ impl FetchedSlots {
     }
 }
 
-/// What the first pass finds: the memo slots read back, and the byte offsets of the opcodes
-/// that push the top-level keys, in order.
+/// What the first pass finds: the memo slots read back, the byte offsets of the opcodes that
+/// push the top-level keys, in order, and whether every slot read back holds text. Only then can
+/// the values of keys that are not kept be walked without building them (a string read back is
+/// still built there; a shared container would have to be built whole).
 struct FirstPass {
     fetched: FetchedSlots,
     key_offsets: Vec<u64>,
+    skippable: bool,
 }
+
+/// Marks, in the first pass's stack of opcode offsets, an item that is text.
+const TEXT_ITEM: u64 = 1 << 63;
 
 fn underflow() -> Box<dyn std::error::Error> {
     invalid("the pickle takes a value from an empty stack")
@@ -374,6 +380,7 @@ fn underflow() -> Box<dyn std::error::Error> {
 fn first_pass(path: &str) -> Result<FirstPass> {
     let mut stream = open(path)?;
     let mut fetched = FetchedSlots(Vec::new());
+    let mut text_slots = FetchedSlots(Vec::new());
     let mut key_offsets = Vec::new();
     let mut starts: Vec<u64> = Vec::new();
     let mut marks: Vec<usize> = Vec::new();
@@ -390,9 +397,14 @@ fn first_pass(path: &str) -> Result<FirstPass> {
                 stream.unsigned(8)?;
             }
             b'.' => {
+                let skippable =
+                    fetched.0.iter().enumerate().all(|(word, bits)| {
+                        bits & !text_slots.0.get(word).copied().unwrap_or(0) == 0
+                    });
                 return Ok(FirstPass {
                     fetched,
                     key_offsets,
+                    skippable,
                 });
             }
             b'(' => marks.push(starts.len()),
@@ -422,7 +434,7 @@ fn first_pass(path: &str) -> Result<FirstPass> {
                     _ => 8,
                 })?;
                 stream.skip(length)?;
-                starts.push(offset);
+                starts.push(offset | TEXT_ITEM);
             }
             b'a' => {
                 starts.pop().ok_or_else(underflow)?;
@@ -432,7 +444,7 @@ fn first_pass(path: &str) -> Result<FirstPass> {
                     return Err(underflow());
                 }
                 if root_made && starts.len() == 3 {
-                    key_offsets.push(starts[1]);
+                    key_offsets.push(starts[1] & !TEXT_ITEM);
                 }
                 starts.truncate(starts.len() - 2);
             }
@@ -444,7 +456,12 @@ fn first_pass(path: &str) -> Result<FirstPass> {
                     return Err(invalid("the pickle's MARK lies above the stack"));
                 }
                 if opcode == b'u' && root_made && mark == 1 {
-                    key_offsets.extend(starts[mark..].iter().step_by(2));
+                    key_offsets.extend(
+                        starts[mark..]
+                            .iter()
+                            .step_by(2)
+                            .map(|start| start & !TEXT_ITEM),
+                    );
                 }
                 starts.truncate(mark);
                 if opcode == b't' {
@@ -459,13 +476,17 @@ fn first_pass(path: &str) -> Result<FirstPass> {
                 starts.truncate(starts.len() - count);
                 starts.push(offset);
             }
-            0x94 => next_slot += 1,
-            b'q' | b'r' => {
-                let slot = stream.unsigned(if opcode == b'q' { 1 } else { 4 })?;
-                if slot != next_slot {
-                    return Err(invalid(format!(
-                        "the pickle's BINPUT at byte {offset} names memo slot {slot} out of order"
-                    )));
+            0x94 | b'q' | b'r' => {
+                if opcode != 0x94 {
+                    let slot = stream.unsigned(if opcode == b'q' { 1 } else { 4 })?;
+                    if slot != next_slot {
+                        return Err(invalid(format!(
+                            "the pickle's BINPUT at byte {offset} names memo slot {slot} out of order"
+                        )));
+                    }
+                }
+                if starts.last().is_some_and(|start| start & TEXT_ITEM != 0) {
+                    text_slots.insert(next_slot);
                 }
                 next_slot += 1;
             }
@@ -477,7 +498,11 @@ fn first_pass(path: &str) -> Result<FirstPass> {
                     )));
                 }
                 fetched.insert(slot);
-                starts.push(offset);
+                starts.push(if text_slots.contains(slot) {
+                    offset | TEXT_ITEM
+                } else {
+                    offset
+                });
             }
             _ => return Err(refused(opcode, offset)),
         }
@@ -551,6 +576,7 @@ pub(crate) fn visit_top_level_dict(
     let FirstPass {
         fetched,
         key_offsets,
+        skippable,
     } = first_pass(path)?;
     let mut stream = open(path)?;
     let mut stack: Vec<Slot> = Vec::new();
@@ -693,7 +719,11 @@ pub(crate) fn visit_top_level_dict(
                             keys.insert(key.clone());
                             match value {
                                 Slot::Skipped => {}
-                                Slot::Value(item) => visit(key, item)?,
+                                Slot::Value(item) => {
+                                    if keep(&key) {
+                                        visit(key, item)?;
+                                    }
+                                }
                                 Slot::Root => return Err(misplaced(&value, offset)),
                             }
                         }
@@ -762,7 +792,7 @@ pub(crate) fn visit_top_level_dict(
             next_key += 1;
             match stack.last() {
                 Some(Slot::Value(Item::Str(key))) if stack.len() == stack_before + 1 => {
-                    skipping = !keep(key);
+                    skipping = skippable && !keep(key);
                 }
                 // Not text: SETITEMS refuses it with its type.
                 _ => skipping = false,
@@ -875,6 +905,16 @@ mod tests {
         assert_eq!(count, 2);
         let (seen, count) = collect_kept(&path, |_| false).unwrap();
         assert!(seen.is_empty());
+        assert_eq!(count, 2);
+    }
+
+    #[test]
+    fn builds_everything_when_a_container_is_shared() {
+        // t = (0.5,); pickle.dumps({"T1": t, "T2": t}, protocol=4): T2 reads T1's tuple back.
+        let bytes = b"\x80\x04\x95\x1c\x00\x00\x00\x00\x00\x00\x00}\x94(\x8c\x02T1\x94G?\xe0\x00\x00\x00\x00\x00\x00\x85\x94\x8c\x02T2\x94h\x02u.";
+        let path = temporary("shared_tuple", bytes);
+        let (seen, count) = collect_kept(&path, |key| key == "T2").unwrap();
+        assert_eq!(seen, vec![("T2".to_owned(), "(0.5)".to_owned())]);
         assert_eq!(count, 2);
     }
 

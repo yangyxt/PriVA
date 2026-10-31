@@ -35,6 +35,7 @@ pub(crate) mod acmg_scoring;
 pub(crate) mod acmg_variant_mechanism;
 pub(crate) mod gene_mechanism_variants;
 // T4: null variants and known variants.
+pub(crate) mod acmg_pm5_residue_rules;
 pub(crate) mod acmg_ps1_pm5_known_variant;
 pub(crate) mod acmg_pvs1_null_variant;
 pub(crate) mod alternative_start_codon;

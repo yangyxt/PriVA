@@ -815,23 +815,6 @@ pub(crate) fn sort_and_rank_variants(
     fam_name: Option<&str>,
     options: &RankingOptions<'_>,
 ) -> Result<Table> {
-    sort_and_rank_variants_with(table, ped, fam_name, options, &compute_control_common)
-}
-
-/// What writes `control_common` and `control_common_index` into the ranked rows
-/// (`compute_control_common(df, proband)`).
-pub(crate) type ControlCommon<'a> = &'a dyn Fn(&mut Table, Option<&str>) -> Result<()>;
-
-/// `sort_and_rank_variants` with the control-common step taken from `control_common`: the
-/// step's own `compute_control_common`, or, in the orchestrator's recorded comparison while
-/// `stats` (thread T5) is not in the crate, the columns a Python run wrote.
-pub(crate) fn sort_and_rank_variants_with(
-    table: &Table,
-    ped: Option<&Table>,
-    fam_name: Option<&str>,
-    options: &RankingOptions<'_>,
-    control_common: ControlCommon<'_>,
-) -> Result<Table> {
     // R1: drop the stale columns, copy the score, keep the protein-coding rows.
     let mut df = table.clone();
     for stale in ["haplo_insuf_index", "zygosity_inheritance_mechanism_index"] {
@@ -853,7 +836,7 @@ pub(crate) fn sort_and_rank_variants_with(
     let (proband, male, female, proband_het) = pedigree_context(&df, ped, fam_name)?;
 
     // Control-common penalty (R3 multiplies it in).
-    control_common(&mut df, proband.as_deref())?;
+    compute_control_common(&mut df, proband.as_deref())?;
     let mut sort_index = float_values(&df, "sort_index")?;
     let control_index = float_values(&df, "control_common_index")?;
     for row in 0..rows {

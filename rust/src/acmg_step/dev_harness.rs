@@ -30,7 +30,7 @@ const USAGE: &str = "usage: priva acmg-step table read --input TSV --kwargs JSON
        priva acmg-step MODULE FUNCTION --input FRAME --output FRAME [--options JSON]";
 
 /// The modules `priva acmg-step MODULE FUNCTION` reaches, by Python script name.
-const MODULES: [(&str, HarnessEntry); 26] = [
+const MODULES: [(&str, HarnessEntry); 27] = [
     ("acmg_consequence", acmg_consequence::run_harness),
     ("stats", stats::run_harness),
     ("acmg_criteria_assign", acmg_criteria_assign::run_harness),

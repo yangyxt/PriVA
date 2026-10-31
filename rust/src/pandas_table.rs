@@ -735,7 +735,7 @@ fn precise_xstrtod(token: &str) -> Option<f64> {
 
 /// A float token as pandas reads it: `precise_xstrtod`, or one of the
 /// infinity spellings (any case, no blanks).
-fn float_token(token: &str) -> Option<f64> {
+pub(crate) fn float_token(token: &str) -> Option<f64> {
     if let Some(value) = precise_xstrtod(token) {
         return Some(value);
     }
@@ -880,7 +880,11 @@ pub(crate) fn parse_table_with(text: &str, options: &ReadOptions) -> Result<Tabl
     };
     let mut tokens: Vec<Vec<String>> = vec![Vec::new(); width.unwrap_or(0)];
     let mut rows = 0;
+    // The most fields of any row: with `names` and `usecols` positions, pandas
+    // refuses positions that no row reaches.
+    let mut widest = 0;
     tokenize(text, options.comment, |record| {
+        widest = widest.max(record.len());
         let Some(expected) = width else {
             let header = column_names(record);
             tokens = vec![Vec::new(); header.len()];
@@ -916,6 +920,12 @@ pub(crate) fn parse_table_with(text: &str, options: &ReadOptions) -> Result<Tabl
     if let (Header::Names(given), Some(UseColumns::Positions(positions))) =
         (&options.header, &options.use_columns)
     {
+        let needed = positions.iter().max().map_or(0, |last| last + 1);
+        if rows > 0 && widest < needed {
+            return Err(invalid(format!(
+                "ParserError: Too many columns specified: expected {needed} and found {widest}"
+            )));
+        }
         let mut kept = positions.clone();
         kept.sort_unstable();
         kept.dedup();
@@ -1416,6 +1426,15 @@ mod tests {
         assert_eq!(table.names, names);
         assert_eq!(texts(&table.columns[1]), [Some("I"), Some("J")]);
         assert_eq!(texts(&table.columns[5]), [Some("2"), Some("")]);
+        // Short rows are padded when some row reaches the sixth field; when none does,
+        // pandas stops (probed on pandas 2.2.3).
+        let short_first = parse_table_with("F\tI\t0\nF\tJ\t0\t0\t2\t1\n", &options).unwrap();
+        assert_eq!(texts(&short_first.columns[5]), [Some(""), Some("1")]);
+        let error = parse_table_with("F\tI\t0\t0\t1\nF\tJ\t0\t0\t2\n", &options).unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "ParserError: Too many columns specified: expected 6 and found 5"
+        );
     }
 
     #[test]

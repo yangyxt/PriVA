@@ -14,20 +14,20 @@
 //!   (`<table without its last suffix>.acmg.tsv`, written before the posterior), the posterior,
 //!   the ranking, and the table written over the input. A failure after the matrix is written
 //!   leaves the matrix and the untouched input table, as in Python.
-//! - The hub of thread T2, the criteria of threads T3, T6 and T7 and T3's ranking are called
-//!   directly. Those of threads still converting (T4 PVS1/PS1/PM5, T5 PM2/BS1/BA1/BS2/BP5) go
-//!   through the
-//!   `pending` module below, one function each with the inputs the Python call takes; until
-//!   their thread lands they stop the step with "not converted". The comparison harness can
-//!   instead hand them the outputs a recording Python run wrote (`Source::Recorded`), so the
-//!   converted parts are compared on the real table now. The ranking's control-common step
-//!   needs T5's `stats` (`binom_cdf`, `beta_ppf`); in a recorded comparison its two columns
-//!   come from the recording too.
+//! - The hub (thread T2), the criteria of threads T3, T5, T6 and T7, `stats` (T5) and the
+//!   ranking (T3) are called directly. The functions of thread T4, still converting (the
+//!   ClinVar dictionaries, the gene summary, PVS1, PS1/PM5), go through the `pending` module
+//!   below, one function each with the inputs the Python call takes; until they land they
+//!   stop the step with "not converted". The comparison harness can instead hand them the
+//!   outputs a recording Python run wrote (`Source::Recorded`), so the converted parts are
+//!   compared on the real table now.
 //! - `read_ped`, `proband`, `am_score_dict`, `transcript_to_gene_map`, `gene_avg_am_score`,
 //!   `variant_id` and `frequency_audit` are the script's inline code; refused where pandas'
 //!   behaviour depends on odd column types (noted at each).
+use super::acmg_bs2_bp5_observation::{bp5_criteria, bs2_criteria};
 use super::acmg_consequence::vep_consq_interpret;
-use super::acmg_pm1_pp2_bp1_missense::{load_pickle, pm1_criteria, pp2_bp1_criteria};
+use super::acmg_pm1_pp2_bp1_missense::{PValues, load_pickle, pm1_criteria, pp2_bp1_criteria};
+use super::acmg_pm2_bs1_ba1_frequency::{ba1_criteria, bs1_criteria, pm2_criteria};
 use super::acmg_pm4_bp3_protein_length::pm4_bp3_criteria;
 use super::acmg_pp1_bs4_bp2_pm3_family::{bp2_pm3_criteria, bs4_criteria, pp1_criteria};
 use super::acmg_pp3_bp4_bp7_insilico::pandas_masks::python_str;
@@ -35,7 +35,7 @@ use super::acmg_pp3_bp4_bp7_insilico::{bp7_criteria, pp3_bp4_criteria};
 use super::acmg_ps2_pm6_denovo::ps2_pm6_criteria;
 use super::acmg_ps3_bs3_pp5_bp6_reported::{pp5_bp6_criteria, ps3_bs3_criteria};
 use super::acmg_scoring::{
-    RankingOptions, posterior_columns, sort_and_rank_variants_with, summarize_acmg_criteria,
+    RankingOptions, posterior_columns, sort_and_rank_variants, summarize_acmg_criteria,
 };
 use super::acmg_variant_mechanism::annotate_exact_nonlof_variants;
 use super::gene_mechanism_annotation::annotate_gene_mechanism_categories;
@@ -811,17 +811,16 @@ pub(crate) fn run_step(
         &table,
         &clinvar_gene_stat,
         &args.am_intol_domains_tsv,
-        &pending::pp2_pvalues(source)?,
+        &PValues::Scipy,
     )?;
     drop(clinvar_gene_stat);
 
     let pp3_bp4 = pp3_bp4_criteria(&table, Some(&pvs1_values), cutoffs.no_splicing_impact)?;
     let pp5_bp6 = pp5_bp6_criteria(&table, &clinvar_patho, &clinvar_benign)?;
 
-    let ba1 = pending::ba1_criteria(source, &table)?;
+    let ba1 = ba1_criteria(&table)?;
     apply_columns(&mut table, &ba1)?;
-    let pm2_output = pending::pm2_criteria(
-        source,
+    let pm2_output = pm2_criteria(
         &table,
         &args.clinvar_patho_af_stat,
         &args.clinvar_patho_exon_af_stat,
@@ -829,7 +828,7 @@ pub(crate) fn run_step(
     )?;
     apply_columns(&mut table, &pm2_output)?;
     let pm2_before = int_values(&criterion(&pm2_output, "PM2")?, "pm2_criteria")?;
-    let bs1_output = pending::bs1_criteria(source, &table, args.expected_incidence, &pm2_before)?;
+    let bs1_output = bs1_criteria(&table, args.expected_incidence, Some(&pm2_before))?;
     apply_columns(&mut table, &bs1_output)?;
     let bs1 = criterion(&bs1_output, "BS1")?;
     let component =
@@ -846,7 +845,7 @@ pub(crate) fn run_step(
     }
     let pm2 = Column::Int(pm2_values.clone());
 
-    let bs2 = pending::bs2_criteria(source, &table, &pm2_values)?;
+    let bs2 = bs2_criteria(&table, &pm2_values)?;
     apply_columns(&mut table, &bs2)?;
     let pp1 = pp1_criteria(&table, &args.pp1_vcf, &args.pp1_ped)?;
     let bs4 = match family {
@@ -858,7 +857,9 @@ pub(crate) fn run_step(
     };
     let bp5 = match args.alt_disease_vcf.as_deref() {
         Some(vcf) if !vcf.is_empty() => {
-            let output = pending::bp5_criteria(source, &table, vcf, args.threads)?;
+            // Python's process pool size; `vep_consq_interpret` has refused fewer than one.
+            let processes = usize::try_from(args.threads).map_err(|_| invalid("threads"))?;
+            let output = bp5_criteria(&table, vcf, processes)?;
             apply_columns(&mut table, &output)?;
             criterion(&output, "BP5")?
         }
@@ -935,16 +936,7 @@ pub(crate) fn run_step(
         relevant_gene_list: args.relevant_gene_list.as_deref(),
         dispensable_gene_list: args.dispensable_gene_list.as_deref(),
     };
-    let control_common = |rows: &mut Table, proband: Option<&str>| {
-        pending::compute_control_common(source, rows, proband)
-    };
-    let ranked = sort_and_rank_variants_with(
-        &table,
-        ped.as_ref(),
-        args.fam_name.as_deref(),
-        &options,
-        &control_common,
-    )?;
+    let ranked = sort_and_rank_variants(&table, ped.as_ref(), args.fam_name.as_deref(), &options)?;
     drop(table);
     write_table(Path::new(&args.anno_table), &ranked)?;
     eprintln!("INFO: annotated table written to {}", args.anno_table);
@@ -985,27 +977,22 @@ pub(crate) fn dispatch(args: &[String]) -> Result<()> {
 
 // ------------------------------------------------------------------------------ pending
 
-/// The calls into threads that are still converting their scripts (thread T4: PVS1, PS1/PM5
-/// and the ClinVar dictionaries; T5: BA1, PM2, BS1, BS2, BP5 and `stats`, which
-/// T3's `compute_control_common` in the ranking calls). Each function takes what the Python call
-/// takes. Until the thread lands, `Source::Unconverted` stops the step with "not converted";
-/// the merge replaces each body by the real call and removes the function's recorded branch.
+/// The calls into thread T4, which is still converting its scripts (the ClinVar dictionaries,
+/// `summarize_clinvar_gene_pathogenicity`, PVS1, PS1/PM5). Each function takes what the Python
+/// call takes. Until the thread lands, `Source::Unconverted` stops the step with "not
+/// converted"; the merge replaces each body by the real call and removes its recorded branch.
 ///
 /// `Source::Recorded(folder)` is for the comparison harness only (`priva acmg-step
 /// acmg_criteria_assign ACMG_criteria_assign`): a Python run of the step with these functions
 /// wrapped wrote, per function, its returned arrays (`<function>.returns.frame`) and the table
-/// columns it added or changed (`<function>.columns.frame`) and the SciPy p-values of PP2
-/// (`pvalues.json`).
+/// columns it added or changed (`<function>.columns.frame`).
 pub(crate) mod pending {
-    use super::super::acmg_pm1_pp2_bp1_missense::PValues;
     use super::super::frame_file::read_frame;
     use super::super::types::{StepOutput, not_converted};
     use super::Column;
     use crate::cli::{Result, invalid};
-    use crate::json_text::{self, Json};
     use crate::pandas_table::Table;
     use crate::pickle_reader::Value;
-    use std::collections::HashMap;
     use std::path::Path;
 
     pub(crate) enum Source<'a> {
@@ -1151,170 +1138,6 @@ pub(crate) mod pending {
                     "acmg_ps1_pm5_known_variant",
                     "PS1_PM5_criteria",
                 ))
-            }
-        }
-    }
-
-    /// `BA1_criteria(anno_df)` (T5).
-    pub(crate) fn ba1_criteria(source: &Source<'_>, table: &Table) -> Result<StepOutput> {
-        match source {
-            Source::Recorded(folder) => recorded_output(folder, "BA1_criteria", &["BA1"], &[]),
-            Source::Unconverted => {
-                let _ = table;
-                Err(not_converted("acmg_pm2_bs1_ba1_frequency", "BA1_criteria"))
-            }
-        }
-    }
-
-    /// `PM2_criteria(anno_df, clinvar_patho_af_stat, clinvar_patho_exon_af_stat,
-    /// gnomAD_extreme_rare_threshold)` (T5), with the four columns it writes.
-    pub(crate) fn pm2_criteria(
-        source: &Source<'_>,
-        table: &Table,
-        clinvar_patho_af_stat: &str,
-        clinvar_patho_exon_af_stat: &str,
-        gnomad_extreme_rare_threshold: f64,
-    ) -> Result<StepOutput> {
-        match source {
-            Source::Recorded(folder) => recorded_output(folder, "PM2_criteria", &["PM2"], &[]),
-            Source::Unconverted => {
-                let _ = (
-                    table,
-                    clinvar_patho_af_stat,
-                    clinvar_patho_exon_af_stat,
-                    gnomad_extreme_rare_threshold,
-                );
-                Err(not_converted("acmg_pm2_bs1_ba1_frequency", "PM2_criteria"))
-            }
-        }
-    }
-
-    /// `BS1_criteria(anno_df, expected_incidence=..., pm2_criteria=...,
-    /// return_frequency_components=True)` (T5): `BS1` and the three components passed on.
-    pub(crate) fn bs1_criteria(
-        source: &Source<'_>,
-        table: &Table,
-        expected_incidence: f64,
-        pm2_criteria: &[i64],
-    ) -> Result<StepOutput> {
-        match source {
-            Source::Recorded(folder) => recorded_output(
-                folder,
-                "BS1_criteria",
-                &["BS1"],
-                &[
-                    "disease_incidence_bs1",
-                    "gene_pathogenic_af_bs1",
-                    "gene_pathogenic_af_blocked_by_pm2",
-                ],
-            ),
-            Source::Unconverted => {
-                let _ = (table, expected_incidence, pm2_criteria);
-                Err(not_converted("acmg_pm2_bs1_ba1_frequency", "BS1_criteria"))
-            }
-        }
-    }
-
-    /// `BS2_criteria(anno_df, pm2_criteria)` (T5), with PM2 after the BS1 back-down.
-    pub(crate) fn bs2_criteria(
-        source: &Source<'_>,
-        table: &Table,
-        pm2_criteria: &[i64],
-    ) -> Result<StepOutput> {
-        match source {
-            Source::Recorded(folder) => recorded_output(folder, "BS2_criteria", &["BS2"], &[]),
-            Source::Unconverted => {
-                let _ = (table, pm2_criteria);
-                Err(not_converted("acmg_bs2_bp5_observation", "BS2_criteria"))
-            }
-        }
-    }
-
-    /// `BP5_criteria(anno_df, alt_disease_vcf, n_processes=threads)` (T5), with the
-    /// `alt_disease_*` columns and the rebuilt `variant_id`.
-    pub(crate) fn bp5_criteria(
-        source: &Source<'_>,
-        table: &Table,
-        alt_disease_vcf: &str,
-        threads: i64,
-    ) -> Result<StepOutput> {
-        match source {
-            Source::Recorded(folder) => recorded_output(folder, "BP5_criteria", &["BP5"], &[]),
-            Source::Unconverted => {
-                let _ = (table, alt_disease_vcf, threads);
-                Err(not_converted("acmg_bs2_bp5_observation", "BP5_criteria"))
-            }
-        }
-    }
-
-    /// Where PP2's chi-square and Fisher p-values come from: SciPy's functions in `stats`
-    /// (T5), or in a recorded comparison the p-values SciPy gave in the Python run.
-    pub(crate) fn pp2_pvalues(source: &Source<'_>) -> Result<PValues> {
-        match source {
-            Source::Unconverted => Ok(PValues::Scipy),
-            Source::Recorded(folder) => {
-                let path = folder.join("pvalues.json");
-                if !path.exists() {
-                    return Ok(PValues::Supplied(HashMap::new()));
-                }
-                let text = std::fs::read_to_string(path)?;
-                let Json::Array(entries) = json_text::parse(&text, true).map_err(invalid)? else {
-                    return Err(invalid("pvalues.json is a list"));
-                };
-                let mut values = HashMap::new();
-                for entry in entries {
-                    let Json::Array(items) = entry else {
-                        return Err(invalid("a p-value entry is a list"));
-                    };
-                    let (Some(Json::Str(test)), Some(Json::Str(bits))) =
-                        (items.first(), items.get(5))
-                    else {
-                        return Err(invalid("a p-value entry is [test, a, b, c, d, p bits]"));
-                    };
-                    let mut cells = [0i64; 4];
-                    for (position, cell) in cells.iter_mut().enumerate() {
-                        let Some(Json::Int(number)) = items.get(position + 1) else {
-                            return Err(invalid("table cells are integers"));
-                        };
-                        *cell = i64::try_from(*number)
-                            .map_err(|_| invalid("a table cell beyond 64 bits"))?;
-                    }
-                    let pvalue = f64::from_bits(
-                        u64::from_str_radix(bits, 16)
-                            .map_err(|_| invalid("p-value bits are hex"))?,
-                    );
-                    values.insert((test == "chi_square", cells), pvalue);
-                }
-                Ok(PValues::Supplied(values))
-            }
-        }
-    }
-
-    /// `compute_control_common(df, proband)` inside `sort_and_rank_variants` (T3's, calling
-    /// T5's `stats::binom_cdf` and `stats::beta_ppf`, still placeholders): in a recorded
-    /// comparison the `control_common` and `control_common_index` columns the Python run
-    /// wrote for the ranked rows. Once `stats` lands, the recorded branch goes.
-    pub(crate) fn compute_control_common(
-        source: &Source<'_>,
-        rows: &mut Table,
-        proband: Option<&str>,
-    ) -> Result<()> {
-        match source {
-            Source::Unconverted => {
-                super::super::acmg_scoring::compute_control_common(rows, proband)
-            }
-            Source::Recorded(folder) => {
-                let (_, columns) = recorded(folder, "compute_control_common")?;
-                if columns.rows != rows.rows {
-                    return Err(invalid(format!(
-                        "the recorded control-common columns have {} rows for {} ranked rows",
-                        columns.rows, rows.rows
-                    )));
-                }
-                for (name, column) in columns.names.iter().zip(columns.columns) {
-                    rows.set_column(name, column);
-                }
-                Ok(())
             }
         }
     }

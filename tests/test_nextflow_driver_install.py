@@ -34,6 +34,8 @@ bash() {
 python() {
     [[ $1 == "$SCRIPT_DIR/bootstrap_priva_rust.py" ]] || return 98
     record_call rust "$@"
+    # The helper prints its receipt; PriVA_rust_install saves the binary it names.
+    printf '{"binary": "%s"}\n' "$TEST_FOLDER/managed-priva"
     return "${RUST_STATUS:-0}"
 }
 '''
@@ -43,6 +45,7 @@ conda_install_vep() { PRIVA_INSTALL_ENV_NAME=priva_acmg; }
 priva_manual_cache_inputs() { record_call manual "$@"; return "${MANUAL_STATUS:-0}"; }
 priva_prepare_install_config() { record_call config "$@"; return "${CONFIG_STATUS:-0}"; }
 bundled_snapshot_install() { record_call bundles "$@"; return "${BUNDLES_STATUS:-0}"; }
+update_or_append_yaml() { record_call save "$@"; }
 # Stop at the next acquisition stage; no VEP/reference/model assets are used.
 reference_genome_install() { record_call reference "$@"; return 73; }
 main_install "$CONFIG"
@@ -62,6 +65,9 @@ class NextflowDriverInstallTests(unittest.TestCase):
                              vep_cache_dir=str(self.folder), vep_plugins_dir=str(self.folder),
                              vep_plugins_cachedir=str(self.folder), ref_genome="unused.fa")
         self.calls = self.folder / "calls.jsonl"
+        self.binary = self.folder / "managed-priva"
+        self.binary.write_text("#!/bin/sh\n")
+        self.binary.chmod(0o755)
 
     def run_fixture(self, body, **overrides):
         self.config.write_text(json.dumps(self.settings))
@@ -155,9 +161,10 @@ class NextflowDriverInstallTests(unittest.TestCase):
     def test_main_orders_runtimes_after_preflight_and_before_reference(self):
         result, calls = self.run_fixture(MAIN_FIXTURES)
         self.assertEqual(result.returncode, 1)  # Reference fixture intentionally stops.
-        self.assertEqual([row[0] for row in calls], ["manual", "config", "bundles", "driver", "rust", "reference"])
+        self.assertEqual([row[0] for row in calls], ["manual", "config", "bundles", "driver", "rust", "save", "reference"])
         self.assertEqual(calls[3], self.expected_driver_call())
         self.assertEqual(calls[4], self.expected_rust_call())
+        self.assertEqual(calls[5], ["save", str(self.config), "priva_binary", str(self.binary)])
         self.assertEqual(calls[-1][1:], [str(self.config)])
 
     def test_driver_failure_stops_main_before_reference_or_success(self):

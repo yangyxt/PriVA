@@ -484,6 +484,7 @@ AlphaMissense_stat() { printf 'ALPHA_STAT\n'; }
 AlphaMissense_pick_intolerant_domains() { :; }
 prepare_pm1_regions() { :; }
 ClinVar_patho_AF_stat() { printf 'CLINVAR_AF\n'; }
+ClinVar_PM5_index() { printf 'CLINVAR_PM5\n'; }
 CADD_install() { :; }
 CADD_upstream_check() { :; }
 ClinGen_deploy() { :; }
@@ -496,7 +497,7 @@ main_install "$TEST_CONFIG"
         result = subprocess.run(["bash", "-c", script, "fixture", str(ROOT / "scripts/install_utils.sh")],
                                 env=environment, capture_output=True, text=True, timeout=20)
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(result.stdout.splitlines(), ["CLINVAR_AUTO", "ALPHA_STAT", "CLINVAR_AF"])
+        self.assertEqual(result.stdout.splitlines(), ["CLINVAR_AUTO", "ALPHA_STAT", "CLINVAR_AF", "CLINVAR_PM5"])
 
 
 class ClinVarMetadataAndAcquisitionTests(unittest.TestCase):

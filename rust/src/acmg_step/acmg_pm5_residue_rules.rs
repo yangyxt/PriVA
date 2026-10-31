@@ -564,7 +564,12 @@ mod tests {
 
     #[test]
     fn index_command_takes_its_two_options_once() {
-        let args = |items: &[&str]| items.iter().map(|item| item.to_string()).collect::<Vec<_>>();
+        let args = |items: &[&str]| {
+            items
+                .iter()
+                .map(|item| item.to_string())
+                .collect::<Vec<_>>()
+        };
         let given = args(&["--output", "index.tsv.gz", "--vcf", "clinvar.vcf.gz"]);
         assert_eq!(
             index_options(&given).unwrap(),

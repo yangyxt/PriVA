@@ -14,12 +14,14 @@
 //!   (`<table without its last suffix>.acmg.tsv`, written before the posterior), the posterior,
 //!   the ranking, and the table written over the input. A failure after the matrix is written
 //!   leaves the matrix and the untouched input table, as in Python.
-//! - The criteria of threads T3, T6 and T7 are called directly. Those of threads still
-//!   converting (T2 hub, T4 PVS1/PS1/PM5, T5 PM2/BS1/BA1/BS2/BP5, T3's ranking) go through the
+//! - The criteria of threads T3, T6 and T7 and T3's ranking are called directly. Those of
+//!   threads still converting (T2 hub, T4 PVS1/PS1/PM5, T5 PM2/BS1/BA1/BS2/BP5) go through the
 //!   `pending` module below, one function each with the inputs the Python call takes; until
 //!   their thread lands they stop the step with "not converted". The comparison harness can
 //!   instead hand them the outputs a recording Python run wrote (`Source::Recorded`), so the
-//!   converted parts are compared on the real table now.
+//!   converted parts are compared on the real table now. The ranking's control-common step
+//!   needs T5's `stats` (`binom_cdf`, `beta_ppf`); in a recorded comparison its two columns
+//!   come from the recording too.
 //! - `read_ped`, `proband`, `am_score_dict`, `transcript_to_gene_map`, `gene_avg_am_score`,
 //!   `variant_id` and `frequency_audit` are the script's inline code; refused where pandas'
 //!   behaviour depends on odd column types (noted at each).
@@ -31,7 +33,9 @@ use super::acmg_pp3_bp4_bp7_insilico::pandas_masks::python_str;
 use super::acmg_pp3_bp4_bp7_insilico::{bp7_criteria, pp3_bp4_criteria};
 use super::acmg_ps2_pm6_denovo::ps2_pm6_criteria;
 use super::acmg_ps3_bs3_pp5_bp6_reported::{pp5_bp6_criteria, ps3_bs3_criteria};
-use super::acmg_scoring::{posterior_columns, summarize_acmg_criteria};
+use super::acmg_scoring::{
+    RankingOptions, posterior_columns, sort_and_rank_variants_with, summarize_acmg_criteria,
+};
 use super::acmg_variant_mechanism::annotate_exact_nonlof_variants;
 use super::types::{
     AcmgError, HarnessCall, MATRIX_AUDIT_COLUMNS, StepArguments, StepOutput, not_converted,
@@ -633,20 +637,13 @@ fn zeros(rows: usize) -> Column {
 
 // ------------------------------------------------------------------------------ the step
 
-/// Where the step ended.
-pub(crate) enum Finished {
-    /// Both outputs are written.
-    Written,
-    /// A recorded comparison stopped before the (pending) ranking; the table as it was then.
-    BeforeRanking(Table),
-}
-
-/// `ACMG_criteria_assign(...)` with the parsed command line, in the script's order.
+/// `ACMG_criteria_assign(...)` with the parsed command line, in the script's order; the
+/// final table, which is also written over the input.
 pub(crate) fn run_step(
     args: &StepArguments,
     cutoffs: &Cutoffs,
     source: &pending::Source<'_>,
-) -> Result<Finished> {
+) -> Result<Table> {
     let read = read_table(Path::new(&args.anno_table))?;
     let kept = pandas_polars::drop_duplicates_first(&read, None)?;
     let mut table = if kept.len() == read.rows {
@@ -896,19 +893,28 @@ pub(crate) fn run_step(
     table.set_column("ACMG_quant_score", scores);
     table.set_column("ACMG_class", classes);
 
-    let ranked = match pending::sort_and_rank_variants(
-        source,
-        table,
+    let options = RankingOptions {
+        pext_tissues: &args.pext_tissues,
+        pext_low_expression_cutoff: args.pext_low_expression_cutoff,
+        pext_penalty_floor: args.pext_penalty_floor,
+        pext_penalty_shape: args.pext_penalty_shape,
+        relevant_gene_list: args.relevant_gene_list.as_deref(),
+        dispensable_gene_list: args.dispensable_gene_list.as_deref(),
+    };
+    let control_common = |rows: &mut Table, proband: Option<&str>| {
+        pending::compute_control_common(source, rows, proband)
+    };
+    let ranked = sort_and_rank_variants_with(
+        &table,
         ped.as_ref(),
         args.fam_name.as_deref(),
-        args,
-    )? {
-        pending::Ranked::Table(ranked) => ranked,
-        pending::Ranked::Stopped(table) => return Ok(Finished::BeforeRanking(table)),
-    };
+        &options,
+        &control_common,
+    )?;
+    drop(table);
     write_table(Path::new(&args.anno_table), &ranked)?;
     eprintln!("INFO: annotated table written to {}", args.anno_table);
-    Ok(Finished::Written)
+    Ok(ranked)
 }
 
 /// The step's exit for an error: Python's uncaught exception ends with status 1.
@@ -946,10 +952,10 @@ pub(crate) fn dispatch(args: &[String]) -> Result<()> {
 // ------------------------------------------------------------------------------ pending
 
 /// The calls into threads that are still converting their scripts (thread T2: the hub; T4:
-/// PVS1, PS1/PM5 and the ClinVar dictionaries; T5: BA1, PM2, BS1, BS2, BP5 and `stats`; T3:
-/// `sort_and_rank_variants`). Each function takes what the Python call takes. Until the thread
-/// lands, `Source::Unconverted` stops the step with "not converted"; the merge replaces each
-/// body by the real call and removes the function's recorded branch.
+/// PVS1, PS1/PM5 and the ClinVar dictionaries; T5: BA1, PM2, BS1, BS2, BP5 and `stats`, which
+/// T3's `compute_control_common` in the ranking calls). Each function takes what the Python call
+/// takes. Until the thread lands, `Source::Unconverted` stops the step with "not converted";
+/// the merge replaces each body by the real call and removes the function's recorded branch.
 ///
 /// `Source::Recorded(folder)` is for the comparison harness only (`priva acmg-step
 /// acmg_criteria_assign ACMG_criteria_assign`): a Python run of the step with these functions
@@ -960,7 +966,7 @@ pub(crate) mod pending {
     use super::super::acmg_pm1_pp2_bp1_missense::PValues;
     use super::super::frame_file::read_frame;
     use super::super::gene_mechanism_variants::CapturedResolver;
-    use super::super::types::{StepArguments, StepOutput, SymbolResolver, not_converted};
+    use super::super::types::{StepOutput, SymbolResolver, not_converted};
     use super::Column;
     use crate::cli::{Result, invalid};
     use crate::json_text::{self, Json};
@@ -992,13 +998,6 @@ pub(crate) mod pending {
         pub(crate) tranx_exon_domain_map_pkl: &'a str,
         pub(crate) proband_gt_col: Option<&'a str>,
         pub(crate) cds_fasta_path: Option<&'a str>,
-    }
-
-    /// What `sort_and_rank_variants` gave.
-    pub(crate) enum Ranked {
-        Table(Table),
-        /// A recorded comparison stops here until T3's ranking lands.
-        Stopped(Table),
     }
 
     /// The returned arrays and changed columns a recording Python run wrote for `function`.
@@ -1324,20 +1323,31 @@ pub(crate) mod pending {
         }
     }
 
-    /// `sort_and_rank_variants(anno_df, ped_df, fam_name, pext_tissues=..., ...,
-    /// relevant_gene_list=..., dispensable_gene_list=...)` (T3).
-    pub(crate) fn sort_and_rank_variants(
+    /// `compute_control_common(df, proband)` inside `sort_and_rank_variants` (T3's, calling
+    /// T5's `stats::binom_cdf` and `stats::beta_ppf`, still placeholders): in a recorded
+    /// comparison the `control_common` and `control_common_index` columns the Python run
+    /// wrote for the ranked rows. Once `stats` lands, the recorded branch goes.
+    pub(crate) fn compute_control_common(
         source: &Source<'_>,
-        table: Table,
-        ped: Option<&Table>,
-        fam_name: Option<&str>,
-        args: &StepArguments,
-    ) -> Result<Ranked> {
+        rows: &mut Table,
+        proband: Option<&str>,
+    ) -> Result<()> {
         match source {
-            Source::Recorded(_) => Ok(Ranked::Stopped(table)),
             Source::Unconverted => {
-                let _ = (table, ped, fam_name, args);
-                Err(not_converted("acmg_scoring", "sort_and_rank_variants"))
+                super::super::acmg_scoring::compute_control_common(rows, proband)
+            }
+            Source::Recorded(folder) => {
+                let (_, columns) = recorded(folder, "compute_control_common")?;
+                if columns.rows != rows.rows {
+                    return Err(invalid(format!(
+                        "the recorded control-common columns have {} rows for {} ranked rows",
+                        columns.rows, rows.rows
+                    )));
+                }
+                for (name, column) in columns.names.iter().zip(columns.columns) {
+                    rows.set_column(name, column);
+                }
+                Ok(())
             }
         }
     }
@@ -1509,7 +1519,7 @@ fn parsed_frame(argv: &[String]) -> Result<Table> {
 ///   back-down and the five audit columns;
 /// - `ACMG_criteria_assign`, options `argv` and `substitutes` (the folder of a recording
 ///   Python run): the step with the pending functions taken from the recording; the result is
-///   the table where the step stopped (before the ranking while it is pending).
+///   the final table (also written over `--anno_table`, with the matrix beside it).
 pub(crate) fn run_harness(function: &str, call: &HarnessCall) -> Result<Table> {
     let options = &call.options;
     let single = |name: &str, column: Column| Table {
@@ -1564,10 +1574,7 @@ pub(crate) fn run_harness(function: &str, call: &HarnessCall) -> Result<Table> {
             let folder = PathBuf::from(text_option(options, "substitutes")?);
             let cutoffs = cutoffs_for_config(parsed.config.as_deref().map(Path::new))
                 .map_err(|failure| invalid(format!("SpliceAI cutoffs: {failure:?}")))?;
-            match run_step(&parsed, &cutoffs, &pending::Source::Recorded(&folder))? {
-                Finished::BeforeRanking(table) => Ok(table),
-                Finished::Written => read_table(Path::new(&parsed.anno_table)),
-            }
+            run_step(&parsed, &cutoffs, &pending::Source::Recorded(&folder))
         }
         _ => Err(not_converted("acmg_criteria_assign", function)),
     }

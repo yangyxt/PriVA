@@ -20,13 +20,13 @@
 //! `pandas_masks`. The criterion uses T3's `variant_mechanism_masks` for `is_exact_gof` and the
 //! hub's `gene_lof_mechanism_history` column.
 //!
-//! Python's `truncate_fraction` (acmg_consequence.py, thread T1) is copied here as
-//! `truncated_fraction` until that module lands; the integration replaces the copy with it.
+//! Python's `truncate_fraction` is `acmg_consequence::truncate_fraction` (thread T1).
 //!
 //! Refused (exit 1 with a message): a `span_functional_domains` value that is not a boolean
 //! (numpy would make a float or text array of it and `~` would raise or act bitwise), text
 //! with non-ASCII digits where Python's `int()`, `isdigit()` or `\d` would read them, a range
 //! of more than a million exons, and the column types the shared mask rules refuse.
+use super::acmg_consequence::truncate_fraction;
 use super::acmg_pp3_bp4_bp7_insilico::harness_options;
 use super::acmg_pp3_bp4_bp7_insilico::pandas_masks::{
     Mask, bool_input, bool_input_fillna_false, numeric_column, python_str_filled, text_contains,
@@ -780,110 +780,6 @@ fn functional_domains_of_rows(
     Ok((functional, frequent))
 }
 
-// ---------------------------------------------------------------- truncate_fraction
-
-/// The number `pd.to_numeric(text, errors="coerce")` reads (probe of 2026-10-30: C white space
-/// around it, an optional sign, decimal digits with an optional point and exponent, `inf`,
-/// `infinity`, `nan`); NaN for anything else. Exponents past 300 are refused.
-fn to_numeric(text: &str) -> Result<f64> {
-    let trimmed = text.trim_matches(|c| matches!(c, ' ' | '\t' | '\n' | '\u{b}' | '\u{c}' | '\r'));
-    let unsigned = trimmed.strip_prefix(['+', '-']).unwrap_or(trimmed);
-    if matches!(
-        unsigned.to_ascii_lowercase().as_str(),
-        "inf" | "infinity" | "nan"
-    ) {
-        return Ok(trimmed
-            .to_ascii_lowercase()
-            .replace("infinity", "inf")
-            .parse()
-            .unwrap_or(f64::NAN));
-    }
-    let bytes = unsigned.as_bytes();
-    let mantissa_end = bytes
-        .iter()
-        .position(|byte| matches!(byte, b'e' | b'E'))
-        .unwrap_or(bytes.len());
-    let (mantissa, exponent) = bytes.split_at(mantissa_end);
-    let digits = mantissa.iter().filter(|byte| byte.is_ascii_digit()).count();
-    let points = mantissa.iter().filter(|byte| **byte == b'.').count();
-    let mantissa_ok = digits > 0 && points <= 1 && digits + points == mantissa.len();
-    let exponent_ok = exponent.is_empty() || {
-        let body = &exponent[1..];
-        let body = body
-            .strip_prefix(b"+")
-            .or_else(|| body.strip_prefix(b"-"))
-            .unwrap_or(body);
-        !body.is_empty() && body.iter().all(u8::is_ascii_digit)
-    };
-    if !(mantissa_ok && exponent_ok) {
-        return Ok(f64::NAN);
-    }
-    if exponent.len() > 4 || (exponent.len() == 4 && exponent[1].is_ascii_digit()) {
-        return Err(invalid(format!(
-            "pd.to_numeric({text:?}): a large exponent is not reproduced"
-        )));
-    }
-    Ok(trimmed.parse().unwrap_or(f64::NAN))
-}
-
-/// `truncate_fraction(df)` (acmg_consequence.py), copied until thread T1's module lands:
-/// for stop-gained or frameshift variants `1 - position / length`, else `span / length`, from
-/// `Protein_position` texts such as `150/500` or `150-151/500`.
-fn truncated_fraction(table: &Table) -> Result<Vec<f64>> {
-    let rows = table.rows;
-    let flags = text_contains(table, "Consequence", None, &["stop_gained", "frameshift"])?;
-    let nonsense = flags[0].or(&flags[1]);
-    let nonsense = nonsense.plain()?;
-    let column = table.column("Protein_position")?;
-    let texts = python_str_filled(column, "Protein_position", "nan")?;
-    // `str.split("/", expand=True).iloc[:, -1]`: the last column of the widest split.
-    let widest = texts
-        .iter()
-        .map(|text| text.split('/').count())
-        .max()
-        .unwrap_or(1);
-    let mut fractions = Vec::with_capacity(rows);
-    for row in 0..rows {
-        let text = &texts[row];
-        let parts: Vec<&str> = text.split('/').collect();
-        let length = if parts.len() == widest {
-            to_numeric(parts[widest - 1])?
-        } else {
-            f64::NAN
-        };
-        let position = to_numeric(
-            text.split('-')
-                .next()
-                .unwrap_or("")
-                .split('/')
-                .next()
-                .unwrap_or(""),
-        )?;
-        // `Protein_position.map(lambda x: ... if "-" in str(x) else 1)` on the raw values.
-        let span = if text.contains('-') {
-            let RowValue::Text(raw) = RowValue::of(column, row) else {
-                return Err(python_error(
-                    "AttributeError",
-                    "a Protein_position that is not text has no attribute 'split'",
-                ));
-            };
-            let range: Vec<&str> = raw.split('/').next().unwrap_or("").split('-').collect();
-            if range.len() < 2 {
-                return Err(python_error("IndexError", "list index out of range"));
-            }
-            (to_numeric(range[1])? - to_numeric(range[0])? + 1.0).abs()
-        } else {
-            1.0
-        };
-        fractions.push(if nonsense[row] {
-            1.0 - position / length
-        } else {
-            span / length
-        });
-    }
-    Ok(fractions)
-}
-
 // ---------------------------------------------------------------- PVS1_criteria
 
 /// The arguments of `PVS1_criteria` besides the table. `row_labels` are the pandas index labels
@@ -1287,7 +1183,7 @@ pub(crate) fn pvs1_criteria(table: &Table, arguments: &Pvs1Arguments) -> Result<
     assign(&mut pvs1, 3, |current| {
         escaping_intol.and(&lof).and(&below(current, 3))
     })?;
-    let fraction = truncated_fraction(table)?;
+    let fraction = truncate_fraction(table)?;
     let long_truncation = Mask::Plain(fraction.iter().map(|value| *value >= 0.1).collect());
     let short_truncation = Mask::Plain(fraction.iter().map(|value| *value < 0.1).collect());
     let escaping_base = escaping.and(&lof).and(&not_intol).and(&rare);
@@ -1646,33 +1542,6 @@ mod tests {
             cache.by_exon_text(transcript, RowValue::Float(f64::NAN)),
             0.0
         );
-    }
-
-    #[test]
-    fn to_numeric_follows_the_pandas_probe() {
-        let read = |text: &str| to_numeric(text).unwrap();
-        for (text, expected) in [
-            ("150", 150.0),
-            (" 150", 150.0),
-            ("150\n", 150.0),
-            ("+150", 150.0),
-            ("-150", -150.0),
-            ("1e2", 100.0),
-            (".5", 0.5),
-            ("5.", 5.0),
-            ("00150", 150.0),
-            ("inf", f64::INFINITY),
-            ("-inf", f64::NEG_INFINITY),
-            ("Infinity", f64::INFINITY),
-        ] {
-            assert_eq!(read(text), expected, "{text}");
-        }
-        for text in [
-            "1_50", "", "?", "0x10", "١٥٠", "1,5", "NA", "None", "nan", "NaN", "1e", ".",
-        ] {
-            assert!(read(text).is_nan(), "{text}");
-        }
-        assert!(to_numeric("1e400").is_err());
     }
 
     #[test]

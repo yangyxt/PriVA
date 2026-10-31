@@ -25,7 +25,7 @@ import yaml
 ROOT = Path(__file__).resolve().parents[1]
 ASSEMBLIES = {"hg19": "hg19", "GRCh37": "hg19", "hg38": "hg38", "GRCh38": "hg38"}
 REQUIRED_RESOURCES = (
-    "input_vcf", "hub_cadd_file", "clinvar_aa_stat", "clinvar_splice_stat",
+    "input_vcf", "hub_cadd_file", "clinvar_aa_stat", "clinvar_splice_stat", "clinvar_pm5_index",
     "clinvar_patho_af_stat", "clinvar_patho_exon_af_stat", "clinvar_gene_stat",
     "alphamissense_tranx_domain_map", "alphamissense_intolerant_domains",
     "all_intolerant_domains", "pm1_regions_pkl", "interpro_mapping_pickle",

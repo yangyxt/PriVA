@@ -38,6 +38,7 @@ pub(crate) mod gene_mechanism_variants;
 pub(crate) mod acmg_ps1_pm5_known_variant;
 pub(crate) mod acmg_pvs1_null_variant;
 pub(crate) mod alternative_start_codon;
+pub(crate) mod pickle_dict_stream;
 // T5: allele frequency, carrier observation and statistics (and `stats`).
 pub(crate) mod acmg_bs2_bp5_observation;
 pub(crate) mod acmg_pm2_bs1_ba1_frequency;

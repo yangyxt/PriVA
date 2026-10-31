@@ -18,8 +18,8 @@
 //!
 //! The condition masks come from `acmg_variant_mechanism::variant_condition_masks`
 //! (thread T3's adapter). Every function also has a `_with` form taking the
-//! masks from elsewhere; the harness gives it the masks the Python capture
-//! computed, until T3's adapter lands.
+//! masks from elsewhere: the harness runs that form when the call names masks
+//! the Python capture computed, and the plain form (T3's adapter) otherwise.
 //!
 //! Refused (exit 1): a `chrom` column that is not text without missing values
 //! for PP1; LOF columns other than booleans for BP2/PM3 (pandas' `|` treats a
@@ -506,6 +506,13 @@ pub(crate) fn bp2_pm3_criteria_with(
     })
 }
 
+/// Whether a harness call names the masks Python computed; without them the
+/// harness runs the plain functions, which call T3's adapter.
+fn has_python_masks(call: &HarnessCall) -> bool {
+    call.options.get("condition_masks_frame").is_some()
+        || call.options.get("condition_masks_error").is_some()
+}
+
 /// The condition masks a harness call provides in place of T3's adapter: the
 /// frame Python computed (`condition_masks_frame`), or the KeyError message
 /// Python raised (`condition_masks_error`).
@@ -563,33 +570,41 @@ pub(crate) fn run_harness(function: &str, call: &HarnessCall) -> Result<Table> {
     let table = &call.table;
     match function {
         "PP1_criteria" => {
-            let masks = harness_masks(call)?;
-            let output = pp1_criteria_with(
-                table,
+            let (vcf, ped) = (
                 harness_text(call, "multi_fam_vcf")?,
                 harness_text(call, "multi_fam_ped")?,
-                &masks,
-            )?;
+            );
+            let output = if has_python_masks(call) {
+                pp1_criteria_with(table, vcf, ped, &harness_masks(call)?)?
+            } else {
+                pp1_criteria(table, vcf, ped)?
+            };
             criteria_frame(&output, table.rows)
         }
         "BS4_criteria" => {
-            let masks = harness_masks(call)?;
             let ped = harness_ped(call)?;
-            let output = bs4_criteria_with(table, &ped, harness_text(call, "fam_name")?, &masks)?;
+            let fam_name = harness_text(call, "fam_name")?;
+            let output = if has_python_masks(call) {
+                bs4_criteria_with(table, &ped, fam_name, &harness_masks(call)?)?
+            } else {
+                bs4_criteria(table, &ped, fam_name)?
+            };
             criteria_frame(&output, table.rows)
         }
         "BP2_PM3_criteria" => {
-            let masks = harness_masks(call)?;
             let ped = harness_ped(call)?;
-            let output = bp2_pm3_criteria_with(
-                table,
-                &ped,
-                &json_array(call, "pm2")?,
-                &json_array(call, "pvs1")?,
-                &json_array(call, "ps1")?,
-                &json_array(call, "ps3")?,
-                &masks,
-            )?;
+            let arrays = [
+                json_array(call, "pm2")?,
+                json_array(call, "pvs1")?,
+                json_array(call, "ps1")?,
+                json_array(call, "ps3")?,
+            ];
+            let [pm2, pvs1, ps1, ps3] = &arrays;
+            let output = if has_python_masks(call) {
+                bp2_pm3_criteria_with(table, &ped, pm2, pvs1, ps1, ps3, &harness_masks(call)?)?
+            } else {
+                bp2_pm3_criteria(table, &ped, pm2, pvs1, ps1, ps3)?
+            };
             let mut frame = criteria_frame(&output, table.rows)?;
             for (name, column) in written_columns(table, &output.columns) {
                 frame.names.push(name);

@@ -34,6 +34,7 @@ const MODULES: [(&str, HarnessEntry); 26] = [
     ("acmg_consequence", acmg_consequence::run_harness),
     ("stats", stats::run_harness),
     ("acmg_criteria_assign", acmg_criteria_assign::run_harness),
+    ("acmg_inheritance", acmg_inheritance::run_harness),
     ("clinvar_vcv", clinvar_vcv::run_harness),
     (
         "gene_mechanism_annotation",

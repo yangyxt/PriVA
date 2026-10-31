@@ -23,6 +23,7 @@ pub(crate) mod types;
 pub(crate) mod acmg_consequence;
 pub(crate) mod acmg_criteria_assign;
 // T2: gene-condition hub.
+pub(crate) mod acmg_inheritance;
 pub(crate) mod clinvar_vcv;
 pub(crate) mod gene_mechanism_annotation;
 pub(crate) mod gene_mechanism_common;

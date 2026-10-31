@@ -6,9 +6,9 @@
 //! earlier mask modules in `crate::acmg_variant_mechanism` with their pandas dtypes, and
 //! `annotate_exact_nonlof_variants` with its helpers (`_clean_text`, `_row_assembly_for_gof_lookup`,
 //! `_merge_semicolon_values`, `_ensure_exact_nonlof_columns`, `_record_exact_nonlof_match`).
-use super::gene_mechanism_variants::{
-    CapturedResolver, CuratedMatch, ExactVariantMatcher, clean, clean_text, text_option,
-};
+use super::gene_mechanism_common::{clean, clean_text};
+use super::gene_mechanism_resources::harness_resolver;
+use super::gene_mechanism_variants::{CuratedMatch, ExactVariantMatcher, text_option};
 use super::types::{AcmgError, HarnessCall, NamedMasks, SymbolResolver, not_converted};
 use crate::acmg_scoring::SourceError;
 use crate::acmg_variant_mechanism::variant_mechanism_masks::numeric_text;
@@ -46,7 +46,7 @@ pub(crate) fn run_harness(function: &str, call: &HarnessCall) -> Result<Table> {
             call.table.rows,
         )),
         "annotate_exact_nonlof_variants" => {
-            let resolver = CapturedResolver::from_options(&call.options)?;
+            let resolver = harness_resolver(&call.options)?;
             let mut table = call.table.clone();
             annotate_exact_nonlof_variants(
                 &mut table,

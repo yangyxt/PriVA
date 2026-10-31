@@ -9,18 +9,22 @@
 //! The matcher also holds the hub's `_load_mechanisms` (`mechanisms_by_symbol`), which only it
 //! uses in the step. Resolution of symbols goes through `types::SymbolResolver` (thread T2's hub).
 //!
-//! The text helpers of `gene_mechanism_common.py` this module needs (`_clean`, `_bool_value`,
-//! `_split_annotation_tokens`, `_bounded_mechanism_score`) are kept here as private functions,
-//! because `gene_mechanism_common` belongs to thread T2; they can move there at integration.
-use super::types::{
-    AcmgError, EffectInputs, HarnessCall, QueryEffect, SymbolResolver, not_converted,
+//! The text helpers of `gene_mechanism_common.py` (`_clean`, `_bool_value`, the key helpers) come
+//! from `gene_mechanism_common`; the harness resolves symbols with the hub's HGNC resolver
+//! (`gene_mechanism_resources::HgncResolver`, the table of option `hgnc_table`, by default the
+//! repository's).
+use super::clinvar_vcv::open_text;
+use super::gene_mechanism_common::{
+    CURATED_EXACT_MECHANISMS, bool_value, bounded_mechanism_score, clean, clean_json, clean_text,
+    genomic_match_key, json_cell, norm_hgvsp, normalize_assembly, normalize_sequence_mechanism,
+    python_path_text, python_str, requested_genomic_key_types, split_annotation_tokens, truthy,
 };
+use super::gene_mechanism_resources::harness_resolver;
+use super::types::{EffectInputs, HarnessCall, QueryEffect, SymbolResolver, not_converted};
 use crate::cli::{Result, invalid};
 use crate::json_text::{self, Json, quote};
 use crate::pandas_table::{Cell, Column, Table};
-use crate::python_text::{float_repr, parse_float, python_strip};
 use std::collections::{HashMap, HashSet};
-use std::io::Read;
 
 /// `priva acmg-step gene_mechanism_variants <function>`: runs one converted function on a frame.
 pub(crate) fn run_harness(function: &str, call: &HarnessCall) -> Result<Table> {
@@ -111,61 +115,6 @@ fn infer_frame(table: &Table) -> Result<Table> {
     })
 }
 
-/// The symbol resolutions a Python capture recorded (`options["symbols"]`: cleaned
-/// symbol to `[hub._try_resolve_symbol(s), hub.resolve_symbol(s)]`), for comparing
-/// the matcher before thread T2's hub resolver is in the crate. Harness only.
-pub(crate) struct CapturedResolver {
-    symbols: HashMap<String, (String, String)>,
-}
-
-impl CapturedResolver {
-    pub(crate) fn from_options(options: &Json) -> Result<CapturedResolver> {
-        let mut symbols = HashMap::new();
-        let Some(Json::Object(items)) = options.get("symbols") else {
-            return Err(invalid(
-                "options need \"symbols\": {symbol: [tried, resolved]}",
-            ));
-        };
-        for (symbol, pair) in items {
-            match pair {
-                Json::Array(pair) if pair.len() == 2 => match (&pair[0], &pair[1]) {
-                    (Json::Str(tried), Json::Str(resolved)) => {
-                        symbols.insert(symbol.clone(), (tried.clone(), resolved.clone()));
-                    }
-                    _ => return Err(invalid("symbol resolutions must be texts")),
-                },
-                _ => return Err(invalid("each symbol needs [tried, resolved]")),
-            }
-        }
-        Ok(CapturedResolver { symbols })
-    }
-}
-
-impl SymbolResolver for CapturedResolver {
-    fn resolve_symbol(&self, gene_symbol: Cell<'_>) -> Result<String> {
-        let cleaned = clean(Some(gene_symbol));
-        if cleaned.is_empty() {
-            return Ok(String::new());
-        }
-        self.symbols
-            .get(&cleaned)
-            .map(|(_, resolved)| resolved.clone())
-            .ok_or_else(|| invalid(format!("the symbol {cleaned:?} was not captured")))
-    }
-
-    fn try_resolve_symbol(&self, gene_symbol: Cell<'_>) -> String {
-        let cleaned = clean(Some(gene_symbol));
-        if cleaned.is_empty() {
-            return cleaned;
-        }
-        match self.symbols.get(&cleaned) {
-            Some((tried, _)) => tried.clone(),
-            // Shows up as a difference rather than passing silently.
-            None => format!("<uncaptured {cleaned}>"),
-        }
-    }
-}
-
 /// The text option `name` of a harness call.
 pub(crate) fn text_option<'a>(options: &'a Json, name: &str) -> Result<&'a str> {
     options
@@ -177,7 +126,7 @@ pub(crate) fn text_option<'a>(options: &'a Json, name: &str) -> Result<&'a str> 
 /// One `match_curated_nonlof_variant` call per row of the frame (columns `gene_symbol`, `hgvsp`,
 /// `hgvsc`, `chrom`, `pos`, `ref`, `alt`, `assembly`, `key_type`; absent ones take the defaults).
 fn match_frame(call: &HarnessCall) -> Result<Table> {
-    let resolver = CapturedResolver::from_options(&call.options)?;
+    let resolver = harness_resolver(&call.options)?;
     let mut matcher =
         ExactVariantMatcher::new(text_option(&call.options, "mechanism_json")?, &resolver);
     let table = &call.table;
@@ -252,121 +201,6 @@ fn match_frame(call: &HarnessCall) -> Result<Table> {
         rows: results.len(),
     })
 }
-
-/// Python's `str(value)` of a table value (`nan` for a missing one).
-fn python_str(cell: Cell<'_>) -> String {
-    match cell {
-        Cell::Missing => "nan".to_owned(),
-        Cell::Text(text) => text.to_owned(),
-        Cell::Int(number) => number.to_string(),
-        Cell::Float(number) => float_repr(number),
-        Cell::Bool(flag) => (if flag { "True" } else { "False" }).to_owned(),
-    }
-}
-
-/// `gene_mechanism_common._clean`: the stripped text, or `""` for a missing
-/// value and the spellings `nan`, `none` and `<na>` in any case.
-pub(crate) fn clean(cell: Option<Cell<'_>>) -> String {
-    let Some(cell) = cell else {
-        return String::new();
-    };
-    clean_text(&python_str(cell))
-}
-
-/// `_clean` of a text.
-pub(crate) fn clean_text(text: &str) -> String {
-    let text = python_strip(text);
-    // Only ASCII letters lower-case to these spellings, so an ASCII comparison is Python's.
-    if ["", "nan", "none", "<na>"]
-        .iter()
-        .any(|word| text.eq_ignore_ascii_case(word))
-    {
-        String::new()
-    } else {
-        text.to_owned()
-    }
-}
-
-/// `gene_mechanism_common._bool_value`: True, a non-zero integer, or the texts
-/// `1`, `true`, `t`, `yes`, `y` in any case. A float (other than NaN, which is
-/// false) goes through its text, which is never one of those spellings.
-fn bool_value(cell: Option<Cell<'_>>) -> bool {
-    match cell {
-        None | Some(Cell::Missing) => false,
-        Some(Cell::Bool(flag)) => flag,
-        Some(Cell::Int(number)) => number != 0,
-        Some(other) => {
-            let text = clean(Some(other));
-            ["1", "true", "t", "yes", "y"]
-                .iter()
-                .any(|word| text.eq_ignore_ascii_case(word))
-        }
-    }
-}
-
-/// `gene_mechanism_common._split_annotation_tokens`: the upper-cased tokens
-/// between `&`, `,`, `;` and `|`, as a set (here a list without repeats).
-fn split_annotation_tokens(cell: Option<Cell<'_>>) -> Vec<String> {
-    let mut tokens: Vec<String> = Vec::new();
-    for token in clean(cell).split(['&', ',', ';', '|']) {
-        let token = python_strip(token);
-        if token.is_empty() {
-            continue;
-        }
-        let token = token.to_uppercase();
-        if !tokens.contains(&token) {
-            tokens.push(token);
-        }
-    }
-    tokens
-}
-
-/// `gene_mechanism_common._bounded_mechanism_score`: `int(float(_clean(value)))`
-/// when it is 0, 1 or 2, else 0; text Python cannot read as a float gives 0.
-/// An infinite value raises OverflowError in Python, and here.
-fn bounded_mechanism_score(cell: Option<Cell<'_>>) -> Result<i64> {
-    let overflow = || -> Box<dyn std::error::Error> {
-        Box::new(AcmgError::new(
-            "OverflowError",
-            "cannot convert float infinity to integer",
-        ))
-    };
-    let number = match cell {
-        None | Some(Cell::Missing) | Some(Cell::Bool(_)) => return Ok(0),
-        Some(Cell::Int(number)) => return Ok(if (0..=2).contains(&number) { number } else { 0 }),
-        Some(Cell::Float(number)) => number,
-        Some(Cell::Text(text)) => {
-            let text = clean_text(text);
-            match parse_float(&text) {
-                Some(number) => number,
-                // Python's float() also reads digits of other scripts: not reproduced.
-                None if !text.is_ascii() => {
-                    return Err(invalid(format!(
-                        "refused (not reproduced): float() of the non-ASCII text {text:?}"
-                    )));
-                }
-                None => return Ok(0),
-            }
-        }
-    };
-    if number.is_nan() {
-        return Ok(0);
-    }
-    if number.is_infinite() {
-        return Err(overflow());
-    }
-    let truncated = number.trunc();
-    Ok(
-        if truncated == 0.0 || truncated == 1.0 || truncated == 2.0 {
-            truncated as i64
-        } else {
-            0
-        },
-    )
-}
-
-/// The curated mechanisms a score of 2 can establish (`CURATED_EXACT_MECHANISMS`), sorted.
-const CURATED_EXACT_MECHANISMS: [&str; 2] = ["DOMINANT_NEGATIVE", "GOF"];
 
 /// `infer_query_variant_effect(row)` for one table row. The hub (T2) calls it
 /// for every row.
@@ -565,19 +399,6 @@ fn odd(what: impl std::fmt::Display) -> Box<dyn std::error::Error> {
     invalid(format!("refused (not reproduced): {what}"))
 }
 
-/// Python truthiness of a JSON value.
-fn truthy(value: &Json) -> bool {
-    match value {
-        Json::Null => false,
-        Json::Bool(flag) => *flag,
-        Json::Int(number) => *number != 0,
-        Json::Float(number) => *number != 0.0,
-        Json::Str(text) => !text.is_empty(),
-        Json::Array(items) => !items.is_empty(),
-        Json::Object(items) => !items.is_empty(),
-    }
-}
-
 /// `value.get(key)` on a dict; any other kind is the AttributeError Python raises.
 fn get<'a>(value: &'a Json, key: &str, what: &str) -> Result<Option<&'a Json>> {
     match value {
@@ -620,159 +441,6 @@ fn list_items<'a>(value: Option<&'a Json>, what: &str) -> Result<&'a [Json]> {
         None | Some(Json::Object(_)) | Some(Json::Str(_)) => Ok(&[]),
         Some(Json::Array(items)) => Ok(items),
         Some(_) => Err(odd(format!("{what} is not iterable"))),
-    }
-}
-
-/// A JSON value as the table value Python's `_clean` and the resolver see.
-fn json_cell(value: Option<&Json>) -> Result<Option<Cell<'_>>> {
-    Ok(match value {
-        None | Some(Json::Null) => None,
-        Some(Json::Bool(flag)) => Some(Cell::Bool(*flag)),
-        Some(Json::Int(number)) => Some(Cell::Int(
-            i64::try_from(*number).map_err(|_| odd(format!("the integer {number}")))?,
-        )),
-        Some(Json::Float(number)) if number.is_nan() => Some(Cell::Missing),
-        Some(Json::Float(number)) => Some(Cell::Float(*number)),
-        Some(Json::Str(text)) => Some(Cell::Text(text)),
-        Some(_) => return Err(odd("a list or dict where the cache holds text")),
-    })
-}
-
-/// `_clean(value)` of a JSON value.
-fn clean_json(value: Option<&Json>) -> Result<String> {
-    Ok(clean(json_cell(value)?))
-}
-
-/// `str(Path(text))`: repeated and trailing slashes and `.` parts dropped.
-fn python_path_text(text: &str) -> String {
-    let root = if text.starts_with("//") && !text.starts_with("///") {
-        "//"
-    } else if text.starts_with('/') {
-        "/"
-    } else {
-        ""
-    };
-    let parts: Vec<&str> = text
-        .split('/')
-        .filter(|part| !part.is_empty() && *part != ".")
-        .collect();
-    if root.is_empty() && parts.is_empty() {
-        ".".to_owned()
-    } else {
-        format!("{root}{}", parts.join("/"))
-    }
-}
-
-/// `_norm_hgvsp`: the protein change after the last `:`, without `p.`, upper-cased.
-pub(crate) fn norm_hgvsp(cleaned: &str) -> String {
-    if cleaned.is_empty() {
-        return String::new();
-    }
-    let protein = python_strip(cleaned.rsplit(':').next().unwrap_or(""));
-    protein.strip_prefix("p.").unwrap_or(protein).to_uppercase()
-}
-
-/// `_norm_chrom_key` of a cleaned text.
-fn norm_chrom_key(cleaned: &str) -> String {
-    if cleaned.is_empty() {
-        return String::new();
-    }
-    // Only the ASCII letters lower-case to "chr", so the first three characters decide.
-    let mut text = cleaned;
-    let head: String = cleaned.chars().take(3).collect();
-    if head.eq_ignore_ascii_case("chr") {
-        text = &cleaned[head.len()..];
-    }
-    let upper = text.to_uppercase();
-    if upper == "M" || upper == "MT" {
-        "MT".to_owned()
-    } else {
-        upper
-    }
-}
-
-/// `str(int(value))` for an integral float.
-fn integral_float_text(value: f64) -> String {
-    if value == 0.0 {
-        "0".to_owned()
-    } else {
-        // Fixed-point formatting prints the exact integer value.
-        format!("{value:.0}")
-    }
-}
-
-/// `_norm_pos_key` of a cleaned text.
-fn norm_pos_key(cleaned: &str) -> Result<String> {
-    if cleaned.is_empty() {
-        return Ok(String::new());
-    }
-    match parse_float(cleaned) {
-        Some(number) if number.is_finite() && number.fract() == 0.0 => {
-            Ok(integral_float_text(number))
-        }
-        Some(_) => Ok(cleaned.to_owned()),
-        None if !cleaned.is_ascii() => Err(odd(format!(
-            "float() of the non-ASCII position {cleaned:?}"
-        ))),
-        None => Ok(cleaned.to_owned()),
-    }
-}
-
-/// `_genomic_match_key` of cleaned texts.
-fn genomic_match_key(chrom: &str, pos: &str, ref_allele: &str, alt_allele: &str) -> Result<String> {
-    let chrom_key = norm_chrom_key(chrom);
-    let pos_key = norm_pos_key(pos)?;
-    if chrom_key.is_empty() || pos_key.is_empty() {
-        return Ok(String::new());
-    }
-    Ok([
-        chrom_key,
-        pos_key,
-        ref_allele.to_uppercase(),
-        alt_allele.to_uppercase(),
-    ]
-    .join("|"))
-}
-
-/// `_normalize_assembly` of a cleaned text.
-fn normalize_assembly(cleaned: &str) -> String {
-    let lower = cleaned.to_lowercase();
-    match lower.as_str() {
-        "grch37" | "hg19" | "b37" => "hg19".to_owned(),
-        "grch38" | "hg38" | "b38" => "hg38".to_owned(),
-        _ => lower,
-    }
-}
-
-/// `_requested_genomic_key_types` of a cleaned text.
-fn requested_genomic_key_types(cleaned: &str) -> &'static [&'static str] {
-    match cleaned.to_lowercase().as_str() {
-        "" | "auto" => &["vcf", "genomic"],
-        "vcf" => &["vcf"],
-        "genomic" => &["genomic"],
-        _ => &[],
-    }
-}
-
-/// `_normalize_sequence_mechanism` of a cleaned text.
-fn normalize_sequence_mechanism(cleaned: &str) -> String {
-    let upper = cleaned.to_uppercase();
-    let mut token = String::with_capacity(upper.len());
-    let mut in_gap = false;
-    for c in upper.chars() {
-        if c.is_ascii_uppercase() || c.is_ascii_digit() {
-            token.push(c);
-            in_gap = false;
-        } else if !in_gap {
-            token.push('_');
-            in_gap = true;
-        }
-    }
-    let token = token.trim_matches('_');
-    match token {
-        "GAIN_OF_FUNCTION" | "ACTIVATING" => "GOF".to_owned(),
-        "DN" | "DOMINANTNEGATIVE" => "DOMINANT_NEGATIVE".to_owned(),
-        _ => token.to_owned(),
     }
 }
 
@@ -885,20 +553,10 @@ fn deduplicate(mut rows: Vec<MatchEntry>) -> Vec<MatchEntry> {
         .collect()
 }
 
-/// Reads the non-LOF mechanism JSON as `open_text` and `json.load` do.
+/// Reads the non-LOF mechanism JSON as `open_text` and `json.load` do. A missing
+/// file is Python's FileNotFoundError; a document `json.load` rejects is refused.
 pub(crate) fn read_mechanism_json(path: &str) -> Result<Json> {
-    let mut raw = Vec::new();
-    std::fs::File::open(path)
-        .map_err(|error| odd(format!("reading the mechanism JSON {path}: {error}")))?
-        .read_to_end(&mut raw)?;
-    if path.ends_with(".gz") {
-        let mut plain = Vec::new();
-        flate2::read::MultiGzDecoder::new(&raw[..])
-            .read_to_end(&mut plain)
-            .map_err(|error| odd(format!("decompressing {path}: {error}")))?;
-        raw = plain;
-    }
-    let text = String::from_utf8(raw).map_err(|_| odd(format!("{path} is not UTF-8")))?;
+    let text = open_text(path)?;
     if text.starts_with('\u{feff}') {
         return Err(odd(format!("{path} starts with a byte-order mark")));
     }
@@ -1323,6 +981,7 @@ impl<'r> ExactVariantMatcher<'r> {
 
 #[cfg(test)]
 mod tests {
+    use super::super::gene_mechanism_common::{norm_chrom_key, norm_pos_key};
     use super::*;
 
     fn effect(inputs: EffectInputs<'_>) -> QueryEffect {

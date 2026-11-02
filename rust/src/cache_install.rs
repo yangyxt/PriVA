@@ -453,7 +453,12 @@ fn validate(key: &str, path: &Path, schema_version: u32) -> Result<()> {
             caches::clinvar_exon_af::ClinvarExonAfCache::open(path)?;
         }
         "clinvar_gene_stat" => {
-            caches::clinvar_gene_stat::ClinvarGeneCache::open(path)?;
+            let cache = caches::clinvar_gene_stat::ClinvarGeneCache::open(path)?;
+            if cache.schema_version() != schema_version {
+                return Err(invalid(
+                    "gene-statistics archive schema version differs from its managed generation",
+                ));
+            }
         }
         "clinvar_patho_af_stat" => {
             let cache = caches::clinvar_gene_af::ClinvarGeneAfCache::open(path)?;
@@ -510,6 +515,8 @@ fn install_one(
         caches::clinvar_gene_af::pickle_schema_version(text(source)?)?
     } else if key == "clinvar_splice_stat" {
         caches::clinvar_splice_stat::pickle_schema_version(text(source)?)?
+    } else if key == "clinvar_gene_stat" {
+        caches::clinvar_gene_stat::pickle_schema_version(text(source)?)?
     } else {
         1
     };
@@ -1140,6 +1147,172 @@ mod tests {
         )
         .unwrap();
         assert!(install_one("clingen_map", &wrong_source, &doc, &tmp.0, "GRCh38/VEP116").is_err());
+        assert_eq!(fs::read(&old).unwrap(), expected);
+    }
+
+    fn gene_stat_pickle(symbol: &[u8]) -> Vec<u8> {
+        let mut out = b"\x80\x05}\x8c\x01G}(".to_vec();
+        let text = |out: &mut Vec<u8>, name: &str| {
+            out.extend_from_slice(&[0x8c, name.len() as u8]);
+            out.extend_from_slice(name.as_bytes());
+        };
+        text(&mut out, "gene_symbol");
+        out.extend_from_slice(symbol);
+        text(&mut out, "ensembl_id");
+        text(&mut out, "G");
+        for name in caches::clinvar_gene_stat::SET_NAMES {
+            text(&mut out, name);
+            out.push(0x8f);
+        }
+        for name in ["domains", "transcripts"] {
+            text(&mut out, name);
+            out.push(b'}');
+        }
+        out.extend_from_slice(b"us.");
+        out
+    }
+
+    #[test]
+    fn gene_statistics_versioned_publication_preserves_v1_and_reuses_v2() {
+        let tmp = Temp::new();
+        let source = tmp.0.join("curated.pkl");
+        fs::write(&source, gene_stat_pickle(b"\x8c\x04TEXT")).unwrap();
+        let (config, private) = tmp.config(&format!("clinvar_gene_stat: '{}'\n", source.display()));
+        let selected = || {
+            PathBuf::from(
+                required(
+                    &document(&fs::read_to_string(&config).unwrap()).unwrap(),
+                    "clinvar_gene_stat",
+                )
+                .unwrap(),
+            )
+        };
+        prepare(&config, &private, &tmp.0).unwrap();
+        publish(&config, &private, &tmp.0).unwrap();
+        let old = selected();
+        assert!(text(&old).unwrap().ends_with(".v1.rkyv"));
+        let old_bytes = fs::read(&old).unwrap();
+        let old_receipt = fs::read(sidecar(&old, ".source.json")).unwrap();
+        let independent = tmp.0.join("independent.rkyv");
+        caches::clinvar_gene_stat::convert(text(&source).unwrap(), &independent).unwrap();
+        assert_eq!(fs::read(&independent).unwrap(), old_bytes);
+        assert!(
+            json(&sidecar(&old, ".source.json"))
+                .unwrap()
+                .get("schema_version")
+                .is_none()
+        );
+
+        prepare(&config, &private, &tmp.0).unwrap();
+        fs::write(&source, gene_stat_pickle(b"G\x80\0\0\0\0\0\0\0")).unwrap();
+        publish(&config, &private, &tmp.0).unwrap();
+        let typed = selected();
+        assert!(text(&typed).unwrap().ends_with(".v2.rkyv"));
+        let cache =
+            caches::clinvar_gene_stat::ClinvarGeneCache::open(text(&typed).unwrap()).unwrap();
+        assert_eq!(cache.schema_version(), 2);
+        assert_eq!(
+            cache.plain("G").unwrap().gene_symbol,
+            caches::clinvar_gene_stat::Symbol::Float(1 << 63)
+        );
+        let receipt = json(&sidecar(&typed, ".source.json")).unwrap();
+        assert_eq!(field(&receipt, "format").unwrap(), "PRIVARKV-v1");
+        assert_eq!(field(&receipt, "schema_version").unwrap(), "2");
+        let typed_bytes = fs::read(&typed).unwrap();
+        let typed_receipt = fs::read(sidecar(&typed, ".source.json")).unwrap();
+        let modified = fs::metadata(&typed).unwrap().modified().unwrap();
+        prepare(&config, &private, &tmp.0).unwrap();
+        publish(&config, &private, &tmp.0).unwrap();
+        assert_eq!(selected(), typed);
+        assert_eq!(fs::metadata(&typed).unwrap().modified().unwrap(), modified);
+        assert_eq!(fs::read(&typed).unwrap(), typed_bytes);
+        assert_eq!(
+            fs::read(sidecar(&typed, ".source.json")).unwrap(),
+            typed_receipt
+        );
+        assert_eq!(fs::read(&old).unwrap(), old_bytes);
+        assert_eq!(
+            fs::read(sidecar(&old, ".source.json")).unwrap(),
+            old_receipt
+        );
+
+        prepare(&config, &private, &tmp.0).unwrap();
+        let before = fs::read(&config).unwrap();
+        fs::write(
+            &source,
+            gene_stat_pickle(b"cposix\nsystem\n\x8c\x04echo\x85R"),
+        )
+        .unwrap();
+        assert!(publish(&config, &private, &tmp.0).is_err());
+        assert_eq!(fs::read(&config).unwrap(), before);
+        assert_eq!(fs::read(&old).unwrap(), old_bytes);
+        assert_eq!(fs::read(&typed).unwrap(), typed_bytes);
+    }
+
+    #[test]
+    fn gene_statistics_recovery_validates_schema_and_keeps_failed_payloads() {
+        let tmp = Temp::new();
+        let source = tmp.0.join("curated.pkl");
+        fs::write(&source, gene_stat_pickle(b"G\x80\0\0\0\0\0\0\0")).unwrap();
+        let (config, _) = tmp.config("");
+        let doc = document(&fs::read_to_string(&config).unwrap()).unwrap();
+        let install = || install_one("clinvar_gene_stat", &source, &doc, &tmp.0, "GRCh38/VEP116");
+        let output = install().unwrap();
+        let expected = fs::read(&output).unwrap();
+        let pending = temporary(&output, "pending");
+        fs::rename(&output, &pending).unwrap();
+        let receipt = sidecar(&output, ".source.json");
+        let mut record = json(&receipt).unwrap();
+        record.set(
+            "pending_archive",
+            Json::Str(text(&pending).unwrap().to_owned()),
+        );
+        fs::write(&receipt, json_text::dumps_indented(&record).unwrap()).unwrap();
+        assert_eq!(install().unwrap(), output);
+        assert_eq!(fs::read(&output).unwrap(), expected);
+        assert!(!pending.exists());
+        let good_receipt = fs::read(&receipt).unwrap();
+        record.set("schema_version", Json::Str("1".into()));
+        fs::write(&receipt, json_text::dumps_indented(&record).unwrap()).unwrap();
+        assert!(install().is_err());
+        assert_eq!(fs::read(&output).unwrap(), expected);
+        fs::write(&receipt, good_receipt).unwrap();
+        record.set("schema_version", Json::Str("2".into()));
+
+        let text_source = tmp.0.join("text.pkl");
+        fs::write(&text_source, gene_stat_pickle(b"\x8c\x04TEXT")).unwrap();
+        caches::clinvar_gene_stat::convert(text(&text_source).unwrap(), &pending).unwrap();
+        fs::remove_file(&output).unwrap();
+        record.set("archive_sha256", Json::Str(sha256_file(&pending).unwrap()));
+        fs::write(&receipt, json_text::dumps_indented(&record).unwrap()).unwrap();
+        let retained = fs::read(&pending).unwrap();
+        assert!(install().is_err());
+        assert!(!output.exists());
+        assert_eq!(fs::read(&pending).unwrap(), retained);
+
+        let old = install_one(
+            "clinvar_gene_stat",
+            &text_source,
+            &doc,
+            &tmp.0,
+            "GRCh38/VEP116",
+        )
+        .unwrap();
+        fs::write(&old, &expected).unwrap();
+        let old_receipt = sidecar(&old, ".source.json");
+        let mut record = json(&old_receipt).unwrap();
+        record.set("archive_sha256", Json::Str(sha256_file(&old).unwrap()));
+        fs::write(&old_receipt, json_text::dumps_indented(&record).unwrap()).unwrap();
+        assert!(
+            install_one(
+                "clinvar_gene_stat",
+                &text_source,
+                &doc,
+                &tmp.0,
+                "GRCh38/VEP116"
+            )
+            .is_err()
+        );
         assert_eq!(fs::read(&old).unwrap(), expected);
     }
 

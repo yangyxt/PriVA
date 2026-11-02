@@ -33,6 +33,8 @@ mod das_sampling;
 // Candidate classification is validated before the full DAS builder is enabled.
 #[allow(dead_code)] // Common-AF procedures await the complete opt-in DAS builder.
 mod das_common;
+#[allow(dead_code)] // Coldspot procedures await the complete opt-in DAS builder.
+mod das_coldspot;
 mod das_domain;
 #[allow(dead_code)] // Reference/Family procedures await the complete opt-in DAS builder.
 mod das_reference;

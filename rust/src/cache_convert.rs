@@ -27,6 +27,7 @@ pub(crate) mod common;
 pub(crate) mod intolerant_domains;
 pub(crate) mod pm1_regions;
 pub(crate) mod transcript_domains;
+pub(crate) mod interpro_mapping;
 
 pub(crate) const CLINVAR_AA_STAT: Schema = Schema {
     name: "clinvar_aa_stat",
@@ -425,6 +426,7 @@ pub(crate) fn dispatch_export(args: &[String]) -> Result<()> {
         "clinvar_patho_exon_af_stat" => clinvar_exon_af::export,
         "clinvar_patho_af_stat" => clinvar_gene_af::export,
         "clingen_map" => clingen_map::export,
+        "interpro_mapping_pickle" => interpro_mapping::export,
         _ => return Err(invalid(format!("cache-export: unsupported cache {cache}"))),
     };
     if output == "-" {
@@ -509,6 +511,10 @@ pub(crate) fn dispatch(args: &[String]) -> Result<()> {
         }
         "clingen_map" => {
             println!("{}", clingen_map::convert(pickle, Path::new(output))?);
+            Ok(())
+        }
+        "interpro_mapping_pickle" => {
+            println!("{}", interpro_mapping::convert(pickle, Path::new(output))?);
             Ok(())
         }
         other => Err(invalid(format!(

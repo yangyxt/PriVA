@@ -85,8 +85,8 @@ jobs:
         # YAML CLI used by the unchanged shell installer. No real caches run.
         run: |
           sudo apt-get update
-          sudo apt-get install --no-install-recommends --yes tabix bcftools yq parallel
-          dpkg-query --show --showformat='${Package} ${Version}\n' tabix bcftools yq parallel
+          sudo apt-get install --no-install-recommends --yes tabix bcftools yq parallel pkg-config libexpat1-dev
+          dpkg-query --show --showformat='${Package} ${Version}\n' tabix bcftools yq parallel pkg-config libexpat1-dev
           command -v bgzip tabix yq parallel
           bgzip --version
           tabix --version

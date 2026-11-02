@@ -366,6 +366,41 @@ debug = 0
             with self.assertRaises(ValueError): B.download_bootstrap(path)
         self.assertEqual(path.read_bytes(), b"wrong")
 
+    def test_xml_build_pins_static_bytes_and_preserves_explicit_search_path(self):
+        prefix = self.folder / 'python'; pc = prefix / 'lib/pkgconfig'
+        pc.mkdir(parents=True)
+        archive = prefix / 'lib/libexpat.a'; archive.write_bytes(b'static library fixture')
+        state = {'files': {'rust/src/interpro_mapping_builder/xml.rs': 'fixture'}}
+        env = dict(PATH='/fixture/bin', PKG_CONFIG_PATH='/explicit/pkgconfig')
+        with mock.patch.object(B.sys, 'prefix', str(prefix)), \
+             mock.patch.object(B.shutil, 'which', return_value='/fixture/bin/pkg-config'), \
+             mock.patch.object(B.subprocess, 'check_output', side_effect=['2.8.5\n', str(prefix/'lib')+'\n']):
+            result = B.xml_build_dependency(state, env)
+        self.assertEqual(result, {'name': 'expat', 'version': '2.8.5', 'static_archive_sha256': B.sha(archive.read_bytes())})
+        self.assertEqual(env['PKG_CONFIG_PATH'], '/explicit/pkgconfig'+os.pathsep+str(pc))
+
+    def test_xml_build_refuses_dynamic_only_environment(self):
+        lib = self.folder / 'lib'; lib.mkdir(); (lib/'libexpat.so').write_bytes(b'dynamic fixture')
+        state = {'files': {'rust/src/interpro_mapping_builder/xml.rs': 'fixture'}}
+        with mock.patch.object(B.shutil, 'which', return_value='/fixture/pkg-config'), \
+             mock.patch.object(B.subprocess, 'check_output', side_effect=['2.8.5\n', str(lib)+'\n']):
+            with self.assertRaisesRegex(ValueError, 'static Expat archive'):
+                B.xml_build_dependency(state, dict(PATH='/fixture'))
+
+    def test_xml_dependency_change_during_compile_prevents_publication(self):
+        state = B.source_state(self.source)
+        tools = self.folder / 'tools'; tools.mkdir()
+        def cargo(argv, **kwargs):
+            binary = Path(kwargs['env']['CARGO_TARGET_DIR'])/'release/priva'
+            binary.parent.mkdir(parents=True); binary.write_bytes(elf(b'cold')); binary.chmod(0o700)
+        with mock.patch.object(B, 'obtain_toolchain', return_value=tools), \
+             mock.patch.object(B, 'toolchain_descriptor', return_value={}), \
+             mock.patch.object(B, 'xml_build_dependency', side_effect=[{'static_archive_sha256':'before'}, {'static_archive_sha256':'changed'}]), \
+             mock.patch.object(B.subprocess, 'run', side_effect=cargo):
+            with self.assertRaisesRegex(ValueError, 'dependency changed'):
+                B.cold_build(self.cache, self.source, state, self.args(imported=False))
+        self.assertFalse(list(self.cache.glob('*/receipt.json')))
+
     def test_automatic_toolchain_setup_uses_owned_roots_and_no_modify_path(self):
         state = B.source_state(self.source); base = B.managed_base(self.cache, create=True)
         compiler = dict(channel=state["channel"], host=B.HOST, files={})
@@ -490,7 +525,9 @@ PriVA_rust_install --config "$CONFIG" ''' + extra
 
     def test_main_calls_rust_once_after_driver_without_backend_mutation(self):
         source = (ROOT / "scripts/install_utils.sh").read_text()
-        main = source.split("function main_install() {", 1)[1]
+        # The entry point's subshell contains its private builder-view marker
+        # and lock descriptor, including early returns.
+        main = source.split("function main_install() (", 1)[1].split("\n)\n", 1)[0]
         self.assertEqual(main.count('PriVA_rust_install --config "${config_file}"'), 1)
         self.assertLess(main.index('Nextflow_runtime_install "${config_file}"'), main.index('PriVA_rust_install --config'))
         self.assertLess(main.index('PriVA_rust_install --config'), main.index('reference_genome_install "${config_file}"'))

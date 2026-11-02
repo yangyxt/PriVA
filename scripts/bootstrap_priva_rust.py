@@ -516,6 +516,29 @@ def obtain_toolchain(base, state, explicit=None, offline=False):
     return path
 
 
+def xml_build_dependency(state, env):
+    """Pin the native XML library for cold builds; warm binaries contain it."""
+    if 'rust/src/interpro_mapping_builder/xml.rs' not in state['files']:
+        return None
+    # Keep an explicit caller search path first. Normal main_install invokes
+    # this helper in priva_acmg, whose expat package includes the static library.
+    prefix_pc = Path(sys.prefix) / 'lib/pkgconfig'
+    paths = [path for path in env.get('PKG_CONFIG_PATH', '').split(os.pathsep) if path]
+    if prefix_pc.is_dir() and str(prefix_pc) not in paths:
+        paths.append(str(prefix_pc))
+    env['PKG_CONFIG_PATH'] = os.pathsep.join(paths)
+    program = shutil.which('pkg-config', path=env.get('PATH'))
+    require(program is not None, 'Native XML build needs pkg-config and the expat development package')
+    version = subprocess.check_output([program, '--modversion', 'expat'], env=env, text=True).strip()
+    libdir = subprocess.check_output([program, '--variable=libdir', 'expat'], env=env, text=True).strip()
+    require(re.fullmatch(r'\d+\.\d+\.\d+', version) is not None
+            and tuple(map(int, version.split('.'))) >= (2, 6, 0), 'Native XML build needs Expat >=2.6.0')
+    library = Path(libdir) / 'libexpat.a'
+    require(library.is_file() and library.stat().st_size > 0,
+            'Native XML build needs the nonempty static Expat archive libexpat.a')
+    return dict(name='expat', version=version, static_archive_sha256=digest(library))
+
+
 def cold_build(base, source, state, args):
     tools = obtain_toolchain(base, state, args.toolchain_bin, args.offline)
     compiler = toolchain_descriptor(tools, state)
@@ -532,6 +555,7 @@ def cold_build(base, source, state, args):
     env.update(CARGO_HOME=str(cargo_home), CARGO_TARGET_DIR=str(work / "target"),
                RUSTC=str(tools / "rustc"), RUSTDOC=str(tools / "rustdoc"),
                RUSTFLAGS="", CARGO_ENCODED_RUSTFLAGS="", CARGO_INCREMENTAL="0")
+    xml_dependency = xml_build_dependency(state, env)
     cwd = work / "source/rust"
     for parent in (cwd, *cwd.parents):
         require(not any((parent / ".cargo" / name).exists() for name in ("config", "config.toml")),
@@ -542,14 +566,18 @@ def cold_build(base, source, state, args):
     log_path = work / "build.log"
     with log_path.open("xb") as log:
         subprocess.run(argv, cwd=cwd, env=env, stdout=log, stderr=subprocess.STDOUT, check=True)
+    require(xml_build_dependency(state, env) == xml_dependency,
+            'Native XML build dependency changed during compilation')
     binary = work / "target" / ("release" if args.build_profile == "release" else "debug") / "priva"
     profile = dict(name=args.build_profile, cargo_manifest_sha256=state["files"]["rust/Cargo.toml"],
                    explicit_rustflags="", incremental=False, fast_math=False,
                    cargo_profile_table=state["cargo_profiles"].get(args.build_profile, {}))
+    if xml_dependency:
+        profile['native_dependencies'] = [xml_dependency]
     return dict(binary=binary, binary_sha256=digest(binary), evidence={"build.log": read_stable(log_path)[0]},
         profile=profile, toolchain=compiler,
         qualification=dict(origin="cold_locked_build", scientific_acceptance=False, production_backend_selected=False),
-        build_command=argv, build_environment={key: env[key] for key in ("CARGO_HOME", "CARGO_TARGET_DIR", "RUSTC", "RUSTDOC", "RUSTFLAGS", "CARGO_ENCODED_RUSTFLAGS", "CARGO_INCREMENTAL")})
+        build_command=argv, build_environment={key: env[key] for key in ("CARGO_HOME", "CARGO_TARGET_DIR", "RUSTC", "RUSTDOC", "RUSTFLAGS", "CARGO_ENCODED_RUSTFLAGS", "CARGO_INCREMENTAL", "PKG_CONFIG_PATH") if key in env})
 
 
 def copy_binary(source, target, wanted):

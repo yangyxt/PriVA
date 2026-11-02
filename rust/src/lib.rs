@@ -61,3 +61,5 @@ pub fn main_entry() {
         });
     }
 }
+
+mod vcf_variant;

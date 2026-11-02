@@ -321,6 +321,9 @@ pub(crate) fn run() -> Result<()> {
     if args.get(1).map(String::as_str) == Some("cache-install") {
         return crate::cache_install::dispatch(&args[2..]);
     }
+    if args.get(1).map(String::as_str) == Some("conservation-resource") {
+        return crate::conservation_resource::dispatch(&args[2..]);
+    }
     if args.get(1).map(String::as_str) == Some("clingen-map") {
         return crate::clingen_map_builder::dispatch(&args[2..]);
     }

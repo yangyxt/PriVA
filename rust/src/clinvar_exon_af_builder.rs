@@ -30,6 +30,11 @@ fn exception(kind: &'static str, message: impl Into<String>) -> Box<dyn std::err
 // exception labels at this source's boundary without changing shared policy.
 fn source_error(error: Box<dyn std::error::Error>) -> Box<dyn std::error::Error> {
     let message = error.to_string();
+    // The VCF text adapter returns a string for a short BGZF read; pysam's
+    // VariantFile constructor exposes that framing failure as OSError.
+    if message == "failed to fill whole buffer" {
+        return exception("OSError", message);
+    }
     for kind in [
         "TypeError",
         "IndexError",

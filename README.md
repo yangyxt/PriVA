@@ -200,6 +200,30 @@ calls. Paths are passed literally to those programs. As with the original
 Python procedure, child command failures are reported but do not make the
 conversion command fail: validate the resulting VCF and index before use.
 
+For an explicit SpliceVault GRCh38-to-GRCh37 table conversion, use:
+
+```bash
+"$PRIVA_BINARY" splicevault-convert \
+  --input_tsv SpliceVault_data_GRCh38.tsv \
+  --output_tsv SpliceVault_data_GRCh37.tsv \
+  --chain_file "$PRIVA_ROOT/data/liftover/hg38ToHg19.over.chain.gz" \
+  --reference_fasta /path/to/hg19.fa --temp_dir /path/to/temp \
+  --chunk_size 50000
+```
+
+This optional procedure requires upstream `CrossMap` on `PATH` and an indexed
+target FASTA. It retains the original chunk boundaries, per-chunk type inference,
+duplicate-ID updates and row order; each chunk calls CrossMap VCF, then BED.
+Keep the default chunk size for the installed resource profile. Output is an
+unsorted table; the installer's subsequent sort, BGZF compression and indexing
+remain separate. Installer callers continue to use the original Python script.
+
+Input must be plain UTF-8 TSV. Output may be plain TSV or gzip (`.gz`); other
+pandas compression formats are unsupported and fail explicitly. A runtime failure
+exits 1 and may leave the completed output prefix; argument errors exit 2.
+Temporary VCF/BED files are removed in the original order, while CrossMap's
+unmapped sidecars remain available in the temporary directory.
+
 The Python scripts remain in `scripts/`. To run a step with its Python script again, revert the commit that switched it (titled "Call priva for the per-sample preparation steps", "Call priva for the splicing and UTR interpretation" or "Call priva acmg-assign for the ACMG step"); each restores the Python command lines and their freshness checks together, and the outputs of the two routes are interchangeable. Use a new output folder after switching either way.
 
 `priva_ranking_binary` selected Rust ranking bridges inside the Python ACMG step; `priva acmg-assign` accepts the option and does not need it.

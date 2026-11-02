@@ -158,7 +158,7 @@ cache conversion interface. Optional native procedures can be invoked directly.
 | [`scripts/installer_config_paths.py`](../scripts/installer_config_paths.py) | Retained Python; native replacement pending. |
 | [`scripts/installer_prerequisites.py`](../scripts/installer_prerequisites.py) | Retained Python; native replacement pending. |
 | [`scripts/mapped_artifact_publish.py`](../scripts/mapped_artifact_publish.py) | Retained Python; native replacement pending. |
-| [`scripts/mechanism_source_input.py`](../scripts/mechanism_source_input.py) | Retained Python; native replacement pending. |
+| [`scripts/mechanism_source_input.py`](../scripts/mechanism_source_input.py) | Optional `priva mechanism-source validate/record-source/check-source` for acquired-source validation and receipts. Retains distinct acquisition/runtime checks and bundled reuse policy. Existing callers remain Python. |
 | [`scripts/prepare_cluster_config.py`](../scripts/prepare_cluster_config.py) | Legacy/manual helper, outside native conversion scope. |
 | [`scripts/reference_resources.py`](../scripts/reference_resources.py) | Retained Python; native replacement pending. |
 | [`scripts/spliceai2_to_vep_vcf.py`](../scripts/spliceai2_to_vep_vcf.py) | Retained Python; native replacement pending. |

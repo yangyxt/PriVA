@@ -19,7 +19,7 @@ STAGES = ["CADD_conda_install", "Nextflow_runtime_install", "PriVA_rust_install"
           "InterPro_parsing", "pext_install", "ClinVar_install", "AlphaMissense_stat", "AlphaMissense_pick_intolerant_domains",
           "prepare_pm1_regions", "ClinVar_patho_AF_stat", "ClinVar_PM5_index", "CADD_install", "CADD_upstream_check", "ClinGen_deploy", "CDS_FASTA_install", "mechanism_resource_install"]
 PLUGINS = ["UTRAnnotator_install", "LOEUF_install", "Conservation_install", "AlphaMissense_install",
-           "AlphaMissense_anno", "AlphaMissense_pick_missense_constrained_segments", "SpliceAI_install",
+           "AlphaMissense_anno", "SpliceAI_install",
            "SpliceVault_install", "MaveDB_install", "PrimateAI_install"]
 PRELUDE = r'''
 source "$1"
@@ -128,7 +128,7 @@ ClinVar_install() {
         self.assertEqual([row[0] for row in calls], PLUGINS)
         cache, plugins = self.config['vep_plugins_cachedir'], self.config['vep_plugins_dir']
         expected = [[str(config), cache], [str(config), 'hg38'], [str(config), cache, 'hg38'],
-                    [str(config), cache, 'hg38', plugins], [str(config)], [str(config)],
+                    [str(config), cache, 'hg38', plugins], [str(config)],
                     [str(config), cache, plugins], [str(config), cache, str(ROOT/'scripts')],
                     [str(config), cache], [str(config), cache, plugins]]
         self.assertEqual([row[1:] for row in calls], expected)

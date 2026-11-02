@@ -141,7 +141,7 @@ class SpliceAIInstallerInputs(unittest.TestCase):
         self.assertNotEqual(self.invoke().returncode, 0)
         self.assertFalse(self.prompts.exists())
 
-    def test_original_plugin_stage_order_is_retained(self):
+    def test_native_plugin_order_excludes_unused_motif_build(self):
         result = self.shell(r'''
             CONDA_PREFIX="$TEST_FOLDER/envs/priva_acmg"
             for name in UTRAnnotator_install LOEUF_install Conservation_install AlphaMissense_install AlphaMissense_anno AlphaMissense_pick_missense_constrained_segments SpliceAI_install SpliceVault_install MaveDB_install PrimateAI_install; do
@@ -153,7 +153,7 @@ class SpliceAIInstallerInputs(unittest.TestCase):
         self.assertEqual(self.calls.read_text().splitlines(), [
             'UTRAnnotator_install', 'LOEUF_install', 'Conservation_install',
             'AlphaMissense_install', 'AlphaMissense_anno',
-            'AlphaMissense_pick_missense_constrained_segments', 'SpliceAI_install',
+            'SpliceAI_install',
             'SpliceVault_install', 'MaveDB_install', 'PrimateAI_install'])
         self.assertNotIn('SpliceAI_profile_install', INSTALLER.read_text())
 

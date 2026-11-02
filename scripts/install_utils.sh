@@ -659,8 +659,8 @@ function VEP_plugins_install() {
     # Then annotate the AlphaMissense prescore file to vcf file
     AlphaMissense_anno "${config_file}" || \
     { log "Failed to convert the AlphaMissense prescore file to vcf file and annotate protein domains to it"; return 1; }
-    AlphaMissense_pick_missense_constrained_segments "${config_file}" || \
-    { log "Failed to pick missense constrained segments from the AlphaMissense prescore file"; return 1; }
+    # The native runtime does not consume the legacy KDE motif cache. Keep its
+    # explicit helper available, but do not build it during normal installation.
 
     # Then install SpliceAI
     SpliceAI_install "${config_file}" "${VEP_PLUGINSCACHEDIR}" "${VEP_PLUGINSDIR}" || \

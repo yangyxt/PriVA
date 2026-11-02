@@ -16,7 +16,7 @@ use super::acmg_pp3_bp4_bp7_insilico::pandas_masks::{
 };
 use super::stats;
 use super::types::{HarnessCall, StepOutput, not_converted};
-use crate::cache_convert::clinvar_gene_stat::{ArchivedGene, ClinvarGeneCache};
+use crate::cache_convert::clinvar_gene_stat::{ClinvarGeneCache, GeneRef};
 use crate::cache_convert::pm1_regions::Pm1RegionCache;
 use crate::cli::{Result, invalid};
 use crate::pandas_table::{Cell, Column, Table, read_table};
@@ -199,10 +199,10 @@ fn difference_count(left: &[rkyv::Archived<u32>], right: &[rkyv::Archived<u32>])
 /// `analyze_bp1_pp2(gene_stat_dict)`: `(ensembl_id, (pp2_granted, bp1_granted))`; the
 /// The typed schema guarantees a text `ensembl_id`; absent lookup keys are handled by callers.
 pub(crate) fn analyze_bp1_pp2(
-    stat: &ArchivedGene,
+    stat: &GeneRef<'_>,
     pvalues: &PValues,
 ) -> Result<(Option<String>, (bool, bool))> {
-    let gene = Some(stat.ensembl_id.as_str().to_owned());
+    let gene = Some(stat.ensembl_id.to_owned());
     let patho = stat.sets.clinvar_pathogenic.as_slice();
     let total_patho = patho.len();
     if total_patho == 0 {
@@ -266,7 +266,7 @@ fn gene_results(
         }
         let stat = clinvar_stats.get(gene);
         let (key, result) = match stat {
-            Some(stat) => analyze_bp1_pp2(stat, pvalues)?,
+            Some(stat) => analyze_bp1_pp2(&stat, pvalues)?,
             None => (Some(gene.to_owned()), (false, false)),
         };
         let Some(key) = key else {
@@ -441,7 +441,7 @@ pub(crate) fn run_harness(function: &str, call: &HarnessCall) -> Result<Table> {
                 };
                 let stat = stats.get(gene);
                 let (id, (granted_pp2, granted_bp1)) = match stat {
-                    Some(stat) => analyze_bp1_pp2(stat, &pvalues)?,
+                    Some(stat) => analyze_bp1_pp2(&stat, &pvalues)?,
                     None => (Some(gene.to_owned()), (false, false)),
                 };
                 ids.push(id);
@@ -523,7 +523,7 @@ mod tests {
         let cache = gene_cache();
         // 2 pathogenic: 1 small, 1 large; under five counted, so the fraction decides PP2.
         let result =
-            analyze_bp1_pp2(cache.get("G").unwrap(), &PValues::Supplied(HashMap::new())).unwrap();
+            analyze_bp1_pp2(&cache.get("G").unwrap(), &PValues::Supplied(HashMap::new())).unwrap();
         assert_eq!(result, (Some("G".to_owned()), (true, false)));
     }
 

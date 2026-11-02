@@ -44,6 +44,18 @@ def encode(value: object) -> list:
         return ["float", struct.pack(">d", value).hex()]
     if kind is str:
         return ["str", value]
+    # Schema 5 v2 alone admits these source-produced scalar types. Exact type
+    # checks keep subclasses and other NumPy/pandas values outside the contract.
+    if kind.__module__.startswith("numpy"):
+        import numpy as np
+        if kind is np.int32:
+            return ["numpy.int32", str(int(value))]
+        if kind is np.float32:
+            return ["numpy.float32", value.tobytes()[::-1].hex() if sys.byteorder == "little" else value.tobytes().hex()]
+    if kind.__module__ == "pandas._libs.missing":
+        import pandas as pd
+        if value is pd.NA:
+            return ["pandas.NA"]
     if kind is dict:
         return ["dict", [[encode(key), encode(item)] for key, item in value.items()]]
     if kind in (list, tuple, set, frozenset):

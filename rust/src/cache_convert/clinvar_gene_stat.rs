@@ -1,7 +1,9 @@
-//! Schema 5, version 1: `clinvar_stat_variants.per_gene_stat` and its complete variant sets.
+//! Schema 5: `clinvar_stat_variants.per_gene_stat` and its complete variant sets.
 //!
 //! Python: `{gene: {gene_symbol: str, ensembl_id: str, <seven named sets of str>,
 //! domains: {domain: <seven named sets>}, transcripts: {transcript: <seven named sets>}}}`.
+//! The frozen v1 layout stores text symbols. V2 additionally stores the exact
+//! source-produced pandas.NA, NumPy int32/float32 and Python float symbol kinds.
 //! The eleven gene-record fields and seven set-record fields are exact; absent/extra fields,
 //! non-text IDs and set/list/tuple substitutions are refused. The seven collections are Python
 //! `set`, not `frozenset`. Domain/transcript dict order is retained. Only gene keys and set
@@ -15,9 +17,12 @@ use crate::rust_cache::{
 };
 use rkyv::{Archive, Deserialize, Serialize, rancor};
 use std::collections::{BTreeSet, HashMap, HashSet};
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::Path;
 use std::time::Instant;
+
+mod typed;
+pub(crate) use typed::Symbol;
 
 pub(crate) const SCHEMA: Schema = Schema {
     name: "clinvar_gene_stat",
@@ -97,10 +102,10 @@ pub(crate) struct ClinvarGeneStat {
 /// Seven Python sets represented as sorted text vectors in `SET_NAMES` order.
 pub(crate) type PlainSets = [Vec<String>; 7];
 
-#[derive(Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct PlainGene {
     pub(crate) ensembl_id: String,
-    pub(crate) gene_symbol: String,
+    pub(crate) gene_symbol: Symbol,
     pub(crate) sets: PlainSets,
     pub(crate) domains: Vec<(String, PlainSets)>,
     pub(crate) transcripts: Vec<(String, PlainSets)>,
@@ -222,7 +227,7 @@ fn plain_gene(path: &str, value: &Value) -> Result<PlainGene> {
     }
     Ok(PlainGene {
         ensembl_id: text(path, field(&dict.entries, "ensembl_id"))?,
-        gene_symbol: text(path, field(&dict.entries, "gene_symbol"))?,
+        gene_symbol: Symbol::from_pickle(field(&dict.entries, "gene_symbol"))?,
         sets: plain_sets(path, &dict.entries)?,
         domains: plain_nested(path, field(&dict.entries, "domains"))?,
         transcripts: plain_nested(path, field(&dict.entries, "transcripts"))?,
@@ -249,7 +254,7 @@ fn plain_stats(path: &str, value: &Value) -> Result<PlainStats> {
 
 fn read_pickle(path: &str) -> Result<PlainStats> {
     let bytes = pickle_reader::read_file(Path::new(path), path.ends_with(".gz"))?;
-    plain_stats(path, &pickle_reader::load(&bytes)?)
+    plain_stats(path, &pickle_reader::load_clinvar_gene(&bytes)?)
 }
 
 fn encode_sets(sets: PlainSets, ids: &HashMap<&str, u32>) -> VariantSets {
@@ -274,7 +279,7 @@ fn encode_sets(sets: PlainSets, ids: &HashMap<&str, u32>) -> VariantSets {
     }
 }
 
-fn build(mut entries: PlainStats, provenance: Vec<Provenance>) -> Result<Vec<u8>> {
+fn prepare(mut entries: PlainStats) -> Result<(PlainStats, Vec<String>)> {
     entries.sort_by(|left, right| left.0.cmp(&right.0));
     if entries.windows(2).any(|pair| pair[0].0 == pair[1].0) {
         return Err(invalid("the ClinVar gene keys are not unique"));
@@ -297,6 +302,12 @@ fn build(mut entries: PlainStats, provenance: Vec<Provenance>) -> Result<Vec<u8>
     if variants.len() > u32::MAX as usize {
         return Err(invalid("too many ClinVar variants for the u32 pool"));
     }
+    Ok((entries, variants))
+}
+
+/// The v1 structs, pool ordering and serialization layout are frozen.
+fn build(entries: PlainStats, provenance: Vec<Provenance>) -> Result<Vec<u8>> {
+    let (entries, variants) = prepare(entries)?;
     let ids: HashMap<&str, u32> = variants
         .iter()
         .enumerate()
@@ -308,7 +319,10 @@ fn build(mut entries: PlainStats, provenance: Vec<Provenance>) -> Result<Vec<u8>
         genes.push(key);
         archived.push(Gene {
             ensembl_id: gene.ensembl_id,
-            gene_symbol: gene.gene_symbol,
+            gene_symbol: match gene.gene_symbol {
+                Symbol::Text(value) => value,
+                _ => return Err(invalid("a typed gene symbol requires schema 5 v2")),
+            },
             sets: encode_sets(gene.sets, &ids),
             domains: gene
                 .domains
@@ -338,28 +352,132 @@ fn build(mut entries: PlainStats, provenance: Vec<Provenance>) -> Result<Vec<u8>
     .to_vec())
 }
 
+fn schema(entries: &PlainStats) -> Schema {
+    if entries
+        .iter()
+        .all(|(_, gene)| matches!(gene.gene_symbol, Symbol::Text(_)))
+    {
+        SCHEMA
+    } else {
+        typed::SCHEMA
+    }
+}
+
+fn build_selected(entries: PlainStats, provenance: Vec<Provenance>) -> Result<(Schema, Vec<u8>)> {
+    let selected = schema(&entries);
+    if selected.version == SCHEMA.version {
+        return Ok((SCHEMA, build(entries, provenance)?));
+    }
+    let (entries, variants) = prepare(entries)?;
+    let ids: HashMap<&str, u32> = variants
+        .iter()
+        .enumerate()
+        .map(|(at, text)| (text.as_str(), at as u32))
+        .collect();
+    let mut genes = Vec::with_capacity(entries.len());
+    let mut archived = Vec::with_capacity(entries.len());
+    for (key, gene) in entries {
+        genes.push(key);
+        archived.push(typed::Gene {
+            ensembl_id: gene.ensembl_id,
+            gene_symbol: gene.gene_symbol,
+            sets: encode_sets(gene.sets, &ids),
+            domains: gene
+                .domains
+                .into_iter()
+                .map(|(domain, sets)| Domain {
+                    domain,
+                    sets: encode_sets(sets, &ids),
+                })
+                .collect(),
+            transcripts: gene
+                .transcripts
+                .into_iter()
+                .map(|(transcript, sets)| Transcript {
+                    transcript,
+                    sets: encode_sets(sets, &ids),
+                })
+                .collect(),
+        });
+    }
+    drop(ids);
+    Ok((
+        selected,
+        rkyv::to_bytes::<rancor::Error>(&typed::Root {
+            provenance,
+            variants,
+            genes,
+            entries: archived,
+        })?
+        .to_vec(),
+    ))
+}
+
+pub(crate) fn pickle_schema_version(path: &str) -> Result<u32> {
+    Ok(schema(&read_pickle(path)?).version)
+}
+
+enum Mapping {
+    V1(MappedCache<ClinvarGeneStat>),
+    V2(MappedCache<typed::Root>),
+}
+
+enum SymbolRef<'a> {
+    V1(&'a str),
+    V2(&'a typed::ArchivedSymbol),
+}
+impl SymbolRef<'_> {
+    fn owned(&self) -> Symbol {
+        match self {
+            Self::V1(text) => Symbol::Text((*text).to_owned()),
+            Self::V2(value) => value.owned(),
+        }
+    }
+}
+
+/// The downstream calculation reads the same archived sets and identifier in
+/// either version. It never coerces or uses `gene_symbol`.
+pub(crate) struct GeneRef<'a> {
+    pub(crate) ensembl_id: &'a str,
+    gene_symbol: SymbolRef<'a>,
+    pub(crate) sets: &'a ArchivedVariantSets,
+    domains: &'a [ArchivedDomain],
+    transcripts: &'a [ArchivedTranscript],
+}
+
 /// Checked mmap view. The complete sets remain archived; no whole-map materialization is needed.
 pub(crate) struct ClinvarGeneCache {
-    mapped: MappedCache<ClinvarGeneStat>,
+    mapped: Mapping,
 }
 
 impl ClinvarGeneCache {
     pub(crate) fn open(path: &str) -> Result<Self> {
-        let mapped = MappedCache::<ClinvarGeneStat>::open(path, SCHEMA)?;
-        let root = mapped.root();
+        let mut file = std::fs::File::open(path)?;
+        let mut prefix = [0; 20];
+        let v2 = file.read_exact(&mut prefix).is_ok()
+            && &prefix[..8] == crate::rust_cache::MAGIC
+            && u32::from_le_bytes(prefix[12..16].try_into().unwrap()) == SCHEMA.id
+            && u32::from_le_bytes(prefix[16..20].try_into().unwrap()) == typed::SCHEMA.version;
+        let mapped = if v2 {
+            Mapping::V2(MappedCache::open_file(&file, path, typed::SCHEMA)?)
+        } else {
+            Mapping::V1(MappedCache::open_file(&file, path, SCHEMA)?)
+        };
+        let cache = Self { mapped };
+        let entry_count = match &cache.mapped {
+            Mapping::V1(mapped) => mapped.root().entries.len(),
+            Mapping::V2(mapped) => mapped.root().entries.len(),
+        };
         let ordered = |keys: &[rkyv::string::ArchivedString]| {
             keys.windows(2)
                 .all(|pair| pair[0].as_str() < pair[1].as_str())
         };
-        if root.genes.len() != root.entries.len()
-            || !ordered(&root.genes)
-            || !ordered(&root.variants)
-        {
+        if cache.len() != entry_count || !ordered(cache.gene_keys()) || !ordered(cache.variants()) {
             return Err(invalid(format!(
                 "{path}: ClinVar genes/variants are not sorted and unique, or not one entry per gene"
             )));
         }
-        let count = root.variants.len();
+        let count = cache.variants().len();
         let valid_sets = |sets: &ArchivedVariantSets| {
             sets.members().iter().all(|ids| {
                 ids.iter().all(|id| (id.to_native() as usize) < count)
@@ -368,7 +486,8 @@ impl ClinvarGeneCache {
                         .all(|pair| pair[0].to_native() < pair[1].to_native())
             })
         };
-        for entry in root.entries.iter() {
+        for key in cache.keys() {
+            let entry = cache.get(key).unwrap();
             let mut domains = HashSet::with_capacity(entry.domains.len());
             let mut transcripts = HashSet::with_capacity(entry.transcripts.len());
             if !valid_sets(&entry.sets)
@@ -385,24 +504,65 @@ impl ClinvarGeneCache {
                 )));
             }
         }
-        Ok(Self { mapped })
+        Ok(cache)
     }
 
     pub(crate) fn len(&self) -> usize {
-        self.mapped.root().genes.len()
+        self.gene_keys().len()
     }
 
     pub(crate) fn keys(&self) -> impl Iterator<Item = &str> {
-        self.mapped.root().genes.iter().map(|key| key.as_str())
+        self.gene_keys().iter().map(|key| key.as_str())
     }
 
-    pub(crate) fn get(&self, gene: &str) -> Option<&ArchivedGene> {
-        let root = self.mapped.root();
-        find_sorted(&root.genes, gene).map(|at| &root.entries[at])
+    pub(crate) fn schema_version(&self) -> u32 {
+        match self.mapped {
+            Mapping::V1(_) => SCHEMA.version,
+            Mapping::V2(_) => typed::SCHEMA.version,
+        }
+    }
+
+    fn gene_keys(&self) -> &[rkyv::string::ArchivedString] {
+        match &self.mapped {
+            Mapping::V1(m) => &m.root().genes,
+            Mapping::V2(m) => &m.root().genes,
+        }
+    }
+
+    fn variants(&self) -> &[rkyv::string::ArchivedString] {
+        match &self.mapped {
+            Mapping::V1(m) => &m.root().variants,
+            Mapping::V2(m) => &m.root().variants,
+        }
+    }
+
+    pub(crate) fn get(&self, gene: &str) -> Option<GeneRef<'_>> {
+        find_sorted(self.gene_keys(), gene).map(|at| match &self.mapped {
+            Mapping::V1(mapped) => {
+                let entry = &mapped.root().entries[at];
+                GeneRef {
+                    ensembl_id: entry.ensembl_id.as_str(),
+                    gene_symbol: SymbolRef::V1(entry.gene_symbol.as_str()),
+                    sets: &entry.sets,
+                    domains: &entry.domains,
+                    transcripts: &entry.transcripts,
+                }
+            }
+            Mapping::V2(mapped) => {
+                let entry = &mapped.root().entries[at];
+                GeneRef {
+                    ensembl_id: entry.ensembl_id.as_str(),
+                    gene_symbol: SymbolRef::V2(&entry.gene_symbol),
+                    sets: &entry.sets,
+                    domains: &entry.domains,
+                    transcripts: &entry.transcripts,
+                }
+            }
+        })
     }
 
     pub(crate) fn variant(&self, id: &rkyv::Archived<u32>) -> &str {
-        self.mapped.root().variants[id.to_native() as usize].as_str()
+        self.variants()[id.to_native() as usize].as_str()
     }
 
     fn plain_sets(&self, sets: &ArchivedVariantSets) -> PlainSets {
@@ -412,8 +572,8 @@ impl ClinvarGeneCache {
 
     pub(crate) fn plain(&self, gene: &str) -> Option<PlainGene> {
         self.get(gene).map(|entry| PlainGene {
-            ensembl_id: entry.ensembl_id.as_str().to_owned(),
-            gene_symbol: entry.gene_symbol.as_str().to_owned(),
+            ensembl_id: entry.ensembl_id.to_owned(),
+            gene_symbol: entry.gene_symbol.owned(),
             sets: self.plain_sets(&entry.sets),
             domains: entry
                 .domains
@@ -460,7 +620,7 @@ fn exact(gene: PlainGene) -> ExactValue {
         ),
         (
             ExactValue::Text("gene_symbol".to_owned()),
-            ExactValue::Text(gene.gene_symbol),
+            gene.gene_symbol.exact(),
         ),
     ];
     fields.extend(exact_sets(gene.sets));
@@ -507,10 +667,10 @@ pub(crate) fn convert(pickle: &str, output: &Path) -> Result<String> {
         .flat_map(|sets| sets.iter())
         .map(Vec::len)
         .sum();
-    let archive = build(entries, provenance(pickle)?)?;
+    let (selected, archive) = build_selected(entries, provenance(pickle)?)?;
     let converted_s = start.elapsed().as_secs_f64();
     let check = Instant::now();
-    write_cache_checked(output, SCHEMA, &archive, |staged| {
+    write_cache_checked(output, selected, &archive, |staged| {
         let cache = ClinvarGeneCache::open(&staged.to_string_lossy())?;
         let expected = read_pickle(pickle)?;
         if cache.len() != count || expected.len() != count {

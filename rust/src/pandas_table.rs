@@ -253,7 +253,7 @@ impl Table {
 
 /// Python's `repr()` of a text: single quotes unless the text holds one and no
 /// double quote; backslashes, the chosen quote and control characters escaped.
-fn python_text_repr(text: &str) -> String {
+pub(crate) fn python_text_repr(text: &str) -> String {
     let quote = if text.contains('\'') && !text.contains('"') {
         '"'
     } else {
@@ -364,6 +364,16 @@ fn end_record(
 pub(crate) fn tokenize(
     text: &str,
     comment: Option<u8>,
+    emit: impl FnMut(Vec<String>) -> Result<()>,
+) -> Result<()> {
+    tokenize_impl(text, comment, false, 0, emit)
+}
+
+fn tokenize_impl(
+    text: &str,
+    comment: Option<u8>,
+    builder_cr_compatibility: bool,
+    bom_bytes: usize,
     mut emit: impl FnMut(Vec<String>) -> Result<()>,
 ) -> Result<()> {
     let bytes = text.as_bytes();
@@ -371,6 +381,9 @@ pub(crate) fn tokenize(
     let mut fields: Vec<String> = Vec::new();
     let mut field: Vec<u8> = Vec::new();
     let mut index = 0;
+    let mut records = 0;
+    let mut call_start = 0;
+    let mut backtracks = std::collections::HashSet::new();
     while index < bytes.len() {
         let byte = bytes[index];
         let terminator = byte == b'\n' || byte == b'\r';
@@ -382,6 +395,7 @@ pub(crate) fn tokenize(
         {
             if state != State::StartRecord {
                 end_record(&mut fields, &mut field, &mut emit)?;
+                records += 1;
             }
             state = State::InComment;
             index += 1;
@@ -391,6 +405,12 @@ pub(crate) fn tokenize(
             State::InComment => {
                 if terminator {
                     state = State::StartRecord;
+                    if builder_cr_compatibility && records == 2 && call_start == 0 {
+                        call_start = index
+                            + 1
+                            + usize::from(byte == b'\r' && bytes.get(index + 1) == Some(&b'\n'));
+                        backtracks.clear();
+                    }
                 }
             }
             State::StartRecord => {
@@ -407,6 +427,32 @@ pub(crate) fn tokenize(
                         index = end;
                         continue;
                     }
+                    if builder_cr_compatibility {
+                        // pandas 2.2.3 WHITESPACE_LINE rewinds to LF (not CR)
+                        // or the current tokenizer-call boundary. Header=0
+                        // first tokenizes two records; later buffers are 256 KiB.
+                        // Reproduce that traversal only for these opt-in text
+                        // builders. A repeated traversal cannot make progress:
+                        // return pandas' eventual buffer error without filling
+                        // memory with repeated rows. See pinned primary sources:
+                        // pandas v2.2.3 pandas/_libs/src/parser/tokenizer.c and
+                        // pandas/_libs/parsers.pyx, _get_header/DEFAULT_CHUNKSIZE.
+                        let chunk_start = ((end + bom_bytes) / (256 * 1024) * (256 * 1024))
+                            .saturating_sub(bom_bytes);
+                        let floor = call_start.max(chunk_start);
+                        let rewind = bytes[floor..=end]
+                            .iter()
+                            .rposition(|byte| *byte == b'\n')
+                            .map_or(floor, |position| floor + position + 1);
+                        if rewind < index && !backtracks.insert((floor, index, rewind)) {
+                            return Err(invalid(
+                                "Error tokenizing data. C error: Buffer overflow caught - possible malformed input file.\n",
+                            ));
+                        }
+                        index = rewind;
+                        state = State::StartField;
+                        continue;
+                    }
                 }
                 // The same byte is read again as the first byte of a field.
                 state = State::StartField;
@@ -414,9 +460,14 @@ pub(crate) fn tokenize(
             }
             State::StartField | State::InField | State::QuoteInQuotedField if terminator => {
                 end_record(&mut fields, &mut field, &mut emit)?;
+                records += 1;
                 state = State::StartRecord;
                 if byte == b'\r' && bytes.get(index + 1) == Some(&b'\n') {
                     index += 1;
+                }
+                if builder_cr_compatibility && records == 2 {
+                    call_start = index + 1;
+                    backtracks.clear();
                 }
             }
             State::StartField => match byte {
@@ -894,6 +945,15 @@ pub(crate) fn parse_table(text: &str) -> Result<Table> {
 
 /// Reads a table from text already decoded as UTF-8, with `pd.read_table` options.
 pub(crate) fn parse_table_with(text: &str, options: &ReadOptions) -> Result<Table> {
+    parse_table_impl(text, options, false)
+}
+
+fn parse_table_impl(
+    text: &str,
+    options: &ReadOptions,
+    builder_cr_compatibility: bool,
+) -> Result<Table> {
+    let bom_bytes = usize::from(text.starts_with('\u{feff}')) * 3;
     let text = text.strip_prefix('\u{feff}').unwrap_or(text);
     let mut names: Option<Vec<String>> = match &options.header {
         Header::FirstLine => None,
@@ -913,39 +973,45 @@ pub(crate) fn parse_table_with(text: &str, options: &ReadOptions) -> Result<Tabl
     // The most fields of any row: with `names` and `usecols` positions, pandas
     // refuses positions that no row reaches.
     let mut widest = 0;
-    tokenize(text, options.comment, |record| {
-        widest = widest.max(record.len());
-        let Some(expected) = width else {
-            let header = column_names(record);
-            tokens = vec![Vec::new(); header.len()];
-            width = Some(header.len());
-            names = Some(header);
-            return Ok(());
-        };
-        let longest = match options.use_columns {
-            Some(UseColumns::Positions(_)) if matches!(options.header, Header::Names(_)) => {
-                usize::MAX
+    tokenize_impl(
+        text,
+        options.comment,
+        builder_cr_compatibility,
+        bom_bytes,
+        |record| {
+            widest = widest.max(record.len());
+            let Some(expected) = width else {
+                let header = column_names(record);
+                tokens = vec![Vec::new(); header.len()];
+                width = Some(header.len());
+                names = Some(header);
+                return Ok(());
+            };
+            let longest = match options.use_columns {
+                Some(UseColumns::Positions(_)) if matches!(options.header, Header::Names(_)) => {
+                    usize::MAX
+                }
+                _ => expected,
+            };
+            if record.len() > longest {
+                return Err(invalid(format!(
+                    "data row {} has {} fields but the header has {}",
+                    rows + 1,
+                    record.len(),
+                    expected
+                )));
             }
-            _ => expected,
-        };
-        if record.len() > longest {
-            return Err(invalid(format!(
-                "data row {} has {} fields but the header has {}",
-                rows + 1,
-                record.len(),
-                expected
-            )));
-        }
-        let filled = record.len().min(expected);
-        for (column, field) in tokens.iter_mut().zip(record) {
-            column.push(field);
-        }
-        for column in tokens.iter_mut().skip(filled) {
-            column.push(String::new());
-        }
-        rows += 1;
-        Ok(())
-    })?;
+            let filled = record.len().min(expected);
+            for (column, field) in tokens.iter_mut().zip(record) {
+                column.push(field);
+            }
+            for column in tokens.iter_mut().skip(filled) {
+                column.push(String::new());
+            }
+            rows += 1;
+            Ok(())
+        },
+    )?;
     let mut names = names.ok_or_else(|| invalid("no columns to parse from the table"))?;
     if let (Header::Names(given), Some(UseColumns::Positions(positions))) =
         (&options.header, &options.use_columns)
@@ -1047,6 +1113,22 @@ pub(crate) fn read_table_with(path: &Path, options: &ReadOptions) -> Result<Tabl
     parse_table_with(&read_table_text(path)?, options)
 }
 
+/// The HPO/MONDO builders' fixed pandas 2.2.3 text-reader profile. Its bare-CR
+/// whitespace rewind is isolated here; existing reader callers keep their
+/// existing behavior. No implicit index or non-gzip compression is added.
+pub(crate) fn read_builder_table(path: &Path, comments: bool) -> Result<Table> {
+    parse_table_impl(
+        &read_table_text(path)?,
+        &ReadOptions {
+            all_text: true,
+            keep_default_na: false,
+            comment: comments.then_some(b'#'),
+            ..ReadOptions::default()
+        },
+        true,
+    )
+}
+
 /// Decode the same filename-selected compression and UTF-8 as `read_table`.
 /// Producers with additional pandas index/dtype rules can reuse its tokenizer.
 pub(crate) fn read_table_text(path: &Path) -> Result<String> {
@@ -1066,7 +1148,9 @@ pub(crate) fn read_table_text(path: &Path) -> Result<String> {
     } else {
         file.read_to_end(&mut bytes)?;
     }
-    String::from_utf8(bytes).map_err(|_| invalid(format!("{}: not UTF-8 text", path.display())))
+    let text = String::from_utf8(bytes)
+        .map_err(|_| invalid(format!("{}: not UTF-8 text", path.display())))?;
+    Ok(text)
 }
 
 fn write_field(out: &mut impl Write, text: &str, only_column: bool) -> std::io::Result<()> {
@@ -1370,6 +1454,34 @@ mod tests {
         assert_eq!(round_trip("a\tb\rx\ty\rz\r"), "a\tb\nx\ty\nz\t\n");
         // A quote inside an unquoted field is a plain character.
         assert_eq!(round_trip("a\nx\"y\n"), "a\n\"x\"\"y\"\n");
+    }
+
+    #[test]
+    fn builder_cr_whitespace_mode_keeps_pinned_header_lookahead_and_cycle_failure() {
+        let options = ReadOptions {
+            all_text: true,
+            keep_default_na: false,
+            ..ReadOptions::default()
+        };
+        let input = "a\tb\r 1\t2\r";
+        let ordinary = parse_table_with(input, &options).unwrap();
+        assert_eq!(ordinary.rows, 1);
+        let builder = parse_table_impl(input, &options, true).unwrap();
+        assert_eq!(builder.rows, 2);
+        assert_eq!(builder.cell(0, 0), Cell::Text("a"));
+        assert_eq!(builder.cell(0, 1), Cell::Text(" 1"));
+        assert_eq!(
+            parse_table_impl("a\tb\r1\t2\r 3\t4\r", &options, true)
+                .unwrap()
+                .rows,
+            2
+        );
+        assert_eq!(
+            parse_table_impl("a\tb\r 1\t2\r 3\t4\r", &options, true)
+                .unwrap_err()
+                .to_string(),
+            "Error tokenizing data. C error: Buffer overflow caught - possible malformed input file.\n"
+        );
     }
 
     #[test]

@@ -4,6 +4,7 @@ pub mod acmg_scoring;
 mod acmg_step;
 pub mod acmg_variant_mechanism;
 mod alphamissense_vcf;
+mod builder_table;
 mod cache_convert;
 mod cache_install;
 pub mod cadd_hub;
@@ -15,13 +16,14 @@ mod config_text;
 mod fdr;
 #[allow(dead_code)] // Shared installer primitive; callers switch after their own parity tests.
 mod file_lock;
-#[allow(dead_code, reason = "Shared gzip API awaiting installer-builder callers")]
 mod gzip_writer;
+mod hpo_assertions;
 pub mod hpo_penetrance;
 pub mod interpro_mapping_io;
 mod json_text;
 #[allow(dead_code, reason = "Publisher-checksum API awaiting installer-builder callers")]
 mod md5;
+mod mondo_scope;
 mod pandas_polars;
 mod pandas_table;
 pub mod pedigree_filter;

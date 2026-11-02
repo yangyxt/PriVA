@@ -228,6 +228,38 @@ failure leaves the completed AA archive. Output paths must be distinct from
 one another and the inputs. This procedure is opt-in; installer callers keep
 their existing producer.
 
+The optional gene-statistics builder consumes an annotated ClinVar VCF and the
+same ClinVar summary and MANE tables as `scripts/clinvar_stat_variants.py`:
+
+```bash
+"$PRIVA_BINARY" clinvar-gene-stats build \
+  --vcf clinvar.annotated.vcf.gz \
+  --clinvar-summary variant_summary.txt.gz --mane-summary MANE.summary.txt.gz \
+  --output clinvar.gene-stat.rkyv --threads 8 \
+  --python-hash-seed "$REFERENCE_HASH_SEED" \
+  --completion-order reference-completion.json
+```
+
+The hash seed must match the explicitly seeded Python reference profile
+(CPython 3.12, 64-bit little-endian). It cannot recover an unknown historical
+random seed. A completion trace contains the input VCF's `vcf_sha256` and an
+`order` array of zero-based record ordinals, each appearing exactly once.
+Without `--completion-order`, workers are collected as they finish;
+`--completion-trace NEW_JSON` records that order. Order can affect the selected
+gene symbol and numeric coercion, so independently timed executions are not
+guaranteed to produce identical values. `--config YAML` reads the existing
+donor-loss cutoff; `--donor-loss-cutoff FLOAT` supplies it explicitly.
+
+`--allele-transcript-map PICKLE` can replace the two table options when reusing
+an independently verified output of the original transcript-map procedure.
+It accepts a plain dictionary, including gzip-compressed input, through the
+restricted reader. `merge --input FIRST_RKYV --input SECOND_RKYV --output RKYV`
+combines completed shards in the supplied VCF header order and requires
+disjoint gene keys. For genes spanning shards, use the whole-input builder.
+Nested dictionary order, typed symbols and set membership are retained;
+[schema 5 version 2](rust/CACHE_FORMATS.md#clinvar-gene-symbols-schema-5-version-2)
+is used only for nontext symbols. Installer callers keep the existing producer.
+
 The Python scripts remain in `scripts/`. To run a step with its Python script again, revert the commit that switched it (titled "Call priva for the per-sample preparation steps", "Call priva for the splicing and UTR interpretation" or "Call priva acmg-assign for the ACMG step"); each restores the Python command lines and their freshness checks together, and the outputs of the two routes are interchangeable. Use a new output folder after switching either way.
 
 `priva_ranking_binary` selected Rust ranking bridges inside the Python ACMG step; `priva acmg-assign` accepts the option and does not need it.

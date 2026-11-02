@@ -39,7 +39,7 @@ pub(crate) fn count_ratio(numerator: u64, denominator: u64) -> Result<f64, Failu
 
 // Inputs are bounded by signed-64-bit endpoints or unsigned-64-bit counts.
 // Their magnitudes are at most 2^64; shifted division fits in u128.
-fn integer_ratio(numerator: i128, denominator: i128) -> Result<f64, Failure> {
+pub(crate) fn integer_ratio(numerator: i128, denominator: i128) -> Result<f64, Failure> {
     if denominator == 0 {
         return Err(Failure::ZeroDivision);
     }

@@ -252,6 +252,9 @@ class ManualInputIntegration(unittest.TestCase):
         # preparation, VEP, or main installation occurs in this test.
         script = r'''
 source "$1"
+# Manual-input boundaries must not bootstrap the native CLI.
+priva_cache_install_begin() { PRIVA_CACHE_INSTALL_BUILD_CONFIG=$2; }
+priva_cache_install_finish() { :; }
 priva_install_basic_paths() { printf 'BOUNDARY:basic\n'; PRIVA_INSTALL_TMPDIR="$TEST_FOLDER"; }
 conda_install_vep() { printf 'BOUNDARY:environment\n'; PRIVA_INSTALL_ENV_NAME=priva_acmg; }
 python() { "$TEST_PYTHON" "$@"; }

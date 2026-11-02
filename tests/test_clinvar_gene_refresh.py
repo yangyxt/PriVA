@@ -469,6 +469,9 @@ class ClinVarGeneRefreshTests(unittest.TestCase):
         script = r'''
 source "$1" >/dev/null || exit
 log() { :; }
+# This test checks dispatch order; native preparation/publication is separate.
+priva_cache_install_begin() { PRIVA_CACHE_INSTALL_BUILD_CONFIG=$2; }
+priva_cache_install_finish() { :; }
 priva_install_basic_paths() { PRIVA_INSTALL_TMPDIR="$TEST_FOLDER"; }
 conda_install_vep() { PRIVA_INSTALL_ENV_NAME=priva_acmg; }
 priva_prepare_install_config() { :; }

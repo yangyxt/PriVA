@@ -40,6 +40,9 @@ python() {
 }
 '''
 MAIN_FIXTURES = r'''
+# Private cache publication has its own real-CLI boundary suite.
+priva_cache_install_begin() { PRIVA_CACHE_INSTALL_BUILD_CONFIG=$2; }
+priva_cache_install_finish() { :; }
 priva_install_basic_paths() { PRIVA_INSTALL_TMPDIR="$TEST_FOLDER"; }
 conda_install_vep() { PRIVA_INSTALL_ENV_NAME=priva_acmg; }
 priva_manual_cache_inputs() { record_call manual "$@"; return "${MANUAL_STATUS:-0}"; }

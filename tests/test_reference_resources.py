@@ -634,6 +634,8 @@ class ReferenceResources(unittest.TestCase):
                 "$TEST_PYTHON" -c 'import json,sys; v=json.load(open(sys.argv[1])).get(sys.argv[2]); print("null" if v is None else v)' "$1" "$2"
             }
             # Scalar bootstrap is separately covered; retain actual prerequisite/cache routing.
+            priva_cache_install_begin() { PRIVA_CACHE_INSTALL_BUILD_CONFIG=$2; }
+            priva_cache_install_finish() { :; }
             priva_install_basic_paths() { PRIVA_INSTALL_TMPDIR="$TEST_INSTALL_TMPDIR"; }
             conda_install_vep() { PRIVA_INSTALL_ENV_NAME=priva_acmg; }
             nm_to_enst_mapping_install() { :; }
@@ -641,6 +643,7 @@ class ReferenceResources(unittest.TestCase):
             # snapshot deployment has its own complete-checkout fixtures.
             bundled_snapshot_install() { :; }
             Nextflow_runtime_install() { :; }  # Unrelated driver acquisition is covered separately.
+            PriVA_rust_install() { :; }  # No build in a reference preflight fixture.
             priva_configure_cache_paths() { [[ ${2:-} != --check ]] || printf '%s' '{}'; :; }
             priva_configure_portable_paths() { :; }
             reference_genome_install() { printf 'SELECTED_REFERENCE_REUSED\n'; }

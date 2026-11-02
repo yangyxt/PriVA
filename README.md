@@ -64,6 +64,16 @@ CADD scores come from upstream `CADD.sh` with all of CADD's own data (see
 Snakemake-built environments while the workflow continues in `priva_acmg`;
 users do not need to switch environments manually. Fresh installs use the
 existing Mamba root, and completed older installations are reused in place.
+Fresh `priva_acmg` environments include Conda, which CADD's Snakemake requires
+even with Micromamba. The installer checks compatible Conda on `PATH`, in
+`CONDA_EXE`, then in `cadd_parent_dir/conda_frontend`. If none is available, the
+selected Micromamba/Mamba/Conda creates that separate tool-only prefix with
+Conda 24.9.2 from conda-forge. Existing scientific packages and exports stay
+unchanged; CADD callers discover the frontend without replacing the active
+Python. With `priva_acmg` active, prepare this prerequisite separately with
+`bash scripts/install_utils.sh CADD_conda_install --config /path/to/config.yaml`
+after cache paths have been prepared. Incomplete frontends are retained and
+reported, never overwritten or treated as ready.
 At completion, `cache_root/*.installed.yml` records the actually installed
 PriVA/CADD packages without host prefixes.
 

@@ -483,6 +483,7 @@ AlphaMissense_pick_intolerant_domains() { :; }
 prepare_pm1_regions() { :; }
 ClinVar_patho_AF_stat() { printf 'CLINVAR_AF\n'; }
 CADD_install() { :; }
+CADD_conda_install() { :; }
 CADD_upstream_check() { :; }
 ClinGen_deploy() { :; }
 CDS_FASTA_install() { :; }

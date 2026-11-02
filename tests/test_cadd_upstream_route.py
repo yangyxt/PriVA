@@ -3,14 +3,16 @@
 A stub CADD.sh records its arguments; no CADD environment or model is run.
 """
 import os
+import gzip
 from pathlib import Path
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
+from test_cadd_conda import write_conda
 
 ROOT = Path(__file__).resolve().parents[1]
-BIN = Path('/stornext/snfs170/next-gen/scratch/yangyxt/mamba/envs/priva_acmg/bin')
 
 CADD_STUB = '''#!/usr/bin/env bash
 printf '%s\\n' "$@" > "$FIXTURE/cadd-argv.txt"
@@ -43,6 +45,8 @@ class UpstreamCaddRouteTests(unittest.TestCase):
         self.exon_tables.mkdir(parents=True)
         (self.root / 'input.vcf.gz').write_bytes(b'fixture input')
         (self.root / 'config.yaml').write_text('assembly: hg38\n')
+        (self.root / 'bin/python').symlink_to(sys.executable)
+        (self.root / 'bin/mawk').symlink_to(shutil.which('mawk') or shutil.which('awk'))
 
     def tearDown(self):
         self.temporary.cleanup()
@@ -52,17 +56,17 @@ class UpstreamCaddRouteTests(unittest.TestCase):
         path.write_text('#!/usr/bin/env bash\nexit 0\n')
         path.chmod(0o755)
 
-    def run_route(self):
-        path = ':'.join([str(self.root / 'bin'), str(BIN), '/usr/bin', '/bin'])
-        if shutil.which('conda', path=':'.join([str(BIN), '/usr/bin', '/bin'])):
+    def run_route(self, shell=SHELL):
+        path = ':'.join([str(self.root / 'bin'), '/usr/bin', '/bin'])
+        if shutil.which('conda', path='/usr/bin:/bin'):
             self.skipTest('a host conda outside the fixture would select the conda route')
-        env = dict(os.environ, ROOT=str(ROOT), FIXTURE=str(self.root), PATH=path)
-        result = subprocess.run(['bash', '-c', SHELL], env=env, capture_output=True, text=True, timeout=60)
+        env = dict(os.environ, ROOT=str(ROOT), FIXTURE=str(self.root), PATH=path, CONDA_EXE='')
+        result = subprocess.run(['bash', '-c', shell], env=env, capture_output=True, text=True, timeout=60)
         argv = (self.root / 'cadd-argv.txt').read_text().splitlines() if (self.root / 'cadd-argv.txt').exists() else []
         return result, argv
 
     def test_conda_host_keeps_original_conda_only_command(self):
-        self.tool('conda')
+        write_conda(self.root)
         result, argv = self.run_route()
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(argv, ['-c', '2', '-a', '-p', '-m', '-d', '-g', 'GRCh38', '-o',
@@ -79,6 +83,27 @@ class UpstreamCaddRouteTests(unittest.TestCase):
         self.assertIn('needs a conda executable', result.stderr)
         self.assertEqual(argv, [])
         self.assertFalse((self.root / 'output.cadd.tsv').exists())
+
+    def test_runtime_finds_frontend_without_activating_its_python(self):
+        write_conda(self.root / 'conda_frontend')
+        result, argv = self.run_route()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('-m', argv)
+
+    def test_installer_upstream_check_uses_same_frontend_and_original_arguments(self):
+        write_conda(self.root / 'conda_frontend')
+        tests = self.root / 'cadd/test'
+        tests.mkdir()
+        (tests / 'input.vcf.gz').write_bytes(b'fixture input')
+        (tests / 'output_inclAnno_GRCh38.tsv.gz').write_bytes(gzip.compress(
+            b'## CADD fixture\n#Chrom\tPos\tRef\tAlt\tRawScore\tPHRED\n1\t10\tA\tG\t0.5\t12.0\n'))
+        shell = SHELL.split('Calculate_CADD ', 1)[0].replace('/scripts/annotation_vcf.sh', '/scripts/install_utils.sh')
+        result, argv = self.run_route(shell + 'CADD_upstream_check "$FIXTURE/config.yaml"\n')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(argv[:8], ['-c', '2', '-a', '-m', '-g', 'GRCh38', '-o', argv[7]])
+        self.assertTrue(argv[7].startswith(str(self.root / 'tmp/cadd_upstream_check.')))
+        self.assertEqual(argv[8], str(tests / 'input.vcf.gz'))
+        self.assertIn('reproduced its bundled GRCh38 test PHRED scores', result.stderr)
 
 
 if __name__ == '__main__':

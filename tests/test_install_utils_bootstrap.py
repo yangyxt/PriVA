@@ -293,6 +293,7 @@ class InstallerBootstrapTests(unittest.TestCase):
             # or external caches and must not invoke source adoption.
             priva_prepare_install_config() { return 0; }
             bundled_snapshot_install() { return 0; }
+            CADD_conda_install() { return 0; }  # Frontend deployment has separate fixtures.
             reference_genome_install() { printf 'REFERENCE_STAGE_REACHED\n'; return 73; }
             main_install "$@"
         ''', *args)
@@ -311,6 +312,7 @@ class InstallerBootstrapTests(unittest.TestCase):
                 self.assertIn("ensembl-vep=113.*", specification)
                 self.assertIn("  - diptest\n", specification)
                 self.assertIn("  - pyarrow\n", specification)
+                self.assertIn("  - conda>=24.7.1\n", specification)
                 self.assertEqual(create[create.index("--name") + 1], "priva_acmg")
                 first_yq = next(index for index, call in enumerate(calls) if call[0] == "yq")
                 activation = next(index for index, call in enumerate(calls) if call[1:3] in
@@ -678,6 +680,7 @@ class InstallerBootstrapTests(unittest.TestCase):
             nm_to_enst_mapping_install() { return 0; }
             priva_configure_cache_paths() { [[ ${2:-} != --check ]] || printf '%s' '{}'; return 0; }
             priva_configure_portable_paths() { return 0; }
+            CADD_conda_install() { return 0; }  # Release-forwarding fixture only.
             reference_genome_install() { return 0; }
             update_yaml() { printf 'UNEXPECTED_CONFIG_UPDATE\n'; return 1; }
             vep_cache_api_install() { printf 'CACHE_ARGS=%s\n' "$*"; return 73; }

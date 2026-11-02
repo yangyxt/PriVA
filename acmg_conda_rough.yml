@@ -12,6 +12,8 @@ dependencies:
   - bioconda::tsv-utils
   - ca-certificates
   - certifi
+  # Upstream CADD's Snakemake requires genuine Conda, including under Micromamba.
+  - conda>=24.7.1
   - conda-forge::parallel
   - conda-forge::perl-compress-raw-zlib[version='>=2.201']
   - ensembl-vep

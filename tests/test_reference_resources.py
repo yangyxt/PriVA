@@ -640,6 +640,7 @@ class ReferenceResources(unittest.TestCase):
             # This fixture exercises reference/cache preflight; unrelated fixed
             # snapshot deployment has its own complete-checkout fixtures.
             bundled_snapshot_install() { :; }
+            CADD_conda_install() { :; }  # Unrelated frontend deployment is covered separately.
             priva_configure_cache_paths() { [[ ${2:-} != --check ]] || printf '%s' '{}'; :; }
             priva_configure_portable_paths() { :; }
             reference_genome_install() { printf 'SELECTED_REFERENCE_REUSED\n'; }

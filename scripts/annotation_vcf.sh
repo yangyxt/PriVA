@@ -1369,7 +1369,7 @@ function Calculate_CADD {
     [[ -x ${cadd_script} ]] || { log "CADD.sh is missing from cadd_base_dir ${cadd_base_dir}; run main_install"; return 1; }
     # Snakemake inside CADD.sh deploys the pinned rule environments (-m keeps
     # them conda-only) and needs a conda executable even when one is active.
-    command -v conda > /dev/null 2>&1 || { log "CADD.sh needs a conda executable on PATH to deploy its environments"; return 1; }
+    priva_cadd_conda check --frontend-prefix "${cadd_base_dir%/*}/conda_frontend" || return 1
     check_vcf_validity ${input_vcf} || { \
     log "The input vcf file ${input_vcf} is not valid. Please check the file"; return 1; }
 

@@ -15,7 +15,7 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 INSTALLER = ROOT / "scripts/install_utils.sh"
-STAGES = ["VEP_plugins_install", "LoFtee_install", "gnomAD_install", "AlphaMissense_anno_gnomAD",
+STAGES = ["CADD_conda_install", "VEP_plugins_install", "LoFtee_install", "gnomAD_install", "AlphaMissense_anno_gnomAD",
           "InterPro_parsing", "pext_install", "ClinVar_install", "AlphaMissense_stat", "AlphaMissense_pick_intolerant_domains",
           "prepare_pm1_regions", "ClinVar_patho_AF_stat", "CADD_install", "CADD_upstream_check", "ClinGen_deploy", "CDS_FASTA_install", "mechanism_resource_install"]
 PLUGINS = ["UTRAnnotator_install", "LOEUF_install", "Conservation_install", "AlphaMissense_install",
@@ -81,14 +81,14 @@ priva_export_installed_environment() { :; }
                 expected.update(VEP_plugins_install=[self.config['vep_plugins_dir'], self.config['vep_plugins_cachedir'], 'hg38', str(config), 'priva_acmg'],
                                 LoFtee_install=[self.config['vep_plugins_cachedir'], str(config)],
                                 gnomAD_install=[str(config), str(self.ref)], ClinVar_install=['--config', str(config)],
-                                CADD_install=[str(config), 'hg38'])
+                                CADD_install=[str(config), 'hg38'], CADD_conda_install=['--config', str(config)])
                 for name, *args in calls:
                     self.assertEqual(args, expected[name], name)
 
     def test_main_stage_failure_stops_following_stages_with_exact_config(self):
         result, config, calls = self.execute(self.main_script(), fail="gnomAD_install")
         self.assertNotEqual(result.returncode, 0)
-        self.assertEqual([row[0] for row in calls], STAGES[:3])
+        self.assertEqual([row[0] for row in calls], STAGES[:STAGES.index("gnomAD_install") + 1])
         self.assertEqual(calls[-1][1:], [str(config), str(self.ref)])
 
     def test_pext_ready_before_clinvar_consumer_fixture(self):

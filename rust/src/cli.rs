@@ -312,6 +312,9 @@ pub(crate) fn run() -> Result<()> {
     if args.get(1).map(String::as_str) == Some("cache-convert") {
         return crate::cache_convert::dispatch(&args[2..]);
     }
+    if args.get(1).map(String::as_str) == Some("cache-install") {
+        return crate::cache_install::dispatch(&args[2..]);
+    }
     if args.get(1).map(String::as_str) == Some("acmg-step") {
         return crate::acmg_step::dev_harness::dispatch(&args[2..]);
     }

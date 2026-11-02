@@ -4,6 +4,7 @@ pub mod acmg_scoring;
 mod acmg_step;
 pub mod acmg_variant_mechanism;
 mod cache_convert;
+mod cache_install;
 pub mod cadd_hub;
 mod cli;
 pub mod combine_annotations;

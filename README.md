@@ -207,6 +207,27 @@ schema 6 version 1, or version 2 when a Boolean value survives; see the
 [gene-AF format](rust/CACHE_FORMATS.md#clinvar-gene-af-values-schema-6-version-2).
 Installer callers continue to select their existing producer.
 
+To build the amino-acid and splice caches together from an existing indexed
+ClinVar VCF:
+
+```bash
+"$PRIVA_BINARY" clinvar-aa-splice build \
+  --vcf clinvar.annotated.vcf.gz \
+  --aa-output clinvar.aa.rkyv --splice-output clinvar.splice.rkyv --threads 4
+```
+
+`chromosome` takes the same inputs plus `--chrom CONTIG`. Use `merge` with
+repeated `--aa-input AA_SHARD --splice-input SPLICE_SHARD` pairs in VCF header
+order, followed by `--aa-output` and `--splice-output`. Both caches retain the
+producer's annotation order and duplicate observations. The splice cache uses
+[schema 2 version 2](rust/CACHE_FORMATS.md#clinvar-splice-records-schema-2-version-2)
+only when missing fields or partial SpliceAI dictionaries require it.
+Processing completes before either output is written; AA is published first.
+Each archive is checked and published atomically, so a later splice publication
+failure leaves the completed AA archive. Output paths must be distinct from
+one another and the inputs. This procedure is opt-in; installer callers keep
+their existing producer.
+
 The Python scripts remain in `scripts/`. To run a step with its Python script again, revert the commit that switched it (titled "Call priva for the per-sample preparation steps", "Call priva for the splicing and UTR interpretation" or "Call priva acmg-assign for the ACMG step"); each restores the Python command lines and their freshness checks together, and the outputs of the two routes are interchangeable. Use a new output folder after switching either way.
 
 `priva_ranking_binary` selected Rust ranking bridges inside the Python ACMG step; `priva acmg-assign` accepts the option and does not need it.

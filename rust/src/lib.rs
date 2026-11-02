@@ -4,6 +4,8 @@ pub mod acmg_scoring;
 mod acmg_step;
 pub mod acmg_variant_mechanism;
 mod alphamissense_vcf;
+#[allow(dead_code)] // Shared runtime boundary also serves separately integrated builders.
+mod builder_error;
 mod cache_convert;
 mod cache_install;
 pub mod cadd_hub;
@@ -41,7 +43,11 @@ mod yaml_config;
 pub fn main_entry() {
     if let Err(error) = cli::run() {
         eprintln!("priva: {error}");
-        std::process::exit(2);
+        std::process::exit(if error.is::<builder_error::RuntimeError>() {
+            1
+        } else {
+            2
+        });
     }
 }
 

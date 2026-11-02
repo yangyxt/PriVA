@@ -42,6 +42,18 @@ use crate::pandas_table::{Column as PandasColumn, ObjectValue, Table};
 use polars_core::prelude::*;
 use polars_ops::chunked_array::strings::StringNameSpaceImpl;
 
+/// Shared exception identity used by the builder runtime boundary.
+#[derive(Debug)]
+pub(crate) struct NonUniqueRightKeys;
+
+impl std::fmt::Display for NonUniqueRightKeys {
+    fn fmt(&self, out: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        out.write_str("Merge keys are not unique in right dataset; not a many-to-one merge")
+    }
+}
+
+impl std::error::Error for NonUniqueRightKeys {}
+
 /// The pandas column type a polars result goes back to.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) enum PandasDtype {

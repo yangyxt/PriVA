@@ -8,6 +8,7 @@
 use crate::cli::{Result, invalid};
 use crate::python_args::{Parsed, parse_long_options};
 use crate::python_io::PythonGzipReader;
+use crate::python_lines::Lines;
 use crate::python_text::is_python_space;
 use std::fs::{self, File};
 use std::io::{BufWriter, Read, Write};
@@ -134,77 +135,6 @@ fn check_tabix_data(path: &Path) -> Result<()> {
         return Err(invalid("the indexed input is not generic text"));
     }
     Ok(())
-}
-
-/// TextIOWrapper's UTF-8 decoding and universal CR/LF/CRLF line boundaries.
-/// Decode each input block before returning its lines, so invalid UTF-8 does
-/// not silently publish earlier lines from the same decoded block.
-struct Lines<R: Read> {
-    source: R,
-    text: String,
-    at: usize,
-    pending: Vec<u8>,
-    eof: bool,
-    skip_lf: bool,
-}
-impl<R: Read> Lines<R> {
-    fn new(source: R) -> Self {
-        Self {
-            source,
-            text: String::new(),
-            at: 0,
-            pending: Vec::new(),
-            eof: false,
-            skip_lf: false,
-        }
-    }
-    fn fill(&mut self) -> Result<bool> {
-        if self.eof {
-            return Ok(false);
-        }
-        let mut block = [0_u8; 8192];
-        let count = self.source.read(&mut block)?;
-        self.eof = count == 0;
-        self.pending.extend_from_slice(&block[..count]);
-        let complete = match std::str::from_utf8(&self.pending) {
-            Ok(_) => self.pending.len(),
-            Err(error) if error.error_len().is_none() && !self.eof => error.valid_up_to(),
-            Err(_) => return Err(invalid("UnicodeDecodeError: input is not UTF-8")),
-        };
-        self.text = std::str::from_utf8(&self.pending[..complete])
-            .unwrap()
-            .to_owned();
-        self.pending.drain(..complete);
-        self.at = 0;
-        Ok(!self.eof || !self.text.is_empty())
-    }
-    fn next(&mut self) -> Result<Option<String>> {
-        let mut line = String::new();
-        loop {
-            if self.at == self.text.len() && !self.fill()? {
-                return Ok((!line.is_empty()).then_some(line));
-            }
-            if self.at == self.text.len() {
-                continue;
-            }
-            if self.skip_lf {
-                self.skip_lf = false;
-                if self.text.as_bytes()[self.at] == b'\n' {
-                    self.at += 1;
-                    continue;
-                }
-            }
-            let rest = &self.text[self.at..];
-            if let Some(end) = rest.bytes().position(|byte| matches!(byte, b'\r' | b'\n')) {
-                line.push_str(&rest[..end]);
-                self.skip_lf = rest.as_bytes()[end] == b'\r';
-                self.at += end + 1;
-                return Ok(Some(line));
-            }
-            line.push_str(rest);
-            self.at = self.text.len();
-        }
-    }
 }
 
 fn project(input: impl Read, output: &mut impl Write, names: &[String]) -> Result<usize> {

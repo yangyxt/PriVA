@@ -823,7 +823,6 @@ function SpliceAI2_install() {
     identities=$(python - "${config_file}" "${manifest}" "${output_dir}" <<'PY'
 import hashlib
 import json
-import os
 from pathlib import Path
 import sys
 import yaml
@@ -4731,7 +4730,175 @@ function priva_export_installed_environment() {
 }
 
 
-function main_install() {
+# The runtime configuration names native archives. Python builders use a stable
+# private configuration naming their original pickle inputs and outputs instead.
+function priva_cache_config_is_native() {
+    [[ $# -eq 2 && ${1:-} == --config && -r ${2:-} ]] || return 2
+    # Legacy callers need no new tools or bootstrap. Parse YAML only when a
+    # native filename occurs; comments or unrelated fields are not sufficient.
+    LC_ALL=C grep -Fq '.rkyv' "$2" || return 1
+    python - "$2" <<'PRIVA_NATIVE_CONFIG_PY'
+import sys
+import yaml
+
+keys = (
+    "clinvar_aa_stat", "clinvar_splice_stat", "alphamissense_tranx_domain_map",
+    "clinvar_patho_exon_af_stat", "clinvar_gene_stat", "clinvar_patho_af_stat",
+    "pm1_regions_pkl", "all_intolerant_domains", "interpro_mapping_pickle", "clingen_map",
+)
+try:
+    with open(sys.argv[1]) as source:
+        config = yaml.safe_load(source)
+    if not isinstance(config, dict):
+        raise ValueError("the configuration must be a YAML mapping")
+    native = any(isinstance(config.get(key), str) and config[key].endswith(".rkyv") for key in keys)
+except (OSError, ValueError, yaml.YAMLError) as error:
+    print("Cannot inspect native cache configuration: " + str(error), file=sys.stderr)
+    raise SystemExit(2)
+raise SystemExit(0 if native else 1)
+PRIVA_NATIVE_CONFIG_PY
+}
+
+
+function priva_cache_install_begin() {
+    [[ $# -eq 2 && ${1:-} == --config && -r ${2:-} ]] || {
+        log "ERROR: Use priva_cache_install_begin --config CONFIG."
+        return 2
+    }
+    PRIVA_CACHE_INSTALL_ORIGINAL=$(realpath -- "$2") || return 1
+    local cache_root receipt identity
+    cache_root=$(read_yaml "$PRIVA_CACHE_INSTALL_ORIGINAL" cache_root) || return 1
+    [[ $cache_root == /* && -d $cache_root ]] || {
+        log "ERROR: Configure an existing absolute cache_root before installing native caches."
+        return 1
+    }
+    cache_root=$(realpath -e -- "$cache_root") || return 1
+    [[ $cache_root != / ]] || { log "ERROR: cache_root must be dedicated storage."; return 1; }
+
+    # Bootstrap without writing priva_binary to the public configuration. Its
+    # selected executable is saved only in the private view during installation.
+    receipt=$(python "${SCRIPT_DIR}/bootstrap_priva_rust.py" install \
+        --source-root "$BASE_DIR" --cache-root "$cache_root") || return 1
+    PRIVA_CACHE_INSTALL_BINARY=$(python -c \
+        'import json,sys; print(json.loads(sys.argv[1])["binary"])' "$receipt") || return 1
+    [[ $PRIVA_CACHE_INSTALL_BINARY == /* && -s $PRIVA_CACHE_INSTALL_BINARY && -x $PRIVA_CACHE_INSTALL_BINARY ]] || {
+        log "ERROR: Rust bootstrap did not return an existing executable."
+        return 1
+    }
+    identity=$(printf '%s' "$PRIVA_CACHE_INSTALL_ORIGINAL" | sha256sum) || return 1
+    identity=${identity%% *}
+    PRIVA_CACHE_INSTALL_BUILD_CONFIG=$(python - "$cache_root" "$identity" <<'PRIVA_PRIVATE_PARENT_PY'
+import os
+from pathlib import Path
+import stat
+import sys
+
+parent = Path(sys.argv[1])
+for part in ("runtime", "priva-cache-configs", sys.argv[2]):
+    parent = parent / part
+    try:
+        parent.mkdir(mode=0o700)
+    except FileExistsError:
+        pass
+    info = parent.lstat()
+    if not stat.S_ISDIR(info.st_mode) or stat.S_ISLNK(info.st_mode):
+        raise SystemExit("Private cache configuration parent must be a real managed directory: " + str(parent))
+lock = parent / "build.yaml.lock"
+try:
+    info = lock.lstat()
+except FileNotFoundError:
+    pass
+else:
+    if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+        raise SystemExit("Private cache configuration lock must be a regular, unlinked file: " + str(lock))
+print(parent / "build.yaml")
+PRIVA_PRIVATE_PARENT_PY
+    ) || return 1
+    "$PRIVA_CACHE_INSTALL_BINARY" cache-install prepare \
+        --config "$PRIVA_CACHE_INSTALL_ORIGINAL" --build-config "$PRIVA_CACHE_INSTALL_BUILD_CONFIG" \
+        --source-root "$BASE_DIR" || return 1
+    local native_status=0
+    priva_cache_config_is_native --config "$PRIVA_CACHE_INSTALL_BUILD_CONFIG" || native_status=$?
+    [[ $native_status == 1 ]] || {
+        log "ERROR: The private builder configuration still names a native cache or is unreadable."
+        return 1
+    }
+
+    # prepare checks/creates the managed parent and retains an interrupted view.
+    # The lock covers the builder phase too; a second caller must not write it.
+    exec {PRIVA_CACHE_INSTALL_LOCK_FD}>"${PRIVA_CACHE_INSTALL_BUILD_CONFIG}.lock" || return 1
+    flock -n "$PRIVA_CACHE_INSTALL_LOCK_FD" || {
+        log "ERROR: Another installation is using this private builder configuration."
+        return 1
+    }
+}
+
+
+function priva_cache_install_finish() {
+    [[ $# -eq 0 && -n ${PRIVA_CACHE_INSTALL_ORIGINAL:-} && -n ${PRIVA_CACHE_INSTALL_BUILD_CONFIG:-} && \
+       -n ${PRIVA_CACHE_INSTALL_BINARY:-} ]] || {
+        log "ERROR: Begin a private cache installation before publishing it."
+        return 2
+    }
+    "$PRIVA_CACHE_INSTALL_BINARY" cache-install publish \
+        --config "$PRIVA_CACHE_INSTALL_ORIGINAL" --build-config "$PRIVA_CACHE_INSTALL_BUILD_CONFIG" \
+        --source-root "$BASE_DIR"
+}
+
+
+function priva_cache_install_direct() (
+    [[ $# -ge 5 && ${1:-} == --function && ${3:-} == --config-position && ${5:-} == -- ]] || {
+        log "ERROR: Use priva_cache_install_direct --function NAME --config-position INDEX -- ARGUMENTS."
+        return 2
+    }
+    local function=$2 position=$4
+    shift 5
+    [[ $function =~ ^[A-Za-z_][A-Za-z0-9_]*$ && $position =~ ^[0-9]+$ ]] || return 2
+    local -a arguments=("$@")
+    local original="_priva_cache_builder_${function}" config=${arguments[$position]:-} native_status=0
+    [[ -r $config ]] || { "$original" "$@"; return $?; }
+    # Nested stage calls already have the private view. ClinVar's subprocess
+    # working configurations also contain pickle paths and follow the legacy arm.
+    if [[ ${PRIVA_CACHE_INSTALL_INTERNAL:-0} == 1 && $config == "${PRIVA_CACHE_INSTALL_BUILD_CONFIG:-}" ]]; then
+        "$original" "$@"
+        return $?
+    fi
+    priva_cache_config_is_native --config "$config" || native_status=$?
+    [[ $native_status != 1 ]] || { "$original" "$@"; return $?; }
+    [[ $native_status == 0 ]] || return "$native_status"
+
+    local PRIVA_CACHE_INSTALL_ORIGINAL PRIVA_CACHE_INSTALL_BINARY PRIVA_CACHE_INSTALL_LOCK_FD
+    local -x PRIVA_CACHE_INSTALL_BUILD_CONFIG PRIVA_CACHE_INSTALL_INTERNAL=1
+    priva_install_basic_paths --config "$config" || return 1
+    export TMPDIR=$PRIVA_INSTALL_TMPDIR
+    priva_cache_install_begin --config "$config" || return 1
+    arguments[$position]=$PRIVA_CACHE_INSTALL_BUILD_CONFIG
+    "$original" "${arguments[@]}" || return $?
+    priva_cache_install_finish
+)
+
+
+function priva_wrap_cache_builders() {
+    local function position definition
+    # Keep the original builder function bodies intact. These fixed aliases
+    # only route already-native direct callers through the same private view.
+    for function in AlphaMissense_stat AlphaMissense_pick_missense_constrained_segments \
+        AlphaMissense_pick_intolerant_domains prepare_pm1_regions InterPro_parsing \
+        ClinGen_deploy ClinVar_AA_stat ClinVar_patho_AF_stat ClinVar_Gene_stat \
+        ClinVar_Gene_stat_regenerate ClinVar_install; do
+        position=0
+        [[ $function != ClinVar_install ]] || position=1
+        definition=$(declare -f "$function") || return 1
+        definition="_priva_cache_builder_${definition}"
+        eval "$definition" || return 1
+        eval "$function() { priva_cache_install_direct --function $function --config-position $position -- \"\$@\"; }" || return 1
+    done
+}
+
+
+# Keep the private-view marker and lock descriptor inside this invocation,
+# including every early failure return from an existing installation stage.
+function main_install() (
     if [[ $# -eq 1 && ( ${1:-} == -h || ${1:-} == --help ) ]]; then
         printf 'Usage: bash scripts/install_utils.sh main_install CONFIG\n'
         printf 'Selects the numeric major vep_installed_version in CONFIG.\n'
@@ -4740,6 +4907,7 @@ function main_install() {
         printf 'The environment supplies yq after the bootstrap release scalar is checked.\n'
         printf 'Installs the pinned Nextflow driver and private JRE under cache_root/runtime.\n'
         printf 'Installs the managed PriVA Rust CLI under cache_root/runtime and saves its path as priva_binary.\n'
+        printf 'Python builders use a private configuration; native caches and runtime configuration publish after success.\n'
         return 0
     fi
     [[ $# -eq 1 && ${1:-} != -* && -r ${1:-} ]] || {
@@ -4756,6 +4924,11 @@ function main_install() {
     # Prepare the bundled environment before parsing the full configuration.
     conda_install_vep "${config_file}" || return 1
     local conda_env_name=${PRIVA_INSTALL_ENV_NAME}
+
+    local PRIVA_CACHE_INSTALL_ORIGINAL PRIVA_CACHE_INSTALL_BINARY PRIVA_CACHE_INSTALL_LOCK_FD
+    local -x PRIVA_CACHE_INSTALL_BUILD_CONFIG PRIVA_CACHE_INSTALL_INTERNAL=1
+    priva_cache_install_begin --config "$config_file" || return 1
+    config_file=$PRIVA_CACHE_INSTALL_BUILD_CONFIG
 
     # The existing smoke route omits VEP/plugins entirely and has no manual
     # plugin-cache requirement. Real installation must check those inputs first.
@@ -4878,10 +5051,13 @@ function main_install() {
     
     priva_export_installed_environment --config "${config_file}" || \
     { log "Failed to export the installed PriVA/CADD package environments"; return 1; }
+    priva_cache_install_finish || { log "Failed to publish native cache configuration"; return 1; }
     log "Congratulations! The installation is completed!"
-}
+)
 
 
+
+priva_wrap_cache_builders || { log "ERROR: Could not prepare private cache builder entry points."; return 1 2>/dev/null || exit 1; }
 
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
     "$@"

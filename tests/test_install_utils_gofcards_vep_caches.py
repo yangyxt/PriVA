@@ -231,6 +231,9 @@ for function in Nextflow_runtime_install PriVA_rust_install reference_genome_ins
 done
 ClinVar_install() { [[ $# -eq 2 && $1 == --config && $2 == "$TEST_CONFIG" ]]; }
 mechanism_resource_install() { gofcards_exact_gof_cache_install "$1"; }
+# Native cache publication is covered by its dedicated boundary fixtures.
+priva_cache_install_begin() { PRIVA_CACHE_INSTALL_BUILD_CONFIG=$2; }
+priva_cache_install_finish() { return 0; }
 main_install "$TEST_CONFIG"
 ''')
         self.assertNotEqual(result.returncode, 0)

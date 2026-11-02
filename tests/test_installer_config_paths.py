@@ -46,8 +46,13 @@ class PortableConfigPaths(unittest.TestCase):
                                "--source-root", str(ROOT), *extra], text=True, capture_output=True, timeout=15)
 
     def run_shell(self, body):
-        return subprocess.run(["bash", "--noprofile", "--norc", "-c",
-                               'source "$1" >/dev/null || exit\n' + body,
+        script = (
+            'source "$1" >/dev/null || exit\n'
+            '# Native publication has dedicated private-view fixtures.\n'
+            'priva_cache_install_begin() { PRIVA_CACHE_INSTALL_BUILD_CONFIG=$2; }\n'
+            'priva_cache_install_finish() { return 0; }\n'
+        ) + body
+        return subprocess.run(["bash", "--noprofile", "--norc", "-c", script,
                                "test", str(INSTALLER), str(self.config)],
                               text=True, capture_output=True, timeout=20)
 
@@ -387,6 +392,8 @@ class PortableConfigPaths(unittest.TestCase):
         before = self.config.read_bytes()
         result = self.run_shell('''
             conda_install_vep() { PRIVA_INSTALL_ENV_NAME=priva_acmg; }
+            priva_cache_install_begin() { PRIVA_CACHE_INSTALL_BUILD_CONFIG=$2; }
+            priva_cache_install_finish() { return 0; }
             # Labelled boundary stub: this fixture tests the effective config
             # and custom prerequisite failure; real manual-input gating has
             # separate fresh/recovery integration coverage.

@@ -279,7 +279,12 @@ class InstallerBootstrapTests(unittest.TestCase):
         return [json.loads(line) for line in path.read_text().splitlines()] if path.exists() else []
 
     def run_shell(self, body, *args):
-        script = 'source "$1" >/dev/null || exit; shift\n' + body
+        script = (
+            'source "$1" >/dev/null || exit; shift\n'
+            '# Native publication has dedicated private-view fixtures.\n'
+            'priva_cache_install_begin() { PRIVA_CACHE_INSTALL_BUILD_CONFIG=$2; }\n'
+            'priva_cache_install_finish() { return 0; }\n'
+        ) + body
         return subprocess.run(
             [self.bash, "--noprofile", "--norc", "-c", script, "bash", str(INSTALLER), *map(str, args)],
             env=self.env, capture_output=True, text=True, timeout=15,
@@ -1068,6 +1073,8 @@ class CachePathTests(unittest.TestCase):
             priva_install_basic_paths() { PRIVA_INSTALL_TMPDIR="$TMPDIR"; }
             conda_install_vep() { PRIVA_INSTALL_ENV_NAME=priva_acmg; }
             # This boundary fixture tests failure in cache-root planning only.
+            priva_cache_install_begin() { PRIVA_CACHE_INSTALL_BUILD_CONFIG=$2; }
+            priva_cache_install_finish() { return 0; }
             priva_manual_cache_inputs() { return 0; }
             priva_install_prerequisites() { return 0; }
             nm_to_enst_mapping_install() { return 0; }

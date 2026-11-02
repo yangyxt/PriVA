@@ -83,6 +83,9 @@ class InstallerPrerequisites(unittest.TestCase):
         # actual Python prerequisite checks and command argument boundaries.
         prefix = '''
             source "$1"
+            # Native cache publication has separate private-view fixtures.
+            priva_cache_install_begin() { PRIVA_CACHE_INSTALL_BUILD_CONFIG=$2; }
+            priva_cache_install_finish() { return 0; }
             log() { printf '%s\\n' "$*" >&2; }
             # This module tests prerequisites; basic YAML bootstrap is separate.
             priva_install_basic_paths() { PRIVA_INSTALL_TMPDIR="$TEST_FOLDER"; }

@@ -60,6 +60,9 @@ class ConfigFilenameSpaces(unittest.TestCase):
 
     def main_script(self):
         setup = r'''
+# Native cache publication is covered by its dedicated boundary fixtures.
+priva_cache_install_begin() { PRIVA_CACHE_INSTALL_BUILD_CONFIG=$2; }
+priva_cache_install_finish() { return 0; }
 conda_install_vep() { PRIVA_INSTALL_ENV_NAME=priva_acmg; }
 priva_manual_cache_inputs() { :; }
 priva_prepare_install_config() { :; }

@@ -297,6 +297,9 @@ pub(crate) fn run() -> Result<()> {
     if args.get(1).map(String::as_str) == Some("interpro-mapping") {
         return crate::interpro_mapping_io::dispatch(&args[2..]);
     }
+    if args.get(1).map(String::as_str) == Some("das-domains") {
+        return crate::das_domain::dispatch(&args[2..]);
+    }
     if args.get(1).map(String::as_str) == Some("spliceai-cache-input") {
         return crate::spliceai_cache_input::dispatch(&args[2..]);
     }

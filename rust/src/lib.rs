@@ -36,6 +36,7 @@ mod ks_greater;
 #[allow(dead_code)]
 mod das_sampling;
 // Candidate classification is validated before the full DAS builder is enabled.
+mod das_domain;
 #[allow(dead_code)]
 mod das_rescue;
 #[allow(dead_code)]
@@ -68,6 +69,7 @@ mod python_args;
 mod python_io;
 mod python_lines;
 mod python_path;
+#[allow(dead_code)] // Individual opt-in producers use distinct text/pair interfaces.
 mod python_set_order;
 mod python_subprocess;
 mod python_text;

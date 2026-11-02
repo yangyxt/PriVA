@@ -1,6 +1,7 @@
 //! `priva cache-convert`: one-time conversion of an installed Python pickle cache to the branch's
 //! Rust-native format (`rust/CACHE_FORMATS.md`), with a check that the converted file answers
-//! every key of the pickle with the same value. Prototype: `clinvar_aa_stat` only.
+//! every key of the pickle with the same value. Each implemented cache has a checked typed
+//! reader and a full typed export for independent comparison with Python's unpickler.
 //!
 //! `clinvar_aa_stat` (schema 1, version 1) holds the ClinVar amino-acid dictionary
 //! `{transcript: {protein_pos: {hgvsp: {"CLNSIG": [str], "CLNREVSTAT": [str]}}}}`:
@@ -21,6 +22,7 @@ use std::time::Instant;
 pub(crate) mod clinvar_exon_af;
 pub(crate) mod clinvar_gene_af;
 pub(crate) mod clinvar_splice_stat;
+pub(crate) mod clingen_map;
 pub(crate) mod common;
 pub(crate) mod intolerant_domains;
 pub(crate) mod pm1_regions;
@@ -422,6 +424,7 @@ pub(crate) fn dispatch_export(args: &[String]) -> Result<()> {
         "clinvar_splice_stat" => clinvar_splice_stat::export,
         "clinvar_patho_exon_af_stat" => clinvar_exon_af::export,
         "clinvar_patho_af_stat" => clinvar_gene_af::export,
+        "clingen_map" => clingen_map::export,
         _ => return Err(invalid(format!("cache-export: unsupported cache {cache}"))),
     };
     if output == "-" {
@@ -450,7 +453,7 @@ pub(crate) fn dispatch_export(args: &[String]) -> Result<()> {
     Ok(())
 }
 
-const USAGE: &str = "usage: priva cache-convert CACHE --pickle PICKLE --output CACHE\nCACHE: clinvar_aa_stat, clinvar_splice_stat, clinvar_patho_exon_af_stat, clinvar_patho_af_stat";
+const USAGE: &str = "usage: priva cache-convert CACHE --pickle PICKLE --output CACHE";
 
 /// `priva cache-convert CACHE --pickle PICKLE --output OUTPUT`.
 pub(crate) fn dispatch(args: &[String]) -> Result<()> {
@@ -502,6 +505,10 @@ pub(crate) fn dispatch(args: &[String]) -> Result<()> {
         }
         "clinvar_patho_af_stat" => {
             println!("{}", clinvar_gene_af::convert(pickle, Path::new(output))?);
+            Ok(())
+        }
+        "clingen_map" => {
+            println!("{}", clingen_map::convert(pickle, Path::new(output))?);
             Ok(())
         }
         other => Err(invalid(format!(

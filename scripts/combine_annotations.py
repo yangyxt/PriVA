@@ -11,6 +11,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import tempfile
 import subprocess
+import shlex
 import time
 import os
 import json
@@ -607,7 +608,10 @@ def arg_generator(vcf_file, threads, cadd_phred_dict, hpo_symbol_map, require_cl
 
 
 def convert_vcf_to_tab(input_vcf: str, threads=4, cadd_phred_dict: dict = None, hpo_symbol_map: dict = None, chunk_size: int = 20000, *, require_clinvar_csq: bool = True) -> pd.DataFrame:
-    est_anno_count = subprocess.run(f'bcftools query -f "%INFO/CSQ\\n" {input_vcf} | tr \',\' \'\\n\' | wc -l', shell=True, capture_output=True, text=True).stdout.strip()
+    # Treat the VCF path as one literal shell argument. Splitting a path at a
+    # space underestimated the allocation and changed downstream column types.
+    # Keep the original query/count pipeline and its failure behavior intact.
+    est_anno_count = subprocess.run(f'bcftools query -f "%INFO/CSQ\\n" {shlex.quote(str(input_vcf))} | tr \',\' \'\\n\' | wc -l', shell=True, capture_output=True, text=True).stdout.strip()
     est_anno_count = int(est_anno_count)
     logger.info(f"The VCF file {input_vcf} has {est_anno_count} transcript_level annotations")
     

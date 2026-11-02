@@ -1,7 +1,7 @@
 //! Ordered, restartable publication of converted/base/runtime VCF-index pairs.
 //! A completed rename prefix is recoverable; no receipt authorizes regeneration.
 use super::io::*;
-use super::{SCHEMA, header, object, profile, require};
+use super::{SCHEMA, error, header, object, profile, require};
 use crate::cli::Result;
 use crate::json_text::Json;
 use crate::python_path::{absolute, is_file, metadata};
@@ -152,23 +152,34 @@ impl Context<'_> {
         ]))
     }
     pub(super) fn check(&self, allow_pending: bool) -> Result<Json> {
+        self.check_fields(allow_pending, &[])
+    }
+    pub(super) fn check_fields(&self, allow_pending: bool, extra: &[&str]) -> Result<Json> {
         let settings = self.settings()?;
         let base = selected(&settings.paths, "base")?;
         require(
             allow_pending || !exists(&pending(&base))?,
             "Complete the pending base publication first",
         )?;
-        let record = read_json(&receipt(&base))?;
+        let encoded = read_text(&receipt(&base))?;
+        let schema = compare_metadata(&encoded, &object([("schema", string(SCHEMA))]))?;
         require(
-            equal(optional(&record, "schema")?, &string(SCHEMA))
-                && equal(optional(&record, "science")?, &profile::science(&settings)?),
+            equal(optional(&schema, "schema")?, &string(SCHEMA)),
             "Complete annotation producer or scientific dependency changed",
         )?;
+        let science = profile::science(&settings)?;
+        let record = compare_metadata(
+            &encoded,
+            &object([("science", science.clone()), ("base_sha256", string(""))]),
+        )?;
         require(
-            equal(
-                optional(&record, "outputs")?,
-                &output_state(&settings.paths)?,
-            ),
+            equal(optional(&record, "science")?, &science),
+            "Complete annotation producer or scientific dependency changed",
+        )?;
+        let outputs = output_state(&settings.paths)?;
+        let recorded_outputs = compare_metadata(&encoded, &object([("outputs", outputs.clone())]))?;
+        require(
+            equal(optional(&recorded_outputs, "outputs")?, &outputs),
             "Complete annotation files changed or publication is incomplete",
         )?;
         let header = header::check(
@@ -191,7 +202,13 @@ impl Context<'_> {
             }),
             "Complete annotation has no published content identity",
         )?;
-        Ok(record)
+        // The comparison-only projection is never published or exported.
+        // After equality succeeds the selected scientific values are decoded
+        // losslessly, preserving int/float spelling, negative zero and order.
+        let mut fields = vec!["schema", "science", "base_sha256"];
+        fields.extend_from_slice(extra);
+        crate::json_text::parse_metadata_fields(&encoded, &fields)
+            .map_err(|e| error("UnsupportedMetadata", e))
     }
     fn commit(&self) -> Result<()> {
         let settings = self.settings()?;

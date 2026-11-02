@@ -3,6 +3,7 @@ pub mod acmg_consequence;
 pub mod acmg_scoring;
 mod acmg_step;
 pub mod acmg_variant_mechanism;
+mod alpha_domain;
 mod alphamissense_vcf;
 mod builder_error;
 mod builder_table;

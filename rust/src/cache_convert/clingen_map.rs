@@ -77,6 +77,29 @@ fn build(
     .to_vec())
 }
 
+/// Publish a producer's already reduced text/NaN values using the same schema
+/// and complete mmap lookup check as the pickle converter. Duplicate keys are
+/// an error here; source-specific last-wins reduction belongs to the producer.
+pub(crate) fn write_entries(
+    output: &Path,
+    entries: &[(String, Option<String>)],
+    provenance: Vec<Provenance>,
+) -> Result<()> {
+    let archive = build(entries.to_vec(), provenance)?;
+    write_cache_checked(output, SCHEMA, &archive, |staged| {
+        let cache = ClingenCache::open(&staged.to_string_lossy())?;
+        if cache.len() != entries.len() {
+            return Err(invalid("the ClinGen map has a different key count"));
+        }
+        for (variant, code) in entries {
+            if cache.get(variant) != Some(code.as_deref()) {
+                return Err(invalid("a ClinGen code differs from the producer"));
+            }
+        }
+        Ok(())
+    })
+}
+
 /// A checked mmap view of the ClinGen map. Lookups do not copy the key/code vectors.
 pub(crate) struct ClingenCache {
     mapped: MappedCache<ClingenMap>,

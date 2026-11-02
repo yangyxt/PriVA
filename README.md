@@ -284,6 +284,31 @@ callers continue to use `scripts/mechanism_source_input.py`. JSON integers
 outside 128 bits, lone surrogate strings and excessive nesting remain outside
 the optional native receipt reader's compatibility scope.
 
+For an explicit build from already prepared G2P and Orphadata inputs:
+
+```bash
+"$PRIVA_BINARY" gene-mechanism prepared --raw-dir /path/to/raw \
+  --disease-scope-registry /path/to/disease_scope.tsv.gz \
+  --output /path/to/gene_pathogenic_mechanism_evidence.tsv
+```
+
+The raw directory contains `AllG2P.csv` and `orphadata/en_product6.xml`.
+G2P rows precede Orphadata rows; source MONDO IDs retain precedence over
+registry mappings. Supply `--g2p-ddg2p-url` or `--orphadata-gene-disease-url`
+when those prepared sources have an explicitly selected URL. As in the Python
+builder, an incompatible explicit source aborts, while a default-source parse
+error is reported and the remaining source is tried. Missing sources produce
+no rows. Omitting the registry option skips condition-identity enrichment.
+
+`parse --kind g2p|orphadata --input FILE --output TSV` exposes each source
+parser and writes the intermediate unified schema. `attach --input TSV
+--disease-scope-registry TSV --output TSV` attaches registry identity while
+preserving the input column order. Output uses the original deterministic
+`.tmp` sibling and retains an identical destination's mode and modification
+time. These procedures acquire no sources; refresh decisions, locking,
+acquisition and manifest publication remain in the Python builder. Installer
+callers continue to use `scripts/build_gene_pathogenic_mechanism_cache.py`.
+
 The optional DAS completion checker uses the same version-3 receipts as the
 Python helper:
 

@@ -19,6 +19,7 @@ mod clinvar_gene_af_builder;
 pub mod combine_annotations;
 mod config_text;
 mod conservation_resource;
+mod das_install_state;
 mod exon_af_stats;
 #[allow(dead_code)] // PM1 producer integration follows exact float64 comparison.
 mod fdr;

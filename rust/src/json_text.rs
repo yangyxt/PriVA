@@ -68,6 +68,17 @@ impl Json {
 
 /// Python's `==` on parsed JSON: `True == 1`, `1 == 1.0`, objects ignore order.
 pub(crate) fn py_equal(left: &Json, right: &Json) -> bool {
+    fn integer_float(integer: i128, float: f64) -> bool {
+        // Python compares the exact integer with the float's exact integral
+        // value; rounding the integer first would equate 2^53+1 with 2^53. This
+        // matters for nanosecond timestamps in completion receipts. Rust's
+        // float-to-int cast saturates, so exclude the upper 2^127 boundary.
+        float.is_finite()
+            && float.fract() == 0.0
+            && float >= i128::MIN as f64
+            && float < -(i128::MIN as f64)
+            && integer == float as i128
+    }
     fn number(value: &Json) -> Option<f64> {
         match value {
             Json::Bool(flag) => Some(if *flag { 1.0 } else { 0.0 }),
@@ -80,6 +91,7 @@ pub(crate) fn py_equal(left: &Json, right: &Json) -> bool {
         (Json::Null, Json::Null) => true,
         (Json::Str(a), Json::Str(b)) => a == b,
         (Json::Int(a), Json::Int(b)) => a == b,
+        (Json::Int(a), Json::Float(b)) | (Json::Float(b), Json::Int(a)) => integer_float(*a, *b),
         // Every NaN `json.loads` returns is the one object `NaN`, and containers
         // compare identical items as equal.
         (Json::Float(a), Json::Float(b)) => a == b || (a.is_nan() && b.is_nan()),
@@ -991,6 +1003,31 @@ mod tests {
         assert!(py_equal(&a, &b));
         let c = parse("{\"x\": true, \"y\": [1, 3]}", false).unwrap();
         assert!(!py_equal(&a, &c));
+    }
+
+    #[test]
+    fn mixed_integer_float_equality_does_not_round_receipt_identities() {
+        for value in [1_i128 << 53, 1_i128 << 60, -(1_i128 << 60)] {
+            assert!(py_equal(&Json::Int(value), &Json::Float(value as f64)));
+            for delta in [-1, 1] {
+                let int = Json::Int(value + delta);
+                let float = Json::Float(value as f64);
+                assert!(!py_equal(&int, &float));
+                assert!(!py_equal(&float, &int));
+            }
+        }
+        assert!(py_equal(
+            &Json::Int(i128::MIN),
+            &Json::Float(i128::MIN as f64)
+        ));
+        assert!(!py_equal(
+            &Json::Int(i128::MAX),
+            &Json::Float(i128::MAX as f64)
+        ));
+        assert!(py_equal(&Json::Int(0), &Json::Float(-0.0)));
+        for value in [0.5, -0.5, f64::INFINITY, f64::NEG_INFINITY, f64::NAN] {
+            assert!(!py_equal(&Json::Int(0), &Json::Float(value)));
+        }
     }
 
     #[test]

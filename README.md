@@ -175,6 +175,20 @@ export PRIVA_BINARY="$CARGO_TARGET_DIR/release/priva"
 "$PRIVA_BINARY" --version
 ```
 
+For an explicit AlphaMissense table conversion, use:
+
+```bash
+"$PRIVA_BINARY" alphamissense-vcf build \
+  --input AlphaMissense_hg38.tsv.gz --output AlphaMissense_hg38.vcf.gz
+```
+
+This optional procedure retains the original table projection, index contig
+order, duplicate rows and literal score strings. It requires BGZF input with an
+index at `INPUT.tbi` and `bgzip`/`tabix` on `PATH`; it does not change installer
+calls. Paths are passed literally to those programs. As with the original
+Python procedure, child command failures are reported but do not make the
+conversion command fail: validate the resulting VCF and index before use.
+
 The Python scripts remain in `scripts/`. To run a step with its Python script again, revert the commit that switched it (titled "Call priva for the per-sample preparation steps", "Call priva for the splicing and UTR interpretation" or "Call priva acmg-assign for the ACMG step"); each restores the Python command lines and their freshness checks together, and the outputs of the two routes are interchangeable. Use a new output folder after switching either way.
 
 `priva_ranking_binary` selected Rust ranking bridges inside the Python ACMG step; `priva acmg-assign` accepts the option and does not need it.

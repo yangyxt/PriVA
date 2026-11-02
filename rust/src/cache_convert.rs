@@ -20,6 +20,7 @@ use std::time::Instant;
 
 pub(crate) mod common;
 pub(crate) mod intolerant_domains;
+pub(crate) mod pm1_regions;
 pub(crate) mod transcript_domains;
 
 pub(crate) const CLINVAR_AA_STAT: Schema = Schema {
@@ -414,6 +415,7 @@ pub(crate) fn dispatch_export(args: &[String]) -> Result<()> {
         "clinvar_aa_stat" => export_clinvar_aa_stat,
         "alphamissense_tranx_domain_map" => transcript_domains::export,
         "all_intolerant_domains" => intolerant_domains::export,
+        "pm1_regions_pkl" => pm1_regions::export,
         _ => return Err(invalid(format!("cache-export: unsupported cache {cache}"))),
     };
     if output == "-" {
@@ -475,6 +477,10 @@ pub(crate) fn dispatch(args: &[String]) -> Result<()> {
         }
         "all_intolerant_domains" => {
             println!("{}", intolerant_domains::convert(pickle, Path::new(output))?);
+            Ok(())
+        }
+        "pm1_regions_pkl" => {
+            println!("{}", pm1_regions::convert(pickle, Path::new(output))?);
             Ok(())
         }
         other => Err(invalid(format!(

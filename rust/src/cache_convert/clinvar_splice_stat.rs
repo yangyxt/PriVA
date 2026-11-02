@@ -258,6 +258,9 @@ impl ClinvarSpliceCache {
     pub(crate) fn len(&self) -> usize {
         self.mapped.root().transcripts.len()
     }
+    pub(crate) fn keys(&self) -> &[rkyv::string::ArchivedString] {
+        &self.mapped.root().transcripts
+    }
     pub(crate) fn get(
         &self,
         transcript: &str,

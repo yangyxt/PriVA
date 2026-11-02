@@ -3,16 +3,14 @@
 //!
 //! `ps1_pm5_criteria` is `PS1_PM5_criteria`, `check_splice_pathogenic` the per-row splice
 //! fallback. PS1 is Python's. PM5 follows the owner's rules of 30 October 2026, which apply to
-//! Rust only (`acmg_pm5_residue_rules`), so it differs from Python's PM5 on purpose. The two ClinVar pickles are read once by `ClinvarKnownVariants::load` (the step
+//! Rust only (`acmg_pm5_residue_rules`), so it differs from Python's PM5 on purpose. The two ClinVar caches are read once by `ClinvarKnownVariants::load` (the step
 //! loads them once and shares them with `summarize_clinvar_gene_pathogenicity` of PVS1).
 //!
-//! The pickles hold 6.2 M (amino-acid) and 5.0 M (splice) ClinVar records; read whole they take
-//! 2.5 GB and 7.6 GB in Python. They are decoded with `pickle_dict_stream` straight into what the
+//! The checked, mapped archives supply typed values directly to the facts the
 //! criteria ask of them, for the transcripts of the table only: PS1/PM5 look a transcript up by
 //! the table's `Feature`, and the gene summary only counts transcripts the table maps to a gene.
-//! Every amino-acid entry is still checked, because PS1_PM5_criteria reads all of them. Shapes
-//! other than the installed ones (probe of 2026-10-30: text keys, lists of text, an int `pos`,
-//! a dict of text for `splice_ai`) are refused with a message naming the transcript.
+//! Every amino-acid entry retains its original ASCII check. Archive shapes and
+//! pooled-text indexes are checked when each map opens; pickle inputs are refused.
 use super::acmg_pm5_residue_rules::{
     ChangeKind, CuratedGainOfFunction, GainOfFunction, ListedGainOfFunction, Pm5Entry, Pm5Index,
     ProteinChange, build_pm5_index, pm5_rule, protein_change,
@@ -20,8 +18,10 @@ use super::acmg_pm5_residue_rules::{
 use super::acmg_pp3_bp4_bp7_insilico::harness_options;
 use super::acmg_pp3_bp4_bp7_insilico::pandas_masks::{high_confidence_review, python_str};
 use super::gene_mechanism_resources::harness_resolver;
+#[cfg(test)]
 use super::pickle_dict_stream::{Item, TextDict, visit_top_level_dict};
 use super::types::{AcmgError, HarnessCall, StepOutput, not_converted};
+use crate::cache_convert::clinvar_splice_stat::{ArchivedSpliceRecord, ClinvarSpliceCache};
 use crate::cache_convert::{ArchivedAaTranscript, ClinvarAaCache};
 use crate::cli::{Result, invalid};
 use crate::pandas_table::{Cell, Column, ObjectValue, Table};
@@ -55,7 +55,7 @@ pub(crate) fn gene_level_pathogenic(clnsig: &str, revstat: &str) -> bool {
 }
 
 /// What PS1, PM5 and the gene summary need of one transcript of the amino-acid dict.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, PartialEq, Eq)]
 struct AminoAcidTranscript {
     /// Some entry passes the gene summary's test.
     gene_level_pathogenic: bool,
@@ -66,7 +66,7 @@ struct AminoAcidTranscript {
 }
 
 /// One record of the splice dict, as check_splice_pathogenic reads it.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 struct SpliceRecord {
     chrom: Rc<str>,
     pos: i64,
@@ -80,7 +80,7 @@ struct SpliceRecord {
     delta_scores: [Option<Rc<str>>; 4],
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, PartialEq, Eq)]
 struct SpliceTranscript {
     gene_level_pathogenic: bool,
     records: Vec<SpliceRecord>,
@@ -122,6 +122,7 @@ fn text_list(item: Option<&Item>) -> Option<Vec<Rc<str>>> {
     }
 }
 
+#[cfg(test)]
 fn dict_of(item: &Item) -> Option<std::cell::Ref<'_, TextDict>> {
     match item {
         Item::Dict(dict) => Some(dict.borrow()),
@@ -130,7 +131,7 @@ fn dict_of(item: &Item) -> Option<std::cell::Ref<'_, TextDict>> {
 }
 
 impl ClinvarKnownVariants {
-    /// Reads the amino-acid and splice pickles (gzip when the name ends in `.gz`), keeping the
+    /// Opens the checked amino-acid and splice archives, keeping the
     /// transcripts in `transcripts` (the table's `Feature` values as `astype(str)` gives them),
     /// or every transcript for `None`.
     pub(crate) fn load(
@@ -157,13 +158,18 @@ impl ClinvarKnownVariants {
                 known.amino_acid.insert(transcript.to_owned(), decoded);
             }
         }
-        known.splice_transcripts =
-            visit_top_level_dict(clinvar_splice_dict_pkl, wanted, |transcript, value| {
-                let decoded =
-                    decode_splice_transcript(clinvar_splice_dict_pkl, &transcript, &value)?;
-                known.splice.insert(transcript.to_string(), decoded);
-                Ok(())
-            })?;
+        let splice = ClinvarSpliceCache::open(clinvar_splice_dict_pkl)?;
+        known.splice_transcripts = splice.len();
+        for transcript in splice.keys().iter().filter(|key| wanted(key.as_str())) {
+            let transcript = transcript.as_str();
+            let decoded = decode_archived_splice_transcript(
+                clinvar_splice_dict_pkl,
+                transcript,
+                &splice,
+                splice.get(transcript).unwrap(),
+            )?;
+            known.splice.insert(transcript.to_owned(), decoded);
+        }
         Ok(known)
     }
 
@@ -294,6 +300,7 @@ fn decode_archived_amino_acid_transcript(
 /// One transcript of the splice dict: a list of records with the eleven fields
 /// `chrom, pos, ref, alt, exon, intron, hgvsc, consequence, clinvar_sig, clinvar_review,
 /// splice_ai`.
+#[cfg(test)]
 fn decode_splice_transcript(
     file: &str,
     transcript: &str,
@@ -345,6 +352,63 @@ fn decode_splice_transcript(
             hgvsc: text("hgvsc")?,
             exon: text("exon")?,
             intron: text("intron")?,
+            clinvar_sig,
+            delta_scores,
+        });
+    }
+    Ok(decoded)
+}
+
+/// Copies only the requested transcript's facts; list order, duplicate records,
+/// absent SpliceAI scores and the original ASCII/type assumptions stay unchanged.
+fn decode_archived_splice_transcript(
+    file: &str,
+    transcript: &str,
+    cache: &ClinvarSpliceCache,
+    records: &rkyv::vec::ArchivedVec<ArchivedSpliceRecord>,
+) -> Result<SpliceTranscript> {
+    let odd = |what: &str| odd_shape(file, transcript, what);
+    let text = |value: &str, name: &str| -> Result<Rc<str>> {
+        if value.is_ascii() {
+            Ok(Rc::from(value))
+        } else {
+            Err(odd(&format!("a record's {name} is not ASCII text")))
+        }
+    };
+    let score_indices = DELTA_SCORE_NAMES.map(|name| {
+        cache
+            .splice_ai_names()
+            .iter()
+            .position(|key| key.as_str() == name)
+    });
+    let mut decoded = SpliceTranscript::default();
+    for record in records.iter() {
+        let mut delta_scores: [Option<Rc<str>>; 4] = Default::default();
+        for (slot, index) in delta_scores.iter_mut().zip(score_indices) {
+            if let Some(index) = index.filter(|_| !record.splice_ai.is_empty()) {
+                let value = cache.text(&record.splice_ai[index]);
+                if !value.is_ascii() {
+                    return Err(odd("a SpliceAI delta score is not ASCII text"));
+                }
+                *slot = Some(Rc::from(value));
+            }
+        }
+        let reference = text(record.reference.as_str(), "ref")?;
+        let alternative = text(record.alternative.as_str(), "alt")?;
+        let change = (reference.len() as i64 - alternative.len() as i64).abs();
+        let clinvar_sig = text(cache.text(&record.clinvar_sig), "clinvar_sig")?;
+        let clinvar_review = text(cache.text(&record.clinvar_review), "clinvar_review")?;
+        text(cache.text(&record.consequence), "consequence")?;
+        if gene_level_pathogenic(&clinvar_sig, &clinvar_review) {
+            decoded.gene_level_pathogenic = true;
+        }
+        decoded.records.push(SpliceRecord {
+            chrom: text(cache.text(&record.chrom), "chrom")?,
+            pos: record.pos.to_native(),
+            length_change: if change == 0 { 1 } else { change },
+            hgvsc: text(record.hgvsc.as_str(), "hgvsc")?,
+            exon: text(cache.text(&record.exon), "exon")?,
+            intron: text(cache.text(&record.intron), "intron")?,
             clinvar_sig,
             delta_scores,
         });
@@ -1046,7 +1110,19 @@ mod tests {
     }
     fn splice_fixture(name: &str) -> String {
         let path = path(name);
-        std::fs::write(&path, b"\x80\x04}.").unwrap();
+        let value = crate::cache_convert::clinvar_splice_stat::ClinvarSpliceStat {
+            provenance: vec![],
+            texts: vec![],
+            splice_ai_names: vec![],
+            transcripts: vec![],
+            entries: vec![],
+        };
+        crate::rust_cache::write_cache(
+            Path::new(&path),
+            crate::cache_convert::clinvar_splice_stat::SCHEMA,
+            &rkyv::to_bytes::<rkyv::rancor::Error>(&value).unwrap(),
+        )
+        .unwrap();
         path
     }
     fn dict(entries: Vec<(String, Item)>) -> Item {
@@ -1165,7 +1241,8 @@ mod tests {
 
     #[test]
     fn native_amino_acid_refuses_pickle_and_checks_unrequested_ascii() {
-        let pickle = splice_fixture("not_aa.pkl");
+        let pickle = path("not_aa.pkl");
+        std::fs::write(&pickle, b"\x80\x04}.").unwrap();
         let error = ClinvarKnownVariants::load(&pickle, &pickle, None).unwrap_err();
         assert!(error.to_string().contains("cache-convert"));
         let aa = aa_fixture("non_ascii.rkyv", true);
@@ -1174,6 +1251,223 @@ mod tests {
         assert!(error.to_string().contains("non-ASCII"));
         std::fs::remove_file(aa).unwrap();
         std::fs::remove_file(pickle).unwrap();
+    }
+
+    fn splice_value() -> crate::cache_convert::clinvar_splice_stat::ClinvarSpliceStat {
+        use crate::cache_convert::clinvar_splice_stat::{ClinvarSpliceStat, SpliceRecord};
+        let names = [
+            "SpliceAI_pred_DP_DL",
+            "SpliceAI_pred_SYMBOL",
+            "SpliceAI_pred_DS_DG",
+            "SpliceAI_pred_DS_AG",
+            "SpliceAI_pred_DS_DL",
+            "SpliceAI_pred_DS_AL",
+            "SpliceAI_pred_DP_AG",
+            "SpliceAI_pred_DP_DG",
+            "SpliceAI_pred_DP_AL",
+        ]
+        .map(str::to_owned)
+        .to_vec();
+        let record = |sig, empty| SpliceRecord {
+            chrom: 0,
+            pos: 100,
+            reference: "A".into(),
+            alternative: "T".into(),
+            exon: 1,
+            intron: 1,
+            hgvsc: "c.100+5A>T".into(),
+            consequence: 2,
+            clinvar_sig: sig,
+            clinvar_review: 5,
+            splice_ai: if empty {
+                vec![]
+            } else {
+                names
+                    .iter()
+                    .map(|n| if n == "SpliceAI_pred_DS_AG" { 6 } else { 7 })
+                    .collect()
+            },
+        };
+        let entries = vec![
+            vec![record(4, true), record(3, false), record(4, false)],
+            vec![],
+        ];
+        ClinvarSpliceStat {
+            provenance: vec![],
+            texts: [
+                "1",
+                "1/2",
+                "intron_variant",
+                "Likely_pathogenic",
+                "Pathogenic",
+                "reviewed_by_expert_panel",
+                "0.8",
+                "0",
+            ]
+            .map(str::to_owned)
+            .to_vec(),
+            splice_ai_names: names,
+            transcripts: vec!["ENST_SPLICE".into(), "ENST_UNUSED".into()],
+            entries,
+        }
+    }
+    fn splice_reference(
+        value: &crate::cache_convert::clinvar_splice_stat::ClinvarSpliceStat,
+    ) -> Item {
+        Item::List(Rc::new(RefCell::new(
+            value.entries[0]
+                .iter()
+                .map(|r| {
+                    let text = |s: &str| Item::Str(Rc::from(s));
+                    let pooled = |id: u32| text(&value.texts[id as usize]);
+                    dict(vec![
+                        ("chrom".into(), pooled(r.chrom)),
+                        ("pos".into(), Item::Int(r.pos)),
+                        ("ref".into(), text(&r.reference)),
+                        ("alt".into(), text(&r.alternative)),
+                        ("exon".into(), pooled(r.exon)),
+                        ("intron".into(), pooled(r.intron)),
+                        ("hgvsc".into(), text(&r.hgvsc)),
+                        ("consequence".into(), pooled(r.consequence)),
+                        ("clinvar_sig".into(), pooled(r.clinvar_sig)),
+                        ("clinvar_review".into(), pooled(r.clinvar_review)),
+                        (
+                            "splice_ai".into(),
+                            dict(
+                                value
+                                    .splice_ai_names
+                                    .iter()
+                                    .zip(&r.splice_ai)
+                                    .map(|(name, id)| (name.clone(), pooled(*id)))
+                                    .collect(),
+                            ),
+                        ),
+                    ])
+                })
+                .collect(),
+        )))
+    }
+    #[test]
+    fn native_splice_keeps_missing_scores_record_order_and_ps1_strength() {
+        let aa = aa_fixture("splice_aa.rkyv", false);
+        let splice = path("splice.rkyv");
+        let value = splice_value();
+        crate::rust_cache::write_cache(
+            Path::new(&splice),
+            crate::cache_convert::clinvar_splice_stat::SCHEMA,
+            &rkyv::to_bytes::<rkyv::rancor::Error>(&value).unwrap(),
+        )
+        .unwrap();
+        let wanted = HashSet::from(["ENST_SPLICE".to_owned()]);
+        let known = ClinvarKnownVariants::load(&aa, &splice, Some(&wanted)).unwrap();
+        assert_eq!(known.splice_transcripts, 2);
+        assert_eq!(known.amino_acid_transcripts, 2);
+        assert_eq!(known.splice.len(), 1);
+        let reference =
+            decode_splice_transcript("fixture", "ENST_SPLICE", &splice_reference(&value)).unwrap();
+        assert_eq!(known.splice["ENST_SPLICE"], reference);
+        assert!(
+            known.splice["ENST_SPLICE"].records[0]
+                .delta_scores
+                .iter()
+                .all(Option::is_none)
+        );
+        let text = |value: &str| Column::Text(vec![Some(value.to_owned())]);
+        let mut columns = vec![
+            ("Feature", text("ENST_SPLICE")),
+            ("Protein_position", text("")),
+            ("HGVSp", text("")),
+            ("Consequence", text("splice_region_variant")),
+            ("CLNSIG", text("")),
+            ("CLNREVSTAT", text("x")),
+            ("INTRON", text("1/2")),
+            ("EXON", text("1/2")),
+            ("HGVSc", text("c.100+5A>T")),
+            ("ref", text("A")),
+            ("alt", text("T")),
+            ("STRAND", Column::Int(vec![1])),
+            ("pos", Column::Int(vec![100])),
+            ("chrom", text("1")),
+        ];
+        columns.extend(
+            DELTA_SCORE_NAMES
+                .into_iter()
+                .enumerate()
+                .map(|(i, name)| (name, Column::Float(vec![if i == 0 { 0.9 } else { 0.0 }]))),
+        );
+        let (names, columns) = columns.into_iter().map(|(n, c)| (n.to_owned(), c)).unzip();
+        let table = Table {
+            names,
+            columns,
+            rows: 1,
+        };
+        let mut gain = ListedGainOfFunction(HashSet::new());
+        let output = ps1_pm5_criteria(
+            &table,
+            &known,
+            &Pm5Index::default(),
+            &mut gain,
+            &[0],
+            1,
+            0.2,
+        )
+        .unwrap();
+        assert_eq!(output.criteria[0].1, Column::Int(vec![2]));
+        assert_eq!(output.criteria[1].1, Column::Int(vec![0]));
+        std::fs::remove_file(aa).unwrap();
+        std::fs::remove_file(splice).unwrap();
+    }
+
+    #[test]
+    #[ignore = "requires installed source pickles and their independently verified native archives"]
+    fn installed_native_clinvar_lookup_facts_match_source() {
+        let variable = |name| std::env::var(name).unwrap_or_else(|_| panic!("set {name}"));
+        let aa_source = variable("PRIVA_NATIVE_AA_SOURCE");
+        let aa_path = variable("PRIVA_NATIVE_AA_ARCHIVE");
+        let splice_source = variable("PRIVA_NATIVE_SPLICE_SOURCE");
+        let splice_path = variable("PRIVA_NATIVE_SPLICE_ARCHIVE");
+        let aa = ClinvarAaCache::open(&aa_path).unwrap();
+        let splice = ClinvarSpliceCache::open(&splice_path).unwrap();
+        let mut wanted = HashSet::new();
+        for keys in [aa.keys(), splice.keys()] {
+            for key in keys.iter().step_by((keys.len() / 24).max(1)).take(24) {
+                wanted.insert(key.as_str().to_owned());
+            }
+        }
+        wanted.insert("__ABSENT_TRANSCRIPT__".to_owned());
+        drop(aa);
+        drop(splice);
+        let known = ClinvarKnownVariants::load(&aa_path, &splice_path, Some(&wanted)).unwrap();
+        let mut expected_aa = HashMap::new();
+        let mut expected_splice = HashMap::new();
+        let aa_count = visit_top_level_dict(
+            &aa_source,
+            |key| wanted.contains(key),
+            |key, value| {
+                expected_aa.insert(
+                    key.to_string(),
+                    decode_amino_acid_transcript(&aa_source, &key, &value, true)?,
+                );
+                Ok(())
+            },
+        )
+        .unwrap();
+        let splice_count = visit_top_level_dict(
+            &splice_source,
+            |key| wanted.contains(key),
+            |key, value| {
+                expected_splice.insert(
+                    key.to_string(),
+                    decode_splice_transcript(&splice_source, &key, &value)?,
+                );
+                Ok(())
+            },
+        )
+        .unwrap();
+        assert_eq!(known.amino_acid_transcripts, aa_count);
+        assert_eq!(known.splice_transcripts, splice_count);
+        assert_eq!(known.amino_acid, expected_aa);
+        assert_eq!(known.splice, expected_splice);
     }
 
     #[test]

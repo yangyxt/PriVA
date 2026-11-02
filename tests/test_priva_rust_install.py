@@ -40,6 +40,8 @@ class ManagedRustTests(unittest.TestCase):
         (self.source / "rust/src/EXPAT_LICENSE").write_text("static XML dependency notice fixture\n")
         (self.source / "rust/src/dependency").mkdir()
         (self.source / "rust/src/dependency/PANDAS_LICENSE").write_text("distinct nested notice fixture\n")
+        (self.source / "rust/third_party").mkdir()
+        (self.source / "rust/third_party/parquet_licenses.txt").write_text("Parquet dependency notice fixture\n")
         (self.source / "rust/Cargo.toml").write_text('''[package]
 name = "priva-tabular"
 version = "0.1.0"
@@ -97,10 +99,11 @@ debug = 0
         self.assertFalse(result["qualification"]["production_backend_selected"])
         receipt, _, _ = B.load(Path(result["receipt"]))
         self.assertEqual(set(receipt["notices_sha256"]), {
-            "licenses/PANDAS_LICENSE", "licenses/EXPAT_LICENSE", "licenses/dependency/PANDAS_LICENSE"})
+            "licenses/PANDAS_LICENSE", "licenses/EXPAT_LICENSE", "licenses/dependency/PANDAS_LICENSE",
+            "licenses/third_party/parquet_licenses.txt"})
         for relative, wanted in receipt["notices_sha256"].items():
             installed = binary.parent.parent / relative
-            original = self.source / "rust/src" / Path(relative).relative_to("licenses")
+            original = self.source / B.source_notice_paths(B.source_state(self.source)['files'])[relative]
             self.assertEqual(installed.read_bytes(), original.read_bytes())
             self.assertEqual(B.digest(installed), wanted)
             self.assertNotEqual(installed.stat().st_ino, original.stat().st_ino)
@@ -145,8 +148,14 @@ debug = 0
     def test_non_rs_source_license_is_pinned_and_changes_invalidate_import(self):
         state = B.source_state(self.source)
         self.assertIn('rust/src/PANDAS_LICENSE', state['files'])
-        (self.source/'rust/src/PANDAS_LICENSE').write_text('changed source companion\n')
-        with self.assertRaises(ValueError): B.install(self.args())
+        self.assertIn('rust/third_party/parquet_licenses.txt', state['files'])
+        for name in ('rust/src/PANDAS_LICENSE', 'rust/third_party/parquet_licenses.txt'):
+            with self.subTest(name=name):
+                path = self.source / name
+                original = path.read_bytes()
+                path.write_text('changed source companion\n')
+                with self.assertRaises(ValueError): B.install(self.args())
+                path.write_bytes(original)
 
     def test_new_build_profile_cannot_be_relabelled_as_qualified(self):
         self.pins["actual_Cargo_profile"] = "release"; self.refresh()

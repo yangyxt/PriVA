@@ -40,7 +40,7 @@ RUSTUP_SHA256 = "20a06e644b0d9bd2fbdbfd52d42540bdde820ea7df86e92e533c073da0cdd43
 IMPORTED_PROFILE = "test/dev, opt-level=0, debug=0; no fast-math"
 # The crate also compiles in data files from outside rust/ (include_str! in
 # rust/src/cadd_hub.rs reads the contig name map). A cold build copies only the
-# files listed here and rust/src, so every such file must be listed: it is then
+# files listed here, rust/src and rust/third_party, so every such file must be listed: it is then
 # copied into the build folder and part of the build identity.
 SOURCE_FIXED = ("rust/Cargo.toml", "rust/Cargo.lock", "rust/rust-toolchain.toml",
                 "data/liftover/GRC_to_ucsc.contig.map.txt")
@@ -167,19 +167,29 @@ def publication_ledger(target, require_created=False):
     return ledger
 
 
-def source_notices(files):
+def source_notice_paths(files):
     """Carry source-derived dependency notices beside each newly published CLI.
 
     Retain subdirectories to avoid basename collisions. These bytes already
     belong to the producing source identity; they are copied, never regenerated.
     """
     notices = {}
-    for name, wanted in files.items():
+    for name in files:
         path = Path(name)
         if name.startswith("rust/src/") and (path.name.endswith("_LICENSE") or path.name in ("LICENSE", "NOTICE")):
-            require(str(path) == name and ".." not in path.parts, "Invalid source-notice path")
-            notices["licenses/" + str(path.relative_to("rust/src"))] = wanted
+            target = "licenses/" + str(path.relative_to("rust/src"))
+        elif name.startswith("rust/third_party/"):
+            target = "licenses/third_party/" + str(path.relative_to("rust/third_party"))
+        else:
+            continue
+        require(str(path) == name and ".." not in path.parts, "Invalid source-notice path")
+        require(target not in notices, "Dependency-notice paths collide")
+        notices[target] = name
     return notices
+
+
+def source_notices(files):
+    return {target: files[source] for target, source in source_notice_paths(files).items()}
 
 
 def artifact_notices(receipt):
@@ -282,6 +292,8 @@ def source_state(root):
     # producer identity; a filename suffix is not a complete source manifest.
     paths += sorted(path for path in (root / "rust/src").rglob("*")
                     if path.is_file() or path.is_symlink())
+    paths += sorted(path for path in (root / "rust/third_party").rglob("*")
+                    if path.is_file() or path.is_symlink())
     if (root / "rust/build.rs").exists():
         paths.append(root / "rust/build.rs")
     # A custom Cargo configuration is a build input, not an invisible override.
@@ -363,7 +375,8 @@ def import_evidence(args, state):
     require(sha(raw_pins) == args.build_pins_sha256 and sha(raw_result) == args.validation_sha256,
             "Explicit import receipt checksum differs")
     expected = {name: value for name, value in pins["source_files"].items()
-                if name.startswith("rust/src/") or name in SOURCE_FIXED or name == "rust/build.rs"}
+                if name.startswith(("rust/src/", "rust/third_party/"))
+                or name in SOURCE_FIXED or name == "rust/build.rs"}
     require(expected == state["files"], "Qualified CLI source/Cargo.lock/toolchain source differs")
     require(result["completed"] is True and result["source_pins_sha256"] == sha(raw_pins)
             and type(result["rust_tests_passed"]) is int and result["rust_tests_passed"] > 0,
@@ -429,7 +442,8 @@ def verify_artifact(root, state):
                 and state["cargo_profiles"].get("test", {}) == {"debug": 0},
                 "Installed import profile/qualification does not bind this executable")
         source_pins = {name: value for name, value in pins["source_files"].items()
-            if name.startswith("rust/src/") or name in SOURCE_FIXED or name == "rust/build.rs"}
+            if name.startswith(("rust/src/", "rust/third_party/"))
+            or name in SOURCE_FIXED or name == "rust/build.rs"}
         require(source_pins == descriptor["source_files"], "Installed import producer source differs")
         pinned_tools = {Path(k).name: v for k, v in pins["toolchain"].items()}
         require(len(pins["toolchain"]) == len(pinned_tools) == 4
@@ -686,8 +700,9 @@ def install(args):
             for name, raw in spec["evidence"].items():
                 (stage / "evidence" / name).write_bytes(raw)
             notices = source_notices(state["files"])
+            notice_paths = source_notice_paths(state["files"])
             for name, wanted in notices.items():
-                original = source / "rust/src" / Path(name).relative_to("licenses")
+                original = source / notice_paths[name]
                 raw, _ = read_stable(original)
                 require(sha(raw) == wanted, "Dependency notice changed before publication")
                 destination = stage / name

@@ -76,14 +76,57 @@ impl DomainLookup {
 }
 
 const HELP: &str = "usage: priva das-domains lookup --domains JSONL --interpro RKYV --normalization-json JSON --python-hash-seed UINT32\n\
+       priva das-domains transcripts --statistics PARQUET --exon-history LINES --source-builder-sha256 SHA256 --python-hash-seed UINT32 --output RKYV\n\
 Each input line is a full domain-path JSON string. Output lines retain input\n\
 order and contain the first source-ordered InterPro entry's identity, type and\n\
 GO molecular-function status. The explicit hash seed describes the reference\n\
-process; no global seed or installed cache is changed. Opt-in procedure only.";
+process; no global seed or installed cache is changed. The transcripts procedure\n\
+requires retained serialized-set history bound to every typed transcript; it\n\
+does not qualify fresh native Alpha builds that lack this history. Both are opt-in.";
 
 pub(crate) fn dispatch(args: &[String]) -> Result<()> {
     if args.is_empty() || args.iter().any(|arg| arg == "--help" || arg == "-h") {
         println!("{HELP}");
+        return Ok(());
+    }
+    if args[0] == "transcripts" {
+        if args.len() != 11 {
+            return Err(invalid(HELP));
+        }
+        let mut options = HashMap::new();
+        for pair in args[1..].chunks_exact(2) {
+            if ![
+                "--statistics",
+                "--exon-history",
+                "--source-builder-sha256",
+                "--python-hash-seed",
+                "--output",
+            ]
+            .contains(&pair[0].as_str())
+                || options.insert(pair[0].as_str(), pair[1].as_str()).is_some()
+            {
+                return Err(invalid(HELP));
+            }
+        }
+        if options.len() != 5 {
+            return Err(invalid(HELP));
+        }
+        let seed = options["--python-hash-seed"]
+            .parse::<u32>()
+            .map_err(|_| invalid("--python-hash-seed requires UINT32"))?;
+        let source = options["--source-builder-sha256"];
+        if source.len() != 64 || !source.bytes().all(|b| b.is_ascii_hexdigit()) {
+            return Err(invalid("--source-builder-sha256 requires SHA256"));
+        }
+        let (transcripts, sets) =
+            builder_error::finish(crate::alpha_domain::das_transcripts::build(
+                std::path::Path::new(options["--statistics"]),
+                std::path::Path::new(options["--exon-history"]),
+                source,
+                seed,
+                std::path::Path::new(options["--output"]),
+            ))?;
+        println!("{{\"transcripts\":{transcripts},\"exon_sets\":{sets}}}");
         return Ok(());
     }
     if args[0] != "lookup" || args.len() != 9 {

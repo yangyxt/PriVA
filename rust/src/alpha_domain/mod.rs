@@ -2,6 +2,7 @@
 //! are not called. Parquet raw shards retain all keys needed by ordered merge;
 //! final distributions retain exact Float64 bits and every residue observation.
 mod association;
+pub(crate) mod das_transcripts;
 mod key;
 mod key_parquet;
 mod metadata;

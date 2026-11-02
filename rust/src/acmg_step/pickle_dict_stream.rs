@@ -38,6 +38,9 @@ pub(crate) enum Item {
     None,
     Bool(bool),
     Int(i64),
+    /// Only emitted by the explicitly opted-in uint64 visitor. Default cache
+    /// readers retain their existing signed-64-bit refusal boundary.
+    Unsigned(u64),
     Float(f64),
     Str(Rc<str>),
     Tuple(Rc<Vec<Item>>),
@@ -51,7 +54,7 @@ impl Item {
         match self {
             Item::None => "NoneType",
             Item::Bool(_) => "bool",
-            Item::Int(_) => "int",
+            Item::Int(_) | Item::Unsigned(_) => "int",
             Item::Float(_) => "float",
             Item::Str(_) => "str",
             Item::Tuple(_) => "tuple",
@@ -292,6 +295,44 @@ impl Stream {
             value = (value << 8) | i64::from(*byte);
         }
         Ok(value)
+    }
+
+    fn integer(&mut self, width: usize, allow_unsigned: bool) -> Result<Item> {
+        if !allow_unsigned {
+            return self.long(width).map(Item::Int);
+        }
+        let length = self.unsigned(width)?;
+        if length == 0 {
+            return Ok(Item::Int(0));
+        }
+        if length > 9 {
+            return Err(invalid(
+                "the pickle integer exceeds the ClinGen uint64 range",
+            ));
+        }
+        let bytes = self.take(length)?;
+        if length == 9 {
+            if bytes[8] != 0 {
+                return Err(invalid(
+                    "the pickle integer exceeds the ClinGen uint64 range",
+                ));
+            }
+            let number = u64::from_le_bytes(bytes[..8].try_into().unwrap());
+            return Ok(if number > i64::MAX as u64 {
+                Item::Unsigned(number)
+            } else {
+                Item::Int(number as i64)
+            });
+        }
+        let mut number = if bytes[bytes.len() - 1] & 0x80 != 0 {
+            -1_i64
+        } else {
+            0
+        };
+        for byte in bytes.iter().rev() {
+            number = (number << 8) | i64::from(*byte);
+        }
+        Ok(Item::Int(number))
     }
 }
 
@@ -571,7 +612,27 @@ fn text_key(key: Item, offset: u64) -> Result<Rc<str>> {
 pub(crate) fn visit_top_level_dict(
     path: &str,
     keep: impl Fn(&str) -> bool,
+    visit: impl FnMut(Rc<str>, Item) -> Result<()>,
+) -> Result<usize> {
+    visit_dict(path, keep, visit, false)
+}
+
+/// ClinGen table uint64 columns become ordinary Python integers in `to_dict`.
+/// This opt-in visitor accepts that complete range without broadening the
+/// integer policy of other cache converters or runtime readers.
+pub(crate) fn visit_top_level_dict_with_uint64(
+    path: &str,
+    keep: impl Fn(&str) -> bool,
+    visit: impl FnMut(Rc<str>, Item) -> Result<()>,
+) -> Result<usize> {
+    visit_dict(path, keep, visit, true)
+}
+
+fn visit_dict(
+    path: &str,
+    keep: impl Fn(&str) -> bool,
     mut visit: impl FnMut(Rc<str>, Item) -> Result<()>,
+    allow_unsigned: bool,
 ) -> Result<usize> {
     let FirstPass {
         fetched,
@@ -632,12 +693,10 @@ pub(crate) fn visit_top_level_dict(
                 stack.push(Slot::Value(Item::Int(number as i64)));
             }
             0x8a => {
-                let number = stream.long(1)?;
-                stack.push(Slot::Value(Item::Int(number)));
+                stack.push(Slot::Value(stream.integer(1, allow_unsigned)?));
             }
             0x8b => {
-                let number = stream.long(4)?;
-                stack.push(Slot::Value(Item::Int(number)));
+                stack.push(Slot::Value(stream.integer(4, allow_unsigned)?));
             }
             b'G' => {
                 let bits = stream.unsigned(8)?;
@@ -815,6 +874,31 @@ mod tests {
         path.to_str().unwrap().to_owned()
     }
 
+    #[test]
+    fn uint64_integer_extension_is_explicit_and_preserves_default_refusal() {
+        let path = temporary(
+            "uint64.pkl",
+            b"\x80\x04}\x8c\x01a\x8a\x09\xff\xff\xff\xff\xff\xff\xff\xff\x00s.",
+        );
+        assert!(
+            visit_top_level_dict(&path, |_| true, |_, _| Ok(()))
+                .unwrap_err()
+                .to_string()
+                .contains("wider than 64 bits")
+        );
+        let mut observed = None;
+        visit_top_level_dict_with_uint64(
+            &path,
+            |_| true,
+            |_, value| {
+                observed = Some(value);
+                Ok(())
+            },
+        )
+        .unwrap();
+        assert!(matches!(observed, Some(Item::Unsigned(u64::MAX))));
+    }
+
     fn collect(path: &str) -> Result<Vec<(String, String)>> {
         collect_kept(path, |_| true).map(|(seen, _)| seen)
     }
@@ -836,6 +920,7 @@ mod tests {
             Item::None => "None".into(),
             Item::Bool(flag) => format!("{flag}"),
             Item::Int(number) => format!("{number}"),
+            Item::Unsigned(number) => format!("{number}"),
             Item::Float(number) => format!("{number:?}"),
             Item::Str(text) => format!("'{text}'"),
             Item::Tuple(items) => format!(

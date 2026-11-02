@@ -29,6 +29,8 @@ mod numpy_rng;
 mod ks_greater;
 // These numerical procedures are qualified before any DAS caller is enabled.
 #[allow(dead_code)]
+mod das_sampling;
+#[allow(dead_code)]
 mod dip_stat;
 #[allow(dead_code)] // Shared installer primitive; callers switch after their own parity tests.
 mod file_lock;

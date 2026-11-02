@@ -392,7 +392,7 @@
         "clinvar_variant_summary",
         "mane_select"
       ],
-      "notes": "User-authorized metadata-age exception: preserve bundled baseline; build a separate managed result and select its full path only on success. No bundled content/schema/checksum validation.",
+      "notes": "User-authorized metadata-age exception: preserve bundled baseline; build a separate managed result and select its full path only on success. No bundled content/schema/checksum validation. On the Rust branch, installation converts the selected pickle into a full-value native archive under cache_root; this archive is not bundled in Git.",
       "install_entrypoints": [
         "ClinVar_install",
         "ClinVar_Gene_stat_regenerate"
@@ -401,6 +401,9 @@
         "basis": "selected_artifact_and_existing_installer_route",
         "cadence": "not_verified",
         "note": "Classification records PriVA policy, not a guarantee that the publisher will maintain or republish this data."
+      },
+      "runtime_formats": {
+        "clinvar_gene_stat": "PRIVARKV/rkyv version 1"
       }
     },
     "clinvar_derived_statistics": {
@@ -435,7 +438,7 @@
         "clinvar_vcf",
         "gnomad"
       ],
-      "notes": "Retain original processing/filter order; do not treat this inventory as a new automatic refresh scheduler.",
+      "notes": "Retain original processing/filter order; do not treat this inventory as a new automatic refresh scheduler. The Rust installer converts only the listed runtime cache keys to native archives after their builders succeed; source pickles and scientific companion receipts are retained.",
       "install_entrypoints": [
         "ClinVar_AA_stat",
         "ClinVar_patho_AF_stat"
@@ -444,6 +447,12 @@
         "basis": "selected_artifact_and_existing_installer_route",
         "cadence": "not_verified",
         "note": "Classification records PriVA policy, not a guarantee that the publisher will maintain or republish this data."
+      },
+      "runtime_formats": {
+        "clinvar_aa_stat": "PRIVARKV/rkyv version 1",
+        "clinvar_splice_stat": "PRIVARKV/rkyv version 1",
+        "clinvar_patho_af_stat": "PRIVARKV/rkyv version 1",
+        "clinvar_patho_exon_af_stat": "PRIVARKV/rkyv version 1"
       }
     },
     "clinvar_vcv": {
@@ -597,7 +606,7 @@
         "interpro",
         "pm1_support"
       ],
-      "notes": "Original scientific operation and mutation order remain fixed within a profile. DAS intermediate metadata requires a completed association with the selected VCF, assembly and extraction source; unassociated or changed-source intermediates regenerate atomically from that input. The outer installer records successful multi-output publication separately. These engineering receipts do not qualify a scientific profile.",
+      "notes": "Original scientific operation and mutation order remain fixed within a profile. DAS intermediate metadata requires a completed association with the selected VCF, assembly and extraction source; unassociated or changed-source intermediates regenerate atomically from that input. The outer installer records successful multi-output publication separately. These engineering receipts do not qualify a scientific profile. The Rust installer converts only the listed runtime cache keys to native archives after their builders succeed; source pickles and scientific companion receipts are retained.",
       "install_entrypoints": [
         "AlphaMissense_anno",
         "AlphaMissense_anno_gnomAD",
@@ -610,6 +619,11 @@
         "basis": "selected_artifact_and_existing_installer_route",
         "cadence": "not_verified",
         "note": "Classification records PriVA policy, not a guarantee that the publisher will maintain or republish this data."
+      },
+      "runtime_formats": {
+        "all_intolerant_domains": "PRIVARKV/rkyv version 1",
+        "pm1_regions_pkl": "PRIVARKV/rkyv version 1",
+        "alphamissense_tranx_domain_map": "PRIVARKV/rkyv version 1"
       }
     },
     "spliceai_v1": {
@@ -1057,7 +1071,7 @@
         ]
       },
       "depends_on": [],
-      "notes": "Upstream release stream is maintained; selected bundled mapping/curation remains a snapshot reused without content checks.",
+      "notes": "Upstream release stream is maintained; selected bundled mapping/curation remains a snapshot reused without content checks. The Rust workflow uses the bundled native archive or an installation-time conversion of the explicitly selected mapping; builders retain their original pickle input.",
       "install_entrypoints": [
         "InterPro_parsing"
       ],
@@ -1065,6 +1079,9 @@
         "basis": "selected_artifact_and_existing_installer_route",
         "cadence": "not_verified",
         "note": "Classification records PriVA policy, not a guarantee that the publisher will maintain or republish this data."
+      },
+      "runtime_formats": {
+        "interpro_mapping_pickle": "PRIVARKV/rkyv version 1"
       }
     },
     "clingen": {
@@ -1095,7 +1112,7 @@
         ]
       },
       "depends_on": [],
-      "notes": "Canonical bundled map/source is reused by existence/nonzero. Existing external-source precedence/refresh policy stays unchanged.",
+      "notes": "Canonical bundled map/source is reused by existence/nonzero. Existing external-source precedence/refresh policy stays unchanged. Native hg19/hg38 maps are bundled beside the pickles; the Rust configuration selects the matching assembly archive after installation.",
       "install_entrypoints": [
         "ClinGen_deploy"
       ],
@@ -1103,6 +1120,9 @@
         "basis": "selected_artifact_and_existing_installer_route",
         "cadence": "not_verified",
         "note": "Classification records PriVA policy, not a guarantee that the publisher will maintain or republish this data."
+      },
+      "runtime_formats": {
+        "clingen_map": "PRIVARKV/rkyv version 1"
       }
     },
     "hpo": {

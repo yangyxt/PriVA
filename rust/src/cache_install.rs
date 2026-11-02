@@ -30,7 +30,7 @@ const KEYS: [&str; 10] = [
 ];
 const HELP: &str = "usage: priva cache-install {prepare|publish} --config CONFIG --build-config PRIVATE_CONFIG --source-root REPO\n\
 prepare creates a private builder config; publish converts/reuses completed caches and atomically updates CONFIG.\n\
-Keep the private config and its adjacent receipt until publish succeeds. No annotation is rerun by this command.";
+Keep the private config and its adjacent receipt for repeat installations. No annotation is rerun by this command.";
 static NEXT: AtomicU64 = AtomicU64::new(0);
 
 fn text(path: &Path) -> Result<&str> {
@@ -140,23 +140,44 @@ fn write_new(path: &Path, data: &[u8]) -> Result<()> {
 
 /// Replace by rename, never by truncating an archive/config a running reader uses.
 fn atomic_write(path: &Path, data: &[u8]) -> Result<()> {
-    let temporary = sidecar(
+    atomic_write_checked(path, data, || Ok(()))
+}
+
+fn parent(path: &Path) -> &Path {
+    path.parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or(Path::new("."))
+}
+
+fn temporary(path: &Path, suffix: &str) -> PathBuf {
+    sidecar(
         path,
         &format!(
-            ".{}.{}.tmp",
+            ".{}.{}.{}.{suffix}",
             std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos(),
             NEXT.fetch_add(1, Ordering::Relaxed)
         ),
-    );
+    )
+}
+
+fn atomic_write_checked(
+    path: &Path,
+    data: &[u8],
+    verify: impl FnOnce() -> Result<()>,
+) -> Result<()> {
+    let temporary = temporary(path, "tmp");
     write_new(&temporary, data)?;
     let result = (|| -> Result<()> {
         if path.exists() {
             fs::set_permissions(&temporary, fs::metadata(path)?.permissions())?;
         }
+        verify()?;
         fs::rename(&temporary, path)?;
-        if let Some(parent) = path.parent() {
-            fs::File::open(parent)?.sync_all()?;
-        }
+        fs::File::open(parent(path))?.sync_all()?;
         Ok(())
     })();
     if result.is_err() {
@@ -219,6 +240,7 @@ fn prepare(config: &Path, private: &Path, repo: &Path) -> Result<()> {
     let original_hash = sha256_hex(contents.as_bytes());
     let context_path = sidecar(private, ".cache-install.json");
     let mut replace_completed = false;
+    let mut previous = None;
     if private.exists() || context_path.exists() {
         nonempty(private)?;
         let context = json(&context_path)?;
@@ -229,7 +251,10 @@ fn prepare(config: &Path, private: &Path, repo: &Path) -> Result<()> {
                 "private config belongs to another source root/config; retained unchanged",
             ));
         }
-        if field(&context, "config_sha256")? == original_hash {
+        replace_completed = context.get("published_sha256").and_then(Json::as_str)
+            == Some(&original_hash)
+            || context.get("state").and_then(Json::as_str) == Some("complete");
+        if !replace_completed && field(&context, "config_sha256")? == original_hash {
             if profile(&document(&fs::read_to_string(private)?)?)? != selected_profile {
                 return Err(invalid(
                     "pending builder profile changed; private config retained unchanged",
@@ -244,14 +269,12 @@ fn prepare(config: &Path, private: &Path, repo: &Path) -> Result<()> {
         // a crash immediately after the rename is recoverable. Once a prior
         // publication is complete, explicit subsequent user edits are inputs
         // for a fresh builder view; pending edits are never guessed away.
-        replace_completed = context.get("published_sha256").and_then(Json::as_str)
-            == Some(&original_hash)
-            || context.get("state").and_then(Json::as_str) == Some("complete");
         if !replace_completed {
             return Err(invalid(
                 "original config changed during a pending installation; preserve/reconcile its private config first",
             ));
         }
+        previous = Some(context);
     }
     let mut updates = BTreeMap::new();
     for key in KEYS {
@@ -280,7 +303,21 @@ fn prepare(config: &Path, private: &Path, repo: &Path) -> Result<()> {
                     "{key}: native cache receipt does not match this path/profile"
                 )));
             }
-            PathBuf::from(field(&record, "source")?)
+            // Several configurations may share identical native bytes while
+            // deliberately selecting different source files. Keep that choice
+            // in the configuration's persistent context, never by rewriting
+            // the shared generation's provenance.
+            let selected = previous.as_ref().filter(|old| {
+                old.get("profile").and_then(Json::as_str) == Some(selected_profile.as_str())
+                    && old
+                        .get(&format!("native_{key}"))
+                        .and_then(Json::as_str)
+                        .is_some_and(|path| same_file(Path::new(path), &native))
+            });
+            PathBuf::from(match selected {
+                Some(old) => field(old, &format!("source_{key}"))?,
+                None => field(&record, "source")?,
+            })
         };
         nonempty(&source)?;
         updates.insert(key.to_owned(), text(&source)?.to_owned());
@@ -459,12 +496,14 @@ fn install_one(
             || field(&record, "format")? != "PRIVARKV-v1"
             || field(&record, "source_sha256")? != source_hash
             || field(&record, "profile")? != selected_profile
+            || field(&record, "archive")? != text(&output)?
         {
             return Err(invalid(format!(
                 "{}: conflicting cache receipt; original retained",
                 output.display()
             )));
         }
+        finish_archive(key, &output, &record)?;
         nonempty(&output)?;
         if sha256_file(&output)? != field(&record, "archive_sha256")? {
             return Err(invalid(format!(
@@ -473,24 +512,16 @@ fn install_one(
             )));
         }
         validate(key, &output)?;
-        let source_path = fs::canonicalize(source)?;
-        if field(&record, "source")? != text(&source_path)? {
-            let mut record = record;
-            record.set("source", Json::Str(text(&source_path)?.to_owned()));
-            atomic_write(
-                &record_path,
-                (json_text::dumps_indented(&record).map_err(invalid)? + "\n").as_bytes(),
-            )?;
-        }
         println!("{key}: reuse completed native conversion");
         return Ok(output);
     }
+    let pending = temporary(&output, "pending");
     caches::dispatch(&[
         key.to_owned(),
         "--pickle".to_owned(),
         text(source)?.to_owned(),
         "--output".to_owned(),
-        text(&output)?.to_owned(),
+        text(&pending)?.to_owned(),
     ])?;
     if sha256_file(source)? != source_hash {
         return Err(invalid(format!(
@@ -498,29 +529,91 @@ fn install_one(
             source.display()
         )));
     }
-    let archive_hash = sha256_file(&output)?;
-    let canonical_source = fs::canonicalize(source)?;
+    let archive_hash = sha256_file(&pending)?;
+    // Preserve the selected logical path, including DataLad's annex link.
+    // Restoring an annex object's physical path would bypass its managed path.
+    let selected_source = std::path::absolute(source)?;
     let source_bytes = fs::metadata(source)?.len().to_string();
-    let archive_bytes = fs::metadata(&output)?.len().to_string();
-    atomic_write(
-        &record_path,
-        &receipt(&[
-            ("format", "PRIVARKV-v1"),
-            ("key", key),
-            ("profile", selected_profile),
-            ("source", text(&canonical_source)?),
-            ("source_sha256", &source_hash),
-            ("source_bytes", &source_bytes),
-            ("archive", text(&output)?),
-            ("archive_sha256", &archive_hash),
-            ("archive_bytes", &archive_bytes),
-        ])?,
-    )?;
+    let archive_bytes = fs::metadata(&pending)?.len().to_string();
+    let record_bytes = receipt(&[
+        ("format", "PRIVARKV-v1"),
+        ("key", key),
+        ("profile", selected_profile),
+        ("source", text(&selected_source)?),
+        ("source_sha256", &source_hash),
+        ("source_bytes", &source_bytes),
+        ("archive", text(&output)?),
+        ("archive_sha256", &archive_hash),
+        ("archive_bytes", &archive_bytes),
+        ("pending_archive", text(&pending)?),
+    ])?;
+    let pending_receipt = sidecar(&pending, ".source.json");
+    write_new(&pending_receipt, &record_bytes)?;
+    // The checked staging file is never a selectable final archive. Publish
+    // its recovery receipt first, without replacing anything supplied. If the
+    // process stops here, the next invocation can finish this exact generation.
+    fs::hard_link(&pending_receipt, &record_path)?;
+    fs::File::open(parent(&output))?.sync_all()?;
+    let record = json_text::parse(std::str::from_utf8(&record_bytes)?, true).map_err(invalid)?;
+    finish_archive(key, &output, &record)?;
+    fs::remove_file(&pending_receipt)?;
     Ok(output)
 }
 
+fn finish_archive(key: &str, output: &Path, record: &Json) -> Result<()> {
+    if output.exists() {
+        return Ok(());
+    }
+    let pending = Path::new(field(record, "pending_archive")?);
+    if parent(pending) != parent(output)
+        || !text(Path::new(
+            pending
+                .file_name()
+                .ok_or_else(|| invalid("pending archive lacks filename"))?,
+        ))?
+        .starts_with(&format!(
+            "{}.",
+            text(Path::new(
+                output
+                    .file_name()
+                    .ok_or_else(|| invalid("archive lacks filename"))?
+            ))?
+        ))
+        || pending.extension().and_then(|e| e.to_str()) != Some("pending")
+    {
+        return Err(invalid("pending archive is outside the owned generation"));
+    }
+    nonempty(pending)?;
+    if sha256_file(pending)? != field(record, "archive_sha256")? {
+        return Err(invalid(
+            "pending archive checksum mismatch; retained without publication",
+        ));
+    }
+    validate(key, pending)?;
+    fs::hard_link(pending, output)?;
+    fs::File::open(parent(output))?.sync_all()?;
+    fs::remove_file(pending)?;
+    Ok(())
+}
+
 fn publish(config: &Path, private: &Path, repo: &Path) -> Result<()> {
-    let context = check_context(config, private, repo)?;
+    let canonical_config = fs::canonicalize(config)?;
+    if canonical_config
+        .components()
+        .collect::<Vec<_>>()
+        .windows(3)
+        .any(|parts| {
+            parts[0].as_os_str() == ".git"
+                && parts[1].as_os_str() == "annex"
+                && parts[2].as_os_str() == "objects"
+        })
+    {
+        return Err(invalid(
+            "configuration is a locked DataLad object; use an unlocked or copied configuration",
+        ));
+    }
+    let config = canonical_config.as_path();
+    let mut context = check_context(config, private, repo)?;
     let contents = fs::read_to_string(private)?;
     let doc = document(&contents)?;
     let selected_profile = profile(&doc)?;
@@ -558,6 +651,14 @@ fn publish(config: &Path, private: &Path, repo: &Path) -> Result<()> {
             )));
         }
         let output = install_one(key, &source, &doc, repo, &selected_profile)?;
+        context.set(
+            &format!("native_{key}"),
+            Json::Str(text(&output)?.to_owned()),
+        );
+        context.set(
+            &format!("source_{key}"),
+            Json::Str(text(&std::path::absolute(&source)?)?.to_owned()),
+        );
         updates.insert(key.to_owned(), text(&output)?.to_owned());
     }
     let runtime = rewrite(&contents, &updates)?;
@@ -566,7 +667,6 @@ fn publish(config: &Path, private: &Path, repo: &Path) -> Result<()> {
     if fs::read_to_string(private)? != contents {
         return Err(invalid("builder config changed during conversion"));
     }
-    let mut context = context;
     context.set(
         "published_sha256",
         Json::Str(sha256_hex(runtime.as_bytes())),
@@ -576,7 +676,14 @@ fn publish(config: &Path, private: &Path, repo: &Path) -> Result<()> {
         &context_path,
         (json_text::dumps_indented(&context).map_err(invalid)? + "\n").as_bytes(),
     )?;
-    atomic_write(config, runtime.as_bytes())?;
+    atomic_write_checked(config, runtime.as_bytes(), || {
+        if sha256_file(config)? != field(&context, "config_sha256")? {
+            return Err(invalid(
+                "original configuration changed before publication; user edit retained",
+            ));
+        }
+        Ok(())
+    })?;
     context.set("state", Json::Str("complete".to_owned()));
     atomic_write(
         &context_path,
@@ -777,5 +884,224 @@ mod tests {
             std::os::unix::fs::symlink(&tmp.0, tmp.0.join("redirect")).unwrap();
             assert!(directory(&tmp.0, &tmp.0.join("redirect/out")).is_err());
         }
+    }
+
+    #[test]
+    fn basename_paths_publish_in_an_isolated_working_directory() {
+        const CASE: &str = "PRIVA_INSTALL_BASENAME_TEST";
+        if std::env::var_os(CASE).is_some() {
+            let repo = std::env::current_dir().unwrap();
+            fs::write(
+                "config.yaml",
+                format!(
+                    "assembly: hg38\nvep_installed_version: 116\ncache_root: {}\n",
+                    repo.display()
+                ),
+            )
+            .unwrap();
+            prepare(Path::new("config.yaml"), Path::new("private.yaml"), &repo).unwrap();
+            publish(Path::new("config.yaml"), Path::new("private.yaml"), &repo).unwrap();
+            return;
+        }
+        let tmp = Temp::new();
+        let status = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "cache_install::tests::basename_paths_publish_in_an_isolated_working_directory",
+            ])
+            .current_dir(&tmp.0)
+            .env(CASE, "1")
+            .status()
+            .unwrap();
+        assert!(status.success());
+    }
+
+    #[test]
+    fn each_identical_warm_cycle_starts_a_new_pending_transaction() {
+        let tmp = Temp::new();
+        let (config, private) = tmp.config("");
+        for _ in 0..3 {
+            prepare(&config, &private, &tmp.0).unwrap();
+            assert!(
+                json(&sidecar(&private, ".cache-install.json"))
+                    .unwrap()
+                    .get("state")
+                    .is_none()
+            );
+            publish(&config, &private, &tmp.0).unwrap();
+        }
+        prepare(&config, &private, &tmp.0).unwrap();
+        let builder = fs::read_to_string(&private).unwrap() + "new_output: finished.vcf.gz\n";
+        fs::write(&private, &builder).unwrap();
+        let original = fs::read_to_string(&config).unwrap() + "user_edit: keep\n";
+        fs::write(&config, &original).unwrap();
+        assert!(prepare(&config, &private, &tmp.0).is_err());
+        assert_eq!(fs::read_to_string(&private).unwrap(), builder);
+        assert_eq!(fs::read_to_string(&config).unwrap(), original);
+    }
+
+    #[test]
+    fn shared_archive_keeps_each_configs_original_source_selection() {
+        let tmp = Temp::new();
+        let a = tmp.0.join("source_a.pkl");
+        let b = tmp.0.join("source_b.pkl");
+        fs::write(&a, b"\x80\x04}\x94.").unwrap();
+        fs::copy(&a, &b).unwrap();
+        let (config_a, private_a) =
+            tmp.config(&format!("clinvar_patho_af_stat: '{}'\n", a.display()));
+        let config_b = tmp.0.join("b.yaml");
+        let private_b = tmp.0.join("b.private.yaml");
+        fs::write(
+            &config_b,
+            fs::read_to_string(&config_a)
+                .unwrap()
+                .replace(text(&a).unwrap(), text(&b).unwrap()),
+        )
+        .unwrap();
+        prepare(&config_a, &private_a, &tmp.0).unwrap();
+        publish(&config_a, &private_a, &tmp.0).unwrap();
+        prepare(&config_b, &private_b, &tmp.0).unwrap();
+        publish(&config_b, &private_b, &tmp.0).unwrap();
+        let doc_a = document(&fs::read_to_string(&config_a).unwrap()).unwrap();
+        let doc_b = document(&fs::read_to_string(&config_b).unwrap()).unwrap();
+        assert_eq!(
+            setting(&doc_a, "clinvar_patho_af_stat").unwrap(),
+            setting(&doc_b, "clinvar_patho_af_stat").unwrap()
+        );
+        prepare(&config_b, &private_b, &tmp.0).unwrap();
+        assert_eq!(
+            setting(
+                &document(&fs::read_to_string(&private_b).unwrap()).unwrap(),
+                "clinvar_patho_af_stat"
+            )
+            .unwrap(),
+            b.to_str()
+        );
+        fs::remove_file(&b).unwrap();
+        prepare(&config_a, &private_a, &tmp.0).unwrap();
+        assert_eq!(
+            setting(
+                &document(&fs::read_to_string(&private_a).unwrap()).unwrap(),
+                "clinvar_patho_af_stat"
+            )
+            .unwrap(),
+            a.to_str()
+        );
+    }
+
+    #[test]
+    fn copied_archive_with_stale_location_receipt_is_refused() {
+        let tmp = Temp::new();
+        let source = tmp.0.join("gene.pkl");
+        fs::write(&source, b"\x80\x04}\x94.").unwrap();
+        let (config, private) =
+            tmp.config(&format!("clinvar_patho_af_stat: '{}'\n", source.display()));
+        prepare(&config, &private, &tmp.0).unwrap();
+        publish(&config, &private, &tmp.0).unwrap();
+        let original = fs::read_to_string(&config).unwrap();
+        let old = PathBuf::from(
+            required(&document(&original).unwrap(), "clinvar_patho_af_stat").unwrap(),
+        );
+        let new_root = tmp.0.join("moved");
+        fs::create_dir(&new_root).unwrap();
+        let changed = original.replace(
+            &format!("cache_root: {}", tmp.0.display()),
+            &format!("cache_root: {}", new_root.display()),
+        );
+        fs::write(&config, &changed).unwrap();
+        prepare(&config, &private, &tmp.0).unwrap();
+        let doc = document(&fs::read_to_string(&private).unwrap()).unwrap();
+        let new = target(
+            "clinvar_patho_af_stat",
+            &sha256_file(&source).unwrap(),
+            &doc,
+            &tmp.0,
+        )
+        .unwrap();
+        fs::copy(&old, &new).unwrap();
+        fs::copy(sidecar(&old, ".source.json"), sidecar(&new, ".source.json")).unwrap();
+        assert!(publish(&config, &private, &tmp.0).is_err());
+        assert_eq!(fs::read_to_string(&config).unwrap(), changed);
+    }
+
+    #[test]
+    fn interrupted_owned_generation_recovers_from_its_verified_staging_receipt() {
+        let tmp = Temp::new();
+        let source = tmp.0.join("gene.pkl");
+        fs::write(&source, b"\x80\x04}\x94.").unwrap();
+        let (config, _) = tmp.config("");
+        let doc = document(&fs::read_to_string(config).unwrap()).unwrap();
+        let output = install_one(
+            "clinvar_patho_af_stat",
+            &source,
+            &doc,
+            &tmp.0,
+            "GRCh38/VEP116",
+        )
+        .unwrap();
+        let expected = fs::read(&output).unwrap();
+        let pending = temporary(&output, "pending");
+        fs::rename(&output, &pending).unwrap();
+        let record_path = sidecar(&output, ".source.json");
+        let mut record = json(&record_path).unwrap();
+        record.set(
+            "pending_archive",
+            Json::Str(text(&pending).unwrap().to_owned()),
+        );
+        fs::write(&record_path, json_text::dumps_indented(&record).unwrap()).unwrap();
+        let restored = install_one(
+            "clinvar_patho_af_stat",
+            &source,
+            &doc,
+            &tmp.0,
+            "GRCh38/VEP116",
+        )
+        .unwrap();
+        assert_eq!(restored, output);
+        assert_eq!(fs::read(&output).unwrap(), expected);
+        assert!(!pending.exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn preserve_configuration_alias_and_logical_source_link() {
+        let tmp = Temp::new();
+        let source = tmp.0.join("source.pkl");
+        let alias = tmp.0.join("source_alias.pkl");
+        fs::write(&source, b"\x80\x04}\x94.").unwrap();
+        std::os::unix::fs::symlink(&source, &alias).unwrap();
+        let (config, private) =
+            tmp.config(&format!("clinvar_patho_af_stat: '{}'\n", alias.display()));
+        let config_alias = tmp.0.join("config_alias.yaml");
+        std::os::unix::fs::symlink(&config, &config_alias).unwrap();
+        prepare(&config_alias, &private, &tmp.0).unwrap();
+        publish(&config_alias, &private, &tmp.0).unwrap();
+        assert!(config_alias.is_symlink());
+        prepare(&config_alias, &private, &tmp.0).unwrap();
+        assert_eq!(
+            setting(
+                &document(&fs::read_to_string(&private).unwrap()).unwrap(),
+                "clinvar_patho_af_stat"
+            )
+            .unwrap(),
+            alias.to_str()
+        );
+    }
+
+    #[test]
+    fn config_edit_during_temporary_write_is_preserved() {
+        let tmp = Temp::new();
+        let file = tmp.0.join("config.yaml");
+        fs::write(&file, "original").unwrap();
+        let before = sha256_file(&file).unwrap();
+        let result = atomic_write_checked(&file, b"new runtime", || {
+            fs::write(&file, "user edit")?;
+            if sha256_file(&file)? != before {
+                return Err(invalid("changed"));
+            }
+            Ok(())
+        });
+        assert!(result.is_err());
+        assert_eq!(fs::read_to_string(&file).unwrap(), "user edit");
     }
 }

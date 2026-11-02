@@ -103,6 +103,12 @@ def cases():
     for encoding in ('utf-8','utf-16','utf-16-le','utf-16-be','iso-8859-1','windows-1252','utf-32','latin-1','unknown'):
         document='<?xml version="1.0" encoding="'+encoding+'"?>'+XML
         validate('xml_encoding_'+encoding,'orphadata',document.encode(encoding if encoding not in ('unknown',) else 'utf-8'))
+    for name,payload in [
+        ('external_unicode','<!DOCTYPE JDBOR [<!ENTITY α SYSTEM "file:///not-read">]><JDBOR>&α;<DisorderList/></JDBOR>'),
+        ('external_nested','<!DOCTYPE JDBOR [<!ENTITY x SYSTEM "file:///not-read"><!ENTITY y "&x;">]><JDBOR>&y;<DisorderList/></JDBOR>'),
+        ('external_namespace_attribute','<!DOCTYPE JDBOR [<!ENTITY x SYSTEM "file:///not-read">]><JDBOR xmlns:p="urn:p" p:a="value">&x;<DisorderList/></JDBOR>'),
+        ('external_block_boundary','<!DOCTYPE JDBOR [<!ENTITY x SYSTEM "file:///not-read">]><JDBOR>'+' '*16320+'&x;<DisorderList/></JDBOR>')]:
+        validate('xml_'+name,'orphadata',payload)
     for url in [URL,'HTTPS://EXAMPLE.invalid/a','http://user:pass@host:badport/a','https://[::1]/','https://[fe80::1%scope]/','https://[v1.ab]/','https://é.invalid/α','https://h/a?b=c#d',
         'ftp://h/a','//h/a','https:///a','https://h/a b',' https://h/a','https://h/\t','https://[a]/','https://[127.0.0.1]/','https://[vX.a]/','https://[::1','https://h／x/a']:
         add('url_'+str(len(result)),command='record-source',url=url,argument=not url.startswith(('https://selected','HTTPS://','http://user','https://[::1]/','https://[fe80','https://[v1','https://é','https://h/a?')))
@@ -130,6 +136,12 @@ def cases():
     add('check_explicit_receipt',command='check-source',receipt=valid,receipt_present=True,explicit=True)
     add('record_denied_parent',command='record-source',parent_denied=True)
     add('relative_source',command='record-source',relative=True)
+    add('alias_source',command='record-source',alias=True)
+    add('alias_publication_failure',command='record-source',alias=True,sidecar_kind='directory',receipt=valid,receipt_present=True)
+    large=b'0123456789abcdef'*(1024*128)+b'last'
+    large_receipt=dict(valid,sha256=hashlib.sha256(large).hexdigest())
+    for command in ('record-source','check-source','metadata'):
+        add(command+'_multi_hash_blocks',large,command=command,receipt=large_receipt,receipt_present=True)
     return result
 
 def normalized(text,root):
@@ -167,6 +179,7 @@ def prepare(folder,spec):
     elif sk=='broken_link':sidecar.unlink();sidecar.symlink_to('absent_receipt')
     if spec.get('parent_denied'):folder.chmod(0o500)
     name='payload' if spec.get('relative') else str(path)
+    if spec.get('alias'):(folder/'nested').mkdir();name=str(folder/'nested'/'..'/'payload')
     command=spec['command'];args=[command if command!='metadata' else 'check-source','--input',name]
     if command=='validate':args+=['--kind',spec['kind']]
     else:args+=['--url',spec.get('url',URL)]

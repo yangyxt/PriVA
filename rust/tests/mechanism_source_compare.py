@@ -144,6 +144,14 @@ def cases():
     large_receipt=dict(valid,sha256=hashlib.sha256(large).hexdigest())
     for command in ('record-source','check-source','metadata'):
         add(command+'_multi_hash_blocks',large,command=command,receipt=large_receipt,receipt_present=True)
+    for name,arguments in {
+        'missing_command':[], 'unknown_command':['unknown'], 'missing_options':['validate'],
+        'missing_kind':['validate','--input','$INPUT'], 'bad_kind':['validate','--input','$INPUT','--kind','unknown'],
+        'missing_url':['check-source','--input','$INPUT'],
+        'record_receipt_option':['record-source','--input','$INPUT','--url',URL,'--receipt','$RECEIPT'],
+        'metadata_value':['check-source','--input','$INPUT','--url',URL,'--metadata-only=true'],
+        'earlier_invalid_url':['record-source','--input','$INPUT','--url','invalid','--url',URL],
+    }.items():add('argument_'+name,command='record-source',arguments=arguments,argument=True)
     return result
 
 def normalized(text,root):
@@ -192,6 +200,7 @@ def prepare(folder,spec):
     else:args+=['--url',spec.get('url',URL)]
     if command=='metadata':args+=['--metadata-only']
     if spec.get('explicit'):args+=['--receipt',str(sidecar)]
+    if 'arguments' in spec:args=[v.replace('$INPUT',name).replace('$RECEIPT',str(sidecar)) for v in spec['arguments']]
     return args
 
 def measure(command,folder,label,cwd):

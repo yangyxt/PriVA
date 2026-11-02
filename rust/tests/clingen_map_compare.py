@@ -6,8 +6,8 @@
 
 The reference producer is executed unchanged. Each successful Python pickle is
 converted to schema 10 from those same fixture inputs; native output is compared
-against that pickle with CPython's independent full-value comparator. Deliberately
-unsupported code scalar types must fail both native production and conversion.
+against that pickle with CPython's independent full-value comparator. Text/NaN
+maps retain schema 10 v1; surviving numeric/Boolean codes require typed v2.
 Logs and fixtures are written under the supplied directory, never beside source.
 """
 from __future__ import annotations
@@ -60,9 +60,16 @@ def cases() -> dict[str, dict]:
         "object_float_text_failure": case(rows="1.0\tPS3\nx\tPM2\n", fails=True),
         "infinite_id_failure": case(rows="inf\tPS3\n1\tPM2\n", fails=True),
         "huge_object_id_failure": case(rows="18446744073709551616\tPS3\n1\tPM2\n", fails=True),
-        "numeric_codes_refused": case(rows="1\t1\n2\t2\n", unsupported=True),
-        "boolean_codes_refused": case(rows="1\tTrue\n2\tFalse\n", unsupported=True),
-        "float_codes_refused": case(rows="1\t1.5\n2\t2.5\n", unsupported=True),
+        "numeric_codes_refused": case(rows="1\t1\n2\t2\n", version=2),
+        "boolean_codes_refused": case(rows="1\tTrue\n2\tFalse\n", version=2),
+        "float_codes_refused": case(rows="1\t1.5\n2\t2.5\n", version=2),
+        "uint64_codes": case(rows="1\t18446744073709551615\n2\t9223372036854775808\n", version=2),
+        "signed_integer_codes": case(rows="1\t-9223372036854775808\n2\t-2\n", version=2),
+        "signed_zero_codes": case(rows="1\t-0.0\n2\t0.0\n", version=2),
+        "infinite_codes": case(rows="1\tinf\n2\t-inf\n", version=2),
+        "boolean_codes_missing": case(rows="1\tFalse\n2\tNA\n", version=2),
+        "float_codes_missing": case(rows="1\t2.5\n2\tNA\n", version=2),
+        "numeric_codes_last_missing": case(rows="1\t2\n1\tNA\n", version=1),
         "unmapped_numeric_codes": case(rows="9\t1\n8\t2\n"),
         "mapped_nan_unmapped_numeric": case(rows="1\tNA\n9\t2\n"),
         "last_nan_overwrites_numeric": case(rows="1\t2\n1\tNA\n"),
@@ -175,6 +182,9 @@ def edges(args: argparse.Namespace) -> None:
                         archive=converted, report=root / "converted_compare.json", mismatches=root / "converted_mismatches.jsonl"))
                 row.update(passed=comparison["passed"] and converted_comparison["passed"],
                            compared_keys=comparison["exported_entries"], mismatches=comparison["mismatches"])
+                versions = [int.from_bytes(path.read_bytes()[16:20], "little") for path in (native, converted)]
+                row["schema_versions"] = versions
+                row["passed"] = row["passed"] and versions == [fixture.get("version", 1)] * 2
         results[name] = row
     stable = {name: oracle.sha256(Path(record["path"])) == record["sha256"] for name, record in sources.items()}
     passed = all(row["passed"] for row in results.values()) and all(stable.values())

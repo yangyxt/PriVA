@@ -26,28 +26,38 @@ pub(crate) fn validate_product6(source: impl Read) -> Result<()> {
     xml::validate_product6(source)
 }
 
+/// Reuse the same Expat owner and ElementTree feed/clear timing for another
+/// explicit tree consumer. The original InterPro mapping route is unchanged.
+pub(crate) fn visit_selected_elements(
+    source: impl Read,
+    name: &'static str,
+    visit: impl FnMut(&Element) + 'static,
+) -> Result<()> {
+    xml::visit_selected(source, name, Box::new(visit))
+}
+
 const HELP: &str = "usage: priva interpro-mapping build --xml XML.gz --output CACHE.rkyv\n\
 Build the full member-signature mapping directly from an explicit gzipped InterPro XML.\n\
 No download, VCF-format report, installer caller change or pickle output.";
 
 #[derive(Default)]
-struct Element {
-    name: String,
+pub(crate) struct Element {
+    pub(crate) name: String,
     attributes: BTreeMap<String, String>,
-    text: String,
+    pub(crate) text: String,
     tail: String,
-    children: Vec<Rc<RefCell<Element>>>,
+    pub(crate) children: Vec<Rc<RefCell<Element>>>,
 }
 
 impl Element {
-    fn child(&self, name: &str) -> Option<Ref<'_, Element>> {
+    pub(crate) fn child(&self, name: &str) -> Option<Ref<'_, Element>> {
         self.children.iter().find_map(|child| {
             let child = child.borrow();
             (child.name == name).then_some(child)
         })
     }
 
-    fn child_text(&self, name: &str) -> String {
+    pub(crate) fn child_text(&self, name: &str) -> String {
         self.child(name)
             .map_or_else(String::new, |child| python_strip(&child.text).to_owned())
     }

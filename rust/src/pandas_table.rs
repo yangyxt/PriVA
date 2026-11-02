@@ -366,7 +366,30 @@ pub(crate) fn tokenize(
     comment: Option<u8>,
     emit: impl FnMut(Vec<String>) -> Result<()>,
 ) -> Result<()> {
-    tokenize_impl(text, comment, false, false, emit)
+    tokenize_impl(text, comment, false, false, b'\t', None, true, emit)
+}
+
+/// The condition-evidence builder's comma/TSV framing. Existing public readers
+/// keep their fixed tab delimiter and admission rules. This consumer owns its
+/// own implicit-index and bad-line policy after the shared C-style tokenizer.
+pub(crate) fn tokenize_builder_separated(
+    text: &str,
+    delimiter: u8,
+    final_input: bool,
+    mut emit: impl FnMut(Vec<String>, usize) -> Result<()>,
+) -> Result<()> {
+    let initial_bom = text.starts_with('\u{feff}');
+    let line = std::cell::Cell::new(1);
+    tokenize_impl(
+        text.strip_prefix('\u{feff}').unwrap_or(text),
+        None,
+        true,
+        initial_bom,
+        delimiter,
+        Some(&line),
+        final_input,
+        |record| emit(record, line.get()),
+    )
 }
 
 fn tokenize_impl(
@@ -374,6 +397,9 @@ fn tokenize_impl(
     comment: Option<u8>,
     builder_cr_compatibility: bool,
     initial_bom: bool,
+    delimiter: u8,
+    line_number: Option<&std::cell::Cell<usize>>,
+    final_input: bool,
     mut emit: impl FnMut(Vec<String>) -> Result<()>,
 ) -> Result<()> {
     let expected_width = std::cell::Cell::new(0usize);
@@ -398,6 +424,7 @@ fn tokenize_impl(
     let mut field: Vec<u8> = Vec::new();
     let mut index = 0;
     let mut records = 0;
+    let mut file_lines = 0;
     let mut call_start = 0;
     let mut backtracks = HashMap::new();
     let mut builder_buffer_starts: Option<Vec<usize>> = None;
@@ -421,6 +448,9 @@ fn tokenize_impl(
         match state {
             State::InComment => {
                 if terminator {
+                    if !(byte == b'\n' && index > 0 && bytes[index - 1] == b'\r') {
+                        file_lines += 1;
+                    }
                     state = State::StartRecord;
                     if builder_cr_compatibility && records == 2 && call_start == 0 {
                         call_start = index
@@ -432,6 +462,9 @@ fn tokenize_impl(
             }
             State::StartRecord => {
                 if terminator {
+                    if !(byte == b'\n' && index > 0 && bytes[index - 1] == b'\r') {
+                        file_lines += 1;
+                    }
                     index += 1;
                     continue;
                 }
@@ -507,7 +540,11 @@ fn tokenize_impl(
                 continue;
             }
             State::StartField | State::InField | State::QuoteInQuotedField if terminator => {
+                if let Some(line) = line_number {
+                    line.set(file_lines + 1);
+                }
                 end_record(&mut fields, &mut field, &mut emit)?;
+                file_lines += 1;
                 records += 1;
                 state = State::StartRecord;
                 if byte == b'\r' && bytes.get(index + 1) == Some(&b'\n') {
@@ -520,14 +557,14 @@ fn tokenize_impl(
             }
             State::StartField => match byte {
                 b'"' => state = State::InQuotedField,
-                b'\t' => end_field(&mut fields, &mut field)?,
+                byte if byte == delimiter => end_field(&mut fields, &mut field)?,
                 _ => {
                     field.push(byte);
                     state = State::InField;
                 }
             },
             State::InField => {
-                if byte == b'\t' {
+                if byte == delimiter {
                     end_field(&mut fields, &mut field)?;
                     state = State::StartField;
                 } else {
@@ -546,7 +583,7 @@ fn tokenize_impl(
                     field.push(b'"');
                     state = State::InQuotedField;
                 }
-                b'\t' => {
+                byte if byte == delimiter => {
                     end_field(&mut fields, &mut field)?;
                     state = State::StartField;
                 }
@@ -558,10 +595,25 @@ fn tokenize_impl(
         }
         index += 1;
     }
+    // A text decoder can fail after earlier complete reads were delivered to
+    // pandas. Inspect that delivered prefix for earlier tokenizer failures,
+    // without inventing EOF or publishing its unfinished final record.
+    if !final_input {
+        return Ok(());
+    }
     match state {
         State::StartRecord | State::InComment => Ok(()),
-        State::InQuotedField => Err(invalid("the table ends inside a quoted field")),
+        State::InQuotedField => Err(invalid(if line_number.is_some() {
+            format!(
+                "Error tokenizing data. C error: EOF inside string starting at row {file_lines}"
+            )
+        } else {
+            "the table ends inside a quoted field".to_owned()
+        })),
         State::StartField | State::InField | State::QuoteInQuotedField => {
+            if let Some(line) = line_number {
+                line.set(file_lines + 1);
+            }
             end_record(&mut fields, &mut field, &mut emit)
         }
     }
@@ -1026,6 +1078,9 @@ fn parse_table_impl(
         options.comment,
         builder_cr_compatibility,
         initial_bom,
+        b'\t',
+        None,
+        true,
         |record| {
             widest = widest.max(record.len());
             let Some(expected) = width else {

@@ -2,7 +2,7 @@
 use super::*;
 use crate::python_text::is_python_space;
 
-pub(super) fn check(value: &str) -> Result<()> {
+pub(crate) fn check(value: &str) -> Result<()> {
     let cleaned = value
         .trim_start_matches(|c: char| c <= ' ')
         .replace(['\t', '\r', '\n'], "");

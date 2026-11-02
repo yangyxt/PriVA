@@ -37,6 +37,7 @@ mod das_sampling;
 mod dip_stat;
 #[allow(dead_code)] // Shared installer primitive; callers switch after their own parity tests.
 mod file_lock;
+mod gene_mechanism_builder;
 mod gzip_writer;
 mod hpo_assertions;
 pub mod hpo_penetrance;

@@ -9,6 +9,8 @@ pub mod cadd_hub;
 mod cli;
 pub mod combine_annotations;
 mod config_text;
+#[allow(dead_code)] // PM1 producer integration follows exact float64 comparison.
+mod fdr;
 #[allow(dead_code)] // Shared installer primitive; callers switch after their own parity tests.
 mod file_lock;
 pub mod hpo_penetrance;

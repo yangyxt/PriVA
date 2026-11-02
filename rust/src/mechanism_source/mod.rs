@@ -5,7 +5,7 @@ mod url;
 use crate::cli::{Result, invalid};
 use crate::json_text::{self, Json};
 use crate::python_args::{parse_long_option_occurrences, require_options};
-use crate::python_path::{absolute, is_file, metadata, os_error, path_value};
+use crate::python_path::{is_file, metadata, os_error, path_value, tempfile_parent};
 use std::collections::HashMap;
 use std::ffi::CString;
 use std::fs::{self, File};
@@ -190,7 +190,7 @@ fn publish(path: &Path, value: &Json) -> Result<()> {
         .filter(|p| !p.as_os_str().is_empty())
         .unwrap_or(Path::new("."));
     let name = path.file_name().unwrap_or_default().to_string_lossy();
-    let template = PathBuf::from(absolute(parent)?).join(format!(".{name}.XXXXXX"));
+    let template = tempfile_parent(parent)?.join(format!(".{name}.XXXXXX"));
     let mut bytes = CString::new(template.as_os_str().as_bytes())
         .map_err(|_| error("ValueError", "embedded null byte"))?
         .into_bytes_with_nul();

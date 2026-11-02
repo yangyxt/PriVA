@@ -417,6 +417,30 @@ pub(crate) fn pickle_schema_version(path: &str) -> Result<u32> {
     Ok(schema(&read_pickle(path)?).version)
 }
 
+/// Direct native producer boundary. Lookup keys and set members follow the
+/// existing archive contract; symbols and free-key dictionary order are exact.
+pub(crate) fn write_entries(
+    output: &Path,
+    entries: PlainStats,
+    provenance: Vec<Provenance>,
+) -> Result<u32> {
+    let (selected, archive) = build_selected(entries.clone(), provenance)?;
+    write_cache_checked(output, selected, &archive, |staged| {
+        let cache = ClinvarGeneCache::open(&staged.to_string_lossy())?;
+        if cache.len() != entries.len()
+            || entries
+                .iter()
+                .any(|(key, value)| cache.plain(key).as_ref() != Some(value))
+        {
+            return Err(invalid(
+                "a direct gene-statistics archive differs from its producer values",
+            ));
+        }
+        Ok(())
+    })?;
+    Ok(selected.version)
+}
+
 enum Mapping {
     V1(MappedCache<ClinvarGeneStat>),
     V2(MappedCache<typed::Root>),

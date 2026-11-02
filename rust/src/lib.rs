@@ -16,6 +16,7 @@ mod clingen_map_builder;
 mod clinvar_aa_splice_builder;
 mod clinvar_exon_af_builder;
 mod clinvar_gene_af_builder;
+mod clinvar_gene_stat_builder;
 pub mod combine_annotations;
 mod config_text;
 mod conservation_resource;

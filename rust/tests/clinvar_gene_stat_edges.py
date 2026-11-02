@@ -131,7 +131,14 @@ def cases():
                  "summary_duplicate_last", "mane_duplicate_last", "summary_missing_name", "summary_numeric_name",
                  "summary_missing_id", "summary_float_id", "summary_two_nan_ids", "summary_quoted", "summary_grch37",
                  "mane_numeric_target", "mane_mixed_target", "mane_missing_refseq",
-                 "summary_two_nan_object_ids", "mane_two_nan_refseq", "mane_two_nan_object_refseq"]:
+                 "summary_two_nan_object_ids", "mane_two_nan_refseq", "mane_two_nan_object_refseq",
+                 "summary_uint64_ids", "summary_uint64_na_ids", "summary_overflow_ids",
+                 "summary_unused_uint64", "mane_unused_uint64", "summary_implicit_index",
+                 "mane_implicit_index", "summary_late_extra_field",
+                 "summary_uint64_float_match", "summary_uint64_float_neighbour",
+                 "summary_uint64_negative", "summary_uint64_mixed_bad",
+                 "summary_uint64_float_collision", "summary_i64_float_neighbour",
+                 "summary_i64_float_collision", "summary_i64_float_duplicate"]:
         yield name, {"mutation": name}
 
 
@@ -183,6 +190,28 @@ def write_case(folder, spec):
     if mutation == "mane_missing_refseq": mane[1] = "\tENST_1.1"
     if mutation == "mane_two_nan_refseq": mane = [mane[0], "\tENST_1.1", "\tENST_2.1"]
     if mutation == "mane_two_nan_object_refseq": mane += ["\tENST_1.1", "\tENST_2.1"]
+    if mutation == "summary_uint64_ids": summary += ["9223372036854775808\tGRCh38\tNM_000002.1:c.1A>T"]
+    if mutation == "summary_uint64_na_ids": summary += ["9223372036854775808\tGRCh38\tNM_000002.1:c.1A>T", "NA\tGRCh38\tNM_000002.1:c.1A>T"]
+    if mutation == "summary_overflow_ids": summary += ["18446744073709551616\tGRCh38\tNM_000002.1:c.1A>T"]
+    if mutation == "summary_unused_uint64": summary = [summary[0]+"\tUnused"]+[row+"\t9223372036854775808" for row in summary[1:]]
+    if mutation == "mane_unused_uint64": mane = [mane[0]+"\tUnused"]+[row+"\t9223372036854775808" for row in mane[1:]]
+    if mutation == "summary_implicit_index": summary = summary[:1]+[f"row{i}\t"+row for i, row in enumerate(summary[1:])]
+    if mutation == "mane_implicit_index": mane = mane[:1]+[f"row{i}\t"+row for i, row in enumerate(mane[1:])]
+    if mutation == "summary_late_extra_field": summary[-1] += "\textra"
+    if mutation in ["summary_uint64_float_match", "summary_uint64_float_neighbour"]:
+        identifier = 9223372036854775808 + int(mutation.endswith("neighbour"))
+        header = [x.replace("ID=ALLELEID,Number=1,Type=Integer", "ID=ALLELEID,Number=1,Type=Float") for x in header]
+        lines = [x.replace("ALLELEID=1;", "ALLELEID=9223372036854775808;") for x in lines]
+        summary[1] = str(identifier)+summary[1][1:]
+    if mutation == "summary_uint64_negative": summary += ["9223372036854775808\tGRCh38\tNM_000002.1:c.1A>T", "-1\tGRCh38\tNM_000002.1:c.1A>T"]
+    if mutation == "summary_uint64_mixed_bad": summary += ["9223372036854775808\tGRCh38\tNM_000002.1:c.1A>T", "bad\tGRCh38\tNM_000002.1:c.1A>T"]
+    if mutation in ["summary_uint64_float_collision", "summary_i64_float_neighbour", "summary_i64_float_collision", "summary_i64_float_duplicate"]:
+        base = 2**63 if "uint64" in mutation else 2**53
+        header = [x.replace("ID=ALLELEID,Number=1,Type=Integer", "ID=ALLELEID,Number=1,Type=Float") for x in header]
+        lines = [x.replace("ALLELEID=1;", f"ALLELEID={base};") for x in lines]
+        summary[1] = str(base+1)+summary[1][1:]
+        if mutation.endswith(("collision", "duplicate")): summary[2] = str(base)+summary[2][1:]
+        if mutation.endswith("duplicate"): summary.append(summary[1])
     separator = "\r\n" if mutation == "crlf" else "\n"
     payload = (separator.join(header+lines)+separator).encode()
     plain = folder/"input.vcf"
@@ -235,6 +264,12 @@ class ObservedPool:
 
 def reference(args):
     original = producer(args.producer)
+    import pandas as pd
+    import numpy as np
+    import pysam
+    runtime = {"python": sys.version.split()[0], "pandas": pd.__version__, "numpy": np.__version__, "pysam": pysam.__version__}
+    if runtime != {"python": "3.12.3", "pandas": "2.2.3", "numpy": "1.26.4", "pysam": "0.22.1"}:
+        raise RuntimeError("reference runtime differs from the pinned producer profile")
     # producer() imports the source module from its pinned script directory.
     import combine_annotations
     mapping = None
@@ -257,7 +292,7 @@ def reference(args):
         _WORKER, _POOL = combine_annotations.convert_record_to_tab, combine_annotations.mp.Pool
         ObservedPool.order = []
         combine_annotations.mp.Pool = ObservedPool
-    report = {"success": False, "prepared_target_map": mapping}
+    report = {"success": False, "prepared_target_map": mapping, "runtime": runtime, "python_hash_seed": os.environ.get("PYTHONHASHSEED")}
     try:
         value = original.main_stat_variants(str(args.vcf), str(args.output), args.threads if args.order or args.observe else 1,
             clinvar_tab=str(args.summary), mane_tranx_tab=str(args.mane), donor_loss_cutoff=.25)

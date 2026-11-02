@@ -1,5 +1,6 @@
 //! Source-ordered summary/MANE and VCF AlleleID dictionaries.
 use crate::cli::{Result, invalid};
+use crate::clingen_map_builder::{ProducerColumn, infer};
 use crate::pandas_table::{self, Cell, Column};
 use crate::pickle_reader::{self, Value};
 use crate::vcf_variant::{self, Scalar};
@@ -11,6 +12,7 @@ use std::path::Path;
 pub(super) enum Key {
     Missing,
     Int(i64),
+    Unsigned(u64),
     Float(u64),
     Text(String),
     Tuple(Vec<Key>),
@@ -23,6 +25,8 @@ impl Key {
             && (-((1_u64 << 63) as f64)..(1_u64 << 63) as f64).contains(&value)
         {
             Self::Int(value as i64)
+        } else if value.fract() == 0.0 && ((1_u64 << 63) as f64..u64::MAX as f64).contains(&value) {
+            Self::Unsigned(value as u64)
         } else {
             Self::Float(value.to_bits())
         }
@@ -34,6 +38,15 @@ impl Key {
             Cell::Float(value) => Self::float(value),
             Cell::Bool(value) => Self::Int(i64::from(value)),
             Cell::Text(value) => Self::Text(value.to_owned()),
+        }
+    }
+    fn column(column: &ProducerColumn, row: usize) -> Self {
+        match column {
+            ProducerColumn::Pandas(column) => Self::cell(column.cell(row)),
+            ProducerColumn::Unsigned(values) => match i64::try_from(values[row]) {
+                Ok(value) => Self::Int(value),
+                Err(_) => Self::Unsigned(values[row]),
+            },
         }
     }
     fn scalar(value: Scalar) -> Self {
@@ -58,13 +71,125 @@ impl Key {
     pub(super) fn promoted(&self) -> Self {
         if let Self::Int(value) = self {
             Self::float(*value as f64)
+        } else if let Self::Unsigned(value) = self {
+            Self::float(*value as f64)
         } else {
             self.clone()
         }
     }
+    fn large_numeric(&self) -> bool {
+        match self {
+            Self::Int(value) => value.unsigned_abs() >= 1_u64 << 53,
+            Self::Unsigned(_) => true,
+            Self::Float(bits) => f64::from_bits(*bits).abs() >= (1_u64 << 53) as f64,
+            _ => false,
+        }
+    }
 }
 
-pub(super) type TargetMap = HashMap<Key, Option<String>>;
+/// pandas coerces a numeric dict Index to float64 for floating query values.
+/// Keep the original first-key order for collisions created by that coercion;
+/// the last index slot wins even when an earlier dict key was updated later.
+/// Ordinary small integer maps need no secondary values or ordering storage.
+#[derive(Default)]
+pub(super) struct TargetMap {
+    values: HashMap<Key, Option<String>>,
+    large_keys: Vec<Key>,
+    rounded: HashMap<Key, Option<String>>,
+}
+impl TargetMap {
+    fn insert(&mut self, key: Key, value: Option<String>) {
+        let large = key.large_numeric();
+        if self.values.insert(key.clone(), value).is_none() && large {
+            self.large_keys.push(key);
+        }
+    }
+    fn finish(mut self) -> Self {
+        if self.values.keys().all(|key| {
+            matches!(
+                key,
+                Key::Missing | Key::Int(_) | Key::Unsigned(_) | Key::Float(_)
+            )
+        }) {
+            for key in &self.large_keys {
+                self.rounded
+                    .insert(key.promoted(), self.values[key].clone());
+            }
+        }
+        self.large_keys.clear();
+        self
+    }
+    pub(super) fn get(&self, key: &Key, floating: bool) -> Option<&Option<String>> {
+        if floating && key.large_numeric() && !self.rounded.is_empty() {
+            self.rounded.get(key)
+        } else {
+            self.values.get(key)
+        }
+    }
+}
+
+/// The source never uses either table's row index or unselected columns.
+/// Retain pandas' implicit leading index and full-row syntax checks while
+/// sharing the already supported uint64/object inference with ClinGen.
+/// The ordinary table reader's restricted policy stays unchanged.
+fn selected<const N: usize>(path: &Path, wanted: [&str; N]) -> Result<[ProducerColumn; N]> {
+    let text = pandas_table::read_table_text(path)?;
+    let text = text.strip_prefix('\u{feff}').unwrap_or(&text);
+    let mut names = None;
+    let mut positions = [0; N];
+    let mut columns: [Vec<String>; N] = std::array::from_fn(|_| Vec::new());
+    let mut width = None;
+    pandas_table::tokenize(text, None, |record| {
+        if names.is_none() {
+            let header = pandas_table::column_names(record);
+            for (at, name) in wanted.iter().enumerate() {
+                positions[at] = header
+                    .iter()
+                    .position(|value| value == name)
+                    .ok_or_else(|| invalid(format!("KeyError: '{name}'")))?;
+            }
+            names = Some(header.len());
+            return Ok(());
+        }
+        let named = names.unwrap();
+        let expected = *width.get_or_insert(record.len().max(named));
+        if record.len() > expected {
+            return Err(invalid("ParserError: table row has too many fields"));
+        }
+        let leading = expected - named;
+        for (at, values) in columns.iter_mut().enumerate() {
+            values.push(
+                record
+                    .get(leading + positions[at])
+                    .cloned()
+                    .unwrap_or_default(),
+            );
+        }
+        Ok(())
+    })?;
+    if names.is_none() {
+        return Err(invalid("EmptyDataError: no columns to parse"));
+    }
+    let columns = columns.into_iter().map(infer).collect::<Result<Vec<_>>>()?;
+    Ok(columns.try_into().unwrap_or_else(|_| unreachable!()))
+}
+
+fn text_cell(column: &ProducerColumn, row: usize) -> Option<&str> {
+    match column {
+        ProducerColumn::Pandas(column) => match column.cell(row) {
+            Cell::Text(value) => Some(value),
+            _ => None,
+        },
+        ProducerColumn::Unsigned(_) => None,
+    }
+}
+
+fn rows(column: &ProducerColumn) -> usize {
+    match column {
+        ProducerColumn::Pandas(column) => column.len(),
+        ProducerColumn::Unsigned(values) => values.len(),
+    }
+}
 
 /// `Name.str.extract(r'(NM_\d+\.\d+)')`: the first match, with Python's
 /// Unicode decimal-digit class. The matched text itself is not normalized.
@@ -95,52 +220,45 @@ fn refseq(text: &str) -> Option<String> {
 }
 
 pub(super) fn from_tables(summary: &Path, mane: &Path) -> Result<TargetMap> {
-    let clinvar = pandas_table::read_table(summary)?;
-    let assembly = clinvar.column("Assembly")?;
-    let names = clinvar.column("Name")?;
-    let ids = clinvar.column("#AlleleID")?;
-    if !matches!(names, Column::Text(_) | Column::Object(_)) {
+    let [assembly, names, ids] = selected(summary, ["Assembly", "Name", "#AlleleID"])?;
+    if !matches!(
+        names,
+        ProducerColumn::Pandas(Column::Text(_) | Column::Object(_))
+    ) {
         return Err(invalid(
             "AttributeError: the ClinVar Name column has no .str accessor",
         ));
     }
-    let mane = pandas_table::read_table(mane)?;
-    let source = mane.column("RefSeq_nuc")?;
-    let target = mane.column("Ensembl_nuc")?;
+    let [source, target] = selected(mane, ["RefSeq_nuc", "Ensembl_nuc"])?;
     // Iterating a float Series creates distinct NaN Python objects. A dict
     // therefore retains repeated NaN keys, and Series.map refuses their
     // non-unique pandas Index. Object-column missing values share np.nan.
-    if matches!(source, Column::Float(values) if values.iter().filter(|v| v.is_nan()).count() > 1) {
+    if matches!(&source, ProducerColumn::Pandas(Column::Float(values)) if values.iter().filter(|v| v.is_nan()).count() > 1)
+    {
         return Err(invalid("InvalidIndexError: repeated NaN MANE keys"));
     }
     let mut refseq_to_ensembl = HashMap::new();
-    for row in 0..mane.rows {
+    for row in 0..rows(&source) {
         refseq_to_ensembl.insert(
-            Key::cell(source.cell(row)),
-            match target.cell(row) {
-                Cell::Text(text) => Some(text.split('.').next().unwrap_or("").to_owned()),
-                _ => None,
-            },
+            Key::column(&source, row),
+            text_cell(&target, row).map(|text| text.split('.').next().unwrap_or("").to_owned()),
         );
     }
-    let mut result = HashMap::new();
+    let mut result = TargetMap::default();
     let mut has_text = false;
     let mut missing_numeric_ids = 0;
-    for row in 0..clinvar.rows {
-        if assembly.cell(row) != Cell::Text("GRCh38") {
+    for row in 0..rows(&ids) {
+        if text_cell(&assembly, row) != Some("GRCh38") {
             continue;
         }
-        if matches!(ids, Column::Float(_)) && ids.cell(row) == Cell::Missing {
+        if matches!(&ids, ProducerColumn::Pandas(Column::Float(values)) if values[row].is_nan()) {
             missing_numeric_ids += 1;
         }
-        let name = match names.cell(row) {
-            Cell::Text(text) => refseq(text),
-            _ => None,
-        };
+        let name = text_cell(&names, row).and_then(refseq);
         let key = name.map_or(Key::Missing, Key::Text);
         let transcript = refseq_to_ensembl.get(&key).cloned().flatten();
         has_text |= transcript.is_some();
-        result.insert(Key::cell(ids.cell(row)), transcript);
+        result.insert(Key::column(&ids, row), transcript);
     }
     // The original .str.split(..., expand=True).iloc[:,0] also fails when no
     // mapped text survives; it does not silently create an empty target map.
@@ -150,7 +268,7 @@ pub(super) fn from_tables(summary: &Path, mane: &Path) -> Result<TargetMap> {
     if missing_numeric_ids > 1 {
         return Err(invalid("InvalidIndexError: repeated NaN AlleleID keys"));
     }
-    Ok(result)
+    Ok(result.finish())
 }
 
 /// Explicit reuse of a source-bound saved procedure result. The ordinary
@@ -161,7 +279,10 @@ pub(super) fn from_pickle(path: &Path) -> Result<TargetMap> {
         return Err(invalid("the saved transcript map is not a dictionary"));
     };
     let dict = dict.borrow();
-    let mut map = HashMap::with_capacity(dict.entries.len());
+    let mut map = TargetMap {
+        values: HashMap::with_capacity(dict.entries.len()),
+        ..TargetMap::default()
+    };
     for (key, value) in &dict.entries {
         let value = match value {
             Value::Str(text) => Some(text.to_string()),
@@ -174,7 +295,7 @@ pub(super) fn from_pickle(path: &Path) -> Result<TargetMap> {
         };
         map.insert(Key::pickle(key)?, value);
     }
-    Ok(map)
+    Ok(map.finish())
 }
 
 pub(super) struct Alleles {
@@ -186,6 +307,7 @@ pub(super) fn alleles(path: &Path) -> Result<Alleles> {
     let header = vcf_variant::header(path)?;
     let mut types = header.info.clone();
     let mut values = HashMap::new();
+    let mut floating = std::collections::HashSet::new();
     let mut body = false;
     for line in crate::vcf_text::open_reader(path)?.lines() {
         let line = line?;
@@ -213,6 +335,16 @@ pub(super) fn alleles(path: &Path) -> Result<Alleles> {
         );
         if record.info.contains_key("ALLELEID") {
             let value = record.get("ALLELEID", &types)?.unwrap();
+            if value.scalar
+                && value
+                    .values
+                    .iter()
+                    .any(|value| matches!(value, Scalar::Float(_)))
+            {
+                floating.insert(variant.clone());
+            } else {
+                floating.remove(&variant);
+            }
             let key = if value.scalar {
                 Key::scalar(value.values.into_iter().next().unwrap())
             } else {
@@ -221,15 +353,52 @@ pub(super) fn alleles(path: &Path) -> Result<Alleles> {
             values.insert(variant, key);
         }
     }
-    let numeric = values
-        .values()
-        .all(|value| matches!(value, Key::Missing | Key::Int(_) | Key::Float(_)));
-    let nullable = values
-        .values()
-        .any(|value| matches!(value, Key::Missing | Key::Float(_)));
+    let numeric = values.values().all(|value| {
+        matches!(
+            value,
+            Key::Missing | Key::Int(_) | Key::Unsigned(_) | Key::Float(_)
+        )
+    });
+    let nullable = !floating.is_empty()
+        || values
+            .values()
+            .any(|value| matches!(value, Key::Missing | Key::Float(_)));
     Ok(Alleles {
         values,
         numeric,
         nullable,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn float_index_collisions_keep_first_dictionary_key_positions() {
+        let base = 1_i64 << 53;
+        let mut map = TargetMap::default();
+        map.insert(Key::Int(base + 1), Some("first".into()));
+        map.insert(Key::Int(base), Some("second".into()));
+        map.insert(Key::Int(base + 1), Some("updated first".into()));
+        let map = map.finish();
+        assert_eq!(
+            map.get(&Key::Int(base + 1), false),
+            Some(&Some("updated first".into()))
+        );
+        assert_eq!(
+            map.get(&Key::float(base as f64), true),
+            Some(&Some("second".into()))
+        );
+    }
+
+    #[test]
+    fn object_index_keeps_exact_large_integer_keys() {
+        let base = 1_i64 << 53;
+        let mut map = TargetMap::default();
+        map.insert(Key::Int(base + 1), Some("integer".into()));
+        map.insert(Key::Text("other".into()), None);
+        let map = map.finish();
+        assert_eq!(map.get(&Key::float(base as f64), true), None);
+    }
 }

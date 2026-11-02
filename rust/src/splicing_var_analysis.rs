@@ -22,26 +22,26 @@
 //! - `splicing_affected_exons` lists the exons in ascending order; the script
 //!   joins a set of strings, whose order changes from run to run.
 //! - The script's INFO log lines per row are not written.
-//! - The pickles are read by the restricted reader (`pickle_reader`), and an
-//!   InterPro, transcript-map or intolerant-domain file of an unexpected shape
-//!   stops the run when it is loaded rather than when a row first reaches it.
+//! - Transcript and intolerant-domain resources use checked native caches; a
+//!   foreign schema or damaged file stops the run before rows are judged.
 //! - The new table replaces the old one by a rename in the same folder; the
 //!   script runs `mv` through a shell, which also mishandles paths with
 //!   spaces.
 //! - `na_value` is a private copy of the function of that name in
 //!   `combine_annotations.py` (another thread converts that script; the two
 //!   copies are to be merged later).
+use crate::cache_convert::intolerant_domains::IntolerantDomainCache;
+use crate::cache_convert::transcript_domains::TranscriptDomainCache;
 use crate::cli::{Result, invalid};
 use crate::interpro_mapping_io::{InterproMapping, load_interpro_mapping};
 use crate::pandas_table::{Cell, Column, Table, read_table, write_table};
-use crate::pickle_reader::{self, Value};
 use crate::protein_domain_mapping::{DomainNormalizer, Functionality};
 use crate::python_text::{float_repr, parse_float, parse_int, sum_floats};
 use crate::splicing_cutoffs::{Cutoffs, cutoffs_for_config};
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::Path;
 
-const USAGE: &str = "usage: priva splicing-analysis --anno_table ANNO_TABLE --transcript_domain_map PICKLE --intolerant_domains PICKLE --interpro_entry_map_pkl PICKLE [--threads THREADS] [--config CONFIG]";
+const USAGE: &str = "usage: priva splicing-analysis --anno_table ANNO_TABLE --transcript_domain_map CACHE --intolerant_domains CACHE --interpro_entry_map_pkl PICKLE [--threads THREADS] [--config CONFIG]";
 const LONG_OPTIONS: [&str; 7] = [
     "--anno_table",
     "--transcript_domain_map",
@@ -669,8 +669,8 @@ fn touches_canonical_splice_site(hgvsc: Option<&str>, consequence: &str) -> bool
 
 struct Resources {
     /// Transcript, then exon number as text, then the domain paths.
-    exon_domains: HashMap<String, HashMap<String, Vec<String>>>,
-    intolerant_domains: HashSet<String>,
+    exon_domains: TranscriptDomainCache,
+    intolerant_domains: IntolerantDomainCache,
     interpro: InterproMapping,
     normalizer: DomainNormalizer,
 }
@@ -682,14 +682,21 @@ struct ExonFlags {
 
 impl Resources {
     /// The domain paths of one exon of a transcript in the map, if both are in it.
-    fn domains_of(&self, transcript: Option<&str>, exon: i64) -> Option<&Vec<String>> {
-        self.exon_domains.get(transcript?)?.get(&exon.to_string())
+    fn domains_of(&self, transcript: Option<&str>, exon: i64) -> Option<&[rkyv::Archived<u32>]> {
+        let entry = self.exon_domains.get(transcript?)?;
+        let exon = exon.to_string();
+        entry
+            .exon_domains
+            .iter()
+            .find(|entry| self.exon_domains.text(&entry.exon) == exon)
+            .map(|entry| entry.domains.as_slice())
     }
 
-    fn is_intolerant(&self, domains: &[String]) -> bool {
-        domains
-            .iter()
-            .any(|domain| self.intolerant_domains.contains(domain))
+    fn is_intolerant(&self, domains: &[rkyv::Archived<u32>]) -> bool {
+        domains.iter().any(|domain| {
+            self.intolerant_domains
+                .contains(self.exon_domains.text(domain))
+        })
     }
 
     /// Whether the exon's domains include an intolerant one or a functional one.
@@ -701,8 +708,9 @@ impl Resources {
             });
         };
         let mut functional = false;
-        for path in domains {
-            let annotation = path.split_once(':').map_or(path.as_str(), |(_, rest)| rest);
+        for domain in domains {
+            let path = self.exon_domains.text(domain);
+            let annotation = path.split_once(':').map_or(path, |(_, rest)| rest);
             if self
                 .normalizer
                 .interpret_functionality(annotation, &self.interpro)?
@@ -716,77 +724,6 @@ impl Resources {
             functional,
         })
     }
-}
-
-fn domain_list(value: &Value) -> Result<Vec<String>> {
-    let items: Vec<Value> = match value {
-        Value::List(items) => items.borrow().clone(),
-        Value::Tuple(items) => (**items).clone(),
-        Value::Set(set) => set.borrow().items.clone(),
-        Value::FrozenSet(set) => set.items.clone(),
-        other => {
-            return Err(invalid(format!(
-                "a domain list in the pickle is a {}",
-                other.type_name()
-            )));
-        }
-    };
-    items
-        .iter()
-        .map(|item| {
-            item.as_str()
-                .map(str::to_owned)
-                .ok_or_else(|| invalid("a domain path in the pickle is not text"))
-        })
-        .collect()
-}
-
-/// `{transcript: {"exon_domains": {exon: [domain path, ...]}}}` from the pickle.
-fn exon_domain_map(value: &Value) -> Result<HashMap<String, HashMap<String, Vec<String>>>> {
-    let Value::Dict(outer) = value else {
-        return Err(invalid(format!(
-            "the transcript domain map is a {}, not a dict",
-            value.type_name()
-        )));
-    };
-    let mut map = HashMap::new();
-    for (key, entry) in &outer.borrow().entries {
-        // A key that is not text can never equal a transcript ID.
-        let Some(transcript) = key.as_str() else {
-            continue;
-        };
-        let Value::Dict(inner) = entry else {
-            return Err(invalid(format!(
-                "the transcript domain map entry for {transcript} is a {}, not a dict",
-                entry.type_name()
-            )));
-        };
-        let mut by_exon: HashMap<String, Vec<String>> = HashMap::new();
-        for (name, exons) in &inner.borrow().entries {
-            if name.as_str() != Some("exon_domains") {
-                continue;
-            }
-            let Value::Dict(exons) = exons else {
-                return Err(invalid(format!(
-                    "exon_domains of {transcript} is a {}, not a dict",
-                    exons.type_name()
-                )));
-            };
-            for (exon, domains) in &exons.borrow().entries {
-                if let Some(exon) = exon.as_str() {
-                    by_exon.insert(exon.to_owned(), domain_list(domains)?);
-                }
-            }
-        }
-        map.insert(transcript.to_owned(), by_exon);
-    }
-    Ok(map)
-}
-
-fn load_pickle(path: &str) -> Result<Value> {
-    // These two files are decompressed by their name, as the script does.
-    let bytes = pickle_reader::read_file(Path::new(path), path.ends_with(".gz"))?;
-    pickle_reader::load(&bytes)
 }
 
 // ----------------------------------------------------------- row analysis
@@ -1745,11 +1682,8 @@ fn unique_tag() -> String {
 /// `splicing_interpretation`.
 fn splicing_interpretation(options: &Options, cutoffs: Cutoffs) -> Result<()> {
     let mut table = read_table(Path::new(&options.anno_table))?;
-    let intolerant_domains: HashSet<String> =
-        domain_list(&load_pickle(&options.intolerant_domains)?)?
-            .into_iter()
-            .collect();
-    let exon_domains = exon_domain_map(&load_pickle(&options.transcript_domain_map)?)?;
+    let intolerant_domains = IntolerantDomainCache::open(&options.intolerant_domains)?;
+    let exon_domains = TranscriptDomainCache::open(&options.transcript_domain_map)?;
     let interpro = load_interpro_mapping(Path::new(&options.interpro_entry_map_pkl))?;
     let resources = Resources {
         exon_domains,
@@ -2356,11 +2290,72 @@ mod tests {
                 ("4".to_owned(), strings(&["GENE:Pfam:PF1"])),
             ]),
         );
+        use crate::cache_convert::common::StringPool;
+        use crate::cache_convert::intolerant_domains::{
+            ALL_INTOLERANT_DOMAINS, IntolerantDomainSet,
+        };
+        use crate::cache_convert::transcript_domains::{
+            ALPHAMISSENSE_TRANX_DOMAIN_MAP, ExonDomains, TranscriptDomainMap, TranscriptDomains,
+        };
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        static SERIAL: AtomicUsize = AtomicUsize::new(0);
+        let mut pool = StringPool::default();
+        let mut ordered: Vec<_> = exon_domains.into_iter().collect();
+        ordered.sort_by(|a, b| a.0.cmp(&b.0));
+        let mut transcripts = Vec::new();
+        let mut entries = Vec::new();
+        for (transcript, exons) in ordered {
+            transcripts.push(transcript);
+            entries.push(TranscriptDomains {
+                pp_domains: vec![],
+                exon_domains: exons
+                    .into_iter()
+                    .map(|(exon, domains)| ExonDomains {
+                        exon: pool.intern(&exon).unwrap(),
+                        domains: domains
+                            .iter()
+                            .map(|domain| pool.intern(domain).unwrap())
+                            .collect(),
+                    })
+                    .collect(),
+            });
+        }
+        let root = TranscriptDomainMap {
+            provenance: vec![],
+            texts: pool.into_texts(),
+            transcripts,
+            entries,
+        };
+        let folder = std::env::temp_dir().join(format!(
+            "priva_splicing_native_{}_{}",
+            std::process::id(),
+            SERIAL.fetch_add(1, Ordering::Relaxed)
+        ));
+        std::fs::create_dir(&folder).unwrap();
+        let map = folder.join("map.rkyv");
+        let set = folder.join("set.rkyv");
+        crate::rust_cache::write_cache(
+            &map,
+            ALPHAMISSENSE_TRANX_DOMAIN_MAP,
+            &rkyv::to_bytes::<rkyv::rancor::Error>(&root).unwrap(),
+        )
+        .unwrap();
+        let intolerant = IntolerantDomainSet {
+            provenance: vec![],
+            domains: strings(&["GENE:Pfam:PF1", "GENE:SMART:SM1"]),
+        };
+        crate::rust_cache::write_cache(
+            &set,
+            ALL_INTOLERANT_DOMAINS,
+            &rkyv::to_bytes::<rkyv::rancor::Error>(&intolerant).unwrap(),
+        )
+        .unwrap();
+        let exon_domains = TranscriptDomainCache::open(map.to_str().unwrap()).unwrap();
+        let intolerant_domains = IntolerantDomainCache::open(set.to_str().unwrap()).unwrap();
+        std::fs::remove_dir_all(folder).unwrap();
         Resources {
             exon_domains,
-            intolerant_domains: strings(&["GENE:Pfam:PF1", "GENE:SMART:SM1"])
-                .into_iter()
-                .collect(),
+            intolerant_domains,
             interpro: InterproMapping::from_entries(Vec::new()),
             normalizer: DomainNormalizer::from_parts(NORM_MAP, HashMap::new()).unwrap(),
         }

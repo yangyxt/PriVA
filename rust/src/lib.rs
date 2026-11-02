@@ -9,6 +9,7 @@ mod builder_error;
 mod builder_table;
 mod cache_convert;
 mod cache_install;
+mod cache_resources;
 pub mod cadd_hub;
 mod cli;
 mod clingen_map_builder;

@@ -451,7 +451,12 @@ fn validate(key: &str, path: &Path, schema_version: u32) -> Result<()> {
             caches::clinvar_gene_stat::ClinvarGeneCache::open(path)?;
         }
         "clinvar_patho_af_stat" => {
-            caches::clinvar_gene_af::ClinvarGeneAfCache::open(path)?;
+            let cache = caches::clinvar_gene_af::ClinvarGeneAfCache::open(path)?;
+            if cache.schema_version() != schema_version {
+                return Err(invalid(
+                    "gene-AF archive schema version differs from its managed generation",
+                ));
+            }
         }
         "pm1_regions_pkl" => {
             caches::pm1_regions::Pm1RegionCache::open(path)?;
@@ -496,6 +501,8 @@ fn install_one(
     let source_hash = sha256_file(source)?;
     let schema_version = if key == "clingen_map" {
         caches::clingen_map::pickle_schema_version(text(source)?)?
+    } else if key == "clinvar_patho_af_stat" {
+        caches::clinvar_gene_af::pickle_schema_version(text(source)?)?
     } else {
         1
     };
@@ -996,6 +1003,169 @@ mod tests {
         )
         .unwrap();
         assert!(install_one("clingen_map", &wrong_source, &doc, &tmp.0, "GRCh38/VEP116").is_err());
+        assert_eq!(fs::read(&old).unwrap(), expected);
+    }
+
+    #[test]
+    fn gene_af_versioned_publication_preserves_v1_and_reuses_v2() {
+        let tmp = Temp::new();
+        let pickle = tmp.0.join("curated.pkl");
+        fs::write(&pickle, b"\x80\x04}\x8c\x01a}\x8c\x02afK\x01ss.").unwrap();
+        let (config, private) =
+            tmp.config(&format!("clinvar_patho_af_stat: '{}'\n", pickle.display()));
+        let selected = || {
+            PathBuf::from(
+                required(
+                    &document(&fs::read_to_string(&config).unwrap()).unwrap(),
+                    "clinvar_patho_af_stat",
+                )
+                .unwrap(),
+            )
+        };
+        prepare(&config, &private, &tmp.0).unwrap();
+        publish(&config, &private, &tmp.0).unwrap();
+        let old = selected();
+        assert!(text(&old).unwrap().ends_with(".v1.rkyv"));
+        let old_bytes = fs::read(&old).unwrap();
+        let old_receipt = fs::read(sidecar(&old, ".source.json")).unwrap();
+        assert!(
+            json(&sidecar(&old, ".source.json"))
+                .unwrap()
+                .get("schema_version")
+                .is_none()
+        );
+        let independent = tmp.0.join("independent.rkyv");
+        caches::clinvar_gene_af::convert(text(&pickle).unwrap(), &independent).unwrap();
+        assert_eq!(fs::read(&independent).unwrap(), old_bytes);
+
+        prepare(&config, &private, &tmp.0).unwrap();
+        fs::write(&pickle, b"\x80\x04}\x8c\x01a}\x8c\x02af\x88ss.").unwrap();
+        publish(&config, &private, &tmp.0).unwrap();
+        let typed = selected();
+        assert!(text(&typed).unwrap().ends_with(".v2.rkyv"));
+        let cache =
+            caches::clinvar_gene_af::ClinvarGeneAfCache::open(text(&typed).unwrap()).unwrap();
+        assert_eq!(cache.schema_version(), 2);
+        assert!(matches!(
+            cache
+                .get("a")
+                .unwrap()
+                .unwrap()
+                .iter()
+                .next()
+                .unwrap()
+                .value,
+            caches::clinvar_gene_af::ValueRef::Bool(true)
+        ));
+        let typed_record = json(&sidecar(&typed, ".source.json")).unwrap();
+        assert_eq!(field(&typed_record, "format").unwrap(), "PRIVARKV-v1");
+        assert_eq!(field(&typed_record, "schema_version").unwrap(), "2");
+        let typed_bytes = fs::read(&typed).unwrap();
+        let typed_receipt = fs::read(sidecar(&typed, ".source.json")).unwrap();
+        let modified = fs::metadata(&typed).unwrap().modified().unwrap();
+        prepare(&config, &private, &tmp.0).unwrap();
+        publish(&config, &private, &tmp.0).unwrap();
+        assert_eq!(selected(), typed);
+        assert_eq!(fs::metadata(&typed).unwrap().modified().unwrap(), modified);
+        assert_eq!(fs::read(&typed).unwrap(), typed_bytes);
+        assert_eq!(
+            fs::read(sidecar(&typed, ".source.json")).unwrap(),
+            typed_receipt
+        );
+        assert_eq!(fs::read(&old).unwrap(), old_bytes);
+        assert_eq!(
+            fs::read(sidecar(&old, ".source.json")).unwrap(),
+            old_receipt
+        );
+        // An unsupported new source cannot change the published config or either archive.
+        prepare(&config, &private, &tmp.0).unwrap();
+        let before = fs::read(&config).unwrap();
+        fs::write(&pickle, b"\x80\x04}\x8c\x01a}\x8c\x02afNss.").unwrap();
+        assert!(publish(&config, &private, &tmp.0).is_err());
+        assert_eq!(fs::read(&config).unwrap(), before);
+        assert_eq!(fs::read(&typed).unwrap(), typed_bytes);
+        assert_eq!(fs::read(&old).unwrap(), old_bytes);
+    }
+
+    #[test]
+    fn gene_af_recovery_checks_schema_and_preserves_mislabeled_archives() {
+        let tmp = Temp::new();
+        let source = tmp.0.join("curated.pkl");
+        fs::write(&source, b"\x80\x04}\x8c\x01a}\x8c\x02af\x88ss.").unwrap();
+        let (config, _) = tmp.config("");
+        let doc = document(&fs::read_to_string(&config).unwrap()).unwrap();
+        let install = || {
+            install_one(
+                "clinvar_patho_af_stat",
+                &source,
+                &doc,
+                &tmp.0,
+                "GRCh38/VEP116",
+            )
+        };
+        let output = install().unwrap();
+        let expected = fs::read(&output).unwrap();
+        let pending = temporary(&output, "pending");
+        fs::rename(&output, &pending).unwrap();
+        let record_path = sidecar(&output, ".source.json");
+        let mut record = json(&record_path).unwrap();
+        record.set(
+            "pending_archive",
+            Json::Str(text(&pending).unwrap().to_owned()),
+        );
+        fs::write(&record_path, json_text::dumps_indented(&record).unwrap()).unwrap();
+        assert_eq!(install().unwrap(), output);
+        assert_eq!(fs::read(&output).unwrap(), expected);
+        assert!(!pending.exists());
+
+        let valid_receipt = fs::read(&record_path).unwrap();
+        record.set("schema_version", Json::Str("1".to_owned()));
+        fs::write(&record_path, json_text::dumps_indented(&record).unwrap()).unwrap();
+        assert!(install().is_err());
+        assert_eq!(fs::read(&output).unwrap(), expected);
+        fs::write(&record_path, valid_receipt).unwrap();
+        record.set("schema_version", Json::Str("2".to_owned()));
+
+        // Even a matching checksum must not let a v1 payload be published as v2.
+        let wrong_source = tmp.0.join("text.pkl");
+        fs::write(&wrong_source, b"\x80\x04}\x8c\x01a}\x8c\x02afK\x01ss.").unwrap();
+        caches::clinvar_gene_af::convert(text(&wrong_source).unwrap(), &pending).unwrap();
+        fs::remove_file(&output).unwrap();
+        record.set("archive_sha256", Json::Str(sha256_file(&pending).unwrap()));
+        fs::write(&record_path, json_text::dumps_indented(&record).unwrap()).unwrap();
+        let retained = fs::read(&pending).unwrap();
+        assert!(install().is_err());
+        assert!(!output.exists());
+        assert_eq!(fs::read(&pending).unwrap(), retained);
+
+        // Likewise a valid v2 payload under an owned v1 name cannot be reused.
+        let old = install_one(
+            "clinvar_patho_af_stat",
+            &wrong_source,
+            &doc,
+            &tmp.0,
+            "GRCh38/VEP116",
+        )
+        .unwrap();
+        fs::write(&old, &expected).unwrap();
+        let old_record_path = sidecar(&old, ".source.json");
+        let mut old_record = json(&old_record_path).unwrap();
+        old_record.set("archive_sha256", Json::Str(sha256_file(&old).unwrap()));
+        fs::write(
+            &old_record_path,
+            json_text::dumps_indented(&old_record).unwrap(),
+        )
+        .unwrap();
+        assert!(
+            install_one(
+                "clinvar_patho_af_stat",
+                &wrong_source,
+                &doc,
+                &tmp.0,
+                "GRCh38/VEP116"
+            )
+            .is_err()
+        );
         assert_eq!(fs::read(&old).unwrap(), expected);
     }
 

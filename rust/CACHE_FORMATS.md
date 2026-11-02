@@ -101,7 +101,7 @@ lists are `List` columns; sets are sorted `List` columns.
 | 3 | `alphamissense_tranx_domain_map` | `texts` (domain paths and exon names); `transcripts`; `entries[i]: {exon_domains: Vec<{exon: u32, domains: Vec<u32>}>, pp_domains: Vec<{start: i64, end: i64, domain: u32}>}` (Python: `pp_domains` items are 3-tuples, `exon_domains` values lists) | benchmarked, converter pending |
 | 4 | `clinvar_patho_exon_af_stat` | `transcripts`; `entries[i]: Vec<{exon_key ("<exon>/<count>"), item0..item3: f64, item4: Vec<f64>}>` (the Python 5-tuple; item 4 a tuple of floats) | **implemented** (`cache_convert/clinvar_exon_af.rs`) |
 | 5 | `clinvar_gene_stat` | `variants` pool (variant ids); `genes`; `entries[i]: {ensembl_id, gene_symbol, sets, domains: Vec<{domain, sets}>, transcripts: Vec<{transcript, sets}>}`, `sets` = the seven variant-id sets as sorted `Vec<u32>` | pending |
-| 6 | `clinvar_patho_af_stat` | `genes`; `entries[i]: Option<Vec<{key, value: Text/Int/Float}>>` (`None` for Python `None`) | pending |
+| 6 | `clinvar_patho_af_stat` | `genes`; `entries[i]: Option<Vec<{key, value: Text/Int/Float}>>` (`None` for Python `None`; only the twelve builder field names are accepted, with missing keys and dict order retained) | **implemented** (`cache_convert/clinvar_gene_af.rs`) |
 | 7 | `pm1_regions_pkl` | `das_intolerant_domains` (sorted); `hcseeker_hotspots` and `rmc_constrained` as sorted transcripts with sorted `Vec<i64>` residues; `metadata: Vec<{key, value}>` | pending |
 | 8 | `all_intolerant_domains` | `domains`: sorted, unique (a Python set) | pending |
 | 9 | `interpro_mapping_pickle` | keys `(database, accession)` sorted; `entries[i]: Vec<{five texts, members: Vec<(text, text, text)>}>` (Python: list of 6-tuples) | pending |

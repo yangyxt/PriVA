@@ -17,6 +17,7 @@ use std::path::Path;
 use std::time::Instant;
 
 pub(crate) mod clinvar_exon_af;
+pub(crate) mod clinvar_gene_af;
 pub(crate) mod clinvar_splice_stat;
 pub(crate) mod common;
 
@@ -342,7 +343,7 @@ pub(crate) fn convert_clinvar_aa_stat(pickle: &str, output: &Path) -> Result<Str
     ))
 }
 
-const USAGE: &str = "usage: priva cache-convert CACHE --pickle PICKLE --output CACHE\nCACHE: clinvar_aa_stat, clinvar_splice_stat, clinvar_patho_exon_af_stat";
+const USAGE: &str = "usage: priva cache-convert CACHE --pickle PICKLE --output CACHE\nCACHE: clinvar_aa_stat, clinvar_splice_stat, clinvar_patho_exon_af_stat, clinvar_patho_af_stat";
 
 /// `priva cache-convert CACHE --pickle PICKLE --output OUTPUT`.
 pub(crate) fn dispatch(args: &[String]) -> Result<()> {
@@ -378,6 +379,10 @@ pub(crate) fn dispatch(args: &[String]) -> Result<()> {
         }
         "clinvar_patho_exon_af_stat" => {
             println!("{}", clinvar_exon_af::convert(pickle, Path::new(output))?);
+            Ok(())
+        }
+        "clinvar_patho_af_stat" => {
+            println!("{}", clinvar_gene_af::convert(pickle, Path::new(output))?);
             Ok(())
         }
         other => Err(invalid(format!(

@@ -125,7 +125,7 @@ cache conversion interface. Optional native procedures can be invoked directly.
 | [`scripts/build_mondo_disease_scope.py`](../scripts/build_mondo_disease_scope.py) | Optional `priva mondo-scope`. Installer caller remains Python. |
 | [`scripts/clinvar_annotation_contract.py`](../scripts/clinvar_annotation_contract.py) | Retained Python; native replacement pending. |
 | [`scripts/clinvar_gene_refresh.py`](../scripts/clinvar_gene_refresh.py) | Retained Python; native replacement pending. |
-| [`scripts/clinvar_stat_variants.py`](../scripts/clinvar_stat_variants.py) | Retained Python; native replacement pending. |
+| [`scripts/clinvar_stat_variants.py`](../scripts/clinvar_stat_variants.py) | Optional `priva clinvar-gene-stats build/merge` with an explicit Python hash seed and recorded completion order for reference comparisons. Installer caller remains Python. |
 | [`scripts/collapse_HPO_anno.py`](../scripts/collapse_HPO_anno.py) | Optional `priva hpo-assertions build`. Installer caller remains Python. |
 | [`scripts/domain_metadata_cache.py`](../scripts/domain_metadata_cache.py) | Optional `priva domain-metadata`. Installer caller remains Python. |
 | [`scripts/inject_clinvar_into_gofcards.py`](../scripts/inject_clinvar_into_gofcards.py) | Retained Python; native replacement pending. |

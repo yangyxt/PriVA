@@ -130,7 +130,7 @@ pub(crate) fn dispatch(args: &[String]) -> Result<()> {
             )?,
             "adopt" => context.adopt(&path_value(option(&options, "lineage")?))?,
             "runtime-associated" => {
-                let record = context.check(false)?;
+                let record = context.check_fields(false, &["native_runtime"])?;
                 let paths = context.settings()?.paths;
                 publication::validate_runtime(
                     io::optional(&record, "native_runtime")?,

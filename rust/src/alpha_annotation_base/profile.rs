@@ -3,9 +3,9 @@
 use super::io::*;
 use super::{error, object, require};
 use crate::cli::Result;
+use crate::installed_environment::yaml::{self, Value, Yaml};
 use crate::json_text::Json;
 use crate::python_path::{absolute, metadata, os_error, path_value};
-use crate::yaml_config::{self, ConfigValue, Scalar};
 use std::collections::BTreeSet;
 use std::fs;
 use std::os::unix::fs::MetadataExt;
@@ -16,55 +16,76 @@ pub(super) struct Settings {
     pub source: PathBuf,
     pub paths: Json,
 }
-fn yaml_value(value: &ConfigValue) -> Json {
-    match value {
-        ConfigValue::Scalar(Scalar::Null) => Json::Null,
-        ConfigValue::Scalar(Scalar::Bool(v)) => Json::Bool(*v),
-        ConfigValue::Scalar(Scalar::Str(v)) => string(v),
-        ConfigValue::Scalar(Scalar::Int(v)) => v
-            .parse::<i128>()
-            .map(Json::Int)
-            .unwrap_or_else(|_| string(v)),
-        ConfigValue::Scalar(v) => {
-            let s = v.python_repr();
-            if let Ok(i) = s.parse() {
-                Json::Int(i)
-            } else if let Ok(f) = s.parse() {
-                Json::Float(f)
-            } else {
-                string(s)
-            }
+fn yaml_value(doc: &Yaml, node: usize) -> Result<Json> {
+    Ok(match doc.value(node) {
+        Value::Null => Json::Null,
+        Value::Bool(v) => Json::Bool(*v),
+        Value::Str(v) => string(v),
+        Value::Number(v) if doc.tag(node) == "int" => Json::Int(v.parse().map_err(|_| {
+            error(
+                "UnsupportedConfiguration",
+                "selected YAML integer exceeds the native metadata range",
+            )
+        })?),
+        Value::Number(v) => Json::Float(v.parse().map_err(|_| {
+            error(
+                "UnsupportedConfiguration",
+                "selected YAML float is not representable",
+            )
+        })?),
+        // These fields are consumed only as scalars. Keep the container type
+        // and emptiness for the original truth/path/int checks, without
+        // recursively unfolding valid cyclic YAML aliases.
+        Value::Sequence(v) => Json::Array(if v.is_empty() {
+            vec![]
+        } else {
+            vec![Json::Null]
+        }),
+        Value::Mapping(v) => Json::Object(if v.is_empty() {
+            vec![]
+        } else {
+            vec![("".into(), Json::Null)]
+        }),
+        Value::Other(_) => {
+            return Err(error(
+                "UnsupportedConfiguration",
+                format!(
+                    "selected YAML {} is outside the scalar metadata profile",
+                    doc.tag(node)
+                ),
+            ));
         }
-        ConfigValue::Opaque(v) => {
-            if v.starts_with('[') || v.trim_start().starts_with('-') {
-                Json::Array(vec![Json::Null])
-            } else {
-                object([("opaque", Json::Null)])
-            }
-        }
-    }
+    })
 }
 fn config(path: &Path) -> Result<Json> {
-    let value = read_text(path)?;
-    // JSON is a YAML subset and appears in the original procedure fixtures.
-    if let Ok(parsed) = parse(&value) {
-        return Ok(parsed);
-    }
-    match yaml_config::parse_config(&value) {
-        Ok(yaml_config::Parsed::Mapping(doc)) => {
-            let mut values = Json::Object(Vec::new());
-            for item in doc.entries {
-                values.set(&item.key, yaml_value(&item.value));
-            }
-            Ok(values)
+    let doc = yaml::load(&read_text(path)?)?;
+    require(
+        doc.mapping(doc.root).is_some(),
+        "Installer configuration must be a mapping",
+    )?;
+    let mut values = Json::Object(Vec::new());
+    // SafeLoader still constructs and validates the entire document. Unused
+    // configuration values, including aliases/typed collections, are ignored
+    // exactly as in the original helper; they are never emitted or rewritten.
+    for key in [
+        "cache_root",
+        "alphamissense_vep_vcf",
+        "alphamissense_vep_base_vcf",
+        "alphamissense_vcf",
+        "assembly",
+        "vep_installed_version",
+        "threads",
+        "conservation_file",
+        "vep_plugins_dir",
+        "vep_cache_dir",
+        "ref_genome",
+        "alphamissense_prescore",
+    ] {
+        if let Some(node) = doc.get(doc.root, key) {
+            values.set(key, yaml_value(&doc, node)?);
         }
-        Ok(_) => {
-            require(false, "Installer configuration must be a mapping")?;
-            unreachable!()
-        }
-        Err(yaml_config::YamlError::Unsupported(e)) => Err(error("UnsupportedConfiguration", e)),
-        Err(e) => Err(error("YAMLError", e.to_string())),
     }
+    Ok(values)
 }
 pub(super) fn settings(config_file: &Path, source: &Path, base: Option<&Path>) -> Result<Settings> {
     let config = config(config_file)?;
@@ -158,6 +179,10 @@ pub(super) fn assembly(value: &Json) -> Result<&'static str> {
     match value.as_str() {
         Some("hg19" | "GRCh37") => Ok("hg19"),
         Some("hg38" | "GRCh38") => Ok("hg38"),
+        _ if matches!(value, Json::Array(_) | Json::Object(_)) => Err(error(
+            "TypeError",
+            format!("unhashable type: '{}'", type_name(value)),
+        )),
         _ => Err(error(
             "ValueError",
             "AlphaMissense requires hg19/GRCh37 or hg38/GRCh38",
@@ -493,16 +518,55 @@ pub(super) fn science(settings: &Settings) -> Result<Json> {
     let threads = match threads {
         Json::Int(n) => *n,
         Json::Bool(v) => i128::from(*v),
-        Json::Float(f) if f.is_finite() => f.trunc() as i128,
-        Json::Str(v) => v.trim().parse::<i128>().map_err(|_| {
-            error(
-                "ValueError",
-                format!(
-                    "invalid literal for int() with base 10: {}",
-                    crate::python_path::repr(v)
-                ),
-            )
-        })?,
+        Json::Float(f) if f.is_nan() => {
+            return Err(error("ValueError", "cannot convert float NaN to integer"));
+        }
+        Json::Float(f) if f.is_infinite() => {
+            return Err(error(
+                "OverflowError",
+                "cannot convert float infinity to integer",
+            ));
+        }
+        Json::Float(f) if *f >= i128::MIN as f64 && *f < -(i128::MIN as f64) => f.trunc() as i128,
+        Json::Float(_) => {
+            return Err(error(
+                "UnsupportedConfiguration",
+                "selected thread integer exceeds the native metadata range",
+            ));
+        }
+        Json::Str(v) => {
+            if !crate::python_text::python_int_is_valid(v) {
+                return Err(error(
+                    "ValueError",
+                    format!(
+                        "invalid literal for int() with base 10: {}",
+                        crate::python_path::repr(v)
+                    ),
+                ));
+            }
+            let normalized: String = v
+                .chars()
+                .filter(|c| *c != '_')
+                .map(|c| {
+                    if let Some(digit) = crate::python_text::decimal_digit_value(c) {
+                        char::from(b'0' + digit as u8)
+                    } else if !c.is_ascii() && crate::python_text::is_python_space(c) {
+                        ' '
+                    } else {
+                        c
+                    }
+                })
+                .collect();
+            normalized
+                .trim_matches(|c| matches!(c, ' ' | '\t' | '\n' | '\u{b}' | '\u{c}' | '\r'))
+                .parse()
+                .map_err(|_| {
+                    error(
+                        "UnsupportedConfiguration",
+                        "selected thread integer exceeds the native metadata range",
+                    )
+                })?
+        }
         _ => {
             return Err(error(
                 "TypeError",

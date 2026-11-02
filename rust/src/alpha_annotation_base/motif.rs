@@ -12,7 +12,7 @@ use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 
 pub(super) fn binding(context: &Context<'_>) -> Result<Json> {
-    let record = context.check(false)?;
+    let record = context.check_fields(false, &["counts"])?;
     Ok(object([
         ("schema", string(MOTIF_SCHEMA)),
         (
@@ -36,9 +36,15 @@ pub(super) fn binding(context: &Context<'_>) -> Result<Json> {
     ]))
 }
 pub(super) fn check(context: &Context<'_>, artifact: &Path) -> Result<()> {
-    let record = read_json(&suffix(artifact, ".nm_to_enst.json"))?;
+    let encoded = read_text(&suffix(artifact, ".nm_to_enst.json"))?;
+    // Validate the receipt before observing the scientific runtime, matching
+    // the original json.loads -> motif_binding evaluation order.
+    let record = compare_metadata(&encoded, &object([]))?;
+    optional(&record, "scientific_input")?;
+    let expected = binding(context)?;
+    let record = compare_metadata(&encoded, &object([("scientific_input", expected.clone())]))?;
     require(
-        equal(optional(&record, "scientific_input")?, &binding(context)?),
+        equal(optional(&record, "scientific_input")?, &expected),
         "Motif receipt is not bound to this complete annotation and scientific producer",
     )
 }

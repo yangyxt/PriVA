@@ -236,6 +236,18 @@ pub(super) fn parse(text: &str) -> Result<Json> {
 pub(super) fn read_json(path: &Path) -> Result<Json> {
     parse(&read_text(path)?)
 }
+pub(super) fn compare_metadata(text: &str, target: &Json) -> Result<Json> {
+    json_text::parse_metadata_comparison(text, target).map_err(|e| {
+        error(
+            if json_text::is_refusal(&e) {
+                "UnsupportedMetadata"
+            } else {
+                "JSONDecodeError"
+            },
+            e,
+        )
+    })
+}
 pub(super) fn mkdir(path: &Path) -> Result<()> {
     fs::create_dir_all(path).map_err(|e| os_error(e, path, None))
 }

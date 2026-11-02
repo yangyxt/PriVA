@@ -262,6 +262,28 @@ JSON integers outside 128 bits, lone surrogate strings, deep nesting and
 interpreter recursion limits remain outside this optional interface's compatibility scope.
 Existing callers continue to use `scripts/cache_resources.py`.
 
+The optional acquisition-source helper validates an explicitly selected input:
+
+```bash
+"$PRIVA_BINARY" mechanism-source validate --kind clingen_erepo --input source.tsv
+"$PRIVA_BINARY" mechanism-source record-source --input source.tsv --url "$SOURCE_URL"
+"$PRIVA_BINARY" mechanism-source check-source --input source.tsv --url "$SOURCE_URL"
+```
+
+Other validation kinds are `clingen_dosage`, `clingen_dosage_runtime`,
+`g2p_ddg2p` and `orphadata`. The strict runtime column checks remain distinct
+from the flexible acquisition formats. `record-source` publishes an adjacent
+`.source.json` receipt through a private temporary sibling; an unsuccessful
+publication retains that sibling. `check-source --receipt JSON --metadata-only`
+checks pending receipt metadata without opening the source. An ordinary check
+hashes the complete source before comparing its receipt.
+
+These commands acquire no data. Genuine bundled resources retain their
+existing existence/nonzero-only reuse policy, and installer/source-builder
+callers continue to use `scripts/mechanism_source_input.py`. JSON integers
+outside 128 bits, lone surrogate strings and excessive nesting remain outside
+the optional native receipt reader's compatibility scope.
+
 The optional DAS completion checker uses the same version-3 receipts as the
 Python helper:
 

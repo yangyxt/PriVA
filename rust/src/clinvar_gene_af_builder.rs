@@ -3,7 +3,9 @@
 //! The partial accumulated-AF snapshot and the original None merge failure
 //! are deliberate compatibility behavior, not corrected scientific rules.
 use crate::cache_convert::Provenance;
-use crate::cache_convert::clinvar_gene_af::{self, ClinvarGeneAfCache, GeneAfEntry, GeneAfValue};
+use crate::cache_convert::clinvar_gene_af::{
+    self, ClinvarGeneAfCache, Entry as GeneAfEntry, Value as GeneAfValue,
+};
 use crate::cli::{Result, invalid};
 use crate::rust_cache::ensure_distinct_paths;
 use crate::tabix_index::{TabixIndex, fetch_contig_lines};
@@ -29,13 +31,21 @@ impl Scalar {
             Self::Text(s) => Ok(GeneAfValue::Text(s.clone())),
             Self::Int(i) => Ok(GeneAfValue::Int(*i)),
             Self::Float(f) => Ok(GeneAfValue::Float(*f)),
+            Self::Bool(b) => Ok(GeneAfValue::Bool(*b)),
             _ => Err(invalid("schema 6 cannot represent this AF scalar kind")),
         }
     }
     fn add(&self, other: &Self) -> Result<Self> {
-        if let (Self::Int(a), Self::Int(b)) = (self, other) {
+        // Python bool is an integer in addition, but the unadded first value
+        // remains Boolean in the saved partial accumulated-AF snapshot.
+        let integer = |value: &Self| match value {
+            Self::Int(i) => Some(*i),
+            Self::Bool(b) => Some(i64::from(*b)),
+            _ => None,
+        };
+        if let (Some(a), Some(b)) = (integer(self), integer(other)) {
             return a
-                .checked_add(*b)
+                .checked_add(b)
                 .map(Self::Int)
                 .ok_or_else(|| invalid("AF integer sum exceeds schema 6"));
         }
@@ -204,6 +214,7 @@ fn entry_af(entries: &[GeneAfEntry]) -> Result<f64> {
     match entries.iter().find(|e| e.key == "af").map(|e| &e.value) {
         Some(GeneAfValue::Int(i)) => Ok(*i as f64),
         Some(GeneAfValue::Float(f)) => Ok(*f),
+        Some(GeneAfValue::Bool(b)) => Ok(u8::from(*b) as f64),
         _ => Err(invalid("gene record lacks a numeric af")),
     }
 }
@@ -378,8 +389,9 @@ pub(crate) fn dispatch(args: &[String]) -> Result<()> {
             }
         }
     };
-    let count = clinvar_gene_af::write_entries(output, records, provenance(&inputs, mode)?)?;
-    println!("{{\"genes\":{count},\"schema\":6,\"version\":1}}");
+    let count = clinvar_gene_af::write_records(output, records, provenance(&inputs, mode)?)?;
+    let version = ClinvarGeneAfCache::open(&output.to_string_lossy())?.schema_version();
+    println!("{{\"genes\":{count},\"schema\":6,\"version\":{version}}}");
     Ok(())
 }
 

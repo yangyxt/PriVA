@@ -2,6 +2,7 @@
 //! record traversal; completed chromosome results merge in header order.
 //! The source's whole-header CSQ rule, partial SpliceAI dictionaries, duplicate
 //! observations and narrow per-record KeyError/ValueError catch are deliberate.
+use crate::builder_error;
 use crate::cache_convert::clinvar_splice_stat::typed::{
     Cache as SpliceCache, Record as SpliceRecord, write_records,
 };
@@ -27,6 +28,32 @@ const CONFIDENCE: [&str; 3] = [
     "reviewed_by_expert_panel",
     "criteria_provided,_multiple_submitters,_no_conflicts",
 ];
+
+// Shared VCF readers carry explicit Python exception labels as text. Preserve
+// those labels at this procedure's CLI boundary, without changing their use
+// by other builders. Uncaught producer failures exit 1, as the Python script
+// does; only native command-line argument admission uses exit 2.
+fn source_error(error: Box<dyn std::error::Error>) -> Box<dyn std::error::Error> {
+    let message = error.to_string();
+    for category in [
+        "TypeError",
+        "IndexError",
+        "ValueError",
+        "KeyError",
+        "AttributeError",
+        "NotImplementedError",
+        "OSError",
+        "UnicodeDecodeError",
+    ] {
+        if let Some(cause) = message
+            .strip_prefix(category)
+            .and_then(|s| s.strip_prefix(": "))
+        {
+            return builder_error::category(category, invalid(cause));
+        }
+    }
+    error
+}
 
 #[derive(Default)]
 struct Pair {
@@ -204,7 +231,10 @@ fn record(
     out: &mut Collector,
 ) -> Result<()> {
     // Iterator decoding happens outside Python's record-level exception handler.
-    let decoded = decode_record(line, h, types)?;
+    // pysam's indexed iterator reports record decoding failures as ValueError.
+    // This remains outside the later record-level KeyError/ValueError skip.
+    let decoded = decode_record(line, h, types)
+        .map_err(|error| builder_error::category("ValueError", error))?;
     let mut work = || -> Result<()> {
         if !decoded.info.contains_key("CLNSIG") || !decoded.info.contains_key("CLNREVSTAT") {
             return Ok(());
@@ -337,7 +367,15 @@ fn chromosome(
     fetch_contig_lines(vcf, index, chrom, &mut |line| {
         record(line, h, &mut types, indices, &mut out).map_err(|e| e.to_string())
     })
-    .map_err(invalid)?;
+    .map_err(|message| {
+        // A coordinate that the tabix iterator cannot parse fails before the
+        // record decoder; pysam exposes that distinct boundary as OSError.
+        if message == "a VCF line has a position that is not an integer" {
+            builder_error::category("OSError", invalid(message))
+        } else {
+            invalid(message)
+        }
+    })?;
     Ok(out.values)
 }
 fn provenance(inputs: &[PathBuf], mode: &str) -> Result<Vec<Provenance>> {
@@ -428,6 +466,17 @@ pub(crate) fn dispatch(args: &[String]) -> Result<()> {
     let required = |key| options.get(key).copied().ok_or_else(|| invalid(HELP));
     let aa_output = required("--aa-output")?;
     let splice_output = options.get("--splice-output").copied().unwrap_or("");
+    if mode != "merge" {
+        required("--vcf")?;
+        if mode == "chromosome" {
+            required("--chrom")?;
+        }
+    }
+    if mode == "merge" && (aa_inputs.is_empty() || aa_inputs.len() != splice_inputs.len()) {
+        return Err(invalid(
+            "merge requires equal, ordered AA/splice input pairs",
+        ));
+    }
     let outputs: Vec<_> = [aa_output, splice_output]
         .into_iter()
         .filter(|s| !s.is_empty())
@@ -436,128 +485,129 @@ pub(crate) fn dispatch(args: &[String]) -> Result<()> {
     if outputs.len() == 2 {
         separate_outputs(outputs[0], outputs[1])?;
     }
-    let mut inputs = Vec::new();
-    let pair = if mode == "merge" {
-        if aa_inputs.is_empty() || aa_inputs.len() != splice_inputs.len() {
-            return Err(invalid(
-                "merge requires equal, ordered AA/splice input pairs",
-            ));
-        }
-        let mut merged = Collector::default();
-        for (aa, splice) in aa_inputs.iter().zip(&splice_inputs) {
-            for input in [aa, splice] {
-                for output in &outputs {
-                    protect_input(input, output)?;
-                }
-                inputs.push(input.clone());
-            }
-            let aa = ClinvarAaCache::open(&aa.to_string_lossy())?;
-            let splice = SpliceCache::open(&splice.to_string_lossy())?;
-            merged.merge(Pair {
-                aa: aa
-                    .keys()
-                    .iter()
-                    .map(|k| (k.as_str().into(), aa.plain(k.as_str()).unwrap()))
-                    .collect(),
-                splice: splice
-                    .keys()
-                    .iter()
-                    .map(|k| (k.as_str().into(), splice.plain(k.as_str()).unwrap()))
-                    .collect(),
-            });
-        }
-        merged.values
-    } else {
-        let vcf = Path::new(required("--vcf")?);
-        let threads: i64 = options
-            .get("--threads")
-            .map(|s| {
-                if !crate::python_text::python_int_is_valid(s) {
-                    return Err(invalid("ValueError: invalid number of processes"));
-                }
-                let ascii: String = s
-                    .chars()
-                    .map(|c| {
-                        crate::python_text::decimal_digit_value(c)
-                            .map(|d| char::from(b'0' + d as u8))
-                            .unwrap_or(c)
-                    })
-                    .collect();
-                crate::python_text::python_int(&ascii)
-                    .and_then(|i| i64::try_from(i).ok())
-                    .ok_or_else(|| invalid("number of processes exceeds supported range"))
-            })
-            .transpose()?
-            .unwrap_or(4);
-        let mut h = header(vcf)?;
-        let indices = indices(vcf)?;
-        let indexed = index(vcf);
-        if let Ok(index) = &indexed {
-            for name in &index.names {
-                if !h.contigs.contains(name) {
-                    h.contigs.push(name.clone());
-                }
-            }
-        }
-        if threads <= 0 {
-            return Err(invalid("number of processes must be at least 1"));
-        }
-        for output in &outputs {
-            protect_input(vcf, output)?;
-        }
-        inputs.push(vcf.to_path_buf());
-        if h.contigs.is_empty() {
-            Pair::default()
-        } else {
-            let index = indexed?;
-            if mode == "chromosome" {
-                chromosome(vcf, &index, &h, &indices, required("--chrom")?)?
-            } else {
-                let next = AtomicUsize::new(0);
-                let (send, receive) = std::sync::mpsc::channel();
-                std::thread::scope(|scope| {
-                    for _ in 0..(threads as usize).min(h.contigs.len()) {
-                        let (send, h, index, indices, next) =
-                            (send.clone(), &h, &index, &indices, &next);
-                        scope.spawn(move || {
-                            loop {
-                                let i = next.fetch_add(1, Ordering::Relaxed);
-                                if i >= h.contigs.len() {
-                                    break;
-                                }
-                                let result = chromosome(vcf, index, h, indices, &h.contigs[i])
-                                    .map_err(|e| e.to_string());
-                                if send.send((i, result)).is_err() {
-                                    break;
-                                }
-                            }
-                        });
-                    }
-                });
-                drop(send);
-                let mut results = receive.into_iter().collect::<Vec<_>>();
-                results.sort_by_key(|(i, _)| *i);
+    builder_error::finish(
+        (|| {
+            let mut inputs = Vec::new();
+            let pair = if mode == "merge" {
                 let mut merged = Collector::default();
-                for (_, result) in results {
-                    merged.merge(result.map_err(invalid)?);
+                for (aa, splice) in aa_inputs.iter().zip(&splice_inputs) {
+                    for input in [aa, splice] {
+                        for output in &outputs {
+                            protect_input(input, output)?;
+                        }
+                        inputs.push(input.clone());
+                    }
+                    let aa = ClinvarAaCache::open(&aa.to_string_lossy())?;
+                    let splice = SpliceCache::open(&splice.to_string_lossy())?;
+                    merged.merge(Pair {
+                        aa: aa
+                            .keys()
+                            .iter()
+                            .map(|k| (k.as_str().into(), aa.plain(k.as_str()).unwrap()))
+                            .collect(),
+                        splice: splice
+                            .keys()
+                            .iter()
+                            .map(|k| (k.as_str().into(), splice.plain(k.as_str()).unwrap()))
+                            .collect(),
+                    });
                 }
                 merged.values
+            } else {
+                let vcf = Path::new(required("--vcf")?);
+                let threads: i64 = options
+                    .get("--threads")
+                    .map(|s| {
+                        if !crate::python_text::python_int_is_valid(s) {
+                            return Err(invalid("ValueError: invalid number of processes"));
+                        }
+                        let ascii: String = s
+                            .chars()
+                            .map(|c| {
+                                crate::python_text::decimal_digit_value(c)
+                                    .map(|d| char::from(b'0' + d as u8))
+                                    .unwrap_or(c)
+                            })
+                            .collect();
+                        crate::python_text::python_int(&ascii)
+                            .and_then(|i| i64::try_from(i).ok())
+                            .ok_or_else(|| invalid("number of processes exceeds supported range"))
+                    })
+                    .transpose()?
+                    .unwrap_or(4);
+                let mut h = header(vcf)?;
+                let indices = indices(vcf)?;
+                let indexed = index(vcf);
+                if let Ok(index) = &indexed {
+                    for name in &index.names {
+                        if !h.contigs.contains(name) {
+                            h.contigs.push(name.clone());
+                        }
+                    }
+                }
+                if threads <= 0 {
+                    return Err(invalid("number of processes must be at least 1"));
+                }
+                for output in &outputs {
+                    protect_input(vcf, output)?;
+                }
+                inputs.push(vcf.to_path_buf());
+                if h.contigs.is_empty() {
+                    Pair::default()
+                } else {
+                    let index = indexed?;
+                    if mode == "chromosome" {
+                        chromosome(vcf, &index, &h, &indices, required("--chrom")?)?
+                    } else {
+                        let next = AtomicUsize::new(0);
+                        let (send, receive) = std::sync::mpsc::channel();
+                        std::thread::scope(|scope| {
+                            for _ in 0..(threads as usize).min(h.contigs.len()) {
+                                let (send, h, index, indices, next) =
+                                    (send.clone(), &h, &index, &indices, &next);
+                                scope.spawn(move || {
+                                    loop {
+                                        let i = next.fetch_add(1, Ordering::Relaxed);
+                                        if i >= h.contigs.len() {
+                                            break;
+                                        }
+                                        let result =
+                                            chromosome(vcf, index, h, indices, &h.contigs[i])
+                                                .map_err(|e| e.to_string());
+                                        if send.send((i, result)).is_err() {
+                                            break;
+                                        }
+                                    }
+                                });
+                            }
+                        });
+                        drop(send);
+                        let mut results = receive.into_iter().collect::<Vec<_>>();
+                        results.sort_by_key(|(i, _)| *i);
+                        let mut merged = Collector::default();
+                        for (_, result) in results {
+                            merged.merge(result.map_err(invalid)?);
+                        }
+                        merged.values
+                    }
+                }
+            };
+            let (aa_count, splice_count) = (pair.aa.len(), pair.splice.len());
+            // Keep Python's AA-first publication order, including a later splice path
+            // failure. Checked native archives use atomic publication individually.
+            if !aa_output.is_empty() {
+                write_clinvar_aa(pair.aa, provenance(&inputs, mode)?, Path::new(aa_output))?;
             }
-        }
-    };
-    let (aa_count, splice_count) = (pair.aa.len(), pair.splice.len());
-    // Keep Python's AA-first publication order, including a later splice path
-    // failure. Checked native archives use atomic publication individually.
-    if !aa_output.is_empty() {
-        write_clinvar_aa(pair.aa, provenance(&inputs, mode)?, Path::new(aa_output))?;
-    }
-    if !splice_output.is_empty() {
-        write_records(
-            Path::new(splice_output),
-            pair.splice,
-            provenance(&inputs, mode)?,
-        )?;
-    }
-    println!("{{\"aa_transcripts\":{aa_count},\"splice_transcripts\":{splice_count}}}");
-    Ok(())
+            if !splice_output.is_empty() {
+                write_records(
+                    Path::new(splice_output),
+                    pair.splice,
+                    provenance(&inputs, mode)?,
+                )?;
+            }
+            println!("{{\"aa_transcripts\":{aa_count},\"splice_transcripts\":{splice_count}}}");
+            Ok(())
+        })()
+        .map_err(source_error),
+    )
 }

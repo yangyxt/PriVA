@@ -19,6 +19,7 @@ use std::path::Path;
 use std::time::Instant;
 
 pub(crate) mod common;
+pub(crate) mod transcript_domains;
 
 pub(crate) const CLINVAR_AA_STAT: Schema = Schema {
     name: "clinvar_aa_stat",
@@ -410,6 +411,7 @@ pub(crate) fn dispatch_export(args: &[String]) -> Result<()> {
     };
     let exporter = match cache.as_str() {
         "clinvar_aa_stat" => export_clinvar_aa_stat,
+        "alphamissense_tranx_domain_map" => transcript_domains::export,
         _ => return Err(invalid(format!("cache-export: unsupported cache {cache}"))),
     };
     if output == "-" {
@@ -463,6 +465,10 @@ pub(crate) fn dispatch(args: &[String]) -> Result<()> {
     match cache.as_str() {
         "clinvar_aa_stat" => {
             println!("{}", convert_clinvar_aa_stat(pickle, Path::new(output))?);
+            Ok(())
+        }
+        "alphamissense_tranx_domain_map" => {
+            println!("{}", transcript_domains::convert(pickle, Path::new(output))?);
             Ok(())
         }
         other => Err(invalid(format!(

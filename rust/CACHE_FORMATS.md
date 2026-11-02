@@ -98,7 +98,7 @@ lists are `List` columns; sets are sorted `List` columns.
 | ---: | --- | --- | --- |
 | 1 | `clinvar_aa_stat` | `texts`; `transcripts` (sorted); `entries[i].positions: Vec<{protein_pos, changes: Vec<{hgvsp, clnsig: Vec<u32>, clnrevstat: Vec<u32>}>}>` | **implemented** (`rust/src/cache_convert.rs`) |
 | 2 | `clinvar_splice_stat` | `texts`; `splice_ai_names` (the nine `SpliceAI_pred_*` keys in pickle order); `transcripts`; `entries[i]: Vec<{chrom: u32, pos: i64, reference, alternative, exon: u32, intron: u32, hgvsc, consequence: u32, clinvar_sig: u32, clinvar_review: u32, splice_ai: Vec<u32>}>` (`splice_ai` empty for `{}`, else the values of `splice_ai_names` in order; any other key set refused) | benchmarked, converter pending |
-| 3 | `alphamissense_tranx_domain_map` | `texts` (domain paths and exon names); `transcripts`; `entries[i]: {exon_domains: Vec<{exon: u32, domains: Vec<u32>}>, pp_domains: Vec<{start: i64, end: i64, domain: u32}>}` (Python: `pp_domains` items are 3-tuples, `exon_domains` values lists) | benchmarked, converter pending |
+| 3 | `alphamissense_tranx_domain_map` | `texts` (domain paths and exon names); `transcripts`; `entries[i]: {exon_domains: Vec<{exon: u32, domains: Vec<u32>}>, pp_domains: Vec<{start: i64, end: i64, domain: u32}>}` (Python: `pp_domains` items are 3-tuples, `exon_domains` values lists; both record keys required; exon dictionary and list order/multiplicity retained) | **implemented** (`rust/src/cache_convert/transcript_domains.rs`) |
 | 4 | `clinvar_patho_exon_af_stat` | `transcripts`; `entries[i]: Vec<{exon_key ("<exon>/<count>"), item0..item3: f64, item4: Vec<f64>}>` (the Python 5-tuple; item 4 a tuple of floats) | pending |
 | 5 | `clinvar_gene_stat` | `variants` pool (variant ids); `genes`; `entries[i]: {ensembl_id, gene_symbol, sets, domains: Vec<{domain, sets}>, transcripts: Vec<{transcript, sets}>}`, `sets` = the seven variant-id sets as sorted `Vec<u32>` | pending |
 | 6 | `clinvar_patho_af_stat` | `genes`; `entries[i]: Option<Vec<{key, value: Text/Int/Float}>>` (`None` for Python `None`) | pending |
@@ -107,7 +107,7 @@ lists are `List` columns; sets are sorted `List` columns.
 | 9 | `interpro_mapping_pickle` | keys `(database, accession)` sorted; `entries[i]: Vec<{five texts, members: Vec<(text, text, text)>}>` (Python: list of 6-tuples) | pending |
 | 10 | `clingen_map` | `variants` (sorted); `codes: Vec<Option<String>>` (`None` = the float NaN of curated variants without codes) | pending |
 
-Schemas 2 to 10 are fixed in outline here; each is frozen as version 1 in the commit that adds
+Pending schemas are fixed in outline here; each is frozen as version 1 in the commit that adds
 its converter, with field names taken from the builder script. File names: the pickle's name
 with `.pkl`/`.pkl.gz` replaced by `.v<schema version>.rkyv`. The branch's configuration keeps
 the key names and points them at the `.rkyv` files.

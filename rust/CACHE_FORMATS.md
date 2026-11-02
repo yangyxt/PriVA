@@ -113,6 +113,29 @@ File names: the pickle's name
 with `.pkl`/`.pkl.gz` replaced by `.v<schema version>.rkyv`. The branch's configuration keeps
 the key names and points them at the `.rkyv` files.
 
+### ClinVar gene AF values (schema 6, version 2)
+
+The gene-AF converter and `priva clinvar-gene-af` retain version 1 whenever
+all surviving record values are text, integer or float. That path uses the
+unchanged version-1 serializer, including its provenance, field order and float
+bits. Existing archives are read with their declared schema version.
+
+Version 2 retains `provenance`, sorted unique `genes`, and
+`entries: Vec<Option<Vec<Entry>>>`. Each ordered `Entry` holds a known field
+name and a value whose declared enum order is `Text(String)`, `Int(i64)`,
+`Float(f64)`, `Bool(bool)`. Boolean values remain distinct from integers;
+missing fields, empty records and `None` genes remain distinct. The container
+version stays 1. An older reader that supports only schema version 1 refuses
+version 2.
+
+Both versions expose the same checked borrowed record view and typed export.
+PM2 preserves pandas' Boolean or mixed-object gene-AF column; PM2 and BS1 use
+Boolean zero/one only in their gene-AF arithmetic. Other numeric-column rules
+are unchanged. Managed installation chooses `.v1.rkyv` or `.v2.rkyv` from the
+actual values, checks the declared version before publication or reuse, and
+keeps prior archives and receipts. Creating an archive does not activate the
+native VCF builder in an installer caller.
+
 ### ClinGen scalar codes (schema 10, version 2)
 
 The ClinGen converter and `priva clingen-map build` select version 1 whenever every

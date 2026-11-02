@@ -189,6 +189,24 @@ calls. Paths are passed literally to those programs. As with the original
 Python procedure, child command failures are reported but do not make the
 conversion command fail: validate the resulting VCF and index before use.
 
+To build the gene pathogenic-AF cache directly from an existing indexed ClinVar
+VCF, use the optional procedure:
+
+```bash
+"$PRIVA_BINARY" clinvar-gene-af build \
+  --vcf clinvar.annotated.vcf.gz --output clinvar.gene-af.rkyv --threads 4
+```
+
+It retains the Python producer's filtering, first equal-AF winner, ordered
+record fields and partial accumulated-AF snapshot. TBI and CSI indexes are
+supported. `chromosome --vcf VCF --chrom CONTIG --output RKYV` builds one
+contig; `merge --input FIRST_RKYV --input SECOND_RKYV --output RKYV` combines
+completed shards in the supplied order, which must match the VCF header.
+The original repeated-gene/`None` merge failure is preserved. The output uses
+schema 6 version 1, or version 2 when a Boolean value survives; see the
+[gene-AF format](rust/CACHE_FORMATS.md#clinvar-gene-af-values-schema-6-version-2).
+Installer callers continue to select their existing producer.
+
 The Python scripts remain in `scripts/`. To run a step with its Python script again, revert the commit that switched it (titled "Call priva for the per-sample preparation steps", "Call priva for the splicing and UTR interpretation" or "Call priva acmg-assign for the ACMG step"); each restores the Python command lines and their freshness checks together, and the outputs of the two routes are interchangeable. Use a new output folder after switching either way.
 
 `priva_ranking_binary` selected Rust ranking bridges inside the Python ACMG step; `priva acmg-assign` accepts the option and does not need it.

@@ -111,7 +111,7 @@ cache conversion interface. Optional native procedures can be invoked directly.
 | [`scripts/alphamissense_domain_cache.py`](../scripts/alphamissense_domain_cache.py) | Retained Python; native replacement pending. |
 | [`scripts/alphamissense_original_cache.py`](../scripts/alphamissense_original_cache.py) | Legacy/manual helper, outside native conversion scope. |
 | [`scripts/alphmis_tsv2vcf.py`](../scripts/alphmis_tsv2vcf.py) | Optional `priva alphamissense-vcf`. Installer caller remains Python. |
-| [`scripts/am_pick_intolerant_domains.py`](../scripts/am_pick_intolerant_domains.py) | Retained Python reference; native DAS implementation pending. See rescue-order profile below. |
+| [`scripts/am_pick_intolerant_domains.py`](../scripts/am_pick_intolerant_domains.py) | Optional `priva das-domains lookup/transcripts/benign` component procedures. Transcript projection requires explicit retained exon history; fresh native history and the complete DAS producer remain pending. Installer caller remains Python. See rescue-order profile below. |
 | [`scripts/am_pick_missense_constrained_segments.py`](../scripts/am_pick_missense_constrained_segments.py) | Legacy/manual helper, outside native conversion scope. |
 | [`scripts/audit_clinvar_gofcards_review_tiers.py`](../scripts/audit_clinvar_gofcards_review_tiers.py) | Legacy/manual helper, outside native conversion scope. |
 | [`scripts/audit_condition_scope_inventory.py`](../scripts/audit_condition_scope_inventory.py) | Legacy/manual helper, outside native conversion scope. |

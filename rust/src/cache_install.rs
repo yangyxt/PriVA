@@ -442,7 +442,12 @@ fn validate(key: &str, path: &Path, schema_version: u32) -> Result<()> {
             caches::ClinvarAaCache::open(path)?;
         }
         "clinvar_splice_stat" => {
-            caches::clinvar_splice_stat::ClinvarSpliceCache::open(path)?;
+            let cache = caches::clinvar_splice_stat::typed::Cache::open(path)?;
+            if cache.version() != schema_version {
+                return Err(invalid(
+                    "splice archive schema version differs from its managed generation",
+                ));
+            }
         }
         "alphamissense_tranx_domain_map" => {
             caches::transcript_domains::TranscriptDomainCache::open(path)?;
@@ -506,6 +511,8 @@ fn install_one(
         caches::clingen_map::pickle_schema_version(text(source)?)?
     } else if key == "clinvar_patho_af_stat" {
         caches::clinvar_gene_af::pickle_schema_version(text(source)?)?
+    } else if key == "clinvar_splice_stat" {
+        caches::clinvar_splice_stat::pickle_schema_version(text(source)?)?
     } else {
         1
     };
@@ -823,6 +830,136 @@ mod tests {
         let updated = fs::read_to_string(&config).unwrap();
         assert_ne!(runtime, updated);
         assert_eq!(before, fs::metadata(&archive).unwrap().modified().unwrap());
+    }
+
+    fn splice_pickle(nullable: bool) -> Vec<u8> {
+        fn string(bytes: &mut Vec<u8>, value: &str) {
+            bytes.extend_from_slice(&[0x8c, value.len() as u8]);
+            bytes.extend_from_slice(value.as_bytes());
+        }
+        let mut bytes = b"\x80\x04}\x8c\x01T]}(".to_vec();
+        for (key, value) in [
+            ("chrom", "1"),
+            ("pos", "42"),
+            ("ref", "A"),
+            ("alt", "T"),
+            ("exon", "1/2"),
+            ("intron", ""),
+            ("hgvsc", "T:c.1+1A>T"),
+            ("consequence", "splice_region_variant"),
+            ("clinvar_sig", "Pathogenic"),
+            ("clinvar_review", "reviewed_by_expert_panel"),
+            ("splice_ai", ""),
+        ] {
+            string(&mut bytes, key);
+            match key {
+                "pos" => bytes.extend_from_slice(b"K*"),
+                "splice_ai" => bytes.push(b'}'),
+                "alt" if nullable => bytes.push(b'N'),
+                _ => string(&mut bytes, value),
+            }
+        }
+        bytes.extend_from_slice(b"uas.");
+        bytes
+    }
+
+    #[test]
+    fn splice_versioned_publication_preserves_v1_and_reuses_v2() {
+        let tmp = Temp::new();
+        let source = tmp.0.join("splice.pkl");
+        fs::write(&source, splice_pickle(false)).unwrap();
+        let (config, private) =
+            tmp.config(&format!("clinvar_splice_stat: '{}'\n", source.display()));
+        let selected = || {
+            PathBuf::from(
+                required(
+                    &document(&fs::read_to_string(&config).unwrap()).unwrap(),
+                    "clinvar_splice_stat",
+                )
+                .unwrap(),
+            )
+        };
+        prepare(&config, &private, &tmp.0).unwrap();
+        publish(&config, &private, &tmp.0).unwrap();
+        let old = selected();
+        let old_bytes = fs::read(&old).unwrap();
+        let old_receipt = fs::read(sidecar(&old, ".source.json")).unwrap();
+        assert!(text(&old).unwrap().ends_with(".v1.rkyv"));
+        assert!(
+            json(&sidecar(&old, ".source.json"))
+                .unwrap()
+                .get("schema_version")
+                .is_none()
+        );
+        prepare(&config, &private, &tmp.0).unwrap();
+        fs::write(&source, splice_pickle(true)).unwrap();
+        publish(&config, &private, &tmp.0).unwrap();
+        let typed = selected();
+        assert!(text(&typed).unwrap().ends_with(".v2.rkyv"));
+        let cache = caches::clinvar_splice_stat::typed::Cache::open(text(&typed).unwrap()).unwrap();
+        assert_eq!(cache.version(), 2);
+        assert!(cache.plain("T").unwrap()[0].alternative.is_none());
+        let record = json(&sidecar(&typed, ".source.json")).unwrap();
+        assert_eq!(field(&record, "schema_version").unwrap(), "2");
+        assert_eq!(field(&record, "format").unwrap(), "PRIVARKV-v1");
+        let modified = fs::metadata(&typed).unwrap().modified().unwrap();
+        let typed_bytes = fs::read(&typed).unwrap();
+        prepare(&config, &private, &tmp.0).unwrap();
+        publish(&config, &private, &tmp.0).unwrap();
+        assert_eq!(selected(), typed);
+        assert_eq!(fs::metadata(&typed).unwrap().modified().unwrap(), modified);
+        assert_eq!(fs::read(&typed).unwrap(), typed_bytes);
+        assert_eq!(fs::read(&old).unwrap(), old_bytes);
+        assert_eq!(
+            fs::read(sidecar(&old, ".source.json")).unwrap(),
+            old_receipt
+        );
+    }
+
+    #[test]
+    fn splice_recovery_checks_schema_and_preserves_failed_publications() {
+        let tmp = Temp::new();
+        let source = tmp.0.join("splice.pkl");
+        fs::write(&source, splice_pickle(true)).unwrap();
+        let (config, _) = tmp.config("");
+        let doc = document(&fs::read_to_string(&config).unwrap()).unwrap();
+        let install = || {
+            install_one(
+                "clinvar_splice_stat",
+                &source,
+                &doc,
+                &tmp.0,
+                "GRCh38/VEP116",
+            )
+        };
+        let output = install().unwrap();
+        let bytes = fs::read(&output).unwrap();
+        let pending = temporary(&output, "pending");
+        fs::rename(&output, &pending).unwrap();
+        let receipt = sidecar(&output, ".source.json");
+        let mut record = json(&receipt).unwrap();
+        record.set(
+            "pending_archive",
+            Json::Str(text(&pending).unwrap().to_owned()),
+        );
+        fs::write(&receipt, json_text::dumps_indented(&record).unwrap()).unwrap();
+        assert_eq!(install().unwrap(), output);
+        assert_eq!(fs::read(&output).unwrap(), bytes);
+        record.set("schema_version", Json::Str("1".to_owned()));
+        fs::write(&receipt, json_text::dumps_indented(&record).unwrap()).unwrap();
+        assert!(install().is_err());
+        assert_eq!(fs::read(&output).unwrap(), bytes);
+        record.set("schema_version", Json::Str("2".to_owned()));
+        let wrong = tmp.0.join("text.pkl");
+        fs::write(&wrong, splice_pickle(false)).unwrap();
+        caches::clinvar_splice_stat::convert(text(&wrong).unwrap(), &pending).unwrap();
+        fs::remove_file(&output).unwrap();
+        record.set("archive_sha256", Json::Str(sha256_file(&pending).unwrap()));
+        fs::write(&receipt, json_text::dumps_indented(&record).unwrap()).unwrap();
+        let preserved = fs::read(&pending).unwrap();
+        assert!(install().is_err());
+        assert!(!output.exists());
+        assert_eq!(fs::read(&pending).unwrap(), preserved);
     }
 
     #[test]

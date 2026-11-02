@@ -15,12 +15,18 @@ mod config_text;
 mod fdr;
 #[allow(dead_code)] // Shared installer primitive; callers switch after their own parity tests.
 mod file_lock;
-#[allow(dead_code, reason = "Shared gzip API awaiting installer-builder callers")]
+#[allow(
+    dead_code,
+    reason = "Shared gzip API awaiting installer-builder callers"
+)]
 mod gzip_writer;
 pub mod hpo_penetrance;
 pub mod interpro_mapping_io;
 mod json_text;
-#[allow(dead_code, reason = "Publisher-checksum API awaiting installer-builder callers")]
+#[allow(
+    dead_code,
+    reason = "Publisher-checksum API awaiting installer-builder callers"
+)]
 mod md5;
 mod pandas_polars;
 mod pandas_table;

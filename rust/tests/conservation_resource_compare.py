@@ -106,7 +106,7 @@ def catalogue():
         "fai_bad_utf8":{"fai_bytes":b"chr1\t248956422\t6\t1\t2\n\xff".hex()},
         "fai_truncated_utf8":{"fai_bytes":b"chr1\t248956422\t6\t1\t2\n\xe2\x82".hex()},
         "fai_utf8_second_block":{"fai_bytes":(b"x"*8191+b"\n\xff").hex()},
-        "existing_symlink":{"input":"symlink"},"relative_paths":{"relative":True},
+        "existing_symlink":{"input":"symlink"},"loop_parent_validate":{"input":"parent_loop"},"loop_parent_publish":{"input":"parent_loop","publish":True},"fifo_perl_fallback":{"tools":"fifo"},"relative_paths":{"relative":True},
         "default_size":{"url":"default"},"default_wrong_assembly":{"assembly":"hg19","track":"hg19","url":"default"},
         "publish":{"publish":True},"publish_existing":{"publish":True,"destination":"existing"},"publish_existing_corrupt":{"publish":True,"destination":"existing","input":"corrupt"},
         "publish_dangling":{"publish":True,"destination":"dangling"},"publish_directory":{"publish":True,"destination":"directory"},
@@ -153,6 +153,8 @@ def setup(folder,case,fixtures,guard):
     if value=="empty":path.write_bytes(b"")
     if value=="corrupt":path.write_bytes(b"not a BigWig\n")
     if value=="truncated":path.write_bytes(path.read_bytes()[:path.stat().st_size//2])
+    if value=="parent_loop":
+        (folder/"loop").symlink_to("loop");path=folder/"loop"/"selected.bw"
     value=case.get("reference")
     if value in ("missing","directory"):reference.unlink()
     if value=="directory":reference.mkdir()
@@ -173,6 +175,7 @@ def setup(folder,case,fixtures,guard):
         if tool=="preferred":
             perl.symlink_to(real);executable(path_bin/"perl","#!/bin/sh\nprintf WRONG >&2\nexit 77\n")
         elif tool=="fallback":(path_bin/"perl").symlink_to(real)
+        elif tool=="fifo":os.mkfifo(path_bin/"perl",0o755)
         elif tool=="nonexecutable":executable(perl,"not executable\n",0o644)
         elif tool=="exit":executable(perl,"#!/bin/sh\nprintf 'reader fixture failed\\n' >&2\nexit 73\n")
         elif tool=="json":executable(perl,"#!/bin/sh\nprintf 'not JSON\\n'\n")
@@ -245,6 +248,7 @@ def check(args):
         fixtures[name]=helper.make_bigwig(fixture_root,name,chroms)
     cases={}
     for name,case in catalogue().items():
+        if args.only and name not in args.only:continue
         folder=args.work_root/name;folder.mkdir();settings={arm:setup(folder/arm,case,fixtures,guard) for arm in ("python","native")}
         commands={}
         for arm,s in settings.items():
@@ -284,7 +288,7 @@ def check(args):
 
 def main():
     parser=argparse.ArgumentParser(description=__doc__);subs=parser.add_subparsers(dest="procedure",required=True)
-    p=subs.add_parser("check");p.add_argument("--producer",type=Path,required=True);p.add_argument("--binary",type=Path,required=True);p.add_argument("--work-root",type=Path,required=True);p.set_defaults(function=check)
+    p=subs.add_parser("check");p.add_argument("--producer",type=Path,required=True);p.add_argument("--binary",type=Path,required=True);p.add_argument("--work-root",type=Path,required=True);p.add_argument("--only",action="append");p.set_defaults(function=check)
     p=subs.add_parser("oracle-sum");p.add_argument("--producer",type=Path,required=True);p.add_argument("--exception",type=Path,required=True);p.add_argument("--input",type=Path,required=True);p.set_defaults(function=oracle,tool_prefix=None)
     p=subs.add_parser("oracle");p.add_argument("--producer",type=Path,required=True);p.add_argument("--exception",type=Path,required=True);p.add_argument("--tool-prefix",type=Path);p.add_argument("arguments",nargs=argparse.REMAINDER);p.set_defaults(function=oracle)
     args=parser.parse_args()

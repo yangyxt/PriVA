@@ -371,8 +371,8 @@ fn publish(
         Ok(m) => m.is_symlink(),
         Err(e)
             if matches!(
-                e.kind(),
-                io::ErrorKind::NotFound | io::ErrorKind::NotADirectory
+                e.raw_os_error(),
+                Some(libc::ENOENT | libc::ENOTDIR | libc::EBADF | libc::ELOOP)
             ) =>
         {
             false

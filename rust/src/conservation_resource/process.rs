@@ -16,7 +16,8 @@ fn which(name: &str) -> Option<PathBuf> {
         let c = CString::new(path.as_os_str().as_encoded_bytes()).ok()?;
         // shutil.which requires an executable non-directory; it does not
         // resolve the returned name or choose a different environment.
-        (path.is_file() && unsafe { libc::access(c.as_ptr(), libc::X_OK) } == 0).then_some(path)
+        (path.exists() && !path.is_dir() && unsafe { libc::access(c.as_ptr(), libc::X_OK) } == 0)
+            .then_some(path)
     })
 }
 

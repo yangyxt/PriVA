@@ -355,9 +355,13 @@ pub(super) fn scan(
     let mut offset = 0;
     for group in &metadata.row_groups {
         let count = group.num_rows();
+        // polars-io 0.51's None/Columns path also deserializes preceding row
+        // groups for an empty slice, retaining their empty frames. RowGroups
+        // skips nonoverlapping groups. This exact slice intersects one group,
+        // so its rows keep source order without prefix work on every read.
         let mut reader = ParquetReader::new(File::open(path)?)
             .with_slice(Some((offset, count)))
-            .read_parallel(ParallelStrategy::None);
+            .read_parallel(ParallelStrategy::RowGroups);
         reader.set_metadata(metadata.clone());
         let frame = reader.finish()?;
         if frame.schema().as_ref() != frame_schema()?.as_ref() || frame.height() != count {

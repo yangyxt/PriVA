@@ -70,6 +70,13 @@ class Fixture:
                       vep_plugins_dir=str(plugins),vep_cache_dir=str(self.cache/"VEP"))
         for name in ["publisher.tsv.gz","publisher.tsv.gz.tbi","reference.fa","reference.fa.fai","gerp.bw"]:(self.cache/name).write_bytes(b"unchanged fixture\n")
         self.config=root/"config.json";self.save()
+        # Synthetic dependencies use exact whole-second mtimes. Some shared
+        # filesystems round a just-created nanosecond timestamp by one tick
+        # after publication; that legitimately changes the original receipt.
+        # Pin only fixture metadata before any reference capture, never the
+        # production identity checks or retained scientific resources.
+        for path in self.root.rglob("*"):
+            if path.is_file():os.utime(path,ns=(1700000000000000000,1700000000000000000))
         self.env=dict(os.environ,PATH=str(self.bin)+os.pathsep+os.environ["PATH"],PYTHONDONTWRITEBYTECODE="1")
         self.module=load(self.scripts/"alphamissense_annotation_base.py","reference_"+root.name)
 
@@ -290,7 +297,7 @@ class Harness:
                     closed_native_proof=dict(path=str(proof),sha256=f.module.digest(proof)))
             lineage=f.root/"lineage.json";write(lineage,record)
             self.success("adopt_"+str(native_runtime),f,"adopt",["--lineage",lineage],lambda:f.ref("check",*f.common()))
-            if native_runtime:self.compare("associated_runtime",f,"runtime-associated",lambda:f.ref("runtime_associated",*f.common()))
+            if native_runtime:self.success("associated_runtime",f,"runtime-associated",verify=lambda:f.ref("runtime_associated",*f.common()))
             if native_runtime:
                 proof.write_text("changed closed proof\n")
                 self.compare("associated_proof_changed",f,"runtime-associated",lambda:f.ref("runtime_associated",*f.common()))
@@ -449,18 +456,48 @@ class Harness:
         for name,content in [
             ("yaml_alias", "unused: &alias 1\nunused_alias: *alias\n"+yaml.safe_dump(f.cfg)),
             ("yaml_flow",yaml.safe_dump(f.cfg,default_flow_style=True)),
+            ("yaml_selected_alias", "n: &n 22\n"+yaml.safe_dump({k:v for k,v in f.cfg.items() if k!="threads"})+"threads: *n\n"),
+            ("yaml_merge", "defaults: &defaults\n"+"".join("  "+line+"\n" for line in yaml.safe_dump(f.cfg).splitlines())+"<<: *defaults\nthreads: 22\n"),
+            ("yaml_ignored_cycle", "unused: &cycle [*cycle]\n"+yaml.safe_dump(f.cfg)),
+            ("yaml_ignored_tags", "date: 2026-11-02\nbinary: !!binary SGk=\nset: !!set {one: null}\n"+yaml.safe_dump(f.cfg)),
         ]:
             f.config.write_text(content)
-            reference=observe(lambda:f.ref("check",*f.common()));native=self.native(f,"check")
-            self.controls.append(dict(name=name,reference=reference,native=native,
-                                      source_supported=reference["success"],native_admitted=native["success"]))
+            self.compare(name,f,"check",lambda:f.ref("check",*f.common()))
+            self.rows[-1]["passed"] &= self.rows[-1]["reference"]["success"]
+        for token in ["22", "0x16", "026", "22.75", "!!float 22", "true", "null", ".nan", ".inf", "-.inf", "'٢_٢'"]:
+            f.config.write_text(yaml.safe_dump({k:v for k,v in f.cfg.items() if k!="threads"})+"threads: "+token+"\n")
+            self.compare("yaml_threads_"+token,f,"capture",lambda:f.ref("capture",*f.common()),value=True)
+        for token in ["116", "116.0", "!!str 116", "true", "null", "[116]", "{x: 116}"]:
+            f.config.write_text(yaml.safe_dump({k:v for k,v in f.cfg.items() if k!="vep_installed_version"})+"vep_installed_version: "+token+"\n")
+            self.compare("yaml_major_"+token,f,"capture",lambda:f.ref("capture",*f.common()),value=True)
+        for token in ["[]", "{}", "true", "false", "0", "1.0", "null"]:
+            f.config.write_text(yaml.safe_dump({k:v for k,v in f.cfg.items() if k!="cache_root"})+"cache_root: "+token+"\n")
+            self.compare("yaml_path_"+token,f,"path",lambda:f.ref("settings",*f.common()))
         f.config.write_text(original)
         receipt=f.module.receipt_path(Path(f.cfg["alphamissense_vep_base_vcf"]));original=receipt.read_text()
-        for name,value in [("json_extra_bigint",2**200),("json_extra_surrogate","\ud800")]:
+        for name,value in [("json_extra_bigint",2**200),("json_extra_surrogate","\ud800"),
+                           ("json_extra_nested",{"arbitrary":[2**200,"\ud800",None,True,0.125]})]:
             data=json.loads(original);data["unused_extra"]=value;write(receipt,data)
-            reference=observe(lambda:f.ref("check",*f.common()));native=self.native(f,"check")
-            self.controls.append(dict(name=name,reference=reference,native=native,
-                                      source_supported=reference["success"],native_admitted=native["success"]))
+            self.compare(name,f,"check",lambda:f.ref("check",*f.common()))
+            self.rows[-1]["passed"] &= self.rows[-1]["reference"]["success"]
+            self.compare(name+"_binding",f,"motif-binding",lambda:f.ref("motif_binding",*f.common()),value=True)
+        for name,mutate in [
+            ("science_extra_bigint",lambda d:d["science"].update(unused=2**200)),
+            ("science_surrogate",lambda d:d["science"].update(assembly="\ud800")),
+            ("science_extra_null",lambda d:d["science"].update(unused=None)),
+            ("science_integer_float_equal",lambda d:d["science"].update(threads=22.0)),
+            ("science_integer_float_unequal",lambda d:d["science"].update(threads=22.5)),
+            ("outputs_extra_bigint",lambda d:d["outputs"].update(unused=2**200)),
+            ("ignored_counts_bigint",lambda d:d.update(counts=2**200)),
+            ("base_sha_bigint",lambda d:d.update(base_sha256=2**200)),
+        ]:
+            data=json.loads(original);mutate(data);write(receipt,data)
+            self.compare(name,f,"check",lambda:f.ref("check",*f.common()))
+            if name=="science_integer_float_equal":
+                self.compare(name+"_binding",f,"motif-binding",lambda:f.ref("motif_binding",*f.common()),value=True)
+        for text in [original[:-2]+',"ignored":[1,]}', original[:-2]+',"ignored":"\\ud800","schema":null}']:
+            receipt.write_text(text)
+            self.compare("json_extra_malformed_or_last_schema",f,"check",lambda:f.ref("check",*f.common()),message=False)
         receipt.write_text(original)
 
 

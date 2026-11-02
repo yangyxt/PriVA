@@ -37,6 +37,8 @@ mod ks_greater;
 mod das_sampling;
 // Candidate classification is validated before the full DAS builder is enabled.
 mod das_domain;
+#[allow(dead_code)] // Common-AF procedures await the complete opt-in DAS builder.
+mod das_common;
 #[allow(dead_code)] // Reference/Family procedures await the complete opt-in DAS builder.
 mod das_reference;
 #[allow(dead_code)]

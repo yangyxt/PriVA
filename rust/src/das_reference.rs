@@ -28,13 +28,24 @@ impl Failure {
 /// rounds to binary64. Casting each large integer to f64 first can double-round.
 fn coverage(meta: Metadata) -> Result<f64, Failure> {
     let denominator = meta.protein_length.ok_or(Failure::NullLength)?;
+    let numerator = i128::from(meta.end) - i128::from(meta.start) + 1;
+    integer_ratio(numerator, i128::from(denominator))
+}
+
+/// Positive counts use the same single-rounding integer division as metadata.
+pub(crate) fn count_ratio(numerator: u64, denominator: u64) -> Result<f64, Failure> {
+    integer_ratio(i128::from(numerator), i128::from(denominator))
+}
+
+// Inputs are bounded by signed-64-bit endpoints or unsigned-64-bit counts.
+// Their magnitudes are at most 2^64; shifted division fits in u128.
+fn integer_ratio(numerator: i128, denominator: i128) -> Result<f64, Failure> {
     if denominator == 0 {
         return Err(Failure::ZeroDivision);
     }
-    let numerator = i128::from(meta.end) - i128::from(meta.start) + 1;
     let sign = ((numerator < 0) ^ (denominator < 0)) as u64;
     let numerator = numerator.unsigned_abs();
-    let denominator = i128::from(denominator).unsigned_abs();
+    let denominator = denominator.unsigned_abs();
     if numerator == 0 {
         return Ok(f64::from_bits(sign << 63));
     }

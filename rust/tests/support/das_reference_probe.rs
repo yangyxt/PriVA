@@ -1,4 +1,5 @@
 //! Typed metadata protocol for independent original-Python comparison.
+#[allow(dead_code)]
 #[path = "../../src/das_reference.rs"]
 mod das_reference;
 #[allow(dead_code)]

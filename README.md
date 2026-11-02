@@ -262,6 +262,24 @@ deep nesting, interpreter recursion limits and first-error selection in
 multiply malformed JSON remain outside this optional interface's compatibility
 scope. Existing callers continue to use `scripts/cache_resources.py`.
 
+The optional DAS completion checker uses the same version-3 receipts as the
+Python helper:
+
+```bash
+"$PRIVA_BINARY" das-install-state capture --profile hg38 \
+  --input /cache/AlphaMissense/domain_statistics.rkyv \
+  --source analysis=scripts/am_pick_intolerant_domains.py \
+  --parameter threads=8
+```
+
+`check` also takes `--receipt JSON` and one or more `--output FILE` options.
+`record` additionally requires `--expected-inputs JSON` from the preceding
+capture; it publishes only the completion receipt after all selected identities
+still match. Repeat `--input`, `--source`, `--bundled` and `--parameter` in their
+original order. Source roles use content hashes; `--bundled ROLE=FILE` checks
+only existence and nonzero size. A completion receipt does not establish
+scientific qualification. The installer continues to use its Python helper.
+
 The opt-in domain procedures read an already annotated AlphaMissense VCF:
 
 ```bash

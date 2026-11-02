@@ -143,12 +143,12 @@ cache conversion interface. Optional native procedures can be invoked directly.
 
 | Python source | Native procedure or current role |
 | --- | --- |
-| [`scripts/cache_resources.py`](../scripts/cache_resources.py) | Retained Python; native replacement pending. |
+| [`scripts/cache_resources.py`](../scripts/cache_resources.py) | Optional `priva cache-resources list/show/refresh-plan/validate` with an explicit registry and Python hash seed. Existing callers remain Python; unusual JSON/set boundaries are documented in the user manual. |
 | [`scripts/check_cluster_environment.py`](../scripts/check_cluster_environment.py) | Retained Python environment inspection. |
 | [`scripts/check_cluster_readiness.py`](../scripts/check_cluster_readiness.py) | Legacy/manual helper, outside native conversion scope. |
 | [`scripts/conservation_resource_check.py`](../scripts/conservation_resource_check.py) | Optional `priva conservation-resource`. Installer caller remains Python. |
 | [`scripts/das_input_continuity.py`](../scripts/das_input_continuity.py) | Retained Python; native replacement pending. |
-| [`scripts/das_install_state.py`](../scripts/das_install_state.py) | Retained Python; native replacement pending. |
+| [`scripts/das_install_state.py`](../scripts/das_install_state.py) | Optional `priva das-install-state capture/check/record`. Preserves completion receipt v3, source-role hashes, metadata identity and bundled existence/nonzero checks. Existing callers remain Python. |
 | [`scripts/deploy_cluster_gnomad.py`](../scripts/deploy_cluster_gnomad.py) | Legacy/manual helper, outside native conversion scope. |
 | [`scripts/deploy_cluster_plugin_inputs.py`](../scripts/deploy_cluster_plugin_inputs.py) | Legacy/manual helper, outside native conversion scope. |
 | [`scripts/deploy_cluster_resources.py`](../scripts/deploy_cluster_resources.py) | Legacy/manual helper, outside native conversion scope. |

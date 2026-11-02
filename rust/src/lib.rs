@@ -3,6 +3,7 @@ pub mod acmg_consequence;
 pub mod acmg_scoring;
 mod acmg_step;
 pub mod acmg_variant_mechanism;
+mod builder_error;
 mod builder_table;
 mod cache_convert;
 mod cache_install;
@@ -39,6 +40,10 @@ mod yaml_config;
 pub fn main_entry() {
     if let Err(error) = cli::run() {
         eprintln!("priva: {error}");
-        std::process::exit(2);
+        std::process::exit(if error.is::<builder_error::RuntimeError>() {
+            1
+        } else {
+            2
+        });
     }
 }

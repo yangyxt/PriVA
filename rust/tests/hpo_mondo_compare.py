@@ -19,6 +19,7 @@ import json
 import math
 import os
 from pathlib import Path
+import re
 import resource
 import signal
 import struct
@@ -146,6 +147,7 @@ class Comparison:
         self.header_checks = 0
         self.compressed_differences = 0
         self.release_checks = {}
+        self.failure_checks = {"exact_exit_codes": 0, "exception_categories": 0, "exact_messages": 0}
 
     def case(self, label, procedure, paths, outputs, *, threshold=".999", failure=False,
              exact_error=False, old=False, directory_output=None, file_limit=False, release=False,
@@ -154,7 +156,7 @@ class Comparison:
         root.mkdir()
         request = {"procedure": procedure, "source": str(self.args.source), "threshold": str(threshold)}
         record = {"label": label, "procedure": procedure, "expected_failure": failure, "issues": [],
-                  "resource_probe": resource_probe}
+                  "resource_probe": resource_probe, "exact_error_message_required": exact_error}
         paths = {name: str(path) for name, path in paths.items()}
         results, actual_paths, commands = {}, {}, {}
         start = time.time()
@@ -203,7 +205,12 @@ class Comparison:
                 metadata = None
             results[arm] = {"returncode": result.returncode, "metadata": metadata,
                             "stderr": (folder / "stderr.log").read_text()}
-            if result.returncode not in ((0, 1) if arm == "python" else (0, 2)):
+            if arm == "native" and result.returncode:
+                diagnostic = results[arm]["stderr"].strip().removeprefix("priva: ")
+                match = re.fullmatch(r"([A-Za-z_][A-Za-z_0-9]*): (.*)", diagnostic, re.DOTALL)
+                results[arm].update(error_type=match[1] if match else None,
+                                    error=match[2] if match else diagnostic)
+            if result.returncode not in (0, 1):
                 record["issues"].append(arm + " abnormal process exit " + str(result.returncode))
             if arm == "python" and result.returncode == 1 and (metadata is None or metadata.get("success") is not False):
                 record["issues"].append("oracle exception metadata missing")
@@ -235,10 +242,21 @@ class Comparison:
                 record["issues"].append("structured coverage metadata differs")
             if release and py is not None:
                 self.release_checks[label] = {"python": py.get("metadata"), "native": native}
-        elif exact_error:
+        else:
             py = results["python"]["metadata"]
-            error = results["native"]["stderr"].strip().removeprefix("priva: ")
-            if py is None or py.get("error", "").rstrip("\n") != error:
+            native = results["native"]
+            self.failure_checks["exact_exit_codes"] += 1
+            self.failure_checks["exception_categories"] += 1
+            record["failure_checks"] = {
+                "exact_exit_codes": results["python"]["returncode"] == native["returncode"] == 1,
+                "exception_categories": py is not None and py.get("error_type") is not None
+                    and py["error_type"] == native.get("error_type")}
+            for check, passed in record["failure_checks"].items():
+                if not passed:
+                    record["issues"].append("runtime failure " + check + " differs")
+            if exact_error:
+                self.failure_checks["exact_messages"] += 1
+            if exact_error and (py is None or py.get("error", "").rstrip("\n") != native.get("error")):
                 record["issues"].append("failure message differs")
         output_records = {}
         for key in outputs:
@@ -290,6 +308,51 @@ class Comparison:
         if record["issues"]:
             self.mismatches.append(self.cases[-1])
         return {name: Path(value) for name, value in actual_paths["python"].items()}, {name: Path(value) for name, value in actual_paths["native"].items()}
+
+
+def admission(args):
+    """Compare argparse exit 2 separately from admitted runtime exceptions."""
+    args.work_root.mkdir()
+    missing = str(args.work_root / "must-not-be-read.tsv")
+    output = str(args.work_root / "must-not-be-written.tsv")
+    hpo_py = [missing, missing, output]
+    hpo_rs = ["--genes-to-phenotype", missing, "--phenotype-hpoa", missing, "--output", output]
+    mondo = ["--mondo-obo", missing, "--hpo-assertions", missing, "--registry-output", output]
+    cases = [
+        ("hpo_missing_all", "collapse_HPO_anno.py", [], ["hpo-assertions", "build"]),
+        ("hpo_missing_output", "collapse_HPO_anno.py", hpo_py[:2], ["hpo-assertions", "build", *hpo_rs[:4]]),
+        ("hpo_invalid_float", "collapse_HPO_anno.py", hpo_py + ["--minimum-match-rate=wrong"], ["hpo-assertions", "build", *hpo_rs, "--minimum-match-rate=wrong"]),
+        ("hpo_unknown_option", "collapse_HPO_anno.py", hpo_py + ["--unknown", "x"], ["hpo-assertions", "build", *hpo_rs, "--unknown", "x"]),
+        ("mondo_missing_all", "build_mondo_disease_scope.py", [], ["mondo-scope", "build"]),
+        ("mondo_missing_output", "build_mondo_disease_scope.py", mondo[:4], ["mondo-scope", "build", *mondo[:4]]),
+        ("mondo_unknown_option", "build_mondo_disease_scope.py", mondo + ["--unknown", "x"], ["mondo-scope", "build", *mondo, "--unknown", "x"]),
+    ]
+    ledger = []
+    for label, script, original, native in cases:
+        folder = args.work_root / label
+        folder.mkdir()
+        results = {}
+        for arm, command in (("python", [sys.executable, str(args.source / "scripts" / script), *original]),
+                             ("native", [str(args.native), *native])):
+            result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30,
+                                    env=dict(os.environ, PYTHONDONTWRITEBYTECODE="1"))
+            (folder / (arm + ".stdout.log")).write_bytes(result.stdout)
+            (folder / (arm + ".stderr.log")).write_bytes(result.stderr)
+            results[arm] = {"command": command, "returncode": result.returncode}
+        ledger.append({"label": label, "results": results,
+                       "passed": all(result["returncode"] == 2 for result in results.values())})
+    native_guards = []
+    for label, command in (("annotation_missing_output", ["mondo-scope", "annotate", "--hpo-assertions", missing, "--registry", missing]),
+                           ("unrelated_cli_error", ["unknown-procedure"])):
+        result = subprocess.run([str(args.native), *command], stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30)
+        (args.work_root / (label + ".stderr.log")).write_bytes(result.stderr)
+        native_guards.append({"label": label, "returncode": result.returncode, "passed": result.returncode == 2})
+    report = {"passed": all(case["passed"] for case in ledger + native_guards) and not Path(output).exists(),
+              "exact_argparse_exit_comparisons": len(ledger), "comparisons": ledger, "native_guards": native_guards}
+    save(args.work_root / "summary.json", report)
+    if not report["passed"]:
+        raise RuntimeError("argument admission exit compatibility failed")
+    return report
 
 
 def fixtures(root):
@@ -425,6 +488,13 @@ def compare(args):
         key = "phenotype-hpoa" if label in ("truncated", "crc") else "genes-to-phenotype"
         comparison.case("hpo_" + label, "hpo", hp | {key: path}, {"output": "out.tsv.gz"}, failure=True, old=True)
     comparison.case("hpo_missing_input", "hpo", hp | {"phenotype-hpoa": fixture_root / "absent.tsv"}, {"output": "out.tsv"}, failure=True, old=True)
+    for label, key, data in (("empty_input", "genes-to-phenotype", b""),
+                             ("comment_only_input", "phenotype-hpoa", b"# no header\n# no rows\n"),
+                             ("gzip_bad_header", "phenotype-hpoa", b"not-a-gzip-header"),
+                             ("gzip_deflate", "phenotype-hpoa", gzip.compress(b"", mtime=0)[:10] + b"\x07" + b"\0" * 8)):
+        path = fixture_root / (label + (".gz" if label.startswith("gzip_") else ".tsv"))
+        path.write_bytes(data)
+        comparison.case("hpo_" + label, "hpo", hp | {key: path}, {"output": "out.tsv"}, failure=True, old=True)
     comparison.case("hpo_partial_write", "hpo", hp, {"output": "out.tsv"}, threshold=0, failure=True, old=True, file_limit=True)
     comparison.case("hpo_gzip_partial_write", "hpo", hp, {"output": "out.tsv.gz"}, threshold=0, failure=True, old=True, file_limit=True)
     comparison.case("hpo_rename_failure", "hpo", hp, {"output": "out.tsv.gz"}, threshold=0, failure=True, directory_output="output")
@@ -465,6 +535,10 @@ def compare(args):
     cr_obo = fixture_root / "cr.obo"
     cr_obo.write_bytes(obo.replace("\n", "\r").encode())
     comparison.case("mondo_cr_obo", "mondo", mp | {"mondo-obo": cr_obo}, {"registry-output": "registry.tsv"})
+    invalid_obo = fixture_root / "invalid_utf8.obo"
+    invalid_obo.write_bytes(b"\xff\n")
+    comparison.case("mondo_invalid_utf8", "mondo", mp | {"mondo-obo": invalid_obo}, {"registry-output": "registry.tsv"}, failure=True, old=True)
+    comparison.case("mondo_missing_input", "mondo", mp | {"mondo-obo": fixture_root / "absent.obo"}, {"registry-output": "registry.tsv"}, failure=True, old=True)
     comparison.case("mondo_partial_write", "mondo", mp, {"registry-output": "registry.tsv"}, failure=True, old=True, file_limit=True)
     comparison.case("mondo_gzip_partial_write", "mondo", mp, {"registry-output": "registry.tsv.gz"}, failure=True, old=True, file_limit=True)
     comparison.case("mondo_second_publication_failure", "mondo", mp, {"registry-output": "registry.tsv.gz", "annotated-assertions-output": "scoped.tsv.gz"}, failure=True, old=True, directory_output="annotated-assertions-output")
@@ -480,6 +554,9 @@ def compare(args):
         comparison.case("annotate_" + label, "annotate", ap | {"registry": path}, {"output": "out.tsv.gz"}, failure=True, exact_error=True, old=True)
     literal_nan = write_tsv(fixture_root / "nan_scope.tsv", columns, [row[:11] + ["nan"] + row[12:] for row in rows])
     comparison.case("annotate_literal_nan_scope", "annotate", ap | {"registry": literal_nan}, {"output": "out.tsv"})
+    missing_columns = write_tsv(fixture_root / "registry_missing_columns.tsv", ["disease_id"], [["D"]])
+    comparison.case("annotate_registry_missing_columns", "annotate", ap | {"registry": missing_columns}, {"output": "out.tsv"}, failure=True, old=True)
+    admission_report = admission(argparse.Namespace(**(vars(args) | {"work_root": args.work_root / "admission"})))
     bounded = Comparison(argparse.Namespace(**(vars(args) | {"work_root": args.work_root / "bounded_parser"})))
     for offset, path in boundary_paths.items():
         bounded.case("hpo_parser_chunk_" + str(offset), "hpo", hp | {"genes-to-phenotype": path}, {"output": "out.tsv"}, threshold=0, failure=None, resource_probe=True)
@@ -490,6 +567,8 @@ def compare(args):
     summary = {"passed": not comparison.mismatches, "cases": len(comparison.cases),
                "qualified_cases_passed": not comparison.mismatches,
                "expected_failures": sum(case["expected_failure"] for case in comparison.cases),
+               "failure_checks": comparison.failure_checks,
+               "admission": admission_report,
                "complete_output_comparisons": comparison.byte_comparisons, "gzip_header_checks": comparison.header_checks,
                "permitted_compressed_byte_differences": comparison.compressed_differences,
                "mismatches": len(comparison.mismatches), "release_checks": comparison.release_checks,
@@ -516,6 +595,10 @@ def main():
     for name in ("native", "source", "inputs-report", "work-root"):
         command.add_argument("--" + name, type=Path, required=True)
     command.set_defaults(function=compare)
+    command = commands.add_parser("admission")
+    for name in ("native", "source", "work-root"):
+        command.add_argument("--" + name, type=Path, required=True)
+    command.set_defaults(function=admission)
     command = commands.add_parser("oracle")
     command.add_argument("--request", type=Path, required=True)
     command.set_defaults(function=oracle)

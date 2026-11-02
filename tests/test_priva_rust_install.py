@@ -57,6 +57,8 @@ debug = 0
         (self.source / "rust/rust-toolchain.toml").write_text('[toolchain]\nchannel = "1.90.0"\nprofile = "minimal"\n')
         (self.source / "data/liftover").mkdir(parents=True)
         (self.source / "data/liftover/GRC_to_ucsc.contig.map.txt").write_text("1 chr1\n")
+        (self.source / "scripts").mkdir()
+        (self.source / "scripts/das_input_continuity.py").write_text("# embedded checker fixture\n")
         self.cache = self.folder / "cache"; self.cache.mkdir()
         self.binary = self.folder / "qualified-priva"; self.binary.write_bytes(elf()); self.binary.chmod(0o700)
         self.pins_path = self.folder / "pins.json"; self.validation_path = self.folder / "validation.json"

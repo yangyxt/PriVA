@@ -43,7 +43,8 @@ IMPORTED_PROFILE = "test/dev, opt-level=0, debug=0; no fast-math"
 # files listed here, rust/src and rust/third_party, so every such file must be listed: it is then
 # copied into the build folder and part of the build identity.
 SOURCE_FIXED = ("rust/Cargo.toml", "rust/Cargo.lock", "rust/rust-toolchain.toml",
-                "data/liftover/GRC_to_ucsc.contig.map.txt")
+                "data/liftover/GRC_to_ucsc.contig.map.txt",
+                "scripts/das_input_continuity.py")
 
 
 def require(ok, message):

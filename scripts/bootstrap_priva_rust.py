@@ -167,6 +167,41 @@ def publication_ledger(target, require_created=False):
     return ledger
 
 
+def source_notices(files):
+    """Carry source-derived dependency notices beside each newly published CLI.
+
+    Retain subdirectories to avoid basename collisions. These bytes already
+    belong to the producing source identity; they are copied, never regenerated.
+    """
+    notices = {}
+    for name, wanted in files.items():
+        path = Path(name)
+        if name.startswith("rust/src/") and (path.name.endswith("_LICENSE") or path.name in ("LICENSE", "NOTICE")):
+            require(str(path) == name and ".." not in path.parts, "Invalid source-notice path")
+            notices["licenses/" + str(path.relative_to("rust/src"))] = wanted
+    return notices
+
+
+def artifact_notices(receipt):
+    # Completed older publications remain immutable and verifiable. New
+    # publications always declare the exact source-derived notice inventory.
+    if "notices_sha256" not in receipt:
+        return {}
+    expected = source_notices(receipt["artifact"]["source_files"])
+    require(receipt["notices_sha256"] == expected, "Published dependency-notice inventory differs")
+    return expected
+
+
+def member_directories(members):
+    directories = set()
+    for name in members:
+        path = Path(name)
+        require(not path.is_absolute() and str(path) == name and ".." not in path.parts,
+                "Invalid publication member path")
+        directories.update(str(parent) for parent in path.parents if parent != Path("."))
+    return directories
+
+
 def resume_publication(target):
     """Resume only an exact owned member ledger; commit readiness last.
 
@@ -181,14 +216,20 @@ def resume_publication(target):
             and not stage.is_symlink() and stage.stat().st_ino == ledger["stage_inode"],
             "Owned prepared publication is unavailable")
     members = ledger["members"]
-    require(set(members) in ({"bin/priva", "receipt.json", "evidence/build-pins.json", "evidence/validation.json"},
+    prepared, raw, _ = load(stage / "receipt.json")
+    require(sha(raw) == members["receipt.json"]["sha256"], "Prepared receipt changed")
+    notices = artifact_notices(prepared)
+    require(set(members) - set(notices) in ({"bin/priva", "receipt.json", "evidence/build-pins.json", "evidence/validation.json"},
                             {"bin/priva", "receipt.json", "evidence/build.json", "evidence/build.log"}),
             "Unexpected publication member set")
-    expected = set(members) | {"bin", "evidence"}
+    require(set(notices) <= set(members) and all(members[name]["sha256"] == wanted for name, wanted in notices.items()),
+            "Prepared dependency notices differ")
+    directories = member_directories(members)
+    expected = set(members) | directories
     require(target.is_dir() and not target.is_symlink()
             and {str(path.relative_to(target)) for path in target.rglob("*")} <= expected,
             "Foreign or extra partial publication members")
-    for folder in ("bin", "evidence"):
+    for folder in sorted(directories, key=lambda name: (len(Path(name).parts), name)):
         path = target / folder; no_links(path, base); path.mkdir(exist_ok=True)
         require(path.is_dir(), "Partial publication directory differs")
     # A ready receipt is the transaction's commit, never a partially written file.
@@ -210,7 +251,9 @@ def resume_publication(target):
                 == expected | {"publication.json"}, "Unexpected staging member; retained")
         for name in (*members, "publication.json"):
             (stage / name).unlink()
-        (stage / "bin").rmdir(); (stage / "evidence").rmdir(); stage.rmdir()
+        for folder in sorted(directories, key=lambda name: (len(Path(name).parts), name), reverse=True):
+            (stage / folder).rmdir()
+        stage.rmdir()
 
 
 def publish_artifact(stage, target):
@@ -403,11 +446,15 @@ def verify_artifact(root, state):
                 "Cold build cannot inherit imported qualification")
     binary = root / "bin/priva"
     require(identity(binary)["mode"] & 0o111 and digest(binary) == descriptor["binary_sha256"], "Installed executable differs")
+    notices = artifact_notices(receipt)
+    for name, wanted in notices.items():
+        require(digest(root / name) == wanted, "Installed dependency notice changed")
     actual = {str(path.relative_to(root)) for path in root.rglob("*")}
-    expected = {"receipt.json", "bin", "bin/priva", "evidence", *("evidence/" + name for name in evidence)}
+    expected = {"receipt.json", "bin", "bin/priva", "evidence", *("evidence/" + name for name in evidence),
+                *notices, *member_directories(notices)}
     require(actual == expected and all(not path.is_symlink() for path in root.rglob("*")), "Unexpected artifact member or link")
     expected_hashes = {"receipt.json": sha(raw_receipt), "bin/priva": descriptor["binary_sha256"],
-                       **{"evidence/" + name: wanted for name, wanted in evidence.items()}}
+                       **{"evidence/" + name: wanted for name, wanted in evidence.items()}, **notices}
     require(set(publication["members"]) == set(expected_hashes)
             and all(publication["members"][name] == dict(sha256=wanted, mode=identity(root / name)["mode"])
                     for name, wanted in expected_hashes.items()), "Published member ledger differs")
@@ -638,8 +685,18 @@ def install(args):
                     command=spec["build_command"], environment=spec["build_environment"])) + b"\n"
             for name, raw in spec["evidence"].items():
                 (stage / "evidence" / name).write_bytes(raw)
+            notices = source_notices(state["files"])
+            for name, wanted in notices.items():
+                original = source / "rust/src" / Path(name).relative_to("licenses")
+                raw, _ = read_stable(original)
+                require(sha(raw) == wanted, "Dependency notice changed before publication")
+                destination = stage / name
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                with destination.open("xb") as stream:
+                    stream.write(raw)
             save_new(stage / "receipt.json", dict(kind=KIND, schema_version=1, artifact=descriptor,
                 evidence_sha256={name: sha(raw) for name, raw in spec["evidence"].items()},
+                notices_sha256=notices,
                 qualification=spec["qualification"], executable_version=version,
                 created_utc=datetime.now(timezone.utc).isoformat(), backend_activated=False))
             require(source_state(source) == state, "Source changed before atomic publication")

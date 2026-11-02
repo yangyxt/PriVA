@@ -37,6 +37,9 @@ class ManagedRustTests(unittest.TestCase):
         self.source = self.folder / "repo"; (self.source / "rust/src").mkdir(parents=True)
         (self.source / "rust/src/main.rs").write_text("fn main() {}\n")
         (self.source / "rust/src/PANDAS_LICENSE").write_text("owned source-license fixture\n")
+        (self.source / "rust/src/EXPAT_LICENSE").write_text("static XML dependency notice fixture\n")
+        (self.source / "rust/src/dependency").mkdir()
+        (self.source / "rust/src/dependency/PANDAS_LICENSE").write_text("distinct nested notice fixture\n")
         (self.source / "rust/Cargo.toml").write_text('''[package]
 name = "priva-tabular"
 version = "0.1.0"
@@ -92,6 +95,15 @@ debug = 0
         self.assertEqual(result["profile"]["opt_level"], 0)
         self.assertFalse(result["qualification"]["scientific_acceptance"])
         self.assertFalse(result["qualification"]["production_backend_selected"])
+        receipt, _, _ = B.load(Path(result["receipt"]))
+        self.assertEqual(set(receipt["notices_sha256"]), {
+            "licenses/PANDAS_LICENSE", "licenses/EXPAT_LICENSE", "licenses/dependency/PANDAS_LICENSE"})
+        for relative, wanted in receipt["notices_sha256"].items():
+            installed = binary.parent.parent / relative
+            original = self.source / "rust/src" / Path(relative).relative_to("licenses")
+            self.assertEqual(installed.read_bytes(), original.read_bytes())
+            self.assertEqual(B.digest(installed), wanted)
+            self.assertNotEqual(installed.stat().st_ino, original.stat().st_ino)
 
     def test_warm_install_and_check_are_read_only_and_do_not_build(self):
         result = B.install(self.args()); before = self.snapshot(self.cache)
@@ -209,7 +221,15 @@ debug = 0
         ready = B.install(self.args()); target = Path(ready['receipt']).parent
         ledger_path = B.publication_path(target); ledger, _, _ = B.load(ledger_path)
         # The first deployed protocol has a complete byte-bound ready receipt
-        # but predates the added target-creation observation. Fixture only.
+        # but predates notices and target-creation observations. Fixture only.
+        receipt, _, _ = B.load(target / 'receipt.json')
+        notices = receipt.pop('notices_sha256')
+        for name in notices:
+            (target / name).unlink(); ledger['members'].pop(name)
+        for folder in sorted(B.member_directories(notices), key=lambda name: len(Path(name).parts), reverse=True):
+            (target / folder).rmdir()
+        write_json(target / 'receipt.json', receipt)
+        ledger['members']['receipt.json']['sha256'] = B.digest(target / 'receipt.json')
         ledger.pop('protocol_version', None); write_json(ledger_path, ledger)
         created = target.parent / ('publication-' + target.name + '.created.json')
         if created.exists(): created.unlink()
@@ -297,7 +317,8 @@ debug = 0
 
     def test_modified_executable_evidence_and_extra_members_fail_warm_check(self):
         ready = B.install(self.args()); root = Path(ready["receipt"]).parent
-        for relative, raw in (("bin/priva", elf(b"different")), ("evidence/validation.json", b"{}\n"), ("foreign", b"unexpected")):
+        for relative, raw in (("bin/priva", elf(b"different")), ("evidence/validation.json", b"{}\n"),
+                              ("licenses/EXPAT_LICENSE", b"changed notice"), ("foreign", b"unexpected")):
             with self.subTest(relative=relative):
                 path = root / relative; before = path.read_bytes() if path.exists() else None
                 mode = path.stat().st_mode if path.exists() else None
@@ -306,6 +327,24 @@ debug = 0
                 with self.assertRaises(ValueError): B.check(self.args(imported=False))
                 if before is None: path.unlink()
                 else: path.write_bytes(before); path.chmod(mode)
+
+    def test_missing_dependency_notice_refuses_ready_reuse_without_repairing_it(self):
+        ready = B.install(self.args()); root = Path(ready["receipt"]).parent
+        (root / "licenses/dependency/PANDAS_LICENSE").unlink()
+        before = self.snapshot(self.cache)
+        with self.assertRaises(FileNotFoundError): B.install(self.args())
+        self.assertEqual(self.snapshot(self.cache), before)
+
+    def test_changed_staged_notice_blocks_interrupted_publication(self):
+        target = self.interrupt_publication()
+        ledger, _, _ = B.load(B.publication_path(target))
+        stage = target.parent / ledger['stage']
+        (stage / 'licenses/EXPAT_LICENSE').write_bytes(b'changed prepared notice')
+        before = self.snapshot(self.source)
+        with self.assertRaises(ValueError): B.install(self.args())
+        self.assertFalse((target / 'receipt.json').exists())
+        self.assertEqual((stage / 'licenses/EXPAT_LICENSE').read_bytes(), b'changed prepared notice')
+        self.assertEqual(self.snapshot(self.source), before)
 
     def test_different_explicit_evidence_cannot_silently_reuse_old_receipt(self):
         result = B.install(self.args()); before = Path(result["receipt"]).read_bytes()

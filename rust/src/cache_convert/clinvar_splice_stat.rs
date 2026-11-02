@@ -16,6 +16,8 @@ use std::io::Write;
 use std::path::Path;
 use std::time::Instant;
 
+pub(crate) mod typed;
+
 pub(crate) const SCHEMA: Schema = Schema {
     name: "clinvar_splice_stat",
     id: 2,
@@ -336,6 +338,9 @@ fn exact(records: Vec<PlainRecord>, names: &[String]) -> ExactValue {
 
 #[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn export(path: &str, out: &mut dyn Write) -> Result<usize> {
+    if typed::Cache::open(path)?.version() == 2 {
+        return typed::export(path, out);
+    }
     let cache = ClinvarSpliceCache::open(path)?;
     let names: Vec<String> = cache
         .splice_ai_names()
@@ -354,6 +359,55 @@ pub(crate) fn export(path: &str, out: &mut dyn Write) -> Result<usize> {
 }
 
 pub(crate) fn convert(pickle: &str, output: &Path) -> Result<String> {
+    ensure_distinct_paths(Path::new(pickle), output)?;
+    if typed::pickle_version(pickle)? == 1 {
+        return convert_v1(pickle, output);
+    }
+    let mut entries = Vec::new();
+    let distinct = visit_top_level_dict(
+        pickle,
+        |_| true,
+        |key, value| {
+            entries.push((
+                key.to_string(),
+                typed::plain_transcript(pickle, &key, &value)?,
+            ));
+            Ok(())
+        },
+    )?;
+    if distinct != entries.len() {
+        return Err(invalid("a splice transcript is set twice; refused"));
+    }
+    let count = typed::write_checked(output, entries, provenance(pickle)?, |cache| {
+        let mut compared = 0;
+        let distinct = visit_top_level_dict(
+            pickle,
+            |_| true,
+            |key, value| {
+                if cache.plain(&key).as_ref()
+                    != Some(&typed::plain_transcript(pickle, &key, &value)?)
+                {
+                    return Err(invalid("splice v2 values changed during conversion"));
+                }
+                compared += 1;
+                Ok(())
+            },
+        )?;
+        if compared != cache.len() || distinct != cache.len() {
+            return Err(invalid("splice pickle changed during conversion"));
+        }
+        Ok(())
+    })?;
+    Ok(format!(
+        "{{\"cache\":\"clinvar_splice_stat\",\"schema_version\":2,\"transcripts\":{count},\"checked_transcripts\":{count}}}"
+    ))
+}
+
+pub(crate) fn pickle_schema_version(path: &str) -> Result<u32> {
+    typed::pickle_version(path)
+}
+
+fn convert_v1(pickle: &str, output: &Path) -> Result<String> {
     ensure_distinct_paths(Path::new(pickle), output)?;
     let started = Instant::now();
     let mut pool = StringPool::default();

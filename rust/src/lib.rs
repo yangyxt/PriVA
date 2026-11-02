@@ -24,6 +24,9 @@ mod fdr;
 // Qualified before the opt-in DAS procedures consume this exact random stream.
 #[allow(dead_code)]
 mod numpy_rng;
+// Qualified independently before the opt-in DAS producer is connected.
+#[allow(dead_code)]
+mod ks_greater;
 #[allow(dead_code)] // Shared installer primitive; callers switch after their own parity tests.
 mod file_lock;
 mod gzip_writer;

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Independent CPython differential for the standalone JSON writer probe.
 
-Compile json_text_probe.rs against current and pre-change json_text.rs, using
+Compile support/json_text_probe.rs against current and pre-change json_text.rs, using
 --cfg legacy for the latter. Run:
   python json_text_compare.py compare --binary PROBE --legacy-binary OLD_PROBE \
       --output RESULTS --random-floats 5000

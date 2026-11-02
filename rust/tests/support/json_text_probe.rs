@@ -3,7 +3,7 @@
 //! `json_text_probe serve`.
 //! `--cfg legacy` uses only the pre-options wrappers for compatibility checks.
 #[allow(dead_code)]
-#[path = "../src/json_text.rs"]
+#[path = "../../src/json_text.rs"]
 mod json_text;
 
 use json_text::Json;

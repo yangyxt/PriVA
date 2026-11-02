@@ -42,6 +42,10 @@ def oracle(args):
         return observe
     sys.settrace(observe)
     try:returncode=module.main(args.arguments)
+    except Exception as exc:
+        # An interpreter-depth failure can disable the trace callback before
+        # it records an exception; observe it after stack unwinding as well.
+        sys.settrace(None);last.update(category=type(exc).__name__,message=str(exc));raise
     finally:
         sys.settrace(None)
         if last:save(args.exception,last)
@@ -121,12 +125,47 @@ def catalogue():
     add("registry_cr",raw=json.dumps(registry(),indent=2).replace("\n","\r"))
     add("registry_symlink_routes",symlink=True,shell="function build_b() {}\n",options=["--check-routes"])
     add("registry_relative",relative=True)
-    # These are measured, never counted as matched failures or successes.
+    # Object hooks run only after an object has completely parsed.
     for name,raw in (("duplicate_then_syntax",'{"a":1,"a":2,"b":}'),("duplicate_then_nested_duplicate",'{"a":1,"a":2,"b":{"x":1,"x":2}}')):
-        add("unqualified_"+name,raw=raw,unqualified="The shared JSON parser rejects a duplicate before Python's object-completion hook; later invalid object content can change the first failure.")
+        add("hook_"+name,raw=raw)
+    for name,raw in {
+        "child_before_syntax":'{"child":{"a":1,"a":2},"broken":}',
+        "syntax_before_child":'{"first":1 "child":{"a":1,"a":2}}',
+        "parent_not_closed":'{"a":1,"a":2',
+        "child_closed_parent_not":'{"child":{"a":1,"a":2}',
+        "empty_child_before_syntax":'{"a":1,"a":2,"child":{},"broken":}',
+        "array_child_before_syntax":'{"a":1,"a":2,"child":[{"x":1,"x":2}],"broken":}',
+        "unicode_offset":'{"α":1,"α":2,"broken":}',
+        "newlines":'{\r\n"a":1,\r"a":2,\n"broken":}',
+        "trailing_data":'{"a":1,"a":2} trailing',
+        "quoted_braces":'{"a":1,"a":2,"child":{"x\\\"}":1,"x\\\"}":2}}',
+        "multiple_duplicates":'{"a":1,"a":2,"b":1,"b":2}',
+        "array_order":'[{"a":1,"a":2},{"x":1,"x":2}]',
+        "nonfinite":'{"a":NaN,"a":Infinity,"child":{"x":-Infinity,"x":0}}',
+        "wide_flat_prefix":json.dumps({"items":[{"v":i} for i in range(1000)]})[:-1]+',"items":0}',
+        "deep_valid_prefix":'{"x":'*120+'{"a":1,"a":2}'+'}'*120,
+    }.items():add("hook_"+name,raw=raw)
     for label,value in (("null",None),("int",1),("list",[]),("object",{})):
         document=registry();document["resources"]["b"]["install_entrypoints"]=["build_b",value]
-        add("unqualified_mixed_route_"+label,document,shell="function build_b() {}\n",options=["--check-routes"],unqualified="The proven set primitive supports string iterable insertion, not mixed-object hashing.")
+        add("mixed_route_"+label,document,shell="function build_b() {}\n",options=["--check-routes"])
+    for label,value in (("true",True),("false",False),("decimal",1.25),("minus_zero",-0.0),("nan",float('nan')),
+        ("inf",float('inf')),("minus_inf",float('-inf')),("wide_integer",2**100)):
+        document=registry();document["resources"]["b"]["install_entrypoints"]=["build_b",value]
+        add("single_nonstring_"+label,document,shell="function build_b() {}\n",options=["--check-routes"])
+    for label,values in (("missing_before_list",["missing",[]]),("null_before_list",[None,[]]),
+        ("list_before_dict",[[],{}]),("dict_before_list",[{},[]]),("mixed_before_dict",[1,"missing",{}])):
+        document=registry();document["resources"]["b"]["install_entrypoints"]=values
+        add("unhashable_"+label,document,shell="function build_b() {}\n",options=["--check-routes"])
+    document=registry();document["resources"]["a"]["install_entrypoints"]=["missing"];document["resources"]["b"]["install_entrypoints"]=[[]]
+    add("earlier_resource_precedes_unhashable",document,shell="function build_b() {}\n",options=["--check-routes"])
+    # These remain measured, never counted as matched failures or successes.
+    for label,values in (("missing_string",["missing",None]),("two_nonstring",[None,1]),("equal_numbers",[1,True]),
+        ("negative_zero",[-0.0,0.0]),("nan_duplicates",[float('nan'),float('nan')])):
+        document=registry();document["resources"]["b"]["install_entrypoints"]=values
+        add("unqualified_ambiguous_route_"+label,document,shell="function build_b() {}\n",options=["--check-routes"],
+            unqualified="More than one possible missing candidate remains outside the string-set/single-candidate profile.")
+    add("unqualified_duplicate_with_wide_integer",raw='{"a":1,"a":2,"large":'+str(2**160)+'}',
+        unqualified="A competing duplicate hook with an unsupported JSON integer remains outside the represented JSON profile.")
     for label,raw in (("wide_int",'{"schema_version":1,"resources":'+json.dumps(registry()["resources"])+',"extra":'+str(2**160)+'}'),
         ("surrogate",json.dumps(registry())[:-1]+',"extra":"\\ud800"}'),
         ("nesting",json.dumps(registry())[:-1]+',"extra":'+"["*405+"0"+"]"*405+'}')):

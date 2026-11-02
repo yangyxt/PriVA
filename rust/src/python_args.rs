@@ -100,6 +100,18 @@ pub(crate) fn parse_long_option_occurrences(
     names: &[&str],
     flags: &[&str],
 ) -> Result<Option<Vec<(String, String)>>, String> {
+    parse_long_options_converted(args, names, flags, |_, _| Ok(()))
+}
+
+/// Opt-in typed admission: argparse converts a value when its action runs,
+/// before a later help action. Existing callers retain the no-conversion
+/// wrapper above; this entry point does not change their admission policy.
+pub(crate) fn parse_long_options_converted(
+    args: &[String],
+    names: &[&str],
+    flags: &[&str],
+    mut convert: impl FnMut(&str, &str) -> Result<(), String>,
+) -> Result<Option<Vec<(String, String)>>, String> {
     let all: Vec<&str> = names.iter().chain(flags).copied().collect();
     let mut values: Vec<(String, String)> = Vec::new();
     let mut unrecognized: Vec<String> = Vec::new();
@@ -144,6 +156,7 @@ pub(crate) fn parse_long_option_occurrences(
                 _ => return Err(format!("argument --{name}: expected one argument")),
             },
         };
+        convert(name, &value)?;
         values.push((name.to_owned(), value));
     }
     if !unrecognized.is_empty() {
@@ -296,6 +309,76 @@ mod tests {
         assert_eq!(
             parse_long_option_occurrences(&strings(&["--help"]), &["threads"], &[]).unwrap(),
             None
+        );
+    }
+
+    #[test]
+    fn typed_actions_run_before_later_help_and_repeated_values() {
+        let mut seen = Vec::new();
+        let result = parse_long_options_converted(
+            &strings(&["--threads=3", "--threads", "bad", "--threads=4", "--help"]),
+            &["threads"],
+            &[],
+            |name, value| {
+                seen.push((name.to_owned(), value.to_owned()));
+                value
+                    .parse::<i64>()
+                    .map(|_| ())
+                    .map_err(|_| "invalid int".to_owned())
+            },
+        );
+        assert_eq!(result, Err("invalid int".to_owned()));
+        assert_eq!(
+            seen,
+            vec![
+                ("threads".to_owned(), "3".to_owned()),
+                ("threads".to_owned(), "bad".to_owned())
+            ]
+        );
+    }
+
+    #[test]
+    fn help_precedes_later_typed_actions_and_flags_have_no_conversion() {
+        let mut seen = Vec::new();
+        let result = parse_long_options_converted(
+            &strings(&["--force", "--thr=-2", "--help", "--threads=bad"]),
+            &["threads"],
+            &["force"],
+            |name, value| {
+                seen.push((name.to_owned(), value.to_owned()));
+                Ok(())
+            },
+        )
+        .unwrap();
+        assert_eq!(result, None);
+        assert_eq!(seen, vec![("threads".to_owned(), "-2".to_owned())]);
+    }
+
+    #[test]
+    fn deferred_unknown_argument_does_not_hide_conversion_failure() {
+        let result = parse_long_options_converted(
+            &strings(&["--unknown", "--threads=bad"]),
+            &["threads"],
+            &[],
+            |_, _| Err("invalid int".to_owned()),
+        );
+        assert_eq!(result, Err("invalid int".to_owned()));
+    }
+
+    #[test]
+    fn existing_untyped_admission_does_not_gain_conversion() {
+        assert_eq!(
+            parse_long_option_occurrences(
+                &strings(&["--threads=bad", "--help"]),
+                &["threads"],
+                &[],
+            )
+            .unwrap(),
+            None
+        );
+        assert_eq!(
+            values(&["--threads=bad"], &["threads"]).unwrap()["threads"],
+            "bad"
         );
     }
 

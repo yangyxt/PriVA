@@ -14,6 +14,10 @@ use std::fs::{File, OpenOptions};
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 
+#[cfg(test)]
+#[path = "../../tests/support/alpha_readback_probe.rs"]
+mod readback_probe;
+
 pub(super) const SCHEMA: &str = "priva-alpha-domain-parquet-v2";
 #[derive(Default, Clone, Debug)]
 pub(super) struct Row {

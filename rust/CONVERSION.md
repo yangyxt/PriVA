@@ -106,7 +106,7 @@ cache conversion interface. Optional native procedures can be invoked directly.
 | Python source | Native procedure or current role |
 | --- | --- |
 | [`scripts/SpliceVault_tsv_vcf_conversion.py`](../scripts/SpliceVault_tsv_vcf_conversion.py) | Optional `priva splicevault-convert`. Installer caller remains Python. Installed BGZF route; general archive-byte/ZIP64 behavior is outside its qualified profile. |
-| [`scripts/alphamissense_annotation_base.py`](../scripts/alphamissense_annotation_base.py) | Retained Python; native replacement pending. |
+| [`scripts/alphamissense_annotation_base.py`](../scripts/alphamissense_annotation_base.py) | Optional `priva alpha-annotation-base`: profile/header checks, base pair publication/recovery and completed motif adoption. `motif-runtime` explicitly observes the original Python package environment; `adopt-motif` still calls original BioMart identity/receipt checks, so that route is partially converted. No annotation/model generation or installer caller switch. |
 | [`scripts/alphamissense_cache.py`](../scripts/alphamissense_cache.py) | Retained Python; native replacement pending. |
 | [`scripts/alphamissense_domain_cache.py`](../scripts/alphamissense_domain_cache.py) | Retained Python; native replacement pending. |
 | [`scripts/alphamissense_original_cache.py`](../scripts/alphamissense_original_cache.py) | Legacy/manual helper, outside native conversion scope. |

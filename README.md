@@ -202,6 +202,10 @@ python "$PRIVA_ROOT/scripts/bootstrap_priva_rust.py" check \
 
 For a manual build with the pinned Rust toolchain, then select it for one shell session:
 
+The native build also needs a C compiler, `pkg-config`, the Expat development
+files and the static libyaml library/header (version 0.2.5 or newer). Set
+`PKG_CONFIG_PATH` when these are installed outside the default search paths.
+
 ```bash
 export CARGO_TARGET_DIR="$PRIVA_RUNS/rust-build"
 (cd "$PRIVA_ROOT/rust" && cargo build --release --locked --bin priva)
@@ -333,6 +337,52 @@ uses the native command layout. The portable comparators
 `rust/tests/indexed_plugin_cache_edges.py` use private fixtures with the actual
 tools, including cleanup and subprocess-failure checks. Permission fixtures
 must run as an ordinary user, without elevated filesystem privileges.
+
+The optional AlphaMissense complete-annotation helper checks the selected
+producer, official VEP/Perl environment, inputs and published VCF/index pairs:
+
+```bash
+"$PRIVA_BINARY" alpha-annotation-base capture \
+  --config "$PRIVA_CONFIG" --source-root "$PRIVA_ROOT" --output expected.json
+"$PRIVA_BINARY" alpha-annotation-base check \
+  --config "$PRIVA_CONFIG" --source-root "$PRIVA_ROOT"
+```
+
+| Procedure | Purpose and additional options |
+| --- | --- |
+| `path` | Show the configured complete base path. |
+| `capture`, `check` | Record current dependencies or check the existing base receipt. `capture` accepts `--output JSON`. |
+| `publish` | Publish already completed VCFs with `--staged-converted VCF --staged-annotation VCF --expected-inputs JSON`. |
+| `recover`, `restore` | Finish an interrupted ordered publication, or copy the verified complete base back to the runtime path. |
+| `adopt`, `runtime-associated` | Import an explicitly evidenced completed base with `--lineage JSON`, or check its closed runtime association. |
+| `motif-binding`, `motif-check` | Compute the current motif producer binding, or check it with `--artifact FILE`. |
+| `adopt-motif` | Publish a preserved motif pair using `--artifact FILE --lineage JSON --mapping TSV` and ordered repeated `--input FILE` options. |
+| `motif-runtime` | Observe the selected scientific Python interpreter and imported package files. |
+
+All except `motif-runtime` require `--config YAML --source-root CHECKOUT`;
+`--base VCF` selects an explicit complete base. These procedures run neither
+VEP annotation nor model generation. They require the existing tools and
+scientific environment named by the original helper. `--python PYTHON`
+(default `python` on `PATH`) identifies the actual Python environment for
+motif provenance. The runtime observer imports the original six packages to
+identify their loaded modules and installed files.
+
+Motif adoption remains partially converted: it calls only the original
+BioMart `mapping_identity` and `check_receipt` functions through an explicit
+argument-vector Python adapter. `--helper-root CHECKOUT` selects those helper
+assets and defaults to `--source-root`; it may differ from the scientific
+producer checkout. Pair staging, identity checks, locking and publication are
+native. No acquisition or scientific rebuild is a fallback, and genuine
+bundled snapshots retain existence/nonzero-only reuse admission.
+
+YAML anchors, aliases, merge keys and flow mappings are supported by the safe
+libyaml reader. Ignored JSON receipt extras are syntax-checked without imposing
+native scalar limits on them; compared fields still require complete equality.
+Values returned or written use the native metadata representation, so arbitrary
+size integers, unpaired Unicode surrogates and deeply nested selected values
+remain outside that profile. Selected YAML date/binary/set values are outside
+the scalar configuration profile. Original Python callers remain unchanged.
+The portable comparator is `rust/tests/alpha_annotation_base_compare.py`.
 
 The optional DAS completion checker uses the same version-3 receipts as the
 Python helper:

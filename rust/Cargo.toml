@@ -25,6 +25,8 @@ polars-core = { version = "=0.51.0", default-features = false, features = ["algo
 polars-io = { version = "=0.51.0", default-features = false, features = ["parquet"] }
 polars-ops = { version = "=0.51.0", default-features = false, features = ["is_in", "strings"] }
 rkyv = { version = "=0.8.18", default-features = false, features = ["std", "bytecheck"] }
+# Deterministic extended precision for the pinned DAS dip interval calculation.
+rustc_apfloat = "=0.2.3"
 ryu = "=1.0.23"
 tar = { version = "=0.4.46", default-features = false }
 xz2 = { version = "=0.1.7", features = ["static"] }

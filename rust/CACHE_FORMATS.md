@@ -103,7 +103,7 @@ lists are `List` columns; sets are sorted `List` columns.
 | 5 | `clinvar_gene_stat` | `variants` pool (variant ids); `genes`; `entries[i]: {ensembl_id, gene_symbol, sets, domains: Vec<{domain, sets}>, transcripts: Vec<{transcript, sets}>}`, `sets` = the seven variant-id sets as sorted `Vec<u32>` | pending |
 | 6 | `clinvar_patho_af_stat` | `genes`; `entries[i]: Option<Vec<{key, value: Text/Int/Float}>>` (`None` for Python `None`) | pending |
 | 7 | `pm1_regions_pkl` | `das_intolerant_domains` (sorted); `hcseeker_hotspots` and `rmc_constrained` as sorted transcripts with sorted `Vec<i64>` residues; `metadata: Vec<{key, value}>` | pending |
-| 8 | `all_intolerant_domains` | `domains`: sorted, unique (a Python set) | pending |
+| 8 | `all_intolerant_domains` | `domains`: UTF-8 byte-sorted, unique (a Python set of text; lists and frozen sets refused) | **implemented** (`rust/src/cache_convert/intolerant_domains.rs`) |
 | 9 | `interpro_mapping_pickle` | keys `(database, accession)` sorted; `entries[i]: Vec<{five texts, members: Vec<(text, text, text)>}>` (Python: list of 6-tuples) | pending |
 | 10 | `clingen_map` | `variants` (sorted); `codes: Vec<Option<String>>` (`None` = the float NaN of curated variants without codes) | pending |
 

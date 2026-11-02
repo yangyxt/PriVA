@@ -71,6 +71,67 @@ impl<R: Read> Lines<R> {
             self.at = self.text.len();
         }
     }
+
+    /// The `newline="", encoding="utf-8-sig"` form used by csv.reader.
+    /// Keep the established universal-newline `next` body unchanged. This
+    /// additional consumer reuses its block decoder but retains actual CR/LF
+    /// bytes, including CRLF across a decode boundary. `first` belongs to this
+    /// consumer and must initially be true; do not mix the two line methods.
+    pub(crate) fn next_csv(&mut self, first: &mut bool) -> Result<Option<String>> {
+        let mut line = String::new();
+        let mut cr = false;
+        loop {
+            if self.at == self.text.len() {
+                let initial = *first;
+                *first = false;
+                let filled = self.fill().map_err(|cause| {
+                    if cause.to_string() == "UnicodeDecodeError: input is not UTF-8" {
+                        let bytes = if initial {
+                            self.pending
+                                .strip_prefix(&[0xef, 0xbb, 0xbf])
+                                .unwrap_or(&self.pending)
+                        } else {
+                            &self.pending
+                        };
+                        crate::builder_error::category(
+                            "UnicodeDecodeError",
+                            invalid(crate::python_io::decode_utf8(bytes).unwrap_err()),
+                        )
+                    } else {
+                        cause
+                    }
+                })?;
+                if initial && self.text.starts_with('\u{feff}') {
+                    self.at = 3;
+                }
+                if !filled {
+                    return Ok((!line.is_empty()).then_some(line));
+                }
+                if self.at == self.text.len() {
+                    continue;
+                }
+            }
+            if cr {
+                if self.text.as_bytes()[self.at] == b'\n' {
+                    line.push('\n');
+                    self.at += 1;
+                }
+                return Ok(Some(line));
+            }
+            let rest = &self.text[self.at..];
+            if let Some(end) = rest.bytes().position(|byte| matches!(byte, b'\r' | b'\n')) {
+                line.push_str(&rest[..=end]);
+                cr = rest.as_bytes()[end] == b'\r';
+                self.at += end + 1;
+                if !cr {
+                    return Ok(Some(line));
+                }
+            } else {
+                line.push_str(rest);
+                self.at = self.text.len();
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -123,5 +184,28 @@ mod tests {
         let mut lines = Lines::new(bytes.as_slice());
         assert_eq!(lines.next().unwrap(), Some("a".repeat(8191)));
         assert!(lines.next().is_err());
+    }
+    #[test]
+    fn csv_lines_keep_endings_and_strip_only_initial_bom() {
+        let mut lines = Lines::new("\u{feff}a\r\nb\rc\n\u{feff}last".as_bytes());
+        let mut first = true;
+        let mut actual = vec![];
+        while let Some(line) = lines.next_csv(&mut first).unwrap() {
+            actual.push(line);
+        }
+        assert_eq!(actual, ["a\r\n", "b\r", "c\n", "\u{feff}last"]);
+    }
+    #[test]
+    fn csv_crlf_and_multibyte_cross_decode_blocks() {
+        for offset in [8188, 8191] {
+            let text = format!("{}α\r\nlast", "a".repeat(offset));
+            let mut lines = Lines::new(text.as_bytes());
+            let mut first = true;
+            assert_eq!(
+                lines.next_csv(&mut first).unwrap(),
+                Some(format!("{}α\r\n", "a".repeat(offset)))
+            );
+            assert_eq!(lines.next_csv(&mut first).unwrap(), Some("last".into()));
+        }
     }
 }

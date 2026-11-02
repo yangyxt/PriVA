@@ -324,6 +324,9 @@ pub(crate) fn run() -> Result<()> {
     if args.get(1).map(String::as_str) == Some("das-install-state") {
         return crate::das_install_state::dispatch(&args[2..]);
     }
+    if args.get(1).map(String::as_str) == Some("mechanism-source") {
+        return crate::mechanism_source::dispatch(&args[2..]);
+    }
     if args.get(1).map(String::as_str) == Some("cache-resources") {
         return crate::cache_resources::dispatch(&args[2..]);
     }

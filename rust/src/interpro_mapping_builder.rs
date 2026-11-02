@@ -20,6 +20,12 @@ use std::rc::Rc;
 mod encodings;
 mod xml;
 
+/// Reuse the mature XML backend for the acquisition helper's independent
+/// Product 6 shape check. It does not construct or publish an InterPro mapping.
+pub(crate) fn validate_product6(source: impl Read) -> Result<()> {
+    xml::validate_product6(source)
+}
+
 const HELP: &str = "usage: priva interpro-mapping build --xml XML.gz --output CACHE.rkyv\n\
 Build the full member-signature mapping directly from an explicit gzipped InterPro XML.\n\
 No download, VCF-format report, installer caller change or pickle output.";

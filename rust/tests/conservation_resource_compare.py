@@ -24,6 +24,8 @@ import time
 sys.dont_write_bytecode=True
 PRODUCER_SHA="b742dafd0f961aba170bc1d637b0911914cf05702e2cbc8dd9e2c7a9ba7bfd73"
 SENTINEL=b"existing target must be retained\n"
+UNQUALIFIED={"fifo_perl_fallback":dict(spec={"tools":"fifo"},
+    reason="An executable FIFO named perl can block the OS exec before the source's subprocess timeout starts. This special-file environment is outside the regular executable profile and requires a separately supervised resource diagnostic; no matched runtime failure is claimed.")}
 
 def load(path,name):
     spec=importlib.util.spec_from_file_location(name,path);module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module);return module
@@ -106,7 +108,7 @@ def catalogue():
         "fai_bad_utf8":{"fai_bytes":b"chr1\t248956422\t6\t1\t2\n\xff".hex()},
         "fai_truncated_utf8":{"fai_bytes":b"chr1\t248956422\t6\t1\t2\n\xe2\x82".hex()},
         "fai_utf8_second_block":{"fai_bytes":(b"x"*8191+b"\n\xff").hex()},
-        "existing_symlink":{"input":"symlink"},"loop_parent_validate":{"input":"parent_loop"},"loop_parent_publish":{"input":"parent_loop","publish":True},"fifo_perl_fallback":{"tools":"fifo"},"relative_paths":{"relative":True},
+        "existing_symlink":{"input":"symlink"},"loop_parent_validate":{"input":"parent_loop"},"loop_parent_publish":{"input":"parent_loop","publish":True},"relative_paths":{"relative":True},
         "default_size":{"url":"default"},"default_wrong_assembly":{"assembly":"hg19","track":"hg19","url":"default"},
         "publish":{"publish":True},"publish_existing":{"publish":True,"destination":"existing"},"publish_existing_corrupt":{"publish":True,"destination":"existing","input":"corrupt"},
         "publish_dangling":{"publish":True,"destination":"dangling"},"publish_directory":{"publish":True,"destination":"directory"},
@@ -238,6 +240,8 @@ def outcome(folder,measured,settings,reference_arm):
 
 def check(args):
     if pin(args.producer)["sha256"]!=PRODUCER_SHA:raise RuntimeError("Oracle source differs")
+    unknown=set(args.only or ())-catalogue().keys()
+    if unknown:raise ValueError("Cases outside the qualified regular-executable profile: "+", ".join(sorted(unknown)))
     args.work_root.mkdir(parents=True,exist_ok=False);fixture_root=args.work_root/"fixtures";fixture_root.mkdir()
     helper=load(args.producer.parent.parent/"tests/test_conservation_resource_check.py","conservation_fixtures")
     guard=helper.guard;fixtures={}
@@ -278,7 +282,7 @@ def check(args):
         folder=args.work_root/("admission_"+name);folder.mkdir()
         measured=run([args.binary,"conservation-resource",*tail],folder,"native",dict(os.environ))
         admission[name]=dict(measurement=measured,expected=expected,passed=measured["returncode"]==expected)
-    report=dict(producer=pin(args.producer),comparator=pin(Path(__file__)),binary=pin(args.binary),cases=cases,
+    report=dict(producer=pin(args.producer),comparator=pin(Path(__file__)),binary=pin(args.binary),cases=cases,unqualified=UNQUALIFIED,
         admission=admission,count=len(cases),successes=sum(c["outcomes"]["python"]["exit"]==0 for c in cases.values()),
         failed=[name for name,c in cases.items() if not c["exact"]]+["admission_"+name for name,c in admission.items() if not c["passed"]],
         stderr_format="Native prefix/category and reference traceback formatting are reported separately from exact exception message/category.")

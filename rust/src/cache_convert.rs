@@ -16,6 +16,8 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::time::Instant;
 
+pub(crate) mod common;
+
 pub(crate) const CLINVAR_AA_STAT: Schema = Schema {
     name: "clinvar_aa_stat",
     id: 1,

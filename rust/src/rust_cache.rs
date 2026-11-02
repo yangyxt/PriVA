@@ -205,9 +205,19 @@ where
     pub(crate) fn open(path: &str, schema: Schema) -> Result<MappedCache<T>> {
         let file = std::fs::File::open(path)
             .map_err(|error| invalid(format!("FileNotFoundError: {path}: {error}")))?;
+        Self::open_file(&file, path, schema)
+    }
+
+    /// Versioned readers inspect and map the same open file, so an atomic path
+    /// replacement cannot separate header selection from archive validation.
+    pub(crate) fn open_file(
+        file: &std::fs::File,
+        path: &str,
+        schema: Schema,
+    ) -> Result<MappedCache<T>> {
         // SAFETY: cache files are immutable once renamed into place (see `write_cache`); the
         // whole archive is validated below before any reference is handed out.
-        let map = unsafe { memmap2::Mmap::map(&file)? };
+        let map = unsafe { memmap2::Mmap::map(file)? };
         let archive = archive_bytes(&map, schema, path)?;
         rkyv::access::<T::Archived, rancor::Error>(archive).map_err(|error| {
             invalid(format!(

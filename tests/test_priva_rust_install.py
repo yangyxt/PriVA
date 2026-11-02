@@ -451,6 +451,48 @@ debug = 0
                 B.cold_build(self.cache, self.source, state, self.args(imported=False))
         self.assertFalse(list(self.cache.glob('*/receipt.json')))
 
+    def test_yaml_build_pins_static_header_and_keeps_caller_search_path(self):
+        prefix = self.folder / 'python'; pc = prefix / 'lib/pkgconfig'
+        pc.mkdir(parents=True); (prefix/'include').mkdir()
+        archive = prefix/'lib/libyaml.a'; archive.write_bytes(b'static YAML fixture')
+        header = prefix/'include/yaml.h'; header.write_bytes(b'public header fixture')
+        state = {'files': {'rust/src/installed_environment/yaml_bridge.c': 'fixture'}}
+        env = dict(PATH='/fixture/bin', PKG_CONFIG_PATH='/explicit/pkgconfig')
+        with mock.patch.object(B.sys, 'prefix', str(prefix)), \
+             mock.patch.object(B.shutil, 'which', return_value='/fixture/bin/pkg-config'), \
+             mock.patch.object(B.subprocess, 'check_output', side_effect=['0.2.5\n', str(prefix/'lib')+'\n', str(prefix/'include')+'\n']):
+            result = B.yaml_build_dependency(state, env)
+        self.assertEqual(result, dict(name='yaml-0.1', version='0.2.5', static_archive_sha256=B.sha(archive.read_bytes()), header_sha256=B.sha(header.read_bytes())))
+        self.assertEqual(env['PKG_CONFIG_PATH'], '/explicit/pkgconfig'+os.pathsep+str(pc))
+
+    def test_yaml_dependency_is_inactive_for_older_sources(self):
+        env = {'PATH': '/unchanged'}
+        with mock.patch.object(B.subprocess, 'check_output') as invoked:
+            self.assertIsNone(B.yaml_build_dependency({'files': {}}, env))
+        invoked.assert_not_called(); self.assertEqual(env, {'PATH': '/unchanged'})
+
+    def test_yaml_build_refuses_a_dynamic_only_environment(self):
+        lib = self.folder/'lib'; lib.mkdir(); (lib/'libyaml.so').write_bytes(b'dynamic fixture')
+        state = {'files': {'rust/src/installed_environment/yaml_bridge.c': 'fixture'}}
+        with mock.patch.object(B.shutil, 'which', return_value='/fixture/pkg-config'), \
+             mock.patch.object(B.subprocess, 'check_output', side_effect=['0.2.5\n', str(lib)+'\n', str(lib)+'\n']):
+            with self.assertRaisesRegex(ValueError, 'static archive libyaml.a'):
+                B.yaml_build_dependency(state, dict(PATH='/fixture'))
+
+    def test_yaml_dependency_change_during_compile_prevents_publication(self):
+        state = B.source_state(self.source)
+        tools = self.folder/'tools'; tools.mkdir()
+        def cargo(argv, **kwargs):
+            binary = Path(kwargs['env']['CARGO_TARGET_DIR'])/'release/priva'
+            binary.parent.mkdir(parents=True); binary.write_bytes(elf(b'cold')); binary.chmod(0o700)
+        with mock.patch.object(B, 'obtain_toolchain', return_value=tools), \
+             mock.patch.object(B, 'toolchain_descriptor', return_value={}), \
+             mock.patch.object(B, 'yaml_build_dependency', side_effect=[{'static_archive_sha256':'before'}, {'static_archive_sha256':'changed'}]), \
+             mock.patch.object(B.subprocess, 'run', side_effect=cargo):
+            with self.assertRaisesRegex(ValueError, 'dependency changed'):
+                B.cold_build(self.cache, self.source, state, self.args(imported=False))
+        self.assertFalse(list(self.cache.glob('*/receipt.json')))
+
     def test_automatic_toolchain_setup_uses_owned_roots_and_no_modify_path(self):
         state = B.source_state(self.source); base = B.managed_base(self.cache, create=True)
         compiler = dict(channel=state["channel"], host=B.HOST, files={})

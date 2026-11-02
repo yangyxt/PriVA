@@ -118,12 +118,12 @@ thread starts.
 
 | Script | Lines | Status |
 | --- | ---: | --- |
-| `scripts/SpliceVault_tsv_vcf_conversion.py` | 192 | Python |
+| `scripts/SpliceVault_tsv_vcf_conversion.py` | 192 | Optional `priva splicevault-convert` retains the chunked CrossMap VCF/BED workflow and the original plain/gzip table behavior. Other compression formats remain under qualification; installer callers remain Python. |
 | `scripts/alphamissense_annotation_base.py` | 611 | Python |
 | `scripts/alphamissense_cache.py` | 363 | Python |
 | `scripts/alphamissense_domain_cache.py` | 620 | Python |
 | `scripts/alphamissense_original_cache.py` | 368 | Python |
-| `scripts/alphmis_tsv2vcf.py` | 85 | Python |
+| `scripts/alphmis_tsv2vcf.py` | 85 | Optional `priva alphamissense-vcf` projects the indexed score table to VCF while retaining the original bgzip/tabix invocation and child-failure behavior. Installer callers remain Python. |
 | `scripts/am_pick_intolerant_domains.py` | 1,748 | Python |
 | `scripts/am_pick_missense_constrained_segments.py` | 1,275 | Python |
 | `scripts/audit_clinvar_gofcards_review_tiers.py` | 154 | Python |
@@ -135,19 +135,19 @@ thread starts.
 | `scripts/build_gene_pathogenic_mechanism_cache.py` | 1,868 | Python |
 | `scripts/build_gofcards_exact_gof_cache.py` | 1,061 | Python |
 | `scripts/build_hpo_condition_mechanism_cache.py` | 2,102 | Python |
-| `scripts/build_mondo_disease_scope.py` | 529 | Python |
+| `scripts/build_mondo_disease_scope.py` | 529 | Optional `priva mondo-scope` provides `build` and `annotate` procedures. Installer callers remain Python; resource-dependent malformed XML cases remain outside the qualified profile. |
 | `scripts/clinvar_annotation_contract.py` | 244 | Python |
 | `scripts/clinvar_gene_refresh.py` | 1,201 | Python |
 | `scripts/clinvar_stat_variants.py` | 373 | Python |
-| `scripts/collapse_HPO_anno.py` | 268 | Python |
+| `scripts/collapse_HPO_anno.py` | 268 | Optional `priva hpo-assertions build` produces ordered HPO assertions. Installer callers remain Python; use the pinned input/parser profile. |
 | `scripts/domain_metadata_cache.py` | 168 | Python |
 | `scripts/inject_clinvar_into_gofcards.py` | 232 | Python |
-| `scripts/prepare_clingen_map.py` | 64 | Python |
-| `scripts/prepare_pm1_regions.py` | 397 | Python |
+| `scripts/prepare_clingen_map.py` | 64 | Optional `priva clingen-map` writes checked native ClinGen archives directly from the existing eRepo input. Version 2 retains source types not representable in version 1; installer callers remain Python. |
+| `scripts/prepare_pm1_regions.py` | 397 | Optional `priva pm1-regions` builds the cache from prepared DAS, HCSeeker, RMC and transcript mappings. It does not regenerate DAS. Installer callers remain Python. |
 | `scripts/resort_step3_only.py` | 76 | Python |
-| `scripts/stat_aachange_clinvar.py` | 371 | Python |
-| `scripts/stat_exon_patho_afs.py` | 238 | Python |
-| `scripts/stat_gene_patho_afs.py` | 216 | Python |
+| `scripts/stat_aachange_clinvar.py` | 371 | Optional `priva clinvar-aa-splice` provides `build`, `chromosome` and ordered `merge` procedures for both native caches. Splice version 2 retains nullable fields and partial score dictionaries. Installer callers remain Python. |
+| `scripts/stat_exon_patho_afs.py` | 238 | Optional `priva clinvar-exon-af` provides `build`, `chromosome` and ordered `merge` procedures with the pinned NumPy reduction profile. Installer callers remain Python. |
+| `scripts/stat_gene_patho_afs.py` | 216 | Optional `priva clinvar-gene-af` provides `build`, `chromosome` and ordered `merge` procedures. Native schema version 2 preserves Boolean values where the producer retains them. Installer callers remain Python. |
 | `scripts/stat_protein_domain_amscores.py` | 396 | Python |
 
 ### 5. Installer and cluster deployment helpers

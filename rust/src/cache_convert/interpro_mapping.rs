@@ -57,7 +57,7 @@ pub(crate) struct InterproMapping {
     pub(crate) entries: Vec<Vec<InterproEntry>>,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub(crate) struct PlainEntry {
     pub(crate) id: String,
     pub(crate) kind: String,
@@ -381,6 +381,38 @@ pub(crate) fn export(path: &str, out: &mut dyn Write) -> Result<usize> {
         )?;
     }
     Ok(cache.len())
+}
+
+/// Publish a native XML producer's complete mapping through the same frozen
+/// schema as conversion. The producer retains the list order and duplicates;
+/// only dictionary lookup keys are sorted by the archive representation.
+pub(crate) fn write_produced(
+    output: &Path,
+    entries: &PlainMapping,
+    provenance: Vec<Provenance>,
+) -> Result<()> {
+    let previous_mode = match std::fs::metadata(output) {
+        Ok(metadata) => Some(metadata.permissions()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(error) => return Err(error.into()),
+    };
+    let archive = build(entries.clone(), provenance)?;
+    write_cache_checked(output, SCHEMA, &archive, |staged| {
+        let cache = InterproCache::open(&staged.to_string_lossy())?;
+        if cache.len() != entries.len() {
+            return Err(invalid("the native InterPro mapping changed key count"));
+        }
+        for ((database, accession), expected) in entries {
+            if cache.plain(database, accession).as_ref() != Some(expected) {
+                return Err(invalid("the native InterPro mapping changed a value"));
+            }
+        }
+        // The original atomic writer preserves an existing destination's mode.
+        if let Some(mode) = previous_mode {
+            std::fs::set_permissions(staged, mode)?;
+        }
+        Ok(())
+    })
 }
 
 pub(crate) fn convert(pickle: &str, output: &Path) -> Result<String> {

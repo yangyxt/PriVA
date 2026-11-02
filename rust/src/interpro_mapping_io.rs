@@ -220,6 +220,9 @@ pub(crate) fn inspect_mapping(path: &str) -> Result<String> {
 }
 
 pub(crate) fn dispatch(args: &[String]) -> Result<()> {
+    if args.first().map(String::as_str) == Some("build") {
+        return crate::interpro_mapping_builder::dispatch(&args[1..]);
+    }
     if args == ["--help"]
         || args == ["-h"]
         || args == ["inspect", "--help"]

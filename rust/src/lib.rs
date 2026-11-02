@@ -24,6 +24,7 @@ mod file_lock;
 mod gzip_writer;
 mod hpo_assertions;
 pub mod hpo_penetrance;
+mod interpro_mapping_builder;
 pub mod interpro_mapping_io;
 mod json_text;
 #[allow(

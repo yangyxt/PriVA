@@ -33,3 +33,6 @@ debug = 0
 [profile.release]
 codegen-units = 16
 lto = false
+
+[build-dependencies]
+pkg-config = "=0.3.34"

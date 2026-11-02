@@ -51,6 +51,29 @@ This prepares `priva_acmg`, reuses bundled snapshots, acquires/builds other reso
 
 The Rust workflow reads checked `.rkyv` caches using the existing configuration keys. InterPro and assembly-specific ClinGen archives are bundled. The larger ClinVar gene archive is generated during installation from the bundled pickle under `cache_root`, along with conversions of the other prepared caches. Original pickles remain available to the cache builders. Installation publishes native paths after conversion succeeds and reuses completed conversions on later runs; changing the storage format does not require repeating VEP annotation. See [cache formats and installation](rust/CACHE_FORMATS.md#6-distribution-and-installation).
 
+Building `priva` also needs `pkg-config` and Expat's static development library
+(`expat >=2.6.0` in the supplied environment recipe; `libexpat1-dev` on Debian or
+Ubuntu). The installer discovers the active Python environment's package metadata
+and records the selected library version and SHA256 in the build profile. Expat
+is linked into the executable, so running `priva` needs no separate XML library.
+Redistributions must retain the [Expat](rust/src/EXPAT_LICENSE) and
+[CPython](rust/src/PYTHON_LICENSE) notices with the program.
+
+To rebuild only the InterPro member-signature mapping from an already acquired,
+version-pinned XML file, use the optional procedure:
+
+```bash
+"$PRIVA_BINARY" interpro-mapping build \
+  --xml /path/to/interpro.xml.gz --output /path/to/interpro.mapping.rkyv
+```
+
+It preserves duplicate member entries, GO terms, source text handling and nested
+element clearing, using Expat and the CPython 3.12 codec fallback profile. The
+archive publishes atomically after complete readback; failure retains the prior
+output. This procedure does not download data or replace the installer's separate
+VCF-format inventory/report workflow. Custom Python-registered codecs are outside
+the standalone source profile. Qualify a new XML/parser profile before adopting it.
+
 For the matching official VEP116 UTRAnnotator module, the installer deploys
 deterministic reporting of all calculated UTR effects and retains the original
 module and patch. The biological calculations are unchanged; other VEP releases

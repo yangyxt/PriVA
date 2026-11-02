@@ -22,6 +22,7 @@ pub(crate) struct TabixIndex {
     column_end: i32,
     meta_character: u8,
     references: Vec<ReferenceIndex>,
+    bin_limit: u32,
 }
 
 struct ReferenceIndex {
@@ -70,6 +71,16 @@ impl<'a> Cursor<'a> {
 }
 
 pub(crate) fn read_index(path: &Path) -> Result<TabixIndex, String> {
+    load_index(path, false)
+}
+
+/// VariantFile permits both TBI and CSI indexes. Existing TabixFile callers
+/// retain their original TBI-only entry point above.
+pub(crate) fn read_variant_index(path: &Path) -> Result<TabixIndex, String> {
+    load_index(path, true)
+}
+
+fn load_index(path: &Path, allow_csi: bool) -> Result<TabixIndex, String> {
     let file = File::open(path).map_err(|error| format!("{}: {error}", path.display()))?;
     let mut data = Vec::new();
     MultiGzDecoder::new(file)
@@ -79,18 +90,76 @@ pub(crate) fn read_index(path: &Path) -> Result<TabixIndex, String> {
         data: &data,
         position: 0,
     };
-    if cursor.take(4)? != b"TBI\x01" {
+    let magic = cursor.take(4)?;
+    let csi = allow_csi && magic == b"CSI\x01";
+    if magic != b"TBI\x01" && !csi {
         return Err(format!("{} is not a tabix index", path.display()));
     }
-    let reference_count = cursor.count()?;
-    let format = cursor.int32()?;
-    let column_sequence = cursor.int32()?;
-    let column_begin = cursor.int32()?;
-    let column_end = cursor.int32()?;
-    let meta = cursor.int32()?;
-    let _skip_lines = cursor.int32()?;
-    let names_length = cursor.count()?;
-    let names_block = cursor.take(names_length)?;
+    let (
+        reference_count,
+        format,
+        column_sequence,
+        column_begin,
+        column_end,
+        meta,
+        names_block,
+        bin_limit,
+    ) = if csi {
+        cursor.count()?; // min_shift: only complete-contig requests use this API.
+        let depth = cursor.count()?;
+        let shift = u32::try_from(
+            depth
+                .checked_mul(3)
+                .and_then(|n| n.checked_add(3))
+                .ok_or("CSI depth overflow")?,
+        )
+        .map_err(|_| "CSI depth overflow")?;
+        let bin_limit =
+            u32::try_from((1_u64.checked_shl(shift).ok_or("CSI depth overflow")? - 1) / 7)
+                .map_err(|_| "CSI depth overflow")?;
+        let length = cursor.count()?;
+        let mut aux = Cursor {
+            data: cursor.take(length)?,
+            position: 0,
+        };
+        let format = aux.int32()?;
+        let sequence = aux.int32()?;
+        let begin = aux.int32()?;
+        let end = aux.int32()?;
+        let meta = aux.int32()?;
+        aux.int32()?;
+        let names_length = aux.count()?;
+        let names = aux.take(names_length)?;
+        (
+            cursor.count()?,
+            format,
+            sequence,
+            begin,
+            end,
+            meta,
+            names,
+            bin_limit,
+        )
+    } else {
+        let count = cursor.count()?;
+        let format = cursor.int32()?;
+        let sequence = cursor.int32()?;
+        let begin = cursor.int32()?;
+        let end = cursor.int32()?;
+        let meta = cursor.int32()?;
+        cursor.int32()?;
+        let length = cursor.count()?;
+        (
+            count,
+            format,
+            sequence,
+            begin,
+            end,
+            meta,
+            cursor.take(length)?,
+            37449,
+        )
+    };
     let mut names: Vec<String> = Vec::new();
     for part in names_block.split(|byte| *byte == 0).take(reference_count) {
         names.push(String::from_utf8_lossy(part).into_owned());
@@ -104,6 +173,9 @@ pub(crate) fn read_index(path: &Path) -> Result<TabixIndex, String> {
         let mut bins = HashMap::new();
         for _ in 0..bin_count {
             let bin = cursor.uint32()?;
+            if csi {
+                cursor.uint64()?; // loffset, not needed by whole-contig requests.
+            }
             let chunk_count = cursor.count()?;
             let mut chunks = Vec::new();
             for _ in 0..chunk_count {
@@ -113,7 +185,7 @@ pub(crate) fn read_index(path: &Path) -> Result<TabixIndex, String> {
             }
             bins.insert(bin, chunks);
         }
-        let window_count = cursor.count()?;
+        let window_count = if csi { 0 } else { cursor.count()? };
         let mut linear = Vec::new();
         for _ in 0..window_count {
             linear.push(cursor.uint64()?);
@@ -128,6 +200,7 @@ pub(crate) fn read_index(path: &Path) -> Result<TabixIndex, String> {
         column_end,
         meta_character: u8::try_from(meta).unwrap_or(b'#'),
         references,
+        bin_limit,
     })
 }
 
@@ -152,6 +225,7 @@ struct BgzfReader {
     block_start: u64,
     next_start: u64,
     position: usize,
+    strict: bool,
 }
 
 impl BgzfReader {
@@ -163,6 +237,7 @@ impl BgzfReader {
             block_start: 0,
             next_start: 0,
             position: 0,
+            strict: false,
         })
     }
 
@@ -231,12 +306,23 @@ impl BgzfReader {
             .read_exact(&mut footer)
             .map_err(|error| error.to_string())?;
         let expected = u32::from_le_bytes([footer[4], footer[5], footer[6], footer[7]]) as usize;
+        if self.strict && expected > 65536 {
+            return Err("a BGZF block exceeds its maximum decoded size".to_owned());
+        }
         let mut decoded = Vec::with_capacity(expected);
         DeflateDecoder::new(&compressed[..])
             .read_to_end(&mut decoded)
             .map_err(|error| format!("a bgzip block is corrupt: {error}"))?;
         if decoded.len() != expected {
             return Err("a bgzip block has the wrong length".to_owned());
+        }
+        if self.strict {
+            let expected_crc = u32::from_le_bytes(footer[..4].try_into().unwrap());
+            let mut crc = flate2::Crc::new();
+            crc.update(&decoded);
+            if crc.sum() != expected_crc {
+                return Err("a BGZF block has a corrupt CRC".to_owned());
+            }
         }
         self.block = decoded;
         self.next_start = offset + total_size as u64;
@@ -295,6 +381,61 @@ impl BgzfReader {
             Ok(Some(line))
         }
     }
+}
+
+/// Visit a complete chromosome in indexed source order. This opt-in reader
+/// checks BGZF CRCs and supports CSI; the established regional reader is unchanged.
+pub(crate) fn fetch_contig_lines(
+    data_path: &Path,
+    index: &TabixIndex,
+    contig: &str,
+    visit: &mut dyn FnMut(&[u8]) -> Result<(), String>,
+) -> Result<(), String> {
+    let Some(id) = index.names.iter().position(|name| name == contig) else {
+        // A header contig with no records need not occur in the tabix catalogue.
+        return Ok(());
+    };
+    let mut chunks: Vec<_> = index.references[id]
+        .bins
+        .iter()
+        .filter(|(bin, _)| **bin < index.bin_limit)
+        .flat_map(|(_, chunks)| chunks.iter().copied())
+        .collect();
+    chunks.sort();
+    let mut merged: Vec<(u64, u64)> = Vec::new();
+    for (start, stop) in chunks {
+        if let Some(last) = merged.last_mut() {
+            if start <= last.1 {
+                last.1 = last.1.max(stop);
+                continue;
+            }
+        }
+        merged.push((start, stop));
+    }
+    let mut reader = BgzfReader::open(data_path)?;
+    reader.strict = true;
+    for (start, stop) in merged {
+        reader.seek_virtual(start)?;
+        while reader.tell() < stop {
+            let Some(line) = reader.read_line()? else {
+                break;
+            };
+            if line.is_empty() || line.first() == Some(&index.meta_character) {
+                continue;
+            }
+            let (chrom, begin, end) = line_interval(index, &line)?;
+            if begin < -1 {
+                return Err("unable to parse a negative VCF position".to_owned());
+            }
+            if chrom != contig || begin >= i32::MAX as i64 {
+                return Ok(());
+            }
+            if end > 0 {
+                visit(&line)?;
+            }
+        }
+    }
+    Ok(())
 }
 
 fn column<'a>(fields: &[&'a str], wanted: i32) -> Result<&'a str, String> {

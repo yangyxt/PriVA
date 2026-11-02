@@ -224,13 +224,13 @@ fn parse_curated(text: &str) -> Result<(ProducerColumn, ProducerColumn)> {
 }
 
 #[derive(Clone, Copy)]
-enum FormatType {
+pub(crate) enum FormatType {
     Integer,
     Float,
     Text,
 }
 
-fn format_definition(line: &[u8]) -> Option<(String, FormatType)> {
+pub(crate) fn format_definition(line: &[u8]) -> Option<(String, FormatType)> {
     let line = std::str::from_utf8(line).ok()?;
     let body = line.strip_prefix("##FORMAT=<")?.strip_suffix('>')?;
     let mut fields = Vec::new();
@@ -277,7 +277,7 @@ fn integer_format(text: &str, negative: bool) -> bool {
 
 /// pysam parses sample fields before exposing a record. Invalid GT/numeric
 /// FORMAT data must therefore fail even though this producer only uses its ID.
-fn check_samples<'a>(
+pub(crate) fn check_samples<'a>(
     columns: &mut impl Iterator<Item = &'a [u8]>,
     samples: usize,
     types: &HashMap<String, FormatType>,
@@ -548,7 +548,7 @@ fn input_provenance(table: &Path, vcf: &Path) -> Result<Vec<Provenance>> {
 
 /// `pysam.VariantFile` accepts BGZF, but refuses ordinary gzip VCFs because
 /// its record reader needs BGZF seeking. Table gzip is independently supported.
-fn check_vcf_compression(path: &Path) -> Result<()> {
+pub(crate) fn check_vcf_compression(path: &Path) -> Result<()> {
     let mut file = std::fs::File::open(path)?;
     let mut prefix = [0_u8; 12];
     let count = file.read(&mut prefix)?;

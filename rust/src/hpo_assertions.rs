@@ -227,17 +227,19 @@ pub(crate) fn dispatch(args: &[String]) -> Result<()> {
             .unwrap_or("0.999"),
     )
     .ok_or_else(|| invalid("--minimum-match-rate requires a float"))?;
-    let (mut assertions, mut summary) = build(Path::new(genes), Path::new(hpoa), minimum)?;
-    if let Some(path) = options.get("disease-scope-registry") {
-        assertions =
-            crate::mondo_scope::annotate(&assertions, &table::read(Path::new(path), false)?)?;
-        if let Json::Object(fields) = &mut summary {
-            fields.push((
-                "annotated_rows".to_owned(),
-                Json::Int(assertions.rows as i128),
-            ));
+    crate::builder_error::finish((|| {
+        let (mut assertions, mut summary) = build(Path::new(genes), Path::new(hpoa), minimum)?;
+        if let Some(path) = options.get("disease-scope-registry") {
+            assertions =
+                crate::mondo_scope::annotate(&assertions, &table::read(Path::new(path), false)?)?;
+            if let Json::Object(fields) = &mut summary {
+                fields.push((
+                    "annotated_rows".to_owned(),
+                    Json::Int(assertions.rows as i128),
+                ));
+            }
         }
-    }
-    table::publish(&assertions, Path::new(output), Publication::Hpo)?;
-    table::print_summary(&summary)
+        table::publish(&assertions, Path::new(output), Publication::Hpo)?;
+        table::print_summary(&summary)
+    })())
 }

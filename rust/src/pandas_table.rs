@@ -1012,7 +1012,16 @@ fn parse_table_impl(
             Ok(())
         },
     )?;
-    let mut names = names.ok_or_else(|| invalid("no columns to parse from the table"))?;
+    let mut names = names.ok_or_else(|| {
+        if builder_cr_compatibility {
+            crate::builder_error::category(
+                "EmptyDataError",
+                invalid("No columns to parse from file"),
+            )
+        } else {
+            invalid("no columns to parse from the table")
+        }
+    })?;
     if let (Header::Names(given), Some(UseColumns::Positions(positions))) =
         (&options.header, &options.use_columns)
     {
@@ -1118,7 +1127,7 @@ pub(crate) fn read_table_with(path: &Path, options: &ReadOptions) -> Result<Tabl
 /// existing behavior. No implicit index or non-gzip compression is added.
 pub(crate) fn read_builder_table(path: &Path, comments: bool) -> Result<Table> {
     parse_table_impl(
-        &read_table_text(path)?,
+        &read_table_text_impl(path, true)?,
         &ReadOptions {
             all_text: true,
             keep_default_na: false,
@@ -1127,16 +1136,29 @@ pub(crate) fn read_builder_table(path: &Path, comments: bool) -> Result<Table> {
         },
         true,
     )
+    .map_err(|error| crate::builder_error::category("ParserError", error))
 }
 
 /// Decode the same filename-selected compression and UTF-8 as `read_table`.
 /// Producers with additional pandas index/dtype rules can reuse its tokenizer.
 pub(crate) fn read_table_text(path: &Path) -> Result<String> {
+    read_table_text_impl(path, false)
+}
+
+fn read_table_text_impl(path: &Path, builder_errors: bool) -> Result<String> {
     let name = path.to_string_lossy().to_lowercase();
     let mut bytes = Vec::new();
     let mut file = File::open(path)?;
     if name.ends_with(".gz") {
-        MultiGzDecoder::new(file).read_to_end(&mut bytes)?;
+        MultiGzDecoder::new(file)
+            .read_to_end(&mut bytes)
+            .map_err(|error| {
+                if builder_errors {
+                    crate::builder_error::gzip(error)
+                } else {
+                    error.into()
+                }
+            })?;
     } else if [".bz2", ".xz", ".zip", ".zst", ".tar"]
         .iter()
         .any(|extension| name.ends_with(*extension))
@@ -1148,8 +1170,14 @@ pub(crate) fn read_table_text(path: &Path) -> Result<String> {
     } else {
         file.read_to_end(&mut bytes)?;
     }
-    let text = String::from_utf8(bytes)
-        .map_err(|_| invalid(format!("{}: not UTF-8 text", path.display())))?;
+    let text = String::from_utf8(bytes).map_err(|_| {
+        let error = invalid(format!("{}: not UTF-8 text", path.display()));
+        if builder_errors {
+            crate::builder_error::category("UnicodeDecodeError", error)
+        } else {
+            error
+        }
+    })?;
     Ok(text)
 }
 

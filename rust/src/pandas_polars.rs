@@ -427,6 +427,17 @@ fn row_numbers(frame: &DataFrame) -> Result<Vec<usize>> {
 /// Null keys match null keys, as in pandas. Payloads stay in `pandas_table` so
 /// the join cannot infer or coerce their dtypes. `unique_right` implements the
 /// `many_to_one` validation over the entire right table, including unused keys.
+#[derive(Debug)]
+pub(crate) struct NonUniqueRightKeys;
+
+impl std::fmt::Display for NonUniqueRightKeys {
+    fn fmt(&self, out: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        out.write_str("Merge keys are not unique in right dataset; not a many-to-one merge")
+    }
+}
+
+impl std::error::Error for NonUniqueRightKeys {}
+
 pub(crate) fn left_join_text_rows(
     left: &Table,
     right: &Table,
@@ -444,9 +455,7 @@ pub(crate) fn left_join_text_rows(
         }
     }
     if unique_right && drop_duplicates_first(right, Some(keys))?.len() != right.rows {
-        return Err(invalid(
-            "Merge keys are not unique in right dataset; not a many-to-one merge",
-        ));
+        return Err(Box::new(NonUniqueRightKeys));
     }
     let (left_frame, names) = keyed_frame(left, keys)?;
     let (mut right_frame, _) = keyed_frame(right, keys)?;

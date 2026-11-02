@@ -89,11 +89,14 @@ fn first_word(value: &str) -> Result<String> {
         .split(|ch: char| ch.is_whitespace() || matches!(ch, '\u{1c}'..='\u{1f}'))
         .find(|word| !word.is_empty())
         .map(str::to_owned)
-        .ok_or_else(|| invalid("list index out of range"))
+        .ok_or_else(|| {
+            crate::builder_error::category("IndexError", invalid("list index out of range"))
+        })
 }
 
 fn parse_obo(path: &Path) -> Result<(String, BTreeMap<String, Term>)> {
-    let contents = fs::read_to_string(path)?;
+    let contents = String::from_utf8(fs::read(path)?)
+        .map_err(|error| crate::builder_error::category("UnicodeDecodeError", error.into()))?;
     let mut version = String::new();
     let mut terms = BTreeMap::new();
     let mut raw: Option<Term> = None;
@@ -623,31 +626,38 @@ pub(crate) fn dispatch(args: &[String]) -> Result<()> {
             .ok_or_else(|| invalid(format!("missing --{name}")))
     };
     if args[0] == "annotate" {
-        let assertions = table::read(required("hpo-assertions")?, true)?;
-        let registry = table::read(required("registry")?, true)?;
-        let output = annotate(&assertions, &registry)?;
-        table::publish(&output, required("output")?, Publication::Mondo)?;
-        return table::print_summary(&table::json_counts([
-            ("assertion_rows", output.rows),
-            ("registry_rows", registry.rows),
-            ("annotated_rows", output.rows),
-        ]));
+        let assertions_path = required("hpo-assertions")?;
+        let registry_path = required("registry")?;
+        let output_path = required("output")?;
+        return crate::builder_error::finish((|| {
+            let assertions = table::read(assertions_path, true)?;
+            let registry = table::read(registry_path, true)?;
+            let output = annotate(&assertions, &registry)?;
+            table::publish(&output, output_path, Publication::Mondo)?;
+            table::print_summary(&table::json_counts([
+                ("assertion_rows", output.rows),
+                ("registry_rows", registry.rows),
+                ("annotated_rows", output.rows),
+            ]))
+        })());
     }
     let obo = required("mondo-obo")?;
     let assertion_path = required("hpo-assertions")?;
     let output = required("registry-output")?;
-    let (registry, mut summary) = build(
-        obo,
-        assertion_path,
-        options.get("manual-overrides").map(Path::new),
-    )?;
-    table::publish(&registry, output, Publication::Mondo)?;
-    if let Some(output) = options.get("annotated-assertions-output") {
-        let scoped = annotate(&table::read(assertion_path, true)?, &registry)?;
-        table::publish(&scoped, Path::new(output), Publication::Mondo)?;
-        if let Json::Object(fields) = &mut summary {
-            fields.push(("annotated_rows".to_owned(), Json::Int(scoped.rows as i128)));
+    crate::builder_error::finish((|| {
+        let (registry, mut summary) = build(
+            obo,
+            assertion_path,
+            options.get("manual-overrides").map(Path::new),
+        )?;
+        table::publish(&registry, output, Publication::Mondo)?;
+        if let Some(output) = options.get("annotated-assertions-output") {
+            let scoped = annotate(&table::read(assertion_path, true)?, &registry)?;
+            table::publish(&scoped, Path::new(output), Publication::Mondo)?;
+            if let Json::Object(fields) = &mut summary {
+                fields.push(("annotated_rows".to_owned(), Json::Int(scoped.rows as i128)));
+            }
         }
-    }
-    table::print_summary(&summary)
+        table::print_summary(&summary)
+    })())
 }

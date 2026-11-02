@@ -73,7 +73,12 @@ pub(crate) fn select(table: &Table, names: &[&str]) -> Result<Table> {
         names: names.iter().map(|name| (*name).to_owned()).collect(),
         columns: names
             .iter()
-            .map(|name| table.column(name).cloned())
+            .map(|name| {
+                table
+                    .column(name)
+                    .cloned()
+                    .map_err(|error| crate::builder_error::category("KeyError", error))
+            })
             .collect::<Result<_>>()?,
         rows: table.rows,
     })

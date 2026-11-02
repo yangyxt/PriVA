@@ -823,6 +823,7 @@ function SpliceAI2_install() {
     identities=$(python - "${config_file}" "${manifest}" "${output_dir}" <<'PY'
 import hashlib
 import json
+import os
 from pathlib import Path
 import sys
 import yaml
@@ -4788,7 +4789,6 @@ function priva_cache_install_begin() {
     identity=$(printf '%s' "$PRIVA_CACHE_INSTALL_ORIGINAL" | sha256sum) || return 1
     identity=${identity%% *}
     PRIVA_CACHE_INSTALL_BUILD_CONFIG=$(python - "$cache_root" "$identity" <<'PRIVA_PRIVATE_PARENT_PY'
-import os
 from pathlib import Path
 import stat
 import sys
@@ -4814,6 +4814,13 @@ else:
 print(parent / "build.yaml")
 PRIVA_PRIVATE_PARENT_PY
     ) || return 1
+    # Lock before prepare: two warm callers must not both reset the completed
+    # private view before either starts its builder phase.
+    exec {PRIVA_CACHE_INSTALL_LOCK_FD}>"${PRIVA_CACHE_INSTALL_BUILD_CONFIG}.lock" || return 1
+    flock -n "$PRIVA_CACHE_INSTALL_LOCK_FD" || {
+        log "ERROR: Another installation is using this private builder configuration."
+        return 1
+    }
     "$PRIVA_CACHE_INSTALL_BINARY" cache-install prepare \
         --config "$PRIVA_CACHE_INSTALL_ORIGINAL" --build-config "$PRIVA_CACHE_INSTALL_BUILD_CONFIG" \
         --source-root "$BASE_DIR" || return 1
@@ -4824,13 +4831,6 @@ PRIVA_PRIVATE_PARENT_PY
         return 1
     }
 
-    # prepare checks/creates the managed parent and retains an interrupted view.
-    # The lock covers the builder phase too; a second caller must not write it.
-    exec {PRIVA_CACHE_INSTALL_LOCK_FD}>"${PRIVA_CACHE_INSTALL_BUILD_CONFIG}.lock" || return 1
-    flock -n "$PRIVA_CACHE_INSTALL_LOCK_FD" || {
-        log "ERROR: Another installation is using this private builder configuration."
-        return 1
-    }
 }
 
 

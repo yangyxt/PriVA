@@ -11,6 +11,7 @@ import pickle
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 
 import yaml
@@ -219,6 +220,50 @@ ClinVar_AA_stat "$CONFIG"
         result, _ = self.execute(body, FAIL_BUILDER="0")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(yaml.safe_load(self.config.read_text())["attempt"], 2)
+
+    def test_second_caller_cannot_prepare_while_first_builder_holds_lock(self):
+        ready = self.root / "first-builder-ready"
+        release = self.root / "release-first-builder"
+        body = r'''
+_priva_cache_builder_ClinVar_AA_stat() {
+    printf '\nprivate_progress: retained\n' >> "$1"
+    record_event builder_entered "$@"
+    : > "$READY"
+    while [[ ! -e $RELEASE ]]; do sleep 0.05; done
+    fixture_builder "$@"
+}
+ClinVar_AA_stat "$CONFIG"
+'''
+        first = subprocess.Popen(["bash", "--noprofile", "--norc", "-c", PRELUDE + body],
+            env=dict(self.env, READY=str(ready), RELEASE=str(release)), cwd=self.root,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        original = self.config.read_bytes()
+        try:
+            deadline = time.monotonic() + 15
+            while not ready.exists() and first.poll() is None and time.monotonic() < deadline:
+                time.sleep(0.05)
+            self.assertTrue(ready.exists(), "first builder did not reach its held-lock phase")
+            private = self.private_path().read_bytes()
+            context = Path(str(self.private_path()) + ".cache-install.json").read_bytes()
+            second, events = self.execute(r'''
+_priva_cache_builder_ClinVar_AA_stat() { fixture_builder "$@"; }
+ClinVar_AA_stat "$CONFIG"
+''')
+            self.assertNotEqual(second.returncode, 0)
+            self.assertIn("Another installation", second.stderr)
+            self.assertEqual(sum(row[0] == "prepare" for row in events), 1)
+            self.assertEqual(self.private_path().read_bytes(), private)
+            self.assertEqual(Path(str(self.private_path()) + ".cache-install.json").read_bytes(), context)
+            self.assertEqual(self.config.read_bytes(), original)
+        finally:
+            release.write_text("release\n")
+            try:
+                stdout, stderr = first.communicate(timeout=15)
+            except subprocess.TimeoutExpired:
+                first.kill()
+                first.communicate()
+                raise
+        self.assertEqual(first.returncode, 0, stdout + stderr)
 
     def test_user_edit_during_builder_is_not_overwritten(self):
         result, events = self.execute(r'''

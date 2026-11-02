@@ -11,6 +11,8 @@ pub mod combine_annotations;
 pub mod hpo_penetrance;
 pub mod interpro_mapping_io;
 mod json_text;
+#[allow(dead_code, reason = "Publisher-checksum API awaiting installer-builder callers")]
+mod md5;
 mod pandas_polars;
 mod pandas_table;
 pub mod pedigree_filter;

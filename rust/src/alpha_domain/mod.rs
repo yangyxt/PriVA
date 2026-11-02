@@ -9,7 +9,7 @@ mod metadata;
 mod model;
 mod parquet;
 mod store;
-mod vcf;
+pub(crate) mod vcf;
 
 use crate::builder_error;
 use crate::cli::{Result, invalid};

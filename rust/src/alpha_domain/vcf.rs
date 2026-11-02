@@ -7,25 +7,12 @@ use std::collections::HashMap;
 use std::io::{BufRead, Read};
 use std::path::Path;
 
-pub(super) struct Context {
+pub(crate) struct Context {
     pub header: Header,
     pub fields: HashMap<&'static str, usize>,
 }
 impl Context {
     pub fn new(path: &Path, metadata: bool) -> Result<Self> {
-        constructor_prefix(path)?;
-        let header = vcf_variant::header(path).map_err(|error| {
-            if error.to_string() == "failed to fill whole buffer" {
-                exception(
-                    "ValueError",
-                    "invalid file: VCF format cannot be determined",
-                )
-            } else {
-                source_error(error)
-            }
-        })?;
-        let names =
-            crate::clinvar_aa_splice_builder::whole_header_names(path).map_err(source_error)?;
         let required: &[&'static str] = if metadata {
             &[
                 "DOMAINS",
@@ -45,6 +32,24 @@ impl Context {
                 "Feature",
             ]
         };
+        Self::with_fields(path, required)
+    }
+    /// DAS's sequential ClinVar filter uses the same constructor and rendered
+    /// header rule, but reads its own five CSQ fields. Selection stays local.
+    pub(crate) fn with_fields(path: &Path, required: &[&'static str]) -> Result<Self> {
+        constructor_prefix(path)?;
+        let header = vcf_variant::header(path).map_err(|error| {
+            if error.to_string() == "failed to fill whole buffer" {
+                exception(
+                    "ValueError",
+                    "invalid file: VCF format cannot be determined",
+                )
+            } else {
+                source_error(error)
+            }
+        })?;
+        let names =
+            crate::clinvar_aa_splice_builder::whole_header_names(path).map_err(source_error)?;
         let mut fields = HashMap::new();
         for &name in required {
             let at = names
@@ -289,7 +294,7 @@ pub(super) fn record(
     }
 }
 
-pub(super) fn visit(
+pub(crate) fn visit(
     path: &Path,
     context: &Context,
     chrom: Option<&str>,

@@ -16,6 +16,7 @@ import os
 from pathlib import Path
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import time
@@ -166,6 +167,16 @@ def compare(args,folder,path,spec,seed):
     else:env["PYTHONHASHSEED"]=str(seed)
     tail=[spec.get("command","validate"),"--registry",str(path),*spec.get("options",[])]
     expected=folder/"exception.json"
+    def states():
+        result={}
+        for item in sorted((folder/"input").rglob("*")):
+            value=item.lstat();record=dict(mode=stat.S_IMODE(value.st_mode),bytes=value.st_size,mtime_ns=value.st_mtime_ns)
+            if item.is_symlink():record.update(kind="symlink",target=os.readlink(item))
+            elif item.is_file():record.update(kind="file",sha256=pin(item)["sha256"] if record["mode"]&0o444 else None)
+            else:record.update(kind="directory")
+            result[str(item.relative_to(folder))]=record
+        return result
+    before=states()
     measurements={"python":run([sys.executable,Path(__file__).resolve(),"oracle","--producer",args.producer,"--exception",expected,"--",*tail],folder,"python",env),
         "native":run([args.binary,"cache-resources",*tail],folder,"native",env)}
     outcomes={}
@@ -176,7 +187,8 @@ def compare(args,folder,path,spec,seed):
             else:
                 text=Path(measurement["stderr"]["path"]).read_text();match=re.fullmatch(r"priva: (\w+): (.*)\n",text,re.S)
                 outcomes[arm].update(category=match[1] if match else None,message=match[2] if match else text)
-    result=dict(seed=seed,measurements=measurements,outcomes=outcomes,exact=outcomes["python"]==outcomes["native"],
+    preserved=before==states()
+    result=dict(seed=seed,measurements=measurements,outcomes=outcomes,exact=outcomes["python"]==outcomes["native"] and preserved,inputs_preserved=preserved,
         stderr_bytes_equal=measurements["python"]["stderr"]["sha256"]==measurements["native"]["stderr"]["sha256"],
         unqualified=spec.get("unqualified"))
     save(folder/"comparison.json",result);return result
@@ -202,11 +214,24 @@ def check(args):
         if original!={"registry":pin(registry_path),"installer":pin(source_root/"scripts/install_utils.sh")}:raise RuntimeError("Reference inputs changed")
         if pin(root/"cache_resources.json")["sha256"]!=original["registry"]["sha256"] or pin(root/"scripts/install_utils.sh")["sha256"]!=original["installer"]["sha256"]:raise RuntimeError("Read-only inputs changed")
         real[str(i)]=dict(original=original,resources=len(resources),cases=results)
+    admission={};selected=args.work_root/'real_0/cache_resources.json'
+    for name,tail,expected in [('missing_command',[],2),('unknown_command',['unknown'],2),('help',['--help'],0),
+        ('missing_resource',['show','--registry',selected],2),('unknown_flag',['validate','--registry',selected,'--refreshable'],2),
+        ('flag_value',['list','--registry',selected,'--refreshable=yes'],2),('missing_registry_value',['list','--registry'],2)]:
+        folder=args.work_root/('admission_'+name);folder.mkdir();env=dict(os.environ,PYTHONHASHSEED='42')
+        reference=run([sys.executable,args.producer,*tail],folder,'python',env)
+        native=run([args.binary,'cache-resources',*tail],folder,'native',env)
+        admission[name]=dict(python=reference,native=native,expected=expected,passed=reference['returncode']==native['returncode']==expected)
+    folder=args.work_root/'admission_explicit_registry_required';folder.mkdir()
+    measured=run([args.binary,'cache-resources','validate'],folder,'native',dict(os.environ,PYTHONHASHSEED='42'))
+    admission['explicit_registry_required']=dict(native=measured,expected=2,passed=measured['returncode']==2,
+        interface_difference='Native requires the registry path; original Python has a source-file-relative default.')
     qualified={name:row for name,row in cases.items() if not row["unqualified"]}
     unqualified={name:row for name,row in cases.items() if row["unqualified"]}
     failed=[name for name,row in qualified.items() if not row["exact"]]
     failed += ["real_"+i+"_"+j for i,group in real.items() for j,row in group["cases"].items() if not row["exact"]]
-    report=dict(producer=pin(args.producer),binary=pin(args.binary),comparator=pin(Path(__file__)),cases=cases,real=real,
+    failed += ['admission_'+name for name,row in admission.items() if not row['passed']]
+    report=dict(producer=pin(args.producer),binary=pin(args.binary),comparator=pin(Path(__file__)),cases=cases,real=real,admission=admission,
         qualified_count=len(qualified),qualified_successes=sum(row["outcomes"]["python"]["exit"]==0 for row in qualified.values()),
         real_count=sum(len(group["cases"]) for group in real.values()),unqualified_count=len(unqualified),
         unqualified_mismatches=[name for name,row in unqualified.items() if not row["exact"]],failed=failed,

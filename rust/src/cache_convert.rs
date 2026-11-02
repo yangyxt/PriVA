@@ -21,6 +21,7 @@ use std::time::Instant;
 
 pub(crate) mod clingen_map;
 pub(crate) mod common;
+pub(crate) mod interpro_mapping;
 
 pub(crate) const CLINVAR_AA_STAT: Schema = Schema {
     name: "clinvar_aa_stat",
@@ -413,6 +414,7 @@ pub(crate) fn dispatch_export(args: &[String]) -> Result<()> {
     let exporter = match cache.as_str() {
         "clinvar_aa_stat" => export_clinvar_aa_stat,
         "clingen_map" => clingen_map::export,
+        "interpro_mapping_pickle" => interpro_mapping::export,
         _ => return Err(invalid(format!("cache-export: unsupported cache {cache}"))),
     };
     if output == "-" {
@@ -441,7 +443,7 @@ pub(crate) fn dispatch_export(args: &[String]) -> Result<()> {
     Ok(())
 }
 
-const USAGE: &str = "usage: priva cache-convert CACHE --pickle PICKLE --output CACHE\nimplemented: clinvar_aa_stat, clingen_map";
+const USAGE: &str = "usage: priva cache-convert CACHE --pickle PICKLE --output CACHE\nimplemented: clinvar_aa_stat, interpro_mapping_pickle, clingen_map";
 
 /// `priva cache-convert CACHE --pickle PICKLE --output OUTPUT`.
 pub(crate) fn dispatch(args: &[String]) -> Result<()> {
@@ -470,6 +472,10 @@ pub(crate) fn dispatch(args: &[String]) -> Result<()> {
         }
         "clingen_map" => {
             println!("{}", clingen_map::convert(pickle, Path::new(output))?);
+            Ok(())
+        }
+        "interpro_mapping_pickle" => {
+            println!("{}", interpro_mapping::convert(pickle, Path::new(output))?);
             Ok(())
         }
         other => Err(invalid(format!(

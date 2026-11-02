@@ -5,7 +5,7 @@
 //! conversion is explicit because pandas/NumPy and Polars differ for floats,
 //! unsigned integers and object strings. No scientific evidence is inferred.
 use crate::cache_convert::Provenance;
-use crate::cache_convert::clingen_map::write_entries;
+use crate::cache_convert::clingen_map::{Code, write_codes};
 use crate::cli::{Result, invalid};
 use crate::pandas_table::{self, Cell, Column as PandasColumn};
 use crate::python_args::{Parsed, parse_long_options};
@@ -21,7 +21,7 @@ const ID: &str = "ClinVar Variation Id";
 const CODE: &str = "Applied Evidence Codes (Met)";
 const USAGE: &str = "usage: priva clingen-map build --clinvar-vcf VCF --clingen-tab TSV --output RKYV\n\
 Build a schema-10 ClinGen map directly from the same inputs as prepare_clingen_map.py.\n\
-The VCF may be plain text or BGZF. Evidence codes remain text or missing;\n\
+The VCF may be plain text or BGZF. Code types are preserved; typed scalars select version 2.\n\
 duplicate ClinVar IDs and duplicate final variants keep their last source value.";
 
 /// The shared reader deliberately refuses uint64 inference. This producer
@@ -75,19 +75,17 @@ impl ProducerColumn {
         Ok(number.to_string())
     }
 
-    fn code(&self, row: usize) -> Result<Option<String>> {
-        match self {
+    fn code(&self, row: usize) -> Result<Code> {
+        Ok(match self {
             Self::Pandas(values) => match values.cell(row) {
-                Cell::Text(text) => Ok(Some(text.to_owned())),
-                Cell::Missing => Ok(None),
-                _ => Err(invalid(
-                    "a surviving ClinGen code is not text or float NaN; schema 10 refuses it",
-                )),
+                Cell::Text(text) => Code::Text(text.to_owned()),
+                Cell::Missing => Code::Missing,
+                Cell::Int(value) => Code::Integer(i128::from(value)),
+                Cell::Float(value) => Code::Float(value.to_bits()),
+                Cell::Bool(value) => Code::Boolean(value),
             },
-            Self::Unsigned(_) => Err(invalid(
-                "a surviving ClinGen code is uint64, not text or float NaN; schema 10 refuses it",
-            )),
-        }
+            Self::Unsigned(values) => Code::Integer(i128::from(values[row])),
+        })
     }
 }
 
@@ -478,7 +476,7 @@ fn mapped_entries(
     mut frame: DataFrame,
     codes: &ProducerColumn,
     reader: &mut dyn BufRead,
-) -> Result<(Vec<(String, Option<String>)>, usize)> {
+) -> Result<(Vec<(String, Code)>, usize)> {
     let id_text = frame
         .column("id")?
         .str()?
@@ -515,7 +513,7 @@ fn reduce(
     ids: &ProducerColumn,
     codes: &ProducerColumn,
     reader: &mut dyn BufRead,
-) -> Result<(Vec<(String, Option<String>)>, usize)> {
+) -> Result<(Vec<(String, Code)>, usize)> {
     mapped_entries(curated_frame(ids, codes)?, codes, reader)
 }
 
@@ -596,8 +594,11 @@ pub(crate) fn build(clinvar: &Path, table: &Path, output: &Path) -> Result<Strin
             "a ClinGen input changed during production; no archive was published",
         ));
     }
-    let without_codes = entries.iter().filter(|(_, value)| value.is_none()).count();
-    write_entries(output, &entries, provenance)?;
+    let without_codes = entries
+        .iter()
+        .filter(|(_, value)| value.is_missing())
+        .count();
+    write_codes(output, &entries, provenance)?;
     Ok(format!(
         "{{\"cache\":\"clingen_map\",\"table_rows\":{},\"vcf_records\":{records},\"variants\":{},\"without_codes\":{without_codes},\"bytes\":{},\"elapsed_s\":{:.3}}}",
         ids.len(),
@@ -659,7 +660,7 @@ mod tests {
 
     const HEADER: &str = "##fileformat=VCFv4.2\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\n";
 
-    fn run(table: &str, records: &str) -> Result<Vec<(String, Option<String>)>> {
+    fn run(table: &str, records: &str) -> Result<Vec<(String, Code)>> {
         let (ids, codes) = parse_curated(&format!("{ID}\t{CODE}\n{table}"))?;
         let mut input = Cursor::new(format!("{HEADER}{records}"));
         let mut entries = reduce(&ids, &codes, &mut input)?.0;
@@ -677,8 +678,8 @@ mod tests {
         assert_eq!(
             result,
             vec![
-                ("1:10:A-T".into(), None),
-                ("1:11:G-C".into(), Some("BA1".into()))
+                ("1:10:A-T".into(), Code::Missing),
+                ("1:11:G-C".into(), Code::Text("BA1".into()))
             ]
         );
     }
@@ -689,7 +690,7 @@ mod tests {
             "1\t1\t1\tA\tT\n1\t2\t0\tA\tC\n1\t3\t-9223372036854775808\tA\tG\n1\t4\t1000\tG\tT\n";
         assert_eq!(
             run("1.9\tPS3\nNA\tPM2\n", records).unwrap(),
-            vec![("1:1:A-T".into(), Some("PS3".into()))]
+            vec![("1:1:A-T".into(), Code::Text("PS3".into()))]
         );
         assert_eq!(
             run("True\tPS3\nFalse\tPM2\n\tPVS1\n", records)
@@ -699,16 +700,16 @@ mod tests {
         );
         assert_eq!(
             run("1e30\tPS3\n", records).unwrap(),
-            vec![("1:3:A-G".into(), Some("PS3".into()))]
+            vec![("1:3:A-G".into(), Code::Text("PS3".into()))]
         );
         assert_eq!(
             run("9223372036854775808\tPS3\n", records).unwrap(),
-            vec![("1:3:A-G".into(), Some("PS3".into()))]
+            vec![("1:3:A-G".into(), Code::Text("PS3".into()))]
         );
         assert!(run("9223372036854775808\tPS3\nNA\tPM2\n", records).is_err());
         assert_eq!(
             run("1_000\tPS3\n", records).unwrap(),
-            vec![("1:4:G-T".into(), Some("PS3".into()))]
+            vec![("1:4:G-T".into(), Code::Text("PS3".into()))]
         );
         assert!(run("1.0\tPS3\nx\tPM2\n", records).is_err());
         assert!(run("inf\tPS3\n", records).is_err());
@@ -717,14 +718,22 @@ mod tests {
     }
 
     #[test]
-    fn typed_codes_are_checked_only_after_mapping_and_last_row_reduction() {
-        assert!(run("1\t2\n", "1\t1\t1\tA\tT\n").is_err());
-        assert!(run("1\tTrue\n", "1\t1\t1\tA\tT\n").is_err());
-        assert!(run("1\t2.0\n", "1\t1\t1\tA\tT\n").is_err());
+    fn typed_codes_are_preserved_after_mapping_and_last_row_reduction() {
+        for (text, expected) in [
+            ("2", Code::Integer(2)),
+            ("True", Code::Boolean(true)),
+            ("2.0", Code::Float(2.0_f64.to_bits())),
+            ("18446744073709551615", Code::Integer(i128::from(u64::MAX))),
+        ] {
+            assert_eq!(
+                run(&format!("1\t{text}\n"), "1\t1\t1\tA\tT\n").unwrap(),
+                vec![("1:1:A-T".into(), expected)]
+            );
+        }
         assert!(run("1\t2\n", "1\t1\t9\tA\tT\n").unwrap().is_empty());
         assert_eq!(
             run("1\tNA\n", "1\t1\t1\tA\tT\n").unwrap(),
-            vec![("1:1:A-T".into(), None)]
+            vec![("1:1:A-T".into(), Code::Missing)]
         );
     }
 
@@ -746,16 +755,16 @@ mod tests {
             )
             .unwrap(),
             vec![
-                ("1:0:.-.".into(), Some("PS3".into())),
-                ("1:1:A-.".into(), Some("PM2".into())),
-                ("1:2:A-<DEL>".into(), Some("PVS1".into()))
+                ("1:0:.-.".into(), Code::Text("PS3".into())),
+                ("1:1:A-.".into(), Code::Text("PM2".into())),
+                ("1:2:A-<DEL>".into(), Code::Text("PVS1".into()))
             ]
         );
         assert!(run("1\tPS3\n", "1\t-1\t1\tA\tT\n").is_err());
         assert!(run("1\tPS3\n", "1\t1\t1\tA\n").is_err());
         assert_eq!(
             run("1\tPS3\n", "1\t\t1\tA\tT\n").unwrap(),
-            vec![("1:0:A-T".into(), Some("PS3".into()))]
+            vec![("1:0:A-T".into(), Code::Text("PS3".into()))]
         );
     }
 
@@ -796,7 +805,7 @@ mod tests {
         let table = format!("\u{feff}{ID}\t{CODE}\t{ID}\r\nindex\t1\t\"PS3\tPM2\"\tbad\r\n");
         let (ids, codes) = parse_curated(&table).unwrap();
         assert_eq!(ids.integer_text(0).unwrap(), "1");
-        assert_eq!(codes.code(0).unwrap(), Some("PS3\tPM2".into()));
+        assert_eq!(codes.code(0).unwrap(), Code::Text("PS3\tPM2".into()));
         assert!(parse_curated(&format!("{ID}\t{CODE}\n1\tPS3\n2\tPM2\textra\n")).is_err());
         assert!(parse_curated(&format!("{ID}\n1\n")).is_err());
     }

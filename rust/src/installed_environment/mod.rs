@@ -4,7 +4,7 @@ mod annex;
 mod ffi;
 mod files;
 mod process;
-mod yaml;
+pub(crate) mod yaml;
 use crate::cli::{Result, invalid};
 use crate::python_path::{is_file, os_error, path_value, repr};
 use std::collections::HashMap;

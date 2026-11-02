@@ -41,6 +41,7 @@ use crate::cli::{Result, invalid};
 use crate::pandas_table::{Column as PandasColumn, ObjectValue, Table};
 use polars_core::prelude::*;
 use polars_ops::chunked_array::strings::StringNameSpaceImpl;
+use polars_ops::prelude::{DataFrameJoinOps, JoinArgs, JoinType, MaintainOrderJoin};
 
 /// The pandas column type a polars result goes back to.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -421,6 +422,67 @@ fn row_numbers(frame: &DataFrame) -> Result<Vec<usize>> {
         .collect())
 }
 
+/// Row pairs for pandas' text-key `merge(how="left", sort=False)`. Every left
+/// occurrence keeps every matching right occurrence, in the two input orders.
+/// Null keys match null keys, as in pandas. Payloads stay in `pandas_table` so
+/// the join cannot infer or coerce their dtypes. `unique_right` implements the
+/// `many_to_one` validation over the entire right table, including unused keys.
+pub(crate) fn left_join_text_rows(
+    left: &Table,
+    right: &Table,
+    keys: &[&str],
+    unique_right: bool,
+) -> Result<Vec<(usize, Option<usize>)>> {
+    if keys.is_empty() {
+        return Err(invalid("a text join requires at least one key"));
+    }
+    for table in [left, right] {
+        for key in keys {
+            if !matches!(table.column(key)?, PandasColumn::Text(_)) {
+                return Err(invalid(format!("text join key {key} is not a text column")));
+            }
+        }
+    }
+    if unique_right && drop_duplicates_first(right, Some(keys))?.len() != right.rows {
+        return Err(invalid(
+            "Merge keys are not unique in right dataset; not a many-to-one merge",
+        ));
+    }
+    let (left_frame, names) = keyed_frame(left, keys)?;
+    let (mut right_frame, _) = keyed_frame(right, keys)?;
+    right_frame
+        .rename("row_number", "right_row_number".into())
+        .map_err(polars_error)?;
+    let joined = left_frame
+        .join(
+            &right_frame,
+            names.iter().map(String::as_str),
+            names.iter().map(String::as_str),
+            JoinArgs {
+                nulls_equal: true,
+                maintain_order: MaintainOrderJoin::LeftRight,
+                ..JoinArgs::new(JoinType::Left)
+            },
+            None,
+        )
+        .map_err(polars_error)?;
+    let left_rows = row_numbers(&joined)?;
+    let right_rows = joined
+        .column("right_row_number")
+        .map_err(polars_error)?
+        .as_materialized_series()
+        .idx()
+        .map_err(polars_error)?;
+    Ok(left_rows
+        .into_iter()
+        .zip(
+            right_rows
+                .into_iter()
+                .map(|row| row.map(|row| row as usize)),
+        )
+        .collect())
+}
+
 /// `df.drop_duplicates(subset=keys, keep="first")` (all columns when `keys`
 /// is `None`): the rows kept, in their original order.
 pub(crate) fn drop_duplicates_first(table: &Table, keys: Option<&[&str]>) -> Result<Vec<usize>> {
@@ -517,6 +579,33 @@ mod tests {
 
     fn text(values: &[Option<&str>]) -> PandasColumn {
         PandasColumn::Text(values.iter().map(|v| v.map(str::to_owned)).collect())
+    }
+
+    #[test]
+    fn text_left_join_retains_multiplicity_null_keys_and_both_input_orders() {
+        let left = table(vec![(
+            "key",
+            text(&[Some("b"), Some("a"), Some("b"), None, Some("")]),
+        )]);
+        let right = table(vec![(
+            "key",
+            text(&[Some("b"), Some("b"), None, Some("a"), None]),
+        )]);
+        assert_eq!(
+            left_join_text_rows(&left, &right, &["key"], false).unwrap(),
+            vec![
+                (0, Some(0)),
+                (0, Some(1)),
+                (1, Some(3)),
+                (2, Some(0)),
+                (2, Some(1)),
+                (3, Some(2)),
+                (3, Some(4)),
+                (4, None)
+            ]
+        );
+        let unmatched = table(vec![("key", text(&[Some("unused"), Some("unused")]))]);
+        assert!(left_join_text_rows(&left, &unmatched, &["key"], true).is_err());
     }
 
     // The expected values below are what pandas 2.2.3 printed for the same input

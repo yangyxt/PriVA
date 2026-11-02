@@ -11,6 +11,7 @@ use crate::rust_cache::{
     MappedCache, Schema, ensure_distinct_paths, find_sorted, write_cache_checked,
 };
 use rkyv::{Archive, Deserialize, Serialize, rancor};
+use std::collections::BTreeSet;
 use std::io::Write;
 use std::path::Path;
 use std::time::Instant;
@@ -133,6 +134,31 @@ pub(crate) fn convert(pickle: &str, output: &Path) -> Result<String> {
     ))
 }
 
+/// Direct native producer boundary for schema 8. The typed input is a set;
+/// canonical lookup order is the same UTF-8 order as the existing converter.
+#[allow(dead_code)] // Used when the independently qualified DAS producer is connected.
+pub(crate) fn write_domains(
+    output: &Path,
+    domains: BTreeSet<String>,
+    provenance: Vec<Provenance>,
+) -> Result<usize> {
+    let root = IntolerantDomainSet {
+        provenance,
+        domains: domains.into_iter().collect(),
+    };
+    let archive = rkyv::to_bytes::<rancor::Error>(&root)?;
+    write_cache_checked(output, ALL_INTOLERANT_DOMAINS, &archive, |staged| {
+        let cache = IntolerantDomainCache::open(&staged.to_string_lossy())?;
+        if !cache.domains().eq(root.domains.iter().map(String::as_str)) {
+            return Err(invalid(
+                "native intolerant-domain set differs after writing",
+            ));
+        }
+        Ok(())
+    })?;
+    Ok(root.domains.len())
+}
+
 /// A set is one full exported value, keyed by None to distinguish it from dict entries.
 pub(crate) fn export(path: &str, out: &mut dyn Write) -> Result<usize> {
     let cache = IntolerantDomainCache::open(path)?;
@@ -162,6 +188,29 @@ mod tests {
         ));
         std::fs::write(&path, bytes).unwrap();
         path.to_str().unwrap().to_owned()
+    }
+
+    #[test]
+    fn native_writer_matches_python_set_fixture_including_empty() {
+        for (at, source) in [GOOD, b"\x80\x04\x8f."].iter().enumerate() {
+            let pickle = temporary(&format!("native_input{at}.pkl"), source);
+            let converted = temporary(&format!("native_control{at}.rkyv"), b"");
+            convert(&pickle, Path::new(&converted)).unwrap();
+            let output = temporary(&format!("native_output{at}.rkyv"), b"");
+            let values = if at == 0 {
+                ["d2", "é", "d1"].into_iter().map(String::from).collect()
+            } else {
+                BTreeSet::new()
+            };
+            assert_eq!(
+                write_domains(Path::new(&output), values, provenance(&pickle).unwrap()).unwrap(),
+                if at == 0 { 3 } else { 0 }
+            );
+            assert_eq!(
+                std::fs::read(&converted).unwrap(),
+                std::fs::read(&output).unwrap()
+            );
+        }
     }
 
     #[test]

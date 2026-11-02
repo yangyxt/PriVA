@@ -17,6 +17,8 @@ from pathlib import Path
 import pickle
 import pickletools
 import sys
+import subprocess
+from types import SimpleNamespace
 
 PRODUCER_SHA256 = "8abdd1964299e69d375eef83bca4ed39d534d1f70f14b96dfae80426ee14f755"
 FIELDS = ["SYMBOL", "Gene", "BIOTYPE", "Feature", "DOMAINS", "Consequence", "LoF", "NMD",
@@ -105,6 +107,54 @@ def probe(args):
     print(json.dumps(report))
 
 
+def invoke(command, directory, name):
+    with (directory/(name+".stdout.log")).open("x") as out, (directory/(name+".stderr.log")).open("x") as err:
+        return subprocess.run(list(map(str, command)), stdout=out, stderr=err).returncode
+
+
+def reuse(args):
+    """Read the completed nine producer probes without rerunning Python."""
+    import cache_values_compare as compare
+    args.work_root.mkdir(parents=True, exist_ok=False)
+    reports = {}
+    for name in ["text", "all_missing", "mixed_missing_text", "integers", "floats", "mixed_numeric_text",
+                 "nullable_integer", "nullable_float", "boolean_text"]:
+        inputs = args.source_probes/name
+        folder = args.work_root/name
+        folder.mkdir()
+        archive = folder/"native.rkyv"
+        trace = folder/"trace.json"
+        command = [args.binary, "clinvar-gene-stats", "build", "--vcf", inputs/"input.vcf.gz",
+            "--clinvar-summary", inputs/"summary.tsv", "--mane-summary", inputs/"mane.tsv",
+            "--output", archive, "--threads", "1", "--python-hash-seed", "0",
+            "--donor-loss-cutoff", "0.25", "--completion-trace", trace]
+        status = invoke(command, folder, "build")
+        report = {"exit": status, "passed": status == 0}
+        if not status:
+            report["comparison"] = compare.compare(SimpleNamespace(binary=args.binary, cache="clinvar_gene_stat",
+                pickle=inputs/"reference.pkl.gz", archive=archive, report=folder/"values.json", mismatches=folder/"mismatches.jsonl"))
+            trace_value = json.loads(trace.read_text())
+            report["passed"] &= report["comparison"]["passed"] and trace_value["order"] == [0, 1]
+            if name == "text":
+                parallel = folder/"parallel.rkyv"
+                command[command.index("--output")+1] = parallel
+                command[command.index("--threads")+1] = "2"
+                command = command[:-2]+["--completion-order", trace]
+                code = invoke(command, folder, "parallel")
+                report["parallel_exit"] = code
+                if not code:
+                    report["parallel_comparison"] = compare.compare(SimpleNamespace(binary=args.binary, cache="clinvar_gene_stat",
+                        pickle=inputs/"reference.pkl.gz", archive=parallel, report=folder/"parallel_values.json", mismatches=folder/"parallel_mismatches.jsonl"))
+                report["passed"] &= code == 0 and report.get("parallel_comparison", {}).get("passed", False)
+        reports[name] = report
+    result = {"passed": all(row["passed"] for row in reports.values()), "cases": reports,
+              "scope": "native builds against retained unchanged-Python producer outputs; no Python producer rerun"}
+    (args.work_root/"comparison.json").write_text(json.dumps(result, indent=2)+"\n")
+    print(json.dumps({"passed": result["passed"], "failed": [name for name, row in reports.items() if not row["passed"]]}))
+    if not result["passed"]:
+        raise SystemExit(1)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
@@ -112,6 +162,10 @@ def main():
     sub.add_argument("--producer", type=Path, required=True)
     sub.add_argument("--work-root", type=Path, required=True)
     sub.set_defaults(function=probe)
+    sub = commands.add_parser("reuse")
+    for name in ("binary", "source-probes", "work-root"):
+        sub.add_argument("--"+name, type=Path, required=True)
+    sub.set_defaults(function=reuse)
     args = parser.parse_args()
     args.function(args)
 

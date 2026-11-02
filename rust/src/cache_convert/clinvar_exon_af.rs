@@ -165,6 +165,9 @@ impl ClinvarExonAfCache {
     pub(crate) fn len(&self) -> usize {
         self.mapped.root().transcripts.len()
     }
+    pub(crate) fn keys(&self) -> &[rkyv::string::ArchivedString] {
+        &self.mapped.root().transcripts
+    }
     pub(crate) fn get(&self, transcript: &str) -> Option<&rkyv::vec::ArchivedVec<ArchivedExonAf>> {
         let root = self.mapped.root();
         find_sorted(&root.transcripts, transcript).map(|at| &root.entries[at])

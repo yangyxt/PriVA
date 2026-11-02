@@ -15,13 +15,16 @@
 use super::acmg_variant_mechanism::variant_condition_masks;
 use super::stats;
 use super::types::{AcmgError, HarnessCall, NamedMasks, StepOutput, not_converted};
+use crate::cache_convert::clinvar_exon_af::ClinvarExonAfCache;
 use crate::cache_convert::clinvar_gene_af::{ArchivedGeneAfValue, ClinvarGeneAfCache};
 use crate::cli::{Result, invalid};
 use crate::json_text::Json;
 use crate::pandas_table::{Column, ObjectValue, Table};
+#[cfg(test)]
 use crate::pickle_reader::{self, Value};
 use crate::python_text::float_repr;
 use std::collections::HashMap;
+#[cfg(test)]
 use std::path::Path;
 
 fn refused(message: impl Into<String>) -> Box<dyn std::error::Error> {
@@ -583,11 +586,13 @@ fn gene_keys(table: &Table, name: &str) -> Result<Vec<Option<String>>> {
     })
 }
 
+#[cfg(test)]
 fn load_pickle(path: &str) -> Result<Value> {
     let bytes = pickle_reader::read_file(Path::new(path), path.ends_with(".gz"))?;
     pickle_reader::load(&bytes)
 }
 
+#[cfg(test)]
 fn dict_entries(value: &Value, what: &str) -> Result<Vec<(Value, Value)>> {
     match value {
         Value::Dict(dict) => Ok(dict.borrow().entries.clone()),
@@ -666,7 +671,8 @@ struct ExonStats {
     by_transcript: HashMap<String, HashMap<String, (f64, f64)>>,
 }
 
-fn exon_stats(path: &str) -> Result<ExonStats> {
+#[cfg(test)]
+fn exon_stats_reference(path: &str) -> Result<ExonStats> {
     let stat = load_pickle(path)?;
     let mut by_transcript = HashMap::new();
     for (key, value) in dict_entries(&stat, "the ClinVar exon AF statistics")? {
@@ -700,6 +706,27 @@ fn exon_stats(path: &str) -> Result<ExonStats> {
             exons.insert(exon.to_string(), (number(0)?, number(2)?));
         }
         by_transcript.insert(transcript.to_string(), exons);
+    }
+    Ok(ExonStats { by_transcript })
+}
+
+fn exon_stats(path: &str) -> Result<ExonStats> {
+    let stat = ClinvarExonAfCache::open(path)?;
+    let mut by_transcript = HashMap::new();
+    for transcript in stat.keys() {
+        let key = transcript.as_str();
+        let exons = stat
+            .get(key)
+            .unwrap()
+            .iter()
+            .map(|entry| {
+                (
+                    entry.exon_key.as_str().to_owned(),
+                    (entry.item0.to_native(), entry.item2.to_native()),
+                )
+            })
+            .collect();
+        by_transcript.insert(key.to_owned(), exons);
     }
     Ok(ExonStats { by_transcript })
 }
@@ -1315,6 +1342,154 @@ mod tests {
         assert!(error.to_string().contains("af of gene BAD is a str"));
         std::fs::remove_file(path).unwrap();
         std::fs::remove_file(pickle).unwrap();
+    }
+
+    fn exon_fixture(name: &str) -> String {
+        use crate::cache_convert::clinvar_exon_af::{ClinvarExonAfStat, ExonAf};
+        let value = ClinvarExonAfStat {
+            provenance: vec![],
+            transcripts: vec!["EMPTY".into(), "ENST1".into()],
+            entries: vec![
+                vec![],
+                vec![
+                    ExonAf {
+                        exon_key: "2/3".into(),
+                        item0: 0.02,
+                        item1: 0.02,
+                        item2: 0.03,
+                        item3: 0.01,
+                        item4: vec![0.01, 0.03],
+                    },
+                    ExonAf {
+                        exon_key: "1/3".into(),
+                        item0: -0.0,
+                        item1: 0.0,
+                        item2: f64::from_bits(0x7ff8_0000_0000_0042),
+                        item3: 0.0,
+                        item4: vec![0.0],
+                    },
+                ],
+            ],
+        };
+        let path = path(name);
+        crate::rust_cache::write_cache(
+            Path::new(&path),
+            crate::cache_convert::clinvar_exon_af::SCHEMA,
+            &rkyv::to_bytes::<rkyv::rancor::Error>(&value).unwrap(),
+        )
+        .unwrap();
+        path
+    }
+
+    #[test]
+    fn native_frequency_caches_preserve_pm2_columns_strengths_and_missingness() {
+        let gene = gene_fixture("pm2_gene.rkyv", false);
+        let exon = exon_fixture("pm2_exon.rkyv");
+        let stat = exon_stats(&exon).unwrap();
+        assert_eq!(stat.by_transcript.len(), 2);
+        assert_eq!(
+            stat.by_transcript["ENST1"]["1/3"].0.to_bits(),
+            (-0.0f64).to_bits()
+        );
+        assert_eq!(
+            stat.by_transcript["ENST1"]["1/3"].1.to_bits(),
+            0x7ff8_0000_0000_0042
+        );
+        let text =
+            |values: &[&str]| Column::Text(values.iter().map(|s| Some((*s).to_owned())).collect());
+        let mut columns = vec![
+            ("Gene", text(&["INT", "FLOAT", "MISSING"])),
+            ("Feature", text(&["ENST1", "ENST1", "MISSING"])),
+            ("EXON", text(&["2/3", "1/3", "1/1"])),
+            ("variant_inheritance", text(&["dominant"; 3])),
+            ("variant_penetrance", text(&["complete"; 3])),
+        ];
+        columns.extend(
+            [
+                "gnomAD_joint_AF",
+                "gnomAD_joint_AN",
+                "gnomAD_joint_AF_max",
+                "gnomAD_joint_AN_max",
+            ]
+            .map(|name| (name, Column::Float(vec![f64::NAN; 3]))),
+        );
+        let table = frame(columns);
+        let output = pm2_criteria(&table, &gene, &exon, 1e-5).unwrap();
+        assert_eq!(output.criteria[0].1, Column::Int(vec![2, 2, 2]));
+        assert_eq!(
+            output
+                .columns
+                .iter()
+                .map(|(name, _)| name.as_str())
+                .collect::<Vec<_>>(),
+            [
+                "clinvar_patho_gene_max_af",
+                "clinvar_patho_gene_max_hom_freq",
+                "exon_patho_median_af",
+                "exon_patho_max_af"
+            ]
+        );
+        let Column::Float(af) = &output.columns[0].1 else {
+            panic!("gene numeric dtype changed")
+        };
+        assert_eq!(af[0], 2.0);
+        assert_eq!(af[1].to_bits(), (-0.0f64).to_bits());
+        assert_eq!(af[2], 0.0);
+        let Column::Float(median) = &output.columns[2].1 else {
+            panic!("median dtype changed")
+        };
+        assert_eq!(median[0], 0.02);
+        assert_eq!(median[1].to_bits(), (-0.0f64).to_bits());
+        assert!(median[2].is_nan());
+        let Column::Float(max) = &output.columns[3].1 else {
+            panic!("max dtype changed")
+        };
+        assert_eq!(max[0], 0.03);
+        assert_eq!(max[1].to_bits(), 0x7ff8_0000_0000_0042);
+        assert!(max[2].is_nan());
+        std::fs::remove_file(gene).unwrap();
+        std::fs::remove_file(exon).unwrap();
+    }
+
+    #[test]
+    fn native_exon_af_refuses_pickle_without_fallback() {
+        let pickle = path("exon.pkl");
+        std::fs::write(&pickle, b"\x80\x04}.").unwrap();
+        let error = exon_stats(&pickle).err().unwrap();
+        assert!(error.to_string().contains("cache-convert"));
+        std::fs::remove_file(pickle).unwrap();
+    }
+
+    #[test]
+    #[ignore = "requires installed source pickles and independently verified native archives"]
+    fn installed_native_frequency_lookup_facts_match_source() {
+        let variable = |name| std::env::var(name).unwrap_or_else(|_| panic!("set {name}"));
+        let gene_source = variable("PRIVA_NATIVE_GENE_AF_SOURCE");
+        let gene_path = variable("PRIVA_NATIVE_GENE_AF_ARCHIVE");
+        let exon_source = variable("PRIVA_NATIVE_EXON_AF_SOURCE");
+        let exon_path = variable("PRIVA_NATIVE_EXON_AF_ARCHIVE");
+        let expected = gene_af_lookup_reference(&gene_source).unwrap();
+        let actual = gene_af_lookup(&gene_path).unwrap();
+        assert_eq!(actual.len(), expected.len());
+        for (key, left) in &expected {
+            match (left, actual.get(key).unwrap()) {
+                (Mapped::Int(l), Mapped::Int(r)) => assert_eq!(l, r),
+                (Mapped::Float(l), Mapped::Float(r)) => assert_eq!(l.to_bits(), r.to_bits()),
+                _ => panic!("a numeric scalar kind changed"),
+            }
+        }
+        let expected = exon_stats_reference(&exon_source).unwrap();
+        let actual = exon_stats(&exon_path).unwrap();
+        assert_eq!(actual.by_transcript.len(), expected.by_transcript.len());
+        for (key, exons) in expected.by_transcript {
+            let converted = &actual.by_transcript[&key];
+            assert_eq!(converted.len(), exons.len());
+            for (exon, (median, max)) in exons {
+                let (new_median, new_max) = converted[&exon];
+                assert_eq!(median.to_bits(), new_median.to_bits());
+                assert_eq!(max.to_bits(), new_max.to_bits());
+            }
+        }
     }
 
     fn frame(columns: Vec<(&str, Column)>) -> Table {

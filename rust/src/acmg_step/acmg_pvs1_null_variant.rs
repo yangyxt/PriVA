@@ -11,8 +11,8 @@
 //! transcript's own first `N/N` key, for the exons downstream of a frameshift or stop-gained
 //! variant, exon 1 of a 5' UTR variant and the exons a splicing variant skips; the look-ups by
 //! VEP's `EXON` text are unchanged. The exon allele-frequency cache is the plain-float rebuild
-//! (owner's decision), read with `pickle_dict_stream` for the table's transcripts only, as is
-//! the transcript domain map.
+//! (owner's decision). Checked native maps supply only the table's transcripts to the
+//! same exon and protein-domain projections.
 //!
 //! `df.apply(span_functional_domains, axis=1)` sees each row as Python objects (`df.values` of a
 //! frame of mixed types: Python ints, floats, bools, text, NaN, `None`, `pd.NA`); `RowValue`
@@ -39,9 +39,9 @@ use super::acmg_variant_mechanism::variant_mechanism_masks;
 use super::alternative_start_codon::{
     AlternativeStart, AlternativeStartCodonDetector, adjust_pvs1_for_start_lost,
 };
-use super::pickle_dict_stream::{Item, visit_top_level_dict};
 use super::types::{AcmgError, HarnessCall, StepOutput, not_converted};
 use crate::cache_convert::clinvar_exon_af::ClinvarExonAfCache;
+use crate::cache_convert::transcript_domains::TranscriptDomainCache;
 use crate::cli::{Result, invalid};
 use crate::interpro_mapping_io::{InterproMapping, load_interpro_mapping};
 use crate::pandas_table::{Cell, Column, ObjectValue, ReadOptions, Table, read_table_with};
@@ -203,38 +203,24 @@ pub(crate) struct ProteinDomains {
 
 impl ProteinDomains {
     pub(crate) fn load(path: &str, wanted: &HashSet<String>) -> Result<ProteinDomains> {
+        let mapped = TranscriptDomainCache::open(path)?;
         let mut map = ProteinDomains::default();
-        let keep = |transcript: &str| wanted.contains(transcript);
-        visit_top_level_dict(path, keep, |transcript, value| {
-            let odd = |what: &str| {
-                invalid(format!(
-                    "{path}: transcript {transcript}: {what}; the transcript domain map is read \
-                     for its installed shape only"
-                ))
+        for transcript in wanted {
+            let Some(entry) = mapped.get(transcript) else {
+                continue;
             };
-            let Item::Dict(entry) = &value else {
-                return Err(odd("the value is not a dict"));
-            };
-            let mut domains = Vec::new();
-            if let Some(found) = entry.borrow().get("pp_domains") {
-                let Item::List(items) = found else {
-                    return Err(odd("pp_domains is not a list"));
-                };
-                for item in items.borrow().iter() {
-                    match item {
-                        Item::Tuple(parts) if parts.len() == 3 => match (&parts[0], &parts[2]) {
-                            (Item::Int(start), Item::Str(path)) => {
-                                domains.push((*start, path.clone()));
-                            }
-                            _ => return Err(odd("a pp_domains entry is not (int, _, str)")),
-                        },
-                        _ => return Err(odd("a pp_domains entry is not a 3-tuple")),
-                    }
-                }
-            }
-            map.transcripts.insert(transcript.to_string(), domains);
-            Ok(())
-        })?;
+            let domains = entry
+                .pp_domains
+                .iter()
+                .map(|domain| {
+                    (
+                        domain.start.to_native(),
+                        Rc::from(mapped.text(&domain.domain)),
+                    )
+                })
+                .collect();
+            map.transcripts.insert(transcript.clone(), domains);
+        }
         Ok(map)
     }
 }
@@ -1568,6 +1554,68 @@ mod tests {
         std::fs::remove_file(path).unwrap();
     }
 
+
+    #[test]
+    fn native_protein_projection_keeps_domain_order() {
+        use crate::cache_convert::transcript_domains::{
+            ALPHAMISSENSE_TRANX_DOMAIN_MAP, ProteinDomain, TranscriptDomainMap, TranscriptDomains,
+        };
+        let root = TranscriptDomainMap {
+            provenance: vec![],
+            texts: vec!["G:Pfam:A".into(), "G:Pfam:B".into()],
+            transcripts: vec!["EMPTY".into(), "ENST1".into(), "IGNORED".into()],
+            entries: vec![
+                TranscriptDomains {
+                    exon_domains: vec![],
+                    pp_domains: vec![],
+                },
+                TranscriptDomains {
+                    exon_domains: vec![],
+                    pp_domains: vec![
+                        ProteinDomain {
+                            start: 8,
+                            end: 9,
+                            domain: 1,
+                        },
+                        ProteinDomain {
+                            start: 3,
+                            end: 7,
+                            domain: 0,
+                        },
+                        ProteinDomain {
+                            start: 8,
+                            end: 9,
+                            domain: 1,
+                        },
+                    ],
+                },
+                TranscriptDomains {
+                    exon_domains: vec![],
+                    pp_domains: vec![],
+                },
+            ],
+        };
+        let path = native_fixture(
+            "domains",
+            ALPHAMISSENSE_TRANX_DOMAIN_MAP,
+            &rkyv::to_bytes::<rkyv::rancor::Error>(&root).unwrap(),
+        );
+        let domains = ProteinDomains::load(
+            &path,
+            &HashSet::from(["EMPTY".into(), "ENST1".into(), "missing".into()]),
+        )
+        .unwrap();
+        assert_eq!(domains.transcripts.len(), 2);
+        assert_eq!(
+            domains.transcripts["ENST1"]
+                .iter()
+                .map(|(start, text)| (*start, text.as_ref()))
+                .collect::<Vec<_>>(),
+            vec![(8, "G:Pfam:B"), (3, "G:Pfam:A"), (8, "G:Pfam:B")]
+        );
+        assert!(domains.transcripts["EMPTY"].is_empty());
+        std::fs::remove_file(path).unwrap();
+    }
 
     #[test]
     fn exon_numbers_find_the_cache_key_of_their_transcript() {

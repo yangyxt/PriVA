@@ -147,7 +147,7 @@ cache conversion interface. Optional native procedures can be invoked directly.
 | [`scripts/check_cluster_environment.py`](../scripts/check_cluster_environment.py) | Retained Python environment inspection. |
 | [`scripts/check_cluster_readiness.py`](../scripts/check_cluster_readiness.py) | Legacy/manual helper, outside native conversion scope. |
 | [`scripts/conservation_resource_check.py`](../scripts/conservation_resource_check.py) | Optional `priva conservation-resource`. Installer caller remains Python. |
-| [`scripts/das_input_continuity.py`](../scripts/das_input_continuity.py) | Retained Python; native replacement pending. |
+| [`scripts/das_input_continuity.py`](../scripts/das_input_continuity.py) | Optional `priva das-input-continuity check/record`; verifies prepared ordered-consumer equivalence proofs and preserves original DAS outputs. Requires the pinned checker source asset, never a Python process. Installer caller remains Python. |
 | [`scripts/das_install_state.py`](../scripts/das_install_state.py) | Optional `priva das-install-state capture/check/record`. Preserves completion receipt v3, source-role hashes, metadata identity and bundled existence/nonzero checks. Existing callers remain Python. |
 | [`scripts/deploy_cluster_gnomad.py`](../scripts/deploy_cluster_gnomad.py) | Legacy/manual helper, outside native conversion scope. |
 | [`scripts/deploy_cluster_plugin_inputs.py`](../scripts/deploy_cluster_plugin_inputs.py) | Legacy/manual helper, outside native conversion scope. |
@@ -219,7 +219,7 @@ tools below are separate from the native runtime.
 
 ## DAS rescue-order profile
 
-The native branch's Python reference uses `domain-sorted-rescue-v1`: sort the
+The explicitly generated Python reference uses `domain-sorted-rescue-v1`: sort the
 tolerant domain identifiers before selecting candidates in both rescue passes,
 then retain the original `42 + i` / `99 + i` seed assignment, 32-bit wraparound,
 permutation count, candidate filters, numerical routines and FDR thresholds.
@@ -230,3 +230,9 @@ unsorted Python behavior. Other DAS stage ordering is unchanged.
 Existing caches retain their producing profile and receipts. This change does
 not rewrite them or qualify them as outputs of the new profile. A future native
 DAS implementation must match the explicitly pinned sorted Python reference.
+Generate that reference with `python rust/tests/das_sorted_reference.py render
+--source scripts/am_pick_intolerant_domains.py --output /work/sorted_reference.py`.
+The generated source is exclusively created; its whole AST differs only at the
+two approved iterators. Keep its reported source/output hashes with the selected
+profile. The still-active Python installer script remains byte-identical to the
+original profile so its source-hash reuse gate does not trigger a new calculation.

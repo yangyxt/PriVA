@@ -280,6 +280,19 @@ original order. Source roles use content hashes; `--bundled ROLE=FILE` checks
 only existence and nonzero size. A completion receipt does not establish
 scientific qualification. The installer continues to use its Python helper.
 
+For a separately prepared, complete ClinVar consumer-equivalence proof,
+`priva das-input-continuity check` verifies the original DAS receipt and its
+continuity sidecar without regenerating any scientific output. Use the same
+ordered input/source/bundle/parameter/output options as above, plus
+`--receipt JSON --continuity JSON --checker-source scripts/das_input_continuity.py`.
+The checker source must match the version embedded in the executable; it is
+hashed as a provenance asset and is never executed. `record` additionally takes
+`--old-input FILE --new-input FILE --proof JSON --proof-sha256 HEX`. It publishes
+only a non-overwriting continuity certificate after all proof bindings pass.
+This optional interface supports UTF-8 JSON (including its BOM); other byte
+encodings, non-string filesystem paths and the JSON limits above remain outside
+its compatibility scope. Existing installer callers remain unchanged.
+
 The opt-in domain procedures read an already annotated AlphaMissense VCF:
 
 ```bash

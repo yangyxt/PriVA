@@ -24,6 +24,9 @@ use std::io::Read;
 use std::path::Path;
 use std::rc::Rc;
 
+mod clinvar_gene;
+pub(crate) use clinvar_gene::Scalar as ClinvarScalar;
+
 /// A fast hasher (FNV-1a for text, a multiplication for numbers) for the
 /// lookup tables below. They only hold keys read from the file being loaded,
 /// so there is nothing to defend against, and the standard hasher costs more
@@ -67,6 +70,8 @@ pub(crate) enum Value {
     Dict(Rc<RefCell<Dict>>),
     Set(Rc<RefCell<Set>>),
     FrozenSet(Rc<Set>),
+    /// Only the explicitly selected schema-5 reader can construct this value.
+    Clinvar(clinvar_gene::Object),
 }
 
 #[derive(Debug, Default)]
@@ -163,7 +168,7 @@ fn identity(value: &Value) -> Result<String> {
             }
             text
         }
-        Value::List(_) | Value::Dict(_) | Value::Set(_) => {
+        Value::List(_) | Value::Dict(_) | Value::Set(_) | Value::Clinvar(_) => {
             return Err(invalid(
                 "the pickle uses a list, dict or set as a dict key or set member",
             ));
@@ -185,6 +190,7 @@ impl Value {
             Value::Dict(_) => "dict",
             Value::Set(_) => "set",
             Value::FrozenSet(_) => "frozenset",
+            Value::Clinvar(value) => value.type_name(),
         }
     }
 
@@ -205,6 +211,13 @@ impl Value {
     pub(crate) fn as_str(&self) -> Option<&str> {
         match self {
             Value::Str(text) => Some(&**text),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn clinvar_scalar(&self) -> Option<ClinvarScalar> {
+        match self {
+            Self::Clinvar(value) => value.scalar(),
             _ => None,
         }
     }
@@ -333,6 +346,16 @@ fn rejected(opcode: u8, offset: usize) -> Box<dyn std::error::Error> {
 /// Reads one pickle from the start of `bytes`; anything after its STOP opcode
 /// is ignored, as `pickle.load` ignores it.
 pub(crate) fn load(bytes: &[u8]) -> Result<Value> {
+    load_profile(bytes, false)
+}
+
+/// Schema-5-only static decoding of pandas.NA and NumPy int32/float32 scalars.
+/// No Python function, import, reducer or constructor is ever executed.
+pub(crate) fn load_clinvar_gene(bytes: &[u8]) -> Result<Value> {
+    load_profile(bytes, true)
+}
+
+fn load_profile(bytes: &[u8], clinvar: bool) -> Result<Value> {
     let mut reader = Reader { bytes, position: 0 };
     let mut stack: Vec<Value> = Vec::new();
     let mut marks: Vec<usize> = Vec::new();
@@ -352,7 +375,37 @@ pub(crate) fn load(bytes: &[u8]) -> Result<Value> {
             0x95 => {
                 reader.take(8)?;
             }
-            b'.' => return pop(&mut stack),
+            b'.' => {
+                let value = pop(&mut stack)?;
+                if clinvar {
+                    clinvar_gene::validate(&value)?;
+                }
+                return Ok(value);
+            }
+            0x93 if clinvar => {
+                let name = pop(&mut stack)?;
+                let module = pop(&mut stack)?;
+                stack.push(clinvar_gene::global(module, name)?);
+            }
+            b'R' if clinvar => {
+                let args = pop(&mut stack)?;
+                let target = pop(&mut stack)?;
+                stack.push(clinvar_gene::reduce(target, args)?);
+            }
+            b'b' if clinvar => {
+                let state = pop(&mut stack)?;
+                let target = stack.last().ok_or_else(|| invalid("BUILD needs a dtype"))?;
+                clinvar_gene::build(target, state)?;
+            }
+            b'C' if clinvar => {
+                let count = reader.byte()?;
+                if count != 4 {
+                    return Err(invalid(
+                        "schema-5 scalar bytes must have exactly four bytes",
+                    ));
+                }
+                stack.push(clinvar_gene::bytes(reader.take(4)?.try_into().unwrap()));
+            }
             b'(' => marks.push(stack.len()),
             b'N' => stack.push(Value::None),
             0x88 => stack.push(Value::Bool(true)),

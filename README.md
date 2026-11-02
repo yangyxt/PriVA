@@ -260,6 +260,11 @@ Nested dictionary order, typed symbols and set membership are retained;
 [schema 5 version 2](rust/CACHE_FORMATS.md#clinvar-gene-symbols-schema-5-version-2)
 is used only for nontext symbols. Installer callers keep the existing producer.
 
+Procedure errors report an exception category and exit status 1. CLI, trace and
+path admission failures use exit status 2. The native reader does not invoke
+the Python progress-estimation command, so missing tools used only by that
+command do not make the native builder fail.
+
 The Python scripts remain in `scripts/`. To run a step with its Python script again, revert the commit that switched it (titled "Call priva for the per-sample preparation steps", "Call priva for the splicing and UTR interpretation" or "Call priva acmg-assign for the ACMG step"); each restores the Python command lines and their freshness checks together, and the outputs of the two routes are interchangeable. Use a new output folder after switching either way.
 
 `priva_ranking_binary` selected Rust ranking bridges inside the Python ACMG step; `priva acmg-assign` accepts the option and does not need it.

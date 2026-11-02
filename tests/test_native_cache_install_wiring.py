@@ -173,6 +173,15 @@ ClinVar_install --config "$CONFIG"
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual([row[0] for row in events], ["bootstrap", "prepare", "builder", "publish"])
 
+    def test_repeated_wrapper_registration_retains_the_raw_builder(self):
+        result, events = self.execute(r'''
+_priva_cache_builder_ClinVar_AA_stat() { fixture_builder "$@"; }
+priva_wrap_cache_builders
+ClinVar_AA_stat "$CONFIG"
+''')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual([row[0] for row in events], ["bootstrap", "prepare", "builder", "publish"])
+
     def test_prepare_builder_and_publish_failures_preserve_original_config(self):
         for failure in ("bootstrap", "prepare", "builder", "publish"):
             with self.subTest(failure=failure):

@@ -4889,6 +4889,10 @@ function priva_wrap_cache_builders() {
         position=0
         [[ $function != ClinVar_install ]] || position=1
         definition=$(declare -f "$function") || return 1
+        if [[ $definition == *"priva_cache_install_direct --function $function --config-position $position -- \"\$@\""* ]]; then
+            declare -F "_priva_cache_builder_${function}" >/dev/null || return 1
+            continue
+        fi
         definition="_priva_cache_builder_${definition}"
         eval "$definition" || return 1
         eval "$function() { priva_cache_install_direct --function $function --config-position $position -- \"\$@\"; }" || return 1

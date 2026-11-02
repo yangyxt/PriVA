@@ -163,7 +163,7 @@ def catalogue():
         ("negative_zero",[-0.0,0.0]),("nan_duplicates",[float('nan'),float('nan')])):
         document=registry();document["resources"]["b"]["install_entrypoints"]=values
         add("unqualified_ambiguous_route_"+label,document,shell="function build_b() {}\n",options=["--check-routes"],
-            unqualified="More than one possible missing candidate remains outside the string-set/single-candidate profile.")
+            unqualified="Multiple non-string occurrences or competing missing strings remain outside this narrow profile; numeric deduplication is not implemented.")
     add("unqualified_duplicate_with_wide_integer",raw='{"a":1,"a":2,"large":'+str(2**160)+'}',
         unqualified="A competing duplicate hook with an unsupported JSON integer remains outside the represented JSON profile.")
     for label,raw in (("wide_int",'{"schema_version":1,"resources":'+json.dumps(registry()["resources"])+',"extra":'+str(2**160)+'}'),

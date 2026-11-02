@@ -11,9 +11,11 @@ mod cache_install;
 pub mod cadd_hub;
 mod cli;
 mod clingen_map_builder;
+mod clinvar_exon_af_builder;
 mod clinvar_gene_af_builder;
 pub mod combine_annotations;
 mod config_text;
+mod exon_af_stats;
 #[allow(dead_code)] // PM1 producer integration follows exact float64 comparison.
 mod fdr;
 #[allow(dead_code)] // Shared installer primitive; callers switch after their own parity tests.

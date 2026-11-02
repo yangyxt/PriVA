@@ -33,7 +33,7 @@ fn string(value: impl Into<String>) -> Json {
 fn time_ns(seconds: i64, nanos: i64) -> i128 {
     seconds as i128 * 1_000_000_000 + nanos as i128
 }
-fn identities(paths: &[String]) -> Result<Json> {
+pub(crate) fn identities(paths: &[String]) -> Result<Json> {
     let mut result = Vec::new();
     for name in paths {
         let path = PathBuf::from(absolute(&path_value(name))?);
@@ -135,15 +135,15 @@ fn bundled(values: &[String]) -> Result<Json> {
     Ok(Json::Array(result))
 }
 #[derive(Default)]
-struct Options {
-    single: HashMap<String, String>,
-    inputs: Vec<String>,
-    sources: Vec<String>,
-    bundled: Vec<String>,
-    parameters: Vec<String>,
-    outputs: Vec<String>,
+pub(crate) struct Options {
+    pub(crate) single: HashMap<String, String>,
+    pub(crate) inputs: Vec<String>,
+    pub(crate) sources: Vec<String>,
+    pub(crate) bundled: Vec<String>,
+    pub(crate) parameters: Vec<String>,
+    pub(crate) outputs: Vec<String>,
 }
-fn input_state(options: &Options) -> Result<Json> {
+pub(crate) fn input_state(options: &Options) -> Result<Json> {
     // Keep these evaluations sequential: a later malformed argument must not
     // hide the earlier input/source failure selected by the original procedure.
     Ok(object([
@@ -163,7 +163,7 @@ fn input_state(options: &Options) -> Result<Json> {
         ),
     ]))
 }
-fn completion(current: Json, outputs: &[String]) -> Result<Json> {
+pub(crate) fn completion(current: Json, outputs: &[String]) -> Result<Json> {
     let Json::Object(items) = current else {
         unreachable!()
     };

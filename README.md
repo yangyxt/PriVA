@@ -280,9 +280,14 @@ Keep the default chunk size for the installed resource profile. Output is an
 unsorted table; the installer's subsequent sort, BGZF compression and indexing
 remain separate. Installer callers continue to use the original Python script.
 
-Input must be plain UTF-8 TSV. Output may be plain TSV or gzip (`.gz`); other
-pandas compression formats are unsupported and fail explicitly. A runtime failure
-exits 1 and may leave the completed output prefix; argument errors exit 2.
+Input must be plain UTF-8 TSV. Output compression follows the filename suffix:
+`.gz`, `.bz2`, `.xz`, `.zst`, `.zip`, `.tar`, `.tar.gz`, `.tar.bz2` or `.tar.xz`;
+other names produce plain TSV. Each chunk appends a new compressed stream or
+archive member as in pandas. ZIP retains duplicate member names. Compressed TAR
+retains the original limitation: a second chunk fails when pandas' append mode
+reopens the first archive without decompression. Compression bytes and generated
+timestamps can differ while decompressed table data and member order agree.
+A runtime failure exits 1 and may leave the completed output prefix; argument errors exit 2.
 Temporary VCF/BED files are removed in the original order, while CrossMap's
 unmapped sidecars remain available in the temporary directory.
 

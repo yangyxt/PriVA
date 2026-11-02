@@ -24,8 +24,11 @@ import resource
 import struct
 import subprocess
 import sys
+import tempfile
 import time
+from types import SimpleNamespace
 import unittest
+from unittest import mock
 
 
 def encode(value: object) -> list:
@@ -118,6 +121,20 @@ def differences(expected: object, actual: object, path: tuple = ()):
         yield path, expected, actual
 
 
+def exact_row_differences(expected: list, actual: list,
+                          expected_json: str, actual_json: str):
+    """Exact fast path for normalized tagged JSON trees, never raw Python objects.
+
+    The caller already serializes both complete rows for the value digests. Byte
+    equality of those canonical JSON strings includes every encoded type, float
+    bit, sequence occurrence and meaningful order. Unequal rows still enumerate
+    the unchanged full leaf/length mismatch ledger. No hash or numeric tolerance
+    substitutes for equality, and top-level guards remain outside this function.
+    """
+    if expected_json != actual_json:
+        yield from differences(expected, actual)
+
+
 def sha256(path: Path) -> str:
     with path.open("rb") as stream:
         return hashlib.file_digest(stream, "sha256").hexdigest()
@@ -172,13 +189,15 @@ def compare(args: argparse.Namespace) -> dict:
                 last_key = decoded
                 seen.add(decoded)
                 actual = normalize(args.cache, decoded, value)
-                actual_digest.update((serialized([key, actual]) + "\n").encode())
+                actual_json = serialized([key, actual]) + "\n"
+                actual_digest.update(actual_json.encode())
                 if decoded not in expected_by_key:
                     record(key, "extra top-level key")
                 else:
                     expected = reference_value(args.cache, decoded, expected_by_key[decoded])
-                    expected_digest.update((serialized([key, expected]) + "\n").encode())
-                    for path, left, right in differences(expected, actual):
+                    expected_json = serialized([key, expected]) + "\n"
+                    expected_digest.update(expected_json.encode())
+                    for path, left, right in exact_row_differences(expected, actual, expected_json, actual_json):
                         record(key, "value mismatch", left, right, path)
                 compared += 1
         except BaseException:
@@ -212,6 +231,84 @@ def compare(args: argparse.Namespace) -> dict:
 
 
 class ComparatorTests(unittest.TestCase):
+    def test_equal_tagged_rows_skip_only_recursive_leaf_expansion(self):
+        key = encode("t")
+        value = encode({"x": (True, 1, 1.0, -0.0, None), "y": ["a", "a"]})
+        row = serialized([key, value]) + "\n"
+        with mock.patch.object(sys.modules[__name__], "differences",
+                               side_effect=AssertionError("equal row expanded")):
+            self.assertEqual(list(exact_row_differences(value, value, row, row)), [])
+
+    def test_fast_path_keeps_every_unequal_nested_ledger_entry(self):
+        nan1 = struct.unpack(">d", bytes.fromhex("7ff8000000000042"))[0]
+        nan2 = struct.unpack(">d", bytes.fromhex("7ff8000000000043"))[0]
+        cases = [
+            ({"x": [None, True, 1, 1.0]}, {"x": [False, 1, 1.0]}),
+            ({"x": ("a", "b")}, {"x": ["a", "b"]}),
+            ({"a": 1, "b": ["x", "x"]}, {"b": ["x"], "a": 1}),
+            ({"x": nan1, "z": -0.0}, {"x": nan2, "z": 0.0}),
+            ({"x": None, "y": {"a": 1}}, {"y": {"a": 2, "b": 3}}),
+            ({"x": {"a", "b"}}, {"x": frozenset({"a", "b"})}),
+            (True, 1),
+            (1, 1.0),
+        ]
+        for before, after in cases:
+            with self.subTest(before_type=type(before).__name__, after_type=type(after).__name__):
+                expected, actual = encode(before), encode(after)
+                expected_json, actual_json = serialized([encode("t"), expected]), serialized([encode("t"), actual])
+                baseline = list(differences(expected, actual))
+                self.assertTrue(baseline)
+                self.assertEqual(list(exact_row_differences(expected, actual, expected_json, actual_json)), baseline)
+        # Fixed record order may normalize away; the nested SpliceAI order may not.
+        before = [{"pos": 1, "splice_ai": {"a": "0", "b": "1"}}]
+        after = [{"splice_ai": {"b": "1", "a": "0"}, "pos": 1}]
+        expected = reference_value("clinvar_splice_stat", "t", before)
+        actual = reference_value("clinvar_splice_stat", "t", after)
+        baseline = list(differences(expected, actual))
+        self.assertTrue(baseline)
+        self.assertEqual(list(exact_row_differences(expected, actual, serialized([encode("t"), expected]), serialized([encode("t"), actual]))), baseline)
+
+    def test_json_equality_does_not_equate_raw_json_bool_int_or_float_types(self):
+        # Defensive transport cases: Python list equality alone would mask them.
+        for left, right in (([True], [1]), ([1], [1.0]), ([False], [0])):
+            self.assertEqual(left, right)
+            self.assertNotEqual(serialized(left), serialized(right))
+            self.assertEqual(list(exact_row_differences(left, right, serialized(left), serialized(right))), list(differences(left, right)))
+
+    def test_equal_value_fast_path_keeps_top_level_guards_and_native_failure(self):
+        original = {"a": {"af": 1}, "b": {"af": 2}}
+        a, b = [encode("a"), encode(original["a"])], [encode("b"), encode(original["b"])]
+        extra = [encode("z"), encode({"af": 3})]
+        cases = [
+            ([a, a, b], 0, ["duplicate top-level key", "top-level keys not strictly sorted"], 3, 2),
+            ([b, a], 0, ["top-level keys not strictly sorted"], 2, 2),
+            ([a], 0, ["missing top-level key"], 1, 1),
+            ([a, b, extra], 0, ["extra top-level key"], 3, 3),
+            ([a, b], 7, ["native export failed"], 2, 2),
+        ]
+        for rows, exit_code, reasons, count, unique in cases:
+            with self.subTest(reasons=reasons), tempfile.TemporaryDirectory(prefix="cache_compare_guards_") as directory:
+                root = Path(directory)
+                source, binary, archive = root / "source.pkl", root / "native", root / "cache.rkyv"
+                # Tiny test-only pickle; no production pickle writer is added.
+                source.write_bytes(pickle.dumps(original, protocol=4))
+                archive.write_bytes(b"fixture identity; fake exporter below")
+                payload = "".join(serialized(row) + "\n" for row in rows)
+                binary.write_text("#!" + sys.executable + "\nimport sys\nsys.stdout.write(" + repr(payload) + ")\nraise SystemExit(" + str(exit_code) + ")\n")
+                binary.chmod(0o755)
+                args = SimpleNamespace(binary=binary, cache="clinvar_patho_af_stat", pickle=source,
+                                       archive=archive, report=root / "report.json", mismatches=root / "ledger.jsonl")
+                with mock.patch("builtins.print"):
+                    result = compare(args)
+                ledger = [json.loads(line) for line in args.mismatches.read_text().splitlines()]
+                self.assertEqual([entry["reason"] for entry in ledger], reasons)
+                self.assertEqual(result["exported_entries"], count)
+                self.assertEqual(result["unique_exported_keys"], unique)
+                self.assertEqual(result["reference_entries"], 2)
+                self.assertEqual(result["mismatches"], len(reasons))
+                self.assertTrue(result["inputs_unchanged"])
+                self.assertFalse(result["passed"])
+
     def test_float_bits_and_scalar_types(self):
         nan = struct.unpack(">d", bytes.fromhex("7ff8000000000042"))[0]
         self.assertEqual(encode(nan), ["float", "7ff8000000000042"])

@@ -41,6 +41,30 @@ pub(crate) fn absolute(path: &Path) -> Result<String> {
     .display()
     .to_string())
 }
+
+/// tempfile._mkstemp_inner applies os.path.abspath to its directory, unlike
+/// Path.absolute. Collapse lexical `..` without following symbolic links;
+/// preserve POSIX's special two-leading-slash spelling. The existing
+/// `absolute` procedure deliberately keeps its original Pathlib behavior.
+pub(crate) fn tempfile_parent(path: &Path) -> Result<PathBuf> {
+    let value = absolute(path)?;
+    let prefix = if value.starts_with("//") && !value.starts_with("///") {
+        "//"
+    } else {
+        "/"
+    };
+    let mut parts = Vec::new();
+    for part in value.split('/') {
+        match part {
+            "" | "." => {}
+            ".." => {
+                parts.pop();
+            }
+            part => parts.push(part),
+        }
+    }
+    Ok(PathBuf::from(format!("{prefix}{}", parts.join("/"))))
+}
 pub(crate) fn repr(text: &str) -> String {
     let quote = if text.contains('\'') && !text.contains('"') {
         '"'
@@ -117,4 +141,27 @@ pub(crate) fn is_file(path: &Path) -> Result<bool> {
 }
 pub(crate) fn metadata(path: &Path) -> Result<fs::Metadata> {
     fs::metadata(path).map_err(|e| os_error(e, path, None))
+}
+
+#[cfg(test)]
+mod tempfile_tests {
+    use super::*;
+    #[test]
+    fn tempfile_directory_normalization_keeps_pathlib_absolute_distinct() {
+        for (input, output) in [
+            ("/a/../b", "/b"),
+            ("//a//./b/../../", "//"),
+            ("/../../b", "/b"),
+            ("/a/b/../c", "/a/c"),
+        ] {
+            assert_eq!(
+                tempfile_parent(Path::new(input))
+                    .unwrap()
+                    .display()
+                    .to_string(),
+                output
+            );
+            assert_eq!(absolute(Path::new(input)).unwrap(), input);
+        }
+    }
 }

@@ -336,6 +336,9 @@ pub(crate) fn run() -> Result<()> {
     if args.get(1).map(String::as_str) == Some("clinvar-exon-af") {
         return crate::clinvar_exon_af_builder::dispatch(&args[2..]);
     }
+    if args.get(1).map(String::as_str) == Some("clinvar-aa-splice") {
+        return crate::clinvar_aa_splice_builder::dispatch(&args[2..]);
+    }
     if args.get(1).map(String::as_str) == Some("acmg-step") {
         return crate::acmg_step::dev_harness::dispatch(&args[2..]);
     }

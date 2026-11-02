@@ -257,10 +257,10 @@ registry. These commands never execute a refresh or read cache payloads.
 An explicit `PYTHONHASHSEED` retains CPython 3.12 string-set iteration order;
 use the same seed when comparing the Python helper. The native interface
 requires the registry path independently of its binary installation directory.
-Mixed-type route sets, JSON integers outside 128 bits, lone surrogate strings,
-deep nesting, interpreter recursion limits and first-error selection in
-multiply malformed JSON remain outside this optional interface's compatibility
-scope. Existing callers continue to use `scripts/cache_resources.py`.
+Mixed-type route sets with multiple possible missing candidates, JSON integers
+outside 128 bits, lone surrogate strings, deep nesting and interpreter
+recursion limits remain outside this optional interface's compatibility scope.
+Existing callers continue to use `scripts/cache_resources.py`.
 
 The optional DAS completion checker uses the same version-3 receipts as the
 Python helper:

@@ -120,6 +120,7 @@ impl Set {
     }
 
     /// `item in set`; an error for an item that cannot be hashed.
+    #[cfg(test)]
     pub(crate) fn contains(&self, item: &Value) -> Result<bool> {
         Ok(self.seen.contains(&identity(item)?))
     }
@@ -188,6 +189,7 @@ impl Value {
     }
 
     /// Python's `len(value)` for the sized types, `None` for the others.
+    #[cfg(test)]
     pub(crate) fn length(&self) -> Option<usize> {
         match self {
             Value::Str(text) => Some(text.chars().count()),
@@ -208,6 +210,7 @@ impl Value {
     }
 
     /// Python's `bool(value)`.
+    #[cfg(test)]
     pub(crate) fn is_truthy(&self) -> bool {
         match self {
             Value::None => false,
@@ -221,6 +224,7 @@ impl Value {
 
     /// Python's `self == other` for values that can be hashed (so `1`, `1.0`
     /// and `True` are equal); an error for a list, dict or set.
+    #[cfg(test)]
     pub(crate) fn python_equals(&self, other: &Value) -> Result<bool> {
         let not_a_number = |value: &Value| matches!(value, Value::Float(number) if number.is_nan());
         if not_a_number(self) || not_a_number(other) {

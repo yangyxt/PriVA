@@ -64,9 +64,10 @@ cardinality texts (ClinVar significance and review status, consequences, exon nu
 paths, SpliceAI scores) go into a `texts` pool (`Vec<String>`) and records hold `u32` indexes.
 For files bundled in git, see the distribution policy in section 6.
 
-**Provenance**: every root holds `provenance: Vec<{key, value}>` with at least `source` (the
-pickle or input it was made from), `source_bytes` and `converter` (`priva cache-convert` and the
-crate version).
+**Provenance**: every root holds `provenance: Vec<{key, value}>`. Converters record `source`
+(the pickle or input it was made from), `source_bytes` and `converter` (`priva cache-convert`
+and the crate version). Direct builders record the identities of their prepared inputs;
+the PM1 builder records a SHA256 for each of its four sources.
 
 ## 3. Python values in the archive
 
@@ -177,3 +178,30 @@ and reuse check that the archive's schema matches its managed generation.
 Changed sources get a new archive path, preserving the previous configuration until the
 final publication. Keep those source files and their scientific companion receipts while
 the corresponding builders still use them.
+
+## 7. Build PM1 regions from prepared inputs
+
+The standalone `pm1-regions build` procedure writes schema 7 directly, without a pickle
+intermediate. Supply the transcript mapping, existing schema-8 DAS archive, HCSeeker
+hotspots and RMC table from the same assembly and scientific profile:
+
+```bash
+priva pm1-regions build --assembly hg38 \
+  --nm-to-enst data/hgnc/ensembl_GRCh38_mart116_ftp_candidate.tsv \
+  --intolerant-domains /path/to/cache/all_intolerant_domains.hg38.v1.rkyv \
+  --hcseeker data/HCSeeker/HC_spots.hg38.tsv \
+  --rmc data/gnomAD_RMC/gnomad_v2.1.1_rmc_flat.hg38.tsv \
+  --output /path/to/cache/pm1_regions.hg38.v1.rkyv
+```
+
+This is the prepared-DAS route of `scripts/prepare_pm1_regions.py --skip_das`.
+It reads mapping, DAS, HCSeeker and RMC in that order; the RMC arm applies float64
+Benjamini-Hochberg adjustment and strict `oe < 0.4` and adjusted `p < 0.05` selection.
+Named `--rmc-oe-threshold` and `--rmc-p-bh-threshold` options preserve explicit profile
+values. Transcript lookup keys and residue sets follow the schema's canonical order;
+all values, empty transcript sets and metadata float bits are retained. Residues must
+fit the schema's signed 64-bit integers.
+
+The procedure checks source identities before publishing the completed archive, retaining
+an existing output on a source/parse failure. It does not calculate DAS or download data.
+The shell installer's existing Python producer remains separate from this opt-in procedure.

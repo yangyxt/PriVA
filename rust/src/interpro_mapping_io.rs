@@ -1,27 +1,21 @@
-//! Rust version of `scripts/interpro_mapping_io.py`: reads the InterPro
-//! mapping pickle (plain, or gzip compressed whatever the file is called) and
-//! prints metadata for `priva interpro-mapping inspect --input PATH`.
+//! Checked Rust-native InterPro mapping access for the domain and splicing rules.
 //!
-//! The mapping is a dict from `(DATABASE, accession)` to a list of entries;
-//! each entry is a tuple `(IPR id, type, short name, name, GO terms, abstract)`.
-//! Only the parts `protein_domain_mapping` reads are kept (the abstract is not),
-//! and the Python types that change what the reader does are kept: whether
-//! the GO terms are a list, and whether each GO term is a list (a tuple is
-//! not, so the GO rule never fires for the tuples the installer writes).
-//!
-//! Differences from Python, all failing loudly: the pickle is read by the
-//! restricted reader (`pickle_reader`), so a file that needs anything but plain
-//! data is refused; an entry that is not a tuple of five or more items, or whose
-//! first four items are not text, becomes an unusable entry that stops the run
-//! when it is first looked at (Python stops at the same entry for a bad shape,
-//! and a little later for a bad item type).
+//! The complete schema-9 archive stays memory-mapped. A key lookup lazily copies only the
+//! first four texts retained by those rules, preserving entry order. The producer's GO terms
+//! are tuples inside a list: Python's list-only GO-term rule skips them, as this view does.
+//! Full six-tuples, GO triples and abstracts remain available through the typed cache/export.
+use crate::cache_convert::interpro_mapping::InterproCache;
 use crate::cli::{Result, invalid};
-use crate::pickle_reader::{self, Value};
+#[cfg(test)]
+use crate::pickle_reader::Value;
+#[cfg(test)]
 use std::collections::HashMap;
 use std::path::Path;
+use std::sync::OnceLock;
 
 const USAGE: &str = "usage: priva interpro-mapping inspect --input INPUT";
 
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) enum GoTerm {
     /// Not a list of three or more items, so no rule applies to it.
     Skipped,
@@ -32,6 +26,7 @@ pub(crate) enum GoTerm {
     },
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) enum GoTerms {
     NotAList,
     List(Vec<GoTerm>),
@@ -45,19 +40,53 @@ pub(crate) struct UsableEntry {
     pub(crate) go_terms: GoTerms,
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) enum InterproEntry {
     Usable(UsableEntry),
     /// Python's `is_functional_domain` raises ValueError for this entry.
     Unusable,
 }
 
+enum MappingSource {
+    Mapped {
+        cache: InterproCache,
+        entries: Vec<OnceLock<Vec<InterproEntry>>>,
+    },
+    #[cfg(test)]
+    Fixture(HashMap<String, HashMap<String, Vec<InterproEntry>>>),
+}
+
 pub(crate) struct InterproMapping {
-    entries: HashMap<String, HashMap<String, Vec<InterproEntry>>>,
+    source: MappingSource,
 }
 
 impl InterproMapping {
     pub(crate) fn get(&self, database: &str, accession: &str) -> Option<&Vec<InterproEntry>> {
-        self.entries.get(database)?.get(accession)
+        match &self.source {
+            MappingSource::Mapped { cache, entries } => {
+                let at = cache.position(database, accession)?;
+                Some(entries[at].get_or_init(|| {
+                    cache
+                        .get(database, accession)
+                        .unwrap()
+                        .iter()
+                        .map(|entry| {
+                            InterproEntry::Usable(UsableEntry {
+                                id: cache.text(&entry.id).to_owned(),
+                                kind: cache.text(&entry.kind).to_owned(),
+                                short_name: cache.text(&entry.short_name).to_owned(),
+                                full_name: cache.text(&entry.name).to_owned(),
+                                go_terms: GoTerms::List(
+                                    entry.go_terms.iter().map(|_| GoTerm::Skipped).collect(),
+                                ),
+                            })
+                        })
+                        .collect()
+                }))
+            }
+            #[cfg(test)]
+            MappingSource::Fixture(entries) => entries.get(database)?.get(accession),
+        }
     }
 
     #[cfg(test)]
@@ -69,10 +98,13 @@ impl InterproMapping {
                 .or_default()
                 .insert(accession.to_owned(), list);
         }
-        InterproMapping { entries }
+        Self {
+            source: MappingSource::Fixture(entries),
+        }
     }
 }
 
+#[cfg(test)]
 fn go_term_from_value(value: &Value) -> GoTerm {
     match value {
         Value::List(items) => {
@@ -90,6 +122,7 @@ fn go_term_from_value(value: &Value) -> GoTerm {
     }
 }
 
+#[cfg(test)]
 fn entry_from_value(value: &Value) -> InterproEntry {
     let Value::Tuple(fields) = value else {
         return InterproEntry::Unusable;
@@ -120,47 +153,16 @@ fn entry_from_value(value: &Value) -> InterproEntry {
     })
 }
 
-/// Turns the loaded pickle into the lookup the splicing step needs. Keys that
-/// are not `(text, text)` tuples can never be looked up and are left out.
-pub(crate) fn mapping_from_value(value: &Value) -> Result<InterproMapping> {
-    let Value::Dict(dict) = value else {
-        return Err(invalid(format!(
-            "the InterPro mapping is a {}, not a dict",
-            value.type_name()
-        )));
-    };
-    let dict = dict.borrow();
-    let mut entries: HashMap<String, HashMap<String, Vec<InterproEntry>>> = HashMap::new();
-    for (key, list) in &dict.entries {
-        let Value::Tuple(parts) = key else { continue };
-        if parts.len() != 2 {
-            continue;
-        }
-        let (Some(database), Some(accession)) = (parts[0].as_str(), parts[1].as_str()) else {
-            continue;
-        };
-        let converted: Vec<InterproEntry> = match list {
-            Value::List(items) => items.borrow().iter().map(entry_from_value).collect(),
-            Value::Tuple(items) => items.iter().map(entry_from_value).collect(),
-            other => {
-                return Err(invalid(format!(
-                    "the InterPro mapping holds a {} for {database}/{accession}, not a list",
-                    other.type_name()
-                )));
-            }
-        };
-        entries
-            .entry(database.to_owned())
-            .or_default()
-            .insert(accession.to_owned(), converted);
-    }
-    Ok(InterproMapping { entries })
-}
-
-/// `load_interpro_mapping`: gzip is chosen by the file's first two bytes.
+/// Maps and validates the complete schema-9 archive; Python pickles are refused.
 pub(crate) fn load_interpro_mapping(path: &Path) -> Result<InterproMapping> {
-    let bytes = pickle_reader::read_file_by_magic(path)?;
-    mapping_from_value(&pickle_reader::load(&bytes)?)
+    let path = path
+        .to_str()
+        .ok_or_else(|| invalid("the InterPro cache path is not UTF-8"))?;
+    let cache = InterproCache::open(path)?;
+    let entries = (0..cache.len()).map(|_| OnceLock::new()).collect();
+    Ok(InterproMapping {
+        source: MappingSource::Mapped { cache, entries },
+    })
 }
 
 /// Python's `json.dumps` of a string (ASCII only, as `ensure_ascii` writes it).
@@ -209,16 +211,11 @@ fn path_text(argument: &str) -> String {
 
 /// The metadata line of `inspect`: the pickle's type and, for a sized value, its length.
 pub(crate) fn inspect_mapping(path: &str) -> Result<String> {
-    let bytes = pickle_reader::read_file_by_magic(Path::new(path))?;
-    let value = pickle_reader::load(&bytes)?;
-    let entries = match value.length() {
-        Some(length) => length.to_string(),
-        None => "null".to_owned(),
-    };
+    let entries = InterproCache::open(path)?.len();
     Ok(format!(
         "{{\"entries\": {entries}, \"input\": {}, \"value_type\": {}}}",
         json_string(&path_text(path)),
-        json_string(value.type_name())
+        json_string("dict")
     ))
 }
 
@@ -342,7 +339,7 @@ mod tests {
     fn the_bundled_mapping_is_read() {
         let path = crate::protein_domain_mapping::data_directory()
             .join("InterPro")
-            .join("Interpro_entry_mapping.pkl.gz");
+            .join("Interpro_entry_mapping.v1.rkyv");
         let line = inspect_mapping(&path.to_string_lossy()).unwrap();
         assert!(
             line.starts_with("{\"entries\": 60301, \"input\": "),
@@ -350,6 +347,10 @@ mod tests {
         );
         assert!(line.ends_with("\"value_type\": \"dict\"}"), "{line}");
         let mapping = load_interpro_mapping(&path).unwrap();
+        let MappingSource::Mapped { entries, .. } = &mapping.source else {
+            panic!("native map")
+        };
+        assert!(entries.iter().all(|entry| entry.get().is_none()));
         let entries = mapping.get("PFAM", "PF00001").unwrap();
         let InterproEntry::Usable(first) = &entries[0] else {
             panic!("the first PF00001 entry is usable")
@@ -357,5 +358,15 @@ mod tests {
         assert_eq!(first.id, "IPR000276");
         assert_eq!(first.short_name, "GPCR_Rhodpsn");
         assert!(matches!(first.go_terms, GoTerms::List(_)));
+        assert!(
+            matches!(&first.go_terms, GoTerms::List(terms) if terms.iter().all(|term| matches!(term, GoTerm::Skipped)))
+        );
+        let MappingSource::Mapped { entries, .. } = &mapping.source else {
+            unreachable!()
+        };
+        assert_eq!(
+            entries.iter().filter(|entry| entry.get().is_some()).count(),
+            1
+        );
     }
 }

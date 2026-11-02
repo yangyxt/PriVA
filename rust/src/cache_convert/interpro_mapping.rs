@@ -292,12 +292,19 @@ impl InterproCache {
         accession: &str,
     ) -> Option<&rkyv::vec::ArchivedVec<ArchivedInterproEntry>> {
         let root = self.mapped.root();
-        root.keys
+        self.position(database, accession)
+            .map(|at| &root.entries[at])
+    }
+
+    /// The stable slot for a key, for consumers that retain a small lazily decoded view.
+    pub(crate) fn position(&self, database: &str, accession: &str) -> Option<usize> {
+        self.mapped
+            .root()
+            .keys
             .binary_search_by(|key| {
                 (key.database.as_str(), key.accession.as_str()).cmp(&(database, accession))
             })
             .ok()
-            .map(|at| &root.entries[at])
     }
 
     /// Access a validated pooled string without allocating.

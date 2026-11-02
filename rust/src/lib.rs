@@ -14,6 +14,7 @@ pub mod cadd_hub;
 mod cli;
 mod clingen_map_builder;
 mod clinvar_aa_splice_builder;
+mod clinvar_contract;
 mod clinvar_exon_af_builder;
 mod clinvar_gene_af_builder;
 mod clinvar_gene_stat_builder;

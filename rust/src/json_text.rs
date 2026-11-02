@@ -168,15 +168,190 @@ struct Parser<'a> {
     text: &'a str,
     pos: usize,
     reject_duplicates: bool,
+    metadata_comparison: bool,
 }
 
 /// Parses a whole document. With `reject_duplicate_keys`, a key repeated in one
 /// object is an error naming the key (`Duplicate manifest key: ...`).
 pub(crate) fn parse(text: &str, reject_duplicate_keys: bool) -> Result<Json, String> {
-    parse_document(text, reject_duplicate_keys).map_err(|failure| failure.describe(text))
+    parse_document(text, reject_duplicate_keys, false).map_err(|failure| failure.describe(text))
 }
 
-fn parse_document(text: &str, reject_duplicate_keys: bool) -> Result<Json, Problem> {
+/// Equality-only projection for completion metadata, never a general JSON
+/// reader or a value writer. The comparison target must contain only NUL-free
+/// UTF-8 strings, integers strictly within +/-2^96, objects and arrays.
+///
+/// An unpaired surrogate cannot equal any target string, so project it to NUL;
+/// an out-of-i128 integer cannot equal any target integer, so project it to
+/// i128::MAX. Unknown object keys still remain unknown. This lets the original
+/// receipt check ignore arbitrary extra fields without silently restricting
+/// json.loads to the smaller native value representation. Default parsing and
+/// every existing reader keep their original refusals and depth bound.
+pub(crate) fn parse_metadata_comparison(text: &str, target: &Json) -> Result<Json, String> {
+    fn supported(value: &Json) -> bool {
+        match value {
+            Json::Str(s) => !s.contains('\0'),
+            Json::Int(n) => n.unsigned_abs() < (1_u128 << 96),
+            Json::Array(values) => values.iter().all(supported),
+            Json::Object(values) => values
+                .iter()
+                .all(|(k, v)| !k.contains('\0') && supported(v)),
+            _ => false,
+        }
+    }
+    if !supported(target) {
+        return Err("invalid metadata comparison target".into());
+    }
+    parse_metadata_document(text, target).map_err(|failure| failure.describe(text))
+}
+
+/// A comparison parses unknown/mistyped subtrees completely, but need not
+/// retain their values: no subtree with that key/type can equal the target.
+/// An explicit stack avoids growing the native call stack for ignored extras.
+enum MetadataFrame<'a> {
+    Array {
+        values: Vec<Json>,
+        target: Option<&'a [Json]>,
+    },
+    Object {
+        values: Vec<(String, Json)>,
+        target: Option<&'a [(String, Json)]>,
+        key: String,
+    },
+}
+
+fn parse_metadata_document(text: &str, target: &Json) -> Result<Json, Problem> {
+    if text.starts_with('\u{feff}') {
+        return problem("Unexpected UTF-8 BOM (decode using utf-8-sig)", 0);
+    }
+    let mut parser = Parser {
+        bytes: text.as_bytes(),
+        text,
+        pos: 0,
+        reject_duplicates: false,
+        metadata_comparison: true,
+    };
+    let mut frames = Vec::new();
+    let mut wanted = Some(target);
+    let mut pending = None;
+    loop {
+        if pending.is_none() {
+            parser.skip_whitespace();
+            let opening = parser.peek();
+            if matches!(opening, Some(b'[' | b'{')) {
+                // Pinned CPython 3.12's C decoder has an independent recursion
+                // budget; Python's sys.getrecursionlimit() is not this limit.
+                if frames.len() >= 9997 {
+                    return plain_problem(TOO_DEEP);
+                }
+                parser.pos += 1;
+                parser.skip_whitespace();
+                if opening == Some(b'[') {
+                    let target = match wanted {
+                        Some(Json::Array(v)) => Some(v.as_slice()),
+                        _ => None,
+                    };
+                    if parser.peek() == Some(b']') {
+                        parser.pos += 1;
+                        pending = Some(Json::Array(vec![]));
+                    } else {
+                        frames.push(MetadataFrame::Array {
+                            values: vec![],
+                            target,
+                        });
+                        wanted = target.and_then(|v| v.first());
+                        continue;
+                    }
+                } else {
+                    let target = match wanted {
+                        Some(Json::Object(v)) => Some(v.as_slice()),
+                        _ => None,
+                    };
+                    if parser.peek() == Some(b'}') {
+                        parser.pos += 1;
+                        pending = Some(Json::Object(vec![]));
+                    } else {
+                        let key = parser.metadata_key()?;
+                        wanted =
+                            target.and_then(|v| v.iter().find(|(k, _)| k == &key).map(|(_, v)| v));
+                        frames.push(MetadataFrame::Object {
+                            values: vec![],
+                            target,
+                            key,
+                        });
+                        continue;
+                    }
+                }
+            } else {
+                pending = Some(parser.value(0)?);
+            }
+        }
+        let value = pending.take().unwrap();
+        let Some(frame) = frames.last_mut() else {
+            parser.skip_whitespace();
+            if parser.pos != parser.bytes.len() {
+                return problem("Extra data", parser.pos);
+            }
+            return Ok(value);
+        };
+        match frame {
+            MetadataFrame::Array { values, target } => {
+                if target.is_some() {
+                    values.push(value);
+                }
+                parser.skip_whitespace();
+                match parser.peek() {
+                    Some(b',') => {
+                        parser.pos += 1;
+                        wanted = target.and_then(|v| v.get(values.len()));
+                        continue;
+                    }
+                    Some(b']') => {
+                        parser.pos += 1;
+                    }
+                    _ => return problem("Expecting ',' delimiter", parser.pos),
+                }
+            }
+            MetadataFrame::Object {
+                values,
+                target,
+                key,
+            } => {
+                if target.is_some() {
+                    if let Some((_, previous)) = values.iter_mut().find(|(k, _)| k == key) {
+                        *previous = value;
+                    } else {
+                        values.push((key.clone(), value));
+                    }
+                }
+                parser.skip_whitespace();
+                match parser.peek() {
+                    Some(b',') => {
+                        parser.pos += 1;
+                        *key = parser.metadata_key()?;
+                        wanted =
+                            target.and_then(|v| v.iter().find(|(k, _)| k == key).map(|(_, v)| v));
+                        continue;
+                    }
+                    Some(b'}') => {
+                        parser.pos += 1;
+                    }
+                    _ => return problem("Expecting ',' delimiter", parser.pos),
+                }
+            }
+        }
+        pending = Some(match frames.pop().unwrap() {
+            MetadataFrame::Array { values, .. } => Json::Array(values),
+            MetadataFrame::Object { values, .. } => Json::Object(values),
+        });
+    }
+}
+
+fn parse_document(
+    text: &str,
+    reject_duplicate_keys: bool,
+    metadata_comparison: bool,
+) -> Result<Json, Problem> {
     if text.starts_with('\u{feff}') {
         return problem("Unexpected UTF-8 BOM (decode using utf-8-sig)", 0);
     }
@@ -185,6 +360,7 @@ fn parse_document(text: &str, reject_duplicate_keys: bool) -> Result<Json, Probl
         text,
         pos: 0,
         reject_duplicates: reject_duplicate_keys,
+        metadata_comparison,
     };
     parser.skip_whitespace();
     let value = parser.value(0)?;
@@ -196,6 +372,22 @@ fn parse_document(text: &str, reject_duplicate_keys: bool) -> Result<Json, Probl
 }
 
 impl<'a> Parser<'a> {
+    fn metadata_key(&mut self) -> Result<String, Problem> {
+        self.skip_whitespace();
+        if self.peek() != Some(b'"') {
+            return problem(
+                "Expecting property name enclosed in double quotes",
+                self.pos,
+            );
+        }
+        let key = self.string()?;
+        self.skip_whitespace();
+        if self.peek() != Some(b':') {
+            return problem("Expecting ':' delimiter", self.pos);
+        }
+        self.pos += 1;
+        Ok(key)
+    }
     fn skip_whitespace(&mut self) {
         while self.pos < self.bytes.len()
             && matches!(self.bytes[self.pos], b' ' | b'\t' | b'\n' | b'\r')
@@ -296,6 +488,15 @@ impl<'a> Parser<'a> {
             let value: i128 = match literal.parse() {
                 Ok(value) => value,
                 Err(_) => {
+                    if self.metadata_comparison {
+                        let digits = literal.trim_start_matches('-').len();
+                        if digits > 4300 {
+                            return plain_problem(&format!(
+                                "Exceeds the limit (4300 digits) for integer string conversion: value has {digits} digits; use sys.set_int_max_str_digits() to increase the limit"
+                            ));
+                        }
+                        return Ok(Json::Int(i128::MAX));
+                    }
                     return plain_problem(&format!("integer too large for this tool: {literal}"));
                 }
             };
@@ -358,17 +559,33 @@ impl<'a> Parser<'a> {
                             let first = self.hex4(self.pos - 1)?;
                             let code = if (0xd800..0xdc00).contains(&first) {
                                 if self.text[self.pos..].starts_with("\\u") {
+                                    let second_start = self.pos;
                                     self.pos += 2;
                                     let second = self.hex4(self.pos - 1)?;
                                     if !(0xdc00..0xe000).contains(&second) {
-                                        return plain_problem(LONE_SURROGATE);
+                                        if self.metadata_comparison {
+                                            // Leave the second escape to the next iteration.
+                                            self.pos = second_start;
+                                            out.push('\0');
+                                            continue;
+                                        } else {
+                                            return plain_problem(LONE_SURROGATE);
+                                        }
                                     }
                                     0x10000 + ((first - 0xd800) << 10) + (second - 0xdc00)
                                 } else {
-                                    return plain_problem(LONE_SURROGATE);
+                                    if self.metadata_comparison {
+                                        0
+                                    } else {
+                                        return plain_problem(LONE_SURROGATE);
+                                    }
                                 }
                             } else if (0xdc00..0xe000).contains(&first) {
-                                return plain_problem(LONE_SURROGATE);
+                                if self.metadata_comparison {
+                                    0
+                                } else {
+                                    return plain_problem(LONE_SURROGATE);
+                                }
                             } else {
                                 first
                             };
@@ -1042,5 +1259,42 @@ mod tests {
         let value = parse("\"\\ud83d\\ude00\"", false).unwrap();
         assert_eq!(value.as_str(), Some("\u{1f600}"));
         assert!(parse("\"\\ud83d\"", false).is_err());
+    }
+
+    #[test]
+    fn metadata_projection_does_not_widen_default_json_readers() {
+        let target = parse(r#"{"schema":1,"path":"valid"}"#, false).unwrap();
+        for token in [
+            format!("1{}", "0".repeat(100)),
+            r#""\ud800""#.into(),
+            format!("{}0{}", "[".repeat(450), "]".repeat(450)),
+        ] {
+            assert!(parse(&token, false).is_err());
+            let text = format!(r#"{{"schema":1,"path":"valid","ignored":{token}}}"#);
+            let projected = parse_metadata_comparison(&text, &target).unwrap();
+            assert!(py_equal(
+                projected.get("schema").unwrap(),
+                target.get("schema").unwrap()
+            ));
+            assert!(py_equal(
+                projected.get("path").unwrap(),
+                target.get("path").unwrap()
+            ));
+            // Complete-input equality still refuses an unexpected field.
+            assert!(!py_equal(&projected, &target));
+        }
+        for text in [
+            r#"{"schema":1,"path":"\ud800"}"#,
+            r#"{"schema":1,"path":"\ud800\u0041"}"#,
+            r#"{"schema":1,"path":"\u0000"}"#,
+        ] {
+            assert!(!py_equal(
+                &parse_metadata_comparison(text, &target).unwrap(),
+                &target
+            ));
+        }
+        assert!(parse_metadata_comparison("{}", &Json::Int(i128::MAX)).is_err());
+        assert!(parse_metadata_comparison("{}", &Json::Str("\0".into())).is_err());
+        assert!(parse_metadata_comparison("{}", &Json::Float(1.0)).is_err());
     }
 }

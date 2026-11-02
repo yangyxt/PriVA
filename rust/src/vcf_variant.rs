@@ -65,6 +65,12 @@ fn attributes(line: &str, prefix: &str) -> Option<HashMap<String, String>> {
 pub(crate) fn header(path: &Path) -> Result<Header> {
     check_vcf_compression(path)?;
     let mut reader = crate::vcf_text::open_reader(path)?;
+    read_header(reader.as_mut())
+}
+
+/// Parse a header from an already selected VCF text stream. Container handling
+/// remains with the caller (the annotation contract also accepts BCF headers).
+pub(crate) fn read_header(reader: &mut dyn BufRead) -> Result<Header> {
     let mut line = String::new();
     reader.read_line(&mut line)?;
     if !line.starts_with("##fileformat=VCFv") {

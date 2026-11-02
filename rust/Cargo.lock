@@ -996,6 +996,7 @@ name = "priva-tabular"
 version = "0.1.0"
 dependencies = [
  "bzip2",
+ "cc",
  "csv",
  "flate2",
  "libc",

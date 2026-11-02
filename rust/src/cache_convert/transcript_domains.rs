@@ -56,9 +56,9 @@ pub(crate) struct TranscriptDomainMap {
 }
 
 #[derive(Debug, PartialEq)]
-struct PlainTranscript {
-    exon_domains: Vec<(String, Vec<String>)>,
-    pp_domains: Vec<(i64, i64, String)>,
+pub(crate) struct PlainTranscript {
+    pub(crate) exon_domains: Vec<(String, Vec<String>)>,
+    pub(crate) pp_domains: Vec<(i64, i64, String)>,
 }
 
 fn plain_transcript(path: &str, transcript: &str, value: &Item) -> Result<PlainTranscript> {
@@ -134,36 +134,36 @@ fn read_pickle(path: &str) -> Result<Vec<(String, PlainTranscript)>> {
 }
 
 fn build(
-    mut entries: Vec<(String, PlainTranscript)>,
+    entries: &mut [(String, PlainTranscript)],
     provenance: Vec<Provenance>,
 ) -> Result<Vec<u8>> {
     entries.sort_by(|a, b| a.0.cmp(&b.0));
     let mut pool = StringPool::default();
     let mut transcripts = Vec::with_capacity(entries.len());
     let mut records = Vec::with_capacity(entries.len());
-    for (transcript, entry) in entries {
-        transcripts.push(transcript);
+    for (transcript, entry) in entries.iter() {
+        transcripts.push(transcript.clone());
         let exon_domains = entry
             .exon_domains
-            .into_iter()
+            .iter()
             .map(|(exon, domains)| {
                 Ok(ExonDomains {
-                    exon: pool.intern(&exon)?,
+                    exon: pool.intern(exon)?,
                     domains: domains
-                        .into_iter()
-                        .map(|domain| pool.intern(&domain))
+                        .iter()
+                        .map(|domain| pool.intern(domain))
                         .collect::<Result<_>>()?,
                 })
             })
             .collect::<Result<_>>()?;
         let pp_domains = entry
             .pp_domains
-            .into_iter()
+            .iter()
             .map(|(start, end, domain)| {
                 Ok(ProteinDomain {
-                    start,
-                    end,
-                    domain: pool.intern(&domain)?,
+                    start: *start,
+                    end: *end,
+                    domain: pool.intern(domain)?,
                 })
             })
             .collect::<Result<_>>()?;
@@ -308,7 +308,7 @@ fn check(pickle: &str, output: &Path, count: usize) -> Result<()> {
 pub(crate) fn convert(pickle: &str, output: &Path) -> Result<String> {
     ensure_distinct_paths(Path::new(pickle), output)?;
     let start = Instant::now();
-    let entries = read_pickle(pickle)?;
+    let mut entries = read_pickle(pickle)?;
     let count = entries.len();
     let protein_domains: usize = entries
         .iter()
@@ -318,7 +318,7 @@ pub(crate) fn convert(pickle: &str, output: &Path) -> Result<String> {
         .iter()
         .map(|(_, entry)| entry.exon_domains.len())
         .sum();
-    let archive = build(entries, provenance(pickle)?)?;
+    let archive = build(&mut entries, provenance(pickle)?)?;
     write_cache_checked(output, ALPHAMISSENSE_TRANX_DOMAIN_MAP, &archive, |staged| {
         check(pickle, staged, count)
     })?;
@@ -327,6 +327,31 @@ pub(crate) fn convert(pickle: &str, output: &Path) -> Result<String> {
         std::fs::metadata(output)?.len(),
         start.elapsed().as_secs_f64()
     ))
+}
+
+/// Direct native producer boundary for schema 3. Only transcript lookup keys
+/// are sorted. Exon dictionary order and every protein/domain list occurrence
+/// remain supplied by the producer, including repeated list values.
+#[allow(dead_code)] // Used when the independently qualified DAS producer is connected.
+pub(crate) fn write_entries(
+    output: &Path,
+    mut entries: Vec<(String, PlainTranscript)>,
+    provenance: Vec<Provenance>,
+) -> Result<usize> {
+    let archive = build(&mut entries, provenance)?;
+    write_cache_checked(output, ALPHAMISSENSE_TRANX_DOMAIN_MAP, &archive, |staged| {
+        let cache = TranscriptDomainCache::open(&staged.to_string_lossy())?;
+        if cache.len() != entries.len() {
+            return Err(invalid("native transcript count differs"));
+        }
+        for (transcript, expected) in &entries {
+            if cache.plain(transcript).as_ref() != Some(expected) {
+                return Err(invalid("native transcript value differs after writing"));
+            }
+        }
+        Ok(())
+    })?;
+    Ok(entries.len())
 }
 
 /// Complete typed values for an independent Python comparison, one sorted transcript per line.
@@ -396,6 +421,66 @@ mod tests {
         ));
         std::fs::write(&path, bytes).unwrap();
         path.to_str().unwrap().to_owned()
+    }
+
+    #[test]
+    fn native_writer_matches_python_fixture_and_preserves_order() {
+        let pickle = temporary("native_input.pkl", GOOD);
+        let old = temporary("converted_fixture.rkyv", b"");
+        convert(&pickle, Path::new(&old)).unwrap();
+        let output = temporary("native_fixture.rkyv", b"");
+        let entries = vec![
+            (
+                "tx2".into(),
+                PlainTranscript {
+                    exon_domains: vec![
+                        ("2".into(), vec!["d2".into(), "d2".into(), "d1".into()]),
+                        ("1".into(), vec![]),
+                    ],
+                    pp_domains: vec![
+                        (7, 11, "d2".into()),
+                        (2, 9, "d1".into()),
+                        (7, 11, "d2".into()),
+                    ],
+                },
+            ),
+            (
+                "tx1".into(),
+                PlainTranscript {
+                    exon_domains: vec![],
+                    pp_domains: vec![],
+                },
+            ),
+        ];
+        assert_eq!(
+            write_entries(Path::new(&output), entries, provenance(&pickle).unwrap()).unwrap(),
+            2
+        );
+        assert_eq!(
+            std::fs::read(&old).unwrap(),
+            std::fs::read(&output).unwrap()
+        );
+        // Invalid free-key dictionaries must fail before replacing an output.
+        let output = temporary("native_duplicate.rkyv", b"retained");
+        for duplicate_transcripts in [false, true] {
+            let empty = || PlainTranscript {
+                exon_domains: vec![],
+                pp_domains: vec![],
+            };
+            let entries = if duplicate_transcripts {
+                vec![("tx".into(), empty()), ("tx".into(), empty())]
+            } else {
+                vec![(
+                    "tx".into(),
+                    PlainTranscript {
+                        exon_domains: vec![("1".into(), vec![]), ("1".into(), vec![])],
+                        pp_domains: vec![],
+                    },
+                )]
+            };
+            assert!(write_entries(Path::new(&output), entries, vec![]).is_err());
+            assert_eq!(std::fs::read(&output).unwrap(), b"retained");
+        }
     }
 
     #[test]

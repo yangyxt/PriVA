@@ -23,7 +23,10 @@ mod hpo_assertions;
 pub mod hpo_penetrance;
 pub mod interpro_mapping_io;
 mod json_text;
-#[allow(dead_code, reason = "Publisher-checksum API awaiting installer-builder callers")]
+#[allow(
+    dead_code,
+    reason = "Publisher-checksum API awaiting installer-builder callers"
+)]
 mod md5;
 mod mondo_scope;
 mod pandas_polars;

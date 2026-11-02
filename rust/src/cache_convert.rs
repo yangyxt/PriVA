@@ -23,6 +23,7 @@ pub(crate) mod clinvar_exon_af;
 pub(crate) mod clinvar_gene_af;
 pub(crate) mod clinvar_splice_stat;
 pub(crate) mod clingen_map;
+pub(crate) mod clinvar_gene_stat;
 pub(crate) mod common;
 pub(crate) mod intolerant_domains;
 pub(crate) mod pm1_regions;
@@ -427,6 +428,7 @@ pub(crate) fn dispatch_export(args: &[String]) -> Result<()> {
         "clinvar_patho_af_stat" => clinvar_gene_af::export,
         "clingen_map" => clingen_map::export,
         "interpro_mapping_pickle" => interpro_mapping::export,
+        "clinvar_gene_stat" => clinvar_gene_stat::export,
         _ => return Err(invalid(format!("cache-export: unsupported cache {cache}"))),
     };
     if output == "-" {
@@ -511,6 +513,10 @@ pub(crate) fn dispatch(args: &[String]) -> Result<()> {
         }
         "clingen_map" => {
             println!("{}", clingen_map::convert(pickle, Path::new(output))?);
+            Ok(())
+        }
+        "clinvar_gene_stat" => {
+            println!("{}", clinvar_gene_stat::convert(pickle, Path::new(output))?);
             Ok(())
         }
         "interpro_mapping_pickle" => {

@@ -41,3 +41,5 @@ pub fn main_entry() {
         std::process::exit(2);
     }
 }
+
+mod vcf_variant;

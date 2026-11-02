@@ -16,6 +16,8 @@ import unittest
 
 
 SOURCE = Path(__file__).resolve().parents[1] / "scripts/am_pick_intolerant_domains.py"
+sys.path.insert(0, str(SOURCE.parents[1] / "rust/tests"))
+from das_sorted_reference import render_source
 FUNCTIONS = ("rescue_bimodal_go_mf_domains", "rescue_non_gomf_domains")
 
 
@@ -36,7 +38,7 @@ class CapturePool:
 
 
 def procedures():
-    tree = ast.parse(SOURCE.read_text())
+    tree = ast.parse(render_source(SOURCE.read_bytes()))
     selected = [node for node in tree.body
                 if isinstance(node, ast.FunctionDef) and node.name in FUNCTIONS]
     assert len(selected) == 2
@@ -74,6 +76,19 @@ def hash_probe():
 
 
 class RescueOrderTests(unittest.TestCase):
+    def test_original_installer_source_stays_unsorted(self):
+        before = SOURCE.read_bytes()
+        tree = ast.parse(before)
+        for name in FUNCTIONS:
+            function = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == name)
+            loops = [n for n in ast.walk(function) if isinstance(n, ast.For)
+                     and isinstance(n.target, ast.Name) and n.target.id == 'domain_path'
+                     and isinstance(n.iter, ast.Name) and n.iter.id == 'tolerant_domains']
+            self.assertEqual(len(loops), 1)
+        rendered = render_source(before)
+        self.assertEqual(SOURCE.read_bytes(), before)
+        self.assertEqual(rendered.replace(b'sorted(tolerant_domains)', b'tolerant_domains'), before)
+
     def test_hash_seed_does_not_change_domain_to_seed(self):
         outcomes = []
         for seed in ("0", "1", "42"):

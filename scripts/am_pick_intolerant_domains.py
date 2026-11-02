@@ -475,9 +475,7 @@ def rescue_bimodal_go_mf_domains(tolerant_domains, domain_scores, fixed_composit
     candidate_composites = []
     directly_rescued = set()
     n_go_mf = 0
-    # Native reference profile: domain-sorted-rescue-v1 (approved 2026-11-02 CT).
-    # Set hashing / KS worker completion must not choose a domain's seed + i.
-    for domain_path in sorted(tolerant_domains):
+    for domain_path in tolerant_domains:
         if domain_path not in domain_scores:
             continue
         domain_name = domain_path.split(':', 1)[-1]
@@ -604,9 +602,7 @@ def rescue_non_gomf_domains(tolerant_domains, domain_scores, fixed_composite,
     candidates = []
     candidate_composites = []
     n_eligible_type = 0
-    # Same domain-sorted-rescue-v1 profile as the GO-MF rescue above. Keep the
-    # original candidate filters, seed + i, permutation count and FDR unchanged.
-    for domain_path in sorted(tolerant_domains):
+    for domain_path in tolerant_domains:
         if domain_path not in domain_scores:
             continue
         domain_name = domain_path.split(':', 1)[-1]

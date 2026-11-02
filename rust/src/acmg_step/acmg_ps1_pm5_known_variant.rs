@@ -21,6 +21,9 @@ use super::gene_mechanism_resources::harness_resolver;
 #[cfg(test)]
 use super::pickle_dict_stream::{Item, TextDict, visit_top_level_dict};
 use super::types::{AcmgError, HarnessCall, StepOutput, not_converted};
+use crate::cache_convert::clinvar_splice_stat::typed::{
+    Cache as SpliceCache, Record as TypedSpliceRecord,
+};
 use crate::cache_convert::clinvar_splice_stat::{ArchivedSpliceRecord, ClinvarSpliceCache};
 use crate::cache_convert::{ArchivedAaTranscript, ClinvarAaCache};
 use crate::cli::{Result, invalid};
@@ -71,10 +74,10 @@ struct SpliceRecord {
     chrom: Rc<str>,
     pos: i64,
     /// `abs(len(ref) - len(alt))`, at least 1 (lengths in code points).
-    length_change: i64,
-    hgvsc: Rc<str>,
-    exon: Rc<str>,
-    intron: Rc<str>,
+    length_change: Option<i64>,
+    hgvsc: Option<Rc<str>>,
+    exon: Option<Rc<str>>,
+    intron: Option<Rc<str>>,
     clinvar_sig: Rc<str>,
     /// `splice_ai.get(name)` for DS_AG, DS_AL, DS_DG, DS_DL (`None`: absent).
     delta_scores: [Option<Rc<str>>; 4],
@@ -158,16 +161,21 @@ impl ClinvarKnownVariants {
                 known.amino_acid.insert(transcript.to_owned(), decoded);
             }
         }
-        let splice = ClinvarSpliceCache::open(clinvar_splice_dict_pkl)?;
+        let splice = SpliceCache::open(clinvar_splice_dict_pkl)?;
         known.splice_transcripts = splice.len();
         for transcript in splice.keys().iter().filter(|key| wanted(key.as_str())) {
             let transcript = transcript.as_str();
-            let decoded = decode_archived_splice_transcript(
-                clinvar_splice_dict_pkl,
-                transcript,
-                &splice,
-                splice.get(transcript).unwrap(),
-            )?;
+            let decoded = match &splice {
+                SpliceCache::V1(cache) => decode_archived_splice_transcript(
+                    clinvar_splice_dict_pkl,
+                    transcript,
+                    cache,
+                    cache.get(transcript).unwrap(),
+                )?,
+                SpliceCache::V2(_) => {
+                    decode_typed_splice_transcript(splice.plain(transcript).unwrap())
+                }
+            };
             known.splice.insert(transcript.to_owned(), decoded);
         }
         Ok(known)
@@ -348,10 +356,10 @@ fn decode_splice_transcript(
         decoded.records.push(SpliceRecord {
             chrom: text("chrom")?,
             pos,
-            length_change: if change == 0 { 1 } else { change },
-            hgvsc: text("hgvsc")?,
-            exon: text("exon")?,
-            intron: text("intron")?,
+            length_change: Some(if change == 0 { 1 } else { change }),
+            hgvsc: Some(text("hgvsc")?),
+            exon: Some(text("exon")?),
+            intron: Some(text("intron")?),
             clinvar_sig,
             delta_scores,
         });
@@ -405,15 +413,49 @@ fn decode_archived_splice_transcript(
         decoded.records.push(SpliceRecord {
             chrom: text(cache.text(&record.chrom), "chrom")?,
             pos: record.pos.to_native(),
-            length_change: if change == 0 { 1 } else { change },
-            hgvsc: text(record.hgvsc.as_str(), "hgvsc")?,
-            exon: text(cache.text(&record.exon), "exon")?,
-            intron: text(cache.text(&record.intron), "intron")?,
+            length_change: Some(if change == 0 { 1 } else { change }),
+            hgvsc: Some(text(record.hgvsc.as_str(), "hgvsc")?),
+            exon: Some(text(cache.text(&record.exon), "exon")?),
+            intron: Some(text(cache.text(&record.intron), "intron")?),
             clinvar_sig,
             delta_scores,
         });
     }
     Ok(decoded)
+}
+
+/// The source supports missing fields and partial score dictionaries. Keep the
+/// nullable ALT failure deferred until the matching record reaches len(alt).
+/// A missing HGVSc reaches the original parser as a non-string and yields None.
+fn decode_typed_splice_transcript(records: Vec<TypedSpliceRecord>) -> SpliceTranscript {
+    let mut decoded = SpliceTranscript::default();
+    for record in records {
+        decoded.gene_level_pathogenic |=
+            gene_level_pathogenic(&record.clinvar_sig, &record.clinvar_review);
+        let length_change = record.alternative.as_ref().map(|alt| {
+            (record.reference.chars().count() as i64 - alt.chars().count() as i64)
+                .abs()
+                .max(1)
+        });
+        let delta_scores = DELTA_SCORE_NAMES.map(|name| {
+            record
+                .splice_ai
+                .iter()
+                .find(|(key, _)| key == name)
+                .map(|(_, value)| Rc::from(value.as_str()))
+        });
+        decoded.records.push(SpliceRecord {
+            chrom: Rc::from(record.chrom),
+            pos: record.pos,
+            length_change,
+            hgvsc: record.hgvsc.map(Rc::from),
+            exon: record.exon.map(Rc::from),
+            intron: record.intron.map(Rc::from),
+            clinvar_sig: Rc::from(record.clinvar_sig),
+            delta_scores,
+        });
+    }
+    decoded
 }
 
 // ------------------------------------------------------------------ check_splice_pathogenic
@@ -571,7 +613,14 @@ fn check_splice_pathogenic(
     let matching: Vec<&SpliceRecord> = records
         .iter()
         .filter(|record| {
-            equals_text(&record.exon, var_exon) || equals_text(&record.intron, var_intron)
+            record
+                .exon
+                .as_deref()
+                .is_some_and(|text| equals_text(text, var_exon))
+                || record
+                    .intron
+                    .as_deref()
+                    .is_some_and(|text| equals_text(text, var_intron))
         })
         .collect();
     if matching.is_empty() {
@@ -644,8 +693,16 @@ fn check_splice_pathogenic(
         }
         let row_pos = int_of(cell("pos")?, "pos")?;
         let vua_overlapping = overlaps_canonical_site(&vua_hgvsc, &strand, row_pos, vua_length)?;
-        let patho_overlapping =
-            overlaps_canonical_site(&record.hgvsc, &strand, record.pos, record.length_change)?;
+        let patho_length = record.length_change.ok_or_else(|| {
+            Box::new(AcmgError::new(
+                "TypeError",
+                "object of type 'NoneType' has no len()",
+            )) as Box<dyn std::error::Error>
+        })?;
+        let patho_overlapping = match record.hgvsc.as_deref() {
+            Some(hgvsc) => overlaps_canonical_site(hgvsc, &strand, record.pos, patho_length)?,
+            None => false,
+        };
         let patho_likely = record.clinvar_sig.contains("ikely");
         return Ok(if vua_overlapping {
             if pvs1_strength >= 4 {

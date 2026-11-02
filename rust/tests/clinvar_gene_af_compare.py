@@ -15,6 +15,7 @@ import importlib.util
 import json
 from pathlib import Path
 import pickle
+import re
 import shutil
 import subprocess
 import sys
@@ -117,6 +118,10 @@ def cases():
         result["sig_"+str(len(result))] = {"rows": [row(sig=sig)]}
     for review in ["no_assertion_criteria_provided", "REVIEWED_BY_EXPERT_PANEL", "criteria_provided,_multiple_submitters,_no_conflicts", "xpractice_guidelinex"]:
         result["review_"+str(len(result))] = {"rows": [row(review=review)]}
+    # Append these without renaming the earlier numbered fixture catalogue.
+    result.update({"whitespace_threads": {"threads": " 1 "}, "underscore_threads": {"threads": "0_1"},
+        "unicode_threads": {"threads": "١"}, "unicode_zero_threads": {"threads": "٠"},
+        "no_csq_unicode_zero_threads": {"description": "no field description", "threads": "٠", "index": False}})
     return result
 
 
@@ -167,6 +172,52 @@ def run(command, folder, name):
     return result.returncode
 
 
+def failure_category(path):
+    # Multiprocessing tracebacks may repeat the worker exception. The final
+    # exception is the actual command failure, not the RemoteTraceback wrapper.
+    matches = re.findall(r"(?m)^(?:priva: )?([A-Za-z_][A-Za-z_.0-9]*(?:Error|Exception)): (.*)$", path.read_text())
+    return matches[-1][0].rsplit(".", 1)[-1] if matches else None
+
+
+def matching_outcome(python_exit, native_exit, python_category, native_category):
+    return (python_exit == native_exit == 0 or
+        python_exit == native_exit == 1 and python_category is not None and python_category == native_category)
+
+
+def verify_pin(record):
+    path = Path(record["path"])
+    if path.stat().st_size != record["bytes"] or digest(path) != record["sha256"]:
+        raise RuntimeError("saved reference changed: " + str(path))
+    return path
+
+
+def admission(args):
+    """Native named-option admission stays exit 2, separate from source calls."""
+    args.work_root.mkdir()
+    absent = str(args.work_root / "absent.vcf.gz")
+    output = str(args.work_root / "must_not_be_written.rkyv")
+    common = ["--vcf", absent, "--output", output]
+    cases = {
+        "unknown_mode": ["unknown"],
+        "build_missing_all": ["build"],
+        "build_missing_output": ["build", "--vcf", absent],
+        "build_missing_vcf": ["build", "--output", output],
+        "chromosome_missing_contig": ["chromosome", *common],
+        "merge_missing_inputs": ["merge", "--output", output],
+        "unknown_option": ["build", *common, "--unknown", "x"],
+        "missing_option_value": ["build", *common, "--threads"],
+    }
+    reports = {}
+    for name, options in cases.items():
+        status = run([str(args.binary), "clinvar-gene-af", *options], args.work_root, name)
+        reports[name] = {"exit": status, "passed": status == 2}
+    result = {"cases": reports, "passed": not Path(output).exists() and all(row["passed"] for row in reports.values()),
+        "scope": "native named-option admission; the legacy Python positional usage interface is separate"}
+    (args.work_root / "admission.json").write_text(json.dumps(result, indent=2, sort_keys=True) + "\n")
+    if not result["passed"]:
+        raise SystemExit(1)
+
+
 def check(args):
     if digest(args.producer) != PRODUCER_SHA256:
         raise RuntimeError("the reference producer does not match its pinned source")
@@ -177,15 +228,38 @@ def check(args):
         comparator = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(comparator)
     reports = {}
+    saved = json.loads(args.reference_report.read_text()) if args.reference_report else None
+    if saved:
+        verify_pin(saved["producer"])
+        if saved["producer"]["sha256"] != PRODUCER_SHA256:
+            raise RuntimeError("saved oracle producer differs")
+    reused = 0
     for name, case in cases().items():
         folder = args.work_root / name
         folder.mkdir()
-        vcf = make_case(folder, case)
-        reference = folder / "python.pkl"
-        reference.write_bytes(SENTINEL)
-        python_status = run([sys.executable, str(args.producer), str(vcf), str(reference), case.get("threads", "1")], folder, "python")
+        if saved and name in saved["cases"]:
+            old = saved["cases"][name]
+            if old["spec_sha256"] != hashlib.sha256(json.dumps(case, sort_keys=True).encode()).hexdigest():
+                raise RuntimeError("saved fixture specification differs: " + name)
+            vcf = verify_pin(old["vcf"])
+            for record in old["sidecars"]:
+                verify_pin(record)
+            reference = verify_pin(old["python"]["output"])
+            python_stderr = verify_pin(old["python"]["stderr"])
+            verify_pin(old["python"]["stdout"])
+            python_status = old["python"]["returncode"]
+            reused += 1
+        else:
+            vcf = make_case(folder, case)
+            reference = folder / "python.pkl"
+            reference.write_bytes(SENTINEL)
+            python_status = run([sys.executable, str(args.producer), str(vcf), str(reference), case.get("threads", "1")], folder, "python")
+            python_stderr = folder / "python.stderr.log"
         python_written = reference.read_bytes() != SENTINEL
-        report = {"python_exit": python_status, "python_output_written": python_written}
+        python_category = failure_category(python_stderr) if python_status else None
+        report = {"python_exit": python_status, "python_output_written": python_written,
+                  "python_exception_category": python_category, "python_stderr": str(python_stderr),
+                  "saved_reference_reused": bool(saved and name in saved["cases"])}
         if python_status == 0 and python_written:
             value = pickle.loads(reference.read_bytes())
             report.update(genes=len(value), none=sum(v is None for v in value.values()))
@@ -194,31 +268,49 @@ def check(args):
             archive.write_bytes(SENTINEL)
             status = run([str(args.binary), "clinvar-gene-af", "build", "--vcf", str(vcf), "--output", str(archive), "--threads", case.get("threads", "1")], folder, "native")
             written = archive.read_bytes() != SENTINEL
-            report.update(native_exit=status, native_output_written=written)
-            report["passed"] = (status == 0) == (python_status == 0) and written == python_written
+            native_category = failure_category(folder / "native.stderr.log") if status else None
+            report.update(native_exit=status, native_output_written=written, native_exception_category=native_category)
+            report["passed"] = matching_outcome(python_status, status, python_category, native_category) and written == python_written
             if status == 0 and python_status == 0 and written and python_written:
                 from types import SimpleNamespace
                 comparison = comparator.compare(SimpleNamespace(binary=args.binary, cache="clinvar_patho_af_stat", pickle=reference,
                     archive=archive, report=folder/"values.json", mismatches=folder/"mismatches.jsonl"))
                 report["comparison"] = comparison
                 report["passed"] &= comparison["passed"]
-        if args.command == "check" and name in ["flag_empty_contig", "flag_header_order_tie", "flag_none_merge_failure", "normal", "csi", "header_order_tie", "cross_chr_larger", "merge_none_first", "merge_none_second", "merge_none_both", "none_separate_genes", "empty_header_contig", "duplicate_csq"]:
-            import pysam
-            with pysam.VariantFile(str(vcf)) as source:
-                contigs = list(source.header.contigs)
+        if args.command == "check" and name in ["flag_empty_contig", "flag_header_order_tie", "flag_none_merge_failure", "normal", "csi", "header_order_tie", "cross_chr_larger", "merge_none_first", "merge_none_second", "merge_none_both", "none_separate_genes", "empty_header_contig", "duplicate_csq",
+            "no_index", "ordinary_gzip", "plain_unindexed", "invalid_unused_gt", "invalid_unused_integer_format",
+            "invalid_pos", "negative_pos", "empty_pos", "af_string", "af_number_g", "af_empty_tuple",
+            "undefined_af", "undefined_af_absent", "csq_integer", "missing_alt_winner"]:
+            contigs = case.get("contigs", ["chr1"])
             merge_command = [str(args.binary), "clinvar-gene-af", "merge"]
             shard_status = []
+            shard_categories = []
+            shard_preserved = []
             for index, chrom in enumerate(contigs):
                 shard = folder / f"chr{index}.rkyv"
+                shard.write_bytes(SENTINEL)
                 shard_status.append(run([str(args.binary), "clinvar-gene-af", "chromosome", "--vcf", str(vcf), "--chrom", chrom, "--output", str(shard)],folder,f"chr{index}"))
+                shard_categories.append(failure_category(folder / f"chr{index}.stderr.log") if shard_status[-1] else None)
+                shard_preserved.append(not shard_status[-1] or shard.read_bytes() == SENTINEL)
                 merge_command += ["--input",str(shard)]
             merged = folder/"merged.rkyv"
             merged.write_bytes(SENTINEL)
-            merged_status = run(merge_command+["--output",str(merged)],folder,"merge")
+            if any(shard_status):
+                first_failure = next(i for i, status in enumerate(shard_status) if status)
+                merged_status = None
+                pipeline_status = shard_status[first_failure]
+                pipeline_category = shard_categories[first_failure]
+            else:
+                merged_status = run(merge_command+["--output",str(merged)],folder,"merge")
+                pipeline_status = merged_status
+                pipeline_category = failure_category(folder / "merge.stderr.log") if merged_status else None
             merged_written = merged.read_bytes() != SENTINEL
             pipeline = {"shard_exits":shard_status,"merge_exit":merged_status,"merge_output_written":merged_written,
-                        "passed":not any(shard_status) and (merged_status == 0) == (python_status == 0) and merged_written == python_written}
-            if not merged_status and python_status == 0 and merged_written:
+                        "shard_categories":shard_categories,"failed_shard_outputs_preserved":all(shard_preserved),
+                        "pipeline_exit":pipeline_status,"pipeline_exception_category":pipeline_category,
+                        "passed":matching_outcome(python_status,pipeline_status,python_category,pipeline_category)
+                            and merged_written == python_written and all(shard_preserved)}
+            if pipeline_status == 0 and python_status == 0 and merged_written:
                 comparison = comparator.compare(SimpleNamespace(binary=args.binary,cache="clinvar_patho_af_stat",pickle=reference,
                     archive=merged,report=folder/"merged.values.json",mismatches=folder/"merged.mismatches.jsonl"))
                 pipeline["comparison"] = comparison
@@ -226,7 +318,8 @@ def check(args):
             report["chromosome_pipeline"] = pipeline
             report["passed"] &= pipeline["passed"]
         reports[name] = report
-    result = {"producer_sha256": digest(args.producer), "count": len(reports), "cases": reports}
+    result = {"producer_sha256": digest(args.producer), "count": len(reports), "cases": reports,
+              "reused_python_cases":reused,"exact_failure_checks":sum(row["python_exit"] != 0 for row in reports.values())}
     result["failed"] = [name for name,r in reports.items() if not r.get("passed", True)]
     (args.work_root / "comparison.json").write_text(json.dumps(result, sort_keys=True, indent=2)+"\n")
     print(json.dumps({"count":len(reports),"failed":result["failed"],"python_success":sum(r["python_exit"] == 0 for r in reports.values())}))
@@ -241,9 +334,14 @@ def main():
         p = commands.add_parser(name)
         p.add_argument("--producer", type=Path, required=True)
         p.add_argument("--work-root", type=Path, required=True)
+        p.add_argument("--reference-report", type=Path, help="Verified saved Python fixtures; preserve their producing source and diagnostics")
         if name == "check":
             p.add_argument("--binary", type=Path, required=True)
         p.set_defaults(function=check)
+    p = commands.add_parser("admission")
+    p.add_argument("--binary", type=Path, required=True)
+    p.add_argument("--work-root", type=Path, required=True)
+    p.set_defaults(function=admission)
     args = parser.parse_args()
     args.function(args)
 

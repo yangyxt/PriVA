@@ -8,6 +8,8 @@
 //! the scripts' `_unique_object` hook does. Writing follows `json.dumps`
 //! (`", "` and `": "` separators, or one item per line with `indent=2`,
 //! `ensure_ascii` on by default, keys in insertion order or sorted).
+//! Builder callers can select compact separators, unescaped Unicode and strict
+//! finite floats through `DumpsOptions`; writers never add a trailing newline.
 //! Numbers with a fraction or exponent are written the way `float.__repr__`
 //! prints them (shortest digits that read back the same, exponent form below
 //! 1e-4 and from 1e16 up); `NaN`, `Infinity` and `-Infinity` as `json.dumps` does.
@@ -460,6 +462,10 @@ pub(crate) fn python_float_repr(value: f64) -> String {
     let digits: String = mantissa.chars().filter(|c| *c != '.').collect();
     // Python's `decpt`: the value is 0.<digits> times ten to this power.
     let point = exponent + 1;
+    python_float_layout(sign, &digits, point)
+}
+
+fn python_float_layout(sign: &str, digits: &str, point: i32) -> String {
     let length = digits.len() as i32;
     let body = if point <= -4 || point > 16 {
         let fraction = if length > 1 {
@@ -490,6 +496,32 @@ pub(crate) fn python_float_repr(value: f64) -> String {
     format!("{sign}{body}")
 }
 
+/// Correct shortest-decimal ties for new builder serialization. Legacy writers
+/// keep std's existing digits because their bytes are already persisted in
+/// receipts and used by other runtime callers of `python_float_repr`.
+fn python_builder_float_repr(value: f64) -> String {
+    debug_assert!(value.is_finite());
+    if value == 0.0 {
+        return python_float_repr(value);
+    }
+    let mut buffer = ryu::Buffer::new();
+    let text = buffer.format_finite(value.abs());
+    let (mantissa, exponent) = match text.split_once('e') {
+        Some((mantissa, exponent)) => (
+            mantissa,
+            exponent.parse::<i32>().expect("Ryū's decimal exponent"),
+        ),
+        None => (text, 0),
+    };
+    let point = mantissa.find('.').unwrap_or(mantissa.len()) as i32 + exponent;
+    let digits: String = mantissa.chars().filter(|c| *c != '.').collect();
+    let leading_zeroes = digits.bytes().take_while(|c| *c == b'0').count();
+    let point = point - leading_zeroes as i32;
+    let digits = digits[leading_zeroes..].trim_end_matches('0');
+    let sign = if value.is_sign_negative() { "-" } else { "" };
+    python_float_layout(sign, digits, point)
+}
+
 /// A float as `json.dumps` writes it: `repr`, except `NaN` and the infinities.
 fn float_text(value: f64) -> String {
     if value.is_nan() {
@@ -498,6 +530,30 @@ fn float_text(value: f64) -> String {
         if value < 0.0 { "-Infinity" } else { "Infinity" }.to_owned()
     } else {
         python_float_repr(value)
+    }
+}
+
+/// The `json.dumps` modes used by cache builders and their receipts. `compact`
+/// selects `separators=(",", ":")`; otherwise Python's separators depend on
+/// whether indentation is enabled. A trailing newline belongs to the caller.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct DumpsOptions {
+    pub(crate) indent: Option<usize>,
+    pub(crate) sort_keys: bool,
+    pub(crate) ensure_ascii: bool,
+    pub(crate) compact: bool,
+    pub(crate) allow_nan: bool,
+}
+
+impl Default for DumpsOptions {
+    fn default() -> Self {
+        Self {
+            indent: None,
+            sort_keys: false,
+            ensure_ascii: true,
+            compact: false,
+            allow_nan: true,
+        }
     }
 }
 
@@ -540,10 +596,9 @@ pub(crate) fn quote(text: &str, ensure_ascii: bool) -> String {
 
 fn write_value(
     value: &Json,
-    indent: Option<usize>,
+    options: &DumpsOptions,
+    legacy_floats: bool,
     level: usize,
-    sort_keys: bool,
-    ensure_ascii: bool,
     out: &mut String,
 ) -> Result<(), String> {
     match value {
@@ -553,8 +608,22 @@ fn write_value(
         Json::Int(int) => {
             let _ = write!(out, "{int}");
         }
-        Json::Float(float) => out.push_str(&float_text(*float)),
-        Json::Str(text) => out.push_str(&quote(text, ensure_ascii)),
+        Json::Float(float) => {
+            if !options.allow_nan && !float.is_finite() {
+                // CPython 3.12 includes repr(value) in both its C and Python
+                // encoders' ValueError, regardless of indentation.
+                return Err(format!(
+                    "Out of range float values are not JSON compliant: {}",
+                    python_float_repr(*float)
+                ));
+            }
+            if legacy_floats || !float.is_finite() {
+                out.push_str(&float_text(*float));
+            } else {
+                out.push_str(&python_builder_float_repr(*float));
+            }
+        }
+        Json::Str(text) => out.push_str(&quote(text, options.ensure_ascii)),
         Json::Array(items) => {
             if items.is_empty() {
                 out.push_str("[]");
@@ -563,15 +632,19 @@ fn write_value(
             out.push('[');
             for (number, item) in items.iter().enumerate() {
                 if number > 0 {
-                    out.push_str(if indent.is_some() { "," } else { ", " });
+                    out.push_str(if options.compact || options.indent.is_some() {
+                        ","
+                    } else {
+                        ", "
+                    });
                 }
-                if let Some(width) = indent {
+                if let Some(width) = options.indent {
                     out.push('\n');
                     out.push_str(&" ".repeat(width * (level + 1)));
                 }
-                write_value(item, indent, level + 1, sort_keys, ensure_ascii, out)?;
+                write_value(item, options, legacy_floats, level + 1, out)?;
             }
-            if let Some(width) = indent {
+            if let Some(width) = options.indent {
                 out.push('\n');
                 out.push_str(&" ".repeat(width * level));
             }
@@ -583,23 +656,27 @@ fn write_value(
                 return Ok(());
             }
             let mut order: Vec<&(String, Json)> = items.iter().collect();
-            if sort_keys {
+            if options.sort_keys {
                 order.sort_by(|a, b| a.0.cmp(&b.0));
             }
             out.push('{');
             for (number, (key, item)) in order.into_iter().enumerate() {
                 if number > 0 {
-                    out.push_str(if indent.is_some() { "," } else { ", " });
+                    out.push_str(if options.compact || options.indent.is_some() {
+                        ","
+                    } else {
+                        ", "
+                    });
                 }
-                if let Some(width) = indent {
+                if let Some(width) = options.indent {
                     out.push('\n');
                     out.push_str(&" ".repeat(width * (level + 1)));
                 }
-                out.push_str(&quote(key, ensure_ascii));
-                out.push_str(": ");
-                write_value(item, indent, level + 1, sort_keys, ensure_ascii, out)?;
+                out.push_str(&quote(key, options.ensure_ascii));
+                out.push_str(if options.compact { ":" } else { ": " });
+                write_value(item, options, legacy_floats, level + 1, out)?;
             }
-            if let Some(width) = indent {
+            if let Some(width) = options.indent {
                 out.push('\n');
                 out.push_str(&" ".repeat(width * level));
             }
@@ -611,15 +688,37 @@ fn write_value(
 
 /// `json.dumps(value)`, optionally with `sort_keys=True`.
 pub(crate) fn dumps(value: &Json, sort_keys: bool) -> Result<String, String> {
-    let mut out = String::new();
-    write_value(value, None, 0, sort_keys, true, &mut out)?;
-    Ok(out)
+    dumps_impl(
+        value,
+        DumpsOptions {
+            sort_keys,
+            ..DumpsOptions::default()
+        },
+        true,
+    )
 }
 
 /// `json.dumps(value, indent=2)`.
 pub(crate) fn dumps_indented(value: &Json) -> Result<String, String> {
+    dumps_impl(
+        value,
+        DumpsOptions {
+            indent: Some(2),
+            ..DumpsOptions::default()
+        },
+        true,
+    )
+}
+
+/// `json.dumps(value, ...)` with the cache builders' explicit output modes.
+#[allow(dead_code, reason = "shared builder API")]
+pub(crate) fn dumps_with_options(value: &Json, options: DumpsOptions) -> Result<String, String> {
+    dumps_impl(value, options, false)
+}
+
+fn dumps_impl(value: &Json, options: DumpsOptions, legacy_floats: bool) -> Result<String, String> {
     let mut out = String::new();
-    write_value(value, Some(2), 0, false, true, &mut out)?;
+    write_value(value, &options, legacy_floats, 0, &mut out)?;
     Ok(out)
 }
 
@@ -664,6 +763,117 @@ mod tests {
         assert_eq!(quote("\u{1f600}", true), "\"\\ud83d\\ude00\"");
         assert_eq!(quote("a\tb\u{1}\u{7f}", true), "\"a\\tb\\u0001\\u007f\"");
         assert_eq!(quote("\u{7f}", false), "\"\u{7f}\"");
+    }
+
+    #[test]
+    fn builder_modes_combine_sorted_indent_and_unescaped_unicode() {
+        let value = parse(
+            r#"{"2": {}, "10": [], "01": {"β": "é", "a": "😀\n"}}"#,
+            false,
+        )
+        .unwrap();
+        let options = DumpsOptions {
+            indent: Some(2),
+            sort_keys: true,
+            ensure_ascii: false,
+            ..DumpsOptions::default()
+        };
+        assert_eq!(
+            dumps_with_options(&value, options).unwrap(),
+            "{\n  \"01\": {\n    \"a\": \"😀\\n\",\n    \"β\": \"é\"\n  },\n  \"10\": [],\n  \"2\": {}\n}"
+        );
+        let compact = dumps_with_options(
+            &value,
+            DumpsOptions {
+                indent: None,
+                compact: true,
+                ..options
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            compact,
+            "{\"01\":{\"a\":\"😀\\n\",\"β\":\"é\"},\"10\":[],\"2\":{}}"
+        );
+        assert!(!compact.ends_with('\n'));
+    }
+
+    #[test]
+    fn compact_indentation_and_strict_float_failures_follow_json_dumps() {
+        let value = parse(r#"{"z": [-0.0, 1e-5]}"#, false).unwrap();
+        let strict = DumpsOptions {
+            compact: true,
+            allow_nan: false,
+            ..DumpsOptions::default()
+        };
+        assert_eq!(
+            dumps_with_options(&value, strict).unwrap(),
+            "{\"z\":[-0.0,1e-05]}"
+        );
+        assert_eq!(
+            dumps_with_options(
+                &value,
+                DumpsOptions {
+                    indent: Some(2),
+                    ..strict
+                }
+            )
+            .unwrap(),
+            "{\n  \"z\":[\n    -0.0,\n    1e-05\n  ]\n}"
+        );
+        for (number, suffix) in [
+            (f64::NAN, "nan"),
+            (f64::INFINITY, "inf"),
+            (f64::NEG_INFINITY, "-inf"),
+        ] {
+            let nested = Json::Array(vec![Json::Float(number)]);
+            let message = "Out of range float values are not JSON compliant";
+            assert_eq!(
+                dumps_with_options(&nested, strict).unwrap_err(),
+                format!("{message}: {suffix}")
+            );
+            assert_eq!(
+                dumps_with_options(
+                    &nested,
+                    DumpsOptions {
+                        indent: Some(2),
+                        ..strict
+                    }
+                )
+                .unwrap_err(),
+                format!("{message}: {suffix}")
+            );
+        }
+        // Legacy calls still allow all three non-finite values.
+        assert_eq!(
+            dumps(&parse("[NaN, Infinity, -Infinity]", false).unwrap(), false).unwrap(),
+            "[NaN, Infinity, -Infinity]"
+        );
+    }
+
+    #[test]
+    fn builder_float_ties_match_python_without_changing_legacy_bytes() {
+        for (bits, python, legacy) in [
+            (
+                0x43192587ad7a8149,
+                "1769534769766482.2",
+                "1769534769766482.3",
+            ),
+            (0x430710bd04f20be2, "811541060272508.2", "811541060272508.3"),
+        ] {
+            let value = f64::from_bits(bits);
+            for (number, sign) in [(value, ""), (-value, "-")] {
+                assert_eq!(
+                    dumps_with_options(&Json::Float(number), DumpsOptions::default()).unwrap(),
+                    format!("{sign}{python}")
+                );
+                assert_eq!(
+                    dumps(&Json::Float(number), false).unwrap(),
+                    format!("{sign}{legacy}")
+                );
+                assert_eq!(python_float_repr(number), format!("{sign}{legacy}"));
+            }
+        }
     }
 
     #[test]

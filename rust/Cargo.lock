@@ -764,6 +764,7 @@ dependencies = [
  "polars-core",
  "polars-ops",
  "rkyv",
+ "ryu",
 ]
 
 [[package]]

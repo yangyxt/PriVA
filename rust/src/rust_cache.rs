@@ -85,6 +85,7 @@ pub(crate) fn archive_bytes<'a>(bytes: &'a [u8], schema: Schema, path: &str) -> 
 }
 
 /// Writes header and archive to `path` through a temporary file in the same folder.
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn write_cache(path: &Path, schema: Schema, archive: &[u8]) -> Result<()> {
     write_cache_checked(path, schema, archive, |_| Ok(()))
 }

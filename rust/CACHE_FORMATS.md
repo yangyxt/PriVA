@@ -61,7 +61,7 @@ feature set) gets a new layout number. The container version changes only with t
 **Compression**: none, so that the file can be mapped. Repeated text is stored once instead: low
 cardinality texts (ClinVar significance and review status, consequences, exon numbers, domain
 paths, SpliceAI scores) go into a `texts` pool (`Vec<String>`) and records hold `u32` indexes.
-For files bundled in git, see the open question in section 6.
+For files bundled in git, see the distribution policy in section 6.
 
 **Provenance**: every root holds `provenance: Vec<{key, value}>` with at least `source` (the
 pickle or input it was made from), `source_bytes` and `converter` (`priva cache-convert` and the
@@ -107,8 +107,8 @@ lists are `List` columns; sets are sorted `List` columns.
 | 9 | `interpro_mapping_pickle` | `texts` pool; keys `(database, accession)` sorted; `entries[i]: Vec<{id, kind, short_name, name, go_terms: Vec<{id, category, description}>, abstract_text}>`, every text field a pool index (Python: list of exact 6-tuples, GO terms a list of exact 3-tuples) | **implemented** (`cache_convert/interpro_mapping.rs`) |
 | 10 | `clingen_map` | `variants` (sorted); `codes: Vec<Option<String>>` (`None` = the float NaN of curated variants without codes; Python `None` and every non-text/non-NaN value refused) | **implemented** (`cache_convert/clingen_map.rs`) |
 
-Pending schemas are fixed in outline here; each is frozen as version 1 in the commit that adds
-its converter, with field names taken from the builder script. File names: the pickle's name
+All ten schemas are frozen as version 1, with field names taken from the builder scripts.
+File names: the pickle's name
 with `.pkl`/`.pkl.gz` replaced by `.v<schema version>.rkyv`. The branch's configuration keeps
 the key names and points them at the `.rkyv` files.
 
@@ -145,13 +145,18 @@ into memory (2.1 GB for the splice dictionary). Why checked access: it makes a d
 error and, on StorNext, its sequential pass is faster cold than the random faults of an
 unchecked map.
 
-## 6. Open questions for the owner
+## 6. Distribution and installation
 
-- Bundled caches in git (`clinvar_gene_stat`, `interpro_mapping_pickle`, `clingen_map`): either
-  the branch installer converts the bundled pickle into `cache_root` at installation (git
-  unchanged, shared with main), or the branch bundles the `.rkyv` files (larger than the gzip
-  pickles; a zstd-compressed copy would need unpacking before mapping). Recommended: convert at
-  installation.
+- Bundle the InterPro archive and both assembly-specific ClinGen archives alongside their
+  existing pickles. These are portable snapshots; normal bundled reuse checks only existence
+  and nonzero size.
+- Keep the compact ClinVar gene-statistics pickle in Git. Convert it during installation
+  into the configured `cache_root`, preserving all original sets and values. Its expanded
+  archive is not a Git asset; Git LFS and a different archive layout are not required.
+- Convert other acquired or derived pickle caches once into managed archives under
+  `cache_root`. Keep the existing YAML key names and publish their archive paths only after
+  conversion succeeds. Preserve the source pickles while installation-time Python builders
+  still use them; changing storage format does not require repeating VEP annotation.
 - `clinvar_gene_stat` holds 13 million variant-id strings in 7 sets per gene, domain and
   transcript; the PP2/BP1 reader uses set sizes and intersections. Version 1 keeps the sets
   (as pooled `u32` ids), not only their counts.

@@ -19,16 +19,16 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::time::Instant;
 
+pub(crate) mod clingen_map;
 pub(crate) mod clinvar_exon_af;
 pub(crate) mod clinvar_gene_af;
-pub(crate) mod clinvar_splice_stat;
-pub(crate) mod clingen_map;
 pub(crate) mod clinvar_gene_stat;
+pub(crate) mod clinvar_splice_stat;
 pub(crate) mod common;
+pub(crate) mod interpro_mapping;
 pub(crate) mod intolerant_domains;
 pub(crate) mod pm1_regions;
 pub(crate) mod transcript_domains;
-pub(crate) mod interpro_mapping;
 
 pub(crate) const CLINVAR_AA_STAT: Schema = Schema {
     name: "clinvar_aa_stat",
@@ -457,7 +457,10 @@ pub(crate) fn dispatch_export(args: &[String]) -> Result<()> {
     Ok(())
 }
 
-const USAGE: &str = "usage: priva cache-convert CACHE --pickle PICKLE --output CACHE";
+const USAGE: &str = "usage: priva cache-convert CACHE --pickle PICKLE --output CACHE\n\
+CACHE: clinvar_aa_stat, clinvar_splice_stat, alphamissense_tranx_domain_map, \
+clinvar_patho_exon_af_stat, clinvar_gene_stat, clinvar_patho_af_stat, pm1_regions_pkl, \
+all_intolerant_domains, interpro_mapping_pickle, clingen_map";
 
 /// `priva cache-convert CACHE --pickle PICKLE --output OUTPUT`.
 pub(crate) fn dispatch(args: &[String]) -> Result<()> {
@@ -485,11 +488,17 @@ pub(crate) fn dispatch(args: &[String]) -> Result<()> {
             Ok(())
         }
         "alphamissense_tranx_domain_map" => {
-            println!("{}", transcript_domains::convert(pickle, Path::new(output))?);
+            println!(
+                "{}",
+                transcript_domains::convert(pickle, Path::new(output))?
+            );
             Ok(())
         }
         "all_intolerant_domains" => {
-            println!("{}", intolerant_domains::convert(pickle, Path::new(output))?);
+            println!(
+                "{}",
+                intolerant_domains::convert(pickle, Path::new(output))?
+            );
             Ok(())
         }
         "pm1_regions_pkl" => {
@@ -524,7 +533,7 @@ pub(crate) fn dispatch(args: &[String]) -> Result<()> {
             Ok(())
         }
         other => Err(invalid(format!(
-            "cache-convert: {other} is not converted yet (prototype: clinvar_aa_stat)\n{USAGE}"
+            "cache-convert: unknown cache {other}\n{USAGE}"
         ))),
     }
 }
@@ -649,7 +658,7 @@ mod tests {
         let args = |a: &[&str]| a.iter().map(|s| s.to_string()).collect::<Vec<_>>();
         let error =
             dispatch(&args(&["unknown_cache", "--pickle", "a", "--output", "b"])).unwrap_err();
-        assert!(error.to_string().contains("not converted yet"), "{error}");
+        assert!(error.to_string().contains("unknown cache"), "{error}");
         assert!(
             dispatch(&args(&[
                 "clinvar_aa_stat",

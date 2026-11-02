@@ -25,7 +25,7 @@
 //!   `int()` rejects (in start-gain annotations);
 //! - a length-changing effect on a transcript whose exon 1 lists a domain of
 //!   the intolerant set also counts as loss of function and sets
-//!   `5UTR_span_intol_domain`; the two pickle files are loaded only when both
+//!   `5UTR_span_intol_domain`; the two checked native caches are loaded only when both
 //!   paths are non-empty, and a failure to read them stops the run;
 //! - exit code 2 for command-line errors, 1 for any other failure.
 //!
@@ -37,195 +37,70 @@
 //! - what the table reader refuses (`pandas_table`): a first data row longer
 //!   than the header, and numbers past the signed 64-bit range that pandas
 //!   reads as unsigned integers or keeps as text;
-//! - a pickle that needs more than plain data (a protocol 2 set, a
-//!   `defaultdict`), which `pickle_reader` refuses by opcode name;
-//! - a domain map that is not a dict, once a length-changing effect needs it
-//!   (the script fails there too unless the transcript is absent from a list,
-//!   set or tuple).
+//! - a resource without the declared native schema or a damaged archive is
+//!   refused when loaded, before any row is judged.
 //!
 //! All output is prepared before the table is opened for writing, so a
 //! failing run leaves the table as it was.
+use crate::cache_convert::intolerant_domains::IntolerantDomainCache;
+use crate::cache_convert::transcript_domains::TranscriptDomainCache;
 use crate::cli::Result;
 use crate::pandas_table::{Cell, Column, Table, read_table, write_table_to};
-use crate::pickle_reader::{self, Value};
 use crate::python_args::{self, Parsed};
 use crate::python_text::python_int_is_valid;
 use crate::yaml_config::python_str_repr;
 use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
-use std::rc::Rc;
 
 const USAGE: &str = "usage: priva utr-anno-interpret --variants_table VARIANTS_TABLE --domain_map DOMAIN_MAP --intolerant_domains INTOLERANT_DOMAINS";
 const COMPRESSED_SUFFIXES: [&str; 6] = [".gz", ".bz2", ".zip", ".xz", ".zst", ".tar"];
 
-/// A failure while reading the pickles or judging a row, which stops the run
+/// A failure while reading the caches or judging a row, which stops the run
 /// like a Python exception.
 type Outcome<T> = std::result::Result<T, String>;
 
-/// The two domain pickles, used only when both are non-empty (`domain_map and
-/// intolerant_domains` in the script).
+/// Both resources stay mapped, and are consulted only when both are nonempty.
 struct Domains {
-    map: Value,
-    intolerant: Value,
+    map: TranscriptDomainCache,
+    intolerant: IntolerantDomainCache,
 }
 
 impl Domains {
-    /// Reads both pickles; `None` when either one is empty, because the script
-    /// then never asks them anything.
     fn load(map_path: &str, intolerant_path: &str) -> Outcome<Option<Domains>> {
-        let read = |path: &str| -> Outcome<Value> {
-            // The script opens the files as they are, so a compressed file is not a pickle.
-            let bytes = pickle_reader::read_file(Path::new(path), false)
-                .map_err(|error| format!("{path}: {error}"))?;
-            pickle_reader::load(&bytes).map_err(|error| format!("{path}: {error}"))
-        };
-        let map = read(map_path)?;
-        let intolerant = read(intolerant_path)?;
-        Ok(Domains::new(map, intolerant))
-    }
-
-    fn new(map: Value, intolerant: Value) -> Option<Domains> {
-        if map.is_truthy() && intolerant.is_truthy() {
+        // Keep Python's read order, including reading the second resource when
+        // the first map is empty, before testing the pair's truthiness.
+        let map = TranscriptDomainCache::open(map_path).map_err(|error| error.to_string())?;
+        let intolerant =
+            IntolerantDomainCache::open(intolerant_path).map_err(|error| error.to_string())?;
+        Ok(if map.len() != 0 && intolerant.len() != 0 {
             Some(Domains { map, intolerant })
         } else {
             None
-        }
+        })
     }
 
-    /// `check_domain_tolerance(transcript, "1", domain_map, intolerant_domains)`:
-    /// does exon 1 of the transcript list a domain that is in the intolerant set?
+    /// The native schema's lookup keys are text. A missing or nontext table
+    /// cell cannot equal one, and absent/empty exon lists still give false.
     fn exon_one_spans_intolerant_domain(&self, transcript: &Cell) -> Outcome<bool> {
-        let Value::Dict(map) = &self.map else {
-            return Err(format!(
-                "TypeError: the domain map is a {}, not a dict (not supported)",
-                self.map.type_name()
-            ));
-        };
-        // A missing value is a float `nan`, which is never a key.
-        let Some(key) = cell_value(transcript) else {
+        let Cell::Text(transcript) = transcript else {
             return Ok(false);
         };
-        let found = map
-            .borrow()
-            .get(&key)
-            .map_err(|error| error.to_string())?
-            .cloned();
-        let Some(entry) = found else {
+        let Some(entry) = self.map.get(transcript) else {
             return Ok(false);
         };
-        let Some(exon_domains) = dict_get(&entry, "exon_domains")? else {
-            return Ok(false);
-        };
-        let Some(affected) = dict_get(&exon_domains, "1")? else {
-            return Ok(false);
-        };
-        if !affected.is_truthy() {
-            return Ok(false);
-        }
-        for domain in iterate(&affected)? {
-            if self.is_intolerant(&domain)? {
-                return Ok(true);
-            }
-        }
-        Ok(false)
-    }
-
-    /// `domain in intolerant_domains`
-    fn is_intolerant(&self, domain: &Value) -> Outcome<bool> {
-        let unhashable = |error: Box<dyn std::error::Error>| format!("TypeError: {error}");
-        match &self.intolerant {
-            Value::Set(set) => set.borrow().contains(domain).map_err(unhashable),
-            Value::FrozenSet(set) => set.contains(domain).map_err(unhashable),
-            Value::Dict(dict) => dict
-                .borrow()
-                .get(domain)
-                .map(|found| found.is_some())
-                .map_err(unhashable),
-            Value::List(items) => {
-                for member in items.borrow().iter() {
-                    if member.python_equals(domain).map_err(unhashable)? {
-                        return Ok(true);
-                    }
-                }
-                Ok(false)
-            }
-            Value::Tuple(items) => {
-                for member in items.iter() {
-                    if member.python_equals(domain).map_err(unhashable)? {
-                        return Ok(true);
-                    }
-                }
-                Ok(false)
-            }
-            Value::Str(haystack) => match domain {
-                Value::Str(needle) => Ok(haystack.contains(&**needle)),
-                other => Err(format!(
-                    "TypeError: 'in <string>' requires string as left operand, not {}",
-                    other.type_name()
-                )),
-            },
-            other => Err(format!(
-                "TypeError: argument of type '{}' is not iterable",
-                other.type_name()
-            )),
-        }
-    }
-}
-
-/// `value.get(name)` where the value must be a dict (anything else has no `get`).
-fn dict_get(value: &Value, name: &str) -> Outcome<Option<Value>> {
-    let Value::Dict(dict) = value else {
-        return Err(format!(
-            "AttributeError: '{}' object has no attribute 'get'",
-            value.type_name()
-        ));
-    };
-    let key = Value::Str(Rc::from(name));
-    let found = dict
-        .borrow()
-        .get(&key)
-        .map_err(|error| error.to_string())?
-        .cloned();
-    Ok(found)
-}
-
-/// The table cell as a Python value that can be looked up in a dict;
-/// `None` for a missing value (a `nan` is never found).
-fn cell_value(cell: &Cell) -> Option<Value> {
-    match cell {
-        Cell::Missing => None,
-        Cell::Text(text) => Some(Value::Str(Rc::from(*text))),
-        Cell::Int(number) => Some(Value::Int(*number)),
-        Cell::Float(number) => Some(Value::Float(*number)),
-        Cell::Bool(flag) => Some(Value::Bool(*flag)),
-    }
-}
-
-/// The items that iterating the value gives.
-fn iterate(value: &Value) -> Outcome<Vec<Value>> {
-    Ok(match value {
-        Value::List(items) => items.borrow().clone(),
-        Value::Tuple(items) => items.as_ref().clone(),
-        Value::Set(set) => set.borrow().items.clone(),
-        Value::FrozenSet(set) => set.items.clone(),
-        Value::Dict(dict) => dict
-            .borrow()
-            .entries
+        let Some(exon) = entry
+            .exon_domains
             .iter()
-            .map(|(key, _)| key.clone())
-            .collect(),
-        Value::Str(text) => text
-            .chars()
-            .map(|c| Value::Str(Rc::from(c.to_string())))
-            .collect(),
-        other => {
-            return Err(format!(
-                "TypeError: '{}' object is not iterable",
-                other.type_name()
-            ));
-        }
-    })
+            .find(|exon| self.map.text(&exon.exon) == "1")
+        else {
+            return Ok(false);
+        };
+        Ok(exon
+            .domains
+            .iter()
+            .any(|domain| self.intolerant.contains(self.map.text(domain))))
+    }
 }
 
 /// The `name=value` items of an annotation; a later repeat of a name wins.
@@ -405,9 +280,6 @@ fn process_variants_table(table_path: &str, pickle_paths: Option<(&str, &str)>) 
     };
     eprintln!("INFO: Processing {} rows", table.rows);
     let judged = judge_rows(&table, domains.as_ref());
-    // The process ends soon: freeing the pickles object by object would take
-    // longer than judging the rows.
-    std::mem::forget(domains);
     let flags = judged?;
     table.set_column("5UTR_lof", Column::Bool(flags.lof));
     table.set_column("5UTR_len_changing", Column::Bool(flags.len_changing));
@@ -611,12 +483,40 @@ mod tests {
         assert!(run(STOP, "DistanceToCDS=x:KozakStrength=Weak").is_ok());
     }
 
+    fn native_tables(map: &[u8], intolerant: &[u8]) -> Outcome<Option<Domains>> {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        static SERIAL: AtomicUsize = AtomicUsize::new(0);
+        let folder = std::env::temp_dir().join(format!(
+            "priva_utr_native_{}_{}",
+            std::process::id(),
+            SERIAL.fetch_add(1, Ordering::Relaxed)
+        ));
+        fs::create_dir(&folder).unwrap();
+        let source_map = folder.join("map.pkl");
+        let source_set = folder.join("set.pkl");
+        let native_map = folder.join("map.rkyv");
+        let native_set = folder.join("set.rkyv");
+        fs::write(&source_map, map).unwrap();
+        fs::write(&source_set, intolerant).unwrap();
+        let outcome = (|| {
+            crate::cache_convert::transcript_domains::convert(
+                source_map.to_str().unwrap(),
+                &native_map,
+            )
+            .map_err(|error| error.to_string())?;
+            crate::cache_convert::intolerant_domains::convert(
+                source_set.to_str().unwrap(),
+                &native_set,
+            )
+            .map_err(|error| error.to_string())?;
+            Domains::load(native_map.to_str().unwrap(), native_set.to_str().unwrap())
+        })();
+        fs::remove_dir_all(folder).unwrap();
+        outcome
+    }
+
     fn tables() -> Domains {
-        Domains::new(
-            pickle_reader::load(DOMAIN_MAP).unwrap(),
-            pickle_reader::load(INTOLERANT).unwrap(),
-        )
-        .unwrap()
+        native_tables(DOMAIN_MAP, INTOLERANT).unwrap().unwrap()
     }
 
     #[test]
@@ -650,90 +550,19 @@ mod tests {
         let empty_set: &[u8] = &[
             0x80, 0x04, 0x95, 0x03, 0, 0, 0, 0, 0, 0, 0, 0x8f, 0x94, 0x2e,
         ];
-        let dict = || pickle_reader::load(empty_dict).unwrap();
-        let set = || pickle_reader::load(empty_set).unwrap();
-        assert!(Domains::new(dict(), set()).is_none());
-        assert!(Domains::new(pickle_reader::load(DOMAIN_MAP).unwrap(), set()).is_none());
-        assert!(Domains::new(dict(), pickle_reader::load(INTOLERANT).unwrap()).is_none());
-    }
-
-    fn text(value: &str) -> Value {
-        Value::Str(Rc::from(value))
-    }
-
-    fn list(items: Vec<Value>) -> Value {
-        Value::List(Rc::new(std::cell::RefCell::new(items)))
+        assert!(native_tables(empty_dict, empty_set).unwrap().is_none());
+        assert!(native_tables(DOMAIN_MAP, empty_set).unwrap().is_none());
+        assert!(native_tables(empty_dict, INTOLERANT).unwrap().is_none());
     }
 
     #[test]
-    fn the_intolerant_collection_may_be_any_container_python_can_search() {
-        let map = pickle_reader::load(DOMAIN_MAP).unwrap();
-        let check = |intolerant: Value| {
-            Domains::new(map.clone(), intolerant)
-                .unwrap()
-                .exon_one_spans_intolerant_domain(&Cell::Text("ENST1"))
-        };
-        assert!(check(list(vec![text("dom:x"), text("dom:b")])).unwrap());
-        assert!(!check(list(vec![text("dom:x")])).unwrap());
-        assert!(check(Value::Tuple(Rc::new(vec![text("dom:b")]))).unwrap());
-        // A string is searched for the domain as a substring.
-        assert!(check(text("xx dom:b yy")).unwrap());
-        assert!(!check(text("dom:c")).unwrap());
-        assert!(check(Value::Int(3)).is_err());
-        assert!(check(Value::Float(1.5)).is_err());
-    }
-
-    fn from_hex(text: &str) -> Vec<u8> {
-        (0..text.len())
-            .step_by(2)
-            .map(|index| u8::from_str_radix(&text[index..index + 2], 16).unwrap())
-            .collect()
-    }
-
-    // pickle.dumps(obj, protocol=4) for each of these objects.
-    // {"ENST_list": ["not", "a", "dict"], "ENST_exons_list": {"exon_domains": ["x"]},
-    //  "ENST_ok": {"exon_domains": {"1": ["dom:b"]}}, "ENST_int": {"exon_domains": {"1": 5}},
-    //  "ENST_empty": {"exon_domains": {"1": []}}, "ENST_none": None,
-    //  "ENST_unhashable": {"exon_domains": {"1": [["dom:b"]]}},
-    //  "ENST_other_first": {"exon_domains": {"1": ["dom:q", "dom:b", ["bad"]]}}}
-    const ODD_ENTRIES: &str = "80049507010000000000007d94288c09454e53545f6c697374945d94288c036e6f74948c0161948c046469637494658c0f454e53545f65786f6e735f6c697374947d948c0c65786f6e5f646f6d61696e73945d948c01789461738c07454e53545f6f6b947d9468087d948c0131945d948c05646f6d3a62946173738c08454e53545f696e74947d9468087d94680e4b0573738c0a454e53545f656d707479947d9468087d94680e5d9473738c09454e53545f6e6f6e65944e8c0f454e53545f756e6861736861626c65947d9468087d94680e5d945d946810616173738c10454e53545f6f746865725f6669727374947d9468087d94680e5d94288c05646f6d3a719468105d948c036261649461657373752e";
-    // {1: {"exon_domains": {"1": ["dom:b"]}}}
-    const INTEGER_KEY: &str = "8004952a000000000000007d944b017d948c0c65786f6e5f646f6d61696e73947d948c0131945d948c05646f6d3a6294617373732e";
-
-    #[test]
-    fn domain_tables_of_an_unexpected_shape_stop_the_run_when_they_are_reached() {
-        let intolerant = pickle_reader::load(INTOLERANT).unwrap();
-        let reach = |map: Value, transcript: Cell| {
-            Domains::new(map, intolerant.clone())
-                .unwrap()
-                .exon_one_spans_intolerant_domain(&transcript)
-        };
-        let odd = || pickle_reader::load(&from_hex(ODD_ENTRIES)).unwrap();
-        let named = |name: &'static str| Cell::Text(name);
-        assert!(reach(odd(), named("ENST_ok")).unwrap());
-        assert!(!reach(odd(), named("ENST_empty")).unwrap());
-        assert!(!reach(odd(), named("ENST_absent")).unwrap());
-        // An entry, an exon table or a domain list of the wrong kind has no `get` or cannot be searched.
-        for transcript in [
-            "ENST_list",
-            "ENST_exons_list",
-            "ENST_int",
-            "ENST_none",
-            "ENST_unhashable",
-        ] {
-            assert!(reach(odd(), named(transcript)).is_err(), "{transcript}");
+    fn foreign_python_container_shapes_are_refused_before_rows_are_judged() {
+        // Runtime accepts the declared native schemas; unsupported Python
+        // containers are rejected by conversion rather than rehydrated at runtime.
+        for bytes in [b"\x80\x04].".as_slice(), b"\x80\x04).", b"\x80\x04N."] {
+            assert!(native_tables(DOMAIN_MAP, bytes).is_err());
+            assert!(native_tables(bytes, INTOLERANT).is_err());
         }
-        // The search stops at the first intolerant domain, so a later bad item is never met.
-        assert!(reach(odd(), named("ENST_other_first")).unwrap());
-        // A map that is not a dict.
-        assert!(reach(list(vec![text("ENST_ok")]), named("ENST_ok")).is_err());
-        // Keys are compared the way Python compares them.
-        let integer_key = || pickle_reader::load(&from_hex(INTEGER_KEY)).unwrap();
-        assert!(reach(integer_key(), Cell::Int(1)).unwrap());
-        assert!(reach(integer_key(), Cell::Float(1.0)).unwrap());
-        assert!(reach(integer_key(), Cell::Bool(true)).unwrap());
-        assert!(!reach(integer_key(), Cell::Text("1")).unwrap());
-        assert!(!reach(integer_key(), Cell::Float(1.5)).unwrap());
     }
 
     #[test]
@@ -797,15 +626,24 @@ mod tests {
     }
 
     #[test]
-    fn the_pickles_are_read_and_applied_to_the_table() {
+    fn the_native_caches_are_read_and_applied_to_the_table() {
         let folder = std::env::temp_dir().join(format!("priva_utr_domains_{}", std::process::id()));
         let _ = fs::remove_dir_all(&folder);
         fs::create_dir_all(&folder).unwrap();
         let table = folder.join("table.tsv");
-        let map = folder.join("map.pkl");
-        let intolerant = folder.join("intolerant.pkl");
-        fs::write(&map, DOMAIN_MAP).unwrap();
-        fs::write(&intolerant, INTOLERANT).unwrap();
+        let source_map = folder.join("map.pkl");
+        let source_set = folder.join("intolerant.pkl");
+        let map = folder.join("map.rkyv");
+        let intolerant = folder.join("intolerant.rkyv");
+        fs::write(&source_map, DOMAIN_MAP).unwrap();
+        fs::write(&source_set, INTOLERANT).unwrap();
+        crate::cache_convert::transcript_domains::convert(source_map.to_str().unwrap(), &map)
+            .unwrap();
+        crate::cache_convert::intolerant_domains::convert(
+            source_set.to_str().unwrap(),
+            &intolerant,
+        )
+        .unwrap();
         let input = format!(
             "Feature\t5UTR_consequence\t5UTR_annotation\nENST1\t{STOP}\t{IN_FRAME_STOP}\nENST2\t{STOP}\t{IN_FRAME_STOP}\n"
         );
@@ -818,7 +656,7 @@ mod tests {
                 "Feature\t5UTR_consequence\t5UTR_annotation\t5UTR_lof\t5UTR_len_changing\t5UTR_frameshift\t5UTR_span_intol_domain\nENST1\t{STOP}\t{IN_FRAME_STOP}\tTrue\tTrue\tFalse\tTrue\nENST2\t{STOP}\t{IN_FRAME_STOP}\tFalse\tTrue\tFalse\tFalse\n"
             )
         );
-        // A pickle that is not there, or not a pickle, stops the run with the table untouched.
+        // A missing, foreign or damaged cache leaves the table untouched.
         fs::write(&table, &input).unwrap();
         let missing = folder.join("absent.pkl");
         let gone = Some((missing.to_str().unwrap(), intolerant.to_str().unwrap()));

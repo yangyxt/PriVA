@@ -327,6 +327,12 @@ pub(crate) fn run() -> Result<()> {
     if args.get(1).map(String::as_str) == Some("alphamissense-vcf") {
         return crate::alphamissense_vcf::dispatch(&args[2..]);
     }
+    if args.get(1).map(String::as_str) == Some("alphamissense-domain") {
+        return crate::alpha_domain::dispatch(&args[2..], false);
+    }
+    if args.get(1).map(String::as_str) == Some("domain-metadata") {
+        return crate::alpha_domain::dispatch(&args[2..], true);
+    }
     if args.get(1).map(String::as_str) == Some("pm1-regions") {
         return crate::pm1_regions_builder::dispatch(&args[2..]);
     }

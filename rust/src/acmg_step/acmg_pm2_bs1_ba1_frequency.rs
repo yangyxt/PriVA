@@ -16,7 +16,7 @@ use super::acmg_variant_mechanism::variant_condition_masks;
 use super::stats;
 use super::types::{AcmgError, HarnessCall, NamedMasks, StepOutput, not_converted};
 use crate::cache_convert::clinvar_exon_af::ClinvarExonAfCache;
-use crate::cache_convert::clinvar_gene_af::{ArchivedGeneAfValue, ClinvarGeneAfCache};
+use crate::cache_convert::clinvar_gene_af::{ClinvarGeneAfCache, ValueRef};
 use crate::cli::{Result, invalid};
 use crate::json_text::Json;
 use crate::pandas_table::{Column, ObjectValue, Table};
@@ -57,6 +57,28 @@ fn numeric(column: &Column, name: &str) -> Result<Vec<f64>> {
             other.dtype_name(),
             column_kind(other)
         ))),
+    }
+}
+
+/// Gene cache mapping preserves Python booleans and mixed object dtype. Only
+/// this consumer's arithmetic treats Boolean as zero/one; unrelated numeric
+/// column validation retains its existing policy.
+fn gene_af_numbers(column: &Column) -> Result<Vec<f64>> {
+    match column {
+        Column::Bool(values) => Ok(values.iter().map(|b| u8::from(*b) as f64).collect()),
+        Column::Object(values) => values
+            .iter()
+            .map(|v| match v {
+                ObjectValue::Bool(b) => Ok(u8::from(*b) as f64),
+                ObjectValue::Int(i) if i.unsigned_abs() <= 1 << 53 => Ok(*i as f64),
+                ObjectValue::Float(f) => Ok(*f),
+                ObjectValue::None | ObjectValue::Nan => Ok(f64::NAN),
+                _ => Err(refused(
+                    "clinvar_patho_gene_max_af contains a nonnumeric value",
+                )),
+            })
+            .collect(),
+        _ => numeric(column, "clinvar_patho_gene_max_af"),
     }
 }
 
@@ -533,16 +555,41 @@ fn gene_max_patho_hom_freq(table: &Table) -> Result<HashMap<String, f64>> {
 enum Mapped {
     Int(i64),
     Float(f64),
+    Bool(bool),
 }
 
 fn mapped_column(values: Vec<Mapped>) -> Column {
+    if !values.is_empty() && values.iter().all(|v| matches!(v, Mapped::Bool(_))) {
+        return Column::Bool(
+            values
+                .into_iter()
+                .map(|v| match v {
+                    Mapped::Bool(b) => b,
+                    _ => unreachable!(),
+                })
+                .collect(),
+        );
+    }
+    if values.iter().any(|v| matches!(v, Mapped::Bool(_))) {
+        return Column::Object(
+            values
+                .into_iter()
+                .map(|v| match v {
+                    Mapped::Bool(b) => ObjectValue::Bool(b),
+                    Mapped::Int(i) => ObjectValue::Int(i),
+                    Mapped::Float(f) if f.is_nan() => ObjectValue::Nan,
+                    Mapped::Float(f) => ObjectValue::Float(f),
+                })
+                .collect(),
+        );
+    }
     if values.iter().all(|value| matches!(value, Mapped::Int(_))) {
         Column::Int(
             values
                 .into_iter()
                 .map(|value| match value {
                     Mapped::Int(number) => number,
-                    Mapped::Float(_) => unreachable!(),
+                    Mapped::Float(_) | Mapped::Bool(_) => unreachable!(),
                 })
                 .collect(),
         )
@@ -553,6 +600,7 @@ fn mapped_column(values: Vec<Mapped>) -> Column {
                 .map(|value| match value {
                     Mapped::Int(number) => number as f64,
                     Mapped::Float(number) => number,
+                    Mapped::Bool(_) => unreachable!(),
                 })
                 .collect(),
         )
@@ -622,6 +670,7 @@ fn gene_af_lookup_reference(path: &str) -> Result<HashMap<String, Mapped>> {
                 None => Mapped::Int(0),
                 Some(Value::Int(number)) => Mapped::Int(*number),
                 Some(Value::Float(number)) => Mapped::Float(*number),
+                Some(Value::Bool(value)) => Mapped::Bool(*value),
                 Some(Value::None) => Mapped::Float(f64::NAN),
                 Some(other) => {
                     return Err(refused(format!(
@@ -652,12 +701,13 @@ fn gene_af_lookup(path: &str) -> Result<HashMap<String, Mapped>> {
         let Some(record) = stat.get(gene).unwrap() else {
             continue;
         };
-        let af = record.iter().find(|field| field.key.as_str() == "af");
-        let entry = match af.map(|field| &field.value) {
+        let af = record.iter().find(|field| field.key == "af");
+        let entry = match af.map(|field| field.value) {
             None => Mapped::Int(0),
-            Some(ArchivedGeneAfValue::Int(number)) => Mapped::Int(number.to_native()),
-            Some(ArchivedGeneAfValue::Float(number)) => Mapped::Float(number.to_native()),
-            Some(ArchivedGeneAfValue::Text(_)) => {
+            Some(ValueRef::Int(number)) => Mapped::Int(number),
+            Some(ValueRef::Float(number)) => Mapped::Float(number),
+            Some(ValueRef::Bool(value)) => Mapped::Bool(value),
+            Some(ValueRef::Text(_)) => {
                 return Err(refused(format!("the af of gene {gene} is a str")));
             }
         };
@@ -758,6 +808,7 @@ pub(crate) fn pm2_criteria(
                 |gene| match gene.as_ref().and_then(|g| gene_af_by_gene.get(g)) {
                     Some(Mapped::Int(number)) => Mapped::Int(*number),
                     Some(Mapped::Float(number)) => Mapped::Float(*number),
+                    Some(Mapped::Bool(value)) => Mapped::Bool(*value),
                     None => Mapped::Int(0),
                 },
             )
@@ -802,7 +853,7 @@ pub(crate) fn pm2_criteria(
     let has_dominant = mask(&masks, "has_dominant")?;
     let has_recessive = mask(&masks, "has_recessive")?;
 
-    let gene_af = fill_nan(&numeric(&gene_af_column, "clinvar_patho_gene_max_af")?, 0.0);
+    let gene_af = fill_nan(&gene_af_numbers(&gene_af_column)?, 0.0);
     let gene_hom = fill_nan(
         &numeric(&hom_column, "clinvar_patho_gene_max_hom_freq")?,
         0.0,
@@ -841,7 +892,7 @@ pub(crate) fn pm2_criteria(
         .collect();
 
     let pm2_supporting_exon = rare_af_binomial(&work, &max)?;
-    let gene_af_raw = numeric(&gene_af_column, "clinvar_patho_gene_max_af")?;
+    let gene_af_raw = gene_af_numbers(&gene_af_column)?;
     let pm2_supporting_gene = rare_af_binomial(&work, &gene_af_raw)?;
     let pm2_moderate_exon = rare_af_binomial(&work, &median)?;
     let gnomad_absent = gnomad_rare_af(&work, 1e-7)?;
@@ -931,10 +982,7 @@ pub(crate) fn bs1_criteria(
     let scope_review = scope_review_required(table)?;
 
     let gene_af = match table.column_index("clinvar_patho_gene_max_af") {
-        Some(index) => fill_nan(
-            &numeric(&table.columns[index], "clinvar_patho_gene_max_af")?,
-            0.0,
-        ),
+        Some(index) => fill_nan(&gene_af_numbers(&table.columns[index])?, 0.0),
         None => vec![0.0; rows],
     };
     let gene_hom = match table.column_index("clinvar_patho_gene_max_hom_freq") {
@@ -1342,6 +1390,44 @@ mod tests {
         assert!(error.to_string().contains("af of gene BAD is a str"));
         std::fs::remove_file(path).unwrap();
         std::fs::remove_file(pickle).unwrap();
+    }
+
+    #[test]
+    fn gene_boolean_mapping_keeps_pandas_dtype_and_local_arithmetic() {
+        let bools = mapped_column(vec![Mapped::Bool(true), Mapped::Bool(false)]);
+        assert_eq!(bools, Column::Bool(vec![true, false]));
+        assert_eq!(gene_af_numbers(&bools).unwrap(), vec![1.0, 0.0]);
+        assert!(numeric(&bools, "unrelated").is_err());
+        let mixed = mapped_column(vec![Mapped::Bool(true), Mapped::Int(0), Mapped::Float(0.2)]);
+        assert_eq!(
+            mixed,
+            Column::Object(vec![
+                ObjectValue::Bool(true),
+                ObjectValue::Int(0),
+                ObjectValue::Float(0.2)
+            ])
+        );
+        assert_eq!(gene_af_numbers(&mixed).unwrap(), vec![1.0, 0.0, 0.2]);
+        assert!(numeric(&mixed, "unrelated").is_err());
+        let path = path("gene_bool.rkyv");
+        use crate::cache_convert::clinvar_gene_af::{Entry, Value as GeneValue, write_records};
+        write_records(
+            Path::new(&path),
+            vec![(
+                "TRUE".into(),
+                Some(vec![Entry {
+                    key: "af".into(),
+                    value: GeneValue::Bool(true),
+                }]),
+            )],
+            vec![],
+        )
+        .unwrap();
+        assert!(matches!(
+            gene_af_lookup(&path).unwrap()["TRUE"],
+            Mapped::Bool(true)
+        ));
+        std::fs::remove_file(path).unwrap();
     }
 
     fn exon_fixture(name: &str) -> String {

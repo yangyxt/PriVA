@@ -1,4 +1,4 @@
-//! Schema 6, version 1: `{gene: None | {known_field: str | int | float}}`.
+//! Schema 6: frozen v1 str/int/float records; v2 additionally retains Boolean scalars.
 //! The twelve known builder field names may be absent; present entries retain
 //! their dictionary insertion order and exact scalar kind. `None`, an empty
 //! dictionary and a missing top-level gene remain distinct.
@@ -11,9 +11,12 @@ use crate::rust_cache::{
 };
 use rkyv::{Archive, Deserialize, Serialize, rancor};
 use std::collections::HashSet;
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::Path;
 use std::time::Instant;
+
+mod typed;
+pub(crate) use typed::{Entry, RecordRef, Value, ValueRef};
 
 pub(crate) const SCHEMA: Schema = Schema {
     name: "clinvar_patho_af_stat",
@@ -115,16 +118,40 @@ fn exact_plain(record: Option<&[GeneAfEntry]>) -> ExactValue {
 
 /// A checked, mapped gene dictionary. `get` returns None for a missing gene,
 /// Some(None) for Python None and Some(Some(entries)) for the ordered record.
+enum Mapping {
+    V1(MappedCache<ClinvarGeneAfStat>),
+    V2(MappedCache<typed::Root>),
+}
 pub(crate) struct ClinvarGeneAfCache {
-    mapped: MappedCache<ClinvarGeneAfStat>,
+    mapped: Mapping,
 }
 impl ClinvarGeneAfCache {
     pub(crate) fn open(path: &str) -> Result<Self> {
-        let mapped = MappedCache::<ClinvarGeneAfStat>::open(path, SCHEMA)?;
-        let root = mapped.root();
-        if root.genes.len() != root.entries.len()
-            || root
-                .genes
+        let mut file = std::fs::File::open(path)?;
+        let mut prefix = [0_u8; 20];
+        let v2 = file.read_exact(&mut prefix).is_ok()
+            && &prefix[..8] == crate::rust_cache::MAGIC
+            && u32::from_le_bytes(prefix[12..16].try_into().unwrap()) == SCHEMA.id
+            && u32::from_le_bytes(prefix[16..20].try_into().unwrap()) == typed::SCHEMA.version;
+        let mapped = if v2 {
+            Mapping::V2(MappedCache::<typed::Root>::open_file(
+                &file,
+                path,
+                typed::SCHEMA,
+            )?)
+        } else {
+            Mapping::V1(MappedCache::<ClinvarGeneAfStat>::open_file(
+                &file, path, SCHEMA,
+            )?)
+        };
+        let cache = Self { mapped };
+        let count = match &cache.mapped {
+            Mapping::V1(m) => m.root().entries.len(),
+            Mapping::V2(m) => m.root().entries.len(),
+        };
+        if cache.len() != count
+            || cache
+                .keys()
                 .windows(2)
                 .any(|p| p[0].as_str() >= p[1].as_str())
         {
@@ -132,9 +159,9 @@ impl ClinvarGeneAfCache {
                 "{path}: genes must be sorted, unique and one per entry"
             )));
         }
-        for entry in root.entries.iter() {
-            if let Some(record) = entry.as_ref() {
-                let names: HashSet<&str> = record.iter().map(|e| e.key.as_str()).collect();
+        for gene in cache.keys() {
+            if let Some(record) = cache.get(gene.as_str()).unwrap() {
+                let names: HashSet<&str> = record.iter().map(|e| e.key).collect();
                 if names.len() != record.len() || names.iter().any(|name| !FIELDS.contains(name)) {
                     return Err(invalid(format!(
                         "{path}: a gene record has duplicate or unknown fields"
@@ -142,37 +169,39 @@ impl ClinvarGeneAfCache {
                 }
             }
         }
-        Ok(Self { mapped })
+        Ok(cache)
+    }
+    pub(crate) fn schema_version(&self) -> u32 {
+        match self.mapped {
+            Mapping::V1(_) => SCHEMA.version,
+            Mapping::V2(_) => typed::SCHEMA.version,
+        }
     }
     pub(crate) fn len(&self) -> usize {
-        self.mapped.root().genes.len()
+        self.keys().len()
     }
     pub(crate) fn keys(&self) -> &[rkyv::string::ArchivedString] {
-        &self.mapped.root().genes
+        match &self.mapped {
+            Mapping::V1(m) => &m.root().genes,
+            Mapping::V2(m) => &m.root().genes,
+        }
     }
-    pub(crate) fn get(
-        &self,
-        gene: &str,
-    ) -> Option<Option<&rkyv::vec::ArchivedVec<ArchivedGeneAfEntry>>> {
-        let root = self.mapped.root();
-        find_sorted(&root.genes, gene).map(|at| root.entries[at].as_ref())
+    pub(crate) fn get(&self, gene: &str) -> Option<Option<RecordRef<'_>>> {
+        find_sorted(self.keys(), gene).map(|at| match &self.mapped {
+            Mapping::V1(m) => m.root().entries[at].as_ref().map(RecordRef::V1),
+            Mapping::V2(m) => m.root().entries[at].as_ref().map(RecordRef::V2),
+        })
     }
-    pub(crate) fn owned_entries(&self) -> Vec<(String, Option<Vec<GeneAfEntry>>)> {
+    pub(crate) fn owned_entries(&self) -> Vec<(String, Option<Vec<Entry>>)> {
         self.keys()
             .iter()
             .map(|gene| {
                 let entries = self.get(gene.as_str()).unwrap().map(|record| {
                     record
                         .iter()
-                        .map(|entry| GeneAfEntry {
-                            key: entry.key.as_str().to_owned(),
-                            value: match &entry.value {
-                                ArchivedGeneAfValue::Text(s) => {
-                                    GeneAfValue::Text(s.as_str().to_owned())
-                                }
-                                ArchivedGeneAfValue::Int(i) => GeneAfValue::Int(i.to_native()),
-                                ArchivedGeneAfValue::Float(f) => GeneAfValue::Float(f.to_native()),
-                            },
+                        .map(|e| Entry {
+                            key: e.key.to_owned(),
+                            value: e.value.owned(),
                         })
                         .collect()
                 });
@@ -186,20 +215,7 @@ impl ClinvarGeneAfCache {
             Some(entries) => ExactValue::Dict(
                 entries
                     .iter()
-                    .map(|entry| {
-                        (
-                            ExactValue::Text(entry.key.as_str().to_owned()),
-                            match &entry.value {
-                                ArchivedGeneAfValue::Text(s) => {
-                                    ExactValue::Text(s.as_str().to_owned())
-                                }
-                                ArchivedGeneAfValue::Int(i) => ExactValue::Int(i.to_native()),
-                                ArchivedGeneAfValue::Float(f) => {
-                                    ExactValue::Float(f.to_native().to_bits())
-                                }
-                            },
-                        )
-                    })
+                    .map(|e| (ExactValue::Text(e.key.to_owned()), e.value.exact()))
                     .collect(),
             ),
         })
@@ -240,7 +256,7 @@ pub(crate) fn write_entries(
 #[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn export(path: &str, out: &mut dyn Write) -> Result<usize> {
     let cache = ClinvarGeneAfCache::open(path)?;
-    for key in cache.mapped.root().genes.iter() {
+    for key in cache.keys() {
         write_entry(
             out,
             &ExactValue::Text(key.as_str().to_owned()),
@@ -250,7 +266,102 @@ pub(crate) fn export(path: &str, out: &mut dyn Write) -> Result<usize> {
     Ok(cache.len())
 }
 
+/// New format is selected only when a Boolean survives in the reduced map.
+pub(crate) fn write_records(
+    output: &Path,
+    entries: Vec<(String, Option<Vec<Entry>>)>,
+    provenance: Vec<Provenance>,
+) -> Result<usize> {
+    write_records_checked(output, entries, provenance, |_| Ok(()))
+}
+fn write_records_checked(
+    output: &Path,
+    mut entries: Vec<(String, Option<Vec<Entry>>)>,
+    provenance: Vec<Provenance>,
+    check: impl FnOnce(&ClinvarGeneAfCache) -> Result<()>,
+) -> Result<usize> {
+    if let Some(legacy) = typed::legacy(&entries) {
+        return write_entries(output, legacy, provenance);
+    }
+    entries.sort_by(|a, b| a.0.cmp(&b.0));
+    let (genes, entries) = entries.into_iter().unzip();
+    let root = typed::Root {
+        provenance,
+        genes,
+        entries,
+    };
+    let count = root.genes.len();
+    let bytes = rkyv::to_bytes::<rancor::Error>(&root)?;
+    write_cache_checked(output, typed::SCHEMA, &bytes, |staged| {
+        let cache = ClinvarGeneAfCache::open(&staged.to_string_lossy())?;
+        if cache.len() != count {
+            return Err(invalid("typed gene count differs"));
+        }
+        for (gene, expected) in root.genes.iter().zip(&root.entries) {
+            if cache.exact(gene).as_ref() != Some(&typed::exact_plain(expected.as_deref())) {
+                return Err(invalid("typed gene value differs after writing"));
+            }
+        }
+        check(&cache)
+    })?;
+    Ok(count)
+}
+
+fn typed_pickle(path: &str) -> Result<Vec<(String, Option<Vec<Entry>>)>> {
+    let mut entries = Vec::new();
+    let distinct = visit_top_level_dict(
+        path,
+        |_| true,
+        |gene, input| {
+            entries.push((gene.to_string(), typed::plain_gene(path, &gene, &input)?));
+            Ok(())
+        },
+    )?;
+    if distinct != entries.len() {
+        return Err(invalid(format!("{path}: a gene is set twice; refused")));
+    }
+    Ok(entries)
+}
+pub(crate) fn pickle_schema_version(path: &str) -> Result<u32> {
+    Ok(if typed::legacy(&typed_pickle(path)?).is_some() {
+        SCHEMA.version
+    } else {
+        typed::SCHEMA.version
+    })
+}
+
 pub(crate) fn convert(pickle: &str, output: &Path) -> Result<String> {
+    ensure_distinct_paths(Path::new(pickle), output)?;
+    let entries = typed_pickle(pickle)?;
+    if typed::legacy(&entries).is_some() {
+        return convert_v1(pickle, output);
+    }
+    let started = Instant::now();
+    let fields: usize = entries
+        .iter()
+        .filter_map(|(_, v)| v.as_ref())
+        .map(Vec::len)
+        .sum();
+    let none = entries.iter().filter(|(_, v)| v.is_none()).count();
+    let count = write_records_checked(output, entries, provenance(pickle)?, |cache| {
+        let reread = typed_pickle(pickle)?;
+        if reread.len() != cache.len()
+            || reread.iter().any(|(gene, value)| {
+                cache.exact(gene).as_ref() != Some(&typed::exact_plain(value.as_deref()))
+            })
+        {
+            return Err(invalid("the pickle changed while converted"));
+        }
+        Ok(())
+    })?;
+    Ok(format!(
+        "{{\"cache\":\"clinvar_patho_af_stat\",\"schema_version\":2,\"genes\":{count},\"fields\":{fields},\"none\":{none},\"checked_genes\":{count},\"bytes\":{},\"elapsed_s\":{:.3}}}",
+        std::fs::metadata(output)?.len(),
+        started.elapsed().as_secs_f64()
+    ))
+}
+
+fn convert_v1(pickle: &str, output: &Path) -> Result<String> {
     ensure_distinct_paths(Path::new(pickle), output)?;
     let started = Instant::now();
     let mut entries = Vec::new();
@@ -443,7 +554,7 @@ mod tests {
         std::fs::write(&input, PICKLE).unwrap();
         convert(&input, Path::new(&output)).unwrap();
         let c = ClinvarGeneAfCache::open(&output).unwrap();
-        assert_eq!(c.mapped.root().genes[0].as_str(), "empty");
+        assert_eq!(c.keys()[0].as_str(), "empty");
         let expected = vec![
             GeneAfEntry {
                 key: "af".into(),
@@ -469,6 +580,116 @@ mod tests {
         std::fs::write(&input, b"\x80\x04}\x8c\x01z\x88s.").unwrap();
         assert!(convert(&input, Path::new(&output)).is_err());
         assert_eq!(std::fs::read(&output).unwrap(), before);
+        std::fs::remove_file(input).unwrap();
+        std::fs::remove_file(output).unwrap();
+    }
+    #[test]
+    fn typed_writer_keeps_complete_v1_bytes_for_old_values() {
+        let old = path("legacy_writer.rkyv");
+        let new = path("typed_old_writer.rkyv");
+        write_entries(
+            Path::new(&old),
+            vec![("a".into(), Some(record())), ("none".into(), None)],
+            vec![],
+        )
+        .unwrap();
+        let entries = ClinvarGeneAfCache::open(&old).unwrap().owned_entries();
+        write_records(Path::new(&new), entries, vec![]).unwrap();
+        assert_eq!(std::fs::read(&new).unwrap(), std::fs::read(&old).unwrap());
+        assert_eq!(ClinvarGeneAfCache::open(&new).unwrap().schema_version(), 1);
+        std::fs::remove_file(old).unwrap();
+        std::fs::remove_file(new).unwrap();
+    }
+
+    #[test]
+    fn typed_roundtrip_retains_booleans_bits_order_and_missing_genes() {
+        let p = path("typed_values.rkyv");
+        let entries = vec![
+            (
+                "z".into(),
+                Some(vec![
+                    Entry {
+                        key: "af".into(),
+                        value: Value::Bool(true),
+                    },
+                    Entry {
+                        key: "acc_patho_af".into(),
+                        value: Value::Bool(false),
+                    },
+                    Entry {
+                        key: "pos".into(),
+                        value: Value::Int(4),
+                    },
+                    Entry {
+                        key: "hgvsp".into(),
+                        value: Value::Float(f64::from_bits(0x7ff8_0000_0000_0042)),
+                    },
+                    Entry {
+                        key: "impact".into(),
+                        value: Value::Float(-0.0),
+                    },
+                    Entry {
+                        key: "chrom".into(),
+                        value: Value::Text("chr1".into()),
+                    },
+                ]),
+            ),
+            ("none".into(), None),
+            ("empty".into(), Some(vec![])),
+        ];
+        write_records(Path::new(&p), entries.clone(), vec![]).unwrap();
+        let cache = ClinvarGeneAfCache::open(&p).unwrap();
+        assert_eq!(cache.schema_version(), 2);
+        assert!(cache.get("absent").is_none());
+        for (gene, record) in &entries {
+            assert_eq!(
+                cache.exact(gene),
+                Some(typed::exact_plain(record.as_deref()))
+            );
+        }
+        let bytes = std::fs::read(&p).unwrap();
+        assert_eq!(u32::from_le_bytes(bytes[8..12].try_into().unwrap()), 1);
+        let mut export_bytes = Vec::new();
+        assert_eq!(export(&p, &mut export_bytes).unwrap(), 3);
+        assert!(
+            String::from_utf8(export_bytes)
+                .unwrap()
+                .contains("[\"bool\",true]")
+        );
+        drop(cache);
+        let mut invalid = entries;
+        invalid[0].1.as_mut().unwrap()[1].key = "af".into();
+        assert!(write_records(Path::new(&p), invalid, vec![]).is_err());
+        assert_eq!(std::fs::read(&p).unwrap(), bytes);
+        std::fs::remove_file(p).unwrap();
+    }
+
+    #[test]
+    fn typed_conversion_preserves_boolean_and_failed_publication() {
+        let input = path("typed.pkl");
+        let output = path("typed.rkyv");
+        std::fs::write(&input, b"\x80\x04}\x8c\x01a}\x8c\x02af\x88ss.").unwrap();
+        assert_eq!(pickle_schema_version(&input).unwrap(), 2);
+        convert(&input, Path::new(&output)).unwrap();
+        let cache = ClinvarGeneAfCache::open(&output).unwrap();
+        assert_eq!(cache.schema_version(), 2);
+        assert_eq!(
+            cache.exact("a"),
+            Some(ExactValue::Dict(vec![(
+                ExactValue::Text("af".into()),
+                ExactValue::Bool(true)
+            )]))
+        );
+        drop(cache);
+        let before = std::fs::read(&output).unwrap();
+        for bad in [
+            b"\x80\x04}\x8c\x01a}\x8c\x02afNss.".as_slice(),
+            b"\x80\x04}\x8c\x01a}\x8c\x02af]ss.",
+        ] {
+            std::fs::write(&input, bad).unwrap();
+            assert!(convert(&input, Path::new(&output)).is_err());
+            assert_eq!(std::fs::read(&output).unwrap(), before);
+        }
         std::fs::remove_file(input).unwrap();
         std::fs::remove_file(output).unwrap();
     }

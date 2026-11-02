@@ -366,14 +366,14 @@ pub(crate) fn tokenize(
     comment: Option<u8>,
     emit: impl FnMut(Vec<String>) -> Result<()>,
 ) -> Result<()> {
-    tokenize_impl(text, comment, false, 0, emit)
+    tokenize_impl(text, comment, false, false, emit)
 }
 
 fn tokenize_impl(
     text: &str,
     comment: Option<u8>,
     builder_cr_compatibility: bool,
-    bom_bytes: usize,
+    initial_bom: bool,
     mut emit: impl FnMut(Vec<String>) -> Result<()>,
 ) -> Result<()> {
     let expected_width = std::cell::Cell::new(0usize);
@@ -400,6 +400,7 @@ fn tokenize_impl(
     let mut records = 0;
     let mut call_start = 0;
     let mut backtracks = HashMap::new();
+    let mut builder_buffer_starts: Option<Vec<usize>> = None;
     while index < bytes.len() {
         let byte = bytes[index];
         let terminator = byte == b'\n' || byte == b'\r';
@@ -446,15 +447,32 @@ fn tokenize_impl(
                     if builder_cr_compatibility {
                         // pandas 2.2.3 WHITESPACE_LINE rewinds to LF (not CR)
                         // or the current tokenizer-call boundary. Header=0
-                        // first tokenizes two records; later buffers are 256 KiB.
+                        // first tokenizes two records; the default text handle
+                        // reads 256 Ki Unicode characters, then encodes UTF-8.
                         // Reproduce that traversal only for these opt-in text
                         // builders. A repeated traversal cannot make progress:
                         // report its eventual failure without filling memory
                         // with repeated rows. See pinned primary sources:
                         // pandas v2.2.3 pandas/_libs/src/parser/tokenizer.c and
-                        // pandas/_libs/parsers.pyx, _get_header/DEFAULT_CHUNKSIZE.
-                        let chunk_start = ((end + bom_bytes) / (256 * 1024) * (256 * 1024))
-                            .saturating_sub(bom_bytes);
+                        // pandas/_libs/parsers.pyx, _get_header/DEFAULT_CHUNKSIZE,
+                        // and pandas/_libs/src/parser/io.c, buffer_rd_bytes.
+                        // Build this small boundary index only on the builder
+                        // rewind path. A stripped BOM consumed one character
+                        // in the first read, although its encoding had 3 bytes.
+                        let starts = builder_buffer_starts.get_or_insert_with(|| {
+                            std::iter::once(0)
+                                .chain(text.char_indices().enumerate().filter_map(
+                                    |(character, (byte, _))| {
+                                        (byte > 0
+                                            && (character + usize::from(initial_bom))
+                                                % (256 * 1024)
+                                                == 0)
+                                            .then_some(byte)
+                                    },
+                                ))
+                                .collect()
+                        });
+                        let chunk_start = starts[starts.partition_point(|start| *start <= end) - 1];
                         let floor = call_start.max(chunk_start);
                         let rewind = bytes[floor..=end]
                             .iter()
@@ -983,7 +1001,7 @@ fn parse_table_impl(
     options: &ReadOptions,
     builder_cr_compatibility: bool,
 ) -> Result<Table> {
-    let bom_bytes = usize::from(text.starts_with('\u{feff}')) * 3;
+    let initial_bom = text.starts_with('\u{feff}');
     let text = text.strip_prefix('\u{feff}').unwrap_or(text);
     let mut names: Option<Vec<String>> = match &options.header {
         Header::FirstLine => None,
@@ -1007,7 +1025,7 @@ fn parse_table_impl(
         text,
         options.comment,
         builder_cr_compatibility,
-        bom_bytes,
+        initial_bom,
         |record| {
             widest = widest.max(record.len());
             let Some(expected) = width else {
@@ -1562,6 +1580,32 @@ mod tests {
             // The ordinary reader does not adopt the builder's pandas-2.2.3
             // bare-CR compatibility traversal or its failure shortcut.
             assert_eq!(parse_table_with(&input, &options).unwrap().rows, 3);
+        }
+    }
+
+    #[test]
+    fn builder_rewind_boundaries_count_decoded_characters_including_bom() {
+        let options = ReadOptions {
+            all_text: true,
+            keep_default_na: false,
+            ..ReadOptions::default()
+        };
+        for (marker, extra_utf8_bytes) in [("\u{feff}", 2), ("é", 1), ("😀", 3)] {
+            for after_boundary in [0, 1] {
+                let prefix = format!("{marker}a\tb\tc\td\te\rG0\tD1\tH1\t\t\rG1\tD1\tH1\t\t");
+                let padding = 256 * 1024 + extra_utf8_bytes + after_boundary - prefix.len() - 1;
+                let input = format!("{prefix}{}\r G2\tD1\tH1\t\t\r", "x".repeat(padding));
+                let result = parse_table_impl(&input, &options, true);
+                if after_boundary == 0 {
+                    assert_eq!(result.unwrap().rows, 3);
+                } else {
+                    assert_eq!(
+                        result.unwrap_err().to_string(),
+                        "Error tokenizing data. C error: out of memory"
+                    );
+                }
+                assert_eq!(parse_table_with(&input, &options).unwrap().rows, 3);
+            }
         }
     }
 

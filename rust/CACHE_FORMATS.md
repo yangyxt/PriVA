@@ -54,8 +54,9 @@ The archive starts at offset 32, so a page-aligned memory map keeps rkyv's 16-by
 to a temporary name in the target folder, synced and renamed into place, so a reader never maps a
 half-written file. Caches are never modified in place. The same input gives the same bytes.
 
-**Versioning**: a change of any archived type bumps the schema version; a reader accepts only its
-own version and says which it found. A change of rkyv's binary format (a new rkyv version or
+**Versioning**: a change of any archived type bumps the schema version; a reader accepts only
+explicitly supported versions and selects each version's unchanged archived type. Unsupported
+versions are refused. A change of rkyv's binary format (a new rkyv version or
 feature set) gets a new layout number. The container version changes only with the header.
 
 **Compression**: none, so that the file can be mapped. Repeated text is stored once instead: low
@@ -84,7 +85,7 @@ holds everything the pickle held, in the readers' terms:
 | `set`, `frozenset` | `Vec<T>` sorted by bytes (numbers by value), unique | Python's set order is hash-random and no reader may depend on it |
 | `None` | `Option<T>::None` | where both `None` and an absent key occur, an enum keeps them apart |
 | `float` | `f64`, bits kept exactly | NaN is stored as NaN; where a field mixes text and NaN (the ClinGen map) the schema says so (`None` = NaN) and refuses other kinds |
-| `int` | `i64` | integers past 64 bits are refused; `bool` is `bool`, never folded into an int |
+| `int` | `i64` | integers past signed 64 bits are refused except for the explicitly versioned ClinGen scalar extension below; `bool` is `bool`, never folded into an int |
 | `str` | `String` (UTF-8) | low-cardinality fields go through the `texts` pool |
 | numpy arrays, other classes | refused | (the pickle reader refuses them already) |
 
@@ -107,10 +108,33 @@ lists are `List` columns; sets are sorted `List` columns.
 | 9 | `interpro_mapping_pickle` | `texts` pool; keys `(database, accession)` sorted; `entries[i]: Vec<{id, kind, short_name, name, go_terms: Vec<{id, category, description}>, abstract_text}>`, every text field a pool index (Python: list of exact 6-tuples, GO terms a list of exact 3-tuples) | **implemented** (`cache_convert/interpro_mapping.rs`) |
 | 10 | `clingen_map` | `variants` (sorted); `codes: Vec<Option<String>>` (`None` = the float NaN of curated variants without codes; Python `None` and every non-text/non-NaN value refused) | **implemented** (`cache_convert/clingen_map.rs`) |
 
-All ten schemas are frozen as version 1, with field names taken from the builder scripts.
+All ten version-1 layouts remain frozen, with field names taken from the builder scripts.
 File names: the pickle's name
 with `.pkl`/`.pkl.gz` replaced by `.v<schema version>.rkyv`. The branch's configuration keeps
 the key names and points them at the `.rkyv` files.
+
+### ClinGen scalar codes (schema 10, version 2)
+
+The ClinGen converter and `priva clingen-map build` select version 1 whenever every
+surviving code is text or missing. They use the original version-1 serializer, so
+the same values and provenance keep identical archive bytes. Bundled version-1
+files are unchanged. The ClinGen reader accepts both versions and validates the
+selected version's archive; an older version-1-only reader refuses version 2.
+
+Version 2 retains `provenance`, sorted unique `variants`, and one tagged `Code`
+per variant in `codes`. The declared enum order is `Text(String)`, `Missing`,
+`Integer(i128)`, `Float(u64)`, `Boolean(bool)`. Integers are limited to the range
+of pandas int64 and uint64 values (`-2^63` through `2^64-1`). Float payloads are
+their exact non-NaN IEEE-754 bits, including signed zero and infinities. Float
+NaN keeps the existing `Missing` normalization; Python `None`, containers, and
+integers outside that range remain refused. Only the ClinGen pickle visitor
+opts into uint64; other cache schemas retain their previous integer boundary.
+
+Export preserves scalar types and float bits. Runtime criteria override still
+uses only nonempty text after Python-compatible whitespace stripping. Present
+numeric, Boolean, or missing codes keep PriVA's assigned criteria, matching the
+Python consumer; they remain distinct from absent keys in the cache. Creating
+a version-2 archive does not select it in a configuration or change a caller.
 
 ## 5. Format selection
 
@@ -146,6 +170,10 @@ edits, and reuses completed conversions. It does not run the scientific builders
 Managed archive names contain the existing YAML key, assembly, VEP release, source digest
 prefix and format version. They stay in the configured resource directories under
 `cache_root`; each has a `.source.json` receipt identifying its original builder input.
+ClinGen managed names use `.v1.rkyv` or `.v2.rkyv` according to their actual schema.
+Version-2 receipts add `schema_version: "2"`; existing version-1 receipts remain
+unchanged. Both use `format: "PRIVARKV-v1"` for the unchanged container. Publication
+and reuse check that the archive's schema matches its managed generation.
 Changed sources get a new archive path, preserving the previous configuration until the
 final publication. Keep those source files and their scientific companion receipts while
 the corresponding builders still use them.

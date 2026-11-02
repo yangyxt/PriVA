@@ -3,6 +3,7 @@ pub mod acmg_consequence;
 pub mod acmg_scoring;
 mod acmg_step;
 pub mod acmg_variant_mechanism;
+mod alphamissense_vcf;
 mod cache_convert;
 mod cache_install;
 pub mod cadd_hub;

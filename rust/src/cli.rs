@@ -318,6 +318,9 @@ pub(crate) fn run() -> Result<()> {
     if args.get(1).map(String::as_str) == Some("clingen-map") {
         return crate::clingen_map_builder::dispatch(&args[2..]);
     }
+    if args.get(1).map(String::as_str) == Some("alphamissense-vcf") {
+        return crate::alphamissense_vcf::dispatch(&args[2..]);
+    }
     if args.get(1).map(String::as_str) == Some("acmg-step") {
         return crate::acmg_step::dev_harness::dispatch(&args[2..]);
     }

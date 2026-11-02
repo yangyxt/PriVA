@@ -26,7 +26,7 @@
 //!   behaviour depends on odd column types (noted at each).
 use super::acmg_bs2_bp5_observation::{bp5_criteria, bs2_criteria};
 use super::acmg_consequence::vep_consq_interpret;
-use super::acmg_pm1_pp2_bp1_missense::{PValues, load_pickle, pm1_criteria, pp2_bp1_criteria};
+use super::acmg_pm1_pp2_bp1_missense::{PValues, pm1_criteria, pp2_bp1_criteria};
 use super::acmg_pm2_bs1_ba1_frequency::{ba1_criteria, bs1_criteria, pm2_criteria};
 use super::acmg_pm4_bp3_protein_length::pm4_bp3_criteria;
 use super::acmg_pm5_residue_rules::{CuratedGainOfFunction, Pm5Index};
@@ -53,6 +53,7 @@ use super::types::{
     AcmgError, HarnessCall, MATRIX_AUDIT_COLUMNS, StepArguments, StepOutput, SymbolResolver,
     not_converted,
 };
+use crate::cache_convert::clinvar_gene_stat::ClinvarGeneCache;
 use crate::cli::{Result, invalid};
 use crate::json_text::Json;
 use crate::pandas_polars;
@@ -849,7 +850,7 @@ pub(crate) fn run_step(args: &StepArguments, cutoffs: &Cutoffs) -> Result<Table>
     )?;
     apply_columns(&mut table, &pm4_bp3)?;
 
-    let clinvar_gene_stat = load_pickle(&args.clinvar_gene_stat_pkl)?;
+    let clinvar_gene_stat = ClinvarGeneCache::open(&args.clinvar_gene_stat_pkl)?;
     let pp2_bp1 = pp2_bp1_criteria(
         &table,
         &clinvar_gene_stat,

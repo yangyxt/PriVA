@@ -15,41 +15,13 @@ use super::acmg_pp3_bp4_bp7_insilico::pandas_masks::{
     Mask, numeric_column, python_str_filled, strengths, text_contains, text_values,
 };
 use super::stats;
-use super::types::{AcmgError, HarnessCall, StepOutput, not_converted};
+use super::types::{HarnessCall, StepOutput, not_converted};
+use crate::cache_convert::clinvar_gene_stat::{ArchivedGene, ClinvarGeneCache};
 use crate::cache_convert::pm1_regions::Pm1RegionCache;
 use crate::cli::{Result, invalid};
 use crate::pandas_table::{Cell, Column, Table, read_table};
-use crate::pickle_reader::{self, Set, Value};
 use std::collections::HashMap;
-use std::ops::Deref;
 use std::path::Path;
-
-/// Loads a pickle as `pickle.load(gzip.open(path) if path.endswith(".gz") else open(path, "rb"))`.
-pub(crate) fn load_pickle(path: &str) -> Result<Value> {
-    pickle_reader::load(&pickle_reader::read_file(
-        Path::new(path),
-        path.ends_with(".gz"),
-    )?)
-}
-
-fn type_error(message: impl Into<String>) -> Box<dyn std::error::Error> {
-    Box::new(AcmgError::new("TypeError", message))
-}
-
-fn key_error(key: &str) -> Box<dyn std::error::Error> {
-    Box::new(AcmgError::new("KeyError", format!("'{key}'")))
-}
-
-/// `dict.get(key)` of a pickled dict with a text key.
-fn dict_get(value: &Value, key: &str) -> Result<Option<Value>> {
-    match value {
-        Value::Dict(dict) => Ok(dict.borrow().get(&Value::Str(key.into()))?.cloned()),
-        other => Err(invalid(format!(
-            "expected a pickled dict, found {}",
-            other.type_name()
-        ))),
-    }
-}
 
 /// The protein position `locate_pm1_region` reads from `Protein_position`: the digits before
 /// the first `/`, or `None` (no position).
@@ -208,98 +180,44 @@ impl PValues {
     }
 }
 
-/// A pickled set or frozenset.
-enum SetView<'a> {
-    Shared(std::cell::Ref<'a, Set>),
-    Frozen(&'a Set),
+/// `len(left & union(any_of))` on sorted pooled variant IDs from the same archive.
+fn intersection_count(left: &[rkyv::Archived<u32>], any_of: &[&[rkyv::Archived<u32>]]) -> usize {
+    left.iter()
+        .filter(|item| {
+            any_of.iter().any(|set| {
+                set.binary_search_by_key(&item.to_native(), |value| value.to_native())
+                    .is_ok()
+            })
+        })
+        .count()
 }
 
-impl Deref for SetView<'_> {
-    type Target = Set;
-    fn deref(&self) -> &Set {
-        match self {
-            SetView::Shared(set) => set,
-            SetView::Frozen(set) => set,
-        }
-    }
-}
-
-fn set_view<'a>(value: &'a Value, what: &str) -> Result<SetView<'a>> {
-    match value {
-        Value::Set(set) => Ok(SetView::Shared(set.borrow())),
-        Value::FrozenSet(set) => Ok(SetView::Frozen(set)),
-        other => Err(type_error(format!(
-            "{what} is a pickled {}; the set arithmetic of analyze_bp1_pp2 needs sets",
-            other.type_name()
-        ))),
-    }
-}
-
-/// `len(left & right)` (`any_of` holds the sets of a union on the right).
-fn intersection_count(left: &Set, any_of: &[&Set]) -> Result<usize> {
-    let mut count = 0;
-    for item in &left.items {
-        let mut found = false;
-        for set in any_of {
-            if set.contains(item)? {
-                found = true;
-                break;
-            }
-        }
-        count += usize::from(found);
-    }
-    Ok(count)
-}
-
-/// `len(left - right)`.
-fn difference_count(left: &Set, right: &Set) -> Result<usize> {
-    Ok(left.items.len() - intersection_count(left, &[right])?)
+fn difference_count(left: &[rkyv::Archived<u32>], right: &[rkyv::Archived<u32>]) -> usize {
+    left.len() - intersection_count(left, &[right])
 }
 
 /// `analyze_bp1_pp2(gene_stat_dict)`: `(ensembl_id, (pp2_granted, bp1_granted))`; the
-/// `ensembl_id` is `None` when it is not a text (no table gene can then find the result).
+/// The typed schema guarantees a text `ensembl_id`; absent lookup keys are handled by callers.
 pub(crate) fn analyze_bp1_pp2(
-    stat: &Value,
+    stat: &ArchivedGene,
     pvalues: &PValues,
 ) -> Result<(Option<String>, (bool, bool))> {
-    let Value::Dict(dict) = stat else {
-        return Err(type_error(format!(
-            "a gene's ClinVar statistics are a pickled {}, not a dict",
-            stat.type_name()
-        )));
-    };
-    let dict = dict.borrow();
-    let field = |key: &str| -> Result<Value> {
-        dict.get(&Value::Str(key.into()))?
-            .cloned()
-            .ok_or_else(|| key_error(key))
-    };
-    let gene = match field("ensembl_id")? {
-        Value::Str(text) => Some(text.to_string()),
-        _ => None,
-    };
-    if dict.entries.len() <= 1 {
-        return Ok((gene, (false, false)));
-    }
-    let patho_value = field("clinvar_pathogenic")?;
-    let patho = set_view(&patho_value, "clinvar_pathogenic")?;
-    let total_patho = patho.items.len();
+    let gene = Some(stat.ensembl_id.as_str().to_owned());
+    let patho = stat.sets.clinvar_pathogenic.as_slice();
+    let total_patho = patho.len();
     if total_patho == 0 {
         return Ok((gene, (false, false)));
     }
-    let large_value = field("large_aachange")?;
-    let nmd_value = field("putative_nmd_variants")?;
-    let large = set_view(&large_value, "large_aachange")?;
-    let nmd = set_view(&nmd_value, "putative_nmd_variants")?;
-    let patho_large_aa_nmd = intersection_count(&patho, &[&*large, &*nmd])?;
+    let large = stat.sets.large_aachange.as_slice();
+    let nmd = stat.sets.putative_nmd_variants.as_slice();
+    let patho_large_aa_nmd = intersection_count(patho, &[large, nmd]);
     let bp1_granted = patho_large_aa_nmd as f64 / total_patho as f64 >= 0.7;
 
-    let small_value = field("small_aachange")?;
-    let small = set_view(&small_value, "small_aachange")?;
-    let patho_small = intersection_count(&patho, &[&*small])? as i64;
-    let patho_large = intersection_count(&patho, &[&*large])? as i64;
-    let non_patho_small = difference_count(&small, &patho)? as i64;
-    let non_patho_large = difference_count(&large, &patho)? as i64;
+    let small = stat.sets.small_aachange.as_slice();
+    let patho_small = intersection_count(patho, &[small]) as i64;
+    let patho_large = intersection_count(patho, &[large]) as i64;
+    let non_patho_small = difference_count(small, patho) as i64;
+    let non_patho_large = difference_count(large, patho) as i64;
     let table = [
         [patho_small, patho_large],
         [non_patho_small, non_patho_large],
@@ -333,13 +251,10 @@ pub(crate) fn analyze_bp1_pp2(
 /// other kind of value can match the text keys of the statistics and of the results).
 fn gene_results(
     table: &Table,
-    clinvar_stats: &Value,
+    clinvar_stats: &ClinvarGeneCache,
     pvalues: &PValues,
 ) -> Result<HashMap<String, (bool, bool)>> {
     let genes = table.column("Gene")?;
-    let Value::Dict(stats_dict) = clinvar_stats else {
-        return Err(invalid("the ClinVar gene statistics pickle is not a dict"));
-    };
     let mut results: HashMap<String, (bool, bool)> = HashMap::new();
     let mut seen = std::collections::HashSet::new();
     for row in 0..table.rows {
@@ -349,9 +264,9 @@ fn gene_results(
         if !seen.insert(gene) {
             continue;
         }
-        let stat = stats_dict.borrow().get(&Value::Str(gene.into()))?.cloned();
+        let stat = clinvar_stats.get(gene);
         let (key, result) = match stat {
-            Some(stat) => analyze_bp1_pp2(&stat, pvalues)?,
+            Some(stat) => analyze_bp1_pp2(stat, pvalues)?,
             None => (Some(gene.to_owned()), (false, false)),
         };
         let Some(key) = key else {
@@ -372,7 +287,7 @@ fn gene_results(
 /// `PP2_BP1_criteria(df, clinvar_stats_dict, am_intol_domains_tsv)`: PP2 and BP1 (strength 1).
 pub(crate) fn pp2_bp1_criteria(
     table: &Table,
-    clinvar_stats: &Value,
+    clinvar_stats: &ClinvarGeneCache,
     am_intol_domains_tsv: &str,
     pvalues: &PValues,
 ) -> Result<StepOutput> {
@@ -502,7 +417,7 @@ pub(crate) fn run_harness(function: &str, call: &HarnessCall) -> Result<Table> {
             Ok(harness_options::frame(columns, table.rows))
         }
         "PP2_BP1_criteria" => {
-            let stats = load_pickle(harness_options::required_text(
+            let stats = ClinvarGeneCache::open(harness_options::required_text(
                 options,
                 "clinvar_gene_stat_pkl",
             )?)?;
@@ -511,7 +426,7 @@ pub(crate) fn run_harness(function: &str, call: &HarnessCall) -> Result<Table> {
             Ok(harness_options::criteria_frame(&output, table.rows))
         }
         "analyze_bp1_pp2" => {
-            let stats = load_pickle(harness_options::required_text(
+            let stats = ClinvarGeneCache::open(harness_options::required_text(
                 options,
                 "clinvar_gene_stat_pkl",
             )?)?;
@@ -524,9 +439,9 @@ pub(crate) fn run_harness(function: &str, call: &HarnessCall) -> Result<Table> {
                 let Cell::Text(gene) = genes.cell(row) else {
                     return Err(invalid("analyze_bp1_pp2 cases name text genes"));
                 };
-                let stat = dict_get(&stats, gene)?;
+                let stat = stats.get(gene);
                 let (id, (granted_pp2, granted_bp1)) = match stat {
-                    Some(stat) => analyze_bp1_pp2(&stat, &pvalues)?,
+                    Some(stat) => analyze_bp1_pp2(stat, &pvalues)?,
                     None => (Some(gene.to_owned()), (false, false)),
                 };
                 ids.push(id);
@@ -570,41 +485,45 @@ mod tests {
         assert!(protein_position(Some(Cell::Text("\u{0661}2"))).is_err());
     }
 
-    fn text_op(text: &str) -> Vec<u8> {
-        let mut bytes = vec![0x8c, text.len() as u8];
-        bytes.extend_from_slice(text.as_bytes());
-        bytes
-    }
-
-    fn set_op(items: &[&str]) -> Vec<u8> {
-        let mut bytes = vec![0x8f];
-        if !items.is_empty() {
-            bytes.push(0x28);
-            for item in items {
-                bytes.extend(text_op(item));
-            }
-            bytes.push(0x90);
-        }
-        bytes
+    fn gene_cache() -> ClinvarGeneCache {
+        use crate::cache_convert::clinvar_gene_stat::{ClinvarGeneStat, Gene, SCHEMA, VariantSets};
+        let root = ClinvarGeneStat {
+            provenance: vec![],
+            variants: vec!["a".into(), "b".into()],
+            genes: vec!["G".into()],
+            entries: vec![Gene {
+                ensembl_id: "G".into(),
+                gene_symbol: "G".into(),
+                domains: vec![],
+                transcripts: vec![],
+                sets: VariantSets {
+                    clinvar_variants: vec![0, 1],
+                    clinvar_pathogenic: vec![0, 1],
+                    clinvar_not_pathogenic: vec![],
+                    putative_nmd_variants: vec![],
+                    small_aachange: vec![1],
+                    large_aachange: vec![0],
+                    no_aachange: vec![],
+                },
+            }],
+        };
+        let path =
+            std::env::temp_dir().join(format!("priva_pp2_native_{}.rkyv", std::process::id()));
+        crate::rust_cache::write_cache(
+            &path,
+            SCHEMA,
+            &rkyv::to_bytes::<rkyv::rancor::Error>(&root).unwrap(),
+        )
+        .unwrap();
+        ClinvarGeneCache::open(path.to_str().unwrap()).unwrap()
     }
 
     #[test]
     fn pp2_fraction_branch_needs_no_statistics() {
-        let mut bytes = vec![0x80, 0x04, 0x7d, 0x28];
-        for (key, value) in [
-            ("ensembl_id", text_op("G")),
-            ("clinvar_pathogenic", set_op(&["a", "b"])),
-            ("large_aachange", set_op(&["a"])),
-            ("putative_nmd_variants", set_op(&[])),
-            ("small_aachange", set_op(&["b"])),
-        ] {
-            bytes.extend(text_op(key));
-            bytes.extend(value);
-        }
-        bytes.extend([0x75, 0x2e]);
-        let stat = pickle_reader::load(&bytes).unwrap();
+        let cache = gene_cache();
         // 2 pathogenic: 1 small, 1 large; under five counted, so the fraction decides PP2.
-        let result = analyze_bp1_pp2(&stat, &PValues::Supplied(HashMap::new())).unwrap();
+        let result =
+            analyze_bp1_pp2(cache.get("G").unwrap(), &PValues::Supplied(HashMap::new())).unwrap();
         assert_eq!(result, (Some("G".to_owned()), (true, false)));
     }
 

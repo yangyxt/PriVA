@@ -594,6 +594,29 @@ fn finish_archive(key: &str, output: &Path, record: &Json) -> Result<()> {
 }
 
 fn publish(config: &Path, private: &Path, repo: &Path) -> Result<()> {
+    publish_impl(config, private, repo, || Ok(()))
+}
+
+fn unchanged_metadata(a: &fs::Metadata, b: &fs::Metadata) -> bool {
+    let same = a.len() == b.len() && a.modified().ok() == b.modified().ok();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        same && (a.dev(), a.ino(), a.ctime(), a.ctime_nsec())
+            == (b.dev(), b.ino(), b.ctime(), b.ctime_nsec())
+    }
+    #[cfg(not(unix))]
+    {
+        same
+    }
+}
+
+fn publish_impl(
+    config: &Path,
+    private: &Path,
+    repo: &Path,
+    after_convert: impl FnOnce() -> Result<()>,
+) -> Result<()> {
     let canonical_config = fs::canonicalize(config)?;
     if canonical_config
         .components()
@@ -637,6 +660,7 @@ fn publish(config: &Path, private: &Path, repo: &Path) -> Result<()> {
         ))
     })?;
     let mut updates = BTreeMap::new();
+    let mut sources = Vec::new();
     for key in KEYS {
         let Some(value) = setting(&doc, key)? else {
             continue;
@@ -648,6 +672,10 @@ fn publish(config: &Path, private: &Path, repo: &Path) -> Result<()> {
             )));
         }
         let output = install_one(key, &source, &doc, repo, &selected_profile)?;
+        if bundle(key, repo, &selected_profile).is_none_or(|(_, native)| native != output) {
+            let record = json(&sidecar(&output, ".source.json"))?;
+            sources.push((source.clone(), field(&record, "source_sha256")?.to_owned()));
+        }
         context.set(
             &format!("native_{key}"),
             Json::Str(text(&output)?.to_owned()),
@@ -657,6 +685,23 @@ fn publish(config: &Path, private: &Path, repo: &Path) -> Result<()> {
             Json::Str(text(&std::path::absolute(&source)?)?.to_owned()),
         );
         updates.insert(key.to_owned(), text(&output)?.to_owned());
+    }
+    after_convert()?;
+    // A later conversion can take minutes. Recheck the exact input bytes for
+    // every managed generation before publishing the combined configuration.
+    // Small native repository bundles retain existence/nonzero-only adoption.
+    let mut source_states = Vec::new();
+    for (source, expected) in sources {
+        let before = fs::metadata(&source)?;
+        let digest = sha256_file(&source)?;
+        let after = fs::metadata(&source)?;
+        if digest != expected || !unchanged_metadata(&before, &after) {
+            return Err(invalid(format!(
+                "{} changed before runtime publication",
+                source.display()
+            )));
+        }
+        source_states.push((source, after));
     }
     let runtime = rewrite(&contents, &updates)?;
     // Builders may take hours. A concurrent user edit must not be discarded.
@@ -674,6 +719,14 @@ fn publish(config: &Path, private: &Path, repo: &Path) -> Result<()> {
         (json_text::dumps_indented(&context).map_err(invalid)? + "\n").as_bytes(),
     )?;
     atomic_write_checked(config, runtime.as_bytes(), || {
+        for (source, expected) in &source_states {
+            if !unchanged_metadata(expected, &fs::metadata(source)?) {
+                return Err(invalid(format!(
+                    "{} changed during final publication checks",
+                    source.display()
+                )));
+            }
+        }
         if sha256_file(config)? != field(&context, "config_sha256")? {
             return Err(invalid(
                 "original configuration changed before publication; user edit retained",
@@ -1119,5 +1172,25 @@ mod tests {
         });
         assert!(result.is_err());
         assert_eq!(fs::read_to_string(&file).unwrap(), "user edit");
+    }
+
+    #[test]
+    fn earlier_source_change_during_later_cache_work_blocks_publication() {
+        let tmp = Temp::new();
+        let source = tmp.0.join("gene.pkl");
+        fs::write(&source, b"\x80\x04}\x94.").unwrap();
+        let (config, private) =
+            tmp.config(&format!("clinvar_patho_af_stat: '{}'\n", source.display()));
+        let before = fs::read(&config).unwrap();
+        prepare(&config, &private, &tmp.0).unwrap();
+        let result = publish_impl(&config, &private, &tmp.0, || {
+            fs::write(&source, b"\x80\x04}\x94\x8c\x04GENE\x94Ns.")?;
+            Ok(())
+        });
+        assert!(result.is_err());
+        assert_eq!(fs::read(&config).unwrap(), before);
+        // The old generation remains evidence; a quiescent retry converts the
+        // actual new bytes and can publish without changing source files.
+        publish(&config, &private, &tmp.0).unwrap();
     }
 }

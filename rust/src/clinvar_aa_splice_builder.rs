@@ -124,6 +124,14 @@ struct Indices {
     splice: Vec<(String, usize)>,
 }
 fn indices(vcf: &Path) -> Result<Indices> {
+    let owned_names = whole_header_names(vcf)?;
+    let names: Vec<_> = owned_names.iter().map(String::as_str).collect();
+    indices_from_names(&names)
+}
+
+/// The source AA/splice and AlphaMissense builders both split the complete
+/// rendered header at its last `Format: `, including its trailing header text.
+pub(crate) fn whole_header_names(vcf: &Path) -> Result<Vec<String>> {
     // pysam's constructor checks the exact BGZF EOF marker before any record.
     // Plain text is allowed to reach the original indexed-fetch failure later.
     let mut file = std::fs::File::open(vcf)?;
@@ -173,7 +181,10 @@ fn indices(vcf: &Path) -> Result<Indices> {
         .next()
         .unwrap()
         .trim_matches(['>', '"']);
-    let names: Vec<_> = format.split('|').collect();
+    Ok(format.split('|').map(str::to_owned).collect())
+}
+
+fn indices_from_names(names: &[&str]) -> Result<Indices> {
     let fields = [
         "Protein_position",
         "HGVSp",

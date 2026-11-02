@@ -414,11 +414,14 @@ pub(crate) fn dispatch_export(args: &[String]) -> Result<()> {
     let (Some(input), Some(output)) = (input, output) else {
         return Err(invalid(HELP));
     };
-    let exporter = match cache.as_str() {
+    let exporter: fn(&str, &mut dyn std::io::Write) -> Result<usize> = match cache.as_str() {
         "clinvar_aa_stat" => export_clinvar_aa_stat,
         "alphamissense_tranx_domain_map" => transcript_domains::export,
         "all_intolerant_domains" => intolerant_domains::export,
         "pm1_regions_pkl" => pm1_regions::export,
+        "clinvar_splice_stat" => clinvar_splice_stat::export,
+        "clinvar_patho_exon_af_stat" => clinvar_exon_af::export,
+        "clinvar_patho_af_stat" => clinvar_gene_af::export,
         _ => return Err(invalid(format!("cache-export: unsupported cache {cache}"))),
     };
     if output == "-" {

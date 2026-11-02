@@ -287,6 +287,8 @@ archive member as in pandas. ZIP retains duplicate member names. Compressed TAR
 retains the original limitation: a second chunk fails when pandas' append mode
 reopens the first archive without decompression. Compression bytes and generated
 timestamps can differ while decompressed table data and member order agree.
+ZIP64 archives can also differ from pandas in central-directory size/offset
+extensions and version metadata; do not assume byte-identical archive encoding.
 A runtime failure exits 1 and may leave the completed output prefix; argument errors exit 2.
 Temporary VCF/BED files are removed in the original order, while CrossMap's
 unmapped sidecars remain available in the temporary directory.

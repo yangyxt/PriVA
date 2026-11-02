@@ -162,6 +162,10 @@ fn zip(path: &Path, data: &Table, first: bool) -> Result<()> {
     // uses permissions-only 0600 and the version needed by the member. Adapt
     // only these two central-header metadata fields; the crate owns all
     // compression, CRC, offsets, ZIP64 and append bookkeeping.
+    // This does not make ZIP64 structure byte-identical: Python starts using
+    // its central size/offset extensions at 2^31-1, while zip 0.6 uses
+    // 0xffffffff. The earlier local-header reservation matches Python, but
+    // central ZIP64 extras/version metadata retain the mature crate's policy.
     let headers = {
         let mut archive = zip::ZipArchive::new(&mut file)?;
         (0..archive.len())

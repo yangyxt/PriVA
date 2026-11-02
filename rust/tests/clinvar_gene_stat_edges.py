@@ -15,6 +15,8 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
+import runpy
 import subprocess
 import sys
 from types import SimpleNamespace
@@ -306,6 +308,41 @@ def reference(args):
     args.report.write_text(json.dumps(report, indent=2)+"\n")
 
 
+def source_cli(args):
+    """Execute unchanged CLI source; observe an uncaught exception only.
+
+    The hook does not catch, replace or suppress the exception. Its marker
+    supplies the actual class name even when a NumPy traceback prints a
+    qualified internal name. Python still chooses its own process exit code.
+    """
+    sys.path.insert(0, str(args.producer.parent))
+    previous = sys.excepthook
+    def observe(kind, value, traceback):
+        previous(kind, value, traceback)
+        print("PRIVA_SOURCE_EXCEPTION="+kind.__name__, file=sys.stderr, flush=True)
+    sys.excepthook = observe
+    sys.argv = [str(args.producer), "-v", str(args.vcf), "-o", str(args.output),
+                "-t", str(args.threads), "--clinvar-summary", str(args.summary),
+                "--mane-summary", str(args.mane)]
+    runpy.run_path(str(args.producer), run_name="__main__")
+
+
+def failed_cli(args, inputs, folder, vcf, seed, sentinel):
+    """Only failed source cases are re-executed; successful truth is reused."""
+    output = folder/"source.cli.pkl.gz"
+    output.write_bytes(sentinel)
+    command = [sys.executable, Path(__file__), "source-cli", "--producer", args.producer,
+        "--vcf", vcf, "--summary", inputs/"summary.tsv", "--mane", inputs/"mane.tsv",
+        "--output", output, "--threads", str(args.threads or 1)]
+    with (folder/"source.cli.stdout.log").open("x") as out, (folder/"source.cli.stderr.log").open("x") as err:
+        status = subprocess.run(list(map(str, command)), stdout=out, stderr=err,
+            env=dict(os.environ, PYTHONHASHSEED=seed, PYTHONDONTWRITEBYTECODE="1")).returncode
+    observed = re.findall(r"^PRIVA_SOURCE_EXCEPTION=(\w+)$", (folder/"source.cli.stderr.log").read_text(), re.MULTILINE)
+    return {"exit": status, "category": observed[0] if len(observed) == 1 else None,
+            "output_preserved": output.is_file() and output.read_bytes() == sentinel,
+            "command": list(map(str, command))}
+
+
 def check(args):
     import cache_values_compare as compare
     producer(args.producer)  # add pinned imports for fixture construction only
@@ -339,7 +376,7 @@ def check(args):
         archive.write_bytes(sentinel)
         command = [args.binary, "clinvar-gene-stats", "build", "--vcf", vcf,
             "--clinvar-summary", inputs/"summary.tsv", "--mane-summary", inputs/"mane.tsv",
-            "--output", archive, "--threads", "2" if "order" in spec else "1",
+            "--output", archive, "--threads", str(args.threads or (2 if "order" in spec else 1)),
             "--python-hash-seed", seed, "--donor-loss-cutoff", ".25"]
         if "order" in spec: command += ["--completion-order", inputs/"order.json"]
         status = invoke(command, folder, "native")
@@ -348,7 +385,16 @@ def check(args):
         if status:
             row["output_preserved"] = archive.read_bytes() == sentinel
             row["passed"] &= row["output_preserved"]
-            row["native_error"] = (folder/"native.stderr.log").read_text().splitlines()[-2:]
+            diagnostic = (folder/"native.stderr.log").read_text()
+            row["native_error"] = diagnostic.splitlines()[-2:]
+            categories = re.findall(r"^priva: (\w+):", diagnostic, re.MULTILINE)
+            row["native_category"] = categories[0] if len(categories) == 1 else None
+        if not reference_result["success"]:
+            row["source_cli"] = failed_cli(args, inputs, folder, vcf, seed, sentinel)
+            row["failure_parity"] = (row["source_cli"]["exit"] == status == 1
+                and row["source_cli"]["category"] == row.get("native_category") == reference_result["exception"]
+                and row["source_cli"]["output_preserved"] and row.get("output_preserved", False))
+            row["passed"] &= row["failure_parity"]
         if reference_result["success"] and not status:
             try:
                 row["comparison"] = compare.compare(SimpleNamespace(binary=args.binary,
@@ -362,7 +408,9 @@ def check(args):
         print(json.dumps({"case": name, "passed": row["passed"], "python_success": reference_result["success"], "native_exit": status}), flush=True)
     result = {"passed": all(row["passed"] for row in reports.values()), "cases": reports,
               "producer_sha256": digest(args.producer), "binary_sha256": digest(args.binary),
-              "scope": "complete producer fixtures; explicit completion traces only where declared; no universal unobserved-trace equivalence"}
+              "successes": sum(row["python"]["success"] for row in reports.values()),
+              "qualified_failures": sum(row.get("failure_parity", False) for row in reports.values()),
+              "scope": "complete successful cache values, actual failed source/native CLI exit and category, and previous-output preservation; explicit completion traces only where declared; no universal unobserved-trace equivalence"}
     (args.work_root/"comparison.json").write_text(json.dumps(result, indent=2)+"\n")
     if not result["passed"]: raise SystemExit(1)
 
@@ -432,6 +480,40 @@ def transport(args):
         reports[name] = {"native_exit": status, "passed": status != 0 and digest(vcf) == original_hash and archive.read_bytes() == sentinel}
     result = {"passed": all(row["passed"] for row in reports.values()), "cases": reports,
               "scope": "observed default worker arrivals replayed without changing source worker/collector; explicit trace and publication rejection controls"}
+    (args.work_root/"comparison.json").write_text(json.dumps(result, indent=2)+"\n")
+    if not result["passed"]: raise SystemExit(1)
+
+
+def admission_controls(args):
+    """Check native-only controls using saved input, without a Python replay."""
+    args.work_root.mkdir(parents=True, exist_ok=False)
+    inputs = args.reference_fixtures/"one_record"
+    vcf = inputs/"input.vcf.gz"
+    input_hash = digest(vcf)
+    archive = args.work_root/"native.rkyv"
+    sentinel = b"previous generation\n"
+    base = [args.binary, "clinvar-gene-stats", "build", "--vcf", vcf,
+        "--clinvar-summary", inputs/"summary.tsv", "--mane-summary", inputs/"mane.tsv",
+        "--output", archive, "--python-hash-seed", "0"]
+    reports = {}
+    for workers in [1, 2]:
+        for name, value in [("duplicate", [0, 0]), ("short", []), ("long", [0, 1]),
+                            ("negative", [-1]), ("float", [0.0])]:
+            label = f"{name}_{workers}"
+            trace = args.work_root/(label+".json")
+            trace.write_text(json.dumps({"vcf_sha256": input_hash, "order": value})+"\n")
+            archive.write_bytes(sentinel)
+            status = invoke(base+["--threads", str(workers), "--completion-order", trace], args.work_root, label)
+            reports[label] = {"exit": status, "output_preserved": archive.read_bytes() == sentinel}
+    for name, extra in [("zero_workers", ["--threads", "0"]),
+                        ("input_alias", ["--completion-trace", vcf]),
+                        ("trace_alias", ["--completion-trace", archive])]:
+        archive.write_bytes(sentinel)
+        status = invoke(base+extra, args.work_root, name)
+        reports[name] = {"exit": status, "output_preserved": archive.read_bytes() == sentinel}
+    for row in reports.values(): row["passed"] = row["exit"] == 2 and row["output_preserved"]
+    result = {"passed": all(row["passed"] for row in reports.values()) and digest(vcf) == input_hash,
+              "cases": reports, "scope": "native-only trace/argument/alias admission; exit 2, previous output and saved input preserved"}
     (args.work_root/"comparison.json").write_text(json.dumps(result, indent=2)+"\n")
     if not result["passed"]: raise SystemExit(1)
 
@@ -524,6 +606,11 @@ def operational(args):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
+    sub = commands.add_parser("source-cli")
+    for name in ["producer", "vcf", "summary", "mane", "output"]:
+        sub.add_argument("--"+name, type=Path, required=True)
+    sub.add_argument("--threads", type=int, default=1)
+    sub.set_defaults(function=source_cli)
     sub = commands.add_parser("reference")
     for name in ["producer", "vcf", "summary", "mane", "output", "report"]:
         sub.add_argument("--"+name, type=Path, required=True)
@@ -538,11 +625,16 @@ def main():
         sub.add_argument("--"+name, type=Path, required=True)
     sub.add_argument("--case", action="append")
     sub.add_argument("--reference-fixtures", type=Path)
+    sub.add_argument("--threads", type=int)
     sub.set_defaults(function=check)
     sub = commands.add_parser("transport")
     for name in ["producer", "binary", "work-root"]:
         sub.add_argument("--"+name, type=Path, required=True)
     sub.set_defaults(function=transport)
+    sub = commands.add_parser("admission-controls")
+    for name in ["producer", "binary", "reference-fixtures", "work-root"]:
+        sub.add_argument("--"+name, type=Path, required=True)
+    sub.set_defaults(function=admission_controls)
     sub = commands.add_parser("merge")
     for name in ["producer", "binary", "source-probes", "work-root"]:
         sub.add_argument("--"+name, type=Path, required=True)

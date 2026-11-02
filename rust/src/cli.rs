@@ -306,6 +306,9 @@ pub(crate) fn run() -> Result<()> {
     if args.get(1).map(String::as_str) == Some("clinvar-pm5-index") {
         return crate::acmg_step::acmg_pm5_residue_rules::dispatch_index(&args[2..]);
     }
+    if args.get(1).map(String::as_str) == Some("cache-export") {
+        return crate::cache_convert::dispatch_export(&args[2..]);
+    }
     if args.get(1).map(String::as_str) == Some("cache-convert") {
         return crate::cache_convert::dispatch(&args[2..]);
     }

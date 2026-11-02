@@ -10,7 +10,9 @@
 //! where a list stands, other keys than CLNSIG and CLNREVSTAT, text that is not text.
 use crate::acmg_step::pickle_dict_stream::{Item, visit_top_level_dict};
 use crate::cli::{Result, invalid};
-use crate::rust_cache::{MappedCache, Schema, find_sorted, write_cache};
+use crate::rust_cache::{
+    MappedCache, Schema, ensure_distinct_paths, find_sorted, write_cache_checked,
+};
 use rkyv::{Archive, Deserialize, Serialize, rancor};
 use std::collections::HashMap;
 use std::path::Path;
@@ -278,6 +280,7 @@ impl ClinvarAaCache {
 /// Converts the pickle at `pickle` to `output`, then reads the pickle again and checks that the
 /// converted file gives every transcript the same value and holds no other. Returns a summary.
 pub(crate) fn convert_clinvar_aa_stat(pickle: &str, output: &Path) -> Result<String> {
+    ensure_distinct_paths(Path::new(pickle), output)?;
     let start = Instant::now();
     let entries = read_pickle(pickle)?;
     let positions: usize = entries.iter().map(|(_, value)| value.len()).sum();
@@ -302,45 +305,140 @@ pub(crate) fn convert_clinvar_aa_stat(pickle: &str, output: &Path) -> Result<Str
     ];
     let count = entries.len();
     let archive = build(entries, provenance)?;
-    write_cache(output, CLINVAR_AA_STAT, &archive)?;
     let converted_s = start.elapsed().as_secs_f64();
 
     // The check reads the pickle a second time, independently of the conversion.
     let check = Instant::now();
-    let output_text = output.to_string_lossy();
-    let cache = ClinvarAaCache::open(&output_text)?;
-    if cache.len() != count {
-        return Err(invalid(format!(
-            "{output_text}: {} transcripts converted, {count} in the pickle",
-            cache.len()
-        )));
-    }
     let mut compared = 0_usize;
-    let distinct = visit_top_level_dict(
-        pickle,
-        |_| true,
-        |transcript, value| {
-            let expected = plain_transcript(pickle, &transcript, &value)?;
-            if cache.plain(&transcript).as_ref() != Some(&expected) {
-                return Err(invalid(format!(
-                    "{output_text}: transcript {transcript} differs from the pickle"
-                )));
-            }
-            compared += 1;
-            Ok(())
-        },
-    )?;
-    if compared != count || distinct != count {
-        return Err(invalid("the pickle changed while it was converted"));
-    }
+    let mut text_count = 0;
+    write_cache_checked(output, CLINVAR_AA_STAT, &archive, |staged| {
+        let staged_text = staged.to_string_lossy();
+        let cache = ClinvarAaCache::open(&staged_text)?;
+        if cache.len() != count {
+            return Err(invalid(format!(
+                "{} transcripts converted, {count} in the pickle",
+                cache.len()
+            )));
+        }
+        text_count = cache.texts.len();
+        let distinct = visit_top_level_dict(
+            pickle,
+            |_| true,
+            |transcript, value| {
+                let expected = plain_transcript(pickle, &transcript, &value)?;
+                if cache.plain(&transcript).as_ref() != Some(&expected) {
+                    return Err(invalid(format!(
+                        "transcript {transcript} differs from the pickle"
+                    )));
+                }
+                compared += 1;
+                Ok(())
+            },
+        )?;
+        if compared != count || distinct != count {
+            return Err(invalid("the pickle changed while it was converted"));
+        }
+        Ok(())
+    })?;
     Ok(format!(
         "{{\"cache\": \"clinvar_aa_stat\", \"transcripts\": {count}, \"positions\": {positions}, \
          \"changes\": {changes}, \"texts\": {}, \"bytes\": {}, \"converted_s\": {converted_s:.1}, \
          \"checked_transcripts\": {compared}, \"check_s\": {:.1}}}",
-        cache.texts.len(),
+        text_count,
         std::fs::metadata(output)?.len(),
         check.elapsed().as_secs_f64()
     ))
+}
+
+/// Full typed inspection, including every position/change and list occurrence.
+fn export_clinvar_aa_stat(path: &str, output: &mut dyn std::io::Write) -> Result<usize> {
+    use common::ExactValue as V;
+    let cache = ClinvarAaCache::open(path)?;
+    for key in cache.mapped.root().transcripts.iter() {
+        let positions = cache.plain(key.as_str()).unwrap();
+        let value = V::Dict(
+            positions
+                .into_iter()
+                .map(|(position, changes)| {
+                    (
+                        V::Text(position),
+                        V::Dict(
+                            changes
+                                .into_iter()
+                                .map(|(change, clnsig, review)| {
+                                    (
+                                        V::Text(change),
+                                        V::Dict(vec![
+                                            (
+                                                V::Text("CLNSIG".into()),
+                                                V::List(clnsig.into_iter().map(V::Text).collect()),
+                                            ),
+                                            (
+                                                V::Text("CLNREVSTAT".into()),
+                                                V::List(review.into_iter().map(V::Text).collect()),
+                                            ),
+                                        ]),
+                                    )
+                                })
+                                .collect(),
+                        ),
+                    )
+                })
+                .collect(),
+        );
+        common::write_entry(output, &V::Text(key.as_str().to_owned()), &value)?;
+    }
+    Ok(cache.len())
+}
+
+/// Inspect one cache without Python. `--output -` streams tagged rows for an independent
+/// comparator; a file destination must be new and is removed if exporting fails.
+pub(crate) fn dispatch_export(args: &[String]) -> Result<()> {
+    use std::io::Write;
+    const HELP: &str = "usage: priva cache-export CACHE --input CACHE --output JSONL_OR_DASH";
+    let [cache, first, first_value, second, second_value] = args else {
+        return Err(invalid(HELP));
+    };
+    let mut input = None;
+    let mut output = None;
+    for (name, value) in [(first, first_value), (second, second_value)] {
+        match name.as_str() {
+            "--input" if input.is_none() => input = Some(value),
+            "--output" if output.is_none() => output = Some(value),
+            _ => return Err(invalid(HELP)),
+        }
+    }
+    let (Some(input), Some(output)) = (input, output) else {
+        return Err(invalid(HELP));
+    };
+    let exporter = match cache.as_str() {
+        "clinvar_aa_stat" => export_clinvar_aa_stat,
+        _ => return Err(invalid(format!("cache-export: unsupported cache {cache}"))),
+    };
+    if output == "-" {
+        let stdout = std::io::stdout();
+        let mut writer = std::io::BufWriter::new(stdout.lock());
+        exporter(input, &mut writer)?;
+        writer.flush()?;
+    } else {
+        ensure_distinct_paths(Path::new(input), Path::new(output))?;
+        let file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(output)?;
+        let result = (|| -> Result<()> {
+            let mut writer = std::io::BufWriter::new(file);
+            exporter(input, &mut writer)?;
+            writer.flush()?;
+            writer.get_ref().sync_all()?;
+            Ok(())
+        })();
+        if result.is_err() {
+            let _ = std::fs::remove_file(output);
+        }
+        result?;
+    }
+    Ok(())
 }
 
 const USAGE: &str = "usage: priva cache-convert CACHE --pickle PICKLE --output CACHE\nCACHE: clinvar_aa_stat, clinvar_splice_stat, clinvar_patho_exon_af_stat, clinvar_patho_af_stat";

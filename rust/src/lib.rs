@@ -9,6 +9,8 @@ pub mod cadd_hub;
 mod cli;
 pub mod combine_annotations;
 mod config_text;
+#[allow(dead_code)] // Shared installer primitive; callers switch after their own parity tests.
+mod file_lock;
 pub mod hpo_penetrance;
 pub mod interpro_mapping_io;
 mod json_text;

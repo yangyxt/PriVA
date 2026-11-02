@@ -7,7 +7,7 @@ use crate::das_rescue::Entry;
 use crate::json_text::{self, Json};
 use crate::protein_domain_mapping::{DomainNormalizer, Lookup};
 use crate::python_set_order::PairSet;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::{BufRead, BufReader, Write};
 
 pub(crate) struct LocatedEntry {
@@ -77,17 +77,37 @@ impl DomainLookup {
 
 const HELP: &str = "usage: priva das-domains lookup --domains JSONL --interpro RKYV --normalization-json JSON --python-hash-seed UINT32\n\
        priva das-domains transcripts --statistics PARQUET --exon-history LINES --source-builder-sha256 SHA256 --python-hash-seed UINT32 --output RKYV\n\
-Each input line is a full domain-path JSON string. Output lines retain input\n\
+       priva das-domains benign --domains JSONL --vcf VCF --min-benign INTEGER\n\
+Each domain input line is a full domain-path JSON string. Output lines retain input\n\
 order and contain the first source-ordered InterPro entry's identity, type and\n\
 GO molecular-function status. The explicit hash seed describes the reference\n\
 process; no global seed or installed cache is changed. The transcripts procedure\n\
 requires retained serialized-set history bound to every typed transcript; it\n\
-does not qualify fresh native Alpha builds that lack this history. Both are opt-in.";
+does not qualify fresh native Alpha builds that lack this history. Benign counts\n\
+every qualifying ClinVar annotation occurrence and emits counts/removal flags\n\
+in requested domain order. It reads sequentially without an index. All are opt-in.";
 
 pub(crate) fn dispatch(args: &[String]) -> Result<()> {
     if args.is_empty() || args.iter().any(|arg| arg == "--help" || arg == "-h") {
         println!("{HELP}");
         return Ok(());
+    }
+    if args[0] == "benign" {
+        if args.len() != 7 {
+            return Err(invalid(HELP));
+        }
+        let mut options = HashMap::new();
+        for pair in args[1..].chunks_exact(2) {
+            if !["--domains", "--vcf", "--min-benign"].contains(&pair[0].as_str())
+                || options.insert(pair[0].as_str(), pair[1].as_str()).is_some()
+            {
+                return Err(invalid(HELP));
+            }
+        }
+        let minimum = options["--min-benign"]
+            .parse::<i64>()
+            .map_err(|_| invalid("--min-benign requires a signed integer"))?;
+        return builder_error::finish(benign_lines(&options, minimum));
     }
     if args[0] == "transcripts" {
         if args.len() != 11 {
@@ -153,6 +173,38 @@ pub(crate) fn dispatch(args: &[String]) -> Result<()> {
         .parse::<u32>()
         .map_err(|_| invalid("--python-hash-seed requires UINT32"))?;
     builder_error::finish(lookup_lines(&options, seed))
+}
+
+fn benign_lines(options: &HashMap<&str, &str>, minimum: i64) -> Result<()> {
+    let input = BufReader::new(std::fs::File::open(options["--domains"])?);
+    let mut domains = Vec::new();
+    for line in input.lines() {
+        let Json::Str(domain) = json_text::parse(&line?, true).map_err(invalid)? else {
+            return Err(invalid("each domain-path line must be a JSON string"));
+        };
+        domains.push(domain);
+    }
+    let wanted: HashSet<_> = domains.iter().cloned().collect();
+    let counts = crate::das_benign::counts(std::path::Path::new(options["--vcf"]), &wanted)?;
+    let mut output = std::io::BufWriter::new(std::io::stdout().lock());
+    for domain in domains {
+        let count = counts.get(&domain).copied().unwrap_or(0);
+        let row = Json::Object(vec![
+            ("domain".into(), Json::Str(domain)),
+            ("n_benign_missense".into(), Json::Int(count as i128)),
+            (
+                "removed".into(),
+                Json::Bool(count as i128 >= minimum as i128),
+            ),
+        ]);
+        writeln!(
+            output,
+            "{}",
+            json_text::dumps(&row, false).map_err(invalid)?
+        )?;
+    }
+    output.flush()?;
+    Ok(())
 }
 
 fn lookup_lines(options: &HashMap<&str, &str>, seed: u32) -> Result<()> {

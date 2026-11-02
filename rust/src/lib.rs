@@ -61,6 +61,7 @@ mod python_io;
 mod python_lines;
 mod python_path;
 mod python_set_order;
+mod python_subprocess;
 mod python_text;
 mod rust_cache;
 mod sha256;

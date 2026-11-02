@@ -114,6 +114,34 @@ File names: the pickle's name
 with `.pkl`/`.pkl.gz` replaced by `.v<schema version>.rkyv`. The branch's configuration keeps
 the key names and points them at the `.rkyv` files.
 
+### ClinVar splice records (schema 2, version 2)
+
+The splice converter and `priva clinvar-aa-splice` retain version 1 for records
+with text fields and either empty SpliceAI dictionaries or the same ordered
+nine-key dictionary. The original version-1 converter, archive layout and
+reader remain unchanged. Conversion of compatible input retains identical
+version-1 bytes; existing bundles are not rewritten.
+
+Version 2 stores `provenance`, the unique `texts` pool, sorted `transcripts`,
+and one ordered record list per transcript. Each record keeps the eleven
+source fields. `alt`, `exon`, `intron`, `hgvsc` and `consequence` are nullable;
+`None` and empty text remain distinct. `splice_ai` is an ordered list of
+unique `SpliceAI_pred_*` key/value pairs, with text values. Key subsets,
+additional names and differing per-record dictionary order are preserved.
+`chrom`, clinical significance/review, exon/intron/consequence, and SpliceAI
+keys/values use checked pool indices; reference, alternative and HGVSc remain
+inline strings. Position is an `i64`. Fixed record keys export in the same
+declared order as version 1; inner dictionary and record-list order remain intact.
+
+The container stays `PRIVARKV` version 1. An older schema-2-v1-only reader
+refuses version 2. Managed conversion selects `.v1.rkyv` or `.v2.rkyv` and
+checks that version before publication, recovery or reuse. Prior archives
+and receipts are retained. The splice consumer treats absent scores as NaN,
+missing HGVSc as an unavailable parsed location, and evaluates a missing ALT
+only if a matching record reaches its length calculation, where Python raises
+`TypeError`. These are representation and source-behavior rules; the installer
+does not activate a different VCF producer.
+
 ### ClinVar gene AF values (schema 6, version 2)
 
 The gene-AF converter and `priva clinvar-gene-af` retain version 1 whenever

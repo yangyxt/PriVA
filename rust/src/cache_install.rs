@@ -378,7 +378,13 @@ fn directory(root: &Path, requested: &Path) -> Result<PathBuf> {
     Ok(path)
 }
 
-fn target(key: &str, source_hash: &str, doc: &ConfigDocument, repo: &Path) -> Result<PathBuf> {
+fn target(
+    key: &str,
+    source_hash: &str,
+    doc: &ConfigDocument,
+    repo: &Path,
+    schema_version: u32,
+) -> Result<PathBuf> {
     let root_input = Path::new(required(doc, "cache_root")?);
     if !root_input.is_absolute() {
         return Err(invalid("cache_root must be an existing absolute directory"));
@@ -421,12 +427,12 @@ fn target(key: &str, source_hash: &str, doc: &ConfigDocument, repo: &Path) -> Re
     // refresh. The full digest is verified in the adjacent receipt.
     let selected_profile = profile(doc)?.replace('/', ".");
     Ok(family.join(format!(
-        "{key}.{selected_profile}.{}.v1.rkyv",
+        "{key}.{selected_profile}.{}.v{schema_version}.rkyv",
         &source_hash[..16]
     )))
 }
 
-fn validate(key: &str, path: &Path) -> Result<()> {
+fn validate(key: &str, path: &Path, schema_version: u32) -> Result<()> {
     let path = text(path)?;
     match key {
         "clinvar_aa_stat" => {
@@ -457,7 +463,12 @@ fn validate(key: &str, path: &Path) -> Result<()> {
             caches::interpro_mapping::InterproCache::open(path)?;
         }
         "clingen_map" => {
-            caches::clingen_map::ClingenCache::open(path)?;
+            let cache = caches::clingen_map::ClingenCache::open(path)?;
+            if cache.schema_version() != schema_version {
+                return Err(invalid(
+                    "ClinGen archive schema version differs from its managed generation",
+                ));
+            }
         }
         _ => return Err(invalid("unknown native cache")),
     }
@@ -483,7 +494,13 @@ fn install_one(
     // This fingerprint identifies the bytes converted; it does not check a
     // repository-bundled pickle against an expected publisher checksum.
     let source_hash = sha256_file(source)?;
-    let output = target(key, &source_hash, doc, repo)?;
+    let schema_version = if key == "clingen_map" {
+        caches::clingen_map::pickle_schema_version(text(source)?)?
+    } else {
+        1
+    };
+    let schema_text = schema_version.to_string();
+    let output = target(key, &source_hash, doc, repo, schema_version)?;
     let record_path = sidecar(&output, ".source.json");
     if output.exists() || record_path.exists() {
         // Do not overwrite a supplied/unregistered file or silently adopt a
@@ -494,13 +511,19 @@ fn install_one(
             || field(&record, "source_sha256")? != source_hash
             || field(&record, "profile")? != selected_profile
             || field(&record, "archive")? != text(&output)?
+            || (schema_version != 1
+                && record.get("schema_version").and_then(Json::as_str)
+                    != Some(schema_text.as_str()))
+            || record
+                .get("schema_version")
+                .is_some_and(|value| value.as_str() != Some(schema_text.as_str()))
         {
             return Err(invalid(format!(
                 "{}: conflicting cache receipt; original retained",
                 output.display()
             )));
         }
-        finish_archive(key, &output, &record)?;
+        finish_archive(key, &output, &record, schema_version)?;
         nonempty(&output)?;
         if sha256_file(&output)? != field(&record, "archive_sha256")? {
             return Err(invalid(format!(
@@ -508,7 +531,7 @@ fn install_one(
                 output.display()
             )));
         }
-        validate(key, &output)?;
+        validate(key, &output, schema_version)?;
         println!("{key}: reuse completed native conversion");
         return Ok(output);
     }
@@ -532,7 +555,7 @@ fn install_one(
     let selected_source = std::path::absolute(source)?;
     let source_bytes = fs::metadata(source)?.len().to_string();
     let archive_bytes = fs::metadata(&pending)?.len().to_string();
-    let record_bytes = receipt(&[
+    let mut fields = vec![
         ("format", "PRIVARKV-v1"),
         ("key", key),
         ("profile", selected_profile),
@@ -543,7 +566,13 @@ fn install_one(
         ("archive_sha256", &archive_hash),
         ("archive_bytes", &archive_bytes),
         ("pending_archive", text(&pending)?),
-    ])?;
+    ];
+    // Keep existing version-1 receipt bytes/fields unchanged. Container v1 is
+    // independent of the optional ClinGen schema v2 payload.
+    if schema_version != 1 {
+        fields.push(("schema_version", &schema_text));
+    }
+    let record_bytes = receipt(&fields)?;
     let pending_receipt = sidecar(&pending, ".source.json");
     write_new(&pending_receipt, &record_bytes)?;
     // The checked staging file is never a selectable final archive. Publish
@@ -552,12 +581,12 @@ fn install_one(
     fs::hard_link(&pending_receipt, &record_path)?;
     fs::File::open(parent(&output))?.sync_all()?;
     let record = json_text::parse(std::str::from_utf8(&record_bytes)?, true).map_err(invalid)?;
-    finish_archive(key, &output, &record)?;
+    finish_archive(key, &output, &record, schema_version)?;
     fs::remove_file(&pending_receipt)?;
     Ok(output)
 }
 
-fn finish_archive(key: &str, output: &Path, record: &Json) -> Result<()> {
+fn finish_archive(key: &str, output: &Path, record: &Json, schema_version: u32) -> Result<()> {
     if output.exists() {
         return Ok(());
     }
@@ -586,7 +615,7 @@ fn finish_archive(key: &str, output: &Path, record: &Json) -> Result<()> {
             "pending archive checksum mismatch; retained without publication",
         ));
     }
-    validate(key, pending)?;
+    validate(key, pending, schema_version)?;
     fs::hard_link(pending, output)?;
     fs::File::open(parent(output))?.sync_all()?;
     fs::remove_file(pending)?;
@@ -840,6 +869,160 @@ mod tests {
     }
 
     #[test]
+    fn clingen_versioned_publication_preserves_v1_and_reuses_v2() {
+        let tmp = Temp::new();
+        let pickle = tmp.0.join("curated.pkl");
+        fs::write(&pickle, b"\x80\x04}\x8c\x01a\x8c\x03PS3s.").unwrap();
+        let (config, private) = tmp.config(&format!("clingen_map: '{}'\n", pickle.display()));
+        let selected = || {
+            PathBuf::from(
+                required(
+                    &document(&fs::read_to_string(&config).unwrap()).unwrap(),
+                    "clingen_map",
+                )
+                .unwrap(),
+            )
+        };
+        prepare(&config, &private, &tmp.0).unwrap();
+        publish(&config, &private, &tmp.0).unwrap();
+        let old = selected();
+        assert!(text(&old).unwrap().ends_with(".v1.rkyv"));
+        let old_bytes = fs::read(&old).unwrap();
+        let old_receipt = fs::read(sidecar(&old, ".source.json")).unwrap();
+        assert!(
+            json(&sidecar(&old, ".source.json"))
+                .unwrap()
+                .get("schema_version")
+                .is_none()
+        );
+        let independent = tmp.0.join("independent.rkyv");
+        caches::clingen_map::convert(text(&pickle).unwrap(), &independent).unwrap();
+        assert_eq!(fs::read(&independent).unwrap(), old_bytes);
+
+        prepare(&config, &private, &tmp.0).unwrap();
+        fs::write(&pickle, b"\x80\x04}\x8c\x01aK\x11s.").unwrap();
+        publish(&config, &private, &tmp.0).unwrap();
+        let typed = selected();
+        assert!(text(&typed).unwrap().ends_with(".v2.rkyv"));
+        let cache = caches::clingen_map::ClingenCache::open(text(&typed).unwrap()).unwrap();
+        assert_eq!(cache.schema_version(), 2);
+        assert_eq!(
+            cache.code("a"),
+            Some(caches::clingen_map::Code::Integer(17))
+        );
+        assert_eq!(cache.get("a"), Some(None));
+        let typed_record = json(&sidecar(&typed, ".source.json")).unwrap();
+        assert_eq!(field(&typed_record, "format").unwrap(), "PRIVARKV-v1");
+        assert_eq!(field(&typed_record, "schema_version").unwrap(), "2");
+        let typed_bytes = fs::read(&typed).unwrap();
+        let typed_receipt = fs::read(sidecar(&typed, ".source.json")).unwrap();
+        let modified = fs::metadata(&typed).unwrap().modified().unwrap();
+        prepare(&config, &private, &tmp.0).unwrap();
+        publish(&config, &private, &tmp.0).unwrap();
+        assert_eq!(selected(), typed);
+        assert_eq!(fs::metadata(&typed).unwrap().modified().unwrap(), modified);
+        assert_eq!(fs::read(&typed).unwrap(), typed_bytes);
+        assert_eq!(
+            fs::read(sidecar(&typed, ".source.json")).unwrap(),
+            typed_receipt
+        );
+        assert_eq!(fs::read(&old).unwrap(), old_bytes);
+        assert_eq!(
+            fs::read(sidecar(&old, ".source.json")).unwrap(),
+            old_receipt
+        );
+        // An unsupported new source cannot change the published config or either archive.
+        prepare(&config, &private, &tmp.0).unwrap();
+        let before = fs::read(&config).unwrap();
+        fs::write(&pickle, b"\x80\x04}\x8c\x01aNs.").unwrap();
+        assert!(publish(&config, &private, &tmp.0).is_err());
+        assert_eq!(fs::read(&config).unwrap(), before);
+        assert_eq!(fs::read(&typed).unwrap(), typed_bytes);
+        assert_eq!(fs::read(&old).unwrap(), old_bytes);
+    }
+
+    #[test]
+    fn clingen_recovery_checks_schema_and_preserves_mislabeled_archives() {
+        let tmp = Temp::new();
+        let source = tmp.0.join("curated.pkl");
+        fs::write(&source, b"\x80\x04}\x8c\x01aK\x11s.").unwrap();
+        let (config, _) = tmp.config("");
+        let doc = document(&fs::read_to_string(&config).unwrap()).unwrap();
+        let install = || install_one("clingen_map", &source, &doc, &tmp.0, "GRCh38/VEP116");
+        let output = install().unwrap();
+        let expected = fs::read(&output).unwrap();
+        let pending = temporary(&output, "pending");
+        fs::rename(&output, &pending).unwrap();
+        let record_path = sidecar(&output, ".source.json");
+        let mut record = json(&record_path).unwrap();
+        record.set(
+            "pending_archive",
+            Json::Str(text(&pending).unwrap().to_owned()),
+        );
+        fs::write(&record_path, json_text::dumps_indented(&record).unwrap()).unwrap();
+        assert_eq!(install().unwrap(), output);
+        assert_eq!(fs::read(&output).unwrap(), expected);
+        assert!(!pending.exists());
+
+        let valid_receipt = fs::read(&record_path).unwrap();
+        record.set("schema_version", Json::Str("1".to_owned()));
+        fs::write(&record_path, json_text::dumps_indented(&record).unwrap()).unwrap();
+        assert!(install().is_err());
+        assert_eq!(fs::read(&output).unwrap(), expected);
+        fs::write(&record_path, valid_receipt).unwrap();
+        record.set("schema_version", Json::Str("2".to_owned()));
+
+        // Even a matching checksum must not let a v1 payload be published as v2.
+        let wrong_source = tmp.0.join("text.pkl");
+        fs::write(&wrong_source, b"\x80\x04}\x8c\x01a\x8c\x03PS3s.").unwrap();
+        caches::clingen_map::convert(text(&wrong_source).unwrap(), &pending).unwrap();
+        fs::remove_file(&output).unwrap();
+        record.set("archive_sha256", Json::Str(sha256_file(&pending).unwrap()));
+        fs::write(&record_path, json_text::dumps_indented(&record).unwrap()).unwrap();
+        let retained = fs::read(&pending).unwrap();
+        assert!(install().is_err());
+        assert!(!output.exists());
+        assert_eq!(fs::read(&pending).unwrap(), retained);
+
+        // Likewise a valid v2 payload under an owned v1 name cannot be reused.
+        let old = install_one("clingen_map", &wrong_source, &doc, &tmp.0, "GRCh38/VEP116").unwrap();
+        fs::write(&old, &expected).unwrap();
+        let old_record_path = sidecar(&old, ".source.json");
+        let mut old_record = json(&old_record_path).unwrap();
+        old_record.set("archive_sha256", Json::Str(sha256_file(&old).unwrap()));
+        fs::write(
+            &old_record_path,
+            json_text::dumps_indented(&old_record).unwrap(),
+        )
+        .unwrap();
+        assert!(install_one("clingen_map", &wrong_source, &doc, &tmp.0, "GRCh38/VEP116").is_err());
+        assert_eq!(fs::read(&old).unwrap(), expected);
+    }
+
+    #[test]
+    fn clingen_bundle_remains_v1_without_inspection_or_receipt_rewrite() {
+        let tmp = Temp::new();
+        fs::create_dir_all(tmp.0.join("data/clingen")).unwrap();
+        let pickle = tmp.0.join("data/clingen/clingen_map.hg38.pkl.gz");
+        let archive = tmp.0.join("data/clingen/clingen_map.hg38.v1.rkyv");
+        fs::write(&pickle, b"nonempty bundled fixture").unwrap();
+        fs::write(&archive, b"existing bundled bytes").unwrap();
+        let (config, private) = tmp.config("clingen_map: data/clingen/clingen_map.hg38.pkl.gz\n");
+        prepare(&config, &private, &tmp.0).unwrap();
+        publish(&config, &private, &tmp.0).unwrap();
+        assert_eq!(fs::read(&archive).unwrap(), b"existing bundled bytes");
+        assert!(!sidecar(&archive, ".source.json").exists());
+        assert_eq!(
+            required(
+                &document(&fs::read_to_string(config).unwrap()).unwrap(),
+                "clingen_map"
+            )
+            .unwrap(),
+            text(&archive).unwrap()
+        );
+    }
+
+    #[test]
     fn refused_publish_keeps_user_edits_and_previous_config() {
         let tmp = Temp::new();
         let (config, private) = tmp.config("");
@@ -1085,6 +1268,7 @@ mod tests {
             &sha256_file(&source).unwrap(),
             &doc,
             &tmp.0,
+            1,
         )
         .unwrap();
         fs::copy(&old, &new).unwrap();

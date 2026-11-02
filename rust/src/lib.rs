@@ -30,6 +30,9 @@ mod numpy_rng;
 // Qualified independently before the opt-in DAS producer is connected.
 #[allow(dead_code)]
 mod ks_greater;
+// These numerical procedures are qualified before any DAS caller is enabled.
+#[allow(dead_code)]
+mod dip_stat;
 #[allow(dead_code)] // Shared installer primitive; callers switch after their own parity tests.
 mod file_lock;
 mod gzip_writer;

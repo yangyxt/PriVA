@@ -345,6 +345,9 @@ pub(crate) fn run() -> Result<()> {
     if args.get(1).map(String::as_str) == Some("indexed-plugin-cache") {
         return crate::indexed_plugin_cache::dispatch(&args[2..]);
     }
+    if args.get(1).map(String::as_str) == Some("alpha-annotation-base") {
+        return crate::alpha_annotation_base::dispatch(&args[2..]);
+    }
     if args.get(1).map(String::as_str) == Some("conservation-resource") {
         return crate::conservation_resource::dispatch(&args[2..]);
     }

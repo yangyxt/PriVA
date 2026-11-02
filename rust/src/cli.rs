@@ -324,6 +324,9 @@ pub(crate) fn run() -> Result<()> {
     if args.get(1).map(String::as_str) == Some("pm1-regions") {
         return crate::pm1_regions_builder::dispatch(&args[2..]);
     }
+    if args.get(1).map(String::as_str) == Some("splicevault-convert") {
+        return crate::splicevault_builder::dispatch(&args[2..]);
+    }
     if args.get(1).map(String::as_str) == Some("acmg-step") {
         return crate::acmg_step::dev_harness::dispatch(&args[2..]);
     }

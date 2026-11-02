@@ -42,6 +42,7 @@ mod sha256;
 pub mod spliceai2;
 pub mod spliceai_cache_input;
 pub mod spliceai_cutoffs;
+mod splicevault_builder;
 mod splicing_cutoffs;
 pub mod splicing_var_analysis;
 mod tabix_index;

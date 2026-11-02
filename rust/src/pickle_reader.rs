@@ -72,6 +72,9 @@ pub(crate) enum Value {
 #[derive(Debug, Default)]
 pub(crate) struct Dict {
     pub(crate) entries: Vec<(Value, Value)>,
+    /// Repeated SETITEM assignments, retained so one-time cache converters can reject
+    /// ambiguous top-level keys without changing the runtime reader's Python semantics.
+    pub(crate) duplicate_assignments: usize,
     positions: QuickMap<String, usize>,
 }
 
@@ -79,7 +82,10 @@ impl Dict {
     fn insert(&mut self, key: Value, value: Value) -> Result<()> {
         let identity = identity(&key)?;
         match self.positions.get(&identity) {
-            Some(&position) => self.entries[position].1 = value,
+            Some(&position) => {
+                self.duplicate_assignments += 1;
+                self.entries[position].1 = value;
+            }
             None => {
                 self.positions.insert(identity, self.entries.len());
                 self.entries.push((key, value));

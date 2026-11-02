@@ -23,6 +23,7 @@ use rkyv::{Archive, Portable, rancor};
 use std::io::Write;
 use std::marker::PhantomData;
 use std::path::Path;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 pub(crate) const MAGIC: &[u8; 8] = b"PRIVARKV";
 pub(crate) const CONTAINER_VERSION: u32 = 1;
@@ -85,17 +86,56 @@ pub(crate) fn archive_bytes<'a>(bytes: &'a [u8], schema: Schema, path: &str) -> 
 
 /// Writes header and archive to `path` through a temporary file in the same folder.
 pub(crate) fn write_cache(path: &Path, schema: Schema, archive: &[u8]) -> Result<()> {
+    write_cache_checked(path, schema, archive, |_| Ok(()))
+}
+
+/// Stages a complete cache, checks it, and publishes only after the check succeeds.
+/// Converters use `validate` for a fresh mmap and complete comparison with their source.
+/// A failed check preserves an existing destination byte for byte.
+pub(crate) fn write_cache_checked(
+    path: &Path,
+    schema: Schema,
+    archive: &[u8],
+    validate: impl FnOnce(&Path) -> Result<()>,
+) -> Result<()> {
+    if archive.len() > i32::MAX as usize {
+        return Err(invalid(
+            "the archive exceeds the PRIVARKV 32-bit layout limit",
+        ));
+    }
     let name = path
         .file_name()
         .ok_or_else(|| invalid(format!("{}: not a file path", path.display())))?
         .to_string_lossy()
         .into_owned();
-    let temporary = path.with_file_name(format!(".{name}.{}.tmp", std::process::id()));
+    // Exclusive creation prevents another writer's temporary file (or a stale symlink)
+    // from being opened and truncated. Each successful caller owns its own name.
+    static NEXT_TEMPORARY: AtomicU64 = AtomicU64::new(0);
+    let mut selected = None;
+    for _ in 0..128 {
+        let serial = NEXT_TEMPORARY.fetch_add(1, Ordering::Relaxed);
+        let temporary = path.with_file_name(format!(".{name}.{}.{serial}.tmp", std::process::id()));
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temporary)
+        {
+            Ok(file) => {
+                selected = Some((temporary, file));
+                break;
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(error.into()),
+        }
+    }
+    let (temporary, mut file) =
+        selected.ok_or_else(|| invalid("cannot reserve a unique cache temporary file"))?;
     let outcome = (|| -> Result<()> {
-        let mut file = std::fs::File::create(&temporary)?;
         file.write_all(&header(schema, archive.len()))?;
         file.write_all(archive)?;
         file.sync_all()?;
+        drop(file);
+        validate(&temporary)?;
         std::fs::rename(&temporary, path)?;
         Ok(())
     })();
@@ -103,6 +143,51 @@ pub(crate) fn write_cache(path: &Path, schema: Schema, archive: &[u8]) -> Result
         let _ = std::fs::remove_file(&temporary);
     }
     outcome
+}
+
+/// Refuse an output which names the source, including symlink and hard-link aliases.
+/// This is deliberately called before reading/converting the source cache.
+pub(crate) fn ensure_distinct_paths(source: &Path, output: &Path) -> Result<()> {
+    let source_metadata = std::fs::metadata(source)?;
+    let source_path = std::fs::canonicalize(source)?;
+    match std::fs::metadata(output) {
+        Ok(output_metadata) => {
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::MetadataExt;
+                if source_metadata.dev() == output_metadata.dev()
+                    && source_metadata.ino() == output_metadata.ino()
+                {
+                    return Err(invalid(
+                        "the output must not be the pickle itself or its alias",
+                    ));
+                }
+            }
+            #[cfg(not(unix))]
+            let _ = (source_metadata, output_metadata);
+            if source_path == std::fs::canonicalize(output)? {
+                return Err(invalid(
+                    "the output must not be the pickle itself or its alias",
+                ));
+            }
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            let parent = output
+                .parent()
+                .filter(|p| !p.as_os_str().is_empty())
+                .unwrap_or(Path::new("."));
+            let name = output
+                .file_name()
+                .ok_or_else(|| invalid("the output needs a file name"))?;
+            if source_path == std::fs::canonicalize(parent)?.join(name) {
+                return Err(invalid(
+                    "the output must not be the pickle itself or its alias",
+                ));
+            }
+        }
+        Err(error) => return Err(error.into()),
+    }
+    Ok(())
 }
 
 /// A validated cache file, memory-mapped; `root()` is the archived value.
@@ -156,6 +241,53 @@ mod tests {
         id: 99,
         version: 2,
     };
+
+    #[test]
+    fn failed_validation_preserves_existing_output() {
+        let folder = std::env::temp_dir().join(format!("priva_publish_{}", std::process::id()));
+        std::fs::create_dir_all(&folder).unwrap();
+        let output = folder.join("checked.rkyv");
+        std::fs::write(&output, b"previous cache").unwrap();
+        let failed = write_cache_checked(&output, SCHEMA, b"candidate", |temporary| {
+            assert_ne!(temporary, output);
+            assert_eq!(
+                archive_bytes(&std::fs::read(temporary)?, SCHEMA, "staged")?,
+                b"candidate"
+            );
+            Err(invalid("a value differs"))
+        });
+        assert!(failed.unwrap_err().to_string().contains("a value differs"));
+        assert_eq!(std::fs::read(&output).unwrap(), b"previous cache");
+        assert_eq!(std::fs::read_dir(&folder).unwrap().count(), 1);
+        write_cache_checked(&output, SCHEMA, b"candidate", |_| Ok(())).unwrap();
+        assert_eq!(
+            archive_bytes(&std::fs::read(&output).unwrap(), SCHEMA, "published").unwrap(),
+            b"candidate"
+        );
+        std::fs::remove_file(output).unwrap();
+        std::fs::remove_dir(folder).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn source_aliases_are_refused() {
+        let folder = std::env::temp_dir().join(format!("priva_alias_{}", std::process::id()));
+        std::fs::create_dir_all(&folder).unwrap();
+        let source = folder.join("source.pkl");
+        let hard = folder.join("hard.pkl");
+        let link = folder.join("link.pkl");
+        std::fs::write(&source, b"pickle").unwrap();
+        std::fs::hard_link(&source, &hard).unwrap();
+        std::os::unix::fs::symlink(&source, &link).unwrap();
+        for path in [&source, &hard, &link] {
+            assert!(ensure_distinct_paths(&source, path).is_err());
+        }
+        assert!(ensure_distinct_paths(&source, &folder.join("new.rkyv")).is_ok());
+        for path in [&source, &hard, &link] {
+            std::fs::remove_file(path).unwrap();
+        }
+        std::fs::remove_dir(folder).unwrap();
+    }
 
     #[test]
     fn header_fields_are_checked() {

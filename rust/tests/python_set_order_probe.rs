@@ -1,5 +1,6 @@
 //! Minimal independent build of the production string-set module for its Python differential test.
 #[path = "../src/python_set_order.rs"]
+#[allow(dead_code)] // This independent probe exercises only the string interface.
 mod python_set_order;
 use python_set_order::{StringHash, StringSet};
 use std::collections::HashMap;

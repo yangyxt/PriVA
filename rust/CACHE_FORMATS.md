@@ -90,9 +90,62 @@ holds everything the pickle held, in the readers' terms:
 | `str` | `String` (UTF-8) | low-cardinality fields go through the `texts` pool |
 | numpy arrays, other classes | refused | (the pickle reader refuses them already) |
 
-In Parquet: one row per innermost record, the top-level key as a column, rows sorted by it with
-the inner order kept; `None` is null, NaN stays NaN in `Float64` (polars keeps them apart);
-lists are `List` columns; sets are sorted `List` columns.
+In Parquet, the top-level key is a column and lists use `List` columns. `None`
+is null, NaN stays NaN in `Float64`, and sets use sorted lists. A builder whose
+dictionary order affects later reduction stores explicit ordinals; physical
+row order alone does not define that dictionary's order.
+
+### AlphaMissense domain intermediates: Parquet schema 2
+
+The statistics intermediate retains the collector's complete domain model.
+The metadata intermediate retains only per-domain symbol, start, end and
+protein length. Both use Polars 0.51 Parquet with zstd compression.
+
+```mermaid
+flowchart LR
+  V[Annotated AlphaMissense VCF] --> C[One raw shard per header contig]
+  C --> M[Merge in header order]
+  M --> S[Statistics Parquet]
+  V --> D[Metadata Parquet]
+```
+
+Raw shards keep variant/residue keys for first-wins, min/max and sample-list
+merging. Final statistics convert the four ordered score dictionaries to
+Float64 arrays. Every repeated residue AF sample remains present; consecutive
+identical float bits use an explicit positive repeat count.
+
+| Columns | Meaning |
+| --- | --- |
+| `gene`, `gene_order` | Top-level key and its original insertion ordinal; metadata uses the complete domain path as this key |
+| `path`, `member_order`, `item_order` | Nested domain path, member insertion order and residue-key insertion order |
+| `kind`, `key` | Explicit node/record tag and its text member name |
+| `keys` | Sorted transcript exon set, with empty strings retained |
+| `typed_keys` | Ordered dictionary keys: tagged text or tuple; tuple elements carry a type tag and nullable text, integer, float or Boolean fields |
+| `values`, `counts` | Float64 values and, for residue samples, their exact consecutive repeat counts |
+| `minimum_int`, `minimum_float`, `maximum` | Transcript minimum retains integer versus unknown `+Inf`; metadata start/end remain integers |
+| `auxiliary_int` | Metadata protein length |
+
+Tuple keys preserve element order, missing elements, float bits and empty
+tuples. Text slicing removes one Unicode character; tuple slicing removes
+one element. Repeated NaN-bearing tuple keys remain distinct across source
+records while repeated visits within one record reuse the same key.
+Gene/source/domain/transcript insertion order and repeated hierarchy visits
+are preserved. Domain/transcript name collisions and integers outside the
+declared signed-64-bit layout fail explicitly.
+
+The footer identifies `priva-alpha-domain-parquet-v2`, raw/final stage,
+producer source content, selected VCF/index identity, header contig order and
+ordered top-level keys. A merge requires every raw contig shard in that order
+and checks their common source/profile. It finalizes a gene only after its
+last contributing chromosome. Readers reconstruct order from ordinals.
+
+Metadata `build --assembly` publishes a separate output-identity receipt and
+reuses only an associated nonempty cache. Empty metadata regenerates. VCF
+identity uses file metadata, while implementation identity uses content;
+metadata reuse does not depend on index-file metadata. Payload and receipt
+publication failures propagate, preserving an existing payload until the new
+Parquet file has finished and passed exact typed readback. Existing file modes
+are retained. These procedures are opt-in and leave caller selection unchanged.
 
 ## 4. Schemas
 

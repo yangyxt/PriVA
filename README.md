@@ -223,6 +223,30 @@ calls. Paths are passed literally to those programs. As with the original
 Python procedure, child command failures are reported but do not make the
 conversion command fail: validate the resulting VCF and index before use.
 
+The opt-in domain procedures read an already annotated AlphaMissense VCF:
+
+```bash
+"$PRIVA_BINARY" alphamissense-domain build \
+  --vcf AlphaMissense.annotated.vcf.gz --output domain-statistics.parquet
+"$PRIVA_BINARY" domain-metadata build \
+  --vcf AlphaMissense.annotated.vcf.gz --output domain-metadata.parquet --assembly GRCh38
+```
+
+For large inputs, run `chromosome --vcf VCF --chrom CONTIG --output PARQUET`
+separately for each header contig, then `merge --input FIRST --input SECOND ...
+--output PARQUET` in literal header order, including empty contigs. Both
+procedures support that interface and `check --input PARQUET [--vcf VCF]`.
+`build` uses the sequential source route; `--threads >1` selects indexed
+chromosome order. Use separate chromosome processes for parallel execution.
+
+Metadata `--assembly` enables source-associated reuse with an adjacent
+`.source.json` receipt. Without it, extraction is fresh. Repeated
+`--target-domain PATH` options restrict fresh metadata extraction; an associated
+warm cache retains its producing target selection, as in the Python wrapper.
+These commands write typed Parquet/zstd intermediates. Installer and DAS
+callers retain their current routes. See the
+[domain intermediate format](rust/CACHE_FORMATS.md#alphamissense-domain-intermediates-parquet-schema-2).
+
 To build the gene pathogenic-AF cache directly from an existing indexed ClinVar
 VCF, use the optional procedure:
 

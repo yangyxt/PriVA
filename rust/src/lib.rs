@@ -30,6 +30,9 @@ mod ks_greater;
 // These numerical procedures are qualified before any DAS caller is enabled.
 #[allow(dead_code)]
 mod das_sampling;
+// Candidate classification is validated before the full DAS builder is enabled.
+#[allow(dead_code)]
+mod das_rescue;
 #[allow(dead_code)]
 mod dip_stat;
 #[allow(dead_code)] // Shared installer primitive; callers switch after their own parity tests.

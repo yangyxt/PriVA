@@ -362,6 +362,12 @@ def resolve_cache_paths(config: dict, source_root: Path | None = None) -> tuple[
         if native_spliceai_source(key, value):
             continue
         if prepared_spliceai_source(key, value):
+            # A selected prepared pair already in managed storage keeps its
+            # exact profile/path, including an explicitly selected root alias.
+            # External pairs still use the receipt-aware physical relocator;
+            # registration retains the adapter/schema/assembly checks.
+            if Path(value).resolve().is_relative_to(root.resolve()):
+                continue
             updates[key] = str(Path(directories["vep_plugins_cachedir"]) / "SpliceAI2/GRCh38" / Path(value).resolve().name)
             continue
         baseline = clinvar_default_marker(value, source_root) if key == "clinvar_gene_stat" else None

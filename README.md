@@ -309,6 +309,31 @@ time. These procedures acquire no sources; refresh decisions, locking,
 acquisition and manifest publication remain in the Python builder. Installer
 callers continue to use `scripts/build_gene_pathogenic_mechanism_cache.py`.
 
+The optional `indexed-plugin-cache` helper validates a selected BGZF table and
+repairs only its adjacent tabix index through a temporary alias. It retains the
+publisher's coordinate, comment and skipped-header settings. `format-primate`
+accepts an explicitly selected PrimateAI source and assembly, uses GNU sort and
+bgzip, and publishes a locked, source-bound managed copy under `--cache-dir`.
+Both procedures require the existing `bgzip` and `tabix` tools on `PATH`;
+formatting also requires GNU `sort`.
+
+```bash
+"$PRIVA_BINARY" indexed-plugin-cache ensure-index \
+  --input selected.tsv.bgz --kind primateai
+"$PRIVA_BINARY" indexed-plugin-cache format-primate \
+  --input PrimateAI.tsv.gz --cache-dir "$CACHE_ROOT/PrimateAI" \
+  --assembly GRCh38 --threads 4
+```
+
+These commands are opt-in. The installer continues to use
+`scripts/indexed_plugin_cache.py`. The native helper retains that script's
+runtime exit code 1; argument errors exit 2. Native help
+uses the native command layout. The portable comparators
+`rust/tests/indexed_plugin_cache_compare.py` and
+`rust/tests/indexed_plugin_cache_edges.py` use private fixtures with the actual
+tools, including cleanup and subprocess-failure checks. Permission fixtures
+must run as an ordinary user, without elevated filesystem privileges.
+
 The optional DAS completion checker uses the same version-3 receipts as the
 Python helper:
 

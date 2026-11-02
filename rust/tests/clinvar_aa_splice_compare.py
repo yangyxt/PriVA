@@ -13,6 +13,7 @@ import importlib.util
 import json
 from pathlib import Path
 import pickle
+import re
 import shutil
 import subprocess
 import sys
@@ -159,6 +160,16 @@ def run(command, folder, name):
         return subprocess.run(list(map(str, command)), stdout=out, stderr=err).returncode
 
 
+def failure_category(folder, name):
+    """Compare actual exception types, without requiring Python tracebacks."""
+    text = (folder / (name + ".stderr.log")).read_text()
+    if name == "native":
+        found = re.findall(r"^priva: ([A-Za-z_][A-Za-z_0-9]*):", text, re.M)
+    else:
+        found = re.findall(r"^([A-Za-z_][A-Za-z_0-9]*(?:Error|Exception)|error):", text, re.M)
+    return found[-1] if found else None
+
+
 def consumer_probe(records, scripts):
     sys.path.insert(0, str(scripts))
     from acmg_ps1_pm5_known_variant import check_splice_pathogenic
@@ -214,7 +225,12 @@ def check(args):
             native_status = run([args.binary, "clinvar-aa-splice", "build", "--vcf", vcf,
                 "--aa-output", target(native[0],"aa"), "--splice-output", target(native[1],"splice"), "--threads", case.get("threads", "1")], folder, "native")
             report.update(native_exit=native_status, native_written=[p.read_bytes() != SENTINEL for p in native])
-            report["passed"] = (status == 0) == (native_status == 0) and report["written"] == report["native_written"]
+            report["python_category"] = failure_category(folder, "python") if status else None
+            report["native_category"] = failure_category(folder, "native") if native_status else None
+            report["failure_category_match"] = (status == 0 or
+                (report["python_category"] is not None and report["python_category"] == report["native_category"]))
+            report["passed"] = (status == native_status and report["failure_category_match"] and
+                                report["written"] == report["native_written"])
             if any(report["written"]) and any(report["native_written"]):
                 report["values"] = {}
                 for cache, source, archive in zip(["clinvar_aa_stat", "clinvar_splice_stat"], [aa, splice], native):

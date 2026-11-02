@@ -16,6 +16,7 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::time::Instant;
 
+pub(crate) mod clinvar_splice_stat;
 pub(crate) mod common;
 
 pub(crate) const CLINVAR_AA_STAT: Schema = Schema {
@@ -340,7 +341,7 @@ pub(crate) fn convert_clinvar_aa_stat(pickle: &str, output: &Path) -> Result<Str
     ))
 }
 
-const USAGE: &str = "usage: priva cache-convert clinvar_aa_stat --pickle PICKLE --output CACHE";
+const USAGE: &str = "usage: priva cache-convert CACHE --pickle PICKLE --output CACHE\nCACHE: clinvar_aa_stat, clinvar_splice_stat";
 
 /// `priva cache-convert CACHE --pickle PICKLE --output OUTPUT`.
 pub(crate) fn dispatch(args: &[String]) -> Result<()> {
@@ -365,6 +366,13 @@ pub(crate) fn dispatch(args: &[String]) -> Result<()> {
     match cache.as_str() {
         "clinvar_aa_stat" => {
             println!("{}", convert_clinvar_aa_stat(pickle, Path::new(output))?);
+            Ok(())
+        }
+        "clinvar_splice_stat" => {
+            println!(
+                "{}",
+                clinvar_splice_stat::convert(pickle, Path::new(output))?
+            );
             Ok(())
         }
         other => Err(invalid(format!(
@@ -491,14 +499,8 @@ mod tests {
     fn command_line() {
         assert!(dispatch(&[]).is_err());
         let args = |a: &[&str]| a.iter().map(|s| s.to_string()).collect::<Vec<_>>();
-        let error = dispatch(&args(&[
-            "clinvar_splice_stat",
-            "--pickle",
-            "a",
-            "--output",
-            "b",
-        ]))
-        .unwrap_err();
+        let error =
+            dispatch(&args(&["unknown_cache", "--pickle", "a", "--output", "b"])).unwrap_err();
         assert!(error.to_string().contains("not converted yet"), "{error}");
         assert!(
             dispatch(&args(&[

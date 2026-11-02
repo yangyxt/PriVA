@@ -155,7 +155,7 @@ cache conversion interface. Optional native procedures can be invoked directly.
 | [`scripts/deploy_cluster_resources.py`](../scripts/deploy_cluster_resources.py) | Legacy/manual helper, outside native conversion scope. |
 | [`scripts/gnomad_cache.py`](../scripts/gnomad_cache.py) | Retained Python; native replacement pending. |
 | [`scripts/indexed_plugin_cache.py`](../scripts/indexed_plugin_cache.py) | Optional `priva indexed-plugin-cache ensure-index/format-primate`. Retains bgzip, tabix and GNU sort; installer caller remains Python. |
-| [`scripts/installed_environment.py`](../scripts/installed_environment.py) | Retained Python; native replacement pending. |
+| [`scripts/installed_environment.py`](../scripts/installed_environment.py) | Optional `priva installed-environment export/export-installation` for package-only YAML exports. Retains the installed package manager and statically linked libyaml; installer caller remains Python. |
 | [`scripts/installer_config_paths.py`](../scripts/installer_config_paths.py) | Retained Python; native replacement pending. |
 | [`scripts/installer_prerequisites.py`](../scripts/installer_prerequisites.py) | Retained Python; native replacement pending. |
 | [`scripts/mapped_artifact_publish.py`](../scripts/mapped_artifact_publish.py) | Retained Python; native replacement pending. |

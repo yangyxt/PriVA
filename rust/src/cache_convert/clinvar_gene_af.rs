@@ -35,13 +35,13 @@ const FIELDS: [&str; 12] = [
     "acc_patho_af",
 ];
 
-#[derive(Archive, Serialize, Deserialize, Debug)]
+#[derive(Archive, Serialize, Deserialize, Debug, Clone)]
 pub(crate) enum GeneAfValue {
     Text(String),
     Int(i64),
     Float(f64),
 }
-#[derive(Archive, Serialize, Deserialize, Debug)]
+#[derive(Archive, Serialize, Deserialize, Debug, Clone)]
 pub(crate) struct GeneAfEntry {
     pub(crate) key: String,
     pub(crate) value: GeneAfValue,
@@ -157,6 +157,29 @@ impl ClinvarGeneAfCache {
         let root = self.mapped.root();
         find_sorted(&root.genes, gene).map(|at| root.entries[at].as_ref())
     }
+    pub(crate) fn owned_entries(&self) -> Vec<(String, Option<Vec<GeneAfEntry>>)> {
+        self.keys()
+            .iter()
+            .map(|gene| {
+                let entries = self.get(gene.as_str()).unwrap().map(|record| {
+                    record
+                        .iter()
+                        .map(|entry| GeneAfEntry {
+                            key: entry.key.as_str().to_owned(),
+                            value: match &entry.value {
+                                ArchivedGeneAfValue::Text(s) => {
+                                    GeneAfValue::Text(s.as_str().to_owned())
+                                }
+                                ArchivedGeneAfValue::Int(i) => GeneAfValue::Int(i.to_native()),
+                                ArchivedGeneAfValue::Float(f) => GeneAfValue::Float(f.to_native()),
+                            },
+                        })
+                        .collect()
+                });
+                (gene.as_str().to_owned(), entries)
+            })
+            .collect()
+    }
     fn exact(&self, gene: &str) -> Option<ExactValue> {
         self.get(gene).map(|record| match record {
             None => ExactValue::None,
@@ -181,6 +204,37 @@ impl ClinvarGeneAfCache {
             ),
         })
     }
+}
+
+/// Direct producer boundary for the existing schema. Only lookup keys are
+/// sorted; None, record field order, scalar kinds and float bits are retained.
+pub(crate) fn write_entries(
+    output: &Path,
+    mut entries: Vec<(String, Option<Vec<GeneAfEntry>>)>,
+    provenance: Vec<Provenance>,
+) -> Result<usize> {
+    entries.sort_by(|a, b| a.0.cmp(&b.0));
+    let (genes, entries) = entries.into_iter().unzip();
+    let value = ClinvarGeneAfStat {
+        provenance,
+        genes,
+        entries,
+    };
+    let count = value.genes.len();
+    let bytes = rkyv::to_bytes::<rancor::Error>(&value)?;
+    write_cache_checked(output, SCHEMA, &bytes, |staged| {
+        let cache = ClinvarGeneAfCache::open(&staged.to_string_lossy())?;
+        if cache.len() != count {
+            return Err(invalid("native gene count differs"));
+        }
+        for (key, expected) in value.genes.iter().zip(&value.entries) {
+            if cache.exact(key).as_ref() != Some(&exact_plain(expected.as_deref())) {
+                return Err(invalid("native gene value differs after writing"));
+            }
+        }
+        Ok(())
+    })?;
+    Ok(count)
 }
 
 #[cfg_attr(not(test), allow(dead_code))]

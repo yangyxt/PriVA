@@ -47,6 +47,8 @@ use std::path::Path;
 
 const USAGE: &str = "usage: priva combine-annotations -i INPUT_VCF -c CADD_TABLE -p HPO_TABLE [-o OUTPUT_TABLE] [-t THREADS]";
 const CHUNK_SIZE: usize = 20_000;
+pub(crate) mod gene_stats;
+
 /// pandas' default missing-value spellings (`keep_default_na`).
 const PANDAS_NA: [&str; 19] = [
     "", "#N/A", "#N/A N/A", "#NA", "-1.#IND", "-1.#QNAN", "-NaN", "-nan", "1.#IND", "1.#QNAN",
@@ -862,6 +864,7 @@ fn json_string(text: &str) -> String {
 // ---------------------------------------------------------------------------
 // VCF records as pysam returns them
 
+#[derive(Clone)]
 struct Definition {
     number: String,
     kind: String,
@@ -903,6 +906,7 @@ fn structured(line: &str) -> HashMap<String, String> {
     pairs
 }
 
+#[derive(Clone)]
 struct VcfHeader {
     infos: HashMap<String, Definition>,
     samples: Vec<String>,
@@ -928,6 +932,9 @@ struct Info<'a> {
     header: &'a VcfHeader,
     /// Key to raw text in record order (`None` for a key without `=`).
     raw: Vec<(&'a str, Option<&'a str>)>,
+    /// Source-cache builders use the shared typed VCF decoder. The existing
+    /// sample converter keeps its separately qualified parsing profile.
+    htslib: bool,
 }
 
 impl<'a> Info<'a> {
@@ -945,6 +952,38 @@ impl<'a> Info<'a> {
         }
         match raw {
             None => Ok(None),
+            Some((_, text)) if self.htslib => {
+                use crate::vcf_variant::{self, InfoType, Scalar};
+                let value = vcf_variant::info_value(
+                    *text,
+                    vcf_variant::Definition {
+                        kind: match definition.kind.as_str() {
+                            "Integer" => InfoType::Integer,
+                            "Float" => InfoType::Float,
+                            "Flag" => InfoType::Flag,
+                            _ => InfoType::Text,
+                        },
+                        scalar: definition.number == "1",
+                        genotype_count: definition.number == "G",
+                    },
+                )?;
+                let values: Vec<Py> = value
+                    .values
+                    .into_iter()
+                    .map(|item| match item {
+                        Scalar::Missing => Py::None,
+                        Scalar::Text(text) => Py::Str(text),
+                        Scalar::Int(value) => Py::Int(value),
+                        Scalar::Float(value) => Py::Float(value),
+                        Scalar::Bool(value) => Py::Bool(value),
+                    })
+                    .collect();
+                Ok(Some(if value.scalar {
+                    values.into_iter().next().unwrap_or(Py::None)
+                } else {
+                    Py::Tuple(values)
+                }))
+            }
             Some((_, text)) => typed(definition, text.unwrap_or(".")).map(Some),
         }
     }
@@ -1494,19 +1533,55 @@ fn record_rows(
     cadd: &CaddScores,
     hpo: &HpoAnnotations,
 ) -> Result<Vec<Row>> {
+    record_rows_profile(
+        line,
+        header,
+        csq_fields,
+        feature_index,
+        variant_source,
+        control,
+        cadd,
+        hpo,
+        false,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn record_rows_profile(
+    line: &str,
+    header: &VcfHeader,
+    csq_fields: &[String],
+    feature_index: Option<usize>,
+    variant_source: bool,
+    control: bool,
+    cadd: &CaddScores,
+    hpo: &HpoAnnotations,
+    htslib: bool,
+) -> Result<Vec<Row>> {
     let fields: Vec<&str> = line.split('\t').collect();
     if fields.len() < 8 {
         return Err(invalid("fewer than 8 VCF columns"));
     }
     let (chrom, pos, reference, alts) = (fields[0], fields[1], fields[3], fields[4]);
+    let reference = if htslib && reference.is_empty() {
+        "."
+    } else {
+        reference
+    };
     let pos: i64 = pos.parse().map_err(|_| invalid("POS is not an integer"))?;
     let alt = if alts == "." {
         ""
     } else {
-        alts.split(',').next().unwrap_or("")
+        let first = alts.split(',').next().unwrap_or("");
+        if htslib && first.is_empty() {
+            "."
+        } else {
+            first
+        }
     };
     let info = Info {
         header,
+        htslib,
         raw: if fields[7] == "." {
             Vec::new()
         } else {

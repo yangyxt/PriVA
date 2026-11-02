@@ -172,6 +172,27 @@ impl ClinvarExonAfCache {
         let root = self.mapped.root();
         find_sorted(&root.transcripts, transcript).map(|at| &root.entries[at])
     }
+    pub(crate) fn owned_entries(&self) -> Vec<(String, Vec<ExonAf>)> {
+        self.keys()
+            .iter()
+            .map(|key| {
+                let entries = self
+                    .get(key.as_str())
+                    .unwrap()
+                    .iter()
+                    .map(|entry| ExonAf {
+                        exon_key: entry.exon_key.as_str().to_owned(),
+                        item0: entry.item0.to_native(),
+                        item1: entry.item1.to_native(),
+                        item2: entry.item2.to_native(),
+                        item3: entry.item3.to_native(),
+                        item4: entry.item4.iter().map(|value| value.to_native()).collect(),
+                    })
+                    .collect();
+                (key.as_str().to_owned(), entries)
+            })
+            .collect()
+    }
     fn exact(&self, transcript: &str) -> Option<ExactValue> {
         self.get(transcript).map(|entries| {
             ExactValue::Dict(
@@ -193,6 +214,37 @@ impl ClinvarExonAfCache {
             )
         })
     }
+}
+
+/// Direct schema-4 publication. Lookup transcripts are sorted; exon insertion
+/// order, the five-tuple shape, sample order and all floating-point bits remain.
+pub(crate) fn write_entries(
+    output: &Path,
+    mut entries: Vec<(String, Vec<ExonAf>)>,
+    provenance: Vec<Provenance>,
+) -> Result<usize> {
+    entries.sort_by(|a, b| a.0.cmp(&b.0));
+    let (transcripts, entries) = entries.into_iter().unzip();
+    let value = ClinvarExonAfStat {
+        provenance,
+        transcripts,
+        entries,
+    };
+    let count = value.transcripts.len();
+    let bytes = rkyv::to_bytes::<rancor::Error>(&value)?;
+    write_cache_checked(output, SCHEMA, &bytes, |staged| {
+        let cache = ClinvarExonAfCache::open(&staged.to_string_lossy())?;
+        if cache.len() != count {
+            return Err(invalid("native transcript count differs"));
+        }
+        for (key, expected) in value.transcripts.iter().zip(&value.entries) {
+            if cache.exact(key).as_ref() != Some(&exact_plain(expected)) {
+                return Err(invalid("native exon value differs after writing"));
+            }
+        }
+        Ok(())
+    })?;
+    Ok(count)
 }
 
 #[cfg_attr(not(test), allow(dead_code))]

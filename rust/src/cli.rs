@@ -363,6 +363,9 @@ pub(crate) fn run() -> Result<()> {
     if args.get(1).map(String::as_str) == Some("clinvar-aa-splice") {
         return crate::clinvar_aa_splice_builder::dispatch(&args[2..]);
     }
+    if args.get(1).map(String::as_str) == Some("clinvar-contract") {
+        return crate::clinvar_contract::dispatch(&args[2..]);
+    }
     if args.get(1).map(String::as_str) == Some("splicevault-convert") {
         return crate::splicevault_builder::dispatch(&args[2..]);
     }

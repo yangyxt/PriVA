@@ -263,6 +263,16 @@ impl Cache {
     pub(crate) fn len(&self) -> usize {
         self.keys().len()
     }
+    /// Shape inspection without copying the record payload or coercing values.
+    pub(crate) fn record_count(&self, key: &str) -> Option<usize> {
+        match self {
+            Self::V1(cache) => cache.get(key).map(|records| records.len()),
+            Self::V2(cache) => {
+                let root = cache.mapped.root();
+                find_sorted(&root.transcripts, key).map(|index| root.entries[index].len())
+            }
+        }
+    }
     pub(crate) fn plain(&self, key: &str) -> Option<Vec<Record>> {
         match self {
             Self::V1(cache) => {

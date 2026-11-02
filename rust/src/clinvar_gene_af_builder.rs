@@ -2,6 +2,7 @@
 //! Chromosome results are merged in header order, never completion order.
 //! The partial accumulated-AF snapshot and the original None merge failure
 //! are deliberate compatibility behavior, not corrected scientific rules.
+use crate::builder_error;
 use crate::cache_convert::Provenance;
 use crate::cache_convert::clinvar_gene_af::{
     self, ClinvarGeneAfCache, Entry as GeneAfEntry, Value as GeneAfValue,
@@ -24,6 +25,28 @@ Preserves None entries, first equal-AF winner and the original partial accumulat
 AF snapshot. A repeated gene with a None value fails as in the Python producer.\n\
 An absent CSQ format returns success without creating output, as in the source.";
 type Records = Vec<(String, Option<Vec<GeneAfEntry>>)>;
+
+fn source_error(error: Box<dyn std::error::Error>) -> Box<dyn std::error::Error> {
+    let message = error.to_string();
+    for category in [
+        "TypeError",
+        "IndexError",
+        "ValueError",
+        "KeyError",
+        "AttributeError",
+        "NotImplementedError",
+        "OSError",
+        "UnicodeDecodeError",
+    ] {
+        if let Some(cause) = message
+            .strip_prefix(category)
+            .and_then(|s| s.strip_prefix(": "))
+        {
+            return builder_error::category(category, invalid(cause));
+        }
+    }
+    error
+}
 
 impl Scalar {
     fn cache(&self) -> Result<GeneAfValue> {
@@ -61,7 +84,11 @@ fn record(
     positions: &mut HashMap<String, usize>,
     accumulated: &mut HashMap<String, Scalar>,
 ) -> Result<()> {
-    let decoded = decode_record(line, h, info_types)?;
+    // Python obtains each pysam record before its only local try/except,
+    // which covers CSQ field indexing. Invalid unused GT/FORMAT values still
+    // propagate as ValueError; they are never skipped as benign records.
+    let decoded = decode_record(line, h, info_types)
+        .map_err(|error| builder_error::category("ValueError", error))?;
     let fields = &decoded.fields;
     let position = decoded.position;
     let info = &decoded.info;
@@ -258,7 +285,14 @@ fn chromosome(vcf: &Path, index: &TabixIndex, h: &Header, chrom: &str) -> Result
         )
         .map_err(|e| e.to_string())
     })
-    .map_err(invalid)?;
+    .map_err(|message| {
+        if message == "a VCF line has a position that is not an integer" {
+            // Tabix iteration fails before a VariantRecord can be decoded.
+            builder_error::category("OSError", invalid(message))
+        } else {
+            source_error(invalid(message))
+        }
+    })?;
     Ok(records)
 }
 
@@ -310,89 +344,121 @@ pub(crate) fn dispatch(args: &[String]) -> Result<()> {
     }
     let required = |key| options.get(key).copied().ok_or_else(|| invalid(HELP));
     let output = Path::new(required("--output")?);
-    let records = if mode == "merge" {
+    // Admit the named command before any source I/O or early CSQ return.
+    // Once admitted, exceptions from the original procedure are exit 1.
+    if mode == "merge" {
         if inputs.is_empty() {
             return Err(invalid("merge requires ordered --input archives"));
         }
-        let results = inputs
-            .iter()
-            .map(|p| {
-                ensure_distinct_paths(p, output)?;
-                Ok(ClinvarGeneAfCache::open(&p.to_string_lossy())?.owned_entries())
-            })
-            .collect::<Result<Vec<_>>>()?;
-        merge(results)?
     } else {
-        let vcf = Path::new(required("--vcf")?);
-        let threads: i64 = options
-            .get("--threads")
-            .map(|s| s.parse())
-            .transpose()?
-            .unwrap_or_else(|| {
-                std::thread::available_parallelism()
-                    .map(|n| n.get().min(16) as i64)
-                    .unwrap_or(1)
-            });
-        let mut h = header(vcf)?;
-        if h.csq.is_none() {
-            eprintln!("Could not extract CSQ format from VCF header");
-            return Ok(());
+        required("--vcf")?;
+        if mode == "chromosome" {
+            required("--chrom")?;
         }
-        if threads <= 0 {
-            return Err(invalid("number of processes must be at least 1"));
-        }
-        ensure_distinct_paths(vcf, output)?;
-        inputs.push(vcf.to_path_buf());
-        let indexed = index(vcf);
-        if let Ok(index) = &indexed {
-            for name in &index.names {
-                if !h.contigs.contains(name) {
-                    h.contigs.push(name.clone());
-                }
-            }
-        }
-        if h.contigs.is_empty() {
-            vec![]
-        } else {
-            let index = indexed?;
-            if mode == "chromosome" {
-                chromosome(vcf, &index, &h, required("--chrom")?)?
-            } else {
-                let next = AtomicUsize::new(0);
-                let (send, receive) = std::sync::mpsc::channel();
-                std::thread::scope(|scope| {
-                    for _ in 0..(threads as usize).min(h.contigs.len()) {
-                        let (send, h, index, next) = (send.clone(), &h, &index, &next);
-                        scope.spawn(move || {
-                            loop {
-                                let i = next.fetch_add(1, Ordering::Relaxed);
-                                if i >= h.contigs.len() {
-                                    break;
-                                }
-                                let result = chromosome(vcf, index, h, &h.contigs[i])
-                                    .map_err(|e| e.to_string());
-                                if send.send((i, result)).is_err() {
-                                    break;
-                                }
-                            }
-                        });
-                    }
-                });
-                drop(send);
-                let mut results = receive.into_iter().collect::<Vec<_>>();
-                results.sort_by_key(|(i, _)| *i);
-                let results = results
-                    .into_iter()
-                    .map(|(_, r)| r.map_err(invalid))
+    }
+    builder_error::finish(
+        (|| {
+            let records = if mode == "merge" {
+                let results = inputs
+                    .iter()
+                    .map(|p| {
+                        ensure_distinct_paths(p, output)?;
+                        Ok(ClinvarGeneAfCache::open(&p.to_string_lossy())?.owned_entries())
+                    })
                     .collect::<Result<Vec<_>>>()?;
                 merge(results)?
-            }
-        }
-    };
-    let count = clinvar_gene_af::write_records(output, records, provenance(&inputs, mode)?)?;
-    let version = ClinvarGeneAfCache::open(&output.to_string_lossy())?.schema_version();
-    println!("{{\"genes\":{count},\"schema\":6,\"version\":{version}}}");
-    Ok(())
+            } else {
+                let vcf = Path::new(required("--vcf")?);
+                let threads: i64 = options
+                    .get("--threads")
+                    .map(|s| {
+                        // The positional Python producer calls int() at runtime,
+                        // before opening the VCF, including when CSQ is absent.
+                        if !crate::python_text::python_int_is_valid(s) {
+                            return Err(invalid("ValueError: invalid number of processes"));
+                        }
+                        let ascii: String = s
+                            .chars()
+                            .map(|c| {
+                                crate::python_text::decimal_digit_value(c)
+                                    .map(|d| char::from(b'0' + d as u8))
+                                    .unwrap_or(c)
+                            })
+                            .collect();
+                        crate::python_text::python_int(&ascii)
+                            .and_then(|value| i64::try_from(value).ok())
+                            .ok_or_else(|| invalid("number of processes exceeds supported range"))
+                    })
+                    .transpose()?
+                    .unwrap_or_else(|| {
+                        std::thread::available_parallelism()
+                            .map(|n| n.get().min(16) as i64)
+                            .unwrap_or(1)
+                    });
+                let mut h = header(vcf)?;
+                if h.csq.is_none() {
+                    eprintln!("Could not extract CSQ format from VCF header");
+                    return Ok(());
+                }
+                if threads <= 0 {
+                    return Err(invalid("number of processes must be at least 1"));
+                }
+                ensure_distinct_paths(vcf, output)?;
+                inputs.push(vcf.to_path_buf());
+                let indexed = index(vcf);
+                if let Ok(index) = &indexed {
+                    for name in &index.names {
+                        if !h.contigs.contains(name) {
+                            h.contigs.push(name.clone());
+                        }
+                    }
+                }
+                if h.contigs.is_empty() {
+                    vec![]
+                } else {
+                    let index = indexed?;
+                    if mode == "chromosome" {
+                        chromosome(vcf, &index, &h, required("--chrom")?)?
+                    } else {
+                        let next = AtomicUsize::new(0);
+                        let (send, receive) = std::sync::mpsc::channel();
+                        std::thread::scope(|scope| {
+                            for _ in 0..(threads as usize).min(h.contigs.len()) {
+                                let (send, h, index, next) = (send.clone(), &h, &index, &next);
+                                scope.spawn(move || {
+                                    loop {
+                                        let i = next.fetch_add(1, Ordering::Relaxed);
+                                        if i >= h.contigs.len() {
+                                            break;
+                                        }
+                                        let result = chromosome(vcf, index, h, &h.contigs[i])
+                                            .map_err(|e| e.to_string());
+                                        if send.send((i, result)).is_err() {
+                                            break;
+                                        }
+                                    }
+                                });
+                            }
+                        });
+                        drop(send);
+                        let mut results = receive.into_iter().collect::<Vec<_>>();
+                        results.sort_by_key(|(i, _)| *i);
+                        let results = results
+                            .into_iter()
+                            .map(|(_, r)| r.map_err(invalid))
+                            .collect::<Result<Vec<_>>>()?;
+                        merge(results)?
+                    }
+                }
+            };
+            let count =
+                clinvar_gene_af::write_records(output, records, provenance(&inputs, mode)?)?;
+            let version = ClinvarGeneAfCache::open(&output.to_string_lossy())?.schema_version();
+            println!("{{\"genes\":{count},\"schema\":6,\"version\":{version}}}");
+            Ok(())
+        })()
+        .map_err(source_error),
+    )
 }
 
 #[cfg(test)]

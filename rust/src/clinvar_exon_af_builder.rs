@@ -8,9 +8,10 @@ use crate::cli::{Result, invalid};
 use crate::rust_cache::ensure_distinct_paths;
 use crate::tabix_index::{TabixIndex, fetch_contig_lines};
 use crate::vcf_variant::{
-    Definition, Header, InfoValue, Record, Scalar, decode_record, header, index,
+    Definition, Header, InfoValue, Record, Scalar, decode_record, header as vcf_header, index,
 };
 use std::collections::HashMap;
+use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -53,6 +54,32 @@ fn source_error(error: Box<dyn std::error::Error>) -> Box<dyn std::error::Error>
         }
     }
     error
+}
+
+fn header(path: &Path) -> Result<Header> {
+    crate::clingen_map_builder::check_vcf_compression(path).map_err(source_error)?;
+    let mut file = std::fs::File::open(path)?;
+    let mut magic = [0; 2];
+    if file.read(&mut magic)? == 2 && magic == [0x1f, 0x8b] {
+        // VariantFile's default check_truncation requires the literal EOF
+        // block, even when every preceding compressed block is complete.
+        let mut eof = [0; 28];
+        if file.metadata()?.len() < eof.len() as u64 {
+            return Err(exception(
+                "OSError",
+                "no BGZF EOF marker; file may be truncated",
+            ));
+        }
+        file.seek(SeekFrom::End(-(eof.len() as i64)))?;
+        file.read_exact(&mut eof)?;
+        if eof != crate::vcf_text::EOF_BLOCK {
+            return Err(exception(
+                "OSError",
+                "no BGZF EOF marker; file may be truncated",
+            ));
+        }
+    }
+    vcf_header(path).map_err(source_error)
 }
 
 fn csq_fields(h: &Header) -> Result<(usize, usize)> {

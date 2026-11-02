@@ -11,6 +11,8 @@ mod cli;
 mod clingen_map_builder;
 pub mod combine_annotations;
 mod config_text;
+#[allow(dead_code)] // Shared installer primitive; callers switch after their own parity tests.
+mod file_lock;
 #[allow(dead_code, reason = "Shared gzip API awaiting installer-builder callers")]
 mod gzip_writer;
 pub mod hpo_penetrance;

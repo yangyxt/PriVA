@@ -138,6 +138,8 @@ def cases():
     add('relative_source',command='record-source',relative=True)
     add('alias_source',command='record-source',alias=True)
     add('alias_publication_failure',command='record-source',alias=True,sidecar_kind='directory',receipt=valid,receipt_present=True)
+    add('symlink_parent_alias',command='record-source',symlink_parent=True)
+    add('symlink_parent_alias_failure',command='record-source',symlink_parent=True,sidecar_kind='directory',receipt=valid,receipt_present=True)
     large=b'0123456789abcdef'*(1024*128)+b'last'
     large_receipt=dict(valid,sha256=hashlib.sha256(large).hexdigest())
     for command in ('record-source','check-source','metadata'):
@@ -180,6 +182,11 @@ def prepare(folder,spec):
     if spec.get('parent_denied'):folder.chmod(0o500)
     name='payload' if spec.get('relative') else str(path)
     if spec.get('alias'):(folder/'nested').mkdir();name=str(folder/'nested'/'..'/'payload')
+    if spec.get('symlink_parent'):
+        (folder/'away'/'sub').mkdir(parents=True);(folder/'nested').symlink_to('away/sub')
+        path.rename(folder/'away'/'payload')
+        if sidecar.exists() or sidecar.is_symlink():sidecar.rename(folder/'away'/sidecar.name)
+        name=str(folder/'nested'/'..'/'payload')
     command=spec['command'];args=[command if command!='metadata' else 'check-source','--input',name]
     if command=='validate':args+=['--kind',spec['kind']]
     else:args+=['--url',spec.get('url',URL)]
@@ -216,7 +223,7 @@ def compare_case(root,name,spec,producer,binary):
         outcomes[arm]=outcome(measurements[arm],work,exception,arm=='native',spec.get('argument',False))
         if spec.get('parent_denied'):work.chmod(0o700)
         after[arm]=snapshot(work)
-        preserved[arm]=all(after[arm].get(key)==value for key,value in before[arm].items() if key in ('payload','target'))
+        preserved[arm]=all(after[arm].get(key)==value for key,value in before[arm].items() if key in ('payload','target') or key.endswith('/payload'))
     exact=outcomes['python']==outcomes['native'] and after['python']==after['native'] and all(preserved.values())
     value=dict(spec=spec,measurements=measurements,outcomes=outcomes,before=before,after=after,source_preserved=preserved,exact=exact,
         stderr_bytes_equal=Path(measurements['python']['stderr']['path']).read_bytes()==Path(measurements['native']['stderr']['path']).read_bytes(),unqualified=spec.get('unqualified'))

@@ -218,19 +218,25 @@ fn check_routes(registry: &Json, source_root: &Path, seed: u32) -> Result<()> {
     let functions = shell_functions(&shell);
     for (name, entry) in registry.get("resources").unwrap().as_object().unwrap() {
         let mut names = strings(entry.get("refresh").unwrap().get("entrypoints").unwrap()).unwrap();
+        let mut nonstrings = Vec::new();
         if let Some(install) = entry.get("install_entrypoints") {
             match install {
                 Json::Array(values) => {
-                    // Non-string members need CPython's mixed-object hashing,
-                    // beyond the proven string-iterable set primitive.
+                    // set(list) consumes the complete iterable before any
+                    // missing-route check. Its first unhashable member wins
+                    // even when an earlier string names a missing function.
                     for value in values {
-                        let Some(value) = value.as_str() else {
+                        if matches!(value, Json::Array(_) | Json::Object(_)) {
                             return Err(error(
-                                "RuntimeError",
-                                "Unsupported profile: non-string install_entrypoints require mixed-object Python set semantics",
+                                "TypeError",
+                                format!("unhashable type: '{}'", kind(value)),
                             ));
-                        };
-                        names.push(value.to_owned());
+                        }
+                        if let Some(value) = value.as_str() {
+                            names.push(value.to_owned());
+                        } else {
+                            nonstrings.push(value);
+                        }
                     }
                 }
                 value => {
@@ -243,6 +249,30 @@ fn check_routes(registry: &Json, source_root: &Path, seed: u32) -> Result<()> {
                     ));
                 }
             }
+        }
+        if !nonstrings.is_empty() {
+            // A lone non-string is necessarily absent from a string function
+            // catalogue. If all string members exist, the deciding error is
+            // independent of mixed-object set hashing/iteration. Multiple
+            // candidates remain outside the proven string-set profile.
+            if nonstrings.len() != 1 || names.iter().any(|name| !functions.contains(name)) {
+                return Err(error(
+                    "RuntimeError",
+                    "Unsupported profile: mixed route sets with multiple missing candidates require Python mixed-object set order",
+                ));
+            }
+            let missing = match nonstrings[0] {
+                Json::Null => "None".to_owned(),
+                Json::Bool(true) => "True".to_owned(),
+                Json::Bool(false) => "False".to_owned(),
+                Json::Int(value) => value.to_string(),
+                Json::Float(value) => json_text::python_float_repr(*value),
+                _ => unreachable!("strings and unhashable objects were handled above"),
+            };
+            return Err(error(
+                "ValueError",
+                format!("Missing installer entrypoint {missing} for {name}"),
+            ));
         }
         let mut ordered = StringSet::new(seed);
         for name in names {
@@ -373,9 +403,71 @@ fn read_text(path: &Path) -> Result<String> {
         .map(|s| s.replace("\r\n", "\n").replace('\r', "\n"))
         .map_err(|message| error("UnicodeDecodeError", message))
 }
+
+/// Python's object_pairs_hook runs when each object closes, rather than at
+/// the second occurrence of a key. Keep the original successful parse path
+/// unchanged. Only a duplicate error needs this local precedence adapter.
+///
+/// The shared parser establishes the first syntax-error offset. Before that
+/// offset the token stream is valid; a small quote/brace walk merely locates
+/// completed object spans. Parsing those spans in completion order preserves
+/// child-hook errors before parent hooks or later syntax errors. Each byte is
+/// reparsed at most once per enclosing object (the shared depth bound applies),
+/// rather than repeatedly parsing a growing document prefix.
+fn parse_registry(text: &str) -> std::result::Result<Json, String> {
+    let first = match json_text::parse(text, true) {
+        Ok(value) => return Ok(value),
+        Err(message) if message.starts_with("Duplicate manifest key: ") => message,
+        Err(message) => return Err(message),
+    };
+    let syntax = json_text::parse(text, false).err();
+    let limit = if let Some(message) = &syntax {
+        if json_text::is_refusal(message) {
+            return Err(message.clone());
+        }
+        let character = message
+            .rsplit_once("(char ")
+            .and_then(|(_, s)| s.strip_suffix(')'))
+            .and_then(|s| s.parse::<usize>().ok());
+        let Some(character) = character else {
+            return Err(message.clone());
+        };
+        text.char_indices()
+            .nth(character)
+            .map_or(text.len(), |(i, _)| i)
+    } else {
+        text.len()
+    };
+    let mut starts = Vec::new();
+    let mut quoted = false;
+    let mut escaped = false;
+    for (at, byte) in text.as_bytes()[..limit].iter().copied().enumerate() {
+        if quoted {
+            if escaped {
+                escaped = false;
+            } else if byte == b'\\' {
+                escaped = true;
+            } else if byte == b'"' {
+                quoted = false;
+            }
+        } else {
+            match byte {
+                b'"' => quoted = true,
+                b'{' => starts.push(at),
+                b'}' => {
+                    if let Some(start) = starts.pop() {
+                        json_text::parse(&text[start..=at], true)?;
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    Err(syntax.unwrap_or(first))
+}
 fn load_registry(path: &Path, seed: u32) -> Result<Json> {
     let text = read_text(path)?;
-    let registry = json_text::parse(&text, true).map_err(|message| {
+    let registry = parse_registry(&text).map_err(|message| {
         if let Some(key) = message.strip_prefix("Duplicate manifest key: ") {
             error("ValueError", format!("Duplicate registry key: {key}"))
         } else if json_text::is_refusal(&message) {
@@ -501,5 +593,24 @@ mod tests {
         for value in ["", "A", "a\n", "á", "9a", "a-"] {
             assert!(!id_valid(value));
         }
+    }
+    #[test]
+    fn duplicate_hooks_wait_for_object_completion() {
+        assert_eq!(
+            parse_registry(r#"{"a":1,"a":2,"b":}"#).unwrap_err(),
+            "Expecting value: line 1 column 18 (char 17)"
+        );
+        assert_eq!(
+            parse_registry(r#"{"a":1,"a":2,"b":{"x":1,"x":2}}"#).unwrap_err(),
+            "Duplicate manifest key: x"
+        );
+        assert_eq!(
+            parse_registry(r#"{"x":{"a":1,"a":2},"b":}"#).unwrap_err(),
+            "Duplicate manifest key: a"
+        );
+        assert_eq!(
+            parse_registry(r#"{"x":{"a":1,"a":2},"b":0}"#).unwrap_err(),
+            "Duplicate manifest key: a"
+        );
     }
 }

@@ -54,7 +54,7 @@ impl Raw {
     }
 }
 #[derive(Clone, Debug)]
-pub(super) enum Value {
+pub(crate) enum Value {
     Null,
     Bool(bool),
     Number(String),
@@ -70,11 +70,19 @@ struct Node {
     mark: Mark,
     value: Option<Value>,
 }
-pub(super) struct Yaml {
+pub(crate) struct Yaml {
     nodes: Vec<Node>,
     pub root: usize,
 }
 impl Yaml {
+    /// The resolved SafeLoader tag distinguishes integer and float values even
+    /// when their canonical numeric spelling happens to be identical.
+    pub(crate) fn tag(&self, node: usize) -> &str {
+        self.nodes[node]
+            .tag
+            .strip_prefix(TAG)
+            .unwrap_or(&self.nodes[node].tag)
+    }
     pub fn value(&self, node: usize) -> &Value {
         self.nodes[node].value.as_ref().unwrap()
     }
@@ -407,7 +415,7 @@ fn load_impl(text: &str) -> Result<Yaml> {
     Ok(yaml)
 }
 
-pub(super) fn load(text: &str) -> Result<Yaml> {
+pub(crate) fn load(text: &str) -> Result<Yaml> {
     load_impl(text).map_err(|e| named_failure(e, "<unicode string>"))
 }
 pub(super) fn load_bytes(bytes: &[u8]) -> Result<Yaml> {

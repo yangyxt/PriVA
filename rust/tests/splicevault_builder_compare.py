@@ -233,11 +233,17 @@ def fixtures(args):
         selected=[case for case in selected if case.get('compression')]
     else:
         selected=[case for case in selected if not case.get('compression')]
+    fresh=set(args.fresh_python_case or [])
+    assert fresh<={case['name'] for case in selected},'Fresh Python case was not selected'
+    assert not args.legacy_oracle_scope or args.reuse_python_results,'Legacy scope requires a saved oracle'
     for case in selected:
         name=case['name'];folder=work/name;folder.mkdir()
+        reuse_case=name in reused and name not in fresh
+        mode_qualified=not reuse_case or 'output_mode' in reused[name]['python']
+        assert mode_qualified or args.legacy_oracle_scope,'Saved oracle lacks producing output_mode; explicit legacy scope is required'
         arms={};encoded={}
         for label in ('python','native'):
-            reuse=label=='python' and name in reused
+            reuse=label=='python' and reuse_case
             arm=args.reuse_python_root/name/'python' if reuse else folder/label
             source=arm/'input.tsv'
             if reuse:
@@ -260,7 +266,7 @@ def fixtures(args):
                      '--temp_dir',str(temp),'--chunk_size',str(case['chunk'])]
             options=case.get('argv',options)+case.get('extra_args',[])
             trace=arm/'commands.jsonl';this_env=dict(env,SPLICEVAULT_COMMAND_TRACE=str(trace))
-            if args.publication_trace and name not in reused:this_env['SPLICEVAULT_PUBLICATION_TRACE']=str(output)
+            if args.publication_trace and not reuse_case:this_env['SPLICEVAULT_PUBLICATION_TRACE']=str(output)
             if reuse:
                 returncode=reused[name]['python']['returncode'];start=end=None
             else:
@@ -271,7 +277,7 @@ def fixtures(args):
             payload=output.read_bytes() if output.is_file() else None
             if reuse:
                 old_payload=gzip.decompress(payload) if payload and payload.startswith(b'\x1f\x8b') else payload
-                assert sha(old_payload)==reused[name]['python']['output_sha256'],'Saved oracle output changed'
+                assert (sha(old_payload) if old_payload is not None else None)==reused[name]['python']['output_sha256'],'Saved oracle output changed'
             signature=output_signature(payload,start,end)
             encoded[label]=dict(sha256=sha(payload) if payload is not None else None,
                 bytes=len(payload) if payload is not None else None,started=start,ended=end,reused=reuse,
@@ -284,19 +290,26 @@ def fixtures(args):
                 for path in sorted(temp.iterdir()):
                     sidecars.append((UUID.sub('<UUID>',path.name),sha(normalize(path.read_bytes(),arm).replace(str(resource_root).encode(),b'<RESOURCES>')) if path.is_file() else 'directory'))
             arms[label]=dict(returncode=returncode,output=signature,command_sha256=sha(normalized),
-                # An archive store may make a saved oracle read-only. Its
-                # immutable producing receipt records publication permissions.
-                output_mode=reused[name]['python']['output_mode'] if reuse else encoded[label]['observed_storage_mode'],
+                # Archive permissions are storage state, never evidence of the
+                # original publication mode. Legacy receipts may lack it.
+                output_mode=reused[name]['python'].get('output_mode') if reuse else encoded[label]['observed_storage_mode'],
                 calls=len(commands),sidecars=sorted(sidecars),temp_kind='directory' if temp.is_dir() else 'file' if temp.is_file() else 'absent')
-            if args.publication_trace and name not in reused and commands:
+            if args.publication_trace and not reuse_case and commands:
                 arms[label]['publication']=publication_signature(arm,output,start,end)
-        equal=arms['python']==arms['native'] and all(a['output'] is None or a['output'].get('timestamps_valid',True) for a in arms.values())
+        compared={label:{key:value for key,value in arm.items() if mode_qualified or key!='output_mode'} for label,arm in arms.items()}
+        equal=compared['python']==compared['native'] and all(a['output'] is None or a['output'].get('timestamps_valid',True) for a in arms.values())
         results[name]=dict(passed=equal,scope='compression/append route' if case.get('compression') else 'supported table route',
+                           publication_mode_qualified=mode_qualified,
+                           publication_mode_comparison=('matched' if arms['python']['output_mode']==arms['native']['output_mode'] else 'mismatch') if mode_qualified else 'unavailable in producing receipt',
                            encoded=encoded,compression_bytes_equal=encoded['python']['sha256']==encoded['native']['sha256'],**arms)
     report=dict(kind='native-splicevault-mature-tool-fixtures-v1',passed=all(v['passed'] for v in results.values()),
         cases=results,case_count=len(results),failed=[n for n,v in results.items() if not v['passed']],
         binary=dict(path=str(args.binary),sha256=sha(args.binary.read_bytes())),
         python_script=dict(path=str(args.python_script),sha256=sha(args.python_script.read_bytes())),
+        publication_modes=dict(qualified=sum(v['publication_mode_qualified'] for v in results.values()),
+            unavailable=[name for name,v in results.items() if not v['publication_mode_qualified']]),
+        oracle_reuse=dict(legacy_scope=args.legacy_oracle_scope,fresh_python_cases=sorted(fresh),
+            producing_report=dict(path=str(args.reuse_python_results),sha256=sha(args.reuse_python_results.read_bytes())) if args.reuse_python_results else None),
         CrossMap=crossmap,wall_seconds=time.monotonic()-started)
     args.report.write_text(json.dumps(report,indent=2,sort_keys=True)+'\n')
     print(json.dumps({k:v for k,v in report.items() if k!='cases'},sort_keys=True))
@@ -311,6 +324,8 @@ def main():
     p.add_argument('--compression-only',action='store_true',help='Run inferred compression and archive append cases')
     p.add_argument('--reuse-python-root',type=Path,help='Read-only fixture root with saved Python outputs')
     p.add_argument('--reuse-python-results',type=Path,help='Original report binding saved Python outputs and producing source')
+    p.add_argument('--legacy-oracle-scope',action='store_true',help='Explicitly exclude unavailable producing permissions from saved byte/outcome comparisons; report them as unqualified')
+    p.add_argument('--fresh-python-case',action='append',help='Run a selected Python fixture anew instead of reusing its saved arm, e.g. when that fixture deliberately removed or replaced its input')
     p.add_argument('--publication-trace',action='store_true',help='Compare output snapshots and relative mtimes before each real CrossMap call')
     p.set_defaults(run=fixtures)
     args=parser.parse_args();raise SystemExit(args.run(args))

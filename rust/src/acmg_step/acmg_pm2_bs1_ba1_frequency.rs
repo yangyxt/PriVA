@@ -15,6 +15,7 @@
 use super::acmg_variant_mechanism::variant_condition_masks;
 use super::stats;
 use super::types::{AcmgError, HarnessCall, NamedMasks, StepOutput, not_converted};
+use crate::cache_convert::clinvar_gene_af::{ArchivedGeneAfValue, ClinvarGeneAfCache};
 use crate::cli::{Result, invalid};
 use crate::json_text::Json;
 use crate::pandas_table::{Column, ObjectValue, Table};
@@ -599,7 +600,8 @@ fn dict_entries(value: &Value, what: &str) -> Result<Vec<(Value, Value)>> {
 
 /// `clinvar_patho_af_dict.get(gene, {"af": 0}).get("af", 0)` for every gene of the pickle whose
 /// value is not None.
-fn gene_af_lookup(path: &str) -> Result<HashMap<String, Mapped>> {
+#[cfg(test)]
+fn gene_af_lookup_reference(path: &str) -> Result<HashMap<String, Mapped>> {
     let stat = load_pickle(path)?;
     let mut lookup = HashMap::new();
     for (key, value) in dict_entries(&stat, "the ClinVar pathogenic AF statistics")? {
@@ -631,6 +633,30 @@ fn gene_af_lookup(path: &str) -> Result<HashMap<String, Mapped>> {
             }
         };
         lookup.insert(gene.to_string(), entry);
+    }
+    Ok(lookup)
+}
+
+/// Keeps the original all-gene read/validation order and numeric scalar kinds.
+/// Python None genes do not enter the lookup; a record without `af` means int zero.
+fn gene_af_lookup(path: &str) -> Result<HashMap<String, Mapped>> {
+    let stat = ClinvarGeneAfCache::open(path)?;
+    let mut lookup = HashMap::new();
+    for gene in stat.keys() {
+        let gene = gene.as_str();
+        let Some(record) = stat.get(gene).unwrap() else {
+            continue;
+        };
+        let af = record.iter().find(|field| field.key.as_str() == "af");
+        let entry = match af.map(|field| &field.value) {
+            None => Mapped::Int(0),
+            Some(ArchivedGeneAfValue::Int(number)) => Mapped::Int(number.to_native()),
+            Some(ArchivedGeneAfValue::Float(number)) => Mapped::Float(number.to_native()),
+            Some(ArchivedGeneAfValue::Text(_)) => {
+                return Err(refused(format!("the af of gene {gene} is a str")));
+            }
+        };
+        lookup.insert(gene.to_owned(), entry);
     }
     Ok(lookup)
 }
@@ -1197,6 +1223,99 @@ pub(crate) fn run_harness(function: &str, call: &HarnessCall) -> Result<Table> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::cache_convert::clinvar_gene_af::{ClinvarGeneAfStat, GeneAfEntry, GeneAfValue};
+
+    fn path(name: &str) -> String {
+        std::env::temp_dir()
+            .join(format!(
+                "priva_frequency_native_{}_{name}",
+                std::process::id()
+            ))
+            .to_str()
+            .unwrap()
+            .to_owned()
+    }
+    fn gene_fixture(name: &str, bad_text: bool) -> String {
+        let names = if bad_text {
+            vec!["BAD".into()]
+        } else {
+            ["EMPTY", "FLOAT", "INT", "NAN", "NONE"]
+                .map(str::to_owned)
+                .to_vec()
+        };
+        let af = |value| {
+            Some(vec![GeneAfEntry {
+                key: "af".into(),
+                value,
+            }])
+        };
+        let entries = if bad_text {
+            vec![af(GeneAfValue::Text("x".into()))]
+        } else {
+            vec![
+                Some(vec![]),
+                af(GeneAfValue::Float(-0.0)),
+                af(GeneAfValue::Int(2)),
+                af(GeneAfValue::Float(f64::from_bits(0x7ff8_0000_0000_0042))),
+                None,
+            ]
+        };
+        let value = ClinvarGeneAfStat {
+            provenance: vec![],
+            genes: names,
+            entries,
+        };
+        let path = path(name);
+        crate::rust_cache::write_cache(
+            Path::new(&path),
+            crate::cache_convert::clinvar_gene_af::SCHEMA,
+            &rkyv::to_bytes::<rkyv::rancor::Error>(&value).unwrap(),
+        )
+        .unwrap();
+        path
+    }
+
+    #[test]
+    fn native_gene_af_preserves_numeric_kinds_none_and_missing_defaults() {
+        let path = gene_fixture("gene.rkyv", false);
+        let lookup = gene_af_lookup(&path).unwrap();
+        assert_eq!(lookup.len(), 4);
+        assert!(matches!(lookup["INT"], Mapped::Int(2)));
+        assert!(matches!(lookup["EMPTY"], Mapped::Int(0)));
+        assert!(!lookup.contains_key("NONE"));
+        assert!(!lookup.contains_key("MISSING"));
+        match lookup["FLOAT"] {
+            Mapped::Float(f) => assert_eq!(f.to_bits(), (-0.0f64).to_bits()),
+            _ => panic!("float coerced"),
+        };
+        match lookup["NAN"] {
+            Mapped::Float(f) => assert_eq!(f.to_bits(), 0x7ff8_0000_0000_0042),
+            _ => panic!("NaN coerced"),
+        };
+        assert_eq!(
+            mapped_column(vec![Mapped::Int(2), Mapped::Int(0)]),
+            Column::Int(vec![2, 0])
+        );
+        let float = mapped_column(vec![Mapped::Int(2), Mapped::Float(-0.0)]);
+        let Column::Float(values) = float else {
+            panic!("numeric dtype changed")
+        };
+        assert_eq!(values[1].to_bits(), (-0.0f64).to_bits());
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn native_gene_af_refuses_pickle_and_retains_text_af_failure() {
+        let pickle = path("gene.pkl");
+        std::fs::write(&pickle, b"\x80\x04}.").unwrap();
+        let error = gene_af_lookup(&pickle).err().unwrap();
+        assert!(error.to_string().contains("cache-convert"));
+        let path = gene_fixture("gene_bad.rkyv", true);
+        let error = gene_af_lookup(&path).err().unwrap();
+        assert!(error.to_string().contains("af of gene BAD is a str"));
+        std::fs::remove_file(path).unwrap();
+        std::fs::remove_file(pickle).unwrap();
+    }
 
     fn frame(columns: Vec<(&str, Column)>) -> Table {
         let rows = columns.first().map_or(0, |(_, column)| column.len());

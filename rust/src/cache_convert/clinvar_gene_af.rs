@@ -147,6 +147,9 @@ impl ClinvarGeneAfCache {
     pub(crate) fn len(&self) -> usize {
         self.mapped.root().genes.len()
     }
+    pub(crate) fn keys(&self) -> &[rkyv::string::ArchivedString] {
+        &self.mapped.root().genes
+    }
     pub(crate) fn get(
         &self,
         gene: &str,

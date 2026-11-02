@@ -45,6 +45,7 @@ pub mod protein_domain_mapping;
 mod python_args;
 mod python_io;
 mod python_lines;
+mod python_path;
 mod python_set_order;
 mod python_text;
 mod rust_cache;

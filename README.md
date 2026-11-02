@@ -242,6 +242,26 @@ then removes the staging name. A failed unlink leaves both names intact.
 These checks establish resource identity and integrity, not scientific
 qualification. The installer and LoFtee callers retain the Python helper.
 
+The optional resource inventory reads an explicitly selected registry:
+
+```bash
+PYTHONHASHSEED=42 "$PRIVA_BINARY" cache-resources validate \
+  --registry cache_resources.json --check-routes
+PYTHONHASHSEED=42 "$PRIVA_BINARY" cache-resources refresh-plan \
+  --registry cache_resources.json --resource alphamissense_prescores
+```
+
+`list`, `list --refreshable` and `show --resource NAME` use the same registry
+option. A route check reads `scripts/install_utils.sh` beside the resolved
+registry. These commands never execute a refresh or read cache payloads.
+An explicit `PYTHONHASHSEED` retains CPython 3.12 string-set iteration order;
+use the same seed when comparing the Python helper. The native interface
+requires the registry path independently of its binary installation directory.
+Mixed-type route sets, JSON integers outside 128 bits, lone surrogate strings,
+deep nesting, interpreter recursion limits and first-error selection in
+multiply malformed JSON remain outside this optional interface's compatibility
+scope. Existing callers continue to use `scripts/cache_resources.py`.
+
 The opt-in domain procedures read an already annotated AlphaMissense VCF:
 
 ```bash

@@ -72,6 +72,62 @@ impl<R: Read> Lines<R> {
         }
     }
 
+    /// TextIOWrapper.readline(size), retaining the translated newline and
+    /// counting Unicode characters rather than UTF-8 bytes. Existing unbounded
+    /// and CSV consumers keep their original code and decoding boundaries.
+    pub(crate) fn readline(&mut self, limit: usize) -> Result<String> {
+        let mut line = String::new();
+        let mut count = 0;
+        while count < limit {
+            if self.at == self.text.len() {
+                let filled = self.fill_for_readline()?;
+                if !filled {
+                    break;
+                }
+            }
+            if self.at == self.text.len() {
+                continue;
+            }
+            let c = self.text[self.at..].chars().next().unwrap();
+            self.at += c.len_utf8();
+            if self.skip_lf {
+                self.skip_lf = false;
+                if c == '\n' {
+                    continue;
+                }
+            }
+            if matches!(c, '\r' | '\n') {
+                // IncrementalNewlineDecoder retains a trailing CR until the
+                // next decoded block or EOF. Its next-block decoding failure
+                // therefore precedes publication of this bounded line.
+                if c == '\r' {
+                    while self.at == self.text.len() && !self.eof {
+                        self.fill_for_readline()?;
+                    }
+                }
+                self.skip_lf = c == '\r';
+                line.push('\n');
+                break;
+            }
+            line.push(c);
+            count += 1;
+        }
+        Ok(line)
+    }
+
+    fn fill_for_readline(&mut self) -> Result<bool> {
+        self.fill().map_err(|cause| {
+            if cause.to_string() == "UnicodeDecodeError: input is not UTF-8" {
+                crate::builder_error::category(
+                    "UnicodeDecodeError",
+                    invalid(crate::python_io::decode_utf8(&self.pending).unwrap_err()),
+                )
+            } else {
+                cause
+            }
+        })
+    }
+
     /// The `newline="", encoding="utf-8-sig"` form used by csv.reader.
     /// Keep the established universal-newline `next` body unchanged. This
     /// additional consumer reuses its block decoder but retains actual CR/LF
@@ -137,6 +193,40 @@ impl<R: Read> Lines<R> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn bounded_cr_waits_for_the_following_decode() {
+        let mut bytes = vec![b'a'; 8191];
+        bytes.extend_from_slice(b"\r\xff");
+        let mut lines = Lines::new(bytes.as_slice());
+        assert_eq!(
+            lines.readline(1024 * 1024).unwrap_err().to_string(),
+            "UnicodeDecodeError: 'utf-8' codec can't decode byte 0xff in position 0: invalid start byte"
+        );
+        let mut bytes = vec![b'a'; 8191];
+        bytes.push(b'\r');
+        let mut lines = Lines::new(bytes.as_slice());
+        assert_eq!(
+            lines.readline(8192).unwrap(),
+            format!("{}\n", "a".repeat(8191))
+        );
+        assert_eq!(lines.readline(8192).unwrap(), "");
+    }
+    #[test]
+    fn bounded_text_readline_preserves_newline_and_unicode_character_limit() {
+        let mut lines = Lines::new("éé\r\nx\r\ny".as_bytes());
+        assert_eq!(lines.readline(2).unwrap(), "éé");
+        assert_eq!(lines.readline(2).unwrap(), "\n");
+        assert_eq!(lines.readline(2).unwrap(), "x\n");
+        assert_eq!(lines.readline(2).unwrap(), "y");
+        assert_eq!(lines.readline(2).unwrap(), "");
+        let text = format!("{}\r\nend", "a".repeat(8191));
+        let mut lines = Lines::new(text.as_bytes());
+        assert_eq!(
+            lines.readline(8192).unwrap(),
+            format!("{}\n", "a".repeat(8191))
+        );
+        assert_eq!(lines.readline(8192).unwrap(), "end");
+    }
     fn collect(bytes: &[u8]) -> Result<Vec<String>> {
         let mut lines = Lines::new(bytes);
         let mut result = Vec::new();

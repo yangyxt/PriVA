@@ -40,6 +40,7 @@ mod file_lock;
 mod gzip_writer;
 mod hpo_assertions;
 pub mod hpo_penetrance;
+mod indexed_plugin_cache;
 mod interpro_mapping_builder;
 pub mod interpro_mapping_io;
 mod json_text;

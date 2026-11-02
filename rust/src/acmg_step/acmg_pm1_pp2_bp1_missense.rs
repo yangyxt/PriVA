@@ -16,6 +16,7 @@ use super::acmg_pp3_bp4_bp7_insilico::pandas_masks::{
 };
 use super::stats;
 use super::types::{AcmgError, HarnessCall, StepOutput, not_converted};
+use crate::cache_convert::pm1_regions::Pm1RegionCache;
 use crate::cli::{Result, invalid};
 use crate::pandas_table::{Cell, Column, Table, read_table};
 use crate::pickle_reader::{self, Set, Value};
@@ -47,47 +48,6 @@ fn dict_get(value: &Value, key: &str) -> Result<Option<Value>> {
             "expected a pickled dict, found {}",
             other.type_name()
         ))),
-    }
-}
-
-/// `item in container` for a pickled set, frozenset, list, tuple or dict.
-fn python_contains(container: &Value, item: &Value) -> Result<bool> {
-    match container {
-        Value::Set(set) => set.borrow().contains(item),
-        Value::FrozenSet(set) => set.contains(item),
-        Value::Dict(dict) => Ok(dict.borrow().get(item)?.is_some()),
-        Value::List(items) => {
-            for candidate in items.borrow().iter() {
-                if candidate.python_equals(item)? {
-                    return Ok(true);
-                }
-            }
-            Ok(false)
-        }
-        Value::Tuple(items) => {
-            for candidate in items.iter() {
-                if candidate.python_equals(item)? {
-                    return Ok(true);
-                }
-            }
-            Ok(false)
-        }
-        other => Err(invalid(format!(
-            "`in` on a pickled {} is not reproduced",
-            other.type_name()
-        ))),
-    }
-}
-
-/// A table value as the dict key Python looks up (`None` for a missing value, which as a
-/// fresh NaN never finds a key).
-fn key_of(cell: Cell<'_>) -> Option<Value> {
-    match cell {
-        Cell::Missing => None,
-        Cell::Text(text) => Some(Value::Str(text.into())),
-        Cell::Int(number) => Some(Value::Int(number)),
-        Cell::Float(number) => Some(Value::Float(number)),
-        Cell::Bool(flag) => Some(Value::Bool(flag)),
     }
 }
 
@@ -124,34 +84,21 @@ fn protein_position(cell: Option<Cell<'_>>) -> Result<Option<i64>> {
 fn locate_pm1_region(
     feature: Option<Cell<'_>>,
     protein: Option<Cell<'_>>,
-    hcseeker_hotspots: &Value,
-    rmc_constrained: &Value,
+    regions: &Pm1RegionCache,
 ) -> Result<(bool, bool)> {
     let Some(position) = protein_position(protein)? else {
         return Ok((false, false));
     };
-    // `row.get('Feature', '')`.
-    let enst = match feature {
-        None => Some(Value::Str("".into())),
-        Some(cell) => key_of(cell),
+    // `row.get('Feature', '')`; no non-text value can match the archive's text keys.
+    let transcript = match feature {
+        None => "",
+        Some(Cell::Text(text)) => text,
+        _ => return Ok((false, false)),
     };
-    let position = Value::Int(position);
-    let hit = |regions: &Value| -> Result<bool> {
-        let Value::Dict(dict) = regions else {
-            return Err(type_error(format!(
-                "PM1 regions: a {} where a dict of transcripts is expected",
-                regions.type_name()
-            )));
-        };
-        let Some(enst) = &enst else {
-            return Ok(false);
-        };
-        match dict.borrow().get(enst)? {
-            Some(residues) => python_contains(residues, &position),
-            None => Ok(false),
-        }
-    };
-    Ok((hit(hcseeker_hotspots)?, hit(rmc_constrained)?))
+    Ok((
+        regions.contains_hcseeker(transcript, position),
+        regions.contains_rmc(transcript, position),
+    ))
 }
 
 /// `PM1_criteria(df, pvs1_criteria, loc_intol_domain, clinvar_patho, pm1_regions_pkl)`: PM1
@@ -186,13 +133,7 @@ pub(crate) fn pm1_criteria(
         Mask::Plain(primateai.iter().map(|value| !(*value >= 0.8)).collect());
     let missense_benign = am_says_benign.and(&primateai_not_damaging);
 
-    let regions = load_pickle(pm1_regions_pkl)?;
-    if !matches!(regions, Value::Dict(_)) {
-        return Err(invalid("the PM1 regions pickle is not a dict"));
-    }
-    let empty = || Value::Dict(Default::default());
-    let hcseeker_hotspots = dict_get(&regions, "hcseeker_hotspots")?.unwrap_or_else(empty);
-    let rmc_constrained = dict_get(&regions, "rmc_constrained")?.unwrap_or_else(empty);
+    let regions = Pm1RegionCache::open(pm1_regions_pkl)?;
     let feature = table.column_index("Feature");
     let protein = table.column_index("Protein_position");
     let mut hcseeker_hit = Vec::with_capacity(rows);
@@ -201,8 +142,7 @@ pub(crate) fn pm1_criteria(
         let (in_hcseeker, in_rmc) = locate_pm1_region(
             feature.map(|index| table.columns[index].cell(row)),
             protein.map(|index| table.columns[index].cell(row)),
-            &hcseeker_hotspots,
-            &rmc_constrained,
+            &regions,
         )?;
         hcseeker_hit.push(in_hcseeker);
         rmc_hit.push(in_rmc);
@@ -666,5 +606,53 @@ mod tests {
         // 2 pathogenic: 1 small, 1 large; under five counted, so the fraction decides PP2.
         let result = analyze_bp1_pp2(&stat, &PValues::Supplied(HashMap::new())).unwrap();
         assert_eq!(result, (Some("G".to_owned()), (true, false)));
+    }
+
+    #[test]
+    fn pm1_mmap_lookup_keeps_position_parsing_and_nontext_missingness() {
+        use crate::cache_convert::pm1_regions::{PM1_REGIONS_PKL, Pm1Regions, TranscriptResidues};
+        let root = Pm1Regions {
+            provenance: vec![],
+            das_intolerant_domains: vec![],
+            metadata: vec![],
+            hcseeker_hotspots: vec![TranscriptResidues {
+                transcript: "ENST1".into(),
+                residues: vec![7],
+            }],
+            rmc_constrained: vec![TranscriptResidues {
+                transcript: "ENST2".into(),
+                residues: vec![9],
+            }],
+        };
+        let path =
+            std::env::temp_dir().join(format!("priva_pm1_native_{}.rkyv", std::process::id()));
+        crate::rust_cache::write_cache(
+            &path,
+            PM1_REGIONS_PKL,
+            &rkyv::to_bytes::<rkyv::rancor::Error>(&root).unwrap(),
+        )
+        .unwrap();
+        let cache = Pm1RegionCache::open(path.to_str().unwrap()).unwrap();
+        assert_eq!(
+            locate_pm1_region(Some(Cell::Text("ENST1")), Some(Cell::Text("7/100")), &cache)
+                .unwrap(),
+            (true, false)
+        );
+        assert_eq!(
+            locate_pm1_region(Some(Cell::Text("ENST2")), Some(Cell::Int(9)), &cache).unwrap(),
+            (false, true)
+        );
+        assert_eq!(
+            locate_pm1_region(Some(Cell::Text("ENST1")), Some(Cell::Float(7.0)), &cache).unwrap(),
+            (false, false)
+        );
+        assert_eq!(
+            locate_pm1_region(Some(Cell::Missing), Some(Cell::Int(7)), &cache).unwrap(),
+            (false, false)
+        );
+        assert_eq!(
+            locate_pm1_region(Some(Cell::Int(1)), Some(Cell::Int(7)), &cache).unwrap(),
+            (false, false)
+        );
     }
 }

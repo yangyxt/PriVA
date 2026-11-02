@@ -7,6 +7,7 @@ mod cache_convert;
 mod cache_install;
 pub mod cadd_hub;
 mod cli;
+mod clingen_map_builder;
 pub mod combine_annotations;
 pub mod hpo_penetrance;
 pub mod interpro_mapping_io;

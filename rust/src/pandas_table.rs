@@ -281,7 +281,7 @@ fn python_text_repr(text: &str) -> String {
     out
 }
 
-fn is_na(token: &str) -> bool {
+pub(crate) fn is_na(token: &str) -> bool {
     NA_VALUES.contains(&token)
 }
 
@@ -361,7 +361,7 @@ fn end_record(
 /// hands each record to `emit`. With a `comment` byte, an unquoted comment byte
 /// ends the record (a record that has not started is skipped) and the rest of
 /// its line is dropped.
-fn tokenize(
+pub(crate) fn tokenize(
     text: &str,
     comment: Option<u8>,
     mut emit: impl FnMut(Vec<String>) -> Result<()>,
@@ -469,7 +469,7 @@ fn tokenize(
 }
 
 /// The column names pandas gives a header line.
-fn column_names(raw: Vec<String>) -> Vec<String> {
+pub(crate) fn column_names(raw: Vec<String>) -> Vec<String> {
     let mut header: Vec<String> = Vec::with_capacity(raw.len());
     let mut unnamed: Vec<usize> = Vec::new();
     for (index, name) in raw.into_iter().enumerate() {
@@ -779,7 +779,7 @@ pub(crate) fn float_token(token: &str) -> Option<f64> {
 
 /// The column type pandas infers for these tokens; `missing_spellings` says
 /// whether pandas' missing-value spellings count as missing (`keep_default_na`).
-fn infer_column(tokens: Vec<String>, missing_spellings: bool) -> Result<Column> {
+pub(crate) fn infer_column(tokens: Vec<String>, missing_spellings: bool) -> Result<Column> {
     if tokens.is_empty() {
         return Ok(Column::Text(Vec::new()));
     }
@@ -1044,6 +1044,12 @@ pub(crate) fn read_table(path: &Path) -> Result<Table> {
 
 /// `pd.read_table(path, low_memory=False, ...)` with the options given.
 pub(crate) fn read_table_with(path: &Path, options: &ReadOptions) -> Result<Table> {
+    parse_table_with(&read_table_text(path)?, options)
+}
+
+/// Decode the same filename-selected compression and UTF-8 as `read_table`.
+/// Producers with additional pandas index/dtype rules can reuse its tokenizer.
+pub(crate) fn read_table_text(path: &Path) -> Result<String> {
     let name = path.to_string_lossy().to_lowercase();
     let mut bytes = Vec::new();
     let mut file = File::open(path)?;
@@ -1060,9 +1066,7 @@ pub(crate) fn read_table_with(path: &Path, options: &ReadOptions) -> Result<Tabl
     } else {
         file.read_to_end(&mut bytes)?;
     }
-    let text = String::from_utf8(bytes)
-        .map_err(|_| invalid(format!("{}: not UTF-8 text", path.display())))?;
-    parse_table_with(&text, options)
+    String::from_utf8(bytes).map_err(|_| invalid(format!("{}: not UTF-8 text", path.display())))
 }
 
 fn write_field(out: &mut impl Write, text: &str, only_column: bool) -> std::io::Result<()> {

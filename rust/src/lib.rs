@@ -25,6 +25,7 @@ mod exon_af_stats;
 mod fdr;
 #[allow(dead_code)] // Shared installer primitive; callers switch after their own parity tests.
 mod file_lock;
+mod gene_mechanism_builder;
 mod gzip_writer;
 mod hpo_assertions;
 pub mod hpo_penetrance;

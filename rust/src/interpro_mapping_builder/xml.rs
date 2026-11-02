@@ -89,6 +89,12 @@ struct State {
     result: Mapping,
     failure: Option<Box<dyn std::error::Error>>,
     product6: Option<Product6>,
+    selected: Option<Selected>,
+}
+
+struct Selected {
+    name: &'static str,
+    visit: Box<dyn FnMut(&Element)>,
 }
 
 #[derive(Default)]
@@ -100,6 +106,15 @@ struct Product6 {
 impl State {
     fn drain(&mut self) {
         for node in std::mem::take(&mut self.ends) {
+            if let Some(selected) = &mut self.selected {
+                if let Some(element) = node {
+                    if element.borrow().name == selected.name {
+                        (selected.visit)(&element.borrow());
+                        element.borrow_mut().clear();
+                    }
+                }
+                continue;
+            }
             if self.first_end {
                 if let Some(element) = node {
                     if element.borrow().name == "interpro" {
@@ -170,7 +185,8 @@ unsafe extern "C" fn start(
                 product.has_disorders |= name == "DisorderList";
                 return Ok(());
             }
-            let capture = name == "interpro" || state.stack.last().is_some_and(Option::is_some);
+            let capture = name == state.selected.as_ref().map_or("interpro", |s| s.name)
+                || state.stack.last().is_some_and(Option::is_some);
             let node = if capture {
                 let mut element = Element {
                     name,
@@ -324,14 +340,26 @@ pub(super) fn version() -> String {
 }
 
 pub(super) fn parse(source: impl Read) -> Result<Mapping> {
-    parse_with(source, false)
+    parse_with(source, false, None)
 }
 
 pub(super) fn validate_product6(source: impl Read) -> Result<()> {
-    parse_with(source, true).map(|_| ())
+    parse_with(source, true, None).map(|_| ())
 }
 
-fn parse_with(mut source: impl Read, product6: bool) -> Result<Mapping> {
+pub(super) fn visit_selected(
+    source: impl Read,
+    name: &'static str,
+    visit: Box<dyn FnMut(&Element)>,
+) -> Result<()> {
+    parse_with(source, false, Some(Selected { name, visit })).map(|_| ())
+}
+
+fn parse_with(
+    mut source: impl Read,
+    product6: bool,
+    selected: Option<Selected>,
+) -> Result<Mapping> {
     // Declare state first so every early return drops the parser before its
     // callback state. The box keeps its address stable while parsing.
     let mut state = Box::new(State {
@@ -342,6 +370,7 @@ fn parse_with(mut source: impl Read, product6: bool) -> Result<Mapping> {
         result: Mapping::new(),
         failure: None,
         product6: product6.then(Product6::default),
+        selected,
     });
     // SAFETY: null selects XML-declared/default encoding; namespace separator
     // is ElementTree's ASCII '}'. Null is checked before all other API calls.
@@ -361,7 +390,7 @@ fn parse_with(mut source: impl Read, product6: bool) -> Result<Mapping> {
         XML_SetUserData(parser.0, data);
         XML_SetElementHandler(parser.0, Some(start), Some(end));
         XML_SetCharacterDataHandler(parser.0, Some(characters));
-        if product6 {
+        if product6 || state.selected.is_some() {
             XML_SetDefaultHandlerExpand(parser.0, Some(product6_default));
         } else {
             XML_SetExternalEntityRefHandler(parser.0, Some(external_entity));
@@ -403,7 +432,7 @@ fn parse_with(mut source: impl Read, product6: bool) -> Result<Mapping> {
         }
         if status != 1 {
             let reason = unsafe { text(XML_ErrorString(XML_GetErrorCode(parser.0))) }?;
-            if product6 {
+            if product6 || state.selected.is_some() {
                 // ElementTree includes Expat's original line/column for this
                 // validator; retain the InterPro builder's existing diagnostic.
                 let (line, column) = unsafe {

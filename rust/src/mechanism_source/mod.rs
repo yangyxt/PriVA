@@ -13,6 +13,7 @@ use std::io::{Read, Write};
 use std::os::fd::FromRawFd;
 use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
+pub(crate) use url::check as check_source_url;
 const HELP: &str = "usage: priva mechanism-source validate --input FILE --kind {clingen_erepo,clingen_dosage,clingen_dosage_runtime,g2p_ddg2p,orphadata}\n\
        priva mechanism-source {record-source|check-source} --input FILE --url URL\n\
 check-source accepts --receipt JSON and --metadata-only. No downloads or caller activation.";

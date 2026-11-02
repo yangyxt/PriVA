@@ -22,6 +22,7 @@ use super::acmg_pp3_bp4_bp7_insilico::pandas_masks::{high_confidence_review, pyt
 use super::gene_mechanism_resources::harness_resolver;
 use super::pickle_dict_stream::{Item, TextDict, visit_top_level_dict};
 use super::types::{AcmgError, HarnessCall, StepOutput, not_converted};
+use crate::cache_convert::{ArchivedAaTranscript, ClinvarAaCache};
 use crate::cli::{Result, invalid};
 use crate::pandas_table::{Cell, Column, ObjectValue, Table};
 use crate::python_text::{parse_float, python_strip};
@@ -109,6 +110,7 @@ fn odd_shape(file: &str, transcript: &str, what: &str) -> Box<dyn std::error::Er
     ))
 }
 
+#[cfg(test)]
 fn text_list(item: Option<&Item>) -> Option<Vec<Rc<str>>> {
     match item? {
         Item::List(items) => items
@@ -139,19 +141,22 @@ impl ClinvarKnownVariants {
         let wanted = |transcript: &str| transcripts.is_none_or(|kept| kept.contains(transcript));
         let mut known = ClinvarKnownVariants::default();
         // Every amino-acid entry is decoded: PS1_PM5_criteria reads them all.
-        known.amino_acid_transcripts = visit_top_level_dict(
-            clinvar_aa_dict_pkl,
-            |_| true,
-            |transcript, value| {
-                let keep = wanted(&transcript);
-                let decoded =
-                    decode_amino_acid_transcript(clinvar_aa_dict_pkl, &transcript, &value, keep)?;
-                if keep {
-                    known.amino_acid.insert(transcript.to_string(), decoded);
-                }
-                Ok(())
-            },
-        )?;
+        let amino_acid = ClinvarAaCache::open(clinvar_aa_dict_pkl)?;
+        known.amino_acid_transcripts = amino_acid.len();
+        for transcript in amino_acid.keys() {
+            let transcript = transcript.as_str();
+            let keep = wanted(transcript);
+            let decoded = decode_archived_amino_acid_transcript(
+                clinvar_aa_dict_pkl,
+                transcript,
+                &amino_acid,
+                amino_acid.get(transcript).unwrap(),
+                keep,
+            )?;
+            if keep {
+                known.amino_acid.insert(transcript.to_owned(), decoded);
+            }
+        }
         known.splice_transcripts =
             visit_top_level_dict(clinvar_splice_dict_pkl, wanted, |transcript, value| {
                 let decoded =
@@ -179,6 +184,7 @@ impl ClinvarKnownVariants {
 /// One transcript of the amino-acid dict:
 /// `{protein_pos: {hgvsp: {"CLNSIG": [str], "CLNREVSTAT": [str]}}}`. Every transcript is
 /// checked (PS1_PM5_criteria reads them all); the facts are gathered only when `keep` is set.
+#[cfg(test)]
 fn decode_amino_acid_transcript(
     file: &str,
     transcript: &str,
@@ -224,6 +230,61 @@ fn decode_amino_acid_transcript(
                 decoded
                     .same_change
                     .insert((position.clone(), hgvsp.clone()));
+            }
+        }
+    }
+    Ok(decoded)
+}
+
+/// The same PS1 and gene-summary facts, read directly from the checked typed archive.
+/// The original all-transcript ASCII check remains; only requested facts are copied out.
+fn decode_archived_amino_acid_transcript(
+    file: &str,
+    transcript: &str,
+    cache: &ClinvarAaCache,
+    positions: &ArchivedAaTranscript,
+    keep: bool,
+) -> Result<AminoAcidTranscript> {
+    let mut decoded = AminoAcidTranscript::default();
+    for position in positions.positions.iter() {
+        let protein_pos: Rc<str> = Rc::from(position.protein_pos.as_str());
+        if keep {
+            decoded.positions.insert(protein_pos.clone());
+        }
+        for change in position.changes.iter() {
+            if !change
+                .clnsig
+                .iter()
+                .chain(change.clnrevstat.iter())
+                .all(|id| cache.text(id).is_ascii())
+            {
+                return Err(odd_shape(
+                    file,
+                    transcript,
+                    "an entry holds non-ASCII CLNSIG or CLNREVSTAT text",
+                ));
+            }
+            if !keep {
+                continue;
+            }
+            let pairs = || {
+                change
+                    .clnsig
+                    .iter()
+                    .zip(change.clnrevstat.iter())
+                    .map(|(sig, review)| (cache.text(sig), cache.text(review)))
+            };
+            if pairs().any(|(sig, review)| gene_level_pathogenic(sig, review)) {
+                decoded.gene_level_pathogenic = true;
+            }
+            if pairs().any(|(sig, review)| {
+                let stars = review_stars(review);
+                (sig.contains("Pathogenic") && stars >= 2)
+                    || (sig == "Likely_pathogenic" && stars >= 3)
+            }) {
+                decoded
+                    .same_change
+                    .insert((protein_pos.clone(), Rc::from(change.hgvsp.as_str())));
             }
         }
     }
@@ -903,6 +964,217 @@ pub(crate) fn run_harness(function: &str, call: &HarnessCall) -> Result<Table> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::cache_convert::{
+        AaChange, AaPosition, AaTranscript, CLINVAR_AA_STAT, ClinvarAaStat,
+    };
+    use std::{cell::RefCell, path::Path};
+
+    fn path(name: &str) -> String {
+        std::env::temp_dir()
+            .join(format!("priva_known_native_{}_{name}", std::process::id()))
+            .to_str()
+            .unwrap()
+            .to_owned()
+    }
+    fn aa_value(non_ascii: bool) -> ClinvarAaStat {
+        ClinvarAaStat {
+            provenance: vec![],
+            texts: vec![
+                "Pathogenic".into(),
+                "criteria_provided,_multiple_submitters,_no_conflicts".into(),
+                "Likely_pathogenic".into(),
+                "reviewed_by_expert_panel".into(),
+                "Benign".into(),
+                "x".into(),
+                if non_ascii {
+                    "Páthogenic".into()
+                } else {
+                    "Benign".into()
+                },
+            ],
+            transcripts: vec!["ENST1".into(), "ENST_UNUSED".into()],
+            entries: vec![
+                AaTranscript {
+                    positions: vec![
+                        AaPosition {
+                            protein_pos: "10".into(),
+                            changes: vec![
+                                AaChange {
+                                    hgvsp: "p.A10V".into(),
+                                    clnsig: vec![0],
+                                    clnrevstat: vec![1],
+                                },
+                                AaChange {
+                                    hgvsp: "p.A10T".into(),
+                                    clnsig: vec![2],
+                                    clnrevstat: vec![1],
+                                },
+                            ],
+                        },
+                        AaPosition {
+                            protein_pos: "11".into(),
+                            changes: vec![AaChange {
+                                hgvsp: "p.A11V".into(),
+                                clnsig: vec![0, 4],
+                                clnrevstat: vec![5],
+                            }],
+                        },
+                    ],
+                },
+                AaTranscript {
+                    positions: vec![AaPosition {
+                        protein_pos: "12".into(),
+                        changes: vec![AaChange {
+                            hgvsp: "p.A12V".into(),
+                            clnsig: vec![6],
+                            clnrevstat: vec![1],
+                        }],
+                    }],
+                },
+            ],
+        }
+    }
+    fn aa_fixture(name: &str, non_ascii: bool) -> String {
+        let path = path(name);
+        crate::rust_cache::write_cache(
+            Path::new(&path),
+            CLINVAR_AA_STAT,
+            &rkyv::to_bytes::<rkyv::rancor::Error>(&aa_value(non_ascii)).unwrap(),
+        )
+        .unwrap();
+        path
+    }
+    fn splice_fixture(name: &str) -> String {
+        let path = path(name);
+        std::fs::write(&path, b"\x80\x04}.").unwrap();
+        path
+    }
+    fn dict(entries: Vec<(String, Item)>) -> Item {
+        let mut dict = TextDict::default();
+        dict.entries = entries
+            .into_iter()
+            .map(|(key, value)| (Rc::from(key), value))
+            .collect();
+        Item::Dict(Rc::new(RefCell::new(dict)))
+    }
+    /// A test-only reference shape for the preceding pickle decoder.
+    fn aa_reference(value: &ClinvarAaStat) -> Item {
+        dict(
+            value.entries[0]
+                .positions
+                .iter()
+                .map(|p| {
+                    (
+                        p.protein_pos.clone(),
+                        dict(
+                            p.changes
+                                .iter()
+                                .map(|c| {
+                                    let list = |ids: &[u32]| {
+                                        Item::List(Rc::new(RefCell::new(
+                                            ids.iter()
+                                                .map(|id| {
+                                                    Item::Str(Rc::from(
+                                                        value.texts[*id as usize].as_str(),
+                                                    ))
+                                                })
+                                                .collect(),
+                                        )))
+                                    };
+                                    (
+                                        c.hgvsp.clone(),
+                                        dict(vec![
+                                            ("CLNSIG".into(), list(&c.clnsig)),
+                                            ("CLNREVSTAT".into(), list(&c.clnrevstat)),
+                                        ]),
+                                    )
+                                })
+                                .collect(),
+                        ),
+                    )
+                })
+                .collect(),
+        )
+    }
+
+    #[test]
+    fn native_amino_acid_lookup_keeps_ps1_pairing_counts_and_pm5_precedence() {
+        let aa = aa_fixture("aa.rkyv", false);
+        let splice = splice_fixture("empty_splice.pkl");
+        let wanted = HashSet::from(["ENST1".to_owned()]);
+        let known = ClinvarKnownVariants::load(&aa, &splice, Some(&wanted)).unwrap();
+        assert_eq!(known.amino_acid_transcripts, 2);
+        assert_eq!(known.splice_transcripts, 0);
+        assert!(!known.amino_acid.contains_key("ENST_UNUSED"));
+        let reference =
+            decode_amino_acid_transcript("fixture", "ENST1", &aa_reference(&aa_value(false)), true)
+                .unwrap();
+        let actual = known.amino_acid.get("ENST1").unwrap();
+        assert_eq!(actual.positions, reference.positions);
+        assert_eq!(actual.same_change, reference.same_change);
+        assert_eq!(
+            actual.gene_level_pathogenic,
+            reference.gene_level_pathogenic
+        );
+        assert_eq!(known.gene_level_pathogenic("ENST1"), (Some(true), None));
+        let text =
+            |items: &[&str]| Column::Text(items.iter().map(|s| Some((*s).to_owned())).collect());
+        let table = Table {
+            names: [
+                "Feature",
+                "Protein_position",
+                "HGVSp",
+                "Consequence",
+                "CLNSIG",
+                "CLNREVSTAT",
+            ]
+            .map(str::to_owned)
+            .to_vec(),
+            columns: vec![
+                text(&["ENST1", "ENST1", "ENST1"]),
+                text(&["10", "10", "11"]),
+                text(&["p.A10V", "p.A10T", "p.A11V"]),
+                text(&["missense_variant"; 3]),
+                text(&[""; 3]),
+                text(&["x"; 3]),
+            ],
+            rows: 3,
+        };
+        let index = Pm5Index::from_entries(vec![(
+            "ENST1",
+            Pm5Entry {
+                change: ProteinChange {
+                    kind: ChangeKind::Missense,
+                    first: 10,
+                    last: 10,
+                },
+                hgvsp: "p.A10V".into(),
+                escapes_nmd: false,
+                symbol: "GENE".into(),
+                hgvsc: "c.1A>T".into(),
+                genomic: ["1".into(), "1".into(), "A".into(), "T".into()],
+            },
+        )]);
+        let mut gain = ListedGainOfFunction(HashSet::new());
+        let output = ps1_pm5_criteria(&table, &known, &index, &mut gain, &[0; 3], 1, 0.2).unwrap();
+        assert_eq!(output.criteria[0].1, Column::Int(vec![3, 0, 0]));
+        assert_eq!(output.criteria[1].1, Column::Int(vec![0, 2, 0]));
+        std::fs::remove_file(aa).unwrap();
+        std::fs::remove_file(splice).unwrap();
+    }
+
+    #[test]
+    fn native_amino_acid_refuses_pickle_and_checks_unrequested_ascii() {
+        let pickle = splice_fixture("not_aa.pkl");
+        let error = ClinvarKnownVariants::load(&pickle, &pickle, None).unwrap_err();
+        assert!(error.to_string().contains("cache-convert"));
+        let aa = aa_fixture("non_ascii.rkyv", true);
+        let wanted = HashSet::from(["ENST1".to_owned()]);
+        let error = ClinvarKnownVariants::load(&aa, &pickle, Some(&wanted)).unwrap_err();
+        assert!(error.to_string().contains("non-ASCII"));
+        std::fs::remove_file(aa).unwrap();
+        std::fs::remove_file(pickle).unwrap();
+    }
 
     #[test]
     fn gene_level_test_tokenizes_clnsig() {

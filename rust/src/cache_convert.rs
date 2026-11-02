@@ -267,6 +267,11 @@ impl ClinvarAaCache {
         self.mapped.root().transcripts.len()
     }
 
+    /// Borrowed lookup keys in the archive's sorted order.
+    pub(crate) fn keys(&self) -> &[rkyv::string::ArchivedString] {
+        &self.mapped.root().transcripts
+    }
+
     pub(crate) fn get(&self, transcript: &str) -> Option<&ArchivedAaTranscript> {
         let root = self.mapped.root();
         find_sorted(&root.transcripts, transcript).map(|at| &root.entries[at])

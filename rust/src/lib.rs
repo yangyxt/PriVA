@@ -24,6 +24,9 @@ mod das_install_state;
 mod exon_af_stats;
 #[allow(dead_code)] // PM1 producer integration follows exact float64 comparison.
 mod fdr;
+// Qualified before the opt-in DAS procedures consume this exact random stream.
+#[allow(dead_code)]
+mod numpy_rng;
 #[allow(dead_code)] // Shared installer primitive; callers switch after their own parity tests.
 mod file_lock;
 mod gzip_writer;

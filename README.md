@@ -58,6 +58,17 @@ are left unchanged. See [`data/vep`](data/vep/README.md).
 
 CADD scores come from upstream `CADD.sh` (CADD-scripts v1.7.2) with all of CADD's own data. `main_install` installs it the original way, each file downloaded only when missing with its MD5 checked once, then replaces two of its scripts with PriVA's faster copies in [`scripts/cadd_scripts`](scripts/cadd_scripts/README.md): the prescore lookup starts from a position index built once beside each prescored table, and MMSplice reloads a saved exon table. Both write the same output as upstream. `CADD.sh` runs as a child process whose Snakemake builds its own environments under `cadd_base_dir/envs/conda`; its Snakemake needs a `conda` program (24.7.1 or later) on `PATH`. The standalone `cadd.nf` runs the same `CADD.sh` on one VCF and writes the CADD table that `--mode annotated` accepts:
 
+Fresh `priva_acmg` environments include Conda. For existing environments, the
+installer checks `PATH`, `CONDA_EXE`, then `cadd_parent_dir/conda_frontend`.
+If none supplies compatible Conda, it uses the selected Micromamba/Mamba/Conda
+to create that separate tool-only frontend with Conda 24.9.2 from conda-forge.
+Existing scientific environments and their package exports remain unchanged.
+CADD callers discover the same frontend without replacing the active Python.
+With `priva_acmg` active, prepare only this prerequisite with
+`bash scripts/install_utils.sh CADD_conda_install --config /path/to/config.yaml`
+after the configuration's cache paths have been prepared. An incomplete frontend
+is retained and reported; it is never overwritten or mistaken for a ready one.
+
 ```bash
 nextflow run "$PRIVA_ROOT/cadd.nf" -c "$PRIVA_ROOT/conf/cadd.config" \
   --input "$(realpath inputs/cohort.vcf.gz)" --assembly GRCh38 \

@@ -27,7 +27,7 @@ WRAPPED = (
 )
 STAGES = (
     "priva_manual_cache_inputs", "priva_prepare_install_config", "bundled_snapshot_install",
-    "Nextflow_runtime_install", "PriVA_rust_install", "reference_genome_install",
+    "CADD_conda_install", "Nextflow_runtime_install", "PriVA_rust_install", "reference_genome_install",
     "priva_verify_vep_release", "vep_cache_api_install", "VEP_plugins_install", "LoFtee_install",
     "gnomAD_install", "AlphaMissense_anno_gnomAD", "InterPro_parsing", "pext_install",
     "ClinVar_install", "AlphaMissense_stat", "AlphaMissense_pick_intolerant_domains",

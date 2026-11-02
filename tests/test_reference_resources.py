@@ -642,6 +642,7 @@ class ReferenceResources(unittest.TestCase):
             # This fixture exercises reference/cache preflight; unrelated fixed
             # snapshot deployment has its own complete-checkout fixtures.
             bundled_snapshot_install() { :; }
+            CADD_conda_install() { :; }  # Unrelated frontend deployment is covered separately.
             Nextflow_runtime_install() { :; }  # Unrelated driver acquisition is covered separately.
             PriVA_rust_install() { :; }  # No build in a reference preflight fixture.
             priva_configure_cache_paths() { [[ ${2:-} != --check ]] || printf '%s' '{}'; :; }

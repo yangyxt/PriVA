@@ -48,6 +48,7 @@ conda_install_vep() { PRIVA_INSTALL_ENV_NAME=priva_acmg; }
 priva_manual_cache_inputs() { record_call manual "$@"; return "${MANUAL_STATUS:-0}"; }
 priva_prepare_install_config() { record_call config "$@"; return "${CONFIG_STATUS:-0}"; }
 bundled_snapshot_install() { record_call bundles "$@"; return "${BUNDLES_STATUS:-0}"; }
+CADD_conda_install() { :; }  # Frontend deployment has separate fixtures.
 update_or_append_yaml() { record_call save "$@"; }
 # Stop at the next acquisition stage; no VEP/reference/model assets are used.
 reference_genome_install() { record_call reference "$@"; return 73; }

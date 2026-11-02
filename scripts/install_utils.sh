@@ -1225,6 +1225,19 @@ function CADD_prescore_index() {
 }
 
 
+function CADD_conda_install() {
+    [[ $# -eq 2 && ${1:-} == --config && -r ${2:-} ]] || {
+        log "ERROR: Use CADD_conda_install --config CONFIG."
+        return 2
+    }
+    local cadd_parent_dir
+    cadd_parent_dir=$(read_yaml "$2" cadd_parent_dir) || return 1
+    priva_find_env_manager || return 1
+    priva_cadd_conda install --frontend-prefix "$cadd_parent_dir/conda_frontend" \
+        --manager "$PRIVA_ENV_MANAGER"
+}
+
+
 function CADD_upstream_check() {
     # Run upstream CADD.sh once on its bundled test input. This creates its
     # conda rule environments during installation rather than at the first
@@ -1247,8 +1260,7 @@ function CADD_upstream_check() {
         log "Upstream CADD.sh or its bundled test files are missing under ${cadd_base_dir}"
         return 1
     }
-    # Snakemake inside CADD.sh needs a conda executable to deploy them.
-    command -v conda > /dev/null 2>&1 || { log "CADD.sh needs a conda executable on PATH to deploy its environments"; return 1; }
+    priva_cadd_conda check --frontend-prefix "${cadd_base_dir%/*}/conda_frontend" || return 1
     work=$(mktemp -d "${tmp_dir}/cadd_upstream_check.XXXXXX") || return 1
     # PriVA's MMSplice copy saves its exon table here during this first run.
     local exon_tables=${cadd_base_dir}/data/annotations/${genome_tag}_v1.7/mmsplice
@@ -4941,6 +4953,8 @@ function main_install() (
     fi
     priva_prepare_install_config --config "${config_file}" || return 1
     bundled_snapshot_install "${config_file}" || return 1
+    # Resolve CADD's package manager before any costly scientific annotation.
+    CADD_conda_install --config "${config_file}" || return 1
     Nextflow_runtime_install "${config_file}" || \
     { log "Failed to install the pinned Nextflow driver and private JRE"; return 1; }
     PriVA_rust_install --config "${config_file}" || \

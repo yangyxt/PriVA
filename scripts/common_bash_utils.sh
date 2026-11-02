@@ -32,6 +32,18 @@ function read_yaml() {
 }
 
 
+# CADD callers share the same read-only frontend discovery as the installer.
+PRIVA_CADD_CONDA_HELPER="$(dirname "$(realpath "${BASH_SOURCE[0]}")")/cadd_conda.py"
+
+function priva_cadd_conda() {
+    # Forward named check/install options; the helper prints PATH as data only.
+    local selected_path
+    selected_path=$(python "$PRIVA_CADD_CONDA_HELPER" "$@" --print-path) || return 1
+    export PATH="$selected_path"
+    hash -r
+}
+
+
 # Function to update YAML configuration
 function update_yaml() {
     local yaml_file=$1

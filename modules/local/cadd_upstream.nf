@@ -14,6 +14,10 @@ process CADD_UPSTREAM {
     script:
     def base = meta.cadd_base_dir
     """
+    # Reuse main_install's genuine frontend without changing rule environments.
+    cadd_path=\$(python ${quoteCadd(meta.source_root + '/scripts/cadd_conda.py')} check \\
+        --frontend-prefix ${quoteCadd(base + '/../conda_frontend')} --print-path)
+    export PATH="\$cadd_path"
     # CADD expects GRCh contig names; convert UCSC-style names first.
     bcftools annotate --rename-chrs ${quoteCadd(meta.source_root + '/data/liftover/ucsc_to_GRC.contig.map.tsv')} \\
         -Oz -o input.nochr.vcf.gz ${vcf}

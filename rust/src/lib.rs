@@ -37,6 +37,7 @@ mod json_text;
     reason = "Publisher-checksum API awaiting installer-builder callers"
 )]
 mod md5;
+mod mechanism_source;
 mod mondo_scope;
 mod pandas_polars;
 mod pandas_table;

@@ -62,6 +62,8 @@ unsafe extern "C" {
     fn XML_Parse(parser: Parser, data: *const c_char, length: c_int, final_chunk: c_int) -> c_int;
     fn XML_StopParser(parser: Parser, resumable: u8) -> c_int;
     fn XML_GetErrorCode(parser: Parser) -> c_int;
+    fn XML_GetCurrentLineNumber(parser: Parser) -> libc::c_ulong;
+    fn XML_GetCurrentColumnNumber(parser: Parser) -> libc::c_ulong;
     fn XML_ErrorString(code: c_int) -> *const c_char;
     fn XML_ExpatVersion() -> *const c_char;
 }
@@ -82,6 +84,13 @@ struct State {
     first_end: bool,
     result: Mapping,
     failure: Option<Box<dyn std::error::Error>>,
+    product6: Option<Product6>,
+}
+
+#[derive(Default)]
+struct Product6 {
+    root: Option<String>,
+    has_disorders: bool,
 }
 
 impl State {
@@ -142,6 +151,21 @@ unsafe extern "C" fn start(
     unsafe {
         callback(data, |state| {
             let name = expanded(text(name)?);
+            if let Some(product) = &mut state.product6 {
+                if name.contains('}') {
+                    return Err(category(
+                        "ValueError",
+                        invalid(
+                            "The original Orphadata reader requires unnamespaced Product 6 XML",
+                        ),
+                    ));
+                }
+                if product.root.is_none() {
+                    product.root = Some(name.clone());
+                }
+                product.has_disorders |= name == "DisorderList";
+                return Ok(());
+            }
             let capture = name == "interpro" || state.stack.last().is_some_and(Option::is_some);
             let node = if capture {
                 let mut element = Element {
@@ -175,6 +199,9 @@ unsafe extern "C" fn start(
 unsafe extern "C" fn end(data: *mut c_void, _name: *const c_char) {
     unsafe {
         callback(data, |state| {
+            if state.product6.is_some() {
+                return Ok(());
+            }
             let node = state
                 .stack
                 .pop()
@@ -188,6 +215,9 @@ unsafe extern "C" fn end(data: *mut c_void, _name: *const c_char) {
 unsafe extern "C" fn characters(data: *mut c_void, value: *const c_char, length: c_int) {
     unsafe {
         callback(data, |state| {
+            if state.product6.is_some() {
+                return Ok(());
+            }
             // Expat's character payload is length-delimited, not NUL-terminated.
             // The supplied nonnegative byte count covers valid callback memory.
             let bytes = std::slice::from_raw_parts(value.cast::<u8>(), usize::try_from(length)?);
@@ -267,7 +297,15 @@ pub(super) fn version() -> String {
         .into_owned()
 }
 
-pub(super) fn parse(mut source: impl Read) -> Result<Mapping> {
+pub(super) fn parse(source: impl Read) -> Result<Mapping> {
+    parse_with(source, false)
+}
+
+pub(super) fn validate_product6(source: impl Read) -> Result<()> {
+    parse_with(source, true).map(|_| ())
+}
+
+fn parse_with(mut source: impl Read, product6: bool) -> Result<Mapping> {
     // Declare state first so every early return drops the parser before its
     // callback state. The box keeps its address stable while parsing.
     let mut state = Box::new(State {
@@ -277,6 +315,7 @@ pub(super) fn parse(mut source: impl Read) -> Result<Mapping> {
         first_end: false,
         result: Mapping::new(),
         failure: None,
+        product6: product6.then(Product6::default),
     });
     // SAFETY: null selects XML-declared/default encoding; namespace separator
     // is ElementTree's ASCII '}'. Null is checked before all other API calls.
@@ -334,6 +373,20 @@ pub(super) fn parse(mut source: impl Read) -> Result<Mapping> {
         }
         if status != 1 {
             let reason = unsafe { text(XML_ErrorString(XML_GetErrorCode(parser.0))) }?;
+            if product6 {
+                // ElementTree includes Expat's original line/column for this
+                // validator; retain the InterPro builder's existing diagnostic.
+                let (line, column) = unsafe {
+                    (
+                        XML_GetCurrentLineNumber(parser.0),
+                        XML_GetCurrentColumnNumber(parser.0),
+                    )
+                };
+                return Err(category(
+                    "ParseError",
+                    invalid(format!("{reason}: line {line}, column {column}")),
+                ));
+            }
             return Err(category("ParseError", invalid(reason)));
         }
         if used == 0 {
@@ -342,5 +395,13 @@ pub(super) fn parse(mut source: impl Read) -> Result<Mapping> {
     }
     // Free the C owner before the callback's state, including on success.
     drop(parser);
+    if let Some(product) = &state.product6 {
+        if product.root.as_deref() != Some("JDBOR") || !product.has_disorders {
+            return Err(category(
+                "ValueError",
+                invalid("Expected Orphadata Product 6 JDBOR/DisorderList XML"),
+            ));
+        }
+    }
     Ok(std::mem::take(&mut state.result))
 }

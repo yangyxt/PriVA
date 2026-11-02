@@ -401,4 +401,47 @@ mod tests {
         let map = map.finish();
         assert_eq!(map.get(&Key::float(base as f64), true), None);
     }
+
+    /// Set all three paths to compare a prepared profile without rerunning its
+    /// Python producer. The expected file must be that producer's saved map.
+    #[test]
+    #[ignore = "requires explicit ClinVar summary, MANE and source-produced map inputs"]
+    fn prepared_summary_map_matches_every_source_entry() {
+        let path = |name| {
+            std::path::PathBuf::from(
+                std::env::var_os(name).expect("missing explicit map-test input"),
+            )
+        };
+        let actual = from_tables(&path("PRIVA_GENE_SUMMARY"), &path("PRIVA_GENE_MANE")).unwrap();
+        let expected = from_pickle(&path("PRIVA_GENE_REFERENCE_MAP")).unwrap();
+        let missing = expected
+            .values
+            .keys()
+            .filter(|key| !actual.values.contains_key(*key))
+            .count();
+        let extra = actual
+            .values
+            .keys()
+            .filter(|key| !expected.values.contains_key(*key))
+            .count();
+        let changed = expected
+            .values
+            .iter()
+            .filter(|(key, value)| {
+                actual
+                    .values
+                    .get(*key)
+                    .is_some_and(|actual| actual != *value)
+            })
+            .count();
+        println!(
+            "{{\"map_entries\":{},\"missing\":{missing},\"extra\":{extra},\"value_mismatches\":{changed}}}",
+            expected.values.len()
+        );
+        assert_eq!(
+            (missing, extra, changed),
+            (0, 0, 0),
+            "complete map comparison differs; only counts are reported"
+        );
+    }
 }

@@ -303,21 +303,18 @@ fn prepare(config: &Path, private: &Path, repo: &Path) -> Result<()> {
                     "{key}: native cache receipt does not match this path/profile"
                 )));
             }
-            // Several configurations may share identical native bytes while
-            // deliberately selecting different source files. Keep that choice
-            // in the configuration's persistent context, never by rewriting
-            // the shared generation's provenance.
-            let selected = previous.as_ref().filter(|old| {
-                old.get("profile").and_then(Json::as_str) == Some(selected_profile.as_str())
-                    && old
-                        .get(&format!("native_{key}"))
-                        .and_then(Json::as_str)
-                        .is_some_and(|path| same_file(Path::new(path), &native))
-            });
-            PathBuf::from(match selected {
-                Some(old) => field(old, &format!("source_{key}"))?,
-                None => field(&record, "source")?,
-            })
+            PathBuf::from(field(&record, "source")?)
+        };
+        // Both managed and bundled archives can have explicitly selected
+        // source aliases. Preserve each configuration's choice without changing
+        // shared archive provenance or adding content checks to bundle reuse.
+        let source = match previous.as_ref().filter(|old| {
+            old.get(&format!("native_{key}"))
+                .and_then(Json::as_str)
+                .is_some_and(|path| same_file(Path::new(path), &native))
+        }) {
+            Some(old) => PathBuf::from(field(old, &format!("source_{key}"))?),
+            None => source,
         };
         nonempty(&source)?;
         updates.insert(key.to_owned(), text(&source)?.to_owned());
@@ -869,6 +866,25 @@ mod tests {
             .unwrap(),
             pickle.to_str()
         );
+        #[cfg(unix)]
+        {
+            let alias = tmp.0.join("selected_snapshot.pkl.gz");
+            std::os::unix::fs::symlink(&pickle, &alias).unwrap();
+            let alias_config = tmp.0.join("alias.yaml");
+            let alias_private = tmp.0.join("alias.private.yaml");
+            fs::write(&alias_config, format!("assembly: hg38\nvep_installed_version: 116\ncache_root: {}\ninterpro_mapping_pickle: {}\n",tmp.0.display(),alias.display())).unwrap();
+            prepare(&alias_config, &alias_private, &tmp.0).unwrap();
+            publish(&alias_config, &alias_private, &tmp.0).unwrap();
+            prepare(&alias_config, &alias_private, &tmp.0).unwrap();
+            assert_eq!(
+                setting(
+                    &document(&fs::read_to_string(&alias_private).unwrap()).unwrap(),
+                    "interpro_mapping_pickle"
+                )
+                .unwrap(),
+                alias.to_str()
+            );
+        }
     }
 
     #[test]

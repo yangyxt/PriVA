@@ -26,11 +26,11 @@ use crate::acmg_scoring::calculate_posterior_probability::{
 use crate::acmg_scoring::create_criteria_summary::create_criteria_summary;
 use crate::acmg_scoring::translate_strength_level::translate_strength_level;
 use crate::acmg_variant_mechanism::variant_mechanism_masks::Cell as MaskCell;
+use crate::cache_convert::clingen_map::ClingenCache;
 use crate::cli::{Result, invalid};
 use crate::json_text::Json;
 use crate::pandas_table::{Cell, Column, ObjectValue, Table};
 use crate::pandas_table::{Header, ReadOptions, read_table_with};
-use crate::pickle_reader::{self, Value};
 use crate::python_text::python_strip;
 use std::cmp::Ordering;
 use std::collections::HashMap;
@@ -166,29 +166,6 @@ fn python_repr_path(path: Option<&str>) -> Result<String> {
     }
 }
 
-/// The ClinGen map pickle: variant id to its evidence codes; an entry that is not
-/// text (the map's float NaN for a curated variant without codes) is `None`.
-fn load_clingen_map(path: &str) -> Result<HashMap<String, Option<String>>> {
-    let bytes = pickle_reader::read_file(Path::new(path), path.ends_with(".gz"))?;
-    let Value::Dict(dict) = pickle_reader::load(&bytes)? else {
-        return Err(invalid(
-            "refused (not reproduced): the ClinGen map is not a dict",
-        ));
-    };
-    let mut map = HashMap::new();
-    for (key, value) in &dict.borrow().entries {
-        // Only text keys can equal a variant id.
-        if let Value::Str(key) = key {
-            let value = match value {
-                Value::Str(text) => Some(text.to_string()),
-                _ => None,
-            };
-            map.insert(key.to_string(), value);
-        }
-    }
-    Ok(map)
-}
-
 /// `summarize_acmg_criteria(df, criteria_dict, clingen_map_pkl, apply_clingen_override)`:
 /// writes `ACMG_criteria` into the table and returns the criteria matrix (the 28
 /// criteria in `CRITERIA_ORDER`, absent ones as int64 zeros, then `variant_id`).
@@ -255,14 +232,16 @@ pub(crate) fn summarize_acmg_criteria(
                 ),
             )));
         };
-        load_clingen_map(path)?
+        Some(ClingenCache::open(path)?)
     } else {
-        HashMap::new()
+        None
     };
 
     let evidence: Vec<Option<&str>> = (0..rows)
         .map(|row| match variant_id.cell(row) {
-            Cell::Text(id) => clingen_map.get(id).and_then(|value| value.as_deref()),
+            Cell::Text(id) => clingen_map
+                .as_ref()
+                .and_then(|cache| cache.get(id).flatten()),
             _ => None,
         })
         .collect();
@@ -283,7 +262,7 @@ pub(crate) fn summarize_acmg_criteria(
     };
     table.set_column("ACMG_criteria", summary_column);
 
-    if !clingen_map.is_empty() {
+    if clingen_map.as_ref().is_some_and(|cache| cache.len() != 0) {
         let overridden: Vec<bool> = evidence
             .iter()
             .map(|value| value.is_some_and(|text| !python_strip(text).is_empty()))
@@ -1149,6 +1128,65 @@ mod tests {
         assert!(error.starts_with(
             "FileNotFoundError: ClinGen override is enabled but the evidence map is missing: '/no/such.pkl'."
         ));
+    }
+
+    #[test]
+    fn native_clingen_keeps_overrides_missing_codes_and_nonempty_map_dtypes() {
+        use crate::cache_convert::clingen_map::{ClingenMap, SCHEMA};
+        let path =
+            std::env::temp_dir().join(format!("priva_scoring_clingen_{}.rkyv", std::process::id()));
+        let root = ClingenMap {
+            provenance: vec![],
+            variants: vec!["a".into(), "b".into()],
+            codes: vec![Some("PS3".into()), None],
+        };
+        crate::rust_cache::write_cache(
+            &path,
+            SCHEMA,
+            &rkyv::to_bytes::<rkyv::rancor::Error>(&root).unwrap(),
+        )
+        .unwrap();
+        let mut input = table(vec![(
+            "variant_id",
+            Column::Text(vec![
+                Some("a".into()),
+                Some("b".into()),
+                Some("missing".into()),
+            ]),
+        )]);
+        let criteria = vec![("PVS1", Column::Int(vec![4, 4, 0]))];
+        let matrix = summarize_acmg_criteria(&mut input, &criteria, path.to_str(), true).unwrap();
+        assert_eq!(
+            input.column("ACMG_criteria").unwrap(),
+            &Column::Text(vec![Some("PS3".into()), Some("PVS1".into()), None])
+        );
+        assert_eq!(matrix.column("PVS1").unwrap(), &Column::Int(vec![0, 4, 0]));
+        assert_eq!(matrix.column("PS3").unwrap(), &Column::Int(vec![3, 0, 0]));
+
+        // A present NaN/no-code entry still makes the map nonempty. The original empty
+        // override assignment changes integer criteria to object when a summary is text.
+        let root = ClingenMap {
+            provenance: vec![],
+            variants: vec!["b".into()],
+            codes: vec![None],
+        };
+        crate::rust_cache::write_cache(
+            &path,
+            SCHEMA,
+            &rkyv::to_bytes::<rkyv::rancor::Error>(&root).unwrap(),
+        )
+        .unwrap();
+        let mut input = table(vec![("variant_id", Column::Text(vec![Some("b".into())]))]);
+        let matrix = summarize_acmg_criteria(
+            &mut input,
+            &[("PVS1", Column::Int(vec![4]))],
+            path.to_str(),
+            true,
+        )
+        .unwrap();
+        assert!(
+            matches!(matrix.column("PVS1").unwrap(), Column::Object(values) if values == &[ObjectValue::Int(4)])
+        );
     }
 
     #[test]

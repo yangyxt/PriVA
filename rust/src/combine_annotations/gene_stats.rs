@@ -8,6 +8,19 @@ use std::io::{Read, Seek, SeekFrom};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
 
+/// Explicit native trace admission has no Python producer counterpart.
+#[derive(Debug)]
+pub(crate) struct TraceError(&'static str);
+impl std::fmt::Display for TraceError {
+    fn fmt(&self, out: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        out.write_str(self.0)
+    }
+}
+impl std::error::Error for TraceError {}
+fn trace_error(message: &'static str) -> Box<dyn std::error::Error> {
+    Box::new(TraceError(message))
+}
+
 pub(crate) const GENE_FIELDS: [&str; 11] = [
     "SYMBOL",
     "Gene",
@@ -201,7 +214,7 @@ impl Collector {
     fn finish(self) -> Result<Table> {
         let mut table = self
             .table
-            .ok_or_else(|| invalid("no record has an Ensembl feature in CSQ"))?;
+            .ok_or_else(|| invalid("AttributeError: no record has an Ensembl feature in CSQ"))?;
         let mut chunk = self.chunk;
         if chunk.rows > 0 {
             table.store(&mut chunk)?;
@@ -327,7 +340,9 @@ fn checked_header(path: &Path) -> Result<(vcf_variant::Header, Arc<VcfHeader>, V
     }
     let csq = header.csq_fields("CSQ")?;
     if header.infos.contains_key("CLNCSQ") {
-        header.csq_fields("CLNCSQ")?;
+        header
+            .csq_fields("CLNCSQ")
+            .map_err(|error| crate::builder_error::category("IndexError", error))?;
     }
     Ok((checked, header, csq))
 }
@@ -353,7 +368,8 @@ fn tasks(
             }
             continue;
         }
-        let record = vcf_variant::decode_record(line.as_bytes(), checked, &mut info)?;
+        let record = vcf_variant::decode_record(line.as_bytes(), checked, &mut info)
+            .map_err(|error| crate::builder_error::category("OSError", error))?;
         for key in record.info.keys() {
             if !header.infos.contains_key(*key) {
                 Arc::make_mut(&mut header).infos.insert(
@@ -372,7 +388,7 @@ fn tasks(
             .map(|value| (*value).to_owned())
             .collect();
         if fields.len() < 5 {
-            return Err(invalid("invalid VCF record"));
+            return Err(invalid("TypeError: invalid VCF record"));
         }
         fields.resize(fields.len().max(8), ".".into());
         fields[1] = record.position.to_string();
@@ -398,7 +414,7 @@ pub(crate) fn read(
         if order.iter().copied().collect::<HashSet<_>>().len() != order.len()
             || order.iter().any(|at| *at >= order.len())
         {
-            return Err(invalid(
+            return Err(trace_error(
                 "completion order must be a permutation of zero-based record ordinals",
             ));
         }
@@ -421,6 +437,13 @@ pub(crate) fn read(
             &hpo,
             true,
         )
+        .map_err(|error| {
+            if error.to_string() == "the record has no GT (pysam: invalid FORMAT: GT)" {
+                crate::builder_error::category("KeyError", error)
+            } else {
+                error
+            }
+        })
     };
     let mut collector = Collector::new();
     let mut trace = Vec::new();
@@ -428,7 +451,9 @@ pub(crate) fn read(
     let mut accept = |ordinal: usize, rows: Vec<Row>| -> Result<()> {
         if let Some(order) = order {
             if ordinal >= order.len() {
-                return Err(invalid("completion trace has fewer records than the VCF"));
+                return Err(trace_error(
+                    "completion trace has fewer records than the VCF",
+                ));
             }
             pending.insert(ordinal, rows);
             while let Some(&next) = order.get(trace.len()) {
@@ -507,7 +532,7 @@ pub(crate) fn read(
         || trace.len() != count
         || !pending.is_empty()
     {
-        return Err(invalid("completion trace and VCF record counts differ"));
+        return Err(trace_error("completion trace and VCF record counts differ"));
     }
     Ok((collector.finish()?, trace))
 }

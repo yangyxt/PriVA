@@ -263,7 +263,11 @@ pub(super) fn from_tables(summary: &Path, mane: &Path) -> Result<TargetMap> {
     // The original .str.split(..., expand=True).iloc[:,0] also fails when no
     // mapped text survives; it does not silently create an empty target map.
     if !has_text {
-        return Err(invalid("the mapped transcript column has no text to split"));
+        return Err(invalid(if result.values.is_empty() {
+            "IndexError: the empty split frame has no first column"
+        } else {
+            "AttributeError: the mapped transcript column has no .str accessor"
+        }));
     }
     if missing_numeric_ids > 1 {
         return Err(invalid("InvalidIndexError: repeated NaN AlleleID keys"));

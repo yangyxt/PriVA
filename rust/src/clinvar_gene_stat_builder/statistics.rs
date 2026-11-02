@@ -328,7 +328,7 @@ pub(super) fn build(
             }
             _ => {
                 return Err(invalid(
-                    "TypeError: a surviving numeric gene identifier cannot prefix a domain",
+                    "UFuncTypeError: a surviving numeric gene identifier cannot prefix a domain",
                 ));
             }
         }

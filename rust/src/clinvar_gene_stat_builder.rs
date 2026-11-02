@@ -12,6 +12,48 @@ const BUILD_USAGE: &str = "usage: priva clinvar-gene-stats build --vcf VCF --out
 
 const MERGE_USAGE: &str = "usage: priva clinvar-gene-stats merge --input SHARD_RKYV [--input SHARD_RKYV ...] --output RKYV";
 
+/// The procedures already identify source-specific exceptions at the point
+/// where they occur. Retain those categories across worker string transport;
+/// ordinary I/O failures use the shared runtime boundary.
+fn source_error(error: Box<dyn std::error::Error>) -> Box<dyn std::error::Error> {
+    if error.is::<crate::builder_error::RuntimeError>() {
+        return error;
+    }
+    let message = error.to_string();
+    for name in [
+        "AttributeError",
+        "IndexError",
+        "InvalidIndexError",
+        "KeyError",
+        "NotImplementedError",
+        "OSError",
+        "ParserError",
+        "TypeError",
+        "UFuncTypeError",
+        "UnicodeDecodeError",
+        "ValueError",
+    ] {
+        if let Some(cause) = message
+            .strip_prefix(name)
+            .and_then(|rest| rest.strip_prefix(": "))
+        {
+            return crate::builder_error::category(name, invalid(cause));
+        }
+    }
+    error
+}
+
+fn finish<T>(result: Result<T>) -> Result<T> {
+    match result {
+        // Explicit trace validation is native CLI admission, not an exception
+        // raised by the original producer. Keep its exit-2 boundary distinct.
+        Err(error) if error.is::<crate::combine_annotations::gene_stats::TraceError>() => {
+            Err(error)
+        }
+        result => crate::builder_error::finish(result.map_err(source_error)),
+    }
+}
+
 pub(crate) fn dispatch(args: &[String]) -> Result<()> {
     let usage = "usage: priva clinvar-gene-stats set-order --input LINES --output LINES --python-hash-seed UINT32 [--hashes OUTPUT]";
     if args.is_empty() || args == ["--help"] {
@@ -165,6 +207,9 @@ fn build(args: &[String]) -> Result<()> {
     let output = Path::new(required("--output")?);
     let seed = required("--python-hash-seed")?.parse::<u32>()?;
     let threads = options.get("--threads").unwrap_or(&"10").parse::<usize>()?;
+    if threads == 0 {
+        return Err(invalid("the worker count must be positive"));
+    }
     let prepared = options.get("--allele-transcript-map").copied();
     if prepared.is_some()
         && (options.contains_key("--clinvar-summary") || options.contains_key("--mane-summary"))
@@ -249,73 +294,75 @@ fn build(args: &[String]) -> Result<()> {
     } else {
         None
     };
-    let started = std::time::Instant::now();
-    let (table, trace) =
-        crate::combine_annotations::gene_stats::read(vcf, threads, order.as_deref())?;
-    let rows = table.rows;
-    let targets = match prepared {
-        Some(path) => maps::from_pickle(Path::new(path))?,
-        None => maps::from_tables(
-            Path::new(required("--clinvar-summary")?),
-            Path::new(required("--mane-summary")?),
-        )?,
-    };
-    let alleles = maps::alleles(vcf)?;
-    let entries = statistics::build(&table, &targets, &alleles, seed, cutoff)?;
-    drop(table);
-    drop(targets);
-    drop(alleles);
-    if let Some(path) = trace_output {
-        use std::io::Write;
-        let value = Json::Object(vec![
-            ("vcf_sha256".into(), Json::Str(vcf_hash.unwrap())),
-            ("python_hash_seed".into(), Json::Int(i128::from(seed))),
-            (
-                "order".into(),
-                Json::Array(trace.iter().map(|at| Json::Int(*at as i128)).collect()),
-            ),
-        ]);
-        let mut file = fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(path)?;
-        file.write_all(json_text::dumps(&value, false).map_err(invalid)?.as_bytes())?;
-        file.write_all(b"\n")?;
-    }
-    let count = entries.len();
-    let provenance = vec![
-        crate::cache_convert::Provenance {
-            key: "producer".into(),
-            value: "priva clinvar-gene-stats build".into(),
-        },
-        crate::cache_convert::Provenance {
-            key: "python_hash_seed".into(),
-            value: seed.to_string(),
-        },
-        crate::cache_convert::Provenance {
-            key: "donor_loss_cutoff".into(),
-            value: crate::python_text::float_repr(cutoff),
-        },
-        crate::cache_convert::Provenance {
-            key: "collector_order".into(),
-            value: if order.is_some() {
-                "explicit completion trace"
-            } else if threads == 1 {
-                "source order"
-            } else {
-                "unordered worker completion"
-            }
-            .into(),
-        },
-    ];
-    let version =
-        crate::cache_convert::clinvar_gene_stat::write_entries(output, entries, provenance)?;
-    println!(
-        "{{\"schema\":5,\"schema_version\":{version},\"records\":{},\"annotation_rows\":{rows},\"genes\":{count},\"seconds\":{:.3}}}",
-        trace.len(),
-        started.elapsed().as_secs_f64()
-    );
-    Ok(())
+    finish((|| {
+        let started = std::time::Instant::now();
+        let (table, trace) =
+            crate::combine_annotations::gene_stats::read(vcf, threads, order.as_deref())?;
+        let rows = table.rows;
+        let targets = match prepared {
+            Some(path) => maps::from_pickle(Path::new(path))?,
+            None => maps::from_tables(
+                Path::new(required("--clinvar-summary")?),
+                Path::new(required("--mane-summary")?),
+            )?,
+        };
+        let alleles = maps::alleles(vcf)?;
+        let entries = statistics::build(&table, &targets, &alleles, seed, cutoff)?;
+        drop(table);
+        drop(targets);
+        drop(alleles);
+        if let Some(path) = trace_output {
+            use std::io::Write;
+            let value = Json::Object(vec![
+                ("vcf_sha256".into(), Json::Str(vcf_hash.unwrap())),
+                ("python_hash_seed".into(), Json::Int(i128::from(seed))),
+                (
+                    "order".into(),
+                    Json::Array(trace.iter().map(|at| Json::Int(*at as i128)).collect()),
+                ),
+            ]);
+            let mut file = fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(path)?;
+            file.write_all(json_text::dumps(&value, false).map_err(invalid)?.as_bytes())?;
+            file.write_all(b"\n")?;
+        }
+        let count = entries.len();
+        let provenance = vec![
+            crate::cache_convert::Provenance {
+                key: "producer".into(),
+                value: "priva clinvar-gene-stats build".into(),
+            },
+            crate::cache_convert::Provenance {
+                key: "python_hash_seed".into(),
+                value: seed.to_string(),
+            },
+            crate::cache_convert::Provenance {
+                key: "donor_loss_cutoff".into(),
+                value: crate::python_text::float_repr(cutoff),
+            },
+            crate::cache_convert::Provenance {
+                key: "collector_order".into(),
+                value: if order.is_some() {
+                    "explicit completion trace"
+                } else if threads == 1 {
+                    "source order"
+                } else {
+                    "unordered worker completion"
+                }
+                .into(),
+            },
+        ];
+        let version =
+            crate::cache_convert::clinvar_gene_stat::write_entries(output, entries, provenance)?;
+        println!(
+            "{{\"schema\":5,\"schema_version\":{version},\"records\":{},\"annotation_rows\":{rows},\"genes\":{count},\"seconds\":{:.3}}}",
+            trace.len(),
+            started.elapsed().as_secs_f64()
+        );
+        Ok(())
+    })())
 }
 
 /// Both destinations may be new. The ordinary source/output guard requires its

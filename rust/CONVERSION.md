@@ -159,7 +159,7 @@ thread starts.
 | `scripts/cache_resources.py` | 159 | Python |
 | `scripts/check_cluster_environment.py` | 87 | Python |
 | `scripts/check_cluster_readiness.py` | 133 | Python |
-| `scripts/conservation_resource_check.py` | 212 | Python |
+| `scripts/conservation_resource_check.py` | 212 | Optional `priva conservation-resource` provides `validate`, `publish` and `bsd-sum`. Retains Perl/Bio::DB::BigFile and `sum`; the selected tool bin directory is explicit. Installer/LoFtee callers remain Python. |
 | `scripts/das_input_continuity.py` | 212 | Python |
 | `scripts/das_install_state.py` | 140 | Python |
 | `scripts/deploy_cluster_gnomad.py` | 35 | Python |

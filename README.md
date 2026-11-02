@@ -223,6 +223,25 @@ calls. Paths are passed literally to those programs. As with the original
 Python procedure, child command failures are reported but do not make the
 conversion command fail: validate the resulting VCF and index before use.
 
+The optional Conservation resource guard uses the installed Perl
+`Bio::DB::BigFile` reader and an indexed reference FASTA:
+
+```bash
+"$PRIVA_BINARY" conservation-resource validate \
+  --input conservation.bw --assembly GRCh38 --reference reference.fa \
+  --tool-prefix "$CONDA_PREFIX/bin"
+```
+
+`--tool-prefix` is the bin directory of the selected scientific environment;
+it binds the Perl selection independently of where `priva` is installed.
+The original PATH fallback applies if that directory contains no Perl file.
+`publish` takes the same options plus `--source-url URL --publish-to FINAL`.
+It validates before creating a hard link, refuses an existing final path,
+then removes the staging name. A failed unlink leaves both names intact.
+`bsd-sum --input FILE` exposes the original `sum -r` checksum procedure.
+These checks establish resource identity and integrity, not scientific
+qualification. The installer and LoFtee callers retain the Python helper.
+
 The opt-in domain procedures read an already annotated AlphaMissense VCF:
 
 ```bash

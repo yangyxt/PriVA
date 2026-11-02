@@ -376,6 +376,22 @@ fn tokenize_impl(
     bom_bytes: usize,
     mut emit: impl FnMut(Vec<String>) -> Result<()>,
 ) -> Result<()> {
+    let expected_width = std::cell::Cell::new(0usize);
+    let growing_short_rows = std::cell::Cell::new(0usize);
+    let mut emit = |record: Vec<String>| {
+        if builder_cr_compatibility {
+            let expected = expected_width.get();
+            // pandas end_line pads short records through make_stream_space.
+            // For a one-field cycle, its reservation guarantees space for the
+            // next field when that field has at most expected-1 bytes. Such a
+            // cycle grows buffers instead of reaching the fixed-buffer guard.
+            if expected > 1 && record.len() == 1 && record[0].len() < expected {
+                growing_short_rows.set(growing_short_rows.get() + 1);
+            }
+            expected_width.set(expected.max(record.len()));
+        }
+        emit(record)
+    };
     let bytes = text.as_bytes();
     let mut state = State::StartRecord;
     let mut fields: Vec<String> = Vec::new();
@@ -383,7 +399,7 @@ fn tokenize_impl(
     let mut index = 0;
     let mut records = 0;
     let mut call_start = 0;
-    let mut backtracks = std::collections::HashSet::new();
+    let mut backtracks = HashMap::new();
     while index < bytes.len() {
         let byte = bytes[index];
         let terminator = byte == b'\n' || byte == b'\r';
@@ -433,8 +449,8 @@ fn tokenize_impl(
                         // first tokenizes two records; later buffers are 256 KiB.
                         // Reproduce that traversal only for these opt-in text
                         // builders. A repeated traversal cannot make progress:
-                        // return pandas' eventual buffer error without filling
-                        // memory with repeated rows. See pinned primary sources:
+                        // report its eventual failure without filling memory
+                        // with repeated rows. See pinned primary sources:
                         // pandas v2.2.3 pandas/_libs/src/parser/tokenizer.c and
                         // pandas/_libs/parsers.pyx, _get_header/DEFAULT_CHUNKSIZE.
                         let chunk_start = ((end + bom_bytes) / (256 * 1024) * (256 * 1024))
@@ -444,10 +460,24 @@ fn tokenize_impl(
                             .iter()
                             .rposition(|byte| *byte == b'\n')
                             .map_or(floor, |position| floor + position + 1);
-                        if rewind < index && !backtracks.insert((floor, index, rewind)) {
-                            return Err(invalid(
-                                "Error tokenizing data. C error: Buffer overflow caught - possible malformed input file.\n",
-                            ));
+                        if rewind < index {
+                            let marker = (records, growing_short_rows.get());
+                            if let Some(previous) =
+                                backtracks.insert((floor, index, rewind), marker)
+                            {
+                                // A repeated single short record continually
+                                // reallocates all token/line buffers in pandas;
+                                // it fails allocation, not a fixed-buffer check.
+                                // Detect this from the executed cycle, never an
+                                // input filename or a particular byte offset.
+                                let grows =
+                                    marker.0 == previous.0 + 1 && marker.1 == previous.1 + 1;
+                                return Err(invalid(if grows {
+                                    "Error tokenizing data. C error: out of memory"
+                                } else {
+                                    "Error tokenizing data. C error: Buffer overflow caught - possible malformed input file.\n"
+                                }));
+                            }
                         }
                         index = rewind;
                         state = State::StartField;
@@ -1510,6 +1540,29 @@ mod tests {
                 .to_string(),
             "Error tokenizing data. C error: Buffer overflow caught - possible malformed input file.\n"
         );
+    }
+
+    #[test]
+    fn builder_short_row_rewind_cycles_report_allocation_failure_without_growing() {
+        let options = ReadOptions {
+            all_text: true,
+            keep_default_na: false,
+            ..ReadOptions::default()
+        };
+        for offset in [1, 2] {
+            let prefix = "a\tb\tc\td\te\rG0\tD1\tH1\t\t\rG1\tD1\tH1\t\t";
+            let padding = 256 * 1024 + offset - prefix.len() - 1;
+            let input = format!("{prefix}{}\r G2\tD1\tH1\t\t\r", "x".repeat(padding));
+            assert_eq!(
+                parse_table_impl(&input, &options, true)
+                    .unwrap_err()
+                    .to_string(),
+                "Error tokenizing data. C error: out of memory"
+            );
+            // The ordinary reader does not adopt the builder's pandas-2.2.3
+            // bare-CR compatibility traversal or its failure shortcut.
+            assert_eq!(parse_table_with(&input, &options).unwrap().rows, 3);
+        }
     }
 
     #[test]

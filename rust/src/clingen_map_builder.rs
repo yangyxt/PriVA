@@ -26,7 +26,7 @@ duplicate ClinVar IDs and duplicate final variants keep their last source value.
 
 /// The shared reader deliberately refuses uint64 inference. This producer
 /// needs that dtype for pandas' explicit `astype(int)` wrapping operation.
-enum ProducerColumn {
+pub(crate) enum ProducerColumn {
     Pandas(PandasColumn),
     Unsigned(Vec<u64>),
 }
@@ -116,7 +116,7 @@ fn object_integer(text: &str) -> Result<i64> {
         .map_err(|_| invalid("OverflowError: Python int too large to convert to C long"))
 }
 
-fn infer(tokens: Vec<String>) -> Result<ProducerColumn> {
+pub(crate) fn infer(tokens: Vec<String>) -> Result<ProducerColumn> {
     match pandas_table::infer_column(tokens.clone(), true) {
         Ok(column) => Ok(ProducerColumn::Pandas(column)),
         Err(error)

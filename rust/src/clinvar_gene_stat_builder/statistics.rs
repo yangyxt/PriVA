@@ -311,7 +311,7 @@ pub(super) fn build(
         } else {
             allele
         };
-        let Some(Some(target)) = targets.get(allele) else {
+        let Some(Some(target)) = targets.get(allele, promote) else {
             continue;
         };
         if !matches!(table.get("Feature", row)?, Scalar::Text(feature) if feature == target) {

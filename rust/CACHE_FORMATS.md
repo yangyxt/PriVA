@@ -112,38 +112,13 @@ File names: the pickle's name
 with `.pkl`/`.pkl.gz` replaced by `.v<schema version>.rkyv`. The branch's configuration keeps
 the key names and points them at the `.rkyv` files.
 
-## 5. Measurements behind the choice (2026-10-31, HGSC rackc81o, release builds)
+## 5. Format selection
 
-Cluster folder: `PriVA_upgrade/validation/rust_conversion_20261029/cache_formats`
-(`README_section.md` there has every number). Benchmark program: `source/rust/cache_format_bench`
-in that folder (a separate crate that includes the branch's pickle readers; not committed). Each read is its own process: open the file, look up
-10,000 random existing keys and 1,000 missing ones, copy the values out; peak memory is VmHWM
-(it counts mapped file pages too). Every format gave the pickle reader's values for all 11,000
-keys (equal digests).
-
-Total seconds (cold = first read of the file on the node / warm, mean of two runs) and peak MB:
-
-| Cache (pickle size) | pickle stream, wanted keys | pickle stream, all keys (today's PS1 reader) | Parquet zstd | IPC mapped | IPC zstd | rkyv checked | rkyv unchecked |
-| --- | --- | --- | --- | --- | --- | --- | --- |
-| `clinvar_aa_stat` (217 MB) | 3.0 / 3.4 s, 251 MB | 12.1 s, 662 MB | 1.16 / 0.89 s, 692 MB | 16.0 / 0.51 s, 391 MB | 1.5 / 1.5 s, 688 MB | **0.79 / 0.48 s, 345 MB** | 1.6 / 0.27 s, 165 MB |
-| `alphamissense_tranx_domain_map` (131 MB) | 2.4 / 3.2 s, 127 MB | 8.0 s, 135 MB (whole-pickle reader: 8.2 s, 2,444 MB) | 2.6 / 1.2 s, 989 MB | 30.2 / 0.47 s, 445 MB | 2.2 / 2.2 s, 1,063 MB | **0.91 / 0.25 s, 219 MB** | 2.0 / 0.21 s, 115 MB |
-| `clinvar_splice_stat` (1,156 MB) | 14.0 / 15.9 s, 649 MB | 42.7 s, 2,097 MB | 4.1 / 2.4 s, 2,133 MB | 91.3 / 1.6 s, 1,226 MB | 5.2 / 5.0 s, 2,572 MB | **2.2 / 1.5 s, 1,109 MB** | 12.0 / 1.0 s, 563 MB |
-
-File sizes (MB) and conversion time from the decoded values (s):
-
-| Cache | pickle | Parquet zstd | IPC plain | IPC zstd | rkyv |
-| --- | ---: | ---: | ---: | ---: | ---: |
-| `clinvar_aa_stat` | 217 | 28 (4.2 s) | 595 (0.5 s) | 46 (2.1 s) | 245 (4.3 s) |
-| `alphamissense_tranx_domain_map` | 131 | 51 (5.1 s) | 1,054 (0.9 s) | 88 (3.3 s) | 170 (4.0 s) |
-| `clinvar_splice_stat` | 1,156 | 59 (5.4 s) | 2,194 (1.7 s) | 105 (4.5 s) | 660 (13.1 s) |
-
-Why rkyv for keyed caches: fastest cold and warm on all three, 3 to 30 times faster than today's
-pickle streaming, memory below Parquet (the mapped pages are page cache and can be dropped by the
-kernel; the anonymous memory is only what the reader copies out), and no decoding step at all for
-keys not asked for. Parquet is 4 to 20 times smaller on disk but must decode whole row groups
-into memory (2.1 GB for the splice dictionary). Why checked access: it makes a damaged file an
-error and, on StorNext, its sequential pass is faster cold than the random faults of an
-unchecked map.
+Keyed caches use checked memory-mapped rkyv archives so readers can access requested entries
+without rebuilding whole Python object graphs. Shared strings are pooled; dictionaries keep
+scientifically relevant inner order and exact values. Checked access rejects malformed archives
+before any borrowed reference is exposed. Tabular intermediates use compressed Parquet through
+Polars; the keyed-cache layout and table format serve different access patterns.
 
 ## 6. Distribution and installation
 
@@ -160,3 +135,17 @@ unchecked map.
 - `clinvar_gene_stat` holds 13 million variant-id strings in 7 sets per gene, domain and
   transcript; the PP2/BP1 reader uses set sizes and intersections. Version 1 keeps the sets
   (as pooled `u32` ids), not only their counts.
+
+`priva cache-install prepare --config CONFIG --build-config PRIVATE --source-root REPO`
+creates the builder view, restoring the recorded pickle paths when CONFIG already selects
+native archives. Use a stable PRIVATE filename so interrupted builders can resume.
+`priva cache-install publish` with the same options converts the completed resources and
+atomically replaces CONFIG. It retains pending builder updates, refuses conflicting user
+edits, and reuses completed conversions. It does not run the scientific builders itself.
+
+Managed archive names contain the existing YAML key, assembly, VEP release, source digest
+prefix and format version. They stay in the configured resource directories under
+`cache_root`; each has a `.source.json` receipt identifying its original builder input.
+Changed sources get a new archive path, preserving the previous configuration until the
+final publication. Keep those source files and their scientific companion receipts while
+the corresponding builders still use them.

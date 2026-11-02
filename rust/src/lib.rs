@@ -31,13 +31,15 @@ mod ks_greater;
 #[allow(dead_code)]
 mod das_sampling;
 // Candidate classification is validated before the full DAS builder is enabled.
-mod das_domain;
 #[allow(dead_code)] // Common-AF procedures await the complete opt-in DAS builder.
 mod das_common;
+mod das_domain;
 #[allow(dead_code)] // Reference/Family procedures await the complete opt-in DAS builder.
 mod das_reference;
 #[allow(dead_code)]
 mod das_rescue;
+#[allow(dead_code)] // Qualified task ordering precedes full DAS execution.
+mod das_rescue_plan;
 #[allow(dead_code)]
 mod dip_stat;
 #[allow(dead_code)] // Shared installer primitive; callers switch after their own parity tests.

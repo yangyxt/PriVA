@@ -41,6 +41,7 @@ use super::alternative_start_codon::{
 };
 use super::pickle_dict_stream::{Item, visit_top_level_dict};
 use super::types::{AcmgError, HarnessCall, StepOutput, not_converted};
+use crate::cache_convert::clinvar_exon_af::ClinvarExonAfCache;
 use crate::cli::{Result, invalid};
 use crate::interpro_mapping_io::{InterproMapping, load_interpro_mapping};
 use crate::pandas_table::{Cell, Column, ObjectValue, ReadOptions, Table, read_table_with};
@@ -140,40 +141,26 @@ struct TranscriptExons {
 }
 
 impl ExonAlleleFrequencies {
-    /// Reads the pickle (gzip when the name ends in `.gz`) for the transcripts in `wanted`.
+    /// Copies only wanted transcripts' first tuple items from the checked native map.
     pub(crate) fn load(path: &str, wanted: &HashSet<String>) -> Result<ExonAlleleFrequencies> {
+        let mapped = ClinvarExonAfCache::open(path)?;
         let mut cache = ExonAlleleFrequencies::default();
-        let keep = |transcript: &str| wanted.contains(transcript);
-        visit_top_level_dict(path, keep, |transcript, value| {
-            let odd = |what: &str| {
-                invalid(format!(
-                    "{path}: transcript {transcript}: {what}; the exon allele-frequency cache is \
-                     read for its installed shape only"
-                ))
-            };
-            let Item::Dict(exons) = &value else {
-                return Err(odd("the value is not a dict"));
+        for transcript in wanted {
+            let Some(exons) = mapped.get(transcript) else {
+                continue;
             };
             let mut decoded = TranscriptExons::default();
-            for (key, entry) in &exons.borrow().entries {
+            for entry in exons.iter() {
+                let key = entry.exon_key.as_str();
                 if decoded.count.is_none() && key.contains('/') {
                     decoded.count = Some(key.split('/').nth(1).unwrap_or("").to_owned());
                 }
-                let first = match entry {
-                    Item::Tuple(items) => items.first().cloned(),
-                    Item::List(items) => items.borrow().first().cloned(),
-                    _ => None,
-                };
-                let first = match first {
-                    Some(Item::Float(number)) => number,
-                    Some(Item::Int(number)) => number as f64,
-                    _ => return Err(odd("an exon's value does not start with a number")),
-                };
-                decoded.first_items.insert(key.clone(), first);
+                decoded
+                    .first_items
+                    .insert(Rc::from(key), entry.item0.to_native());
             }
-            cache.transcripts.insert(transcript.to_string(), decoded);
-            Ok(())
-        })?;
+            cache.transcripts.insert(transcript.clone(), decoded);
+        }
         Ok(cache)
     }
 
@@ -1515,6 +1502,72 @@ pub(crate) fn run_harness(function: &str, call: &HarnessCall) -> Result<Table> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn native_fixture(name: &str, schema: crate::rust_cache::Schema, archive: &[u8]) -> String {
+        let path = std::env::temp_dir().join(format!(
+            "priva_pvs1_native_{}_{name}.rkyv",
+            std::process::id()
+        ));
+        crate::rust_cache::write_cache(&path, schema, archive).unwrap();
+        path.to_str().unwrap().to_owned()
+    }
+
+    #[test]
+    fn native_exon_projection_keeps_first_count_missingness_and_float_bits() {
+        use crate::cache_convert::clinvar_exon_af::{ClinvarExonAfStat, ExonAf, SCHEMA};
+        let exon = |key: &str, value: f64| ExonAf {
+            exon_key: key.into(),
+            item0: value,
+            item1: 0.0,
+            item2: 0.0,
+            item3: 0.0,
+            item4: vec![],
+        };
+        let root = ClinvarExonAfStat {
+            provenance: vec![],
+            transcripts: vec!["EMPTY".into(), "ENST1".into(), "IGNORED".into()],
+            entries: vec![
+                vec![],
+                vec![
+                    exon("7/9", 0.5),
+                    exon("1/9", -0.0),
+                    exon("2/9", f64::from_bits(0x7ff8_0000_0000_0042)),
+                    exon("1/99", 0.8),
+                ],
+                vec![exon("1/1", 1.0)],
+            ],
+        };
+        let path = native_fixture(
+            "exons",
+            SCHEMA,
+            &rkyv::to_bytes::<rkyv::rancor::Error>(&root).unwrap(),
+        );
+        let cache = ExonAlleleFrequencies::load(
+            &path,
+            &HashSet::from(["ENST1".into(), "EMPTY".into(), "missing".into()]),
+        )
+        .unwrap();
+        assert_eq!(cache.transcripts.len(), 2);
+        assert_eq!(cache.transcripts["ENST1"].count.as_deref(), Some("9"));
+        assert_eq!(cache.transcripts["EMPTY"].count, None);
+        assert_eq!(
+            cache.by_exon_number(RowValue::Text("ENST1"), 1).to_bits(),
+            (-0.0f64).to_bits()
+        );
+        assert_eq!(
+            cache.by_exon_number(RowValue::Text("ENST1"), 2).to_bits(),
+            0x7ff8_0000_0000_0042
+        );
+        assert_eq!(cache.by_exon_number(RowValue::Text("ENST1"), 7), 0.5);
+        assert_eq!(cache.by_exon_number(RowValue::Text("EMPTY"), 1), 0.0);
+        assert_eq!(cache.by_exon_number(RowValue::Text("missing"), 1), 0.0);
+        assert_eq!(
+            cache.by_exon_text(RowValue::Text("ENST1"), RowValue::Text("1/99")),
+            0.8
+        );
+        std::fs::remove_file(path).unwrap();
+    }
+
 
     #[test]
     fn exon_numbers_find_the_cache_key_of_their_transcript() {

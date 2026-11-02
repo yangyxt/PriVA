@@ -3,6 +3,7 @@
 //! Preserve the producer's stage order, chunk-local IDs, last-value dictionaries,
 //! sequential publication and finally cleanup. A failed later chunk leaves the
 //! completed prefix; unmapped CrossMap sidecars are deliberately not removed.
+mod compression;
 mod table;
 
 use crate::cli::{Result, invalid};
@@ -18,7 +19,7 @@ use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const HELP: &str = "usage: priva splicevault-convert --input_tsv TSV --output_tsv TSV --chain_file CHAIN --reference_fasta FASTA [--temp_dir ./temp] [--chunk_size 50000]\n\
-Opt-in native SpliceVault table conversion for plain TSV input and plain TSV or .gz output. Other pandas compression formats are unsupported. Runs the original upstream CrossMap vcf and bed commands, in order, once per original chunk. No download or installer default change.";
+Opt-in native SpliceVault table conversion for plain TSV input and pandas-inferred output compression (.gz, .bz2, .xz, .zst, .zip, .tar, .tar.gz, .tar.bz2, .tar.xz). Retains archive append behavior, including compressed-TAR failure on a second chunk. Runs the original upstream CrossMap vcf and bed commands, in order, once per original chunk. No download or installer default change.";
 
 struct Options {
     input: PathBuf,
@@ -586,18 +587,9 @@ fn raw_header(path: &Path) -> Result<String> {
 }
 
 fn publish(path: &Path, table: &Table, first: bool) -> Result<()> {
-    // The installed route writes TSV, then runs the original sort/bgzip.
-    // Do not disguise a missing pandas compression backend as plain output.
-    // This explicit unsupported-format error is a compatibility limitation,
-    // not a claim that Python fails on these otherwise valid destinations.
     let name = path.to_string_lossy().to_lowercase();
-    if [".bz2", ".xz", ".zst", ".zip", ".tar", ".tar.gz"]
-        .iter()
-        .any(|suffix| name.ends_with(suffix))
-    {
-        return Err(invalid(
-            "Unsupported output compression: use plain TSV or .gz; other pandas compression formats are not implemented",
-        ));
+    if let Some(format) = compression::Format::infer(&name) {
+        return compression::publish(path, table, first, format);
     }
     let file = OpenOptions::new()
         .create(true)

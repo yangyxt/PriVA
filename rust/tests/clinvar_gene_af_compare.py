@@ -93,6 +93,21 @@ def cases():
               "truncated_no_info": {"rows": ["chr1\t10\t.\tA\tT\n"]},
               "crlf": {"crlf": True}, "literal_paths": {"filename": "input ;literal $(unused).vcf.gz"},
               }
+    # Boolean fields are source-supported; v2 is needed only when one survives.
+    result.update({
+        "flag_group_float_joint": {"af_type":"Flag", "af_number":"0", "joint_type":"Float", "joint_number":"A"},
+        "flag_group_absent_falls_back": {"af_type":"Flag", "af_number":"0", "joint_type":"Float", "joint_number":"A", "rows":[row().replace(";AF_grpmax_joint=0.1", "")]},
+        "flag_joint_first_snapshot": {"joint_type":"Flag", "joint_number":"0"},
+        "flag_joint_added_twice": {"joint_type":"Flag", "joint_number":"0", "rows":[row(),row(pos=11,af="0.2")]},
+        "flag_joint_absent_then_true": {"joint_type":"Flag", "joint_number":"0", "rows":[row().replace(";AF_joint=0.01", ""),row(pos=11,af="0.2")]},
+        "flag_joint_true_then_absent": {"joint_type":"Flag", "joint_number":"0", "rows":[row(),row(pos=11,af="0.2").replace(";AF_joint=0.01", "")]},
+        "flag_group_later_float_winner": {"af_type":"Flag", "af_number":"0", "joint_type":"Float", "joint_number":"A", "rows":[row(),row(pos=11,joint="2").replace(";AF_grpmax_joint=0.1", "")]},
+        "flag_unused_record": {"af_type":"Flag", "af_number":"0", "rows":[row(sig="Benign")]},
+        "flag_empty_contig": {"af_type":"Flag", "af_number":"0", "contigs":["chr1","chr2"]},
+        "flag_header_order_tie": {"af_type":"Flag", "af_number":"0", "contigs":["chr2","chr1"], "rows":[row(),row(chrom="chr2",ref="C")]},
+        "flag_none_merge_failure": {"af_type":"Flag", "af_number":"0", "contigs":["chr1","chr2"], "rows":[row().replace(";AF_grpmax_joint=0.1;AF_joint=0.01", ""),row(chrom="chr2")]},
+        "flag_all_absent": {"af_type":"Flag", "af_number":"0", "rows":[row().replace(";AF_grpmax_joint=0.1;AF_joint=0.01", "")]},
+    })
     for value in ["0", "-0", "-1", ".", "NaN", "-NaN", "Inf", "-Inf", "1e-50", "1e40", "x", "0.123456789", "0.1junk", " 0.2", ".2", "0x1p-2"]:
         name = "af_token_" + str(len(result))
         result[name] = {"rows": [row(af=value)], "token": value}
@@ -113,7 +128,9 @@ def make_case(folder, spec):
               '##INFO=<ID=CLNREVSTAT,Number=.,Type=String,Description="Review status">\n']
     if not spec.get("omit_af_header"):
         for key in ["AF_grpmax_joint", "AF_joint"]:
-            lines.append(f'##INFO=<ID={key},Number={spec.get("af_number", "A")},Type={spec.get("af_type", "Float")},Description="AF">\n')
+            number = spec.get("joint_number", spec.get("af_number", "A")) if key == "AF_joint" else spec.get("af_number", "A")
+            kind = spec.get("joint_type", spec.get("af_type", "Float")) if key == "AF_joint" else spec.get("af_type", "Float")
+            lines.append(f'##INFO=<ID={key},Number={number},Type={kind},Description="AF">\n')
     lines.append(f'##INFO=<ID=CSQ,Number={spec.get("csq_number", ".")},Type={spec.get("csq_type", "String")},Description="{spec.get("description", "Format: Gene|HGVSp|IMPACT|Consequence|SYMBOL")}">\n')
     if spec.get("sample"):
         lines.append(f'##FORMAT=<ID={spec["sample"]},Number=1,Type={spec.get("format_type", "String")},Description="sample">\n')
@@ -185,7 +202,7 @@ def check(args):
                     archive=archive, report=folder/"values.json", mismatches=folder/"mismatches.jsonl"))
                 report["comparison"] = comparison
                 report["passed"] &= comparison["passed"]
-        if args.command == "check" and name in ["normal", "csi", "header_order_tie", "cross_chr_larger", "merge_none_first", "merge_none_second", "merge_none_both", "none_separate_genes", "empty_header_contig", "duplicate_csq"]:
+        if args.command == "check" and name in ["flag_empty_contig", "flag_header_order_tie", "flag_none_merge_failure", "normal", "csi", "header_order_tie", "cross_chr_larger", "merge_none_first", "merge_none_second", "merge_none_both", "none_separate_genes", "empty_header_contig", "duplicate_csq"]:
             import pysam
             with pysam.VariantFile(str(vcf)) as source:
                 contigs = list(source.header.contigs)

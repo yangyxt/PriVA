@@ -327,6 +327,9 @@ pub(crate) fn run() -> Result<()> {
     if args.get(1).map(String::as_str) == Some("das-input-continuity") {
         return crate::das_input_continuity::dispatch(&args[2..]);
     }
+    if args.get(1).map(String::as_str) == Some("installed-environment") {
+        return crate::installed_environment::dispatch(&args[2..]);
+    }
     if args.get(1).map(String::as_str) == Some("mechanism-source") {
         return crate::mechanism_source::dispatch(&args[2..]);
     }

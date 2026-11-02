@@ -46,4 +46,5 @@ codegen-units = 16
 lto = false
 
 [build-dependencies]
+cc = "=1.8.0"
 pkg-config = "=0.3.34"

@@ -1,4 +1,30 @@
 fn main() {
+    // Match PyYAML's mature event parser/emitter. Package export bytes are
+    // qualified against SafeDumper; no independent YAML formatting policy.
+    let yaml = pkg_config::Config::new()
+        .atleast_version("0.2.5")
+        .statik(true)
+        .cargo_metadata(false)
+        .probe("yaml-0.1")
+        .expect("building priva requires libyaml >=0.2.5 and its static archive");
+    let yaml_dir = std::path::PathBuf::from(
+        pkg_config::get_variable("yaml-0.1", "libdir").expect("libyaml libdir is required"),
+    );
+    assert!(
+        yaml_dir.join("libyaml.a").is_file(),
+        "libyaml.a is required"
+    );
+    cc::Build::new()
+        .file("src/installed_environment/yaml_bridge.c")
+        .includes(&yaml.include_paths)
+        .warnings_into_errors(true)
+        .compile("priva_yaml_bridge");
+    for path in yaml.link_paths.iter().chain(std::iter::once(&yaml_dir)) {
+        println!("cargo:rustc-link-search=native={}", path.display());
+    }
+    println!("cargo:rustc-link-lib=static=yaml");
+    println!("cargo:rustc-env=PRIVA_LIBYAML_VERSION={}", yaml.version);
+    println!("cargo:rerun-if-changed=src/installed_environment/yaml_bridge.c");
     // ElementTree uses Expat. Keep the same mature XML backend instead of
     // independently changing namespace, encoding, DTD or text semantics.
     // The static dependency follows the binary across execution environments.

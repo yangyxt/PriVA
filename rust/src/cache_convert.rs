@@ -72,8 +72,8 @@ pub(crate) struct ClinvarAaStat {
 }
 
 /// One transcript as plain values, the unit the converter and its check compare.
-type PlainChange = (String, Vec<String>, Vec<String>);
-type PlainTranscript = Vec<(String, Vec<PlainChange>)>;
+pub(crate) type PlainChange = (String, Vec<String>, Vec<String>);
+pub(crate) type PlainTranscript = Vec<(String, Vec<PlainChange>)>;
 
 fn text_list(file: &str, transcript: &str, item: Option<&Item>, name: &str) -> Result<Vec<String>> {
     match item {
@@ -283,10 +283,33 @@ impl ClinvarAaCache {
         &self.texts[id.to_native() as usize]
     }
 
-    fn plain(&self, transcript: &str) -> Option<PlainTranscript> {
+    pub(crate) fn plain(&self, transcript: &str) -> Option<PlainTranscript> {
         self.get(transcript)
             .map(|entry| plain_from_archive(entry, &self.texts))
     }
+}
+
+/// Direct producer boundary. The frozen schema-1 encoding and inner order are
+/// shared with conversion; top-level transcript order remains lookup-only.
+pub(crate) fn write_clinvar_aa(
+    entries: Vec<(String, PlainTranscript)>,
+    provenance: Vec<Provenance>,
+    output: &Path,
+) -> Result<usize> {
+    let bytes = build(entries.clone(), provenance)?;
+    write_cache_checked(output, CLINVAR_AA_STAT, &bytes, |staged| {
+        let cache = ClinvarAaCache::open(&staged.to_string_lossy())?;
+        if cache.len() != entries.len() {
+            return Err(invalid("direct AA transcript count differs"));
+        }
+        for (key, expected) in &entries {
+            if cache.plain(key).as_ref() != Some(expected) {
+                return Err(invalid("direct AA values differ after writing"));
+            }
+        }
+        Ok(())
+    })?;
+    Ok(entries.len())
 }
 
 /// Converts the pickle at `pickle` to `output`, then reads the pickle again and checks that the

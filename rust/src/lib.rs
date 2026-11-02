@@ -61,6 +61,7 @@ mod json_text;
 )]
 mod md5;
 mod mondo_scope;
+mod pandas_low_memory;
 mod pandas_polars;
 mod pandas_table;
 pub mod pedigree_filter;

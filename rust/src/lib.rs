@@ -10,6 +10,8 @@ pub mod cadd_hub;
 mod cli;
 mod clingen_map_builder;
 pub mod combine_annotations;
+#[allow(dead_code, reason = "Shared gzip API awaiting installer-builder callers")]
+mod gzip_writer;
 pub mod hpo_penetrance;
 pub mod interpro_mapping_io;
 mod json_text;

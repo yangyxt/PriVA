@@ -172,7 +172,8 @@ def caches(args,module,root):
     for name,kind,data in [('aa_untyped_values','aa',{'T':{'1':{'x':{'CLNSIG':1,'CLNREVSTAT':None}}}}),
         ('aa_extra_field','aa',{'T':{'1':{'x':{'CLNSIG':[],'CLNREVSTAT':[],'extra':1}}}}),
         ('splice_minimum_keys','splice',{'T':[{'chrom':None,'pos':None,'clinvar_sig':None,'splice_ai':None}]}),
-        ('gene_af_none_scalar','gene-af',{'G':dict(valid['gene-af']['G'],af=None)})]:
+        ('gene_af_none_scalar','gene-af',{'G':dict(valid['gene-af']['G'],af=None)}),
+        ('gene_plain_integer_symbol','gene',{'G':dict(gene,gene_symbol=3)})]:
         source=folder/(name+'.pkl');source.write_bytes(pickle.dumps(data,protocol=4))
         archive=folder/(name+'.rkyv')
         expected=captured(lambda:module.validate_cache(source,kind))

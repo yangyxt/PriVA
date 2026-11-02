@@ -142,6 +142,24 @@ only if a matching record reaches its length calculation, where Python raises
 `TypeError`. These are representation and source-behavior rules; the installer
 does not activate a different VCF producer.
 
+### ClinVar gene symbols (schema 5, version 2)
+
+All-text `gene_symbol` values continue to use the unchanged schema-5 v1 layout.
+When a symbol is a Python float, pandas `NA`, NumPy `int32` or NumPy `float32`,
+schema v2 retains its scalar kind and raw floating-point bits. Missing values,
+signed zero and NaN payloads remain distinct. Gene identifiers, all seven variant
+sets and domain/transcript dictionary order retain their v1 meaning. The PP2/BP1
+consumer reads the same identifier and sets in both versions; it does not use the symbol.
+
+Only this converter enables static decoding of `pandas._libs.missing.NA` and
+the NumPy `dtype`/`scalar` forms needed for little-endian `i4` and `f4` scalars.
+Reducer targets, arguments, dtype state and four-byte payload length are checked.
+No Python global or reducer is executed. Other reducers, arrays and scalar dtypes
+are refused, and the ordinary restricted pickle reader keeps its plain-data policy.
+
+The container remains `PRIVARKV` version 1. Managed v2 outputs use `.v2.rkyv`
+and a schema-version receipt; existing v1 archives and receipts are retained.
+
 ### ClinVar gene AF values (schema 6, version 2)
 
 The gene-AF converter and `priva clinvar-gene-af` retain version 1 whenever

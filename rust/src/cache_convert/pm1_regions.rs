@@ -320,6 +320,15 @@ fn check(pickle: &str, output: &Path) -> Result<()> {
         .ok_or_else(|| invalid("the cache path is not UTF-8"))?;
     let cache = Pm1RegionCache::open(path)?;
     let expected = read_pickle(pickle)?;
+    if !matches_expected(&cache, &expected) {
+        return Err(invalid(format!(
+            "{path}: the converted PM1 values differ from the pickle"
+        )));
+    }
+    Ok(())
+}
+
+fn matches_expected(cache: &Pm1RegionCache, expected: &Pm1Regions) -> bool {
     let root = cache.mapped.root();
     let same_map = |actual: &[ArchivedTranscriptResidues], expected: &[TranscriptResidues]| {
         actual.len() == expected.len()
@@ -331,24 +340,35 @@ fn check(pickle: &str, output: &Path) -> Result<()> {
                         .eq(b.residues.iter().copied())
             })
     };
-    if !root
-        .das_intolerant_domains
+    root.das_intolerant_domains
         .iter()
         .map(|value| value.as_str())
         .eq(expected.das_intolerant_domains.iter().map(String::as_str))
-        || !same_map(&root.hcseeker_hotspots, &expected.hcseeker_hotspots)
-        || !same_map(&root.rmc_constrained, &expected.rmc_constrained)
-        || !root
+        && same_map(&root.hcseeker_hotspots, &expected.hcseeker_hotspots)
+        && same_map(&root.rmc_constrained, &expected.rmc_constrained)
+        && root
             .metadata
             .iter()
             .map(metadata_plain)
             .eq(expected.metadata.iter().map(plain_metadata))
-    {
-        return Err(invalid(format!(
-            "{path}: the converted PM1 values differ from the pickle"
-        )));
-    }
-    Ok(())
+}
+
+/// A native producer writes the frozen schema directly and checks every value
+/// through its runtime reader before atomic publication. No pickle is emitted.
+pub(crate) fn write_produced(output: &Path, root: &Pm1Regions) -> Result<()> {
+    let archive = rkyv::to_bytes::<rancor::Error>(root)?;
+    write_cache_checked(output, PM1_REGIONS_PKL, &archive, |staged| {
+        let path = staged
+            .to_str()
+            .ok_or_else(|| invalid("PM1 output path is not UTF-8"))?;
+        let cache = Pm1RegionCache::open(path)?;
+        if !matches_expected(&cache, root) {
+            return Err(invalid(
+                "the staged PM1 cache differs from its native producer",
+            ));
+        }
+        Ok(())
+    })
 }
 
 pub(crate) fn convert(pickle: &str, output: &Path) -> Result<String> {

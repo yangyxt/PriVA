@@ -26,6 +26,7 @@ mod pandas_polars;
 mod pandas_table;
 pub mod pedigree_filter;
 mod pickle_reader;
+mod pm1_regions_builder;
 pub mod protein_domain_mapping;
 mod python_args;
 mod python_io;

@@ -428,6 +428,38 @@ failure leaves the completed AA archive. Output paths must be distinct from
 one another and the inputs. This procedure is opt-in; installer callers keep
 their existing producer.
 
+The optional annotation contract exposes header, native cache-shape and
+completion-receipt checks separately:
+
+```bash
+"$PRIVA_BINARY" clinvar-contract header \
+  --vcf clinvar.annotated.vcf.gz --stage complete
+"$PRIVA_BINARY" clinvar-contract cache --input clinvar.aa.rkyv --kind aa
+"$PRIVA_BINARY" clinvar-contract pair-check \
+  --vcf clinvar.annotated.vcf.gz \
+  --producer "$PRIVA_ROOT/scripts/stat_aachange_clinvar.py" \
+  --contract-source "$PRIVA_ROOT/scripts/clinvar_annotation_contract.py" \
+  --aa clinvar.aa.rkyv --splice clinvar.splice.rkyv --receipt pair.complete.json
+```
+
+Header stages are `aa`, `gene`, `af`, `vep` and `complete`; only the header is
+read. Cache kinds are `aa`, `splice`, `gene-af`, `exon-af` and `gene`. Native
+archive admission follows the existing schema readers, followed by the Python
+helper's nonempty/nested-shape checks. The Python checker accepts some value
+types that these archive schemas cannot represent; this command does not widen
+the cache formats or create pickles.
+
+Use `pair-capture --captured CAPTURE.json` before building the AA/splice pair,
+then `pair-complete --captured CAPTURE.json` with the same arguments afterwards.
+Both commands require `--receipt`; capture leaves that receipt untouched.
+Pass `--config CONFIG.yaml` to include the active configuration in the alias
+checks. The pair association records path/target/inode/size/timestamps for the
+VCF, its existing CSI/TBI indexes and the two outputs, plus the original Python
+producer and contract asset hashes. Those assets are read, never executed by
+the native command. `af-paths-check --vcf VCF --config YAML --gene GENE --exon EXON`
+exposes the separate AF output-path preflight. Existing installer callers keep
+the Python contract.
+
 For an explicit SpliceVault GRCh38-to-GRCh37 table conversion, use:
 
 ```bash

@@ -42,6 +42,10 @@ unsafe extern "C" {
         parser: Parser,
         handler: Option<unsafe extern "C" fn(*mut c_void, *const c_char, c_int)>,
     );
+    fn XML_SetDefaultHandlerExpand(
+        parser: Parser,
+        handler: Option<unsafe extern "C" fn(*mut c_void, *const c_char, c_int)>,
+    );
     fn XML_SetExternalEntityRefHandler(
         parser: Parser,
         handler: Option<
@@ -241,6 +245,28 @@ unsafe extern "C" fn external_entity(
     0
 }
 
+unsafe extern "C" fn product6_default(data: *mut c_void, value: *const c_char, length: c_int) {
+    unsafe {
+        callback(data, |state| {
+            // ElementTree's expanding default handler rejects an external
+            // entity by its literal reference; no external resolver is used.
+            let bytes = std::slice::from_raw_parts(value.cast::<u8>(), usize::try_from(length)?);
+            if bytes.starts_with(b"&") {
+                let value = std::str::from_utf8(bytes)?;
+                let line = XML_GetCurrentLineNumber(state.parser);
+                let column = XML_GetCurrentColumnNumber(state.parser);
+                return Err(category(
+                    "ParseError",
+                    invalid(format!(
+                        "undefined entity {value}: line {line}, column {column}"
+                    )),
+                ));
+            }
+            Ok(())
+        })
+    }
+}
+
 unsafe extern "C" fn unknown_encoding(
     data: *mut c_void,
     name: *const c_char,
@@ -335,7 +361,11 @@ fn parse_with(mut source: impl Read, product6: bool) -> Result<Mapping> {
         XML_SetUserData(parser.0, data);
         XML_SetElementHandler(parser.0, Some(start), Some(end));
         XML_SetCharacterDataHandler(parser.0, Some(characters));
-        XML_SetExternalEntityRefHandler(parser.0, Some(external_entity));
+        if product6 {
+            XML_SetDefaultHandlerExpand(parser.0, Some(product6_default));
+        } else {
+            XML_SetExternalEntityRefHandler(parser.0, Some(external_entity));
+        }
         XML_SetUnknownEncodingHandler(parser.0, Some(unknown_encoding), data);
     }
     let mut buffer = [0u8; 16 * 1024];

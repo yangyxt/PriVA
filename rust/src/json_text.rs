@@ -179,7 +179,8 @@ pub(crate) fn parse(text: &str, reject_duplicate_keys: bool) -> Result<Json, Str
 
 /// Equality-only projection for completion metadata, never a general JSON
 /// reader or a value writer. The comparison target must contain only NUL-free
-/// UTF-8 strings, integers strictly within +/-2^96, objects and arrays.
+/// UTF-8 strings, integers and finite floats strictly within +/-2^96,
+/// booleans, nulls, objects and arrays.
 ///
 /// An unpaired surrogate cannot equal any target string, so project it to NUL;
 /// an out-of-i128 integer cannot equal any target integer, so project it to
@@ -192,17 +193,41 @@ pub(crate) fn parse_metadata_comparison(text: &str, target: &Json) -> Result<Jso
         match value {
             Json::Str(s) => !s.contains('\0'),
             Json::Int(n) => n.unsigned_abs() < (1_u128 << 96),
+            Json::Float(n) => n.is_finite() && n.abs() < (1_u128 << 96) as f64,
+            Json::Bool(_) | Json::Null => true,
             Json::Array(values) => values.iter().all(supported),
             Json::Object(values) => values
                 .iter()
                 .all(|(k, v)| !k.contains('\0') && supported(v)),
-            _ => false,
         }
     }
     if !supported(target) {
         return Err("invalid metadata comparison target".into());
     }
-    parse_metadata_document(text, target).map_err(|failure| failure.describe(text))
+    parse_metadata_document(text, target, &mut Vec::new()).map_err(|failure| failure.describe(text))
+}
+
+/// Select fields from a read-only receipt after validating its COMPLETE JSON
+/// syntax. Ignored values may contain Python integers or unpaired surrogates;
+/// selected values use the ordinary lossless native reader, never projection
+/// sentinels. Do not use this to rewrite a source document or a publication
+/// marker: omitted fields are deliberately not returned.
+pub(crate) fn parse_metadata_fields(text: &str, names: &[&str]) -> Result<Json, String> {
+    let mut spans = Vec::new();
+    let root = parse_metadata_document(text, &Json::Object(vec![]), &mut spans)
+        .map_err(|failure| failure.describe(text))?;
+    if !matches!(root, Json::Object(_)) {
+        // Keep the existing native representation boundary for a wrong root;
+        // the caller will report its original type/category, not a fake map.
+        return parse(text, false);
+    }
+    let mut values = Json::Object(Vec::new());
+    for (name, span) in spans {
+        if names.contains(&name.as_str()) {
+            values.set(&name, parse(&text[span], false)?);
+        }
+    }
+    Ok(values)
 }
 
 /// A comparison parses unknown/mistyped subtrees completely, but need not
@@ -220,7 +245,11 @@ enum MetadataFrame<'a> {
     },
 }
 
-fn parse_metadata_document(text: &str, target: &Json) -> Result<Json, Problem> {
+fn parse_metadata_document(
+    text: &str,
+    target: &Json,
+    spans: &mut Vec<(String, std::ops::Range<usize>)>,
+) -> Result<Json, Problem> {
     if text.starts_with('\u{feff}') {
         return problem("Unexpected UTF-8 BOM (decode using utf-8-sig)", 0);
     }
@@ -234,9 +263,13 @@ fn parse_metadata_document(text: &str, target: &Json) -> Result<Json, Problem> {
     let mut frames = Vec::new();
     let mut wanted = Some(target);
     let mut pending = None;
+    let mut member_start = 0;
     loop {
         if pending.is_none() {
             parser.skip_whitespace();
+            if frames.len() == 1 && matches!(frames[0], MetadataFrame::Object { .. }) {
+                member_start = parser.pos;
+            }
             let opening = parser.peek();
             if matches!(opening, Some(b'[' | b'{')) {
                 // Pinned CPython 3.12's C decoder has an independent recursion
@@ -287,6 +320,7 @@ fn parse_metadata_document(text: &str, target: &Json) -> Result<Json, Problem> {
             }
         }
         let value = pending.take().unwrap();
+        let root_member = frames.len() == 1;
         let Some(frame) = frames.last_mut() else {
             parser.skip_whitespace();
             if parser.pos != parser.bytes.len() {
@@ -317,6 +351,13 @@ fn parse_metadata_document(text: &str, target: &Json) -> Result<Json, Problem> {
                 target,
                 key,
             } => {
+                if root_member {
+                    if let Some((_, prior)) = spans.iter_mut().find(|(name, _)| name == key) {
+                        *prior = member_start..parser.pos;
+                    } else {
+                        spans.push((key.clone(), member_start..parser.pos));
+                    }
+                }
                 if target.is_some() {
                     if let Some((_, previous)) = values.iter_mut().find(|(k, _)| k == key) {
                         *previous = value;
@@ -1295,6 +1336,60 @@ mod tests {
         }
         assert!(parse_metadata_comparison("{}", &Json::Int(i128::MAX)).is_err());
         assert!(parse_metadata_comparison("{}", &Json::Str("\0".into())).is_err());
-        assert!(parse_metadata_comparison("{}", &Json::Float(1.0)).is_err());
+        assert!(parse_metadata_comparison("{}", &Json::Float(f64::INFINITY)).is_err());
+        assert!(parse_metadata_comparison("{}", &Json::Float((1_u128 << 96) as f64)).is_err());
+    }
+
+    #[test]
+    fn metadata_fields_validate_extras_but_never_rewrite_selected_values() {
+        let text = r#"{"ignored":{"a":[1606938044258990275541962092341162602522202993782792835301376,"\ud800"]},"v":[true,null,-0.0,0.125],"last":"\ud800","last":4}"#;
+        let selected = parse_metadata_fields(text, &["v", "last"]).unwrap();
+        let expected = parse(r#"{"v":[true,null,-0.0,0.125],"last":4}"#, false).unwrap();
+        assert!(py_equal(&selected, &expected));
+        assert!(parse(text, false).is_err());
+        assert!(parse_metadata_fields(r#"{"v":"\ud800"}"#, &["v"]).is_err());
+        assert!(parse_metadata_fields(r#"{"ignored":[1,],"v":4}"#, &["v"]).is_err());
+        assert!(parse_metadata_fields(r#"{"v":4,"v":"\ud800"}"#, &["v"]).is_err());
+        if let Json::Array(values) = selected.get("v").unwrap() {
+            assert!(matches!(values[2], Json::Float(n) if n.to_bits()==(-0.0_f64).to_bits()));
+        } else {
+            panic!("selected list was not retained");
+        }
+    }
+
+    #[test]
+    fn metadata_numeric_projection_has_no_scalar_sentinel_collision() {
+        for target in [
+            Json::Null,
+            Json::Bool(false),
+            Json::Bool(true),
+            Json::Float(-0.0),
+            Json::Float(1.0),
+            Json::Float(0.125),
+            Json::Float(-1e20),
+        ] {
+            let text = dumps(&target, false).unwrap();
+            assert!(py_equal(
+                &parse_metadata_comparison(&text, &target).unwrap(),
+                &target
+            ));
+            for text in [
+                "1606938044258990275541962092341162602522202993782792835301376",
+                r#""\ud800""#,
+            ] {
+                assert!(!py_equal(
+                    &parse_metadata_comparison(text, &target).unwrap(),
+                    &target
+                ));
+            }
+        }
+        assert!(py_equal(
+            &parse_metadata_comparison("1", &Json::Bool(true)).unwrap(),
+            &Json::Bool(true)
+        ));
+        assert!(py_equal(
+            &parse_metadata_comparison("0.0", &Json::Bool(false)).unwrap(),
+            &Json::Bool(false)
+        ));
     }
 }

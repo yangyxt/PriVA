@@ -1,4 +1,4 @@
-//! CPython 3.12's 64-bit little-endian, SipHash13 string-set iteration order.
+//! CPython 3.12's 64-bit little-endian string/text-pair set iteration order.
 //!
 //! The gene-statistics producer constructs dictionaries by iterating newly built
 //! sets of transcript/domain strings. Preserve that order for an explicit
@@ -6,7 +6,7 @@
 //! This small table supports construction from an iterable, not deletion or set
 //! algebra. Unicode hashes use Python's one-, two- or four-byte character kind.
 //!
-//! Algorithm references (CPython v3.12.3): Objects/setobject.c,
+//! Algorithm references (CPython v3.12.3): Objects/setobject.c, Objects/tupleobject.c,
 //! Python/pyhash.c and Python/bootstrap_hash.c in https://github.com/python/cpython.
 
 #[derive(Clone, Copy)]
@@ -49,6 +49,25 @@ impl StringHash {
         }
         let value = siphash13(self.keys, &data) as i64;
         if value == -1 { -2 } else { value }
+    }
+
+    /// `tuplehash` for exactly two Unicode strings, including empty strings.
+    /// Hash randomization remains an explicit caller/test profile parameter.
+    pub(crate) fn pair_hash(&self, first: &str, second: &str) -> i64 {
+        const PRIME_1: u64 = 11_400_714_785_074_694_791;
+        const PRIME_2: u64 = 14_029_467_366_897_019_727;
+        const PRIME_5: u64 = 2_870_177_450_012_600_261;
+        let mut value = PRIME_5;
+        for text in [first, second] {
+            value = value.wrapping_add((self.hash(text) as u64).wrapping_mul(PRIME_2));
+            value = value.rotate_left(31).wrapping_mul(PRIME_1);
+        }
+        value = value.wrapping_add(2 ^ (PRIME_5 ^ 3_527_539));
+        if value == u64::MAX {
+            1_546_275_796
+        } else {
+            value as i64
+        }
     }
 }
 
@@ -96,27 +115,25 @@ fn siphash13(keys: [u64; 2], bytes: &[u8]) -> u64 {
 }
 
 #[derive(Clone)]
-struct Entry {
-    text: String,
+struct Entry<T> {
+    key: T,
     hash: i64,
 }
 
-pub(crate) struct StringSet {
-    slots: Vec<Option<Entry>>,
+struct Table<T> {
+    slots: Vec<Option<Entry<T>>>,
     used: usize,
-    hash: StringHash,
 }
 
-impl StringSet {
-    pub(crate) fn new(seed: u32) -> Self {
+impl<T: Clone + Eq> Table<T> {
+    fn new() -> Self {
         Self {
             slots: vec![None; 8],
             used: 0,
-            hash: StringHash::seeded(seed),
         }
     }
 
-    fn locate(&self, text: &str, hash: i64) -> usize {
+    fn locate(&self, key: &T, hash: i64) -> usize {
         let mask = self.slots.len() - 1;
         let mut perturb = hash as u64;
         let mut position = perturb as usize & mask;
@@ -129,7 +146,7 @@ impl StringSet {
             for at in position..=end {
                 match &self.slots[at] {
                     None => return at,
-                    Some(entry) if entry.hash == hash && entry.text == text => return at,
+                    Some(entry) if entry.hash == hash && &entry.key == key => return at,
                     _ => {}
                 }
             }
@@ -142,13 +159,12 @@ impl StringSet {
         }
     }
 
-    pub(crate) fn insert(&mut self, text: String) {
-        let hash = self.hash.hash(&text);
-        let position = self.locate(&text, hash);
+    fn insert(&mut self, key: T, hash: i64) {
+        let position = self.locate(&key, hash);
         if self.slots[position].is_some() {
             return;
         }
-        self.slots[position] = Some(Entry { text, hash });
+        self.slots[position] = Some(Entry { key, hash });
         self.used += 1;
         if self.used * 5 >= (self.slots.len() - 1) * 3 {
             let minimum = self.used * if self.used > 50_000 { 2 } else { 4 };
@@ -160,17 +176,65 @@ impl StringSet {
             // No deletion occurs in set(iterable); table-order reinsertion
             // and the first free probe slot reproduce set_insert_clean.
             for entry in old.into_iter().flatten() {
-                let position = self.locate(&entry.text, entry.hash);
+                let position = self.locate(&entry.key, entry.hash);
                 self.slots[position] = Some(entry);
             }
         }
     }
 
-    pub(crate) fn into_order(self) -> Vec<String> {
+    fn into_order(self) -> Vec<T> {
         self.slots
             .into_iter()
             .flatten()
-            .map(|entry| entry.text)
+            .map(|entry| entry.key)
             .collect()
+    }
+}
+
+pub(crate) struct StringSet {
+    table: Table<String>,
+    hash: StringHash,
+}
+
+impl StringSet {
+    pub(crate) fn new(seed: u32) -> Self {
+        Self {
+            table: Table::new(),
+            hash: StringHash::seeded(seed),
+        }
+    }
+
+    pub(crate) fn insert(&mut self, text: String) {
+        let hash = self.hash.hash(&text);
+        self.table.insert(text, hash);
+    }
+
+    pub(crate) fn into_order(self) -> Vec<String> {
+        self.table.into_order()
+    }
+}
+
+/// A newly constructed Python set of exact two-text tuples. No deletion or
+/// set algebra is modeled; normalization inserts the tuples in source order.
+pub(crate) struct PairSet {
+    table: Table<(String, String)>,
+    hash: StringHash,
+}
+
+impl PairSet {
+    pub(crate) fn new(seed: u32) -> Self {
+        Self {
+            table: Table::new(),
+            hash: StringHash::seeded(seed),
+        }
+    }
+
+    pub(crate) fn insert(&mut self, pair: (String, String)) {
+        let hash = self.hash.pair_hash(&pair.0, &pair.1);
+        self.table.insert(pair, hash);
+    }
+
+    pub(crate) fn into_order(self) -> Vec<(String, String)> {
+        self.table.into_order()
     }
 }

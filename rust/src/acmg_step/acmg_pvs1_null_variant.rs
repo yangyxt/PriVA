@@ -41,11 +41,11 @@ use super::alternative_start_codon::{
 };
 use super::types::{AcmgError, HarnessCall, StepOutput, not_converted};
 use crate::cache_convert::clinvar_exon_af::ClinvarExonAfCache;
+use crate::cache_convert::intolerant_domains::IntolerantDomainCache;
 use crate::cache_convert::transcript_domains::TranscriptDomainCache;
 use crate::cli::{Result, invalid};
 use crate::interpro_mapping_io::{InterproMapping, load_interpro_mapping};
 use crate::pandas_table::{Cell, Column, ObjectValue, ReadOptions, Table, read_table_with};
-use crate::pickle_reader::{self, Value};
 use crate::protein_domain_mapping::{DomainNormalizer, Functionality};
 use crate::python_text::{
     decimal_digit_value, float_repr, python_int, python_int_is_valid, python_strip,
@@ -227,44 +227,27 @@ impl ProteinDomains {
 
 /// The intolerant domain collection (`all_intolerant_domains`): its text items and whether
 /// it is truthy (`if intol_domains:`).
-#[derive(Clone, Debug, Default)]
+#[derive(Default)]
 pub(crate) struct IntolerantDomains {
-    pub(crate) items: HashSet<String>,
+    mapped: Option<IntolerantDomainCache>,
     pub(crate) truthy: bool,
 }
 
 impl IntolerantDomains {
-    /// The orchestrator's load of `--intolerant_domains_pkl` (through `mmap`; a `.gz` name maps
-    /// the compressed bytes and fails in Python, so it is refused here).
+    /// The orchestrator's declared native intolerant-domain set; None remains an
+    /// empty, false collection for the optional harness argument.
     pub(crate) fn load(path: &str) -> Result<IntolerantDomains> {
-        if path.ends_with(".gz") {
-            return Err(invalid(format!(
-                "{path}: Python maps the gzip bytes of a .gz intolerant domain pickle and fails"
-            )));
-        }
-        let value = pickle_reader::load(&pickle_reader::read_file(Path::new(path), false)?)?;
-        let items: Vec<Value> = match &value {
-            Value::Set(set) => set.borrow().items.clone(),
-            Value::FrozenSet(set) => set.items.clone(),
-            Value::List(items) => items.borrow().clone(),
-            other => {
-                return Err(invalid(format!(
-                    "{path} holds a {}; a set, frozenset or list of domains is expected",
-                    other.type_name()
-                )));
-            }
-        };
+        let mapped = IntolerantDomainCache::open(path)?;
         Ok(IntolerantDomains {
-            truthy: !items.is_empty(),
-            items: items
-                .iter()
-                .filter_map(|item| item.as_str().map(str::to_owned))
-                .collect(),
+            truthy: mapped.len() != 0,
+            mapped: Some(mapped),
         })
     }
 
     fn contains(&self, text: &str) -> bool {
-        self.items.contains(text)
+        self.mapped
+            .as_ref()
+            .is_some_and(|mapped| mapped.contains(text))
     }
 }
 
@@ -1554,9 +1537,11 @@ mod tests {
         std::fs::remove_file(path).unwrap();
     }
 
-
     #[test]
-    fn native_protein_projection_keeps_domain_order() {
+    fn native_protein_projection_keeps_domain_order_and_set_membership() {
+        use crate::cache_convert::intolerant_domains::{
+            ALL_INTOLERANT_DOMAINS, IntolerantDomainSet,
+        };
         use crate::cache_convert::transcript_domains::{
             ALPHAMISSENSE_TRANX_DOMAIN_MAP, ProteinDomain, TranscriptDomainMap, TranscriptDomains,
         };
@@ -1614,7 +1599,22 @@ mod tests {
             vec![(8, "G:Pfam:B"), (3, "G:Pfam:A"), (8, "G:Pfam:B")]
         );
         assert!(domains.transcripts["EMPTY"].is_empty());
+        let set = IntolerantDomainSet {
+            provenance: vec![],
+            domains: vec!["G:Pfam:B".into()],
+        };
+        let set_path = native_fixture(
+            "set",
+            ALL_INTOLERANT_DOMAINS,
+            &rkyv::to_bytes::<rkyv::rancor::Error>(&set).unwrap(),
+        );
+        let intolerant = IntolerantDomains::load(&set_path).unwrap();
+        assert!(intolerant.truthy && intolerant.contains("G:Pfam:B"));
+        assert!(!intolerant.contains("G:Pfam:A"));
+        assert!(!IntolerantDomains::default().truthy);
+        assert!(!IntolerantDomains::default().contains("G:Pfam:B"));
         std::fs::remove_file(path).unwrap();
+        std::fs::remove_file(set_path).unwrap();
     }
 
     #[test]

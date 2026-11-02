@@ -105,7 +105,7 @@ lists are `List` columns; sets are sorted `List` columns.
 | 7 | `pm1_regions_pkl` | `das_intolerant_domains` (sorted); `hcseeker_hotspots` and `rmc_constrained` as sorted transcripts with sorted `Vec<i64>` residues; `metadata: Vec<{key, value}>` | pending |
 | 8 | `all_intolerant_domains` | `domains`: sorted, unique (a Python set) | pending |
 | 9 | `interpro_mapping_pickle` | keys `(database, accession)` sorted; `entries[i]: Vec<{five texts, members: Vec<(text, text, text)>}>` (Python: list of 6-tuples) | pending |
-| 10 | `clingen_map` | `variants` (sorted); `codes: Vec<Option<String>>` (`None` = the float NaN of curated variants without codes) | pending |
+| 10 | `clingen_map` | `variants` (sorted); `codes: Vec<Option<String>>` (`None` = the float NaN of curated variants without codes; Python `None` and every non-text/non-NaN value refused) | **implemented** (`cache_convert/clingen_map.rs`) |
 
 Schemas 2 to 10 are fixed in outline here; each is frozen as version 1 in the commit that adds
 its converter, with field names taken from the builder script. File names: the pickle's name

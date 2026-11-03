@@ -254,31 +254,44 @@ impl Writer {
     }
 }
 
-fn row(frame: &DataFrame, at: usize) -> Result<Row> {
-    let text = |name| -> Result<String> {
-        Ok(frame
-            .column(name)?
-            .str()?
-            .get(at)
-            .ok_or_else(|| invalid("unexpected null Parquet text"))?
-            .to_owned())
+/// Offsets and the flat child of one list column. A Series built for every
+/// cell made whole-genome scans take hours.
+pub(super) fn list_parts(
+    series: &Series,
+    null: impl FnOnce() -> Box<dyn std::error::Error>,
+) -> Result<(Vec<usize>, Series)> {
+    let series = series.rechunk();
+    let lists = series.list()?;
+    if lists.null_count() != 0 {
+        return Err(null());
+    }
+    let mut arrays = lists.downcast_iter();
+    let offsets: Vec<usize> = match (arrays.next(), arrays.next()) {
+        (Some(array), None) => array.offsets().iter().map(|&at| at as usize).collect(),
+        (None, None) => vec![0],
+        _ => return Err(invalid("Parquet list column is not contiguous")),
     };
-    let integer = |name| -> Result<u64> {
-        frame
-            .column(name)?
-            .u64()?
-            .get(at)
-            .ok_or_else(|| invalid("unexpected null Parquet ordinal"))
+    let child = lists.get_inner();
+    if offsets.len() != series.len() + 1 || offsets.last() > Some(&child.len()) {
+        return Err(invalid("Parquet list offsets differ from their values"));
+    }
+    Ok((offsets, child))
+}
+
+fn span(offsets: &[usize], at: usize) -> std::ops::Range<usize> {
+    offsets[at]..offsets[at + 1]
+}
+
+/// Columns are resolved once per row group; each row copies its own cells.
+fn rows(frame: &DataFrame, mut visit: impl FnMut(Row) -> Result<()>) -> Result<()> {
+    let column = |name: &str| -> Result<Series> {
+        Ok(frame.column(name)?.as_materialized_series().rechunk())
     };
-    let list = |name| -> Result<Series> {
-        frame
-            .column(name)?
-            .list()?
-            .get_as_series(at)
-            .ok_or_else(|| invalid("unexpected null Parquet list"))
+    let list = |name: &str| -> Result<(Vec<usize>, Series)> {
+        list_parts(&column(name)?, || invalid("unexpected null Parquet list"))
     };
-    let texts = |name| -> Result<Vec<String>> {
-        list(name)?
+    let items = |child: &Series| -> Result<Vec<String>> {
+        child
             .str()?
             .into_iter()
             .map(|value| {
@@ -288,33 +301,75 @@ fn row(frame: &DataFrame, at: usize) -> Result<Row> {
             })
             .collect()
     };
-    let values = list("values")?
+    let gene = column("gene")?;
+    let gene = gene.str()?;
+    let key = column("key")?;
+    let key = key.str()?;
+    let kind = column("kind")?;
+    let kind = kind.str()?;
+    let gene_order = column("gene_order")?;
+    let gene_order = gene_order.u64()?;
+    let member_order = column("member_order")?;
+    let member_order = member_order.u64()?;
+    let item_order = column("item_order")?;
+    let item_order = item_order.u64()?;
+    let minimum_int = column("minimum_int")?;
+    let minimum_int = minimum_int.i64()?;
+    let minimum_float = column("minimum_float")?;
+    let minimum_float = minimum_float.f64()?;
+    let maximum = column("maximum")?;
+    let maximum = maximum.i64()?;
+    let auxiliary_int = column("auxiliary_int")?;
+    let auxiliary_int = auxiliary_int.i64()?;
+    let (path_at, path) = list("path")?;
+    let path = items(&path)?;
+    let (keys_at, keys) = list("keys")?;
+    let keys = items(&keys)?;
+    let (typed_at, typed) = list("typed_keys")?;
+    let typed = key_parquet::decode(typed)?;
+    let (values_at, values) = list("values")?;
+    let values = values
         .f64()?
         .into_iter()
         .map(|v| v.ok_or_else(|| invalid("null sample")))
         .collect::<Result<Vec<_>>>()?;
-    let counts = list("counts")?
+    let (counts_at, counts) = list("counts")?;
+    let counts = counts
         .u64()?
         .into_iter()
         .map(|v| v.ok_or_else(|| invalid("null repeat count")))
         .collect::<Result<Vec<_>>>()?;
-    Ok(Row {
-        gene: text("gene")?,
-        gene_order: integer("gene_order")?,
-        path: texts("path")?,
-        member_order: integer("member_order")?,
-        item_order: integer("item_order")?,
-        key: text("key")?,
-        kind: text("kind")?,
-        keys: texts("keys")?,
-        typed_keys: key_parquet::decode(list("typed_keys")?)?,
-        values,
-        counts,
-        minimum_int: frame.column("minimum_int")?.i64()?.get(at),
-        minimum_float: frame.column("minimum_float")?.f64()?.get(at),
-        maximum: frame.column("maximum")?.i64()?.get(at),
-        auxiliary_int: frame.column("auxiliary_int")?.i64()?.get(at),
-    })
+    let text = |column: &StringChunked, at| -> Result<String> {
+        Ok(column
+            .get(at)
+            .ok_or_else(|| invalid("unexpected null Parquet text"))?
+            .to_owned())
+    };
+    let integer = |column: &UInt64Chunked, at| -> Result<u64> {
+        column
+            .get(at)
+            .ok_or_else(|| invalid("unexpected null Parquet ordinal"))
+    };
+    for at in 0..frame.height() {
+        visit(Row {
+            gene: text(gene, at)?,
+            gene_order: integer(gene_order, at)?,
+            path: path[span(&path_at, at)].to_vec(),
+            member_order: integer(member_order, at)?,
+            item_order: integer(item_order, at)?,
+            key: text(key, at)?,
+            kind: text(kind, at)?,
+            keys: keys[span(&keys_at, at)].to_vec(),
+            typed_keys: typed[span(&typed_at, at)].to_vec(),
+            values: values[span(&values_at, at)].to_vec(),
+            counts: counts[span(&counts_at, at)].to_vec(),
+            minimum_int: minimum_int.get(at),
+            minimum_float: minimum_float.get(at),
+            maximum: maximum.get(at),
+            auxiliary_int: auxiliary_int.get(at),
+        })?;
+    }
+    Ok(())
 }
 
 pub(super) fn metadata(path: &Path) -> Result<HashMap<String, String>> {
@@ -370,9 +425,7 @@ pub(super) fn scan(
                 "invalid typed AlphaMissense Parquet row group",
             ));
         }
-        for at in 0..frame.height() {
-            visit(row(&frame, at)?)?;
-        }
+        rows(&frame, &mut visit)?;
         offset += count;
     }
     Ok(values)

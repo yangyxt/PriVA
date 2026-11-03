@@ -3,6 +3,7 @@
 //! final distributions retain exact Float64 bits and every residue observation.
 mod association;
 pub(crate) mod das_transcripts;
+pub(crate) mod exon_history;
 mod key;
 mod key_parquet;
 mod metadata;

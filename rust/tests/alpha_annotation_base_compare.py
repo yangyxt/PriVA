@@ -98,6 +98,7 @@ class Fixture:
         if mitochondrial:text+='chrM\t20\t.\tG\tT\t.\tPASS\t.\n'
         with path.open("wb") as stream:subprocess.run(["bgzip","-c"],input=text.encode(),stdout=stream,check=True)
         subprocess.run(["tabix","-p","vcf",str(path)],check=True,capture_output=True)
+        for selected in [path,Path(str(path)+'.tbi')]:os.utime(selected,ns=(1700000000000000000,1700000000000000000))
         return path
 
     def stage(self,mitochondrial=True,header=None):
@@ -177,6 +178,7 @@ class Harness:
         output=f.root/"capture.json"
         self.success("capture_file",f,"capture",["--output",output],lambda:f.ref("capture",*f.common()))
         self.rows[-1]["passed"] &= json.loads(output.read_text())==f.ref("capture",*f.common()) and output.stat().st_mode&0o777==0o600
+        self.rows[-1]["passed"] &= output.read_text()==json.dumps(f.ref("capture",*f.common()),sort_keys=True,indent=2)+'\n'
         self.compare("recover_absent",f,"recover",lambda:f.ref("recover",*f.common()))
         mutations={
             "root_relative":("cache_root","relative"),"root_empty":("cache_root",""),
@@ -333,6 +335,51 @@ class Harness:
                      ["--artifact",target2,"--mapping",mapping,"--lineage",lineage_file])
         receipt.write_bytes(old)
 
+    def motif_receipt_extras(self):
+        for label,value in [('bigint',2**200),('surrogate','\ud800'),('nested',{'v':[True,None,0.125,2**200,'\ud800']})]:
+            f=self.fixture('motif_extra_'+label);f.published()
+            artifact=f.cache/'historical.pkl';artifact.write_bytes(b'preserved completed motif')
+            mapping=f.root/'custom.tsv';mapping.write_text('mapping fixture\n')
+            biomart=load(f.scripts/'biomart_nm_to_enst.py','biomart_extra_'+label)
+            record=dict(mapping_identity=biomart.mapping_identity(mapping,[]),artifact_bytes=artifact.stat().st_size,
+                artifact_sha256=f.module.digest(artifact),scientific_input=f.ref('motif_binding',*f.common()),unused_extra=value)
+            receipt=Path(str(artifact)+'.nm_to_enst.json');write(receipt,record)
+            lineage=dict(schema=f.module.MOTIF_SCHEMA,provenance={'fixture':'closed'},scientific_input=record['scientific_input'],
+                artifact_path=str(artifact),receipt_sha256=f.module.digest(receipt),
+                **{k:record[k] for k in ['mapping_identity','artifact_bytes','artifact_sha256']})
+            lineage_file=f.root/'lineage.json';write(lineage_file,lineage)
+            native=f.cache/'native.pkl';original=f.cache/'python.pkl'
+            extra=['--artifact',native,'--mapping',mapping,'--lineage',lineage_file]
+            self.compare('motif_check_extra_'+label,f,'motif-check',lambda:f.ref('motif_check',*f.common(),artifact),['--artifact',artifact])
+            self.rows[-1]['passed'] &= self.rows[-1]['reference']['success']
+            self.compare('motif_adopt_extra_'+label,f,'adopt-motif',
+                lambda:f.ref('adopt_motif',*f.common(),original,lineage_file,mapping,[]),extra)
+            self.rows[-1]['passed'] &= self.rows[-1]['reference']['success'] and self.rows[-1]['native']['success']
+            if native.exists() and original.exists():
+                self.rows[-1]['artifact_bytes_equal']=native.read_bytes()==original.read_bytes()==artifact.read_bytes()
+                left=Path(str(native)+'.nm_to_enst.json').read_bytes();right=Path(str(original)+'.nm_to_enst.json').read_bytes()
+                self.rows[-1]['receipt_values_equal']=json.loads(left)==json.loads(right)
+                self.rows[-1]['receipt_bytes_equal']=left==right
+                self.rows[-1]['passed'] &= self.rows[-1]['artifact_bytes_equal'] and self.rows[-1]['receipt_values_equal'] and self.rows[-1]['receipt_bytes_equal']
+            # Reuse has its own source-produced pair, so an earlier adoption
+            # failure cannot prevent independent coverage of this boundary.
+            native=f.cache/'warm_native.pkl';original=f.cache/'warm_python.pkl'
+            for path in [native,original]:f.ref('adopt_motif',*f.common(),path,lineage_file,mapping,[])
+            extra=['--artifact',native,'--mapping',mapping,'--lineage',lineage_file]
+            def state(path):
+                s=path.stat();return s.st_ino,s.st_size,s.st_mtime_ns,s.st_ctime_ns,s.st_mode,path.read_bytes()
+            for path in [native,original]:
+                rp=Path(str(path)+'.nm_to_enst.json');v=json.loads(rp.read_text());v['unused_extra']=value;write(rp,v)
+            before=[state(path) for target in [native,original] for path in [target,Path(str(target)+'.nm_to_enst.json')]]
+            self.compare('motif_reuse_extra_'+label,f,'adopt-motif',
+                lambda:f.ref('adopt_motif',*f.common(),original,lineage_file,mapping,[]),extra)
+            self.rows[-1]['passed'] &= self.rows[-1]['reference']['success'] and self.rows[-1]['native']['success']
+            self.rows[-1]['passed'] &= before==[state(path) for target in [native,original] for path in [target,Path(str(target)+'.nm_to_enst.json')]]
+            for path in [native,original]:
+                rp=Path(str(path)+'.nm_to_enst.json');v=json.loads(rp.read_text());v['scientific_input']['unexpected']=value;write(rp,v)
+            self.compare('motif_reuse_science_extra_'+label,f,'adopt-motif',
+                lambda:f.ref('adopt_motif',*f.common(),original,lineage_file,mapping,[]),extra)
+
     def boundaries(self):
         f=self.fixture("profile_edges")
         original=f.vep.read_text()
@@ -435,6 +482,16 @@ class Harness:
             marker=publisher.pending_path(target)
             if not marker.exists():raise RuntimeError("reference motif stage did not close: "+str(result))
             pending=json.loads(marker.read_text());staged=Path(pending["stage"])/target.name
+            if prefix==0:
+                staged_receipt=publisher.receipt_path(staged);original_bytes=staged_receipt.read_bytes()
+                for label,value in [('bigint',2**200),('surrogate','\ud800')]:
+                    changed=json.loads(original_bytes);changed['unexpected']=value;write(staged_receipt,changed)
+                    pending['new']['receipt']=publisher.file_state(staged_receipt);write(marker,pending)
+                    self.compare('motif_pending_receipt_extra_'+label,f,'adopt-motif',
+                        lambda:f.ref('adopt_motif',*f.common(),target,lineage_file,mapping,[]),
+                        ['--artifact',target,'--lineage',lineage_file,'--mapping',mapping])
+                staged_receipt.write_bytes(original_bytes)
+                pending['new']['receipt']=publisher.file_state(staged_receipt);write(marker,pending)
             for src,dst in [(staged,target),(publisher.receipt_path(staged),publisher.receipt_path(target))][:prefix]:os.replace(src,dst)
             self.success("motif_recover_"+str(prefix),f,"adopt-motif",["--artifact",target,"--lineage",lineage_file,"--mapping",mapping],
                          lambda:biomart.check_receipt(target,mapping,[]))
@@ -505,7 +562,7 @@ def check(args):
     harness=Harness(args)
     try:
         harness.path_and_capture();harness.publication();harness.headers();harness.adoption();harness.motifs()
-        harness.boundaries();harness.motif_recovery()
+        harness.boundaries();harness.motif_recovery();harness.motif_receipt_extras()
         harness.admission()
     finally:
         result=harness.finish()

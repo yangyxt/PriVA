@@ -5,6 +5,7 @@
 mod cache;
 mod header;
 mod metadata;
+pub(crate) use metadata::resolve as resolve_non_strict;
 
 use crate::cli::{Result, invalid};
 use crate::json_text::{self, Json};

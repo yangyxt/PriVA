@@ -400,13 +400,13 @@ scientific environment named by the original helper. `--python PYTHON`
 motif provenance. The runtime observer imports the original six packages to
 identify their loaded modules and installed files.
 
-Motif adoption remains partially converted: it calls only the original
-BioMart `mapping_identity` and `check_receipt` functions through an explicit
-argument-vector Python adapter. `--helper-root CHECKOUT` selects those helper
-assets and defaults to `--source-root`; it may differ from the scientific
+Motif adoption uses the native BioMart identity and receipt-check API.
+`--helper-root CHECKOUT` selects its pinned source assets and canonical bundle
+context, and defaults to `--source-root`; it may differ from the scientific
 producer checkout. Pair staging, identity checks, locking and publication are
-native. No acquisition or scientific rebuild is a fallback, and genuine
-bundled snapshots retain existence/nonzero-only reuse admission.
+native. The Python interpreter remains the observer of the original scientific
+package environment. No acquisition or scientific rebuild is a fallback, and
+genuine bundled snapshots retain existence/nonzero-only reuse admission.
 
 YAML anchors, aliases, merge keys and flow mappings are supported by the safe
 libyaml reader. Ignored JSON receipt extras are syntax-checked without imposing

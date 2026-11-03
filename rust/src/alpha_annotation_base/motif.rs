@@ -1,5 +1,4 @@
-//! Explicit adoption of a completed motif pair. The original read-only BioMart
-//! contract remains a visible dependency until its separate native port.
+//! Explicit adoption of a completed motif pair with the native BioMart contract.
 use super::io::*;
 use super::publication::{Context, selected};
 use super::{MOTIF_SCHEMA, error, object, profile, require};
@@ -114,21 +113,6 @@ fn size(value: &Json) -> Option<i128> {
     }
 }
 
-// Preserve exception categories across the explicit resource-contract process
-// boundary. The BioMart CLI flattens categories into stderr; this fixed adapter
-// calls the same identity/receipt-check procedures and transports only their
-// metadata result or exception. It has no fetch branch or command-string input.
-const BIOMART_OBSERVER: &str = r#"import importlib.util,json,sys
-from pathlib import Path
-try:
- spec=importlib.util.spec_from_file_location('native_alpha_biomart_dependency',sys.argv[1])
- m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m)
- action=sys.argv[2];mapping=Path(sys.argv[3]);artifact=sys.argv[4];inputs=[Path(p) for p in sys.argv[5:]]
- value=m.mapping_identity(mapping,inputs) if action=='identity' else m.check_receipt(Path(artifact),mapping,inputs)
- print(json.dumps(dict(success=True,value=value),sort_keys=True))
-except Exception as e:
- print(json.dumps(dict(success=False,category=type(e).__name__,message=str(e)),sort_keys=True))
-"#;
 struct Publisher<'a> {
     context: &'a Context<'a>,
     artifact: &'a Path,
@@ -141,48 +125,16 @@ struct Publisher<'a> {
 }
 impl Publisher<'_> {
     fn biomart(&self, artifact: Option<&Path>) -> Result<Json> {
-        let mut argv = vec![
-            self.context.python.into(),
-            "-c".into(),
-            BIOMART_OBSERVER.into(),
-            self.context
-                .helper
-                .join("scripts/biomart_nm_to_enst.py")
-                .display()
-                .to_string(),
-            if artifact.is_some() {
-                "receipt-check"
-            } else {
-                "identity"
-            }
-            .into(),
-            self.mapping.display().to_string(),
-            artifact.map_or(String::new(), |p| p.display().to_string()),
-        ];
-        argv.extend(self.inputs.iter().map(|p| p.display().to_string()));
-        let value = parse(&run(&argv, false)?)?;
-        if truth(get(&value, "success")?) {
-            return Ok(get(&value, "value")?.clone());
+        // The original helper location still controls bundle recognition and
+        // provenance. The qualified native API preserves the identity/check
+        // order without a Python implementation adapter.
+        let context = crate::biomart::Context::new(self.context.helper)?;
+        if let Some(artifact) = artifact {
+            crate::biomart::check_receipt(&context, artifact, self.mapping, self.inputs)?;
+            Ok(Json::Null)
+        } else {
+            crate::biomart::mapping_identity(&context, self.mapping, self.inputs)
         }
-        let name = text(get(&value, "category")?);
-        let category = match name.as_str() {
-            "ValueError" => "ValueError",
-            "FileNotFoundError" => "FileNotFoundError",
-            "PermissionError" => "PermissionError",
-            "IsADirectoryError" => "IsADirectoryError",
-            "NotADirectoryError" => "NotADirectoryError",
-            "OSError" => "OSError",
-            "TypeError" => "TypeError",
-            "KeyError" => "KeyError",
-            "AttributeError" => "AttributeError",
-            "JSONDecodeError" => "JSONDecodeError",
-            "ParseError" => "ParseError",
-            "IncompleteRead" => "IncompleteRead",
-            "ModuleNotFoundError" => "ModuleNotFoundError",
-            "ImportError" => "ImportError",
-            _ => "BioMartDependencyError",
-        };
-        Err(error(category, text(get(&value, "message")?)))
     }
     fn expected(&self) -> Result<Json> {
         let producer = self

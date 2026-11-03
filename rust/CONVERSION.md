@@ -106,18 +106,18 @@ cache conversion interface. Optional native procedures can be invoked directly.
 | Python source | Native procedure or current role |
 | --- | --- |
 | [`scripts/SpliceVault_tsv_vcf_conversion.py`](../scripts/SpliceVault_tsv_vcf_conversion.py) | Optional `priva splicevault-convert`. Installer caller remains Python. Installed BGZF route; general archive-byte/ZIP64 behavior is outside its qualified profile. |
-| [`scripts/alphamissense_annotation_base.py`](../scripts/alphamissense_annotation_base.py) | Optional `priva alpha-annotation-base`: profile/header checks, base pair publication/recovery and completed motif adoption. `motif-runtime` explicitly observes the original Python package environment; `adopt-motif` still calls original BioMart identity/receipt checks, so that route is partially converted. No annotation/model generation or installer caller switch. |
+| [`scripts/alphamissense_annotation_base.py`](../scripts/alphamissense_annotation_base.py) | Optional `priva alpha-annotation-base`: profile/header checks, base pair publication/recovery and completed motif adoption. `motif-runtime` explicitly observes the original Python package environment; motif adoption uses the native BioMart identity/receipt API. No annotation/model generation or installer caller switch. |
 | [`scripts/alphamissense_cache.py`](../scripts/alphamissense_cache.py) | Retained Python; native replacement pending. |
 | [`scripts/alphamissense_domain_cache.py`](../scripts/alphamissense_domain_cache.py) | Retained Python; native replacement pending. |
 | [`scripts/alphamissense_original_cache.py`](../scripts/alphamissense_original_cache.py) | Legacy/manual helper, outside native conversion scope. |
 | [`scripts/alphmis_tsv2vcf.py`](../scripts/alphmis_tsv2vcf.py) | Optional `priva alphamissense-vcf`. Installer caller remains Python. |
-| [`scripts/am_pick_intolerant_domains.py`](../scripts/am_pick_intolerant_domains.py) | Optional `priva das-domains lookup/transcripts/benign` component procedures. Transcript projection requires explicit retained exon history; fresh native history and the complete DAS producer remain pending. Installer caller remains Python. See rescue-order profile below. |
+| [`scripts/am_pick_intolerant_domains.py`](../scripts/am_pick_intolerant_domains.py) | Optional `priva das-domains lookup/transcripts/benign/coldspot-table` component procedures. Transcript projection requires explicit retained exon history; fresh native history and the complete DAS producer remain pending. Installer caller remains Python. See rescue-order profile below. |
 | [`scripts/am_pick_missense_constrained_segments.py`](../scripts/am_pick_missense_constrained_segments.py) | Legacy/manual helper, outside native conversion scope. |
 | [`scripts/audit_clinvar_gofcards_review_tiers.py`](../scripts/audit_clinvar_gofcards_review_tiers.py) | Legacy/manual helper, outside native conversion scope. |
 | [`scripts/audit_condition_scope_inventory.py`](../scripts/audit_condition_scope_inventory.py) | Legacy/manual helper, outside native conversion scope. |
 | [`scripts/audit_gofcards_source_coverage.py`](../scripts/audit_gofcards_source_coverage.py) | Legacy/manual helper, outside native conversion scope. |
-| [`scripts/biomart_ftp_nm_to_enst.py`](../scripts/biomart_ftp_nm_to_enst.py) | Retained Python; native replacement pending. |
-| [`scripts/biomart_nm_to_enst.py`](../scripts/biomart_nm_to_enst.py) | Retained Python; native replacement pending. |
+| [`scripts/biomart_ftp_nm_to_enst.py`](../scripts/biomart_ftp_nm_to_enst.py) | Optional `priva biomart` FTP specification, metadata/XML and prepared-table identity/verification procedures. FTP acquisition and SQLite projection remain Python. |
+| [`scripts/biomart_nm_to_enst.py`](../scripts/biomart_nm_to_enst.py) | Optional `priva biomart` identity, receipt, pinned-table verification and artifact routing with explicit `--helper-root`. Acquisition and installer caller migration remain pending. |
 | [`scripts/build_gene_nonlof_mechanism_cache.py`](../scripts/build_gene_nonlof_mechanism_cache.py) | Retained Python; native replacement pending. |
 | [`scripts/build_gene_pathogenic_mechanism_cache.py`](../scripts/build_gene_pathogenic_mechanism_cache.py) | Optional `priva gene-mechanism parse/build/attach` for prepared inputs. Acquisition, refresh, locking and installer orchestration remain Python; see the manual for the supported procedures. |
 | [`scripts/build_gofcards_exact_gof_cache.py`](../scripts/build_gofcards_exact_gof_cache.py) | Retained Python; native replacement pending. |

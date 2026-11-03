@@ -76,7 +76,8 @@ impl DomainLookup {
 }
 
 const HELP: &str = "usage: priva das-domains lookup --domains JSONL --interpro RKYV --normalization-json JSON --python-hash-seed UINT32\n\
-       priva das-domains transcripts --statistics PARQUET --exon-history LINES --source-builder-sha256 SHA256 --python-hash-seed UINT32 --output RKYV\n\
+       priva das-domains transcripts --statistics PARQUET --exon-history LINES --source-builder-sha256 SHA256 --python-hash-seed UINT32 --output RKYV [--history-builder-sha256 SHA256]\n\
+       priva das-domains transcript-provenance --input RKYV\n\
        priva das-domains benign --domains JSONL --vcf VCF --min-benign INTEGER\n\
        priva das-domains coldspot-table --spots TSV\n\
 Each domain input line is a full domain-path JSON string. Output lines retain input\n\
@@ -116,8 +117,25 @@ pub(crate) fn dispatch(args: &[String]) -> Result<()> {
         }
         return builder_error::finish(coldspot_rows(std::path::Path::new(&args[2])));
     }
+    if args[0] == "transcript-provenance" {
+        if args.len() != 3 || args[1] != "--input" {
+            return Err(invalid(HELP));
+        }
+        let cache =
+            crate::cache_convert::transcript_domains::TranscriptDomainCache::open(&args[2])?;
+        let rows = cache
+            .provenance()
+            .into_iter()
+            .map(|(key, value)| Json::Array(vec![Json::Str(key), Json::Str(value)]))
+            .collect();
+        println!(
+            "{}",
+            json_text::dumps(&Json::Array(rows), false).map_err(invalid)?
+        );
+        return Ok(());
+    }
     if args[0] == "transcripts" {
-        if args.len() != 11 {
+        if ![11, 13].contains(&args.len()) {
             return Err(invalid(HELP));
         }
         let mut options = HashMap::new();
@@ -126,6 +144,7 @@ pub(crate) fn dispatch(args: &[String]) -> Result<()> {
                 "--statistics",
                 "--exon-history",
                 "--source-builder-sha256",
+                "--history-builder-sha256",
                 "--python-hash-seed",
                 "--output",
             ]
@@ -135,7 +154,16 @@ pub(crate) fn dispatch(args: &[String]) -> Result<()> {
                 return Err(invalid(HELP));
             }
         }
-        if options.len() != 5 {
+        if ![
+            "--statistics",
+            "--exon-history",
+            "--source-builder-sha256",
+            "--python-hash-seed",
+            "--output",
+        ]
+        .iter()
+        .all(|key| options.contains_key(key))
+        {
             return Err(invalid(HELP));
         }
         let seed = options["--python-hash-seed"]
@@ -145,11 +173,18 @@ pub(crate) fn dispatch(args: &[String]) -> Result<()> {
         if source.len() != 64 || !source.bytes().all(|b| b.is_ascii_hexdigit()) {
             return Err(invalid("--source-builder-sha256 requires SHA256"));
         }
+        let history_builder = options.get("--history-builder-sha256").copied();
+        if history_builder
+            .is_some_and(|value| value.len() != 64 || !value.bytes().all(|b| b.is_ascii_hexdigit()))
+        {
+            return Err(invalid("--history-builder-sha256 requires SHA256"));
+        }
         let (transcripts, sets) =
             builder_error::finish(crate::alpha_domain::das_transcripts::build(
                 std::path::Path::new(options["--statistics"]),
                 std::path::Path::new(options["--exon-history"]),
                 source,
+                history_builder,
                 seed,
                 std::path::Path::new(options["--output"]),
             ))?;

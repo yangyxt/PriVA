@@ -237,6 +237,16 @@ impl TranscriptDomainCache {
         self.mapped.root().transcripts.len()
     }
 
+    /// Preserve the declared producer/consumer provenance and its stored order.
+    pub(crate) fn provenance(&self) -> Vec<(String, String)> {
+        self.mapped
+            .root()
+            .provenance
+            .iter()
+            .map(|item| (item.key.as_str().to_owned(), item.value.as_str().to_owned()))
+            .collect()
+    }
+
     pub(crate) fn get(&self, transcript: &str) -> Option<&ArchivedTranscriptDomains> {
         let root = self.mapped.root();
         find_sorted(&root.transcripts, transcript).map(|at| &root.entries[at])

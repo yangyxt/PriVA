@@ -22,10 +22,20 @@ struct History {
     input: BufReader<File>,
     seed: u32,
     sets: usize,
-    native: Option<(String, String)>,
+    native: Option<NativeHistory>,
+}
+struct NativeHistory {
+    profile: String,
+    producing_seed: String,
+    builder: String,
 }
 impl History {
-    fn open(path: &Path, seed: u32, statistics: &HashMap<String, String>) -> Result<Self> {
+    fn open(
+        path: &Path,
+        seed: u32,
+        statistics: &HashMap<String, String>,
+        expected_builder: Option<&str>,
+    ) -> Result<Self> {
         let mut input = BufReader::new(File::open(path)?);
         let native = if input.fill_buf()?.first() == Some(&b'#') {
             let mut line = String::new();
@@ -46,7 +56,8 @@ impl History {
                 || text("priva.kind")? != "exon-history"
                 || text("priva.stage")? != "final"
                 || text("priva.producer")? != PRODUCER
-                || text("priva.builder_source_sha256")? != super::exon_history::identity()
+                || text("priva.builder_source_sha256")?
+                    != expected_builder.unwrap_or(&super::exon_history::identity())
                 || Some(text("priva.input")?) != statistics.get("priva.input").map(String::as_str)
             {
                 return Err(invalid(
@@ -61,8 +72,17 @@ impl History {
             producing_seed
                 .parse::<u32>()
                 .map_err(|_| invalid("invalid native history producing seed"))?;
-            Some((profile.to_owned(), producing_seed.to_owned()))
+            Some(NativeHistory {
+                profile: profile.to_owned(),
+                producing_seed: producing_seed.to_owned(),
+                builder: text("priva.builder_source_sha256")?.to_owned(),
+            })
         } else {
+            if expected_builder.is_some() {
+                return Err(invalid(
+                    "explicit history source requires a native history header",
+                ));
+            }
             None
         };
         Ok(Self {
@@ -246,6 +266,7 @@ pub(crate) fn build(
     statistics: &Path,
     exon_history: &Path,
     source_builder: &str,
+    history_builder: Option<&str>,
     seed: u32,
     output: &Path,
 ) -> Result<(usize, usize)> {
@@ -272,7 +293,7 @@ pub(crate) fn build(
         .map(|path| std::fs::metadata(path))
         .into_iter()
         .collect::<std::io::Result<Vec<_>>>()?;
-    let mut history = History::open(exon_history, seed, &metadata)?;
+    let mut history = History::open(exon_history, seed, &metadata, history_builder)?;
     let mut transcripts = HashMap::new();
     let mut visited = 0;
     // Reuse the existing complete typed/ordinal validator. Only one compressed
@@ -317,21 +338,32 @@ pub(crate) fn build(
             value: source_builder.to_owned(),
         },
     ];
-    if let Some((profile, producing_seed)) = &history.native {
+    if let Some(native) = &history.native {
         provenance.extend([
             Provenance {
                 key: "history_profile".into(),
-                value: profile.clone(),
+                value: native.profile.clone(),
             },
             Provenance {
                 key: "history_producing_python_hash_seed".into(),
-                value: producing_seed.clone(),
+                value: native.producing_seed.clone(),
             },
             Provenance {
                 key: "history_builder_sha256".into(),
-                value: super::exon_history::identity(),
+                value: native.builder.clone(),
             },
         ]);
+        if history_builder.is_some() {
+            // An explicit producer pin never relabels the older companion.
+            // Record this consumer file separately; default archive bytes and
+            // the default current-producer-only guard remain unchanged.
+            let mut source = crate::sha256::Sha256::new();
+            source.update(include_bytes!("das_transcripts.rs"));
+            provenance.push(Provenance {
+                key: "transcript_consumer_source_sha256".into(),
+                value: source.finish_hex(),
+            });
+        }
     }
     for ((path, before), label) in [statistics, exon_history]
         .into_iter()

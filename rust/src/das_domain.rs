@@ -78,6 +78,7 @@ impl DomainLookup {
 const HELP: &str = "usage: priva das-domains lookup --domains JSONL --interpro RKYV --normalization-json JSON --python-hash-seed UINT32\n\
        priva das-domains transcripts --statistics PARQUET --exon-history LINES --source-builder-sha256 SHA256 --python-hash-seed UINT32 --output RKYV\n\
        priva das-domains benign --domains JSONL --vcf VCF --min-benign INTEGER\n\
+       priva das-domains coldspot-table --spots TSV\n\
 Each domain input line is a full domain-path JSON string. Output lines retain input\n\
 order and contain the first source-ordered InterPro entry's identity, type and\n\
 GO molecular-function status. The explicit hash seed describes the reference\n\
@@ -108,6 +109,12 @@ pub(crate) fn dispatch(args: &[String]) -> Result<()> {
             .parse::<i64>()
             .map_err(|_| invalid("--min-benign requires a signed integer"))?;
         return builder_error::finish(benign_lines(&options, minimum));
+    }
+    if args[0] == "coldspot-table" {
+        if args.len() != 3 || args[1] != "--spots" {
+            return Err(invalid(HELP));
+        }
+        return builder_error::finish(coldspot_rows(std::path::Path::new(&args[2])));
     }
     if args[0] == "transcripts" {
         if args.len() != 11 {
@@ -173,6 +180,25 @@ pub(crate) fn dispatch(args: &[String]) -> Result<()> {
         .parse::<u32>()
         .map_err(|_| invalid("--python-hash-seed requires UINT32"))?;
     builder_error::finish(lookup_lines(&options, seed))
+}
+
+fn coldspot_rows(path: &std::path::Path) -> Result<()> {
+    let rows = crate::das_coldspot_table::read(path)?;
+    let mut output = std::io::BufWriter::new(std::io::stdout().lock());
+    for row in rows {
+        let value = Json::Object(vec![
+            ("gene".into(), row.gene.json()),
+            ("start".into(), Json::Str(row.start)),
+            ("end".into(), Json::Str(row.end)),
+        ]);
+        writeln!(
+            output,
+            "{}",
+            json_text::dumps(&value, false).map_err(invalid)?
+        )?;
+    }
+    output.flush()?;
+    Ok(())
 }
 
 fn benign_lines(options: &HashMap<&str, &str>, minimum: i64) -> Result<()> {

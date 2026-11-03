@@ -3,8 +3,9 @@
 //! The gene-statistics producer constructs dictionaries by iterating newly built
 //! sets of transcript/domain strings. Preserve that order for an explicit
 //! `PYTHONHASHSEED`; a different process's unspecified random secret is unknown.
-//! This small table supports construction from an iterable, not deletion or set
-//! algebra. Unicode hashes use Python's one-, two- or four-byte character kind.
+//! This small table supports construction from an iterable and the string-set
+//! copy/update paths, without deletion or general set algebra. Unicode hashes
+//! use Python's one-, two- or four-byte character kind.
 //!
 //! Algorithm references (CPython v3.12.3): Objects/setobject.c, Objects/tupleobject.c,
 //! Python/pyhash.c and Python/bootstrap_hash.c in https://github.com/python/cpython.
@@ -189,6 +190,45 @@ impl<T: Clone + Eq> Table<T> {
             .map(|entry| entry.key)
             .collect()
     }
+
+    fn merge(&mut self, other: &Self) {
+        if other.used == 0 {
+            return;
+        }
+        // CPython set_merge reserves for both sets before visiting the source
+        // table. Repeated ordinary insertion alone has different resize/order
+        // behavior, even when every final member is the same.
+        if (self.used + other.used) * 5 >= (self.slots.len() - 1) * 3 {
+            let minimum = (self.used + other.used) * 2;
+            let mut size = 8;
+            while size <= minimum {
+                size *= 2;
+            }
+            if size != self.slots.len() {
+                let old = std::mem::replace(&mut self.slots, vec![None; size]);
+                for entry in old.into_iter().flatten() {
+                    let position = self.locate(&entry.key, entry.hash);
+                    self.slots[position] = Some(entry);
+                }
+            }
+        }
+        // There are no deleted entries in this restricted table. The empty
+        // same-size fast path copies slot positions, not iteration insertion.
+        if self.used == 0 && self.slots.len() == other.slots.len() {
+            self.slots.clone_from(&other.slots);
+            self.used = other.used;
+        } else if self.used == 0 {
+            for entry in other.slots.iter().flatten() {
+                let position = self.locate(&entry.key, entry.hash);
+                self.slots[position] = Some(entry.clone());
+            }
+            self.used = other.used;
+        } else {
+            for entry in other.slots.iter().flatten() {
+                self.insert(entry.key.clone(), entry.hash);
+            }
+        }
+    }
 }
 
 pub(crate) struct StringSet {
@@ -211,6 +251,38 @@ impl StringSet {
 
     pub(crate) fn into_order(self) -> Vec<String> {
         self.table.into_order()
+    }
+
+    #[allow(dead_code)] // Serialization observers need a nonmutating table-order view.
+    pub(crate) fn iter(&self) -> impl Iterator<Item = &str> {
+        self.table
+            .slots
+            .iter()
+            .flatten()
+            .map(|entry| entry.key.as_str())
+    }
+
+    /// `set.update(other_set)` for two explicit, identical Python hash profiles.
+    /// A cross-process random hash secret is not inferred from observed values.
+    #[allow(dead_code)] // Used by the separate native Alpha exon-history path.
+    pub(crate) fn update_set(&mut self, other: &Self) -> Result<(), &'static str> {
+        if self.hash.keys != other.hash.keys {
+            return Err("set update requires identical explicit hash profiles");
+        }
+        self.table.merge(&other.table);
+        Ok(())
+    }
+
+    /// Python `set.copy()` constructs an empty table and takes the set fast path;
+    /// a Rust Clone of the slots would preserve too much allocation history.
+    #[allow(dead_code)] // Used by the separate native Alpha exon-history path.
+    pub(crate) fn copy(&self) -> Self {
+        let mut copied = Self {
+            table: Table::new(),
+            hash: self.hash,
+        };
+        copied.table.merge(&self.table);
+        copied
     }
 }
 

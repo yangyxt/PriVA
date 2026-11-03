@@ -1,6 +1,7 @@
 python_set_order.rs adapts CPython 3.12.3's string hashing, hash-seed expansion
-and newly constructed string/text-pair set table order into Rust. It omits deletion,
-arbitrary object hashing, interpreter callbacks and set algebra, and explicitly
+and string/text-pair set table order into Rust, including the string-set copy
+and set-to-set update fast paths. It omits deletion, arbitrary object hashing,
+interpreter callbacks and other set algebra, and explicitly
 selects the 64-bit little-endian SipHash13 profile.
 
 Sources: https://github.com/python/cpython/tree/v3.12.3

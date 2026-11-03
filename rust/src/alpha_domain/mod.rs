@@ -5,7 +5,7 @@ mod association;
 pub(crate) mod das_transcripts;
 mod key;
 mod key_parquet;
-mod metadata;
+pub(crate) mod metadata;
 mod model;
 mod parquet;
 mod store;

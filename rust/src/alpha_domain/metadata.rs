@@ -8,14 +8,14 @@ use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 #[derive(Clone)]
-pub(super) struct Entry {
+pub(crate) struct Entry {
     pub symbol: String,
     pub start: i64,
     pub end: i64,
     pub length: i64,
 }
 #[derive(Default)]
-pub(super) struct Metadata {
+pub(crate) struct Metadata {
     pub entries: Vec<(String, Entry)>,
     index: HashMap<String, usize>,
 }
@@ -148,7 +148,7 @@ pub(super) fn write(writer: &mut Writer, metadata: &Metadata) -> Result<()> {
     }
     Ok(())
 }
-pub(super) fn read(path: &Path) -> Result<Metadata> {
+pub(crate) fn read(path: &Path) -> Result<Metadata> {
     let mut output = Metadata::default();
     let meta = parquet::scan(path, |row| {
         if row.kind != "metadata"

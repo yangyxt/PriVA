@@ -3,8 +3,8 @@
 use super::io::*;
 use super::publication::{Context, selected};
 use super::{MOTIF_SCHEMA, error, object, profile, require};
-use crate::cli::{Result, invalid};
-use crate::json_text::{self, Json};
+use crate::cli::Result;
+use crate::json_text::Json;
 use crate::python_path::{absolute, is_file, metadata, os_error, tempfile_parent};
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
@@ -463,7 +463,7 @@ fn mapping_json(path: &Path, value: &Json) -> Result<()> {
         ),
     )?;
     let mut file = File::create(&temporary).map_err(|e| os_error(e, &temporary, None))?;
-    file.write_all((json_text::dumps_indented(value).map_err(invalid)? + "\n").as_bytes())
+    file.write_all(formatted_json(value)?.as_bytes())
         .map_err(|e| os_error(e, &temporary, None))?;
     drop(file);
     rename(&temporary, path)

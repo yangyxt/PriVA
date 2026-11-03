@@ -327,6 +327,7 @@ fn projection_lines(options: &HashMap<&str, &str>) -> Result<()> {
     let projection = crate::alpha_domain::das_projection::project(
         std::path::Path::new(options["--statistics"]),
         options["--source-builder-sha256"],
+        crate::alpha_domain::das_projection::AF_COMMON,
     )?;
     let mut rows = Vec::new();
     match domains {

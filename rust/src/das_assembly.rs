@@ -31,7 +31,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 pub(crate) const HELP: &str = "usage: priva das-domains analyze --statistics PARQUET --source-builder-sha256 SHA256 \
 --interpro RKYV --normalization-json JSON --python-hash-seed UINT32 --threads INTEGER --assembly NAME \
 --output-dir DIRECTORY [--metadata PARQUET] [--spots TSV] [--clinvar-vcf VCF] [--fdr-threshold FLOAT] \
-[--coldspot-overlap-threshold FLOAT]\n\
+[--coldspot-overlap-threshold FLOAT] [--common-af-threshold FLOAT]\n\
 Runs the whole DAS step of am_pick_intolerant_domains.py. --metadata is the native\n\
 domain metadata (the source's --am_vcf); the coldspot filter also needs --spots.\n\
 Writes domain_tolerance_analysis, domain_filter_results, the native\n\
@@ -68,6 +68,7 @@ struct Options {
     clinvar: Option<PathBuf>,
     fdr: f64,
     overlap: f64,
+    common: f64,
 }
 
 fn options(args: &[String]) -> Result<Options> {
@@ -81,12 +82,13 @@ fn options(args: &[String]) -> Result<Options> {
         "--assembly",
         "--output-dir",
     ];
-    const OPTIONAL: [&str; 5] = [
+    const OPTIONAL: [&str; 6] = [
         "--metadata",
         "--spots",
         "--clinvar-vcf",
         "--fdr-threshold",
         "--coldspot-overlap-threshold",
+        "--common-af-threshold",
     ];
     if args.len() % 2 != 0 {
         return Err(invalid(HELP));
@@ -142,6 +144,7 @@ fn options(args: &[String]) -> Result<Options> {
         clinvar: values.get("--clinvar-vcf").map(PathBuf::from),
         fdr: float("--fdr-threshold", 0.01)?,
         overlap: float("--coldspot-overlap-threshold", 0.6)?,
+        common: float("--common-af-threshold", das_projection::AF_COMMON)?,
     })
 }
 
@@ -200,7 +203,8 @@ fn composite_size(value: usize) -> i64 {
 
 fn analyze(options: &Options) -> Result<String> {
     // 1. Domain score arrays in `visualize_domain_distribution` order.
-    let projection = das_projection::project(&options.statistics, &options.source_builder)?;
+    let projection =
+        das_projection::project(&options.statistics, &options.source_builder, options.common)?;
     let order: Vec<String> = projection
         .scores
         .iter()
@@ -635,6 +639,11 @@ impl Table {
     }
 
     fn write(&self, out: &mut impl Write) -> Result<()> {
+        // A frame built from no records has no columns either.
+        if self.rows.is_empty() {
+            writeln!(out)?;
+            return Ok(());
+        }
         let floats: Vec<bool> = (0..self.columns.len())
             .map(|at| {
                 let column = || self.rows.iter().map(move |row| &row[at]);

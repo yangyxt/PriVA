@@ -14,7 +14,7 @@ use std::path::Path;
 
 /// `visualize_domain_distribution` passes this literal minimum.
 const MIN_VARIANTS: usize = 6;
-/// `analyze_domain_data` defaults, which `run_das_pipeline` does not override.
+/// `analyze_domain_data` defaults; only the common AF has a source option.
 pub(crate) const AF_COMMON: f64 = 0.05;
 pub(crate) const AF_RARE: f64 = 0.01;
 pub(crate) const RESIDUE_FRACTION: f64 = 0.05;
@@ -29,6 +29,7 @@ pub(crate) struct Projection {
     residues: HashMap<String, Summary>,
     flat: HashMap<String, Vec<f64>>,
     any_residue_data: bool,
+    af_common: f64,
 }
 
 impl Projection {
@@ -41,7 +42,7 @@ impl Projection {
             None::<Vec<Vec<f64>>>,
             self.flat.get(domain).map(|values| values.iter().copied()),
             self.any_residue_data,
-            AF_COMMON,
+            self.af_common,
             AF_RARE,
             RESIDUE_FRACTION,
         )
@@ -83,7 +84,7 @@ impl Projection {
                         Some(lists),
                         None::<Vec<f64>>,
                         true,
-                        AF_COMMON,
+                        self.af_common,
                         AF_RARE,
                         RESIDUE_FRACTION,
                     );
@@ -106,7 +107,11 @@ fn run_values(samples: &Samples) -> Vec<f64> {
     values
 }
 
-pub(crate) fn project(statistics: &Path, source_builder: &str) -> Result<Projection> {
+pub(crate) fn project(
+    statistics: &Path,
+    source_builder: &str,
+    af_common: f64,
+) -> Result<Projection> {
     let metadata = parquet::metadata(statistics)?;
     for (key, expected) in [
         ("priva.kind", "statistics"),
@@ -130,6 +135,7 @@ pub(crate) fn project(statistics: &Path, source_builder: &str) -> Result<Project
         residues: HashMap::new(),
         flat: HashMap::new(),
         any_residue_data: false,
+        af_common,
     };
     let mut visited = 0;
     store::scan_genes(statistics, |gene, ordinal, node| {

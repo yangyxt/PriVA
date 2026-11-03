@@ -7,7 +7,9 @@ Procedures: identity, receipt-check, receipt-write, artifact-route, artifact-rec
             changed-target, verify, validate-table, parse-metadata, source,\n\
             snapshot-identity, is-bundled, ftp-specification, ftp-table-identity,\n\
             ftp-verify-record, ftp-parse-xml, ftp-sqlite-info, ftp-schema,\n\
-            ftp-load, ftp-audit, ftp-export, ftp-project, ftp-verify-raw, ftp-metadata.\n\
+            ftp-load, ftp-audit, ftp-export, ftp-project, ftp-verify-raw, ftp-metadata,\n\
+            ftp-make-provenance, ftp-portable-provenance, external-path,\n\
+            atomic-json and runtime-receipt (--method service|ftp).\n\
 Use --mapping, --artifact, repeated --input, --assembly and --kind where applicable.\n\
 The explicit helper root supplies pinned source assets and canonical bundle context;\n\
 the optional native implementation never runs Python or selects a scientific release implicitly.";
@@ -125,6 +127,27 @@ pub(crate) fn dispatch(args: &[String]) -> Result<()> {
             &["helper-root", "mapping"],
         ),
         "ftp-specification" | "ftp-sqlite-info" => (&["helper-root"], &[], &["helper-root"]),
+        "ftp-make-provenance" => (
+            &["helper-root", "mapping", "operation"],
+            &[],
+            &["helper-root", "mapping", "operation"],
+        ),
+        "ftp-portable-provenance" => (&["helper-root", "record"], &[], &["helper-root", "record"]),
+        "external-path" => (
+            &["helper-root", "path", "method"],
+            &[],
+            &["helper-root", "path", "method"],
+        ),
+        "atomic-json" => (
+            &["helper-root", "output", "record", "method"],
+            &[],
+            &["helper-root", "output", "record", "method"],
+        ),
+        "runtime-receipt" => (
+            &["helper-root", "workspace", "basename", "record", "method"],
+            &[],
+            &["helper-root", "workspace", "basename", "record", "method"],
+        ),
         "ftp-schema" => (&["helper-root", "schema"], &[], &["helper-root", "schema"]),
         "ftp-verify-raw" => (
             &["helper-root", "path", "pin", "name"],
@@ -194,6 +217,9 @@ pub(crate) fn dispatch(args: &[String]) -> Result<()> {
         return Err(invalid("provide exactly one of --pin or --name"));
     }
     let option = |key: &str| values.get(key).map(String::as_str);
+    if option("method").is_some_and(|m| !matches!(m, "service" | "ftp")) {
+        return Err(invalid("--method must be service or ftp"));
+    }
     let p = |key: &str| path_value(option(key).expect("required option"));
     let inputs = occurrences
         .iter()
@@ -302,6 +328,40 @@ pub(crate) fn dispatch(args: &[String]) -> Result<()> {
             "is-bundled" => Some(Json::Bool(identity::is_bundled(&context, &p("mapping"))?)),
             "ftp-table-identity" => Some(verify::ftp_table_identity(&p("mapping"))?),
             "ftp-specification" => Some(get(facts(), "ftp_specification").clone()),
+            "ftp-make-provenance" => Some(publication::make_provenance(
+                &context,
+                &p("mapping"),
+                option("operation").unwrap(),
+            )?),
+            "ftp-portable-provenance" => {
+                let record =
+                    publication_json::Record::parse(&read_json_text(&p("record"))?)?.portable()?;
+                println!("{}", record.text()?);
+                None
+            }
+            "external-path" => {
+                publication::external_path(&context, &p("path"), option("method") == Some("ftp"))?;
+                None
+            }
+            "atomic-json" => {
+                let record = publication_json::Record::parse(&read_json_text(&p("record"))?)?;
+                publication::atomic(&p("output"), &record, option("method") == Some("ftp"))?;
+                None
+            }
+            "runtime-receipt" => {
+                let record = publication_json::Record::parse(&read_json_text(&p("record"))?)?;
+                Some(string(
+                    publication::runtime(
+                        &context,
+                        &record,
+                        &p("workspace"),
+                        option("basename").unwrap(),
+                        option("method") == Some("ftp"),
+                    )?
+                    .display()
+                    .to_string(),
+                ))
+            }
             "ftp-sqlite-info" => Some(ftp::sqlite_information()),
             "ftp-schema" => Some(ftp::schema(&p("schema"))?),
             "ftp-verify-raw" => Some(ftp::verify_raw(

@@ -26,13 +26,22 @@ fn fraction(a: &BigInt, b: &BigInt) -> Result<f64> {
     })
 }
 
-fn summary(
+/// Coldspot intervals by gene label, from the qualified TSV reader.
+pub(crate) struct Coldspots(HashMap<String, Vec<Interval>>);
+
+pub(crate) struct Summary {
+    pub(crate) of_coldspot: f64,
+    pub(crate) of_domain: f64,
+    pub(crate) removed: bool,
+}
+
+pub(crate) fn summary(
     domain: &str,
     metadata: &HashMap<String, metadata::Entry>,
-    coldspots: &HashMap<String, Vec<Interval>>,
+    coldspots: &Coldspots,
     lookup: &DomainLookup,
     threshold: f64,
-) -> Result<Json> {
+) -> Result<Summary> {
     let entry = lookup.first(domain).map_err(invalid)?;
     let mut a = 0.0;
     let mut b = 0.0;
@@ -44,7 +53,7 @@ fn summary(
         )
     }) {
         if let Some(meta) = metadata.get(domain) {
-            if let Some(spots) = coldspots.get(&meta.symbol) {
+            if let Some(spots) = coldspots.0.get(&meta.symbol) {
                 let domain_start = BigInt::from(meta.start);
                 let domain_end = BigInt::from(meta.end);
                 let domain_length = &domain_end - &domain_start + 1;
@@ -69,31 +78,17 @@ fn summary(
             }
         }
     }
-    Ok(Json::Object(vec![
-        ("domain".into(), Json::Str(domain.into())),
-        ("coldspot_max_frac_of_coldspot".into(), Json::Float(a)),
-        ("coldspot_max_frac_of_domain".into(), Json::Float(b)),
-        ("removed".into(), Json::Bool(removed)),
-    ]))
+    Ok(Summary {
+        of_coldspot: a,
+        of_domain: b,
+        removed,
+    })
 }
 
-pub(crate) fn lines(options: &HashMap<&str, &str>, seed: u32, threshold: f64) -> Result<()> {
-    let metadata = metadata::read(Path::new(options["--metadata"]))?
-        .entries
-        .into_iter()
-        .collect();
-    let normalizer = DomainNormalizer::from_parts(
-        &std::fs::read_to_string(options["--normalization-json"])?,
-        HashMap::new(),
-    )?;
-    let lookup = DomainLookup::new(
-        normalizer,
-        InterproCache::open(options["--interpro"])?,
-        seed,
-    );
-    // Parse/convert every selected row before looking up any domain, including
-    // numeric/Boolean/missing gene labels that cannot equal metadata's text.
-    let rows = das_coldspot_table::read(Path::new(options["--spots"]))?;
+/// Parse/convert every selected row before looking up any domain, including
+/// numeric/Boolean/missing gene labels that cannot equal metadata's text.
+pub(crate) fn read_coldspots(path: &Path) -> Result<Coldspots> {
+    let rows = das_coldspot_table::read(path)?;
     let mut coldspots = HashMap::<String, Vec<Interval>>::new();
     for row in rows {
         let interval = Interval {
@@ -110,13 +105,37 @@ pub(crate) fn lines(options: &HashMap<&str, &str>, seed: u32, threshold: f64) ->
             coldspots.entry(gene).or_default().push(interval);
         }
     }
+    Ok(Coldspots(coldspots))
+}
+
+pub(crate) fn lines(options: &HashMap<&str, &str>, seed: u32, threshold: f64) -> Result<()> {
+    let metadata = metadata::read(Path::new(options["--metadata"]))?
+        .entries
+        .into_iter()
+        .collect();
+    let normalizer = DomainNormalizer::from_parts(
+        &std::fs::read_to_string(options["--normalization-json"])?,
+        HashMap::new(),
+    )?;
+    let lookup = DomainLookup::new(
+        normalizer,
+        InterproCache::open(options["--interpro"])?,
+        seed,
+    );
+    let coldspots = read_coldspots(Path::new(options["--spots"]))?;
     let input = BufReader::new(std::fs::File::open(options["--domains"])?);
     let mut output = Vec::new();
     for line in input.lines() {
         let Json::Str(domain) = json_text::parse(&line?, true).map_err(invalid)? else {
             return Err(invalid("each domain-path line must be a JSON string"));
         };
-        output.push(summary(&domain, &metadata, &coldspots, &lookup, threshold)?);
+        let row = summary(&domain, &metadata, &coldspots, &lookup, threshold)?;
+        output.push(Json::Object(vec![
+            ("domain".into(), Json::Str(domain)),
+            ("coldspot_max_frac_of_coldspot".into(), Json::Float(row.of_coldspot)),
+            ("coldspot_max_frac_of_domain".into(), Json::Float(row.of_domain)),
+            ("removed".into(), Json::Bool(row.removed)),
+        ]));
     }
     // The original returns only after the complete procedure succeeds. Avoid
     // publishing a scientific prefix when a later domain raises an exception.

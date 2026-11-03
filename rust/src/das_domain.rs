@@ -78,6 +78,7 @@ impl DomainLookup {
 const HELP: &str = "usage: priva das-domains lookup --domains JSONL --interpro RKYV --normalization-json JSON --python-hash-seed UINT32\n\
        priva das-domains transcripts --statistics PARQUET --exon-history LINES --source-builder-sha256 SHA256 --python-hash-seed UINT32 --output RKYV [--history-builder-sha256 SHA256]\n\
        priva das-domains transcript-provenance --input RKYV\n\
+       priva das-domains analyze ... (see priva das-domains analyze --help)\n\
        priva das-domains scores --statistics PARQUET --source-builder-sha256 SHA256\n\
        priva das-domains common --statistics PARQUET --source-builder-sha256 SHA256 --domains JSONL\n\
        priva das-domains benign --domains JSONL --vcf VCF --min-benign INTEGER\n\
@@ -107,6 +108,9 @@ pub(crate) fn dispatch(args: &[String]) -> Result<()> {
         .is_some_and(|s| matches!(s.as_str(), "benign-chromosome" | "benign-merge"))
     {
         return crate::das_benign_shards::dispatch(args);
+    }
+    if args.first().is_some_and(|s| s == "analyze") {
+        return crate::das_assembly::dispatch(&args[1..]);
     }
     if args.is_empty() || args.iter().any(|arg| arg == "--help" || arg == "-h") {
         println!("{HELP}");

@@ -132,8 +132,14 @@ pub(crate) fn lines(options: &HashMap<&str, &str>, seed: u32, threshold: f64) ->
         let row = summary(&domain, &metadata, &coldspots, &lookup, threshold)?;
         output.push(Json::Object(vec![
             ("domain".into(), Json::Str(domain)),
-            ("coldspot_max_frac_of_coldspot".into(), Json::Float(row.of_coldspot)),
-            ("coldspot_max_frac_of_domain".into(), Json::Float(row.of_domain)),
+            (
+                "coldspot_max_frac_of_coldspot".into(),
+                Json::Float(row.of_coldspot),
+            ),
+            (
+                "coldspot_max_frac_of_domain".into(),
+                Json::Float(row.of_domain),
+            ),
             ("removed".into(), Json::Bool(row.removed)),
         ]));
     }

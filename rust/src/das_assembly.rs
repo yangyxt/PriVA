@@ -226,7 +226,10 @@ fn analyze(options: &Options) -> Result<String> {
     // Every later lookup is of a scored domain, and the first is made in this order.
     let mut entries: HashMap<&str, Option<Entry>> = HashMap::with_capacity(order.len());
     for domain in &order {
-        let entry = lookup.first(domain).map_err(invalid)?.map(|found| found.entry);
+        let entry = lookup
+            .first(domain)
+            .map_err(invalid)?
+            .map(|found| found.entry);
         entries.insert(domain, entry);
     }
     let kind = |domain: &str| entries[domain].as_ref().map(|entry| entry.kind.clone());
@@ -272,10 +275,13 @@ fn analyze(options: &Options) -> Result<String> {
     let t = composite_size(queries.iter().map(|d| scores[*d].len()).max().unwrap());
     let mut rng = Pcg64::new(SEED);
     let arrays = |domains: &[&str]| -> Vec<Vec<f64>> {
-        domains.iter().map(|domain| scores[*domain].clone()).collect()
+        domains
+            .iter()
+            .map(|domain| scores[*domain].clone())
+            .collect()
     };
-    let global = das_sampling::fixed_composite(&arrays(&references), t, &mut rng)
-        .map_err(sampling)?;
+    let global =
+        das_sampling::fixed_composite(&arrays(&references), t, &mut rng).map_err(sampling)?;
     let mut by_type_order: Vec<(String, Vec<&str>)> = Vec::new();
     for &domain in &references {
         let Some(kind) = kind(domain) else { continue };
@@ -290,8 +296,9 @@ fn analyze(options: &Options) -> Result<String> {
             continue;
         }
         let total = members.iter().map(|d| scores[*d].len()).sum::<usize>();
-        let composite = das_sampling::fixed_composite(&arrays(members), composite_size(total), &mut rng)
-            .map_err(sampling)?;
+        let composite =
+            das_sampling::fixed_composite(&arrays(members), composite_size(total), &mut rng)
+                .map_err(sampling)?;
         by_type.insert(kind.clone(), composite);
     }
 
@@ -303,12 +310,21 @@ fn analyze(options: &Options) -> Result<String> {
             let composite = kind(*domain)
                 .and_then(|kind| by_type.get(&kind))
                 .unwrap_or(&global);
-            (*domain, composite.as_slice(), (SEED + at as u64) & 0xFFFF_FFFF)
+            (
+                *domain,
+                composite.as_slice(),
+                (SEED + at as u64) & 0xFFFF_FFFF,
+            )
         })
         .collect();
     let ks = parallel(&tasks, options.threads, |(domain, composite, seed)| {
         let cap = (t as usize).min(composite.len()) as i64;
-        das_sampling::ks_sample(&scores[*domain], composite, &mut Pcg64::new(*seed), Some(cap))
+        das_sampling::ks_sample(
+            &scores[*domain],
+            composite,
+            &mut Pcg64::new(*seed),
+            Some(cap),
+        )
     })?;
 
     // 5. Benjamini-Hochberg over the raw KS p-values.
@@ -363,7 +379,9 @@ fn analyze(options: &Options) -> Result<String> {
                 das_coldspot_filter::summary(domain, meta, &coldspots, &lookup, options.overlap)?;
             rows.insert(*domain, summary);
         }
-        coldspot = Some(remove(&mut kept, &mut excluded, "coldspot", rows, |s| s.removed));
+        coldspot = Some(remove(&mut kept, &mut excluded, "coldspot", rows, |s| {
+            s.removed
+        }));
     }
     let mut benign = None;
     if let Some(vcf) = &options.clinvar {
@@ -373,7 +391,9 @@ fn analyze(options: &Options) -> Result<String> {
             .iter()
             .map(|d| (*d, counts.get(*d).copied().unwrap_or(0)))
             .collect();
-        benign = Some(remove(&mut kept, &mut excluded, "benign", rows, |n| *n >= MIN_BENIGN));
+        benign = Some(remove(&mut kept, &mut excluded, "benign", rows, |n| {
+            *n >= MIN_BENIGN
+        }));
     }
     let rows = kept.iter().map(|d| (*d, projection.common(d))).collect();
     let common = remove(&mut kept, &mut excluded, "common", rows, |s| s.removed);
@@ -391,7 +411,9 @@ fn analyze(options: &Options) -> Result<String> {
             .map_err(reference_failure)?;
             rows.insert(*domain, summary);
         }
-        family = Some(remove(&mut kept, &mut excluded, "family", rows, |s| s.removed));
+        family = Some(remove(&mut kept, &mut excluded, "family", rows, |s| {
+            s.removed
+        }));
     }
 
     // 7. Both rescues of the KS-tolerant domains, then the references.
@@ -475,7 +497,11 @@ fn analyze(options: &Options) -> Result<String> {
         ];
         if let Some(rows) = &coldspot {
             row.extend(match rows.get(domain) {
-                Some(s) => [Cell::Float(s.of_coldspot), Cell::Float(s.of_domain), Cell::Bool(s.removed)],
+                Some(s) => [
+                    Cell::Float(s.of_coldspot),
+                    Cell::Float(s.of_domain),
+                    Cell::Bool(s.removed),
+                ],
                 None => [Cell::Missing, Cell::Missing, Cell::Bool(false)],
             });
         }
@@ -504,7 +530,12 @@ fn analyze(options: &Options) -> Result<String> {
                     s.protein_length.map_or(Cell::Missing, Cell::Int),
                     Cell::Bool(s.removed),
                 ],
-                None => [Cell::Text(String::new()), Cell::Missing, Cell::Missing, Cell::Bool(false)],
+                None => [
+                    Cell::Text(String::new()),
+                    Cell::Missing,
+                    Cell::Missing,
+                    Cell::Bool(false),
+                ],
             });
         }
         row.push(Cell::Bool(intolerant.contains(domain)));
@@ -514,7 +545,11 @@ fn analyze(options: &Options) -> Result<String> {
     // 9. Publish only after every step succeeded.
     std::fs::create_dir_all(&options.output)?;
     let assembly = &options.assembly;
-    let path = |name: &str, extension: &str| options.output.join(format!("{name}.{assembly}.{extension}"));
+    let path = |name: &str, extension: &str| {
+        options
+            .output
+            .join(format!("{name}.{assembly}.{extension}"))
+    };
     let mut tolerance_bytes = Vec::new();
     tolerance.write(&mut tolerance_bytes)?;
     let mut filter_bytes = Vec::new();
@@ -525,7 +560,8 @@ fn analyze(options: &Options) -> Result<String> {
         Json::Array(domains.map(|domain| Json::Str(domain.to_owned())).collect())
     };
     let curated: BTreeSet<&str> = references.iter().copied().collect();
-    let curated_json = json_text::dumps(&set(&mut curated.iter().copied()), false).map_err(invalid)?;
+    let curated_json =
+        json_text::dumps(&set(&mut curated.iter().copied()), false).map_err(invalid)?;
     publish(
         &path("curated_functional_references", "json"),
         format!("{curated_json}\n").as_bytes(),
@@ -542,7 +578,10 @@ fn analyze(options: &Options) -> Result<String> {
         format!("{excluded_json}\n").as_bytes(),
     )?;
     let provenance = [
-        ("producer", format!("priva das-domains analyze {}", env!("CARGO_PKG_VERSION"))),
+        (
+            "producer",
+            format!("priva das-domains analyze {}", env!("CARGO_PKG_VERSION")),
+        ),
         ("statistics_builder_sha256", options.source_builder.clone()),
         ("python_hash_seed", options.hash_seed.to_string()),
         ("fdr_threshold", float_repr(options.fdr)),

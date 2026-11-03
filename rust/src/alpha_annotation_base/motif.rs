@@ -402,16 +402,15 @@ impl Publisher<'_> {
             locations[0] <= locations[1],
             "Pending publication is not an ordered two-file state",
         )?;
-        let record = read_json(if locations[1] == "stage" {
+        let encoded = read_text(if locations[1] == "stage" {
             &paths[1].1
         } else {
             &paths[1].2
         })?;
+        let wanted = artifact_record(expected, get(get(&value, "new")?, "artifact")?)?;
+        let record = compare_metadata(&encoded, &wanted)?;
         require(
-            equal(
-                &record,
-                &artifact_record(expected, get(get(&value, "new")?, "artifact")?)?,
-            ),
+            equal(&record, &wanted),
             "Pending mapping receipt does not describe the staged artifact",
         )?;
         for (location, (_, staged, final_path)) in locations.iter().zip(&paths) {
@@ -521,7 +520,23 @@ pub(super) fn adopt(
     }
     if lexists(&target)? || lexists(&suffix(&target, ".nm_to_enst.json"))? {
         publisher.biomart(Some(&target))?;
-        let completed = read_json(&suffix(&target, ".nm_to_enst.json"))?;
+        let completed = compare_metadata(
+            &read_text(&suffix(&target, ".nm_to_enst.json"))?,
+            &object([
+                (
+                    "scientific_input",
+                    optional(&expected, "scientific_input")?.clone(),
+                ),
+                (
+                    "native_input_lineage",
+                    optional(&expected, "native_input_lineage")?.clone(),
+                ),
+                (
+                    "artifact_sha256",
+                    optional(&lineage, "artifact_sha256")?.clone(),
+                ),
+            ]),
+        )?;
         require(
             equal(
                 optional(&completed, "scientific_input")?,
@@ -541,7 +556,23 @@ pub(super) fn adopt(
     let source_before = file_state(&source)?;
     let source_receipt = suffix(&source, ".nm_to_enst.json");
     let receipt_before = file_state(&source_receipt)?;
-    let original = read_json(&source_receipt)?;
+    let original = compare_metadata(
+        &read_text(&source_receipt)?,
+        &object([
+            (
+                "mapping_identity",
+                optional(&lineage, "mapping_identity")?.clone(),
+            ),
+            (
+                "artifact_bytes",
+                optional(&lineage, "artifact_bytes")?.clone(),
+            ),
+            (
+                "artifact_sha256",
+                optional(&lineage, "artifact_sha256")?.clone(),
+            ),
+        ]),
+    )?;
     for k in ["mapping_identity", "artifact_bytes", "artifact_sha256"] {
         require(
             equal(optional(&lineage, k)?, optional(&original, k)?),

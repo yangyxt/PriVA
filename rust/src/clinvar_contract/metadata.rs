@@ -89,7 +89,7 @@ fn resolve_parts(mut base: PathBuf, tail: &Path, active: &mut HashSet<PathBuf>) 
     }
     Ok(base)
 }
-fn resolve(path: &Path) -> Result<PathBuf> {
+pub(crate) fn resolve(path: &Path) -> Result<PathBuf> {
     resolve_parts(std::env::current_dir()?, path, &mut HashSet::new())
 }
 

@@ -124,7 +124,10 @@ def cases():
 
 
 def category(path):
-    matches = re.findall(r'\b([A-Za-z]+(?:Error|Exception)):', path.read_text(errors='replace'))
+    text = path.read_text(errors='replace')
+    matches = re.findall(r'^priva: ([A-Za-z_][A-Za-z_0-9]*(?:Error|Exception)):', text, re.M)
+    if not matches:
+        matches = re.findall(r'^(?:[A-Za-z_][A-Za-z_0-9]*\.)*([A-Za-z_][A-Za-z_0-9]*(?:Error|Exception)):', text, re.M)
     return matches[-1] if matches else None
 
 

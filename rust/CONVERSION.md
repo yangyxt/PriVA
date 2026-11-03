@@ -111,7 +111,7 @@ cache conversion interface. Optional native procedures can be invoked directly.
 | [`scripts/alphamissense_domain_cache.py`](../scripts/alphamissense_domain_cache.py) | Retained Python; native replacement pending. |
 | [`scripts/alphamissense_original_cache.py`](../scripts/alphamissense_original_cache.py) | Legacy/manual helper, outside native conversion scope. |
 | [`scripts/alphmis_tsv2vcf.py`](../scripts/alphmis_tsv2vcf.py) | Optional `priva alphamissense-vcf`. Installer caller remains Python. |
-| [`scripts/am_pick_intolerant_domains.py`](../scripts/am_pick_intolerant_domains.py) | Optional `priva das-domains lookup/transcripts/benign/coldspot-table` component procedures. Transcript projection requires explicit retained exon history; fresh native history and the complete DAS producer remain pending. Installer caller remains Python. See rescue-order profile below. |
+| [`scripts/am_pick_intolerant_domains.py`](../scripts/am_pick_intolerant_domains.py) | Optional `priva das-domains lookup/transcripts/benign/coldspot-table` component procedures. Transcript projection accepts the explicit native Alpha exon-history companion. The complete DAS producer remains pending; the installer caller remains Python. See the rescue-order and exon-history profiles below. |
 | [`scripts/am_pick_missense_constrained_segments.py`](../scripts/am_pick_missense_constrained_segments.py) | Legacy/manual helper, outside native conversion scope. |
 | [`scripts/audit_clinvar_gofcards_review_tiers.py`](../scripts/audit_clinvar_gofcards_review_tiers.py) | Legacy/manual helper, outside native conversion scope. |
 | [`scripts/audit_condition_scope_inventory.py`](../scripts/audit_condition_scope_inventory.py) | Legacy/manual helper, outside native conversion scope. |
@@ -237,3 +237,27 @@ The generated source is exclusively created; its whole AST differs only at the
 two approved iterators. Keep its reported source/output hashes with the selected
 profile. The still-active Python installer script remains byte-identical to the
 original profile so its source-hash reuse gate does not trigger a new calculation.
+
+## Native Alpha exon-history companion
+
+```text
+Annotated Alpha VCF -> per-chromosome first-insertion history
+                    -> header-ordered merge with an explicit Python hash seed
+                    -> serialized-set history -> DAS transcript mapping
+```
+
+`alpha-exon-history chromosome` captures the original observation order without
+scores or a Python pickle. Merge all header contigs in their original order,
+including empty contigs, with `alpha-exon-history merge --input FIRST --input
+SECOND ... --hash-seed UINT32 --output HISTORY.parquet`. The final companion
+reproduces CPython 3.12 set construction, worker transport and ordered updates
+for that explicit seed. `build --vcf VCF --hash-seed UINT32 --output PARQUET`
+uses the original sequential route instead.
+
+Export with `alpha-exon-history export --input HISTORY.parquet --output HISTORY`;
+pass that file to `das-domains transcripts --exon-history HISTORY` alongside the
+typed statistics and the remaining required options. This retains exon traversal
+order that the statistics model's set membership alone cannot recover. It does
+not recover an unknown historical hash seed or require the legacy score pickle.
+Source/profile guards remain active: do not retag an older companion when a
+guard rejects it. Existing caches and installer callers remain unchanged.

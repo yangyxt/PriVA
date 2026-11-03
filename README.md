@@ -523,6 +523,12 @@ These commands write typed Parquet/zstd intermediates. Installer and DAS
 callers retain their current routes. See the
 [domain intermediate format](rust/CACHE_FORMATS.md#alphamissense-domain-intermediates-parquet-schema-2).
 
+For native DAS preparation, the optional `alpha-exon-history` procedure retains
+exon construction and serialization order beside the statistics. It supports
+separate chromosome jobs and a header-ordered merge with an explicit Python
+hash seed. See the [exon-history interface](rust/CONVERSION.md#native-alpha-exon-history-companion).
+This does not change the current installer route or existing caches.
+
 To build the gene pathogenic-AF cache directly from an existing indexed ClinVar
 VCF, use the optional procedure:
 

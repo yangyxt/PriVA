@@ -2,6 +2,7 @@
 pub mod acmg_consequence;
 pub mod acmg_scoring;
 pub mod acmg_variant_mechanism;
+pub mod insilico_criteria;
 mod cli;
 pub mod pedigree_filtration;
 pub mod pm4_bp3;

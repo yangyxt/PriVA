@@ -246,6 +246,9 @@ pub(crate) fn run() -> Result<()> {
     if args.get(1).map(String::as_str) == Some("pedigree-filtration") {
         return crate::pedigree_filtration::stream::dispatch(&args[2..]);
     }
+    if args.get(1).map(String::as_str) == Some("insilico-criteria") {
+        return crate::insilico_criteria::transport::dispatch(&args[2..]);
+    }
     if args.get(1).map(String::as_str) == Some("pm4-bp3") {
         return crate::pm4_bp3::transport::dispatch(&args[2..]);
     }
@@ -281,7 +284,7 @@ pub(crate) fn run() -> Result<()> {
     }
     if args.len() != 6 || args[1] != "final-order" || args[4] != "--chrom-type" {
         return Err(invalid(
-            "usage: priva final-order INPUT.tsv NEW_OUTPUT.tsv --chrom-type string|integer\n       priva score-criteria INPUT.tsv NEW_OUTPUT.tsv --no-clingen-override\n       priva score-criteria INPUT.tsv NEW_OUTPUT.tsv --clingen-evidence-column COLUMN\n       priva spliceai2-vcf --help\n       priva pedigree-filtration --help\n       priva pm4-bp3 --help\nOpt-in boundaries only; criteria must already be assigned, and final-order additionally requires sort_index. SpliceAI2 is an annotation-only projection.",
+            "usage: priva final-order INPUT.tsv NEW_OUTPUT.tsv --chrom-type string|integer\n       priva score-criteria INPUT.tsv NEW_OUTPUT.tsv --no-clingen-override\n       priva score-criteria INPUT.tsv NEW_OUTPUT.tsv --clingen-evidence-column COLUMN\n       priva spliceai2-vcf --help\n       priva pedigree-filtration --help\n       priva pm4-bp3 --help\n       priva insilico-criteria --help\nOpt-in boundaries only; criteria must already be assigned, and final-order additionally requires sort_index. SpliceAI2 is an annotation-only projection.",
         ));
     }
     final_order(Path::new(&args[2]), Path::new(&args[3]), &args[5])

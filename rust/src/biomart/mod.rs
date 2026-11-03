@@ -2,6 +2,7 @@
 //! Source assets identify the helper and its repository bundles; they are never
 //! executed. Existing Python installation/scientific callers are unchanged.
 mod cli;
+mod ftp;
 mod identity;
 mod receipt;
 mod table;

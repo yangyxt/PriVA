@@ -6,7 +6,8 @@ const HELP: &str = "usage: priva biomart PROCEDURE --helper-root SOURCE [named o
 Procedures: identity, receipt-check, receipt-write, artifact-route, artifact-receipt,\n\
             changed-target, verify, validate-table, parse-metadata, source,\n\
             snapshot-identity, is-bundled, ftp-specification, ftp-table-identity,\n\
-            ftp-verify-record, ftp-parse-xml.\n\
+            ftp-verify-record, ftp-parse-xml, ftp-sqlite-info, ftp-schema,\n\
+            ftp-load, ftp-audit, ftp-export, ftp-project.\n\
 Use --mapping, --artifact, repeated --input, --assembly and --kind where applicable.\n\
 The explicit helper root supplies pinned source assets and canonical bundle context;\n\
 the optional native implementation never runs Python or selects a scientific release implicitly.";
@@ -123,7 +124,40 @@ pub(crate) fn dispatch(args: &[String]) -> Result<()> {
             &[],
             &["helper-root", "mapping"],
         ),
-        "ftp-specification" => (&["helper-root"], &[], &["helper-root"]),
+        "ftp-specification" | "ftp-sqlite-info" => (&["helper-root"], &[], &["helper-root"]),
+        "ftp-schema" => (&["helper-root", "schema"], &[], &["helper-root", "schema"]),
+        "ftp-load" => (
+            &[
+                "helper-root",
+                "db",
+                "raw",
+                "alias",
+                "table",
+                "columns",
+                "schema",
+            ],
+            &[],
+            &[
+                "helper-root",
+                "db",
+                "raw",
+                "alias",
+                "table",
+                "columns",
+                "schema",
+            ],
+        ),
+        "ftp-audit" => (&["helper-root", "db"], &[], &["helper-root", "db"]),
+        "ftp-export" => (
+            &["helper-root", "db", "output", "audit"],
+            &[],
+            &["helper-root", "db", "output", "audit"],
+        ),
+        "ftp-project" => (
+            &["helper-root", "db", "raw", "schema", "output"],
+            &[],
+            &["helper-root", "db", "raw", "schema", "output"],
+        ),
         "ftp-parse-xml" => (
             &["helper-root", "xml", "dataset-row"],
             &[],
@@ -255,6 +289,28 @@ pub(crate) fn dispatch(args: &[String]) -> Result<()> {
             "is-bundled" => Some(Json::Bool(identity::is_bundled(&context, &p("mapping"))?)),
             "ftp-table-identity" => Some(verify::ftp_table_identity(&p("mapping"))?),
             "ftp-specification" => Some(get(facts(), "ftp_specification").clone()),
+            "ftp-sqlite-info" => Some(ftp::sqlite_information()),
+            "ftp-schema" => Some(ftp::schema(&p("schema"))?),
+            "ftp-load" => Some(ftp::load(
+                &p("db"),
+                &p("raw"),
+                option("alias").unwrap(),
+                option("table").unwrap(),
+                &parse_json(option("columns").unwrap())?,
+                &read_json(&p("schema"))?,
+            )?),
+            "ftp-audit" => Some(ftp::audit(&p("db"))?),
+            "ftp-export" => Some(ftp::export(
+                &p("db"),
+                &p("output"),
+                &read_json(&p("audit"))?,
+            )?),
+            "ftp-project" => Some(ftp::project(
+                &p("raw"),
+                &p("schema"),
+                &p("db"),
+                &p("output"),
+            )?),
             "ftp-parse-xml" => Some(verify::parse_xml(
                 &fs::read(p("xml")).map_err(|e| os_error(e, &p("xml"), None))?,
                 &parse_json(option("dataset-row").unwrap())?,
@@ -262,7 +318,11 @@ pub(crate) fn dispatch(args: &[String]) -> Result<()> {
             _ => unreachable!(),
         };
         if let Some(value) = value {
-            println!("{}", json_text::dumps(&value, true).map_err(invalid)?)
+            let sorted = !matches!(
+                command,
+                "ftp-schema" | "ftp-load" | "ftp-audit" | "ftp-export" | "ftp-project"
+            );
+            println!("{}", json_text::dumps(&value, sorted).map_err(invalid)?)
         }
         Ok(())
     })())

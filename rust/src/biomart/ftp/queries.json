@@ -1,0 +1,13 @@
+{
+  "transcript_rows": "SELECT COUNT(*) FROM transcripts",
+  "main_rows": "SELECT COUNT(*) FROM main",
+  "distinct_transcript_keys": "SELECT COUNT(DISTINCT transcript_id_1064_key) FROM transcripts",
+  "transcripts_missing_from_translation_main": "SELECT COUNT(*) FROM transcripts t WHERE NOT EXISTS (SELECT 1 FROM main m WHERE m.transcript_id_1064_key=t.transcript_id_1064_key)",
+  "translation_main_missing_or_changed_transcripts": "SELECT COUNT(*) FROM main m WHERE NOT EXISTS (SELECT 1 FROM transcripts t WHERE t.transcript_id_1064_key=m.transcript_id_1064_key AND t.gene_id_1020_key=m.gene_id_1020_key AND t.stable_id_1023=m.stable_id_1023 AND t.stable_id_1066=m.stable_id_1066 AND t.biotype_1064 IS m.biotype_1064)",
+  "no_translation_main_rows": "SELECT COUNT(*) FROM main WHERE translation_id_1068_key IS NULL OR translation_id_1068_key=0",
+  "noncoding_no_translation_transcripts": "SELECT COUNT(DISTINCT transcript_id_1064_key) FROM main WHERE (translation_id_1068_key IS NULL OR translation_id_1068_key=0) AND biotype_1064!='protein_coding'",
+  "untranslated_with_nonblank_swissprot": "SELECT COUNT(*) FROM main m JOIN swissprot u ON u.translation_id_1068_key=m.translation_id_1068_key WHERE (m.translation_id_1068_key IS NULL OR m.translation_id_1068_key=0) AND u.dbprimary_acc_1074 IS NOT NULL AND u.dbprimary_acc_1074!=''",
+  "expected_output_rows": "WITH h AS (SELECT gene_id_1020_key k,COUNT(*) n FROM hgnc GROUP BY 1),\n u AS (SELECT translation_id_1068_key k,COUNT(*) n FROM swissprot GROUP BY 1),\n r AS (SELECT transcript_id_1064_key k,COUNT(*) n FROM refseq GROUP BY 1)\nSELECT SUM(COALESCE(h.n,1)*COALESCE(u.n,1)*COALESCE(r.n,1)) FROM main m\nLEFT JOIN h ON h.k=m.gene_id_1020_key LEFT JOIN u ON u.k=m.translation_id_1068_key LEFT JOIN r ON r.k=m.transcript_id_1064_key",
+  "untranslated_output_rows": "SELECT COUNT(*) FROM main m\n LEFT JOIN hgnc h ON h.gene_id_1020_key=m.gene_id_1020_key\n LEFT JOIN swissprot u ON u.translation_id_1068_key=m.translation_id_1068_key\n LEFT JOIN refseq r ON r.transcript_id_1064_key=m.transcript_id_1064_key\n WHERE m.translation_id_1068_key IS NULL OR m.translation_id_1068_key=0",
+  "invalid_transcript_rows": "SELECT COUNT(*) FROM transcripts WHERE transcript_id_1064_key IS NULL OR transcript_id_1064_key<=0 OR gene_id_1020_key IS NULL OR gene_id_1020_key<=0 OR stable_id_1023 IS NULL OR stable_id_1066 IS NULL"
+}

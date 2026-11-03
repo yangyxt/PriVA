@@ -7,6 +7,7 @@ use std::io::Read;
 /// not silently publish earlier lines from the same decoded block.
 pub(crate) struct Lines<R: Read> {
     source: R,
+    latin1: bool,
     text: String,
     at: usize,
     pending: Vec<u8>,
@@ -17,12 +18,20 @@ impl<R: Read> Lines<R> {
     pub(crate) fn new(source: R) -> Self {
         Self {
             source,
+            latin1: false,
             text: String::new(),
             at: 0,
             pending: Vec::new(),
             eof: false,
             skip_lf: false,
         }
+    }
+    /// The same TextIOWrapper block and universal-newline mechanism with the
+    /// source's explicit one-byte Latin-1 decoder. Existing consumers use UTF-8.
+    pub(crate) fn latin1(source: R) -> Self {
+        let mut lines = Self::new(source);
+        lines.latin1 = true;
+        lines
     }
     fn fill(&mut self) -> Result<bool> {
         if self.eof {
@@ -32,6 +41,12 @@ impl<R: Read> Lines<R> {
         let count = self.source.read(&mut block)?;
         self.eof = count == 0;
         self.pending.extend_from_slice(&block[..count]);
+        if self.latin1 {
+            self.text = self.pending.iter().map(|byte| char::from(*byte)).collect();
+            self.pending.clear();
+            self.at = 0;
+            return Ok(!self.eof || !self.text.is_empty());
+        }
         let complete = match std::str::from_utf8(&self.pending) {
             Ok(_) => self.pending.len(),
             Err(error) if error.error_len().is_none() && !self.eof => error.valid_up_to(),
@@ -193,6 +208,21 @@ impl<R: Read> Lines<R> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn latin1_keeps_byte_decoding_and_crlf_block_boundaries() {
+        let mut bytes = vec![0xff; 8191];
+        bytes.extend_from_slice(b"\r\nnext\rfinal\n");
+        let mut lines = Lines::latin1(bytes.as_slice());
+        assert_eq!(
+            lines.readline(usize::MAX).unwrap(),
+            format!("{}\n", "ÿ".repeat(8191))
+        );
+        assert_eq!(lines.readline(usize::MAX).unwrap(), "next\n");
+        assert_eq!(lines.readline(usize::MAX).unwrap(), "final\n");
+        assert_eq!(lines.readline(usize::MAX).unwrap(), "");
+        let mut utf8 = Lines::new(bytes.as_slice());
+        assert!(utf8.readline(usize::MAX).is_err());
+    }
     #[test]
     fn bounded_cr_waits_for_the_following_decode() {
         let mut bytes = vec![b'a'; 8191];

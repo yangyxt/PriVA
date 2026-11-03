@@ -11,7 +11,11 @@ use crate::json_text::{self, Json};
 use crate::python_path::{metadata, os_error, repr};
 use crate::sha256::Sha256;
 pub(crate) use cli::dispatch;
-pub(crate) use identity::{artifact_route, check_receipt, mapping_identity};
+pub(crate) use identity::{
+    artifact_route, atomic_json, changed_target, check_receipt, managed_artifact_path,
+    mapping_identity,
+};
+pub(crate) use receipt::artifact_receipt;
 use std::fs::{self, File};
 use std::io::Read;
 use std::path::{Path, PathBuf};

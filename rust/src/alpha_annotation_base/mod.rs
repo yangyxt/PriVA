@@ -2,7 +2,7 @@
 //! Original installer callers stay unchanged. VEP is queried only for runtime
 //! provenance; scientific annotation and model generation are never invoked.
 mod header;
-mod io;
+pub(crate) mod io;
 mod motif;
 mod profile;
 mod publication;
@@ -155,4 +155,21 @@ pub(crate) fn dispatch(args: &[String]) -> Result<()> {
         }
         Ok(())
     })())
+}
+
+/// Original motif binding for native publication; runtime observation remains
+/// in the explicitly selected Python environment, never a scientific rerun.
+pub(crate) fn motif_binding(
+    config: &Path,
+    source: &Path,
+    base: Option<&Path>,
+    python: &str,
+) -> Result<Json> {
+    motif::binding(&publication::Context {
+        config,
+        source,
+        base,
+        python,
+        helper: source,
+    })
 }

@@ -97,7 +97,7 @@ pub(crate) fn check_receipt(
         None=>e,
     })
 }
-pub(super) fn atomic_json(path: &Path, value: &Json) -> Result<()> {
+pub(crate) fn atomic_json(path: &Path, value: &Json) -> Result<()> {
     let temporary = PathBuf::from(format!("{}.part", path.display()));
     require(
         !is_link(&temporary)?,
@@ -157,7 +157,7 @@ pub(super) fn write_receipt(
         ]),
     )
 }
-pub(super) fn changed_target(
+pub(crate) fn changed_target(
     identity: &Json,
     cache_root: &Path,
     output_dir: &Path,
@@ -195,6 +195,16 @@ pub(super) fn changed_target(
         .join(kind)
         .join(hash(serialized.as_bytes()))
         .join(filename);
+    managed_artifact_path(cache_root, output_dir, &relative)
+}
+
+/// Original `_managed_artifact_path`, also used by pair publication. Keep its
+/// checks separate from changed-target assembly and kind selection.
+pub(crate) fn managed_artifact_path(
+    cache_root: &Path,
+    output_dir: &Path,
+    relative: &Path,
+) -> Result<PathBuf> {
     require(
         cache_root.is_absolute() && output_dir.is_absolute(),
         "Changed mapping outputs require absolute cache_root and output_dir",

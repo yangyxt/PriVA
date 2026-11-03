@@ -15,13 +15,13 @@ use std::os::unix::process::ExitStatusExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
-pub(super) fn string(value: impl Into<String>) -> Json {
+pub(crate) fn string(value: impl Into<String>) -> Json {
     Json::Str(value.into())
 }
-pub(super) fn pstr(path: &Path) -> Json {
+pub(crate) fn pstr(path: &Path) -> Json {
     string(path.display().to_string())
 }
-pub(super) fn path(value: &Json) -> Result<PathBuf> {
+pub(crate) fn path(value: &Json) -> Result<PathBuf> {
     let Some(value) = value.as_str() else {
         return Err(error(
             "TypeError",
@@ -36,7 +36,7 @@ pub(super) fn path(value: &Json) -> Result<PathBuf> {
     }
     Ok(path_value(value))
 }
-pub(super) fn type_name(value: &Json) -> &'static str {
+pub(crate) fn type_name(value: &Json) -> &'static str {
     match value {
         Json::Null => "NoneType",
         Json::Bool(_) => "bool",
@@ -47,7 +47,7 @@ pub(super) fn type_name(value: &Json) -> &'static str {
         Json::Object(_) => "dict",
     }
 }
-pub(super) fn truth(value: &Json) -> bool {
+pub(crate) fn truth(value: &Json) -> bool {
     match value {
         Json::Null => false,
         Json::Bool(v) => *v,
@@ -58,7 +58,7 @@ pub(super) fn truth(value: &Json) -> bool {
         Json::Object(v) => !v.is_empty(),
     }
 }
-pub(super) fn get<'a>(value: &'a Json, key: &str) -> Result<&'a Json> {
+pub(crate) fn get<'a>(value: &'a Json, key: &str) -> Result<&'a Json> {
     match value {
         Json::Object(_) => value.get(key).ok_or_else(|| error("KeyError", repr(key))),
         _ => Err(error(
@@ -67,7 +67,7 @@ pub(super) fn get<'a>(value: &'a Json, key: &str) -> Result<&'a Json> {
         )),
     }
 }
-pub(super) fn optional<'a>(value: &'a Json, key: &str) -> Result<&'a Json> {
+pub(crate) fn optional<'a>(value: &'a Json, key: &str) -> Result<&'a Json> {
     match value {
         Json::Object(_) => Ok(value.get(key).unwrap_or(&Json::Null)),
         _ => Err(error(
@@ -104,19 +104,19 @@ pub(super) fn text(value: &Json) -> String {
         _ => json_text::dumps(value, false).unwrap_or_default(),
     }
 }
-pub(super) fn equal(a: &Json, b: &Json) -> bool {
+pub(crate) fn equal(a: &Json, b: &Json) -> bool {
     json_text::py_equal(a, b)
 }
-pub(super) fn suffix(path: &Path, extra: &str) -> PathBuf {
+pub(crate) fn suffix(path: &Path, extra: &str) -> PathBuf {
     PathBuf::from(format!("{}{extra}", path.display()))
 }
-pub(super) fn exists(path: &Path) -> Result<bool> {
+pub(crate) fn exists(path: &Path) -> Result<bool> {
     probe(path, false).map(|m| m.is_some())
 }
-pub(super) fn lexists(path: &Path) -> Result<bool> {
+pub(crate) fn lexists(path: &Path) -> Result<bool> {
     probe(path, true).map(|m| m.is_some())
 }
-pub(super) fn symlink(path: &Path) -> Result<bool> {
+pub(crate) fn symlink(path: &Path) -> Result<bool> {
     probe(path, true).map(|m| m.is_some_and(|m| m.file_type().is_symlink()))
 }
 fn probe(path: &Path, link: bool) -> Result<Option<fs::Metadata>> {
@@ -174,10 +174,10 @@ fn resolve_parts(mut base: PathBuf, tail: &Path, active: &mut HashSet<PathBuf>) 
     }
     Ok(base)
 }
-pub(super) fn resolve(path: &Path) -> Result<PathBuf> {
+pub(crate) fn resolve(path: &Path) -> Result<PathBuf> {
     resolve_parts(std::env::current_dir()?, path, &mut HashSet::new())
 }
-pub(super) fn time(seconds: i64, nanos: i64) -> Json {
+pub(crate) fn time(seconds: i64, nanos: i64) -> Json {
     Json::Int(seconds as i128 * 1_000_000_000 + nanos as i128)
 }
 pub(super) fn identity(path: &Path, missing: bool) -> Result<Json> {
@@ -199,7 +199,7 @@ pub(super) fn identity(path: &Path, missing: bool) -> Result<Json> {
         ("ctime_ns", time(m.ctime(), m.ctime_nsec())),
     ]))
 }
-pub(super) fn digest(path: &Path) -> Result<String> {
+pub(crate) fn digest(path: &Path) -> Result<String> {
     crate::sha256::sha256_file(path).map_err(|e| os_error(e, path, None))
 }
 pub(super) fn json_digest(value: &Json) -> Result<String> {
@@ -214,7 +214,7 @@ pub(super) fn json_digest(value: &Json) -> Result<String> {
     .map_err(invalid)?;
     Ok(crate::sha256::sha256_hex(out.as_bytes()))
 }
-pub(super) fn formatted_json(value: &Json) -> Result<String> {
+pub(crate) fn formatted_json(value: &Json) -> Result<String> {
     json_text::dumps_with_options(
         value,
         json_text::DumpsOptions {
@@ -226,7 +226,7 @@ pub(super) fn formatted_json(value: &Json) -> Result<String> {
     .map(|value| value + "\n")
     .map_err(invalid)
 }
-pub(super) fn read_text(path: &Path) -> Result<String> {
+pub(crate) fn read_text(path: &Path) -> Result<String> {
     let bytes = fs::read(path).map_err(|e| os_error(e, path, None))?;
     Ok(crate::python_io::decode_utf8(&bytes)
         .map_err(|e| error("UnicodeDecodeError", e))?
@@ -260,16 +260,16 @@ pub(super) fn compare_metadata(text: &str, target: &Json) -> Result<Json> {
         )
     })
 }
-pub(super) fn mkdir(path: &Path) -> Result<()> {
+pub(crate) fn mkdir(path: &Path) -> Result<()> {
     fs::create_dir_all(path).map_err(|e| os_error(e, path, None))
 }
-pub(super) fn rename(source: &Path, target: &Path) -> Result<()> {
+pub(crate) fn rename(source: &Path, target: &Path) -> Result<()> {
     fs::rename(source, target).map_err(|e| os_error(e, source, Some(target)))
 }
-pub(super) fn unlink(path: &Path) -> Result<()> {
+pub(crate) fn unlink(path: &Path) -> Result<()> {
     fs::remove_file(path).map_err(|e| os_error(e, path, None))
 }
-pub(super) fn stage(parent: &Path, prefix: &str) -> Result<PathBuf> {
+pub(crate) fn stage(parent: &Path, prefix: &str) -> Result<PathBuf> {
     let mut name = CString::new(
         tempfile_parent(parent)?
             .join(format!("{prefix}XXXXXX"))
@@ -317,7 +317,7 @@ pub(super) fn atomic_json(path: &Path, value: &Json) -> Result<()> {
     }
     result
 }
-pub(super) fn lock(directory: &Path) -> Result<crate::file_lock::ExclusiveLock> {
+pub(crate) fn lock(directory: &Path) -> Result<crate::file_lock::ExclusiveLock> {
     let file = OpenOptions::new()
         .read(true)
         .custom_flags(libc::O_DIRECTORY)

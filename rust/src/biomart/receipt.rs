@@ -5,12 +5,12 @@ use super::*;
 use crate::python_path::is_file;
 use std::ops::Range;
 
-pub(super) struct ArtifactReceipt {
-    pub(super) json: String,
+pub(crate) struct ArtifactReceipt {
+    pub(crate) json: String,
     identity: Range<usize>,
 }
 impl ArtifactReceipt {
-    pub(super) fn matches(&self, expected: &Json) -> Result<bool> {
+    pub(crate) fn matches(&self, expected: &Json) -> Result<bool> {
         matches_value(&self.json[self.identity.clone()], expected)
     }
 }
@@ -97,7 +97,7 @@ fn elements(raw: &str) -> Option<Vec<&str>> {
     Some(result)
 }
 
-pub(super) fn artifact_receipt(artifact: &Path) -> Result<ArtifactReceipt> {
+pub(crate) fn artifact_receipt(artifact: &Path) -> Result<ArtifactReceipt> {
     let receipt = PathBuf::from(format!("{}.nm_to_enst.json", artifact.display()));
     let raw = read_json_text(&receipt)?;
     let recorded = Object::parse(&raw)?

@@ -44,7 +44,8 @@ IMPORTED_PROFILE = "test/dev, opt-level=0, debug=0; no fast-math"
 # copied into the build folder and part of the build identity.
 SOURCE_FIXED = ("rust/Cargo.toml", "rust/Cargo.lock", "rust/rust-toolchain.toml",
                 "data/liftover/GRC_to_ucsc.contig.map.txt",
-                "scripts/das_input_continuity.py")
+                "scripts/das_input_continuity.py", "scripts/biomart_nm_to_enst.py",
+                "scripts/biomart_ftp_nm_to_enst.py")
 
 
 def require(ok, message):

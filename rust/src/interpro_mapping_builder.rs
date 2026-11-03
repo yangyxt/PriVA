@@ -36,6 +36,17 @@ pub(crate) fn visit_selected_elements(
     xml::visit_selected(source, name, Box::new(visit))
 }
 
+/// Parse one complete ElementTree document, retaining XML attribute insertion
+/// order for consumers whose Python diagnostics expose `node.attrib` order.
+/// The streaming InterPro and selected-element readers keep their old profile.
+pub(crate) fn visit_document(
+    source: impl Read,
+    unicode_input: bool,
+    visit: impl FnMut(&Element) + 'static,
+) -> Result<()> {
+    xml::visit_document(source, unicode_input, Box::new(visit))
+}
+
 const HELP: &str = "usage: priva interpro-mapping build --xml XML.gz --output CACHE.rkyv\n\
 Build the full member-signature mapping directly from an explicit gzipped InterPro XML.\n\
 No download, VCF-format report, installer caller change or pickle output.";
@@ -44,6 +55,8 @@ No download, VCF-format report, installer caller change or pickle output.";
 pub(crate) struct Element {
     pub(crate) name: String,
     attributes: BTreeMap<String, String>,
+    pub(crate) ordered_attributes: Vec<(String, String)>,
+    document_root: bool,
     pub(crate) text: String,
     tail: String,
     pub(crate) children: Vec<Rc<RefCell<Element>>>,
@@ -86,6 +99,7 @@ impl Element {
 
     fn clear(&mut self) {
         self.attributes.clear();
+        self.ordered_attributes.clear();
         self.text.clear();
         self.tail.clear();
         self.children.clear();

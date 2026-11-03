@@ -3,13 +3,13 @@
 //! while a later NaN cannot replace an already finite accumulator.
 use crate::das_reference::{count_ratio, round_four};
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub(crate) enum Fraction {
     IntegerZero,
     Float(f64),
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub(crate) struct Summary {
     pub(crate) fully_common: u64,
     pub(crate) total: u64,

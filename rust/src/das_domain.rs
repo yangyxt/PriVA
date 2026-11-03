@@ -78,6 +78,8 @@ impl DomainLookup {
 const HELP: &str = "usage: priva das-domains lookup --domains JSONL --interpro RKYV --normalization-json JSON --python-hash-seed UINT32\n\
        priva das-domains transcripts --statistics PARQUET --exon-history LINES --source-builder-sha256 SHA256 --python-hash-seed UINT32 --output RKYV [--history-builder-sha256 SHA256]\n\
        priva das-domains transcript-provenance --input RKYV\n\
+       priva das-domains scores --statistics PARQUET --source-builder-sha256 SHA256\n\
+       priva das-domains common --statistics PARQUET --source-builder-sha256 SHA256 --domains JSONL\n\
        priva das-domains benign --domains JSONL --vcf VCF --min-benign INTEGER\n\
        priva das-domains benign-chromosome --domains JSONL --vcf INDEXED_VCF --chrom CONTIG --output NEW_JSON\n\
        priva das-domains benign-merge --domains JSONL --min-benign INTEGER --input CHR1_JSON --input CHR2_JSON ...\n\
@@ -93,7 +95,11 @@ every qualifying ClinVar annotation occurrence and emits counts/removal flags\n\
 in requested domain order. It reads sequentially without an index. Coldspot\n\
 combines native metadata, source-ordered InterPro lookup and pandas TSV parsing;\n\
 it emits exact fractions/removal flags in requested domain order. Neither filter\n\
-procedure reconstructs the enclosing DAS candidate-set history. All are opt-in.";
+procedure reconstructs the enclosing DAS candidate-set history. Scores lists each\n\
+domain with at least six max_distribution values in source order, with its value\n\
+count and the SHA256 of its big-endian float64 bytes. Common emits each requested\n\
+domain's common-missense summary at the source defaults (max AF > 0.05, min AF >\n\
+0.01, removal above 5% of residues). All are opt-in.";
 
 pub(crate) fn dispatch(args: &[String]) -> Result<()> {
     if args
@@ -126,6 +132,29 @@ pub(crate) fn dispatch(args: &[String]) -> Result<()> {
             return Err(invalid(HELP));
         }
         return builder_error::finish(coldspot_rows(std::path::Path::new(&args[2])));
+    }
+    if args[0] == "scores" || args[0] == "common" {
+        let names: &[&str] = if args[0] == "scores" {
+            &["--statistics", "--source-builder-sha256"]
+        } else {
+            &["--statistics", "--source-builder-sha256", "--domains"]
+        };
+        if args.len() != 1 + 2 * names.len() {
+            return Err(invalid(HELP));
+        }
+        let mut options = HashMap::new();
+        for pair in args[1..].chunks_exact(2) {
+            if !names.contains(&pair[0].as_str())
+                || options.insert(pair[0].as_str(), pair[1].as_str()).is_some()
+            {
+                return Err(invalid(HELP));
+            }
+        }
+        let source = options["--source-builder-sha256"];
+        if source.len() != 64 || !source.bytes().all(|b| b.is_ascii_hexdigit()) {
+            return Err(invalid("--source-builder-sha256 requires SHA256"));
+        }
+        return builder_error::finish(projection_lines(&options));
     }
     if args[0] == "transcript-provenance" {
         if args.len() != 3 || args[1] != "--input" {
@@ -268,6 +297,74 @@ fn coldspot_rows(path: &std::path::Path) -> Result<()> {
             output,
             "{}",
             json_text::dumps(&value, false).map_err(invalid)?
+        )?;
+    }
+    output.flush()?;
+    Ok(())
+}
+
+fn read_domains(path: &str) -> Result<Vec<String>> {
+    let input = BufReader::new(std::fs::File::open(path)?);
+    let mut domains = Vec::new();
+    for line in input.lines() {
+        let Json::Str(domain) = json_text::parse(&line?, true).map_err(invalid)? else {
+            return Err(invalid("each domain-path line must be a JSON string"));
+        };
+        domains.push(domain);
+    }
+    Ok(domains)
+}
+
+fn projection_lines(options: &HashMap<&str, &str>) -> Result<()> {
+    let domains = match options.get("--domains") {
+        Some(path) => Some(read_domains(path)?),
+        None => None,
+    };
+    let projection = crate::alpha_domain::das_projection::project(
+        std::path::Path::new(options["--statistics"]),
+        options["--source-builder-sha256"],
+    )?;
+    let mut rows = Vec::new();
+    match domains {
+        None => {
+            for (domain, values) in &projection.scores {
+                let mut digest = crate::sha256::Sha256::new();
+                for value in values {
+                    digest.update(&value.to_be_bytes());
+                }
+                rows.push(Json::Array(vec![
+                    Json::Str(domain.clone()),
+                    Json::Int(values.len() as i128),
+                    Json::Str(digest.finish_hex()),
+                ]));
+            }
+        }
+        Some(domains) => {
+            for domain in domains {
+                let summary = projection.common(&domain);
+                let fraction = match summary.fraction {
+                    crate::das_common::Fraction::IntegerZero => Json::Int(0),
+                    crate::das_common::Fraction::Float(value) => Json::Float(value),
+                };
+                rows.push(Json::Object(vec![
+                    ("domain".into(), Json::Str(domain)),
+                    (
+                        "n_fully_common_residues".into(),
+                        Json::Int(summary.fully_common.into()),
+                    ),
+                    ("n_total_residues".into(), Json::Int(summary.total.into())),
+                    ("frac_common".into(), fraction),
+                    ("removed".into(), Json::Bool(summary.removed)),
+                ]));
+            }
+        }
+    }
+    let mut output = std::io::BufWriter::new(std::io::stdout().lock());
+    for row in rows {
+        writeln!(
+            output,
+            "{}",
+            json_text::dumps(&row, false).map_err(invalid)?
         )?;
     }
     output.flush()?;

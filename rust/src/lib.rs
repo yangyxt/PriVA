@@ -39,6 +39,7 @@ mod ks_greater;
 mod das_sampling;
 // Candidate classification is validated before the full DAS builder is enabled.
 mod das_benign;
+mod das_benign_shards;
 #[allow(dead_code)] // Coldspot procedures await the complete opt-in DAS builder.
 mod das_coldspot;
 mod das_coldspot_filter;

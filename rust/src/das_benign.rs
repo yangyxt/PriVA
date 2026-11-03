@@ -4,11 +4,29 @@ use crate::alpha_domain::vcf::{Context, visit};
 use crate::builder_error;
 use crate::cli::{Result, invalid};
 use crate::vcf_variant::{Definition, InfoValue, Record, Scalar};
+use num_bigint::BigInt;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 fn error(category: &'static str, message: &str) -> Box<dyn std::error::Error> {
     builder_error::category(category, invalid(message))
+}
+
+/// The original argparse type is Python int, including Unicode digits and
+/// arbitrary magnitudes within Python 3.12's default decimal-string limit.
+pub(crate) fn minimum(text: &str) -> Result<BigInt> {
+    use crate::python_text::{decimal_digit_value, python_int_is_valid, python_strip};
+    if !python_int_is_valid(text) {
+        return Err(invalid("--min-benign requires a signed integer"));
+    }
+    let digits: String = python_strip(text)
+        .chars()
+        .filter(|c| *c != '_')
+        .map(|c| decimal_digit_value(c).map_or(c, |n| char::from(b'0' + n as u8)))
+        .collect();
+    digits
+        .parse()
+        .map_err(|_| invalid("--min-benign requires a signed integer"))
 }
 
 fn get(
@@ -60,12 +78,27 @@ fn truthy(value: &InfoValue) -> bool {
 }
 
 pub(crate) fn counts(path: &Path, domains: &HashSet<String>) -> Result<HashMap<String, u64>> {
+    counts_for(path, domains, None).map(|(counts, _)| counts)
+}
+
+/// An explicit indexed chromosome procedure reuses the identical record
+/// selection and accumulation body. The ordinary whole-file reader stays the
+/// default; the shard caller owns completeness and ordered aggregation.
+pub(crate) fn counts_for(
+    path: &Path,
+    domains: &HashSet<String>,
+    chromosome: Option<&str>,
+) -> Result<(HashMap<String, u64>, u64)> {
     let context = Context::with_fields(
         path,
         &["DOMAINS", "Gene", "Consequence", "Feature_type", "Feature"],
     )?;
     let mut counts = HashMap::<String, u64>::new();
-    visit(path, &context, None, |record, types| {
+    let mut records = 0_u64;
+    visit(path, &context, chromosome, |record, types| {
+        records = records
+            .checked_add(1)
+            .ok_or_else(|| error("OverflowError", "VCF record count exceeds u64"))?;
         let Some(significance) = get(record, "CLNSIG", types)? else {
             return Ok(());
         };
@@ -139,6 +172,19 @@ pub(crate) fn counts(path: &Path, domains: &HashSet<String>) -> Result<HashMap<S
             }
         }
         Ok(())
+    })
+    .map_err(|cause| {
+        // pysam.fetch reports a noninteger position as OSError even though
+        // other indexed parsing failures (such as a negative POS) are
+        // ValueError. Keep this new procedure's boundary local; do not alter
+        // the previously qualified shared Alpha reader or sequential route.
+        if chromosome.is_some()
+            && cause.to_string() == "a VCF line has a position that is not an integer"
+        {
+            error("OSError", &cause.to_string())
+        } else {
+            cause
+        }
     })?;
-    Ok(counts)
+    Ok((counts, records))
 }

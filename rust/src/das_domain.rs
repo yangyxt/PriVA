@@ -79,7 +79,10 @@ const HELP: &str = "usage: priva das-domains lookup --domains JSONL --interpro R
        priva das-domains transcripts --statistics PARQUET --exon-history LINES --source-builder-sha256 SHA256 --python-hash-seed UINT32 --output RKYV [--history-builder-sha256 SHA256]\n\
        priva das-domains transcript-provenance --input RKYV\n\
        priva das-domains benign --domains JSONL --vcf VCF --min-benign INTEGER\n\
+       priva das-domains benign-chromosome --domains JSONL --vcf INDEXED_VCF --chrom CONTIG --output NEW_JSON\n\
+       priva das-domains benign-merge --domains JSONL --min-benign INTEGER --input CHR1_JSON --input CHR2_JSON ...\n\
        priva das-domains coldspot-table --spots TSV\n\
+       priva das-domains coldspot --domains JSONL --metadata PARQUET --spots TSV --interpro RKYV --normalization-json JSON --python-hash-seed UINT32 --overlap-threshold FLOAT\n\
 Each domain input line is a full domain-path JSON string. Output lines retain input\n\
 order and contain the first source-ordered InterPro entry's identity, type and\n\
 GO molecular-function status. The explicit hash seed describes the reference\n\
@@ -87,9 +90,18 @@ process; no global seed or installed cache is changed. The transcripts procedure
 requires retained serialized-set history bound to every typed transcript; it\n\
 does not qualify fresh native Alpha builds that lack this history. Benign counts\n\
 every qualifying ClinVar annotation occurrence and emits counts/removal flags\n\
-in requested domain order. It reads sequentially without an index. All are opt-in.";
+in requested domain order. It reads sequentially without an index. Coldspot\n\
+combines native metadata, source-ordered InterPro lookup and pandas TSV parsing;\n\
+it emits exact fractions/removal flags in requested domain order. Neither filter\n\
+procedure reconstructs the enclosing DAS candidate-set history. All are opt-in.";
 
 pub(crate) fn dispatch(args: &[String]) -> Result<()> {
+    if args
+        .first()
+        .is_some_and(|s| matches!(s.as_str(), "benign-chromosome" | "benign-merge"))
+    {
+        return crate::das_benign_shards::dispatch(args);
+    }
     if args.is_empty() || args.iter().any(|arg| arg == "--help" || arg == "-h") {
         println!("{HELP}");
         return Ok(());
@@ -106,9 +118,7 @@ pub(crate) fn dispatch(args: &[String]) -> Result<()> {
                 return Err(invalid(HELP));
             }
         }
-        let minimum = options["--min-benign"]
-            .parse::<i64>()
-            .map_err(|_| invalid("--min-benign requires a signed integer"))?;
+        let minimum = crate::das_benign::minimum(options["--min-benign"])?;
         return builder_error::finish(benign_lines(&options, minimum));
     }
     if args[0] == "coldspot-table" {
@@ -133,6 +143,34 @@ pub(crate) fn dispatch(args: &[String]) -> Result<()> {
             json_text::dumps(&Json::Array(rows), false).map_err(invalid)?
         );
         return Ok(());
+    }
+    if args[0] == "coldspot" {
+        if args.len() != 15 {
+            return Err(invalid(HELP));
+        }
+        let mut options = HashMap::new();
+        for pair in args[1..].chunks_exact(2) {
+            if ![
+                "--domains",
+                "--metadata",
+                "--spots",
+                "--interpro",
+                "--normalization-json",
+                "--python-hash-seed",
+                "--overlap-threshold",
+            ]
+            .contains(&pair[0].as_str())
+                || options.insert(pair[0].as_str(), pair[1].as_str()).is_some()
+            {
+                return Err(invalid(HELP));
+            }
+        }
+        let seed = options["--python-hash-seed"]
+            .parse::<u32>()
+            .map_err(|_| invalid("--python-hash-seed requires UINT32"))?;
+        let threshold = crate::python_text::parse_float(options["--overlap-threshold"])
+            .ok_or_else(|| invalid("--overlap-threshold requires a float"))?;
+        return builder_error::finish(crate::das_coldspot_filter::lines(&options, seed, threshold));
     }
     if args[0] == "transcripts" {
         if ![11, 13].contains(&args.len()) {
@@ -236,7 +274,7 @@ fn coldspot_rows(path: &std::path::Path) -> Result<()> {
     Ok(())
 }
 
-fn benign_lines(options: &HashMap<&str, &str>, minimum: i64) -> Result<()> {
+fn benign_lines(options: &HashMap<&str, &str>, minimum: num_bigint::BigInt) -> Result<()> {
     let input = BufReader::new(std::fs::File::open(options["--domains"])?);
     let mut domains = Vec::new();
     for line in input.lines() {
@@ -255,7 +293,7 @@ fn benign_lines(options: &HashMap<&str, &str>, minimum: i64) -> Result<()> {
             ("n_benign_missense".into(), Json::Int(count as i128)),
             (
                 "removed".into(),
-                Json::Bool(count as i128 >= minimum as i128),
+                Json::Bool(num_bigint::BigInt::from(count) >= minimum),
             ),
         ]);
         writeln!(

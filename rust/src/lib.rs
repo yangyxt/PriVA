@@ -40,14 +40,17 @@ mod ks_greater;
 mod das_sampling;
 // Candidate classification is validated before the full DAS builder is enabled.
 mod das_benign;
+mod das_benign_shards;
 #[allow(dead_code)] // Coldspot procedures await the complete opt-in DAS builder.
 mod das_coldspot;
+mod das_coldspot_filter;
 mod das_coldspot_table;
 #[allow(dead_code)] // Common-AF procedures await the complete opt-in DAS builder.
 mod das_common;
 mod das_domain;
 #[allow(dead_code)] // Retained exon ordering is qualified before DAS consumes it.
 mod das_exon_pickle;
+mod das_integer_ratio;
 #[allow(dead_code)] // Reference/Family procedures await the complete opt-in DAS builder.
 mod das_reference;
 #[allow(dead_code)]

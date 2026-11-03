@@ -21,6 +21,8 @@ csv = "=1.3.1"
 flate2 = "=1.1.10"
 libc = "=0.2.190"
 memmap2 = "=0.9.11"
+# Preserve Python's arbitrary-integer coldspot coordinates and single rounding.
+num-bigint = "=0.4.6"
 polars-core = { version = "=0.51.0", default-features = false, features = ["algorithm_group_by", "dtype-struct"] }
 polars-io = { version = "=0.51.0", default-features = false, features = ["parquet"] }
 polars-ops = { version = "=0.51.0", default-features = false, features = ["is_in", "strings"] }

@@ -249,6 +249,7 @@ pub(crate) struct PythonGzipReader<R: Read> {
     inflater: Decompress,
     crc: Crc,
     produced: u64,
+    detailed_errors: bool,
 }
 
 impl<R: Read> PythonGzipReader<R> {
@@ -262,7 +263,16 @@ impl<R: Read> PythonGzipReader<R> {
             inflater: Decompress::new(false),
             crc: Crc::new(),
             produced: 0,
+            detailed_errors: false,
         }
+    }
+
+    /// Keep the mature decoder's reason for helpers that compare zlib's
+    /// diagnostic text. Existing callers retain the established default.
+    pub(crate) fn with_zlib_diagnostics(source: R) -> Self {
+        let mut reader = Self::new(source);
+        reader.detailed_errors = true;
+        reader
     }
 
     /// Makes at least one unread byte available; false at the end of the file.
@@ -418,7 +428,15 @@ impl<R: Read> Read for PythonGzipReader<R> {
                             out,
                             FlushDecompress::None,
                         )
-                        .map_err(|_| {
+                        .map_err(|cause| {
+                            if self.detailed_errors {
+                                if let Some(reason) = cause.message() {
+                                    return GzipFailure::Zlib(format!(
+                                        "Error -3 while decompressing data: {reason}"
+                                    ))
+                                    .into_error();
+                                }
+                            }
                             GzipFailure::Zlib(
                                 "Error -3 while decompressing data: invalid deflate data"
                                     .to_owned(),
@@ -467,6 +485,25 @@ mod tests {
         let mut out = Vec::new();
         PythonGzipReader::new(bytes).read_to_end(&mut out)?;
         Ok(out)
+    }
+
+    #[test]
+    fn decoder_diagnostic_is_opt_in_and_default_stays_unchanged() {
+        let mut bytes = gzip(b"test");
+        bytes[10] = 7; // Reserved deflate block type.
+        let default = read_all(&bytes).unwrap_err();
+        assert_eq!(
+            default.to_string(),
+            "Error -3 while decompressing data: invalid deflate data"
+        );
+        let mut result = Vec::new();
+        let detailed = PythonGzipReader::with_zlib_diagnostics(&bytes[..])
+            .read_to_end(&mut result)
+            .unwrap_err();
+        assert_eq!(
+            detailed.to_string(),
+            "Error -3 while decompressing data: invalid block type"
+        );
     }
 
     fn failure_text(error: &io::Error) -> String {

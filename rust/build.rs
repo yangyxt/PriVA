@@ -1,4 +1,27 @@
 fn main() {
+    // The FTP projection uses the same pinned mature SQLite engine as its
+    // original Python environment. Vendor source avoids a runtime host-library
+    // dependency and makes normal offline bootstrap builds self-contained.
+    let sqlite_root = "third_party/sqlite3";
+    let mut sqlite = cc::Build::new();
+    sqlite
+        .file(format!("{sqlite_root}/sqlite3.c"))
+        .opt_level(2)
+        .debug(false)
+        .warnings(false);
+    for line in std::fs::read_to_string(format!("{sqlite_root}/compile_options.txt"))
+        .expect("pinned SQLite compile options")
+        .lines()
+    {
+        let (name, value) = line.split_once('=').expect("SQLite definition=value");
+        sqlite.define(name, value);
+    }
+    sqlite.compile("priva_sqlite3");
+    for library in ["m", "dl", "pthread"] {
+        println!("cargo:rustc-link-lib={library}");
+    }
+    println!("cargo:rerun-if-changed={sqlite_root}");
+
     // Match PyYAML's mature event parser/emitter. Package export bytes are
     // qualified against SafeDumper; no independent YAML formatting policy.
     let yaml = pkg_config::Config::new()

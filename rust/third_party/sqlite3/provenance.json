@@ -1,0 +1,40 @@
+{
+  "archive_sha256": "712a7d09d2a22652fb06a49af516e051979a3984adb067da86760e60ed51a7f5",
+  "compile_option_label_caveat": "DEFAULT_AUTOVACUUM and DEFAULT_RECURSIVE_TRIGGERS are reported by presence, without their numeric values. Explicit zero definitions preserve the selected original engine defaults.",
+  "compile_options_file": "compile_options.txt",
+  "effective_defaults": {
+    "auto_vacuum": 0,
+    "cache_size": -2000,
+    "foreign_keys": 0,
+    "journal_size_limit": -1,
+    "legacy_alter_table": 0,
+    "page_size": 4096,
+    "read_uncommitted": 0,
+    "recursive_triggers": 0,
+    "reverse_unordered_selects": 0,
+    "secure_delete": 1,
+    "synchronous": 2,
+    "temp_store": 0,
+    "trusted_schema": 1
+  },
+  "files": {
+    "sqlite3.c": {
+      "bytes": 9089040,
+      "sha256": "c01235302fe80da901fb70c7622c39147e29d9f29b7f6eb746b23517f320c90d"
+    },
+    "sqlite3.h": {
+      "bytes": 644069,
+      "sha256": "d088aa96aa70db50f02acc5c86eca61a5d17556e4c363b9c06079239bf7f87b1"
+    },
+    "sqlite3ext.h": {
+      "bytes": 38149,
+      "sha256": "b184dd1586d935133d37ad76fa353faf0a1021ff2fdedeedcc3498fff74bbb94"
+    }
+  },
+  "license": "SQLite public domain",
+  "official_release": "https://www.sqlite.org/releaselog/3_46_0.html",
+  "source_id": "2024-05-23 13:25:27 96c92aba00c8375bc32fafcdf12429c58bd8aabfcadab6683e35bbb9cdebf19e",
+  "source_url": "https://www.sqlite.org/2024/sqlite-amalgamation-3460000.zip",
+  "sqlite3_c_sha3_256": "094429ea827fcd32275e767134bc6c7b9ea394a2c5a9e653dd0a0690b2c11358",
+  "version": "3.46.0"
+}

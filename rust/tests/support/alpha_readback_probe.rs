@@ -74,14 +74,14 @@ fn bounded_readback() -> Result<()> {
             read_s += before.elapsed().as_secs_f64();
             let before = Instant::now();
             if mode != "frames" {
-                for at in 0..frame.height() {
-                    let value = row(&frame, at)?;
+                super::rows(&frame, |value| {
                     if mode == "digest" {
                         digest(&value, &mut sha);
                     } else {
                         std::hint::black_box(value);
                     }
-                }
+                    Ok(())
+                })?;
             }
             visit_s += before.elapsed().as_secs_f64();
             rows += count;

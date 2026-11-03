@@ -408,6 +408,9 @@ def check(args):
     args.work_root.mkdir();producer_pin=pin(args.producer);ftp_pin=pin(args.producer.with_name('biomart_ftp_nm_to_enst.py'));binary_pin=pin(args.binary) if args.binary else None
     assert args.binary or args.oracle_only
     fixtures=cases();results=[];reuse=None;reuse_cases={};readbacks={}
+    rerun_native=set(getattr(args,'rerun_native_case',[]) or [])
+    if rerun_native-set(fixtures):raise ValueError('Unknown native replay case')
+    if rerun_native and not args.reuse_native_root:raise ValueError('Native case replay requires --reuse-native-root')
     resources=args.resources or args.producer.parent.parent/'data/hgnc'
     resource_pins={str(p):pin(p) for p in sorted(resources.glob('ensembl*.tsv*')) if p.is_file()}
     if args.reuse_native_root:
@@ -428,7 +431,7 @@ def check(args):
         if args.oracle_only:
             record=dict(name=name,exact=False,differences=['native_unmeasured'],python=str(python_root/'arm.json'),native=None,python_reused=python_root!=root/'python')
             results.append(record);print(json.dumps(record),flush=True);continue
-        saved_native=args.reuse_native_root/name/'native/arm.json' if args.reuse_native_root else None
+        saved_native=args.reuse_native_root/name/'native/arm.json' if args.reuse_native_root and name not in rerun_native else None
         if saved_native and saved_native.is_file():
             native,proof=readback(saved_native);native_root=saved_native.parent
             assert pin(native['command'][0])['sha256']==binary_pin['sha256']
@@ -457,10 +460,12 @@ def check(args):
     assert pin(args.producer)==producer_pin and (not args.binary or pin(args.binary)==binary_pin) and pin(args.producer.with_name('biomart_ftp_nm_to_enst.py'))==ftp_pin
     assert all(pin(path)==identity for path,identity in resource_pins.items())
     report=dict(full_return_contract='artifact-receipt preserves complete JSON values and dictionary insertion order; lexical JSON encoding is not claimed byte-identical',producer=producer_pin,ftp_producer=ftp_pin,binary=binary_pin,harness=pin(__file__),fixtures=fixtures,cases=results,total=len(results),exact=sum(v['exact'] for v in results),mismatches=[v for v in results if not v['exact']],source_stable=True,reuse_report=pin(args.reuse_report) if args.reuse_report else None,reuse_readbacks=readbacks,resource_pins=resource_pins,resources_preserved=True,reuse_native_harness=pin(args.reuse_native_harness) if args.reuse_native_harness else None)
+    report['rerun_native_cases']=sorted(rerun_native)
     save(args.report,report)
 def main():
     parser=argparse.ArgumentParser(description=__doc__);sub=parser.add_subparsers(required=True)
     q=sub.add_parser('oracle');q.add_argument('--producer',type=Path,required=True);q.add_argument('--request',type=Path,required=True);q.add_argument('--result',type=Path,required=True);q.set_defaults(run=oracle)
     q=sub.add_parser('check');q.add_argument('--producer',type=Path,required=True);q.add_argument('--binary',type=Path);q.add_argument('--work-root',type=Path,required=True);q.add_argument('--report',type=Path,required=True);q.add_argument('--reuse-report',type=Path);q.add_argument('--reuse-native-root',type=Path);q.add_argument('--reuse-native-harness',type=Path);q.add_argument('--resources',type=Path);q.add_argument('--oracle-only',action='store_true');q.set_defaults(run=check)
+    q.add_argument('--rerun-native-case',action='append',default=[],help='Replay this named native case while reusing other source-bound native outcomes')
     args=parser.parse_args();args.run(args)
 if __name__=='__main__':main()

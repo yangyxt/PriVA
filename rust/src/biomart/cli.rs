@@ -7,7 +7,7 @@ Procedures: identity, receipt-check, receipt-write, artifact-route, artifact-rec
             changed-target, verify, validate-table, parse-metadata, source,\n\
             snapshot-identity, is-bundled, ftp-specification, ftp-table-identity,\n\
             ftp-verify-record, ftp-parse-xml, ftp-sqlite-info, ftp-schema,\n\
-            ftp-load, ftp-audit, ftp-export, ftp-project.\n\
+            ftp-load, ftp-audit, ftp-export, ftp-project, ftp-verify-raw, ftp-metadata.\n\
 Use --mapping, --artifact, repeated --input, --assembly and --kind where applicable.\n\
 The explicit helper root supplies pinned source assets and canonical bundle context;\n\
 the optional native implementation never runs Python or selects a scientific release implicitly.";
@@ -126,6 +126,16 @@ pub(crate) fn dispatch(args: &[String]) -> Result<()> {
         ),
         "ftp-specification" | "ftp-sqlite-info" => (&["helper-root"], &[], &["helper-root"]),
         "ftp-schema" => (&["helper-root", "schema"], &[], &["helper-root", "schema"]),
+        "ftp-verify-raw" => (
+            &["helper-root", "path", "pin", "name"],
+            &[],
+            &["helper-root", "path"],
+        ),
+        "ftp-metadata" => (
+            &["helper-root", "raw", "schemas", "output-dir"],
+            &[],
+            &["helper-root", "raw", "schemas", "output-dir"],
+        ),
         "ftp-load" => (
             &[
                 "helper-root",
@@ -179,6 +189,9 @@ pub(crate) fn dispatch(args: &[String]) -> Result<()> {
     require_options(&values, required).map_err(invalid)?;
     if command == "ftp-verify-record" && !values.contains_key("record") {
         return Err(invalid("the following arguments are required: --record"));
+    }
+    if command == "ftp-verify-raw" && option_count(&values, &["pin", "name"]) != 1 {
+        return Err(invalid("provide exactly one of --pin or --name"));
     }
     let option = |key: &str| values.get(key).map(String::as_str);
     let p = |key: &str| path_value(option(key).expect("required option"));
@@ -291,6 +304,18 @@ pub(crate) fn dispatch(args: &[String]) -> Result<()> {
             "ftp-specification" => Some(get(facts(), "ftp_specification").clone()),
             "ftp-sqlite-info" => Some(ftp::sqlite_information()),
             "ftp-schema" => Some(ftp::schema(&p("schema"))?),
+            "ftp-verify-raw" => Some(ftp::verify_raw(
+                &p("path"),
+                &match option("pin") {
+                    Some(value) => parse_json(value)?,
+                    None => ftp::named_pin(option("name").unwrap())?,
+                },
+            )?),
+            "ftp-metadata" => Some(ftp::publisher(
+                &p("raw"),
+                &read_json(&p("schemas"))?,
+                &p("output-dir"),
+            )?),
             "ftp-load" => Some(ftp::load(
                 &p("db"),
                 &p("raw"),
@@ -320,12 +345,24 @@ pub(crate) fn dispatch(args: &[String]) -> Result<()> {
         if let Some(value) = value {
             let sorted = !matches!(
                 command,
-                "ftp-schema" | "ftp-load" | "ftp-audit" | "ftp-export" | "ftp-project"
+                "ftp-schema"
+                    | "ftp-load"
+                    | "ftp-audit"
+                    | "ftp-export"
+                    | "ftp-project"
+                    | "ftp-verify-raw"
+                    | "ftp-metadata"
             );
             println!("{}", json_text::dumps(&value, sorted).map_err(invalid)?)
         }
         Ok(())
     })())
+}
+fn option_count(values: &HashMap<String, String>, names: &[&str]) -> usize {
+    names
+        .iter()
+        .filter(|name| values.contains_key(**name))
+        .count()
 }
 fn source_for_assembly(assembly: &str, release: Option<&Json>) -> Result<&'static Json> {
     if let Some(release) = release {

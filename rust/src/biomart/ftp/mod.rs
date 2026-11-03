@@ -1,5 +1,7 @@
 //! Optional original FTP parser/projection procedures; no caller activation.
 use super::*;
+mod metadata;
+pub(super) use metadata::{named_pin, publisher, verify_raw};
 mod projection;
 mod raw;
 mod sqlite;

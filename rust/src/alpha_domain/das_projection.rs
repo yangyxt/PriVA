@@ -75,7 +75,10 @@ impl Projection {
                     }
                     // Repeats of one value cannot change a minimum or maximum,
                     // so each run contributes its value once.
-                    let lists = residues.items.iter().map(|(_, samples)| run_values(samples));
+                    let lists = residues
+                        .items
+                        .iter()
+                        .map(|(_, samples)| run_values(samples));
                     let summary = das_common::filter(
                         Some(lists),
                         None::<Vec<f64>>,

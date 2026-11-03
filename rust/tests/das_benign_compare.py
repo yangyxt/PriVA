@@ -37,6 +37,8 @@ def cases():
         repeated_annotations=dict(rows=[row(csq=annotation()+','+annotation()+','+annotation(Feature='ENST_TWO'))]),
         repeated_prefixes=dict(rows=[row(csq=annotation(DOMAINS='DB:A:B&DB:A:B&DB:A'))]),
         overlapping_query_repeats={},empty_candidates=dict(domains=[]),minimum_zero=dict(minimum=0),minimum_negative=dict(minimum=-1),minimum_large=dict(minimum=99),
+        minimum_huge=dict(minimum=10**1000),minimum_negative_huge=dict(minimum=-(10**1000)),
+        minimum_unicode=dict(minimum='\u2003+\uff13\u2003'),minimum_underscores=dict(minimum='0_0_3'),
         plain=dict(compression='plain',index=False),gzip=dict(compression='gzip',index=False),no_index=dict(index=False),no_eof=dict(no_eof=True),
         empty_no_contigs=dict(contigs=[],rows=[],index=False),no_contigs=dict(contigs=[],index=False),
         unicode=dict(rows=[row(csq=annotation(Gene='ENSG_α',DOMAINS='DB:Δ',Feature='ENST_β'))]),
@@ -98,7 +100,10 @@ def identity(path):
 
 def category(path):
     text=path.read_text(errors='replace')
-    names=re.findall(r'\b([A-Za-z]+(?:Error|Exception)):',text)
+    # The top-level native category precedes its cause. A nested cause may
+    # contain another label; it is not the exception exposed by the CLI.
+    names=re.findall(r'^priva: ([A-Za-z_][A-Za-z_0-9]*(?:Error|Exception)):',text,re.M)
+    if not names:names=re.findall(r'^([A-Za-z_][A-Za-z_0-9]*(?:Error|Exception)):',text,re.M)
     return names[-1] if names else None
 
 

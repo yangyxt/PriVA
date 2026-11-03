@@ -79,6 +79,7 @@ const HELP: &str = "usage: priva das-domains lookup --domains JSONL --interpro R
        priva das-domains transcripts --statistics PARQUET --exon-history LINES --source-builder-sha256 SHA256 --python-hash-seed UINT32 --output RKYV\n\
        priva das-domains benign --domains JSONL --vcf VCF --min-benign INTEGER\n\
        priva das-domains coldspot-table --spots TSV\n\
+       priva das-domains coldspot --domains JSONL --metadata PARQUET --spots TSV --interpro RKYV --normalization-json JSON --python-hash-seed UINT32 --overlap-threshold FLOAT\n\
 Each domain input line is a full domain-path JSON string. Output lines retain input\n\
 order and contain the first source-ordered InterPro entry's identity, type and\n\
 GO molecular-function status. The explicit hash seed describes the reference\n\
@@ -86,7 +87,10 @@ process; no global seed or installed cache is changed. The transcripts procedure
 requires retained serialized-set history bound to every typed transcript; it\n\
 does not qualify fresh native Alpha builds that lack this history. Benign counts\n\
 every qualifying ClinVar annotation occurrence and emits counts/removal flags\n\
-in requested domain order. It reads sequentially without an index. All are opt-in.";
+in requested domain order. It reads sequentially without an index. Coldspot\n\
+combines native metadata, source-ordered InterPro lookup and pandas TSV parsing;\n\
+it emits exact fractions/removal flags in requested domain order. Neither filter\n\
+procedure reconstructs the enclosing DAS candidate-set history. All are opt-in.";
 
 pub(crate) fn dispatch(args: &[String]) -> Result<()> {
     if args.is_empty() || args.iter().any(|arg| arg == "--help" || arg == "-h") {
@@ -115,6 +119,34 @@ pub(crate) fn dispatch(args: &[String]) -> Result<()> {
             return Err(invalid(HELP));
         }
         return builder_error::finish(coldspot_rows(std::path::Path::new(&args[2])));
+    }
+    if args[0] == "coldspot" {
+        if args.len() != 15 {
+            return Err(invalid(HELP));
+        }
+        let mut options = HashMap::new();
+        for pair in args[1..].chunks_exact(2) {
+            if ![
+                "--domains",
+                "--metadata",
+                "--spots",
+                "--interpro",
+                "--normalization-json",
+                "--python-hash-seed",
+                "--overlap-threshold",
+            ]
+            .contains(&pair[0].as_str())
+                || options.insert(pair[0].as_str(), pair[1].as_str()).is_some()
+            {
+                return Err(invalid(HELP));
+            }
+        }
+        let seed = options["--python-hash-seed"]
+            .parse::<u32>()
+            .map_err(|_| invalid("--python-hash-seed requires UINT32"))?;
+        let threshold = crate::python_text::parse_float(options["--overlap-threshold"])
+            .ok_or_else(|| invalid("--overlap-threshold requires a float"))?;
+        return builder_error::finish(crate::das_coldspot_filter::lines(&options, seed, threshold));
     }
     if args[0] == "transcripts" {
         if args.len() != 11 {

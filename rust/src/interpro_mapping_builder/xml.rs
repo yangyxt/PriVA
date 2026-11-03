@@ -93,7 +93,8 @@ struct State {
 }
 
 struct Selected {
-    name: &'static str,
+    name: Option<&'static str>,
+    unicode_input: bool,
     visit: Box<dyn FnMut(&Element)>,
 }
 
@@ -108,7 +109,12 @@ impl State {
         for node in std::mem::take(&mut self.ends) {
             if let Some(selected) = &mut self.selected {
                 if let Some(element) = node {
-                    if element.borrow().name == selected.name {
+                    if selected
+                        .name
+                        .map_or(element.borrow().document_root, |name| {
+                            element.borrow().name == name
+                        })
+                    {
                         (selected.visit)(&element.borrow());
                         element.borrow_mut().clear();
                     }
@@ -185,21 +191,28 @@ unsafe extern "C" fn start(
                 product.has_disorders |= name == "DisorderList";
                 return Ok(());
             }
-            let capture = name == state.selected.as_ref().map_or("interpro", |s| s.name)
-                || state.stack.last().is_some_and(Option::is_some);
+            let capture = state.selected.as_ref().map_or(name == "interpro", |s| {
+                s.name
+                    .map_or(state.stack.is_empty(), |selected| name == selected)
+            }) || state.stack.last().is_some_and(Option::is_some);
             let node = if capture {
                 let mut element = Element {
                     name,
+                    document_root: state.stack.is_empty(),
                     ..Element::default()
                 };
                 let mut at = 0;
                 // Expat supplies NUL-terminated (name,value) pairs followed by a
                 // null name pointer. All pointed-to text lives for this callback.
                 while !(*attributes.add(at)).is_null() {
-                    element.attributes.insert(
-                        expanded(text(*attributes.add(at))?),
-                        text(*attributes.add(at + 1))?,
-                    );
+                    let key = expanded(text(*attributes.add(at))?);
+                    let value = text(*attributes.add(at + 1))?;
+                    if state.selected.as_ref().is_some_and(|s| s.name.is_none()) {
+                        element
+                            .ordered_attributes
+                            .push((key.clone(), value.clone()));
+                    }
+                    element.attributes.insert(key, value);
                     at += 2;
                 }
                 let node = Rc::new(RefCell::new(element));
@@ -352,7 +365,33 @@ pub(super) fn visit_selected(
     name: &'static str,
     visit: Box<dyn FnMut(&Element)>,
 ) -> Result<()> {
-    parse_with(source, false, Some(Selected { name, visit })).map(|_| ())
+    parse_with(
+        source,
+        false,
+        Some(Selected {
+            name: Some(name),
+            unicode_input: false,
+            visit,
+        }),
+    )
+    .map(|_| ())
+}
+
+pub(super) fn visit_document(
+    source: impl Read,
+    unicode_input: bool,
+    visit: Box<dyn FnMut(&Element)>,
+) -> Result<()> {
+    parse_with(
+        source,
+        false,
+        Some(Selected {
+            name: None,
+            unicode_input,
+            visit,
+        }),
+    )
+    .map(|_| ())
 }
 
 fn parse_with(
@@ -374,7 +413,14 @@ fn parse_with(
     });
     // SAFETY: null selects XML-declared/default encoding; namespace separator
     // is ElementTree's ASCII '}'. Null is checked before all other API calls.
-    let parser = Owner(unsafe { XML_ParserCreateNS(ptr::null(), b'}' as c_char) });
+    // ElementTree's Unicode feed explicitly selects UTF-8, overriding an XML
+    // declaration. Bytes and every pre-existing consumer keep auto detection.
+    let encoding = if state.selected.as_ref().is_some_and(|s| s.unicode_input) {
+        c"utf-8".as_ptr()
+    } else {
+        ptr::null()
+    };
+    let parser = Owner(unsafe { XML_ParserCreateNS(encoding, b'}' as c_char) });
     if parser.0.is_null() {
         std::mem::forget(parser);
         return Err(category(

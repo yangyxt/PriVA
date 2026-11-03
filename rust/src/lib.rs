@@ -5,6 +5,7 @@ mod acmg_step;
 pub mod acmg_variant_mechanism;
 mod alpha_domain;
 mod alphamissense_vcf;
+mod biomart;
 mod builder_error;
 mod builder_table;
 mod cache_convert;

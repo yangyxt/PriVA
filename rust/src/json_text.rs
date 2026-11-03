@@ -212,6 +212,7 @@ pub(crate) fn parse_metadata_comparison(text: &str, target: &Json) -> Result<Jso
 /// selected values use the ordinary lossless native reader, never projection
 /// sentinels. Do not use this to rewrite a source document or a publication
 /// marker: omitted fields are deliberately not returned.
+#[cfg_attr(not(test), allow(dead_code))] // Used by separately qualified optional metadata consumers.
 pub(crate) fn parse_metadata_fields(text: &str, names: &[&str]) -> Result<Json, String> {
     let mut spans = Vec::new();
     let root = parse_metadata_document(text, &Json::Object(vec![]), &mut spans)
@@ -228,6 +229,20 @@ pub(crate) fn parse_metadata_fields(text: &str, names: &[&str]) -> Result<Json, 
         }
     }
     Ok(values)
+}
+
+/// Complete-text validation and last-wins value ranges for fixed, NUL-free
+/// metadata keys. Values remain raw slices, so a caller can preserve a complete
+/// source record losslessly while inspecting only its declared fields. Key
+/// names containing lone surrogates are equality-only projections; they cannot
+/// match a supported field name. Never serialize these projected key names.
+pub(crate) fn metadata_field_spans(
+    text: &str,
+) -> Result<Option<Vec<(String, std::ops::Range<usize>)>>, String> {
+    let mut spans = Vec::new();
+    let root = parse_metadata_document(text, &Json::Object(vec![]), &mut spans)
+        .map_err(|failure| failure.describe(text))?;
+    Ok(matches!(root, Json::Object(_)).then_some(spans))
 }
 
 /// A comparison parses unknown/mistyped subtrees completely, but need not
@@ -1355,6 +1370,23 @@ mod tests {
         } else {
             panic!("selected list was not retained");
         }
+    }
+
+    #[test]
+    fn metadata_raw_ranges_keep_values_and_first_key_position() {
+        let text = r#"{"x":0,"ignored":["\ud800",1606938044258990275541962092341162602522202993782792835301376],"x":{"z":-0.0,"a":true}}"#;
+        let spans = metadata_field_spans(text).unwrap().unwrap();
+        assert_eq!(
+            spans.iter().map(|(k, _)| k.as_str()).collect::<Vec<_>>(),
+            vec!["x", "ignored"]
+        );
+        assert_eq!(&text[spans[0].1.clone()], r#"{"z":-0.0,"a":true}"#);
+        assert_eq!(
+            &text[spans[1].1.clone()],
+            r#"["\ud800",1606938044258990275541962092341162602522202993782792835301376]"#
+        );
+        assert!(metadata_field_spans("[1,2]").unwrap().is_none());
+        assert!(metadata_field_spans(r#"{"ignored":[1,],"x":2}"#).is_err());
     }
 
     #[test]

@@ -28,6 +28,7 @@ mod das_install_state;
 mod exon_af_stats;
 #[allow(dead_code)] // PM1 producer integration follows exact float64 comparison.
 mod fdr;
+mod installer_config_paths;
 // Qualified before the opt-in DAS procedures consume this exact random stream.
 #[allow(dead_code)]
 mod numpy_rng;
@@ -88,6 +89,7 @@ mod python_path;
 mod python_set_order;
 mod python_subprocess;
 mod python_text;
+mod python_unicode;
 mod python_url;
 mod rust_cache;
 mod sha256;

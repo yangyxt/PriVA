@@ -341,6 +341,20 @@ must run as an ordinary user, without elevated filesystem privileges.
 The optional AlphaMissense complete-annotation helper checks the selected
 producer, official VEP/Perl environment, inputs and published VCF/index pairs:
 
+```text
+Selected config + producer + environment
+                  │ capture
+                  ▼
+Expected input identities + prepared VCF/index pairs
+                  │ publish / recover
+                  ▼
+Complete base + receipt ── check ──┬─ restore → runtime VCF/index
+                                 └─ motif-binding + preserved motif/lineage
+                                                     │ adopt-motif
+                                                     ▼
+                                              Published motif pair
+```
+
 ```bash
 "$PRIVA_BINARY" alpha-annotation-base capture \
   --config "$PRIVA_CONFIG" --source-root "$PRIVA_ROOT" --output expected.json

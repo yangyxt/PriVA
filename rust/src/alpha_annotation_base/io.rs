@@ -214,6 +214,18 @@ pub(super) fn json_digest(value: &Json) -> Result<String> {
     .map_err(invalid)?;
     Ok(crate::sha256::sha256_hex(out.as_bytes()))
 }
+pub(super) fn formatted_json(value: &Json) -> Result<String> {
+    json_text::dumps_with_options(
+        value,
+        json_text::DumpsOptions {
+            sort_keys: true,
+            indent: Some(2),
+            ..Default::default()
+        },
+    )
+    .map(|value| value + "\n")
+    .map_err(invalid)
+}
 pub(super) fn read_text(path: &Path) -> Result<String> {
     let bytes = fs::read(path).map_err(|e| os_error(e, path, None))?;
     Ok(crate::python_io::decode_utf8(&bytes)
@@ -293,7 +305,7 @@ pub(super) fn atomic_json(path: &Path, value: &Json) -> Result<()> {
     }
     let result = (|| {
         let mut file = unsafe { File::from_raw_fd(fd) };
-        let data = json_text::dumps_indented(value).map_err(invalid)? + "\n";
+        let data = formatted_json(value)?;
         file.write_all(data.as_bytes())
             .map_err(|e| os_error(e, &temporary, None))?;
         file.sync_all().map_err(|e| os_error(e, &temporary, None))?;

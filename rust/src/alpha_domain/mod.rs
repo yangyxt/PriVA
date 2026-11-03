@@ -116,7 +116,7 @@ fn file_identity(path: &Path) -> Result<Json> {
     }
     Ok(Json::Object(fields))
 }
-fn input_identity(path: &Path, indexes: bool) -> Result<String> {
+pub(crate) fn input_identity(path: &Path, indexes: bool) -> Result<String> {
     let mut fields = vec![
         ("vcf".into(), file_identity(path)?),
         ("indexes".into(), Json::Bool(indexes)),
@@ -142,7 +142,7 @@ fn input_identity(path: &Path, indexes: bool) -> Result<String> {
     }
     json(Json::Object(fields))
 }
-fn verify_input(encoded: &str) -> Result<()> {
+pub(crate) fn verify_input(encoded: &str) -> Result<()> {
     let value = json_text::parse(encoded, true).map_err(invalid)?;
     let path = value
         .get("vcf")

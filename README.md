@@ -417,6 +417,57 @@ remain outside that profile. Selected YAML date/binary/set values are outside
 the scalar configuration profile. Original Python callers remain unchanged.
 The portable comparator is `rust/tests/alpha_annotation_base_compare.py`.
 
+The optional mapped-artifact publisher preserves the original motif/PM1
+publication transaction. It runs an explicitly selected scientific command in a
+private directory beside the target, changing only its single `--output` value.
+The producer's bytes and their mapping receipt are then published in this order:
+
+```text
+Selected mapping + producer + config
+                  │ run (external scientific command)
+                  ▼
+Private artifact + mapping receipt
+                  │ pending marker → artifact rename → receipt rename
+                  ▼
+Selected pair ── recover → finish only the recorded ordered transaction
+```
+
+```bash
+"$PRIVA_BINARY" mapped-artifact context \
+  --helper-root "$PRIVA_ROOT" --config "$PRIVA_CONFIG" \
+  --artifact "$ARTIFACT" --mapping "$MAPPING" \
+  --cache-root "$CACHE_ROOT" --output-dir "$OUTPUT_DIR" \
+  --assembly hg38 --kind pm1 \
+  --producer "$PRIVA_ROOT/scripts/prepare_pm1_regions.py" \
+  --input "$RMC_TABLE" --input "$HCSEEKER_TABLE"
+```
+
+Use the same options with `recover` for process-interruption recovery.
+`run` additionally requires `--expected-identity JSON`, followed by `--` and the
+original producer argument vector, including exactly one `--output "$ARTIFACT"`.
+Obtain that identity with `priva biomart identity --helper-root CHECKOUT
+--mapping TSV` and the same ordered `--input` options. `--python PYTHON` selects
+the producer interpreter and defaults to `python` on `PATH`. Commands and paths
+are passed literally; shell fragments are not interpreted.
+
+`adopt-native --source FILE --lineage JSON_FILE` copies a preserved completed
+artifact without modifying its original pair. `--native-lineage JSON_FILE`
+explicitly binds that lineage file into publication metadata. Motif procedures
+can supply `--annotation-base VCF` to retain the complete-base scientific
+binding, including the original Python runtime observation. The original
+lineage admission remains the caller's responsibility; adoption does not infer
+scientific provenance from an unreceipted file.
+
+The publisher uses native BioMart checks directly. Source assets identify the
+qualified helpers and scientific producers; they are not a Python publication
+fallback. Failed private stages remain available, directory locks are
+nonblocking, and only the three original ordered pair states can recover.
+Ignored JSON metadata is validated losslessly; pending receipt comparisons
+retain complete equality. Existing installer callers and scientific commands
+remain unchanged. The portable comparator is
+`rust/tests/mapped_artifact_compare.py`; its byte producers and interrupted
+transactions are transport fixtures, not scientific production acceptance.
+
 The optional DAS completion checker uses the same version-3 receipts as the
 Python helper:
 

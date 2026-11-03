@@ -197,10 +197,10 @@ def oracle(args):
     sys.path.insert(0, str(args.scripts))
     das = importlib.import_module("am_pick_intolerant_domains")
     reference = load(args.sorted_reference, "sorted_rescue_reference")
+    if hashlib.sha256(Path(args.sorted_reference).read_bytes()).hexdigest() != SORTED_PIN:
+        raise RuntimeError("sorted rescue reference differs from the approved profile")
     source = Path(das.__file__)
     rendered = reference.render_source(source.read_bytes())
-    if hashlib.sha256(rendered).hexdigest() != SORTED_PIN:
-        raise RuntimeError("sorted rescue reference differs from the approved profile")
     functions = [node for node in ast.parse(rendered).body
                  if isinstance(node, ast.FunctionDef) and node.name in reference.FUNCTIONS]
     if len(functions) != len(reference.FUNCTIONS):

@@ -34,6 +34,7 @@ mod das_sampling;
 mod das_benign;
 #[allow(dead_code)] // Coldspot procedures await the complete opt-in DAS builder.
 mod das_coldspot;
+mod das_coldspot_table;
 #[allow(dead_code)] // Common-AF procedures await the complete opt-in DAS builder.
 mod das_common;
 mod das_domain;

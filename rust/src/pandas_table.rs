@@ -369,6 +369,17 @@ pub(crate) fn tokenize(
     tokenize_impl(text, comment, false, false, emit)
 }
 
+/// The opt-in builders' pinned pandas C-parser traversal, including its
+/// bare-CR whitespace rewind. Keep the ordinary reader's tokenizer unchanged.
+pub(crate) fn tokenize_builder(
+    text: &str,
+    comment: Option<u8>,
+    initial_bom: bool,
+    emit: impl FnMut(Vec<String>) -> Result<()>,
+) -> Result<()> {
+    tokenize_impl(text, comment, true, initial_bom, emit)
+}
+
 fn tokenize_impl(
     text: &str,
     comment: Option<u8>,

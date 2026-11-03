@@ -210,6 +210,20 @@ pub(super) fn record(
     definitions: &HashMap<String, Definition>,
     context: &Context,
 ) -> Result<()> {
+    observations(record, definitions, context, |observation| {
+        model.observe(observation)
+    })
+}
+
+/// The accepted observation sequence, including record-local partial mutation
+/// and the original KeyError/ValueError skip boundary. Metadata-only history
+/// consumes these same observations without materializing score distributions.
+pub(super) fn observations(
+    record: &Record<'_>,
+    definitions: &HashMap<String, Definition>,
+    context: &Context,
+    mut observe: impl FnMut(Observation<'_>) -> Result<()>,
+) -> Result<()> {
     let mut run = || -> Result<()> {
         let score = score(get(record, "AM_PATHOGENICITY", definitions)?)?;
         let af = match get(record, "AF_grpmax_joint", definitions).and_then(af) {
@@ -265,7 +279,7 @@ pub(super) fn record(
             if domains.is_empty() || gene.is_empty() {
                 continue;
             }
-            model.observe(Observation {
+            observe(Observation {
                 gene,
                 domains,
                 transcript,

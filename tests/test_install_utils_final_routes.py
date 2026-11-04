@@ -252,6 +252,7 @@ wget() { printf 'corrupt text\n' > "${@: -1}"; }
         os.utime(index, (time.time() + 5, time.time() + 5))
         result, events = self.run_shell('AlphaMissense_install "$TEST_CONFIG" "$TEST_CACHE" hg38 /plugins', r'''
 python() { event alpha-helper "$@"; return 73; }
+export -f python event
 ''')
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual(sum(event[0] == "alpha-helper" for event in events), 1)

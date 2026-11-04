@@ -96,7 +96,9 @@ fn message(failure: &(dyn std::error::Error + 'static)) -> String {
 fn absorbed(failure: &(dyn std::error::Error + 'static)) -> bool {
     !failure
         .downcast_ref::<RuntimeError>()
-        .is_some_and(|runtime| matches!(runtime.category_name(), "EOFError" | "error" | "TypeError"))
+        .is_some_and(|runtime| {
+            matches!(runtime.category_name(), "EOFError" | "error" | "TypeError")
+        })
 }
 fn progress(line: &str) {
     eprintln!("{line}");
@@ -152,11 +154,9 @@ fn which(name: &str) -> bool {
 /// `capture` returns it as text, as `check_output(..., text=True)` does.
 fn run(arguments: &[&str], output: Stdio, capture: bool) -> Result<String> {
     let mut command = Command::new(arguments[0]);
-    command.args(&arguments[1..]).stdout(if capture {
-        Stdio::piped()
-    } else {
-        output
-    });
+    command
+        .args(&arguments[1..])
+        .stdout(if capture { Stdio::piped() } else { output });
     let child = command
         .spawn()
         .map_err(|cause| os_error(cause, Path::new(arguments[0]), None))?;
@@ -164,7 +164,10 @@ fn run(arguments: &[&str], output: Stdio, capture: bool) -> Result<String> {
         .wait_with_output()
         .map_err(|cause| os_error(cause, Path::new(arguments[0]), None))?;
     if !finished.status.success() {
-        let shown = arguments.iter().map(|value| repr(value)).collect::<Vec<_>>();
+        let shown = arguments
+            .iter()
+            .map(|value| repr(value))
+            .collect::<Vec<_>>();
         let outcome = match (finished.status.code(), finished.status.signal()) {
             (Some(code), _) => format!("returned non-zero exit status {code}"),
             (None, Some(signal)) => format!("died with {}", signal_repr(signal)),
@@ -262,7 +265,10 @@ fn first_record(path: &str, assembly: &str) -> Result<(String, Vec<String>)> {
         )?;
         return Ok((line, fields));
     }
-    Err(error("ValueError", "AlphaMissense raw TSV contains no records"))
+    Err(error(
+        "ValueError",
+        "AlphaMissense raw TSV contains no records",
+    ))
 }
 
 /// `validate(path, assembly)`: the complete publisher bytes and BGZF integrity.
@@ -475,15 +481,18 @@ fn install(cache_dir: &str, assembly: &str, supplied: Option<&str>) -> Result<St
         .create(true)
         .open(native(Path::new(&lock))?)
         .map_err(|cause| os_error(cause, Path::new(&lock), None))?;
-    let _guard = crate::file_lock::ExclusiveLock::acquire(lock_file, crate::file_lock::Wait::Blocking)
-        .map_err(|cause| os_error(cause, Path::new(&lock), None))?;
+    let _guard =
+        crate::file_lock::ExclusiveLock::acquire(lock_file, crate::file_lock::Wait::Blocking)
+            .map_err(|cause| os_error(cause, Path::new(&lock), None))?;
     let source_identity = external.map(|path| validate(path, assembly)).transpose()?;
     // A completed, unchanged receipt avoids rereading the large stream; the
     // current data and index still pass a real indexed record probe.
     if !is_link(Path::new(&destination))? && receipt_valid(&receipt, &destination, assembly) {
         match check_index(&destination, assembly) {
             Ok(_) => {
-                progress(&format!("Reusing verified managed AlphaMissense {assembly}"));
+                progress(&format!(
+                    "Reusing verified managed AlphaMissense {assembly}"
+                ));
                 return Ok(destination);
             }
             Err(failure) if absorbed(failure.as_ref()) => {}
@@ -558,7 +567,9 @@ fn install(cache_dir: &str, assembly: &str, supplied: Option<&str>) -> Result<St
             validate(&staged, assembly)?;
         }
         run(
-            &["tabix", "-f", "-s", "1", "-b", "2", "-e", "2", "-S", "1", &staged],
+            &[
+                "tabix", "-f", "-s", "1", "-b", "2", "-e", "2", "-S", "1", &staged,
+            ],
             Stdio::inherit(),
             false,
         )?;
@@ -620,9 +631,15 @@ fn install(cache_dir: &str, assembly: &str, supplied: Option<&str>) -> Result<St
 
 fn options(command: &str) -> (&'static [&'static str], &'static [&'static str]) {
     match command {
-        "install" => (&["cache-dir", "assembly", "source"], &["cache-dir", "assembly"]),
+        "install" => (
+            &["cache-dir", "assembly", "source"],
+            &["cache-dir", "assembly"],
+        ),
         "validate" => (&["input", "assembly"], &["input", "assembly"]),
-        _ => (&["input", "assembly", "vep-major"], &["input", "assembly", "vep-major"]),
+        _ => (
+            &["input", "assembly", "vep-major"],
+            &["input", "assembly", "vep-major"],
+        ),
     }
 }
 
@@ -644,7 +661,8 @@ pub(crate) fn dispatch(args: &[String]) -> Result<()> {
         )));
     }
     let (names, required) = options(command);
-    let Some(occurrences) = parse_long_option_occurrences(&args[1..], names, &[]).map_err(invalid)?
+    let Some(occurrences) =
+        parse_long_option_occurrences(&args[1..], names, &[]).map_err(invalid)?
     else {
         println!("{HELP}");
         return Ok(());
@@ -660,8 +678,11 @@ pub(crate) fn dispatch(args: &[String]) -> Result<()> {
                 &assembly,
                 path("source").as_deref(),
             ),
-            "validate" => json_text::dumps(&validate(&path("input").unwrap_or_default(), &assembly)?, false)
-                .map_err(|failure| error("ValueError", failure)),
+            "validate" => json_text::dumps(
+                &validate(&path("input").unwrap_or_default(), &assembly)?,
+                false,
+            )
+            .map_err(|failure| error("ValueError", failure)),
             _ => {
                 let result = crate::alpha_annotation_base::header::check(
                     Path::new(&path("input").unwrap_or_default()),
@@ -691,12 +712,21 @@ mod tests {
             args(&[]),
             args(&["fetch"]),
             args(&["install", "--cache-dir", "/c"]),
-            args(&["validate", "--input", "/x", "--assembly", "hg19", "--source", "/y"]),
+            args(&[
+                "validate",
+                "--input",
+                "/x",
+                "--assembly",
+                "hg19",
+                "--source",
+                "/y",
+            ]),
         ] {
             let failure = dispatch(&bad).unwrap_err();
             assert!(!failure.is::<RuntimeError>(), "{failure}");
         }
-        let failure = dispatch(&args(&["validate", "--input", "/x", "--assembly", "T2T"])).unwrap_err();
+        let failure =
+            dispatch(&args(&["validate", "--input", "/x", "--assembly", "T2T"])).unwrap_err();
         assert_eq!(
             failure.to_string(),
             "ValueError: AlphaMissense requires hg19/GRCh37 or hg38/GRCh38"

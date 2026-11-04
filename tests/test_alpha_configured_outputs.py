@@ -276,7 +276,8 @@ class AlphaConfiguredOutputs(unittest.TestCase):
         self.assertNotIn("UPDATE:", self.events.read_text())
 
     def test_named_raw_install_dispatches_selected_assembly(self):
-        result = self.invoke('AlphaMissense_install --config "$TEST_CONFIG" --cache-dir "$TEST_CACHE" --assembly hg38')
+        result = self.invoke(self.native('AlphaMissense_install --config "$TEST_CONFIG" --cache-dir "$TEST_CACHE" '
+                                         '--assembly hg38'))
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("--assembly hg38", self.events.read_text())
         self.assertIn("UPDATE:alphamissense_prescore:", self.events.read_text())

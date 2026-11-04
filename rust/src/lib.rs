@@ -29,6 +29,7 @@ mod das_install_state;
 mod exon_af_stats;
 #[allow(dead_code)] // PM1 producer integration follows exact float64 comparison.
 mod fdr;
+mod gnomad_cache;
 mod installer_config_paths;
 mod mapped_artifact_publish;
 // Qualified before the opt-in DAS procedures consume this exact random stream.
@@ -110,8 +111,8 @@ pub mod splicing_var_analysis;
 mod tabix_index;
 pub mod utr_anno_interpret;
 pub mod variant_ids;
-mod vep_plugins;
 mod vcf_text;
+mod vep_plugins;
 mod yaml_config;
 
 pub fn main_entry() {

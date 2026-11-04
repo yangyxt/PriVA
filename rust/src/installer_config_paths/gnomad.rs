@@ -18,7 +18,7 @@ fn chromosomes() -> Vec<String> {
         .chain(["chrX".into(), "chrY".into()])
         .collect()
 }
-pub(super) fn default_path(cache_dir: &Path, selected: &str) -> Result<PathBuf> {
+pub(crate) fn default_path(cache_dir: &Path, selected: &str) -> Result<PathBuf> {
     let a = assembly(selected)?;
     Ok(join(
         Path::new(&absolute(cache_dir)?),
@@ -29,7 +29,7 @@ pub(super) fn default_path(cache_dir: &Path, selected: &str) -> Result<PathBuf> 
         },
     ))
 }
-pub(super) fn family_paths(path: &Path) -> Result<Vec<(String, PathBuf)>> {
+pub(crate) fn family_paths(path: &Path) -> Result<Vec<(String, PathBuf)>> {
     let path = path_value(&absolute(path)?);
     let filename = name(&path);
     let (prefix, suffix) = if let Some(v) = filename.strip_suffix(".chrX.vcf.gz") {
@@ -115,6 +115,11 @@ fn header(path: &Path) -> Result<Header> {
     }
     let typed = vcf_variant::read_header(&mut std::io::Cursor::new(raw))?;
     Ok(Header { typed, lengths })
+}
+/// `validate_family(...)` with the reference as `gnomad_cache.py validate`
+/// passes it: a path, or none.
+pub(crate) fn validate_selected(path: &Path, selected: &str, reference: Option<&str>) -> Result<Json> {
+    validate_family(path, selected, reference.map_or(Value::Missing, Value::Text))
 }
 pub(super) fn validate_family(path: &Path, selected: &str, reference: Value<'_>) -> Result<Json> {
     let a = assembly(selected)?;

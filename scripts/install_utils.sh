@@ -2176,18 +2176,20 @@ function gnomAD_install() {
     local selected_gnomad canonical_gnomad gnomad_vcf_dir
     selected_gnomad=$(read_yaml "$config_file" gnomad_vcf_chrX) || return 1
     gnomad_vcf_dir=$(read_yaml "$config_file" gnomad_vcf_dir) || return 1
-    canonical_gnomad=$(python "${SCRIPT_DIR}/gnomad_cache.py" default-path \
+    # main_install reaches this after PriVA_rust_install records priva_binary.
+    priva_resolve_binary "$config_file" || return 1
+    canonical_gnomad=$("${PRIVA_BIN}" gnomad-cache default-path \
         --cache-dir "$gnomad_vcf_dir" --assembly "$assembly") || return 1
     if [[ -n "$selected_gnomad" && "$selected_gnomad" != null ]]; then
         if [[ "$(realpath -ms -- "$selected_gnomad")" != "$(realpath -ms -- "$canonical_gnomad")" ]]; then
             # A selected target-assembly family is an input, not a request to
             # fetch another release or lift already selected target coordinates.
-            python "${SCRIPT_DIR}/gnomad_cache.py" validate --chr-x "$selected_gnomad" \
+            "${PRIVA_BIN}" gnomad-cache validate --chr-x "$selected_gnomad" \
                 --assembly "$assembly" --reference "$hg19_fasta" >/dev/null || return 1
             log "Reusing the selected complete indexed gnomAD family without changing its bytes: $selected_gnomad"
             return 0
         elif [[ -f "$selected_gnomad" ]] && \
-             python "${SCRIPT_DIR}/gnomad_cache.py" validate --chr-x "$selected_gnomad" \
+             "${PRIVA_BIN}" gnomad-cache validate --chr-x "$selected_gnomad" \
                  --assembly "$assembly" --reference "$hg19_fasta" >/dev/null 2>&1; then
             log "Reusing the complete managed gnomAD target-assembly family: $selected_gnomad"
             return 0

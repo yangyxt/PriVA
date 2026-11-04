@@ -58,7 +58,8 @@ class InstallResourceBoundaries(unittest.TestCase):
                              gnomad_vcf_dir=str(self.cache / "gnomAD"))
         self.env = dict(os.environ, TEST_PYTHON=sys.executable, TEST_CONFIG=str(self.config),
                         TEST_SOURCE_ROOT=str(self.source_root), TEST_EVENTS=str(self.events),
-                        TEST_CACHE=str(self.cache / "VEP_plugin_cache"))
+                        TEST_CACHE=str(self.cache / "VEP_plugin_cache"),
+                        **fake_priva_binary.environment(self.folder))
 
     def write(self):
         self.config.write_text(json.dumps(self.settings))

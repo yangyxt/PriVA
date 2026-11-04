@@ -5,7 +5,7 @@ mod adopt;
 mod cli;
 mod defaults;
 pub(crate) mod files;
-mod gnomad;
+pub(crate) mod gnomad;
 mod plan;
 mod receipt_json;
 mod values;

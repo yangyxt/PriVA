@@ -18,7 +18,7 @@ arguments (CONFIG first, then the script's own options).
 `reference-resources` runs scripts/reference_resources.py with the same
 subcommand, CONFIG and options.
 `vep-plugins MODE` runs scripts/vep_plugins_release.py with the same mode and
-options.
+options; `gnomad-cache COMMAND` runs scripts/gnomad_cache.py likewise.
 `installer-config-paths resolve/managed-roots` runs scripts/installer_config_paths.py
 with the same subcommand and options; it needs an explicit PYTHONHASHSEED, as the
 native command does.
@@ -192,6 +192,8 @@ elif command == "installer-config-paths" and rest[:1] in (["resolve"], ["managed
 elif command == "vep-plugins" and rest[:1] in (["check"], ["install"], ["transition"],
                                               ["clear-transition"], ["ensure-utr-reporting"]):
     script, forwarded = "vep_plugins_release.py", rest
+elif command == "gnomad-cache" and rest[:1] in (["members"], ["validate"], ["default-path"]):
+    script, forwarded = "gnomad_cache.py", rest
 elif command == "indexed-plugin-cache":
     flags = [value for value in rest[1:] if value == "--print-path"]
     pairs = options([value for value in rest[1:] if value != "--print-path"],

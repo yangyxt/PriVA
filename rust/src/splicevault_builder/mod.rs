@@ -320,7 +320,8 @@ fn write_bed(path: &Path, chunk: &table::Chunk, ids: &[String]) -> Result<()> {
             ));
         }
         let (pos, start) = bed_integer(fields[1])?;
-        writeln!(out, "{}\t{start}\t{pos}\t{id}", fields[0])?;
+        // Each event row has its own site, so the lifted site is keyed by row.
+        writeln!(out, "{}\t{start}\t{pos}\t{id}|{row}", fields[0])?;
     }
     out.flush()?;
     Ok(())
@@ -504,7 +505,7 @@ fn process(mut chunk: table::Chunk, options: &Options) -> Result<Table> {
             } else {
                 unmapped.insert(id.as_str());
             }
-            if let Some(value) = bed_coords.get(id) {
+            if let Some(value) = bed_coords.get(&format!("{id}|{row}")) {
                 if chunk.duplicate_multi_index {
                     return Err(invalid(
                         "ValueError: Invalid call for scalar access (setting)!",

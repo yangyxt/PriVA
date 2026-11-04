@@ -20,7 +20,7 @@ import shutil
 import subprocess
 import sys
 
-PRODUCER_SHA256 = "0e9dce6d1cd9e193e1549b74ec3ccf83786342c51e80536c050aab816b9710bb"
+PRODUCER_SHA256 = "8541a9b819999085479242106e9e81dfda5a2b5ff2ada40cf174396a65f235c1"
 SENTINEL = b"previous output must survive a pre-publication failure\n"
 
 

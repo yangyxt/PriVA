@@ -251,13 +251,14 @@ fn merge(results: Vec<Records>) -> Result<Records> {
     for result in results {
         for (gene, record) in result {
             if let Some(&id) = positions.get(&gene) {
-                let old: &Option<Vec<GeneAfEntry>> = &merged[id].1;
-                let (Some(old), Some(new)) = (old.as_ref(), record.as_ref()) else {
-                    return Err(invalid(
-                        "TypeError: None is not subscriptable during chromosome merge",
-                    ));
+                // None marks a gene without a non-zero AF on that chromosome; a
+                // variant from another chromosome replaces it.
+                let Some(new) = record.as_ref() else { continue };
+                let replace = match merged[id].1.as_ref() {
+                    None => true,
+                    Some(old) => entry_af(old)? < entry_af(new)?,
                 };
-                if entry_af(old)? < entry_af(new)? {
+                if replace {
                     merged[id].1 = record;
                 }
             } else {

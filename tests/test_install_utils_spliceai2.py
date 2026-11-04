@@ -402,15 +402,17 @@ class SpliceAI2Preparation(unittest.TestCase):
         self.assertNotIn('FileNotFoundError', result.stderr)
         self.assertFalse(self.calls.exists())
 
-    def test_missing_driver_and_failed_driver_do_not_update_config(self):
+    def test_missing_priva_and_failed_preparation_do_not_update_config(self):
         result = self.invoke('failure')
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual(self.config.read_bytes(), self.original)
-        self.driver.unlink()
+        self.calls.unlink(missing_ok=True)
+        self.env['PRIVA_BINARY'] = str(self.folder / 'absent' / 'priva')
         result = self.invoke()
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn('deployment driver is absent', result.stderr)
+        self.assertIn('must be an existing executable', result.stderr)
         self.assertEqual(self.config.read_bytes(), self.original)
+        self.assertFalse(self.calls.exists())
 
     def test_changed_config_is_not_overwritten(self):
         result = self.invoke('config_changed')

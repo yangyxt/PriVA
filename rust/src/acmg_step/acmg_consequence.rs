@@ -214,7 +214,7 @@ fn missense_change(text: &[u8]) -> bool {
 }
 
 /// `get_variant_type(hgvsp)` for a text: the part after the last `:` is searched for the
-/// nine HGVSp patterns in Python's order. Text with a non-ASCII character is refused.
+/// ten HGVSp patterns in Python's order. Text with a non-ASCII character is refused.
 pub(crate) fn get_variant_type(hgvsp: &str) -> Result<Option<&'static str>> {
     if !hgvsp.is_ascii() {
         return Err(invalid(format!(
@@ -232,11 +232,22 @@ pub(crate) fn get_variant_type(hgvsp: &str) -> Result<Option<&'static str>> {
             && &rest[3..5] == b"er"
             && rest[5].is_ascii_digit()
     };
+    // VEP names the first changed residue before `fs`: `[A-Z](?:[a-z]{2})?fs`.
+    let frameshift_named = |rest: &[u8]| {
+        rest.first().is_some_and(u8::is_ascii_uppercase)
+            && (rest[1..].starts_with(b"fs")
+                || (rest.len() >= 5
+                    && rest[1].is_ascii_lowercase()
+                    && rest[2].is_ascii_lowercase()
+                    && &rest[3..5] == b"fs"))
+    };
     let found = if protein_change_then(text, literal(b"Ter"))
         || protein_change_then(text, literal(b"*"))
     {
         Some("nonsense")
-    } else if protein_change_then(text, literal(b"fs")) || protein_change_then(text, frameshift_ter)
+    } else if protein_change_then(text, literal(b"fs"))
+        || protein_change_then(text, frameshift_ter)
+        || protein_change_then(text, frameshift_named)
     {
         Some("frameshift")
     } else if protein_change_then(text, literal(b"delins")) {
@@ -526,10 +537,13 @@ mod tests {
         let kind = |text: &str| get_variant_type(text).unwrap();
         assert_eq!(kind("ENSP00000439902.1:p.Arg123Ter"), Some("nonsense"));
         assert_eq!(kind("p.Arg123*"), Some("nonsense"));
-        // The digits must come right before `fs`, so VEP's usual frameshift spelling is no
-        // frameshift here (nor anything else), as in Python.
-        assert_eq!(kind("p.Asn3264LeufsTer12"), None);
-        assert_eq!(kind("ENSP00000439902.1:p.Asn3264LeufsTer12"), None);
+        // VEP names the first changed residue before `fs`.
+        assert_eq!(kind("p.Asn3264LeufsTer12"), Some("frameshift"));
+        assert_eq!(kind("ENSP00000439902.1:p.Asn3264LeufsTer12"), Some("frameshift"));
+        assert_eq!(kind("p.Arg123Glyfs*5"), Some("frameshift"));
+        assert_eq!(kind("p.R123Gfs*5"), Some("frameshift"));
+        assert_eq!(kind("p.Arg123Gfs"), Some("frameshift"));
+        assert_eq!(kind("p.Arg123GlFs"), None);
         assert_eq!(kind("p.Gly123fs"), Some("frameshift"));
         assert_eq!(kind("p.Gly123FsTer5"), Some("frameshift"));
         assert_eq!(kind("p.Gly123FsTer"), None);

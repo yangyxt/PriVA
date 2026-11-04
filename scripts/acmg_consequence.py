@@ -152,8 +152,10 @@ def get_variant_type(hgvsp):
     # Check nonsense/stop gain variants first (most severe)
     if re.search(r'p\.\w+\d+Ter', hgvsp) or re.search(r'p\.\w+\d+\*', hgvsp):  # p.Arg123Ter or p.Arg123*
         return "nonsense"
-    # Check frameshift second (next most severe)
-    elif re.search(r'p\.\w+\d+fs', hgvsp) or re.search(r'p\.\w+\d+[Ff]s[Tt]er\d+', hgvsp):  # p.Gly123fs or p.Asn3264LeufsTer12
+    # Check frameshift second (next most severe); VEP names the first changed residue
+    # before "fs", as in p.Asn3264LeufsTer12 or p.N3264Lfs*12
+    elif (re.search(r'p\.\w+\d+fs', hgvsp) or re.search(r'p\.\w+\d+[Ff]s[Tt]er\d+', hgvsp)
+          or re.search(r'p\.\w+\d+[A-Z](?:[a-z]{2})?fs', hgvsp)):  # p.Gly123fs or p.Asn3264LeufsTer12
         return "frameshift"
     # Check delins (length changing)
     elif re.search(r'p\.\w+\d+delins', hgvsp):  # p.Ala123delinsGly

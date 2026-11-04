@@ -466,28 +466,38 @@ pub(crate) fn dispatch(args: &[String]) -> Result<()> {
 mod tests {
     use super::*;
     #[test]
-    fn merge_preserves_first_tie_and_none_failure() {
+    fn merge_keeps_first_tie_and_replaces_none() {
         let value = |af| {
             Some(vec![GeneAfEntry {
                 key: "af".into(),
                 value: GeneAfValue::Float(af),
             }])
         };
-        assert!(
-            merge(vec![
-                vec![("g".into(), None)],
-                vec![("g".into(), value(1.0))]
-            ])
-            .is_err()
-        );
-        assert!(
-            merge(vec![
-                vec![("g".into(), value(1.0))],
-                vec![("g".into(), None)]
-            ])
-            .is_err()
-        );
-        assert!(merge(vec![vec![("g".into(), None)], vec![("g".into(), None)]]).is_err());
+        let af = |results: Vec<Records>| -> Option<f64> {
+            let merged = merge(results).unwrap();
+            assert_eq!(merged.len(), 1);
+            merged[0].1.as_ref().map(|entries| entry_af(entries).unwrap())
+        };
+        let g = |record| vec![("g".to_string(), record)];
+        // None marks a gene without a non-zero AF on that chromosome.
+        assert_eq!(af(vec![g(None), g(value(1.0))]), Some(1.0));
+        assert_eq!(af(vec![g(value(1.0)), g(None)]), Some(1.0));
+        assert_eq!(af(vec![g(None), g(None)]), None);
+        assert_eq!(af(vec![g(value(0.5)), g(value(1.0))]), Some(1.0));
+        assert_eq!(af(vec![g(value(1.0)), g(value(0.5))]), Some(1.0));
+        // A tie keeps the first chromosome's record.
+        let first = Some(vec![
+            GeneAfEntry {
+                key: "af".into(),
+                value: GeneAfValue::Float(1.0),
+            },
+            GeneAfEntry {
+                key: "chrom".into(),
+                value: GeneAfValue::Int(1),
+            },
+        ]);
+        let merged = merge(vec![g(first), g(value(1.0))]).unwrap();
+        assert_eq!(merged[0].1.as_ref().map(Vec::len), Some(2));
         assert_eq!(
             merge(vec![vec![("a".into(), None)], vec![("b".into(), None)]])
                 .unwrap()

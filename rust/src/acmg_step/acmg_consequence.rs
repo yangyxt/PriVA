@@ -241,28 +241,27 @@ pub(crate) fn get_variant_type(hgvsp: &str) -> Result<Option<&'static str>> {
                     && rest[2].is_ascii_lowercase()
                     && &rest[3..5] == b"fs"))
     };
-    let found = if protein_change_then(text, literal(b"Ter"))
-        || protein_change_then(text, literal(b"*"))
-    {
-        Some("nonsense")
-    } else if protein_change_then(text, literal(b"fs"))
-        || protein_change_then(text, frameshift_ter)
-        || protein_change_then(text, frameshift_named)
-    {
-        Some("frameshift")
-    } else if protein_change_then(text, literal(b"delins")) {
-        Some("delins")
-    } else if protein_change_then(text, literal(b"del")) {
-        Some("deletion")
-    } else if protein_change_then(text, literal(b"dup"))
-        || protein_change_then(text, literal(b"ins"))
-    {
-        Some("insertion_type")
-    } else if missense_change(text) {
-        Some("missense")
-    } else {
-        None
-    };
+    let found =
+        if protein_change_then(text, literal(b"Ter")) || protein_change_then(text, literal(b"*")) {
+            Some("nonsense")
+        } else if protein_change_then(text, literal(b"fs"))
+            || protein_change_then(text, frameshift_ter)
+            || protein_change_then(text, frameshift_named)
+        {
+            Some("frameshift")
+        } else if protein_change_then(text, literal(b"delins")) {
+            Some("delins")
+        } else if protein_change_then(text, literal(b"del")) {
+            Some("deletion")
+        } else if protein_change_then(text, literal(b"dup"))
+            || protein_change_then(text, literal(b"ins"))
+        {
+            Some("insertion_type")
+        } else if missense_change(text) {
+            Some("missense")
+        } else {
+            None
+        };
     Ok(found)
 }
 
@@ -539,7 +538,10 @@ mod tests {
         assert_eq!(kind("p.Arg123*"), Some("nonsense"));
         // VEP names the first changed residue before `fs`.
         assert_eq!(kind("p.Asn3264LeufsTer12"), Some("frameshift"));
-        assert_eq!(kind("ENSP00000439902.1:p.Asn3264LeufsTer12"), Some("frameshift"));
+        assert_eq!(
+            kind("ENSP00000439902.1:p.Asn3264LeufsTer12"),
+            Some("frameshift")
+        );
         assert_eq!(kind("p.Arg123Glyfs*5"), Some("frameshift"));
         assert_eq!(kind("p.R123Gfs*5"), Some("frameshift"));
         assert_eq!(kind("p.Arg123Gfs"), Some("frameshift"));

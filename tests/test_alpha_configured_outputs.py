@@ -1,5 +1,6 @@
 """AlphaMissense stage routing and failure barriers; scientific procedures stubbed."""
 import gzip
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -8,6 +9,7 @@ import sys
 import tempfile
 import time
 import unittest
+import fake_priva_binary
 import test_alphamissense_annotation_base as BASE_FIXTURE
 
 
@@ -117,12 +119,22 @@ class AlphaConfiguredOutputs(unittest.TestCase):
                              alphamissense_pd_stat=str(self.managed / "custom statistic.pkl"))
         self.config.write_text(json.dumps(self.settings))
         self.env = dict(os.environ, TEST_PYTHON=sys.executable, TEST_EVENTS=str(self.events),
-                        TEST_CACHE=str(self.managed), TEST_CONFIG=str(self.config), TEST_FAILURE="none")
+                        TEST_CACHE=str(self.managed), TEST_CONFIG=str(self.config), TEST_FAILURE="none",
+                        **fake_priva_binary.environment(self.folder))
 
-    def invoke(self, command, failure="none"):
+    def invoke(self, command, failure="none", **extra):
         return subprocess.run(["bash", "--noprofile", "--norc", "-c", PRELUDE + command,
                                "test", str(ROOT / "scripts/install_utils.sh")],
-                              env=dict(self.env, TEST_FAILURE=failure), capture_output=True, text=True)
+                              env=dict(self.env, TEST_FAILURE=failure, **extra), capture_output=True, text=True)
+
+    def native(self, command):
+        # The fixture VCF header declares one contig; the fixture priva runs
+        # das_install_state.py through the exported python function.
+        return ("bcftools() { printf '##contig=<ID=chr1,length=100>\\n'; }\n"
+                "export -f python fixture_vcf\n" + command)
+
+    def priva_calls(self):
+        return fake_priva_binary.calls(self.env["PRIVA_FAKE_CALLS"])
 
     def test_annotation_honors_both_configured_paths_and_preserves_original_source(self):
         result = self.invoke('AlphaMissense_anno "$TEST_CONFIG"')
@@ -236,19 +248,28 @@ class AlphaConfiguredOutputs(unittest.TestCase):
                 self.assertNotIn("UPDATE:", self.events.read_text())
 
     def test_statistic_honors_configured_destination(self):
-        result = self.invoke('AlphaMissense_stat "$TEST_CONFIG"')
+        # A configured pickle without completed Python DAS outputs selects the
+        # typed Parquet statistics beside it.
+        result = self.invoke(self.native('AlphaMissense_stat "$TEST_CONFIG"'))
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(Path(self.settings["alphamissense_pd_stat"]).read_text(), "statistics fixture\n")
-        self.assertFalse(Path(self.settings["alphamissense_vep_vcf"].replace(".vcf.gz", ".prot.domain.stats.pkl")).exists())
+        target = self.managed / "custom statistic.parquet"
+        self.assertTrue(target.is_file())
+        self.assertIn(f"UPDATE:alphamissense_pd_stat:{target}", self.events.read_text())
+        self.assertIn(["alphamissense-domain", "merge", "--input",
+                       str(self.managed / "custom statistic.parquet.chromosomes/00000.parquet"),
+                       "--output", str(target)], self.priva_calls())
+        self.assertFalse(Path(self.settings["alphamissense_pd_stat"]).exists())
+        self.assertFalse(Path(self.settings["alphamissense_vep_vcf"].replace(".vcf.gz", ".prot.domain.stats.parquet")).exists())
 
     def test_failed_statistic_does_not_replace_previous_output_or_register_it(self):
-        target = Path(self.settings["alphamissense_pd_stat"])
+        target = self.managed / "custom statistic.parquet"
         target.parent.mkdir()
         target.write_bytes(b"retain previous statistic")
         os.utime(target, (1, 1))
-        result = self.invoke('AlphaMissense_stat "$TEST_CONFIG"', "stat")
-        self.assertEqual(result.returncode, 73, result.stderr)
-        self.assertIn("STAT:", self.events.read_text())
+        result = self.invoke(self.native('AlphaMissense_stat "$TEST_CONFIG"'),
+                             PRIVA_FAKE_FAIL="alphamissense-domain merge")
+        self.assertNotEqual(result.returncode, 0, result.stderr)
+        self.assertIn("merge", [call[1] for call in self.priva_calls()])
         self.assertEqual(target.read_bytes(), b"retain previous statistic")
         self.assertNotIn("UPDATE:", self.events.read_text())
 
@@ -262,9 +283,11 @@ class AlphaConfiguredOutputs(unittest.TestCase):
         self.domain_inputs()
         keys = ("alphamissense_intolerant_domains", "alphamissense_tranx_domain_map", "all_intolerant_domains")
         for key in keys:
-            self.settings[key] = str(self.managed / key / "selected output")
+            # The transcript map and DAS set are native archives.
+            self.settings[key] = str(self.managed / key / (
+                "selected output" if key == "alphamissense_intolerant_domains" else "selected output.rkyv"))
         self.config.write_text(json.dumps(self.settings))
-        result = self.invoke('AlphaMissense_pick_intolerant_domains "$TEST_CONFIG"')
+        result = self.invoke(self.native('AlphaMissense_pick_intolerant_domains "$TEST_CONFIG"'))
         self.assertEqual(result.returncode, 0, result.stderr)
         for key in keys:
             self.assertTrue(Path(self.settings[key]).is_file())
@@ -281,7 +304,8 @@ class AlphaConfiguredOutputs(unittest.TestCase):
             os.utime(path, (1, 1))
             self.settings[key] = str(path)
         self.config.write_text(json.dumps(self.settings))
-        result = self.invoke('AlphaMissense_pick_intolerant_domains "$TEST_CONFIG"', "domains")
+        result = self.invoke(self.native('AlphaMissense_pick_intolerant_domains "$TEST_CONFIG"'),
+                             PRIVA_FAKE_FAIL="das-domains analyze")
         self.assertNotEqual(result.returncode, 0)
         for key in keys:
             self.assertEqual(Path(self.settings[key]).read_bytes(), b"retain selected domain output")
@@ -290,9 +314,15 @@ class AlphaConfiguredOutputs(unittest.TestCase):
     def domain_inputs(self):
         # The real completion guard runs before the labelled scientific stub.
         # Supply its required inputs so these cases reach the intended writer.
-        stats = Path(self.settings["alphamissense_pd_stat"])
+        stats = self.managed / "custom statistic.parquet"
         stats.parent.mkdir(parents=True, exist_ok=True)
-        stats.write_bytes(b"completed domain-statistics fixture")
+        vcf = Path(self.settings["alphamissense_vep_vcf"])
+        vcf.write_bytes(b"opaque AlphaMissense VCF fixture")
+        # A typed statistics stand-in in the fixture priva's format.
+        stats.write_text(json.dumps({"command": "alphamissense-domain", "stage": "final", "vcf": str(vcf),
+            "builder_source_sha256": hashlib.sha256(b"alphamissense-domain").hexdigest()}))
+        os.utime(stats, (1, 1))
+        self.settings["alphamissense_pd_stat"] = str(stats)
         interpro = self.folder / "selected-interpro.pkl"
         interpro.write_bytes(b"selected InterPro fixture")
         self.settings["interpro_mapping_pickle"] = str(interpro)

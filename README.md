@@ -464,8 +464,9 @@ qualified helpers and scientific producers; they are not a Python publication
 fallback. Failed private stages remain available, directory locks are
 nonblocking, and only the three original ordered pair states can recover.
 Ignored JSON metadata is validated losslessly; pending receipt comparisons
-retain complete equality. Existing installer callers and scientific commands
-remain unchanged. The portable comparator is
+retain complete equality. The installer publishes PM1 regions with
+`--native-producer pm1-regions`; the AlphaMissense motif caller and the
+scientific commands remain unchanged. The portable comparator is
 `rust/tests/mapped_artifact_compare.py`; its byte producers and interrupted
 transactions are transport fixtures, not scientific production acceptance.
 
@@ -485,7 +486,11 @@ capture; it publishes only the completion receipt after all selected identities
 still match. Repeat `--input`, `--source`, `--bundled` and `--parameter` in their
 original order. Source roles use content hashes; `--bundled ROLE=FILE` checks
 only existence and nonzero size. A completion receipt does not establish
-scientific qualification. The installer continues to use its Python helper.
+scientific qualification. The installer records native DAS builds with
+`priva das-install-state`, binding `priva builder-identity` output for
+`das-domains`, `alphamissense-domain` and `alpha-exon-history` as source roles;
+completed Python DAS outputs of an existing installation keep their Python
+receipt check for one transition.
 
 For a separately prepared, complete ClinVar consumer-equivalence proof,
 `priva das-input-continuity check` verifies the original DAS receipt and its

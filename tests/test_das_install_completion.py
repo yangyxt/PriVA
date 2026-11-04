@@ -1,11 +1,11 @@
-"""Real installer/state helper, synthetic scientific writer and injected failures.
+"""Real installer/state helper, recording fixture priva and injected failures.
 
 These tests establish orchestration/recovery, not domain model acceptance.
 """
+import hashlib
 import json
 import os
 from pathlib import Path
-import re
 import subprocess
 import sys
 import tempfile
@@ -14,12 +14,14 @@ from types import SimpleNamespace
 from unittest.mock import patch
 import importlib.util
 
+import fake_priva_binary
+
 
 ROOT = Path(__file__).resolve().parents[1]
 _spec = importlib.util.spec_from_file_location('das_install_state_test', ROOT / 'scripts/das_install_state.py')
 STATE = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(STATE)
-PRELUDE = r'''
+PRELUDE = r"""
 source "$1"
 DATA_DIR="$TEST_FOLDER/bundled data"
 read_yaml() {
@@ -29,32 +31,17 @@ update_yaml() {
     [[ $2 != "$FAIL_KEY" ]] || return 71
     "$TEST_PYTHON" -c 'import json,sys; p,k,v=sys.argv[1:]; d=json.load(open(p)); d[k]=v; open(p,"w").write(json.dumps(d))' "$@"
 }
-python() {
-    if [[ $1 == */am_pick_intolerant_domains.py ]]; then
-        "$TEST_PYTHON" "$TEST_FOLDER/writer.py" "$@"
-    else
-        "$TEST_PYTHON" "$@"
-    fi
-}
-'''
-WRITER = r'''
-import json,os,sys
-from pathlib import Path
-args=sys.argv[1:]
-with open(os.environ["TEST_FOLDER"]+"/calls.jsonl","a") as f:
-    f.write(json.dumps(args)+"\n")
-folder=Path(args[args.index("--output_dir")+1])
-mode=os.environ["FAIL_MODE"]
-for index,(stem,suffix) in enumerate((("transcript_pp_domain_mapping","pkl"),
-        ("domain_tolerance_analysis","tsv"),("all_intolerant_domains","pkl"))):
-    path=folder/f"{stem}.hg38.{suffix}"
-    path.write_bytes(b"complete synthetic output:"+stem.encode())
-    if mode == str(index):
-        raise SystemExit(73)
-if mode == "empty": path.write_bytes(b"")
-if mode == "input_changed":
-    Path(args[args.index("--interpro_mapping_pickle")+1]).write_bytes(b"changed selected input")
-'''
+# The fixture VCF is opaque; its header declares two contigs.
+bcftools() { printf '##fileformat=VCFv4.2\n##contig=<ID=chr1,length=10>\n##contig=<ID=chr2,length=10>\n'; }
+# The fixture priva runs das_install_state.py through this exported function.
+python() { "$TEST_PYTHON" "$@"; }
+export -f python
+"""
+
+
+def builder(name):
+    """The identity the fixture priva records for NAME."""
+    return hashlib.sha256(name.encode()).hexdigest()
 
 
 class DASInstallCompletion(unittest.TestCase):
@@ -65,29 +52,45 @@ class DASInstallCompletion(unittest.TestCase):
         self.folder = Path(self.temporary.name)
         self.cache = self.folder / "managed cache"
         self.cache.mkdir()
-        self.stats = self.cache / "input.stats.pkl"
-        self.stats.write_bytes(b"opaque fixture input")
+        self.am = self.folder / "am.vcf.gz"
+        self.am.write_bytes(b"opaque external AlphaMissense VCF")
+        # A typed statistics stand-in in the fixture priva's format.
+        self.stats = self.cache / "input.stats.parquet"
+        self.stats.write_text(json.dumps({"command": "alphamissense-domain", "stage": "final",
+                                          "vcf": str(self.am),
+                                          "builder_source_sha256": builder("alphamissense-domain")}))
         self.mapping = self.folder / "selected mapping.pkl.gz"
         self.mapping.write_bytes(b"opaque fixture mapping")
         self.config_path = self.folder / "config.json"
         self.config = {"assembly": "GRCh38", "threads": 1,
             "alphamissense_pd_stat": str(self.stats),
+            "alphamissense_vep_vcf": str(self.am),
             "interpro_mapping_pickle": str(self.mapping)}
         self.config_path.write_text(json.dumps(self.config))
-        (self.folder / "writer.py").write_text(WRITER)
         self.receipt = self.cache / "domain_analysis.hg38.install.json"
+        self.priva = fake_priva_binary.environment(self.folder)
+        self.history = self.cache / "input.stats.exon_history.seed0.parquet"
+        # Built intermediates must be newer than their sources at any timestamp resolution.
+        for path in (self.am, self.stats):
+            os.utime(path, ns=(10 ** 18, 10 ** 18))
 
-    def run_install(self, mode="none", fail_key="none", override="", installer=None):
+    def run_install(self, fail="", fail_key="none", change=None, override="",
+                    function="AlphaMissense_pick_intolerant_domains", **extra):
         env = dict(os.environ, TEST_FOLDER=str(self.folder), TEST_PYTHON=sys.executable,
-                   FAIL_MODE=mode, FAIL_KEY=fail_key, PYTHONDONTWRITEBYTECODE="1")
+                   FAIL_KEY=fail_key, PYTHONDONTWRITEBYTECODE="1", PRIVA_FAKE_FAIL=fail, **self.priva, **extra)
+        if change is not None:
+            env["PRIVA_FAKE_CHANGE"] = str(change)
         return subprocess.run(["bash", "--noprofile", "--norc", "-c",
-            PRELUDE + override + '\nAlphaMissense_pick_intolerant_domains "$2"',
-            "test", str(installer or ROOT / "scripts/install_utils.sh"), str(self.config_path)],
+            PRELUDE + override + f'\n{function} "$2"',
+            "test", str(ROOT / "scripts/install_utils.sh"), str(self.config_path)],
             env=env, text=True, capture_output=True, timeout=60)
 
+    def native(self):
+        return fake_priva_binary.calls(self.priva["PRIVA_FAKE_CALLS"])
+
     def calls(self):
-        path = self.folder / "calls.jsonl"
-        return [json.loads(line) for line in path.read_text().splitlines()] if path.exists() else []
+        """The das-domains analyze calls, oldest first."""
+        return [call for call in self.native() if call[:2] == ["das-domains", "analyze"]]
 
     def assert_ok(self, result):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
@@ -98,12 +101,43 @@ class DASInstallCompletion(unittest.TestCase):
         calls = self.calls()
         self.assertEqual(len(calls), 1)
         args = calls[0]
-        self.assertEqual(args[args.index("--interpro_mapping_pickle") + 1], str(self.mapping))
+        self.assertEqual(args[args.index("--interpro") + 1], str(self.mapping))
         self.assertEqual(args[args.index("--assembly") + 1], "hg38")
-        self.assert_ok(self.run_install(mode="0"))
+        self.assertEqual(self.native()[0], ["cache-install", "resolve", "--key", "interpro_mapping_pickle",
+            "--build-config", str(self.config_path), "--source-root", str(ROOT)])
+        self.assert_ok(self.run_install(fail="das-domains analyze"))
         self.assertEqual(self.calls(), calls)
         self.assertEqual(self.receipt.read_bytes(), first)
+        # The source roles hash the builder identities priva builder-identity prints.
+        sources = json.loads(first)["sources"]
+        self.assertEqual([entry["role"] for entry in sources], ["analysis", "statistics", "exon-history"])
+        identity = json.dumps({"builder": "das-domains", "builder_source_sha256": builder("das-domains")},
+                              separators=(",", ":")) + "\n"
+        self.assertEqual(sources[0]["sha256"], hashlib.sha256(identity.encode()).hexdigest())
 
+    def test_exon_history_resumes_and_keeps_its_recorded_builder(self):
+        shards = self.cache / (self.history.name + ".chromosomes")
+        self.assertNotEqual(self.run_install(fail="alpha-exon-history merge").returncode, 0)
+        self.assertEqual(sorted(path.name for path in shards.iterdir()), ["00000.parquet", "00001.parquet"])
+        self.assertFalse(self.receipt.exists())
+        self.assert_ok(self.run_install())
+        chromosomes = [call for call in self.native() if call[:2] == ["alpha-exon-history", "chromosome"]]
+        self.assertEqual(chromosomes, [
+            ["alpha-exon-history", "chromosome", "--vcf", str(self.am), "--chrom", contig,
+             "--output", str(shards / name)] for contig, name in (("chr1", "00000.parquet"), ("chr2", "00001.parquet"))])
+        self.assertIn(["alpha-exon-history", "merge", "--input", str(shards / "00000.parquet"),
+                       "--input", str(shards / "00001.parquet"), "--hash-seed", "0",
+                       "--output", str(self.history)], self.native())
+        self.assertFalse(shards.exists())
+        # A newer priva keeps the recorded history and binds it explicitly.
+        count = len(self.native())
+        self.assert_ok(self.run_install(PRIVA_FAKE_BUILDER_SHA256="f" * 64))
+        later = self.native()[count:]
+        self.assertFalse([call for call in later if call[0] == "alpha-exon-history" and
+                          call[1] in ("chromosome", "merge", "export")])
+        transcripts = next(call for call in later if call[:2] == ["das-domains", "transcripts"])
+        self.assertEqual(transcripts[transcripts.index("--history-builder-sha256") + 1], builder("alpha-exon-history"))
+        self.assertEqual(len(self.calls()), 2)
     def test_receipt_device_portability_and_remaining_identity_strictness(self):
         output = self.cache / 'portable-output'
         output.write_bytes(b'output')
@@ -219,35 +253,60 @@ class DASInstallCompletion(unittest.TestCase):
         with self.assertRaises(ValueError): STATE.check(args)
         self.assertEqual(json.loads(self.receipt.read_text())['version'], 2)
 
-    def test_installer_reuses_identical_sources_from_other_checkout(self):
-        peer = ROOT.parent / ('PriVA-nextflow' if ROOT.name == 'PriVA' else 'PriVA')
-        installer = peer / 'scripts/install_utils.sh'
-        if not installer.is_file(): self.skipTest('A second installer checkout is required')
-        self.assert_ok(self.run_install()); before = self.receipt.read_bytes()
-        self.assert_ok(self.run_install(mode='0', installer=installer))
-        self.assertEqual(len(self.calls()), 1)
-        self.assertEqual(self.receipt.read_bytes(), before)
-
     def filter_inputs(self):
         spots = self.folder / 'bundled data/HCSeeker/HC_spots.hg38.tsv'
         spots.parent.mkdir(parents=True); spots.write_bytes(b'opaque bundled HCSeeker fixture')
-        am = self.folder / 'am.vcf.gz'; am.write_bytes(b'opaque external AlphaMissense VCF')
         clinvar = self.folder / 'clinvar.vcf.gz'; clinvar.write_bytes(b'opaque external ClinVar VCF')
         config = json.loads(self.config_path.read_text())
-        config.update(alphamissense_vep_vcf=str(am), clinvar_vcf=str(clinvar))
+        config.update(clinvar_vcf=str(clinvar))
         self.config_path.write_text(json.dumps(config))
-        return spots, am, clinvar
+        return spots, self.am, clinvar
 
-    def test_scientific_argv_order_and_options_remain_unchanged(self):
+    def test_native_argv_and_filter_options(self):
+        self.assert_ok(self.run_install())
+        self.assertEqual(self.calls()[0], ['das-domains', 'analyze', '--statistics', str(self.stats),
+            '--source-builder-sha256', builder('alphamissense-domain'), '--interpro', str(self.mapping),
+            '--normalization-json', str(ROOT / 'data/InterPro/InterPro_domain_norm_map.json'),
+            '--python-hash-seed', '0', '--threads', '1', '--assembly', 'hg38', '--output-dir', str(self.cache)])
+        self.assertFalse([call for call in self.native() if call[0] == 'domain-metadata'])
+        self.receipt.unlink()
         spots, am, clinvar = self.filter_inputs(); self.assert_ok(self.run_install())
-        self.assertEqual(self.calls()[0], [str(ROOT / 'scripts/am_pick_intolerant_domains.py'),
-            '--assembly', 'hg38', '--pickle_file', str(self.stats), '--interpro_mapping_pickle', str(self.mapping),
-            '--threads', '1', '--output_dir', str(self.cache), '--am_vcf', str(am),
-            '--hcseeker_spots_tsv', str(spots), '--clinvar_vcf', str(clinvar)])
+        metadata = self.cache / 'domain_metadata.hg38.parquet'
+        lines = self.cache / 'input.stats.exon_history.seed0.lines'
+        native = self.native()
+        self.assertIn(['domain-metadata', 'build', '--vcf', str(am), '--output', str(metadata),
+                       '--assembly', 'hg38', '--threads', '1'], native)
+        self.assertEqual([call for call in native if call[:2] == ['das-domains', 'transcripts']][-1], [
+            'das-domains', 'transcripts', '--statistics', str(self.stats), '--exon-history', str(lines),
+            '--source-builder-sha256', builder('alphamissense-domain'), '--python-hash-seed', '0',
+            '--output', str(self.cache / 'transcript_pp_domain_mapping.hg38.rkyv'),
+            '--history-builder-sha256', builder('alpha-exon-history')])
+        self.assertEqual(self.calls()[-1], ['das-domains', 'analyze', '--statistics', str(self.stats),
+            '--source-builder-sha256', builder('alphamissense-domain'), '--interpro', str(self.mapping),
+            '--normalization-json', str(ROOT / 'data/InterPro/InterPro_domain_norm_map.json'),
+            '--python-hash-seed', '0', '--threads', '1', '--assembly', 'hg38', '--output-dir', str(self.cache),
+            '--metadata', str(metadata), '--spots', str(spots), '--clinvar-vcf', str(clinvar)])
+        config = json.loads(self.config_path.read_text())
+        self.assertEqual(config['all_intolerant_domains'], str(self.cache / 'all_intolerant_domains.hg38.rkyv'))
+        self.assertEqual(config['alphamissense_tranx_domain_map'],
+                         str(self.cache / 'transcript_pp_domain_mapping.hg38.rkyv'))
+
+    def test_seed_setting_reaches_every_seeded_builder(self):
+        config = json.loads(self.config_path.read_text())
+        config['priva_python_hash_seed'] = 7
+        self.config_path.write_text(json.dumps(config))
+        self.assert_ok(self.run_install())
+        native = self.native()
+        merge = next(call for call in native if call[:2] == ['alpha-exon-history', 'merge'])
+        self.assertEqual(merge[merge.index('--hash-seed') + 1], '7')
+        self.assertEqual(merge[-1], str(self.cache / 'input.stats.exon_history.seed7.parquet'))
+        for name in ('transcripts', 'analyze'):
+            call = next(call for call in native if call[:2] == ['das-domains', name])
+            self.assertEqual(call[call.index('--python-hash-seed') + 1], '7')
 
     def test_filter_enablement_and_external_filter_data_changes_rebuild(self):
         spots, am, clinvar = self.filter_inputs(); self.assert_ok(self.run_install())
-        self.assert_ok(self.run_install(mode='0')); self.assertEqual(len(self.calls()), 1)
+        self.assert_ok(self.run_install(fail='das-domains analyze')); self.assertEqual(len(self.calls()), 1)
         am.write_bytes(b'changed selected AM VCF'); self.assert_ok(self.run_install())
         self.assertEqual(len(self.calls()), 2)
         clinvar.write_bytes(b'changed selected ClinVar VCF'); self.assert_ok(self.run_install())
@@ -255,18 +314,10 @@ class DASInstallCompletion(unittest.TestCase):
         spots.unlink(); self.assert_ok(self.run_install()); self.assertEqual(len(self.calls()), 4)
         clinvar.unlink(); self.assert_ok(self.run_install()); self.assertEqual(len(self.calls()), 5)
 
-    def test_only_actual_bundled_mapping_gets_existence_only_reuse(self):
-        bundled = self.folder / 'bundled data/InterPro/Interpro_entry_mapping.pkl.gz'
-        bundled.parent.mkdir(parents=True); bundled.write_bytes(b'opaque bundled mapping')
-        self.config['interpro_mapping_pickle'] = str(bundled)
-        self.config_path.write_text(json.dumps(self.config)); self.assert_ok(self.run_install())
-        bundled.write_bytes(b'changed but nonempty bundled mapping')
-        self.assert_ok(self.run_install(mode='0')); self.assertEqual(len(self.calls()), 1)
-        external = self.folder / 'Interpro_entry_mapping.pkl.gz'; external.write_bytes(b'external selected mapping')
-        config = json.loads(self.config_path.read_text()); config['interpro_mapping_pickle'] = str(external)
-        self.config_path.write_text(json.dumps(config)); self.assert_ok(self.run_install())
-        external.write_bytes(b'changed external mapping'); self.assert_ok(self.run_install())
-        self.assertEqual(len(self.calls()), 3)
+    def test_selected_interpro_archive_is_a_strict_input(self):
+        self.assert_ok(self.run_install())
+        self.mapping.write_bytes(b'changed selected mapping'); self.assert_ok(self.run_install())
+        self.assertEqual(len(self.calls()), 2)
 
     def test_bundled_mapping_link_to_external_remains_strict(self):
         bundled = self.folder / 'bundled data/InterPro/Interpro_entry_mapping.pkl.gz'
@@ -289,13 +340,13 @@ class DASInstallCompletion(unittest.TestCase):
                 if missing == 'absent': value.pop(key)
                 else: value[key] = '' if missing == 'blank' else None
             self.config_path.write_text(json.dumps(value))
-            self.assert_ok(self.run_install(mode='0'))
+            self.assert_ok(self.run_install(fail='das-domains analyze'))
             self.assertEqual(json.loads(self.config_path.read_text()), ready)
             self.assertEqual(len(self.calls()), count)
         # Already normalized values must not call update_yaml at all.
         for key in keys:
             config_before = (self.config_path.read_bytes(), self.config_path.stat().st_mtime_ns)
-            self.assert_ok(self.run_install(mode='0', fail_key=key))
+            self.assert_ok(self.run_install(fail='das-domains analyze', fail_key=key))
             self.assertEqual(config_before, (self.config_path.read_bytes(), self.config_path.stat().st_mtime_ns))
         self.assertEqual(before, {p: (p.read_bytes(), p.stat().st_ino, p.stat().st_mtime_ns) for p in selected})
 
@@ -308,10 +359,10 @@ class DASInstallCompletion(unittest.TestCase):
         for failure in keys:
             value = dict(ready, **{key: None for key in keys})
             self.config_path.write_text(json.dumps(value))
-            self.assertNotEqual(self.run_install(mode='0', fail_key=failure).returncode, 0)
+            self.assertNotEqual(self.run_install(fail='das-domains analyze', fail_key=failure).returncode, 0)
             self.assertEqual(self.receipt.read_bytes(), receipt)
             self.assertEqual(len(self.calls()), count)
-            self.assert_ok(self.run_install(mode='0'))
+            self.assert_ok(self.run_install(fail='das-domains analyze'))
             self.assertEqual(json.loads(self.config_path.read_text()), ready)
             self.assertEqual(len(self.calls()), count)
 
@@ -322,23 +373,26 @@ class DASInstallCompletion(unittest.TestCase):
         self.assert_ok(self.run_install())
         self.assertTrue(self.receipt.is_file())
 
-    def test_failed_scientific_stages_never_reuse_partial_generation(self):
-        for stage in ("0", "1", "2", "empty"):
+    def test_failed_native_stages_never_reuse_partial_generation(self):
+        # The fixture records a failing call before it exits.
+        for stage, failed_analyses in (("das-domains transcripts", 0), ("das-domains analyze", 1),
+                                       ("das-install-state record", 1)):
             with self.subTest(stage=stage):
                 self.assert_ok(self.run_install())
                 self.mapping.write_bytes(self.mapping.read_bytes() + b"!")
                 count = len(self.calls())
-                self.assertNotEqual(self.run_install(mode=stage).returncode, 0)
+                self.assertNotEqual(self.run_install(fail=stage).returncode, 0)
                 self.assertFalse(self.receipt.exists())
                 self.assert_ok(self.run_install())
-                self.assertEqual(len(self.calls()), count + 2)
+                self.assertEqual(len(self.calls()), count + failed_analyses + 1)
                 self.assertTrue(self.receipt.is_file())
 
     def test_yaml_failures_and_selected_destination_changes_retry(self):
         for key in ("alphamissense_intolerant_domains", "alphamissense_tranx_domain_map", "all_intolerant_domains"):
             with self.subTest(key=key):
                 config = json.loads(self.config_path.read_text())
-                config[key] = str(self.cache / (key + ".selected"))
+                suffix = ".tsv" if key == "alphamissense_intolerant_domains" else ".rkyv"
+                config[key] = str(self.cache / (key + ".selected" + suffix))
                 self.config_path.write_text(json.dumps(config))
                 self.assertNotEqual(self.run_install(fail_key=key).returncode, 0)
                 self.assertFalse(self.receipt.exists())
@@ -347,8 +401,19 @@ class DASInstallCompletion(unittest.TestCase):
                 self.assertEqual(len(self.calls()), count + 1)
                 self.assertTrue(Path(config[key]).is_file())
 
+    def test_selected_pickle_destinations_select_native_siblings(self):
+        config = json.loads(self.config_path.read_text())
+        config.update(alphamissense_tranx_domain_map=str(self.cache / "selected map.pkl"),
+                      all_intolerant_domains=str(self.cache / "selected domains.pkl.gz"))
+        self.config_path.write_text(json.dumps(config))
+        self.assert_ok(self.run_install())
+        config = json.loads(self.config_path.read_text())
+        self.assertEqual(config["alphamissense_tranx_domain_map"], str(self.cache / "selected map.rkyv"))
+        self.assertEqual(config["all_intolerant_domains"], str(self.cache / "selected domains.rkyv"))
+        self.assertTrue(Path(config["all_intolerant_domains"]).is_file())
+
     def test_changed_input_during_command_cannot_record_completion(self):
-        self.assertNotEqual(self.run_install(mode="input_changed").returncode, 0)
+        self.assertNotEqual(self.run_install(change=self.mapping).returncode, 0)
         self.assertFalse(self.receipt.exists())
         self.assert_ok(self.run_install())
 
@@ -362,28 +427,64 @@ class DASInstallCompletion(unittest.TestCase):
         self.assert_ok(self.run_install())
         self.assertEqual(len(self.calls()), 3)
 
-    def test_old_false_reuse_reproduced_and_current_requires_completion(self):
-        previous = os.environ.get("PRIVA_TEST_BEFORE_SOURCE_ROOT")
-        if not previous:
-            self.skipTest("Frozen predecessor required for historical defect reproduction")
-        source = (Path(previous) / "scripts/install_utils.sh").read_text()
-        old = re.search(r"^function AlphaMissense_pick_intolerant_domains\(\).*?(?=^function )",
-                        source, re.M | re.S).group()
-        # All three files can look current even when the real command failed
-        # immediately after its last main output and before later outputs.
-        for stem, suffix in (("domain_tolerance_analysis", "tsv"),
-                             ("transcript_pp_domain_mapping", "pkl"),
-                             ("all_intolerant_domains", "pkl")):
-            path = self.cache / f"{stem}.hg38.{suffix}"
-            path.write_bytes(b"partial failed generation")
-            future = max(self.stats.stat().st_mtime_ns,
-                (ROOT / "scripts/am_pick_intolerant_domains.py").stat().st_mtime_ns) + 1000000000
-            os.utime(path, ns=(future, future))
-        self.assert_ok(self.run_install(mode="0", override=old))
-        self.assertEqual(self.calls(), [])
+    def legacy_pickle(self):
+        stats = self.cache / "input.stats.pkl"
+        stats.write_bytes(b"completed Python statistics fixture")
+        config = json.loads(self.config_path.read_text())
+        config["alphamissense_pd_stat"] = str(stats)
+        self.config_path.write_text(json.dumps(config))
+        return stats
+
+    def test_legacy_python_receipt_keeps_python_outputs_without_native_calls(self):
+        self.legacy_pickle()
+        # Stand in for a valid Python completion receipt of an existing installation.
+        override = r"""
+python() {
+    if [[ $1 == */das_install_state.py && $2 == check ]]; then
+        printf 'LEGACY_CHECK %s\n' "${@:3}" >> "$TEST_FOLDER/legacy.events"; return 0
+    fi
+    "$TEST_PYTHON" "$@"
+}
+"""
+        for function in ("AlphaMissense_stat", "AlphaMissense_pick_intolerant_domains"):
+            with self.subTest(function=function):
+                self.assert_ok(self.run_install(override=override, function=function))
+        self.assertEqual(self.native(), [])
+        events = (self.folder / "legacy.events").read_text()
+        self.assertIn("analysis=" + str(ROOT / "scripts/am_pick_intolerant_domains.py"), events)
+        config = json.loads(self.config_path.read_text())
+        self.assertEqual(config["alphamissense_pd_stat"], str(self.cache / "input.stats.pkl"))
+        self.assertEqual(config["all_intolerant_domains"], str(self.cache / "all_intolerant_domains.hg38.pkl"))
+        self.assertEqual(config["alphamissense_tranx_domain_map"],
+                         str(self.cache / "transcript_pp_domain_mapping.hg38.pkl"))
+
+    def test_legacy_pickle_without_python_receipt_builds_native_statistics(self):
+        self.legacy_pickle()
+        result = self.run_install()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("run AlphaMissense_stat", result.stderr)
+        self.assertEqual(self.native(), [])
+        self.stats.unlink()
+        self.assert_ok(self.run_install(function="AlphaMissense_stat"))
+        shards = self.cache / "input.stats.parquet.chromosomes"
+        self.assertEqual([call for call in self.native() if call[0] == "alphamissense-domain"], [
+            ["alphamissense-domain", "chromosome", "--vcf", str(self.am), "--chrom", "chr1",
+             "--output", str(shards / "00000.parquet")],
+            ["alphamissense-domain", "chromosome", "--vcf", str(self.am), "--chrom", "chr2",
+             "--output", str(shards / "00001.parquet")],
+            ["alphamissense-domain", "merge", "--input", str(shards / "00000.parquet"),
+             "--input", str(shards / "00001.parquet"), "--output", str(self.stats)],
+            ["alphamissense-domain", "check", "--input", str(self.stats), "--vcf", str(self.am)]])
+        self.assertEqual(json.loads(self.config_path.read_text())["alphamissense_pd_stat"], str(self.stats))
+        # A complete Parquet keeps its recorded builder.
+        count = len(self.native())
+        self.assert_ok(self.run_install(function="AlphaMissense_stat", PRIVA_FAKE_BUILDER_SHA256="f" * 64))
+        self.assertEqual(self.native()[count:], [
+            ["alphamissense-domain", "identity", "--input", str(self.stats)],
+            ["alphamissense-domain", "check", "--input", str(self.stats), "--vcf", str(self.am),
+             "--builder-sha256", builder("alphamissense-domain")]])
         self.assert_ok(self.run_install())
         self.assertEqual(len(self.calls()), 1)
-        self.assertTrue(self.receipt.is_file())
 
 
 if __name__ == "__main__":

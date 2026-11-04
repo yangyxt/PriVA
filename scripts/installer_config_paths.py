@@ -692,7 +692,7 @@ def _portable_defaults(config: dict, source_root: Path) -> dict[str, str]:
     # Preserve this baseline marker even when absent/empty. The existing
     # ClinVar refresh procedure recognizes it and selects a managed candidate.
     fill("clinvar_gene_stat", source_root / "data/ClinVar/clinvar_2star_stats.pkl.gz")
-    # The gene-statistics builder reproduces the set order of this Python hash seed.
+    # The gene-statistics and DAS builders reproduce the set order of this Python hash seed.
     fill("priva_python_hash_seed", "0")
     fill("utr_annotator_file", plugin / f"UTRannotator/uORF_5UTR_{genome}_PUBLIC.txt")
     fill("loeuf_prescore", source_root / "data/loeuf" / (
@@ -709,12 +709,14 @@ def _portable_defaults(config: dict, source_root: Path) -> dict[str, str]:
         "alphamissense_vcf": f"AlphaMissense_{assembly}.vcf.gz",
         "alphamissense_vep_vcf": f"AlphaMissense_{assembly}.vep.vcf.gz",
         "alphamissense_vep_base_vcf": f"AlphaMissense_{assembly}.vep.base.vcf.gz",
-        "alphamissense_pd_stat": f"AlphaMissense_{assembly}.vep.prot.domain.stats.pkl",
-        "alphamissense_tranx_domain_map": f"transcript_pp_domain_mapping.{assembly}.pkl",
+        # Native builders write typed Parquet statistics and .rkyv archives. An
+        # existing pickle value is kept; its builder selects the sibling.
+        "alphamissense_pd_stat": f"AlphaMissense_{assembly}.vep.prot.domain.stats.parquet",
+        "alphamissense_tranx_domain_map": f"transcript_pp_domain_mapping.{assembly}.rkyv",
         "alphamissense_intolerant_domains": f"domain_tolerance_analysis.{assembly}.tsv",
         "alphamissense_intolerant_motifs": f"AlphaMissense_{assembly}.kde.pkl",
-        "all_intolerant_domains": f"all_intolerant_domains.{assembly}.pkl",
-        "pm1_regions_pkl": f"pm1_regions.{assembly}.pkl",
+        "all_intolerant_domains": f"all_intolerant_domains.{assembly}.rkyv",
+        "pm1_regions_pkl": f"pm1_regions.{assembly}.rkyv",
     }.items():
         fill(key, alpha / name)
     fill("conservation_file", plugin / f"Conservation/gerp_conservation_scores.homo_sapiens.{genome}.bw")

@@ -8,6 +8,17 @@ exported `python` function (export -f python) therefore still sees the call.
 PRIVA_FAKE_STATUS makes every builder call exit with that status instead.
 `builder-identity NAME` prints a fixed identity for NAME, or
 PRIVA_FAKE_BUILDER_SHA256 when it is set, and runs no script.
+`cache-install resolve` prints the build config's value for the key (relative
+values under --source-root) without converting it, and runs no script.
+`mapped-artifact run/recover --native-producer pm1-regions` runs the Python
+publication helper with the Python PM1 producer and its --skip_das arguments.
+`das-install-state` runs scripts/das_install_state.py with the same arguments.
+The AlphaMissense statistics, exon-history, domain-metadata and das-domains
+transcripts/analyze commands replace no single Python script: the fixture
+writes small JSON stand-ins that record the inputs and the current builder
+identity, and their check/identity/export/merge commands read them back.
+PRIVA_FAKE_FAIL="COMMAND SUBCOMMAND" makes that one call exit 73 before writing;
+PRIVA_FAKE_CHANGE=PATH makes `das-domains analyze` append to PATH first.
 This program is never used by an installer.
 """
 import json
@@ -50,8 +61,105 @@ if command == "builder-identity" and len(rest) == 1:
     value = os.environ.get("PRIVA_FAKE_BUILDER_SHA256") or hashlib.sha256(rest[0].encode()).hexdigest()
     print(json.dumps({"builder": rest[0], "builder_source_sha256": value}, separators=(",", ":")))
     raise SystemExit(0)
+if os.environ.get("PRIVA_FAKE_FAIL") == " ".join(args[:2]):
+    raise SystemExit(73)
+
+
+def current(name):
+    """The fixture builder identity, as builder-identity prints it."""
+    return os.environ.get("PRIVA_FAKE_BUILDER_SHA256") or hashlib.sha256(name.encode()).hexdigest()
+
+
+def stand_in(path, **value):
+    with open(path, "w") as stream:
+        json.dump(value, stream, sort_keys=True)
+
+
+def read(path):
+    with open(path) as stream:
+        return json.load(stream)
+
+
+SYNTHETIC = {"alphamissense-domain": "alphamissense-domain", "domain-metadata": "alphamissense-domain",
+             "alpha-exon-history": "alpha-exon-history"}
+if command in SYNTHETIC and rest[:1] in (["chromosome"], ["merge"], ["build"], ["check"], ["identity"],
+                                         ["export"]):
+    builder = current(SYNTHETIC[command])
+    procedure, pairs = rest[0], options(rest[1:], {"--vcf", "--chrom", "--output", "--input", "--hash-seed",
+                                                    "--builder-sha256", "--assembly", "--threads"})
+    values = dict(pairs)
+    inputs = [value for name, value in pairs if name == "--input"]
+    if procedure == "chromosome":
+        stand_in(values["--output"], command=command, stage="raw", vcf=values["--vcf"],
+                 chrom=values["--chrom"], builder_source_sha256=builder)
+    elif procedure == "build":
+        receipt = values["--output"] + ".source.json"
+        if os.path.exists(values["--output"]) and os.path.exists(receipt) and read(receipt) == values:
+            print(json.dumps({"reused": True}))
+            raise SystemExit(0)
+        stand_in(values["--output"], command=command, stage="final", vcf=values["--vcf"],
+                 builder_source_sha256=builder)
+        stand_in(receipt, **values)
+    elif procedure == "merge":
+        shards = [read(path) for path in inputs]
+        if any(shard["stage"] != "raw" or shard["builder_source_sha256"] != builder for shard in shards):
+            raise SystemExit("priva fixture: checkpoint producer/implementation differs")
+        stand_in(values["--output"], command=command, stage="final", vcf=shards[0]["vcf"],
+                 chromosomes=[shard["chrom"] for shard in shards], seed=values.get("--hash-seed"),
+                 builder_source_sha256=builder)
+    elif procedure == "export":
+        recorded = read(inputs[0])
+        if recorded["builder_source_sha256"] != builder or recorded["stage"] != "final":
+            raise SystemExit("priva fixture: only final current history can be exported")
+        with open(values["--output"], "w") as stream:
+            stream.write("# " + json.dumps(recorded, sort_keys=True) + "\n")
+    else:
+        recorded = read(inputs[0])
+        if procedure == "identity":
+            print(json.dumps({"builder_source_sha256": recorded["builder_source_sha256"],
+                              "kind": command, "stage": recorded["stage"]}, separators=(",", ":")))
+            raise SystemExit(0)
+        if "--vcf" in values and values["--vcf"] != recorded["vcf"]:
+            raise SystemExit("priva fixture: selected VCF/index association differs")
+        if recorded["builder_source_sha256"] != values.get("--builder-sha256", builder):
+            raise SystemExit("priva fixture: selected producer association differs")
+        print(json.dumps({"passed": True}))
+    raise SystemExit(0)
+if command == "das-domains" and rest[:1] == ["transcripts"]:
+    values = dict(options(rest[1:], {"--statistics", "--exon-history", "--source-builder-sha256",
+                                     "--python-hash-seed", "--output", "--history-builder-sha256"}))
+    stand_in(values["--output"], builder_source_sha256=current("das-domains"), **values)
+    raise SystemExit(0)
+if command == "das-domains" and rest[:1] == ["analyze"]:
+    values = dict(options(rest[1:], {"--statistics", "--source-builder-sha256", "--interpro",
+                                     "--normalization-json", "--python-hash-seed", "--threads", "--assembly",
+                                     "--output-dir", "--metadata", "--spots", "--clinvar-vcf"}))
+    if os.environ.get("PRIVA_FAKE_CHANGE"):
+        with open(os.environ["PRIVA_FAKE_CHANGE"], "ab") as stream:
+            stream.write(b"changed during analysis")
+    for stem, suffix in (("domain_tolerance_analysis", "tsv"), ("domain_filter_results", "tsv"),
+                         ("curated_functional_references", "json"), ("excluded_domains", "json"),
+                         ("all_intolerant_domains", "rkyv")):
+        stand_in(os.path.join(values["--output-dir"], stem + "." + values["--assembly"] + "." + suffix),
+                 output=stem, builder_source_sha256=current("das-domains"), **values)
+    raise SystemExit(0)
+if command == "cache-install" and rest[:1] == ["resolve"]:
+    values = dict(options(rest[1:], {"--key", "--build-config", "--source-root"}))
+    text = open(values["--build-config"]).read()
+    try:
+        document = json.loads(text)
+    except ValueError:
+        import yaml
+        document = yaml.safe_load(text)
+    selected = document.get(values["--key"])
+    if not selected:
+        raise SystemExit("priva fixture: " + values["--key"] + " is not configured")
+    print(os.path.join(values["--source-root"], selected))
+    raise SystemExit(0)
 if command == "installed-environment":
     script, forwarded = "installed_environment.py", rest
+elif command == "das-install-state":
+    script, forwarded = "das_install_state.py", rest
 elif command == "indexed-plugin-cache":
     flags = [value for value in rest[1:] if value == "--print-path"]
     pairs = options([value for value in rest[1:] if value != "--print-path"],
@@ -115,6 +223,24 @@ elif command == "clinvar-gene-stats" and rest[:1] == ["build"]:
     long = {"--vcf": "--clinvar_anno_vcf", "--output": "--output_pickle"}
     script = "clinvar_stat_variants.py"
     forwarded = list(sum(((long.get(name, name), value) for name, value in values.items()), ()))
+elif command == "mapped-artifact" and rest[:1] in (["run"], ["recover"]):
+    head, producer = rest[1:], None
+    if "--" in head:
+        head, producer = head[:head.index("--")], head[head.index("--") + 1:]
+    pairs = options(head, {"--artifact", "--mapping", "--input", "--cache-root", "--output-dir", "--assembly",
+                           "--config", "--kind", "--helper-root", "--native-producer", "--expected-identity"})
+    values = dict(pairs)
+    if values.get("--native-producer") != "pm1-regions" or values.get("--kind") != "pm1":
+        raise SystemExit("priva fixture: only the native PM1 producer has a Python equivalent")
+    script = "mapped_artifact_publish.py"
+    forwarded = [rest[0], *sum((pair for pair in pairs if pair[0] not in ("--helper-root", "--native-producer")), ()),
+                 "--producer", os.path.join(SCRIPTS, "prepare_pm1_regions.py")]
+    if producer is not None:
+        built = dict(options(producer, {"--assembly", "--nm-to-enst", "--intolerant-domains", "--hcseeker",
+                                        "--rmc", "--output"}))
+        # The Python producer reads the DAS set and anchors from the config and checkout.
+        forwarded += ["--", "--config", values["--config"], "--output", built["--output"],
+                      "--assembly", built["--assembly"], "--nm_to_enst_tsv", built["--nm-to-enst"], "--skip_das"]
 else:
     raise SystemExit("priva fixture: no Python equivalent for " + repr(args))
 result = subprocess.run(["bash", "--noprofile", "--norc", "-c", 'python "$@"', "priva-fixture",

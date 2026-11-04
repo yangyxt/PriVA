@@ -76,8 +76,9 @@ clinvar_patho_af_stat: ""
 clinvar_patho_exon_af_stat: ""
 clinvar_pm5_index: ""  # Built by install_utils.sh ClinVar_PM5_index (priva clinvar-pm5-index) from clinvar_vcf; read by priva acmg-assign for PM5
 clinvar_gene_stat: "clinvar_2star_stats.pkl.gz"
-# Python hash seed whose set iteration order priva clinvar-gene-stats reproduces
-# when ClinVar_Gene_stat_regenerate rebuilds the gene statistics.
+# Python hash seed whose set iteration order the native builders reproduce:
+# priva clinvar-gene-stats (ClinVar_Gene_stat_regenerate), and the exon-history
+# merge, das-domains transcripts and das-domains analyze (AlphaMissense DAS).
 priva_python_hash_seed: 0
 
 # The UTRAnnotator plugin cache file

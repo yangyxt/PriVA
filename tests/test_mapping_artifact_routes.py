@@ -172,13 +172,15 @@ class MappingArtifactInstaller(unittest.TestCase):
         self.root = self.fixture.folder / "managed cache"
         self.root.mkdir()
         self.fixture.config.update(cache_root=str(self.root), vep_plugins_cachedir=str(self.root / "plugins"))
+        self.fixture.configure_pm1_domains()
         self.anchors = [ROOT / "data/gnomAD_RMC/gnomad_v2.1.1_rmc_flat.hg38.tsv",
                         ROOT / "data/HCSeeker/HC_spots.hg38.tsv"]
 
     def test_changed_mapping_build_and_completed_target_fast_reuse_register_correct_key(self):
         for function, key, name in (
             ("AlphaMissense_pick_missense_constrained_segments", "alphamissense_intolerant_motifs", "motifs.pkl"),
-            ("prepare_pm1_regions", "pm1_regions_pkl", "pm1.pkl"),
+            # Native PM1 regions are an archive; its route keeps the .rkyv name.
+            ("prepare_pm1_regions", "pm1_regions_pkl", "pm1.rkyv"),
         ):
             with self.subTest(function=function):
                 old = self.fixture.folder / name

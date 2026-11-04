@@ -1,5 +1,6 @@
 """Original-input and call contracts; fixture-only, without resource downloads."""
 import gzip
+import hashlib
 import importlib.util
 import json
 import os
@@ -11,6 +12,8 @@ import sys
 import tempfile
 import unittest
 from unittest import mock
+
+import fake_priva_binary
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -71,8 +74,16 @@ class InstallerPrerequisites(unittest.TestCase):
         self.config_file = self.folder / "config.json"
         self.env = dict(os.environ, TEST_CONFIG=str(self.config_file), TEST_FOLDER=str(self.folder),
                         TEST_PYTHON=sys.executable, PYTHONDONTWRITEBYTECODE="1",
-                        PRIVA_INSTALL_INSPECT_ROOTS=os.pathsep.join((str(ROOT), str(self.folder))))
+                        PRIVA_INSTALL_INSPECT_ROOTS=os.pathsep.join((str(ROOT), str(self.folder))),
+                        **fake_priva_binary.environment(self.folder))
         self.env.pop("PRIVA_SMOKE_SKIP_VEP", None)
+
+    def configure_pm1_domains(self):
+        """Select an existing DAS set; priva cache-install resolve reads this key."""
+        domains = self.folder / "all_intolerant_domains.selected.rkyv"
+        domains.write_bytes(b"opaque DAS fixture")
+        self.config["all_intolerant_domains"] = str(domains)
+        return domains
 
     def write_config(self):
         self.config_file.write_text(json.dumps(self.config))
@@ -113,6 +124,13 @@ class InstallerPrerequisites(unittest.TestCase):
                 if [[ $1 == */alphamissense_annotation_base.py ]]; then
                     fixture_annotation_base "$@"
                 else "$TEST_PYTHON" "$@"; fi
+            }
+            # The fixture priva (tests/fake_priva_binary.py) runs each replaced
+            # Python script through `python` in a new Bash; export these stubs.
+            priva_resolve_binary() {
+                export -f python fixture_annotation_base
+                ! declare -F fixture_python > /dev/null || export -f fixture_python
+                PRIVA_BIN=$PRIVA_BINARY
             }
         '''
         if "python() {" in body:
@@ -382,6 +400,7 @@ class InstallerPrerequisites(unittest.TestCase):
 
     def test_mapping_is_passed_verbatim_and_pm1_options_are_preserved(self):
         self.config.update(cache_root=str(self.folder), vep_plugins_cachedir=str(self.folder))
+        domains = self.configure_pm1_domains()
         result = self.run_shell('''
             python() {
                 if [[ $1 == */installer_prerequisites.py || $1 == */biomart_nm_to_enst.py ]]; then
@@ -398,12 +417,22 @@ class InstallerPrerequisites(unittest.TestCase):
         self.assertEqual(len(calls), 2)
         for call in calls:
             self.assertEqual(call[call.index("--nm_to_enst_tsv") + 1], str(self.mapping))
-        self.assertEqual(calls[1][calls[1].index("--threads") + 1], "2")
         self.assertIn("--skip_das", calls[1])
         self.assertNotIn("--skip_das", calls[0])
+        # priva pm1-regions reads the resolved DAS archive and has no thread option.
+        native = fake_priva_binary.calls(self.env["PRIVA_FAKE_CALLS"])
+        self.assertEqual(native[0], ["cache-install", "resolve", "--key", "all_intolerant_domains",
+                                     "--build-config", str(self.config_file), "--source-root", str(ROOT)])
+        run = next(call for call in native if call[:2] == ["mapped-artifact", "run"])
+        self.assertEqual(run[run.index("--") + 1:], [
+            "--assembly", "hg38", "--nm-to-enst", str(self.mapping), "--intolerant-domains", str(domains),
+            "--hcseeker", str(ROOT / "data/HCSeeker/HC_spots.hg38.tsv"),
+            "--rmc", str(ROOT / "data/gnomAD_RMC/gnomad_v2.1.1_rmc_flat.hg38.tsv"),
+            "--output", str(self.folder / "pm1_regions.hg38.rkyv")])
 
     def test_assembly_aliases_match_canonical_motif_and_pm1_calls(self):
         self.config.update(cache_root=str(self.folder), vep_plugins_cachedir=str(self.folder))
+        self.configure_pm1_domains()
         body = r'''
             python() {
                 if [[ $1 == */installer_prerequisites.py || $1 == */biomart_nm_to_enst.py ]]; then
@@ -430,7 +459,7 @@ Path(args[args.index("--output")+1]).write_bytes(b"fixture scientific output")
             observed = []
             for assembly in (canonical, alias):
                 with self.subTest(assembly=assembly):
-                    for path in (self.folder / "motifs.pkl", self.folder / f"pm1_regions.{canonical}.pkl"):
+                    for path in (self.folder / "motifs.pkl", self.folder / f"pm1_regions.{canonical}.rkyv"):
                         path.unlink(missing_ok=True)
                         Path(str(path) + ".nm_to_enst.json").unlink(missing_ok=True)
                     self.config["assembly"] = assembly
@@ -451,7 +480,7 @@ Path(args[args.index("--output")+1]).write_bytes(b"fixture scientific output")
                         self.assertTrue(final.is_file())
                         call[index] = str(final)
                     self.assertEqual(calls[1][calls[1].index("--output") + 1],
-                                     str(self.folder / f"pm1_regions.{canonical}.pkl"))
+                                     str(self.folder / f"pm1_regions.{canonical}.rkyv"))
                     self.assertIn("--skip_das", calls[1])
                     self.assertEqual(json.loads(self.config_file.read_text())["assembly"], assembly)
                     observed.append(calls)
@@ -461,51 +490,52 @@ Path(args[args.index("--output")+1]).write_bytes(b"fixture scientific output")
         Path(self.config["alphamissense_vep_vcf"]).write_bytes(b"fixture VCF")
         self.config["clinvar_vcf"] = str(self.folder / "clinvar.vcf.gz")
         Path(self.config["clinvar_vcf"]).write_bytes(b"fixture ClinVar")
-        Path(self.config["alphamissense_pd_stat"]).write_bytes(b"opaque stats fixture")
+        # A typed statistics stand-in in the fixture priva's format.
+        stats = self.folder / "input.stats.parquet"
+        stats.write_text(json.dumps({"command": "alphamissense-domain", "stage": "final",
+            "vcf": self.config["alphamissense_vep_vcf"],
+            "builder_source_sha256": hashlib.sha256(b"alphamissense-domain").hexdigest()}))
+        os.utime(stats, (1, 1))
+        self.config["alphamissense_pd_stat"] = str(stats)
         self.config["interpro_mapping_pickle"] = str(self.folder / "mapping.pkl")
         Path(self.config["interpro_mapping_pickle"]).write_bytes(b"opaque mapping fixture")
-        body = r'''
+        body = r"""
             rm -f "$TEST_FOLDER"/domain_tolerance_analysis.* "$TEST_FOLDER"/transcript_pp_domain_mapping.* "$TEST_FOLDER"/all_intolerant_domains.*
-            python() {
-                if [[ $1 != */am_pick_intolerant_domains.py ]]; then "$TEST_PYTHON" "$@"; return $?; fi
-                "$TEST_PYTHON" -c '
-import json,sys
-from pathlib import Path
-args=sys.argv[1:]
-folder=Path(args[args.index("--output_dir")+1])
-assembly=args[args.index("--assembly")+1]
-for stem,suffix in (("domain_tolerance_analysis","tsv"),("transcript_pp_domain_mapping","pkl"),("all_intolerant_domains","pkl")):
-    (folder / f"{stem}.{assembly}.{suffix}").write_bytes(b"fixture scientific output")
-print("CALL:"+json.dumps(args))
-' "$@"; }
+            bcftools() { printf '##contig=<ID=chr1,length=10>\n'; }
             update_yaml() { printf 'DEPLOY:%s=%s\n' "$2" "$3"; }
             AlphaMissense_pick_intolerant_domains "$TEST_CONFIG"
-        '''
+        """
         for canonical, alias in (("hg19", "GRCh37"), ("hg38", "GRCh38")):
             observed = []
             for assembly in (canonical, alias):
                 with self.subTest(assembly=assembly):
                     self.config["assembly"] = assembly
+                    Path(self.env["PRIVA_FAKE_CALLS"]).unlink(missing_ok=True)
                     result = self.run_shell(body)
                     self.assertEqual(result.returncode, 0, result.stderr)
-                    calls = [json.loads(line[5:]) for line in result.stdout.splitlines() if line.startswith("CALL:")]
+                    calls = [call for call in fake_priva_binary.calls(self.env["PRIVA_FAKE_CALLS"])
+                             if call[:2] == ["das-domains", "analyze"]]
                     self.assertEqual(len(calls), 1)
                     call = calls[0]
                     self.assertEqual(call[call.index("--assembly") + 1], canonical)
-                    self.assertEqual(call[call.index("--hcseeker_spots_tsv") + 1],
+                    self.assertEqual(call[call.index("--spots") + 1],
                                      str(ROOT / f"data/HCSeeker/HC_spots.{canonical}.tsv"))
-                    self.assertEqual(call[call.index("--am_vcf") + 1], self.config["alphamissense_vep_vcf"])
-                    self.assertEqual(call[call.index("--clinvar_vcf") + 1], self.config["clinvar_vcf"])
-                    self.assertIn(f"domain_tolerance_analysis.{canonical}.tsv", result.stdout)
-                    self.assertIn(f"transcript_pp_domain_mapping.{canonical}.pkl", result.stdout)
-                    self.assertIn(f"all_intolerant_domains.{canonical}.pkl", result.stdout)
+                    self.assertEqual(call[call.index("--metadata") + 1],
+                                     str(self.folder / f"domain_metadata.{canonical}.parquet"))
+                    self.assertEqual(call[call.index("--clinvar-vcf") + 1], self.config["clinvar_vcf"])
+                    deployed = [line for line in result.stdout.splitlines() if line.startswith("DEPLOY:")]
+                    self.assertEqual(deployed, [
+                        f"DEPLOY:alphamissense_intolerant_domains={self.folder}/domain_tolerance_analysis.{canonical}.tsv",
+                        f"DEPLOY:alphamissense_tranx_domain_map={self.folder}/transcript_pp_domain_mapping.{canonical}.rkyv",
+                        f"DEPLOY:all_intolerant_domains={self.folder}/all_intolerant_domains.{canonical}.rkyv"])
                     self.assertEqual(json.loads(self.config_file.read_text())["assembly"], assembly)
-                    observed.append(result.stdout)
+                    observed.append((call, deployed))
             self.assertEqual(observed[0], observed[1])
 
     def test_existing_motif_or_pm1_without_mapping_receipt_is_preserved(self):
+        self.configure_pm1_domains()
         for function, name in (("AlphaMissense_pick_missense_constrained_segments", "motifs.pkl"),
-                               ("prepare_pm1_regions", "pm1_regions.hg38.pkl")):
+                               ("prepare_pm1_regions", "pm1_regions.hg38.rkyv")):
             with self.subTest(function=function):
                 artifact = self.folder / name
                 artifact.write_bytes(b"existing artifact with unknown mapping\n")
@@ -768,8 +798,9 @@ print("CALL:"+json.dumps(args))
         self.assertEqual(json.loads(self.config_file.read_text()), self.config)
 
     def test_matching_mapping_anchor_and_output_receipts_allow_existing_cache_skip(self):
+        self.configure_pm1_domains()
         for function, name in (("AlphaMissense_pick_missense_constrained_segments", "motifs.pkl"),
-                               ("prepare_pm1_regions", "pm1_regions.hg38.pkl")):
+                               ("prepare_pm1_regions", "pm1_regions.hg38.rkyv")):
             with self.subTest(function=function):
                 artifact = self.folder / name
                 artifact.write_bytes(b"fixture completed scientific output\n")

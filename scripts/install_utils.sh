@@ -1571,99 +1571,107 @@ function AlphaMissense_pick_missense_constrained_segments() {
 }
 
 
-function AlphaMissense_stat() {
-    local config_file=${1}
-    local alphamissense_stat=$(read_yaml "${config_file}" "alphamissense_pd_stat")
-    local alphamissense_vcf=$(read_yaml "${config_file}" "alphamissense_vep_vcf")
-    local stat_py=${SCRIPT_DIR}/stat_protein_domain_amscores.py
-    local cache_root
-    cache_root=$(read_yaml "$config_file" cache_root) || return 1
-    [[ $cache_root == / ]] || cache_root=${cache_root%/}
-
-    # 2026-10-24 CT: a completed unmodified original producer is independent of
-    # the optional chromosome merger. Its own receipt must never masquerade as
-    # a builder .complete.json. Invalid/pending original receipts fail closed;
-    # only exit 3 (no original ownership sidecars) falls through to other routes.
-    local original_status=0
-    python "${SCRIPT_DIR}/alphamissense_original_cache.py" check \
-        --source-script "$stat_py" --input-vcf "$alphamissense_vcf" \
-        --output-pickle "$alphamissense_stat" --cache-root "$cache_root" || original_status=$?
-    if [[ $original_status == 0 ]]; then
-        log "The completed original AlphaMissense statistics pickle is ready at $alphamissense_stat"
-        return 0
-    elif [[ $original_status != 3 ]]; then
-        log "ERROR: Original AlphaMissense publication needs review or interrupted-import recovery."
-        return "$original_status"
-    fi
-
-    # Keep the existing reuse route for explicitly selected outside-root data.
-    # Managed builds instead require the builder's completed publication receipt.
-    if [[ $cache_root != / && $alphamissense_stat != "$cache_root/"* && -s $alphamissense_stat &&
-          $alphamissense_stat -nt $alphamissense_vcf && $alphamissense_stat -nt $stat_py ]]; then
-        log "The selected AlphaMissense statistics pickle $alphamissense_stat is already generated, skip this step"
-        return 0
-    fi
-
-    [[ -n $alphamissense_stat && $alphamissense_stat != null ]] || {
-        log "ERROR: Configure the managed alphamissense_pd_stat destination."
+function priva_builder_sha256() {
+    # Print the builder_source_sha256 field of the JSON line printed by
+    # `priva builder-identity NAME` or `priva COMMAND identity --input PATH`.
+    [[ ${1:-} =~ \"builder_source_sha256\":\"([0-9a-f]{64})\" ]] || {
+        log "ERROR: No builder_source_sha256 in: ${1:-}"
         return 1
     }
-    # 2026-10-24 CT: the full 22-worker Pool.map exceeded 96 GiB. The installation
-    # helper reuses the unchanged scientific collector, retains completed literal
-    # chromosomes, and merges/finalizes genes in the original mutation order.
-    # Its conservative local default is one collector; its named chromosome entry
-    # point also permits independent Slurm jobs without a production Rust binary.
-    log "Checking or building the AlphaMissense domain-statistics pickle with chromosome checkpoints"
-    python "${SCRIPT_DIR}/alphamissense_domain_cache.py" build \
-        --source-script "$stat_py" --input-vcf "$alphamissense_vcf" \
-        --output-pickle "$alphamissense_stat" --cache-root "$cache_root" && \
-    update_yaml "$config_file" alphamissense_pd_stat "$alphamissense_stat" && \
-    log "The AlphaMissense statistics pickle is ready at $alphamissense_stat"
+    printf '%s\n' "${BASH_REMATCH[1]}"
 }
 
 
-function AlphaMissense_pick_intolerant_domains() {
-    local config_file=${1}
+function priva_recorded_builder() {
+    # Print the builder identity recorded in the footer of a native
+    # intermediate: priva_recorded_builder COMMAND PARQUET.
+    local command=${1:?Supply the priva command} path=${2:?Supply the intermediate}
+    local recorded
+    recorded=$("${PRIVA_BIN}" "$command" identity --input "$path") || return 1
+    priva_builder_sha256 "$recorded"
+}
 
+
+function priva_builder_identity_file() {
+    # Keep FILE holding `priva builder-identity NAME`, the producer content a
+    # completion receipt hashes; a replaced file never writes through a link.
+    local name=${1:?Supply the builder name} path=${2:?Supply the identity file}
+    local identity
+    identity=$("${PRIVA_BIN}" builder-identity "$name") || return 1
+    if [[ -L $path || ! -f $path || $(< "$path") != "$identity" ]]; then
+        mkdir -p -- "$(dirname -- "$path")" || return 1
+        rm -f -- "$path" || return 1
+        printf '%s\n' "$identity" > "$path" || return 1
+    fi
+}
+
+
+function priva_vcf_header_contigs() {
+    # Print the ##contig IDs of a VCF in literal header order, the chromosome
+    # inventory the native chromosome builders and their merges use.
+    local vcf=${1:?Supply a VCF}
+    local header
+    header=$(bcftools view -h "$vcf") || return 1
+    sed -n 's/^##contig=<ID=\([^,>]*\).*/\1/p' <<< "$header"
+}
+
+
+function alphamissense_chromosome_build() {
+    # alphamissense_chromosome_build COMMAND VCF OUTPUT [MERGE_OPTION VALUE ...]
+    # Build one `priva COMMAND chromosome` shard per header contig of VCF in
+    # OUTPUT.chromosomes/, then merge every shard in header order into OUTPUT.
+    # A shard newer than VCF and recorded by the current builder is kept, so an
+    # interrupted build resumes at its first missing chromosome.
+    local command=${1:?Supply the priva command} vcf=${2:?Supply the VCF} output=${3:?Supply the output}
+    shift 3
+    local folder=${output}.chromosomes text contig shard current index=0
+    local -a contigs=() inputs=()
+    text=$(priva_vcf_header_contigs "$vcf") || return 1
+    [[ -n $text ]] || { log "ERROR: ${vcf} declares no ##contig lines for the chromosome builders"; return 1; }
+    mapfile -t contigs <<< "$text"
+    current=$("${PRIVA_BIN}" builder-identity "$command") || return 1
+    current=$(priva_builder_sha256 "$current") || return 1
+    mkdir -p -- "$folder" || return 1
+    for contig in "${contigs[@]}"; do
+        shard=${folder}/$(printf '%05d' "$index").parquet
+        index=$((index + 1))
+        inputs+=(--input "$shard")
+        if [[ -s $shard && $shard -nt $vcf && $(priva_recorded_builder "$command" "$shard" 2> /dev/null) == "$current" ]]; then
+            continue
+        fi
+        log "Building priva ${command} chromosome ${contig} of ${vcf}"
+        "${PRIVA_BIN}" "$command" chromosome --vcf "$vcf" --chrom "$contig" --output "$shard" || return 1
+    done
+    "${PRIVA_BIN}" "$command" merge "${inputs[@]}" "$@" --output "$output" || return 1
+    rm -rf -- "$folder"
+}
+
+
+function alphamissense_python_das_complete() {
+    # alphamissense_python_das_complete CONFIG [--restore]
+    # Succeed when the configured Python statistics pickle has a valid Python
+    # DAS completion receipt. Completed Python statistics and DAS outputs of an
+    # existing installation stay in use for one transition; cache-install
+    # publish converts their pickles as before. --restore also writes the
+    # three output keys when they differ from the receipt's selections.
+    local config_file=${1:?Supply the configuration}
     local assembly
     assembly=$(priva_bundle_assembly "$(read_yaml "${config_file}" "assembly")") || return 1
     local alphamissense_pd_stat=$(read_yaml "$config_file" "alphamissense_pd_stat")
-    local alphamissense_tranx_domain_map=$(read_yaml "$config_file" "alphamissense_tranx_domain_map")
-    local alphamissense_intolerant_domains=$(read_yaml "$config_file" "alphamissense_intolerant_domains")
+    [[ $alphamissense_pd_stat == *.pkl || $alphamissense_pd_stat == *.pkl.gz ]] || return 1
     local pick_intolerant_domains_py=${SCRIPT_DIR}/am_pick_intolerant_domains.py
-    local alphamissense_dir
+    local alphamissense_dir alphamissense_intolerant_domains alphamissense_tranx_domain_map all_intolerant_domains
     alphamissense_dir=$(dirname "$alphamissense_pd_stat")
     alphamissense_intolerant_domains=$(yaml_value_or_default "$config_file" alphamissense_intolerant_domains \
         "${alphamissense_dir}/domain_tolerance_analysis.${assembly}.tsv") || return 1
     alphamissense_tranx_domain_map=$(yaml_value_or_default "$config_file" alphamissense_tranx_domain_map \
         "${alphamissense_dir}/transcript_pp_domain_mapping.${assembly}.pkl") || return 1
-    local all_intolerant_domains
     all_intolerant_domains=$(yaml_value_or_default "$config_file" all_intolerant_domains \
         "${alphamissense_dir}/all_intolerant_domains.${assembly}.pkl") || return 1
-
     local threads=$(read_yaml "$config_file" "threads")
-    mkdir -p "$alphamissense_dir" || return 1
-
-    # Post-KS filter inputs
     local alphamissense_vep_vcf=$(read_yaml "$config_file" "alphamissense_vep_vcf")
     local hcseeker_spots_tsv=${DATA_DIR}/HCSeeker/HC_spots.${assembly}.tsv
     local clinvar_vcf=$(read_yaml "$config_file" "clinvar_vcf")
-
-    # Build optional filter flags
-    local -a filter_flags=()
-    if [[ -f ${alphamissense_vep_vcf} ]] && [[ -f ${hcseeker_spots_tsv} ]]; then
-        filter_flags+=(--am_vcf "$alphamissense_vep_vcf" --hcseeker_spots_tsv "$hcseeker_spots_tsv")
-        log "Filter 1 (coldspot overlap) enabled: am_vcf=${alphamissense_vep_vcf}, hcseeker=${hcseeker_spots_tsv}"
-    else
-        log "Filter 1 (coldspot overlap) skipped: am_vcf or hcseeker_spots_tsv not found"
-    fi
-    if [[ -f ${clinvar_vcf} ]]; then
-        filter_flags+=(--clinvar_vcf "$clinvar_vcf")
-        log "Filter 2 (benign ClinVar) enabled: clinvar_vcf=${clinvar_vcf}"
-    else
-        log "Filter 2 (benign ClinVar) skipped: clinvar_vcf not found"
-    fi
-
     local interpro_mapping_pickle
     interpro_mapping_pickle=$(read_yaml "$config_file" interpro_mapping_pickle) || return 1
     local completion_state=${SCRIPT_DIR}/das_install_state.py
@@ -1713,55 +1721,264 @@ function AlphaMissense_pick_intolerant_domains() {
     [[ ! -f ${clinvar_vcf} ]] || state_inputs+=(--input "$clinvar_vcf")
     local -a state_outputs=(--output "$alphamissense_intolerant_domains"
         --output "$alphamissense_tranx_domain_map" --output "$all_intolerant_domains")
-    # DAS writes several files in sequence and can fail after any of them. Even
-    # three fresh, nonempty outputs cannot establish successful completion.
-    # A receipt is valid only after the entire command, publication and YAML
-    # updates succeeded. Legacy unreceipted derived outputs rebuild once.
     # 2026-10-26 CT: preserve a completed original DAS producer when a separate
     # closed proof establishes identical ordered ClinVar consumer inputs. The
     # optional sidecar admits only that one input replacement; every other
     # dependency/output stays strict. No sidecar is inferred or created here.
-    if python "$completion_state" check --receipt "$completion_receipt" \
+    python "$completion_state" check --receipt "$completion_receipt" \
         "${state_inputs[@]}" "${state_outputs[@]}" || \
-       python "${SCRIPT_DIR}/das_input_continuity.py" check \
+    python "${SCRIPT_DIR}/das_input_continuity.py" check \
         --receipt "$completion_receipt" \
         --continuity "${completion_receipt}.clinvar-continuity.json" \
+        "${state_inputs[@]}" "${state_outputs[@]}" || return 1
+    [[ ${2:-} == --restore ]] || return 0
+    # Standalone callers may leave equivalent default output keys unset.
+    # Restore only differing selections; valid warm reuse never reruns DAS.
+    priva_restore_yaml_values "$config_file" \
+        alphamissense_intolerant_domains "$alphamissense_intolerant_domains" \
+        alphamissense_tranx_domain_map "$alphamissense_tranx_domain_map" \
+        all_intolerant_domains "$all_intolerant_domains"
+}
+
+
+function priva_restore_yaml_values() {
+    # priva_restore_yaml_values CONFIG KEY VALUE [KEY VALUE ...]
+    # Write each KEY only when its configured value differs from VALUE.
+    local config_file=${1:?Supply the configuration}
+    shift
+    local key selected_value current_value
+    while [[ $# -ge 2 ]]; do
+        key=$1 selected_value=$2
+        shift 2
+        current_value=$(read_yaml "$config_file" "$key") || return 1
+        [[ "$current_value" == "$selected_value" ]] || \
+            update_yaml "$config_file" "$key" "$selected_value" || return 1
+    done
+}
+
+
+function AlphaMissense_stat() {
+    local config_file=${1}
+    local alphamissense_stat=$(read_yaml "${config_file}" "alphamissense_pd_stat")
+    local alphamissense_vcf=$(read_yaml "${config_file}" "alphamissense_vep_vcf")
+    [[ -n $alphamissense_stat && $alphamissense_stat != null ]] || {
+        log "ERROR: Configure the managed alphamissense_pd_stat destination."
+        return 1
+    }
+    # Completed Python statistics whose Python DAS outputs are still complete
+    # are kept for one transition. Otherwise a pickle value selects the typed
+    # Parquet statistics beside it.
+    if [[ $alphamissense_stat == *.pkl || $alphamissense_stat == *.pkl.gz ]]; then
+        if alphamissense_python_das_complete "$config_file"; then
+            log "Keeping the completed Python AlphaMissense statistics $alphamissense_stat and their completed DAS outputs"
+            return 0
+        fi
+        alphamissense_stat=${alphamissense_stat%.gz}
+        alphamissense_stat=${alphamissense_stat%.pkl}.parquet
+    fi
+    priva_resolve_binary "$config_file" || return 1
+
+    # Native intermediates keep the builder identity recorded when they were
+    # built; remove the file to rebuild it with the current builder.
+    local recorded
+    if [[ -s $alphamissense_stat ]] && \
+       recorded=$(priva_recorded_builder alphamissense-domain "$alphamissense_stat") && \
+       "${PRIVA_BIN}" alphamissense-domain check --input "$alphamissense_stat" \
+           --vcf "$alphamissense_vcf" --builder-sha256 "$recorded" > /dev/null; then
+        priva_restore_yaml_values "$config_file" alphamissense_pd_stat "$alphamissense_stat" || return 1
+        log "The AlphaMissense statistics $alphamissense_stat are complete for $alphamissense_vcf, skip this step"
+        return 0
+    fi
+    # 2026-10-24 CT: the full 22-worker Pool.map exceeded 96 GiB. One bounded
+    # process per chromosome retains each completed chromosome; the ordered
+    # merge reproduces the original gene order.
+    log "Building the AlphaMissense domain statistics $alphamissense_stat with chromosome checkpoints"
+    mkdir -p -- "$(dirname -- "$alphamissense_stat")" || return 1
+    alphamissense_chromosome_build alphamissense-domain "$alphamissense_vcf" "$alphamissense_stat" && \
+    "${PRIVA_BIN}" alphamissense-domain check --input "$alphamissense_stat" --vcf "$alphamissense_vcf" > /dev/null && \
+    update_yaml "$config_file" alphamissense_pd_stat "$alphamissense_stat" && \
+    log "The AlphaMissense statistics are ready at $alphamissense_stat"
+}
+
+
+function AlphaMissense_pick_intolerant_domains() {
+    local config_file=${1}
+
+    local assembly
+    assembly=$(priva_bundle_assembly "$(read_yaml "${config_file}" "assembly")") || return 1
+    local alphamissense_pd_stat=$(read_yaml "$config_file" "alphamissense_pd_stat")
+    if [[ $alphamissense_pd_stat == *.pkl || $alphamissense_pd_stat == *.pkl.gz ]]; then
+        if alphamissense_python_das_complete "$config_file" --restore; then
+            log "The Python AlphaMissense domain build is complete for these inputs; reusing it for this transition"
+            return 0
+        fi
+        log "ERROR: ${alphamissense_pd_stat} has no completed Python DAS outputs; run AlphaMissense_stat to build the native statistics first."
+        return 1
+    fi
+    priva_resolve_binary "$config_file" || return 1
+    local alphamissense_dir
+    alphamissense_dir=$(dirname "$alphamissense_pd_stat")
+    # The native transcript map and DAS set are archives: a configured pickle
+    # value selects the .rkyv beside it.
+    local alphamissense_intolerant_domains alphamissense_tranx_domain_map all_intolerant_domains
+    alphamissense_intolerant_domains=$(yaml_value_or_default "$config_file" alphamissense_intolerant_domains \
+        "${alphamissense_dir}/domain_tolerance_analysis.${assembly}.tsv") || return 1
+    alphamissense_tranx_domain_map=$(yaml_value_or_default "$config_file" alphamissense_tranx_domain_map \
+        "${alphamissense_dir}/transcript_pp_domain_mapping.${assembly}.rkyv") || return 1
+    alphamissense_tranx_domain_map=$(clinvar_native_archive_path "$alphamissense_tranx_domain_map" \
+        "${alphamissense_dir}/transcript_pp_domain_mapping.${assembly}.rkyv") || return 1
+    all_intolerant_domains=$(yaml_value_or_default "$config_file" all_intolerant_domains \
+        "${alphamissense_dir}/all_intolerant_domains.${assembly}.rkyv") || return 1
+    all_intolerant_domains=$(clinvar_native_archive_path "$all_intolerant_domains" \
+        "${alphamissense_dir}/all_intolerant_domains.${assembly}.rkyv") || return 1
+
+    local threads=$(read_yaml "$config_file" "threads")
+    # The Python DAS iterated sets in a hash-seeded order; priva reproduces the
+    # order of one named seed.
+    local seed
+    seed=$(yaml_value_or_default "$config_file" "priva_python_hash_seed" 0) || return 1
+    [[ $seed =~ ^[0-9]+$ ]] || { log "ERROR: priva_python_hash_seed must be a non-negative integer: $seed"; return 1; }
+    mkdir -p "$alphamissense_dir" || return 1
+
+    # Post-KS filter inputs
+    local alphamissense_vep_vcf=$(read_yaml "$config_file" "alphamissense_vep_vcf")
+    local hcseeker_spots_tsv=${DATA_DIR}/HCSeeker/HC_spots.${assembly}.tsv
+    local clinvar_vcf=$(read_yaml "$config_file" "clinvar_vcf")
+    # The transcript map reads exon history built from the AlphaMissense VCF.
+    [[ -f ${alphamissense_vep_vcf} ]] || {
+        log "ERROR: The AlphaMissense VEP VCF is required for the native exon history: ${alphamissense_vep_vcf}"
+        return 1
+    }
+
+    # Build optional filter flags
+    local -a filter_flags=()
+    local metadata=${alphamissense_dir}/domain_metadata.${assembly}.parquet
+    if [[ -f ${alphamissense_vep_vcf} ]] && [[ -f ${hcseeker_spots_tsv} ]]; then
+        filter_flags+=(--metadata "$metadata" --spots "$hcseeker_spots_tsv")
+        log "Filter 1 (coldspot overlap) enabled: am_vcf=${alphamissense_vep_vcf}, hcseeker=${hcseeker_spots_tsv}"
+    else
+        log "Filter 1 (coldspot overlap) skipped: am_vcf or hcseeker_spots_tsv not found"
+    fi
+    if [[ -f ${clinvar_vcf} ]]; then
+        filter_flags+=(--clinvar-vcf "$clinvar_vcf")
+        log "Filter 2 (benign ClinVar) enabled: clinvar_vcf=${clinvar_vcf}"
+    else
+        log "Filter 2 (benign ClinVar) skipped: clinvar_vcf not found"
+    fi
+
+    # A Python InterPro pickle is converted once by the same managed conversion
+    # cache-install publish makes; a native archive is checked and used.
+    local interpro_mapping
+    interpro_mapping=$("${PRIVA_BIN}" cache-install resolve --key interpro_mapping_pickle \
+        --build-config "$config_file" --source-root "$BASE_DIR") || return 1
+    local normalization=${BASE_DIR}/data/InterPro/InterPro_domain_norm_map.json
+    local completion_receipt=${alphamissense_dir}/domain_analysis.${assembly}.install.json
+    # The receipt binds each native builder's identity, kept beside it.
+    local builders=${completion_receipt%.json}.builders builder
+    for builder in das-domains alphamissense-domain alpha-exon-history; do
+        priva_builder_identity_file "$builder" "${builders}/${builder}.json" || return 1
+    done
+    local -a state_inputs=(--profile "$assembly"
+        --input "$alphamissense_pd_stat" --input "$interpro_mapping" --input "$alphamissense_vep_vcf"
+        --source "analysis=${builders}/das-domains.json"
+        --source "statistics=${builders}/alphamissense-domain.json"
+        --source "exon-history=${builders}/alpha-exon-history.json"
+        --parameter "python-hash-seed=$seed"
+        --parameter "coldspot-enabled=$([[ -f $alphamissense_vep_vcf && -f $hcseeker_spots_tsv ]] && printf true || printf false)"
+        --parameter "benign-enabled=$([[ -f $clinvar_vcf ]] && printf true || printf false)")
+    local bundled_role bundled_path
+    for bundled_role in domain-normalization functional-domains; do
+        if [[ $bundled_role == domain-normalization ]]; then
+            bundled_path=$normalization
+        else
+            bundled_path=${BASE_DIR}/data/InterPro/curated_InterPro_func_domains.tsv.gz
+        fi
+        if [[ "$(realpath -m -- "$bundled_path")" == "$(realpath -ms -- "$bundled_path")" ]]; then
+            state_inputs+=(--bundled "$bundled_role=$bundled_path")
+        else
+            state_inputs+=(--input "$bundled_path")
+        fi
+    done
+    if [[ -f ${hcseeker_spots_tsv} ]]; then
+        if [[ "$(realpath -m -- "$hcseeker_spots_tsv")" == "$(realpath -ms -- "$hcseeker_spots_tsv")" ]]; then
+            state_inputs+=(--bundled "hcseeker-spots=$hcseeker_spots_tsv")
+        else
+            state_inputs+=(--input "$hcseeker_spots_tsv")
+        fi
+    fi
+    [[ ! -f ${clinvar_vcf} ]] || state_inputs+=(--input "$clinvar_vcf")
+    local -a state_outputs=(--output "$alphamissense_intolerant_domains"
+        --output "$alphamissense_tranx_domain_map" --output "$all_intolerant_domains")
+    # DAS writes several files in sequence and can fail after any of them. Even
+    # three fresh, nonempty outputs cannot establish successful completion.
+    # A receipt is valid only after the entire command, publication and YAML
+    # updates succeeded.
+    if "${PRIVA_BIN}" das-install-state check --receipt "$completion_receipt" \
         "${state_inputs[@]}" "${state_outputs[@]}"; then
-        # Standalone callers may leave equivalent default output keys unset.
-        # Restore only differing selections; valid warm reuse never reruns DAS.
-        local key selected_value current_value
-        local -a output_keys=(alphamissense_intolerant_domains alphamissense_tranx_domain_map all_intolerant_domains)
-        local -a output_values=("$alphamissense_intolerant_domains" "$alphamissense_tranx_domain_map" "$all_intolerant_domains")
-        local output_index
-        for output_index in 0 1 2; do
-            key=${output_keys[$output_index]}
-            selected_value=${output_values[$output_index]}
-            current_value=$(read_yaml "$config_file" "$key") || return 1
-            [[ "$current_value" == "$selected_value" ]] || \
-                update_yaml "$config_file" "$key" "$selected_value" || return 1
-        done
+        priva_restore_yaml_values "$config_file" \
+            alphamissense_intolerant_domains "$alphamissense_intolerant_domains" \
+            alphamissense_tranx_domain_map "$alphamissense_tranx_domain_map" \
+            all_intolerant_domains "$all_intolerant_domains" || return 1
         log "The AlphaMissense domain build is complete for these inputs; reusing $completion_receipt"
         return 0
     fi
     local expected_inputs
-    expected_inputs=$(python "$completion_state" capture "${state_inputs[@]}") || return 1
+    expected_inputs=$("${PRIVA_BIN}" das-install-state capture "${state_inputs[@]}") || return 1
     rm -f -- "$completion_receipt" || return 1
 
-    log "Running original DAS intolerant domain analysis in $alphamissense_dir"
-    python "$pick_intolerant_domains_py" \
-    --assembly "$assembly" \
-    --pickle_file "$alphamissense_pd_stat" \
-    --interpro_mapping_pickle "$interpro_mapping_pickle" \
+    # Exon history: chromosome shards, an ordered merge under the seed, and the
+    # serialized-set export das-domains transcripts reads. Its name carries the
+    # merge seed. A history newer than the statistics keeps its recorded
+    # builder; remove it to rebuild it.
+    local history=${alphamissense_pd_stat%.parquet}.exon_history.seed${seed}.parquet
+    local history_lines=${history%.parquet}.lines
+    local history_builder
+    if [[ -s $history && $history -nt $alphamissense_pd_stat ]] && \
+       history_builder=$(priva_recorded_builder alpha-exon-history "$history") && \
+       "${PRIVA_BIN}" alpha-exon-history check --input "$history" --builder-sha256 "$history_builder" > /dev/null; then
+        log "Reusing the AlphaMissense exon history $history"
+    else
+        log "Building the AlphaMissense exon history $history with chromosome checkpoints"
+        alphamissense_chromosome_build alpha-exon-history "$alphamissense_vep_vcf" "$history" --hash-seed "$seed" || return 1
+        history_builder=$(priva_recorded_builder alpha-exon-history "$history") || return 1
+        rm -f -- "$history_lines" || return 1
+    fi
+    if [[ ! -s $history_lines || $history -nt $history_lines ]]; then
+        "${PRIVA_BIN}" alpha-exon-history export --input "$history" --output "$history_lines" || return 1
+    fi
+    if [[ -f ${alphamissense_vep_vcf} && -f ${hcseeker_spots_tsv} ]]; then
+        # Reuses itself through its adjacent .source.json receipt.
+        "${PRIVA_BIN}" domain-metadata build --vcf "$alphamissense_vep_vcf" --output "$metadata" \
+            --assembly "$assembly" --threads "$threads" || return 1
+    fi
+    local statistics_builder
+    statistics_builder=$(priva_recorded_builder alphamissense-domain "$alphamissense_pd_stat") || return 1
+
+    log "Running native DAS intolerant domain analysis in $alphamissense_dir"
+    "${PRIVA_BIN}" das-domains transcripts \
+    --statistics "$alphamissense_pd_stat" \
+    --exon-history "$history_lines" \
+    --source-builder-sha256 "$statistics_builder" \
+    --python-hash-seed "$seed" \
+    --output "${alphamissense_dir}/transcript_pp_domain_mapping.${assembly}.rkyv" \
+    --history-builder-sha256 "$history_builder" || return 1
+    "${PRIVA_BIN}" das-domains analyze \
+    --statistics "$alphamissense_pd_stat" \
+    --source-builder-sha256 "$statistics_builder" \
+    --interpro "$interpro_mapping" \
+    --normalization-json "$normalization" \
+    --python-hash-seed "$seed" \
     --threads "$threads" \
-    --output_dir "$alphamissense_dir" \
+    --assembly "$assembly" \
+    --output-dir "$alphamissense_dir" \
     "${filter_flags[@]}" || return 1
 
-    # The scientific program writes its original canonical filenames. Preserve
-    # their bytes while honoring each configured managed publication path.
+    # The builders write the original canonical filenames. Preserve their bytes
+    # while honoring each configured managed publication path.
     local -a produced=(
         "${alphamissense_dir}/domain_tolerance_analysis.${assembly}.tsv"
-        "${alphamissense_dir}/transcript_pp_domain_mapping.${assembly}.pkl"
-        "${alphamissense_dir}/all_intolerant_domains.${assembly}.pkl"
+        "${alphamissense_dir}/transcript_pp_domain_mapping.${assembly}.rkyv"
+        "${alphamissense_dir}/all_intolerant_domains.${assembly}.rkyv"
     )
     local -a selected=("$alphamissense_intolerant_domains" "$alphamissense_tranx_domain_map" "$all_intolerant_domains")
     local item
@@ -1775,7 +1992,7 @@ function AlphaMissense_pick_intolerant_domains() {
     update_yaml "$config_file" alphamissense_intolerant_domains "$alphamissense_intolerant_domains" && \
     update_yaml "$config_file" alphamissense_tranx_domain_map "$alphamissense_tranx_domain_map" && \
     update_yaml "$config_file" all_intolerant_domains "$all_intolerant_domains" && \
-    python "$completion_state" record --receipt "$completion_receipt" \
+    "${PRIVA_BIN}" das-install-state record --receipt "$completion_receipt" \
         "${state_inputs[@]}" "${state_outputs[@]}" --expected-inputs "$expected_inputs" && \
     log "DAS intolerant domains analysis complete. Outputs saved to ${alphamissense_dir}"
 }
@@ -1783,49 +2000,65 @@ function AlphaMissense_pick_intolerant_domains() {
 
 function prepare_pm1_regions() {
     local config_file=${1}
-    local prepare_pm1_py=${SCRIPT_DIR}/prepare_pm1_regions.py
     local assembly
     assembly=$(priva_bundle_assembly "$(read_yaml "${config_file}" "assembly")") || return 1
-    local threads=$(read_yaml "${config_file}" "threads")
-    local alphamissense_dir pm1_regions_pkl all_intolerant_pkl
+    priva_resolve_binary "$config_file" || return 1
+    local alphamissense_dir pm1_regions all_intolerant
     alphamissense_dir=$(dirname -- "$(read_yaml "$config_file" "alphamissense_pd_stat")")
     # The portable resolver owns destinations; do not infer a new output beside
     # a supplied input and silently discard the user's configured output key.
-    pm1_regions_pkl=$(yaml_value_or_default "$config_file" pm1_regions_pkl "${alphamissense_dir}/pm1_regions.${assembly}.pkl")
-    all_intolerant_pkl=$(yaml_value_or_default "$config_file" all_intolerant_domains "${alphamissense_dir}/all_intolerant_domains.${assembly}.pkl")
-    mkdir -p -- "$(dirname -- "$pm1_regions_pkl")" || return 1
+    # priva pm1-regions writes an archive: a configured pickle value selects
+    # its .rkyv sibling, as the ClinVar statistics builders do.
+    pm1_regions=$(yaml_value_or_default "$config_file" pm1_regions_pkl "${alphamissense_dir}/pm1_regions.${assembly}.rkyv") || return 1
+    pm1_regions=$(clinvar_native_archive_path "$pm1_regions" "${alphamissense_dir}/pm1_regions.${assembly}.rkyv") || return 1
+    mkdir -p -- "$(dirname -- "$pm1_regions")" || return 1
+
+    # The DAS set is read as a native archive: a Python DAS pickle is converted
+    # once by the same managed conversion cache-install publish makes.
+    all_intolerant=$(read_yaml "$config_file" all_intolerant_domains) || return 1
+    [[ -n $all_intolerant && $all_intolerant != null ]] || {
+        log "ERROR: Configure all_intolerant_domains (AlphaMissense_pick_intolerant_domains records it) before PM1 regions."
+        return 1
+    }
+    all_intolerant=$("${PRIVA_BIN}" cache-install resolve --key all_intolerant_domains \
+        --build-config "$config_file" --source-root "$BASE_DIR") || return 1
 
     local nm_to_enst_tsv
     nm_to_enst_tsv=$(python "${SCRIPT_DIR}/installer_prerequisites.py" "${config_file}" \
         --source-root "${BASE_DIR}" --stage mapping --print-mapping) || return 1
+    local hcseeker_tsv=${DATA_DIR}/HCSeeker/HC_spots.${assembly}.tsv
+    local rmc_tsv=${DATA_DIR}/gnomAD_RMC/gnomad_v2.1.1_rmc_flat.${assembly}.tsv
     local -a mapping_inputs=(
-        --input "${DATA_DIR}/gnomAD_RMC/gnomad_v2.1.1_rmc_flat.${assembly}.tsv"
-        --input "${DATA_DIR}/HCSeeker/HC_spots.${assembly}.tsv"
+        --input "$rmc_tsv"
+        --input "$hcseeker_tsv"
     )
     local -a publication_args=(
-        --config "$config_file" --producer "$prepare_pm1_py"
+        --config "$config_file" --native-producer pm1-regions --helper-root "$BASE_DIR"
         --mapping "$nm_to_enst_tsv" --kind pm1 --assembly "$assembly"
         --cache-root "$(read_yaml "$config_file" cache_root)"
         --output-dir "$(read_yaml "$config_file" vep_plugins_cachedir)/AlphaMissense"
         "${mapping_inputs[@]}"
     )
-    python "${SCRIPT_DIR}/mapped_artifact_publish.py" recover \
-        --artifact "$pm1_regions_pkl" "${publication_args[@]}" || return 1
-    local original_pm1=$pm1_regions_pkl
-    if [[ -e "$pm1_regions_pkl" || -L "$pm1_regions_pkl" ||
-          -e "${pm1_regions_pkl}.nm_to_enst.json" || -L "${pm1_regions_pkl}.nm_to_enst.json" ]]; then
-        pm1_regions_pkl=$(python "${SCRIPT_DIR}/biomart_nm_to_enst.py" artifact-route \
-            --artifact "$pm1_regions_pkl" --mapping "$nm_to_enst_tsv" \
+    # Only priva mapped-artifact can finish a pending native publication.
+    "${PRIVA_BIN}" mapped-artifact recover \
+        --artifact "$pm1_regions" "${publication_args[@]}" || return 1
+    local original_pm1=$pm1_regions
+    if [[ -e "$pm1_regions" || -L "$pm1_regions" ||
+          -e "${pm1_regions}.nm_to_enst.json" || -L "${pm1_regions}.nm_to_enst.json" ]]; then
+        pm1_regions=$(python "${SCRIPT_DIR}/biomart_nm_to_enst.py" artifact-route \
+            --artifact "$pm1_regions" --mapping "$nm_to_enst_tsv" \
             --cache-root "$(read_yaml "$config_file" cache_root)" \
             --output-dir "$(read_yaml "$config_file" vep_plugins_cachedir)/AlphaMissense" \
-            --assembly "$assembly" --kind pm1 --print-path "${mapping_inputs[@]}") || return 1
+            --assembly "$assembly" --kind pm1 --artifact-format rkyv \
+            --print-path "${mapping_inputs[@]}") || return 1
     fi
 
-    if [[ -f "$pm1_regions_pkl" && "$pm1_regions_pkl" -nt "$prepare_pm1_py" &&
-          "$pm1_regions_pkl" -nt "$all_intolerant_pkl" ]]; then
-        [[ "$pm1_regions_pkl" == "$original_pm1" ]] || \
-            update_yaml "$config_file" pm1_regions_pkl "$pm1_regions_pkl" || return 1
-        log "The PM1 regions file ${pm1_regions_pkl} is already generated, skip this step"
+    # The builder is a priva command, so a newer program rebuilds the regions.
+    if [[ -f "$pm1_regions" && "$pm1_regions" -nt "$PRIVA_BIN" &&
+          "$pm1_regions" -nt "$all_intolerant" ]]; then
+        [[ "$pm1_regions" == "$original_pm1" ]] || \
+            update_yaml "$config_file" pm1_regions_pkl "$pm1_regions" || return 1
+        log "The PM1 regions file ${pm1_regions} is already generated, skip this step"
         return 0
     fi
     log "Preparing PM1 regions (DAS + HCSeeker + RMC) …"
@@ -1834,18 +2067,18 @@ function prepare_pm1_regions() {
     mapping_identity=$(python "${SCRIPT_DIR}/biomart_nm_to_enst.py" identity \
         "${nm_to_enst_tsv}" "${mapping_inputs[@]}") || return 1
 
-    mkdir -p "$(dirname -- "$pm1_regions_pkl")" || return 1
-    python "${SCRIPT_DIR}/mapped_artifact_publish.py" run \
-    --artifact "$pm1_regions_pkl" --expected-identity "$mapping_identity" \
+    mkdir -p "$(dirname -- "$pm1_regions")" || return 1
+    "${PRIVA_BIN}" mapped-artifact run \
+    --artifact "$pm1_regions" --expected-identity "$mapping_identity" \
     "${publication_args[@]}" -- \
-    --config "$config_file" \
-    --output "$pm1_regions_pkl" \
     --assembly "$assembly" \
-    --threads "$threads" \
-    --nm_to_enst_tsv "${nm_to_enst_tsv}" \
-    --skip_das && \
-    update_yaml "${config_file}" "pm1_regions_pkl" "${pm1_regions_pkl}" && \
-    log "PM1 regions saved to ${pm1_regions_pkl}"
+    --nm-to-enst "${nm_to_enst_tsv}" \
+    --intolerant-domains "$all_intolerant" \
+    --hcseeker "$hcseeker_tsv" \
+    --rmc "$rmc_tsv" \
+    --output "$pm1_regions" && \
+    update_yaml "${config_file}" "pm1_regions_pkl" "${pm1_regions}" && \
+    log "PM1 regions saved to ${pm1_regions}"
 }
 
 

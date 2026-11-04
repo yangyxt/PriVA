@@ -3,7 +3,7 @@
 //! operations. The original Python source asset is explicit in pair operations:
 //! its content identity must not be replaced by the native executable's hash.
 mod cache;
-mod header;
+pub(crate) mod header;
 mod metadata;
 pub(crate) use metadata::resolve as resolve_non_strict;
 

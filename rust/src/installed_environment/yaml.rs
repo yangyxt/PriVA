@@ -60,6 +60,13 @@ pub(crate) enum Value {
     Number(String),
     Other(String),
     Str(String),
+    /// Python's pure-Python scanner retains escaped surrogate code points.
+    /// This is constructed only by the optional UniqueLoader profile; it is
+    /// not coerced to replacement characters or silently combined as UTF-16.
+    Codepoints {
+        points: Vec<u32>,
+        transport: String,
+    },
     Sequence(Vec<usize>),
     Mapping(Vec<(usize, usize)>),
 }
@@ -73,6 +80,9 @@ struct Node {
 pub(crate) struct Yaml {
     nodes: Vec<Node>,
     pub root: usize,
+    unique: bool,
+    constructing: HashSet<usize>,
+    escaped_surrogates: HashMap<char, u32>,
 }
 impl Yaml {
     /// The resolved SafeLoader tag distinguishes integer and float values even
@@ -87,10 +97,9 @@ impl Yaml {
         self.nodes[node].value.as_ref().unwrap()
     }
     pub fn string(&self, node: usize) -> Option<&str> {
-        if let Value::Str(s) = self.value(node) {
-            Some(s)
-        } else {
-            None
+        match self.value(node) {
+            Value::Str(s) | Value::Codepoints { transport: s, .. } => Some(s),
+            _ => None,
         }
     }
     pub fn get(&self, node: usize, key: &str) -> Option<usize> {
@@ -283,7 +292,7 @@ fn parser_error(text: &str, mut e: ffi::ParseError) -> Box<dyn std::error::Error
     marked(text, category, context, &e.problem, e.problem_mark)
 }
 
-fn load_impl(text: &str) -> Result<Yaml> {
+fn load_impl(text: &str, unique: bool) -> Result<Yaml> {
     // PyYAML's Reader checks printable code points before composition.
     for (position, c) in text.chars().enumerate() {
         if !matches!(c as u32,9|10|13|0x20..=0x7e|0x85|0xa0..=0xd7ff|0xe000..=0xfffd|0x10000..=0x10ffff)
@@ -297,15 +306,23 @@ fn load_impl(text: &str) -> Result<Yaml> {
             ));
         }
     }
+    let (parser_text, escaped_surrogates) = if unique {
+        unique_surrogate_input(text)
+    } else {
+        (text.to_owned(), HashMap::new())
+    };
     let mut yaml = Yaml {
         nodes: vec![],
         root: 0,
+        unique,
+        constructing: HashSet::new(),
+        escaped_surrogates,
     };
     let mut stack: Vec<usize> = vec![];
     let mut anchors = HashMap::<String, usize>::new();
     let mut failure = None;
     let mut docs = 0;
-    let result = ffi::parse(text, &mut |event| {
+    let result = ffi::parse(&parser_text, &mut |event| {
         if event.kind == 3 {
             docs += 1;
             if docs > 1 {
@@ -415,8 +432,88 @@ fn load_impl(text: &str) -> Result<Yaml> {
     Ok(yaml)
 }
 
+/// libyaml rejects escaped surrogates that PyYAML's Python scanner accepts.
+/// Let libyaml identify actual escapes (never rewrite comments/plain/single
+/// quoted text), substitute unused BMP scalars without shifting source marks,
+/// then restore the original code points when constructing string nodes.
+fn unique_surrogate_input(text: &str) -> (String, HashMap<char, u32>) {
+    let mut input = text.to_owned();
+    let mut replacements = HashMap::new();
+    let mut occupied: HashSet<u32> = text.chars().map(u32::from).collect();
+    let bytes = text.as_bytes();
+    for at in 0..bytes.len().saturating_sub(2) {
+        let width = match bytes.get(at..at + 2) {
+            Some(b"\\u") => 4,
+            Some(b"\\U") => 8,
+            Some(b"\\x") => 2,
+            _ => continue,
+        };
+        if let Some(value) = bytes
+            .get(at + 2..at + 2 + width)
+            .and_then(|v| std::str::from_utf8(v).ok())
+            .and_then(|v| u32::from_str_radix(v, 16).ok())
+        {
+            occupied.insert(value);
+        }
+    }
+    loop {
+        let Err(cause) = ffi::parse(&input, &mut |_| true) else {
+            break;
+        };
+        if cause.problem != "found invalid Unicode character escape code" {
+            break;
+        }
+        let Some(at) = input
+            .char_indices()
+            .nth(cause.problem_mark.index)
+            .map(|(i, _)| i)
+        else {
+            break;
+        };
+        let width = if at >= 2 && &input.as_bytes()[at - 2..at] == b"\\u" {
+            4
+        } else if at >= 2 && &input.as_bytes()[at - 2..at] == b"\\U" {
+            8
+        } else {
+            break;
+        };
+        let Some(code) = input
+            .get(at..at + width)
+            .and_then(|v| u32::from_str_radix(v, 16).ok())
+        else {
+            break;
+        };
+        if !(0xd800..=0xdfff).contains(&code) {
+            break;
+        }
+        let existing = replacements
+            .iter()
+            .find_map(|(key, value)| (*value == code).then_some(*key));
+        let replacement = existing.or_else(|| {
+            (0xe000..=0xfffd)
+                .chain(0x100..=0xd7ff)
+                .find(|v| !occupied.contains(v))
+                .and_then(char::from_u32)
+        });
+        let Some(replacement) = replacement else {
+            break;
+        };
+        occupied.insert(replacement as u32);
+        replacements.insert(replacement, code);
+        input.replace_range(at..at + width, &format!("{:0width$x}", replacement as u32));
+    }
+    (input, replacements)
+}
+
 pub(crate) fn load(text: &str) -> Result<Yaml> {
-    load_impl(text).map_err(|e| named_failure(e, "<unicode string>"))
+    load_impl(text, false).map_err(|e| named_failure(e, "<unicode string>"))
+}
+/// `installer_config_paths.UniqueLoader`: its custom map constructor is
+/// immediate, rejects duplicate Python keys before constructing their values,
+/// and deliberately does not apply SafeLoader's merge-key flattening.
+/// The ordinary safe-loader entry points keep their preceding behavior.
+pub(crate) fn load_unique(text: &str) -> Result<Yaml> {
+    load_impl(text, true).map_err(|e| named_failure(e, "<unicode string>"))
 }
 pub(super) fn load_bytes(bytes: &[u8]) -> Result<Yaml> {
     fn invalid_byte(bytes: &[u8], position: usize, reason: &str) -> Box<dyn std::error::Error> {
@@ -480,7 +577,7 @@ pub(super) fn load_bytes(bytes: &[u8]) -> Result<Yaml> {
             }
         }
     };
-    load_impl(&text).map_err(|e| named_failure(e, "<byte string>"))
+    load_impl(&text, false).map_err(|e| named_failure(e, "<byte string>"))
 }
 
 impl Yaml {
@@ -520,6 +617,54 @@ impl Yaml {
         if self.nodes[node].value.is_some() {
             return Ok(());
         }
+        if self.unique && self.nodes[node].tag == format!("{TAG}map") {
+            if !self.constructing.insert(node) {
+                return Err(marked(
+                    text,
+                    "ConstructorError",
+                    None,
+                    "found unconstructable recursive node",
+                    self.nodes[node].mark,
+                ));
+            }
+            if self.constructing.len() > 300 {
+                return Err(error("RecursionError", "maximum recursion depth exceeded"));
+            }
+            let Raw::Mapping(children) = self.nodes[node].raw.clone() else {
+                return Err(error("TypeError", "cannot unpack non-iterable object"));
+            };
+            let mut entries: Vec<(usize, usize)> = vec![];
+            for pair in children.chunks_exact(2) {
+                let (key, value) = (pair[0], pair[1]);
+                self.construct(key, text, pending)?;
+                let unhashable = match self.value(key) {
+                    Value::Sequence(_) => Some("list"),
+                    Value::Mapping(_) => Some("dict"),
+                    Value::Other(s) if s == "set" => Some("set"),
+                    _ => None,
+                };
+                if let Some(kind) = unhashable {
+                    return Err(error("TypeError", format!("unhashable type: '{kind}'")));
+                }
+                if entries
+                    .iter()
+                    .any(|(other, _)| self.unique_key_equal(*other, key))
+                {
+                    return Err(error(
+                        "ValueError",
+                        format!(
+                            "Duplicate configuration key: {}",
+                            crate::python_unicode::display(&self.scalar_display(key))
+                        ),
+                    ));
+                }
+                self.construct(value, text, pending)?;
+                entries.push((key, value));
+            }
+            self.nodes[node].value = Some(Value::Mapping(entries));
+            self.constructing.remove(&node);
+            return Ok(());
+        }
         let tag = self.nodes[node]
             .tag
             .strip_prefix(TAG)
@@ -534,7 +679,28 @@ impl Yaml {
                 pending.push_back(node);
                 Value::Mapping(vec![])
             }
-            "str" => Value::Str(self.scalar(node, text)?),
+            "str" => {
+                let value = self.scalar(node, text)?;
+                if value
+                    .chars()
+                    .any(|c| self.escaped_surrogates.contains_key(&c))
+                {
+                    let points = value
+                        .chars()
+                        .map(|c| self.escaped_surrogates.get(&c).copied().unwrap_or(c as u32))
+                        .collect::<Vec<_>>();
+                    Value::Codepoints {
+                        transport: crate::python_unicode::encode_points(points.iter().copied()),
+                        points,
+                    }
+                } else {
+                    Value::Str(if self.unique {
+                        crate::python_unicode::encode(&value)
+                    } else {
+                        value
+                    })
+                }
+            }
             "null" => {
                 self.scalar(node, text)?;
                 Value::Null
@@ -547,7 +713,11 @@ impl Yaml {
                     _ => return Err(error("KeyError", repr(&v))),
                 })
             }
-            "int" => Value::Number(integer(&self.scalar(node, text)?)?),
+            "int" => Value::Number(if self.unique {
+                unique_integer(&self.scalar(node, text)?)?
+            } else {
+                integer(&self.scalar(node, text)?)?
+            }),
             "float" => Value::Number(float(&self.scalar(node, text)?)?),
             "timestamp" => Value::Other(timestamp(&self.scalar(node, text)?)?),
             "binary" => {
@@ -650,6 +820,7 @@ impl Yaml {
         match (self.value(left), self.value(right)) {
             (Value::Null, Value::Null) => true,
             (Value::Str(a), Value::Str(b)) => a == b,
+            (Value::Codepoints { points: a, .. }, Value::Codepoints { points: b, .. }) => a == b,
             (Value::Bool(a), Value::Bool(b)) => a == b,
             (Value::Number(a), Value::Number(b)) => a == b && a != "nan",
             (Value::Bool(a), Value::Number(b)) | (Value::Number(b), Value::Bool(a)) => {
@@ -657,6 +828,59 @@ impl Yaml {
             }
             (Value::Other(a), Value::Other(b)) => a == b,
             _ => false,
+        }
+    }
+    fn unique_key_equal(&self, left: usize, right: usize) -> bool {
+        if self.equal_key(left, right) {
+            return true;
+        }
+        let number = |node| match self.value(node) {
+            Value::Bool(v) => Some(if *v { "1" } else { "0" }),
+            Value::Number(v) => Some(v.as_str()),
+            _ => None,
+        };
+        match (number(left), number(right)) {
+            // SafeConstructor reuses its singleton nan_value, hence Python
+            // dict's identity shortcut treats repeated .nan keys as equal.
+            (Some("nan"), Some("nan")) => true,
+            (Some(a), Some(b)) if self.tag(left) == "float" && self.tag(right) == "float" => a
+                .parse::<f64>()
+                .ok()
+                .zip(b.parse::<f64>().ok())
+                .is_some_and(|(a, b)| a == b),
+            (Some(a), Some(b)) if self.tag(left) == "float" || self.tag(right) == "float" => {
+                let (float, integer) = if self.tag(left) == "float" {
+                    (a, b)
+                } else {
+                    (b, a)
+                };
+                float.parse::<f64>().ok().is_some_and(|f| {
+                    f.is_finite()
+                        && f.fract() == 0.0
+                        && (if f == 0.0 {
+                            "0".into()
+                        } else {
+                            format!("{f:.0}")
+                        }) == integer
+                })
+            }
+            _ => false,
+        }
+    }
+    pub(crate) fn scalar_display(&self, node: usize) -> String {
+        match self.value(node) {
+            Value::Null => "None".into(),
+            Value::Bool(true) => "True".into(),
+            Value::Bool(false) => "False".into(),
+            Value::Str(s) => s.clone(),
+            Value::Codepoints { transport, .. } => transport.clone(),
+            Value::Number(s) if self.tag(node) == "float" => s
+                .parse::<f64>()
+                .map(crate::json_text::python_float_repr)
+                .unwrap_or_else(|_| s.clone()),
+            Value::Number(s) | Value::Other(s) => s.clone(),
+            Value::Sequence(_) => "[]".into(),
+            Value::Mapping(_) => "{}".into(),
         }
     }
     fn fill(&mut self, node: usize, text: &str, pending: &mut VecDeque<usize>) -> Result<()> {
@@ -876,6 +1100,51 @@ impl Yaml {
     }
 }
 
+fn unique_integer(value: &str) -> Result<String> {
+    // Run the established constructor first for its ordinary admission/error
+    // order, then retain arbitrary-width integer values in the unique-loader
+    // profile. No package-export/SafeLoader default is changed.
+    let ordinary = integer(value)?;
+    let clean = value.replace('_', "");
+    let negative = clean.starts_with('-');
+    let body = clean.trim_start_matches(['+', '-']);
+    let (base, digits) = if let Some(v) = body.strip_prefix("0b") {
+        (2, v)
+    } else if let Some(v) = body.strip_prefix("0x") {
+        (16, v)
+    } else if body.starts_with('0') && (body.len() > 1) {
+        (8, body)
+    } else {
+        (10, body)
+    };
+    if digits.contains(':') || !digits.is_ascii() {
+        return Ok(ordinary);
+    }
+    let mut decimal = vec![0u32];
+    for c in digits.chars() {
+        let Some(mut carry) = c.to_digit(base) else {
+            return Ok(ordinary);
+        };
+        for digit in &mut decimal {
+            let n = *digit * base + carry;
+            *digit = n % 10;
+            carry = n / 10;
+        }
+        while carry > 0 {
+            decimal.push(carry % 10);
+            carry /= 10;
+        }
+    }
+    while decimal.len() > 1 && decimal.last() == Some(&0) {
+        decimal.pop();
+    }
+    let mut text = String::new();
+    if negative && decimal != [0] {
+        text.push('-');
+    }
+    text.extend(decimal.iter().rev().map(|n| char::from(b'0' + *n as u8)));
+    Ok(text)
+}
 fn integer(value: &str) -> Result<String> {
     let cleaned = value.replace('_', "");
     let mut body = cleaned.as_str();
@@ -1144,4 +1413,77 @@ fn binary(value: &str) -> std::result::Result<(), String> {
         return Err("failed to decode base64 data: Incorrect padding".into());
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod unique_loader_tests {
+    use super::*;
+    #[test]
+    fn duplicate_admission_precedes_duplicate_value_construction() {
+        let failure = load_unique("a: 1\na: !unknown bad\n")
+            .err()
+            .unwrap()
+            .to_string();
+        assert_eq!(failure, "ValueError: Duplicate configuration key: a");
+        let ordinary = load("a: 1\na: 2\n").unwrap();
+        assert_eq!(
+            ordinary.scalar_display(ordinary.get(ordinary.root, "a").unwrap()),
+            "2"
+        );
+    }
+    #[test]
+    fn immediate_mapping_recursion_differs_from_sequence_aliases() {
+        assert!(
+            load_unique("a: &a {self: *a}")
+                .err()
+                .unwrap()
+                .to_string()
+                .starts_with("ConstructorError: found unconstructable recursive node")
+        );
+        assert!(load_unique("a: &a [*a]").is_ok());
+        assert!(
+            load_unique("a: &a {x: 1}\nb: {<<: *a}")
+                .err()
+                .unwrap()
+                .to_string()
+                .contains("tag:yaml.org,2002:merge")
+        );
+    }
+    #[test]
+    fn numeric_key_equality_does_not_round_integer_keys() {
+        assert!(load_unique("18014398509481985: a\n18014398509481984.0: b").is_ok());
+        assert!(load_unique("18014398509481984: a\n18014398509481984.0: b").is_err());
+        assert!(load_unique(".nan: a\n.nan: b").is_err());
+        let y = load_unique("a: 0xffffffffffffffffffffffffffffffffffff").unwrap();
+        assert_eq!(
+            y.scalar_display(y.get(y.root, "a").unwrap()),
+            "22300745198530623141535718272648361505980415"
+        );
+    }
+    #[test]
+    fn unique_escaped_codepoints_preserve_python_strings_and_default_loader() {
+        let y = load_unique(
+            r#"a: "\ud834\udd1e"
+b: "\ud800"
+c: '\ud800'
+d: "\ue000"
+e: "\U0000d800"
+"#,
+        )
+        .unwrap();
+        assert!(
+            matches!(y.value(y.get(y.root, "a").unwrap()), Value::Codepoints { points: v, .. } if v == &[0xd834, 0xdd1e])
+        );
+        assert!(
+            matches!(y.value(y.get(y.root, "b").unwrap()), Value::Codepoints { points: v, .. } if v == &[0xd800])
+        );
+        assert_eq!(y.string(y.get(y.root, "c").unwrap()), Some(r"\ud800"));
+        assert_eq!(y.string(y.get(y.root, "d").unwrap()), Some("\u{e000}"));
+        assert!(
+            matches!(y.value(y.get(y.root, "e").unwrap()), Value::Codepoints { points: v, .. } if v == &[0xd800])
+        );
+        assert!(load(r#"a: "\ud800""#).is_err());
+        assert!(load_unique(r#"{"\ud800": 1, "\ud800": 2}"#).is_err());
+        assert!(load_unique(r#"{"\ud834\udd1e": 1, "𝄞": 2}"#).is_ok());
+    }
 }

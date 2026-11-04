@@ -807,6 +807,12 @@ fn validate_pair(assembly: &'static str, snv: &Path, indel: &Path) -> Done<PairR
     })
 }
 
+/// Read-only dependency used by installer path planning. The same canonical
+/// assembly admission and ordered header checks are shared with install().
+pub(crate) fn validate_pair_input(assembly: &str, snv: &Path, indel: &Path) -> Done<()> {
+    validate_pair(canonical_assembly(assembly)?, snv, indel).map(|_| ())
+}
+
 fn header_json(header: &Header) -> Json {
     Json::Object(vec![
         ("format".to_owned(), Json::Str(header.format.to_owned())),

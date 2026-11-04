@@ -15,6 +15,9 @@ publication helper with the Python PM1 producer and its --skip_das arguments.
 `das-install-state` runs scripts/das_install_state.py with the same arguments.
 `installer-prerequisites` runs scripts/installer_prerequisites.py with the same
 arguments (CONFIG first, then the script's own options).
+`installer-config-paths resolve/managed-roots` runs scripts/installer_config_paths.py
+with the same subcommand and options; it needs an explicit PYTHONHASHSEED, as the
+native command does.
 The AlphaMissense statistics, exon-history, domain-metadata and das-domains
 transcripts/analyze commands replace no single Python script: the fixture
 writes small JSON stand-ins that record the inputs and the current builder
@@ -167,6 +170,15 @@ elif command == "installer-prerequisites":
     if "--source-root" not in rest:
         raise SystemExit("priva fixture: installer-prerequisites needs --source-root")
     script, forwarded = "installer_prerequisites.py", rest
+elif command == "installer-config-paths" and rest[:1] in (["resolve"], ["managed-roots"]):
+    flags = [value for value in rest[1:] if value == "--check"]
+    names = {"--config", "--source-root"}
+    if rest[0] == "resolve":
+        names |= {"--managed-updates-json", "--output"}
+    pairs = options([value for value in rest[1:] if value != "--check"], names)
+    if "--source-root" not in dict(pairs) or not os.environ.get("PYTHONHASHSEED", "").isdigit():
+        raise SystemExit("priva fixture: installer-config-paths needs --source-root and PYTHONHASHSEED")
+    script, forwarded = "installer_config_paths.py", [rest[0], *sum(pairs, ()), *flags]
 elif command == "indexed-plugin-cache":
     flags = [value for value in rest[1:] if value == "--print-path"]
     pairs = options([value for value in rest[1:] if value != "--print-path"],

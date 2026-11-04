@@ -199,12 +199,14 @@ fn validate_manual_file(value: &Value, key: &str) -> Result<()> {
 }
 
 /// `manual_inputs(config_file, prompt=prompt)`. Prepared inputs never write the
-/// configuration; collecting unset ones at a terminal stays with the script.
+/// configuration. At a terminal, every unset path is collected, then all are
+/// checked before one atomic configuration rewrite.
 pub(super) fn manual_inputs(config_path: &str, prompt: bool) -> Result<()> {
     let destination = resolve_strict(Path::new(config_path))
         .map_err(|(failure, named)| os_error(failure, &named, None))?;
     let destination = destination.display().to_string();
-    let config = Config::load(&read_text(&destination)?, true)?;
+    let original = read_text(&destination)?;
+    let mut config = Config::load(&original, true)?;
     let mut missing = Vec::new();
     for key in MANUAL_INPUT_KEYS {
         let value = config.get(key);
@@ -231,11 +233,74 @@ pub(super) fn manual_inputs(config_path: &str, prompt: bool) -> Result<()> {
             missing.join(", ")
         )));
     }
-    Err(not_native(
-        "Collecting manual publisher inputs at a terminal rewrites the configuration through \
-         installer_config_paths.py; run scripts/installer_prerequisites.py --stage manual-inputs \
-         --prompt",
-    ))
+    eprintln!(
+        "Select completed manual publisher files; all paths are checked before the \
+         configuration is saved."
+    );
+    let mut updates = Vec::new();
+    for key in &missing {
+        let Some(answer) = input_line(&format!("{key}: "))? else {
+            return Err(value_error(
+                "Manual input collection ended; configuration is unchanged",
+            ));
+        };
+        let answer = answer.trim_matches(is_python_space).to_owned();
+        updates.push((key.to_string(), answer));
+    }
+    // Collect all missing paths, then validate them as one transaction. A later
+    // invalid answer must not leave earlier answers saved in the configuration.
+    for (key, value) in &updates {
+        config.set(key, Value::Str(value.clone()));
+    }
+    for key in MANUAL_INPUT_KEYS {
+        validate_manual_file(config.get(key), key)?;
+    }
+    let updated = crate::installer_config_paths::render_text(&original, &updates)?;
+    // Refuse an edit the shared renderer cannot make without changing another
+    // value (a hand-edited construct such as a quoted duplicate key).
+    let reloaded = Config::load(&updated, true)?;
+    let (before, after) = (config.entries(), reloaded.entries());
+    require(
+        before.len() == after.len() && before.iter().all(|entry| after.contains(entry)),
+        "Manual input paths could not be updated without changing other configuration values",
+    )?;
+    crate::installer_config_paths::replace_text_synced(
+        Path::new(&destination),
+        &original,
+        &updated,
+        "Configuration changed during manual input collection; retry after its writer closes",
+    )
+}
+
+/// `input(prompt)`: CPython writes the prompt to standard error when standard
+/// input and output are both terminals (no readline module is loaded), and to
+/// standard output otherwise. `None` is the end of input before any text.
+fn input_line(prompt: &str) -> Result<Option<String>> {
+    use std::io::{BufRead, Write};
+    let os = |failure: std::io::Error| error("OSError", failure.to_string());
+    // SAFETY: isatty only inspects the process's standard output descriptor.
+    if unsafe { libc::isatty(1) } == 1 {
+        let mut stream = std::io::stderr();
+        stream.write_all(prompt.as_bytes()).map_err(os)?;
+        stream.flush().map_err(os)?;
+    } else {
+        let mut stream = std::io::stdout();
+        stream.write_all(prompt.as_bytes()).map_err(os)?;
+        stream.flush().map_err(os)?;
+    }
+    let mut line = Vec::new();
+    let mut input = std::io::stdin().lock();
+    input.read_until(b'\n', &mut line).map_err(os)?;
+    if line.is_empty() {
+        return Ok(None);
+    }
+    if line.last() == Some(&b'\n') {
+        line.pop();
+    }
+    match crate::python_io::decode_utf8(&line) {
+        Ok(text) => Ok(Some(text.to_owned())),
+        Err(message) => Err(error("UnicodeDecodeError", message)),
+    }
 }
 
 /// `validate_main(config, source_root, ...)`

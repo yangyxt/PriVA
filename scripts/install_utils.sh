@@ -164,6 +164,8 @@ function priva_configure_portable_paths() {
         log "ERROR: Use priva_configure_portable_paths --config CONFIG."
         return 2
     }
+    # Stays on Python: priva_prepare_install_config, its only caller, runs
+    # before PriVA_rust_install records priva_binary.
     python "${SCRIPT_DIR}/installer_config_paths.py" resolve \
         --config "$2" --source-root "${BASE_DIR}"
 }
@@ -390,11 +392,24 @@ PRIVA_VEP_PINS_PY
 function priva_configure_cache_paths() {
     # Plan from original configured sources. The centralized helper adopts their
     # bytes/known companions before selecting managed paths; --check is read-only.
+    # priva_configure_cache_paths CONFIG [write|--check] [--native]
     local config_file=${1}
     local mode=${2:-write}
+    local route=${3:-}
     local cache_root config_json
     cache_root=$(yq '.cache_root' "${config_file}") || return 1
     [[ -z ${cache_root} || ${cache_root} == null || ${cache_root} == '""' ]] && return 0
+    if [[ ${route} == --native ]]; then
+        # Only for callers that run after PriVA_rust_install records priva_binary.
+        # The fixed hash seed selects one of the orders the script itself may use.
+        local -a check=()
+        [[ ${mode} == --check ]] && check=(--check)
+        priva_resolve_binary "$config_file" || return 1
+        PYTHONHASHSEED=0 "${PRIVA_BIN}" installer-config-paths managed-roots \
+            --config "${config_file}" --source-root "${BASE_DIR}" "${check[@]}"
+        return
+    fi
+    # The early installer calls stay on Python: they run before priva_binary is recorded.
     config_json=$(yq '.' "${config_file}") || return 1
     python - "${config_file}" "${config_json}" "${mode}" "${SCRIPT_DIR}/installer_config_paths.py" <<'PRIVA_CACHE_PY'
 import importlib.util
@@ -1117,7 +1132,8 @@ function CADD_install() {
     local assembly=${2:-}
     local cadd_version cadd_parent_dir cadd_base_dir cadd_zip_url unpack_parent unpacked staging
 
-    priva_configure_cache_paths "${config_file}" || return 1
+    # main_install reaches this after PriVA_rust_install records priva_binary.
+    priva_configure_cache_paths "${config_file}" write --native || return 1
     [[ -z ${assembly} ]] && assembly=$(read_yaml "${config_file}" "assembly")
     [[ ${assembly} == "hg19" ]] && assembly="GRCh37"
     [[ ${assembly} == "hg38" ]] && assembly="GRCh38"
@@ -4963,6 +4979,8 @@ function priva_prepare_install_config() {
     planning_config=$(mktemp "${TMPDIR}/priva-install-plan.XXXXXX.yaml") || return 1
     managed_updates=$(priva_configure_cache_paths "${config_file}" --check) || \
         { rm -f -- "${planning_config}"; return 1; }
+    # These configuration steps stay on Python: main_install runs them before
+    # PriVA_rust_install records priva_binary.
     python "${SCRIPT_DIR}/installer_config_paths.py" resolve --config "${config_file}" \
         --source-root "${BASE_DIR}" --managed-updates-json "${managed_updates}" \
         --output "${planning_config}" || { rm -f -- "${planning_config}"; return 1; }

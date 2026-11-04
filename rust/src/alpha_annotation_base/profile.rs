@@ -46,7 +46,7 @@ fn yaml_value(doc: &Yaml, node: usize) -> Result<Json> {
         } else {
             vec![("".into(), Json::Null)]
         }),
-        Value::Other(_) => {
+        Value::Other(_) | Value::Codepoints { .. } => {
             return Err(error(
                 "UnsupportedConfiguration",
                 format!(

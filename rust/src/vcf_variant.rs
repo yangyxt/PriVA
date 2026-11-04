@@ -34,7 +34,7 @@ pub(crate) struct Header {
     pub(crate) samples: usize,
 }
 
-fn attributes(line: &str, prefix: &str) -> Option<HashMap<String, String>> {
+pub(crate) fn attributes(line: &str, prefix: &str) -> Option<HashMap<String, String>> {
     let body = line.strip_prefix(prefix)?.strip_suffix('>')?;
     let (mut start, mut quoted, mut escaped) = (0, false, false);
     let mut parts = Vec::new();

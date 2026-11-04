@@ -56,7 +56,7 @@ const POPS: &[&str] = &[
     "remaining",
 ];
 
-fn header_text(path: &Path) -> Result<Vec<u8>> {
+pub(crate) fn header_text(path: &Path) -> Result<Vec<u8>> {
     crate::clingen_map_builder::check_vcf_compression(path).map_err(|e| {
         if e.to_string().starts_with("NotImplementedError:") {
             error(

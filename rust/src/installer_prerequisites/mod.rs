@@ -1,14 +1,14 @@
 //! Native installer input checks, from `scripts/installer_prerequisites.py`.
 //!
 //! The stages read metadata, small indexes and headers only. They never create,
-//! index or download a resource and never write the configuration. Printed paths,
-//! exit statuses and the Python exception category and message of each failure
-//! follow the script. Two routes need Python helpers without a native port and
-//! are refused with `NotImplementedError`: collecting unset manual inputs at a
-//! terminal (`--prompt`; the configuration rewrite belongs to
-//! installer_config_paths.py) and `--allow-pinned-reference-defaults`
-//! (reference_resources.py). The script's default `--source-root` is its own
-//! checkout; this command has no such location, so the option is required.
+//! index or download a resource. Only `--stage manual-inputs --prompt` at a
+//! terminal writes the configuration, through the native `render_config` of
+//! installer_config_paths.py. Printed paths, exit statuses and the Python
+//! exception category and message of each failure follow the script.
+//! `--allow-pinned-reference-defaults` needs reference_resources.py, which has
+//! no native port, and is refused with `NotImplementedError`. The script's
+//! default `--source-root` is its own checkout; this command has no such
+//! location, so the option is required.
 mod checks;
 mod mapping;
 mod paths;
@@ -30,8 +30,7 @@ STAGE: main (default), manual-inputs, snapshots, mapping, mapping-target, mappin
 mapping-workspace, clinvar, gofcards, gofcards-main.\n\
 The checks, printed paths and exit statuses of scripts/installer_prerequisites.py.\n\
 CONFIG comes first; --source-root names the PriVA checkout. Refused here with\n\
-NotImplementedError, and left to the Python script: collecting unset manual inputs\n\
-at a terminal (--prompt) and --allow-pinned-reference-defaults.";
+NotImplementedError, and left to the Python script: --allow-pinned-reference-defaults.";
 const STAGES: [&str; 10] = [
     "main",
     "manual-inputs",

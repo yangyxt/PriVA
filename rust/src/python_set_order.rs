@@ -284,6 +284,45 @@ impl StringSet {
         copied.table.merge(&self.table);
         copied
     }
+
+    /// CPython's optimized constant set literal: BUILD_SET(0), then SET_UPDATE
+    /// from the compiler's frozenset. Keep this separate from set(iterable).
+    pub(crate) fn literal(seed: u32, values: &[&str]) -> Self {
+        let mut frozen = Self::new(seed);
+        for value in values {
+            frozen.insert((*value).into());
+        }
+        let mut result = Self::new(seed);
+        if frozen.table.used * 5 >= 7 * 3 {
+            let minimum = frozen.table.used * 2;
+            let mut size = 8;
+            while size <= minimum {
+                size *= 2;
+            }
+            result.table.slots = vec![None; size];
+        }
+        for entry in frozen.table.slots.into_iter().flatten() {
+            let index = result.table.locate(&entry.key, entry.hash);
+            result.table.slots[index] = Some(entry);
+            result.table.used += 1;
+        }
+        result
+    }
+
+    /// Fresh set-difference iteration used by the installer's five-key constant
+    /// minus one-key literal. No dummy-slot mutation or general set deletion.
+    pub(crate) fn difference_small(self, excluded: &[&str]) -> Vec<String> {
+        let mut result = Self {
+            table: Table::new(),
+            hash: self.hash,
+        };
+        for entry in self.table.slots.into_iter().flatten() {
+            if !excluded.contains(&entry.key.as_str()) {
+                result.table.insert(entry.key, entry.hash);
+            }
+        }
+        result.into_order()
+    }
 }
 
 /// A newly constructed Python set of exact two-text tuples. No deletion or

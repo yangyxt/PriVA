@@ -121,7 +121,7 @@ pub(crate) fn render(
     for (key, value) in updates {
         update_map.set(key, value.clone());
     }
-    let Json::Object(mut updates) = update_map else {
+    let Json::Object(updates) = update_map else {
         unreachable!()
     };
     if original
@@ -145,6 +145,37 @@ pub(crate) fn render(
         result.push('\n');
         return Ok(result);
     }
+    render_lines(original, updates, writer, |value| {
+        json_text::dumps_with_options(value, DumpsOptions::default())
+            .map_err(|message| error("ValueError", message))
+    })
+}
+
+/// Additive scalar boundary for callers preserving Python code points that
+/// Rust `String` cannot hold. Each value is already a complete validated JSON
+/// scalar spelling; the established line/comment/duplicate logic is shared.
+pub(crate) fn render_yaml_scalars(
+    original: &str,
+    values: &[(String, String)],
+    writer: Writer,
+) -> Result<String, RenderError> {
+    let mut updates = Json::Object(vec![]);
+    for (key, value) in values {
+        updates.set(key, Json::Str(value.clone()));
+    }
+    let Json::Object(updates) = updates else {
+        unreachable!()
+    };
+    render_lines(original, updates, writer, |v| {
+        Ok(v.as_str().unwrap().to_owned())
+    })
+}
+fn render_lines(
+    original: &str,
+    mut updates: Vec<(String, Json)>,
+    writer: Writer,
+    mut scalar: impl FnMut(&Json) -> Result<String, RenderError>,
+) -> Result<String, RenderError> {
     if writer == Writer::Paths {
         updates.sort_by(|left, right| left.0.cmp(&right.0));
     }
@@ -161,10 +192,7 @@ pub(crate) fn render(
         }
         let mut replacement = key.clone();
         replacement.push_str(": ");
-        replacement.push_str(
-            &json_text::dumps_with_options(&value, DumpsOptions::default())
-                .map_err(|message| error("ValueError", message))?,
-        );
+        replacement.push_str(&scalar(&value)?);
         if let Some(found) = matches.first() {
             // Python splits on the FIRST colon, even when the literal key
             // itself contains one. Preserve this edge behavior too.

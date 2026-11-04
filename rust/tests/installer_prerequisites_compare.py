@@ -11,7 +11,12 @@ catch) without changing main() or any check. The native arm runs
 `PRIVA installer-prerequisites` with the same arguments. Compared exactly:
 exit status, stdout (with the case folder written as <ARM>), the exception
 category and message, and the complete fixture tree before and after (neither
-arm may write anything). Declared differences, each named in its case:
+arm may write anything, except that a case marked "writes" compares the
+rewritten config.yaml text, with the case folder written as <ARM>, and its
+permission bits, while every other entry must stay unchanged). A case with
+"terminal" input runs both arms with standard input on a pseudo-terminal
+without echo, holding that input; standard output stays a file, so both arms
+write their prompts there. Declared differences, each named in its case:
 - YAML syntax errors: PyYAML's subclass and text against the native YAMLError;
   only the category family is compared.
 - decoder diagnostics inside "Cannot reuse bundled ClinVar gene statistics":
@@ -31,10 +36,12 @@ import json
 import os
 from pathlib import Path
 import pickle
+import pty
 import re
 import shutil
 import subprocess
 import sys
+import termios
 
 sys.dont_write_bytecode = True
 PRODUCER_SHA256 = "3dc00df076de9a545e23e550696f85f4a77d2958c5c861ace9e9a1c955a86e6a"
@@ -469,6 +476,37 @@ def catalogue():
         "manual_nested_duplicate_key": {"stage": "manual-inputs", "append": ["nested:", "  a: 1", "  a: 2"]},
         "manual_not_mapping": {"stage": "manual-inputs", "raw": "- a\n- b\n"},
         "manual_missing_config": {"stage": "manual-inputs", "config_arg": "absent/config.yaml"},
+        # manual publisher inputs collected at a terminal
+        "manual_prompt_fills_unset": {
+            "stage": "manual-inputs", "args": ["--prompt"], "writes": True,
+            "set": {"primateai_prescore": None, "spliceai_indel_prescore": " null "},
+            "terminal": "{arm}/manual/primateai.tsv.gz\n  {arm}/manual/spliceai_indel.prescore.gz \t\n"},
+        "manual_prompt_appends_absent_key": {
+            "stage": "manual-inputs", "args": ["--prompt"], "writes": True,
+            "unset": ["spliceai_snv_prescore"], "terminal": "{arm}/manual/spliceai_snv.prescore.gz\n"},
+        "manual_prompt_keeps_comment": {
+            "stage": "manual-inputs", "args": ["--prompt"], "writes": True, "unset": ["primateai_prescore"],
+            "append": ["primateai_prescore: null   # fill at the terminal"],
+            "terminal": "{arm}/manual/primateai.tsv.gz\n"},
+        "manual_prompt_unicode_path": {
+            "stage": "manual-inputs", "args": ["--prompt"], "writes": True,
+            "set": {"primateai_prescore": ""}, "files": {"manual/primateai_é.tsv.gz": "fixture\n"},
+            "terminal": "{arm}/manual/primateai_é.tsv.gz\n"},
+        "manual_prompt_invalid_answer": {
+            "stage": "manual-inputs", "args": ["--prompt"], "set": {"primateai_prescore": None},
+            "terminal": "{arm}/manual/absent.tsv.gz\n"},
+        "manual_prompt_later_answer_invalid": {
+            "stage": "manual-inputs", "args": ["--prompt"],
+            "set": {"primateai_prescore": None, "spliceai_snv_prescore": None},
+            "terminal": "{arm}/manual/primateai.tsv.gz\n{arm}/manual/primateai.tsv.gz.partial\n",
+            "files": {"manual/primateai.tsv.gz.partial": "x\n"}},
+        "manual_prompt_end_of_input": {
+            "stage": "manual-inputs", "args": ["--prompt"],
+            "set": {"primateai_prescore": None, "spliceai_snv_prescore": None},
+            "terminal": "{arm}/manual/primateai.tsv.gz\n\x04"},
+        "manual_prompt_quoted_key": {
+            "stage": "manual-inputs", "args": ["--prompt"], "unset": ["primateai_prescore"],
+            "append": ['"primateai_prescore": null'], "terminal": "{arm}/manual/primateai.tsv.gz\n"},
         # restrictions, admission and configuration reading
         "restrict_prompt": {"args": ["--prompt"]},
         "restrict_clinvar_flag": {"stage": "snapshots", "args": ["--allow-missing-bundled-clinvar"]},
@@ -512,10 +550,24 @@ def arguments(case, arm):
             *[value.replace("{arm}", str(arm)) for value in case.get("args", [])]]
 
 
-def run(command, folder, label, environment):
+def run(command, folder, label, environment, terminal=None):
     with (folder / (label + ".stdout")).open("wb") as out, (folder / (label + ".stderr")).open("wb") as err:
-        process = subprocess.run(list(map(str, command)), cwd=folder / label, stdout=out, stderr=err,
-                                 stdin=subprocess.DEVNULL, env=environment, timeout=120)
+        if terminal is None:
+            process = subprocess.run(list(map(str, command)), cwd=folder / label, stdout=out, stderr=err,
+                                     stdin=subprocess.DEVNULL, env=environment, timeout=120)
+            return process.returncode
+        # Canonical mode keeps line reads and turns a leading Ctrl-D into end of input.
+        controller, terminal_end = pty.openpty()
+        try:
+            attributes = termios.tcgetattr(terminal_end)
+            attributes[3] &= ~termios.ECHO
+            termios.tcsetattr(terminal_end, termios.TCSANOW, attributes)
+            os.write(controller, terminal)
+            process = subprocess.run(list(map(str, command)), cwd=folder / label, stdout=out, stderr=err,
+                                     stdin=terminal_end, env=environment, timeout=120)
+        finally:
+            os.close(terminal_end)
+            os.close(controller)
     return process.returncode
 
 
@@ -527,10 +579,18 @@ def normalize(text, arm):
     return text
 
 
-def outcome(folder, label, status, arm, before):
+def outcome(folder, label, status, arm, before, case):
     stdout = (folder / (label + ".stdout")).read_bytes().decode("utf-8", "replace")
     stderr = (folder / (label + ".stderr")).read_bytes().decode("utf-8", "replace")
-    result = {"exit": status, "stdout": normalize(stdout, arm), "unchanged": tree(arm) == before}
+    after = tree(arm)
+    result = {"exit": status, "stdout": normalize(stdout, arm), "unchanged": after == before}
+    if case.get("writes"):
+        config = arm / "config.yaml"
+        others = [{key: value for key, value in state.items() if key != "config.yaml"}
+                  for state in (before, after)]
+        result.update(others_unchanged=others[0] == others[1],
+                      config=normalize(config.read_bytes().decode("utf-8", "replace"), arm),
+                      config_mode=oct(config.stat().st_mode & 0o7777))
     if label == "python":
         recorded = folder / "exception.json"
         # A successful run records an empty object: no exception to compare.
@@ -563,6 +623,9 @@ def compare(case, python, native):
         left["message"], right["message"] = (prefix.sub(r"\1: <DECODER>\2", left["message"]),
                                              prefix.sub(r"\1: <DECODER>\2", right["message"]))
     left.pop("uncaught", None)
+    if case.get("writes"):
+        # Both arms rewrite config.yaml; the text and mode are compared above.
+        return left == right and left["others_unchanged"]
     return left == right and left["unchanged"]
 
 
@@ -599,8 +662,11 @@ def check(args):
                            "--exception", folder / "exception.json", "--", *arguments(case, arm)]
             else:
                 command = [args.binary, "installer-prerequisites", *arguments(case, arm)]
-            status = run(command, folder, label, environment)
-            results[label] = outcome(folder, label, status, arm, before)
+            terminal = case.get("terminal")
+            if terminal is not None:
+                terminal = terminal.replace("{arm}", str(arm)).encode()
+            status = run(command, folder, label, environment, terminal)
+            results[label] = outcome(folder, label, status, arm, before, case)
         passed = compare(case, results["python"], results["native"])
         rows[name] = {"passed": passed, "python": results["python"], "native": results["native"],
                       "refused": case.get("refused"), "loose_message": bool(case.get("loose_message"))}

@@ -17,6 +17,8 @@ publication helper with the Python PM1 producer and its --skip_das arguments.
 arguments (CONFIG first, then the script's own options).
 `reference-resources` runs scripts/reference_resources.py with the same
 subcommand, CONFIG and options.
+`vep-plugins MODE` runs scripts/vep_plugins_release.py with the same mode and
+options.
 `installer-config-paths resolve/managed-roots` runs scripts/installer_config_paths.py
 with the same subcommand and options; it needs an explicit PYTHONHASHSEED, as the
 native command does.
@@ -187,6 +189,9 @@ elif command == "installer-config-paths" and rest[:1] in (["resolve"], ["managed
     if "--source-root" not in dict(pairs) or not os.environ.get("PYTHONHASHSEED", "").isdigit():
         raise SystemExit("priva fixture: installer-config-paths needs --source-root and PYTHONHASHSEED")
     script, forwarded = "installer_config_paths.py", [rest[0], *sum(pairs, ()), *flags]
+elif command == "vep-plugins" and rest[:1] in (["check"], ["install"], ["transition"],
+                                              ["clear-transition"], ["ensure-utr-reporting"]):
+    script, forwarded = "vep_plugins_release.py", rest
 elif command == "indexed-plugin-cache":
     flags = [value for value in rest[1:] if value == "--print-path"]
     pairs = options([value for value in rest[1:] if value != "--print-path"],

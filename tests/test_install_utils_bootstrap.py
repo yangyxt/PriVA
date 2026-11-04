@@ -18,6 +18,8 @@ import textwrap
 import unittest
 from unittest import mock
 
+import fake_priva_binary
+
 
 ROOT = Path(__file__).resolve().parents[1]
 INSTALLER = ROOT / "scripts" / "install_utils.sh"
@@ -486,6 +488,8 @@ class InstallerBootstrapTests(unittest.TestCase):
 
     def run_cache(self, assembly="hg19", release="113"):
         cache, plugins = self.cache_paths()
+        # The plugin receipts run through priva; the fixture runs the Python script.
+        self.env.update(fake_priva_binary.environment(self.directory))
         return self.run_shell(r'''
             conda_install_vep "$1" || exit
             vep_cache_api_install --VEP_VERSION "$2" --VEP_ASSEMBLY "$3" \

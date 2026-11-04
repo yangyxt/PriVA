@@ -110,6 +110,7 @@ pub mod splicing_var_analysis;
 mod tabix_index;
 pub mod utr_anno_interpret;
 pub mod variant_ids;
+mod vep_plugins;
 mod vcf_text;
 mod yaml_config;
 

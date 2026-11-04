@@ -165,7 +165,7 @@ Installer callers remain Python unless their row says the installer calls
 | [`scripts/spliceai2_to_vep_vcf.py`](../scripts/spliceai2_to_vep_vcf.py) | Retained Python; native replacement pending. |
 | [`scripts/vep_chromosome_cache.py`](../scripts/vep_chromosome_cache.py) | Legacy/manual helper, outside native conversion scope. |
 | [`scripts/vep_chromosome_jobs.py`](../scripts/vep_chromosome_jobs.py) | Legacy/manual helper, outside native conversion scope. |
-| [`scripts/vep_plugins_release.py`](../scripts/vep_plugins_release.py) | Retained Python; native replacement pending. |
+| [`scripts/vep_plugins_release.py`](../scripts/vep_plugins_release.py) | Optional `priva vep-plugins {check,install,transition,clear-transition,ensure-utr-reporting} --release RELEASE` with the same options; the mode comes first. Receipt checks, local-patch recognition, staged publication with the release-switch and partial-retry rules, the transition record, and the locked UTRAnnotator 116 reporting transaction (pinned upstream and installed bytes, original and patch backups, the pending recovery receipt) follow the script; the patch is the same `difflib.unified_diff` text. The bundled reporting module is read from `PRIVA_DATA_DIR`. Installer calls `priva vep-plugins check/install/ensure-utr-reporting/clear-transition` in `vep_cache_api_install`; the `transition` call in `conda_install_vep` runs before `PriVA_rust_install` records `priva_binary` and remains Python. Compared by `rust/tests/vep_plugins_compare.py` (no case reaches the network). |
 
 ## Task adapters and retained bridges
 

@@ -6,10 +6,10 @@ use std::os::fd::FromRawFd;
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 
-pub(super) fn native(path: &Path) -> Result<PathBuf> {
+pub(crate) fn native(path: &Path) -> Result<PathBuf> {
     crate::python_unicode::native(path).map_err(|e| error("UnicodeEncodeError", e))
 }
-pub(super) fn os_error(
+pub(crate) fn os_error(
     cause: std::io::Error,
     path: &Path,
     dest: Option<&Path>,
@@ -28,15 +28,15 @@ pub(super) fn os_error(
         text.strip_prefix(&format!("{kind}: ")).unwrap_or(&text),
     )
 }
-pub(super) fn metadata(path: &Path) -> Result<fs::Metadata> {
+pub(crate) fn metadata(path: &Path) -> Result<fs::Metadata> {
     fs::metadata(native(path)?).map_err(|e| os_error(e, path, None))
 }
-pub(super) fn resolve(path: &Path) -> Result<PathBuf> {
+pub(crate) fn resolve(path: &Path) -> Result<PathBuf> {
     Ok(crate::python_unicode::from_native(
         &crate::clinvar_contract::resolve_non_strict(&native(path)?)?,
     ))
 }
-pub(super) fn is_file(path: &Path) -> Result<bool> {
+pub(crate) fn is_file(path: &Path) -> Result<bool> {
     Ok(probe(path, false)?.is_some_and(|m| m.is_file()))
 }
 
@@ -63,13 +63,13 @@ fn probe(path: &Path, link: bool) -> Result<Option<fs::Metadata>> {
         Err(e) => Err(os_error(e, path, None)),
     }
 }
-pub(super) fn exists(path: &Path) -> Result<bool> {
+pub(crate) fn exists(path: &Path) -> Result<bool> {
     Ok(probe(path, false)?.is_some())
 }
-pub(super) fn is_dir(path: &Path) -> Result<bool> {
+pub(crate) fn is_dir(path: &Path) -> Result<bool> {
     Ok(probe(path, false)?.is_some_and(|m| m.is_dir()))
 }
-pub(super) fn is_link(path: &Path) -> Result<bool> {
+pub(crate) fn is_link(path: &Path) -> Result<bool> {
     Ok(probe(path, true)?.is_some_and(|m| m.file_type().is_symlink()))
 }
 pub(super) fn suffix(path: &Path, value: &str) -> PathBuf {
@@ -101,27 +101,27 @@ pub(crate) fn sha256_file(path: &Path) -> Result<String> {
     }
     Ok(h.finish_hex())
 }
-pub(super) fn read_text(path: &Path) -> Result<String> {
+pub(crate) fn read_text(path: &Path) -> Result<String> {
     let bytes = fs::read(native(path)?).map_err(|e| os_error(e, path, None))?;
     Ok(crate::python_io::decode_utf8(&bytes)
         .map_err(|e| error("UnicodeDecodeError", e))?
         .replace("\r\n", "\n")
         .replace('\r', "\n"))
 }
-pub(super) fn mkdir(path: &Path) -> Result<()> {
+pub(crate) fn mkdir(path: &Path) -> Result<()> {
     fs::create_dir_all(native(path)?).map_err(|e| os_error(e, path, None))
 }
-pub(super) fn rename(source: &Path, target: &Path) -> Result<()> {
+pub(crate) fn rename(source: &Path, target: &Path) -> Result<()> {
     fs::rename(native(source)?, native(target)?).map_err(|e| os_error(e, source, Some(target)))
 }
-pub(super) fn unlink_missing(path: &Path) -> Result<()> {
+pub(crate) fn unlink_missing(path: &Path) -> Result<()> {
     match fs::remove_file(native(path)?) {
         Ok(()) => Ok(()),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
         Err(e) => Err(os_error(e, path, None)),
     }
 }
-pub(super) fn temporary(parent: &Path, prefix: &str) -> Result<(File, PathBuf)> {
+pub(crate) fn temporary(parent: &Path, prefix: &str) -> Result<(File, PathBuf)> {
     let mut raw = CString::new(
         native(&tempfile_parent(parent)?)?
             .join(format!("{prefix}XXXXXX"))
@@ -228,7 +228,7 @@ pub(super) fn copystat(source: &Path, target: &Path) -> Result<()> {
     )
     .map_err(|e| os_error(e, target, None))
 }
-pub(super) fn copy2(source: &Path, target: &Path) -> Result<()> {
+pub(crate) fn copy2(source: &Path, target: &Path) -> Result<()> {
     let m = metadata(source)?;
     if m.mode() & libc::S_IFMT == libc::S_IFIFO {
         return Err(error(

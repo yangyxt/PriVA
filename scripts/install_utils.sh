@@ -366,6 +366,7 @@ PRIVA_VEP_PINS_PY
             fi
             local config_json
             config_json=$(yq '.' "$1") || { rm -f -- "$constraints"; return 1; }
+            # Runs before PriVA_rust_install records priva_binary; stays on Python.
             python "$SCRIPT_DIR/vep_plugins_release.py" transition \
                 --transition-file "$CONDA_PREFIX/.priva-vep-release-transition.json" \
                 --from-release "$current" --release "$requested" --config-json "$config_json" || {
@@ -475,9 +476,10 @@ function vep_cache_api_install() {
     local VEP_PLUGINSDIR=""
     local VEP_VERSION=""
     local VEP_PLUGINSCACHEDIR=""
+    local config_file=""
 
     local TEMP
-    TEMP=$(getopt -o hc:y:r:p:v:g: --long help,VEP_CACHEDIR:,VEP_ASSEMBLY:,VEP_PLUGINSDIR:,VEP_PLUGINSCACHEDIR:,VEP_PLUGINS:,VEP_VERSION: -- "$@")
+    TEMP=$(getopt -o hc:y:r:p:v:g:f: --long help,VEP_CACHEDIR:,VEP_ASSEMBLY:,VEP_PLUGINSDIR:,VEP_PLUGINSCACHEDIR:,VEP_PLUGINS:,VEP_VERSION:,config: -- "$@")
 
     if [[ $? != 0 ]]; then return 1; fi
 
@@ -494,6 +496,7 @@ function vep_cache_api_install() {
                 echo "  -r, --VEP_PLUGINSDIR        Set destination directory for VEP plugins files"
                 echo "  -p, --VEP_PLUGINSCACHEDIR  Set destination direcotry for VEP plugins caches"
                 echo "  -v, --VEP_VERSION         Set the version of VEP to install"
+                echo "  -f, --config              Configuration file whose priva_binary runs the plugin receipts"
                 return 0
                 ;;
             -c|--VEP_CACHEDIR)
@@ -518,6 +521,10 @@ function vep_cache_api_install() {
                 ;;
             -v|--VEP_VERSION)
                 VEP_VERSION="$2"
+                shift 2
+                ;;
+            -f|--config)
+                config_file="$2"
                 shift 2
                 ;;
             --)
@@ -558,7 +565,9 @@ function vep_cache_api_install() {
 
     local required_plugins=SpliceAI,SpliceVault,UTRAnnotator,AlphaMissense,GO,Phenotypes,Conservation,LOEUF,SameCodon,NMD,PrimateAI,MaveDB
     [[ -n $VEP_PLUGINS && $VEP_PLUGINS != empty ]] && required_plugins="$VEP_PLUGINS,$required_plugins"
-    local receipt_helper="$SCRIPT_DIR/vep_plugins_release.py"
+    # Callers reach this after PriVA_rust_install records priva_binary; the
+    # plugin receipts run through priva vep-plugins.
+    priva_resolve_binary "$config_file" || return 1
     local cache_directory="$VEP_CACHEDIR/homo_sapiens_merged/${VEP_VERSION}_$VEP_ASSEMBLY"
     local automatic="" staging="" status=0
     # The upstream installer skips any existing cache directory, including
@@ -581,10 +590,10 @@ function vep_cache_api_install() {
             log "ERROR: Complete the pending UTR116 reporting installation before changing VEP release."
             return 1
         }
-        python "$receipt_helper" ensure-utr-reporting --directory "$VEP_PLUGINSDIR" \
+        "$PRIVA_BIN" vep-plugins ensure-utr-reporting --directory "$VEP_PLUGINSDIR" \
             --release "$VEP_VERSION" || return 1
     fi
-    if ! python "$receipt_helper" check --directory "$VEP_PLUGINSDIR" \
+    if ! "$PRIVA_BIN" vep-plugins check --directory "$VEP_PLUGINSDIR" \
             --release "$VEP_VERSION" --plugins "$required_plugins" >/dev/null 2>&1; then
         automatic+=p
         staging=$(mktemp -d "${VEP_PLUGINSDIR%/}.install-$VEP_VERSION.XXXXXX") || return 1
@@ -617,14 +626,14 @@ function vep_cache_api_install() {
         local -a receipt_args=(install --directory "$VEP_PLUGINSDIR" --release "$VEP_VERSION"
                                --plugins "$required_plugins" --stage "$staging"
                                --transition-file "$CONDA_PREFIX/.priva-vep-release-transition.json")
-        python "$receipt_helper" "${receipt_args[@]}" || status=$?
+        "$PRIVA_BIN" vep-plugins "${receipt_args[@]}" || status=$?
         rm -rf -- "$staging"
         [[ $status -eq 0 ]] || return 1
     fi
     # Reproduce the already approved deterministic UTR116 reporting repair.
     # The helper pins both upstream and installed bytes, retains originals,
     # and leaves other releases unchanged rather than guessing compatibility.
-    python "$receipt_helper" ensure-utr-reporting --directory "$VEP_PLUGINSDIR" \
+    "$PRIVA_BIN" vep-plugins ensure-utr-reporting --directory "$VEP_PLUGINSDIR" \
         --release "$VEP_VERSION" || return 1
     if [[ ":${PERL5LIB:-}:" != *":${VEP_DESTDIR}:"* || ":${PERL5LIB:-}:" != *":${VEP_PLUGINSDIR}:"* ]]; then
         priva_env_vars_set PERL5LIB="$VEP_DESTDIR:$VEP_PLUGINSDIR${PERL5LIB:+:$PERL5LIB}" || return 1
@@ -632,7 +641,7 @@ function vep_cache_api_install() {
     if [[ ":$PATH:" != *":${VEP_DESTDIR}:"* ]]; then
         priva_env_vars_set PATH="$VEP_DESTDIR:$VEP_DESTDIR/htslib:$PATH" || return 1
     fi
-    python "$receipt_helper" clear-transition --directory "$VEP_PLUGINSDIR" --release "$VEP_VERSION" \
+    "$PRIVA_BIN" vep-plugins clear-transition --directory "$VEP_PLUGINSDIR" --release "$VEP_VERSION" \
         --transition-file "$CONDA_PREFIX/.priva-vep-release-transition.json" || return 1
     log "VEP $VEP_VERSION cache/plugins validated; environment settings applied to $conda_env_name."
 }
@@ -4279,7 +4288,8 @@ function gofcards_vep_caches_install() {
             }
             mkdir -p -- "${cache_dir}" "${plugins_dir}" || return 1
             vep_cache_api_install --VEP_VERSION "${version}" --VEP_CACHEDIR "${cache_dir}" \
-                --VEP_PLUGINSDIR "${plugins_dir}" --VEP_ASSEMBLY "${assembly}" || return 1
+                --VEP_PLUGINSDIR "${plugins_dir}" --VEP_ASSEMBLY "${assembly}" \
+                --config "${config_file}" || return 1
         fi
         priva_validate_vep_cache "${directory}" "${assembly}" || {
             log "ERROR: GoFCards requires a complete VEP ${version} ${assembly} merged cache: ${directory}"
@@ -5341,7 +5351,8 @@ function main_install() (
         --VEP_CACHEDIR "$vep_cache_dir" \
         --VEP_PLUGINSDIR "$vep_plugins_dir" \
         --VEP_ASSEMBLY "$assembly" \
-        --VEP_PLUGINSCACHEDIR "$vep_plugins_cachedir" || \
+        --VEP_PLUGINSCACHEDIR "$vep_plugins_cachedir" \
+        --config "$config_file" || \
         { log "Failed to install VEP API and caches"; return 1; }
 
         # Install VEP plugins caches

@@ -61,6 +61,8 @@ debug = 0
         (self.source / "scripts/das_input_continuity.py").write_text("# embedded checker fixture\n")
         for name in ("biomart_nm_to_enst.py", "biomart_ftp_nm_to_enst.py"):
             (self.source / "scripts" / name).write_text("# embedded BioMart source fixture\n")
+        for name in ("spliceai_cache_input.py", "gnomad_cache.py"):
+            (self.source / "scripts" / name).write_text("# embedded configuration-path source fixture\n")
         self.cache = self.folder / "cache"; self.cache.mkdir()
         self.binary = self.folder / "qualified-priva"; self.binary.write_bytes(elf()); self.binary.chmod(0o700)
         self.pins_path = self.folder / "pins.json"; self.validation_path = self.folder / "validation.json"

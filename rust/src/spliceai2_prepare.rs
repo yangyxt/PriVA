@@ -943,9 +943,11 @@ fn project(
 /// A failure carried between threads: its category and message.
 type Carried<T> = std::result::Result<T, (&'static str, String)>;
 fn carry<T>(result: Result<T>) -> Carried<T> {
-    builder_error::finish(result).map_err(|cause| match cause.downcast_ref::<builder_error::RuntimeError>() {
-        Some(failure) => (failure.category_name(), failure.message()),
-        None => ("RuntimeError", cause.to_string()),
+    builder_error::finish(result).map_err(|cause| {
+        match cause.downcast_ref::<builder_error::RuntimeError>() {
+            Some(failure) => (failure.category_name(), failure.message()),
+            None => ("RuntimeError", cause.to_string()),
+        }
     })
 }
 fn uncarry<T>(result: Carried<T>) -> Result<T> {
@@ -994,8 +996,8 @@ fn in_parallel<T: Send>(
 
 /// The 28-byte empty BGZF block that ends every bgzip output.
 const BGZF_EOF: [u8; 28] = [
-    0x1f, 0x8b, 0x08, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00, 0xff, 0x06, 0x00, 0x42, 0x43, 0x02,
-    0x00, 0x1b, 0x00, 0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x1f, 0x8b, 0x08, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00, 0xff, 0x06, 0x00, 0x42, 0x43, 0x02, 0x00,
+    0x1b, 0x00, 0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
 ];
 
 /// `--jobs` above 1 (Rust only): each shard is projected and compressed into
@@ -1090,7 +1092,9 @@ fn convert_kind(
     tools: &HashMap<&str, String>,
 ) -> Result<Vec<Json>> {
     let statistics = if jobs > 1 {
-        convert_parts(kind, entries, context, target, converter, threads, jobs, tools)?
+        convert_parts(
+            kind, entries, context, target, converter, threads, jobs, tools,
+        )?
     } else {
         convert_sequentially(kind, entries, context, target, converter, threads, tools)?
     };

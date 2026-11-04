@@ -34,9 +34,11 @@ pub(super) fn abspath(value: &str) -> Result<String> {
 
 /// `Path(path).resolve()`: symbolic links followed where they exist.
 pub(super) fn resolve(path: &str) -> Result<String> {
-    Ok(crate::clinvar_contract::resolve_non_strict(Path::new(path))?
-        .display()
-        .to_string())
+    Ok(
+        crate::clinvar_contract::resolve_non_strict(Path::new(path))?
+            .display()
+            .to_string(),
+    )
 }
 
 /// `Path(path).name`

@@ -533,8 +533,9 @@ def outcome(folder, label, status, arm, before):
     result = {"exit": status, "stdout": normalize(stdout, arm), "unchanged": tree(arm) == before}
     if label == "python":
         recorded = folder / "exception.json"
-        if recorded.exists():
-            value = json.loads(recorded.read_text())
+        # A successful run records an empty object: no exception to compare.
+        value = json.loads(recorded.read_text()) if recorded.exists() else {}
+        if value:
             result.update(category=value.get("category"), message=value.get("message"))
     else:
         matched = re.fullmatch(r"priva: ([A-Za-z_][A-Za-z_0-9]*): (.*)\n", stderr, re.S)

@@ -61,8 +61,25 @@ PROFILE_KEYS = (
 )
 SCIENTIFIC_SOURCES = (
     "clinvar_stat_variants.py", "combine_annotations.py", "annotation_vcf.sh",
-    "clinvar_annotation_contract.py", "common_bash_utils.sh", "stat_aachange_clinvar.py", "install_utils.sh", "hpo_penetrance.py",
+    "clinvar_annotation_contract.py", "common_bash_utils.sh", "stat_aachange_clinvar.py", "hpo_penetrance.py",
 )
+# v2 binds the installer by the ClinVar stage bodies below instead of the whole
+# install_utils.sh, so v1 and v2 profiles can never share a signature.
+PROFILE_SCHEMA = "priva_clinvar_scientific_profile_v2"
+INSTALLER = "install_utils.sh"
+# The install_utils.sh functions the refresh runs to build the ClinVar
+# annotation and its statistics, bound by their own source text so that edits
+# elsewhere in the installer keep the same profile and workspace:
+#   ClinVar_VCF_deploy            public deployment entry; routes to the locked deploy helper
+#   _ClinVar_VCF_deploy           pinned input, liftover, official VEP (annotation_vcf.sh), gnomAD enrichment
+#   ClinVar_AA_stat               AA/splice statistics from stat_aachange_clinvar.py
+#   ClinVar_Gene_stat_regenerate  gene statistics from clinvar_stat_variants.py
+# Their other callees are either whole-file sources above (annotation_vcf.sh,
+# common_bash_utils.sh), or only select paths and private configuration views
+# (yaml_value_or_default, priva_cache_install_direct and the builder wrappers).
+# download_resource_atomic never runs here because the refresh pins its input.
+INSTALLER_PROCEDURES = ("ClinVar_VCF_deploy", "_ClinVar_VCF_deploy", "ClinVar_AA_stat",
+                        "ClinVar_Gene_stat_regenerate")
 
 
 def utc_now() -> str:
@@ -272,6 +289,30 @@ def selected_vcf(config: dict, root: Path, ucsc: str) -> Path:
     return path if path.is_absolute() or "/" in str(value) else root / path
 
 
+def procedure_text(path: Path, name: str) -> str:
+    """Return one shell function exactly as written, following alphamissense_annotation_base.
+
+    The installer also spells definitions as ``function name () {``. A missing
+    or repeated definition raises, so a renamed stage cannot leave the profile.
+    """
+    pattern = r"^function " + re.escape(name) + r" ?\(\) \{\n.*?^\}"
+    matches = re.findall(pattern, path.read_text(), re.M | re.S)
+    if len(matches) != 1:
+        raise ValueError(f"Cannot identify exactly one ClinVar shell procedure {name} in {path} "
+                         f"(found {len(matches)}); update INSTALLER_PROCEDURES with the stage it was renamed to")
+    return matches[0]
+
+
+def installer_procedures(source_root: Path) -> dict:
+    """Hash each listed ClinVar stage separately; absence is recorded like other sources."""
+    path = (source_root / "scripts" / INSTALLER).absolute()
+    if not path.exists():
+        return {"path": str(path), "exists": False}
+    return {"path": str(path), "exists": True,
+            "sha256": {name: hashlib.sha256(procedure_text(path, name).encode()).hexdigest()
+                       for name in INSTALLER_PROCEDURES}}
+
+
 def scientific_profile(config: dict, source_root: Path, policy: dict) -> dict:
     """Bind scientific paths/code and actual input metadata, without hashing bundles.
 
@@ -348,7 +389,8 @@ def scientific_profile(config: dict, source_root: Path, policy: dict) -> dict:
     for path in sorted((Path(sys.prefix) / "conda-meta").glob("*.json")):
         if path.name.startswith(package_names):
             record(path, code=True)
-    return {"config": values, "files": files,
+    return {"schema": PROFILE_SCHEMA, "config": values, "files": files,
+            "installer_procedures": installer_procedures(source_root),
             "python": {"executable": sys.executable, "version": sys.version},
             "source_policy": {key: policy[key] for key in ("latest_url_template", "summary_url", "mane_url", "automatic", "threshold_months")}}
 

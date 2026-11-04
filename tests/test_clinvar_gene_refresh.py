@@ -32,6 +32,33 @@ def write_vcf(path, stamp="20260430"):
         handle.write(vcf_bytes(stamp))
 
 
+INSTALLER_FIXTURE = '''\
+function unrelated_builder() {
+    echo "unrelated resource"
+}
+
+
+function ClinVar_VCF_deploy() {
+    python clinvar_gene_refresh.py deploy --config "$1"
+}
+
+
+function _ClinVar_VCF_deploy() {
+    bash annotation_vcf.sh anno_VEP_cache_candidate --input_vcf "$1"
+}
+
+
+function ClinVar_AA_stat () {
+    python stat_aachange_clinvar.py "$1"
+}
+
+
+function ClinVar_Gene_stat_regenerate () {
+    python clinvar_stat_variants.py --clinvar_anno_vcf "$1"
+}
+'''
+
+
 def write_stat(path):
     path.parent.mkdir(parents=True, exist_ok=True)
     with gzip.open(path, "wb") as handle:
@@ -63,6 +90,8 @@ class ClinVarGeneRefreshTests(unittest.TestCase):
             path = self.source / "scripts" / name
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text("frozen fixture scientific source\n")
+        self.installer = self.source / "scripts/install_utils.sh"
+        self.installer.write_text(INSTALLER_FIXTURE)
         self.cache = self.directory / "cache"
         self.config = self.directory / "config.json"
         self.settings = {"assembly": "hg38", "vep_installed_version": "116",
@@ -425,6 +454,49 @@ class ClinVarGeneRefreshTests(unittest.TestCase):
         self.install()
         (container / "unrelated later resource").write_text("not a selected scientific input")
         self.assertEqual(self.plan()["action"], "reuse")
+
+    def signature(self):
+        return refresh.profile_signature(refresh.scientific_profile(
+            refresh.load_config(self.config), self.source, refresh.resource_policy(self.source)))
+
+    def test_unrelated_installer_edits_keep_the_profile_and_workspace(self):
+        previous, _, _ = self.install()
+        self.assertEqual(previous["scientific_profile"]["schema"], refresh.PROFILE_SCHEMA)
+        self.installer.write_text(INSTALLER_FIXTURE.replace('echo "unrelated resource"', 'echo "changed"')
+                                  + '\n\nfunction new_native_builder() {\n    priva build-cache "$1"\n}\n')
+        planned = self.plan()
+        self.assertEqual(planned["action"], "reuse")
+        self.assertEqual(planned["output_path"], previous["output_path"])
+        self.assertEqual(planned["scientific_profile_sha256"], previous["scientific_profile_sha256"])
+
+    def test_edit_inside_each_clinvar_stage_changes_the_profile(self):
+        before = self.signature()
+        edits = {"ClinVar_VCF_deploy": ("deploy --config", "deploy --strict --config"),
+                 "_ClinVar_VCF_deploy": ("anno_VEP_cache_candidate", "anno_VEP_data"),
+                 "ClinVar_AA_stat": ('stat_aachange_clinvar.py "$1"', 'stat_aachange_clinvar.py "$1" 2'),
+                 "ClinVar_Gene_stat_regenerate": ("--clinvar_anno_vcf", "--vcf")}
+        self.assertEqual(set(edits), set(refresh.INSTALLER_PROCEDURES))
+        for name, (old, new) in edits.items():
+            with self.subTest(name=name):
+                self.assertEqual(INSTALLER_FIXTURE.count(old), 1)
+                self.installer.write_text(INSTALLER_FIXTURE.replace(old, new))
+                self.assertNotEqual(self.signature(), before)
+        self.installer.write_text(INSTALLER_FIXTURE)
+        self.assertEqual(self.signature(), before)
+
+    def test_missing_or_repeated_clinvar_stage_fails_closed(self):
+        renamed = INSTALLER_FIXTURE.replace("function ClinVar_AA_stat ()", "function ClinVar_AA_statistics ()")
+        repeated = INSTALLER_FIXTURE + '\n\nfunction ClinVar_Gene_stat_regenerate () {\n    :\n}\n'
+        for text, name in ((renamed, "ClinVar_AA_stat"), (repeated, "ClinVar_Gene_stat_regenerate")):
+            with self.subTest(name=name):
+                self.installer.write_text(text)
+                with self.assertRaisesRegex(ValueError, "exactly one ClinVar shell procedure " + name + " "):
+                    self.plan()
+
+    def test_actual_installer_defines_every_bound_clinvar_stage(self):
+        value = refresh.installer_procedures(ROOT)
+        self.assertTrue(value["exists"])
+        self.assertEqual(set(value["sha256"]), set(refresh.INSTALLER_PROCEDURES))
 
     def test_missing_or_changed_annotation_aa_splice_artifacts_block_reuse(self):
         self.install()

@@ -183,7 +183,10 @@ pub(super) fn install_resource(resource: &Resource) -> Result<()> {
         let metadata = Json::Object(vec![
             ("source".to_owned(), source.json()),
             ("output".to_owned(), Json::Str(path.to_owned())),
-            ("sha256".to_owned(), output_sha256.map_or(Json::Null, Json::Str)),
+            (
+                "sha256".to_owned(),
+                output_sha256.map_or(Json::Null, Json::Str),
+            ),
             ("identity".to_owned(), identity_json(&identity(path)?)),
         ]);
         let serialized = dumps_sorted(&metadata)? + "\n";
@@ -253,7 +256,10 @@ mod tests {
         let expected = format!("Reference staging path is not a regular file: {link}");
         assert_eq!(message(failure), expected);
         assert!(staging(&root).is_err());
-        assert_eq!(staging(&format!("{root}/new")).unwrap(), format!("{root}/new"));
+        assert_eq!(
+            staging(&format!("{root}/new")).unwrap(),
+            format!("{root}/new")
+        );
     }
 
     #[test]

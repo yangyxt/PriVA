@@ -135,7 +135,10 @@ pub(super) fn fetch(url: &str, total: u64, offset: u64, partial: &str) -> Result
         } else {
             " before an HTTP response"
         };
-        return Err(url_error(format!("curl ended with {}{ending}", output.status)));
+        return Err(url_error(format!(
+            "curl ended with {}{ending}",
+            output.status
+        )));
     }
     Err(url_error(reason))
 }

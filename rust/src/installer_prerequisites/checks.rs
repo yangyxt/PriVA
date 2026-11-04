@@ -770,9 +770,7 @@ pub(super) fn validate_gofcards(
         for assembly in ["hg19", "hg38"] {
             let key = format!("gofcards_{assembly}_fasta");
             let value = config.get(&key);
-            if main_preflight
-                && selected == Some(assembly)
-                && same(value, config.get("ref_genome"))
+            if main_preflight && selected == Some(assembly) && same(value, config.get("ref_genome"))
             {
                 // The selected reference may still be installed by the main run.
                 let fasta = checked(value, &key)?;

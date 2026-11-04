@@ -199,10 +199,9 @@ impl Planner {
         let (path, managed) = destination(value, old, new)?;
         self.updates.push((key.to_owned(), path.clone()));
         match self.resources.iter().find(|known| known.path == path) {
-            Some(existing) => require(
-                existing.assembly == assembly,
-                format!("{DISTINCT}: {path}"),
-            )?,
+            Some(existing) => {
+                require(existing.assembly == assembly, format!("{DISTINCT}: {path}"))?
+            }
             None => self.resources.push(Resource {
                 path: path.clone(),
                 assembly,
@@ -243,9 +242,8 @@ pub(crate) fn resource_plan(
             "cache_root must name a dedicated cache directory",
         )?;
     }
-    let fasta = |folder: &str, assembly: &str| {
-        join(folder, &format!("reference/ucsc.{assembly}.fasta"))
-    };
+    let fasta =
+        |folder: &str, assembly: &str| join(folder, &format!("reference/ucsc.{assembly}.fasta"));
     let mut planner = Planner::default();
     let chosen = planner.add(
         "ref_genome",
@@ -407,7 +405,10 @@ mod tests {
         let legacy = format!("{data}/reference/ucsc.hg38.fasta");
         let text = format!("assembly: hg38\ncache_root: {root}/cache\nref_genome: {legacy}\n");
         let moved = plan(&text, &data, Scope::Selected, true).unwrap();
-        assert_eq!(moved[0].path, format!("{root}/cache/reference/ucsc.hg38.fasta"));
+        assert_eq!(
+            moved[0].path,
+            format!("{root}/cache/reference/ucsc.hg38.fasta")
+        );
         assert!(moved[0].managed);
         fs::create_dir_all(format!("{data}/reference")).unwrap();
         fs::write(format!("{legacy}.install.lock"), "").unwrap();
@@ -428,7 +429,12 @@ mod tests {
         assert!(failure.starts_with("The forward-chain destination"));
         let failure = refused("ref_genome: x.fa\n", &root, Scope::Selected, false);
         assert!(failure.contains("filenames do not select"));
-        let failure = refused("assembly: hg38\nref_genome: 5\n", &root, Scope::Selected, false);
+        let failure = refused(
+            "assembly: hg38\nref_genome: 5\n",
+            &root,
+            Scope::Selected,
+            false,
+        );
         assert_eq!(failure, PATH_TEXT);
         let explicit = format!("assembly: hg38\nref_genome: {root}/original.fa\n");
         let resources = plan(&explicit, &root, Scope::Selected, false).unwrap();

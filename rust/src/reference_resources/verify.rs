@@ -2,8 +2,8 @@
 //! and `preflight`, which inspects every planned resource before any lock,
 //! directory, index or download.
 use super::files::{
-    Algorithm, BLOCK, GZIP_MAGIC, TextLines, compressed, digest, file_size, gzip_prefix,
-    identity, identity_json, mtime_ns, prefix, read_block, read_text,
+    Algorithm, BLOCK, GZIP_MAGIC, TextLines, compressed, digest, file_size, gzip_prefix, identity,
+    identity_json, mtime_ns, prefix, read_block, read_text,
 };
 use super::plan::{Kind, Resource, checked_path};
 use super::{Result, error, require, source};
@@ -420,7 +420,11 @@ mod tests {
     fn fasta_lengths_are_counted_only_without_a_valid_index() {
         let root = folder();
         let fasta = format!("{root}/x.fa");
-        fs::write(&fasta, ">chr2\nAA\n>1 description\nAC GT \r\nAA\n>chr3\nA\n").unwrap();
+        fs::write(
+            &fasta,
+            ">chr2\nAA\n>1 description\nAC GT \r\nAA\n>chr3\nA\n",
+        )
+        .unwrap();
         assert_eq!(fasta_chr1(&fasta).unwrap(), Some(7));
         fs::write(&fasta, ">\nA\n").unwrap();
         let message = fasta_chr1(&fasta).unwrap_err().to_string();
@@ -445,7 +449,11 @@ mod tests {
         fs::write(&chain, reverse).unwrap();
         let (_, message) = failure(validate_chain(&chain));
         assert!(message.starts_with("Expected the forward UCSC hg19-to-hg38 chain"));
-        fs::write(&chain, "chain 1 chr1 0249250621 + 0 1 1 248956422 + 0 1 1\n").unwrap();
+        fs::write(
+            &chain,
+            "chain 1 chr1 0249250621 + 0 1 1 248956422 + 0 1 1\n",
+        )
+        .unwrap();
         assert!(validate_chain(&chain).is_err());
     }
 

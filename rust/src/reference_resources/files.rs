@@ -270,17 +270,15 @@ pub(super) fn unlink_missing_ok(path: &str) -> Result<()> {
 /// `publish_new(partial, destination)`: the link fails if a concurrent
 /// process supplied the final file, which is never replaced.
 pub(super) fn publish_new(partial: &str, destination: &str) -> Result<()> {
-    fs::hard_link(partial, destination).map_err(|failure| {
-        os_error(failure, Path::new(partial), Some(Path::new(destination)))
-    })?;
+    fs::hard_link(partial, destination)
+        .map_err(|failure| os_error(failure, Path::new(partial), Some(Path::new(destination))))?;
     fs::remove_file(partial).map_err(|failure| os_error(failure, Path::new(partial), None))
 }
 
 /// `os.replace(source, destination)`
 pub(super) fn replace(source: &str, destination: &str) -> Result<()> {
-    fs::rename(source, destination).map_err(|failure| {
-        os_error(failure, Path::new(source), Some(Path::new(destination)))
-    })
+    fs::rename(source, destination)
+        .map_err(|failure| os_error(failure, Path::new(source), Some(Path::new(destination))))
 }
 
 /// `Path(path).write_text(text)`

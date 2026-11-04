@@ -84,14 +84,19 @@ fn numeric(text: &str) -> bool {
 }
 /// `re.fullmatch(r"[0-9a-f]{64}", text)`
 fn hex64(text: &str) -> bool {
-    text.len() == 64 && text.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+    text.len() == 64
+        && text
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
 }
 /// `re.fullmatch(r"[A-Za-z][A-Za-z0-9_]*", text)`
 fn module_name(text: &str) -> bool {
     let bytes = text.as_bytes();
     !bytes.is_empty()
         && bytes[0].is_ascii_alphabetic()
-        && bytes.iter().all(|b| b.is_ascii_alphanumeric() || *b == b'_')
+        && bytes
+            .iter()
+            .all(|b| b.is_ascii_alphanumeric() || *b == b'_')
 }
 /// `re.fullmatch(r"[A-Za-z][A-Za-z0-9_]*\.pm", text)`
 fn plugin_file(text: &str) -> bool {
@@ -255,14 +260,15 @@ fn local_patch_matches(directory: &str, receipt: &Json, filename: &str) -> bool 
     }
     // re.fullmatch on a non-string value raises TypeError.
     let field = |key: &str| patch.get(key).map_or(Some(""), Json::as_str);
-    let (Some(installed), Some(recorded_patch)) = (field("installed_sha256"), field("patch_sha256"))
+    let (Some(installed), Some(recorded_patch)) =
+        (field("installed_sha256"), field("patch_sha256"))
     else {
         return false;
     };
     if !hex64(installed) || !hex64(recorded_patch) {
         return false;
     }
-    if digest(&join(directory, filename)).ok().as_deref() != Some(installed.as_str()) {
+    if digest(&join(directory, filename)).ok().as_deref() != Some(installed) {
         return false;
     }
     let file_digest = |key: &str| match patch.get(key) {
@@ -276,7 +282,7 @@ fn local_patch_matches(directory: &str, receipt: &Json, filename: &str) -> bool 
         Some(value) if py_equal(upstream, &Json::Str(value.clone())) => {}
         _ => return false,
     }
-    if file_digest("patch_file").as_deref() != Some(recorded_patch.as_str()) {
+    if file_digest("patch_file").as_deref() != Some(recorded_patch) {
         return false;
     }
     truthy(patch.get("profile"))
@@ -320,7 +326,9 @@ fn matches(directory: &str, receipt: &Json, release: &str, names: &[String]) -> 
         let matched = if listed_as_patched(receipt, &filename)? {
             local_patch_matches(directory, receipt, &filename)
         } else {
-            let recorded = receipt.get("plugins").and_then(|plugins| plugins.get(&filename));
+            let recorded = receipt
+                .get("plugins")
+                .and_then(|plugins| plugins.get(&filename));
             let observed = digest(&join(directory, &filename))?;
             is(recorded, &observed)
         };
@@ -348,8 +356,7 @@ fn capture_transition(
         "The installer configuration must be a mapping",
     )?;
     let root = config.get("cache_root");
-    let directory = if root.is_some_and(|root| !matches!(root, Json::Null) && !is(Some(root), ""))
-    {
+    let directory = if root.is_some_and(|root| !matches!(root, Json::Null) && !is(Some(root), "")) {
         let root = match root {
             Some(Json::Str(root)) if absolute_plain(root) => root,
             _ => {
@@ -460,7 +467,10 @@ fn matching_transition(path: Option<&str>, directory: &str, release: &str) -> Op
         && numeric(&text_of(Some(from.unwrap_or(&Json::Str(String::new())))))
         && is(
             value.get("environment_prefix"),
-            &resolve(Path::new(&parent(path))).ok()?.display().to_string(),
+            &resolve(Path::new(&parent(path)))
+                .ok()?
+                .display()
+                .to_string(),
         )
         && is(
             value.get("plugins_directory"),
@@ -525,7 +535,8 @@ fn install(
     }
     let previous = load_receipt(directory);
     let empty = Json::Object(Vec::new());
-    let old_release = previous.get("release").unwrap_or(&Json::Str(String::new()));
+    let no_release = Json::Str(String::new());
+    let old_release = previous.get("release").unwrap_or(&no_release);
     let old_plugins = previous.get("plugins").unwrap_or(&empty);
     let local_patches = previous.get("local_patches").unwrap_or(&empty);
     let Json::Object(patches) = local_patches else {
@@ -673,7 +684,8 @@ pub(crate) fn dispatch(args: &[String]) -> Result<()> {
             MODES.map(repr).join(", ")
         )));
     }
-    let Some(occurrences) = parse_long_option_occurrences(&args[1..], &NAMES, &[]).map_err(invalid)?
+    let Some(occurrences) =
+        parse_long_option_occurrences(&args[1..], &NAMES, &[]).map_err(invalid)?
     else {
         println!("{HELP}");
         return Ok(());
@@ -710,15 +722,21 @@ fn run(
     from_release: Option<&str>,
     config_json: Option<&str>,
 ) -> Result<bool> {
-    require(numeric(release), "VEP release must be a numeric major release")?;
+    require(
+        numeric(release),
+        "VEP release must be a numeric major release",
+    )?;
     if mode == "transition" {
         let Some(path) = transition_file else {
             return Err(value_error(
                 "A release transition requires an environment transition file",
             ));
         };
-        let config = json_text::parse(config_json.filter(|v| !v.is_empty()).unwrap_or("null"), false)
-            .map_err(|message| error("JSONDecodeError", message))?;
+        let config = json_text::parse(
+            config_json.filter(|v| !v.is_empty()).unwrap_or("null"),
+            false,
+        )
+        .map_err(|message| error("JSONDecodeError", message))?;
         capture_transition(path, &config, from_release, release)?;
         return Ok(true);
     }
@@ -777,7 +795,10 @@ mod tests {
     #[test]
     fn package_declarations_follow_the_multiline_pattern() {
         assert!(declares_package("package SpliceAI;\n", "SpliceAI"));
-        assert!(declares_package("# x\n  package\n\tSpliceAI \n;", "SpliceAI"));
+        assert!(declares_package(
+            "# x\n  package\n\tSpliceAI \n;",
+            "SpliceAI"
+        ));
         assert!(declares_package("\u{a0}package SpliceAI;", "SpliceAI"));
         assert!(!declares_package("package SpliceAI2;", "SpliceAI"));
         assert!(!declares_package("packageSpliceAI;", "SpliceAI"));
@@ -797,7 +818,11 @@ mod tests {
     #[test]
     fn admission_errors_exit_two_and_checks_exit_one() {
         let args = |items: &[&str]| items.iter().map(|v| (*v).to_owned()).collect::<Vec<_>>();
-        for bad in [args(&[]), args(&["fetch", "--release", "116"]), args(&["check"])] {
+        for bad in [
+            args(&[]),
+            args(&["fetch", "--release", "116"]),
+            args(&["check"]),
+        ] {
             let failure = dispatch(&bad).unwrap_err();
             assert!(!failure.is::<builder_error::RuntimeError>(), "{failure}");
         }
@@ -807,6 +832,9 @@ mod tests {
             "ValueError: VEP release must be a numeric major release"
         );
         let failure = dispatch(&args(&["install", "--release", "116"])).unwrap_err();
-        assert_eq!(failure.to_string(), "ValueError: A plugin directory is required");
+        assert_eq!(
+            failure.to_string(),
+            "ValueError: A plugin directory is required"
+        );
     }
 }

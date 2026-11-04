@@ -155,7 +155,13 @@ impl<'a> Matcher<'a> {
             && first.0 == 'e'
         {
             let (tag, i1, i2, j1, j2) = *first;
-            *first = (tag, i1.max(i2.saturating_sub(n)), i2, j1.max(j2.saturating_sub(n)), j2);
+            *first = (
+                tag,
+                i1.max(i2.saturating_sub(n)),
+                i2,
+                j1.max(j2.saturating_sub(n)),
+                j2,
+            );
         }
         if let Some(last) = codes.last_mut()
             && last.0 == 'e'
@@ -205,14 +211,20 @@ pub(super) fn unified_diff(a: &str, b: &str, fromfile: &str, tofile: &str) -> St
         ));
         for &(tag, i1, i2, j1, j2) in group {
             if tag == 'e' {
-                a[i1..i2].iter().for_each(|line| out.push_str(&format!(" {line}")));
+                a[i1..i2]
+                    .iter()
+                    .for_each(|line| out.push_str(&format!(" {line}")));
                 continue;
             }
             if tag == 'r' || tag == 'd' {
-                a[i1..i2].iter().for_each(|line| out.push_str(&format!("-{line}")));
+                a[i1..i2]
+                    .iter()
+                    .for_each(|line| out.push_str(&format!("-{line}")));
             }
             if tag == 'r' || tag == 'i' {
-                b[j1..j2].iter().for_each(|line| out.push_str(&format!("+{line}")));
+                b[j1..j2]
+                    .iter()
+                    .for_each(|line| out.push_str(&format!("+{line}")));
             }
         }
     }
@@ -235,15 +247,26 @@ mod tests {
              seven\n eight\n nine\n-ten\n+TEN\n+eleven"
         );
         assert_eq!(unified_diff("x\ny", "x\ny", "a", "b"), "");
-        assert_eq!(unified_diff("", "a\n", "a", "b"), "--- a\n+++ b\n@@ -0,0 +1 @@\n+a\n");
+        assert_eq!(
+            unified_diff("", "a\n", "a", "b"),
+            "--- a\n+++ b\n@@ -0,0 +1 @@\n+a\n"
+        );
     }
 
     #[test]
     fn popular_lines_are_not_match_seeds_once_b_has_200_lines() {
         let a: String = (0..240)
-            .map(|i| if i % 3 == 0 { "}\n".to_owned() } else { format!("line {i}\n") })
+            .map(|i| {
+                if i % 3 == 0 {
+                    "}\n".to_owned()
+                } else {
+                    format!("line {i}\n")
+                }
+            })
             .collect();
-        let b = a.replace("line 100\n", "changed 100\n").replace("line 5\n", "");
+        let b = a
+            .replace("line 100\n", "changed 100\n")
+            .replace("line 5\n", "");
         let out = unified_diff(&a, &b, "a", "b");
         assert_eq!(out.len(), 159);
         assert_eq!(

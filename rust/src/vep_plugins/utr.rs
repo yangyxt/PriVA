@@ -4,7 +4,7 @@
 //! Pinned upstream and installed bytes, the original and the patch kept as
 //! backups, and a pending receipt that makes an interrupted run resumable.
 use super::{
-    RECEIPT, Result, digest, difflib, is, load_json, load_receipt, local_patch_matches, object,
+    RECEIPT, Result, difflib, digest, is, load_json, load_receipt, local_patch_matches, object,
     parent, read_bytes, setdefault, sha256_hex, source, text, value_error, write_receipt,
 };
 use crate::file_lock::{ExclusiveLock, Wait};
@@ -108,7 +108,9 @@ fn locked(
         || !is(receipt.get("source"), &source(release))
         || !matches!(receipt.get("plugins"), Some(Json::Object(_)))
         || !is(
-            receipt.get("plugins").and_then(|plugins| plugins.get(MODULE)),
+            receipt
+                .get("plugins")
+                .and_then(|plugins| plugins.get(MODULE)),
             UPSTREAM_SHA,
         )
     {
@@ -180,7 +182,10 @@ fn locked(
     } else {
         None
     };
-    if recovery.as_ref().is_some_and(|value| !transaction_shape(value)) {
+    if recovery
+        .as_ref()
+        .is_some_and(|value| !transaction_shape(value))
+    {
         return Err(value_error(
             "Malformed UTR reporting recovery receipt; files were preserved",
         ));
@@ -201,7 +206,10 @@ fn locked(
             "Bundled UTR reporting implementation does not reproduce the approved profile",
         ));
     }
-    let folder = join(directory, ".priva-local-patches/UTRAnnotator116_all_effects");
+    let folder = join(
+        directory,
+        ".priva-local-patches/UTRAnnotator116_all_effects",
+    );
     if is_link(Path::new(&folder))? || is_link(Path::new(&parent(&folder)))? {
         return Err(value_error(
             "Refusing a symlinked UTR patch backup directory",

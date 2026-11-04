@@ -43,7 +43,8 @@ class GoFCardsEndpointCoordinate(unittest.TestCase):
             "hg38_chrom": "1", "hg38_pos": "5100", "hg38_ref": "A", "hg38_alt": "G",
             "liftover_status": "unmapped", "hg38_refalt_status": "endpoint_ref_match",
         }
-        cache = gofcards._nest(pd.DataFrame([row]), {}, {}, gofcards.HgncResolver(None), {}, {"v1"})
+        resolver = mock.Mock(hgnc_id=lambda symbol: "HGNC:1")
+        cache = gofcards._nest(pd.DataFrame([row]), {}, {}, resolver, {}, {"v1"})
         variant = next(iter(cache["genes"]["GENE1"]["variants"].values()))
         self.assertEqual(variant["record"]["liftover_status"], "unmapped")
         self.assertEqual(variant["assemblies"]["hg38"]["genomic"],

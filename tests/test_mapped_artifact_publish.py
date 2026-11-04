@@ -320,7 +320,9 @@ yaml_value_or_default() { local v;v=$(read_yaml "$1" "$2"); if [[ $v == null || 
 "$4" "$5"
 '''
         env = dict(os.environ, PATH=str(Path(sys.executable).parent) + os.pathsep + os.environ["PATH"],
-                   **self.priva)
+                   # Run the builder as main_install does inside its private view;
+                   # native .rkyv values would otherwise start a private installation.
+                   PRIVA_CACHE_INSTALL_INTERNAL="1", **self.priva)
         return subprocess.run(["bash", "--noprofile", "--norc", "-c", body, "fixture",
             str(ROOT / "scripts/install_utils.sh"), str(self.scripts), str(self.folder), function, str(self.config)],
             env=env, text=True, capture_output=True, timeout=30)

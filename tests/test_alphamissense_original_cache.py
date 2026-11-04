@@ -20,6 +20,7 @@ import os
 from pathlib import Path
 import pickle
 import sys
+import tempfile
 import unittest
 from unittest.mock import patch
 
@@ -33,7 +34,13 @@ FIXTURE_ROOT = None
 
 class OriginalCache(unittest.TestCase):
     def setUp(self):
-        self.folder = FIXTURE_ROOT / self._testMethodName
+        root = FIXTURE_ROOT
+        if root is None:
+            # Under unittest discovery, retain nothing beyond the test.
+            temporary = tempfile.TemporaryDirectory(prefix='original_cache_')
+            self.addCleanup(temporary.cleanup)
+            root = Path(temporary.name)
+        self.folder = root / self._testMethodName
         self.folder.mkdir()
         self.cache = self.folder / 'cache root'; self.cache.mkdir()
         self.vcf = self.cache / 'input.vcf.gz'; self.vcf.write_bytes(b'SYNTHETIC indexed-input metadata fixture')

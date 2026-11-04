@@ -120,7 +120,9 @@ class AlphaConfiguredOutputs(unittest.TestCase):
         self.config.write_text(json.dumps(self.settings))
         self.env = dict(os.environ, TEST_PYTHON=sys.executable, TEST_EVENTS=str(self.events),
                         TEST_CACHE=str(self.managed), TEST_CONFIG=str(self.config), TEST_FAILURE="none",
-                        **fake_priva_binary.environment(self.folder))
+                        # Run builders as main_install does inside its private view;
+                        # native .rkyv values would otherwise start a private installation.
+                        PRIVA_CACHE_INSTALL_INTERNAL="1", **fake_priva_binary.environment(self.folder))
 
     def invoke(self, command, failure="none", **extra):
         return subprocess.run(["bash", "--noprofile", "--norc", "-c", PRELUDE + command,

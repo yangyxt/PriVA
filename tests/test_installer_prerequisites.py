@@ -75,7 +75,9 @@ class InstallerPrerequisites(unittest.TestCase):
         self.env = dict(os.environ, TEST_CONFIG=str(self.config_file), TEST_FOLDER=str(self.folder),
                         TEST_PYTHON=sys.executable, PYTHONDONTWRITEBYTECODE="1",
                         PRIVA_INSTALL_INSPECT_ROOTS=os.pathsep.join((str(ROOT), str(self.folder))),
-                        **fake_priva_binary.environment(self.folder))
+                        # Builders run as main_install runs them inside its private
+                        # view; native .rkyv values would otherwise start one.
+                        PRIVA_CACHE_INSTALL_INTERNAL="1", **fake_priva_binary.environment(self.folder))
         self.env.pop("PRIVA_SMOKE_SKIP_VEP", None)
 
     def configure_pm1_domains(self):

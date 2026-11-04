@@ -77,7 +77,10 @@ class DASInstallCompletion(unittest.TestCase):
     def run_install(self, fail="", fail_key="none", change=None, override="",
                     function="AlphaMissense_pick_intolerant_domains", **extra):
         env = dict(os.environ, TEST_FOLDER=str(self.folder), TEST_PYTHON=sys.executable,
-                   FAIL_KEY=fail_key, PYTHONDONTWRITEBYTECODE="1", PRIVA_FAKE_FAIL=fail, **self.priva, **extra)
+                   FAIL_KEY=fail_key, PYTHONDONTWRITEBYTECODE="1", PRIVA_FAKE_FAIL=fail,
+                   # Run the builder as main_install does inside its private view;
+                   # native .rkyv values would otherwise start a private installation.
+                   PRIVA_CACHE_INSTALL_INTERNAL="1", **self.priva, **extra)
         if change is not None:
             env["PRIVA_FAKE_CHANGE"] = str(change)
         return subprocess.run(["bash", "--noprofile", "--norc", "-c",

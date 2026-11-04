@@ -1,7 +1,7 @@
 //! Optional procedures corresponding to alphamissense_annotation_base.py.
 //! Original installer callers stay unchanged. VEP is queried only for runtime
 //! provenance; scientific annotation and model generation are never invoked.
-mod header;
+pub(crate) mod header;
 pub(crate) mod io;
 mod motif;
 mod profile;

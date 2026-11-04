@@ -4,6 +4,7 @@ pub mod acmg_scoring;
 mod acmg_step;
 pub mod acmg_variant_mechanism;
 mod alpha_annotation_base;
+mod alphamissense_cache;
 mod alpha_domain;
 mod alphamissense_vcf;
 mod biomart;

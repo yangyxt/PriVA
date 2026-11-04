@@ -253,7 +253,7 @@ pub(crate) fn copy2(source: &Path, target: &Path) -> Result<()> {
     drop(output);
     copystat(source, target)
 }
-pub(super) fn stamp() -> Result<String> {
+pub(crate) fn stamp() -> Result<String> {
     let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)?;
     let seconds = now.as_secs() as libc::time_t;
     let mut tm = unsafe { std::mem::zeroed::<libc::tm>() };

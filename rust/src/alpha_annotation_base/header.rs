@@ -194,7 +194,7 @@ fn check_header(path: &Path, selected: &str, requested: &str, raw_assembly: &Jso
         ("vep_version", string(&version[1..])),
     ]))
 }
-pub(super) fn check(path: &Path, raw_assembly: &Json, vep_major: &Json) -> Result<Json> {
+pub(crate) fn check(path: &Path, raw_assembly: &Json, vep_major: &Json) -> Result<Json> {
     let selected = assembly(raw_assembly)?;
     let requested = text(vep_major);
     require(

@@ -1416,7 +1416,9 @@ function AlphaMissense_install() {
     configured=$(read_yaml "$config_file" alphamissense_prescore) || return 1
     local -a source_args=()
     [[ -z $configured || $configured == null ]] || source_args=(--source "$configured")
-    selected=$(python "${SCRIPT_DIR}/alphamissense_cache.py" install \
+    # main_install reaches this after PriVA_rust_install records priva_binary.
+    priva_resolve_binary "$config_file" || return 1
+    selected=$("${PRIVA_BIN}" alphamissense-cache install \
         --cache-dir "$PLUGIN_CACHEDIR" --assembly "$ASSEMBLY_VERSION" "${source_args[@]}") || return 1
     update_yaml "$config_file" alphamissense_prescore "$selected" || return 1
     log "AlphaMissense original prescore and tabix index are ready: $selected"
@@ -1437,6 +1439,7 @@ function AlphaMissense_anno() {
     local assembly vep_major
     assembly=$(read_yaml "$config_file" assembly) || return 1
     vep_major=$(read_yaml "$config_file" vep_installed_version) || return 1
+    priva_resolve_binary "$config_file" || return 1
     [[ "$vep_major" =~ ^[1-9][0-9]*$ ]] || {
         log "ERROR: AlphaMissense annotation requires the configured numeric VEP major."
         return 1
@@ -1453,7 +1456,7 @@ function AlphaMissense_anno() {
                { [[ "$alphamissense_vep_vcf" -nt "$alphamissense_vep_base_vcf" ]] || \
                  python "$base_helper" runtime-associated --config "$config_file" --source-root "$BASE_DIR"; } && \
                check_vcf_infotags "$alphamissense_vep_vcf" CSQ && \
-               python "${SCRIPT_DIR}/alphamissense_cache.py" check-annotation \
+               "${PRIVA_BIN}" alphamissense-cache check-annotation \
                    --input "$alphamissense_vep_vcf" --assembly "$assembly" --vep-major "$vep_major" > /dev/null; }; then
             python "$base_helper" restore --config "$config_file" --source-root "$BASE_DIR" || return 1
         fi
@@ -1488,7 +1491,7 @@ function AlphaMissense_anno() {
     -i "$converted" -a "$assembly" -r "$ref_genome" -c "$vep_cache_dir" \
     -t "$threads" -p "$vep_plugins_dir" -v "$conservation_file" && \
     check_vcf_validity "$annotated" && check_vcf_infotags "$annotated" CSQ && \
-    python "${SCRIPT_DIR}/alphamissense_cache.py" check-annotation \
+    "${PRIVA_BIN}" alphamissense-cache check-annotation \
         --input "$annotated" --assembly "$assembly" --vep-major "$vep_major" > /dev/null || {
         log "ERROR: AlphaMissense conversion/annotation failed; incomplete stage retained at $stage"
         return 1

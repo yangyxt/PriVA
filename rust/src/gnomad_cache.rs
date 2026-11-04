@@ -52,7 +52,8 @@ pub(crate) fn dispatch(args: &[String]) -> Result<()> {
         )));
     }
     let (names, required) = options(command);
-    let Some(occurrences) = parse_long_option_occurrences(&args[1..], names, &[]).map_err(invalid)?
+    let Some(occurrences) =
+        parse_long_option_occurrences(&args[1..], names, &[]).map_err(invalid)?
     else {
         println!("{HELP}");
         return Ok(());
@@ -118,13 +119,27 @@ mod tests {
             args(&["inspect"]),
             args(&["members"]),
             args(&["validate", "--chr-x", "/g/a.chrX.vcf.bgz"]),
-            args(&["default-path", "--cache-dir", "/g", "--assembly", "hg38", "--reference", "/r"]),
+            args(&[
+                "default-path",
+                "--cache-dir",
+                "/g",
+                "--assembly",
+                "hg38",
+                "--reference",
+                "/r",
+            ]),
         ] {
             let failure = dispatch(&bad).unwrap_err();
             assert!(!failure.is::<builder_error::RuntimeError>(), "{failure}");
         }
-        let failure = dispatch(&args(&["default-path", "--cache-dir", "/g", "--assembly", "hg39"]))
-            .unwrap_err();
+        let failure = dispatch(&args(&[
+            "default-path",
+            "--cache-dir",
+            "/g",
+            "--assembly",
+            "hg39",
+        ]))
+        .unwrap_err();
         assert_eq!(
             failure.to_string(),
             "ValueError: Select hg19/GRCh37 or hg38/GRCh38"

@@ -118,8 +118,16 @@ fn header(path: &Path) -> Result<Header> {
 }
 /// `validate_family(...)` with the reference as `gnomad_cache.py validate`
 /// passes it: a path, or none.
-pub(crate) fn validate_selected(path: &Path, selected: &str, reference: Option<&str>) -> Result<Json> {
-    validate_family(path, selected, reference.map_or(Value::Missing, Value::Text))
+pub(crate) fn validate_selected(
+    path: &Path,
+    selected: &str,
+    reference: Option<&str>,
+) -> Result<Json> {
+    validate_family(
+        path,
+        selected,
+        reference.map_or(Value::Missing, Value::Text),
+    )
 }
 pub(super) fn validate_family(path: &Path, selected: &str, reference: Value<'_>) -> Result<Json> {
     let a = assembly(selected)?;

@@ -18,7 +18,9 @@
 //! - The subcommand comes first (the script also accepted bare prepare flags).
 use crate::builder_error;
 use crate::cli::{Result, invalid};
-use crate::installer_config_paths::files::{is_file, is_link, metadata, mkdir, native, os_error, rename};
+use crate::installer_config_paths::files::{
+    is_file, is_link, metadata, mkdir, native, os_error, rename,
+};
 use crate::json_text::{self, DumpsOptions, Json};
 use crate::python_args::{parse_long_option_occurrences, require_options};
 use crate::python_io::PythonGzipReader;
@@ -65,10 +67,15 @@ fn chroms() -> Vec<String> {
         .collect()
 }
 fn chrom_index(chrom: &str) -> usize {
-    chroms().iter().position(|c| c == chrom).unwrap_or(usize::MAX)
+    chroms()
+        .iter()
+        .position(|c| c == chrom)
+        .unwrap_or(usize::MAX)
 }
 fn published(kind: &str, chrom: &str) -> bool {
-    matches!(kind, "snv" | "indel") && chrom_index(chrom) != usize::MAX && (kind, chrom) != ("indel", "chrY")
+    matches!(kind, "snv" | "indel")
+        && chrom_index(chrom) != usize::MAX
+        && (kind, chrom) != ("indel", "chrY")
 }
 
 fn error(category: &'static str, message: impl Into<String>) -> Box<dyn std::error::Error> {
@@ -112,18 +119,25 @@ fn identity(path: &str) -> Result<Identity> {
     ))
 }
 fn partial(path: &str) -> bool {
-    path.split('/').any(|part| part.to_lowercase().contains(".partial"))
+    path.split('/')
+        .any(|part| part.to_lowercase().contains(".partial"))
 }
 
 /// `complete_file(path)`: the resolved, complete, nonempty regular input.
 fn complete_file(path: &str) -> Result<String> {
-    require(path.starts_with('/'), format!("An absolute input path is required: {path}"))?;
+    require(
+        path.starts_with('/'),
+        format!("An absolute input path is required: {path}"),
+    )?;
     require(!partial(path), format!("Incomplete input: {path}"))?;
     let resolved = crate::python_io::resolve_strict(&native(Path::new(path))?)
         .map_err(|(cause, at)| os_error(cause, &at, None))?
         .display()
         .to_string();
-    require(!partial(&resolved), format!("Incomplete input target: {path}"))?;
+    require(
+        !partial(&resolved),
+        format!("Incomplete input target: {path}"),
+    )?;
     require(
         is_file(Path::new(&resolved))? && metadata(Path::new(&resolved))?.len() > 0,
         format!("Missing/empty input: {path}"),
@@ -138,7 +152,12 @@ fn verified_file(item: &Json, identities: &mut Vec<(String, Identity)>) -> Resul
     };
     let raw = match item.get("path") {
         Some(Json::Str(path)) => path.clone(),
-        Some(_) => return Err(error("TypeError", "expected str, bytes or os.PathLike object")),
+        Some(_) => {
+            return Err(error(
+                "TypeError",
+                "expected str, bytes or os.PathLike object",
+            ));
+        }
         None => return Err(key_error("path")),
     };
     let path = complete_file(&crate::installer_prerequisites::paths::pathlib(&raw))?;
@@ -146,16 +165,34 @@ fn verified_file(item: &Json, identities: &mut Vec<(String, Identity)>) -> Resul
         Some(Json::Int(value)) if *value > 0 => *value,
         _ => return Err(error("ValueError", "Expected positive input bytes")),
     };
-    let sha256 = item.get("sha256").and_then(Json::as_str).unwrap_or_default();
+    let sha256 = item
+        .get("sha256")
+        .and_then(Json::as_str)
+        .unwrap_or_default();
     require(
-        sha256.len() == 64 && sha256.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)),
+        sha256.len() == 64
+            && sha256
+                .bytes()
+                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)),
         "Expected pinned SHA256",
     )?;
     let before = identity(&path)?;
-    require(before.2 as i128 == bytes, format!("Input size mismatch: {path}"))?;
-    say(&format!("Verifying {}", path.rsplit('/').next().unwrap_or_default()));
-    require(digest(&path)? == sha256, format!("Input SHA256 mismatch: {path}"))?;
-    require(identity(&path)? == before, format!("Input changed during verification: {path}"))?;
+    require(
+        before.2 as i128 == bytes,
+        format!("Input size mismatch: {path}"),
+    )?;
+    say(&format!(
+        "Verifying {}",
+        path.rsplit('/').next().unwrap_or_default()
+    ));
+    require(
+        digest(&path)? == sha256,
+        format!("Input SHA256 mismatch: {path}"),
+    )?;
+    require(
+        identity(&path)? == before,
+        format!("Input changed during verification: {path}"),
+    )?;
     record(identities, &path, before);
     Ok(path)
 }
@@ -181,7 +218,10 @@ impl Lines {
         } else {
             Box::new(file)
         };
-        Ok(Self { reader: BufReader::with_capacity(1 << 20, reader), path: path.to_owned() })
+        Ok(Self {
+            reader: BufReader::with_capacity(1 << 20, reader),
+            path: path.to_owned(),
+        })
     }
     fn next(&mut self) -> Result<Option<String>> {
         let mut line = Vec::new();
@@ -331,7 +371,10 @@ fn vep_release_names(annotation: &str, release: &str) -> Result<ReleaseNames> {
             continue;
         }
         let row = fields(&line);
-        require(row.len() == 9, format!("Invalid VEP-release annotation row {number}"))?;
+        require(
+            row.len() == 9,
+            format!("Invalid VEP-release annotation row {number}"),
+        )?;
         if row[2] != "gene" {
             continue;
         }
@@ -339,7 +382,10 @@ fn vep_release_names(annotation: &str, release: &str) -> Result<ReleaseNames> {
         if gff3 {
             for item in row[8].split(';').filter(|item| !item.is_empty()) {
                 let Some((key, value)) = item.split_once('=') else {
-                    return Err(error("ValueError", "not enough values to unpack (expected 2, got 1)"));
+                    return Err(error(
+                        "ValueError",
+                        "not enough values to unpack (expected 2, got 1)",
+                    ));
                 };
                 attributes.insert(key.to_owned(), unquote(value));
             }
@@ -349,9 +395,14 @@ fn vep_release_names(annotation: &str, release: &str) -> Result<ReleaseNames> {
         let gene_id = attributes.get("gene_id").filter(|v| !v.is_empty());
         let symbol = attributes.get("gene_name").filter(|v| !v.is_empty());
         let (Some(gene_id), Some(symbol)) = (gene_id, symbol) else {
-            return Err(error("ValueError", format!("VEP-release annotation gene lacks ID/name at {number}")));
+            return Err(error(
+                "ValueError",
+                format!("VEP-release annotation gene lacks ID/name at {number}"),
+            ));
         };
-        let set = names.entry((unversioned(gene_id), row[0].to_owned())).or_default();
+        let set = names
+            .entry((unversioned(gene_id), row[0].to_owned()))
+            .or_default();
         let value = (row[6].to_owned(), symbol.clone());
         if !set.contains(&value) {
             set.push(value);
@@ -359,7 +410,9 @@ fn vep_release_names(annotation: &str, release: &str) -> Result<ReleaseNames> {
     }
     require(
         description.contains("GRCh38") && description.contains(&format!("(Ensembl {release})")),
-        format!("VEP gene names require the GRCh38 GENCODE annotation of Ensembl release {release}"),
+        format!(
+            "VEP gene names require the GRCh38 GENCODE annotation of Ensembl release {release}"
+        ),
     )?;
     Ok(names)
 }
@@ -368,10 +421,16 @@ fn vep_release_names(annotation: &str, release: &str) -> Result<ReleaseNames> {
 fn integer(value: &str) -> Result<i64> {
     crate::python_text::python_int(value)
         .and_then(|v| i64::try_from(v).ok())
-        .ok_or_else(|| error("ValueError", format!("invalid literal for int() with base 10: {}", repr(value))))
+        .ok_or_else(|| {
+            error(
+                "ValueError",
+                format!("invalid literal for int() with base 10: {}", repr(value)),
+            )
+        })
 }
 fn unsafe_symbol(name: &str) -> bool {
-    name.chars().any(|c| is_python_space(c) || matches!(c, '|' | ';' | ',' | '='))
+    name.chars()
+        .any(|c| is_python_space(c) || matches!(c, '|' | ';' | ',' | '='))
 }
 /// csv.writer(delimiter="\t", lineterminator="\n") quoting.
 fn csv_field(value: &str) -> String {
@@ -385,7 +444,12 @@ fn csv_field(value: &str) -> String {
 type ContextRow = (String, String, i64, i64, String, String);
 
 /// `gene_context(regions, gtf, destination, release_names)`
-fn gene_context(regions: &str, gtf: &str, destination: &str, release_names: Option<&ReleaseNames>) -> Result<Json> {
+fn gene_context(
+    regions: &str,
+    gtf: &str,
+    destination: &str,
+    release_names: Option<&ReleaseNames>,
+) -> Result<Json> {
     let mut genes: HashMap<String, (String, i64, i64, String, String, String)> = HashMap::new();
     let mut stable_ids: HashMap<String, Vec<String>> = HashMap::new();
     let mut description = String::new();
@@ -409,14 +473,35 @@ fn gene_context(regions: &str, gtf: &str, destination: &str, release_names: Opti
                 format!("Missing/duplicate GTF {key} at {number}"),
             )?;
         }
-        let value = |key: &str| attributes.iter().rev().find(|(k, _)| k == key).map(|(_, v)| v.clone());
-        let (gene_id, symbol) = (value("gene_id").unwrap_or_default(), value("gene_name").unwrap_or_default());
-        require(!gene_id.is_empty() && !symbol.is_empty(), format!("GTF gene lacks ID/name at {number}"))?;
-        require(!genes.contains_key(&gene_id), format!("Duplicate GTF gene ID: {gene_id}"))?;
+        let value = |key: &str| {
+            attributes
+                .iter()
+                .rev()
+                .find(|(k, _)| k == key)
+                .map(|(_, v)| v.clone())
+        };
+        let (gene_id, symbol) = (
+            value("gene_id").unwrap_or_default(),
+            value("gene_name").unwrap_or_default(),
+        );
+        require(
+            !gene_id.is_empty() && !symbol.is_empty(),
+            format!("GTF gene lacks ID/name at {number}"),
+        )?;
+        require(
+            !genes.contains_key(&gene_id),
+            format!("Duplicate GTF gene ID: {gene_id}"),
+        )?;
         genes.insert(
             gene_id.clone(),
-            (row[0].to_owned(), integer(row[3])?, integer(row[4])?, row[6].to_owned(), symbol,
-             value("gene_type").unwrap_or_default()),
+            (
+                row[0].to_owned(),
+                integer(row[3])?,
+                integer(row[4])?,
+                row[6].to_owned(),
+                symbol,
+                value("gene_type").unwrap_or_default(),
+            ),
         );
         if let Some(stable) = stable_id(&gene_id) {
             stable_ids.entry(stable).or_default().push(gene_id);
@@ -433,22 +518,33 @@ fn gene_context(regions: &str, gtf: &str, destination: &str, release_names: Opti
     let mut stable_matches = 0;
     let mut reader = Lines::open(regions)?;
     let header = reader.next()?.unwrap_or_default();
-    require(fields(&header) == REGION_COLUMNS, "Unexpected publisher scored-region schema")?;
+    require(
+        fields(&header) == REGION_COLUMNS,
+        "Unexpected publisher scored-region schema",
+    )?;
     while let Some(line) = reader.next()? {
         if line.trim_end_matches(['\r', '\n']).is_empty() {
             continue;
         }
         let row = fields(&line);
-        require(row.len() == REGION_COLUMNS.len(), "Malformed scored-region row")?;
+        require(
+            row.len() == REGION_COLUMNS.len(),
+            "Malformed scored-region row",
+        )?;
         let gene_id = row[0].to_owned();
-        require(!seen.contains(&gene_id), format!("Duplicate scored-region gene: {gene_id}"))?;
+        require(
+            !seen.contains(&gene_id),
+            format!("Duplicate scored-region gene: {gene_id}"),
+        )?;
         seen.insert(gene_id.clone());
         let mut resolved_id = gene_id.clone();
         if !genes.contains_key(&gene_id) {
             let candidates = stable_ids.get(&gene_id).cloned().unwrap_or_default();
             require(
                 candidates.len() == 1,
-                format!("No exact or unique GENCODE48 stable gene ID: {gene_id}; aliases/ambiguous versions are not allowed"),
+                format!(
+                    "No exact or unique GENCODE48 stable gene ID: {gene_id}; aliases/ambiguous versions are not allowed"
+                ),
             )?;
             resolved_id = candidates[0].clone();
             stable_matches += 1;
@@ -459,28 +555,46 @@ fn gene_context(regions: &str, gtf: &str, destination: &str, release_names: Opti
         )?;
         resolved_seen.insert(resolved_id.clone());
         let (chrom, start, end, strand, name, gene_type) = genes[&resolved_id].clone();
-        require(chrom == row[1] && strand == row[4], format!("Gene contig/strand mismatch: {gene_id}"))?;
-        require(gene_type == "protein_coding", format!("Scored region is not a GENCODE48 protein-coding gene: {gene_id}"))?;
+        require(
+            chrom == row[1] && strand == row[4],
+            format!("Gene contig/strand mismatch: {gene_id}"),
+        )?;
+        require(
+            gene_type == "protein_coding",
+            format!("Scored region is not a GENCODE48 protein-coding gene: {gene_id}"),
+        )?;
         let (raw_start, raw_end) = (integer(row[2])?, integer(row[3])?);
         require(
             raw_end == end && (raw_start == start || raw_start == start - 1),
             format!("Scored-region/GTF bounds differ: {gene_id}"),
         )?;
-        let convention = if raw_start == start { "1-based-closed" } else { "0-based-half-open" };
+        let convention = if raw_start == start {
+            "1-based-closed"
+        } else {
+            "0-based-half-open"
+        };
         if !conventions.contains(&convention) {
             conventions.push(convention);
         }
         require(
-            chrom_index(&chrom) != usize::MAX && (strand == "+" || strand == "-") && 0 < start && start <= end,
+            chrom_index(&chrom) != usize::MAX
+                && (strand == "+" || strand == "-")
+                && 0 < start
+                && start <= end,
             format!("Unsupported gene context: {gene_id}"),
         )?;
-        require(!unsafe_symbol(&name), format!("Gene symbol cannot be represented safely in the plugin: {gene_id}"))?;
+        require(
+            !unsafe_symbol(&name),
+            format!("Gene symbol cannot be represented safely in the plugin: {gene_id}"),
+        )?;
         let key = (chrom.clone(), name.clone());
         match symbols.iter_mut().find(|(k, _, _)| *k == key) {
             Some((_, prior_strand, count)) => {
                 require(
                     *prior_strand == strand,
-                    format!("Opposite-strand genes share a symbol on {chrom}: {name}; plugin matching would be ambiguous"),
+                    format!(
+                        "Opposite-strand genes share a symbol on {chrom}: {name}; plugin matching would be ambiguous"
+                    ),
                 )?;
                 *count += 1;
             }
@@ -488,7 +602,10 @@ fn gene_context(regions: &str, gtf: &str, destination: &str, release_names: Opti
         }
         rows.push((resolved_id, chrom, start, end, strand, name));
     }
-    require(!rows.is_empty() && conventions.len() == 1, "Empty or mixed-coordinate scored-region table")?;
+    require(
+        !rows.is_empty() && conventions.len() == 1,
+        "Empty or mixed-coordinate scored-region table",
+    )?;
     let genes_scored = rows.len();
     let mut release = Json::Null;
     if let Some(release_names) = release_names {
@@ -497,7 +614,8 @@ fn gene_context(regions: &str, gtf: &str, destination: &str, release_names: Opti
         // skipped, so no score moves to a different gene's transcripts.
         let (mut same, mut not_found, mut strand_differs) = (0, 0, 0);
         let (mut renamed, mut skipped) = (Vec::new(), Vec::new());
-        let held: HashSet<(String, String)> = rows.iter().map(|r| (r.1.clone(), r.5.clone())).collect();
+        let held: HashSet<(String, String)> =
+            rows.iter().map(|r| (r.1.clone(), r.5.clone())).collect();
         let mut proposed: BTreeMap<(String, String), Vec<ContextRow>> = BTreeMap::new();
         for row in &rows {
             let found = release_names.get(&(unversioned(&row.0), row.1.clone()));
@@ -511,18 +629,33 @@ fn gene_context(regions: &str, gtf: &str, destination: &str, release_names: Opti
             } else if *name == row.5 {
                 same += 1;
             } else {
-                proposed.entry((row.1.clone(), name.clone())).or_default().push(row.clone());
+                proposed
+                    .entry((row.1.clone(), name.clone()))
+                    .or_default()
+                    .push(row.clone());
             }
         }
-        let triple = |owner: &ContextRow, name: &str| Json::Array(vec![text(&owner.0), text(&owner.5), text(name)]);
+        let triple = |owner: &ContextRow, name: &str| {
+            Json::Array(vec![text(&owner.0), text(&owner.5), text(name)])
+        };
         let mut added = Vec::new();
         for ((chrom, name), owners) in proposed {
-            if owners.len() > 1 || held.contains(&(chrom.clone(), name.clone())) || unsafe_symbol(&name) {
+            if owners.len() > 1
+                || held.contains(&(chrom.clone(), name.clone()))
+                || unsafe_symbol(&name)
+            {
                 skipped.extend(owners.iter().map(|owner| triple(owner, &name)));
                 continue;
             }
             let owner = &owners[0];
-            added.push((owner.0.clone(), owner.1.clone(), owner.2, owner.3, owner.4.clone(), name.clone()));
+            added.push((
+                owner.0.clone(),
+                owner.1.clone(),
+                owner.2,
+                owner.3,
+                owner.4.clone(),
+                name.clone(),
+            ));
             renamed.push(triple(owner, &name));
         }
         rows.extend(added);
@@ -539,8 +672,17 @@ fn gene_context(regions: &str, gtf: &str, destination: &str, release_names: Opti
     });
     let mut body = String::from("gene_id\tchrom\tgene_start\tgene_end\tstrand\tgene_name\n");
     for row in &rows {
-        body.push_str(&[csv_field(&row.0), csv_field(&row.1), row.2.to_string(), row.3.to_string(),
-                        csv_field(&row.4), csv_field(&row.5)].join("\t"));
+        body.push_str(
+            &[
+                csv_field(&row.0),
+                csv_field(&row.1),
+                row.2.to_string(),
+                row.3.to_string(),
+                csv_field(&row.4),
+                csv_field(&row.5),
+            ]
+            .join("\t"),
+        );
         body.push('\n');
     }
     let mut output = OpenOptions::new()
@@ -548,20 +690,45 @@ fn gene_context(regions: &str, gtf: &str, destination: &str, release_names: Opti
         .create_new(true)
         .open(native(Path::new(destination))?)
         .map_err(|cause| os_error(cause, Path::new(destination), None))?;
-    output.write_all(body.as_bytes()).map_err(|cause| os_error(cause, Path::new(destination), None))?;
+    output
+        .write_all(body.as_bytes())
+        .map_err(|cause| os_error(cause, Path::new(destination), None))?;
     Ok(object(vec![
         ("genes", Json::Int(genes_scored as i128)),
         ("context_rows", Json::Int(rows.len() as i128)),
         ("vep_release_names", release),
         ("source_coordinates", text(conventions[0])),
         ("context_coordinates", text("1-based-closed")),
-        ("gene_id_matching", text(if stable_matches > 0 { "unique-GENCODE48-stable-ID-with-exact-context" } else { "exact" })),
+        (
+            "gene_id_matching",
+            text(if stable_matches > 0 {
+                "unique-GENCODE48-stable-ID-with-exact-context"
+            } else {
+                "exact"
+            }),
+        ),
         ("stable_id_matches", Json::Int(stable_matches)),
         ("versioned_gene_ids_retained", Json::Bool(true)),
-        ("same_strand_symbol_groups", Json::Int(symbols.iter().filter(|(_, _, n)| *n > 1).count() as i128)),
-        ("symbol_projection", text("One unchanged prediction per distinct symbol per native row, under the GENCODE48 name and, when it differs, the VEP release's name of the same gene ID; all same-strand gene IDs/intervals retained in context. Opposite-strand same-symbol contexts rejected.")),
-        ("join", text("source variant position and model strand within verified scored-gene intervals")),
-        ("scope", text("Adapter-derived gene association, not a publisher gene-conditioned prediction. Predicted sites may lie outside the associated gene; no effects are filtered.")),
+        (
+            "same_strand_symbol_groups",
+            Json::Int(symbols.iter().filter(|(_, _, n)| *n > 1).count() as i128),
+        ),
+        (
+            "symbol_projection",
+            text(
+                "One unchanged prediction per distinct symbol per native row, under the GENCODE48 name and, when it differs, the VEP release's name of the same gene ID; all same-strand gene IDs/intervals retained in context. Opposite-strand same-symbol contexts rejected.",
+            ),
+        ),
+        (
+            "join",
+            text("source variant position and model strand within verified scored-gene intervals"),
+        ),
+        (
+            "scope",
+            text(
+                "Adapter-derived gene association, not a publisher gene-conditioned prediction. Predicted sites may lie outside the associated gene; no effects are filtered.",
+            ),
+        ),
     ]))
 }
 
@@ -600,14 +767,24 @@ fn which(name: &str) -> Option<String> {
         .map(|candidate| candidate.display().to_string())
 }
 
-fn called_process_error(arguments: &[String], status: std::process::ExitStatus) -> Box<dyn std::error::Error> {
-    let shown = arguments.iter().map(|a| repr(a)).collect::<Vec<_>>().join(", ");
+fn called_process_error(
+    arguments: &[String],
+    status: std::process::ExitStatus,
+) -> Box<dyn std::error::Error> {
+    let shown = arguments
+        .iter()
+        .map(|a| repr(a))
+        .collect::<Vec<_>>()
+        .join(", ");
     let outcome = match (status.code(), status.signal()) {
         (Some(code), _) => format!("returned non-zero exit status {code}"),
         (None, Some(signal)) => format!("died with {}", signal_repr(signal)),
         (None, None) => format!("ended with {status}"),
     };
-    error("CalledProcessError", format!("Command '[{shown}]' {outcome}."))
+    error(
+        "CalledProcessError",
+        format!("Command '[{shown}]' {outcome}."),
+    )
 }
 
 /// `subprocess.check_output(arguments, text=True)` (stderr as given).
@@ -635,7 +812,11 @@ fn run(arguments: &[String]) -> Result<()> {
         .args(&arguments[1..])
         .status()
         .map_err(|cause| os_error(cause, Path::new(&arguments[0]), None))?;
-    if status.success() { Ok(()) } else { Err(called_process_error(arguments, status)) }
+    if status.success() {
+        Ok(())
+    } else {
+        Err(called_process_error(arguments, status))
+    }
 }
 
 /// Children of one conversion, ended as the script's `terminate` does.
@@ -694,7 +875,21 @@ fn convert_kind(
             .map_err(|cause| os_error(cause, Path::new(&tools["gzip"]), None))?;
         let source_output = source.stdout.take().expect("piped stdout");
         let mut arguments = converter[1..].to_vec();
-        arguments.extend(["--genes", context, "--chrom", &item.chrom, "--kind", kind, "--input", "-", "--output", "-"].map(str::to_owned));
+        arguments.extend(
+            [
+                "--genes",
+                context,
+                "--chrom",
+                &item.chrom,
+                "--kind",
+                kind,
+                "--input",
+                "-",
+                "--output",
+                "-",
+            ]
+            .map(str::to_owned),
+        );
         if index > 0 {
             arguments.push("--no-header".into());
         }
@@ -715,13 +910,29 @@ fn convert_kind(
             .map_err(|cause| os_error(cause, Path::new(&converter[0]), None))?;
         let diagnostic = String::from_utf8_lossy(&finished.stderr).into_owned();
         if !finished.status.success() {
-            let tail: String = diagnostic.chars().rev().take(4096).collect::<Vec<_>>().into_iter().rev().collect();
-            return Err(error("ValueError", format!("Rust projection failed: {tail}")));
+            let tail: String = diagnostic
+                .chars()
+                .rev()
+                .take(4096)
+                .collect::<Vec<_>>()
+                .into_iter()
+                .rev()
+                .collect();
+            return Err(error(
+                "ValueError",
+                format!("Rust projection failed: {tail}"),
+            ));
         }
         let source = processes.0.last_mut().expect("source process");
-        let decompressed = source.wait().map_err(|cause| os_error(cause, Path::new(&tools["gzip"]), None))?;
-        require(decompressed.success(), format!("Source decompression failed: {}", item.path))?;
-        let report = json_text::parse(&diagnostic, false).map_err(|m| error("JSONDecodeError", m))?;
+        let decompressed = source
+            .wait()
+            .map_err(|cause| os_error(cause, Path::new(&tools["gzip"]), None))?;
+        require(
+            decompressed.success(),
+            format!("Source decompression failed: {}", item.path),
+        )?;
+        let report =
+            json_text::parse(&diagnostic, false).map_err(|m| error("JSONDecodeError", m))?;
         let field = |key: &str| report.get(key).cloned().ok_or_else(|| key_error(key));
         require(
             matches!(field("module")?, Json::Str(ref v) if v == "spliceai2-vcf")
@@ -735,11 +946,16 @@ fn convert_kind(
                 _ => Err(error("TypeError", "'>' not supported")),
             }
         };
-        require(count("input_rows")? > 0 && count("output_records")? >= count("input_rows")?, "Empty/incomplete projection")?;
+        require(
+            count("input_rows")? > 0 && count("output_records")? >= count("input_rows")?,
+            "Empty/incomplete projection",
+        )?;
         statistics.push(report);
     }
     drop(compressor_input);
-    let status = processes.0[0].wait().map_err(|cause| os_error(cause, Path::new(&bgzip), None))?;
+    let status = processes.0[0]
+        .wait()
+        .map_err(|cause| os_error(cause, Path::new(&bgzip), None))?;
     require(status.success(), "BGZF compression failed")?;
     let tabix = tools["tabix"].clone();
     run(&[tabix.clone(), "-p".into(), "vcf".into(), target.into()])?;
@@ -762,9 +978,17 @@ fn convert_kind(
     }
     let first = first.ok_or_else(|| error("StopIteration", ""))?;
     let row = first.split('\t').collect::<Vec<_>>();
-    let region = format!("{}:{}-{}", row[0], row.get(1).unwrap_or(&""), row.get(1).unwrap_or(&""));
+    let region = format!(
+        "{}:{}-{}",
+        row[0],
+        row.get(1).unwrap_or(&""),
+        row.get(1).unwrap_or(&"")
+    );
     let query = check_output(&[tabix, target.into(), region], false)?;
-    require(query.lines().any(|line| line == first), "Nonempty VCF/index query did not recover the first record")?;
+    require(
+        query.lines().any(|line| line == first),
+        "Nonempty VCF/index query did not recover the first record",
+    )?;
     Ok(statistics)
 }
 
@@ -793,12 +1017,16 @@ fn no_symlink_ancestors(path: &str) -> Result<bool> {
 }
 
 fn prepare(options: &Options) -> Result<Json> {
-    require(matches!(options.assembly.as_str(), "GRCh38" | "hg38"), "SpliceAI2 route supports GRCh38/hg38 only; hg19 remains v1")?;
+    require(
+        matches!(options.assembly.as_str(), "GRCh38" | "hg38"),
+        "SpliceAI2 route supports GRCh38/hg38 only; hg19 remains v1",
+    )?;
     require(options.threads > 0, "threads must be positive")?;
     let manifest_path = complete_file(&options.manifest)?;
     let manifest_before = identity(&manifest_path)?;
     let manifest_text = crate::installer_config_paths::files::read_text(Path::new(&manifest_path))?;
-    let manifest = json_text::parse(&manifest_text, false).map_err(|m| error("JSONDecodeError", m))?;
+    let manifest =
+        json_text::parse(&manifest_text, false).map_err(|m| error("JSONDecodeError", m))?;
     let manifest_sha = digest(&manifest_path)?;
     let get = |key: &str| manifest.get(key).cloned().unwrap_or(Json::Null);
     let is_text = |key: &str, value: &str| matches!(get(key), Json::Str(ref v) if v == value);
@@ -809,7 +1037,9 @@ fn prepare(options: &Options) -> Result<Json> {
         "A confirmed, complete source manifest is required; downloading inventories are not inputs",
     )?;
     require(
-        is_text("resource", "SpliceAI2") && is_text("version", "2.0") && is_text("assembly", "GRCh38")
+        is_text("resource", "SpliceAI2")
+            && is_text("version", "2.0")
+            && is_text("assembly", "GRCh38")
             && is_text("source_revision", REVISION),
         "Wrong source version/assembly/revision",
     )?;
@@ -828,28 +1058,51 @@ fn prepare(options: &Options) -> Result<Json> {
     };
     let mut pairs = Vec::new();
     for item in &files {
-        let kind = item.get("kind").and_then(Json::as_str).ok_or_else(|| key_error("kind"))?;
-        let chrom = item.get("chrom").and_then(Json::as_str).ok_or_else(|| key_error("chrom"))?;
+        let kind = item
+            .get("kind")
+            .and_then(Json::as_str)
+            .ok_or_else(|| key_error("kind"))?;
+        let chrom = item
+            .get("chrom")
+            .and_then(Json::as_str)
+            .ok_or_else(|| key_error("chrom"))?;
         pairs.push((kind.to_owned(), chrom.to_owned()));
     }
     let unique: HashSet<_> = pairs.iter().cloned().collect();
     require(
-        unique.len() == pairs.len() && unique.iter().all(|(k, c)| published(k, c)) && !pairs.is_empty(),
+        unique.len() == pairs.len()
+            && unique.iter().all(|(k, c)| published(k, c))
+            && !pairs.is_empty(),
         "Duplicate/unsupported source shards",
     )?;
-    require(unique.len() == 47 || options.validation_subset, "Full cache requires all 47 published shards; chrY indels are not published")?;
+    require(
+        unique.len() == 47 || options.validation_subset,
+        "Full cache requires all 47 published shards; chrY indels are not published",
+    )?;
     let kinds: HashSet<&str> = pairs.iter().map(|(k, _)| k.as_str()).collect();
-    require(!options.validation_subset || kinds.len() == 2, "Subset validation requires both variant types")?;
+    require(
+        !options.validation_subset || kinds.len() == 2,
+        "Subset validation requires both variant types",
+    )?;
     let driver = std::env::current_exe()
         .map_err(|cause| os_error(cause, Path::new("priva"), None))?
         .display()
         .to_string();
-    let mut identities = vec![(manifest_path.clone(), manifest_before), (driver.clone(), identity(&driver)?)];
+    let mut identities = vec![
+        (manifest_path.clone(), manifest_before),
+        (driver.clone(), identity(&driver)?),
+    ];
     let driver_sha = digest(&driver)?;
     for (item, (kind, chrom)) in files.iter().zip(&pairs) {
         let expected = format!("SpliceAI2_GRCh38_{kind}_{chrom}.tsv.gz");
-        let path = item.get("path").and_then(Json::as_str).ok_or_else(|| key_error("path"))?;
-        require(path.rsplit('/').next() == Some(expected.as_str()), format!("Unexpected source name: {path}"))?;
+        let path = item
+            .get("path")
+            .and_then(Json::as_str)
+            .ok_or_else(|| key_error("path"))?;
+        require(
+            path.rsplit('/').next() == Some(expected.as_str()),
+            format!("Unexpected source name: {path}"),
+        )?;
         complete_file(&crate::installer_prerequisites::paths::pathlib(path))?;
     }
     let regions = verified_file(&get("scored_regions"), &mut identities)?;
@@ -857,7 +1110,11 @@ fn prepare(options: &Options) -> Result<Json> {
     let vep_annotation = verified_file(&get("vep_gene_annotation"), &mut identities)?;
     let plugin_item = get("vep_spliceai_plugin");
     let plugin_path = verified_file(&plugin_item, &mut identities)?;
-    let plugin_sha = plugin_item.get("sha256").and_then(Json::as_str).unwrap_or_default().to_owned();
+    let plugin_sha = plugin_item
+        .get("sha256")
+        .and_then(Json::as_str)
+        .unwrap_or_default()
+        .to_owned();
     let Some((plugin_release, allele_matching)) = qualified_plugin(&plugin_sha) else {
         return Err(error("ValueError", "Unqualified official plugin revision"));
     };
@@ -870,7 +1127,8 @@ fn prepare(options: &Options) -> Result<Json> {
     let mut tools: HashMap<&str, String> = HashMap::new();
     let mut tool_identities = Vec::new();
     for name in ["gzip", "bgzip", "tabix"] {
-        let found = which(name).ok_or_else(|| error("ValueError", format!("Missing mature command tool: {name}")))?;
+        let found = which(name)
+            .ok_or_else(|| error("ValueError", format!("Missing mature command tool: {name}")))?;
         let path = crate::python_io::resolve_strict(Path::new(&found))
             .map_err(|(cause, at)| os_error(cause, &at, None))?
             .display()
@@ -883,31 +1141,54 @@ fn prepare(options: &Options) -> Result<Json> {
             .next()
             .unwrap_or_default()
             .to_owned();
-        tool_identities.push((name.to_owned(), object(vec![
-            ("path", text(&path)),
-            ("sha256", text(&digest(&path)?)),
-            ("version", text(&version)),
-        ])));
+        tool_identities.push((
+            name.to_owned(),
+            object(vec![
+                ("path", text(&path)),
+                ("sha256", text(&digest(&path)?)),
+                ("version", text(&version)),
+            ]),
+        ));
     }
     let folder = absolute(Path::new(&options.output_dir))?;
     let receipt_path = absolute(Path::new(&options.receipt))?;
     for path in [&folder, &receipt_path] {
         require(
-            !path.split('/').any(|part| part.to_lowercase().contains(".partial") || part == ".."),
+            !path
+                .split('/')
+                .any(|part| part.to_lowercase().contains(".partial") || part == ".."),
             "Incomplete/noncanonical output path",
         )?;
-        require(no_symlink_ancestors(path)?, "Output paths must not traverse symlinks")?;
+        require(
+            no_symlink_ancestors(path)?,
+            "Output paths must not traverse symlinks",
+        )?;
     }
     let receipt_parent = crate::installer_prerequisites::paths::parent(&receipt_path);
     let resolved = |path: &str| -> Result<String> {
-        Ok(crate::installer_config_paths::files::resolve(Path::new(path))?.display().to_string())
+        Ok(
+            crate::installer_config_paths::files::resolve(Path::new(path))?
+                .display()
+                .to_string(),
+        )
     };
-    require(resolved(&receipt_parent)? == resolved(&folder)?, "Receipt must be directly inside the output directory")?;
+    require(
+        resolved(&receipt_parent)? == resolved(&folder)?,
+        "Receipt must be directly inside the output directory",
+    )?;
     let (converter, mut converter_info) = match &options.converter_bin {
         Some(name) => {
-            let found = which(name).ok_or_else(|| error("ValueError", "The explicit --converter-bin installation tool is not executable"))?;
+            let found = which(name).ok_or_else(|| {
+                error(
+                    "ValueError",
+                    "The explicit --converter-bin installation tool is not executable",
+                )
+            })?;
             let path = complete_file(&absolute(Path::new(&found))?)?;
-            (vec![path.clone(), "project".to_owned()], vec![("role".to_owned(), text("explicit_converter_override"))])
+            (
+                vec![path.clone(), "project".to_owned()],
+                vec![("role".to_owned(), text("explicit_converter_override"))],
+            )
         }
         None => (
             vec![driver.clone(), "spliceai2-vcf".to_owned()],
@@ -922,7 +1203,9 @@ fn prepare(options: &Options) -> Result<Json> {
     let mut final_paths = Vec::new();
     for kind in ["snv", "indel"] {
         for suffix in ["", ".tbi"] {
-            final_paths.push(format!("{folder}/SpliceAI2_GRCh38.{kind}.vep.vcf.gz{suffix}"));
+            final_paths.push(format!(
+                "{folder}/SpliceAI2_GRCh38.{kind}.vep.vcf.gz{suffix}"
+            ));
         }
     }
     final_paths.push(format!("{folder}/{CONTEXT_NAME}"));
@@ -933,11 +1216,21 @@ fn prepare(options: &Options) -> Result<Json> {
         .create(true)
         .open(native(Path::new(&lock_path))?)
         .map_err(|cause| os_error(cause, Path::new(&lock_path), None))?;
-    let _guard = crate::file_lock::ExclusiveLock::acquire(lock, crate::file_lock::Wait::Nonblocking)
-        .map_err(|cause| error("BlockingIOError", format!("[Errno {}] Resource temporarily unavailable", cause.raw_os_error().unwrap_or(11))))?;
+    let _guard =
+        crate::file_lock::ExclusiveLock::acquire(lock, crate::file_lock::Wait::Nonblocking)
+            .map_err(|cause| {
+                error(
+                    "BlockingIOError",
+                    format!(
+                        "[Errno {}] Resource temporarily unavailable",
+                        cause.raw_os_error().unwrap_or(11)
+                    ),
+                )
+            })?;
     for path in &final_paths {
         require(
-            !crate::installer_config_paths::files::exists(Path::new(path))? && !is_link(Path::new(path))?,
+            !crate::installer_config_paths::files::exists(Path::new(path))?
+                && !is_link(Path::new(path))?,
             "Refusing to replace existing prepared outputs",
         )?;
     }
@@ -948,34 +1241,74 @@ fn prepare(options: &Options) -> Result<Json> {
     let mut entries: Vec<(String, Entry)> = Vec::new();
     for (item, (kind, chrom)) in files.iter().zip(&pairs) {
         let resolved = verified_file(item, &mut identities)?;
-        let path = item.get("path").and_then(Json::as_str).unwrap_or_default().to_owned();
-        entries.push((kind.clone(), Entry { chrom: chrom.clone(), path, resolved }));
+        let path = item
+            .get("path")
+            .and_then(Json::as_str)
+            .unwrap_or_default()
+            .to_owned();
+        entries.push((
+            kind.clone(),
+            Entry {
+                chrom: chrom.clone(),
+                path,
+                resolved,
+            },
+        ));
     }
     let (mut outputs, mut statistics) = (Vec::new(), Vec::new());
     for kind in ["snv", "indel"] {
-        let mut selected: Vec<&Entry> = entries.iter().filter(|(k, _)| k == kind).map(|(_, e)| e).collect();
+        let mut selected: Vec<&Entry> = entries
+            .iter()
+            .filter(|(k, _)| k == kind)
+            .map(|(_, e)| e)
+            .collect();
         selected.sort_by_key(|entry| chrom_index(&entry.chrom));
         let selected: Vec<Entry> = selected
             .into_iter()
-            .map(|e| Entry { chrom: e.chrom.clone(), path: e.path.clone(), resolved: e.resolved.clone() })
+            .map(|e| Entry {
+                chrom: e.chrom.clone(),
+                path: e.path.clone(),
+                resolved: e.resolved.clone(),
+            })
             .collect();
         let name = format!("SpliceAI2_GRCh38.{kind}.vep.vcf.gz");
         let target = format!("{}/{name}", stage.0);
-        let report = convert_kind(kind, &selected, &context, &target, &converter, options.threads, &tools)?;
+        let report = convert_kind(
+            kind,
+            &selected,
+            &context,
+            &target,
+            &converter,
+            options.threads,
+            &tools,
+        )?;
         statistics.push((kind.to_owned(), Json::Array(report)));
-        outputs.push((kind.to_owned(), object(vec![
-            ("path", text(&format!("{folder}/{name}"))),
-            ("index_path", text(&format!("{folder}/{name}.tbi"))),
-            ("bytes", Json::Int(metadata(Path::new(&target))?.len() as i128)),
-            ("sha256", text(&digest(&target)?)),
-            ("index_sha256", text(&digest(&format!("{target}.tbi"))?)),
-        ])));
+        outputs.push((
+            kind.to_owned(),
+            object(vec![
+                ("path", text(&format!("{folder}/{name}"))),
+                ("index_path", text(&format!("{folder}/{name}.tbi"))),
+                (
+                    "bytes",
+                    Json::Int(metadata(Path::new(&target))?.len() as i128),
+                ),
+                ("sha256", text(&digest(&target)?)),
+                ("index_sha256", text(&digest(&format!("{target}.tbi"))?)),
+            ]),
+        ));
     }
     for (path, before) in &identities {
-        require(identity(path)? == *before, format!("Input changed while preparing cache: {path}"))?;
+        require(
+            identity(path)? == *before,
+            format!("Input changed while preparing cache: {path}"),
+        )?;
     }
     let source_files = Json::Array(files.clone());
-    let status = if options.validation_subset { "validated_subset_annotation_only" } else { "prepared_annotation_only" };
+    let status = if options.validation_subset {
+        "validated_subset_annotation_only"
+    } else {
+        "prepared_annotation_only"
+    };
     let mut context_info = vec![
         ("path".to_owned(), text(&format!("{folder}/{CONTEXT_NAME}"))),
         ("sha256".to_owned(), text(&digest(&context)?)),
@@ -989,7 +1322,14 @@ fn prepare(options: &Options) -> Result<Json> {
         ("version", text("2.0")),
         ("assembly", text("GRCh38")),
         ("status", text(status)),
-        ("coverage", text(if options.validation_subset { "validation_subset" } else { "complete_published" })),
+        (
+            "coverage",
+            text(if options.validation_subset {
+                "validation_subset"
+            } else {
+                "complete_published"
+            }),
+        ),
         ("scientific_qualified", Json::Bool(false)),
         ("source_revision", text(REVISION)),
         ("source_manifest_sha256", text(&manifest_sha)),
@@ -1004,17 +1344,59 @@ fn prepare(options: &Options) -> Result<Json> {
         ("converter", Json::Object(converter_info)),
         ("tools", Json::Object(tool_identities)),
         ("driver_sha256", text(&driver_sha)),
-        ("slurm_job_id", std::env::var("SLURM_JOB_ID").map_or(Json::Null, |v| text(&v))),
-        ("thresholds", object(vec![("high_recall", Json::Float(0.1)), ("balanced", Json::Float(0.25)), ("high_precision", Json::Float(0.5))])),
-        ("projection", text("Unchanged top0 site delta/distance strings only, one allele/gene per VCF record. No cutoff filtering, score recomputation, masking, normalization or strand flipping. Original 84-column tables retain all top3/junction/reference/alternate/summary values.")),
-        ("coverage_limits", text("GENCODE48 protein-coding scored regions; population-observed indels; no published chrY indel shard; the plugin cannot score transcripts whose gene has no name in the VEP cache. Missing coverage is not zero score.")),
-        ("license", object(vec![
-            ("source", text(&format!("https://huggingface.co/datasets/illumina-ai/SpliceAI2-data/tree/{REVISION}"))),
-            ("note", text("Original and derived score resources retain Illumina SpliceAI2 terms; no redistribution or public service is enabled by this adapter.")),
-        ])),
-        ("activation", text("Preparation only. Legacy PriVA ACMG/ClinVar/SpliceVault and CADD v1 feature contracts are not qualified for substitution.")),
+        (
+            "slurm_job_id",
+            std::env::var("SLURM_JOB_ID").map_or(Json::Null, |v| text(&v)),
+        ),
+        (
+            "thresholds",
+            object(vec![
+                ("high_recall", Json::Float(0.1)),
+                ("balanced", Json::Float(0.25)),
+                ("high_precision", Json::Float(0.5)),
+            ]),
+        ),
+        (
+            "projection",
+            text(
+                "Unchanged top0 site delta/distance strings only, one allele/gene per VCF record. No cutoff filtering, score recomputation, masking, normalization or strand flipping. Original 84-column tables retain all top3/junction/reference/alternate/summary values.",
+            ),
+        ),
+        (
+            "coverage_limits",
+            text(
+                "GENCODE48 protein-coding scored regions; population-observed indels; no published chrY indel shard; the plugin cannot score transcripts whose gene has no name in the VEP cache. Missing coverage is not zero score.",
+            ),
+        ),
+        (
+            "license",
+            object(vec![
+                (
+                    "source",
+                    text(&format!(
+                        "https://huggingface.co/datasets/illumina-ai/SpliceAI2-data/tree/{REVISION}"
+                    )),
+                ),
+                (
+                    "note",
+                    text(
+                        "Original and derived score resources retain Illumina SpliceAI2 terms; no redistribution or public service is enabled by this adapter.",
+                    ),
+                ),
+            ]),
+        ),
+        (
+            "activation",
+            text(
+                "Preparation only. Legacy PriVA ACMG/ClinVar/SpliceVault and CADD v1 feature contracts are not qualified for substitution.",
+            ),
+        ),
     ]);
-    let receipt_name = receipt_path.rsplit('/').next().unwrap_or_default().to_owned();
+    let receipt_name = receipt_path
+        .rsplit('/')
+        .next()
+        .unwrap_or_default()
+        .to_owned();
     let staged_receipt = format!("{}/{receipt_name}", stage.0);
     require(
         !final_paths[..final_paths.len() - 1]
@@ -1022,8 +1404,14 @@ fn prepare(options: &Options) -> Result<Json> {
             .any(|path| path.rsplit('/').next() == Some(receipt_name.as_str())),
         "Receipt name collides with an output",
     )?;
-    let body = json_text::dumps_with_options(&receipt, DumpsOptions { indent: Some(2), ..DumpsOptions::default() })
-        .map_err(|m| error("ValueError", m))?;
+    let body = json_text::dumps_with_options(
+        &receipt,
+        DumpsOptions {
+            indent: Some(2),
+            ..DumpsOptions::default()
+        },
+    )
+    .map_err(|m| error("ValueError", m))?;
     fs::write(native(Path::new(&staged_receipt))?, format!("{body}\n"))
         .map_err(|cause| os_error(cause, Path::new(&staged_receipt), None))?;
     // Receipt is published last; incomplete sets never have a readiness receipt.
@@ -1033,7 +1421,10 @@ fn prepare(options: &Options) -> Result<Json> {
     }
     rename(Path::new(&staged_receipt), Path::new(&receipt_path))?;
     drop(stage);
-    let printed = object(vec![("status", text(status)), ("receipt", text(&receipt_path))]);
+    let printed = object(vec![
+        ("status", text(status)),
+        ("receipt", text(&receipt_path)),
+    ]);
     say(&json_text::dumps(&printed, false).map_err(|m| error("ValueError", m))?);
     Ok(receipt)
 }
@@ -1047,9 +1438,15 @@ impl Building {
             .map_err(|_| error("ValueError", "embedded null byte"))?
             .into_bytes_with_nul();
         if unsafe { libc::mkdtemp(raw.as_mut_ptr().cast()) }.is_null() {
-            return Err(os_error(io::Error::last_os_error(), Path::new(&template), None));
+            return Err(os_error(
+                io::Error::last_os_error(),
+                Path::new(&template),
+                None,
+            ));
         }
-        Ok(Self(String::from_utf8_lossy(&raw[..raw.len() - 1]).into_owned()))
+        Ok(Self(
+            String::from_utf8_lossy(&raw[..raw.len() - 1]).into_owned(),
+        ))
     }
 }
 impl Drop for Building {
@@ -1062,7 +1459,9 @@ impl Drop for Building {
 
 pub(crate) fn dispatch(args: &[String]) -> Result<()> {
     let Some(command) = args.first() else {
-        return Err(invalid(format!("the following arguments are required: command\n{HELP}")));
+        return Err(invalid(format!(
+            "the following arguments are required: command\n{HELP}"
+        )));
     };
     if matches!(command.as_str(), "-h" | "--help") {
         println!("{HELP}");
@@ -1070,11 +1469,28 @@ pub(crate) fn dispatch(args: &[String]) -> Result<()> {
     }
     let (names, flags, required): (&[&str], &[&str], &[&str]) = match command.as_str() {
         "prepare" => (
-            &["manifest", "assembly", "output-dir", "receipt", "converter-bin", "threads"],
+            &[
+                "manifest",
+                "assembly",
+                "output-dir",
+                "receipt",
+                "converter-bin",
+                "threads",
+            ],
             &["validation-subset"],
             &["manifest", "assembly", "output-dir", "receipt"],
         ),
-        "gene-context" => (&["regions", "gtf", "output", "vep-annotation", "ensembl-release"], &[], &["regions", "gtf", "output"]),
+        "gene-context" => (
+            &[
+                "regions",
+                "gtf",
+                "output",
+                "vep-annotation",
+                "ensembl-release",
+            ],
+            &[],
+            &["regions", "gtf", "output"],
+        ),
         _ => {
             return Err(invalid(format!(
                 "argument command: invalid choice: {} (choose from 'prepare', 'gene-context')",
@@ -1082,7 +1498,9 @@ pub(crate) fn dispatch(args: &[String]) -> Result<()> {
             )));
         }
     };
-    let Some(occurrences) = parse_long_option_occurrences(&args[1..], names, flags).map_err(invalid)? else {
+    let Some(occurrences) =
+        parse_long_option_occurrences(&args[1..], names, flags).map_err(invalid)?
+    else {
         println!("{HELP}");
         return Ok(());
     };
@@ -1096,18 +1514,29 @@ pub(crate) fn dispatch(args: &[String]) -> Result<()> {
         }
     }
     require_options(&values, required).map_err(invalid)?;
-    let path = |name: &str| values.get(name).map(|v| crate::installer_prerequisites::paths::pathlib(v));
+    let path = |name: &str| {
+        values
+            .get(name)
+            .map(|v| crate::installer_prerequisites::paths::pathlib(v))
+    };
     if command == "gene-context" {
         let threads_free = || -> Result<Json> {
             let annotation = path("vep-annotation");
             let release = values.get("ensembl-release");
-            require(annotation.is_none() == release.is_none(), "--vep-annotation and --ensembl-release go together")?;
+            require(
+                annotation.is_none() == release.is_none(),
+                "--vep-annotation and --ensembl-release go together",
+            )?;
             let names = match (annotation, release) {
                 (Some(annotation), Some(release)) => Some(vep_release_names(&annotation, release)?),
                 _ => None,
             };
-            gene_context(&path("regions").unwrap_or_default(), &path("gtf").unwrap_or_default(),
-                         &path("output").unwrap_or_default(), names.as_ref())
+            gene_context(
+                &path("regions").unwrap_or_default(),
+                &path("gtf").unwrap_or_default(),
+                &path("output").unwrap_or_default(),
+                names.as_ref(),
+            )
         };
         let result = builder_error::finish(threads_free())?;
         say(&json_text::dumps(&result, false).map_err(|m| error("ValueError", m))?);
@@ -1117,7 +1546,12 @@ pub(crate) fn dispatch(args: &[String]) -> Result<()> {
         None => 1,
         Some(value) => crate::python_text::python_int(value)
             .and_then(|v| i64::try_from(v).ok())
-            .ok_or_else(|| invalid(format!("argument --threads: invalid int value: {}", repr(value))))?,
+            .ok_or_else(|| {
+                invalid(format!(
+                    "argument --threads: invalid int value: {}",
+                    repr(value)
+                ))
+            })?,
     };
     let options = Options {
         manifest: path("manifest").unwrap_or_default(),
@@ -1139,18 +1573,30 @@ mod tests {
     fn identifiers_follow_the_script_patterns() {
         assert_eq!(unversioned("ENSG00000000003.15"), "ENSG00000000003");
         assert_eq!(unversioned("ENSG00000182378.15_PAR_Y"), "ENSG00000182378");
-        assert_eq!(unversioned("ENSG00000182378_PAR_Y"), "ENSG00000182378_PAR_Y");
-        assert_eq!(stable_id("ENSG00000182378.15_PAR_Y").as_deref(), Some("ENSG00000182378_PAR_Y"));
+        assert_eq!(
+            unversioned("ENSG00000182378_PAR_Y"),
+            "ENSG00000182378_PAR_Y"
+        );
+        assert_eq!(
+            stable_id("ENSG00000182378.15_PAR_Y").as_deref(),
+            Some("ENSG00000182378_PAR_Y")
+        );
         assert_eq!(stable_id("ENSG0000018237.15"), None);
         assert_eq!(unquote("A%2CB%3Dx%"), "A,B=x%");
     }
 
     #[test]
     fn gtf_attributes_follow_the_findall_pattern() {
-        let found = gtf_attributes(r#"gene_id "ENSG1.1"; gene_type "protein_coding"; gene_name "A1BG"; level 2; tag "x""#);
+        let found = gtf_attributes(
+            r#"gene_id "ENSG1.1"; gene_type "protein_coding"; gene_name "A1BG"; level 2; tag "x""#,
+        );
         assert_eq!(
             found,
-            [("gene_id".into(), "ENSG1.1".into()), ("gene_type".into(), "protein_coding".into()), ("gene_name".into(), "A1BG".into())]
+            [
+                ("gene_id".into(), "ENSG1.1".into()),
+                ("gene_type".into(), "protein_coding".into()),
+                ("gene_name".into(), "A1BG".into())
+            ]
         );
     }
 }

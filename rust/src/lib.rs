@@ -98,6 +98,7 @@ mod python_subprocess;
 mod python_text;
 mod python_unicode;
 mod python_url;
+mod reference_resources;
 mod rust_cache;
 mod sha256;
 pub mod spliceai2;

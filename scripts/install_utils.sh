@@ -3716,7 +3716,10 @@ function priva_prepare_reference_resources() {
     local config_file=${1}
     local scope=${2}
     # The helper quotes paths and saves them only after all inputs are ready.
-    python "${SCRIPT_DIR}/reference_resources.py" install "${config_file}" \
+    # main_install and the GoFCards build reach this after PriVA_rust_install
+    # records priva_binary.
+    priva_resolve_binary "$config_file" || return 1
+    "${PRIVA_BIN}" reference-resources install "${config_file}" \
         --data-dir "${DATA_DIR}" --scope "${scope}" --write-config --use-cache-root
 }
 
@@ -4399,15 +4402,20 @@ function gofcards_exact_gof_cache_install() {
     }
     local prerequisite_stage=gofcards
     [[ ${mode} == --main-preflight ]] && prerequisite_stage=gofcards-main
-    # Stays on the Python script: --allow-pinned-reference-defaults plans the
-    # references with reference_resources.py, and the main preflight runs
-    # before PriVA_rust_install records priva_binary.
     local -a prerequisite_args=(--stage "${prerequisite_stage}" --vep-version "${vep_version}"
         --allow-pinned-reference-defaults --source-root "${BASE_DIR}")
     # This build route prepares both exact-release caches after references.
     [[ ${PRIVA_SMOKE_SKIP_VEP:-0} == 1 ]] || prerequisite_args+=(--allow-missing-merged-caches)
-    python "${SCRIPT_DIR}/installer_prerequisites.py" "${config_file}" \
-        "${prerequisite_args[@]}" || return 1
+    if [[ ${mode} == --main-preflight ]]; then
+        # The main preflight runs before PriVA_rust_install records
+        # priva_binary, so it stays on the Python script.
+        python "${SCRIPT_DIR}/installer_prerequisites.py" "${config_file}" \
+            "${prerequisite_args[@]}" || return 1
+    else
+        priva_resolve_binary "$config_file" || return 1
+        "${PRIVA_BIN}" installer-prerequisites "${config_file}" \
+            "${prerequisite_args[@]}" || return 1
+    fi
     [[ -f ${builder_script} ]] || { log "ERROR: GoFCards builder not found: ${builder_script}"; return 1; }
     [[ ${mode} == --main-preflight ]] && return 0
     [[ -s ${hgnc_table} ]] || { log "ERROR: HGNC complete-set table not found: ${hgnc_table}"; return 1; }
@@ -4961,6 +4969,7 @@ function priva_install_prerequisites() {
         --allow-missing-bundled-mapping --allow-missing-bundled-clinvar || return 1
     # The selected reference is always needed. The GoFCards preflight below
     # checks both assemblies only when the normalized cache requires a build.
+    # Runs before PriVA_rust_install records priva_binary; stays on Python.
     python "${SCRIPT_DIR}/reference_resources.py" preflight "${config_file}" \
         --data-dir "${DATA_DIR}" --scope selected --use-cache-root || return 1
     gofcards_exact_gof_cache_install "${config_file}" --main-preflight || return 1

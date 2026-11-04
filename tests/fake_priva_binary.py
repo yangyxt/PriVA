@@ -15,6 +15,8 @@ publication helper with the Python PM1 producer and its --skip_das arguments.
 `das-install-state` runs scripts/das_install_state.py with the same arguments.
 `installer-prerequisites` runs scripts/installer_prerequisites.py with the same
 arguments (CONFIG first, then the script's own options).
+`reference-resources` runs scripts/reference_resources.py with the same
+subcommand, CONFIG and options.
 `installer-config-paths resolve/managed-roots` runs scripts/installer_config_paths.py
 with the same subcommand and options; it needs an explicit PYTHONHASHSEED, as the
 native command does.
@@ -170,6 +172,12 @@ elif command == "installer-prerequisites":
     if "--source-root" not in rest:
         raise SystemExit("priva fixture: installer-prerequisites needs --source-root")
     script, forwarded = "installer_prerequisites.py", rest
+elif command == "reference-resources" and rest[:1] in (["sources"], ["preflight"], ["install"]):
+    # Same subcommand, CONFIG and options; the native command requires --data-dir
+    # for preflight and install.
+    if rest[0] != "sources" and "--data-dir" not in rest:
+        raise SystemExit("priva fixture: reference-resources needs --data-dir")
+    script, forwarded = "reference_resources.py", rest
 elif command == "installer-config-paths" and rest[:1] in (["resolve"], ["managed-roots"]):
     flags = [value for value in rest[1:] if value == "--check"]
     names = {"--config", "--source-root"}

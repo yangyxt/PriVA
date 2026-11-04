@@ -6,11 +6,12 @@ use super::paths::{
     join, lexists, nonempty_readable, open, parts, pathlib, read_failure, read_text, readable,
     readable_text, resolve, suffix,
 };
-use super::{Config, Result, Value, error, exception, not_native, require, value_error};
+use super::{Config, Result, Value, error, exception, require, value_error};
 use crate::pickle_reader::{self, Value as Pickled};
 use crate::python_io::{PythonGzipReader, resolve_strict};
 use crate::python_path::{absolute, metadata, os_error, repr};
 use crate::python_text::{decimal_digit_value, is_python_space};
+use crate::reference_resources;
 use crate::yaml_config;
 use std::collections::HashMap;
 use std::io::Read;
@@ -67,7 +68,7 @@ fn chr1_length(assembly: &str) -> &'static str {
 }
 
 /// `{"hg19": "hg19", "GRCh37": "hg19", "hg38": "hg38", "GRCh38": "hg38"}.get(value)`
-fn assembly_alias(value: &Value) -> Result<Option<&'static str>> {
+pub(crate) fn assembly_alias(value: &Value) -> Result<Option<&'static str>> {
     Ok(match value {
         Value::Str(text) => match text.as_str() {
             "hg19" | "GRCh37" => Some("hg19"),
@@ -85,7 +86,7 @@ fn assembly_alias(value: &Value) -> Result<Option<&'static str>> {
 }
 
 /// `int(text)` in base 10 as a canonical decimal, or Python's ValueError.
-fn python_int(text: &str) -> Result<String> {
+pub(crate) fn python_int(text: &str) -> Result<String> {
     // Python converts other scripts' digits and white space to ASCII first.
     let converted: String = text
         .chars()
@@ -130,7 +131,7 @@ fn python_int(text: &str) -> Result<String> {
 }
 
 /// `str.splitlines()`
-fn splitlines(text: &str) -> Vec<&str> {
+pub(crate) fn splitlines(text: &str) -> Vec<&str> {
     let mut lines = Vec::new();
     let mut start = 0;
     let mut characters = text.char_indices().peekable();
@@ -748,39 +749,50 @@ fn same(value: &Value, other: &Value) -> bool {
 /// `validate_gofcards(config, main_preflight=..., ...)`
 pub(super) fn validate_gofcards(
     config: &Config,
+    root: &str,
     main_preflight: bool,
     allow_pinned_reference_defaults: bool,
     allow_missing_merged_caches: bool,
 ) -> Result<()> {
     let selected = assembly_alias(config.get("assembly"))?;
     if allow_pinned_reference_defaults {
-        return Err(not_native(
-            "--allow-pinned-reference-defaults plans references with reference_resources.py, \
-             which has no native port; run scripts/installer_prerequisites.py for this check",
-        ));
-    }
-    for assembly in ["hg19", "hg38"] {
-        let key = format!("gofcards_{assembly}_fasta");
-        let value = config.get(&key);
-        if main_preflight && selected == Some(assembly) && same(value, config.get("ref_genome")) {
-            // The selected reference may still be installed by the main run.
-            let fasta = checked(value, &key)?;
-            let index = checked_text(&format!("{fasta}.fai"), &format!("{key} index"), 0)?;
-            if is_file(&fasta)? && is_file(&index)? {
+        // This resolves and checks every explicit reference without creating
+        // directories, indexes or downloads. Only pinned missing defaults wait
+        // for preparation; an original DRAGEN path is never a UCSC destination.
+        let (resources, _) = reference_resources::resource_plan(
+            config,
+            &join(root, "data"),
+            reference_resources::Scope::Gofcards,
+            true,
+        )?;
+        reference_resources::preflight(&resources)?;
+    } else {
+        for assembly in ["hg19", "hg38"] {
+            let key = format!("gofcards_{assembly}_fasta");
+            let value = config.get(&key);
+            if main_preflight
+                && selected == Some(assembly)
+                && same(value, config.get("ref_genome"))
+            {
+                // The selected reference may still be installed by the main run.
+                let fasta = checked(value, &key)?;
+                let index = checked_text(&format!("{fasta}.fai"), &format!("{key} index"), 0)?;
+                if is_file(&fasta)? && is_file(&index)? {
+                    validate_fasta(value, assembly)?;
+                }
+            } else {
                 validate_fasta(value, assembly)?;
             }
-        } else {
-            validate_fasta(value, assembly)?;
         }
+        require(
+            !same(
+                config.get("gofcards_hg19_fasta"),
+                config.get("gofcards_hg38_fasta"),
+            ),
+            "GoFCards hg19 and hg38 FASTAs must be distinct assembly-correct inputs",
+        )?;
+        validate_forward_chain(config.get("gofcards_hg19_to_hg38_chain"))?;
     }
-    require(
-        !same(
-            config.get("gofcards_hg19_fasta"),
-            config.get("gofcards_hg38_fasta"),
-        ),
-        "GoFCards hg19 and hg38 FASTAs must be distinct assembly-correct inputs",
-    )?;
-    validate_forward_chain(config.get("gofcards_hg19_to_hg38_chain"))?;
     let directory = if main_preflight && config.get("cache_root").truthy() {
         Value::Str(managed_vep_cache(config)?)
     } else {

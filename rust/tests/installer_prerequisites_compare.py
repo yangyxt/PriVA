@@ -23,7 +23,9 @@ write their prompts there. Declared differences, each named in its case:
   the restricted pickle reader names other faults than pickle; the wrapper
   text and category are still compared.
 - refused profiles: the native command must fail with the named category
-  (anchors, --allow-pinned-reference-defaults, reducer-built pickles).
+  (anchors, reducer-built pickles).
+The --allow-pinned-reference-defaults cases plan and check the references with
+the checkout's unchanged reference_resources.py, which is pinned as well.
 Writes WORK_ROOT/complete.json and exits 1 on any mismatch.
 """
 from __future__ import annotations
@@ -45,6 +47,7 @@ import termios
 
 sys.dont_write_bytecode = True
 PRODUCER_SHA256 = "3dc00df076de9a545e23e550696f85f4a77d2958c5c861ace9e9a1c955a86e6a"
+REFERENCES_SHA256 = "4a5276d3e812225e6254a1d9cd02d4af6c6c755069cb5f1c15856c50a464c4ec"
 YAML_ERRORS = {"YAMLError", "MarkedYAMLError", "ReaderError", "ScannerError", "ParserError",
                "ComposerError", "ConstructorError"}
 CHR1 = {"hg19": 249250621, "hg38": 248956422}
@@ -454,8 +457,35 @@ def catalogue():
         "gofcards_main_cache_folders_null_value": {"stage": "gofcards-main",
                                                    "set": {"cache_folders": {"vep_cache": None}}},
         "gofcards_main_cache_root_integer": {"stage": "gofcards-main", "set": {"cache_root": 3}},
-        "gofcards_pinned_defaults": {"stage": "gofcards", "refused": "NotImplementedError",
-                                     "args": ["--allow-pinned-reference-defaults"]},
+        # GoFCards references planned by reference_resources.py
+        "gofcards_pinned_explicit": {"stage": "gofcards", "args": ["--allow-pinned-reference-defaults"]},
+        "gofcards_pinned_defaults_absent": {
+            "stage": "gofcards", "args": ["--allow-pinned-reference-defaults"],
+            "set": {"ref_genome": None, "gofcards_hg19_fasta": None, "gofcards_hg38_fasta": None,
+                    "gofcards_hg19_to_hg38_chain": None}},
+        "gofcards_pinned_main_deferred_caches": {
+            "stage": "gofcards-main", "set": {"ref_genome": None, "gofcards_hg38_fasta": None},
+            "args": ["--allow-pinned-reference-defaults", "--allow-missing-merged-caches", "--vep-version", "116"]},
+        "gofcards_pinned_missing_explicit": {"stage": "gofcards", "args": ["--allow-pinned-reference-defaults"],
+                                             "set": {"gofcards_hg19_fasta": "{arm}/ref/absent.fa"}},
+        "gofcards_pinned_orphan_index": {"stage": "gofcards", "args": ["--allow-pinned-reference-defaults"],
+                                         "set": {"gofcards_hg19_fasta": None},
+                                         "files": {"cache/reference/ucsc.hg19.fasta.fai": "chr1\t1\n"}},
+        "gofcards_pinned_unproven_default": {"stage": "gofcards", "args": ["--allow-pinned-reference-defaults"],
+                                             "set": {"gofcards_hg19_fasta": None},
+                                             "files": {"cache/reference/ucsc.hg19.fasta": ">chr1\nA\n"}},
+        "gofcards_pinned_relative_cache_root": {"stage": "gofcards", "set": {"cache_root": "rel/cache"},
+                                                "args": ["--allow-pinned-reference-defaults"]},
+        "gofcards_pinned_wrong_fai": {"stage": "gofcards", "args": ["--allow-pinned-reference-defaults"],
+                                      "files": {"ref/hg19.fa.fai": "chr1\t1000\t6\t1\t2\n"}},
+        "gofcards_pinned_reverse_chain": {"stage": "gofcards", "args": ["--allow-pinned-reference-defaults"],
+                                          "files": {"ref/hg19ToHg38.over.chain": chain(CHR1["hg38"], CHR1["hg19"])}},
+        "gofcards_pinned_same_fasta": {"stage": "gofcards", "args": ["--allow-pinned-reference-defaults"],
+                                       "set": {"gofcards_hg19_fasta": "{arm}/ref/hg38.fa"}},
+        "gofcards_pinned_policy": {"stage": "gofcards", "args": ["--allow-pinned-reference-defaults"],
+                                   "env": {"PRIVA_INSTALL_INSPECT_ROOTS": "{arm}"}},
+        "gofcards_pinned_list_assembly": {"stage": "gofcards", "args": ["--allow-pinned-reference-defaults"],
+                                          "set": {"assembly": ["x"]}},
         "gofcards_list_assembly": {"stage": "gofcards", "set": {"assembly": ["x"]}},
         # manual publisher inputs
         "manual_prepared": {"stage": "manual-inputs"},
@@ -634,6 +664,9 @@ def check(args):
     producer = args.repo / "scripts/installer_prerequisites.py"
     if hashlib.sha256(producer.read_bytes()).hexdigest() != PRODUCER_SHA256:
         raise SystemExit("installer_prerequisites.py differs from the qualified source; update the pin")
+    references = args.repo / "scripts/reference_resources.py"
+    if hashlib.sha256(references.read_bytes()).hexdigest() != REFERENCES_SHA256:
+        raise SystemExit("reference_resources.py differs from the qualified source; update the pin")
     cases = catalogue()
     unknown = set(args.only or ()) - cases.keys()
     if unknown:

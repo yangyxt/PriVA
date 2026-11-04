@@ -12,12 +12,12 @@ use std::io::{self, Read};
 use std::path::Path;
 
 /// `str(Path(value))`
-pub(super) fn pathlib(value: &str) -> String {
+pub(crate) fn pathlib(value: &str) -> String {
     path_value(value).display().to_string()
 }
 
 /// `str(Path(base) / relative)` for a pathlib-normalized `base`.
-pub(super) fn join(base: &str, relative: &str) -> String {
+pub(crate) fn join(base: &str, relative: &str) -> String {
     if relative.starts_with('/') {
         pathlib(relative)
     } else if base.ends_with('/') {
@@ -28,7 +28,7 @@ pub(super) fn join(base: &str, relative: &str) -> String {
 }
 
 /// `os.path.abspath(value)`
-pub(super) fn abspath(value: &str) -> Result<String> {
+pub(crate) fn abspath(value: &str) -> Result<String> {
     Ok(tempfile_parent(Path::new(value))?.display().to_string())
 }
 
@@ -56,7 +56,7 @@ pub(super) fn suffix(path: &str) -> &str {
 }
 
 /// `Path(path).parts` of a normalized path.
-pub(super) fn parts(path: &str) -> Vec<&str> {
+pub(crate) fn parts(path: &str) -> Vec<&str> {
     let (anchor, rest) = if path.starts_with("//") && !path.starts_with("///") {
         ("//", &path[2..])
     } else if path.starts_with('/') {
@@ -85,7 +85,7 @@ fn from_parts(parts: &[&str]) -> String {
 }
 
 /// `Path(path).parent`
-fn parent(path: &str) -> String {
+pub(crate) fn parent(path: &str) -> String {
     let all = parts(path);
     if all.len() <= 1 {
         return path.to_owned();
@@ -94,7 +94,7 @@ fn parent(path: &str) -> String {
 }
 
 /// `Path(path) == Path(base) or Path(base) in Path(path).parents`
-pub(super) fn is_relative_to(path: &str, base: &str) -> bool {
+pub(crate) fn is_relative_to(path: &str, base: &str) -> bool {
     let (path, base) = (parts(path), parts(base));
     path.len() >= base.len() && path[..base.len()] == base[..]
 }
@@ -120,29 +120,29 @@ fn tested(
 }
 
 /// `Path(path).exists()`
-pub(super) fn exists(path: &str) -> Result<bool> {
+pub(crate) fn exists(path: &str) -> Result<bool> {
     tested(path, fs::metadata(path), |_| true)
 }
 
 /// `Path(path).is_file()`
-pub(super) fn is_file(path: &str) -> Result<bool> {
+pub(crate) fn is_file(path: &str) -> Result<bool> {
     tested(path, fs::metadata(path), fs::Metadata::is_file)
 }
 
 /// `Path(path).is_dir()`
-pub(super) fn is_dir(path: &str) -> Result<bool> {
+pub(crate) fn is_dir(path: &str) -> Result<bool> {
     tested(path, fs::metadata(path), fs::Metadata::is_dir)
 }
 
 /// `Path(path).is_symlink()`
-pub(super) fn is_symlink(path: &str) -> Result<bool> {
+pub(crate) fn is_symlink(path: &str) -> Result<bool> {
     tested(path, fs::symlink_metadata(path), |metadata| {
         metadata.file_type().is_symlink()
     })
 }
 
 /// `os.path.lexists(path)`: every failure reads as absent.
-pub(super) fn lexists(path: &str) -> bool {
+pub(crate) fn lexists(path: &str) -> bool {
     fs::symlink_metadata(path).is_ok()
 }
 
@@ -251,7 +251,7 @@ pub(super) fn readable_text(value: &str, key: &str) -> Result<String> {
 }
 
 /// A failure while reading text, as the Python reader reports it.
-pub(super) fn read_failure(failure: Box<dyn Error>, path: &str) -> Box<dyn Error> {
+pub(crate) fn read_failure(failure: Box<dyn Error>, path: &str) -> Box<dyn Error> {
     if let Some(cause) = failure.downcast_ref::<io::Error>() {
         if let Some(gzip) = GzipFailure::of(cause) {
             let category = match gzip {
@@ -293,7 +293,7 @@ impl<R: Read> TextLines<R> {
 }
 
 /// `open(path)`
-pub(super) fn open(path: &str) -> Result<File> {
+pub(crate) fn open(path: &str) -> Result<File> {
     File::open(path).map_err(|failure| os_error(failure, Path::new(path), None))
 }
 

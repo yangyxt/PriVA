@@ -5,13 +5,13 @@
 //! terminal writes the configuration, through the native `render_config` of
 //! installer_config_paths.py. Printed paths, exit statuses and the Python
 //! exception category and message of each failure follow the script.
-//! `--allow-pinned-reference-defaults` needs reference_resources.py, which has
-//! no native port, and is refused with `NotImplementedError`. The script's
-//! default `--source-root` is its own checkout; this command has no such
-//! location, so the option is required.
-mod checks;
+//! `--allow-pinned-reference-defaults` plans and checks the references with
+//! the native `priva reference-resources` procedures, as the script did with
+//! reference_resources.py. The script's default `--source-root` is its own
+//! checkout; this command has no such location, so the option is required.
+pub(crate) mod checks;
 mod mapping;
-mod paths;
+pub(crate) mod paths;
 
 use crate::builder_error::{self, RuntimeError};
 use crate::cli::{Result, invalid};
@@ -29,8 +29,7 @@ const HELP: &str = "usage: priva installer-prerequisites CONFIG --source-root CH
 STAGE: main (default), manual-inputs, snapshots, mapping, mapping-target, mapping-source,\n\
 mapping-workspace, clinvar, gofcards, gofcards-main.\n\
 The checks, printed paths and exit statuses of scripts/installer_prerequisites.py.\n\
-CONFIG comes first; --source-root names the PriVA checkout. Refused here with\n\
-NotImplementedError, and left to the Python script: --allow-pinned-reference-defaults.";
+CONFIG comes first; --source-root names the PriVA checkout.";
 const STAGES: [&str; 10] = [
     "main",
     "manual-inputs",
@@ -78,7 +77,7 @@ fn exception(failure: &(dyn Error + 'static)) -> Option<(&'static str, String)> 
 
 /// A value `yaml.safe_load` gives for one configuration key.
 #[derive(Clone, Debug, PartialEq)]
-pub(super) enum Value {
+pub(crate) enum Value {
     None,
     Bool(bool),
     /// A decimal integer as Python prints it.
@@ -116,7 +115,7 @@ impl Value {
         })
     }
     /// `value in (None, "", "null")`
-    pub(super) fn is_unset(&self) -> bool {
+    pub(crate) fn is_unset(&self) -> bool {
         match self {
             Self::None => true,
             Self::Str(text) => text.is_empty() || text == "null",
@@ -183,13 +182,13 @@ impl Value {
 }
 
 /// The top-level mapping: each key once, at its first position, with its last value.
-pub(super) struct Config {
+pub(crate) struct Config {
     entries: Vec<(String, Value)>,
 }
 
 impl Config {
     /// `config.get(key)`
-    pub(super) fn get(&self, key: &str) -> &Value {
+    pub(crate) fn get(&self, key: &str) -> &Value {
         self.entries
             .iter()
             .find(|(name, _)| name == key)
@@ -206,7 +205,7 @@ impl Config {
     }
     /// `yaml.safe_load` of configuration text; `unique` adds the duplicate-key
     /// refusal of installer_config_paths.UniqueLoader, nested mappings included.
-    fn load(text: &str, unique: bool) -> Result<Self> {
+    pub(crate) fn load(text: &str, unique: bool) -> Result<Self> {
         let document = match yaml_config::parse_config(text) {
             Ok(Parsed::Mapping(document)) => document,
             Ok(Parsed::Empty) if empty_mapping(text) => {
@@ -391,6 +390,7 @@ fn run(config_path: &str, options: &Options) -> Result<()> {
         "clinvar" => checks::validate_selected_clinvar_stats(&config, root),
         _ => checks::validate_gofcards(
             &config,
+            root,
             stage == "gofcards-main",
             options.flag("allow-pinned-reference-defaults"),
             options.flag("allow-missing-merged-caches"),

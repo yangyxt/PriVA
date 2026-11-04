@@ -723,9 +723,12 @@ class ReferenceResources(unittest.TestCase):
         for function, scope in (("reference_genome_install", "selected"), ("assembly_references_install", "both"),
                                 ("gofcards_reference_install", "gofcards")):
             with self.subTest(function=function):
+                # The installer runs priva reference-resources once priva is recorded.
                 script = r'''
                     source "$1" >/dev/null
-                    python() {
+                    priva_resolve_binary() { PRIVA_BIN=reference_helper; }
+                    reference_helper() {
+                        printf 'COMMAND:%s\n' "$1" >&2
                         printf 'HELPER:%s %s %s\n' "$2" "$7" "$8" >&2
                         printf 'OPT_IN:%s\n' "$9" >&2
                         return "${FAIL_HELPER:-0}"
@@ -735,6 +738,7 @@ class ReferenceResources(unittest.TestCase):
                 command = ["bash", "--noprofile", "--norc", "-c", script, "fixture", str(ROOT / "scripts/install_utils.sh"), function, str(config)]
                 result = subprocess.run(command, capture_output=True, text=True)
                 self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertIn("COMMAND:reference-resources", result.stderr)
                 self.assertIn(f"HELPER:install {scope} --write-config", result.stderr)
                 self.assertIn("OPT_IN:--use-cache-root", result.stderr)
                 failed = subprocess.run(command, capture_output=True, text=True,

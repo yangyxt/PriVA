@@ -16,6 +16,11 @@
 //!   `driver_sha256` is its SHA-256. `--converter-bin` still runs an explicit
 //!   standalone converter's `project`.
 //! - The subcommand comes first (the script also accepted bare prepare flags).
+//! - `--jobs N` (default 1, which keeps the script's single pipeline) checks
+//!   the source shards' SHA-256 and converts the shards of each kind N at a
+//!   time, each into its own BGZF part, then joins the parts in chromosome
+//!   order. The decompressed VCF and the receipt, apart from the output bytes
+//!   and checksums, are the same as with one job.
 use crate::builder_error;
 use crate::cli::{Result, invalid};
 use crate::installer_config_paths::files::{
@@ -36,10 +41,13 @@ use std::os::unix::fs::MetadataExt;
 use std::os::unix::process::ExitStatusExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
+use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 const HELP: &str = "usage: priva spliceai2-prepare {prepare,gene-context}\n\
        prepare --manifest MANIFEST --assembly ASSEMBLY --output-dir OUTPUT_DIR --receipt RECEIPT\n\
-               [--converter-bin CONVERTER_BIN] [--threads THREADS] [--validation-subset]\n\
+               [--converter-bin CONVERTER_BIN] [--threads THREADS] [--jobs JOBS]\n\
+               [--validation-subset]\n\
        gene-context --regions REGIONS --gtf GTF --output OUTPUT [--vep-annotation VEP_ANNOTATION\n\
                --ensembl-release ENSEMBL_RELEASE]\n\
 Prepare a verified, annotation-only SpliceAI2 view; never activate ACMG policy. The output and\n\
@@ -840,8 +848,258 @@ struct Entry {
     resolved: String,
 }
 
+/// One source shard, `gzip -dc | projection` into `sink`, and its checked
+/// conversion report. Shards after the first omit the VCF header.
+fn project(
+    kind: &str,
+    item: &Entry,
+    header: bool,
+    context: &str,
+    converter: &[String],
+    sink: Stdio,
+    tools: &HashMap<&str, String>,
+) -> Result<Json> {
+    let mut processes = Processes(Vec::new());
+    let mut source = Command::new(&tools["gzip"])
+        .args(["-dc", &item.resolved])
+        .stdout(Stdio::piped())
+        .spawn()
+        .map_err(|cause| os_error(cause, Path::new(&tools["gzip"]), None))?;
+    let source_output = source.stdout.take().expect("piped stdout");
+    let mut arguments = converter[1..].to_vec();
+    arguments.extend(
+        [
+            "--genes",
+            context,
+            "--chrom",
+            &item.chrom,
+            "--kind",
+            kind,
+            "--input",
+            "-",
+            "--output",
+            "-",
+        ]
+        .map(str::to_owned),
+    );
+    if !header {
+        arguments.push("--no-header".into());
+    }
+    let projection = Command::new(&converter[0])
+        .args(&arguments)
+        .stdin(Stdio::from(source_output))
+        .stdout(sink)
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|cause| os_error(cause, Path::new(&converter[0]), None))?;
+    processes.0.push(source);
+    let finished = projection
+        .wait_with_output()
+        .map_err(|cause| os_error(cause, Path::new(&converter[0]), None))?;
+    let diagnostic = String::from_utf8_lossy(&finished.stderr).into_owned();
+    if !finished.status.success() {
+        let tail: String = diagnostic
+            .chars()
+            .rev()
+            .take(4096)
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .collect();
+        return Err(error(
+            "ValueError",
+            format!("Rust projection failed: {tail}"),
+        ));
+    }
+    let source = processes.0.last_mut().expect("source process");
+    let decompressed = source
+        .wait()
+        .map_err(|cause| os_error(cause, Path::new(&tools["gzip"]), None))?;
+    require(
+        decompressed.success(),
+        format!("Source decompression failed: {}", item.path),
+    )?;
+    let report = json_text::parse(&diagnostic, false).map_err(|m| error("JSONDecodeError", m))?;
+    let field = |key: &str| report.get(key).cloned().ok_or_else(|| key_error(key));
+    require(
+        matches!(field("module")?, Json::Str(ref v) if v == "spliceai2-vcf")
+            && matches!(field("chrom")?, Json::Str(ref v) if *v == item.chrom)
+            && matches!(field("kind")?, Json::Str(ref v) if v == kind),
+        "Invalid Rust conversion report",
+    )?;
+    let count = |key: &str| -> Result<i128> {
+        match field(key)? {
+            Json::Int(value) => Ok(value),
+            _ => Err(error("TypeError", "'>' not supported")),
+        }
+    };
+    require(
+        count("input_rows")? > 0 && count("output_records")? >= count("input_rows")?,
+        "Empty/incomplete projection",
+    )?;
+    Ok(report)
+}
+
+/// A failure carried between threads: its category and message.
+type Carried<T> = std::result::Result<T, (&'static str, String)>;
+fn carry<T>(result: Result<T>) -> Carried<T> {
+    builder_error::finish(result).map_err(|cause| match cause.downcast_ref::<builder_error::RuntimeError>() {
+        Some(failure) => (failure.category_name(), failure.message()),
+        None => ("RuntimeError", cause.to_string()),
+    })
+}
+fn uncarry<T>(result: Carried<T>) -> Result<T> {
+    result.map_err(|(category, message)| error(category, message))
+}
+
+/// Run `task` on each index below `count` with at most `jobs` threads; the
+/// results come back in index order. After a failure no new index starts.
+fn in_parallel<T: Send>(
+    count: usize,
+    jobs: usize,
+    task: impl Fn(usize) -> Result<T> + Sync,
+) -> Result<Vec<T>> {
+    let next = AtomicUsize::new(0);
+    let failed = AtomicBool::new(false);
+    let slots: Mutex<Vec<Option<Carried<T>>>> = Mutex::new((0..count).map(|_| None).collect());
+    std::thread::scope(|scope| {
+        for _ in 0..jobs.min(count) {
+            scope.spawn(|| {
+                while !failed.load(Ordering::SeqCst) {
+                    let index = next.fetch_add(1, Ordering::SeqCst);
+                    if index >= count {
+                        break;
+                    }
+                    let result = carry(task(index));
+                    if result.is_err() {
+                        failed.store(true, Ordering::SeqCst);
+                    }
+                    slots.lock().expect("result slots")[index] = Some(result);
+                }
+            });
+        }
+    });
+    // Indexes start in order, so the first failure in index order comes
+    // before any index that never started.
+    let mut results = Vec::with_capacity(count);
+    for slot in slots.into_inner().expect("result slots") {
+        match slot {
+            Some(result) => results.push(uncarry(result)?),
+            None => break,
+        }
+    }
+    require(results.len() == count, "Parallel work stopped early")?;
+    Ok(results)
+}
+
+/// The 28-byte empty BGZF block that ends every bgzip output.
+const BGZF_EOF: [u8; 28] = [
+    0x1f, 0x8b, 0x08, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00, 0xff, 0x06, 0x00, 0x42, 0x43, 0x02,
+    0x00, 0x1b, 0x00, 0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+];
+
+/// `--jobs` above 1 (Rust only): each shard is projected and compressed into
+/// its own BGZF part at the same time, and the parts are joined in
+/// chromosome order without the end blocks of all but the last part. The
+/// decompressed VCF is the same as the sequential pipeline's; the compressed
+/// bytes are not, because the block boundaries differ.
+fn convert_parts(
+    kind: &str,
+    entries: &[Entry],
+    context: &str,
+    target: &str,
+    converter: &[String],
+    threads: i64,
+    jobs: usize,
+    tools: &HashMap<&str, String>,
+) -> Result<Vec<Json>> {
+    let output = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(native(Path::new(target))?)
+        .map_err(|cause| os_error(cause, Path::new(target), None))?;
+    let bgzip = tools["bgzip"].clone();
+    let parts: Vec<String> = (0..entries.len())
+        .map(|index| format!("{target}.part{index}"))
+        .collect();
+    let statistics = in_parallel(entries.len(), jobs, |index| {
+        let item = &entries[index];
+        say(&format!("Projecting {kind} {}", item.chrom));
+        let part = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(native(Path::new(&parts[index]))?)
+            .map_err(|cause| os_error(cause, Path::new(&parts[index]), None))?;
+        let mut processes = Processes(Vec::new());
+        let mut compressor = Command::new(&bgzip)
+            .args(["-c", "-@", &threads.to_string()])
+            .stdin(Stdio::piped())
+            .stdout(part)
+            .spawn()
+            .map_err(|cause| os_error(cause, Path::new(&bgzip), None))?;
+        let sink = Stdio::from(compressor.stdin.take().expect("piped stdin"));
+        processes.0.push(compressor);
+        let report = project(kind, item, index == 0, context, converter, sink, tools)?;
+        let status = processes.0[0]
+            .wait()
+            .map_err(|cause| os_error(cause, Path::new(&bgzip), None))?;
+        require(status.success(), "BGZF compression failed")?;
+        Ok(report)
+    });
+    let statistics = match statistics {
+        Ok(statistics) => statistics,
+        Err(failure) => {
+            for part in &parts {
+                let _ = fs::remove_file(part);
+            }
+            return Err(failure);
+        }
+    };
+    let mut output = io::BufWriter::new(output);
+    for (index, part) in parts.iter().enumerate() {
+        let mut bytes = fs::read(part).map_err(|cause| os_error(cause, Path::new(part), None))?;
+        if index + 1 < parts.len() {
+            require(
+                bytes.ends_with(&BGZF_EOF),
+                format!("BGZF part lacks its end block: {part}"),
+            )?;
+            bytes.truncate(bytes.len() - BGZF_EOF.len());
+        }
+        output
+            .write_all(&bytes)
+            .map_err(|cause| os_error(cause, Path::new(target), None))?;
+        fs::remove_file(part).map_err(|cause| os_error(cause, Path::new(part), None))?;
+    }
+    output
+        .into_inner()
+        .map_err(|cause| os_error(cause.into_error(), Path::new(target), None))?
+        .sync_all()
+        .map_err(|cause| os_error(cause, Path::new(target), None))?;
+    Ok(statistics)
+}
+
 /// `convert_kind(kind, entries, context, target, converter, threads, tools)`
 fn convert_kind(
+    kind: &str,
+    entries: &[Entry],
+    context: &str,
+    target: &str,
+    converter: &[String],
+    threads: i64,
+    jobs: usize,
+    tools: &HashMap<&str, String>,
+) -> Result<Vec<Json>> {
+    let statistics = if jobs > 1 {
+        convert_parts(kind, entries, context, target, converter, threads, jobs, tools)?
+    } else {
+        convert_sequentially(kind, entries, context, target, converter, threads, tools)?
+    };
+    index_and_probe(entries, target, tools)?;
+    Ok(statistics)
+}
+
+/// The script's single `gzip | projection | bgzip` pipeline per kind.
+fn convert_sequentially(
     kind: &str,
     entries: &[Entry],
     context: &str,
@@ -868,95 +1126,30 @@ fn convert_kind(
     processes.0.push(compressor);
     for (index, item) in entries.iter().enumerate() {
         say(&format!("Projecting {kind} {}", item.chrom));
-        let mut source = Command::new(&tools["gzip"])
-            .args(["-dc", &item.resolved])
-            .stdout(Stdio::piped())
-            .spawn()
-            .map_err(|cause| os_error(cause, Path::new(&tools["gzip"]), None))?;
-        let source_output = source.stdout.take().expect("piped stdout");
-        let mut arguments = converter[1..].to_vec();
-        arguments.extend(
-            [
-                "--genes",
-                context,
-                "--chrom",
-                &item.chrom,
-                "--kind",
-                kind,
-                "--input",
-                "-",
-                "--output",
-                "-",
-            ]
-            .map(str::to_owned),
-        );
-        if index > 0 {
-            arguments.push("--no-header".into());
-        }
         let sink = compressor_input
             .as_fd()
             .try_clone_to_owned()
             .map_err(|cause| os_error(cause, Path::new(&bgzip), None))?;
-        let projection = Command::new(&converter[0])
-            .args(&arguments)
-            .stdin(Stdio::from(source_output))
-            .stdout(Stdio::from(sink))
-            .stderr(Stdio::piped())
-            .spawn()
-            .map_err(|cause| os_error(cause, Path::new(&converter[0]), None))?;
-        processes.0.push(source);
-        let finished = projection
-            .wait_with_output()
-            .map_err(|cause| os_error(cause, Path::new(&converter[0]), None))?;
-        let diagnostic = String::from_utf8_lossy(&finished.stderr).into_owned();
-        if !finished.status.success() {
-            let tail: String = diagnostic
-                .chars()
-                .rev()
-                .take(4096)
-                .collect::<Vec<_>>()
-                .into_iter()
-                .rev()
-                .collect();
-            return Err(error(
-                "ValueError",
-                format!("Rust projection failed: {tail}"),
-            ));
-        }
-        let source = processes.0.last_mut().expect("source process");
-        let decompressed = source
-            .wait()
-            .map_err(|cause| os_error(cause, Path::new(&tools["gzip"]), None))?;
-        require(
-            decompressed.success(),
-            format!("Source decompression failed: {}", item.path),
-        )?;
-        let report =
-            json_text::parse(&diagnostic, false).map_err(|m| error("JSONDecodeError", m))?;
-        let field = |key: &str| report.get(key).cloned().ok_or_else(|| key_error(key));
-        require(
-            matches!(field("module")?, Json::Str(ref v) if v == "spliceai2-vcf")
-                && matches!(field("chrom")?, Json::Str(ref v) if *v == item.chrom)
-                && matches!(field("kind")?, Json::Str(ref v) if v == kind),
-            "Invalid Rust conversion report",
-        )?;
-        let count = |key: &str| -> Result<i128> {
-            match field(key)? {
-                Json::Int(value) => Ok(value),
-                _ => Err(error("TypeError", "'>' not supported")),
-            }
-        };
-        require(
-            count("input_rows")? > 0 && count("output_records")? >= count("input_rows")?,
-            "Empty/incomplete projection",
-        )?;
-        statistics.push(report);
+        statistics.push(project(
+            kind,
+            item,
+            index == 0,
+            context,
+            converter,
+            Stdio::from(sink),
+            tools,
+        )?);
     }
     drop(compressor_input);
     let status = processes.0[0]
         .wait()
         .map_err(|cause| os_error(cause, Path::new(&bgzip), None))?;
     require(status.success(), "BGZF compression failed")?;
+    Ok(statistics)
+}
+
+/// The tabix index, its contig list and the first-record probe.
+fn index_and_probe(entries: &[Entry], target: &str, tools: &HashMap<&str, String>) -> Result<()> {
     let tabix = tools["tabix"].clone();
     run(&[tabix.clone(), "-p".into(), "vcf".into(), target.into()])?;
     let contigs: Vec<String> = check_output(&[tabix.clone(), "-l".into(), target.into()], false)?
@@ -989,7 +1182,7 @@ fn convert_kind(
         query.lines().any(|line| line == first),
         "Nonempty VCF/index query did not recover the first record",
     )?;
-    Ok(statistics)
+    Ok(())
 }
 
 // ---------------------------------------------------------------- prepare
@@ -1001,6 +1194,7 @@ struct Options {
     receipt: String,
     converter_bin: Option<String>,
     threads: i64,
+    jobs: usize,
     validation_subset: bool,
 }
 
@@ -1238,9 +1432,18 @@ fn prepare(options: &Options) -> Result<Json> {
     let context = format!("{}/{CONTEXT_NAME}", stage.0);
     let names = vep_release_names(&vep_annotation, plugin_release)?;
     let mapping = gene_context(&regions, &gtf, &context, Some(&names))?;
+    // With --jobs above 1 the shards' SHA-256 checks run at the same time;
+    // their identities are recorded in manifest order either way.
+    let checked = in_parallel(files.len(), options.jobs, |index| {
+        let mut seen = Vec::new();
+        let resolved = verified_file(&files[index], &mut seen)?;
+        Ok((resolved, seen))
+    })?;
     let mut entries: Vec<(String, Entry)> = Vec::new();
-    for (item, (kind, chrom)) in files.iter().zip(&pairs) {
-        let resolved = verified_file(item, &mut identities)?;
+    for ((item, (kind, chrom)), (resolved, seen)) in files.iter().zip(&pairs).zip(checked) {
+        for (path, value) in seen {
+            record(&mut identities, &path, value);
+        }
         let path = item
             .get("path")
             .and_then(Json::as_str)
@@ -1280,6 +1483,7 @@ fn prepare(options: &Options) -> Result<Json> {
             &target,
             &converter,
             options.threads,
+            options.jobs,
             &tools,
         )?;
         statistics.push((kind.to_owned(), Json::Array(report)));
@@ -1476,6 +1680,7 @@ pub(crate) fn dispatch(args: &[String]) -> Result<()> {
                 "receipt",
                 "converter-bin",
                 "threads",
+                "jobs",
             ],
             &["validation-subset"],
             &["manifest", "assembly", "output-dir", "receipt"],
@@ -1553,6 +1758,18 @@ pub(crate) fn dispatch(args: &[String]) -> Result<()> {
                 ))
             })?,
     };
+    let jobs = match values.get("jobs") {
+        None => 1,
+        Some(value) => crate::python_text::python_int(value)
+            .and_then(|v| usize::try_from(v).ok())
+            .filter(|v| *v > 0)
+            .ok_or_else(|| {
+                invalid(format!(
+                    "argument --jobs: invalid positive int value: {}",
+                    repr(value)
+                ))
+            })?,
+    };
     let options = Options {
         manifest: path("manifest").unwrap_or_default(),
         assembly: values["assembly"].clone(),
@@ -1560,6 +1777,7 @@ pub(crate) fn dispatch(args: &[String]) -> Result<()> {
         receipt: path("receipt").unwrap_or_default(),
         converter_bin: values.get("converter-bin").cloned(),
         threads,
+        jobs,
         validation_subset: set_flags.iter().any(|f| f == "validation-subset"),
     };
     builder_error::finish(prepare(&options)).map(|_| ())

@@ -120,7 +120,7 @@ explicit prefix. A byte-identical existing export is reused read-only. A linked
 export additionally needs stable, committed local git-annex content; a changed
 or foreign linked destination is retained and refused. Ordinary matching-schema
 exports can be atomically refreshed. These optional commands do not activate,
-solve, or install environments; the installer retains its Python export caller.
+solve, or install environments; the installer runs `export-installation` through them.
 
 
 Small HGNC snapshots and assembly/release-specific transcript mappings remain bundled under [`data/hgnc`](data/hgnc/README.md). Default installation selects the mapping for the configured assembly and VEP major; explicitly supplied mappings stay selected. Different versions have distinct filenames.
@@ -263,7 +263,8 @@ It validates before creating a hard link, refuses an existing final path,
 then removes the staging name. A failed unlink leaves both names intact.
 `bsd-sum --input FILE` exposes the original `sum -r` checksum procedure.
 These checks establish resource identity and integrity, not scientific
-qualification. The installer and LoFtee callers retain the Python helper.
+qualification. The installer and LoFtee callers run these procedures, passing
+the directory of the `python` on `PATH` as `--tool-prefix`.
 
 The optional resource inventory reads an explicitly selected registry:
 
@@ -348,7 +349,7 @@ formatting also requires GNU `sort`.
   --assembly GRCh38 --threads 4
 ```
 
-These commands are opt-in. The installer continues to use
+The installer runs these commands in place of
 `scripts/indexed_plugin_cache.py`. The native helper retains that script's
 runtime exit code 1; argument errors exit 2. Native help
 uses the native command layout. The portable comparators
@@ -616,7 +617,7 @@ target FASTA. It retains the original chunk boundaries, per-chunk type inference
 duplicate-ID updates and row order; each chunk calls CrossMap VCF, then BED.
 Keep the default chunk size for the installed resource profile. Output is an
 unsorted table; the installer's subsequent sort, BGZF compression and indexing
-remain separate. Installer callers continue to use the original Python script.
+remain separate. The GRCh37 installer route runs this command.
 
 Input must be plain UTF-8 TSV. Output compression follows the filename suffix:
 `.gz`, `.bz2`, `.xz`, `.zst`, `.zip`, `.tar`, `.tar.gz`, `.tar.bz2` or `.tar.xz`;

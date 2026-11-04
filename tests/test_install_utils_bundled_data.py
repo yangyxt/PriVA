@@ -9,6 +9,8 @@ import tempfile
 import unittest
 from unittest import mock
 
+import fake_priva_binary
+
 
 ROOT = Path(__file__).resolve().parents[1]
 SPEC = importlib.util.spec_from_file_location("bundled_portable_paths", ROOT / "scripts/installer_config_paths.py")
@@ -25,6 +27,7 @@ read_yaml() {
 update_yaml() { printf 'REGISTER %s %s\n' "$2" "$3"; }
 update_or_append_yaml() { update_yaml "$@"; }
 python() { printf 'UNEXPECTED_BUILD %s\n' "$*"; return 91; }
+export -f python
 wget() { printf 'UNEXPECTED_DOWNLOAD %s\n' "$*"; return 92; }
 priva_verify_vep_release() { printf 'UNEXPECTED_VEP_CHECK\n'; return 93; }
 '''
@@ -65,7 +68,8 @@ class BundledDataPolicy(unittest.TestCase):
         self.bundles["clingen_erepo"] = erepo
         self.env = {key: value for key, value in os.environ.items() if not key.startswith("PRIVA_FORCE_")}
         self.env.update(TEST_SOURCE=str(self.source), TEST_CONFIG=str(self.config_path),
-                        TEST_PYTHON=sys.executable, TEST_FOLDER=str(self.folder), PYTHONDONTWRITEBYTECODE="1")
+                        TEST_PYTHON=sys.executable, TEST_FOLDER=str(self.folder), PYTHONDONTWRITEBYTECODE="1",
+                        **fake_priva_binary.environment(self.folder))
 
     def run_shell(self, body, **env):
         self.config_path.write_text(json.dumps(self.config))
@@ -251,12 +255,19 @@ PY
                 done
                 return 99
             }
+            export -f python
             ClinGen_deploy "$TEST_CONFIG"
         ''')
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("-t " + str(self.bundles["clingen_erepo"]), result.stdout)
         self.assertNotIn("UNEXPECTED_DOWNLOAD", result.stdout)
-        self.assertTrue(selected.is_file())
+        # The native map goes under cache_root, not to the configured pickle name.
+        native_map = self.cache / "ClinGen/clingen_map.hg19.rkyv"
+        self.assertTrue(native_map.is_file())
+        self.assertFalse(selected.exists())
+        self.assertEqual(fake_priva_binary.calls(self.env["PRIVA_FAKE_CALLS"]), [[
+            "clingen-map", "build", "--clinvar-vcf", "null", "--clingen-tab", str(self.bundles["clingen_erepo"]),
+            "--output", str(native_map)]])
         self.assertEqual(self.snapshot(), before)
 
     def test_existing_external_erepo_keeps_precedence_over_bundled_source(self):
@@ -274,6 +285,7 @@ PY
                 done
                 return 99
             }
+            export -f python
             ClinGen_deploy "$TEST_CONFIG"
         ''')
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -299,6 +311,7 @@ PY
                     selected.symlink_to(external)
                 result = self.run_shell(r'''
                     python() { printf 'MAP_ARGS %s\n' "$*"; }
+                    export -f python
                     ClinGen_deploy "$TEST_CONFIG"
                 ''')
                 self.assertEqual(result.returncode, 0, result.stderr)

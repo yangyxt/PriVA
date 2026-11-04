@@ -11,6 +11,8 @@ import tempfile
 import unittest
 from unittest import mock
 
+import fake_priva_binary
+
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -169,6 +171,7 @@ parallel() { return 0; }
         with (folder / "SpliceVault_data_GRCh38.tsv.gz").open("wb") as output:
             subprocess.run(["bgzip", "-c"], input=b"#chrom\tpos\nchr1\t1\n", stdout=output, check=True)
         self.env["TEST_CHAIN"] = str(source)
+        self.env.update(fake_priva_binary.environment(self.folder))
         setup = r'''
 python() {
     if [[ "$1" == */SpliceVault_tsv_vcf_conversion.py ]]; then
@@ -184,6 +187,7 @@ with open(os.environ["TEST_EVENTS"],"a") as output:output.write("SPLICE_CHAIN:"+
 BOUNDARY_CONVERSION_PY
     else "$TEST_PYTHON" "$@"; fi
 }
+export -f python
 sort() { command sort -k1,1V -k2,2n "${@: -1}"; }
 announce_remove_tmps() { return 0; }
 '''
@@ -192,6 +196,8 @@ announce_remove_tmps() { return 0; }
         self.assertIn("SPLICE_CHAIN:" + str(source), self.events.read_text())
         self.assertNotIn("UNEXPECTED_NETWORK", self.events.read_text())
         self.assertEqual(source.read_bytes(), b"exact selected external chain; never substitute bundle")
+        conversion = fake_priva_binary.calls(self.env["PRIVA_FAKE_CALLS"])[0]
+        self.assertEqual(conversion[:1] + conversion[5:7], ["splicevault-convert", "--chain_file", str(source)])
 
     def test_repeat_path_syntax_is_rejected_before_config_or_cache_mutation(self):
         for value in (str(self.folder / "selected.bed.gz"), "../selected.bed.gz", "subdir/selected.bed.gz", "subdir\\selected.bed.gz", ".", ".."):

@@ -156,6 +156,10 @@ def test_failed_second_publication_is_rebuilt_on_warm_retry(tmp_path):
     import subprocess
     from unittest import TestCase, mock
     import build_mondo_disease_scope as subject
+    import fake_priva_binary
+    # An older program than every fixture: only the stale scoped pair rebuilds.
+    fake = fake_priva_binary.environment(tmp_path)
+    os.utime(fake["PRIVA_BINARY"], ns=(1, 1))
     mondo = _write_mondo(tmp_path)
     raw = tmp_path / "raw"
     raw.mkdir()
@@ -200,14 +204,18 @@ python() {
     fi
     "$TEST_PYTHON" "$@"
 }
+export -f python
 mondo_hpo_scope_install "$2"
 '''
     env = {key: value for key, value in os.environ.items() if not key.startswith("PRIVA_FORCE_")}
-    env.update(TEST_PYTHON=sys.executable, PYTHONDONTWRITEBYTECODE="1")
+    env.update(TEST_PYTHON=sys.executable, PYTHONDONTWRITEBYTECODE="1", **fake)
     command = ["bash", "-c", script, "fixture", str(ROOT / "scripts/install_utils.sh"), str(config)]
     retry = subprocess.run(command, env=env, text=True, capture_output=True, timeout=45)
     assert retry.returncode == 0, retry.stderr
     assert "UNEXPECTED" not in retry.stdout + retry.stderr
+    assert fake_priva_binary.calls(fake["PRIVA_FAKE_CALLS"]) == [[
+        "mondo-scope", "build", "--mondo-obo", str(mondo), "--hpo-assertions", str(base),
+        "--registry-output", str(registry), "--annotated-assertions-output", str(scoped)]]
     assert len(pd.read_csv(registry, sep="\t")) == 7
     assert len(pd.read_csv(scoped, sep="\t")) == 7
     expected = subject.annotate_hpo_assertions(frame.astype(str), subject.build_disease_scope_registry(mondo, base))
@@ -224,3 +232,48 @@ mondo_hpo_scope_install "$2"
     for path in (registry, scoped):
         assert (path.read_bytes(), identity(path)) == before[path]
     assert config.read_bytes() == before[config][0]
+    assert len(fake_priva_binary.calls(fake["PRIVA_FAKE_CALLS"])) == 1
+
+
+def test_installer_builds_hpo_assertions_and_scope_with_priva(tmp_path):
+    import json
+    import os
+    import subprocess
+    import fake_priva_binary
+    raw = tmp_path / "raw"
+    raw.mkdir()
+    for name in ("genes_to_phenotype.txt", "phenotype.hpoa"):
+        (raw / name).write_text("local raw fixture\n")
+    mondo = _write_mondo(tmp_path)
+    overrides = tmp_path / "overrides.tsv"
+    overrides.write_text("fixture override\n")
+    registry, scoped = tmp_path / "registry.tsv.gz", tmp_path / "scoped.tsv.gz"
+    config = tmp_path / "config.json"
+    config.write_text(json.dumps({
+        "hpo_raw_dir": str(raw), "hpo_assertions": str(scoped), "mondo_obo": str(mondo),
+        "mondo_disease_scope_registry": str(registry), "mondo_disease_scope_overrides": str(overrides),
+        # Old configurations may still name the Python builders; the installer ignores them.
+        "hpo_assertion_builder_script": str(tmp_path / "absent_builder.py"),
+        "mondo_scope_builder_script": str(tmp_path / "absent_builder.py")}))
+    script = r'''
+source "$1"
+read_yaml() { "$TEST_PYTHON" -c 'import json,sys;print(json.load(open(sys.argv[1])).get(sys.argv[2],""))' "$@"; }
+update_yaml() { :; }
+download_resource_atomic() { echo UNEXPECTED_DOWNLOAD >&2; return 98; }
+validate_mondo_hpo_scope_cache() { :; }
+mondo_hpo_scope_install "$2"
+'''
+    env = {key: value for key, value in os.environ.items() if not key.startswith("PRIVA_FORCE_")}
+    # The stand-in program records each builder call and runs nothing.
+    env.update(TEST_PYTHON=sys.executable, PRIVA_FAKE_STATUS="0", **fake_priva_binary.environment(tmp_path))
+    result = subprocess.run(["bash", "-c", script, "fixture", str(ROOT / "scripts/install_utils.sh"), str(config)],
+                            env=env, text=True, capture_output=True, timeout=45)
+    assert result.returncode == 0, result.stderr
+    assert "UNEXPECTED" not in result.stdout + result.stderr
+    base = raw / "genes_to_phenotype.assertions.base.tsv.gz"
+    assert fake_priva_binary.calls(env["PRIVA_FAKE_CALLS"]) == [
+        ["hpo-assertions", "build", "--genes-to-phenotype", str(raw / "genes_to_phenotype.txt"),
+         "--phenotype-hpoa", str(raw / "phenotype.hpoa"), "--output", str(base)],
+        ["mondo-scope", "build", "--mondo-obo", str(mondo), "--hpo-assertions", str(base),
+         "--registry-output", str(registry), "--annotated-assertions-output", str(scoped),
+         "--manual-overrides", str(overrides)]]

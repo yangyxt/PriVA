@@ -10,6 +10,8 @@ import tempfile
 import time
 import unittest
 
+import fake_priva_binary
+
 
 ROOT = Path(__file__).resolve().parents[1]
 INSTALLER = ROOT / "scripts/install_utils.sh"
@@ -69,6 +71,8 @@ with gzip.open(output, "wb") as stream:
     pickle.dump({"routing_fixture": True}, stream)
 PARSER_STUB
 }
+# The stand-in priva program runs the replaced Python parser through these.
+export -f python event
 '''
 
 
@@ -90,7 +94,9 @@ class InstallerOutputPaths(unittest.TestCase):
         self.xml_fixture = self.folder / "xml_fixture.gz"
         with gzip.open(self.xml_fixture, "wt") as stream:
             stream.write("<interprodb/>\n")
-        self.config = {"assembly": "hg19", "interpro_mapping_pickle": "Interpro_entry_mapping.pkl.gz",
+        self.native_map = self.cache / "ClinGen/clingen_map.hg19.rkyv"
+        self.config = {"assembly": "hg19", "cache_root": str(self.cache),
+                       "interpro_mapping_pickle": "Interpro_entry_mapping.pkl.gz",
                        "interpro_xml_gz_url": "https://fixtures.invalid/interpro.xml.gz",
                        "alphamissense_vep_vcf": str(self.folder / "alpha.vcf.gz"),
                        "clinvar_vcf": str(self.folder / "clinvar.vcf.gz"),
@@ -107,7 +113,8 @@ class InstallerOutputPaths(unittest.TestCase):
                         TEST_XML=str(self.xml_fixture), TEST_CONFIG=str(self.config_file),
                         TEST_PYTHON=sys.executable, TEST_FAIL="none", TMPDIR=str(self.folder),
                         TEST_CLINGEN_EREPO=str(self.clingen_erepo_fixture),
-                        TEST_CLINGEN_DOSAGE=str(self.clingen_dosage_fixture))
+                        TEST_CLINGEN_DOSAGE=str(self.clingen_dosage_fixture),
+                        **fake_priva_binary.environment(self.folder))
 
     def run_function(self, name, fail="none", setup=""):
         self.config_file.write_text(json.dumps(self.config))
@@ -240,7 +247,10 @@ class InstallerOutputPaths(unittest.TestCase):
         self.assertEqual([event[0] for event in events], ["download", "parser", "update", "download", "update"])
         self.assertEqual(events[1], ["parser", str(ROOT / "scripts/prepare_clingen_map.py"),
                                      "-v", self.config["clinvar_vcf"], "-t", str(self.mapping.parent / "clingen_erepo.tsv"),
-                                     "-o", str(self.mapping)])
+                                     "-o", str(self.native_map)])
+        self.assertEqual(fake_priva_binary.calls(self.env["PRIVA_FAKE_CALLS"]), [[
+            "clingen-map", "build", "--clinvar-vcf", self.config["clinvar_vcf"],
+            "--clingen-tab", str(self.mapping.parent / "clingen_erepo.tsv"), "--output", str(self.native_map)]])
         self.assertEqual(self.dosage.read_text(), CLINGEN_DOSAGE.split("\n", 1)[1])
         downloads = [event[-1] for event in events if event[0] == "download"]
         for staged, target in zip(downloads, (self.mapping.parent / "clingen_erepo.tsv", self.dosage)):
@@ -250,10 +260,12 @@ class InstallerOutputPaths(unittest.TestCase):
         self.assertEqual((self.mapping.parent / "clingen_erepo.tsv").read_text(), CLINGEN_EREPO)
         receipt = json.loads(Path(str(self.dosage) + ".source.json").read_text())
         self.assertEqual(receipt["sha256"], hashlib.sha256(self.dosage.read_bytes()).hexdigest())
-        self.assertTrue(self.mapping.is_file())
+        # The native archive goes under cache_root; the configured pickle path only places sources.
+        self.assertTrue(self.native_map.is_file())
+        self.assertFalse(self.mapping.exists())
         self.assertEqual(self.source_snapshot(), before)
         configured = json.loads(self.config_file.read_text())
-        self.assertEqual(configured["clingen_map"], str(self.mapping))
+        self.assertEqual(configured["clingen_map"], str(self.native_map))
         self.assertEqual(configured["gene_dosage_sensitivity"], str(self.dosage))
 
     def test_clingen_current_selected_sources_reuse_without_download_in_original_parser_order(self):
@@ -273,16 +285,17 @@ class InstallerOutputPaths(unittest.TestCase):
         result, events = self.run_function("ClinGen_deploy")
         self.assertEqual(result.returncode, 0, result.stderr)
         configured = json.loads(self.config_file.read_text())
-        self.assertEqual(configured["clingen_map"], str(self.mapping))
+        self.assertEqual(configured["clingen_map"], str(self.native_map))
         self.assertEqual(configured["gene_dosage_sensitivity"],
                          str(self.source_data / "clingen/gene_dosage_sensitivity.hg19.tsv"))
 
-    def test_clingen_only_absolute_dosage_keeps_bare_map_legacy_destination(self):
+    def test_clingen_only_absolute_dosage_writes_bare_map_under_cache_root(self):
         self.config["gene_dosage_sensitivity"] = str(self.dosage)
         result, events = self.run_function("ClinGen_deploy")
         self.assertEqual(result.returncode, 0, result.stderr)
         configured = json.loads(self.config_file.read_text())
-        self.assertEqual(configured["clingen_map"], str(self.source_data / "clingen/clingen_map.hg19.pkl.gz"))
+        self.assertEqual(configured["clingen_map"], str(self.native_map))
+        self.assertFalse((self.source_data / "clingen/clingen_map.hg19.pkl.gz").exists())
         self.assertEqual(configured["gene_dosage_sensitivity"], str(self.dosage))
 
     def test_clingen_absolute_erepo_failure_retains_partial_and_never_uses_source_tree(self):
@@ -298,6 +311,7 @@ class InstallerOutputPaths(unittest.TestCase):
         self.assertEqual(events[0][-1], str(stages[0]))
         self.assertFalse(canonical.exists())
         self.assertFalse(self.mapping.exists())
+        self.assertFalse(self.native_map.exists())
         self.assertEqual(self.source_snapshot(), before)
         self.assertEqual(json.loads(self.config_file.read_text()), self.config)
 

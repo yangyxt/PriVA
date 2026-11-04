@@ -21,6 +21,8 @@ import unittest
 
 import yaml
 
+import fake_priva_binary
+
 
 ROOT = Path(__file__).resolve().parents[1]
 HELPER = ROOT / "scripts/installer_prerequisites.py"
@@ -344,7 +346,8 @@ class LocalHttpMaveDBRecovery(unittest.TestCase):
                     "vep_plugins_cachedir": str(cache)})
                 config.write_text(text)
                 env = dict(os.environ, PYTHONDONTWRITEBYTECODE="1", TMPDIR=str(folder),
-                           PRIVA_INSTALL_INSPECT_ROOTS=os.pathsep.join((str(ROOT), str(folder))))
+                           PRIVA_INSTALL_INSPECT_ROOTS=os.pathsep.join((str(ROOT), str(folder))),
+                           **fake_priva_binary.environment(folder))
                 command = ["bash", "--noprofile", "--norc", "-c",
                            'source "$1"; MaveDB_install "$2" "$3"',
                            "fixture", str(INSTALLER), str(config), str(cache)]
@@ -382,6 +385,8 @@ class LocalHttpMaveDBRecovery(unittest.TestCase):
                 self.assertEqual(third.returncode, 0, third.stderr + third.stdout)
                 self.assertEqual(state["requests"], requests)
                 self.assertEqual((target.stat().st_ino, target.stat().st_mtime_ns, target.read_bytes()), identity)
+                self.assertEqual(fake_priva_binary.calls(env["PRIVA_FAKE_CALLS"])[-1],
+                                 ["indexed-plugin-cache", "ensure-index", "--input", str(target), "--kind", "mavedb"])
             finally:
                 server.shutdown()
                 thread.join(timeout=5)

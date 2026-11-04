@@ -38,6 +38,7 @@ BUNDLED_PATHS = {
     "gofcards_clinvar_injector_script": "scripts/inject_clinvar_into_gofcards.py",
     "gofcards_builder_script": "scripts/build_gofcards_exact_gof_cache.py",
     "gofcards_mechanism_review_tsv": "data/gofcards/gofcards_mechanism_reviews.tsv",
+    # The installer no longer reads these two; old configurations still resolve.
     "hpo_assertion_builder_script": "scripts/collapse_HPO_anno.py",
     "mondo_scope_builder_script": "scripts/build_mondo_disease_scope.py",
     "mondo_disease_scope_overrides": "data/mondo/disease_scope_overrides.tsv",

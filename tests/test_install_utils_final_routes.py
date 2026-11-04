@@ -11,6 +11,8 @@ import tempfile
 import time
 import unittest
 
+import fake_priva_binary
+
 
 ROOT = Path(__file__).resolve().parents[1]
 INSTALLER = ROOT / "scripts/install_utils.sh"
@@ -63,7 +65,8 @@ class FinalInstallerRoutes(unittest.TestCase):
         self.config = {"assembly": "hg19", "vep_plugins_cachedir": str(self.cache), "vep_installed_version": "116"}
         self.env = dict(os.environ, TEST_PYTHON=sys.executable, TEST_EVENTS=str(self.events),
                         TEST_CONFIG=str(self.config_file), TEST_CACHE=str(self.cache), TEST_DATA=str(self.data),
-                        TEST_FASTA=str(self.fasta), TEST_FAIL="none", TMPDIR=str(self.folder))
+                        TEST_FASTA=str(self.fasta), TEST_FAIL="none", TMPDIR=str(self.folder),
+                        **fake_priva_binary.environment(self.folder))
 
     @staticmethod
     def write_fasta(path, assembly="GRCh37", compressed=True):

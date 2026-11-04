@@ -8,6 +8,8 @@ import sys
 import tempfile
 import unittest
 
+import fake_priva_binary
+
 ROOT = Path(__file__).resolve().parents[1]
 INSTALLER = ROOT / "scripts/install_utils.sh"
 
@@ -32,7 +34,7 @@ class InstallerDownloadFailures(unittest.TestCase):
                         TEST_DATA=str(self.data), TEST_ASSEMBLY="hg19", TEST_PYTHON=sys.executable,
                         TEST_INTERPRO_XML=str(self.xml_fixture),
                         TEST_INTERPRO_MAP=str(self.cache / "InterPro/Interpro_entry_mapping.pkl.gz"),
-                        TEST_UTR_FILE="")
+                        TEST_UTR_FILE="", **fake_priva_binary.environment(self.folder))
 
     def run_shell(self, body):
         settings = r'''
@@ -41,6 +43,7 @@ class InstallerDownloadFailures(unittest.TestCase):
             read_yaml() {
                 case "$2" in
                     assembly) printf '%s\n' "$TEST_ASSEMBLY" ;;
+                    cache_root) printf '%s\n' "$TEST_CACHE" ;;
                     utr_annotator_file) printf '%s\n' "$TEST_UTR_FILE" ;;
                     interpro_mapping_pickle) printf '%s\n' "$TEST_INTERPRO_MAP" ;;
                     clingen_map) printf '%s/ClinGen/clingen_map.hg19.pkl.gz\n' "$TEST_CACHE" ;;
@@ -54,6 +57,7 @@ class InstallerDownloadFailures(unittest.TestCase):
             wget() { printf 'UNEXPECTED_NETWORK\n'; return 98; }
             git() { printf 'UNEXPECTED_GIT\n'; return 97; }
             python() { printf 'UNEXPECTED_PYTHON\n'; return 96; }
+            export -f python
         '''
         return subprocess.run(["bash", "-c", 'source "$1"; ' + settings + body,
                                "test", str(INSTALLER)], text=True, capture_output=True, env=self.env)
@@ -280,6 +284,7 @@ class InstallerDownloadFailures(unittest.TestCase):
         before = dosage.read_bytes()
         result = self.run_shell(r'''
             python() { printf 'PARSER_FAILED\n'; return 75; }
+            export -f python
             ClinGen_deploy config
         ''')
         self.assertNotEqual(result.returncode, 0)
@@ -292,6 +297,7 @@ class InstallerDownloadFailures(unittest.TestCase):
         self.clinvar_inputs()
         result = self.run_shell(r'''
             python() { return 0; }
+            export -f python
             update_yaml() { printf 'UPDATE:%s\n' "$2"; [[ "$2" != clingen_map ]]; }
             ClinGen_deploy config
         ''')
@@ -306,6 +312,7 @@ class InstallerDownloadFailures(unittest.TestCase):
                 self.env["TEST_DOWNLOAD_STATUS"] = str(download_status)
                 result = self.run_shell(r'''
                     python() { return 0; }
+                    export -f python
                     wget() { printf 'DOSAGE_DOWNLOAD\n'; return "$TEST_DOWNLOAD_STATUS"; }
                     ClinGen_deploy config
                 ''')
@@ -332,6 +339,7 @@ class InstallerDownloadFailures(unittest.TestCase):
                     shift
                 done
             }
+            export -f python
             ClinGen_deploy config
         ''')
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -340,7 +348,10 @@ class InstallerDownloadFailures(unittest.TestCase):
                       str(clingen / "clingen_erepo.tsv.download."), result.stdout)
         self.assertIn("prepare_clingen_map.py -v " + str(self.folder / "clinvar.vcf.gz") +
                       " -t " + str(clingen / "clingen_erepo.tsv") +
-                      " -o " + str(clingen / "clingen_map.hg19.pkl.gz"), result.stdout)
+                      " -o " + str(clingen / "clingen_map.hg19.rkyv"), result.stdout)
+        self.assertEqual(fake_priva_binary.calls(self.env["PRIVA_FAKE_CALLS"]), [[
+            "clingen-map", "build", "--clinvar-vcf", str(self.folder / "clinvar.vcf.gz"),
+            "--clingen-tab", str(clingen / "clingen_erepo.tsv"), "--output", str(clingen / "clingen_map.hg19.rkyv")]])
         self.assertIn("DOWNLOAD:-c http://ftp.clinicalgenome.org/ClinGen_gene_curation_list_GRCh37.tsv -O " +
                       str(clingen / "gene_dosage_sensitivity.hg19.tsv.download."), result.stdout)
         self.assertIn(r"AWK:-F \t $1 !~ /^#/ {print;} $1 ~ /^#Gene/{print;}", result.stderr)

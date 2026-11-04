@@ -1301,9 +1301,10 @@ function PrimateAI_install() {
         return 1
     fi
     [[ -n "$PLUGIN_CACHEDIR" ]] || { log "The plugin cache directory is not configured"; return 1; }
+    priva_resolve_binary "$config_file" || return 1
     # Prepared tables are reused/indexed; raw sources remain read-only and the
     # original formatting is produced under the managed plugin cache.
-    prepared=$(python "${SCRIPT_DIR}/indexed_plugin_cache.py" format-primate \
+    prepared=$("${PRIVA_BIN}" indexed-plugin-cache format-primate \
         --input "$prescore_file" --cache-dir "${PLUGIN_CACHEDIR}/PrimateAI" \
         --assembly "$assembly" --threads 1 --print-path) || return 1
     [[ "$(realpath -m "$prepared")" == "$(realpath -m "$prescore_file")" ]] || \
@@ -1326,6 +1327,7 @@ function MaveDB_install() {
         *) log "Unsupported MaveDB assembly: $assembly"; return 1 ;;
     esac
     [[ -n "$PLUGIN_CACHEDIR" && "$PLUGIN_CACHEDIR" != null ]] || return 1
+    priva_resolve_binary "$config_file" || return 1
     local cache_dir="${PLUGIN_CACHEDIR%/}/MaveDB"
     default_file="${cache_dir}/MaveDB_variants.${assembly}.tsv.gz"
     mavedb_file=$(read_yaml "$config_file" mavedb_file) || return 1
@@ -1333,7 +1335,7 @@ function MaveDB_install() {
     [[ -n "$mavedb_file" && "$mavedb_file" != null ]] || mavedb_file=$default_file
     if [[ -s "$mavedb_file" && -f "$mavedb_file" ]]; then
         # Repair only the index; never wget -O over selected table bytes.
-        python "${SCRIPT_DIR}/indexed_plugin_cache.py" ensure-index \
+        "${PRIVA_BIN}" indexed-plugin-cache ensure-index \
             --input "$mavedb_file" --kind mavedb || return 1
         [[ "$mavedb_file" == "$configured_file" ]] || update_yaml "$config_file" mavedb_file "$mavedb_file" || return 1
         log "The indexed MaveDB table is ready at ${mavedb_file}"
@@ -1352,7 +1354,7 @@ function MaveDB_install() {
     local staged_file="${stage}/$(basename "$mavedb_file")"
     wget -c "$mavedb_url" -O "$staged_file" && \
         wget -c "${mavedb_url}.tbi" -O "${staged_file}.tbi" && \
-        python "${SCRIPT_DIR}/indexed_plugin_cache.py" ensure-index --input "$staged_file" --kind mavedb || \
+        "${PRIVA_BIN}" indexed-plugin-cache ensure-index --input "$staged_file" --kind mavedb || \
         { log "Failed to stage the indexed MaveDB resource; retained stage: $stage"; return 1; }
     [[ ! -e "$mavedb_file" ]] || { log "MaveDB target became occupied: $mavedb_file"; return 1; }
     mv "${staged_file}.tbi" "${mavedb_file}.tbi" && \
@@ -2533,7 +2535,11 @@ function Conservation_install() {
         return 1
     fi
 
-    local helper="${SCRIPT_DIR}/conservation_resource_check.py"
+    priva_resolve_binary "$config" || return 1
+    # The bigWig reader prefers the perl beside the active Python interpreter.
+    local tool_prefix
+    tool_prefix=$(type -P python) || { log "ERROR: No python executable on PATH for the Conservation check"; return 1; }
+    tool_prefix=$(dirname "$tool_prefix")
     local target="${CACHEDIR}/Conservation/gerp_conservation_scores.homo_sapiens.${assembly_version}.bw"
     local existed_file ref_genome
     existed_file=$(read_yaml "${config}" "conservation_file")
@@ -2542,7 +2548,8 @@ function Conservation_install() {
         if [[ -e "$existed_file" || -L "$existed_file" ]]; then
             # An explicit existing file keeps its own validated identity; the
             # configured download URL does not relabel it as archived release114.
-            python "$helper" --input "$existed_file" --assembly "$assembly_version" --reference "$ref_genome" || return 1
+            "${PRIVA_BIN}" conservation-resource validate --input "$existed_file" --assembly "$assembly_version" \
+                --reference "$ref_genome" --tool-prefix "$tool_prefix" || return 1
             log "Reusing validated configured Conservation file: $existed_file"
             return 0
         fi
@@ -2552,7 +2559,8 @@ function Conservation_install() {
         fi
     fi
     if [[ -e "$target" || -L "$target" ]]; then
-        python "$helper" --input "$target" --assembly "$assembly_version" --reference "$ref_genome" || return 1
+        "${PRIVA_BIN}" conservation-resource validate --input "$target" --assembly "$assembly_version" \
+            --reference "$ref_genome" --tool-prefix "$tool_prefix" || return 1
         update_yaml "$config" conservation_file "$target" || return 1
         log "Reusing validated Conservation target: $target"
         return 0
@@ -2572,8 +2580,8 @@ function Conservation_install() {
     [[ ! -L "${target}.partial" ]] || { log "ERROR: Refusing symlinked Conservation staging file"; return 1; }
     wget -c "$url" -O "${target}.partial" || \
         { log "Failed to download Conservation for ${assembly_version}; partial retained"; return 1; }
-    python "$helper" --input "${target}.partial" --assembly "$assembly_version" --reference "$ref_genome" \
-        --source-url "$url" --publish-to "$target" || return 1
+    "${PRIVA_BIN}" conservation-resource publish --input "${target}.partial" --assembly "$assembly_version" \
+        --reference "$ref_genome" --tool-prefix "$tool_prefix" --source-url "$url" --publish-to "$target" || return 1
     update_yaml "$config" conservation_file "$target" || return 1
     log "Conservation for ${assembly_version} is deployed to $target"
 }
@@ -2684,12 +2692,13 @@ function SpliceVault_install () {
         GRCh37|hg19|GRCh38|hg38) ;;
         *) log "Not supported assembly version: ${ASSEMBLY_VERSION}"; return 1 ;;
     esac
+    priva_resolve_binary "$config" || return 1
     local configured_prescore=$splicevault_prescore genome default_file
     case "$ASSEMBLY_VERSION" in hg19|GRCh37) genome=GRCh37 ;; *) genome=GRCh38 ;; esac
     default_file="${PLUGIN_CACHEDIR}/SpliceVault/SpliceVault_data_${genome}.tsv.gz"
     [[ -n "$splicevault_prescore" && "$splicevault_prescore" != null ]] || splicevault_prescore=$default_file
     if [[ -s "$splicevault_prescore" && -f "$splicevault_prescore" ]]; then
-        python "${SCRIPT_DIR}/indexed_plugin_cache.py" ensure-index \
+        "${PRIVA_BIN}" indexed-plugin-cache ensure-index \
             --input "$splicevault_prescore" --kind splicevault || return 1
         [[ "$splicevault_prescore" == "$configured_prescore" ]] || \
             update_yaml "$config" splicevault_prescore "$splicevault_prescore" || return 1
@@ -2725,7 +2734,7 @@ function SpliceVault_install () {
         fi
         bgzip -t "${PLUGIN_CACHEDIR}/SpliceVault/SpliceVault_data_GRCh38.tsv.gz" && \
         gunzip -c ${PLUGIN_CACHEDIR}/SpliceVault/SpliceVault_data_GRCh38.tsv.gz > ${PLUGIN_CACHEDIR}/SpliceVault/SpliceVault_data_GRCh38.tsv && \
-        python "${SCRIPT_DIR}/SpliceVault_tsv_vcf_conversion.py" \
+        "${PRIVA_BIN}" splicevault-convert \
         --input_tsv ${PLUGIN_CACHEDIR}/SpliceVault/SpliceVault_data_GRCh38.tsv \
         --output_tsv ${PLUGIN_CACHEDIR}/SpliceVault/SpliceVault_data_GRCh37.tsv \
         --chain_file "${chain_file}" \
@@ -2740,7 +2749,7 @@ function SpliceVault_install () {
         bgzip -t ${PLUGIN_CACHEDIR}/SpliceVault/SpliceVault_data_GRCh37.tsv.gz && \
         tabix -f -s 1 -b 2 -e 2 -c "#" ${PLUGIN_CACHEDIR}/SpliceVault/SpliceVault_data_GRCh37.tsv.gz && \
         tabix -l ${PLUGIN_CACHEDIR}/SpliceVault/SpliceVault_data_GRCh37.tsv.gz > /dev/null && \
-        python "${SCRIPT_DIR}/indexed_plugin_cache.py" ensure-index \
+        "${PRIVA_BIN}" indexed-plugin-cache ensure-index \
         --input "${PLUGIN_CACHEDIR}/SpliceVault/SpliceVault_data_GRCh37.tsv.gz" --kind splicevault && \
         update_yaml "${config}" "splicevault_prescore" "${PLUGIN_CACHEDIR}/SpliceVault/SpliceVault_data_GRCh37.tsv.gz" && \
         announce_remove_tmps ${PLUGIN_CACHEDIR}/SpliceVault/SpliceVault_data_GRCh37.tsv.header ${PLUGIN_CACHEDIR}/SpliceVault/SpliceVault_data_GRCh37.tsv.body || \
@@ -2752,7 +2761,7 @@ function SpliceVault_install () {
         wget -c "$splicevault_url" -O "$staged_file" && \
         wget -c "${splicevault_url}.tbi" -O "${staged_file}.tbi" && \
         bgzip -t "$staged_file" && tabix -l "$staged_file" > /dev/null && \
-        python "${SCRIPT_DIR}/indexed_plugin_cache.py" ensure-index --input "$staged_file" --kind splicevault && \
+        "${PRIVA_BIN}" indexed-plugin-cache ensure-index --input "$staged_file" --kind splicevault && \
         mv "${staged_file}.tbi" "${default_file}.tbi" && mv "$staged_file" "$default_file" && \
         rmdir "$stage" && update_yaml "${config}" "splicevault_prescore" "$default_file" || \
         { log "Failed to deploy indexed SpliceVault for ${ASSEMBLY_VERSION}"; return 1; }
@@ -2809,8 +2818,11 @@ LOFTEE_VALIDATION_PY
     [[ $? -eq 0 ]] || return 1
     if [[ "$assembly" == hg38 || "$assembly" == GRCh38 ]]; then
         reference=$(read_yaml "$config" ref_genome)
-        python "${SCRIPT_DIR}/conservation_resource_check.py" --input "$gerp" \
-            --assembly "$assembly" --reference "$reference" || return 1
+        priva_resolve_binary "$config" || return 1
+        local tool_prefix
+        tool_prefix=$(type -P python) || { log "ERROR: No python executable on PATH for the GERP check"; return 1; }
+        "${PRIVA_BIN}" conservation-resource validate --input "$gerp" --assembly "$assembly" \
+            --reference "$reference" --tool-prefix "$(dirname "$tool_prefix")" || return 1
     fi
 }
 
@@ -3256,10 +3268,18 @@ function ClinGen_deploy() {
     [[ -s "$erepo_file" ]] || \
     { log "The ClinGen eRepo resource is missing or empty"; return 1; }
 
-    python "${SCRIPT_DIR}/prepare_clingen_map.py" \
-    -v "${clinvar_vcf}" \
-    -t "${erepo_file}" \
-    -o "${clingen_map}" && \
+    # priva clingen-map writes a native archive under cache_root, never into the
+    # repository data folder; cache-install publish adopts it from the build config.
+    priva_resolve_binary "$config_file" || return 1
+    local cache_root
+    cache_root=$(read_yaml "$config_file" cache_root) || return 1
+    [[ ${cache_root} == /* ]] || { log "ERROR: Configure an absolute cache_root before building the ClinGen map"; return 1; }
+    clingen_map=${cache_root%/}/ClinGen/clingen_map.${bundle_assembly}.rkyv
+    mkdir -p "$(dirname "$clingen_map")" && \
+    "${PRIVA_BIN}" clingen-map build \
+    --clinvar-vcf "${clinvar_vcf}" \
+    --clingen-tab "${erepo_file}" \
+    --output "${clingen_map}" && \
     update_yaml "${config_file}" "clingen_map" "${clingen_map}" || \
     { log "Failed to prepare or configure the ClinGen map"; return 1; }
 
@@ -4447,8 +4467,6 @@ function mondo_hpo_scope_install() {
     local mondo_obo
     local scope_registry
     local scope_overrides
-    local scope_builder
-    local hpo_builder
 
     hpo_release=$(yaml_value_or_default "${config_file}" "hpo_release" "v2026-06-23")
     hpo_raw_dir=$(yaml_value_or_default "${config_file}" "hpo_raw_dir" "${DATA_DIR}/hpo/raw/${hpo_release}")
@@ -4458,7 +4476,6 @@ function mondo_hpo_scope_install() {
     hpo_hpoa="${hpo_raw_dir}/phenotype.hpoa"
     hpo_base_assertions="${hpo_raw_dir}/genes_to_phenotype.assertions.base.tsv.gz"
     hpo_assertions=$(yaml_value_or_default "${config_file}" "hpo_assertions" "${DATA_DIR}/hpo/genes_to_phenotype.assertions.tsv.gz")
-    hpo_builder=$(yaml_value_or_default "${config_file}" "hpo_assertion_builder_script" "${SCRIPT_DIR}/collapse_HPO_anno.py")
 
     mondo_release=$(yaml_value_or_default "${config_file}" "mondo_release" "v2026-07-06")
     mondo_url=$(yaml_value_or_default "${config_file}" "mondo_url" "https://github.com/monarch-initiative/mondo/releases/download/${mondo_release}/mondo-simple.obo")
@@ -4466,10 +4483,9 @@ function mondo_hpo_scope_install() {
     mondo_obo=$(yaml_value_or_default "${config_file}" "mondo_obo" "${DATA_DIR}/mondo/mondo-simple.${mondo_release}.obo")
     scope_registry=$(yaml_value_or_default "${config_file}" "mondo_disease_scope_registry" "${DATA_DIR}/mondo/disease_scope.tsv.gz")
     scope_overrides=$(yaml_value_or_default "${config_file}" "mondo_disease_scope_overrides" "${DATA_DIR}/mondo/disease_scope_overrides.tsv")
-    scope_builder=$(yaml_value_or_default "${config_file}" "mondo_scope_builder_script" "${SCRIPT_DIR}/build_mondo_disease_scope.py")
 
-    [[ -f ${hpo_builder} ]] || { log "ERROR: HPO assertion builder not found: ${hpo_builder}"; return 1; }
-    [[ -f ${scope_builder} ]] || { log "ERROR: MONDO scope builder not found: ${scope_builder}"; return 1; }
+    # Both builders are priva commands, so a newer program rebuilds their outputs.
+    priva_resolve_binary "${config_file}" || return 1
     mkdir -p "${hpo_raw_dir}" "$(dirname "${hpo_assertions}")" "$(dirname "${mondo_obo}")" || return 1
 
     if [[ "${PRIVA_FORCE_HPO_ASSERTIONS:-0}" == "1" ]] || \
@@ -4510,10 +4526,11 @@ function mondo_hpo_scope_install() {
     if [[ "${PRIVA_FORCE_HPO_ASSERTIONS:-0}" == "1" ]] || \
        [[ "${PRIVA_FORCE_ALL_CACHES:-0}" == "1" ]] || [[ ! -s ${hpo_base_assertions} ]] || \
        [[ ${hpo_genes} -nt ${hpo_base_assertions} ]] || [[ ${hpo_hpoa} -nt ${hpo_base_assertions} ]] || \
-       [[ ${hpo_builder} -nt ${hpo_base_assertions} ]]; then
+       [[ ${PRIVA_BIN} -nt ${hpo_base_assertions} ]]; then
         rebuild_hpo=1
         log "Building release-matched base HPO assertions"
-        python "${hpo_builder}" "${hpo_genes}" "${hpo_hpoa}" "${hpo_base_assertions}" || return 1
+        "${PRIVA_BIN}" hpo-assertions build --genes-to-phenotype "${hpo_genes}" \
+            --phenotype-hpoa "${hpo_hpoa}" --output "${hpo_base_assertions}" || return 1
     fi
 
     # The builder publishes the registry before scoped assertions. If the second
@@ -4524,20 +4541,20 @@ function mondo_hpo_scope_install() {
        [[ ! -s ${scope_registry} ]] || [[ ! -s ${hpo_assertions} ]] || \
        [[ ${scope_registry} -nt ${hpo_assertions} ]] || \
        [[ ${mondo_obo} -nt ${scope_registry} ]] || [[ ${hpo_base_assertions} -nt ${scope_registry} ]] || \
-       [[ ${scope_builder} -nt ${scope_registry} ]] || [[ ${scope_overrides} -nt ${scope_registry} ]]; then
+       [[ ${PRIVA_BIN} -nt ${scope_registry} ]] || [[ ${scope_overrides} -nt ${scope_registry} ]]; then
         rebuild_scope=1
     fi
     if [[ ${rebuild_scope} -eq 1 ]]; then
         log "Building MONDO/HPO disease-scope registry and scoped HPO assertions"
         local -a scope_args=(
-            "${scope_builder}"
+            mondo-scope build
             --mondo-obo "${mondo_obo}"
             --hpo-assertions "${hpo_base_assertions}"
             --registry-output "${scope_registry}"
             --annotated-assertions-output "${hpo_assertions}"
         )
         [[ -s ${scope_overrides} ]] && scope_args+=(--manual-overrides "${scope_overrides}")
-        python "${scope_args[@]}" || return 1
+        "${PRIVA_BIN}" "${scope_args[@]}" || return 1
     fi
 
     validate_mondo_hpo_scope_cache "${mondo_obo}" "${scope_registry}" "${hpo_assertions}" || return 1
@@ -4738,7 +4755,8 @@ function priva_export_installed_environment() {
         return 2
     }
     [[ -n ${PRIVA_ENV_MANAGER:-} ]] || priva_find_env_manager || return 1
-    python "${SCRIPT_DIR}/installed_environment.py" export-installation \
+    priva_resolve_binary "$2" || return 1
+    "${PRIVA_BIN}" installed-environment export-installation \
         --config "$2" --manager "${PRIVA_ENV_MANAGER}"
 }
 

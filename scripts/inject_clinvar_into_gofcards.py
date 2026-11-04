@@ -68,7 +68,7 @@ def clinvar_block(payload: dict[str, Any]) -> dict[str, Any]:
     return {
         "vcv_accession": _clean(variation.get("vcv_accession")),
         "variation_id": _clean(variation.get("variation_id")),
-        "variation_name": _clean(variation.get("name")),
+        "variation_name": _clean(variation.get("variation_name")),
         "hgvs": list(dict.fromkeys(hgvs)),
         "condition_assertions": payload.get("condition_assertions") or [],
     }

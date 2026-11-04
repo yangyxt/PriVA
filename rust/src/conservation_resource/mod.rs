@@ -3,6 +3,8 @@
 //! This checks resource identity/integrity, never scientific qualification.
 mod process;
 mod reference;
+/// Python 3.12 `str.isdigit`, shared with the installer prerequisite checks.
+pub(crate) use reference::isdigit as python_isdigit;
 
 use crate::cli::{Result, invalid};
 use crate::json_text::{self, Json};

@@ -8,7 +8,7 @@ use std::rc::Rc;
 
 /// Python 3.12 / Unicode 15.0 `str.isdigit`, including digits that int()
 /// subsequently refuses. The FAI offset field is checked but never converted.
-pub(super) fn isdigit(text: &str) -> bool {
+pub(crate) fn isdigit(text: &str) -> bool {
     !text.is_empty() && text.chars().all(|c| crate::python_text::decimal_digit_value(c).is_some()
         || matches!(c as u32,0xb2..=0xb3 | 0xb9 | 0x1369..=0x1371 | 0x19da | 0x2070 | 0x2074..=0x2079
             | 0x2080..=0x2089 | 0x2460..=0x2468 | 0x2474..=0x247c | 0x2488..=0x2490 | 0x24ea

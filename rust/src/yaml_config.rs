@@ -266,6 +266,29 @@ fn opaque_repr(text: &str) -> Option<String> {
     Some(format!("{{{}}}", parts.join(", ")))
 }
 
+/// The entries of an `Opaque` nested block mapping (or `{}`): each plain key
+/// with its single-line scalar, in written order and with repeated keys kept.
+/// `None` for a list, which has no keys.
+pub(crate) fn nested_mapping_entries(text: &str) -> Option<Vec<(String, Scalar)>> {
+    if text == "{}" {
+        return Some(Vec::new());
+    }
+    if text.starts_with('[') {
+        return None;
+    }
+    let mut entries = Vec::new();
+    for line in split_lines(text).iter().filter(|line| !line.is_skippable()) {
+        if line.is_list_item() {
+            return None;
+        }
+        let content = &line.text[line.indent..];
+        let length = key_length(content)?;
+        let value = entry_scalar(content[length + 1..].trim_start_matches(' '))?;
+        entries.push((content[..length].trim_end_matches(' ').to_owned(), value));
+    }
+    Some(entries)
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct ConfigEntry {
     pub(crate) key: String,

@@ -9,6 +9,8 @@ import sys
 import tempfile
 import unittest
 
+import fake_priva_binary
+
 ROOT = Path(__file__).resolve().parents[1]
 DATA_TMP = Path(os.environ.get("PRIVA_TEST_TMPDIR", tempfile.gettempdir())) / "priva-gofcards-cache-tests"
 SPEC = importlib.util.spec_from_file_location("gofcards_prerequisites", ROOT / "scripts/installer_prerequisites.py")
@@ -62,7 +64,9 @@ for name in ('chr_synonyms.txt','1/all_vars.gz','1/all_vars.gz.csi'): (destinati
 ''')
         self.env = dict(os.environ, TEST_PYTHON=sys.executable, TEST_CONFIG=str(self.config_path),
                         TEST_EVENTS=str(self.events), TEST_API=str(self.api), PYTHONDONTWRITEBYTECODE="1",
-                        PRIVA_INSTALL_INSPECT_ROOTS=os.pathsep.join((str(ROOT), str(self.folder))))
+                        PRIVA_INSTALL_INSPECT_ROOTS=os.pathsep.join((str(ROOT), str(self.folder))),
+                        # The build route checks its inputs with priva installer-prerequisites.
+                        **fake_priva_binary.environment(self.folder))
         for key in ("PRIVA_SMOKE_SKIP_VEP", "PRIVA_FORCE_GOFCARDS_CACHE", "PRIVA_FORCE_ALL_CACHES"):
             self.env.pop(key, None)
 

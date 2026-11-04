@@ -21,6 +21,17 @@ impl fmt::Display for RuntimeError {
     }
 }
 
+impl RuntimeError {
+    /// The Python exception class name this failure stands for.
+    pub(crate) fn category_name(&self) -> &'static str {
+        self.category
+    }
+    /// `str()` of the exception, without the category prefix.
+    pub(crate) fn message(&self) -> String {
+        self.cause.to_string()
+    }
+}
+
 impl Error for RuntimeError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         Some(self.cause.as_ref())

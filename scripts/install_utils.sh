@@ -1515,7 +1515,8 @@ function AlphaMissense_pick_missense_constrained_segments() {
         alphamissense_intolerant_motifs="${intolerant_motif_prefix}.pkl"
     fi
     local nm_to_enst_tsv
-    nm_to_enst_tsv=$(python "${SCRIPT_DIR}/installer_prerequisites.py" "${config_file}" \
+    priva_resolve_binary "$config_file" || return 1
+    nm_to_enst_tsv=$("${PRIVA_BIN}" installer-prerequisites "${config_file}" \
         --source-root "${BASE_DIR}" --stage mapping --print-mapping) || return 1
     local -a mapping_inputs=(
         --input "${DATA_DIR}/gnomAD_RMC/gnomad_v2.1.1_rmc_flat.${assembly}.tsv"
@@ -2024,7 +2025,7 @@ function prepare_pm1_regions() {
         --build-config "$config_file" --source-root "$BASE_DIR") || return 1
 
     local nm_to_enst_tsv
-    nm_to_enst_tsv=$(python "${SCRIPT_DIR}/installer_prerequisites.py" "${config_file}" \
+    nm_to_enst_tsv=$("${PRIVA_BIN}" installer-prerequisites "${config_file}" \
         --source-root "${BASE_DIR}" --stage mapping --print-mapping) || return 1
     local hcseeker_tsv=${DATA_DIR}/HCSeeker/HC_spots.${assembly}.tsv
     local rmc_tsv=${DATA_DIR}/gnomAD_RMC/gnomad_v2.1.1_rmc_flat.${assembly}.tsv
@@ -2593,7 +2594,8 @@ function ClinVar_Gene_stat () {
     esac
     # Low-level selected-file reuse. ClinVar_install owns date-triggered refresh
     # and never replaces the original bundled artifact.
-    python "${SCRIPT_DIR}/installer_prerequisites.py" "${config_file}" \
+    priva_resolve_binary "$config_file" || return 1
+    "${PRIVA_BIN}" installer-prerequisites "${config_file}" \
         --source-root "${BASE_DIR}" --stage clinvar || return 1
     update_or_append_yaml "${config_file}" "clinvar_gene_stat" "${clinvar_stat}" || return 1
     log "Reusing selected ClinVar gene statistics: ${clinvar_stat}"
@@ -4381,6 +4383,9 @@ function gofcards_exact_gof_cache_install() {
     }
     local prerequisite_stage=gofcards
     [[ ${mode} == --main-preflight ]] && prerequisite_stage=gofcards-main
+    # Stays on the Python script: --allow-pinned-reference-defaults plans the
+    # references with reference_resources.py, and the main preflight runs
+    # before PriVA_rust_install records priva_binary.
     local -a prerequisite_args=(--stage "${prerequisite_stage}" --vep-version "${vep_version}"
         --allow-pinned-reference-defaults --source-root "${BASE_DIR}")
     # This build route prepares both exact-release caches after references.
@@ -4401,7 +4406,8 @@ function gofcards_exact_gof_cache_install() {
     hg38_fasta=$(read_yaml "${config_file}" "gofcards_hg38_fasta")
     chain_file=$(read_yaml "${config_file}" "gofcards_hg19_to_hg38_chain")
     gofcards_vep_caches_install "${config_file}" || return 1
-    python "${SCRIPT_DIR}/installer_prerequisites.py" "${config_file}" --stage gofcards \
+    priva_resolve_binary "$config_file" || return 1
+    "${PRIVA_BIN}" installer-prerequisites "${config_file}" --stage gofcards \
         --vep-version "${vep_version}" --source-root "${BASE_DIR}" || return 1
 
     mkdir -p "$(dirname "${target_tsv}")" "${workdir}" || return 1
@@ -4883,6 +4889,8 @@ function mechanism_resource_install() {
 
 function nm_to_enst_mapping_install() {
     local config_file=${1}
+    # main_install reaches this through priva_prepare_install_config, before
+    # PriVA_rust_install records priva_binary, so these checks stay on Python.
     local target
     target=$(python "${SCRIPT_DIR}/installer_prerequisites.py" "${config_file}" \
         --source-root "${BASE_DIR}" --stage mapping-target) || return 1
@@ -4924,12 +4932,15 @@ function priva_manual_cache_inputs() {
     # whole-table annotation. Batch runs fail with the missing keys instead of
     # reaching an unanswered prompt hours later; interactive users keep prompts.
     [[ ! -t 0 ]] || arguments+=(--prompt)
+    # Stays on Python: it runs before priva_binary is recorded, and only the
+    # script collects unset paths interactively and rewrites the configuration.
     python "${SCRIPT_DIR}/installer_prerequisites.py" "${arguments[@]}"
 }
 
 
 function priva_install_prerequisites() {
     local config_file=${1}
+    # Runs before PriVA_rust_install records priva_binary; stays on Python.
     python "${SCRIPT_DIR}/installer_prerequisites.py" "${config_file}" --source-root "${BASE_DIR}" \
         --allow-missing-bundled-mapping --allow-missing-bundled-clinvar || return 1
     # The selected reference is always needed. The GoFCards preflight below
@@ -4972,6 +4983,7 @@ function bundled_snapshot_install() {
     [[ $# -eq 1 ]] || { log "ERROR: Use bundled_snapshot_install CONFIG"; return 2; }
     # Fixed Git data are already deployed by cloning PriVA. Check only that
     # each selected input exists and is nonempty; do not parse/refresh bundles.
+    # Runs before PriVA_rust_install records priva_binary; stays on Python.
     python "${SCRIPT_DIR}/installer_prerequisites.py" "$1" \
         --source-root "${BASE_DIR}" --stage snapshots
 }

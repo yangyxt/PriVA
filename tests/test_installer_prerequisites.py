@@ -423,8 +423,14 @@ class InstallerPrerequisites(unittest.TestCase):
         self.assertNotIn("--skip_das", calls[0])
         # priva pm1-regions reads the resolved DAS archive and has no thread option.
         native = fake_priva_binary.calls(self.env["PRIVA_FAKE_CALLS"])
-        self.assertEqual(native[0], ["cache-install", "resolve", "--key", "all_intolerant_domains",
-                                     "--build-config", str(self.config_file), "--source-root", str(ROOT)])
+        # Both producers select their mapping through priva installer-prerequisites.
+        mapping_check = ["installer-prerequisites", str(self.config_file), "--source-root", str(ROOT),
+                         "--stage", "mapping", "--print-mapping"]
+        self.assertEqual([call for call in native if call[0] == "installer-prerequisites"],
+                         [mapping_check, mapping_check])
+        resolve = [call for call in native if call[:2] == ["cache-install", "resolve"]]
+        self.assertEqual(resolve[0], ["cache-install", "resolve", "--key", "all_intolerant_domains",
+                                      "--build-config", str(self.config_file), "--source-root", str(ROOT)])
         run = next(call for call in native if call[:2] == ["mapped-artifact", "run"])
         self.assertEqual(run[run.index("--") + 1:], [
             "--assembly", "hg38", "--nm-to-enst", str(self.mapping), "--intolerant-domains", str(domains),

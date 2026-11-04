@@ -13,6 +13,8 @@ values under --source-root) without converting it, and runs no script.
 `mapped-artifact run/recover --native-producer pm1-regions` runs the Python
 publication helper with the Python PM1 producer and its --skip_das arguments.
 `das-install-state` runs scripts/das_install_state.py with the same arguments.
+`installer-prerequisites` runs scripts/installer_prerequisites.py with the same
+arguments (CONFIG first, then the script's own options).
 The AlphaMissense statistics, exon-history, domain-metadata and das-domains
 transcripts/analyze commands replace no single Python script: the fixture
 writes small JSON stand-ins that record the inputs and the current builder
@@ -160,6 +162,11 @@ if command == "installed-environment":
     script, forwarded = "installed_environment.py", rest
 elif command == "das-install-state":
     script, forwarded = "das_install_state.py", rest
+elif command == "installer-prerequisites":
+    # Same positional CONFIG and options; the native command requires --source-root.
+    if "--source-root" not in rest:
+        raise SystemExit("priva fixture: installer-prerequisites needs --source-root")
+    script, forwarded = "installer_prerequisites.py", rest
 elif command == "indexed-plugin-cache":
     flags = [value for value in rest[1:] if value == "--print-path"]
     pairs = options([value for value in rest[1:] if value != "--print-path"],

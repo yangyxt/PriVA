@@ -125,6 +125,41 @@ fn source_for_basename(name: &str) -> Option<&'static Json> {
         .iter()
         .find(|s| get(s, "basename").as_str() == Some(name))
 }
+/// The reviewed facts of one pinned mapping source that the installer
+/// prerequisite checks read (`source_for_assembly`/`source_for_basename`).
+pub(crate) struct PinnedSource {
+    pub(crate) source_id: String,
+    pub(crate) relative_path: String,
+    pub(crate) aliases: Vec<String>,
+}
+impl PinnedSource {
+    fn of(selected: &Json) -> Self {
+        Self {
+            source_id: text(get(selected, "source_id")).to_owned(),
+            relative_path: text(get(selected, "relative_path")).to_owned(),
+            aliases: array(get(selected, "aliases"))
+                .iter()
+                .map(|alias| text(alias).to_owned())
+                .collect(),
+        }
+    }
+}
+/// `source_for_assembly(assembly, vep_release)`; `assembly` is `str()` of the
+/// configured value, which no non-string configuration value can turn into an alias.
+pub(crate) fn pinned_source_for_assembly(
+    assembly: &str,
+    release: Option<&Json>,
+) -> Result<PinnedSource> {
+    cli::source_for_assembly(assembly, release).map(PinnedSource::of)
+}
+/// The pinned source of a `PINNED_BASENAMES` file name, or `None` for any other name.
+pub(crate) fn pinned_source_for_basename(basename: &str) -> Option<PinnedSource> {
+    source_for_basename(basename).map(PinnedSource::of)
+}
+/// `verify_pinned(mapping, assembly)`, discarding the returned record.
+pub(crate) fn verify_pinned_mapping(mapping: &Path, assembly: Option<&str>) -> Result<()> {
+    verify::pinned(mapping, assembly).map(|_| ())
+}
 fn name(path: &Path) -> String {
     use std::path::Component;
     match path.components().next_back() {

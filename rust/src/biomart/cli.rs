@@ -379,7 +379,7 @@ fn option_count(values: &HashMap<String, String>, names: &[&str]) -> usize {
         .filter(|name| values.contains_key(**name))
         .count()
 }
-fn source_for_assembly(assembly: &str, release: Option<&Json>) -> Result<&'static Json> {
+pub(super) fn source_for_assembly(assembly: &str, release: Option<&Json>) -> Result<&'static Json> {
     if let Some(release) = release {
         require(
             !matches!(release, Json::Bool(_)) && matches!(py_str(release).as_str(), "113" | "116"),

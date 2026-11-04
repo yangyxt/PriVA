@@ -69,6 +69,7 @@ mod hpo_assertions;
 pub mod hpo_penetrance;
 mod indexed_plugin_cache;
 mod installed_environment;
+mod installer_prerequisites;
 mod interpro_mapping_builder;
 pub mod interpro_mapping_io;
 mod json_text;

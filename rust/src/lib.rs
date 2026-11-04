@@ -8,6 +8,7 @@ mod alpha_domain;
 mod alphamissense_vcf;
 mod biomart;
 mod builder_error;
+mod builder_identity;
 mod builder_table;
 mod cache_convert;
 mod cache_install;

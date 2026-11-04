@@ -5,8 +5,8 @@ mod model;
 mod store;
 
 use super::{
-    PRODUCER, Result, exception, input_identity, json, parquet, parse_texts, protect, texts, vcf,
-    verify_input,
+    PRODUCER, Result, builder_accepted, exception, input_identity, json, parquet, parse_texts,
+    protect, texts, vcf, verify_input,
 };
 use crate::builder_error;
 use crate::cli;
@@ -20,8 +20,14 @@ pub(super) const SCHEMA: &str = "priva-alpha-exon-history-v1";
 const HELP: &str = "usage: priva alpha-exon-history build --vcf VCF --hash-seed UINT32 --output PARQUET\n\
        priva alpha-exon-history chromosome --vcf INDEXED_VCF --chrom CONTIG --output PARQUET\n\
        priva alpha-exon-history merge --input CHR1_PARQUET --input CHR2_PARQUET ... --hash-seed UINT32 --output PARQUET\n\
-       priva alpha-exon-history check --input PARQUET\n\
+       priva alpha-exon-history check --input PARQUET [--builder-sha256 SHA256]\n\
+       priva alpha-exon-history identity --input PARQUET\n\
        priva alpha-exon-history export --input FINAL_PARQUET --output HISTORY\n\
+Check prints the recorded and current builder_source_sha256 and by default\n\
+requires the current builder; --builder-sha256 instead accepts history recorded\n\
+by that pinned builder, with every other check unchanged. Identity prints the\n\
+recorded value without qualifying the file. Merge and export require the\n\
+current builder; rebuild only on explicit request.\n\
 Chromosome jobs retain seed-independent first insertion order. Ordered merge\n\
 requires all header chromosomes and reproduces CPython 3.12 worker transport\n\
 and set.update under the explicit seed. Build uses original sequential order.\n\
@@ -31,7 +37,7 @@ does not call Python, write pickle, or activate an installer caller.";
 fn invalid(message: &str) -> Box<dyn std::error::Error> {
     exception("ValueError", message)
 }
-pub(super) fn identity() -> String {
+pub(crate) fn identity() -> String {
     static DIGEST: std::sync::OnceLock<String> = std::sync::OnceLock::new();
     DIGEST
         .get_or_init(|| {
@@ -64,17 +70,23 @@ pub(super) fn identity() -> String {
         })
         .clone()
 }
-fn checked(path: &Path) -> Result<HashMap<String, String>> {
+fn checked(path: &Path, builder: Option<&str>) -> Result<HashMap<String, String>> {
     let metadata = parquet::metadata(path)?;
     for (key, wanted) in [
         ("priva.kind", "exon-history"),
         ("priva.history.schema", SCHEMA),
         ("priva.producer", PRODUCER),
-        ("priva.builder_source_sha256", identity().as_str()),
     ] {
         if metadata.get(key).map(String::as_str) != Some(wanted) {
             return Err(invalid("exon history source/profile differs"));
         }
+    }
+    if !builder_accepted(
+        metadata.get("priva.builder_source_sha256"),
+        builder,
+        &identity(),
+    ) {
+        return Err(invalid("exon history source/profile differs"));
     }
     let stage = metadata.get("priva.stage").map(String::as_str);
     let profile = metadata.get("priva.history.profile").map(String::as_str);
@@ -169,7 +181,7 @@ fn merge(inputs: &[PathBuf], seed: u32, output: &Path) -> Result<()> {
     let mut headers = vec![];
     for path in inputs {
         protect(path, output)?;
-        headers.push(checked(path)?);
+        headers.push(checked(path, None)?);
     }
     let first = &headers[0];
     let contigs = parse_texts(
@@ -296,8 +308,8 @@ fn visit_transcripts(
     }
     Ok(())
 }
-fn check(path: &Path) -> Result<()> {
-    let _metadata = checked(path)?;
+fn check(path: &Path, builder: Option<&str>) -> Result<()> {
+    let metadata = checked(path, builder)?;
     let mut genes = 0;
     let mut sets = 0;
     let mut members = 0;
@@ -309,7 +321,10 @@ fn check(path: &Path) -> Result<()> {
             Ok(())
         })
     })?;
-    println!("{{\"passed\":true,\"genes\":{genes},\"sets\":{sets},\"members\":{members}}}");
+    println!(
+        "{{\"passed\":true,\"genes\":{genes},\"sets\":{sets},\"members\":{members},{}}}",
+        super::identity_fields(&metadata["priva.builder_source_sha256"], &identity())
+    );
     Ok(())
 }
 fn hex(value: &str) -> String {
@@ -320,7 +335,7 @@ fn hex(value: &str) -> String {
 }
 fn export(input: &Path, output: &Path) -> Result<()> {
     protect(input, output)?;
-    let metadata = checked(input)?;
+    let metadata = checked(input, None)?;
     if metadata.get("priva.stage").map(String::as_str) != Some("final") {
         return Err(invalid("only final history can be exported"));
     }
@@ -369,7 +384,7 @@ pub(crate) fn dispatch(args: &[String]) -> Result<()> {
     let command = args
         .first()
         .map(String::as_str)
-        .filter(|s| ["build", "chromosome", "merge", "check", "export"].contains(s))
+        .filter(|s| ["build", "chromosome", "merge", "check", "identity", "export"].contains(s))
         .ok_or_else(|| cli::invalid(HELP))?;
     let mut fields = HashMap::new();
     let mut inputs = vec![];
@@ -382,6 +397,7 @@ pub(crate) fn dispatch(args: &[String]) -> Result<()> {
             "chromosome" => ["--vcf", "--chrom", "--output"].contains(&name),
             "merge" => ["--input", "--hash-seed", "--output"].contains(&name),
             "export" => ["--input", "--output"].contains(&name),
+            "check" => ["--input", "--builder-sha256"].contains(&name),
             _ => name == "--input",
         };
         if !admitted {
@@ -395,7 +411,7 @@ pub(crate) fn dispatch(args: &[String]) -> Result<()> {
         at += 2;
     }
     let need = |name| fields.get(name).copied().ok_or_else(|| cli::invalid(HELP));
-    let output = if command != "check" {
+    let output = if !["check", "identity"].contains(&command) {
         Some(Path::new(need("--output")?))
     } else {
         None
@@ -410,10 +426,15 @@ pub(crate) fn dispatch(args: &[String]) -> Result<()> {
         None
     };
     if (command == "merge" && inputs.is_empty())
-        || (["check", "export"].contains(&command) && inputs.len() != 1)
+        || (["check", "identity", "export"].contains(&command) && inputs.len() != 1)
     {
         return Err(cli::invalid(HELP));
     }
+    let builder = fields
+        .get("--builder-sha256")
+        .copied()
+        .map(super::builder_pin)
+        .transpose()?;
     let result = match command {
         "build" => build(Path::new(need("--vcf")?), None, seed, output.unwrap()),
         "chromosome" => build(
@@ -423,8 +444,61 @@ pub(crate) fn dispatch(args: &[String]) -> Result<()> {
             output.unwrap(),
         ),
         "merge" => merge(&inputs, seed.unwrap(), output.unwrap()),
-        "check" => check(&inputs[0]),
+        "check" => check(&inputs[0], builder.as_deref()),
+        "identity" => super::recorded_identity(&inputs[0]),
         _ => export(&inputs[0], output.unwrap()),
     };
     builder_error::finish(result.map_err(super::source_error))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{PRODUCER, SCHEMA, check, checked, dispatch, identity, parquet};
+
+    #[test]
+    fn history_check_accepts_an_earlier_builder_only_when_pinned() {
+        let path = std::env::temp_dir().join(format!(
+            "priva_history_builder_pin_{}.parquet",
+            std::process::id()
+        ));
+        let older = "b".repeat(64);
+        let footer = [
+            ("priva.kind", "exon-history"),
+            ("priva.history.schema", SCHEMA),
+            ("priva.stage", "final"),
+            ("priva.history.profile", "cpython312-serial-v1"),
+            ("priva.history.seed", "0"),
+            ("priva.input", "{}"),
+            ("priva.producer", PRODUCER),
+            ("priva.builder_source_sha256", older.as_str()),
+            ("priva.keys", "[]"),
+        ];
+        let footer = footer
+            .into_iter()
+            .map(|(key, value)| (key.to_owned(), value.to_owned()))
+            .collect();
+        parquet::publish(&path, footer, |_| Ok(())).unwrap();
+        assert!(check(&path, None).is_err());
+        assert!(check(&path, Some(older.as_str())).is_ok());
+        assert!(check(&path, Some("c".repeat(64).as_str())).is_err());
+        assert!(check(&path, Some(identity().as_str())).is_err());
+        // Merge and export never take a pin and keep requiring the current builder.
+        assert!(checked(&path, None).is_err());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn builder_pin_is_a_sha256_check_option() {
+        let message = |command: &str, pin: &str| {
+            let args = [command, "--input", "absent", "--builder-sha256", pin];
+            let args: Vec<String> = args.into_iter().map(String::from).collect();
+            dispatch(&args).unwrap_err().to_string()
+        };
+        let refused = "--builder-sha256 requires SHA256";
+        assert_eq!(message("check", "invalid"), refused);
+        let pin = "0f".repeat(32);
+        for command in ["identity", "merge", "export"] {
+            assert!(message(command, &pin).starts_with("usage:"));
+        }
+    }
 }

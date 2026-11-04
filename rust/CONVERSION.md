@@ -135,7 +135,7 @@ cache conversion interface. Optional native procedures can be invoked directly.
 | [`scripts/stat_aachange_clinvar.py`](../scripts/stat_aachange_clinvar.py) | Optional `priva clinvar-aa-splice`. Installer caller remains Python. |
 | [`scripts/stat_exon_patho_afs.py`](../scripts/stat_exon_patho_afs.py) | Optional `priva clinvar-exon-af`. Installer caller remains Python. |
 | [`scripts/stat_gene_patho_afs.py`](../scripts/stat_gene_patho_afs.py) | Optional `priva clinvar-gene-af`. Installer caller remains Python. |
-| [`scripts/stat_protein_domain_amscores.py`](../scripts/stat_protein_domain_amscores.py) | Optional `priva alphamissense-domain`. Installer caller remains Python. |
+| [`scripts/stat_protein_domain_amscores.py`](../scripts/stat_protein_domain_amscores.py) | Optional `priva alphamissense-domain`. Installer caller remains Python. `check` prints the recorded and current `builder_source_sha256`; `--builder-sha256 SHA256` accepts an earlier recorded builder, other checks unchanged. `identity --input PARQUET` prints the recorded value for `das-domains --source-builder-sha256`. |
 
 ## Installer helpers
 
@@ -158,7 +158,7 @@ cache conversion interface. Optional native procedures can be invoked directly.
 | [`scripts/installed_environment.py`](../scripts/installed_environment.py) | Optional `priva installed-environment export/export-installation` for package-only YAML exports. Retains the installed package manager and statically linked libyaml; installer caller remains Python. |
 | [`scripts/installer_config_paths.py`](../scripts/installer_config_paths.py) | Retained Python; native replacement pending. |
 | [`scripts/installer_prerequisites.py`](../scripts/installer_prerequisites.py) | Retained Python; native replacement pending. |
-| [`scripts/mapped_artifact_publish.py`](../scripts/mapped_artifact_publish.py) | Optional `priva mapped-artifact run/recover/adopt-native/context`: native BioMart checks, literal external producer arguments, pending pair publication and preserved-artifact adoption. Scientific producers remain external; original installer callers are unchanged. |
+| [`scripts/mapped_artifact_publish.py`](../scripts/mapped_artifact_publish.py) | Optional `priva mapped-artifact run/recover/adopt-native/context`: native BioMart checks, literal external producer arguments, pending pair publication and preserved-artifact adoption. Scientific producers remain external; original installer callers are unchanged. `--native-producer pm1-regions` instead runs this executable's `pm1-regions build` (exact `--name value` pairs bound to the selected assembly, mapping and HCSeeker/RMC anchors) and publishes `pm1_regions.{asm}.rkyv`; the context and receipt record `native_producer`. `biomart artifact-route/changed-target --artifact-format rkyv` names that archive. |
 | [`scripts/mechanism_source_input.py`](../scripts/mechanism_source_input.py) | Optional `priva mechanism-source validate/record-source/check-source` for acquired-source validation and receipts. Retains distinct acquisition/runtime checks and bundled reuse policy. Existing callers remain Python. |
 | [`scripts/prepare_cluster_config.py`](../scripts/prepare_cluster_config.py) | Legacy/manual helper, outside native conversion scope. |
 | [`scripts/reference_resources.py`](../scripts/reference_resources.py) | Retained Python; native replacement pending. |
@@ -261,3 +261,17 @@ order that the statistics model's set membership alone cannot recover. It does
 not recover an unknown historical hash seed or require the legacy score pickle.
 Source/profile guards remain active: do not retag an older companion when a
 guard rejects it. Existing caches and installer callers remain unchanged.
+
+Native statistics and history files keep the builder identity recorded when
+they were built; rebuild them only on explicit request. `alphamissense-domain
+check` and `alpha-exon-history check` print the recorded and current
+`builder_source_sha256` and, by default, require the current builder. With
+`--builder-sha256 SHA256` they accept exactly that recorded builder; VCF,
+producer, extractor and profile checks stay strict. Merge and export still
+require the current builder. `identity --input PARQUET` in either family prints
+the recorded value without qualifying the file, for `das-domains transcripts`
+`--source-builder-sha256` and `--history-builder-sha256`. Installer receipts use
+`priva builder-identity NAME`: a SHA-256 over that builder's own embedded source
+modules and Cargo.lock, listed by `priva builder-identity --help`. Its
+`alphamissense-domain`, `domain-metadata` and `alpha-exon-history` values equal
+the identities those builders record in their footers.

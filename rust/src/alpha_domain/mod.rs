@@ -25,8 +25,14 @@ const EXTRACTOR: &str = "37502dedf58f44eb67237c462a9a0c19a84bc696764ecc870edabca
 const HELP: &str = "usage: priva alphamissense-domain build --vcf VCF --output PARQUET [--threads N]\n\
        priva alphamissense-domain chromosome --vcf INDEXED_VCF --chrom CONTIG --output PARQUET\n\
        priva alphamissense-domain merge --input CHR1_PARQUET --input CHR2_PARQUET ... --output PARQUET\n\
-       priva alphamissense-domain check --input PARQUET [--vcf VCF]\n\
-       priva domain-metadata {build|chromosome|merge|check} ... [--assembly hg19|hg38|GRCh37|GRCh38]\n\
+       priva alphamissense-domain check --input PARQUET [--vcf VCF] [--builder-sha256 SHA256]\n\
+       priva alphamissense-domain identity --input PARQUET\n\
+       priva domain-metadata {build|chromosome|merge|check|identity} ... [--assembly hg19|hg38|GRCh37|GRCh38]\n\
+Check prints the recorded and current builder_source_sha256. By default it\n\
+requires the current builder; --builder-sha256 instead accepts statistics\n\
+recorded by that pinned builder, with every other check unchanged. Identity\n\
+prints the recorded builder_source_sha256 without qualifying the file, for\n\
+das-domains --source-builder-sha256. Rebuilds happen only on explicit request.\n\
 Metadata build/chromosome also accept repeated --target-domain PATH. Merge must\n\
 receive every chromosome in literal header order, including empty chromosomes.\n\
 Metadata build --assembly enables the source-associated cache wrapper and its\n\
@@ -162,7 +168,7 @@ fn protect(input: &Path, output: &Path) -> Result<()> {
     }
     Ok(())
 }
-fn builder_identity() -> Result<String> {
+pub(crate) fn builder_identity() -> Result<String> {
     // Content identity of this builder and its semantic primitives, embedded
     // by rustc. Cache reuse does not depend on executable path, inode, debug
     // symbols or build-directory names. The lockfile pins the Parquet codec.
@@ -197,6 +203,42 @@ fn builder_identity() -> Result<String> {
         })
         .clone())
 }
+// Without a pin the recorded builder must be the current one. An explicit pin
+// accepts exactly that recorded builder and never relaxes any other check.
+pub(super) fn builder_accepted(
+    recorded: Option<&String>,
+    pin: Option<&str>,
+    current: &str,
+) -> bool {
+    recorded.map(String::as_str) == Some(pin.unwrap_or(current))
+}
+pub(super) fn builder_pin(value: &str) -> Result<String> {
+    if value.len() != 64 || !value.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return Err(invalid("--builder-sha256 requires SHA256"));
+    }
+    Ok(value.to_owned())
+}
+pub(super) fn identity_fields(recorded: &str, current: &str) -> String {
+    format!(
+        "\"builder_source_sha256\":\"{recorded}\",\"current_builder_source_sha256\":\"{current}\""
+    )
+}
+// Reads only the footer, so an installer can pass an earlier builder identity
+// to das-domains explicitly. Qualification remains the job of check.
+pub(super) fn recorded_identity(path: &Path) -> Result<()> {
+    let header = parquet::metadata(path)?;
+    let recorded = header
+        .get("priva.builder_source_sha256")
+        .filter(|value| builder_pin(value).is_ok())
+        .ok_or_else(|| exception("ValueError", "builder identity absent or invalid"))?;
+    let text = |key: &str| json(header.get(key).cloned().map_or(Json::Null, Json::Str));
+    println!(
+        "{{\"builder_source_sha256\":\"{recorded}\",\"kind\":{},\"stage\":{}}}",
+        text("priva.kind")?,
+        text("priva.stage")?
+    );
+    Ok(())
+}
 
 struct Options {
     command: String,
@@ -208,6 +250,7 @@ struct Options {
     threads: i64,
     assembly: Option<String>,
     targets: Option<HashSet<String>>,
+    builder: Option<String>,
 }
 fn common(options: &Options, context: &vcf::Context, input: &str) -> Result<Vec<(String, String)>> {
     let ordinal = options
@@ -592,9 +635,11 @@ fn check(options: &Options) -> Result<()> {
             }
         }
     }
+    let current = builder_identity()?;
+    let recorded = header.get("priva.builder_source_sha256");
     if header.get("priva.producer").map(String::as_str) != Some(PRODUCER)
         || header.get("priva.extractor").map(String::as_str) != Some(EXTRACTOR)
-        || header.get("priva.builder_source_sha256") != Some(&builder_identity()?)
+        || !builder_accepted(recorded, options.builder.as_deref(), &current)
     {
         return Err(exception(
             "ValueError",
@@ -631,7 +676,11 @@ fn check(options: &Options) -> Result<()> {
             return Err(exception("ValueError", "statistics gene inventory differs"));
         }
     }
-    println!("{{\"passed\":true,\"keys\":{}}}", keys.len());
+    println!(
+        "{{\"passed\":true,\"keys\":{},{}}}",
+        keys.len(),
+        identity_fields(recorded.unwrap(), &current)
+    );
     Ok(())
 }
 
@@ -642,7 +691,7 @@ pub(crate) fn dispatch(args: &[String], metadata: bool) -> Result<()> {
     }
     let command = args
         .first()
-        .filter(|s| ["build", "chromosome", "merge", "check"].contains(&s.as_str()))
+        .filter(|s| ["build", "chromosome", "merge", "check", "identity"].contains(&s.as_str()))
         .ok_or_else(|| invalid(HELP))?
         .clone();
     let mut fields = HashMap::new();
@@ -656,8 +705,9 @@ pub(crate) fn dispatch(args: &[String], metadata: bool) -> Result<()> {
             "build" => ["--vcf", "--output", "--threads"].contains(&name),
             "chromosome" => ["--vcf", "--output", "--chrom"].contains(&name),
             "merge" => ["--input", "--output"].contains(&name),
-            _ => ["--input", "--vcf"].contains(&name),
-        } || (metadata && name == "--assembly")
+            "identity" => name == "--input",
+            _ => ["--input", "--vcf"].contains(&name) || (!metadata && name == "--builder-sha256"),
+        } || (metadata && command != "identity" && name == "--assembly")
             || (metadata
                 && ["build", "chromosome"].contains(&command.as_str())
                 && name == "--target-domain");
@@ -678,7 +728,7 @@ pub(crate) fn dispatch(args: &[String], metadata: bool) -> Result<()> {
         at += 2;
     }
     let need = |name| fields.get(name).cloned().ok_or_else(|| invalid(HELP));
-    let output = if command == "check" {
+    let output = if ["check", "identity"].contains(&command.as_str()) {
         None
     } else {
         Some(need("--output")?.into())
@@ -693,8 +743,13 @@ pub(crate) fn dispatch(args: &[String], metadata: bool) -> Result<()> {
     } else {
         None
     };
-    if (command == "merge" && inputs.is_empty()) || (command == "check" && inputs.len() != 1) {
+    if (command == "merge" && inputs.is_empty())
+        || (["check", "identity"].contains(&command.as_str()) && inputs.len() != 1)
+    {
         return Err(invalid(HELP));
+    }
+    if command == "identity" {
+        return builder_error::finish(recorded_identity(&inputs[0]));
     }
     // The source uses Python int() and only distinguishes <=1 from >1 before
     // limiting workers to the number of contigs. Preserve Unicode digits,
@@ -725,6 +780,10 @@ pub(crate) fn dispatch(args: &[String], metadata: bool) -> Result<()> {
             _ => Err(invalid("unsupported assembly")),
         })
         .transpose()?;
+    let builder = fields
+        .get("--builder-sha256")
+        .map(|value| builder_pin(value))
+        .transpose()?;
     let options = Options {
         command: command.clone(),
         metadata,
@@ -735,10 +794,111 @@ pub(crate) fn dispatch(args: &[String], metadata: bool) -> Result<()> {
         threads,
         assembly,
         targets,
+        builder,
     };
     builder_error::finish(match command.as_str() {
         "merge" => merge(&options),
         "check" => check(&options),
         _ => build(&options),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        EXTRACTOR, Options, PRODUCER, builder_accepted, builder_identity, builder_pin, check,
+        dispatch, parquet,
+    };
+    use std::path::{Path, PathBuf};
+
+    fn statistics(builder: &str, name: &str) -> PathBuf {
+        let path = std::env::temp_dir().join(format!(
+            "priva_builder_pin_{}_{name}.parquet",
+            std::process::id()
+        ));
+        let footer = [
+            ("priva.kind", "statistics"),
+            ("priva.stage", "final"),
+            ("priva.input", "{}"),
+            ("priva.producer", PRODUCER),
+            ("priva.extractor", EXTRACTOR),
+            ("priva.builder_source_sha256", builder),
+            ("priva.keys", "[]"),
+        ];
+        let footer = footer
+            .into_iter()
+            .map(|(key, value)| (key.to_owned(), value.to_owned()))
+            .collect();
+        parquet::publish(&path, footer, |_| Ok(())).unwrap();
+        path
+    }
+    fn checked(path: &Path, pin: Option<&String>) -> bool {
+        check(&Options {
+            command: "check".into(),
+            metadata: false,
+            vcf: None,
+            output: None,
+            inputs: vec![path.to_owned()],
+            chrom: None,
+            threads: 1,
+            assembly: None,
+            targets: None,
+            builder: pin.cloned(),
+        })
+        .is_ok()
+    }
+
+    #[test]
+    fn statistics_check_accepts_an_earlier_builder_only_when_pinned() {
+        let current = builder_identity().unwrap();
+        let older = "b".repeat(64);
+        let other = "c".repeat(64);
+        let earlier = statistics(&older, "earlier");
+        assert!(!checked(&earlier, None));
+        assert!(checked(&earlier, Some(&older)));
+        assert!(!checked(&earlier, Some(&other)));
+        assert!(!checked(&earlier, Some(&current)));
+        let present = statistics(&current, "current");
+        assert!(checked(&present, None));
+        assert!(checked(&present, Some(&current)));
+        assert!(!checked(&present, Some(&older)));
+        std::fs::remove_file(earlier).unwrap();
+        std::fs::remove_file(present).unwrap();
+    }
+
+    #[test]
+    fn builder_pin_accepts_only_the_pinned_recorded_builder() {
+        let current = "a".repeat(64);
+        let older = "b".repeat(64);
+        let other = "c".repeat(64);
+        let accepted = |recorded: Option<&String>, pin: Option<&String>| {
+            builder_accepted(recorded, pin.map(String::as_str), &current)
+        };
+        // Unpinned checks keep requiring the current builder.
+        assert!(accepted(Some(&current), None));
+        assert!(!accepted(Some(&older), None));
+        assert!(!accepted(None, None));
+        // A pin accepts exactly the recorded builder, even an earlier one.
+        assert!(accepted(Some(&older), Some(&older)));
+        assert!(!accepted(Some(&older), Some(&other)));
+        assert!(!accepted(Some(&current), Some(&older)));
+        assert!(!accepted(None, Some(&older)));
+    }
+
+    #[test]
+    fn builder_pin_is_a_sha256_statistics_check_option() {
+        assert!(builder_pin(&"0f".repeat(32)).is_ok());
+        assert!(builder_pin("0f").is_err());
+        assert!(builder_pin(&"g".repeat(64)).is_err());
+        let message = |command: &str, pin: &str, metadata: bool| {
+            let args = [command, "--input", "absent", "--builder-sha256", pin];
+            let args: Vec<String> = args.into_iter().map(String::from).collect();
+            dispatch(&args, metadata).unwrap_err().to_string()
+        };
+        let refused = "--builder-sha256 requires SHA256";
+        assert_eq!(message("check", "invalid", false), refused);
+        let pin = "0f".repeat(32);
+        assert!(message("check", &pin, true).starts_with("usage:"));
+        assert!(message("identity", &pin, false).starts_with("usage:"));
+    }
 }

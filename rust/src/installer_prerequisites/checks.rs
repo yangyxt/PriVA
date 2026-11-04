@@ -633,8 +633,10 @@ fn managed_vep_cache(config: &Config) -> Result<String> {
         other => {
             return Err(error(
                 "TypeError",
+                // CPython 3.12 pathlib.Path wording.
                 format!(
-                    "expected str, bytes or os.PathLike object, not {}",
+                    "argument should be a str or an os.PathLike object where __fspath__ returns \
+                     a str, not '{}'",
                     other.type_name()
                 ),
             ));

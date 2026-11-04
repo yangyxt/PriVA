@@ -193,6 +193,8 @@ class InstallerOutputPaths(unittest.TestCase):
         self.assertEqual(json.loads(self.config_file.read_text())["interpro_mapping_pickle"], str(selected))
 
     def test_interpro_bare_default_generation_keeps_original_output_and_report_paths(self):
+        # Without cache_root a generated mapping stays in the source data folder.
+        self.config.pop("cache_root")
         result, events = self.run_function("InterPro_parsing")
         self.assertEqual(result.returncode, 0, result.stderr)
         command = next(event for event in events if event[0] == "parser")

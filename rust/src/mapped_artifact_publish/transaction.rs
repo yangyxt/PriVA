@@ -99,7 +99,11 @@ fn artifact_record(expected: &Json, state: &Json) -> Result<Json> {
         ("artifact_bytes", get(state, "size")?.clone()),
         ("artifact_sha256", get(state, "sha256")?.clone()),
     ]);
-    for name in ["scientific_input", "native_input_lineage", "native_producer"] {
+    for name in [
+        "scientific_input",
+        "native_input_lineage",
+        "native_producer",
+    ] {
         if let Some(v) = expected.get(name) {
             value.set(name, v.clone());
         }

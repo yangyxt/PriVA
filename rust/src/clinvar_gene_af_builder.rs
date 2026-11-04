@@ -476,7 +476,10 @@ mod tests {
         let af = |results: Vec<Records>| -> Option<f64> {
             let merged = merge(results).unwrap();
             assert_eq!(merged.len(), 1);
-            merged[0].1.as_ref().map(|entries| entry_af(entries).unwrap())
+            merged[0]
+                .1
+                .as_ref()
+                .map(|entries| entry_af(entries).unwrap())
         };
         let g = |record| vec![("g".to_string(), record)];
         // None marks a gene without a non-zero AF on that chromosome.

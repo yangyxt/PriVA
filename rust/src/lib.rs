@@ -104,6 +104,7 @@ mod reference_resources;
 mod rust_cache;
 mod sha256;
 pub mod spliceai2;
+mod spliceai2_prepare;
 pub mod spliceai_cache_input;
 pub mod spliceai_cutoffs;
 mod splicevault_builder;

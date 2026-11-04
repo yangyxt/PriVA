@@ -14,6 +14,8 @@ from unittest import mock
 
 import yaml
 
+import fake_priva_binary
+
 ROOT = Path(__file__).resolve().parents[1]
 INSTALLER = ROOT / 'scripts/install_utils.sh'
 FROZEN_INSTALLER = ROOT / 'tests/fixtures/installer-054b494/scripts/install_utils.sh'
@@ -318,7 +320,10 @@ class SpliceAI2Preparation(unittest.TestCase):
         self.manifest.write_text(json.dumps(self.source))
         self.output = self.folder / 'output with spaces'
         self.calls = self.folder / 'calls.json'
-        self.env = dict(os.environ, TEST_CONFIG=str(self.config), TEST_CALLS=str(self.calls))
+        # The installer runs priva spliceai2-prepare; the fixture priva runs the
+        # stand-in driver above with the same arguments.
+        self.env = dict(os.environ, TEST_CONFIG=str(self.config), TEST_CALLS=str(self.calls),
+                        **fake_priva_binary.environment(self.folder, scripts))
 
     def invoke(self, mode='valid', converter='/pinned bin/spliceai2-converter'):
         self.env['TEST_ADAPTER_MODE'] = mode

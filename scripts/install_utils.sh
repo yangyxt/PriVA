@@ -897,14 +897,12 @@ PY
     if [[ -e ${receipt} || -L ${receipt} ]]; then
         log "Reusing the completed SpliceAI2 receipt after verification; no conversion is started."
     else
-        [[ -f ${SCRIPT_DIR}/spliceai2_to_vep_vcf.py ]] || {
-            log "ERROR: The SpliceAI2 deployment driver is absent from this source snapshot."
-            return 1
-        }
+        # Callers reach this after PriVA_rust_install records priva_binary.
+        priva_resolve_binary "${config_file}" || return 1
         log "Preparing SpliceAI2 GRCh38 from the complete source manifest; no score download or v1 fallback is performed."
         local -a converter_args=()
         [[ -z ${converter} ]] || converter_args=(--converter-bin "${converter}")
-        python "${SCRIPT_DIR}/spliceai2_to_vep_vcf.py" prepare \
+        "${PRIVA_BIN}" spliceai2-prepare prepare \
             --manifest "${manifest}" --assembly GRCh38 --output-dir "${output_dir}" \
             --receipt "${receipt}" "${converter_args[@]}" || return 1
     fi

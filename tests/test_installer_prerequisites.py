@@ -294,6 +294,22 @@ class InstallerPrerequisites(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "Cannot reuse bundled ClinVar gene statistics"):
             PREREQS.validate_selected_clinvar_stats(self.config, self.source)
 
+    def test_generated_native_clinvar_stat_archive_is_checked_by_its_header(self):
+        # priva clinvar-gene-stats writes a PRIVARKV archive with schema 5.
+        selected = self.folder / "generated statistics" / "release.rkyv"
+        selected.parent.mkdir()
+        archive = b"\0" * 16
+        def header(schema, length=len(archive)):
+            return (b"PRIVARKV" + (1).to_bytes(4, "little") + schema.to_bytes(4, "little")
+                    + (1).to_bytes(4, "little") + (1).to_bytes(4, "little") + length.to_bytes(8, "little"))
+        selected.write_bytes(header(5) + archive)
+        self.config["clinvar_gene_stat"] = str(selected)
+        PREREQS.validate_selected_clinvar_stats(self.config, self.source)
+        for value in (header(4) + archive, header(5, len(archive) + 1) + archive, self.stats.read_bytes()):
+            selected.write_bytes(value)
+            with self.assertRaisesRegex(ValueError, "Cannot reuse bundled ClinVar gene statistics"):
+                PREREQS.validate_selected_clinvar_stats(self.config, self.source)
+
     def test_clinvar_stat_relative_directory_is_retained_but_bare_name_is_bundled_relative(self):
         self.config["clinvar_gene_stat"] = "generated/release.pkl.gz"
         self.assertEqual(PREREQS.clinvar_stats_path(self.config, self.source), Path("generated/release.pkl.gz"))

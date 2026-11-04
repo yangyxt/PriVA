@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import gzip
+import hashlib
+import json
 import os
 from pathlib import Path
 import pickle
@@ -13,6 +15,7 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'tests'))
+import fake_priva_binary
 from test_clinvar_regeneration import header_vcf, row
 from clinvar_annotation_contract import AA_CSQ_FIELDS, GENE_CSQ_FIELDS, AF_CSQ_FIELDS
 from clinvar_stat_variants import per_gene_stat, logger
@@ -35,12 +38,16 @@ read_yaml() {
         clinvar_gene_stat) printf '%s' "$TEST_BASELINE_CONFIG" ;;
         clinvar_patho_af_stat) printf '%s' "${TEST_GENE_AF:-null}" ;;
         clinvar_patho_exon_af_stat) printf '%s' "${TEST_EXON_AF:-null}" ;;
+        priva_python_hash_seed) printf '%s' "${TEST_SEED:-null}" ;;
         threads) printf 1 ;;
         gnomad_vcf_chrX) printf '%s/gnomad.chrX.vcf.gz' "$TEST_CACHE" ;;
         *) printf null ;;
     esac
 }
 update_yaml() { event "update $2 $3"; }
+# The fixture priva (tests/fake_priva_binary.py) records each native call and
+# runs the replaced Python script through the exported python function below.
+priva_resolve_binary() { PRIVA_BIN=$PRIVA_BINARY; }
 check_vcf_validity() { [[ -s "$1" && -s "$1.tbi" ]]; }
 download_resource_atomic() {
     event "download $1"
@@ -67,6 +74,8 @@ python() {
             cp "$TEST_AA_FIXTURE" "$3"; cp "$TEST_SPLICE_FIXTURE" "$4" ;;
         stat_gene_patho_afs.py)
             event gene_af_builder
+            # Without a CSQ format the builder succeeds and writes nothing.
+            [[ "$TEST_FAIL" != gene_af_no_csq ]] || return 0
             cp "$TEST_GENE_AF_FIXTURE" "$3" ;;
         stat_exon_patho_afs.py)
             event exon_af_builder
@@ -79,10 +88,11 @@ python() {
                 argument=$1; shift
                 if [[ "$argument" == --output_pickle ]]; then out=$1; fi
             done
-            cp "$TEST_GENE_FIXTURE" "$out" ;;
+            cp "$TEST_GENE_NATIVE_FIXTURE" "$out" ;;
         *) return 9 ;;
     esac
 }
+export -f event python
 '''
 
 
@@ -129,15 +139,22 @@ class ClinVarInstallerTests(unittest.TestCase):
             with opener(path, 'wb') as handle:
                 pickle.dump(value, handle)
             fixture_paths[name] = path
+        # The fixture priva checks its archives with the Python cache checks,
+        # which read a plain pickle at a .rkyv name.
+        fixture_paths['gene_native'] = self.directory / 'gene_native.pkl'
+        fixture_paths['gene_native'].write_bytes(pickle.dumps(fixtures['gene']))
         self.baseline.write_bytes(fixture_paths['gene'].read_bytes())
+        priva = tempfile.TemporaryDirectory()
+        self.addCleanup(priva.cleanup)
         self.env = dict(os.environ, TEST_EVENTS=str(self.events), TEST_CACHE=str(self.cache),
                         TEST_VCF=str(self.cache / 'clinvar.hg19.vep.vcf.gz'),
-                        TEST_AA=str(self.cache / 'clinvar.hg19.vep.aa_change.stats.pkl'),
-                        TEST_SPLICE=str(self.cache / 'clinvar.hg19.vep.splice_change.stats.pkl'),
+                        TEST_AA=str(self.cache / 'clinvar.hg19.vep.aa_change.stats.rkyv'),
+                        TEST_SPLICE=str(self.cache / 'clinvar.hg19.vep.splice_change.stats.rkyv'),
                         TEST_BASELINE_CONFIG='clinvar_2star_stats.pkl.gz',
                         TEST_RAW=str(paths['raw']), TEST_VEP=str(paths['vep']),
                         TEST_COMPLETE=str(paths['complete']), TEST_PYTHON=sys.executable,
-                        TEST_FAIL='none', SCRIPT_DIR=str(ROOT / 'scripts'), DATA_DIR=str(data), BASE_DIR=str(ROOT))
+                        TEST_FAIL='none', SCRIPT_DIR=str(ROOT / 'scripts'), DATA_DIR=str(data), BASE_DIR=str(ROOT),
+                        **fake_priva_binary.environment(priva.name))
         self.env.update({'TEST_' + name.upper() + '_FIXTURE': str(path)
                          for name, path in fixture_paths.items()})
         source = (ROOT / 'scripts/install_utils.sh').read_text()
@@ -160,6 +177,11 @@ class ClinVarInstallerTests(unittest.TestCase):
         result = subprocess.run(['bash', '-c', PRELUDE + self.functions + '\n' + command],
                                 env=environment, text=True, capture_output=True)
         return result, self.events.read_text().splitlines()
+
+    def priva_calls(self):
+        calls = fake_priva_binary.calls(self.env['PRIVA_FAKE_CALLS'])
+        Path(self.env['PRIVA_FAKE_CALLS']).unlink(missing_ok=True)
+        return calls
 
     def install_vcf(self, stage):
         path = Path(self.env['TEST_' + stage.upper()])
@@ -272,17 +294,90 @@ class ClinVarInstallerTests(unittest.TestCase):
         self.assertEqual([event.split()[0] for event in events], ['aa_builder', 'update', 'update'])
         self.assertTrue(Path(self.env['TEST_AA']).is_file())
         self.assertTrue(Path(self.env['TEST_SPLICE']).is_file())
+        vcf, aa, splice = self.env['TEST_VCF'], self.env['TEST_AA'], self.env['TEST_SPLICE']
+        self.assertEqual(self.priva_calls(), [
+            ['clinvar-contract', 'header', '--vcf', vcf, '--stage', 'aa'],
+            ['builder-identity', 'clinvar-aa-splice'],
+            ['clinvar-aa-splice', 'build', '--vcf', vcf, '--aa-output', aa + '.partial.fixture',
+             '--splice-output', splice + '.partial.fixture', '--threads', '1'],
+            ['clinvar-contract', 'cache', '--input', aa + '.partial.fixture', '--kind', 'aa'],
+            ['clinvar-contract', 'cache', '--input', splice + '.partial.fixture', '--kind', 'splice']])
+        receipt = json.loads(Path(aa + '.pair.ready.json').read_text())
+        producer = Path(aa + '.builder_identity.json')
+        self.assertEqual(receipt['producer_path'], str(producer))
+        self.assertEqual(json.loads(producer.read_text())['builder'], 'clinvar-aa-splice')
+        self.assertEqual(receipt['inputs']['producer_sha256'], hashlib.sha256(producer.read_bytes()).hexdigest())
+
+    def test_native_aa_reuse_follows_the_builder_identity(self):
+        self.install_vcf('complete')
+        result, _ = self.run_function('ClinVar_AA_stat config.yaml')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.priva_calls()
+        self.events.write_text('')
+        result, events = self.run_function('ClinVar_AA_stat config.yaml')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(events, [])
+        vcf, aa, splice = self.env['TEST_VCF'], self.env['TEST_AA'], self.env['TEST_SPLICE']
+        self.assertEqual(self.priva_calls(), [
+            ['clinvar-contract', 'header', '--vcf', vcf, '--stage', 'aa'],
+            ['builder-identity', 'clinvar-aa-splice'],
+            ['clinvar-contract', 'cache', '--input', aa, '--kind', 'aa'],
+            ['clinvar-contract', 'cache', '--input', splice, '--kind', 'splice']])
+        self.env['PRIVA_FAKE_BUILDER_SHA256'] = 'f' * 64
+        result, events = self.run_function('ClinVar_AA_stat config.yaml')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('aa_builder', events)
+
+    def test_legacy_python_pair_is_reused_without_native_builds(self):
+        self.install_vcf('complete')
+        aa, splice = self.cache / 'legacy.aa.pkl', self.cache / 'legacy.splice.pkl'
+        for path, fixture in ((aa, 'TEST_AA_FIXTURE'), (splice, 'TEST_SPLICE_FIXTURE')):
+            path.write_bytes(Path(self.env[fixture]).read_bytes())
+        contract = [sys.executable, str(ROOT / 'scripts/clinvar_annotation_contract.py')]
+        pair = ['--vcf', self.env['TEST_VCF'], '--producer', str(ROOT / 'scripts/stat_aachange_clinvar.py'),
+                '--aa', str(aa), '--splice', str(splice), '--receipt', str(aa) + '.pair.ready.json',
+                '--captured', str(self.directory / 'captured.json')]
+        for operation in ('pair-capture', 'pair-complete'):
+            subprocess.run(contract + [operation] + pair, check=True, capture_output=True)
+        self.env.update(TEST_AA=str(aa), TEST_SPLICE=str(splice))
+        result, events = self.run_function('ClinVar_AA_stat config.yaml')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(events, [])
+        self.assertEqual(self.priva_calls(), [
+            ['clinvar-contract', 'header', '--vcf', self.env['TEST_VCF'], '--stage', 'aa']])
+        self.assertFalse(Path(str(aa)[:-4] + '.rkyv').exists())
 
     def test_aa_outputs_honor_distinct_configured_directories(self):
         self.install_vcf('complete')
+        # Pickle values restored by cache-install prepare select .rkyv siblings.
         self.env['TEST_AA'] = str(self.cache / 'aa/custom.pkl')
         self.env['TEST_SPLICE'] = str(self.cache / 'splice/custom.pkl')
         result, events = self.run_function('ClinVar_AA_stat config.yaml')
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual([event.split()[0] for event in events], ['aa_builder', 'update', 'update'])
-        self.assertEqual(Path(self.env['TEST_AA']).read_bytes(), Path(self.env['TEST_AA_FIXTURE']).read_bytes())
-        self.assertEqual(Path(self.env['TEST_SPLICE']).read_bytes(), Path(self.env['TEST_SPLICE_FIXTURE']).read_bytes())
-        self.assertFalse((self.cache / 'clinvar.hg19.vep.aa_change.stats.pkl').exists())
+        aa, splice = self.cache / 'aa/custom.rkyv', self.cache / 'splice/custom.rkyv'
+        self.assertEqual(events, ['aa_builder', 'update clinvar_aa_stat ' + str(aa),
+                                  'update clinvar_splice_stat ' + str(splice)])
+        self.assertEqual(aa.read_bytes(), Path(self.env['TEST_AA_FIXTURE']).read_bytes())
+        self.assertEqual(splice.read_bytes(), Path(self.env['TEST_SPLICE_FIXTURE']).read_bytes())
+        self.assertFalse(Path(self.env['TEST_AA']).exists())
+        self.assertFalse((self.cache / 'clinvar.hg19.vep.aa_change.stats.rkyv').exists())
+
+    def test_managed_aa_archive_is_never_rebuilt_in_place(self):
+        self.install_vcf('complete')
+        managed = {}
+        for key in ('TEST_AA', 'TEST_SPLICE'):
+            managed[key] = self.cache / ('managed.' + key.lower() + '.v1.rkyv')
+            managed[key].write_bytes(b'published archive')
+            Path(str(managed[key]) + '.source.json').write_text('{"origin": "direct"}\n')
+            self.env[key] = str(managed[key])
+        result, events = self.run_function('ClinVar_AA_stat config.yaml')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        defaults = [self.cache / 'clinvar.hg19.vep.aa_change.stats.rkyv',
+                    self.cache / 'clinvar.hg19.vep.splice_change.stats.rkyv']
+        self.assertEqual(events, ['aa_builder', 'update clinvar_aa_stat ' + str(defaults[0]),
+                                  'update clinvar_splice_stat ' + str(defaults[1])])
+        self.assertTrue(all(path.is_file() for path in defaults))
+        self.assertTrue(all(path.read_bytes() == b'published archive' for path in managed.values()))
 
     def test_aa_pair_completion_cold_warm_and_input_output_invalidation(self):
         self.install_vcf('complete')
@@ -337,13 +432,29 @@ class ClinVarInstallerTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual(events, [])
 
-    def test_aa_receipt_output_collision_stops_before_builder(self):
+    def test_aa_receipt_named_splice_value_writes_its_own_archive(self):
         self.install_vcf('complete')
-        self.env['TEST_SPLICE'] = self.env['TEST_AA'] + '.pair.ready.json'
+        receipt = Path(self.env['TEST_AA'] + '.pair.ready.json')
+        self.env['TEST_SPLICE'] = str(receipt)
         result, events = self.run_function('ClinVar_AA_stat config.yaml')
-        self.assertNotEqual(result.returncode, 0)
-        self.assertEqual(events, [])
-        self.assertFalse(Path(self.env['TEST_SPLICE']).exists())
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('aa_builder', events)
+        self.assertEqual(json.loads(receipt.read_text())['schema'], 1)
+        self.assertEqual(Path(str(receipt) + '.rkyv').read_bytes(),
+                         Path(self.env['TEST_SPLICE_FIXTURE']).read_bytes())
+
+    def test_aa_linked_producer_file_is_replaced_not_written_through(self):
+        self.install_vcf('complete')
+        producer = Path(self.env['TEST_AA'] + '.builder_identity.json')
+        protected = self.directory / 'protected.txt'
+        protected.write_text('linked file remains unchanged\n')
+        os.symlink(protected, producer)
+        result, events = self.run_function('ClinVar_AA_stat config.yaml')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('aa_builder', events)
+        self.assertFalse(producer.is_symlink())
+        self.assertEqual(json.loads(producer.read_text())['builder'], 'clinvar-aa-splice')
+        self.assertEqual(protected.read_text(), 'linked file remains unchanged\n')
 
     def test_aa_real_producer_pair_bytes_order_and_warm_reuse(self):
         fields = sorted(AA_CSQ_FIELDS) + ['Unused']
@@ -364,7 +475,7 @@ class ClinVarInstallerTests(unittest.TestCase):
         baseline = Path(os.environ.get('PRIVA_WORKER_BASELINE', str(ROOT)))
         subprocess.run([sys.executable, str(baseline / 'scripts/stat_aachange_clinvar.py'),
                         self.env['TEST_VCF'], *map(str, expected), '1'], check=True, capture_output=True)
-        command = '''python() { [[ "${1##*/}" != stat_aachange_clinvar.py ]] || event aa_builder; "$TEST_PYTHON" "$@"; }; ClinVar_AA_stat config.yaml'''
+        command = '''python() { [[ "${1##*/}" != stat_aachange_clinvar.py ]] || event aa_builder; "$TEST_PYTHON" "$@"; }; export -f python; ClinVar_AA_stat config.yaml'''
         result, events = self.run_function(command)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn('aa_builder', events)
@@ -425,8 +536,9 @@ class ClinVarInstallerTests(unittest.TestCase):
         return result
 
     def assert_af_alias_rejected(self, output, target_name, kind):
+        # The builders write .rkyv archives, so the aliases are at those names.
         case = self.cache / ('af-case-' + output + '-' + target_name + '-' + kind)
-        gene, exon = case / 'gene/result.pkl', case / 'exon/result.pkl'
+        gene, exon = case / 'gene/result.rkyv', case / 'exon/result.rkyv'
         other = exon if output == 'gene' else gene
         target = {'vcf': Path(self.env['TEST_VCF']),
                   'tbi': Path(self.env['TEST_VCF'] + '.tbi'),
@@ -451,13 +563,15 @@ class ClinVarInstallerTests(unittest.TestCase):
         self.assertRegex(result.stderr, 'paths must (be distinct|not share an existing file)')
         self.assertEqual(events, [])
         self.assertEqual(self.fixture_state(), before)
+        self.assertEqual(self.priva_calls(), [
+            ['clinvar-contract', 'af-paths-check', '--vcf', self.env['TEST_VCF'], '--config', self.env['TEST_CONFIG'],
+             '--gene', self.env['TEST_GENE_AF'], '--exon', self.env['TEST_EXON_AF']]])
 
-    def test_af_normalized_input_index_config_and_output_aliases_fail_without_writes(self):
+    def test_af_normalized_output_aliases_fail_without_writes(self):
         self.af_case()
         for output in ('gene', 'exon'):
-            for target in ('vcf', 'tbi', 'csi', 'config', 'other'):
-                with self.subTest(output=output, target=target):
-                    self.assert_af_alias_rejected(output, target, 'normalized')
+            with self.subTest(output=output):
+                self.assert_af_alias_rejected(output, 'other', 'normalized')
 
     def test_af_symlink_input_index_config_and_output_aliases_fail_without_writes(self):
         self.af_case()
@@ -479,19 +593,68 @@ class ClinVarInstallerTests(unittest.TestCase):
             with self.subTest(output=output):
                 self.assert_af_alias_rejected(output, 'other', 'same')
 
+    def test_af_values_naming_protected_files_write_separate_archives(self):
+        config = self.af_case()
+        protected = [config, Path(self.env['TEST_VCF']), Path(self.env['TEST_VCF'] + '.tbi')]
+        before = {path: path.read_bytes() for path in protected}
+        self.env.update(TEST_GENE_AF=self.env['TEST_VCF'], TEST_EXON_AF=str(config))
+        result, events = self.run_function('ClinVar_patho_AF_stat "$TEST_CONFIG"')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(events, ['gene_af_builder', 'exon_af_builder',
+                                  'update clinvar_patho_af_stat ' + self.env['TEST_VCF'] + '.rkyv',
+                                  'update clinvar_patho_exon_af_stat ' + str(config) + '.rkyv'])
+        self.assertEqual({path: path.read_bytes() for path in protected}, before)
+
     def test_af_distinct_configured_paths_keep_original_bytes_and_producer_order(self):
         config = self.af_case()
         protected = [config, Path(self.env['TEST_VCF']), Path(self.env['TEST_VCF'] + '.tbi')]
         before = {path: path.read_bytes() for path in protected}
+        # Pickle values restored by cache-install prepare select .rkyv siblings.
         gene, exon = self.cache / "gene's output/result.pkl", self.cache / 'exon output/result.pkl'
         self.env.update(TEST_GENE_AF=str(gene), TEST_EXON_AF=str(exon))
         result, events = self.run_function('ClinVar_patho_AF_stat "$TEST_CONFIG"')
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual([event.split()[0] for event in events],
-                         ['gene_af_builder', 'exon_af_builder', 'update', 'update'])
+        gene, exon = gene.with_suffix('.rkyv'), exon.with_suffix('.rkyv')
+        self.assertEqual(events, ['gene_af_builder', 'exon_af_builder',
+                                  'update clinvar_patho_af_stat ' + str(gene),
+                                  'update clinvar_patho_exon_af_stat ' + str(exon)])
         for output, fixture in ((gene, 'TEST_GENE_AF_FIXTURE'), (exon, 'TEST_EXON_AF_FIXTURE')):
             self.assertEqual(output.read_bytes(), Path(self.env[fixture]).read_bytes())
+        self.assertFalse(gene.with_suffix('.pkl').exists() or exon.with_suffix('.pkl').exists())
         self.assertEqual({path: path.read_bytes() for path in protected}, before)
+        vcf = self.env['TEST_VCF']
+        self.assertEqual(self.priva_calls(), [
+            ['clinvar-contract', 'af-paths-check', '--vcf', vcf, '--config', str(config),
+             '--gene', str(gene), '--exon', str(exon)],
+            ['clinvar-contract', 'header', '--vcf', vcf, '--stage', 'af'],
+            ['clinvar-gene-af', 'build', '--vcf', vcf, '--output', str(gene) + '.partial.fixture', '--threads', '1'],
+            ['clinvar-contract', 'cache', '--input', str(gene) + '.partial.fixture', '--kind', 'gene-af'],
+            ['clinvar-exon-af', 'build', '--vcf', vcf, '--output', str(exon) + '.partial.fixture', '--threads', '1'],
+            ['clinvar-contract', 'cache', '--input', str(exon) + '.partial.fixture', '--kind', 'exon-af']])
+
+    def test_af_managed_archives_are_never_rebuilt_in_place(self):
+        self.install_vcf('complete')
+        managed = {}
+        for key in ('TEST_GENE_AF', 'TEST_EXON_AF'):
+            managed[key] = self.cache / ('managed.' + key.lower() + '.v1.rkyv')
+            managed[key].write_bytes(b'published archive')
+            Path(str(managed[key]) + '.source.json').write_text('{"origin": "direct"}\n')
+            self.env[key] = str(managed[key])
+        result, events = self.run_function('ClinVar_patho_AF_stat config.yaml')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(events[2:], [
+            'update clinvar_patho_af_stat ' + str(self.cache / 'clinvar.hg19.vep.patho_af_stat.rkyv'),
+            'update clinvar_patho_exon_af_stat ' + str(self.cache / 'clinvar.hg19.vep.patho_exon_af_stat.rkyv')])
+        self.assertTrue(all(path.read_bytes() == b'published archive' for path in managed.values()))
+
+    def test_af_builder_without_csq_output_fails_before_exon_builder(self):
+        self.install_vcf('complete')
+        result, events = self.run_function('ClinVar_patho_AF_stat config.yaml', fail='gene_af_no_csq')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('priva clinvar-gene-af wrote no archive', result.stdout)
+        self.assertEqual(events, ['gene_af_builder'])
+        self.assertEqual([call[:2] for call in self.priva_calls()], [
+            ['clinvar-contract', 'af-paths-check'], ['clinvar-contract', 'header'], ['clinvar-gene-af', 'build']])
 
     def test_af_stage_rejects_missing_population_annotations(self):
         self.install_vcf('vep')
@@ -504,7 +667,7 @@ class ClinVarInstallerTests(unittest.TestCase):
         result, events = self.run_function('ClinVar_patho_AF_stat config.yaml', fail='exon_af')
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual(events, ['gene_af_builder', 'exon_af_builder'])
-        self.assertFalse((self.cache / 'clinvar.hg19.vep.patho_af_stat.pkl').exists())
+        self.assertFalse((self.cache / 'clinvar.hg19.vep.patho_af_stat.rkyv').exists())
 
     def test_valid_af_outputs_publish_after_original_gene_then_exon_order(self):
         self.install_vcf('complete')
@@ -517,22 +680,48 @@ class ClinVarInstallerTests(unittest.TestCase):
         before = self.baseline.read_bytes()
         result, events = self.run_function('ClinVar_Gene_stat_regenerate config.yaml summary.tsv mane.tsv "$DATA_DIR/ClinVar/clinvar_2star_stats.pkl.gz"')
         self.assertNotEqual(result.returncode, 0)
+        self.assertIn('Candidate output must end in .rkyv', result.stdout)
         self.assertEqual(events, [])
+        self.assertEqual(self.priva_calls(), [])
         self.assertEqual(before, self.baseline.read_bytes())
 
-    def test_explicit_regeneration_passes_inputs_and_preserves_baseline(self):
+    def regenerate(self, seed=None):
         self.install_vcf('complete')
-        before = self.baseline.read_bytes()
         for filename in ('summary.tsv', 'mane.tsv'):
             (self.directory / filename).write_text('explicit pinned fixture\n')
         self.env['TEST_DIRECTORY'] = str(self.directory)
-        result, events = self.run_function('ClinVar_Gene_stat_regenerate config.yaml "$TEST_DIRECTORY/summary.tsv" "$TEST_DIRECTORY/mane.tsv" "$TEST_DIRECTORY/candidate.pkl.gz"')
+        if seed is not None:
+            self.env['TEST_SEED'] = seed
+        return self.run_function('ClinVar_Gene_stat_regenerate config.yaml "$TEST_DIRECTORY/summary.tsv" "$TEST_DIRECTORY/mane.tsv" "$TEST_DIRECTORY/candidate.rkyv"')
+
+    def test_explicit_regeneration_passes_inputs_and_preserves_baseline(self):
+        before = self.baseline.read_bytes()
+        result, events = self.regenerate()
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(len(events), 1)
         self.assertIn('--clinvar-summary ' + str(self.directory / 'summary.tsv'), events[0])
         self.assertIn('--mane-summary ' + str(self.directory / 'mane.tsv'), events[0])
         self.assertEqual(before, self.baseline.read_bytes())
-        self.assertTrue((self.directory / 'candidate.pkl.gz').is_file())
+        self.assertTrue((self.directory / 'candidate.rkyv').is_file())
+        vcf, temporary = self.env['TEST_VCF'], str(self.directory / 'candidate.partial.fixture.rkyv')
+        self.assertEqual(self.priva_calls(), [
+            ['clinvar-contract', 'header', '--vcf', vcf, '--stage', 'gene'],
+            ['clinvar-gene-stats', 'build', '--vcf', vcf, '--output', temporary, '--python-hash-seed', '0',
+             '--clinvar-summary', str(self.directory / 'summary.tsv'),
+             '--mane-summary', str(self.directory / 'mane.tsv'), '--threads', '1', '--config', 'config.yaml'],
+            ['clinvar-contract', 'cache', '--input', temporary, '--kind', 'gene']])
+
+    def test_explicit_regeneration_uses_the_configured_hash_seed(self):
+        result, _ = self.regenerate('17')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        build = [call for call in self.priva_calls() if call[0] == 'clinvar-gene-stats']
+        self.assertEqual(build[0][build[0].index('--python-hash-seed') + 1], '17')
+        self.events.write_text('')
+        result, events = self.regenerate('-1')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('priva_python_hash_seed must be a non-negative integer', result.stdout)
+        self.assertEqual(events, [])
+        self.assertEqual(self.priva_calls(), [])
 
 
 if __name__ == '__main__':

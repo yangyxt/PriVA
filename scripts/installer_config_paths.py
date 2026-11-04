@@ -692,6 +692,8 @@ def _portable_defaults(config: dict, source_root: Path) -> dict[str, str]:
     # Preserve this baseline marker even when absent/empty. The existing
     # ClinVar refresh procedure recognizes it and selects a managed candidate.
     fill("clinvar_gene_stat", source_root / "data/ClinVar/clinvar_2star_stats.pkl.gz")
+    # The gene-statistics builder reproduces the set order of this Python hash seed.
+    fill("priva_python_hash_seed", "0")
     fill("utr_annotator_file", plugin / f"UTRannotator/uORF_5UTR_{genome}_PUBLIC.txt")
     fill("loeuf_prescore", source_root / "data/loeuf" / (
         "loeuf_dataset.tsv.gz" if assembly == "hg19" else "loeuf_dataset_hg38.tsv.gz"))

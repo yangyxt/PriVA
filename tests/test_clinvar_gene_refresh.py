@@ -147,6 +147,40 @@ class ClinVarGeneRefreshTests(unittest.TestCase):
             value = refresh.install_refresh(self.config, self.source)
         return value, preflight, acquired
 
+    def test_published_native_statistics_keep_date_based_refresh(self):
+        result, _, _ = self.install()
+        output = Path(result["output_path"])
+        refreshed = refresh.load_config(self.config)
+        for origin in ("direct", None):
+            with self.subTest(origin=origin):
+                # cache-install publish selects a managed copy with its own receipt.
+                managed = self.directory / "cache_root" / f"clinvar_gene_stat.{origin}.v1.rkyv"
+                managed.parent.mkdir(exist_ok=True)
+                managed.write_bytes(output.read_bytes())
+                record = {"key": "clinvar_gene_stat", "archive": str(managed)}
+                if origin is None:
+                    record["source"] = str(output)
+                else:
+                    record.update(origin=origin, archive_sha256=hashlib.sha256(output.read_bytes()).hexdigest())
+                Path(str(managed) + ".source.json").write_text(json.dumps(record))
+                self.settings = dict(refreshed, clinvar_gene_stat=str(managed))
+                self.save_config()
+                self.latest["file_date"] = "2026-04-30"
+                self.assertEqual(self.plan()["action"], "reuse")
+                self.latest["file_date"] = "2026-07-31"
+                planned = self.plan()
+                self.assertEqual(planned["action"], "rebuild")
+                self.assertNotEqual(planned["output_path"], str(output))
+
+    def test_hash_seed_is_bound_into_the_profile(self):
+        before = self.signature()
+        self.settings["priva_python_hash_seed"] = 0
+        self.save_config()
+        self.assertEqual(self.signature(), before)
+        self.settings["priva_python_hash_seed"] = 17
+        self.save_config()
+        self.assertNotEqual(self.signature(), before)
+
     def test_calendar_months_include_boundary_and_clamp_month_ends(self):
         for start, expected in ((date(2026, 1, 31), date(2026, 4, 30)),
                                 (date(2023, 11, 30), date(2024, 2, 29)),
@@ -226,6 +260,12 @@ class ClinVarGeneRefreshTests(unittest.TestCase):
         acquired.assert_called_once()
         selected = Path(refresh.load_config(self.config)["clinvar_gene_stat"])
         self.assertEqual(selected, Path(result["output_path"]))
+        # The native builders write archives that cache-install publish adopts.
+        self.assertEqual(selected.name, "clinvar_2star_stats.rkyv")
+        working = refresh.load_config(Path(self.calls[1][1][0]))
+        self.assertEqual([Path(working[key]).name for key in ("clinvar_aa_stat", "clinvar_splice_stat")],
+                         ["clinvar.hg38.vep.aa_change.stats.rkyv", "clinvar.hg38.vep.splice_change.stats.rkyv"])
+        self.assertEqual(self.calls[2][1][3], result["output_path"])
         receipt = json.loads(refresh.receipt_path(selected).read_text())
         self.assertEqual(receipt["data_date"], "2026-04-30")
         self.assertEqual(receipt["status"], "complete")

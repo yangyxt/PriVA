@@ -2371,13 +2371,17 @@ function ClinVar_Gene_stat_regenerate () {
     local config_file=${1:?Supply CONFIG SUMMARY MANE OUTPUT for a separate candidate}
     local clinvar_summary=${2:?Supply the pinned ClinVar variant_summary table}
     local mane_summary=${3:?Supply the pinned MANE summary table}
-    local output_candidate=${4:?Supply a separate candidate output ending in .pkl.gz}
-    local clinvar_vcf threads configured_stat baseline
+    local output_candidate=${4:?Supply a separate candidate output ending in .rkyv}
+    local clinvar_vcf threads configured_stat baseline seed
     clinvar_vcf=$(read_yaml "$config_file" "clinvar_vcf")
     threads=$(read_yaml "$config_file" "threads")
     configured_stat=$(yaml_value_or_default "$config_file" "clinvar_gene_stat" "clinvar_2star_stats.pkl.gz")
+    # The Python builder iterated sets in a hash-seeded order; priva reproduces
+    # the order of one named seed.
+    seed=$(yaml_value_or_default "$config_file" "priva_python_hash_seed" 0)
+    [[ $seed =~ ^[0-9]+$ ]] || { log "ERROR: priva_python_hash_seed must be a non-negative integer: $seed"; return 1; }
     baseline=${DATA_DIR}/ClinVar/$(basename "$configured_stat")
-    [[ "$output_candidate" == *.pkl.gz ]] || { log "ERROR: Candidate output must end in .pkl.gz"; return 1; }
+    [[ "$output_candidate" == *.rkyv ]] || { log "ERROR: Candidate output must end in .rkyv"; return 1; }
     if [[ "$(realpath -m "$output_candidate")" == "$(realpath -m "$baseline")" ]] || \
        { [[ "$configured_stat" == /* ]] && [[ "$(realpath -m "$output_candidate")" == "$(realpath -m "$configured_stat")" ]]; } || \
        [[ "$(realpath -m "$output_candidate")" == "$(realpath -m "${DATA_DIR}/ClinVar/clinvar_2star_stats.pkl.gz")" ]] || \
@@ -2386,15 +2390,40 @@ function ClinVar_Gene_stat_regenerate () {
         return 1
     fi
     [[ -s "$clinvar_summary" && -s "$mane_summary" ]] || { log "ERROR: Explicit ClinVar summary and MANE inputs must both exist"; return 1; }
-    python "${SCRIPT_DIR}/clinvar_annotation_contract.py" "$clinvar_vcf" --stage gene || return 1
+    priva_resolve_binary "$config_file" || return 1
+    "${PRIVA_BIN}" clinvar-contract header --vcf "$clinvar_vcf" --stage gene || return 1
     mkdir -p "$(dirname "$output_candidate")" || return 1
-    local temporary=${output_candidate%.gz}.partial.$(randomID).gz
-    python "${SCRIPT_DIR}/clinvar_stat_variants.py" \
-        --clinvar_anno_vcf "$clinvar_vcf" --output_pickle "$temporary" --threads "$threads" \
-        --clinvar-summary "$clinvar_summary" --mane-summary "$mane_summary" --config "$config_file" || return 1
-    python "${SCRIPT_DIR}/clinvar_annotation_contract.py" "$temporary" --cache-kind gene || return 1
+    local temporary=${output_candidate%.rkyv}.partial.$(randomID).rkyv
+    "${PRIVA_BIN}" clinvar-gene-stats build --vcf "$clinvar_vcf" --output "$temporary" \
+        --python-hash-seed "$seed" --clinvar-summary "$clinvar_summary" --mane-summary "$mane_summary" \
+        --threads "$threads" --config "$config_file" || return 1
+    "${PRIVA_BIN}" clinvar-contract cache --input "$temporary" --kind gene || return 1
     mv -- "$temporary" "$output_candidate" || return 1
     log "Generated separate candidate ClinVar gene statistics: $output_candidate"
+}
+
+
+function clinvar_native_archive_path () {
+    # Print the native archive a ClinVar statistics builder writes for one
+    # configured value: the .rkyv sibling of a pickle value (an existing
+    # installation's cache-install prepare restores .pkl values), or the .rkyv
+    # value itself. An archive that cache-install publish copied into managed
+    # storage has a .source.json receipt and is never rebuilt in place; the
+    # builder writes the DEFAULT archive instead.
+    local value=${1:?Supply the configured ClinVar statistics path}
+    local default=${2:?Supply the default native archive path}
+    if [[ $value == *.rkyv ]]; then
+        if [[ -e ${value}.source.json ]]; then
+            value=$default
+        fi
+        printf '%s\n' "$value"
+        return 0
+    fi
+    case "$value" in
+        *.pkl.gz) value=${value%.pkl.gz} ;;
+        *.pkl) value=${value%.pkl} ;;
+    esac
+    printf '%s.rkyv\n' "$value"
 }
 
 
@@ -2406,9 +2435,13 @@ function ClinVar_AA_stat () {
     clinvar_splice_stat=$(read_yaml "$config_file" "clinvar_splice_stat")
     clinvar_vcf=$(read_yaml "$config_file" "clinvar_vcf")
     threads=$(read_yaml "$config_file" "threads")
-    python "$contract" "$clinvar_vcf" --stage aa || return 1
+    priva_resolve_binary "$config_file" || return 1
+    "${PRIVA_BIN}" clinvar-contract header --vcf "$clinvar_vcf" --stage aa || return 1
+    # Completed Python pickles of an existing installation remain reusable for
+    # one transition, with their Python checks and producer association.
     local receipt=${clinvar_aa_stat}.pair.ready.json
-    if [[ -s "$clinvar_aa_stat" && "$clinvar_aa_stat" -nt "$clinvar_vcf" && \
+    if [[ $clinvar_aa_stat != *.rkyv && $clinvar_splice_stat != *.rkyv && \
+          -s "$clinvar_aa_stat" && "$clinvar_aa_stat" -nt "$clinvar_vcf" && \
           -s "$clinvar_splice_stat" && "$clinvar_splice_stat" -nt "$clinvar_vcf" ]] && \
        python "$contract" "$clinvar_aa_stat" --cache-kind aa && \
        python "$contract" "$clinvar_splice_stat" --cache-kind splice && \
@@ -2421,25 +2454,47 @@ function ClinVar_AA_stat () {
     # Preserve configured managed destinations while keeping the original
     # paired builder and validation order. Publish neither result on failure.
     local aa splice
-    aa=$(yaml_value_or_default "$config_file" clinvar_aa_stat "${clinvar_vcf/.vcf*/.aa_change.stats.pkl}") || return 1
-    splice=$(yaml_value_or_default "$config_file" clinvar_splice_stat "${clinvar_vcf/.vcf*/.splice_change.stats.pkl}") || return 1
+    aa=$(yaml_value_or_default "$config_file" clinvar_aa_stat "${clinvar_vcf/.vcf*/.aa_change.stats.rkyv}") || return 1
+    aa=$(clinvar_native_archive_path "$aa" "${clinvar_vcf/.vcf*/.aa_change.stats.rkyv}") || return 1
+    splice=$(yaml_value_or_default "$config_file" clinvar_splice_stat "${clinvar_vcf/.vcf*/.splice_change.stats.rkyv}") || return 1
+    splice=$(clinvar_native_archive_path "$splice" "${clinvar_vcf/.vcf*/.splice_change.stats.rkyv}") || return 1
     [[ $aa != "$splice" && $aa != "$clinvar_vcf" && $splice != "$clinvar_vcf" ]] || {
         log "ERROR: ClinVar AA/splice outputs must be distinct from each other and the input VCF."
         return 1
     }
+    # The pair receipts hash the producer file. The native producer is the
+    # builder identity of priva clinvar-aa-splice, kept beside the AA archive;
+    # a replaced file never writes through a link to another file.
+    local producer=${aa}.builder_identity.json identity
+    identity=$("${PRIVA_BIN}" builder-identity clinvar-aa-splice) || return 1
+    if [[ -L $producer || ! -f $producer || $(< "$producer") != "$identity" ]]; then
+        mkdir -p -- "$(dirname -- "$producer")" || return 1
+        rm -f -- "$producer" || return 1
+        printf '%s\n' "$identity" > "$producer" || return 1
+    fi
+    receipt=${aa}.pair.ready.json
+    if [[ -s "$aa" && "$aa" -nt "$clinvar_vcf" && -s "$splice" && "$splice" -nt "$clinvar_vcf" ]] && \
+       "${PRIVA_BIN}" clinvar-contract cache --input "$aa" --kind aa && \
+       "${PRIVA_BIN}" clinvar-contract cache --input "$splice" --kind splice && \
+       python "$contract" pair-check --vcf "$clinvar_vcf" --config "$config_file" \
+           --producer "$producer" --aa "$aa" --splice "$splice" --receipt "$receipt"; then
+        [[ $aa == "$clinvar_aa_stat" ]] || update_yaml "$config_file" "clinvar_aa_stat" "$aa" || return 1
+        [[ $splice == "$clinvar_splice_stat" ]] || update_yaml "$config_file" "clinvar_splice_stat" "$splice" || return 1
+        log "Reusing validated native ClinVar AA and splice statistics"
+        return 0
+    fi
     mkdir -p -- "$(dirname -- "$aa")" "$(dirname -- "$splice")" || return 1
     local tag=$(randomID)
     local temporary_aa=${aa}.partial.${tag}
     local temporary_splice=${splice}.partial.${tag}
-    receipt=${aa}.pair.ready.json
     local captured=${temporary_aa}.inputs.json
     python "$contract" pair-capture --vcf "$clinvar_vcf" --config "$config_file" \
-        --producer "${SCRIPT_DIR}/stat_aachange_clinvar.py" \
+        --producer "$producer" \
         --aa "$aa" --splice "$splice" --receipt "$receipt" --captured "$captured" || return 1
-    python "${SCRIPT_DIR}/stat_aachange_clinvar.py" "$clinvar_vcf" \
-        "$temporary_aa" "$temporary_splice" "$threads" || return 1
-    python "$contract" "$temporary_aa" --cache-kind aa || return 1
-    python "$contract" "$temporary_splice" --cache-kind splice || return 1
+    "${PRIVA_BIN}" clinvar-aa-splice build --vcf "$clinvar_vcf" \
+        --aa-output "$temporary_aa" --splice-output "$temporary_splice" --threads "$threads" || return 1
+    "${PRIVA_BIN}" clinvar-contract cache --input "$temporary_aa" --kind aa || return 1
+    "${PRIVA_BIN}" clinvar-contract cache --input "$temporary_splice" --kind splice || return 1
     # A paired completion is published only after both moves and YAML writes.
     # Failed builders retain the previous files; failed publication never leaves
     # an old ready association eligible for reuse.
@@ -2449,7 +2504,7 @@ function ClinVar_AA_stat () {
     update_yaml "$config_file" "clinvar_aa_stat" "$aa" || return 1
     update_yaml "$config_file" "clinvar_splice_stat" "$splice" || return 1
     python "$contract" pair-complete --vcf "$clinvar_vcf" --config "$config_file" \
-        --producer "${SCRIPT_DIR}/stat_aachange_clinvar.py" \
+        --producer "$producer" \
         --aa "$aa" --splice "$splice" --receipt "$receipt" --captured "$captured" || return 1
     rm -f -- "$captured"
 }
@@ -2458,29 +2513,34 @@ function ClinVar_AA_stat () {
 function ClinVar_patho_AF_stat () {
     local config_file=${1}
     local clinvar_vcf threads
-    local contract=${SCRIPT_DIR}/clinvar_annotation_contract.py
     clinvar_vcf=$(read_yaml "$config_file" "clinvar_vcf")
     threads=$(read_yaml "$config_file" "threads")
-    local gene_pickle exon_pickle
-    gene_pickle=$(yaml_value_or_default "$config_file" clinvar_patho_af_stat "${clinvar_vcf/.vcf*/.patho_af_stat.pkl}")
-    exon_pickle=$(yaml_value_or_default "$config_file" clinvar_patho_exon_af_stat "${clinvar_vcf/.vcf*/.patho_exon_af_stat.pkl}")
+    priva_resolve_binary "$config_file" || return 1
+    local gene_archive exon_archive
+    gene_archive=$(yaml_value_or_default "$config_file" clinvar_patho_af_stat "${clinvar_vcf/.vcf*/.patho_af_stat.rkyv}") || return 1
+    gene_archive=$(clinvar_native_archive_path "$gene_archive" "${clinvar_vcf/.vcf*/.patho_af_stat.rkyv}") || return 1
+    exon_archive=$(yaml_value_or_default "$config_file" clinvar_patho_exon_af_stat "${clinvar_vcf/.vcf*/.patho_exon_af_stat.rkyv}") || return 1
+    exon_archive=$(clinvar_native_archive_path "$exon_archive" "${clinvar_vcf/.vcf*/.patho_exon_af_stat.rkyv}") || return 1
     # 2026-10-23 CDT: reject AF output aliases before mkdir or scientific writes.
-    python "$contract" af-paths-check --vcf "$clinvar_vcf" --config "$config_file" \
-        --gene "$gene_pickle" --exon "$exon_pickle" || return 1
-    python "$contract" "$clinvar_vcf" --stage af || return 1
-    mkdir -p -- "$(dirname -- "$gene_pickle")" "$(dirname -- "$exon_pickle")" || return 1
+    "${PRIVA_BIN}" clinvar-contract af-paths-check --vcf "$clinvar_vcf" --config "$config_file" \
+        --gene "$gene_archive" --exon "$exon_archive" || return 1
+    "${PRIVA_BIN}" clinvar-contract header --vcf "$clinvar_vcf" --stage af || return 1
+    mkdir -p -- "$(dirname -- "$gene_archive")" "$(dirname -- "$exon_archive")" || return 1
     local tag=$(randomID)
-    local temporary_gene=${gene_pickle}.partial.${tag}
-    local temporary_exon=${exon_pickle}.partial.${tag}
-    python "${SCRIPT_DIR}/stat_gene_patho_afs.py" "$clinvar_vcf" "$temporary_gene" "$threads" || return 1
-    python "$contract" "$temporary_gene" --cache-kind gene-af || return 1
-    python "${SCRIPT_DIR}/stat_exon_patho_afs.py" --vcf_path "$clinvar_vcf" \
-        --output "$temporary_exon" --threads "$threads" || return 1
-    python "$contract" "$temporary_exon" --cache-kind exon-af || return 1
-    mv -- "$temporary_gene" "$gene_pickle" || return 1
-    mv -- "$temporary_exon" "$exon_pickle" || return 1
-    update_yaml "$config_file" "clinvar_patho_af_stat" "$gene_pickle" || return 1
-    update_yaml "$config_file" "clinvar_patho_exon_af_stat" "$exon_pickle"
+    local temporary_gene=${gene_archive}.partial.${tag}
+    local temporary_exon=${exon_archive}.partial.${tag}
+    # Without a CSQ format the builders succeed without writing, as the Python
+    # builders did, so an absent archive is a failure here.
+    "${PRIVA_BIN}" clinvar-gene-af build --vcf "$clinvar_vcf" --output "$temporary_gene" --threads "$threads" || return 1
+    [[ -s $temporary_gene ]] || { log "ERROR: priva clinvar-gene-af wrote no archive for $clinvar_vcf"; return 1; }
+    "${PRIVA_BIN}" clinvar-contract cache --input "$temporary_gene" --kind gene-af || return 1
+    "${PRIVA_BIN}" clinvar-exon-af build --vcf "$clinvar_vcf" --output "$temporary_exon" --threads "$threads" || return 1
+    [[ -s $temporary_exon ]] || { log "ERROR: priva clinvar-exon-af wrote no archive for $clinvar_vcf"; return 1; }
+    "${PRIVA_BIN}" clinvar-contract cache --input "$temporary_exon" --kind exon-af || return 1
+    mv -- "$temporary_gene" "$gene_archive" || return 1
+    mv -- "$temporary_exon" "$exon_archive" || return 1
+    update_yaml "$config_file" "clinvar_patho_af_stat" "$gene_archive" || return 1
+    update_yaml "$config_file" "clinvar_patho_exon_af_stat" "$exon_archive"
 }
 
 
@@ -2491,7 +2551,6 @@ function ClinVar_PM5_index () {
     # indexes the VEP-annotated ClinVar VCF itself (clinvar_pm5_index).
     local config_file=${1}
     local clinvar_vcf index
-    local contract=${SCRIPT_DIR}/clinvar_annotation_contract.py
     clinvar_vcf=$(read_yaml "$config_file" "clinvar_vcf")
     [[ -s ${clinvar_vcf} ]] || { log "ERROR: The VEP-annotated ClinVar VCF is missing: ${clinvar_vcf}"; return 1; }
     priva_resolve_binary "$config_file" || return 1
@@ -2506,7 +2565,7 @@ function ClinVar_PM5_index () {
         update_or_append_yaml "$config_file" clinvar_pm5_index "$index"
         return
     fi
-    python "$contract" "$clinvar_vcf" --stage vep || return 1
+    "${PRIVA_BIN}" clinvar-contract header --vcf "$clinvar_vcf" --stage vep || return 1
     mkdir -p -- "$(dirname -- "$index")" || return 1
     local temporary=${index%.tsv.gz}.partial.$(randomID).tsv.gz
     "${PRIVA_BIN}" clinvar-pm5-index --vcf "$clinvar_vcf" --output "$temporary" || {

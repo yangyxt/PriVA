@@ -160,7 +160,10 @@ def merge_results(results):
     merged = {}
     for chrom_result in results:
         for gene, variant in chrom_result.items():
-            if gene not in merged or merged[gene]['af'] < variant['af']:
+            # None marks a gene whose pathogenic variants on that chromosome all
+            # have AF 0; a variant from another chromosome replaces it.
+            current = merged.get(gene)
+            if gene not in merged or (variant is not None and (current is None or current['af'] < variant['af'])):
                 merged[gene] = variant
     return merged
 

@@ -79,6 +79,9 @@ def process_and_update_chunk(chunk: pd.DataFrame, chain_file: str, reference_fas
             lambda row: generate_variant_id(row['#chrom'], row['pos'], row['ref'], row['alt']),
             axis=1
         )
+        # A variant has one row per splice event, each with its own site, so the
+        # lifted site is keyed by row; the variant coordinates are shared.
+        chunk['site_id'] = [f"{variant_id}|{row}" for row, variant_id in enumerate(chunk['variant_id'])]
 
         # Create VCF for this chunk
         with pysam.VariantFile(temp_vcf, 'w', header=create_simple_vcf_header()) as vcf_out:
@@ -96,7 +99,7 @@ def process_and_update_chunk(chunk: pd.DataFrame, chain_file: str, reference_fas
         with open(temp_bed, 'w') as bed_out:
             for _, row in chunk.iterrows():
                 chrom, pos = parse_splice_site_loc(row['splicevault_site_loc'])
-                bed_out.write(f"{chrom}\t{pos-1}\t{pos}\t{row['variant_id']}\n")
+                bed_out.write(f"{chrom}\t{pos-1}\t{pos}\t{row['site_id']}\n")
 
         # Perform liftover for this chunk
         liftover_coordinates(temp_vcf, lifted_vcf, temp_bed, lifted_bed,
@@ -116,8 +119,8 @@ def process_and_update_chunk(chunk: pd.DataFrame, chain_file: str, reference_fas
         bed_coords = {}
         with open(lifted_bed) as f:
             for line in f:
-                chrom, start, end, var_id = line.strip().split('\t')
-                bed_coords[var_id] = f"{chrom}:{end}"
+                chrom, start, end, site_id = line.strip().split('\t')
+                bed_coords[site_id] = f"{chrom}:{end}"
 
         # Update coordinates in the chunk
         updated_chunk = chunk.copy()
@@ -132,14 +135,14 @@ def process_and_update_chunk(chunk: pd.DataFrame, chain_file: str, reference_fas
                 updated_chunk.at[idx, 'ref'] = coords['ref']
                 updated_chunk.at[idx, 'alt'] = coords['alt']
                 matched = True
-            if var_id in bed_coords:
-                updated_chunk.at[idx, 'splicevault_site_loc'] = bed_coords[var_id]
+            if row['site_id'] in bed_coords:
+                updated_chunk.at[idx, 'splicevault_site_loc'] = bed_coords[row['site_id']]
             if not matched:
                 unmapped_ids.add(var_id)
 
         # Remove variant_id column
         updated_chunk = updated_chunk.loc[~updated_chunk['variant_id'].isin(unmapped_ids), :]
-        updated_chunk = updated_chunk.drop('variant_id', axis=1)
+        updated_chunk = updated_chunk.drop(['variant_id', 'site_id'], axis=1)
         return updated_chunk
 
     finally:

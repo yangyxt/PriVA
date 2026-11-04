@@ -765,6 +765,17 @@ def _nest(merged: pd.DataFrame, evidence_records: dict[str, list[dict]],
                 "assemblies": {},
             })
 
+            # An endpoint-recovered record has no GRCh38 VEP rows; its checked
+            # coordinate still keys the genomic route.
+            if first["hg38_refalt_status"] == "endpoint_ref_match":
+                variant["assemblies"]["hg38"] = {
+                    "genomic": {
+                        "chrom": first["hg38_chrom"], "pos": int(first["hg38_pos"]),
+                        "ref": first["hg38_ref"], "alt": first["hg38_alt"],
+                        "status": first["hg38_refalt_status"],
+                    },
+                    "transcripts": {},
+                }
             for assembly, arows in rows.groupby("VEP_assembly", sort=True):
                 if not assembly:
                     continue
@@ -913,8 +924,11 @@ def build_cache(core: pd.DataFrame, evidence: pd.DataFrame, evidence_records: di
     merged["liftover_status"] = merged["vcf_id"].map(
         lambda v: "unmapped" if v in unmapped else "mapped")
 
+    # A record CrossMap could not place keeps an endpoint coordinate when the
+    # GRCh38 reference confirmed it (endpoint_hg38_coordinates).
     merged["hg38_refalt_status"] = merged.apply(
-        lambda r: "liftover_unmapped" if r["liftover_status"] == "unmapped"
+        lambda r: ("endpoint_ref_match" if r["hg38_chrom"] else "liftover_unmapped")
+        if r["liftover_status"] == "unmapped"
         else ("lifted_ref_match" if r["hg38_chrom"] else "no_hg38_coordinate"), axis=1)
     # This field reaches the final ACMG output, and its name means what GoFCards
     # means by it: the ClinVar accession, i.e. the ClinVar VariationID.

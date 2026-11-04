@@ -598,7 +598,8 @@ def outcome(folder, label, status, arm, before, case):
         if value:
             result.update(category=value.get("category"), message=value.get("message"))
     else:
-        matched = re.fullmatch(r"priva: ([A-Za-z_][A-Za-z_0-9]*): (.*)\n", stderr, re.S)
+        # Prompted runs print their introduction first; the error is the last line group.
+        matched = re.search(r"(?:\A|\n)priva: ([A-Za-z_][A-Za-z_0-9]*): ((?:(?!\npriva: ).)*)\n\Z", stderr, re.S)
         if matched:
             result.update(category=matched[1], message=matched[2])
         elif status not in (0, 2):

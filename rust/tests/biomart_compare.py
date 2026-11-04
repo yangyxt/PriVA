@@ -41,8 +41,8 @@ def oracle(args):
             b.atomic_json(Path(str(artifact)+'.nm_to_enst.json'),dict(mapping_identity=expected,artifact_bytes=artifact.stat().st_size,artifact_sha256=b.sha256(artifact)))
         elif command=='artifact-receipt':value=b._artifact_receipt(p('artifact'))
         elif command=='artifact-route':
-            value={'artifact':str(b.artifact_route(artifact=p('artifact'),mapping=p('mapping'),cache_root=p('cache-root'),output_dir=p('output-dir'),assembly=o['assembly'],kind=o['kind'],inputs=inputs))}
-        elif command=='changed-target':value=str(b.changed_mapping_target(identity=json.loads(o['identity']),cache_root=p('cache-root'),output_dir=p('output-dir'),assembly=o['assembly'],kind=o['kind']))
+            value={'artifact':str(b.artifact_route(artifact=p('artifact'),mapping=p('mapping'),cache_root=p('cache-root'),output_dir=p('output-dir'),assembly=o['assembly'],kind=o['kind'],inputs=inputs,artifact_format=o.get('artifact-format','pickle')))}
+        elif command=='changed-target':value=str(b.changed_mapping_target(identity=json.loads(o['identity']),cache_root=p('cache-root'),output_dir=p('output-dir'),assembly=o['assembly'],kind=o['kind'],artifact_format=o.get('artifact-format','pickle')))
         elif command=='verify':value=b.verify_pinned(p('mapping'),o.get('assembly'))
         elif command=='validate-table':value=b.validate_table(p('table'),raw=r.get('raw',False),output=p('output') if 'output' in o else None)
         elif command=='parse-metadata':value=b.parse_metadata(p('registry').read_text(),p('datasets').read_text(),o.get('source',GR37))
@@ -115,7 +115,7 @@ def cases():
             add(command+'_'+kind,command,receipt_kind=kind)
     for kind in ('valid','existing','part_existing','part_symlink','part_broken','part_directory','receipt_symlink','receipt_directory','expected_invalid'):
         add('write_'+kind,'receipt-write',write_kind=kind)
-    for kind in ('same_bad_options','changed','anchor_changed','root_alias','relative_root','missing_root','file_root','filesystem_root','outside','output_link','parent_file','target_link','target_hardlink','receipt_link','target_unknown','target_good','orphan_receipt'):
+    for kind in ('same_bad_options','changed','anchor_changed','root_alias','relative_root','missing_root','file_root','filesystem_root','outside','output_link','parent_file','target_link','target_hardlink','receipt_link','target_unknown','target_good','orphan_receipt','pm1_rkyv','motifs_rkyv'):
         add('route_'+kind,'artifact-route',route_kind=kind)
     registry='<r><MartURLLocation name="ENSEMBL_MART_ENSEMBL" z="extra" database="ensembl_mart_116" displayName="Ensembl Genes 116" host="grch37.ensembl.org" path="/biomart/martservice" serverVirtualSchema="default"/></r>'
     datasets='TableSet\thsapiens_gene_ensembl\tHuman genes (GRCh37.p13)\t1\tGRCh37.p13\textra\n'
@@ -243,6 +243,8 @@ def setup(folder,spec,producer,resources=None):
         options.update(artifact=str(artifact),mapping=str(selected),**{'cache-root':str(cache),'output-dir':str(dest),'assembly':'hg38','kind':'motifs'})
         if route=='same_bad_options':options.update(assembly='bad',kind='bad',**{'cache-root':'relative','output-dir':'relative'})
         if route=='anchor_changed':inputs=[anchor]
+        if route=='pm1_rkyv':options.update(kind='pm1',**{'artifact-format':'rkyv'})
+        if route=='motifs_rkyv':options['artifact-format']='rkyv'
         if route=='root_alias':alias=folder/'alias';alias.symlink_to(cache,target_is_directory=True);options.update(**{'cache-root':str(alias),'output-dir':str(alias/'plugins/AlphaMissense')})
         if route=='relative_root':options['cache-root']='relative'
         if route=='missing_root':options['cache-root']=str(folder/'missing')

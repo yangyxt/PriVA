@@ -99,7 +99,7 @@ fn artifact_record(expected: &Json, state: &Json) -> Result<Json> {
         ("artifact_bytes", get(state, "size")?.clone()),
         ("artifact_sha256", get(state, "sha256")?.clone()),
     ]);
-    for name in ["scientific_input", "native_input_lineage"] {
+    for name in ["scientific_input", "native_input_lineage", "native_producer"] {
         if let Some(v) = expected.get(name) {
             value.set(name, v.clone());
         }
@@ -247,6 +247,9 @@ impl Context {
             index < argv.len() && argv[index] == self.artifact.to_string_lossy(),
             "Scientific --output must be the selected configured artifact",
         )?;
+        if self.native_producer.is_some() {
+            self.native_arguments(&argv)?;
+        }
         let stage_path = stage(
             target.parent().unwrap(),
             &format!(".mapped-artifact-{}-", self.kind),
@@ -258,7 +261,14 @@ impl Context {
             stage_path.display()
         );
         std::io::stdout().flush()?;
-        let mut command = vec![self.python.clone(), self.producer.display().to_string()];
+        let mut command = match &self.native_producer {
+            Some(executable) => vec![
+                executable.display().to_string(),
+                NATIVE_PM1.to_owned(),
+                "build".to_owned(),
+            ],
+            None => vec![self.python.clone(), self.producer.display().to_string()],
+        };
         command.extend(argv);
         let status = Command::new(&command[0])
             .args(&command[1..])
@@ -289,7 +299,11 @@ impl Context {
         require(
             !matches!(staged_state, Json::Null)
                 && matches!(get(&staged_state,"size")?,Json::Int(n) if *n>0),
-            "Scientific producer created no nonempty pickle",
+            if self.native_producer.is_some() {
+                "Native producer created no nonempty archive"
+            } else {
+                "Scientific producer created no nonempty pickle"
+            },
         )?;
         require(
             equal(&self.expected()?, &expected),

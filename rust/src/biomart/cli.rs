@@ -9,6 +9,8 @@ Procedures: identity, receipt-check, receipt-write, artifact-route, artifact-rec
             ftp-verify-record, ftp-parse-xml, ftp-sqlite-info, ftp-schema,\n\
             ftp-load, ftp-audit, ftp-export, ftp-project, ftp-verify-raw, ftp-metadata.\n\
 Use --mapping, --artifact, repeated --input, --assembly and --kind where applicable.\n\
+artifact-route and changed-target accept --artifact-format {pickle,rkyv} (default pickle;\n\
+rkyv names the natively built PM1 regions archive).\n\
 The explicit helper root supplies pinned source assets and canonical bundle context;\n\
 the optional native implementation never runs Python or selects a scientific release implicitly.";
 pub(crate) fn dispatch(args: &[String]) -> Result<()> {
@@ -51,6 +53,7 @@ pub(crate) fn dispatch(args: &[String]) -> Result<()> {
                 "output-dir",
                 "assembly",
                 "kind",
+                "artifact-format",
                 "input",
             ],
             &["print-path"],
@@ -72,6 +75,7 @@ pub(crate) fn dispatch(args: &[String]) -> Result<()> {
                 "output-dir",
                 "assembly",
                 "kind",
+                "artifact-format",
             ],
             &[],
             &[
@@ -193,6 +197,15 @@ pub(crate) fn dispatch(args: &[String]) -> Result<()> {
     if command == "ftp-verify-raw" && option_count(&values, &["pin", "name"]) != 1 {
         return Err(invalid("provide exactly one of --pin or --name"));
     }
+    let artifact_format = values
+        .get("artifact-format")
+        .map_or("pickle", String::as_str);
+    if !matches!(artifact_format, "pickle" | "rkyv") {
+        return Err(invalid(format!(
+            "argument --artifact-format: invalid choice: '{artifact_format}' \
+             (choose from 'pickle', 'rkyv')"
+        )));
+    }
     let option = |key: &str| values.get(key).map(String::as_str);
     let p = |key: &str| path_value(option(key).expect("required option"));
     let inputs = occurrences
@@ -233,6 +246,7 @@ pub(crate) fn dispatch(args: &[String]) -> Result<()> {
                     &p("output-dir"),
                     option("assembly").unwrap(),
                     option("kind").unwrap(),
+                    artifact_format,
                 )?
                 .display()
                 .to_string(),
@@ -246,6 +260,7 @@ pub(crate) fn dispatch(args: &[String]) -> Result<()> {
                     &p("output-dir"),
                     option("assembly").unwrap(),
                     option("kind").unwrap(),
+                    artifact_format,
                     &inputs,
                 )?;
                 if values.contains_key("print-path") {

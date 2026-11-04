@@ -65,6 +65,10 @@ class MappingArtifactRoutes(unittest.TestCase):
         other = self.route(kind="pm1")
         self.assertNotEqual(target, other)
         self.assertEqual(other.name, "pm1_regions.hg38.pkl")
+        native = self.route(kind="pm1", artifact_format="rkyv")
+        self.assertEqual((native.parent, native.name), (other.parent, "pm1_regions.hg38.rkyv"))
+        with self.assertRaisesRegex(ValueError, "rkyv for natively built PM1 regions"):
+            self.route(artifact_format="rkyv")
 
     def test_changed_anchor_selects_distinct_namespace_without_mtime_identity(self):
         self.change_mapping()

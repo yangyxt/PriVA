@@ -5,11 +5,15 @@ use std::collections::HashMap;
 
 const HELP: &str = "usage: priva mapped-artifact {run,recover,adopt-native,context}\n\
 --artifact FILE --mapping TSV [--input FILE ...] --cache-root DIR --output-dir DIR\n\
---assembly NAME --config YAML --producer SCRIPT --kind {motifs,pm1} --helper-root CHECKOUT\n\
+--assembly NAME --config YAML --kind {motifs,pm1} --helper-root CHECKOUT\n\
+(--producer SCRIPT | --native-producer pm1-regions)\n\
 [--annotation-base VCF] [--native-lineage JSON] [--python PYTHON]\n\
 run --expected-identity JSON -- PRODUCER_ARGUMENTS\n\
 adopt-native --source FILE --lineage JSON_FILE\n\
 Optional procedures only. The scientific producer is executed as a literal argument vector.\n\
+--native-producer pm1-regions (with --kind pm1 and an .rkyv --artifact) runs this executable's\n\
+`pm1-regions build` instead of [PYTHON, SCRIPT]; PRODUCER_ARGUMENTS are its exact --name value\n\
+pairs, bound to --assembly, --mapping and the HCSeeker/RMC --input anchors.\n\
 context prints the original read-only publication binding; no installed caller is changed.";
 
 pub(crate) fn dispatch(args: &[String]) -> Result<()> {
@@ -32,6 +36,7 @@ pub(crate) fn dispatch(args: &[String]) -> Result<()> {
         "assembly",
         "config",
         "producer",
+        "native-producer",
         "kind",
         "annotation-base",
         "native-lineage",
@@ -87,6 +92,15 @@ pub(crate) fn dispatch(args: &[String]) -> Result<()> {
         "kind",
         "helper-root",
     ];
+    let native = options.get("native-producer").cloned();
+    if native.is_some() {
+        if options.contains_key("producer") {
+            return Err(invalid(
+                "argument --native-producer: not allowed with argument --producer",
+            ));
+        }
+        required.retain(|name| *name != "producer");
+    }
     if command == "run" {
         required.push("expected-identity");
     }
@@ -101,6 +115,22 @@ pub(crate) fn dispatch(args: &[String]) -> Result<()> {
             select("kind")
         )));
     }
+    let native_producer = match native.as_deref() {
+        None => None,
+        Some(NATIVE_PM1) if select("kind") == "pm1" && command != "adopt-native" => {
+            Some(std::env::current_exe()?)
+        }
+        Some(NATIVE_PM1) => {
+            return Err(invalid(
+                "--native-producer pm1-regions requires --kind pm1 outside adopt-native",
+            ));
+        }
+        Some(other) => {
+            return Err(invalid(format!(
+                "argument --native-producer: invalid choice: '{other}' (choose from 'pm1-regions')"
+            )));
+        }
+    };
     crate::builder_error::finish((|| {
         let helper = path_value(select("helper-root"));
         let context = Context {
@@ -111,7 +141,11 @@ pub(crate) fn dispatch(args: &[String]) -> Result<()> {
             output_dir: path_value(select("output-dir")),
             assembly: select("assembly").clone(),
             config: path_value(select("config")),
-            producer: path_value(select("producer")),
+            producer: options
+                .get("producer")
+                .map(|v| path_value(v))
+                .unwrap_or_default(),
+            native_producer,
             kind: select("kind").clone(),
             annotation_base: options.get("annotation-base").map(|v| path_value(v)),
             native_lineage: options.get("native-lineage").map(|v| path_value(v)),

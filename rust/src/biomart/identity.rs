@@ -163,6 +163,7 @@ pub(crate) fn changed_target(
     output_dir: &Path,
     assembly: &str,
     kind: &str,
+    artifact_format: &str,
 ) -> Result<PathBuf> {
     require(
         matches!(assembly, "hg19" | "GRCh37" | "hg38" | "GRCh38")
@@ -174,10 +175,18 @@ pub(crate) fn changed_target(
     } else {
         "hg38"
     };
-    let filename = if kind == "motifs" {
-        format!("AlphaMissense_{assembly}.kde.pkl")
-    } else {
-        format!("pm1_regions.{assembly}.pkl")
+    // The native PM1 builder writes an rkyv archive beside the pickle namespace;
+    // motifs have no native producer, so they remain pickle-only.
+    let filename = match (kind, artifact_format) {
+        ("motifs", "pickle") => format!("AlphaMissense_{assembly}.kde.pkl"),
+        ("pm1", "pickle") => format!("pm1_regions.{assembly}.pkl"),
+        ("pm1", "rkyv") => format!("pm1_regions.{assembly}.rkyv"),
+        _ => {
+            return Err(error(
+                "ValueError",
+                "Select a pickle artifact, or rkyv for natively built PM1 regions",
+            ));
+        }
     };
     let serialized = json_text::dumps_with_options(
         identity,
@@ -259,6 +268,7 @@ pub(crate) fn artifact_route(
     output_dir: &Path,
     assembly: &str,
     kind: &str,
+    artifact_format: &str,
     inputs: &[PathBuf],
 ) -> Result<PathBuf> {
     let recorded=receipt::artifact_receipt(artifact).map_err(|e|match caught_message(e.as_ref()) {
@@ -272,7 +282,14 @@ pub(crate) fn artifact_route(
     if recorded.matches(&identity)? {
         return Ok(artifact.to_path_buf());
     }
-    let target = changed_target(&identity, cache_root, output_dir, assembly, kind)?;
+    let target = changed_target(
+        &identity,
+        cache_root,
+        output_dir,
+        assembly,
+        kind,
+        artifact_format,
+    )?;
     let receipt = PathBuf::from(format!("{}.nm_to_enst.json", target.display()));
     require(
         !is_link(&receipt)?,
@@ -292,4 +309,33 @@ pub(crate) fn artifact_route(
         check_receipt(context, &target, mapping, inputs)?;
     }
     Ok(target)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn changed_targets_name_the_native_pm1_archive_beside_the_pickle() {
+        let name = format!("priva-changed-target-{}", std::process::id());
+        let root = std::env::temp_dir().join(name);
+        fs::create_dir_all(&root).unwrap();
+        let root = root.canonicalize().unwrap();
+        let output = root.join("AlphaMissense");
+        let identity = object([("mapping_sha256", string("0".repeat(64)))]);
+        let target = |kind: &str, format: &str| {
+            changed_target(&identity, &root, &output, "GRCh38", kind, format)
+        };
+        let motifs = target("motifs", "pickle").unwrap();
+        let pickle = target("pm1", "pickle").unwrap();
+        let native = target("pm1", "rkyv").unwrap();
+        let rejected = [target("motifs", "rkyv"), target("pm1", "parquet")];
+        let _ = fs::remove_dir_all(&root);
+        assert_eq!(motifs.file_name().unwrap(), "AlphaMissense_hg38.kde.pkl");
+        assert_eq!(pickle.file_name().unwrap(), "pm1_regions.hg38.pkl");
+        assert_eq!(native.file_name().unwrap(), "pm1_regions.hg38.rkyv");
+        assert_eq!(pickle.parent(), native.parent());
+        assert!(native.starts_with(output.join("nm-to-enst/hg38/pm1")));
+        assert!(rejected.iter().all(Result::is_err));
+    }
 }

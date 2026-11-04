@@ -842,7 +842,9 @@ fn resolve_native(key: &str, private: &Path, repo: &Path) -> Result<PathBuf> {
     let doc = document(&fs::read_to_string(private)?)?;
     let selected_profile = profile(&doc)?;
     let Some(value) = setting(&doc, key)? else {
-        return Err(invalid(format!("{key}: not configured in the builder config")));
+        return Err(invalid(format!(
+            "{key}: not configured in the builder config"
+        )));
     };
     let source = resolve(value, repo);
     if source.extension().and_then(|s| s.to_str()) == Some("rkyv") {
@@ -910,8 +912,7 @@ fn publish_impl(
         } else {
             install_one(key, &source, &doc, repo, &selected_profile)?
         };
-        if direct
-            || bundle(key, repo, &selected_profile).is_none_or(|(_, native)| native != output)
+        if direct || bundle(key, repo, &selected_profile).is_none_or(|(_, native)| native != output)
         {
             // A direct archive is its own builder input; recheck its bytes.
             let record = json(&sidecar(&output, ".source.json"))?;

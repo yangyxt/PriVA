@@ -384,7 +384,17 @@ pub(crate) fn dispatch(args: &[String]) -> Result<()> {
     let command = args
         .first()
         .map(String::as_str)
-        .filter(|s| ["build", "chromosome", "merge", "check", "identity", "export"].contains(s))
+        .filter(|s| {
+            [
+                "build",
+                "chromosome",
+                "merge",
+                "check",
+                "identity",
+                "export",
+            ]
+            .contains(s)
+        })
         .ok_or_else(|| cli::invalid(HELP))?;
     let mut fields = HashMap::new();
     let mut inputs = vec![];

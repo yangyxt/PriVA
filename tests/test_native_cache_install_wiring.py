@@ -59,6 +59,7 @@ if operation == 'prepare':
             if prior['sha256'] != sha(): raise SystemExit(62)
             raise SystemExit(0)
     config=yaml.safe_load(original.read_text())
+    # Other native values stay as they are, like archives written directly by builders.
     for key in ('all_intolerant_domains','clinvar_aa_stat'):
         if isinstance(config.get(key),str) and config[key].endswith('.rkyv'):
             config[key]=config[key][:-5]+'.pkl'
@@ -173,6 +174,37 @@ ClinVar_install --config "$CONFIG"
 ''')
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual([row[0] for row in events], ["bootstrap", "prepare", "builder", "publish"])
+
+    def test_private_config_may_name_a_direct_native_archive(self):
+        direct = str(self.cache / "pm1_regions.direct.v1.rkyv")
+        self.values["pm1_regions_pkl"] = direct
+        self.write_config()
+        result, events = self.execute(r'''
+_priva_cache_builder_prepare_pm1_regions() { fixture_builder "$@"; }
+prepare_pm1_regions "$CONFIG"
+''')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual([row[0] for row in events], ["bootstrap", "prepare", "builder", "publish"])
+        self.assertEqual(events[2][1], str(self.private_path()))
+        self.assertEqual(yaml.safe_load(self.private_path().read_text())["pm1_regions_pkl"], direct)
+        self.assertEqual(yaml.safe_load(self.config.read_text())["pm1_regions_pkl"], direct)
+
+    def test_nested_working_config_with_native_archive_stays_in_the_current_installation(self):
+        self.values["pm1_regions_pkl"] = str(self.cache / "pm1_regions.direct.v1.rkyv")
+        self.write_config()
+        working = self.root / "clinvar working.yaml"
+        result, events = self.execute(r'''
+_priva_cache_builder_ClinVar_AA_stat() { fixture_builder "$@"; }
+_priva_cache_builder_ClinVar_install() {
+    cp -- "$2" "$WORKING"
+    ClinVar_AA_stat "$WORKING"
+}
+ClinVar_install --config "$CONFIG"
+''', WORKING=str(working))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual([row[0] for row in events], ["bootstrap", "prepare", "builder", "publish"])
+        self.assertEqual(events[2][1:], [str(working)])
+        self.assertTrue(yaml.safe_load(working.read_text())["pm1_regions_pkl"].endswith(".rkyv"))
 
     def test_repeated_wrapper_registration_retains_the_raw_builder(self):
         result, events = self.execute(r'''

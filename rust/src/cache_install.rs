@@ -3,8 +3,11 @@
 //! Builders still produce/read their original pickles. `prepare` gives them a
 //! private config; `publish` converts completed files and changes the user's
 //! existing runtime keys only after every selected cache succeeds. Per-archive
-//! receipts retain the exact builder inputs for the next installation. Nothing
-//! here changes a scientific producer, its order, or its cache refresh policy.
+//! receipts retain the exact builder inputs for the next installation. A native
+//! builder may instead write an archive directly; `publish` checks and adopts it
+//! under the same managed naming, with a receipt whose origin is `direct`.
+//! Nothing here changes a scientific producer, its order, or its cache refresh
+//! policy.
 use crate::cache_convert as caches;
 use crate::cli::{Result, invalid};
 use crate::json_text::{self, Json};
@@ -12,7 +15,7 @@ use crate::sha256::{sha256_file, sha256_hex};
 use crate::yaml_config::{self, ConfigDocument, Parsed, Scalar};
 use std::collections::BTreeMap;
 use std::fs::{self, OpenOptions};
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -29,7 +32,10 @@ const KEYS: [&str; 10] = [
     "clingen_map",
 ];
 const HELP: &str = "usage: priva cache-install {prepare|publish} --config CONFIG --build-config PRIVATE_CONFIG --source-root REPO\n\
-prepare creates a private builder config; publish converts/reuses completed caches and atomically updates CONFIG.\n\
+       priva cache-install resolve --key KEY --build-config PRIVATE_CONFIG --source-root REPO\n\
+prepare creates a private builder config; publish converts/reuses completed caches, adopts checked archives written\n\
+directly by native builders, and atomically updates CONFIG.\n\
+resolve prints the checked native archive for KEY; a builder pickle is converted once and publish reuses that conversion.\n\
 Keep the private config and its adjacent receipt for repeat installations. No annotation is rerun by this command.";
 static NEXT: AtomicU64 = AtomicU64::new(0);
 
@@ -303,7 +309,17 @@ fn prepare(config: &Path, private: &Path, repo: &Path) -> Result<()> {
                     "{key}: native cache receipt does not match this path/profile"
                 )));
             }
-            PathBuf::from(field(&record, "source")?)
+            match record.get("origin").and_then(Json::as_str) {
+                // A native builder's own archive has no builder input to
+                // restore; the private view keeps selecting the archive.
+                Some("direct") => continue,
+                None => PathBuf::from(field(&record, "source")?),
+                Some(_) => {
+                    return Err(invalid(format!(
+                        "{key}: native cache receipt has an unknown origin"
+                    )));
+                }
+            }
         };
         // Both managed and bundled archives can have explicitly selected
         // source aliases. Preserve each configuration's choice without changing
@@ -490,6 +506,47 @@ fn validate(key: &str, path: &Path, schema_version: u32) -> Result<()> {
     Ok(())
 }
 
+/// Check an archive a native builder wrote and return its own schema version.
+/// Schema ids follow `KEYS` order (`CACHE_FORMATS.md`, section 4), so an
+/// archive of another cache is refused before any reader maps it.
+fn check_direct(key: &str, archive: &Path) -> Result<u32> {
+    if !archive.is_file() {
+        return Err(invalid(format!(
+            "{key}: native archive {} named by the builder config does not exist",
+            archive.display()
+        )));
+    }
+    nonempty(archive)?;
+    let Some(position) = KEYS.iter().position(|name| *name == key) else {
+        return Err(invalid("unknown native cache"));
+    };
+    let expected = position as u32 + 1;
+    let mut header = [0_u8; crate::rust_cache::HEADER_LEN];
+    let mut file = fs::File::open(archive)?;
+    if file.read_exact(&mut header).is_err() {
+        return Err(invalid(format!(
+            "{key}: {} is too short to be a native archive",
+            archive.display()
+        )));
+    }
+    if &header[0..8] != crate::rust_cache::MAGIC {
+        return Err(invalid(format!(
+            "{key}: {} is not a PRIVARKV archive",
+            archive.display()
+        )));
+    }
+    let word = |at: usize| u32::from_le_bytes(header[at..at + 4].try_into().unwrap());
+    if word(12) != expected {
+        return Err(invalid(format!(
+            "{key}: {} holds cache schema {}, not schema {expected}",
+            archive.display(),
+            word(12)
+        )));
+    }
+    validate(key, archive, word(16))?;
+    Ok(word(16))
+}
+
 fn install_one(
     key: &str,
     source: &Path,
@@ -503,7 +560,8 @@ fn install_one(
     {
         nonempty(&pickle)?;
         nonempty(&native)?;
-        println!("{key}: reuse repository-bundled native cache");
+        // Progress goes to stderr: `resolve` prints only the archive path.
+        eprintln!("{key}: reuse repository-bundled native cache");
         return Ok(native);
     }
     // This fingerprint identifies the bytes converted; it does not check a
@@ -553,7 +611,7 @@ fn install_one(
             )));
         }
         validate(key, &output, schema_version)?;
-        println!("{key}: reuse completed native conversion");
+        eprintln!("{key}: reuse completed native conversion");
         return Ok(output);
     }
     let pending = temporary(&output, "pending");
@@ -593,17 +651,119 @@ fn install_one(
     if schema_version != 1 {
         fields.push(("schema_version", &schema_text));
     }
-    let record_bytes = receipt(&fields)?;
-    let pending_receipt = sidecar(&pending, ".source.json");
+    publish_generation(key, &output, &pending, &fields, schema_version)?;
+    Ok(output)
+}
+
+fn publish_generation(
+    key: &str,
+    output: &Path,
+    pending: &Path,
+    fields: &[(&str, &str)],
+    schema_version: u32,
+) -> Result<()> {
+    let record_bytes = receipt(fields)?;
+    let pending_receipt = sidecar(pending, ".source.json");
     write_new(&pending_receipt, &record_bytes)?;
     // The checked staging file is never a selectable final archive. Publish
     // its recovery receipt first, without replacing anything supplied. If the
     // process stops here, the next invocation can finish this exact generation.
-    fs::hard_link(&pending_receipt, &record_path)?;
-    fs::File::open(parent(&output))?.sync_all()?;
+    fs::hard_link(&pending_receipt, sidecar(output, ".source.json"))?;
+    fs::File::open(parent(output))?.sync_all()?;
     let record = json_text::parse(std::str::from_utf8(&record_bytes)?, true).map_err(invalid)?;
-    finish_archive(key, &output, &record, schema_version)?;
+    finish_archive(key, output, &record, schema_version)?;
     fs::remove_file(&pending_receipt)?;
+    Ok(())
+}
+
+/// Adopt an archive a native builder wrote into the private config. Its own
+/// bytes take the place of a source pickle: the managed name carries the
+/// archive digest, and the receipt records `origin: direct` and no source.
+fn install_direct(
+    key: &str,
+    archive: &Path,
+    doc: &ConfigDocument,
+    repo: &Path,
+    selected_profile: &str,
+) -> Result<PathBuf> {
+    let schema_version = check_direct(key, archive)?;
+    let schema_text = schema_version.to_string();
+    let archive_hash = sha256_file(archive)?;
+    let own_record_path = sidecar(archive, ".source.json");
+    if own_record_path.exists() {
+        // A managed archive selected again (a direct one passed through by
+        // `prepare`, or a completed conversion) is reused at its own path.
+        let record = json(&own_record_path)?;
+        if field(&record, "key")? != key
+            || field(&record, "format")? != "PRIVARKV-v1"
+            || field(&record, "profile")? != selected_profile
+            || !same_file(Path::new(field(&record, "archive")?), archive)
+            || field(&record, "archive_sha256")? != archive_hash
+        {
+            return Err(invalid(format!(
+                "{}: native archive differs from its managed receipt; original retained",
+                archive.display()
+            )));
+        }
+        eprintln!("{key}: reuse managed native archive");
+        return Ok(archive.to_owned());
+    }
+    let output = target(key, &archive_hash, doc, repo, schema_version)?;
+    let record_path = sidecar(&output, ".source.json");
+    if output.exists() || record_path.exists() {
+        let record = json(&record_path)?;
+        if record.get("origin").and_then(Json::as_str) != Some("direct")
+            || field(&record, "key")? != key
+            || field(&record, "format")? != "PRIVARKV-v1"
+            || field(&record, "profile")? != selected_profile
+            || field(&record, "archive")? != text(&output)?
+            || field(&record, "archive_sha256")? != archive_hash
+            || field(&record, "schema_version")? != schema_text
+        {
+            return Err(invalid(format!(
+                "{}: conflicting cache receipt; original retained",
+                output.display()
+            )));
+        }
+        finish_archive(key, &output, &record, schema_version)?;
+        nonempty(&output)?;
+        if sha256_file(&output)? != archive_hash {
+            return Err(invalid(format!(
+                "{}: archive checksum differs from its direct publication; original retained",
+                output.display()
+            )));
+        }
+        validate(key, &output, schema_version)?;
+        eprintln!("{key}: reuse published direct native archive");
+        return Ok(output);
+    }
+    // Copy rather than link: the builder's file stays its own, and the managed
+    // generation cannot change if a builder later rewrites that path.
+    let pending = temporary(&output, "pending");
+    if let Err(error) = fs::copy(archive, &pending) {
+        let _ = fs::remove_file(&pending);
+        return Err(error.into());
+    }
+    if sha256_file(&pending)? != archive_hash {
+        let _ = fs::remove_file(&pending);
+        return Err(invalid(format!(
+            "{} changed while it was copied; runtime config was not published",
+            archive.display()
+        )));
+    }
+    let archive_bytes = fs::metadata(&pending)?.len().to_string();
+    let fields = [
+        ("format", "PRIVARKV-v1"),
+        ("origin", "direct"),
+        ("key", key),
+        ("profile", selected_profile),
+        ("archive", text(&output)?),
+        ("archive_sha256", &archive_hash),
+        ("archive_bytes", &archive_bytes),
+        ("schema_version", &schema_text),
+        ("pending_archive", text(&pending)?),
+    ];
+    publish_generation(key, &output, &pending, &fields, schema_version)?;
     Ok(output)
 }
 
@@ -645,6 +805,52 @@ fn finish_archive(key: &str, output: &Path, record: &Json, schema_version: u32) 
 
 fn publish(config: &Path, private: &Path, repo: &Path) -> Result<()> {
     publish_impl(config, private, repo, || Ok(()))
+}
+
+/// One publisher at a time creates managed generations under `cache_root`.
+/// The lock is held until the returned file is dropped.
+fn lock_cache_root(doc: &ConfigDocument) -> Result<fs::File> {
+    let root = fs::canonicalize(required(doc, "cache_root")?)?;
+    if !root.is_dir() || root.parent().is_none() {
+        return Err(invalid("cache_root must be a dedicated directory"));
+    }
+    let lock_path = root.join(".priva-native-caches.lock");
+    if fs::symlink_metadata(&lock_path).is_ok_and(|m| !m.is_file() || m.file_type().is_symlink()) {
+        return Err(invalid("native cache lock is not a regular file"));
+    }
+    let lock = OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(&lock_path)?;
+    lock.try_lock().map_err(|e| {
+        invalid(format!(
+            "another native-cache publisher holds cache_root: {e}"
+        ))
+    })?;
+    Ok(lock)
+}
+
+/// The native archive a builder can read for `key` before publication. A
+/// direct archive is returned after its checks; a pickle goes through the
+/// managed conversion of `install_one`, which `publish` later reuses.
+fn resolve_native(key: &str, private: &Path, repo: &Path) -> Result<PathBuf> {
+    if !KEYS.contains(&key) {
+        return Err(invalid(format!("{key}: not a native cache key")));
+    }
+    let doc = document(&fs::read_to_string(private)?)?;
+    let selected_profile = profile(&doc)?;
+    let Some(value) = setting(&doc, key)? else {
+        return Err(invalid(format!("{key}: not configured in the builder config")));
+    };
+    let source = resolve(value, repo);
+    if source.extension().and_then(|s| s.to_str()) == Some("rkyv") {
+        check_direct(key, &source)?;
+        return Ok(source);
+    }
+    let _lock = lock_cache_root(&doc)?;
+    install_one(key, &source, &doc, repo, &selected_profile)
 }
 
 fn unchanged_metadata(a: &fs::Metadata, b: &fs::Metadata) -> bool {
@@ -690,25 +896,7 @@ fn publish_impl(
     if selected_profile != field(&context, "profile")? {
         return Err(invalid("assembly/VEP profile changed during installation"));
     }
-    let root = fs::canonicalize(required(&doc, "cache_root")?)?;
-    if !root.is_dir() || root.parent().is_none() {
-        return Err(invalid("cache_root must be a dedicated directory"));
-    }
-    let lock_path = root.join(".priva-native-caches.lock");
-    if fs::symlink_metadata(&lock_path).is_ok_and(|m| !m.is_file() || m.file_type().is_symlink()) {
-        return Err(invalid("native cache lock is not a regular file"));
-    }
-    let lock = OpenOptions::new()
-        .create(true)
-        .truncate(false)
-        .read(true)
-        .write(true)
-        .open(&lock_path)?;
-    lock.try_lock().map_err(|e| {
-        invalid(format!(
-            "another native-cache publisher holds cache_root: {e}"
-        ))
-    })?;
+    let _lock = lock_cache_root(&doc)?;
     let mut updates = BTreeMap::new();
     let mut sources = Vec::new();
     for key in KEYS {
@@ -716,15 +904,23 @@ fn publish_impl(
             continue;
         };
         let source = resolve(value, repo);
-        if source.extension().and_then(|s| s.to_str()) == Some("rkyv") {
-            return Err(invalid(format!(
-                "{key}: builder config still selects a native archive"
-            )));
-        }
-        let output = install_one(key, &source, &doc, repo, &selected_profile)?;
-        if bundle(key, repo, &selected_profile).is_none_or(|(_, native)| native != output) {
+        let direct = source.extension().and_then(|s| s.to_str()) == Some("rkyv");
+        let output = if direct {
+            install_direct(key, &source, &doc, repo, &selected_profile)?
+        } else {
+            install_one(key, &source, &doc, repo, &selected_profile)?
+        };
+        if direct
+            || bundle(key, repo, &selected_profile).is_none_or(|(_, native)| native != output)
+        {
+            // A direct archive is its own builder input; recheck its bytes.
             let record = json(&sidecar(&output, ".source.json"))?;
-            sources.push((source.clone(), field(&record, "source_sha256")?.to_owned()));
+            let digest = if direct {
+                "archive_sha256"
+            } else {
+                "source_sha256"
+            };
+            sources.push((source.clone(), field(&record, digest)?.to_owned()));
         }
         context.set(
             &format!("native_{key}"),
@@ -801,12 +997,17 @@ pub(crate) fn dispatch(args: &[String]) -> Result<()> {
         println!("{HELP}");
         return Ok(());
     }
-    if args.len() != 7 || !["prepare", "publish"].contains(&args[0].as_str()) {
+    if args.len() != 7 || !["prepare", "publish", "resolve"].contains(&args[0].as_str()) {
         return Err(invalid(HELP));
     }
+    let first = if args[0] == "resolve" {
+        "--key"
+    } else {
+        "--config"
+    };
     let mut options = BTreeMap::new();
     for pair in args[1..].chunks_exact(2) {
-        if !["--config", "--build-config", "--source-root"].contains(&pair[0].as_str())
+        if ![first, "--build-config", "--source-root"].contains(&pair[0].as_str())
             || options
                 .insert(pair[0].as_str(), PathBuf::from(&pair[1]))
                 .is_some()
@@ -814,9 +1015,15 @@ pub(crate) fn dispatch(args: &[String]) -> Result<()> {
             return Err(invalid(HELP));
         }
     }
-    let config = options.get("--config").ok_or_else(|| invalid(HELP))?;
     let private = options.get("--build-config").ok_or_else(|| invalid(HELP))?;
     let repo = fs::canonicalize(options.get("--source-root").ok_or_else(|| invalid(HELP))?)?;
+    if args[0] == "resolve" {
+        let key = options.get("--key").ok_or_else(|| invalid(HELP))?;
+        // The one stdout line is the archive path; progress goes to stderr.
+        println!("{}", text(&resolve_native(text(key)?, private, &repo)?)?);
+        return Ok(());
+    }
+    let config = options.get("--config").ok_or_else(|| invalid(HELP))?;
     crate::rust_cache::ensure_distinct_paths(config, private)?;
     match args[0].as_str() {
         "prepare" => prepare(config, private, &repo),
@@ -1856,5 +2063,168 @@ mod tests {
         // The old generation remains evidence; a quiescent retry converts the
         // actual new bytes and can publish without changing source files.
         publish(&config, &private, &tmp.0).unwrap();
+    }
+
+    fn select_in_builder(private: &Path, from: &Path, to: &Path) {
+        let builder = fs::read_to_string(private).unwrap();
+        assert!(builder.contains(text(from).unwrap()));
+        fs::write(
+            private,
+            builder.replace(text(from).unwrap(), text(to).unwrap()),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn direct_archive_publishes_once_and_passes_through_prepare() {
+        let tmp = Temp::new();
+        let pickle = tmp.0.join("curated.pkl");
+        fs::write(&pickle, b"\x80\x04}\x8c\x01a}\x8c\x02afK\x01ss.").unwrap();
+        let built = tmp.0.join("built.rkyv");
+        caches::clinvar_gene_af::convert(text(&pickle).unwrap(), &built).unwrap();
+        let (config, private) =
+            tmp.config(&format!("clinvar_patho_af_stat: '{}'\n", pickle.display()));
+        let selected = || {
+            PathBuf::from(
+                required(
+                    &document(&fs::read_to_string(&config).unwrap()).unwrap(),
+                    "clinvar_patho_af_stat",
+                )
+                .unwrap(),
+            )
+        };
+        prepare(&config, &private, &tmp.0).unwrap();
+        select_in_builder(&private, &pickle, &built);
+        publish(&config, &private, &tmp.0).unwrap();
+        let archive = selected();
+        assert_ne!(archive, built);
+        assert!(archive.starts_with(tmp.0.join("ClinVar")));
+        assert!(text(&archive).unwrap().ends_with(".v1.rkyv"));
+        assert_eq!(fs::read(&archive).unwrap(), fs::read(&built).unwrap());
+        let record = json(&sidecar(&archive, ".source.json")).unwrap();
+        assert_eq!(field(&record, "origin").unwrap(), "direct");
+        assert_eq!(field(&record, "key").unwrap(), "clinvar_patho_af_stat");
+        assert_eq!(field(&record, "profile").unwrap(), "GRCh38/VEP116");
+        assert_eq!(
+            field(&record, "archive_sha256").unwrap(),
+            sha256_file(&built).unwrap()
+        );
+        assert!(record.get("source").is_none());
+        let receipt = fs::read(sidecar(&archive, ".source.json")).unwrap();
+        let modified = fs::metadata(&archive).unwrap().modified().unwrap();
+
+        // The next builder view keeps selecting the archive; no pickle is restored.
+        prepare(&config, &private, &tmp.0).unwrap();
+        assert_eq!(
+            setting(
+                &document(&fs::read_to_string(&private).unwrap()).unwrap(),
+                "clinvar_patho_af_stat"
+            )
+            .unwrap(),
+            archive.to_str()
+        );
+        publish(&config, &private, &tmp.0).unwrap();
+        assert_eq!(selected(), archive);
+        // The same bytes written again by a builder reuse the published generation.
+        prepare(&config, &private, &tmp.0).unwrap();
+        select_in_builder(&private, &archive, &built);
+        publish(&config, &private, &tmp.0).unwrap();
+        assert_eq!(selected(), archive);
+        assert_eq!(
+            fs::metadata(&archive).unwrap().modified().unwrap(),
+            modified
+        );
+        assert_eq!(
+            fs::read(sidecar(&archive, ".source.json")).unwrap(),
+            receipt
+        );
+    }
+
+    #[test]
+    fn damaged_wrong_kind_or_missing_direct_archives_are_refused() {
+        let tmp = Temp::new();
+        let pickle = tmp.0.join("gene.pkl");
+        fs::write(&pickle, b"\x80\x04}\x94.").unwrap();
+        let splice = tmp.0.join("splice.pkl");
+        fs::write(&splice, splice_pickle(false)).unwrap();
+        let wrong = tmp.0.join("splice.rkyv");
+        caches::clinvar_splice_stat::convert(text(&splice).unwrap(), &wrong).unwrap();
+        let damaged = tmp.0.join("damaged.rkyv");
+        caches::clinvar_gene_af::convert(text(&pickle).unwrap(), &damaged).unwrap();
+        let bytes = fs::read(&damaged).unwrap();
+        fs::write(&damaged, &bytes[..bytes.len() - 1]).unwrap();
+        let short = tmp.0.join("short.rkyv");
+        fs::write(&short, "damaged").unwrap();
+        let missing = tmp.0.join("missing.rkyv");
+        let (config, private) =
+            tmp.config(&format!("clinvar_patho_af_stat: '{}'\n", pickle.display()));
+        prepare(&config, &private, &tmp.0).unwrap();
+        let builder = fs::read_to_string(&private).unwrap();
+        let before = fs::read(&config).unwrap();
+        for (archive, message) in [
+            (&wrong, "schema"),
+            (&damaged, "length"),
+            (&short, "too short"),
+            (&missing, "does not exist"),
+        ] {
+            fs::write(&private, &builder).unwrap();
+            select_in_builder(&private, &pickle, archive);
+            let error = publish(&config, &private, &tmp.0).unwrap_err().to_string();
+            assert!(error.contains(message), "{error}");
+            assert_eq!(fs::read(&config).unwrap(), before);
+            assert!(resolve_native("clinvar_patho_af_stat", &private, &tmp.0).is_err());
+        }
+        assert!(!tmp.0.join("ClinVar").exists());
+    }
+
+    #[test]
+    fn resolved_conversion_is_reused_by_publish() {
+        let tmp = Temp::new();
+        let pickle = tmp.0.join("gene.pkl");
+        fs::write(&pickle, b"\x80\x04}\x94.").unwrap();
+        let (config, private) =
+            tmp.config(&format!("clinvar_patho_af_stat: '{}'\n", pickle.display()));
+        prepare(&config, &private, &tmp.0).unwrap();
+        assert!(resolve_native("clinvar_gene_stat", &private, &tmp.0).is_err());
+        assert!(resolve_native("unknown", &private, &tmp.0).is_err());
+        let resolved = resolve_native("clinvar_patho_af_stat", &private, &tmp.0).unwrap();
+        let bytes = fs::read(&resolved).unwrap();
+        let receipt = fs::read(sidecar(&resolved, ".source.json")).unwrap();
+        let modified = fs::metadata(&resolved).unwrap().modified().unwrap();
+        assert_eq!(
+            resolve_native("clinvar_patho_af_stat", &private, &tmp.0).unwrap(),
+            resolved
+        );
+        publish(&config, &private, &tmp.0).unwrap();
+        assert_eq!(
+            setting(
+                &document(&fs::read_to_string(&config).unwrap()).unwrap(),
+                "clinvar_patho_af_stat"
+            )
+            .unwrap(),
+            resolved.to_str()
+        );
+        assert_eq!(fs::read(&resolved).unwrap(), bytes);
+        assert_eq!(
+            fs::metadata(&resolved).unwrap().modified().unwrap(),
+            modified
+        );
+        assert_eq!(
+            fs::read(sidecar(&resolved, ".source.json")).unwrap(),
+            receipt
+        );
+        let generations = fs::read_dir(resolved.parent().unwrap())
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .filter(|name| name.to_string_lossy().ends_with(".rkyv"))
+            .count();
+        assert_eq!(generations, 1);
+        // A converted archive named directly resolves to itself after its checks.
+        prepare(&config, &private, &tmp.0).unwrap();
+        select_in_builder(&private, &pickle, &resolved);
+        assert_eq!(
+            resolve_native("clinvar_patho_af_stat", &private, &tmp.0).unwrap(),
+            resolved
+        );
     }
 }

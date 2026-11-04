@@ -4744,7 +4744,8 @@ function priva_export_installed_environment() {
 
 
 # The runtime configuration names native archives. Python builders use a stable
-# private configuration naming their original pickle inputs and outputs instead.
+# private configuration naming their original pickle inputs and outputs instead;
+# native builders may name the archives they write directly there.
 function priva_cache_config_is_native() {
     [[ $# -eq 2 && ${1:-} == --config && -r ${2:-} ]] || return 2
     # Legacy callers need no new tools or bootstrap. Parse YAML only when a
@@ -4836,13 +4837,8 @@ PRIVA_PRIVATE_PARENT_PY
     "$PRIVA_CACHE_INSTALL_BINARY" cache-install prepare \
         --config "$PRIVA_CACHE_INSTALL_ORIGINAL" --build-config "$PRIVA_CACHE_INSTALL_BUILD_CONFIG" \
         --source-root "$BASE_DIR" || return 1
-    local native_status=0
-    priva_cache_config_is_native --config "$PRIVA_CACHE_INSTALL_BUILD_CONFIG" || native_status=$?
-    [[ $native_status == 1 ]] || {
-        log "ERROR: The private builder configuration still names a native cache or is unreadable."
-        return 1
-    }
-
+    # The private view may name archives written directly by native builders;
+    # publish checks and adopts them alongside converted pickles.
 }
 
 
@@ -4869,9 +4865,10 @@ function priva_cache_install_direct() (
     local -a arguments=("$@")
     local original="_priva_cache_builder_${function}" config=${arguments[$position]:-} native_status=0
     [[ -r $config ]] || { "$original" "$@"; return $?; }
-    # Nested stage calls already have the private view. ClinVar's subprocess
-    # working configurations also contain pickle paths and follow the legacy arm.
-    if [[ ${PRIVA_CACHE_INSTALL_INTERNAL:-0} == 1 && $config == "${PRIVA_CACHE_INSTALL_BUILD_CONFIG:-}" ]]; then
+    # Nested calls run inside a private installation already. Their configs,
+    # including ClinVar's working configurations, may name direct native
+    # archives; they never start a second private installation.
+    if [[ ${PRIVA_CACHE_INSTALL_INTERNAL:-0} == 1 ]]; then
         "$original" "$@"
         return $?
     fi

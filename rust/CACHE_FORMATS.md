@@ -301,6 +301,28 @@ Changed sources get a new archive path, preserving the previous configuration un
 final publication. Keep those source files and their scientific companion receipts while
 the corresponding builders still use them.
 
+### Archives written directly by native builders
+
+A native builder may write a `.rkyv` archive into the private build configuration instead
+of a pickle. `publish` checks that the file exists, that its header names this key's schema
+id (section 4), and opens it with that cache's reader at the archive's own schema version.
+A missing, damaged or other-cache archive is refused and the runtime configuration is kept.
+The checked archive is copied into the same managed location and naming as a conversion,
+with the archive's own SHA-256 in place of the source digest. Its receipt has
+`"origin": "direct"`, the key, profile, archive path, `archive_sha256`, `archive_bytes` and
+`schema_version`, and no `source`. Before the final publication, `publish` rechecks the
+builder's archive bytes as it rechecks a converted source. Receipts without `origin` are
+conversions and keep their existing fields.
+
+`prepare` restores the recorded pickle only for converted archives; a direct archive stays
+selected in the private view, and a later `publish` reuses it in place.
+
+`priva cache-install resolve --key KEY --build-config PRIVATE --source-root REPO` prints the
+native archive path for one key of the private view, so a native builder can read a cache
+that another builder has just produced. A `.rkyv` value is printed after the same checks; a
+pickle goes through the managed conversion `publish` uses, and `publish` reuses that
+generation instead of converting again. Progress messages go to stderr.
+
 ## 7. Build PM1 regions from prepared inputs
 
 The standalone `pm1-regions build` procedure writes schema 7 directly, without a pickle

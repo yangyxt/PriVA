@@ -4,6 +4,8 @@
 mod cli;
 mod ftp;
 mod identity;
+mod publication;
+mod publication_json;
 mod receipt;
 mod table;
 mod verify;

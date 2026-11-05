@@ -52,7 +52,12 @@ pub(crate) fn read(path: &Path, delimiter: u8, skip_bad: bool) -> Result<Table> 
 
 /// `pd.read_csv(..., skiprows=skip)` for an uncompressed table: the first
 /// `skip` lines (any of the universal line endings) are not read.
-pub(crate) fn read_skipping(path: &Path, delimiter: u8, skip_bad: bool, skip: usize) -> Result<Table> {
+pub(crate) fn read_skipping(
+    path: &Path,
+    delimiter: u8,
+    skip_bad: bool,
+    skip: usize,
+) -> Result<Table> {
     if skip == 0 {
         return read(path, delimiter, skip_bad);
     }
@@ -67,7 +72,12 @@ pub(crate) fn read_skipping(path: &Path, delimiter: u8, skip_bad: bool, skip: us
             rest = "";
             break;
         };
-        rest = &rest[end + if rest[end..].starts_with("\r\n") { 2 } else { 1 }..];
+        rest = &rest[end
+            + if rest[end..].starts_with("\r\n") {
+                2
+            } else {
+                1
+            }..];
     }
     Ok(parse(rest, delimiter, skip_bad, true)?.unwrap())
 }

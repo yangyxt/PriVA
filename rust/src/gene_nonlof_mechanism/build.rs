@@ -25,13 +25,20 @@ pub(super) fn load_gofcards_cache(path: &Path) -> Result<Json> {
         ));
     }
     let meta = get(&cache, "metadata")?.cloned().unwrap_or(Json::Null);
-    let meta = if truthy(&meta) { meta } else { Json::Object(vec![]) };
+    let meta = if truthy(&meta) {
+        meta
+    } else {
+        Json::Object(vec![])
+    };
     let source = get(&meta, "source")?.cloned().unwrap_or(Json::Null);
     let mechanism = get(&meta, "mechanism")?.cloned().unwrap_or(Json::Null);
     if !equal(&source, &text("GoFCards")) || !equal(&mechanism, &text("GOF")) {
         return Err(error(
             "ValueError",
-            format!("GoFCards cache does not declare GoFCards/GOF: {}", path.display()),
+            format!(
+                "GoFCards cache does not declare GoFCards/GOF: {}",
+                path.display()
+            ),
         ));
     }
     Ok(cache)
@@ -53,21 +60,39 @@ fn items(value: &Json) -> Result<Vec<(String, Json)>> {
 /// `clinvar_vcv.gofcards_variant_is_eligible`.
 pub(super) fn eligible(variant: &Json) -> Result<bool> {
     let record = get(variant, "record")?.cloned().unwrap_or(Json::Null);
-    let record = if truthy(&record) { record } else { Json::Object(vec![]) };
+    let record = if truthy(&record) {
+        record
+    } else {
+        Json::Object(vec![])
+    };
     let eligibility = get(&record, "eligibility")?.cloned().unwrap_or(Json::Null);
-    let eligibility = if truthy(&eligibility) { eligibility } else { Json::Object(vec![]) };
+    let eligibility = if truthy(&eligibility) {
+        eligibility
+    } else {
+        Json::Object(vec![])
+    };
     Ok(get(&eligibility, "status")?.is_some_and(|status| equal(status, &text("eligible"))))
 }
 
 fn quarantine_status(variant: &Json) -> Result<&'static str> {
     let record = get(variant, "record")?.cloned().unwrap_or(Json::Null);
-    let record = if truthy(&record) { record } else { Json::Object(vec![]) };
+    let record = if truthy(&record) {
+        record
+    } else {
+        Json::Object(vec![])
+    };
     let eligibility = get(&record, "eligibility")?.cloned().unwrap_or(Json::Null);
-    let eligibility = if truthy(&eligibility) { eligibility } else { Json::Object(vec![]) };
+    let eligibility = if truthy(&eligibility) {
+        eligibility
+    } else {
+        Json::Object(vec![])
+    };
     let status = py_str(&get_or(&eligibility, "status", text(""))?);
     let status = python_strip(&status).to_lowercase();
     Ok(
-        if status.starts_with("quarantined_reviewed_") || status.starts_with("quarantined_mechanism_") {
+        if status.starts_with("quarantined_reviewed_")
+            || status.starts_with("quarantined_mechanism_")
+        {
             "quarantined_upstream_mechanism_review"
         } else {
             "quarantined_upstream_gene_discordance"
@@ -80,8 +105,10 @@ fn resolved_hgnc_id(symbol: &str, hgnc: &HashMap<String, Hgnc>) -> String {
     if cleaned.is_empty() {
         return String::new();
     }
-    hgnc.get(&cleaned)
-        .map_or_else(|| format!("SYMBOL:{cleaned}"), |entry| entry.hgnc_id.clone())
+    hgnc.get(&cleaned).map_or_else(
+        || format!("SYMBOL:{cleaned}"),
+        |entry| entry.hgnc_id.clone(),
+    )
 }
 
 pub(super) type Exact = HashMap<(String, String), Json>;
@@ -149,8 +176,16 @@ fn clean_text(value: &str) -> String {
 pub(super) fn variant_id_of(chrom: &str, start: &str, reference: &str, alternate: &str) -> String {
     let allele = |value: &str| {
         let text = clean_text(value);
-        let text = if ["-", "."].contains(&text.as_str()) { String::new() } else { text.to_uppercase() };
-        if text.is_empty() { "-".to_owned() } else { text }
+        let text = if ["-", "."].contains(&text.as_str()) {
+            String::new()
+        } else {
+            text.to_uppercase()
+        };
+        if text.is_empty() {
+            "-".to_owned()
+        } else {
+            text
+        }
     };
     let start = python_strip(start);
     let start = start.strip_suffix(".0").unwrap_or(start);
@@ -180,13 +215,23 @@ fn nonempty(fields: Vec<(&str, Json)>) -> Json {
 
 fn retain_nonempty(value: Json) -> Json {
     match value {
-        Json::Object(fields) => nonempty(fields.iter().map(|(k, v)| (k.as_str(), v.clone())).collect()),
+        Json::Object(fields) => nonempty(
+            fields
+                .iter()
+                .map(|(k, v)| (k.as_str(), v.clone()))
+                .collect(),
+        ),
         other => other,
     }
 }
 
 fn pmids(row: &Row) -> Json {
-    Json::Array(split_pmids(row.get("pmids")).into_iter().map(Json::Str).collect())
+    Json::Array(
+        split_pmids(row.get("pmids"))
+            .into_iter()
+            .map(Json::Str)
+            .collect(),
+    )
 }
 
 fn assertion(source: &str, row: &Row) -> Option<Json> {
@@ -202,12 +247,10 @@ fn assertion(source: &str, row: &Row) -> Option<Json> {
         ]),
         "PanelApp" => {
             let record = row.get("source_record_id");
-            let panel_id = record
-                .split_once("panel:")
-                .map_or("", |(_, rest)| {
-                    let between = rest.split("panel:").next().unwrap_or("");
-                    between.split(';').next().unwrap_or("")
-                });
+            let panel_id = record.split_once("panel:").map_or("", |(_, rest)| {
+                let between = rest.split("panel:").next().unwrap_or("");
+                between.split(';').next().unwrap_or("")
+            });
             nonempty(vec![
                 ("mechanism", field("mechanism")),
                 ("panel", field("disease")),
@@ -236,7 +279,9 @@ fn assertion(source: &str, row: &Row) -> Option<Json> {
             let confidence = row.get("disease_confidence");
             let pscore = confidence
                 .strip_prefix("Pscore=")
-                .and_then(|rest| crate::python_text::parse_float(rest.split('=').next().unwrap_or("")))
+                .and_then(|rest| {
+                    crate::python_text::parse_float(rest.split('=').next().unwrap_or(""))
+                })
                 .map_or(Json::Null, Json::Float);
             let hgvsc = row.get("hgvsc");
             let transcript = if !hgvsc.is_empty() && hgvsc.contains(':') {
@@ -260,7 +305,11 @@ fn assertion(source: &str, row: &Row) -> Option<Json> {
                 ("pmids", pmids(row)),
                 (
                     "function",
-                    text(if raw != "curated GOF variant" { raw } else { "" }),
+                    text(if raw != "curated GOF variant" {
+                        raw
+                    } else {
+                        ""
+                    }),
                 ),
                 ("pathway", text("")),
                 ("animal_model", text("")),
@@ -302,7 +351,10 @@ fn meta(genes: usize, unmapped: Vec<String>) -> Json {
         ("version", text("2.0")),
         ("built_at", text(iso_now())),
         ("total_genes", Json::Int(genes as i128)),
-        ("unmapped_symbols", Json::Array(unmapped.into_iter().map(Json::Str).collect())),
+        (
+            "unmapped_symbols",
+            Json::Array(unmapped.into_iter().map(Json::Str).collect()),
+        ),
         (
             "sources",
             object([
@@ -312,12 +364,24 @@ fn meta(genes: usize, unmapped: Vec<String>) -> Json {
                         ("level", text("gene_level")),
                         (
                             "keys",
-                            strings(&["mechanism", "mechanism_raw", "disease", "inheritance", "confidence", "pmids"]),
+                            strings(&[
+                                "mechanism",
+                                "mechanism_raw",
+                                "disease",
+                                "inheritance",
+                                "confidence",
+                                "pmids",
+                            ]),
                         ),
-                        ("mechanism_raw", text("original G2P molecular mechanism text")),
+                        (
+                            "mechanism_raw",
+                            text("original G2P molecular mechanism text"),
+                        ),
                         (
                             "confidence_values",
-                            text("definitive | strong | moderate | limited | conflicting_or_refuted"),
+                            text(
+                                "definitive | strong | moderate | limited | conflicting_or_refuted",
+                            ),
                         ),
                     ]),
                 ),
@@ -328,16 +392,32 @@ fn meta(genes: usize, unmapped: Vec<String>) -> Json {
                         (
                             "keys",
                             strings(&[
-                                "mechanism", "source_record_id", "allele_key",
-                                "exact_normalization_status", "exact_cache_gene_symbols",
-                                "exact_normalized_variants", "disease", "chr", "pos", "ref",
-                                "alt", "transcript", "consequence", "pscore", "pmids",
-                                "function", "pathway", "animal_model", "cell_model",
+                                "mechanism",
+                                "source_record_id",
+                                "allele_key",
+                                "exact_normalization_status",
+                                "exact_cache_gene_symbols",
+                                "exact_normalized_variants",
+                                "disease",
+                                "chr",
+                                "pos",
+                                "ref",
+                                "alt",
+                                "transcript",
+                                "consequence",
+                                "pscore",
+                                "pmids",
+                                "function",
+                                "pathway",
+                                "animal_model",
+                                "cell_model",
                             ]),
                         ),
                         (
                             "exact_normalized_variant_shape",
-                            text("gene -> variants -> <loc_...._grch37> -> {record, assemblies -> hg19|hg38 -> {genomic, transcripts}}"),
+                            text(
+                                "gene -> variants -> <loc_...._grch37> -> {record, assemblies -> hg19|hg38 -> {genomic, transcripts}}",
+                            ),
                         ),
                         (
                             "raw_public_allele_fields",
@@ -346,7 +426,9 @@ fn meta(genes: usize, unmapped: Vec<String>) -> Json {
                                 ("keys", strings(&["chr", "pos", "ref", "alt"])),
                                 (
                                     "note",
-                                    text("Applies only to the legacy top-level GoFCards source fields; exact_normalized_variants identify hg19 and hg38 fields explicitly"),
+                                    text(
+                                        "Applies only to the legacy top-level GoFCards source fields; exact_normalized_variants identify hg19 and hg38 fields explicitly",
+                                    ),
                                 ),
                             ]),
                         ),
@@ -359,7 +441,9 @@ fn meta(genes: usize, unmapped: Vec<String>) -> Json {
                         ),
                         (
                             "pscore",
-                            text("GoFCards pathogenicity score (float); >=5 high, >=3 moderate, else limited"),
+                            text(
+                                "GoFCards pathogenicity score (float); >=5 high, >=3 moderate, else limited",
+                            ),
                         ),
                         ("animal_model", text("true if animal model evidence exists")),
                         ("cell_model", text("true if cell model evidence exists")),
@@ -369,10 +453,21 @@ fn meta(genes: usize, unmapped: Vec<String>) -> Json {
                     "PanelApp",
                     object([
                         ("level", text("gene_level")),
-                        ("keys", strings(&["mechanism", "panel", "panel_id", "inheritance", "confidence"])),
+                        (
+                            "keys",
+                            strings(&[
+                                "mechanism",
+                                "panel",
+                                "panel_id",
+                                "inheritance",
+                                "confidence",
+                            ]),
+                        ),
                         (
                             "note",
-                            text("non-LOF history marker; LOF variants do NOT cause phenotype in this panel"),
+                            text(
+                                "non-LOF history marker; LOF variants do NOT cause phenotype in this panel",
+                            ),
                         ),
                     ]),
                 ),
@@ -380,8 +475,14 @@ fn meta(genes: usize, unmapped: Vec<String>) -> Json {
                     "ClinGen_Dosage",
                     object([
                         ("level", text("gene_level")),
-                        ("keys", strings(&["mechanism", "score", "score_description", "pmids"])),
-                        ("score", text("ClinGen dosage score; 3=sufficient, 2=emerging evidence")),
+                        (
+                            "keys",
+                            strings(&["mechanism", "score", "score_description", "pmids"]),
+                        ),
+                        (
+                            "score",
+                            text("ClinGen dosage score; 3=sufficient, 2=emerging evidence"),
+                        ),
                     ]),
                 ),
                 (
@@ -390,7 +491,9 @@ fn meta(genes: usize, unmapped: Vec<String>) -> Json {
                         ("level", text("variant_level")),
                         (
                             "scope",
-                            text("condition-specific germline RCV classifications and linked SCV observations for exact normalized GoFCards alleles"),
+                            text(
+                                "condition-specific germline RCV classifications and linked SCV observations for exact normalized GoFCards alleles",
+                            ),
                         ),
                         ("minimum_review_stars", Json::Int(2)),
                         (
@@ -403,11 +506,15 @@ fn meta(genes: usize, unmapped: Vec<String>) -> Json {
                         ),
                         (
                             "mechanism_caveat",
-                            text("ClinVar does not assign GOF here; GOF context comes from the exact matched GoFCards allele."),
+                            text(
+                                "ClinVar does not assign GOF here; GOF context comes from the exact matched GoFCards allele.",
+                            ),
                         ),
                         (
                             "inheritance_caveat",
-                            text("Observed zygosity and submitted mode of inheritance are retained as evidence and do not set allelic_requirement."),
+                            text(
+                                "Observed zygosity and submitted mode of inheritance are retained as evidence and do not set allelic_requirement.",
+                            ),
                         ),
                     ]),
                 ),
@@ -415,13 +522,22 @@ fn meta(genes: usize, unmapped: Vec<String>) -> Json {
         ),
         (
             "mechanism_values",
-            strings(&["GOF", "DOMINANT_NEGATIVE", "TRIPLOSENSITIVITY", "PANELAPP_GREEN_NON_LOF_PATHO_HISTORY"]),
+            strings(&[
+                "GOF",
+                "DOMINANT_NEGATIVE",
+                "TRIPLOSENSITIVITY",
+                "PANELAPP_GREEN_NON_LOF_PATHO_HISTORY",
+            ]),
         ),
     ])
 }
 
 /// The script's `build_nonlof_assertions_json`.
-pub(super) fn assertions_json(rows: &[Row], hgnc: &HashMap<String, Hgnc>, exact: &Exact) -> Result<Json> {
+pub(super) fn assertions_json(
+    rows: &[Row],
+    hgnc: &HashMap<String, Hgnc>,
+    exact: &Exact,
+) -> Result<Json> {
     let mut genes: BTreeMap<String, Gene> = BTreeMap::new();
     let mut unmapped = Vec::new();
     for row in rows {
@@ -432,7 +548,10 @@ pub(super) fn assertions_json(rows: &[Row], hgnc: &HashMap<String, Hgnc>, exact:
         let (id, ids) = match hgnc.get(&symbol.to_uppercase()) {
             None => {
                 unmapped.push(symbol.clone());
-                (format!("SYMBOL:{symbol}"), nonempty(vec![("symbol", text(symbol.clone()))]))
+                (
+                    format!("SYMBOL:{symbol}"),
+                    nonempty(vec![("symbol", text(symbol.clone()))]),
+                )
             }
             Some(entry) => (
                 entry.hgnc_id.clone(),
@@ -466,11 +585,20 @@ pub(super) fn assertions_json(rows: &[Row], hgnc: &HashMap<String, Hgnc>, exact:
                     text("unmatched_public_source_allele"),
                 ),
                 Some(variant) if eligible(variant)? => {
-                    value.set("exact_normalization_status", text("matched_gene_concordant"));
-                    value.set("exact_normalized_variants", Json::Array(vec![variant.clone()]));
+                    value.set(
+                        "exact_normalization_status",
+                        text("matched_gene_concordant"),
+                    );
+                    value.set(
+                        "exact_normalized_variants",
+                        Json::Array(vec![variant.clone()]),
+                    );
                 }
                 Some(variant) => {
-                    value.set("exact_normalization_status", text(quarantine_status(variant)?));
+                    value.set(
+                        "exact_normalization_status",
+                        text(quarantine_status(variant)?),
+                    );
                     value.set(
                         "quarantined_exact_normalized_variants",
                         Json::Array(vec![variant.clone()]),
@@ -493,7 +621,10 @@ pub(super) fn assertions_json(rows: &[Row], hgnc: &HashMap<String, Hgnc>, exact:
         }
     }
     let unmapped: BTreeSet<String> = unmapped.into_iter().collect();
-    let mut result = vec![("_meta".to_owned(), meta(genes.len(), unmapped.into_iter().collect()))];
+    let mut result = vec![(
+        "_meta".to_owned(),
+        meta(genes.len(), unmapped.into_iter().collect()),
+    )];
     for (id, gene) in genes {
         let mut value = gene.ids;
         value.set(
@@ -520,7 +651,12 @@ fn meta_mut(result: &mut Json) -> &mut Json {
 
 /// The GoFCards and ClinVar integration summaries; returns the number of
 /// variants that carry ClinVar conditions.
-pub(super) fn integrate(result: &mut Json, path: &Path, stats: &Json, exact: &Exact) -> Result<usize> {
+pub(super) fn integrate(
+    result: &mut Json,
+    path: &Path,
+    stats: &Json,
+    exact: &Exact,
+) -> Result<usize> {
     let mut assertions = Vec::new();
     if let Json::Object(items) = &*result {
         for (id, gene) in items {
@@ -541,7 +677,11 @@ pub(super) fn integrate(result: &mut Json, path: &Path, stats: &Json, exact: &Ex
     let mut quarantined = 0;
     for value in &assertions {
         *counts
-            .entry(py_str(value.get("exact_normalization_status").unwrap_or(&Json::Null)))
+            .entry(py_str(
+                value
+                    .get("exact_normalization_status")
+                    .unwrap_or(&Json::Null),
+            ))
             .or_default() += 1;
         if let Some(Json::Array(items)) = value.get("exact_normalized_variants") {
             emitted += items.len();
@@ -561,8 +701,14 @@ pub(super) fn integrate(result: &mut Json, path: &Path, stats: &Json, exact: &Ex
         }
     }
     integration.set("public_assertions", Json::Int(assertions.len() as i128));
-    integration.set("emitted_exact_normalized_records", Json::Int(emitted as i128));
-    integration.set("emitted_quarantined_records", Json::Int(quarantined as i128));
+    integration.set(
+        "emitted_exact_normalized_records",
+        Json::Int(emitted as i128),
+    );
+    integration.set(
+        "emitted_quarantined_records",
+        Json::Int(quarantined as i128),
+    );
     integration.set(
         "assertion_status_counts",
         Json::Object(counts.into_iter().map(|(k, v)| (k, Json::Int(v))).collect()),
@@ -578,7 +724,10 @@ pub(super) fn integrate(result: &mut Json, path: &Path, stats: &Json, exact: &Ex
         object([
             ("source", text("inject_clinvar_into_gofcards.py")),
             ("gofcards_exact_sha256", text(digest)),
-            ("variants_carrying_clinvar_conditions", Json::Int(annotated as i128)),
+            (
+                "variants_carrying_clinvar_conditions",
+                Json::Int(annotated as i128),
+            ),
         ]),
     );
     Ok(annotated)

@@ -111,9 +111,9 @@ def snapshot(arm, folder=None):
                     for name, meta in body["sources"].items():
                         if isinstance(meta, dict) and str(meta.get("status", "")).endswith("_after_download_error"):
                             meta["error"] = "<ERROR>"
-                        # A fetched PanelApp file records its own download time.
-                        if name == "panelapp_all_panels" and isinstance(meta, dict) and \
-                                meta.get("status") in ("downloaded", "updated", "checked_same_checksum"):
+                        # A fetched PanelApp file records its own download time;
+                        # its content is compared, normalized, as a file.
+                        if name == "panelapp_all_panels" and isinstance(meta, dict) and "sha256" in meta:
                             meta.update(sha256="<PANELAPP>", md5="<PANELAPP>")
                             hashes = (body.get("build_inputs") or {}).get("source_sha256") or {}
                             if name in hashes:
@@ -130,8 +130,7 @@ def snapshot(arm, folder=None):
                 for row in rows[1:]:
                     if len(row) > where and row[1].endswith("_after_download_error"):
                         row[where] = "<ERROR>"
-                    if len(row) > where and row[0] == "panelapp_all_panels" and \
-                            row[1] in ("downloaded", "updated", "checked_same_checksum"):
+                    if len(row) > where and row[0] == "panelapp_all_panels":
                         for column in ("sha256", "md5"):
                             row[rows[0].index(column)] = "<PANELAPP>"
             state[relative] = STAMP.sub("<TIME>", "\n".join("\t".join(row) for row in rows))
@@ -248,7 +247,7 @@ def write_sources(raw, picked, repo, strict=False):
     (raw / "gofcards").mkdir(exist_ok=True)
     write_workbook(raw / "gofcards/gofcards_data_download.xlsx", picked)
     (raw / "clinvar_vcv").mkdir(exist_ok=True)
-    (raw / CLINVAR_RAW).write_bytes(gzip.compress(b"<ClinVarVariationRelease/>"))
+    (raw / CLINVAR_RAW).write_bytes(gzip.compress(b"<ClinVarVariationRelease/>", mtime=0))
 
 
 def fresh_manifest(cache_dir, raw, urls=None, clinvar=True, checked=None):
@@ -346,7 +345,7 @@ class Fixtures:
         write_sources(raw, self.picked, self.repo)
         if workbook != "plain":
             write_workbook(raw / "gofcards/gofcards_data_download.xlsx", self.picked, workbook)
-        (arm / "vcv.xml.gz").write_bytes(gzip.compress(vcv_xml(vcv)))
+        (arm / "vcv.xml.gz").write_bytes(gzip.compress(vcv_xml(vcv), mtime=0))
         local = copy.deepcopy(self.cache)
         if inject:
             # Relative to the copy, where both commands run: identical cache bytes.
@@ -509,7 +508,7 @@ def real(args):
         for name in ("AllG2P.csv", "ClinGen_gene_curation_list_GRCh38.tsv", "panelapp_all_panels.json",
                      "gofcards/gofcards_data_download.xlsx"):
             (raw / name).symlink_to((args.raw_inputs / name).resolve())
-        (raw / CLINVAR_RAW).write_bytes(gzip.compress(b"<ClinVarVariationRelease/>"))
+        (raw / CLINVAR_RAW).write_bytes(gzip.compress(b"<ClinVarVariationRelease/>", mtime=0))
         fresh_manifest(arm / "cache", raw)
     for label in ("python", "native"):
         arm = args.work_root / label

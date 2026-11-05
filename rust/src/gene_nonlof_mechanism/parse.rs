@@ -75,7 +75,10 @@ fn mechanism(raw: &str, source: &str) -> Vec<String> {
         }
         return vec![];
     }
-    normalize_mechanism(raw).into_iter().map(str::to_owned).collect()
+    normalize_mechanism(raw)
+        .into_iter()
+        .map(str::to_owned)
+        .collect()
 }
 
 /// A pandas string table as text cells (`fillna("")`).
@@ -106,7 +109,9 @@ impl Frame {
         for (index, name) in self.names.iter().enumerate() {
             map.insert(norm_key(name), index);
         }
-        candidates.iter().find_map(|c| map.get(&norm_key(c)).copied())
+        candidates
+            .iter()
+            .find_map(|c| map.get(&norm_key(c)).copied())
     }
     /// `row.get(name, "")` by label (the first column carrying it).
     fn by_name<'a>(&self, row: &'a [String], name: &str) -> &'a str {
@@ -126,7 +131,9 @@ fn parse_g2p(path: &Path) -> Result<Vec<Row>> {
     if !exists(path) {
         return Ok(vec![]);
     }
-    let frame = Frame::from_table(crate::gene_mechanism_builder::table::read(path, b',', true)?);
+    let frame = Frame::from_table(crate::gene_mechanism_builder::table::read(
+        path, b',', true,
+    )?);
     let gene = frame.resolve(&["gene symbol", "gene_symbol"]);
     let disease = frame.resolve(&["disease name", "disease_label", "disease"]);
     let consequence = frame.resolve(&[
@@ -177,13 +184,21 @@ fn parse_panelapp(path: &Path) -> Result<Vec<Row>> {
         let id = py_str(&get_or(panel, "id", text(""))?);
         let version = py_str(&get_or(panel, "version", text(""))?);
         let genes = get_or(panel, "genes", Json::Array(vec![]))?;
-        let genes = if truthy(&genes) { genes } else { Json::Array(vec![]) };
+        let genes = if truthy(&genes) {
+            genes
+        } else {
+            Json::Array(vec![])
+        };
         let Json::Array(genes) = genes else {
             continue;
         };
         for entry in &genes {
             let data = get(entry, "gene_data")?.cloned().unwrap_or(Json::Null);
-            let data = if truthy(&data) { data } else { Json::Object(vec![]) };
+            let data = if truthy(&data) {
+                data
+            } else {
+                Json::Object(vec![])
+            };
             let mut symbol = Json::Null;
             for (source, key) in [
                 (&data, "gene_symbol"),
@@ -197,7 +212,11 @@ fn parse_panelapp(path: &Path) -> Result<Vec<Row>> {
                     break;
                 }
             }
-            let gene = if truthy(&symbol) { py_str(&symbol) } else { String::new() };
+            let gene = if truthy(&symbol) {
+                py_str(&symbol)
+            } else {
+                String::new()
+            };
             let gene = python_strip(&gene).to_owned();
             if gene.is_empty() {
                 continue;
@@ -231,7 +250,8 @@ fn parse_panelapp(path: &Path) -> Result<Vec<Row>> {
                 .join("|");
             let confidence = first(&["confidence_level", "penetrance"])?;
             let labels = mechanism(&mop, "PanelApp");
-            if python_strip(&confidence) != "3" || !labels.iter().any(|l| l == PANELAPP_NON_LOF_LABEL)
+            if python_strip(&confidence) != "3"
+                || !labels.iter().any(|l| l == PANELAPP_NON_LOF_LABEL)
             {
                 continue;
             }
@@ -284,7 +304,11 @@ fn parse_clingen(path: &Path) -> Result<Vec<Row>> {
     let mut frame = Frame::from_table(crate::gene_mechanism_builder::table::read_skipping(
         path, b'\t', true, skip,
     )?);
-    if frame.names.first().is_some_and(|name| name.starts_with('#')) {
+    if frame
+        .names
+        .first()
+        .is_some_and(|name| name.starts_with('#'))
+    {
         frame.names[0] = python_strip(frame.names[0].trim_start_matches('#')).to_owned();
     }
     let gene = frame.resolve(&["Gene Symbol", "#Gene Symbol", "gene_symbol", "symbol"]);
@@ -370,7 +394,11 @@ fn universal_lines(body: &str) -> impl Iterator<Item = &str> {
             return None;
         }
         let end = rest.find(['\r', '\n']).map_or(rest.len(), |at| {
-            if rest[at..].starts_with("\r\n") { at + 2 } else { at + 1 }
+            if rest[at..].starts_with("\r\n") {
+                at + 2
+            } else {
+                at + 1
+            }
         });
         let (line, tail) = rest.split_at(end);
         rest = tail;
@@ -587,7 +615,9 @@ pub(super) fn load_hgnc_mapping(path: &Path) -> Result<HashMap<String, Hgnc>> {
     if !exists(path) {
         return Ok(HashMap::new());
     }
-    let frame = Frame::from_table(crate::gene_mechanism_builder::table::read(path, b'\t', false)?);
+    let frame = Frame::from_table(crate::gene_mechanism_builder::table::read(
+        path, b'\t', false,
+    )?);
     let mut columns: HashMap<String, usize> = HashMap::new();
     for (index, name) in frame.names.iter().enumerate() {
         columns.insert(name.to_lowercase(), index);
@@ -619,8 +649,12 @@ pub(super) fn load_hgnc_mapping(path: &Path) -> Result<HashMap<String, Hgnc>> {
     let alias_column = find(&["alias_symbol", "Alias symbols"], false)?;
     let previous_column = find(&["prev_symbol", "Previous symbols"], false)?;
     let entrez_column = find(&["entrez_id", "NCBI Gene ID(supplied by NCBI)"], false)?;
-    let ensembl_column = find(&["ensembl_gene_id", "Ensembl ID(supplied by Ensembl)"], false)?;
-    let cell = |row: &[String], column: Option<usize>| column.map_or("", |i| row[i].as_str()).to_owned();
+    let ensembl_column = find(
+        &["ensembl_gene_id", "Ensembl ID(supplied by Ensembl)"],
+        false,
+    )?;
+    let cell =
+        |row: &[String], column: Option<usize>| column.map_or("", |i| row[i].as_str()).to_owned();
     let mut lookup: HashMap<String, Hgnc> = HashMap::new();
     for row in &frame.rows {
         let entrez = python_strip(&cell(row, entrez_column)).to_owned();

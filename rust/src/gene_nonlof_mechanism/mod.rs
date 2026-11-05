@@ -199,7 +199,10 @@ pub(super) struct Transfer {
     pub(super) max_panels: Option<i128>,
 }
 
-pub(super) fn error(category: &'static str, message: impl Into<String>) -> Box<dyn std::error::Error> {
+pub(super) fn error(
+    category: &'static str,
+    message: impl Into<String>,
+) -> Box<dyn std::error::Error> {
     builder_error::category(category, invalid(message))
 }
 
@@ -387,7 +390,20 @@ pub(super) fn parse_iso(value: &str) -> Option<(i128, bool)> {
         return None;
     }
     let leap = year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);
-    let lengths = [31, if leap { 29 } else { 28 }, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+    let lengths = [
+        31,
+        if leap { 29 } else { 28 },
+        31,
+        30,
+        31,
+        30,
+        31,
+        31,
+        30,
+        31,
+        30,
+        31,
+    ];
     if day < 1 || day > lengths[month as usize - 1] {
         return None;
     }
@@ -489,9 +505,8 @@ pub(super) fn expanduser(path: &Path) -> Result<PathBuf> {
     if value != "~" && !value.starts_with("~/") {
         return Ok(path.to_owned());
     }
-    let home = std::env::var("HOME").map_err(|_| {
-        error("RuntimeError", "Could not determine home directory.")
-    })?;
+    let home = std::env::var("HOME")
+        .map_err(|_| error("RuntimeError", "Could not determine home directory."))?;
     Ok(path_value(&format!("{home}{}", &value[1..])))
 }
 
@@ -548,9 +563,15 @@ pub(super) fn dumps_indented(value: &Json) -> Result<String> {
 /// `atomic_write_text`: the whole text to a temporary sibling (keeping a
 /// `.gz` suffix, gzip with mtime 0 and no name), then one rename.
 pub(super) fn atomic_write(path: &Path, body: &str) -> Result<()> {
-    let parent = path.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or(Path::new("."));
+    let parent = path
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
     fs::create_dir_all(parent).map_err(|e| os_error(e, parent, None))?;
-    let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    let name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
     let gz = path.to_string_lossy().ends_with(".gz");
     let temporary = if gz {
         path.with_file_name(format!("{}.tmp.gz", &name[..name.len() - 3]))
@@ -651,8 +672,12 @@ pub(super) struct Options {
 }
 
 fn int_value(name: &str, value: &str) -> std::result::Result<i128, String> {
-    crate::python_text::python_int(value)
-        .ok_or_else(|| format!("argument --{name}: invalid int value: {}", crate::python_path::repr(value)))
+    crate::python_text::python_int(value).ok_or_else(|| {
+        format!(
+            "argument --{name}: invalid int value: {}",
+            crate::python_path::repr(value)
+        )
+    })
 }
 
 fn parse_options(args: &[String]) -> Result<Option<Options>> {
@@ -722,7 +747,10 @@ fn parse_options(args: &[String]) -> Result<Option<Options>> {
         }
     }
     let mut panelapp = panelapp_spec();
-    if let Some(url) = values.get("panelapp-panels-url").filter(|url| !url.is_empty()) {
+    if let Some(url) = values
+        .get("panelapp-panels-url")
+        .filter(|url| !url.is_empty())
+    {
         panelapp.url = url.clone();
     }
     Ok(Some(Options {
@@ -800,10 +828,7 @@ fn run(options: Options) -> Result<()> {
         let target = resolve(target)?;
         let canonical = read_json(&target)?;
         if !truthy(&canonical) {
-            return Err(error(
-                "FileNotFoundError",
-                target.display().to_string(),
-            ));
+            return Err(error("FileNotFoundError", target.display().to_string()));
         }
         schema::validate_canonical(&canonical, &resolve(&options.output_schema)?)?;
         let genes = match &canonical {
@@ -920,7 +945,11 @@ fn run(options: Options) -> Result<()> {
         ("raw_dir", text(raw_dir.display().to_string())),
         (
             "raw_dir_mode",
-            text(if raw_dir_is_shared { "shared" } else { "cache_local" }),
+            text(if raw_dir_is_shared {
+                "shared"
+            } else {
+                "cache_local"
+            }),
         ),
         ("lock_path", text(lock_path.display().to_string())),
         (
@@ -931,13 +960,19 @@ fn run(options: Options) -> Result<()> {
                 "explicit_proxy_url"
             }),
         ),
-        ("download_tool", text(options.transfer.download_tool.clone())),
+        (
+            "download_tool",
+            text(options.transfer.download_tool.clone()),
+        ),
         ("expected_raw_filenames", Json::Array(expected)),
         ("built_at_utc", text(built_at.clone())),
         ("sources", Json::Object(source_meta.clone())),
     ]);
     if let Some(meta) = &selected {
-        manifest.set("selected_clinvar_vcv_path", get_or(meta, "raw_path", Json::Null)?);
+        manifest.set(
+            "selected_clinvar_vcv_path",
+            get_or(meta, "raw_path", Json::Null)?,
+        );
     }
     if options.fetch_sources_only {
         if let Some(previous) = get(&previous_manifest, "build_inputs")? {
@@ -958,8 +993,14 @@ fn run(options: Options) -> Result<()> {
         let clinvar_meta = &source_meta.last().unwrap().1;
         print_json(&object([
             ("status", text("fetched_sources_only")),
-            ("clinvar_vcv_xml", get_or(clinvar_meta, "raw_path", text(""))?),
-            ("source_manifest_json", text(manifest_path.display().to_string())),
+            (
+                "clinvar_vcv_xml",
+                get_or(clinvar_meta, "raw_path", text(""))?,
+            ),
+            (
+                "source_manifest_json",
+                text(manifest_path.display().to_string()),
+            ),
         ]))?;
         return Ok(());
     }
@@ -976,8 +1017,14 @@ fn run(options: Options) -> Result<()> {
         ),
         ("schema_sha256", text(sha256_file(&schema_path)?)),
         ("hgnc_sha256", text(sha256_file(&hgnc_path)?)),
-        ("gofcards_exact_sha256", text(sha256_file(&gofcards_exact_path)?)),
-        ("gofcards_exact_path", text(gofcards_exact_path.display().to_string())),
+        (
+            "gofcards_exact_sha256",
+            text(sha256_file(&gofcards_exact_path)?),
+        ),
+        (
+            "gofcards_exact_path",
+            text(gofcards_exact_path.display().to_string()),
+        ),
         ("source_sha256", {
             let mut names: Vec<(String, Json)> = source_meta
                 .iter()
@@ -993,12 +1040,16 @@ fn run(options: Options) -> Result<()> {
         }),
     ]);
     if let Some(meta) = &selected {
-        build_inputs.set("selected_clinvar_vcv_path", get_or(meta, "raw_path", Json::Null)?);
+        build_inputs.set(
+            "selected_clinvar_vcv_path",
+            get_or(meta, "raw_path", Json::Null)?,
+        );
     }
     manifest.set("build_inputs", build_inputs.clone());
     if !options.force
         && exists(&json_path)
-        && get(&previous_manifest, "build_inputs")?.is_some_and(|previous| equal(previous, &build_inputs))
+        && get(&previous_manifest, "build_inputs")?
+            .is_some_and(|previous| equal(previous, &build_inputs))
     {
         schema::validate_canonical(&read_json(&json_path)?, &schema_path)?;
         write_json(&manifest_path, &manifest)?;
@@ -1013,7 +1064,10 @@ fn run(options: Options) -> Result<()> {
         )?;
         print_json(&object([
             ("status", text("checked_inputs_unchanged")),
-            ("nonlof_assertions_json", text(json_path.display().to_string())),
+            (
+                "nonlof_assertions_json",
+                text(json_path.display().to_string()),
+            ),
             ("schema_validation", text("passed")),
         ]))?;
         return Ok(());
@@ -1067,9 +1121,18 @@ fn run(options: Options) -> Result<()> {
         (
             "outputs",
             object([
-                ("source_manifest_json", text(manifest_path.display().to_string())),
-                ("source_manifest_tsv", text(manifest_tsv_path.display().to_string())),
-                ("nonlof_assertions_json", text(json_path.display().to_string())),
+                (
+                    "source_manifest_json",
+                    text(manifest_path.display().to_string()),
+                ),
+                (
+                    "source_manifest_tsv",
+                    text(manifest_tsv_path.display().to_string()),
+                ),
+                (
+                    "nonlof_assertions_json",
+                    text(json_path.display().to_string()),
+                ),
             ]),
         ),
     ]);

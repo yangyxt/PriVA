@@ -6,7 +6,9 @@ use std::process::{Command, Stdio};
 /// `previous_meta.get(source.name, {})`, emptied when its raw path moved.
 fn previous(spec: &Spec, previous_sources: &Json, raw_path: &Path) -> Result<Json> {
     let old = get_or(previous_sources, spec.name, Json::Object(vec![]))?;
-    if !get(&old, "raw_path")?.is_some_and(|value| equal(value, &text(raw_path.display().to_string()))) {
+    if !get(&old, "raw_path")?
+        .is_some_and(|value| equal(value, &text(raw_path.display().to_string())))
+    {
         return Ok(Json::Object(vec![]));
     }
     Ok(old)
@@ -19,8 +21,8 @@ fn identity_matches(spec: &Spec, metadata: &Json, raw_path: Option<&Path>) -> Re
         || (!truthy(&previous) && spec.url == spec.default_url());
     if let (true, Some(raw_path)) = (matches, raw_path) {
         if let Some(sha) = get(metadata, "sha256")?.filter(|v| truthy(v)) {
-            matches = crate::python_path::is_file(raw_path)?
-                && equal(&text(sha256_file(raw_path)?), sha);
+            matches =
+                crate::python_path::is_file(raw_path)? && equal(&text(sha256_file(raw_path)?), sha);
         }
     }
     Ok(matches)
@@ -37,7 +39,10 @@ fn is_fresh(path: &Path, meta: &Json, refresh_days: i64, force: bool) -> Result<
             other => {
                 return Err(error(
                     "TypeError",
-                    format!("fromisoformat: argument must be str, not {}", type_name(other)),
+                    format!(
+                        "fromisoformat: argument must be str, not {}",
+                        type_name(other)
+                    ),
                 ));
             }
         },
@@ -79,7 +84,8 @@ fn metadata_for_file(
     ]);
     if nonempty(raw_path) {
         let sha256 = sha256_file(raw_path)?;
-        let changed = old_sha256.is_some_and(|old| truthy(old) && !equal(old, &text(sha256.clone())));
+        let changed =
+            old_sha256.is_some_and(|old| truthy(old) && !equal(old, &text(sha256.clone())));
         metadata.set("size_bytes", Json::Int(stat(raw_path)?.len().into()));
         metadata.set("sha256", text(sha256));
         metadata.set("md5", text(md5_file(raw_path)?));
@@ -93,7 +99,10 @@ fn metadata_for_file(
 }
 
 fn with_name(path: &Path, suffix: &str) -> PathBuf {
-    let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    let name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
     path.with_file_name(format!("{name}{suffix}"))
 }
 
@@ -161,7 +170,12 @@ pub(super) fn curl(
 
 /// One `urlopen` request written to `out`: `Ok(())`, or `str(error)` of the
 /// exception urllib would raise.
-fn urlopen(url: &str, out: &Path, transfer: &Transfer, accept_json: bool) -> std::result::Result<(), String> {
+fn urlopen(
+    url: &str,
+    out: &Path,
+    transfer: &Transfer,
+    accept_json: bool,
+) -> std::result::Result<(), String> {
     let headers = with_name(out, ".headers");
     let timeout = transfer.timeout.to_string();
     let mut command = Command::new("curl");
@@ -189,7 +203,12 @@ fn urlopen(url: &str, out: &Path, transfer: &Transfer, accept_json: bool) -> std
     if !transfer.proxy_url.is_empty() {
         command.args(["--proxy", &transfer.proxy_url]);
     }
-    command.arg("--dump-header").arg(&headers).arg("--output").arg(out).arg(url);
+    command
+        .arg("--dump-header")
+        .arg(&headers)
+        .arg("--output")
+        .arg(out)
+        .arg(url);
     let output = command
         .stdin(Stdio::null())
         .output()
@@ -251,7 +270,10 @@ pub(super) fn download(url: &str, out: &Path, transfer: &Transfer) -> Result<()>
             pause(attempt);
         }
     }
-    Err(error("RuntimeError", format!("failed to download {url}: {last}")))
+    Err(error(
+        "RuntimeError",
+        format!("failed to download {url}: {last}"),
+    ))
 }
 
 fn temporary_path(prefix: &str, suffix: &str) -> PathBuf {
@@ -259,7 +281,9 @@ fn temporary_path(prefix: &str, suffix: &str) -> PathBuf {
     let tag: String = std::iter::repeat_with(|| {
         let alphabet = b"abcdefghijklmnopqrstuvwxyz0123456789_";
         let mut byte = [0u8; 1];
-        File::open("/dev/urandom").and_then(|mut f| f.read_exact(&mut byte)).ok();
+        File::open("/dev/urandom")
+            .and_then(|mut f| f.read_exact(&mut byte))
+            .ok();
         alphabet[byte[0] as usize % alphabet.len()] as char
     })
     .take(8)
@@ -274,7 +298,8 @@ fn fetch_json(url: &str, transfer: &Transfer) -> Result<Json> {
         if needs_curl(transfer) {
             curl(url, &path, transfer, None, false)?;
             let bytes = fs::read(&path).map_err(|e| os_error(e, &path, None))?;
-            let body = crate::python_io::decode_utf8(&bytes).map_err(|e| error("UnicodeDecodeError", e))?;
+            let body = crate::python_io::decode_utf8(&bytes)
+                .map_err(|e| error("UnicodeDecodeError", e))?;
             return json_text::parse(body, false).map_err(|e| error("JSONDecodeError", e));
         }
         let mut last = "None".to_owned();
@@ -295,7 +320,10 @@ fn fetch_json(url: &str, transfer: &Transfer) -> Result<Json> {
                 pause(attempt);
             }
         }
-        Err(error("RuntimeError", format!("failed to fetch JSON {url}: {last}")))
+        Err(error(
+            "RuntimeError",
+            format!("failed to fetch JSON {url}: {last}"),
+        ))
     })();
     let _ = fs::remove_file(&path);
     result
@@ -343,7 +371,9 @@ pub(super) fn fetch_static_source(
         let new_sha = sha256_file(&temporary)?;
         let status = if matches
             && exists(&raw_path)
-            && old_sha.as_ref().is_some_and(|old| equal(old, &text(new_sha.clone())))
+            && old_sha
+                .as_ref()
+                .is_some_and(|old| equal(old, &text(new_sha.clone())))
         {
             fs::remove_file(&temporary).map_err(|e| os_error(e, &temporary, None))?;
             "checked_same_checksum"
@@ -391,7 +421,9 @@ fn join_url(base: &str, relative: &str) -> String {
     }
     if let Some(rest) = relative.strip_prefix('/') {
         let scheme_end = base.find("://").map_or(0, |at| at + 3);
-        let host_end = base[scheme_end..].find('/').map_or(base.len(), |at| scheme_end + at);
+        let host_end = base[scheme_end..]
+            .find('/')
+            .map_or(base.len(), |at| scheme_end + at);
         return format!("{}/{rest}", &base[..host_end]);
     }
     format!("{base}{relative}")
@@ -427,8 +459,7 @@ pub(super) fn fetch_panelapp(
                     Json::Object(_) => {
                         let results_ok = match payload.get("results") {
                             Some(Json::Array(rows)) => rows.iter().all(|row| {
-                                matches!(row, Json::Object(_))
-                                    && row.get("id").is_some_and(truthy)
+                                matches!(row, Json::Object(_)) && row.get("id").is_some_and(truthy)
                             }),
                             _ => false,
                         };
@@ -468,7 +499,11 @@ pub(super) fn fetch_panelapp(
             if let Some(cap) = transfer.max_panels {
                 if panels.len() as i128 >= cap {
                     // panels[:cap], including a negative cap's slice.
-                    let keep = if cap >= 0 { cap } else { (panels.len() as i128 + cap).max(0) };
+                    let keep = if cap >= 0 {
+                        cap
+                    } else {
+                        (panels.len() as i128 + cap).max(0)
+                    };
                     panels.truncate(keep as usize);
                     break;
                 }
@@ -476,7 +511,11 @@ pub(super) fn fetch_panelapp(
         }
         let base = format!(
             "{}/",
-            spec.url.split('?').next().unwrap_or("").trim_end_matches('/')
+            spec.url
+                .split('?')
+                .next()
+                .unwrap_or("")
+                .trim_end_matches('/')
         );
         let mut detailed = Vec::new();
         for (index, panel) in panels.iter().enumerate() {
@@ -548,7 +587,9 @@ pub(super) fn fetch_panelapp(
         let new_sha = sha256_file(&temporary)?;
         let status = if matches
             && exists(&raw_path)
-            && old_sha.as_ref().is_some_and(|old| equal(old, &text(new_sha.clone())))
+            && old_sha
+                .as_ref()
+                .is_some_and(|old| equal(old, &text(new_sha.clone())))
         {
             fs::remove_file(&temporary).map_err(|e| os_error(e, &temporary, None))?;
             "checked_same_checksum"
@@ -631,7 +672,10 @@ fn latest_xsd(index: &str) -> Result<(String, String)> {
         if version.is_empty() || !tail[version.len()..].starts_with(".xsd") {
             continue;
         }
-        let key: Vec<u128> = version.split('.').map(|part| part.parse().unwrap_or(0)).collect();
+        let key: Vec<u128> = version
+            .split('.')
+            .map(|part| part.parse().unwrap_or(0))
+            .collect();
         if best.as_ref().is_none_or(|(old, _)| key > *old) {
             best = Some((key, version.to_owned()));
         }
@@ -667,7 +711,10 @@ fn remote_md5(body: &str) -> Result<String> {
     let shown: String = body.chars().take(200).collect();
     Err(error(
         "ValueError",
-        format!("Could not parse ClinVar companion MD5: {}", crate::python_path::repr(&shown)),
+        format!(
+            "Could not parse ClinVar companion MD5: {}",
+            crate::python_path::repr(&shown)
+        ),
     ))
 }
 
@@ -687,7 +734,10 @@ pub(super) fn fetch_clinvar_vcv(
         Some(other) if truthy(other) => {
             return Err(error(
                 "TypeError",
-                format!("fromisoformat: argument must be str, not {}", type_name(other)),
+                format!(
+                    "fromisoformat: argument must be str, not {}",
+                    type_name(other)
+                ),
             ));
         }
         _ => None,
@@ -716,17 +766,28 @@ pub(super) fn fetch_clinvar_vcv(
         let (version, xsd_url) = latest_xsd(&index)?;
         let xsd = download_text(&xsd_url, transfer)?;
         let format_dir = raw_path.parent().unwrap().join("format");
-        let readme_meta = write_downloaded_text(&format_dir.join("NCBI_CLINVAR_XML_README"), &readme)?;
+        let readme_meta =
+            write_downloaded_text(&format_dir.join("NCBI_CLINVAR_XML_README"), &readme)?;
         let xsd_meta =
             write_downloaded_text(&format_dir.join(format!("ClinVar_VCV_{version}.xsd")), &xsd)?;
-        let local = if nonempty(&raw_path) { md5_file(&raw_path)? } else { String::new() };
+        let local = if nonempty(&raw_path) {
+            md5_file(&raw_path)?
+        } else {
+            String::new()
+        };
         let mut downloaded = false;
         if local != md5 {
             let part = raw_path.with_file_name(format!(
                 "{}.{md5}.part",
                 raw_path.file_name().unwrap().to_string_lossy()
             ));
-            curl(&spec.url, &part, transfer, Some(transfer.max_download_seconds), true)?;
+            curl(
+                &spec.url,
+                &part,
+                transfer,
+                Some(transfer.max_download_seconds),
+                true,
+            )?;
             let actual = md5_file(&part)?;
             if actual != md5 {
                 let _ = fs::remove_file(&part);
@@ -740,7 +801,10 @@ pub(super) fn fetch_clinvar_vcv(
             if let Ok(entries) = fs::read_dir(raw_path.parent().unwrap()) {
                 for entry in entries.flatten() {
                     let name = entry.file_name().to_string_lossy().into_owned();
-                    if name.starts_with(&stem) && name.ends_with(".part") && name.len() > stem.len() + 4 {
+                    if name.starts_with(&stem)
+                        && name.ends_with(".part")
+                        && name.len() > stem.len() + 4
+                    {
                         let _ = fs::remove_file(entry.path());
                     }
                 }
@@ -753,7 +817,8 @@ pub(super) fn fetch_clinvar_vcv(
         };
         let has_old = truthy(&old);
         let changed = downloaded
-            && get(&old, "md5")?.is_some_and(|value| truthy(value) && !equal(value, &text(md5.clone())));
+            && get(&old, "md5")?
+                .is_some_and(|value| truthy(value) && !equal(value, &text(md5.clone())));
         let metadata = object([
             ("name", text(spec.name)),
             ("url", text(spec.url.clone())),
@@ -789,7 +854,10 @@ pub(super) fn fetch_clinvar_vcv(
             ("sha256", sha256),
             ("md5", text(md5.clone())),
             ("remote_md5", text(md5.clone())),
-            ("remote_md5_text", text(crate::python_text::python_strip(&md5_text))),
+            (
+                "remote_md5_text",
+                text(crate::python_text::python_strip(&md5_text)),
+            ),
             ("file_mtime_utc", text(file_mtime_iso(&raw_path)?)),
             ("content_changed", Json::Bool(changed)),
             (
@@ -917,17 +985,32 @@ pub(super) fn selected_clinvar_vcv_metadata(supplied: &Path) -> Result<Json> {
     if !crate::python_path::is_file(&path)? || stat(&path)?.len() == 0 {
         return Err(error(
             "ValueError",
-            format!("Missing or empty explicit ClinVar VCV XML: {}", path.display()),
+            format!(
+                "Missing or empty explicit ClinVar VCV XML: {}",
+                path.display()
+            ),
         ));
     }
     let identity = |meta: &fs::Metadata| {
-        (meta.dev(), meta.ino(), meta.len(), meta.mtime(), meta.mtime_nsec(), meta.ctime(), meta.ctime_nsec())
+        (
+            meta.dev(),
+            meta.ino(),
+            meta.len(),
+            meta.mtime(),
+            meta.mtime_nsec(),
+            meta.ctime(),
+            meta.ctime_nsec(),
+        )
     };
     let before_meta = stat(&path)?;
     let before = identity(&before_meta);
     let sha256 = sha256_file(&path)?;
     let md5 = md5_file(&path)?;
-    let state = std::rc::Rc::new(std::cell::RefCell::new((None::<String>, None::<String>, 0u64)));
+    let state = std::rc::Rc::new(std::cell::RefCell::new((
+        None::<String>,
+        None::<String>,
+        0u64,
+    )));
     let display = path.display().to_string();
     let file = File::open(&path).map_err(|e| os_error(e, &path, None))?;
     let source: Box<dyn Read> = if display.ends_with(".gz") {
@@ -1095,9 +1178,8 @@ pub(super) fn write_source_manifest_tsv(path: &Path, manifest: &Json) -> Result<
         let stringified = |key: &str| -> Result<ObjectValue> {
             Ok(ObjectValue::Text(py_str(&field(key)?.unwrap_or(text("")))))
         };
-        let plain = |key: &str| -> Result<ObjectValue> {
-            Ok(cell(Some(&field(key)?.unwrap_or(text("")))))
-        };
+        let plain =
+            |key: &str| -> Result<ObjectValue> { Ok(cell(Some(&field(key)?.unwrap_or(text(""))))) };
         let format = get_or(meta, "format_metadata", Json::Object(vec![]))?;
         let xsd = get_or(&format, "xsd", Json::Object(vec![]))?;
         let row = [

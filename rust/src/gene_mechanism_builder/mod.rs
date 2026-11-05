@@ -3,7 +3,6 @@
 //! Python builder. These commands do not acquire sources or activate callers.
 pub(crate) mod table;
 mod word;
-pub(crate) use word::is_word;
 use crate::builder_table::{strings, text};
 use crate::cli::{Result, invalid};
 use crate::hpo_penetrance::{self, Values};
@@ -17,6 +16,7 @@ use std::collections::{BTreeSet, HashMap};
 use std::fs::{self, File};
 use std::path::Path;
 use std::rc::Rc;
+pub(crate) use word::is_word;
 
 const G2P_URL: &str = "https://www.ebi.ac.uk/gene2phenotype/api/panel/all/download";
 const ORPHA_URL: &str = "https://www.orphadata.com/data/xml/en_product6.xml";

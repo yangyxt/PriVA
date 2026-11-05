@@ -63,10 +63,15 @@ fn same(left: &Json, right: &Json) -> bool {
     match (left, right) {
         (Json::Str(a), Json::Str(b)) => a == b,
         (Json::Str(_), _) | (_, Json::Str(_)) => false,
-        (Json::Array(a), Json::Array(b)) => a.len() == b.len() && a.iter().zip(b).all(|(x, y)| same(x, y)),
+        (Json::Array(a), Json::Array(b)) => {
+            a.len() == b.len() && a.iter().zip(b).all(|(x, y)| same(x, y))
+        }
         (Json::Object(a), Json::Object(b)) => {
             a.len() == b.len()
-                && a.iter().all(|(key, value)| b.iter().any(|(other, item)| other == key && same(value, item)))
+                && a.iter().all(|(key, value)| {
+                    b.iter()
+                        .any(|(other, item)| other == key && same(value, item))
+                })
         }
         (Json::Bool(a), Json::Bool(b)) => a == b,
         (Json::Bool(_), _) | (_, Json::Bool(_)) => false,
@@ -147,7 +152,13 @@ impl Validator<'_> {
         Ok(found.is_empty())
     }
 
-    fn check(&self, instance: &Json, schema: &Json, path: &[Step], out: &mut Vec<Failure>) -> Result<()> {
+    fn check(
+        &self,
+        instance: &Json,
+        schema: &Json,
+        path: &[Step],
+        out: &mut Vec<Failure>,
+    ) -> Result<()> {
         let fail = |out: &mut Vec<Failure>, message: String| {
             out.push(Failure {
                 path: path.to_vec(),
@@ -157,7 +168,10 @@ impl Validator<'_> {
         let entries = match schema {
             Json::Bool(true) => return Ok(()),
             Json::Bool(false) => {
-                fail(out, format!("False schema does not allow {}", repr(instance)));
+                fail(
+                    out,
+                    format!("False schema does not allow {}", repr(instance)),
+                );
                 return Ok(());
             }
             Json::Object(entries) => entries,
@@ -190,8 +204,12 @@ impl Validator<'_> {
                         other => vec![py_str(other)],
                     };
                     if !types.iter().any(|t| is_type(instance, t)) {
-                        let names: Vec<String> = types.iter().map(|t| crate::python_path::repr(t)).collect();
-                        fail(out, format!("{} is not of type {}", repr(instance), names.join(", ")));
+                        let names: Vec<String> =
+                            types.iter().map(|t| crate::python_path::repr(t)).collect();
+                        fail(
+                            out,
+                            format!("{} is not of type {}", repr(instance), names.join(", ")),
+                        );
                     }
                 }
                 "required" => {
@@ -217,14 +235,21 @@ impl Validator<'_> {
                         for (pattern, subschema) in patterns {
                             for (name, item) in fields {
                                 if search(pattern, name)? {
-                                    self.check(item, subschema, &child(Step::Key(name.clone())), out)?;
+                                    self.check(
+                                        item,
+                                        subschema,
+                                        &child(Step::Key(name.clone())),
+                                        out,
+                                    )?;
                                 }
                             }
                         }
                     }
                 }
                 "additionalProperties" => {
-                    let Json::Object(fields) = instance else { continue };
+                    let Json::Object(fields) = instance else {
+                        continue;
+                    };
                     let properties = schema.get("properties");
                     let patterns: Vec<String> = match schema.get("patternProperties") {
                         Some(Json::Object(items)) => items.iter().map(|(k, _)| k.clone()).collect(),
@@ -248,20 +273,41 @@ impl Validator<'_> {
                     }
                     if let Json::Object(_) = value {
                         for name in &extras {
-                            self.check(instance.get(name).unwrap(), value, &child(Step::Key(name.clone())), out)?;
+                            self.check(
+                                instance.get(name).unwrap(),
+                                value,
+                                &child(Step::Key(name.clone())),
+                                out,
+                            )?;
                         }
                     } else if !truthy(value) && !extras.is_empty() {
                         extras.sort();
-                        let joined = extras.iter().map(|e| crate::python_path::repr(e)).collect::<Vec<_>>().join(", ");
+                        let joined = extras
+                            .iter()
+                            .map(|e| crate::python_path::repr(e))
+                            .collect::<Vec<_>>()
+                            .join(", ");
                         if schema.get("patternProperties").is_some() {
                             let mut sorted = patterns.clone();
                             sorted.sort();
-                            let shown = sorted.iter().map(|p| crate::python_path::repr(p)).collect::<Vec<_>>().join(", ");
+                            let shown = sorted
+                                .iter()
+                                .map(|p| crate::python_path::repr(p))
+                                .collect::<Vec<_>>()
+                                .join(", ");
                             let verb = if extras.len() == 1 { "does" } else { "do" };
-                            fail(out, format!("{joined} {verb} not match any of the regexes: {shown}"));
+                            fail(
+                                out,
+                                format!("{joined} {verb} not match any of the regexes: {shown}"),
+                            );
                         } else {
                             let verb = if extras.len() == 1 { "was" } else { "were" };
-                            fail(out, format!("Additional properties are not allowed ({joined} {verb} unexpected)"));
+                            fail(
+                                out,
+                                format!(
+                                    "Additional properties are not allowed ({joined} {verb} unexpected)"
+                                ),
+                            );
                         }
                     }
                 }
@@ -283,17 +329,28 @@ impl Validator<'_> {
                         other => vec![other.clone()],
                     };
                     if options.iter().all(|option| !same(option, instance)) {
-                        fail(out, format!("{} is not one of {}", repr(instance), repr(value)));
+                        fail(
+                            out,
+                            format!("{} is not one of {}", repr(instance), repr(value)),
+                        );
                     }
                 }
                 "minLength" | "maxLength" => {
                     if let (Json::Str(_), Some(limit)) = (instance, number(value)) {
                         let size = length(instance).unwrap() as f64;
                         if keyword == "minLength" && size < limit {
-                            let words = if limit == 1.0 { "should be non-empty" } else { "is too short" };
+                            let words = if limit == 1.0 {
+                                "should be non-empty"
+                            } else {
+                                "is too short"
+                            };
                             fail(out, format!("{} {words}", repr(instance)));
                         } else if keyword == "maxLength" && size > limit {
-                            let words = if limit == 0.0 { "is expected to be empty" } else { "is too long" };
+                            let words = if limit == 0.0 {
+                                "is expected to be empty"
+                            } else {
+                                "is too long"
+                            };
                             fail(out, format!("{} {words}", repr(instance)));
                         }
                     }
@@ -302,10 +359,18 @@ impl Validator<'_> {
                     if let (Json::Array(_), Some(limit)) = (instance, number(value)) {
                         let size = length(instance).unwrap() as f64;
                         if keyword == "minItems" && size < limit {
-                            let words = if limit == 1.0 { "should be non-empty" } else { "is too short" };
+                            let words = if limit == 1.0 {
+                                "should be non-empty"
+                            } else {
+                                "is too short"
+                            };
                             fail(out, format!("{} {words}", repr(instance)));
                         } else if keyword == "maxItems" && size > limit {
-                            let words = if limit == 0.0 { "is expected to be empty" } else { "is too long" };
+                            let words = if limit == 0.0 {
+                                "is expected to be empty"
+                            } else {
+                                "is too long"
+                            };
                             fail(out, format!("{} {words}", repr(instance)));
                         }
                     }
@@ -314,10 +379,18 @@ impl Validator<'_> {
                     if let (Json::Object(_), Some(limit)) = (instance, number(value)) {
                         let size = length(instance).unwrap() as f64;
                         if keyword == "minProperties" && size < limit {
-                            let words = if limit == 1.0 { "should be non-empty" } else { "does not have enough properties" };
+                            let words = if limit == 1.0 {
+                                "should be non-empty"
+                            } else {
+                                "does not have enough properties"
+                            };
                             fail(out, format!("{} {words}", repr(instance)));
                         } else if keyword == "maxProperties" && size > limit {
-                            let words = if limit == 0.0 { "is expected to be empty" } else { "has too many properties" };
+                            let words = if limit == 0.0 {
+                                "is expected to be empty"
+                            } else {
+                                "has too many properties"
+                            };
                             fail(out, format!("{} {words}", repr(instance)));
                         }
                     }
@@ -326,16 +399,37 @@ impl Validator<'_> {
                     if let Json::Str(body) = instance {
                         let pattern = py_str(value);
                         if !search(&pattern, body)? {
-                            fail(out, format!("{} does not match {}", repr(instance), crate::python_path::repr(&pattern)));
+                            fail(
+                                out,
+                                format!(
+                                    "{} does not match {}",
+                                    repr(instance),
+                                    crate::python_path::repr(&pattern)
+                                ),
+                            );
                         }
                     }
                 }
                 "minimum" | "maximum" => {
                     if is_type(instance, "number") {
                         if keyword == "minimum" && less(instance, value) {
-                            fail(out, format!("{} is less than the minimum of {}", repr(instance), repr(value)));
+                            fail(
+                                out,
+                                format!(
+                                    "{} is less than the minimum of {}",
+                                    repr(instance),
+                                    repr(value)
+                                ),
+                            );
                         } else if keyword == "maximum" && less(value, instance) {
-                            fail(out, format!("{} is greater than the maximum of {}", repr(instance), repr(value)));
+                            fail(
+                                out,
+                                format!(
+                                    "{} is greater than the maximum of {}",
+                                    repr(instance),
+                                    repr(value)
+                                ),
+                            );
                         }
                     }
                 }
@@ -369,7 +463,13 @@ impl Validator<'_> {
                             }
                         }
                         if !passed {
-                            fail(out, format!("{} is not valid under any of the given schemas", repr(instance)));
+                            fail(
+                                out,
+                                format!(
+                                    "{} is not valid under any of the given schemas",
+                                    repr(instance)
+                                ),
+                            );
                         }
                     }
                 }
@@ -417,7 +517,10 @@ pub(super) fn validate_canonical(result: &Json, schema_path: &Path) -> Result<()
     if !truthy(&schema) {
         return Err(error(
             "FileNotFoundError",
-            format!("Canonical JSON Schema is missing: {}", schema_path.display()),
+            format!(
+                "Canonical JSON Schema is missing: {}",
+                schema_path.display()
+            ),
         ));
     }
     let validator = Validator { root: &schema };
@@ -442,7 +545,11 @@ pub(super) fn validate_canonical(result: &Json, schema_path: &Path) -> Result<()
                 .join("/");
             format!(
                 "{}: {}",
-                if location.is_empty() { "<root>" } else { &location },
+                if location.is_empty() {
+                    "<root>"
+                } else {
+                    &location
+                },
                 failure.message
             )
         })
@@ -544,7 +651,9 @@ fn parse_pattern(pattern: &str) -> Result<Vec<Piece>> {
                     } else {
                         c
                     };
-                    if chars.get(at + 1) == Some(&'-') && chars.get(at + 2).is_some_and(|c| *c != ']') {
+                    if chars.get(at + 1) == Some(&'-')
+                        && chars.get(at + 2).is_some_and(|c| *c != ']')
+                    {
                         let high = chars[at + 2];
                         if high == '\\' {
                             return Err(unsupported(pattern));
@@ -603,11 +712,15 @@ fn match_here(pieces: &[Piece], text: &[char], at: usize) -> bool {
     match piece.atom {
         Atom::Start => at == 0 && match_here(rest, text, at),
         Atom::End => {
-            (at == text.len() || (at + 1 == text.len() && text[at] == '\n')) && match_here(rest, text, at)
+            (at == text.len() || (at + 1 == text.len() && text[at] == '\n'))
+                && match_here(rest, text, at)
         }
         _ => {
             let mut count = 0;
-            while count < piece.max && at + count < text.len() && atom_matches(&piece.atom, text[at + count]) {
+            while count < piece.max
+                && at + count < text.len()
+                && atom_matches(&piece.atom, text[at + count])
+            {
                 count += 1;
             }
             loop {

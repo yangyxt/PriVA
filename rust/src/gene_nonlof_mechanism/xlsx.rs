@@ -31,7 +31,9 @@ impl Node {
             .map(|(_, value)| value.as_str())
     }
     fn children(&self, name: &'static str) -> impl Iterator<Item = &Node> {
-        self.children.iter().filter(move |child| child.local() == name)
+        self.children
+            .iter()
+            .filter(move |child| child.local() == name)
     }
     fn child(&self, name: &'static str) -> Option<&Node> {
         self.children(name).next()
@@ -166,7 +168,10 @@ const BUILTIN: [(u32, &str); 43] = [
     (41, r#"_(* #,##0_);_(* \(#,##0\);_(* "-"_);_(@_)"#),
     (42, r#"_("$"* #,##0_);_("$"* \(#,##0\);_("$"* "-"_);_(@_)"#),
     (43, r#"_(* #,##0.00_);_(* \(#,##0.00\);_(* "-"??_);_(@_)"#),
-    (44, r#"_("$"* #,##0.00_)_("$"* \(#,##0.00\)_("$"* "-"??_)_(@_)"#),
+    (
+        44,
+        r#"_("$"* #,##0.00_)_("$"* \(#,##0.00\)_("$"* "-"??_)_(@_)"#,
+    ),
     (45, "mm:ss"),
     (46, "[h]:mm:ss"),
     (47, "mmss.0"),
@@ -252,7 +257,8 @@ fn excel_date(value: f64, mac: bool, timedelta: bool) -> Option<String> {
         if micros.rem_euclid(1_000_000) != 0 {
             let seconds = (micros as f64 / 1e6).floor() as i128;
             let rest = micros - seconds * 1_000_000;
-            micros = seconds * 1_000_000 + ((rest as f64 / 1000.0).round_ties_even() as i128) * 1000;
+            micros =
+                seconds * 1_000_000 + ((rest as f64 / 1000.0).round_ties_even() as i128) * 1000;
         }
         let days = micros.div_euclid(86_400_000_000);
         let within = micros.rem_euclid(86_400_000_000);
@@ -263,9 +269,16 @@ fn excel_date(value: f64, mac: bool, timedelta: bool) -> Option<String> {
             (within % 1_000_000) as i64,
         );
         let clock = clock.trim_start_matches('0');
-        let clock = if clock.starts_with(':') { format!("0{clock}") } else { clock.to_owned() };
+        let clock = if clock.starts_with(':') {
+            format!("0{clock}")
+        } else {
+            clock.to_owned()
+        };
         return Some(if days != 0 {
-            format!("{days} day{}, {clock}", if days.abs() != 1 { "s" } else { "" })
+            format!(
+                "{days} day{}, {clock}",
+                if days.abs() != 1 { "s" } else { "" }
+            )
         } else {
             clock
         });
@@ -321,7 +334,9 @@ fn excel_date(value: f64, mac: bool, timedelta: bool) -> Option<String> {
 /// openpyxl's `coordinate_to_tuple`.
 fn coordinate(text: &str) -> Result<(i128, i128)> {
     let body = text.replace('$', "");
-    let split = body.find(|c: char| c.is_ascii_digit()).unwrap_or(body.len());
+    let split = body
+        .find(|c: char| c.is_ascii_digit())
+        .unwrap_or(body.len());
     let (letters, digits) = body.split_at(split);
     if letters.is_empty()
         || letters.len() > 3
@@ -334,9 +349,9 @@ fn coordinate(text: &str) -> Result<(i128, i128)> {
             format!("Invalid cell coordinates ({text})"),
         ));
     }
-    let column = letters
-        .chars()
-        .fold(0i128, |total, c| total * 26 + i128::from(c.to_ascii_uppercase() as u8 - b'A' + 1));
+    let column = letters.chars().fold(0i128, |total, c| {
+        total * 26 + i128::from(c.to_ascii_uppercase() as u8 - b'A' + 1)
+    });
     Ok((digits.parse().unwrap_or(0), column))
 }
 
@@ -372,7 +387,10 @@ fn styles(book: &mut Book) -> Result<Styles> {
     }
     if let Some(xfs) = root.child("cellXfs") {
         for (index, xf) in xfs.children("xf").enumerate() {
-            let id: u32 = xf.plain("numFmtId").and_then(|v| v.parse().ok()).unwrap_or(0);
+            let id: u32 = xf
+                .plain("numFmtId")
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(0);
             let code = custom.get(&id).cloned().unwrap_or_else(|| {
                 BUILTIN
                     .iter()
@@ -394,16 +412,22 @@ fn styles(book: &mut Book) -> Result<Styles> {
 /// The DataFrame's column names and its text cells after `fillna("")`.
 pub(super) fn read_sheet(path: &Path, sheet: &str) -> Result<(Vec<String>, Vec<Vec<String>>)> {
     let file = File::open(path).map_err(|e| os_error(e, path, None))?;
-    let archive = zip::ZipArchive::new(file)
-        .map_err(|_| error("BadZipFile", "File is not a zip file"))?;
+    let archive =
+        zip::ZipArchive::new(file).map_err(|_| error("BadZipFile", "File is not a zip file"))?;
     let mut book = Book { archive };
-    let manifest = book
-        .part("[Content_Types].xml")?
-        .ok_or_else(|| error("KeyError", "\"There is no item named '[Content_Types].xml' in the archive\""))?;
+    let manifest = book.part("[Content_Types].xml")?.ok_or_else(|| {
+        error(
+            "KeyError",
+            "\"There is no item named '[Content_Types].xml' in the archive\"",
+        )
+    })?;
     let override_part = |types: &[&str]| {
         manifest
             .children("Override")
-            .find(|node| node.plain("ContentType").is_some_and(|t| types.contains(&t)))
+            .find(|node| {
+                node.plain("ContentType")
+                    .is_some_and(|t| types.contains(&t))
+            })
             .and_then(|node| node.plain("PartName"))
             .map(|name| name.trim_start_matches('/').to_owned())
     };
@@ -419,14 +443,20 @@ pub(super) fn read_sheet(path: &Path, sheet: &str) -> Result<(Vec<String>, Vec<V
         },
         None => vec![],
     };
-    let workbook = book
-        .part(&workbook_part)?
-        .ok_or_else(|| error("KeyError", format!("There is no item named '{workbook_part}' in the archive")))?;
+    let workbook = book.part(&workbook_part)?.ok_or_else(|| {
+        error(
+            "KeyError",
+            format!("There is no item named '{workbook_part}' in the archive"),
+        )
+    })?;
     let mac = workbook
         .child("workbookPr")
         .and_then(|p| p.plain("date1904"))
         .is_some_and(|v| matches!(v, "1" | "true"));
-    let base_dir = workbook_part.rsplit_once('/').map_or("", |(folder, _)| folder).to_owned();
+    let base_dir = workbook_part
+        .rsplit_once('/')
+        .map_or("", |(folder, _)| folder)
+        .to_owned();
     let rels = book.part(&rels_path(&workbook_part))?;
     let names = book.names();
     let target = workbook
@@ -439,17 +469,25 @@ pub(super) fn read_sheet(path: &Path, sheet: &str) -> Result<(Vec<String>, Vec<V
                 .iter()
                 .find(|(key, _)| key.ends_with("}id"))
                 .map(|(_, value)| value.clone())?;
-            let target = rels.as_ref()?.children("Relationship").find(|r| r.plain("Id") == Some(id.as_str()))?;
+            let target = rels
+                .as_ref()?
+                .children("Relationship")
+                .find(|r| r.plain("Id") == Some(id.as_str()))?;
             let part = join_part(&base_dir, target.plain("Target")?);
-            names.contains(&part).then(|| (node.plain("name").unwrap_or("").to_owned(), part))
+            names
+                .contains(&part)
+                .then(|| (node.plain("name").unwrap_or("").to_owned(), part))
         })
         .find(|(name, _)| name == sheet)
         .map(|(_, part)| part)
         .ok_or_else(|| bad(format!("Worksheet named '{sheet}' not found")))?;
     let style = styles(&mut book)?;
-    let root = book
-        .part(&target)?
-        .ok_or_else(|| error("KeyError", format!("There is no item named '{target}' in the archive")))?;
+    let root = book.part(&target)?.ok_or_else(|| {
+        error(
+            "KeyError",
+            format!("There is no item named '{target}' in the archive"),
+        )
+    })?;
     let mut rows: Vec<Vec<Value>> = Vec::new();
     let mut counter: i128 = 1;
     let mut row_counter: i128 = 0;
@@ -459,8 +497,9 @@ pub(super) fn read_sheet(path: &Path, sheet: &str) -> Result<(Vec<String>, Vec<V
                 Some(text) => match crate::python_text::python_int(text) {
                     Some(number) => number,
                     None => {
-                        let value = crate::python_text::parse_float(text)
-                            .ok_or_else(|| bad(format!("could not convert string to float: '{text}'")))?;
+                        let value = crate::python_text::parse_float(text).ok_or_else(|| {
+                            bad(format!("could not convert string to float: '{text}'"))
+                        })?;
                         if value.fract() != 0.0 {
                             return Err(bad(format!("{text} is not a valid row number")));
                         }
@@ -488,16 +527,25 @@ pub(super) fn read_sheet(path: &Path, sheet: &str) -> Result<(Vec<String>, Vec<V
                 let raw = if kind == "inlineStr" {
                     None
                 } else {
-                    cell.child("v").map(|v| v.text.clone()).filter(|v| !v.is_empty())
+                    cell.child("v")
+                        .map(|v| v.text.clone())
+                        .filter(|v| !v.is_empty())
                 };
                 let value = match (kind, raw) {
-                    ("inlineStr", _) => cell.child("is").map_or(Value::Empty, |node| Value::Text(rich_text(node))),
+                    ("inlineStr", _) => cell
+                        .child("is")
+                        .map_or(Value::Empty, |node| Value::Text(rich_text(node))),
                     (_, None) => Value::Empty,
                     ("n", Some(raw)) => {
                         let number = if raw.contains(['.', 'E', 'e']) {
-                            Value::Float(crate::python_text::parse_float(&raw).ok_or_else(|| {
-                                bad(format!("could not convert string to float: {}", crate::python_path::repr(&raw)))
-                            })?)
+                            Value::Float(crate::python_text::parse_float(&raw).ok_or_else(
+                                || {
+                                    bad(format!(
+                                        "could not convert string to float: {}",
+                                        crate::python_path::repr(&raw)
+                                    ))
+                                },
+                            )?)
                         } else {
                             Value::Int(python_int(&raw)?)
                         };
@@ -515,7 +563,11 @@ pub(super) fn read_sheet(path: &Path, sheet: &str) -> Result<(Vec<String>, Vec<V
                             match number {
                                 Value::Float(f) if !f.is_finite() => {
                                     return Err(error(
-                                        if f.is_nan() { "ValueError" } else { "OverflowError" },
+                                        if f.is_nan() {
+                                            "ValueError"
+                                        } else {
+                                            "OverflowError"
+                                        },
                                         "cannot convert float to integer",
                                     ));
                                 }

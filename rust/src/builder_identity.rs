@@ -55,7 +55,7 @@ const ALPHA_EXON_HISTORY: Sources = sources![
     "../Cargo.lock",
 ];
 
-static BUILDERS: [(&str, Sources); 10] = [
+static BUILDERS: [(&str, Sources); 11] = [
     ("alphamissense-domain", ALPHA_DOMAIN),
     ("domain-metadata", ALPHA_DOMAIN),
     ("alpha-exon-history", ALPHA_EXON_HISTORY),
@@ -190,6 +190,33 @@ static BUILDERS: [(&str, Sources); 10] = [
             "tabix_index.rs",
             "vcf_variant.rs",
             "vcf_text.rs",
+            "python_text.rs",
+            "builder_error.rs",
+            "../Cargo.lock",
+        ],
+    ),
+    (
+        "biomart-fetch",
+        sources![
+            "biomart/mod.rs",
+            "biomart/cli.rs",
+            "biomart/fetch.rs",
+            "biomart/http.rs",
+            "biomart/identity.rs",
+            "biomart/publication.rs",
+            "biomart/publication_json.rs",
+            "biomart/receipt.rs",
+            "biomart/table.rs",
+            "biomart/verify.rs",
+            "biomart/facts.json",
+            "biomart/ftp/mod.rs",
+            "biomart/ftp/metadata.rs",
+            "biomart/ftp/projection.rs",
+            "biomart/ftp/raw.rs",
+            "biomart/ftp/sqlite.rs",
+            "biomart/ftp/projections.json",
+            "biomart/ftp/queries.json",
+            "json_text.rs",
             "python_text.rs",
             "builder_error.rs",
             "../Cargo.lock",

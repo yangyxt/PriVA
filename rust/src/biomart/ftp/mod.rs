@@ -1,4 +1,4 @@
-//! Optional original FTP parser/projection procedures; no caller activation.
+//! Original FTP parser and projection procedures, also used by `fetch`.
 use super::*;
 mod metadata;
 pub(super) use metadata::{named_pin, publisher, verify_raw};
@@ -73,7 +73,18 @@ pub(super) fn export(db: &Path, output: &Path, audit: &Json) -> Result<Json> {
 /// The prepared-input projection block in FTP.install. Acquisition and final
 /// scientific publication are separate procedures; this never selects inputs.
 pub(super) fn project(raw: &Path, schema: &Path, db: &Path, output: &Path) -> Result<Json> {
-    let schema = raw::read_schema(schema)?;
+    project_schema(raw, &raw::read_schema(schema)?, db, output)
+}
+/// The read_schema-to-integrity-check block of FTP.install: publisher metadata
+/// first, then a new private work folder in `root` that outlives the run.
+pub(super) fn project_from_dumps(raw: &Path, root: &Path, candidate: &Path) -> Result<()> {
+    let schema = raw::read_schema(&raw.join("ensembl_mart_116.sql.gz"))?;
+    publisher(raw, &raw::schema_json(&schema), root)?;
+    let work = super::publication::temporary_directory(root, "projection-")?;
+    project_schema(raw, &schema, &work.join("human-projection.sqlite"), candidate)?;
+    Ok(())
+}
+fn project_schema(raw: &Path, schema: &raw::Schema, db: &Path, output: &Path) -> Result<Json> {
     let db = sqlite::Connection::open(db)?;
     db.execute("PRAGMA cache_size=-131072")?;
     let mut imports = Vec::new();

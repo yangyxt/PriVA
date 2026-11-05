@@ -9,10 +9,12 @@ Procedures: identity, receipt-check, receipt-write, artifact-route, artifact-rec
             ftp-verify-record, ftp-parse-xml, ftp-sqlite-info, ftp-schema,\n\
             ftp-load, ftp-audit, ftp-export, ftp-project, ftp-verify-raw, ftp-metadata,\n\
             ftp-make-provenance, ftp-portable-provenance, external-path,\n\
-            atomic-json and runtime-receipt (--method service|ftp).\n\
+            atomic-json and runtime-receipt (--method service|ftp), fetch.\n\
 Use --mapping, --artifact, repeated --input, --assembly and --kind where applicable.\n\
 artifact-route and changed-target accept --artifact-format {pickle,rkyv} (default pickle;\n\
 rkyv names the natively built PM1 regions archive).\n\
+fetch --source SOURCE --output TSV [--raw-output RAW] [--resource-dir DIR] [--timeout S]\n\
+[--attempts N] acquires one pinned source through curl; a completed output is reused offline.\n\
 The explicit helper root supplies pinned source assets and canonical bundle context;\n\
 the optional native implementation never runs Python or selects a scientific release implicitly.";
 pub(crate) fn dispatch(args: &[String]) -> Result<()> {
@@ -152,6 +154,19 @@ pub(crate) fn dispatch(args: &[String]) -> Result<()> {
             &[],
             &["helper-root", "workspace", "basename", "record", "method"],
         ),
+        "fetch" => (
+            &[
+                "helper-root",
+                "source",
+                "output",
+                "raw-output",
+                "resource-dir",
+                "timeout",
+                "attempts",
+            ],
+            &[],
+            &["helper-root", "source", "output"],
+        ),
         "ftp-schema" => (&["helper-root", "schema"], &[], &["helper-root", "schema"]),
         "ftp-verify-raw" => (
             &["helper-root", "path", "pin", "name"],
@@ -233,6 +248,11 @@ pub(crate) fn dispatch(args: &[String]) -> Result<()> {
     if option("method").is_some_and(|m| !matches!(m, "service" | "ftp")) {
         return Err(invalid("--method must be service or ftp"));
     }
+    let fetch_options = if command == "fetch" {
+        Some(fetch::Options::admit(&values)?)
+    } else {
+        None
+    };
     let p = |key: &str| path_value(option(key).expect("required option"));
     let inputs = occurrences
         .iter()
@@ -380,6 +400,10 @@ pub(crate) fn dispatch(args: &[String]) -> Result<()> {
                     .display()
                     .to_string(),
                 ))
+            }
+            "fetch" => {
+                fetch::acquire(&context, fetch_options.as_ref().unwrap())?;
+                None
             }
             "ftp-sqlite-info" => Some(ftp::sqlite_information()),
             "ftp-schema" => Some(ftp::schema(&p("schema"))?),

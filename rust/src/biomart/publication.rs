@@ -1,10 +1,11 @@
-//! Original BioMart provenance and receipt publication, without acquisition.
+//! Original BioMart provenance and receipt publication. `fetch` calls these
+//! after an acquisition; the named procedures expose each one alone.
 use super::publication_json::Record;
 use super::*;
 use crate::clinvar_contract::resolve_non_strict;
 use crate::python_path::tempfile_parent;
 use std::io::{self, BufWriter, Write};
-use std::os::unix::fs::OpenOptionsExt;
+use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 pub(super) fn external_path(context: &Context, path: &Path, ftp: bool) -> Result<()> {
@@ -27,7 +28,7 @@ pub(super) fn external_path(context: &Context, path: &Path, ftp: bool) -> Result
     )
 }
 
-fn utc_now() -> Result<String> {
+pub(super) fn utc_now() -> Result<String> {
     let duration = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_err(|e| error("OSError", e.to_string()))?;
@@ -196,6 +197,22 @@ fn random_name() -> Result<String> {
         }
     }
     Ok(result)
+}
+/// `tempfile.mkdtemp(prefix=prefix, dir=root)`: a new private directory.
+pub(super) fn temporary_directory(root: &Path, prefix: &str) -> Result<PathBuf> {
+    let parent = tempfile_parent(root)?;
+    for _ in 0..238_328 {
+        let path = parent.join(format!("{prefix}{}", random_name()?));
+        match fs::DirBuilder::new().mode(0o700).create(&path) {
+            Ok(()) => return Ok(path),
+            Err(e) if e.kind() == io::ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(os_error(e, &path, None)),
+        }
+    }
+    Err(error(
+        "FileExistsError",
+        "[Errno 17] No usable temporary name found",
+    ))
 }
 fn temporary(workspace: &Path, basename: &str) -> Result<(File, PathBuf)> {
     let parent = tempfile_parent(workspace)?;

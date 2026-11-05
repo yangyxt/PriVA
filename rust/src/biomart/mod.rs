@@ -1,8 +1,11 @@
 //! Optional native procedures for the explicitly pinned BioMart crosswalks.
 //! Source assets identify the helper and its repository bundles; they are never
-//! executed. Existing Python installation/scientific callers are unchanged.
+//! executed. `identity` and `artifact-route` serve the installer; `fetch` and
+//! `verify` are ready for the mapping-install step, which still runs Python.
 mod cli;
+mod fetch;
 mod ftp;
+mod http;
 mod identity;
 mod publication;
 mod publication_json;

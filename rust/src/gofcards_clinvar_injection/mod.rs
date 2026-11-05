@@ -174,7 +174,8 @@ fn genomic_keys(variant: &Json) -> Result<Vec<(String, String)>> {
         let (Some(chrom), Some(position)) = (chrom, position) else {
             continue;
         };
-        let allele = |key: &str| get(coords, key).map(|value| value.map(py_str).unwrap_or_default());
+        let allele =
+            |key: &str| get(coords, key).map(|value| value.map(py_str).unwrap_or_default());
         let joined = format!(
             "{}|{}|{}|{}",
             py_str(chrom),
@@ -262,7 +263,10 @@ fn clinvar_block(found: &Match) -> Json {
         ("variation_id", text(python_strip(&found.variation_id))),
         ("variation_name", text(python_strip(&found.variation_name))),
         ("hgvs", Json::Array(hgvs)),
-        ("condition_assertions", Json::Array(found.conditions.clone())),
+        (
+            "condition_assertions",
+            Json::Array(found.conditions.clone()),
+        ),
     ])
 }
 
@@ -282,7 +286,12 @@ fn variant_mut<'a>(cache: &'a mut Json, symbol: &str, variant_id: &str) -> Optio
 }
 
 /// The `clinvar_additional` branch of `inject`.
-fn add_additional(variant: &mut Json, block: &Json, accession: &Json, counts: &mut Counts) -> Result<()> {
+fn add_additional(
+    variant: &mut Json,
+    block: &Json,
+    accession: &Json,
+    counts: &mut Counts,
+) -> Result<()> {
     if variant.get("clinvar_additional").is_none() {
         variant.set("clinvar_additional", Json::Array(vec![]));
     }
@@ -331,7 +340,11 @@ fn inject(cache: &mut Json, matches: &[Match]) -> Result<Counts> {
             };
             let existing = match get(variant, "clinvar")? {
                 None | Some(Json::Null) => None,
-                Some(existing) => Some(get(existing, "vcv_accession")?.cloned().unwrap_or(Json::Null)),
+                Some(existing) => Some(
+                    get(existing, "vcv_accession")?
+                        .cloned()
+                        .unwrap_or(Json::Null),
+                ),
             };
             match existing {
                 None => {
@@ -390,7 +403,10 @@ fn write_atomic(path: &Path, body: &str) -> Result<()> {
         Some(stem) => format!("{stem}.tmp.gz"),
         None => format!("{name}.tmp"),
     });
-    if let Some(parent) = path.parent().filter(|parent| !parent.as_os_str().is_empty()) {
+    if let Some(parent) = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+    {
         fs::create_dir_all(parent).map_err(|e| os_error(e, parent, None))?;
     }
     let bytes = if compressed {
@@ -458,7 +474,10 @@ fn audit_rows(matches: &[Match]) -> Vec<String> {
 }
 
 fn write_audit(path: &Path, matches: &[Match]) -> Result<()> {
-    if let Some(parent) = path.parent().filter(|parent| !parent.as_os_str().is_empty()) {
+    if let Some(parent) = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+    {
         fs::create_dir_all(parent).map_err(|e| os_error(e, parent, None))?;
     }
     let rows = audit_rows(matches);
@@ -470,7 +489,11 @@ fn write_audit(path: &Path, matches: &[Match]) -> Result<()> {
     }
     file.write_all(body.as_bytes())
         .map_err(|e| os_error(e, path, None))?;
-    log(&format!("wrote {} audit rows to {}", rows.len(), path.display()));
+    log(&format!(
+        "wrote {} audit rows to {}",
+        rows.len(),
+        path.display()
+    ));
     Ok(())
 }
 
@@ -517,10 +540,15 @@ fn run(options: Options) -> Result<()> {
             ));
         }
     }
-    log(&format!("ClinVar returned {} matched records", matches.len()));
+    log(&format!(
+        "ClinVar returned {} matched records",
+        matches.len()
+    ));
 
     let counts = inject(&mut cache, &matches)?;
-    let injector = options.source_root.join("scripts/inject_clinvar_into_gofcards.py");
+    let injector = options
+        .source_root
+        .join("scripts/inject_clinvar_into_gofcards.py");
     let mut provenance = object([
         ("source", text(source.display().to_string())),
         ("min_review_stars", Json::Int(options.min_review_stars)),
@@ -600,7 +628,10 @@ fn require_source(path: &Path) -> Result<()> {
         Ok(meta) if meta.len() > 0 => Ok(()),
         _ => Err(error(
             "SystemExit",
-            format!("ClinVar VCV is required and was not found: {}", path.display()),
+            format!(
+                "ClinVar VCV is required and was not found: {}",
+                path.display()
+            ),
         )),
     }
 }

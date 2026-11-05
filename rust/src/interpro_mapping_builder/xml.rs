@@ -231,11 +231,9 @@ unsafe extern "C" fn start(
                 product.has_disorders |= name == "DisorderList";
                 return Ok(());
             }
-            let capture = state
-                .selected
-                .as_ref()
-                .map_or(name == "interpro", |s| s.matches(&name, state.stack.is_empty()))
-                || state.stack.last().is_some_and(Option::is_some);
+            let capture = state.selected.as_ref().map_or(name == "interpro", |s| {
+                s.matches(&name, state.stack.is_empty())
+            }) || state.stack.last().is_some_and(Option::is_some);
             let node = if capture {
                 let mut element = Element {
                     name,

@@ -139,9 +139,8 @@ fn folded(value: &str) -> String {
 /// `review_stars`.
 fn review_stars(status: &str) -> i128 {
     match collapse_space(&folded(status)).as_str() {
-        "criteria provided, single submitter" | "criteria provided, conflicting classifications" => {
-            1
-        }
+        "criteria provided, single submitter"
+        | "criteria provided, conflicting classifications" => 1,
         "criteria provided, multiple submitters, no conflicts" => 2,
         "reviewed by expert panel" => 3,
         "practice guideline" => 4,
@@ -150,7 +149,12 @@ fn review_stars(status: &str) -> i128 {
 }
 
 /// `normalize_vcf_key`.
-pub(super) fn normalize_vcf_key(chromosome: &str, position: &str, reference: &str, alternate: &str) -> String {
+pub(super) fn normalize_vcf_key(
+    chromosome: &str,
+    position: &str,
+    reference: &str,
+    alternate: &str,
+) -> String {
     let stripped = python_strip(chromosome);
     let mut chrom: String = if stripped.to_lowercase().starts_with("chr") {
         stripped.chars().skip(3).collect()
@@ -300,7 +304,10 @@ fn trait_mappings(classified: &Node) -> HashMap<String, Vec<TraitMapping>> {
             continue;
         }
         let medgen = child(&item.borrow(), "MedGen");
-        let (name, cui) = (attr_of(medgen.as_ref(), "Name"), attr_of(medgen.as_ref(), "CUI"));
+        let (name, cui) = (
+            attr_of(medgen.as_ref(), "Name"),
+            attr_of(medgen.as_ref(), "CUI"),
+        );
         let row = nonempty([
             ("clinical_assertion_id", text(assertion_id.clone())),
             ("trait_type", text(attr(&item, "TraitType"))),
@@ -383,7 +390,10 @@ fn cooccurrence(item: &Node) -> Json {
         })
         .collect();
     nonempty([
-        ("asserted_variant_zygosity", text_field(Some(item), "Zygosity")),
+        (
+            "asserted_variant_zygosity",
+            text_field(Some(item), "Zygosity"),
+        ),
         ("count", int_field(Some(item), "Count")),
         ("cooccurring_alleles", Json::Array(alleles)),
     ])
@@ -414,7 +424,10 @@ fn observation(item: &Node) -> Json {
         ("number_tested", int_field(sample, "NumberTested")),
         ("number_males", int_field(sample, "NumberMales")),
         ("number_females", int_field(sample, "NumberFemales")),
-        ("number_chromosomes_tested", int_field(sample, "NumberChrTested")),
+        (
+            "number_chromosomes_tested",
+            int_field(sample, "NumberChrTested"),
+        ),
         ("observed_data", Json::Array(data)),
         ("cooccurrence_sets", Json::Array(sets)),
     ])
@@ -559,9 +572,15 @@ fn eligible_conditions(classified: &Node, min_review_stars: i128) -> Vec<Conditi
         let rcv_accession = attr(&rcv, "Accession");
         let fields = object([
             ("rcv_accession", text(rcv_accession.clone())),
-            ("rcv_version", int_or_text(attribute(&rcv, "Version").as_deref())),
+            (
+                "rcv_version",
+                int_or_text(attribute(&rcv, "Version").as_deref()),
+            ),
             ("title", text(attr(&rcv, "Title"))),
-            ("trait_set_id", text(attr_of(condition_list.as_ref(), "TraitSetID"))),
+            (
+                "trait_set_id",
+                text(attr_of(condition_list.as_ref(), "TraitSetID")),
+            ),
             ("conditions", Json::Array(conditions)),
             (
                 "germline_classification",
@@ -661,14 +680,19 @@ fn attach_scvs(classified: &Node, mut conditions: Vec<Condition>) -> Vec<Json> {
             for scv in &mut condition.scvs {
                 let linked = scv_to_rcvs.get(&scv_key(scv));
                 if let Some(linked) = linked.filter(|linked| linked.len() > 1) {
-                    scv.set("trait_linkage_ambiguous_across_eligible_rcvs", Json::Bool(true));
+                    scv.set(
+                        "trait_linkage_ambiguous_across_eligible_rcvs",
+                        Json::Bool(true),
+                    );
                     scv.set(
                         "linked_eligible_rcv_accessions",
                         Json::Array(linked.iter().cloned().map(Json::Str).collect()),
                     );
                 }
             }
-            condition.fields.set("matched_scvs", Json::Array(condition.scvs));
+            condition
+                .fields
+                .set("matched_scvs", Json::Array(condition.scvs));
             condition.fields.set(
                 "scv_linkage",
                 object([

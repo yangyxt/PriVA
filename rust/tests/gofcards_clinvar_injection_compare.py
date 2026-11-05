@@ -762,12 +762,20 @@ def real(args):
         left["metadata"].pop("clinvar", None)
         right["metadata"].pop("clinvar", None)
         report["cache_same_apart_from_clinvar_metadata"] = left == right
+    # A deployed cache may come from an older injector; only its hash may differ.
+    reference_text = gzip.decompress(reference["cache"].read_bytes()).decode()
+    native_text = gzip.decompress(out.read_bytes()).decode()
+    differences = report.get("metadata_differences", {})
+    only_injector = set(differences) <= {"injector_sha256"} and report.get("cache_same_apart_from_clinvar_metadata", True)
+    if "injector_sha256" in differences:
+        native_text = native_text.replace(*reversed(differences["injector_sha256"]))
+    report["text_same_apart_from_injector_hash"] = only_injector and reference_text == native_text
     report["gzip_bytes_same"] = reference["cache"].read_bytes() == out.read_bytes()
     report["audit_same"] = reference["audit"].read_bytes() == audit.read_bytes()
     report["stats_same"] = json.loads(reference["stats"].read_text()) == json.loads(stats.read_text())
     report["stats"] = json.loads(stats.read_text())
     report["validate_exit"] = subprocess.run([binary, "gofcards-cache-validate", out], capture_output=True).returncode
-    report["same"] = bool(report["cache_same"] and report["audit_same"] and report["stats_same"])
+    report["same"] = bool(report["text_same_apart_from_injector_hash"] and report["audit_same"] and report["stats_same"])
     print(json.dumps(report))
     return 0 if report["same"] else 1
 

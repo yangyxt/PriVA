@@ -314,7 +314,9 @@ fn validate(path: &str, expected: &[String]) -> Result<()> {
         return Err(stop(format!("{path} contains no variants")));
     }
     if totals.eligible == 0 {
-        return Err(stop(format!("{path} contains no runtime-eligible variants")));
+        return Err(stop(format!(
+            "{path} contains no runtime-eligible variants"
+        )));
     }
     if totals.with_protein == 0 {
         return Err(stop(format!(

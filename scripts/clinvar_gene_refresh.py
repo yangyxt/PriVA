@@ -376,7 +376,9 @@ def scientific_profile(config: dict, source_root: Path, policy: dict) -> dict:
                 value["sha256"] = digest(path)
         files[str(path)] = value
     for key, value in values.items():
-        if key in ("assembly", "vep_installed_version", "pext_enabled", "pext_tissues") or value in EMPTY:
+        # The hash seed is a plain value; as a path it would bind the working directory.
+        if key in ("assembly", "vep_installed_version", "pext_enabled", "pext_tissues",
+                   "priva_python_hash_seed") or value in EMPTY:
             continue
         if isinstance(value, str):
             path = Path(value)

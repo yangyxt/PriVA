@@ -181,6 +181,18 @@ class ClinVarGeneRefreshTests(unittest.TestCase):
         self.save_config()
         self.assertNotEqual(self.signature(), before)
 
+    def test_working_directory_does_not_change_the_profile(self):
+        before = self.signature()
+        previous = os.getcwd()
+        try:
+            os.chdir(self.directory)
+            self.assertEqual(self.signature(), before)
+        finally:
+            os.chdir(previous)
+        files = refresh.scientific_profile(refresh.load_config(self.config), self.source,
+                                           refresh.resource_policy(self.source))["files"]
+        self.assertFalse(any(Path(path).name == "0" for path in files))
+
     def test_calendar_months_include_boundary_and_clamp_month_ends(self):
         for start, expected in ((date(2026, 1, 31), date(2026, 4, 30)),
                                 (date(2023, 11, 30), date(2024, 2, 29)),

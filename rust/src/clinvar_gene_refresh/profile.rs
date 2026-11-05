@@ -437,9 +437,14 @@ pub(super) fn scientific_profile(config: &Json, source_root: &str, policy: &Json
     };
     let entries = values.as_object().cloned().unwrap_or_default();
     for (key, value) in &entries {
+        // The hash seed is a plain value; as a path it would bind the working directory.
         if matches!(
             key.as_str(),
-            "assembly" | "vep_installed_version" | "pext_enabled" | "pext_tissues"
+            "assembly"
+                | "vep_installed_version"
+                | "pext_enabled"
+                | "pext_tissues"
+                | "priva_python_hash_seed"
         ) || empty(value)
         {
             continue;

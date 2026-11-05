@@ -81,7 +81,12 @@ pub(super) fn project_from_dumps(raw: &Path, root: &Path, candidate: &Path) -> R
     let schema = raw::read_schema(&raw.join("ensembl_mart_116.sql.gz"))?;
     publisher(raw, &raw::schema_json(&schema), root)?;
     let work = super::publication::temporary_directory(root, "projection-")?;
-    project_schema(raw, &schema, &work.join("human-projection.sqlite"), candidate)?;
+    project_schema(
+        raw,
+        &schema,
+        &work.join("human-projection.sqlite"),
+        candidate,
+    )?;
     Ok(())
 }
 fn project_schema(raw: &Path, schema: &raw::Schema, db: &Path, output: &Path) -> Result<Json> {

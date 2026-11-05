@@ -33,7 +33,10 @@ impl Options {
         let option = |key: &str| values.get(key).map(String::as_str);
         let selected = option("source").unwrap();
         let sources = array(get(facts(), "sources"));
-        if !sources.iter().any(|s| get(s, "source_id").as_str() == Some(selected)) {
+        if !sources
+            .iter()
+            .any(|s| get(s, "source_id").as_str() == Some(selected))
+        {
             return Err(invalid(format!(
                 "argument --source: invalid choice: {} (choose from {})",
                 repr(selected),
@@ -59,7 +62,9 @@ impl Options {
             ))
         })?;
         if selected != FTP && option("raw-output").is_none() {
-            return Err(invalid("--raw-output is required for online BioMart sources"));
+            return Err(invalid(
+                "--raw-output is required for online BioMart sources",
+            ));
         }
         Ok(Self {
             source: selected.to_owned(),
@@ -135,10 +140,12 @@ pub(super) fn acquire(context: &Context, options: &Options) -> Result<()> {
         }
         return install_ftp(context, options, selected);
     }
-    let raw_output = options
-        .raw_output
-        .as_ref()
-        .ok_or_else(|| error("ValueError", "Online BioMart acquisition requires its raw_output destination"))?;
+    let raw_output = options.raw_output.as_ref().ok_or_else(|| {
+        error(
+            "ValueError",
+            "Online BioMart acquisition requires its raw_output destination",
+        )
+    })?;
     require(
         options.resource_dir.is_none(),
         "resource_dir is specific to the FTP source",
@@ -187,11 +194,7 @@ fn urlencode(parameters: &[(&str, &str)]) -> String {
 }
 
 /// `_request`: the whole response stays on the selected publisher's host.
-fn service_request(
-    selected: &Json,
-    parameters: &[(&str, &str)],
-    timeout: f64,
-) -> Result<Response> {
+fn service_request(selected: &Json, parameters: &[(&str, &str)], timeout: f64) -> Result<Response> {
     let endpoint = text(get(selected, "endpoint"));
     let url = format!("{endpoint}?{}", urlencode(parameters));
     let headers = [("User-Agent", USER_AGENT), ("Accept-Encoding", "identity")];
@@ -212,7 +215,9 @@ fn read_text(mut response: Response) -> Result<String> {
     if block.len() < http::BLOCK {
         response.finish()?;
     }
-    crate::python_io::decode_utf8(&block).map_err(|e| error("UnicodeDecodeError", e))
+    crate::python_io::decode_utf8(&block)
+        .map(str::to_owned)
+        .map_err(|e| error("UnicodeDecodeError", e))
 }
 
 /// `source_metadata`: the exact mart and dataset, publisher text kept verbatim.
@@ -224,9 +229,8 @@ fn source_metadata(selected: &Json, timeout: f64, attempts: i64) -> Result<Json>
             timeout,
         )
         .and_then(read_text)?;
-        let datasets =
-            service_request(selected, &[("type", "datasets"), ("mart", MART)], timeout)
-                .and_then(read_text)?;
+        let datasets = service_request(selected, &[("type", "datasets"), ("mart", MART)], timeout)
+            .and_then(read_text)?;
         Ok((registry, datasets))
     };
     let mut attempt = 1;
@@ -234,8 +238,8 @@ fn source_metadata(selected: &Json, timeout: f64, attempts: i64) -> Result<Json>
         match read_both() {
             Ok(pair) => break pair,
             Err(failure) => {
-                let caught = http::is_os_error(failure.as_ref())
-                    || http::is_value_error(failure.as_ref());
+                let caught =
+                    http::is_os_error(failure.as_ref()) || http::is_value_error(failure.as_ref());
                 if !caught || attempt == attempts {
                     return Err(failure);
                 }
@@ -252,12 +256,7 @@ fn source_metadata(selected: &Json, timeout: f64, attempts: i64) -> Result<Json>
 }
 
 /// One export attempt, writing the raw response and then the checked table.
-fn export(
-    selected: &Json,
-    timeout: f64,
-    raw_partial: &Path,
-    table_partial: &Path,
-) -> Result<Json> {
+fn export(selected: &Json, timeout: f64, raw_partial: &Path, table_partial: &Path) -> Result<Json> {
     let query = text(get(facts(), "query_xml"));
     let mut response = service_request(selected, &[("query", query)], timeout)?;
     let mut handle = File::create(raw_partial).map_err(|e| os_error(e, raw_partial, None))?;
@@ -424,7 +423,10 @@ fn acquire_service(
     let identity = snapshot_identity(&table_partial, get(selected, "source_id"))?;
     record.set("bytes", get(&identity, "bytes").clone());
     record.set("sha256", get(&identity, "sha256").clone());
-    record.set("raw_bytes", Json::Int(metadata(&raw_partial)?.len() as i128));
+    record.set(
+        "raw_bytes",
+        Json::Int(metadata(&raw_partial)?.len() as i128),
+    );
     record.set("raw_sha256", string(sha256(&raw_partial)?));
     fs::rename(&raw_partial, raw_output)
         .map_err(|e| os_error(e, &raw_partial, Some(raw_output)))?;
@@ -448,9 +450,9 @@ fn acquire_service(
         "Completed export; provenance receipt closed: {}",
         receipt.display()
     );
-    let summary = object(["source_id", "bytes", "sha256", "statistics"].map(|key| {
-        (key, get(&record, key).clone())
-    }));
+    let summary = object(
+        ["source_id", "bytes", "sha256", "statistics"].map(|key| (key, get(&record, key).clone())),
+    );
     println!(
         "{}",
         json_text::dumps(&summary, true).map_err(|e| error("ValueError", e))?
@@ -477,7 +479,10 @@ fn bundled_service_record(record: Json) -> Json {
         ("metadata_kind", string("priva_bundled_mapping_snapshot")),
         ("metadata_schema_version", Json::Int(1)),
         ("acquisition_method", string("online_biomart")),
-        ("order_policy", string("Preserve BioMart response row order.")),
+        (
+            "order_policy",
+            string("Preserve BioMart response row order."),
+        ),
         (
             "multiplicity_policy",
             string("uniqueRows=0; retain duplicate rows and blank RefSeq fields."),
@@ -485,7 +490,10 @@ fn bundled_service_record(record: Json) -> Json {
         ("scientific_qualified", Json::Bool(false)),
         ("production_selected", Json::Bool(false)),
         ("original_biomart_export_identity", Json::Bool(false)),
-        ("original_biomart_response_order_identity", Json::Bool(false)),
+        (
+            "original_biomart_response_order_identity",
+            Json::Bool(false),
+        ),
         ("online_query_executed", Json::Bool(true)),
     ] {
         bundled.set(key, value);
@@ -563,7 +571,10 @@ fn acquire_raw(raw: &Path, file: &str, base_url: &str, timeout: f64) -> Result<(
         let mut stream = if present {
             fs::OpenOptions::new().append(true).open(&part)
         } else {
-            fs::OpenOptions::new().write(true).create_new(true).open(&part)
+            fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&part)
         }
         .map_err(|e| os_error(e, &part, None))?;
         let mut received = offset;
@@ -606,11 +617,16 @@ fn get_bytes(pin: &Json) -> i128 {
 fn check_checksums(raw: &Path, sources: &[Json]) -> Result<()> {
     let path = raw.join("CHECKSUMS");
     let bytes = fs::read(&path).map_err(|e| os_error(e, &path, None))?;
-    let document = crate::python_io::decode_utf8(&bytes).map_err(|e| error("UnicodeDecodeError", e))?;
+    let document =
+        crate::python_io::decode_utf8(&bytes).map_err(|e| error("UnicodeDecodeError", e))?;
     let mut found: Vec<(String, Json)> = Vec::new();
     for line in document.lines() {
         let cells = line.split_whitespace().collect::<Vec<_>>();
-        if cells.len() != 3 || !sources.iter().any(|s| get(s, "name").as_str() == Some(cells[2])) {
+        if cells.len() != 3
+            || !sources
+                .iter()
+                .any(|s| get(s, "name").as_str() == Some(cells[2]))
+        {
             continue;
         }
         require(
@@ -633,11 +649,14 @@ fn check_checksums(raw: &Path, sources: &[Json]) -> Result<()> {
     let agrees = sources.iter().all(|pinned| {
         let expected = get(pinned, "publisher_bsd_sum_blocks");
         !truth(expected)
-            || found
-                .iter()
-                .any(|(file, sum)| get(pinned, "name").as_str() == Some(file) && equal(sum, expected))
+            || found.iter().any(|(file, sum)| {
+                get(pinned, "name").as_str() == Some(file) && equal(sum, expected)
+            })
     });
-    require(agrees, "Publisher checksum document differs from fixed FTP pins")
+    require(
+        agrees,
+        "Publisher checksum document differs from fixed FTP pins",
+    )
 }
 
 fn verify_ftp(output: &Path, assembly: &str) -> Result<()> {
@@ -655,7 +674,9 @@ fn record_of(value: &Json) -> Result<Record> {
 
 /// `Path(os.path.abspath(output)) == canonical`, on the unlinked canonical path.
 fn is_canonical(context: &Context, output: &Path, selected: &Json) -> Result<bool> {
-    let script = context.helper_root.join("scripts/biomart_ftp_nm_to_enst.py");
+    let script = context
+        .helper_root
+        .join("scripts/biomart_ftp_nm_to_enst.py");
     let script = resolve_non_strict(&script)?;
     let root = script
         .parent()
@@ -676,7 +697,10 @@ fn install_ftp(context: &Context, options: &Options, selected: &Json) -> Result<
     make_directory(&folder)?;
     let _lock = lock_directory(&folder)?.map_err(|cause| {
         if cause.kind() == io::ErrorKind::WouldBlock {
-            error("BlockingIOError", "[Errno 11] Resource temporarily unavailable")
+            error(
+                "BlockingIOError",
+                "[Errno 11] Resource temporarily unavailable",
+            )
         } else {
             os_error(cause, &folder, None)
         }
@@ -701,10 +725,12 @@ fn install_ftp(context: &Context, options: &Options, selected: &Json) -> Result<
         !exists(&receipt)? && !is_link(&receipt)?,
         "Missing FTP table has existing provenance; restore it explicitly",
     )?;
-    let root = options
-        .resource_dir
-        .as_ref()
-        .ok_or_else(|| error("ValueError", "New FTP acquisition requires an external resource_dir"))?;
+    let root = options.resource_dir.as_ref().ok_or_else(|| {
+        error(
+            "ValueError",
+            "New FTP acquisition requires an external resource_dir",
+        )
+    })?;
     publication::external_path(context, root, true)?;
     let raw = root.join("raw");
     make_directory(&raw)?;

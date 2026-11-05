@@ -41,7 +41,7 @@ const VALUE_ERRORS: [&str; 4] = [
     "JSONDecodeError",
 ];
 
-fn category(failure: &(dyn std::error::Error + 'static)) -> &str {
+fn category(failure: &(dyn std::error::Error + 'static)) -> &'static str {
     failure
         .downcast_ref::<RuntimeError>()
         .map_or("", RuntimeError::category_name)
@@ -258,7 +258,10 @@ fn join_url(base: &str, location: &str) -> String {
     if location.starts_with('/') {
         return format!("{scheme}://{authority}{location}");
     }
-    let path = rest[authority.len()..].split(['?', '#']).next().unwrap_or("");
+    let path = rest[authority.len()..]
+        .split(['?', '#'])
+        .next()
+        .unwrap_or("");
     let folder = path.rfind('/').map_or("/", |end| &path[..=end]);
     format!("{scheme}://{authority}{folder}{location}")
 }
@@ -302,8 +305,7 @@ pub(super) fn open(url: &str, headers: &[(&str, &str)], timeout: f64) -> Result<
         }
         let next = join_url(&current, location);
         let seen = visited.iter().position(|(url, _)| *url == next);
-        if seen.is_some_and(|at| visited[at].1 >= MAX_REPEATS)
-            || visited.len() >= MAX_REDIRECTIONS
+        if seen.is_some_and(|at| visited[at].1 >= MAX_REPEATS) || visited.len() >= MAX_REDIRECTIONS
         {
             return Err(http_error(&format!(
                 "The HTTP server returned a redirect error that would lead to an infinite loop.\n\

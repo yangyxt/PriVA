@@ -428,6 +428,13 @@ class InstallerPrerequisites(unittest.TestCase):
                          "--stage", "mapping", "--print-mapping"]
         self.assertEqual([call for call in native if call[0] == "installer-prerequisites"],
                          [mapping_check, mapping_check])
+        # Both steps read the mapping identity through the native command.
+        identity = [call for call in native if call[:2] == ["biomart", "identity"]]
+        self.assertEqual(len(identity), 2)
+        for call in identity:
+            self.assertEqual(call[:6], ["biomart", "identity", "--helper-root", str(ROOT),
+                                        "--mapping", str(self.mapping)])
+            self.assertEqual(call[6:].count("--input"), 2)
         resolve = [call for call in native if call[:2] == ["cache-install", "resolve"]]
         self.assertEqual(resolve[0], ["cache-install", "resolve", "--key", "all_intolerant_domains",
                                       "--build-config", str(self.config_file), "--source-root", str(ROOT)])

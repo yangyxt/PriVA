@@ -6,6 +6,7 @@ import tempfile
 import time
 import unittest
 
+import fake_priva_binary
 from test_biomart_nm_to_enst import BODY, MAPPING
 import test_installer_prerequisites as prerequisites
 from test_installer_prerequisites import ROOT
@@ -207,6 +208,10 @@ class MappingArtifactInstaller(unittest.TestCase):
                 '''
                 result = self.fixture.run_shell(setup + f'\n{function} "$TEST_CONFIG"')
                 self.assertEqual(result.returncode, 0, result.stderr)
+                route = [call for call in fake_priva_binary.calls(self.fixture.env["PRIVA_FAKE_CALLS"])
+                         if call[:2] == ["biomart", "artifact-route"]][-1]
+                self.assertEqual(route[2:4], ["--helper-root", str(ROOT)])
+                self.assertEqual(route[route.index("--artifact") + 1], str(old))
                 call = next(json.loads(line[4:]) for line in result.stdout.splitlines() if line.startswith("SCI:"))
                 self.assertEqual(call[call.index("--nm_to_enst_tsv") + 1], str(self.fixture.mapping))
                 if key == "pm1_regions_pkl":

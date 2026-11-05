@@ -285,7 +285,11 @@ fn merge_scope(scope: &mut Scope, row: &Row) -> Result<()> {
     if !review_status.is_empty() {
         push_unique(&mut scope.review_statuses, &review_status);
     }
-    if scope.review_statuses.iter().any(|s| s == "manually_confirmed") {
+    if scope
+        .review_statuses
+        .iter()
+        .any(|s| s == "manually_confirmed")
+    {
         scope.review_status = "manually_confirmed".into();
     } else if scope.review_statuses.len() == 1 {
         scope.review_status = scope.review_statuses[0].clone();
@@ -317,7 +321,11 @@ fn hpo_penetrance_record(row: &Row, normalized_value: &str) -> Json {
         .filter(|v| !v.is_empty() && v != "-")
         .collect::<Vec<_>>()
         .join("|");
-    let ids = if hpo_id.is_empty() { vec![] } else { vec![hpo_id] };
+    let ids = if hpo_id.is_empty() {
+        vec![]
+    } else {
+        vec![hpo_id]
+    };
     obj(vec![
         ("source", st("HPO")),
         ("source_record_id", st(&record_id)),
@@ -373,7 +381,7 @@ fn scope_rank(decision: &str) -> Result<usize> {
         .ok_or_else(|| {
             error(
                 "ValueError",
-                format!("{} is not in tuple", crate::python_path::repr(decision)),
+                "tuple.index(x): x not in tuple".to_owned(),
             )
         })
 }
@@ -390,7 +398,9 @@ fn union_axis(target: &mut Axis, source: Axis) {
 }
 
 /// `_merge_conditions_by_disease`.
-fn merge_conditions(conditions: BTreeMap<String, Condition>) -> Result<BTreeMap<String, Condition>> {
+fn merge_conditions(
+    conditions: BTreeMap<String, Condition>,
+) -> Result<BTreeMap<String, Condition>> {
     let mut groups: BTreeMap<String, Vec<(String, Condition)>> = BTreeMap::new();
     for (key, condition) in conditions {
         let group = condition
@@ -554,7 +564,6 @@ fn alias_index(genes: &Genes) -> BTreeMap<String, BTreeMap<String, String>> {
     index
 }
 
-
 fn matched_keys(
     aliases: &BTreeMap<String, BTreeMap<String, String>>,
     symbol: &str,
@@ -599,7 +608,10 @@ fn mechanism_record(row: &Row, mechanism: &str) -> Json {
         ("mechanism", st(mechanism)),
         ("mechanism_raw", st(&cell(row, "patho_mode_raw"))),
         ("allelic_requirement", st(&cell(row, "inheritance"))),
-        ("mechanism_confidence", st(&cell(row, "mechanism_confidence"))),
+        (
+            "mechanism_confidence",
+            st(&cell(row, "mechanism_confidence")),
+        ),
         ("disease_confidence", st(&cell(row, "disease_confidence"))),
         (
             "source_scope",
@@ -745,7 +757,8 @@ fn attach_condition_mechanisms(genes: &mut Genes, path: &Path) -> Result<Json> {
                 .or_default()
                 .insert(penetrance_key(&evidence))
             {
-                gene.unmapped_penetrance.push(with_reason(&evidence, reason));
+                gene.unmapped_penetrance
+                    .push(with_reason(&evidence, reason));
                 penetrance_unmapped += 1;
             }
         }
@@ -761,7 +774,10 @@ fn attach_condition_mechanisms(genes: &mut Genes, path: &Path) -> Result<Json> {
             mechanisms += 1;
             let evidence = mechanism_record(&row, mechanism);
             if keys.len() == 1 {
-                let condition = gene.conditions.get_mut(keys.iter().next().unwrap()).unwrap();
+                let condition = gene
+                    .conditions
+                    .get_mut(keys.iter().next().unwrap())
+                    .unwrap();
                 let label = field(&evidence, "condition_label").to_owned();
                 attach_mechanism(condition, evidence);
                 if condition.label.is_empty() && !label.is_empty() {
@@ -826,11 +842,7 @@ fn hi3_requirement(row: &Row, condition: &Condition) -> &'static str {
         return "";
     }
     let location = cell(row, "Genomic Location");
-    let mut chromosome = location
-        .split(':')
-        .next()
-        .unwrap_or("")
-        .to_lowercase();
+    let mut chromosome = location.split(':').next().unwrap_or("").to_lowercase();
     if let Some(rest) = chromosome.strip_prefix("chr") {
         chromosome = rest.to_owned();
     }
@@ -903,7 +915,10 @@ fn attach_clingen(genes: &mut Genes, path: &Path) -> Result<Json> {
                 obj(vec![
                     ("source", st("ClinGen_haploinsufficiency")),
                     ("source_record_id", st(&disease)),
-                    ("condition_identifiers", strings(std::slice::from_ref(&disease))),
+                    (
+                        "condition_identifiers",
+                        strings(std::slice::from_ref(&disease)),
+                    ),
                     ("condition_label", st(&description)),
                     ("mechanism", st("LOF")),
                     ("mechanism_raw", st(&description)),
@@ -1018,7 +1033,12 @@ fn normalize_clinvar_identifier(namespace: &Json, value: &Json) -> String {
 /// `_clinvar_condition_identities`.
 fn clinvar_identities(assertion: &Json) -> Result<Vec<String>> {
     let mut identities = Vec::new();
-    let conditions = or(get(assertion, "conditions")?.cloned().unwrap_or(Json::Array(vec![])), Json::Array(vec![]));
+    let conditions = or(
+        get(assertion, "conditions")?
+            .cloned()
+            .unwrap_or(Json::Array(vec![])),
+        Json::Array(vec![]),
+    );
     for condition in iterate(&conditions)? {
         if !matches!(condition, Json::Object(_)) {
             continue;
@@ -1031,12 +1051,22 @@ fn clinvar_identities(assertion: &Json) -> Result<Vec<String>> {
             push_unique(&mut identities, &identifier);
         }
     }
-    let scvs = or(get(assertion, "matched_scvs")?.cloned().unwrap_or(Json::Array(vec![])), Json::Array(vec![]));
+    let scvs = or(
+        get(assertion, "matched_scvs")?
+            .cloned()
+            .unwrap_or(Json::Array(vec![])),
+        Json::Array(vec![]),
+    );
     for scv in iterate(&scvs)? {
         if !matches!(scv, Json::Object(_)) {
             continue;
         }
-        let mappings = or(get(&scv, "trait_mappings")?.cloned().unwrap_or(Json::Array(vec![])), Json::Array(vec![]));
+        let mappings = or(
+            get(&scv, "trait_mappings")?
+                .cloned()
+                .unwrap_or(Json::Array(vec![])),
+            Json::Array(vec![]),
+        );
         for mapping in iterate(&mappings)? {
             if !matches!(mapping, Json::Object(_)) {
                 continue;
@@ -1089,7 +1119,10 @@ fn clinvar_links(cache: &Json) -> Result<BTreeMap<(String, String), Vec<Json>>> 
                 Json::Array(vec![]),
             ))? {
                 let conditions = or(pyget(&assertion, "conditions")?, Json::Array(vec![]));
-                let classification = or(pyget(&assertion, "germline_classification")?, empty_object());
+                let classification = or(
+                    pyget(&assertion, "germline_classification")?,
+                    empty_object(),
+                );
                 let rcv = clean_json(&pyget(&assertion, "rcv_accession")?);
                 let significance = clean_json(&pyget(&classification, "clinical_significance")?);
                 let stars = pyget(&classification, "review_stars")?;
@@ -1252,7 +1285,11 @@ fn attach_gofcards(genes: &mut Genes, path: &Path) -> Result<Json> {
         let mut by_condition: BTreeMap<String, Vec<Json>> = BTreeMap::new();
         let mut ambiguous = false;
         for link in &links {
-            let keys = matched_keys(&aliases, &symbol, &link_strings(link, "condition_identifiers"));
+            let keys = matched_keys(
+                &aliases,
+                &symbol,
+                &link_strings(link, "condition_identifiers"),
+            );
             if keys.len() == 1 {
                 by_condition
                     .entry(keys.into_iter().next().unwrap())
@@ -1343,7 +1380,9 @@ fn deduce(genes: &mut Genes) -> Json {
                     ("mechanism", st("LOF")),
                     (
                         "mechanism_raw",
-                        st(&format!("{inheritance} inheritance implies loss of function")),
+                        st(&format!(
+                            "{inheritance} inheritance implies loss of function"
+                        )),
                     ),
                     ("allelic_requirement", st("")),
                     ("mechanism_confidence", st("")),
@@ -1447,7 +1486,10 @@ fn summary(gene: &Gene) -> Json {
             "conditions_with_penetrance",
             count(&|c| !c.penetrance.values.is_empty()),
         ),
-        ("conditions_with_onset", count(&|c| !c.onset.values.is_empty())),
+        (
+            "conditions_with_onset",
+            count(&|c| !c.onset.values.is_empty()),
+        ),
         (
             "pathogenic_mechanisms",
             strings(&mechanisms.into_iter().collect::<Vec<_>>()),
@@ -1469,7 +1511,10 @@ fn summary(gene: &Gene) -> Json {
             "unmapped_variant_count",
             Json::Int(gene.unmapped_variants.len() as i128),
         ),
-        ("unmapped_variant_mechanism_counts", sorted_counts(variant_counts)),
+        (
+            "unmapped_variant_mechanism_counts",
+            sorted_counts(variant_counts),
+        ),
     ])
 }
 
@@ -1536,7 +1581,10 @@ fn condition_json(condition: &Condition) -> Json {
                     .collect(),
             ),
         ),
-        ("hpo_assertion_count", Json::Int(condition.hpo_assertion_count)),
+        (
+            "hpo_assertion_count",
+            Json::Int(condition.hpo_assertion_count),
+        ),
     ])
 }
 
@@ -1603,9 +1651,15 @@ pub(super) fn build_cache_payload(inputs: &Inputs) -> Result<Json> {
     let sources = obj(vec![
         ("builder_script", source_metadata(&inputs.builder)?),
         ("hpo_assertions", source_metadata(&inputs.hpo_assertions)?),
-        ("mechanism_evidence", source_metadata(&inputs.mechanism_evidence)?),
+        (
+            "mechanism_evidence",
+            source_metadata(&inputs.mechanism_evidence)?,
+        ),
         ("clingen_dosage", source_metadata(&inputs.clingen_dosage)?),
-        ("gofcards_variants", source_metadata(&inputs.gofcards_variants)?),
+        (
+            "gofcards_variants",
+            source_metadata(&inputs.gofcards_variants)?,
+        ),
     ]);
     let counts = super::validate::cache_counts(&genes_json)?;
     let payload = obj(vec![

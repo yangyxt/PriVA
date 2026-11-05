@@ -114,7 +114,11 @@ impl Reader {
                         if newline || eol {
                             fields.push(std::mem::take(&mut field));
                             length = 0;
-                            state = if eol { State::StartRecord } else { State::EatCrnl };
+                            state = if eol {
+                                State::StartRecord
+                            } else {
+                                State::EatCrnl
+                            };
                         } else if c == Some('"') {
                             state = State::InQuotedField;
                         } else if c == Some('\t') {
@@ -129,7 +133,11 @@ impl Reader {
                         if newline || eol {
                             fields.push(std::mem::take(&mut field));
                             length = 0;
-                            state = if eol { State::StartRecord } else { State::EatCrnl };
+                            state = if eol {
+                                State::StartRecord
+                            } else {
+                                State::EatCrnl
+                            };
                         } else if c == Some('\t') {
                             fields.push(std::mem::take(&mut field));
                             length = 0;
@@ -157,7 +165,11 @@ impl Reader {
                         } else if newline || eol {
                             fields.push(std::mem::take(&mut field));
                             length = 0;
-                            state = if eol { State::StartRecord } else { State::EatCrnl };
+                            state = if eol {
+                                State::StartRecord
+                            } else {
+                                State::EatCrnl
+                            };
                         } else {
                             add(c.unwrap(), &mut field, &mut length)?;
                             state = State::InField;

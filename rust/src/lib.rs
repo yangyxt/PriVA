@@ -94,6 +94,7 @@ mod pickle_reader;
 mod pm1_regions_builder;
 pub mod protein_domain_mapping;
 mod python_args;
+mod python_gzip;
 mod python_io;
 mod python_lines;
 mod python_path;

@@ -82,4 +82,23 @@ fn main() {
         println!("cargo:rustc-link-arg=-Wl,{}", arguments.join(","));
     }
     println!("cargo:rustc-env=PRIVA_EXPAT_VERSION={}", library.version);
+    // Python's gzip module compresses through zlib. Linking the same static
+    // zlib lets a native cache writer produce Python's compressed bytes.
+    let zlib = pkg_config::Config::new()
+        .statik(true)
+        .cargo_metadata(false)
+        .probe("zlib")
+        .expect("building priva requires zlib, its static library and pkg-config metadata");
+    let zlib_dir = std::path::PathBuf::from(
+        pkg_config::get_variable("zlib", "libdir").expect("zlib libdir metadata is required"),
+    );
+    assert!(
+        zlib_dir.join("libz.a").is_file(),
+        "zlib's static archive libz.a is required"
+    );
+    for path in zlib.link_paths.iter().chain(std::iter::once(&zlib_dir)) {
+        println!("cargo:rustc-link-search=native={}", path.display());
+    }
+    println!("cargo:rustc-link-lib=static=z");
+    println!("cargo:rustc-env=PRIVA_ZLIB_VERSION={}", zlib.version);
 }

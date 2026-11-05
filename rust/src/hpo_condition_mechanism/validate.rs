@@ -32,7 +32,10 @@ fn index<'a>(value: &'a Json, key: &str) -> Result<&'a Json> {
             "TypeError",
             "list indices must be integers or slices, not str",
         )),
-        Json::Str(_) => Err(error("TypeError", "string indices must be integers, not 'str'")),
+        Json::Str(_) => Err(error(
+            "TypeError",
+            "string indices must be integers, not 'str'",
+        )),
         other => Err(error(
             "TypeError",
             format!("'{}' object is not subscriptable", type_name(other)),
@@ -197,7 +200,9 @@ pub(super) fn cache_counts(genes: &Json) -> Result<Json> {
 }
 
 fn validate_condition(symbol: &str, key: &str, condition: &Json) -> Result<()> {
-    let scope = get(condition, "priva_scope")?.cloned().unwrap_or(Json::Null);
+    let scope = get(condition, "priva_scope")?
+        .cloned()
+        .unwrap_or(Json::Null);
     if matches!(scope, Json::Object(_))
         && clean_json(&get(&scope, "decision")?.cloned().unwrap_or(Json::Null)).to_lowercase()
             == "exclude"
@@ -226,7 +231,9 @@ fn validate_condition(symbol: &str, key: &str, condition: &Json) -> Result<()> {
         )));
     }
     let statuses = get(&penetrance, "statuses")?.cloned().unwrap_or(Json::Null);
-    let assertions = get(&penetrance, "assertions")?.cloned().unwrap_or(Json::Null);
+    let assertions = get(&penetrance, "assertions")?
+        .cloned()
+        .unwrap_or(Json::Null);
     let Json::Array(statuses) = statuses else {
         return Err(invalid_cache(format!(
             "{symbol}/{key} has unsupported penetrance statuses"
@@ -263,7 +270,8 @@ fn validate_condition(symbol: &str, key: &str, condition: &Json) -> Result<()> {
                 "{symbol}/{key} has an invalid penetrance assertion schema"
             )));
         }
-        let normalized = clean_json(&get_or(assertion, "normalized_value", Json::Null)?).to_lowercase();
+        let normalized =
+            clean_json(&get_or(assertion, "normalized_value", Json::Null)?).to_lowercase();
         if normalized != "complete" && normalized != "incomplete" {
             return Err(invalid_cache(format!(
                 "{symbol}/{key} has invalid normalized penetrance"
@@ -306,7 +314,10 @@ pub(super) fn validate_payload(payload: &Json) -> Result<Json> {
     let meta = payload.get("_meta").cloned().unwrap_or(Json::Null);
     let genes = payload.get("genes").cloned().unwrap_or(Json::Null);
     if !matches!(meta, Json::Object(_))
-        || !is_text(meta.get("schema_version").unwrap_or(&Json::Null), SCHEMA_VERSION)
+        || !is_text(
+            meta.get("schema_version").unwrap_or(&Json::Null),
+            SCHEMA_VERSION,
+        )
     {
         return Err(invalid_cache(format!(
             "Cache schema_version must be {SCHEMA_VERSION}"
@@ -320,7 +331,9 @@ pub(super) fn validate_payload(payload: &Json) -> Result<Json> {
     }
     for (symbol, gene) in gene_items {
         if symbol.is_empty() || !matches!(gene, Json::Object(_)) {
-            return Err(invalid_cache("Cache contains an invalid gene record".into()));
+            return Err(invalid_cache(
+                "Cache contains an invalid gene record".into(),
+            ));
         }
         let conditions = gene.get("conditions").cloned().unwrap_or(Json::Null);
         let unmapped = gene.get("unmapped_evidence").cloned().unwrap_or(Json::Null);
@@ -381,7 +394,9 @@ pub(super) fn validate_payload(payload: &Json) -> Result<Json> {
     } else {
         Json::Object(vec![])
     };
-    let scope_stats = get(&statistics, "scope_gate")?.cloned().unwrap_or(Json::Null);
+    let scope_stats = get(&statistics, "scope_gate")?
+        .cloned()
+        .unwrap_or(Json::Null);
     if !matches!(scope_stats, Json::Object(_)) {
         return Err(invalid_cache(
             "Cache metadata lacks final condition scope-gate statistics".into(),
@@ -391,7 +406,10 @@ pub(super) fn validate_payload(payload: &Json) -> Result<Json> {
         .get("conditions_excluded")
         .cloned()
         .unwrap_or(Json::Null);
-    let actual_excluded = actual.get("excluded_conditions").cloned().unwrap_or(Json::Null);
+    let actual_excluded = actual
+        .get("excluded_conditions")
+        .cloned()
+        .unwrap_or(Json::Null);
     if !equal(&recorded_excluded, &actual_excluded) {
         return Err(invalid_cache(format!(
             "Cache scope-gate count mismatch: recorded={}, actual={}",

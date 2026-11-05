@@ -11,7 +11,8 @@ the script in one and the native command in the other. A step is a command
 line or an edit of the files left by the previous steps. Exit status, the
 failure category and message, the printed counts and every file left in the
 folder (with its mode) are compared. The folder's own path and the build
-time are normalized; gzip files are compared by their decompressed text.
+time are normalized; gzip files are compared by their decompressed text and
+by whether their bytes are those Python's GzipFile writes for that text.
 `real` builds once with each from existing inputs read in place, compares
 the two caches and checks that each one passes the other's provenance check.
 """
@@ -22,11 +23,13 @@ import concurrent.futures
 import copy
 import gzip
 import hashlib
+import io
 import json
 import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -156,7 +159,7 @@ def gofcards_cache():
         "genes": {
             "GENE1": {"variants": {
                 "loc_1:10_grch37": variant(10, clinvar=clinvar_block("VCV1", [
-                    assertion("RCV1", [omim101, medgen, "text"]),
+                    assertion("RCV1", [omim101, medgen]),
                     assertion("RCV1", [omim101, medgen]),
                 ]), additional=[clinvar_block("VCV1b", [assertion(
                     "RCV1b", [], [{"mapping_ref": "Orphanet", "mapping_value": "ORPHA:200"},
@@ -405,6 +408,10 @@ def run_cases():
     bad = copy.deepcopy(gofcards_cache())
     bad["genes"]["GENE1"]["variants"]["loc_1:10_grch37"]["clinvar"]["condition_assertions"] = ["text"]
     case("gofcards_assertion_text", lambda f: base(f, cache=bad), build_args())
+    bad1 = copy.deepcopy(gofcards_cache())
+    bad1["genes"]["GENE1"]["variants"]["loc_1:20_grch37"]["clinvar"]["condition_assertions"][0][
+        "conditions"].append("text")
+    case("gofcards_condition_text", lambda f: base(f, cache=bad1), build_args())
     bad2 = copy.deepcopy(gofcards_cache())
     bad2["genes"]["GENE1"]["variants"]["loc_1:20_grch37"]["clinvar_additional"] = 5
     case("gofcards_additional_number", lambda f: base(f, cache=bad2), build_args())
@@ -456,6 +463,16 @@ def normalize(value, folder):
     return value
 
 
+def python_gzip(data):
+    """The bytes clinvar_vcv.open_text(path, "wt") writes for this text."""
+    with tempfile.TemporaryFile() as raw:
+        with gzip.GzipFile(filename="", fileobj=raw, mode="wb", mtime=0) as compressed, \
+                io.TextIOWrapper(compressed, encoding="utf-8") as handle:
+            handle.write(data.decode("utf-8"))
+        raw.seek(0)
+        return raw.read()
+
+
 def snapshot(folder):
     state = {}
     for path in sorted(folder.rglob("*")):
@@ -463,12 +480,15 @@ def snapshot(folder):
             continue
         relative = str(path.relative_to(folder))
         data = path.read_bytes()
+        mode = oct(path.stat().st_mode & 0o777)
         if path.name.endswith(".gz"):
             try:
                 data = gzip.decompress(data)
             except OSError:
                 pass
-        mode = oct(path.stat().st_mode & 0o777)
+            else:
+                # Python's GzipFile, given the same text, writes the same bytes.
+                mode += " python-gzip-bytes" if python_gzip(data) == path.read_bytes() else " other-gzip-bytes"
         try:
             body = normalize(json.loads(data), folder)
             # The compact and indented forms are compared byte for byte too.
@@ -489,7 +509,11 @@ def run_case(name, binary, repo, work_root):
         results = []
         for step in steps:
             if callable(step):
-                step(folder)
+                try:
+                    step(folder)
+                except (OSError, KeyError, IndexError, TypeError, ValueError) as failure:
+                    # An edit of a file an earlier step did not leave.
+                    results.append({"edit_failed": type(failure).__name__})
                 continue
             if arm == "python":
                 command = [sys.executable, repo / SCRIPT, *step]
@@ -498,6 +522,8 @@ def run_case(name, binary, repo, work_root):
             results.append(outcome(command, folder))
         arms[arm] = {"steps": results, "files": snapshot(folder)}
     same = arms["python"] == arms["native"]
+    if any("edit_failed" in result for result in arms["python"]["steps"]):
+        same = False
     return name, same, len([s for s in steps if not callable(s)]), arms
 
 
@@ -508,7 +534,8 @@ def check(args):
     repo = Path(args.repo).resolve()
     failed, steps = [], 0
     with concurrent.futures.ThreadPoolExecutor(args.jobs) as pool:
-        futures = [pool.submit(run_case, name, Path(args.binary), repo, work_root) for name in CASES]
+        names = [name for name in CASES if not args.cases or name in args.cases.split(",")]
+        futures = [pool.submit(run_case, name, Path(args.binary).resolve(), repo, work_root) for name in names]
         for future in futures:
             name, same, count, arms = future.result()
             steps += count
@@ -521,7 +548,7 @@ def check(args):
                 for key in sorted(set(py_files) | set(na_files)):
                     if py_files.get(key) != na_files.get(key):
                         print(f"  file {key} differs", file=sys.stderr)
-    print(json.dumps({"cases": len(CASES), "steps": steps, "failed": failed}))
+    print(json.dumps({"cases": len(names), "steps": steps, "failed": failed}))
     return 1 if failed else 0
 
 
@@ -533,7 +560,7 @@ def real(args):
               "--clingen-dosage", args.clingen_dosage, "--gofcards-variants", args.gofcards_variants,
               "--hpo-release", args.hpo_release, "--mondo-release", args.mondo_release]
     commands = {"python": [sys.executable, repo / SCRIPT],
-                "native": [args.binary, "hpo-condition-mechanism", "--source-root", repo]}
+                "native": [Path(args.binary).resolve(), "hpo-condition-mechanism", "--source-root", repo]}
     report, caches = {}, {}
     for arm, command in commands.items():
         output = work_root / arm / "hpo_condition_mechanism_cache.json.gz"
@@ -550,7 +577,8 @@ def real(args):
     if len(caches) == 2:
         bodies = {arm: gzip.decompress(path.read_bytes()).decode() for arm, path in caches.items()}
         report["same"] = STAMP.sub("<TIME>", bodies["python"]) == STAMP.sub("<TIME>", bodies["native"])
-        report["genes"] = len(json.loads(bodies["native"])["genes"])
+        # The native bytes are what Python's GzipFile writes for the native text.
+        report["same_gzip_bytes"] = python_gzip(bodies["native"].encode()) == caches["native"].read_bytes()
         for checker, cache in (("python", "native"), ("native", "python")):
             result = subprocess.run([str(p) for p in [*commands[checker], "--validate-only", caches[cache],
                                                        *inputs]], capture_output=True, text=True)
@@ -558,7 +586,9 @@ def real(args):
     else:
         report["same"] = False
     print(json.dumps(report))
-    return 0 if report["same"] and all(v for k, v in report.items() if "_accepts_" in k) else 1
+    passed = report["same"] and report.get("same_gzip_bytes") and all(
+        v for k, v in report.items() if "_accepts_" in k)
+    return 0 if passed else 1
 
 
 def main():
@@ -571,6 +601,7 @@ def main():
         part.add_argument("--work-root", required=True)
         if mode == "check":
             part.add_argument("--jobs", type=int, default=4)
+            part.add_argument("--cases", default="", help="comma-separated case names (default: all)")
         else:
             for name in ("hpo-assertions", "mechanism-evidence", "clingen-dosage", "gofcards-variants",
                          "hpo-release", "mondo-release"):

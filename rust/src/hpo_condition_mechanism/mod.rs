@@ -6,8 +6,9 @@
 //! GoFCards exact alleles with their ClinVar condition links, the deduced
 //! recessive LOF, the final scope gate, the structural validation, the
 //! provenance check and the atomic publication follow the script. Printed
-//! counts, the JSON (compact or `--pretty`, gzip with mtime 0 and no name)
-//! and exit statuses follow the script; an exception the script let escape
+//! counts, the JSON (compact or `--pretty`; gzip through the same zlib, so
+//! the compressed bytes match too) and exit statuses follow the script; an
+//! exception the script let escape
 //! exits 1 here as `priva: CATEGORY: message`, and its `SystemExit` messages
 //! do the same with the category `SystemExit`.
 //!
@@ -34,7 +35,7 @@ use std::io::{Read, Write};
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
-pub(super) use shared::{error, equal, get, py_str, repr, truthy, type_name};
+pub(super) use shared::{equal, error, get, py_str, repr, truthy, type_name};
 
 const HELP: &str = "usage: priva hpo-condition-mechanism --source-root CHECKOUT\n\
        [--hpo-assertions HPO_ASSERTIONS] [--mechanism-evidence MECHANISM_EVIDENCE]\n\
@@ -136,7 +137,8 @@ fn render(payload: &Json, pretty: bool) -> Result<String> {
 /// `tempfile.mkstemp(prefix=..., suffix=..., dir=...)`: a new file, mode 0600.
 fn temporary_file(directory: &Path, prefix: &str, suffix: &str) -> Result<(PathBuf, File)> {
     const LETTERS: &[u8] = b"abcdefghijklmnopqrstuvwxyz0123456789_";
-    let mut random = File::open("/dev/urandom").map_err(|e| os_error(e, Path::new("/dev/urandom"), None))?;
+    let mut random =
+        File::open("/dev/urandom").map_err(|e| os_error(e, Path::new("/dev/urandom"), None))?;
     for _ in 0..100 {
         let mut bytes = [0u8; 8];
         random
@@ -184,18 +186,15 @@ fn write_json_atomic(payload: &Json, output: &Path, pretty: bool) -> Result<()> 
     )?;
     let result = (|| -> Result<()> {
         let body = render(payload, pretty)?;
-        if gz {
-            let mut writer = crate::gzip_writer::GzipWriter::new(
-                file,
-                crate::gzip_writer::GzipOptions::default(),
-            )?;
-            writer.write_all(body.as_bytes())?;
-            writer.finish()?;
+        let bytes = if gz {
+            // open_text writes through a TextIOWrapper, which flushes the GzipFile on close.
+            crate::python_gzip::compress(body.as_bytes(), 9, true)?
         } else {
-            let mut file = file;
-            file.write_all(body.as_bytes())
-                .map_err(|e| os_error(e, &temporary, None))?;
-        }
+            body.into_bytes()
+        };
+        let mut file = file;
+        file.write_all(&bytes)
+            .map_err(|e| os_error(e, &temporary, None))?;
         validate::load_and_validate(&temporary)?;
         fs::set_permissions(&temporary, fs::Permissions::from_mode(0o644))
             .map_err(|e| os_error(e, &temporary, None))?;
@@ -256,8 +255,14 @@ fn run(options: Options) -> Result<()> {
                     "Provenance validation requires all build inputs and releases",
                 ));
             }
-            let [hpo, mechanism, clingen, gofcards, hpo_release, mondo_release] =
-                provenance.map(Option::unwrap);
+            let [
+                hpo,
+                mechanism,
+                clingen,
+                gofcards,
+                hpo_release,
+                mondo_release,
+            ] = provenance.map(Option::unwrap);
             validate::validate_provenance(
                 &path_value(&cache),
                 &[

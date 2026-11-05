@@ -17,7 +17,8 @@ bytes apart from the time in the header.
 
 `real` serves an existing workbook from this machine, seeds each folder with an
 existing summary cache so that no allele is requested, and runs the real
-bcftools, VEP and CrossMap with both. VCF files are compared by hash only.
+bcftools, VEP and CrossMap with both. VCF files are compared by the hash of
+their lines below the `##` header, which records the time and command line.
 """
 from __future__ import annotations
 
@@ -923,21 +924,22 @@ def real(args):
     repo = Path(args.repo).resolve()
     folders = {arm: root / arm for arm in ("python", "native")}
     runs = {}
+    served = root / "served"
+    (served / "server").mkdir(parents=True)
+    shutil.copy(args.workbook, served / "server" / "public.xlsx")
+    (served / "server" / "control.json").write_text('{"summary": {}}')
+    Handler.folders["real"] = served
+    base_url = f"http://127.0.0.1:{port}/real"
 
     def run(arm):
         folder = folders[arm]
-        (folder / "server").mkdir(parents=True)
-        (folder / "work").mkdir()
-        shutil.copy(args.workbook, folder / "server" / "public.xlsx")
-        (folder / "server" / "control.json").write_text('{"summary": {}}')
+        (folder / "work").mkdir(parents=True)
         shutil.copy(args.summary_cache, folder / "work" / "gofcards_summary_cache.jsonl")
-        Handler.folders[arm] = folder
-        base_url = f"http://127.0.0.1:{port}/{arm}"
         command = ["--workdir", "work", "--out-json", "work/cache.json.gz", "--hg19-fasta", args.hg19_fasta,
                    "--hg38-fasta", args.hg38_fasta, "--chain", args.chain, "--vep-cache-dir", args.vep_cache_dir,
                    "--vep-cache-version", args.vep_cache_version, "--hgnc-table", args.hgnc_table,
                    "--mechanism-review-tsv", args.mechanism_review_tsv, "--public-excel-url",
-                   "http://127.0.0.1:%d/%s/public.xlsx" % (port, arm), "--stats-json", "work/stats.json"]
+                   f"{base_url}/public.xlsx", "--stats-json", "work/stats.json"]
         endpoint = f"{base_url}/summary"
         if arm == "python":
             full = [sys.executable, root / "driver.py", repo / "scripts", endpoint, *command]
@@ -946,37 +948,36 @@ def real(args):
         started = time.time()
         env = dict(os.environ, no_proxy="*", NO_PROXY="*")
         result = outcome(full, folder, env)
-        runs[arm] = {"seconds": round(time.time() - started, 1), "result": normalize(result, folder, arm)}
+        runs[arm] = {"seconds": round(time.time() - started, 1), "result": normalize(result, folder, "real")}
 
     with concurrent.futures.ThreadPoolExecutor(2) as pool:
         for future in [pool.submit(run, arm) for arm in folders]:
             future.result()
 
-    def view(folder, arm):
+    def data_lines(path):
+        lines = [line for line in path.read_bytes().splitlines() if not line.startswith(b"##")]
+        return hashlib.sha256(b"\n".join(lines)).hexdigest()
+
+    def view(folder):
         work = folder / "work"
-        stats = json.loads((work / "stats.json").read_text())
-        cache = json.loads(gzip.decompress((work / "cache.json.gz").read_bytes()))
+        raw = (work / "cache.json.gz").read_bytes()
         return {
-            "stats": normalize(stats, folder, arm),
-            "cache_sha256": hashlib.sha256(json.dumps(normalize(cache, folder, arm), sort_keys=True).encode()).hexdigest(),
+            "stats": (work / "stats.json").read_text(),
+            "cache": hashlib.sha256(gzip.decompress(raw)).hexdigest(),
+            "gzip_without_time": hashlib.sha256(raw[:4] + raw[8:]).hexdigest(),
             "rejects": (work / "gofcards_reference_rejects.tsv").read_text(),
-            "vcf_sha256": {name: sha256(work / name) for name in
-                           ("gofcards.hg19.vcf", "gofcards.hg19.norm.vcf", "gofcards.hg38.vcf",
-                            "gofcards.hg38.norm.vcf", "gofcards.hg38.vcf.unmap")},
-            "summary_sha256": sha256(work / "gofcards_summary_cache.jsonl"),
-            "requests": (folder / "requests.log").read_text().count("\n"),
+            "vcf": {name: data_lines(work / name) for name in
+                    ("gofcards.hg19.vcf", "gofcards.hg19.norm.vcf", "gofcards.hg38.vcf",
+                     "gofcards.hg38.norm.vcf", "gofcards.hg38.vcf.unmap")},
+            "summary": sha256(work / "gofcards_summary_cache.jsonl"),
         }
-    views = {arm: view(folder, arm) for arm, folder in folders.items()}
-    raw = {arm: (folders[arm] / "work" / "cache.json.gz").read_bytes() for arm in folders}
+    python, native = view(folders["python"]), view(folders["native"])
     same_log = runs["python"]["result"]["log"] == runs["native"]["result"]["log"]
-    report = {"same": views["python"] == views["native"] and same_log, "same_log": same_log,
+    report = {"same": python == native and same_log, "same_log": same_log,
+              "same_fields": {key: python[key] == native[key] for key in python},
               "python_seconds": runs["python"]["seconds"], "native_seconds": runs["native"]["seconds"],
               "exits": [runs["python"]["result"]["exit"], runs["native"]["result"]["exit"]],
-              "stats": views["native"]["stats"], "requests": views["native"]["requests"],
-              "same_vcf": views["python"]["vcf_sha256"] == views["native"]["vcf_sha256"],
-              "same_cache": views["python"]["cache_sha256"] == views["native"]["cache_sha256"],
-              "same_rejects": views["python"]["rejects"] == views["native"]["rejects"],
-              "gzip_size": [len(raw["python"]), len(raw["native"])]}
+              "stats": json.loads(native["stats"]), "requests": (served / "requests.log").read_text().count("\n")}
     print(json.dumps(report))
     return 0 if report["same"] else 1
 

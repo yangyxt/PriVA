@@ -501,14 +501,27 @@ def environment(context, port):
     return env
 
 
+# Measure from a small process: a fork of this one would report the publisher's memory.
+MEASURE = """
+import os, sys
+pid = os.fork()
+if pid == 0:
+    os.execvp(sys.argv[2], sys.argv[2:])
+_, status, usage = os.wait4(pid, 0)
+with open(sys.argv[1], "w") as handle:
+    handle.write(str(usage.ru_maxrss))
+sys.exit(os.waitstatus_to_exitcode(status))
+"""
+
+
 def run_measured(command, cwd, env, stdout_path, stderr_path):
     """Run one program; returns exit status, wall seconds and peak memory in KiB."""
     started = time.monotonic()
+    memory = Path(str(stdout_path) + ".peak_rss")
     with stdout_path.open("wb") as stdout, stderr_path.open("wb") as stderr:
-        process = subprocess.Popen(command, cwd=cwd, env=env, stdin=subprocess.DEVNULL, stdout=stdout, stderr=stderr)
-        _, status, usage = os.wait4(process.pid, 0)
-    process.returncode = os.waitstatus_to_exitcode(status)
-    return process.returncode, time.monotonic() - started, usage.ru_maxrss
+        process = subprocess.run([sys.executable, "-I", "-S", "-c", MEASURE, str(memory), *command], cwd=cwd, env=env,
+                                 stdin=subprocess.DEVNULL, stdout=stdout, stderr=stderr)
+    return process.returncode, time.monotonic() - started, int(memory.read_text())
 
 
 TIME = re.compile(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d{1,6})?\+00:00")
@@ -693,7 +706,7 @@ def comparable_requests(requests, volatile):
     for item in requests:
         item = dict(item)
         # A dump request's User-Agent is urllib's own against curl's fixed one.
-        if "ensembl_mart_116/" in item["path"]:
+        if item["host"] == "ftp.ensembl.org":
             item.pop("user_agent")
         if volatile and item["range"]:
             item["range"] = "present"

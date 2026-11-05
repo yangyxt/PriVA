@@ -2522,7 +2522,6 @@ function _ClinVar_VCF_deploy() {
         esac
     done
     local contig_map=${DATA_DIR}/liftover/GRC_to_ucsc.contig.map.txt
-    local contract=${SCRIPT_DIR}/clinvar_annotation_contract.py
     [[ -f "$contig_map" ]] || { log "The contig map file ${contig_map} is not found"; return 1; }
     priva_resolve_binary "$config_file" || return 1
     local CACHEDIR assembly_version ucsc_assembly_version clinvar_vcf threads assembly
@@ -2555,7 +2554,7 @@ function _ClinVar_VCF_deploy() {
         # The generic validity helper may repair an owned cache from a sibling
         # VCF. Explicit custom inputs are checked without repair or replacement.
         [[ -s "$clinvar_vcf" ]] && bcftools view -h "$clinvar_vcf" >/dev/null && \
-        python "$contract" "$clinvar_vcf" --stage complete || \
+        "${PRIVA_BIN}" clinvar-contract header --vcf "$clinvar_vcf" --stage complete || \
             { log "ERROR: Explicit ClinVar input is missing or lacks complete annotations: $clinvar_vcf; prepare it separately"; return 1; }
         case "$clinvar_vcf" in
             *.gz|*.bgz) bgzip -t "$clinvar_vcf" || return 1 ;;
@@ -2565,7 +2564,7 @@ function _ClinVar_VCF_deploy() {
     fi
     if check_vcf_validity "$clinvar_vcf" && \
        "${PRIVA_BIN}" clinvar-gene-refresh check-header --config "$config_file" --source-root "$BASE_DIR" > /dev/null && \
-       python "$contract" "$clinvar_vcf" --stage complete; then
+       "${PRIVA_BIN}" clinvar-contract header --vcf "$clinvar_vcf" --stage complete; then
         update_yaml "$config_file" "clinvar_vcf" "$clinvar_vcf" || return 1
         log "Reusing ClinVar VCF with the complete statistics annotation contract: $clinvar_vcf"
         return 0
@@ -2573,7 +2572,7 @@ function _ClinVar_VCF_deploy() {
     # A completed VEP stage is reusable while population annotation waits.
     if ! { check_vcf_validity "$clinvar_vcf" && \
            "${PRIVA_BIN}" clinvar-gene-refresh check-header --config "$config_file" --source-root "$BASE_DIR" > /dev/null && \
-           python "$contract" "$clinvar_vcf" --stage vep; }; then
+           "${PRIVA_BIN}" clinvar-contract header --vcf "$clinvar_vcf" --stage vep; }; then
         local -a source_args=()
         [[ -z $pinned_source ]] || source_args=(--source-vcf "$pinned_source")
         "${PRIVA_BIN}" clinvar-gene-refresh retire-owned --config "$config_file" --source-root "$BASE_DIR" "${source_args[@]}" || return 1
@@ -2600,14 +2599,14 @@ function _ClinVar_VCF_deploy() {
             --input_vcf "$clinvar_vcf" --config "$config_file" --threads "$threads" || return 1
         check_vcf_validity "$clinvar_vcf" || return 1
         "${PRIVA_BIN}" clinvar-gene-refresh check-header --config "$config_file" --source-root "$BASE_DIR" > /dev/null || return 1
-        python "$contract" "$clinvar_vcf" --stage vep || return 1
+        "${PRIVA_BIN}" clinvar-contract header --vcf "$clinvar_vcf" --stage vep || return 1
     fi
     local gnomad_vcf_chrX
     gnomad_vcf_chrX=$(read_yaml "$config_file" "gnomad_vcf_chrX")
     PRIVA_CLINVAR_RECOVERY_CONFIG="$config_file" \
         bash "${SCRIPT_DIR}/annotation_vcf.sh" anno_agg_gnomAD_data \
             "$clinvar_vcf" "$threads" "$assembly" "$gnomad_vcf_chrX" || return 1
-    python "$contract" "$clinvar_vcf" --stage complete || return 1
+    "${PRIVA_BIN}" clinvar-contract header --vcf "$clinvar_vcf" --stage complete || return 1
     "${PRIVA_BIN}" clinvar-gene-refresh check-header --config "$config_file" --source-root "$BASE_DIR" > /dev/null || return 1
     update_yaml "$config_file" "clinvar_vcf" "$clinvar_vcf"
 }
@@ -2703,14 +2702,14 @@ function ClinVar_AA_stat () {
     priva_resolve_binary "$config_file" || return 1
     "${PRIVA_BIN}" clinvar-contract header --vcf "$clinvar_vcf" --stage aa || return 1
     # Completed Python pickles of an existing installation remain reusable for
-    # one transition, with their Python checks and producer association.
+    # one transition, with their checks and producer association.
     local receipt=${clinvar_aa_stat}.pair.ready.json
     if [[ $clinvar_aa_stat != *.rkyv && $clinvar_splice_stat != *.rkyv && \
           -s "$clinvar_aa_stat" && "$clinvar_aa_stat" -nt "$clinvar_vcf" && \
           -s "$clinvar_splice_stat" && "$clinvar_splice_stat" -nt "$clinvar_vcf" ]] && \
-       python "$contract" "$clinvar_aa_stat" --cache-kind aa && \
-       python "$contract" "$clinvar_splice_stat" --cache-kind splice && \
-       python "$contract" pair-check --vcf "$clinvar_vcf" --config "$config_file" \
+       "${PRIVA_BIN}" clinvar-contract legacy-cache --input "$clinvar_aa_stat" --kind aa && \
+       "${PRIVA_BIN}" clinvar-contract legacy-cache --input "$clinvar_splice_stat" --kind splice && \
+       "${PRIVA_BIN}" clinvar-contract pair-check --contract-source "$contract" --vcf "$clinvar_vcf" --config "$config_file" \
            --producer "${SCRIPT_DIR}/stat_aachange_clinvar.py" \
            --aa "$clinvar_aa_stat" --splice "$clinvar_splice_stat" --receipt "$receipt"; then
         log "Reusing validated ClinVar AA and splice statistics"
@@ -2741,7 +2740,7 @@ function ClinVar_AA_stat () {
     if [[ -s "$aa" && "$aa" -nt "$clinvar_vcf" && -s "$splice" && "$splice" -nt "$clinvar_vcf" ]] && \
        "${PRIVA_BIN}" clinvar-contract cache --input "$aa" --kind aa && \
        "${PRIVA_BIN}" clinvar-contract cache --input "$splice" --kind splice && \
-       python "$contract" pair-check --vcf "$clinvar_vcf" --config "$config_file" \
+       "${PRIVA_BIN}" clinvar-contract pair-check --contract-source "$contract" --vcf "$clinvar_vcf" --config "$config_file" \
            --producer "$producer" --aa "$aa" --splice "$splice" --receipt "$receipt"; then
         [[ $aa == "$clinvar_aa_stat" ]] || update_yaml "$config_file" "clinvar_aa_stat" "$aa" || return 1
         [[ $splice == "$clinvar_splice_stat" ]] || update_yaml "$config_file" "clinvar_splice_stat" "$splice" || return 1
@@ -2753,7 +2752,7 @@ function ClinVar_AA_stat () {
     local temporary_aa=${aa}.partial.${tag}
     local temporary_splice=${splice}.partial.${tag}
     local captured=${temporary_aa}.inputs.json
-    python "$contract" pair-capture --vcf "$clinvar_vcf" --config "$config_file" \
+    "${PRIVA_BIN}" clinvar-contract pair-capture --contract-source "$contract" --vcf "$clinvar_vcf" --config "$config_file" \
         --producer "$producer" \
         --aa "$aa" --splice "$splice" --receipt "$receipt" --captured "$captured" || return 1
     "${PRIVA_BIN}" clinvar-aa-splice build --vcf "$clinvar_vcf" \
@@ -2768,7 +2767,7 @@ function ClinVar_AA_stat () {
     mv -- "$temporary_splice" "$splice" || return 1
     update_yaml "$config_file" "clinvar_aa_stat" "$aa" || return 1
     update_yaml "$config_file" "clinvar_splice_stat" "$splice" || return 1
-    python "$contract" pair-complete --vcf "$clinvar_vcf" --config "$config_file" \
+    "${PRIVA_BIN}" clinvar-contract pair-complete --contract-source "$contract" --vcf "$clinvar_vcf" --config "$config_file" \
         --producer "$producer" \
         --aa "$aa" --splice "$splice" --receipt "$receipt" --captured "$captured" || return 1
     rm -f -- "$captured"

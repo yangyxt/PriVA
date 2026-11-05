@@ -242,6 +242,15 @@ elif command == "clinvar-contract" and rest[:1] == ["cache"]:
     values = dict(options(rest[1:], {"--input", "--kind"}))
     script = "clinvar_annotation_contract.py"
     forwarded = [values["--input"], "--cache-kind", values["--kind"]]
+elif command == "clinvar-contract" and rest[:1] == ["legacy-cache"]:
+    values = dict(options(rest[1:], {"--input", "--kind"}))
+    script = "clinvar_annotation_contract.py"
+    forwarded = [values["--input"], "--cache-kind", values["--kind"]]
+elif command == "clinvar-contract" and rest[:1] in (["pair-capture"], ["pair-check"], ["pair-complete"]):
+    pairs = options(rest[1:], {"--vcf", "--producer", "--contract-source", "--aa", "--splice",
+                               "--receipt", "--captured", "--config"})
+    script = "clinvar_annotation_contract.py"
+    forwarded = [rest[0], *sum((pair for pair in pairs if pair[0] != "--contract-source"), ())]
 elif command == "clinvar-contract" and rest[:1] == ["af-paths-check"]:
     pairs = options(rest[1:], {"--vcf", "--config", "--gene", "--exon"})
     script, forwarded = "clinvar_annotation_contract.py", ["af-paths-check", *sum(pairs, ())]

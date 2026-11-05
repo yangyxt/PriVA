@@ -183,6 +183,40 @@ def caches(args,module,root):
     return rows,admission
 
 
+def legacy(args,module,root):
+    """Existing Python pickles, checked by priva clinvar-contract legacy-cache."""
+    folder=root/'legacy';folder.mkdir()
+    sets={k:set() for k in ['clinvar_variants','clinvar_pathogenic','clinvar_not_pathogenic','putative_nmd_variants','small_aachange','large_aachange','no_aachange']}
+    gene=dict(gene_symbol='S',ensembl_id='G',**sets,transcripts={},domains={})
+    splice=dict(chrom='1',pos=1,ref='A',alt='T',clinvar_sig='P',splice_ai={'SpliceAI_pred_DS_AG':0.2})
+    specs=[('aa_valid','aa',{'T':{'1':{'p.Ala1Val':{'CLNSIG':['P'],'CLNREVSTAT':['R']}}}}),
+        ('aa_untyped_values','aa',{'T':{'1':{'x':{'CLNSIG':1,'CLNREVSTAT':None}}}}),
+        ('aa_empty_positions','aa',{'T':{}}),('aa_empty_changes','aa',{'T':{'1':{}}}),
+        ('aa_missing_field','aa',{'T':{'1':{'x':{'CLNSIG':[]}}}}),('aa_list_positions','aa',{'T':[1]}),
+        ('aa_nondict_entry','aa',{'T':{'1':{'x':['CLNSIG','CLNREVSTAT']}}}),
+        ('splice_valid','splice',{'T':[splice]}),('splice_minimum_keys','splice',{'T':[{'chrom':None,'pos':None,'clinvar_sig':None,'splice_ai':None}]}),
+        ('splice_empty_records','splice',{'T':[]}),('splice_tuple_records','splice',{'T':(splice,)}),
+        ('splice_missing_field','splice',{'T':[{'chrom':'1','pos':1,'clinvar_sig':'P'}]}),
+        ('gene_af_valid','gene-af',{'G':{'chrom':'1','pos':1,'af':0.0,'acc_patho_af':0.0},'N':None}),
+        ('gene_af_missing_field','gene-af',{'G':{'af':1.0}}),
+        ('exon_af_valid','exon-af',{'T':{'1/2':(0.0,1.0,2.0,3.0,(4.0,5.0))}}),('exon_af_short_tuple','exon-af',{'T':{'1/2':(0.0,1.0)}}),
+        ('exon_af_list_value','exon-af',{'T':{'1/2':[0.0,1.0,2.0,3.0,4.0]}}),('exon_af_empty','exon-af',{'T':{}}),
+        ('gene_valid','gene',{'G':gene}),('gene_missing_field','gene',{'G':dict(gene_symbol='S')}),
+        ('empty_dict','aa',{}),('top_level_list','splice',[1]),('top_level_none','gene-af',None),
+        ('integer_keys','aa',{1:{2:{3:{'CLNSIG':1,'CLNREVSTAT':2}}}})]
+    rows=[]
+    for name,kind,data in specs:
+        for protocol in (4,5):
+            for compressed in (False,True):
+                label=f'{name}_p{protocol}'+('_gz' if compressed else '')
+                source=folder/(label+('.pkl.gz' if compressed else '.pkl'))
+                payload=pickle.dumps(data,protocol=protocol)
+                source.write_bytes(gzip.compress(payload) if compressed else payload)
+                rows.append(paired(args,module,folder,label,'legacy-cache',{'input':source,'kind':kind},
+                    lambda source=source,kind=kind:module.validate_cache(source,kind),[str(source),'--cache-kind',kind]))
+    return rows
+
+
 def metadata(args,module,root):
     folder=root/'metadata';folder.mkdir();rows=[]
     def setup(name):
@@ -267,6 +301,7 @@ def check(args):
     module=load(args.source)
     rows=headers(args,module,args.work_root)
     cache_rows,admission=caches(args,module,args.work_root);rows+=cache_rows
+    rows+=legacy(args,module,args.work_root)
     rows+=metadata(args,module,args.work_root)
     report={'source_sha256':hashlib.sha256(args.source.read_bytes()).hexdigest(),
         'binary_sha256':hashlib.sha256(args.binary.read_bytes()).hexdigest(),'cases':rows,'schema_admission':admission,

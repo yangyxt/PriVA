@@ -4,6 +4,7 @@
 //! its content identity must not be replaced by the native executable's hash.
 mod cache;
 pub(crate) mod header;
+mod legacy;
 mod metadata;
 pub(crate) use metadata::resolve as resolve_non_strict;
 
@@ -33,12 +34,13 @@ fn print(value: &Json) -> Result<()> {
 }
 const USAGE: &str = "priva clinvar-contract header --vcf VCF_OR_BCF [--stage aa|gene|af|vep|complete]\n\
 priva clinvar-contract cache --input NATIVE_ARCHIVE --kind aa|splice|gene-af|exon-af|gene\n\
+priva clinvar-contract legacy-cache --input PYTHON_PICKLE --kind aa|splice|gene-af|exon-af|gene\n\
 priva clinvar-contract af-paths-check --vcf VCF --config YAML --gene GENE --exon EXON\n\
 priva clinvar-contract pair-metadata --input PATH\n\
 priva clinvar-contract pair-inputs --vcf VCF --producer PYTHON_ASSET --contract-source PYTHON_CONTRACT\n\
 priva clinvar-contract pair-capture|pair-check|pair-complete --vcf VCF --producer PYTHON_ASSET \
 --contract-source PYTHON_CONTRACT --aa AA --splice SPLICE --receipt JSON [--captured JSON] [--config YAML]\n\
-Opt-in procedures; existing installer callers and cache format policies are unchanged.";
+Header, archive and pickle shape, output path and AA/splice pair procedures.";
 
 pub(crate) fn dispatch(args: &[String]) -> Result<()> {
     let Some(command) = args.first().map(String::as_str) else {
@@ -50,7 +52,7 @@ pub(crate) fn dispatch(args: &[String]) -> Result<()> {
     }
     let names: &[&str] = match command {
         "header" => &["vcf", "stage"],
-        "cache" => &["input", "kind"],
+        "cache" | "legacy-cache" => &["input", "kind"],
         "af-paths-check" => &["vcf", "config", "gene", "exon"],
         "pair-metadata" => &["input"],
         "pair-inputs" => &["vcf", "producer", "contract-source"],
@@ -86,7 +88,7 @@ pub(crate) fn dispatch(args: &[String]) -> Result<()> {
             return Err(invalid("unknown validation stage"));
         }
     }
-    if command == "cache"
+    if matches!(command, "cache" | "legacy-cache")
         && !["aa", "splice", "gene-af", "exon-af", "gene"].contains(&required(&options, "kind")?)
     {
         return Err(invalid("unknown cache kind"));
@@ -101,6 +103,10 @@ fn execute(command: &str, options: &HashMap<String, String>) -> Result<()> {
             options.get("stage").map_or("complete", String::as_str),
         )?),
         "cache" => print(&cache::validate(
+            required(options, "input")?,
+            required(options, "kind")?,
+        )?),
+        "legacy-cache" => print(&legacy::validate(
             required(options, "input")?,
             required(options, "kind")?,
         )?),

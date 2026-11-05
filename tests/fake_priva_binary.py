@@ -20,7 +20,8 @@ subcommand, CONFIG and options.
 `vep-plugins MODE` runs scripts/vep_plugins_release.py with the same mode and
 options; `gnomad-cache COMMAND` runs scripts/gnomad_cache.py and
 `alphamissense-cache COMMAND` runs scripts/alphamissense_cache.py and
-`spliceai2-prepare COMMAND` runs scripts/spliceai2_to_vep_vcf.py likewise.
+`spliceai2-prepare COMMAND` runs scripts/spliceai2_to_vep_vcf.py and
+`clinvar-gene-refresh COMMAND` runs scripts/clinvar_gene_refresh.py likewise.
 `installer-config-paths resolve/managed-roots` runs scripts/installer_config_paths.py
 with the same subcommand and options; it needs an explicit PYTHONHASHSEED, as the
 native command does.
@@ -200,6 +201,8 @@ elif command == "alphamissense-cache" and rest[:1] in (["install"], ["validate"]
     script, forwarded = "alphamissense_cache.py", rest
 elif command == "spliceai2-prepare" and rest[:1] in (["prepare"], ["gene-context"]):
     script, forwarded = "spliceai2_to_vep_vcf.py", rest
+elif command == "clinvar-gene-refresh":
+    script, forwarded = "clinvar_gene_refresh.py", rest
 elif command == "indexed-plugin-cache":
     flags = [value for value in rest[1:] if value == "--print-path"]
     pairs = options([value for value in rest[1:] if value != "--print-path"],

@@ -175,7 +175,7 @@ fn csq_description(text: &str) -> Option<String> {
     }
     None
 }
-pub(super) fn validate(path: &str, stage: &str) -> Result<Json> {
+pub(crate) fn validate(path: &str, stage: &str) -> Result<Json> {
     if !["aa", "gene", "af", "vep", "complete"].contains(&stage) {
         return Err(error(
             "ValueError",

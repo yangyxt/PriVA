@@ -1109,6 +1109,21 @@ fn has_expected_receipt_fields(data: &Json) -> bool {
 
 /// Cheap publication check of a SpliceAI2 VCF pair: the completed receipt of
 /// its folder, no pending build, outputs that match the receipt.
+/// `validate_pair(assembly, snv, indel)["format"]` for the ClinVar refresh.
+pub(crate) fn pair_format(assembly: &str, snv: &Path, indel: &Path) -> Done<&'static str> {
+    validate_pair(canonical_assembly(assembly)?, snv, indel).map(|report| report.format)
+}
+
+/// Runs `inside` while `_completed_projection(snv, indel)` holds the adapter lock.
+pub(crate) fn within_completed_projection<T>(
+    snv: &Path,
+    indel: &Path,
+    inside: impl FnOnce() -> T,
+) -> Done<T> {
+    let _projection = completed_projection(snv, indel, false)?;
+    Ok(inside())
+}
+
 fn completed_projection(snv: &Path, indel: &Path, require_existing_lock: bool) -> Done<Projection> {
     let selected = [
         ("snv", complete_path(snv)?),

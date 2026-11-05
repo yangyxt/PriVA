@@ -6,6 +6,7 @@ pub mod acmg_variant_mechanism;
 mod alpha_annotation_base;
 mod alpha_domain;
 mod alphamissense_cache;
+mod clinvar_gene_refresh;
 mod alphamissense_vcf;
 mod biomart;
 mod builder_error;

@@ -305,7 +305,7 @@ fn input_line(prompt: &str) -> Result<Option<String>> {
 }
 
 /// `validate_main(config, source_root, ...)`
-pub(super) fn validate_main(
+pub(crate) fn validate_main(
     config: &Config,
     root: &str,
     allow_missing_mapping: bool,

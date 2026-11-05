@@ -666,7 +666,8 @@ function anno_agg_gnomAD_data () {
     if [[ -n ${PRIVA_CLINVAR_RECOVERY_CONFIG:-} ]]; then
         local -a recovery_chromosomes=()
         for chr in "${valid_chroms[@]}"; do recovery_chromosomes+=(--chromosome "$chr"); done
-        python "${SCRIPT_DIR}/clinvar_gene_refresh.py" retire-shards \
+        priva_resolve_binary "$PRIVA_CLINVAR_RECOVERY_CONFIG" || return 1
+        "${PRIVA_BIN}" clinvar-gene-refresh retire-shards \
             --config "$PRIVA_CLINVAR_RECOVERY_CONFIG" --source-root "${SCRIPT_DIR}/.." \
             --input-vcf "$input_vcf" "${recovery_chromosomes[@]}" || return $?
     fi
@@ -1079,7 +1080,8 @@ function anno_VEP_cache_candidate_phase() {
         esac
     done
     [[ -n "$phase_config" && -n "$phase_input" && ( "$phase" == begin || "$phase" == complete ) ]] || { log "Candidate phase requires explicit config, managed input and begin|complete"; return 1; }
-    python "${SCRIPT_DIR}/clinvar_gene_refresh.py" "candidate-${phase}" \
+    priva_resolve_binary "$phase_config" || return 1
+    "${PRIVA_BIN}" clinvar-gene-refresh "candidate-${phase}" \
         --config "$phase_config" --source-root "$BASE_DIR" --input-vcf "$phase_input"
 }
 
@@ -1226,7 +1228,8 @@ function _priva_anno_VEP_data() {
     local pext_tissues="${pext_tissues:-${config_args[pext_tissues]}}"
 
     if [[ "$priva_vep_purpose" == cache_candidate ]]; then
-        python "${SCRIPT_DIR}/clinvar_gene_refresh.py" candidate-begin \
+        priva_resolve_binary "$config_file" || return 1
+        "${PRIVA_BIN}" clinvar-gene-refresh candidate-begin \
             --config "$config_file" --source-root "$BASE_DIR" --input-vcf "$input_vcf" || return 1
     elif [[ "$priva_vep_purpose" == runtime ]]; then
         priva_check_spliceai_versions "${config_file}" "${spliceai_snv_prescore}" "${spliceai_indel_prescore}" || return 1
@@ -1349,7 +1352,8 @@ function _priva_anno_VEP_data() {
     display_vcf ${input_vcf/.vcf*/.vcf.gz} || return $?
 
     if [[ "$priva_vep_purpose" == cache_candidate ]]; then
-        python "${SCRIPT_DIR}/clinvar_gene_refresh.py" candidate-complete \
+        priva_resolve_binary "$config_file" || return 1
+        "${PRIVA_BIN}" clinvar-gene-refresh candidate-complete \
             --config "$config_file" --source-root "$BASE_DIR" --input-vcf "$input_vcf" || return 1
     fi
 }

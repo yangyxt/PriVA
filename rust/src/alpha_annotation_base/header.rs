@@ -92,7 +92,13 @@ fn split(value: &str) -> Result<Vec<String>> {
     }
     Ok(words)
 }
-fn check_header(path: &Path, selected: &str, requested: &str, raw_assembly: &Json) -> Result<Json> {
+fn check_header(
+    path: &Path,
+    selected: &str,
+    requested: &str,
+    raw_assembly: &Json,
+    resource: &str,
+) -> Result<Json> {
     let mut first = File::open(path).map_err(|e| os_error(e, path, None))?;
     let mut magic = [0; 2];
     let n = first
@@ -115,7 +121,7 @@ fn check_header(path: &Path, selected: &str, requested: &str, raw_assembly: &Jso
         limited.read_until(b'\n', &mut line).map_err(gzip_error)?;
         require(
             !line.is_empty() && line.len() <= remaining && line.ends_with(b"\n"),
-            "AlphaMissense annotation has no complete bounded VCF header",
+            format!("{resource} annotation has no complete bounded VCF header"),
         )?;
         remaining -= line.len();
         if line.starts_with(b"##VEP=") {
@@ -134,16 +140,16 @@ fn check_header(path: &Path, selected: &str, requested: &str, raw_assembly: &Jso
         }
         require(
             line.starts_with(b"##"),
-            "AlphaMissense annotation has no complete VCF column header",
+            format!("{resource} annotation has no complete VCF column header"),
         )?;
     }
     require(
         complete,
-        "AlphaMissense annotation VCF header exceeds the bounded line limit",
+        format!("{resource} annotation VCF header exceeds the bounded line limit"),
     )?;
     require(
         headers.len() == 1,
-        "AlphaMissense annotation requires exactly one unambiguous ##VEP header",
+        format!("{resource} annotation requires exactly one unambiguous ##VEP header"),
     )?;
     let mut versions = Vec::new();
     let mut assemblies = Vec::new();
@@ -159,7 +165,7 @@ fn check_header(path: &Path, selected: &str, requested: &str, raw_assembly: &Jso
     }
     require(
         versions.len() == 1 && assemblies.len() == 1,
-        "AlphaMissense annotation requires unambiguous VEP release and assembly metadata",
+        format!("{resource} annotation requires unambiguous VEP release and assembly metadata"),
     )?;
     let version = &versions[0];
     let valid = version.strip_prefix('v').is_some_and(|v| {
@@ -172,7 +178,7 @@ fn check_header(path: &Path, selected: &str, requested: &str, raw_assembly: &Jso
     require(
         valid,
         format!(
-            "AlphaMissense annotation VEP release {version} differs from requested major {requested}"
+            "{resource} annotation VEP release {version} differs from requested major {requested}"
         ),
     )?;
     let observed = &assemblies[0];
@@ -183,7 +189,7 @@ fn check_header(path: &Path, selected: &str, requested: &str, raw_assembly: &Jso
     require(
         assembly(&string(normalized))? == selected,
         format!(
-            "AlphaMissense annotation assembly {observed} differs from requested {}",
+            "{resource} annotation assembly {observed} differs from requested {}",
             text(raw_assembly)
         ),
     )?;
@@ -195,6 +201,16 @@ fn check_header(path: &Path, selected: &str, requested: &str, raw_assembly: &Jso
     ]))
 }
 pub(crate) fn check(path: &Path, raw_assembly: &Json, vep_major: &Json) -> Result<Json> {
+    check_resource(path, raw_assembly, vep_major, "AlphaMissense")
+}
+/// `check_vep_annotation(..., resource=resource)`: the same bounded check for
+/// another derived annotation, such as the managed ClinVar VCF.
+pub(crate) fn check_resource(
+    path: &Path,
+    raw_assembly: &Json,
+    vep_major: &Json,
+    resource: &str,
+) -> Result<Json> {
     let selected = assembly(raw_assembly)?;
     let requested = text(vep_major);
     require(
@@ -204,14 +220,14 @@ pub(crate) fn check(path: &Path, raw_assembly: &Json, vep_major: &Json) -> Resul
     let path = PathBuf::from(absolute(path)?);
     require(
         is_file(&path)? && metadata(&path)?.len() > 0,
-        format!("Missing/empty AlphaMissense annotation: {}", path.display()),
+        format!("Missing/empty {resource} annotation: {}", path.display()),
     )?;
     let before = state(&path)?;
-    let value = check_header(&path, selected, &requested, raw_assembly);
+    let value = check_header(&path, selected, &requested, raw_assembly, resource);
     if state(&path).ok() != Some(before) {
         return Err(error(
             "AnnotationHeaderChangedError",
-            "AlphaMissense annotation changed during its header check",
+            format!("{resource} annotation changed during its header check"),
         ));
     }
     value

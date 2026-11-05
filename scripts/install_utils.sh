@@ -2489,7 +2489,8 @@ function ClinVar_install() {
     # The helper checks official fileDate before deciding whether a completed
     # managed VCF is reusable. It calls the original scientific stage functions
     # on a private configuration and selects new statistics only after success.
-    python "${SCRIPT_DIR}/clinvar_gene_refresh.py" install \
+    priva_resolve_binary "$2" || return 1
+    "${PRIVA_BIN}" clinvar-gene-refresh install \
         --config "$2" --source-root "${BASE_DIR}"
 }
 
@@ -2499,7 +2500,8 @@ function ClinVar_VCF_deploy() {
     shift
     # 2026-10-23 CT: owned annotation reuse requires its bounded VEP/assembly
     # header. Keep mismatched/unknown generations before the original rebuild.
-    python "${SCRIPT_DIR}/clinvar_gene_refresh.py" deploy \
+    priva_resolve_binary "$config_file" || return 1
+    "${PRIVA_BIN}" clinvar-gene-refresh deploy \
         --config "$config_file" --source-root "$BASE_DIR" "$@"
 }
 
@@ -2521,8 +2523,8 @@ function _ClinVar_VCF_deploy() {
     done
     local contig_map=${DATA_DIR}/liftover/GRC_to_ucsc.contig.map.txt
     local contract=${SCRIPT_DIR}/clinvar_annotation_contract.py
-    local refresh=${SCRIPT_DIR}/clinvar_gene_refresh.py
     [[ -f "$contig_map" ]] || { log "The contig map file ${contig_map} is not found"; return 1; }
+    priva_resolve_binary "$config_file" || return 1
     local CACHEDIR assembly_version ucsc_assembly_version clinvar_vcf threads assembly
     CACHEDIR=$(read_yaml "$config_file" "clinvar_vcf_dir")
     assembly=$(read_yaml "$config_file" "assembly")
@@ -2549,7 +2551,7 @@ function _ClinVar_VCF_deploy() {
     threads=$(read_yaml "$config_file" "threads")
     if [[ $explicit_input -eq 1 ]]; then
         [[ -z $pinned_source ]] || { log "ERROR: A pinned raw source cannot replace an explicitly selected annotated ClinVar VCF"; return 1; }
-        python "$refresh" check-header --config "$config_file" --source-root "$BASE_DIR" > /dev/null || return 1
+        "${PRIVA_BIN}" clinvar-gene-refresh check-header --config "$config_file" --source-root "$BASE_DIR" > /dev/null || return 1
         # The generic validity helper may repair an owned cache from a sibling
         # VCF. Explicit custom inputs are checked without repair or replacement.
         [[ -s "$clinvar_vcf" ]] && bcftools view -h "$clinvar_vcf" >/dev/null && \
@@ -2562,7 +2564,7 @@ function _ClinVar_VCF_deploy() {
         return 0
     fi
     if check_vcf_validity "$clinvar_vcf" && \
-       python "$refresh" check-header --config "$config_file" --source-root "$BASE_DIR" > /dev/null && \
+       "${PRIVA_BIN}" clinvar-gene-refresh check-header --config "$config_file" --source-root "$BASE_DIR" > /dev/null && \
        python "$contract" "$clinvar_vcf" --stage complete; then
         update_yaml "$config_file" "clinvar_vcf" "$clinvar_vcf" || return 1
         log "Reusing ClinVar VCF with the complete statistics annotation contract: $clinvar_vcf"
@@ -2570,11 +2572,11 @@ function _ClinVar_VCF_deploy() {
     fi
     # A completed VEP stage is reusable while population annotation waits.
     if ! { check_vcf_validity "$clinvar_vcf" && \
-           python "$refresh" check-header --config "$config_file" --source-root "$BASE_DIR" > /dev/null && \
+           "${PRIVA_BIN}" clinvar-gene-refresh check-header --config "$config_file" --source-root "$BASE_DIR" > /dev/null && \
            python "$contract" "$clinvar_vcf" --stage vep; }; then
         local -a source_args=()
         [[ -z $pinned_source ]] || source_args=(--source-vcf "$pinned_source")
-        python "$refresh" retire-owned --config "$config_file" --source-root "$BASE_DIR" "${source_args[@]}" || return 1
+        "${PRIVA_BIN}" clinvar-gene-refresh retire-owned --config "$config_file" --source-root "$BASE_DIR" "${source_args[@]}" || return 1
         local source_vcf=${CACHEDIR}/clinvar.${assembly_version}.vcf.gz
         local converted_vcf=${CACHEDIR}/clinvar.${ucsc_assembly_version}.vcf.gz
         if [[ -n $pinned_source ]]; then
@@ -2597,7 +2599,7 @@ function _ClinVar_VCF_deploy() {
         bash "${SCRIPT_DIR}/annotation_vcf.sh" anno_VEP_cache_candidate \
             --input_vcf "$clinvar_vcf" --config "$config_file" --threads "$threads" || return 1
         check_vcf_validity "$clinvar_vcf" || return 1
-        python "$refresh" check-header --config "$config_file" --source-root "$BASE_DIR" > /dev/null || return 1
+        "${PRIVA_BIN}" clinvar-gene-refresh check-header --config "$config_file" --source-root "$BASE_DIR" > /dev/null || return 1
         python "$contract" "$clinvar_vcf" --stage vep || return 1
     fi
     local gnomad_vcf_chrX
@@ -2606,7 +2608,7 @@ function _ClinVar_VCF_deploy() {
         bash "${SCRIPT_DIR}/annotation_vcf.sh" anno_agg_gnomAD_data \
             "$clinvar_vcf" "$threads" "$assembly" "$gnomad_vcf_chrX" || return 1
     python "$contract" "$clinvar_vcf" --stage complete || return 1
-    python "$refresh" check-header --config "$config_file" --source-root "$BASE_DIR" > /dev/null || return 1
+    "${PRIVA_BIN}" clinvar-gene-refresh check-header --config "$config_file" --source-root "$BASE_DIR" > /dev/null || return 1
     update_yaml "$config_file" "clinvar_vcf" "$clinvar_vcf"
 }
 

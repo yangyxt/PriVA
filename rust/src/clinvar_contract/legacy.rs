@@ -51,9 +51,9 @@ fn shape(kind: &str, data: &Dict) -> Result<bool> {
             Value::List(entries) => {
                 let entries = entries.borrow();
                 !entries.is_empty()
-                    && entries.iter().all(|entry| {
-                        has_keys(entry, &["chrom", "pos", "clinvar_sig", "splice_ai"])
-                    })
+                    && entries
+                        .iter()
+                        .all(|entry| has_keys(entry, &["chrom", "pos", "clinvar_sig", "splice_ai"]))
             }
             _ => false,
         }),

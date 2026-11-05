@@ -183,6 +183,19 @@ class ClinVarInstallerTests(unittest.TestCase):
         Path(self.env['PRIVA_FAKE_CALLS']).unlink(missing_ok=True)
         return calls
 
+    def contract_calls(self):
+        """priva calls, with each AA/splice pair call cut to its subcommand.
+
+        Pair calls must name the Python contract, whose SHA-256 the receipts keep.
+        """
+        calls = self.priva_calls()
+        for call in calls:
+            if call[:1] == ['clinvar-contract'] and call[1].startswith('pair-'):
+                source = call[call.index('--contract-source') + 1]
+                self.assertEqual(Path(source).name, 'clinvar_annotation_contract.py')
+        return [call[:2] if call[:1] == ['clinvar-contract'] and call[1].startswith('pair-') else call
+                for call in calls]
+
     def install_vcf(self, stage):
         path = Path(self.env['TEST_' + stage.upper()])
         target = Path(self.env['TEST_VCF'])
@@ -295,13 +308,15 @@ class ClinVarInstallerTests(unittest.TestCase):
         self.assertTrue(Path(self.env['TEST_AA']).is_file())
         self.assertTrue(Path(self.env['TEST_SPLICE']).is_file())
         vcf, aa, splice = self.env['TEST_VCF'], self.env['TEST_AA'], self.env['TEST_SPLICE']
-        self.assertEqual(self.priva_calls(), [
+        self.assertEqual(self.contract_calls(), [
             ['clinvar-contract', 'header', '--vcf', vcf, '--stage', 'aa'],
             ['builder-identity', 'clinvar-aa-splice'],
+            ['clinvar-contract', 'pair-capture'],
             ['clinvar-aa-splice', 'build', '--vcf', vcf, '--aa-output', aa + '.partial.fixture',
              '--splice-output', splice + '.partial.fixture', '--threads', '1'],
             ['clinvar-contract', 'cache', '--input', aa + '.partial.fixture', '--kind', 'aa'],
-            ['clinvar-contract', 'cache', '--input', splice + '.partial.fixture', '--kind', 'splice']])
+            ['clinvar-contract', 'cache', '--input', splice + '.partial.fixture', '--kind', 'splice'],
+            ['clinvar-contract', 'pair-complete']])
         receipt = json.loads(Path(aa + '.pair.ready.json').read_text())
         producer = Path(aa + '.builder_identity.json')
         self.assertEqual(receipt['producer_path'], str(producer))
@@ -318,11 +333,12 @@ class ClinVarInstallerTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(events, [])
         vcf, aa, splice = self.env['TEST_VCF'], self.env['TEST_AA'], self.env['TEST_SPLICE']
-        self.assertEqual(self.priva_calls(), [
+        self.assertEqual(self.contract_calls(), [
             ['clinvar-contract', 'header', '--vcf', vcf, '--stage', 'aa'],
             ['builder-identity', 'clinvar-aa-splice'],
             ['clinvar-contract', 'cache', '--input', aa, '--kind', 'aa'],
-            ['clinvar-contract', 'cache', '--input', splice, '--kind', 'splice']])
+            ['clinvar-contract', 'cache', '--input', splice, '--kind', 'splice'],
+            ['clinvar-contract', 'pair-check']])
         self.env['PRIVA_FAKE_BUILDER_SHA256'] = 'f' * 64
         result, events = self.run_function('ClinVar_AA_stat config.yaml')
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -343,8 +359,11 @@ class ClinVarInstallerTests(unittest.TestCase):
         result, events = self.run_function('ClinVar_AA_stat config.yaml')
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(events, [])
-        self.assertEqual(self.priva_calls(), [
-            ['clinvar-contract', 'header', '--vcf', self.env['TEST_VCF'], '--stage', 'aa']])
+        self.assertEqual(self.contract_calls(), [
+            ['clinvar-contract', 'header', '--vcf', self.env['TEST_VCF'], '--stage', 'aa'],
+            ['clinvar-contract', 'legacy-cache', '--input', str(aa), '--kind', 'aa'],
+            ['clinvar-contract', 'legacy-cache', '--input', str(splice), '--kind', 'splice'],
+            ['clinvar-contract', 'pair-check']])
         self.assertFalse(Path(str(aa)[:-4] + '.rkyv').exists())
 
     def test_aa_outputs_honor_distinct_configured_directories(self):

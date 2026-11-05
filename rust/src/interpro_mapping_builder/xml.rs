@@ -101,8 +101,22 @@ pub(super) struct Events {
 
 struct Selected {
     name: Option<&'static str>,
+    /// Compare `name` with the tag without its namespace.
+    local: bool,
     unicode_input: bool,
-    visit: Box<dyn FnMut(&Element)>,
+    visit: Box<dyn FnMut(&Element) -> Result<()>>,
+}
+
+impl Selected {
+    fn matches(&self, name: &str, document_root: bool) -> bool {
+        self.name.map_or(document_root, |selected| {
+            if self.local {
+                name.rsplit('}').next() == Some(selected)
+            } else {
+                name == selected
+            }
+        })
+    }
 }
 
 #[derive(Default)]
@@ -116,13 +130,14 @@ impl State {
         for node in std::mem::take(&mut self.ends) {
             if let Some(selected) = &mut self.selected {
                 if let Some(element) = node {
-                    if selected
-                        .name
-                        .map_or(element.borrow().document_root, |name| {
-                            element.borrow().name == name
-                        })
-                    {
-                        (selected.visit)(&element.borrow());
+                    let chosen = {
+                        let element = element.borrow();
+                        selected.matches(&element.name, element.document_root)
+                    };
+                    if chosen {
+                        if self.failure.is_none() {
+                            self.failure = (selected.visit)(&element.borrow()).err();
+                        }
                         element.borrow_mut().clear();
                     }
                 }
@@ -216,10 +231,11 @@ unsafe extern "C" fn start(
                 product.has_disorders |= name == "DisorderList";
                 return Ok(());
             }
-            let capture = state.selected.as_ref().map_or(name == "interpro", |s| {
-                s.name
-                    .map_or(state.stack.is_empty(), |selected| name == selected)
-            }) || state.stack.last().is_some_and(Option::is_some);
+            let capture = state
+                .selected
+                .as_ref()
+                .map_or(name == "interpro", |s| s.matches(&name, state.stack.is_empty()))
+                || state.stack.last().is_some_and(Option::is_some);
             let node = if capture {
                 let mut element = Element {
                     name,
@@ -400,13 +416,39 @@ pub(super) fn visit_events(source: impl Read, events: Events) -> Result<()> {
 pub(super) fn visit_selected(
     source: impl Read,
     name: &'static str,
-    visit: Box<dyn FnMut(&Element)>,
+    mut visit: Box<dyn FnMut(&Element)>,
 ) -> Result<()> {
     parse_with(
         source,
         false,
         Some(Selected {
             name: Some(name),
+            local: false,
+            unicode_input: false,
+            visit: Box::new(move |element| {
+                visit(element);
+                Ok(())
+            }),
+        }),
+        None,
+    )
+    .map(|_| ())
+}
+
+/// Each element whose tag without its namespace is `name`; a failing visit
+/// stops the reader at the end of the current feed, as an exception would
+/// stop the loop over iterparse's queued events.
+pub(super) fn visit_local(
+    source: impl Read,
+    name: &'static str,
+    visit: Box<dyn FnMut(&Element) -> Result<()>>,
+) -> Result<()> {
+    parse_with(
+        source,
+        false,
+        Some(Selected {
+            name: Some(name),
+            local: true,
             unicode_input: false,
             visit,
         }),
@@ -418,15 +460,19 @@ pub(super) fn visit_selected(
 pub(super) fn visit_document(
     source: impl Read,
     unicode_input: bool,
-    visit: Box<dyn FnMut(&Element)>,
+    mut visit: Box<dyn FnMut(&Element)>,
 ) -> Result<()> {
     parse_with(
         source,
         false,
         Some(Selected {
             name: None,
+            local: false,
             unicode_input,
-            visit,
+            visit: Box::new(move |element| {
+                visit(element);
+                Ok(())
+            }),
         }),
         None,
     )

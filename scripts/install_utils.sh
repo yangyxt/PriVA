@@ -3999,119 +3999,20 @@ function validate_gofcards_exact_gof_cache() {
     shift
     [[ -s ${gofcards_json} ]] || { log "ERROR: Missing/empty GoFCards cache: ${gofcards_json}"; return 1; }
 
-    python - "${gofcards_json}" "$@" <<'GOFPY'
-import gzip
-import json
-import re
-import sys
-
-path = sys.argv[1]
-expected_provenance = sys.argv[2:]
-opener = gzip.open if path.endswith(".gz") else open
-with opener(path, "rt", encoding="utf-8") as handle:
-    cache = json.load(handle)
-
-for key in ("metadata", "genes"):
-    if key not in cache:
-        raise SystemExit(f"{path} has no top-level {key!r} block")
-meta = cache["metadata"]
-if meta.get("source") != "GoFCards":
-    raise SystemExit(f"{path} metadata does not declare GoFCards as the source")
-if meta.get("mechanism") != "GOF":
-    raise SystemExit(f"{path} metadata does not declare GOF as the mechanism")
-
-for pair in expected_provenance:
-    key, _, want = pair.partition("=")
-    if not want:
-        continue
-    # A dotted key walks into a nested block, so a caller can ask about
-    # "clinvar.injector_sha256" as easily as about a value recorded at the top.
-    have = meta
-    for part in key.split("."):
-        have = have.get(part) if isinstance(have, dict) else None
-    if str(have) != want:
-        raise SystemExit(
-            f"{path} was built with {key}={have!r}, but {want!r} is configured now"
-        )
-
-# loc_<chrom>:<start>:<ref>-><alt>_grch37
-VARIANT_ID = re.compile(r"^loc_[0-9XYMT]+:\d+:[ACGTN-]+->[ACGTN-]+_grch37$")
-ELIGIBLE = "eligible"
-ALLOWED = {
-    ELIGIBLE,
-    "quarantined_gene_discordance",
-    "quarantined_allele_gene_discordance",
-    "quarantined_missing_source_gene",
-    "quarantined_reviewed_lof",
-    "quarantined_reviewed_mixed",
-    "quarantined_reviewed_dominant_negative",
-    "quarantined_reviewed_uncertain",
-    "quarantined_reviewed_exclude",
-    "quarantined_mechanism_review_required",
+    # The main preflight runs before PriVA_rust_install records priva_binary.
+    if [[ ${gofcards_validate_with_python:-0} == 1 ]]; then
+        python "${SCRIPT_DIR}/validate_gofcards_cache.py" "${gofcards_json}" "$@"
+        return
+    fi
+    [[ -n ${PRIVA_BIN:-} ]] || priva_resolve_binary || return 1
+    "${PRIVA_BIN}" gofcards-cache-validate "${gofcards_json}" "$@"
 }
-genes = variants = eligible = quarantined = with_protein = with_hg38 = evidence = 0
-hgvsc_keys = hgvsp_keys = 0
-for symbol, gene in cache["genes"].items():
-    genes += 1
-    if not symbol.strip():
-        raise SystemExit(f"{path} has an empty gene symbol key")
-    for vid, variant in (gene.get("variants") or {}).items():
-        variants += 1
-        if not VARIANT_ID.match(vid):
-            raise SystemExit(f"{path}: {symbol}/{vid} is not a well-formed variant identifier")
-        record = variant.get("record") or {}
-        state = (record.get("eligibility") or {}).get("status", "")
-        if state not in ALLOWED:
-            raise SystemExit(f"{path}: {symbol}/{vid} has unknown eligibility {state!r}")
-        assemblies = variant.get("assemblies") or {}
-        if not assemblies:
-            raise SystemExit(f"{path}: {symbol}/{vid} is present on no assembly")
-        protein = coding = False
-        for assembly, block in assemblies.items():
-            if assembly not in ("hg19", "hg38"):
-                raise SystemExit(f"{path}: {symbol}/{vid} has unknown assembly {assembly!r}")
-            coords = block.get("genomic") or {}
-            if not coords.get("chrom") or not isinstance(coords.get("pos"), int):
-                raise SystemExit(f"{path}: {symbol}/{vid}/{assembly} has no usable coordinates")
-            if not coords.get("ref") or not coords.get("alt"):
-                raise SystemExit(f"{path}: {symbol}/{vid}/{assembly} has no reference or alternate")
-            for transcript, view in (block.get("transcripts") or {}).items():
-                by_c = view.get("by_hgvsc") or {}
-                by_p = view.get("by_hgvsp") or {}
-                hgvsc_keys += len(by_c)
-                hgvsp_keys += len(by_p)
-                if by_c: coding = True
-                if by_p: protein = True
-                for hgvsp, coding_keys in by_p.items():
-                    if not isinstance(coding_keys, list) or not coding_keys:
-                        raise SystemExit(f"{path}: {symbol}/{vid} protein key {hgvsp!r} maps to no coding change")
-                    for ck in coding_keys:
-                        if ck not in by_c:
-                            raise SystemExit(f"{path}: {symbol}/{vid} protein key {hgvsp!r} points at unknown {ck!r}")
-        if "hg38" in assemblies: with_hg38 += 1
-        if protein: with_protein += 1
-        if state == ELIGIBLE:
-            eligible += 1
-            if not (protein or coding or assemblies):
-                raise SystemExit(f"{path}: {symbol}/{vid} is eligible but offers no match route")
-        else:
-            quarantined += 1
-            if not (record.get("eligibility") or {}).get("reason"):
-                raise SystemExit(f"{path}: {symbol}/{vid} is quarantined without a reason")
-        evidence += len(record.get("evidence") or [])
 
-if variants == 0:
-    raise SystemExit(f"{path} contains no variants")
-if eligible == 0:
-    raise SystemExit(f"{path} contains no runtime-eligible variants")
-if with_protein == 0:
-    raise SystemExit(f"{path} contains no variant with a protein-change key")
-print(
-    f"gofcards_genes={genes}; variants={variants}; eligible={eligible}; "
-    f"quarantined={quarantined}; with_protein_key={with_protein}; on_hg38={with_hg38}; "
-    f"hgvsc_keys={hgvsc_keys}; hgvsp_keys={hgvsp_keys}; evidence_entries={evidence}"
-)
-GOFPY
+
+function gofcards_clinvar_injector_is_default() {
+    # The checkout's own injector runs as priva gofcards-clinvar-injection. A
+    # separately configured injector script keeps running with python.
+    [[ $(realpath -m -- "${1}") == $(realpath -m -- "${SCRIPT_DIR}/inject_clinvar_into_gofcards.py") ]]
 }
 
 
@@ -4156,6 +4057,7 @@ function gofcards_clinvar_injection_install() {
         return 1
     }
     [[ -s ${clinvar_xml} ]] || { log "ERROR: ClinVar VCV XML not found: ${clinvar_xml}"; return 1; }
+    priva_resolve_binary "$config_file" || return 1
 
     local configured_raw_dir managed_clinvar_xml custom_vcv_sha256="" custom_vcv_identity="" digest_output
     local -a vcv_digest_arg=()
@@ -4225,7 +4127,10 @@ function gofcards_clinvar_injection_install() {
 
     if [[ ${reinject} -eq 1 ]]; then
         log "Injecting ClinVar VCV conditions into GoFCards variants -> ${target_json}"
-        python "${injector}" \
+        local -a injector_command=(python "${injector}")
+        gofcards_clinvar_injector_is_default "${injector}" && \
+            injector_command=("${PRIVA_BIN}" gofcards-clinvar-injection --source-root "${BASE_DIR}")
+        "${injector_command[@]}" \
             --gofcards-cache "${source_cache}" \
             --clinvar-vcv "${clinvar_xml}" \
             "${vcv_digest_arg[@]}" \
@@ -4385,6 +4290,12 @@ function gofcards_exact_gof_cache_install() {
        [[ "${PRIVA_FORCE_ALL_CACHES:-0}" == "1" ]] || [[ ! -s ${target_tsv} ]]; then
         rebuild=1
     else
+        local gofcards_validate_with_python=0
+        if [[ ${mode} == --main-preflight ]]; then
+            gofcards_validate_with_python=1
+        else
+            priva_resolve_binary "$config_file" || return 1
+        fi
         local source_file
         for source_file in "${builder_script}" "${review_tsv}" "${hgnc_table}" \
                            "${chain_file}" "${hg19_fasta}" "${hg38_fasta}"; do

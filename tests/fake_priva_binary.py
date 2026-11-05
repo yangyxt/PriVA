@@ -26,7 +26,10 @@ options; `gnomad-cache COMMAND` runs scripts/gnomad_cache.py and
 `gofcards-exact-gof` runs scripts/build_gofcards_exact_gof_cache.py with the same
 options.
 `hpo-condition-mechanism` runs scripts/build_hpo_condition_mechanism_cache.py
+and `gofcards-clinvar-injection` runs scripts/inject_clinvar_into_gofcards.py
 with every option except --source-root.
+`gofcards-cache-validate` runs scripts/validate_gofcards_cache.py with the same
+arguments.
 `installer-config-paths resolve/managed-roots` runs scripts/installer_config_paths.py
 with the same subcommand and options; it needs an explicit PYTHONHASHSEED, as the
 native command does.
@@ -262,6 +265,19 @@ elif command in ("gene-nonlof-mechanism", "hpo-condition-mechanism"):
 elif command == "gofcards-exact-gof":
     script = "build_gofcards_exact_gof_cache.py"
     forwarded = rest
+elif command == "gofcards-cache-validate":
+    script = "validate_gofcards_cache.py"
+    forwarded = rest
+elif command == "gofcards-clinvar-injection":
+    script = "inject_clinvar_into_gofcards.py"
+    forwarded = []
+    remaining = list(rest)
+    while remaining:
+        token = remaining.pop(0)
+        if token == "--source-root":
+            remaining.pop(0)
+        else:
+            forwarded.append(token)
 elif command == "clinvar-contract" and rest[:1] == ["legacy-cache"]:
     values = dict(options(rest[1:], {"--input", "--kind"}))
     script = "clinvar_annotation_contract.py"

@@ -427,6 +427,7 @@ out = arguments[arguments.index("--out-json") + 1]
 json.dump({"metadata": {"clinvar": {"source": path, "source_sha256": sha}}}, open(out, "w"))
 INJECTOR_IDENTITY_STUB
 }
+export -f python event
 '''
 
     def test_custom_vcv_changed_bytes_at_same_path_reinjects_and_unchanged_reuses(self):

@@ -36,6 +36,16 @@ pub(crate) fn visit_selected_elements(
     xml::visit_selected(source, name, Box::new(visit))
 }
 
+/// Each element whose tag, without its namespace, is `name`, with the same
+/// feed and clear timing; an error from `visit` ends the reading.
+pub(crate) fn visit_elements_by_local_name(
+    source: impl Read,
+    name: &'static str,
+    visit: impl FnMut(&Element) -> Result<()> + 'static,
+) -> Result<()> {
+    xml::visit_local(source, name, Box::new(visit))
+}
+
 /// Parse one complete ElementTree document, retaining XML attribute insertion
 /// order for consumers whose Python diagnostics expose `node.attrib` order.
 /// The streaming InterPro and selected-element readers keep their old profile.
@@ -78,6 +88,10 @@ impl Element {
             let child = child.borrow();
             (child.name == name).then_some(child)
         })
+    }
+
+    pub(crate) fn attribute(&self, key: &str) -> Option<&str> {
+        self.attributes.get(key).map(String::as_str)
     }
 
     pub(crate) fn child_text(&self, name: &str) -> String {

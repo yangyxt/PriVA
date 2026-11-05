@@ -70,7 +70,10 @@ impl Fasta {
             let [contig, length, offset, line_bases, line_bytes] = fields[..] else {
                 return Err(error(
                     "ValueError",
-                    format!("not enough values to unpack (expected 5, got {})", fields.len()),
+                    format!(
+                        "not enough values to unpack (expected 5, got {})",
+                        fields.len()
+                    ),
                 ));
             };
             let length = index_field(length)?;

@@ -602,7 +602,11 @@ fn string(value: &str) -> Json {
 fn variant_id(chrom: &str, start: &str, reference: &str, alternate: &str) -> String {
     let allele = |text: &str| {
         let text = normalize_allele(&clean_text(text));
-        if text.is_empty() { "-".to_owned() } else { text }
+        if text.is_empty() {
+            "-".to_owned()
+        } else {
+            text
+        }
     };
     format!(
         "loc_{}:{}:{}->{}_grch37",
@@ -720,10 +724,9 @@ fn nest(
                 }
             });
             if first.hg38_status == "endpoint_ref_match" {
-                variant.assemblies.insert(
-                    "hg38",
-                    coordinate_block(first.hg38, first.hg38_status)?,
-                );
+                variant
+                    .assemblies
+                    .insert("hg38", coordinate_block(first.hg38, first.hg38_status)?);
             }
             let mut by_assembly: BTreeMap<&'static str, Vec<&Merged>> = BTreeMap::new();
             for row in rows.iter().copied() {
@@ -737,7 +740,11 @@ fn nest(
                     continue;
                 }
                 let head = arows[0];
-                let coord = if assembly == "hg19" { head.hg19 } else { head.hg38 };
+                let coord = if assembly == "hg19" {
+                    head.hg19
+                } else {
+                    head.hg38
+                };
                 if coord.is_none_or(|c| c.chrom.is_empty()) {
                     continue;
                 }
@@ -914,19 +921,24 @@ pub(super) fn build_cache(layers: Layers) -> Result<Vec<(String, Json)>> {
 
     let mut merged: Vec<Merged> = Vec::new();
     for record in core {
-        let symbol = groups.get(record.allele_key.as_str()).map_or_else(
-            String::new,
-            |rows| resolver.resolve(&join_unique(rows.iter().map(|row| row.symbol.as_str()))),
-        );
+        let symbol = groups
+            .get(record.allele_key.as_str())
+            .map_or_else(String::new, |rows| {
+                resolver.resolve(&join_unique(rows.iter().map(|row| row.symbol.as_str())))
+            });
         let pick = |map: &HashMap<String, Vec<usize>>| -> Vec<Option<usize>> {
-            map.get(&record.vcf_id)
-                .map_or_else(|| vec![None], |rows| rows.iter().copied().map(Some).collect())
+            map.get(&record.vcf_id).map_or_else(
+                || vec![None],
+                |rows| rows.iter().copied().map(Some).collect(),
+            )
         };
         for hg19 in pick(&hg19_index) {
             for hg38 in pick(&hg38_index) {
-                let rows: Vec<Option<&VepRow>> = annotation
-                    .get(record.vcf_id.as_str())
-                    .map_or_else(|| vec![None], |rows| rows.iter().copied().map(Some).collect());
+                let rows: Vec<Option<&VepRow>> =
+                    annotation.get(record.vcf_id.as_str()).map_or_else(
+                        || vec![None],
+                        |rows| rows.iter().copied().map(Some).collect(),
+                    );
                 for row in rows {
                     if symbol.is_empty() {
                         continue;
@@ -960,9 +972,8 @@ pub(super) fn build_cache(layers: Layers) -> Result<Vec<(String, Json)>> {
         .map(|row| row.core.vcf_id.clone())
         .collect();
     let before = merged.len();
-    merged.retain(|row| {
-        !curated_present.contains(&row.core.vcf_id) || row.vep_symbol == row.symbol
-    });
+    merged
+        .retain(|row| !curated_present.contains(&row.core.vcf_id) || row.vep_symbol == row.symbol);
     log(&format!(
         "dropped {} transcript rows belonging to other genes at the same loci",
         before - merged.len()
@@ -1128,10 +1139,7 @@ fn gzip_open_bytes(body: &[u8], path: &Path) -> Result<Vec<u8>> {
         .file_name()
         .map(|name| name.to_string_lossy().into_owned())
         .unwrap_or_default();
-    let latin: Option<Vec<u8>> = name
-        .chars()
-        .map(|c| u8::try_from(c as u32).ok())
-        .collect();
+    let latin: Option<Vec<u8>> = name.chars().map(|c| u8::try_from(c as u32).ok()).collect();
     let mut stored = latin.unwrap_or_default();
     if stored.ends_with(b".gz") {
         stored.truncate(stored.len() - 3);
@@ -1139,5 +1147,7 @@ fn gzip_open_bytes(body: &[u8], path: &Path) -> Result<Vec<u8>> {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |elapsed| elapsed.as_secs() as u32);
-    Ok(crate::python_gzip::compress_named(body, 9, true, &stored, now)?)
+    Ok(crate::python_gzip::compress_named(
+        body, 9, true, &stored, now,
+    )?)
 }

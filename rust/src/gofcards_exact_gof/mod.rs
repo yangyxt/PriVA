@@ -156,8 +156,7 @@ fn child(work: &Path, name: &str) -> PathBuf {
 /// The text of a file opened with `open(path, "r", encoding="utf-8")`.
 fn read_text(path: &Path) -> Result<String> {
     let bytes = fs::read(path).map_err(|e| os_error(e, path, None))?;
-    let text =
-        crate::python_io::decode_utf8(&bytes).map_err(|e| error("UnicodeDecodeError", e))?;
+    let text = crate::python_io::decode_utf8(&bytes).map_err(|e| error("UnicodeDecodeError", e))?;
     Ok(text.replace("\r\n", "\n").replace('\r', "\n"))
 }
 
@@ -441,7 +440,12 @@ fn run(options: Options) -> Result<()> {
 
     // Step 3
     let norm19 = at("gofcards.hg19.norm.vcf");
-    normalize_vcf(&at("gofcards.hg19.vcf"), &options.hg19_fasta, &norm19, &logs)?;
+    normalize_vcf(
+        &at("gofcards.hg19.vcf"),
+        &options.hg19_fasta,
+        &norm19,
+        &logs,
+    )?;
 
     // Step 4
     let vep19_path = at("gofcards.hg19.vep.tsv");

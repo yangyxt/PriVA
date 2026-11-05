@@ -192,7 +192,6 @@ pub(super) struct Source {
     pub(super) reference: String,
     pub(super) alternate: String,
     pub(super) symbol: String,
-    pub(super) transcript: String,
     pub(super) evidence: Json,
 }
 
@@ -233,8 +232,8 @@ pub(super) fn fetch_sources(
         "Downloading public workbook -> {}",
         public_path.display()
     ));
-    let reply = request(url, &[("User-Agent", "Mozilla/5.0")], timeout, work)?
-        .map_err(Failure::raise)?;
+    let reply =
+        request(url, &[("User-Agent", "Mozilla/5.0")], timeout, work)?.map_err(Failure::raise)?;
     reply.check().map_err(Failure::raise)?;
     fs::write(&public_path, &reply.body).map_err(|e| os_error(e, &public_path, None))?;
 
@@ -325,7 +324,6 @@ pub(super) fn fetch_sources(
             reference,
             alternate,
             symbol: clean_cell(at(gene)),
-            transcript: source_transcript.clone(),
             evidence: Json::Object(
                 [
                     ("source_order", clean_cell(at(order))),
@@ -428,7 +426,10 @@ fn read_summary_cache(path: &Path) -> Result<HashMap<String, Json>> {
             .unwrap_or(Json::Object(vec![]));
         cache.insert(crate::gene_nonlof_mechanism::py_str(key), data);
     }
-    log(&format!("summary cache already holds {} alleles", cache.len()));
+    log(&format!(
+        "summary cache already holds {} alleles",
+        cache.len()
+    ));
     Ok(cache)
 }
 

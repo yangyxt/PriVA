@@ -764,7 +764,11 @@ fn numeric_column(values: &[Value]) -> Option<Vec<SheetCell>> {
         });
     }
     let null = numbers.iter().any(Option::is_none);
-    let float = null || numbers.iter().flatten().any(|n| matches!(n, Value::Float(_)));
+    let float = null
+        || numbers
+            .iter()
+            .flatten()
+            .any(|n| matches!(n, Value::Float(_)));
     let int = numbers.iter().flatten().any(|n| matches!(n, Value::Int(_)));
     let as_float = |number: &Value| match number {
         Value::Int(n) => *n as f64,
@@ -822,8 +826,7 @@ fn object_column(values: &[Value]) -> Vec<SheetCell> {
         return cells;
     }
     // A time of day has no date in front of it and stays a plain object.
-    let is_datetime =
-        |cell: &SheetCell| matches!(cell, SheetCell::Date(text) if text.as_bytes().get(4) == Some(&b'-'));
+    let is_datetime = |cell: &SheetCell| matches!(cell, SheetCell::Date(text) if text.as_bytes().get(4) == Some(&b'-'));
     if cells
         .iter()
         .all(|cell| *cell == SheetCell::Nan || is_datetime(cell))

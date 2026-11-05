@@ -28,6 +28,7 @@ import hashlib
 import json
 import os
 import re
+import resource
 import shutil
 import subprocess
 import sys
@@ -747,8 +748,9 @@ def real(args):
     if args.digest:
         command += ["--clinvar-vcv-sha256", args.digest]
     started = time.time()
-    subprocess.run(["/usr/bin/time", "-v", *map(str, command)], check=True, stderr=(root / "native.log").open("w"))
-    report = {"native_seconds": round(time.time() - started, 1)}
+    subprocess.run([str(part) for part in command], check=True, stderr=(root / "native.log").open("w"))
+    report = {"native_seconds": round(time.time() - started, 1),
+              "native_peak_rss_kib": resource.getrusage(resource.RUSAGE_CHILDREN).ru_maxrss}
     if args.python_output:
         base = Path(args.python_output)
         reference = {"cache": base / "out.json.gz", "audit": base / "audit.tsv", "stats": base / "stats.json"}

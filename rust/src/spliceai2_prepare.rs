@@ -758,7 +758,7 @@ fn stable_id(gene_id: &str) -> Option<String> {
 // ---------------------------------------------------------------- tools
 
 /// `shutil.which(name)`
-fn which(name: &str) -> Option<String> {
+pub(crate) fn which(name: &str) -> Option<String> {
     let executable = |candidate: &Path| {
         CString::new(candidate.as_os_str().as_encoded_bytes())
             .is_ok_and(|t| unsafe { libc::access(t.as_ptr(), libc::X_OK) } == 0)

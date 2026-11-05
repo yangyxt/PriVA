@@ -29,6 +29,8 @@ mod schema;
 mod xlsx;
 
 pub(crate) use build::{eligible, load_gofcards_cache};
+pub(crate) use fetch::is_digit;
+pub(crate) use xlsx::{SheetCell, read_first_sheet};
 
 use crate::builder_error;
 use crate::cli::{Result, invalid};

@@ -32,6 +32,7 @@ mod exon_af_stats;
 #[allow(dead_code)] // PM1 producer integration follows exact float64 comparison.
 mod fdr;
 mod gnomad_cache;
+mod gofcards_exact_gof;
 mod installer_config_paths;
 mod mapped_artifact_publish;
 // Qualified before the opt-in DAS procedures consume this exact random stream.

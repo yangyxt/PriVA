@@ -4303,6 +4303,13 @@ function gofcards_vep_caches_install() {
 }
 
 
+function gofcards_builder_is_default() {
+    # The checkout's own builder runs as priva gofcards-exact-gof. A separately
+    # configured builder script keeps running with python.
+    [[ $(realpath -m -- "${1}") == $(realpath -m -- "${SCRIPT_DIR}/build_gofcards_exact_gof_cache.py") ]]
+}
+
+
 function gofcards_exact_gof_cache_install() {
     # Build the GoFCards exact GOF evidence cache from the raw GoFCards sources.
     # The whole pipeline is one script; see docs/GOFCARDS_NORMALIZATION_METHODS.md
@@ -4451,7 +4458,9 @@ function gofcards_exact_gof_cache_install() {
     mkdir -p "$(dirname "${target_tsv}")" "${workdir}" || return 1
 
     log "Building GoFCards exact GOF cache -> ${target_tsv}"
-    python "${builder_script}" \
+    local -a builder_command=(python "${builder_script}")
+    gofcards_builder_is_default "${builder_script}" && builder_command=("${PRIVA_BIN}" gofcards-exact-gof)
+    "${builder_command[@]}" \
         --workdir "${workdir}" \
         --out-json "${target_tsv}" \
         --hg19-fasta "${hg19_fasta}" \

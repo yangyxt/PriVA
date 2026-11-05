@@ -126,6 +126,18 @@ impl Drop for Deflater {
 /// The complete gzip member GzipFile writes for `body` at `level` (0 to 9),
 /// with one `Z_SYNC_FLUSH` before the end when `sync_flush` is set.
 pub(crate) fn compress(body: &[u8], level: u32, sync_flush: bool) -> io::Result<Vec<u8>> {
+    compress_named(body, level, sync_flush, b"", 0)
+}
+
+/// `compress` with the name and modification time `gzip.open(path, "wb")`
+/// stores in the header; an empty `name` stores none.
+pub(crate) fn compress_named(
+    body: &[u8],
+    level: u32,
+    sync_flush: bool,
+    name: &[u8],
+    mtime: u32,
+) -> io::Result<Vec<u8>> {
     if level > 9 {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
@@ -137,7 +149,13 @@ pub(crate) fn compress(body: &[u8], level: u32, sync_flush: bool) -> io::Result<
         1 => 4,
         _ => 0,
     };
-    let mut out = vec![0x1f, 0x8b, 8, 0, 0, 0, 0, 0, xfl, 0xff];
+    let mut out = vec![0x1f, 0x8b, 8, if name.is_empty() { 0 } else { 8 }];
+    out.extend_from_slice(&mtime.to_le_bytes());
+    out.extend_from_slice(&[xfl, 0xff]);
+    if !name.is_empty() {
+        out.extend_from_slice(name);
+        out.push(0);
+    }
     let mut deflater = Deflater::new(level)?;
     let mut crc: c_ulong = 0;
     for part in body.chunks(CHUNK) {

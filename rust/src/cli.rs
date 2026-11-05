@@ -351,6 +351,9 @@ pub(crate) fn run() -> Result<()> {
     if args.get(1).map(String::as_str) == Some("hpo-condition-mechanism") {
         return crate::hpo_condition_mechanism::dispatch(&args[2..]);
     }
+    if args.get(1).map(String::as_str) == Some("gofcards-exact-gof") {
+        return crate::gofcards_exact_gof::dispatch(&args[2..]);
+    }
     if args.get(1).map(String::as_str) == Some("gene-mechanism") {
         return crate::gene_mechanism_builder::dispatch(&args[2..]);
     }

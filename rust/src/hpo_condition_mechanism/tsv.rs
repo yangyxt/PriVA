@@ -8,7 +8,7 @@ use std::collections::HashMap;
 const FIELD_LIMIT: usize = 131_072;
 
 /// One row as `DictReader` returns it; `None` is the restval of a short row.
-pub(super) type Row = HashMap<String, Option<String>>;
+pub(crate) type Row = HashMap<String, Option<String>>;
 
 #[derive(Clone, Copy, PartialEq)]
 enum State {
@@ -20,7 +20,7 @@ enum State {
     EatCrnl,
 }
 
-pub(super) struct Reader {
+pub(crate) struct Reader {
     text: String,
     at: usize,
     pub(super) fieldnames: Option<Vec<String>>,
@@ -32,7 +32,7 @@ fn csv_error(message: impl Into<String>) -> Box<dyn std::error::Error> {
 
 impl Reader {
     /// `_open_text(path)`: gzip when the file name ends in `.gz`, UTF-8.
-    pub(super) fn open(path: &Path) -> Result<Self> {
+    pub(crate) fn open(path: &Path) -> Result<Self> {
         let bytes = read_maybe_gzip(path, file_name_ends_gz(path))?;
         let text = crate::python_io::decode_utf8(&bytes)
             .map_err(|e| error("UnicodeDecodeError", e))?
@@ -42,6 +42,15 @@ impl Reader {
             at: 0,
             fieldnames: None,
         })
+    }
+
+    /// A reader over text already decoded.
+    pub(crate) fn from_text(text: String) -> Self {
+        Self {
+            text,
+            at: 0,
+            fieldnames: None,
+        }
     }
 
     /// The next physical line, keeping its `\n`, `\r` or `\r\n` ending.
@@ -195,7 +204,7 @@ open the file with newline=''?",
     }
 
     /// The header check `_iter_tsv_rows` makes before its first row.
-    pub(super) fn require(&mut self, path: &Path, required: &[&str]) -> Result<()> {
+    pub(crate) fn require(&mut self, path: &Path, required: &[&str]) -> Result<()> {
         self.fieldnames = self.record()?;
         let names = self.fieldnames.clone().unwrap_or_default();
         let mut missing: Vec<&str> = required
@@ -218,7 +227,7 @@ open the file with newline=''?",
     }
 
     /// `next(DictReader)` after the header.
-    pub(super) fn next_row(&mut self) -> Result<Option<Row>> {
+    pub(crate) fn next_row(&mut self) -> Result<Option<Row>> {
         let names = self.fieldnames.clone().unwrap_or_default();
         loop {
             let Some(values) = self.record()? else {

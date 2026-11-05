@@ -23,6 +23,8 @@ options; `gnomad-cache COMMAND` runs scripts/gnomad_cache.py and
 `spliceai2-prepare COMMAND` runs scripts/spliceai2_to_vep_vcf.py and
 `clinvar-gene-refresh COMMAND` runs scripts/clinvar_gene_refresh.py likewise.
 `gene-nonlof-mechanism` runs scripts/build_gene_nonlof_mechanism_cache.py and
+`gofcards-exact-gof` runs scripts/build_gofcards_exact_gof_cache.py with the same
+options.
 `hpo-condition-mechanism` runs scripts/build_hpo_condition_mechanism_cache.py
 with every option except --source-root.
 `installer-config-paths resolve/managed-roots` runs scripts/installer_config_paths.py
@@ -257,6 +259,9 @@ elif command in ("gene-nonlof-mechanism", "hpo-condition-mechanism"):
             remaining.pop(0)
         else:
             forwarded.append(token)
+elif command == "gofcards-exact-gof":
+    script = "build_gofcards_exact_gof_cache.py"
+    forwarded = rest
 elif command == "clinvar-contract" and rest[:1] == ["legacy-cache"]:
     values = dict(options(rest[1:], {"--input", "--kind"}))
     script = "clinvar_annotation_contract.py"

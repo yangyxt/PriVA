@@ -105,6 +105,7 @@ python() {
    "$TEST_PYTHON" -c 'import json,sys; print("BUILD_ARGS="+json.dumps(sys.argv[1:]))' "$@"
  else "$TEST_PYTHON" "$@"; fi
 }
+export -f python
 '''
         return subprocess.run(["bash", "--noprofile", "--norc", "-c", prefix + body, "test",
                                str(ROOT / "scripts/install_utils.sh")], env=self.env,

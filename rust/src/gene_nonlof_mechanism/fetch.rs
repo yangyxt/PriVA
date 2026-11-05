@@ -968,7 +968,7 @@ fn local_name(name: &str) -> &str {
 }
 
 /// `str.isdigit()`: decimal digits and the other Unicode digit characters.
-pub(super) fn is_digit(c: char) -> bool {
+pub(crate) fn is_digit(c: char) -> bool {
     crate::python_text::decimal_digit_value(c).is_some()
         || matches!(c,
             '\u{b2}' | '\u{b3}' | '\u{b9}' | '\u{1369}'..='\u{1371}' | '\u{19da}'

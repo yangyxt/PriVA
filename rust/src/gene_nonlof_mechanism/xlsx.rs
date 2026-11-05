@@ -7,6 +7,9 @@
 //! rows; the Python text parser names the columns from the first row and
 //! turns pandas' missing-value spellings into empty strings. ISO `t="d"`
 //! cells are refused.
+//!
+//! `read_first_sheet` is `pd.read_excel(path, sheet_name=0)` with pandas'
+//! default typing: the same cells, then the Python parser's column inference.
 use super::*;
 use crate::interpro_mapping_builder::Element;
 use std::cell::RefCell;
@@ -409,8 +412,9 @@ fn styles(book: &mut Book) -> Result<Styles> {
     Ok(result)
 }
 
-/// The DataFrame's column names and its text cells after `fillna("")`.
-pub(super) fn read_sheet(path: &Path, sheet: &str) -> Result<(Vec<String>, Vec<Vec<String>>)> {
+/// The header row and data rows of a sheet (the first when `sheet` is
+/// `None`), after pandas' trimming and padding.
+fn sheet_rows(path: &Path, sheet: Option<&str>) -> Result<(Vec<Value>, Vec<Vec<Value>>)> {
     let file = File::open(path).map_err(|e| os_error(e, path, None))?;
     let archive =
         zip::ZipArchive::new(file).map_err(|_| error("BadZipFile", "File is not a zip file"))?;
@@ -459,7 +463,7 @@ pub(super) fn read_sheet(path: &Path, sheet: &str) -> Result<(Vec<String>, Vec<V
         .to_owned();
     let rels = book.part(&rels_path(&workbook_part))?;
     let names = book.names();
-    let target = workbook
+    let mut targets = workbook
         .child("sheets")
         .into_iter()
         .flat_map(|sheets| sheets.children("sheet"))
@@ -478,9 +482,18 @@ pub(super) fn read_sheet(path: &Path, sheet: &str) -> Result<(Vec<String>, Vec<V
                 .contains(&part)
                 .then(|| (node.plain("name").unwrap_or("").to_owned(), part))
         })
-        .find(|(name, _)| name == sheet)
-        .map(|(_, part)| part)
-        .ok_or_else(|| bad(format!("Worksheet named '{sheet}' not found")))?;
+        .collect::<Vec<_>>()
+        .into_iter();
+    let target = match sheet {
+        Some(sheet) => targets
+            .find(|(name, _)| name == sheet)
+            .map(|(_, part)| part)
+            .ok_or_else(|| bad(format!("Worksheet named '{sheet}' not found")))?,
+        None => targets
+            .next()
+            .map(|(_, part)| part)
+            .ok_or_else(|| bad("Worksheet index 0 is invalid, 0 worksheets found"))?,
+    };
     let style = styles(&mut book)?;
     let root = book.part(&target)?.ok_or_else(|| {
         error(
@@ -571,8 +584,11 @@ pub(super) fn read_sheet(path: &Path, sheet: &str) -> Result<(Vec<String>, Vec<V
                                         "cannot convert float to integer",
                                     ));
                                 }
+                                Value::Float(f) if f.fract() == 0.0 && f.abs() < 1e36 => {
+                                    Value::Int(f as i128)
+                                }
                                 Value::Float(f) if f.fract() == 0.0 => {
-                                    Value::Rendered(format!("{f:.0}").replace("-0", "0"))
+                                    Value::Rendered(format!("{f:.0}"))
                                 }
                                 other => other,
                             }
@@ -630,40 +646,217 @@ pub(super) fn read_sheet(path: &Path, sheet: &str) -> Result<(Vec<String>, Vec<V
     for row in &mut rows {
         row.resize(width, Value::Empty);
     }
-    let header: Vec<String> = rows[0]
-        .iter()
-        .map(|value| match value {
-            Value::Empty | Value::Missing => String::new(),
-            Value::Text(text) | Value::Rendered(text) => text.clone(),
-            Value::Int(number) => number.to_string(),
-            Value::Float(number) => crate::python_text::float_repr(*number),
-            Value::Bool(flag) => (if *flag { "True" } else { "False" }).into(),
-        })
-        .collect();
-    let names = crate::pandas_table::column_names(header);
-    let mut cells: Vec<Vec<String>> = rows[1..]
+    let mut data = rows.split_off(1);
+    if width == 1 {
+        data.retain(|row| {
+            !matches!(&row[0], Value::Empty)
+                && !matches!(&row[0], Value::Text(text) if crate::python_text::python_strip(text).is_empty())
+        });
+    }
+    Ok((rows.remove(0), data))
+}
+
+fn plain_text(value: &Value) -> String {
+    match value {
+        Value::Empty | Value::Missing => String::new(),
+        Value::Text(text) | Value::Rendered(text) => text.clone(),
+        Value::Int(number) => number.to_string(),
+        Value::Float(number) => crate::python_text::float_repr(*number),
+        Value::Bool(flag) => (if *flag { "True" } else { "False" }).into(),
+    }
+}
+
+/// The DataFrame's column names and its text cells after `fillna("")`.
+pub(super) fn read_sheet(path: &Path, sheet: &str) -> Result<(Vec<String>, Vec<Vec<String>>)> {
+    let (header, rows) = sheet_rows(path, Some(sheet))?;
+    let names = crate::pandas_table::column_names(header.iter().map(plain_text).collect());
+    let cells = rows
         .iter()
         .map(|row| {
             row.iter()
                 .map(|value| match value {
-                    Value::Empty | Value::Missing => String::new(),
                     Value::Text(text) if crate::pandas_table::is_na(text) => String::new(),
-                    Value::Text(text) | Value::Rendered(text) => text.clone(),
-                    Value::Int(number) => number.to_string(),
-                    Value::Float(number) => crate::python_text::float_repr(*number),
-                    Value::Bool(flag) => (if *flag { "True" } else { "False" }).into(),
+                    other => plain_text(other),
                 })
                 .collect()
         })
         .collect();
-    if width == 1 {
-        let original = rows[1..].to_vec();
-        cells = cells
-            .into_iter()
-            .zip(original)
-            .filter(|(_, row)| !matches!(&row[0], Value::Empty) && !matches!(&row[0], Value::Text(text) if crate::python_text::python_strip(text).is_empty()))
-            .map(|(cells, _)| cells)
-            .collect();
+    Ok((names, cells))
+}
+
+/// One DataFrame value of `pd.read_excel` with default typing.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum SheetCell {
+    Nan,
+    /// The missing value of a column pandas made datetime64.
+    NaT,
+    Text(String),
+    Int(i128),
+    Float(f64),
+    Bool(bool),
+    /// `str()` of a date or time.
+    Date(String),
+}
+
+/// `floatify`: the number a text cell spells, integer-shaped or not.
+fn numeric_text(text: &str) -> Option<Value> {
+    let body = text.trim_matches(|c: char| c.is_ascii_whitespace());
+    let (sign, unsigned) = match body.as_bytes().first() {
+        Some(b'+') => (1.0, &body[1..]),
+        Some(b'-') => (-1.0, &body[1..]),
+        _ => (1.0, body),
+    };
+    if matches!(unsigned.to_ascii_lowercase().as_str(), "inf" | "infinity") {
+        return Some(Value::Float(sign * f64::INFINITY));
+    }
+    let bytes = unsigned.as_bytes();
+    let digits = |from: usize| {
+        bytes[from..]
+            .iter()
+            .take_while(|b| b.is_ascii_digit())
+            .count()
+    };
+    let whole = digits(0);
+    let mut at = whole;
+    let mut fraction = 0;
+    let mut integer = true;
+    if bytes.get(at) == Some(&b'.') {
+        integer = false;
+        fraction = digits(at + 1);
+        at += 1 + fraction;
+    }
+    if whole + fraction == 0 {
+        return None;
+    }
+    if matches!(bytes.get(at), Some(b'e' | b'E')) {
+        integer = false;
+        at += 1;
+        if matches!(bytes.get(at), Some(b'+' | b'-')) {
+            at += 1;
+        }
+        let exponent = digits(at);
+        if exponent == 0 {
+            return None;
+        }
+        at += exponent;
+    }
+    if at != bytes.len() {
+        return None;
+    }
+    if integer {
+        if let Ok(number) = body.parse::<i128>() {
+            return Some(Value::Int(number));
+        }
+    }
+    crate::python_text::parse_float(body).map(Value::Float)
+}
+
+/// `maybe_convert_numeric` over one column; `None` when it raises.
+fn numeric_column(values: &[Value]) -> Option<Vec<SheetCell>> {
+    let mut numbers: Vec<Option<Value>> = Vec::with_capacity(values.len());
+    for value in values {
+        numbers.push(match value {
+            Value::Empty | Value::Missing => None,
+            Value::Text(text) if crate::pandas_table::is_na(text) => None,
+            Value::Text(text) => Some(numeric_text(text)?),
+            Value::Rendered(_) => return None,
+            other => Some(other.clone()),
+        });
+    }
+    let null = numbers.iter().any(Option::is_none);
+    let float = null || numbers.iter().flatten().any(|n| matches!(n, Value::Float(_)));
+    let int = numbers.iter().flatten().any(|n| matches!(n, Value::Int(_)));
+    let as_float = |number: &Value| match number {
+        Value::Int(n) => *n as f64,
+        Value::Float(f) => *f,
+        Value::Bool(flag) => f64::from(u8::from(*flag)),
+        _ => f64::NAN,
+    };
+    Some(
+        numbers
+            .iter()
+            .map(|number| match number {
+                None => SheetCell::Nan,
+                Some(number) if float => SheetCell::Float(as_float(number)),
+                Some(Value::Int(n)) => SheetCell::Int(*n),
+                Some(Value::Bool(flag)) if int => SheetCell::Int(i128::from(*flag)),
+                Some(Value::Bool(flag)) => SheetCell::Bool(*flag),
+                Some(_) => SheetCell::Nan,
+            })
+            .collect(),
+    )
+}
+
+/// `sanitize_objects`, `maybe_convert_bool`, and the datetime inference of
+/// the DataFrame constructor, for a column that stayed `object`.
+fn object_column(values: &[Value]) -> Vec<SheetCell> {
+    let mut cells: Vec<SheetCell> = values
+        .iter()
+        .map(|value| match value {
+            Value::Empty | Value::Missing => SheetCell::Nan,
+            Value::Text(text) if crate::pandas_table::is_na(text) => SheetCell::Nan,
+            Value::Text(text) => SheetCell::Text(text.clone()),
+            Value::Int(number) => SheetCell::Int(*number),
+            Value::Float(number) => SheetCell::Float(*number),
+            Value::Bool(flag) => SheetCell::Bool(*flag),
+            Value::Rendered(text) => SheetCell::Date(text.clone()),
+        })
+        .collect();
+    let spelled = |cell: &SheetCell| match cell {
+        SheetCell::Bool(flag) => Some(*flag),
+        SheetCell::Text(text) if matches!(text.as_str(), "True" | "TRUE" | "true") => Some(true),
+        SheetCell::Text(text) if matches!(text.as_str(), "False" | "FALSE" | "false") => {
+            Some(false)
+        }
+        _ => None,
+    };
+    if cells
+        .iter()
+        .all(|cell| *cell == SheetCell::Nan || spelled(cell).is_some())
+    {
+        for cell in &mut cells {
+            if let Some(flag) = spelled(cell) {
+                *cell = SheetCell::Bool(flag);
+            }
+        }
+        return cells;
+    }
+    // A time of day has no date in front of it and stays a plain object.
+    let is_datetime =
+        |cell: &SheetCell| matches!(cell, SheetCell::Date(text) if text.as_bytes().get(4) == Some(&b'-'));
+    if cells
+        .iter()
+        .all(|cell| *cell == SheetCell::Nan || is_datetime(cell))
+    {
+        for cell in &mut cells {
+            if *cell == SheetCell::Nan {
+                *cell = SheetCell::NaT;
+            }
+        }
+    }
+    cells
+}
+
+/// `pd.read_excel(path, sheet_name=0)`: column names and rows of values.
+pub(crate) fn read_first_sheet(path: &Path) -> Result<(Vec<String>, Vec<Vec<SheetCell>>)> {
+    let mut start = [0u8; 4];
+    let read = File::open(path)
+        .and_then(|mut file| file.read(&mut start))
+        .map_err(|e| os_error(e, path, None))?;
+    if read < 4 || start != *b"PK\x03\x04" {
+        return Err(bad(
+            "Excel file format cannot be determined, you must specify an engine manually.",
+        ));
+    }
+    let (header, rows) = sheet_rows(path, None)?;
+    let names = crate::pandas_table::column_names(header.iter().map(plain_text).collect());
+    let mut cells = vec![Vec::with_capacity(names.len()); rows.len()];
+    for column in 0..names.len() {
+        let values: Vec<Value> = rows.iter().map(|row| row[column].clone()).collect();
+        let converted = numeric_column(&values).unwrap_or_else(|| object_column(&values));
+        for (row, cell) in cells.iter_mut().zip(converted) {
+            row.push(cell);
+        }
     }
     Ok((names, cells))
 }

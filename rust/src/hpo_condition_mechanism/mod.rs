@@ -20,7 +20,7 @@
 //! - An input table is decoded completely before its rows are read, so
 //!   invalid UTF-8 is reported before an error in an earlier row.
 mod build;
-mod tsv;
+pub(crate) mod tsv;
 mod validate;
 
 use crate::builder_error;

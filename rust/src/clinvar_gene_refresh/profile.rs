@@ -138,8 +138,14 @@ pub(super) fn resource_policy(source_root: &str) -> Result<Json> {
                 "expected boolean automatic and policy latest_filedate_vs_bundled_mtime",
             ));
         }
-        let latest = item(item(item(resources, "clinvar_vcf")?, "source")?, "latest_url_template")?;
-        let summary = item(item(item(resources, "clinvar_variant_summary")?, "source")?, "url")?;
+        let latest = item(
+            item(item(resources, "clinvar_vcf")?, "source")?,
+            "latest_url_template",
+        )?;
+        let summary = item(
+            item(item(resources, "clinvar_variant_summary")?, "source")?,
+            "url",
+        )?;
         let mane = item(item(item(resources, "mane_select")?, "source")?, "url")?;
         if !matches!(months, Json::Int(number) if *number > 0) {
             return Err(value_error("threshold_months must be a positive integer"));
@@ -253,9 +259,15 @@ fn procedure_text(path: &str, name: &str) -> Result<String> {
 }
 /// `installer_procedures(source_root)`
 fn installer_procedures(source_root: &str) -> Result<Json> {
-    let path = absolute(Path::new(&join(source_root, &format!("scripts/{INSTALLER}"))))?;
+    let path = absolute(Path::new(&join(
+        source_root,
+        &format!("scripts/{INSTALLER}"),
+    )))?;
     if !exists(&path)? {
-        return Ok(object([("path", string(path)), ("exists", Json::Bool(false))]));
+        return Ok(object([
+            ("path", string(path)),
+            ("exists", Json::Bool(false)),
+        ]));
     }
     let mut hashes = Json::Object(Vec::new());
     for name in INSTALLER_PROCEDURES {
@@ -287,9 +299,10 @@ fn python_runtime() -> Result<(String, String, String)> {
     let text = String::from_utf8_lossy(&output.stdout);
     let parsed = json_text::parse(text.trim_end(), false).ok();
     let values: Option<Vec<String>> = match (&output.status.success(), parsed) {
-        (true, Some(Json::Array(items))) if items.len() == 3 => {
-            items.iter().map(|v| v.as_str().map(str::to_owned)).collect()
-        }
+        (true, Some(Json::Array(items))) if items.len() == 3 => items
+            .iter()
+            .map(|v| v.as_str().map(str::to_owned))
+            .collect(),
         _ => None,
     };
     let Some(values) = values else {
@@ -366,7 +379,10 @@ impl Recorder {
             let file = is_file(&path)?;
             if file {
                 value.set("size", Json::Int(info.len() as i128));
-                value.set("mtime_ns", Json::Int(nanoseconds(info.mtime(), info.mtime_nsec())));
+                value.set(
+                    "mtime_ns",
+                    Json::Int(nanoseconds(info.mtime(), info.mtime_nsec())),
+                );
             }
             let bundled = is_relative_to(&resolved, &self.source_data);
             if file && (code || (!bundled && info.len() <= 1024 * 1024)) {
@@ -387,10 +403,17 @@ pub(super) fn scientific_profile(config: &Json, source_root: &str, policy: &Json
             .collect::<Result<_>>()?,
     );
     // ClinVar_Gene_stat_regenerate reads an unset seed as 0.
-    let seed = values.get("priva_python_hash_seed").cloned().unwrap_or(Json::Null);
+    let seed = values
+        .get("priva_python_hash_seed")
+        .cloned()
+        .unwrap_or(Json::Null);
     values.set(
         "priva_python_hash_seed",
-        string(if empty(&seed) { "0".into() } else { py_str(&seed) }),
+        string(if empty(&seed) {
+            "0".into()
+        } else {
+            py_str(&seed)
+        }),
     );
     let pext = config
         .get("pext_enabled")
@@ -460,7 +483,9 @@ pub(super) fn scientific_profile(config: &Json, source_root: &str, policy: &Json
     let gnomad = get_or_null(config, "gnomad_vcf_chrX")?;
     if !empty(&gnomad) {
         let template = py_str(item(config, "gnomad_vcf_chrX")?);
-        let chromosomes = (1..=22).map(|n| n.to_string()).chain(["X".into(), "Y".into()]);
+        let chromosomes = (1..=22)
+            .map(|n| n.to_string())
+            .chain(["X".into(), "Y".into()]);
         for chrom in chromosomes {
             let path = pathlib(&template.replace(".chrX.vcf", &format!(".chr{chrom}.vcf")));
             recorder.record(&path, false)?;
@@ -515,7 +540,10 @@ pub(super) fn scientific_profile(config: &Json, source_root: &str, policy: &Json
         name.len() >= 5 && name.ends_with(".json")
     });
     for path in records {
-        if PACKAGES.iter().any(|prefix| name_of(&path).starts_with(prefix)) {
+        if PACKAGES
+            .iter()
+            .any(|prefix| name_of(&path).starts_with(prefix))
+        {
             recorder.record(&path, true)?;
         }
     }
@@ -608,14 +636,14 @@ pub(super) fn candidate_route(source_root: &str) -> Result<Json> {
         .map(|(at, _)| at)
         .filter(|at| line_start(&text, *at))
         .find_map(|at| {
-            closing_brace(&text, at + "function priva_check_spliceai_versions() {".len())
-                .map(|end| &text[at..end])
+            closing_brace(
+                &text,
+                at + "function priva_check_spliceai_versions() {".len(),
+            )
+            .map(|end| &text[at..end])
         });
     let Some(guard) = guard else {
-        return Err(error(
-            "TypeError",
-            "'NoneType' object is not subscriptable",
-        ));
+        return Err(error("TypeError", "'NoneType' object is not subscriptable"));
     };
     Ok(object([
         ("kind", string(CANDIDATE_KIND)),
@@ -769,7 +797,11 @@ pub(super) fn first_vcf_stem(path: &str) -> &str {
 }
 
 /// `candidate_begin(config_path, source_root, input_vcf)`
-pub(super) fn candidate_begin(config_path: &str, source_root: &str, input_vcf: &str) -> Result<Json> {
+pub(super) fn candidate_begin(
+    config_path: &str,
+    source_root: &str,
+    input_vcf: &str,
+) -> Result<Json> {
     let mut value = candidate_context(config_path, source_root, input_vcf)?;
     let vcf = text_of(item(&value, "input_vcf")?);
     let info = stat(&vcf)?;
@@ -780,7 +812,10 @@ pub(super) fn candidate_begin(config_path: &str, source_root: &str, input_vcf: &
         object([
             ("path", string(vcf.clone())),
             ("size", Json::Int(info.len() as i128)),
-            ("mtime_ns", Json::Int(nanoseconds(info.mtime(), info.mtime_nsec()))),
+            (
+                "mtime_ns",
+                Json::Int(nanoseconds(info.mtime(), info.mtime_nsec())),
+            ),
         ]),
     );
     write_json(&candidate_receipt_path(&vcf, true), &value)?;
@@ -799,9 +834,13 @@ pub(super) fn candidate_complete(
     let current = candidate_context(config_path, source_root, &vcf)?;
     let status = lookup(&before, "status")?.cloned().unwrap_or(Json::Null);
     let changed = !json_text::py_equal(&status, &string("preparing_annotation_only"))
-        || current.as_object().into_iter().flatten().any(|(key, value)| {
-            !json_text::py_equal(before.get(key).unwrap_or(&Json::Null), value)
-        });
+        || current
+            .as_object()
+            .into_iter()
+            .flatten()
+            .any(|(key, value)| {
+                !json_text::py_equal(before.get(key).unwrap_or(&Json::Null), value)
+            });
     require(
         !changed,
         "ClinVar candidate configuration/scientific inputs changed during preparation",

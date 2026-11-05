@@ -181,7 +181,13 @@ fn text_of(value: &Json) -> String {
 /// A YAML node as the dict `yaml.load` builds. Values JSON cannot represent
 /// (timestamps, binary, sets) keep their tag and spelling for comparisons.
 fn yaml_json(doc: &Yaml, node: usize, depth: usize) -> Json {
-    let opaque = || string(format!("\u{0}{}:{}", doc.tag(node), doc.scalar_display(node)));
+    let opaque = || {
+        string(format!(
+            "\u{0}{}:{}",
+            doc.tag(node),
+            doc.scalar_display(node)
+        ))
+    };
     if depth > 200 {
         return opaque();
     }
@@ -197,7 +203,8 @@ fn yaml_json(doc: &Yaml, node: usize, depth: usize) -> Json {
             ".nan" => Json::Float(f64::NAN),
             lower => lower.parse().map(Json::Float).unwrap_or_else(|_| opaque()),
         },
-        Value::Str(text) | Value::Codepoints {
+        Value::Str(text)
+        | Value::Codepoints {
             transport: text, ..
         } => string(text.clone()),
         Value::Other(_) => opaque(),
@@ -210,9 +217,10 @@ fn yaml_json(doc: &Yaml, node: usize, depth: usize) -> Json {
         Value::Mapping(pairs) => {
             let mut result = Json::Object(Vec::new());
             for (key, child) in pairs {
-                let name = doc
-                    .string(*key)
-                    .map_or_else(|| format!("\u{0}{}", doc.scalar_display(*key)), str::to_owned);
+                let name = doc.string(*key).map_or_else(
+                    || format!("\u{0}{}", doc.scalar_display(*key)),
+                    str::to_owned,
+                );
                 result.set(&name, yaml_json(doc, *child, depth + 1));
             }
             result
@@ -253,7 +261,10 @@ fn ucsc(assembly: &str) -> &'static str {
 }
 /// `re.fullmatch(r"[1-9][0-9]*", value)`
 fn positive(value: &str) -> bool {
-    value.bytes().next().is_some_and(|b| (b'1'..=b'9').contains(&b))
+    value
+        .bytes()
+        .next()
+        .is_some_and(|b| (b'1'..=b'9').contains(&b))
         && value.bytes().all(|b| b.is_ascii_digit())
 }
 /// `str(config.get("vep_installed_version", ""))`
@@ -343,16 +354,15 @@ fn mkstemp(parent: &str, prefix: &str) -> Result<(File, String)> {
     if fd < 0 {
         return Err(os_error(io::Error::last_os_error(), &path, None));
     }
-    Ok((
-        unsafe { File::from_raw_fd(fd) },
-        path.display().to_string(),
-    ))
+    Ok((unsafe { File::from_raw_fd(fd) }, path.display().to_string()))
 }
 /// `tempfile.mkdtemp(prefix=prefix, dir=parent)`
 fn mkdtemp(parent: &str, prefix: &str) -> Result<String> {
-    Ok(crate::alpha_annotation_base::io::stage(Path::new(parent), prefix)?
-        .display()
-        .to_string())
+    Ok(
+        crate::alpha_annotation_base::io::stage(Path::new(parent), prefix)?
+            .display()
+            .to_string(),
+    )
 }
 fn mkdirs(path: &str) -> Result<()> {
     fs::create_dir_all(path).map_err(|e| os_error(e, Path::new(path), None))
@@ -416,7 +426,11 @@ fn civil_from_days(days: i128) -> (i128, u32, u32) {
     let of_year = of_era - (365 * of_cycle + of_cycle / 4 - of_cycle / 100);
     let shifted = (5 * of_year + 2) / 153;
     let day = (of_year - (153 * shifted + 2) / 5 + 1) as u32;
-    let month = (if shifted < 10 { shifted + 3 } else { shifted - 9 }) as u32;
+    let month = (if shifted < 10 {
+        shifted + 3
+    } else {
+        shifted - 9
+    }) as u32;
     let year = of_cycle + era * 400 + if month <= 2 { 1 } else { 0 };
     (year, month, day)
 }
@@ -650,29 +664,42 @@ pub(crate) fn dispatch(args: &[String]) -> Result<()> {
 mod tests {
     use super::*;
 
-/// Days since 1970-01-01 of a proleptic Gregorian date.
-fn days_from_civil(year: i128, month: u32, day: u32) -> i128 {
-    let year = if month <= 2 { year - 1 } else { year };
-    let era = year.div_euclid(400);
-    let of_era = year - era * 400;
-    let month = month as i128;
-    let of_year = (153 * (if month > 2 { month - 3 } else { month + 9 }) + 2) / 5 + day as i128 - 1;
-    let of_cycle = of_era * 365 + of_era / 4 - of_era / 100 + of_year;
-    era * 146097 + of_cycle - 719468
-}
+    /// Days since 1970-01-01 of a proleptic Gregorian date.
+    fn days_from_civil(year: i128, month: u32, day: u32) -> i128 {
+        let year = if month <= 2 { year - 1 } else { year };
+        let era = year.div_euclid(400);
+        let of_era = year - era * 400;
+        let month = month as i128;
+        let of_year =
+            (153 * (if month > 2 { month - 3 } else { month + 9 }) + 2) / 5 + day as i128 - 1;
+        let of_cycle = of_era * 365 + of_era / 4 - of_era / 100 + of_year;
+        era * 146097 + of_cycle - 719468
+    }
 
     #[test]
     fn calendar_months_clamp_month_ends() {
-        assert_eq!(add_calendar_months((2026, 11, 30), 3).unwrap(), (2027, 2, 28));
-        assert_eq!(add_calendar_months((2023, 11, 30), 3).unwrap(), (2024, 2, 29));
-        assert_eq!(add_calendar_months((2026, 1, 31), 1).unwrap(), (2026, 2, 28));
+        assert_eq!(
+            add_calendar_months((2026, 11, 30), 3).unwrap(),
+            (2027, 2, 28)
+        );
+        assert_eq!(
+            add_calendar_months((2023, 11, 30), 3).unwrap(),
+            (2024, 2, 29)
+        );
+        assert_eq!(
+            add_calendar_months((2026, 1, 31), 1).unwrap(),
+            (2026, 2, 28)
+        );
         assert!(add_calendar_months((9999, 12, 1), 1).is_err());
     }
 
     #[test]
     fn utc_text_omits_zero_microseconds() {
         assert_eq!(utc_text(0, 0), "1970-01-01T00:00:00+00:00");
-        assert_eq!(utc_text(1_762_300_800, 5), "2025-11-05T00:00:00.000005+00:00");
+        assert_eq!(
+            utc_text(1_762_300_800, 5),
+            "2025-11-05T00:00:00.000005+00:00"
+        );
         assert_eq!(civil_from_days(days_from_civil(2024, 2, 29)), (2024, 2, 29));
     }
 
@@ -681,7 +708,10 @@ fn days_from_civil(year: i128, month: u32, day: u32) -> i128 {
         // Python: datetime.fromtimestamp(1 + 500e-9, timezone.utc) is 1.000001 s.
         assert_eq!(float_timestamp(1, 500), (1, 1));
         assert_eq!(float_timestamp(1, 999_999_600), (2, 0));
-        assert_eq!(float_timestamp(1_700_000_000, 123_456_789), (1_700_000_000, 123_457));
+        assert_eq!(
+            float_timestamp(1_700_000_000, 123_456_789),
+            (1_700_000_000, 123_457)
+        );
     }
 
     #[test]

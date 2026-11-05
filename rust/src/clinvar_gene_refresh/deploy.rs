@@ -13,7 +13,9 @@ use std::os::unix::process::ExitStatusExt;
 use std::process::Command;
 
 const RECOVERY_KIND: &str = "priva_clinvar_annotation_recovery_v1";
-const IDENTITY_FIELDS: [&str; 7] = ["dev", "ino", "mode", "nlink", "size", "mtime_ns", "ctime_ns"];
+const IDENTITY_FIELDS: [&str; 7] = [
+    "dev", "ino", "mode", "nlink", "size", "mtime_ns", "ctime_ns",
+];
 
 fn resolve(path: &str) -> Result<String> {
     crate::installer_prerequisites::paths::resolve(path)
@@ -34,7 +36,11 @@ pub(super) fn run_original(source_root: &str, function: &str, arguments: &[&str]
         .map_err(|e| os_error(e, Path::new("bash"), None))?;
     let listed = format!(
         "[{}]",
-        command.iter().map(|value| repr(value)).collect::<Vec<_>>().join(", ")
+        command
+            .iter()
+            .map(|value| repr(value))
+            .collect::<Vec<_>>()
+            .join(", ")
     );
     match (status.code(), status.signal()) {
         (Some(0), _) => Ok(()),
@@ -49,7 +55,10 @@ pub(super) fn run_original(source_root: &str, function: &str, arguments: &[&str]
                 crate::python_subprocess::signal_repr(signal)
             ),
         )),
-        _ => Err(error("CalledProcessError", format!("Command '{listed}' failed."))),
+        _ => Err(error(
+            "CalledProcessError",
+            format!("Command '{listed}' failed."),
+        )),
     }
 }
 
@@ -360,11 +369,19 @@ fn retirement_inventory(
     let mut protected = vec![context.config_path.clone()];
     if protect_target {
         let target = &context.target;
-        protected.extend([target.clone(), format!("{target}.tbi"), format!("{target}.csi")]);
+        protected.extend([
+            target.clone(),
+            format!("{target}.tbi"),
+            format!("{target}.csi"),
+        ]);
     }
     if let Some(source) = source_vcf {
         let source = absolute(Path::new(source))?;
-        protected.extend([source.clone(), format!("{source}.tbi"), format!("{source}.csi")]);
+        protected.extend([
+            source.clone(),
+            format!("{source}.tbi"),
+            format!("{source}.csi"),
+        ]);
     }
     let mut moves = Vec::new();
     for member in members.unwrap_or_else(|| retirement_members(context)) {
@@ -377,8 +394,8 @@ fn retirement_inventory(
         }
         let before = retirement_identity(&member)?;
         for item in &protected {
-            let aliased = resolve(&member)? == resolve(item)?
-                || (exists(item)? && same_file(&member, item)?);
+            let aliased =
+                resolve(&member)? == resolve(item)? || (exists(item)? && same_file(&member, item)?);
             require(
                 !aliased,
                 format!(
@@ -404,7 +421,10 @@ fn deployment_pending_path(context: &Context) -> Result<String> {
 /// `deployment_pending(context)`: this target's recovery journal, if any.
 fn deployment_pending(context: &Context) -> Result<Option<Json>> {
     let path = deployment_pending_path(context)?;
-    require(!is_symlink(&path)?, "Linked ClinVar recovery journal preserved")?;
+    require(
+        !is_symlink(&path)?,
+        "Linked ClinVar recovery journal preserved",
+    )?;
     if !exists(&path)? {
         return Ok(None);
     }
@@ -443,7 +463,11 @@ fn pinned_source_identity(context: &Context, source_vcf: Option<&str>) -> Result
     let prefix = format!("{}.", first_vcf_stem(context.target_name()));
     let source = absolute(Path::new(source))?;
     let folder = resolve(&context.folder)?;
-    for path in [source.clone(), format!("{source}.tbi"), format!("{source}.csi")] {
+    for path in [
+        source.clone(),
+        format!("{source}.tbi"),
+        format!("{source}.csi"),
+    ] {
         if !lexists(&path) {
             continue;
         }
@@ -669,7 +693,10 @@ fn retain_members(
 
 fn value_mut<'a>(value: &'a mut Json, key: &str) -> Option<&'a mut Json> {
     match value {
-        Json::Object(items) => items.iter_mut().find(|(name, _)| name == key).map(|(_, v)| v),
+        Json::Object(items) => items
+            .iter_mut()
+            .find(|(name, _)| name == key)
+            .map(|(_, v)| v),
         _ => None,
     }
 }
@@ -762,7 +789,11 @@ pub(super) fn retire_rebuilt_shards(
 
 /// `deploy_cache(config_path, source_root, source_vcf=...)`: one target is
 /// serialized independently of an enclosing gene-refresh lock.
-pub(super) fn deploy_cache(config_path: &str, source_root: &str, source_vcf: Option<&str>) -> Result<()> {
+pub(super) fn deploy_cache(
+    config_path: &str,
+    source_root: &str,
+    source_vcf: Option<&str>,
+) -> Result<()> {
     let context = deployment_context(config_path)?;
     let mut arguments = vec![config_path];
     if let Some(source) = source_vcf {
@@ -791,7 +822,10 @@ pub(super) fn deploy_cache(config_path: &str, source_root: &str, source_vcf: Opt
         || is_symlink(&lock_folder)?
         || is_symlink(&lock_path)?
         || (exists(&lock_path)? && (!is_file(&lock_path)? || stat(&lock_path)?.nlink() != 1));
-    require(!linked, "Linked ClinVar deployment lock directory preserved")?;
+    require(
+        !linked,
+        "Linked ClinVar deployment lock directory preserved",
+    )?;
     retirement_inventory(&context, source_vcf, None, false)?;
     pinned_source_identity(&context, source_vcf)?;
     let _lock = build_lock(&lock_folder)?;

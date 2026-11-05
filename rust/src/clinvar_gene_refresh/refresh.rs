@@ -10,7 +10,11 @@ use crate::python_path::absolute;
 fn os_failure(category: &str) -> bool {
     matches!(
         category,
-        "OSError" | "FileNotFoundError" | "PermissionError" | "IsADirectoryError" | "NotADirectoryError"
+        "OSError"
+            | "FileNotFoundError"
+            | "PermissionError"
+            | "IsADirectoryError"
+            | "NotADirectoryError"
     )
 }
 fn same(left: &Json, right: &Json) -> bool {
@@ -64,7 +68,10 @@ fn baseline_metadata(path: &str) -> Result<Json> {
     let info = stat(path)?;
     let (seconds, micros) = float_timestamp(info.mtime(), info.mtime_nsec());
     value.set("size", Json::Int(info.len() as i128));
-    value.set("mtime_ns", Json::Int(nanoseconds(info.mtime(), info.mtime_nsec())));
+    value.set(
+        "mtime_ns",
+        Json::Int(nanoseconds(info.mtime(), info.mtime_nsec())),
+    );
     value.set("mtime_utc", string(utc_text(seconds, micros)));
     Ok(value)
 }
@@ -105,7 +112,12 @@ fn suffix(path: &str) -> &str {
 
 /// `selected_receipt(selected, root, ...)`: the owned refresh receipt for the
 /// selected statistics, following a cache-install copy to its source.
-fn selected_receipt(selected: &str, root: &str, assembly: &str, major: &str) -> Result<Option<Json>> {
+fn selected_receipt(
+    selected: &str,
+    root: &str,
+    assembly: &str,
+    major: &str,
+) -> Result<Option<Json>> {
     let known = owned_receipt(selected, assembly, major)?;
     let record_path = format!("{selected}.source.json");
     if known.is_some() || suffix(selected) != ".rkyv" || !is_file(&record_path)? {
@@ -207,10 +219,16 @@ fn validate_reuse(prior: &Json, plan: &Json) -> Result<()> {
         };
         require(
             same(&current, &recorded),
-            format!("Completed ClinVar artifact changed: {label}: {}", py_str(path)),
+            format!(
+                "Completed ClinVar artifact changed: {label}: {}",
+                py_str(path)
+            ),
         )?;
     }
-    let mut labels: Vec<String> = updates_of(&artifacts)?.into_iter().map(|(k, _)| k).collect();
+    let mut labels: Vec<String> = updates_of(&artifacts)?
+        .into_iter()
+        .map(|(k, _)| k)
+        .collect();
     labels.sort();
     require(
         labels == ["aa", "splice", "vcf", "vcf_index"],
@@ -275,7 +293,10 @@ pub(super) fn plan_refresh(config_path: &str, source_root: &str) -> Result<Json>
         ("vep_major", string(major.clone())),
         ("selected_stat", string(selected.clone())),
         ("action", string("preserve")),
-        ("reason", string("explicitly selected statistics are retained")),
+        (
+            "reason",
+            string("explicitly selected statistics are retained"),
+        ),
     ]);
     if !is_baseline && known.is_none() {
         return Ok(plan);
@@ -291,7 +312,9 @@ pub(super) fn plan_refresh(config_path: &str, source_root: &str) -> Result<Json>
         plan.set("resource_policy", policy);
         plan.set(
             "reason",
-            string("automatic ClinVar gene-statistics refresh is disabled in the resource registry"),
+            string(
+                "automatic ClinVar gene-statistics refresh is disabled in the resource registry",
+            ),
         );
         return Ok(plan);
     }
@@ -369,14 +392,18 @@ pub(super) fn plan_refresh(config_path: &str, source_root: &str) -> Result<Json>
             date_text(local_file_date(&input_vcf)?)
         )));
     }
-    let reuse = prior
-        .as_ref()
-        .is_some_and(|prior| same(&get_or_null(prior, "data_date").unwrap_or(Json::Null), &string(file_date.clone())));
+    let reuse = prior.as_ref().is_some_and(|prior| {
+        same(
+            &get_or_null(prior, "data_date").unwrap_or(Json::Null),
+            &string(file_date.clone()),
+        )
+    });
     plan.set("action", string(if reuse { "reuse" } else { "rebuild" }));
     plan.set(
         "reason",
         string(if missing {
-            "missing/empty bundled ClinVar gene statistics require managed reconstruction".to_owned()
+            "missing/empty bundled ClinVar gene statistics require managed reconstruction"
+                .to_owned()
         } else {
             format!("latest ClinVar data date reaches the {months}-calendar-month boundary")
         }),
@@ -388,7 +415,11 @@ pub(super) fn plan_refresh(config_path: &str, source_root: &str) -> Result<Json>
     plan.set("explicit_vcf", Json::Bool(!managed));
     plan.set(
         "explicit_vcf_identity",
-        if managed { Json::Null } else { identity(&input_vcf)? },
+        if managed {
+            Json::Null
+        } else {
+            identity(&input_vcf)?
+        },
     );
     plan.set("scientific_profile", profile);
     plan.set("scientific_profile_sha256", string(signature));
@@ -419,7 +450,10 @@ fn require_workspace_owner(plan: &Json) -> Result<()> {
                 &get_or_null(&previous, "explicit_vcf_identity")?,
                 item(plan, "explicit_vcf_identity")?,
             )
-            && same(&get_or_null(&latest, "file_date")?, item(plan_latest, "file_date")?)
+            && same(
+                &get_or_null(&latest, "file_date")?,
+                item(plan_latest, "file_date")?,
+            )
             && same(
                 &get_or_null(&latest, "publisher_md5")?,
                 item(plan_latest, "publisher_md5")?,
@@ -465,7 +499,10 @@ fn complete_refresh(plan: &Json, working: &str, inputs: &Json) -> Result<()> {
         }
     }
     require(
-        same(&baseline_metadata(&path_of(item(recorded, "path")?)?)?, &before),
+        same(
+            &baseline_metadata(&path_of(item(recorded, "path")?)?)?,
+            &before,
+        ),
         "Bundled ClinVar metadata changed during regeneration; no new selection was written",
     )?;
     let current = load_config(working)?;
@@ -473,14 +510,22 @@ fn complete_refresh(plan: &Json, working: &str, inputs: &Json) -> Result<()> {
     let policy = resource_policy(&source_root)?;
     let now = scientific_profile(&load_config(&original)?, &source_root, &policy)?;
     require(
-        profile_signature(Some(&now))? == profile_signature(Some(item(plan, "scientific_profile")?))?,
+        profile_signature(Some(&now))?
+            == profile_signature(Some(item(plan, "scientific_profile")?))?,
         "ClinVar scientific inputs/source changed during regeneration; no new selection was written",
     )?;
     let ucsc = text_of(item(plan, "ucsc_assembly")?);
-    let vcf = selected_vcf(&current, &path_of(item(&current, "clinvar_vcf_dir")?)?, &ucsc)?;
+    let vcf = selected_vcf(
+        &current,
+        &path_of(item(&current, "clinvar_vcf_dir")?)?,
+        &ucsc,
+    )?;
     let latest = item(plan, "latest")?;
     require(
-        same(&string(date_text(local_file_date(&vcf)?)), item(latest, "file_date")?),
+        same(
+            &string(date_text(local_file_date(&vcf)?)),
+            item(latest, "file_date")?,
+        ),
         "Completed annotation fileDate differs from the detected latest ClinVar release",
     )?;
     let mut updates = Vec::new();
@@ -488,7 +533,10 @@ fn complete_refresh(plan: &Json, working: &str, inputs: &Json) -> Result<()> {
         updates.push((key.to_owned(), string(py_str(item(&current, key)?))));
     }
     let output = path_of(item(plan, "output_path")?)?;
-    updates.push(("clinvar_gene_stat".to_owned(), item(plan, "output_path")?.clone()));
+    updates.push((
+        "clinvar_gene_stat".to_owned(),
+        item(plan, "output_path")?.clone(),
+    ));
     let mut updates_json = Json::Object(Vec::new());
     for (key, value) in &updates {
         updates_json.set(key, value.clone());
@@ -496,12 +544,25 @@ fn complete_refresh(plan: &Json, working: &str, inputs: &Json) -> Result<()> {
     let completed = object([
         ("vcf", identity(&vcf)?),
         ("vcf_index", identity(&format!("{vcf}.tbi"))?),
-        ("aa", identity(&path_of(item(&current, "clinvar_aa_stat")?)?)?),
-        ("splice", identity(&path_of(item(&current, "clinvar_splice_stat")?)?)?),
+        (
+            "aa",
+            identity(&path_of(item(&current, "clinvar_aa_stat")?)?)?,
+        ),
+        (
+            "splice",
+            identity(&path_of(item(&current, "clinvar_splice_stat")?)?)?,
+        ),
     ]);
     let mut sources = Json::Object(Vec::new());
-    for name in ["clinvar_stat_variants.py", "combine_annotations.py", "annotation_vcf.sh"] {
-        sources.set(name, string(sha256(&join(&source_root, &format!("scripts/{name}")))?));
+    for name in [
+        "clinvar_stat_variants.py",
+        "combine_annotations.py",
+        "annotation_vcf.sh",
+    ] {
+        sources.set(
+            name,
+            string(sha256(&join(&source_root, &format!("scripts/{name}")))?),
+        );
     }
     let value = object([
         ("kind", string(RECEIPT_KIND)),
@@ -515,7 +576,10 @@ fn complete_refresh(plan: &Json, working: &str, inputs: &Json) -> Result<()> {
         ("latest", latest.clone()),
         ("inputs", inputs.clone()),
         ("resource_policy", item(plan, "resource_policy")?.clone()),
-        ("scientific_profile", item(plan, "scientific_profile")?.clone()),
+        (
+            "scientific_profile",
+            item(plan, "scientific_profile")?.clone(),
+        ),
         (
             "scientific_profile_sha256",
             item(plan, "scientific_profile_sha256")?.clone(),
@@ -539,8 +603,14 @@ fn complete_refresh(plan: &Json, working: &str, inputs: &Json) -> Result<()> {
 /// `install_refresh(config_path, source_root)`
 pub(super) fn install_refresh(config_path: &str, source_root: &str) -> Result<Json> {
     // Preflight selected inputs before metadata access or any acquisition.
-    let prerequisites = crate::installer_prerequisites::Config::load(&read_text(config_path)?, true)?;
-    crate::installer_prerequisites::checks::validate_main(&prerequisites, source_root, false, true)?;
+    let prerequisites =
+        crate::installer_prerequisites::Config::load(&read_text(config_path)?, true)?;
+    crate::installer_prerequisites::checks::validate_main(
+        &prerequisites,
+        source_root,
+        false,
+        true,
+    )?;
     let mut plan = plan_refresh(config_path, source_root)?;
     let action = text_of(item(&plan, "action")?);
     println!(
@@ -571,7 +641,10 @@ pub(super) fn install_refresh(config_path: &str, source_root: &str) -> Result<Js
             "Configuration changed while waiting for the ClinVar refresh lock",
         )?;
         let updates = updates_of(item(&prior, "config_updates")?)?;
-        atomic_text(config_path, &render_config(&read_text(config_path)?, &updates)?)?;
+        atomic_text(
+            config_path,
+            &render_config(&read_text(config_path)?, &updates)?,
+        )?;
         plan.set("action", string("reuse"));
         return Ok(plan);
     }
@@ -596,7 +669,10 @@ pub(super) fn install_refresh(config_path: &str, source_root: &str) -> Result<Js
             ));
         }
     }
-    atomic_text(&working, &render_config(&read_text(config_path)?, &updates)?)?;
+    atomic_text(
+        &working,
+        &render_config(&read_text(config_path)?, &updates)?,
+    )?;
     let source = text_of(item(item(item(&inputs, "sources")?, "vcf")?, "path")?);
     let mut arguments = vec![working.as_str()];
     if !explicit {
@@ -610,7 +686,10 @@ pub(super) fn install_refresh(config_path: &str, source_root: &str) -> Result<Js
         &ucsc,
     )?;
     require(
-        same(&string(date_text(local_file_date(&annotated)?)), &latest_date),
+        same(
+            &string(date_text(local_file_date(&annotated)?)),
+            &latest_date,
+        ),
         "Managed ClinVar annotation has an older/different fileDate; refusing reuse",
     )?;
     run_original(source_root, "ClinVar_AA_stat", &[&working])?;

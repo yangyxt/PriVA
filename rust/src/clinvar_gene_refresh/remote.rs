@@ -35,7 +35,10 @@ impl Response {
     }
     /// Waits for curl after the body was read; a failed transfer is URLError.
     fn finish(mut self) -> Result<()> {
-        let output = self.child.wait().map_err(|e| os_error(e, Path::new("curl"), None))?;
+        let output = self
+            .child
+            .wait()
+            .map_err(|e| os_error(e, Path::new("curl"), None))?;
         let mut reason = String::new();
         if let Some(mut stderr) = self.child.stderr.take() {
             stderr.read_to_string(&mut reason).ok();
@@ -61,13 +64,17 @@ impl Drop for Response {
 
 /// The status line's code and reason, skipping informational replies and
 /// the redirects curl followed.
-fn read_head(reader: &mut impl BufRead) -> io::Result<Option<(u16, String, Vec<(String, String)>)>> {
+fn read_head(
+    reader: &mut impl BufRead,
+) -> io::Result<Option<(u16, String, Vec<(String, String)>)>> {
     loop {
         let mut line = Vec::new();
         if reader.read_until(b'\n', &mut line)? == 0 {
             return Ok(None);
         }
-        let text = String::from_utf8_lossy(&line).trim_end_matches(['\r', '\n']).to_owned();
+        let text = String::from_utf8_lossy(&line)
+            .trim_end_matches(['\r', '\n'])
+            .to_owned();
         let mut words = text.splitn(3, ' ');
         let version = words.next().unwrap_or_default();
         let status = words.next().and_then(|code| code.parse::<u16>().ok());
@@ -84,7 +91,9 @@ fn read_head(reader: &mut impl BufRead) -> io::Result<Option<(u16, String, Vec<(
             if reader.read_until(b'\n', &mut line)? == 0 {
                 return Ok(None);
             }
-            let field = String::from_utf8_lossy(&line).trim_end_matches(['\r', '\n']).to_owned();
+            let field = String::from_utf8_lossy(&line)
+                .trim_end_matches(['\r', '\n'])
+                .to_owned();
             if field.is_empty() {
                 break;
             }
@@ -92,9 +101,13 @@ fn read_head(reader: &mut impl BufRead) -> io::Result<Option<(u16, String, Vec<(
                 headers.push((name.to_owned(), value.trim_matches([' ', '\t']).to_owned()));
             }
         }
-        let location = headers.iter().any(|(name, _)| name.eq_ignore_ascii_case("location"));
+        let location = headers
+            .iter()
+            .any(|(name, _)| name.eq_ignore_ascii_case("location"));
         if (100..200).contains(&status)
-            || ((300..400).contains(&status) && location && reader.fill_buf()?.starts_with(b"HTTP/"))
+            || ((300..400).contains(&status)
+                && location
+                && reader.fill_buf()?.starts_with(b"HTTP/"))
         {
             continue;
         }
@@ -207,7 +220,8 @@ fn stamp_date(stamp: &str) -> Result<Date> {
     let dashed = stamp.contains('-');
     let format = if dashed { "%Y-%m-%d" } else { "%Y%m%d" };
     let bytes = stamp.as_bytes();
-    let digit = |at: usize, low: u8, high: u8| bytes.get(at).is_some_and(|b| (low..=high).contains(b));
+    let digit =
+        |at: usize, low: u8, high: u8| bytes.get(at).is_some_and(|b| (low..=high).contains(b));
     // %Y takes four digits; the dashed form then has its literal '-'.
     let first = if dashed { 5 } else { 4 };
     // %m: 1[0-2]|0[1-9]|[1-9]
@@ -263,7 +277,13 @@ fn file_date_stamp(line: &[u8]) -> Option<&str> {
     let digits = |part: &[u8]| part.iter().all(u8::is_ascii_digit);
     let valid = match body.len() {
         8 => digits(body),
-        10 => body[4] == b'-' && body[7] == b'-' && digits(&body[..4]) && digits(&body[5..7]) && digits(&body[8..]),
+        10 => {
+            body[4] == b'-'
+                && body[7] == b'-'
+                && digits(&body[..4])
+                && digits(&body[5..7])
+                && digits(&body[8..])
+        }
         _ => false,
     };
     valid.then(|| std::str::from_utf8(body).unwrap_or_default())
@@ -297,7 +317,8 @@ fn header_date(reader: &mut impl BufRead, path: &str) -> Result<Date> {
             )?;
             result = Some(found);
         } else if line.starts_with(b"#CHROM\t") {
-            return result.ok_or_else(|| value_error("ClinVar VCF header has no fileDate data date"));
+            return result
+                .ok_or_else(|| value_error("ClinVar VCF header has no fileDate data date"));
         } else {
             require(
                 line.starts_with(b"##"),
@@ -467,7 +488,8 @@ fn acquire_file(url: &str, destination: &str, expected_md5: Option<&str>) -> Res
     if !reusable {
         let parent = parent_of(destination);
         mkdirs(&parent)?;
-        let (mut output, temporary) = mkstemp(&parent, &format!("{}.partial.", name_of(destination)))?;
+        let (mut output, temporary) =
+            mkstemp(&parent, &format!("{}.partial.", name_of(destination)))?;
         let result = (|| -> Result<()> {
             let mut response = open_url(url, false)?;
             provenance = object([
@@ -488,7 +510,8 @@ fn acquire_file(url: &str, destination: &str, expected_md5: Option<&str>) -> Res
                 )?;
             }
             if destination.ends_with(".gz") {
-                let file = File::open(&temporary).map_err(|e| os_error(e, Path::new(&temporary), None))?;
+                let file =
+                    File::open(&temporary).map_err(|e| os_error(e, Path::new(&temporary), None))?;
                 io::copy(&mut PythonGzipReader::new(file), &mut io::sink())
                     .map_err(|cause| read_failure(cause, &temporary))?;
             }
@@ -527,7 +550,10 @@ pub(super) fn acquire_inputs(plan: &Json) -> Result<Json> {
         let path = path_of(item(plan, "input_vcf")?)?;
         sources.set(
             "vcf",
-            identity_with(&path, vec![("kind", string("explicit_complete_annotated_vcf"))])?,
+            identity_with(
+                &path,
+                vec![("kind", string("explicit_complete_annotated_vcf"))],
+            )?,
         );
     } else {
         let stamp = file_date.replace('-', "");
@@ -540,7 +566,10 @@ pub(super) fn acquire_inputs(plan: &Json) -> Result<Json> {
             lookup(latest, "publisher_md5")?.and_then(Json::as_str) == Some(expected.as_str()),
             "Official ClinVar changed after latest-data detection; no replacement selected",
         )?;
-        let vcf = join(&folder, &format!("clinvar_{stamp}.{assembly}.md5_{expected}.vcf.gz"));
+        let vcf = join(
+            &folder,
+            &format!("clinvar_{stamp}.{assembly}.md5_{expected}.vcf.gz"),
+        );
         sources.set("vcf", acquire_file(&url, &vcf, Some(&expected))?);
         sources.set(
             "index",
@@ -559,7 +588,10 @@ pub(super) fn acquire_inputs(plan: &Json) -> Result<Json> {
         "summary",
         acquire_file(
             &summary_url,
-            &join(&folder, &format!("variant_summary.md5_{summary_md5}.txt.gz")),
+            &join(
+                &folder,
+                &format!("variant_summary.md5_{summary_md5}.txt.gz"),
+            ),
             Some(&summary_md5),
         )?,
     );
@@ -578,7 +610,10 @@ pub(super) fn acquire_inputs(plan: &Json) -> Result<Json> {
     )?;
     require(
         json_text::py_equal(item(&after, "file_date")?, item(latest, "file_date")?)
-            && json_text::py_equal(item(&after, "publisher_md5")?, item(latest, "publisher_md5")?),
+            && json_text::py_equal(
+                item(&after, "publisher_md5")?,
+                item(latest, "publisher_md5")?,
+            ),
         "Official ClinVar changed during acquisition; no partial release was selected",
     )?;
     let release = mane_url
@@ -611,8 +646,14 @@ mod tests {
 
     #[test]
     fn file_dates_come_from_the_bounded_header() {
-        assert_eq!(date_of("##fileformat=VCFv4.1\n##fileDate=2026-10-27\n#CHROM\tPOS\n"), Ok((2026, 10, 27)));
-        assert_eq!(date_of("##fileDate=20261027\r\n#CHROM\tPOS\n"), Ok((2026, 10, 27)));
+        assert_eq!(
+            date_of("##fileformat=VCFv4.1\n##fileDate=2026-10-27\n#CHROM\tPOS\n"),
+            Ok((2026, 10, 27))
+        );
+        assert_eq!(
+            date_of("##fileDate=20261027\r\n#CHROM\tPOS\n"),
+            Ok((2026, 10, 27))
+        );
         assert_eq!(
             date_of("##fileDate=2026-10-27\n##fileDate=20261028\n#CHROM\t\n"),
             Err("Conflicting ClinVar fileDate header values".into())
@@ -636,26 +677,40 @@ mod tests {
         let message = |stamp| stamp_date(stamp).map_err(|failure| exception(failure.as_ref()).1);
         assert_eq!(message("2026-10-27"), Ok((2026, 10, 27)));
         assert_eq!(message("20261027"), Ok((2026, 10, 27)));
-        assert_eq!(message("2026-02-30"), Err("day is out of range for month".into()));
+        assert_eq!(
+            message("2026-02-30"),
+            Err("day is out of range for month".into())
+        );
         assert_eq!(
             message("2026-13-01"),
             Err("time data '2026-13-01' does not match format '%Y-%m-%d'".into())
         );
-        assert_eq!(message("20261301"), Err("unconverted data remains: 1".into()));
-        assert_eq!(message("2026-10-32"), Err("unconverted data remains: 2".into()));
+        assert_eq!(
+            message("20261301"),
+            Err("unconverted data remains: 1".into())
+        );
+        assert_eq!(
+            message("2026-10-32"),
+            Err("unconverted data remains: 2".into())
+        );
         assert_eq!(message("0000-01-01"), Err("year 0 is out of range".into()));
     }
 
     #[test]
     fn templates_format_like_str_format() {
-        assert_eq!(format_template("a/{assembly}/b", "GRCh38").unwrap(), "a/GRCh38/b");
+        assert_eq!(
+            format_template("a/{assembly}/b", "GRCh38").unwrap(),
+            "a/GRCh38/b"
+        );
         assert_eq!(format_template("{{x}}{assembly}", "G").unwrap(), "{x}G");
         assert!(format_template("a}{assembly}", "G").is_err());
     }
 
     #[test]
     fn redirects_are_followed_to_the_final_reply() {
-        let mut text = &b"HTTP/1.1 302 Found\r\nLocation: /b\r\n\r\nHTTP/1.1 404 Not Found\r\nETag: x\r\n\r\n"[..];
+        let mut text =
+            &b"HTTP/1.1 302 Found\r\nLocation: /b\r\n\r\nHTTP/1.1 404 Not Found\r\nETag: x\r\n\r\n"
+                [..];
         let (status, reason, headers) = read_head(&mut text).unwrap().unwrap();
         assert_eq!((status, reason.as_str()), (404, "Not Found"));
         assert_eq!(headers, [("ETag".to_owned(), "x".to_owned())]);

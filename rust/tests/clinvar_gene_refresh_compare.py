@@ -39,7 +39,7 @@ import sys
 import time
 
 sys.dont_write_bytecode = True
-PRODUCER_SHA256 = "3c11bea9ff24aa883c941fe61bdf219b895fd68338151a3bcef32421ab45c9ee"
+PRODUCER_SHA256 = "ee238e18dfd582b50b62fad346aa89557c88200a52f06198ae00be12c8156d86"
 MTIME = 1_700_000_000_123_456_789
 OLD = 1_600_000_000_000_000_000
 # A recent bundled baseline: its three-month boundary lies after the latest ClinVar release.

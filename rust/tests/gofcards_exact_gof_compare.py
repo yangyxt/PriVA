@@ -155,8 +155,8 @@ def row(gene, chrom, start, ref=None, alt=None, length=1, vep="same", **override
         alt = {"A": "C", "C": "G", "G": "T", "T": "A"}.get(ref[0], "T")
     values = {"GeneSymbol": gene, "Transcript": "NM_000001.1", "Chr": chrom, "hg19Start": start,
               "hg19End": start + max(len(ref), 1) - 1 if start is not None else None, "Ref": ref, "Alt": alt, "Function": "gain of function",
-              "Pathways Proteins Involved": "pathway A", "Disorder Involved": "disease A", "PMID": 1000 + start,
-              "Animal Model": "mouse", "Cell Model": "_", "Pscore": 0.5, "Order Numbe": start}
+              "Pathways Proteins Involved": "pathway A", "Disorder Involved": "disease A", "PMID": 1000 + (start or 0),
+              "Animal Model": "mouse", "Cell Model": "_", "Pscore": 0.5, "Order Numbe": start or 0}
     values.update(overrides)
     values["vep"] = gene if vep == "same" else vep
     return values

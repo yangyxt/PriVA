@@ -1562,7 +1562,7 @@ function AlphaMissense_pick_missense_constrained_segments() {
     local original_motifs=$alphamissense_intolerant_motifs
     if [[ -e "$alphamissense_intolerant_motifs" || -L "$alphamissense_intolerant_motifs" ||
           -e "${alphamissense_intolerant_motifs}.nm_to_enst.json" || -L "${alphamissense_intolerant_motifs}.nm_to_enst.json" ]]; then
-        alphamissense_intolerant_motifs=$(python "${SCRIPT_DIR}/biomart_nm_to_enst.py" artifact-route \
+        alphamissense_intolerant_motifs=$("${PRIVA_BIN}" biomart artifact-route --helper-root "$BASE_DIR" \
             --artifact "$alphamissense_intolerant_motifs" --mapping "$nm_to_enst_tsv" \
             --cache-root "$(read_yaml "$config_file" cache_root)" \
             --output-dir "$(read_yaml "$config_file" vep_plugins_cachedir)/AlphaMissense" \
@@ -1579,8 +1579,8 @@ function AlphaMissense_pick_missense_constrained_segments() {
     log "The AlphaMissense intolerant motifs file ${alphamissense_intolerant_motifs} is not generated, we will generate it"
 
     local mapping_identity
-    mapping_identity=$(python "${SCRIPT_DIR}/biomart_nm_to_enst.py" identity \
-        "${nm_to_enst_tsv}" "${mapping_inputs[@]}") || return 1
+    mapping_identity=$("${PRIVA_BIN}" biomart identity --helper-root "$BASE_DIR" \
+        --mapping "${nm_to_enst_tsv}" "${mapping_inputs[@]}") || return 1
 
     mkdir -p "$(dirname "$alphamissense_intolerant_motifs")" || return 1
 
@@ -2072,7 +2072,7 @@ function prepare_pm1_regions() {
     local original_pm1=$pm1_regions
     if [[ -e "$pm1_regions" || -L "$pm1_regions" ||
           -e "${pm1_regions}.nm_to_enst.json" || -L "${pm1_regions}.nm_to_enst.json" ]]; then
-        pm1_regions=$(python "${SCRIPT_DIR}/biomart_nm_to_enst.py" artifact-route \
+        pm1_regions=$("${PRIVA_BIN}" biomart artifact-route --helper-root "$BASE_DIR" \
             --artifact "$pm1_regions" --mapping "$nm_to_enst_tsv" \
             --cache-root "$(read_yaml "$config_file" cache_root)" \
             --output-dir "$(read_yaml "$config_file" vep_plugins_cachedir)/AlphaMissense" \
@@ -2091,8 +2091,8 @@ function prepare_pm1_regions() {
     log "Preparing PM1 regions (DAS + HCSeeker + RMC) …"
 
     local mapping_identity
-    mapping_identity=$(python "${SCRIPT_DIR}/biomart_nm_to_enst.py" identity \
-        "${nm_to_enst_tsv}" "${mapping_inputs[@]}") || return 1
+    mapping_identity=$("${PRIVA_BIN}" biomart identity --helper-root "$BASE_DIR" \
+        --mapping "${nm_to_enst_tsv}" "${mapping_inputs[@]}") || return 1
 
     mkdir -p "$(dirname -- "$pm1_regions")" || return 1
     "${PRIVA_BIN}" mapped-artifact run \

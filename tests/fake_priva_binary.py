@@ -30,6 +30,9 @@ and `gofcards-clinvar-injection` runs scripts/inject_clinvar_into_gofcards.py
 with every option except --source-root.
 `gofcards-cache-validate` runs scripts/validate_gofcards_cache.py with the same
 arguments.
+`biomart identity/artifact-route/verify/fetch` runs scripts/biomart_nm_to_enst.py
+with every option except --helper-root; --mapping is the script's positional
+argument for identity and verify.
 `installer-config-paths resolve/managed-roots` runs scripts/installer_config_paths.py
 with the same subcommand and options; it needs an explicit PYTHONHASHSEED, as the
 native command does.
@@ -278,6 +281,21 @@ elif command == "gofcards-clinvar-injection":
             remaining.pop(0)
         else:
             forwarded.append(token)
+elif command == "biomart" and rest[:1] in (["identity"], ["artifact-route"], ["verify"], ["fetch"]):
+    flags = [value for value in rest[1:] if value == "--print-path"]
+    names = {"identity": {"--mapping", "--input"}, "verify": {"--mapping", "--assembly"},
+             "artifact-route": {"--artifact", "--mapping", "--cache-root", "--output-dir", "--assembly",
+                                "--kind", "--artifact-format", "--input"},
+             "fetch": {"--source", "--output", "--raw-output", "--resource-dir", "--timeout", "--attempts"}}
+    pairs = options([value for value in rest[1:] if value != "--print-path"], names[rest[0]] | {"--helper-root"})
+    if "--helper-root" not in dict(pairs):
+        raise SystemExit("priva fixture: biomart needs --helper-root")
+    pairs = [pair for pair in pairs if pair[0] != "--helper-root"]
+    script, forwarded = "biomart_nm_to_enst.py", [rest[0]]
+    if rest[0] in ("identity", "verify"):
+        forwarded.append(dict(pairs)["--mapping"])
+        pairs = [pair for pair in pairs if pair[0] != "--mapping"]
+    forwarded += [*sum(pairs, ()), *flags]
 elif command == "clinvar-contract" and rest[:1] == ["legacy-cache"]:
     values = dict(options(rest[1:], {"--input", "--kind"}))
     script = "clinvar_annotation_contract.py"

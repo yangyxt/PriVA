@@ -8,7 +8,7 @@ use std::fs::{self, File};
 use std::io::{BufWriter, Read, Seek, Write};
 use std::path::Path;
 
-pub(super) fn read(path: &Path, delimiter: u8, skip_bad: bool) -> Result<Table> {
+pub(crate) fn read(path: &Path, delimiter: u8, skip_bad: bool) -> Result<Table> {
     let file = File::open(path).map_err(|e| os_error(e, path, None))?;
     if file.metadata()?.is_dir() {
         return Err(os_error(
@@ -48,6 +48,28 @@ pub(super) fn read(path: &Path, delimiter: u8, skip_bad: bool) -> Result<Table> 
             None => error("OSError", e.to_string()),
         })?;
     decode_and_parse(&bytes, delimiter, skip_bad)
+}
+
+/// `pd.read_csv(..., skiprows=skip)` for an uncompressed table: the first
+/// `skip` lines (any of the universal line endings) are not read.
+pub(crate) fn read_skipping(path: &Path, delimiter: u8, skip_bad: bool, skip: usize) -> Result<Table> {
+    if skip == 0 {
+        return read(path, delimiter, skip_bad);
+    }
+    let mut bytes = Vec::new();
+    File::open(path)
+        .and_then(|mut file| file.read_to_end(&mut bytes))
+        .map_err(|e| os_error(e, path, None))?;
+    let text = decode_text(&bytes).map_err(|failed| failed.cause)?;
+    let mut rest = text.as_str();
+    for _ in 0..skip {
+        let Some(end) = rest.find(['\r', '\n']) else {
+            rest = "";
+            break;
+        };
+        rest = &rest[end + if rest[end..].starts_with("\r\n") { 2 } else { 1 }..];
+    }
+    Ok(parse(rest, delimiter, skip_bad, true)?.unwrap())
 }
 
 fn member_names(names: &[String]) -> String {

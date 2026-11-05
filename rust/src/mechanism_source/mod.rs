@@ -62,6 +62,10 @@ fn finite_number(text: &str) -> bool {
         .collect();
     crate::python_text::parse_float(&converted).is_some_and(f64::is_finite)
 }
+/// `validate_source_payload(path, kind)` for the acquisition helpers.
+pub(crate) fn validate_payload(path: &Path, kind: &str) -> Result<()> {
+    validate(path, kind)
+}
 fn validate(path: &Path, kind: &str) -> Result<()> {
     require(
         is_file(path)? && metadata(path)?.len() > 0,

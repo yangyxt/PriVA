@@ -4479,14 +4479,31 @@ function gofcards_exact_gof_cache_install() {
 }
 
 
+function gene_nonlof_mechanism_builder_is_default() {
+    # The checkout's own builder runs as priva gene-nonlof-mechanism, whose
+    # build receipt keeps that script's SHA-256, so either one reuses the
+    # other's cache. A separately configured builder script keeps running
+    # with python.
+    [[ $(realpath -m -- "${1}") == $(realpath -m -- "${SCRIPT_DIR}/build_gene_nonlof_mechanism_cache.py") ]]
+}
+
+
 function validate_gene_nonlof_mechanism_cache() {
     local builder_script=${1}
     local cache_json=${2}
     local schema_json=${3}
+    local config_file=${4:-}
 
     [[ -f ${builder_script} ]] || { log "ERROR: Non-LOF builder not found: ${builder_script}"; return 1; }
     [[ -s ${cache_json} ]] || { log "ERROR: Missing/empty non-LOF cache: ${cache_json}"; return 1; }
     [[ -s ${schema_json} ]] || { log "ERROR: Missing/empty non-LOF schema: ${schema_json}"; return 1; }
+    if [[ -n ${config_file} ]] && gene_nonlof_mechanism_builder_is_default "${builder_script}"; then
+        priva_resolve_binary "${config_file}" || return 1
+        "${PRIVA_BIN}" gene-nonlof-mechanism --source-root "${BASE_DIR}" \
+            --output-schema "${schema_json}" \
+            --validate-only "${cache_json}"
+        return
+    fi
     python "${builder_script}" \
         --output-schema "${schema_json}" \
         --validate-only "${cache_json}"
@@ -4555,8 +4572,12 @@ function gene_nonlof_mechanism_cache_install() {
     fi
     mkdir -p "${cache_dir}" "${raw_dir}" "$(dirname "${cache_json}")" || return 1
 
+    local -a builder_command=(python "${builder_script}")
+    if gene_nonlof_mechanism_builder_is_default "${builder_script}"; then
+        priva_resolve_binary "${config_file}" || return 1
+        builder_command=("${PRIVA_BIN}" gene-nonlof-mechanism --source-root "${BASE_DIR}")
+    fi
     local -a builder_args=(
-        "${builder_script}"
         --cache-dir "${cache_dir}"
         --shared-raw-dir "${raw_dir}"
         --gofcards-exact-variants "${gofcards_variants}"
@@ -4590,7 +4611,7 @@ function gene_nonlof_mechanism_cache_install() {
     else
         log "Checking PriVA non-LOF/ClinVar mechanism sources and rebuilding only when inputs changed"
     fi
-    python "${builder_args[@]}" || {
+    "${builder_command[@]}" "${builder_args[@]}" || {
         log "ERROR: PriVA non-LOF mechanism builder failed (mode=${mode})"
         return 1
     }
@@ -4612,7 +4633,7 @@ function gene_nonlof_mechanism_cache_install() {
     fi
 
     validate_gene_nonlof_mechanism_cache \
-        "${builder_script}" "${cache_json}" "${schema_json}" || {
+        "${builder_script}" "${cache_json}" "${schema_json}" "${config_file}" || {
         log "ERROR: PriVA non-LOF mechanism cache validation failed"
         return 1
     }

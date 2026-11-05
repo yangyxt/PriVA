@@ -1,7 +1,7 @@
 //! CPython 3.12 Unicode 15.0 Letter/Number membership for regex word boundaries.
 //! Generated from str.isalnum over every Unicode codepoint. This is local
 //! to the condition-evidence builder; existing consumers keep their policies.
-pub(super) fn is_word(character: char) -> bool {
+pub(crate) fn is_word(character: char) -> bool {
     if character == '_' {
         return true;
     }

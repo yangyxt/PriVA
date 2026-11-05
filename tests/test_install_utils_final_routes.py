@@ -299,6 +299,7 @@ python() {
 validate_gene_pathogenic_mechanism_evidence() { return 0; }
 validate_gene_nonlof_mechanism_cache() { return 0; }
 validate_hpo_condition_mechanism_cache() { return 0; }
+export -f python event
 '''
 
     def test_custom_vcv_selection_is_passed_to_both_builder_phases_and_not_replaced(self):

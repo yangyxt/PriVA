@@ -1,8 +1,9 @@
 //! Optional prepared G2P/Orphadata condition-evidence procedures.
 //! Source order, filtering, default-source catches and publication match the
 //! Python builder. These commands do not acquire sources or activate callers.
-mod table;
+pub(crate) mod table;
 mod word;
+pub(crate) use word::is_word;
 use crate::builder_table::{strings, text};
 use crate::cli::{Result, invalid};
 use crate::hpo_penetrance::{self, Values};
@@ -97,7 +98,7 @@ fn exists(path: &Path) -> Result<bool> {
         Err(e) => Err(os_error(e, path, None)),
     }
 }
-fn norm_key(value: &str) -> String {
+pub(crate) fn norm_key(value: &str) -> String {
     let mut out = String::new();
     let mut separator = false;
     for c in value.to_lowercase().chars() {
@@ -129,7 +130,7 @@ fn dominant_negative(text: &str) -> bool {
                 .is_some_and(|tail| !tail.chars().next().is_some_and(word))
     })
 }
-fn normalize_mechanism(raw: &str) -> Vec<&'static str> {
+pub(crate) fn normalize_mechanism(raw: &str) -> Vec<&'static str> {
     // Rust's Unicode version can assign new capital letters that CPython 3.12
     // still treats as non-word characters (for example U+A7CB). Lowering such
     // a letter to an older word character would change Python's regex boundary.
@@ -204,6 +205,10 @@ fn normalize_mechanism(raw: &str) -> Vec<&'static str> {
         labels.insert("UNMAPPED_MECHANISM");
     }
     labels.into_iter().collect()
+}
+/// `mechanism_confidence_from_text`, shared with the non-LOF builder.
+pub(crate) fn mechanism_confidence(value: &str) -> &'static str {
+    confidence(value)
 }
 fn confidence(value: &str) -> &'static str {
     match python_strip(value) {

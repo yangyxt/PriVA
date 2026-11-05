@@ -90,6 +90,13 @@ struct State {
     failure: Option<Box<dyn std::error::Error>>,
     product6: Option<Product6>,
     selected: Option<Selected>,
+    events: Option<Events>,
+}
+
+/// Start/end callbacks for readers that keep no element tree.
+pub(super) struct Events {
+    pub(super) start: Box<dyn FnMut(&str, &[(String, String)]) -> Result<()>>,
+    pub(super) end: Box<dyn FnMut(&str) -> Result<()>>,
 }
 
 struct Selected {
@@ -176,6 +183,24 @@ unsafe extern "C" fn start(
     unsafe {
         callback(data, |state| {
             let name = expanded(text(name)?);
+            if state.events.is_some() {
+                let mut attributes_seen = Vec::new();
+                let mut at = 0;
+                // Expat supplies NUL-terminated (name,value) pairs followed by a
+                // null name pointer. All pointed-to text lives for this callback.
+                while !(*attributes.add(at)).is_null() {
+                    attributes_seen.push((
+                        expanded(text(*attributes.add(at))?),
+                        text(*attributes.add(at + 1))?,
+                    ));
+                    at += 2;
+                }
+                state.stack.push(None);
+                if let Some(events) = state.events.as_mut() {
+                    (events.start)(&name, &attributes_seen)?;
+                }
+                return Ok(());
+            }
             if let Some(product) = &mut state.product6 {
                 if name.contains('}') {
                     return Err(category(
@@ -229,9 +254,17 @@ unsafe extern "C" fn start(
     }
 }
 
-unsafe extern "C" fn end(data: *mut c_void, _name: *const c_char) {
+unsafe extern "C" fn end(data: *mut c_void, name: *const c_char) {
     unsafe {
         callback(data, |state| {
+            if state.events.is_some() {
+                let name = expanded(text(name)?);
+                state.stack.pop();
+                if let Some(events) = state.events.as_mut() {
+                    (events.end)(&name)?;
+                }
+                return Ok(());
+            }
             if state.product6.is_some() {
                 return Ok(());
             }
@@ -353,11 +386,15 @@ pub(super) fn version() -> String {
 }
 
 pub(super) fn parse(source: impl Read) -> Result<Mapping> {
-    parse_with(source, false, None)
+    parse_with(source, false, None, None)
 }
 
 pub(super) fn validate_product6(source: impl Read) -> Result<()> {
-    parse_with(source, true, None).map(|_| ())
+    parse_with(source, true, None, None).map(|_| ())
+}
+
+pub(super) fn visit_events(source: impl Read, events: Events) -> Result<()> {
+    parse_with(source, false, None, Some(events)).map(|_| ())
 }
 
 pub(super) fn visit_selected(
@@ -373,6 +410,7 @@ pub(super) fn visit_selected(
             unicode_input: false,
             visit,
         }),
+        None,
     )
     .map(|_| ())
 }
@@ -390,6 +428,7 @@ pub(super) fn visit_document(
             unicode_input,
             visit,
         }),
+        None,
     )
     .map(|_| ())
 }
@@ -398,6 +437,7 @@ fn parse_with(
     mut source: impl Read,
     product6: bool,
     selected: Option<Selected>,
+    events: Option<Events>,
 ) -> Result<Mapping> {
     // Declare state first so every early return drops the parser before its
     // callback state. The box keeps its address stable while parsing.
@@ -410,6 +450,7 @@ fn parse_with(
         failure: None,
         product6: product6.then(Product6::default),
         selected,
+        events,
     });
     // SAFETY: null selects XML-declared/default encoding; namespace separator
     // is ElementTree's ASCII '}'. Null is checked before all other API calls.
@@ -436,7 +477,7 @@ fn parse_with(
         XML_SetUserData(parser.0, data);
         XML_SetElementHandler(parser.0, Some(start), Some(end));
         XML_SetCharacterDataHandler(parser.0, Some(characters));
-        if product6 || state.selected.is_some() {
+        if product6 || state.selected.is_some() || state.events.is_some() {
             XML_SetDefaultHandlerExpand(parser.0, Some(product6_default));
         } else {
             XML_SetExternalEntityRefHandler(parser.0, Some(external_entity));
@@ -478,7 +519,7 @@ fn parse_with(
         }
         if status != 1 {
             let reason = unsafe { text(XML_ErrorString(XML_GetErrorCode(parser.0))) }?;
-            if product6 || state.selected.is_some() {
+            if product6 || state.selected.is_some() || state.events.is_some() {
                 // ElementTree includes Expat's original line/column for this
                 // validator; retain the InterPro builder's existing diagnostic.
                 let (line, column) = unsafe {

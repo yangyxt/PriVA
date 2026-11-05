@@ -271,6 +271,7 @@ ClinGen_deploy "$TEST_CONFIG"
                 result = self.run_shell('''
 priva_bundled_cache_reuse() { return 1; }
 python() { printf 'BUILD %s\\n' "$*"; return 79; }
+export -f python
 ''' + function + ' "$TEST_CONFIG" sources-only')
                 self.assertNotEqual(result.returncode, 0)
                 self.assertIn("BUILD ", result.stdout)

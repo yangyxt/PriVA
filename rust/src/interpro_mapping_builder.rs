@@ -47,6 +47,16 @@ pub(crate) fn visit_document(
     xml::visit_document(source, unicode_input, Box::new(visit))
 }
 
+/// Start and end events with expanded names, through the same Expat owner and
+/// ElementTree error text, for a reader that keeps no element tree.
+pub(crate) fn visit_events(
+    source: impl Read,
+    start: Box<dyn FnMut(&str, &[(String, String)]) -> Result<()>>,
+    end: Box<dyn FnMut(&str) -> Result<()>>,
+) -> Result<()> {
+    xml::visit_events(source, xml::Events { start, end })
+}
+
 const HELP: &str = "usage: priva interpro-mapping build --xml XML.gz --output CACHE.rkyv\n\
 Build the full member-signature mapping directly from an explicit gzipped InterPro XML.\n\
 No download, VCF-format report, installer caller change or pickle output.";

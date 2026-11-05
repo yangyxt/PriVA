@@ -378,12 +378,7 @@ fn scope_rank(decision: &str) -> Result<usize> {
     SCOPE_PRECEDENCE
         .iter()
         .position(|v| *v == decision)
-        .ok_or_else(|| {
-            error(
-                "ValueError",
-                "tuple.index(x): x not in tuple".to_owned(),
-            )
-        })
+        .ok_or_else(|| error("ValueError", "tuple.index(x): x not in tuple".to_owned()))
 }
 
 fn union_axis(target: &mut Axis, source: Axis) {

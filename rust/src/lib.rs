@@ -71,6 +71,7 @@ mod gene_mechanism_builder;
 mod gene_nonlof_mechanism;
 mod gzip_writer;
 mod hpo_assertions;
+mod hpo_condition_mechanism;
 pub mod hpo_penetrance;
 mod indexed_plugin_cache;
 mod installed_environment;

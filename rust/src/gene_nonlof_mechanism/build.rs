@@ -5,7 +5,7 @@ use crate::python_text::python_strip;
 use std::collections::{BTreeMap, BTreeSet};
 
 /// `clinvar_vcv.load_gofcards_cache`.
-pub(super) fn load_gofcards_cache(path: &Path) -> Result<Json> {
+pub(crate) fn load_gofcards_cache(path: &Path) -> Result<Json> {
     let cache = load_json(path)?;
     let has_genes = match &cache {
         Json::Object(_) => cache.get("genes").is_some(),
@@ -58,7 +58,7 @@ fn items(value: &Json) -> Result<Vec<(String, Json)>> {
 }
 
 /// `clinvar_vcv.gofcards_variant_is_eligible`.
-pub(super) fn eligible(variant: &Json) -> Result<bool> {
+pub(crate) fn eligible(variant: &Json) -> Result<bool> {
     let record = get(variant, "record")?.cloned().unwrap_or(Json::Null);
     let record = if truthy(&record) {
         record

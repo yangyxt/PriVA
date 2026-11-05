@@ -22,8 +22,9 @@ options; `gnomad-cache COMMAND` runs scripts/gnomad_cache.py and
 `alphamissense-cache COMMAND` runs scripts/alphamissense_cache.py and
 `spliceai2-prepare COMMAND` runs scripts/spliceai2_to_vep_vcf.py and
 `clinvar-gene-refresh COMMAND` runs scripts/clinvar_gene_refresh.py likewise.
-`gene-nonlof-mechanism` runs scripts/build_gene_nonlof_mechanism_cache.py with
-every option except --source-root.
+`gene-nonlof-mechanism` runs scripts/build_gene_nonlof_mechanism_cache.py and
+`hpo-condition-mechanism` runs scripts/build_hpo_condition_mechanism_cache.py
+with every option except --source-root.
 `installer-config-paths resolve/managed-roots` runs scripts/installer_config_paths.py
 with the same subcommand and options; it needs an explicit PYTHONHASHSEED, as the
 native command does.
@@ -244,9 +245,11 @@ elif command == "clinvar-contract" and rest[:1] == ["cache"]:
     values = dict(options(rest[1:], {"--input", "--kind"}))
     script = "clinvar_annotation_contract.py"
     forwarded = [values["--input"], "--cache-kind", values["--kind"]]
-elif command == "gene-nonlof-mechanism":
+elif command in ("gene-nonlof-mechanism", "hpo-condition-mechanism"):
     # Every option but --source-root passes through unchanged, flags included.
-    script, forwarded = "build_gene_nonlof_mechanism_cache.py", []
+    script = {"gene-nonlof-mechanism": "build_gene_nonlof_mechanism_cache.py",
+              "hpo-condition-mechanism": "build_hpo_condition_mechanism_cache.py"}[command]
+    forwarded = []
     remaining = list(rest)
     while remaining:
         token = remaining.pop(0)

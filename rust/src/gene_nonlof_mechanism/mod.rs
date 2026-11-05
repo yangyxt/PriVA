@@ -28,6 +28,8 @@ mod parse;
 mod schema;
 mod xlsx;
 
+pub(crate) use build::{eligible, load_gofcards_cache};
+
 use crate::builder_error;
 use crate::cli::{Result, invalid};
 use crate::json_text::{self, DumpsOptions, Json};
@@ -199,7 +201,7 @@ pub(super) struct Transfer {
     pub(super) max_panels: Option<i128>,
 }
 
-pub(super) fn error(
+pub(crate) fn error(
     category: &'static str,
     message: impl Into<String>,
 ) -> Box<dyn std::error::Error> {
@@ -213,15 +215,15 @@ pub(super) fn message(failure: &(dyn std::error::Error + 'static)) -> String {
         .map_or_else(|| failure.to_string(), builder_error::RuntimeError::message)
 }
 
-pub(super) fn object<const N: usize>(values: [(&str, Json); N]) -> Json {
+pub(crate) fn object<const N: usize>(values: [(&str, Json); N]) -> Json {
     Json::Object(values.into_iter().map(|(k, v)| (k.to_owned(), v)).collect())
 }
-pub(super) fn text(value: impl Into<String>) -> Json {
+pub(crate) fn text(value: impl Into<String>) -> Json {
     Json::Str(value.into())
 }
 
 /// Python's `type(value).__name__` for a parsed JSON value.
-pub(super) fn type_name(value: &Json) -> &'static str {
+pub(crate) fn type_name(value: &Json) -> &'static str {
     match value {
         Json::Null => "NoneType",
         Json::Bool(_) => "bool",
@@ -234,7 +236,7 @@ pub(super) fn type_name(value: &Json) -> &'static str {
 }
 
 /// `bool(value)`.
-pub(super) fn truthy(value: &Json) -> bool {
+pub(crate) fn truthy(value: &Json) -> bool {
     match value {
         Json::Null => false,
         Json::Bool(flag) => *flag,
@@ -247,7 +249,7 @@ pub(super) fn truthy(value: &Json) -> bool {
 }
 
 /// `value.get(key)`: `None` for an absent key, AttributeError for a non-dict.
-pub(super) fn get<'a>(value: &'a Json, key: &str) -> Result<Option<&'a Json>> {
+pub(crate) fn get<'a>(value: &'a Json, key: &str) -> Result<Option<&'a Json>> {
     match value {
         Json::Object(_) => Ok(value.get(key)),
         other => Err(error(
@@ -263,7 +265,7 @@ pub(super) fn get_or(value: &Json, key: &str, default: Json) -> Result<Json> {
 }
 
 /// `repr(value)` of the Python object `json.load` returns.
-pub(super) fn repr(value: &Json) -> String {
+pub(crate) fn repr(value: &Json) -> String {
     match value {
         Json::Null => "None".into(),
         Json::Bool(true) => "True".into(),
@@ -287,7 +289,7 @@ pub(super) fn repr(value: &Json) -> String {
 }
 
 /// `str(value)`.
-pub(super) fn py_str(value: &Json) -> String {
+pub(crate) fn py_str(value: &Json) -> String {
     match value {
         Json::Str(text) => text.clone(),
         other => repr(other),
@@ -295,7 +297,7 @@ pub(super) fn py_str(value: &Json) -> String {
 }
 
 /// Python `==` between two parsed values (`1 == 1.0 == True`).
-pub(super) fn equal(left: &Json, right: &Json) -> bool {
+pub(crate) fn equal(left: &Json, right: &Json) -> bool {
     json_text::py_equal(left, right)
 }
 
@@ -344,7 +346,7 @@ pub(super) fn iso_seconds(micros: i128) -> String {
     )
 }
 
-pub(super) fn iso_now() -> String {
+pub(crate) fn iso_now() -> String {
     iso_seconds(now_micros())
 }
 
@@ -473,7 +475,7 @@ pub(super) fn age_seconds(checked_micros: i128) -> f64 {
     (now_micros() - checked_micros) as f64 / 1e6
 }
 
-pub(super) fn stat(path: &Path) -> Result<fs::Metadata> {
+pub(crate) fn stat(path: &Path) -> Result<fs::Metadata> {
     fs::metadata(path).map_err(|e| os_error(e, path, None))
 }
 
@@ -487,7 +489,7 @@ pub(super) fn nonempty(path: &Path) -> bool {
     fs::metadata(path).is_ok_and(|m| m.len() > 0)
 }
 
-pub(super) fn sha256_file(path: &Path) -> Result<String> {
+pub(crate) fn sha256_file(path: &Path) -> Result<String> {
     crate::sha256::sha256_file(path).map_err(|e| os_error(e, path, None))
 }
 pub(super) fn md5_file(path: &Path) -> Result<String> {
@@ -495,7 +497,7 @@ pub(super) fn md5_file(path: &Path) -> Result<String> {
 }
 
 /// `Path.resolve()` (non-strict).
-pub(super) fn resolve(path: &Path) -> Result<PathBuf> {
+pub(crate) fn resolve(path: &Path) -> Result<PathBuf> {
     crate::installer_config_paths::files::resolve(path)
 }
 
@@ -516,7 +518,7 @@ pub(super) fn absolute(path: &Path) -> Result<PathBuf> {
 }
 
 /// `open_text(path)` then `json.load`: gzip when the name ends in `.gz`.
-pub(super) fn load_json(path: &Path) -> Result<Json> {
+pub(crate) fn load_json(path: &Path) -> Result<Json> {
     let file = File::open(path).map_err(|e| os_error(e, path, None))?;
     let mut bytes = Vec::new();
     if path.to_string_lossy().ends_with(".gz") {

@@ -4645,13 +4645,29 @@ function gene_nonlof_mechanism_cache_install() {
 }
 
 
+function hpo_condition_mechanism_builder_is_default() {
+    # The checkout's own builder runs as priva hpo-condition-mechanism, which
+    # records that script as the cache's builder source, so either one accepts
+    # the other's cache. A separately configured builder script keeps running
+    # with python.
+    [[ $(realpath -m -- "${1}") == $(realpath -m -- "${SCRIPT_DIR}/build_hpo_condition_mechanism_cache.py") ]]
+}
+
+
 function validate_hpo_condition_mechanism_cache() {
     local builder_script=${1}
     local cache_json=${2}
-    shift 2
+    local config_file=${3}
+    shift 3
 
     [[ -f ${builder_script} ]] || { log "ERROR: HPO condition mechanism builder not found: ${builder_script}"; return 1; }
     [[ -s ${cache_json} ]] || { log "ERROR: Missing/empty HPO condition mechanism cache: ${cache_json}"; return 1; }
+    if hpo_condition_mechanism_builder_is_default "${builder_script}"; then
+        priva_resolve_binary "${config_file}" || return 1
+        "${PRIVA_BIN}" hpo-condition-mechanism --source-root "${BASE_DIR}" \
+            --validate-only "${cache_json}" "$@"
+        return
+    fi
     python "${builder_script}" --validate-only "${cache_json}" "$@"
 }
 
@@ -4704,14 +4720,19 @@ function hpo_condition_mechanism_cache_install() {
        [[ "${PRIVA_FORCE_ALL_CACHES:-0}" == "1" ]] || [[ ! -s ${cache_json} ]]; then
         rebuild=1
     elif ! validate_hpo_condition_mechanism_cache \
-        "${builder_script}" "${cache_json}" "${provenance_args[@]}" \
+        "${builder_script}" "${cache_json}" "${config_file}" "${provenance_args[@]}" \
         >/dev/null 2>&1; then
         rebuild=1
     fi
 
     if [[ ${rebuild} -eq 1 ]]; then
         log "Building atomic HPO-framed condition mechanism JSON: ${cache_json}"
-        python "${builder_script}" \
+        local -a builder_command=(python "${builder_script}")
+        if hpo_condition_mechanism_builder_is_default "${builder_script}"; then
+            priva_resolve_binary "${config_file}" || return 1
+            builder_command=("${PRIVA_BIN}" hpo-condition-mechanism --source-root "${BASE_DIR}")
+        fi
+        "${builder_command[@]}" \
             --hpo-assertions "${hpo_assertions}" \
             --mechanism-evidence "${mechanism_evidence}" \
             --clingen-dosage "${clingen_dosage}" \
@@ -4727,7 +4748,7 @@ function hpo_condition_mechanism_cache_install() {
     fi
 
     validate_hpo_condition_mechanism_cache \
-        "${builder_script}" "${cache_json}" "${provenance_args[@]}" || {
+        "${builder_script}" "${cache_json}" "${config_file}" "${provenance_args[@]}" || {
         log "ERROR: HPO condition mechanism cache validation failed"
         return 1
     }

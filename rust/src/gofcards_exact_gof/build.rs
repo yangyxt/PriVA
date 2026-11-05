@@ -979,10 +979,7 @@ pub(super) fn build_cache(layers: Layers) -> Result<Vec<(String, Json)>> {
         before - merged.len()
     ));
     if merged.is_empty() {
-        return Err(error(
-            "ValueError",
-            "Cannot set a DataFrame with multiple columns to the single column gene_match_status",
-        ));
+        return Err(error("KeyError", "0"));
     }
 
     for row in &mut merged {

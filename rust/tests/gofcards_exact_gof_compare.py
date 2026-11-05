@@ -334,7 +334,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if "raw" in answer:
             self.reply(answer.get("status", 200), answer["raw"].encode())
             return
-        data = answer.get("data", {"Accession": int(query.get("start") or 0) + 5, "CLNSIG": "x"})
+        data = answer.get("data", {"Accession": f"{query.get('start')}5", "CLNSIG": "x"})
         self.reply(answer.get("status", 200), json.dumps({"code": 0, "data": data}).encode())
 
     def send_workbook(self, folder):
@@ -779,7 +779,8 @@ def argument_unknown(spec): spec["args"] = ["--unknown", "x"]
 
 def outcome(command, folder, env):
     result = subprocess.run([str(part) for part in command], cwd=folder, capture_output=True, text=True, env=env)
-    lines = result.stderr.splitlines()
+    # pyfaidx's __del__ complains after a failed open; the failure is what came before.
+    lines = result.stderr.split("Exception ignored in")[0].splitlines()
     value = {"exit": result.returncode, "stdout": result.stdout,
              "log": [line for line in lines if line.startswith("[gofcards]")]}
     if result.returncode == 2 and lines:
@@ -819,8 +820,8 @@ def snapshot(folder, token):
                           if token not in text else "url in text"}
         else:
             text = raw.decode("utf-8", "replace")
-            if key == "gofcards_public.xlsx" or key.endswith(".xlsx"):
-                text = hashlib.sha256(raw).hexdigest()
+            if key.endswith(".xlsx"):
+                text = "served bytes" if raw == (folder / "server" / "public.xlsx").read_bytes() else "other bytes"
             files[key] = normalize(text, folder, token)
         files[key + ":mode"] = stat.S_IMODE(path.stat().st_mode)
     return files

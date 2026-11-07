@@ -599,6 +599,7 @@ priva_cache_install_finish() { :; }
 priva_install_basic_paths() { PRIVA_INSTALL_TMPDIR="$TEST_FOLDER"; }
 conda_install_vep() { PRIVA_INSTALL_ENV_NAME=priva_acmg; }
 priva_prepare_install_config() { :; }
+bundled_snapshot_install() { :; }  # Dispatch fixture; snapshot checks are covered separately.
 Nextflow_runtime_install() { :; }  # Dispatch fixture; no driver acquisition.
 PriVA_rust_install() { :; }  # Dispatch fixture; no Rust build.
 read_yaml() { case "$2" in ref_genome) printf '%s' "$TEST_REFERENCE";; assembly) printf hg38;; *) printf '%s' "$TEST_FOLDER";; esac; }

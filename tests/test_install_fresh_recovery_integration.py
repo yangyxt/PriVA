@@ -265,8 +265,10 @@ reference_genome_install() { printf 'UNEXPECTED_REFERENCE\n'; return 99; }
 VEP_plugins_install() { printf 'UNEXPECTED_WHOLE_TABLE_VEP\n'; return 99; }
 main_install "$TEST_CONFIG"
 '''
+        # The manual-input check runs through priva; the fixture runs the script.
         return subprocess.run(["bash", "--noprofile", "--norc", "-c", script, "fixture", str(INSTALLER)],
-                              env=self.env, capture_output=True, text=True, timeout=20)
+                              env=dict(self.env, **fake_priva_binary.environment(self.folder)),
+                              capture_output=True, text=True, timeout=20)
 
     def test_main_missing_manual_stops_after_environment_before_prepare(self):
         before = self.config.read_bytes()

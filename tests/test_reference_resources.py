@@ -16,6 +16,8 @@ import tempfile
 import unittest
 from unittest import mock
 
+import fake_priva_binary
+
 
 ROOT = Path(__file__).resolve().parents[1]
 SPEC = importlib.util.spec_from_file_location("reference_resources", ROOT / "scripts/reference_resources.py")
@@ -358,12 +360,15 @@ class ReferenceResources(unittest.TestCase):
                 "$TEST_PYTHON" -c 'import json,os,sys; open(os.environ["TEST_EVENTS"],"a").write(json.dumps(sys.argv[1:])+"\n")' "$@"
             }
             gofcards_exact_gof_cache_install() { return 0; }
+            # The fixture priva runs each script through `python` in a new Bash.
+            export -f python
             priva_install_prerequisites "$2"
         '''
         result = subprocess.run(["bash", "--noprofile", "--norc", "-c", script, "fixture",
                                  str(ROOT / "scripts/install_utils.sh"), str(config)],
                                 env=dict(os.environ, TEST_DATA=str(self.data), TEST_SOURCE=str(self.data.parent),
-                                         TEST_PYTHON=sys.executable, TEST_EVENTS=str(events)),
+                                         TEST_PYTHON=sys.executable, TEST_EVENTS=str(events),
+                                         **fake_priva_binary.environment(self.folder)),
                                 text=True, capture_output=True)
         self.assertEqual(result.returncode, 0, result.stderr)
         calls = [json.loads(line) for line in events.read_text().splitlines()]
@@ -654,7 +659,8 @@ class ReferenceResources(unittest.TestCase):
         '''
         env = dict(os.environ, TEST_SOURCE=str(self.data.parent), TEST_PYTHON=sys.executable,
                    TEST_INSTALL_TMPDIR=str(self.folder),
-                   PRIVA_SMOKE_SKIP_VEP="1", PYTHONDONTWRITEBYTECODE="1")
+                   PRIVA_SMOKE_SKIP_VEP="1", PYTHONDONTWRITEBYTECODE="1",
+                   **fake_priva_binary.environment(self.folder))
         env.pop("PRIVA_FORCE_GOFCARDS_CACHE", None)
         env.pop("PRIVA_FORCE_ALL_CACHES", None)
         result = subprocess.run(["bash", "--noprofile", "--norc", "-c", body, "fixture",

@@ -164,9 +164,9 @@ function priva_configure_portable_paths() {
         log "ERROR: Use priva_configure_portable_paths --config CONFIG."
         return 2
     }
-    # Stays on Python: priva_prepare_install_config, its only caller, runs
-    # before PriVA_rust_install records priva_binary.
-    python "${SCRIPT_DIR}/installer_config_paths.py" resolve \
+    # The fixed hash seed selects one of the orders the script itself may use.
+    priva_resolve_binary "$2" || return 1
+    PYTHONHASHSEED=0 "${PRIVA_BIN}" installer-config-paths resolve \
         --config "$2" --source-root "${BASE_DIR}"
 }
 
@@ -366,7 +366,7 @@ PRIVA_VEP_PINS_PY
             fi
             local config_json
             config_json=$(yq '.' "$1") || { rm -f -- "$constraints"; return 1; }
-            # Runs before PriVA_rust_install records priva_binary; stays on Python.
+            # Runs before priva_cache_install_begin builds priva; stays on Python.
             python "$SCRIPT_DIR/vep_plugins_release.py" transition \
                 --transition-file "$CONDA_PREFIX/.priva-vep-release-transition.json" \
                 --from-release "$current" --release "$requested" --config-json "$config_json" || {
@@ -393,62 +393,18 @@ PRIVA_VEP_PINS_PY
 function priva_configure_cache_paths() {
     # Plan from original configured sources. The centralized helper adopts their
     # bytes/known companions before selecting managed paths; --check is read-only.
-    # priva_configure_cache_paths CONFIG [write|--check] [--native]
+    # priva_configure_cache_paths CONFIG [write|--check]
     local config_file=${1}
     local mode=${2:-write}
-    local route=${3:-}
-    local cache_root config_json
+    local cache_root
     cache_root=$(yq '.cache_root' "${config_file}") || return 1
     [[ -z ${cache_root} || ${cache_root} == null || ${cache_root} == '""' ]] && return 0
-    if [[ ${route} == --native ]]; then
-        # Only for callers that run after PriVA_rust_install records priva_binary.
-        # The fixed hash seed selects one of the orders the script itself may use.
-        local -a check=()
-        [[ ${mode} == --check ]] && check=(--check)
-        priva_resolve_binary "$config_file" || return 1
-        PYTHONHASHSEED=0 "${PRIVA_BIN}" installer-config-paths managed-roots \
-            --config "${config_file}" --source-root "${BASE_DIR}" "${check[@]}"
-        return
-    fi
-    # The early installer calls stay on Python: they run before priva_binary is recorded.
-    config_json=$(yq '.' "${config_file}") || return 1
-    python - "${config_file}" "${config_json}" "${mode}" "${SCRIPT_DIR}/installer_config_paths.py" <<'PRIVA_CACHE_PY'
-import importlib.util
-import json
-from pathlib import Path
-import sys
-
-
-def path_helper():
-    global _PATH_HELPER
-    if '_PATH_HELPER' not in globals():
-        spec = importlib.util.spec_from_file_location('priva_install_cache_paths', CONFIG_PATHS_HELPER)
-        _PATH_HELPER = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(_PATH_HELPER)
-    return _PATH_HELPER
-
-
-def resolve_cache_paths(config):
-    return path_helper().resolve_cache_paths(config, Path(CONFIG_PATHS_HELPER).parent.parent)
-
-
-def render_cache_config(text, updates):
-    return path_helper().render_config(text, updates)
-
-
-def configure_cache_paths(config_file, config, mode):
-    return path_helper().configure_cache_paths(config_file, config, mode,
-                                              Path(CONFIG_PATHS_HELPER).parent.parent)
-
-
-if __name__ == '__main__':
-    try:
-        CONFIG_PATHS_HELPER = sys.argv[4]
-        configure_cache_paths(sys.argv[1], json.loads(sys.argv[2]), sys.argv[3])
-    except (OSError, ValueError) as error:
-        print(f'ERROR: {error}', file=sys.stderr)
-        sys.exit(1)
-PRIVA_CACHE_PY
+    # The fixed hash seed selects one of the orders the script itself may use.
+    local -a check=()
+    [[ ${mode} == --check ]] && check=(--check)
+    priva_resolve_binary "$config_file" || return 1
+    PYTHONHASHSEED=0 "${PRIVA_BIN}" installer-config-paths managed-roots \
+        --config "${config_file}" --source-root "${BASE_DIR}" "${check[@]}"
 }
 
 
@@ -1140,7 +1096,7 @@ function CADD_install() {
     local cadd_version cadd_parent_dir cadd_base_dir cadd_zip_url unpack_parent unpacked staging
 
     # main_install reaches this after PriVA_rust_install records priva_binary.
-    priva_configure_cache_paths "${config_file}" write --native || return 1
+    priva_configure_cache_paths "${config_file}" || return 1
     [[ -z ${assembly} ]] && assembly=$(read_yaml "${config_file}" "assembly")
     [[ ${assembly} == "hg19" ]] && assembly="GRCh37"
     [[ ${assembly} == "hg38" ]] && assembly="GRCh38"
@@ -3999,11 +3955,6 @@ function validate_gofcards_exact_gof_cache() {
     shift
     [[ -s ${gofcards_json} ]] || { log "ERROR: Missing/empty GoFCards cache: ${gofcards_json}"; return 1; }
 
-    # The main preflight runs before PriVA_rust_install records priva_binary.
-    if [[ ${gofcards_validate_with_python:-0} == 1 ]]; then
-        python "${SCRIPT_DIR}/validate_gofcards_cache.py" "${gofcards_json}" "$@"
-        return
-    fi
     [[ -n ${PRIVA_BIN:-} ]] || priva_resolve_binary || return 1
     "${PRIVA_BIN}" gofcards-cache-validate "${gofcards_json}" "$@"
 }
@@ -4290,12 +4241,7 @@ function gofcards_exact_gof_cache_install() {
        [[ "${PRIVA_FORCE_ALL_CACHES:-0}" == "1" ]] || [[ ! -s ${target_tsv} ]]; then
         rebuild=1
     else
-        local gofcards_validate_with_python=0
-        if [[ ${mode} == --main-preflight ]]; then
-            gofcards_validate_with_python=1
-        else
-            priva_resolve_binary "$config_file" || return 1
-        fi
+        priva_resolve_binary "$config_file" || return 1
         local source_file
         for source_file in "${builder_script}" "${review_tsv}" "${hgnc_table}" \
                            "${chain_file}" "${hg19_fasta}" "${hg38_fasta}"; do
@@ -4338,16 +4284,9 @@ function gofcards_exact_gof_cache_install() {
         --allow-pinned-reference-defaults --source-root "${BASE_DIR}")
     # This build route prepares both exact-release caches after references.
     [[ ${PRIVA_SMOKE_SKIP_VEP:-0} == 1 ]] || prerequisite_args+=(--allow-missing-merged-caches)
-    if [[ ${mode} == --main-preflight ]]; then
-        # The main preflight runs before PriVA_rust_install records
-        # priva_binary, so it stays on the Python script.
-        python "${SCRIPT_DIR}/installer_prerequisites.py" "${config_file}" \
-            "${prerequisite_args[@]}" || return 1
-    else
-        priva_resolve_binary "$config_file" || return 1
-        "${PRIVA_BIN}" installer-prerequisites "${config_file}" \
-            "${prerequisite_args[@]}" || return 1
-    fi
+    priva_resolve_binary "$config_file" || return 1
+    "${PRIVA_BIN}" installer-prerequisites "${config_file}" \
+        "${prerequisite_args[@]}" || return 1
     [[ -f ${builder_script} ]] || { log "ERROR: GoFCards builder not found: ${builder_script}"; return 1; }
     [[ ${mode} == --main-preflight ]] && return 0
     [[ -s ${hgnc_table} ]] || { log "ERROR: HGNC complete-set table not found: ${hgnc_table}"; return 1; }
@@ -4889,33 +4828,32 @@ function mechanism_resource_install() {
 
 function nm_to_enst_mapping_install() {
     local config_file=${1}
-    # main_install reaches this through priva_prepare_install_config, before
-    # PriVA_rust_install records priva_binary, so these checks stay on Python.
+    priva_resolve_binary "$config_file" || return 1
     local target
-    target=$(python "${SCRIPT_DIR}/installer_prerequisites.py" "${config_file}" \
+    target=$("${PRIVA_BIN}" installer-prerequisites "${config_file}" \
         --source-root "${BASE_DIR}" --stage mapping-target) || return 1
     if [[ ! -e ${target} ]]; then
         local source_id
-        source_id=$(python "${SCRIPT_DIR}/installer_prerequisites.py" "${config_file}" \
+        source_id=$("${PRIVA_BIN}" installer-prerequisites "${config_file}" \
             --source-root "${BASE_DIR}" --stage mapping-source) || return 1
         local workspace
-        workspace=$(python "${SCRIPT_DIR}/installer_prerequisites.py" "${config_file}" \
+        workspace=$("${PRIVA_BIN}" installer-prerequisites "${config_file}" \
             --source-root "${BASE_DIR}" --stage mapping-workspace) || return 1
         if [[ ${source_id} == ensembl-grch38-mart116-ftp ]]; then
-            python "${SCRIPT_DIR}/biomart_nm_to_enst.py" fetch \
+            "${PRIVA_BIN}" biomart fetch --helper-root "${BASE_DIR}" \
                 --source "${source_id}" --output "${target}" --resource-dir "${workspace}" || return 1
         else
             local raw_output=${2:-${workspace}/${target##*/}.biomart.raw.tsv}
             mkdir -p "${workspace}" || return 1
-            python "${SCRIPT_DIR}/biomart_nm_to_enst.py" fetch \
+            "${PRIVA_BIN}" biomart fetch --helper-root "${BASE_DIR}" \
                 --source "${source_id}" --output "${target}" --raw-output "${raw_output}" || return 1
         fi
         # Newly acquired bytes are not a previously bundled table, even when
         # a legacy no-root invocation downloads into its source-root pathname.
-        python "${SCRIPT_DIR}/biomart_nm_to_enst.py" verify "${target}" \
+        "${PRIVA_BIN}" biomart verify --helper-root "${BASE_DIR}" --mapping "${target}" \
             --assembly "$(read_yaml "${config_file}" assembly)" || return 1
     fi
-    target=$(python "${SCRIPT_DIR}/installer_prerequisites.py" "${config_file}" \
+    target=$("${PRIVA_BIN}" installer-prerequisites "${config_file}" \
         --source-root "${BASE_DIR}" --stage mapping --print-mapping) || return 1
     update_or_append_yaml "${config_file}" "nm_to_enst_tsv" "${target}" || return 1
     log "Validated NM-to-ENST mapping selected: ${target}"
@@ -4927,26 +4865,24 @@ function priva_manual_cache_inputs() {
         log "ERROR: Use priva_manual_cache_inputs --config CONFIG."
         return 2
     }
+    priva_resolve_binary "$2" || return 1
     local -a arguments=("${2}" --source-root "${BASE_DIR}" --stage manual-inputs)
     # Collect publisher-required paths before any resource acquisition or
     # whole-table annotation. Batch runs fail with the missing keys instead of
     # reaching an unanswered prompt hours later; interactive users keep prompts.
     [[ ! -t 0 ]] || arguments+=(--prompt)
-    # Stays on Python: it runs before priva_binary is recorded, and only the
-    # script collects unset paths interactively and rewrites the configuration.
-    python "${SCRIPT_DIR}/installer_prerequisites.py" "${arguments[@]}"
+    "${PRIVA_BIN}" installer-prerequisites "${arguments[@]}"
 }
 
 
 function priva_install_prerequisites() {
     local config_file=${1}
-    # Runs before PriVA_rust_install records priva_binary; stays on Python.
-    python "${SCRIPT_DIR}/installer_prerequisites.py" "${config_file}" --source-root "${BASE_DIR}" \
+    priva_resolve_binary "$config_file" || return 1
+    "${PRIVA_BIN}" installer-prerequisites "${config_file}" --source-root "${BASE_DIR}" \
         --allow-missing-bundled-mapping --allow-missing-bundled-clinvar || return 1
     # The selected reference is always needed. The GoFCards preflight below
     # checks both assemblies only when the normalized cache requires a build.
-    # Runs before PriVA_rust_install records priva_binary; stays on Python.
-    python "${SCRIPT_DIR}/reference_resources.py" preflight "${config_file}" \
+    "${PRIVA_BIN}" reference-resources preflight "${config_file}" \
         --data-dir "${DATA_DIR}" --scope selected --use-cache-root || return 1
     gofcards_exact_gof_cache_install "${config_file}" --main-preflight || return 1
 }
@@ -4964,9 +4900,8 @@ function priva_prepare_install_config() {
     planning_config=$(mktemp "${TMPDIR}/priva-install-plan.XXXXXX.yaml") || return 1
     managed_updates=$(priva_configure_cache_paths "${config_file}" --check) || \
         { rm -f -- "${planning_config}"; return 1; }
-    # These configuration steps stay on Python: main_install runs them before
-    # PriVA_rust_install records priva_binary.
-    python "${SCRIPT_DIR}/installer_config_paths.py" resolve --config "${config_file}" \
+    priva_resolve_binary "$config_file" || { rm -f -- "${planning_config}"; return 1; }
+    PYTHONHASHSEED=0 "${PRIVA_BIN}" installer-config-paths resolve --config "${config_file}" \
         --source-root "${BASE_DIR}" --managed-updates-json "${managed_updates}" \
         --output "${planning_config}" || { rm -f -- "${planning_config}"; return 1; }
     priva_install_prerequisites "${planning_config}" || \
@@ -4986,8 +4921,8 @@ function bundled_snapshot_install() {
     [[ $# -eq 1 ]] || { log "ERROR: Use bundled_snapshot_install CONFIG"; return 2; }
     # Fixed Git data are already deployed by cloning PriVA. Check only that
     # each selected input exists and is nonempty; do not parse/refresh bundles.
-    # Runs before PriVA_rust_install records priva_binary; stays on Python.
-    python "${SCRIPT_DIR}/installer_prerequisites.py" "$1" \
+    priva_resolve_binary "$1" || return 1
+    "${PRIVA_BIN}" installer-prerequisites "$1" \
         --source-root "${BASE_DIR}" --stage snapshots
 }
 
@@ -5267,6 +5202,9 @@ function main_install() (
     local -x PRIVA_CACHE_INSTALL_BUILD_CONFIG PRIVA_CACHE_INSTALL_INTERNAL=1
     priva_cache_install_begin --config "$config_file" || return 1
     config_file=$PRIVA_CACHE_INSTALL_BUILD_CONFIG
+    # The next stages run priva before PriVA_rust_install records priva_binary.
+    # A caller's own PRIVA_BINARY keeps its priority, as in priva_resolve_binary.
+    export PRIVA_BINARY=${PRIVA_BINARY:-$PRIVA_CACHE_INSTALL_BINARY}
 
     # The existing smoke route omits VEP/plugins entirely and has no manual
     # plugin-cache requirement. Real installation must check those inputs first.

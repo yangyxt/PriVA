@@ -63,8 +63,8 @@ function update_yaml() {
 PRIVA_SOURCE_SCRIPT_DIR=$(dirname "$(realpath "${BASH_SOURCE[0]}")")
 
 # Finds the compiled PriVA program `priva` (built from rust/ by
-# scripts/bootstrap_priva_rust.py during main_install, which saves its path as
-# priva_binary) and sets PRIVA_BIN to it. Looked up in this order: the
+# scripts/bootstrap_priva_rust.py during main_install, which exports it as
+# PRIVA_BINARY and later saves its path as priva_binary) and sets PRIVA_BIN to it. Looked up in this order: the
 # environment variable PRIVA_BINARY, the key priva_binary of CONFIG, then `priva`
 # on PATH. Every function that runs `priva` calls this first, because the
 # functions are also entered directly (tests, Nextflow tasks, the smoke example).

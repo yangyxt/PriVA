@@ -6,6 +6,7 @@ Run with Python's standard library: python -m unittest discover -s tests
 
 import json
 import contextlib
+import importlib.util
 import io
 import os
 from pathlib import Path
@@ -682,6 +683,8 @@ class InstallerBootstrapTests(unittest.TestCase):
         self.manager("micromamba")
         self.select_release("116")
         self.env["PRIVA_SMOKE_SKIP_VEP"] = "0"
+        # The configuration planning runs through priva; the fixture runs the Python script.
+        self.env.update(fake_priva_binary.environment(self.directory))
         (self.directory / "reference.fa").write_text(">1\nA\n")
         before = self.config.read_bytes()
         result = self.run_shell(r'''
@@ -971,10 +974,14 @@ class CachePathTests(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        source = INSTALLER.read_text()
-        program = source.split("<<'PRIVA_CACHE_PY'\n", 1)[1].split("\nPRIVA_CACHE_PY", 1)[0]
-        cls.namespace = {"__name__": "priva_cache_tests", "CONFIG_PATHS_HELPER": ROOT / "scripts/installer_config_paths.py"}
-        exec(compile(program, str(INSTALLER) + ":cache_paths", "exec"), cls.namespace)
+        spec = importlib.util.spec_from_file_location("priva_cache_tests", ROOT / "scripts/installer_config_paths.py")
+        helper = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(helper)
+        cls.namespace = {
+            "resolve_cache_paths": lambda config: helper.resolve_cache_paths(config, ROOT),
+            "render_cache_config": helper.render_config,
+            "configure_cache_paths": lambda path, config, mode: helper.configure_cache_paths(path, config, mode, ROOT),
+        }
 
     def resolve(self, config):
         return self.namespace["resolve_cache_paths"](config)
@@ -1073,6 +1080,31 @@ class CachePathTests(unittest.TestCase):
             self.namespace["configure_cache_paths"]("unused", config, "write")
         write.assert_not_called()
         self.assertEqual({str(call.args[0]) for call in mkdir.call_args_list}, set(directories.values()))
+
+    def test_main_shares_the_bootstrapped_binary_before_priva_binary_is_recorded(self):
+        script = '''
+            source "$1" >/dev/null || exit
+            priva_install_basic_paths() { PRIVA_INSTALL_TMPDIR=/tmp; }
+            conda_install_vep() { PRIVA_INSTALL_ENV_NAME=fixture; }
+            priva_cache_install_begin() {
+                PRIVA_CACHE_INSTALL_BUILD_CONFIG=$2
+                PRIVA_CACHE_INSTALL_BINARY=/bootstrapped/priva
+            }
+            priva_manual_cache_inputs() { printf 'BINARY:%s\\n' "$PRIVA_BINARY"; return 1; }
+            main_install "$2"
+            printf 'AFTER:%s\\n' "${PRIVA_BINARY:-}"
+        '''
+        for chosen, expected in (("", "/bootstrapped/priva"), ("/chosen/priva", "/chosen/priva")):
+            with self.subTest(chosen=chosen):
+                env = {key: value for key, value in os.environ.items() if key != "PRIVA_BINARY"}
+                if chosen:
+                    env["PRIVA_BINARY"] = chosen
+                result = subprocess.run(["bash", "--noprofile", "--norc", "-c", script,
+                                         "bash", str(INSTALLER), str(ROOT / "config.yaml")],
+                                        env=env, capture_output=True, text=True, timeout=10)
+                self.assertIn("BINARY:" + expected + "\n", result.stdout, result.stderr)
+                # main_install runs in a subshell, so its export ends with it.
+                self.assertIn("AFTER:" + chosen + "\n", result.stdout, result.stderr)
 
     def test_main_stops_if_cache_configuration_fails(self):
         script = '''

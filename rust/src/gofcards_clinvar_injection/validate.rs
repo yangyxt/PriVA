@@ -1,6 +1,5 @@
 //! `scripts/validate_gofcards_cache.py`, the structure check behind the
-//! installer's `validate_gofcards_exact_gof_cache`; the main preflight, which
-//! runs before priva_binary is recorded, keeps the script.
+//! installer's `validate_gofcards_exact_gof_cache`.
 //! `priva gofcards-cache-validate CACHE [KEY=VALUE ...]` checks the cache and
 //! any recorded provenance; a value left empty is skipped.
 use super::{entries, or_empty};

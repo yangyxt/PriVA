@@ -11,6 +11,8 @@ import tempfile
 import unittest
 from unittest import mock
 
+import fake_priva_binary
+
 import yaml
 
 
@@ -52,8 +54,10 @@ class PortableConfigPaths(unittest.TestCase):
             'priva_cache_install_begin() { PRIVA_CACHE_INSTALL_BUILD_CONFIG=$2; }\n'
             'priva_cache_install_finish() { return 0; }\n'
         ) + body
+        # The installer's configuration steps run through priva; the fixture runs the scripts.
         return subprocess.run(["bash", "--noprofile", "--norc", "-c", script,
                                "test", str(INSTALLER), str(self.config)],
+                              env=dict(os.environ, **fake_priva_binary.environment(self.folder)),
                               text=True, capture_output=True, timeout=20)
 
     def test_template_has_no_host_paths_and_only_run_inputs_are_unset(self):
@@ -258,15 +262,12 @@ class PortableConfigPaths(unittest.TestCase):
         self.assertFalse(external.exists())
 
     def test_existing_managed_root_migration_is_applied_before_defaults(self):
-        source = INSTALLER.read_text().split("<<'PRIVA_CACHE_PY'\n", 1)[1].split("\nPRIVA_CACHE_PY", 1)[0]
-        namespace = {"__name__": "portable_test_managed_resolver", "CONFIG_PATHS_HELPER": ROOT / "scripts/installer_config_paths.py"}
-        exec(compile(source, str(INSTALLER), "exec"), namespace)
         old = self.folder / "old_cache"
         external = self.folder / "external.vcf.gz"
         config = dict(self.basic, vep_plugins_cachedir=str(old / "plugins"),
                       human_ancestor_fasta=str(old / "plugins/LoFtee/hg19/human_ancestor.fa.gz"),
                       clinvar_vcf=str(external), cache_folders={"vep_plugin_cache": "plugins_new"})
-        _, managed = namespace["resolve_cache_paths"](config)
+        _, managed = PATHS.resolve_cache_paths(config, ROOT)
         effective = dict(config, **managed)
         updates = PATHS.portable_updates(effective, ROOT)
         effective.update(updates)

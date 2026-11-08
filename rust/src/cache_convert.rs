@@ -492,6 +492,13 @@ all_intolerant_domains, interpro_mapping_pickle, clingen_map";
 
 /// `priva cache-convert CACHE --pickle PICKLE --output OUTPUT`.
 pub(crate) fn dispatch(args: &[String]) -> Result<()> {
+    println!("{}", convert(args)?);
+    Ok(())
+}
+
+/// Converts as `cache-convert` does and returns its one-line summary, so a
+/// caller whose stdout carries something else can report it elsewhere.
+pub(crate) fn convert(args: &[String]) -> Result<String> {
     let [cache, first, first_value, second, second_value] = args else {
         return Err(invalid(USAGE));
     };
@@ -512,53 +519,34 @@ pub(crate) fn dispatch(args: &[String]) -> Result<()> {
     }
     match cache.as_str() {
         "clinvar_aa_stat" => {
-            println!("{}", convert_clinvar_aa_stat(pickle, Path::new(output))?);
-            Ok(())
+            Ok(convert_clinvar_aa_stat(pickle, Path::new(output))?.to_string())
         }
         "alphamissense_tranx_domain_map" => {
-            println!(
-                "{}",
-                transcript_domains::convert(pickle, Path::new(output))?
-            );
-            Ok(())
+            Ok(transcript_domains::convert(pickle, Path::new(output))?.to_string())
         }
         "all_intolerant_domains" => {
-            println!(
-                "{}",
-                intolerant_domains::convert(pickle, Path::new(output))?
-            );
-            Ok(())
+            Ok(intolerant_domains::convert(pickle, Path::new(output))?.to_string())
         }
         "pm1_regions_pkl" => {
-            println!("{}", pm1_regions::convert(pickle, Path::new(output))?);
-            Ok(())
+            Ok(pm1_regions::convert(pickle, Path::new(output))?.to_string())
         }
         "clinvar_splice_stat" => {
-            println!(
-                "{}",
-                clinvar_splice_stat::convert(pickle, Path::new(output))?
-            );
-            Ok(())
+            Ok(clinvar_splice_stat::convert(pickle, Path::new(output))?.to_string())
         }
         "clinvar_patho_exon_af_stat" => {
-            println!("{}", clinvar_exon_af::convert(pickle, Path::new(output))?);
-            Ok(())
+            Ok(clinvar_exon_af::convert(pickle, Path::new(output))?.to_string())
         }
         "clinvar_patho_af_stat" => {
-            println!("{}", clinvar_gene_af::convert(pickle, Path::new(output))?);
-            Ok(())
+            Ok(clinvar_gene_af::convert(pickle, Path::new(output))?.to_string())
         }
         "clingen_map" => {
-            println!("{}", clingen_map::convert(pickle, Path::new(output))?);
-            Ok(())
+            Ok(clingen_map::convert(pickle, Path::new(output))?.to_string())
         }
         "clinvar_gene_stat" => {
-            println!("{}", clinvar_gene_stat::convert(pickle, Path::new(output))?);
-            Ok(())
+            Ok(clinvar_gene_stat::convert(pickle, Path::new(output))?.to_string())
         }
         "interpro_mapping_pickle" => {
-            println!("{}", interpro_mapping::convert(pickle, Path::new(output))?);
-            Ok(())
+            Ok(interpro_mapping::convert(pickle, Path::new(output))?.to_string())
         }
         other => Err(invalid(format!(
             "cache-convert: unknown cache {other}\n{USAGE}"

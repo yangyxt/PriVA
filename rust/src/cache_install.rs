@@ -625,13 +625,16 @@ fn install_one(
         return Ok(output);
     }
     let pending = temporary(&output, "pending");
-    caches::dispatch(&[
+    // The summary goes to stderr: `resolve` prints only the archive path on
+    // stdout, and installer steps read that line as a file name.
+    let summary = caches::convert(&[
         key.to_owned(),
         "--pickle".to_owned(),
         text(source)?.to_owned(),
         "--output".to_owned(),
         text(&pending)?.to_owned(),
     ])?;
+    eprintln!("{summary}");
     if sha256_file(source)? != source_hash {
         return Err(invalid(format!(
             "{} changed while converting; runtime config was not published",

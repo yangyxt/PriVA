@@ -90,6 +90,9 @@ pub(crate) fn safe_id(value: &str) -> bool {
 pub(crate) struct Config {
     pub(crate) text: String,
     pub(crate) doc: ConfigDocument,
+    /// The SpliceAI version of the configured score files, `v1` or
+    /// `SpliceAI2`, when at least one of them is present.
+    pub(crate) spliceai: Option<&'static str>,
 }
 
 impl Config {
@@ -156,13 +159,19 @@ pub(crate) fn read_config(path: &Path) -> Result<Config> {
             return refuse(format!("Duplicate YAML key: {}", entry.key));
         }
     }
-    let config = Config { text, doc };
+    let mut config = Config {
+        text,
+        doc,
+        spliceai: None,
+    };
     if config.str("assembly").and_then(assembly).is_none() {
         return refuse("Config assembly must be hg19/hg38/GRCh37/GRCh38");
     }
-    // Annotated imports skip the annotation shell. Inspect the actual
-    // resources at the original two keys here too, including cached launches
-    // and tasks; an installer setting cannot confer scientific qualification.
+    // Annotated imports skip the annotation shell, so inspect the actual
+    // score files here too, including cached launches and tasks. SpliceAI v1
+    // and SpliceAI2 each have their own cutoffs (scripts/spliceai_cutoffs.py);
+    // the SNV and indel files must be the same version.
+    let mut found: Vec<(&str, &'static str)> = Vec::new();
     for key in ["spliceai_snv_prescore", "spliceai_indel_prescore"] {
         let Some(value) = config.str(key) else {
             continue;
@@ -180,12 +189,23 @@ pub(crate) fn read_config(path: &Path) -> Result<Config> {
                 return refuse(format!("Cannot verify {key} header: exit {code}"));
             }
         };
-        if detected.format != "vcf_v1" {
-            return refuse(
-                "SpliceAI2 is prepared for annotation inspection only; legacy PriVA ACMG/ClinVar criteria are not qualified for v2. Use original v1 resources for this scientific reference.",
-            );
+        found.push((
+            key,
+            if detected.format == "vcf_v1" {
+                "v1"
+            } else {
+                "SpliceAI2"
+            },
+        ));
+    }
+    if let [(_, snv), (_, indel)] = found.as_slice() {
+        if snv != indel {
+            return refuse(format!(
+                "SpliceAI SNV ({snv}) and indel ({indel}) score files must be the same version; each version uses its own cutoffs"
+            ));
         }
     }
+    config.spliceai = found.first().map(|(_, version)| *version);
     Ok(config)
 }
 

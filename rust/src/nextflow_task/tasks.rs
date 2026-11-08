@@ -236,24 +236,26 @@ fn called_process_error(
     }
 }
 
-/// The sample columns of the input VCF; refuses SpliceAI2-marked input.
-fn vcf_samples(path: &Path) -> Result<Vec<String>> {
+/// The sample columns of the input VCF, and whether its header marks a
+/// SpliceAI2 annotation.
+pub(crate) fn vcf_samples(path: &Path) -> Result<(Vec<String>, bool)> {
     let file = fs::File::open(path).map_err(|e| crate::python_path::os_error(e, path, None))?;
     let mut lines = crate::python_lines::Lines::new(flate2::read::MultiGzDecoder::new(
         std::io::BufReader::new(file),
     ));
+    let mut spliceai2 = false;
     while let Some(line) = lines.next()? {
         if line.starts_with("##SpliceAI2")
             || line.trim_end_matches(['\r', '\n']) == "##source=PriVA_SpliceAI2_projection"
         {
-            return refuse("SpliceAI2-marked input is not qualified for legacy PriVA criteria");
+            spliceai2 = true;
         }
         if line.starts_with("#CHROM\t") {
             let fields: Vec<&str> = line.trim_end_matches('\n').split('\t').collect();
             if fields.len() < 10 || fields[8] != "FORMAT" {
                 return refuse("Family input VCF must have FORMAT and sample columns");
             }
-            return Ok(fields[9..].iter().map(|s| s.to_string()).collect());
+            return Ok((fields[9..].iter().map(|s| s.to_string()).collect(), spliceai2));
         }
         if !line.starts_with('#') {
             break;
@@ -395,7 +397,17 @@ pub(crate) fn validate(options: &Options) -> Result<()> {
         return refuse("Annotated mode requires the paired CADD TSV");
     }
     let vcf = PathBuf::from(options.value("vcf"));
-    let samples = vcf_samples(&vcf)?;
+    let (samples, marked) = vcf_samples(&vcf)?;
+    // An annotation made with one SpliceAI version is scored with that
+    // version's cutoffs; the configured score files must match it.
+    if let Some(configured) = config.spliceai {
+        let annotated = if marked { "SpliceAI2" } else { "v1" };
+        if annotated != configured {
+            return refuse(format!(
+                "The input VCF was annotated with SpliceAI {annotated} but the configured SpliceAI score files are {configured}"
+            ));
+        }
+    }
     let ped = PathBuf::from(options.value("ped"));
     let family_samples = validate_ped(&ped, family, &samples)?;
     if !Path::new(options.value("vcf-index")).is_file() {

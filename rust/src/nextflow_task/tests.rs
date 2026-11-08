@@ -163,7 +163,7 @@ fn duplicate_yaml_key_is_refused() {
 }
 
 #[test]
-fn spliceai2_at_original_keys_is_refused_by_header() {
+fn spliceai_versions_are_read_from_headers_and_must_match() {
     let folder = Folder::new("splice");
     let path = folder.0.join("profile.yaml");
     let cache = folder.0.join("scores.any_extension");
@@ -184,10 +184,27 @@ fn spliceai2_at_original_keys_is_refused_by_header() {
                 format!("assembly: hg38\n{key}: {}\n", cache.display()),
             )
             .unwrap();
-            let error = contract::read_config(&path).err().unwrap();
-            assert!(message(error).contains("not qualified for v2"));
+            let config = contract::read_config(&path).unwrap();
+            assert_eq!(config.spliceai, Some("SpliceAI2"));
         }
     }
+    let v1 = folder.0.join("v1.vcf");
+    fs::write(
+        &v1,
+        "##fileformat=VCFv4.2\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\n",
+    )
+    .unwrap();
+    fs::write(
+        &path,
+        format!(
+            "assembly: hg38\nspliceai_snv_prescore: {}\nspliceai_indel_prescore: {}\n",
+            cache.display(),
+            v1.display()
+        ),
+    )
+    .unwrap();
+    let error = contract::read_config(&path).err().unwrap();
+    assert!(message(error).contains("must be the same version"));
     fs::write(
         &cache,
         "##fileformat=VCFv4.2\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\n",
@@ -563,7 +580,7 @@ fn launch_rejects_changed_family_and_changed_source() {
 }
 
 #[test]
-fn preannotated_v2_launch_rejected_before_output_creation() {
+fn mixed_spliceai_versions_rejected_before_output_creation() {
     let fixture = LaunchFixture::new("launch3");
     let config = PathBuf::from(fixture.value("config"));
     let cache = fixture.folder.0.join("v2.vcf");
@@ -572,18 +589,24 @@ fn preannotated_v2_launch_rejected_before_output_creation() {
         "##fileformat=VCFv4.2\n##SpliceAI2Version=2\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\n",
     )
     .unwrap();
+    let v1 = fixture.folder.0.join("v1.vcf");
+    fs::write(&v1, "##fileformat=VCFv4.2\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\n").unwrap();
     let text = fs::read_to_string(&config).unwrap();
     fs::write(
         &config,
-        format!("{text}spliceai_snv_prescore: {}\n", cache.display()),
+        format!(
+            "{text}spliceai_snv_prescore: {}\nspliceai_indel_prescore: {}\n",
+            cache.display(),
+            v1.display()
+        ),
     )
     .unwrap();
-    assert!(message(fixture.launch().unwrap_err()).contains("not qualified for v2"));
+    assert!(message(fixture.launch().unwrap_err()).contains("must be the same version"));
     assert!(!Path::new(&fixture.value("outdir")).exists());
 }
 
 #[test]
-fn preannotated_v2_task_rejected_before_any_output() {
+fn mixed_spliceai_versions_task_rejected_before_any_output() {
     let _guard = CWD.lock().unwrap_or_else(|e| e.into_inner());
     let fixture = LaunchFixture::new("launch4");
     let bundle = fixture.folder.0.join("v2-bundle");
@@ -594,10 +617,16 @@ fn preannotated_v2_task_rejected_before_any_output() {
         "##fileformat=VCFv4.2\n##SpliceAI2Version=2\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\n",
     )
     .unwrap();
+    let v1 = fixture.folder.0.join("v1.vcf");
+    fs::write(&v1, "##fileformat=VCFv4.2\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\n").unwrap();
     let config = fs::read_to_string(fixture.value("config")).unwrap();
     fs::write(
         bundle.join("legacy.yaml"),
-        format!("{config}spliceai_indel_prescore: {}\n", cache.display()),
+        format!(
+            "{config}spliceai_snv_prescore: {}\nspliceai_indel_prescore: {}\n",
+            v1.display(),
+            cache.display()
+        ),
     )
     .unwrap();
     fs::copy(fixture.value("resources"), bundle.join("resources.json")).unwrap();
@@ -621,7 +650,7 @@ fn preannotated_v2_task_rejected_before_any_output() {
                 &[],
             ))
         });
-        assert!(message(outcome.unwrap_err()).contains("not qualified for v2"));
+        assert!(message(outcome.unwrap_err()).contains("must be the same version"));
         assert!(!fixture.folder.0.join("result").exists());
     }
 }
@@ -727,7 +756,12 @@ fn cds_cache_copies_follow_the_detector_names() {
     }
     // An old whole-path sidecar is never copied over the private FASTA.
     let fasta = folder.0.join("inputs/refs.fa.gz/selected.fa");
-    let old = PathBuf::from(fasta.display().to_string().replace(".fa.gz", ".cds_cache.pkl.gz"));
+    let old = PathBuf::from(
+        fasta
+            .display()
+            .to_string()
+            .replace(".fa.gz", ".cds_cache.pkl.gz"),
+    );
     fs::create_dir_all(old.parent().unwrap()).unwrap();
     fs::write(&old, b"old misplaced pickle").unwrap();
     let config = private(
@@ -751,7 +785,10 @@ fn cds_cache_copies_follow_the_detector_names() {
         "annotated",
     )
     .unwrap();
-    assert_eq!(config.str("cds_fasta_file"), Some(fasta.display().to_string().as_str()));
+    assert_eq!(
+        config.str("cds_fasta_file"),
+        Some(fasta.display().to_string().as_str())
+    );
 }
 
 #[test]
@@ -762,11 +799,18 @@ fn the_pipeline_program_is_required_and_content_pinned() {
         false,
     )
     .unwrap();
-    let record = manifest.get("resources").unwrap().get("priva_binary").unwrap();
+    let record = manifest
+        .get("resources")
+        .unwrap()
+        .get("priva_binary")
+        .unwrap();
     let program = fixture.folder.0.join("priva");
     assert!(matches!(record.get("sha256"), Some(Json::Str(digest))
         if *digest == crate::sha256::sha256_file(&program).unwrap()));
-    assert!(matches!(record.get("executable_mode"), Some(Json::Int(0o755))));
+    assert!(matches!(
+        record.get("executable_mode"),
+        Some(Json::Int(0o755))
+    ));
     // The same size and time but other bytes: the launch is refused.
     let original = fs::metadata(&program).unwrap();
     fs::write(&program, "#!/bin/sh\necho 'priva 0.1.1 (fixture)'\n").unwrap();
@@ -796,4 +840,23 @@ fn the_pipeline_program_is_required_and_content_pinned() {
     )
     .unwrap_err();
     assert!(message(error).contains("priva_binary"));
+}
+
+#[test]
+fn input_vcf_header_reports_a_spliceai2_annotation() {
+    let folder = Folder::new("marker");
+    let path = folder.0.join("input.vcf.gz");
+    for (marker, expected) in [
+        ("##SpliceAI2Version=2\n", true),
+        ("##source=PriVA_SpliceAI2_projection\n", true),
+        ("##source=other\n", false),
+    ] {
+        let text = format!(
+            "##fileformat=VCFv4.2\n{marker}#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tchild\n"
+        );
+        fs::write(&path, gzip(text.as_bytes())).unwrap();
+        let (samples, marked) = tasks::vcf_samples(&path).unwrap();
+        assert_eq!(samples, ["child"]);
+        assert_eq!(marked, expected, "{marker}");
+    }
 }

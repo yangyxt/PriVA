@@ -33,7 +33,7 @@ def manifest(config, source, mode="annotated", checksum=False):
     with tempfile.TemporaryDirectory(prefix="priva_task_cli_",
                                      dir=os.environ.get("PRIVA_TEST_TMPDIR", os.environ.get("TMPDIR"))) as folder:
         config_path = Path(folder) / "legacy.yaml"
-        config_path.write_text(yaml.safe_dump(config))
+        config_path.write_text(yaml.safe_dump(config, width=float("inf")))
         output = Path(folder) / "resources.json"
         command = [program(), "task", "manifest", "--config", str(config_path),
                    "--legacy-root", str(source), "--mode", "raw" if mode == "raw" else "annotated",

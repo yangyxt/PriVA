@@ -90,9 +90,6 @@ pub(crate) fn safe_id(value: &str) -> bool {
 pub(crate) struct Config {
     pub(crate) text: String,
     pub(crate) doc: ConfigDocument,
-    /// The SpliceAI version of the configured score files, `v1` or
-    /// `SpliceAI2`, when at least one of them is present.
-    pub(crate) spliceai: Option<&'static str>,
 }
 
 impl Config {
@@ -159,11 +156,7 @@ pub(crate) fn read_config(path: &Path) -> Result<Config> {
             return refuse(format!("Duplicate YAML key: {}", entry.key));
         }
     }
-    let mut config = Config {
-        text,
-        doc,
-        spliceai: None,
-    };
+    let config = Config { text, doc };
     if config.str("assembly").and_then(assembly).is_none() {
         return refuse("Config assembly must be hg19/hg38/GRCh37/GRCh38");
     }
@@ -205,7 +198,6 @@ pub(crate) fn read_config(path: &Path) -> Result<Config> {
             ));
         }
     }
-    config.spliceai = found.first().map(|(_, version)| *version);
     Ok(config)
 }
 

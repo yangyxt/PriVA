@@ -168,32 +168,19 @@ Installer callers remain Python unless their row says the installer calls
 | [`scripts/vep_chromosome_jobs.py`](../scripts/vep_chromosome_jobs.py) | Legacy/manual helper, outside native conversion scope. |
 | [`scripts/vep_plugins_release.py`](../scripts/vep_plugins_release.py) | Optional `priva vep-plugins {check,install,transition,clear-transition,ensure-utr-reporting} --release RELEASE` with the same options; the mode comes first. Receipt checks, local-patch recognition, staged publication with the release-switch and partial-retry rules, the transition record, and the locked UTRAnnotator 116 reporting transaction (pinned upstream and installed bytes, original and patch backups, the pending recovery receipt) follow the script; the patch is the same `difflib.unified_diff` text. The bundled reporting module is read from `PRIVA_DATA_DIR`. Installer calls `priva vep-plugins check/install/ensure-utr-reporting/clear-transition` in `vep_cache_api_install`; the `transition` call in `conda_install_vep` runs before `PriVA_rust_install` records `priva_binary` and remains Python. Compared by `rust/tests/vep_plugins_compare.py` (no case reaches the network). |
 
-## Task adapters and retained bridges
+## Task adapters and bridges
 
-Production Nextflow integration is incomplete. Existing adapters and bootstrap
-bridges remain until their caller replacements are qualified.
+The Nextflow task adapters are converted, and the Python-to-Rust bridges are
+removed (G10, November 2026).
 
-### Nextflow task adapters
-
-| Python source | Native procedure or current role |
+| Former Python source | Native procedure or current role |
 | --- | --- |
-| [`bin/priva_task.py`](../bin/priva_task.py) | Retained Python; native replacement pending. |
-| [`bin/priva_task_boundary.py`](../bin/priva_task_boundary.py) | Retained Python; native replacement pending. |
+| `bin/priva_task.py` | `priva task {manifest,validate,launch,run}` ([`rust/src/nextflow_task/`](src/nextflow_task/mod.rs)). Same checks, refusal messages, JSON records and exit codes; the per-task configuration is written by editing the original text instead of re-dumping it, with PyYAML-only spellings (such as `yes`) rewritten so `yq` reads the values PyYAML loaded. Compared with the Python adapter by `rust/tests/nextflow_task_compare.py` (38 of 38 synthetic cases, check job 1538049); its `--source` must be a revision that still has the Python adapters, such as `918c87f`. |
+| `bin/priva_task_boundary.py` | `priva task-boundary {check,exec}`, same Bubblewrap arguments and exit code 125. |
+| `scripts/priva_rust_*.py` (nine ranking and criteria bridges) | Removed with their tests. They were the optional `--ranking_binary` path inside the Python ACMG step; the workflow runs `priva acmg-assign`, which accepts and ignores `--ranking_binary`. `scripts/acmg_scoring.py` and `scripts/acmg_criteria_assign.py` match `main` again. |
 
-### Bootstrap and compatibility bridges
-
-| Python source | Native procedure or current role |
-| --- | --- |
-| [`scripts/bootstrap_priva_rust.py`](../scripts/bootstrap_priva_rust.py) | Retained bootstrap/compatibility bridge; remove only after all callers migrate. |
-| [`scripts/priva_rust_control_multiply.py`](../scripts/priva_rust_control_multiply.py) | Retained bootstrap/compatibility bridge; remove only after all callers migrate. |
-| [`scripts/priva_rust_criteria_summary.py`](../scripts/priva_rust_criteria_summary.py) | Retained bootstrap/compatibility bridge; remove only after all callers migrate. |
-| [`scripts/priva_rust_gene_weights.py`](../scripts/priva_rust_gene_weights.py) | Retained bootstrap/compatibility bridge; remove only after all callers migrate. |
-| [`scripts/priva_rust_pedigree_context.py`](../scripts/priva_rust_pedigree_context.py) | Retained bootstrap/compatibility bridge; remove only after all callers migrate. |
-| [`scripts/priva_rust_pext.py`](../scripts/priva_rust_pext.py) | Retained bootstrap/compatibility bridge; remove only after all callers migrate. |
-| [`scripts/priva_rust_posterior.py`](../scripts/priva_rust_posterior.py) | Retained bootstrap/compatibility bridge; remove only after all callers migrate. |
-| [`scripts/priva_rust_rank_setup.py`](../scripts/priva_rust_rank_setup.py) | Retained bootstrap/compatibility bridge; remove only after all callers migrate. |
-| [`scripts/priva_rust_ranking_compatibility.py`](../scripts/priva_rust_ranking_compatibility.py) | Retained bootstrap/compatibility bridge; remove only after all callers migrate. |
-| [`scripts/priva_rust_terminal_order.py`](../scripts/priva_rust_terminal_order.py) | Retained bootstrap/compatibility bridge; remove only after all callers migrate. |
+[`scripts/bootstrap_priva_rust.py`](../scripts/bootstrap_priva_rust.py) stays: the
+installer runs it to build `priva` itself, so it cannot be replaced by `priva`.
 
 ## Retained Python tools
 

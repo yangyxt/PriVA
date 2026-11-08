@@ -1,5 +1,5 @@
-//! Ports of tests/nextflow/test_adapter.py, test_cpu_contract.py and
-//! test_task_boundary.py. Synthetic fixtures only.
+//! Ports of the former tests/nextflow/test_adapter.py, test_cpu_contract.py
+//! and test_task_boundary.py. Synthetic fixtures only.
 use super::contract::{self, Config, PRIORITY_KEYS};
 use super::tasks;
 use super::{ContractError, Options};
@@ -687,4 +687,113 @@ fn boundary_checks_task_controls_and_aliases() {
     assert_eq!(check(&task, &task), 125);
     std::os::unix::fs::symlink(task.join(".command.sh"), task.join(".command.run")).unwrap();
     assert_eq!(check(&task, &task), 125);
+}
+
+#[test]
+fn cds_cache_copies_follow_the_detector_names() {
+    let _guard = CWD.lock().unwrap_or_else(|e| e.into_inner());
+    let folder = Folder::new("cds");
+    // Names whose cache sits beside the FASTA, as the Python detector names it.
+    for relative in [
+        "standard.fa.gz",
+        "plain.fa",
+        "generic.other.gz",
+        "refs.fa.gz/selected.fa",
+        "refs.fa.gz/selected.other.gz",
+        "refs.fa.gz/standard.fa.gz",
+    ] {
+        let fasta = folder.0.join("inputs").join(relative);
+        fs::create_dir_all(fasta.parent().unwrap()).unwrap();
+        fs::write(&fasta, b"fasta bytes").unwrap();
+        let cache = contract::cds_cache_path(&fasta.display().to_string());
+        fs::write(&cache, b"parsed cache").unwrap();
+        let config = private(
+            &folder.0,
+            &format!("cds_fasta_file: {}\n", fasta.display()),
+            "prioritization",
+            1,
+            "annotated",
+        )
+        .unwrap();
+        let copied = config.str("cds_fasta_file").unwrap().to_owned();
+        assert!(copied.starts_with(&folder.0.join("task").display().to_string()));
+        assert_eq!(fs::read(&copied).unwrap(), b"fasta bytes");
+        assert_eq!(
+            fs::read(contract::cds_cache_path(&copied)).unwrap(),
+            b"parsed cache",
+            "{relative}"
+        );
+        fs::remove_file(&cache).unwrap();
+    }
+    // An old whole-path sidecar is never copied over the private FASTA.
+    let fasta = folder.0.join("inputs/refs.fa.gz/selected.fa");
+    let old = PathBuf::from(fasta.display().to_string().replace(".fa.gz", ".cds_cache.pkl.gz"));
+    fs::create_dir_all(old.parent().unwrap()).unwrap();
+    fs::write(&old, b"old misplaced pickle").unwrap();
+    let config = private(
+        &folder.0,
+        &format!("cds_fasta_file: {}\n", fasta.display()),
+        "prioritization",
+        1,
+        "annotated",
+    )
+    .unwrap();
+    let copied = config.str("cds_fasta_file").unwrap().to_owned();
+    assert_eq!(fs::read(&copied).unwrap(), b"fasta bytes");
+    assert!(!contract::cds_cache_path(&copied).exists());
+    assert!(old.exists());
+    // Other phases leave the configured FASTA in place.
+    let config = private(
+        &folder.0,
+        &format!("cds_fasta_file: {}\n", fasta.display()),
+        "filtration",
+        1,
+        "annotated",
+    )
+    .unwrap();
+    assert_eq!(config.str("cds_fasta_file"), Some(fasta.display().to_string().as_str()));
+}
+
+#[test]
+fn the_pipeline_program_is_required_and_content_pinned() {
+    let fixture = LaunchFixture::new("program");
+    let manifest = crate::json_text::parse(
+        &fs::read_to_string(fixture.value("resources")).unwrap(),
+        false,
+    )
+    .unwrap();
+    let record = manifest.get("resources").unwrap().get("priva_binary").unwrap();
+    let program = fixture.folder.0.join("priva");
+    assert!(matches!(record.get("sha256"), Some(Json::Str(digest))
+        if *digest == crate::sha256::sha256_file(&program).unwrap()));
+    assert!(matches!(record.get("executable_mode"), Some(Json::Int(0o755))));
+    // The same size and time but other bytes: the launch is refused.
+    let original = fs::metadata(&program).unwrap();
+    fs::write(&program, "#!/bin/sh\necho 'priva 0.1.1 (fixture)'\n").unwrap();
+    let times = fs::FileTimes::new().set_modified(original.modified().unwrap());
+    fs::OpenOptions::new()
+        .write(true)
+        .open(&program)
+        .unwrap()
+        .set_times(times)
+        .unwrap();
+    assert!(message(fixture.launch().unwrap_err()).contains("Resource changed"));
+    // A configuration without the program is refused.
+    let config = PathBuf::from(fixture.value("config"));
+    let text = fs::read_to_string(&config).unwrap();
+    let without: String = text
+        .lines()
+        .filter(|line| !line.starts_with("priva_binary:"))
+        .map(|line| format!("{line}\n"))
+        .collect();
+    fs::write(&config, without).unwrap();
+    let error = contract::runtime_resources(
+        &contract::read_config(&config).unwrap(),
+        Path::new(&fixture.value("legacy-root")),
+        "annotated",
+        "off",
+        "copy",
+    )
+    .unwrap_err();
+    assert!(message(error).contains("priva_binary"));
 }

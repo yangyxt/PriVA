@@ -1,6 +1,6 @@
 //! `priva task` and `priva task-boundary`: the Nextflow task contract.
 //!
-//! This reproduces `bin/priva_task.py` and `bin/priva_task_boundary.py`. It
+//! This reproduces the former `bin/priva_task.py` and `bin/priva_task_boundary.py`. It
 //! checks inputs and prepared resources, gives each task private copies of
 //! the files the shell steps may change, and runs the unchanged shell
 //! workflow scripts. It implements no variant scoring, filtering, criteria or

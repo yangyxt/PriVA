@@ -173,8 +173,7 @@ def ACMG_criteria_assign(anno_table: str,
                          gnomAD_extreme_rare_threshold: float = 0.0001,
                          expected_incidence: float = 0.0001,
                          threads: int = 10,
-                         spliceai_cutoffs: dict = SPLICEAI_CUTOFFS["vcf_v1"],
-                         ranking_binary: str = None) -> Tuple[pd.DataFrame, pd.DataFrame]:
+                         spliceai_cutoffs: dict = SPLICEAI_CUTOFFS["vcf_v1"]) -> Tuple[pd.DataFrame, pd.DataFrame]:
     """
     Main function to assign ACMG criteria.
     Returns both annotated DataFrame and criteria matrix.
@@ -534,20 +533,10 @@ def ACMG_criteria_assign(anno_table: str,
     }
 
     # Create summary and matrix
-    # 27 October 2026 CT: the explicit Rust opt-in selects the qualified
-    # summary subprocedure as well as ranking. Keep default arguments and
-    # matrix publication/posterior/ranking order at their original boundaries.
-    if ranking_binary is None:
-        anno_df, criteria_matrix = summarize_acmg_criteria(
-            anno_df, criteria_dict, clingen_map_pkl,
-            apply_clingen_override=apply_clingen_override,
-        )
-    else:
-        anno_df, criteria_matrix = summarize_acmg_criteria(
-            anno_df, criteria_dict, clingen_map_pkl,
-            apply_clingen_override=apply_clingen_override,
-            summary_binary=ranking_binary,
-        )
+    anno_df, criteria_matrix = summarize_acmg_criteria(
+        anno_df, criteria_dict, clingen_map_pkl,
+        apply_clingen_override=apply_clingen_override,
+    )
     for audit_column in (
         "audit_BS1_disease_incidence_gate",
         "audit_BS1_gene_pathogenic_AF_gate",
@@ -561,48 +550,20 @@ def ACMG_criteria_assign(anno_table: str,
     criteria_matrix.to_csv(output_matrix, sep="\t", index=False)
 
     # Apply quantification using ACMG_criteria column and use that to sort the variants
-    # The explicit native opt-in also permits the separately qualified default
-    # posterior procedure. The original matrix write precedes admission; the
-    # original current-buffer expression owns every unsupported/failure case.
-    if ranking_binary is None:
-        posterior_probability, acmg_class = zip(*criteria_matrix.apply(calculate_posterior_probability, axis=1))
-    else:
-        from priva_rust_posterior import try_posterior_probability
-        posterior_plan = try_posterior_probability(
-            criteria_matrix, ranking_binary, source_function=calculate_posterior_probability,
-        )
-        if posterior_plan is None:
-            posterior_probability, acmg_class = zip(*criteria_matrix.apply(calculate_posterior_probability, axis=1))
-        else:
-            posterior_probability, acmg_class = zip(*posterior_plan)
+    posterior_probability, acmg_class = zip(*criteria_matrix.apply(calculate_posterior_probability, axis=1))
     anno_df["ACMG_quant_score"] = posterior_probability
     anno_df["ACMG_class"] = acmg_class
 
     # Sort and rank variants
-    # 26 October 2026 CT: expose the separately qualified optional ranker at
-    # the original call boundary. Criteria, writes and default call stay in
-    # their original order; no earlier scientific calculation is replayed.
-    if ranking_binary is None:
-        anno_df = sort_and_rank_variants(anno_df,
-                                         ped_df,
-                                         fam_name,
-                                         pext_tissues=pext_tissues,
-                                         pext_low_expression_cutoff=pext_low_expression_cutoff,
-                                         pext_penalty_floor=pext_penalty_floor,
-                                         pext_penalty_shape=pext_penalty_shape,
-                                         relevant_gene_list=relevant_gene_list,
-                                         dispensable_gene_list=dispensable_gene_list)
-    else:
-        anno_df = sort_and_rank_variants(anno_df,
-                                         ped_df,
-                                         fam_name,
-                                         pext_tissues=pext_tissues,
-                                         pext_low_expression_cutoff=pext_low_expression_cutoff,
-                                         pext_penalty_floor=pext_penalty_floor,
-                                         pext_penalty_shape=pext_penalty_shape,
-                                         relevant_gene_list=relevant_gene_list,
-                                         dispensable_gene_list=dispensable_gene_list,
-                                         ranking_binary=ranking_binary)
+    anno_df = sort_and_rank_variants(anno_df,
+                                     ped_df,
+                                     fam_name,
+                                     pext_tissues=pext_tissues,
+                                     pext_low_expression_cutoff=pext_low_expression_cutoff,
+                                     pext_penalty_floor=pext_penalty_floor,
+                                     pext_penalty_shape=pext_penalty_shape,
+                                     relevant_gene_list=relevant_gene_list,
+                                     dispensable_gene_list=dispensable_gene_list)
     # Save the annotated table to replace the input anno_table
     anno_df.to_csv(anno_table, sep="\t", index=False)
 
@@ -673,8 +634,6 @@ if __name__ == "__main__":
         help="Schema-v2 exact non-LOF mechanism assertions JSON.",
     )
     parser.add_argument("--threads", type=int, required=False, default=10)
-    parser.add_argument("--ranking_binary", type=str, required=False, default=None,
-                        help="Optional qualified PriVA Rust summaries, default-model posteriors and ranking; criterion assignment, control statistics and unsupported inputs retain Python.")
     parser.add_argument("--config", type=str, required=False, default=None,
                         help="PriVA config; its SpliceAI score files select the SpliceAI v1 or SpliceAI2 cutoffs")
     args = parser.parse_args()
@@ -713,5 +672,4 @@ if __name__ == "__main__":
                                                     gnomAD_extreme_rare_threshold=args.gnomAD_extreme_rare_threshold,
                                                     expected_incidence=args.expected_incidence,
                                                     threads=args.threads,
-                                                    spliceai_cutoffs=cutoffs_for_config(args.config),
-                                                    ranking_binary=args.ranking_binary)
+                                                    spliceai_cutoffs=cutoffs_for_config(args.config))

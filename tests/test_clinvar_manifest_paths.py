@@ -26,7 +26,8 @@ def load_module(name, relative):
     return module
 
 
-adapter = load_module("priva_task_clinvar_paths", "bin/priva_task.py")
+sys.path.insert(0, str(ROOT / "tests"))
+import priva_task_cli as adapter
 readiness = load_module("readiness_clinvar_paths", "scripts/check_cluster_readiness.py")
 
 
@@ -45,7 +46,7 @@ class ClinVarManifestPaths(unittest.TestCase):
         temporary = tempfile.TemporaryDirectory(
             prefix="priva_clinvar_manifest_", dir=os.environ.get("PRIVA_TEST_TMPDIR", os.environ.get("TMPDIR")))
         self.addCleanup(temporary.cleanup)
-        self.folder = Path(temporary.name)
+        self.folder = Path(temporary.name).resolve()
         self.source = self.folder / "source"
         resource = self.folder / "resource.txt"
         resource.write_text("unrelated routing fixture\n")
@@ -78,11 +79,10 @@ class ClinVarManifestPaths(unittest.TestCase):
             pickle.dump(counts, handle)
 
     def resources(self):
-        return adapter.runtime_resources(self.config, self.source, "preannotated")
+        return adapter.runtime_resources(self.config, self.source)
 
     def selected_record(self):
-        paths = self.resources()
-        manifest = adapter.inventory(paths, checksum=True)
+        manifest = adapter.manifest(self.config, self.source, checksum=True)
         self.assertEqual(sum(key == "clinvar_gene_stat_used_by_shell" for key in manifest), 1)
         return manifest["clinvar_gene_stat_used_by_shell"]
 

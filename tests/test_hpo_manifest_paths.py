@@ -1,17 +1,15 @@
 """Manifest records the HPO file selected by the compatibility shell."""
 import gzip
 import hashlib
-import importlib.util
 import os
 from pathlib import Path
+import sys
 import tempfile
 import unittest
 
 
-ROOT = Path(__file__).resolve().parents[1]
-SPEC = importlib.util.spec_from_file_location("priva_task_hpo_paths", ROOT / "bin/priva_task.py")
-adapter = importlib.util.module_from_spec(SPEC)
-SPEC.loader.exec_module(adapter)
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import priva_task_cli as adapter
 
 
 class HPOManifestPaths(unittest.TestCase):
@@ -19,7 +17,7 @@ class HPOManifestPaths(unittest.TestCase):
         self.temporary = tempfile.TemporaryDirectory(
             prefix="priva_hpo_manifest_", dir=os.environ.get("PRIVA_TEST_TMPDIR", os.environ.get("TMPDIR")))
         self.addCleanup(self.temporary.cleanup)
-        self.folder = Path(self.temporary.name)
+        self.folder = Path(self.temporary.name).resolve()
         self.source = self.folder / "source"
         self.fixture = self.folder / "resource.txt"
         self.fixture.write_text("routing fixture\n")
@@ -43,14 +41,14 @@ class HPOManifestPaths(unittest.TestCase):
                          "GENE\tOMIM:1\tHP:0000006\t-\tTAS\tPMID:1\n")
 
     def paths(self):
-        return adapter.runtime_resources(self.config, self.source, "preannotated")
+        return adapter.runtime_resources(self.config, self.source)
 
     def test_explicit_selected_hpo_identity_is_inventoried_without_legacy_substitution(self):
         self.config["hpo_assertions"] = str(self.selected)
         before = self.default.read_bytes()
         paths = self.paths()
         self.assertEqual(paths["hpo_assertions_used_by_shell"], self.selected)
-        record = adapter.inventory(paths, checksum=True)["hpo_assertions_used_by_shell"]
+        record = adapter.manifest(self.config, self.source, checksum=True)["hpo_assertions_used_by_shell"]
         self.assertEqual(record["path"], str(self.selected))
         self.assertEqual(record["resolved_path"], str(self.selected.resolve()))
         self.assertEqual(record["sha256"], hashlib.sha256(self.selected.read_bytes()).hexdigest())
@@ -73,7 +71,7 @@ class HPOManifestPaths(unittest.TestCase):
         selected_link = self.folder / "selected_link.tsv.gz"
         selected_link.symlink_to(self.selected)
         self.config["hpo_assertions"] = str(selected_link)
-        record = adapter.inventory(self.paths(), checksum=True)["hpo_assertions_used_by_shell"]
+        record = adapter.manifest(self.config, self.source, checksum=True)["hpo_assertions_used_by_shell"]
         self.assertEqual(record["path"], str(selected_link))
         self.assertEqual(record["resolved_path"], str(self.selected.resolve()))
         self.assertEqual(record["sha256"], hashlib.sha256(self.selected.read_bytes()).hexdigest())

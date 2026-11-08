@@ -7,6 +7,9 @@ and every file they write. Timestamps and paths are equal because both read
 the same fixture files; per-run folders are mapped to one placeholder.
 
     python3 rust/tests/nextflow_task_compare.py --binary PRIVA --source CHECKOUT --work DIR
+
+CHECKOUT must still contain bin/priva_task.py and bin/priva_task_boundary.py,
+which were removed after this comparison passed: use a source tree at 918c87f.
 """
 import argparse
 import gzip

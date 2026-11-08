@@ -155,7 +155,7 @@ def create_criteria_summary(row, criteria_order=None, clingen_evidence=None):
 def summarize_acmg_criteria(df: pd.DataFrame,
                             criteria_dict: Dict[str, np.ndarray],
                             clingen_map_pkl: str,
-                            apply_clingen_override: bool = True, *, summary_binary=None) -> Tuple[pd.DataFrame, pd.DataFrame]:
+                            apply_clingen_override: bool = True) -> Tuple[pd.DataFrame, pd.DataFrame]:
     """
     Create a summary column of assigned criteria and a boolean matrix of all criteria.
 
@@ -272,26 +272,6 @@ def summarize_acmg_criteria(df: pd.DataFrame,
             "Use this only for benchmarking against ClinGen-curated variants."
         )
 
-    if summary_binary is not None:
-        # Optional summary-only native plan after all original construction,
-        # validation, loading and logs. A rejected plan changes no current data.
-        from priva_rust_criteria_summary import try_criteria_summary
-        _summary_plan = try_criteria_summary(df, criteria_matrix, clingen_map, summary_binary,
-            source_functions=(summarize_acmg_criteria, create_criteria_summary,
-                              fix_clingen_term, translate_strength_level))
-        if _summary_plan is not None:
-            df['ACMG_criteria'] = _summary_plan.summary
-            if clingen_map:
-                overridden = _summary_plan.overridden
-                for col in criteria_order:
-                    criteria_matrix.loc[overridden, col] = _summary_plan.updates[col]
-                logger.info(
-                    "ClinGen override applied to %s variants; %s further curated "
-                    "variants had no evidence codes recorded and kept PriVA's criteria",
-                    int(overridden.sum()),
-                    int(criteria_matrix["variant_id"].isin(clingen_map).sum() - overridden.sum()),
-                )
-            return df, criteria_matrix
     # Add summary column to original DataFrame
     df['ACMG_criteria'] = criteria_matrix.apply(create_criteria_summary, axis=1, criteria_order=criteria_order, clingen_evidence=clingen_map)
 
@@ -499,82 +479,35 @@ def sort_and_rank_variants(df: pd.DataFrame,
                            pext_penalty_floor: float = 0.8,
                            pext_penalty_shape: float = 0.5,
                            relevant_gene_list: str = None,
-                           dispensable_gene_list: str = DEFAULT_DISPENSABLE_GENE_LIST,
-                           terminal_order_binary: str = None,
-                           ranking_binary: str = None) -> pd.DataFrame:
+                           dispensable_gene_list: str = DEFAULT_DISPENSABLE_GENE_LIST) -> pd.DataFrame:
     """
     Sort variants by their maximum ACMG quantitative score and add ranking.
 
     Args:
         df: DataFrame with ACMG_quant_score column and variant information
-        terminal_order_binary: Explicit opt-in PriVA Rust CLI for final ordering
-            only. None retains Python; unsupported inputs use the original tail.
-        ranking_binary: Explicit opt-in single PriVA Rust CLI for the integrated
-            R1 setup, R2 pedigree context, R3 control multiplication, R4
-            compatibility masks, ordered R5/R6 weights, R7 expression
-            modulation and R8 ordering. Other stages retain Python.
 
     Returns:
         DataFrame sorted by variant's max ACMG score with added variant rank column
     """
-    # 26 October 2026 CT: optional R1 plan, before the original PED/control
-    # stages. The adapter keeps the caller unchanged on fallback. Preserve all
-    # four original statements and their order in the default/fallback branch.
-    native_setup = None
-    if ranking_binary is not None:
-        from priva_rust_rank_setup import try_rank_setup
-        native_setup = try_rank_setup(df, ranking_binary)
-    if native_setup is None:
-        df = df.copy()
-        for stale_col in ("haplo_insuf_index", "zygosity_inheritance_mechanism_index"):
-            if stale_col in df.columns:
-                df = df.drop(columns=[stale_col])
+    df = df.copy()
+    for stale_col in ("haplo_insuf_index", "zygosity_inheritance_mechanism_index"):
+        if stale_col in df.columns:
+            df = df.drop(columns=[stale_col])
 
-        df["sort_index"] = df.loc[:, "ACMG_quant_score"]
-        df = df.loc[df["BIOTYPE"] == "protein_coding", :]
-    else:
-        df = native_setup
+    df["sort_index"] = df.loc[:, "ACMG_quant_score"]
+    df = df.loc[df["BIOTYPE"] == "protein_coding", :]
 
     # NOTE: proband_het must be created AFTER filtering to match df's shape
-    # 26 October 2026 CT: optional R2 context after R1 and before control
-    # calculations. A rejected request executes this original statement intact;
-    # accepted context emits the original warning before entering control code.
-    native_context = None
-    if ranking_binary is not None:
-        from priva_rust_pedigree_context import try_pedigree_context
-        native_context = try_pedigree_context(df, ped_df, fam_name, ranking_binary)
-    if native_context is None:
-        if ped_df is not None and fam_name is not None:
-            proband_row = ped_df.loc[
-                (ped_df['#FamilyID'] == fam_name)
-                & (ped_df['Phenotype'].isin(["2", 2]))
-            ].iloc[0]
-            proband = proband_row['IndividualID']
-            proband_sex = str(proband_row.get("Sex", "")).strip().lower()
-            proband_is_male = proband_sex in {"1", "1.0", "m", "male"}
-            proband_is_female = proband_sex in {"2", "2.0", "f", "female"}
-            if not (proband_is_male or proband_is_female):
-                logger.warning(
-                    "Unrecognized pedigree sex %r for proband %s; neither "
-                    "X-linked recessive nor X-linked dominant ranking "
-                    "compatibility will be assumed",
-                    proband_row.get("Sex", ""),
-                    proband,
-                )
-            proband_het = (df.loc[:, proband].str.count("1") == 1)
-        else:
-            logger.warning("No ped_table provided, skip the zygosity/inheritance/mechanism compatibility penalty")
-            proband = None
-            proband_is_male = False
-            proband_is_female = False
-            proband_het = pd.Series([False] * len(df), index=df.index)  # Use Series with matching index
-    else:
-        proband = native_context['proband']
-        proband_row = native_context['proband_row']
-        proband_is_male = native_context['proband_is_male']
-        proband_is_female = native_context['proband_is_female']
-        proband_het = native_context['proband_het']
-        if native_context['source_warning'] == 'unknown_sex':
+    if ped_df is not None and fam_name is not None:
+        proband_row = ped_df.loc[
+            (ped_df['#FamilyID'] == fam_name)
+            & (ped_df['Phenotype'].isin(["2", 2]))
+        ].iloc[0]
+        proband = proband_row['IndividualID']
+        proband_sex = str(proband_row.get("Sex", "")).strip().lower()
+        proband_is_male = proband_sex in {"1", "1.0", "m", "male"}
+        proband_is_female = proband_sex in {"2", "2.0", "f", "female"}
+        if not (proband_is_male or proband_is_female):
             logger.warning(
                 "Unrecognized pedigree sex %r for proband %s; neither "
                 "X-linked recessive nor X-linked dominant ranking "
@@ -582,22 +515,17 @@ def sort_and_rank_variants(df: pd.DataFrame,
                 proband_row.get("Sex", ""),
                 proband,
             )
-        elif native_context['source_warning'] == 'no_pedigree':
-            logger.warning("No ped_table provided, skip the zygosity/inheritance/mechanism compatibility penalty")
+        proband_het = (df.loc[:, proband].str.count("1") == 1)
+    else:
+        logger.warning("No ped_table provided, skip the zygosity/inheritance/mechanism compatibility penalty")
+        proband = None
+        proband_is_male = False
+        proband_is_female = False
+        proband_het = pd.Series([False] * len(df), index=df.index)  # Use Series with matching index
 
     # Control-common penalty: halve sort_index for variants common in control cohort
     df = compute_control_common(df, proband)
-    # 26 October 2026 CT: only the post-control float64 product is optional.
-    # Keep C1-C5 above, once, and the original current-buffer statement intact
-    # on fallback. Validate the whole product before the single .loc assignment.
-    native_product = None
-    if ranking_binary is not None:
-        from priva_rust_control_multiply import try_control_multiply
-        native_product = try_control_multiply(df, ranking_binary)
-    if native_product is None:
-        df.loc[:, "sort_index"] = df.loc[:, "sort_index"] * df.loc[:, "control_common_index"]
-    else:
-        df.loc[:, "sort_index"] = native_product
+    df.loc[:, "sort_index"] = df.loc[:, "sort_index"] * df.loc[:, "control_common_index"]
 
     # ---------------------------------------------------------------------
     # Zygosity / inheritance / mechanism compatibility penalty.
@@ -606,77 +534,56 @@ def sort_and_rank_variants(df: pd.DataFrame,
     # not provide a dominant-compatible assertion. No raw annotation or
     # gene-level fallback is allowed at this stage.
     # ---------------------------------------------------------------------
-    # 26 October 2026 CT: R4 plans consume the actual current R2 context
-    # and post-R3 frame. Complete validation precedes the unchanged INFO call
-    # and both original assignments below. Fallback executes only this block.
-    native_compatibility = None
-    if ranking_binary is not None:
-        from priva_rust_ranking_compatibility import try_ranking_compatibility
-        native_compatibility = try_ranking_compatibility(
-            df, proband_is_male, proband_is_female, proband_het, ranking_binary)
-    if native_compatibility is None:
-        mechanism_masks = _variant_mechanism_masks(df)
-        chrom = df.get("chrom", pd.Series("", index=df.index)).fillna("").astype(str)
-        x_locus = chrom.str.upper().str.replace(r"^CHR", "", regex=True).eq("X")
-        has_single_alt_lof_compatible = (
-            mechanism_masks["has_dom_lof_history"]
-            | mechanism_masks["has_dom_unresolved_history"]
-            | (
-                x_locus
-                & proband_is_male
-                & (
-                    mechanism_masks["has_x_recessive_lof_history"]
-                    | mechanism_masks["has_x_recessive_unresolved_history"]
-                    | mechanism_masks["has_x_dominant_lof_history"]
-                    | mechanism_masks["has_x_dominant_unresolved_history"]
-                )
-            )
-            | (
-                x_locus
-                & proband_is_female
-                & (
-                    mechanism_masks["has_x_dominant_lof_history"]
-                    | mechanism_masks["has_x_dominant_unresolved_history"]
-                )
-            )
-        )
-        exact_gof = mechanism_masks["is_exact_gof"]
-        asserted_lof_effect = mechanism_masks["is_predicted_lof"]
-        dn_without_hi_or_ambiguous = (
-            (
-                mechanism_masks["has_dom_dn_history"]
-                | mechanism_masks["has_x_dominant_dn_history"]
-            )
-            & ~(
-                mechanism_masks["has_dom_lof_history"]
+    mechanism_masks = _variant_mechanism_masks(df)
+    chrom = df.get("chrom", pd.Series("", index=df.index)).fillna("").astype(str)
+    x_locus = chrom.str.upper().str.replace(r"^CHR", "", regex=True).eq("X")
+    has_single_alt_lof_compatible = (
+        mechanism_masks["has_dom_lof_history"]
+        | mechanism_masks["has_dom_unresolved_history"]
+        | (
+            x_locus
+            & proband_is_male
+            & (
+                mechanism_masks["has_x_recessive_lof_history"]
+                | mechanism_masks["has_x_recessive_unresolved_history"]
                 | mechanism_masks["has_x_dominant_lof_history"]
-            )
-            & ~(
-                mechanism_masks["has_dom_unresolved_history"]
                 | mechanism_masks["has_x_dominant_unresolved_history"]
             )
         )
-        heterozygous_lof_incompatible = (
-            asserted_lof_effect
-            & ~exact_gof
-            & ~has_single_alt_lof_compatible
+        | (
+            x_locus
+            & proband_is_female
+            & (
+                mechanism_masks["has_x_dominant_lof_history"]
+                | mechanism_masks["has_x_dominant_unresolved_history"]
+            )
         )
+    )
+    exact_gof = mechanism_masks["is_exact_gof"]
+    asserted_lof_effect = mechanism_masks["is_predicted_lof"]
+    dn_without_hi_or_ambiguous = (
+        (
+            mechanism_masks["has_dom_dn_history"]
+            | mechanism_masks["has_x_dominant_dn_history"]
+        )
+        & ~(
+            mechanism_masks["has_dom_lof_history"]
+            | mechanism_masks["has_x_dominant_lof_history"]
+        )
+        & ~(
+            mechanism_masks["has_dom_unresolved_history"]
+            | mechanism_masks["has_x_dominant_unresolved_history"]
+        )
+    )
+    heterozygous_lof_incompatible = (
+        asserted_lof_effect
+        & ~exact_gof
+        & ~has_single_alt_lof_compatible
+    )
 
-        high_acmg_lof = df["ACMG_quant_score"] > 0.89
-        compatibility_penalty_rows = high_acmg_lof & proband_het & heterozygous_lof_incompatible
-        pext_modulation_rows = high_acmg_lof
-    else:
-        mechanism_masks = native_compatibility['mechanism_masks']
-        chrom = native_compatibility['chrom']
-        x_locus = native_compatibility['x_locus']
-        has_single_alt_lof_compatible = native_compatibility['has_single_alt_lof_compatible']
-        exact_gof = native_compatibility['exact_gof']
-        asserted_lof_effect = native_compatibility['asserted_lof_effect']
-        dn_without_hi_or_ambiguous = native_compatibility['dn_without_hi_or_ambiguous']
-        heterozygous_lof_incompatible = native_compatibility['heterozygous_lof_incompatible']
-        high_acmg_lof = native_compatibility['high_acmg_lof']
-        compatibility_penalty_rows = native_compatibility['compatibility_penalty_rows']
-        pext_modulation_rows = native_compatibility['pext_modulation_rows']
+    high_acmg_lof = df["ACMG_quant_score"] > 0.89
+    compatibility_penalty_rows = high_acmg_lof & proband_het & heterozygous_lof_incompatible
+    pext_modulation_rows = high_acmg_lof
 
     logger.info(
         "Zygosity/inheritance/mechanism compatibility signals for ranking: "
@@ -689,45 +596,24 @@ def sort_and_rank_variants(df: pd.DataFrame,
     df["zygosity_inheritance_mechanism_compatibility"] = 1.0
     df.loc[compatibility_penalty_rows, "zygosity_inheritance_mechanism_compatibility"] = 0.9
 
-    # 26 October 2026 CT: plan R5 then R6 only on the current post-R4
-    # buffers. Validate every step before mutation; fallback never replays
-    # pedigree warnings, controls, R3 or R4.
-    native_weights = None
-    if ranking_binary is not None:
-        from priva_rust_gene_weights import try_gene_weights, gene_membership
-        native_weights = try_gene_weights(
-            df, dispensable_gene_list, relevant_gene_list, compatibility_penalty_rows, ranking_binary)
-    if native_weights is None:
-        if dispensable_gene_list is not None:
-            dispensable_genes = pd.read_table(dispensable_gene_list, header=None, names=["SYMBOL"], comment="#") # Skip the header row starting with #
-            dispensable_genes = set(dispensable_genes["SYMBOL"].tolist())
-            df["dispensable_gene_index"] = 1.0
-            df.loc[df["SYMBOL"].isin(dispensable_genes), "dispensable_gene_index"] = 0.9
-            df.loc[:, "sort_index"] = df.loc[:, "sort_index"] * df.loc[:, "dispensable_gene_index"]
+    if dispensable_gene_list is not None:
+        dispensable_genes = pd.read_table(dispensable_gene_list, header=None, names=["SYMBOL"], comment="#") # Skip the header row starting with #
+        dispensable_genes = set(dispensable_genes["SYMBOL"].tolist())
+        df["dispensable_gene_index"] = 1.0
+        df.loc[df["SYMBOL"].isin(dispensable_genes), "dispensable_gene_index"] = 0.9
+        df.loc[:, "sort_index"] = df.loc[:, "sort_index"] * df.loc[:, "dispensable_gene_index"]
 
-        if relevant_gene_list is not None:
-            relevant_genes = pd.read_table(relevant_gene_list, header=None, names=["SYMBOL"], comment="#") # Skip the header row starting with #
-            relevant_genes = set(relevant_genes["SYMBOL"].tolist())
-            df["relevant_gene_index"] = 1.0
-            df.loc[df["SYMBOL"].isin(relevant_genes), "relevant_gene_index"] = 1.2  # Prioritize the variants in relevant genes
-            df.loc[:, "sort_index"] = df.loc[:, "sort_index"] * df.loc[:, "relevant_gene_index"]
+    if relevant_gene_list is not None:
+        relevant_genes = pd.read_table(relevant_gene_list, header=None, names=["SYMBOL"], comment="#") # Skip the header row starting with #
+        relevant_genes = set(relevant_genes["SYMBOL"].tolist())
+        df["relevant_gene_index"] = 1.0
+        df.loc[df["SYMBOL"].isin(relevant_genes), "relevant_gene_index"] = 1.2  # Prioritize the variants in relevant genes
+        df.loc[:, "sort_index"] = df.loc[:, "sort_index"] * df.loc[:, "relevant_gene_index"]
 
-        df.loc[compatibility_penalty_rows, "sort_index"] = (
-            df.loc[compatibility_penalty_rows, "sort_index"]
-            * df.loc[compatibility_penalty_rows, "zygosity_inheritance_mechanism_compatibility"]
-        )
-    else:
-        if dispensable_gene_list is not None:
-            dispensable_genes = native_weights['dispensable_genes']
-            df["dispensable_gene_index"] = 1.0
-            df.loc[gene_membership(df, native_weights['dispensable_selected']), "dispensable_gene_index"] = 0.9
-            df.loc[:, "sort_index"] = native_weights['dispensable_product']
-        if relevant_gene_list is not None:
-            relevant_genes = native_weights['relevant_genes']
-            df["relevant_gene_index"] = 1.0
-            df.loc[gene_membership(df, native_weights['relevant_selected']), "relevant_gene_index"] = 1.2
-            df.loc[:, "sort_index"] = native_weights['relevant_product']
-        df.loc[compatibility_penalty_rows, "sort_index"] = native_weights['compatibility_product']
+    df.loc[compatibility_penalty_rows, "sort_index"] = (
+        df.loc[compatibility_penalty_rows, "sort_index"]
+        * df.loc[compatibility_penalty_rows, "zygosity_inheritance_mechanism_compatibility"]
+    )
 
     # Apply pext-based expression modulation if pext columns are available
     # Low pext = variant in low-expression region = deprioritize for LoF interpretation
@@ -757,33 +643,18 @@ def sort_and_rank_variants(df: pd.DataFrame,
 
         # Cummings 2020 used PEXT < 0.1 as the low-expression bin.
         # Bound the ranking penalty so PEXT cannot overwhelm ACMG evidence.
-        # 26 October 2026 CT: R7 consumes current post-R5/R6 buffers and the
-        # original R4 PEXT mask. Selection, validation and logs stay ordered;
-        # rejection executes these original four statements once in place.
-        native_pext = None
-        if ranking_binary is not None:
-            from priva_rust_pext import try_pext, pext_score_product
-            native_pext = try_pext(df, pext_col_to_use, pext_tissues,
-                pext_low_expression_cutoff, pext_penalty_floor, pext_penalty_shape,
-                pext_modulation_rows, ranking_binary)
-        if native_pext is None:
-            pext_numeric = df[pext_col_to_use].map(coerce_pext_value).fillna(1.0).clip(0, 1)
-            scaled_pext = (pext_numeric / pext_low_expression_cutoff).clip(0, 1)
-            df["pext_sort_index"] = np.where(
-                pext_numeric >= pext_low_expression_cutoff,
-                1.0,
-                pext_penalty_floor + (1.0 - pext_penalty_floor) * np.power(scaled_pext, pext_penalty_shape)
-            )
-            # Historical PriVA behavior applied PEXT modulation to high ACMG-score rows.
-            df.loc[pext_modulation_rows, "sort_index"] = (
-                df.loc[pext_modulation_rows, "sort_index"]
-                * df.loc[pext_modulation_rows, "pext_sort_index"]
-            )
-        else:
-            pext_numeric = native_pext['pext_numeric']
-            scaled_pext = native_pext['scaled_pext']
-            df["pext_sort_index"] = native_pext['pext_sort_index']
-            df.loc[pext_modulation_rows, "sort_index"] = pext_score_product(df, pext_modulation_rows, native_pext)
+        pext_numeric = df[pext_col_to_use].map(coerce_pext_value).fillna(1.0).clip(0, 1)
+        scaled_pext = (pext_numeric / pext_low_expression_cutoff).clip(0, 1)
+        df["pext_sort_index"] = np.where(
+            pext_numeric >= pext_low_expression_cutoff,
+            1.0,
+            pext_penalty_floor + (1.0 - pext_penalty_floor) * np.power(scaled_pext, pext_penalty_shape)
+        )
+        # Historical PriVA behavior applied PEXT modulation to high ACMG-score rows.
+        df.loc[pext_modulation_rows, "sort_index"] = (
+            df.loc[pext_modulation_rows, "sort_index"]
+            * df.loc[pext_modulation_rows, "pext_sort_index"]
+        )
         logger.info(
             "Applied pext-based sort modulation using %s "
             "(cutoff=%s, floor=%s, shape=%s)",
@@ -792,16 +663,6 @@ def sort_and_rank_variants(df: pd.DataFrame,
             pext_penalty_floor,
             pext_penalty_shape,
         )
-
-    # 26 October 2026 CT: integrate only the existing R8 native boundary after
-    # all original C1-C5/R1-R7 statements. Keep Python as the default and retain
-    # these original statements verbatim for atomic current-frame fallback.
-    if terminal_order_binary is not None or ranking_binary is not None:
-        from priva_rust_terminal_order import try_terminal_order
-        native_order = try_terminal_order(
-            df, terminal_order_binary if terminal_order_binary is not None else ranking_binary)
-        if native_order is not None:
-            return native_order
 
     # Group by variant coordinates to get max score per variant
     variant_groups = df.groupby(['chrom', 'pos', 'ref', 'alt'])

@@ -285,9 +285,18 @@ fn inventory_tracks_nested_changes() {
         before.get(key).unwrap(),
         after.get(key).unwrap()
     ));
-    std::os::unix::fs::symlink(&root, root.join("loop")).unwrap();
+    // A link to a folder inside the resource is recorded, not followed.
+    std::os::unix::fs::symlink(root.join("release"), root.join("inside")).unwrap();
+    let records = contract::inventory(&paths, false).unwrap();
+    let link = records.get("vep/inside").unwrap();
+    assert!(matches!(link.get("type"), Some(Json::Str(kind)) if kind == "directory_link"));
+    assert!(records.get("vep/inside/data.tsv").is_none());
+    // A link leaving the resource is refused.
+    let outside = folder.0.join("outside");
+    fs::create_dir_all(&outside).unwrap();
+    std::os::unix::fs::symlink(&outside, root.join("away")).unwrap();
     let error = contract::inventory(&paths, false).unwrap_err();
-    assert!(message(error).contains("Directory symlink"));
+    assert!(message(error).contains("points outside"));
 }
 
 fn options(pairs: &[(&str, &str)], flags: &[&str]) -> Options {

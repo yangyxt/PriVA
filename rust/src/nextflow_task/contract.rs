@@ -598,13 +598,31 @@ pub(crate) fn inventory(paths: &[(String, PathBuf)], checksum: bool) -> Result<J
             // Include every dependency below directory resources without
             // hashing TB of bytes by default. Symlinks are recorded and their
             // target stat included; directory symlinks are not traversed.
+            let resolved_root = fs::canonicalize(path)?;
             for child in tree(path)? {
                 let link = fs::symlink_metadata(&child)?.file_type().is_symlink();
                 if link && child.is_dir() {
-                    return refuse(format!(
-                        "Directory symlink in resource tree needs explicit resolved config: {}",
-                        child.display()
-                    ));
+                    // A link to a folder inside the same resource (such as a
+                    // conda environment's lib/terminfo) is recorded but not
+                    // followed: its target's files are inventoried already.
+                    // A link leaving the resource could change unseen.
+                    let target = fs::canonicalize(&child)?;
+                    if !target.starts_with(&resolved_root) {
+                        return refuse(format!(
+                            "Directory symlink in resource tree points outside it and needs explicit resolved config: {}",
+                            child.display()
+                        ));
+                    }
+                    let relative = child.strip_prefix(path).unwrap_or(&child);
+                    records.set(
+                        &format!("{key}/{}", relative.display()),
+                        object(vec![
+                            ("path", text(path_text(&child))),
+                            ("resolved_path", text(path_text(&target))),
+                            ("type", text("directory_link")),
+                        ]),
+                    );
+                    continue;
                 }
                 if child.is_file() {
                     let relative = child.strip_prefix(path).unwrap_or(&child);

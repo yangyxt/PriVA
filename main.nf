@@ -27,6 +27,7 @@ workflow {
 Required: --input VCF.vcf.gz --ped FAMILY.ped --family ID --assembly hg19|hg38
           --legacy_config CONFIG.yaml --resource_manifest RESOURCES.json
           --software_id PINNED_ENVIRONMENT_OR_IMAGE_ID --outdir NEW_OUTPUT_DIRECTORY
+          --priva_binary PRIVA_PROGRAM (runs the task contract: priva task)
 Optional: --mode raw|annotated --cadd ANNOTATED.cadd.tsv --vcf_index VCF.vcf.gz.tbi
           --vcf_hub_mode off|qualified-copy --cadd_hub_mode off|copy
 The annotated mode requires its matching CADD TSV. The full cohort PED and VCF
@@ -34,7 +35,7 @@ are retained for annotation; only the selected family is prioritized. Preserve
 the original proband-first PED row order. Use -stub-run only for wiring tests.
 See README.md for configuration, outputs and scientific-profile requirements.'''
     } else {
-        ['input', 'ped', 'family', 'assembly', 'legacy_config', 'resource_manifest', 'software_id', 'outdir'].each { key ->
+        ['input', 'ped', 'family', 'assembly', 'legacy_config', 'resource_manifest', 'software_id', 'outdir', 'priva_binary'].each { key ->
             if (!params[key]) error "Required parameter --${key} is missing"
         }
         if (!(params.mode in ['raw', 'annotated'])) error '--mode must be raw or annotated'
@@ -55,16 +56,22 @@ See README.md for configuration, outputs and scientific-profile requirements.'''
         if (!(params.input.toString().endsWith('.vcf.gz'))) error '--input must be a BGZF .vcf.gz file'
         def sourceRoot = new File(projectDir.toString()).canonicalFile
         if (!(sourceRoot.toString() ==~ /[A-Za-z0-9_\.\/:+\-]+/)) error 'Legacy shell scripts require a source path without whitespace or shell metacharacters'
+        def privaBinary = new File(params.priva_binary.toString()).canonicalFile
+        if (!privaBinary.isFile() || !privaBinary.canExecute()) error '--priva_binary must be an executable PriVA program'
+        if (!(privaBinary.toString() ==~ /[A-Za-z0-9_\.\/:+\-]+/)) error '--priva_binary must be a path without whitespace or shell metacharacters'
         def base = new File(params.input.toString()).name.replaceFirst(/\.vcf\.gz$/, '')
         if (params.mode == 'annotated') base = base.replaceFirst(/\.anno$/, '')
         if (!(base ==~ /[A-Za-z0-9_][A-Za-z0-9_.-]*/)) error 'Unsafe input basename'
         def meta = [id: params.family, base: base, assembly: params.assembly, mode: params.mode,
                     source_root: sourceRoot.toString(), source_digest: sourceDigest(sourceRoot),
                     software_id: params.software_id.toString(), vcf_hub_mode: params.vcf_hub_mode,
-                    cadd_hub_mode: params.cadd_hub_mode, task_boundary: taskBoundary]
+                    cadd_hub_mode: params.cadd_hub_mode, task_boundary: taskBoundary,
+                    // The task program's bytes, not only its path, join every task hash.
+                    priva_binary: privaBinary.toString(),
+                    priva_sha256: java.security.MessageDigest.getInstance('SHA-256').digest(privaBinary.bytes).encodeHex().toString()]
         // This check executes outside the task cache. A fully cached -resume
         // still verifies external resources and the published run identity.
-        def launchCommand = ['python3', "${sourceRoot}/bin/priva_task.py", 'launch',
+        def launchCommand = [meta.priva_binary, 'task', 'launch',
             '--vcf', file(params.input, checkIfExists: true).toString(),
             '--vcf-index', file(params.vcf_index ?: "${params.input}.tbi", checkIfExists: true).toString(),
             '--ped', file(params.ped, checkIfExists: true).toString(),

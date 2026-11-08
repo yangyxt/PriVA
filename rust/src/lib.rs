@@ -38,6 +38,7 @@ mod installer_config_paths;
 mod mapped_artifact_publish;
 // Qualified before the opt-in DAS procedures consume this exact random stream.
 #[allow(dead_code)]
+mod nextflow_task;
 mod numpy_rng;
 // Qualified independently before the opt-in DAS producer is connected.
 #[allow(dead_code)]

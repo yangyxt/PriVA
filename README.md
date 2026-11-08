@@ -148,7 +148,7 @@ The cache path is read from the installed configuration. Keep this external laun
 Create a manifest of the existing resources. This inventories resources; it does not install them or qualify a new scientific profile:
 
 ```bash
-python3 "$PRIVA_ROOT/bin/priva_task.py" manifest \
+"$PRIVA_BINARY" task manifest \
   --config "$PRIVA_CONFIG" --legacy-root "$PRIVA_ROOT" --mode annotated \
   --vcf-hub-mode off --cadd-hub-mode off \
   --output "$PRIVA_RUNS/resources.json"
@@ -176,6 +176,7 @@ After preparing a compatible pair and reviewing the experimental execution bound
   --legacy_config "$PRIVA_CONFIG" \
   --resource_manifest "$PRIVA_RUNS/resources.json" \
   --software_id "$PRIVA_SOFTWARE_ID" \
+  --priva_binary "$PRIVA_BINARY" \
   --vcf_hub_mode off --cadd_hub_mode off \
   --outdir "$PRIVA_RUNS/FAM1" -work-dir "$PRIVA_RUNS/work"
 ```

@@ -8,12 +8,12 @@ process VALIDATE_FAMILY {
     script:
     def caddArg = cadd ? '--cadd provided.cadd.tsv' : ''
     """
-    python3 '${meta.source_root}/bin/priva_task.py' validate --vcf '${vcf}' --vcf-index '${vcf_index}' --ped '${ped}' --config '${config}' --resources '${resources}' --family '${meta.id}' --base '${meta.base}' --assembly '${meta.assembly}' --mode '${meta.mode}' --legacy-root '${meta.source_root}' --source-digest '${meta.source_digest}' --software-id '${meta.software_id.replace("'", "'\\''")}' --vcf-hub-mode '${meta.vcf_hub_mode}' --cadd-hub-mode '${meta.cadd_hub_mode}' --task-boundary '${meta.task_boundary}' ${caddArg}
+    '${meta.priva_binary}' task validate --vcf '${vcf}' --vcf-index '${vcf_index}' --ped '${ped}' --config '${config}' --resources '${resources}' --family '${meta.id}' --base '${meta.base}' --assembly '${meta.assembly}' --mode '${meta.mode}' --legacy-root '${meta.source_root}' --source-digest '${meta.source_digest}' --software-id '${meta.software_id.replace("'", "'\\''")}' --vcf-hub-mode '${meta.vcf_hub_mode}' --cadd-hub-mode '${meta.cadd_hub_mode}' --task-boundary '${meta.task_boundary}' ${caddArg}
     """
     stub:
     def caddArg = cadd ? '--cadd provided.cadd.tsv' : ''
     """
-    python3 '${meta.source_root}/bin/priva_task.py' validate --vcf '${vcf}' --vcf-index '${vcf_index}' --ped '${ped}' --config '${config}' --resources '${resources}' --family '${meta.id}' --base '${meta.base}' --assembly '${meta.assembly}' --mode '${meta.mode}' --legacy-root '${meta.source_root}' --source-digest '${meta.source_digest}' --software-id stub --vcf-hub-mode '${meta.vcf_hub_mode}' --cadd-hub-mode '${meta.cadd_hub_mode}' --task-boundary '${meta.task_boundary}' ${caddArg} --stub
+    '${meta.priva_binary}' task validate --vcf '${vcf}' --vcf-index '${vcf_index}' --ped '${ped}' --config '${config}' --resources '${resources}' --family '${meta.id}' --base '${meta.base}' --assembly '${meta.assembly}' --mode '${meta.mode}' --legacy-root '${meta.source_root}' --source-digest '${meta.source_digest}' --software-id stub --vcf-hub-mode '${meta.vcf_hub_mode}' --cadd-hub-mode '${meta.cadd_hub_mode}' --task-boundary '${meta.task_boundary}' ${caddArg} --stub
     """
 }
 
@@ -29,12 +29,12 @@ process ANNOTATE_FAMILY {
     script:
     def caddArg = cadd ? '--cadd provided.cadd.tsv' : ''
     """
-    python3 '${meta.source_root}/bin/priva_task.py' run --phase annotation --bundle '${bundle}' --vcf '${vcf}' --vcf-index '${vcf_index}' --cpus ${task.cpus} ${caddArg}
+    '${meta.priva_binary}' task run --phase annotation --bundle '${bundle}' --vcf '${vcf}' --vcf-index '${vcf_index}' --cpus ${task.cpus} ${caddArg}
     """
     stub:
     def caddArg = cadd ? '--cadd provided.cadd.tsv' : ''
     """
-    python3 '${meta.source_root}/bin/priva_task.py' run --phase annotation --bundle '${bundle}' --vcf '${vcf}' --vcf-index '${vcf_index}' --cpus ${task.cpus} ${caddArg} --stub
+    '${meta.priva_binary}' task run --phase annotation --bundle '${bundle}' --vcf '${vcf}' --vcf-index '${vcf_index}' --cpus ${task.cpus} ${caddArg} --stub
     """
 }
 
@@ -50,11 +50,11 @@ process FILTER_FAMILY {
     path('filtration.provenance.json'), emit: provenance
     script:
     """
-    python3 '${meta.source_root}/bin/priva_task.py' run --phase filtration --bundle '${bundle}' --vcf '${vcf}' --vcf-index '${vcf_index}' --cadd '${cadd}' --cpus ${task.cpus}
+    '${meta.priva_binary}' task run --phase filtration --bundle '${bundle}' --vcf '${vcf}' --vcf-index '${vcf_index}' --cadd '${cadd}' --cpus ${task.cpus}
     """
     stub:
     """
-    python3 '${meta.source_root}/bin/priva_task.py' run --phase filtration --bundle '${bundle}' --vcf '${vcf}' --vcf-index '${vcf_index}' --cadd '${cadd}' --cpus ${task.cpus} --stub
+    '${meta.priva_binary}' task run --phase filtration --bundle '${bundle}' --vcf '${vcf}' --vcf-index '${vcf_index}' --cadd '${cadd}' --cpus ${task.cpus} --stub
     """
 }
 
@@ -70,10 +70,10 @@ process PRIORITIZE_FAMILY {
     path('prioritization.provenance.json'), emit: provenance
     script:
     """
-    python3 '${meta.source_root}/bin/priva_task.py' run --phase prioritization --bundle '${bundle}' --vcf '${vcf}' --vcf-index '${vcf_index}' --cadd '${cadd}' --cpus ${task.cpus}
+    '${meta.priva_binary}' task run --phase prioritization --bundle '${bundle}' --vcf '${vcf}' --vcf-index '${vcf_index}' --cadd '${cadd}' --cpus ${task.cpus}
     """
     stub:
     """
-    python3 '${meta.source_root}/bin/priva_task.py' run --phase prioritization --bundle '${bundle}' --vcf '${vcf}' --vcf-index '${vcf_index}' --cadd '${cadd}' --cpus ${task.cpus} --stub
+    '${meta.priva_binary}' task run --phase prioritization --bundle '${bundle}' --vcf '${vcf}' --vcf-index '${vcf_index}' --cadd '${cadd}' --cpus ${task.cpus} --stub
     """
 }

@@ -17,10 +17,11 @@ if ! "${nextflow_bin}" -log "${run_root}/logs/cadd-stub.log" run "${repo_root}/c
     tail -80 "${run_root}/logs/cadd-stub.stdout.log"
     exit 1
 fi
-python3 - "${repo_root}" "${run_root}/cadd/sample.cadd.tsv" <<'PY'
+python3 - "${run_root}/cadd/sample.cadd.tsv" <<'PY'
 import sys
-sys.path.insert(0, sys.argv[1] + "/bin")
-import priva_task
-priva_task.validate_cadd(sys.argv[2])
+# The header contract `priva task validate` applies to a provided CADD table.
+fields = open(sys.argv[1]).readline().rstrip("\n").split("\t")
+assert {"#Chrom", "Pos", "Ref", "Alt", "PHRED", "FeatureID"} <= set(fields), fields
+assert len(fields) == len(set(fields)), fields
 print("cadd.nf stub run wrote a CADD table that main.nf accepts")
 PY

@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 # Synthetic wiring tests only: no mature variant tools or real caches invoked.
-# Usage: bash tests/nextflow/run_stub.sh /absolute/path/to/nextflow /absolute/run-root
+# Usage: bash tests/nextflow/run_stub.sh /absolute/path/to/nextflow /absolute/run-root [PRIVA]
 set -euo pipefail
 nextflow_bin=${1:?Pass the pinned Nextflow executable}
 run_root=${2:?Pass a new durable test run root}
 repo_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd -P)
+priva_bin=${3:-${repo_root}/rust/target/release/priva}
 mkdir -p "${run_root}/validation" "${run_root}/logs" "${run_root}/work/driver-stub"
 fixture="${run_root}/validation/nextflow-fixture"
 case_root="${run_root}/validation/nextflow-stub"
@@ -14,7 +15,8 @@ common=(run "${repo_root}" -profile test -stub-run -ansi-log false
     -work-dir "${run_root}/work/nextflow-stub"
     --input "${fixture}/cohort.vcf.gz" --ped "${fixture}/family.ped"
     --family FAM --assembly hg19 --legacy_config "${fixture}/legacy.yaml"
-    --resource_manifest "${fixture}/resources.json" --software_id stub)
+    --resource_manifest "${fixture}/resources.json" --software_id stub
+    --priva_binary "${priva_bin}")
 run_case() {
     local name=$1
     shift

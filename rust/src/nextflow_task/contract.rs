@@ -583,6 +583,33 @@ fn tree(directory: &Path) -> Result<Vec<PathBuf>> {
     Ok(found)
 }
 
+/// Threads that read entry metadata; network file systems answer each
+/// call slowly, so the calls overlap rather than run one after another.
+const PROBE_THREADS: usize = 8;
+
+type Probe = std::io::Result<(fs::Metadata, Option<std::io::Result<String>>)>;
+
+/// The lstat of every entry, in order, plus the SHA-256 of regular files
+/// when `checksum` is set.
+fn probe_entries(entries: &[PathBuf], checksum: bool) -> Vec<Probe> {
+    let probe = |path: &PathBuf| -> Probe {
+        let meta = fs::symlink_metadata(path)?;
+        let digest = (checksum && meta.is_file()).then(|| crate::sha256::sha256_file(path));
+        Ok((meta, digest))
+    };
+    let chunk = entries.len().div_ceil(PROBE_THREADS).max(1);
+    std::thread::scope(|scope| {
+        let workers: Vec<_> = entries
+            .chunks(chunk)
+            .map(|part| scope.spawn(move || part.iter().map(probe).collect::<Vec<_>>()))
+            .collect();
+        workers
+            .into_iter()
+            .flat_map(|worker| worker.join().expect("metadata worker panicked"))
+            .collect()
+    })
+}
+
 pub(crate) fn inventory(paths: &[(String, PathBuf)], checksum: bool) -> Result<Json> {
     let mut sorted: Vec<&(String, PathBuf)> = paths.iter().collect();
     sorted.sort_by(|a, b| a.0.cmp(&b.0));
@@ -599,8 +626,35 @@ pub(crate) fn inventory(paths: &[(String, PathBuf)], checksum: bool) -> Result<J
             // hashing TB of bytes by default. Symlinks are recorded and their
             // target stat included; directory symlinks are not traversed.
             let resolved_root = fs::canonicalize(path)?;
-            for child in tree(path)? {
-                let link = fs::symlink_metadata(&child)?.file_type().is_symlink();
+            let children = tree(path)?;
+            let probes = probe_entries(&children, checksum);
+            for (child, probe) in children.iter().zip(probes) {
+                let child = child.clone();
+                let (meta, digest) = probe?;
+                let link = meta.file_type().is_symlink();
+                if !link {
+                    // tree() descends only into real folders, so the resolved
+                    // path of an entry that is not a link is the resolved root
+                    // plus its relative path: one lstat replaces stat, stat,
+                    // stat and realpath of inventory_record.
+                    if meta.is_file() {
+                        let relative = child.strip_prefix(path).unwrap_or(&child);
+                        let mut items = vec![
+                            ("path", text(path_text(&child))),
+                            ("resolved_path", text(path_text(&resolved_root.join(relative)))),
+                            ("type", text("file")),
+                            ("size", Json::Int(meta.len() as i128)),
+                            ("mtime_ns", Json::Int(mtime_ns(&meta))),
+                        ];
+                        if let Some(digest) = digest {
+                            let digest = digest
+                                .map_err(|e| crate::python_path::os_error(e, &child, None))?;
+                            items.push(("sha256", text(digest)));
+                        }
+                        records.set(&format!("{key}/{}", relative.display()), object(items));
+                    }
+                    continue;
+                }
                 if link && child.is_dir() {
                     // A link to a folder inside the same resource (such as a
                     // conda environment's lib/terminfo) is recorded but not

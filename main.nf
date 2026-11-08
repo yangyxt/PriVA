@@ -53,9 +53,10 @@ See README.md for configuration, outputs and scientific-profile requirements.'''
         if (params.mode == 'annotated' && !params.cadd) error '--mode annotated requires the matching --cadd TSV'
         if (params.mode == 'raw' && params.cadd) error '--cadd is only accepted with --mode annotated'
         // A value starting with '-' after a space is read by Nextflow as a
-        // separate flag, which leaves this parameter set to true.
+        // separate flag, which leaves this parameter set to true (a boolean,
+        // or the text 'true' depending on how the launch reads it).
         ['slurm_cluster_options', 'slurm_account', 'container_run_options'].each { name ->
-            if (params[name] instanceof Boolean) error "--${name} needs a value; write it as --${name}='VALUE'"
+            if (params[name] instanceof Boolean || params[name]?.toString() == 'true') error "--${name} needs a value; write it as --${name}='VALUE'"
         }
         if (!(params.family ==~ /[A-Za-z0-9_][A-Za-z0-9_.-]*/)) error 'Unsafe family identifier'
         if (!(params.input.toString().endsWith('.vcf.gz'))) error '--input must be a BGZF .vcf.gz file'

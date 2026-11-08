@@ -222,9 +222,11 @@ def main():
         return folder
     harness.both("launch_identical_resume", launch + ["--outdir", "{folder}/out"], setup=same)
     swap = lambda items, key, value: [value if i and items[i - 1] == key else x for i, x in enumerate(items)]
+    # Raw mode is no longer refused (its gate was lifted after the trio
+    # qualification), so it has no Python counterpart to compare; the Rust
+    # test raw_mode_checks_the_annotation_resources covers it instead.
     for name, changed in (("launch_bad_digest", swap(launch, "--source-digest", "0" * 64)),
                           ("launch_wrong_assembly", swap(launch, "--assembly", "hg19")),
-                          ("launch_raw_gated", swap(launch, "--mode", "raw")),
                           ("launch_too_few_family_cpus", swap(launch, "--family-cpus", "0")),
                           ("launch_bad_int", swap(launch, "--family-cpus", "two"))):
         harness.both(name, changed + ["--outdir", "{folder}/out"])

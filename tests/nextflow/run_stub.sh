@@ -50,6 +50,14 @@ if "${nextflow_bin}" -log "${run_root}/logs/nextflow-stub-reject-output.log" "${
     echo 'ERROR: mismatched output identity was accepted' >&2
     exit 1
 fi
+# An option value written after a space is read by Nextflow as a separate
+# flag; the launch must refuse it before any task instead of passing 'true'.
+if "${nextflow_bin}" -log "${run_root}/logs/nextflow-stub-flag-value.log" "${common[@]}" \
+    --outdir "${case_root}/flag-value" --slurm_cluster_options --constraint=NAME \
+    > "${run_root}/logs/nextflow-stub-flag-value.stdout.log" 2>&1; then
+    echo 'ERROR: an option value read as a flag was accepted' >&2
+    exit 1
+fi
 python3 - "${run_root}" <<'PY'
 from pathlib import Path
 import json
@@ -57,10 +65,12 @@ import sys
 root = Path(sys.argv[1])
 failure = (root / 'logs/nextflow-stub-reject-output.stdout.log').read_text()
 assert 'different inputs/source/resources/settings' in failure, failure
+flag = (root / 'logs/nextflow-stub-flag-value.stdout.log').read_text()
+assert '--slurm_cluster_options needs a value' in flag, flag
 contract = json.loads(next((root / 'validation/nextflow-stub/raw').rglob('contract.json')).read_text())
 assert contract['samples'] == ['child', 'dad', 'mom', 'other']
 assert contract['family_samples'] == ['child', 'dad', 'mom']
 assert contract['stub'] is True
 assert len(list((root / 'validation/nextflow-stub/annotated').rglob('*.filtered.acmg.tsv'))) == 1
-print('Annotated stub, preserved cohort context, and stale-output rejection passed')
+print('Annotated stub, preserved cohort context, stale-output and flag-value rejection passed')
 PY

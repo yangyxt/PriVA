@@ -759,6 +759,43 @@ pub(crate) fn source_digest(root: &Path) -> Result<String> {
     Ok(digest.finish_hex())
 }
 
+/// How a current inventory record differs from the manifest's, as
+/// " (field recorded -> current; ...)", or None when it has not changed.
+/// A folder's own size is file-system bookkeeping, not content (this
+/// network file system reports 0 or 4096 for the same folder); the files
+/// below it carry their own records, so it is not compared.
+pub(crate) fn record_change(current: &Json, expected: &Json) -> Result<Option<String>> {
+    let folder = current
+        .get("type")
+        .is_some_and(|t| json_text::py_equal(t, &text("directory")));
+    let (mut current, mut expected) = (current.clone(), expected.clone());
+    if folder {
+        for value in [&mut current, &mut expected] {
+            if let Json::Object(fields) = value {
+                fields.retain(|(name, _)| name != "size");
+            }
+        }
+    }
+    if json_text::py_equal(&current, &expected) {
+        return Ok(None);
+    }
+    let mut changed = Vec::new();
+    if let Json::Object(now) = &current {
+        for (name, value) in now {
+            let before = expected.get(name).cloned().unwrap_or(Json::Null);
+            if !json_text::py_equal(value, &before) {
+                let show = |v: &Json| json_text::dumps_with_options(v, DumpsOptions::default());
+                changed.push(format!("{name} {} -> {}", show(&before)?, show(value)?));
+            }
+        }
+    }
+    Ok(Some(if changed.is_empty() {
+        String::new()
+    } else {
+        format!(" ({})", changed.join("; "))
+    }))
+}
+
 /// The keys `verify_manifest` compares with the manifest's own record.
 pub(crate) fn verify_manifest(
     manifest: &Json,
@@ -842,8 +879,8 @@ pub(crate) fn verify_manifest(
                 fields.retain(|(name, _)| name != "sha256");
             }
         }
-        if !json_text::py_equal(record, &expected) {
-            return refuse(format!("Resource changed since manifest creation: {key}"));
+        if let Some(detail) = record_change(record, &expected)? {
+            return refuse(format!("Resource changed since manifest creation: {key}{detail}"));
         }
     }
     Ok(paths)

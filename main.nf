@@ -103,9 +103,14 @@ See README.md for configuration, outputs and scientific-profile requirements.'''
             file(params.legacy_config, checkIfExists: true),
             file(params.resource_manifest, checkIfExists: true),
             params.cadd ? file(params.cadd, checkIfExists: true) : []))
+        // The bundle passes between tasks as its files, not as a folder: a
+        // folder's own size and time on network file systems can differ
+        // between reads, which would change the task hash and defeat -resume.
+        // Sorting by name keeps the list order, also part of the hash, fixed.
+        def bundleLast = { row -> row.take(row.size() - 1) + [(row.last() instanceof List ? row.last() : [row.last()]).sort(false) { it.name }] }
         VALIDATE_FAMILY(inputs)
-        ANNOTATE_FAMILY(VALIDATE_FAMILY.out.validated)
-        FILTER_FAMILY(ANNOTATE_FAMILY.out.annotated)
-        PRIORITIZE_FAMILY(FILTER_FAMILY.out.filtered)
+        ANNOTATE_FAMILY(VALIDATE_FAMILY.out.validated.map(bundleLast))
+        FILTER_FAMILY(ANNOTATE_FAMILY.out.annotated.map(bundleLast))
+        PRIORITIZE_FAMILY(FILTER_FAMILY.out.filtered.map(bundleLast))
     }
 }

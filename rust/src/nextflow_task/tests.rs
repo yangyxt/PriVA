@@ -573,7 +573,33 @@ fn launch_rechecks_resources_even_for_identical_resume() {
     fixture.launch().unwrap();
     fixture.launch().unwrap();
     fs::write(&fixture.resource, b"changed after completed cached run").unwrap();
-    assert!(message(fixture.launch().unwrap_err()).contains("Resource changed"));
+    let refusal = message(fixture.launch().unwrap_err());
+    assert!(refusal.contains("Resource changed"));
+    // The refusal names the changed fields with both values.
+    assert!(refusal.contains("size 19 -> 34"), "{refusal}");
+}
+
+#[test]
+fn folder_size_is_not_compared_but_other_fields_are() {
+    let record = |kind: &str, size: i128, mtime: i128| {
+        contract::object(vec![
+            ("path", contract::text("/r")),
+            ("resolved_path", contract::text("/r")),
+            ("type", contract::text(kind)),
+            ("size", Json::Int(size)),
+            ("mtime_ns", Json::Int(mtime)),
+        ])
+    };
+    let change = |a: &Json, b: &Json| contract::record_change(a, b).unwrap();
+    assert_eq!(change(&record("directory", 4096, 1), &record("directory", 0, 1)), None);
+    assert_eq!(
+        change(&record("directory", 0, 2), &record("directory", 0, 1)).as_deref(),
+        Some(" (mtime_ns 1 -> 2)")
+    );
+    assert_eq!(
+        change(&record("file", 5, 1), &record("file", 4, 1)).as_deref(),
+        Some(" (size 4 -> 5)")
+    );
 }
 
 #[test]

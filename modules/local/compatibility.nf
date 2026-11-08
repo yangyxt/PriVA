@@ -1,10 +1,10 @@
 process VALIDATE_FAMILY {
     tag "${meta.id}:${meta.mode}"
-    publishDir "${params.outdir}/pipeline_info", mode: 'copy', overwrite: false, pattern: 'bundle'
+    publishDir "${params.outdir}/pipeline_info", mode: 'copy', overwrite: false, pattern: 'bundle/*'
     input:
     tuple val(meta), path(vcf, stageAs: 'input.vcf.gz'), path(vcf_index, stageAs: 'input.vcf.gz.tbi'), path(ped, stageAs: 'family.ped'), path(config, stageAs: 'legacy.yaml'), path(resources, stageAs: 'resources.json'), path(cadd, stageAs: 'provided.cadd.tsv')
     output:
-    tuple val(meta), path(vcf), path(vcf_index), path(cadd), path('bundle'), emit: validated
+    tuple val(meta), path(vcf), path(vcf_index), path(cadd), path('bundle/*'), emit: validated
     script:
     def caddArg = cadd ? '--cadd provided.cadd.tsv' : ''
     """
@@ -24,19 +24,19 @@ process ANNOTATE_FAMILY {
     publishDir "${params.outdir}/annotation", mode: 'copy', overwrite: false, pattern: 'result/*.anno.*', saveAs: { new File(it).name }, enabled: params.mode == 'raw'
     publishDir "${params.outdir}/pipeline_info", mode: 'copy', overwrite: false, pattern: '*.provenance.json'
     input:
-    tuple val(meta), path(vcf, stageAs: 'input.vcf.gz'), path(vcf_index, stageAs: 'input.vcf.gz.tbi'), path(cadd, stageAs: 'provided.cadd.tsv'), path(bundle)
+    tuple val(meta), path(vcf, stageAs: 'input.vcf.gz'), path(vcf_index, stageAs: 'input.vcf.gz.tbi'), path(cadd, stageAs: 'provided.cadd.tsv'), path(bundle, stageAs: 'bundle/*')
     output:
-    tuple val(meta), path('result/*.anno.vcf.gz'), path('result/*.anno.vcf.gz.tbi'), path('result/*.anno.cadd.tsv'), path(bundle), emit: annotated
+    tuple val(meta), path('result/*.anno.vcf.gz'), path('result/*.anno.vcf.gz.tbi'), path('result/*.anno.cadd.tsv'), path('bundle/*', includeInputs: true), emit: annotated
     path('annotation.provenance.json'), emit: provenance
     script:
     def caddArg = cadd ? '--cadd provided.cadd.tsv' : ''
     """
-    '${meta.priva_binary}' task run --phase annotation --bundle '${bundle}' --vcf '${vcf}' --vcf-index '${vcf_index}' --cpus ${task.cpus} ${caddArg}
+    '${meta.priva_binary}' task run --phase annotation --bundle bundle --vcf '${vcf}' --vcf-index '${vcf_index}' --cpus ${task.cpus} ${caddArg}
     """
     stub:
     def caddArg = cadd ? '--cadd provided.cadd.tsv' : ''
     """
-    '${meta.priva_binary}' task run --phase annotation --bundle '${bundle}' --vcf '${vcf}' --vcf-index '${vcf_index}' --cpus ${task.cpus} ${caddArg} --stub
+    '${meta.priva_binary}' task run --phase annotation --bundle bundle --vcf '${vcf}' --vcf-index '${vcf_index}' --cpus ${task.cpus} ${caddArg} --stub
     """
 }
 
@@ -46,17 +46,17 @@ process FILTER_FAMILY {
     publishDir "${params.outdir}/variants", mode: 'copy', overwrite: false, pattern: 'result/*.filtered.*'
     publishDir "${params.outdir}/pipeline_info", mode: 'copy', overwrite: false, pattern: '*.provenance.json'
     input:
-    tuple val(meta), path(vcf, stageAs: 'input.vcf.gz'), path(vcf_index, stageAs: 'input.vcf.gz.tbi'), path(cadd, stageAs: 'input.cadd.tsv'), path(bundle)
+    tuple val(meta), path(vcf, stageAs: 'input.vcf.gz'), path(vcf_index, stageAs: 'input.vcf.gz.tbi'), path(cadd, stageAs: 'input.cadd.tsv'), path(bundle, stageAs: 'bundle/*')
     output:
-    tuple val(meta), path('result/*.filtered.vcf.gz'), path('result/*.filtered.vcf.gz.tbi'), path('result/*.filtered.cadd.tsv'), path(bundle), emit: filtered
+    tuple val(meta), path('result/*.filtered.vcf.gz'), path('result/*.filtered.vcf.gz.tbi'), path('result/*.filtered.cadd.tsv'), path('bundle/*', includeInputs: true), emit: filtered
     path('filtration.provenance.json'), emit: provenance
     script:
     """
-    '${meta.priva_binary}' task run --phase filtration --bundle '${bundle}' --vcf '${vcf}' --vcf-index '${vcf_index}' --cadd '${cadd}' --cpus ${task.cpus}
+    '${meta.priva_binary}' task run --phase filtration --bundle bundle --vcf '${vcf}' --vcf-index '${vcf_index}' --cadd '${cadd}' --cpus ${task.cpus}
     """
     stub:
     """
-    '${meta.priva_binary}' task run --phase filtration --bundle '${bundle}' --vcf '${vcf}' --vcf-index '${vcf_index}' --cadd '${cadd}' --cpus ${task.cpus} --stub
+    '${meta.priva_binary}' task run --phase filtration --bundle bundle --vcf '${vcf}' --vcf-index '${vcf_index}' --cadd '${cadd}' --cpus ${task.cpus} --stub
     """
 }
 
@@ -66,16 +66,16 @@ process PRIORITIZE_FAMILY {
     publishDir "${params.outdir}/prioritization", mode: 'copy', overwrite: false, pattern: 'result/*.tsv'
     publishDir "${params.outdir}/pipeline_info", mode: 'copy', overwrite: false, pattern: '*.provenance.json'
     input:
-    tuple val(meta), path(vcf, stageAs: 'input.vcf.gz'), path(vcf_index, stageAs: 'input.vcf.gz.tbi'), path(cadd, stageAs: 'input.cadd.tsv'), path(bundle)
+    tuple val(meta), path(vcf, stageAs: 'input.vcf.gz'), path(vcf_index, stageAs: 'input.vcf.gz.tbi'), path(cadd, stageAs: 'input.cadd.tsv'), path(bundle, stageAs: 'bundle/*')
     output:
     tuple val(meta), path('result/*.filtered.tsv'), path('result/*.filtered.acmg.tsv'), emit: tables
     path('prioritization.provenance.json'), emit: provenance
     script:
     """
-    '${meta.priva_binary}' task run --phase prioritization --bundle '${bundle}' --vcf '${vcf}' --vcf-index '${vcf_index}' --cadd '${cadd}' --cpus ${task.cpus}
+    '${meta.priva_binary}' task run --phase prioritization --bundle bundle --vcf '${vcf}' --vcf-index '${vcf_index}' --cadd '${cadd}' --cpus ${task.cpus}
     """
     stub:
     """
-    '${meta.priva_binary}' task run --phase prioritization --bundle '${bundle}' --vcf '${vcf}' --vcf-index '${vcf_index}' --cadd '${cadd}' --cpus ${task.cpus} --stub
+    '${meta.priva_binary}' task run --phase prioritization --bundle bundle --vcf '${vcf}' --vcf-index '${vcf_index}' --cadd '${cadd}' --cpus ${task.cpus} --stub
     """
 }

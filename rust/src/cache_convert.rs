@@ -518,18 +518,14 @@ pub(crate) fn convert(args: &[String]) -> Result<String> {
         return Err(invalid("the output must not be the pickle itself"));
     }
     match cache.as_str() {
-        "clinvar_aa_stat" => {
-            Ok(convert_clinvar_aa_stat(pickle, Path::new(output))?.to_string())
-        }
+        "clinvar_aa_stat" => Ok(convert_clinvar_aa_stat(pickle, Path::new(output))?.to_string()),
         "alphamissense_tranx_domain_map" => {
             Ok(transcript_domains::convert(pickle, Path::new(output))?.to_string())
         }
         "all_intolerant_domains" => {
             Ok(intolerant_domains::convert(pickle, Path::new(output))?.to_string())
         }
-        "pm1_regions_pkl" => {
-            Ok(pm1_regions::convert(pickle, Path::new(output))?.to_string())
-        }
+        "pm1_regions_pkl" => Ok(pm1_regions::convert(pickle, Path::new(output))?.to_string()),
         "clinvar_splice_stat" => {
             Ok(clinvar_splice_stat::convert(pickle, Path::new(output))?.to_string())
         }
@@ -539,9 +535,7 @@ pub(crate) fn convert(args: &[String]) -> Result<String> {
         "clinvar_patho_af_stat" => {
             Ok(clinvar_gene_af::convert(pickle, Path::new(output))?.to_string())
         }
-        "clingen_map" => {
-            Ok(clingen_map::convert(pickle, Path::new(output))?.to_string())
-        }
+        "clingen_map" => Ok(clingen_map::convert(pickle, Path::new(output))?.to_string()),
         "clinvar_gene_stat" => {
             Ok(clinvar_gene_stat::convert(pickle, Path::new(output))?.to_string())
         }

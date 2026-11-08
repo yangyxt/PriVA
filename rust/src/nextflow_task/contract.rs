@@ -641,7 +641,10 @@ pub(crate) fn inventory(paths: &[(String, PathBuf)], checksum: bool) -> Result<J
                         let relative = child.strip_prefix(path).unwrap_or(&child);
                         let mut items = vec![
                             ("path", text(path_text(&child))),
-                            ("resolved_path", text(path_text(&resolved_root.join(relative)))),
+                            (
+                                "resolved_path",
+                                text(path_text(&resolved_root.join(relative))),
+                            ),
                             ("type", text("file")),
                             ("size", Json::Int(meta.len() as i128)),
                             ("mtime_ns", Json::Int(mtime_ns(&meta))),

@@ -23,6 +23,7 @@
     "annotation_cpus": {"type": "integer", "minimum": 1, "default": 4},
     "family_cpus": {"type": "integer", "minimum": 1, "default": 1},
     "container_image": {"type": ["string", "null"]},
+    "container_run_options": {"type": ["string", "null"], "description": "Extra apptainer run options, such as -B binds for the cache and data folders"},
     "slurm_queue": {"type": ["string", "null"]},
     "slurm_account": {"type": ["string", "null"]}
   },

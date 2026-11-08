@@ -19,10 +19,8 @@ impl Folder {
         // Only characters the task contract accepts in a path.
         static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
         let serial = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let path = std::env::temp_dir().join(format!(
-            "priva_task_{name}_{}_{serial}",
-            std::process::id()
-        ));
+        let path =
+            std::env::temp_dir().join(format!("priva_task_{name}_{}_{serial}", std::process::id()));
         let _ = fs::remove_dir_all(&path);
         fs::create_dir_all(&path).unwrap();
         Folder(fs::canonicalize(path).unwrap())

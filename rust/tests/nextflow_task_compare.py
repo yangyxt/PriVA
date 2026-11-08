@@ -92,8 +92,9 @@ class Harness:
             code, stderr = run(program + [a.replace("{folder}", str(folder)) for a in args], cwd, env)
             stderr = self.normalize(stderr, [(folder, "{folder}")])
             files = tree(folder) if compare_files else {}
-            files = {k: (kind, self.normalize(v.decode("utf-8", "replace"), [(folder, "{folder}")])
-                         if isinstance(v, bytes) else v) for k, (kind, v) in files.items()}
+            files = {k: (kind, self.normalize(v.decode("utf-8", "replace") if isinstance(v, bytes) else v,
+                                              [(folder, "{folder}")]) if v is not None else v)
+                     for k, (kind, v) in files.items()}
             outcomes.append((code, stderr.strip().splitlines()[-1:] if code else [], files))
         (pc, pe, pf), (rc, re_, rf) = outcomes
         detail = []

@@ -20,6 +20,8 @@ process VALIDATE_FAMILY {
 process ANNOTATE_FAMILY {
     tag "${meta.id}:${meta.mode}"
     label 'annotation'
+    // Raw mode publishes the new annotation pair; annotated mode only imports it.
+    publishDir "${params.outdir}/annotation", mode: 'copy', overwrite: false, pattern: 'result/*.anno.*', saveAs: { new File(it).name }, enabled: params.mode == 'raw'
     publishDir "${params.outdir}/pipeline_info", mode: 'copy', overwrite: false, pattern: '*.provenance.json'
     input:
     tuple val(meta), path(vcf, stageAs: 'input.vcf.gz'), path(vcf_index, stageAs: 'input.vcf.gz.tbi'), path(cadd, stageAs: 'provided.cadd.tsv'), path(bundle)

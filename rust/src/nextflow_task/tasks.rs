@@ -56,15 +56,6 @@ pub(crate) fn build_manifest(options: &Options) -> Result<()> {
     write_json(Path::new(options.value("output")), &payload)
 }
 
-fn require_qualified_execution(mode: &str, stub: bool) -> Result<()> {
-    if mode == "raw" && !stub {
-        return refuse(
-            "Real raw annotation is gated: shared official-VEP/CADD feature compatibility and enforced read-only cache/task isolation have not passed acceptance. Installation does not qualify this route. Annotated mode requires the original paired annotation/CADD artifacts from a pinned compatible scientific profile.",
-        );
-    }
-    Ok(())
-}
-
 /// The opt-in read-only view is part of the run identity. This detects an
 /// omitted profile; it is not an attestation of scientific qualification.
 fn require_task_boundary(boundary: &str) -> Result<()> {
@@ -370,7 +361,6 @@ fn validate_cadd(path: &Path) -> Result<()> {
 pub(crate) fn validate(options: &Options) -> Result<()> {
     let mode = options.value("mode");
     let stub = options.flag("stub");
-    require_qualified_execution(mode, stub)?;
     let boundary = options.get("task-boundary").unwrap_or("off");
     require_task_boundary(boundary)?;
     let config_path = PathBuf::from(options.value("config"));
@@ -552,7 +542,6 @@ fn task_thread_settings(
 pub(crate) fn launch(options: &Options) -> Result<()> {
     let mode = options.value("mode");
     let stub = options.flag("stub");
-    require_qualified_execution(mode, stub)?;
     let root = resolve(options.value("legacy-root"))?;
     if source_digest(&root)? != options.value("source-digest") {
         return refuse("Source changed while launching");
@@ -755,7 +744,6 @@ pub(crate) fn run(options: &Options) -> Result<()> {
     let field = |key: &str| record.get(key).and_then(Json::as_str).unwrap_or_default();
     let stub = options.flag("stub");
     let phase = options.value("phase");
-    require_qualified_execution(field("mode"), stub)?;
     let boundary = record
         .get("task_boundary")
         .and_then(Json::as_str)

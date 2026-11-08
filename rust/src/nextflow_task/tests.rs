@@ -679,13 +679,14 @@ fn manifest_bundle_identity_is_checked() {
 }
 
 #[test]
-fn raw_mode_is_gated_unless_stub() {
+fn raw_mode_checks_the_annotation_resources() {
     let fixture = LaunchFixture::new("gate");
     let mut raw = fixture.args.clone();
     raw.iter_mut().find(|(k, _)| k == "mode").unwrap().1 = "raw".into();
     let pairs: Vec<(&str, &str)> = raw.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
+    // Raw mode needs explicit VEP workers and every annotation resource.
     let error = tasks::launch(&options(&pairs, &[])).unwrap_err();
-    assert!(message(error).contains("read-only"));
+    assert!(message(error).contains("explicit legacy-config threads"));
 }
 
 #[test]

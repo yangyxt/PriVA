@@ -23,6 +23,7 @@
     "annotation_cpus": {"type": "integer", "minimum": 1, "default": 4},
     "family_cpus": {"type": "integer", "minimum": 1, "default": 1},
     "container_image": {"type": ["string", "null"]},
+    "slurm_cluster_options": {"type": ["string", "null"], "description": "Extra sbatch options for every task, such as --constraint=NAME"},
     "local_cpus": {"type": ["integer", "null"], "minimum": 1, "description": "CPUs the local executor may give to tasks; the installed driver itself sees 2"},
     "container_run_options": {"type": ["string", "null"], "description": "Extra apptainer run options, such as -B binds for the cache and data folders"},
     "slurm_queue": {"type": ["string", "null"]},

@@ -188,7 +188,7 @@ The example `inputs/` paths are relative to the external `PRIVA_RUNS` directory;
 | `-profile local` | Execute tasks in the active scientific environment. The installed driver limits its own Java runtime to 2 processors, so pass `--local_cpus N` when tasks need more (for example the CPUs of the Slurm job running the driver) |
 | `-profile slurm` | Submit tasks to Slurm; set `--slurm_queue` and optional `--slurm_account` for the site |
 | `--annotation_cpus`, `--family_cpus` | Task CPU allocations; corresponding memory/time parameters are in `nextflow.config` |
-| `-profile apptainer` | Requires an explicitly selected tested `--container_image` and matching software identity. Tasks run with `--cleanenv`, so they use the image's tools; bind the cache, data and input folders with `--container_run_options='-B /path'` |
+| `-profile apptainer` | Requires an explicitly selected tested `--container_image` and matching software identity. Tasks run with `--cleanenv`, so they use the image's tools; bind the cache, data and input folders with `--container_run_options='-B /path'`. Build the image from [priva_acmg.def](priva_acmg.def) |
 | `-profile task_readonly` | Optional Linux Bubblewrap task filesystem boundary; it cannot be combined with `apptainer` and does not enable raw execution |
 | `-profile test -stub-run` | Synthetic wiring only; its outputs are not scientific results |
 

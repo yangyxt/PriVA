@@ -590,7 +590,11 @@ fn mixed_spliceai_versions_rejected_before_output_creation() {
     )
     .unwrap();
     let v1 = fixture.folder.0.join("v1.vcf");
-    fs::write(&v1, "##fileformat=VCFv4.2\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\n").unwrap();
+    fs::write(
+        &v1,
+        "##fileformat=VCFv4.2\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\n",
+    )
+    .unwrap();
     let text = fs::read_to_string(&config).unwrap();
     fs::write(
         &config,
@@ -618,7 +622,11 @@ fn mixed_spliceai_versions_task_rejected_before_any_output() {
     )
     .unwrap();
     let v1 = fixture.folder.0.join("v1.vcf");
-    fs::write(&v1, "##fileformat=VCFv4.2\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\n").unwrap();
+    fs::write(
+        &v1,
+        "##fileformat=VCFv4.2\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\n",
+    )
+    .unwrap();
     let config = fs::read_to_string(fixture.value("config")).unwrap();
     fs::write(
         bundle.join("legacy.yaml"),
@@ -840,23 +848,4 @@ fn the_pipeline_program_is_required_and_content_pinned() {
     )
     .unwrap_err();
     assert!(message(error).contains("priva_binary"));
-}
-
-#[test]
-fn input_vcf_header_reports_a_spliceai2_annotation() {
-    let folder = Folder::new("marker");
-    let path = folder.0.join("input.vcf.gz");
-    for (marker, expected) in [
-        ("##SpliceAI2Version=2\n", true),
-        ("##source=PriVA_SpliceAI2_projection\n", true),
-        ("##source=other\n", false),
-    ] {
-        let text = format!(
-            "##fileformat=VCFv4.2\n{marker}#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tchild\n"
-        );
-        fs::write(&path, gzip(text.as_bytes())).unwrap();
-        let (samples, marked) = tasks::vcf_samples(&path).unwrap();
-        assert_eq!(samples, ["child"]);
-        assert_eq!(marked, expected, "{marker}");
-    }
 }

@@ -52,6 +52,11 @@ See README.md for configuration, outputs and scientific-profile requirements.'''
         if (workflow.profile.tokenize(',').contains('apptainer') && !params.container_image) error 'The apptainer profile requires --container_image pinned to a tested image'
         if (params.mode == 'annotated' && !params.cadd) error '--mode annotated requires the matching --cadd TSV'
         if (params.mode == 'raw' && params.cadd) error '--cadd is only accepted with --mode annotated'
+        // A value starting with '-' after a space is read by Nextflow as a
+        // separate flag, which leaves this parameter set to true.
+        ['slurm_cluster_options', 'slurm_account', 'container_run_options'].each { name ->
+            if (params[name] instanceof Boolean) error "--${name} needs a value; write it as --${name}='VALUE'"
+        }
         if (!(params.family ==~ /[A-Za-z0-9_][A-Za-z0-9_.-]*/)) error 'Unsafe family identifier'
         if (!(params.input.toString().endsWith('.vcf.gz'))) error '--input must be a BGZF .vcf.gz file'
         def sourceRoot = new File(projectDir.toString()).canonicalFile
@@ -85,8 +90,11 @@ See README.md for configuration, outputs and scientific-profile requirements.'''
             '--annotation-cpus', params.annotation_cpus.toString(), '--family-cpus', params.family_cpus.toString()]
         if (params.cadd) launchCommand.addAll(['--cadd', file(params.cadd, checkIfExists: true).toString()])
         if (workflow.stubRun) launchCommand.add('--stub')
-        def preflight = new ProcessBuilder(launchCommand).inheritIO().start()
-        if (preflight.waitFor() != 0) error 'Launch-time resource/output contract validation failed'
+        // The check's own message joins the error, so it stays in .nextflow.log.
+        def preflight = new ProcessBuilder(launchCommand).redirectErrorStream(true).start()
+        def report = preflight.inputStream.text.readLines().findAll { it.trim() }
+        if (preflight.waitFor() != 0) error "Launch-time resource/output contract validation failed: ${report.takeRight(5).join(' | ')}"
+        report.each { log.info it }
         def inputs = Channel.of(tuple(meta,
             file(params.input, checkIfExists: true),
             file(params.vcf_index ?: "${params.input}.tbi", checkIfExists: true),

@@ -300,7 +300,17 @@ fn prepare(config: &Path, private: &Path, repo: &Path) -> Result<()> {
             nonempty(&archive)?;
             source
         } else {
-            let record = json(&sidecar(&native, ".source.json"))?;
+            let receipt = sidecar(&native, ".source.json");
+            if !receipt.exists() && !receipt.is_symlink() {
+                // A builder called on its own, with a configuration that named
+                // no native archive yet, runs without a private installation,
+                // so its archive has no receipt. It has no builder input to
+                // restore: check its format and keep selecting it. Publication
+                // then records it as a direct archive.
+                check_direct(key, &native)?;
+                continue;
+            }
+            let record = json(&receipt)?;
             if field(&record, "key")? != key
                 || field(&record, "profile")? != selected_profile
                 || !same_file(Path::new(field(&record, "archive")?), &native)
@@ -2139,6 +2149,50 @@ mod tests {
             fs::read(sidecar(&archive, ".source.json")).unwrap(),
             receipt
         );
+    }
+
+    #[test]
+    fn direct_archive_without_receipt_passes_through_prepare() {
+        // A builder called on its own writes its archive into the runtime
+        // config without a private installation, so no receipt exists yet.
+        let tmp = Temp::new();
+        let pickle = tmp.0.join("curated.pkl");
+        fs::write(&pickle, b"\x80\x04}\x8c\x01a}\x8c\x02afK\x01ss.").unwrap();
+        let built = tmp.0.join("built.rkyv");
+        caches::clinvar_gene_af::convert(text(&pickle).unwrap(), &built).unwrap();
+        let (config, private) =
+            tmp.config(&format!("clinvar_patho_af_stat: '{}'\n", built.display()));
+        prepare(&config, &private, &tmp.0).unwrap();
+        assert_eq!(
+            setting(
+                &document(&fs::read_to_string(&private).unwrap()).unwrap(),
+                "clinvar_patho_af_stat"
+            )
+            .unwrap(),
+            built.to_str()
+        );
+        publish(&config, &private, &tmp.0).unwrap();
+        let archive = PathBuf::from(
+            required(
+                &document(&fs::read_to_string(&config).unwrap()).unwrap(),
+                "clinvar_patho_af_stat",
+            )
+            .unwrap(),
+        );
+        assert!(archive.starts_with(tmp.0.join("ClinVar")));
+        assert_eq!(fs::read(&archive).unwrap(), fs::read(&built).unwrap());
+        let record = json(&sidecar(&archive, ".source.json")).unwrap();
+        assert_eq!(field(&record, "origin").unwrap(), "direct");
+
+        // A damaged archive without a receipt is still refused.
+        let tmp = Temp::new();
+        let damaged = tmp.0.join("damaged.rkyv");
+        fs::write(&damaged, "damaged").unwrap();
+        let (config, private) =
+            tmp.config(&format!("clinvar_patho_af_stat: '{}'\n", damaged.display()));
+        let error = prepare(&config, &private, &tmp.0).unwrap_err().to_string();
+        assert!(error.contains("too short"), "{error}");
+        assert!(!private.exists());
     }
 
     #[test]

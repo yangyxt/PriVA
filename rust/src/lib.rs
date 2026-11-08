@@ -36,9 +36,9 @@ mod gofcards_clinvar_injection;
 mod gofcards_exact_gof;
 mod installer_config_paths;
 mod mapped_artifact_publish;
+mod nextflow_task;
 // Qualified before the opt-in DAS procedures consume this exact random stream.
 #[allow(dead_code)]
-mod nextflow_task;
 mod numpy_rng;
 // Qualified independently before the opt-in DAS producer is connected.
 #[allow(dead_code)]

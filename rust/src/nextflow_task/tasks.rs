@@ -1,9 +1,9 @@
 //! The four task-contract commands: manifest, validate, launch and run.
 use super::contract::{
-    self, Config, OPTIONAL_INPUTS, assembly, cds_cache_path, copy2,
-    copy_writable, exists, inventory, inventory_record, json_digest, object, read_config,
-    read_json, read_text, render_config, runtime_resources, safe_id, sha256, source_digest,
-    text, verify_manifest, write_json,
+    self, Config, OPTIONAL_INPUTS, assembly, cds_cache_path, copy_writable, copy2, exists,
+    inventory, inventory_record, json_digest, object, read_config, read_json, read_text,
+    render_config, runtime_resources, safe_id, sha256, source_digest, text, verify_manifest,
+    write_json,
 };
 use super::{Options, Result, refuse};
 use crate::json_text::Json;
@@ -118,10 +118,9 @@ fn version_output(tool: &str) -> Result<(String, i32)> {
         if started.elapsed() > Duration::from_secs(30) {
             let _ = child.kill();
             let _ = child.wait();
-            return Err(format!(
-                "Command '['{tool}', '--version']' timed out after 30 seconds"
-            )
-            .into());
+            return Err(
+                format!("Command '['{tool}', '--version']' timed out after 30 seconds").into(),
+            );
         }
         std::thread::sleep(Duration::from_millis(20));
     };
@@ -203,7 +202,10 @@ fn software_readiness(mode: &str, priva_binary: Option<&Path>) -> Result<Json> {
             "priva",
             object(vec![
                 ("executable", text(display(&fs::canonicalize(binary)?))),
-                ("version_output", text(stdout.chars().take(4096).collect::<String>())),
+                (
+                    "version_output",
+                    text(stdout.chars().take(4096).collect::<String>()),
+                ),
                 ("version_exit_code", Json::Int(0)),
             ]),
         );
@@ -237,8 +239,9 @@ fn called_process_error(
 /// The sample columns of the input VCF; refuses SpliceAI2-marked input.
 fn vcf_samples(path: &Path) -> Result<Vec<String>> {
     let file = fs::File::open(path).map_err(|e| crate::python_path::os_error(e, path, None))?;
-    let mut lines =
-        crate::python_lines::Lines::new(flate2::read::MultiGzDecoder::new(std::io::BufReader::new(file)));
+    let mut lines = crate::python_lines::Lines::new(flate2::read::MultiGzDecoder::new(
+        std::io::BufReader::new(file),
+    ));
     while let Some(line) = lines.next()? {
         if line.starts_with("##SpliceAI2")
             || line.trim_end_matches(['\r', '\n']) == "##source=PriVA_SpliceAI2_projection"
@@ -338,9 +341,10 @@ pub(crate) fn validate_ped(path: &Path, family: &str, samples: &[String]) -> Res
         return refuse("Every PED sample must be present in the VCF");
     }
     // Missing affection is neither affected nor unaffected in the legacy science.
-    if rows.iter().any(|row| {
-        !["0", "1", "2"].contains(&row[4]) || !["-9", "0", "1", "2"].contains(&row[5])
-    }) {
+    if rows
+        .iter()
+        .any(|row| !["0", "1", "2"].contains(&row[4]) || !["-9", "0", "1", "2"].contains(&row[5]))
+    {
         return refuse("PED requires sex 0/1/2 and phenotype -9/0/1/2");
     }
     if selected[0][5] != "2" {
@@ -411,7 +415,10 @@ pub(crate) fn validate(options: &Options) -> Result<()> {
     let mut versions = Json::Object(Vec::new());
     if !stub {
         let paths = verify_manifest(&manifest, &config_path, &root, mode, vcf_hub, cadd_hub)?;
-        let binary = paths.iter().find(|(k, _)| k == "priva_binary").map(|(_, p)| p.clone());
+        let binary = paths
+            .iter()
+            .find(|(k, _)| k == "priva_binary")
+            .map(|(_, p)| p.clone());
         versions = software_readiness(mode, binary.as_deref())?;
         let status = Command::new("bcftools")
             .args(["index", "--nrecords"])
@@ -435,7 +442,8 @@ pub(crate) fn validate(options: &Options) -> Result<()> {
     ] {
         copy2(source, &bundle.join(name))?;
     }
-    let samples_json = |items: &[String]| Json::Array(items.iter().cloned().map(Json::Str).collect());
+    let samples_json =
+        |items: &[String]| Json::Array(items.iter().cloned().map(Json::Str).collect());
     let bundle_id = match &manifest {
         Json::Object(_) => manifest.get("bundle_id").cloned().unwrap_or(text("stub")),
         _ => return Err("Resource manifest must be a JSON object".into()),
@@ -481,7 +489,11 @@ fn task_thread_settings(
     // `config.get(key, cpus)`: the configured value, else the allocation.
     let setting = |key: &str| -> (Json, String, Option<u128>) {
         match config.get(key) {
-            None => (Json::Int(cpus as i128), cpus.to_string(), Some(cpus as u128)),
+            None => (
+                Json::Int(cpus as i128),
+                cpus.to_string(),
+                Some(cpus as u128),
+            ),
             Some(ConfigValue::Scalar(scalar)) => {
                 let shown = match scalar {
                     Scalar::Str(text) => text.clone(),
@@ -585,7 +597,10 @@ pub(crate) fn launch(options: &Options) -> Result<()> {
         ("config_sha256", text(sha256(&config_path)?)),
         ("ped_sha256", text(sha256(Path::new(options.value("ped")))?)),
         ("manifest_sha256", text(sha256(&resources)?)),
-        ("input", inventory_record(&resolve(options.value("vcf"))?, false)?),
+        (
+            "input",
+            inventory_record(&resolve(options.value("vcf"))?, false)?,
+        ),
         (
             "input_index",
             inventory_record(&resolve(options.value("vcf-index"))?, false)?,
@@ -605,7 +620,9 @@ pub(crate) fn launch(options: &Options) -> Result<()> {
         ("run_identity", text(json_digest(&fingerprint)?)),
         ("contract", fingerprint),
     ]);
-    let outdir = PathBuf::from(crate::python_path::absolute(&path_value(options.value("outdir")))?);
+    let outdir = PathBuf::from(crate::python_path::absolute(&path_value(
+        options.value("outdir"),
+    ))?);
     fs::create_dir_all(&outdir)?;
     let outdir = fs::canonicalize(&outdir)?;
     let path = outdir.join(".priva-run.json");
@@ -642,7 +659,10 @@ fn private_config(
     cpus: i64,
 ) -> Result<(PathBuf, PathBuf)> {
     let config = read_config(&bundle.join("legacy.yaml"))?;
-    let mode = record.get("mode").and_then(Json::as_str).unwrap_or_default();
+    let mode = record
+        .get("mode")
+        .and_then(Json::as_str)
+        .unwrap_or_default();
     let thread_settings = task_thread_settings(&config, phase, mode, cpus)?;
     let result = PathBuf::from(crate::python_path::absolute(Path::new("result"))?);
     if !result.is_dir() {
@@ -928,7 +948,11 @@ pub(crate) fn run(options: &Options) -> Result<()> {
         "filtration" => &[".vcf.gz", ".vcf.gz.tbi", ".cadd.tsv"],
         _ => &[".tsv", ".acmg.tsv"],
     };
-    let stem = if phase == "annotation" { &base } else { &family_base };
+    let stem = if phase == "annotation" {
+        &base
+    } else {
+        &family_base
+    };
     let outputs: Vec<PathBuf> = suffixes
         .iter()
         .map(|suffix| result.join(format!("{stem}{suffix}")))

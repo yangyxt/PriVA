@@ -86,6 +86,7 @@ pub(crate) fn safe_id(value: &str) -> bool {
 }
 
 /// A legacy configuration as `yaml.load` with duplicate-key refusal reads it.
+#[derive(Debug)]
 pub(crate) struct Config {
     pub(crate) text: String,
     pub(crate) doc: ConfigDocument,
@@ -209,9 +210,7 @@ pub(crate) fn checked_path(value: Option<&str>, key: &str) -> Result<PathBuf> {
     }
     if path.is_file() {
         let mut head = Vec::with_capacity(200);
-        fs::File::open(&path)?
-            .take(200)
-            .read_to_end(&mut head)?;
+        fs::File::open(&path)?.take(200).read_to_end(&mut head)?;
         if head.starts_with(b"version https://git-lfs.github.com/spec/v1") {
             return refuse(format!(
                 "{key}: Git LFS pointer must be materialized: {value}"
@@ -247,7 +246,7 @@ pub(crate) fn runtime_resources(
     cadd_hub_mode: &str,
 ) -> Result<Vec<(String, PathBuf)>> {
     let mut paths: Vec<(String, PathBuf)> = Vec::new();
-    let mut put = |paths: &mut Vec<(String, PathBuf)>, key: String, path: PathBuf| {
+    let put = |paths: &mut Vec<(String, PathBuf)>, key: String, path: PathBuf| {
         if let Some(slot) = paths.iter_mut().find(|(k, _)| *k == key) {
             slot.1 = path;
         } else {
@@ -293,7 +292,9 @@ pub(crate) fn runtime_resources(
         String::new()
     };
     let gene_stat = if selected_gene_stat.contains('/') {
-        PathBuf::from(crate::python_path::absolute(&path_value(&selected_gene_stat))?)
+        PathBuf::from(crate::python_path::absolute(&path_value(
+            &selected_gene_stat,
+        ))?)
     } else {
         under(&format!("data/ClinVar/{selected_gene_stat}"))
     };
@@ -363,7 +364,10 @@ pub(crate) fn runtime_resources(
             .find(|(k, _)| k == "ref_genome")
             .map(|(_, p)| path_text(p))
             .unwrap_or_default();
-        fixed.push(("reference_fai".into(), path_value(&format!("{reference}.fai"))));
+        fixed.push((
+            "reference_fai".into(),
+            path_value(&format!("{reference}.fai")),
+        ));
         if config.assembly() == "hg38" {
             for key in ["gerp_bigwig", "mavedb_file"] {
                 put(&mut paths, key.into(), config_path(config, key)?);
@@ -386,7 +390,10 @@ pub(crate) fn runtime_resources(
                 );
             }
         }
-        for (key, mode_value) in [("hub_vcf_file", vcf_hub_mode), ("hub_cadd_file", cadd_hub_mode)] {
+        for (key, mode_value) in [
+            ("hub_vcf_file", vcf_hub_mode),
+            ("hub_cadd_file", cadd_hub_mode),
+        ] {
             if mode_value != "off" && config.truthy(key) {
                 let path = hub_source(config, key)?;
                 let checked = checked_path(Some(&path_text(&path)), key)?;
@@ -499,7 +506,10 @@ pub(crate) fn inventory_record(path: &Path, checksum: bool) -> Result<Json> {
     let mut items = vec![
         ("path", text(path_text(path))),
         ("resolved_path", text(path_text(&resolved))),
-        ("type", text(if meta.is_dir() { "directory" } else { "file" })),
+        (
+            "type",
+            text(if meta.is_dir() { "directory" } else { "file" }),
+        ),
         ("size", Json::Int(meta.len() as i128)),
         ("mtime_ns", Json::Int(mtime_ns(&meta))),
     ];
@@ -688,9 +698,7 @@ pub(crate) fn verify_manifest(
         .get("schema_version")
         .is_some_and(|v| json_text::py_equal(v, &Json::Int(1)));
     if !schema_one || empty(manifest.get("resources")) {
-        return refuse(
-            "Resource manifest is incomplete; create it with priva task manifest",
-        );
+        return refuse("Resource manifest is incomplete; create it with priva task manifest");
     }
     let content = Json::Object(
         items

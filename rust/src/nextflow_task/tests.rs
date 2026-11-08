@@ -42,7 +42,10 @@ fn in_dir<T>(path: &Path, body: impl FnOnce() -> T) -> T {
 }
 
 fn message(error: Box<dyn std::error::Error>) -> String {
-    assert!(error.is::<ContractError>(), "not a contract refusal: {error}");
+    assert!(
+        error.is::<ContractError>(),
+        "not a contract refusal: {error}"
+    );
     error.to_string()
 }
 
@@ -113,9 +116,21 @@ fn ped_refusals() {
     let path = folder.0.join("family.ped");
     for (text, members, expected) in [
         ("FAM\tchild\t0\t0\t1\t2\n", vec![], "Every PED sample"),
-        ("OTHER\tchild\t0\t0\t1\t2\n", vec!["child"], "absent from the PED"),
-        ("FAM\tchild\t0\t0\t1\t3\n", vec!["child"], "PED requires sex"),
-        ("FAM\tchild\t0\t0\t1\t1\n", vec!["child"], "affected proband first"),
+        (
+            "OTHER\tchild\t0\t0\t1\t2\n",
+            vec!["child"],
+            "absent from the PED",
+        ),
+        (
+            "FAM\tchild\t0\t0\t1\t3\n",
+            vec!["child"],
+            "PED requires sex",
+        ),
+        (
+            "FAM\tchild\t0\t0\t1\t1\n",
+            vec!["child"],
+            "affected proband first",
+        ),
         ("FAM child 0 0 1 2\n", vec!["child"], "tab-delimited"),
         (
             "FAM\tmom\t0\t0\t2\t-9\nFAM\tchild\tdad\tmom\t0\t2\nFAM\tdad\t0\t0\t1\t-9\n",
@@ -155,8 +170,20 @@ fn spliceai2_at_original_keys_is_refused_by_header() {
     let header = b"##fileformat=VCFv4.2\n##SpliceAI2Version=2\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\n";
     for key in ["spliceai_snv_prescore", "spliceai_indel_prescore"] {
         for compressed in [false, true] {
-            fs::write(&cache, if compressed { gzip(header) } else { header.to_vec() }).unwrap();
-            fs::write(&path, format!("assembly: hg38\n{key}: {}\n", cache.display())).unwrap();
+            fs::write(
+                &cache,
+                if compressed {
+                    gzip(header)
+                } else {
+                    header.to_vec()
+                },
+            )
+            .unwrap();
+            fs::write(
+                &path,
+                format!("assembly: hg38\n{key}: {}\n", cache.display()),
+            )
+            .unwrap();
             let error = contract::read_config(&path).err().unwrap();
             assert!(message(error).contains("not qualified for v2"));
         }
@@ -184,8 +211,16 @@ fn spliceai2_at_original_keys_is_refused_by_header() {
 fn missing_relative_and_lfs_paths_are_refused() {
     let folder = Folder::new("paths");
     let missing = folder.0.join("missing").display().to_string();
-    for value in ["missing/cache", missing.as_str(), "", "/path with space/cache"] {
-        assert!(contract::checked_path(Some(value), "cache").is_err(), "{value}");
+    for value in [
+        "missing/cache",
+        missing.as_str(),
+        "",
+        "/path with space/cache",
+    ] {
+        assert!(
+            contract::checked_path(Some(value), "cache").is_err(),
+            "{value}"
+        );
     }
     let pointer = folder.0.join("pointer.tsv");
     fs::write(
@@ -257,7 +292,13 @@ fn yaml_text(config: &Config, key: &str) -> String {
 }
 
 /// The private task configuration with the given extra settings.
-fn private(folder: &Path, extra: &str, phase: &str, cpus: i64, mode: &str) -> Result<Config, String> {
+fn private(
+    folder: &Path,
+    extra: &str,
+    phase: &str,
+    cpus: i64,
+    mode: &str,
+) -> Result<Config, String> {
     let bundle = folder.join("bundle");
     let task = folder.join("task");
     let _ = fs::remove_dir_all(&task);
@@ -273,12 +314,21 @@ fn private(folder: &Path, extra: &str, phase: &str, cpus: i64, mode: &str) -> Re
         false,
     )
     .unwrap();
-    let outcome = in_dir(&task, || tasks::private_config_for_test(&bundle, &record, phase, cpus));
-    assert_eq!(fs::read_to_string(bundle.join("legacy.yaml")).unwrap(), original);
+    let outcome = in_dir(&task, || {
+        tasks::private_config_for_test(&bundle, &record, phase, cpus)
+    });
+    assert_eq!(
+        fs::read_to_string(bundle.join("legacy.yaml")).unwrap(),
+        original
+    );
     match outcome {
         Ok(path) => Ok(contract::read_config(&path).unwrap()),
         Err(error) => {
-            assert_eq!(fs::read_dir(&task).unwrap().count(), 0, "task written before refusal");
+            assert_eq!(
+                fs::read_dir(&task).unwrap().count(),
+                0,
+                "task written before refusal"
+            );
             Err(message(error))
         }
     }
@@ -290,9 +340,27 @@ fn cpu_allocations_keep_the_scientific_worker_counts() {
     let folder = Folder::new("cpu");
     let counts = "threads: 22\nthreads_per_fam: 4\n";
     let config = private(&folder.0, counts, "annotation", 24, "raw").unwrap();
-    assert_eq!((yaml_text(&config, "threads"), yaml_text(&config, "threads_per_fam")), ("22".into(), "4".into()));
-    assert!(matches!(config.get("threads"), Some(crate::yaml_config::ConfigValue::Scalar(crate::yaml_config::Scalar::Int(_)))));
-    let config = private(&folder.0, "threads: '22'\nthreads_per_fam: '4'\n", "annotation", 24, "raw").unwrap();
+    assert_eq!(
+        (
+            yaml_text(&config, "threads"),
+            yaml_text(&config, "threads_per_fam")
+        ),
+        ("22".into(), "4".into())
+    );
+    assert!(matches!(
+        config.get("threads"),
+        Some(crate::yaml_config::ConfigValue::Scalar(
+            crate::yaml_config::Scalar::Int(_)
+        ))
+    ));
+    let config = private(
+        &folder.0,
+        "threads: '22'\nthreads_per_fam: '4'\n",
+        "annotation",
+        24,
+        "raw",
+    )
+    .unwrap();
     assert_eq!(config.str("threads"), Some("22"));
     assert_eq!(config.str("threads_per_fam"), Some("4"));
     let error = private(&folder.0, counts, "annotation", 23, "raw").unwrap_err();
@@ -305,9 +373,21 @@ fn cpu_allocations_keep_the_scientific_worker_counts() {
     assert_eq!(yaml_text(&config, "threads"), "22");
     let error = private(&folder.0, "threads_per_fam: 4\n", "annotation", 24, "raw").unwrap_err();
     assert!(error.contains("explicit legacy-config threads"), "{error}");
-    for value in ["true", "false", "0", "-1", "null", "''", "'2.0'", "auto", "2.0"] {
-        let error = private(&folder.0, &format!("threads: {value}\n"), "annotation", 24, "raw").unwrap_err();
-        assert!(error.contains("must be a positive integer"), "{value}: {error}");
+    for value in [
+        "true", "false", "0", "-1", "null", "''", "'2.0'", "auto", "2.0",
+    ] {
+        let error = private(
+            &folder.0,
+            &format!("threads: {value}\n"),
+            "annotation",
+            24,
+            "raw",
+        )
+        .unwrap_err();
+        assert!(
+            error.contains("must be a positive integer"),
+            "{value}: {error}"
+        );
     }
     for cpus in [0, -1] {
         let error = private(&folder.0, "threads: 22\n", "annotation", cpus, "raw").unwrap_err();
@@ -336,14 +416,24 @@ fn private_config_keeps_scientific_values_and_isolates_mutable_resources() {
     let config = private(&folder.0, &extra, "prioritization", 2, "raw").unwrap();
     let task = folder.0.join("task");
     assert_eq!(yaml_text(&config, "af_cutoff"), "0.05");
-    assert!(config.text.contains("apply_clingen_override: false  # PyYAML false"));
-    assert_eq!(config.str("clinvar_aa_stat"), Some("/shared/same/cache.pkl"));
+    assert!(
+        config
+            .text
+            .contains("apply_clingen_override: false  # PyYAML false")
+    );
+    assert_eq!(
+        config.str("clinvar_aa_stat"),
+        Some("/shared/same/cache.pkl")
+    );
     assert_eq!(yaml_text(&config, "threads_per_fam"), "2");
     assert_eq!(config.str("hub_vcf_file"), Some(""));
     assert_eq!(config.str("assembly"), Some("hg38"));
     let control = config.str("control_vcf").unwrap().to_owned();
     assert!(control.starts_with(&task.display().to_string()));
-    let copied_cds = config.str("cds_fasta_file").unwrap().replace(".fa.gz", ".cds_cache.pkl.gz");
+    let copied_cds = config
+        .str("cds_fasta_file")
+        .unwrap()
+        .replace(".fa.gz", ".cds_cache.pkl.gz");
     assert!(Path::new(&copied_cds).exists());
     fs::write(&control, b"modified").unwrap();
     assert_eq!(fs::read(&controls).unwrap(), b"immutable-control-bytes");
@@ -427,11 +517,19 @@ impl LaunchFixture {
         .into_iter()
         .map(|(k, v)| (k.to_owned(), v))
         .collect();
-        LaunchFixture { folder, args, resource }
+        LaunchFixture {
+            folder,
+            args,
+            resource,
+        }
     }
 
     fn launch(&self) -> super::Result<()> {
-        let pairs: Vec<(&str, &str)> = self.args.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
+        let pairs: Vec<(&str, &str)> = self
+            .args
+            .iter()
+            .map(|(k, v)| (k.as_str(), v.as_str()))
+            .collect();
         tasks::launch(&options(&pairs, &[]))
     }
 
@@ -475,7 +573,11 @@ fn preannotated_v2_launch_rejected_before_output_creation() {
     )
     .unwrap();
     let text = fs::read_to_string(&config).unwrap();
-    fs::write(&config, format!("{text}spliceai_snv_prescore: {}\n", cache.display())).unwrap();
+    fs::write(
+        &config,
+        format!("{text}spliceai_snv_prescore: {}\n", cache.display()),
+    )
+    .unwrap();
     assert!(message(fixture.launch().unwrap_err()).contains("not qualified for v2"));
     assert!(!Path::new(&fixture.value("outdir")).exists());
 }
@@ -532,7 +634,11 @@ fn manifest_bundle_identity_is_checked() {
     let parsed = crate::json_text::parse(&text, false).unwrap();
     assert!(matches!(parsed.get("bundle_id"), Some(Json::Str(_))));
     assert!(text.ends_with("}\n") && text.starts_with("{\n  \"assembly\": \"hg19\""));
-    fs::write(&path, text.replace("\"mode\": \"annotated\"", "\"mode\": \"raw\"")).unwrap();
+    fs::write(
+        &path,
+        text.replace("\"mode\": \"annotated\"", "\"mode\": \"raw\""),
+    )
+    .unwrap();
     assert!(message(fixture.launch().unwrap_err()).contains("bundle_id does not match"));
 }
 
@@ -556,7 +662,11 @@ fn boundary_checks_task_controls_and_aliases() {
         fs::write(task.join(name), "true\n").unwrap();
     }
     let check = |dir: &Path, cwd: &Path| {
-        let args = vec!["check".to_owned(), "--task-dir".into(), dir.display().to_string()];
+        let args = vec![
+            "check".to_owned(),
+            "--task-dir".into(),
+            dir.display().to_string(),
+        ];
         in_dir(cwd, || super::boundary::main(&args))
     };
     assert_eq!(check(&task, &task), 0);

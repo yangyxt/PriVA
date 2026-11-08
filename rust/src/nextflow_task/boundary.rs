@@ -69,7 +69,10 @@ fn check_task(task_dir: &Path) -> Result<PathBuf, Refusal> {
                 continue;
             }
             if !kind.is_file() || kind.is_fifo() || kind.is_socket() {
-                return refuse(format!("Unsupported writable task entry: {}", path.display()));
+                return refuse(format!(
+                    "Unsupported writable task entry: {}",
+                    path.display()
+                ));
             }
             if value.nlink() != 1 {
                 return refuse(format!(

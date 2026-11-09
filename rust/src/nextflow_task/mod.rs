@@ -224,7 +224,15 @@ fn parse_task(args: &[String]) -> std::result::Result<(String, Options), String>
         "run" => {
             let options = Options::parse(
                 rest,
-                &["phase", "bundle", "vcf", "vcf-index", "cadd", "cpus", "family"],
+                &[
+                    "phase",
+                    "bundle",
+                    "vcf",
+                    "vcf-index",
+                    "cadd",
+                    "cpus",
+                    "family",
+                ],
                 &["stub"],
             )?;
             options.require(&["phase", "bundle", "vcf", "vcf-index", "cpus"])?;

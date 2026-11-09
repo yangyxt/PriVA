@@ -394,7 +394,10 @@ pub(crate) fn validate(options: &Options) -> Result<()> {
     if family.is_some_and(|f| !safe_id(f)) || !safe_id(base) {
         return refuse("Unsafe family/base identifier");
     }
-    let ped = options.get("ped").filter(|v| !v.is_empty()).map(PathBuf::from);
+    let ped = options
+        .get("ped")
+        .filter(|v| !v.is_empty())
+        .map(PathBuf::from);
     if family.is_some() && ped.is_none() {
         return refuse("A selected family needs its PED");
     }
@@ -722,7 +725,10 @@ fn private_config(
     let field = |key: &str| record.get(key).and_then(Json::as_str).unwrap_or_default();
     // An empty ped_file is the shell scripts' no-pedigree mode.
     let ped = if bundle.join("family.ped").is_file() {
-        display(&copy_writable(&bundle.join("family.ped"), &result.join("family.ped"))?)
+        display(&copy_writable(
+            &bundle.join("family.ped"),
+            &result.join("family.ped"),
+        )?)
     } else {
         String::new()
     };
@@ -871,7 +877,9 @@ pub(crate) fn run(options: &Options) -> Result<()> {
             return refuse("Annotation covers the whole cohort; it takes no --family");
         }
         (Some(id), _) if !families.contains(id) => {
-            return refuse(format!("Family {id} is not in this run's validated families"));
+            return refuse(format!(
+                "Family {id} is not in this run's validated families"
+            ));
         }
         (None, "filtration" | "prioritization") if !families.is_empty() => {
             return refuse("This run has PED families; name one with --family");
@@ -977,7 +985,12 @@ pub(crate) fn run(options: &Options) -> Result<()> {
             ]),
             // Without a family the scripts run their no-pedigree mode.
             "filtration" => {
-                let mut command: Vec<String> = vec!["bash".into(), script("filtration_vcf_per_fam.sh"), "-v".into(), input];
+                let mut command: Vec<String> = vec![
+                    "bash".into(),
+                    script("filtration_vcf_per_fam.sh"),
+                    "-v".into(),
+                    input,
+                ];
                 if let Some(id) = &family {
                     command.extend(["-f".into(), id.clone()]);
                 }
@@ -985,7 +998,12 @@ pub(crate) fn run(options: &Options) -> Result<()> {
                 Some(command)
             }
             "prioritization" => {
-                let mut command: Vec<String> = vec!["bash".into(), script("prioritization_vcf_per_fam.sh"), "-i".into(), input];
+                let mut command: Vec<String> = vec![
+                    "bash".into(),
+                    script("prioritization_vcf_per_fam.sh"),
+                    "-i".into(),
+                    input,
+                ];
                 if let Some(id) = &family {
                     command.extend(["-f".into(), id.clone()]);
                 }

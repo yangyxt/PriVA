@@ -10,6 +10,11 @@ the same fixture files; per-run folders are mapped to one placeholder.
 
 CHECKOUT must still contain bin/priva_task.py and bin/priva_task_boundary.py,
 which were removed after this comparison passed: use a source tree at 918c87f.
+
+This is a record of the conversion: it applies to programs up to dac10c2.
+The contract was then extended to whole cohorts (every PED family, or no
+PED), which the Python adapters never had, so later programs differ from
+them by design in the validate and launch cases.
 """
 import argparse
 import gzip

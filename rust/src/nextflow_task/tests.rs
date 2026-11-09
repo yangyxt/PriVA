@@ -744,11 +744,15 @@ fn family_tasks_name_a_validated_family() {
         if let Some(family) = family {
             pairs.push(("family", family));
         }
-        in_dir(&fixture.folder.0, || tasks::run(&options(&pairs, &["stub"])))
+        in_dir(&fixture.folder.0, || {
+            tasks::run(&options(&pairs, &["stub"]))
+        })
     };
     let refusal = |phase, family| message(run(phase, family).unwrap_err());
     assert!(refusal("filtration", None).contains("name one with --family"));
-    assert!(refusal("prioritization", Some("NOPE")).contains("not in this run's validated families"));
+    assert!(
+        refusal("prioritization", Some("NOPE")).contains("not in this run's validated families")
+    );
     assert!(refusal("annotation", Some("FAM")).contains("takes no --family"));
     // Refusals come before the task writes anything.
     assert!(!fixture.folder.0.join("result").exists());

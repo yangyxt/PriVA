@@ -214,12 +214,39 @@ each step reads the previous step's output (the gnomAD allele-frequency
 filter decides which variants reach VEP and CADD), so finer tasks would run
 one after another anyway. Filtration and prioritization take seconds; the
 time a task adds is spent in the resource checks, not in the task layout.
-Families already run in parallel as separate launches. Splitting would also
+Families run in parallel as their own tasks (next section). Splitting would also
 mean breaking `annotation_vcf.sh` into separately callable steps, which the
 shell workflow on `main` shares.
 
 Not covered by the trio: raw mode inside the Apptainer image (annotated mode
 passed there) and the `task_readonly` profile (the cluster has no Bubblewrap).
+
+## Whole cohorts, and the Snakemake workflow removed
+
+The `Snakefile` ran the phase scripts for a whole cohort: one annotation,
+then filtration and prioritization for every PED family, or once without a
+family when no PED was given. Nextflow now does the same, and the
+`Snakefile` (with the example's `smoke.Snakefile`) is removed. The
+`snakemake` package stays in the environments, because upstream `CADD.sh`
+is itself a Snakemake workflow.
+
+| Step | Tasks |
+| --- | --- |
+| Validation | One: the VCF, every PED family (or the one `--family` names), the resources |
+| Annotation | One, over the cohort VCF with the full PED |
+| Filtration, prioritization | One each per family, in parallel; with no PED, one each without a family |
+
+The task contract records `families` and `family_samples` per family;
+`priva task run --family ID` names the family of a family task, and refuses
+a family the contract does not list. Each family's first PED row must be its
+affected proband. Without a PED, prioritization reads the whole annotation
+CADD table, as the Snakefile's no-pedigree rule did.
+
+Compared with the Snakefile at `02d16b6` on the BH14233 trio slice, with its
+three samples as three one-person families and again without a PED (job
+1538573 at `1a07641`, 9 November 2026): the annotated VCF, the annotation
+CADD table, and every family's filtered VCF, filtered CADD table, final table
+and ACMG matrix were identical; `-resume` reused all eight cohort tasks.
 
 ## Retained Python tools
 

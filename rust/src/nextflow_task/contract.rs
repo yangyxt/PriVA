@@ -880,7 +880,9 @@ pub(crate) fn verify_manifest(
             }
         }
         if let Some(detail) = record_change(record, &expected)? {
-            return refuse(format!("Resource changed since manifest creation: {key}{detail}"));
+            return refuse(format!(
+                "Resource changed since manifest creation: {key}{detail}"
+            ));
         }
     }
     Ok(paths)

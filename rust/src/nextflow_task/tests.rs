@@ -591,7 +591,10 @@ fn folder_size_is_not_compared_but_other_fields_are() {
         ])
     };
     let change = |a: &Json, b: &Json| contract::record_change(a, b).unwrap();
-    assert_eq!(change(&record("directory", 4096, 1), &record("directory", 0, 1)), None);
+    assert_eq!(
+        change(&record("directory", 4096, 1), &record("directory", 0, 1)),
+        None
+    );
     assert_eq!(
         change(&record("directory", 0, 2), &record("directory", 0, 1)).as_deref(),
         Some(" (mtime_ns 1 -> 2)")

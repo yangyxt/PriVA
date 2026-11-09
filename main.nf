@@ -124,12 +124,12 @@ outputs and scientific-profile requirements.'''
         ANNOTATE_COHORT(VALIDATE_INPUTS.out.validated.map(bundleLast))
         def annotated = ANNOTATE_COHORT.out.annotated.map(bundleLast)
         // One filtration task per family: (meta, family, vcf, index, cadd, bundle).
-        FILTER_FAMILY(annotated.combine(families).map { meta, vcf, index, cadd, bundle, family -> [meta, family, vcf, index, cadd, bundle] })
+        FILTER_FAMILY(annotated.combine(families).map { run, vcf, index, cadd, bundle, family -> [run, family, vcf, index, cadd, bundle] })
         // Families prioritize with their filtered CADD table; the no-pedigree
         // run uses the whole annotation CADD table, as the shell workflow did.
         def toPrioritize = FILTER_FAMILY.out.filtered.map(bundleLast)
             .combine(annotated.map { it[3] })
-            .map { meta, family, vcf, index, cadd, bundle, cohortCadd -> [meta, family, vcf, index, family ? cadd : cohortCadd, bundle] }
+            .map { run, family, vcf, index, cadd, bundle, cohortCadd -> [run, family, vcf, index, family ? cadd : cohortCadd, bundle] }
         PRIORITIZE_FAMILY(toPrioritize)
     }
 }

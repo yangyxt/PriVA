@@ -1,6 +1,6 @@
 nextflow.enable.dsl=2
 
-include { VALIDATE_FAMILY; ANNOTATE_FAMILY; FILTER_FAMILY; PRIORITIZE_FAMILY } from './modules/local/compatibility'
+include { VALIDATE_INPUTS; ANNOTATE_COHORT; FILTER_FAMILY; PRIORITIZE_FAMILY } from './modules/local/compatibility'
 
 // The scientific source is deliberately retained during orchestration parity.
 // Its content identity, rather than only its pathname, participates in every task hash.
@@ -23,19 +23,22 @@ def sourceDigest(root) {
 
 workflow {
     if (params.help) {
-        log.info '''PriVA single-family compatibility workflow
-Required: --input VCF.vcf.gz --ped FAMILY.ped --family ID --assembly hg19|hg38
+        log.info '''PriVA workflow
+Required: --input VCF.vcf.gz --assembly hg19|hg38
           --legacy_config CONFIG.yaml --resource_manifest RESOURCES.json
           --software_id PINNED_ENVIRONMENT_OR_IMAGE_ID --outdir NEW_OUTPUT_DIRECTORY
           --priva_binary PRIVA_PROGRAM (runs the task contract: priva task)
-Optional: --mode raw|annotated --cadd ANNOTATED.cadd.tsv --vcf_index VCF.vcf.gz.tbi
+Optional: --ped COHORT.ped --family ID --mode raw|annotated
+          --cadd ANNOTATED.cadd.tsv --vcf_index VCF.vcf.gz.tbi
           --vcf_hub_mode off|qualified-copy --cadd_hub_mode off|copy
-The annotated mode requires its matching CADD TSV. The full cohort PED and VCF
-are retained for annotation; only the selected family is prioritized. Preserve
-the original proband-first PED row order. Use -stub-run only for wiring tests.
-See README.md for configuration, outputs and scientific-profile requirements.'''
+The cohort VCF is validated and annotated once. With --ped, every PED family is
+then filtered and prioritized in its own tasks (--family selects one); without
+--ped, one run covers all samples without family filtering. The annotated mode
+requires its matching CADD TSV. Preserve the original proband-first PED row
+order. Use -stub-run only for wiring tests. See README.md for configuration,
+outputs and scientific-profile requirements.'''
     } else {
-        ['input', 'ped', 'family', 'assembly', 'legacy_config', 'resource_manifest', 'software_id', 'outdir', 'priva_binary'].each { key ->
+        ['input', 'assembly', 'legacy_config', 'resource_manifest', 'software_id', 'outdir', 'priva_binary'].each { key ->
             if (!params[key]) error "Required parameter --${key} is missing"
         }
         if (!(params.mode in ['raw', 'annotated'])) error '--mode must be raw or annotated'
@@ -58,7 +61,8 @@ See README.md for configuration, outputs and scientific-profile requirements.'''
         ['slurm_cluster_options', 'slurm_account', 'container_run_options'].each { name ->
             if (params[name] instanceof Boolean || params[name]?.toString() == 'true') error "--${name} needs a value; write it as --${name}='VALUE'"
         }
-        if (!(params.family ==~ /[A-Za-z0-9_][A-Za-z0-9_.-]*/)) error 'Unsafe family identifier'
+        if (params.family && !(params.family.toString() ==~ /[A-Za-z0-9_][A-Za-z0-9_.-]*/)) error 'Unsafe family identifier'
+        if (params.family && !params.ped) error '--family selects a family of the --ped file; pass --ped'
         if (!(params.input.toString().endsWith('.vcf.gz'))) error '--input must be a BGZF .vcf.gz file'
         def sourceRoot = new File(projectDir.toString()).canonicalFile
         if (!(sourceRoot.toString() ==~ /[A-Za-z0-9_\.\/:+\-]+/)) error 'Legacy shell scripts require a source path without whitespace or shell metacharacters'
@@ -68,7 +72,7 @@ See README.md for configuration, outputs and scientific-profile requirements.'''
         def base = new File(params.input.toString()).name.replaceFirst(/\.vcf\.gz$/, '')
         if (params.mode == 'annotated') base = base.replaceFirst(/\.anno$/, '')
         if (!(base ==~ /[A-Za-z0-9_][A-Za-z0-9_.-]*/)) error 'Unsafe input basename'
-        def meta = [id: params.family, base: base, assembly: params.assembly, mode: params.mode,
+        def meta = [family: params.family ? params.family.toString() : '', base: base, assembly: params.assembly, mode: params.mode,
                     source_root: sourceRoot.toString(), source_digest: sourceDigest(sourceRoot),
                     software_id: params.software_id.toString(), vcf_hub_mode: params.vcf_hub_mode,
                     cadd_hub_mode: params.cadd_hub_mode, task_boundary: taskBoundary,
@@ -80,16 +84,17 @@ See README.md for configuration, outputs and scientific-profile requirements.'''
         def launchCommand = [meta.priva_binary, 'task', 'launch',
             '--vcf', file(params.input, checkIfExists: true).toString(),
             '--vcf-index', file(params.vcf_index ?: "${params.input}.tbi", checkIfExists: true).toString(),
-            '--ped', file(params.ped, checkIfExists: true).toString(),
             '--config', file(params.legacy_config, checkIfExists: true).toString(),
             '--resources', file(params.resource_manifest, checkIfExists: true).toString(),
-            '--family', meta.id.toString(), '--assembly', meta.assembly.toString(), '--mode', meta.mode.toString(),
+            '--assembly', meta.assembly.toString(), '--mode', meta.mode.toString(),
             '--legacy-root', meta.source_root, '--source-digest', meta.source_digest,
             '--software-id', meta.software_id, '--vcf-hub-mode', meta.vcf_hub_mode.toString(),
             '--cadd-hub-mode', meta.cadd_hub_mode.toString(), '--outdir', params.outdir.toString(),
             '--task-boundary', meta.task_boundary.toString(),
             '--annotation-cpus', params.annotation_cpus.toString(), '--family-cpus', params.family_cpus.toString()]
         if (params.cadd) launchCommand.addAll(['--cadd', file(params.cadd, checkIfExists: true).toString()])
+        if (params.ped) launchCommand.addAll(['--ped', file(params.ped, checkIfExists: true).toString()])
+        if (meta.family) launchCommand.addAll(['--family', meta.family])
         if (workflow.stubRun) launchCommand.add('--stub')
         // The check's own message joins the error, so it stays in .nextflow.log.
         def preflight = new ProcessBuilder(launchCommand).redirectErrorStream(true).start()
@@ -99,7 +104,7 @@ See README.md for configuration, outputs and scientific-profile requirements.'''
         def inputs = Channel.of(tuple(meta,
             file(params.input, checkIfExists: true),
             file(params.vcf_index ?: "${params.input}.tbi", checkIfExists: true),
-            file(params.ped, checkIfExists: true),
+            params.ped ? file(params.ped, checkIfExists: true) : [],
             file(params.legacy_config, checkIfExists: true),
             file(params.resource_manifest, checkIfExists: true),
             params.cadd ? file(params.cadd, checkIfExists: true) : []))
@@ -108,9 +113,23 @@ See README.md for configuration, outputs and scientific-profile requirements.'''
         // between reads, which would change the task hash and defeat -resume.
         // Sorting by name keeps the list order, also part of the hash, fixed.
         def bundleLast = { row -> row.take(row.size() - 1) + [(row.last() instanceof List ? row.last() : [row.last()]).sort(false) { it.name }] }
-        VALIDATE_FAMILY(inputs)
-        ANNOTATE_FAMILY(VALIDATE_FAMILY.out.validated.map(bundleLast))
-        FILTER_FAMILY(ANNOTATE_FAMILY.out.annotated.map(bundleLast))
-        PRIORITIZE_FAMILY(FILTER_FAMILY.out.filtered.map(bundleLast))
+        VALIDATE_INPUTS(inputs)
+        // The validated contract lists the families this run covers; none
+        // (no PED) is one run without a family, written as ''.
+        def families = VALIDATE_INPUTS.out.validated.flatMap { row ->
+            def contract = row.last().find { it.name == 'contract.json' }
+            def listed = new groovy.json.JsonSlurper().parse(contract.toFile()).families
+            listed ? listed.collect { it.toString() } : ['']
+        }
+        ANNOTATE_COHORT(VALIDATE_INPUTS.out.validated.map(bundleLast))
+        def annotated = ANNOTATE_COHORT.out.annotated.map(bundleLast)
+        // One filtration task per family: (meta, family, vcf, index, cadd, bundle).
+        FILTER_FAMILY(annotated.combine(families).map { meta, vcf, index, cadd, bundle, family -> [meta, family, vcf, index, cadd, bundle] })
+        // Families prioritize with their filtered CADD table; the no-pedigree
+        // run uses the whole annotation CADD table, as the shell workflow did.
+        def toPrioritize = FILTER_FAMILY.out.filtered.map(bundleLast)
+            .combine(annotated.map { it[3] })
+            .map { meta, family, vcf, index, cadd, bundle, cohortCadd -> [meta, family, vcf, index, family ? cadd : cohortCadd, bundle] }
+        PRIORITIZE_FAMILY(toPrioritize)
     }
 }

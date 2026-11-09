@@ -168,8 +168,35 @@ def validate(args) -> None:
           f"Prepared fixtures only; VEP and CADD model calculation not exercised. Outputs: {config['output_dir']}")
 
 
+def run_steps(path: Path) -> None:
+    """The prepared-fixture steps in order: stage the fixtures, filter, prioritize."""
+    config = load_config(path)
+    base = Path(config["input_vcf"]).name.removesuffix(".vcf.gz")
+    out = Path(config["output_dir"]) / f"{base}.anno"
+    vcf, cadd = Path(f"{out}.vcf.gz"), Path(f"{out}.cadd.tsv")
+    # 1. The prepared fixtures already carry annotations and transcript PHRED.
+    shutil.copyfile(config["input_vcf"], vcf)
+    shutil.copyfile(config["input_vcf"] + ".tbi", f"{vcf}.tbi")
+    shutil.copyfile(config["hub_cadd_file"], cadd)
+    filtration = str(ROOT / "scripts/filtration_vcf_per_fam.sh")
+    prioritization = str(ROOT / "scripts/prioritization_vcf_per_fam.sh")
+    filtered_vcf, filtered_cadd = f"{out}.filtered.vcf.gz", f"{out}.filtered.cadd.tsv"
+    threads = str(config["threads_per_fam"])
+    steps = [
+        # 2. Filtration without a family (the fixtures have no pedigree).
+        ["bash", filtration, "main_filtration", "-v", str(vcf), "-c", str(path)],
+        # 3. Prioritization: the combined table, kept as .prepared.tsv for
+        # validate(), then ACMG assignment and ranking.
+        ["bash", prioritization, "prepare_combined_tab", filtered_vcf, filtered_cadd, threads, str(path)],
+        ["cp", "--", f"{out}.filtered.tsv", f"{out}.prepared.tsv"],
+        ["bash", prioritization, "main_prioritization", "-i", filtered_vcf, "-t", filtered_cadd, "-c", str(path)],
+    ]
+    for command in steps:
+        subprocess.run(command, check=True, cwd=path.parent)
+
+
 def run(args) -> None:
-    for tool in ("bash", "python", "yq", "bcftools", "tabix", "snakemake"):
+    for tool in ("bash", "python", "yq", "bcftools", "tabix"):
         if not shutil.which(tool):
             raise ValueError(f"Activate the PriVA environment; missing executable: {tool}")
     # The pipeline scripts run the converted steps with the priva program.
@@ -178,9 +205,7 @@ def run(args) -> None:
                          "or put priva on PATH.")
     path = prepare(args)
     print(f"Prepared-fixture smoke test: {path}", flush=True)
-    subprocess.run(["snakemake", "--snakefile", str(ROOT / "example/smoke.Snakefile"),
-                    "--configfile", str(path), "--directory", str(path.parent),
-                    "--cores", str(args.cores), "--rerun-incomplete"], check=True)
+    run_steps(path)
     validate(argparse.Namespace(config=path))
 
 

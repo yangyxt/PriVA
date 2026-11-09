@@ -87,10 +87,30 @@ fn ped_preserves_cohort_context_and_selects_family() {
     fs::write(&path, text).unwrap();
     let all = samples(&["child", "dad", "mom", "other"]);
     assert_eq!(
-        tasks::validate_ped(&path, "FAM", &all).unwrap(),
-        samples(&["child", "mom", "dad"])
+        tasks::validate_ped(&path, Some("FAM"), &all).unwrap(),
+        vec![("FAM".to_owned(), samples(&["child", "mom", "dad"]))]
+    );
+    // Without a selection every family runs, in order of first appearance.
+    assert_eq!(
+        tasks::validate_ped(&path, None, &all).unwrap(),
+        vec![
+            ("OTHER".to_owned(), samples(&["other"])),
+            ("FAM".to_owned(), samples(&["child", "mom", "dad"])),
+        ]
     );
     assert_eq!(fs::read_to_string(&path).unwrap(), text);
+}
+
+#[test]
+fn every_family_needs_its_affected_proband_first() {
+    let folder = Folder::new("ped4");
+    let path = folder.0.join("cohort.ped");
+    fs::write(&path, "FAM\tchild\t0\t0\t1\t2\nOTHER\tother\t0\t0\t2\t1\n").unwrap();
+    let all = samples(&["child", "other"]);
+    // Selecting the valid family alone is accepted; the whole PED is not.
+    assert!(tasks::validate_ped(&path, Some("FAM"), &all).is_ok());
+    let error = tasks::validate_ped(&path, None, &all).unwrap_err();
+    assert!(message(error).contains("affected proband first (family OTHER)"));
 }
 
 #[test]
@@ -104,8 +124,8 @@ fn ped_accepts_missing_parent_phenotypes_in_family_order() {
         );
         fs::write(&path, &text).unwrap();
         assert_eq!(
-            tasks::validate_ped(&path, "FAM", &all).unwrap(),
-            samples(&["child", "mom", "dad"])
+            tasks::validate_ped(&path, Some("FAM"), &all).unwrap(),
+            vec![("FAM".to_owned(), samples(&["child", "mom", "dad"]))]
         );
     }
 }
@@ -149,7 +169,7 @@ fn ped_refusals() {
         ),
     ] {
         fs::write(&path, text).unwrap();
-        let error = tasks::validate_ped(&path, "FAM", &samples(&members)).unwrap_err();
+        let error = tasks::validate_ped(&path, Some("FAM"), &samples(&members)).unwrap_err();
         assert!(message(error).contains(expected), "{text:?}");
     }
 }
@@ -698,6 +718,40 @@ fn mixed_spliceai_versions_task_rejected_before_any_output() {
         assert!(message(outcome.unwrap_err()).contains("must be the same version"));
         assert!(!fixture.folder.0.join("result").exists());
     }
+}
+
+#[test]
+fn family_tasks_name_a_validated_family() {
+    let _guard = CWD.lock().unwrap_or_else(|e| e.into_inner());
+    let fixture = LaunchFixture::new("family_run");
+    let bundle = fixture.folder.0.join("family-bundle");
+    fs::create_dir_all(&bundle).unwrap();
+    let record = format!(
+        "{{\"mode\": \"annotated\", \"stub\": true, \"base\": \"input\", \"families\": [\"FAM\", \"OTHER\"], \"legacy_root\": \"{}\", \"source_digest\": \"{}\", \"vcf_hub_mode\": \"off\", \"cadd_hub_mode\": \"copy\"}}",
+        fixture.value("legacy-root"),
+        fixture.value("source-digest")
+    );
+    fs::write(bundle.join("contract.json"), record).unwrap();
+    let bundle_text = bundle.display().to_string();
+    let run = |phase: &str, family: Option<&str>| {
+        let mut pairs = vec![
+            ("phase", phase),
+            ("bundle", bundle_text.as_str()),
+            ("vcf", "input.vcf.gz"),
+            ("vcf-index", "input.vcf.gz.tbi"),
+            ("cpus", "1"),
+        ];
+        if let Some(family) = family {
+            pairs.push(("family", family));
+        }
+        in_dir(&fixture.folder.0, || tasks::run(&options(&pairs, &["stub"])))
+    };
+    let refusal = |phase, family| message(run(phase, family).unwrap_err());
+    assert!(refusal("filtration", None).contains("name one with --family"));
+    assert!(refusal("prioritization", Some("NOPE")).contains("not in this run's validated families"));
+    assert!(refusal("annotation", Some("FAM")).contains("takes no --family"));
+    // Refusals come before the task writes anything.
+    assert!(!fixture.folder.0.join("result").exists());
 }
 
 #[test]

@@ -142,13 +142,13 @@ fn usage_error(command: &str, message: &str) -> ! {
     std::process::exit(2)
 }
 
+// --ped is optional (no pedigree: one sample-set run without family
+// filtering); --family selects one PED family, else every family runs.
 const VALIDATE_REQUIRED: &[&str] = &[
     "vcf",
     "vcf-index",
-    "ped",
     "config",
     "resources",
-    "family",
     "base",
     "assembly",
     "mode",
@@ -161,10 +161,8 @@ const VALIDATE_REQUIRED: &[&str] = &[
 const LAUNCH_REQUIRED: &[&str] = &[
     "vcf",
     "vcf-index",
-    "ped",
     "config",
     "resources",
-    "family",
     "assembly",
     "mode",
     "legacy-root",
@@ -207,7 +205,7 @@ fn parse_task(args: &[String]) -> std::result::Result<(String, Options), String>
         }
         "validate" => {
             let mut valued = VALIDATE_REQUIRED.to_vec();
-            valued.extend(["cadd", "task-boundary"]);
+            valued.extend(["cadd", "task-boundary", "ped", "family"]);
             let options = Options::parse(rest, &valued, &["stub"])?;
             options.require(VALIDATE_REQUIRED)?;
             options.choice("task-boundary", &["off", "bwrap"])?;
@@ -215,7 +213,7 @@ fn parse_task(args: &[String]) -> std::result::Result<(String, Options), String>
         }
         "launch" => {
             let mut valued = LAUNCH_REQUIRED.to_vec();
-            valued.extend(["cadd", "task-boundary"]);
+            valued.extend(["cadd", "task-boundary", "ped", "family"]);
             let options = Options::parse(rest, &valued, &["stub"])?;
             options.require(LAUNCH_REQUIRED)?;
             options.int("annotation-cpus")?;
@@ -226,7 +224,7 @@ fn parse_task(args: &[String]) -> std::result::Result<(String, Options), String>
         "run" => {
             let options = Options::parse(
                 rest,
-                &["phase", "bundle", "vcf", "vcf-index", "cadd", "cpus"],
+                &["phase", "bundle", "vcf", "vcf-index", "cadd", "cpus", "family"],
                 &["stub"],
             )?;
             options.require(&["phase", "bundle", "vcf", "vcf-index", "cpus"])?;

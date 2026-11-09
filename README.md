@@ -1,14 +1,18 @@
 # PriVA-nextflow
 
-PriVA-nextflow is an experimental single-family orchestration layer around PriVA's existing Python scientific implementation. It consumes SNV/short-indel annotations and produces family-filtered variants, ACMG evidence and transcript-level rankings. It is not a structural-variant/CNV workflow.
+PriVA-nextflow runs PriVA as a Nextflow workflow over one cohort VCF. It validates and annotates the cohort once, then filters and prioritizes every pedigree family in its own tasks; without a pedigree, one run covers all samples without family filtering. PriVA's own steps run in the `priva` program (Rust); VEP and CADD run as their authors ship them. It produces family-filtered variants, ACMG evidence and transcript-level rankings for SNVs and short indels. It is not a structural-variant/CNV workflow.
 
 ```mermaid
 flowchart LR
-    I[Annotated VCF + matching CADD] --> V[Validate inputs and resources]
-    P[Pedigree + configuration] --> V
-    V --> F[Family filtering]
-    F --> R[Original Python ACMG + ranking]
-    R --> O[Variants + ranked tables + provenance]
+    I[Cohort VCF, or annotated VCF + matching CADD] --> V[Validate inputs and resources]
+    P[Pedigree, optional + configuration] --> V
+    V --> A[Annotate the cohort once: VEP, CADD]
+    A --> F1[Filter family 1]
+    A --> F2[Filter family 2 ...]
+    F1 --> R1[ACMG + ranking, family 1]
+    F2 --> R2[ACMG + ranking, family 2 ...]
+    R1 --> O[Variants + ranked tables + provenance]
+    R2 --> O
 ```
 
 **Two entry points.** `--mode raw` starts from the cohort VCF and runs the annotation phase (VEP, CADD and the other annotation steps) as a Nextflow task. It was qualified against the shell workflow on a trio: the annotated VCF, the CADD table and every family output were identical, with the local executor and with the Slurm profile. `--mode annotated` imports the complete original VCF/CADD pair from a compatible scientific profile, not arbitrary annotations, and skips annotation. SpliceAI v1 and prepared SpliceAI2 caches each use their own splicing and ACMG cutoffs ([spliceai_cutoffs.py](scripts/spliceai_cutoffs.py)); SpliceAI2 uses its authors' recommended thresholds (0.1, 0.25 and 0.5 in place of SpliceAI v1's 0.2, 0.5 and 0.8). Installation, stub execution and successful scheduling do not establish family or scientific-profile qualification.
@@ -141,8 +145,8 @@ The cache path is read from the installed configuration. Keep this external laun
 ## Prepare a compatible annotated input
 
 - Supply one BGZF `*.vcf.gz` with its adjacent `.tbi`, complete compatible `CSQ` annotations, and the matching uncompressed transcript-aware CADD TSV. Its first row needs unique `#Chrom`, `Pos`, `Ref`, `Alt`, `PHRED` and `FeatureID` columns. Preserve any additional original columns.
-- Retain the full cohort VCF and pedigree; select one family through `--family`. Every PED sample must occur in the VCF, sample identifiers must be unique, and family/sample names must be safe file-name tokens.
-- Use a tab-delimited PED with at least the standard six columns: family, individual, father, mother, sex, phenotype. Put the affected proband first within the selected family. Sex is `0` unknown, `1` male or `2` female; phenotype is `0`/`-9` unknown, `1` unaffected or `2` affected. Unknown values remain unknown.
+- Retain the full cohort VCF and pedigree. Every PED family is filtered and prioritized in its own tasks; `--family ID` runs only that family. Without `--ped`, one run covers all samples with allele-frequency filtering only, as the earlier shell workflow did. Every PED sample must occur in the VCF, sample identifiers must be unique, and family/sample names must be safe file-name tokens.
+- Use a tab-delimited PED with at least the standard six columns: family, individual, father, mother, sex, phenotype. Put the affected proband first within each family. Sex is `0` unknown, `1` male or `2` female; phenotype is `0`/`-9` unknown, `1` unaffected or `2` affected. Unknown values remain unknown.
 - Match `--assembly`, the installed configuration, annotations and resources. Keep the legacy scientific profile and transcript mappings compatible. The SpliceAI SNV and indel files must be the same version (v1 or SpliceAI2); each version uses its own cutoffs.
 
 Create a manifest of the existing resources. This inventories resources; it does not install them or qualify a new scientific profile:
@@ -163,7 +167,7 @@ PRIVA_SOFTWARE_ID="conda-explicit-sha256:$(sha256sum "$PRIVA_RUNS/environment.ex
 
 Use the equivalent explicit lock from your manager when using Mamba/Conda. Keep the identity unchanged only while that environment remains unchanged.
 
-## Run one family
+## Run a cohort
 
 Annotated mode, with a compatible VCF/CADD pair:
 
@@ -172,20 +176,24 @@ Annotated mode, with a compatible VCF/CADD pair:
   --mode annotated \
   --input "$(realpath inputs/cohort.anno.vcf.gz)" \
   --cadd "$(realpath inputs/cohort.anno.cadd.tsv)" \
-  --ped "$(realpath inputs/family.ped)" --family FAM1 --assembly hg19 \
+  --ped "$(realpath inputs/cohort.ped)" --assembly hg19 \
   --legacy_config "$PRIVA_CONFIG" \
   --resource_manifest "$PRIVA_RUNS/resources.json" \
   --software_id "$PRIVA_SOFTWARE_ID" \
   --priva_binary "$PRIVA_BINARY" \
   --vcf_hub_mode off --cadd_hub_mode off \
-  --outdir "$PRIVA_RUNS/FAM1" -work-dir "$PRIVA_RUNS/work"
+  --outdir "$PRIVA_RUNS/cohort" -work-dir "$PRIVA_RUNS/work"
 ```
 
 For raw mode, make the manifest with `--mode raw` (it also records the VEP and CADD
 installations), then launch with `--mode raw` and the cohort VCF as `--input`, without `--cadd`.
 The new annotation pair is published under `annotation/`.
 
-The example `inputs/` paths are relative to the external `PRIVA_RUNS` directory; replace them with your actual input paths, family and assembly. The annotated route does not rerun VEP or regenerate CADD. Use a new output directory for changed inputs, source, resources or settings. For the same run, retain the external launch/work directories and Nextflow cache, and append `-resume`; launch-time resource checks still apply to a fully cached run.
+Each family's outputs carry its PED family identifier, for example
+`cohort.anno.FAM1.filtered.tsv`; a run without `--ped` writes `cohort.anno.filtered.tsv`.
+Families run in parallel as far as `--family_cpus` and the executor allow.
+
+The example `inputs/` paths are relative to the external `PRIVA_RUNS` directory; replace them with your actual input paths and assembly. The annotated route does not rerun VEP or regenerate CADD. Use a new output directory for changed inputs, source, resources or settings. For the same run, retain the external launch/work directories and Nextflow cache, and append `-resume`; launch-time resource checks still apply to a fully cached run.
 
 | Profile/option | Scope |
 |---|---|
@@ -209,9 +217,9 @@ as 1e-06 between 10 and 12 CPUs; RawScore and PHRED were unchanged), so keep
 | Directory | Contents |
 |---|---|
 | `annotation/` | Raw mode only: the annotated VCF/index and its CADD table |
-| `variants/` | Family-filtered VCF/index and matching CADD table |
-| `prioritization/` | `*.filtered.tsv` ranked transcript rows and `*.filtered.acmg.tsv` evidence matrix |
-| `pipeline_info/` | Input/resource bundle, phase provenance and Nextflow execution reports |
+| `variants/` | Per family: the filtered VCF/index and matching CADD table |
+| `prioritization/` | Per family: `*.filtered.tsv` ranked transcript rows and `*.filtered.acmg.tsv` evidence matrix |
+| `pipeline_info/` | Input/resource bundle, provenance of each task (family tasks carry the family in the name) and Nextflow execution reports |
 
 `ACMG_criteria` records applied evidence; `ACMG_quant_score` is the posterior under PriVA's ACMG model; `ACMG_class` is its classification. `sort_index` additionally includes control, inheritance, gene-list and expression weighting. Read `variant_rank` with allele/variant identifiers and transcript columns, since several transcript rows can represent one variant. The default `apply_clingen_override: true` uses curated ClinGen criteria in place of PriVA-derived criteria where available. These outputs support evidence review, not a diagnosis by themselves.
 

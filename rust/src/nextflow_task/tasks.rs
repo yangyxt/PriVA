@@ -288,8 +288,13 @@ fn python_strip(text: &str) -> &str {
     text.trim_matches(crate::python_text::is_python_space)
 }
 
-/// The selected family's sample identifiers, in PED order.
-pub(crate) fn validate_ped(path: &Path, family: &str, samples: &[String]) -> Result<Vec<String>> {
+/// Each family's sample identifiers, in PED order, for every family in
+/// order of first appearance, or only `family` when one is selected.
+pub(crate) fn validate_ped(
+    path: &Path,
+    family: Option<&str>,
+    samples: &[String],
+) -> Result<Vec<(String, Vec<String>)>> {
     let content = read_text(path)?;
     let rows: Vec<Vec<&str>> = split_lines(&content)
         .into_iter()
@@ -306,9 +311,20 @@ pub(crate) fn validate_ped(path: &Path, family: &str, samples: &[String]) -> Res
             "Legacy Python requires a tab-delimited PED with at least six columns and one person",
         );
     }
-    let selected: Vec<&Vec<&str>> = rows.iter().filter(|row| row[0] == family).collect();
-    if selected.is_empty() {
-        return refuse("The selected family is absent from the PED");
+    let mut order: Vec<&str> = Vec::new();
+    for row in &rows {
+        if !order.contains(&row[0]) {
+            order.push(row[0]);
+        }
+    }
+    if let Some(family) = family {
+        if !order.contains(&family) {
+            return refuse("The selected family is absent from the PED");
+        }
+        order = vec![family];
+    }
+    if order.iter().any(|id| !safe_id(id)) {
+        return refuse("PED family identifier contains unsupported shell characters");
     }
     let ids: Vec<&str> = rows.iter().map(|row| row[1]).collect();
     let unique = |items: &[&str]| {
@@ -333,12 +349,20 @@ pub(crate) fn validate_ped(path: &Path, family: &str, samples: &[String]) -> Res
     {
         return refuse("PED requires sex 0/1/2 and phenotype -9/0/1/2");
     }
-    if selected[0][5] != "2" {
-        return refuse(
-            "Legacy PriVA requires the affected proband first; PED order is never rewritten",
-        );
+    let mut families = Vec::new();
+    for id in order {
+        let selected: Vec<&Vec<&str>> = rows.iter().filter(|row| row[0] == id).collect();
+        if selected[0][5] != "2" {
+            return refuse(format!(
+                "Legacy PriVA requires the affected proband first (family {id}); PED order is never rewritten"
+            ));
+        }
+        families.push((
+            id.to_owned(),
+            selected.iter().map(|row| row[1].to_owned()).collect(),
+        ));
     }
-    Ok(selected.iter().map(|row| row[1].to_owned()).collect())
+    Ok(families)
 }
 
 fn validate_cadd(path: &Path) -> Result<()> {
@@ -365,10 +389,14 @@ pub(crate) fn validate(options: &Options) -> Result<()> {
     require_task_boundary(boundary)?;
     let config_path = PathBuf::from(options.value("config"));
     let config = read_config(&config_path)?;
-    let family = options.value("family");
+    let family = options.get("family").filter(|v| !v.is_empty());
     let base = options.value("base");
-    if !safe_id(family) || !safe_id(base) {
+    if family.is_some_and(|f| !safe_id(f)) || !safe_id(base) {
         return refuse("Unsafe family/base identifier");
+    }
+    let ped = options.get("ped").filter(|v| !v.is_empty()).map(PathBuf::from);
+    if family.is_some() && ped.is_none() {
+        return refuse("A selected family needs its PED");
     }
     let requested = assembly(options.value("assembly"))
         .ok_or_else(|| format!("KeyError: '{}'", options.value("assembly")))?;
@@ -381,8 +409,12 @@ pub(crate) fn validate(options: &Options) -> Result<()> {
     }
     let vcf = PathBuf::from(options.value("vcf"));
     let samples = vcf_samples(&vcf)?;
-    let ped = PathBuf::from(options.value("ped"));
-    let family_samples = validate_ped(&ped, family, &samples)?;
+    // No PED: one run over every sample without family filtering, as the
+    // shell workflow's no-pedigree mode.
+    let families = match &ped {
+        Some(ped) => validate_ped(ped, family, &samples)?,
+        None => Vec::new(),
+    };
     if !Path::new(options.value("vcf-index")).is_file() {
         return refuse("Input VCF index is missing");
     }
@@ -422,10 +454,12 @@ pub(crate) fn validate(options: &Options) -> Result<()> {
     fs::create_dir(bundle).map_err(|e| crate::python_path::os_error(e, bundle, None))?;
     for (source, name) in [
         (config_path.as_path(), "legacy.yaml"),
-        (ped.as_path(), "family.ped"),
         (resources.as_path(), "resources.json"),
     ] {
         copy2(source, &bundle.join(name))?;
+    }
+    if let Some(ped) = &ped {
+        copy2(ped, &bundle.join("family.ped"))?;
     }
     let samples_json =
         |items: &[String]| Json::Array(items.iter().cloned().map(Json::Str).collect());
@@ -439,7 +473,10 @@ pub(crate) fn validate(options: &Options) -> Result<()> {
     };
     let record = object(vec![
         ("schema_version", Json::Int(1)),
-        ("family", text(family)),
+        (
+            "families",
+            Json::Array(families.iter().map(|(id, _)| text(id.clone())).collect()),
+        ),
         ("base", text(base)),
         ("assembly", text(requested)),
         ("mode", text(mode)),
@@ -451,10 +488,24 @@ pub(crate) fn validate(options: &Options) -> Result<()> {
         ("vcf_hub_mode", text(vcf_hub)),
         ("cadd_hub_mode", text(cadd_hub)),
         ("samples", samples_json(&samples)),
-        ("family_samples", samples_json(&family_samples)),
+        (
+            "family_samples",
+            Json::Object(
+                families
+                    .iter()
+                    .map(|(id, members)| (id.clone(), samples_json(members)))
+                    .collect(),
+            ),
+        ),
         ("stub", Json::Bool(stub)),
         ("input_sha256", text(sha256(&vcf)?)),
-        ("ped_sha256", text(sha256(&ped)?)),
+        (
+            "ped_sha256",
+            match &ped {
+                Some(ped) => text(sha256(ped)?),
+                None => Json::Null,
+            },
+        ),
         ("provided_cadd_sha256", provided),
     ]);
     write_json(&bundle.join("contract.json"), &record)?;
@@ -575,11 +626,23 @@ pub(crate) fn launch(options: &Options) -> Result<()> {
         ("schema_version", Json::Int(1)),
         ("source_digest", text(options.value("source-digest"))),
         ("software_id", text(options.value("software-id"))),
-        ("family", text(options.value("family"))),
+        (
+            "family",
+            options
+                .get("family")
+                .filter(|v| !v.is_empty())
+                .map_or(Json::Null, text),
+        ),
         ("assembly", text(requested)),
         ("mode", text(mode)),
         ("config_sha256", text(sha256(&config_path)?)),
-        ("ped_sha256", text(sha256(Path::new(options.value("ped")))?)),
+        (
+            "ped_sha256",
+            match options.get("ped").filter(|v| !v.is_empty()) {
+                Some(ped) => text(sha256(Path::new(ped))?),
+                None => Json::Null,
+            },
+        ),
         ("manifest_sha256", text(sha256(&resources)?)),
         (
             "input",
@@ -657,7 +720,12 @@ fn private_config(
         fs::create_dir(&temp)?;
     }
     let field = |key: &str| record.get(key).and_then(Json::as_str).unwrap_or_default();
-    let ped = copy_writable(&bundle.join("family.ped"), &result.join("family.ped"))?;
+    // An empty ped_file is the shell scripts' no-pedigree mode.
+    let ped = if bundle.join("family.ped").is_file() {
+        display(&copy_writable(&bundle.join("family.ped"), &result.join("family.ped"))?)
+    } else {
+        String::new()
+    };
     let mut updates: Vec<(String, Json)> = vec![
         (
             "input_vcf".into(),
@@ -665,7 +733,7 @@ fn private_config(
         ),
         ("output_dir".into(), text(display(&result))),
         ("tmp_dir".into(), text(display(&temp))),
-        ("ped_file".into(), text(display(&ped))),
+        ("ped_file".into(), text(ped)),
     ];
     updates.extend(thread_settings);
     updates.extend([
@@ -784,11 +852,38 @@ pub(crate) fn run(options: &Options) -> Result<()> {
         )?;
         verified = Some((manifest, paths));
     }
+    let base = field("base").to_owned();
+    // The contract lists every family the run covers; each family task
+    // names one. A contract without families is the no-pedigree run.
+    let families: Vec<String> = match record.get("families") {
+        Some(Json::Array(items)) => items
+            .iter()
+            .filter_map(|item| item.as_str().map(str::to_owned))
+            .collect(),
+        _ => Vec::new(),
+    };
+    let family = options
+        .get("family")
+        .filter(|v| !v.is_empty())
+        .map(str::to_owned);
+    match (&family, phase) {
+        (Some(_), "annotation") => {
+            return refuse("Annotation covers the whole cohort; it takes no --family");
+        }
+        (Some(id), _) if !families.contains(id) => {
+            return refuse(format!("Family {id} is not in this run's validated families"));
+        }
+        (None, "filtration" | "prioritization") if !families.is_empty() => {
+            return refuse("This run has PED families; name one with --family");
+        }
+        _ => {}
+    }
+    let family_base = match &family {
+        Some(id) => format!("{base}.anno.{id}.filtered"),
+        None => format!("{base}.anno.filtered"),
+    };
     let result = PathBuf::from(crate::python_path::absolute(Path::new("result"))?);
     fs::create_dir(&result).map_err(|e| crate::python_path::os_error(e, &result, None))?;
-    let base = field("base").to_owned();
-    let family = field("family").to_owned();
-    let family_base = format!("{base}.anno.{family}.filtered");
     let name = match phase {
         "annotation" if field("mode") == "annotated" => format!("{base}.anno"),
         "annotation" => base.clone(),
@@ -880,28 +975,28 @@ pub(crate) fn run(options: &Options) -> Result<()> {
                 "--config".into(),
                 config_text,
             ]),
-            "filtration" => Some(vec![
-                "bash".into(),
-                script("filtration_vcf_per_fam.sh"),
-                "-v".into(),
-                input,
-                "-f".into(),
-                family.clone(),
-                "-c".into(),
-                config_text,
-            ]),
-            "prioritization" => Some(vec![
-                "bash".into(),
-                script("prioritization_vcf_per_fam.sh"),
-                "-i".into(),
-                input,
-                "-f".into(),
-                family.clone(),
-                "-c".into(),
-                config_text,
-                "-t".into(),
-                display(cadd_path.as_deref().unwrap()),
-            ]),
+            // Without a family the scripts run their no-pedigree mode.
+            "filtration" => {
+                let mut command: Vec<String> = vec!["bash".into(), script("filtration_vcf_per_fam.sh"), "-v".into(), input];
+                if let Some(id) = &family {
+                    command.extend(["-f".into(), id.clone()]);
+                }
+                command.extend(["-c".into(), config_text]);
+                Some(command)
+            }
+            "prioritization" => {
+                let mut command: Vec<String> = vec!["bash".into(), script("prioritization_vcf_per_fam.sh"), "-i".into(), input];
+                if let Some(id) = &family {
+                    command.extend(["-f".into(), id.clone()]);
+                }
+                command.extend([
+                    "-c".into(),
+                    config_text,
+                    "-t".into(),
+                    display(cadd_path.as_deref().unwrap()),
+                ]);
+                Some(command)
+            }
             _ => None, // An explicit preannotated import keeps the input bytes.
         };
         if let Some(command) = command {
@@ -960,6 +1055,7 @@ pub(crate) fn run(options: &Options) -> Result<()> {
     }
     let mut provenance = record.clone();
     provenance.set("phase", text(phase));
+    provenance.set("family", family.clone().map_or(Json::Null, text));
     provenance.set("cpus", Json::Int(cpus as i128));
     let mut listed = Vec::new();
     for path in &outputs {
@@ -977,5 +1073,10 @@ pub(crate) fn run(options: &Options) -> Result<()> {
         "cache_isolation",
         text("shared resources read; mutable VCF/CADD hubs, optional cohort VCFs and CDS lazy cache copied into task"),
     );
-    write_json(Path::new(&format!("{phase}.provenance.json")), &provenance)
+    // One provenance file per family task, so the published names differ.
+    let name = match &family {
+        Some(id) => format!("{phase}.{id}.provenance.json"),
+        None => format!("{phase}.provenance.json"),
+    };
+    write_json(Path::new(&name), &provenance)
 }

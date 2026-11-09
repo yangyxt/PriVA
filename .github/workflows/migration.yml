@@ -177,7 +177,8 @@ jobs:
         run: |
           bash tests/nextflow/run_stub.sh \
             "$RUNNER_TEMP/priva-nextflow-runtime/bin/nextflow" \
-            "$RUNNER_TEMP/priva-nextflow-stub"
+            "$RUNNER_TEMP/priva-nextflow-stub" \
+            "$CARGO_TARGET_DIR/debug/priva"
 
       - name: Test the standalone upstream CADD.sh workflow wiring
         env:

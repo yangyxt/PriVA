@@ -175,12 +175,51 @@ removed (G10, November 2026).
 
 | Former Python source | Native procedure or current role |
 | --- | --- |
-| `bin/priva_task.py` | `priva task {manifest,validate,launch,run}` ([`rust/src/nextflow_task/`](src/nextflow_task/mod.rs)). Same checks, refusal messages, JSON records and exit codes; the per-task configuration is written by editing the original text instead of re-dumping it, with PyYAML-only spellings (such as `yes`) rewritten so `yq` reads the values PyYAML loaded. Compared with the Python adapter by `rust/tests/nextflow_task_compare.py` (38 of 38 synthetic cases, check job 1538049); its `--source` must be a revision that still has the Python adapters, such as `918c87f`. |
+| `bin/priva_task.py` | `priva task {manifest,validate,launch,run}` ([`rust/src/nextflow_task/`](src/nextflow_task/mod.rs)). Same checks, refusal messages, JSON records and exit codes; the per-task configuration is written by editing the original text instead of re-dumping it, with PyYAML-only spellings (such as `yes`) rewritten so `yq` reads the values PyYAML loaded. Compared with the Python adapter by `rust/tests/nextflow_task_compare.py` (38 of 38 synthetic cases, check job 1538049; 37 cases since the raw refusal case was dropped with the raw gate); its `--source` must be a revision that still has the Python adapters, such as `918c87f`. |
 | `bin/priva_task_boundary.py` | `priva task-boundary {check,exec}`, same Bubblewrap arguments and exit code 125. |
 | `scripts/priva_rust_*.py` (nine ranking and criteria bridges) | Removed with their tests. They were the optional `--ranking_binary` path inside the Python ACMG step; the workflow runs `priva acmg-assign`, which accepts and ignores `--ranking_binary`. `scripts/acmg_scoring.py` and `scripts/acmg_criteria_assign.py` match `main` again. |
 
 [`scripts/bootstrap_priva_rust.py`](../scripts/bootstrap_priva_rust.py) stays: the
 installer runs it to build `priva` itself, so it cannot be replaced by `priva`.
+
+## Raw mode and the task layout
+
+Raw mode was refused by `priva task` until its annotation phase (VEP, CADD
+and the other annotation steps) was compared with the shell workflow. The
+refusal was removed after the BH14233 chr19 1–3.5 Mb trio passed (job 1538402
+at `a50f82a`, 8 November 2026):
+
+| Run | Compared with the shell workflow |
+| --- | --- |
+| Local executor | Annotated VCF records and header (dated lines aside), annotation CADD table, filtered VCF records, filtered CADD table, final table and ACMG matrix: all identical |
+| Same launch with `-resume` | All four tasks reused |
+| Slurm profile, each task its own Slurm job on three nodes | All identical, with 12 annotation CPUs |
+
+Fixes found on the way:
+
+| Problem | Fix |
+| --- | --- |
+| `--slurm_cluster_options --constraint=X` reached sbatch as `#SBATCH true` | Nextflow reads a value after a space as a separate flag; the launch now refuses it, and the README shows the `--name='value'` form |
+| A failed launch check left no message in `.nextflow.log` | Its output joins the Nextflow error |
+| Each resource check read 171,914 files one stat and realpath at a time: about 3.5 minutes, eight times per run | One lstat per entry, eight entries at a time; the manifest is unchanged and a pass takes about 55 seconds (raw local run 2,179 s → 1,325 s) |
+| `-resume` re-ran three of four raw tasks; one launch was refused with "Resource changed: cadd_base_dir" | This network file system can report a folder's size differently between reads. The bundle passes between tasks as its files, sorted by name, and folder records no longer compare their own size; the refusal now names each changed field |
+
+CADD's RegSeq feature columns differed by 1e-06 in 24 of 13,825 rows when
+the Slurm annotation task had 10 CPUs instead of the 12 the shell and local
+runs saw; RawScore, PHRED and every family output were unchanged, and with 12
+CPUs the table was identical. Keep `--annotation_cpus` fixed to compare runs.
+
+The four tasks stay as they are. The annotation phase is a chain in which
+each step reads the previous step's output (the gnomAD allele-frequency
+filter decides which variants reach VEP and CADD), so finer tasks would run
+one after another anyway. Filtration and prioritization take seconds; the
+time a task adds is spent in the resource checks, not in the task layout.
+Families already run in parallel as separate launches. Splitting would also
+mean breaking `annotation_vcf.sh` into separately callable steps, which the
+shell workflow on `main` shares.
+
+Not covered by the trio: raw mode inside the Apptainer image (annotated mode
+passed there) and the `task_readonly` profile (the cluster has no Bubblewrap).
 
 ## Retained Python tools
 

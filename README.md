@@ -11,7 +11,7 @@ flowchart LR
     R --> O[Variants + ranked tables + provenance]
 ```
 
-**Real `--mode raw` execution is disabled**, including after successful installation. The executable path is the compatibility interface for preannotated inputs: it requires the complete original VCF/CADD pair from a compatible scientific profile, not arbitrary annotations. SpliceAI v1 and prepared SpliceAI2 caches each use their own splicing and ACMG cutoffs ([spliceai_cutoffs.py](scripts/spliceai_cutoffs.py)); SpliceAI2 uses its authors' recommended thresholds (0.1, 0.25 and 0.5 in place of SpliceAI v1's 0.2, 0.5 and 0.8). Installation, stub execution and successful scheduling do not establish family or scientific-profile qualification.
+**Two entry points.** `--mode raw` starts from the cohort VCF and runs the annotation phase (VEP, CADD and the other annotation steps) as a Nextflow task. It was qualified against the shell workflow on a trio: the annotated VCF, the CADD table and every family output were identical, with the local executor and with the Slurm profile. `--mode annotated` imports the complete original VCF/CADD pair from a compatible scientific profile, not arbitrary annotations, and skips annotation. SpliceAI v1 and prepared SpliceAI2 caches each use their own splicing and ACMG cutoffs ([spliceai_cutoffs.py](scripts/spliceai_cutoffs.py)); SpliceAI2 uses its authors' recommended thresholds (0.1, 0.25 and 0.5 in place of SpliceAI v1's 0.2, 0.5 and 0.8). Installation, stub execution and successful scheduling do not establish family or scientific-profile qualification.
 
 ## Install
 
@@ -165,7 +165,7 @@ Use the equivalent explicit lock from your manager when using Mamba/Conda. Keep 
 
 ## Run one family
 
-After preparing a compatible pair and reviewing the experimental execution boundary above:
+Annotated mode, with a compatible VCF/CADD pair:
 
 ```bash
 "$PRIVA_NF" run "$PRIVA_ROOT/main.nf" -profile local \
@@ -181,6 +181,10 @@ After preparing a compatible pair and reviewing the experimental execution bound
   --outdir "$PRIVA_RUNS/FAM1" -work-dir "$PRIVA_RUNS/work"
 ```
 
+For raw mode, make the manifest with `--mode raw` (it also records the VEP and CADD
+installations), then launch with `--mode raw` and the cohort VCF as `--input`, without `--cadd`.
+The new annotation pair is published under `annotation/`.
+
 The example `inputs/` paths are relative to the external `PRIVA_RUNS` directory; replace them with your actual input paths, family and assembly. The annotated route does not rerun VEP or regenerate CADD. Use a new output directory for changed inputs, source, resources or settings. For the same run, retain the external launch/work directories and Nextflow cache, and append `-resume`; launch-time resource checks still apply to a fully cached run.
 
 | Profile/option | Scope |
@@ -189,18 +193,22 @@ The example `inputs/` paths are relative to the external `PRIVA_RUNS` directory;
 | `-profile slurm` | Submit tasks to Slurm; set `--slurm_queue`, optional `--slurm_account`, and optional `--slurm_cluster_options` for other sbatch flags. Write values that start with `-` as `--slurm_cluster_options='--constraint=NAME'`; with a space instead of `=`, Nextflow reads the value as a separate flag |
 | `--annotation_cpus`, `--family_cpus` | Task CPU allocations; corresponding memory/time parameters are in `nextflow.config` |
 | `-profile apptainer` | Requires an explicitly selected tested `--container_image` and matching software identity. Tasks run with `--cleanenv`, so they use the image's tools; bind the cache, data and input folders with `--container_run_options='-B /path'`. Build the image from [priva_acmg.def](priva_acmg.def) |
-| `-profile task_readonly` | Optional Linux Bubblewrap task filesystem boundary; it cannot be combined with `apptainer` and does not enable raw execution |
+| `-profile task_readonly` | Optional Linux Bubblewrap task filesystem boundary; it cannot be combined with `apptainer` |
 | `-profile test -stub-run` | Synthetic wiring only; its outputs are not scientific results |
 
 Keep scientific worker counts in the legacy configuration's `threads` and
 `threads_per_fam`; set task CPU allocations independently. Family tasks need at
 least `threads_per_fam` CPUs. Raw VEP profiles need `threads + 2` CPUs, for
-example 24 CPUs for 22 configured forks; raw execution remains gated.
+example 24 CPUs for 22 configured forks. CADD's RegSeq feature columns can
+differ in the last printed decimal with the annotation task's CPU count (seen
+as 1e-06 between 10 and 12 CPUs; RawScore and PHRED were unchanged), so keep
+`--annotation_cpus` fixed when comparing runs exactly.
 
 ## Read the outputs
 
 | Directory | Contents |
 |---|---|
+| `annotation/` | Raw mode only: the annotated VCF/index and its CADD table |
 | `variants/` | Family-filtered VCF/index and matching CADD table |
 | `prioritization/` | `*.filtered.tsv` ranked transcript rows and `*.filtered.acmg.tsv` evidence matrix |
 | `pipeline_info/` | Input/resource bundle, phase provenance and Nextflow execution reports |

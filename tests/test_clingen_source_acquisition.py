@@ -97,7 +97,9 @@ export -f python
         native_map = self.cache / "ClinGen/clingen_map.hg38.rkyv"
         self.assertIn("UPDATE clingen_map " + str(native_map), retried.stdout)
         self.assertEqual(native_map.read_text(), "scientific-map-fixture\n")
-        self.assertEqual(fake_priva_binary.calls(self.env["PRIVA_FAKE_CALLS"]), [[
+        # Source checks (priva mechanism-source) are tested on their own.
+        self.assertEqual([call for call in fake_priva_binary.calls(self.env["PRIVA_FAKE_CALLS"])
+                          if call[0] != "mechanism-source"], [[
             "clingen-map", "build", "--clinvar-vcf", str(self.folder / "clinvar.vcf"),
             "--clingen-tab", str(self.erepo), "--output", str(native_map)]])
 

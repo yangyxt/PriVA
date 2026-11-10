@@ -250,7 +250,9 @@ class InstallerOutputPaths(unittest.TestCase):
         self.assertEqual(events[1], ["parser", str(ROOT / "scripts/prepare_clingen_map.py"),
                                      "-v", self.config["clinvar_vcf"], "-t", str(self.mapping.parent / "clingen_erepo.tsv"),
                                      "-o", str(self.native_map)])
-        self.assertEqual(fake_priva_binary.calls(self.env["PRIVA_FAKE_CALLS"]), [[
+        # Source checks (priva mechanism-source) are tested on their own.
+        self.assertEqual([call for call in fake_priva_binary.calls(self.env["PRIVA_FAKE_CALLS"])
+                          if call[0] != "mechanism-source"], [[
             "clingen-map", "build", "--clinvar-vcf", self.config["clinvar_vcf"],
             "--clingen-tab", str(self.mapping.parent / "clingen_erepo.tsv"), "--output", str(self.native_map)]])
         self.assertEqual(self.dosage.read_text(), CLINGEN_DOSAGE.split("\n", 1)[1])

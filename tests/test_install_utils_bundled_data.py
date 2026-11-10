@@ -265,7 +265,9 @@ PY
         native_map = self.cache / "ClinGen/clingen_map.hg19.rkyv"
         self.assertTrue(native_map.is_file())
         self.assertFalse(selected.exists())
-        self.assertEqual(fake_priva_binary.calls(self.env["PRIVA_FAKE_CALLS"]), [[
+        # Source checks (priva mechanism-source) are tested on their own.
+        self.assertEqual([call for call in fake_priva_binary.calls(self.env["PRIVA_FAKE_CALLS"])
+                          if call[0] != "mechanism-source"], [[
             "clingen-map", "build", "--clinvar-vcf", "null", "--clingen-tab", str(self.bundles["clingen_erepo"]),
             "--output", str(native_map)]])
         self.assertEqual(self.snapshot(), before)

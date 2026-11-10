@@ -349,7 +349,9 @@ class InstallerDownloadFailures(unittest.TestCase):
         self.assertIn("prepare_clingen_map.py -v " + str(self.folder / "clinvar.vcf.gz") +
                       " -t " + str(clingen / "clingen_erepo.tsv") +
                       " -o " + str(clingen / "clingen_map.hg19.rkyv"), result.stdout)
-        self.assertEqual(fake_priva_binary.calls(self.env["PRIVA_FAKE_CALLS"]), [[
+        # Source checks (priva mechanism-source) are tested on their own.
+        self.assertEqual([call for call in fake_priva_binary.calls(self.env["PRIVA_FAKE_CALLS"])
+                          if call[0] != "mechanism-source"], [[
             "clingen-map", "build", "--clinvar-vcf", str(self.folder / "clinvar.vcf.gz"),
             "--clingen-tab", str(clingen / "clingen_erepo.tsv"), "--output", str(clingen / "clingen_map.hg19.rkyv")]])
         self.assertIn("DOWNLOAD:-c http://ftp.clinicalgenome.org/ClinGen_gene_curation_list_GRCh37.tsv -O " +

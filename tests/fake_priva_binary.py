@@ -13,6 +13,12 @@ values under --source-root) without converting it, and runs no script.
 `mapped-artifact run/recover --native-producer pm1-regions` runs the Python
 publication helper with the Python PM1 producer and its --skip_das arguments.
 `das-install-state` runs scripts/das_install_state.py with the same arguments.
+`mechanism-source` runs scripts/mechanism_source_input.py with the same arguments.
+`alphamissense-vcf build --input TSV --output VCF` runs scripts/alphmis_tsv2vcf.py
+TSV VCF. `alpha-annotation-base` runs scripts/alphamissense_annotation_base.py
+with the same arguments, but with --source-root pointing at a private copy
+whose install_utils.sh has the original Python converter line instead of the
+native one; priva's recipe fingerprint counts the two lines as the same step.
 `installer-prerequisites` runs scripts/installer_prerequisites.py with the same
 arguments (CONFIG first, then the script's own options).
 `reference-resources` runs scripts/reference_resources.py with the same
@@ -183,6 +189,26 @@ if command == "installed-environment":
     script, forwarded = "installed_environment.py", rest
 elif command == "das-install-state":
     script, forwarded = "das_install_state.py", rest
+elif command == "mechanism-source":
+    script, forwarded = "mechanism_source_input.py", rest
+elif command == "alphamissense-vcf" and rest[:1] == ["build"]:
+    values = dict(options(rest[1:], {"--input", "--output"}))
+    script, forwarded = "alphmis_tsv2vcf.py", [values["--input"], values["--output"]]
+elif command == "alpha-annotation-base":
+    import tempfile
+    from pathlib import Path as SourcePath
+    forwarded = list(rest)
+    index = forwarded.index("--source-root") + 1
+    real = SourcePath(forwarded[index])
+    native = '"${PRIVA_BIN}" alphamissense-vcf build --input "$alphamissense_prescore" --output "$converted" && \\'
+    original = 'python "$convert_py" "$alphamissense_prescore" "$converted" && \\'
+    view = SourcePath(tempfile.mkdtemp(prefix="priva_fixture_source_"))
+    (view / "scripts").mkdir()
+    (view / "scripts/alphmis_tsv2vcf.py").symlink_to(real / "scripts/alphmis_tsv2vcf.py")
+    (view / "scripts/install_utils.sh").write_text(
+        (real / "scripts/install_utils.sh").read_text().replace(native, original))
+    forwarded[index] = str(view)
+    script = "alphamissense_annotation_base.py"
 elif command == "installer-prerequisites":
     # Same positional CONFIG and options; the native command requires --source-root.
     if "--source-root" not in rest:

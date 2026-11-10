@@ -1386,14 +1386,15 @@ function AlphaMissense_anno() {
     local alphamissense_prescore=$(read_yaml "${config_file}" "alphamissense_prescore")
     local alphamissense_vcf=$(read_yaml "${config_file}" "alphamissense_vcf")
     local alphamissense_vep_vcf=$(read_yaml "${config_file}" "alphamissense_vep_vcf")
-    local base_helper=${SCRIPT_DIR}/alphamissense_annotation_base.py
+    # priva alpha-annotation-base gives the same paths, checks and receipts as
+    # the original alphamissense_annotation_base.py helper.
+    priva_resolve_binary "$config_file" || return 1
     local alphamissense_vep_base_vcf
-    alphamissense_vep_base_vcf=$(python "$base_helper" path --config "$config_file" --source-root "$BASE_DIR") || return 1
+    alphamissense_vep_base_vcf=$("${PRIVA_BIN}" alpha-annotation-base path --config "$config_file" --source-root "$BASE_DIR") || return 1
     local conservation_file=$(read_yaml "${config_file}" "conservation_file")
     local assembly vep_major
     assembly=$(read_yaml "$config_file" assembly) || return 1
     vep_major=$(read_yaml "$config_file" vep_installed_version) || return 1
-    priva_resolve_binary "$config_file" || return 1
     [[ "$vep_major" =~ ^[1-9][0-9]*$ ]] || {
         log "ERROR: AlphaMissense annotation requires the configured numeric VEP major."
         return 1
@@ -1404,15 +1405,15 @@ function AlphaMissense_anno() {
     # Motifs need the complete pre-AF annotation (including chrM); AF may replace
     # only the independent runtime copy. Bind actual science, not this whole
     # installer's mtime, so unrelated engineering edits cannot repeat full VEP.
-    python "$base_helper" recover --config "$config_file" --source-root "$BASE_DIR" || return 1
-    if python "$base_helper" check --config "$config_file" --source-root "$BASE_DIR"; then
+    "${PRIVA_BIN}" alpha-annotation-base recover --config "$config_file" --source-root "$BASE_DIR" || return 1
+    if "${PRIVA_BIN}" alpha-annotation-base check --config "$config_file" --source-root "$BASE_DIR"; then
         if ! { check_vcf_validity "$alphamissense_vep_vcf" && \
                { [[ "$alphamissense_vep_vcf" -nt "$alphamissense_vep_base_vcf" ]] || \
-                 python "$base_helper" runtime-associated --config "$config_file" --source-root "$BASE_DIR"; } && \
+                 "${PRIVA_BIN}" alpha-annotation-base runtime-associated --config "$config_file" --source-root "$BASE_DIR"; } && \
                check_vcf_infotags "$alphamissense_vep_vcf" CSQ && \
                "${PRIVA_BIN}" alphamissense-cache check-annotation \
                    --input "$alphamissense_vep_vcf" --assembly "$assembly" --vep-major "$vep_major" > /dev/null; }; then
-            python "$base_helper" restore --config "$config_file" --source-root "$BASE_DIR" || return 1
+            "${PRIVA_BIN}" alpha-annotation-base restore --config "$config_file" --source-root "$BASE_DIR" || return 1
         fi
         [[ $(read_yaml "$config_file" alphamissense_vep_base_vcf) == "$alphamissense_vep_base_vcf" ]] || \
             update_yaml "$config_file" alphamissense_vep_base_vcf "$alphamissense_vep_base_vcf" || return 1
@@ -1425,7 +1426,6 @@ function AlphaMissense_anno() {
         log "ERROR: Configure managed alphamissense_vcf and alphamissense_vep_vcf destinations."
         return 1
     }
-    local convert_py=${SCRIPT_DIR}/alphmis_tsv2vcf.py
     local vep_cache_dir=$(read_yaml "$config_file" vep_cache_dir)
     local threads=$(read_yaml "$config_file" threads)
     local ref_genome=$(read_yaml "$config_file" ref_genome)
@@ -1435,11 +1435,12 @@ function AlphaMissense_anno() {
     stage=$(mktemp -d "$(dirname "$alphamissense_vcf")/.alphamissense-anno.XXXXXX") || return 1
     converted="$stage/AlphaMissense.vcf.gz"
     annotated="$stage/AlphaMissense.vep.vcf.gz"
-    python "$base_helper" capture --config "$config_file" --source-root "$BASE_DIR" \
+    "${PRIVA_BIN}" alpha-annotation-base capture --config "$config_file" --source-root "$BASE_DIR" \
         --output "$stage/annotation-inputs.json" || return 1
-    # Keep the original scientific converter and VEP procedure. A stage keeps
+    # The native converter writes the same VCF as alphmis_tsv2vcf.py; the
+    # recipe fingerprint treats the two lines as one step. Keep the VEP procedure. A stage keeps
     # outputs beside the managed destinations, never beside an external input.
-    python "$convert_py" "$alphamissense_prescore" "$converted" && \
+    "${PRIVA_BIN}" alphamissense-vcf build --input "$alphamissense_prescore" --output "$converted" && \
     check_vcf_validity "$converted" && \
     basic_vep_annotation \
     -i "$converted" -a "$assembly" -r "$ref_genome" -c "$vep_cache_dir" \
@@ -1450,7 +1451,7 @@ function AlphaMissense_anno() {
         log "ERROR: AlphaMissense conversion/annotation failed; incomplete stage retained at $stage"
         return 1
     }
-    python "$base_helper" publish --config "$config_file" --source-root "$BASE_DIR" \
+    "${PRIVA_BIN}" alpha-annotation-base publish --config "$config_file" --source-root "$BASE_DIR" \
         --staged-converted "$converted" --staged-annotation "$annotated" --expected-inputs "$stage/annotation-inputs.json" || return 1
     if [[ -f $stage/AlphaMissense.vep.stats.html ]]; then
         mv "$stage/AlphaMissense.vep.stats.html" "${alphamissense_vep_vcf/.vcf*/.stats.html}" || return 1
@@ -3463,6 +3464,8 @@ function priva_clingen_download() {
         esac
     done
     [[ -n $url && -n $output && -n $kind && ! -d $output ]] || return 2
+    # ClinGen_deploy resolves the program from its configuration first.
+    [[ -n ${PRIVA_BIN:-} ]] || priva_resolve_binary || return 1
     mkdir -p -- "$(dirname -- "$output")" || return 1
     local staged
     staged=$(mktemp "${output}.download.XXXXXX") || return 1
@@ -3472,11 +3475,11 @@ function priva_clingen_download() {
         return 1
     }
     [[ -s $staged ]] || { log "The downloaded ClinGen resource is missing or empty; retained stage: $staged"; return 1; }
-    python "${SCRIPT_DIR}/mechanism_source_input.py" validate --input "$staged" --kind "$kind" || {
+    "${PRIVA_BIN}" mechanism-source validate --input "$staged" --kind "$kind" || {
         log "Invalid downloaded ClinGen source; prior file unchanged, retained stage: $staged"
         return 1
     }
-    python "${SCRIPT_DIR}/mechanism_source_input.py" record-source --input "$staged" --url "$url" || return 1
+    "${PRIVA_BIN}" mechanism-source record-source --input "$staged" --url "$url" || return 1
     [[ ! -L ${output}.source.pending.json && ! -d ${output}.source.pending.json ]] || return 1
     mv -T -- "${staged}.source.json" "${output}.source.pending.json" &&
     mv -T -- "$staged" "$output" &&
@@ -3486,6 +3489,7 @@ function priva_clingen_download() {
 
 function ClinGen_deploy() {
     local config_file=${1}
+    priva_resolve_binary "$config_file" || return 1
     local assembly=$(read_yaml "${config_file}" "assembly")
     local clinvar_vcf=$(read_yaml "${config_file}" "clinvar_vcf")
     local bundle_assembly
@@ -3533,9 +3537,9 @@ function ClinGen_deploy() {
 
     if [[ ${bundled_erepo:-0} -eq 0 && ( -e ${erepo_file}.source.pending.json || -L ${erepo_file}.source.pending.json ) ]]; then
         [[ -f ${erepo_file}.source.pending.json && ! -L ${erepo_file}.source.pending.json ]] || return 1
-        python "${SCRIPT_DIR}/mechanism_source_input.py" check-source --input "$erepo_file" --url "$clingen_url" \
+        "${PRIVA_BIN}" mechanism-source check-source --input "$erepo_file" --url "$clingen_url" \
             --receipt "${erepo_file}.source.pending.json" --metadata-only || return 1
-        if python "${SCRIPT_DIR}/mechanism_source_input.py" check-source --input "$erepo_file" --url "$clingen_url" --receipt "${erepo_file}.source.pending.json"; then
+        if "${PRIVA_BIN}" mechanism-source check-source --input "$erepo_file" --url "$clingen_url" --receipt "${erepo_file}.source.pending.json"; then
             mv -T -- "${erepo_file}.source.pending.json" "${erepo_file}.source.json" || return 1
         else download=1; fi
     fi
@@ -3577,14 +3581,14 @@ function ClinGen_deploy() {
     local dosage_identity_changed=0
     if [[ -e ${dosage_file}.source.pending.json || -L ${dosage_file}.source.pending.json ]]; then
         [[ -f ${dosage_file}.source.pending.json && ! -L ${dosage_file}.source.pending.json ]] || return 1
-        python "${SCRIPT_DIR}/mechanism_source_input.py" check-source --input "$dosage_file" --url "$dosage_url" \
+        "${PRIVA_BIN}" mechanism-source check-source --input "$dosage_file" --url "$dosage_url" \
             --receipt "${dosage_file}.source.pending.json" --metadata-only || return 1
-        if python "${SCRIPT_DIR}/mechanism_source_input.py" check-source --input "$dosage_file" --url "$dosage_url" --receipt "${dosage_file}.source.pending.json"; then
+        if "${PRIVA_BIN}" mechanism-source check-source --input "$dosage_file" --url "$dosage_url" --receipt "${dosage_file}.source.pending.json"; then
             mv -T -- "${dosage_file}.source.pending.json" "${dosage_file}.source.json" || return 1
         else dosage_identity_changed=1; fi
     fi
     if [[ -e ${dosage_file}.source.json || -L ${dosage_file}.source.json ]]; then
-        python "${SCRIPT_DIR}/mechanism_source_input.py" check-source --input "$dosage_file" --url "$dosage_url" || dosage_identity_changed=1
+        "${PRIVA_BIN}" mechanism-source check-source --input "$dosage_file" --url "$dosage_url" || dosage_identity_changed=1
     elif [[ $dosage_identity_changed -eq 0 && -e $dosage_file && $dosage_url != "http://ftp.clinicalgenome.org/ClinGen_gene_curation_list_${url_assembly}.tsv" &&
             $dosage_url != "https://ftp.clinicalgenome.org/ClinGen_gene_curation_list_${url_assembly}.tsv" ]]; then
         log "ERROR: Existing selected ClinGen dosage has no receipt for the nondefault URL; preserve that input and select a new managed output for acquisition."
@@ -3606,7 +3610,7 @@ function ClinGen_deploy() {
     # Preserve an acquired source receipt across the original header filter.
     # Existing unreceipted manual/default tables are never assigned guessed provenance.
     if [[ -f ${dosage_file}.source.json ]]; then
-        python "${SCRIPT_DIR}/mechanism_source_input.py" record-source --input "$dosage_file" --url "$dosage_url" || return 1
+        "${PRIVA_BIN}" mechanism-source record-source --input "$dosage_file" --url "$dosage_url" || return 1
     fi
     update_yaml "${config_file}" "gene_dosage_sensitivity" "${dosage_file}" || \
     { log "Failed to prepare or configure the ClinGen dosage sensitivity resource"; return 1; }

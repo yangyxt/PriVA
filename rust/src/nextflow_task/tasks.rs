@@ -126,18 +126,11 @@ fn version_output(tool: &str) -> Result<(String, i32)> {
 }
 
 fn software_readiness(mode: &str, priva_binary: Option<&Path>) -> Result<Json> {
-    let mut required = vec![
-        "bash",
-        "python",
-        "python3",
-        "bcftools",
-        "tabix",
-        "yq",
-        "parallel",
-        "tsv-pretty",
-    ];
+    let mut required = vec!["bash", "bcftools", "tabix", "yq", "parallel", "tsv-pretty"];
+    // PriVA's own steps run in priva. Only raw-mode annotation runs Python:
+    // scripts/cadd_conda.py finds CADD's Conda, and CADD.sh runs Snakemake.
     if mode == "raw" {
-        required.extend(["vep", "samtools", "conda"]);
+        required.extend(["vep", "samtools", "conda", "python", "snakemake"]);
     }
     let missing: Vec<&str> = required
         .iter()
@@ -157,10 +150,7 @@ fn software_readiness(mode: &str, priva_binary: Option<&Path>) -> Result<Json> {
             "executable",
             text(display(&fs::canonicalize(&found).unwrap_or(found))),
         )]);
-        if [
-            "python", "python3", "bcftools", "tabix", "yq", "samtools", "conda",
-        ]
-        .contains(tool)
+        if ["python", "bcftools", "tabix", "yq", "samtools", "conda"].contains(tool)
         {
             let (output, code) = version_output(tool)?;
             entry.set("version_output", text(output));
@@ -168,16 +158,18 @@ fn software_readiness(mode: &str, priva_binary: Option<&Path>) -> Result<Json> {
         }
         versions.set(tool, entry);
     }
-    // The shell invokes python (not necessarily python3), so check the
-    // interpreter that will actually load the unchanged scientific modules.
-    let status = Command::new("python")
-        .args(["-c", "import pandas,numpy,pysam,yaml,scipy"])
-        .status()?;
-    if !status.success() {
-        return Err(called_process_error(
-            &["python", "-c", "import pandas,numpy,pysam,yaml,scipy"],
-            status,
-        ));
+    // The modules cadd_conda.py and CADD's Snakemake import, in the python
+    // the shell runs (not necessarily python3).
+    if mode == "raw" {
+        let status = Command::new("python")
+            .args(["-c", "import packaging, snakemake"])
+            .status()?;
+        if !status.success() {
+            return Err(called_process_error(
+                &["python", "-c", "import packaging, snakemake"],
+                status,
+            ));
+        }
     }
     if let Some(binary) = priva_binary {
         // The same check as priva_resolve_binary in scripts/common_bash_utils.sh.

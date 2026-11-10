@@ -213,14 +213,30 @@ pub(super) fn procedure(path: &Path, name: &str) -> Result<String> {
         format!("Cannot identify scientific shell procedure: {name}"),
     ))
 }
+/// The installer's converter line before it ran `priva alphamissense-vcf`.
+const PYTHON_CONVERTER: &str =
+    "python \"$convert_py\" \"$alphamissense_prescore\" \"$converted\" && \\";
+/// The native converter line; it writes the same bytes as the Python one.
+const NATIVE_CONVERTER: &str = "\"${PRIVA_BIN}\" alphamissense-vcf build --input \"$alphamissense_prescore\" --output \"$converted\" && \\";
 fn annotation_recipe(path: &Path) -> Result<String> {
     let body = procedure(path, "AlphaMissense_anno")?;
     let lines: Vec<&str> = body.lines().collect();
-    let converter = lines.iter().find(|line| {
-        line.trim_start()
-            .strip_prefix("python \"$convert_py\"")
-            .is_some_and(|s| !s.is_empty())
-    });
+    // The native converter counts as the original Python line, so caches
+    // annotated before the switch keep their recipe fingerprint.
+    let converter = lines
+        .iter()
+        .map(|line| {
+            if line.trim() == NATIVE_CONVERTER {
+                PYTHON_CONVERTER
+            } else {
+                *line
+            }
+        })
+        .find(|line| {
+            line.trim_start()
+                .strip_prefix("python \"$convert_py\"")
+                .is_some_and(|s| !s.is_empty())
+        });
     let start = lines
         .iter()
         .position(|line| line.trim_start_matches([' ', '\t']) == "basic_vep_annotation \\");

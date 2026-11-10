@@ -214,9 +214,11 @@ pub(super) fn procedure(path: &Path, name: &str) -> Result<String> {
     ))
 }
 /// A cache's recorded inputs against the current ones, without the VEP
-/// thread count. `--fork` changes how fast VEP runs, not what it writes, so
-/// a cache built with another thread count is still the same annotation.
-/// The count stays in the record as a note of how the cache was made.
+/// thread count. On 86,498 AlphaMissense records, 2 and 10 forks gave the
+/// same output except VEP's HGNC_ID, empty in 410 of the 10-fork CSQ entries
+/// (fork_1538819, 10 November 2026); PriVA reads no HGNC_ID, so a cache
+/// built with another thread count serves PriVA the same. The count stays in
+/// the record as a note of how the cache was made.
 pub(super) fn same_science(recorded: &Json, current: &Json) -> bool {
     let without_threads = |value: &Json| match value {
         Json::Object(fields) => Json::Object(

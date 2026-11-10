@@ -11,6 +11,7 @@
 //!   priva task-boundary check|exec --task-dir DIR [-- COMMAND...]
 mod boundary;
 mod contract;
+mod info_merge;
 mod tasks;
 #[cfg(test)]
 mod tests;
@@ -175,6 +176,22 @@ const LAUNCH_REQUIRED: &[&str] = &[
     "family-cpus",
 ];
 
+/// Task phases. `annotation` runs the whole annotation script; the
+/// `annotation-*` steps run one of its functions each, and `annotation-merge`
+/// joins their INFO fields.
+pub(crate) const PHASES: &[&str] = &[
+    "annotation",
+    "annotation-preprocess",
+    "annotation-gnomad",
+    "annotation-clinvar",
+    "annotation-control",
+    "annotation-vep",
+    "annotation-cadd",
+    "annotation-merge",
+    "filtration",
+    "prioritization",
+];
+
 fn parse_task(args: &[String]) -> std::result::Result<(String, Options), String> {
     let Some(command) = args.first() else {
         return Err(
@@ -232,11 +249,15 @@ fn parse_task(args: &[String]) -> std::result::Result<(String, Options), String>
                     "cadd",
                     "cpus",
                     "family",
+                    "gnomad-vcf",
+                    "clinvar-vcf",
+                    "control-vcf",
+                    "vep-vcf",
                 ],
                 &["stub"],
             )?;
             options.require(&["phase", "bundle", "vcf", "vcf-index", "cpus"])?;
-            options.choice("phase", &["annotation", "filtration", "prioritization"])?;
+            options.choice("phase", PHASES)?;
             options.int("cpus")?;
             options
         }

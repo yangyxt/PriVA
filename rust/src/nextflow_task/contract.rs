@@ -805,6 +805,39 @@ pub(crate) fn verify_manifest(
     vcf_hub_mode: &str,
     cadd_hub_mode: &str,
 ) -> Result<Vec<(String, PathBuf)>> {
+    verify_manifest_for(manifest, config_path, root, mode, vcf_hub_mode, cadd_hub_mode, "")
+}
+
+/// Whether a task of `phase` checks the resource `key`. Each annotation step
+/// checks what its shell function reads; the CADD installation, the largest
+/// tree, is left to the CADD step. Every other phase checks everything.
+pub(crate) fn phase_reads(phase: &str, key: &str) -> bool {
+    let key = key.split('/').next().unwrap_or(key);
+    if EXECUTABLE_KEYS.contains(&key) {
+        return true;
+    }
+    match phase {
+        "annotation-preprocess" => key == "ref_genome",
+        "annotation-gnomad" => key == "gnomad_vcf_chrX",
+        "annotation-clinvar" => key == "clinvar_vcf",
+        "annotation-control" => key == "control_vcf",
+        "annotation-cadd" => key == "cadd_base_dir" || key == "ref_genome",
+        "annotation-vep" => key != "cadd_base_dir",
+        "annotation-merge" => false,
+        _ => true,
+    }
+}
+
+/// `verify_manifest` for only the resources `phase` reads (all for "").
+pub(crate) fn verify_manifest_for(
+    manifest: &Json,
+    config_path: &Path,
+    root: &Path,
+    mode: &str,
+    vcf_hub_mode: &str,
+    cadd_hub_mode: &str,
+    phase: &str,
+) -> Result<Vec<(String, PathBuf)>> {
     let config = read_config(config_path)?;
     let Json::Object(items) = manifest else {
         return Err("Resource manifest must be a JSON object".into());
@@ -852,7 +885,12 @@ pub(crate) fn verify_manifest(
         }
     }
     let paths = runtime_resources(&config, root, mode, vcf_hub_mode, cadd_hub_mode)?;
-    let current = inventory(&paths, false)?;
+    let selected: Vec<(String, PathBuf)> = paths
+        .iter()
+        .filter(|(key, _)| phase_reads(phase, key))
+        .cloned()
+        .collect();
+    let current = inventory(&selected, false)?;
     let Some(Json::Object(recorded)) = manifest.get("resources") else {
         return refuse("Resource inventory membership changed; freeze and rebuild manifest");
     };
@@ -860,7 +898,11 @@ pub(crate) fn verify_manifest(
         unreachable!()
     };
     let mut current_keys: Vec<&str> = current_items.iter().map(|(k, _)| k.as_str()).collect();
-    let mut recorded_keys: Vec<&str> = recorded.iter().map(|(k, _)| k.as_str()).collect();
+    let mut recorded_keys: Vec<&str> = recorded
+        .iter()
+        .map(|(k, _)| k.as_str())
+        .filter(|key| phase_reads(phase, key))
+        .collect();
     current_keys.sort_unstable();
     current_keys.dedup();
     recorded_keys.sort_unstable();

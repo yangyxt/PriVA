@@ -48,6 +48,29 @@ assert len(list(root.rglob('*.filtered.vcf.gz'))) == 1
 assert len(list(root.rglob('*.provenance.json'))) == 3
 print('Fresh raw stub and all-four-task cached resume passed')
 PY
+# Raw mode with both hubs off: annotation runs as one task per step
+# (preprocess; gnomAD, ClinVar, control, VEP and CADD side by side; merge).
+run_case nextflow-stub-steps --vcf_hub_mode off --cadd_hub_mode off --outdir "${case_root}/steps"
+run_case nextflow-stub-steps-resume --vcf_hub_mode off --cadd_hub_mode off --outdir "${case_root}/steps" -resume
+python3 - "${case_root}/steps" <<'PY'
+import csv
+from pathlib import Path
+import sys
+root = Path(sys.argv[1])
+traces = sorted((root / 'pipeline_info').glob('trace-*.tsv'))
+fresh = sorted(row['name'].split(' ')[0] for row in csv.DictReader(traces[-2].open(), delimiter='\t'))
+assert fresh == ['ANNOTATE_CADD', 'ANNOTATE_MERGE', 'ANNOTATE_PREPROCESS'] + ['ANNOTATE_STEP'] * 4 + [
+    'FILTER_FAMILY', 'PRIORITIZE_FAMILY', 'VALIDATE_INPUTS'], fresh
+resumed = list(csv.DictReader(traces[-1].open(), delimiter='\t'))
+assert len(resumed) == 10 and all(row['status'] == 'CACHED' for row in resumed), resumed
+assert sorted(p.name for p in (root / 'annotation').iterdir()) == [
+    'cohort.anno.cadd.tsv', 'cohort.anno.vcf.gz', 'cohort.anno.vcf.gz.tbi']
+names = sorted(p.name for p in (root / 'pipeline_info').glob('annotation-*.provenance.json'))
+assert names == [f'annotation-{step}.provenance.json' for step in
+                 ('cadd', 'clinvar', 'control', 'gnomad', 'merge', 'preprocess', 'vep')], names
+assert len(list(root.rglob('*.filtered.acmg.tsv'))) == 1
+print('Annotation as one task per step, and its cached resume, passed')
+PY
 # Whole cohort: one validation and one annotation, then two family tasks
 # each for filtration and prioritization.
 run_with nextflow-stub-cohort "${shared[@]}" --ped "${fixture}/family.ped" --outdir "${case_root}/cohort"

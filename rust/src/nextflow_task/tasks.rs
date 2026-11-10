@@ -2,7 +2,7 @@
 use super::contract::{
     self, Config, OPTIONAL_INPUTS, assembly, cds_cache_path, copy_writable, copy2, exists,
     inventory, inventory_record, json_digest, object, read_config, read_json, read_text,
-    render_config, runtime_resources, safe_id, sha256, source_digest, text, verify_manifest,
+    render_config, runtime_resources, safe_id, sha256, source_digest, text, verify_manifest, verify_manifest_for,
     write_json,
 };
 use super::{Options, Result, refuse};
@@ -557,15 +557,14 @@ fn task_thread_settings(
             settings.push((key.to_owned(), setting(key).0));
         }
     }
-    if phase == "annotation" && mode != "raw" {
-        return Ok(settings); // This phase imports an existing annotation artifact.
+    // VEP runs in the whole raw annotation and in its own step. The other
+    // annotation steps, and annotated mode's import, need no CPU minimum.
+    let vep = phase == "annotation-vep" || (phase == "annotation" && mode == "raw");
+    if phase.starts_with("annotation") && !vep {
+        return Ok(settings);
     }
-    let key = if phase == "annotation" {
-        "threads"
-    } else {
-        "threads_per_fam"
-    };
-    if phase == "annotation" && config.get(key).is_none() {
+    let key = if vep { "threads" } else { "threads_per_fam" };
+    if vep && config.get(key).is_none() {
         return refuse("Raw annotation requires explicit legacy-config threads");
     }
     let (_, shown, digits) = setting(key);
@@ -575,7 +574,7 @@ fn task_thread_settings(
     // Preserve the fixed scientific profile: allocating 24 CPUs must not
     // rewrite a qualified --fork 22 invocation. VEP 116 can spawn N+1
     // children besides its parent; reserve that headroom for raw annotation.
-    let required = value + if phase == "annotation" { 2 } else { 0 };
+    let required = value + if vep { 2 } else { 0 };
     if (cpus as u128) < required {
         return refuse(format!(
             "{phase} needs at least {required} allocated CPUs to preserve {key}={shown}"
@@ -768,7 +767,7 @@ fn private_config(
             }
         }
     }
-    if phase == "annotation" && mode == "raw" {
+    if phase.starts_with("annotation") && mode == "raw" {
         for (key, option) in [
             ("hub_vcf_file", "vcf_hub_mode"),
             ("hub_cadd_file", "cadd_hub_mode"),
@@ -803,6 +802,37 @@ pub(crate) fn private_config_for_test(
     private_config(bundle, record, phase, cpus).map(|(path, _)| path)
 }
 
+const STUB_CADD: &str =
+    "#Chrom\tPos\tRef\tAlt\tRawScore\tPHRED\tFeatureID\n1\t10\tA\tG\t1.0\t10\tSTUB\n";
+
+/// One function of annotation_vcf.sh, with the arguments main_workflow
+/// gives it (read with the script's own read_yaml, so a missing key is
+/// `null` as there). Sourced from this file, the script defines its
+/// functions and runs nothing itself.
+/// Arguments: SOURCE_ROOT CONFIG VCF STEP [OUTPUT].
+const ANNOTATION_STEP: &str = r#"#!/usr/bin/env bash
+source "$1/scripts/annotation_vcf.sh" || exit 1
+config=$2 vcf=$3 step=$4 output=${5:-}
+value() { read_yaml "$config" "$1"; }
+case $step in
+    preprocess)
+        preprocess_vcf -i "$vcf" -o "$output" -r "$(value ref_genome)" -t "$(value threads)" ;;
+    gnomad)
+        anno_agg_gnomAD_data "$vcf" "$(value threads)" "$(value assembly)" "$(value gnomad_vcf_chrX)" ;;
+    clinvar)
+        anno_clinvar_data "$vcf" "$(value clinvar_vcf)" "$(value threads)" ;;
+    control)
+        optional=$(value control_vcf_optional)
+        anno_control_vcf_allele "$vcf" "$(value control_vcf)" "$(value ped_file)" "$(value threads)" "${optional:-false}" ;;
+    vep)
+        anno_VEP_data --input_vcf "$vcf" --config "$config" --assembly "$(value assembly)"             --ref_genome "$(value ref_genome)" --vep_cache_dir "$(value vep_cache_dir)"             --vep_plugins_dir "$(value vep_plugins_dir)"             --vep_plugins_cachedir "$(value vep_plugins_cachedir)" --threads "$(value threads)" ;;
+    cadd)
+        Calculate_CADD "$vcf" "$config" "$output" ;;
+    *)
+        echo "Unknown annotation step: $step" >&2; exit 2 ;;
+esac
+"#;
+
 pub(crate) fn run(options: &Options) -> Result<()> {
     let bundle = PathBuf::from(options.value("bundle"));
     let record = read_json(&bundle.join("contract.json"))?;
@@ -833,13 +863,14 @@ pub(crate) fn run(options: &Options) -> Result<()> {
     let mut verified = None;
     if !stub {
         let manifest = read_json(&bundle.join("resources.json"))?;
-        let paths = verify_manifest(
+        let paths = verify_manifest_for(
             &manifest,
             &bundle.join("legacy.yaml"),
             &root,
             field("mode"),
             field("vcf_hub_mode"),
             field("cadd_hub_mode"),
+            phase,
         )?;
         task_thread_settings(
             &read_config(&bundle.join("legacy.yaml"))?,
@@ -863,8 +894,13 @@ pub(crate) fn run(options: &Options) -> Result<()> {
         .get("family")
         .filter(|v| !v.is_empty())
         .map(str::to_owned);
+    // One function of the annotation script per task; only raw mode runs them.
+    let step = phase.strip_prefix("annotation-");
+    if step.is_some() && field("mode") != "raw" {
+        return refuse("Annotation steps run only in raw mode");
+    }
     match (&family, phase) {
-        (Some(_), "annotation") => {
+        (Some(_), annotation) if annotation.starts_with("annotation") => {
             return refuse("Annotation covers the whole cohort; it takes no --family");
         }
         (Some(id), _) if !families.contains(id) => {
@@ -885,7 +921,9 @@ pub(crate) fn run(options: &Options) -> Result<()> {
     fs::create_dir(&result).map_err(|e| crate::python_path::os_error(e, &result, None))?;
     let name = match phase {
         "annotation" if field("mode") == "annotated" => format!("{base}.anno"),
-        "annotation" => base.clone(),
+        "annotation" | "annotation-preprocess" => base.clone(),
+        // The other steps work on (a copy of) the preprocessed VCF.
+        _ if step.is_some() => format!("{base}.anno"),
         "filtration" => format!("{base}.anno"),
         _ => family_base.clone(),
     };
@@ -908,7 +946,7 @@ pub(crate) fn run(options: &Options) -> Result<()> {
                 &result.join(format!("{cadd_base}.cadd.tsv")),
             )?)
         }
-        None if phase != "annotation" => {
+        None if matches!(phase, "filtration" | "prioritization" | "annotation-merge") => {
             return refuse("Filtration/prioritization require the paired CADD TSV");
         }
         None => None,
@@ -916,7 +954,7 @@ pub(crate) fn run(options: &Options) -> Result<()> {
     if stub {
         // Tiny syntactic fixtures; no scientific acceptance is claimed.
         match phase {
-            "annotation" => {
+            "annotation" | "annotation-preprocess" => {
                 let destination = result.join(format!("{base}.anno.vcf.gz"));
                 if input_vcf != destination {
                     copy_writable(&input_vcf, &destination)?;
@@ -925,11 +963,16 @@ pub(crate) fn run(options: &Options) -> Result<()> {
                         Path::new(&format!("{}.tbi", display(&destination))),
                     )?;
                 }
-                fs::write(
-                    result.join(format!("{base}.anno.cadd.tsv")),
-                    "#Chrom\tPos\tRef\tAlt\tRawScore\tPHRED\tFeatureID\n1\t10\tA\tG\t1.0\t10\tSTUB\n",
-                )?;
+                if phase == "annotation" {
+                    fs::write(
+                        result.join(format!("{base}.anno.cadd.tsv")),
+                        STUB_CADD,
+                    )?;
+                }
             }
+            "annotation-cadd" => fs::write(result.join(format!("{base}.anno.cadd.tsv")), STUB_CADD)?,
+            // The copied input already is the step's output.
+            _ if step.is_some() => {}
             "filtration" => {
                 let destination = result.join(format!("{family_base}.vcf.gz"));
                 copy_writable(&input_vcf, &destination)?;
@@ -964,15 +1007,50 @@ pub(crate) fn run(options: &Options) -> Result<()> {
         let script = |name: &str| display(&root.join("scripts").join(name));
         let input = display(&input_vcf);
         let config_text = display(&config_path);
+        let step_command = |step: &str, output: Option<String>| -> Result<Vec<String>> {
+            fs::write("annotation_step.sh", ANNOTATION_STEP)?;
+            let mut command = vec![
+                "bash".into(),
+                "annotation_step.sh".into(),
+                display(&root),
+                config_text.clone(),
+                input.clone(),
+                step.into(),
+            ];
+            command.extend(output);
+            Ok(command)
+        };
+        let anno = |suffix: &str| display(&result.join(format!("{base}.anno{suffix}")));
         let command: Option<Vec<String>> = match phase {
+            "annotation-preprocess" => Some(step_command("preprocess", Some(anno(".vcf.gz")))?),
+            "annotation-cadd" => Some(step_command("cadd", Some(anno(".cadd.tsv")))?),
+            "annotation-merge" => {
+                let mut steps = Vec::new();
+                for (name, option) in [
+                    ("gnomAD", "gnomad-vcf"),
+                    ("ClinVar", "clinvar-vcf"),
+                    ("control cohort", "control-vcf"),
+                    ("VEP", "vep-vcf"),
+                ] {
+                    let Some(path) = options.get(option).filter(|v| !v.is_empty()) else {
+                        return refuse(format!("annotation-merge needs --{option}"));
+                    };
+                    steps.push((name, PathBuf::from(path)));
+                }
+                let steps: Vec<(&str, &Path)> =
+                    steps.iter().map(|(n, p)| (*n, p.as_path())).collect();
+                super::info_merge::merge(&input_vcf, &steps, &input_vcf)?;
+                None
+            }
+            _ if step.is_some() => Some(step_command(step.unwrap(), None)?),
             "annotation" if field("mode") == "raw" => Some(vec![
                 "bash".into(),
                 script("annotation_vcf.sh"),
                 "main_workflow".into(),
                 "-i".into(),
-                input,
+                input.clone(),
                 "--config".into(),
-                config_text,
+                config_text.clone(),
             ]),
             // Without a family the scripts run their no-pedigree mode.
             "filtration" => {
@@ -980,12 +1058,12 @@ pub(crate) fn run(options: &Options) -> Result<()> {
                     "bash".into(),
                     script("filtration_vcf_per_fam.sh"),
                     "-v".into(),
-                    input,
+                    input.clone(),
                 ];
                 if let Some(id) = &family {
                     command.extend(["-f".into(), id.clone()]);
                 }
-                command.extend(["-c".into(), config_text]);
+                command.extend(["-c".into(), config_text.clone()]);
                 Some(command)
             }
             "prioritization" => {
@@ -993,14 +1071,14 @@ pub(crate) fn run(options: &Options) -> Result<()> {
                     "bash".into(),
                     script("prioritization_vcf_per_fam.sh"),
                     "-i".into(),
-                    input,
+                    input.clone(),
                 ];
                 if let Some(id) = &family {
                     command.extend(["-f".into(), id.clone()]);
                 }
                 command.extend([
                     "-c".into(),
-                    config_text,
+                    config_text.clone(),
                     "-t".into(),
                     display(cadd_path.as_deref().unwrap()),
                 ]);
@@ -1031,11 +1109,13 @@ pub(crate) fn run(options: &Options) -> Result<()> {
         }
     }
     let suffixes: &[&str] = match phase {
-        "annotation" => &[".anno.vcf.gz", ".anno.vcf.gz.tbi", ".anno.cadd.tsv"],
+        "annotation" | "annotation-merge" => &[".anno.vcf.gz", ".anno.vcf.gz.tbi", ".anno.cadd.tsv"],
+        "annotation-cadd" => &[".anno.cadd.tsv"],
+        _ if step.is_some() => &[".anno.vcf.gz", ".anno.vcf.gz.tbi"],
         "filtration" => &[".vcf.gz", ".vcf.gz.tbi", ".cadd.tsv"],
         _ => &[".tsv", ".acmg.tsv"],
     };
-    let stem = if phase == "annotation" {
+    let stem = if phase.starts_with("annotation") {
         &base
     } else {
         &family_base
@@ -1053,13 +1133,14 @@ pub(crate) fn run(options: &Options) -> Result<()> {
         }
     }
     if let Some((manifest, _)) = &verified {
-        verify_manifest(
+        verify_manifest_for(
             manifest,
             &bundle.join("legacy.yaml"),
             &root,
             field("mode"),
             field("vcf_hub_mode"),
             field("cadd_hub_mode"),
+            phase,
         )?;
     }
     let mut provenance = record.clone();

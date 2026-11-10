@@ -1,6 +1,6 @@
 nextflow.enable.dsl=2
 
-include { VALIDATE_INPUTS; ANNOTATE_COHORT; FILTER_FAMILY; PRIORITIZE_FAMILY } from './modules/local/compatibility'
+include { VALIDATE_INPUTS; ANNOTATE_COHORT; ANNOTATE_PREPROCESS; ANNOTATE_STEP; ANNOTATE_CADD; ANNOTATE_MERGE; FILTER_FAMILY; PRIORITIZE_FAMILY } from './modules/local/compatibility'
 
 // The scientific source is deliberately retained during orchestration parity.
 // Its content identity, rather than only its pathname, participates in every task hash.
@@ -121,8 +121,37 @@ outputs and scientific-profile requirements.'''
             def listed = new groovy.json.JsonSlurper().parse(contract.toFile()).families
             listed ? listed.collect { it.toString() } : ['']
         }
-        ANNOTATE_COHORT(VALIDATE_INPUTS.out.validated.map(bundleLast))
-        def annotated = ANNOTATE_COHORT.out.annotated.map(bundleLast)
+        // Raw mode with both hubs off runs the annotation script's functions as
+        // their own tasks; otherwise (annotated mode, or a hub in use, whose
+        // logic reshapes the annotation) the whole script is one task.
+        def annotated = Channel.empty()
+        if (params.mode == 'raw' && params.vcf_hub_mode == 'off' && params.cadd_hub_mode == 'off') {
+            ANNOTATE_PREPROCESS(VALIDATE_INPUTS.out.validated.map(bundleLast).map { run, vcf, index, cadd, bundle -> [run, vcf, index, bundle] })
+            def preprocessed = ANNOTATE_PREPROCESS.out.preprocessed.map(bundleLast)
+            // gnomAD, ClinVar, control cohort and VEP at the same time, and CADD.
+            ANNOTATE_STEP(preprocessed.combine(Channel.of('gnomad', 'clinvar', 'control', 'vep'))
+                .map { run, vcf, index, bundle, step -> [run, step, vcf, index, bundle] })
+            ANNOTATE_CADD(preprocessed)
+            def byStep = ANNOTATE_STEP.out.annotated.branch { item ->
+                gnomad: item[1] == 'gnomad'
+                clinvar: item[1] == 'clinvar'
+                control: item[1] == 'control'
+                vep: item[1] == 'vep'
+            }
+            // One cohort per run, so combine joins exactly one item of each.
+            def toMerge = preprocessed
+                .combine(byStep.gnomad.map { it[2] })
+                .combine(byStep.clinvar.map { it[2] })
+                .combine(byStep.control.map { it[2] })
+                .combine(byStep.vep.map { it[2] })
+                .combine(ANNOTATE_CADD.out.cadd.map { it[1] })
+                .map { run, vcf, index, bundle, gnomad, clinvar, control, vep, cadd -> [run, vcf, index, gnomad, clinvar, control, vep, cadd, bundle] }
+            ANNOTATE_MERGE(toMerge)
+            annotated = ANNOTATE_MERGE.out.annotated.map(bundleLast)
+        } else {
+            ANNOTATE_COHORT(VALIDATE_INPUTS.out.validated.map(bundleLast))
+            annotated = ANNOTATE_COHORT.out.annotated.map(bundleLast)
+        }
         // One filtration task per family: (meta, family, vcf, index, cadd, bundle).
         FILTER_FAMILY(annotated.combine(families).map { run, vcf, index, cadd, bundle, family -> [run, family, vcf, index, cadd, bundle] })
         // Families prioritize with their filtered CADD table; the no-pedigree

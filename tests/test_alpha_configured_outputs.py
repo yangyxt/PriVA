@@ -125,7 +125,9 @@ class AlphaConfiguredOutputs(unittest.TestCase):
                         PRIVA_CACHE_INSTALL_INTERNAL="1", **fake_priva_binary.environment(self.folder))
 
     def invoke(self, command, failure="none", **extra):
-        return subprocess.run(["bash", "--noprofile", "--norc", "-c", PRELUDE + command,
+        # Exported, so steps the fixture priva runs in a new Bash still see them.
+        return subprocess.run(["bash", "--noprofile", "--norc", "-c",
+                               PRELUDE + "export -f python fixture_vcf\n" + command,
                                "test", str(ROOT / "scripts/install_utils.sh")],
                               env=dict(self.env, TEST_FAILURE=failure, **extra), capture_output=True, text=True)
 

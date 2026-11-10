@@ -2,8 +2,8 @@
 use super::contract::{
     self, Config, OPTIONAL_INPUTS, assembly, cds_cache_path, copy_writable, copy2, exists,
     inventory, inventory_record, json_digest, object, read_config, read_json, read_text,
-    render_config, runtime_resources, safe_id, sha256, source_digest, text, verify_manifest, verify_manifest_for,
-    write_json,
+    render_config, runtime_resources, safe_id, sha256, source_digest, text, verify_manifest,
+    verify_manifest_for, write_json,
 };
 use super::{Options, Result, refuse};
 use crate::json_text::Json;
@@ -964,13 +964,12 @@ pub(crate) fn run(options: &Options) -> Result<()> {
                     )?;
                 }
                 if phase == "annotation" {
-                    fs::write(
-                        result.join(format!("{base}.anno.cadd.tsv")),
-                        STUB_CADD,
-                    )?;
+                    fs::write(result.join(format!("{base}.anno.cadd.tsv")), STUB_CADD)?;
                 }
             }
-            "annotation-cadd" => fs::write(result.join(format!("{base}.anno.cadd.tsv")), STUB_CADD)?,
+            "annotation-cadd" => {
+                fs::write(result.join(format!("{base}.anno.cadd.tsv")), STUB_CADD)?
+            }
             // The copied input already is the step's output.
             _ if step.is_some() => {}
             "filtration" => {
@@ -1109,7 +1108,9 @@ pub(crate) fn run(options: &Options) -> Result<()> {
         }
     }
     let suffixes: &[&str] = match phase {
-        "annotation" | "annotation-merge" => &[".anno.vcf.gz", ".anno.vcf.gz.tbi", ".anno.cadd.tsv"],
+        "annotation" | "annotation-merge" => {
+            &[".anno.vcf.gz", ".anno.vcf.gz.tbi", ".anno.cadd.tsv"]
+        }
         "annotation-cadd" => &[".anno.cadd.tsv"],
         _ if step.is_some() => &[".anno.vcf.gz", ".anno.vcf.gz.tbi"],
         "filtration" => &[".vcf.gz", ".vcf.gz.tbi", ".cadd.tsv"],

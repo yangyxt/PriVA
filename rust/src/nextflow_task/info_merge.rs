@@ -7,7 +7,7 @@
 //! The merge refuses a record whose position, alleles, QUAL, FILTER or
 //! genotype columns differ between the files, and a step that changed an
 //! INFO field the preprocessed VCF already had.
-use super::{refuse, Result};
+use super::{Result, refuse};
 use std::collections::HashSet;
 use std::fs;
 use std::io::{self, BufRead, BufReader, BufWriter, Write};
@@ -57,9 +57,14 @@ fn key(entry: &str) -> &str {
 fn merge_record(base: &str, steps: &[(&str, String)], number: usize) -> Result<String> {
     let fields: Vec<&str> = base.split('\t').collect();
     if fields.len() < 8 {
-        return refuse(format!("Preprocessed VCF record {number} has fewer than 8 columns"));
+        return refuse(format!(
+            "Preprocessed VCF record {number} has fewer than 8 columns"
+        ));
     }
-    let mut info: Vec<String> = info_entries(fields[7]).iter().map(|e| e.to_string()).collect();
+    let mut info: Vec<String> = info_entries(fields[7])
+        .iter()
+        .map(|e| e.to_string())
+        .collect();
     let base_info: HashSet<String> = info.iter().cloned().collect();
     let base_keys: HashSet<String> = info.iter().map(|e| key(e).to_owned()).collect();
     let mut added: HashSet<String> = HashSet::new();
@@ -140,9 +145,7 @@ pub(crate) fn merge(base: &Path, steps: &[(&str, &Path)], output: &Path) -> Resu
                 match lines.next() {
                     Some(step) => step_lines.push((*name, step?)),
                     None => {
-                        return refuse(format!(
-                            "The {name} step VCF ended before record {number}"
-                        ));
+                        return refuse(format!("The {name} step VCF ended before record {number}"));
                     }
                 }
             }
@@ -150,7 +153,9 @@ pub(crate) fn merge(base: &Path, steps: &[(&str, &Path)], output: &Path) -> Resu
         }
         for (name, lines) in readers.iter_mut() {
             if lines.next().is_some() {
-                return refuse(format!("The {name} step VCF has more records than the preprocessed VCF"));
+                return refuse(format!(
+                    "The {name} step VCF has more records than the preprocessed VCF"
+                ));
             }
         }
         writer.flush()?;
@@ -162,7 +167,10 @@ pub(crate) fn merge(base: &Path, steps: &[(&str, &Path)], output: &Path) -> Resu
     }
     fs::rename(&compressed, output)
         .map_err(|e| crate::python_path::os_error(e, &compressed, Some(output)))?;
-    let status = Command::new("tabix").args(["-f", "-p", "vcf"]).arg(output).status()?;
+    let status = Command::new("tabix")
+        .args(["-f", "-p", "vcf"])
+        .arg(output)
+        .status()?;
     if !status.success() {
         return refuse("tabix failed on the merged VCF");
     }
@@ -177,9 +185,18 @@ mod tests {
     fn steps_add_their_fields_in_order_after_the_preprocessed_ones() {
         let base = "chr1\t10\t.\tA\tG\t50\tPASS\tDP=3\tGT\t0/1";
         let steps = [
-            ("gnomAD", "chr1\t10\t.\tA\tG\t50\tPASS\tDP=3;AF_joint=0.1\tGT\t0/1".to_owned()),
-            ("ClinVar", "chr1\t10\t.\tA\tG\t50\tPASS\tDP=3;CLNSIG=Benign\tGT\t0/1".to_owned()),
-            ("VEP", "chr1\t10\t.\tA\tG\t50\tPASS\tDP=3;CSQ=G|x\tGT\t0/1".to_owned()),
+            (
+                "gnomAD",
+                "chr1\t10\t.\tA\tG\t50\tPASS\tDP=3;AF_joint=0.1\tGT\t0/1".to_owned(),
+            ),
+            (
+                "ClinVar",
+                "chr1\t10\t.\tA\tG\t50\tPASS\tDP=3;CLNSIG=Benign\tGT\t0/1".to_owned(),
+            ),
+            (
+                "VEP",
+                "chr1\t10\t.\tA\tG\t50\tPASS\tDP=3;CSQ=G|x\tGT\t0/1".to_owned(),
+            ),
         ];
         assert_eq!(
             merge_record(base, &steps, 1).unwrap(),
@@ -187,7 +204,10 @@ mod tests {
         );
         let empty = "chr1\t10\t.\tA\tG\t50\tPASS\t.";
         let one = [("VEP", "chr1\t10\t.\tA\tG\t50\tPASS\tCSQ=G".to_owned())];
-        assert_eq!(merge_record(empty, &one, 1).unwrap(), "chr1\t10\t.\tA\tG\t50\tPASS\tCSQ=G");
+        assert_eq!(
+            merge_record(empty, &one, 1).unwrap(),
+            "chr1\t10\t.\tA\tG\t50\tPASS\tCSQ=G"
+        );
     }
 
     #[test]

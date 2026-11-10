@@ -805,7 +805,15 @@ pub(crate) fn verify_manifest(
     vcf_hub_mode: &str,
     cadd_hub_mode: &str,
 ) -> Result<Vec<(String, PathBuf)>> {
-    verify_manifest_for(manifest, config_path, root, mode, vcf_hub_mode, cadd_hub_mode, "")
+    verify_manifest_for(
+        manifest,
+        config_path,
+        root,
+        mode,
+        vcf_hub_mode,
+        cadd_hub_mode,
+        "",
+    )
 }
 
 /// Whether a task of `phase` checks the resource `key`. Each annotation step

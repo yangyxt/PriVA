@@ -950,10 +950,22 @@ fn the_pipeline_program_is_required_and_content_pinned() {
 fn annotation_steps_check_only_the_resources_they_read() {
     use contract::phase_reads;
     assert!(phase_reads("annotation-clinvar", "clinvar_vcf"));
-    assert!(!phase_reads("annotation-clinvar", "vep_cache_dir/homo_sapiens/info.txt"));
-    assert!(phase_reads("annotation-vep", "vep_cache_dir/homo_sapiens/info.txt"));
-    assert!(!phase_reads("annotation-vep", "cadd_base_dir/src/scripts/x.py"));
-    assert!(phase_reads("annotation-cadd", "cadd_base_dir/src/scripts/x.py"));
+    assert!(!phase_reads(
+        "annotation-clinvar",
+        "vep_cache_dir/homo_sapiens/info.txt"
+    ));
+    assert!(phase_reads(
+        "annotation-vep",
+        "vep_cache_dir/homo_sapiens/info.txt"
+    ));
+    assert!(!phase_reads(
+        "annotation-vep",
+        "cadd_base_dir/src/scripts/x.py"
+    ));
+    assert!(phase_reads(
+        "annotation-cadd",
+        "cadd_base_dir/src/scripts/x.py"
+    ));
     assert!(phase_reads("annotation-merge", "priva_binary"));
     assert!(!phase_reads("annotation-merge", "ref_genome"));
     // Whole-script and family phases check every resource, as before.

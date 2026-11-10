@@ -150,8 +150,7 @@ fn software_readiness(mode: &str, priva_binary: Option<&Path>) -> Result<Json> {
             "executable",
             text(display(&fs::canonicalize(&found).unwrap_or(found))),
         )]);
-        if ["python", "bcftools", "tabix", "yq", "samtools", "conda"].contains(tool)
-        {
+        if ["python", "bcftools", "tabix", "yq", "samtools", "conda"].contains(tool) {
             let (output, code) = version_output(tool)?;
             entry.set("version_output", text(output));
             entry.set("version_exit_code", Json::Int(code as i128));

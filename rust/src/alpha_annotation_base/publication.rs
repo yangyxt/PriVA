@@ -222,7 +222,10 @@ impl Context<'_> {
         let value = read_json(&marker)?;
         require(
             equal(optional(&value, "schema")?, &string(SCHEMA))
-                && profile::same_science(optional(&value, "science")?, &profile::science(&settings)?),
+                && profile::same_science(
+                    optional(&value, "science")?,
+                    &profile::science(&settings)?,
+                ),
             "Pending annotation scientific inputs changed",
         )?;
         require(
@@ -457,7 +460,10 @@ impl Context<'_> {
         let expected = self.capture()?;
         require(
             equal(optional(&lineage, "schema")?, &string(SCHEMA))
-                && profile::same_science(optional(&lineage, "science")?, get(&expected, "science")?)
+                && profile::same_science(
+                    optional(&lineage, "science")?,
+                    get(&expected, "science")?,
+                )
                 && truth(optional(&lineage, "provenance")?),
             "Native complete-base lineage does not match the actual scientific producer",
         )?;

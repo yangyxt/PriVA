@@ -248,6 +248,32 @@ three samples as three one-person families and again without a PED (job
 CADD table, and every family's filtered VCF, filtered CADD table, final table
 and ACMG matrix were identical; `-resume` reused all eight cohort tasks.
 
+## Annotation as one task per step
+
+In raw mode with both hubs off, `annotation_vcf.sh`'s functions run as their own
+Nextflow tasks, called with the arguments `main_workflow` gives them and without
+changes to the script: `priva task run --phase annotation-preprocess`, then
+`annotation-gnomad`, `-clinvar`, `-control`, `-vep` and `-cadd` side by side on
+copies of the preprocessed VCF, then `annotation-merge`. The merge
+(`rust/src/nextflow_task/info_merge.rs`) reads the preprocessed VCF and the four
+step VCFs record by record and appends each step's new INFO fields and header
+lines in the script's order; it refuses a step that kept a different record or
+changed QUAL, FILTER, genotypes or an existing INFO field. Each step checks only
+the resources it reads (`phase_reads`), so a step does not re-read the 148,287
+files of the CADD installation. The gnomAD step removes no variants (`af_cutoff`
+is applied later, in filtration), so every step sees the same variants.
+
+Compared with the Snakefile at `02d16b6` (job 1538935 at `d74eef8`, 12 CPUs as the
+reference, 10 November 2026): the annotated VCF, the annotation CADD table and
+every family's outputs were identical for three families and without a PED;
+`-resume` reused all 14 tasks. In a 24-CPU job (job 1538842) only CADD's RegSeq
+columns and 3 RawScore values moved by 1e-06, from the CPU count CADD sees.
+
+Thread counts are left out of the AlphaMissense annotation and DAS completion
+records (`d9eac64`): the G9 AlphaMissense cache built with 22 threads is now
+reused at 8. VEP with 2 and 10 forks differed only in `HGNC_ID`, which PriVA does
+not read (`fork_1538819`).
+
 ## Retained Python tools
 
 CADD scientific packages and model assets remain upstream. The auxiliary data

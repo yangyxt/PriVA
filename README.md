@@ -193,13 +193,28 @@ Each family's outputs carry its PED family identifier, for example
 `cohort.anno.FAM1.filtered.tsv`; a run without `--ped` writes `cohort.anno.filtered.tsv`.
 Families run in parallel as far as `--family_cpus` and the executor allow.
 
+In raw mode with `--vcf_hub_mode off --cadd_hub_mode off`, annotation runs as one
+task per step of `annotation_vcf.sh`, in this order:
+
+1. Preprocessing.
+2. gnomAD, ClinVar, control cohort, VEP and CADD at the same time, each on its own
+   copy of the preprocessed VCF.
+3. A merge that copies each step's new INFO fields and header lines onto the
+   preprocessed VCF in the script's order. It refuses a step that kept a different
+   record or changed anything else.
+
+The result is the same annotated VCF and CADD table as the single annotation task,
+and a failed step reruns alone with `-resume`. With a hub in use (the default
+`--cadd_hub_mode` is `copy`), annotation stays one task, because the hub logic
+reshapes it.
+
 The example `inputs/` paths are relative to the external `PRIVA_RUNS` directory; replace them with your actual input paths and assembly. The annotated route does not rerun VEP or regenerate CADD. Use a new output directory for changed inputs, source, resources or settings. For the same run, retain the external launch/work directories and Nextflow cache, and append `-resume`; launch-time resource checks still apply to a fully cached run.
 
 | Profile/option | Scope |
 |---|---|
 | `-profile local` | Execute tasks in the active scientific environment. The installed driver limits its own Java runtime to 2 processors, so pass `--local_cpus N` when tasks need more (for example the CPUs of the Slurm job running the driver) |
 | `-profile slurm` | Submit tasks to Slurm; set `--slurm_queue`, optional `--slurm_account`, and optional `--slurm_cluster_options` for other sbatch flags. Write values that start with `-` as `--slurm_cluster_options='--constraint=NAME'`; with a space instead of `=`, Nextflow reads the value as a separate flag |
-| `--annotation_cpus`, `--family_cpus` | Task CPU allocations; corresponding memory/time parameters are in `nextflow.config` |
+| `--annotation_cpus`, `--family_cpus` | Task CPU allocations; corresponding memory/time parameters are in `nextflow.config`. VEP and CADD steps use `--annotation_cpus`; the other annotation steps and the merge use `--annotation_step_cpus` (default 2), so they can run beside VEP and CADD |
 | `-profile apptainer` | Requires an explicitly selected tested `--container_image` and matching software identity. Tasks run with `--cleanenv`, so they use the image's tools; bind the cache, data and input folders with `--container_run_options='-B /path'`. Build the image from [priva_acmg.def](priva_acmg.def) |
 | `-profile task_readonly` | Optional Linux Bubblewrap task filesystem boundary; it cannot be combined with `apptainer` |
 | `-profile test -stub-run` | Synthetic wiring only; its outputs are not scientific results |
@@ -207,10 +222,14 @@ The example `inputs/` paths are relative to the external `PRIVA_RUNS` directory;
 Keep scientific worker counts in the legacy configuration's `threads` and
 `threads_per_fam`; set task CPU allocations independently. Family tasks need at
 least `threads_per_fam` CPUs. Raw VEP profiles need `threads + 2` CPUs, for
-example 24 CPUs for 22 configured forks. CADD's RegSeq feature columns can
-differ in the last printed decimal with the annotation task's CPU count (seen
-as 1e-06 between 10 and 12 CPUs; RawScore and PHRED were unchanged), so keep
-`--annotation_cpus` fixed when comparing runs exactly.
+example 24 CPUs for 22 configured forks. CADD's RegSeq feature columns, and
+rarely RawScore, can differ in the last printed decimal with the number of CPUs
+CADD can see (1e-06, in 21 of 13,825 rows between 12 and 24 CPUs; PHRED and every
+family output were unchanged). With the local executor a task sees every CPU of
+the machine or job, so compare runs made with the same CPU count. Likewise VEP's
+`HGNC_ID` can be empty for a few transcripts at higher `threads` (410 of the CSQ
+entries of 86,498 AlphaMissense records between 2 and 10 forks); PriVA does not
+read `HGNC_ID`.
 
 ## Read the outputs
 

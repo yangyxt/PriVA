@@ -213,6 +213,23 @@ pub(super) fn procedure(path: &Path, name: &str) -> Result<String> {
         format!("Cannot identify scientific shell procedure: {name}"),
     ))
 }
+/// A cache's recorded inputs against the current ones, without the VEP
+/// thread count. `--fork` changes how fast VEP runs, not what it writes, so
+/// a cache built with another thread count is still the same annotation.
+/// The count stays in the record as a note of how the cache was made.
+pub(super) fn same_science(recorded: &Json, current: &Json) -> bool {
+    let without_threads = |value: &Json| match value {
+        Json::Object(fields) => Json::Object(
+            fields
+                .iter()
+                .filter(|(name, _)| name != "threads")
+                .cloned()
+                .collect(),
+        ),
+        other => other.clone(),
+    };
+    equal(&without_threads(recorded), &without_threads(current))
+}
 /// The installer's converter line before it ran `priva alphamissense-vcf`.
 const PYTHON_CONVERTER: &str =
     "python \"$convert_py\" \"$alphamissense_prescore\" \"$converted\" && \\";
@@ -730,4 +747,20 @@ pub(super) fn motif_runtime(python: &str) -> Result<Json> {
         ("version", get(&observed, "version")?.clone()),
         ("packages", packages),
     ]))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn thread_count_is_left_out_of_the_recorded_inputs() {
+        let science = |threads: i128, vep: &str| {
+            object([
+                ("threads", Json::Int(threads)),
+                ("vep_version", Json::Str(vep.into())),
+            ])
+        };
+        assert!(same_science(&science(22, "116.3"), &science(8, "116.3")));
+        assert!(!same_science(&science(22, "116.3"), &science(22, "117.0")));
+    }
 }

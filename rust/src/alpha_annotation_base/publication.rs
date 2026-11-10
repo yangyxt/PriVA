@@ -173,7 +173,7 @@ impl Context<'_> {
             &object([("science", science.clone()), ("base_sha256", string(""))]),
         )?;
         require(
-            equal(optional(&record, "science")?, &science),
+            profile::same_science(optional(&record, "science")?, &science),
             "Complete annotation producer or scientific dependency changed",
         )?;
         let outputs = output_state(&settings.paths)?;
@@ -222,7 +222,7 @@ impl Context<'_> {
         let value = read_json(&marker)?;
         require(
             equal(optional(&value, "schema")?, &string(SCHEMA))
-                && equal(optional(&value, "science")?, &profile::science(&settings)?),
+                && profile::same_science(optional(&value, "science")?, &profile::science(&settings)?),
             "Pending annotation scientific inputs changed",
         )?;
         require(
@@ -457,7 +457,7 @@ impl Context<'_> {
         let expected = self.capture()?;
         require(
             equal(optional(&lineage, "schema")?, &string(SCHEMA))
-                && equal(optional(&lineage, "science")?, get(&expected, "science")?)
+                && profile::same_science(optional(&lineage, "science")?, get(&expected, "science")?)
                 && truth(optional(&lineage, "provenance")?),
             "Native complete-base lineage does not match the actual scientific producer",
         )?;

@@ -222,6 +222,35 @@ fn publish(path: &Path, value: &Json) -> Result<()> {
     }
     result
 }
+/// A completion record without its `threads` parameter. The worker count
+/// changes how fast the DAS analysis runs, not its result (each domain's seed
+/// is fixed by its sorted position), so a build made with another count is
+/// reused. The parameter stays in the record as a note of how it was made.
+fn without_thread_count(record: Json) -> Json {
+    let Json::Object(fields) = record else {
+        return record;
+    };
+    Json::Object(
+        fields
+            .into_iter()
+            .map(|(name, value)| match (name.as_str(), value) {
+                ("parameters", Json::Array(pairs)) => (
+                    name,
+                    Json::Array(
+                        pairs
+                            .into_iter()
+                            .filter(|pair| {
+                                !matches!(pair, Json::Array(items)
+                                    if items.first().and_then(Json::as_str) == Some("threads"))
+                            })
+                            .collect(),
+                    ),
+                ),
+                (_, value) => (name, value),
+            })
+            .collect(),
+    )
+}
 fn execute(command: &str, options: &Options) -> Result<()> {
     let current = input_state(options)?;
     if command == "capture" {
@@ -241,7 +270,8 @@ fn execute(command: &str, options: &Options) -> Result<()> {
     if command == "record" {
         publish(&receipt, &expected)
     } else {
-        if !json_text::py_equal(&read_receipt(&receipt)?, &expected) {
+        let recorded = without_thread_count(read_receipt(&receipt)?);
+        if !json_text::py_equal(&recorded, &without_thread_count(expected)) {
             return Err(error(
                 "ValueError",
                 "DAS completion metadata no longer matches selected files",
@@ -299,6 +329,26 @@ pub(crate) fn dispatch(args: &[String]) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn thread_count_is_left_out_of_the_completion_comparison() {
+        let record = |threads: &str, coldspot: &str| {
+            object([
+                ("version", Json::Int(3)),
+                (
+                    "parameters",
+                    Json::Array(vec![
+                        Json::Array(vec![string("threads"), string(threads)]),
+                        Json::Array(vec![string("coldspot-enabled"), string(coldspot)]),
+                    ]),
+                ),
+            ])
+        };
+        let same = |a: Json, b: Json| {
+            json_text::py_equal(&without_thread_count(a), &without_thread_count(b))
+        };
+        assert!(same(record("22", "true"), record("8", "true")));
+        assert!(!same(record("22", "true"), record("22", "false")));
+    }
     #[test]
     fn named_roles_preserve_order_duplicates_spaces_and_embedded_equals() {
         let values = ["b=2", "a=1=2", "b=3", " = "].map(str::to_owned);

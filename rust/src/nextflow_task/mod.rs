@@ -12,6 +12,7 @@
 mod boundary;
 mod contract;
 mod info_merge;
+mod table_join;
 mod tasks;
 #[cfg(test)]
 mod tests;
@@ -178,7 +179,10 @@ const LAUNCH_REQUIRED: &[&str] = &[
 
 /// Task phases. `annotation` runs the whole annotation script; the
 /// `annotation-*` steps run one of its functions each, and `annotation-merge`
-/// joins their INFO fields.
+/// joins their INFO fields. `prioritization` runs the whole prioritization
+/// script; `prioritization-combine`, `-splicing`, `-utr` and `-acmg` run one of
+/// its steps each, and `prioritization-join` joins the splicing and 5' UTR
+/// copies of the family table.
 pub(crate) const PHASES: &[&str] = &[
     "annotation",
     "annotation-preprocess",
@@ -190,6 +194,11 @@ pub(crate) const PHASES: &[&str] = &[
     "annotation-merge",
     "filtration",
     "prioritization",
+    "prioritization-combine",
+    "prioritization-splicing",
+    "prioritization-utr",
+    "prioritization-join",
+    "prioritization-acmg",
 ];
 
 fn parse_task(args: &[String]) -> std::result::Result<(String, Options), String> {
@@ -253,11 +262,23 @@ fn parse_task(args: &[String]) -> std::result::Result<(String, Options), String>
                     "clinvar-vcf",
                     "control-vcf",
                     "vep-vcf",
+                    "table",
+                    "splicing-table",
+                    "utr-table",
                 ],
                 &["stub"],
             )?;
-            options.require(&["phase", "bundle", "vcf", "vcf-index", "cpus"])?;
+            options.require(&["phase", "bundle", "cpus"])?;
             options.choice("phase", PHASES)?;
+            // The steps after prioritization-combine read the family table.
+            if matches!(
+                options.value("phase"),
+                "prioritization-splicing" | "prioritization-utr" | "prioritization-join" | "prioritization-acmg"
+            ) {
+                options.require(&["table"])?;
+            } else {
+                options.require(&["vcf", "vcf-index"])?;
+            }
             options.int("cpus")?;
             options
         }

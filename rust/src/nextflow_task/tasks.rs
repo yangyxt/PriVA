@@ -742,7 +742,9 @@ fn private_config(
         ),
     ]);
     for key in OPTIONAL_INPUTS {
-        if !config.truthy(key) || (phase != "prioritization" && *key == "cds_fasta_file") {
+        if !config.truthy(key)
+            || (!matches!(phase, "prioritization" | "prioritization-acmg") && *key == "cds_fasta_file")
+        {
             continue;
         }
         let source = config
@@ -810,6 +812,37 @@ const STUB_CADD: &str =
 /// `null` as there). Sourced from this file, the script defines its
 /// functions and runs nothing itself.
 /// Arguments: SOURCE_ROOT CONFIG VCF STEP [OUTPUT].
+/// One step of prioritization_vcf_per_fam.sh, as main_prioritization runs
+/// it (threads from threads_per_fam). Sourced from this file, the script
+/// defines its functions and runs nothing itself. A family with no variant
+/// left gets empty tables, as main_prioritization writes them.
+/// Arguments: SOURCE_ROOT CONFIG STEP ARGUMENTS...
+const PRIORITIZATION_STEP: &str = r#"#!/usr/bin/env bash
+source "$1/scripts/prioritization_vcf_per_fam.sh" || exit 1
+config=$2 step=$3
+shift 3
+threads=$(read_yaml "$config" threads_per_fam)
+case $step in
+    combine)
+        vcf=$1 cadd=$2 table=${1/.vcf*/.tsv}
+        if [[ $(count_vcf_records "$vcf") -lt 1 ]] && check_vcf_validity "$vcf" 0; then : > "$table"; exit 0; fi
+        [[ $(wc -l < "$cadd") -le 1 ]] && { echo "The CADD table $cadd is empty" >&2; exit 0; }
+        prepare_combined_tab "$vcf" "$cadd" "$threads" "$config" && [[ -f $table ]] ;;
+    splicing)
+        [[ -s $1 ]] || exit 0
+        interpret_splicing_annotations "$1" "$config" "$threads" ;;
+    utr)
+        [[ -s $1 ]] || exit 0
+        interpret_utr_annotations "$1" "$config" "$threads" ;;
+    acmg)
+        table=$1 family=${2:-}
+        [[ -s $table ]] || { : > "${table%.tsv}.acmg.tsv"; exit 0; }
+        acmg_assign_table -i "$table" -c "$config" -t "$threads" ${family:+-f "$family"} ;;
+    *)
+        echo "Unknown prioritization step: $step" >&2; exit 2 ;;
+esac
+"#;
+
 const ANNOTATION_STEP: &str = r#"#!/usr/bin/env bash
 source "$1/scripts/annotation_vcf.sh" || exit 1
 config=$2 vcf=$3 step=$4 output=${5:-}
@@ -908,7 +941,10 @@ pub(crate) fn run(options: &Options) -> Result<()> {
                 "Family {id} is not in this run's validated families"
             ));
         }
-        (None, "filtration" | "prioritization") if !families.is_empty() => {
+        (None, family_phase)
+            if (family_phase == "filtration" || family_phase.starts_with("prioritization"))
+                && !families.is_empty() =>
+        {
             return refuse("This run has PED families; name one with --family");
         }
         _ => {}
@@ -927,16 +963,31 @@ pub(crate) fn run(options: &Options) -> Result<()> {
         "filtration" => format!("{base}.anno"),
         _ => family_base.clone(),
     };
-    let input_vcf = copy_writable(
-        Path::new(options.value("vcf")),
-        &result.join(format!("{name}.vcf.gz")),
-    )?;
+    // The prioritization steps after combine read and rewrite the family
+    // table instead of a VCF; their input is the table itself.
+    let table_phase = matches!(
+        phase,
+        "prioritization-splicing" | "prioritization-utr" | "prioritization-join" | "prioritization-acmg"
+    );
+    let input_vcf = if table_phase {
+        copy_writable(
+            Path::new(options.value("table")),
+            &result.join(format!("{family_base}.tsv")),
+        )?
+    } else {
+        copy_writable(
+            Path::new(options.value("vcf")),
+            &result.join(format!("{name}.vcf.gz")),
+        )?
+    };
     let input_index = PathBuf::from(format!("{}.tbi", display(&input_vcf)));
-    copy_writable(Path::new(options.value("vcf-index")), &input_index)?;
+    if !table_phase {
+        copy_writable(Path::new(options.value("vcf-index")), &input_index)?;
+    }
     let cadd = options.get("cadd").filter(|v| !v.is_empty());
     let cadd_path = match cadd {
         Some(cadd) => {
-            let cadd_base = if phase == "prioritization" {
+            let cadd_base = if phase.starts_with("prioritization") {
                 family_base.clone()
             } else {
                 format!("{base}.anno")
@@ -946,7 +997,11 @@ pub(crate) fn run(options: &Options) -> Result<()> {
                 &result.join(format!("{cadd_base}.cadd.tsv")),
             )?)
         }
-        None if matches!(phase, "filtration" | "prioritization" | "annotation-merge") => {
+        None if matches!(
+            phase,
+            "filtration" | "prioritization" | "prioritization-combine" | "annotation-merge"
+        ) =>
+        {
             return refuse("Filtration/prioritization require the paired CADD TSV");
         }
         None => None,
@@ -972,6 +1027,11 @@ pub(crate) fn run(options: &Options) -> Result<()> {
             }
             // The copied input already is the step's output.
             _ if step.is_some() => {}
+            "prioritization-combine" => fs::write(
+                result.join(format!("{family_base}.tsv")),
+                "Chr\tStart\tRef\tAlt\tFeature\n1\t10\tA\tG\tSTUB\n",
+            )?,
+            "prioritization-splicing" | "prioritization-utr" | "prioritization-join" => {}
             "filtration" => {
                 let destination = result.join(format!("{family_base}.vcf.gz"));
                 copy_writable(&input_vcf, &destination)?;
@@ -1020,6 +1080,18 @@ pub(crate) fn run(options: &Options) -> Result<()> {
             Ok(command)
         };
         let anno = |suffix: &str| display(&result.join(format!("{base}.anno{suffix}")));
+        let prioritization_step = |step: &str, arguments: Vec<String>| -> Result<Vec<String>> {
+            fs::write("prioritization_step.sh", PRIORITIZATION_STEP)?;
+            let mut command = vec![
+                "bash".into(),
+                "prioritization_step.sh".into(),
+                display(&root),
+                config_text.clone(),
+                step.into(),
+            ];
+            command.extend(arguments);
+            Ok(command)
+        };
         let command: Option<Vec<String>> = match phase {
             "annotation-preprocess" => Some(step_command("preprocess", Some(anno(".vcf.gz")))?),
             "annotation-cadd" => Some(step_command("cadd", Some(anno(".cadd.tsv")))?),
@@ -1042,6 +1114,27 @@ pub(crate) fn run(options: &Options) -> Result<()> {
                 None
             }
             _ if step.is_some() => Some(step_command(step.unwrap(), None)?),
+            "prioritization-combine" => Some(prioritization_step(
+                "combine",
+                vec![input.clone(), display(cadd_path.as_deref().unwrap())],
+            )?),
+            "prioritization-splicing" => Some(prioritization_step("splicing", vec![input.clone()])?),
+            "prioritization-utr" => Some(prioritization_step("utr", vec![input.clone()])?),
+            "prioritization-join" => {
+                let (Some(splicing), Some(utr)) = (
+                    options.get("splicing-table").filter(|v| !v.is_empty()),
+                    options.get("utr-table").filter(|v| !v.is_empty()),
+                ) else {
+                    return refuse("prioritization-join needs --splicing-table and --utr-table");
+                };
+                super::table_join::join(&input_vcf, Path::new(splicing), Path::new(utr), &input_vcf)?;
+                None
+            }
+            "prioritization-acmg" => {
+                let mut arguments = vec![input.clone()];
+                arguments.extend(family.clone());
+                Some(prioritization_step("acmg", arguments)?)
+            }
             "annotation" if field("mode") == "raw" => Some(vec![
                 "bash".into(),
                 script("annotation_vcf.sh"),
@@ -1114,6 +1207,10 @@ pub(crate) fn run(options: &Options) -> Result<()> {
         "annotation-cadd" => &[".anno.cadd.tsv"],
         _ if step.is_some() => &[".anno.vcf.gz", ".anno.vcf.gz.tbi"],
         "filtration" => &[".vcf.gz", ".vcf.gz.tbi", ".cadd.tsv"],
+        "prioritization-combine"
+        | "prioritization-splicing"
+        | "prioritization-utr"
+        | "prioritization-join" => &[".tsv"],
         _ => &[".tsv", ".acmg.tsv"],
     };
     let stem = if phase.starts_with("annotation") {

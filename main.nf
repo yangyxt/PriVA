@@ -1,6 +1,6 @@
 nextflow.enable.dsl=2
 
-include { VALIDATE_INPUTS; ANNOTATE_COHORT; ANNOTATE_PREPROCESS; ANNOTATE_STEP; ANNOTATE_CADD; ANNOTATE_MERGE; FILTER_FAMILY; PRIORITIZE_FAMILY } from './modules/local/compatibility'
+include { VALIDATE_INPUTS; ANNOTATE_COHORT; ANNOTATE_PREPROCESS; ANNOTATE_STEP; ANNOTATE_CADD; ANNOTATE_MERGE; FILTER_FAMILY; PRIORITIZE_COMBINE; PRIORITIZE_SPLICING; PRIORITIZE_UTR; PRIORITIZE_JOIN; PRIORITIZE_ACMG } from './modules/local/compatibility'
 include { INSTALL_RESOURCES } from './workflows/install'
 
 // The scientific source is deliberately retained during orchestration parity.
@@ -167,6 +167,17 @@ outputs and scientific-profile requirements.'''
         def toPrioritize = FILTER_FAMILY.out.filtered.map(bundleLast)
             .combine(annotated.map { it[3] })
             .map { run, family, vcf, index, cadd, bundle, cohortCadd -> [run, family, vcf, index, family ? cadd : cohortCadd, bundle] }
-        PRIORITIZE_FAMILY(toPrioritize)
+        // Prioritization per family, one task per step: combine, then splicing
+        // and 5' UTR side by side on copies of the table, join, then ACMG.
+        PRIORITIZE_COMBINE(toPrioritize)
+        def combined = PRIORITIZE_COMBINE.out.table.map(bundleLast)
+        PRIORITIZE_SPLICING(combined)
+        PRIORITIZE_UTR(combined)
+        def toJoin = combined.map { run, family, table, bundle -> [family, run, table, bundle] }
+            .join(PRIORITIZE_SPLICING.out.table.map { run, family, table -> [family, table] })
+            .join(PRIORITIZE_UTR.out.table.map { run, family, table -> [family, table] })
+            .map { family, run, table, bundle, splicing, utr -> [run, family, table, splicing, utr, bundle] }
+        PRIORITIZE_JOIN(toJoin)
+        PRIORITIZE_ACMG(PRIORITIZE_JOIN.out.table.map(bundleLast))
     }
 }

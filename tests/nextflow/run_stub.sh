@@ -42,11 +42,11 @@ root = Path(sys.argv[1])
 traces = sorted((root / 'pipeline_info').glob('trace-*.tsv'))
 assert len(traces) >= 2, 'Fresh and resume traces are required'
 rows = list(csv.DictReader(traces[-1].open(), delimiter='\t'))
-assert len(rows) == 4 and all(row['status'] == 'CACHED' for row in rows), rows
+assert len(rows) == 8 and all(row['status'] == 'CACHED' for row in rows), rows
 assert len(list(root.rglob('*.filtered.acmg.tsv'))) == 1
 assert len(list(root.rglob('*.filtered.vcf.gz'))) == 1
-assert len(list(root.rglob('*.provenance.json'))) == 3
-print('Fresh raw stub and all-four-task cached resume passed')
+assert len(list(root.rglob('*.provenance.json'))) == 7
+print('Fresh raw stub and all-eight-task cached resume passed')
 PY
 # Raw mode with both hubs off: annotation runs as one task per step
 # (preprocess; gnomAD, ClinVar, control, VEP and CADD side by side; merge).
@@ -59,10 +59,11 @@ import sys
 root = Path(sys.argv[1])
 traces = sorted((root / 'pipeline_info').glob('trace-*.tsv'))
 fresh = sorted(row['name'].split(' ')[0] for row in csv.DictReader(traces[-2].open(), delimiter='\t'))
-assert fresh == ['ANNOTATE_CADD', 'ANNOTATE_MERGE', 'ANNOTATE_PREPROCESS'] + ['ANNOTATE_STEP'] * 4 + [
-    'FILTER_FAMILY', 'PRIORITIZE_FAMILY', 'VALIDATE_INPUTS'], fresh
+PRIORITIZE = ['PRIORITIZE_ACMG', 'PRIORITIZE_COMBINE', 'PRIORITIZE_JOIN', 'PRIORITIZE_SPLICING', 'PRIORITIZE_UTR']
+assert fresh == sorted(['ANNOTATE_CADD', 'ANNOTATE_MERGE', 'ANNOTATE_PREPROCESS'] + ['ANNOTATE_STEP'] * 4 + [
+    'FILTER_FAMILY', 'VALIDATE_INPUTS'] + PRIORITIZE), fresh
 resumed = list(csv.DictReader(traces[-1].open(), delimiter='\t'))
-assert len(resumed) == 10 and all(row['status'] == 'CACHED' for row in resumed), resumed
+assert len(resumed) == 14 and all(row['status'] == 'CACHED' for row in resumed), resumed
 assert sorted(p.name for p in (root / 'annotation').iterdir()) == [
     'cohort.anno.cadd.tsv', 'cohort.anno.vcf.gz', 'cohort.anno.vcf.gz.tbi']
 names = sorted(p.name for p in (root / 'pipeline_info').glob('annotation-*.provenance.json'))
@@ -84,16 +85,18 @@ import sys
 root = Path(sys.argv[1])
 def names(case, pattern):
     return sorted(p.name for p in (root / case).rglob(pattern))
+PRIORITIZE = ['PRIORITIZE_ACMG', 'PRIORITIZE_COMBINE', 'PRIORITIZE_JOIN', 'PRIORITIZE_SPLICING', 'PRIORITIZE_UTR']
+STEPS = ['acmg', 'combine', 'join', 'splicing', 'utr']
 def tasks(case):
     trace = sorted((root / case / 'pipeline_info').glob('trace-*.tsv'))[-1]
     return sorted(row['name'].split(' ')[0] for row in csv.DictReader(trace.open(), delimiter='\t'))
-assert tasks('cohort') == ['ANNOTATE_COHORT', 'FILTER_FAMILY', 'FILTER_FAMILY', 'PRIORITIZE_FAMILY', 'PRIORITIZE_FAMILY', 'VALIDATE_INPUTS'], tasks('cohort')
+assert tasks('cohort') == sorted(['ANNOTATE_COHORT', 'FILTER_FAMILY', 'FILTER_FAMILY', 'VALIDATE_INPUTS'] + PRIORITIZE * 2), tasks('cohort')
 assert names('cohort', '*.filtered.acmg.tsv') == ['cohort.anno.FAM.filtered.acmg.tsv', 'cohort.anno.OTHER.filtered.acmg.tsv'], names('cohort', '*.acmg.tsv')
-assert names('cohort', '*.provenance.json') == ['annotation.provenance.json', 'filtration.FAM.provenance.json', 'filtration.OTHER.provenance.json', 'prioritization.FAM.provenance.json', 'prioritization.OTHER.provenance.json'], names('cohort', '*.provenance.json')
+assert names('cohort', '*.provenance.json') == sorted(['annotation.provenance.json', 'filtration.FAM.provenance.json', 'filtration.OTHER.provenance.json'] + [f'prioritization-{s}.{f}.provenance.json' for s in STEPS for f in ('FAM', 'OTHER')]), names('cohort', '*.provenance.json')
 contract = json.loads(next((root / 'cohort').rglob('contract.json')).read_text())
 assert contract['families'] == ['OTHER', 'FAM'], contract['families']
 assert contract['family_samples'] == {'OTHER': ['other'], 'FAM': ['child', 'dad', 'mom']}, contract['family_samples']
-assert tasks('no-pedigree') == ['ANNOTATE_COHORT', 'FILTER_FAMILY', 'PRIORITIZE_FAMILY', 'VALIDATE_INPUTS'], tasks('no-pedigree')
+assert tasks('no-pedigree') == sorted(['ANNOTATE_COHORT', 'FILTER_FAMILY', 'VALIDATE_INPUTS'] + PRIORITIZE), tasks('no-pedigree')
 assert names('no-pedigree', '*.filtered.acmg.tsv') == ['cohort.anno.filtered.acmg.tsv'], names('no-pedigree', '*.acmg.tsv')
 assert names('no-pedigree', '*.filtered.vcf.gz') == ['cohort.anno.filtered.vcf.gz']
 contract = json.loads(next((root / 'no-pedigree').rglob('contract.json')).read_text())

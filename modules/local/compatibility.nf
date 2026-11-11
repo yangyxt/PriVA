@@ -156,24 +156,111 @@ process FILTER_FAMILY {
     """
 }
 
-process PRIORITIZE_FAMILY {
+// Prioritization, one task per step and family: combine builds the family
+// table; splicing and 5' UTR add their columns to copies of it side by side;
+// join puts the copies together; ACMG assigns the criteria.
+process PRIORITIZE_COMBINE {
+    tag "${family ?: 'no pedigree'}"
+    label 'family'
+    publishDir "${params.outdir}/pipeline_info", mode: 'copy', overwrite: false, pattern: '*.provenance.json'
+    input:
+    tuple val(meta), val(family), path(vcf, stageAs: 'input.vcf.gz'), path(vcf_index, stageAs: 'input.vcf.gz.tbi'), path(cadd, stageAs: 'input.cadd.tsv'), path(bundle, stageAs: 'bundle/*')
+    output:
+    tuple val(meta), val(family), path('result/*.filtered.tsv'), path('bundle/*', includeInputs: true), emit: table
+    path('prioritization-combine*.provenance.json'), emit: provenance
+    script:
+    def familyArg = family ? "--family '${family}'" : ''
+    """
+    '${meta.priva_binary}' task run --phase prioritization-combine --bundle bundle ${familyArg} --vcf '${vcf}' --vcf-index '${vcf_index}' --cadd '${cadd}' --cpus ${task.cpus}
+    """
+    stub:
+    def familyArg = family ? "--family '${family}'" : ''
+    """
+    '${meta.priva_binary}' task run --phase prioritization-combine --bundle bundle ${familyArg} --vcf '${vcf}' --vcf-index '${vcf_index}' --cadd '${cadd}' --cpus ${task.cpus} --stub
+    """
+}
+
+process PRIORITIZE_SPLICING {
+    tag "${family ?: 'no pedigree'}"
+    label 'family'
+    publishDir "${params.outdir}/pipeline_info", mode: 'copy', overwrite: false, pattern: '*.provenance.json'
+    input:
+    tuple val(meta), val(family), path(table, stageAs: 'input.tsv'), path(bundle, stageAs: 'bundle/*')
+    output:
+    tuple val(meta), val(family), path('result/*.filtered.tsv'), emit: table
+    path('prioritization-splicing*.provenance.json'), emit: provenance
+    script:
+    def familyArg = family ? "--family '${family}'" : ''
+    """
+    '${meta.priva_binary}' task run --phase prioritization-splicing --bundle bundle ${familyArg} --table '${table}' --cpus ${task.cpus}
+    """
+    stub:
+    def familyArg = family ? "--family '${family}'" : ''
+    """
+    '${meta.priva_binary}' task run --phase prioritization-splicing --bundle bundle ${familyArg} --table '${table}' --cpus ${task.cpus} --stub
+    """
+}
+
+process PRIORITIZE_UTR {
+    tag "${family ?: 'no pedigree'}"
+    label 'family'
+    publishDir "${params.outdir}/pipeline_info", mode: 'copy', overwrite: false, pattern: '*.provenance.json'
+    input:
+    tuple val(meta), val(family), path(table, stageAs: 'input.tsv'), path(bundle, stageAs: 'bundle/*')
+    output:
+    tuple val(meta), val(family), path('result/*.filtered.tsv'), emit: table
+    path('prioritization-utr*.provenance.json'), emit: provenance
+    script:
+    def familyArg = family ? "--family '${family}'" : ''
+    """
+    '${meta.priva_binary}' task run --phase prioritization-utr --bundle bundle ${familyArg} --table '${table}' --cpus ${task.cpus}
+    """
+    stub:
+    def familyArg = family ? "--family '${family}'" : ''
+    """
+    '${meta.priva_binary}' task run --phase prioritization-utr --bundle bundle ${familyArg} --table '${table}' --cpus ${task.cpus} --stub
+    """
+}
+
+process PRIORITIZE_JOIN {
+    tag "${family ?: 'no pedigree'}"
+    label 'family'
+    publishDir "${params.outdir}/pipeline_info", mode: 'copy', overwrite: false, pattern: '*.provenance.json'
+    input:
+    tuple val(meta), val(family), path(table, stageAs: 'input.tsv'), path(splicing, stageAs: 'splicing.tsv'), path(utr, stageAs: 'utr.tsv'), path(bundle, stageAs: 'bundle/*')
+    output:
+    tuple val(meta), val(family), path('result/*.filtered.tsv'), path('bundle/*', includeInputs: true), emit: table
+    path('prioritization-join*.provenance.json'), emit: provenance
+    script:
+    def familyArg = family ? "--family '${family}'" : ''
+    """
+    '${meta.priva_binary}' task run --phase prioritization-join --bundle bundle ${familyArg} --table '${table}' --splicing-table '${splicing}' --utr-table '${utr}' --cpus ${task.cpus}
+    """
+    stub:
+    def familyArg = family ? "--family '${family}'" : ''
+    """
+    '${meta.priva_binary}' task run --phase prioritization-join --bundle bundle ${familyArg} --table '${table}' --splicing-table '${splicing}' --utr-table '${utr}' --cpus ${task.cpus} --stub
+    """
+}
+
+process PRIORITIZE_ACMG {
     tag "${family ?: 'no pedigree'}"
     label 'family'
     publishDir "${params.outdir}/prioritization", mode: 'copy', overwrite: false, pattern: 'result/*.tsv'
     publishDir "${params.outdir}/pipeline_info", mode: 'copy', overwrite: false, pattern: '*.provenance.json'
     input:
-    tuple val(meta), val(family), path(vcf, stageAs: 'input.vcf.gz'), path(vcf_index, stageAs: 'input.vcf.gz.tbi'), path(cadd, stageAs: 'input.cadd.tsv'), path(bundle, stageAs: 'bundle/*')
+    tuple val(meta), val(family), path(table, stageAs: 'input.tsv'), path(bundle, stageAs: 'bundle/*')
     output:
     tuple val(meta), val(family), path('result/*.filtered.tsv'), path('result/*.filtered.acmg.tsv'), emit: tables
-    path('prioritization*.provenance.json'), emit: provenance
+    path('prioritization-acmg*.provenance.json'), emit: provenance
     script:
     def familyArg = family ? "--family '${family}'" : ''
     """
-    '${meta.priva_binary}' task run --phase prioritization --bundle bundle ${familyArg} --vcf '${vcf}' --vcf-index '${vcf_index}' --cadd '${cadd}' --cpus ${task.cpus}
+    '${meta.priva_binary}' task run --phase prioritization-acmg --bundle bundle ${familyArg} --table '${table}' --cpus ${task.cpus}
     """
     stub:
     def familyArg = family ? "--family '${family}'" : ''
     """
-    '${meta.priva_binary}' task run --phase prioritization --bundle bundle ${familyArg} --vcf '${vcf}' --vcf-index '${vcf_index}' --cadd '${cadd}' --cpus ${task.cpus} --stub
+    '${meta.priva_binary}' task run --phase prioritization-acmg --bundle bundle ${familyArg} --table '${table}' --cpus ${task.cpus} --stub
     """
 }

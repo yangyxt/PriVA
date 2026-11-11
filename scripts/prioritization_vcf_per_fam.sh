@@ -152,7 +152,31 @@ function assign_acmg_criteria () {
     # Preprocess step, interpret the UTR annotations
     interpret_utr_annotations ${input_tab} ${config_file} ${threads} || \
     { log "Failed to interpret UTR annotations for ${input_tab}"; return 1; }
-    
+
+    [[ -z ${fam_name} ]] && local acmg_fam_arg="" || local acmg_fam_arg="-f ${fam_name}"
+    acmg_assign_table -i ${input_tab} -c ${config_file} -t ${threads} ${acmg_fam_arg}
+}
+
+
+# The ACMG part of assign_acmg_criteria, for a table that already has its
+# splicing and UTR columns (the Nextflow prioritization-acmg task).
+function acmg_assign_table () {
+    local input_tab
+    local config_file
+    local fam_name
+    local threads
+    local OPTIND i c f t
+    while getopts i:c:f::t: args
+    do
+        case ${args} in
+            i) input_tab=$OPTARG ;;
+            c) config_file=$OPTARG ;;
+            f) fam_name=$OPTARG ;;
+            t) threads=$OPTARG ;;
+            *) echo "No argument passed. At least pass an argument specifying the input table" ;;
+        esac
+    done
+
     local mean_am_score_table=${BASE_DIR}/data/alphamissense/alphamissense_mean_score.tsv
     local ped_table=$(read_yaml ${config_file} "ped_file")
     local clinvar_aa_dict_pkl=$(read_yaml ${config_file} "clinvar_aa_stat")

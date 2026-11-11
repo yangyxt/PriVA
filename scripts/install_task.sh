@@ -7,7 +7,15 @@
 #                        --receipt FILE [--input RECEIPT]... [--stub]
 #   install_task.sh adopt --plan PLAN --step ID --lineage L --receipt FILE
 #   install_task.sh publish --registry R --plan PLAN --lineage L --folder F
-#                           [--input RECEIPT]... [--stub]
+#                           [--input RECEIPT]... [--pins PINS.json] [--stub]
+#   install_task.sh release --registry R --config USER --step ID --out FILE [--stub]
+#
+# release: asks a changing source for its current release (registry
+# "release": git commit, or the server's ETag, Last-Modified and size) and
+# writes {"step": ID, "release": TEXT}. plan --releases FILE... puts it in the
+# step's plan entry; a pinned step uses resource_root/pins.json instead
+# (--pins), unless it is listed in --refresh. publish --pins records the
+# releases of refreshed pinned steps there.
 #
 # plan: writes DIR/base.yaml (your configuration without any key an install
 # step writes, so each step resolves its own destinations) and DIR/plan.json
@@ -70,10 +78,12 @@ step_digest() {
 }
 
 cmd_plan() {
-    local registry config out adopt_config="" adopt="" run=""
+    local registry config out adopt_config="" adopt="" run="" pins="" refresh=""
+    local -a release_files=()
     while (($#)); do case $1 in
         --registry) registry=$2; shift 2 ;; --config) config=$2; shift 2 ;; --out) out=$2; shift 2 ;;
         --adopt-config) adopt_config=$2; shift 2 ;; --adopt) adopt=$2; shift 2 ;; --run) run=$2; shift 2 ;;
+        --pins) pins=$2; shift 2 ;; --refresh) refresh=$2; shift 2 ;; --releases) release_files+=("$2"); shift 2 ;;
         *) die "plan: unknown option $1" ;; esac; done
     [[ -r $registry && -r $config && -n $out ]] || die "plan needs --registry, --config and --out"
     mkdir -p "$out"; out=$(cd "$out" && pwd)
@@ -108,6 +118,18 @@ cmd_plan() {
             v=$(yaml_value "$config" "$k")
             [[ -n $v ]] && files=$(jq -c --arg k "$k" --arg i "$(identity "$v")" '. + [[$k, $i]]' <<< "$files")
         done
+        # The step's release: checked now, or for a pinned step its pin.
+        local release=null r
+        if [[ $(jq '.release // [] | length' <<< "$entry") != 0 ]]; then
+            if [[ $(jq '.pinned // false' <<< "$entry") == true && ",$refresh," != *",$id,"* ]]; then
+                release=$( { [[ -n $pins && -r $pins ]] && jq -c --arg id "$id" '.[$id] // "initial"' "$pins"; } || echo '"initial"')
+            else
+                for r in "${release_files[@]}"; do
+                    [[ $(jq -r .step "$r") == "$id" ]] && release=$(jq -c .release "$r")
+                done
+                [[ $release != null ]] || die "no release check result for step $id"
+            fi
+        fi
         adopted=null
         if [[ -n $adopt_config ]] && { [[ $adopt == all && ",$run," != *",$id,"* ]] || [[ ",$adopt," == *",$id,"* ]]; }; then
             adopted='{"keys":{},"identity":[]}'
@@ -119,11 +141,48 @@ cmd_plan() {
             done
         fi
         steps=$(jq -c --arg id "$id" --arg d "$digest" --argjson s "$settings" --argjson f "$files" \
-            --argjson a "$adopted" \
-            '. + {($id): {digest: $d, settings: $s, user_files: $f, adopt: $a}}' <<< "$steps")
+            --argjson a "$adopted" --argjson rel "$release" --argjson pinned "$(jq '.pinned // false' <<< "$entry")" \
+            '. + {($id): {digest: $d, settings: $s, user_files: $f, adopt: $a, release: $rel, pinned: $pinned}}' <<< "$steps")
     done
     jq -n --arg base "$base" --arg pi "$priva_identity" --argjson steps "$steps" \
         '{schema: 1, base_config: $base, priva_identity: $pi, steps: $steps}' > "$out/plan.json"
+}
+
+expand_url() { # expand_url TEMPLATE CONFIG: {grch}, {loftee_branch}, {KEY}
+    local text=$1 config=$2 assembly key
+    assembly=$(yaml_value "$config" assembly)
+    case $assembly in hg19|GRCh37) text=${text//\{grch\}/GRCh37}; text=${text//\{loftee_branch\}/master} ;;
+                      *) text=${text//\{grch\}/GRCh38}; text=${text//\{loftee_branch\}/grch38} ;; esac
+    while [[ $text =~ \{([A-Za-z0-9_]+)\} ]]; do
+        key=${BASH_REMATCH[1]}
+        text=${text//\{$key\}/$(yaml_value "$config" "$key")}
+    done
+    printf '%s' "$text"
+}
+
+cmd_release() {
+    local registry config id out stub=0
+    while (($#)); do case $1 in
+        --registry) registry=$2; shift 2 ;; --config) config=$2; shift 2 ;; --step) id=$2; shift 2 ;;
+        --out) out=$2; shift 2 ;; --stub) stub=1; shift ;; *) die "release: unknown option $1" ;; esac; done
+    local entry; entry=$(json_step "$registry" "$id") || exit 1
+    local parts="[]" spec kind url ref answer
+    while read -r spec; do
+        kind=$(jq -r .kind <<< "$spec"); url=$(expand_url "$(jq -r .url <<< "$spec")" "$config")
+        if ((stub)); then
+            answer="stub"
+        elif [[ $kind == git ]]; then
+            ref=$(expand_url "$(jq -r '.ref // "HEAD"' <<< "$spec")" "$config")
+            answer=$(git ls-remote "$url" "$ref" 2>/dev/null | head -1 | cut -f1)
+            [[ -n $answer ]] || die "$id: no commit for $ref at $url"
+        else
+            # Headers of the final response after redirects; none -> unversioned.
+            answer=$(curl -sIL --max-time 120 "$url" | tr -d '\r' | awk 'BEGIN{IGNORECASE=1} /^HTTP\//{e="";m="";l=""} /^etag:/{e=$0} /^last-modified:/{m=$0} /^content-length:/{l=$0} END{print e"|"m"|"l}')
+            [[ $answer == '||' ]] && answer="unversioned"
+        fi
+        parts=$(jq -c --arg u "$url" --arg a "$answer" '. + [{url: $u, release: $a}]' <<< "$parts")
+    done < <(jq -c '.release[]?' <<< "$entry")
+    jq -n --arg id "$id" --argjson parts "$parts" '{step: $id, release: ($parts | tostring), sources: $parts}' > "$out"
 }
 
 cmd_run() {
@@ -211,11 +270,12 @@ cmd_run() {
 # archives converted under F/data, and resources.lock.json naming every
 # step's lineage and keys.
 cmd_publish() {
-    local registry plan lineage folder stub=0
+    local registry plan lineage folder stub=0 pins=""
     local -a inputs=()
     while (($#)); do case $1 in
         --registry) registry=$2; shift 2 ;; --plan) plan=$2; shift 2 ;; --lineage) lineage=$2; shift 2 ;;
         --folder) folder=$2; shift 2 ;; --input) inputs+=("$2"); shift 2 ;; --stub) stub=1; shift ;;
+        --pins) pins=$2; shift 2 ;;
         *) die "publish: unknown option $1" ;; esac; done
     [[ -r $registry && -r $plan && -n $lineage && -n $folder ]] || die "publish needs all options"
     local work=$folder/data id r k v
@@ -251,6 +311,11 @@ cmd_publish() {
     fi
     set_key "$merged" vep_plugins_cachedir "$work/VEP_plugin_cache"
     cp "$merged" config.yaml
+    # Pinned steps keep the release they were built from until --refresh.
+    if [[ -n $pins ]]; then
+        local current='{}'; [[ -r $pins ]] && current=$(cat "$pins")
+        jq -c --argjson cur "$current" '$cur + ([.steps | to_entries[] | select(.value.pinned and .value.release != null and .value.release != "initial") | {(.key): .value.release}] | add // {})' "$plan" > "$pins.partial" && mv "$pins.partial" "$pins"
+    fi
     jq -n --arg l "$lineage" --arg done "$(date -Is)" --argjson steps "$steps" \
         --arg pi "$(jq -r .priva_identity "$plan")" \
         '{schema: 1, lineage: $l, published: $done, priva_identity: $pi, steps: $steps}' > resources.lock.json
@@ -273,5 +338,6 @@ case ${1:-} in
     run) shift; cmd_run "$@" ;;
     adopt) shift; cmd_adopt "$@" ;;
     publish) shift; cmd_publish "$@" ;;
-    *) die "usage: install_task.sh plan|run|adopt|publish ..." ;;
+    release) shift; cmd_release "$@" ;;
+    *) die "usage: install_task.sh plan|run|adopt|publish|release ..." ;;
 esac

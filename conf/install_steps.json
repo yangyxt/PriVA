@@ -1,5 +1,5 @@
 {
-  "about": "Install steps run as Nextflow tasks by workflows/install.nf. Each step calls existing installer functions from scripts/install_utils.sh with its own private configuration, whose cache_root is the step's lineage folder. Tokens: {config} is that configuration, {script_dir} the scripts folder, {KEY} the configuration value of KEY. needs: steps whose receipts supply input keys. outputs: keys the step must set; optional_outputs may be empty. user_inputs: keys naming files you supply, kept from your configuration and counted in lineage. settings: configuration values that change results (glob patterns allowed). copies: input keys the step rewrites in place; the runner copies them into the step's own folder first. writable: the folder stays writable after the step (otherwise it is made read-only). native: the step's results are computed by priva, so the priva source identity counts in its lineage.",
+  "about": "Install steps run as Nextflow tasks by workflows/install.nf. Each step calls existing installer functions from scripts/install_utils.sh with its own private configuration, whose cache_root is the step's lineage folder. Tokens: {config} is that configuration, {script_dir} the scripts folder, {KEY} the configuration value of KEY. needs: steps whose receipts supply input keys. outputs: keys the step must set; optional_outputs may be empty. user_inputs: keys naming files you supply, kept from your configuration and counted in lineage. settings: configuration values that change results (glob patterns allowed). copies: input keys the step rewrites in place; the runner copies them into the step's own folder first. writable: the folder stays writable after the step (otherwise it is made read-only). native: the step's results are computed by priva, so the priva source identity counts in its lineage. release: how to ask a changing source for its current release (git: the commit of url and ref; http: the server's ETag, Last-Modified and size), part of the step's lineage. Tokens {grch} (GRCh37 or GRCh38) and {loftee_branch} (master or grch38) follow the assembly. pinned: the release is kept in resource_root/pins.json and only checked again with --refresh STEP.",
   "folder_keys": [
     "cache_root",
     "vep_cache_dir",
@@ -62,6 +62,13 @@
       "settings": [
         "assembly",
         "vep_installed_version"
+      ],
+      "release": [
+        {
+          "kind": "git",
+          "url": "https://github.com/Ensembl/VEP_plugins.git",
+          "ref": "refs/heads/release/{vep_installed_version}"
+        }
       ]
     },
     {
@@ -117,7 +124,15 @@
       ],
       "settings": [
         "assembly"
-      ]
+      ],
+      "release": [
+        {
+          "kind": "git",
+          "url": "https://github.com/Ensembl/UTRannotator",
+          "ref": "HEAD"
+        }
+      ],
+      "pinned": true
     },
     {
       "id": "B2",
@@ -209,7 +224,14 @@
       "settings": [
         "assembly",
         "splicevault_url"
-      ]
+      ],
+      "release": [
+        {
+          "kind": "http",
+          "url": "{splicevault_url}"
+        }
+      ],
+      "pinned": true
     },
     {
       "id": "B6",
@@ -229,7 +251,14 @@
       "settings": [
         "assembly",
         "mavedb_url"
-      ]
+      ],
+      "release": [
+        {
+          "kind": "http",
+          "url": "{mavedb_url}"
+        }
+      ],
+      "pinned": true
     },
     {
       "id": "B7",
@@ -279,7 +308,15 @@
       ],
       "settings": [
         "assembly"
-      ]
+      ],
+      "release": [
+        {
+          "kind": "git",
+          "url": "https://github.com/konradjk/loftee",
+          "ref": "refs/heads/{loftee_branch}"
+        }
+      ],
+      "pinned": true
     },
     {
       "id": "B9",
@@ -412,7 +449,13 @@
         "assembly",
         "interpro_xml_gz_url"
       ],
-      "native": true
+      "native": true,
+      "release": [
+        {
+          "kind": "http",
+          "url": "{interpro_xml_gz_url}"
+        }
+      ]
     },
     {
       "id": "D1",
@@ -452,7 +495,17 @@
         "vep_installed_version",
         "clinvar_*"
       ],
-      "native": true
+      "native": true,
+      "release": [
+        {
+          "kind": "http",
+          "url": "https://ftp.ncbi.nlm.nih.gov/pub/clinvar/vcf_{grch}/clinvar.vcf.gz"
+        },
+        {
+          "kind": "http",
+          "url": "https://ftp.ncbi.nlm.nih.gov/pub/clinvar/tab_delimited/variant_summary.txt.gz"
+        }
+      ]
     },
     {
       "id": "C10",
@@ -563,7 +616,17 @@
         "assembly",
         "clingen_*url*"
       ],
-      "native": true
+      "native": true,
+      "release": [
+        {
+          "kind": "http",
+          "url": "https://erepo.clinicalgenome.org/evrepo/api/summary/classifications/download"
+        },
+        {
+          "kind": "http",
+          "url": "{clingen_dosage_grch38_url}"
+        }
+      ]
     },
     {
       "id": "E1",
@@ -639,7 +702,17 @@
         "g2p_ddg2p_url",
         "orphadata_gene_disease_url"
       ],
-      "native": true
+      "native": true,
+      "release": [
+        {
+          "kind": "http",
+          "url": "{g2p_ddg2p_url}"
+        },
+        {
+          "kind": "http",
+          "url": "{orphadata_gene_disease_url}"
+        }
+      ]
     },
     {
       "id": "F5",
@@ -659,7 +732,13 @@
         "gofcards_refresh_days",
         "vep_installed_version"
       ],
-      "native": true
+      "native": true,
+      "release": [
+        {
+          "kind": "http",
+          "url": "https://download.genemed.tech/upload/GainFunCards/gofcards_data_download.xlsx"
+        }
+      ]
     },
     {
       "id": "F6",
@@ -676,7 +755,21 @@
       "optional_outputs": [
         "clinvar_vcv_xml"
       ],
-      "settings": []
+      "settings": [],
+      "release": [
+        {
+          "kind": "http",
+          "url": "https://ftp.ncbi.nlm.nih.gov/pub/clinvar/xml/weekly_release/ClinVarVCVRelease_00-latest_weekly.xml.gz"
+        },
+        {
+          "kind": "http",
+          "url": "{g2p_ddg2p_url}"
+        },
+        {
+          "kind": "http",
+          "url": "https://panelapp.genomicsengland.co.uk/api/v1/panels/"
+        }
+      ]
     },
     {
       "id": "F7",

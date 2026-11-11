@@ -4,18 +4,38 @@
 // reused without running (storeDir), across runs and after the work folder
 // is deleted.
 
+// The current release of a changing source (registry "release"); pinned
+// sources are checked only when --refresh names them.
+process INSTALL_RELEASE {
+    tag "${id}"
+    label 'install_light'
+    input:
+    tuple val(id), path(config, stageAs: 'install_config.yaml')
+    output:
+    path("release_${id}.json"), emit: release
+    script:
+    """
+    bash '${projectDir}/scripts/install_task.sh' release --registry '${projectDir}/conf/install_steps.json' --config install_config.yaml --step ${id} --out 'release_${id}.json'
+    """
+    stub:
+    """
+    bash '${projectDir}/scripts/install_task.sh' release --registry '${projectDir}/conf/install_steps.json' --config install_config.yaml --step ${id} --out 'release_${id}.json' --stub
+    """
+}
+
 process INSTALL_PLAN {
     tag 'plan'
     label 'install_light'
     input:
-    tuple path(config, stageAs: 'install_config.yaml'), path(registry, stageAs: 'install_steps.json'), val(adopt_config), val(adopt), val(run_steps)
+    tuple path(config, stageAs: 'install_config.yaml'), path(registry, stageAs: 'install_steps.json'), val(adopt_config), val(adopt), val(run_steps), val(refresh), path(releases, stageAs: 'releases/*')
     output:
     path('plan/plan.json'), emit: plan
     script:
     def adoptArgs = adopt_config ? "--adopt-config '${adopt_config}' --adopt '${adopt}' --run '${run_steps}'" : ''
+    def releaseArgs = (releases instanceof List ? releases : [releases]).findAll { r -> r }.collect { r -> "--releases '${r}'" }.join(' ')
     """
     export PRIVA_BINARY='${params.priva_binary}'
-    bash '${projectDir}/scripts/install_task.sh' plan --registry '${registry}' --config '${config}' --out plan ${adoptArgs}
+    bash '${projectDir}/scripts/install_task.sh' plan --registry '${registry}' --config '${config}' --out plan ${adoptArgs} --pins '${params.resource_root}/pins.json' --refresh '${refresh}' ${releaseArgs}
     """
 }
 
@@ -66,12 +86,12 @@ process INSTALL_PUBLISH {
     def inputArgs = inputs.collect { "--input '${it}'" }.join(' ')
     """
     export PRIVA_BINARY='${params.priva_binary}'
-    bash '${projectDir}/scripts/install_task.sh' publish --registry '${projectDir}/conf/install_steps.json' --plan plan.json --lineage ${lineage} --folder '${params.resource_root}/PUBLISH/${lineage}' ${inputArgs}
+    bash '${projectDir}/scripts/install_task.sh' publish --registry '${projectDir}/conf/install_steps.json' --plan plan.json --lineage ${lineage} --folder '${params.resource_root}/PUBLISH/${lineage}' ${inputArgs} --pins '${params.resource_root}/pins.json'
     """
     stub:
     def inputArgs = inputs.collect { "--input '${it}'" }.join(' ')
     """
     export PRIVA_BINARY='${params.priva_binary}'
-    bash '${projectDir}/scripts/install_task.sh' publish --registry '${projectDir}/conf/install_steps.json' --plan plan.json --lineage ${lineage} --folder '${params.resource_root}/PUBLISH/${lineage}' ${inputArgs} --stub
+    bash '${projectDir}/scripts/install_task.sh' publish --registry '${projectDir}/conf/install_steps.json' --plan plan.json --lineage ${lineage} --folder '${params.resource_root}/PUBLISH/${lineage}' ${inputArgs} --pins '${params.resource_root}/pins.json' --stub
     """
 }

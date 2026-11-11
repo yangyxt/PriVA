@@ -152,9 +152,9 @@ outputs and scientific-profile requirements.'''
                 HUB_LOOKUP(toLookup)
                 def lookedUp = HUB_LOOKUP.out.split.map { run, source, lineage, known, fresh, freshIndex, count -> [run, source, lineage, known, fresh, freshIndex, count.trim().toInteger()] }
                 def withNew = lookedUp.filter { item -> item[6] > 0 }
-                ANNOTATE_STEP(withNew.filter { item -> item[1] != 'cadd' }.combine(preprocessed.map { item -> item[3] })
+                ANNOTATE_STEP(withNew.filter { item -> item[1] != 'cadd' }.combine(preprocessed.map { item -> [item[3]] })
                     .map { run, source, lineage, known, fresh, freshIndex, count, bundle -> [run, source, fresh, freshIndex, bundle] })
-                ANNOTATE_CADD(withNew.filter { item -> item[1] == 'cadd' }.combine(preprocessed.map { item -> item[3] })
+                ANNOTATE_CADD(withNew.filter { item -> item[1] == 'cadd' }.combine(preprocessed.map { item -> [item[3]] })
                     .map { run, source, lineage, known, fresh, freshIndex, count, bundle -> [run, fresh, freshIndex, bundle] })
                 def annotatedNew = ANNOTATE_STEP.out.annotated.map { run, source, output -> [source, output] }
                     .mix(ANNOTATE_CADD.out.cadd.map { run, output -> ['cadd', output] })

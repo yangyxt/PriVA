@@ -1,6 +1,6 @@
 nextflow.enable.dsl=2
 
-include { VALIDATE_INPUTS; ANNOTATE_COHORT; ANNOTATE_PREPROCESS; ANNOTATE_STEP; ANNOTATE_CADD; ANNOTATE_MERGE; HUB_LOOKUP; HUB_FILL; HUB_ADD; FILTER_FAMILY; PRIORITIZE_COMBINE; PRIORITIZE_SPLICING; PRIORITIZE_UTR; PRIORITIZE_JOIN; PRIORITIZE_ACMG } from './modules/local/compatibility'
+include { VALIDATE_INPUTS; ANNOTATE_COHORT; ANNOTATE_PREPROCESS; ANNOTATE_STEP; ANNOTATE_CADD; ANNOTATE_MERGE; HUB_LOOKUP; HUB_FILL; HUB_ADD; HUB_REFRESH_PLAN; FILTER_FAMILY; PRIORITIZE_COMBINE; PRIORITIZE_SPLICING; PRIORITIZE_UTR; PRIORITIZE_JOIN; PRIORITIZE_ACMG } from './modules/local/compatibility'
 include { INSTALL_RESOURCES } from './workflows/install'
 
 // The scientific source is deliberately retained during orchestration parity.
@@ -28,6 +28,48 @@ workflow {
     //   [--install_outdir FOLDER] [--adopt_config OLD.yaml --adopt all --run_steps ID,ID]
     if (params.action == 'install') {
         INSTALL_RESOURCES()
+    } else if (params.action == 'hub_refresh') {
+        // --action hub_refresh: after an install changed a resource, annotate
+        // the variants earlier hub folders hold into the current folders of
+        // the steps that changed, before the next cohort needs them.
+        ['annotation_hub', 'assembly', 'legacy_config', 'resource_manifest', 'software_id', 'outdir', 'priva_binary'].each { key ->
+            if (!params[key]) error "Required parameter --${key} is missing"
+        }
+        if (params.vcf_hub_mode != 'off' || params.cadd_hub_mode != 'off') error '--action hub_refresh needs --vcf_hub_mode off --cadd_hub_mode off'
+        def refreshRoot = new File(projectDir.toString()).canonicalFile
+        def refreshBinary = new File(params.priva_binary.toString()).canonicalFile
+        if (!refreshBinary.isFile() || !refreshBinary.canExecute()) error '--priva_binary must be an executable PriVA program'
+        def refreshMeta = [family: '', base: 'hub_refresh', assembly: params.assembly, mode: 'raw',
+                           source_root: refreshRoot.toString(), source_digest: sourceDigest(refreshRoot),
+                           software_id: params.software_id.toString(), vcf_hub_mode: 'off', cadd_hub_mode: 'off', task_boundary: 'off',
+                           priva_binary: refreshBinary.toString(),
+                           priva_sha256: java.security.MessageDigest.getInstance('SHA-256').digest(refreshBinary.bytes).encodeHex().toString()]
+        def refreshBundle = { row -> row.take(row.size() - 1) + [(row.last() instanceof List ? row.last() : [row.last()]).sort(false) { it.name }] }
+        def readPlan = { planFile -> new groovy.json.JsonSlurper().parse(planFile.toFile()) }
+        HUB_REFRESH_PLAN(Channel.of([refreshMeta, file(params.legacy_config, checkIfExists: true), file(params.resource_manifest, checkIfExists: true)]))
+        def planned = HUB_REFRESH_PLAN.out.plan
+        planned.subscribe { row -> log.info "Hub refresh: ${readPlan(row[3]).refresh ?: 'nothing to refresh'}" }
+        VALIDATE_INPUTS(planned.filter { row -> readPlan(row[3]).refresh }
+            .map { row -> [row[0], row[1], row[2], [], file(params.legacy_config), file(params.resource_manifest), []] })
+        def validated = VALIDATE_INPUTS.out.validated.map(refreshBundle)
+        def toLookup = validated.combine(planned.flatMap { row -> readPlan(row[3]).refresh.collect { source -> source.toString() } })
+            .map { run, vcf, index, cadd, bundle, source ->
+                def contract = new groovy.json.JsonSlurper().parse(bundle.find { f -> f.name == 'contract.json' }.toFile())
+                [run, source, contract.hub_lineages[source].toString(), vcf, index]
+            }
+        HUB_LOOKUP(toLookup)
+        def withNew = HUB_LOOKUP.out.split.map { run, source, lineage, known, fresh, freshIndex, count -> [run, source, lineage, known, fresh, freshIndex, count.trim().toInteger()] }
+            .filter { item -> item[6] > 0 }
+        def bundles = validated.map { item -> [item[4]] }
+        ANNOTATE_STEP(withNew.filter { item -> item[1] != 'cadd' }.combine(bundles)
+            .map { run, source, lineage, known, fresh, freshIndex, count, bundle -> [run, source, fresh, freshIndex, bundle] })
+        ANNOTATE_CADD(withNew.filter { item -> item[1] == 'cadd' }.combine(bundles)
+            .map { run, source, lineage, known, fresh, freshIndex, count, bundle -> [run, fresh, freshIndex, bundle] })
+        def annotatedNew = ANNOTATE_STEP.out.annotated.map { run, source, output -> [source, output] }
+            .mix(ANNOTATE_CADD.out.cadd.map { run, output -> ['cadd', output] })
+        HUB_ADD(withNew.map { run, source, lineage, known, fresh, freshIndex, count -> [source, run, lineage, fresh] }
+            .join(annotatedNew)
+            .map { source, run, lineage, fresh, output -> [run, source, lineage, fresh, output] })
     } else if (params.help) {
         log.info '''PriVA workflow
 Required: --input VCF.vcf.gz --assembly hg19|hg38
@@ -36,6 +78,8 @@ Required: --input VCF.vcf.gz --assembly hg19|hg38
           --priva_binary PRIVA_PROGRAM (runs the task contract: priva task)
 Install:  --action install --install_config CONFIG.yaml --resource_root FOLDER
           --priva_binary PRIVA_PROGRAM [--install_outdir FOLDER]
+Refresh:  --action hub_refresh --annotation_hub FOLDER with the run options above
+          (no --input): re-annotates stored variants for steps whose folder changed
 Optional: --ped COHORT.ped --family ID --mode raw|annotated
           --cadd ANNOTATED.cadd.tsv --vcf_index VCF.vcf.gz.tbi
           --vcf_hub_mode off|qualified-copy --cadd_hub_mode off|copy

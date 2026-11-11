@@ -153,6 +153,22 @@ process HUB_LOOKUP {
     """
 }
 
+// Hub refresh (--action hub_refresh): a VCF of the variants that earlier hub
+// folders hold for every step whose current folder is still empty.
+process HUB_REFRESH_PLAN {
+    tag 'plan'
+    label 'annotation_step'
+    input:
+    tuple val(meta), path(config, stageAs: 'legacy.yaml'), path(resources, stageAs: 'resources.json')
+    output:
+    tuple val(meta), path("refresh/${meta.base}.vcf.gz"), path("refresh/${meta.base}.vcf.gz.tbi"), path('refresh/plan.json'), emit: plan
+    script:
+    """
+    mkdir -p refresh
+    '${meta.priva_binary}' annotation-hub refresh-plan --hub '${params.annotation_hub}' --resources resources.json --legacy-root '${meta.source_root}' --vcf 'refresh/${meta.base}.vcf.gz' --plan refresh/plan.json
+    """
+}
+
 process HUB_FILL {
     tag "${source}"
     label 'annotation_step'

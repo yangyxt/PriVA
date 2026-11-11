@@ -19,12 +19,17 @@
 //!   CADD table) from the stored values and the step's output for the new
 //!   variants, in the preprocessed VCF's record order.
 //! - add: stores the step's results for the new variants as new files.
+//! - refresh-plan: for every step whose current folder (named by the lineages
+//!   validation would record) is empty while earlier folders of the step hold
+//!   files, writes a VCF of the variants those earlier folders hold, so the
+//!   hub refresh run can annotate them into the current folder before the
+//!   next cohort needs them. Earlier folders are never changed.
 use crate::cli::{Result, invalid};
 use crate::vcf_text::open_reader;
 use polars_core::prelude::*;
 use polars_io::parquet::write::KeyValueMetadata;
 use polars_io::prelude::*;
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fs::{self, File};
 use std::io::{BufRead, BufWriter, Write};
 use std::path::{Path, PathBuf};
@@ -33,6 +38,7 @@ use std::process::Command;
 const USAGE: &str = "usage: priva annotation-hub lookup --hub HUB --source SOURCE --lineage LINEAGE --vcf PREPROCESSED.vcf.gz --known KNOWN.parquet --new NEW.vcf.gz [--exclude-session SESSION]
        priva annotation-hub fill --source SOURCE --vcf PREPROCESSED.vcf.gz --known KNOWN.parquet --annotated STEP_OUTPUT --output OUTPUT
        priva annotation-hub add --hub HUB --source SOURCE --lineage LINEAGE --session SESSION --base NEW.vcf.gz --annotated STEP_OUTPUT
+       priva annotation-hub refresh-plan --hub HUB --resources RESOURCES.json --legacy-root CHECKOUT --vcf VARIANTS.vcf.gz --plan PLAN.json
 SOURCE is gnomad, clinvar, control, vep or cadd; for cadd the step output is the CADD table.";
 const SOURCES: [&str; 5] = ["gnomad", "clinvar", "control", "vep", "cadd"];
 const HEADER_KEY: &str = "priva.hub.header";
@@ -61,6 +67,15 @@ pub(crate) fn dispatch(args: &[String]) -> Result<()> {
             .map(String::as_str)
             .ok_or_else(|| invalid(format!("--{name} is required\n{USAGE}")))
     };
+    if command == "refresh-plan" {
+        return refresh_plan(
+            Path::new(get("hub")?),
+            Path::new(get("resources")?),
+            Path::new(get("legacy-root")?),
+            Path::new(get("vcf")?),
+            Path::new(get("plan")?),
+        );
+    }
     let source = get("source")?;
     if !SOURCES.contains(&source) {
         return Err(invalid(format!("unknown source {source:?}\n{USAGE}")));
@@ -624,6 +639,152 @@ fn add(
     eprintln!(
         "annotation-hub add {source}: {stored} variants stored under {}",
         folder.display()
+    );
+    Ok(())
+}
+
+fn subfolders(dir: &Path) -> Vec<String> {
+    let mut names: Vec<String> = fs::read_dir(dir)
+        .map(|entries| {
+            entries
+                .filter_map(|e| e.ok())
+                .filter(|e| e.path().is_dir())
+                .filter_map(|e| e.file_name().into_string().ok())
+                .collect()
+        })
+        .unwrap_or_default();
+    names.sort();
+    names
+}
+
+fn has_parts(folder: &Path) -> bool {
+    subfolders(folder).iter().any(|chrom| {
+        fs::read_dir(folder.join(chrom))
+            .map(|entries| {
+                entries.filter_map(|e| e.ok()).any(|e| {
+                    let name = e.file_name().to_string_lossy().into_owned();
+                    name.starts_with("part-") && name.ends_with(".parquet")
+                })
+            })
+            .unwrap_or(false)
+    })
+}
+
+/// Chromosome order for the refresh VCF: 1-22, X, Y, M, then others by name.
+fn chrom_rank(chrom: &str) -> (u32, String) {
+    let bare = chrom.strip_prefix("chr").unwrap_or(chrom);
+    let rank = match bare {
+        "X" => 23,
+        "Y" => 24,
+        "M" | "MT" => 25,
+        other => other.parse::<u32>().unwrap_or(26),
+    };
+    (rank, chrom.to_owned())
+}
+
+fn refresh_plan(
+    hub: &Path,
+    resources: &Path,
+    root: &Path,
+    vcf_out: &Path,
+    plan_out: &Path,
+) -> Result<()> {
+    use crate::json_text::Json;
+    use crate::nextflow_task::contract::{object, read_json, text, write_json};
+    let manifest = read_json(resources)?;
+    let lineages = crate::nextflow_task::hub_lineage::lineages(&manifest, root)?;
+    let mut variants: BTreeSet<((u32, String), u64, String, String)> = BTreeSet::new();
+    let mut steps = Vec::new();
+    for source in SOURCES {
+        let lineage = lineages
+            .get(source)
+            .and_then(Json::as_str)
+            .unwrap_or("off")
+            .to_owned();
+        let current = source_dir(hub, source, &lineage);
+        let earlier: Vec<String> = subfolders(&hub.join(source))
+            .into_iter()
+            .filter(|name| *name != lineage && has_parts(&hub.join(source).join(name)))
+            .collect();
+        let state = if lineage == "off" {
+            "no hub folder"
+        } else if has_parts(&current) {
+            "current"
+        } else if earlier.is_empty() {
+            "nothing stored yet"
+        } else {
+            "refresh"
+        };
+        let mut count = 0usize;
+        if state == "refresh" {
+            for old in &earlier {
+                let folder = hub.join(source).join(old);
+                let chroms: HashSet<String> = subfolders(&folder).into_iter().collect();
+                let (stored, _) = load(&folder, &chroms, None)?;
+                for (chrom, pos, reference, alt) in stored.into_keys() {
+                    let position = pos.parse::<u64>().map_err(|_| {
+                        invalid(format!("{source}: stored position {pos:?} is not a number"))
+                    })?;
+                    if variants.insert((chrom_rank(&chrom), position, reference, alt)) {
+                        count += 1;
+                    }
+                }
+            }
+        }
+        steps.push((
+            source.to_owned(),
+            object(vec![
+                ("lineage", text(lineage.clone())),
+                ("state", text(state)),
+                (
+                    "earlier",
+                    Json::Array(earlier.iter().cloned().map(text).collect()),
+                ),
+                ("variants_added", Json::Int(count as i128)),
+            ]),
+        ));
+    }
+    let refresh: Vec<Json> = steps
+        .iter()
+        .filter(|(_, step)| step.get("state").and_then(Json::as_str) == Some("refresh"))
+        .map(|(source, _)| text(source.clone()))
+        .collect();
+    let plain = PathBuf::from(format!("{}.plain.vcf", vcf_out.display()));
+    let mut out = BufWriter::new(File::create(&plain)?);
+    writeln!(out, "##fileformat=VCFv4.2")?;
+    let mut contigs: Vec<&(u32, String)> = variants.iter().map(|v| &v.0).collect();
+    contigs.dedup();
+    for (_, chrom) in contigs {
+        writeln!(out, "##contig=<ID={chrom}>")?;
+    }
+    writeln!(
+        out,
+        "##FORMAT=<ID=GT,Number=1,Type=String,Description=\"Genotype\">"
+    )?;
+    writeln!(
+        out,
+        "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\thub_refresh"
+    )?;
+    for ((_, chrom), pos, reference, alt) in &variants {
+        writeln!(
+            out,
+            "{chrom}\t{pos}\t.\t{reference}\t{alt}\t.\tPASS\t.\tGT\t0/1"
+        )?;
+    }
+    out.flush()?;
+    drop(out);
+    bgzip_and_index(&plain, vcf_out)?;
+    write_json(
+        plan_out,
+        &object(vec![
+            ("refresh", Json::Array(refresh)),
+            ("variants", Json::Int(variants.len() as i128)),
+            ("steps", Json::Object(steps)),
+        ]),
+    )?;
+    eprintln!(
+        "annotation-hub refresh-plan: {} variants to refresh",
+        variants.len()
     );
     Ok(())
 }

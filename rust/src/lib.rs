@@ -14,6 +14,7 @@ mod builder_table;
 mod cache_convert;
 mod cache_install;
 mod cache_resources;
+pub mod annotation_hub;
 pub mod cadd_hub;
 mod cli;
 mod clingen_map_builder;

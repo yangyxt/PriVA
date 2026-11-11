@@ -22,6 +22,11 @@ def sourceDigest(root) {
     digest.digest().encodeHex().toString()
 }
 
+// The plan HUB_REFRESH_PLAN writes: which steps to refresh, and how many variants.
+def readRefreshPlan(planFile) {
+    new groovy.json.JsonSlurper().parse(planFile.toFile())
+}
+
 workflow {
     // --action install builds every resource as its own task (workflows/install.nf):
     //   --install_config CONFIG.yaml --resource_root FOLDER --priva_binary PRIVA
@@ -45,14 +50,13 @@ workflow {
                            priva_binary: refreshBinary.toString(),
                            priva_sha256: java.security.MessageDigest.getInstance('SHA-256').digest(refreshBinary.bytes).encodeHex().toString()]
         def refreshBundle = { row -> row.take(row.size() - 1) + [(row.last() instanceof List ? row.last() : [row.last()]).sort(false) { it.name }] }
-        def readPlan = { planFile -> new groovy.json.JsonSlurper().parse(planFile.toFile()) }
         HUB_REFRESH_PLAN(Channel.of([refreshMeta, file(params.legacy_config, checkIfExists: true), file(params.resource_manifest, checkIfExists: true)]))
         def planned = HUB_REFRESH_PLAN.out.plan
-        planned.subscribe { row -> log.info "Hub refresh: ${readPlan(row[3]).refresh ?: 'nothing to refresh'}" }
-        VALIDATE_INPUTS(planned.filter { row -> readPlan(row[3]).refresh }
+        planned.subscribe { row -> log.info "Hub refresh: ${readRefreshPlan(row[3]).refresh ?: 'nothing to refresh'}" }
+        VALIDATE_INPUTS(planned.filter { row -> readRefreshPlan(row[3]).refresh }
             .map { row -> [row[0], row[1], row[2], [], file(params.legacy_config), file(params.resource_manifest), []] })
         def validated = VALIDATE_INPUTS.out.validated.map(refreshBundle)
-        def toLookup = validated.combine(planned.flatMap { row -> readPlan(row[3]).refresh.collect { source -> source.toString() } })
+        def toLookup = validated.combine(planned.flatMap { row -> readRefreshPlan(row[3]).refresh.collect { source -> source.toString() } })
             .map { run, vcf, index, cadd, bundle, source ->
                 def contract = new groovy.json.JsonSlurper().parse(bundle.find { f -> f.name == 'contract.json' }.toFile())
                 [run, source, contract.hub_lineages[source].toString(), vcf, index]

@@ -46,9 +46,12 @@ set_key() { # set_key FILE KEY VALUE: replace the key's line or append one
         printf '%s: %s\n' "$key" "$value" >> "$file"
     fi
 }
-identity() { # path size mtime, or "missing"
+identity() { # path size mtime for a file, path "folder" mtime for a folder, or "missing"
+    # A folder's size is not stable on StorNext (0, then 1, for an unchanged
+    # LOFTEE repository between two launches of job 1540691).
     local p=$1
-    if [[ -e $p ]]; then stat -L -c '%n %s %Y' -- "$p"; else echo "missing $p"; fi
+    if [[ -d $p ]]; then stat -L -c '%n folder %Y' -- "$p"
+    elif [[ -e $p ]]; then stat -L -c '%n %s %Y' -- "$p"; else echo "missing $p"; fi
 }
 
 # Every function a step's calls reach, by name, then a digest of their text,

@@ -2140,17 +2140,18 @@ function _gnomAD_fetch_chrom() {
 }
 
 # Install task of one chromosome (conf/install_steps.json C1_chrN): fetch it
-# into gnomad_vcf_dir and record it as gnomad_vcf_chrN.
+# into gnomad_vcf_dir and record it as gnomad_download_chrN (not gnomad_vcf_chrN:
+# gnomAD_install takes a set gnomad_vcf_chrX as a gnomAD family you selected).
 function gnomAD_download_chrom() {
     local config_file=${1} chr=${2} gnomAD_vcf_dir
     gnomAD_vcf_dir=$(read_yaml "${config_file}" "gnomad_vcf_dir") || return 1
     [[ -n $gnomAD_vcf_dir && $gnomAD_vcf_dir != null ]] || { log "ERROR: gnomad_vcf_dir is not set"; return 1; }
     mkdir -p "$gnomAD_vcf_dir" || return 1
     _gnomAD_fetch_chrom "$gnomAD_vcf_dir" "$chr" && \
-    update_or_append_yaml "${config_file}" "gnomad_vcf_chr${chr}" "${gnomAD_vcf_dir}/gnomad.joint.v4.1.sites.chr${chr}.vcf.bgz"
+    update_or_append_yaml "${config_file}" "gnomad_download_chr${chr}" "${gnomAD_vcf_dir}/gnomad.joint.v4.1.sites.chr${chr}.vcf.bgz"
 }
 
-# Install task C1: link the 24 chromosome downloads (gnomad_vcf_chrN, each in
+# Install task C1: link the 24 chromosome downloads (gnomad_download_chrN, each in
 # its own install folder) into gnomad_vcf_dir, where gnomAD_install finds them
 # complete and, for GRCh37, lifts them over.
 function gnomAD_collect_chroms() {
@@ -2158,7 +2159,7 @@ function gnomAD_collect_chroms() {
     gnomAD_vcf_dir=$(read_yaml "${config_file}" "gnomad_vcf_dir") || return 1
     mkdir -p "$gnomAD_vcf_dir" || return 1
     for chr in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 X Y; do
-        source=$(read_yaml "${config_file}" "gnomad_vcf_chr${chr}") || return 1
+        source=$(read_yaml "${config_file}" "gnomad_download_chr${chr}") || return 1
         [[ -s $source && -s $source.tbi ]] || { log "ERROR: gnomAD chromosome ${chr} download is missing: ${source}"; return 1; }
         ln -sfn "$source" "${gnomAD_vcf_dir}/gnomad.joint.v4.1.sites.chr${chr}.vcf.bgz" && \
         ln -sfn "$source.tbi" "${gnomAD_vcf_dir}/gnomad.joint.v4.1.sites.chr${chr}.vcf.bgz.tbi" || return 1

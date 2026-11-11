@@ -351,11 +351,11 @@
       ],
       "needs": [],
       "outputs": [
-        "gnomad_vcf_chr1"
+        "gnomad_download_chr1"
       ],
       "settings": [],
       "adopt_paths": {
-        "gnomad_vcf_chr1": "{gnomad_vcf_dir}/gnomad.joint.v4.1.sites.chr1.vcf.bgz"
+        "gnomad_download_chr1": "{gnomad_vcf_dir}/gnomad.joint.v4.1.sites.chr1.vcf.bgz"
       }
     },
     {
@@ -370,11 +370,11 @@
       ],
       "needs": [],
       "outputs": [
-        "gnomad_vcf_chr2"
+        "gnomad_download_chr2"
       ],
       "settings": [],
       "adopt_paths": {
-        "gnomad_vcf_chr2": "{gnomad_vcf_dir}/gnomad.joint.v4.1.sites.chr2.vcf.bgz"
+        "gnomad_download_chr2": "{gnomad_vcf_dir}/gnomad.joint.v4.1.sites.chr2.vcf.bgz"
       }
     },
     {
@@ -389,11 +389,11 @@
       ],
       "needs": [],
       "outputs": [
-        "gnomad_vcf_chr3"
+        "gnomad_download_chr3"
       ],
       "settings": [],
       "adopt_paths": {
-        "gnomad_vcf_chr3": "{gnomad_vcf_dir}/gnomad.joint.v4.1.sites.chr3.vcf.bgz"
+        "gnomad_download_chr3": "{gnomad_vcf_dir}/gnomad.joint.v4.1.sites.chr3.vcf.bgz"
       }
     },
     {
@@ -408,11 +408,11 @@
       ],
       "needs": [],
       "outputs": [
-        "gnomad_vcf_chr4"
+        "gnomad_download_chr4"
       ],
       "settings": [],
       "adopt_paths": {
-        "gnomad_vcf_chr4": "{gnomad_vcf_dir}/gnomad.joint.v4.1.sites.chr4.vcf.bgz"
+        "gnomad_download_chr4": "{gnomad_vcf_dir}/gnomad.joint.v4.1.sites.chr4.vcf.bgz"
       }
     },
     {
@@ -427,11 +427,11 @@
       ],
       "needs": [],
       "outputs": [
-        "gnomad_vcf_chr5"
+        "gnomad_download_chr5"
       ],
       "settings": [],
       "adopt_paths": {
-        "gnomad_vcf_chr5": "{gnomad_vcf_dir}/gnomad.joint.v4.1.sites.chr5.vcf.bgz"
+        "gnomad_download_chr5": "{gnomad_vcf_dir}/gnomad.joint.v4.1.sites.chr5.vcf.bgz"
       }
     },
     {
@@ -446,11 +446,11 @@
       ],
       "needs": [],
       "outputs": [
-        "gnomad_vcf_chr6"
+        "gnomad_download_chr6"
       ],
       "settings": [],
       "adopt_paths": {
-        "gnomad_vcf_chr6": "{gnomad_vcf_dir}/gnomad.joint.v4.1.sites.chr6.vcf.bgz"
+        "gnomad_download_chr6": "{gnomad_vcf_dir}/gnomad.joint.v4.1.sites.chr6.vcf.bgz"
       }
     },
     {
@@ -465,11 +465,11 @@
       ],
       "needs": [],
       "outputs": [
-        "gnomad_vcf_chr7"
+        "gnomad_download_chr7"
       ],
       "settings": [],
       "adopt_paths": {
-        "gnomad_vcf_chr7": "{gnomad_vcf_dir}/gnomad.joint.v4.1.sites.chr7.vcf.bgz"
+        "gnomad_download_chr7": "{gnomad_vcf_dir}/gnomad.joint.v4.1.sites.chr7.vcf.bgz"
       }
     },
     {
@@ -484,11 +484,11 @@
       ],
       "needs": [],
       "outputs": [
-        "gnomad_vcf_chr8"
+        "gnomad_download_chr8"
       ],
       "settings": [],
       "adopt_paths": {
-        "gnomad_vcf_chr8": "{gnomad_vcf_dir}/gnomad.joint.v4.1.sites.chr8.vcf.bgz"
+        "gnomad_download_chr8": "{gnomad_vcf_dir}/gnomad.joint.v4.1.sites.chr8.vcf.bgz"
       }
     },
     {
@@ -503,11 +503,11 @@
       ],
       "needs": [],
       "outputs": [
-        "gnomad_vcf_chr9"
+        "gnomad_download_chr9"
       ],
       "settings": [],
       "adopt_paths": {
-        "gnomad_vcf_chr9": "{gnomad_vcf_dir}/gnomad.joint.v4.1.sites.chr9.vcf.bgz"
+        "gnomad_download_chr9": "{gnomad_vcf_dir}/gnomad.joint.v4.1.sites.chr9.vcf.bgz"
       }
     },
     {
@@ -522,11 +522,11 @@
       ],
       "needs": [],
       "outputs": [
-        "gnomad_vcf_chr10"
+        "gnomad_download_chr10"
       ],
       "settings": [],
       "adopt_paths": {
-        "gnomad_vcf_chr10": "{gnomad_vcf_dir}/gnomad.joint.v4.1.sites.chr10.vcf.bgz"
+        "gnomad_download_chr10": "{gnomad_vcf_dir}/gnomad.joint.v4.1.sites.chr10.vcf.bgz"
       }
     },
     {
@@ -541,11 +541,11 @@
       ],
       "needs": [],
       "outputs": [
-        "gnomad_vcf_chr11"
+        "gnomad_download_chr11"
       ],
       "settings": [],
       "adopt_paths": {
-        "gnomad_vcf_chr11": "{gnomad_vcf_dir}/gnomad.joint.v4.1.sites.chr11.vcf.bgz"
+        "gnomad_download_chr11": "{gnomad_vcf_dir}/gnomad.joint.v4.1.sites.chr11.vcf.bgz"
       }
     },
     {
@@ -560,11 +560,11 @@
       ],
       "needs": [],
       "outputs": [
-        "gnomad_vcf_chr12"
+        "gnomad_download_chr12"
       ],
       "settings": [],
       "adopt_paths": {
-        "gnomad_vcf_chr12": "{gnomad_vcf_dir}/gnomad.joint.v4.1.sites.chr12.vcf.bgz"
+        "gnomad_download_chr12": "{gnomad_vcf_dir}/gnomad.joint.v4.1.sites.chr12.vcf.bgz"
       }
     },
     {
@@ -579,11 +579,11 @@
       ],
       "needs": [],
       "outputs": [
-        "gnomad_vcf_chr13"
+        "gnomad_download_chr13"
       ],
       "settings": [],
       "adopt_paths": {
-        "gnomad_vcf_chr13": "{gnomad_vcf_dir}/gnomad.joint.v4.1.sites.chr13.vcf.bgz"
+        "gnomad_download_chr13": "{gnomad_vcf_dir}/gnomad.joint.v4.1.sites.chr13.vcf.bgz"
       }
     },
     {
@@ -598,11 +598,11 @@
       ],
       "needs": [],
       "outputs": [
-        "gnomad_vcf_chr14"
+        "gnomad_download_chr14"
       ],
       "settings": [],
       "adopt_paths": {
-        "gnomad_vcf_chr14": "{gnomad_vcf_dir}/gnomad.joint.v4.1.sites.chr14.vcf.bgz"
+        "gnomad_download_chr14": "{gnomad_vcf_dir}/gnomad.joint.v4.1.sites.chr14.vcf.bgz"
       }
     },
     {
@@ -617,11 +617,11 @@
       ],
       "needs": [],
       "outputs": [
-        "gnomad_vcf_chr15"
+        "gnomad_download_chr15"
       ],
       "settings": [],
       "adopt_paths": {
-        "gnomad_vcf_chr15": "{gnomad_vcf_dir}/gnomad.joint.v4.1.sites.chr15.vcf.bgz"
+        "gnomad_download_chr15": "{gnomad_vcf_dir}/gnomad.joint.v4.1.sites.chr15.vcf.bgz"
       }
     },
     {
@@ -636,11 +636,11 @@
       ],
       "needs": [],
       "outputs": [
-        "gnomad_vcf_chr16"
+        "gnomad_download_chr16"
       ],
       "settings": [],
       "adopt_paths": {
-        "gnomad_vcf_chr16": "{gnomad_vcf_dir}/gnomad.joint.v4.1.sites.chr16.vcf.bgz"
+        "gnomad_download_chr16": "{gnomad_vcf_dir}/gnomad.joint.v4.1.sites.chr16.vcf.bgz"
       }
     },
     {
@@ -655,11 +655,11 @@
       ],
       "needs": [],
       "outputs": [
-        "gnomad_vcf_chr17"
+        "gnomad_download_chr17"
       ],
       "settings": [],
       "adopt_paths": {
-        "gnomad_vcf_chr17": "{gnomad_vcf_dir}/gnomad.joint.v4.1.sites.chr17.vcf.bgz"
+        "gnomad_download_chr17": "{gnomad_vcf_dir}/gnomad.joint.v4.1.sites.chr17.vcf.bgz"
       }
     },
     {
@@ -674,11 +674,11 @@
       ],
       "needs": [],
       "outputs": [
-        "gnomad_vcf_chr18"
+        "gnomad_download_chr18"
       ],
       "settings": [],
       "adopt_paths": {
-        "gnomad_vcf_chr18": "{gnomad_vcf_dir}/gnomad.joint.v4.1.sites.chr18.vcf.bgz"
+        "gnomad_download_chr18": "{gnomad_vcf_dir}/gnomad.joint.v4.1.sites.chr18.vcf.bgz"
       }
     },
     {
@@ -693,11 +693,11 @@
       ],
       "needs": [],
       "outputs": [
-        "gnomad_vcf_chr19"
+        "gnomad_download_chr19"
       ],
       "settings": [],
       "adopt_paths": {
-        "gnomad_vcf_chr19": "{gnomad_vcf_dir}/gnomad.joint.v4.1.sites.chr19.vcf.bgz"
+        "gnomad_download_chr19": "{gnomad_vcf_dir}/gnomad.joint.v4.1.sites.chr19.vcf.bgz"
       }
     },
     {
@@ -712,11 +712,11 @@
       ],
       "needs": [],
       "outputs": [
-        "gnomad_vcf_chr20"
+        "gnomad_download_chr20"
       ],
       "settings": [],
       "adopt_paths": {
-        "gnomad_vcf_chr20": "{gnomad_vcf_dir}/gnomad.joint.v4.1.sites.chr20.vcf.bgz"
+        "gnomad_download_chr20": "{gnomad_vcf_dir}/gnomad.joint.v4.1.sites.chr20.vcf.bgz"
       }
     },
     {
@@ -731,11 +731,11 @@
       ],
       "needs": [],
       "outputs": [
-        "gnomad_vcf_chr21"
+        "gnomad_download_chr21"
       ],
       "settings": [],
       "adopt_paths": {
-        "gnomad_vcf_chr21": "{gnomad_vcf_dir}/gnomad.joint.v4.1.sites.chr21.vcf.bgz"
+        "gnomad_download_chr21": "{gnomad_vcf_dir}/gnomad.joint.v4.1.sites.chr21.vcf.bgz"
       }
     },
     {
@@ -750,11 +750,11 @@
       ],
       "needs": [],
       "outputs": [
-        "gnomad_vcf_chr22"
+        "gnomad_download_chr22"
       ],
       "settings": [],
       "adopt_paths": {
-        "gnomad_vcf_chr22": "{gnomad_vcf_dir}/gnomad.joint.v4.1.sites.chr22.vcf.bgz"
+        "gnomad_download_chr22": "{gnomad_vcf_dir}/gnomad.joint.v4.1.sites.chr22.vcf.bgz"
       }
     },
     {
@@ -769,11 +769,11 @@
       ],
       "needs": [],
       "outputs": [
-        "gnomad_vcf_chrX"
+        "gnomad_download_chrX"
       ],
       "settings": [],
       "adopt_paths": {
-        "gnomad_vcf_chrX": "{gnomad_vcf_dir}/gnomad.joint.v4.1.sites.chrX.vcf.bgz"
+        "gnomad_download_chrX": "{gnomad_vcf_dir}/gnomad.joint.v4.1.sites.chrX.vcf.bgz"
       }
     },
     {
@@ -788,11 +788,11 @@
       ],
       "needs": [],
       "outputs": [
-        "gnomad_vcf_chrY"
+        "gnomad_download_chrY"
       ],
       "settings": [],
       "adopt_paths": {
-        "gnomad_vcf_chrY": "{gnomad_vcf_dir}/gnomad.joint.v4.1.sites.chrY.vcf.bgz"
+        "gnomad_download_chrY": "{gnomad_vcf_dir}/gnomad.joint.v4.1.sites.chrY.vcf.bgz"
       }
     },
     {

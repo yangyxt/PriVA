@@ -1,6 +1,9 @@
 //! The annotation hub folder name (lineage) of each annotation step: a hash
 //! of the step's name, the text of the annotation script it runs, and the
-//! resource records of every resource that step reads. A change to any of
+//! identity of every resource that step reads. A resource's identity leaves
+//! its path out, so moving the checkout or the caches keeps the folder: a file
+//! inside the PriVA checkout (bundled data) counts by its content, any other
+//! by its size and recorded SHA-256, or its size and modification time. A change to any of
 //! them gives a new, empty hub folder, so stored results are never reused
 //! with other resources or code. The control cohort step has no folder
 //! ("off") when its counts come from the cohort itself (no control VCF).
@@ -47,6 +50,34 @@ fn reads(source: &str, key: &str) -> bool {
     }
 }
 
+/// A resource record without its path: content digest for files inside the
+/// checkout, else size with the recorded digest or the modification time.
+fn identity(record: &Json, root: &Path) -> Result<Json> {
+    let field = |name: &str| record.get(name).cloned().unwrap_or(Json::Null);
+    let resolved = record
+        .get("resolved_path")
+        .and_then(Json::as_str)
+        .map(Path::new);
+    let canonical_root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+    if let Some(path) = resolved.filter(|p| p.starts_with(&canonical_root) && p.is_file()) {
+        return Ok(object(vec![(
+            "sha256",
+            text(crate::sha256::sha256_file(path)?),
+        )]));
+    }
+    let digest = field("sha256");
+    let marker = if matches!(digest, Json::Null) {
+        field("mtime_ns")
+    } else {
+        digest
+    };
+    Ok(object(vec![
+        ("type", field("type")),
+        ("size", field("size")),
+        ("marker", marker),
+    ]))
+}
+
 /// {source: lineage} for the five annotation steps.
 pub(crate) fn lineages(manifest: &Json, root: &Path) -> Result<Json> {
     let mut code = Vec::new();
@@ -64,11 +95,12 @@ pub(crate) fn lineages(manifest: &Json, root: &Path) -> Result<Json> {
     };
     let mut out = Vec::new();
     for source in SOURCES {
-        let used: Vec<(String, Json)> = resources
-            .iter()
-            .filter(|(key, _)| reads(source, key.split('/').next().unwrap_or(key)))
-            .cloned()
-            .collect();
+        let mut used = Vec::new();
+        for (key, record) in &resources {
+            if reads(source, key.split('/').next().unwrap_or(key)) {
+                used.push((key.clone(), identity(record, root)?));
+            }
+        }
         let lineage = if source == "control" && used.is_empty() {
             "off".to_owned()
         } else {
@@ -132,6 +164,27 @@ mod tests {
         assert_eq!(
             lineage(&before, "clinvar"),
             lineage(&vep_changed, "clinvar")
+        );
+    }
+
+    #[test]
+    fn moving_a_resource_keeps_its_lineage() {
+        let record = |path: &str| {
+            object(vec![
+                ("path", text(path)),
+                ("resolved_path", text(path)),
+                ("size", Json::Int(5)),
+                ("mtime_ns", Json::Int(7)),
+            ])
+        };
+        let at = |path: &str| {
+            let resources = Json::Object(vec![("clinvar_vcf".into(), record(path))]);
+            let manifest = Json::Object(vec![("resources".into(), resources)]);
+            lineages(&manifest, &std::env::temp_dir()).unwrap()
+        };
+        assert_eq!(
+            lineage(&at("/old/clinvar.vcf.gz"), "clinvar"),
+            lineage(&at("/new/c.vcf.gz"), "clinvar")
         );
     }
 

@@ -135,6 +135,15 @@ cmd_plan() {
             adopted='{"keys":{},"identity":[]}'
             for k in $(jq -r '.outputs[], .optional_outputs[]?' <<< "$entry"); do
                 v=$(yaml_value "$adopt_config" "$k")
+                # An older installation may not name this output (registry
+                # adopt_paths gives where its installer put the file).
+                if [[ -z $v ]]; then
+                    v=$(jq -r --arg k "$k" '.adopt_paths[$k] // empty' <<< "$entry")
+                    while [[ $v =~ \{([A-Za-z0-9_]+)\} ]]; do
+                        v=${v//\{${BASH_REMATCH[1]}\}/$(yaml_value "$adopt_config" "${BASH_REMATCH[1]}")}
+                    done
+                    [[ -n $v && -e $v ]] || v=
+                fi
                 [[ -n $v ]] || continue
                 adopted=$(jq -c --arg k "$k" --arg v "$v" --arg i "$(identity "$v")" \
                     '.keys += {($k): $v} | .identity += [$i]' <<< "$adopted")

@@ -1,5 +1,5 @@
 {
-  "about": "Install steps run as Nextflow tasks by workflows/install.nf. Each step calls existing installer functions from scripts/install_utils.sh with its own private configuration, whose cache_root is the step's lineage folder. Tokens: {config} is that configuration, {script_dir} the scripts folder, {KEY} the configuration value of KEY. needs: steps whose receipts supply input keys. outputs: keys the step must set; optional_outputs may be empty. user_inputs: keys naming files you supply, kept from your configuration and counted in lineage. settings: configuration values that change results (glob patterns allowed). copies: input keys the step rewrites in place; the runner copies them into the step's own folder first. writable: the folder stays writable after the step (otherwise it is made read-only). native: the step's results are computed by priva, so the priva source identity counts in its lineage. release: how to ask a changing source for its current release (git: the commit of url and ref; http: the server's ETag, Last-Modified and size), part of the step's lineage. Tokens {grch} (GRCh37 or GRCh38) and {loftee_branch} (master or grch38) follow the assembly. pinned: the release is kept in resource_root/pins.json and only checked again with --refresh STEP.",
+  "about": "Install steps run as Nextflow tasks by workflows/install.nf. Each step calls existing installer functions from scripts/install_utils.sh with its own private configuration, whose cache_root is the step's lineage folder. Tokens: {config} is that configuration, {script_dir} the scripts folder, {KEY} the configuration value of KEY. needs: steps whose receipts supply input keys. outputs: keys the step must set; optional_outputs may be empty. user_inputs: keys naming files you supply, kept from your configuration and counted in lineage. settings: configuration values that change results (glob patterns allowed). copies: input keys the step rewrites in place; the runner copies them into the step's own folder first. writable: the folder stays writable after the step (otherwise it is made read-only). native: the step's results are computed by priva, so the priva source identity counts in its lineage. release: how to ask a changing source for its current release (git: the commit of url and ref; http: the server's ETag, Last-Modified and size), part of the step's lineage. Tokens {grch} (GRCh37 or GRCh38) and {loftee_branch} (master or grch38) follow the assembly. adopt_paths: where an older installation that does not name an output key put that file, for --adopt ({KEY} from the old configuration). pinned: the release is kept in resource_root/pins.json and only checked again with --refresh STEP.",
   "folder_keys": [
     "cache_root",
     "vep_cache_dir",
@@ -340,9 +340,469 @@
       ]
     },
     {
+      "id": "C1_chr1",
+      "name": "GNOMAD_DOWNLOAD_CHR1",
+      "calls": [
+        [
+          "gnomAD_download_chrom",
+          "{config}",
+          "1"
+        ]
+      ],
+      "needs": [],
+      "outputs": [
+        "gnomad_vcf_chr1"
+      ],
+      "settings": [],
+      "adopt_paths": {
+        "gnomad_vcf_chr1": "{gnomad_vcf_dir}/gnomad.joint.v4.1.sites.chr1.vcf.bgz"
+      }
+    },
+    {
+      "id": "C1_chr2",
+      "name": "GNOMAD_DOWNLOAD_CHR2",
+      "calls": [
+        [
+          "gnomAD_download_chrom",
+          "{config}",
+          "2"
+        ]
+      ],
+      "needs": [],
+      "outputs": [
+        "gnomad_vcf_chr2"
+      ],
+      "settings": [],
+      "adopt_paths": {
+        "gnomad_vcf_chr2": "{gnomad_vcf_dir}/gnomad.joint.v4.1.sites.chr2.vcf.bgz"
+      }
+    },
+    {
+      "id": "C1_chr3",
+      "name": "GNOMAD_DOWNLOAD_CHR3",
+      "calls": [
+        [
+          "gnomAD_download_chrom",
+          "{config}",
+          "3"
+        ]
+      ],
+      "needs": [],
+      "outputs": [
+        "gnomad_vcf_chr3"
+      ],
+      "settings": [],
+      "adopt_paths": {
+        "gnomad_vcf_chr3": "{gnomad_vcf_dir}/gnomad.joint.v4.1.sites.chr3.vcf.bgz"
+      }
+    },
+    {
+      "id": "C1_chr4",
+      "name": "GNOMAD_DOWNLOAD_CHR4",
+      "calls": [
+        [
+          "gnomAD_download_chrom",
+          "{config}",
+          "4"
+        ]
+      ],
+      "needs": [],
+      "outputs": [
+        "gnomad_vcf_chr4"
+      ],
+      "settings": [],
+      "adopt_paths": {
+        "gnomad_vcf_chr4": "{gnomad_vcf_dir}/gnomad.joint.v4.1.sites.chr4.vcf.bgz"
+      }
+    },
+    {
+      "id": "C1_chr5",
+      "name": "GNOMAD_DOWNLOAD_CHR5",
+      "calls": [
+        [
+          "gnomAD_download_chrom",
+          "{config}",
+          "5"
+        ]
+      ],
+      "needs": [],
+      "outputs": [
+        "gnomad_vcf_chr5"
+      ],
+      "settings": [],
+      "adopt_paths": {
+        "gnomad_vcf_chr5": "{gnomad_vcf_dir}/gnomad.joint.v4.1.sites.chr5.vcf.bgz"
+      }
+    },
+    {
+      "id": "C1_chr6",
+      "name": "GNOMAD_DOWNLOAD_CHR6",
+      "calls": [
+        [
+          "gnomAD_download_chrom",
+          "{config}",
+          "6"
+        ]
+      ],
+      "needs": [],
+      "outputs": [
+        "gnomad_vcf_chr6"
+      ],
+      "settings": [],
+      "adopt_paths": {
+        "gnomad_vcf_chr6": "{gnomad_vcf_dir}/gnomad.joint.v4.1.sites.chr6.vcf.bgz"
+      }
+    },
+    {
+      "id": "C1_chr7",
+      "name": "GNOMAD_DOWNLOAD_CHR7",
+      "calls": [
+        [
+          "gnomAD_download_chrom",
+          "{config}",
+          "7"
+        ]
+      ],
+      "needs": [],
+      "outputs": [
+        "gnomad_vcf_chr7"
+      ],
+      "settings": [],
+      "adopt_paths": {
+        "gnomad_vcf_chr7": "{gnomad_vcf_dir}/gnomad.joint.v4.1.sites.chr7.vcf.bgz"
+      }
+    },
+    {
+      "id": "C1_chr8",
+      "name": "GNOMAD_DOWNLOAD_CHR8",
+      "calls": [
+        [
+          "gnomAD_download_chrom",
+          "{config}",
+          "8"
+        ]
+      ],
+      "needs": [],
+      "outputs": [
+        "gnomad_vcf_chr8"
+      ],
+      "settings": [],
+      "adopt_paths": {
+        "gnomad_vcf_chr8": "{gnomad_vcf_dir}/gnomad.joint.v4.1.sites.chr8.vcf.bgz"
+      }
+    },
+    {
+      "id": "C1_chr9",
+      "name": "GNOMAD_DOWNLOAD_CHR9",
+      "calls": [
+        [
+          "gnomAD_download_chrom",
+          "{config}",
+          "9"
+        ]
+      ],
+      "needs": [],
+      "outputs": [
+        "gnomad_vcf_chr9"
+      ],
+      "settings": [],
+      "adopt_paths": {
+        "gnomad_vcf_chr9": "{gnomad_vcf_dir}/gnomad.joint.v4.1.sites.chr9.vcf.bgz"
+      }
+    },
+    {
+      "id": "C1_chr10",
+      "name": "GNOMAD_DOWNLOAD_CHR10",
+      "calls": [
+        [
+          "gnomAD_download_chrom",
+          "{config}",
+          "10"
+        ]
+      ],
+      "needs": [],
+      "outputs": [
+        "gnomad_vcf_chr10"
+      ],
+      "settings": [],
+      "adopt_paths": {
+        "gnomad_vcf_chr10": "{gnomad_vcf_dir}/gnomad.joint.v4.1.sites.chr10.vcf.bgz"
+      }
+    },
+    {
+      "id": "C1_chr11",
+      "name": "GNOMAD_DOWNLOAD_CHR11",
+      "calls": [
+        [
+          "gnomAD_download_chrom",
+          "{config}",
+          "11"
+        ]
+      ],
+      "needs": [],
+      "outputs": [
+        "gnomad_vcf_chr11"
+      ],
+      "settings": [],
+      "adopt_paths": {
+        "gnomad_vcf_chr11": "{gnomad_vcf_dir}/gnomad.joint.v4.1.sites.chr11.vcf.bgz"
+      }
+    },
+    {
+      "id": "C1_chr12",
+      "name": "GNOMAD_DOWNLOAD_CHR12",
+      "calls": [
+        [
+          "gnomAD_download_chrom",
+          "{config}",
+          "12"
+        ]
+      ],
+      "needs": [],
+      "outputs": [
+        "gnomad_vcf_chr12"
+      ],
+      "settings": [],
+      "adopt_paths": {
+        "gnomad_vcf_chr12": "{gnomad_vcf_dir}/gnomad.joint.v4.1.sites.chr12.vcf.bgz"
+      }
+    },
+    {
+      "id": "C1_chr13",
+      "name": "GNOMAD_DOWNLOAD_CHR13",
+      "calls": [
+        [
+          "gnomAD_download_chrom",
+          "{config}",
+          "13"
+        ]
+      ],
+      "needs": [],
+      "outputs": [
+        "gnomad_vcf_chr13"
+      ],
+      "settings": [],
+      "adopt_paths": {
+        "gnomad_vcf_chr13": "{gnomad_vcf_dir}/gnomad.joint.v4.1.sites.chr13.vcf.bgz"
+      }
+    },
+    {
+      "id": "C1_chr14",
+      "name": "GNOMAD_DOWNLOAD_CHR14",
+      "calls": [
+        [
+          "gnomAD_download_chrom",
+          "{config}",
+          "14"
+        ]
+      ],
+      "needs": [],
+      "outputs": [
+        "gnomad_vcf_chr14"
+      ],
+      "settings": [],
+      "adopt_paths": {
+        "gnomad_vcf_chr14": "{gnomad_vcf_dir}/gnomad.joint.v4.1.sites.chr14.vcf.bgz"
+      }
+    },
+    {
+      "id": "C1_chr15",
+      "name": "GNOMAD_DOWNLOAD_CHR15",
+      "calls": [
+        [
+          "gnomAD_download_chrom",
+          "{config}",
+          "15"
+        ]
+      ],
+      "needs": [],
+      "outputs": [
+        "gnomad_vcf_chr15"
+      ],
+      "settings": [],
+      "adopt_paths": {
+        "gnomad_vcf_chr15": "{gnomad_vcf_dir}/gnomad.joint.v4.1.sites.chr15.vcf.bgz"
+      }
+    },
+    {
+      "id": "C1_chr16",
+      "name": "GNOMAD_DOWNLOAD_CHR16",
+      "calls": [
+        [
+          "gnomAD_download_chrom",
+          "{config}",
+          "16"
+        ]
+      ],
+      "needs": [],
+      "outputs": [
+        "gnomad_vcf_chr16"
+      ],
+      "settings": [],
+      "adopt_paths": {
+        "gnomad_vcf_chr16": "{gnomad_vcf_dir}/gnomad.joint.v4.1.sites.chr16.vcf.bgz"
+      }
+    },
+    {
+      "id": "C1_chr17",
+      "name": "GNOMAD_DOWNLOAD_CHR17",
+      "calls": [
+        [
+          "gnomAD_download_chrom",
+          "{config}",
+          "17"
+        ]
+      ],
+      "needs": [],
+      "outputs": [
+        "gnomad_vcf_chr17"
+      ],
+      "settings": [],
+      "adopt_paths": {
+        "gnomad_vcf_chr17": "{gnomad_vcf_dir}/gnomad.joint.v4.1.sites.chr17.vcf.bgz"
+      }
+    },
+    {
+      "id": "C1_chr18",
+      "name": "GNOMAD_DOWNLOAD_CHR18",
+      "calls": [
+        [
+          "gnomAD_download_chrom",
+          "{config}",
+          "18"
+        ]
+      ],
+      "needs": [],
+      "outputs": [
+        "gnomad_vcf_chr18"
+      ],
+      "settings": [],
+      "adopt_paths": {
+        "gnomad_vcf_chr18": "{gnomad_vcf_dir}/gnomad.joint.v4.1.sites.chr18.vcf.bgz"
+      }
+    },
+    {
+      "id": "C1_chr19",
+      "name": "GNOMAD_DOWNLOAD_CHR19",
+      "calls": [
+        [
+          "gnomAD_download_chrom",
+          "{config}",
+          "19"
+        ]
+      ],
+      "needs": [],
+      "outputs": [
+        "gnomad_vcf_chr19"
+      ],
+      "settings": [],
+      "adopt_paths": {
+        "gnomad_vcf_chr19": "{gnomad_vcf_dir}/gnomad.joint.v4.1.sites.chr19.vcf.bgz"
+      }
+    },
+    {
+      "id": "C1_chr20",
+      "name": "GNOMAD_DOWNLOAD_CHR20",
+      "calls": [
+        [
+          "gnomAD_download_chrom",
+          "{config}",
+          "20"
+        ]
+      ],
+      "needs": [],
+      "outputs": [
+        "gnomad_vcf_chr20"
+      ],
+      "settings": [],
+      "adopt_paths": {
+        "gnomad_vcf_chr20": "{gnomad_vcf_dir}/gnomad.joint.v4.1.sites.chr20.vcf.bgz"
+      }
+    },
+    {
+      "id": "C1_chr21",
+      "name": "GNOMAD_DOWNLOAD_CHR21",
+      "calls": [
+        [
+          "gnomAD_download_chrom",
+          "{config}",
+          "21"
+        ]
+      ],
+      "needs": [],
+      "outputs": [
+        "gnomad_vcf_chr21"
+      ],
+      "settings": [],
+      "adopt_paths": {
+        "gnomad_vcf_chr21": "{gnomad_vcf_dir}/gnomad.joint.v4.1.sites.chr21.vcf.bgz"
+      }
+    },
+    {
+      "id": "C1_chr22",
+      "name": "GNOMAD_DOWNLOAD_CHR22",
+      "calls": [
+        [
+          "gnomAD_download_chrom",
+          "{config}",
+          "22"
+        ]
+      ],
+      "needs": [],
+      "outputs": [
+        "gnomad_vcf_chr22"
+      ],
+      "settings": [],
+      "adopt_paths": {
+        "gnomad_vcf_chr22": "{gnomad_vcf_dir}/gnomad.joint.v4.1.sites.chr22.vcf.bgz"
+      }
+    },
+    {
+      "id": "C1_chrX",
+      "name": "GNOMAD_DOWNLOAD_CHRX",
+      "calls": [
+        [
+          "gnomAD_download_chrom",
+          "{config}",
+          "X"
+        ]
+      ],
+      "needs": [],
+      "outputs": [
+        "gnomad_vcf_chrX"
+      ],
+      "settings": [],
+      "adopt_paths": {
+        "gnomad_vcf_chrX": "{gnomad_vcf_dir}/gnomad.joint.v4.1.sites.chrX.vcf.bgz"
+      }
+    },
+    {
+      "id": "C1_chrY",
+      "name": "GNOMAD_DOWNLOAD_CHRY",
+      "calls": [
+        [
+          "gnomAD_download_chrom",
+          "{config}",
+          "Y"
+        ]
+      ],
+      "needs": [],
+      "outputs": [
+        "gnomad_vcf_chrY"
+      ],
+      "settings": [],
+      "adopt_paths": {
+        "gnomad_vcf_chrY": "{gnomad_vcf_dir}/gnomad.joint.v4.1.sites.chrY.vcf.bgz"
+      }
+    },
+    {
       "id": "C1",
       "name": "GNOMAD",
       "calls": [
+        [
+          "gnomAD_collect_chroms",
+          "{config}"
+        ],
         [
           "gnomAD_install",
           "{config}",
@@ -350,7 +810,31 @@
         ]
       ],
       "needs": [
-        "A1"
+        "A1",
+        "C1_chr1",
+        "C1_chr2",
+        "C1_chr3",
+        "C1_chr4",
+        "C1_chr5",
+        "C1_chr6",
+        "C1_chr7",
+        "C1_chr8",
+        "C1_chr9",
+        "C1_chr10",
+        "C1_chr11",
+        "C1_chr12",
+        "C1_chr13",
+        "C1_chr14",
+        "C1_chr15",
+        "C1_chr16",
+        "C1_chr17",
+        "C1_chr18",
+        "C1_chr19",
+        "C1_chr20",
+        "C1_chr21",
+        "C1_chr22",
+        "C1_chrX",
+        "C1_chrY"
       ],
       "outputs": [
         "gnomad_vcf_chrX"

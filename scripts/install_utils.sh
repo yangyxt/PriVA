@@ -2114,6 +2114,57 @@ function priva_reverse_chain_file() {
 }
 
 
+# One gnomAD v4.1 joint sites chromosome in DIR: kept when it is a valid VCF,
+# downloaded otherwise; an index older than its VCF is rebuilt (wget keeps the
+# server times, so a fresh download can have an older index).
+function _gnomAD_fetch_chrom() {
+    local gnomAD_vcf_dir=${1} chr=${2}
+    local url=https://storage.googleapis.com/gcp-public-data--gnomad/release/4.1/vcf/joint/gnomad.joint.v4.1.sites.chr${chr}.vcf.bgz
+    local vcf=${gnomAD_vcf_dir}/gnomad.joint.v4.1.sites.chr${chr}.vcf.bgz
+    log "About to download the gnomAD v4.1 files for chr${chr} from the url ${url}"
+    if check_vcf_validity "${vcf}"; then
+        log "The gnomAD v4.1 file for chr${chr} is already downloaded to ${gnomAD_vcf_dir} and updated"
+    else
+        log "The gnomAD v4.1 file for chr${chr} (${vcf}) is not downloaded or not updated, now we start to download the files"
+        wget "${url}" -O "${vcf}" && \
+        wget "${url}.tbi" -O "${vcf}.tbi" || \
+        { log "Failed to download gnomAD chromosome ${chr}"; return 1; }
+        check_vcf_validity "${vcf}" || \
+        { log "Downloaded gnomAD chromosome ${chr} is invalid"; return 1; }
+    fi
+    if [[ ${vcf}.tbi -ot ${vcf} ]]; then
+        log "The index file is not updated, now we start to index the file"
+        tabix -f -p vcf "${vcf}" || \
+        { log "Failed to index gnomAD chromosome ${chr}"; return 1; }
+    fi
+}
+
+# Install task of one chromosome (conf/install_steps.json C1_chrN): fetch it
+# into gnomad_vcf_dir and record it as gnomad_vcf_chrN.
+function gnomAD_download_chrom() {
+    local config_file=${1} chr=${2} gnomAD_vcf_dir
+    gnomAD_vcf_dir=$(read_yaml "${config_file}" "gnomad_vcf_dir") || return 1
+    [[ -n $gnomAD_vcf_dir && $gnomAD_vcf_dir != null ]] || { log "ERROR: gnomad_vcf_dir is not set"; return 1; }
+    mkdir -p "$gnomAD_vcf_dir" || return 1
+    _gnomAD_fetch_chrom "$gnomAD_vcf_dir" "$chr" && \
+    update_yaml "${config_file}" "gnomad_vcf_chr${chr}" "${gnomAD_vcf_dir}/gnomad.joint.v4.1.sites.chr${chr}.vcf.bgz"
+}
+
+# Install task C1: link the 24 chromosome downloads (gnomad_vcf_chrN, each in
+# its own install folder) into gnomad_vcf_dir, where gnomAD_install finds them
+# complete and, for GRCh37, lifts them over.
+function gnomAD_collect_chroms() {
+    local config_file=${1} gnomAD_vcf_dir chr source
+    gnomAD_vcf_dir=$(read_yaml "${config_file}" "gnomad_vcf_dir") || return 1
+    mkdir -p "$gnomAD_vcf_dir" || return 1
+    for chr in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 X Y; do
+        source=$(read_yaml "${config_file}" "gnomad_vcf_chr${chr}") || return 1
+        [[ -s $source && -s $source.tbi ]] || { log "ERROR: gnomAD chromosome ${chr} download is missing: ${source}"; return 1; }
+        ln -sfn "$source" "${gnomAD_vcf_dir}/gnomad.joint.v4.1.sites.chr${chr}.vcf.bgz" && \
+        ln -sfn "$source.tbi" "${gnomAD_vcf_dir}/gnomad.joint.v4.1.sites.chr${chr}.vcf.bgz.tbi" || return 1
+    done
+}
+
 function gnomAD_install() {
     local config_file=${1}
     local hg19_fasta=${2:-$(read_yaml "${config_file}" "ref_genome")}
@@ -2164,22 +2215,7 @@ function gnomAD_install() {
     local gnomAD_vcf_dir=$(read_yaml "${config_file}" "gnomad_vcf_dir")
 
     for chr in "${chromosomes[@]}"; do
-        log "About to download the gnomAD v4.1 files for chr${chr} from the url https://storage.googleapis.com/gcp-public-data--gnomad/release/4.1/vcf/joint/gnomad.joint.v4.1.sites.chr${chr}.vcf.bgz"
-        if check_vcf_validity ${gnomAD_vcf_dir}/gnomad.joint.v4.1.sites.chr${chr}.vcf.bgz; then
-            log "The gnomAD v4.1 file for chr${chr} is already downloaded to ${gnomAD_vcf_dir} and updated"
-            if [[ ${gnomAD_vcf_dir}/gnomad.joint.v4.1.sites.chr${chr}.vcf.bgz.tbi -ot ${gnomAD_vcf_dir}/gnomad.joint.v4.1.sites.chr${chr}.vcf.bgz ]]; then
-                log "The index file is not updated, now we start to index the file"
-                tabix -f -p vcf ${gnomAD_vcf_dir}/gnomad.joint.v4.1.sites.chr${chr}.vcf.bgz || \
-                { log "Failed to index gnomAD chromosome ${chr}"; return 1; }
-            fi
-        else
-            log "The gnomAD v4.1 file for chr${chr} (${gnomAD_vcf_dir}/gnomad.joint.v4.1.sites.chr${chr}.vcf.bgz) is not downloaded or not updated, now we start to download the files"
-            wget https://storage.googleapis.com/gcp-public-data--gnomad/release/4.1/vcf/joint/gnomad.joint.v4.1.sites.chr${chr}.vcf.bgz -O ${gnomAD_vcf_dir}/gnomad.joint.v4.1.sites.chr${chr}.vcf.bgz && \
-            wget https://storage.googleapis.com/gcp-public-data--gnomad/release/4.1/vcf/joint/gnomad.joint.v4.1.sites.chr${chr}.vcf.bgz.tbi -O ${gnomAD_vcf_dir}/gnomad.joint.v4.1.sites.chr${chr}.vcf.bgz.tbi || \
-            { log "Failed to download gnomAD chromosome ${chr}"; return 1; }
-            check_vcf_validity "${gnomAD_vcf_dir}/gnomad.joint.v4.1.sites.chr${chr}.vcf.bgz" || \
-            { log "Downloaded gnomAD chromosome ${chr} is invalid"; return 1; }
-        fi
+        _gnomAD_fetch_chrom "$gnomAD_vcf_dir" "$chr" || return 1
     done
 
     log "The gnomAD v4.1 files are already downloaded to ${gnomAD_vcf_dir}, remember that the VCF records are 1-based and currently mapped to hg38 assembly"

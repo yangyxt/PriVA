@@ -164,7 +164,7 @@ process HUB_FILL {
     def name = source == 'cadd' ? "${meta.base}.anno.cadd.tsv" : "${meta.base}.anno.vcf.gz"
     """
     mkdir -p filled
-    '${meta.priva_binary}' annotation-hub fill --source ${source} --vcf preprocessed.vcf.gz --known known.parquet --annotated 'step/${output.name}' --output 'filled/${name}'
+    '${meta.priva_binary}' annotation-hub fill --source ${source} --vcf preprocessed.vcf.gz --known known.parquet --annotated '${output}' --output 'filled/${name}'
     """
 }
 
@@ -177,7 +177,7 @@ process HUB_ADD {
     tuple val(source), path('added.log'), emit: added
     script:
     """
-    '${meta.priva_binary}' annotation-hub add --hub '${params.annotation_hub}' --source ${source} --lineage '${lineage}' --session '${workflow.sessionId}' --base new.vcf.gz --annotated 'step/${output.name}' 2> added.log
+    '${meta.priva_binary}' annotation-hub add --hub '${params.annotation_hub}' --source ${source} --lineage '${lineage}' --session '${workflow.sessionId}' --base new.vcf.gz --annotated '${output}' 2> added.log
     """
 }
 

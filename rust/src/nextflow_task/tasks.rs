@@ -503,7 +503,16 @@ pub(crate) fn validate(options: &Options) -> Result<()> {
         ("provided_cadd_sha256", provided),
         (
             "hub_lineages",
-            super::hub_lineage::lineages(&manifest, &root)?,
+            super::hub_lineage::lineages(
+                &manifest,
+                &root,
+                options
+                    .get("resources-lock")
+                    .filter(|v| !v.is_empty())
+                    .map(|p| read_json(Path::new(p)))
+                    .transpose()?
+                    .as_ref(),
+            )?,
         ),
     ]);
     write_json(&bundle.join("contract.json"), &record)?;

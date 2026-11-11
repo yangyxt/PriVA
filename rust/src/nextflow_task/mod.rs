@@ -232,7 +232,7 @@ fn parse_task(args: &[String]) -> std::result::Result<(String, Options), String>
         }
         "validate" => {
             let mut valued = VALIDATE_REQUIRED.to_vec();
-            valued.extend(["cadd", "task-boundary", "ped", "family"]);
+            valued.extend(["cadd", "task-boundary", "ped", "family", "resources-lock"]);
             let options = Options::parse(rest, &valued, &["stub"])?;
             options.require(VALIDATE_REQUIRED)?;
             options.choice("task-boundary", &["off", "bwrap"])?;

@@ -14,14 +14,14 @@ process VALIDATE_INPUTS {
     def pedArg = ped ? '--ped family.ped' : ''
     def familyArg = meta.family ? "--family '${meta.family}'" : ''
     """
-    '${meta.priva_binary}' task validate --vcf '${vcf}' --vcf-index '${vcf_index}' ${pedArg} --config '${config}' --resources '${resources}' ${familyArg} --base '${meta.base}' --assembly '${meta.assembly}' --mode '${meta.mode}' --legacy-root '${meta.source_root}' --source-digest '${meta.source_digest}' --software-id '${meta.software_id.replace("'", "'\\''")}' --vcf-hub-mode '${meta.vcf_hub_mode}' --cadd-hub-mode '${meta.cadd_hub_mode}' --task-boundary '${meta.task_boundary}' ${caddArg}
+    '${meta.priva_binary}' task validate --vcf '${vcf}' --vcf-index '${vcf_index}' ${pedArg} --config '${config}' --resources '${resources}' ${familyArg} --base '${meta.base}' --assembly '${meta.assembly}' --mode '${meta.mode}' --legacy-root '${meta.source_root}' --source-digest '${meta.source_digest}' --software-id '${meta.software_id.replace("'", "'\\''")}' --vcf-hub-mode '${meta.vcf_hub_mode}' --cadd-hub-mode '${meta.cadd_hub_mode}' --task-boundary '${meta.task_boundary}' ${caddArg} ${meta.resources_lock ? "--resources-lock '${meta.resources_lock}'" : ''}
     """
     stub:
     def caddArg = cadd ? '--cadd provided.cadd.tsv' : ''
     def pedArg = ped ? '--ped family.ped' : ''
     def familyArg = meta.family ? "--family '${meta.family}'" : ''
     """
-    '${meta.priva_binary}' task validate --vcf '${vcf}' --vcf-index '${vcf_index}' ${pedArg} --config '${config}' --resources '${resources}' ${familyArg} --base '${meta.base}' --assembly '${meta.assembly}' --mode '${meta.mode}' --legacy-root '${meta.source_root}' --source-digest '${meta.source_digest}' --software-id stub --vcf-hub-mode '${meta.vcf_hub_mode}' --cadd-hub-mode '${meta.cadd_hub_mode}' --task-boundary '${meta.task_boundary}' ${caddArg} --stub
+    '${meta.priva_binary}' task validate --vcf '${vcf}' --vcf-index '${vcf_index}' ${pedArg} --config '${config}' --resources '${resources}' ${familyArg} --base '${meta.base}' --assembly '${meta.assembly}' --mode '${meta.mode}' --legacy-root '${meta.source_root}' --source-digest '${meta.source_digest}' --software-id stub --vcf-hub-mode '${meta.vcf_hub_mode}' --cadd-hub-mode '${meta.cadd_hub_mode}' --task-boundary '${meta.task_boundary}' ${caddArg} ${meta.resources_lock ? "--resources-lock '${meta.resources_lock}'" : ''} --stub
     """
 }
 
@@ -142,7 +142,7 @@ process HUB_REFRESH_PLAN {
     script:
     """
     mkdir -p refresh
-    '${meta.priva_binary}' annotation-hub refresh-plan --hub '${params.annotation_hub}' --resources resources.json --legacy-root '${meta.source_root}' --vcf 'refresh/${meta.base}.vcf.gz' --plan refresh/plan.json
+    '${meta.priva_binary}' annotation-hub refresh-plan --hub '${params.annotation_hub}' --resources resources.json --legacy-root '${meta.source_root}' ${meta.resources_lock ? "--resources-lock '${meta.resources_lock}'" : ''} --vcf 'refresh/${meta.base}.vcf.gz' --plan refresh/plan.json
     """
 }
 

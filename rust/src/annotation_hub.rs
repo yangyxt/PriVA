@@ -38,7 +38,7 @@ use std::process::Command;
 const USAGE: &str = "usage: priva annotation-hub lookup --hub HUB --source SOURCE --lineage LINEAGE --vcf PREPROCESSED.vcf.gz --known KNOWN.parquet --new NEW.vcf.gz [--exclude-session SESSION]
        priva annotation-hub fill --source SOURCE --vcf PREPROCESSED.vcf.gz --known KNOWN.parquet --annotated STEP_OUTPUT --output OUTPUT
        priva annotation-hub add --hub HUB --source SOURCE --lineage LINEAGE --session SESSION --base NEW.vcf.gz --annotated STEP_OUTPUT
-       priva annotation-hub refresh-plan --hub HUB --resources RESOURCES.json --legacy-root CHECKOUT --vcf VARIANTS.vcf.gz --plan PLAN.json
+       priva annotation-hub refresh-plan --hub HUB --resources RESOURCES.json --legacy-root CHECKOUT [--resources-lock LOCK.json] --vcf VARIANTS.vcf.gz --plan PLAN.json
 SOURCE is gnomad, clinvar, control, vep or cadd; for cadd the step output is the CADD table.";
 const SOURCES: [&str; 5] = ["gnomad", "clinvar", "control", "vep", "cadd"];
 const HEADER_KEY: &str = "priva.hub.header";
@@ -72,6 +72,7 @@ pub(crate) fn dispatch(args: &[String]) -> Result<()> {
             Path::new(get("hub")?),
             Path::new(get("resources")?),
             Path::new(get("legacy-root")?),
+            options.get("resources-lock").map(Path::new),
             Path::new(get("vcf")?),
             Path::new(get("plan")?),
         );
@@ -686,13 +687,18 @@ fn refresh_plan(
     hub: &Path,
     resources: &Path,
     root: &Path,
+    lock: Option<&Path>,
     vcf_out: &Path,
     plan_out: &Path,
 ) -> Result<()> {
     use crate::json_text::Json;
     use crate::nextflow_task::contract::{object, read_json, text, write_json};
     let manifest = read_json(resources)?;
-    let lineages = crate::nextflow_task::hub_lineage::lineages(&manifest, root)?;
+    let lock = match lock {
+        Some(path) => Some(read_json(path)?),
+        None => None,
+    };
+    let lineages = crate::nextflow_task::hub_lineage::lineages(&manifest, root, lock.as_ref())?;
     let mut variants: BTreeSet<((u32, String), u64, String, String)> = BTreeSet::new();
     let mut steps = Vec::new();
     for source in SOURCES {

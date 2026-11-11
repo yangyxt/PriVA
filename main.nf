@@ -22,6 +22,14 @@ def sourceDigest(root) {
     digest.digest().encodeHex().toString()
 }
 
+// The install workflow's resources.lock.json, if given: hub lineages then use
+// its install-step lineages; its checksum joins every task identity.
+def lockFields() {
+    if (!params.resources_lock) return [resources_lock: '', resources_lock_sha256: '']
+    def lock = file(params.resources_lock, checkIfExists: true)
+    [resources_lock: lock.toString(), resources_lock_sha256: java.security.MessageDigest.getInstance('SHA-256').digest(lock.bytes).encodeHex().toString()]
+}
+
 // The plan HUB_REFRESH_PLAN writes: which steps to refresh, and how many variants.
 def readRefreshPlan(planFile) {
     new groovy.json.JsonSlurper().parse(planFile.toFile())
@@ -47,7 +55,7 @@ workflow {
                            source_root: refreshRoot.toString(), source_digest: sourceDigest(refreshRoot),
                            software_id: params.software_id.toString(), vcf_hub_mode: 'off', cadd_hub_mode: 'off', task_boundary: 'off',
                            priva_binary: refreshBinary.toString(),
-                           priva_sha256: java.security.MessageDigest.getInstance('SHA-256').digest(refreshBinary.bytes).encodeHex().toString()]
+                           priva_sha256: java.security.MessageDigest.getInstance('SHA-256').digest(refreshBinary.bytes).encodeHex().toString()] + lockFields()
         def refreshBundle = { row -> row.take(row.size() - 1) + [(row.last() instanceof List ? row.last() : [row.last()]).sort(false) { it.name }] }
         HUB_REFRESH_PLAN(Channel.of([refreshMeta, file(params.legacy_config, checkIfExists: true), file(params.resource_manifest, checkIfExists: true)]))
         def planned = HUB_REFRESH_PLAN.out.plan
@@ -85,6 +93,8 @@ Refresh:  --action hub_refresh --annotation_hub FOLDER with the run options abov
           (no --input): re-annotates stored variants for steps whose folder changed
 Optional: --ped COHORT.ped --family ID --vcf_index VCF.vcf.gz.tbi
           --annotation_hub FOLDER (reuse stored annotation across runs)
+          --resources_lock resources.lock.json (from --action install: hub
+            folders named from install-step lineages)
 The cohort VCF is validated and annotated once, one task per annotation step.
 With --ped, every PED family is then filtered and prioritized in its own tasks
 (--family selects one); without --ped, one run covers all samples without
@@ -129,7 +139,7 @@ outputs and scientific-profile requirements.'''
                     cadd_hub_mode: params.cadd_hub_mode, task_boundary: taskBoundary,
                     // The task program's bytes, not only its path, join every task hash.
                     priva_binary: privaBinary.toString(),
-                    priva_sha256: java.security.MessageDigest.getInstance('SHA-256').digest(privaBinary.bytes).encodeHex().toString()]
+                    priva_sha256: java.security.MessageDigest.getInstance('SHA-256').digest(privaBinary.bytes).encodeHex().toString()] + lockFields()
         // This check executes outside the task cache. A fully cached -resume
         // still verifies external resources and the published run identity.
         def launchCommand = [meta.priva_binary, 'task', 'launch',

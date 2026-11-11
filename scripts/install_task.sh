@@ -278,7 +278,11 @@ cmd_run() {
                 esac
             done < <(jq -r '.[]' <<< "$n")
             echo "== $(date -Is) ${args[*]}"
-            "${args[@]}" || die "${args[0]} failed (exit $?)"
+            # The installer functions were written without pipefail (checks
+            # such as `bcftools view FILE | head` end their writer early).
+            local rc=0
+            set +o pipefail; "${args[@]}" || rc=$?; set -o pipefail
+            ((rc == 0)) || die "${args[0]} failed (exit $rc)"
         done <<< "$calls"
     fi
     local keys="{}" files="[]" missing=""

@@ -83,17 +83,16 @@ jobs:
       - name: Install command tools for synthetic installer fixtures
         # Ubuntu's tabix package supplies both bgzip and tabix; yq supplies the
         # YAML CLI used by the unchanged shell installer. No real caches run.
+        # On 2026-11-11 the runner's default mirror (azure.archive.ubuntu.com)
+        # stopped resolving for hours. apt-get update only warns about that, and
+        # each lookup waits about 40 seconds, so the job ran out of time before
+        # any fallback. Use the main Ubuntu archive directly, make a failed
+        # index download an error, and stop this step early if it still hangs.
+        timeout-minutes: 10
         run: |
-          apt_install() {
-            sudo apt-get -o Acquire::Retries=3 update &&
-              sudo apt-get -o Acquire::Retries=3 install --no-install-recommends --yes tabix bcftools yq parallel pkg-config libexpat1-dev
-          }
-          # On 2026-11-11 the runner's default mirror (azure.archive.ubuntu.com)
-          # stopped resolving for hours; then use the main Ubuntu archive.
-          if ! apt_install; then
-            echo 'http://archive.ubuntu.com/ubuntu/' | sudo tee /etc/apt/apt-mirrors.txt
-            apt_install
-          fi
+          echo 'http://archive.ubuntu.com/ubuntu/' | sudo tee /etc/apt/apt-mirrors.txt
+          sudo apt-get -o Acquire::Retries=2 update --error-on=any
+          sudo apt-get -o Acquire::Retries=2 install --no-install-recommends --yes tabix bcftools yq parallel pkg-config libexpat1-dev
           dpkg-query --show --showformat='${Package} ${Version}\n' tabix bcftools yq parallel pkg-config libexpat1-dev
           command -v bgzip tabix yq parallel
           bgzip --version

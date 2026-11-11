@@ -47,10 +47,11 @@ workflow INSTALL_RESOURCES {
     def registryPath = file(params.install_registry ?: "${projectDir}/conf/install_steps.json")
     // Read once here: the parsed registry is not shared with the parallel lineage calls.
     def nativeSteps = new groovy.json.JsonSlurper().parse(registryPath.toFile()).steps.findAll { s -> s.native }.collect { s -> s.id.toString() } as Set
-    // Changing sources: one release check each; pinned ones only with --refresh.
+    // Changing sources: one release check each; pinned ones only with --refresh,
+    // or when the pin can expire (max_age_months; the plan decides whether it has).
     def registryEntries = new groovy.json.JsonSlurper().parse(registryPath.toFile()).steps
     def refreshSteps = (params.refresh ?: '').toString().tokenize(',').collect { s -> s.trim() }
-    def checked = registryEntries.findAll { s -> s.release && (!s.pinned || refreshSteps.contains(s.id.toString())) }.collect { s -> s.id.toString() }
+    def checked = registryEntries.findAll { s -> s.release && (!s.pinned || s.max_age_months || refreshSteps.contains(s.id.toString())) }.collect { s -> s.id.toString() }
     INSTALL_RELEASE(Channel.fromList(checked).map { id -> [id, file(params.install_config)] })
     def releases = INSTALL_RELEASE.out.release.collect().ifEmpty([])
     INSTALL_PLAN(Channel.of([file(params.install_config), registryPath, params.adopt_config ?: '', params.adopt ?: '', params.run_steps ?: '', refreshSteps.join(',')])

@@ -118,11 +118,17 @@ cmd_plan() {
             v=$(yaml_value "$config" "$k")
             [[ -n $v ]] && files=$(jq -c --arg k "$k" --arg i "$(identity "$v")" '. + [[$k, $i]]' <<< "$files")
         done
-        # The step's release: checked now, or for a pinned step its pin.
-        local release=null r
+        # The step's release: checked now, or for a pinned step its pin
+        # (pins.json: {"ID": {"release": ..., "recorded": "YYYY-MM-DD"}}). A
+        # pin older than max_age_months calendar months gives way to the check.
+        local release=null r pin months
         if [[ $(jq '.release // [] | length' <<< "$entry") != 0 ]]; then
-            if [[ $(jq '.pinned // false' <<< "$entry") == true && ",$refresh," != *",$id,"* ]]; then
-                release=$( { [[ -n $pins && -r $pins ]] && jq -c --arg id "$id" '.[$id] // "initial"' "$pins"; } || echo '"initial"')
+            pin=null
+            [[ -n $pins && -r $pins ]] && pin=$(jq -c --arg id "$id" '.[$id] // null | if type == "string" then {release: .} else . end' "$pins")
+            months=$(jq '.max_age_months // 0' <<< "$entry")
+            if [[ $(jq '.pinned // false' <<< "$entry") == true && ",$refresh," != *",$id,"* ]] &&
+               { ((months == 0)) || { [[ $pin != null ]] && pin_is_fresh "$pin" "$months"; }; }; then
+                release=$(jq -c '.release // "initial"' <<< "$pin")
             else
                 for r in "${release_files[@]}"; do
                     [[ $(jq -r .step "$r") == "$id" ]] && release=$(jq -c .release "$r")
@@ -155,6 +161,18 @@ cmd_plan() {
     done
     jq -n --arg base "$base" --arg pi "$priva_identity" --argjson steps "$steps" \
         '{schema: 1, base_config: $base, priva_identity: $pi, steps: $steps}' > "$out/plan.json"
+}
+
+add_months() { # add_months YYYY-MM-DD N: N calendar months later, the day clamped to the month
+    local y=$((10#${1:0:4})) m=$((10#${1:5:2})) d=$((10#${1:8:2})) o last
+    o=$((y * 12 + m - 1 + $2)); y=$((o / 12)); m=$((o % 12 + 1))
+    last=$(date -u -d "$(printf '%04d-%02d-01' "$y" "$m") +1 month -1 day" +%d) || return 1
+    ((d > 10#$last)) && d=$((10#$last))
+    printf '%04d-%02d-%02d' "$y" "$m" "$d"
+}
+pin_is_fresh() { # pin_is_fresh PIN_JSON MONTHS: taken fewer than MONTHS calendar months ago
+    local recorded; recorded=$(jq -r '.recorded // empty' <<< "$1")
+    [[ -n $recorded ]] && [[ $(date -u +%F) < $(add_months "$recorded" "$2") ]]
 }
 
 expand_url() { # expand_url TEMPLATE CONFIG: {grch}, {loftee_branch}, {KEY}
@@ -334,7 +352,12 @@ cmd_publish() {
     # Pinned steps keep the release they were built from until --refresh.
     if [[ -n $pins ]]; then
         local current='{}'; [[ -r $pins ]] && current=$(cat "$pins")
-        jq -c --argjson cur "$current" '$cur + ([.steps | to_entries[] | select(.value.pinned and .value.release != null and .value.release != "initial") | {(.key): .value.release}] | add // {})' "$plan" > "$pins.partial" && mv "$pins.partial" "$pins"
+        # A release already pinned keeps the day it was first taken.
+        jq -c --argjson cur "$current" --arg today "$(date -u +%F)" '$cur + ([.steps | to_entries[]
+            | select(.value.pinned and .value.release != null and .value.release != "initial")
+            | .key as $id | ($cur[$id] // null | if type == "string" then {release: .} else . end) as $old
+            | {($id): (if $old != null and $old.release == .value.release and $old.recorded != null then $old
+                       else {release: .value.release, recorded: $today} end)}] | add // {})' "$plan" > "$pins.partial" && mv "$pins.partial" "$pins"
     fi
     jq -n --arg l "$lineage" --arg done "$(date -Is)" --argjson steps "$steps" \
         --arg pi "$(jq -r .priva_identity "$plan")" \

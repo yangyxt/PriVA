@@ -1,5 +1,5 @@
 {
-  "about": "Install steps run as Nextflow tasks by workflows/install.nf. Each step calls existing installer functions from scripts/install_utils.sh with its own private configuration, whose cache_root is the step's lineage folder. Tokens: {config} is that configuration, {script_dir} the scripts folder, {KEY} the configuration value of KEY. needs: steps whose receipts supply input keys. outputs: keys the step must set; optional_outputs may be empty. user_inputs: keys naming files you supply, kept from your configuration and counted in lineage. settings: configuration values that change results (glob patterns allowed). copies: input keys the step rewrites in place; the runner copies them into the step's own folder first. writable: the folder stays writable after the step (otherwise it is made read-only). native: the step's results are computed by priva, so the priva source identity counts in its lineage. release: how to ask a changing source for its current release (git: the commit of url and ref; http: the server's ETag, Last-Modified and size), part of the step's lineage. Tokens {grch} (GRCh37 or GRCh38) and {loftee_branch} (master or grch38) follow the assembly. adopt_paths: where an older installation that does not name an output key put that file, for --adopt ({KEY} from the old configuration). pinned: the release is kept in resource_root/pins.json and only checked again with --refresh STEP.",
+  "about": "Install steps run as Nextflow tasks by workflows/install.nf. Each step calls existing installer functions from scripts/install_utils.sh with its own private configuration, whose cache_root is the step's lineage folder. Tokens: {config} is that configuration, {script_dir} the scripts folder, {KEY} the configuration value of KEY. needs: steps whose receipts supply input keys. outputs: keys the step must set; optional_outputs may be empty. user_inputs: keys naming files you supply, kept from your configuration and counted in lineage. settings: configuration values that change results (glob patterns allowed). copies: input keys the step rewrites in place; the runner copies them into the step's own folder first. writable: the folder stays writable after the step (otherwise it is made read-only). native: the step's results are computed by priva, so the priva source identity counts in its lineage. release: how to ask a changing source for its current release (git: the commit of url and ref; http: the server's ETag, Last-Modified and size), part of the step's lineage. Tokens {grch} (GRCh37 or GRCh38) and {loftee_branch} (master or grch38) follow the assembly. adopt_paths: where an older installation that does not name an output key put that file, for --adopt ({KEY} from the old configuration). pinned: the release is kept in resource_root/pins.json and only checked again with --refresh STEP. max_age_months: a pinned release older than this many calendar months (from the day it was taken) is replaced by the current one.",
   "folder_keys": [
     "cache_root",
     "vep_cache_dir",
@@ -942,6 +942,36 @@
       ]
     },
     {
+      "id": "D0",
+      "name": "CLINVAR_DOWNLOAD",
+      "calls": [
+        [
+          "ClinVar_download",
+          "--config",
+          "{config}"
+        ]
+      ],
+      "needs": [],
+      "outputs": [
+        "clinvar_release_inputs"
+      ],
+      "settings": [
+        "assembly"
+      ],
+      "release": [
+        {
+          "kind": "http",
+          "url": "https://ftp.ncbi.nlm.nih.gov/pub/clinvar/vcf_{grch}/clinvar.vcf.gz"
+        },
+        {
+          "kind": "http",
+          "url": "https://ftp.ncbi.nlm.nih.gov/pub/clinvar/tab_delimited/variant_summary.txt.gz"
+        }
+      ],
+      "pinned": true,
+      "max_age_months": 3
+    },
+    {
       "id": "D1",
       "name": "CLINVAR",
       "calls": [
@@ -963,7 +993,8 @@
         "B7",
         "B8",
         "B9",
-        "C1"
+        "C1",
+        "D0"
       ],
       "outputs": [
         "clinvar_vcf",
@@ -979,17 +1010,7 @@
         "vep_installed_version",
         "clinvar_*"
       ],
-      "native": true,
-      "release": [
-        {
-          "kind": "http",
-          "url": "https://ftp.ncbi.nlm.nih.gov/pub/clinvar/vcf_{grch}/clinvar.vcf.gz"
-        },
-        {
-          "kind": "http",
-          "url": "https://ftp.ncbi.nlm.nih.gov/pub/clinvar/tab_delimited/variant_summary.txt.gz"
-        }
-      ]
+      "native": true
     },
     {
       "id": "C10",

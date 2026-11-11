@@ -330,7 +330,20 @@ pub(super) fn plan_refresh(config_path: &str, source_root: &str) -> Result<Json>
     plan.set("resource_policy", policy.clone());
     plan.set("baseline", baseline_state);
     plan.set("baseline_missing", Json::Bool(missing));
-    let latest = latest_metadata(assembly, &text_of(item(&policy, "latest_url_template")?))?;
+    // The install workflow's download step (D0) names the release it acquired;
+    // the plan then judges that release instead of asking NCBI again.
+    let release_inputs = get_or_null(&config, "clinvar_release_inputs")?;
+    let latest = if empty(&release_inputs) {
+        latest_metadata(assembly, &text_of(item(&policy, "latest_url_template")?))?
+    } else {
+        let release = read_json(&path_of(&release_inputs)?)?;
+        require(
+            same(&get_or_null(&release, "assembly")?, &string(assembly)),
+            "The ClinVar download step fetched another assembly",
+        )?;
+        plan.set("release_inputs", release_inputs.clone());
+        item(&release, "latest")?.clone()
+    };
     let file_date = text_of(item(&latest, "file_date")?);
     plan.set("latest", latest.clone());
     if let Some(boundary) = boundary
@@ -601,6 +614,17 @@ fn complete_refresh(plan: &Json, working: &str, inputs: &Json) -> Result<()> {
 }
 
 /// `install_refresh(config_path, source_root)`
+/// The raw VCF a ClinVar download step (install step D0) acquired, when the
+/// configuration names its `clinvar_release_inputs`.
+fn downloaded_vcf(config_path: &str) -> Result<Option<String>> {
+    let value = get_or_null(&load_config(config_path)?, "clinvar_release_inputs")?;
+    if empty(&value) {
+        return Ok(None);
+    }
+    let release = read_json(&path_of(&value)?)?;
+    Ok(Some(path_of(item(item(item(&release, "sources")?, "vcf")?, "path")?)?))
+}
+
 pub(super) fn install_refresh(config_path: &str, source_root: &str) -> Result<Json> {
     // Preflight selected inputs before metadata access or any acquisition.
     let prerequisites =
@@ -619,7 +643,15 @@ pub(super) fn install_refresh(config_path: &str, source_root: &str) -> Result<Js
     );
     io::stdout().flush().ok();
     if action == "preserve" {
-        for function in ["ClinVar_VCF_deploy", "ClinVar_AA_stat", "ClinVar_Gene_stat"] {
+        // A downloaded release (install step D0) is deployed instead of the
+        // newest one.
+        let downloaded = downloaded_vcf(config_path)?;
+        let mut deploy = vec![config_path];
+        if let Some(source) = &downloaded {
+            deploy.extend(["--source-vcf", source.as_str()]);
+        }
+        run_original(source_root, "ClinVar_VCF_deploy", &deploy)?;
+        for function in ["ClinVar_AA_stat", "ClinVar_Gene_stat"] {
             run_original(source_root, function, &[config_path])?;
         }
         return Ok(plan);

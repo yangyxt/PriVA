@@ -2,7 +2,8 @@
 //! gene-statistics refresh, the locked ClinVar annotation deployment with its
 //! retained generations, and the unqualified installation-candidate receipts.
 //!
-//! The eleven subcommands take the script's options; the subcommand comes
+//! The eleven subcommands of the script take its options, and `download` is
+//! the install workflow's ClinVar download step (native only); the subcommand comes
 //! first. Printed JSON, receipts, journals, retained members, configuration
 //! rewrites and exit statuses follow the script. A failure that the script
 //! reported as `ERROR: ClinVar gene-statistics refresh failed: message` exits 1
@@ -47,12 +48,13 @@ const HELP: &str = "usage: priva clinvar-gene-refresh COMMAND [options]\n\
        plan [--output OUTPUT]; deploy|retire-owned [--source-vcf VCF]\n\
        retire-shards --input-vcf VCF --chromosome CHROM [--chromosome CHROM ...]\n\
        acquire --plan PLAN --output OUTPUT\n\
+       download --config CONFIG --source-root ROOT --output FOLDER\n\
        file-date --input ANNOTATED_VCF\n\
        candidate-route --source-root ROOT\n\
        {candidate-begin,candidate-complete} --config CONFIG --source-root ROOT --input-vcf VCF\n\
 Refresh ClinVar gene statistics after three calendar months of source-data age; the\n\
 outputs and exit statuses of scripts/clinvar_gene_refresh.py. The subcommand comes first.";
-const COMMANDS: [&str; 11] = [
+const COMMANDS: [&str; 12] = [
     "plan",
     "install",
     "deploy",
@@ -60,6 +62,7 @@ const COMMANDS: [&str; 11] = [
     "retire-shards",
     "check-header",
     "acquire",
+    "download",
     "file-date",
     "candidate-route",
     "candidate-begin",
@@ -533,6 +536,10 @@ fn float_timestamp(seconds: i64, nanos: i64) -> (i128, u32) {
 fn options(command: &str) -> (Vec<&'static str>, Vec<&'static str>) {
     match command {
         "acquire" => (vec!["plan", "output"], vec!["plan", "output"]),
+        "download" => (
+            vec!["config", "source-root", "output"],
+            vec!["config", "source-root", "output"],
+        ),
         "file-date" => (vec!["input"], vec!["input"]),
         "candidate-route" => (vec!["source-root"], vec!["source-root"]),
         "candidate-begin" | "candidate-complete" => (
@@ -610,6 +617,11 @@ fn run(command: &str, values: &HashMap<String, String>, chromosomes: Vec<String>
                 &remote::acquire_inputs(&plan)?,
             )
         }
+        "download" => printed(&remote::download_release(
+            &config,
+            &root,
+            &path("output").unwrap_or_default(),
+        )?),
         "plan" => {
             let value = refresh::plan_refresh(&config, &root)?;
             match path("output") {

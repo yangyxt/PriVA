@@ -539,6 +539,11 @@ fn acquire_file(url: &str, destination: &str, expected_md5: Option<&str>) -> Res
 /// `acquire_inputs(plan)`: the pinned ClinVar VCF (or the explicit complete
 /// annotation), variant_summary and MANE, with the release stable around them.
 pub(super) fn acquire_inputs(plan: &Json) -> Result<Json> {
+    if let Some(release) = lookup(plan, "release_inputs")?
+        && !empty(release)
+    {
+        return downloaded_inputs(plan, &path_of(release)?);
+    }
     let build = path_of(item(plan, "build_dir")?)?;
     let folder = join(&build, "inputs");
     mkdirs(&folder)?;
@@ -632,6 +637,77 @@ pub(super) fn acquire_inputs(plan: &Json) -> Result<Json> {
             string("independent publisher MD5 snapshot; not inferred from filename or VCF date"),
         ),
     ]);
+    write_json(&join(&build, "inputs.ready.json"), &value)?;
+    Ok(value)
+}
+
+/// `download`: the install workflow's ClinVar download step (D0). The latest
+/// official release is detected and acquired as `acquire_inputs` does for a
+/// managed refresh, into FOLDER/inputs, and described in
+/// FOLDER/inputs.ready.json. The annotation step names that file as
+/// `clinvar_release_inputs` and then neither detects nor downloads a release.
+pub(super) fn download_release(config_path: &str, source_root: &str, folder: &str) -> Result<Json> {
+    let config = load_config(config_path)?;
+    let Some(assembly) = assembly_of(&get_or_null(&config, "assembly")?)? else {
+        return Err(value_error(
+            "ClinVar download requires hg19/GRCh37 or hg38/GRCh38",
+        ));
+    };
+    let policy = super::profile::resource_policy(source_root)?;
+    let latest = latest_metadata(
+        assembly,
+        &text_of(item(&policy, "latest_url_template")?),
+    )?;
+    let plan = object([
+        ("build_dir", string(folder)),
+        ("assembly", string(assembly)),
+        ("latest", latest),
+        ("resource_policy", policy),
+        ("explicit_vcf", Json::Bool(false)),
+    ]);
+    let mut value = acquire_inputs(&plan)?;
+    value.set("assembly", string(assembly));
+    write_json(&join(folder, "inputs.ready.json"), &value)?;
+    Ok(value)
+}
+
+/// `acquire_inputs` for a plan whose release a download step already acquired
+/// (`release_inputs`): each file must still have the MD5 recorded when it was
+/// downloaded, an explicitly selected complete annotation replaces the raw
+/// VCF, and nothing is downloaded.
+fn downloaded_inputs(plan: &Json, release_path: &str) -> Result<Json> {
+    let release = read_json(release_path)?;
+    let mut sources = item(&release, "sources")?.clone();
+    for name in ["vcf", "index", "summary", "mane"] {
+        let source = item(&sources, name)?;
+        let path = path_of(item(source, "path")?)?;
+        require(
+            md5(&path)? == text_of(item(source, "md5")?),
+            format!("Downloaded ClinVar input changed after its download step: {path}"),
+        )?;
+    }
+    if truth(item(plan, "explicit_vcf")?) {
+        let path = path_of(item(plan, "input_vcf")?)?;
+        if let Json::Object(entries) = &mut sources {
+            entries.retain(|(key, _)| key != "index");
+        }
+        sources.set(
+            "vcf",
+            identity_with(
+                &path,
+                vec![("kind", string("explicit_complete_annotated_vcf"))],
+            )?,
+        );
+    }
+    let vcf = path_of(item(item(&sources, "vcf")?, "path")?)?;
+    require(
+        date_text(local_file_date(&vcf)?) == text_of(item(item(plan, "latest")?, "file_date")?),
+        "Pinned ClinVar input fileDate differs from the downloaded release",
+    )?;
+    let mut value = release.clone();
+    value.set("sources", sources);
+    let build = path_of(item(plan, "build_dir")?)?;
+    mkdirs(&build)?;
     write_json(&join(&build, "inputs.ready.json"), &value)?;
     Ok(value)
 }

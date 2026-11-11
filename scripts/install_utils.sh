@@ -2474,6 +2474,23 @@ function basic_vep_annotation() {
 
 
 
+# Install task D0: one ClinVar release (VCF, index, variant_summary and MANE)
+# in clinvar_vcf_dir/release, named for the annotation step (D1, through
+# ClinVar_install) as clinvar_release_inputs.
+function ClinVar_download() {
+    [[ $# -eq 2 && ${1:-} == --config ]] || {
+        log "ERROR: Use ClinVar_download --config CONFIG."
+        return 2
+    }
+    local config_file=$2 folder
+    folder=$(read_yaml "$config_file" clinvar_vcf_dir) || return 1
+    [[ -n $folder && $folder != null ]] || { log "ERROR: clinvar_vcf_dir is not set"; return 1; }
+    priva_resolve_binary "$config_file" || return 1
+    "${PRIVA_BIN}" clinvar-gene-refresh download \
+        --config "$config_file" --source-root "${BASE_DIR}" --output "$folder/release" && \
+    update_yaml "$config_file" clinvar_release_inputs "$folder/release/inputs.ready.json"
+}
+
 function ClinVar_install() {
     [[ $# -eq 2 && ${1:-} == --config ]] || {
         log "ERROR: Use ClinVar_install --config CONFIG."

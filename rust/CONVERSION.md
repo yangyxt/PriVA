@@ -286,6 +286,10 @@ Prioritization runs as `PRIORITIZE_COMBINE`, `PRIORITIZE_SPLICING` and `PRIORITI
 | 1539604 | Same, after leaving annotation-only folders out of family checks | Identical; three families 1,491 s (2,752 s before, 1,524 s with one task) |
 | 1539608 | `--annotation_hub`: empty hub, then a new session with the filled hub, then `-resume` | Both runs identical to the Snakefile (annotated VCF, CADD table, every family table and ACMG matrix); second run 7,761 of 7,761 variants stored for gnomAD, ClinVar, VEP and CADD, no step but control ran; resume 32/32 |
 
+## Annotated mode and the old hub options removed
+
+The whole-script annotation task (`ANNOTATE_COHORT`), annotated mode (`--mode annotated --cadd`) and `--vcf_hub_mode`/`--cadd_hub_mode` are removed from the workflow; setting them stops the launch with a message that points to `--annotation_hub`. Every run annotates one task per step; `--annotation_hub` reuses stored annotation and `-resume` finishes an interrupted run. The `priva task` adapter still accepts the earlier mode values, which the workflow now always passes as `raw` and `off`. `--action hub_refresh` (`priva annotation-hub refresh-plan`) re-annotates the variants of a step's earlier hub folders into its new folder after a resource changes; trio job 1539721 refreshed a changed ClinVar resource and the next cohort run found all 7,761 variants stored, identical to the Snakefile.
+
 ## Installation as one task per step
 
 `nextflow run main.nf --action install` runs the installer as Nextflow tasks (`workflows/install.nf`, generated from `conf/install_steps.json`; `tests/install_workflow_check.py` fails when the two differ). Nextflow 25.10's strict syntax refuses `-entry`, so the main workflow selects it by `--action`.

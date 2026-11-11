@@ -25,29 +25,6 @@ process VALIDATE_INPUTS {
     """
 }
 
-process ANNOTATE_COHORT {
-    tag "${meta.base}:${meta.mode}"
-    label 'annotation'
-    // Raw mode publishes the new annotation pair; annotated mode only imports it.
-    publishDir "${params.outdir}/annotation", mode: 'copy', overwrite: false, pattern: 'result/*.anno.*', saveAs: { new File(it).name }, enabled: params.mode == 'raw'
-    publishDir "${params.outdir}/pipeline_info", mode: 'copy', overwrite: false, pattern: '*.provenance.json'
-    input:
-    tuple val(meta), path(vcf, stageAs: 'input.vcf.gz'), path(vcf_index, stageAs: 'input.vcf.gz.tbi'), path(cadd, stageAs: 'provided.cadd.tsv'), path(bundle, stageAs: 'bundle/*')
-    output:
-    tuple val(meta), path('result/*.anno.vcf.gz'), path('result/*.anno.vcf.gz.tbi'), path('result/*.anno.cadd.tsv'), path('bundle/*', includeInputs: true), emit: annotated
-    path('annotation.provenance.json'), emit: provenance
-    script:
-    def caddArg = cadd ? '--cadd provided.cadd.tsv' : ''
-    """
-    '${meta.priva_binary}' task run --phase annotation --bundle bundle --vcf '${vcf}' --vcf-index '${vcf_index}' --cpus ${task.cpus} ${caddArg}
-    """
-    stub:
-    def caddArg = cadd ? '--cadd provided.cadd.tsv' : ''
-    """
-    '${meta.priva_binary}' task run --phase annotation --bundle bundle --vcf '${vcf}' --vcf-index '${vcf_index}' --cpus ${task.cpus} ${caddArg} --stub
-    """
-}
-
 // Raw mode with both hubs off: the annotation script's functions as their own
 // tasks. Preprocessing comes first; gnomAD, ClinVar, control cohort, VEP and
 // CADD then run at the same time on copies of the preprocessed VCF, and the

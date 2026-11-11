@@ -32,6 +32,8 @@ run_case() {
     shift
     run_with "${name}" "${common[@]}" "$@"
 }
+# One annotation route: preprocessing; gnomAD, ClinVar, control, VEP and CADD
+# side by side; a merge of their INFO fields. A resume reuses every task.
 run_case nextflow-stub-raw --outdir "${case_root}/raw"
 run_case nextflow-stub-resume --outdir "${case_root}/raw" -resume
 python3 - "${case_root}/raw" <<'PY'
@@ -41,23 +43,6 @@ import sys
 root = Path(sys.argv[1])
 traces = sorted((root / 'pipeline_info').glob('trace-*.tsv'))
 assert len(traces) >= 2, 'Fresh and resume traces are required'
-rows = list(csv.DictReader(traces[-1].open(), delimiter='\t'))
-assert len(rows) == 8 and all(row['status'] == 'CACHED' for row in rows), rows
-assert len(list(root.rglob('*.filtered.acmg.tsv'))) == 1
-assert len(list(root.rglob('*.filtered.vcf.gz'))) == 1
-assert len(list(root.rglob('*.provenance.json'))) == 7
-print('Fresh raw stub and all-eight-task cached resume passed')
-PY
-# Raw mode with both hubs off: annotation runs as one task per step
-# (preprocess; gnomAD, ClinVar, control, VEP and CADD side by side; merge).
-run_case nextflow-stub-steps --vcf_hub_mode off --cadd_hub_mode off --outdir "${case_root}/steps"
-run_case nextflow-stub-steps-resume --vcf_hub_mode off --cadd_hub_mode off --outdir "${case_root}/steps" -resume
-python3 - "${case_root}/steps" <<'PY'
-import csv
-from pathlib import Path
-import sys
-root = Path(sys.argv[1])
-traces = sorted((root / 'pipeline_info').glob('trace-*.tsv'))
 fresh = sorted(row['name'].split(' ')[0] for row in csv.DictReader(traces[-2].open(), delimiter='\t'))
 PRIORITIZE = ['PRIORITIZE_ACMG', 'PRIORITIZE_COMBINE', 'PRIORITIZE_JOIN', 'PRIORITIZE_SPLICING', 'PRIORITIZE_UTR']
 assert fresh == sorted(['ANNOTATE_CADD', 'ANNOTATE_MERGE', 'ANNOTATE_PREPROCESS'] + ['ANNOTATE_STEP'] * 4 + [
@@ -70,12 +55,13 @@ names = sorted(p.name for p in (root / 'pipeline_info').glob('annotation-*.prove
 assert names == [f'annotation-{step}.provenance.json' for step in
                  ('cadd', 'clinvar', 'control', 'gnomad', 'merge', 'preprocess', 'vep')], names
 assert len(list(root.rglob('*.filtered.acmg.tsv'))) == 1
+assert len(list(root.rglob('*.filtered.vcf.gz'))) == 1
 print('Annotation as one task per step, and its cached resume, passed')
 PY
 # Annotation hub: the first run stores every step's results; a second run, in
 # a new session, finds every variant stored and runs no annotation step except
 # the control cohort step, which has no hub folder without a control VCF.
-hub_args=(--vcf_hub_mode off --cadd_hub_mode off --annotation_hub "${case_root}/hub")
+hub_args=(--annotation_hub "${case_root}/hub")
 run_case nextflow-stub-hub-first "${hub_args[@]}" --outdir "${case_root}/hub-first"
 run_case nextflow-stub-hub-second "${hub_args[@]}" --outdir "${case_root}/hub-second"
 python3 - "${case_root}" <<'PY'
@@ -102,13 +88,13 @@ for names in (first, second):
     assert names.count('HUB_LOOKUP') == 5 and names.count('HUB_FILL') == 5, names
 assert first.count('HUB_ADD') == 4 and second.count('HUB_ADD') == 0, (first, second)
 read = lambda case: gzip.open(root / case / 'annotation' / 'cohort.anno.vcf.gz', 'rt').read()
-assert read('hub-first') == read('hub-second') == read('steps'), 'annotated VCFs differ'
+assert read('hub-first') == read('hub-second') == read('raw'), 'annotated VCFs differ'
 stored = sorted({p.relative_to(root / 'hub').parts[0] for p in (root / 'hub').rglob('part-*.parquet')})
 assert stored == ['cadd', 'clinvar', 'gnomad', 'vep'], stored
 print('Annotation hub: first run stores, second run annotates nothing new, outputs identical')
 PY
-# Whole cohort: one validation and one annotation, then two family tasks
-# each for filtration and prioritization.
+# Whole cohort: one validation and one annotation, then each family's
+# filtration and prioritization tasks.
 run_with nextflow-stub-cohort "${shared[@]}" --ped "${fixture}/family.ped" --outdir "${case_root}/cohort"
 # No PED: one filtration and one prioritization without a family.
 run_with nextflow-stub-no-pedigree "${shared[@]}" --outdir "${case_root}/no-pedigree"
@@ -120,25 +106,34 @@ import sys
 root = Path(sys.argv[1])
 def names(case, pattern):
     return sorted(p.name for p in (root / case).rglob(pattern))
+ANNOTATE = ['ANNOTATE_CADD', 'ANNOTATE_MERGE', 'ANNOTATE_PREPROCESS'] + ['ANNOTATE_STEP'] * 4
 PRIORITIZE = ['PRIORITIZE_ACMG', 'PRIORITIZE_COMBINE', 'PRIORITIZE_JOIN', 'PRIORITIZE_SPLICING', 'PRIORITIZE_UTR']
 STEPS = ['acmg', 'combine', 'join', 'splicing', 'utr']
+ANNOTATION_RECORDS = [f'annotation-{s}.provenance.json' for s in ('cadd', 'clinvar', 'control', 'gnomad', 'merge', 'preprocess', 'vep')]
 def tasks(case):
     trace = sorted((root / case / 'pipeline_info').glob('trace-*.tsv'))[-1]
     return sorted(row['name'].split(' ')[0] for row in csv.DictReader(trace.open(), delimiter='\t'))
-assert tasks('cohort') == sorted(['ANNOTATE_COHORT', 'FILTER_FAMILY', 'FILTER_FAMILY', 'VALIDATE_INPUTS'] + PRIORITIZE * 2), tasks('cohort')
+assert tasks('cohort') == sorted(ANNOTATE + ['FILTER_FAMILY', 'FILTER_FAMILY', 'VALIDATE_INPUTS'] + PRIORITIZE * 2), tasks('cohort')
 assert names('cohort', '*.filtered.acmg.tsv') == ['cohort.anno.FAM.filtered.acmg.tsv', 'cohort.anno.OTHER.filtered.acmg.tsv'], names('cohort', '*.acmg.tsv')
-assert names('cohort', '*.provenance.json') == sorted(['annotation.provenance.json', 'filtration.FAM.provenance.json', 'filtration.OTHER.provenance.json'] + [f'prioritization-{s}.{f}.provenance.json' for s in STEPS for f in ('FAM', 'OTHER')]), names('cohort', '*.provenance.json')
+assert names('cohort', '*.provenance.json') == sorted(ANNOTATION_RECORDS + ['filtration.FAM.provenance.json', 'filtration.OTHER.provenance.json'] + [f'prioritization-{s}.{f}.provenance.json' for s in STEPS for f in ('FAM', 'OTHER')]), names('cohort', '*.provenance.json')
 contract = json.loads(next((root / 'cohort').rglob('contract.json')).read_text())
 assert contract['families'] == ['OTHER', 'FAM'], contract['families']
 assert contract['family_samples'] == {'OTHER': ['other'], 'FAM': ['child', 'dad', 'mom']}, contract['family_samples']
-assert tasks('no-pedigree') == sorted(['ANNOTATE_COHORT', 'FILTER_FAMILY', 'VALIDATE_INPUTS'] + PRIORITIZE), tasks('no-pedigree')
+assert tasks('no-pedigree') == sorted(ANNOTATE + ['FILTER_FAMILY', 'VALIDATE_INPUTS'] + PRIORITIZE), tasks('no-pedigree')
 assert names('no-pedigree', '*.filtered.acmg.tsv') == ['cohort.anno.filtered.acmg.tsv'], names('no-pedigree', '*.acmg.tsv')
 assert names('no-pedigree', '*.filtered.vcf.gz') == ['cohort.anno.filtered.vcf.gz']
 contract = json.loads(next((root / 'no-pedigree').rglob('contract.json')).read_text())
 assert contract['families'] == [] and contract['ped_sha256'] is None, contract
-print('Cohort stub with two family task pairs and no-pedigree stub passed')
+print('Cohort stub with two families and no-pedigree stub passed')
 PY
-run_case nextflow-stub-annotated --mode annotated --cadd "${fixture}/cohort.anno.cadd.tsv" --outdir "${case_root}/annotated"
+# The removed annotated mode and old hub options are refused with a message
+# that points to the annotation hub.
+if "${nextflow_bin}" -log "${run_root}/logs/nextflow-stub-removed-mode.log" "${common[@]}" \
+    --mode annotated --cadd "${fixture}/cohort.anno.cadd.tsv" --outdir "${case_root}/removed-mode" \
+    > "${run_root}/logs/nextflow-stub-removed-mode.stdout.log" 2>&1; then
+    echo 'ERROR: the removed annotated mode was accepted' >&2
+    exit 1
+fi
 # Same output directory with a different environment identity must fail before
 # cached tasks are considered; this guards against silently retaining old tables.
 if "${nextflow_bin}" -log "${run_root}/logs/nextflow-stub-reject-output.log" "${common[@]}" \
@@ -160,6 +155,8 @@ from pathlib import Path
 import json
 import sys
 root = Path(sys.argv[1])
+removed = (root / 'logs/nextflow-stub-removed-mode.stdout.log').read_text()
+assert 'annotated mode was removed' in removed, removed
 failure = (root / 'logs/nextflow-stub-reject-output.stdout.log').read_text()
 assert 'different inputs/source/resources/settings' in failure, failure
 flag = (root / 'logs/nextflow-stub-flag-value.stdout.log').read_text()
@@ -169,6 +166,5 @@ assert contract['samples'] == ['child', 'dad', 'mom', 'other']
 assert contract['families'] == ['FAM']
 assert contract['family_samples'] == {'FAM': ['child', 'dad', 'mom']}
 assert contract['stub'] is True
-assert len(list((root / 'validation/nextflow-stub/annotated').rglob('*.filtered.acmg.tsv'))) == 1
-print('Annotated stub, preserved cohort context, stale-output and flag-value rejection passed')
+print('Removed-option refusal, preserved cohort context, stale-output and flag-value rejection passed')
 PY

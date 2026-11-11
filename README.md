@@ -4,7 +4,7 @@ PriVA-nextflow runs PriVA as a Nextflow workflow over one cohort VCF. It validat
 
 ```mermaid
 flowchart LR
-    I[Cohort VCF, or annotated VCF + matching CADD] --> V[Validate inputs and resources]
+    I[Cohort VCF] --> V[Validate inputs and resources]
     P[Pedigree, optional + configuration] --> V
     V --> A[Annotate the cohort once: VEP, CADD]
     A --> F1[Filter family 1]
@@ -15,7 +15,7 @@ flowchart LR
     R2 --> O
 ```
 
-**Two entry points.** `--mode raw` starts from the cohort VCF and runs the annotation phase (VEP, CADD and the other annotation steps) as a Nextflow task. It was qualified against the earlier Snakemake workflow, which this workflow replaces: on a trio, and on the same three samples as three families and without a pedigree, the annotated VCF, the CADD table and every family's outputs were identical, with the local executor and with the Slurm profile. `--mode annotated` imports the complete original VCF/CADD pair from a compatible scientific profile, not arbitrary annotations, and skips annotation. SpliceAI v1 and prepared SpliceAI2 caches each use their own splicing and ACMG cutoffs ([spliceai_cutoffs.py](scripts/spliceai_cutoffs.py)); SpliceAI2 uses its authors' recommended thresholds (0.1, 0.25 and 0.5 in place of SpliceAI v1's 0.2, 0.5 and 0.8). Installation, stub execution and successful scheduling do not establish family or scientific-profile qualification.
+**One entry point.** A run starts from the cohort VCF and annotates it one task per annotation step (VEP, CADD and the other steps). It was qualified against the earlier Snakemake workflow, which this workflow replaces: on a trio, and on the same three samples as three families and without a pedigree, the annotated VCF, the CADD table and every family's outputs were identical, with the local executor and with the Slurm profile. To avoid annotating the same variants again, use the annotation hub (`--annotation_hub`); to finish an interrupted run, use `-resume`. The earlier annotated mode, which imported a ready VCF/CADD pair, was removed. SpliceAI v1 and prepared SpliceAI2 caches each use their own splicing and ACMG cutoffs ([spliceai_cutoffs.py](scripts/spliceai_cutoffs.py)); SpliceAI2 uses its authors' recommended thresholds (0.1, 0.25 and 0.5 in place of SpliceAI v1's 0.2, 0.5 and 0.8). Installation, stub execution and successful scheduling do not establish family or scientific-profile qualification.
 
 ## Install
 
@@ -96,7 +96,7 @@ deterministic reporting of all calculated UTR effects and retains the original
 module and patch. The biological calculations are unchanged; other VEP releases
 are left unchanged. See [`data/vep`](data/vep/README.md).
 
-CADD scores come from upstream `CADD.sh` (CADD-scripts v1.7.2) with all of CADD's own data. `main_install` installs it the original way, each file downloaded only when missing with its MD5 checked once, then replaces two of its scripts with PriVA's faster copies in [`scripts/cadd_scripts`](scripts/cadd_scripts/README.md): the prescore lookup starts from a position index built once beside each prescored table, and MMSplice reloads a saved exon table. Both write the same output as upstream. `CADD.sh` runs as a child process whose Snakemake builds its own environments under `cadd_base_dir/envs/conda`; its Snakemake needs a `conda` program (24.7.1 or later) on `PATH`. The standalone `cadd.nf` runs the same `CADD.sh` on one VCF and writes the CADD table that `--mode annotated` accepts:
+CADD scores come from upstream `CADD.sh` (CADD-scripts v1.7.2) with all of CADD's own data. `main_install` installs it the original way, each file downloaded only when missing with its MD5 checked once, then replaces two of its scripts with PriVA's faster copies in [`scripts/cadd_scripts`](scripts/cadd_scripts/README.md): the prescore lookup starts from a position index built once beside each prescored table, and MMSplice reloads a saved exon table. Both write the same output as upstream. `CADD.sh` runs as a child process whose Snakemake builds its own environments under `cadd_base_dir/envs/conda`; its Snakemake needs a `conda` program (24.7.1 or later) on `PATH`. The standalone `cadd.nf` runs the same `CADD.sh` on one VCF and writes its CADD table:
 
 Fresh `priva_acmg` environments include Conda. For existing environments, the
 installer checks `PATH`, `CONDA_EXE`, then `cadd_parent_dir/conda_frontend`.
@@ -154,9 +154,9 @@ cd "$PRIVA_RUNS"
 
 The cache path is read from the installed configuration. Keep this external launch directory so `.nextflow` state, logs and run products stay outside the checkout. The driver is separate from the scientific environment.
 
-## Prepare a compatible annotated input
+## Prepare the inputs
 
-- Supply one BGZF `*.vcf.gz` with its adjacent `.tbi`, complete compatible `CSQ` annotations, and the matching uncompressed transcript-aware CADD TSV. Its first row needs unique `#Chrom`, `Pos`, `Ref`, `Alt`, `PHRED` and `FeatureID` columns. Preserve any additional original columns.
+- Supply the cohort as one BGZF `*.vcf.gz` with its adjacent `.tbi`.
 - Retain the full cohort VCF and pedigree. Every PED family is filtered and prioritized in its own tasks; `--family ID` runs only that family. Without `--ped`, one run covers all samples with allele-frequency filtering only, as the earlier shell workflow did. Every PED sample must occur in the VCF, sample identifiers must be unique, and family/sample names must be safe file-name tokens.
 - Use a tab-delimited PED with at least the standard six columns: family, individual, father, mother, sex, phenotype. Put the affected proband first within each family. Sex is `0` unknown, `1` male or `2` female; phenotype is `0`/`-9` unknown, `1` unaffected or `2` affected. Unknown values remain unknown.
 - Match `--assembly`, the installed configuration, annotations and resources. Keep the legacy scientific profile and transcript mappings compatible. The SpliceAI SNV and indel files must be the same version (v1 or SpliceAI2); each version uses its own cutoffs.
@@ -165,7 +165,7 @@ Create a manifest of the existing resources. This inventories resources; it does
 
 ```bash
 "$PRIVA_BINARY" task manifest \
-  --config "$PRIVA_CONFIG" --legacy-root "$PRIVA_ROOT" --mode annotated \
+  --config "$PRIVA_CONFIG" --legacy-root "$PRIVA_ROOT" --mode raw \
   --vcf-hub-mode off --cadd-hub-mode off \
   --output "$PRIVA_RUNS/resources.json"
 ```
@@ -181,32 +181,25 @@ Use the equivalent explicit lock from your manager when using Mamba/Conda. Keep 
 
 ## Run a cohort
 
-Annotated mode, with a compatible VCF/CADD pair:
-
 ```bash
 "$PRIVA_NF" run "$PRIVA_ROOT/main.nf" -profile local \
-  --mode annotated \
-  --input "$(realpath inputs/cohort.anno.vcf.gz)" \
-  --cadd "$(realpath inputs/cohort.anno.cadd.tsv)" \
+  --input "$(realpath inputs/cohort.vcf.gz)" \
   --ped "$(realpath inputs/cohort.ped)" --assembly hg19 \
   --legacy_config "$PRIVA_CONFIG" \
   --resource_manifest "$PRIVA_RUNS/resources.json" \
   --software_id "$PRIVA_SOFTWARE_ID" \
   --priva_binary "$PRIVA_BINARY" \
-  --vcf_hub_mode off --cadd_hub_mode off \
+  --annotation_hub "$PRIVA_RUNS/annotation_hub" \
   --outdir "$PRIVA_RUNS/cohort" -work-dir "$PRIVA_RUNS/work"
 ```
 
-For raw mode, make the manifest with `--mode raw` (it also records the VEP and CADD
-installations), then launch with `--mode raw` and the cohort VCF as `--input`, without `--cadd`.
-The new annotation pair is published under `annotation/`.
+The annotated VCF and its CADD table are published under `annotation/`.
 
 Each family's outputs carry its PED family identifier, for example
 `cohort.anno.FAM1.filtered.tsv`; a run without `--ped` writes `cohort.anno.filtered.tsv`.
 Families run in parallel as far as `--family_cpus` and the executor allow.
 
-In raw mode with `--vcf_hub_mode off --cadd_hub_mode off`, annotation runs as one
-task per step of `annotation_vcf.sh`, in this order:
+Annotation runs as one task per step of `annotation_vcf.sh`, in this order:
 
 1. Preprocessing.
 2. gnomAD, ClinVar, control cohort, VEP and CADD at the same time, each on its own
@@ -215,12 +208,10 @@ task per step of `annotation_vcf.sh`, in this order:
    preprocessed VCF in the script's order. It refuses a step that kept a different
    record or changed anything else.
 
-The result is the same annotated VCF and CADD table as the single annotation task,
-and a failed step reruns alone with `-resume`. With an old hub mode in use (the
-default `--cadd_hub_mode` is `copy`), annotation stays one task, because the hub
-logic reshapes it.
+The result is the same annotated VCF and CADD table as the earlier single
+annotation task, and a failed step reruns alone with `-resume`.
 
-`--annotation_hub FOLDER` (with both old hub modes off) keeps each annotation
+`--annotation_hub FOLDER` keeps each annotation
 step's results per variant, so later runs annotate only variants the hub has not
 seen:
 
@@ -235,11 +226,15 @@ seen:
    session. A resumed run never reads its own session's files, so `-resume` reuses
    every task.
 
+After an installation changes a resource, `--action hub_refresh` (the same options,
+without `--input`) annotates the variants stored in that step's earlier folders into
+its new folder, so the next cohort finds them; earlier folders are never changed.
+
 Family tasks run prioritization in five steps: combine the family table, add the
 splicing and 5′ UTR columns side by side on copies of it, join the copies (refusing
 differing rows or shared columns), then assign the ACMG criteria.
 
-The example `inputs/` paths are relative to the external `PRIVA_RUNS` directory; replace them with your actual input paths and assembly. The annotated route does not rerun VEP or regenerate CADD. Use a new output directory for changed inputs, source, resources or settings. For the same run, retain the external launch/work directories and Nextflow cache, and append `-resume`; launch-time resource checks still apply to a fully cached run.
+The example `inputs/` paths are relative to the external `PRIVA_RUNS` directory; replace them with your actual input paths and assembly. Use a new output directory for changed inputs, source, resources or settings. For the same run, retain the external launch/work directories and Nextflow cache, and append `-resume`; launch-time resource checks still apply to a fully cached run.
 
 | Profile/option | Scope |
 |---|---|
@@ -266,7 +261,7 @@ read `HGNC_ID`.
 
 | Directory | Contents |
 |---|---|
-| `annotation/` | Raw mode only: the annotated VCF/index and its CADD table |
+| `annotation/` | The annotated VCF/index and its CADD table |
 | `variants/` | Per family: the filtered VCF/index and matching CADD table |
 | `prioritization/` | Per family: `*.filtered.tsv` ranked transcript rows and `*.filtered.acmg.tsv` evidence matrix |
 | `pipeline_info/` | Input/resource bundle, provenance of each task (family tasks carry the family in the name) and Nextflow execution reports |

@@ -1,6 +1,6 @@
 nextflow.enable.dsl=2
 
-include { VALIDATE_INPUTS; ANNOTATE_COHORT; ANNOTATE_PREPROCESS; ANNOTATE_STEP; ANNOTATE_CADD; ANNOTATE_MERGE; HUB_LOOKUP; HUB_FILL; HUB_ADD; HUB_REFRESH_PLAN; FILTER_FAMILY; PRIORITIZE_COMBINE; PRIORITIZE_SPLICING; PRIORITIZE_UTR; PRIORITIZE_JOIN; PRIORITIZE_ACMG } from './modules/local/compatibility'
+include { VALIDATE_INPUTS; ANNOTATE_PREPROCESS; ANNOTATE_STEP; ANNOTATE_CADD; ANNOTATE_MERGE; HUB_LOOKUP; HUB_FILL; HUB_ADD; HUB_REFRESH_PLAN; FILTER_FAMILY; PRIORITIZE_COMBINE; PRIORITIZE_SPLICING; PRIORITIZE_UTR; PRIORITIZE_JOIN; PRIORITIZE_ACMG } from './modules/local/compatibility'
 include { INSTALL_RESOURCES } from './workflows/install'
 
 // The scientific source is deliberately retained during orchestration parity.
@@ -40,7 +40,6 @@ workflow {
         ['annotation_hub', 'assembly', 'legacy_config', 'resource_manifest', 'software_id', 'outdir', 'priva_binary'].each { key ->
             if (!params[key]) error "Required parameter --${key} is missing"
         }
-        if (params.vcf_hub_mode != 'off' || params.cadd_hub_mode != 'off') error '--action hub_refresh needs --vcf_hub_mode off --cadd_hub_mode off'
         def refreshRoot = new File(projectDir.toString()).canonicalFile
         def refreshBinary = new File(params.priva_binary.toString()).canonicalFile
         if (!refreshBinary.isFile() || !refreshBinary.canExecute()) error '--priva_binary must be an executable PriVA program'
@@ -84,24 +83,22 @@ Install:  --action install --install_config CONFIG.yaml --resource_root FOLDER
           --priva_binary PRIVA_PROGRAM [--install_outdir FOLDER]
 Refresh:  --action hub_refresh --annotation_hub FOLDER with the run options above
           (no --input): re-annotates stored variants for steps whose folder changed
-Optional: --ped COHORT.ped --family ID --mode raw|annotated
-          --cadd ANNOTATED.cadd.tsv --vcf_index VCF.vcf.gz.tbi
-          --vcf_hub_mode off|qualified-copy --cadd_hub_mode off|copy
-          --annotation_hub FOLDER (raw mode with both old hub modes off)
-The cohort VCF is validated and annotated once. With --ped, every PED family is
-then filtered and prioritized in its own tasks (--family selects one); without
---ped, one run covers all samples without family filtering. The annotated mode
-requires its matching CADD TSV. Preserve the original proband-first PED row
-order. Use -stub-run only for wiring tests. See README.md for configuration,
+Optional: --ped COHORT.ped --family ID --vcf_index VCF.vcf.gz.tbi
+          --annotation_hub FOLDER (reuse stored annotation across runs)
+The cohort VCF is validated and annotated once, one task per annotation step.
+With --ped, every PED family is then filtered and prioritized in its own tasks
+(--family selects one); without --ped, one run covers all samples without
+family filtering. Preserve the original proband-first PED row order. Use -stub-run only for wiring tests. See README.md for configuration,
 outputs and scientific-profile requirements.'''
     } else {
         ['input', 'assembly', 'legacy_config', 'resource_manifest', 'software_id', 'outdir', 'priva_binary'].each { key ->
             if (!params[key]) error "Required parameter --${key} is missing"
         }
-        if (!(params.mode in ['raw', 'annotated'])) error '--mode must be raw or annotated'
+        // Annotated mode and the old hub options were removed (November 2026):
+        // --annotation_hub reuses stored annotation, and -resume a finished run.
+        if (params.mode != 'raw' || params.cadd) error 'The annotated mode was removed; run from the raw VCF, with --annotation_hub to reuse stored annotation'
+        if (params.vcf_hub_mode != 'off' || params.cadd_hub_mode != 'off') error '--vcf_hub_mode and --cadd_hub_mode were removed; use --annotation_hub FOLDER'
         if (!(params.assembly in ['hg19', 'hg38', 'GRCh37', 'GRCh38'])) error 'Unsupported --assembly'
-        if (!(params.vcf_hub_mode in ['off', 'qualified-copy'])) error 'Unsupported --vcf_hub_mode'
-        if (!(params.cadd_hub_mode in ['off', 'copy'])) error 'Unsupported --cadd_hub_mode'
         def readonlyProfile = workflow.profile.tokenize(',').contains('task_readonly')
         // 24 October 2026 CT: derive identity from the selected profile itself.
         // A separate params default can override an included profile assignment
@@ -110,9 +107,6 @@ outputs and scientific-profile requirements.'''
         if (readonlyProfile && workflow.profile.tokenize(',').contains('apptainer')) error 'Combined task_readonly/apptainer execution is not qualified; choose one profile'
         if (workflow.profile.tokenize(',').contains('test') && !workflow.stubRun) error 'The test profile requires -stub-run and is never a scientific acceptance run'
         if (workflow.profile.tokenize(',').contains('apptainer') && !params.container_image) error 'The apptainer profile requires --container_image pinned to a tested image'
-        if (params.mode == 'annotated' && !params.cadd) error '--mode annotated requires the matching --cadd TSV'
-        if (params.mode == 'raw' && params.cadd) error '--cadd is only accepted with --mode annotated'
-        if (params.annotation_hub && !(params.mode == 'raw' && params.vcf_hub_mode == 'off' && params.cadd_hub_mode == 'off')) error '--annotation_hub needs --mode raw with --vcf_hub_mode off and --cadd_hub_mode off'
         // A value starting with '-' after a space is read by Nextflow as a
         // separate flag, which leaves this parameter set to true (a boolean,
         // or the text 'true' depending on how the launch reads it).
@@ -128,7 +122,6 @@ outputs and scientific-profile requirements.'''
         if (!privaBinary.isFile() || !privaBinary.canExecute()) error '--priva_binary must be an executable PriVA program'
         if (!(privaBinary.toString() ==~ /[A-Za-z0-9_\.\/:+\-]+/)) error '--priva_binary must be a path without whitespace or shell metacharacters'
         def base = new File(params.input.toString()).name.replaceFirst(/\.vcf\.gz$/, '')
-        if (params.mode == 'annotated') base = base.replaceFirst(/\.anno$/, '')
         if (!(base ==~ /[A-Za-z0-9_][A-Za-z0-9_.-]*/)) error 'Unsafe input basename'
         def meta = [family: params.family ? params.family.toString() : '', base: base, assembly: params.assembly, mode: params.mode,
                     source_root: sourceRoot.toString(), source_digest: sourceDigest(sourceRoot),
@@ -150,7 +143,6 @@ outputs and scientific-profile requirements.'''
             '--cadd-hub-mode', meta.cadd_hub_mode.toString(), '--outdir', params.outdir.toString(),
             '--task-boundary', meta.task_boundary.toString(),
             '--annotation-cpus', params.annotation_cpus.toString(), '--family-cpus', params.family_cpus.toString()]
-        if (params.cadd) launchCommand.addAll(['--cadd', file(params.cadd, checkIfExists: true).toString()])
         if (params.ped) launchCommand.addAll(['--ped', file(params.ped, checkIfExists: true).toString()])
         if (meta.family) launchCommand.addAll(['--family', meta.family])
         if (workflow.stubRun) launchCommand.add('--stub')
@@ -165,7 +157,7 @@ outputs and scientific-profile requirements.'''
             params.ped ? file(params.ped, checkIfExists: true) : [],
             file(params.legacy_config, checkIfExists: true),
             file(params.resource_manifest, checkIfExists: true),
-            params.cadd ? file(params.cadd, checkIfExists: true) : []))
+            []))
         // The bundle passes between tasks as its files, not as a folder: a
         // folder's own size and time on network file systems can differ
         // between reads, which would change the task hash and defeat -resume.
@@ -179,75 +171,67 @@ outputs and scientific-profile requirements.'''
             def listed = new groovy.json.JsonSlurper().parse(contract.toFile()).families
             listed ? listed.collect { it.toString() } : ['']
         }
-        // Raw mode with both hubs off runs the annotation script's functions as
-        // their own tasks; otherwise (annotated mode, or a hub in use, whose
-        // logic reshapes the annotation) the whole script is one task.
-        def annotated = Channel.empty()
-        if (params.mode == 'raw' && params.vcf_hub_mode == 'off' && params.cadd_hub_mode == 'off') {
-            ANNOTATE_PREPROCESS(VALIDATE_INPUTS.out.validated.map(bundleLast).map { run, vcf, index, cadd, bundle -> [run, vcf, index, bundle] })
-            def preprocessed = ANNOTATE_PREPROCESS.out.preprocessed.map(bundleLast)
-            // Each annotation step's output, as [source, file]: gnomad, clinvar,
-            // control, vep (VCFs with every preprocessed record) and cadd (table).
-            def stepOutputs = Channel.empty()
-            if (params.annotation_hub) {
-                // Hub: each step's stored results are looked up first; the step
-                // runs only on new variants; fill rebuilds its full output; add
-                // stores the new results (hub folders named in the contract).
-                def toLookup = preprocessed.flatMap { run, vcf, index, bundle ->
-                    def contract = new groovy.json.JsonSlurper().parse(bundle.find { f -> f.name == 'contract.json' }.toFile())
-                    ['gnomad', 'clinvar', 'control', 'vep', 'cadd'].collect { source -> [run, source, contract.hub_lineages[source].toString(), vcf, index] }
-                }
-                HUB_LOOKUP(toLookup)
-                def lookedUp = HUB_LOOKUP.out.split.map { run, source, lineage, known, fresh, freshIndex, count -> [run, source, lineage, known, fresh, freshIndex, count.trim().toInteger()] }
-                def withNew = lookedUp.filter { item -> item[6] > 0 }
-                ANNOTATE_STEP(withNew.filter { item -> item[1] != 'cadd' }.combine(preprocessed.map { item -> [item[3]] })
-                    .map { run, source, lineage, known, fresh, freshIndex, count, bundle -> [run, source, fresh, freshIndex, bundle] })
-                ANNOTATE_CADD(withNew.filter { item -> item[1] == 'cadd' }.combine(preprocessed.map { item -> [item[3]] })
-                    .map { run, source, lineage, known, fresh, freshIndex, count, bundle -> [run, fresh, freshIndex, bundle] })
-                def annotatedNew = ANNOTATE_STEP.out.annotated.map { run, source, output -> [source, output] }
-                    .mix(ANNOTATE_CADD.out.cadd.map { run, output -> ['cadd', output] })
-                def noNew = file("${projectDir}/assets/hub_no_new_variants")
-                def stepResults = annotatedNew.mix(lookedUp.filter { item -> item[6] == 0 }.map { item -> [item[1], noNew] })
-                def toFill = lookedUp.map { run, source, lineage, known, fresh, freshIndex, count -> [source, run, known] }
-                    .join(stepResults)
-                    .combine(preprocessed.map { item -> [item[1], item[2]] })
-                    .map { source, run, known, output, vcf, index -> [run, source, vcf, index, known, output] }
-                HUB_FILL(toFill)
-                def toAdd = withNew.filter { item -> item[2] != 'off' }
-                    .map { run, source, lineage, known, fresh, freshIndex, count -> [source, run, lineage, fresh] }
-                    .join(annotatedNew)
-                    .map { source, run, lineage, fresh, output -> [run, source, lineage, fresh, output] }
-                HUB_ADD(toAdd)
-                stepOutputs = HUB_FILL.out.filled.map { run, source, output -> [source, output] }
-            } else {
-                // gnomAD, ClinVar, control cohort and VEP at the same time, and CADD.
-                ANNOTATE_STEP(preprocessed.combine(Channel.of('gnomad', 'clinvar', 'control', 'vep'))
-                    .map { run, vcf, index, bundle, step -> [run, step, vcf, index, bundle] })
-                ANNOTATE_CADD(preprocessed)
-                stepOutputs = ANNOTATE_STEP.out.annotated.map { run, source, output -> [source, output] }
-                    .mix(ANNOTATE_CADD.out.cadd.map { run, output -> ['cadd', output] })
+        // Annotation runs as one task per step of annotation_vcf.sh.
+        ANNOTATE_PREPROCESS(VALIDATE_INPUTS.out.validated.map(bundleLast).map { run, vcf, index, cadd, bundle -> [run, vcf, index, bundle] })
+        def preprocessed = ANNOTATE_PREPROCESS.out.preprocessed.map(bundleLast)
+        // Each annotation step's output, as [source, file]: gnomad, clinvar,
+        // control, vep (VCFs with every preprocessed record) and cadd (table).
+        def stepOutputs = Channel.empty()
+        if (params.annotation_hub) {
+            // Hub: each step's stored results are looked up first; the step
+            // runs only on new variants; fill rebuilds its full output; add
+            // stores the new results (hub folders named in the contract).
+            def toLookup = preprocessed.flatMap { run, vcf, index, bundle ->
+                def contract = new groovy.json.JsonSlurper().parse(bundle.find { f -> f.name == 'contract.json' }.toFile())
+                ['gnomad', 'clinvar', 'control', 'vep', 'cadd'].collect { source -> [run, source, contract.hub_lineages[source].toString(), vcf, index] }
             }
-            def byStep = stepOutputs.branch { item ->
-                gnomad: item[0] == 'gnomad'
-                clinvar: item[0] == 'clinvar'
-                control: item[0] == 'control'
-                vep: item[0] == 'vep'
-                cadd: item[0] == 'cadd'
-            }
-            // One cohort per run, so combine joins exactly one item of each.
-            def toMerge = preprocessed
-                .combine(byStep.gnomad.map { it[1] })
-                .combine(byStep.clinvar.map { it[1] })
-                .combine(byStep.control.map { it[1] })
-                .combine(byStep.vep.map { it[1] })
-                .combine(byStep.cadd.map { it[1] })
-                .map { run, vcf, index, bundle, gnomad, clinvar, control, vep, cadd -> [run, vcf, index, gnomad, clinvar, control, vep, cadd, bundle] }
-            ANNOTATE_MERGE(toMerge)
-            annotated = ANNOTATE_MERGE.out.annotated.map(bundleLast)
+            HUB_LOOKUP(toLookup)
+            def lookedUp = HUB_LOOKUP.out.split.map { run, source, lineage, known, fresh, freshIndex, count -> [run, source, lineage, known, fresh, freshIndex, count.trim().toInteger()] }
+            def withNew = lookedUp.filter { item -> item[6] > 0 }
+            ANNOTATE_STEP(withNew.filter { item -> item[1] != 'cadd' }.combine(preprocessed.map { item -> [item[3]] })
+                .map { run, source, lineage, known, fresh, freshIndex, count, bundle -> [run, source, fresh, freshIndex, bundle] })
+            ANNOTATE_CADD(withNew.filter { item -> item[1] == 'cadd' }.combine(preprocessed.map { item -> [item[3]] })
+                .map { run, source, lineage, known, fresh, freshIndex, count, bundle -> [run, fresh, freshIndex, bundle] })
+            def annotatedNew = ANNOTATE_STEP.out.annotated.map { run, source, output -> [source, output] }
+                .mix(ANNOTATE_CADD.out.cadd.map { run, output -> ['cadd', output] })
+            def noNew = file("${projectDir}/assets/hub_no_new_variants")
+            def stepResults = annotatedNew.mix(lookedUp.filter { item -> item[6] == 0 }.map { item -> [item[1], noNew] })
+            def toFill = lookedUp.map { run, source, lineage, known, fresh, freshIndex, count -> [source, run, known] }
+                .join(stepResults)
+                .combine(preprocessed.map { item -> [item[1], item[2]] })
+                .map { source, run, known, output, vcf, index -> [run, source, vcf, index, known, output] }
+            HUB_FILL(toFill)
+            def toAdd = withNew.filter { item -> item[2] != 'off' }
+                .map { run, source, lineage, known, fresh, freshIndex, count -> [source, run, lineage, fresh] }
+                .join(annotatedNew)
+                .map { source, run, lineage, fresh, output -> [run, source, lineage, fresh, output] }
+            HUB_ADD(toAdd)
+            stepOutputs = HUB_FILL.out.filled.map { run, source, output -> [source, output] }
         } else {
-            ANNOTATE_COHORT(VALIDATE_INPUTS.out.validated.map(bundleLast))
-            annotated = ANNOTATE_COHORT.out.annotated.map(bundleLast)
+            // gnomAD, ClinVar, control cohort and VEP at the same time, and CADD.
+            ANNOTATE_STEP(preprocessed.combine(Channel.of('gnomad', 'clinvar', 'control', 'vep'))
+                .map { run, vcf, index, bundle, step -> [run, step, vcf, index, bundle] })
+            ANNOTATE_CADD(preprocessed)
+            stepOutputs = ANNOTATE_STEP.out.annotated.map { run, source, output -> [source, output] }
+                .mix(ANNOTATE_CADD.out.cadd.map { run, output -> ['cadd', output] })
         }
+        def byStep = stepOutputs.branch { item ->
+            gnomad: item[0] == 'gnomad'
+            clinvar: item[0] == 'clinvar'
+            control: item[0] == 'control'
+            vep: item[0] == 'vep'
+            cadd: item[0] == 'cadd'
+        }
+        // One cohort per run, so combine joins exactly one item of each.
+        def toMerge = preprocessed
+            .combine(byStep.gnomad.map { it[1] })
+            .combine(byStep.clinvar.map { it[1] })
+            .combine(byStep.control.map { it[1] })
+            .combine(byStep.vep.map { it[1] })
+            .combine(byStep.cadd.map { it[1] })
+            .map { run, vcf, index, bundle, gnomad, clinvar, control, vep, cadd -> [run, vcf, index, gnomad, clinvar, control, vep, cadd, bundle] }
+        ANNOTATE_MERGE(toMerge)
+        def annotated = ANNOTATE_MERGE.out.annotated.map(bundleLast)
         // One filtration task per family: (meta, family, vcf, index, cadd, bundle).
         FILTER_FAMILY(annotated.combine(families).map { run, vcf, index, cadd, bundle, family -> [run, family, vcf, index, cadd, bundle] })
         // Families prioritize with their filtered CADD table; the no-pedigree

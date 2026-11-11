@@ -2147,7 +2147,7 @@ function gnomAD_download_chrom() {
     [[ -n $gnomAD_vcf_dir && $gnomAD_vcf_dir != null ]] || { log "ERROR: gnomad_vcf_dir is not set"; return 1; }
     mkdir -p "$gnomAD_vcf_dir" || return 1
     _gnomAD_fetch_chrom "$gnomAD_vcf_dir" "$chr" && \
-    update_yaml "${config_file}" "gnomad_vcf_chr${chr}" "${gnomAD_vcf_dir}/gnomad.joint.v4.1.sites.chr${chr}.vcf.bgz"
+    update_or_append_yaml "${config_file}" "gnomad_vcf_chr${chr}" "${gnomAD_vcf_dir}/gnomad.joint.v4.1.sites.chr${chr}.vcf.bgz"
 }
 
 # Install task C1: link the 24 chromosome downloads (gnomad_vcf_chrN, each in
@@ -2488,7 +2488,7 @@ function ClinVar_download() {
     priva_resolve_binary "$config_file" || return 1
     "${PRIVA_BIN}" clinvar-gene-refresh download \
         --config "$config_file" --source-root "${BASE_DIR}" --output "$folder/release" && \
-    update_yaml "$config_file" clinvar_release_inputs "$folder/release/inputs.ready.json"
+    update_or_append_yaml "$config_file" clinvar_release_inputs "$folder/release/inputs.ready.json"
 }
 
 function ClinVar_install() {

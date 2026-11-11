@@ -654,10 +654,7 @@ pub(super) fn download_release(config_path: &str, source_root: &str, folder: &st
         ));
     };
     let policy = super::profile::resource_policy(source_root)?;
-    let latest = latest_metadata(
-        assembly,
-        &text_of(item(&policy, "latest_url_template")?),
-    )?;
+    let latest = latest_metadata(assembly, &text_of(item(&policy, "latest_url_template")?))?;
     let plan = object([
         ("build_dir", string(folder)),
         ("assembly", string(assembly)),

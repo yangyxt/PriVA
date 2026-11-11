@@ -622,7 +622,10 @@ fn downloaded_vcf(config_path: &str) -> Result<Option<String>> {
         return Ok(None);
     }
     let release = read_json(&path_of(&value)?)?;
-    Ok(Some(path_of(item(item(item(&release, "sources")?, "vcf")?, "path")?)?))
+    Ok(Some(path_of(item(
+        item(item(&release, "sources")?, "vcf")?,
+        "path",
+    )?)?))
 }
 
 pub(super) fn install_refresh(config_path: &str, source_root: &str) -> Result<Json> {

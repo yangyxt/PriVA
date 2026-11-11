@@ -101,7 +101,9 @@ fn check_name(label: &str, value: &str) -> Result<()> {
             .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_' || b == b'.')
         || value.starts_with('.')
     {
-        return Err(invalid(format!("{label} {value:?} must be letters, digits, '-', '_' or '.'")));
+        return Err(invalid(format!(
+            "{label} {value:?} must be letters, digits, '-', '_' or '.'"
+        )));
     }
     Ok(())
 }
@@ -130,7 +132,10 @@ fn read_vcf(path: &Path) -> Result<Vcf> {
             break;
         }
     }
-    Err(invalid(format!("{}: no #CHROM header line", path.display())))
+    Err(invalid(format!(
+        "{}: no #CHROM header line",
+        path.display()
+    )))
 }
 
 fn key_of(line: &str) -> Result<Key> {
@@ -140,7 +145,9 @@ fn key_of(line: &str) -> Result<Key> {
         (Some(chrom), Some(pos), Some(_id), Some(reference), Some(alt)) => {
             Ok((chrom, pos, reference, alt))
         }
-        _ => Err(invalid(format!("VCF record with fewer than 5 columns: {line}"))),
+        _ => Err(invalid(format!(
+            "VCF record with fewer than 5 columns: {line}"
+        ))),
     }
 }
 
@@ -201,7 +208,13 @@ fn load(
                     .map(|v| v.unwrap_or_default().to_owned())
                     .collect())
             };
-            let (c, p, r, a, v) = (column("chrom")?, column("pos")?, column("ref")?, column("alt")?, column("value")?);
+            let (c, p, r, a, v) = (
+                column("chrom")?,
+                column("pos")?,
+                column("ref")?,
+                column("alt")?,
+                column("value")?,
+            );
             for i in 0..frame.height() {
                 values
                     .entry((c[i].clone(), p[i].clone(), r[i].clone(), a[i].clone()))
@@ -226,7 +239,8 @@ fn frame(rows: &[(Key, String)]) -> Result<DataFrame> {
 fn write_parquet(path: &Path, rows: &[(Key, String)], header: Option<&str>) -> Result<()> {
     let staged = path.with_extension("parquet.partial");
     let mut data = frame(rows)?;
-    let metadata = header.map(|h| KeyValueMetadata::from_static(vec![(HEADER_KEY.to_owned(), h.to_owned())]));
+    let metadata =
+        header.map(|h| KeyValueMetadata::from_static(vec![(HEADER_KEY.to_owned(), h.to_owned())]));
     ParquetWriter::new(File::create(&staged)?)
         .with_compression(ParquetCompression::Zstd(None))
         .with_key_value_metadata(metadata)
@@ -242,7 +256,10 @@ fn bgzip_and_index(plain: &Path, output: &Path) -> Result<()> {
         return Err(invalid(format!("bgzip failed on {}", plain.display())));
     }
     fs::rename(PathBuf::from(format!("{}.gz", plain.display())), output)?;
-    let status = Command::new("tabix").args(["-f", "-p", "vcf"]).arg(output).status()?;
+    let status = Command::new("tabix")
+        .args(["-f", "-p", "vcf"])
+        .arg(output)
+        .status()?;
     if !status.success() {
         return Err(invalid(format!("tabix failed on {}", output.display())));
     }
@@ -300,7 +317,10 @@ fn lookup(
     drop(out);
     bgzip_and_index(&plain, new)?;
     write_parquet(known, &hits, header.as_deref())?;
-    eprintln!("annotation-hub lookup {source}: {} known, {misses} new", hits.len());
+    eprintln!(
+        "annotation-hub lookup {source}: {} known, {misses} new",
+        hits.len()
+    );
     Ok(())
 }
 
@@ -335,7 +355,10 @@ fn with_entries(record: &str, entries: &str) -> String {
 
 /// The CADD table's leading `#` lines and its rows grouped by variant, keyed
 /// with the VCF's chromosome spelling.
-fn cadd_rows(path: &Path, chr_prefix: bool) -> Result<(String, BTreeMap<Key, Vec<String>>, Vec<Key>)> {
+fn cadd_rows(
+    path: &Path,
+    chr_prefix: bool,
+) -> Result<(String, BTreeMap<Key, Vec<String>>, Vec<Key>)> {
     let mut header = Vec::new();
     let mut rows: BTreeMap<Key, Vec<String>> = BTreeMap::new();
     let mut order = Vec::new();
@@ -347,9 +370,16 @@ fn cadd_rows(path: &Path, chr_prefix: bool) -> Result<(String, BTreeMap<Key, Vec
         }
         let mut f = line.splitn(5, '\t');
         let (Some(c), Some(p), Some(r), Some(a)) = (f.next(), f.next(), f.next(), f.next()) else {
-            return Err(invalid(format!("CADD row with fewer than 4 columns in {}", path.display())));
+            return Err(invalid(format!(
+                "CADD row with fewer than 4 columns in {}",
+                path.display()
+            )));
         };
-        let chrom = if chr_prefix && !c.starts_with("chr") { format!("chr{c}") } else { c.to_owned() };
+        let chrom = if chr_prefix && !c.starts_with("chr") {
+            format!("chr{c}")
+        } else {
+            c.to_owned()
+        };
         let key = (chrom, p.to_owned(), r.to_owned(), a.to_owned());
         let entry = rows.entry(key.clone()).or_default();
         if entry.is_empty() {
@@ -360,7 +390,13 @@ fn cadd_rows(path: &Path, chr_prefix: bool) -> Result<(String, BTreeMap<Key, Vec
     Ok((header.join("\n"), rows, order))
 }
 
-fn fill(source: &str, vcf_path: &Path, known: &Path, annotated: &Path, output: &Path) -> Result<()> {
+fn fill(
+    source: &str,
+    vcf_path: &Path,
+    known: &Path,
+    annotated: &Path,
+    output: &Path,
+) -> Result<()> {
     let mut reader = ParquetReader::new(File::open(known)?);
     let stored_header = reader
         .get_metadata()?
@@ -372,13 +408,32 @@ fn fill(source: &str, vcf_path: &Path, known: &Path, annotated: &Path, output: &
         .and_then(|kv| kv.value.clone());
     let frame = reader.finish()?;
     let column = |name: &str| -> Result<Vec<String>> {
-        Ok(frame.column(name)?.as_materialized_series().str()?.into_iter().map(|v| v.unwrap_or_default().to_owned()).collect())
+        Ok(frame
+            .column(name)?
+            .as_materialized_series()
+            .str()?
+            .into_iter()
+            .map(|v| v.unwrap_or_default().to_owned())
+            .collect())
     };
-    let (c, p, r, a, v) = (column("chrom")?, column("pos")?, column("ref")?, column("alt")?, column("value")?);
-    let mut known_rows = (0..frame.height()).map(|i| ((c[i].clone(), p[i].clone(), r[i].clone(), a[i].clone()), v[i].clone()));
+    let (c, p, r, a, v) = (
+        column("chrom")?,
+        column("pos")?,
+        column("ref")?,
+        column("alt")?,
+        column("value")?,
+    );
+    let mut known_rows = (0..frame.height()).map(|i| {
+        (
+            (c[i].clone(), p[i].clone(), r[i].clone(), a[i].clone()),
+            v[i].clone(),
+        )
+    });
     let mut next_known = known_rows.next();
     let vcf = read_vcf(vcf_path)?;
-    let has_new = fs::metadata(annotated).map(|m| m.len() > 0).unwrap_or(false);
+    let has_new = fs::metadata(annotated)
+        .map(|m| m.len() > 0)
+        .unwrap_or(false);
     if source == "cadd" {
         // Preprocessing gives UCSC chromosome names; CADD writes them without "chr".
         let (fresh_header, mut fresh, _) = if has_new {
@@ -386,7 +441,11 @@ fn fill(source: &str, vcf_path: &Path, known: &Path, annotated: &Path, output: &
         } else {
             (String::new(), BTreeMap::new(), Vec::new())
         };
-        let header = if has_new && !fresh_header.is_empty() { fresh_header } else { stored_header.unwrap_or_default() };
+        let header = if has_new && !fresh_header.is_empty() {
+            fresh_header
+        } else {
+            stored_header.unwrap_or_default()
+        };
         let mut out = BufWriter::new(File::create(output)?);
         if !header.is_empty() {
             writeln!(out, "{header}")?;
@@ -399,7 +458,10 @@ fn fill(source: &str, vcf_path: &Path, known: &Path, annotated: &Path, output: &
                     next_known = known_rows.next();
                     value
                 }
-                _ => fresh.remove(&key).map(|rows| rows.join("\n")).unwrap_or_default(),
+                _ => fresh
+                    .remove(&key)
+                    .map(|rows| rows.join("\n"))
+                    .unwrap_or_default(),
             };
             if !value.is_empty() {
                 writeln!(out, "{value}")?;
@@ -407,11 +469,24 @@ fn fill(source: &str, vcf_path: &Path, known: &Path, annotated: &Path, output: &
         }
         out.flush()?;
     } else {
-        let mut fresh = if has_new { Some(read_vcf(annotated)?) } else { None };
+        let mut fresh = if has_new {
+            Some(read_vcf(annotated)?)
+        } else {
+            None
+        };
         let base_lines: HashSet<&String> = vcf.meta.iter().collect();
         let added_meta: Vec<String> = match (&fresh, &stored_header) {
-            (Some(f), _) => f.meta.iter().filter(|l| !base_lines.contains(l)).cloned().collect(),
-            (None, Some(h)) => h.lines().filter(|l| !l.is_empty()).map(str::to_owned).collect(),
+            (Some(f), _) => f
+                .meta
+                .iter()
+                .filter(|l| !base_lines.contains(l))
+                .cloned()
+                .collect(),
+            (None, Some(h)) => h
+                .lines()
+                .filter(|l| !l.is_empty())
+                .map(str::to_owned)
+                .collect(),
             (None, None) => Vec::new(),
         };
         let plain = PathBuf::from(format!("{}.plain.vcf", output.display()));
@@ -430,22 +505,34 @@ fn fill(source: &str, vcf_path: &Path, known: &Path, annotated: &Path, output: &
                 }
                 _ => {
                     let Some(f) = fresh.as_mut() else {
-                        return Err(invalid(format!("{source}: variant {key:?} is neither stored nor annotated")));
+                        return Err(invalid(format!(
+                            "{source}: variant {key:?} is neither stored nor annotated"
+                        )));
                     };
-                    let annotated_line = f
-                        .records
-                        .next()
-                        .ok_or_else(|| invalid(format!("{source}: the step's output ended before {key:?}")))??;
+                    let annotated_line = f.records.next().ok_or_else(|| {
+                        invalid(format!("{source}: the step's output ended before {key:?}"))
+                    })??;
                     if key_of(&annotated_line)? != key {
-                        return Err(invalid(format!("{source}: the step's output is out of order at {key:?}")));
+                        return Err(invalid(format!(
+                            "{source}: the step's output is out of order at {key:?}"
+                        )));
                     }
-                    writeln!(out, "{}", with_entries(&line, &added_entries(info_of(&line)?, info_of(&annotated_line)?)))?;
+                    writeln!(
+                        out,
+                        "{}",
+                        with_entries(
+                            &line,
+                            &added_entries(info_of(&line)?, info_of(&annotated_line)?)
+                        )
+                    )?;
                 }
             }
         }
         if let Some(f) = fresh.as_mut() {
             if f.records.next().is_some() {
-                return Err(invalid(format!("{source}: the step's output has records the preprocessed VCF lacks")));
+                return Err(invalid(format!(
+                    "{source}: the step's output has records the preprocessed VCF lacks"
+                )));
             }
         }
         out.flush()?;
@@ -453,12 +540,21 @@ fn fill(source: &str, vcf_path: &Path, known: &Path, annotated: &Path, output: &
         bgzip_and_index(&plain, output)?;
     }
     if next_known.is_some() {
-        return Err(invalid(format!("{source}: stored values out of the preprocessed VCF's order")));
+        return Err(invalid(format!(
+            "{source}: stored values out of the preprocessed VCF's order"
+        )));
     }
     Ok(())
 }
 
-fn add(hub: &Path, source: &str, lineage: &str, session: &str, base: &Path, annotated: &Path) -> Result<()> {
+fn add(
+    hub: &Path,
+    source: &str,
+    lineage: &str,
+    session: &str,
+    base: &Path,
+    annotated: &Path,
+) -> Result<()> {
     check_name("lineage", lineage)?;
     check_name("session", session)?;
     let folder = source_dir(hub, source, lineage);
@@ -471,24 +567,37 @@ fn add(hub: &Path, source: &str, lineage: &str, session: &str, base: &Path, anno
         for line in base_vcf.records {
             let key = key_of(&line?)?;
             let value = rows.remove(&key).map(|r| r.join("\n")).unwrap_or_default();
-            by_chrom.entry(key.0.clone()).or_default().push((key, value));
+            by_chrom
+                .entry(key.0.clone())
+                .or_default()
+                .push((key, value));
         }
     } else {
         let mut fresh = read_vcf(annotated)?;
         let base_lines: HashSet<&String> = base_vcf.meta.iter().collect();
-        header = fresh.meta.iter().filter(|l| !base_lines.contains(l)).cloned().collect::<Vec<_>>().join("\n");
+        header = fresh
+            .meta
+            .iter()
+            .filter(|l| !base_lines.contains(l))
+            .cloned()
+            .collect::<Vec<_>>()
+            .join("\n");
         for line in base_vcf.records {
             let line = line?;
             let key = key_of(&line)?;
-            let annotated_line = fresh
-                .records
-                .next()
-                .ok_or_else(|| invalid(format!("{source}: the step's output ended before {key:?}")))??;
+            let annotated_line = fresh.records.next().ok_or_else(|| {
+                invalid(format!("{source}: the step's output ended before {key:?}"))
+            })??;
             if key_of(&annotated_line)? != key {
-                return Err(invalid(format!("{source}: the step's output is out of order at {key:?}")));
+                return Err(invalid(format!(
+                    "{source}: the step's output is out of order at {key:?}"
+                )));
             }
             let value = added_entries(info_of(&line)?, info_of(&annotated_line)?);
-            by_chrom.entry(key.0.clone()).or_default().push((key, value));
+            by_chrom
+                .entry(key.0.clone())
+                .or_default()
+                .push((key, value));
         }
     }
     let mut stored = 0;
@@ -496,10 +605,17 @@ fn add(hub: &Path, source: &str, lineage: &str, session: &str, base: &Path, anno
         check_name("chromosome", &chrom)?;
         let dir = folder.join(&chrom);
         fs::create_dir_all(&dir)?;
-        write_parquet(&dir.join(format!("part-{session}.parquet")), &rows, Some(&header))?;
+        write_parquet(
+            &dir.join(format!("part-{session}.parquet")),
+            &rows,
+            Some(&header),
+        )?;
         stored += rows.len();
     }
-    eprintln!("annotation-hub add {source}: {stored} variants stored under {}", folder.display());
+    eprintln!(
+        "annotation-hub add {source}: {stored} variants stored under {}",
+        folder.display()
+    );
     Ok(())
 }
 
@@ -509,11 +625,20 @@ mod tests {
 
     #[test]
     fn added_entries_are_the_new_keys_in_step_order() {
-        assert_eq!(added_entries("DP=3;AC=1", "DP=3;AC=1;CSQ=x|y;AF_joint=0.1"), "CSQ=x|y;AF_joint=0.1");
+        assert_eq!(
+            added_entries("DP=3;AC=1", "DP=3;AC=1;CSQ=x|y;AF_joint=0.1"),
+            "CSQ=x|y;AF_joint=0.1"
+        );
         assert_eq!(added_entries(".", "CSQ=a"), "CSQ=a");
         assert_eq!(added_entries("DP=3", "DP=3"), "");
-        assert_eq!(with_entries("1\t10\t.\tA\tG\t.\tPASS\t.\tGT\t0/1", "CSQ=a"), "1\t10\t.\tA\tG\t.\tPASS\tCSQ=a\tGT\t0/1");
-        assert_eq!(with_entries("1\t10\t.\tA\tG\t.\tPASS\tDP=3", "CSQ=a"), "1\t10\t.\tA\tG\t.\tPASS\tDP=3;CSQ=a");
+        assert_eq!(
+            with_entries("1\t10\t.\tA\tG\t.\tPASS\t.\tGT\t0/1", "CSQ=a"),
+            "1\t10\t.\tA\tG\t.\tPASS\tCSQ=a\tGT\t0/1"
+        );
+        assert_eq!(
+            with_entries("1\t10\t.\tA\tG\t.\tPASS\tDP=3", "CSQ=a"),
+            "1\t10\t.\tA\tG\t.\tPASS\tDP=3;CSQ=a"
+        );
     }
 
     #[test]

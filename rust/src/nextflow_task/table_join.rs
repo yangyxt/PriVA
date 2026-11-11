@@ -81,7 +81,8 @@ mod tests {
         }
     }
     fn folder(name: &str) -> Folder {
-        let path = std::env::temp_dir().join(format!("priva_table_join_{name}_{}", std::process::id()));
+        let path =
+            std::env::temp_dir().join(format!("priva_table_join_{name}_{}", std::process::id()));
         let _ = fs::remove_dir_all(&path);
         fs::create_dir_all(&path).unwrap();
         Folder(path)
@@ -92,8 +93,16 @@ mod tests {
         let f = folder("order");
         let p = |n: &str| f.0.join(n);
         fs::write(p("c.tsv"), "Chr\tPos\tScore\n1\t10\t0.5\n1\t20\t\n").unwrap();
-        fs::write(p("s.tsv"), "Chr\tPos\tScore\tsplicing_lof\n1\t10\t0.5\tTrue\n1\t20\t\tFalse\n").unwrap();
-        fs::write(p("u.tsv"), "Chr\tPos\tScore\t5UTR_lof\n1\t10\t0.5\tFalse\n1\t20\t\tTrue\n").unwrap();
+        fs::write(
+            p("s.tsv"),
+            "Chr\tPos\tScore\tsplicing_lof\n1\t10\t0.5\tTrue\n1\t20\t\tFalse\n",
+        )
+        .unwrap();
+        fs::write(
+            p("u.tsv"),
+            "Chr\tPos\tScore\t5UTR_lof\n1\t10\t0.5\tFalse\n1\t20\t\tTrue\n",
+        )
+        .unwrap();
         join(&p("c.tsv"), &p("s.tsv"), &p("u.tsv"), &p("out.tsv")).unwrap();
         assert_eq!(
             fs::read_to_string(p("out.tsv")).unwrap(),

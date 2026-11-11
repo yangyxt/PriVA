@@ -273,7 +273,10 @@ fn parse_task(args: &[String]) -> std::result::Result<(String, Options), String>
             // The steps after prioritization-combine read the family table.
             if matches!(
                 options.value("phase"),
-                "prioritization-splicing" | "prioritization-utr" | "prioritization-join" | "prioritization-acmg"
+                "prioritization-splicing"
+                    | "prioritization-utr"
+                    | "prioritization-join"
+                    | "prioritization-acmg"
             ) {
                 options.require(&["table"])?;
             } else {

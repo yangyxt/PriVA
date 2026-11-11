@@ -743,7 +743,8 @@ fn private_config(
     ]);
     for key in OPTIONAL_INPUTS {
         if !config.truthy(key)
-            || (!matches!(phase, "prioritization" | "prioritization-acmg") && *key == "cds_fasta_file")
+            || (!matches!(phase, "prioritization" | "prioritization-acmg")
+                && *key == "cds_fasta_file")
         {
             continue;
         }
@@ -967,7 +968,10 @@ pub(crate) fn run(options: &Options) -> Result<()> {
     // table instead of a VCF; their input is the table itself.
     let table_phase = matches!(
         phase,
-        "prioritization-splicing" | "prioritization-utr" | "prioritization-join" | "prioritization-acmg"
+        "prioritization-splicing"
+            | "prioritization-utr"
+            | "prioritization-join"
+            | "prioritization-acmg"
     );
     let input_vcf = if table_phase {
         copy_writable(
@@ -1118,7 +1122,9 @@ pub(crate) fn run(options: &Options) -> Result<()> {
                 "combine",
                 vec![input.clone(), display(cadd_path.as_deref().unwrap())],
             )?),
-            "prioritization-splicing" => Some(prioritization_step("splicing", vec![input.clone()])?),
+            "prioritization-splicing" => {
+                Some(prioritization_step("splicing", vec![input.clone()])?)
+            }
             "prioritization-utr" => Some(prioritization_step("utr", vec![input.clone()])?),
             "prioritization-join" => {
                 let (Some(splicing), Some(utr)) = (
@@ -1127,7 +1133,12 @@ pub(crate) fn run(options: &Options) -> Result<()> {
                 ) else {
                     return refuse("prioritization-join needs --splicing-table and --utr-table");
                 };
-                super::table_join::join(&input_vcf, Path::new(splicing), Path::new(utr), &input_vcf)?;
+                super::table_join::join(
+                    &input_vcf,
+                    Path::new(splicing),
+                    Path::new(utr),
+                    &input_vcf,
+                )?;
                 None
             }
             "prioritization-acmg" => {

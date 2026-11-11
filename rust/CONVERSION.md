@@ -300,13 +300,14 @@ The whole-script annotation task (`ANNOTATE_COHORT`), annotated mode (`--mode an
 
 | Part | What it does |
 | --- | --- |
+| `INSTALL_RELEASE` | `scripts/install_task.sh release`, once per step with a changing source (registry `release`): the current git commit, or the server's ETag, Last-Modified and size (`unversioned` when it gives none). Pinned steps run it only when `--refresh` names them |
 | `INSTALL_PLAN` | Copies your configuration without any key an install step writes, and records each step's code digest (the text of every installer function its calls reach, plus the script files they name), its settings and the files you supply |
 | `INSTALL_STEP` (one alias per step) | `scripts/install_task.sh run`: a private configuration whose `cache_root` is `resource_root/STEP/LINEAGE/data`, the keys of the input receipts, then the unchanged installer functions with `PRIVA_CACHE_INSTALL_INTERNAL=1`; the output keys are checked and `receipt.json` is written; the folder is then made read-only unless the step is marked writable (CADD) |
 | `INSTALL_PUBLISH` | One configuration from every receipt, `priva cache-install prepare` and `publish` for the native statistics files, and `resources.lock.json` |
 
-A step's lineage hashes its code digest, settings, supplied files, the `priva` source identity (only for steps whose results `priva` computes) and the lineage of every step it needs. `storeDir` reuses a lineage folder that holds a receipt, across runs and after the work folder is deleted. A step that rewrites an input in place (`copies`) works on a copy in its own folder. `--adopt_config` with `--adopt all --run_steps ID,...` writes receipts for an existing installation's files instead of building them.
+A step's lineage hashes its code digest, settings, supplied files, the release of a changing source (only for steps that have one), the `priva` source identity (only for steps whose results `priva` computes) and the lineage of every step it needs. SpliceVault (B5), MaveDB (B6), UTRannotator (B1) and LOFTEE (B8) are pinned: their lineage uses the release recorded in `resource_root/pins.json` (`initial` before any refresh) until `--refresh B5,B8` checks them again, and publish then records the new release there. `storeDir` reuses a lineage folder that holds a receipt, across runs and after the work folder is deleted. A step that rewrites an input in place (`copies`) works on a copy in its own folder. `--adopt_config` with `--adopt all --run_steps ID,...` writes receipts for an existing installation's files instead of building them.
 
-This first version has one step per existing installer function. The finer split of the task map (gnomAD per chromosome, the ClinVar download apart from its VEP run, the release check and pinned plugin sources) and the hub refresh entry are not built yet; hub lineages come from the resource manifest until the run reads `resources.lock.json`.
+This first version has one step per existing installer function. The finer split of the task map (gnomAD per chromosome, the ClinVar download apart from its VEP run) is not built yet.
 
 Wiring test with stub steps (job 1539506): 33 folders on the first run, none new on the second, and a changed `mavedb_url` gave new folders for exactly B6, C10, C11, D1, D6, D8, D9, F9 and publish.
 

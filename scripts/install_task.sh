@@ -153,9 +153,12 @@ expand_url() { # expand_url TEMPLATE CONFIG: {grch}, {loftee_branch}, {KEY}
     assembly=$(yaml_value "$config" assembly)
     case $assembly in hg19|GRCh37) text=${text//\{grch\}/GRCh37}; text=${text//\{loftee_branch\}/master} ;;
                       *) text=${text//\{grch\}/GRCh38}; text=${text//\{loftee_branch\}/grch38} ;; esac
+    local value
     while [[ $text =~ \{([A-Za-z0-9_]+)\} ]]; do
         key=${BASH_REMATCH[1]}
-        text=${text//\{$key\}/$(yaml_value "$config" "$key")}
+        value=$(yaml_value "$config" "$key") || die "cannot read $key from $config (is yq installed?)"
+        [[ -n $value ]] || die "$key is not set in $config"
+        text=${text//\{$key\}/$value}
     done
     printf '%s' "$text"
 }
@@ -166,19 +169,26 @@ cmd_release() {
         --registry) registry=$2; shift 2 ;; --config) config=$2; shift 2 ;; --step) id=$2; shift 2 ;;
         --out) out=$2; shift 2 ;; --stub) stub=1; shift ;; *) die "release: unknown option $1" ;; esac; done
     local entry; entry=$(json_step "$registry" "$id") || exit 1
-    local parts="[]" spec kind url ref answer
+    local parts="[]" spec kind url ref answer digest
     while read -r spec; do
-        kind=$(jq -r .kind <<< "$spec"); url=$(expand_url "$(jq -r .url <<< "$spec")" "$config")
+        kind=$(jq -r .kind <<< "$spec")
+        url=$(expand_url "$(jq -r .url <<< "$spec")" "$config") || exit 1
         if ((stub)); then
             answer="stub"
         elif [[ $kind == git ]]; then
-            ref=$(expand_url "$(jq -r '.ref // "HEAD"' <<< "$spec")" "$config")
+            ref=$(expand_url "$(jq -r '.ref // "HEAD"' <<< "$spec")" "$config") || exit 1
             answer=$(git ls-remote "$url" "$ref" 2>/dev/null | head -1 | cut -f1)
             [[ -n $answer ]] || die "$id: no commit for $ref at $url"
         else
-            # Headers of the final response after redirects; none -> unversioned.
-            answer=$(curl -sIL --max-time 120 "$url" | tr -d '\r' | awk 'BEGIN{IGNORECASE=1} /^HTTP\//{e="";m="";l=""} /^etag:/{e=$0} /^last-modified:/{m=$0} /^content-length:/{l=$0} END{print e"|"m"|"l}')
-            [[ $answer == '||' ]] && answer="unversioned"
+            # Headers of the final response after redirects. A source that
+            # sends neither ETag nor Last-Modified (an API answer) is named
+            # by the SHA-256 of its content, up to 500 MB.
+            answer=$(curl -sIL --max-time 120 "$url" | tr -d '\r' | awk '{h=tolower($0)} h~/^http\//{e="";m="";l=""} h~/^etag:/{e=h} h~/^last-modified:/{m=h} h~/^content-length:/{l=h} END{print e"|"m"|"l}')
+            if [[ $answer == '||'* ]]; then
+                digest=$(set -o pipefail; curl -sfL --max-time 600 --max-filesize 500000000 "$url" | sha256sum) ||
+                    die "$id: cannot read $url"
+                answer="sha256:${digest%% *}"
+            fi
         fi
         parts=$(jq -c --arg u "$url" --arg a "$answer" '. + [{url: $u, release: $a}]' <<< "$parts")
     done < <(jq -c '.release[]?' <<< "$entry")

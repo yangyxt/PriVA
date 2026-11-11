@@ -7,7 +7,8 @@
 
 # Maintainer: yangyxt@gmail.com, yangyxt@hku.hk
 
-SCRIPT_DIR=$(dirname $(readlink -f $0))
+# BASH_SOURCE, not $0: the Nextflow step wrapper sources this file.
+SCRIPT_DIR=$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")
 BASE_DIR=$(dirname ${SCRIPT_DIR})
 DATA_DIR=${BASE_DIR}/data
 source ${SCRIPT_DIR}/common_bash_utils.sh

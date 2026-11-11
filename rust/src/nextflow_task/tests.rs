@@ -971,9 +971,20 @@ fn annotation_steps_check_only_the_resources_they_read() {
     // The whole annotation script checks every resource; family phases skip
     // only the annotation-only folders and still check everything else.
     assert!(phase_reads("annotation", "cadd_base_dir/src/scripts/x.py"));
-    for phase in ["filtration", "prioritization", "prioritization-join", "prioritization-acmg"] {
-        assert!(!phase_reads(phase, "cadd_base_dir/src/scripts/x.py"), "{phase}");
-        assert!(!phase_reads(phase, "vep_cache_dir/homo_sapiens/info.txt"), "{phase}");
+    for phase in [
+        "filtration",
+        "prioritization",
+        "prioritization-join",
+        "prioritization-acmg",
+    ] {
+        assert!(
+            !phase_reads(phase, "cadd_base_dir/src/scripts/x.py"),
+            "{phase}"
+        );
+        assert!(
+            !phase_reads(phase, "vep_cache_dir/homo_sapiens/info.txt"),
+            "{phase}"
+        );
         assert!(phase_reads(phase, "clinvar_aa_stat"), "{phase}");
         assert!(phase_reads(phase, "ref_genome"), "{phase}");
         assert!(phase_reads(phase, "priva_binary"), "{phase}");

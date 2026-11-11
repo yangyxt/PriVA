@@ -111,17 +111,28 @@ mod tests {
     fn a_resource_change_moves_only_the_steps_that_read_it() {
         let root = std::env::temp_dir();
         let of = |clinvar: i128, vep: i128| {
-            let entries = [("clinvar_vcf", clinvar), ("vep_cache_dir/a", vep), ("control_vcf", 3)];
+            let entries = [
+                ("clinvar_vcf", clinvar),
+                ("vep_cache_dir/a", vep),
+                ("control_vcf", 3),
+            ];
             lineages(&manifest(&entries), &root).unwrap()
         };
         let (before, after) = (of(1, 2), of(9, 2));
         assert_ne!(lineage(&before, "clinvar"), lineage(&after, "clinvar"));
         for source in ["gnomad", "control", "vep", "cadd"] {
-            assert_eq!(lineage(&before, source), lineage(&after, source), "{source}");
+            assert_eq!(
+                lineage(&before, source),
+                lineage(&after, source),
+                "{source}"
+            );
         }
         let vep_changed = of(1, 5);
         assert_ne!(lineage(&before, "vep"), lineage(&vep_changed, "vep"));
-        assert_eq!(lineage(&before, "clinvar"), lineage(&vep_changed, "clinvar"));
+        assert_eq!(
+            lineage(&before, "clinvar"),
+            lineage(&vep_changed, "clinvar")
+        );
     }
 
     #[test]

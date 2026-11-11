@@ -72,6 +72,41 @@ assert names == [f'annotation-{step}.provenance.json' for step in
 assert len(list(root.rglob('*.filtered.acmg.tsv'))) == 1
 print('Annotation as one task per step, and its cached resume, passed')
 PY
+# Annotation hub: the first run stores every step's results; a second run, in
+# a new session, finds every variant stored and runs no annotation step except
+# the control cohort step, which has no hub folder without a control VCF.
+hub_args=(--vcf_hub_mode off --cadd_hub_mode off --annotation_hub "${case_root}/hub")
+run_case nextflow-stub-hub-first "${hub_args[@]}" --outdir "${case_root}/hub-first"
+run_case nextflow-stub-hub-second "${hub_args[@]}" --outdir "${case_root}/hub-second"
+python3 - "${case_root}" <<'PY'
+import csv
+import gzip
+from pathlib import Path
+import sys
+root = Path(sys.argv[1])
+def tasks(case):
+    trace = sorted((root / case / 'pipeline_info').glob('trace-*.tsv'))[-1]
+    names = []
+    for row in csv.DictReader(trace.open(), delimiter='\t'):
+        name = row['name'].split(' ')[0]
+        if name == 'ANNOTATE_STEP':
+            name += ':' + row['name'].split(':')[-1].rstrip(')')
+        names.append(name)
+    return sorted(names)
+first, second = tasks('hub-first'), tasks('hub-second')
+annotate = lambda names: [n for n in names if n.startswith('ANNOTATE_STEP') or n == 'ANNOTATE_CADD']
+assert annotate(first) == ['ANNOTATE_CADD', 'ANNOTATE_STEP:clinvar', 'ANNOTATE_STEP:control',
+                           'ANNOTATE_STEP:gnomad', 'ANNOTATE_STEP:vep'], first
+assert annotate(second) == ['ANNOTATE_STEP:control'], second
+for names in (first, second):
+    assert names.count('HUB_LOOKUP') == 5 and names.count('HUB_FILL') == 5, names
+assert first.count('HUB_ADD') == 4 and second.count('HUB_ADD') == 0, (first, second)
+read = lambda case: gzip.open(root / case / 'annotation' / 'cohort.anno.vcf.gz', 'rt').read()
+assert read('hub-first') == read('hub-second') == read('steps'), 'annotated VCFs differ'
+stored = sorted({p.relative_to(root / 'hub').parts[0] for p in (root / 'hub').rglob('part-*.parquet')})
+assert stored == ['cadd', 'clinvar', 'gnomad', 'vep'], stored
+print('Annotation hub: first run stores, second run annotates nothing new, outputs identical')
+PY
 # Whole cohort: one validation and one annotation, then two family tasks
 # each for filtration and prioritization.
 run_with nextflow-stub-cohort "${shared[@]}" --ped "${fixture}/family.ped" --outdir "${case_root}/cohort"

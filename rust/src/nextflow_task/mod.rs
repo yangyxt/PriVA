@@ -11,6 +11,7 @@
 //!   priva task-boundary check|exec --task-dir DIR [-- COMMAND...]
 mod boundary;
 mod contract;
+mod hub_lineage;
 mod info_merge;
 mod table_join;
 mod tasks;

@@ -279,6 +279,16 @@ fn chroms_of(path: &Path) -> Result<Vec<String>> {
     Ok(seen)
 }
 
+/// Whether a VCF's first record names its chromosome with "chr"; CADD
+/// writes chromosome names without it.
+fn uses_chr(path: &Path) -> Result<bool> {
+    let mut vcf = read_vcf(path)?;
+    match vcf.records.next() {
+        Some(line) => Ok(line?.starts_with("chr")),
+        None => Ok(true),
+    }
+}
+
 fn lookup(
     hub: &Path,
     source: &str,
@@ -435,9 +445,8 @@ fn fill(
         .map(|m| m.len() > 0)
         .unwrap_or(false);
     if source == "cadd" {
-        // Preprocessing gives UCSC chromosome names; CADD writes them without "chr".
         let (fresh_header, mut fresh, _) = if has_new {
-            cadd_rows(annotated, true)?
+            cadd_rows(annotated, uses_chr(vcf_path)?)?
         } else {
             (String::new(), BTreeMap::new(), Vec::new())
         };
@@ -562,7 +571,7 @@ fn add(
     let mut by_chrom: BTreeMap<String, Vec<(Key, String)>> = BTreeMap::new();
     let header;
     if source == "cadd" {
-        let (h, mut rows, _) = cadd_rows(annotated, true)?;
+        let (h, mut rows, _) = cadd_rows(annotated, uses_chr(base)?)?;
         header = h;
         for line in base_vcf.records {
             let key = key_of(&line?)?;

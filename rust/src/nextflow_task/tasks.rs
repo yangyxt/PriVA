@@ -501,6 +501,7 @@ pub(crate) fn validate(options: &Options) -> Result<()> {
             },
         ),
         ("provided_cadd_sha256", provided),
+        ("hub_lineages", super::hub_lineage::lineages(&manifest, &root)?),
     ]);
     write_json(&bundle.join("contract.json"), &record)?;
     write_json(&bundle.join("software-observed.json"), &versions)

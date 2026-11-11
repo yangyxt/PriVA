@@ -134,6 +134,53 @@ process ANNOTATE_MERGE {
 }
 
 // family is a PED family identifier, or '' for the no-pedigree run.
+// Annotation hub (raw mode, --annotation_hub). The hub keeps each step's
+// results per variant in HUB/SOURCE/LINEAGE/CHROM/part-SESSION.parquet; files
+// are only added. A run never reads the files its own session wrote, so a
+// resumed run sees what its first launch saw.
+process HUB_LOOKUP {
+    tag "${source}"
+    label 'annotation_step'
+    input:
+    tuple val(meta), val(source), val(lineage), path(vcf, stageAs: 'preprocessed.vcf.gz'), path(vcf_index, stageAs: 'preprocessed.vcf.gz.tbi')
+    output:
+    tuple val(meta), val(source), val(lineage), path('known.parquet'), path("new/${meta.base}.vcf.gz"), path("new/${meta.base}.vcf.gz.tbi"), env('NEW_VARIANTS'), emit: split
+    script:
+    """
+    mkdir -p new
+    '${meta.priva_binary}' annotation-hub lookup --hub '${params.annotation_hub}' --source ${source} --lineage '${lineage}' --exclude-session '${workflow.sessionId}' --vcf preprocessed.vcf.gz --known known.parquet --new 'new/${meta.base}.vcf.gz'
+    NEW_VARIANTS=\$(gzip -dc 'new/${meta.base}.vcf.gz' | grep -vc '^#' || true)
+    """
+}
+
+process HUB_FILL {
+    tag "${source}"
+    label 'annotation_step'
+    input:
+    tuple val(meta), val(source), path(vcf, stageAs: 'preprocessed.vcf.gz'), path(vcf_index, stageAs: 'preprocessed.vcf.gz.tbi'), path(known, stageAs: 'known.parquet'), path(output, stageAs: 'step/*')
+    output:
+    tuple val(meta), val(source), path('filled/*'), emit: filled
+    script:
+    def name = source == 'cadd' ? "${meta.base}.anno.cadd.tsv" : "${meta.base}.anno.vcf.gz"
+    """
+    mkdir -p filled
+    '${meta.priva_binary}' annotation-hub fill --source ${source} --vcf preprocessed.vcf.gz --known known.parquet --annotated 'step/${output.name}' --output 'filled/${name}'
+    """
+}
+
+process HUB_ADD {
+    tag "${source}"
+    label 'annotation_step'
+    input:
+    tuple val(meta), val(source), val(lineage), path(fresh, stageAs: 'new.vcf.gz'), path(output, stageAs: 'step/*')
+    output:
+    tuple val(source), path('added.log'), emit: added
+    script:
+    """
+    '${meta.priva_binary}' annotation-hub add --hub '${params.annotation_hub}' --source ${source} --lineage '${lineage}' --session '${workflow.sessionId}' --base new.vcf.gz --annotated 'step/${output.name}' 2> added.log
+    """
+}
+
 process FILTER_FAMILY {
     tag "${family ?: 'no pedigree'}"
     label 'family'

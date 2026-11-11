@@ -1,6 +1,7 @@
 nextflow.enable.dsl=2
 
 include { VALIDATE_INPUTS; ANNOTATE_COHORT; ANNOTATE_PREPROCESS; ANNOTATE_STEP; ANNOTATE_CADD; ANNOTATE_MERGE; FILTER_FAMILY; PRIORITIZE_FAMILY } from './modules/local/compatibility'
+include { INSTALL_RESOURCES } from './workflows/install'
 
 // The scientific source is deliberately retained during orchestration parity.
 // Its content identity, rather than only its pathname, participates in every task hash.
@@ -22,12 +23,19 @@ def sourceDigest(root) {
 }
 
 workflow {
-    if (params.help) {
+    // --action install builds every resource as its own task (workflows/install.nf):
+    //   --install_config CONFIG.yaml --resource_root FOLDER --priva_binary PRIVA
+    //   [--install_outdir FOLDER] [--adopt_config OLD.yaml --adopt all --run_steps ID,ID]
+    if (params.action == 'install') {
+        INSTALL_RESOURCES()
+    } else if (params.help) {
         log.info '''PriVA workflow
 Required: --input VCF.vcf.gz --assembly hg19|hg38
           --legacy_config CONFIG.yaml --resource_manifest RESOURCES.json
           --software_id PINNED_ENVIRONMENT_OR_IMAGE_ID --outdir NEW_OUTPUT_DIRECTORY
           --priva_binary PRIVA_PROGRAM (runs the task contract: priva task)
+Install:  --action install --install_config CONFIG.yaml --resource_root FOLDER
+          --priva_binary PRIVA_PROGRAM [--install_outdir FOLDER]
 Optional: --ped COHORT.ped --family ID --mode raw|annotated
           --cadd ANNOTATED.cadd.tsv --vcf_index VCF.vcf.gz.tbi
           --vcf_hub_mode off|qualified-copy --cadd_hub_mode off|copy

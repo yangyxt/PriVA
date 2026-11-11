@@ -274,6 +274,22 @@ records (`d9eac64`): the G9 AlphaMissense cache built with 22 threads is now
 reused at 8. VEP with 2 and 10 forks differed only in `HGNC_ID`, which PriVA does
 not read (`fork_1538819`).
 
+## Installation as one task per step
+
+`nextflow run main.nf --action install` runs the installer as Nextflow tasks (`workflows/install.nf`, generated from `conf/install_steps.json`; `tests/install_workflow_check.py` fails when the two differ). Nextflow 25.10's strict syntax refuses `-entry`, so the main workflow selects it by `--action`.
+
+| Part | What it does |
+| --- | --- |
+| `INSTALL_PLAN` | Copies your configuration without any key an install step writes, and records each step's code digest (the text of every installer function its calls reach, plus the script files they name), its settings and the files you supply |
+| `INSTALL_STEP` (one alias per step) | `scripts/install_task.sh run`: a private configuration whose `cache_root` is `resource_root/STEP/LINEAGE/data`, the keys of the input receipts, then the unchanged installer functions with `PRIVA_CACHE_INSTALL_INTERNAL=1`; the output keys are checked and `receipt.json` is written; the folder is then made read-only unless the step is marked writable (CADD) |
+| `INSTALL_PUBLISH` | One configuration from every receipt, `priva cache-install prepare` and `publish` for the native statistics files, and `resources.lock.json` |
+
+A step's lineage hashes its code digest, settings, supplied files, the `priva` source identity (only for steps whose results `priva` computes) and the lineage of every step it needs. `storeDir` reuses a lineage folder that holds a receipt, across runs and after the work folder is deleted. A step that rewrites an input in place (`copies`) works on a copy in its own folder. `--adopt_config` with `--adopt all --run_steps ID,...` writes receipts for an existing installation's files instead of building them.
+
+This first version has one step per existing installer function. The finer split of the task map (gnomAD per chromosome, the ClinVar download apart from its VEP run, the release check and pinned plugin sources, and the hub refresh entry) is not built yet.
+
+Wiring test with stub steps (job 1539506): 33 folders on the first run, none new on the second, and a changed `mavedb_url` gave new folders for exactly B6, C10, C11, D1, D6, D8, D9, F9 and publish.
+
 ## Retained Python tools
 
 CADD scientific packages and model assets remain upstream. The auxiliary data

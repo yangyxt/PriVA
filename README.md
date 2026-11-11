@@ -53,6 +53,18 @@ bash "$PRIVA_ROOT/scripts/install_utils.sh" main_install "$PRIVA_CONFIG"
 
 This prepares `priva_acmg`, reuses bundled snapshots, acquires/builds other resources beneath `cache_root`, and updates managed paths in the selected configuration. It also installs the pinned Nextflow25.10.4 driver and private JRE beneath `cache_root/runtime/priva-nextflow-25.10.4`. It builds the PriVA program `priva` (saved as `priva_binary`) and the ClinVar PM5 index (saved as `clinvar_pm5_index`); see [the PriVA program](#scientific-resources-and-the-priva-program). No family input is required at this stage. Rerun the same command to reuse completed preparation.
 
+### Install as Nextflow tasks
+
+The same installer functions can also run as one Nextflow task per install step, listed in [`conf/install_steps.json`](conf/install_steps.json):
+
+```bash
+"$PRIVA_NF" run "$PRIVA_ROOT/main.nf" --action install \
+  --install_config "$PRIVA_CONFIG" --resource_root /path/to/resources \
+  --priva_binary /path/to/priva --install_outdir /path/to/published
+```
+
+Each step writes only into `resource_root/STEP/LINEAGE/data`. Its lineage is a hash of the step's code, the settings that change its results, the files you supply and the lineage of every step it needs. A step whose folder already holds `receipt.json` is reused, so a later run builds only what changed and the steps that depend on it. Finished folders are read-only. The last task writes one configuration and `resources.lock.json`, which names every step's lineage and output keys. `--adopt_config OLD.yaml --adopt all --run_steps ID,ID` takes every other step's files from an existing installation without copying them.
+
 The Rust workflow reads checked `.rkyv` caches using the existing configuration keys. InterPro and assembly-specific ClinGen archives are bundled. The larger ClinVar gene archive is generated during installation from the bundled pickle under `cache_root`, along with conversions of the other prepared caches. Original pickles remain available to the cache builders. Installation publishes native paths after conversion succeeds and reuses completed conversions on later runs; changing the storage format does not require repeating VEP annotation. See [cache formats and installation](rust/CACHE_FORMATS.md#6-distribution-and-installation).
 
 Building `priva` also needs `pkg-config`, a C compiler, and the static development

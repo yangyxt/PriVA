@@ -1,0 +1,750 @@
+{
+  "about": "Install steps run as Nextflow tasks by workflows/install.nf. Each step calls existing installer functions from scripts/install_utils.sh with its own private configuration, whose cache_root is the step's lineage folder. Tokens: {config} is that configuration, {script_dir} the scripts folder, {KEY} the configuration value of KEY. needs: steps whose receipts supply input keys. outputs: keys the step must set; optional_outputs may be empty. user_inputs: keys naming files you supply, kept from your configuration and counted in lineage. settings: configuration values that change results (glob patterns allowed). copies: input keys the step rewrites in place; the runner copies them into the step's own folder first. writable: the folder stays writable after the step (otherwise it is made read-only). native: the step's results are computed by priva, so the priva source identity counts in its lineage.",
+  "folder_keys": [
+    "cache_root",
+    "vep_cache_dir",
+    "vep_plugins_dir",
+    "vep_plugins_cachedir",
+    "gnomad_vcf_dir",
+    "clinvar_vcf_dir",
+    "cadd_parent_dir",
+    "cadd_base_dir",
+    "loftee_parent_dir",
+    "hpo_raw_dir",
+    "gene_mechanism_cache_dir",
+    "gene_mechanism_raw_dir",
+    "gofcards_workdir",
+    "pext_tissue_bw_dir"
+  ],
+  "steps": [
+    {
+      "id": "A1",
+      "name": "REFERENCE_FASTA",
+      "calls": [
+        [
+          "reference_genome_install",
+          "{config}"
+        ]
+      ],
+      "needs": [],
+      "outputs": [
+        "ref_genome"
+      ],
+      "settings": [
+        "assembly"
+      ]
+    },
+    {
+      "id": "A2",
+      "name": "VEP_CACHE",
+      "calls": [
+        [
+          "vep_cache_api_install",
+          "--VEP_VERSION",
+          "{vep_installed_version}",
+          "--VEP_CACHEDIR",
+          "{vep_cache_dir}",
+          "--VEP_PLUGINSDIR",
+          "{vep_plugins_dir}",
+          "--VEP_ASSEMBLY",
+          "{assembly}",
+          "--VEP_PLUGINSCACHEDIR",
+          "{vep_plugins_cachedir}",
+          "--config",
+          "{config}"
+        ]
+      ],
+      "needs": [],
+      "outputs": [
+        "vep_cache_dir",
+        "vep_plugins_dir"
+      ],
+      "settings": [
+        "assembly",
+        "vep_installed_version"
+      ]
+    },
+    {
+      "id": "A4",
+      "name": "CDS_FASTA",
+      "calls": [
+        [
+          "CDS_FASTA_install",
+          "{config}"
+        ]
+      ],
+      "needs": [],
+      "outputs": [
+        "cds_fasta_file"
+      ],
+      "settings": [
+        "assembly",
+        "vep_installed_version"
+      ]
+    },
+    {
+      "id": "A5",
+      "name": "NM_TO_ENST",
+      "calls": [
+        [
+          "nm_to_enst_mapping_install",
+          "{config}"
+        ]
+      ],
+      "needs": [],
+      "outputs": [
+        "nm_to_enst_tsv"
+      ],
+      "settings": [
+        "assembly",
+        "vep_installed_version"
+      ],
+      "native": true
+    },
+    {
+      "id": "B1",
+      "name": "UTR_ANNOTATOR",
+      "calls": [
+        [
+          "UTRAnnotator_install",
+          "{config}",
+          "{vep_plugins_cachedir}"
+        ]
+      ],
+      "needs": [],
+      "outputs": [
+        "utr_annotator_file"
+      ],
+      "settings": [
+        "assembly"
+      ]
+    },
+    {
+      "id": "B2",
+      "name": "CONSERVATION",
+      "calls": [
+        [
+          "Conservation_install",
+          "{config}",
+          "{vep_plugins_cachedir}",
+          "{assembly}"
+        ]
+      ],
+      "needs": [
+        "A1"
+      ],
+      "outputs": [
+        "conservation_file"
+      ],
+      "settings": [
+        "assembly",
+        "conservation_*url*"
+      ]
+    },
+    {
+      "id": "B3",
+      "name": "ALPHAMISSENSE_TSV",
+      "calls": [
+        [
+          "AlphaMissense_install",
+          "{config}",
+          "{vep_plugins_cachedir}",
+          "{assembly}",
+          "{vep_plugins_dir}"
+        ]
+      ],
+      "needs": [
+        "A2"
+      ],
+      "outputs": [
+        "alphamissense_prescore"
+      ],
+      "settings": [
+        "assembly"
+      ]
+    },
+    {
+      "id": "B4",
+      "name": "SPLICEAI",
+      "calls": [
+        [
+          "SpliceAI_install",
+          "{config}",
+          "{vep_plugins_cachedir}",
+          "{vep_plugins_dir}"
+        ]
+      ],
+      "needs": [
+        "A2"
+      ],
+      "outputs": [
+        "spliceai_snv_prescore",
+        "spliceai_indel_prescore"
+      ],
+      "user_inputs": [
+        "spliceai_snv_prescore",
+        "spliceai_indel_prescore"
+      ],
+      "settings": [
+        "assembly"
+      ]
+    },
+    {
+      "id": "B5",
+      "name": "SPLICEVAULT",
+      "calls": [
+        [
+          "SpliceVault_install",
+          "{config}",
+          "{vep_plugins_cachedir}",
+          "{script_dir}"
+        ]
+      ],
+      "needs": [
+        "A1"
+      ],
+      "outputs": [
+        "splicevault_prescore"
+      ],
+      "settings": [
+        "assembly",
+        "splicevault_url"
+      ]
+    },
+    {
+      "id": "B6",
+      "name": "MAVEDB",
+      "calls": [
+        [
+          "MaveDB_install",
+          "{config}",
+          "{vep_plugins_cachedir}"
+        ]
+      ],
+      "needs": [],
+      "outputs": [],
+      "optional_outputs": [
+        "mavedb_file"
+      ],
+      "settings": [
+        "assembly",
+        "mavedb_url"
+      ]
+    },
+    {
+      "id": "B7",
+      "name": "PRIMATEAI",
+      "calls": [
+        [
+          "PrimateAI_install",
+          "{config}",
+          "{vep_plugins_cachedir}",
+          "{vep_plugins_dir}"
+        ]
+      ],
+      "needs": [
+        "A2"
+      ],
+      "outputs": [
+        "primateai_prescore"
+      ],
+      "user_inputs": [
+        "primateai_prescore"
+      ],
+      "settings": [
+        "assembly"
+      ]
+    },
+    {
+      "id": "B8",
+      "name": "LOFTEE",
+      "calls": [
+        [
+          "LoFtee_install",
+          "{vep_plugins_cachedir}",
+          "{config}"
+        ]
+      ],
+      "needs": [
+        "A1",
+        "A2"
+      ],
+      "outputs": [
+        "loftee_repo",
+        "human_ancestor_fasta",
+        "loftee_conservation_file"
+      ],
+      "optional_outputs": [
+        "gerp_bigwig"
+      ],
+      "settings": [
+        "assembly"
+      ]
+    },
+    {
+      "id": "B9",
+      "name": "PEXT",
+      "calls": [
+        [
+          "pext_install",
+          "{config}"
+        ]
+      ],
+      "needs": [],
+      "outputs": [],
+      "optional_outputs": [
+        "pext_mean_bw",
+        "pext_tissue_bw_dir"
+      ],
+      "settings": [
+        "assembly",
+        "pext_enabled",
+        "pext_tissues"
+      ]
+    },
+    {
+      "id": "C1",
+      "name": "GNOMAD",
+      "calls": [
+        [
+          "gnomAD_install",
+          "{config}",
+          "{ref_genome}"
+        ]
+      ],
+      "needs": [
+        "A1"
+      ],
+      "outputs": [
+        "gnomad_vcf_chrX"
+      ],
+      "settings": [
+        "assembly"
+      ]
+    },
+    {
+      "id": "C3",
+      "name": "ALPHAMISSENSE_VEP",
+      "calls": [
+        [
+          "AlphaMissense_anno",
+          "{config}"
+        ]
+      ],
+      "needs": [
+        "A1",
+        "A2",
+        "B2",
+        "B3"
+      ],
+      "outputs": [
+        "alphamissense_vcf",
+        "alphamissense_vep_vcf"
+      ],
+      "optional_outputs": [
+        "alphamissense_vep_base_vcf"
+      ],
+      "settings": [
+        "assembly",
+        "vep_installed_version"
+      ],
+      "native": true
+    },
+    {
+      "id": "C4",
+      "name": "ALPHAMISSENSE_GNOMAD",
+      "calls": [
+        [
+          "AlphaMissense_anno_gnomAD",
+          "{config}"
+        ]
+      ],
+      "needs": [
+        "C3",
+        "C1"
+      ],
+      "copies": [
+        "alphamissense_vep_vcf"
+      ],
+      "outputs": [
+        "alphamissense_vep_vcf"
+      ],
+      "settings": [
+        "assembly"
+      ]
+    },
+    {
+      "id": "C6",
+      "name": "ALPHAMISSENSE_DOMAIN",
+      "calls": [
+        [
+          "AlphaMissense_stat",
+          "{config}"
+        ]
+      ],
+      "needs": [
+        "C4"
+      ],
+      "outputs": [
+        "alphamissense_pd_stat"
+      ],
+      "settings": [
+        "assembly"
+      ],
+      "native": true
+    },
+    {
+      "id": "C8",
+      "name": "INTERPRO_MAPPING",
+      "calls": [
+        [
+          "InterPro_parsing",
+          "{config}"
+        ]
+      ],
+      "needs": [
+        "C4"
+      ],
+      "outputs": [
+        "interpro_mapping_pickle"
+      ],
+      "settings": [
+        "assembly",
+        "interpro_xml_gz_url"
+      ],
+      "native": true
+    },
+    {
+      "id": "D1",
+      "name": "CLINVAR",
+      "calls": [
+        [
+          "ClinVar_install",
+          "--config",
+          "{config}"
+        ]
+      ],
+      "needs": [
+        "A1",
+        "A2",
+        "B1",
+        "B2",
+        "B3",
+        "B4",
+        "B5",
+        "B6",
+        "B7",
+        "B8",
+        "B9",
+        "C1"
+      ],
+      "outputs": [
+        "clinvar_vcf",
+        "clinvar_aa_stat",
+        "clinvar_splice_stat",
+        "clinvar_gene_stat"
+      ],
+      "optional_outputs": [
+        "clinvar_vcf_dir"
+      ],
+      "settings": [
+        "assembly",
+        "vep_installed_version",
+        "clinvar_*"
+      ],
+      "native": true
+    },
+    {
+      "id": "C10",
+      "name": "DAS_DOMAINS",
+      "calls": [
+        [
+          "AlphaMissense_pick_intolerant_domains",
+          "{config}"
+        ]
+      ],
+      "needs": [
+        "C6",
+        "C8",
+        "C4",
+        "D1"
+      ],
+      "outputs": [
+        "alphamissense_intolerant_domains",
+        "alphamissense_tranx_domain_map",
+        "all_intolerant_domains"
+      ],
+      "settings": [
+        "assembly",
+        "priva_python_hash_seed"
+      ],
+      "native": true
+    },
+    {
+      "id": "C11",
+      "name": "PM1_REGIONS",
+      "calls": [
+        [
+          "prepare_pm1_regions",
+          "{config}"
+        ]
+      ],
+      "needs": [
+        "C10",
+        "C6",
+        "A5"
+      ],
+      "outputs": [
+        "pm1_regions_pkl"
+      ],
+      "settings": [
+        "assembly"
+      ],
+      "native": true
+    },
+    {
+      "id": "D6",
+      "name": "CLINVAR_PATHO_AF",
+      "calls": [
+        [
+          "ClinVar_patho_AF_stat",
+          "{config}"
+        ]
+      ],
+      "needs": [
+        "D1"
+      ],
+      "outputs": [
+        "clinvar_patho_af_stat",
+        "clinvar_patho_exon_af_stat"
+      ],
+      "settings": [
+        "assembly"
+      ],
+      "native": true
+    },
+    {
+      "id": "D8",
+      "name": "CLINVAR_PM5",
+      "calls": [
+        [
+          "ClinVar_PM5_index",
+          "{config}"
+        ]
+      ],
+      "needs": [
+        "D1"
+      ],
+      "outputs": [
+        "clinvar_pm5_index"
+      ],
+      "settings": [
+        "assembly"
+      ],
+      "native": true
+    },
+    {
+      "id": "D9",
+      "name": "CLINGEN_MAP",
+      "calls": [
+        [
+          "ClinGen_deploy",
+          "{config}"
+        ]
+      ],
+      "needs": [
+        "D1"
+      ],
+      "outputs": [
+        "clingen_map",
+        "gene_dosage_sensitivity"
+      ],
+      "settings": [
+        "assembly",
+        "clingen_*url*"
+      ],
+      "native": true
+    },
+    {
+      "id": "E1",
+      "name": "CADD",
+      "calls": [
+        [
+          "CADD_conda_install",
+          "--config",
+          "{config}"
+        ],
+        [
+          "CADD_install",
+          "{config}",
+          "{assembly}"
+        ],
+        [
+          "CADD_upstream_check",
+          "{config}"
+        ]
+      ],
+      "needs": [],
+      "outputs": [
+        "cadd_base_dir"
+      ],
+      "settings": [
+        "assembly",
+        "cadd_version",
+        "cadd_*url*",
+        "cadd_*md5*"
+      ],
+      "writable": true
+    },
+    {
+      "id": "F1",
+      "name": "HPO_MONDO",
+      "calls": [
+        [
+          "mondo_hpo_scope_install",
+          "{config}"
+        ]
+      ],
+      "needs": [],
+      "outputs": [
+        "hpo_assertions",
+        "mondo_obo",
+        "mondo_disease_scope_registry"
+      ],
+      "settings": [
+        "hpo_release",
+        "hpo_*url*",
+        "mondo_release",
+        "mondo_url",
+        "mondo_sha256"
+      ],
+      "native": true
+    },
+    {
+      "id": "F4",
+      "name": "GENE_PATHOGENIC_MECHANISM",
+      "calls": [
+        [
+          "gene_pathogenic_mechanism_cache_install",
+          "{config}"
+        ]
+      ],
+      "needs": [
+        "F1"
+      ],
+      "outputs": [
+        "ddg2p_mechanism_evidence"
+      ],
+      "settings": [
+        "g2p_ddg2p_url",
+        "orphadata_gene_disease_url"
+      ],
+      "native": true
+    },
+    {
+      "id": "F5",
+      "name": "GOFCARDS_EXACT_GOF",
+      "calls": [
+        [
+          "gofcards_exact_gof_cache_install",
+          "{config}"
+        ]
+      ],
+      "needs": [],
+      "outputs": [
+        "gofcards_exact_gof_cache"
+      ],
+      "settings": [
+        "assembly",
+        "gofcards_refresh_days",
+        "vep_installed_version"
+      ],
+      "native": true
+    },
+    {
+      "id": "F6",
+      "name": "MECHANISM_SOURCES",
+      "calls": [
+        [
+          "gene_nonlof_mechanism_cache_install",
+          "{config}",
+          "sources-only"
+        ]
+      ],
+      "needs": [],
+      "outputs": [],
+      "optional_outputs": [
+        "clinvar_vcv_xml"
+      ],
+      "settings": []
+    },
+    {
+      "id": "F7",
+      "name": "GOFCARDS_CLINVAR_INJECTION",
+      "calls": [
+        [
+          "gofcards_clinvar_injection_install",
+          "{config}"
+        ]
+      ],
+      "needs": [
+        "F5",
+        "F6"
+      ],
+      "copies": [
+        "gofcards_exact_gof_cache"
+      ],
+      "outputs": [
+        "gofcards_exact_gof_cache"
+      ],
+      "settings": [
+        "clinvar_min_review_stars",
+        "gofcards_clinvar_reinjection_lag_days"
+      ],
+      "native": true
+    },
+    {
+      "id": "F8",
+      "name": "GENE_NONLOF_MECHANISM",
+      "calls": [
+        [
+          "gene_nonlof_mechanism_cache_install",
+          "{config}"
+        ]
+      ],
+      "needs": [
+        "F6",
+        "F7"
+      ],
+      "outputs": [
+        "gene_nonlof_mechanism_json"
+      ],
+      "settings": [],
+      "native": true
+    },
+    {
+      "id": "F9",
+      "name": "HPO_CONDITION_MECHANISM",
+      "calls": [
+        [
+          "hpo_condition_mechanism_cache_install",
+          "{config}"
+        ]
+      ],
+      "needs": [
+        "F1",
+        "F4",
+        "F7",
+        "D9"
+      ],
+      "outputs": [
+        "hpo_condition_mechanism_json"
+      ],
+      "settings": [
+        "hpo_release",
+        "mondo_release"
+      ],
+      "native": true
+    }
+  ]
+}

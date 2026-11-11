@@ -832,9 +832,23 @@ pub(crate) fn phase_reads(phase: &str, key: &str) -> bool {
         "annotation-cadd" => key == "cadd_base_dir" || key == "ref_genome",
         "annotation-vep" => key != "cadd_base_dir",
         "annotation-merge" => false,
+        // Family tasks never read the large annotation-only folders; checking
+        // the VEP cache alone takes minutes, before and after every task.
+        family if family == "filtration" || family.starts_with("prioritization") => {
+            !ANNOTATION_ONLY_FOLDERS.contains(&key)
+        }
         _ => true,
     }
 }
+
+/// Annotation resources that are whole folders, read only by annotation.
+const ANNOTATION_ONLY_FOLDERS: &[&str] = &[
+    "vep_cache_dir",
+    "vep_plugins_dir",
+    "vep_plugins_cachedir",
+    "cadd_base_dir",
+    "loftee_repo",
+];
 
 /// `verify_manifest` for only the resources `phase` reads (all for "").
 pub(crate) fn verify_manifest_for(

@@ -274,6 +274,18 @@ records (`d9eac64`): the G9 AlphaMissense cache built with 22 threads is now
 reused at 8. VEP with 2 and 10 forks differed only in `HGNC_ID`, which PriVA does
 not read (`fork_1538819`).
 
+## Prioritization as five tasks, and the annotation hub
+
+Prioritization runs as `PRIORITIZE_COMBINE`, `PRIORITIZE_SPLICING` and `PRIORITIZE_UTR` side by side, `PRIORITIZE_JOIN` (`rust/src/nextflow_task/table_join.rs`) and `PRIORITIZE_ACMG` (the ACMG part of `assign_acmg_criteria`, now `acmg_assign_table`). The script finds its helpers from `BASH_SOURCE`, since the step wrapper sources it. Family tasks no longer check the annotation-only folders (VEP cache, VEP plugin folders, CADD, LOFTEE); every other resource is still checked before and after each task.
+
+`priva annotation-hub lookup|fill|add` (`rust/src/annotation_hub.rs`) keeps one step's results per variant in `HUB/SOURCE/LINEAGE/CHROM/part-SESSION.parquet`; validation records the five lineages in the contract (`rust/src/nextflow_task/hub_lineage.rs`).
+
+| Job | Checked | Result |
+| --- | --- | --- |
+| 1539590 | Five prioritization tasks against the Snakefile, three families and no PED | Every table and ACMG matrix identical; resume 26/26 |
+| 1539604 | Same, after leaving annotation-only folders out of family checks | Identical; three families 1,491 s (2,752 s before, 1,524 s with one task) |
+| 1539608 | `--annotation_hub`: empty hub, then a new session with the filled hub, then `-resume` | Both runs identical to the Snakefile (annotated VCF, CADD table, every family table and ACMG matrix); second run 7,761 of 7,761 variants stored for gnomAD, ClinVar, VEP and CADD, no step but control ran; resume 32/32 |
+
 ## Installation as one task per step
 
 `nextflow run main.nf --action install` runs the installer as Nextflow tasks (`workflows/install.nf`, generated from `conf/install_steps.json`; `tests/install_workflow_check.py` fails when the two differ). Nextflow 25.10's strict syntax refuses `-entry`, so the main workflow selects it by `--action`.
@@ -286,7 +298,7 @@ not read (`fork_1538819`).
 
 A step's lineage hashes its code digest, settings, supplied files, the `priva` source identity (only for steps whose results `priva` computes) and the lineage of every step it needs. `storeDir` reuses a lineage folder that holds a receipt, across runs and after the work folder is deleted. A step that rewrites an input in place (`copies`) works on a copy in its own folder. `--adopt_config` with `--adopt all --run_steps ID,...` writes receipts for an existing installation's files instead of building them.
 
-This first version has one step per existing installer function. The finer split of the task map (gnomAD per chromosome, the ClinVar download apart from its VEP run, the release check and pinned plugin sources, and the hub refresh entry) is not built yet.
+This first version has one step per existing installer function. The finer split of the task map (gnomAD per chromosome, the ClinVar download apart from its VEP run, the release check and pinned plugin sources) and the hub refresh entry are not built yet; hub lineages come from the resource manifest until the run reads `resources.lock.json`.
 
 Wiring test with stub steps (job 1539506): 33 folders on the first run, none new on the second, and a changed `mavedb_url` gave new folders for exactly B6, C10, C11, D1, D6, D8, D9, F9 and publish.
 

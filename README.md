@@ -216,9 +216,28 @@ task per step of `annotation_vcf.sh`, in this order:
    record or changed anything else.
 
 The result is the same annotated VCF and CADD table as the single annotation task,
-and a failed step reruns alone with `-resume`. With a hub in use (the default
-`--cadd_hub_mode` is `copy`), annotation stays one task, because the hub logic
-reshapes it.
+and a failed step reruns alone with `-resume`. With an old hub mode in use (the
+default `--cadd_hub_mode` is `copy`), annotation stays one task, because the hub
+logic reshapes it.
+
+`--annotation_hub FOLDER` (with both old hub modes off) keeps each annotation
+step's results per variant, so later runs annotate only variants the hub has not
+seen:
+
+1. Validation names one hub folder (lineage) per step from the resources that step
+   reads and the annotation scripts; a changed resource gives that step a new, empty
+   folder. The control cohort step has no folder when its counts come from the
+   cohort itself.
+2. `HUB_LOOKUP` splits the preprocessed VCF into stored and new variants per step.
+3. Each step runs only on its new variants, or not at all.
+4. `HUB_FILL` rebuilds the step's full output from stored and new results, then the
+   merge runs as above; `HUB_ADD` stores the new results under the run's Nextflow
+   session. A resumed run never reads its own session's files, so `-resume` reuses
+   every task.
+
+Family tasks run prioritization in five steps: combine the family table, add the
+splicing and 5′ UTR columns side by side on copies of it, join the copies (refusing
+differing rows or shared columns), then assign the ACMG criteria.
 
 The example `inputs/` paths are relative to the external `PRIVA_RUNS` directory; replace them with your actual input paths and assembly. The annotated route does not rerun VEP or regenerate CADD. Use a new output directory for changed inputs, source, resources or settings. For the same run, retain the external launch/work directories and Nextflow cache, and append `-resume`; launch-time resource checks still apply to a fully cached run.
 

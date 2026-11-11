@@ -159,7 +159,7 @@ process HUB_FILL {
     input:
     tuple val(meta), val(source), path(vcf, stageAs: 'preprocessed.vcf.gz'), path(vcf_index, stageAs: 'preprocessed.vcf.gz.tbi'), path(known, stageAs: 'known.parquet'), path(output, stageAs: 'step/*')
     output:
-    tuple val(meta), val(source), path('filled/*'), emit: filled
+    tuple val(meta), val(source), path(source == 'cadd' ? "filled/${meta.base}.anno.cadd.tsv" : "filled/${meta.base}.anno.vcf.gz"), emit: filled
     script:
     def name = source == 'cadd' ? "${meta.base}.anno.cadd.tsv" : "${meta.base}.anno.vcf.gz"
     """

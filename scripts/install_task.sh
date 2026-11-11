@@ -182,12 +182,13 @@ cmd_release() {
         else
             # Headers of the final response after redirects. A source that
             # sends neither ETag nor Last-Modified (an API answer) is named
-            # by the SHA-256 of its content, up to 500 MB.
+            # by the SHA-256 of its sorted lines, up to 500 MB: the ClinGen
+            # evidence repository returns the same rows in varying order.
             answer=$(curl -sIL --max-time 120 "$url" | tr -d '\r' | awk '{h=tolower($0)} h~/^http\//{e="";m="";l=""} h~/^etag:/{e=h} h~/^last-modified:/{m=h} h~/^content-length:/{l=h} END{print e"|"m"|"l}')
             if [[ $answer == '||'* ]]; then
-                digest=$(set -o pipefail; curl -sfL --max-time 600 --max-filesize 500000000 "$url" | sha256sum) ||
+                digest=$(set -o pipefail; curl -sfL --max-time 600 --max-filesize 500000000 "$url" | LC_ALL=C sort | sha256sum) ||
                     die "$id: cannot read $url"
-                answer="sha256:${digest%% *}"
+                answer="sorted-lines-sha256:${digest%% *}"
             fi
         fi
         parts=$(jq -c --arg u "$url" --arg a "$answer" '. + [{url: $u, release: $a}]' <<< "$parts")

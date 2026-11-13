@@ -2606,8 +2606,16 @@ function _ClinVar_VCF_deploy() {
         # basic_vep_annotation lacks LoF/NMD/SpliceVault required for regeneration.
         # Prepare a cache candidate with the original official VEP invocation.
         # Deployment does not activate a changed scientific profile.
-        bash "${SCRIPT_DIR}/annotation_vcf.sh" anno_VEP_cache_candidate \
-            --input_vcf "$clinvar_vcf" --config "$config_file" --threads "$threads" || return 1
+        local vep_split
+        vep_split=$(read_yaml "$config_file" "clinvar_vep_split")
+        if [[ -n $vep_split && $vep_split != null ]]; then
+            # Install workflow: VEP already ran on each chromosome (install
+            # steps D1_chrN); gather their outputs for these records.
+            _ClinVar_vep_gather "$config_file" "$vep_split" "$converted_vcf" "$clinvar_vcf" || return 1
+        else
+            bash "${SCRIPT_DIR}/annotation_vcf.sh" anno_VEP_cache_candidate \
+                --input_vcf "$clinvar_vcf" --config "$config_file" --threads "$threads" || return 1
+        fi
         check_vcf_validity "$clinvar_vcf" || return 1
         "${PRIVA_BIN}" clinvar-gene-refresh check-header --config "$config_file" --source-root "$BASE_DIR" > /dev/null || return 1
         "${PRIVA_BIN}" clinvar-contract header --vcf "$clinvar_vcf" --stage vep || return 1
@@ -2620,6 +2628,151 @@ function _ClinVar_VCF_deploy() {
     "${PRIVA_BIN}" clinvar-contract header --vcf "$clinvar_vcf" --stage complete || return 1
     "${PRIVA_BIN}" clinvar-gene-refresh check-header --config "$config_file" --source-root "$BASE_DIR" > /dev/null || return 1
     update_yaml "$config_file" "clinvar_vcf" "$clinvar_vcf"
+}
+
+
+# ClinVar VEP per chromosome (install workflow). VEP on the whole release took
+# 34 hours (job 1540983); on each chromosome it runs side by side. The route
+# with 22 forks per chromosome was compared with the whole-release run with 22
+# forks on 26 October 2026 (jobs 1524533 and 1524532): 4,597,985 ordered rows,
+# 4 rows differing only in HGNC_ID, no other difference. With 8 forks, domain
+# order differed, so the fork count stays 22 (ClinVar_vep_chrom).
+# The pieces, one install step each (D1_chrN): every other contig is in chrOther.
+function _clinvar_vep_pieces() {
+    printf '%s\n' chr1 chr2 chr3 chr4 chr5 chr6 chr7 chr8 chr9 chr10 chr11 chr12 chr13 chr14 \
+        chr15 chr16 chr17 chr18 chr19 chr20 chr21 chr22 chrX chrY chrOther
+}
+
+# The header lines of a bgzipped or plain VCF, without reading past them.
+function _vcf_header_lines() {
+    ( set +o pipefail; bgzip -dc -- "$1" | awk '/^#/ { print; next } { exit }' )
+}
+
+# Install task D1_split: rename the contigs of D0's release as
+# _ClinVar_VCF_deploy does, then write its records into one plain VCF per
+# chromosome (chr1..chr22, chrX, chrY; every other contig in chrOther), each
+# with the whole header. split.json lists the pieces and a hash of the records.
+function ClinVar_vep_split() {
+    local config_file=${1} folder release source assembly ucsc converted contig_map body name
+    local -a names
+    mapfile -t names < <(_clinvar_vep_pieces)
+    folder=$(read_yaml "$config_file" clinvar_vcf_dir) || return 1
+    [[ -n $folder && $folder != null ]] || { log "ERROR: clinvar_vcf_dir is not set"; return 1; }
+    release=$(read_yaml "$config_file" clinvar_release_inputs) || return 1
+    [[ -s $release ]] || { log "ERROR: clinvar_release_inputs (from D0) is missing: $release"; return 1; }
+    source=$(jq -r '.sources.vcf.path // empty' "$release") || return 1
+    [[ -s $source && -s $source.tbi ]] || { log "ERROR: D0's ClinVar VCF or its index is missing: $source"; return 1; }
+    assembly=$(read_yaml "$config_file" assembly)
+    case "$assembly" in
+        hg19|GRCh37) ucsc=hg19 ;;
+        hg38|GRCh38) ucsc=hg38 ;;
+        *) log "ERROR: Unsupported assembly for ClinVar: $assembly"; return 1 ;;
+    esac
+    contig_map=${DATA_DIR}/liftover/GRC_to_ucsc.contig.map.txt
+    [[ -f $contig_map ]] || { log "The contig map file ${contig_map} is not found"; return 1; }
+    folder=$(realpath -m -- "$folder/vep_split") || return 1
+    mkdir -p "$folder" || return 1
+    converted=$folder/clinvar.${ucsc}.vcf.gz
+    liftover_from_ucsc_to_GRCh "$source" "$contig_map" "$converted" || return 1
+    check_vcf_validity "$converted" || return 1
+    bgzip -dc -- "$converted" | awk -v dir="$folder" -v names="${names[*]}" '
+        BEGIN { n = split(names, list, " "); for (i = 1; i <= n; i++) known[list[i]] = 1 }
+        /^#/ { header = header $0 "\n"; next }
+        {
+            name = ($1 in known) ? $1 : "chrOther"
+            if (!(name in count)) { count[name] = 0; printf "%s", header > (dir "/" name ".vcf") }
+            print > (dir "/" name ".vcf"); count[name]++
+        }
+        END {
+            for (i = 1; i <= n; i++) {
+                if (!(list[i] in count)) { count[list[i]] = 0; printf "%s", header > (dir "/" list[i] ".vcf") }
+                print list[i] "\t" count[list[i]] > (dir "/counts.tsv")
+            }
+        }' || return 1
+    body=$(bgzip -dc -- "$converted" | grep -v '^#' | sha256sum | cut -c1-64) || return 1
+    local pieces="[]" records
+    for name in "${names[@]}"; do
+        records=$(awk -v n="$name" '$1 == n { print $2 }' "$folder/counts.tsv")
+        [[ $records =~ ^[0-9]+$ && -s $folder/$name.vcf ]] || { log "ERROR: ClinVar piece ${name} was not written"; return 1; }
+        pieces=$(jq -c --arg n "$name" --arg p "$folder/$name.vcf" --argjson r "$records" \
+            '. + [{name: $n, path: $p, records: $r}]' <<< "$pieces") || return 1
+    done
+    jq -n --arg source "$source" --arg converted "$converted" --arg body "$body" --argjson pieces "$pieces" \
+        '{kind: "priva-clinvar-vep-split-v1", source_vcf: $source, converted_vcf: $converted,
+          body_sha256: $body, records: ([$pieces[].records] | add), pieces: $pieces}' > "$folder/split.json" || return 1
+    log "Split $(jq .records "$folder/split.json") ClinVar records into ${#names[@]} pieces in $folder"
+    update_or_append_yaml "$config_file" clinvar_vep_split "$folder/split.json"
+}
+
+# Install task D1_chrN: VEP on one piece of D1_split, with the original VEP
+# command (anno_VEP_cache_worker) and 22 forks. VEP 116 starts up to forks + 1
+# children besides its parent, so the task needs 24 CPUs; the worker checks
+# that against SLURM_CPUS_PER_TASK. A piece without records has nothing to
+# annotate; its header-only file stands as the output.
+function ClinVar_vep_chrom() {
+    local config_file=${1} name=${2} manifest piece records folder threads
+    manifest=$(read_yaml "$config_file" clinvar_vep_split) || return 1
+    [[ -s $manifest ]] || { log "ERROR: clinvar_vep_split (from D1_split) is missing: $manifest"; return 1; }
+    piece=$(jq -r --arg n "$name" '.pieces[] | select(.name == $n) | .path' "$manifest") || return 1
+    records=$(jq -r --arg n "$name" '.pieces[] | select(.name == $n) | .records' "$manifest") || return 1
+    [[ -s $piece && $records =~ ^[0-9]+$ ]] || { log "ERROR: No ClinVar piece ${name} in $manifest"; return 1; }
+    folder=$(read_yaml "$config_file" clinvar_vcf_dir) || return 1
+    [[ -n $folder && $folder != null ]] || { log "ERROR: clinvar_vcf_dir is not set"; return 1; }
+    folder=$(realpath -m -- "$folder/vep_${name}") || return 1
+    mkdir -p "$folder" || return 1
+    threads=$(read_yaml "$config_file" threads)
+    [[ $threads =~ ^[1-9][0-9]*$ ]] || threads=1
+    if ((records == 0)); then
+        log "No ClinVar records on ${name}; nothing to annotate"
+        cp -- "$piece" "$folder/output.vcf" || return 1
+    else
+        bash "${SCRIPT_DIR}/annotation_vcf.sh" anno_VEP_cache_worker --config "$config_file" \
+            --input-vcf "$piece" --output-vcf "$folder/output.vcf" --stats-file "$folder/stats.html" \
+            --forks 22 || return 1
+    fi
+    bgzip -f -@ "$threads" -- "$folder/output.vcf" || return 1
+    update_or_append_yaml "$config_file" "clinvar_vep_${name}" "$folder/output.vcf.gz"
+}
+
+# D1, in _ClinVar_VCF_deploy: the per-chromosome VEP outputs in place of VEP on
+# the whole file. The records must be those D1_split annotated; the gathered
+# file is then sorted into TARGET as the whole-file route sorts VEP's output,
+# between the same candidate begin and complete records.
+function _ClinVar_vep_gather() {
+    local config_file=${1} manifest=${2} converted=${3} target=${4}
+    local body name records output first="" reference header total=0 written
+    [[ -s $manifest ]] || { log "ERROR: The ClinVar VEP split record is missing: $manifest"; return 1; }
+    body=$(bgzip -dc -- "$converted" | grep -v '^#' | sha256sum | cut -c1-64) || return 1
+    [[ $body == "$(jq -r .body_sha256 "$manifest")" ]] || {
+        log "ERROR: The per-chromosome VEP outputs were made from other ClinVar records than $converted"; return 1; }
+    local -a outputs=()
+    while IFS=$'\t' read -r name records; do
+        ((records > 0)) || continue
+        output=$(read_yaml "$config_file" "clinvar_vep_${name}") || return 1
+        [[ -s $output ]] || { log "ERROR: The VEP output for ${name} (clinvar_vep_${name}) is missing: $output"; return 1; }
+        # Pieces differ only in VEP's command line and start time.
+        header=$(_vcf_header_lines "$output" | grep -v '^##VEP-command-line=' | sed -E 's/ time="[^"]*"//' | sha256sum)
+        if [[ -z $first ]]; then first=$output reference=$header
+        elif [[ $header != "$reference" ]]; then
+            log "ERROR: The VEP header of ${name} differs from that of the first piece ($first)"; return 1
+        fi
+        outputs+=("$output"); total=$((total + records))
+    done < <(jq -r '.pieces[] | "\(.name)\t\(.records)"' "$manifest")
+    ((${#outputs[@]})) || { log "ERROR: No ClinVar VEP output to gather"; return 1; }
+    bash "${SCRIPT_DIR}/annotation_vcf.sh" anno_VEP_cache_candidate_phase \
+        --config "$config_file" --input-vcf "$target" --phase begin || return 1
+    {
+        _vcf_header_lines "$first"
+        for output in "${outputs[@]}"; do bgzip -dc -- "$output" | grep -v '^#'; done
+    } | bcftools sort -Oz -o "$target" - || return 1
+    tabix -f -p vcf "$target" || return 1
+    written=$(bcftools index -n "$target") || return 1
+    # VEP leaves out records whose first ALT is '.', so it writes at most as many.
+    ((written > 0 && written <= total)) || {
+        log "ERROR: Gathered ${written} VEP records for ${total} ClinVar records"; return 1; }
+    log "Gathered ${written} VEP records (from ${total} ClinVar records, ${#outputs[@]} pieces) into $target"
+    bash "${SCRIPT_DIR}/annotation_vcf.sh" anno_VEP_cache_candidate_phase \
+        --config "$config_file" --input-vcf "$target" --phase complete
 }
 
 

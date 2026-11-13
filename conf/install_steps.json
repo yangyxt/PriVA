@@ -972,6 +972,825 @@
       "max_age_months": 3
     },
     {
+      "id": "D1_split",
+      "name": "CLINVAR_VEP_SPLIT",
+      "calls": [
+        [
+          "ClinVar_vep_split",
+          "{config}"
+        ]
+      ],
+      "needs": [
+        "D0"
+      ],
+      "outputs": [
+        "clinvar_vep_split"
+      ],
+      "settings": [
+        "assembly"
+      ]
+    },
+    {
+      "id": "D1_chr1",
+      "name": "CLINVAR_VEP_CHR1",
+      "calls": [
+        [
+          "ClinVar_vep_chrom",
+          "{config}",
+          "chr1"
+        ]
+      ],
+      "needs": [
+        "A1",
+        "A2",
+        "B1",
+        "B2",
+        "B3",
+        "B4",
+        "B5",
+        "B6",
+        "B7",
+        "B8",
+        "B9",
+        "D1_split"
+      ],
+      "outputs": [
+        "clinvar_vep_chr1"
+      ],
+      "settings": [
+        "assembly",
+        "vep_installed_version"
+      ]
+    },
+    {
+      "id": "D1_chr2",
+      "name": "CLINVAR_VEP_CHR2",
+      "calls": [
+        [
+          "ClinVar_vep_chrom",
+          "{config}",
+          "chr2"
+        ]
+      ],
+      "needs": [
+        "A1",
+        "A2",
+        "B1",
+        "B2",
+        "B3",
+        "B4",
+        "B5",
+        "B6",
+        "B7",
+        "B8",
+        "B9",
+        "D1_split"
+      ],
+      "outputs": [
+        "clinvar_vep_chr2"
+      ],
+      "settings": [
+        "assembly",
+        "vep_installed_version"
+      ]
+    },
+    {
+      "id": "D1_chr3",
+      "name": "CLINVAR_VEP_CHR3",
+      "calls": [
+        [
+          "ClinVar_vep_chrom",
+          "{config}",
+          "chr3"
+        ]
+      ],
+      "needs": [
+        "A1",
+        "A2",
+        "B1",
+        "B2",
+        "B3",
+        "B4",
+        "B5",
+        "B6",
+        "B7",
+        "B8",
+        "B9",
+        "D1_split"
+      ],
+      "outputs": [
+        "clinvar_vep_chr3"
+      ],
+      "settings": [
+        "assembly",
+        "vep_installed_version"
+      ]
+    },
+    {
+      "id": "D1_chr4",
+      "name": "CLINVAR_VEP_CHR4",
+      "calls": [
+        [
+          "ClinVar_vep_chrom",
+          "{config}",
+          "chr4"
+        ]
+      ],
+      "needs": [
+        "A1",
+        "A2",
+        "B1",
+        "B2",
+        "B3",
+        "B4",
+        "B5",
+        "B6",
+        "B7",
+        "B8",
+        "B9",
+        "D1_split"
+      ],
+      "outputs": [
+        "clinvar_vep_chr4"
+      ],
+      "settings": [
+        "assembly",
+        "vep_installed_version"
+      ]
+    },
+    {
+      "id": "D1_chr5",
+      "name": "CLINVAR_VEP_CHR5",
+      "calls": [
+        [
+          "ClinVar_vep_chrom",
+          "{config}",
+          "chr5"
+        ]
+      ],
+      "needs": [
+        "A1",
+        "A2",
+        "B1",
+        "B2",
+        "B3",
+        "B4",
+        "B5",
+        "B6",
+        "B7",
+        "B8",
+        "B9",
+        "D1_split"
+      ],
+      "outputs": [
+        "clinvar_vep_chr5"
+      ],
+      "settings": [
+        "assembly",
+        "vep_installed_version"
+      ]
+    },
+    {
+      "id": "D1_chr6",
+      "name": "CLINVAR_VEP_CHR6",
+      "calls": [
+        [
+          "ClinVar_vep_chrom",
+          "{config}",
+          "chr6"
+        ]
+      ],
+      "needs": [
+        "A1",
+        "A2",
+        "B1",
+        "B2",
+        "B3",
+        "B4",
+        "B5",
+        "B6",
+        "B7",
+        "B8",
+        "B9",
+        "D1_split"
+      ],
+      "outputs": [
+        "clinvar_vep_chr6"
+      ],
+      "settings": [
+        "assembly",
+        "vep_installed_version"
+      ]
+    },
+    {
+      "id": "D1_chr7",
+      "name": "CLINVAR_VEP_CHR7",
+      "calls": [
+        [
+          "ClinVar_vep_chrom",
+          "{config}",
+          "chr7"
+        ]
+      ],
+      "needs": [
+        "A1",
+        "A2",
+        "B1",
+        "B2",
+        "B3",
+        "B4",
+        "B5",
+        "B6",
+        "B7",
+        "B8",
+        "B9",
+        "D1_split"
+      ],
+      "outputs": [
+        "clinvar_vep_chr7"
+      ],
+      "settings": [
+        "assembly",
+        "vep_installed_version"
+      ]
+    },
+    {
+      "id": "D1_chr8",
+      "name": "CLINVAR_VEP_CHR8",
+      "calls": [
+        [
+          "ClinVar_vep_chrom",
+          "{config}",
+          "chr8"
+        ]
+      ],
+      "needs": [
+        "A1",
+        "A2",
+        "B1",
+        "B2",
+        "B3",
+        "B4",
+        "B5",
+        "B6",
+        "B7",
+        "B8",
+        "B9",
+        "D1_split"
+      ],
+      "outputs": [
+        "clinvar_vep_chr8"
+      ],
+      "settings": [
+        "assembly",
+        "vep_installed_version"
+      ]
+    },
+    {
+      "id": "D1_chr9",
+      "name": "CLINVAR_VEP_CHR9",
+      "calls": [
+        [
+          "ClinVar_vep_chrom",
+          "{config}",
+          "chr9"
+        ]
+      ],
+      "needs": [
+        "A1",
+        "A2",
+        "B1",
+        "B2",
+        "B3",
+        "B4",
+        "B5",
+        "B6",
+        "B7",
+        "B8",
+        "B9",
+        "D1_split"
+      ],
+      "outputs": [
+        "clinvar_vep_chr9"
+      ],
+      "settings": [
+        "assembly",
+        "vep_installed_version"
+      ]
+    },
+    {
+      "id": "D1_chr10",
+      "name": "CLINVAR_VEP_CHR10",
+      "calls": [
+        [
+          "ClinVar_vep_chrom",
+          "{config}",
+          "chr10"
+        ]
+      ],
+      "needs": [
+        "A1",
+        "A2",
+        "B1",
+        "B2",
+        "B3",
+        "B4",
+        "B5",
+        "B6",
+        "B7",
+        "B8",
+        "B9",
+        "D1_split"
+      ],
+      "outputs": [
+        "clinvar_vep_chr10"
+      ],
+      "settings": [
+        "assembly",
+        "vep_installed_version"
+      ]
+    },
+    {
+      "id": "D1_chr11",
+      "name": "CLINVAR_VEP_CHR11",
+      "calls": [
+        [
+          "ClinVar_vep_chrom",
+          "{config}",
+          "chr11"
+        ]
+      ],
+      "needs": [
+        "A1",
+        "A2",
+        "B1",
+        "B2",
+        "B3",
+        "B4",
+        "B5",
+        "B6",
+        "B7",
+        "B8",
+        "B9",
+        "D1_split"
+      ],
+      "outputs": [
+        "clinvar_vep_chr11"
+      ],
+      "settings": [
+        "assembly",
+        "vep_installed_version"
+      ]
+    },
+    {
+      "id": "D1_chr12",
+      "name": "CLINVAR_VEP_CHR12",
+      "calls": [
+        [
+          "ClinVar_vep_chrom",
+          "{config}",
+          "chr12"
+        ]
+      ],
+      "needs": [
+        "A1",
+        "A2",
+        "B1",
+        "B2",
+        "B3",
+        "B4",
+        "B5",
+        "B6",
+        "B7",
+        "B8",
+        "B9",
+        "D1_split"
+      ],
+      "outputs": [
+        "clinvar_vep_chr12"
+      ],
+      "settings": [
+        "assembly",
+        "vep_installed_version"
+      ]
+    },
+    {
+      "id": "D1_chr13",
+      "name": "CLINVAR_VEP_CHR13",
+      "calls": [
+        [
+          "ClinVar_vep_chrom",
+          "{config}",
+          "chr13"
+        ]
+      ],
+      "needs": [
+        "A1",
+        "A2",
+        "B1",
+        "B2",
+        "B3",
+        "B4",
+        "B5",
+        "B6",
+        "B7",
+        "B8",
+        "B9",
+        "D1_split"
+      ],
+      "outputs": [
+        "clinvar_vep_chr13"
+      ],
+      "settings": [
+        "assembly",
+        "vep_installed_version"
+      ]
+    },
+    {
+      "id": "D1_chr14",
+      "name": "CLINVAR_VEP_CHR14",
+      "calls": [
+        [
+          "ClinVar_vep_chrom",
+          "{config}",
+          "chr14"
+        ]
+      ],
+      "needs": [
+        "A1",
+        "A2",
+        "B1",
+        "B2",
+        "B3",
+        "B4",
+        "B5",
+        "B6",
+        "B7",
+        "B8",
+        "B9",
+        "D1_split"
+      ],
+      "outputs": [
+        "clinvar_vep_chr14"
+      ],
+      "settings": [
+        "assembly",
+        "vep_installed_version"
+      ]
+    },
+    {
+      "id": "D1_chr15",
+      "name": "CLINVAR_VEP_CHR15",
+      "calls": [
+        [
+          "ClinVar_vep_chrom",
+          "{config}",
+          "chr15"
+        ]
+      ],
+      "needs": [
+        "A1",
+        "A2",
+        "B1",
+        "B2",
+        "B3",
+        "B4",
+        "B5",
+        "B6",
+        "B7",
+        "B8",
+        "B9",
+        "D1_split"
+      ],
+      "outputs": [
+        "clinvar_vep_chr15"
+      ],
+      "settings": [
+        "assembly",
+        "vep_installed_version"
+      ]
+    },
+    {
+      "id": "D1_chr16",
+      "name": "CLINVAR_VEP_CHR16",
+      "calls": [
+        [
+          "ClinVar_vep_chrom",
+          "{config}",
+          "chr16"
+        ]
+      ],
+      "needs": [
+        "A1",
+        "A2",
+        "B1",
+        "B2",
+        "B3",
+        "B4",
+        "B5",
+        "B6",
+        "B7",
+        "B8",
+        "B9",
+        "D1_split"
+      ],
+      "outputs": [
+        "clinvar_vep_chr16"
+      ],
+      "settings": [
+        "assembly",
+        "vep_installed_version"
+      ]
+    },
+    {
+      "id": "D1_chr17",
+      "name": "CLINVAR_VEP_CHR17",
+      "calls": [
+        [
+          "ClinVar_vep_chrom",
+          "{config}",
+          "chr17"
+        ]
+      ],
+      "needs": [
+        "A1",
+        "A2",
+        "B1",
+        "B2",
+        "B3",
+        "B4",
+        "B5",
+        "B6",
+        "B7",
+        "B8",
+        "B9",
+        "D1_split"
+      ],
+      "outputs": [
+        "clinvar_vep_chr17"
+      ],
+      "settings": [
+        "assembly",
+        "vep_installed_version"
+      ]
+    },
+    {
+      "id": "D1_chr18",
+      "name": "CLINVAR_VEP_CHR18",
+      "calls": [
+        [
+          "ClinVar_vep_chrom",
+          "{config}",
+          "chr18"
+        ]
+      ],
+      "needs": [
+        "A1",
+        "A2",
+        "B1",
+        "B2",
+        "B3",
+        "B4",
+        "B5",
+        "B6",
+        "B7",
+        "B8",
+        "B9",
+        "D1_split"
+      ],
+      "outputs": [
+        "clinvar_vep_chr18"
+      ],
+      "settings": [
+        "assembly",
+        "vep_installed_version"
+      ]
+    },
+    {
+      "id": "D1_chr19",
+      "name": "CLINVAR_VEP_CHR19",
+      "calls": [
+        [
+          "ClinVar_vep_chrom",
+          "{config}",
+          "chr19"
+        ]
+      ],
+      "needs": [
+        "A1",
+        "A2",
+        "B1",
+        "B2",
+        "B3",
+        "B4",
+        "B5",
+        "B6",
+        "B7",
+        "B8",
+        "B9",
+        "D1_split"
+      ],
+      "outputs": [
+        "clinvar_vep_chr19"
+      ],
+      "settings": [
+        "assembly",
+        "vep_installed_version"
+      ]
+    },
+    {
+      "id": "D1_chr20",
+      "name": "CLINVAR_VEP_CHR20",
+      "calls": [
+        [
+          "ClinVar_vep_chrom",
+          "{config}",
+          "chr20"
+        ]
+      ],
+      "needs": [
+        "A1",
+        "A2",
+        "B1",
+        "B2",
+        "B3",
+        "B4",
+        "B5",
+        "B6",
+        "B7",
+        "B8",
+        "B9",
+        "D1_split"
+      ],
+      "outputs": [
+        "clinvar_vep_chr20"
+      ],
+      "settings": [
+        "assembly",
+        "vep_installed_version"
+      ]
+    },
+    {
+      "id": "D1_chr21",
+      "name": "CLINVAR_VEP_CHR21",
+      "calls": [
+        [
+          "ClinVar_vep_chrom",
+          "{config}",
+          "chr21"
+        ]
+      ],
+      "needs": [
+        "A1",
+        "A2",
+        "B1",
+        "B2",
+        "B3",
+        "B4",
+        "B5",
+        "B6",
+        "B7",
+        "B8",
+        "B9",
+        "D1_split"
+      ],
+      "outputs": [
+        "clinvar_vep_chr21"
+      ],
+      "settings": [
+        "assembly",
+        "vep_installed_version"
+      ]
+    },
+    {
+      "id": "D1_chr22",
+      "name": "CLINVAR_VEP_CHR22",
+      "calls": [
+        [
+          "ClinVar_vep_chrom",
+          "{config}",
+          "chr22"
+        ]
+      ],
+      "needs": [
+        "A1",
+        "A2",
+        "B1",
+        "B2",
+        "B3",
+        "B4",
+        "B5",
+        "B6",
+        "B7",
+        "B8",
+        "B9",
+        "D1_split"
+      ],
+      "outputs": [
+        "clinvar_vep_chr22"
+      ],
+      "settings": [
+        "assembly",
+        "vep_installed_version"
+      ]
+    },
+    {
+      "id": "D1_chrX",
+      "name": "CLINVAR_VEP_CHRX",
+      "calls": [
+        [
+          "ClinVar_vep_chrom",
+          "{config}",
+          "chrX"
+        ]
+      ],
+      "needs": [
+        "A1",
+        "A2",
+        "B1",
+        "B2",
+        "B3",
+        "B4",
+        "B5",
+        "B6",
+        "B7",
+        "B8",
+        "B9",
+        "D1_split"
+      ],
+      "outputs": [
+        "clinvar_vep_chrX"
+      ],
+      "settings": [
+        "assembly",
+        "vep_installed_version"
+      ]
+    },
+    {
+      "id": "D1_chrY",
+      "name": "CLINVAR_VEP_CHRY",
+      "calls": [
+        [
+          "ClinVar_vep_chrom",
+          "{config}",
+          "chrY"
+        ]
+      ],
+      "needs": [
+        "A1",
+        "A2",
+        "B1",
+        "B2",
+        "B3",
+        "B4",
+        "B5",
+        "B6",
+        "B7",
+        "B8",
+        "B9",
+        "D1_split"
+      ],
+      "outputs": [
+        "clinvar_vep_chrY"
+      ],
+      "settings": [
+        "assembly",
+        "vep_installed_version"
+      ]
+    },
+    {
+      "id": "D1_chrOther",
+      "name": "CLINVAR_VEP_CHROTHER",
+      "calls": [
+        [
+          "ClinVar_vep_chrom",
+          "{config}",
+          "chrOther"
+        ]
+      ],
+      "needs": [
+        "A1",
+        "A2",
+        "B1",
+        "B2",
+        "B3",
+        "B4",
+        "B5",
+        "B6",
+        "B7",
+        "B8",
+        "B9",
+        "D1_split"
+      ],
+      "outputs": [
+        "clinvar_vep_chrOther"
+      ],
+      "settings": [
+        "assembly",
+        "vep_installed_version"
+      ]
+    },
+    {
       "id": "D1",
       "name": "CLINVAR",
       "calls": [
@@ -994,7 +1813,33 @@
         "B8",
         "B9",
         "C1",
-        "D0"
+        "D0",
+        "D1_split",
+        "D1_chr1",
+        "D1_chr2",
+        "D1_chr3",
+        "D1_chr4",
+        "D1_chr5",
+        "D1_chr6",
+        "D1_chr7",
+        "D1_chr8",
+        "D1_chr9",
+        "D1_chr10",
+        "D1_chr11",
+        "D1_chr12",
+        "D1_chr13",
+        "D1_chr14",
+        "D1_chr15",
+        "D1_chr16",
+        "D1_chr17",
+        "D1_chr18",
+        "D1_chr19",
+        "D1_chr20",
+        "D1_chr21",
+        "D1_chr22",
+        "D1_chrX",
+        "D1_chrY",
+        "D1_chrOther"
       ],
       "outputs": [
         "clinvar_vcf",

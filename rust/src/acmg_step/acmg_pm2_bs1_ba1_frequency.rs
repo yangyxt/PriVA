@@ -896,9 +896,16 @@ pub(crate) fn pm2_criteria(
     let pm2_supporting_gene = rare_af_binomial(&work, &gene_af_raw)?;
     let pm2_moderate_exon = rare_af_binomial(&work, &median)?;
     let gnomad_absent = gnomad_rare_af(&work, 1e-7)?;
+    // gnomAD's joint exome and genome release has no chrM, and the gnomAD step
+    // passes chrM records through without its values. A missing frequency there
+    // means "not covered", not "absent from the population", so PM2 stays off.
+    let mitochondrial = loci(table)?.mitochondrial;
 
     let mut pm2 = vec![0i64; table.rows];
     for row in 0..table.rows {
+        if mitochondrial[row] {
+            continue;
+        }
         let mut supporting = if max[row] == 0.0 || max[row].is_nan() {
             pm2_supporting_gene[row]
         } else {
@@ -1465,6 +1472,33 @@ mod tests {
         )
         .unwrap();
         path
+    }
+
+    #[test]
+    fn pm2_stays_off_for_mitochondrial_records_without_gnomad_values() {
+        let gene = gene_fixture("pm2_gene_mitochondrial.rkyv", false);
+        let exon = exon_fixture("pm2_exon_mitochondrial.rkyv");
+        let text =
+            |values: &[&str]| Column::Text(values.iter().map(|s| Some((*s).to_owned())).collect());
+        let mut columns = vec![
+            ("chrom", text(&["chr1", "chrM", "MT"])),
+            ("Gene", text(&["INT", "FLOAT", "MISSING"])),
+            ("Feature", text(&["ENST1", "ENST1", "MISSING"])),
+            ("EXON", text(&["2/3", "1/3", "1/1"])),
+            ("variant_inheritance", text(&["dominant"; 3])),
+            ("variant_penetrance", text(&["complete"; 3])),
+        ];
+        columns.extend(
+            [
+                "gnomAD_joint_AF",
+                "gnomAD_joint_AN",
+                "gnomAD_joint_AF_max",
+                "gnomAD_joint_AN_max",
+            ]
+            .map(|name| (name, Column::Float(vec![f64::NAN; 3]))),
+        );
+        let output = pm2_criteria(&frame(columns), &gene, &exon, 1e-5).unwrap();
+        assert_eq!(output.criteria[0].1, Column::Int(vec![2, 0, 0]));
     }
 
     #[test]

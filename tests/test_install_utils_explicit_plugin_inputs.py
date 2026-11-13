@@ -8,6 +8,8 @@ import sys
 import tempfile
 import unittest
 
+import fake_priva_binary
+
 ROOT = Path(__file__).resolve().parents[1]
 INSTALLER = ROOT / "scripts/install_utils.sh"
 PRELUDE = r'''
@@ -21,6 +23,7 @@ update_yaml() {
     "$TEST_PYTHON" -c 'import json,sys; p,k,v=sys.argv[1:]; d=json.load(open(p)); d[k]=v; open(p,"w").write(json.dumps(d))' "$@"
 }
 python() { "$TEST_PYTHON" "$@"; }
+export -f python
 wget() { printf 'UNEXPECTED_NETWORK\n'; return 98; }
 git() { printf 'UNEXPECTED_GIT\n'; return 97; }
 '''
@@ -38,12 +41,15 @@ class ExplicitPluginInputs(unittest.TestCase):
         self.config_file = self.folder / "config.json"
         self.config = {"assembly": "hg38", "vep_plugins_cachedir": str(self.cache)}
         self.env = dict(os.environ, TEST_PYTHON=sys.executable, TEST_CONFIG=str(self.config_file),
-                        TEST_CACHE=str(self.cache))
+                        TEST_CACHE=str(self.cache), **fake_priva_binary.environment(self.folder))
 
     def run_shell(self, command, setup=""):
         self.config_file.write_text(json.dumps(self.config))
         return subprocess.run(["bash", "-c", PRELUDE + setup + "\n" + command, "test", str(INSTALLER)],
                               env=self.env, cwd=self.folder, text=True, capture_output=True, timeout=45)
+
+    def priva_calls(self):
+        return fake_priva_binary.calls(self.env["PRIVA_FAKE_CALLS"])
 
     def bgzf(self, content, name="selected.tsv.gz"):
         path = self.folder / name
@@ -62,6 +68,8 @@ class ExplicitPluginInputs(unittest.TestCase):
         self.assertEqual((source.read_bytes(), source.stat().st_ctime_ns), before)
         self.assertEqual(json.loads(self.config_file.read_text()), self.config)
         self.assertEqual(subprocess.check_output(["tabix", str(source), "chr1:1-1"]), b"chr1\t1\t1\n")
+        self.assertEqual(self.priva_calls(), [["indexed-plugin-cache", "ensure-index",
+                                               "--input", str(source), "--kind", "mavedb"]])
 
     def test_missing_custom_table_inputs_fail_before_network_or_configuration_change(self):
         for key, command in (
@@ -86,6 +94,10 @@ class ExplicitPluginInputs(unittest.TestCase):
         result = self.run_shell('PrimateAI_install "$TEST_CONFIG" "$TEST_CACHE" plugins')
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertNotIn("UPDATE", result.stdout)
+        self.assertEqual(self.priva_calls(), [[
+            "indexed-plugin-cache", "format-primate", "--input", source.name,
+            "--cache-dir", str(self.cache / "PrimateAI"), "--assembly", "hg38", "--threads", "1",
+            "--print-path"]])
         self.assertEqual((source.read_bytes(), source.stat().st_ctime_ns), before)
         self.assertEqual(json.loads(self.config_file.read_text()), self.config)
 
@@ -148,6 +160,10 @@ wget() {
         self.assertEqual(target.read_bytes(), source.read_bytes())
         self.assertEqual(json.loads(self.config_file.read_text())["mavedb_file"], str(target))
         self.assertEqual(subprocess.check_output(["tabix", str(target), "chr1:2-2"]), b"chr1\t2\t2\n")
+        staged = self.priva_calls()[0][3]
+        self.assertRegex(staged, r"/MaveDB/\.download\.[^/]+/MaveDB_variants\.hg38\.tsv\.gz$")
+        self.assertEqual(self.priva_calls(), [["indexed-plugin-cache", "ensure-index",
+                                               "--input", staged, "--kind", "mavedb"]])
 
     def test_mavedb_failed_index_download_does_not_publish_data_or_register(self):
         setup = r'''

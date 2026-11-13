@@ -6,6 +6,7 @@ import tempfile
 import time
 import unittest
 
+import fake_priva_binary
 from test_biomart_nm_to_enst import BODY, MAPPING
 import test_installer_prerequisites as prerequisites
 from test_installer_prerequisites import ROOT
@@ -65,6 +66,10 @@ class MappingArtifactRoutes(unittest.TestCase):
         other = self.route(kind="pm1")
         self.assertNotEqual(target, other)
         self.assertEqual(other.name, "pm1_regions.hg38.pkl")
+        native = self.route(kind="pm1", artifact_format="rkyv")
+        self.assertEqual((native.parent, native.name), (other.parent, "pm1_regions.hg38.rkyv"))
+        with self.assertRaisesRegex(ValueError, "rkyv for natively built PM1 regions"):
+            self.route(artifact_format="rkyv")
 
     def test_changed_anchor_selects_distinct_namespace_without_mtime_identity(self):
         self.change_mapping()
@@ -168,13 +173,15 @@ class MappingArtifactInstaller(unittest.TestCase):
         self.root = self.fixture.folder / "managed cache"
         self.root.mkdir()
         self.fixture.config.update(cache_root=str(self.root), vep_plugins_cachedir=str(self.root / "plugins"))
+        self.fixture.configure_pm1_domains()
         self.anchors = [ROOT / "data/gnomAD_RMC/gnomad_v2.1.1_rmc_flat.hg38.tsv",
                         ROOT / "data/HCSeeker/HC_spots.hg38.tsv"]
 
     def test_changed_mapping_build_and_completed_target_fast_reuse_register_correct_key(self):
         for function, key, name in (
             ("AlphaMissense_pick_missense_constrained_segments", "alphamissense_intolerant_motifs", "motifs.pkl"),
-            ("prepare_pm1_regions", "pm1_regions_pkl", "pm1.pkl"),
+            # Native PM1 regions are an archive; its route keeps the .rkyv name.
+            ("prepare_pm1_regions", "pm1_regions_pkl", "pm1.rkyv"),
         ):
             with self.subTest(function=function):
                 old = self.fixture.folder / name
@@ -201,6 +208,10 @@ class MappingArtifactInstaller(unittest.TestCase):
                 '''
                 result = self.fixture.run_shell(setup + f'\n{function} "$TEST_CONFIG"')
                 self.assertEqual(result.returncode, 0, result.stderr)
+                route = [call for call in fake_priva_binary.calls(self.fixture.env["PRIVA_FAKE_CALLS"])
+                         if call[:2] == ["biomart", "artifact-route"]][-1]
+                self.assertEqual(route[2:4], ["--helper-root", str(ROOT)])
+                self.assertEqual(route[route.index("--artifact") + 1], str(old))
                 call = next(json.loads(line[4:]) for line in result.stdout.splitlines() if line.startswith("SCI:"))
                 self.assertEqual(call[call.index("--nm_to_enst_tsv") + 1], str(self.fixture.mapping))
                 if key == "pm1_regions_pkl":

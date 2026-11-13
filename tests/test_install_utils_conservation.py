@@ -3,11 +3,13 @@ import json
 import os
 from pathlib import Path
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
 import unittest
 
+import fake_priva_binary
 from test_conservation_resource_check import guard, make_bigwig, make_reference
 
 
@@ -29,6 +31,8 @@ read_yaml() {
     "$TEST_PYTHON" -c 'import json,sys; value=json.load(open(sys.argv[1])).get(sys.argv[2]); print("null" if value is None else value)' "$1" "$2"
 }
 python() { "$TEST_PYTHON" "$@"; }
+export -f python
+priva_resolve_binary() { PRIVA_BIN=$PRIVA_BINARY; }
 wget() {
     event "wget $2"
     local output=${@: -1}
@@ -62,7 +66,9 @@ class ConservationShell(unittest.TestCase):
         self.environment = dict(os.environ, SCRIPT_DIR=str(SCRIPT_DIR), TEST_CONFIG=str(self.config_file),
                                 TEST_EVENTS=str(self.events), TEST_PYTHON=sys.executable,
                                 TEST_CACHE=str(self.cache), TEST_DOWNLOAD=str(self.track),
-                                TEST_TARGET=str(self.target), TEST_FAILURE="none", TEST_ASSEMBLY="hg38")
+                                TEST_TARGET=str(self.target), TEST_FAILURE="none", TEST_ASSEMBLY="hg38",
+                                **fake_priva_binary.environment(self.folder, SCRIPT_DIR))
+        self.tool_prefix = os.path.dirname(shutil.which("python", path=self.environment.get("PATH")) or "")
 
     def run_installer(self, failure="none"):
         self.config_file.write_text(json.dumps(self.config))
@@ -106,6 +112,10 @@ class ConservationShell(unittest.TestCase):
                                   "yaml conservation_file " + str(self.target)])
         self.assertEqual(self.target.read_bytes(), self.track.read_bytes())
         self.assertFalse(Path(str(self.target) + ".partial").exists())
+        self.assertEqual(fake_priva_binary.calls(self.environment["PRIVA_FAKE_CALLS"]), [[
+            "conservation-resource", "publish", "--input", str(self.target) + ".partial",
+            "--assembly", "GRCh38", "--reference", str(self.reference), "--tool-prefix", self.tool_prefix,
+            "--source-url", self.config["conservation_GRCh38_url"], "--publish-to", str(self.target)]])
 
     def test_default_download_requires_publisher_pin_before_publication_or_yaml(self):
         self.config["conservation_GRCh38_url"] = None
@@ -163,6 +173,9 @@ class ConservationShell(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(events, ["yaml conservation_file " + str(self.target)])
         self.assertIsNone(json.loads(result.stdout)["release"])
+        self.assertEqual(fake_priva_binary.calls(self.environment["PRIVA_FAKE_CALLS"]), [[
+            "conservation-resource", "validate", "--input", str(self.target), "--assembly", "GRCh38",
+            "--reference", str(self.reference), "--tool-prefix", self.tool_prefix]])
 
     def test_hg19_download_source_is_unchanged_and_native_validation_runs(self):
         self.target = self.cache / "Conservation/gerp_conservation_scores.homo_sapiens.GRCh37.bw"

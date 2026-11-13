@@ -7,6 +7,8 @@ import subprocess
 import tempfile
 import unittest
 
+import fake_priva_binary
+
 ROOT = Path(__file__).resolve().parents[1]
 INSTALLER = ROOT / "scripts/install_utils.sh"
 TSV = (b"#chrom\tpos\tref\talt\tsplicevault_site_loc\n"
@@ -38,7 +40,8 @@ class SpliceVaultInstall(unittest.TestCase):
                         TEST_SOURCE=str(self.source), TEST_CONVERTED=str(self.converted),
                         TEST_TMP=str(self.folder / "tmp/nested"),
                         TEST_PRESCORE=str(self.cache / "SpliceVault/SpliceVault_data_GRCh38.tsv.gz"),
-                        TEST_URL="https://fixtures.invalid/SpliceVault_data_GRCh38.tsv.gz")
+                        TEST_URL="https://fixtures.invalid/SpliceVault_data_GRCh38.tsv.gz",
+                        **fake_priva_binary.environment(self.folder))
 
     def run_shell(self, body):
         settings = r'''
@@ -80,6 +83,9 @@ class SpliceVaultInstall(unittest.TestCase):
             }
         '''
 
+    def priva_calls(self):
+        return fake_priva_binary.calls(self.env["PRIVA_FAKE_CALLS"])
+
     def index_source(self):
         subprocess.run(["tabix", "-s", "1", "-b", "2", "-e", "2", "-c", "#",
                         str(self.source)], check=True)
@@ -95,6 +101,8 @@ class SpliceVaultInstall(unittest.TestCase):
         self.assertTrue(Path(str(self.source) + ".tbi").is_file())
         records = subprocess.check_output(["tabix", str(self.source), "chr1:10-10"])
         self.assertEqual(records, b"chr1\t10\tA\tC\tchr1:11\n")
+        self.assertEqual(self.priva_calls(), [["indexed-plugin-cache", "ensure-index",
+                                               "--input", str(self.source), "--kind", "splicevault"]])
 
     def test_existing_current_index_is_reused_without_download(self):
         self.index_source()
@@ -165,6 +173,7 @@ class SpliceVaultInstall(unittest.TestCase):
                 done
                 cp "$TEST_CONVERTED" "$output"
             }
+            export -f python
             sort() {
                 printf 'SORT:%s\n' "$*" >&2
                 local -a args=()
@@ -191,6 +200,13 @@ class SpliceVaultInstall(unittest.TestCase):
                          b"chr1\t30\tA\tC\tchr1:31\nchr2\t20\tC\tT\tchr2:21\n")
         self.assertEqual(subprocess.check_output(["tabix", "-l", str(target)]), b"chr1\nchr2\n")
         self.assertIn("UPDATE:config splicevault_prescore " + str(target), result.stdout)
+        grch38 = self.cache / "SpliceVault/SpliceVault_data_GRCh38.tsv"
+        self.assertEqual(self.priva_calls(), [
+            ["splicevault-convert", "--input_tsv", str(grch38),
+             "--output_tsv", str(self.cache / "SpliceVault/SpliceVault_data_GRCh37.tsv"),
+             "--chain_file", str(self.chain), "--reference_fasta", str(self.reference),
+             "--temp_dir", self.env["TEST_TMP"]],
+            ["indexed-plugin-cache", "ensure-index", "--input", str(target), "--kind", "splicevault"]])
 
     def test_missing_or_empty_conversion_inputs_stop_before_download(self):
         self.env["TEST_ASSEMBLY"] = "hg19"
@@ -217,12 +233,14 @@ class SpliceVaultInstall(unittest.TestCase):
         self.env["TEST_PRESCORE"] = str(self.cache / "SpliceVault/SpliceVault_data_GRCh37.tsv.gz")
         result = self.run_shell(self.local_download() + r'''
             python() { return 71; }
+            export -f python
             tabix() { printf 'UNEXPECTED_TABIX\n'; }
             SpliceVault_install config "$TEST_CACHE"
         ''')
         self.assertNotEqual(result.returncode, 0)
         self.assertNotIn("UNEXPECTED_TABIX", result.stdout)
         self.assertNotIn("UPDATE", result.stdout)
+        self.assertEqual([call[0] for call in self.priva_calls()], ["splicevault-convert"])
 
     def test_missing_url_and_unsupported_assembly_stop_before_download(self):
         for key, value in (("TEST_URL", ""), ("TEST_ASSEMBLY", "GRCh39")):

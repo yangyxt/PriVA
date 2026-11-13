@@ -1,0 +1,2193 @@
+{
+  "about": "Install steps run as Nextflow tasks by workflows/install.nf. Each step calls existing installer functions from scripts/install_utils.sh with its own private configuration, whose cache_root is the step's lineage folder. Tokens: {config} is that configuration, {script_dir} the scripts folder, {KEY} the configuration value of KEY. needs: steps whose receipts supply input keys. outputs: keys the step must set; optional_outputs may be empty. user_inputs: keys naming files you supply, kept from your configuration and counted in lineage. settings: configuration values that change results (glob patterns allowed). copies: input keys the step rewrites in place; the runner copies them into the step's own folder first. writable: the folder stays writable after the step (otherwise it is made read-only). native: the step's results are computed by priva, so the priva source identity counts in its lineage. release: how to ask a changing source for its current release (git: the commit of url and ref; http: the server's ETag, Last-Modified and size), part of the step's lineage. Tokens {grch} (GRCh37 or GRCh38) and {loftee_branch} (master or grch38) follow the assembly. adopt_paths: where an older installation that does not name an output key put that file, for --adopt ({KEY} from the old configuration). pinned: the release is kept in resource_root/pins.json and only checked again with --refresh STEP. max_age_months: a pinned release older than this many calendar months (from the day it was taken) is replaced by the current one.",
+  "folder_keys": [
+    "cache_root",
+    "vep_cache_dir",
+    "vep_plugins_dir",
+    "vep_plugins_cachedir",
+    "gnomad_vcf_dir",
+    "clinvar_vcf_dir",
+    "cadd_parent_dir",
+    "cadd_base_dir",
+    "loftee_parent_dir",
+    "hpo_raw_dir",
+    "gene_mechanism_cache_dir",
+    "gene_mechanism_raw_dir",
+    "gofcards_workdir",
+    "pext_tissue_bw_dir"
+  ],
+  "steps": [
+    {
+      "id": "A1",
+      "name": "REFERENCE_FASTA",
+      "calls": [
+        [
+          "reference_genome_install",
+          "{config}"
+        ]
+      ],
+      "needs": [],
+      "outputs": [
+        "ref_genome"
+      ],
+      "settings": [
+        "assembly"
+      ]
+    },
+    {
+      "id": "A2",
+      "name": "VEP_CACHE",
+      "calls": [
+        [
+          "vep_cache_api_install",
+          "--VEP_VERSION",
+          "{vep_installed_version}",
+          "--VEP_CACHEDIR",
+          "{vep_cache_dir}",
+          "--VEP_PLUGINSDIR",
+          "{vep_plugins_dir}",
+          "--VEP_ASSEMBLY",
+          "{assembly}",
+          "--VEP_PLUGINSCACHEDIR",
+          "{vep_plugins_cachedir}",
+          "--config",
+          "{config}"
+        ]
+      ],
+      "needs": [],
+      "outputs": [
+        "vep_cache_dir",
+        "vep_plugins_dir"
+      ],
+      "settings": [
+        "assembly",
+        "vep_installed_version"
+      ],
+      "release": [
+        {
+          "kind": "git",
+          "url": "https://github.com/Ensembl/VEP_plugins.git",
+          "ref": "refs/heads/release/{vep_installed_version}"
+        }
+      ]
+    },
+    {
+      "id": "A4",
+      "name": "CDS_FASTA",
+      "calls": [
+        [
+          "CDS_FASTA_install",
+          "{config}"
+        ]
+      ],
+      "needs": [],
+      "outputs": [
+        "cds_fasta_file"
+      ],
+      "settings": [
+        "assembly",
+        "vep_installed_version"
+      ]
+    },
+    {
+      "id": "A5",
+      "name": "NM_TO_ENST",
+      "calls": [
+        [
+          "nm_to_enst_mapping_install",
+          "{config}"
+        ]
+      ],
+      "needs": [],
+      "outputs": [
+        "nm_to_enst_tsv"
+      ],
+      "settings": [
+        "assembly",
+        "vep_installed_version"
+      ],
+      "native": true
+    },
+    {
+      "id": "B1",
+      "name": "UTR_ANNOTATOR",
+      "calls": [
+        [
+          "UTRAnnotator_install",
+          "{config}",
+          "{vep_plugins_cachedir}"
+        ]
+      ],
+      "needs": [],
+      "outputs": [
+        "utr_annotator_file"
+      ],
+      "settings": [
+        "assembly"
+      ],
+      "release": [
+        {
+          "kind": "git",
+          "url": "https://github.com/Ensembl/UTRannotator",
+          "ref": "HEAD"
+        }
+      ],
+      "pinned": true
+    },
+    {
+      "id": "B2",
+      "name": "CONSERVATION",
+      "calls": [
+        [
+          "Conservation_install",
+          "{config}",
+          "{vep_plugins_cachedir}",
+          "{assembly}"
+        ]
+      ],
+      "needs": [
+        "A1"
+      ],
+      "outputs": [
+        "conservation_file"
+      ],
+      "settings": [
+        "assembly",
+        "conservation_*url*"
+      ]
+    },
+    {
+      "id": "B3",
+      "name": "ALPHAMISSENSE_TSV",
+      "calls": [
+        [
+          "AlphaMissense_install",
+          "{config}",
+          "{vep_plugins_cachedir}",
+          "{assembly}",
+          "{vep_plugins_dir}"
+        ]
+      ],
+      "needs": [
+        "A2"
+      ],
+      "outputs": [
+        "alphamissense_prescore"
+      ],
+      "settings": [
+        "assembly"
+      ]
+    },
+    {
+      "id": "B4",
+      "name": "SPLICEAI",
+      "calls": [
+        [
+          "SpliceAI_install",
+          "{config}",
+          "{vep_plugins_cachedir}",
+          "{vep_plugins_dir}"
+        ]
+      ],
+      "needs": [
+        "A2"
+      ],
+      "outputs": [
+        "spliceai_snv_prescore",
+        "spliceai_indel_prescore"
+      ],
+      "user_inputs": [
+        "spliceai_snv_prescore",
+        "spliceai_indel_prescore"
+      ],
+      "settings": [
+        "assembly"
+      ]
+    },
+    {
+      "id": "B5",
+      "name": "SPLICEVAULT",
+      "calls": [
+        [
+          "SpliceVault_install",
+          "{config}",
+          "{vep_plugins_cachedir}",
+          "{script_dir}"
+        ]
+      ],
+      "needs": [
+        "A1"
+      ],
+      "outputs": [
+        "splicevault_prescore"
+      ],
+      "settings": [
+        "assembly",
+        "splicevault_url"
+      ],
+      "release": [
+        {
+          "kind": "http",
+          "url": "{splicevault_url}"
+        }
+      ],
+      "pinned": true
+    },
+    {
+      "id": "B6",
+      "name": "MAVEDB",
+      "calls": [
+        [
+          "MaveDB_install",
+          "{config}",
+          "{vep_plugins_cachedir}"
+        ]
+      ],
+      "needs": [],
+      "outputs": [],
+      "optional_outputs": [
+        "mavedb_file"
+      ],
+      "settings": [
+        "assembly",
+        "mavedb_url"
+      ],
+      "release": [
+        {
+          "kind": "http",
+          "url": "{mavedb_url}"
+        }
+      ],
+      "pinned": true
+    },
+    {
+      "id": "B7",
+      "name": "PRIMATEAI",
+      "calls": [
+        [
+          "PrimateAI_install",
+          "{config}",
+          "{vep_plugins_cachedir}",
+          "{vep_plugins_dir}"
+        ]
+      ],
+      "needs": [
+        "A2"
+      ],
+      "outputs": [
+        "primateai_prescore"
+      ],
+      "user_inputs": [
+        "primateai_prescore"
+      ],
+      "settings": [
+        "assembly"
+      ]
+    },
+    {
+      "id": "B8",
+      "name": "LOFTEE",
+      "calls": [
+        [
+          "LoFtee_install",
+          "{vep_plugins_cachedir}",
+          "{config}"
+        ]
+      ],
+      "needs": [
+        "A1",
+        "A2"
+      ],
+      "outputs": [
+        "loftee_repo",
+        "human_ancestor_fasta",
+        "loftee_conservation_file"
+      ],
+      "optional_outputs": [
+        "gerp_bigwig"
+      ],
+      "settings": [
+        "assembly"
+      ],
+      "release": [
+        {
+          "kind": "git",
+          "url": "https://github.com/konradjk/loftee",
+          "ref": "refs/heads/{loftee_branch}"
+        }
+      ],
+      "pinned": true
+    },
+    {
+      "id": "B9",
+      "name": "PEXT",
+      "calls": [
+        [
+          "pext_install",
+          "{config}"
+        ]
+      ],
+      "needs": [],
+      "outputs": [],
+      "optional_outputs": [
+        "pext_mean_bw",
+        "pext_tissue_bw_dir"
+      ],
+      "settings": [
+        "assembly",
+        "pext_enabled",
+        "pext_tissues"
+      ]
+    },
+    {
+      "id": "C1_chr1",
+      "name": "GNOMAD_DOWNLOAD_CHR1",
+      "calls": [
+        [
+          "gnomAD_download_chrom",
+          "{config}",
+          "1"
+        ]
+      ],
+      "needs": [],
+      "outputs": [
+        "gnomad_download_chr1"
+      ],
+      "settings": [],
+      "adopt_paths": {
+        "gnomad_download_chr1": "{gnomad_vcf_dir}/gnomad.joint.v4.1.sites.chr1.vcf.bgz"
+      }
+    },
+    {
+      "id": "C1_chr2",
+      "name": "GNOMAD_DOWNLOAD_CHR2",
+      "calls": [
+        [
+          "gnomAD_download_chrom",
+          "{config}",
+          "2"
+        ]
+      ],
+      "needs": [],
+      "outputs": [
+        "gnomad_download_chr2"
+      ],
+      "settings": [],
+      "adopt_paths": {
+        "gnomad_download_chr2": "{gnomad_vcf_dir}/gnomad.joint.v4.1.sites.chr2.vcf.bgz"
+      }
+    },
+    {
+      "id": "C1_chr3",
+      "name": "GNOMAD_DOWNLOAD_CHR3",
+      "calls": [
+        [
+          "gnomAD_download_chrom",
+          "{config}",
+          "3"
+        ]
+      ],
+      "needs": [],
+      "outputs": [
+        "gnomad_download_chr3"
+      ],
+      "settings": [],
+      "adopt_paths": {
+        "gnomad_download_chr3": "{gnomad_vcf_dir}/gnomad.joint.v4.1.sites.chr3.vcf.bgz"
+      }
+    },
+    {
+      "id": "C1_chr4",
+      "name": "GNOMAD_DOWNLOAD_CHR4",
+      "calls": [
+        [
+          "gnomAD_download_chrom",
+          "{config}",
+          "4"
+        ]
+      ],
+      "needs": [],
+      "outputs": [
+        "gnomad_download_chr4"
+      ],
+      "settings": [],
+      "adopt_paths": {
+        "gnomad_download_chr4": "{gnomad_vcf_dir}/gnomad.joint.v4.1.sites.chr4.vcf.bgz"
+      }
+    },
+    {
+      "id": "C1_chr5",
+      "name": "GNOMAD_DOWNLOAD_CHR5",
+      "calls": [
+        [
+          "gnomAD_download_chrom",
+          "{config}",
+          "5"
+        ]
+      ],
+      "needs": [],
+      "outputs": [
+        "gnomad_download_chr5"
+      ],
+      "settings": [],
+      "adopt_paths": {
+        "gnomad_download_chr5": "{gnomad_vcf_dir}/gnomad.joint.v4.1.sites.chr5.vcf.bgz"
+      }
+    },
+    {
+      "id": "C1_chr6",
+      "name": "GNOMAD_DOWNLOAD_CHR6",
+      "calls": [
+        [
+          "gnomAD_download_chrom",
+          "{config}",
+          "6"
+        ]
+      ],
+      "needs": [],
+      "outputs": [
+        "gnomad_download_chr6"
+      ],
+      "settings": [],
+      "adopt_paths": {
+        "gnomad_download_chr6": "{gnomad_vcf_dir}/gnomad.joint.v4.1.sites.chr6.vcf.bgz"
+      }
+    },
+    {
+      "id": "C1_chr7",
+      "name": "GNOMAD_DOWNLOAD_CHR7",
+      "calls": [
+        [
+          "gnomAD_download_chrom",
+          "{config}",
+          "7"
+        ]
+      ],
+      "needs": [],
+      "outputs": [
+        "gnomad_download_chr7"
+      ],
+      "settings": [],
+      "adopt_paths": {
+        "gnomad_download_chr7": "{gnomad_vcf_dir}/gnomad.joint.v4.1.sites.chr7.vcf.bgz"
+      }
+    },
+    {
+      "id": "C1_chr8",
+      "name": "GNOMAD_DOWNLOAD_CHR8",
+      "calls": [
+        [
+          "gnomAD_download_chrom",
+          "{config}",
+          "8"
+        ]
+      ],
+      "needs": [],
+      "outputs": [
+        "gnomad_download_chr8"
+      ],
+      "settings": [],
+      "adopt_paths": {
+        "gnomad_download_chr8": "{gnomad_vcf_dir}/gnomad.joint.v4.1.sites.chr8.vcf.bgz"
+      }
+    },
+    {
+      "id": "C1_chr9",
+      "name": "GNOMAD_DOWNLOAD_CHR9",
+      "calls": [
+        [
+          "gnomAD_download_chrom",
+          "{config}",
+          "9"
+        ]
+      ],
+      "needs": [],
+      "outputs": [
+        "gnomad_download_chr9"
+      ],
+      "settings": [],
+      "adopt_paths": {
+        "gnomad_download_chr9": "{gnomad_vcf_dir}/gnomad.joint.v4.1.sites.chr9.vcf.bgz"
+      }
+    },
+    {
+      "id": "C1_chr10",
+      "name": "GNOMAD_DOWNLOAD_CHR10",
+      "calls": [
+        [
+          "gnomAD_download_chrom",
+          "{config}",
+          "10"
+        ]
+      ],
+      "needs": [],
+      "outputs": [
+        "gnomad_download_chr10"
+      ],
+      "settings": [],
+      "adopt_paths": {
+        "gnomad_download_chr10": "{gnomad_vcf_dir}/gnomad.joint.v4.1.sites.chr10.vcf.bgz"
+      }
+    },
+    {
+      "id": "C1_chr11",
+      "name": "GNOMAD_DOWNLOAD_CHR11",
+      "calls": [
+        [
+          "gnomAD_download_chrom",
+          "{config}",
+          "11"
+        ]
+      ],
+      "needs": [],
+      "outputs": [
+        "gnomad_download_chr11"
+      ],
+      "settings": [],
+      "adopt_paths": {
+        "gnomad_download_chr11": "{gnomad_vcf_dir}/gnomad.joint.v4.1.sites.chr11.vcf.bgz"
+      }
+    },
+    {
+      "id": "C1_chr12",
+      "name": "GNOMAD_DOWNLOAD_CHR12",
+      "calls": [
+        [
+          "gnomAD_download_chrom",
+          "{config}",
+          "12"
+        ]
+      ],
+      "needs": [],
+      "outputs": [
+        "gnomad_download_chr12"
+      ],
+      "settings": [],
+      "adopt_paths": {
+        "gnomad_download_chr12": "{gnomad_vcf_dir}/gnomad.joint.v4.1.sites.chr12.vcf.bgz"
+      }
+    },
+    {
+      "id": "C1_chr13",
+      "name": "GNOMAD_DOWNLOAD_CHR13",
+      "calls": [
+        [
+          "gnomAD_download_chrom",
+          "{config}",
+          "13"
+        ]
+      ],
+      "needs": [],
+      "outputs": [
+        "gnomad_download_chr13"
+      ],
+      "settings": [],
+      "adopt_paths": {
+        "gnomad_download_chr13": "{gnomad_vcf_dir}/gnomad.joint.v4.1.sites.chr13.vcf.bgz"
+      }
+    },
+    {
+      "id": "C1_chr14",
+      "name": "GNOMAD_DOWNLOAD_CHR14",
+      "calls": [
+        [
+          "gnomAD_download_chrom",
+          "{config}",
+          "14"
+        ]
+      ],
+      "needs": [],
+      "outputs": [
+        "gnomad_download_chr14"
+      ],
+      "settings": [],
+      "adopt_paths": {
+        "gnomad_download_chr14": "{gnomad_vcf_dir}/gnomad.joint.v4.1.sites.chr14.vcf.bgz"
+      }
+    },
+    {
+      "id": "C1_chr15",
+      "name": "GNOMAD_DOWNLOAD_CHR15",
+      "calls": [
+        [
+          "gnomAD_download_chrom",
+          "{config}",
+          "15"
+        ]
+      ],
+      "needs": [],
+      "outputs": [
+        "gnomad_download_chr15"
+      ],
+      "settings": [],
+      "adopt_paths": {
+        "gnomad_download_chr15": "{gnomad_vcf_dir}/gnomad.joint.v4.1.sites.chr15.vcf.bgz"
+      }
+    },
+    {
+      "id": "C1_chr16",
+      "name": "GNOMAD_DOWNLOAD_CHR16",
+      "calls": [
+        [
+          "gnomAD_download_chrom",
+          "{config}",
+          "16"
+        ]
+      ],
+      "needs": [],
+      "outputs": [
+        "gnomad_download_chr16"
+      ],
+      "settings": [],
+      "adopt_paths": {
+        "gnomad_download_chr16": "{gnomad_vcf_dir}/gnomad.joint.v4.1.sites.chr16.vcf.bgz"
+      }
+    },
+    {
+      "id": "C1_chr17",
+      "name": "GNOMAD_DOWNLOAD_CHR17",
+      "calls": [
+        [
+          "gnomAD_download_chrom",
+          "{config}",
+          "17"
+        ]
+      ],
+      "needs": [],
+      "outputs": [
+        "gnomad_download_chr17"
+      ],
+      "settings": [],
+      "adopt_paths": {
+        "gnomad_download_chr17": "{gnomad_vcf_dir}/gnomad.joint.v4.1.sites.chr17.vcf.bgz"
+      }
+    },
+    {
+      "id": "C1_chr18",
+      "name": "GNOMAD_DOWNLOAD_CHR18",
+      "calls": [
+        [
+          "gnomAD_download_chrom",
+          "{config}",
+          "18"
+        ]
+      ],
+      "needs": [],
+      "outputs": [
+        "gnomad_download_chr18"
+      ],
+      "settings": [],
+      "adopt_paths": {
+        "gnomad_download_chr18": "{gnomad_vcf_dir}/gnomad.joint.v4.1.sites.chr18.vcf.bgz"
+      }
+    },
+    {
+      "id": "C1_chr19",
+      "name": "GNOMAD_DOWNLOAD_CHR19",
+      "calls": [
+        [
+          "gnomAD_download_chrom",
+          "{config}",
+          "19"
+        ]
+      ],
+      "needs": [],
+      "outputs": [
+        "gnomad_download_chr19"
+      ],
+      "settings": [],
+      "adopt_paths": {
+        "gnomad_download_chr19": "{gnomad_vcf_dir}/gnomad.joint.v4.1.sites.chr19.vcf.bgz"
+      }
+    },
+    {
+      "id": "C1_chr20",
+      "name": "GNOMAD_DOWNLOAD_CHR20",
+      "calls": [
+        [
+          "gnomAD_download_chrom",
+          "{config}",
+          "20"
+        ]
+      ],
+      "needs": [],
+      "outputs": [
+        "gnomad_download_chr20"
+      ],
+      "settings": [],
+      "adopt_paths": {
+        "gnomad_download_chr20": "{gnomad_vcf_dir}/gnomad.joint.v4.1.sites.chr20.vcf.bgz"
+      }
+    },
+    {
+      "id": "C1_chr21",
+      "name": "GNOMAD_DOWNLOAD_CHR21",
+      "calls": [
+        [
+          "gnomAD_download_chrom",
+          "{config}",
+          "21"
+        ]
+      ],
+      "needs": [],
+      "outputs": [
+        "gnomad_download_chr21"
+      ],
+      "settings": [],
+      "adopt_paths": {
+        "gnomad_download_chr21": "{gnomad_vcf_dir}/gnomad.joint.v4.1.sites.chr21.vcf.bgz"
+      }
+    },
+    {
+      "id": "C1_chr22",
+      "name": "GNOMAD_DOWNLOAD_CHR22",
+      "calls": [
+        [
+          "gnomAD_download_chrom",
+          "{config}",
+          "22"
+        ]
+      ],
+      "needs": [],
+      "outputs": [
+        "gnomad_download_chr22"
+      ],
+      "settings": [],
+      "adopt_paths": {
+        "gnomad_download_chr22": "{gnomad_vcf_dir}/gnomad.joint.v4.1.sites.chr22.vcf.bgz"
+      }
+    },
+    {
+      "id": "C1_chrX",
+      "name": "GNOMAD_DOWNLOAD_CHRX",
+      "calls": [
+        [
+          "gnomAD_download_chrom",
+          "{config}",
+          "X"
+        ]
+      ],
+      "needs": [],
+      "outputs": [
+        "gnomad_download_chrX"
+      ],
+      "settings": [],
+      "adopt_paths": {
+        "gnomad_download_chrX": "{gnomad_vcf_dir}/gnomad.joint.v4.1.sites.chrX.vcf.bgz"
+      }
+    },
+    {
+      "id": "C1_chrY",
+      "name": "GNOMAD_DOWNLOAD_CHRY",
+      "calls": [
+        [
+          "gnomAD_download_chrom",
+          "{config}",
+          "Y"
+        ]
+      ],
+      "needs": [],
+      "outputs": [
+        "gnomad_download_chrY"
+      ],
+      "settings": [],
+      "adopt_paths": {
+        "gnomad_download_chrY": "{gnomad_vcf_dir}/gnomad.joint.v4.1.sites.chrY.vcf.bgz"
+      }
+    },
+    {
+      "id": "C1",
+      "name": "GNOMAD",
+      "calls": [
+        [
+          "gnomAD_collect_chroms",
+          "{config}"
+        ],
+        [
+          "gnomAD_install",
+          "{config}",
+          "{ref_genome}"
+        ]
+      ],
+      "needs": [
+        "A1",
+        "C1_chr1",
+        "C1_chr2",
+        "C1_chr3",
+        "C1_chr4",
+        "C1_chr5",
+        "C1_chr6",
+        "C1_chr7",
+        "C1_chr8",
+        "C1_chr9",
+        "C1_chr10",
+        "C1_chr11",
+        "C1_chr12",
+        "C1_chr13",
+        "C1_chr14",
+        "C1_chr15",
+        "C1_chr16",
+        "C1_chr17",
+        "C1_chr18",
+        "C1_chr19",
+        "C1_chr20",
+        "C1_chr21",
+        "C1_chr22",
+        "C1_chrX",
+        "C1_chrY"
+      ],
+      "outputs": [
+        "gnomad_vcf_chrX"
+      ],
+      "settings": [
+        "assembly"
+      ]
+    },
+    {
+      "id": "C3",
+      "name": "ALPHAMISSENSE_VEP",
+      "calls": [
+        [
+          "AlphaMissense_anno",
+          "{config}"
+        ]
+      ],
+      "needs": [
+        "A1",
+        "A2",
+        "B2",
+        "B3"
+      ],
+      "outputs": [
+        "alphamissense_vcf",
+        "alphamissense_vep_vcf"
+      ],
+      "optional_outputs": [
+        "alphamissense_vep_base_vcf"
+      ],
+      "settings": [
+        "assembly",
+        "vep_installed_version"
+      ],
+      "native": true
+    },
+    {
+      "id": "C4",
+      "name": "ALPHAMISSENSE_GNOMAD",
+      "calls": [
+        [
+          "AlphaMissense_anno_gnomAD",
+          "{config}"
+        ]
+      ],
+      "needs": [
+        "C3",
+        "C1"
+      ],
+      "copies": [
+        "alphamissense_vep_vcf"
+      ],
+      "outputs": [
+        "alphamissense_vep_vcf"
+      ],
+      "settings": [
+        "assembly"
+      ]
+    },
+    {
+      "id": "C6",
+      "name": "ALPHAMISSENSE_DOMAIN",
+      "calls": [
+        [
+          "AlphaMissense_stat",
+          "{config}"
+        ]
+      ],
+      "needs": [
+        "C4"
+      ],
+      "outputs": [
+        "alphamissense_pd_stat"
+      ],
+      "settings": [
+        "assembly"
+      ],
+      "native": true
+    },
+    {
+      "id": "C8",
+      "name": "INTERPRO_MAPPING",
+      "calls": [
+        [
+          "InterPro_parsing",
+          "{config}"
+        ]
+      ],
+      "needs": [
+        "C4"
+      ],
+      "outputs": [
+        "interpro_mapping_pickle"
+      ],
+      "settings": [
+        "assembly",
+        "interpro_xml_gz_url"
+      ],
+      "native": true,
+      "release": [
+        {
+          "kind": "http",
+          "url": "{interpro_xml_gz_url}"
+        }
+      ]
+    },
+    {
+      "id": "D0",
+      "name": "CLINVAR_DOWNLOAD",
+      "calls": [
+        [
+          "ClinVar_download",
+          "--config",
+          "{config}"
+        ]
+      ],
+      "needs": [],
+      "outputs": [
+        "clinvar_release_inputs"
+      ],
+      "settings": [
+        "assembly"
+      ],
+      "release": [
+        {
+          "kind": "http",
+          "url": "https://ftp.ncbi.nlm.nih.gov/pub/clinvar/vcf_{grch}/clinvar.vcf.gz"
+        },
+        {
+          "kind": "http",
+          "url": "https://ftp.ncbi.nlm.nih.gov/pub/clinvar/tab_delimited/variant_summary.txt.gz"
+        }
+      ],
+      "pinned": true,
+      "max_age_months": 3
+    },
+    {
+      "id": "D1_split",
+      "name": "CLINVAR_VEP_SPLIT",
+      "calls": [
+        [
+          "ClinVar_vep_split",
+          "{config}"
+        ]
+      ],
+      "needs": [
+        "D0"
+      ],
+      "outputs": [
+        "clinvar_vep_split"
+      ],
+      "settings": [
+        "assembly"
+      ]
+    },
+    {
+      "id": "D1_chr1",
+      "name": "CLINVAR_VEP_CHR1",
+      "calls": [
+        [
+          "ClinVar_vep_chrom",
+          "{config}",
+          "chr1"
+        ]
+      ],
+      "needs": [
+        "A1",
+        "A2",
+        "B1",
+        "B2",
+        "B3",
+        "B4",
+        "B5",
+        "B6",
+        "B7",
+        "B8",
+        "B9",
+        "D1_split"
+      ],
+      "outputs": [
+        "clinvar_vep_chr1"
+      ],
+      "settings": [
+        "assembly",
+        "vep_installed_version"
+      ]
+    },
+    {
+      "id": "D1_chr2",
+      "name": "CLINVAR_VEP_CHR2",
+      "calls": [
+        [
+          "ClinVar_vep_chrom",
+          "{config}",
+          "chr2"
+        ]
+      ],
+      "needs": [
+        "A1",
+        "A2",
+        "B1",
+        "B2",
+        "B3",
+        "B4",
+        "B5",
+        "B6",
+        "B7",
+        "B8",
+        "B9",
+        "D1_split"
+      ],
+      "outputs": [
+        "clinvar_vep_chr2"
+      ],
+      "settings": [
+        "assembly",
+        "vep_installed_version"
+      ]
+    },
+    {
+      "id": "D1_chr3",
+      "name": "CLINVAR_VEP_CHR3",
+      "calls": [
+        [
+          "ClinVar_vep_chrom",
+          "{config}",
+          "chr3"
+        ]
+      ],
+      "needs": [
+        "A1",
+        "A2",
+        "B1",
+        "B2",
+        "B3",
+        "B4",
+        "B5",
+        "B6",
+        "B7",
+        "B8",
+        "B9",
+        "D1_split"
+      ],
+      "outputs": [
+        "clinvar_vep_chr3"
+      ],
+      "settings": [
+        "assembly",
+        "vep_installed_version"
+      ]
+    },
+    {
+      "id": "D1_chr4",
+      "name": "CLINVAR_VEP_CHR4",
+      "calls": [
+        [
+          "ClinVar_vep_chrom",
+          "{config}",
+          "chr4"
+        ]
+      ],
+      "needs": [
+        "A1",
+        "A2",
+        "B1",
+        "B2",
+        "B3",
+        "B4",
+        "B5",
+        "B6",
+        "B7",
+        "B8",
+        "B9",
+        "D1_split"
+      ],
+      "outputs": [
+        "clinvar_vep_chr4"
+      ],
+      "settings": [
+        "assembly",
+        "vep_installed_version"
+      ]
+    },
+    {
+      "id": "D1_chr5",
+      "name": "CLINVAR_VEP_CHR5",
+      "calls": [
+        [
+          "ClinVar_vep_chrom",
+          "{config}",
+          "chr5"
+        ]
+      ],
+      "needs": [
+        "A1",
+        "A2",
+        "B1",
+        "B2",
+        "B3",
+        "B4",
+        "B5",
+        "B6",
+        "B7",
+        "B8",
+        "B9",
+        "D1_split"
+      ],
+      "outputs": [
+        "clinvar_vep_chr5"
+      ],
+      "settings": [
+        "assembly",
+        "vep_installed_version"
+      ]
+    },
+    {
+      "id": "D1_chr6",
+      "name": "CLINVAR_VEP_CHR6",
+      "calls": [
+        [
+          "ClinVar_vep_chrom",
+          "{config}",
+          "chr6"
+        ]
+      ],
+      "needs": [
+        "A1",
+        "A2",
+        "B1",
+        "B2",
+        "B3",
+        "B4",
+        "B5",
+        "B6",
+        "B7",
+        "B8",
+        "B9",
+        "D1_split"
+      ],
+      "outputs": [
+        "clinvar_vep_chr6"
+      ],
+      "settings": [
+        "assembly",
+        "vep_installed_version"
+      ]
+    },
+    {
+      "id": "D1_chr7",
+      "name": "CLINVAR_VEP_CHR7",
+      "calls": [
+        [
+          "ClinVar_vep_chrom",
+          "{config}",
+          "chr7"
+        ]
+      ],
+      "needs": [
+        "A1",
+        "A2",
+        "B1",
+        "B2",
+        "B3",
+        "B4",
+        "B5",
+        "B6",
+        "B7",
+        "B8",
+        "B9",
+        "D1_split"
+      ],
+      "outputs": [
+        "clinvar_vep_chr7"
+      ],
+      "settings": [
+        "assembly",
+        "vep_installed_version"
+      ]
+    },
+    {
+      "id": "D1_chr8",
+      "name": "CLINVAR_VEP_CHR8",
+      "calls": [
+        [
+          "ClinVar_vep_chrom",
+          "{config}",
+          "chr8"
+        ]
+      ],
+      "needs": [
+        "A1",
+        "A2",
+        "B1",
+        "B2",
+        "B3",
+        "B4",
+        "B5",
+        "B6",
+        "B7",
+        "B8",
+        "B9",
+        "D1_split"
+      ],
+      "outputs": [
+        "clinvar_vep_chr8"
+      ],
+      "settings": [
+        "assembly",
+        "vep_installed_version"
+      ]
+    },
+    {
+      "id": "D1_chr9",
+      "name": "CLINVAR_VEP_CHR9",
+      "calls": [
+        [
+          "ClinVar_vep_chrom",
+          "{config}",
+          "chr9"
+        ]
+      ],
+      "needs": [
+        "A1",
+        "A2",
+        "B1",
+        "B2",
+        "B3",
+        "B4",
+        "B5",
+        "B6",
+        "B7",
+        "B8",
+        "B9",
+        "D1_split"
+      ],
+      "outputs": [
+        "clinvar_vep_chr9"
+      ],
+      "settings": [
+        "assembly",
+        "vep_installed_version"
+      ]
+    },
+    {
+      "id": "D1_chr10",
+      "name": "CLINVAR_VEP_CHR10",
+      "calls": [
+        [
+          "ClinVar_vep_chrom",
+          "{config}",
+          "chr10"
+        ]
+      ],
+      "needs": [
+        "A1",
+        "A2",
+        "B1",
+        "B2",
+        "B3",
+        "B4",
+        "B5",
+        "B6",
+        "B7",
+        "B8",
+        "B9",
+        "D1_split"
+      ],
+      "outputs": [
+        "clinvar_vep_chr10"
+      ],
+      "settings": [
+        "assembly",
+        "vep_installed_version"
+      ]
+    },
+    {
+      "id": "D1_chr11",
+      "name": "CLINVAR_VEP_CHR11",
+      "calls": [
+        [
+          "ClinVar_vep_chrom",
+          "{config}",
+          "chr11"
+        ]
+      ],
+      "needs": [
+        "A1",
+        "A2",
+        "B1",
+        "B2",
+        "B3",
+        "B4",
+        "B5",
+        "B6",
+        "B7",
+        "B8",
+        "B9",
+        "D1_split"
+      ],
+      "outputs": [
+        "clinvar_vep_chr11"
+      ],
+      "settings": [
+        "assembly",
+        "vep_installed_version"
+      ]
+    },
+    {
+      "id": "D1_chr12",
+      "name": "CLINVAR_VEP_CHR12",
+      "calls": [
+        [
+          "ClinVar_vep_chrom",
+          "{config}",
+          "chr12"
+        ]
+      ],
+      "needs": [
+        "A1",
+        "A2",
+        "B1",
+        "B2",
+        "B3",
+        "B4",
+        "B5",
+        "B6",
+        "B7",
+        "B8",
+        "B9",
+        "D1_split"
+      ],
+      "outputs": [
+        "clinvar_vep_chr12"
+      ],
+      "settings": [
+        "assembly",
+        "vep_installed_version"
+      ]
+    },
+    {
+      "id": "D1_chr13",
+      "name": "CLINVAR_VEP_CHR13",
+      "calls": [
+        [
+          "ClinVar_vep_chrom",
+          "{config}",
+          "chr13"
+        ]
+      ],
+      "needs": [
+        "A1",
+        "A2",
+        "B1",
+        "B2",
+        "B3",
+        "B4",
+        "B5",
+        "B6",
+        "B7",
+        "B8",
+        "B9",
+        "D1_split"
+      ],
+      "outputs": [
+        "clinvar_vep_chr13"
+      ],
+      "settings": [
+        "assembly",
+        "vep_installed_version"
+      ]
+    },
+    {
+      "id": "D1_chr14",
+      "name": "CLINVAR_VEP_CHR14",
+      "calls": [
+        [
+          "ClinVar_vep_chrom",
+          "{config}",
+          "chr14"
+        ]
+      ],
+      "needs": [
+        "A1",
+        "A2",
+        "B1",
+        "B2",
+        "B3",
+        "B4",
+        "B5",
+        "B6",
+        "B7",
+        "B8",
+        "B9",
+        "D1_split"
+      ],
+      "outputs": [
+        "clinvar_vep_chr14"
+      ],
+      "settings": [
+        "assembly",
+        "vep_installed_version"
+      ]
+    },
+    {
+      "id": "D1_chr15",
+      "name": "CLINVAR_VEP_CHR15",
+      "calls": [
+        [
+          "ClinVar_vep_chrom",
+          "{config}",
+          "chr15"
+        ]
+      ],
+      "needs": [
+        "A1",
+        "A2",
+        "B1",
+        "B2",
+        "B3",
+        "B4",
+        "B5",
+        "B6",
+        "B7",
+        "B8",
+        "B9",
+        "D1_split"
+      ],
+      "outputs": [
+        "clinvar_vep_chr15"
+      ],
+      "settings": [
+        "assembly",
+        "vep_installed_version"
+      ]
+    },
+    {
+      "id": "D1_chr16",
+      "name": "CLINVAR_VEP_CHR16",
+      "calls": [
+        [
+          "ClinVar_vep_chrom",
+          "{config}",
+          "chr16"
+        ]
+      ],
+      "needs": [
+        "A1",
+        "A2",
+        "B1",
+        "B2",
+        "B3",
+        "B4",
+        "B5",
+        "B6",
+        "B7",
+        "B8",
+        "B9",
+        "D1_split"
+      ],
+      "outputs": [
+        "clinvar_vep_chr16"
+      ],
+      "settings": [
+        "assembly",
+        "vep_installed_version"
+      ]
+    },
+    {
+      "id": "D1_chr17",
+      "name": "CLINVAR_VEP_CHR17",
+      "calls": [
+        [
+          "ClinVar_vep_chrom",
+          "{config}",
+          "chr17"
+        ]
+      ],
+      "needs": [
+        "A1",
+        "A2",
+        "B1",
+        "B2",
+        "B3",
+        "B4",
+        "B5",
+        "B6",
+        "B7",
+        "B8",
+        "B9",
+        "D1_split"
+      ],
+      "outputs": [
+        "clinvar_vep_chr17"
+      ],
+      "settings": [
+        "assembly",
+        "vep_installed_version"
+      ]
+    },
+    {
+      "id": "D1_chr18",
+      "name": "CLINVAR_VEP_CHR18",
+      "calls": [
+        [
+          "ClinVar_vep_chrom",
+          "{config}",
+          "chr18"
+        ]
+      ],
+      "needs": [
+        "A1",
+        "A2",
+        "B1",
+        "B2",
+        "B3",
+        "B4",
+        "B5",
+        "B6",
+        "B7",
+        "B8",
+        "B9",
+        "D1_split"
+      ],
+      "outputs": [
+        "clinvar_vep_chr18"
+      ],
+      "settings": [
+        "assembly",
+        "vep_installed_version"
+      ]
+    },
+    {
+      "id": "D1_chr19",
+      "name": "CLINVAR_VEP_CHR19",
+      "calls": [
+        [
+          "ClinVar_vep_chrom",
+          "{config}",
+          "chr19"
+        ]
+      ],
+      "needs": [
+        "A1",
+        "A2",
+        "B1",
+        "B2",
+        "B3",
+        "B4",
+        "B5",
+        "B6",
+        "B7",
+        "B8",
+        "B9",
+        "D1_split"
+      ],
+      "outputs": [
+        "clinvar_vep_chr19"
+      ],
+      "settings": [
+        "assembly",
+        "vep_installed_version"
+      ]
+    },
+    {
+      "id": "D1_chr20",
+      "name": "CLINVAR_VEP_CHR20",
+      "calls": [
+        [
+          "ClinVar_vep_chrom",
+          "{config}",
+          "chr20"
+        ]
+      ],
+      "needs": [
+        "A1",
+        "A2",
+        "B1",
+        "B2",
+        "B3",
+        "B4",
+        "B5",
+        "B6",
+        "B7",
+        "B8",
+        "B9",
+        "D1_split"
+      ],
+      "outputs": [
+        "clinvar_vep_chr20"
+      ],
+      "settings": [
+        "assembly",
+        "vep_installed_version"
+      ]
+    },
+    {
+      "id": "D1_chr21",
+      "name": "CLINVAR_VEP_CHR21",
+      "calls": [
+        [
+          "ClinVar_vep_chrom",
+          "{config}",
+          "chr21"
+        ]
+      ],
+      "needs": [
+        "A1",
+        "A2",
+        "B1",
+        "B2",
+        "B3",
+        "B4",
+        "B5",
+        "B6",
+        "B7",
+        "B8",
+        "B9",
+        "D1_split"
+      ],
+      "outputs": [
+        "clinvar_vep_chr21"
+      ],
+      "settings": [
+        "assembly",
+        "vep_installed_version"
+      ]
+    },
+    {
+      "id": "D1_chr22",
+      "name": "CLINVAR_VEP_CHR22",
+      "calls": [
+        [
+          "ClinVar_vep_chrom",
+          "{config}",
+          "chr22"
+        ]
+      ],
+      "needs": [
+        "A1",
+        "A2",
+        "B1",
+        "B2",
+        "B3",
+        "B4",
+        "B5",
+        "B6",
+        "B7",
+        "B8",
+        "B9",
+        "D1_split"
+      ],
+      "outputs": [
+        "clinvar_vep_chr22"
+      ],
+      "settings": [
+        "assembly",
+        "vep_installed_version"
+      ]
+    },
+    {
+      "id": "D1_chrX",
+      "name": "CLINVAR_VEP_CHRX",
+      "calls": [
+        [
+          "ClinVar_vep_chrom",
+          "{config}",
+          "chrX"
+        ]
+      ],
+      "needs": [
+        "A1",
+        "A2",
+        "B1",
+        "B2",
+        "B3",
+        "B4",
+        "B5",
+        "B6",
+        "B7",
+        "B8",
+        "B9",
+        "D1_split"
+      ],
+      "outputs": [
+        "clinvar_vep_chrX"
+      ],
+      "settings": [
+        "assembly",
+        "vep_installed_version"
+      ]
+    },
+    {
+      "id": "D1_chrY",
+      "name": "CLINVAR_VEP_CHRY",
+      "calls": [
+        [
+          "ClinVar_vep_chrom",
+          "{config}",
+          "chrY"
+        ]
+      ],
+      "needs": [
+        "A1",
+        "A2",
+        "B1",
+        "B2",
+        "B3",
+        "B4",
+        "B5",
+        "B6",
+        "B7",
+        "B8",
+        "B9",
+        "D1_split"
+      ],
+      "outputs": [
+        "clinvar_vep_chrY"
+      ],
+      "settings": [
+        "assembly",
+        "vep_installed_version"
+      ]
+    },
+    {
+      "id": "D1_chrOther",
+      "name": "CLINVAR_VEP_CHROTHER",
+      "calls": [
+        [
+          "ClinVar_vep_chrom",
+          "{config}",
+          "chrOther"
+        ]
+      ],
+      "needs": [
+        "A1",
+        "A2",
+        "B1",
+        "B2",
+        "B3",
+        "B4",
+        "B5",
+        "B6",
+        "B7",
+        "B8",
+        "B9",
+        "D1_split"
+      ],
+      "outputs": [
+        "clinvar_vep_chrOther"
+      ],
+      "settings": [
+        "assembly",
+        "vep_installed_version"
+      ]
+    },
+    {
+      "id": "D1",
+      "name": "CLINVAR",
+      "calls": [
+        [
+          "ClinVar_install",
+          "--config",
+          "{config}"
+        ]
+      ],
+      "needs": [
+        "A1",
+        "A2",
+        "B1",
+        "B2",
+        "B3",
+        "B4",
+        "B5",
+        "B6",
+        "B7",
+        "B8",
+        "B9",
+        "C1",
+        "D0",
+        "D1_split",
+        "D1_chr1",
+        "D1_chr2",
+        "D1_chr3",
+        "D1_chr4",
+        "D1_chr5",
+        "D1_chr6",
+        "D1_chr7",
+        "D1_chr8",
+        "D1_chr9",
+        "D1_chr10",
+        "D1_chr11",
+        "D1_chr12",
+        "D1_chr13",
+        "D1_chr14",
+        "D1_chr15",
+        "D1_chr16",
+        "D1_chr17",
+        "D1_chr18",
+        "D1_chr19",
+        "D1_chr20",
+        "D1_chr21",
+        "D1_chr22",
+        "D1_chrX",
+        "D1_chrY",
+        "D1_chrOther"
+      ],
+      "outputs": [
+        "clinvar_vcf",
+        "clinvar_aa_stat",
+        "clinvar_splice_stat",
+        "clinvar_gene_stat"
+      ],
+      "optional_outputs": [
+        "clinvar_vcf_dir"
+      ],
+      "settings": [
+        "assembly",
+        "vep_installed_version",
+        "clinvar_*"
+      ],
+      "native": true
+    },
+    {
+      "id": "C10",
+      "name": "DAS_DOMAINS",
+      "calls": [
+        [
+          "AlphaMissense_pick_intolerant_domains",
+          "{config}"
+        ]
+      ],
+      "needs": [
+        "C6",
+        "C8",
+        "C4",
+        "D1"
+      ],
+      "outputs": [
+        "alphamissense_intolerant_domains",
+        "alphamissense_tranx_domain_map",
+        "all_intolerant_domains"
+      ],
+      "settings": [
+        "assembly",
+        "priva_python_hash_seed"
+      ],
+      "native": true
+    },
+    {
+      "id": "C11",
+      "name": "PM1_REGIONS",
+      "calls": [
+        [
+          "prepare_pm1_regions",
+          "{config}"
+        ]
+      ],
+      "needs": [
+        "C10",
+        "C6",
+        "A5"
+      ],
+      "outputs": [
+        "pm1_regions_pkl"
+      ],
+      "settings": [
+        "assembly"
+      ],
+      "native": true
+    },
+    {
+      "id": "D6",
+      "name": "CLINVAR_PATHO_AF",
+      "calls": [
+        [
+          "ClinVar_patho_AF_stat",
+          "{config}"
+        ]
+      ],
+      "needs": [
+        "D1"
+      ],
+      "outputs": [
+        "clinvar_patho_af_stat",
+        "clinvar_patho_exon_af_stat"
+      ],
+      "settings": [
+        "assembly"
+      ],
+      "native": true
+    },
+    {
+      "id": "D8",
+      "name": "CLINVAR_PM5",
+      "calls": [
+        [
+          "ClinVar_PM5_index",
+          "{config}"
+        ]
+      ],
+      "needs": [
+        "D1"
+      ],
+      "outputs": [
+        "clinvar_pm5_index"
+      ],
+      "settings": [
+        "assembly"
+      ],
+      "native": true
+    },
+    {
+      "id": "D9",
+      "name": "CLINGEN_MAP",
+      "calls": [
+        [
+          "ClinGen_deploy",
+          "{config}"
+        ]
+      ],
+      "needs": [
+        "D1"
+      ],
+      "outputs": [
+        "clingen_map",
+        "gene_dosage_sensitivity"
+      ],
+      "settings": [
+        "assembly",
+        "clingen_*url*"
+      ],
+      "native": true,
+      "release": [
+        {
+          "kind": "http",
+          "url": "https://erepo.clinicalgenome.org/evrepo/api/summary/classifications/download"
+        },
+        {
+          "kind": "http",
+          "url": "{clingen_dosage_grch38_url}"
+        }
+      ]
+    },
+    {
+      "id": "E1",
+      "name": "CADD",
+      "calls": [
+        [
+          "CADD_conda_install",
+          "--config",
+          "{config}"
+        ],
+        [
+          "CADD_install",
+          "{config}",
+          "{assembly}"
+        ],
+        [
+          "CADD_upstream_check",
+          "{config}"
+        ]
+      ],
+      "needs": [],
+      "outputs": [
+        "cadd_base_dir"
+      ],
+      "settings": [
+        "assembly",
+        "cadd_version",
+        "cadd_*url*",
+        "cadd_*md5*"
+      ],
+      "writable": true
+    },
+    {
+      "id": "F1",
+      "name": "HPO_MONDO",
+      "calls": [
+        [
+          "mondo_hpo_scope_install",
+          "{config}"
+        ]
+      ],
+      "needs": [],
+      "outputs": [
+        "hpo_assertions",
+        "mondo_obo",
+        "mondo_disease_scope_registry"
+      ],
+      "settings": [
+        "hpo_release",
+        "hpo_*url*",
+        "mondo_release",
+        "mondo_url",
+        "mondo_sha256"
+      ],
+      "native": true
+    },
+    {
+      "id": "F4",
+      "name": "GENE_PATHOGENIC_MECHANISM",
+      "calls": [
+        [
+          "gene_pathogenic_mechanism_cache_install",
+          "{config}"
+        ]
+      ],
+      "needs": [
+        "F1"
+      ],
+      "outputs": [
+        "ddg2p_mechanism_evidence"
+      ],
+      "settings": [
+        "g2p_ddg2p_url",
+        "orphadata_gene_disease_url"
+      ],
+      "native": true,
+      "release": [
+        {
+          "kind": "http",
+          "url": "{g2p_ddg2p_url}"
+        },
+        {
+          "kind": "http",
+          "url": "{orphadata_gene_disease_url}"
+        }
+      ]
+    },
+    {
+      "id": "F5",
+      "name": "GOFCARDS_EXACT_GOF",
+      "calls": [
+        [
+          "gofcards_exact_gof_cache_install",
+          "{config}"
+        ]
+      ],
+      "needs": [],
+      "outputs": [
+        "gofcards_exact_gof_cache"
+      ],
+      "settings": [
+        "assembly",
+        "gofcards_refresh_days",
+        "vep_installed_version"
+      ],
+      "native": true,
+      "release": [
+        {
+          "kind": "http",
+          "url": "https://download.genemed.tech/upload/GainFunCards/gofcards_data_download.xlsx"
+        }
+      ]
+    },
+    {
+      "id": "F6",
+      "name": "MECHANISM_SOURCES",
+      "calls": [
+        [
+          "gene_nonlof_mechanism_cache_install",
+          "{config}",
+          "sources-only"
+        ]
+      ],
+      "needs": [],
+      "outputs": [],
+      "optional_outputs": [
+        "clinvar_vcv_xml"
+      ],
+      "settings": [],
+      "release": [
+        {
+          "kind": "http",
+          "url": "https://ftp.ncbi.nlm.nih.gov/pub/clinvar/xml/weekly_release/ClinVarVCVRelease_00-latest_weekly.xml.gz"
+        },
+        {
+          "kind": "http",
+          "url": "{g2p_ddg2p_url}"
+        },
+        {
+          "kind": "http",
+          "url": "https://panelapp.genomicsengland.co.uk/api/v1/panels/"
+        }
+      ]
+    },
+    {
+      "id": "F7",
+      "name": "GOFCARDS_CLINVAR_INJECTION",
+      "calls": [
+        [
+          "gofcards_clinvar_injection_install",
+          "{config}"
+        ]
+      ],
+      "needs": [
+        "F5",
+        "F6"
+      ],
+      "copies": [
+        "gofcards_exact_gof_cache"
+      ],
+      "outputs": [
+        "gofcards_exact_gof_cache"
+      ],
+      "settings": [
+        "clinvar_min_review_stars",
+        "gofcards_clinvar_reinjection_lag_days"
+      ],
+      "native": true
+    },
+    {
+      "id": "F8",
+      "name": "GENE_NONLOF_MECHANISM",
+      "calls": [
+        [
+          "gene_nonlof_mechanism_cache_install",
+          "{config}"
+        ]
+      ],
+      "needs": [
+        "F6",
+        "F7"
+      ],
+      "outputs": [
+        "gene_nonlof_mechanism_json"
+      ],
+      "settings": [],
+      "native": true
+    },
+    {
+      "id": "F9",
+      "name": "HPO_CONDITION_MECHANISM",
+      "calls": [
+        [
+          "hpo_condition_mechanism_cache_install",
+          "{config}"
+        ]
+      ],
+      "needs": [
+        "F1",
+        "F4",
+        "F7",
+        "D9"
+      ],
+      "outputs": [
+        "hpo_condition_mechanism_json"
+      ],
+      "settings": [
+        "hpo_release",
+        "mondo_release"
+      ],
+      "native": true
+    }
+  ]
+}

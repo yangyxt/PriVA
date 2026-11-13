@@ -263,9 +263,30 @@ class _StatsUnpickler(pickle.Unpickler):
         raise ValueError(f"Unexpected object in bundled ClinVar statistics: {module}.{name}")
 
 
+def validate_native_clinvar_stats(path: Path) -> None:
+    """Check the PRIVARKV header of a gene-statistics archive (rust/CACHE_FORMATS.md 2).
+
+    priva clinvar-gene-stats writes these archives; the full archive is checked
+    by cache-install publish and by every reader that maps it.
+    """
+    readable_file(str(path), "clinvar_gene_stat archive")
+    with path.open("rb") as handle:
+        header = handle.read(32)
+    if len(header) != 32 or header[:8] != b"PRIVARKV":
+        raise ValueError("not a PRIVARKV archive")
+    container, schema = int.from_bytes(header[8:12], "little"), int.from_bytes(header[12:16], "little")
+    if (container, schema) != (1, 5):
+        raise ValueError(f"container {container}, schema {schema} is not a ClinVar gene-statistics archive")
+    if 32 + int.from_bytes(header[24:32], "little") != path.stat().st_size:
+        raise ValueError("archive length differs from its header")
+
+
 def validate_clinvar_stats(path: Path) -> None:
     fields = {"ensembl_id", "clinvar_pathogenic", "large_aachange", "small_aachange", "putative_nmd_variants"}
     try:
+        if path.suffix == ".rkyv":
+            validate_native_clinvar_stats(path)
+            return
         readable_file(str(path), "bundled clinvar_gene_stat")
         with gzip.open(path, "rb") as handle:
             stats = _StatsUnpickler(handle).load()

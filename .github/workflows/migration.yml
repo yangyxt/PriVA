@@ -1,0 +1,201 @@
+name: Nextflow and Rust migration contracts
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/migration.yml'
+      - 'config.yaml'
+      - 'cache_resources.json'
+      - 'main.nf'
+      - 'cadd.nf'
+      - 'nextflow.config'
+      - 'conf/**'
+      - 'modules/**'
+      - 'subworkflows/**'
+      - 'lib/**'
+      - 'bin/**'
+      - 'rust/**'
+      - 'scripts/**'
+      - 'tests/**'
+  push:
+    paths:
+      - '.github/workflows/migration.yml'
+      - 'config.yaml'
+      - 'cache_resources.json'
+      - 'main.nf'
+      - 'cadd.nf'
+      - 'nextflow.config'
+      - 'conf/**'
+      - 'modules/**'
+      - 'subworkflows/**'
+      - 'lib/**'
+      - 'bin/**'
+      - 'rust/**'
+      - 'scripts/**'
+      - 'tests/**'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: migration-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  synthetic-contracts:
+    name: Synthetic contracts and source-faithful Rust parity
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash
+    env:
+      PYTHONDONTWRITEBYTECODE: '1'
+      POLARS_MAX_THREADS: '1'
+      RAYON_NUM_THREADS: '1'
+      OPENBLAS_NUM_THREADS: '1'
+      OMP_NUM_THREADS: '1'
+      CARGO_TERM_COLOR: always
+    steps:
+      # Official release tags and commit objects verified on 2026-10-15:
+      # https://github.com/actions/checkout/releases/tag/v7.0.1
+      # https://github.com/actions/setup-python/releases/tag/v7.0.0
+      - name: Check out source without retained credentials
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Select build directory after the runner starts
+        run: echo "CARGO_TARGET_DIR=$RUNNER_TEMP/priva-cargo" >> "$GITHUB_ENV"
+
+      - name: Install the differential-test Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.12.3'
+
+      - name: Install the synthetic test dependencies
+        # Matches the installed reference's input-library pins. These
+        # fixtures do not run scientific annotation, CADD models or a family.
+        run: |
+          python -m pip install --only-binary=:all: 'numpy==1.26.4' 'pandas==2.2.3' 'PyYAML==6.0.3' 'pysam==0.22.1' 'CrossMap==0.7.0' 'scipy==1.14.1'
+          python -m pip check
+
+      - name: Install command tools for synthetic installer fixtures
+        # Ubuntu's tabix package supplies both bgzip and tabix; yq supplies the
+        # YAML CLI used by the unchanged shell installer. No real caches run.
+        # On 2026-11-11 the runner's default mirror (azure.archive.ubuntu.com)
+        # stopped resolving for hours. apt-get update only warns about that, and
+        # each lookup waits about 40 seconds, so the job ran out of time before
+        # any fallback. Use the main Ubuntu archive directly, make a failed
+        # index download an error, and stop this step early if it still hangs.
+        timeout-minutes: 10
+        run: |
+          echo 'http://archive.ubuntu.com/ubuntu/' | sudo tee /etc/apt/apt-mirrors.txt
+          sudo apt-get -o Acquire::Retries=2 update --error-on=any
+          sudo apt-get -o Acquire::Retries=2 install --no-install-recommends --yes tabix bcftools yq parallel pkg-config libexpat1-dev
+          dpkg-query --show --showformat='${Package} ${Version}\n' tabix bcftools yq parallel pkg-config libexpat1-dev
+          command -v bgzip tabix yq parallel
+          bgzip --version
+          tabix --version
+          yq --version
+          parallel --version
+
+      - name: Validate adapters and strict result comparison
+        run: |
+          python -m unittest discover -s tests -p 'test_nextflow_parity.py' -v
+          python tests/install_workflow_check.py
+          python -m unittest discover -s tests -p 'test_cluster_deployment.py' -v
+          python -m unittest discover -s tests -p 'test_cluster_licensed_import.py' -v
+          python -m unittest discover -s tests -p 'test_cluster_alpha.py' -v
+          python -m unittest discover -s tests -p 'test_cluster_primate_validation.py' -v
+          python -m unittest discover -s tests -p 'test_install_utils_bootstrap.py' -v
+          python -m unittest discover -s tests -p 'test_installed_environment.py' -v
+          python -m unittest discover -s tests -p 'test_bootstrap_nextflow_runtime.py' -v
+          python -m unittest discover -s tests -p 'test_nextflow_driver_install.py' -v
+          python -m unittest discover -s tests -p 'test_priva_rust_install.py' -v
+          python -m unittest discover -s tests -p 'test_install_utils_resources.py' -v
+          python -m unittest discover -s tests -p 'test_clingen_source_acquisition.py' -v
+          python -m unittest discover -s tests -p 'test_gnomad_annotation_failures.py' -v
+          python -m unittest discover -s tests -p 'test_alphamissense_cache.py' -v
+          python -m unittest discover -s tests -p 'test_alphamissense_annotation_header.py' -v
+          python -m unittest discover -s tests -p 'test_alpha_configured_outputs.py' -v
+          python -m unittest discover -s tests -p 'test_mapping_artifact_routes.py' -v
+          python -m unittest discover -s tests -p 'test_mapped_artifact_publish.py' -v
+          python -m unittest discover -s tests -p 'test_install_resource_boundaries.py' -v
+          python -m unittest discover -s tests -p 'test_install_utils_explicit_plugin_inputs.py' -v
+          python -m unittest discover -s tests -p 'test_indexed_plugin_cache.py' -v
+          python -m unittest discover -s tests -p 'test_install_utils_spliceai2.py' -v
+          python -m unittest discover -s tests -p 'test_spliceai_cache_input.py' -v
+          python -m unittest discover -s tests -p 'test_vcf_bgz_validation.py' -v
+          python -m unittest discover -s tests -p 'test_clinvar_vep_chromosomes.py' -v
+
+      - name: Install the pinned Rust toolchain
+        run: rustup toolchain install 1.90.0 --profile minimal --component rustfmt
+
+      - name: Check and build the locked Rust module
+        run: |
+          cargo +1.90.0 fmt --manifest-path rust/Cargo.toml --check
+          cargo +1.90.0 build --manifest-path rust/Cargo.toml --locked --jobs 1
+          cargo +1.90.0 test --manifest-path rust/Cargo.toml --locked --jobs 1
+
+      - name: Test the shell callers with the built priva program
+        # The pipeline scripts run the converted steps with priva; these tests
+        # call the real shell functions and skip without PRIVA_BINARY.
+        run: |
+          export PRIVA_BINARY="$CARGO_TARGET_DIR/debug/priva"
+          python -m unittest discover -s tests -p 'test_spliceai2_runtime_guard.py' -v
+          python -m unittest discover -s tests -p 'test_hpo_runtime_paths.py' -v
+          python -m unittest discover -s tests -p 'test_preprocess_contig_mapping.py' -v
+
+      - name: Test SpliceAI2 preparation with real Rust, BGZF and tabix
+        # Synthetic scores and GENCODE context; no model or full-cache acceptance.
+        run: |
+          converter=$(python scripts/spliceai2_to_vep_vcf.py build-converter --tools-dir "$RUNNER_TEMP/spliceai2-install-tools" --rustc "$(rustup which --toolchain 1.90.0 rustc)" | tail -n 1)
+          export PRIVA_SPLICEAI2_INSTALL_BIN="$converter"
+          export PRIVA_SPLICEAI2_REFERENCE_BIN="$CARGO_TARGET_DIR/debug/priva"
+          python -m unittest discover -s tests -p 'test_spliceai2_converter.py' -v
+          python -m unittest discover -s tests -p 'test_spliceai2_deployment.py' -v
+          python -m unittest discover -s tests -p 'test_spliceai2_relocation.py' -v
+
+      - name: Compare the actual legacy terminal sorting block with Rust
+        # This tests group maxima, ordering and ranks only. Full score/criteria
+        # assignment and single-family scientific parity remain separate gates.
+        run: python rust/tests/differential_final_order.py "$CARGO_TARGET_DIR/debug/priva-tabular"
+
+      - name: Compare bounded summary and posterior modules with frozen Python
+        run: python rust/tests/differential_scoring.py "$CARGO_TARGET_DIR/debug/priva"
+
+      - name: Install the checksum-pinned Nextflow and Java runtime
+        run: |
+          bash scripts/bootstrap_nextflow_runtime.sh "$RUNNER_TEMP/priva-nextflow-runtime"
+          echo "$RUNNER_TEMP/priva-nextflow-runtime/bin" >> "$GITHUB_PATH"
+
+      - name: Validate the Nextflow command interface
+        env:
+          NXF_OFFLINE: 'true'
+        run: |
+          mkdir -p "$RUNNER_TEMP/priva-nextflow-help"
+          cd "$RUNNER_TEMP/priva-nextflow-help"
+          nextflow run "$GITHUB_WORKSPACE" --help
+
+      - name: Test synthetic raw, annotated and cached-resume wiring
+        env:
+          NXF_OFFLINE: 'true'
+        # The harness creates its own synthetic fixture outside the checkout,
+        # verifies cached resume and rejects reuse with a changed software ID.
+        run: |
+          bash tests/nextflow/run_stub.sh \
+            "$RUNNER_TEMP/priva-nextflow-runtime/bin/nextflow" \
+            "$RUNNER_TEMP/priva-nextflow-stub" \
+            "$CARGO_TARGET_DIR/debug/priva"
+
+      - name: Test the standalone upstream CADD.sh workflow wiring
+        env:
+          NXF_OFFLINE: 'true'
+        run: |
+          bash tests/nextflow/run_cadd_stub.sh \
+            "$RUNNER_TEMP/priva-nextflow-runtime/bin/nextflow" \
+            "$RUNNER_TEMP/priva-cadd-stub"
+
+      - name: Ensure tests did not modify tracked source
+        run: git diff --exit-code

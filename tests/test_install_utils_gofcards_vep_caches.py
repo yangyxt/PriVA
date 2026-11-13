@@ -9,6 +9,8 @@ import sys
 import tempfile
 import unittest
 
+import fake_priva_binary
+
 ROOT = Path(__file__).resolve().parents[1]
 DATA_TMP = Path(os.environ.get("PRIVA_TEST_TMPDIR", tempfile.gettempdir())) / "priva-gofcards-cache-tests"
 SPEC = importlib.util.spec_from_file_location("gofcards_prerequisites", ROOT / "scripts/installer_prerequisites.py")
@@ -62,7 +64,9 @@ for name in ('chr_synonyms.txt','1/all_vars.gz','1/all_vars.gz.csi'): (destinati
 ''')
         self.env = dict(os.environ, TEST_PYTHON=sys.executable, TEST_CONFIG=str(self.config_path),
                         TEST_EVENTS=str(self.events), TEST_API=str(self.api), PYTHONDONTWRITEBYTECODE="1",
-                        PRIVA_INSTALL_INSPECT_ROOTS=os.pathsep.join((str(ROOT), str(self.folder))))
+                        PRIVA_INSTALL_INSPECT_ROOTS=os.pathsep.join((str(ROOT), str(self.folder))),
+                        # The build route checks its inputs with priva installer-prerequisites.
+                        **fake_priva_binary.environment(self.folder))
         for key in ("PRIVA_SMOKE_SKIP_VEP", "PRIVA_FORCE_GOFCARDS_CACHE", "PRIVA_FORCE_ALL_CACHES"):
             self.env.pop(key, None)
 
@@ -101,6 +105,7 @@ python() {
    "$TEST_PYTHON" -c 'import json,sys; print("BUILD_ARGS="+json.dumps(sys.argv[1:]))' "$@"
  else "$TEST_PYTHON" "$@"; fi
 }
+export -f python
 '''
         return subprocess.run(["bash", "--noprofile", "--norc", "-c", prefix + body, "test",
                                str(ROOT / "scripts/install_utils.sh")], env=self.env,
@@ -226,11 +231,14 @@ priva_install_prerequisites() { gofcards_exact_gof_cache_install "$1" --main-pre
 bundled_snapshot_install() { :; }
 nm_to_enst_mapping_install() { :; }
 priva_configure_cache_paths() { :; }
-for function in CADD_conda_install reference_genome_install VEP_plugins_install LoFtee_install gnomAD_install AlphaMissense_anno_gnomAD InterPro_parsing ClinVar_VCF_deploy ClinVar_AA_stat ClinVar_Gene_stat AlphaMissense_stat AlphaMissense_pick_intolerant_domains prepare_pm1_regions ClinVar_patho_AF_stat CADD_install CADD_upstream_check ClinGen_deploy CDS_FASTA_install pext_install; do
+for function in CADD_conda_install Nextflow_runtime_install PriVA_rust_install reference_genome_install VEP_plugins_install LoFtee_install gnomAD_install AlphaMissense_anno_gnomAD InterPro_parsing ClinVar_VCF_deploy ClinVar_AA_stat ClinVar_Gene_stat AlphaMissense_stat AlphaMissense_pick_intolerant_domains prepare_pm1_regions ClinVar_patho_AF_stat ClinVar_PM5_index CADD_install CADD_upstream_check ClinGen_deploy CDS_FASTA_install pext_install; do
  eval "$function() { :; }"
 done
 ClinVar_install() { [[ $# -eq 2 && $1 == --config && $2 == "$TEST_CONFIG" ]]; }
 mechanism_resource_install() { gofcards_exact_gof_cache_install "$1"; }
+# Native cache publication is covered by its dedicated boundary fixtures.
+priva_cache_install_begin() { PRIVA_CACHE_INSTALL_BUILD_CONFIG=$2; }
+priva_cache_install_finish() { return 0; }
 main_install "$TEST_CONFIG"
 ''')
         self.assertNotEqual(result.returncode, 0)

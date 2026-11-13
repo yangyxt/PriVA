@@ -164,7 +164,9 @@ function priva_configure_portable_paths() {
         log "ERROR: Use priva_configure_portable_paths --config CONFIG."
         return 2
     }
-    python "${SCRIPT_DIR}/installer_config_paths.py" resolve \
+    # The fixed hash seed selects one of the orders the script itself may use.
+    priva_resolve_binary "$2" || return 1
+    PYTHONHASHSEED=0 "${PRIVA_BIN}" installer-config-paths resolve \
         --config "$2" --source-root "${BASE_DIR}"
 }
 
@@ -364,6 +366,7 @@ PRIVA_VEP_PINS_PY
             fi
             local config_json
             config_json=$(yq '.' "$1") || { rm -f -- "$constraints"; return 1; }
+            # Runs before priva_cache_install_begin builds priva; stays on Python.
             python "$SCRIPT_DIR/vep_plugins_release.py" transition \
                 --transition-file "$CONDA_PREFIX/.priva-vep-release-transition.json" \
                 --from-release "$current" --release "$requested" --config-json "$config_json" || {
@@ -390,49 +393,18 @@ PRIVA_VEP_PINS_PY
 function priva_configure_cache_paths() {
     # Plan from original configured sources. The centralized helper adopts their
     # bytes/known companions before selecting managed paths; --check is read-only.
+    # priva_configure_cache_paths CONFIG [write|--check]
     local config_file=${1}
     local mode=${2:-write}
-    local cache_root config_json
+    local cache_root
     cache_root=$(yq '.cache_root' "${config_file}") || return 1
     [[ -z ${cache_root} || ${cache_root} == null || ${cache_root} == '""' ]] && return 0
-    config_json=$(yq '.' "${config_file}") || return 1
-    python - "${config_file}" "${config_json}" "${mode}" "${SCRIPT_DIR}/installer_config_paths.py" <<'PRIVA_CACHE_PY'
-import importlib.util
-import json
-from pathlib import Path
-import sys
-
-
-def path_helper():
-    global _PATH_HELPER
-    if '_PATH_HELPER' not in globals():
-        spec = importlib.util.spec_from_file_location('priva_install_cache_paths', CONFIG_PATHS_HELPER)
-        _PATH_HELPER = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(_PATH_HELPER)
-    return _PATH_HELPER
-
-
-def resolve_cache_paths(config):
-    return path_helper().resolve_cache_paths(config, Path(CONFIG_PATHS_HELPER).parent.parent)
-
-
-def render_cache_config(text, updates):
-    return path_helper().render_config(text, updates)
-
-
-def configure_cache_paths(config_file, config, mode):
-    return path_helper().configure_cache_paths(config_file, config, mode,
-                                              Path(CONFIG_PATHS_HELPER).parent.parent)
-
-
-if __name__ == '__main__':
-    try:
-        CONFIG_PATHS_HELPER = sys.argv[4]
-        configure_cache_paths(sys.argv[1], json.loads(sys.argv[2]), sys.argv[3])
-    except (OSError, ValueError) as error:
-        print(f'ERROR: {error}', file=sys.stderr)
-        sys.exit(1)
-PRIVA_CACHE_PY
+    # The fixed hash seed selects one of the orders the script itself may use.
+    local -a check=()
+    [[ ${mode} == --check ]] && check=(--check)
+    priva_resolve_binary "$config_file" || return 1
+    PYTHONHASHSEED=0 "${PRIVA_BIN}" installer-config-paths managed-roots \
+        --config "${config_file}" --source-root "${BASE_DIR}" "${check[@]}"
 }
 
 
@@ -460,9 +432,10 @@ function vep_cache_api_install() {
     local VEP_PLUGINSDIR=""
     local VEP_VERSION=""
     local VEP_PLUGINSCACHEDIR=""
+    local config_file=""
 
     local TEMP
-    TEMP=$(getopt -o hc:y:r:p:v:g: --long help,VEP_CACHEDIR:,VEP_ASSEMBLY:,VEP_PLUGINSDIR:,VEP_PLUGINSCACHEDIR:,VEP_PLUGINS:,VEP_VERSION: -- "$@")
+    TEMP=$(getopt -o hc:y:r:p:v:g:f: --long help,VEP_CACHEDIR:,VEP_ASSEMBLY:,VEP_PLUGINSDIR:,VEP_PLUGINSCACHEDIR:,VEP_PLUGINS:,VEP_VERSION:,config: -- "$@")
 
     if [[ $? != 0 ]]; then return 1; fi
 
@@ -479,6 +452,7 @@ function vep_cache_api_install() {
                 echo "  -r, --VEP_PLUGINSDIR        Set destination directory for VEP plugins files"
                 echo "  -p, --VEP_PLUGINSCACHEDIR  Set destination direcotry for VEP plugins caches"
                 echo "  -v, --VEP_VERSION         Set the version of VEP to install"
+                echo "  -f, --config              Configuration file whose priva_binary runs the plugin receipts"
                 return 0
                 ;;
             -c|--VEP_CACHEDIR)
@@ -503,6 +477,10 @@ function vep_cache_api_install() {
                 ;;
             -v|--VEP_VERSION)
                 VEP_VERSION="$2"
+                shift 2
+                ;;
+            -f|--config)
+                config_file="$2"
                 shift 2
                 ;;
             --)
@@ -543,7 +521,9 @@ function vep_cache_api_install() {
 
     local required_plugins=SpliceAI,SpliceVault,UTRAnnotator,AlphaMissense,GO,Phenotypes,Conservation,LOEUF,SameCodon,NMD,PrimateAI,MaveDB
     [[ -n $VEP_PLUGINS && $VEP_PLUGINS != empty ]] && required_plugins="$VEP_PLUGINS,$required_plugins"
-    local receipt_helper="$SCRIPT_DIR/vep_plugins_release.py"
+    # Callers reach this after PriVA_rust_install records priva_binary; the
+    # plugin receipts run through priva vep-plugins.
+    priva_resolve_binary "$config_file" || return 1
     local cache_directory="$VEP_CACHEDIR/homo_sapiens_merged/${VEP_VERSION}_$VEP_ASSEMBLY"
     local automatic="" staging="" status=0
     # The upstream installer skips any existing cache directory, including
@@ -566,10 +546,10 @@ function vep_cache_api_install() {
             log "ERROR: Complete the pending UTR116 reporting installation before changing VEP release."
             return 1
         }
-        python "$receipt_helper" ensure-utr-reporting --directory "$VEP_PLUGINSDIR" \
+        "$PRIVA_BIN" vep-plugins ensure-utr-reporting --directory "$VEP_PLUGINSDIR" \
             --release "$VEP_VERSION" || return 1
     fi
-    if ! python "$receipt_helper" check --directory "$VEP_PLUGINSDIR" \
+    if ! "$PRIVA_BIN" vep-plugins check --directory "$VEP_PLUGINSDIR" \
             --release "$VEP_VERSION" --plugins "$required_plugins" >/dev/null 2>&1; then
         automatic+=p
         staging=$(mktemp -d "${VEP_PLUGINSDIR%/}.install-$VEP_VERSION.XXXXXX") || return 1
@@ -602,14 +582,14 @@ function vep_cache_api_install() {
         local -a receipt_args=(install --directory "$VEP_PLUGINSDIR" --release "$VEP_VERSION"
                                --plugins "$required_plugins" --stage "$staging"
                                --transition-file "$CONDA_PREFIX/.priva-vep-release-transition.json")
-        python "$receipt_helper" "${receipt_args[@]}" || status=$?
+        "$PRIVA_BIN" vep-plugins "${receipt_args[@]}" || status=$?
         rm -rf -- "$staging"
         [[ $status -eq 0 ]] || return 1
     fi
     # Reproduce the already approved deterministic UTR116 reporting repair.
     # The helper pins both upstream and installed bytes, retains originals,
     # and leaves other releases unchanged rather than guessing compatibility.
-    python "$receipt_helper" ensure-utr-reporting --directory "$VEP_PLUGINSDIR" \
+    "$PRIVA_BIN" vep-plugins ensure-utr-reporting --directory "$VEP_PLUGINSDIR" \
         --release "$VEP_VERSION" || return 1
     if [[ ":${PERL5LIB:-}:" != *":${VEP_DESTDIR}:"* || ":${PERL5LIB:-}:" != *":${VEP_PLUGINSDIR}:"* ]]; then
         priva_env_vars_set PERL5LIB="$VEP_DESTDIR:$VEP_PLUGINSDIR${PERL5LIB:+:$PERL5LIB}" || return 1
@@ -617,7 +597,7 @@ function vep_cache_api_install() {
     if [[ ":$PATH:" != *":${VEP_DESTDIR}:"* ]]; then
         priva_env_vars_set PATH="$VEP_DESTDIR:$VEP_DESTDIR/htslib:$PATH" || return 1
     fi
-    python "$receipt_helper" clear-transition --directory "$VEP_PLUGINSDIR" --release "$VEP_VERSION" \
+    "$PRIVA_BIN" vep-plugins clear-transition --directory "$VEP_PLUGINSDIR" --release "$VEP_VERSION" \
         --transition-file "$CONDA_PREFIX/.priva-vep-release-transition.json" || return 1
     log "VEP $VEP_VERSION cache/plugins validated; environment settings applied to $conda_env_name."
 }
@@ -659,11 +639,11 @@ function VEP_plugins_install() {
     # Then annotate the AlphaMissense prescore file to vcf file
     AlphaMissense_anno "${config_file}" || \
     { log "Failed to convert the AlphaMissense prescore file to vcf file and annotate protein domains to it"; return 1; }
-    AlphaMissense_pick_missense_constrained_segments "${config_file}" || \
-    { log "Failed to pick missense constrained segments from the AlphaMissense prescore file"; return 1; }
+    # The native runtime does not consume the legacy KDE motif cache. Keep its
+    # explicit helper available, but do not build it during normal installation.
 
     # Then install SpliceAI
-    SpliceAI_install "${config_file}" ${VEP_PLUGINSCACHEDIR} ${VEP_PLUGINSDIR} || \
+    SpliceAI_install "${config_file}" "${VEP_PLUGINSCACHEDIR}" "${VEP_PLUGINSDIR}" || \
     { log "Failed to install SpliceAI"; return 1; }
 
     # Followed by SpliceVault
@@ -755,13 +735,15 @@ function SpliceAI_install() {
         hg19|GRCh37|hg38|GRCh38) ;;
         *) log "Not supported assembly version: ${assembly_version}"; return 1 ;;
     esac
-    [[ -f ${SCRIPT_DIR}/spliceai_cache_input.py ]] || {
-        log "The SpliceAI cache format helper is missing from this source snapshot."
+    # priva spliceai-cache-input runs install_utils.sh from PRIVA_SCRIPT_DIR, which
+    # priva_resolve_binary sets to this checkout's scripts folder.
+    priva_resolve_binary "${config_file}" || {
+        log "The SpliceAI cache format helper (priva spliceai-cache-input) is not available."
         return 1
     }
 
     if [[ -f "${snv_prescore}" && -f "${indel_prescore}" ]]; then
-        python "${SCRIPT_DIR}/spliceai_cache_input.py" install --config "${config_file}" \
+        "${PRIVA_BIN}" spliceai-cache-input install --config "${config_file}" \
             --cache-dir "${PLUGIN_CACHEDIR}" --snv "${snv_prescore}" --indel "${indel_prescore}"
         return $?
     fi
@@ -799,7 +781,7 @@ function SpliceAI_install() {
         fi
         log "Now we start to install the SpliceAI plugin"
         # Validate both staged inputs before atomically updating the original two keys.
-        python "${SCRIPT_DIR}/spliceai_cache_input.py" install --config "${config_file}" \
+        "${PRIVA_BIN}" spliceai-cache-input install --config "${config_file}" \
             --cache-dir "${PLUGIN_CACHEDIR}" --snv "${snv_pre_score_file}" --indel "${indel_pre_score_file}" || return 1
     else
         log "Please download the prescores for the SpliceAI plugin first"
@@ -871,14 +853,12 @@ PY
     if [[ -e ${receipt} || -L ${receipt} ]]; then
         log "Reusing the completed SpliceAI2 receipt after verification; no conversion is started."
     else
-        [[ -f ${SCRIPT_DIR}/spliceai2_to_vep_vcf.py ]] || {
-            log "ERROR: The SpliceAI2 deployment driver is absent from this source snapshot."
-            return 1
-        }
+        # Callers reach this after PriVA_rust_install records priva_binary.
+        priva_resolve_binary "${config_file}" || return 1
         log "Preparing SpliceAI2 GRCh38 from the complete source manifest; no score download or v1 fallback is performed."
         local -a converter_args=()
         [[ -z ${converter} ]] || converter_args=(--converter-bin "${converter}")
-        python "${SCRIPT_DIR}/spliceai2_to_vep_vcf.py" prepare \
+        "${PRIVA_BIN}" spliceai2-prepare prepare \
             --manifest "${manifest}" --assembly GRCh38 --output-dir "${output_dir}" \
             --receipt "${receipt}" "${converter_args[@]}" || return 1
     fi
@@ -1115,6 +1095,7 @@ function CADD_install() {
     local assembly=${2:-}
     local cadd_version cadd_parent_dir cadd_base_dir cadd_zip_url unpack_parent unpacked staging
 
+    # main_install reaches this after PriVA_rust_install records priva_binary.
     priva_configure_cache_paths "${config_file}" || return 1
     [[ -z ${assembly} ]] && assembly=$(read_yaml "${config_file}" "assembly")
     [[ ${assembly} == "hg19" ]] && assembly="GRCh37"
@@ -1299,9 +1280,10 @@ function PrimateAI_install() {
         return 1
     fi
     [[ -n "$PLUGIN_CACHEDIR" ]] || { log "The plugin cache directory is not configured"; return 1; }
+    priva_resolve_binary "$config_file" || return 1
     # Prepared tables are reused/indexed; raw sources remain read-only and the
     # original formatting is produced under the managed plugin cache.
-    prepared=$(python "${SCRIPT_DIR}/indexed_plugin_cache.py" format-primate \
+    prepared=$("${PRIVA_BIN}" indexed-plugin-cache format-primate \
         --input "$prescore_file" --cache-dir "${PLUGIN_CACHEDIR}/PrimateAI" \
         --assembly "$assembly" --threads 1 --print-path) || return 1
     [[ "$(realpath -m "$prepared")" == "$(realpath -m "$prescore_file")" ]] || \
@@ -1324,6 +1306,7 @@ function MaveDB_install() {
         *) log "Unsupported MaveDB assembly: $assembly"; return 1 ;;
     esac
     [[ -n "$PLUGIN_CACHEDIR" && "$PLUGIN_CACHEDIR" != null ]] || return 1
+    priva_resolve_binary "$config_file" || return 1
     local cache_dir="${PLUGIN_CACHEDIR%/}/MaveDB"
     default_file="${cache_dir}/MaveDB_variants.${assembly}.tsv.gz"
     mavedb_file=$(read_yaml "$config_file" mavedb_file) || return 1
@@ -1331,7 +1314,7 @@ function MaveDB_install() {
     [[ -n "$mavedb_file" && "$mavedb_file" != null ]] || mavedb_file=$default_file
     if [[ -s "$mavedb_file" && -f "$mavedb_file" ]]; then
         # Repair only the index; never wget -O over selected table bytes.
-        python "${SCRIPT_DIR}/indexed_plugin_cache.py" ensure-index \
+        "${PRIVA_BIN}" indexed-plugin-cache ensure-index \
             --input "$mavedb_file" --kind mavedb || return 1
         [[ "$mavedb_file" == "$configured_file" ]] || update_yaml "$config_file" mavedb_file "$mavedb_file" || return 1
         log "The indexed MaveDB table is ready at ${mavedb_file}"
@@ -1350,7 +1333,7 @@ function MaveDB_install() {
     local staged_file="${stage}/$(basename "$mavedb_file")"
     wget -c "$mavedb_url" -O "$staged_file" && \
         wget -c "${mavedb_url}.tbi" -O "${staged_file}.tbi" && \
-        python "${SCRIPT_DIR}/indexed_plugin_cache.py" ensure-index --input "$staged_file" --kind mavedb || \
+        "${PRIVA_BIN}" indexed-plugin-cache ensure-index --input "$staged_file" --kind mavedb || \
         { log "Failed to stage the indexed MaveDB resource; retained stage: $stage"; return 1; }
     [[ ! -e "$mavedb_file" ]] || { log "MaveDB target became occupied: $mavedb_file"; return 1; }
     mv "${staged_file}.tbi" "${mavedb_file}.tbi" && \
@@ -1387,7 +1370,9 @@ function AlphaMissense_install() {
     configured=$(read_yaml "$config_file" alphamissense_prescore) || return 1
     local -a source_args=()
     [[ -z $configured || $configured == null ]] || source_args=(--source "$configured")
-    selected=$(python "${SCRIPT_DIR}/alphamissense_cache.py" install \
+    # main_install reaches this after PriVA_rust_install records priva_binary.
+    priva_resolve_binary "$config_file" || return 1
+    selected=$("${PRIVA_BIN}" alphamissense-cache install \
         --cache-dir "$PLUGIN_CACHEDIR" --assembly "$ASSEMBLY_VERSION" "${source_args[@]}") || return 1
     update_yaml "$config_file" alphamissense_prescore "$selected" || return 1
     log "AlphaMissense original prescore and tabix index are ready: $selected"
@@ -1401,9 +1386,11 @@ function AlphaMissense_anno() {
     local alphamissense_prescore=$(read_yaml "${config_file}" "alphamissense_prescore")
     local alphamissense_vcf=$(read_yaml "${config_file}" "alphamissense_vcf")
     local alphamissense_vep_vcf=$(read_yaml "${config_file}" "alphamissense_vep_vcf")
-    local base_helper=${SCRIPT_DIR}/alphamissense_annotation_base.py
+    # priva alpha-annotation-base gives the same paths, checks and receipts as
+    # the original alphamissense_annotation_base.py helper.
+    priva_resolve_binary "$config_file" || return 1
     local alphamissense_vep_base_vcf
-    alphamissense_vep_base_vcf=$(python "$base_helper" path --config "$config_file" --source-root "$BASE_DIR") || return 1
+    alphamissense_vep_base_vcf=$("${PRIVA_BIN}" alpha-annotation-base path --config "$config_file" --source-root "$BASE_DIR") || return 1
     local conservation_file=$(read_yaml "${config_file}" "conservation_file")
     local assembly vep_major
     assembly=$(read_yaml "$config_file" assembly) || return 1
@@ -1418,15 +1405,15 @@ function AlphaMissense_anno() {
     # Motifs need the complete pre-AF annotation (including chrM); AF may replace
     # only the independent runtime copy. Bind actual science, not this whole
     # installer's mtime, so unrelated engineering edits cannot repeat full VEP.
-    python "$base_helper" recover --config "$config_file" --source-root "$BASE_DIR" || return 1
-    if python "$base_helper" check --config "$config_file" --source-root "$BASE_DIR"; then
+    "${PRIVA_BIN}" alpha-annotation-base recover --config "$config_file" --source-root "$BASE_DIR" || return 1
+    if "${PRIVA_BIN}" alpha-annotation-base check --config "$config_file" --source-root "$BASE_DIR"; then
         if ! { check_vcf_validity "$alphamissense_vep_vcf" && \
                { [[ "$alphamissense_vep_vcf" -nt "$alphamissense_vep_base_vcf" ]] || \
-                 python "$base_helper" runtime-associated --config "$config_file" --source-root "$BASE_DIR"; } && \
+                 "${PRIVA_BIN}" alpha-annotation-base runtime-associated --config "$config_file" --source-root "$BASE_DIR"; } && \
                check_vcf_infotags "$alphamissense_vep_vcf" CSQ && \
-               python "${SCRIPT_DIR}/alphamissense_cache.py" check-annotation \
+               "${PRIVA_BIN}" alphamissense-cache check-annotation \
                    --input "$alphamissense_vep_vcf" --assembly "$assembly" --vep-major "$vep_major" > /dev/null; }; then
-            python "$base_helper" restore --config "$config_file" --source-root "$BASE_DIR" || return 1
+            "${PRIVA_BIN}" alpha-annotation-base restore --config "$config_file" --source-root "$BASE_DIR" || return 1
         fi
         [[ $(read_yaml "$config_file" alphamissense_vep_base_vcf) == "$alphamissense_vep_base_vcf" ]] || \
             update_yaml "$config_file" alphamissense_vep_base_vcf "$alphamissense_vep_base_vcf" || return 1
@@ -1439,7 +1426,6 @@ function AlphaMissense_anno() {
         log "ERROR: Configure managed alphamissense_vcf and alphamissense_vep_vcf destinations."
         return 1
     }
-    local convert_py=${SCRIPT_DIR}/alphmis_tsv2vcf.py
     local vep_cache_dir=$(read_yaml "$config_file" vep_cache_dir)
     local threads=$(read_yaml "$config_file" threads)
     local ref_genome=$(read_yaml "$config_file" ref_genome)
@@ -1449,22 +1435,23 @@ function AlphaMissense_anno() {
     stage=$(mktemp -d "$(dirname "$alphamissense_vcf")/.alphamissense-anno.XXXXXX") || return 1
     converted="$stage/AlphaMissense.vcf.gz"
     annotated="$stage/AlphaMissense.vep.vcf.gz"
-    python "$base_helper" capture --config "$config_file" --source-root "$BASE_DIR" \
+    "${PRIVA_BIN}" alpha-annotation-base capture --config "$config_file" --source-root "$BASE_DIR" \
         --output "$stage/annotation-inputs.json" || return 1
-    # Keep the original scientific converter and VEP procedure. A stage keeps
+    # The native converter writes the same VCF as alphmis_tsv2vcf.py; the
+    # recipe fingerprint treats the two lines as one step. Keep the VEP procedure. A stage keeps
     # outputs beside the managed destinations, never beside an external input.
-    python "$convert_py" "$alphamissense_prescore" "$converted" && \
+    "${PRIVA_BIN}" alphamissense-vcf build --input "$alphamissense_prescore" --output "$converted" && \
     check_vcf_validity "$converted" && \
     basic_vep_annotation \
     -i "$converted" -a "$assembly" -r "$ref_genome" -c "$vep_cache_dir" \
     -t "$threads" -p "$vep_plugins_dir" -v "$conservation_file" && \
     check_vcf_validity "$annotated" && check_vcf_infotags "$annotated" CSQ && \
-    python "${SCRIPT_DIR}/alphamissense_cache.py" check-annotation \
+    "${PRIVA_BIN}" alphamissense-cache check-annotation \
         --input "$annotated" --assembly "$assembly" --vep-major "$vep_major" > /dev/null || {
         log "ERROR: AlphaMissense conversion/annotation failed; incomplete stage retained at $stage"
         return 1
     }
-    python "$base_helper" publish --config "$config_file" --source-root "$BASE_DIR" \
+    "${PRIVA_BIN}" alpha-annotation-base publish --config "$config_file" --source-root "$BASE_DIR" \
         --staged-converted "$converted" --staged-annotation "$annotated" --expected-inputs "$stage/annotation-inputs.json" || return 1
     if [[ -f $stage/AlphaMissense.vep.stats.html ]]; then
         mv "$stage/AlphaMissense.vep.stats.html" "${alphamissense_vep_vcf/.vcf*/.stats.html}" || return 1
@@ -1511,7 +1498,8 @@ function AlphaMissense_pick_missense_constrained_segments() {
         alphamissense_intolerant_motifs="${intolerant_motif_prefix}.pkl"
     fi
     local nm_to_enst_tsv
-    nm_to_enst_tsv=$(python "${SCRIPT_DIR}/installer_prerequisites.py" "${config_file}" \
+    priva_resolve_binary "$config_file" || return 1
+    nm_to_enst_tsv=$("${PRIVA_BIN}" installer-prerequisites "${config_file}" \
         --source-root "${BASE_DIR}" --stage mapping --print-mapping) || return 1
     local -a mapping_inputs=(
         --input "${DATA_DIR}/gnomAD_RMC/gnomad_v2.1.1_rmc_flat.${assembly}.tsv"
@@ -1531,7 +1519,7 @@ function AlphaMissense_pick_missense_constrained_segments() {
     local original_motifs=$alphamissense_intolerant_motifs
     if [[ -e "$alphamissense_intolerant_motifs" || -L "$alphamissense_intolerant_motifs" ||
           -e "${alphamissense_intolerant_motifs}.nm_to_enst.json" || -L "${alphamissense_intolerant_motifs}.nm_to_enst.json" ]]; then
-        alphamissense_intolerant_motifs=$(python "${SCRIPT_DIR}/biomart_nm_to_enst.py" artifact-route \
+        alphamissense_intolerant_motifs=$("${PRIVA_BIN}" biomart artifact-route --helper-root "$BASE_DIR" \
             --artifact "$alphamissense_intolerant_motifs" --mapping "$nm_to_enst_tsv" \
             --cache-root "$(read_yaml "$config_file" cache_root)" \
             --output-dir "$(read_yaml "$config_file" vep_plugins_cachedir)/AlphaMissense" \
@@ -1548,8 +1536,8 @@ function AlphaMissense_pick_missense_constrained_segments() {
     log "The AlphaMissense intolerant motifs file ${alphamissense_intolerant_motifs} is not generated, we will generate it"
 
     local mapping_identity
-    mapping_identity=$(python "${SCRIPT_DIR}/biomart_nm_to_enst.py" identity \
-        "${nm_to_enst_tsv}" "${mapping_inputs[@]}") || return 1
+    mapping_identity=$("${PRIVA_BIN}" biomart identity --helper-root "$BASE_DIR" \
+        --mapping "${nm_to_enst_tsv}" "${mapping_inputs[@]}") || return 1
 
     mkdir -p "$(dirname "$alphamissense_intolerant_motifs")" || return 1
 
@@ -1567,99 +1555,107 @@ function AlphaMissense_pick_missense_constrained_segments() {
 }
 
 
-function AlphaMissense_stat() {
-    local config_file=${1}
-    local alphamissense_stat=$(read_yaml "${config_file}" "alphamissense_pd_stat")
-    local alphamissense_vcf=$(read_yaml "${config_file}" "alphamissense_vep_vcf")
-    local stat_py=${SCRIPT_DIR}/stat_protein_domain_amscores.py
-    local cache_root
-    cache_root=$(read_yaml "$config_file" cache_root) || return 1
-    [[ $cache_root == / ]] || cache_root=${cache_root%/}
-
-    # 2026-10-24 CT: a completed unmodified original producer is independent of
-    # the optional chromosome merger. Its own receipt must never masquerade as
-    # a builder .complete.json. Invalid/pending original receipts fail closed;
-    # only exit 3 (no original ownership sidecars) falls through to other routes.
-    local original_status=0
-    python "${SCRIPT_DIR}/alphamissense_original_cache.py" check \
-        --source-script "$stat_py" --input-vcf "$alphamissense_vcf" \
-        --output-pickle "$alphamissense_stat" --cache-root "$cache_root" || original_status=$?
-    if [[ $original_status == 0 ]]; then
-        log "The completed original AlphaMissense statistics pickle is ready at $alphamissense_stat"
-        return 0
-    elif [[ $original_status != 3 ]]; then
-        log "ERROR: Original AlphaMissense publication needs review or interrupted-import recovery."
-        return "$original_status"
-    fi
-
-    # Keep the existing reuse route for explicitly selected outside-root data.
-    # Managed builds instead require the builder's completed publication receipt.
-    if [[ $cache_root != / && $alphamissense_stat != "$cache_root/"* && -s $alphamissense_stat &&
-          $alphamissense_stat -nt $alphamissense_vcf && $alphamissense_stat -nt $stat_py ]]; then
-        log "The selected AlphaMissense statistics pickle $alphamissense_stat is already generated, skip this step"
-        return 0
-    fi
-
-    [[ -n $alphamissense_stat && $alphamissense_stat != null ]] || {
-        log "ERROR: Configure the managed alphamissense_pd_stat destination."
+function priva_builder_sha256() {
+    # Print the builder_source_sha256 field of the JSON line printed by
+    # `priva builder-identity NAME` or `priva COMMAND identity --input PATH`.
+    [[ ${1:-} =~ \"builder_source_sha256\":\"([0-9a-f]{64})\" ]] || {
+        log "ERROR: No builder_source_sha256 in: ${1:-}"
         return 1
     }
-    # 2026-10-24 CT: the full 22-worker Pool.map exceeded 96 GiB. The installation
-    # helper reuses the unchanged scientific collector, retains completed literal
-    # chromosomes, and merges/finalizes genes in the original mutation order.
-    # Its conservative local default is one collector; its named chromosome entry
-    # point also permits independent Slurm jobs without a production Rust binary.
-    log "Checking or building the AlphaMissense domain-statistics pickle with chromosome checkpoints"
-    python "${SCRIPT_DIR}/alphamissense_domain_cache.py" build \
-        --source-script "$stat_py" --input-vcf "$alphamissense_vcf" \
-        --output-pickle "$alphamissense_stat" --cache-root "$cache_root" && \
-    update_yaml "$config_file" alphamissense_pd_stat "$alphamissense_stat" && \
-    log "The AlphaMissense statistics pickle is ready at $alphamissense_stat"
+    printf '%s\n' "${BASH_REMATCH[1]}"
 }
 
 
-function AlphaMissense_pick_intolerant_domains() {
-    local config_file=${1}
+function priva_recorded_builder() {
+    # Print the builder identity recorded in the footer of a native
+    # intermediate: priva_recorded_builder COMMAND PARQUET.
+    local command=${1:?Supply the priva command} path=${2:?Supply the intermediate}
+    local recorded
+    recorded=$("${PRIVA_BIN}" "$command" identity --input "$path") || return 1
+    priva_builder_sha256 "$recorded"
+}
 
+
+function priva_builder_identity_file() {
+    # Keep FILE holding `priva builder-identity NAME`, the producer content a
+    # completion receipt hashes; a replaced file never writes through a link.
+    local name=${1:?Supply the builder name} path=${2:?Supply the identity file}
+    local identity
+    identity=$("${PRIVA_BIN}" builder-identity "$name") || return 1
+    if [[ -L $path || ! -f $path || $(< "$path") != "$identity" ]]; then
+        mkdir -p -- "$(dirname -- "$path")" || return 1
+        rm -f -- "$path" || return 1
+        printf '%s\n' "$identity" > "$path" || return 1
+    fi
+}
+
+
+function priva_vcf_header_contigs() {
+    # Print the ##contig IDs of a VCF in literal header order, the chromosome
+    # inventory the native chromosome builders and their merges use.
+    local vcf=${1:?Supply a VCF}
+    local header
+    header=$(bcftools view -h "$vcf") || return 1
+    sed -n 's/^##contig=<ID=\([^,>]*\).*/\1/p' <<< "$header"
+}
+
+
+function alphamissense_chromosome_build() {
+    # alphamissense_chromosome_build COMMAND VCF OUTPUT [MERGE_OPTION VALUE ...]
+    # Build one `priva COMMAND chromosome` shard per header contig of VCF in
+    # OUTPUT.chromosomes/, then merge every shard in header order into OUTPUT.
+    # A shard newer than VCF and recorded by the current builder is kept, so an
+    # interrupted build resumes at its first missing chromosome.
+    local command=${1:?Supply the priva command} vcf=${2:?Supply the VCF} output=${3:?Supply the output}
+    shift 3
+    local folder=${output}.chromosomes text contig shard current index=0
+    local -a contigs=() inputs=()
+    text=$(priva_vcf_header_contigs "$vcf") || return 1
+    [[ -n $text ]] || { log "ERROR: ${vcf} declares no ##contig lines for the chromosome builders"; return 1; }
+    mapfile -t contigs <<< "$text"
+    current=$("${PRIVA_BIN}" builder-identity "$command") || return 1
+    current=$(priva_builder_sha256 "$current") || return 1
+    mkdir -p -- "$folder" || return 1
+    for contig in "${contigs[@]}"; do
+        shard=${folder}/$(printf '%05d' "$index").parquet
+        index=$((index + 1))
+        inputs+=(--input "$shard")
+        if [[ -s $shard && $shard -nt $vcf && $(priva_recorded_builder "$command" "$shard" 2> /dev/null) == "$current" ]]; then
+            continue
+        fi
+        log "Building priva ${command} chromosome ${contig} of ${vcf}"
+        "${PRIVA_BIN}" "$command" chromosome --vcf "$vcf" --chrom "$contig" --output "$shard" || return 1
+    done
+    "${PRIVA_BIN}" "$command" merge "${inputs[@]}" "$@" --output "$output" || return 1
+    rm -rf -- "$folder"
+}
+
+
+function alphamissense_python_das_complete() {
+    # alphamissense_python_das_complete CONFIG [--restore]
+    # Succeed when the configured Python statistics pickle has a valid Python
+    # DAS completion receipt. Completed Python statistics and DAS outputs of an
+    # existing installation stay in use for one transition; cache-install
+    # publish converts their pickles as before. --restore also writes the
+    # three output keys when they differ from the receipt's selections.
+    local config_file=${1:?Supply the configuration}
     local assembly
     assembly=$(priva_bundle_assembly "$(read_yaml "${config_file}" "assembly")") || return 1
     local alphamissense_pd_stat=$(read_yaml "$config_file" "alphamissense_pd_stat")
-    local alphamissense_tranx_domain_map=$(read_yaml "$config_file" "alphamissense_tranx_domain_map")
-    local alphamissense_intolerant_domains=$(read_yaml "$config_file" "alphamissense_intolerant_domains")
+    [[ $alphamissense_pd_stat == *.pkl || $alphamissense_pd_stat == *.pkl.gz ]] || return 1
     local pick_intolerant_domains_py=${SCRIPT_DIR}/am_pick_intolerant_domains.py
-    local alphamissense_dir
+    local alphamissense_dir alphamissense_intolerant_domains alphamissense_tranx_domain_map all_intolerant_domains
     alphamissense_dir=$(dirname "$alphamissense_pd_stat")
     alphamissense_intolerant_domains=$(yaml_value_or_default "$config_file" alphamissense_intolerant_domains \
         "${alphamissense_dir}/domain_tolerance_analysis.${assembly}.tsv") || return 1
     alphamissense_tranx_domain_map=$(yaml_value_or_default "$config_file" alphamissense_tranx_domain_map \
         "${alphamissense_dir}/transcript_pp_domain_mapping.${assembly}.pkl") || return 1
-    local all_intolerant_domains
     all_intolerant_domains=$(yaml_value_or_default "$config_file" all_intolerant_domains \
         "${alphamissense_dir}/all_intolerant_domains.${assembly}.pkl") || return 1
-
     local threads=$(read_yaml "$config_file" "threads")
-    mkdir -p "$alphamissense_dir" || return 1
-
-    # Post-KS filter inputs
     local alphamissense_vep_vcf=$(read_yaml "$config_file" "alphamissense_vep_vcf")
     local hcseeker_spots_tsv=${DATA_DIR}/HCSeeker/HC_spots.${assembly}.tsv
     local clinvar_vcf=$(read_yaml "$config_file" "clinvar_vcf")
-
-    # Build optional filter flags
-    local -a filter_flags=()
-    if [[ -f ${alphamissense_vep_vcf} ]] && [[ -f ${hcseeker_spots_tsv} ]]; then
-        filter_flags+=(--am_vcf "$alphamissense_vep_vcf" --hcseeker_spots_tsv "$hcseeker_spots_tsv")
-        log "Filter 1 (coldspot overlap) enabled: am_vcf=${alphamissense_vep_vcf}, hcseeker=${hcseeker_spots_tsv}"
-    else
-        log "Filter 1 (coldspot overlap) skipped: am_vcf or hcseeker_spots_tsv not found"
-    fi
-    if [[ -f ${clinvar_vcf} ]]; then
-        filter_flags+=(--clinvar_vcf "$clinvar_vcf")
-        log "Filter 2 (benign ClinVar) enabled: clinvar_vcf=${clinvar_vcf}"
-    else
-        log "Filter 2 (benign ClinVar) skipped: clinvar_vcf not found"
-    fi
-
     local interpro_mapping_pickle
     interpro_mapping_pickle=$(read_yaml "$config_file" interpro_mapping_pickle) || return 1
     local completion_state=${SCRIPT_DIR}/das_install_state.py
@@ -1709,55 +1705,264 @@ function AlphaMissense_pick_intolerant_domains() {
     [[ ! -f ${clinvar_vcf} ]] || state_inputs+=(--input "$clinvar_vcf")
     local -a state_outputs=(--output "$alphamissense_intolerant_domains"
         --output "$alphamissense_tranx_domain_map" --output "$all_intolerant_domains")
-    # DAS writes several files in sequence and can fail after any of them. Even
-    # three fresh, nonempty outputs cannot establish successful completion.
-    # A receipt is valid only after the entire command, publication and YAML
-    # updates succeeded. Legacy unreceipted derived outputs rebuild once.
     # 2026-10-26 CT: preserve a completed original DAS producer when a separate
     # closed proof establishes identical ordered ClinVar consumer inputs. The
     # optional sidecar admits only that one input replacement; every other
     # dependency/output stays strict. No sidecar is inferred or created here.
-    if python "$completion_state" check --receipt "$completion_receipt" \
+    python "$completion_state" check --receipt "$completion_receipt" \
         "${state_inputs[@]}" "${state_outputs[@]}" || \
-       python "${SCRIPT_DIR}/das_input_continuity.py" check \
+    python "${SCRIPT_DIR}/das_input_continuity.py" check \
         --receipt "$completion_receipt" \
         --continuity "${completion_receipt}.clinvar-continuity.json" \
+        "${state_inputs[@]}" "${state_outputs[@]}" || return 1
+    [[ ${2:-} == --restore ]] || return 0
+    # Standalone callers may leave equivalent default output keys unset.
+    # Restore only differing selections; valid warm reuse never reruns DAS.
+    priva_restore_yaml_values "$config_file" \
+        alphamissense_intolerant_domains "$alphamissense_intolerant_domains" \
+        alphamissense_tranx_domain_map "$alphamissense_tranx_domain_map" \
+        all_intolerant_domains "$all_intolerant_domains"
+}
+
+
+function priva_restore_yaml_values() {
+    # priva_restore_yaml_values CONFIG KEY VALUE [KEY VALUE ...]
+    # Write each KEY only when its configured value differs from VALUE.
+    local config_file=${1:?Supply the configuration}
+    shift
+    local key selected_value current_value
+    while [[ $# -ge 2 ]]; do
+        key=$1 selected_value=$2
+        shift 2
+        current_value=$(read_yaml "$config_file" "$key") || return 1
+        [[ "$current_value" == "$selected_value" ]] || \
+            update_yaml "$config_file" "$key" "$selected_value" || return 1
+    done
+}
+
+
+function AlphaMissense_stat() {
+    local config_file=${1}
+    local alphamissense_stat=$(read_yaml "${config_file}" "alphamissense_pd_stat")
+    local alphamissense_vcf=$(read_yaml "${config_file}" "alphamissense_vep_vcf")
+    [[ -n $alphamissense_stat && $alphamissense_stat != null ]] || {
+        log "ERROR: Configure the managed alphamissense_pd_stat destination."
+        return 1
+    }
+    # Completed Python statistics whose Python DAS outputs are still complete
+    # are kept for one transition. Otherwise a pickle value selects the typed
+    # Parquet statistics beside it.
+    if [[ $alphamissense_stat == *.pkl || $alphamissense_stat == *.pkl.gz ]]; then
+        if alphamissense_python_das_complete "$config_file"; then
+            log "Keeping the completed Python AlphaMissense statistics $alphamissense_stat and their completed DAS outputs"
+            return 0
+        fi
+        alphamissense_stat=${alphamissense_stat%.gz}
+        alphamissense_stat=${alphamissense_stat%.pkl}.parquet
+    fi
+    priva_resolve_binary "$config_file" || return 1
+
+    # Native intermediates keep the builder identity recorded when they were
+    # built; remove the file to rebuild it with the current builder.
+    local recorded
+    if [[ -s $alphamissense_stat ]] && \
+       recorded=$(priva_recorded_builder alphamissense-domain "$alphamissense_stat") && \
+       "${PRIVA_BIN}" alphamissense-domain check --input "$alphamissense_stat" \
+           --vcf "$alphamissense_vcf" --builder-sha256 "$recorded" > /dev/null; then
+        priva_restore_yaml_values "$config_file" alphamissense_pd_stat "$alphamissense_stat" || return 1
+        log "The AlphaMissense statistics $alphamissense_stat are complete for $alphamissense_vcf, skip this step"
+        return 0
+    fi
+    # 2026-10-24 CT: the full 22-worker Pool.map exceeded 96 GiB. One bounded
+    # process per chromosome retains each completed chromosome; the ordered
+    # merge reproduces the original gene order.
+    log "Building the AlphaMissense domain statistics $alphamissense_stat with chromosome checkpoints"
+    mkdir -p -- "$(dirname -- "$alphamissense_stat")" || return 1
+    alphamissense_chromosome_build alphamissense-domain "$alphamissense_vcf" "$alphamissense_stat" && \
+    "${PRIVA_BIN}" alphamissense-domain check --input "$alphamissense_stat" --vcf "$alphamissense_vcf" > /dev/null && \
+    update_yaml "$config_file" alphamissense_pd_stat "$alphamissense_stat" && \
+    log "The AlphaMissense statistics are ready at $alphamissense_stat"
+}
+
+
+function AlphaMissense_pick_intolerant_domains() {
+    local config_file=${1}
+
+    local assembly
+    assembly=$(priva_bundle_assembly "$(read_yaml "${config_file}" "assembly")") || return 1
+    local alphamissense_pd_stat=$(read_yaml "$config_file" "alphamissense_pd_stat")
+    if [[ $alphamissense_pd_stat == *.pkl || $alphamissense_pd_stat == *.pkl.gz ]]; then
+        if alphamissense_python_das_complete "$config_file" --restore; then
+            log "The Python AlphaMissense domain build is complete for these inputs; reusing it for this transition"
+            return 0
+        fi
+        log "ERROR: ${alphamissense_pd_stat} has no completed Python DAS outputs; run AlphaMissense_stat to build the native statistics first."
+        return 1
+    fi
+    priva_resolve_binary "$config_file" || return 1
+    local alphamissense_dir
+    alphamissense_dir=$(dirname "$alphamissense_pd_stat")
+    # The native transcript map and DAS set are archives: a configured pickle
+    # value selects the .rkyv beside it.
+    local alphamissense_intolerant_domains alphamissense_tranx_domain_map all_intolerant_domains
+    alphamissense_intolerant_domains=$(yaml_value_or_default "$config_file" alphamissense_intolerant_domains \
+        "${alphamissense_dir}/domain_tolerance_analysis.${assembly}.tsv") || return 1
+    alphamissense_tranx_domain_map=$(yaml_value_or_default "$config_file" alphamissense_tranx_domain_map \
+        "${alphamissense_dir}/transcript_pp_domain_mapping.${assembly}.rkyv") || return 1
+    alphamissense_tranx_domain_map=$(clinvar_native_archive_path "$alphamissense_tranx_domain_map" \
+        "${alphamissense_dir}/transcript_pp_domain_mapping.${assembly}.rkyv") || return 1
+    all_intolerant_domains=$(yaml_value_or_default "$config_file" all_intolerant_domains \
+        "${alphamissense_dir}/all_intolerant_domains.${assembly}.rkyv") || return 1
+    all_intolerant_domains=$(clinvar_native_archive_path "$all_intolerant_domains" \
+        "${alphamissense_dir}/all_intolerant_domains.${assembly}.rkyv") || return 1
+
+    local threads=$(read_yaml "$config_file" "threads")
+    # The Python DAS iterated sets in a hash-seeded order; priva reproduces the
+    # order of one named seed.
+    local seed
+    seed=$(yaml_value_or_default "$config_file" "priva_python_hash_seed" 0) || return 1
+    [[ $seed =~ ^[0-9]+$ ]] || { log "ERROR: priva_python_hash_seed must be a non-negative integer: $seed"; return 1; }
+    mkdir -p "$alphamissense_dir" || return 1
+
+    # Post-KS filter inputs
+    local alphamissense_vep_vcf=$(read_yaml "$config_file" "alphamissense_vep_vcf")
+    local hcseeker_spots_tsv=${DATA_DIR}/HCSeeker/HC_spots.${assembly}.tsv
+    local clinvar_vcf=$(read_yaml "$config_file" "clinvar_vcf")
+    # The transcript map reads exon history built from the AlphaMissense VCF.
+    [[ -f ${alphamissense_vep_vcf} ]] || {
+        log "ERROR: The AlphaMissense VEP VCF is required for the native exon history: ${alphamissense_vep_vcf}"
+        return 1
+    }
+
+    # Build optional filter flags
+    local -a filter_flags=()
+    local metadata=${alphamissense_dir}/domain_metadata.${assembly}.parquet
+    if [[ -f ${alphamissense_vep_vcf} ]] && [[ -f ${hcseeker_spots_tsv} ]]; then
+        filter_flags+=(--metadata "$metadata" --spots "$hcseeker_spots_tsv")
+        log "Filter 1 (coldspot overlap) enabled: am_vcf=${alphamissense_vep_vcf}, hcseeker=${hcseeker_spots_tsv}"
+    else
+        log "Filter 1 (coldspot overlap) skipped: am_vcf or hcseeker_spots_tsv not found"
+    fi
+    if [[ -f ${clinvar_vcf} ]]; then
+        filter_flags+=(--clinvar-vcf "$clinvar_vcf")
+        log "Filter 2 (benign ClinVar) enabled: clinvar_vcf=${clinvar_vcf}"
+    else
+        log "Filter 2 (benign ClinVar) skipped: clinvar_vcf not found"
+    fi
+
+    # A Python InterPro pickle is converted once by the same managed conversion
+    # cache-install publish makes; a native archive is checked and used.
+    local interpro_mapping
+    interpro_mapping=$("${PRIVA_BIN}" cache-install resolve --key interpro_mapping_pickle \
+        --build-config "$config_file" --source-root "$BASE_DIR") || return 1
+    local normalization=${BASE_DIR}/data/InterPro/InterPro_domain_norm_map.json
+    local completion_receipt=${alphamissense_dir}/domain_analysis.${assembly}.install.json
+    # The receipt binds each native builder's identity, kept beside it.
+    local builders=${completion_receipt%.json}.builders builder
+    for builder in das-domains alphamissense-domain alpha-exon-history; do
+        priva_builder_identity_file "$builder" "${builders}/${builder}.json" || return 1
+    done
+    local -a state_inputs=(--profile "$assembly"
+        --input "$alphamissense_pd_stat" --input "$interpro_mapping" --input "$alphamissense_vep_vcf"
+        --source "analysis=${builders}/das-domains.json"
+        --source "statistics=${builders}/alphamissense-domain.json"
+        --source "exon-history=${builders}/alpha-exon-history.json"
+        --parameter "python-hash-seed=$seed"
+        --parameter "coldspot-enabled=$([[ -f $alphamissense_vep_vcf && -f $hcseeker_spots_tsv ]] && printf true || printf false)"
+        --parameter "benign-enabled=$([[ -f $clinvar_vcf ]] && printf true || printf false)")
+    local bundled_role bundled_path
+    for bundled_role in domain-normalization functional-domains; do
+        if [[ $bundled_role == domain-normalization ]]; then
+            bundled_path=$normalization
+        else
+            bundled_path=${BASE_DIR}/data/InterPro/curated_InterPro_func_domains.tsv.gz
+        fi
+        if [[ "$(realpath -m -- "$bundled_path")" == "$(realpath -ms -- "$bundled_path")" ]]; then
+            state_inputs+=(--bundled "$bundled_role=$bundled_path")
+        else
+            state_inputs+=(--input "$bundled_path")
+        fi
+    done
+    if [[ -f ${hcseeker_spots_tsv} ]]; then
+        if [[ "$(realpath -m -- "$hcseeker_spots_tsv")" == "$(realpath -ms -- "$hcseeker_spots_tsv")" ]]; then
+            state_inputs+=(--bundled "hcseeker-spots=$hcseeker_spots_tsv")
+        else
+            state_inputs+=(--input "$hcseeker_spots_tsv")
+        fi
+    fi
+    [[ ! -f ${clinvar_vcf} ]] || state_inputs+=(--input "$clinvar_vcf")
+    local -a state_outputs=(--output "$alphamissense_intolerant_domains"
+        --output "$alphamissense_tranx_domain_map" --output "$all_intolerant_domains")
+    # DAS writes several files in sequence and can fail after any of them. Even
+    # three fresh, nonempty outputs cannot establish successful completion.
+    # A receipt is valid only after the entire command, publication and YAML
+    # updates succeeded.
+    if "${PRIVA_BIN}" das-install-state check --receipt "$completion_receipt" \
         "${state_inputs[@]}" "${state_outputs[@]}"; then
-        # Standalone callers may leave equivalent default output keys unset.
-        # Restore only differing selections; valid warm reuse never reruns DAS.
-        local key selected_value current_value
-        local -a output_keys=(alphamissense_intolerant_domains alphamissense_tranx_domain_map all_intolerant_domains)
-        local -a output_values=("$alphamissense_intolerant_domains" "$alphamissense_tranx_domain_map" "$all_intolerant_domains")
-        local output_index
-        for output_index in 0 1 2; do
-            key=${output_keys[$output_index]}
-            selected_value=${output_values[$output_index]}
-            current_value=$(read_yaml "$config_file" "$key") || return 1
-            [[ "$current_value" == "$selected_value" ]] || \
-                update_yaml "$config_file" "$key" "$selected_value" || return 1
-        done
+        priva_restore_yaml_values "$config_file" \
+            alphamissense_intolerant_domains "$alphamissense_intolerant_domains" \
+            alphamissense_tranx_domain_map "$alphamissense_tranx_domain_map" \
+            all_intolerant_domains "$all_intolerant_domains" || return 1
         log "The AlphaMissense domain build is complete for these inputs; reusing $completion_receipt"
         return 0
     fi
     local expected_inputs
-    expected_inputs=$(python "$completion_state" capture "${state_inputs[@]}") || return 1
+    expected_inputs=$("${PRIVA_BIN}" das-install-state capture "${state_inputs[@]}") || return 1
     rm -f -- "$completion_receipt" || return 1
 
-    log "Running original DAS intolerant domain analysis in $alphamissense_dir"
-    python "$pick_intolerant_domains_py" \
-    --assembly "$assembly" \
-    --pickle_file "$alphamissense_pd_stat" \
-    --interpro_mapping_pickle "$interpro_mapping_pickle" \
+    # Exon history: chromosome shards, an ordered merge under the seed, and the
+    # serialized-set export das-domains transcripts reads. Its name carries the
+    # merge seed. A history newer than the statistics keeps its recorded
+    # builder; remove it to rebuild it.
+    local history=${alphamissense_pd_stat%.parquet}.exon_history.seed${seed}.parquet
+    local history_lines=${history%.parquet}.lines
+    local history_builder
+    if [[ -s $history && $history -nt $alphamissense_pd_stat ]] && \
+       history_builder=$(priva_recorded_builder alpha-exon-history "$history") && \
+       "${PRIVA_BIN}" alpha-exon-history check --input "$history" --builder-sha256 "$history_builder" > /dev/null; then
+        log "Reusing the AlphaMissense exon history $history"
+    else
+        log "Building the AlphaMissense exon history $history with chromosome checkpoints"
+        alphamissense_chromosome_build alpha-exon-history "$alphamissense_vep_vcf" "$history" --hash-seed "$seed" || return 1
+        history_builder=$(priva_recorded_builder alpha-exon-history "$history") || return 1
+        rm -f -- "$history_lines" || return 1
+    fi
+    if [[ ! -s $history_lines || $history -nt $history_lines ]]; then
+        "${PRIVA_BIN}" alpha-exon-history export --input "$history" --output "$history_lines" || return 1
+    fi
+    if [[ -f ${alphamissense_vep_vcf} && -f ${hcseeker_spots_tsv} ]]; then
+        # Reuses itself through its adjacent .source.json receipt.
+        "${PRIVA_BIN}" domain-metadata build --vcf "$alphamissense_vep_vcf" --output "$metadata" \
+            --assembly "$assembly" --threads "$threads" || return 1
+    fi
+    local statistics_builder
+    statistics_builder=$(priva_recorded_builder alphamissense-domain "$alphamissense_pd_stat") || return 1
+
+    log "Running native DAS intolerant domain analysis in $alphamissense_dir"
+    "${PRIVA_BIN}" das-domains transcripts \
+    --statistics "$alphamissense_pd_stat" \
+    --exon-history "$history_lines" \
+    --source-builder-sha256 "$statistics_builder" \
+    --python-hash-seed "$seed" \
+    --output "${alphamissense_dir}/transcript_pp_domain_mapping.${assembly}.rkyv" \
+    --history-builder-sha256 "$history_builder" || return 1
+    "${PRIVA_BIN}" das-domains analyze \
+    --statistics "$alphamissense_pd_stat" \
+    --source-builder-sha256 "$statistics_builder" \
+    --interpro "$interpro_mapping" \
+    --normalization-json "$normalization" \
+    --python-hash-seed "$seed" \
     --threads "$threads" \
-    --output_dir "$alphamissense_dir" \
+    --assembly "$assembly" \
+    --output-dir "$alphamissense_dir" \
     "${filter_flags[@]}" || return 1
 
-    # The scientific program writes its original canonical filenames. Preserve
-    # their bytes while honoring each configured managed publication path.
+    # The builders write the original canonical filenames. Preserve their bytes
+    # while honoring each configured managed publication path.
     local -a produced=(
         "${alphamissense_dir}/domain_tolerance_analysis.${assembly}.tsv"
-        "${alphamissense_dir}/transcript_pp_domain_mapping.${assembly}.pkl"
-        "${alphamissense_dir}/all_intolerant_domains.${assembly}.pkl"
+        "${alphamissense_dir}/transcript_pp_domain_mapping.${assembly}.rkyv"
+        "${alphamissense_dir}/all_intolerant_domains.${assembly}.rkyv"
     )
     local -a selected=("$alphamissense_intolerant_domains" "$alphamissense_tranx_domain_map" "$all_intolerant_domains")
     local item
@@ -1771,7 +1976,7 @@ function AlphaMissense_pick_intolerant_domains() {
     update_yaml "$config_file" alphamissense_intolerant_domains "$alphamissense_intolerant_domains" && \
     update_yaml "$config_file" alphamissense_tranx_domain_map "$alphamissense_tranx_domain_map" && \
     update_yaml "$config_file" all_intolerant_domains "$all_intolerant_domains" && \
-    python "$completion_state" record --receipt "$completion_receipt" \
+    "${PRIVA_BIN}" das-install-state record --receipt "$completion_receipt" \
         "${state_inputs[@]}" "${state_outputs[@]}" --expected-inputs "$expected_inputs" && \
     log "DAS intolerant domains analysis complete. Outputs saved to ${alphamissense_dir}"
 }
@@ -1779,69 +1984,85 @@ function AlphaMissense_pick_intolerant_domains() {
 
 function prepare_pm1_regions() {
     local config_file=${1}
-    local prepare_pm1_py=${SCRIPT_DIR}/prepare_pm1_regions.py
     local assembly
     assembly=$(priva_bundle_assembly "$(read_yaml "${config_file}" "assembly")") || return 1
-    local threads=$(read_yaml "${config_file}" "threads")
-    local alphamissense_dir pm1_regions_pkl all_intolerant_pkl
+    priva_resolve_binary "$config_file" || return 1
+    local alphamissense_dir pm1_regions all_intolerant
     alphamissense_dir=$(dirname -- "$(read_yaml "$config_file" "alphamissense_pd_stat")")
     # The portable resolver owns destinations; do not infer a new output beside
     # a supplied input and silently discard the user's configured output key.
-    pm1_regions_pkl=$(yaml_value_or_default "$config_file" pm1_regions_pkl "${alphamissense_dir}/pm1_regions.${assembly}.pkl")
-    all_intolerant_pkl=$(yaml_value_or_default "$config_file" all_intolerant_domains "${alphamissense_dir}/all_intolerant_domains.${assembly}.pkl")
-    mkdir -p -- "$(dirname -- "$pm1_regions_pkl")" || return 1
+    # priva pm1-regions writes an archive: a configured pickle value selects
+    # its .rkyv sibling, as the ClinVar statistics builders do.
+    pm1_regions=$(yaml_value_or_default "$config_file" pm1_regions_pkl "${alphamissense_dir}/pm1_regions.${assembly}.rkyv") || return 1
+    pm1_regions=$(clinvar_native_archive_path "$pm1_regions" "${alphamissense_dir}/pm1_regions.${assembly}.rkyv") || return 1
+    mkdir -p -- "$(dirname -- "$pm1_regions")" || return 1
+
+    # The DAS set is read as a native archive: a Python DAS pickle is converted
+    # once by the same managed conversion cache-install publish makes.
+    all_intolerant=$(read_yaml "$config_file" all_intolerant_domains) || return 1
+    [[ -n $all_intolerant && $all_intolerant != null ]] || {
+        log "ERROR: Configure all_intolerant_domains (AlphaMissense_pick_intolerant_domains records it) before PM1 regions."
+        return 1
+    }
+    all_intolerant=$("${PRIVA_BIN}" cache-install resolve --key all_intolerant_domains \
+        --build-config "$config_file" --source-root "$BASE_DIR") || return 1
 
     local nm_to_enst_tsv
-    nm_to_enst_tsv=$(python "${SCRIPT_DIR}/installer_prerequisites.py" "${config_file}" \
+    nm_to_enst_tsv=$("${PRIVA_BIN}" installer-prerequisites "${config_file}" \
         --source-root "${BASE_DIR}" --stage mapping --print-mapping) || return 1
+    local hcseeker_tsv=${DATA_DIR}/HCSeeker/HC_spots.${assembly}.tsv
+    local rmc_tsv=${DATA_DIR}/gnomAD_RMC/gnomad_v2.1.1_rmc_flat.${assembly}.tsv
     local -a mapping_inputs=(
-        --input "${DATA_DIR}/gnomAD_RMC/gnomad_v2.1.1_rmc_flat.${assembly}.tsv"
-        --input "${DATA_DIR}/HCSeeker/HC_spots.${assembly}.tsv"
+        --input "$rmc_tsv"
+        --input "$hcseeker_tsv"
     )
     local -a publication_args=(
-        --config "$config_file" --producer "$prepare_pm1_py"
+        --config "$config_file" --native-producer pm1-regions --helper-root "$BASE_DIR"
         --mapping "$nm_to_enst_tsv" --kind pm1 --assembly "$assembly"
         --cache-root "$(read_yaml "$config_file" cache_root)"
         --output-dir "$(read_yaml "$config_file" vep_plugins_cachedir)/AlphaMissense"
         "${mapping_inputs[@]}"
     )
-    python "${SCRIPT_DIR}/mapped_artifact_publish.py" recover \
-        --artifact "$pm1_regions_pkl" "${publication_args[@]}" || return 1
-    local original_pm1=$pm1_regions_pkl
-    if [[ -e "$pm1_regions_pkl" || -L "$pm1_regions_pkl" ||
-          -e "${pm1_regions_pkl}.nm_to_enst.json" || -L "${pm1_regions_pkl}.nm_to_enst.json" ]]; then
-        pm1_regions_pkl=$(python "${SCRIPT_DIR}/biomart_nm_to_enst.py" artifact-route \
-            --artifact "$pm1_regions_pkl" --mapping "$nm_to_enst_tsv" \
+    # Only priva mapped-artifact can finish a pending native publication.
+    "${PRIVA_BIN}" mapped-artifact recover \
+        --artifact "$pm1_regions" "${publication_args[@]}" || return 1
+    local original_pm1=$pm1_regions
+    if [[ -e "$pm1_regions" || -L "$pm1_regions" ||
+          -e "${pm1_regions}.nm_to_enst.json" || -L "${pm1_regions}.nm_to_enst.json" ]]; then
+        pm1_regions=$("${PRIVA_BIN}" biomart artifact-route --helper-root "$BASE_DIR" \
+            --artifact "$pm1_regions" --mapping "$nm_to_enst_tsv" \
             --cache-root "$(read_yaml "$config_file" cache_root)" \
             --output-dir "$(read_yaml "$config_file" vep_plugins_cachedir)/AlphaMissense" \
-            --assembly "$assembly" --kind pm1 --print-path "${mapping_inputs[@]}") || return 1
+            --assembly "$assembly" --kind pm1 --artifact-format rkyv \
+            --print-path "${mapping_inputs[@]}") || return 1
     fi
 
-    if [[ -f "$pm1_regions_pkl" && "$pm1_regions_pkl" -nt "$prepare_pm1_py" &&
-          "$pm1_regions_pkl" -nt "$all_intolerant_pkl" ]]; then
-        [[ "$pm1_regions_pkl" == "$original_pm1" ]] || \
-            update_yaml "$config_file" pm1_regions_pkl "$pm1_regions_pkl" || return 1
-        log "The PM1 regions file ${pm1_regions_pkl} is already generated, skip this step"
+    # The builder is a priva command, so a newer program rebuilds the regions.
+    if [[ -f "$pm1_regions" && "$pm1_regions" -nt "$PRIVA_BIN" &&
+          "$pm1_regions" -nt "$all_intolerant" ]]; then
+        [[ "$pm1_regions" == "$original_pm1" ]] || \
+            update_yaml "$config_file" pm1_regions_pkl "$pm1_regions" || return 1
+        log "The PM1 regions file ${pm1_regions} is already generated, skip this step"
         return 0
     fi
     log "Preparing PM1 regions (DAS + HCSeeker + RMC) …"
 
     local mapping_identity
-    mapping_identity=$(python "${SCRIPT_DIR}/biomart_nm_to_enst.py" identity \
-        "${nm_to_enst_tsv}" "${mapping_inputs[@]}") || return 1
+    mapping_identity=$("${PRIVA_BIN}" biomart identity --helper-root "$BASE_DIR" \
+        --mapping "${nm_to_enst_tsv}" "${mapping_inputs[@]}") || return 1
 
-    mkdir -p "$(dirname -- "$pm1_regions_pkl")" || return 1
-    python "${SCRIPT_DIR}/mapped_artifact_publish.py" run \
-    --artifact "$pm1_regions_pkl" --expected-identity "$mapping_identity" \
+    mkdir -p "$(dirname -- "$pm1_regions")" || return 1
+    "${PRIVA_BIN}" mapped-artifact run \
+    --artifact "$pm1_regions" --expected-identity "$mapping_identity" \
     "${publication_args[@]}" -- \
-    --config "$config_file" \
-    --output "$pm1_regions_pkl" \
     --assembly "$assembly" \
-    --threads "$threads" \
-    --nm_to_enst_tsv "${nm_to_enst_tsv}" \
-    --skip_das && \
-    update_yaml "${config_file}" "pm1_regions_pkl" "${pm1_regions_pkl}" && \
-    log "PM1 regions saved to ${pm1_regions_pkl}"
+    --nm-to-enst "${nm_to_enst_tsv}" \
+    --intolerant-domains "$all_intolerant" \
+    --hcseeker "$hcseeker_tsv" \
+    --rmc "$rmc_tsv" \
+    --output "$pm1_regions" && \
+    update_yaml "${config_file}" "pm1_regions_pkl" "${pm1_regions}" && \
+    log "PM1 regions saved to ${pm1_regions}"
 }
 
 
@@ -1893,6 +2114,58 @@ function priva_reverse_chain_file() {
 }
 
 
+# One gnomAD v4.1 joint sites chromosome in DIR: kept when it is a valid VCF,
+# downloaded otherwise; an index older than its VCF is rebuilt (wget keeps the
+# server times, so a fresh download can have an older index).
+function _gnomAD_fetch_chrom() {
+    local gnomAD_vcf_dir=${1} chr=${2}
+    local url=https://storage.googleapis.com/gcp-public-data--gnomad/release/4.1/vcf/joint/gnomad.joint.v4.1.sites.chr${chr}.vcf.bgz
+    local vcf=${gnomAD_vcf_dir}/gnomad.joint.v4.1.sites.chr${chr}.vcf.bgz
+    log "About to download the gnomAD v4.1 files for chr${chr} from the url ${url}"
+    if check_vcf_validity "${vcf}"; then
+        log "The gnomAD v4.1 file for chr${chr} is already downloaded to ${gnomAD_vcf_dir} and updated"
+    else
+        log "The gnomAD v4.1 file for chr${chr} (${vcf}) is not downloaded or not updated, now we start to download the files"
+        wget "${url}" -O "${vcf}" && \
+        wget "${url}.tbi" -O "${vcf}.tbi" || \
+        { log "Failed to download gnomAD chromosome ${chr}"; return 1; }
+        check_vcf_validity "${vcf}" || \
+        { log "Downloaded gnomAD chromosome ${chr} is invalid"; return 1; }
+    fi
+    if [[ ${vcf}.tbi -ot ${vcf} ]]; then
+        log "The index file is not updated, now we start to index the file"
+        tabix -f -p vcf "${vcf}" || \
+        { log "Failed to index gnomAD chromosome ${chr}"; return 1; }
+    fi
+}
+
+# Install task of one chromosome (conf/install_steps.json C1_chrN): fetch it
+# into gnomad_vcf_dir and record it as gnomad_download_chrN (not gnomad_vcf_chrN:
+# gnomAD_install takes a set gnomad_vcf_chrX as a gnomAD family you selected).
+function gnomAD_download_chrom() {
+    local config_file=${1} chr=${2} gnomAD_vcf_dir
+    gnomAD_vcf_dir=$(read_yaml "${config_file}" "gnomad_vcf_dir") || return 1
+    [[ -n $gnomAD_vcf_dir && $gnomAD_vcf_dir != null ]] || { log "ERROR: gnomad_vcf_dir is not set"; return 1; }
+    mkdir -p "$gnomAD_vcf_dir" || return 1
+    _gnomAD_fetch_chrom "$gnomAD_vcf_dir" "$chr" && \
+    update_or_append_yaml "${config_file}" "gnomad_download_chr${chr}" "${gnomAD_vcf_dir}/gnomad.joint.v4.1.sites.chr${chr}.vcf.bgz"
+}
+
+# Install task C1: link the 24 chromosome downloads (gnomad_download_chrN, each in
+# its own install folder) into gnomad_vcf_dir, where gnomAD_install finds them
+# complete and, for GRCh37, lifts them over.
+function gnomAD_collect_chroms() {
+    local config_file=${1} gnomAD_vcf_dir chr source
+    gnomAD_vcf_dir=$(read_yaml "${config_file}" "gnomad_vcf_dir") || return 1
+    mkdir -p "$gnomAD_vcf_dir" || return 1
+    for chr in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 X Y; do
+        source=$(read_yaml "${config_file}" "gnomad_download_chr${chr}") || return 1
+        [[ -s $source && -s $source.tbi ]] || { log "ERROR: gnomAD chromosome ${chr} download is missing: ${source}"; return 1; }
+        ln -sfn "$source" "${gnomAD_vcf_dir}/gnomad.joint.v4.1.sites.chr${chr}.vcf.bgz" && \
+        ln -sfn "$source.tbi" "${gnomAD_vcf_dir}/gnomad.joint.v4.1.sites.chr${chr}.vcf.bgz.tbi" || return 1
+    done
+}
+
 function gnomAD_install() {
     local config_file=${1}
     local hg19_fasta=${2:-$(read_yaml "${config_file}" "ref_genome")}
@@ -1913,18 +2186,20 @@ function gnomAD_install() {
     local selected_gnomad canonical_gnomad gnomad_vcf_dir
     selected_gnomad=$(read_yaml "$config_file" gnomad_vcf_chrX) || return 1
     gnomad_vcf_dir=$(read_yaml "$config_file" gnomad_vcf_dir) || return 1
-    canonical_gnomad=$(python "${SCRIPT_DIR}/gnomad_cache.py" default-path \
+    # main_install reaches this after PriVA_rust_install records priva_binary.
+    priva_resolve_binary "$config_file" || return 1
+    canonical_gnomad=$("${PRIVA_BIN}" gnomad-cache default-path \
         --cache-dir "$gnomad_vcf_dir" --assembly "$assembly") || return 1
     if [[ -n "$selected_gnomad" && "$selected_gnomad" != null ]]; then
         if [[ "$(realpath -ms -- "$selected_gnomad")" != "$(realpath -ms -- "$canonical_gnomad")" ]]; then
             # A selected target-assembly family is an input, not a request to
             # fetch another release or lift already selected target coordinates.
-            python "${SCRIPT_DIR}/gnomad_cache.py" validate --chr-x "$selected_gnomad" \
+            "${PRIVA_BIN}" gnomad-cache validate --chr-x "$selected_gnomad" \
                 --assembly "$assembly" --reference "$hg19_fasta" >/dev/null || return 1
             log "Reusing the selected complete indexed gnomAD family without changing its bytes: $selected_gnomad"
             return 0
         elif [[ -f "$selected_gnomad" ]] && \
-             python "${SCRIPT_DIR}/gnomad_cache.py" validate --chr-x "$selected_gnomad" \
+             "${PRIVA_BIN}" gnomad-cache validate --chr-x "$selected_gnomad" \
                  --assembly "$assembly" --reference "$hg19_fasta" >/dev/null 2>&1; then
             log "Reusing the complete managed gnomAD target-assembly family: $selected_gnomad"
             return 0
@@ -1941,22 +2216,7 @@ function gnomAD_install() {
     local gnomAD_vcf_dir=$(read_yaml "${config_file}" "gnomad_vcf_dir")
 
     for chr in "${chromosomes[@]}"; do
-        log "About to download the gnomAD v4.1 files for chr${chr} from the url https://storage.googleapis.com/gcp-public-data--gnomad/release/4.1/vcf/joint/gnomad.joint.v4.1.sites.chr${chr}.vcf.bgz"
-        if check_vcf_validity ${gnomAD_vcf_dir}/gnomad.joint.v4.1.sites.chr${chr}.vcf.bgz; then
-            log "The gnomAD v4.1 file for chr${chr} is already downloaded to ${gnomAD_vcf_dir} and updated"
-            if [[ ${gnomAD_vcf_dir}/gnomad.joint.v4.1.sites.chr${chr}.vcf.bgz.tbi -ot ${gnomAD_vcf_dir}/gnomad.joint.v4.1.sites.chr${chr}.vcf.bgz ]]; then
-                log "The index file is not updated, now we start to index the file"
-                tabix -f -p vcf ${gnomAD_vcf_dir}/gnomad.joint.v4.1.sites.chr${chr}.vcf.bgz || \
-                { log "Failed to index gnomAD chromosome ${chr}"; return 1; }
-            fi
-        else
-            log "The gnomAD v4.1 file for chr${chr} (${gnomAD_vcf_dir}/gnomad.joint.v4.1.sites.chr${chr}.vcf.bgz) is not downloaded or not updated, now we start to download the files"
-            wget https://storage.googleapis.com/gcp-public-data--gnomad/release/4.1/vcf/joint/gnomad.joint.v4.1.sites.chr${chr}.vcf.bgz -O ${gnomAD_vcf_dir}/gnomad.joint.v4.1.sites.chr${chr}.vcf.bgz && \
-            wget https://storage.googleapis.com/gcp-public-data--gnomad/release/4.1/vcf/joint/gnomad.joint.v4.1.sites.chr${chr}.vcf.bgz.tbi -O ${gnomAD_vcf_dir}/gnomad.joint.v4.1.sites.chr${chr}.vcf.bgz.tbi || \
-            { log "Failed to download gnomAD chromosome ${chr}"; return 1; }
-            check_vcf_validity "${gnomAD_vcf_dir}/gnomad.joint.v4.1.sites.chr${chr}.vcf.bgz" || \
-            { log "Downloaded gnomAD chromosome ${chr} is invalid"; return 1; }
-        fi
+        _gnomAD_fetch_chrom "$gnomAD_vcf_dir" "$chr" || return 1
     done
 
     log "The gnomAD v4.1 files are already downloaded to ${gnomAD_vcf_dir}, remember that the VCF records are 1-based and currently mapped to hg38 assembly"
@@ -2215,6 +2475,23 @@ function basic_vep_annotation() {
 
 
 
+# Install task D0: one ClinVar release (VCF, index, variant_summary and MANE)
+# in clinvar_vcf_dir/release, named for the annotation step (D1, through
+# ClinVar_install) as clinvar_release_inputs.
+function ClinVar_download() {
+    [[ $# -eq 2 && ${1:-} == --config ]] || {
+        log "ERROR: Use ClinVar_download --config CONFIG."
+        return 2
+    }
+    local config_file=$2 folder
+    folder=$(read_yaml "$config_file" clinvar_vcf_dir) || return 1
+    [[ -n $folder && $folder != null ]] || { log "ERROR: clinvar_vcf_dir is not set"; return 1; }
+    priva_resolve_binary "$config_file" || return 1
+    "${PRIVA_BIN}" clinvar-gene-refresh download \
+        --config "$config_file" --source-root "${BASE_DIR}" --output "$folder/release" && \
+    update_or_append_yaml "$config_file" clinvar_release_inputs "$folder/release/inputs.ready.json"
+}
+
 function ClinVar_install() {
     [[ $# -eq 2 && ${1:-} == --config ]] || {
         log "ERROR: Use ClinVar_install --config CONFIG."
@@ -2223,7 +2500,8 @@ function ClinVar_install() {
     # The helper checks official fileDate before deciding whether a completed
     # managed VCF is reusable. It calls the original scientific stage functions
     # on a private configuration and selects new statistics only after success.
-    python "${SCRIPT_DIR}/clinvar_gene_refresh.py" install \
+    priva_resolve_binary "$2" || return 1
+    "${PRIVA_BIN}" clinvar-gene-refresh install \
         --config "$2" --source-root "${BASE_DIR}"
 }
 
@@ -2233,7 +2511,8 @@ function ClinVar_VCF_deploy() {
     shift
     # 2026-10-23 CT: owned annotation reuse requires its bounded VEP/assembly
     # header. Keep mismatched/unknown generations before the original rebuild.
-    python "${SCRIPT_DIR}/clinvar_gene_refresh.py" deploy \
+    priva_resolve_binary "$config_file" || return 1
+    "${PRIVA_BIN}" clinvar-gene-refresh deploy \
         --config "$config_file" --source-root "$BASE_DIR" "$@"
 }
 
@@ -2254,9 +2533,8 @@ function _ClinVar_VCF_deploy() {
         esac
     done
     local contig_map=${DATA_DIR}/liftover/GRC_to_ucsc.contig.map.txt
-    local contract=${SCRIPT_DIR}/clinvar_annotation_contract.py
-    local refresh=${SCRIPT_DIR}/clinvar_gene_refresh.py
     [[ -f "$contig_map" ]] || { log "The contig map file ${contig_map} is not found"; return 1; }
+    priva_resolve_binary "$config_file" || return 1
     local CACHEDIR assembly_version ucsc_assembly_version clinvar_vcf threads assembly
     CACHEDIR=$(read_yaml "$config_file" "clinvar_vcf_dir")
     assembly=$(read_yaml "$config_file" "assembly")
@@ -2283,11 +2561,11 @@ function _ClinVar_VCF_deploy() {
     threads=$(read_yaml "$config_file" "threads")
     if [[ $explicit_input -eq 1 ]]; then
         [[ -z $pinned_source ]] || { log "ERROR: A pinned raw source cannot replace an explicitly selected annotated ClinVar VCF"; return 1; }
-        python "$refresh" check-header --config "$config_file" --source-root "$BASE_DIR" > /dev/null || return 1
+        "${PRIVA_BIN}" clinvar-gene-refresh check-header --config "$config_file" --source-root "$BASE_DIR" > /dev/null || return 1
         # The generic validity helper may repair an owned cache from a sibling
         # VCF. Explicit custom inputs are checked without repair or replacement.
         [[ -s "$clinvar_vcf" ]] && bcftools view -h "$clinvar_vcf" >/dev/null && \
-        python "$contract" "$clinvar_vcf" --stage complete || \
+        "${PRIVA_BIN}" clinvar-contract header --vcf "$clinvar_vcf" --stage complete || \
             { log "ERROR: Explicit ClinVar input is missing or lacks complete annotations: $clinvar_vcf; prepare it separately"; return 1; }
         case "$clinvar_vcf" in
             *.gz|*.bgz) bgzip -t "$clinvar_vcf" || return 1 ;;
@@ -2296,19 +2574,19 @@ function _ClinVar_VCF_deploy() {
         return 0
     fi
     if check_vcf_validity "$clinvar_vcf" && \
-       python "$refresh" check-header --config "$config_file" --source-root "$BASE_DIR" > /dev/null && \
-       python "$contract" "$clinvar_vcf" --stage complete; then
+       "${PRIVA_BIN}" clinvar-gene-refresh check-header --config "$config_file" --source-root "$BASE_DIR" > /dev/null && \
+       "${PRIVA_BIN}" clinvar-contract header --vcf "$clinvar_vcf" --stage complete; then
         update_yaml "$config_file" "clinvar_vcf" "$clinvar_vcf" || return 1
         log "Reusing ClinVar VCF with the complete statistics annotation contract: $clinvar_vcf"
         return 0
     fi
     # A completed VEP stage is reusable while population annotation waits.
     if ! { check_vcf_validity "$clinvar_vcf" && \
-           python "$refresh" check-header --config "$config_file" --source-root "$BASE_DIR" > /dev/null && \
-           python "$contract" "$clinvar_vcf" --stage vep; }; then
+           "${PRIVA_BIN}" clinvar-gene-refresh check-header --config "$config_file" --source-root "$BASE_DIR" > /dev/null && \
+           "${PRIVA_BIN}" clinvar-contract header --vcf "$clinvar_vcf" --stage vep; }; then
         local -a source_args=()
         [[ -z $pinned_source ]] || source_args=(--source-vcf "$pinned_source")
-        python "$refresh" retire-owned --config "$config_file" --source-root "$BASE_DIR" "${source_args[@]}" || return 1
+        "${PRIVA_BIN}" clinvar-gene-refresh retire-owned --config "$config_file" --source-root "$BASE_DIR" "${source_args[@]}" || return 1
         local source_vcf=${CACHEDIR}/clinvar.${assembly_version}.vcf.gz
         local converted_vcf=${CACHEDIR}/clinvar.${ucsc_assembly_version}.vcf.gz
         if [[ -n $pinned_source ]]; then
@@ -2328,20 +2606,173 @@ function _ClinVar_VCF_deploy() {
         # basic_vep_annotation lacks LoF/NMD/SpliceVault required for regeneration.
         # Prepare a cache candidate with the original official VEP invocation.
         # Deployment does not activate a changed scientific profile.
-        bash "${SCRIPT_DIR}/annotation_vcf.sh" anno_VEP_cache_candidate \
-            --input_vcf "$clinvar_vcf" --config "$config_file" --threads "$threads" || return 1
+        local vep_split
+        vep_split=$(read_yaml "$config_file" "clinvar_vep_split")
+        if [[ -n $vep_split && $vep_split != null ]]; then
+            # Install workflow: VEP already ran on each chromosome (install
+            # steps D1_chrN); gather their outputs for these records.
+            _ClinVar_vep_gather "$config_file" "$vep_split" "$converted_vcf" "$clinvar_vcf" || return 1
+        else
+            bash "${SCRIPT_DIR}/annotation_vcf.sh" anno_VEP_cache_candidate \
+                --input_vcf "$clinvar_vcf" --config "$config_file" --threads "$threads" || return 1
+        fi
         check_vcf_validity "$clinvar_vcf" || return 1
-        python "$refresh" check-header --config "$config_file" --source-root "$BASE_DIR" > /dev/null || return 1
-        python "$contract" "$clinvar_vcf" --stage vep || return 1
+        "${PRIVA_BIN}" clinvar-gene-refresh check-header --config "$config_file" --source-root "$BASE_DIR" > /dev/null || return 1
+        "${PRIVA_BIN}" clinvar-contract header --vcf "$clinvar_vcf" --stage vep || return 1
     fi
     local gnomad_vcf_chrX
     gnomad_vcf_chrX=$(read_yaml "$config_file" "gnomad_vcf_chrX")
     PRIVA_CLINVAR_RECOVERY_CONFIG="$config_file" \
         bash "${SCRIPT_DIR}/annotation_vcf.sh" anno_agg_gnomAD_data \
             "$clinvar_vcf" "$threads" "$assembly" "$gnomad_vcf_chrX" || return 1
-    python "$contract" "$clinvar_vcf" --stage complete || return 1
-    python "$refresh" check-header --config "$config_file" --source-root "$BASE_DIR" > /dev/null || return 1
+    "${PRIVA_BIN}" clinvar-contract header --vcf "$clinvar_vcf" --stage complete || return 1
+    "${PRIVA_BIN}" clinvar-gene-refresh check-header --config "$config_file" --source-root "$BASE_DIR" > /dev/null || return 1
     update_yaml "$config_file" "clinvar_vcf" "$clinvar_vcf"
+}
+
+
+# ClinVar VEP per chromosome (install workflow). VEP on the whole release took
+# 34 hours (job 1540983); on each chromosome it runs side by side. The route
+# with 22 forks per chromosome was compared with the whole-release run with 22
+# forks on 26 October 2026 (jobs 1524533 and 1524532): 4,597,985 ordered rows,
+# 4 rows differing only in HGNC_ID, no other difference. With 8 forks, domain
+# order differed, so the fork count stays 22 (ClinVar_vep_chrom).
+# The pieces, one install step each (D1_chrN): every other contig is in chrOther.
+function _clinvar_vep_pieces() {
+    printf '%s\n' chr1 chr2 chr3 chr4 chr5 chr6 chr7 chr8 chr9 chr10 chr11 chr12 chr13 chr14 \
+        chr15 chr16 chr17 chr18 chr19 chr20 chr21 chr22 chrX chrY chrOther
+}
+
+# The header lines of a bgzipped or plain VCF, without reading past them.
+function _vcf_header_lines() {
+    ( set +o pipefail; bgzip -dc -- "$1" | awk '/^#/ { print; next } { exit }' )
+}
+
+# Install task D1_split: rename the contigs of D0's release as
+# _ClinVar_VCF_deploy does, then write its records into one plain VCF per
+# chromosome (chr1..chr22, chrX, chrY; every other contig in chrOther), each
+# with the whole header. split.json lists the pieces and a hash of the records.
+function ClinVar_vep_split() {
+    local config_file=${1} folder release source assembly ucsc converted contig_map body name
+    local -a names
+    mapfile -t names < <(_clinvar_vep_pieces)
+    folder=$(read_yaml "$config_file" clinvar_vcf_dir) || return 1
+    [[ -n $folder && $folder != null ]] || { log "ERROR: clinvar_vcf_dir is not set"; return 1; }
+    release=$(read_yaml "$config_file" clinvar_release_inputs) || return 1
+    [[ -s $release ]] || { log "ERROR: clinvar_release_inputs (from D0) is missing: $release"; return 1; }
+    source=$(jq -r '.sources.vcf.path // empty' "$release") || return 1
+    [[ -s $source && -s $source.tbi ]] || { log "ERROR: D0's ClinVar VCF or its index is missing: $source"; return 1; }
+    assembly=$(read_yaml "$config_file" assembly)
+    case "$assembly" in
+        hg19|GRCh37) ucsc=hg19 ;;
+        hg38|GRCh38) ucsc=hg38 ;;
+        *) log "ERROR: Unsupported assembly for ClinVar: $assembly"; return 1 ;;
+    esac
+    contig_map=${DATA_DIR}/liftover/GRC_to_ucsc.contig.map.txt
+    [[ -f $contig_map ]] || { log "The contig map file ${contig_map} is not found"; return 1; }
+    folder=$(realpath -m -- "$folder/vep_split") || return 1
+    mkdir -p "$folder" || return 1
+    converted=$folder/clinvar.${ucsc}.vcf.gz
+    liftover_from_ucsc_to_GRCh "$source" "$contig_map" "$converted" || return 1
+    check_vcf_validity "$converted" || return 1
+    bgzip -dc -- "$converted" | awk -v dir="$folder" -v names="${names[*]}" '
+        BEGIN { n = split(names, list, " "); for (i = 1; i <= n; i++) known[list[i]] = 1 }
+        /^#/ { header = header $0 "\n"; next }
+        {
+            name = ($1 in known) ? $1 : "chrOther"
+            if (!(name in count)) { count[name] = 0; printf "%s", header > (dir "/" name ".vcf") }
+            print > (dir "/" name ".vcf"); count[name]++
+        }
+        END {
+            for (i = 1; i <= n; i++) {
+                if (!(list[i] in count)) { count[list[i]] = 0; printf "%s", header > (dir "/" list[i] ".vcf") }
+                print list[i] "\t" count[list[i]] > (dir "/counts.tsv")
+            }
+        }' || return 1
+    body=$(bgzip -dc -- "$converted" | grep -v '^#' | sha256sum | cut -c1-64) || return 1
+    local pieces="[]" records
+    for name in "${names[@]}"; do
+        records=$(awk -v n="$name" '$1 == n { print $2 }' "$folder/counts.tsv")
+        [[ $records =~ ^[0-9]+$ && -s $folder/$name.vcf ]] || { log "ERROR: ClinVar piece ${name} was not written"; return 1; }
+        pieces=$(jq -c --arg n "$name" --arg p "$folder/$name.vcf" --argjson r "$records" \
+            '. + [{name: $n, path: $p, records: $r}]' <<< "$pieces") || return 1
+    done
+    jq -n --arg source "$source" --arg converted "$converted" --arg body "$body" --argjson pieces "$pieces" \
+        '{kind: "priva-clinvar-vep-split-v1", source_vcf: $source, converted_vcf: $converted,
+          body_sha256: $body, records: ([$pieces[].records] | add), pieces: $pieces}' > "$folder/split.json" || return 1
+    log "Split $(jq .records "$folder/split.json") ClinVar records into ${#names[@]} pieces in $folder"
+    update_or_append_yaml "$config_file" clinvar_vep_split "$folder/split.json"
+}
+
+# Install task D1_chrN: VEP on one piece of D1_split, with the original VEP
+# command (anno_VEP_cache_worker) and 22 forks. VEP 116 starts up to forks + 1
+# children besides its parent, so the task needs 24 CPUs; the worker checks
+# that against SLURM_CPUS_PER_TASK. A piece without records has nothing to
+# annotate; its header-only file stands as the output.
+function ClinVar_vep_chrom() {
+    local config_file=${1} name=${2} manifest piece records folder threads
+    manifest=$(read_yaml "$config_file" clinvar_vep_split) || return 1
+    [[ -s $manifest ]] || { log "ERROR: clinvar_vep_split (from D1_split) is missing: $manifest"; return 1; }
+    piece=$(jq -r --arg n "$name" '.pieces[] | select(.name == $n) | .path' "$manifest") || return 1
+    records=$(jq -r --arg n "$name" '.pieces[] | select(.name == $n) | .records' "$manifest") || return 1
+    [[ -s $piece && $records =~ ^[0-9]+$ ]] || { log "ERROR: No ClinVar piece ${name} in $manifest"; return 1; }
+    folder=$(read_yaml "$config_file" clinvar_vcf_dir) || return 1
+    [[ -n $folder && $folder != null ]] || { log "ERROR: clinvar_vcf_dir is not set"; return 1; }
+    folder=$(realpath -m -- "$folder/vep_${name}") || return 1
+    mkdir -p "$folder" || return 1
+    threads=$(read_yaml "$config_file" threads)
+    [[ $threads =~ ^[1-9][0-9]*$ ]] || threads=1
+    if ((records == 0)); then
+        log "No ClinVar records on ${name}; nothing to annotate"
+        cp -- "$piece" "$folder/output.vcf" || return 1
+    else
+        bash "${SCRIPT_DIR}/annotation_vcf.sh" anno_VEP_cache_worker --config "$config_file" \
+            --input-vcf "$piece" --output-vcf "$folder/output.vcf" --stats-file "$folder/stats.html" \
+            --forks 22 || return 1
+    fi
+    bgzip -f -@ "$threads" -- "$folder/output.vcf" || return 1
+    update_or_append_yaml "$config_file" "clinvar_vep_${name}" "$folder/output.vcf.gz"
+}
+
+# D1, in _ClinVar_VCF_deploy: the per-chromosome VEP outputs in place of VEP on
+# the whole file. The records must be those D1_split annotated; the gathered
+# file is then sorted into TARGET as the whole-file route sorts VEP's output,
+# between the same candidate begin and complete records.
+function _ClinVar_vep_gather() {
+    local config_file=${1} manifest=${2} converted=${3} target=${4}
+    local body name records output first="" reference header total=0 written
+    [[ -s $manifest ]] || { log "ERROR: The ClinVar VEP split record is missing: $manifest"; return 1; }
+    body=$(bgzip -dc -- "$converted" | grep -v '^#' | sha256sum | cut -c1-64) || return 1
+    [[ $body == "$(jq -r .body_sha256 "$manifest")" ]] || {
+        log "ERROR: The per-chromosome VEP outputs were made from other ClinVar records than $converted"; return 1; }
+    local -a outputs=()
+    while IFS=$'\t' read -r name records; do
+        ((records > 0)) || continue
+        output=$(read_yaml "$config_file" "clinvar_vep_${name}") || return 1
+        [[ -s $output ]] || { log "ERROR: The VEP output for ${name} (clinvar_vep_${name}) is missing: $output"; return 1; }
+        # Pieces differ only in VEP's command line and start time.
+        header=$(_vcf_header_lines "$output" | grep -v '^##VEP-command-line=' | sed -E 's/ time="[^"]*"//' | sha256sum)
+        if [[ -z $first ]]; then first=$output reference=$header
+        elif [[ $header != "$reference" ]]; then
+            log "ERROR: The VEP header of ${name} differs from that of the first piece ($first)"; return 1
+        fi
+        outputs+=("$output"); total=$((total + records))
+    done < <(jq -r '.pieces[] | "\(.name)\t\(.records)"' "$manifest")
+    ((${#outputs[@]})) || { log "ERROR: No ClinVar VEP output to gather"; return 1; }
+    bash "${SCRIPT_DIR}/annotation_vcf.sh" anno_VEP_cache_candidate_phase \
+        --config "$config_file" --input-vcf "$target" --phase begin || return 1
+    {
+        _vcf_header_lines "$first"
+        for output in "${outputs[@]}"; do bgzip -dc -- "$output" | grep -v '^#'; done
+    } | bcftools sort -Oz -o "$target" - || return 1
+    tabix -f -p vcf "$target" || return 1
+    written=$(bcftools index -n "$target") || return 1
+    # VEP leaves out records whose first ALT is '.', so it writes at most as many.
+    ((written > 0 && written <= total)) || {
+        log "ERROR: Gathered ${written} VEP records for ${total} ClinVar records"; return 1; }
+    log "Gathered ${written} VEP records (from ${total} ClinVar records, ${#outputs[@]} pieces) into $target"
+    bash "${SCRIPT_DIR}/annotation_vcf.sh" anno_VEP_cache_candidate_phase \
+        --config "$config_file" --input-vcf "$target" --phase complete
 }
 
 
@@ -2356,7 +2787,8 @@ function ClinVar_Gene_stat () {
     esac
     # Low-level selected-file reuse. ClinVar_install owns date-triggered refresh
     # and never replaces the original bundled artifact.
-    python "${SCRIPT_DIR}/installer_prerequisites.py" "${config_file}" \
+    priva_resolve_binary "$config_file" || return 1
+    "${PRIVA_BIN}" installer-prerequisites "${config_file}" \
         --source-root "${BASE_DIR}" --stage clinvar || return 1
     update_or_append_yaml "${config_file}" "clinvar_gene_stat" "${clinvar_stat}" || return 1
     log "Reusing selected ClinVar gene statistics: ${clinvar_stat}"
@@ -2367,13 +2799,17 @@ function ClinVar_Gene_stat_regenerate () {
     local config_file=${1:?Supply CONFIG SUMMARY MANE OUTPUT for a separate candidate}
     local clinvar_summary=${2:?Supply the pinned ClinVar variant_summary table}
     local mane_summary=${3:?Supply the pinned MANE summary table}
-    local output_candidate=${4:?Supply a separate candidate output ending in .pkl.gz}
-    local clinvar_vcf threads configured_stat baseline
+    local output_candidate=${4:?Supply a separate candidate output ending in .rkyv}
+    local clinvar_vcf threads configured_stat baseline seed
     clinvar_vcf=$(read_yaml "$config_file" "clinvar_vcf")
     threads=$(read_yaml "$config_file" "threads")
     configured_stat=$(yaml_value_or_default "$config_file" "clinvar_gene_stat" "clinvar_2star_stats.pkl.gz")
+    # The Python builder iterated sets in a hash-seeded order; priva reproduces
+    # the order of one named seed.
+    seed=$(yaml_value_or_default "$config_file" "priva_python_hash_seed" 0)
+    [[ $seed =~ ^[0-9]+$ ]] || { log "ERROR: priva_python_hash_seed must be a non-negative integer: $seed"; return 1; }
     baseline=${DATA_DIR}/ClinVar/$(basename "$configured_stat")
-    [[ "$output_candidate" == *.pkl.gz ]] || { log "ERROR: Candidate output must end in .pkl.gz"; return 1; }
+    [[ "$output_candidate" == *.rkyv ]] || { log "ERROR: Candidate output must end in .rkyv"; return 1; }
     if [[ "$(realpath -m "$output_candidate")" == "$(realpath -m "$baseline")" ]] || \
        { [[ "$configured_stat" == /* ]] && [[ "$(realpath -m "$output_candidate")" == "$(realpath -m "$configured_stat")" ]]; } || \
        [[ "$(realpath -m "$output_candidate")" == "$(realpath -m "${DATA_DIR}/ClinVar/clinvar_2star_stats.pkl.gz")" ]] || \
@@ -2382,15 +2818,40 @@ function ClinVar_Gene_stat_regenerate () {
         return 1
     fi
     [[ -s "$clinvar_summary" && -s "$mane_summary" ]] || { log "ERROR: Explicit ClinVar summary and MANE inputs must both exist"; return 1; }
-    python "${SCRIPT_DIR}/clinvar_annotation_contract.py" "$clinvar_vcf" --stage gene || return 1
+    priva_resolve_binary "$config_file" || return 1
+    "${PRIVA_BIN}" clinvar-contract header --vcf "$clinvar_vcf" --stage gene || return 1
     mkdir -p "$(dirname "$output_candidate")" || return 1
-    local temporary=${output_candidate%.gz}.partial.$(randomID).gz
-    python "${SCRIPT_DIR}/clinvar_stat_variants.py" \
-        --clinvar_anno_vcf "$clinvar_vcf" --output_pickle "$temporary" --threads "$threads" \
-        --clinvar-summary "$clinvar_summary" --mane-summary "$mane_summary" --config "$config_file" || return 1
-    python "${SCRIPT_DIR}/clinvar_annotation_contract.py" "$temporary" --cache-kind gene || return 1
+    local temporary=${output_candidate%.rkyv}.partial.$(randomID).rkyv
+    "${PRIVA_BIN}" clinvar-gene-stats build --vcf "$clinvar_vcf" --output "$temporary" \
+        --python-hash-seed "$seed" --clinvar-summary "$clinvar_summary" --mane-summary "$mane_summary" \
+        --threads "$threads" --config "$config_file" || return 1
+    "${PRIVA_BIN}" clinvar-contract cache --input "$temporary" --kind gene || return 1
     mv -- "$temporary" "$output_candidate" || return 1
     log "Generated separate candidate ClinVar gene statistics: $output_candidate"
+}
+
+
+function clinvar_native_archive_path () {
+    # Print the native archive a ClinVar statistics builder writes for one
+    # configured value: the .rkyv sibling of a pickle value (an existing
+    # installation's cache-install prepare restores .pkl values), or the .rkyv
+    # value itself. An archive that cache-install publish copied into managed
+    # storage has a .source.json receipt and is never rebuilt in place; the
+    # builder writes the DEFAULT archive instead.
+    local value=${1:?Supply the configured ClinVar statistics path}
+    local default=${2:?Supply the default native archive path}
+    if [[ $value == *.rkyv ]]; then
+        if [[ -e ${value}.source.json ]]; then
+            value=$default
+        fi
+        printf '%s\n' "$value"
+        return 0
+    fi
+    case "$value" in
+        *.pkl.gz) value=${value%.pkl.gz} ;;
+        *.pkl) value=${value%.pkl} ;;
+    esac
+    printf '%s.rkyv\n' "$value"
 }
 
 
@@ -2402,13 +2863,17 @@ function ClinVar_AA_stat () {
     clinvar_splice_stat=$(read_yaml "$config_file" "clinvar_splice_stat")
     clinvar_vcf=$(read_yaml "$config_file" "clinvar_vcf")
     threads=$(read_yaml "$config_file" "threads")
-    python "$contract" "$clinvar_vcf" --stage aa || return 1
+    priva_resolve_binary "$config_file" || return 1
+    "${PRIVA_BIN}" clinvar-contract header --vcf "$clinvar_vcf" --stage aa || return 1
+    # Completed Python pickles of an existing installation remain reusable for
+    # one transition, with their checks and producer association.
     local receipt=${clinvar_aa_stat}.pair.ready.json
-    if [[ -s "$clinvar_aa_stat" && "$clinvar_aa_stat" -nt "$clinvar_vcf" && \
+    if [[ $clinvar_aa_stat != *.rkyv && $clinvar_splice_stat != *.rkyv && \
+          -s "$clinvar_aa_stat" && "$clinvar_aa_stat" -nt "$clinvar_vcf" && \
           -s "$clinvar_splice_stat" && "$clinvar_splice_stat" -nt "$clinvar_vcf" ]] && \
-       python "$contract" "$clinvar_aa_stat" --cache-kind aa && \
-       python "$contract" "$clinvar_splice_stat" --cache-kind splice && \
-       python "$contract" pair-check --vcf "$clinvar_vcf" --config "$config_file" \
+       "${PRIVA_BIN}" clinvar-contract legacy-cache --input "$clinvar_aa_stat" --kind aa && \
+       "${PRIVA_BIN}" clinvar-contract legacy-cache --input "$clinvar_splice_stat" --kind splice && \
+       "${PRIVA_BIN}" clinvar-contract pair-check --contract-source "$contract" --vcf "$clinvar_vcf" --config "$config_file" \
            --producer "${SCRIPT_DIR}/stat_aachange_clinvar.py" \
            --aa "$clinvar_aa_stat" --splice "$clinvar_splice_stat" --receipt "$receipt"; then
         log "Reusing validated ClinVar AA and splice statistics"
@@ -2417,25 +2882,47 @@ function ClinVar_AA_stat () {
     # Preserve configured managed destinations while keeping the original
     # paired builder and validation order. Publish neither result on failure.
     local aa splice
-    aa=$(yaml_value_or_default "$config_file" clinvar_aa_stat "${clinvar_vcf/.vcf*/.aa_change.stats.pkl}") || return 1
-    splice=$(yaml_value_or_default "$config_file" clinvar_splice_stat "${clinvar_vcf/.vcf*/.splice_change.stats.pkl}") || return 1
+    aa=$(yaml_value_or_default "$config_file" clinvar_aa_stat "${clinvar_vcf/.vcf*/.aa_change.stats.rkyv}") || return 1
+    aa=$(clinvar_native_archive_path "$aa" "${clinvar_vcf/.vcf*/.aa_change.stats.rkyv}") || return 1
+    splice=$(yaml_value_or_default "$config_file" clinvar_splice_stat "${clinvar_vcf/.vcf*/.splice_change.stats.rkyv}") || return 1
+    splice=$(clinvar_native_archive_path "$splice" "${clinvar_vcf/.vcf*/.splice_change.stats.rkyv}") || return 1
     [[ $aa != "$splice" && $aa != "$clinvar_vcf" && $splice != "$clinvar_vcf" ]] || {
         log "ERROR: ClinVar AA/splice outputs must be distinct from each other and the input VCF."
         return 1
     }
+    # The pair receipts hash the producer file. The native producer is the
+    # builder identity of priva clinvar-aa-splice, kept beside the AA archive;
+    # a replaced file never writes through a link to another file.
+    local producer=${aa}.builder_identity.json identity
+    identity=$("${PRIVA_BIN}" builder-identity clinvar-aa-splice) || return 1
+    if [[ -L $producer || ! -f $producer || $(< "$producer") != "$identity" ]]; then
+        mkdir -p -- "$(dirname -- "$producer")" || return 1
+        rm -f -- "$producer" || return 1
+        printf '%s\n' "$identity" > "$producer" || return 1
+    fi
+    receipt=${aa}.pair.ready.json
+    if [[ -s "$aa" && "$aa" -nt "$clinvar_vcf" && -s "$splice" && "$splice" -nt "$clinvar_vcf" ]] && \
+       "${PRIVA_BIN}" clinvar-contract cache --input "$aa" --kind aa && \
+       "${PRIVA_BIN}" clinvar-contract cache --input "$splice" --kind splice && \
+       "${PRIVA_BIN}" clinvar-contract pair-check --contract-source "$contract" --vcf "$clinvar_vcf" --config "$config_file" \
+           --producer "$producer" --aa "$aa" --splice "$splice" --receipt "$receipt"; then
+        [[ $aa == "$clinvar_aa_stat" ]] || update_yaml "$config_file" "clinvar_aa_stat" "$aa" || return 1
+        [[ $splice == "$clinvar_splice_stat" ]] || update_yaml "$config_file" "clinvar_splice_stat" "$splice" || return 1
+        log "Reusing validated native ClinVar AA and splice statistics"
+        return 0
+    fi
     mkdir -p -- "$(dirname -- "$aa")" "$(dirname -- "$splice")" || return 1
     local tag=$(randomID)
     local temporary_aa=${aa}.partial.${tag}
     local temporary_splice=${splice}.partial.${tag}
-    receipt=${aa}.pair.ready.json
     local captured=${temporary_aa}.inputs.json
-    python "$contract" pair-capture --vcf "$clinvar_vcf" --config "$config_file" \
-        --producer "${SCRIPT_DIR}/stat_aachange_clinvar.py" \
+    "${PRIVA_BIN}" clinvar-contract pair-capture --contract-source "$contract" --vcf "$clinvar_vcf" --config "$config_file" \
+        --producer "$producer" \
         --aa "$aa" --splice "$splice" --receipt "$receipt" --captured "$captured" || return 1
-    python "${SCRIPT_DIR}/stat_aachange_clinvar.py" "$clinvar_vcf" \
-        "$temporary_aa" "$temporary_splice" "$threads" || return 1
-    python "$contract" "$temporary_aa" --cache-kind aa || return 1
-    python "$contract" "$temporary_splice" --cache-kind splice || return 1
+    "${PRIVA_BIN}" clinvar-aa-splice build --vcf "$clinvar_vcf" \
+        --aa-output "$temporary_aa" --splice-output "$temporary_splice" --threads "$threads" || return 1
+    "${PRIVA_BIN}" clinvar-contract cache --input "$temporary_aa" --kind aa || return 1
+    "${PRIVA_BIN}" clinvar-contract cache --input "$temporary_splice" --kind splice || return 1
     # A paired completion is published only after both moves and YAML writes.
     # Failed builders retain the previous files; failed publication never leaves
     # an old ready association eligible for reuse.
@@ -2444,8 +2931,8 @@ function ClinVar_AA_stat () {
     mv -- "$temporary_splice" "$splice" || return 1
     update_yaml "$config_file" "clinvar_aa_stat" "$aa" || return 1
     update_yaml "$config_file" "clinvar_splice_stat" "$splice" || return 1
-    python "$contract" pair-complete --vcf "$clinvar_vcf" --config "$config_file" \
-        --producer "${SCRIPT_DIR}/stat_aachange_clinvar.py" \
+    "${PRIVA_BIN}" clinvar-contract pair-complete --contract-source "$contract" --vcf "$clinvar_vcf" --config "$config_file" \
+        --producer "$producer" \
         --aa "$aa" --splice "$splice" --receipt "$receipt" --captured "$captured" || return 1
     rm -f -- "$captured"
 }
@@ -2454,29 +2941,67 @@ function ClinVar_AA_stat () {
 function ClinVar_patho_AF_stat () {
     local config_file=${1}
     local clinvar_vcf threads
-    local contract=${SCRIPT_DIR}/clinvar_annotation_contract.py
     clinvar_vcf=$(read_yaml "$config_file" "clinvar_vcf")
     threads=$(read_yaml "$config_file" "threads")
-    local gene_pickle exon_pickle
-    gene_pickle=$(yaml_value_or_default "$config_file" clinvar_patho_af_stat "${clinvar_vcf/.vcf*/.patho_af_stat.pkl}")
-    exon_pickle=$(yaml_value_or_default "$config_file" clinvar_patho_exon_af_stat "${clinvar_vcf/.vcf*/.patho_exon_af_stat.pkl}")
+    priva_resolve_binary "$config_file" || return 1
+    local gene_archive exon_archive
+    gene_archive=$(yaml_value_or_default "$config_file" clinvar_patho_af_stat "${clinvar_vcf/.vcf*/.patho_af_stat.rkyv}") || return 1
+    gene_archive=$(clinvar_native_archive_path "$gene_archive" "${clinvar_vcf/.vcf*/.patho_af_stat.rkyv}") || return 1
+    exon_archive=$(yaml_value_or_default "$config_file" clinvar_patho_exon_af_stat "${clinvar_vcf/.vcf*/.patho_exon_af_stat.rkyv}") || return 1
+    exon_archive=$(clinvar_native_archive_path "$exon_archive" "${clinvar_vcf/.vcf*/.patho_exon_af_stat.rkyv}") || return 1
     # 2026-10-23 CDT: reject AF output aliases before mkdir or scientific writes.
-    python "$contract" af-paths-check --vcf "$clinvar_vcf" --config "$config_file" \
-        --gene "$gene_pickle" --exon "$exon_pickle" || return 1
-    python "$contract" "$clinvar_vcf" --stage af || return 1
-    mkdir -p -- "$(dirname -- "$gene_pickle")" "$(dirname -- "$exon_pickle")" || return 1
+    "${PRIVA_BIN}" clinvar-contract af-paths-check --vcf "$clinvar_vcf" --config "$config_file" \
+        --gene "$gene_archive" --exon "$exon_archive" || return 1
+    "${PRIVA_BIN}" clinvar-contract header --vcf "$clinvar_vcf" --stage af || return 1
+    mkdir -p -- "$(dirname -- "$gene_archive")" "$(dirname -- "$exon_archive")" || return 1
     local tag=$(randomID)
-    local temporary_gene=${gene_pickle}.partial.${tag}
-    local temporary_exon=${exon_pickle}.partial.${tag}
-    python "${SCRIPT_DIR}/stat_gene_patho_afs.py" "$clinvar_vcf" "$temporary_gene" "$threads" || return 1
-    python "$contract" "$temporary_gene" --cache-kind gene-af || return 1
-    python "${SCRIPT_DIR}/stat_exon_patho_afs.py" --vcf_path "$clinvar_vcf" \
-        --output "$temporary_exon" --threads "$threads" || return 1
-    python "$contract" "$temporary_exon" --cache-kind exon-af || return 1
-    mv -- "$temporary_gene" "$gene_pickle" || return 1
-    mv -- "$temporary_exon" "$exon_pickle" || return 1
-    update_yaml "$config_file" "clinvar_patho_af_stat" "$gene_pickle" || return 1
-    update_yaml "$config_file" "clinvar_patho_exon_af_stat" "$exon_pickle"
+    local temporary_gene=${gene_archive}.partial.${tag}
+    local temporary_exon=${exon_archive}.partial.${tag}
+    # Without a CSQ format the builders succeed without writing, as the Python
+    # builders did, so an absent archive is a failure here.
+    "${PRIVA_BIN}" clinvar-gene-af build --vcf "$clinvar_vcf" --output "$temporary_gene" --threads "$threads" || return 1
+    [[ -s $temporary_gene ]] || { log "ERROR: priva clinvar-gene-af wrote no archive for $clinvar_vcf"; return 1; }
+    "${PRIVA_BIN}" clinvar-contract cache --input "$temporary_gene" --kind gene-af || return 1
+    "${PRIVA_BIN}" clinvar-exon-af build --vcf "$clinvar_vcf" --output "$temporary_exon" --threads "$threads" || return 1
+    [[ -s $temporary_exon ]] || { log "ERROR: priva clinvar-exon-af wrote no archive for $clinvar_vcf"; return 1; }
+    "${PRIVA_BIN}" clinvar-contract cache --input "$temporary_exon" --kind exon-af || return 1
+    mv -- "$temporary_gene" "$gene_archive" || return 1
+    mv -- "$temporary_exon" "$exon_archive" || return 1
+    update_yaml "$config_file" "clinvar_patho_af_stat" "$gene_archive" || return 1
+    update_yaml "$config_file" "clinvar_patho_exon_af_stat" "$exon_archive"
+}
+
+
+function ClinVar_PM5_index () {
+    # PM5 in priva acmg-assign follows the residue rules of 30 October 2026, which
+    # need each confident pathogenic ClinVar change's consequence, NMD status and
+    # residue span. The amino-acid statistics do not hold these, so the program
+    # indexes the VEP-annotated ClinVar VCF itself (clinvar_pm5_index).
+    local config_file=${1}
+    local clinvar_vcf index
+    clinvar_vcf=$(read_yaml "$config_file" "clinvar_vcf")
+    [[ -s ${clinvar_vcf} ]] || { log "ERROR: The VEP-annotated ClinVar VCF is missing: ${clinvar_vcf}"; return 1; }
+    priva_resolve_binary "$config_file" || return 1
+    index=$(yaml_value_or_default "$config_file" clinvar_pm5_index "${clinvar_vcf/.vcf*/.pm5_index.tsv.gz}") || return 1
+    [[ ${index} == /*.tsv.gz && ${index} != "${clinvar_vcf}" ]] || {
+        log "ERROR: clinvar_pm5_index must be an absolute .tsv.gz path separate from the ClinVar VCF: ${index}"
+        return 1
+    }
+    # A new ClinVar VCF or a new build of the program makes a new index.
+    if [[ -s ${index} && ${index} -nt ${clinvar_vcf} && ${index} -nt ${PRIVA_BIN} ]]; then
+        log "Reusing the ClinVar PM5 index ${index}"
+        update_or_append_yaml "$config_file" clinvar_pm5_index "$index"
+        return
+    fi
+    "${PRIVA_BIN}" clinvar-contract header --vcf "$clinvar_vcf" --stage vep || return 1
+    mkdir -p -- "$(dirname -- "$index")" || return 1
+    local temporary=${index%.tsv.gz}.partial.$(randomID).tsv.gz
+    "${PRIVA_BIN}" clinvar-pm5-index --vcf "$clinvar_vcf" --output "$temporary" || {
+        rm -f -- "$temporary"
+        return 1
+    }
+    mv -- "$temporary" "$index" || return 1
+    update_or_append_yaml "$config_file" clinvar_pm5_index "$index"
 }
 
 
@@ -2497,7 +3022,11 @@ function Conservation_install() {
         return 1
     fi
 
-    local helper="${SCRIPT_DIR}/conservation_resource_check.py"
+    priva_resolve_binary "$config" || return 1
+    # The bigWig reader prefers the perl beside the active Python interpreter.
+    local tool_prefix
+    tool_prefix=$(type -P python) || { log "ERROR: No python executable on PATH for the Conservation check"; return 1; }
+    tool_prefix=$(dirname "$tool_prefix")
     local target="${CACHEDIR}/Conservation/gerp_conservation_scores.homo_sapiens.${assembly_version}.bw"
     local existed_file ref_genome
     existed_file=$(read_yaml "${config}" "conservation_file")
@@ -2506,7 +3035,8 @@ function Conservation_install() {
         if [[ -e "$existed_file" || -L "$existed_file" ]]; then
             # An explicit existing file keeps its own validated identity; the
             # configured download URL does not relabel it as archived release114.
-            python "$helper" --input "$existed_file" --assembly "$assembly_version" --reference "$ref_genome" || return 1
+            "${PRIVA_BIN}" conservation-resource validate --input "$existed_file" --assembly "$assembly_version" \
+                --reference "$ref_genome" --tool-prefix "$tool_prefix" || return 1
             log "Reusing validated configured Conservation file: $existed_file"
             return 0
         fi
@@ -2516,7 +3046,8 @@ function Conservation_install() {
         fi
     fi
     if [[ -e "$target" || -L "$target" ]]; then
-        python "$helper" --input "$target" --assembly "$assembly_version" --reference "$ref_genome" || return 1
+        "${PRIVA_BIN}" conservation-resource validate --input "$target" --assembly "$assembly_version" \
+            --reference "$ref_genome" --tool-prefix "$tool_prefix" || return 1
         update_yaml "$config" conservation_file "$target" || return 1
         log "Reusing validated Conservation target: $target"
         return 0
@@ -2536,8 +3067,8 @@ function Conservation_install() {
     [[ ! -L "${target}.partial" ]] || { log "ERROR: Refusing symlinked Conservation staging file"; return 1; }
     wget -c "$url" -O "${target}.partial" || \
         { log "Failed to download Conservation for ${assembly_version}; partial retained"; return 1; }
-    python "$helper" --input "${target}.partial" --assembly "$assembly_version" --reference "$ref_genome" \
-        --source-url "$url" --publish-to "$target" || return 1
+    "${PRIVA_BIN}" conservation-resource publish --input "${target}.partial" --assembly "$assembly_version" \
+        --reference "$ref_genome" --tool-prefix "$tool_prefix" --source-url "$url" --publish-to "$target" || return 1
     update_yaml "$config" conservation_file "$target" || return 1
     log "Conservation for ${assembly_version} is deployed to $target"
 }
@@ -2648,12 +3179,13 @@ function SpliceVault_install () {
         GRCh37|hg19|GRCh38|hg38) ;;
         *) log "Not supported assembly version: ${ASSEMBLY_VERSION}"; return 1 ;;
     esac
+    priva_resolve_binary "$config" || return 1
     local configured_prescore=$splicevault_prescore genome default_file
     case "$ASSEMBLY_VERSION" in hg19|GRCh37) genome=GRCh37 ;; *) genome=GRCh38 ;; esac
     default_file="${PLUGIN_CACHEDIR}/SpliceVault/SpliceVault_data_${genome}.tsv.gz"
     [[ -n "$splicevault_prescore" && "$splicevault_prescore" != null ]] || splicevault_prescore=$default_file
     if [[ -s "$splicevault_prescore" && -f "$splicevault_prescore" ]]; then
-        python "${SCRIPT_DIR}/indexed_plugin_cache.py" ensure-index \
+        "${PRIVA_BIN}" indexed-plugin-cache ensure-index \
             --input "$splicevault_prescore" --kind splicevault || return 1
         [[ "$splicevault_prescore" == "$configured_prescore" ]] || \
             update_yaml "$config" splicevault_prescore "$splicevault_prescore" || return 1
@@ -2689,7 +3221,7 @@ function SpliceVault_install () {
         fi
         bgzip -t "${PLUGIN_CACHEDIR}/SpliceVault/SpliceVault_data_GRCh38.tsv.gz" && \
         gunzip -c ${PLUGIN_CACHEDIR}/SpliceVault/SpliceVault_data_GRCh38.tsv.gz > ${PLUGIN_CACHEDIR}/SpliceVault/SpliceVault_data_GRCh38.tsv && \
-        python "${SCRIPT_DIR}/SpliceVault_tsv_vcf_conversion.py" \
+        "${PRIVA_BIN}" splicevault-convert \
         --input_tsv ${PLUGIN_CACHEDIR}/SpliceVault/SpliceVault_data_GRCh38.tsv \
         --output_tsv ${PLUGIN_CACHEDIR}/SpliceVault/SpliceVault_data_GRCh37.tsv \
         --chain_file "${chain_file}" \
@@ -2704,7 +3236,7 @@ function SpliceVault_install () {
         bgzip -t ${PLUGIN_CACHEDIR}/SpliceVault/SpliceVault_data_GRCh37.tsv.gz && \
         tabix -f -s 1 -b 2 -e 2 -c "#" ${PLUGIN_CACHEDIR}/SpliceVault/SpliceVault_data_GRCh37.tsv.gz && \
         tabix -l ${PLUGIN_CACHEDIR}/SpliceVault/SpliceVault_data_GRCh37.tsv.gz > /dev/null && \
-        python "${SCRIPT_DIR}/indexed_plugin_cache.py" ensure-index \
+        "${PRIVA_BIN}" indexed-plugin-cache ensure-index \
         --input "${PLUGIN_CACHEDIR}/SpliceVault/SpliceVault_data_GRCh37.tsv.gz" --kind splicevault && \
         update_yaml "${config}" "splicevault_prescore" "${PLUGIN_CACHEDIR}/SpliceVault/SpliceVault_data_GRCh37.tsv.gz" && \
         announce_remove_tmps ${PLUGIN_CACHEDIR}/SpliceVault/SpliceVault_data_GRCh37.tsv.header ${PLUGIN_CACHEDIR}/SpliceVault/SpliceVault_data_GRCh37.tsv.body || \
@@ -2716,7 +3248,7 @@ function SpliceVault_install () {
         wget -c "$splicevault_url" -O "$staged_file" && \
         wget -c "${splicevault_url}.tbi" -O "${staged_file}.tbi" && \
         bgzip -t "$staged_file" && tabix -l "$staged_file" > /dev/null && \
-        python "${SCRIPT_DIR}/indexed_plugin_cache.py" ensure-index --input "$staged_file" --kind splicevault && \
+        "${PRIVA_BIN}" indexed-plugin-cache ensure-index --input "$staged_file" --kind splicevault && \
         mv "${staged_file}.tbi" "${default_file}.tbi" && mv "$staged_file" "$default_file" && \
         rmdir "$stage" && update_yaml "${config}" "splicevault_prescore" "$default_file" || \
         { log "Failed to deploy indexed SpliceVault for ${ASSEMBLY_VERSION}"; return 1; }
@@ -2773,8 +3305,11 @@ LOFTEE_VALIDATION_PY
     [[ $? -eq 0 ]] || return 1
     if [[ "$assembly" == hg38 || "$assembly" == GRCh38 ]]; then
         reference=$(read_yaml "$config" ref_genome)
-        python "${SCRIPT_DIR}/conservation_resource_check.py" --input "$gerp" \
-            --assembly "$assembly" --reference "$reference" || return 1
+        priva_resolve_binary "$config" || return 1
+        local tool_prefix
+        tool_prefix=$(type -P python) || { log "ERROR: No python executable on PATH for the GERP check"; return 1; }
+        "${PRIVA_BIN}" conservation-resource validate --input "$gerp" --assembly "$assembly" \
+            --reference "$reference" --tool-prefix "$(dirname "$tool_prefix")" || return 1
     fi
 }
 
@@ -3136,6 +3671,8 @@ function priva_clingen_download() {
         esac
     done
     [[ -n $url && -n $output && -n $kind && ! -d $output ]] || return 2
+    # ClinGen_deploy resolves the program from its configuration first.
+    [[ -n ${PRIVA_BIN:-} ]] || priva_resolve_binary || return 1
     mkdir -p -- "$(dirname -- "$output")" || return 1
     local staged
     staged=$(mktemp "${output}.download.XXXXXX") || return 1
@@ -3145,11 +3682,11 @@ function priva_clingen_download() {
         return 1
     }
     [[ -s $staged ]] || { log "The downloaded ClinGen resource is missing or empty; retained stage: $staged"; return 1; }
-    python "${SCRIPT_DIR}/mechanism_source_input.py" validate --input "$staged" --kind "$kind" || {
+    "${PRIVA_BIN}" mechanism-source validate --input "$staged" --kind "$kind" || {
         log "Invalid downloaded ClinGen source; prior file unchanged, retained stage: $staged"
         return 1
     }
-    python "${SCRIPT_DIR}/mechanism_source_input.py" record-source --input "$staged" --url "$url" || return 1
+    "${PRIVA_BIN}" mechanism-source record-source --input "$staged" --url "$url" || return 1
     [[ ! -L ${output}.source.pending.json && ! -d ${output}.source.pending.json ]] || return 1
     mv -T -- "${staged}.source.json" "${output}.source.pending.json" &&
     mv -T -- "$staged" "$output" &&
@@ -3159,6 +3696,7 @@ function priva_clingen_download() {
 
 function ClinGen_deploy() {
     local config_file=${1}
+    priva_resolve_binary "$config_file" || return 1
     local assembly=$(read_yaml "${config_file}" "assembly")
     local clinvar_vcf=$(read_yaml "${config_file}" "clinvar_vcf")
     local bundle_assembly
@@ -3206,9 +3744,9 @@ function ClinGen_deploy() {
 
     if [[ ${bundled_erepo:-0} -eq 0 && ( -e ${erepo_file}.source.pending.json || -L ${erepo_file}.source.pending.json ) ]]; then
         [[ -f ${erepo_file}.source.pending.json && ! -L ${erepo_file}.source.pending.json ]] || return 1
-        python "${SCRIPT_DIR}/mechanism_source_input.py" check-source --input "$erepo_file" --url "$clingen_url" \
+        "${PRIVA_BIN}" mechanism-source check-source --input "$erepo_file" --url "$clingen_url" \
             --receipt "${erepo_file}.source.pending.json" --metadata-only || return 1
-        if python "${SCRIPT_DIR}/mechanism_source_input.py" check-source --input "$erepo_file" --url "$clingen_url" --receipt "${erepo_file}.source.pending.json"; then
+        if "${PRIVA_BIN}" mechanism-source check-source --input "$erepo_file" --url "$clingen_url" --receipt "${erepo_file}.source.pending.json"; then
             mv -T -- "${erepo_file}.source.pending.json" "${erepo_file}.source.json" || return 1
         else download=1; fi
     fi
@@ -3220,10 +3758,18 @@ function ClinGen_deploy() {
     [[ -s "$erepo_file" ]] || \
     { log "The ClinGen eRepo resource is missing or empty"; return 1; }
 
-    python "${SCRIPT_DIR}/prepare_clingen_map.py" \
-    -v "${clinvar_vcf}" \
-    -t "${erepo_file}" \
-    -o "${clingen_map}" && \
+    # priva clingen-map writes a native archive under cache_root, never into the
+    # repository data folder; cache-install publish adopts it from the build config.
+    priva_resolve_binary "$config_file" || return 1
+    local cache_root
+    cache_root=$(read_yaml "$config_file" cache_root) || return 1
+    [[ ${cache_root} == /* ]] || { log "ERROR: Configure an absolute cache_root before building the ClinGen map"; return 1; }
+    clingen_map=${cache_root%/}/ClinGen/clingen_map.${bundle_assembly}.rkyv
+    mkdir -p "$(dirname "$clingen_map")" && \
+    "${PRIVA_BIN}" clingen-map build \
+    --clinvar-vcf "${clinvar_vcf}" \
+    --clingen-tab "${erepo_file}" \
+    --output "${clingen_map}" && \
     update_yaml "${config_file}" "clingen_map" "${clingen_map}" || \
     { log "Failed to prepare or configure the ClinGen map"; return 1; }
 
@@ -3242,14 +3788,14 @@ function ClinGen_deploy() {
     local dosage_identity_changed=0
     if [[ -e ${dosage_file}.source.pending.json || -L ${dosage_file}.source.pending.json ]]; then
         [[ -f ${dosage_file}.source.pending.json && ! -L ${dosage_file}.source.pending.json ]] || return 1
-        python "${SCRIPT_DIR}/mechanism_source_input.py" check-source --input "$dosage_file" --url "$dosage_url" \
+        "${PRIVA_BIN}" mechanism-source check-source --input "$dosage_file" --url "$dosage_url" \
             --receipt "${dosage_file}.source.pending.json" --metadata-only || return 1
-        if python "${SCRIPT_DIR}/mechanism_source_input.py" check-source --input "$dosage_file" --url "$dosage_url" --receipt "${dosage_file}.source.pending.json"; then
+        if "${PRIVA_BIN}" mechanism-source check-source --input "$dosage_file" --url "$dosage_url" --receipt "${dosage_file}.source.pending.json"; then
             mv -T -- "${dosage_file}.source.pending.json" "${dosage_file}.source.json" || return 1
         else dosage_identity_changed=1; fi
     fi
     if [[ -e ${dosage_file}.source.json || -L ${dosage_file}.source.json ]]; then
-        python "${SCRIPT_DIR}/mechanism_source_input.py" check-source --input "$dosage_file" --url "$dosage_url" || dosage_identity_changed=1
+        "${PRIVA_BIN}" mechanism-source check-source --input "$dosage_file" --url "$dosage_url" || dosage_identity_changed=1
     elif [[ $dosage_identity_changed -eq 0 && -e $dosage_file && $dosage_url != "http://ftp.clinicalgenome.org/ClinGen_gene_curation_list_${url_assembly}.tsv" &&
             $dosage_url != "https://ftp.clinicalgenome.org/ClinGen_gene_curation_list_${url_assembly}.tsv" ]]; then
         log "ERROR: Existing selected ClinGen dosage has no receipt for the nondefault URL; preserve that input and select a new managed output for acquisition."
@@ -3271,7 +3817,7 @@ function ClinGen_deploy() {
     # Preserve an acquired source receipt across the original header filter.
     # Existing unreceipted manual/default tables are never assigned guessed provenance.
     if [[ -f ${dosage_file}.source.json ]]; then
-        python "${SCRIPT_DIR}/mechanism_source_input.py" record-source --input "$dosage_file" --url "$dosage_url" || return 1
+        "${PRIVA_BIN}" mechanism-source record-source --input "$dosage_file" --url "$dosage_url" || return 1
     fi
     update_yaml "${config_file}" "gene_dosage_sensitivity" "${dosage_file}" || \
     { log "Failed to prepare or configure the ClinGen dosage sensitivity resource"; return 1; }
@@ -3350,7 +3896,10 @@ function priva_prepare_reference_resources() {
     local config_file=${1}
     local scope=${2}
     # The helper quotes paths and saves them only after all inputs are ready.
-    python "${SCRIPT_DIR}/reference_resources.py" install "${config_file}" \
+    # main_install and the GoFCards build reach this after PriVA_rust_install
+    # records priva_binary.
+    priva_resolve_binary "$config_file" || return 1
+    "${PRIVA_BIN}" reference-resources install "${config_file}" \
         --data-dir "${DATA_DIR}" --scope "${scope}" --write-config --use-cache-root
 }
 
@@ -3617,119 +4166,15 @@ function validate_gofcards_exact_gof_cache() {
     shift
     [[ -s ${gofcards_json} ]] || { log "ERROR: Missing/empty GoFCards cache: ${gofcards_json}"; return 1; }
 
-    python - "${gofcards_json}" "$@" <<'GOFPY'
-import gzip
-import json
-import re
-import sys
-
-path = sys.argv[1]
-expected_provenance = sys.argv[2:]
-opener = gzip.open if path.endswith(".gz") else open
-with opener(path, "rt", encoding="utf-8") as handle:
-    cache = json.load(handle)
-
-for key in ("metadata", "genes"):
-    if key not in cache:
-        raise SystemExit(f"{path} has no top-level {key!r} block")
-meta = cache["metadata"]
-if meta.get("source") != "GoFCards":
-    raise SystemExit(f"{path} metadata does not declare GoFCards as the source")
-if meta.get("mechanism") != "GOF":
-    raise SystemExit(f"{path} metadata does not declare GOF as the mechanism")
-
-for pair in expected_provenance:
-    key, _, want = pair.partition("=")
-    if not want:
-        continue
-    # A dotted key walks into a nested block, so a caller can ask about
-    # "clinvar.injector_sha256" as easily as about a value recorded at the top.
-    have = meta
-    for part in key.split("."):
-        have = have.get(part) if isinstance(have, dict) else None
-    if str(have) != want:
-        raise SystemExit(
-            f"{path} was built with {key}={have!r}, but {want!r} is configured now"
-        )
-
-# loc_<chrom>:<start>:<ref>-><alt>_grch37
-VARIANT_ID = re.compile(r"^loc_[0-9XYMT]+:\d+:[ACGTN-]+->[ACGTN-]+_grch37$")
-ELIGIBLE = "eligible"
-ALLOWED = {
-    ELIGIBLE,
-    "quarantined_gene_discordance",
-    "quarantined_allele_gene_discordance",
-    "quarantined_missing_source_gene",
-    "quarantined_reviewed_lof",
-    "quarantined_reviewed_mixed",
-    "quarantined_reviewed_dominant_negative",
-    "quarantined_reviewed_uncertain",
-    "quarantined_reviewed_exclude",
-    "quarantined_mechanism_review_required",
+    [[ -n ${PRIVA_BIN:-} ]] || priva_resolve_binary || return 1
+    "${PRIVA_BIN}" gofcards-cache-validate "${gofcards_json}" "$@"
 }
-genes = variants = eligible = quarantined = with_protein = with_hg38 = evidence = 0
-hgvsc_keys = hgvsp_keys = 0
-for symbol, gene in cache["genes"].items():
-    genes += 1
-    if not symbol.strip():
-        raise SystemExit(f"{path} has an empty gene symbol key")
-    for vid, variant in (gene.get("variants") or {}).items():
-        variants += 1
-        if not VARIANT_ID.match(vid):
-            raise SystemExit(f"{path}: {symbol}/{vid} is not a well-formed variant identifier")
-        record = variant.get("record") or {}
-        state = (record.get("eligibility") or {}).get("status", "")
-        if state not in ALLOWED:
-            raise SystemExit(f"{path}: {symbol}/{vid} has unknown eligibility {state!r}")
-        assemblies = variant.get("assemblies") or {}
-        if not assemblies:
-            raise SystemExit(f"{path}: {symbol}/{vid} is present on no assembly")
-        protein = coding = False
-        for assembly, block in assemblies.items():
-            if assembly not in ("hg19", "hg38"):
-                raise SystemExit(f"{path}: {symbol}/{vid} has unknown assembly {assembly!r}")
-            coords = block.get("genomic") or {}
-            if not coords.get("chrom") or not isinstance(coords.get("pos"), int):
-                raise SystemExit(f"{path}: {symbol}/{vid}/{assembly} has no usable coordinates")
-            if not coords.get("ref") or not coords.get("alt"):
-                raise SystemExit(f"{path}: {symbol}/{vid}/{assembly} has no reference or alternate")
-            for transcript, view in (block.get("transcripts") or {}).items():
-                by_c = view.get("by_hgvsc") or {}
-                by_p = view.get("by_hgvsp") or {}
-                hgvsc_keys += len(by_c)
-                hgvsp_keys += len(by_p)
-                if by_c: coding = True
-                if by_p: protein = True
-                for hgvsp, coding_keys in by_p.items():
-                    if not isinstance(coding_keys, list) or not coding_keys:
-                        raise SystemExit(f"{path}: {symbol}/{vid} protein key {hgvsp!r} maps to no coding change")
-                    for ck in coding_keys:
-                        if ck not in by_c:
-                            raise SystemExit(f"{path}: {symbol}/{vid} protein key {hgvsp!r} points at unknown {ck!r}")
-        if "hg38" in assemblies: with_hg38 += 1
-        if protein: with_protein += 1
-        if state == ELIGIBLE:
-            eligible += 1
-            if not (protein or coding or assemblies):
-                raise SystemExit(f"{path}: {symbol}/{vid} is eligible but offers no match route")
-        else:
-            quarantined += 1
-            if not (record.get("eligibility") or {}).get("reason"):
-                raise SystemExit(f"{path}: {symbol}/{vid} is quarantined without a reason")
-        evidence += len(record.get("evidence") or [])
 
-if variants == 0:
-    raise SystemExit(f"{path} contains no variants")
-if eligible == 0:
-    raise SystemExit(f"{path} contains no runtime-eligible variants")
-if with_protein == 0:
-    raise SystemExit(f"{path} contains no variant with a protein-change key")
-print(
-    f"gofcards_genes={genes}; variants={variants}; eligible={eligible}; "
-    f"quarantined={quarantined}; with_protein_key={with_protein}; on_hg38={with_hg38}; "
-    f"hgvsc_keys={hgvsc_keys}; hgvsp_keys={hgvsp_keys}; evidence_entries={evidence}"
-)
-GOFPY
+
+function gofcards_clinvar_injector_is_default() {
+    # The checkout's own injector runs as priva gofcards-clinvar-injection. A
+    # separately configured injector script keeps running with python.
+    [[ $(realpath -m -- "${1}") == $(realpath -m -- "${SCRIPT_DIR}/inject_clinvar_into_gofcards.py") ]]
 }
 
 
@@ -3774,6 +4219,7 @@ function gofcards_clinvar_injection_install() {
         return 1
     }
     [[ -s ${clinvar_xml} ]] || { log "ERROR: ClinVar VCV XML not found: ${clinvar_xml}"; return 1; }
+    priva_resolve_binary "$config_file" || return 1
 
     local configured_raw_dir managed_clinvar_xml custom_vcv_sha256="" custom_vcv_identity="" digest_output
     local -a vcv_digest_arg=()
@@ -3843,7 +4289,10 @@ function gofcards_clinvar_injection_install() {
 
     if [[ ${reinject} -eq 1 ]]; then
         log "Injecting ClinVar VCV conditions into GoFCards variants -> ${target_json}"
-        python "${injector}" \
+        local -a injector_command=(python "${injector}")
+        gofcards_clinvar_injector_is_default "${injector}" && \
+            injector_command=("${PRIVA_BIN}" gofcards-clinvar-injection --source-root "${BASE_DIR}")
+        "${injector_command[@]}" \
             --gofcards-cache "${source_cache}" \
             --clinvar-vcv "${clinvar_xml}" \
             "${vcv_digest_arg[@]}" \
@@ -3910,13 +4359,21 @@ function gofcards_vep_caches_install() {
             }
             mkdir -p -- "${cache_dir}" "${plugins_dir}" || return 1
             vep_cache_api_install --VEP_VERSION "${version}" --VEP_CACHEDIR "${cache_dir}" \
-                --VEP_PLUGINSDIR "${plugins_dir}" --VEP_ASSEMBLY "${assembly}" || return 1
+                --VEP_PLUGINSDIR "${plugins_dir}" --VEP_ASSEMBLY "${assembly}" \
+                --config "${config_file}" || return 1
         fi
         priva_validate_vep_cache "${directory}" "${assembly}" || {
             log "ERROR: GoFCards requires a complete VEP ${version} ${assembly} merged cache: ${directory}"
             return 1
         }
     done
+}
+
+
+function gofcards_builder_is_default() {
+    # The checkout's own builder runs as priva gofcards-exact-gof. A separately
+    # configured builder script keeps running with python.
+    [[ $(realpath -m -- "${1}") == $(realpath -m -- "${SCRIPT_DIR}/build_gofcards_exact_gof_cache.py") ]]
 }
 
 
@@ -3995,6 +4452,7 @@ function gofcards_exact_gof_cache_install() {
        [[ "${PRIVA_FORCE_ALL_CACHES:-0}" == "1" ]] || [[ ! -s ${target_tsv} ]]; then
         rebuild=1
     else
+        priva_resolve_binary "$config_file" || return 1
         local source_file
         for source_file in "${builder_script}" "${review_tsv}" "${hgnc_table}" \
                            "${chain_file}" "${hg19_fasta}" "${hg38_fasta}"; do
@@ -4037,7 +4495,8 @@ function gofcards_exact_gof_cache_install() {
         --allow-pinned-reference-defaults --source-root "${BASE_DIR}")
     # This build route prepares both exact-release caches after references.
     [[ ${PRIVA_SMOKE_SKIP_VEP:-0} == 1 ]] || prerequisite_args+=(--allow-missing-merged-caches)
-    python "${SCRIPT_DIR}/installer_prerequisites.py" "${config_file}" \
+    priva_resolve_binary "$config_file" || return 1
+    "${PRIVA_BIN}" installer-prerequisites "${config_file}" \
         "${prerequisite_args[@]}" || return 1
     [[ -f ${builder_script} ]] || { log "ERROR: GoFCards builder not found: ${builder_script}"; return 1; }
     [[ ${mode} == --main-preflight ]] && return 0
@@ -4053,13 +4512,16 @@ function gofcards_exact_gof_cache_install() {
     hg38_fasta=$(read_yaml "${config_file}" "gofcards_hg38_fasta")
     chain_file=$(read_yaml "${config_file}" "gofcards_hg19_to_hg38_chain")
     gofcards_vep_caches_install "${config_file}" || return 1
-    python "${SCRIPT_DIR}/installer_prerequisites.py" "${config_file}" --stage gofcards \
+    priva_resolve_binary "$config_file" || return 1
+    "${PRIVA_BIN}" installer-prerequisites "${config_file}" --stage gofcards \
         --vep-version "${vep_version}" --source-root "${BASE_DIR}" || return 1
 
     mkdir -p "$(dirname "${target_tsv}")" "${workdir}" || return 1
 
     log "Building GoFCards exact GOF cache -> ${target_tsv}"
-    python "${builder_script}" \
+    local -a builder_command=(python "${builder_script}")
+    gofcards_builder_is_default "${builder_script}" && builder_command=("${PRIVA_BIN}" gofcards-exact-gof)
+    "${builder_command[@]}" \
         --workdir "${workdir}" \
         --out-json "${target_tsv}" \
         --hg19-fasta "${hg19_fasta}" \
@@ -4087,14 +4549,31 @@ function gofcards_exact_gof_cache_install() {
 }
 
 
+function gene_nonlof_mechanism_builder_is_default() {
+    # The checkout's own builder runs as priva gene-nonlof-mechanism, whose
+    # build receipt keeps that script's SHA-256, so either one reuses the
+    # other's cache. A separately configured builder script keeps running
+    # with python.
+    [[ $(realpath -m -- "${1}") == $(realpath -m -- "${SCRIPT_DIR}/build_gene_nonlof_mechanism_cache.py") ]]
+}
+
+
 function validate_gene_nonlof_mechanism_cache() {
     local builder_script=${1}
     local cache_json=${2}
     local schema_json=${3}
+    local config_file=${4:-}
 
     [[ -f ${builder_script} ]] || { log "ERROR: Non-LOF builder not found: ${builder_script}"; return 1; }
     [[ -s ${cache_json} ]] || { log "ERROR: Missing/empty non-LOF cache: ${cache_json}"; return 1; }
     [[ -s ${schema_json} ]] || { log "ERROR: Missing/empty non-LOF schema: ${schema_json}"; return 1; }
+    if [[ -n ${config_file} ]] && gene_nonlof_mechanism_builder_is_default "${builder_script}"; then
+        priva_resolve_binary "${config_file}" || return 1
+        "${PRIVA_BIN}" gene-nonlof-mechanism --source-root "${BASE_DIR}" \
+            --output-schema "${schema_json}" \
+            --validate-only "${cache_json}"
+        return
+    fi
     python "${builder_script}" \
         --output-schema "${schema_json}" \
         --validate-only "${cache_json}"
@@ -4163,8 +4642,12 @@ function gene_nonlof_mechanism_cache_install() {
     fi
     mkdir -p "${cache_dir}" "${raw_dir}" "$(dirname "${cache_json}")" || return 1
 
+    local -a builder_command=(python "${builder_script}")
+    if gene_nonlof_mechanism_builder_is_default "${builder_script}"; then
+        priva_resolve_binary "${config_file}" || return 1
+        builder_command=("${PRIVA_BIN}" gene-nonlof-mechanism --source-root "${BASE_DIR}")
+    fi
     local -a builder_args=(
-        "${builder_script}"
         --cache-dir "${cache_dir}"
         --shared-raw-dir "${raw_dir}"
         --gofcards-exact-variants "${gofcards_variants}"
@@ -4198,7 +4681,7 @@ function gene_nonlof_mechanism_cache_install() {
     else
         log "Checking PriVA non-LOF/ClinVar mechanism sources and rebuilding only when inputs changed"
     fi
-    python "${builder_args[@]}" || {
+    "${builder_command[@]}" "${builder_args[@]}" || {
         log "ERROR: PriVA non-LOF mechanism builder failed (mode=${mode})"
         return 1
     }
@@ -4220,7 +4703,7 @@ function gene_nonlof_mechanism_cache_install() {
     fi
 
     validate_gene_nonlof_mechanism_cache \
-        "${builder_script}" "${cache_json}" "${schema_json}" || {
+        "${builder_script}" "${cache_json}" "${schema_json}" "${config_file}" || {
         log "ERROR: PriVA non-LOF mechanism cache validation failed"
         return 1
     }
@@ -4232,13 +4715,29 @@ function gene_nonlof_mechanism_cache_install() {
 }
 
 
+function hpo_condition_mechanism_builder_is_default() {
+    # The checkout's own builder runs as priva hpo-condition-mechanism, which
+    # records that script as the cache's builder source, so either one accepts
+    # the other's cache. A separately configured builder script keeps running
+    # with python.
+    [[ $(realpath -m -- "${1}") == $(realpath -m -- "${SCRIPT_DIR}/build_hpo_condition_mechanism_cache.py") ]]
+}
+
+
 function validate_hpo_condition_mechanism_cache() {
     local builder_script=${1}
     local cache_json=${2}
-    shift 2
+    local config_file=${3}
+    shift 3
 
     [[ -f ${builder_script} ]] || { log "ERROR: HPO condition mechanism builder not found: ${builder_script}"; return 1; }
     [[ -s ${cache_json} ]] || { log "ERROR: Missing/empty HPO condition mechanism cache: ${cache_json}"; return 1; }
+    if hpo_condition_mechanism_builder_is_default "${builder_script}"; then
+        priva_resolve_binary "${config_file}" || return 1
+        "${PRIVA_BIN}" hpo-condition-mechanism --source-root "${BASE_DIR}" \
+            --validate-only "${cache_json}" "$@"
+        return
+    fi
     python "${builder_script}" --validate-only "${cache_json}" "$@"
 }
 
@@ -4291,14 +4790,19 @@ function hpo_condition_mechanism_cache_install() {
        [[ "${PRIVA_FORCE_ALL_CACHES:-0}" == "1" ]] || [[ ! -s ${cache_json} ]]; then
         rebuild=1
     elif ! validate_hpo_condition_mechanism_cache \
-        "${builder_script}" "${cache_json}" "${provenance_args[@]}" \
+        "${builder_script}" "${cache_json}" "${config_file}" "${provenance_args[@]}" \
         >/dev/null 2>&1; then
         rebuild=1
     fi
 
     if [[ ${rebuild} -eq 1 ]]; then
         log "Building atomic HPO-framed condition mechanism JSON: ${cache_json}"
-        python "${builder_script}" \
+        local -a builder_command=(python "${builder_script}")
+        if hpo_condition_mechanism_builder_is_default "${builder_script}"; then
+            priva_resolve_binary "${config_file}" || return 1
+            builder_command=("${PRIVA_BIN}" hpo-condition-mechanism --source-root "${BASE_DIR}")
+        fi
+        "${builder_command[@]}" \
             --hpo-assertions "${hpo_assertions}" \
             --mechanism-evidence "${mechanism_evidence}" \
             --clingen-dosage "${clingen_dosage}" \
@@ -4314,7 +4818,7 @@ function hpo_condition_mechanism_cache_install() {
     fi
 
     validate_hpo_condition_mechanism_cache \
-        "${builder_script}" "${cache_json}" "${provenance_args[@]}" || {
+        "${builder_script}" "${cache_json}" "${config_file}" "${provenance_args[@]}" || {
         log "ERROR: HPO condition mechanism cache validation failed"
         return 1
     }
@@ -4411,8 +4915,6 @@ function mondo_hpo_scope_install() {
     local mondo_obo
     local scope_registry
     local scope_overrides
-    local scope_builder
-    local hpo_builder
 
     hpo_release=$(yaml_value_or_default "${config_file}" "hpo_release" "v2026-06-23")
     hpo_raw_dir=$(yaml_value_or_default "${config_file}" "hpo_raw_dir" "${DATA_DIR}/hpo/raw/${hpo_release}")
@@ -4422,7 +4924,6 @@ function mondo_hpo_scope_install() {
     hpo_hpoa="${hpo_raw_dir}/phenotype.hpoa"
     hpo_base_assertions="${hpo_raw_dir}/genes_to_phenotype.assertions.base.tsv.gz"
     hpo_assertions=$(yaml_value_or_default "${config_file}" "hpo_assertions" "${DATA_DIR}/hpo/genes_to_phenotype.assertions.tsv.gz")
-    hpo_builder=$(yaml_value_or_default "${config_file}" "hpo_assertion_builder_script" "${SCRIPT_DIR}/collapse_HPO_anno.py")
 
     mondo_release=$(yaml_value_or_default "${config_file}" "mondo_release" "v2026-07-06")
     mondo_url=$(yaml_value_or_default "${config_file}" "mondo_url" "https://github.com/monarch-initiative/mondo/releases/download/${mondo_release}/mondo-simple.obo")
@@ -4430,10 +4931,9 @@ function mondo_hpo_scope_install() {
     mondo_obo=$(yaml_value_or_default "${config_file}" "mondo_obo" "${DATA_DIR}/mondo/mondo-simple.${mondo_release}.obo")
     scope_registry=$(yaml_value_or_default "${config_file}" "mondo_disease_scope_registry" "${DATA_DIR}/mondo/disease_scope.tsv.gz")
     scope_overrides=$(yaml_value_or_default "${config_file}" "mondo_disease_scope_overrides" "${DATA_DIR}/mondo/disease_scope_overrides.tsv")
-    scope_builder=$(yaml_value_or_default "${config_file}" "mondo_scope_builder_script" "${SCRIPT_DIR}/build_mondo_disease_scope.py")
 
-    [[ -f ${hpo_builder} ]] || { log "ERROR: HPO assertion builder not found: ${hpo_builder}"; return 1; }
-    [[ -f ${scope_builder} ]] || { log "ERROR: MONDO scope builder not found: ${scope_builder}"; return 1; }
+    # Both builders are priva commands, so a newer program rebuilds their outputs.
+    priva_resolve_binary "${config_file}" || return 1
     mkdir -p "${hpo_raw_dir}" "$(dirname "${hpo_assertions}")" "$(dirname "${mondo_obo}")" || return 1
 
     if [[ "${PRIVA_FORCE_HPO_ASSERTIONS:-0}" == "1" ]] || \
@@ -4474,10 +4974,11 @@ function mondo_hpo_scope_install() {
     if [[ "${PRIVA_FORCE_HPO_ASSERTIONS:-0}" == "1" ]] || \
        [[ "${PRIVA_FORCE_ALL_CACHES:-0}" == "1" ]] || [[ ! -s ${hpo_base_assertions} ]] || \
        [[ ${hpo_genes} -nt ${hpo_base_assertions} ]] || [[ ${hpo_hpoa} -nt ${hpo_base_assertions} ]] || \
-       [[ ${hpo_builder} -nt ${hpo_base_assertions} ]]; then
+       [[ ${PRIVA_BIN} -nt ${hpo_base_assertions} ]]; then
         rebuild_hpo=1
         log "Building release-matched base HPO assertions"
-        python "${hpo_builder}" "${hpo_genes}" "${hpo_hpoa}" "${hpo_base_assertions}" || return 1
+        "${PRIVA_BIN}" hpo-assertions build --genes-to-phenotype "${hpo_genes}" \
+            --phenotype-hpoa "${hpo_hpoa}" --output "${hpo_base_assertions}" || return 1
     fi
 
     # The builder publishes the registry before scoped assertions. If the second
@@ -4488,20 +4989,20 @@ function mondo_hpo_scope_install() {
        [[ ! -s ${scope_registry} ]] || [[ ! -s ${hpo_assertions} ]] || \
        [[ ${scope_registry} -nt ${hpo_assertions} ]] || \
        [[ ${mondo_obo} -nt ${scope_registry} ]] || [[ ${hpo_base_assertions} -nt ${scope_registry} ]] || \
-       [[ ${scope_builder} -nt ${scope_registry} ]] || [[ ${scope_overrides} -nt ${scope_registry} ]]; then
+       [[ ${PRIVA_BIN} -nt ${scope_registry} ]] || [[ ${scope_overrides} -nt ${scope_registry} ]]; then
         rebuild_scope=1
     fi
     if [[ ${rebuild_scope} -eq 1 ]]; then
         log "Building MONDO/HPO disease-scope registry and scoped HPO assertions"
         local -a scope_args=(
-            "${scope_builder}"
+            mondo-scope build
             --mondo-obo "${mondo_obo}"
             --hpo-assertions "${hpo_base_assertions}"
             --registry-output "${scope_registry}"
             --annotated-assertions-output "${hpo_assertions}"
         )
         [[ -s ${scope_overrides} ]] && scope_args+=(--manual-overrides "${scope_overrides}")
-        python "${scope_args[@]}" || return 1
+        "${PRIVA_BIN}" "${scope_args[@]}" || return 1
     fi
 
     validate_mondo_hpo_scope_cache "${mondo_obo}" "${scope_registry}" "${hpo_assertions}" || return 1
@@ -4538,31 +5039,32 @@ function mechanism_resource_install() {
 
 function nm_to_enst_mapping_install() {
     local config_file=${1}
+    priva_resolve_binary "$config_file" || return 1
     local target
-    target=$(python "${SCRIPT_DIR}/installer_prerequisites.py" "${config_file}" \
+    target=$("${PRIVA_BIN}" installer-prerequisites "${config_file}" \
         --source-root "${BASE_DIR}" --stage mapping-target) || return 1
     if [[ ! -e ${target} ]]; then
         local source_id
-        source_id=$(python "${SCRIPT_DIR}/installer_prerequisites.py" "${config_file}" \
+        source_id=$("${PRIVA_BIN}" installer-prerequisites "${config_file}" \
             --source-root "${BASE_DIR}" --stage mapping-source) || return 1
         local workspace
-        workspace=$(python "${SCRIPT_DIR}/installer_prerequisites.py" "${config_file}" \
+        workspace=$("${PRIVA_BIN}" installer-prerequisites "${config_file}" \
             --source-root "${BASE_DIR}" --stage mapping-workspace) || return 1
         if [[ ${source_id} == ensembl-grch38-mart116-ftp ]]; then
-            python "${SCRIPT_DIR}/biomart_nm_to_enst.py" fetch \
+            "${PRIVA_BIN}" biomart fetch --helper-root "${BASE_DIR}" \
                 --source "${source_id}" --output "${target}" --resource-dir "${workspace}" || return 1
         else
             local raw_output=${2:-${workspace}/${target##*/}.biomart.raw.tsv}
             mkdir -p "${workspace}" || return 1
-            python "${SCRIPT_DIR}/biomart_nm_to_enst.py" fetch \
+            "${PRIVA_BIN}" biomart fetch --helper-root "${BASE_DIR}" \
                 --source "${source_id}" --output "${target}" --raw-output "${raw_output}" || return 1
         fi
         # Newly acquired bytes are not a previously bundled table, even when
         # a legacy no-root invocation downloads into its source-root pathname.
-        python "${SCRIPT_DIR}/biomart_nm_to_enst.py" verify "${target}" \
+        "${PRIVA_BIN}" biomart verify --helper-root "${BASE_DIR}" --mapping "${target}" \
             --assembly "$(read_yaml "${config_file}" assembly)" || return 1
     fi
-    target=$(python "${SCRIPT_DIR}/installer_prerequisites.py" "${config_file}" \
+    target=$("${PRIVA_BIN}" installer-prerequisites "${config_file}" \
         --source-root "${BASE_DIR}" --stage mapping --print-mapping) || return 1
     update_or_append_yaml "${config_file}" "nm_to_enst_tsv" "${target}" || return 1
     log "Validated NM-to-ENST mapping selected: ${target}"
@@ -4574,22 +5076,24 @@ function priva_manual_cache_inputs() {
         log "ERROR: Use priva_manual_cache_inputs --config CONFIG."
         return 2
     }
+    priva_resolve_binary "$2" || return 1
     local -a arguments=("${2}" --source-root "${BASE_DIR}" --stage manual-inputs)
     # Collect publisher-required paths before any resource acquisition or
     # whole-table annotation. Batch runs fail with the missing keys instead of
     # reaching an unanswered prompt hours later; interactive users keep prompts.
     [[ ! -t 0 ]] || arguments+=(--prompt)
-    python "${SCRIPT_DIR}/installer_prerequisites.py" "${arguments[@]}"
+    "${PRIVA_BIN}" installer-prerequisites "${arguments[@]}"
 }
 
 
 function priva_install_prerequisites() {
     local config_file=${1}
-    python "${SCRIPT_DIR}/installer_prerequisites.py" "${config_file}" --source-root "${BASE_DIR}" \
+    priva_resolve_binary "$config_file" || return 1
+    "${PRIVA_BIN}" installer-prerequisites "${config_file}" --source-root "${BASE_DIR}" \
         --allow-missing-bundled-mapping --allow-missing-bundled-clinvar || return 1
     # The selected reference is always needed. The GoFCards preflight below
     # checks both assemblies only when the normalized cache requires a build.
-    python "${SCRIPT_DIR}/reference_resources.py" preflight "${config_file}" \
+    "${PRIVA_BIN}" reference-resources preflight "${config_file}" \
         --data-dir "${DATA_DIR}" --scope selected --use-cache-root || return 1
     gofcards_exact_gof_cache_install "${config_file}" --main-preflight || return 1
 }
@@ -4607,7 +5111,8 @@ function priva_prepare_install_config() {
     planning_config=$(mktemp "${TMPDIR}/priva-install-plan.XXXXXX.yaml") || return 1
     managed_updates=$(priva_configure_cache_paths "${config_file}" --check) || \
         { rm -f -- "${planning_config}"; return 1; }
-    python "${SCRIPT_DIR}/installer_config_paths.py" resolve --config "${config_file}" \
+    priva_resolve_binary "$config_file" || { rm -f -- "${planning_config}"; return 1; }
+    PYTHONHASHSEED=0 "${PRIVA_BIN}" installer-config-paths resolve --config "${config_file}" \
         --source-root "${BASE_DIR}" --managed-updates-json "${managed_updates}" \
         --output "${planning_config}" || { rm -f -- "${planning_config}"; return 1; }
     priva_install_prerequisites "${planning_config}" || \
@@ -4627,8 +5132,73 @@ function bundled_snapshot_install() {
     [[ $# -eq 1 ]] || { log "ERROR: Use bundled_snapshot_install CONFIG"; return 2; }
     # Fixed Git data are already deployed by cloning PriVA. Check only that
     # each selected input exists and is nonempty; do not parse/refresh bundles.
-    python "${SCRIPT_DIR}/installer_prerequisites.py" "$1" \
+    priva_resolve_binary "$1" || return 1
+    "${PRIVA_BIN}" installer-prerequisites "$1" \
         --source-root "${BASE_DIR}" --stage snapshots
+}
+
+
+function Nextflow_runtime_install() {
+    [[ $# -eq 1 && -r ${1:-} ]] || {
+        log "ERROR: Use Nextflow_runtime_install CONFIG"
+        return 2
+    }
+    local cache_root runtime_prefix
+    cache_root=$(read_yaml "$1" cache_root) || return 1
+    [[ ${cache_root} == /* && -d ${cache_root} ]] || {
+        log "ERROR: Configure an existing absolute cache_root before installing Nextflow."
+        return 1
+    }
+    # Basic storage preflight permits an existing root alias. Resolve that
+    # selected root only; the helper still rejects symlinked runtime/staging
+    # children so a managed installation cannot redirect itself elsewhere.
+    # Match the cache resolver's lexical normalization before following links.
+    cache_root=$(realpath -ms -- "${cache_root}") || return 1
+    cache_root=$(realpath -e -- "${cache_root}") || return 1
+    [[ ${cache_root} != / ]] || {
+        log "ERROR: cache_root must resolve to a dedicated storage directory."
+        return 1
+    }
+    # The workflow driver is part of the Nextflow checkout's one-command
+    # installation. Its private JRE leaves VEP and the scientific environments
+    # unchanged; a completed driver does not activate the raw-workflow gate.
+    # Reuse/download/recovery and exact upstream pins live in the small helper.
+    runtime_prefix="${cache_root%/}/runtime/priva-nextflow-25.10.4"
+    bash "${SCRIPT_DIR}/bootstrap_nextflow_runtime.sh" install \
+        --prefix "${runtime_prefix}" || return 1
+    log "Nextflow driver ready: ${runtime_prefix}/bin/nextflow"
+}
+
+
+function PriVA_rust_install() {
+    [[ $# -eq 2 && ${1:-} == --config && -r ${2:-} ]] || {
+        log "ERROR: Use PriVA_rust_install --config CONFIG"
+        return 2
+    }
+    local cache_root
+    cache_root=$(read_yaml "$2" cache_root) || return 1
+    [[ ${cache_root} == /* && -d ${cache_root} ]] || {
+        log "ERROR: Configure an existing absolute cache_root before installing the PriVA CLI."
+        return 1
+    }
+    # Match the established Nextflow root-alias normalization. The small helper
+    # rejects symlinked managed children and records the actual build profile;
+    # installing this executable never selects a ranking or raw-workflow backend.
+    cache_root=$(realpath -ms -- "${cache_root}") || return 1
+    cache_root=$(realpath -e -- "${cache_root}") || return 1
+    [[ ${cache_root} != / ]] || { log "ERROR: cache_root must resolve to dedicated storage."; return 1; }
+    local receipt binary
+    receipt=$(python "${SCRIPT_DIR}/bootstrap_priva_rust.py" install \
+        --source-root "${BASE_DIR}" --cache-root "${cache_root}") || return 1
+    # The pipeline scripts run the converted steps with this program; they find
+    # it through priva_binary (priva_resolve_binary in common_bash_utils.sh).
+    binary=$(read_yaml <(printf '%s\n' "${receipt}") binary) || return 1
+    [[ ${binary} == /* && -f ${binary} && -x ${binary} ]] || {
+        log "ERROR: The PriVA CLI installer did not report an executable: ${binary}"
+        return 1
+    }
+    update_or_append_yaml "$2" priva_binary "${binary}" || return 1
+    log "PriVA CLI ready and saved as priva_binary: ${binary}"
 }
 
 
@@ -4638,18 +5208,190 @@ function priva_export_installed_environment() {
         return 2
     }
     [[ -n ${PRIVA_ENV_MANAGER:-} ]] || priva_find_env_manager || return 1
-    python "${SCRIPT_DIR}/installed_environment.py" export-installation \
+    priva_resolve_binary "$2" || return 1
+    "${PRIVA_BIN}" installed-environment export-installation \
         --config "$2" --manager "${PRIVA_ENV_MANAGER}"
 }
 
 
-function main_install() {
+# The runtime configuration names native archives. Python builders use a stable
+# private configuration naming their original pickle inputs and outputs instead;
+# native builders may name the archives they write directly there.
+function priva_cache_config_is_native() {
+    [[ $# -eq 2 && ${1:-} == --config && -r ${2:-} ]] || return 2
+    # Legacy callers need no new tools or bootstrap. Parse YAML only when a
+    # native filename occurs; comments or unrelated fields are not sufficient.
+    LC_ALL=C grep -Fq '.rkyv' "$2" || return 1
+    python - "$2" <<'PRIVA_NATIVE_CONFIG_PY'
+import sys
+import yaml
+
+keys = (
+    "clinvar_aa_stat", "clinvar_splice_stat", "alphamissense_tranx_domain_map",
+    "clinvar_patho_exon_af_stat", "clinvar_gene_stat", "clinvar_patho_af_stat",
+    "pm1_regions_pkl", "all_intolerant_domains", "interpro_mapping_pickle", "clingen_map",
+)
+try:
+    with open(sys.argv[1]) as source:
+        config = yaml.safe_load(source)
+    if not isinstance(config, dict):
+        raise ValueError("the configuration must be a YAML mapping")
+    native = any(isinstance(config.get(key), str) and config[key].endswith(".rkyv") for key in keys)
+except (OSError, ValueError, yaml.YAMLError) as error:
+    print("Cannot inspect native cache configuration: " + str(error), file=sys.stderr)
+    raise SystemExit(2)
+raise SystemExit(0 if native else 1)
+PRIVA_NATIVE_CONFIG_PY
+}
+
+
+function priva_cache_install_begin() {
+    [[ $# -eq 2 && ${1:-} == --config && -r ${2:-} ]] || {
+        log "ERROR: Use priva_cache_install_begin --config CONFIG."
+        return 2
+    }
+    PRIVA_CACHE_INSTALL_ORIGINAL=$(realpath -- "$2") || return 1
+    local cache_root receipt identity
+    cache_root=$(read_yaml "$PRIVA_CACHE_INSTALL_ORIGINAL" cache_root) || return 1
+    [[ $cache_root == /* && -d $cache_root ]] || {
+        log "ERROR: Configure an existing absolute cache_root before installing native caches."
+        return 1
+    }
+    cache_root=$(realpath -e -- "$cache_root") || return 1
+    [[ $cache_root != / ]] || { log "ERROR: cache_root must be dedicated storage."; return 1; }
+
+    # Bootstrap without writing priva_binary to the public configuration. Its
+    # selected executable is saved only in the private view during installation.
+    receipt=$(python "${SCRIPT_DIR}/bootstrap_priva_rust.py" install \
+        --source-root "$BASE_DIR" --cache-root "$cache_root") || return 1
+    PRIVA_CACHE_INSTALL_BINARY=$(python -c \
+        'import json,sys; print(json.loads(sys.argv[1])["binary"])' "$receipt") || return 1
+    [[ $PRIVA_CACHE_INSTALL_BINARY == /* && -s $PRIVA_CACHE_INSTALL_BINARY && -x $PRIVA_CACHE_INSTALL_BINARY ]] || {
+        log "ERROR: Rust bootstrap did not return an existing executable."
+        return 1
+    }
+    identity=$(printf '%s' "$PRIVA_CACHE_INSTALL_ORIGINAL" | sha256sum) || return 1
+    identity=${identity%% *}
+    PRIVA_CACHE_INSTALL_BUILD_CONFIG=$(python - "$cache_root" "$identity" <<'PRIVA_PRIVATE_PARENT_PY'
+from pathlib import Path
+import stat
+import sys
+
+parent = Path(sys.argv[1])
+for part in ("runtime", "priva-cache-configs", sys.argv[2]):
+    parent = parent / part
+    try:
+        parent.mkdir(mode=0o700)
+    except FileExistsError:
+        pass
+    info = parent.lstat()
+    if not stat.S_ISDIR(info.st_mode) or stat.S_ISLNK(info.st_mode):
+        raise SystemExit("Private cache configuration parent must be a real managed directory: " + str(parent))
+lock = parent / "build.yaml.lock"
+try:
+    info = lock.lstat()
+except FileNotFoundError:
+    pass
+else:
+    if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+        raise SystemExit("Private cache configuration lock must be a regular, unlinked file: " + str(lock))
+print(parent / "build.yaml")
+PRIVA_PRIVATE_PARENT_PY
+    ) || return 1
+    # Lock before prepare: two warm callers must not both reset the completed
+    # private view before either starts its builder phase.
+    exec {PRIVA_CACHE_INSTALL_LOCK_FD}>"${PRIVA_CACHE_INSTALL_BUILD_CONFIG}.lock" || return 1
+    flock -n "$PRIVA_CACHE_INSTALL_LOCK_FD" || {
+        log "ERROR: Another installation is using this private builder configuration."
+        return 1
+    }
+    "$PRIVA_CACHE_INSTALL_BINARY" cache-install prepare \
+        --config "$PRIVA_CACHE_INSTALL_ORIGINAL" --build-config "$PRIVA_CACHE_INSTALL_BUILD_CONFIG" \
+        --source-root "$BASE_DIR" || return 1
+    # The private view may name archives written directly by native builders;
+    # publish checks and adopts them alongside converted pickles.
+}
+
+
+function priva_cache_install_finish() {
+    [[ $# -eq 0 && -n ${PRIVA_CACHE_INSTALL_ORIGINAL:-} && -n ${PRIVA_CACHE_INSTALL_BUILD_CONFIG:-} && \
+       -n ${PRIVA_CACHE_INSTALL_BINARY:-} ]] || {
+        log "ERROR: Begin a private cache installation before publishing it."
+        return 2
+    }
+    "$PRIVA_CACHE_INSTALL_BINARY" cache-install publish \
+        --config "$PRIVA_CACHE_INSTALL_ORIGINAL" --build-config "$PRIVA_CACHE_INSTALL_BUILD_CONFIG" \
+        --source-root "$BASE_DIR"
+}
+
+
+function priva_cache_install_direct() (
+    [[ $# -ge 5 && ${1:-} == --function && ${3:-} == --config-position && ${5:-} == -- ]] || {
+        log "ERROR: Use priva_cache_install_direct --function NAME --config-position INDEX -- ARGUMENTS."
+        return 2
+    }
+    local function=$2 position=$4
+    shift 5
+    [[ $function =~ ^[A-Za-z_][A-Za-z0-9_]*$ && $position =~ ^[0-9]+$ ]] || return 2
+    local -a arguments=("$@")
+    local original="_priva_cache_builder_${function}" config=${arguments[$position]:-} native_status=0
+    [[ -r $config ]] || { "$original" "$@"; return $?; }
+    # Nested calls run inside a private installation already. Their configs,
+    # including ClinVar's working configurations, may name direct native
+    # archives; they never start a second private installation.
+    if [[ ${PRIVA_CACHE_INSTALL_INTERNAL:-0} == 1 ]]; then
+        "$original" "$@"
+        return $?
+    fi
+    priva_cache_config_is_native --config "$config" || native_status=$?
+    [[ $native_status != 1 ]] || { "$original" "$@"; return $?; }
+    [[ $native_status == 0 ]] || return "$native_status"
+
+    local PRIVA_CACHE_INSTALL_ORIGINAL PRIVA_CACHE_INSTALL_BINARY PRIVA_CACHE_INSTALL_LOCK_FD
+    local -x PRIVA_CACHE_INSTALL_BUILD_CONFIG PRIVA_CACHE_INSTALL_INTERNAL=1
+    priva_install_basic_paths --config "$config" || return 1
+    export TMPDIR=$PRIVA_INSTALL_TMPDIR
+    priva_cache_install_begin --config "$config" || return 1
+    arguments[$position]=$PRIVA_CACHE_INSTALL_BUILD_CONFIG
+    "$original" "${arguments[@]}" || return $?
+    priva_cache_install_finish
+)
+
+
+function priva_wrap_cache_builders() {
+    local function position definition
+    # Keep the original builder function bodies intact. These fixed aliases
+    # only route already-native direct callers through the same private view.
+    for function in AlphaMissense_stat AlphaMissense_pick_missense_constrained_segments \
+        AlphaMissense_pick_intolerant_domains prepare_pm1_regions InterPro_parsing \
+        ClinGen_deploy ClinVar_AA_stat ClinVar_patho_AF_stat ClinVar_Gene_stat \
+        ClinVar_Gene_stat_regenerate ClinVar_install; do
+        position=0
+        [[ $function != ClinVar_install ]] || position=1
+        definition=$(declare -f "$function") || return 1
+        if [[ $definition == *"priva_cache_install_direct --function $function --config-position $position -- \"\$@\""* ]]; then
+            declare -F "_priva_cache_builder_${function}" >/dev/null || return 1
+            continue
+        fi
+        definition="_priva_cache_builder_${definition}"
+        eval "$definition" || return 1
+        eval "$function() { priva_cache_install_direct --function $function --config-position $position -- \"\$@\"; }" || return 1
+    done
+}
+
+
+# Keep the private-view marker and lock descriptor inside this invocation,
+# including every early failure return from an existing installation stage.
+function main_install() (
     if [[ $# -eq 1 && ( ${1:-} == -h || ${1:-} == --help ) ]]; then
         printf 'Usage: bash scripts/install_utils.sh main_install CONFIG\n'
         printf 'Selects the numeric major vep_installed_version in CONFIG.\n'
         printf 'Requires existing cache_root and tmp_dir directories plus assembly before environment setup.\n'
         printf 'Creates priva_acmg from %s/acmg_conda_rough.yml or changes its VEP release.\n' "${BASE_DIR}"
         printf 'The environment supplies yq after the bootstrap release scalar is checked.\n'
+        printf 'Installs the pinned Nextflow driver and private JRE under cache_root/runtime.\n'
+        printf 'Installs the managed PriVA Rust CLI under cache_root/runtime and saves its path as priva_binary.\n'
+        printf 'Python builders use a private configuration; native caches and runtime configuration publish after success.\n'
         return 0
     fi
     [[ $# -eq 1 && ${1:-} != -* && -r ${1:-} ]] || {
@@ -4667,6 +5409,14 @@ function main_install() {
     conda_install_vep "${config_file}" || return 1
     local conda_env_name=${PRIVA_INSTALL_ENV_NAME}
 
+    local PRIVA_CACHE_INSTALL_ORIGINAL PRIVA_CACHE_INSTALL_BINARY PRIVA_CACHE_INSTALL_LOCK_FD
+    local -x PRIVA_CACHE_INSTALL_BUILD_CONFIG PRIVA_CACHE_INSTALL_INTERNAL=1
+    priva_cache_install_begin --config "$config_file" || return 1
+    config_file=$PRIVA_CACHE_INSTALL_BUILD_CONFIG
+    # The next stages run priva before PriVA_rust_install records priva_binary.
+    # A caller's own PRIVA_BINARY keeps its priority, as in priva_resolve_binary.
+    export PRIVA_BINARY=${PRIVA_BINARY:-$PRIVA_CACHE_INSTALL_BINARY}
+
     # The existing smoke route omits VEP/plugins entirely and has no manual
     # plugin-cache requirement. Real installation must check those inputs first.
     if [[ ${PRIVA_SMOKE_SKIP_VEP:-0} != 1 ]]; then
@@ -4676,6 +5426,10 @@ function main_install() {
     bundled_snapshot_install "${config_file}" || return 1
     # Resolve CADD's package manager before any costly scientific annotation.
     CADD_conda_install --config "${config_file}" || return 1
+    Nextflow_runtime_install "${config_file}" || \
+    { log "Failed to install the pinned Nextflow driver and private JRE"; return 1; }
+    PriVA_rust_install --config "${config_file}" || \
+    { log "Failed to install the managed PriVA Rust CLI"; return 1; }
 
     local has_error=0
     local skip_vep_install=0
@@ -4712,7 +5466,8 @@ function main_install() {
         --VEP_CACHEDIR "$vep_cache_dir" \
         --VEP_PLUGINSDIR "$vep_plugins_dir" \
         --VEP_ASSEMBLY "$assembly" \
-        --VEP_PLUGINSCACHEDIR "$vep_plugins_cachedir" || \
+        --VEP_PLUGINSCACHEDIR "$vep_plugins_cachedir" \
+        --config "$config_file" || \
         { log "Failed to install VEP API and caches"; return 1; }
 
         # Install VEP plugins caches
@@ -4757,6 +5512,8 @@ function main_install() {
     { log "Failed to prepare PM1 regions pickle"; return 1; }
     ClinVar_patho_AF_stat "${config_file}" || \
     { log "Failed to stat ClinVar pathogenic variants per allele frequency"; return 1; }
+    ClinVar_PM5_index "${config_file}" || \
+    { log "Failed to index the confident pathogenic ClinVar variants for PM5"; return 1; }
 
 
     # 7. Install CADD prescores
@@ -4784,10 +5541,13 @@ function main_install() {
     
     priva_export_installed_environment --config "${config_file}" || \
     { log "Failed to export the installed PriVA/CADD package environments"; return 1; }
+    priva_cache_install_finish || { log "Failed to publish native cache configuration"; return 1; }
     log "Congratulations! The installation is completed!"
-}
+)
 
 
+
+priva_wrap_cache_builders || { log "ERROR: Could not prepare private cache builder entry points."; return 1 2>/dev/null || exit 1; }
 
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
     "$@"

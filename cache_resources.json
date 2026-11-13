@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "reviewed_on": "2026-10-19",
-  "scope": "Original PriVA resource lifecycle and refresh inventory; the Nextflow checkout shares these entries and additionally inventories its pinned workflow runtime.",
+  "scope": "PriVA-nextflow resource lifecycle and refresh inventory; original PriVA resource entries plus the pinned Nextflow and Java runtime used only by this checkout.",
   "definitions": {
     "maintained": "Upstream feed or versioned distribution for which a refresh route should be retained; not a promise of constant maintenance or update frequency. Evidence/cadence uncertainty is recorded per resource.",
     "snapshot": "Selected artifact is fixed for this profile. Reuse a bundled copy if provided; external/licensed snapshots remain external and are not made redistributable.",
@@ -16,6 +16,42 @@
     "install_vs_refresh": "install_entrypoints records acquisition/reuse procedures; refresh.entrypoints records procedures to retain for maintained feeds/derived rebuilds. Fixed snapshots have no routine refresh function."
   },
   "resources": {
+    "nextflow_runtime": {
+      "title": "Pinned Nextflow driver and Temurin Java runtime",
+      "lifecycle": "snapshot",
+      "storage": "external",
+      "config_keys": [
+        "cache_root"
+      ],
+      "bundled_paths": [],
+      "source": {
+        "kind": "pinned_release_artifacts",
+        "pins_file": "scripts/bootstrap_nextflow_runtime.sh",
+        "nextflow_url": "https://github.com/nextflow-io/nextflow/releases/download/v25.10.4/nextflow-25.10.4-dist",
+        "java_url": "https://github.com/adoptium/temurin21-binaries/releases/download/jdk-21.0.12.1%2B1/OpenJDK21U-jre_x64_linux_hotspot_21.0.12.1_1.tar.gz"
+      },
+      "selected_profile": {
+        "nextflow": "25.10.4",
+        "temurin_jre": "21.0.12.1+1",
+        "platform": "linux_x64"
+      },
+      "refresh": {
+        "keep_function": false,
+        "automatic": false,
+        "policy": "explicit_pinned_runtime_revision_only",
+        "entrypoints": []
+      },
+      "depends_on": [],
+      "notes": "Nextflow checkout only. main_install calls Nextflow_runtime_install, which installs or reuses checksum-pinned artifacts under cache_root/runtime/priva-nextflow-25.10.4. The bootstrap script owns the exact URL/SHA256 pins; this inventory does not select or upgrade versions. No scientific workflow is run by driver deployment.",
+      "install_entrypoints": [
+        "Nextflow_runtime_install"
+      ],
+      "maintenance_evidence": {
+        "basis": "selected_pinned_installer_artifacts",
+        "cadence": "explicit_revision_only",
+        "note": "Snapshot describes the selected runtime, not the upstream project's release cadence. Original PriVA has no Nextflow runtime dependency."
+      }
+    },
     "genome_reference": {
       "title": "Reference FASTA and indexes",
       "lifecycle": "snapshot",
@@ -356,7 +392,7 @@
         "clinvar_variant_summary",
         "mane_select"
       ],
-      "notes": "User-authorized metadata-age exception: preserve bundled baseline; build a separate managed result and select its full path only on success. No bundled content/schema/checksum validation.",
+      "notes": "User-authorized metadata-age exception: preserve bundled baseline; build a separate managed result and select its full path only on success. No bundled content/schema/checksum validation. On the Rust branch, installation converts the selected pickle into a full-value native archive under cache_root; this archive is not bundled in Git.",
       "install_entrypoints": [
         "ClinVar_install",
         "ClinVar_Gene_stat_regenerate"
@@ -365,6 +401,9 @@
         "basis": "selected_artifact_and_existing_installer_route",
         "cadence": "not_verified",
         "note": "Classification records PriVA policy, not a guarantee that the publisher will maintain or republish this data."
+      },
+      "runtime_formats": {
+        "clinvar_gene_stat": "PRIVARKV/rkyv version 1"
       }
     },
     "clinvar_derived_statistics": {
@@ -399,7 +438,7 @@
         "clinvar_vcf",
         "gnomad"
       ],
-      "notes": "Retain original processing/filter order; do not treat this inventory as a new automatic refresh scheduler.",
+      "notes": "Retain original processing/filter order; do not treat this inventory as a new automatic refresh scheduler. The Rust installer converts only the listed runtime cache keys to native archives after their builders succeed; source pickles and scientific companion receipts are retained.",
       "install_entrypoints": [
         "ClinVar_AA_stat",
         "ClinVar_patho_AF_stat"
@@ -408,6 +447,12 @@
         "basis": "selected_artifact_and_existing_installer_route",
         "cadence": "not_verified",
         "note": "Classification records PriVA policy, not a guarantee that the publisher will maintain or republish this data."
+      },
+      "runtime_formats": {
+        "clinvar_aa_stat": "PRIVARKV/rkyv version 1",
+        "clinvar_splice_stat": "PRIVARKV/rkyv version 1",
+        "clinvar_patho_af_stat": "PRIVARKV/rkyv version 1",
+        "clinvar_patho_exon_af_stat": "PRIVARKV/rkyv version 1"
       }
     },
     "clinvar_vcv": {
@@ -516,7 +561,7 @@
       }
     },
     "alphamissense_derived": {
-      "title": "AlphaMissense annotation, motifs, domains and PM1",
+      "title": "AlphaMissense annotation, domains and PM1",
       "lifecycle": "derived",
       "storage": "generated",
       "config_keys": [
@@ -525,7 +570,6 @@
         "alphamissense_vep_base_vcf",
         "alphamissense_pd_stat",
         "alphamissense_intolerant_domains",
-        "alphamissense_intolerant_motifs",
         "all_intolerant_domains",
         "pm1_regions_pkl",
         "alphamissense_tranx_domain_map"
@@ -534,7 +578,6 @@
       "source": {
         "kind": "derived",
         "builders": [
-          "scripts/am_pick_missense_constrained_segments.py",
           "scripts/stat_protein_domain_amscores.py",
           "scripts/prepare_pm1_regions.py"
         ]
@@ -546,7 +589,6 @@
         "entrypoints": [
           "AlphaMissense_anno",
           "AlphaMissense_anno_gnomAD",
-          "AlphaMissense_pick_missense_constrained_segments",
           "AlphaMissense_stat",
           "AlphaMissense_pick_intolerant_domains",
           "prepare_pm1_regions"
@@ -561,11 +603,10 @@
         "interpro",
         "pm1_support"
       ],
-      "notes": "Original scientific operation and mutation order remain fixed within a profile. DAS intermediate metadata requires a completed association with the selected VCF, assembly and extraction source; unassociated or changed-source intermediates regenerate atomically from that input. The outer installer records successful multi-output publication separately. These engineering receipts do not qualify a scientific profile.",
+      "notes": "Original scientific operation and mutation order remain fixed within a profile. DAS intermediate metadata requires a completed association with the selected VCF, assembly and extraction source; unassociated or changed-source intermediates regenerate atomically from that input. The outer installer records successful multi-output publication separately. These engineering receipts do not qualify a scientific profile. The Rust installer converts only the listed runtime cache keys to native archives after their builders succeed; source pickles and scientific companion receipts are retained.",
       "install_entrypoints": [
         "AlphaMissense_anno",
         "AlphaMissense_anno_gnomAD",
-        "AlphaMissense_pick_missense_constrained_segments",
         "AlphaMissense_stat",
         "AlphaMissense_pick_intolerant_domains",
         "prepare_pm1_regions"
@@ -574,6 +615,11 @@
         "basis": "selected_artifact_and_existing_installer_route",
         "cadence": "not_verified",
         "note": "Classification records PriVA policy, not a guarantee that the publisher will maintain or republish this data."
+      },
+      "runtime_formats": {
+        "all_intolerant_domains": "PRIVARKV/rkyv version 1",
+        "pm1_regions_pkl": "PRIVARKV/rkyv version 1",
+        "alphamissense_tranx_domain_map": "PRIVARKV/rkyv version 1"
       }
     },
     "spliceai_v1": {
@@ -1021,7 +1067,7 @@
         ]
       },
       "depends_on": [],
-      "notes": "Upstream release stream is maintained; selected bundled mapping/curation remains a snapshot reused without content checks.",
+      "notes": "Upstream release stream is maintained; selected bundled mapping/curation remains a snapshot reused without content checks. The Rust workflow uses the bundled native archive or an installation-time conversion of the explicitly selected mapping; builders retain their original pickle input.",
       "install_entrypoints": [
         "InterPro_parsing"
       ],
@@ -1029,6 +1075,9 @@
         "basis": "selected_artifact_and_existing_installer_route",
         "cadence": "not_verified",
         "note": "Classification records PriVA policy, not a guarantee that the publisher will maintain or republish this data."
+      },
+      "runtime_formats": {
+        "interpro_mapping_pickle": "PRIVARKV/rkyv version 1"
       }
     },
     "clingen": {
@@ -1059,7 +1108,7 @@
         ]
       },
       "depends_on": [],
-      "notes": "Canonical bundled map/source is reused by existence/nonzero. Existing external-source precedence/refresh policy stays unchanged.",
+      "notes": "Canonical bundled map/source is reused by existence/nonzero. Existing external-source precedence/refresh policy stays unchanged. Native hg19/hg38 maps are bundled beside the pickles; the Rust configuration selects the matching assembly archive after installation.",
       "install_entrypoints": [
         "ClinGen_deploy"
       ],
@@ -1067,6 +1116,9 @@
         "basis": "selected_artifact_and_existing_installer_route",
         "cadence": "not_verified",
         "note": "Classification records PriVA policy, not a guarantee that the publisher will maintain or republish this data."
+      },
+      "runtime_formats": {
+        "clingen_map": "PRIVARKV/rkyv version 1"
       }
     },
     "hpo": {

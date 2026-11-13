@@ -11,6 +11,8 @@ import tempfile
 import unittest
 from unittest import mock
 
+import fake_priva_binary
+
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 INPUTS = importlib.import_module("mechanism_source_input")
@@ -35,14 +37,16 @@ class ClinGenRecovery(unittest.TestCase):
         self.dosage = self.cache / "dosage.hg38.tsv"
         self.map = self.cache / "clingen_map.hg38.pkl.gz"
         self.config = self.folder / "config.json"
-        self.config.write_text(json.dumps({"assembly": "hg38", "clinvar_vcf": str(self.folder / "clinvar.vcf"),
+        self.config.write_text(json.dumps({"assembly": "hg38", "cache_root": str(self.cache),
+            "clinvar_vcf": str(self.folder / "clinvar.vcf"),
             "clingen_map": str(self.map), "gene_dosage_sensitivity": str(self.dosage),
             "clingen_dosage_grch38_url": "https://selected.invalid/GRCh38.tsv"}))
         (self.folder / "erepo.tsv").write_text(EREPO)
         (self.folder / "dosage.tsv").write_text(DOSAGE)
         self.env = {key: value for key, value in os.environ.items() if not key.startswith("PRIVA_FORCE_")}
         self.env.update(TEST_PYTHON=sys.executable, TEST_FOLDER=str(self.folder), TEST_CACHE=str(self.cache),
-                        TEST_DATA=str(self.data), TEST_CONFIG=str(self.config), TEST_MODE="success")
+                        TEST_DATA=str(self.data), TEST_CONFIG=str(self.config), TEST_MODE="success",
+                        **fake_priva_binary.environment(self.folder))
 
     def run_shell(self, body='ClinGen_deploy "$TEST_CONFIG"', **env):
         prelude = r'''
@@ -72,6 +76,7 @@ python() {
     fi
     "$TEST_PYTHON" "$@"
 }
+export -f python
 '''
         return subprocess.run(["bash", "--noprofile", "--norc", "-c", prelude + body, "test",
                                str(ROOT / "scripts/install_utils.sh")], text=True, capture_output=True,
@@ -89,7 +94,14 @@ python() {
         self.assertEqual(retried.returncode, 0, retried.stderr)
         self.assertEqual(self.erepo.read_text(), EREPO)
         self.assertEqual(retried.stdout.count("FETCH "), 1)
-        self.assertIn("UPDATE clingen_map ", retried.stdout)
+        native_map = self.cache / "ClinGen/clingen_map.hg38.rkyv"
+        self.assertIn("UPDATE clingen_map " + str(native_map), retried.stdout)
+        self.assertEqual(native_map.read_text(), "scientific-map-fixture\n")
+        # Source checks (priva mechanism-source) are tested on their own.
+        self.assertEqual([call for call in fake_priva_binary.calls(self.env["PRIVA_FAKE_CALLS"])
+                          if call[0] != "mechanism-source"], [[
+            "clingen-map", "build", "--clinvar-vcf", str(self.folder / "clinvar.vcf"),
+            "--clingen-tab", str(self.erepo), "--output", str(native_map)]])
 
     def test_interrupted_dosage_retry_preserves_erepo_and_uses_selected_url(self):
         self.erepo.write_text(EREPO)
@@ -261,6 +273,7 @@ ClinGen_deploy "$TEST_CONFIG"
                 result = self.run_shell('''
 priva_bundled_cache_reuse() { return 1; }
 python() { printf 'BUILD %s\\n' "$*"; return 79; }
+export -f python
 ''' + function + ' "$TEST_CONFIG" sources-only')
                 self.assertNotEqual(result.returncode, 0)
                 self.assertIn("BUILD ", result.stdout)

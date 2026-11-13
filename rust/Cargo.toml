@@ -1,0 +1,52 @@
+[package]
+name = "priva-tabular"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.90"
+publish = false
+description = "Opt-in, parity-gated PriVA tabular modules"
+autobins = false
+
+[[bin]]
+name = "priva"
+path = "src/main.rs"
+
+[[bin]]
+name = "priva-tabular"
+path = "src/bin/priva-tabular.rs"
+
+[dependencies]
+bzip2 = { version = "=0.4.4", features = ["static"] }
+csv = "=1.3.1"
+flate2 = "=1.1.10"
+libc = "=0.2.190"
+memmap2 = "=0.9.11"
+# Preserve Python's arbitrary-integer coldspot coordinates and single rounding.
+num-bigint = "=0.4.6"
+polars-core = { version = "=0.51.0", default-features = false, features = ["algorithm_group_by", "dtype-struct"] }
+polars-io = { version = "=0.51.0", default-features = false, features = ["parquet"] }
+polars-ops = { version = "=0.51.0", default-features = false, features = ["is_in", "strings"] }
+rkyv = { version = "=0.8.18", default-features = false, features = ["std", "bytecheck"] }
+# Deterministic extended precision for the pinned DAS dip interval calculation.
+rustc_apfloat = "=0.2.3"
+ryu = "=1.0.23"
+tar = { version = "=0.4.46", default-features = false }
+xz2 = { version = "=0.1.7", features = ["static"] }
+# This writer retains duplicate ZIP members, matching pandas' append mode.
+# Newer ZipWriter APIs reject duplicate names.
+zip = { version = "=0.6.6", default-features = false, features = ["deflate"] }
+zstd = { version = "=0.13.3", default-features = false }
+
+[profile.dev]
+debug = 0
+
+[profile.test]
+debug = 0
+
+[profile.release]
+codegen-units = 16
+lto = false
+
+[build-dependencies]
+cc = "=1.8.0"
+pkg-config = "=0.3.34"

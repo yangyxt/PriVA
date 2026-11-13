@@ -4,7 +4,9 @@
 Use --fixture-root in an explicitly authorized runtime/data tree. Tests retain
 their inputs, interrupted files and sidecars. Native execution records below
 are labelled synthetic; they provide no evidence about a real AlphaMissense
-run. Both installers run this same mirrored suite against their own shell.
+run. AlphaMissense_stat no longer reads these receipts: it builds native
+statistics unless completed Python statistics keep a valid Python DAS receipt
+(tests/test_das_install_completion.py covers both routes).
 """
 from __future__ import annotations
 
@@ -17,8 +19,8 @@ import json
 import os
 from pathlib import Path
 import pickle
-import subprocess
 import sys
+import tempfile
 import unittest
 from unittest.mock import patch
 
@@ -32,7 +34,13 @@ FIXTURE_ROOT = None
 
 class OriginalCache(unittest.TestCase):
     def setUp(self):
-        self.folder = FIXTURE_ROOT / self._testMethodName
+        root = FIXTURE_ROOT
+        if root is None:
+            # Under unittest discovery, retain nothing beyond the test.
+            temporary = tempfile.TemporaryDirectory(prefix='original_cache_')
+            self.addCleanup(temporary.cleanup)
+            root = Path(temporary.name)
+        self.folder = root / self._testMethodName
         self.folder.mkdir()
         self.cache = self.folder / 'cache root'; self.cache.mkdir()
         self.vcf = self.cache / 'input.vcf.gz'; self.vcf.write_bytes(b'SYNTHETIC indexed-input metadata fixture')
@@ -90,31 +98,6 @@ class OriginalCache(unittest.TestCase):
                 raise OSError('SYNTHETIC interrupted before payload publication')
             return original_link(source, target, **kwargs)
         return patch.object(m.os, 'link', link)
-
-    def shell(self, *, output=None):
-        config = self.folder / 'config.json'
-        config.write_text(json.dumps(dict(cache_root=str(self.cache), alphamissense_pd_stat=str(output or self.output),
-                                          alphamissense_vep_vcf=str(self.vcf))))
-        events = self.folder / 'shell.events'
-        script = r'''
-source "$TEST_INSTALLER"
-log() { printf '%s\n' "$*" >&2; }
-read_yaml() { "$TEST_PYTHON" -c 'import json,sys; print(json.load(open(sys.argv[1])).get(sys.argv[2],""))' "$1" "$2"; }
-update_yaml() { printf 'UPDATE:%s\n' "$*" >> "$TEST_EVENTS"; }
-python() {
-    if [[ $1 == */alphamissense_domain_cache.py ]]; then
-        printf 'BUILDER:%s\n' "$*" >> "$TEST_EVENTS"
-        return 0
-    fi
-    "$TEST_PYTHON" "$@"
-}
-AlphaMissense_stat "$TEST_CONFIG"
-'''
-        env = dict(os.environ, TEST_INSTALLER=str(ROOT / 'scripts/install_utils.sh'),
-                   TEST_PYTHON=sys.executable, TEST_CONFIG=str(config), TEST_EVENTS=str(events),
-                   PYTHONDONTWRITEBYTECODE='1')
-        result = subprocess.run(['bash', '-c', script], env=env, text=True, capture_output=True)
-        return result, events.read_text() if events.exists() else ''
 
     def test_import_preserves_original_and_uses_distinct_receipt(self):
         before = m.entry(self.original, hashed=True)
@@ -365,38 +348,6 @@ AlphaMissense_stat "$TEST_CONFIG"
         self.imported()
         self.assertEqual(m.entry(self.output, hashed=True), before)
         self.assertTrue(self.check()['reused'])
-
-    def test_installer_reuses_original_without_builder_or_yaml_write(self):
-        self.imported(); result, events = self.shell()
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(events, '')
-        self.assertIn('completed original', result.stderr)
-
-    def test_installer_missing_original_receipt_uses_existing_builder_route(self):
-        result, events = self.shell()
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn('BUILDER:', events); self.assertIn('UPDATE:', events)
-
-    def test_installer_invalid_original_receipt_fails_without_builder(self):
-        self.imported(); self.output.write_bytes(b'changed')
-        result, events = self.shell()
-        self.assertNotEqual(result.returncode, 0)
-        self.assertEqual(events, '')
-
-    def test_installer_pending_original_import_fails_without_builder(self):
-        with self.interrupted('receipt'):
-            with self.assertRaises(OSError): self.imported()
-        result, events = self.shell()
-        self.assertNotEqual(result.returncode, 0)
-        self.assertEqual(events, '')
-
-    def test_installer_preserves_explicit_external_legacy_reuse(self):
-        outside = self.folder / 'external.pkl'; outside.write_bytes(b'legacy explicit selection')
-        future = max(self.vcf.stat().st_mtime_ns, (ROOT / 'scripts/stat_protein_domain_amscores.py').stat().st_mtime_ns) + 1000000000
-        os.utime(outside, ns=(future, future))
-        result, events = self.shell(output=outside)
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(events, '')
 
 
 def main():

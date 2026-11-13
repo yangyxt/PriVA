@@ -57,12 +57,30 @@ PROFILE_KEYS = (
     "spliceai_snv_prescore", "spliceai_indel_prescore", "primateai_prescore", "splicevault_prescore",
     "conservation_file", "loftee_repo", "human_ancestor_fasta", "loftee_conservation_file",
     "gerp_bigwig", "mavedb_file", "gnomad_vcf_chrX", "pext_enabled", "pext_mean_bw",
-    "pext_tissue_bw_dir", "pext_tissues",
+    "pext_tissue_bw_dir", "pext_tissues", "priva_python_hash_seed",
 )
 SCIENTIFIC_SOURCES = (
     "clinvar_stat_variants.py", "combine_annotations.py", "annotation_vcf.sh",
-    "clinvar_annotation_contract.py", "common_bash_utils.sh", "stat_aachange_clinvar.py", "install_utils.sh", "hpo_penetrance.py",
+    "clinvar_annotation_contract.py", "common_bash_utils.sh", "stat_aachange_clinvar.py", "hpo_penetrance.py",
 )
+# v2 binds the installer by the ClinVar stage bodies below instead of the whole
+# install_utils.sh, so v1 and v2 profiles can never share a signature.
+PROFILE_SCHEMA = "priva_clinvar_scientific_profile_v2"
+INSTALLER = "install_utils.sh"
+# The install_utils.sh functions the refresh runs to build the ClinVar
+# annotation and its statistics, bound by their own source text so that edits
+# elsewhere in the installer keep the same profile and workspace:
+#   ClinVar_VCF_deploy            public deployment entry; routes to the locked deploy helper
+#   _ClinVar_VCF_deploy           pinned input, liftover, official VEP (annotation_vcf.sh), gnomAD enrichment
+#   ClinVar_AA_stat               AA/splice archives from priva clinvar-aa-splice
+#   ClinVar_Gene_stat_regenerate  gene statistics archive from priva clinvar-gene-stats
+# Their other callees are either whole-file sources above (annotation_vcf.sh,
+# common_bash_utils.sh), or only select paths and private configuration views
+# (yaml_value_or_default, clinvar_native_archive_path, priva_resolve_binary,
+# priva_cache_install_direct and the builder wrappers).
+# download_resource_atomic never runs here because the refresh pins its input.
+INSTALLER_PROCEDURES = ("ClinVar_VCF_deploy", "_ClinVar_VCF_deploy", "ClinVar_AA_stat",
+                        "ClinVar_Gene_stat_regenerate")
 
 
 def utc_now() -> str:
@@ -264,12 +282,67 @@ def owned_receipt(output: Path, *, assembly: str, vep_major: str) -> dict | None
     return value
 
 
+def selected_receipt(selected: Path, root: Path, *, assembly: str, vep_major: str) -> dict | None:
+    """Return the owned refresh receipt for the selected gene statistics.
+
+    cache-install publish selects a managed copy with a .source.json receipt
+    instead of the refresh output itself. A converted copy names its source; a
+    direct native copy keeps the builder archive's SHA-256, which identifies
+    the refresh output among this assembly's completed native refreshes.
+    """
+    known = owned_receipt(selected, assembly=assembly, vep_major=vep_major)
+    record_path = Path(str(selected) + ".source.json")
+    if known is not None or selected.suffix != ".rkyv" or not record_path.is_file():
+        return known
+    record = json.loads(record_path.read_text())
+    if (record.get("key") != "clinvar_gene_stat"
+            or Path(str(record.get("archive", ""))).resolve() != selected.resolve()):
+        return None
+    if record.get("origin") is None:
+        return owned_receipt(Path(record["source"]), assembly=assembly, vep_major=vep_major)
+    if record.get("origin") != "direct":
+        return None
+    matches = []
+    for path in sorted((root / "gene_statistics" / assembly).glob("*/*/clinvar_2star_stats.rkyv.ready.json")):
+        try:
+            value = owned_receipt(Path(str(path).removesuffix(".ready.json")), assembly=assembly, vep_major=vep_major)
+        except (OSError, ValueError, KeyError):
+            continue  # Another profile's or a changed completion is never adopted.
+        if value is not None and value["output"]["sha256"] == record.get("archive_sha256"):
+            matches.append(value)
+    return max(matches, key=lambda value: (value["data_date"], value["completed_utc"]), default=None)
+
+
 def selected_vcf(config: dict, root: Path, ucsc: str) -> Path:
     value = config.get("clinvar_vcf")
     if value in EMPTY:
         return root / f"clinvar.{ucsc}.vep.vcf.gz"
     path = Path(value)
     return path if path.is_absolute() or "/" in str(value) else root / path
+
+
+def procedure_text(path: Path, name: str) -> str:
+    """Return one shell function exactly as written, following alphamissense_annotation_base.
+
+    The installer also spells definitions as ``function name () {``. A missing
+    or repeated definition raises, so a renamed stage cannot leave the profile.
+    """
+    pattern = r"^function " + re.escape(name) + r" ?\(\) \{\n.*?^\}"
+    matches = re.findall(pattern, path.read_text(), re.M | re.S)
+    if len(matches) != 1:
+        raise ValueError(f"Cannot identify exactly one ClinVar shell procedure {name} in {path} "
+                         f"(found {len(matches)}); update INSTALLER_PROCEDURES with the stage it was renamed to")
+    return matches[0]
+
+
+def installer_procedures(source_root: Path) -> dict:
+    """Hash each listed ClinVar stage separately; absence is recorded like other sources."""
+    path = (source_root / "scripts" / INSTALLER).absolute()
+    if not path.exists():
+        return {"path": str(path), "exists": False}
+    return {"path": str(path), "exists": True,
+            "sha256": {name: hashlib.sha256(procedure_text(path, name).encode()).hexdigest()
+                       for name in INSTALLER_PROCEDURES}}
 
 
 def scientific_profile(config: dict, source_root: Path, policy: dict) -> dict:
@@ -280,6 +353,9 @@ def scientific_profile(config: dict, source_root: Path, policy: dict) -> dict:
     Bundled data are never opened here for content validation.
     """
     values = {key: config.get(key) for key in PROFILE_KEYS}
+    # ClinVar_Gene_stat_regenerate reads an unset seed as 0.
+    seed = values["priva_python_hash_seed"]
+    values["priva_python_hash_seed"] = "0" if seed in EMPTY else str(seed)
     if str(config.get("pext_enabled", "false")).lower() != "true":
         for key in ("pext_mean_bw", "pext_tissue_bw_dir", "pext_tissues"):
             values.pop(key, None)
@@ -300,7 +376,9 @@ def scientific_profile(config: dict, source_root: Path, policy: dict) -> dict:
                 value["sha256"] = digest(path)
         files[str(path)] = value
     for key, value in values.items():
-        if key in ("assembly", "vep_installed_version", "pext_enabled", "pext_tissues") or value in EMPTY:
+        # The hash seed is a plain value; as a path it would bind the working directory.
+        if key in ("assembly", "vep_installed_version", "pext_enabled", "pext_tissues",
+                   "priva_python_hash_seed") or value in EMPTY:
             continue
         if isinstance(value, str):
             path = Path(value)
@@ -348,7 +426,8 @@ def scientific_profile(config: dict, source_root: Path, policy: dict) -> dict:
     for path in sorted((Path(sys.prefix) / "conda-meta").glob("*.json")):
         if path.name.startswith(package_names):
             record(path, code=True)
-    return {"config": values, "files": files,
+    return {"schema": PROFILE_SCHEMA, "config": values, "files": files,
+            "installer_procedures": installer_procedures(source_root),
             "python": {"executable": sys.executable, "version": sys.version},
             "source_policy": {key: policy[key] for key in ("latest_url_template", "summary_url", "mane_url", "automatic", "threshold_months")}}
 
@@ -510,7 +589,10 @@ def plan_refresh(config_path: Path, source_root: Path) -> dict:
     is_baseline = selected.absolute() == baseline.absolute()
     if not is_baseline:
         nonempty(selected, "selected ClinVar gene statistics")
-    known = owned_receipt(selected, assembly=assembly, vep_major=major) if not is_baseline else None
+    root_value = config.get("clinvar_vcf_dir")
+    known = None if is_baseline else (
+        selected_receipt(selected, Path(root_value), assembly=assembly, vep_major=major)
+        if root_value not in EMPTY else owned_receipt(selected, assembly=assembly, vep_major=major))
     plan = {"kind": RECEIPT_KIND, "config_path": str(config_path), "source_root": str(source_root),
             "config_sha256": digest(config_path), "assembly": assembly, "ucsc_assembly": ucsc,
             "vep_major": major, "selected_stat": str(selected),
@@ -539,10 +621,12 @@ def plan_refresh(config_path: Path, source_root: Path) -> dict:
     signature = profile_signature(profile)
     release_dir = root / "gene_statistics" / assembly / latest["file_date"].replace("-", "")
     build = release_dir / ("vep" + major + "-" + signature[:16])
-    output = build / "clinvar_2star_stats.pkl.gz"
+    # priva clinvar-gene-stats writes the archive; cache-install publish adopts it.
+    output = build / "clinvar_2star_stats.rkyv"
     prior = owned_receipt(output, assembly=assembly, vep_major=major)
     # Reuse an existing unsuffixed completion only for its exact profile. A
     # different profile gets a separate workspace and cannot relabel old bytes.
+    # Unsuffixed workspaces predate the native builder and hold a Python pickle.
     legacy_build = release_dir / ("vep" + major)
     legacy_output = legacy_build / "clinvar_2star_stats.pkl.gz"
     if prior is None and receipt_path(legacy_output).is_file():
@@ -1123,8 +1207,8 @@ def install_refresh(config_path: Path, source_root: Path) -> dict:
         if not plan["explicit_vcf"]:
             updates = {"clinvar_vcf_dir": str(folder),
                        "clinvar_vcf": str(folder / f"clinvar.{plan['ucsc_assembly']}.vep.vcf.gz")}
-            for key, suffix in (("clinvar_aa_stat", "aa_change.stats.pkl"),
-                                ("clinvar_splice_stat", "splice_change.stats.pkl")):
+            for key, suffix in (("clinvar_aa_stat", "aa_change.stats.rkyv"),
+                                ("clinvar_splice_stat", "splice_change.stats.rkyv")):
                 updates[key] = str(folder / f"clinvar.{plan['ucsc_assembly']}.vep.{suffix}")
         atomic_text(working, render_config(config_path.read_text(), updates))
         arguments = [] if plan["explicit_vcf"] else ["--source-vcf", inputs["sources"]["vcf"]["path"]]

@@ -9,11 +9,13 @@ import tempfile
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
-READY = all(shutil.which(x) for x in ('bcftools', 'tabix')) and all(
+# Variant IDs are written by priva variant-ids; CI sets PRIVA_BINARY after building it.
+PRIVA = os.environ.get('PRIVA_BINARY') or shutil.which('priva')
+READY = PRIVA and all(shutil.which(x) for x in ('bcftools', 'tabix')) and all(
     importlib.util.find_spec(x) for x in ('pysam', 'pandas'))
 
 
-@unittest.skipUnless(READY, 'bcftools, tabix, pysam and pandas required')
+@unittest.skipUnless(READY, 'priva (PRIVA_BINARY), bcftools, tabix, pysam and pandas required')
 class PreprocessContigMapping(unittest.TestCase):
     def setUp(self):
         import pysam
@@ -48,7 +50,8 @@ class PreprocessContigMapping(unittest.TestCase):
         target = folder / 'result.vcf.gz'
         result = subprocess.run(['bash', str(ROOT / 'scripts/annotation_vcf.sh'), 'preprocess_vcf',
                                  '-i', compressed, '-o', str(target), '-r', str(self.reference), '-t', '1'],
-                                env=dict(os.environ, TMPDIR=str(self.root)), capture_output=True, text=True, timeout=60)
+                                env=dict(os.environ, TMPDIR=str(self.root), PRIVA_BINARY=os.path.abspath(PRIVA)),
+                                capture_output=True, text=True, timeout=60)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertTrue(Path(str(target) + '.tbi').is_file())
         with gzip.open(target, 'rt') as stream:

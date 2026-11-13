@@ -10,6 +10,7 @@ import sys
 import tempfile
 import unittest
 
+import fake_priva_binary
 from test_conservation_resource_check import make_bigwig, make_reference
 
 
@@ -30,6 +31,7 @@ update_yaml() {
 update_or_append_yaml() { update_yaml "$@"; }
 priva_env_vars_set() { export "$@"; }
 python() { "$TEST_PYTHON" "$@"; }
+export -f python
 git() { event "git $*"; return 72; }
 wget() {
     local destination=${@: -1} name fixture
@@ -67,7 +69,7 @@ class LoFteeInstallerTests(unittest.TestCase):
         self.config = self.folder / "config.json"
         self.env = dict(os.environ, TEST_EVENTS=str(self.events), TEST_PYTHON=sys.executable,
                         TEST_CONFIG=str(self.config), TEST_CACHE=str(self.cache), TEST_FAIL="none",
-                        TMPDIR=str(self.folder))
+                        TMPDIR=str(self.folder), **fake_priva_binary.environment(self.folder))
         self.configure("hg19")
 
     def configure(self, assembly):
@@ -122,6 +124,11 @@ class LoFteeInstallerTests(unittest.TestCase):
                 self.assertEqual(events, [])
                 self.assertEqual(self.config.read_bytes(), before)
                 self.assertIn("already installed", result.stderr)
+        tool_prefix = os.path.dirname(shutil.which("python", path=self.env.get("PATH")))
+        self.assertEqual(fake_priva_binary.calls(self.env["PRIVA_FAKE_CALLS"]), [
+            ["conservation-resource", "validate", "--input", str(self.folder / (assembly + "_assets/gerp.bw")),
+             "--assembly", assembly, "--reference", str(self.folder / (assembly + "_assets/hg38.reference.fa")),
+             "--tool-prefix", tool_prefix] for assembly in ("hg38", "GRCh38")])
 
     def test_fresh_hg19_under_nounset_uses_original_three_sources_without_gerp_url(self):
         self.fresh()

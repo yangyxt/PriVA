@@ -32,6 +32,33 @@ def write_vcf(path, stamp="20260430"):
         handle.write(vcf_bytes(stamp))
 
 
+INSTALLER_FIXTURE = '''\
+function unrelated_builder() {
+    echo "unrelated resource"
+}
+
+
+function ClinVar_VCF_deploy() {
+    python clinvar_gene_refresh.py deploy --config "$1"
+}
+
+
+function _ClinVar_VCF_deploy() {
+    bash annotation_vcf.sh anno_VEP_cache_candidate --input_vcf "$1"
+}
+
+
+function ClinVar_AA_stat () {
+    python stat_aachange_clinvar.py "$1"
+}
+
+
+function ClinVar_Gene_stat_regenerate () {
+    python clinvar_stat_variants.py --clinvar_anno_vcf "$1"
+}
+'''
+
+
 def write_stat(path):
     path.parent.mkdir(parents=True, exist_ok=True)
     with gzip.open(path, "wb") as handle:
@@ -63,6 +90,8 @@ class ClinVarGeneRefreshTests(unittest.TestCase):
             path = self.source / "scripts" / name
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text("frozen fixture scientific source\n")
+        self.installer = self.source / "scripts/install_utils.sh"
+        self.installer.write_text(INSTALLER_FIXTURE)
         self.cache = self.directory / "cache"
         self.config = self.directory / "config.json"
         self.settings = {"assembly": "hg38", "vep_installed_version": "116",
@@ -117,6 +146,52 @@ class ClinVarGeneRefreshTests(unittest.TestCase):
              mock.patch.object(refresh, "run_original", side_effect=original or self.original_fixture):
             value = refresh.install_refresh(self.config, self.source)
         return value, preflight, acquired
+
+    def test_published_native_statistics_keep_date_based_refresh(self):
+        result, _, _ = self.install()
+        output = Path(result["output_path"])
+        refreshed = refresh.load_config(self.config)
+        for origin in ("direct", None):
+            with self.subTest(origin=origin):
+                # cache-install publish selects a managed copy with its own receipt.
+                managed = self.directory / "cache_root" / f"clinvar_gene_stat.{origin}.v1.rkyv"
+                managed.parent.mkdir(exist_ok=True)
+                managed.write_bytes(output.read_bytes())
+                record = {"key": "clinvar_gene_stat", "archive": str(managed)}
+                if origin is None:
+                    record["source"] = str(output)
+                else:
+                    record.update(origin=origin, archive_sha256=hashlib.sha256(output.read_bytes()).hexdigest())
+                Path(str(managed) + ".source.json").write_text(json.dumps(record))
+                self.settings = dict(refreshed, clinvar_gene_stat=str(managed))
+                self.save_config()
+                self.latest["file_date"] = "2026-04-30"
+                self.assertEqual(self.plan()["action"], "reuse")
+                self.latest["file_date"] = "2026-07-31"
+                planned = self.plan()
+                self.assertEqual(planned["action"], "rebuild")
+                self.assertNotEqual(planned["output_path"], str(output))
+
+    def test_hash_seed_is_bound_into_the_profile(self):
+        before = self.signature()
+        self.settings["priva_python_hash_seed"] = 0
+        self.save_config()
+        self.assertEqual(self.signature(), before)
+        self.settings["priva_python_hash_seed"] = 17
+        self.save_config()
+        self.assertNotEqual(self.signature(), before)
+
+    def test_working_directory_does_not_change_the_profile(self):
+        before = self.signature()
+        previous = os.getcwd()
+        try:
+            os.chdir(self.directory)
+            self.assertEqual(self.signature(), before)
+        finally:
+            os.chdir(previous)
+        files = refresh.scientific_profile(refresh.load_config(self.config), self.source,
+                                           refresh.resource_policy(self.source))["files"]
+        self.assertFalse(any(Path(path).name == "0" for path in files))
 
     def test_calendar_months_include_boundary_and_clamp_month_ends(self):
         for start, expected in ((date(2026, 1, 31), date(2026, 4, 30)),
@@ -197,6 +272,12 @@ class ClinVarGeneRefreshTests(unittest.TestCase):
         acquired.assert_called_once()
         selected = Path(refresh.load_config(self.config)["clinvar_gene_stat"])
         self.assertEqual(selected, Path(result["output_path"]))
+        # The native builders write archives that cache-install publish adopts.
+        self.assertEqual(selected.name, "clinvar_2star_stats.rkyv")
+        working = refresh.load_config(Path(self.calls[1][1][0]))
+        self.assertEqual([Path(working[key]).name for key in ("clinvar_aa_stat", "clinvar_splice_stat")],
+                         ["clinvar.hg38.vep.aa_change.stats.rkyv", "clinvar.hg38.vep.splice_change.stats.rkyv"])
+        self.assertEqual(self.calls[2][1][3], result["output_path"])
         receipt = json.loads(refresh.receipt_path(selected).read_text())
         self.assertEqual(receipt["data_date"], "2026-04-30")
         self.assertEqual(receipt["status"], "complete")
@@ -426,6 +507,49 @@ class ClinVarGeneRefreshTests(unittest.TestCase):
         (container / "unrelated later resource").write_text("not a selected scientific input")
         self.assertEqual(self.plan()["action"], "reuse")
 
+    def signature(self):
+        return refresh.profile_signature(refresh.scientific_profile(
+            refresh.load_config(self.config), self.source, refresh.resource_policy(self.source)))
+
+    def test_unrelated_installer_edits_keep_the_profile_and_workspace(self):
+        previous, _, _ = self.install()
+        self.assertEqual(previous["scientific_profile"]["schema"], refresh.PROFILE_SCHEMA)
+        self.installer.write_text(INSTALLER_FIXTURE.replace('echo "unrelated resource"', 'echo "changed"')
+                                  + '\n\nfunction new_native_builder() {\n    priva build-cache "$1"\n}\n')
+        planned = self.plan()
+        self.assertEqual(planned["action"], "reuse")
+        self.assertEqual(planned["output_path"], previous["output_path"])
+        self.assertEqual(planned["scientific_profile_sha256"], previous["scientific_profile_sha256"])
+
+    def test_edit_inside_each_clinvar_stage_changes_the_profile(self):
+        before = self.signature()
+        edits = {"ClinVar_VCF_deploy": ("deploy --config", "deploy --strict --config"),
+                 "_ClinVar_VCF_deploy": ("anno_VEP_cache_candidate", "anno_VEP_data"),
+                 "ClinVar_AA_stat": ('stat_aachange_clinvar.py "$1"', 'stat_aachange_clinvar.py "$1" 2'),
+                 "ClinVar_Gene_stat_regenerate": ("--clinvar_anno_vcf", "--vcf")}
+        self.assertEqual(set(edits), set(refresh.INSTALLER_PROCEDURES))
+        for name, (old, new) in edits.items():
+            with self.subTest(name=name):
+                self.assertEqual(INSTALLER_FIXTURE.count(old), 1)
+                self.installer.write_text(INSTALLER_FIXTURE.replace(old, new))
+                self.assertNotEqual(self.signature(), before)
+        self.installer.write_text(INSTALLER_FIXTURE)
+        self.assertEqual(self.signature(), before)
+
+    def test_missing_or_repeated_clinvar_stage_fails_closed(self):
+        renamed = INSTALLER_FIXTURE.replace("function ClinVar_AA_stat ()", "function ClinVar_AA_statistics ()")
+        repeated = INSTALLER_FIXTURE + '\n\nfunction ClinVar_Gene_stat_regenerate () {\n    :\n}\n'
+        for text, name in ((renamed, "ClinVar_AA_stat"), (repeated, "ClinVar_Gene_stat_regenerate")):
+            with self.subTest(name=name):
+                self.installer.write_text(text)
+                with self.assertRaisesRegex(ValueError, "exactly one ClinVar shell procedure " + name + " "):
+                    self.plan()
+
+    def test_actual_installer_defines_every_bound_clinvar_stage(self):
+        value = refresh.installer_procedures(ROOT)
+        self.assertTrue(value["exists"])
+        self.assertEqual(set(value["sha256"]), set(refresh.INSTALLER_PROCEDURES))
+
     def test_missing_or_changed_annotation_aa_splice_artifacts_block_reuse(self):
         self.install()
         selected = Path(refresh.load_config(self.config)["clinvar_gene_stat"])
@@ -469,9 +593,15 @@ class ClinVarGeneRefreshTests(unittest.TestCase):
         script = r'''
 source "$1" >/dev/null || exit
 log() { :; }
+# This test checks dispatch order; native preparation/publication is separate.
+priva_cache_install_begin() { PRIVA_CACHE_INSTALL_BUILD_CONFIG=$2; }
+priva_cache_install_finish() { :; }
 priva_install_basic_paths() { PRIVA_INSTALL_TMPDIR="$TEST_FOLDER"; }
 conda_install_vep() { PRIVA_INSTALL_ENV_NAME=priva_acmg; }
 priva_prepare_install_config() { :; }
+bundled_snapshot_install() { :; }  # Dispatch fixture; snapshot checks are covered separately.
+Nextflow_runtime_install() { :; }  # Dispatch fixture; no driver acquisition.
+PriVA_rust_install() { :; }  # Dispatch fixture; no Rust build.
 read_yaml() { case "$2" in ref_genome) printf '%s' "$TEST_REFERENCE";; assembly) printf hg38;; *) printf '%s' "$TEST_FOLDER";; esac; }
 reference_genome_install() { :; }
 gnomAD_install() { :; }
@@ -482,6 +612,7 @@ AlphaMissense_stat() { printf 'ALPHA_STAT\n'; }
 AlphaMissense_pick_intolerant_domains() { :; }
 prepare_pm1_regions() { :; }
 ClinVar_patho_AF_stat() { printf 'CLINVAR_AF\n'; }
+ClinVar_PM5_index() { printf 'CLINVAR_PM5\n'; }
 CADD_install() { :; }
 CADD_conda_install() { :; }
 CADD_upstream_check() { :; }
@@ -495,7 +626,7 @@ main_install "$TEST_CONFIG"
         result = subprocess.run(["bash", "-c", script, "fixture", str(ROOT / "scripts/install_utils.sh")],
                                 env=environment, capture_output=True, text=True, timeout=20)
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(result.stdout.splitlines(), ["CLINVAR_AUTO", "ALPHA_STAT", "CLINVAR_AF"])
+        self.assertEqual(result.stdout.splitlines(), ["CLINVAR_AUTO", "ALPHA_STAT", "CLINVAR_AF", "CLINVAR_PM5"])
 
 
 class ClinVarMetadataAndAcquisitionTests(unittest.TestCase):

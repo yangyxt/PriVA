@@ -16,6 +16,8 @@ import tempfile
 import unittest
 from unittest import mock
 
+import fake_priva_binary
+
 
 ROOT = Path(__file__).resolve().parents[1]
 SPEC = importlib.util.spec_from_file_location("reference_resources", ROOT / "scripts/reference_resources.py")
@@ -358,12 +360,15 @@ class ReferenceResources(unittest.TestCase):
                 "$TEST_PYTHON" -c 'import json,os,sys; open(os.environ["TEST_EVENTS"],"a").write(json.dumps(sys.argv[1:])+"\n")' "$@"
             }
             gofcards_exact_gof_cache_install() { return 0; }
+            # The fixture priva runs each script through `python` in a new Bash.
+            export -f python
             priva_install_prerequisites "$2"
         '''
         result = subprocess.run(["bash", "--noprofile", "--norc", "-c", script, "fixture",
                                  str(ROOT / "scripts/install_utils.sh"), str(config)],
                                 env=dict(os.environ, TEST_DATA=str(self.data), TEST_SOURCE=str(self.data.parent),
-                                         TEST_PYTHON=sys.executable, TEST_EVENTS=str(events)),
+                                         TEST_PYTHON=sys.executable, TEST_EVENTS=str(events),
+                                         **fake_priva_binary.environment(self.folder)),
                                 text=True, capture_output=True)
         self.assertEqual(result.returncode, 0, result.stderr)
         calls = [json.loads(line) for line in events.read_text().splitlines()]
@@ -634,6 +639,8 @@ class ReferenceResources(unittest.TestCase):
                 "$TEST_PYTHON" -c 'import json,sys; v=json.load(open(sys.argv[1])).get(sys.argv[2]); print("null" if v is None else v)' "$1" "$2"
             }
             # Scalar bootstrap is separately covered; retain actual prerequisite/cache routing.
+            priva_cache_install_begin() { PRIVA_CACHE_INSTALL_BUILD_CONFIG=$2; }
+            priva_cache_install_finish() { :; }
             priva_install_basic_paths() { PRIVA_INSTALL_TMPDIR="$TEST_INSTALL_TMPDIR"; }
             conda_install_vep() { PRIVA_INSTALL_ENV_NAME=priva_acmg; }
             nm_to_enst_mapping_install() { :; }
@@ -641,6 +648,8 @@ class ReferenceResources(unittest.TestCase):
             # snapshot deployment has its own complete-checkout fixtures.
             bundled_snapshot_install() { :; }
             CADD_conda_install() { :; }  # Unrelated frontend deployment is covered separately.
+            Nextflow_runtime_install() { :; }  # Unrelated driver acquisition is covered separately.
+            PriVA_rust_install() { :; }  # No build in a reference preflight fixture.
             priva_configure_cache_paths() { [[ ${2:-} != --check ]] || printf '%s' '{}'; :; }
             priva_configure_portable_paths() { :; }
             reference_genome_install() { printf 'SELECTED_REFERENCE_REUSED\n'; }
@@ -650,7 +659,8 @@ class ReferenceResources(unittest.TestCase):
         '''
         env = dict(os.environ, TEST_SOURCE=str(self.data.parent), TEST_PYTHON=sys.executable,
                    TEST_INSTALL_TMPDIR=str(self.folder),
-                   PRIVA_SMOKE_SKIP_VEP="1", PYTHONDONTWRITEBYTECODE="1")
+                   PRIVA_SMOKE_SKIP_VEP="1", PYTHONDONTWRITEBYTECODE="1",
+                   **fake_priva_binary.environment(self.folder))
         env.pop("PRIVA_FORCE_GOFCARDS_CACHE", None)
         env.pop("PRIVA_FORCE_ALL_CACHES", None)
         result = subprocess.run(["bash", "--noprofile", "--norc", "-c", body, "fixture",
@@ -719,9 +729,12 @@ class ReferenceResources(unittest.TestCase):
         for function, scope in (("reference_genome_install", "selected"), ("assembly_references_install", "both"),
                                 ("gofcards_reference_install", "gofcards")):
             with self.subTest(function=function):
+                # The installer runs priva reference-resources once priva is recorded.
                 script = r'''
                     source "$1" >/dev/null
-                    python() {
+                    priva_resolve_binary() { PRIVA_BIN=reference_helper; }
+                    reference_helper() {
+                        printf 'COMMAND:%s\n' "$1" >&2
                         printf 'HELPER:%s %s %s\n' "$2" "$7" "$8" >&2
                         printf 'OPT_IN:%s\n' "$9" >&2
                         return "${FAIL_HELPER:-0}"
@@ -731,6 +744,7 @@ class ReferenceResources(unittest.TestCase):
                 command = ["bash", "--noprofile", "--norc", "-c", script, "fixture", str(ROOT / "scripts/install_utils.sh"), function, str(config)]
                 result = subprocess.run(command, capture_output=True, text=True)
                 self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertIn("COMMAND:reference-resources", result.stderr)
                 self.assertIn(f"HELPER:install {scope} --write-config", result.stderr)
                 self.assertIn("OPT_IN:--use-cache-root", result.stderr)
                 failed = subprocess.run(command, capture_output=True, text=True,

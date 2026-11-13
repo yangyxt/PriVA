@@ -12,6 +12,8 @@ from unittest.mock import patch
 
 import yaml
 
+import fake_priva_binary
+
 ROOT = Path(__file__).resolve().parents[1]
 SPEC = importlib.util.spec_from_file_location('installed_environment_test', ROOT / 'scripts/installed_environment.py')
 EXPORT = importlib.util.module_from_spec(SPEC)
@@ -381,6 +383,25 @@ class ManagedInstalledEnvironment(unittest.TestCase):
             self.invoke(action=lambda: self.output.symlink_to(self.target))
         self.assertEqual((self.identity(self.target.stat()), self.target.read_bytes()), target_before)
         self.assertTrue(self.output.is_symlink())
+
+
+class InstallerExport(unittest.TestCase):
+    def test_installer_exports_through_priva_with_the_selected_manager(self):
+        with tempfile.TemporaryDirectory(dir=os.environ.get('PRIVA_TEST_TMPDIR', os.environ.get('TMPDIR'))) as temporary:
+            root = Path(temporary)
+            config = root / 'config.yml'
+            config.write_text(yaml.safe_dump(dict(cache_root=str(root))))
+            # The stand-in program records the call and runs no package manager.
+            env = dict(os.environ, PRIVA_ENV_MANAGER='/selected/micromamba', PRIVA_FAKE_STATUS='0',
+                       **fake_priva_binary.environment(root))
+            result = subprocess.run(['bash', '--noprofile', '--norc', '-c',
+                                     'source "$1" >/dev/null && priva_export_installed_environment --config "$2"',
+                                     'fixture', str(ROOT / 'scripts/install_utils.sh'), str(config)],
+                                    env=env, text=True, capture_output=True, timeout=30)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(fake_priva_binary.calls(env['PRIVA_FAKE_CALLS']), [[
+                'installed-environment', 'export-installation', '--config', str(config),
+                '--manager', '/selected/micromamba']])
 
 
 if __name__ == '__main__':

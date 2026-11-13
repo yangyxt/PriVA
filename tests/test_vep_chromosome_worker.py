@@ -11,6 +11,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -26,6 +27,8 @@ from test_clinvar_cache_candidate import write_vcf
 ORACLE = ROOT / "tests/fixtures/vep_serial_v7_5be1b946.sh"
 ORACLE_SHA = "78cc9a45f457a0cbcc90be5b3379b0a540b92855a30bef4a398e5f0cff70ad80"
 FUNCTION_SHA = "f887aa2298360af1779eb9ad28a0fbd737093c66d73e10658af4950bd385415e"
+# The SpliceAI check runs priva spliceai-cutoffs; CI sets PRIVA_BINARY after building it.
+PRIVA = os.environ.get("PRIVA_BINARY") or shutil.which("priva")
 
 SHELL = r'''
 load_script() { source "$1"; }
@@ -98,7 +101,10 @@ class VEPChromosomeWorkerTests(unittest.TestCase):
         self.config.write_text(yaml.safe_dump(self.settings, sort_keys=False))
 
     def run_shell(self, function, arguments, *, oracle=False, env=None):
-        environment = dict(os.environ, WORKER_SCRIPT=str(ROOT / "scripts/annotation_vcf.sh"),
+        if not PRIVA:
+            self.skipTest("needs the priva program: set PRIVA_BINARY")
+        environment = dict(os.environ, PRIVA_BINARY=os.path.abspath(PRIVA),
+            WORKER_SCRIPT=str(ROOT / "scripts/annotation_vcf.sh"),
             WORKER_ORACLE_PATH=str(ORACLE), WORKER_ORACLE=str(int(oracle)), WORKER_FUNCTION=function,
             WORKER_TRACE=str(self.trace), WORKER_EVENTS=str(self.events), SLURM_CPUS_PER_TASK="24")
         if env:

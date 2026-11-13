@@ -63,6 +63,8 @@ pp1_ped: ""      # PED file for the PP1 cohort VCF file, optional
 
 
 ####################################################Below paths will be determined automatically by install_utils.sh####################################################
+# The compiled PriVA program (priva) that runs the converted pipeline steps; saved by main_install (PriVA_rust_install)
+priva_binary: ""
 # Below we specify the path to the gnomAD vcf file for chromosome X and we'll use that template to deduce the paths to other chromosome VCF files, the paths should be relatively constant
 gnomad_vcf_chrX: ""
 
@@ -72,7 +74,12 @@ clinvar_aa_stat: ""
 clinvar_splice_stat: ""
 clinvar_patho_af_stat: ""
 clinvar_patho_exon_af_stat: ""
+clinvar_pm5_index: ""  # Built by install_utils.sh ClinVar_PM5_index (priva clinvar-pm5-index) from clinvar_vcf; read by priva acmg-assign for PM5
 clinvar_gene_stat: "clinvar_2star_stats.pkl.gz"
+# Python hash seed whose set iteration order the native builders reproduce:
+# priva clinvar-gene-stats (ClinVar_Gene_stat_regenerate), and the exon-history
+# merge, das-domains transcripts and das-domains analyze (AlphaMissense DAS).
+priva_python_hash_seed: 0
 
 # The UTRAnnotator plugin cache file
 utr_annotator_file: ""
@@ -123,7 +130,9 @@ cadd_base_dir: ""
 # The PrimateAI plugin prescore file
 primateai_prescore: ""
 
-# The SpliceAI plugin cache file, snv and indel
+# The SpliceAI plugin cache files. Fresh GRCh37 installs use v1; GRCh38 uses v2.
+# Installation detects decompressed headers: VCF is passed through; native v2
+# TSV is prepared for the unchanged VEP plugin. Provenance stays in sidecars.
 spliceai_snv_prescore: ""
 spliceai_indel_prescore: ""
 ####################################################Above will be determined manually by your reply by install_utils.sh####################################################
@@ -256,12 +265,14 @@ hpo_release: "v2026-06-23"
 hpo_raw_dir: ""
 hpo_genes_to_phenotype_url: "https://github.com/obophenotype/human-phenotype-ontology/releases/download/v2026-06-23/genes_to_phenotype.txt"
 hpo_phenotype_hpoa_url: "https://github.com/obophenotype/human-phenotype-ontology/releases/download/v2026-06-23/phenotype.hpoa"
+# Kept for older configurations only; the installer runs priva hpo-assertions build.
 hpo_assertion_builder_script: "scripts/collapse_HPO_anno.py"
 hpo_assertions: ""
 mondo_release: "v2026-07-06"
 mondo_url: "https://github.com/monarch-initiative/mondo/releases/download/v2026-07-06/mondo-simple.obo"
 mondo_sha256: "7e28f3fba97b2f474b70dba54d9b719d07c3d84e5e682189146a05dbedf755aa"
 mondo_obo: ""
+# Kept for older configurations only; the installer runs priva mondo-scope build.
 mondo_scope_builder_script: "scripts/build_mondo_disease_scope.py"
 mondo_disease_scope_registry: ""
 mondo_disease_scope_overrides: "data/mondo/disease_scope_overrides.tsv"

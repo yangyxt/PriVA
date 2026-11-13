@@ -14,6 +14,8 @@ from unittest import mock
 
 import yaml
 
+import fake_priva_binary
+
 ROOT = Path(__file__).resolve().parents[1]
 INSTALLER = ROOT / 'scripts/install_utils.sh'
 FROZEN_INSTALLER = ROOT / 'tests/fixtures/installer-054b494/scripts/install_utils.sh'
@@ -41,9 +43,12 @@ class SpliceAIInstallerInputs(unittest.TestCase):
         self.indel = self.folder / 'indel with spaces.vcf.gz'
         self.snv.write_bytes(b'fixture: helper owns decompressed-header validation')
         self.indel.write_bytes(b'fixture: helper owns decompressed-header validation')
-        self.helper = scripts / 'spliceai_cache_input.py'
-        self.helper.write_text(FAKE_INPUT_HELPER)
-        self.env = dict(os.environ, TEST_CONFIG=str(self.config), TEST_FOLDER=str(self.folder),
+        # A stand-in for the priva program's spliceai-cache-input command.
+        self.helper = scripts / 'priva'
+        self.helper.write_text('#!' + sys.executable + '\n' + FAKE_INPUT_HELPER)
+        self.helper.chmod(0o755)
+        self.env = dict(os.environ, PRIVA_BINARY=str(self.helper), TEST_SCRIPT_DIR=str(scripts.resolve()),
+                        TEST_CONFIG=str(self.config), TEST_FOLDER=str(self.folder),
                         TEST_CALLS=str(self.calls), TEST_PROMPTS=str(self.prompts),
                         TEST_SNV=str(self.snv), TEST_INDEL=str(self.indel))
         self.configure()
@@ -138,7 +143,7 @@ class SpliceAIInstallerInputs(unittest.TestCase):
         self.assertNotEqual(self.invoke().returncode, 0)
         self.assertFalse(self.prompts.exists())
 
-    def test_original_plugin_stage_order_is_retained(self):
+    def test_native_plugin_order_excludes_unused_motif_build(self):
         result = self.shell(r'''
             CONDA_PREFIX="$TEST_FOLDER/envs/priva_acmg"
             for name in UTRAnnotator_install LOEUF_install Conservation_install AlphaMissense_install AlphaMissense_anno AlphaMissense_pick_missense_constrained_segments SpliceAI_install SpliceVault_install MaveDB_install PrimateAI_install; do
@@ -150,15 +155,20 @@ class SpliceAIInstallerInputs(unittest.TestCase):
         self.assertEqual(self.calls.read_text().splitlines(), [
             'UTRAnnotator_install', 'LOEUF_install', 'Conservation_install',
             'AlphaMissense_install', 'AlphaMissense_anno',
-            'AlphaMissense_pick_missense_constrained_segments', 'SpliceAI_install',
+            'SpliceAI_install',
             'SpliceVault_install', 'MaveDB_install', 'PrimateAI_install'])
         self.assertNotIn('SpliceAI_profile_install', INSTALLER.read_text())
 
 
 FAKE_INPUT_HELPER = r'''
-import argparse, hashlib, json, os
+import argparse, hashlib, json, os, sys
 from pathlib import Path
 import yaml
+if sys.argv[1:]==['--version']:print('priva 0.1.0 (fixture)');raise SystemExit(0)
+assert sys.argv[1]=='spliceai-cache-input', sys.argv
+# The command runs install_utils.sh from this folder for SpliceAI2 tables.
+assert os.environ['PRIVA_SCRIPT_DIR']==os.environ['TEST_SCRIPT_DIR'], os.environ.get('PRIVA_SCRIPT_DIR')
+del sys.argv[1]
 p=argparse.ArgumentParser()
 p.add_argument('command', choices=['install'])
 for key in ('config','cache-dir','snv','indel'):p.add_argument('--'+key,required=True)
@@ -310,7 +320,10 @@ class SpliceAI2Preparation(unittest.TestCase):
         self.manifest.write_text(json.dumps(self.source))
         self.output = self.folder / 'output with spaces'
         self.calls = self.folder / 'calls.json'
-        self.env = dict(os.environ, TEST_CONFIG=str(self.config), TEST_CALLS=str(self.calls))
+        # The installer runs priva spliceai2-prepare; the fixture priva runs the
+        # stand-in driver above with the same arguments.
+        self.env = dict(os.environ, TEST_CONFIG=str(self.config), TEST_CALLS=str(self.calls),
+                        **fake_priva_binary.environment(self.folder, scripts))
 
     def invoke(self, mode='valid', converter='/pinned bin/spliceai2-converter'):
         self.env['TEST_ADAPTER_MODE'] = mode
@@ -389,15 +402,17 @@ class SpliceAI2Preparation(unittest.TestCase):
         self.assertNotIn('FileNotFoundError', result.stderr)
         self.assertFalse(self.calls.exists())
 
-    def test_missing_driver_and_failed_driver_do_not_update_config(self):
+    def test_missing_priva_and_failed_preparation_do_not_update_config(self):
         result = self.invoke('failure')
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual(self.config.read_bytes(), self.original)
-        self.driver.unlink()
+        self.calls.unlink(missing_ok=True)
+        self.env['PRIVA_BINARY'] = str(self.folder / 'absent' / 'priva')
         result = self.invoke()
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn('deployment driver is absent', result.stderr)
+        self.assertIn('must be an existing executable', result.stderr)
         self.assertEqual(self.config.read_bytes(), self.original)
+        self.assertFalse(self.calls.exists())
 
     def test_changed_config_is_not_overwritten(self):
         result = self.invoke('config_changed')

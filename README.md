@@ -1,459 +1,741 @@
-# PriVA
+# PriVA-nextflow
 
-A comprehensive pipeline for ACMG/AMP-based variant interpretation and variant prioritization in genetic analysis.
+PriVA-nextflow runs PriVA as a Nextflow workflow over one cohort VCF. It validates and annotates the cohort once, then filters and prioritizes every pedigree family in its own tasks; without a pedigree, one run covers all samples without family filtering. PriVA's own steps run in the `priva` program (Rust); VEP and CADD run as their authors ship them. It produces family-filtered variants, ACMG evidence and transcript-level rankings for SNVs and short indels. It is not a structural-variant/CNV workflow.
 
-## Overview
-
-This repository contains scripts and configuration files for an automated variant prioritization pipeline based on the ACMG/AMP guidelines. PriVA combines transcript-level annotation, population and functional data, gene-disease mechanism and inheritance context, and family information to evaluate ACMG/AMP criteria and produce ranked variant lists for each family. Annotation resources are deployed once and can be refreshed; each cohort run then performs annotation, family-level filtering, criteria matching, and prioritization.
-
-![PriVA workflow (Figure 1)](PriVA_figure1.png)
-
-## Requirements
-
-- Conda/Mamba for environment management
-- Sufficient disk space for annotation resources (>1TB)
-- Reference genome file (or let the installer download and index the assembly-matched FASTA)
-
-## Pedigree File Requirements
-
-If a valid pedigree table is provided, please note:
-1. The family sample ID should be consistent between the pedigree table and the VCF file.
-2. The proband of the family should stay as the first record of the family in the pedigree table
-3. Every family should have a unique identifier in the pedigree table
-
-## Installation
-
-The github repository includes an one-stop installation BASH script (`scripts/install_utils.sh`) that helps deploy all required dependencies on your host system, with the help from a configuration YAML file (e.g., `config.yaml`). This YAML file is specifying the paths to external annotation dependencies.
-
-**Carefully read comments in `config.yaml` to prepare for execution of install_utils.sh and PriVA**
-
-Before the first run, create the directories selected by `cache_root` and
-`tmp_dir`, then set those existing absolute paths, `assembly`, and
-`vep_installed_version` (default `"116"`) in your copy of `config.yaml`.
-Prepare the matching manual publisher files described below. The installer
-stops if either storage directory is missing or unusable.
-
-Install the environment, VEP/plugins, and annotation resources in one run:
-
-```bash
-bash scripts/install_utils.sh main_install /path/to/config.yaml
-conda activate priva_acmg  # Or activate with the Mamba/Micromamba used to install.
+```mermaid
+flowchart LR
+    I[Cohort VCF] --> V[Validate inputs and resources]
+    P[Pedigree, optional + configuration] --> V
+    V --> A[Annotate the cohort once: VEP, CADD]
+    A --> F1[Filter family 1]
+    A --> F2[Filter family 2 ...]
+    F1 --> R1[ACMG + ranking, family 1]
+    F2 --> R2[ACMG + ranking, family 2 ...]
+    R1 --> O[Variants + ranked tables + provenance]
+    R2 --> O
 ```
 
-`main_install` creates or prepares `priva_acmg` from `acmg_conda_rough.yml`
-and selects the configured VEP major. A separate VEP installation call is not
-required. Rerun the same command to reuse compatible completed resources and
-continue interrupted preparation.
+**One entry point.** A run starts from the cohort VCF and annotates it one task per annotation step (VEP, CADD and the other steps). It was qualified against the earlier Snakemake workflow, which this workflow replaces: on a trio, and on the same three samples as three families and without a pedigree, the annotated VCF, the CADD table and every family's outputs were identical, with the local executor and with the Slurm profile. To avoid annotating the same variants again, use the annotation hub (`--annotation_hub`); to finish an interrupted run, use `-resume`. The earlier annotated mode, which imported a ready VCF/CADD pair, was removed. SpliceAI v1 and prepared SpliceAI2 caches each use their own splicing and ACMG cutoffs ([spliceai_cutoffs.py](scripts/spliceai_cutoffs.py)); SpliceAI2 uses its authors' recommended thresholds (0.1, 0.25 and 0.5 in place of SpliceAI v1's 0.2, 0.5 and 0.8). Installation, stub execution and successful scheduling do not establish family or scientific-profile qualification.
+
+## Install
+
+Use Linux x86-64, Bash, standard GNU tools, network access and Micromamba, Mamba or Conda. Begin in this checkout; the commands below move to an external run directory before launching Nextflow. Keep source, input and storage paths free of spaces or shell metacharacters. Genome-wide resource acquisition and cache building need suitable disk, memory and batch resources.
+
+The tree below shows the default storage locations and how each resource is prepared. Blue path names and tokens follow the YAML configuration; the labels distinguish downloads, builds, manual inputs, bundled snapshots and package exports. Bundled data stay in the checkout; fresh CADD environments use the existing Mamba root. The Nextflow driver and JRE have their own cache-root entry.
+
+[![PriVA-nextflow installation tree showing bundled data, separate Mamba environments, configurable cache paths, the Nextflow driver and scratch space, with resource preparation labels.](docs/installation_layout.svg)](docs/installation_layout.svg)
+
+[Open the full-size SVG](docs/installation_layout.svg). Supplied originals are preserved; managed copies and converted outputs use the configured cache folders. Explicit reference/mapping paths and completed legacy software retain their selected locations.
+
+```bash
+PRIVA_ROOT="$(pwd)"
+cp "$PRIVA_ROOT/config.yaml" ../priva-nextflow.local.yaml
+PRIVA_CONFIG="$(realpath ../priva-nextflow.local.yaml)"
+```
+
+Edit the copy before installation:
+
+| Setting | Required choice |
+|---|---|
+| `cache_root` | Existing, writable, dedicated absolute resource directory outside the checkout |
+| `tmp_dir` | Existing, writable absolute temporary-work directory outside the checkout |
+| `assembly` | `hg19`/`GRCh37` or `hg38`/`GRCh38` |
+| `vep_installed_version` | Numeric VEP major, for example `"116"`; match software, plugins and caches |
+| `ref_genome` | Optional existing assembly-correct indexed FASTA; empty selects managed acquisition |
+| `primateai_prescore` | Completed publisher PrimateAI file for the selected assembly |
+| `spliceai_snv_prescore`, `spliceai_indel_prescore` | Completed publisher files appropriate to the selected assembly/profile |
+
+Obtain restricted publisher files under their own registration and license terms. Interactive installation can prompt for unset manual paths; noninteractive installation needs them beforehand.
+
+```bash
+bash "$PRIVA_ROOT/scripts/install_utils.sh" main_install "$PRIVA_CONFIG"
+```
+
+This prepares `priva_acmg`, reuses bundled snapshots, acquires/builds other resources beneath `cache_root`, and updates managed paths in the selected configuration. It also installs the pinned Nextflow25.10.4 driver and private JRE beneath `cache_root/runtime/priva-nextflow-25.10.4`. It builds the PriVA program `priva` (saved as `priva_binary`) and the ClinVar PM5 index (saved as `clinvar_pm5_index`); see [the PriVA program](#scientific-resources-and-the-priva-program). No family input is required at this stage. Rerun the same command to reuse completed preparation.
+
+### Install as Nextflow tasks
+
+The same installer functions can also run as one Nextflow task per install step, listed in [`conf/install_steps.json`](conf/install_steps.json):
+
+```bash
+"$PRIVA_NF" run "$PRIVA_ROOT/main.nf" --action install \
+  --install_config "$PRIVA_CONFIG" --resource_root /path/to/resources \
+  --priva_binary /path/to/priva --install_outdir /path/to/published
+```
+
+Each step writes only into `resource_root/STEP/LINEAGE/data`. Its lineage is a hash of the step's code, the settings that change its results, the files you supply, the current release of a changing source (ClinVar, InterPro, ClinGen, VEP plugins and others) and the lineage of every step it needs. A step whose folder already holds `receipt.json` is reused, so a later run builds only what changed and the steps that depend on it. Finished folders are read-only. The last task writes one configuration and `resources.lock.json`, which names every step's lineage and output keys. `--adopt_config OLD.yaml --adopt all --run_steps ID,ID` takes every other step's files from an existing installation without copying them. SpliceVault, MaveDB, UTRannotator and LOFTEE keep the release they were first built from (recorded in `resource_root/pins.json`) until you ask for a newer one with `--refresh B5,B6,B1,B8`. The ClinVar download (step D0) keeps its release for three calendar months, the original installer's refresh interval, then takes the current one; `--refresh D0` takes it sooner. gnomAD downloads run as 24 tasks, one per chromosome.
+
+The Rust workflow reads checked `.rkyv` caches using the existing configuration keys. InterPro and assembly-specific ClinGen archives are bundled. The larger ClinVar gene archive is generated during installation from the bundled pickle under `cache_root`, along with conversions of the other prepared caches. Original pickles remain available to the cache builders. Installation publishes native paths after conversion succeeds and reuses completed conversions on later runs; changing the storage format does not require repeating VEP annotation. See [cache formats and installation](rust/CACHE_FORMATS.md#6-distribution-and-installation).
+
+Building `priva` also needs `pkg-config`, a C compiler, and the static development
+libraries for Expat >=2.6.0 and libyaml >=0.2.5 (`expat` and `yaml` in Conda;
+`libexpat1-dev` and `libyaml-dev` on Debian or Ubuntu). The installer discovers the active Python environment's package metadata
+and records the selected library version and SHA256 in the build profile. Expat
+and libyaml are linked into the executable, so running `priva` needs no separate
+XML or YAML library. Redistributions must retain the [Expat](rust/src/EXPAT_LICENSE),
+[libyaml](rust/src/LIBYAML_LICENSE), [PyYAML](rust/src/PYYAML_LICENSE), and
+[CPython](rust/src/PYTHON_LICENSE) notices with the program.
+
+To rebuild only the InterPro member-signature mapping from an already acquired,
+version-pinned XML file, use the optional procedure:
+
+```bash
+"$PRIVA_BINARY" interpro-mapping build \
+  --xml /path/to/interpro.xml.gz --output /path/to/interpro.mapping.rkyv
+```
+
+It preserves duplicate member entries, GO terms, source text handling and nested
+element clearing, using Expat and the CPython 3.12 codec fallback profile. The
+archive publishes atomically after complete readback; failure retains the prior
+output. This procedure does not download data or replace the installer's separate
+VCF-format inventory/report workflow. Custom Python-registered codecs are outside
+the standalone source profile. Qualify a new XML/parser profile before adopting it.
 
 For the matching official VEP116 UTRAnnotator module, the installer deploys
 deterministic reporting of all calculated UTR effects and retains the original
 module and patch. The biological calculations are unchanged; other VEP releases
 are left unchanged. See [`data/vep`](data/vep/README.md).
 
-The cache tree shows default folder names, YAML-controlled assembly/release
-parts, and whether each resource is downloaded, calculated, manually supplied,
-or bundled. Bundled snapshots stay in the checkout; acquired and derived caches
-use `cache_root`. Optional `cache_folders` entries rename its six main folders.
+CADD scores come from upstream `CADD.sh` (CADD-scripts v1.7.2) with all of CADD's own data. `main_install` installs it the original way, each file downloaded only when missing with its MD5 checked once, then replaces two of its scripts with PriVA's faster copies in [`scripts/cadd_scripts`](scripts/cadd_scripts/README.md): the prescore lookup starts from a position index built once beside each prescored table, and MMSplice reloads a saved exon table. Both write the same output as upstream. `CADD.sh` runs as a child process whose Snakemake builds its own environments under `cadd_base_dir/envs/conda`; its Snakemake needs a `conda` program (24.7.1 or later) on `PATH`. The standalone `cadd.nf` runs the same `CADD.sh` on one VCF and writes its CADD table:
 
-[![PriVA cache and installation tree, with configurable names and resource preparation labels.](docs/installation_layout.svg)](docs/installation_layout.svg)
-
-[Open the full-size cache tree](docs/installation_layout.svg).
-
-CADD scores come from upstream `CADD.sh` with all of CADD's own data (see
-[Running PriVA](#running-priva)). It runs as a child process with its own
-Snakemake-built environments while the workflow continues in `priva_acmg`;
-users do not need to switch environments manually. Fresh installs use the
-existing Mamba root, and completed older installations are reused in place.
-Fresh `priva_acmg` environments include Conda, which CADD's Snakemake requires
-even with Micromamba. The installer checks compatible Conda on `PATH`, in
-`CONDA_EXE`, then in `cadd_parent_dir/conda_frontend`. If none is available, the
-selected Micromamba/Mamba/Conda creates that separate tool-only prefix with
-Conda 24.9.2 from conda-forge. Existing scientific packages and exports stay
-unchanged; CADD callers discover the frontend without replacing the active
-Python. With `priva_acmg` active, prepare this prerequisite separately with
+Fresh `priva_acmg` environments include Conda. For existing environments, the
+installer checks `PATH`, `CONDA_EXE`, then `cadd_parent_dir/conda_frontend`.
+If none supplies compatible Conda, it uses the selected Micromamba/Mamba/Conda
+to create that separate tool-only frontend with Conda 24.9.2 from conda-forge.
+Existing scientific environments and their package exports remain unchanged.
+CADD callers discover the same frontend without replacing the active Python.
+With `priva_acmg` active, prepare only this prerequisite with
 `bash scripts/install_utils.sh CADD_conda_install --config /path/to/config.yaml`
-after cache paths have been prepared. Incomplete frontends are retained and
-reported, never overwritten or treated as ready.
-At completion, `cache_root/*.installed.yml` records the actually installed
-PriVA/CADD packages without host prefixes.
-
-`main_install` also deploys the gene-mechanism resources used by ACMG step 3 in
-dependency order: pinned HPO/MONDO data, the broader LOF/non-LOF mechanism
-cache, exact normalized GoFCards variants, the canonical non-LOF/ClinVar VCV
-cache, and the integrated HPO-framed condition cache. All builders, parsers,
-schemas, and outputs are inside the PriVA tree; `llm_gene_reranker` is not an
-installation dependency.
-
-The complete canonical JSON and ClinVar VCV/RCV/SCV field contract is documented
-in `GENE_NONLOF_MECHANISM_JSON_STRUCTURE.md` and enforced by the bundled JSON
-Schema.
-
-The supported full manual refresh is the same entry point as installation:
+after the configuration's cache paths have been prepared. An incomplete frontend
+is retained and reported; it is never overwritten or mistaken for a ready one.
 
 ```bash
-bash scripts/install_utils.sh main_install path/to/config.yaml
+nextflow run "$PRIVA_ROOT/cadd.nf" -c "$PRIVA_ROOT/conf/cadd.config" \
+  --input "$(realpath inputs/cohort.vcf.gz)" --assembly GRCh38 \
+  --cadd_base_dir "$PRIVA_CACHE/CADD/CADD-scripts-1.7.2" --outdir "$(realpath cadd_out)"
 ```
 
-Users who want automatic refreshes should schedule that command with their own
-cron or cluster scheduler. PriVA does not install a separate weekly job. Each
-run checks source-specific refresh intervals and rebuilds downstream caches only
-when an input checksum or implementation file changes. A forced mechanism
-refresh can be requested with `PRIVA_FORCE_ALL_CACHES=1`.
-The root [`cache_resources.json`](cache_resources.json) records which resources
-are bundled snapshots and which have maintained acquisition/refresh routes.
-
-The mechanism stages can also be run independently for debugging:
+At completion, the installer exports the packages actually installed, including version/build pins and pip dependencies, to `cache_root/priva_acmg.installed.yml` and, for each environment `CADD.sh` built, `cache_root/cadd-*.installed.yml`. These portable YAML files omit host prefixes and environment variables. To repeat only this export:
 
 ```bash
-bash scripts/install_utils.sh gene_pathogenic_mechanism_cache_install path/to/config.yaml
-bash scripts/install_utils.sh gofcards_exact_gof_cache_install path/to/config.yaml
-bash scripts/install_utils.sh gene_nonlof_mechanism_cache_install path/to/config.yaml sources-only
-bash scripts/install_utils.sh gofcards_clinvar_injection_install path/to/config.yaml
-bash scripts/install_utils.sh gene_nonlof_mechanism_cache_install path/to/config.yaml
-bash scripts/install_utils.sh mondo_hpo_scope_install path/to/config.yaml
-bash scripts/install_utils.sh hpo_condition_mechanism_cache_install path/to/config.yaml
-bash scripts/install_utils.sh mechanism_resource_install path/to/config.yaml
+bash "$PRIVA_ROOT/scripts/install_utils.sh" priva_export_installed_environment --config "$PRIVA_CONFIG"
 ```
 
-The GoFCards steps must run in the order shown. `gofcards_exact_gof_cache_install`
-writes only a build intermediate; `gofcards_clinvar_injection_install` turns that
-into the one deployed cache every consumer reads. The `sources-only` call in
-between downloads the weekly ClinVar VCV XML that injection needs, because the
-component that owns that download is the non-LOF builder, and the non-LOF
-builder's ordinary run cannot start until injection has finished. See
-`docs/GOFCARDS_CACHE_SCHEMA.md` for the full ordering.
-
-The integrated JSON is published by writing and validating a complete temporary
-snapshot before atomically replacing the live cache. It nests external
-mechanism histories and variants under an HPO gene/condition only through exact
-OMIM, ORPHA, or MONDO identifiers; unresolved records remain under the gene's
-`unmapped_evidence` section.
-
-The MONDO/HPO installer downloads pinned releases, builds one disease-scope
-registry, and adds the resulting scope and provenance fields to each HPO
-assertion. Confirmed non-monogenic diseases are excluded from PriVA's flattened
-inheritance/penetrance context. Neoplastic diseases without positive hereditary
-evidence remain review-required rather than being assumed somatic-only. Manual
-decisions are stored in `data/mondo/disease_scope_overrides.tsv` and take
-precedence when the registry is rebuilt.
-
-## Smoke test
-
-The smoke test uses the bundled 20-variant annotation/CADD fixtures in
-`example/smoke_data/` and runs PriVA's filtering, ACMG assignment, and ranking.
-Activate `priva_acmg` first. If needed, create it with
-`mamba env create -f acmg_conda_rough.yml`; full resource installation is not
-required for this prepared-input test.
+The optional native export procedures accept the same selected environment and
+write package-only YAML beneath `cache_root`:
 
 ```bash
-conda activate priva_acmg  # Or use your Mamba/Micromamba activation command.
-./example/run_smoke_test.sh hg19
-./example/run_smoke_test.sh hg38
+"$PRIVA_BINARY" installed-environment export --config "$PRIVA_CONFIG" \
+  --manager micromamba --name priva_acmg
+"$PRIVA_BINARY" installed-environment export-installation --config "$PRIVA_CONFIG" \
+  --manager micromamba
 ```
 
-Each run creates a fresh temporary directory and prints its output path. Add
-`--output-dir /path/to/empty/smoke-directory` to choose an external destination;
-existing results and bundled inputs are preserved. Named `run`, `prepare`, and
-`validate` subcommands are also available; see `--help`.
-
-This is a sites-only fixture test. New VEP annotation, original CADD model
-calculation, and family/public-data acceptance remain separate checks.
-
-The smoke test does not require Git LFS on current `main`; all current smoke assets are stored as normal Git files.
-
-## Configuration File
-The `config.yaml` file in the PriVA repo contains all the parameters you need. Most of them can be automatically handled by the BASH script `install_utils.sh`. Here we list the items need to be specified by users prior to executing `install_utils.sh`
-
-- CACHE ROOT: `cache_root`, an existing writable absolute directory outside the checkout for acquired and derived annotation resources.
-- TEMPORARY DIRECTORY: `tmp_dir`, an existing writable absolute directory outside the checkout for temporary work.
-- REF GENOME ASSEMBLY: `assembly` (`hg19`/`GRCh37` or `hg38`/`GRCh38`). `ref_genome` is optional: supply an assembly-correct FASTA or leave it empty for managed download and indexing.
-- VEP RELEASE: `vep_installed_version`, the requested numeric major (default `"116"`); VEP, plugins, cache, and transcript mapping must be compatible.
-
-The installer derives `vep_cache_dir`, `vep_plugins_dir`,
-`vep_plugins_cachedir`, `gnomad_vcf_dir`, `clinvar_vcf_dir`, and
-`cadd_parent_dir` from `cache_root` and `cache_folders`, and saves them in the
-selected YAML. Do not set these managed directories separately. Small HGNC
-snapshots and assembly/release-specific transcript mappings remain under
-[`data/hgnc`](data/hgnc/README.md); an explicitly supplied mapping stays selected.
-
-After specifying these settings and the manual inputs below, execute `main_install`.
-
-**Special annotation resources need manual download**
-SpliceAI and PrimateAI require completed publisher downloads under their own
-access and license terms. Supply assembly-matched paths in `primateai_prescore`,
-`spliceai_snv_prescore`, and `spliceai_indel_prescore`. An interactive installer
-can prompt for unset paths; noninteractive runs need them set beforehand.
-Incomplete files must not be supplied.
-
-GRCh37/hg19 uses SpliceAI v1; GRCh38/hg38 installation prepares SpliceAI2.
-The decompressed header identifies the input format: VCF inputs are reused;
-SpliceAI2 TSVs are automatically adapted to indexed VCF without changing the
-existing YAML keys. The official VEP SpliceAI plugin attaches a score only when
-its gene name equals the transcript's gene name in VEP's cache, so the adapter
-also writes each score under the gene's name in the GENCODE release of VEP's
-Ensembl release when a gene was renamed (for example CENPJ, now CPAP). The
-SpliceAI2 source manifest pins that annotation, a GENCODE GTF or GFF3 whose
-header names GRCh38 and VEP's Ensembl release, as `vep_gene_annotation`.
-PriVA's splicing and ACMG rules apply the thresholds the
-SpliceAI2 authors recommend (0.1, 0.25 and 0.5 in place of SpliceAI v1's 0.2, 0.5
-and 0.8; see [spliceai_cutoffs.py](scripts/spliceai_cutoffs.py)).
-SpliceAI v1 GRCh38 files can still be used by pointing the same two keys at them;
-the SNV and indel files must be the same version.
-
-There are also items in `config.yaml` that needs to be specified for each PriVA exectuion:
-
-- INPUT_VCF: `input_vcf`, which supposed to be a cohort VCF file
-- PEDIGREE_FILE: `ped_file`, which is the pedigree file corresponding to the cohort VCF file. 
-- OUTPUT_DIR: `output_dir`, which is the directory containing all the output annotation files
-- HUB_CACHE_FILEs: `hub_file_dir`, parent folder storing the hub cache files; `hub_vcf_file`, hub annotated VCF file for annotation caching; `hub_cadd_file`, hub annotated CADD TSV for CADD annotation caching
-- ALLELE_FREQUENCY_THRESHOLDS: `extreme_rare_PAF`, the extreme rare population allele frequency threshold for PM2; `af_cutoff`, population allele frequency threshold distinguishing common and rare variants
-- DISEASE_INCIDENCE: `exp_disease_incidence`, the expected incidence of the disease
-- ALT_DISEASE_PAT_VARs: `alt_disease_vcf`, Abs path to the VCF file containing the variants from alternative disease patients, used for BP5
-- CONTROL_VARs: `control_vcf`, abs path to the VCF containing variants from control samples
-- PP1_RESOURCES: `pp1_vcf`, abs path to the VCF containing patients (as well as family members) from the same disease, for family consegregation; `pp1_ped`, pedigree file corresponding to `pp1_vcf`
-- COMPUTATION_RESOURCES: `threads`, total CPUs assigned to PriVA execution; `threads_per_fam`, per fam processing (step2 and step3) are executed in parallel across all families, this specify how many CPUs to use per family.
+Use `export --prefix /absolute/completed/prefix --name portable_name` for an
+explicit prefix. A byte-identical existing export is reused read-only. A linked
+export additionally needs stable, committed local git-annex content; a changed
+or foreign linked destination is retained and refused. Ordinary matching-schema
+exports can be atomically refreshed. These optional commands do not activate,
+solve, or install environments; the installer runs `export-installation` through them.
 
 
-## Running PriVA
+Small HGNC snapshots and assembly/release-specific transcript mappings remain bundled under [`data/hgnc`](data/hgnc/README.md). Default installation selects the mapping for the configured assembly and VEP major; explicitly supplied mappings stay selected. Different versions have distinct filenames.
 
-The recommended way to run the pipeline is using Snakemake, which manages dependencies and execution order.
-
-CADD scores come from the upstream `CADD.sh` in `cadd_base_dir`, which performs
-its own annotation and the original raw/PHRED scoring. Its Snakemake workflow
-needs a `conda` executable on `PATH` to create the pinned rule environments
-under `cadd_base_dir/envs/conda`; `main_install` creates them by scoring CADD's
-bundled test variants. A separately installed conda belongs after the activated
-`priva_acmg` environment on `PATH`, so that its own Python cannot shadow the
-CADD environments.
-
-`main_install` (`CADD_install`) downloads CADD-scripts, its genome annotations
-and its prescored variants the original way: each file only when it is missing,
-with its MD5 checked once right after the download, so reinstalling does not
-re-read the roughly 1 TB of CADD data. It then replaces two of the scripts
-`CADD.sh` runs with PriVA's copies in
-[`scripts/cadd_scripts`](scripts/cadd_scripts/README.md) (CADD license), which
-write the same output faster: the prescore lookup (`extract_scored.py`) starts
-each lookup from a position index (`TABLE.posidx`) that `main_install` builds
-once next to each prescored table and reads nearby variants in one pass, and
-`MMSplice.py` saves the exon table it reads from CADD's Ensembl 110 GTF and
-reloads it on later runs. Building a position index reads its table once, in
-parallel over `threads`. `python scripts/cadd_scripts_install.py --source
-CADD_DIR --state` shows whether PriVA's copies are installed.
-
-**Prerequisites:**
-
-1. Activate Conda Environment: Ensure the `priva_acmg` conda environment (or the one created during installation) is activated:
-   ```bash
-   conda activate priva_acmg
-   ```
-2. Configuration File: Have your `config.yaml` file ready with all necessary paths and parameters correctly specified.
-
-**Running the Pipeline:**
-
-Navigate to your working directory (or specify absolute paths in the command).
-The config file can be duplicated and customized for batch-specific runs.
-Keep `input_vcf` and `output_dir` outside the checkout: annotation creates
-intermediates beside the input. Use the configured `output_dir` as the working
-directory for the commands below.
-
-**Basic Command:**
+Activate `priva_acmg` using the chosen environment manager. Set these shell variables to your existing cache directory and a durable directory for run products:
 
 ```bash
-snakemake --snakefile /path/to/your/PriVA/Snakefile \
-          --configfile /path/to/your/config.yaml \
-          --cores <number_of_cores>
+PRIVA_CACHE="$(yq -r '.cache_root' "$PRIVA_CONFIG")"
+mkdir -p "$PRIVA_ROOT/../priva-runs/nextflow"
+PRIVA_RUNS="$(realpath "$PRIVA_ROOT/../priva-runs/nextflow")"
+PRIVA_NF="$PRIVA_CACHE/runtime/priva-nextflow-25.10.4/bin/nextflow"
+cd "$PRIVA_RUNS"
+"$PRIVA_NF" run "$PRIVA_ROOT/main.nf" --help
 ```
 
-* `--snakefile`: Path to the pipeline's `Snakefile`.
-* `--configfile`: Path to your specific configuration file.
-* `--cores` (or `-j`): Maximum number of CPU cores Snakemake can use.
+The cache path is read from the installed configuration. Keep this external launch directory so `.nextflow` state, logs and run products stay outside the checkout. The driver is separate from the scientific environment.
 
-**Bash Function Wrapper Example:**
+## Prepare the inputs
 
-You can wrap the Snakemake command in a bash function for easier execution. Add this function to your `.bashrc` or `.bash_profile`, or save it in a script file and source it.
+- Supply the cohort as one BGZF `*.vcf.gz` with its adjacent `.tbi`.
+- Retain the full cohort VCF and pedigree. Every PED family is filtered and prioritized in its own tasks; `--family ID` runs only that family. Without `--ped`, one run covers all samples with allele-frequency filtering only, as the earlier shell workflow did. Every PED sample must occur in the VCF, sample identifiers must be unique, and family/sample names must be safe file-name tokens.
+- Use a tab-delimited PED with at least the standard six columns: family, individual, father, mother, sex, phenotype. Put the affected proband first within each family. Sex is `0` unknown, `1` male or `2` female; phenotype is `0`/`-9` unknown, `1` unaffected or `2` affected. Unknown values remain unknown.
+- Match `--assembly`, the installed configuration, annotations and resources. Keep the legacy scientific profile and transcript mappings compatible. The SpliceAI SNV and indel files must be the same version (v1 or SpliceAI2); each version uses its own cutoffs.
+
+Create a manifest of the existing resources. This inventories resources; it does not install them or qualify a new scientific profile:
 
 ```bash
-run_priva_pipeline() {
-    # --- Configuration ---
-    local snakefile_path="/path/to/your/PriVA/Snakefile" # CHANGE THIS to the actual path
-    local default_config="/path/to/your/default_config.yaml" # Optional: Set a default config
-    local default_cores=8
-    local default_log_dir="snakemake_logs"
-
-    # --- Argument Parsing ---
-    local config_file="${1:-$default_config}"
-    local num_cores="${2:-$default_cores}"
-    local timestamp=$(date +"%Y%m%d_%H%M%S")
-    local log_dir="${3:-$default_log_dir}"
-    local log_file="${log_dir}/priva_run_${timestamp}.log"
-
-    # --- Input Validation ---
-    if [[ ! -f "$snakefile_path" ]]; then
-        echo "ERROR: Snakefile not found at $snakefile_path"
-        return 1
-    fi
-    if [[ -z "$config_file" ]] || [[ ! -f "$config_file" ]]; then
-        echo "ERROR: Config file not found or not specified: '$config_file'"
-        echo "Usage: run_priva_pipeline <config_file_path> [num_cores] [log_directory]"
-        return 1
-    fi
-    if ! [[ "$num_cores" =~ ^[0-9]+$ ]] || [[ "$num_cores" -lt 1 ]]; then
-        echo "ERROR: Number of cores must be a positive integer: '$num_cores'"
-        return 1
-    fi
-
-    # --- Environment Check ---
-    if [[ -z "$CONDA_DEFAULT_ENV" ]] || [[ "$CONDA_DEFAULT_ENV" != "priva_acmg" ]]; then
-        echo "WARNING: Conda environment 'priva_acmg' might not be active. Attempting to activate..."
-        conda activate priva_acmg
-        if [[ $? -ne 0 ]]; then
-            echo "ERROR: Failed to activate conda environment 'priva_acmg'. Please activate it manually."
-            return 1
-        fi
-        echo "Activated conda environment 'priva_acmg'."
-    fi
-
-    # --- Execution ---
-    echo "Starting PriVA pipeline..."
-    echo "Snakefile: $snakefile_path"
-    echo "Config File: $config_file"
-    echo "Cores: $num_cores"
-    mkdir -p "$log_dir"
-    echo "Log File: $log_file"
-    echo "-----------------------------------------"
-
-    nohup snakemake --snakefile "$snakefile_path" \
-                    --configfile "$config_file" \
-                    --cores "$num_cores" \
-                    --printshellcmds \
-                    --rerun-incomplete \
-                    --verbose \
-                    > "$log_file" 2>&1 &
-
-    local job_pid=$!
-    echo "Pipeline submitted in the background. PID: $job_pid"
-    echo "Monitor progress with: tail -f $log_file"
-    echo "-----------------------------------------"
-}
-
-# --- How to use the function ---
-# 1. Source the script or add the function to your .bashrc/.bash_profile
-# 2. Run it:
-#    run_priva_pipeline /path/to/my_experiment_config.yaml 16 /path/to/my/logs
-#    # Or using defaults:
-#    run_priva_pipeline /path/to/my_experiment_config.yaml
+"$PRIVA_BINARY" task manifest \
+  --config "$PRIVA_CONFIG" --legacy-root "$PRIVA_ROOT" --mode raw \
+  --vcf-hub-mode off --cadd-hub-mode off \
+  --output "$PRIVA_RUNS/resources.json"
 ```
 
-
-**Explanation of the Function:**
-
-1. **Configuration:** Set the path to your `Snakefile` and optionally a default config file path.
-2. **Arguments:** Takes the config file path (required), number of cores (optional, defaults to 8), and log directory (optional, defaults to `snakemake_logs`) as arguments.
-3. **Validation:** Checks if the Snakefile and config file exist and if the core count is valid.
-4. **Environment Check:** Verifies if the `priva_acmg` conda environment is active and tries to activate it if not.
-5. **Execution:** Creates a log directory, constructs the `snakemake` command with useful options (`--printshellcmds`, `--verbose`, `--rerun-incomplete`), and runs it in the background using `nohup`. It prints the PID and log file location for monitoring.
-
-**Comprehensive Example Command (from original README):**
-
-This shows a full command often used for running on a cluster or server:
+Set `PRIVA_SOFTWARE_ID` to the stable identity of the exact environment lock or tested container used for this run. For example, with Micromamba:
 
 ```bash
-# Activate environment first!
-# conda activate priva_acmg
-
-nohup snakemake --snakefile /path/to/PriVA/Snakefile \
-                --cores 50 \
-                --configfile /path/to/config.yaml \
-                --printshellcmds \
-                --verbose \
-                > /path/to/snakemake_pipeline.log 2>&1 &
+micromamba env export --name priva_acmg --explicit > "$PRIVA_RUNS/environment.explicit.txt"
+PRIVA_SOFTWARE_ID="conda-explicit-sha256:$(sha256sum "$PRIVA_RUNS/environment.explicit.txt" | cut -d ' ' -f 1)"
 ```
 
-* `nohup ... &`: Runs the command in the background, detached from the terminal, logging output to the specified file.
-* `--printshellcmds`: Shows the actual shell commands being executed by Snakemake.
-* `--verbose`: Provides more detailed output from Snakemake.
+Use the equivalent explicit lock from your manager when using Mamba/Conda. Keep the identity unchanged only while that environment remains unchanged.
 
-For family-specific analysis, ensure your pedigree file (`ped_file` in `config.yaml`) is properly formatted and specified in the config file.
+## Run a cohort
 
+```bash
+"$PRIVA_NF" run "$PRIVA_ROOT/main.nf" -profile local \
+  --input "$(realpath inputs/cohort.vcf.gz)" \
+  --ped "$(realpath inputs/cohort.ped)" --assembly hg19 \
+  --legacy_config "$PRIVA_CONFIG" \
+  --resource_manifest "$PRIVA_RUNS/resources.json" \
+  --software_id "$PRIVA_SOFTWARE_ID" \
+  --priva_binary "$PRIVA_BINARY" \
+  --annotation_hub "$PRIVA_RUNS/annotation_hub" \
+  --outdir "$PRIVA_RUNS/cohort" -work-dir "$PRIVA_RUNS/work"
+```
 
-## Annotation Resources
+The annotated VCF and its CADD table are published under `annotation/`.
 
-The pipeline integrates multiple annotation resources to comprehensively evaluate variant pathogenicity:
+Each family's outputs carry its PED family identifier, for example
+`cohort.anno.FAM1.filtered.tsv`; a run without `--ped` writes `cohort.anno.filtered.tsv`.
+Families run in parallel as far as `--family_cpus` and the executor allow.
 
-1. **Splicing disruption effect**: 
-   - SpliceAI (VEP_plugin)
-   - SpliceVault (VEP_Plugin)
+Annotation runs as one task per step of `annotation_vcf.sh`, in this order:
 
-2. **5-UTR uORF disruption effect**: 
-   - UTRannotator (VEP_plugin)
+1. Preprocessing.
+2. gnomAD, ClinVar, control cohort, VEP and CADD at the same time, each on its own
+   copy of the preprocessed VCF.
+3. A merge that copies each step's new INFO fields and header lines onto the
+   preprocessed VCF in the script's order. It refuses a step that kept a different
+   record or changed anything else.
 
-3. **General Deleterious effect prediction**: 
-   - CADD (standalone client)
-   - PrimateAI (VEP_plugin)
-   - AlphaMissense (VEP_plugin)
-   - LOFTEE (VEP_plugin)
+The result is the same annotated VCF and CADD table as the earlier single
+annotation task, and a failed step reruns alone with `-resume`.
 
-4. **Haplo-insufficiency**: 
-   - LOEUF (VEP_plugin)
-   - AlphaMissense_mean_score_per_gene
+`--annotation_hub FOLDER` keeps each annotation
+step's results per variant, so later runs annotate only variants the hub has not
+seen:
 
-5. **Transcript disruption effect prediction**: 
-   - VEP
+1. Validation names one hub folder (lineage) per step from the resources that step
+   reads and the annotation scripts; a changed resource gives that step a new, empty
+   folder. The control cohort step has no folder when its counts come from the
+   cohort itself.
+2. `HUB_LOOKUP` splits the preprocessed VCF into stored and new variants per step.
+3. Each step runs only on its new variants, or not at all.
+4. `HUB_FILL` rebuilds the step's full output from stored and new results, then the
+   merge runs as above; `HUB_ADD` stores the new results under the run's Nextflow
+   session. A resumed run never reads its own session's files, so `-resume` reuses
+   every task.
 
-6. **Clinical variants**: 
-   - ClinVar VCF (bcftools annotate)
+After an installation changes a resource, `--action hub_refresh` (the same options,
+without `--input`) annotates the variants stored in that step's earlier folders into
+its new folder, so the next cohort finds them; earlier folders are never changed.
 
-7. **Population-wise allele frequency + number of homozygous carriers**: 
-   - gnomADv4 VCFs (bcftools annotate)
+Family tasks run prioritization in five steps: combine the family table, add the
+splicing and 5′ UTR columns side by side on copies of it, join the copies (refusing
+differing rows or shared columns), then assign the ACMG criteria.
 
-8. **Conservation**: 
-   - Conservation (VEP_plugin)
+The example `inputs/` paths are relative to the external `PRIVA_RUNS` directory; replace them with your actual input paths and assembly. Use a new output directory for changed inputs, source, resources or settings. For the same run, retain the external launch/work directories and Nextflow cache, and append `-resume`; launch-time resource checks still apply to a fully cached run.
 
+| Profile/option | Scope |
+|---|---|
+| `-profile local` | Execute tasks in the active scientific environment. The installed driver limits its own Java runtime to 2 processors, so pass `--local_cpus N` when tasks need more (for example the CPUs of the Slurm job running the driver) |
+| `-profile slurm` | Submit tasks to Slurm; set `--slurm_queue`, optional `--slurm_account`, and optional `--slurm_cluster_options` for other sbatch flags. Write values that start with `-` as `--slurm_cluster_options='--constraint=NAME'`; with a space instead of `=`, Nextflow reads the value as a separate flag |
+| `--annotation_cpus`, `--family_cpus` | Task CPU allocations; corresponding memory/time parameters are in `nextflow.config`. VEP and CADD steps use `--annotation_cpus`; the other annotation steps and the merge use `--annotation_step_cpus` (default 2), so they can run beside VEP and CADD |
+| `-profile apptainer` | Requires an explicitly selected tested `--container_image` and matching software identity. Tasks run with `--cleanenv`, so they use the image's tools; bind the cache, data and input folders with `--container_run_options='-B /path'`. Build the image from [priva_acmg.def](priva_acmg.def) |
+| `-profile task_readonly` | Optional Linux Bubblewrap task filesystem boundary; it cannot be combined with `apptainer` |
+| `-profile test -stub-run` | Synthetic wiring only; its outputs are not scientific results |
 
-## Pipeline Structure
+Keep scientific worker counts in the legacy configuration's `threads` and
+`threads_per_fam`; set task CPU allocations independently. Family tasks need at
+least `threads_per_fam` CPUs. Raw VEP profiles need `threads + 2` CPUs, for
+example 24 CPUs for 22 configured forks. CADD's RegSeq feature columns, and
+rarely RawScore, can differ in the last printed decimal with the number of CPUs
+CADD can see (1e-06, in 21 of 13,825 rows between 12 and 24 CPUs; PHRED and every
+family output were unchanged). With the local executor a task sees every CPU of
+the machine or job, so compare runs made with the same CPU count. Likewise VEP's
+`HGNC_ID` can be empty for a few transcripts at higher `threads` (410 of the CSQ
+entries of 86,498 AlphaMissense records between 2 and 10 forks); PriVA does not
+read `HGNC_ID`.
 
-The pipeline consists of three main steps:
+## Read the outputs
 
-1. **Annotation**: Annotates variants with multiple resources (Rule `annotate_variants`)
-   - VEP annotation with plugins
-   - CADD scoring
-   - gnomAD frequency annotation
-   - ClinVar annotation
+| Directory | Contents |
+|---|---|
+| `annotation/` | The annotated VCF/index and its CADD table |
+| `variants/` | Per family: the filtered VCF/index and matching CADD table |
+| `prioritization/` | Per family: `*.filtered.tsv` ranked transcript rows and `*.filtered.acmg.tsv` evidence matrix |
+| `pipeline_info/` | Input/resource bundle, provenance of each task (family tasks carry the family in the name) and Nextflow execution reports |
 
-2. **Filtration**: Filters variants based on family information (if available) (Rules `filter_variants_per_family` / `filter_variants_no_family`)
-   - Family-specific filtering when pedigree is provided
-   - General filtering without family information
+`ACMG_criteria` records applied evidence; `ACMG_quant_score` is the posterior under PriVA's ACMG model; `ACMG_class` is its classification. `sort_index` additionally includes control, inheritance, gene-list and expression weighting. Read `variant_rank` with allele/variant identifiers and transcript columns, since several transcript rows can represent one variant. The default `apply_clingen_override: true` uses curated ClinGen criteria in place of PriVA-derived criteria where available. These outputs support evidence review, not a diagnosis by themselves.
 
-3. **Prioritization**: Prioritizes variants according to ACMG guidelines (Rules `prioritize_variants_per_family` / `prioritize_variants_no_family`)
-   - Generates TSV output with prioritized variants
-   - Produces ACMG-specific reports
+## Scientific resources and the PriVA program
 
+Managed VEP116 mappings use Ensembl BioMart116; GRCh37 retains its GRCh37 annotation-base75 lineage and is not a GRCh38 fallback. [HCSeeker](data/HCSeeker/README.md) originates in GRCh38 protein space; [gnomAD RMC](data/gnomAD_RMC/README.md) originates in GRCh37, with derived opposite-assembly protein-coordinate tables. [GoFCards](data/gofcards/README.md) starts from GRCh37 variant records and includes derived GRCh38 representations; exact variant evidence is not a whole-gene mechanism assertion. Preserve assembly, transcript and source provenance when choosing these resources.
 
-## Output Files
+PriVA's own pipeline steps run in one compiled program, `priva`, built from [`rust/`](rust/CONVERSION.md): variant IDs, the CADD hub cache, family filtering, the combined annotation table, the SpliceAI version check and cache registration, splicing and UTR interpretation, and the whole ACMG step (criteria, scoring and ranking). CADD scores come from upstream `CADD.sh`. [`rust/CONVERSION.md`](rust/CONVERSION.md) records how each step was compared with the Python script it replaces. PM5 deliberately follows residue rules that the Python script does not have; it reads an index of the confident pathogenic ClinVar protein changes (`clinvar_pm5_index`), which `main_install` builds from the VEP-annotated ClinVar VCF.
 
-The pipeline produces several output files in the directory specified by `output_dir` in your `config.yaml`:
+`main_install` builds `priva` beneath `cache_root/runtime/priva-rust/<identity>/bin/priva` and saves that path as `priva_binary` in the configuration. New installations include the source-derived dependency notices in the sibling `licenses/` directory; keep these notices with the executable when distributing it. The pipeline scripts look for the program in this order: the environment variable `PRIVA_BINARY`, the configuration key `priva_binary`, then `priva` on `PATH`. Snakemake runs recompute an output that is older than the program. The Nextflow resource manifest pins the program's SHA-256; a rebuilt program needs a new manifest and output directory. Inspect the installed program and its build record with:
 
-1. Annotated VCF files (`<input_base>.anno.vcf.gz`)
-2. CADD score files (`<input_base>.anno.cadd.tsv`)
-3. Filtered VCF files (`<input_base>.anno.filtered.vcf.gz` or `<input_base>.anno.<family>.filtered.vcf.gz`)
-4. Prioritized variant tables (`<input_base>.anno.filtered.tsv` or `<input_base>.anno.<family>.filtered.tsv`)
-5. ACMG-classified variant tables (`<input_base>.anno.filtered.acmg.tsv` or `<input_base>.anno.<family>.filtered.acmg.tsv`)
+```bash
+python "$PRIVA_ROOT/scripts/bootstrap_priva_rust.py" check \
+  --source-root "$PRIVA_ROOT" --cache-root "$PRIVA_CACHE"
+```
 
-Where `<input_base>` is derived from your `input_vcf` filename, and `<family>` corresponds to family IDs found in your `ped_file`.
+For a manual build with the pinned Rust toolchain, then select it for one shell session:
 
-## Workflow Modes
+The native build also needs a C compiler, `pkg-config`, the Expat development
+files and the static libyaml library/header (version 0.2.5 or newer). Set
+`PKG_CONFIG_PATH` when these are installed outside the default search paths.
 
-The pipeline automatically adapts based on the presence of the `ped_file` specified in the `config.yaml`:
+```bash
+export CARGO_TARGET_DIR="$PRIVA_RUNS/rust-build"
+(cd "$PRIVA_ROOT/rust" && cargo build --release --locked --bin priva)
+export PRIVA_BINARY="$CARGO_TARGET_DIR/release/priva"
+"$PRIVA_BINARY" --version
+```
 
-- **With family information**: If `ped_file` exists, uses pedigree data to perform family-specific filtering and prioritization for each family listed.
-- **Without family information**: If `ped_file` does not exist or is not specified, performs general filtering and prioritization on the entire VCF.
+For an explicit AlphaMissense table conversion, use:
 
-## License
+```bash
+"$PRIVA_BINARY" alphamissense-vcf build \
+  --input AlphaMissense_hg38.tsv.gz --output AlphaMissense_hg38.vcf.gz
+```
 
-PriVA is licensed under the Apache License 2.0 with Commons Clause. This means:
-- You can use, modify, and share it freely for academic and clinical research.
-- Commercial use is prohibited without my permission, including selling PriVA as a product or involving PriVA as a part of charging service.
+This optional procedure retains the original table projection, index contig
+order, duplicate rows and literal score strings. It requires BGZF input with an
+index at `INPUT.tbi` and `bgzip`/`tabix` on `PATH`; it does not change installer
+calls. Paths are passed literally to those programs. As with the original
+Python procedure, child command failures are reported but do not make the
+conversion command fail: validate the resulting VCF and index before use.
 
-## Contact
+The optional Conservation resource guard uses the installed Perl
+`Bio::DB::BigFile` reader and an indexed reference FASTA:
 
-Maintainer: yangyxt@hku.hk, yangyxt@gmail.com
+```bash
+"$PRIVA_BINARY" conservation-resource validate \
+  --input conservation.bw --assembly GRCh38 --reference reference.fa \
+  --tool-prefix "$CONDA_PREFIX/bin"
+```
+
+`--tool-prefix` is the bin directory of the selected scientific environment;
+it binds the Perl selection independently of where `priva` is installed.
+The original PATH fallback applies if that directory contains no Perl file.
+`publish` takes the same options plus `--source-url URL --publish-to FINAL`.
+It validates before creating a hard link, refuses an existing final path,
+then removes the staging name. A failed unlink leaves both names intact.
+`bsd-sum --input FILE` exposes the original `sum -r` checksum procedure.
+These checks establish resource identity and integrity, not scientific
+qualification. The installer and LoFtee callers run these procedures, passing
+the directory of the `python` on `PATH` as `--tool-prefix`.
+
+The optional resource inventory reads an explicitly selected registry:
+
+```bash
+PYTHONHASHSEED=42 "$PRIVA_BINARY" cache-resources validate \
+  --registry cache_resources.json --check-routes
+PYTHONHASHSEED=42 "$PRIVA_BINARY" cache-resources refresh-plan \
+  --registry cache_resources.json --resource alphamissense_prescores
+```
+
+`list`, `list --refreshable` and `show --resource NAME` use the same registry
+option. A route check reads `scripts/install_utils.sh` beside the resolved
+registry. These commands never execute a refresh or read cache payloads.
+An explicit `PYTHONHASHSEED` retains CPython 3.12 string-set iteration order;
+use the same seed when comparing the Python helper. The native interface
+requires the registry path independently of its binary installation directory.
+Route sets with multiple non-string entries or competing missing string routes,
+JSON integers outside 128 bits, lone surrogate strings, deep nesting and
+interpreter recursion limits remain outside this optional interface's compatibility scope.
+Existing callers continue to use `scripts/cache_resources.py`.
+
+The optional acquisition-source helper validates an explicitly selected input:
+
+```bash
+"$PRIVA_BINARY" mechanism-source validate --kind clingen_erepo --input source.tsv
+"$PRIVA_BINARY" mechanism-source record-source --input source.tsv --url "$SOURCE_URL"
+"$PRIVA_BINARY" mechanism-source check-source --input source.tsv --url "$SOURCE_URL"
+```
+
+Other validation kinds are `clingen_dosage`, `clingen_dosage_runtime`,
+`g2p_ddg2p` and `orphadata`. The strict runtime column checks remain distinct
+from the flexible acquisition formats. `record-source` publishes an adjacent
+`.source.json` receipt through a private temporary sibling; an unsuccessful
+publication retains that sibling. `check-source --receipt JSON --metadata-only`
+checks pending receipt metadata without opening the source. An ordinary check
+hashes the complete source before comparing its receipt.
+
+These commands acquire no data. Genuine bundled resources retain their
+existing existence/nonzero-only reuse policy, and installer/source-builder
+callers continue to use `scripts/mechanism_source_input.py`. JSON integers
+outside 128 bits, lone surrogate strings and excessive nesting remain outside
+the optional native receipt reader's compatibility scope.
+
+For an explicit build from already prepared G2P and Orphadata inputs:
+
+```bash
+"$PRIVA_BINARY" gene-mechanism prepared --raw-dir /path/to/raw \
+  --disease-scope-registry /path/to/disease_scope.tsv.gz \
+  --output /path/to/gene_pathogenic_mechanism_evidence.tsv
+```
+
+The raw directory contains `AllG2P.csv` and `orphadata/en_product6.xml`.
+G2P rows precede Orphadata rows; source MONDO IDs retain precedence over
+registry mappings. Supply `--g2p-ddg2p-url` or `--orphadata-gene-disease-url`
+when those prepared sources have an explicitly selected URL. As in the Python
+builder, an incompatible explicit source aborts, while a default-source parse
+error is reported and the remaining source is tried. Missing sources produce
+no rows. Omitting the registry option skips condition-identity enrichment.
+
+`parse --kind g2p|orphadata --input FILE --output TSV` exposes each source
+parser and writes the intermediate unified schema. `attach --input TSV
+--disease-scope-registry TSV --output TSV` attaches registry identity while
+preserving the input column order. Output uses the original deterministic
+`.tmp` sibling and retains an identical destination's mode and modification
+time. These procedures acquire no sources; refresh decisions, locking,
+acquisition and manifest publication remain in the Python builder. Installer
+callers continue to use `scripts/build_gene_pathogenic_mechanism_cache.py`.
+
+The optional `indexed-plugin-cache` helper validates a selected BGZF table and
+repairs only its adjacent tabix index through a temporary alias. It retains the
+publisher's coordinate, comment and skipped-header settings. `format-primate`
+accepts an explicitly selected PrimateAI source and assembly, uses GNU sort and
+bgzip, and publishes a locked, source-bound managed copy under `--cache-dir`.
+Both procedures require the existing `bgzip` and `tabix` tools on `PATH`;
+formatting also requires GNU `sort`.
+
+```bash
+"$PRIVA_BINARY" indexed-plugin-cache ensure-index \
+  --input selected.tsv.bgz --kind primateai
+"$PRIVA_BINARY" indexed-plugin-cache format-primate \
+  --input PrimateAI.tsv.gz --cache-dir "$CACHE_ROOT/PrimateAI" \
+  --assembly GRCh38 --threads 4
+```
+
+The installer runs these commands in place of
+`scripts/indexed_plugin_cache.py`. The native helper retains that script's
+runtime exit code 1; argument errors exit 2. Native help
+uses the native command layout. The portable comparators
+`rust/tests/indexed_plugin_cache_compare.py` and
+`rust/tests/indexed_plugin_cache_edges.py` use private fixtures with the actual
+tools, including cleanup and subprocess-failure checks. Permission fixtures
+must run as an ordinary user, without elevated filesystem privileges.
+
+The optional AlphaMissense complete-annotation helper checks the selected
+producer, official VEP/Perl environment, inputs and published VCF/index pairs:
+
+```text
+Selected config + producer + environment
+                  │ capture
+                  ▼
+Expected input identities + prepared VCF/index pairs
+                  │ publish / recover
+                  ▼
+Complete base + receipt ── check ──┬─ restore → runtime VCF/index
+                                 └─ motif-binding + preserved motif/lineage
+                                                     │ adopt-motif
+                                                     ▼
+                                              Published motif pair
+```
+
+```bash
+"$PRIVA_BINARY" alpha-annotation-base capture \
+  --config "$PRIVA_CONFIG" --source-root "$PRIVA_ROOT" --output expected.json
+"$PRIVA_BINARY" alpha-annotation-base check \
+  --config "$PRIVA_CONFIG" --source-root "$PRIVA_ROOT"
+```
+
+| Procedure | Purpose and additional options |
+| --- | --- |
+| `path` | Show the configured complete base path. |
+| `capture`, `check` | Record current dependencies or check the existing base receipt. `capture` accepts `--output JSON`. |
+| `publish` | Publish already completed VCFs with `--staged-converted VCF --staged-annotation VCF --expected-inputs JSON`. |
+| `recover`, `restore` | Finish an interrupted ordered publication, or copy the verified complete base back to the runtime path. |
+| `adopt`, `runtime-associated` | Import an explicitly evidenced completed base with `--lineage JSON`, or check its closed runtime association. |
+| `motif-binding`, `motif-check` | Compute the current motif producer binding, or check it with `--artifact FILE`. |
+| `adopt-motif` | Publish a preserved motif pair using `--artifact FILE --lineage JSON --mapping TSV` and ordered repeated `--input FILE` options. |
+| `motif-runtime` | Observe the selected scientific Python interpreter and imported package files. |
+
+All except `motif-runtime` require `--config YAML --source-root CHECKOUT`;
+`--base VCF` selects an explicit complete base. These procedures run neither
+VEP annotation nor model generation. They require the existing tools and
+scientific environment named by the original helper. `--python PYTHON`
+(default `python` on `PATH`) identifies the actual Python environment for
+motif provenance. The runtime observer imports the original six packages to
+identify their loaded modules and installed files.
+
+Motif adoption uses the native BioMart identity and receipt-check API.
+`--helper-root CHECKOUT` selects its pinned source assets and canonical bundle
+context, and defaults to `--source-root`; it may differ from the scientific
+producer checkout. Pair staging, identity checks, locking and publication are
+native. The Python interpreter remains the observer of the original scientific
+package environment. No acquisition or scientific rebuild is a fallback, and
+genuine bundled snapshots retain existence/nonzero-only reuse admission.
+
+YAML anchors, aliases, merge keys and flow mappings are supported by the safe
+libyaml reader. Ignored JSON receipt extras are syntax-checked without imposing
+native scalar limits on them; compared fields still require complete equality.
+Values returned or written use the native metadata representation, so arbitrary
+size integers, unpaired Unicode surrogates and deeply nested selected values
+remain outside that profile. Selected YAML date/binary/set values are outside
+the scalar configuration profile. Original Python callers remain unchanged.
+The portable comparator is `rust/tests/alpha_annotation_base_compare.py`.
+
+The optional mapped-artifact publisher preserves the original motif/PM1
+publication transaction. It runs an explicitly selected scientific command in a
+private directory beside the target, changing only its single `--output` value.
+The producer's bytes and their mapping receipt are then published in this order:
+
+```text
+Selected mapping + producer + config
+                  │ run (external scientific command)
+                  ▼
+Private artifact + mapping receipt
+                  │ pending marker → artifact rename → receipt rename
+                  ▼
+Selected pair ── recover → finish only the recorded ordered transaction
+```
+
+```bash
+"$PRIVA_BINARY" mapped-artifact context \
+  --helper-root "$PRIVA_ROOT" --config "$PRIVA_CONFIG" \
+  --artifact "$ARTIFACT" --mapping "$MAPPING" \
+  --cache-root "$CACHE_ROOT" --output-dir "$OUTPUT_DIR" \
+  --assembly hg38 --kind pm1 \
+  --producer "$PRIVA_ROOT/scripts/prepare_pm1_regions.py" \
+  --input "$RMC_TABLE" --input "$HCSEEKER_TABLE"
+```
+
+Use the same options with `recover` for process-interruption recovery.
+`run` additionally requires `--expected-identity JSON`, followed by `--` and the
+original producer argument vector, including exactly one `--output "$ARTIFACT"`.
+Obtain that identity with `priva biomart identity --helper-root CHECKOUT
+--mapping TSV` and the same ordered `--input` options. `--python PYTHON` selects
+the producer interpreter and defaults to `python` on `PATH`. Commands and paths
+are passed literally; shell fragments are not interpreted.
+
+`adopt-native --source FILE --lineage JSON_FILE` copies a preserved completed
+artifact without modifying its original pair. `--native-lineage JSON_FILE`
+explicitly binds that lineage file into publication metadata. Motif procedures
+can supply `--annotation-base VCF` to retain the complete-base scientific
+binding, including the original Python runtime observation. The original
+lineage admission remains the caller's responsibility; adoption does not infer
+scientific provenance from an unreceipted file.
+
+The publisher uses native BioMart checks directly. Source assets identify the
+qualified helpers and scientific producers; they are not a Python publication
+fallback. Failed private stages remain available, directory locks are
+nonblocking, and only the three original ordered pair states can recover.
+Ignored JSON metadata is validated losslessly; pending receipt comparisons
+retain complete equality. The installer publishes PM1 regions with
+`--native-producer pm1-regions`; the AlphaMissense motif caller and the
+scientific commands remain unchanged. The portable comparator is
+`rust/tests/mapped_artifact_compare.py`; its byte producers and interrupted
+transactions are transport fixtures, not scientific production acceptance.
+
+The optional DAS completion checker uses the same version-3 receipts as the
+Python helper:
+
+```bash
+"$PRIVA_BINARY" das-install-state capture --profile hg38 \
+  --input /cache/AlphaMissense/domain_statistics.rkyv \
+  --source analysis=scripts/am_pick_intolerant_domains.py \
+  --parameter threads=8
+```
+
+`check` also takes `--receipt JSON` and one or more `--output FILE` options.
+`record` additionally requires `--expected-inputs JSON` from the preceding
+capture; it publishes only the completion receipt after all selected identities
+still match. Repeat `--input`, `--source`, `--bundled` and `--parameter` in their
+original order. Source roles use content hashes; `--bundled ROLE=FILE` checks
+only existence and nonzero size. A completion receipt does not establish
+scientific qualification. The installer records native DAS builds with
+`priva das-install-state`, binding `priva builder-identity` output for
+`das-domains`, `alphamissense-domain` and `alpha-exon-history` as source roles;
+completed Python DAS outputs of an existing installation keep their Python
+receipt check for one transition.
+
+For a separately prepared, complete ClinVar consumer-equivalence proof,
+`priva das-input-continuity check` verifies the original DAS receipt and its
+continuity sidecar without regenerating any scientific output. Use the same
+ordered input/source/bundle/parameter/output options as above, plus
+`--receipt JSON --continuity JSON --checker-source scripts/das_input_continuity.py`.
+The checker source must match the version embedded in the executable; it is
+hashed as a provenance asset and is never executed. `record` additionally takes
+`--old-input FILE --new-input FILE --proof JSON --proof-sha256 HEX`. It publishes
+only a non-overwriting continuity certificate after all proof bindings pass.
+This optional interface supports UTF-8 JSON (including its BOM); other byte
+encodings, non-string filesystem paths and the JSON limits above remain outside
+its compatibility scope. Existing installer callers remain unchanged.
+
+The opt-in domain procedures read an already annotated AlphaMissense VCF:
+
+```bash
+"$PRIVA_BINARY" alphamissense-domain build \
+  --vcf AlphaMissense.annotated.vcf.gz --output domain-statistics.parquet
+"$PRIVA_BINARY" domain-metadata build \
+  --vcf AlphaMissense.annotated.vcf.gz --output domain-metadata.parquet --assembly GRCh38
+```
+
+For large inputs, run `chromosome --vcf VCF --chrom CONTIG --output PARQUET`
+separately for each header contig, then `merge --input FIRST --input SECOND ...
+--output PARQUET` in literal header order, including empty contigs. Both
+procedures support that interface and `check --input PARQUET [--vcf VCF]`.
+`build` uses the sequential source route; `--threads >1` selects indexed
+chromosome order. Use separate chromosome processes for parallel execution.
+
+Metadata `--assembly` enables source-associated reuse with an adjacent
+`.source.json` receipt. Without it, extraction is fresh. Repeated
+`--target-domain PATH` options restrict fresh metadata extraction; an associated
+warm cache retains its producing target selection, as in the Python wrapper.
+These commands write typed Parquet/zstd intermediates. Installer and DAS
+callers retain their current routes. See the
+[domain intermediate format](rust/CACHE_FORMATS.md#alphamissense-domain-intermediates-parquet-schema-2).
+
+For native DAS preparation, the optional `alpha-exon-history` procedure retains
+exon construction and serialization order beside the statistics. It supports
+separate chromosome jobs and a header-ordered merge with an explicit Python
+hash seed. See the [exon-history interface](rust/CONVERSION.md#native-alpha-exon-history-companion).
+This does not change the current installer route or existing caches.
+
+To build the gene pathogenic-AF cache directly from an existing indexed ClinVar
+VCF, use the optional procedure:
+
+```bash
+"$PRIVA_BINARY" clinvar-gene-af build \
+  --vcf clinvar.annotated.vcf.gz --output clinvar.gene-af.rkyv --threads 4
+```
+
+It retains the Python producer's filtering, first equal-AF winner, ordered
+record fields and partial accumulated-AF snapshot. TBI and CSI indexes are
+supported. `chromosome --vcf VCF --chrom CONTIG --output RKYV` builds one
+contig; `merge --input FIRST_RKYV --input SECOND_RKYV --output RKYV` combines
+completed shards in the supplied order, which must match the VCF header.
+The original repeated-gene/`None` merge failure is preserved. The output uses
+schema 6 version 1, or version 2 when a Boolean value survives; see the
+[gene-AF format](rust/CACHE_FORMATS.md#clinvar-gene-af-values-schema-6-version-2).
+Installer callers continue to select their existing producer.
+
+To build the amino-acid and splice caches together from an existing indexed
+ClinVar VCF:
+
+```bash
+"$PRIVA_BINARY" clinvar-aa-splice build \
+  --vcf clinvar.annotated.vcf.gz \
+  --aa-output clinvar.aa.rkyv --splice-output clinvar.splice.rkyv --threads 4
+```
+
+`chromosome` takes the same inputs plus `--chrom CONTIG`. Use `merge` with
+repeated `--aa-input AA_SHARD --splice-input SPLICE_SHARD` pairs in VCF header
+order, followed by `--aa-output` and `--splice-output`. Both caches retain the
+producer's annotation order and duplicate observations. The splice cache uses
+[schema 2 version 2](rust/CACHE_FORMATS.md#clinvar-splice-records-schema-2-version-2)
+only when missing fields or partial SpliceAI dictionaries require it.
+Processing completes before either output is written; AA is published first.
+Each archive is checked and published atomically, so a later splice publication
+failure leaves the completed AA archive. Output paths must be distinct from
+one another and the inputs. This procedure is opt-in; installer callers keep
+their existing producer.
+
+The optional annotation contract exposes header, native cache-shape and
+completion-receipt checks separately:
+
+```bash
+"$PRIVA_BINARY" clinvar-contract header \
+  --vcf clinvar.annotated.vcf.gz --stage complete
+"$PRIVA_BINARY" clinvar-contract cache --input clinvar.aa.rkyv --kind aa
+"$PRIVA_BINARY" clinvar-contract pair-check \
+  --vcf clinvar.annotated.vcf.gz \
+  --producer "$PRIVA_ROOT/scripts/stat_aachange_clinvar.py" \
+  --contract-source "$PRIVA_ROOT/scripts/clinvar_annotation_contract.py" \
+  --aa clinvar.aa.rkyv --splice clinvar.splice.rkyv --receipt pair.complete.json
+```
+
+Header stages are `aa`, `gene`, `af`, `vep` and `complete`; only the header is
+read. Cache kinds are `aa`, `splice`, `gene-af`, `exon-af` and `gene`. Native
+archive admission follows the existing schema readers, followed by the Python
+helper's nonempty/nested-shape checks. The Python checker accepts some value
+types that these archive schemas cannot represent; this command does not widen
+the cache formats or create pickles.
+
+Use `pair-capture --captured CAPTURE.json` before building the AA/splice pair,
+then `pair-complete --captured CAPTURE.json` with the same arguments afterwards.
+Both commands require `--receipt`; capture leaves that receipt untouched.
+Pass `--config CONFIG.yaml` to include the active configuration in the alias
+checks. The pair association records path/target/inode/size/timestamps for the
+VCF, its existing CSI/TBI indexes and the two outputs, plus the original Python
+producer and contract asset hashes. Those assets are read, never executed by
+the native command. `af-paths-check --vcf VCF --config YAML --gene GENE --exon EXON`
+exposes the separate AF output-path preflight. Existing installer callers keep
+the Python contract.
+
+For an explicit SpliceVault GRCh38-to-GRCh37 table conversion, use:
+
+```bash
+"$PRIVA_BINARY" splicevault-convert \
+  --input_tsv SpliceVault_data_GRCh38.tsv \
+  --output_tsv SpliceVault_data_GRCh37.tsv \
+  --chain_file "$PRIVA_ROOT/data/liftover/hg38ToHg19.over.chain.gz" \
+  --reference_fasta /path/to/hg19.fa --temp_dir /path/to/temp \
+  --chunk_size 50000
+```
+
+This optional procedure requires upstream `CrossMap` on `PATH` and an indexed
+target FASTA. It retains the original chunk boundaries, per-chunk type inference,
+duplicate-ID updates and row order; each chunk calls CrossMap VCF, then BED.
+Keep the default chunk size for the installed resource profile. Output is an
+unsorted table; the installer's subsequent sort, BGZF compression and indexing
+remain separate. The GRCh37 installer route runs this command.
+
+Input must be plain UTF-8 TSV. Output compression follows the filename suffix:
+`.gz`, `.bz2`, `.xz`, `.zst`, `.zip`, `.tar`, `.tar.gz`, `.tar.bz2` or `.tar.xz`;
+other names produce plain TSV. Each chunk appends a new compressed stream or
+archive member as in pandas. ZIP retains duplicate member names. Compressed TAR
+retains the original limitation: a second chunk fails when pandas' append mode
+reopens the first archive without decompression. Compression bytes and generated
+timestamps can differ while decompressed table data and member order agree.
+ZIP64 archives can also differ from pandas in central-directory size/offset
+extensions and version metadata; do not assume byte-identical archive encoding.
+A runtime failure exits 1 and may leave the completed output prefix; argument errors exit 2.
+Temporary VCF/BED files are removed in the original order, while CrossMap's
+unmapped sidecars remain available in the temporary directory.
+
+The optional gene-statistics builder consumes an annotated ClinVar VCF and the
+same ClinVar summary and MANE tables as `scripts/clinvar_stat_variants.py`:
+
+```bash
+"$PRIVA_BINARY" clinvar-gene-stats build \
+  --vcf clinvar.annotated.vcf.gz \
+  --clinvar-summary variant_summary.txt.gz --mane-summary MANE.summary.txt.gz \
+  --output clinvar.gene-stat.rkyv --threads 8 \
+  --python-hash-seed "$REFERENCE_HASH_SEED" \
+  --completion-order reference-completion.json
+```
+
+The hash seed must match the explicitly seeded Python reference profile
+(CPython 3.12, 64-bit little-endian). It cannot recover an unknown historical
+random seed. A completion trace contains the input VCF's `vcf_sha256` and an
+`order` array of zero-based record ordinals, each appearing exactly once.
+Without `--completion-order`, workers are collected as they finish;
+`--completion-trace NEW_JSON` records that order. Order can affect the selected
+gene symbol and numeric coercion, so independently timed executions are not
+guaranteed to produce identical values. `--config YAML` reads the existing
+donor-loss cutoff; `--donor-loss-cutoff FLOAT` supplies it explicitly.
+
+`--allele-transcript-map PICKLE` can replace the two table options when reusing
+an independently verified output of the original transcript-map procedure.
+It accepts a plain dictionary, including gzip-compressed input, through the
+restricted reader. `merge --input FIRST_RKYV --input SECOND_RKYV --output RKYV`
+combines completed shards in the supplied VCF header order and requires
+disjoint gene keys. For genes spanning shards, use the whole-input builder.
+Nested dictionary order, typed symbols and set membership are retained;
+[schema 5 version 2](rust/CACHE_FORMATS.md#clinvar-gene-symbols-schema-5-version-2)
+is used only for nontext symbols. Installer callers keep the existing producer.
+
+Procedure errors report an exception category and exit status 1. CLI, trace and
+path admission failures use exit status 2. The native reader does not invoke
+the Python progress-estimation command, so missing tools used only by that
+command do not make the native builder fail.
+
+The Python scripts remain in `scripts/`. To run a step with its Python script again, revert the commit that switched it (titled "Call priva for the per-sample preparation steps", "Call priva for the splicing and UTR interpretation" or "Call priva acmg-assign for the ACMG step"); each restores the Python command lines and their freshness checks together, and the outputs of the two routes are interchangeable. Use a new output folder after switching either way.
+
+See [LICENSE](LICENSE) for Apache 2.0 with the Commons Clause condition and commercial licensing, including clinical/diagnostic applications. Third-party resources retain their own terms, including the [CADD license](scripts/cadd_scripts/CADD-LICENSE).

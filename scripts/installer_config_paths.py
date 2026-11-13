@@ -38,6 +38,7 @@ BUNDLED_PATHS = {
     "gofcards_clinvar_injector_script": "scripts/inject_clinvar_into_gofcards.py",
     "gofcards_builder_script": "scripts/build_gofcards_exact_gof_cache.py",
     "gofcards_mechanism_review_tsv": "data/gofcards/gofcards_mechanism_reviews.tsv",
+    # The installer no longer reads these two; old configurations still resolve.
     "hpo_assertion_builder_script": "scripts/collapse_HPO_anno.py",
     "mondo_scope_builder_script": "scripts/build_mondo_disease_scope.py",
     "mondo_disease_scope_overrides": "data/mondo/disease_scope_overrides.tsv",
@@ -65,7 +66,7 @@ FORCE_KEYS = {
 # missing derived destinations are built by their existing scientific procedures.
 GENERATED_CACHE_KEYS = {
     "clinvar_vcf", "clinvar_aa_stat", "clinvar_splice_stat", "clinvar_patho_af_stat",
-    "clinvar_patho_exon_af_stat", "clinvar_gene_stat", "alphamissense_vcf",
+    "clinvar_patho_exon_af_stat", "clinvar_pm5_index", "clinvar_gene_stat", "alphamissense_vcf",
     "alphamissense_vep_vcf", "alphamissense_vep_base_vcf", "alphamissense_pd_stat", "alphamissense_tranx_domain_map",
     "alphamissense_intolerant_domains", "alphamissense_intolerant_motifs",
     "all_intolerant_domains", "pm1_regions_pkl", "interpro_mapping_pickle",
@@ -128,7 +129,7 @@ def resource_groups(config: dict, directories: dict[str, str]) -> dict[str, Path
             "alphamissense_pd_stat", "alphamissense_tranx_domain_map", "alphamissense_intolerant_domains",
             "alphamissense_intolerant_motifs", "all_intolerant_domains", "pm1_regions_pkl"),
         Path(directories["clinvar_vcf_dir"]): ("clinvar_vcf", "clinvar_aa_stat", "clinvar_splice_stat",
-            "clinvar_patho_af_stat", "clinvar_patho_exon_af_stat", "clinvar_gene_stat"),
+            "clinvar_patho_af_stat", "clinvar_patho_exon_af_stat", "clinvar_pm5_index", "clinvar_gene_stat"),
         Path(directories["gnomad_vcf_dir"]): ("gnomad_vcf_chrX",),
         plugin / "UTRannotator": ("utr_annotator_file",),
         plugin / "LoFtee": ("human_ancestor_fasta", "loftee_conservation_file", "gerp_bigwig"),
@@ -685,11 +686,14 @@ def _portable_defaults(config: dict, source_root: Path) -> dict[str, str]:
     for key, suffix in (("clinvar_aa_stat", "aa_change.stats.pkl"),
                         ("clinvar_splice_stat", "splice_change.stats.pkl"),
                         ("clinvar_patho_af_stat", "patho_af_stat.pkl"),
-                        ("clinvar_patho_exon_af_stat", "patho_exon_af_stat.pkl")):
+                        ("clinvar_patho_exon_af_stat", "patho_exon_af_stat.pkl"),
+                        ("clinvar_pm5_index", "pm5_index.tsv.gz")):
         fill(key, str(effective["clinvar_vcf"]).removesuffix(".vcf.gz") + "." + suffix)
     # Preserve this baseline marker even when absent/empty. The existing
     # ClinVar refresh procedure recognizes it and selects a managed candidate.
     fill("clinvar_gene_stat", source_root / "data/ClinVar/clinvar_2star_stats.pkl.gz")
+    # The gene-statistics and DAS builders reproduce the set order of this Python hash seed.
+    fill("priva_python_hash_seed", "0")
     fill("utr_annotator_file", plugin / f"UTRannotator/uORF_5UTR_{genome}_PUBLIC.txt")
     fill("loeuf_prescore", source_root / "data/loeuf" / (
         "loeuf_dataset.tsv.gz" if assembly == "hg19" else "loeuf_dataset_hg38.tsv.gz"))
@@ -705,12 +709,14 @@ def _portable_defaults(config: dict, source_root: Path) -> dict[str, str]:
         "alphamissense_vcf": f"AlphaMissense_{assembly}.vcf.gz",
         "alphamissense_vep_vcf": f"AlphaMissense_{assembly}.vep.vcf.gz",
         "alphamissense_vep_base_vcf": f"AlphaMissense_{assembly}.vep.base.vcf.gz",
-        "alphamissense_pd_stat": f"AlphaMissense_{assembly}.vep.prot.domain.stats.pkl",
-        "alphamissense_tranx_domain_map": f"transcript_pp_domain_mapping.{assembly}.pkl",
+        # Native builders write typed Parquet statistics and .rkyv archives. An
+        # existing pickle value is kept; its builder selects the sibling.
+        "alphamissense_pd_stat": f"AlphaMissense_{assembly}.vep.prot.domain.stats.parquet",
+        "alphamissense_tranx_domain_map": f"transcript_pp_domain_mapping.{assembly}.rkyv",
         "alphamissense_intolerant_domains": f"domain_tolerance_analysis.{assembly}.tsv",
         "alphamissense_intolerant_motifs": f"AlphaMissense_{assembly}.kde.pkl",
-        "all_intolerant_domains": f"all_intolerant_domains.{assembly}.pkl",
-        "pm1_regions_pkl": f"pm1_regions.{assembly}.pkl",
+        "all_intolerant_domains": f"all_intolerant_domains.{assembly}.rkyv",
+        "pm1_regions_pkl": f"pm1_regions.{assembly}.rkyv",
     }.items():
         fill(key, alpha / name)
     fill("conservation_file", plugin / f"Conservation/gerp_conservation_scores.homo_sapiens.{genome}.bw")

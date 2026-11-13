@@ -6,6 +6,9 @@ input_vcf: example/smoke_data/hg19/input/clinvar.hg19.demo20.seed20250429.noCSQ.
 hub_cadd_file: example/smoke_data/hg19/resources/hg19.demo20.hub.cadd.tsv
 clinvar_aa_stat: example/smoke_data/hg19/resources/clinvar.hg19.demo20.vep.aa_change.stats.pkl
 clinvar_splice_stat: example/smoke_data/hg19/resources/clinvar.hg19.demo20.vep.splice_change.stats.pkl
+# The demo ClinVar VCF's CSQ has no NMD field, which priva clinvar-pm5-index needs, so this fixture
+# holds the index header only: PM5 never applies in the hg19 smoke run.
+clinvar_pm5_index: example/smoke_data/hg19/resources/clinvar.hg19.demo20.vep.pm5_index.header_only.tsv.gz
 clinvar_patho_af_stat: example/smoke_data/hg19/resources/clinvar.hg19.demo20.vep.patho_af_stat.pkl
 clinvar_patho_exon_af_stat: example/smoke_data/hg19/resources/clinvar.hg19.demo20.vep.patho_exon_af_stat.pkl
 alphamissense_tranx_domain_map: example/smoke_data/hg19/resources/transcript_pp_domain_mapping.hg19.demo20.pkl

@@ -322,6 +322,8 @@ Wiring test with stub steps (job 1540683, 57 steps): 58 folders on the first run
 
 Real gnomAD test (job 1540694, `validation/install_workflow_20261110/gnomad_1540694`): with every other step adopted from the existing installation, `C1_chrY` downloaded chrY into its own folder with the same bytes as the existing chrY file, `C1` linked all 24 chromosomes (chrY to the new download, the others to the existing files) and ran `gnomAD_install`, and a second launch submitted no step task.
 
+Real ClinVar test (job 1540983, `validation/install_workflow_20261110/clinvar_1540983`, 24 CPUs): with every other step adopted from the existing installation, `D0` found the release dated 2026-11-08 and acquired it, and `D1` annotated it (VEP 34 hours, gnomAD and the AA/splice statistics about 2.5 hours; 37 h 16 min in all). The annotated ClinVar VCF carries D0's fileDate; `D1` kept the bundled gene statistics, so it deployed D0's VCF without an acquisition record. `pins.json` recorded D0 with the day it was taken, and a second launch submitted no step task (128 seconds). Like the existing installation, `D1`'s folder keeps the 24 per-chromosome VEP files (about 5.5 GB). An earlier attempt with 8 CPUs (job 1540692) ran out of its 12-hour limit during VEP.
+
 ## Retained Python tools
 
 CADD scientific packages and model assets remain upstream. The auxiliary data

@@ -245,11 +245,11 @@ class AnnotationFailures(unittest.TestCase):
         subprocess.run([TOOLS["tabix"], "-p", "vcf", str(path)], check=True)
         return path
 
-    def fixture(self, label, *, stale=False, unsupported_only=False):
+    def fixture(self, label, *, stale=False, unsupported_only=False, mitochondrial=False):
         folder = self.folder / label
         folder.mkdir()
         header = "##fileformat=VCFv4.2\n"
-        for chrom in ("chr2", "chr10", "chr1", "chr3", "GL000191.1"):
+        for chrom in ("chr2", "chr10", "chr1", "chr3", "GL000191.1") + (("chrM",) if mitochondrial else ()):
             header += f"##contig=<ID={chrom},length=1000>\n"
         header += '##INFO=<ID=ORIG,Number=1,Type=String,Description="Original fixture marker">\n'
         columns = "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\n"
@@ -259,6 +259,8 @@ class AnnotationFailures(unittest.TestCase):
                 for position in (10, 11):
                     rows += f"{chrom}\t{position}\t{chrom}_{position}\tA\tC\t50\tPASS\tORIG=keep\n"
         rows += "GL000191.1\t10\tunsupported\tA\tC\t50\tPASS\tORIG=skip_original_policy\n"
+        if mitochondrial:
+            rows += "chrM\t5\tchrM_5\tA\tC\t50\tPASS\tORIG=mitochondrial\n"
         source = header + columns + rows
         path = self.bgzf(folder / "input.vcf.gz", source)
         fields = self.info_fields()
@@ -372,6 +374,19 @@ class AnnotationFailures(unittest.TestCase):
         self.assertNotIn("unsupported", outputs["fixed"]["body"])
         unmatched = next(line for line in outputs["fixed"]["body"].splitlines() if line.startswith("chr2\t11\t"))
         self.assertTrue(unmatched.endswith("\tORIG=keep"))
+
+    def test_chrM_records_are_kept_without_gnomad_values(self):
+        folder, path, gnomad, _, _ = self.fixture("mitochondrial", mitochondrial=True)
+        result = self.run_annotation(path, gnomad)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        body = subprocess.check_output(
+            [TOOLS["bcftools"], "query", "-f", "%CHROM\t%POS\t%ID\t%INFO\n", str(path)], text=True).splitlines()
+        self.assertEqual(len(body), 7)
+        self.assertEqual(body[-1], "chrM\t5\tchrM_5\tORIG=mitochondrial")
+        self.assertNotIn("unsupported", "\n".join(body))
+        concat = [Path(x).name for x in (folder / "concat.args").read_text().splitlines()[2:]]
+        self.assertIn("input.chrM.gnomAD.vcf.gz", concat)
+        self.assertEqual(sorted(p.name for p in folder.glob("input.chr*.gnomAD.vcf.gz*")), [])
 
     def test_failed_and_interrupted_partial_shards_are_not_reused_on_retry(self):
         for failure in ("split-view", "annotation-producer", "annotation-interrupted"):

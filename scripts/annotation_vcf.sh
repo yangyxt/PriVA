@@ -574,6 +574,28 @@ function anno_agg_gnomAD_chromosome() {
     rm -- "$publication_pending" && rmdir "$stage"
 }
 
+# 2026-11-12 CT: a chromosome gnomAD does not cover (chrM) keeps its records,
+# copied unchanged into a shard of its own so the concat below includes them.
+function anno_agg_gnomAD_passthrough() {
+    local input_vcf="" chr="" output_vcf="" stage staged
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --input-vcf) [[ $# -ge 2 ]] || return 2; input_vcf=$2; shift 2 ;;
+            --chromosome) [[ $# -ge 2 ]] || return 2; chr=$2; shift 2 ;;
+            --output-vcf) [[ $# -ge 2 ]] || return 2; output_vcf=$2; shift 2 ;;
+            *) log "Use anno_agg_gnomAD_passthrough --input-vcf VCF --chromosome CHROM --output-vcf VCF"; return 2 ;;
+        esac
+    done
+    [[ -n $input_vcf && -f $input_vcf && -n $chr && -n $output_vcf && $output_vcf != "$input_vcf" ]] || return 2
+    [[ ! -d $output_vcf.tbi ]] || return 1
+    stage=$(mktemp -d "$(dirname "$output_vcf")/.gnomad-passthrough.XXXXXX") || return $?
+    staged="$stage/$(basename "$output_vcf")"
+    bcftools view -r "$chr" -Oz -o "$staged" "$input_vcf" || return $?
+    tabix -f -p vcf "$staged" || return $?
+    check_vcf_validity "$staged" || return $?
+    mv "$staged" "$output_vcf" && mv -T "$staged.tbi" "$output_vcf.tbi" && rmdir "$stage"
+}
+
 function anno_agg_gnomAD_data () {
     local input_vcf=${1}
     local threads=${2}
@@ -645,10 +667,13 @@ function anno_agg_gnomAD_data () {
     log "The chromosome names extracted from the input vcf are: ${chr_chroms[*]}"
 
     # Step 2: Further split the main-contig-variants file to multiple single-contig variant files
-    local -a valid_chroms=()
+    local -a valid_chroms=() passthrough_chroms=()
     for chr in "${chr_chroms[@]}"; do
         if [[ ${chr} =~ chr[0-9XY]+ ]]; then
             valid_chroms+=( "${chr}" )
+        elif [[ ${chr} =~ ^chrMT?$ ]]; then
+            passthrough_chroms+=( "${chr}" )
+            log "WARNING!!! gnomAD has no ${chr} data. Its records are kept without gnomAD values"
         else
             log "WARNING!!! The chromosome ${chr} is not supported by gnomAD now. Currently only support chr1 to chrY. Skip this chromosome"
         fi
@@ -704,13 +729,17 @@ function anno_agg_gnomAD_data () {
     parallel -j "${threads}" --joblog "${job_log}" "${annotation_job}" ::: "${valid_chroms[@]}" || return $?
     check_parallel_joblog --job-log "${job_log}" \
         --expected-jobs "${#valid_chroms[@]}" --exit-status 0 || return $?
+    for chr in "${passthrough_chroms[@]}"; do
+        anno_agg_gnomAD_passthrough --input-vcf "${input_vcf}" --chromosome "${chr}" \
+            --output-vcf "${input_vcf/.vcf*/}.${chr}.gnomAD.vcf.gz" || return $?
+    done
 
     # Keep the original shell-glob concat order, but accept only the shards
     # selected for this invocation. Unrelated leftovers must not be published.
     local shard
     local -A expected_shards=()
     local -a annotated_vcfs=()
-    for chr in "${valid_chroms[@]}"; do
+    for chr in "${valid_chroms[@]}" "${passthrough_chroms[@]}"; do
         shard="${input_vcf/.vcf*/}.${chr}.gnomAD.vcf.gz"
         check_vcf_validity "${shard}" || return $?
         expected_shards["${shard}"]=1

@@ -410,6 +410,12 @@ def PM2_criteria(df: pd.DataFrame,
     pm2_array = np.zeros(len(df), dtype=int)
     pm2_array[pm2_supporting] = 1
     pm2_array[pm2_moderate] = 2
+    # gnomAD's joint exome and genome release has no chrM, and the gnomAD step
+    # passes chrM records through without its values. A missing frequency there
+    # means "not covered", not "absent from the population", so PM2 stays off.
+    chrom = df.get("chrom", pd.Series("", index=df.index)).fillna("").astype(str)
+    mitochondrial = chrom.str.upper().str.removeprefix("CHR").isin({"M", "MT"}).to_numpy()
+    pm2_array[mitochondrial] = 0
     return pm2_array
 
 

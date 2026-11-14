@@ -1427,6 +1427,17 @@ function Calculate_CADD {
     log "Failed to convert chromosome names from UCSC to GRCh style for ${input_vcf}. Quit now";
     return 1; }
 
+    # 2026-11-14 CT: CADD's v1.7 data have no mitochondrial chromosome (no MT
+    # rows in either prescored table, no MT sequence in the reference MMSplice
+    # reads), and MMSplice stops on an MT variant near a mitochondrial gene
+    # (TruPath job 1542201). MT records are left out of CADD's input and get
+    # no CADD values, as they get no gnomAD values. CADD reads only the first
+    # five VCF columns, so the genotype columns are left out as well.
+    local cadd_input=${nochr_vcf%.vcf.gz}.cadd_input.vcf.gz
+    bcftools view --threads ${threads} -G -t ^MT -Oz -o ${cadd_input} ${nochr_vcf} || { \
+    log "Failed to write the CADD input ${cadd_input} without MT records and genotypes. Quit now";
+    return 1; }
+
     # Determine the genome tag based on the assembly
     if [[ ${assembly} == "GRCh37" ]] || [[ ${assembly} == "hg19" ]]; then
         local genome_tag="GRCh37"
@@ -1453,7 +1464,7 @@ function Calculate_CADD {
     fi
 
     log "Running CADD script ${cadd_script} with the following command"
-    log "${cadd_script} -c ${threads} -a -p -m -d -g ${genome_tag} -o ${output_file} ${nochr_vcf}"
+    log "${cadd_script} -c ${threads} -a -p -m -d -g ${genome_tag} -o ${output_file} ${cadd_input}"
     export TMPDIR=${tmp_dir}
     PRIVA_CADD_MMSPLICE_EXON_CACHE=${exon_tables} \
     PRIVA_CADD_PRESCORE_BIN=${prescore_bin} \
@@ -1462,7 +1473,7 @@ function Calculate_CADD {
     -a -p -m -d \
     -g ${genome_tag} \
     -o ${output_file} \
-    ${nochr_vcf} && \
+    ${cadd_input} && \
     gunzip -f ${output_file} && \
     mawk -F '\t' '$1 !~ /^##/{print;}' ${output_file/.gz/} > ${output_file/.gz/}.tmp && \
     mv ${output_file/.gz/}.tmp ${output_file/.gz/} && \

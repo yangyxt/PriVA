@@ -248,10 +248,23 @@ cmd_run() {
     [[ -n ${PRIVA_BINARY:-} ]] && set_key "$private" priva_binary "$PRIVA_BINARY"
     [[ -n ${INSTALL_THREADS:-} ]] && set_key "$private" threads "$INSTALL_THREADS"
     export TMPDIR=$PWD/tmp
+    # Files you supply for another step (its user_inputs) reach the steps that
+    # need them through that step's receipt. Resolving folders would copy them
+    # into this step's folder: 47 GB for the SpliceAI2 pair in every running
+    # step (job 1542391). They are left out of that and put back as configured.
+    local -A supplied=()
+    local own
+    own=" $(jq -r '[.user_inputs[]?, .outputs[], .optional_outputs[]?, .copies[]?] | join(" ")' <<< "$entry") "
+    for k in $(jq -r '.steps[].user_inputs[]?' "$registry" | sort -u); do
+        [[ $own == *" $k "* ]] && continue
+        v=$(yaml_value "$private" "$k"); [[ -n $v ]] || continue
+        supplied[$k]=$v; sed -i -E "/^${k}[[:space:]]*:/d" "$private"
+    done
     if ((stub == 0)); then
         priva_configure_cache_paths "$private" > resolve.log 2>&1 || { cat resolve.log >&2; die "resolving folders failed"; }
         priva_configure_portable_paths --config "$private" >> resolve.log 2>&1 || { cat resolve.log >&2; die "resolving paths failed"; }
     fi
+    for k in "${!supplied[@]}"; do set_key "$private" "$k" "${supplied[$k]}"; done
     for r in "${inputs[@]}"; do
         while IFS=$'\t' read -r k v; do set_key "$private" "$k" "$v"; done < <(jq -r '.keys | to_entries[] | "\(.key)\t\(.value)"' "$r")
     done

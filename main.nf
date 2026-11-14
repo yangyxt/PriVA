@@ -1,6 +1,6 @@
 nextflow.enable.dsl=2
 
-include { VALIDATE_INPUTS; ANNOTATE_PREPROCESS; ANNOTATE_STEP; ANNOTATE_CADD; ANNOTATE_MERGE; HUB_LOOKUP; HUB_FILL; HUB_ADD; HUB_REFRESH_PLAN; FILTER_FAMILY; PRIORITIZE_COMBINE; PRIORITIZE_SPLICING; PRIORITIZE_UTR; PRIORITIZE_JOIN; PRIORITIZE_ACMG } from './modules/local/compatibility'
+include { VALIDATE_INPUTS; ANNOTATE_PREPROCESS; ANNOTATE_STEP; ANNOTATE_CADD; SPLIT_CHROMOSOMES; GATHER_PIECES; ANNOTATE_MERGE; HUB_LOOKUP; HUB_FILL; HUB_ADD; HUB_REFRESH_PLAN; FILTER_FAMILY; PRIORITIZE_COMBINE; PRIORITIZE_SPLICING; PRIORITIZE_UTR; PRIORITIZE_JOIN; PRIORITIZE_ACMG } from './modules/local/compatibility'
 include { INSTALL_RESOURCES } from './workflows/install'
 
 // The scientific source is deliberately retained during orchestration parity.
@@ -72,12 +72,8 @@ workflow {
         def withNew = HUB_LOOKUP.out.split.map { run, source, lineage, known, fresh, freshIndex, count -> [run, source, lineage, known, fresh, freshIndex, count.trim().toInteger()] }
             .filter { item -> item[6] > 0 }
         def bundles = validated.map { item -> [item[4]] }
-        ANNOTATE_STEP(withNew.filter { item -> item[1] != 'cadd' }.combine(bundles)
-            .map { run, source, lineage, known, fresh, freshIndex, count, bundle -> [run, source, fresh, freshIndex, bundle] })
-        ANNOTATE_CADD(withNew.filter { item -> item[1] == 'cadd' }.combine(bundles)
-            .map { run, source, lineage, known, fresh, freshIndex, count, bundle -> [run, fresh, freshIndex, bundle] })
-        def annotatedNew = ANNOTATE_STEP.out.annotated.map { run, source, output -> [source, output] }
-            .mix(ANNOTATE_CADD.out.cadd.map { run, output -> ['cadd', output] })
+        ANNOTATE_NEW(withNew, bundles)
+        def annotatedNew = ANNOTATE_NEW.out.annotated
         HUB_ADD(withNew.map { run, source, lineage, known, fresh, freshIndex, count -> [source, run, lineage, fresh] }
             .join(annotatedNew)
             .map { source, run, lineage, fresh, output -> [run, source, lineage, fresh, output] })
@@ -198,12 +194,9 @@ outputs and scientific-profile requirements.'''
             HUB_LOOKUP(toLookup)
             def lookedUp = HUB_LOOKUP.out.split.map { run, source, lineage, known, fresh, freshIndex, count -> [run, source, lineage, known, fresh, freshIndex, count.trim().toInteger()] }
             def withNew = lookedUp.filter { item -> item[6] > 0 }
-            ANNOTATE_STEP(withNew.filter { item -> item[1] != 'cadd' }.combine(preprocessed.map { item -> [item[3]] })
-                .map { run, source, lineage, known, fresh, freshIndex, count, bundle -> [run, source, fresh, freshIndex, bundle] })
-            ANNOTATE_CADD(withNew.filter { item -> item[1] == 'cadd' }.combine(preprocessed.map { item -> [item[3]] })
-                .map { run, source, lineage, known, fresh, freshIndex, count, bundle -> [run, fresh, freshIndex, bundle] })
-            def annotatedNew = ANNOTATE_STEP.out.annotated.map { run, source, output -> [source, output] }
-                .mix(ANNOTATE_CADD.out.cadd.map { run, output -> ['cadd', output] })
+            // VEP and CADD run on one sites-only piece per chromosome.
+            ANNOTATE_NEW(withNew, preprocessed.map { item -> [item[3]] })
+            def annotatedNew = ANNOTATE_NEW.out.annotated
             def noNew = file("${projectDir}/assets/hub_no_new_variants")
             def stepResults = annotatedNew.mix(lookedUp.filter { item -> item[6] == 0 }.map { item -> [item[1], noNew] })
             def toFill = lookedUp.map { run, source, lineage, known, fresh, freshIndex, count -> [source, run, known] }
@@ -219,11 +212,13 @@ outputs and scientific-profile requirements.'''
             stepOutputs = HUB_FILL.out.filled.map { run, source, output -> [source, output] }
         } else {
             // gnomAD, ClinVar, control cohort and VEP at the same time, and CADD.
+            // Without the hub VEP and CADD run whole: the merge needs each
+            // step's VCF with its genotype columns.
             ANNOTATE_STEP(preprocessed.combine(Channel.of('gnomad', 'clinvar', 'control', 'vep'))
-                .map { run, vcf, index, bundle, step -> [run, step, vcf, index, bundle] })
-            ANNOTATE_CADD(preprocessed)
-            stepOutputs = ANNOTATE_STEP.out.annotated.map { run, source, output -> [source, output] }
-                .mix(ANNOTATE_CADD.out.cadd.map { run, output -> ['cadd', output] })
+                .map { run, vcf, index, bundle, step -> [run, step, '', vcf, index, bundle] })
+            ANNOTATE_CADD(preprocessed.map { run, vcf, index, bundle -> [run, '', vcf, index, bundle] })
+            stepOutputs = ANNOTATE_STEP.out.annotated.map { run, source, piece, output -> [source, output] }
+                .mix(ANNOTATE_CADD.out.cadd.map { run, piece, output -> ['cadd', output] })
         }
         def byStep = stepOutputs.branch { item ->
             gnomad: item[0] == 'gnomad'
@@ -262,4 +257,49 @@ outputs and scientific-profile requirements.'''
         PRIORITIZE_JOIN(toJoin)
         PRIORITIZE_ACMG(PRIORITIZE_JOIN.out.table.map(bundleLast))
     }
+}
+
+// The annotation steps' outputs for the new variants a hub lookup found, as
+// [source, file]. gnomAD, ClinVar and the control cohort run as one task
+// each. VEP and CADD run on one sites-only piece per chromosome, each piece
+// its own task, and the pieces' outputs are gathered back in the VCF's
+// chromosome order: in one cohort task VEP kept about 12 of its 24 CPUs busy
+// and CADD about 1 (TruPath job 1542089, 14 November 2026).
+workflow ANNOTATE_NEW {
+    take:
+    withNew // [run, source, lineage, known, fresh, freshIndex, count]
+    bundles // [bundle]
+    main:
+    SPLIT_CHROMOSOMES(withNew.filter { item -> item[1] in ['vep', 'cadd'] }
+        .map { run, source, lineage, known, fresh, freshIndex, count -> [run, source, fresh, freshIndex] })
+    // [run, step, piece, vcf, index]; a piece is named NNN_CHROM in file order.
+    def pieces = SPLIT_CHROMOSOMES.out.pieces.flatMap { run, step, vcfs, indexes ->
+        def files = [vcfs].flatten().sort { it.name }
+        def indexFiles = [indexes].flatten().sort { it.name }
+        files.withIndex().collect { vcf, n -> [run, step, vcf.name.replaceAll(/\.vcf\.gz$/, ''), vcf, indexFiles[n]] }
+    }
+    def pieceCounts = SPLIT_CHROMOSOMES.out.pieces.map { run, step, vcfs, indexes -> [step, [vcfs].flatten().size()] }
+    ANNOTATE_STEP(withNew.filter { item -> !(item[1] in ['vep', 'cadd']) }
+            .map { run, source, lineage, known, fresh, freshIndex, count -> [run, source, '', fresh, freshIndex] }
+        .mix(pieces.filter { item -> item[1] == 'vep' })
+        .combine(bundles)
+        .map { run, step, piece, vcf, index, bundle -> [run, step, piece, vcf, index, bundle] })
+    ANNOTATE_CADD(pieces.filter { item -> item[1] == 'cadd' }.combine(bundles)
+        .map { run, step, piece, vcf, index, bundle -> [run, piece, vcf, index, bundle] })
+    // Each step's piece outputs, grouped as soon as all its pieces are done
+    // and put back in piece order.
+    def pieceOutputs = ANNOTATE_STEP.out.annotated.filter { item -> item[2] }
+        .map { run, step, piece, output -> [step, run, piece, output] }
+        .mix(ANNOTATE_CADD.out.cadd.map { run, piece, output -> ['cadd', run, piece, output] })
+        .combine(pieceCounts, by: 0)
+        .map { step, run, piece, output, count -> [groupKey(step, count), run, piece, output] }
+        .groupTuple()
+        .map { key, runs, names, outputs ->
+            [runs[0], key.getGroupTarget(), [names, outputs].transpose().sort { it[0] }.collect { it[1] }]
+        }
+    GATHER_PIECES(pieceOutputs)
+    emit:
+    annotated = ANNOTATE_STEP.out.annotated.filter { item -> !item[2] }
+        .map { run, source, piece, output -> [source, output] }
+        .mix(GATHER_PIECES.out.gathered.map { run, step, output -> [step, output] })
 }

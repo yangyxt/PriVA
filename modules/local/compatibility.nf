@@ -51,19 +51,24 @@ process ANNOTATE_PREPROCESS {
 
 // step is gnomad, clinvar, control or vep. VEP gets the annotation CPUs.
 process ANNOTATE_STEP {
-    tag "${meta.base}:${step}"
-    cpus { step == 'vep' ? params.annotation_cpus : params.annotation_step_cpus }
-    memory { step == 'vep' ? params.annotation_memory : params.annotation_step_memory }
-    time { step == 'vep' ? params.annotation_time : params.annotation_step_time }
-    publishDir "${params.outdir}/pipeline_info", mode: 'copy', overwrite: false, pattern: '*.provenance.json'
+    // piece: '' for a whole step; with --annotation_hub, the VEP step runs on
+    // one sites-only piece per chromosome (SPLIT_CHROMOSOMES), with
+    // --vep_piece_cpus CPUs and two fewer VEP forks.
+    tag "${meta.base}:${step}${piece ? ':' + piece : ''}"
+    cpus { step == 'vep' ? (piece ? params.vep_piece_cpus : params.annotation_cpus) : params.annotation_step_cpus }
+    memory { step == 'vep' ? (piece ? params.vep_piece_memory : params.annotation_memory) : params.annotation_step_memory }
+    time { step == 'vep' ? (piece ? params.piece_time : params.annotation_time) : params.annotation_step_time }
+    publishDir "${params.outdir}/pipeline_info", mode: 'copy', overwrite: false, pattern: '*.provenance.json',
+        saveAs: { name -> piece ? name.replace('.provenance.json', ".${piece}.provenance.json") : name }
     input:
-    tuple val(meta), val(step), path(vcf, stageAs: 'preprocessed.vcf.gz'), path(vcf_index, stageAs: 'preprocessed.vcf.gz.tbi'), path(bundle, stageAs: 'bundle/*')
+    tuple val(meta), val(step), val(piece), path(vcf, stageAs: 'preprocessed.vcf.gz'), path(vcf_index, stageAs: 'preprocessed.vcf.gz.tbi'), path(bundle, stageAs: 'bundle/*')
     output:
-    tuple val(meta), val(step), path("result/${meta.base}.anno.vcf.gz"), emit: annotated
+    tuple val(meta), val(step), val(piece), path("result/${meta.base}.anno.vcf.gz"), emit: annotated
     path("annotation-${step}.provenance.json"), emit: provenance
     script:
+    def threads = piece ? "--threads ${task.cpus - 2}" : ''
     """
-    '${meta.priva_binary}' task run --phase annotation-${step} --bundle bundle --vcf '${vcf}' --vcf-index '${vcf_index}' --cpus ${task.cpus}
+    '${meta.priva_binary}' task run --phase annotation-${step} --bundle bundle --vcf '${vcf}' --vcf-index '${vcf_index}' --cpus ${task.cpus} ${threads}
     """
     stub:
     """
@@ -72,21 +77,103 @@ process ANNOTATE_STEP {
 }
 
 process ANNOTATE_CADD {
-    tag "${meta.base}"
-    label 'annotation'
-    publishDir "${params.outdir}/pipeline_info", mode: 'copy', overwrite: false, pattern: '*.provenance.json'
+    // piece: '' for the whole cohort; with --annotation_hub, one sites-only
+    // piece per chromosome (no MT piece: CADD's data have no MT chromosome),
+    // with --cadd_piece_cpus CPUs.
+    tag "${meta.base}${piece ? ':' + piece : ''}"
+    cpus { piece ? params.cadd_piece_cpus : params.annotation_cpus }
+    memory { piece ? params.cadd_piece_memory : params.annotation_memory }
+    time { piece ? params.piece_time : params.annotation_time }
+    publishDir "${params.outdir}/pipeline_info", mode: 'copy', overwrite: false, pattern: '*.provenance.json',
+        saveAs: { name -> piece ? name.replace('.provenance.json', ".${piece}.provenance.json") : name }
     input:
-    tuple val(meta), path(vcf, stageAs: 'preprocessed.vcf.gz'), path(vcf_index, stageAs: 'preprocessed.vcf.gz.tbi'), path(bundle, stageAs: 'bundle/*')
+    tuple val(meta), val(piece), path(vcf, stageAs: 'preprocessed.vcf.gz'), path(vcf_index, stageAs: 'preprocessed.vcf.gz.tbi'), path(bundle, stageAs: 'bundle/*')
     output:
-    tuple val(meta), path("result/${meta.base}.anno.cadd.tsv"), emit: cadd
+    tuple val(meta), val(piece), path("result/${meta.base}.anno.cadd.tsv"), emit: cadd
     path('annotation-cadd.provenance.json'), emit: provenance
     script:
+    def threads = piece ? "--threads ${task.cpus}" : ''
     """
-    '${meta.priva_binary}' task run --phase annotation-cadd --bundle bundle --vcf '${vcf}' --vcf-index '${vcf_index}' --cpus ${task.cpus}
+    '${meta.priva_binary}' task run --phase annotation-cadd --bundle bundle --vcf '${vcf}' --vcf-index '${vcf_index}' --cpus ${task.cpus} ${threads}
     """
     stub:
     """
     '${meta.priva_binary}' task run --phase annotation-cadd --bundle bundle --vcf '${vcf}' --vcf-index '${vcf_index}' --cpus ${task.cpus} --stub
+    """
+}
+
+// One sites-only piece per chromosome of the VCF a VEP or CADD step would
+// annotate, in the file's chromosome order, so the pieces run as separate
+// tasks on any free node. VEP and CADD read no genotypes; the hub fill
+// takes each record's INFO entries from the gathered output and everything
+// else from the preprocessed VCF. CADD gets no MT piece: CADD's v1.7 data
+// have no MT chromosome (Calculate_CADD also leaves MT records out).
+process SPLIT_CHROMOSOMES {
+    tag "${meta.base}:${step}"
+    label 'annotation_step'
+    input:
+    tuple val(meta), val(step), path(vcf, stageAs: 'input.vcf.gz'), path(vcf_index, stageAs: 'input.vcf.gz.tbi')
+    output:
+    tuple val(meta), val(step), path('pieces/*.vcf.gz', arity: '1..*'), path('pieces/*.vcf.gz.tbi', arity: '1..*'), emit: pieces
+    script:
+    """
+    mkdir pieces
+    count=0
+    for chrom in \$(bcftools index -s input.vcf.gz | cut -f1); do
+        if [[ ${step} == cadd && \$chrom =~ ^(chr)?MT?\$ ]]; then continue; fi
+        count=\$((count + 1))
+        piece=pieces/\$(printf '%03d' "\$count")_\$chrom.vcf.gz
+        bcftools view --no-version --threads ${task.cpus} -G -r "\$chrom" -Oz -o "\$piece" input.vcf.gz
+        tabix -p vcf "\$piece"
+    done
+    # Only MT records for CADD: one empty piece, so CADD writes an empty table.
+    if [[ \$count == 0 ]]; then
+        bcftools view --no-version -G -h -Oz -o pieces/001_none.vcf.gz input.vcf.gz
+        tabix -p vcf pieces/001_none.vcf.gz
+    fi
+    """
+    stub:
+    """
+    mkdir pieces
+    cp input.vcf.gz pieces/001_stub.vcf.gz
+    cp input.vcf.gz.tbi pieces/001_stub.vcf.gz.tbi
+    """
+}
+
+// The pieces' outputs in piece order, as the whole step's output: one VCF
+// (the first piece's header, then every piece's records) or one CADD table
+// (the first table's header, then every table's rows).
+process GATHER_PIECES {
+    tag "${meta.base}:${step}"
+    label 'annotation_step'
+    input:
+    tuple val(meta), val(step), path(outputs, stageAs: 'piece?/*')
+    output:
+    tuple val(meta), val(step), path("result/*"), emit: gathered
+    script:
+    def count = outputs instanceof List ? outputs.size() : 1
+    def name = step == 'cadd' ? "${meta.base}.anno.cadd.tsv" : "${meta.base}.anno.vcf.gz"
+    """
+    mkdir result
+    pieces=()
+    for n in \$(seq 1 ${count}); do pieces+=(piece\$n/*); done
+    if [[ ${step} == cadd ]]; then
+        : > 'result/${name}'
+        for piece in "\${pieces[@]}"; do
+            if [[ ! -s 'result/${name}' && -s \$piece ]]; then awk '/^#/' "\$piece" > 'result/${name}'; fi
+        done
+        for piece in "\${pieces[@]}"; do awk '!/^#/' "\$piece" >> 'result/${name}'; done
+    else
+        { bcftools view --no-version -h "\${pieces[0]}"
+          for piece in "\${pieces[@]}"; do bgzip -dc "\$piece" | awk '!/^#/'; done; } \
+            | bgzip -@ ${task.cpus} > 'result/${name}'
+    fi
+    """
+    stub:
+    def name = step == 'cadd' ? "${meta.base}.anno.cadd.tsv" : "${meta.base}.anno.vcf.gz"
+    """
+    mkdir result
+    cp piece1/* 'result/${name}'
     """
 }
 

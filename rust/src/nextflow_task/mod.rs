@@ -266,6 +266,7 @@ fn parse_task(args: &[String]) -> std::result::Result<(String, Options), String>
                     "table",
                     "splicing-table",
                     "utr-table",
+                    "threads",
                 ],
                 &["stub"],
             )?;
@@ -284,6 +285,9 @@ fn parse_task(args: &[String]) -> std::result::Result<(String, Options), String>
                 options.require(&["vcf", "vcf-index"])?;
             }
             options.int("cpus")?;
+            if options.get("threads").is_some() {
+                options.int("threads")?;
+            }
             options
         }
         other => {

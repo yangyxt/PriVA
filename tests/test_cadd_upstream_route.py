@@ -33,6 +33,8 @@ Calculate_CADD "$FIXTURE/input.vcf.gz" "$FIXTURE/config.yaml" "$FIXTURE/output.c
 
 
 BCFTOOLS_STUB = '''#!/usr/bin/env bash
+# `view -H`: the fixture input has one record.
+[[ " $* " == *" -H "* ]] && { [[ -e $FIXTURE/no-records ]] || printf '1\\t10\\t.\\tA\\tG\\n'; exit 0; }
 printf '%s\\n' "$@" > "$FIXTURE/bcftools-argv.txt"
 while [[ $# -gt 1 ]]; do [[ $1 == -o ]] && { out=$2; shift; }; shift; done
 cp -- "$1" "$out"
@@ -90,6 +92,15 @@ class UpstreamCaddRouteTests(unittest.TestCase):
         # The consumer receives the plain table without CADD's ## header lines.
         self.assertEqual((self.root / 'output.cadd.tsv').read_text().splitlines()[0],
                          '#Chrom\tPos\tRef\tAlt\tRawScore\tPHRED')
+
+    def test_piece_without_records_gives_an_empty_table(self):
+        # main.nf gives CADD one empty piece when every new variant is on MT.
+        write_conda(self.root)
+        (self.root / 'no-records').write_text('')
+        result, argv = self.run_route()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(argv, [])
+        self.assertEqual((self.root / 'output.cadd.tsv').read_text(), '')
 
     def test_missing_conda_stops_before_cadd_runs(self):
         result, argv = self.run_route()

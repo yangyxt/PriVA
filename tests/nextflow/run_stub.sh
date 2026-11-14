@@ -74,9 +74,11 @@ def tasks(case):
     trace = sorted((root / case / 'pipeline_info').glob('trace-*.tsv'))[-1]
     names = []
     for row in csv.DictReader(trace.open(), delimiter='\t'):
-        name = row['name'].split(' ')[0]
+        # Tasks of the ANNOTATE_NEW sub-workflow carry its name as a prefix.
+        name = row['name'].split(' ')[0].split(':')[-1]
         if name == 'ANNOTATE_STEP':
-            name += ':' + row['name'].split(':')[-1].rstrip(')')
+            # "ANNOTATE_STEP (BASE:STEP)" or, for a VEP piece, "(BASE:vep:PIECE)".
+            name += ':' + row['name'].split('(', 1)[1].rstrip(')').split(':')[1]
         names.append(name)
     return sorted(names)
 first, second = tasks('hub-first'), tasks('hub-second')
@@ -87,6 +89,9 @@ assert annotate(second) == ['ANNOTATE_STEP:control'], second
 for names in (first, second):
     assert names.count('HUB_LOOKUP') == 5 and names.count('HUB_FILL') == 5, names
 assert first.count('HUB_ADD') == 4 and second.count('HUB_ADD') == 0, (first, second)
+# VEP and CADD run on per-chromosome pieces (one piece in the stub), gathered back.
+assert first.count('SPLIT_CHROMOSOMES') == 2 and first.count('GATHER_PIECES') == 2, first
+assert 'SPLIT_CHROMOSOMES' not in second and 'GATHER_PIECES' not in second, second
 read = lambda case: gzip.open(root / case / 'annotation' / 'cohort.anno.vcf.gz', 'rt').read()
 assert read('hub-first') == read('hub-second') == read('raw'), 'annotated VCFs differ'
 stored = sorted({p.relative_to(root / 'hub').parts[0] for p in (root / 'hub').rglob('part-*.parquet')})

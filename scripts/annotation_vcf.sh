@@ -1405,6 +1405,14 @@ function Calculate_CADD {
     # Snakemake inside CADD.sh deploys the pinned rule environments (-m keeps
     # them conda-only) and needs a conda executable even when one is active.
     priva_cadd_conda check --frontend-prefix "${cadd_base_dir%/*}/conda_frontend" || return 1
+    # 2026-11-14 CT: a per-chromosome piece without records (main.nf gives CADD
+    # one empty piece when every new variant is on MT) gives an empty table.
+    if [[ -f ${input_vcf} && -z $(bcftools view -H ${input_vcf} 2> /dev/null | head -n 1) ]]; then
+        [[ -z ${output_file} ]] && output_file=${input_vcf/.vcf*/.cadd.tsv}
+        : > "${output_file%.gz}"
+        log "${input_vcf} has no records; wrote an empty CADD table ${output_file%.gz}"
+        return 0
+    fi
     check_vcf_validity ${input_vcf} || { \
     log "The input vcf file ${input_vcf} is not valid. Please check the file"; return 1; }
 

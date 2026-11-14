@@ -525,9 +525,34 @@ fn task_thread_settings(
     phase: &str,
     mode: &str,
     cpus: i64,
+    step_threads: Option<i64>,
 ) -> Result<Vec<(String, Json)>> {
     if cpus < 1 {
         return refuse("Allocated cpus must be a positive integer");
+    }
+    // `--threads`: the per-chromosome pieces of the VEP and CADD steps
+    // (main.nf with --annotation_hub) run with fewer workers than the whole
+    // cohort step. VEP's rows do not depend on its fork count (validation
+    // vep_scaling_20261018_v2_lowspace: 8 and 22 forks gave identical rows);
+    // VEP still needs two CPUs besides its forks.
+    if let Some(threads) = step_threads {
+        if !matches!(phase, "annotation-vep" | "annotation-cadd") {
+            return refuse(
+                "--threads applies only to the annotation-vep and annotation-cadd steps",
+            );
+        }
+        let required = threads + if phase == "annotation-vep" { 2 } else { 0 };
+        if threads < 1 || cpus < required {
+            return refuse(format!(
+                "{phase} with --threads {threads} needs at least {required} allocated CPUs"
+            ));
+        }
+        let mut settings: Vec<(String, Json)> = Vec::new();
+        if config.get("threads_per_fam").is_none() {
+            settings.push(("threads_per_fam".to_owned(), Json::Int(cpus as i128)));
+        }
+        settings.push(("threads".to_owned(), Json::Int(threads as i128)));
+        return Ok(settings);
     }
     // `config.get(key, cpus)`: the configured value, else the allocation.
     let setting = |key: &str| -> (Json, String, Option<u128>) {
@@ -613,8 +638,8 @@ pub(crate) fn launch(options: &Options) -> Result<()> {
     let annotation_cpus = options.int("annotation-cpus")?;
     let family_cpus = options.int("family-cpus")?;
     if !stub {
-        task_thread_settings(&config, "annotation", mode, annotation_cpus)?;
-        task_thread_settings(&config, "filtration", mode, family_cpus)?;
+        task_thread_settings(&config, "annotation", mode, annotation_cpus, None)?;
+        task_thread_settings(&config, "filtration", mode, family_cpus, None)?;
     }
     let resources = PathBuf::from(options.value("resources"));
     let manifest = read_json(&resources)?;
@@ -710,13 +735,14 @@ fn private_config(
     record: &Json,
     phase: &str,
     cpus: i64,
+    step_threads: Option<i64>,
 ) -> Result<(PathBuf, PathBuf)> {
     let config = read_config(&bundle.join("legacy.yaml"))?;
     let mode = record
         .get("mode")
         .and_then(Json::as_str)
         .unwrap_or_default();
-    let thread_settings = task_thread_settings(&config, phase, mode, cpus)?;
+    let thread_settings = task_thread_settings(&config, phase, mode, cpus, step_threads)?;
     let result = PathBuf::from(crate::python_path::absolute(Path::new("result"))?);
     if !result.is_dir() {
         fs::create_dir(&result)?;
@@ -815,7 +841,7 @@ pub(crate) fn private_config_for_test(
     phase: &str,
     cpus: i64,
 ) -> Result<PathBuf> {
-    private_config(bundle, record, phase, cpus).map(|(path, _)| path)
+    private_config(bundle, record, phase, cpus, None).map(|(path, _)| path)
 }
 
 const STUB_CADD: &str =
@@ -903,6 +929,10 @@ pub(crate) fn run(options: &Options) -> Result<()> {
     if cpus < 1 {
         return refuse("cpus must be positive");
     }
+    let step_threads = match options.get("threads") {
+        Some(_) => Some(options.int("threads")?),
+        None => None,
+    };
     let root = PathBuf::from(field("legacy_root"));
     if source_digest(&root)? != field("source_digest") {
         return refuse("Scientific or adapter source changed after validation; task refused");
@@ -924,6 +954,7 @@ pub(crate) fn run(options: &Options) -> Result<()> {
             phase,
             field("mode"),
             cpus,
+            step_threads,
         )?;
         verified = Some((manifest, paths));
     }
@@ -1073,7 +1104,7 @@ pub(crate) fn run(options: &Options) -> Result<()> {
             }
         }
     } else {
-        let (config_path, temp) = private_config(&bundle, &record, phase, cpus)?;
+        let (config_path, temp) = private_config(&bundle, &record, phase, cpus, step_threads)?;
         let paths = &verified.as_ref().unwrap().1;
         let binary = paths
             .iter()
@@ -1291,4 +1322,39 @@ pub(crate) fn run(options: &Options) -> Result<()> {
         None => format!("{phase}.provenance.json"),
     };
     write_json(Path::new(&name), &provenance)
+}
+
+#[cfg(test)]
+mod step_thread_tests {
+    use super::*;
+
+    fn config(text: &str) -> Config {
+        let path = std::env::temp_dir().join(format!(
+            "priva_step_threads_{}_{}.yaml",
+            std::process::id(),
+            text.len()
+        ));
+        fs::write(&path, text).unwrap();
+        let config = read_config(&path).unwrap();
+        let _ = fs::remove_file(&path);
+        config
+    }
+
+    #[test]
+    fn piece_threads_replace_the_configured_threads() {
+        let config = config("assembly: hg38\nthreads: 22\nthreads_per_fam: 4\n");
+        // The whole-cohort VEP step keeps --fork 22 and needs 24 CPUs.
+        assert!(task_thread_settings(&config, "annotation-vep", "raw", 8, None).is_err());
+        let threads = |settings: Vec<(String, Json)>| match settings.as_slice() {
+            [(key, Json::Int(value))] if key == "threads" => Some(*value),
+            _ => None,
+        };
+        let settings = task_thread_settings(&config, "annotation-vep", "raw", 8, Some(6)).unwrap();
+        assert_eq!(threads(settings), Some(6));
+        assert!(task_thread_settings(&config, "annotation-vep", "raw", 7, Some(6)).is_err());
+        let settings = task_thread_settings(&config, "annotation-cadd", "raw", 4, Some(4)).unwrap();
+        assert_eq!(threads(settings), Some(4));
+        assert!(task_thread_settings(&config, "annotation-gnomad", "raw", 8, Some(4)).is_err());
+        assert!(task_thread_settings(&config, "annotation-cadd", "raw", 4, Some(0)).is_err());
+    }
 }

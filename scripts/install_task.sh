@@ -108,9 +108,9 @@ step_functions() {
         f=${queue[0]}; queue=("${queue[@]:1}")
         [[ -n ${seen[$f]:-} ]] && continue
         seen[$f]=1
-        [[ -n ${known[$f]:-} ]] && echo "$f"
+        if [[ -n ${known[$f]:-} ]]; then echo "$f"; fi
         for w in $(called_words "$f"); do
-            [[ -n ${known[$w]:-} && -z ${seen[$w]:-} ]] && queue+=("$w")
+            if [[ -n ${known[$w]:-} && -z ${seen[$w]:-} ]]; then queue+=("$w"); fi
         done
     done | sort
 }
@@ -123,7 +123,7 @@ step_scripts() {
                grep -oE '[A-Za-z0-9_.-]+\.(py|sh|R|pl|bash)|SCRIPT_DIR\}?/[A-Za-z0-9_./-]+' |
                sed -E 's|^SCRIPT_DIR\}?/||' | sort -u); do
         [[ " $SHELL_LIBRARIES " == *" $w "* ]] && continue
-        [[ -f $SCRIPT_DIR/$w ]] && echo "$w"
+        if [[ -f $SCRIPT_DIR/$w ]]; then echo "$w"; fi
     done
 }
 

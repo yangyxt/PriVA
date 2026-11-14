@@ -10,7 +10,7 @@ sys.path.insert(0, str(ROOT / "scripts"))
 
 import acmg_pp1_bs4_bp2_pm3_family as family_criteria  # noqa: E402
 from acmg_bs2_bp5_observation import BP5_criteria, BS2_criteria  # noqa: E402
-from acmg_pm2_bs1_ba1_frequency import BS1_criteria  # noqa: E402
+from acmg_pm2_bs1_ba1_frequency import BS1_criteria, PM2_criteria  # noqa: E402
 from acmg_variant_mechanism import (  # noqa: E402
     _variant_condition_masks,
     _variant_mechanism_masks,
@@ -104,6 +104,35 @@ def _x_linked_frequency_frame() -> pd.DataFrame:
             "clinvar_patho_gene_max_af": [0.0] * size,
         }
     )
+
+
+def test_pm2_stays_off_for_mitochondrial_records_without_gnomad_values(tmp_path) -> None:
+    import pickle
+
+    gene_stat = tmp_path / "gene_af.pkl"
+    exon_stat = tmp_path / "exon_af.pkl"
+    gene_stat.write_bytes(pickle.dumps({}))
+    exon_stat.write_bytes(pickle.dumps({}))
+    size = 3
+    frame = pd.DataFrame(
+        {
+            "chrom": ["chr1", "chrM", "MT"],
+            "Gene": ["GENE1"] * size,
+            "Feature": ["ENST1"] * size,
+            "EXON": ["1/2"] * size,
+            "variant_inheritance": ["dominant"] * size,
+            "variant_penetrance": ["complete"] * size,
+            "gnomAD_joint_AF": [np.nan] * size,
+            "gnomAD_joint_AN": [np.nan] * size,
+            "gnomAD_joint_AF_max": [np.nan] * size,
+            "gnomAD_joint_AN_max": [np.nan] * size,
+            "gnomAD_nhomalt_XX": [np.nan] * size,
+            "gnomAD_nhomalt_XY": [np.nan] * size,
+            "gnomAD_nhomalt_max": [np.nan] * size,
+        }
+    )
+    pm2 = PM2_criteria(frame, str(gene_stat), str(exon_stat), 1e-5)
+    assert pm2.tolist() == [2, 0, 0]
 
 
 def test_bs1_and_bs2_use_explicit_x_linked_population_strata() -> None:

@@ -1443,11 +1443,20 @@ function Calculate_CADD {
     # from here instead of reading the GTF again; upstream's file ignores it.
     local exon_tables=${cadd_base_dir}/data/annotations/${genome_tag}_v1.7/mmsplice
     [[ -d ${exon_tables} ]] || exon_tables=""
+    # 2026-11-14 CT: PriVA's extract_scored.py hands the prescored lookup to
+    # `priva cadd-prescore` when main_install built a compact copy of the
+    # table (TABLE.priva_compact); without the program or the copy it runs its
+    # own Python lookup.
+    local prescore_bin=""
+    if priva_resolve_binary "${config_file}" > /dev/null 2>&1; then
+        prescore_bin=${PRIVA_BIN}
+    fi
 
     log "Running CADD script ${cadd_script} with the following command"
     log "${cadd_script} -c ${threads} -a -p -m -d -g ${genome_tag} -o ${output_file} ${nochr_vcf}"
     export TMPDIR=${tmp_dir}
     PRIVA_CADD_MMSPLICE_EXON_CACHE=${exon_tables} \
+    PRIVA_CADD_PRESCORE_BIN=${prescore_bin} \
     ${cadd_script} \
     -c ${threads} \
     -a -p -m -d \

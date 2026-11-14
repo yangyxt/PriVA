@@ -285,6 +285,12 @@ pub(crate) fn run() -> Result<()> {
     if args.get(1).map(String::as_str) == Some("cadd-hub") {
         return crate::cadd_hub::dispatch(&args[2..]);
     }
+    if args.get(1).map(String::as_str) == Some("cadd-prescore") {
+        return crate::cadd_prescore::dispatch_lookup(&args[2..]);
+    }
+    if args.get(1).map(String::as_str) == Some("cadd-prescore-compact") {
+        return crate::cadd_prescore::dispatch_build(&args[2..]);
+    }
     if args.get(1).map(String::as_str) == Some("variant-ids") {
         return crate::variant_ids::dispatch(&args[2..]);
     }

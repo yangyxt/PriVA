@@ -1176,6 +1176,38 @@ function CADD_install() {
 
     # 5. A position index for each prescored table, used by that lookup
     CADD_prescore_index "${prescored_dir}" "$(read_yaml "${config_file}" "threads")" || return 1
+
+    # 6. A compact copy of each prescored table for priva cadd-prescore
+    CADD_prescore_compact "${prescored_dir}" "$(read_yaml "${config_file}" "threads")" "${config_file}" || return 1
+}
+
+
+function CADD_prescore_compact() {
+    # 2026-11-14 CT: `priva cadd-prescore-compact build` writes
+    # TABLE.priva_compact, the six columns PriVA reads from CADD's output
+    # (#Chrom, Pos, Ref, Alt, FeatureID, PHRED) in about 4 KB blocks, and its
+    # block index TABLE.priva_compact.idx. PriVA's extract_scored.py then
+    # hands the lookup to `priva cadd-prescore`, which decompresses only the
+    # blocks that hold a wanted position. The names do not end in .tsv.gz, so
+    # CADD's prescore step does not take them for prescored tables.
+    local prescored_dir=${1}
+    local threads=${2:-1}
+    local config_file=${3:-}
+    local table
+    [[ ${threads} =~ ^[1-9][0-9]*$ ]] || threads=1
+    priva_resolve_binary "${config_file}" || return 1
+    for table in "${prescored_dir}"/*.tsv.gz; do
+        [[ -f ${table} ]] || continue
+        if "${PRIVA_BIN}" cadd-prescore-compact check "${table}"; then
+            log "The compact copy ${table}.priva_compact is already present, skip building"
+            continue
+        fi
+        log "Building the compact copy ${table}.priva_compact with ${threads} threads; this reads the whole table once"
+        "${PRIVA_BIN}" cadd-prescore-compact build "${table}" --threads "${threads}" || {
+            log "Failed to build the compact copy of ${table}; nothing was published"
+            return 1
+        }
+    done
 }
 
 

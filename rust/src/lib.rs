@@ -16,6 +16,7 @@ mod cache_convert;
 mod cache_install;
 mod cache_resources;
 pub mod cadd_hub;
+mod cadd_prescore;
 mod cli;
 mod clingen_map_builder;
 mod clinvar_aa_splice_builder;

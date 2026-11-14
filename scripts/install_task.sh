@@ -81,9 +81,14 @@ SHELL_LIBRARIES="install_utils.sh common_bash_utils.sh annotation_vcf.sh"
 shell_toplevel() {
     local w
     for w in $SHELL_LIBRARIES; do
-        awk '/^function [A-Za-z_]/ { inside = 1 }
-             !inside && !/^[[:space:]]*(#|$)/ { print }
-             /^}/ { inside = 0 }' "$SCRIPT_DIR/$w" || return 1
+        # A function ends at its last "}" or ")" in column 0 before the next
+        # function (main_install has a "(" body); the lines after it are outside.
+        awk 'function flush(  i) { for (i = 1; i <= n; i++) if (pending[i] !~ /^[[:space:]]*(#|$)/) print pending[i]; n = 0 }
+             /^function [A-Za-z_]/ { flush(); inside = 1; next }
+             inside && /^[})]/ { n = 0; next }
+             inside { pending[++n] = $0; next }
+             !/^[[:space:]]*(#|$)/ { print }
+             END { flush() }' "$SCRIPT_DIR/$w" || return 1
     done
 }
 

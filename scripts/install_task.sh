@@ -9,6 +9,7 @@
 #   install_task.sh publish --registry R --plan PLAN --lineage L --folder F
 #                           [--input RECEIPT]... [--pins PINS.json] [--stub]
 #   install_task.sh release --registry R --config USER --step ID --out FILE [--stub]
+#   install_task.sh reach --registry R --step ID
 #
 # release: asks a changing source for its current release (registry
 # "release": git commit, or the server's ETag, Last-Modified and size) and
@@ -26,6 +27,8 @@
 # failed attempt left it; Nextflow (storeDir) skips a step whose F holds a
 # receipt. The finished folder is made read-only unless the step is writable.
 # adopt: writes a receipt naming the files of an existing installation.
+# reach: lists the installer functions and script files a step's code digest
+# covers, and the digest.
 set -o pipefail
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 
@@ -54,30 +57,101 @@ identity() { # path size mtime for a file, path "folder" mtime for a folder, or 
     elif [[ -e $p ]]; then stat -L -c '%n %s %Y' -- "$p"; else echo "missing $p"; fi
 }
 
-# Every function a step's calls reach, by name, then a digest of their text,
-# of the script files they name, and of the step's registry entry.
-step_digest() {
-    local registry=$1 id=$2 entry f w
-    entry=$(json_step "$registry" "$id") || return 1
+# The words of a function that may name a function it runs. In a message (a
+# log, echo or printf line) only a word where a command can start counts:
+# after $(, a backquote, |, & or ;. Read whole, the message "run main_install"
+# in priva_resolve_binary tied almost every step to the whole installer.
+called_words() {
+    declare -f "$1" | awk '
+        /^[[:space:]]*(log|echo|printf)([[:space:]]|$)/ {
+            line = $0
+            while (match(line, /(\$\(|`|\||&|;)[[:space:]]*[A-Za-z_][A-Za-z0-9_]*/)) {
+                word = substr(line, RSTART, RLENGTH); sub(/^[^A-Za-z_]+/, "", word); print word
+                line = substr(line, RSTART + RLENGTH)
+            }
+            next
+        }
+        { gsub(/[^A-Za-z0-9_]+/, "\n"); print }' | grep -E '^[A-Za-z_]' | sort -u
+}
+
+# The shell files whose functions every step shares. A step counts the
+# functions it reaches, not these whole files; their lines outside any
+# function (comments and blank lines left out) count for every step.
+SHELL_LIBRARIES="install_utils.sh common_bash_utils.sh annotation_vcf.sh"
+shell_toplevel() {
+    local w
+    for w in $SHELL_LIBRARIES; do
+        awk '/^function [A-Za-z_]/ { inside = 1 }
+             !inside && !/^[[:space:]]*(#|$)/ { print }
+             /^}/ { inside = 0 }' "$SCRIPT_DIR/$w" || return 1
+    done
+}
+
+# The installer functions a step reaches, sorted: from its calls and its
+# "runs" (installer functions that a program of the step runs itself, such as
+# the ClinVar stages run by priva clinvar-gene-refresh), through every
+# function those name.
+step_functions() {
+    local entry=$1 f w
     local -A known=() seen=()
     while read -r _ _ f; do known[$f]=1; done < <(declare -F)
-    local -a queue=($(jq -r '.calls[][0]' <<< "$entry"))
-    local -a names=()
+    for f in $(jq -r '.runs[]?' <<< "$entry"); do
+        [[ -n ${known[$f]:-} ]] || { echo "install_task: step $(jq -r .id <<< "$entry") runs unknown installer function $f" >&2; return 1; }
+    done
+    local -a queue=($(jq -r '.calls[][0], .runs[]?' <<< "$entry"))
     while ((${#queue[@]})); do
         f=${queue[0]}; queue=("${queue[@]:1}")
         [[ -n ${seen[$f]:-} ]] && continue
-        seen[$f]=1; names+=("$f")
-        for w in $(declare -f "$f" | grep -oE '[A-Za-z_][A-Za-z0-9_]*' | sort -u); do
+        seen[$f]=1
+        [[ -n ${known[$f]:-} ]] && echo "$f"
+        for w in $(called_words "$f"); do
             [[ -n ${known[$w]:-} && -z ${seen[$w]:-} ]] && queue+=("$w")
         done
+    done | sort
+}
+
+# The script files those functions name: by a script file name, or as
+# SCRIPT_DIR/NAME. The shared shell files are counted by function instead.
+step_scripts() {
+    local f w
+    for w in $(for f in "$@"; do declare -f "$f"; done |
+               grep -oE '[A-Za-z0-9_.-]+\.(py|sh|R|pl|bash)|SCRIPT_DIR\}?/[A-Za-z0-9_./-]+' |
+               sed -E 's|^SCRIPT_DIR\}?/||' | sort -u); do
+        [[ " $SHELL_LIBRARIES " == *" $w "* ]] && continue
+        [[ -f $SCRIPT_DIR/$w ]] && echo "$w"
     done
+}
+
+# A step's code digest: its registry entry, the text of the functions it
+# reaches, the shared shell files' lines outside functions, and the content of
+# the script files it names.
+step_digest() {
+    local registry=$1 id=$2 entry f w
+    entry=$(json_step "$registry" "$id") || return 1
+    local -a names
+    names=($(step_functions "$entry")) || return 1
     {
         printf '%s\n' "$entry"
-        for f in $(printf '%s\n' "${names[@]}" | sort); do declare -f "$f"; done
-        for w in $(for f in "${names[@]}"; do declare -f "$f"; done | grep -oE '[A-Za-z0-9_.-]+\.(py|sh|R|pl)' | sort -u); do
-            [[ -f $SCRIPT_DIR/$w ]] && { printf '%s ' "$w"; sha256sum < "$SCRIPT_DIR/$w"; }
-        done
+        for f in "${names[@]}"; do declare -f "$f"; done
+        echo "== outside functions"; shell_toplevel
+        for w in $(step_scripts "${names[@]}"); do printf '%s ' "$w"; sha256sum < "$SCRIPT_DIR/$w"; done
     } | sha256sum | cut -c1-64
+}
+
+# reach: what a step's code digest covers, to see why a step ran again.
+cmd_reach() {
+    local registry id entry f
+    while (($#)); do case $1 in
+        --registry) registry=$2; shift 2 ;; --step) id=$2; shift 2 ;;
+        *) die "reach: unknown option $1" ;; esac; done
+    [[ -r $registry && -n $id ]] || die "reach needs --registry and --step"
+    source "$SCRIPT_DIR/install_utils.sh" > /dev/null 2>&1 || die "cannot source install_utils.sh"
+    entry=$(json_step "$registry" "$id") || exit 1
+    local -a names
+    names=($(step_functions "$entry")) || exit 1
+    for f in "${names[@]}"; do echo "function $f"; done
+    for f in $(step_scripts "${names[@]}"); do echo "script $f"; done
+    echo "digest $(step_digest "$registry" "$id")"
 }
 
 cmd_plan() {
@@ -399,6 +473,7 @@ SCRIPT_DIR=$HERE
 case ${1:-} in
     plan) shift; cmd_plan "$@" ;;
     run) shift; cmd_run "$@" ;;
+    reach) shift; cmd_reach "$@" ;;
     adopt) shift; cmd_adopt "$@" ;;
     publish) shift; cmd_publish "$@" ;;
     release) shift; cmd_release "$@" ;;

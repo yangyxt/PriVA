@@ -349,6 +349,10 @@ cmd_run() {
     done
     for k in $(jq -r '.copies[]?' <<< "$entry"); do
         v=$(yaml_value "$private" "$k"); [[ -f $v ]] || die "$k ($v) is not a file to copy"
+        # A file shipped with the repository is reused where it is and never
+        # rewritten. A copy is no longer that file to the step's function,
+        # which then looks for build files nobody made (F7 in job 1545925).
+        if ((stub == 0)) && priva_bundled_cache_reuse --key "$k" --path "$v" > /dev/null 2>&1; then continue; fi
         mkdir -p "$work/copied"; cp -p -- "$v" "$work/copied/"
         local index; for index in "$v.tbi" "$v.csi"; do [[ -f $index ]] && cp -p -- "$index" "$work/copied/"; done
         set_key "$private" "$k" "$work/copied/$(basename "$v")"
@@ -387,9 +391,10 @@ cmd_run() {
         keys=$(jq -c --arg k "$k" --arg v "$v" '. + {($k): $v}' <<< "$keys")
     done
     [[ -z $missing ]] || die "outputs missing after the step:$missing"
+    # An optional output is recorded only when the step made it.
     for k in $(jq -r '.optional_outputs[]?' <<< "$entry"); do
         v=$(yaml_value "$private" "$k")
-        [[ -n $v ]] && keys=$(jq -c --arg k "$k" --arg v "$v" '. + {($k): $v}' <<< "$keys")
+        if [[ -n $v && -e $v ]]; then keys=$(jq -c --arg k "$k" --arg v "$v" '. + {($k): $v}' <<< "$keys"); fi
     done
     for v in $(jq -r '.[]' <<< "$keys"); do files=$(jq -c --arg i "$(identity "$v")" '. + [$i]' <<< "$files"); done
     local upstream="[]"

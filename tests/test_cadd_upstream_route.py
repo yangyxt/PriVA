@@ -32,6 +32,13 @@ Calculate_CADD "$FIXTURE/input.vcf.gz" "$FIXTURE/config.yaml" "$FIXTURE/output.c
 '''
 
 
+BCFTOOLS_STUB = '''#!/usr/bin/env bash
+printf '%s\\n' "$@" > "$FIXTURE/bcftools-argv.txt"
+while [[ $# -gt 1 ]]; do [[ $1 == -o ]] && { out=$2; shift; }; shift; done
+cp -- "$1" "$out"
+'''
+
+
 class UpstreamCaddRouteTests(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory(prefix='cadd-upstream-fixture-')
@@ -47,6 +54,9 @@ class UpstreamCaddRouteTests(unittest.TestCase):
         (self.root / 'config.yaml').write_text('assembly: hg38\n')
         (self.root / 'bin/python').symlink_to(sys.executable)
         (self.root / 'bin/mawk').symlink_to(shutil.which('mawk') or shutil.which('awk'))
+        bcftools = self.root / 'bin/bcftools'
+        bcftools.write_text(BCFTOOLS_STUB)
+        bcftools.chmod(0o755)
 
     def tearDown(self):
         self.temporary.cleanup()
@@ -70,7 +80,11 @@ class UpstreamCaddRouteTests(unittest.TestCase):
         result, argv = self.run_route()
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(argv, ['-c', '2', '-a', '-p', '-m', '-d', '-g', 'GRCh38', '-o',
-                                str(self.root / 'output.cadd.tsv.gz'), str(self.root / 'input.nochr.vcf.gz')])
+                                str(self.root / 'output.cadd.tsv.gz'), str(self.root / 'input.nochr.cadd_input.vcf.gz')])
+        # CADD has no MT data: MT records stay out of its input.
+        self.assertEqual((self.root / 'bcftools-argv.txt').read_text().splitlines(),
+                         ['view', '--threads', '2', '-t', '^MT', '-Oz', '-o',
+                          str(self.root / 'input.nochr.cadd_input.vcf.gz'), str(self.root / 'input.nochr.vcf.gz')])
         # PriVA's MMSplice copy saves and reloads its exon table beside CADD's GTF.
         self.assertEqual((self.root / 'cadd-exon-tables.txt').read_text(), str(self.exon_tables))
         # The consumer receives the plain table without CADD's ## header lines.

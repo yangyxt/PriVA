@@ -305,6 +305,17 @@ cmd_release() {
     jq -n --arg id "$id" --argjson parts "$parts" '{step: $id, release: ($parts | tostring), sources: $parts}' > "$out"
 }
 
+# receipt_keys RECEIPT: its keys as "KEY<TAB>VALUE" lines. A step that reuses
+# a file shipped with the repository records the file's path in the source
+# tree it ran from, and lists the key under "shipped" with the path inside the
+# tree. From another source tree (a new checkout) the recorded path is no
+# longer the shipped file to the installer's functions, so the reader names
+# the file in its own tree (F7 after F5 in job 1546329).
+receipt_keys() {
+    jq -r --arg root "$(realpath -m -- "$SCRIPT_DIR/..")" '(.shipped // {}) as $s | .keys | to_entries[]
+        | "\(.key)\t\(if $s[.key] then $root + "/" + $s[.key] else .value end)"' "$1"
+}
+
 cmd_run() {
     local registry plan id lineage folder receipt stub=0
     local -a inputs=()
@@ -345,7 +356,7 @@ cmd_run() {
     fi
     for k in "${!supplied[@]}"; do set_key "$private" "$k" "${supplied[$k]}"; done
     for r in "${inputs[@]}"; do
-        while IFS=$'\t' read -r k v; do set_key "$private" "$k" "$v"; done < <(jq -r '.keys | to_entries[] | "\(.key)\t\(.value)"' "$r")
+        while IFS=$'\t' read -r k v; do set_key "$private" "$k" "$v"; done < <(receipt_keys "$r")
     done
     for k in $(jq -r '.copies[]?' <<< "$entry"); do
         v=$(yaml_value "$private" "$k"); [[ -f $v ]] || die "$k ($v) is not a file to copy"
@@ -397,14 +408,24 @@ cmd_run() {
         if [[ -n $v && -e $v ]]; then keys=$(jq -c --arg k "$k" --arg v "$v" '. + {($k): $v}' <<< "$keys"); fi
     done
     for v in $(jq -r '.[]' <<< "$keys"); do files=$(jq -c --arg i "$(identity "$v")" '. + [$i]' <<< "$files"); done
+    # Outputs that lie in the source tree and outside this step's folder are
+    # files shipped with the repository (see receipt_keys).
+    local shipped="{}" root here
+    root=$(realpath -m -- "$SCRIPT_DIR/.."); here=$(realpath -m -- "$folder")
+    while IFS=$'\t' read -r k v; do
+        v=$(realpath -m -- "$v")
+        if [[ $v == "$root"/* && $v != "$here"/* ]]; then
+            shipped=$(jq -c --arg k "$k" --arg v "${v#"$root"/}" '. + {($k): $v}' <<< "$shipped")
+        fi
+    done < <(jq -r 'to_entries[] | "\(.key)\t\(.value)"' <<< "$keys")
     local upstream="[]"
     for r in "${inputs[@]}"; do upstream=$(jq -c --slurpfile x "$r" '. + [{id: $x[0].id, lineage: $x[0].lineage}]' <<< "$upstream"); done
     diff private.before.yaml "$private" > config_changes.diff
     [[ $(jq '.writable // false' <<< "$entry") == true ]] || chmod -R a-w "$work"
     jq -n --arg id "$id" --arg name "$(jq -r .name <<< "$entry")" --arg l "$lineage" --argjson keys "$keys" \
         --argjson files "$files" --argjson inputs "$upstream" --arg folder "$folder" --arg host "$(hostname)" \
-        --arg done "$(date -Is)" --argjson stub "$stub" \
-        '{schema: 1, id: $id, name: $name, lineage: $l, folder: $folder, keys: $keys, files: $files, inputs: $inputs, finished: $done, host: $host, stub: ($stub == 1)}' > "$receipt"
+        --arg done "$(date -Is)" --argjson stub "$stub" --argjson shipped "$shipped" \
+        '{schema: 1, id: $id, name: $name, lineage: $l, folder: $folder, keys: $keys, shipped: $shipped, files: $files, inputs: $inputs, finished: $done, host: $host, stub: ($stub == 1)}' > "$receipt"
 }
 
 # publish: one configuration from your base configuration and every step's
@@ -431,7 +452,7 @@ cmd_publish() {
     local steps="{}"
     for id in $(jq -r '.steps[].id' "$registry"); do
         r=${by_id[$id]:-}; [[ -n $r ]] || die "no receipt for step $id"
-        while IFS=$'\t' read -r k v; do set_key "$merged" "$k" "$v"; done < <(jq -r '.keys | to_entries[] | "\(.key)\t\(.value)"' "$r")
+        while IFS=$'\t' read -r k v; do set_key "$merged" "$k" "$v"; done < <(receipt_keys "$r")
         steps=$(jq -c --slurpfile x "$r" --arg id "$id" '. + {($id): {name: $x[0].name, lineage: $x[0].lineage, adopted: ($x[0].adopted // false), keys: $x[0].keys, receipt: $x[0].folder}}' <<< "$steps")
     done
     [[ -n ${PRIVA_BINARY:-} ]] && set_key "$merged" priva_binary "$PRIVA_BINARY"

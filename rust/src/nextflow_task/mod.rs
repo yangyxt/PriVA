@@ -13,6 +13,7 @@ mod boundary;
 pub(crate) mod contract;
 pub(crate) mod hub_lineage;
 mod info_merge;
+mod rust_reach;
 mod table_join;
 mod tasks;
 #[cfg(test)]

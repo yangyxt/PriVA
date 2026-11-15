@@ -217,7 +217,8 @@ seen:
 
 1. Validation names one hub folder (lineage) per step from the resources that step
    reads and the code that step runs: its shell function, the functions that one
-   calls, and the script and data files they name. A changed resource or a change
+   calls, the script and data files they name, and the Rust files behind the
+   `priva` commands they run. A changed resource or a change
    to that code gives that step a new, empty folder; a change to another step's
    function leaves it alone (`priva annotation-hub lineages` lists what each step
    counts). The control cohort step has no folder when its counts come from the

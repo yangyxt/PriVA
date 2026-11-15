@@ -9,8 +9,8 @@
 //! scripts/ and data/ those functions name. Comment lines and blank lines do
 //! not count. A change inside one step's function therefore gives a new
 //! folder for that step only; a change to a shared function gives a new
-//! folder for each step that calls it. Rust subcommands a function calls are
-//! not part of the code hash.
+//! folder for each step that calls it. Where those functions run a `priva`
+//! command, the Rust files behind that command count too (rust_reach.rs).
 //!
 //! A resource's identity leaves its path out, so moving the checkout or the
 //! caches keeps the folder: a file inside the PriVA checkout (bundled data)
@@ -301,6 +301,33 @@ impl Shell {
         lines.extend(&own);
         let (functions, variables) = self.reached(&lines);
         let digest = |lines: &[&str]| text(crate::sha256::sha256_hex(lines.join("\n").as_bytes()));
+        // The `priva` commands those lines run, each with its Rust files.
+        let mut called = BTreeSet::new();
+        let function_lines = functions
+            .iter()
+            .flat_map(|name| self.functions[*name].iter().map(String::as_str));
+        for line in lines.iter().copied().chain(function_lines) {
+            called.extend(super::rust_reach::called_commands(line));
+        }
+        let table = super::rust_reach::commands(root);
+        if !called.is_empty() && !root.join("rust/src/cli.rs").is_file() {
+            return Err(format!(
+                "{}: rust/src/cli.rs is needed to count the Rust code the {source} step runs",
+                root.display()
+            )
+            .into());
+        }
+        let mut rust = Vec::new();
+        for command in called {
+            let Some(entry) = table.get(&command) else {
+                continue;
+            };
+            let files = super::rust_reach::command_files(root, entry)?
+                .into_iter()
+                .map(|(file, digest)| (file, text(digest)))
+                .collect();
+            rust.push((command, Json::Object(files)));
+        }
         let mut files = BTreeSet::new();
         let mut record = |units: &BTreeMap<String, Vec<String>>, reached: &BTreeSet<&str>| {
             let mut out = Vec::new();
@@ -329,6 +356,7 @@ impl Shell {
             ("functions", functions),
             ("variables", variables),
             ("files", Json::Object(contents)),
+            ("rust", Json::Object(rust)),
         ]))
     }
 }
@@ -691,6 +719,49 @@ fi
         }
         std::fs::write(root.join("scripts/unused.py"), "X = 2\n").unwrap();
         assert!(moved(&before, &code_lineages(&root)).is_empty());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_rust_file_moves_only_the_steps_whose_code_runs_its_command() {
+        let script = annotation("echo a", "--one").replace(
+            "count_records gnomad",
+            "\"${PRIVA_BIN}\" count-records gnomad",
+        );
+        let root = checkout("rust", &script, COMMON);
+        let src = root.join("rust/src");
+        std::fs::create_dir_all(&src).unwrap();
+        let table = "pub(crate) fn run() {
+    if first() == Some(\"count-records\") {
+        return crate::count::dispatch();
+    }
+    if first() == Some(\"other\") {
+        return crate::other::dispatch();
+    }
+}
+";
+        std::fs::write(src.join("cli.rs"), table).unwrap();
+        std::fs::write(src.join("count.rs"), "pub(crate) fn dispatch() {}\n").unwrap();
+        std::fs::write(src.join("other.rs"), "pub(crate) fn dispatch() {}\n").unwrap();
+        let before = code_lineages(&root);
+        // A command no step runs, then a test of the command gnomAD runs.
+        std::fs::write(
+            src.join("other.rs"),
+            "pub(crate) fn dispatch() -> u8 { 1 }\n",
+        )
+        .unwrap();
+        let tested = "pub(crate) fn dispatch() {}\n#[cfg(test)]\nmod tests {\n    fn t() {}\n}\n";
+        std::fs::write(src.join("count.rs"), tested).unwrap();
+        assert!(moved(&before, &code_lineages(&root)).is_empty());
+        std::fs::write(
+            src.join("count.rs"),
+            "pub(crate) fn dispatch() -> u8 { 1 }\n",
+        )
+        .unwrap();
+        assert_eq!(moved(&before, &code_lineages(&root)), ["gnomad"]);
+        // Without the Rust source the folder cannot be named.
+        std::fs::remove_dir_all(&src).unwrap();
+        assert!(lineages(&manifest(&[("control_vcf", 3)]), &root, None).is_err());
         std::fs::remove_dir_all(root).unwrap();
     }
 

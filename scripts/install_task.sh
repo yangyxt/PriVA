@@ -293,7 +293,10 @@ cmd_release() {
             # sends neither ETag nor Last-Modified (an API answer) is named
             # by the SHA-256 of its sorted lines, up to 500 MB: the ClinGen
             # evidence repository returns the same rows in varying order.
-            answer=$(curl -sIL --max-time 120 "$url" | tr -d '\r' | awk '{h=tolower($0)} h~/^http\//{e="";m="";l=""} h~/^etag:/{e=h} h~/^last-modified:/{m=h} h~/^content-length:/{l=h} END{print e"|"m"|"l}')
+            # The size is left out: Orphadata sends Content-Length with some
+            # answers and not with others, which gave F4 another release, and
+            # so another folder, from one launch to the next (job 1546377).
+            answer=$(curl -sIL --max-time 120 "$url" | tr -d '\r' | awk '{h=tolower($0)} h~/^http\//{e="";m=""} h~/^etag:/{e=h} h~/^last-modified:/{m=h} END{print e"|"m"|"}')
             if [[ $answer == '||'* ]]; then
                 digest=$(set -o pipefail; curl -sfL --max-time 600 --max-filesize 500000000 "$url" | LC_ALL=C sort | sha256sum) ||
                     die "$id: cannot read $url"

@@ -95,7 +95,9 @@ def check_priva_runs() -> None:
     """priva runs some installer functions itself (bash install_utils.sh NAME).
 
     Each installer function named in a Rust string must be reached by a step's
-    code digest; otherwise an edit to it would not run that step again.
+    code digest; otherwise an edit to it would not run that step again. A
+    file's unit tests (from "#[cfg(test)]" followed by "mod" to its end) are
+    not read: priva runs nothing that only a test names.
     """
     reached = reached_functions()
     names = set()
@@ -103,7 +105,8 @@ def check_priva_runs() -> None:
         names |= set(re.findall(r"^function\s+(" + WORD + ")", (ROOT / "scripts" / line).read_text(), re.M))
     missing = {}
     for path in sorted((ROOT / "rust" / "src").rglob("*.rs")):
-        for name in set(re.findall(r'"(' + WORD + ')"', path.read_text())) & names:
+        text = re.split(r"#\[cfg\(test\)\]\s*mod\b", path.read_text(), maxsplit=1)[0]
+        for name in set(re.findall(r'"(' + WORD + ')"', text)) & names:
             if name not in reached and name not in RUN_ENTRIES:
                 missing.setdefault(name, []).append(str(path.relative_to(ROOT)))
     if missing:

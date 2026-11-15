@@ -492,6 +492,26 @@ cmd_publish() {
         '{schema: 1, lineage: $l, published: $done, priva_identity: $pi, steps: $steps}' > resources.lock.json
 }
 
+# shipped_twin FILE: when FILE lies in the data folder of another PriVA source
+# tree and this source tree ships the same bytes at the same place, the place
+# inside the tree (data/...). An existing installation names such a file by
+# its path in the source tree it was installed from; adopted as it is, the
+# path is not the shipped file to the installer's functions of this tree (see
+# receipt_keys), so the receipt lists the key under "shipped".
+shipped_twin() {
+    local v root prefix rel
+    v=$(realpath -m -- "$1"); root=$(realpath -m -- "$SCRIPT_DIR/..")
+    [[ -f $v && $v != "$root"/* ]] || return 1
+    prefix=$v
+    while [[ $prefix == */data/* ]]; do
+        prefix=${prefix%/data/*}; rel=${v#"$prefix"/}
+        if [[ -f $prefix/scripts/install_utils.sh && -f $root/$rel ]] && cmp -s -- "$v" "$root/$rel"; then
+            printf '%s\n' "$rel"; return 0
+        fi
+    done
+    return 1
+}
+
 cmd_adopt() {
     local plan id lineage receipt
     while (($#)); do case $1 in
@@ -499,8 +519,12 @@ cmd_adopt() {
         --receipt) receipt=$2; shift 2 ;; *) die "adopt: unknown option $1" ;; esac; done
     local a; a=$(jq -c --arg id "$id" '.steps[$id].adopt' "$plan")
     [[ $a != null ]] || die "$id is not adopted in $plan"
-    jq -n --arg id "$id" --arg l "$lineage" --argjson a "$a" --arg done "$(date -Is)" \
-        '{schema: 1, id: $id, lineage: $l, adopted: true, keys: $a.keys, files: $a.identity, inputs: [], finished: $done}' > "$receipt"
+    local shipped="{}" k v rel
+    while IFS=$'\t' read -r k v; do
+        if rel=$(shipped_twin "$v"); then shipped=$(jq -c --arg k "$k" --arg v "$rel" '. + {($k): $v}' <<< "$shipped"); fi
+    done < <(jq -r '.keys | to_entries[] | "\(.key)\t\(.value)"' <<< "$a")
+    jq -n --arg id "$id" --arg l "$lineage" --argjson a "$a" --arg done "$(date -Is)" --argjson shipped "$shipped" \
+        '{schema: 1, id: $id, lineage: $l, adopted: true, keys: $a.keys, shipped: $shipped, files: $a.identity, inputs: [], finished: $done}' > "$receipt"
 }
 
 SCRIPT_DIR=$HERE

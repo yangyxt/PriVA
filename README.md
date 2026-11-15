@@ -216,8 +216,11 @@ step's results per variant, so later runs annotate only variants the hub has not
 seen:
 
 1. Validation names one hub folder (lineage) per step from the resources that step
-   reads and the annotation scripts; a changed resource gives that step a new, empty
-   folder. The control cohort step has no folder when its counts come from the
+   reads and the code that step runs: its shell function, the functions that one
+   calls, and the script and data files they name. A changed resource or a change
+   to that code gives that step a new, empty folder; a change to another step's
+   function leaves it alone (`priva annotation-hub lineages` lists what each step
+   counts). The control cohort step has no folder when its counts come from the
    cohort itself.
 2. `HUB_LOOKUP` splits the preprocessed VCF into stored and new variants per step.
 3. Each step runs only on its new variants, or not at all.

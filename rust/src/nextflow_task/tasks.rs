@@ -883,7 +883,7 @@ case $step in
 esac
 "#;
 
-const ANNOTATION_STEP: &str = r#"#!/usr/bin/env bash
+pub(super) const ANNOTATION_STEP: &str = r#"#!/usr/bin/env bash
 source "$1/scripts/annotation_vcf.sh" || exit 1
 config=$2 vcf=$3 step=$4 output=${5:-}
 value() { read_yaml "$config" "$1"; }

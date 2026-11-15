@@ -39,6 +39,7 @@ const USAGE: &str = "usage: priva annotation-hub lookup --hub HUB --source SOURC
        priva annotation-hub fill --source SOURCE --vcf PREPROCESSED.vcf.gz --known KNOWN.parquet --annotated STEP_OUTPUT --output OUTPUT
        priva annotation-hub add --hub HUB --source SOURCE --lineage LINEAGE --session SESSION --base NEW.vcf.gz --annotated STEP_OUTPUT
        priva annotation-hub refresh-plan --hub HUB --resources RESOURCES.json --legacy-root CHECKOUT [--resources-lock LOCK.json] --vcf VARIANTS.vcf.gz --plan PLAN.json
+       priva annotation-hub lineages --resources RESOURCES.json --legacy-root CHECKOUT [--resources-lock LOCK.json]
 SOURCE is gnomad, clinvar, control, vep or cadd; for cadd the step output is the CADD table.";
 const SOURCES: [&str; 5] = ["gnomad", "clinvar", "control", "vep", "cadd"];
 const HEADER_KEY: &str = "priva.hub.header";
@@ -67,6 +68,21 @@ pub(crate) fn dispatch(args: &[String]) -> Result<()> {
             .map(String::as_str)
             .ok_or_else(|| invalid(format!("--{name} is required\n{USAGE}")))
     };
+    if command == "lineages" {
+        // Each step's hub folder name with the code and resources it hashes.
+        use crate::nextflow_task::contract::{json_document, read_json};
+        let lock = match options.get("resources-lock") {
+            Some(path) => Some(read_json(Path::new(path))?),
+            None => None,
+        };
+        let explained = crate::nextflow_task::hub_lineage::explain(
+            &read_json(Path::new(get("resources")?))?,
+            Path::new(get("legacy-root")?),
+            lock.as_ref(),
+        )?;
+        print!("{}", json_document(&explained)?);
+        return Ok(());
+    }
     if command == "refresh-plan" {
         return refresh_plan(
             Path::new(get("hub")?),

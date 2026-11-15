@@ -10,7 +10,9 @@
 //! not count. A change inside one step's function therefore gives a new
 //! folder for that step only; a change to a shared function gives a new
 //! folder for each step that calls it. Where those functions run a `priva`
-//! command, the Rust files behind that command count too (rust_reach.rs).
+//! command, the Rust files behind that command count too (rust_reach.rs),
+//! except installer commands (INSTALLER_COMMANDS), which an annotation step
+//! never runs.
 //!
 //! A resource's identity leaves its path out, so moving the checkout or the
 //! caches keeps the folder: a file inside the PriVA checkout (bundled data)
@@ -30,6 +32,16 @@ use std::path::Path;
 
 /// The shell files whose functions the annotation steps run.
 const SHELL_FILES: [&str; 2] = ["annotation_vcf.sh", "common_bash_utils.sh"];
+
+/// `priva` commands of the installer that the annotation functions name but
+/// an annotation step never runs, so their Rust files stay out of a step's
+/// lineage. The installer annotates the ClinVar file with the gnomAD and VEP
+/// functions; only then (PRIVA_CLINVAR_RECOVERY_CONFIG set, or the function
+/// entered as anno_VEP_cache_candidate) do those functions call
+/// `clinvar-gene-refresh`, which keeps the installer's journal and receipts
+/// and writes no annotation value. A unit test checks those conditions in
+/// scripts/annotation_vcf.sh. The install steps count this code themselves.
+const INSTALLER_COMMANDS: [&str; 1] = ["clinvar-gene-refresh"];
 
 pub(crate) const SOURCES: [&str; 5] = ["gnomad", "clinvar", "control", "vep", "cadd"];
 
@@ -318,10 +330,15 @@ impl Shell {
             .into());
         }
         let mut rust = Vec::new();
+        let mut left_out = Vec::new();
         for command in called {
             let Some(entry) = table.get(&command) else {
                 continue;
             };
+            if INSTALLER_COMMANDS.contains(&command.as_str()) {
+                left_out.push(text(command));
+                continue;
+            }
             let files = super::rust_reach::command_files(root, entry)?
                 .into_iter()
                 .map(|(file, digest)| (file, text(digest)))
@@ -357,6 +374,7 @@ impl Shell {
             ("variables", variables),
             ("files", Json::Object(contents)),
             ("rust", Json::Object(rust)),
+            ("rust_left_out", Json::Array(left_out)),
         ]))
     }
 }
@@ -724,10 +742,16 @@ fi
 
     #[test]
     fn a_rust_file_moves_only_the_steps_whose_code_runs_its_command() {
-        let script = annotation("echo a", "--one").replace(
-            "count_records gnomad",
-            "\"${PRIVA_BIN}\" count-records gnomad",
-        );
+        let script = annotation("echo a", "--one")
+            .replace(
+                "count_records gnomad",
+                "\"${PRIVA_BIN}\" count-records gnomad",
+            )
+            .replace(
+                "echo \"${TISSUES[@]}\"",
+                "\"${PRIVA_BIN}\" clinvar-gene-refresh candidate-begin",
+            );
+        assert!(script.contains("count-records") && script.contains("clinvar-gene-refresh"));
         let root = checkout("rust", &script, COMMON);
         let src = root.join("rust/src");
         std::fs::create_dir_all(&src).unwrap();
@@ -738,13 +762,23 @@ fi
     if first() == Some(\"other\") {
         return crate::other::dispatch();
     }
+    if first() == Some(\"clinvar-gene-refresh\") {
+        return crate::refresh::dispatch();
+    }
 }
 ";
         std::fs::write(src.join("cli.rs"), table).unwrap();
+        std::fs::write(src.join("refresh.rs"), "pub(crate) fn dispatch() {}\n").unwrap();
         std::fs::write(src.join("count.rs"), "pub(crate) fn dispatch() {}\n").unwrap();
         std::fs::write(src.join("other.rs"), "pub(crate) fn dispatch() {}\n").unwrap();
         let before = code_lineages(&root);
-        // A command no step runs, then a test of the command gnomAD runs.
+        // A command no step runs, an installer command the VEP function
+        // names, then a test of the command gnomAD runs.
+        std::fs::write(
+            src.join("refresh.rs"),
+            "pub(crate) fn dispatch() -> u8 { 1 }\n",
+        )
+        .unwrap();
         std::fs::write(
             src.join("other.rs"),
             "pub(crate) fn dispatch() -> u8 { 1 }\n",
@@ -763,6 +797,44 @@ fi
         std::fs::remove_dir_all(&src).unwrap();
         assert!(lineages(&manifest(&[("control_vcf", 3)]), &root, None).is_err());
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn installer_commands_run_only_under_installer_conditions() {
+        // The reason INSTALLER_COMMANDS may stay out of a step's lineage:
+        // every call sits under a condition only the installer sets, or in
+        // the installer's own entry function.
+        let script = include_str!("../../../scripts/annotation_vcf.sh");
+        let lines: Vec<&str> = script.lines().collect();
+        let mut calls = 0;
+        for (at, line) in lines.iter().enumerate() {
+            let trimmed = line.trim_start();
+            let named = super::super::rust_reach::called_commands(line)
+                .iter()
+                .any(|command| INSTALLER_COMMANDS.contains(&command.as_str()));
+            if !named || trimmed.starts_with('#') || trimmed.starts_with("log ") {
+                continue;
+            }
+            calls += 1;
+            let guard = lines[..at]
+                .iter()
+                .rev()
+                .find(|above| {
+                    let above = above.trim_start();
+                    above.starts_with("if ")
+                        || above.starts_with("elif ")
+                        || function_name(above).is_some()
+                })
+                .copied()
+                .unwrap_or_default();
+            assert!(
+                guard.contains("PRIVA_CLINVAR_RECOVERY_CONFIG")
+                    || guard.contains("cache_candidate"),
+                "line {}: {guard}",
+                at + 1
+            );
+        }
+        assert!(calls > 0);
     }
 
     #[test]

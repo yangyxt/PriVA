@@ -2087,6 +2087,11 @@
       "outputs": [
         "gofcards_exact_gof_cache"
       ],
+      "user_inputs": [
+        "gofcards_hg19_fasta",
+        "gofcards_hg38_fasta",
+        "gofcards_hg19_to_hg38_chain"
+      ],
       "settings": [
         "assembly",
         "gofcards_refresh_days",

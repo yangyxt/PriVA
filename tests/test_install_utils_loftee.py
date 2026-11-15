@@ -141,6 +141,32 @@ class LoFteeInstallerTests(unittest.TestCase):
         self.assertEqual(registered["human_ancestor_fasta"], str(self.cache / "LoFtee/hg19/human_ancestor.fa.gz"))
         self.assertEqual(registered["gerp_bigwig"], "")
 
+    def test_block_format_ancestor_gets_its_block_index_and_plain_gzip_none(self):
+        # samtools needs FILE.gzi for a bgzipped FASTA; a finished install
+        # step's folder is read-only, so the installer writes it.
+        installed = self.cache / "LoFtee/hg19/human_ancestor.fa.gz"
+        self.fresh()
+        result, _ = self.run_shell()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse(Path(str(installed) + ".gzi").exists())
+        if shutil.which("bgzip", path=self.env.get("PATH")) is None:
+            self.skipTest("bgzip is not available")
+        shutil.rmtree(self.cache / "LoFtee")
+        plain = self.ancestor.with_suffix(".plain")
+        with gzip.open(self.ancestor, "rb") as stream, open(plain, "wb") as output:
+            output.write(stream.read())
+        with open(self.ancestor, "wb") as output:
+            subprocess.run(["bgzip", "-c", str(plain)], check=True, stdout=output, env=self.env)
+        self.fresh()
+        result, _ = self.run_shell()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertGreater(Path(str(installed) + ".gzi").stat().st_size, 0)
+        # A second run reuses the installed files and keeps the index.
+        index = Path(str(installed) + ".gzi").read_bytes()
+        result, _ = self.run_shell()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(Path(str(installed) + ".gzi").read_bytes(), index)
+
     def test_fresh_grch38_validates_bigwig_before_registration(self):
         self.configure("GRCh38")
         self.fresh()

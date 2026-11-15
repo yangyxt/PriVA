@@ -3292,6 +3292,23 @@ function SpliceVault_install () {
 
 
 
+# samtools reads a bgzipped FASTA through its block index (FILE.gzi). Without
+# one it builds the index on every lookup and saves it next to the FASTA. A
+# plain install got the index from VEP's first lookup. An install step's folder
+# is read-only once the step ends: there every LOFTEE ancestor lookup took 12
+# seconds and ended in a segmentation fault (samtools 1.21, job 1545925). So
+# the installer makes the index itself.
+function _loftee_ancestor_block_index() {
+    local fasta=$1
+    [[ -s "$fasta" && ! -s "${fasta}.gzi" ]] || return 0
+    # Only a file in bgzip's block format has such an index: its first block
+    # starts with the gzip bytes 1f 8b 08 04 and carries the field "BC".
+    [[ $(head -c 14 -- "$fasta" | od -An -tx1 | tr -d ' \n') == 1f8b0804????????????????4243 ]] || return 0
+    bgzip -r "$fasta" && [[ -s "${fasta}.gzi" ]] || \
+        { log "ERROR: Cannot write the block index (.gzi) of the LoFtee ancestor: $fasta"; return 1; }
+}
+
+
 function validate_loftee_resources() {
     local config=${1} loftee_repo=${2}
     local assembly ancestor conservation gerp reference
@@ -3412,6 +3429,7 @@ function LoFtee_install() {
     if [[ ${assembly_version} == "GRCh37" ]] || [[ ${assembly_version} == "hg19" ]]; then
         if [[ "$resource_paths_changed" == false && -s ${loftee_repo}/LoF.pm && -s ${human_ancestor_fasta} && -s ${human_ancestor_fasta}.fai && -s ${loftee_conservation_file} ]]; then
             validate_loftee_resources "$config" "$loftee_repo" || return 1
+            _loftee_ancestor_block_index "$human_ancestor_fasta" || return 1
             log "The LOFTEE repository for hg19/GRCh37 is already installed at ${loftee_repo}"
             return 0
         fi
@@ -3420,6 +3438,7 @@ function LoFtee_install() {
     if [[ ${assembly_version} == "GRCh38" ]] || [[ ${assembly_version} == "hg38" ]]; then
         if [[ "$resource_paths_changed" == false && -s ${loftee_repo}/LoF.pm && -s ${human_ancestor_fasta} && -s ${human_ancestor_fasta}.fai && -s ${loftee_conservation_file} && -s ${gerp_bigwig} ]]; then
             validate_loftee_resources "$config" "$loftee_repo" || return 1
+            _loftee_ancestor_block_index "$human_ancestor_fasta" || return 1
             log "The LOFTEE repository for hg38/GRCh38 is already installed at ${loftee_repo}"
             return 0
         fi
@@ -3540,6 +3559,7 @@ function LoFtee_install() {
         mkdir -p "$(dirname "$gerp_bigwig")" && mv "$staged_gerp" "$gerp_bigwig" || return 1
     fi
     rmdir "$acquire_stage" || return 1
+    _loftee_ancestor_block_index "$human_ancestor_fasta" || return 1
     update_or_append_yaml "$config" human_ancestor_fasta "$human_ancestor_fasta" && \
         update_or_append_yaml "$config" loftee_conservation_file "$loftee_conservation_file" && \
         update_or_append_yaml "$config" gerp_bigwig "$gerp_bigwig" || return 1

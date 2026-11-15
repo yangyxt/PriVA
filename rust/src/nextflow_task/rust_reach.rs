@@ -6,9 +6,10 @@
 //! file: the file the command table (`run` in cli.rs) hands the command to,
 //! every file of the crate that one names (`crate::`, `super::` and `self::`
 //! paths, with `{a, b}` groups), and those they name in turn. A child module
-//! (`mod NAME;`) counts when its parent file uses it (`NAME::`) or when it
-//! holds a trait implementation, which acts without being named. Files a
-//! reached file embeds (`include_str!`, `include_bytes!`) count by content.
+//! (`mod NAME;`) counts when its parent file uses it (`NAME::`), or when it
+//! implements a trait for a type defined outside itself, which acts without
+//! the child being named. Files a reached file embeds (`include_str!`,
+//! `include_bytes!`) count by content.
 //!
 //! Left out: comment lines, blank lines and test modules (`#[cfg(test)] mod`),
 //! and the command table itself, which names every command; cli.rs counts
@@ -183,6 +184,46 @@ fn uses_child(text: &str, name: &str) -> bool {
     false
 }
 
+/// Whether a file's text implements a trait for a type it does not define
+/// itself (`impl Trait for super::Thing`, `for u8`, `for Imported`). Such an
+/// implementation acts wherever that type is used. One for the file's own
+/// `struct`, `enum`, `union` or `type` needs the file to be named first.
+fn acts_unnamed(text: &str) -> bool {
+    let defined: BTreeSet<&str> = text
+        .lines()
+        .filter_map(|line| {
+            let mut rest = line.trim_start();
+            if let Some(after) = rest.strip_prefix("pub") {
+                rest = match after.strip_prefix('(') {
+                    Some(scope) => scope.split_once(')').map_or("", |(_, tail)| tail),
+                    None => after,
+                }
+                .trim_start();
+            }
+            let name = ["struct ", "enum ", "union ", "type "]
+                .iter()
+                .find_map(|keyword| rest.strip_prefix(keyword))?;
+            Some(&name[..name.find(|c: char| !is_name(c)).unwrap_or(name.len())])
+        })
+        .collect();
+    text.lines().any(|line| {
+        let line = line.trim_start();
+        let line = line.strip_prefix("unsafe ").unwrap_or(line);
+        let target = match line.strip_prefix("impl") {
+            Some(rest) => rest.rsplit_once(" for ").map(|(_, target)| target),
+            // A long header continues on its own line: `    for Type<T>`.
+            None => line
+                .strip_prefix("for ")
+                .filter(|rest| !rest.contains(" in ")),
+        };
+        let Some(target) = target else {
+            return false;
+        };
+        let end = target.find(|c: char| !is_name(c)).unwrap_or(target.len());
+        target[end..].starts_with("::") || !defined.contains(&target[..end])
+    })
+}
+
 /// The files of the checkout a text embeds, relative to the checkout.
 fn embedded(text: &str, file: &Path, root: &Path, out: &mut BTreeSet<String>) {
     for opener in ["include_str!(", "include_bytes!("] {
@@ -326,14 +367,11 @@ pub(super) fn command_files(root: &Path, entry: &str) -> Result<BTreeMap<String,
             else {
                 continue;
             };
-            let acts_unnamed = || {
-                std::fs::read_to_string(src.join(&child_file)).is_ok_and(|content| {
-                    counted(&content)
-                        .lines()
-                        .any(|line| line.starts_with("impl") && line.contains(" for "))
-                })
+            let unnamed = || {
+                std::fs::read_to_string(src.join(&child_file))
+                    .is_ok_and(|content| acts_unnamed(&counted(&content)))
             };
-            if uses_child(&text, child) || acts_unnamed() {
+            if uses_child(&text, child) || unnamed() {
                 pending.push(child_file);
             }
         }
@@ -411,11 +449,15 @@ mod tests {
             ("rust/src/other.rs", "pub(crate) fn fallback() {}\n"),
             (
                 "rust/src/pack/mod.rs",
-                "mod quiet;\nmod shown;\npub(crate) mod two;\nmod used;\n\
+                "mod own;\nmod quiet;\nmod shown;\npub(crate) mod two;\nmod used;\n\
                  pub(crate) fn thing() {\n    used::go()\n}\n",
             ),
             ("rust/src/pack/used.rs", "pub(super) fn go() {}\n"),
             ("rust/src/pack/quiet.rs", "pub(super) fn never() {}\n"),
+            (
+                "rust/src/pack/own.rs",
+                "pub(crate) struct Own<T>(T);\nimpl<T> std::fmt::Debug for Own<T> {\n}\n",
+            ),
             (
                 "rust/src/pack/shown.rs",
                 "impl std::fmt::Display for super::Thing {\n}\n",
@@ -510,6 +552,40 @@ mod tests {
             write(file, kept);
         }
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_trait_for_a_type_defined_elsewhere_acts_unnamed() {
+        for (text, expected) in [
+            (
+                "pub struct Own;\nimpl std::fmt::Display for Own {\n}",
+                false,
+            ),
+            (
+                "pub(crate) enum Kind<T> {\n}\nimpl<T> From<T> for Kind<T> {\n}",
+                false,
+            ),
+            ("impl std::fmt::Display for super::Thing {\n}", true),
+            (
+                "use super::Thing;\nimpl std::fmt::Display for Thing {\n}",
+                true,
+            ),
+            ("struct Own;\nimpl Marker for u8 {}", true),
+            ("struct Own;\nimpl Marker for &Own {}", true),
+            ("struct Own;\nimpl Own {\n    fn before(&self) {}\n}", false),
+            (
+                "struct Own;\nimpl<T> LongTrait<T>\n    for Own\n{\n}",
+                false,
+            ),
+            ("impl<T> LongTrait<T>\n    for Other<T>\n{\n}", true),
+            (
+                "struct Own;\nfn f() {\n    for item in items {\n    }\n}",
+                false,
+            ),
+            ("unsafe impl Send for super::Thing {}", true),
+        ] {
+            assert_eq!(acts_unnamed(text), expected, "{text}");
+        }
     }
 
     #[test]

@@ -12,7 +12,7 @@
 #   install_task.sh reach --registry R --step ID
 #
 # release: asks a changing source for its current release (registry
-# "release": git commit, or the server's ETag, Last-Modified and size) and
+# "release": git commit, or the server's ETag and Last-Modified) and
 # writes {"step": ID, "release": TEXT}. plan --releases FILE... puts it in the
 # step's plan entry; a pinned step uses resource_root/pins.json instead
 # (--pins), unless it is listed in --refresh. publish --pins records the
@@ -27,8 +27,8 @@
 # failed attempt left it; Nextflow (storeDir) skips a step whose F holds a
 # receipt. The finished folder is made read-only unless the step is writable.
 # adopt: writes a receipt naming the files of an existing installation.
-# reach: lists the installer functions and script files a step's code digest
-# covers, and the digest.
+# reach: lists the installer functions, script files and shipped data files a
+# step's code digest covers, and the digest.
 set -o pipefail
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 
@@ -116,20 +116,53 @@ step_functions() {
 }
 
 # The script files those functions name: by a script file name, or as
-# SCRIPT_DIR/NAME. The shared shell files are counted by function instead.
+# SCRIPT_DIR/NAME, and the Python files of this folder that such a Python
+# script imports (and those import). The shared shell files are counted by
+# function instead.
 step_scripts() {
-    local f w
+    local f w m
+    local -a queue=()
+    local -A seen=()
     for w in $(for f in "$@"; do declare -f "$f"; done |
                grep -oE '[A-Za-z0-9_.-]+\.(py|sh|R|pl|bash)|SCRIPT_DIR\}?/[A-Za-z0-9_./-]+' |
                sed -E 's|^SCRIPT_DIR\}?/||' | sort -u); do
         [[ " $SHELL_LIBRARIES " == *" $w "* ]] && continue
-        if [[ -f $SCRIPT_DIR/$w ]]; then echo "$w"; fi
+        if [[ -f $SCRIPT_DIR/$w ]]; then queue+=("$w"); fi
     done
+    while ((${#queue[@]})); do
+        w=${queue[0]}; queue=("${queue[@]:1}")
+        [[ -n ${seen[$w]:-} ]] && continue
+        seen[$w]=1; echo "$w"
+        [[ $w == *.py ]] || continue
+        for m in $(grep -oE '^[[:space:]]*(from|import)[[:space:]]+[A-Za-z_][A-Za-z0-9_]*' "$SCRIPT_DIR/$w" | awk '{print $2}' | sort -u); do
+            if [[ -f $SCRIPT_DIR/$m.py && -z ${seen[$m.py]:-} ]]; then queue+=("$m.py"); fi
+        done
+    done | sort -u
+}
+
+# The data files shipped with the repository that those functions name as
+# DATA_DIR/PATH, with ${assembly} read as hg19 and as hg38. A file counts when
+# the source tree has it and, in a git checkout, git tracks it (an installer
+# run from a checkout may have left its own results in the data folder).
+# A data file a function reaches another way (a configuration key, or a path
+# put together while it runs) is not counted.
+step_data() {
+    local f w a p root
+    root=$(cd "$SCRIPT_DIR/.." && pwd)
+    for w in $(for f in "$@"; do declare -f "$f"; done |
+               grep -oE 'DATA_DIR\}?/[A-Za-z0-9_./${}-]+' | sed -E 's|^DATA_DIR\}?/||' | sort -u); do
+        for a in hg19 hg38; do
+            p=${w//'${assembly}'/$a}
+            [[ $p != *'$'* && -f $root/data/$p ]] || continue
+            if [[ -e $root/.git ]] && ! git -C "$root" ls-files --error-unmatch -- "data/$p" > /dev/null 2>&1; then continue; fi
+            echo "$p"
+        done
+    done | sort -u
 }
 
 # A step's code digest: its registry entry, the text of the functions it
 # reaches, the shared shell files' lines outside functions, and the content of
-# the script files it names.
+# the script files and of the shipped data files it names.
 step_digest() {
     local registry=$1 id=$2 entry f w
     entry=$(json_step "$registry" "$id") || return 1
@@ -140,6 +173,7 @@ step_digest() {
         for f in "${names[@]}"; do declare -f "$f"; done
         echo "== outside functions"; shell_toplevel
         for w in $(step_scripts "${names[@]}"); do printf '%s ' "$w"; sha256sum < "$SCRIPT_DIR/$w"; done
+        for w in $(step_data "${names[@]}"); do printf 'data %s ' "$w"; sha256sum < "$SCRIPT_DIR/../data/$w"; done
     } | sha256sum | cut -c1-64
 }
 
@@ -156,6 +190,7 @@ cmd_reach() {
     names=($(step_functions "$entry")) || exit 1
     for f in "${names[@]}"; do echo "function $f"; done
     for f in $(step_scripts "${names[@]}"); do echo "script $f"; done
+    for f in $(step_data "${names[@]}"); do echo "data $f"; done
     echo "digest $(step_digest "$registry" "$id")"
 }
 

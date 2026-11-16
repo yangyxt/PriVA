@@ -24,10 +24,16 @@
 //!   files, writes a VCF of the variants those earlier folders hold, so the
 //!   hub refresh run can annotate them into the current folder before the
 //!   next cohort needs them. Earlier folders are never changed.
+//!
+//! Memory: Parquet files are written and read one batch of rows at a time,
+//! and lookup holds the stored values of one chromosome at a time, so the
+//! memory held follows the largest chromosome and not the genome. `add`
+//! closes a chromosome's file when the next chromosome begins, so it needs
+//! each chromosome's records together in the preprocessed VCF.
 use crate::cli::{Result, invalid};
 use crate::vcf_text::open_reader;
 use polars_core::prelude::*;
-use polars_io::parquet::write::KeyValueMetadata;
+use polars_io::parquet::write::{BatchedWriter, KeyValueMetadata};
 use polars_io::prelude::*;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fs::{self, File};
@@ -193,44 +199,81 @@ fn source_dir(hub: &Path, source: &str, lineage: &str) -> PathBuf {
     hub.join(source).join(lineage)
 }
 
-/// Every stored value of the chromosomes in `wanted`, the first file (by
-/// name) winning when two sessions stored one variant, and the stored header.
-fn load(
-    folder: &Path,
-    wanted: &HashSet<String>,
-    exclude: Option<&str>,
-) -> Result<(HashMap<Key, String>, Option<String>)> {
-    let mut values = HashMap::new();
-    let mut header = None;
+/// A part or known file is written and read this many rows (or this many
+/// bytes of values) at a time.
+const BATCH_ROWS: usize = 100_000;
+const BATCH_BYTES: usize = 256 << 20;
+
+/// The part files of one chromosome in a hub folder, by name, without the
+/// file of the excluded session.
+fn part_files(folder: &Path, chrom: &str, exclude: Option<&str>) -> Vec<PathBuf> {
     let skip = exclude.map(|s| format!("part-{s}.parquet"));
-    for chrom in wanted {
-        let dir = folder.join(chrom);
-        let Ok(entries) = fs::read_dir(&dir) else {
-            continue;
-        };
-        let mut parts: Vec<PathBuf> = entries
-            .filter_map(|e| e.ok().map(|e| e.path()))
-            .filter(|p| {
-                let name = p.file_name().and_then(|n| n.to_str()).unwrap_or_default();
-                name.starts_with("part-")
-                    && name.ends_with(".parquet")
-                    && skip.as_deref() != Some(name)
-            })
-            .collect();
-        parts.sort();
-        for part in parts {
-            let mut reader = ParquetReader::new(File::open(&part)?);
-            if header.is_none() {
-                header = reader
-                    .get_metadata()?
-                    .key_value_metadata
-                    .as_deref()
-                    .unwrap_or_default()
-                    .iter()
-                    .find(|kv| kv.key == HEADER_KEY)
-                    .and_then(|kv| kv.value.clone());
+    let Ok(entries) = fs::read_dir(folder.join(chrom)) else {
+        return Vec::new();
+    };
+    let mut parts: Vec<PathBuf> = entries
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .filter(|p| {
+            let name = p.file_name().and_then(|n| n.to_str()).unwrap_or_default();
+            name.starts_with("part-") && name.ends_with(".parquet") && skip.as_deref() != Some(name)
+        })
+        .collect();
+    parts.sort();
+    parts
+}
+
+/// A Parquet file of hub rows and its stored header, read one row group at a
+/// time.
+struct RowReader {
+    path: PathBuf,
+    header: Option<String>,
+    groups: Vec<usize>,
+    next: usize,
+    offset: usize,
+    batch: std::vec::IntoIter<(Key, String)>,
+}
+
+impl RowReader {
+    fn open(path: &Path) -> Result<Self> {
+        let mut reader = ParquetReader::new(File::open(path)?);
+        let metadata = reader.get_metadata()?;
+        let header = metadata
+            .key_value_metadata
+            .as_deref()
+            .unwrap_or_default()
+            .iter()
+            .find(|kv| kv.key == HEADER_KEY)
+            .and_then(|kv| kv.value.clone());
+        let groups = metadata.row_groups.iter().map(|g| g.num_rows()).collect();
+        Ok(Self {
+            path: path.to_owned(),
+            header,
+            groups,
+            next: 0,
+            offset: 0,
+            batch: Vec::new().into_iter(),
+        })
+    }
+
+    /// The next row in the file's order, reading the next row group when the
+    /// rows of the last one are used up.
+    fn next_row(&mut self) -> Result<Option<(Key, String)>> {
+        loop {
+            if let Some(row) = self.batch.next() {
+                return Ok(Some(row));
             }
-            let frame = reader.finish()?;
+            let Some(&rows) = self.groups.get(self.next) else {
+                return Ok(None);
+            };
+            self.next += 1;
+            if rows == 0 {
+                continue;
+            }
+            let frame = ParquetReader::new(File::open(&self.path)?)
+                .read_parallel(ParallelStrategy::RowGroups)
+                .with_slice(Some((self.offset, rows)))
+                .finish()?;
+            self.offset += rows;
             let column = |name: &str| -> Result<Vec<String>> {
                 Ok(frame
                     .column(name)?
@@ -247,14 +290,47 @@ fn load(
                 column("alt")?,
                 column("value")?,
             );
-            for i in 0..frame.height() {
-                values
-                    .entry((c[i].clone(), p[i].clone(), r[i].clone(), a[i].clone()))
-                    .or_insert_with(|| v[i].clone());
+            let batch: Vec<(Key, String)> = c
+                .into_iter()
+                .zip(p)
+                .zip(r)
+                .zip(a)
+                .zip(v)
+                .map(|((((c, p), r), a), v)| ((c, p, r, a), v))
+                .collect();
+            self.batch = batch.into_iter();
+        }
+    }
+}
+
+/// Every stored value of one chromosome, the first file (by name) winning
+/// when two sessions stored one variant.
+fn load_chrom(folder: &Path, chrom: &str, exclude: Option<&str>) -> Result<HashMap<Key, String>> {
+    let mut values = HashMap::new();
+    for part in part_files(folder, chrom, exclude) {
+        let mut reader = RowReader::open(&part)?;
+        while let Some((key, value)) = reader.next_row()? {
+            values.entry(key).or_insert(value);
+        }
+    }
+    Ok(values)
+}
+
+/// The header a hub folder stores: that of the first part file that has one,
+/// taking the chromosomes in the given order.
+fn stored_header(
+    folder: &Path,
+    chroms: &[String],
+    exclude: Option<&str>,
+) -> Result<Option<String>> {
+    for chrom in chroms {
+        for part in part_files(folder, chrom, exclude) {
+            if let Some(header) = RowReader::open(&part)?.header {
+                return Ok(Some(header));
             }
         }
     }
-    Ok((values, header))
+    Ok(None)
 }
 
 fn frame(rows: &[(Key, String)]) -> Result<DataFrame> {
@@ -268,18 +344,79 @@ fn frame(rows: &[(Key, String)]) -> Result<DataFrame> {
     ])?)
 }
 
-fn write_parquet(path: &Path, rows: &[(Key, String)], header: Option<&str>) -> Result<()> {
-    let staged = path.with_extension("parquet.partial");
-    let mut data = frame(rows)?;
-    let metadata =
-        header.map(|h| KeyValueMetadata::from_static(vec![(HEADER_KEY.to_owned(), h.to_owned())]));
-    ParquetWriter::new(File::create(&staged)?)
-        .with_compression(ParquetCompression::Zstd(None))
-        .with_key_value_metadata(metadata)
-        .finish(&mut data)?;
-    File::open(&staged)?.sync_all()?;
-    fs::rename(&staged, path)?;
-    Ok(())
+/// A Parquet file of hub rows, written one batch (one row group) at a time
+/// under a staged name and renamed when it is complete.
+struct RowWriter {
+    path: PathBuf,
+    header: Option<String>,
+    writer: Option<BatchedWriter<File>>,
+    rows: Vec<(Key, String)>,
+    bytes: usize,
+    batch_rows: usize,
+    written: usize,
+}
+
+impl RowWriter {
+    fn new(path: &Path, header: Option<&str>) -> Self {
+        Self {
+            path: path.to_owned(),
+            header: header.map(str::to_owned),
+            writer: None,
+            rows: Vec::new(),
+            bytes: 0,
+            batch_rows: BATCH_ROWS,
+            written: 0,
+        }
+    }
+
+    fn staged(&self) -> PathBuf {
+        self.path.with_extension("parquet.partial")
+    }
+
+    fn push(&mut self, key: Key, value: String) -> Result<()> {
+        self.bytes += value.len();
+        self.rows.push((key, value));
+        if self.rows.len() >= self.batch_rows || self.bytes >= BATCH_BYTES {
+            self.write_batch()?;
+        }
+        Ok(())
+    }
+
+    fn write_batch(&mut self) -> Result<()> {
+        let data = frame(&self.rows)?;
+        if self.writer.is_none() {
+            let metadata = self.header.as_deref().map(|h| {
+                KeyValueMetadata::from_static(vec![(HEADER_KEY.to_owned(), h.to_owned())])
+            });
+            self.writer = Some(
+                ParquetWriter::new(File::create(self.staged())?)
+                    .with_compression(ParquetCompression::Zstd(None))
+                    .with_key_value_metadata(metadata)
+                    .batched(data.schema())?,
+            );
+        }
+        if let Some(writer) = self.writer.as_mut() {
+            writer.write_batch(&data)?;
+        }
+        self.written += self.rows.len();
+        self.rows.clear();
+        self.bytes = 0;
+        Ok(())
+    }
+
+    /// Writes the rows still held and the file's footer, and gives the
+    /// number of rows in the file. A file without rows keeps its header.
+    fn finish(mut self) -> Result<usize> {
+        if !self.rows.is_empty() || self.writer.is_none() {
+            self.write_batch()?;
+        }
+        if let Some(writer) = self.writer.take() {
+            writer.finish()?;
+        }
+        File::open(self.staged())?.sync_all()?;
+        fs::rename(self.staged(), &self.path)?;
+        Ok(self.written)
+    }
 }
 
 fn bgzip_and_index(plain: &Path, output: &Path) -> Result<()> {
@@ -334,8 +471,8 @@ fn lookup(
     if let Some(session) = exclude {
         check_name("session", session)?;
     }
-    let chroms: HashSet<String> = chroms_of(vcf_path)?.into_iter().collect();
-    let (stored, header) = load(&source_dir(hub, source, lineage), &chroms, exclude)?;
+    let folder = source_dir(hub, source, lineage);
+    let header = stored_header(&folder, &chroms_of(vcf_path)?, exclude)?;
     let vcf = read_vcf(vcf_path)?;
     let plain = PathBuf::from(format!("{}.plain.vcf", new.display()));
     let mut out = BufWriter::new(File::create(&plain)?);
@@ -343,12 +480,22 @@ fn lookup(
         writeln!(out, "{line}")?;
     }
     writeln!(out, "{}", vcf.chrom_line)?;
-    let (mut hits, mut misses) = (Vec::new(), 0usize);
+    let mut hits = RowWriter::new(known, header.as_deref());
+    // The stored values of the chromosome the records are in.
+    let mut chrom: Option<String> = None;
+    let mut stored = HashMap::new();
+    let mut misses = 0usize;
     for line in vcf.records {
         let line = line?;
         let key = key_of(&line)?;
+        if chrom.as_deref() != Some(key.0.as_str()) {
+            // The last chromosome's values go before the next ones come.
+            drop(std::mem::take(&mut stored));
+            stored = load_chrom(&folder, &key.0, exclude)?;
+            chrom = Some(key.0.clone());
+        }
         match stored.get(&key) {
-            Some(value) => hits.push((key, value.clone())),
+            Some(value) => hits.push(key, value.clone())?,
             None => {
                 writeln!(out, "{line}")?;
                 misses += 1;
@@ -358,11 +505,8 @@ fn lookup(
     out.flush()?;
     drop(out);
     bgzip_and_index(&plain, new)?;
-    write_parquet(known, &hits, header.as_deref())?;
-    eprintln!(
-        "annotation-hub lookup {source}: {} known, {misses} new",
-        hits.len()
-    );
+    let hits = hits.finish()?;
+    eprintln!("annotation-hub lookup {source}: {hits} known, {misses} new");
     Ok(())
 }
 
@@ -439,39 +583,9 @@ fn fill(
     annotated: &Path,
     output: &Path,
 ) -> Result<()> {
-    let mut reader = ParquetReader::new(File::open(known)?);
-    let stored_header = reader
-        .get_metadata()?
-        .key_value_metadata
-        .as_deref()
-        .unwrap_or_default()
-        .iter()
-        .find(|kv| kv.key == HEADER_KEY)
-        .and_then(|kv| kv.value.clone());
-    let frame = reader.finish()?;
-    let column = |name: &str| -> Result<Vec<String>> {
-        Ok(frame
-            .column(name)?
-            .as_materialized_series()
-            .str()?
-            .into_iter()
-            .map(|v| v.unwrap_or_default().to_owned())
-            .collect())
-    };
-    let (c, p, r, a, v) = (
-        column("chrom")?,
-        column("pos")?,
-        column("ref")?,
-        column("alt")?,
-        column("value")?,
-    );
-    let mut known_rows = (0..frame.height()).map(|i| {
-        (
-            (c[i].clone(), p[i].clone(), r[i].clone(), a[i].clone()),
-            v[i].clone(),
-        )
-    });
-    let mut next_known = known_rows.next();
+    let mut known_rows = RowReader::open(known)?;
+    let stored_header = known_rows.header.clone();
+    let mut next_known = known_rows.next_row()?;
     let vcf = read_vcf(vcf_path)?;
     let has_new = fs::metadata(annotated)
         .map(|m| m.len() > 0)
@@ -496,7 +610,7 @@ fn fill(
             let value = match &next_known {
                 Some((k, value)) if *k == key => {
                     let value = value.clone();
-                    next_known = known_rows.next();
+                    next_known = known_rows.next_row()?;
                     value
                 }
                 _ => fresh
@@ -542,7 +656,7 @@ fn fill(
             match &next_known {
                 Some((k, value)) if *k == key => {
                     writeln!(out, "{}", with_entries(&line, value))?;
-                    next_known = known_rows.next();
+                    next_known = known_rows.next_row()?;
                 }
                 _ => {
                     let Some(f) = fresh.as_mut() else {
@@ -588,6 +702,68 @@ fn fill(
     Ok(())
 }
 
+/// The part files one `add` writes: one per chromosome, written while the
+/// chromosome's records pass and closed when the next chromosome begins.
+struct PartStore<'a> {
+    folder: &'a Path,
+    source: &'a str,
+    session: &'a str,
+    header: &'a str,
+    current: Option<(String, RowWriter)>,
+    closed: HashSet<String>,
+    stored: usize,
+}
+
+impl<'a> PartStore<'a> {
+    fn new(folder: &'a Path, source: &'a str, session: &'a str, header: &'a str) -> Self {
+        Self {
+            folder,
+            source,
+            session,
+            header,
+            current: None,
+            closed: HashSet::new(),
+            stored: 0,
+        }
+    }
+
+    fn push(&mut self, key: Key, value: String) -> Result<()> {
+        if self.current.as_ref().map(|(chrom, _)| chrom) != Some(&key.0) {
+            self.close()?;
+            check_name("chromosome", &key.0)?;
+            if self.closed.contains(&key.0) {
+                return Err(invalid(format!(
+                    "{}: the records of {} are not together in the preprocessed VCF",
+                    self.source, key.0
+                )));
+            }
+            let dir = self.folder.join(&key.0);
+            fs::create_dir_all(&dir)?;
+            let part = dir.join(format!("part-{}.parquet", self.session));
+            self.current = Some((key.0.clone(), RowWriter::new(&part, Some(self.header))));
+        }
+        match self.current.as_mut() {
+            Some((_, writer)) => writer.push(key, value),
+            None => Ok(()),
+        }
+    }
+
+    fn close(&mut self) -> Result<()> {
+        if let Some((chrom, writer)) = self.current.take() {
+            self.stored += writer.finish()?;
+            self.closed.insert(chrom);
+        }
+        Ok(())
+    }
+
+    /// Closes the last chromosome's file and gives the number of variants
+    /// stored.
+    fn finish(mut self) -> Result<usize> {
+        self.close()?;
+        Ok(self.stored)
+    }
+}
+
 fn add(
     hub: &Path,
     source: &str,
@@ -600,29 +776,27 @@ fn add(
     check_name("session", session)?;
     let folder = source_dir(hub, source, lineage);
     let base_vcf = read_vcf(base)?;
-    let mut by_chrom: BTreeMap<String, Vec<(Key, String)>> = BTreeMap::new();
-    let header;
+    let stored;
     if source == "cadd" {
-        let (h, mut rows, _) = cadd_rows(annotated, uses_chr(base)?)?;
-        header = h;
+        let (header, mut rows, _) = cadd_rows(annotated, uses_chr(base)?)?;
+        let mut store = PartStore::new(&folder, source, session, &header);
         for line in base_vcf.records {
             let key = key_of(&line?)?;
             let value = rows.remove(&key).map(|r| r.join("\n")).unwrap_or_default();
-            by_chrom
-                .entry(key.0.clone())
-                .or_default()
-                .push((key, value));
+            store.push(key, value)?;
         }
+        stored = store.finish()?;
     } else {
         let mut fresh = read_vcf(annotated)?;
         let base_lines: HashSet<&String> = base_vcf.meta.iter().collect();
-        header = fresh
+        let header = fresh
             .meta
             .iter()
             .filter(|l| !base_lines.contains(l))
             .cloned()
             .collect::<Vec<_>>()
             .join("\n");
+        let mut store = PartStore::new(&folder, source, session, &header);
         for line in base_vcf.records {
             let line = line?;
             let key = key_of(&line)?;
@@ -635,23 +809,9 @@ fn add(
                 )));
             }
             let value = added_entries(info_of(&line)?, info_of(&annotated_line)?);
-            by_chrom
-                .entry(key.0.clone())
-                .or_default()
-                .push((key, value));
+            store.push(key, value)?;
         }
-    }
-    let mut stored = 0;
-    for (chrom, rows) in by_chrom {
-        check_name("chromosome", &chrom)?;
-        let dir = folder.join(&chrom);
-        fs::create_dir_all(&dir)?;
-        write_parquet(
-            &dir.join(format!("part-{session}.parquet")),
-            &rows,
-            Some(&header),
-        )?;
-        stored += rows.len();
+        stored = store.finish()?;
     }
     eprintln!(
         "annotation-hub add {source}: {stored} variants stored under {}",
@@ -741,14 +901,15 @@ fn refresh_plan(
         if state == "refresh" {
             for old in &earlier {
                 let folder = hub.join(source).join(old);
-                let chroms: HashSet<String> = subfolders(&folder).into_iter().collect();
-                let (stored, _) = load(&folder, &chroms, None)?;
-                for (chrom, pos, reference, alt) in stored.into_keys() {
-                    let position = pos.parse::<u64>().map_err(|_| {
-                        invalid(format!("{source}: stored position {pos:?} is not a number"))
-                    })?;
-                    if variants.insert((chrom_rank(&chrom), position, reference, alt)) {
-                        count += 1;
+                for stored_chrom in subfolders(&folder) {
+                    let stored = load_chrom(&folder, &stored_chrom, None)?;
+                    for (chrom, pos, reference, alt) in stored.into_keys() {
+                        let position = pos.parse::<u64>().map_err(|_| {
+                            invalid(format!("{source}: stored position {pos:?} is not a number"))
+                        })?;
+                        if variants.insert((chrom_rank(&chrom), position, reference, alt)) {
+                            count += 1;
+                        }
                     }
                 }
             }
@@ -839,5 +1000,147 @@ mod tests {
         for bad in ["", "../x", "a/b", ".hidden"] {
             assert!(check_name("session", bad).is_err(), "{bad}");
         }
+    }
+
+    fn scratch(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("priva_hub_{name}_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn key(chrom: &str, pos: &str) -> Key {
+        (
+            chrom.to_owned(),
+            pos.to_owned(),
+            "A".to_owned(),
+            "G".to_owned(),
+        )
+    }
+
+    #[test]
+    fn rows_are_written_and_read_back_one_batch_at_a_time() {
+        let dir = scratch("batches");
+        let file = dir.join("rows.parquet");
+        let rows: Vec<(Key, String)> = (1..=5)
+            .map(|i| (key("chr1", &i.to_string()), format!("AF={i}")))
+            .collect();
+        let mut writer = RowWriter::new(&file, Some("##one\n##two"));
+        writer.batch_rows = 2;
+        for (key, value) in rows.clone() {
+            writer.push(key, value).unwrap();
+        }
+        assert_eq!(writer.finish().unwrap(), 5);
+        assert!(!file.with_extension("parquet.partial").exists());
+        let mut reader = RowReader::open(&file).unwrap();
+        assert_eq!(reader.groups, vec![2, 2, 1]);
+        assert_eq!(reader.header.as_deref(), Some("##one\n##two"));
+        let mut read = Vec::new();
+        while let Some(row) = reader.next_row().unwrap() {
+            read.push(row);
+        }
+        assert_eq!(read, rows);
+
+        let empty = dir.join("empty.parquet");
+        assert_eq!(RowWriter::new(&empty, Some("##h")).finish().unwrap(), 0);
+        let mut reader = RowReader::open(&empty).unwrap();
+        assert_eq!(reader.header.as_deref(), Some("##h"));
+        assert!(reader.next_row().unwrap().is_none());
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    fn vcf(path: &Path, extra_meta: &[&str], records: &[(&str, &str, &str)]) {
+        let mut text = String::from("##fileformat=VCFv4.2\n");
+        for line in extra_meta {
+            text.push_str(line);
+            text.push('\n');
+        }
+        text.push_str("#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\n");
+        for (chrom, pos, info) in records {
+            text.push_str(&format!("{chrom}\t{pos}\t.\tA\tG\t.\tPASS\t{info}\n"));
+        }
+        fs::write(path, text).unwrap();
+    }
+
+    #[test]
+    fn add_writes_one_file_per_chromosome_as_the_records_pass() {
+        let dir = scratch("add");
+        let (hub, base, annotated) = (dir.join("hub"), dir.join("base.vcf"), dir.join("anno.vcf"));
+        let meta = "##INFO=<ID=AF,Number=1,Type=Float,Description=\"x\">";
+        vcf(
+            &base,
+            &[],
+            &[
+                ("chr1", "10", "DP=1"),
+                ("chr1", "20", "."),
+                ("chr2", "5", "DP=3"),
+            ],
+        );
+        vcf(
+            &annotated,
+            &[meta],
+            &[
+                ("chr1", "10", "DP=1;AF=0.1"),
+                ("chr1", "20", "."),
+                ("chr2", "5", "DP=3;AF=0.3"),
+            ],
+        );
+        add(&hub, "gnomad", "lineage", "s1", &base, &annotated).unwrap();
+        let folder = source_dir(&hub, "gnomad", "lineage");
+        assert_eq!(subfolders(&folder), vec!["chr1", "chr2"]);
+        let chr1 = load_chrom(&folder, "chr1", None).unwrap();
+        assert_eq!(chr1.len(), 2);
+        assert_eq!(chr1[&key("chr1", "10")], "AF=0.1");
+        assert_eq!(chr1[&key("chr1", "20")], "");
+        let chr2 = load_chrom(&folder, "chr2", None).unwrap();
+        assert_eq!(chr2[&key("chr2", "5")], "AF=0.3");
+        assert!(load_chrom(&folder, "chr1", Some("s1")).unwrap().is_empty());
+        let chroms = vec!["chr9".to_owned(), "chr2".to_owned()];
+        assert_eq!(
+            stored_header(&folder, &chroms, None).unwrap().as_deref(),
+            Some(meta)
+        );
+        assert_eq!(stored_header(&folder, &chroms, Some("s1")).unwrap(), None);
+
+        // A chromosome that returns after its file was closed is refused.
+        let split = [("chr1", "10", "."), ("chr2", "5", "."), ("chr1", "20", ".")];
+        vcf(&base, &[], &split);
+        vcf(&annotated, &[meta], &split);
+        let error = add(&hub, "gnomad", "lineage", "s2", &base, &annotated).unwrap_err();
+        assert!(error.to_string().contains("not together"), "{error}");
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn fill_takes_stored_rows_across_batches_in_the_vcf_order() {
+        let dir = scratch("fill");
+        let (input, known, table, output) = (
+            dir.join("in.vcf"),
+            dir.join("known.parquet"),
+            dir.join("new.tsv"),
+            dir.join("out.tsv"),
+        );
+        vcf(
+            &input,
+            &[],
+            &[("chr1", "10", "."), ("chr1", "20", "."), ("chr2", "5", ".")],
+        );
+        let header = "## CADD\n#Chrom\tPos\tRef\tAlt\tPHRED";
+        let mut writer = RowWriter::new(&known, Some(header));
+        writer.batch_rows = 1;
+        writer
+            .push(key("chr1", "10"), "1\t10\tA\tG\t1.5".to_owned())
+            .unwrap();
+        writer
+            .push(key("chr2", "5"), "2\t5\tA\tG\t2.5".to_owned())
+            .unwrap();
+        writer.finish().unwrap();
+        fs::write(&table, format!("{header}\n1\t20\tA\tG\t3.5\n")).unwrap();
+        fill("cadd", &input, &known, &table, &output).unwrap();
+        assert_eq!(
+            fs::read_to_string(&output).unwrap(),
+            format!("{header}\n1\t10\tA\tG\t1.5\n1\t20\tA\tG\t3.5\n2\t5\tA\tG\t2.5\n")
+        );
+        fs::remove_dir_all(&dir).unwrap();
     }
 }

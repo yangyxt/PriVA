@@ -695,7 +695,8 @@ pub(crate) fn run_step(args: &StepArguments, cutoffs: &Cutoffs) -> Result<Table>
     let mut table = if kept.len() == read.rows {
         read
     } else {
-        read.take_rows(&kept)
+        // Column by column, so the table is not held twice.
+        read.into_rows(&kept)
     };
     eprintln!(
         "INFO: {} rows after drop_duplicates() of {}",
@@ -757,7 +758,7 @@ pub(crate) fn run_step(args: &StepArguments, cutoffs: &Cutoffs) -> Result<Table>
     // `annotate_gene_mechanism_categories(anno_df, condition_cache=..., symbol_col="SYMBOL",
     // use_hgnc_package=False)`: the other hub files are the repository's.
     table = annotate_gene_mechanism_categories(
-        &table,
+        table,
         HubPaths {
             condition_cache: args.hpo_condition_mechanism_json.clone(),
             ..HubPaths::default()
@@ -980,8 +981,7 @@ pub(crate) fn run_step(args: &StepArguments, cutoffs: &Cutoffs) -> Result<Table>
         relevant_gene_list: args.relevant_gene_list.as_deref(),
         dispensable_gene_list: args.dispensable_gene_list.as_deref(),
     };
-    let ranked = sort_and_rank_variants(&table, ped.as_ref(), args.fam_name.as_deref(), &options)?;
-    drop(table);
+    let ranked = sort_and_rank_variants(table, ped.as_ref(), args.fam_name.as_deref(), &options)?;
     write_table(Path::new(&args.anno_table), &ranked)?;
     eprintln!("INFO: annotated table written to {}", args.anno_table);
     Ok(ranked)

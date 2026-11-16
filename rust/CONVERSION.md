@@ -318,6 +318,25 @@ VEP writes the EXON or INTRON value of a variant that spans several exons or int
 
 Validation folder `PriVA_upgrade/validation/splicing_exon_range_20261116` on HGSC. Job 1548849: the answers of the Python function for the 160 made-up rows of the unit test `rows_match_the_python_function` were written again with a new generator (`splicing_rows_expected_from_python.py`); with the script before the change they equal the repository's `rust/tests/splicing_rows_expected.tsv` byte for byte, and with the changed script 24 lines change, all of them rows with a range that stopped before (30 rows have a range; none stops now). Rust equals the new answers on all 160 rows, and 593 unit tests pass. Job 1548794, real family tables (counts only): on 16 rows with a range plus 2,000 other rows of the failed family the earlier program stops with the message above and the new one finishes; the family's whole table (7,063,096 rows) is analysed in 5.4 minutes with 38.9 GB; for a family that had finished, the new program's table is byte-identical to the earlier program's. The Python script was not run on the real tables, because the run's caches are in the Rust formats.
 
+## Family table steps: join one record at a time, ACMG holds its table once
+
+In the TruPath cohort run (Slurm jobs 1548033 to 1550268) the peak memory of every prioritization task grew in proportion to the family's table, with no growth over time (no leak): for 40 families, about 4.5 times the combine table's size for combine, 7 times for splicing and 5' UTR, 18 times for join and 16 times for ACMG, up to 118 GB for join and 90 GB for ACMG on a 6.6 GB table; join and ACMG ran out of memory at 48 GB and ended two runs. Recording each task's memory every second next to its progress lines (replays of finished tasks with the same staged inputs) showed where: a table read by `pandas_table` takes about five to seven times its text size (one 5 GB table: about 25 GB, plus the text while it is parsed), and the steps held several whole tables at once. The join read the combined, splicing and 5' UTR tables (three steps of about 25 GB each), wrote the shared columns of two copies to text to compare them, and copied the splicing table before adding the 5' UTR columns. The ACMG step peaked in `sort_and_rank_variants`, which copied the table, then copied the kept rows and then the sorted rows while the earlier copies were alive; `annotate_gene_mechanism_categories` copied the table too.
+
+Now `join` (`rust/src/nextflow_task/table_join.rs`) reads the three files one record at a time. The combined table's columns are copied as written, because the splicing step read and wrote them and the reader gives such text back unchanged; the columns the two steps added are read and written again, because the reader can give them another type than the step held (in one family every non-empty `splicing_affected_exons` value was a single number, which the reader takes as a number, so "4" is written "4.0", as the whole-table join and the original sequential steps wrote it). A header the reader would rename, a record with another number of fields or an empty copy goes to the earlier whole-table join (`join_in_memory`). The refusals keep their order. `sort_and_rank_variants` and `annotate_gene_mechanism_categories` take the table instead of copying it, and rows are kept and sorted column by column (`Table::into_rows`, `Table::into_filtered`), as is the step's `drop_duplicates()` result.
+
+Validation folder `PriVA_upgrade/validation/prioritize_memory_20261116` on HGSC: 597 unit tests pass (new: the record-by-record join equals the whole-table join on writer output with quoted tabs, quotes and line ends, missing-value spellings, integers with gaps and float spellings; added columns that change type when read again; renamed headers; the order of refusals). Replays of the run's finished tasks with the changed program (job numbers in the folder's README) gave byte-identical outputs in every case:
+
+| Family table | Step | Peak before | Peak after | Time before | Time after |
+| --- | --- | ---: | ---: | ---: | ---: |
+| 2.3 GB | join | 42.8 GB | 1.9 GB | - | 2.4 min |
+| 4.8 GB | join | 90.0 GB | 3.6 GB | 22.2 min | 4.1 min |
+| 6.6 GB | join | 118 GB | 4.6 GB | - | 4.4 min |
+| 1.8 GB | ACMG | 37.6 GB | 26.4 GB | - | 10.8 min |
+| 5.4 GB | ACMG | 79.3 GB | 54.4 GB | 22.5 min | 23.2 min |
+| 5.4 GB | ACMG | 79.8 GB | 54.6 GB | 23.8 min | 24.0 min |
+
+What still takes memory: the table itself (text cells are separate strings, about five to seven times the text), which sets the floor of combine, splicing, 5' UTR and ACMG; in ACMG also the `drop_duplicates()` frame over every column (about 12 GB more for a 5 GB table), PM2 (about 15 GB more) and the family criteria (about 15 GB more).
+
 ## Installation as one task per step
 
 `nextflow run main.nf --action install` runs the installer as Nextflow tasks (`workflows/install.nf`, generated from `conf/install_steps.json`; `tests/install_workflow_check.py` fails when the two differ). Nextflow 25.10's strict syntax refuses `-entry`, so the main workflow selects it by `--action`.

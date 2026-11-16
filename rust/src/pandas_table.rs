@@ -242,6 +242,27 @@ impl Table {
         }
     }
 
+    /// `take_rows` that gives up the table column by column, so at most one
+    /// column is held twice.
+    pub(crate) fn into_rows(self, rows: &[usize]) -> Table {
+        Table {
+            names: self.names,
+            columns: self
+                .columns
+                .into_iter()
+                .map(|column| column.take(rows))
+                .collect(),
+            rows: rows.len(),
+        }
+    }
+
+    /// `filter_rows` that gives up the table column by column.
+    pub(crate) fn into_filtered(self, mask: &[bool]) -> Table {
+        assert_eq!(mask.len(), self.rows, "a row mask must cover every row");
+        let rows: Vec<usize> = (0..self.rows).filter(|row| mask[*row]).collect();
+        self.into_rows(&rows)
+    }
+
     /// `df[mask]` for a mask without missing values.
     #[allow(dead_code)]
     pub(crate) fn filter_rows(&self, mask: &[bool]) -> Table {

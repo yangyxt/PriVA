@@ -309,12 +309,15 @@ fn single_column(table: &Table, name: &str) -> Result<Option<usize>> {
 /// hgnc_table=...)`: the table with `output_col` and the 15
 /// `VARIANT_MECHANISM_OUTPUT_COLUMNS` set (new columns at the end, existing
 /// ones replaced in place).
+///
+/// The table is taken and returned with the new columns, so it is held once.
 pub(crate) fn annotate_gene_mechanism_categories(
-    table: &Table,
+    owned: Table,
     paths: HubPaths,
     symbol_col: &str,
     output_col: &str,
 ) -> Result<Table> {
+    let table = &owned;
     if !table.has_column(symbol_col) {
         let message = format!("missing symbol column: {symbol_col}");
         return Err(python_error("KeyError", python_text_repr(&message)?));
@@ -523,7 +526,7 @@ pub(crate) fn annotate_gene_mechanism_categories(
         );
     }
 
-    let mut out = table.clone();
+    let mut out = owned;
     // `df[name] = []` on an empty table makes a float64 column.
     let column_of = |values: Column| {
         if rows == 0 {
@@ -566,7 +569,7 @@ pub(crate) fn run_harness(function: &str, call: &HarnessCall) -> Result<Table> {
             let output_col = text("output_col", "var_plausible_patho_mechs")?;
             // The paths only; the hub itself is built inside, after the column check.
             let paths = harness_paths(&call.options)?;
-            annotate_gene_mechanism_categories(&call.table, paths, &symbol_col, &output_col)
+            annotate_gene_mechanism_categories(call.table.clone(), paths, &symbol_col, &output_col)
         }
         _ => Err(not_converted("gene_mechanism_annotation", function)),
     }

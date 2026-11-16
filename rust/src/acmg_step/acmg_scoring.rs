@@ -126,7 +126,7 @@ pub(crate) fn run_harness(function: &str, call: &HarnessCall) -> Result<Table> {
                 relevant_gene_list: text("relevant_gene_list"),
                 dispensable_gene_list: text("dispensable_gene_list"),
             };
-            sort_and_rank_variants(&call.table, ped.as_ref(), text("fam_name"), &options)
+            sort_and_rank_variants(call.table.clone(), ped.as_ref(), text("fam_name"), &options)
         }
         _ => Err(not_converted("acmg_scoring", function)),
     }
@@ -788,14 +788,17 @@ impl KeyValues {
 /// `sort_and_rank_variants(df, ped_df, fam_name, ...)`: the protein-coding rows of the
 /// table with the ranking columns, sorted by the best `sort_index` of each variant, then
 /// `ACMG_quant_score`, `chrom`, `pos`, `ref`, `alt`, and ranked by `variant_id`.
+///
+/// The table is taken, and its rows are kept and sorted column by column, so it
+/// is held about once (the step's peak memory was here: three copies).
 pub(crate) fn sort_and_rank_variants(
-    table: &Table,
+    table: Table,
     ped: Option<&Table>,
     fam_name: Option<&str>,
     options: &RankingOptions<'_>,
 ) -> Result<Table> {
     // R1: drop the stale columns, copy the score, keep the protein-coding rows.
-    let mut df = table.clone();
+    let mut df = table;
     for stale in ["haplo_insuf_index", "zygosity_inheritance_mechanism_index"] {
         if let Some(index) = df.column_index(stale) {
             df.names.remove(index);
@@ -808,7 +811,7 @@ pub(crate) fn sort_and_rank_variants(
     let keep: Vec<bool> = (0..df.rows)
         .map(|row| biotype.cell(row) == Cell::Text("protein_coding"))
         .collect();
-    let mut df = df.filter_rows(&keep);
+    let mut df = df.into_filtered(&keep);
     let rows = df.rows;
 
     // R2: the proband from the pedigree.
@@ -1038,7 +1041,7 @@ pub(crate) fn sort_and_rank_variants(
         df.names.remove(index);
         df.columns.remove(index);
     }
-    let mut sorted = df.take_rows(&order);
+    let mut sorted = df.into_rows(&order);
     let identities: Vec<Option<String>> = match sorted.column("variant_id") {
         Ok(Column::Text(values)) => values.clone(),
         Ok(other) => {
@@ -1278,7 +1281,7 @@ mod tests {
             relevant_gene_list: None,
             dispensable_gene_list: None,
         };
-        let ranked = sort_and_rank_variants(&input, None, None, &options).unwrap();
+        let ranked = sort_and_rank_variants(input.clone(), None, None, &options).unwrap();
         assert_eq!(ranked.rows, 3);
         assert_eq!(
             ranked.column("ACMG_quant_score").unwrap(),
@@ -1293,7 +1296,7 @@ mod tests {
             &Column::Float(vec![1.0; 3])
         );
         assert!(!ranked.has_column("max_variant_score"));
-        let error = sort_and_rank_variants(&input, Some(&input), Some("F"), &options)
+        let error = sort_and_rank_variants(input.clone(), Some(&input), Some("F"), &options)
             .unwrap_err()
             .to_string();
         assert_eq!(error, "KeyError: '#FamilyID'");

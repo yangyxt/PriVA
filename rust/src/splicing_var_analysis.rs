@@ -162,12 +162,19 @@ impl<'a> Position<'a> {
     }
 }
 
-/// `int(text.split("/")[0])`.
-fn first_number(text: &str) -> Outcome<i64> {
-    text_int(text.split('/').next().unwrap_or(""))
+/// The first number of an EXON or INTRON number. VEP writes a range ("4-5")
+/// for a variant that spans several exons or introns: `number.split("-")[0]`.
+fn range_start(number: &str) -> &str {
+    number.split('-').next().unwrap_or("")
 }
 
-/// `map(int, text.split("/"))` unpacked into two numbers.
+/// `int(text.split("/")[0].split("-")[0])`.
+fn first_number(text: &str) -> Outcome<i64> {
+    text_int(range_start(text.split('/').next().unwrap_or("")))
+}
+
+/// `position_pair(text)`: the number, or the first number of a range, and the
+/// total of an EXON or INTRON value.
 fn number_pair(text: &str) -> Outcome<(i64, i64)> {
     let parts: Vec<&str> = text.split('/').collect();
     if parts.len() != 2 {
@@ -175,7 +182,7 @@ fn number_pair(text: &str) -> Outcome<(i64, i64)> {
             "ValueError: {text:?} does not split into two numbers"
         ));
     }
-    Ok((text_int(parts[0])?, text_int(parts[1])?))
+    Ok((text_int(range_start(parts[0]))?, text_int(parts[1])?))
 }
 
 /// The two numbers of INTRON or EXON for the event functions; `None` when absent.
@@ -2523,5 +2530,18 @@ mod tests {
             is_negative_number("-5") && is_negative_number("-.5") && is_negative_number("-5.5")
         );
         assert!(!is_negative_number("-") && !is_negative_number("-5.") && !is_negative_number("5"));
+    }
+
+    #[test]
+    fn a_range_of_exons_or_introns_gives_its_first_number() {
+        assert_eq!(first_number("4/12"), Ok(4));
+        assert_eq!(first_number("4-5/12"), Ok(4));
+        assert_eq!(number_pair("7/12"), Ok((7, 12)));
+        assert_eq!(number_pair("4-5/12"), Ok((4, 12)));
+        assert_eq!(pair_of(&Position::Text("11-12/11")), Ok(Some((11, 11))));
+        assert_eq!(pair_of(&Position::Absent), Ok(None));
+        assert!(first_number("x-5/12").is_err());
+        assert!(number_pair("4-5").is_err());
+        assert!(number_pair("4-5/x").is_err());
     }
 }

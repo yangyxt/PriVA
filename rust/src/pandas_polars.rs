@@ -79,13 +79,9 @@ pub(crate) fn to_series(column: &PandasColumn, name: &str) -> Result<Series> {
             Series::new(name.into(), values)
         }
         PandasColumn::NullableInt(values) => Series::new(name.into(), values),
-        PandasColumn::Text(values) => Series::new(
-            name.into(),
-            values
-                .iter()
-                .map(|value| value.as_deref())
-                .collect::<Vec<Option<&str>>>(),
-        ),
+        PandasColumn::Text(values) => {
+            Series::new(name.into(), values.iter().collect::<Vec<Option<&str>>>())
+        }
         PandasColumn::Object(_) => {
             return Err(invalid(format!(
                 "column {name} is a pandas object column that mixes kinds of values; \
@@ -153,14 +149,9 @@ pub(crate) fn from_series(series: &Series, dtype: PandasDtype) -> Result<PandasC
             let values = series.strict_cast(&DataType::Int64).map_err(polars_error)?;
             PandasColumn::NullableInt(values.i64().map_err(polars_error)?.into_iter().collect())
         }
-        PandasDtype::ObjectText => PandasColumn::Text(
-            series
-                .str()
-                .map_err(polars_error)?
-                .into_iter()
-                .map(|value| value.map(str::to_owned))
-                .collect(),
-        ),
+        PandasDtype::ObjectText => {
+            PandasColumn::Text(series.str().map_err(polars_error)?.into_iter().collect())
+        }
     })
 }
 

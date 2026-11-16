@@ -10,7 +10,9 @@ use super::acmg_variant_mechanism::variant_condition_masks;
 use super::types::{AcmgError, HarnessCall, StepOutput, not_converted};
 use crate::cli::{Result, invalid};
 use crate::json_text::Json;
-use crate::pandas_table::{Column, Header, ObjectValue, ReadOptions, Table, parse_table_with};
+use crate::pandas_table::{
+    Column, Header, ObjectValue, ReadOptions, Table, TextColumn, parse_table_with,
+};
 use crate::python_text::float_repr;
 use std::collections::HashMap;
 use std::process::Command;
@@ -207,7 +209,7 @@ pub(crate) fn extract_and_summarize_alt_disease_variants(
             .iter()
             .map(|value| {
                 value
-                    .clone()
+                    .map(str::to_owned)
                     .ok_or_else(|| refused("a missing variant id in the bcftools output"))
             })
             .collect::<Result<_>>()?,
@@ -239,7 +241,7 @@ pub(crate) fn extract_and_summarize_alt_disease_variants(
 /// `str(value)` of one cell for the `variant_id` text (`astype(str)`).
 fn cell_text(column: &Column, row: usize) -> Option<String> {
     match column {
-        Column::Text(values) => Some(values[row].clone().unwrap_or_else(|| "nan".to_owned())),
+        Column::Text(values) => Some(values.get(row).unwrap_or("nan").to_owned()),
         Column::Int(values) => Some(values[row].to_string()),
         Column::Float(values) => Some(if values[row].is_nan() {
             "nan".to_owned()
@@ -252,7 +254,7 @@ fn cell_text(column: &Column, row: usize) -> Option<String> {
 }
 
 /// An object column of text (`ref`, `alt`): its values, `None` where missing.
-fn text_values<'a>(table: &'a Table, name: &str) -> Result<&'a [Option<String>]> {
+fn text_values<'a>(table: &'a Table, name: &str) -> Result<&'a TextColumn> {
     match table.column(name)? {
         Column::Text(values) => Ok(values),
         other => Err(refused(format!(
@@ -275,7 +277,7 @@ fn observed_column(table: &Table, name: &str) -> Result<(Vec<bool>, Option<Colum
         Column::Text(values) => {
             let flags: Vec<bool> = values
                 .iter()
-                .map(|value| value.as_deref().is_some_and(truthy))
+                .map(|value| value.is_some_and(truthy))
                 .collect();
             Ok((flags.clone(), Some(Column::Bool(flags))))
         }
@@ -387,7 +389,7 @@ pub(crate) fn bp5_criteria(
                 .ok_or_else(|| refused(format!("chrom is a {} column", chrom.dtype_name())))?;
             let pos_text = cell_text(pos, row)
                 .ok_or_else(|| refused(format!("pos is a {} column", pos.dtype_name())))?;
-            ids.push(match (&reference[row], &alternative[row]) {
+            ids.push(match (reference.get(row), alternative.get(row)) {
                 (Some(r), Some(a)) => Some(format!("{chrom_text}:{pos_text}:{r}-{a}")),
                 _ => None,
             });
@@ -404,7 +406,7 @@ pub(crate) fn bp5_criteria(
         };
         hets = lookup(&het_by_id);
         homs = lookup(&hom_by_id);
-        written.push(("variant_id".to_owned(), Column::Text(ids)));
+        written.push(("variant_id".to_owned(), Column::Text(ids.into())));
         written.push(("alt_disease_hets".to_owned(), Column::Bool(hets.clone())));
         written.push(("alt_disease_homs".to_owned(), Column::Bool(homs.clone())));
     }
@@ -510,7 +512,7 @@ mod tests {
 
     #[test]
     fn text_counts_refuse_like_pandas() {
-        let error = positive(&Column::Text(vec![Some("1,0".into())]))
+        let error = positive(&Column::Text(vec![Some("1,0".into())].into()))
             .unwrap_err()
             .to_string();
         assert!(error.contains("TypeError"), "{error}");

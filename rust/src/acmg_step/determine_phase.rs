@@ -352,14 +352,14 @@ fn gender_from_chry(table: &Table, patient: &str) -> Result<&'static str> {
             genotypes.dtype_name()
         )));
     };
-    if values.iter().any(Option::is_none) {
+    if values.any_value_missing() {
         return Err(value_error(
             "Cannot mask with non-boolean array containing NA / NaN values".to_owned(),
         ));
     }
     let chrom = table.column("chrom")?;
     let on_y = values.iter().enumerate().any(|(row, value)| {
-        value.as_deref().is_some_and(|gt| gt.contains('1')) && chrom.cell(row) == Cell::Text("chrY")
+        value.is_some_and(|gt| gt.contains('1')) && chrom.cell(row) == Cell::Text("chrY")
     });
     Ok(if on_y { "male" } else { "female" })
 }
@@ -420,7 +420,7 @@ fn create_variants(
     let mut groups: Vec<(&str, Vec<usize>)> = Vec::new();
     let mut position: HashMap<&str, usize> = HashMap::new();
     for row in gene_rows {
-        let Some(id) = id_values[*row].as_deref() else {
+        let Some(id) = id_values.get(*row) else {
             continue;
         };
         match position.get(id) {
@@ -716,7 +716,7 @@ pub(crate) fn run_harness(function: &str, call: &HarnessCall) -> Result<Table> {
             }
             Ok(Table {
                 names: vec!["phase".to_owned()],
-                columns: vec![Column::Text(out)],
+                columns: vec![Column::Text(out.into())],
                 rows: table.rows,
             })
         }
@@ -895,7 +895,7 @@ mod tests {
         assert_eq!(result.columns[1].0, "kid_phase_patho");
         assert_eq!(
             result.columns[1].1,
-            Column::Text(vec![Some("trans".into()), None, Some("trans".into()), None])
+            Column::Text(vec![Some("trans".into()), None, Some("trans".into()), None].into())
         );
         assert_eq!(result.in_trans_pathogenic, vec![1, 0, 1, 0]);
         assert_eq!(result.in_cis_pathogenic, vec![0, 0, 0, 0]);

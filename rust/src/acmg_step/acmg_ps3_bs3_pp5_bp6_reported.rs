@@ -129,7 +129,7 @@ fn after_apply(name: &str, column: &Column) -> Result<Option<Column>> {
         Column::Int(_) | Column::Float(_) | Column::Bool(_) => Ok(None),
         // An object column of only NaN (the table's missing text values are NaN, not None)
         // becomes float64.
-        Column::Text(values) if !values.is_empty() && values.iter().all(Option::is_none) => {
+        Column::Text(values) if !values.is_empty() && values.every_value_missing() => {
             Ok(Some(Column::Float(vec![f64::NAN; values.len()])))
         }
         Column::Text(_) => Ok(None),
@@ -194,7 +194,7 @@ fn mavedb_score_interpretation(
     let interpretation = if interpretation.iter().all(Option::is_none) {
         Column::Float(vec![f64::NAN; table.rows])
     } else {
-        Column::Text(interpretation)
+        Column::Text(interpretation.into())
     };
     let mut new_columns = vec![
         ("MaveDB_PS3".to_owned(), Column::Bool(ps3)),

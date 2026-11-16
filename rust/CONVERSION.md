@@ -331,11 +331,27 @@ Validation folder `PriVA_upgrade/validation/prioritize_memory_20261116` on HGSC:
 | 2.3 GB | join | 42.8 GB | 1.9 GB | - | 2.4 min |
 | 4.8 GB | join | 90.0 GB | 3.6 GB | 22.2 min | 4.1 min |
 | 6.6 GB | join | 118 GB | 4.6 GB | - | 4.4 min |
-| 1.8 GB | ACMG | 37.6 GB | 26.4 GB | - | 10.8 min |
+| 2.6 GB | ACMG | 37.6 GB | 26.4 GB | - | 10.8 min |
 | 5.4 GB | ACMG | 79.3 GB | 54.4 GB | 22.5 min | 23.2 min |
 | 5.4 GB | ACMG | 79.8 GB | 54.6 GB | 23.8 min | 24.0 min |
 
 What still takes memory: the table itself (text cells are separate strings, about five to seven times the text), which sets the floor of combine, splicing, 5' UTR and ACMG; in ACMG also the `drop_duplicates()` frame over every column (about 12 GB more for a 5 GB table), PM2 (about 15 GB more) and the family criteria (about 15 GB more).
+
+## Text columns held in one block per column
+
+The floor the previous section left was the table itself: `pandas_table` held every text value as a `String` of its own (24 bytes, an allocation and the allocator's rounding, about 56 bytes for a value of a few bytes), so a table in memory took five to seven times its file. A text column (`Column::Text(TextColumn)`) now holds its values one after another in a single block of text, with the place where each value ends (4 bytes each; 8 bytes once the column's text passes 4 GiB) and one bit per value that marks a missing one. The reader appends each field to its column's block as it reads; a column that turns out to be text keeps that block (pandas' missing-value spellings are only marked missing), and a number column is parsed from it. Code reads values with `get(row)` and `iter()` (both give `Option<&str>`) and builds columns with `push`, `collect()` or `From<Vec<Option<String>>>`. The SpliceVault builder, which sets single cells, changes copies of those columns as separate values and puts them back after its loop. The combine step has its own reader and is not changed.
+
+Validation folder `PriVA_upgrade/validation/prioritize_memory_20261116` on HGSC: 598 unit tests pass (new: a text column's values, missing values past 64 rows, taking rows, comparing and printing, and the change to 8-byte ends). Replays of the run's finished tasks with the changed program (jobs 1554919 to 1554923) gave byte-identical outputs in every case:
+
+| Family table | Step | Peak before | Peak now | Time before | Time now |
+| --- | --- | ---: | ---: | ---: | ---: |
+| 4.8 GB | splicing | 33.7 GB | 11.6 GB | 6.6 min | 3.2 min |
+| 4.8 GB | 5' UTR | 33.7 GB | 12.0 GB | 6.1 min | 2.9 min |
+| 2.6 GB | ACMG | 26.4 GB | 13.2 GB | 10.8 min | 4.8 min |
+| 5.4 GB | ACMG | 54.4 GB | 28.1 GB | 23.2 min | 8.6 min |
+| 7.4 GB | ACMG | 105.3 GB | 36.0 GB | 31.0 min | 12.3 min |
+
+"Before" is commit 321f8b5 for the first two ACMG rows and revision a995c0a (the cohort run's program, which 321f8b5 did not change for splicing and 5' UTR) for the others; the 7.4 GB row is the run's own task, which was first stopped at 90 GB. A 5.4 GB table now takes about 7.4 GB in memory. The highest point left in ACMG is `drop_duplicates()`, which builds a polars frame of every column: all three ACMG peaks are there; after it the step reaches at most 10.9 GB, 21.9 GB and 29.3 GB for the 2.6, 5.4 and 7.4 GB tables (memory sampled every second).
 
 ## Installation as one task per step
 

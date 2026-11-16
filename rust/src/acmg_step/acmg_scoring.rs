@@ -29,7 +29,7 @@ use crate::acmg_variant_mechanism::variant_mechanism_masks::Cell as MaskCell;
 use crate::cache_convert::clingen_map::ClingenCache;
 use crate::cli::{Result, invalid};
 use crate::json_text::Json;
-use crate::pandas_table::{Cell, Column, ObjectValue, Table};
+use crate::pandas_table::{Cell, Column, ObjectValue, Table, TextColumn};
 use crate::pandas_table::{Header, ReadOptions, read_table_with};
 use crate::python_text::python_strip;
 use std::cmp::Ordering;
@@ -258,7 +258,7 @@ pub(crate) fn summarize_acmg_criteria(
     let summary_column = if summary_all_missing {
         Column::Float(vec![f64::NAN; rows])
     } else {
-        Column::Text(summaries.clone())
+        Column::Text(summaries.iter().map(Option::as_deref).collect())
     };
     table.set_column("ACMG_criteria", summary_column);
 
@@ -381,7 +381,7 @@ pub(crate) fn posterior_columns(matrix: &Table) -> Result<(Column, Column)> {
     } else {
         Column::Float(scores.iter().map(Probability::as_f64).collect())
     };
-    Ok((scores, Column::Text(classes)))
+    Ok((scores, Column::Text(classes.into())))
 }
 
 /// `pd.to_numeric(df.get(name), errors="coerce")` for the column types the control
@@ -613,11 +613,7 @@ fn pedigree_context(
     let het = match table.column(&proband)? {
         Column::Text(values) => values
             .iter()
-            .map(|value| {
-                value
-                    .as_deref()
-                    .is_some_and(|text| text.matches('1').count() == 1)
-            })
+            .map(|value| value.is_some_and(|text| text.matches('1').count() == 1))
             .collect(),
         Column::Object(_) => {
             return Err(refuse(format!(
@@ -727,7 +723,7 @@ fn pext_values(table: &Table, name: &str) -> Result<Vec<f64>> {
 enum KeyValues {
     /// NaN is a missing value.
     Numbers(Vec<f64>),
-    Texts(Vec<Option<String>>),
+    Texts(TextColumn),
 }
 
 impl KeyValues {
@@ -759,7 +755,7 @@ impl KeyValues {
     fn missing(&self, row: usize) -> bool {
         match self {
             KeyValues::Numbers(values) => values[row].is_nan(),
-            KeyValues::Texts(values) => values[row].is_none(),
+            KeyValues::Texts(values) => values.get(row).is_none(),
         }
     }
 
@@ -769,7 +765,7 @@ impl KeyValues {
             KeyValues::Numbers(values) => values[left]
                 .partial_cmp(&values[right])
                 .unwrap_or(Ordering::Equal),
-            KeyValues::Texts(values) => values[left].cmp(&values[right]),
+            KeyValues::Texts(values) => values.get(left).cmp(&values.get(right)),
         }
     }
 
@@ -780,7 +776,7 @@ impl KeyValues {
                 let value = if values[row] == 0.0 { 0.0 } else { values[row] };
                 format!("n{:016x}", value.to_bits())
             }
-            KeyValues::Texts(values) => format!("s{}", values[row].as_deref().unwrap_or("")),
+            KeyValues::Texts(values) => format!("s{}", values.get(row).unwrap_or("")),
         }
     }
 }
@@ -1042,7 +1038,7 @@ pub(crate) fn sort_and_rank_variants(
         df.columns.remove(index);
     }
     let mut sorted = df.into_rows(&order);
-    let identities: Vec<Option<String>> = match sorted.column("variant_id") {
+    let identities: TextColumn = match sorted.column("variant_id") {
         Ok(Column::Text(values)) => values.clone(),
         Ok(other) => {
             return Err(refuse(format!(
@@ -1070,14 +1066,14 @@ pub(crate) fn sort_and_rank_variants(
                 .collect()
         }
     };
-    let mut codes: HashMap<String, i64> = HashMap::new();
+    let mut codes: HashMap<&str, i64> = HashMap::new();
     let ranks: Vec<i64> = identities
         .iter()
         .map(|identity| match identity {
             None => 0,
             Some(identity) => {
                 let next = codes.len() as i64 + 1;
-                *codes.entry(identity.clone()).or_insert(next)
+                *codes.entry(identity).or_insert(next)
             }
         })
         .collect();
@@ -1106,7 +1102,7 @@ mod tests {
     fn summary_without_clingen_keeps_int_columns() {
         let mut input = table(vec![(
             "variant_id",
-            Column::Text(vec![Some("1:1:A-T".into()), Some("1:2:C-G".into())]),
+            Column::Text(vec![Some("1:1:A-T".into()), Some("1:2:C-G".into())].into()),
         )]);
         let criteria = vec![
             ("PVS1", Column::Int(vec![4, 0])),
@@ -1118,7 +1114,7 @@ mod tests {
         assert_eq!(matrix.column("PS4").unwrap(), &Column::Int(vec![0, 0]));
         assert_eq!(
             input.column("ACMG_criteria").unwrap(),
-            &Column::Text(vec![Some("PVS1;PM2_Supporting".into()), None])
+            &Column::Text(vec![Some("PVS1;PM2_Supporting".into()), None].into())
         );
         let bad = vec![("PS1", Column::Int(vec![6, 0]))];
         let error = summarize_acmg_criteria(&mut input, &bad, None, false)
@@ -1151,17 +1147,13 @@ mod tests {
         .unwrap();
         let mut input = table(vec![(
             "variant_id",
-            Column::Text(vec![
-                Some("a".into()),
-                Some("b".into()),
-                Some("missing".into()),
-            ]),
+            Column::Text(vec![Some("a".into()), Some("b".into()), Some("missing".into())].into()),
         )]);
         let criteria = vec![("PVS1", Column::Int(vec![4, 4, 0]))];
         let matrix = summarize_acmg_criteria(&mut input, &criteria, path.to_str(), true).unwrap();
         assert_eq!(
             input.column("ACMG_criteria").unwrap(),
-            &Column::Text(vec![Some("PS3".into()), Some("PVS1".into()), None])
+            &Column::Text(vec![Some("PS3".into()), Some("PVS1".into()), None].into())
         );
         assert_eq!(matrix.column("PVS1").unwrap(), &Column::Int(vec![0, 4, 0]));
         assert_eq!(matrix.column("PS3").unwrap(), &Column::Int(vec![3, 0, 0]));
@@ -1179,7 +1171,10 @@ mod tests {
             &rkyv::to_bytes::<rkyv::rancor::Error>(&root).unwrap(),
         )
         .unwrap();
-        let mut input = table(vec![("variant_id", Column::Text(vec![Some("b".into())]))]);
+        let mut input = table(vec![(
+            "variant_id",
+            Column::Text(vec![Some("b".into())].into()),
+        )]);
         let matrix = summarize_acmg_criteria(
             &mut input,
             &[("PVS1", Column::Int(vec![4]))],
@@ -1199,7 +1194,7 @@ mod tests {
             ("BA1", Column::Int(vec![0, 5])),
             (
                 "variant_id",
-                Column::Text(vec![Some("a".into()), Some("b".into())]),
+                Column::Text(vec![Some("a".into()), Some("b".into())].into()),
             ),
         ]);
         let (scores, classes) = posterior_columns(&matrix).unwrap();
@@ -1209,10 +1204,7 @@ mod tests {
         assert_eq!(scores[1], 0.0);
         assert_eq!(
             classes,
-            Column::Text(vec![
-                Some("Likely Pathogenic".into()),
-                Some("Benign".into())
-            ])
+            Column::Text(vec![Some("Likely Pathogenic".into()), Some("Benign".into())].into())
         );
     }
 

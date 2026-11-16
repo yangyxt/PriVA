@@ -575,14 +575,14 @@ pub(crate) fn run_harness(function: &str, call: &HarnessCall) -> Result<Table> {
     let rows = urns.len();
     Ok(harness_options::frame(
         vec![
-            ("urn".into(), Column::Text(urns)),
-            ("call".into(), Column::Text(calls)),
+            ("urn".into(), Column::Text(urns.into())),
+            ("call".into(), Column::Text(calls.into())),
             ("standardized_score".into(), Column::Float(scores)),
             ("standardized_is_none".into(), Column::Bool(none)),
-            ("reason".into(), Column::Text(reasons)),
+            ("reason".into(), Column::Text(reasons.into())),
             ("MaveDB_PS3".into(), Column::Bool(ps3)),
             ("MaveDB_BS3".into(), Column::Bool(bs3)),
-            ("error".into(), Column::Text(errors)),
+            ("error".into(), Column::Text(errors.into())),
         ],
         rows,
     ))

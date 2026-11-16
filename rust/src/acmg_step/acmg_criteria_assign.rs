@@ -387,12 +387,12 @@ fn text_column<'a>(
             column.dtype_name()
         )));
     };
-    if !missing_allowed && values.iter().any(Option::is_none) {
+    if !missing_allowed && values.any_value_missing() {
         return Err(invalid(format!(
             "refused (not reproduced): {name} has a missing value (Python keys a dict by NaN)"
         )));
     }
-    Ok(values.iter().map(Option::as_deref).collect())
+    Ok(values.iter().collect())
 }
 
 /// `dict(zip(am_score_df['transcript'], am_score_df['mean_am_pathogenicity']))` (the last
@@ -491,7 +491,7 @@ pub(crate) fn variant_id(table: &Table) -> Result<Column> {
     let parts = |name: &str| -> Result<Vec<Option<&str>>> {
         let column = table.column(name)?;
         match column {
-            Column::Text(values) => Ok(values.iter().map(Option::as_deref).collect()),
+            Column::Text(values) => Ok(values.iter().collect()),
             Column::Float(values)
                 if name != "chrom" && values.iter().all(|value| value.is_nan()) =>
             {
@@ -1201,7 +1201,7 @@ pub(crate) fn run_harness(function: &str, call: &HarnessCall) -> Result<Table> {
             let fam_name = options.get("fam_name").and_then(Json::as_str);
             Ok(single(
                 "proband",
-                Column::Text(vec![Some(proband(&ped, fam_name)?)]),
+                Column::Text(vec![Some(proband(&ped, fam_name)?)].into()),
             ))
         }
         "gene_avg_am_score" => {

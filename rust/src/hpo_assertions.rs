@@ -35,9 +35,10 @@ fn stripped(mut input: Table) -> Table {
         let Column::Text(values) = column else {
             unreachable!("dtype=str input")
         };
-        for value in values {
-            *value = Some(python_strip(value.as_deref().unwrap_or("nan")).to_owned());
-        }
+        *values = values
+            .iter()
+            .map(|value| Some(python_strip(value.unwrap_or("nan"))))
+            .collect();
     }
     input
 }

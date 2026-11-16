@@ -892,7 +892,7 @@ pub(crate) fn ps1_pm5_criteria(
     Ok(StepOutput {
         criteria: vec![("PS1", Column::Int(ps1)), ("PM5", Column::Int(pm5))],
         columns: Vec::new(),
-        passed_on: vec![("pm5_rule".to_owned(), Column::Text(pm5_rules))],
+        passed_on: vec![("pm5_rule".to_owned(), Column::Text(pm5_rules.into()))],
     })
 }
 
@@ -1046,7 +1046,7 @@ pub(crate) fn run_harness(function: &str, call: &HarnessCall) -> Result<Table> {
                 })
                 .collect::<Result<Vec<_>>>()?;
             Ok(harness_options::frame(
-                vec![("result".to_owned(), Column::Text(results))],
+                vec![("result".to_owned(), Column::Text(results.into()))],
                 table.rows,
             ))
         }
@@ -1429,7 +1429,7 @@ mod tests {
                 .iter()
                 .all(Option::is_none)
         );
-        let text = |value: &str| Column::Text(vec![Some(value.to_owned())]);
+        let text = |value: &str| Column::Text(vec![Some(value.to_owned())].into());
         let mut columns = vec![
             ("Feature", text("ENST_SPLICE")),
             ("Protein_position", text("")),

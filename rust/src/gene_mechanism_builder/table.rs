@@ -290,7 +290,10 @@ fn parse(text: &str, delimiter: u8, skip_bad: bool, final_input: bool) -> Result
     }
     Ok(Some(Table {
         names: names.ok_or_else(|| error("EmptyDataError", "No columns to parse from file"))?,
-        columns: columns.into_iter().map(Column::Text).collect(),
+        columns: columns
+            .into_iter()
+            .map(|values| Column::Text(values.into()))
+            .collect(),
         rows: count,
     }))
 }

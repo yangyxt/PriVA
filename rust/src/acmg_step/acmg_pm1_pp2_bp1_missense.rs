@@ -450,7 +450,7 @@ pub(crate) fn run_harness(function: &str, call: &HarnessCall) -> Result<Table> {
             }
             Ok(harness_options::frame(
                 vec![
-                    ("ensembl_id".into(), Column::Text(ids)),
+                    ("ensembl_id".into(), Column::Text(ids.into())),
                     ("pp2".into(), Column::Bool(pp2)),
                     ("bp1".into(), Column::Bool(bp1)),
                 ],

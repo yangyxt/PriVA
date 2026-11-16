@@ -84,11 +84,7 @@ fn chrom_texts(table: &Table) -> Result<Vec<&str>> {
     };
     values
         .iter()
-        .map(|value| {
-            value
-                .as_deref()
-                .ok_or_else(|| refused("a missing chrom value (str.contains gives NaN)"))
-        })
+        .map(|value| value.ok_or_else(|| refused("a missing chrom value (str.contains gives NaN)")))
         .collect()
 }
 

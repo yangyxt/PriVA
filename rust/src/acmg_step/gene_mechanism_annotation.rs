@@ -535,7 +535,7 @@ pub(crate) fn annotate_gene_mechanism_categories(
             values
         }
     };
-    out.set_column(output_col, column_of(Column::Text(plausible)));
+    out.set_column(output_col, column_of(Column::Text(plausible.into())));
     let [lof, gof, dn] = scores;
     let mut scores = [Some(lof), Some(gof), Some(dn)];
     let mut exclusive = Some(exclusive);
@@ -545,7 +545,7 @@ pub(crate) fn annotate_gene_mechanism_categories(
             "variant_gof_score" => Column::Int(scores[1].take().unwrap_or_default()),
             "variant_dn_score" => Column::Int(scores[2].take().unwrap_or_default()),
             "variant_mechanism_exclusive" => Column::Bool(exclusive.take().unwrap_or_default()),
-            _ => Column::Text(texts.remove(name).unwrap_or_default()),
+            _ => Column::Text(texts.remove(name).unwrap_or_default().into()),
         };
         out.set_column(name, column_of(values));
     }

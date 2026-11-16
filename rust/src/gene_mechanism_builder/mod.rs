@@ -437,7 +437,10 @@ fn attach(mut output: Table, registry: Option<&Path>) -> Result<Table> {
     ];
     for name in FIELDS {
         if !output.has_column(name) {
-            output.set_column(name, Column::Text(vec![Some(String::new()); output.rows]));
+            output.set_column(
+                name,
+                Column::Text(vec![Some(String::new()); output.rows].into()),
+            );
         }
     }
     let Some(path) = registry else {
@@ -484,7 +487,7 @@ fn attach(mut output: Table, registry: Option<&Path>) -> Result<Table> {
             }
             values.push(Some(if old.is_empty() { mapped } else { old }.to_owned()));
         }
-        output.set_column(name, Column::Text(values));
+        output.set_column(name, Column::Text(values.into()));
     }
     if conflicts > 0 {
         eprintln!(

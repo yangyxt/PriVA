@@ -909,7 +909,7 @@ pub(crate) fn run_harness(function: &str, call: &HarnessCall) -> Result<Table> {
         return Ok(Table {
             names: vec!["row".to_owned(), "assertion".to_owned()],
             rows: rows.len(),
-            columns: vec![Column::Int(rows), Column::Text(shown)],
+            columns: vec![Column::Int(rows), Column::Text(shown.into())],
         });
     }
     let constraint = if function == "gene_inheritance_from_constraint" {

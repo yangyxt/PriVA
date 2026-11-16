@@ -375,8 +375,8 @@ impl RowValue<'_> {
             Column::BoolOrMissing(values) => {
                 values[row].map_or(RowValue::Float(f64::NAN), RowValue::Bool)
             }
-            Column::Text(values) => values[row]
-                .as_deref()
+            Column::Text(values) => values
+                .get(row)
                 .map_or(RowValue::Float(f64::NAN), RowValue::Text),
             Column::Object(values) => match &values[row] {
                 ObjectValue::Nan => RowValue::Float(f64::NAN),
@@ -1369,7 +1369,7 @@ pub(crate) fn run_harness(function: &str, call: &HarnessCall) -> Result<Table> {
             }
             let count = genes.len();
             Ok(harness_options::frame(
-                vec![("gene".to_owned(), Column::Text(genes))],
+                vec![("gene".to_owned(), Column::Text(genes.into()))],
                 count,
             ))
         }

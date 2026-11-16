@@ -64,7 +64,7 @@ fn cell_text(column: &Column, row: usize) -> String {
             Some(flag) => format!("b{}", u8::from(flag)),
             None => "n".to_owned(),
         },
-        Column::Text(values) => match &values[row] {
+        Column::Text(values) => match values.get(row) {
             Some(text) => format!("s{}", hex(text.as_bytes())),
             None => "n".to_owned(),
         },
@@ -351,7 +351,7 @@ mod tests {
                 Column::Float(vec![f64::NAN, -0.0]),
                 Column::Bool(vec![true, false]),
                 Column::BoolOrMissing(vec![None, Some(false)]),
-                Column::Text(vec![Some("é\t\"x\"".into()), None]),
+                Column::Text(vec![Some("é\t\"x\"".into()), None].into()),
                 Column::Object(vec![ObjectValue::None, ObjectValue::Float(1e-5)]),
                 Column::NullableInt(vec![None, Some(7)]),
                 Column::NullableBool(vec![Some(true), None]),
@@ -375,7 +375,10 @@ mod tests {
             table.columns[0],
             Column::BoolOrMissing(vec![Some(true), None])
         );
-        assert_eq!(table.columns[1], Column::Text(vec![Some("x".into()), None]));
+        assert_eq!(
+            table.columns[1],
+            Column::Text(vec![Some("x".into()), None].into())
+        );
         assert_eq!(
             table.columns[2],
             Column::Object(vec![ObjectValue::Int(1), ObjectValue::Text("x".into())])

@@ -19,7 +19,7 @@ use crate::cache_convert::clinvar_exon_af::ClinvarExonAfCache;
 use crate::cache_convert::clinvar_gene_af::{ClinvarGeneAfCache, ValueRef};
 use crate::cli::{Result, invalid};
 use crate::json_text::Json;
-use crate::pandas_table::{Column, ObjectValue, Table};
+use crate::pandas_table::{Column, ObjectValue, Table, TextColumn};
 #[cfg(test)]
 use crate::pickle_reader::{self, Value};
 use crate::python_text::float_repr;
@@ -162,7 +162,7 @@ fn text_or_empty(table: &Table, name: &str) -> Result<Vec<String>> {
     Ok(match &table.columns[index] {
         Column::Text(values) => values
             .iter()
-            .map(|value| value.clone().unwrap_or_default())
+            .map(|value| value.unwrap_or_default().to_owned())
             .collect(),
         Column::Float(values) => values.iter().map(|value| float_text(*value)).collect(),
         Column::Int(values) => values.iter().map(|value| value.to_string()).collect(),
@@ -609,12 +609,12 @@ fn mapped_column(values: Vec<Mapped>) -> Column {
 
 /// The text of the `Gene` cell as a dictionary key (`None` for a missing value, which matches no
 /// key of the pickles).
-fn gene_keys(table: &Table, name: &str) -> Result<Vec<Option<String>>> {
+fn gene_keys(table: &Table, name: &str) -> Result<TextColumn> {
     let index = table.column_index(name).ok_or_else(|| key_error(name))?;
     Ok(match &table.columns[index] {
         Column::Text(values) => values.clone(),
         Column::Float(values) if values.iter().all(|value| value.is_nan()) => {
-            vec![None; table.rows]
+            TextColumn::of_missing_values(table.rows)
         }
         Column::Object(values) => values
             .iter()
@@ -804,14 +804,12 @@ pub(crate) fn pm2_criteria(
     let gene_af_column = mapped_column(
         genes
             .iter()
-            .map(
-                |gene| match gene.as_ref().and_then(|g| gene_af_by_gene.get(g)) {
-                    Some(Mapped::Int(number)) => Mapped::Int(*number),
-                    Some(Mapped::Float(number)) => Mapped::Float(*number),
-                    Some(Mapped::Bool(value)) => Mapped::Bool(*value),
-                    None => Mapped::Int(0),
-                },
-            )
+            .map(|gene| match gene.and_then(|g| gene_af_by_gene.get(g)) {
+                Some(Mapped::Int(number)) => Mapped::Int(*number),
+                Some(Mapped::Float(number)) => Mapped::Float(*number),
+                Some(Mapped::Bool(value)) => Mapped::Bool(*value),
+                None => Mapped::Int(0),
+            })
             .collect(),
     );
     let mut work = table.clone();
@@ -820,12 +818,10 @@ pub(crate) fn pm2_criteria(
     let hom_column = mapped_column(
         genes
             .iter()
-            .map(
-                |gene| match gene.as_ref().and_then(|g| hom_by_gene.get(g)) {
-                    Some(value) => Mapped::Float(*value),
-                    None => Mapped::Int(0),
-                },
-            )
+            .map(|gene| match gene.and_then(|g| hom_by_gene.get(g)) {
+                Some(value) => Mapped::Float(*value),
+                None => Mapped::Int(0),
+            })
             .collect(),
     );
     work.set_column("clinvar_patho_gene_max_hom_freq", hom_column.clone());
@@ -836,7 +832,7 @@ pub(crate) fn pm2_criteria(
     let mut median = Vec::with_capacity(table.rows);
     let mut max = Vec::with_capacity(table.rows);
     for row in 0..table.rows {
-        let found = match (&features[row], &exon_keys[row]) {
+        let found = match (features.get(row), exon_keys.get(row)) {
             (Some(feature), Some(exon)) => exons
                 .by_transcript
                 .get(feature)
@@ -940,12 +936,12 @@ pub(crate) fn pm2_criteria(
 
 /// The cells of `Feature` or `EXON` as `dict.get` keys inside `df.apply(axis=1)`: text, or `None`
 /// for a value that matches no key of the exon pickle (missing, a number).
-fn lookup_keys(table: &Table, name: &str) -> Result<Vec<Option<String>>> {
+fn lookup_keys(table: &Table, name: &str) -> Result<TextColumn> {
     let index = table.column_index(name).ok_or_else(|| key_error(name))?;
     Ok(match &table.columns[index] {
         Column::Text(values) => values.clone(),
         Column::Float(_) | Column::Int(_) | Column::Bool(_) | Column::BoolOrMissing(_) => {
-            vec![None; table.rows]
+            TextColumn::of_missing_values(table.rows)
         }
         Column::Object(values) => values
             .iter()
@@ -1004,7 +1000,6 @@ pub(crate) fn bs1_criteria(
                 .iter()
                 .map(|gene| {
                     let value = gene
-                        .as_ref()
                         .and_then(|g| hom_by_gene.get(g))
                         .copied()
                         .unwrap_or(0.0);

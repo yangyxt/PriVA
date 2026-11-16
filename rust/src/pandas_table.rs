@@ -87,14 +87,248 @@ pub(crate) enum Column {
     Bool(Vec<bool>),
     /// pandas' object column of `True`, `False` and missing values.
     BoolOrMissing(Vec<Option<bool>>),
-    /// pandas' object column of text; `None` is a missing value.
-    Text(Vec<Option<String>>),
+    /// pandas' object column of text and missing values.
+    Text(TextColumn),
     /// pandas' object column of any other mix of values.
     Object(Vec<ObjectValue>),
     /// pandas' nullable `Int64` column; `None` is `pd.NA`.
     NullableInt(Vec<Option<i64>>),
     /// pandas' nullable `boolean` column; `None` is `pd.NA`.
     NullableBool(Vec<Option<bool>>),
+}
+
+/// The values of a text column, where `None` is a missing value. They are held
+/// one after another in a single block of text, with the place where each one
+/// ends and one bit per value that marks a missing one. A value then costs its
+/// own bytes and about 4 bytes more; a separate `String` for each value cost
+/// 24 bytes, an allocation of its own and the allocator's rounding, which made
+/// a table in memory 5 to 7 times as large as its file.
+#[derive(Clone, Default)]
+pub(crate) struct TextColumn {
+    /// The present values, one after another.
+    text: String,
+    /// Where each value ends in `text`.
+    ends: TextEnds,
+    /// One bit per value, set where the value is missing.
+    missing_bits: Vec<u64>,
+}
+
+/// The ends of the values of a text column: 4 bytes each while the column's
+/// text is shorter than 4 GiB, 8 bytes each after that.
+#[derive(Clone)]
+enum TextEnds {
+    Narrow(Vec<u32>),
+    Wide(Vec<u64>),
+}
+
+impl Default for TextEnds {
+    fn default() -> Self {
+        TextEnds::Narrow(Vec::new())
+    }
+}
+
+impl TextEnds {
+    fn len(&self) -> usize {
+        match self {
+            TextEnds::Narrow(ends) => ends.len(),
+            TextEnds::Wide(ends) => ends.len(),
+        }
+    }
+
+    fn get(&self, index: usize) -> usize {
+        match self {
+            TextEnds::Narrow(ends) => ends[index] as usize,
+            TextEnds::Wide(ends) => ends[index] as usize,
+        }
+    }
+
+    fn push(&mut self, end: usize) {
+        match self {
+            TextEnds::Narrow(ends) => match u32::try_from(end) {
+                Ok(end) => ends.push(end),
+                Err(_) => {
+                    let mut wide = Vec::with_capacity(ends.capacity().max(ends.len() + 1));
+                    wide.extend(ends.iter().map(|end| u64::from(*end)));
+                    wide.push(end as u64);
+                    *self = TextEnds::Wide(wide);
+                }
+            },
+            TextEnds::Wide(ends) => ends.push(end as u64),
+        }
+    }
+
+    fn shrink_to_fit(&mut self) {
+        match self {
+            TextEnds::Narrow(ends) => ends.shrink_to_fit(),
+            TextEnds::Wide(ends) => ends.shrink_to_fit(),
+        }
+    }
+}
+
+impl TextColumn {
+    pub(crate) fn new() -> TextColumn {
+        TextColumn::default()
+    }
+
+    /// An empty column with room for the ends of `rows` values.
+    pub(crate) fn with_capacity(rows: usize) -> TextColumn {
+        TextColumn {
+            text: String::new(),
+            ends: TextEnds::Narrow(Vec::with_capacity(rows)),
+            missing_bits: Vec::with_capacity(rows.div_ceil(64)),
+        }
+    }
+
+    /// `rows` missing values.
+    pub(crate) fn of_missing_values(rows: usize) -> TextColumn {
+        let mut column = TextColumn::with_capacity(rows);
+        for _ in 0..rows {
+            column.push(None);
+        }
+        column
+    }
+
+    pub(crate) fn len(&self) -> usize {
+        self.ends.len()
+    }
+
+    pub(crate) fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    /// Adds a value at the end; `None` adds a missing value.
+    pub(crate) fn push(&mut self, value: Option<&str>) {
+        let row = self.len();
+        if row % 64 == 0 {
+            self.missing_bits.push(0);
+        }
+        match value {
+            Some(text) => self.text.push_str(text),
+            None => self.missing_bits[row / 64] |= 1 << (row % 64),
+        }
+        self.ends.push(self.text.len());
+    }
+
+    fn is_missing(&self, row: usize) -> bool {
+        (self.missing_bits[row / 64] >> (row % 64)) & 1 == 1
+    }
+
+    /// Marks the value at `row` as missing. Its text stays in the block, unused.
+    fn set_missing(&mut self, row: usize) {
+        assert!(row < self.len(), "row {row} of {} values", self.len());
+        self.missing_bits[row / 64] |= 1 << (row % 64);
+    }
+
+    /// Where the value at `row` starts and ends in the block.
+    fn span(&self, row: usize) -> (usize, usize) {
+        let end = self.ends.get(row);
+        let start = if row == 0 { 0 } else { self.ends.get(row - 1) };
+        (start, end)
+    }
+
+    /// The value at `row`, `None` where it is missing (`values[row]`).
+    pub(crate) fn get(&self, row: usize) -> Option<&str> {
+        let (start, end) = self.span(row);
+        if self.is_missing(row) {
+            None
+        } else {
+            Some(&self.text[start..end])
+        }
+    }
+
+    /// Every value in order, `None` where one is missing.
+    pub(crate) fn iter(
+        &self,
+    ) -> impl DoubleEndedIterator<Item = Option<&str>> + ExactSizeIterator + Clone + '_ {
+        (0..self.len()).map(move |row| self.get(row))
+    }
+
+    /// Whether every value is missing (true for a column without values).
+    pub(crate) fn every_value_missing(&self) -> bool {
+        (0..self.len()).all(|row| self.is_missing(row))
+    }
+
+    /// Whether any value is missing.
+    pub(crate) fn any_value_missing(&self) -> bool {
+        (0..self.len()).any(|row| self.is_missing(row))
+    }
+
+    /// The values at `rows`, in that order (`series.iloc[rows]`).
+    pub(crate) fn take(&self, rows: &[usize]) -> TextColumn {
+        let bytes: usize = rows
+            .iter()
+            .filter(|row| !self.is_missing(**row))
+            .map(|row| {
+                let (start, end) = self.span(*row);
+                end - start
+            })
+            .sum();
+        let mut taken = TextColumn::with_capacity(rows.len());
+        taken.text.reserve_exact(bytes);
+        for row in rows {
+            taken.push(self.get(*row));
+        }
+        taken
+    }
+
+    /// Every value as a `String` of its own, for code that changes values one
+    /// by one.
+    pub(crate) fn to_vec(&self) -> Vec<Option<String>> {
+        self.iter().map(|value| value.map(str::to_owned)).collect()
+    }
+
+    /// Gives back the room the block and the ends were given while they grew.
+    pub(crate) fn shrink_to_fit(&mut self) {
+        self.text.shrink_to_fit();
+        self.ends.shrink_to_fit();
+        self.missing_bits.shrink_to_fit();
+    }
+}
+
+impl PartialEq for TextColumn {
+    fn eq(&self, other: &TextColumn) -> bool {
+        self.len() == other.len() && self.iter().eq(other.iter())
+    }
+}
+
+impl std::fmt::Debug for TextColumn {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_list().entries(self.iter()).finish()
+    }
+}
+
+impl FromIterator<Option<String>> for TextColumn {
+    fn from_iter<I: IntoIterator<Item = Option<String>>>(values: I) -> TextColumn {
+        let values = values.into_iter();
+        let mut column = TextColumn::with_capacity(values.size_hint().0);
+        for value in values {
+            column.push(value.as_deref());
+        }
+        column
+    }
+}
+
+impl<'a> FromIterator<Option<&'a str>> for TextColumn {
+    fn from_iter<I: IntoIterator<Item = Option<&'a str>>>(values: I) -> TextColumn {
+        let values = values.into_iter();
+        let mut column = TextColumn::with_capacity(values.size_hint().0);
+        for value in values {
+            column.push(value);
+        }
+        column
+    }
+}
+
+impl From<Vec<Option<String>>> for TextColumn {
+    fn from(values: Vec<Option<String>>) -> TextColumn {
+        let bytes = values.iter().flatten().map(String::len).sum();
+        let mut column = TextColumn::with_capacity(values.len());
+        column.text.reserve_exact(bytes);
+        for value in &values {
+            column.push(value.as_deref());
+        }
+        column
+    }
 }
 
 impl Column {
@@ -129,8 +363,8 @@ impl Column {
                 Some(flag) => Cell::Bool(flag),
                 None => Cell::Missing,
             },
-            Column::Text(values) => match &values[row] {
-                Some(text) => Cell::Text(text.as_str()),
+            Column::Text(values) => match values.get(row) {
+                Some(text) => Cell::Text(text),
                 None => Cell::Missing,
             },
             Column::Object(values) => match &values[row] {
@@ -177,7 +411,7 @@ impl Column {
             Column::Float(values) => Column::Float(pick(values, rows)),
             Column::Bool(values) => Column::Bool(pick(values, rows)),
             Column::BoolOrMissing(values) => Column::BoolOrMissing(pick(values, rows)),
-            Column::Text(values) => Column::Text(pick(values, rows)),
+            Column::Text(values) => Column::Text(values.take(rows)),
             Column::Object(values) => Column::Object(pick(values, rows)),
             Column::NullableInt(values) => Column::NullableInt(pick(values, rows)),
             Column::NullableBool(values) => Column::NullableBool(pick(values, rows)),
@@ -788,7 +1022,7 @@ fn shortened(token: &str) -> String {
 /// failure is not an overflow, and then pandas goes on to floats as usual.
 /// Only that last outcome is reproduced; the others are refused.
 fn refuse_unless_float_follows(
-    tokens: &[String],
+    tokens: &TextColumn,
     missing: &[bool],
     overflowing: &str,
 ) -> Result<()> {
@@ -796,7 +1030,7 @@ fn refuse_unless_float_follows(
         if *absent {
             continue;
         }
-        match unsigned_token(token) {
+        match unsigned_token(token.unwrap_or_default()) {
             UnsignedToken::Negative | UnsignedToken::Value => {}
             UnsignedToken::Overflow => break,
             UnsignedToken::Invalid => return Ok(()),
@@ -952,19 +1186,28 @@ pub(crate) fn float_token(token: &str) -> Option<f64> {
 /// The column type pandas infers for these tokens; `missing_spellings` says
 /// whether pandas' missing-value spellings count as missing (`keep_default_na`).
 pub(crate) fn infer_column(tokens: Vec<String>, missing_spellings: bool) -> Result<Column> {
+    infer_tokens(
+        tokens.iter().map(|token| Some(token.as_str())).collect(),
+        missing_spellings,
+    )
+}
+
+/// `infer_column` for the tokens of one column as the reader holds them (every
+/// token present). A text column keeps the tokens' block as it is.
+fn infer_tokens(mut tokens: TextColumn, missing_spellings: bool) -> Result<Column> {
     if tokens.is_empty() {
-        return Ok(Column::Text(Vec::new()));
+        return Ok(Column::Text(TextColumn::new()));
     }
     let missing: Vec<bool> = tokens
         .iter()
-        .map(|token| missing_spellings && is_na(token))
+        .map(|token| missing_spellings && is_na(token.unwrap_or_default()))
         .collect();
     let any_missing = missing.iter().any(|flag| *flag);
 
     // 1. Integers (every value that is not missing).
     let mut integers: Vec<i64> = Vec::with_capacity(tokens.len());
     let mut all_integers = true;
-    for (token, absent) in tokens.iter().zip(&missing) {
+    for (token, absent) in tokens.iter().map(Option::unwrap_or_default).zip(&missing) {
         if *absent {
             integers.push(0);
             continue;
@@ -1004,7 +1247,7 @@ pub(crate) fn infer_column(tokens: Vec<String>, missing_spellings: bool) -> Resu
     // 2. Floats.
     let mut floats: Vec<f64> = Vec::with_capacity(tokens.len());
     let mut all_floats = true;
-    for (token, absent) in tokens.iter().zip(&missing) {
+    for (token, absent) in tokens.iter().map(Option::unwrap_or_default).zip(&missing) {
         if *absent {
             floats.push(f64::NAN);
             continue;
@@ -1024,7 +1267,7 @@ pub(crate) fn infer_column(tokens: Vec<String>, missing_spellings: bool) -> Resu
     // 3. Booleans.
     let mut flags: Vec<Option<bool>> = Vec::with_capacity(tokens.len());
     let mut all_flags = true;
-    for (token, absent) in tokens.iter().zip(&missing) {
+    for (token, absent) in tokens.iter().map(Option::unwrap_or_default).zip(&missing) {
         if *absent {
             flags.push(None);
             continue;
@@ -1048,14 +1291,28 @@ pub(crate) fn infer_column(tokens: Vec<String>, missing_spellings: bool) -> Resu
         ));
     }
 
-    // 4. Text.
-    Ok(Column::Text(
-        tokens
-            .into_iter()
-            .zip(missing)
-            .map(|(token, absent)| if absent { None } else { Some(token) })
-            .collect(),
-    ))
+    // 4. Text: the tokens themselves, the missing-value spellings marked missing.
+    for (row, absent) in missing.iter().enumerate() {
+        if *absent {
+            tokens.set_missing(row);
+        }
+    }
+    tokens.shrink_to_fit();
+    Ok(Column::Text(tokens))
+}
+
+/// `dtype=str`: every token stays text; with `missing_spellings`
+/// (`keep_default_na`), pandas' missing-value spellings are missing.
+fn text_tokens(mut tokens: TextColumn, missing_spellings: bool) -> Column {
+    if missing_spellings {
+        for row in 0..tokens.len() {
+            if tokens.get(row).is_some_and(is_na) {
+                tokens.set_missing(row);
+            }
+        }
+    }
+    tokens.shrink_to_fit();
+    Column::Text(tokens)
 }
 
 /// Reads a table from text already decoded as UTF-8.
@@ -1089,7 +1346,8 @@ fn parse_table_impl(
         (Header::Names(given), _) => Some(given.len()),
         (Header::FirstLine, _) => None,
     };
-    let mut tokens: Vec<Vec<String>> = vec![Vec::new(); width.unwrap_or(0)];
+    // Each column's tokens are kept in one block of text as they are read.
+    let mut tokens: Vec<TextColumn> = vec![TextColumn::new(); width.unwrap_or(0)];
     let mut rows = 0;
     // The most fields of any row: with `names` and `usecols` positions, pandas
     // refuses positions that no row reaches.
@@ -1106,7 +1364,7 @@ fn parse_table_impl(
             widest = widest.max(record.len());
             let Some(expected) = width else {
                 let header = column_names(record);
-                tokens = vec![Vec::new(); header.len()];
+                tokens = vec![TextColumn::new(); header.len()];
                 width = Some(header.len());
                 names = Some(header);
                 return Ok(());
@@ -1126,11 +1384,11 @@ fn parse_table_impl(
                 )));
             }
             let filled = record.len().min(expected);
-            for (column, field) in tokens.iter_mut().zip(record) {
-                column.push(field);
+            for (column, field) in tokens.iter_mut().zip(&record) {
+                column.push(Some(field.as_str()));
             }
             for column in tokens.iter_mut().skip(filled) {
-                column.push(String::new());
+                column.push(Some(""));
             }
             rows += 1;
             Ok(())
@@ -1213,20 +1471,9 @@ fn parse_table_impl(
     let mut columns = Vec::with_capacity(names.len());
     for column in tokens {
         columns.push(if options.all_text {
-            Column::Text(
-                column
-                    .into_iter()
-                    .map(|token| {
-                        if options.keep_default_na && is_na(&token) {
-                            None
-                        } else {
-                            Some(token)
-                        }
-                    })
-                    .collect(),
-            )
+            text_tokens(column, options.keep_default_na)
         } else {
-            infer_column(column, options.keep_default_na)?
+            infer_tokens(column, options.keep_default_na)?
         });
     }
     Ok(Table {
@@ -1357,7 +1604,7 @@ pub(crate) fn write_table_to(out: &mut impl Write, table: &Table) -> std::io::Re
                     None => {}
                 },
                 Column::Text(values) => {
-                    if let Some(text) = &values[row] {
+                    if let Some(text) = values.get(row) {
                         write_field(out, text, only_column)?;
                     }
                 }
@@ -1425,7 +1672,7 @@ mod tests {
         assert_eq!(table.columns[3], Column::Bool(vec![true, false, false]));
         assert_eq!(
             table.columns[4],
-            Column::Text(vec![Some("x".into()), Some("y".into()), None])
+            Column::Text(vec![Some("x".into()), Some("y".into()), None].into())
         );
         assert_eq!(
             table.columns[5],
@@ -1447,9 +1694,14 @@ mod tests {
         let Column::Text(values) = &table.columns[0] else {
             panic!("a column of words is text")
         };
-        assert!(values[..missing.len()].iter().all(Option::is_none));
-        for (value, expected) in values[missing.len()..].iter().zip(kept) {
-            assert_eq!(value.as_deref(), Some(expected));
+        assert!(
+            values
+                .iter()
+                .take(missing.len())
+                .all(|value| value.is_none())
+        );
+        for (value, expected) in values.iter().skip(missing.len()).zip(kept) {
+            assert_eq!(value, Some(expected));
         }
     }
 
@@ -1538,7 +1790,7 @@ mod tests {
         );
         assert_eq!(
             single_column(&["abc", &"1".repeat(30)]).unwrap(),
-            Column::Text(vec![Some("abc".into()), Some("1".repeat(30))])
+            Column::Text(vec![Some("abc".into()), Some("1".repeat(30))].into())
         );
         // Everything else past the signed range is read by pandas as unsigned integers or text.
         for values in [
@@ -1704,23 +1956,64 @@ mod tests {
     #[test]
     fn a_lone_empty_field_is_quoted_and_set_column_replaces_in_place() {
         let mut table = parse_table("a\n1\n").unwrap();
-        table.set_column("b", Column::Text(vec![Some(String::new())]));
+        table.set_column("b", Column::Text(vec![Some(String::new())].into()));
         table.set_column("a", Column::Bool(vec![true]));
         let mut out = Vec::new();
         write_table_to(&mut out, &table).unwrap();
         assert_eq!(String::from_utf8(out).unwrap(), "a\tb\nTrue\t\n");
         let mut single = parse_table("a\n1\n").unwrap();
-        single.set_column("a", Column::Text(vec![Some(String::new())]));
+        single.set_column("a", Column::Text(vec![Some(String::new())].into()));
         let mut out = Vec::new();
         write_table_to(&mut out, &single).unwrap();
         assert_eq!(String::from_utf8(out).unwrap(), "a\n\"\"\n");
+    }
+
+    #[test]
+    fn a_text_column_holds_its_values_in_one_block() {
+        let mut column = TextColumn::new();
+        column.push(Some("abc"));
+        column.push(None);
+        column.push(Some(""));
+        column.push(Some("é\td"));
+        assert_eq!(column.len(), 4);
+        assert_eq!(
+            column.iter().collect::<Vec<_>>(),
+            [Some("abc"), None, Some(""), Some("é\td")]
+        );
+        assert_eq!(
+            column.take(&[3, 1, 0, 0]).to_vec(),
+            [
+                Some("é\td".to_owned()),
+                None,
+                Some("abc".to_owned()),
+                Some("abc".to_owned())
+            ]
+        );
+        // A value marked missing after it was added reads, compares and prints as missing.
+        let mut marked = TextColumn::from(vec![Some("NA".to_owned()), Some("x".to_owned())]);
+        marked.set_missing(0);
+        assert_eq!(marked, TextColumn::from(vec![None, Some("x".to_owned())]));
+        assert_eq!(format!("{marked:?}"), "[None, Some(\"x\")]");
+        // The missing-value bits go on past 64 values.
+        let many: TextColumn = (0..130)
+            .map(|row| (row % 3 != 0).then(|| row.to_string()))
+            .collect();
+        assert_eq!((many.get(128), many.get(129)), (Some("128"), None));
+        assert!(many.any_value_missing() && !many.every_value_missing());
+        assert!(TextColumn::of_missing_values(130).every_value_missing());
+        // The ends of a column whose text passes 4 GiB take 8 bytes each.
+        let mut ends = TextEnds::default();
+        ends.push(5);
+        ends.push(u32::MAX as usize + 7);
+        assert!(matches!(ends, TextEnds::Wide(_)));
+        assert_eq!((ends.get(0), ends.get(1)), (5, u32::MAX as usize + 7));
     }
 
     fn texts(column: &Column) -> Vec<Option<&str>> {
         let Column::Text(values) = column else {
             panic!("not a text column: {column:?}")
         };
-        values.iter().map(|value| value.as_deref()).collect()
+        values.iter().collect()
     }
 
     // The expected values below are what pandas 2.2.3 returned for the same

@@ -138,7 +138,7 @@ fn mask_column(name: &str, column: &Column) -> InputColumn {
             values
                 .iter()
                 .map(|value| match value {
-                    Some(text) => MaskCell::Text(text.clone()),
+                    Some(text) => MaskCell::Text(text.to_owned()),
                     None => nan(),
                 })
                 .collect(),

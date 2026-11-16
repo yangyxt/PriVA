@@ -93,7 +93,7 @@ impl Frame {
         for column in &table.columns {
             for (row, value) in rows.iter_mut().enumerate() {
                 value.push(match column {
-                    Column::Text(values) => values[row].clone().unwrap_or_default(),
+                    Column::Text(values) => values.get(row).unwrap_or_default().to_owned(),
                     _ => String::new(),
                 });
             }

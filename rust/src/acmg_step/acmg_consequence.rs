@@ -587,18 +587,24 @@ mod tests {
         let table = Table {
             names: vec!["Consequence".into(), "Protein_position".into()],
             columns: vec![
-                Column::Text(vec![
-                    Some("stop_gained".into()),
-                    Some("inframe_deletion".into()),
-                    None,
-                    Some("missense_variant".into()),
-                ]),
-                Column::Text(vec![
-                    Some("25/100".into()),
-                    Some("10-14/100".into()),
-                    None,
-                    Some("?-5/100".into()),
-                ]),
+                Column::Text(
+                    vec![
+                        Some("stop_gained".into()),
+                        Some("inframe_deletion".into()),
+                        None,
+                        Some("missense_variant".into()),
+                    ]
+                    .into(),
+                ),
+                Column::Text(
+                    vec![
+                        Some("25/100".into()),
+                        Some("10-14/100".into()),
+                        None,
+                        Some("?-5/100".into()),
+                    ]
+                    .into(),
+                ),
             ],
             rows: 4,
         };

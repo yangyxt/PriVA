@@ -424,9 +424,20 @@ fn mapped_bed(path: &Path) -> Result<HashMap<String, String>> {
     Ok(result)
 }
 
-fn set_text(table: &mut Table, col: usize, row: usize, value: &str) -> Result<()> {
+/// Sets one text cell. A text column holds its values in one block, so the
+/// values of a text column are changed in `edited` (a copy of each value) and
+/// put back into the table by `put_back_edited` once every cell is set.
+fn set_text(
+    table: &mut Table,
+    edited: &mut HashMap<usize, Vec<Option<String>>>,
+    col: usize,
+    row: usize,
+    value: &str,
+) -> Result<()> {
     match &mut table.columns[col] {
-        Column::Text(values) => values[row] = Some(value.to_owned()),
+        Column::Text(values) => {
+            edited.entry(col).or_insert_with(|| values.to_vec())[row] = Some(value.to_owned())
+        }
         Column::Object(values) => values[row] = ObjectValue::Text(value.to_owned()),
         _ => {
             return Err(invalid(
@@ -435,6 +446,12 @@ fn set_text(table: &mut Table, col: usize, row: usize, value: &str) -> Result<()
         }
     }
     Ok(())
+}
+
+fn put_back_edited(table: &mut Table, edited: HashMap<usize, Vec<Option<String>>>) {
+    for (col, values) in edited {
+        table.columns[col] = Column::Text(values.into());
+    }
 }
 
 fn set_pos(chunk: &mut table::Chunk, col: usize, row: usize, value: i64) -> Result<()> {
@@ -489,6 +506,7 @@ fn process(mut chunk: table::Chunk, options: &Options) -> Result<Table> {
         let vcf_coords = mapped_vcf(&lifted_vcf)?;
         let bed_coords = mapped_bed(&lifted_bed)?;
         let mut unmapped = HashSet::new();
+        let mut edited = HashMap::new();
         for (row, id) in ids.iter().enumerate() {
             if let Some(value) = vcf_coords.get(id) {
                 if chunk.duplicate_multi_index {
@@ -497,10 +515,22 @@ fn process(mut chunk: table::Chunk, options: &Options) -> Result<Table> {
                     ));
                 }
                 for target in chunk.same_index[row].clone() {
-                    set_text(&mut chunk.table, cols[0], target, &value.chrom)?;
+                    set_text(&mut chunk.table, &mut edited, cols[0], target, &value.chrom)?;
                     set_pos(&mut chunk, cols[1], target, value.pos)?;
-                    set_text(&mut chunk.table, cols[2], target, &value.reference)?;
-                    set_text(&mut chunk.table, cols[3], target, &value.alternate)?;
+                    set_text(
+                        &mut chunk.table,
+                        &mut edited,
+                        cols[2],
+                        target,
+                        &value.reference,
+                    )?;
+                    set_text(
+                        &mut chunk.table,
+                        &mut edited,
+                        cols[3],
+                        target,
+                        &value.alternate,
+                    )?;
                 }
             } else {
                 unmapped.insert(id.as_str());
@@ -513,10 +543,11 @@ fn process(mut chunk: table::Chunk, options: &Options) -> Result<Table> {
                 }
                 let col = required(&chunk.table, "splicevault_site_loc")?;
                 for target in &chunk.same_index[row] {
-                    set_text(&mut chunk.table, col, *target, value)?;
+                    set_text(&mut chunk.table, &mut edited, col, *target, value)?;
                 }
             }
         }
+        put_back_edited(&mut chunk.table, edited);
         // Polars applies the original ID-membership filter, retaining every
         // duplicate occurrence and its source order after dictionary updates.
         let series = Series::new("variant_id".into(), &ids);

@@ -393,7 +393,7 @@ pub(super) mod harness_options {
 pub(super) mod pandas_masks {
     use crate::cli::{Result, invalid};
     use crate::pandas_polars;
-    use crate::pandas_table::{Cell, Column, ObjectValue, Table};
+    use crate::pandas_table::{Cell, Column, ObjectValue, Table, TextColumn};
     use crate::python_text::float_repr;
 
     /// A boolean pandas Series as the criteria build it: a plain `bool` Series, or an
@@ -533,17 +533,17 @@ pub(super) mod pandas_masks {
         table: &Table,
         name: &str,
         fill: Option<&str>,
-    ) -> Result<Vec<Option<String>>> {
+    ) -> Result<TextColumn> {
         let column = table.column(name)?;
         match (column, fill) {
             (Column::Text(values), None) => Ok(values.clone()),
             (Column::Text(values), Some(fill)) => Ok(values
                 .iter()
-                .map(|value| Some(value.clone().unwrap_or_else(|| fill.to_owned())))
+                .map(|value| Some(value.unwrap_or(fill)))
                 .collect()),
             (Column::Float(values), Some(fill)) if values.iter().any(|value| value.is_nan()) => {
                 if values.iter().all(|value| value.is_nan()) {
-                    Ok(vec![Some(fill.to_owned()); values.len()])
+                    Ok(vec![Some(fill.to_owned()); values.len()].into())
                 } else {
                     Err(invalid(format!(
                         "{name} is a float column with numbers and missing values; \
@@ -654,7 +654,7 @@ pub(super) mod pandas_masks {
         match table.column(name)? {
             Column::Bool(values) => Ok(Mask::Plain(values.clone())),
             Column::BoolOrMissing(values) => Ok(Mask::Object(values.clone())),
-            Column::Text(values) if values.iter().all(Option::is_none) => {
+            Column::Text(values) if values.every_value_missing() => {
                 Ok(Mask::Object(vec![None; values.len()]))
             }
             Column::Float(values) if values.iter().all(|value| value.is_nan()) => {

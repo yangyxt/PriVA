@@ -238,6 +238,33 @@ Family tasks run prioritization in five steps: combine the family table, add the
 splicing and 5′ UTR columns side by side on copies of it, join the copies (refusing
 differing rows or shared columns), then assign the ACMG criteria.
 
+**Phenotype gene bonus (optional, off by default).** It turns on by itself when
+`--phenotype_hpo_terms TERMS.tsv` gives HPO terms for the proband of every family
+in the run; there is no separate switch. Each family's variants are then sorted
+with the genes' relevance to its terms:
+
+1. `RANK_PHENOTYPE_GENES` ranks the family's genes for its terms with
+   `hpo-gene-ranking rank-genes` (repository llm_gene_reranker; pass the program
+   as `--hpo_gene_ranking_binary` and its reference folder of `raw/`, `prepared/`
+   and `hpo_graph/` as `--hpo_gene_ranking_reference`). The table has the columns
+   `sample_id` (the PED family identifier) and `hpo_term` (an HPO id or exact term
+   name), one row per term. The rankings are published under
+   `phenotype_gene_ranking/FAMILY/`.
+2. The family's ACMG task gives each gene of the ranking
+   `phenotype_gene_index = 1 + 0.2 × clip(1 + log10(share) / 2, 0, 1)`, where
+   `share` is the gene's `total_score` divided by the family's top `total_score`:
+   1.2 for the top gene, 1.1 at a tenth of its score, 1.0 at a hundredth or below
+   and for genes not in the ranking.
+3. A row's sort index is multiplied by the larger of this index and its relevant
+   gene list weight (1.2), never by both; the table gains the column
+   `phenotype_gene_index`.
+
+If any family of the run has no terms (or the run has no PED file), the bonus is
+off for the whole run: no ranking task runs, a warning names the families without
+terms, and every family ranks exactly as before, as in a run without the option.
+Terms of families not in the run are left out with a warning. Outside Nextflow, the key `phenotype_gene_ranking: FAMILY.gene_ranked.tsv`
+in the configuration of a one-family run does the same.
+
 The example `inputs/` paths are relative to the external `PRIVA_RUNS` directory; replace them with your actual input paths and assembly. Use a new output directory for changed inputs, source, resources or settings. For the same run, retain the external launch/work directories and Nextflow cache, and append `-resume`; launch-time resource checks still apply to a fully cached run.
 
 | Profile/option | Scope |
@@ -248,6 +275,7 @@ The example `inputs/` paths are relative to the external `PRIVA_RUNS` directory;
 | `-profile apptainer` | Requires an explicitly selected tested `--container_image` and matching software identity. Tasks run with `--cleanenv`, so they use the image's tools; bind the cache, data and input folders with `--container_run_options='-B /path'`. Build the image from [priva_acmg.def](priva_acmg.def) |
 | `-profile task_readonly` | Optional Linux Bubblewrap task filesystem boundary; it cannot be combined with `apptainer` |
 | `-profile test -stub-run` | Synthetic wiring only; its outputs are not scientific results |
+| `--phenotype_hpo_terms`, `--hpo_gene_ranking_binary`, `--hpo_gene_ranking_reference` | The optional phenotype gene bonus, above; the ranking task asks for 1 CPU, 4 GB and 1 hour |
 
 Keep scientific worker counts in the legacy configuration's `threads` and
 `threads_per_fam`; set task CPU allocations independently. Family tasks need at

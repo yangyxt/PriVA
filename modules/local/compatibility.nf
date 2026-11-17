@@ -376,18 +376,23 @@ process PRIORITIZE_ACMG {
     publishDir "${params.outdir}/prioritization", mode: 'copy', overwrite: false, pattern: 'result/*.tsv'
     publishDir "${params.outdir}/pipeline_info", mode: 'copy', overwrite: false, pattern: '*.provenance.json'
     input:
-    tuple val(meta), val(family), path(table, stageAs: 'input.tsv'), path(bundle, stageAs: 'bundle/*')
+    // ranking: the family's gene ranking for its HPO terms (RANK_PHENOTYPE_GENES),
+    // or an empty list when the bonus is off (some family has no HPO terms, or
+    // no --phenotype_hpo_terms), which ranks as before.
+    tuple val(meta), val(family), path(table, stageAs: 'input.tsv'), path(ranking, stageAs: 'phenotype_gene_ranking/*'), path(bundle, stageAs: 'bundle/*')
     output:
     tuple val(meta), val(family), path('result/*.filtered.tsv'), path('result/*.filtered.acmg.tsv'), emit: tables
     path('prioritization-acmg*.provenance.json'), emit: provenance
     script:
     def familyArg = family ? "--family '${family}'" : ''
+    def rankingArg = ranking ? " --phenotype-gene-ranking '${ranking}'" : ''
     """
-    '${meta.priva_binary}' task run --phase prioritization-acmg --bundle bundle ${familyArg} --table '${table}' --cpus ${task.cpus}
+    '${meta.priva_binary}' task run --phase prioritization-acmg --bundle bundle ${familyArg} --table '${table}'${rankingArg} --cpus ${task.cpus}
     """
     stub:
     def familyArg = family ? "--family '${family}'" : ''
+    def rankingArg = ranking ? " --phenotype-gene-ranking '${ranking}'" : ''
     """
-    '${meta.priva_binary}' task run --phase prioritization-acmg --bundle bundle ${familyArg} --table '${table}' --cpus ${task.cpus} --stub
+    '${meta.priva_binary}' task run --phase prioritization-acmg --bundle bundle ${familyArg} --table '${table}'${rankingArg} --cpus ${task.cpus} --stub
     """
 }

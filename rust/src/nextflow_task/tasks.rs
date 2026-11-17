@@ -736,6 +736,7 @@ fn private_config(
     phase: &str,
     cpus: i64,
     step_threads: Option<i64>,
+    phenotype_gene_ranking: Option<&Path>,
 ) -> Result<(PathBuf, PathBuf)> {
     let config = read_config(&bundle.join("legacy.yaml"))?;
     let mode = record
@@ -829,6 +830,18 @@ fn private_config(
             }
         }
     }
+    // The family's gene ranking for the phenotype gene bonus of the ACMG step.
+    if let Some(source) = phenotype_gene_ranking {
+        let name = contract::file_name(&display(source));
+        let destination = copy_writable(
+            source,
+            &result
+                .join("private_inputs")
+                .join("phenotype_gene_ranking")
+                .join(&name),
+        )?;
+        updates.push(("phenotype_gene_ranking".into(), text(display(&destination))));
+    }
     let path = PathBuf::from(crate::python_path::absolute(Path::new("task.yaml"))?);
     fs::write(&path, render_config(&config, &updates)?)?;
     Ok((path, temp))
@@ -841,7 +854,7 @@ pub(crate) fn private_config_for_test(
     phase: &str,
     cpus: i64,
 ) -> Result<PathBuf> {
-    private_config(bundle, record, phase, cpus, None).map(|(path, _)| path)
+    private_config(bundle, record, phase, cpus, None, None).map(|(path, _)| path)
 }
 
 const STUB_CADD: &str =
@@ -972,6 +985,22 @@ pub(crate) fn run(options: &Options) -> Result<()> {
         .get("family")
         .filter(|v| !v.is_empty())
         .map(str::to_owned);
+    // A family's gene ranking for its HPO terms: only the ACMG step reads it.
+    let phenotype_gene_ranking = options
+        .get("phenotype-gene-ranking")
+        .filter(|v| !v.is_empty())
+        .map(PathBuf::from);
+    if let Some(path) = &phenotype_gene_ranking {
+        if phase != "prioritization-acmg" {
+            return refuse("--phenotype-gene-ranking belongs to the prioritization-acmg phase");
+        }
+        if !path.is_file() {
+            return refuse(format!(
+                "--phenotype-gene-ranking: {} is not a file",
+                display(path)
+            ));
+        }
+    }
     // One function of the annotation script per task; only raw mode runs them.
     let step = phase.strip_prefix("annotation-");
     if step.is_some() && field("mode") != "raw" {
@@ -1104,7 +1133,14 @@ pub(crate) fn run(options: &Options) -> Result<()> {
             }
         }
     } else {
-        let (config_path, temp) = private_config(&bundle, &record, phase, cpus, step_threads)?;
+        let (config_path, temp) = private_config(
+            &bundle,
+            &record,
+            phase,
+            cpus,
+            step_threads,
+            phenotype_gene_ranking.as_deref(),
+        )?;
         let paths = &verified.as_ref().unwrap().1;
         let binary = paths
             .iter()
@@ -1300,6 +1336,18 @@ pub(crate) fn run(options: &Options) -> Result<()> {
     provenance.set("phase", text(phase));
     provenance.set("family", family.clone().map_or(Json::Null, text));
     provenance.set("cpus", Json::Int(cpus as i128));
+    if let Some(path) = &phenotype_gene_ranking {
+        provenance.set(
+            "phenotype_gene_ranking",
+            object(vec![
+                (
+                    "name",
+                    text(path.file_name().unwrap().to_string_lossy().into_owned()),
+                ),
+                ("sha256", text(sha256(path)?)),
+            ]),
+        );
+    }
     let mut listed = Vec::new();
     for path in &outputs {
         listed.push(object(vec![

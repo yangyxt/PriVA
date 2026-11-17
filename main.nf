@@ -118,7 +118,8 @@ Optional: --ped COHORT.ped --family ID --vcf_index VCF.vcf.gz.tbi
             and hpo_term, an HPO id or exact term name) with
             --hpo_gene_ranking_binary HPO_GENE_RANKING --hpo_gene_ranking_reference
             FOLDER: raises the sort index of variants in genes ranked high for
-            the family's terms
+            the family's terms. On only when every family's proband has
+            terms; otherwise off for the whole run, with a warning
 The cohort VCF is validated and annotated once, one task per annotation step.
 With --ped, every PED family is then filtered and prioritized in its own tasks
 (--family selects one); without --ped, one run covers all samples without
@@ -302,18 +303,27 @@ outputs and scientific-profile requirements.'''
             .join(PRIORITIZE_UTR.out.table.map { run, family, table -> [family, table] })
             .map { family, run, table, bundle, splicing, utr -> [run, family, table, splicing, utr, bundle] }
         PRIORITIZE_JOIN(toJoin)
-        // With --phenotype_hpo_terms each family that has terms gets its genes
-        // ranked, and its ACMG task the ranking (the phenotype gene bonus);
-        // the other families, and every family without the option, rank as
-        // before: they are joined with no ranking and given an empty list.
+        // The phenotype gene bonus is on only when --phenotype_hpo_terms gives
+        // HPO terms for the proband of every family in this run: each family
+        // then gets its genes ranked, and its ACMG task the ranking. If any
+        // family has no terms (or the run has no PED family), the bonus is off
+        // for the whole run, with a warning naming those families, and every
+        // ACMG task ranks as before with an empty list.
         def rankings = Channel.empty()
         if (phenotypeRanking) {
-            families.toList().subscribe { listed ->
+            def rankedFamilies = families.toList().flatMap { listed ->
                 def absent = phenotypeTerms.keySet().findAll { family -> !(family in listed) }
                 if (absent) log.warn "HPO terms of families not in this run are left out: ${absent.sort().join(', ')}"
+                def missing = listed.findAll { family -> !phenotypeTerms.containsKey(family) }
+                if (missing) {
+                    def named = missing.collect { family -> family ?: '(no PED family)' }.sort().join(', ')
+                    log.warn "Phenotype gene bonus is off: --phenotype_hpo_terms has no HPO terms for ${named}; it needs terms for the proband of every family"
+                    return []
+                }
+                log.info "Phenotype gene bonus is on for all ${listed.size()} families"
+                listed
             }
-            RANK_PHENOTYPE_GENES(families.filter { family -> phenotypeTerms.containsKey(family) }
-                .map { family -> [family, phenotypeTerms[family], phenotypeRanking] })
+            RANK_PHENOTYPE_GENES(rankedFamilies.map { family -> [family, phenotypeTerms[family], phenotypeRanking] })
             rankings = RANK_PHENOTYPE_GENES.out.ranking
         }
         def toAcmg = PRIORITIZE_JOIN.out.table.map(bundleLast)

@@ -131,31 +131,54 @@ contract = json.loads(next((root / 'no-pedigree').rglob('contract.json')).read_t
 assert contract['families'] == [] and contract['ped_sha256'] is None, contract
 print('Cohort stub with two families and no-pedigree stub passed')
 PY
-# Phenotype gene bonus: the family with HPO terms (FAM) gets its genes ranked
-# (a header-only stub table here) and its ACMG task the ranking; OTHER ranks as
-# before. Terms of a family that is not in the PED file are reported and left out.
+# Phenotype gene bonus. It is on only when every family's proband has HPO
+# terms: then FAM and OTHER each get their genes ranked (a header-only stub
+# table here) and their ACMG task the ranking. Terms of a family that is not in
+# the PED file are reported and left out. With terms for FAM only, the bonus is
+# off for the whole run: no ranking task, a warning naming OTHER, and both ACMG
+# tasks rank as before.
 mkdir -p "${fixture}/hpo_reference/raw" "${fixture}/hpo_reference/prepared" "${fixture}/hpo_reference/hpo_graph"
-printf 'sample_id\thpo_term\nFAM\tHP:0001250\nFAM\tGlobal developmental delay\nABSENT\tHP:0000252\n' > "${fixture}/hpo_terms.tsv"
-run_with nextflow-stub-phenotype "${shared[@]}" --ped "${fixture}/family.ped" \
-    --phenotype_hpo_terms "${fixture}/hpo_terms.tsv" --hpo_gene_ranking_binary "$(type -P true)" \
-    --hpo_gene_ranking_reference "${fixture}/hpo_reference" --outdir "${case_root}/phenotype"
-python3 - "${case_root}/phenotype" "${run_root}/logs/nextflow-stub-phenotype.log" <<'PY'
+printf 'sample_id\thpo_term\nFAM\tHP:0001250\nFAM\tGlobal developmental delay\nOTHER\tHP:0001263\nABSENT\tHP:0000252\n' > "${fixture}/hpo_terms.tsv"
+printf 'sample_id\thpo_term\nFAM\tHP:0001250\n' > "${fixture}/hpo_terms_partial.tsv"
+phenotype=(--ped "${fixture}/family.ped" --hpo_gene_ranking_binary "$(type -P true)"
+    --hpo_gene_ranking_reference "${fixture}/hpo_reference")
+run_with nextflow-stub-phenotype "${shared[@]}" "${phenotype[@]}" \
+    --phenotype_hpo_terms "${fixture}/hpo_terms.tsv" --outdir "${case_root}/phenotype"
+run_with nextflow-stub-phenotype-partial "${shared[@]}" "${phenotype[@]}" \
+    --phenotype_hpo_terms "${fixture}/hpo_terms_partial.tsv" --outdir "${case_root}/phenotype-partial"
+python3 - "${case_root}" "${run_root}/logs" <<'PY'
 import csv
 import json
 from pathlib import Path
 import sys
-root, log = Path(sys.argv[1]), Path(sys.argv[2]).read_text()
-trace = sorted((root / 'pipeline_info').glob('trace-*.tsv'))[-1]
-tasks = sorted(row['name'] for row in csv.DictReader(trace.open(), delimiter='\t'))
-assert [t for t in tasks if t.startswith('RANK_PHENOTYPE_GENES')] == ['RANK_PHENOTYPE_GENES (FAM)'], tasks
-assert sorted(t for t in tasks if t.startswith('PRIORITIZE_ACMG')) == ['PRIORITIZE_ACMG (FAM)', 'PRIORITIZE_ACMG (OTHER)'], tasks
-records = {f: json.loads((root / 'pipeline_info' / f'prioritization-acmg.{f}.provenance.json').read_text()) for f in ('FAM', 'OTHER')}
-assert records['FAM']['phenotype_gene_ranking']['name'] == 'FAM.gene_ranked.tsv', records['FAM']
-assert 'phenotype_gene_ranking' not in records['OTHER'], records['OTHER']
-assert sorted(p.name for p in (root / 'phenotype_gene_ranking' / 'FAM').iterdir()) == sorted(
-    [f'FAM.{t}.tsv' for t in ('frontier_gene_evidence', 'frontier_p_terms', 'gene_ranked', 'gene_score_contributions', 'gene_summary', 'p_pairs')] + ['run_summary.tsv'])
+cases, logs = Path(sys.argv[1]), Path(sys.argv[2])
+def tasks(root):
+    trace = sorted((root / 'pipeline_info').glob('trace-*.tsv'))[-1]
+    return sorted(row['name'] for row in csv.DictReader(trace.open(), delimiter='\t'))
+def provenance(root, family):
+    return json.loads((root / 'pipeline_info' / f'prioritization-acmg.{family}.provenance.json').read_text())
+# Every family has terms: the bonus is on for both.
+root, log = cases / 'phenotype', (logs / 'nextflow-stub-phenotype.log').read_text()
+names = tasks(root)
+assert [t for t in names if t.startswith('RANK_PHENOTYPE_GENES')] == ['RANK_PHENOTYPE_GENES (FAM)', 'RANK_PHENOTYPE_GENES (OTHER)'], names
+assert [t for t in names if t.startswith('PRIORITIZE_ACMG')] == ['PRIORITIZE_ACMG (FAM)', 'PRIORITIZE_ACMG (OTHER)'], names
+for family in ('FAM', 'OTHER'):
+    record = provenance(root, family)
+    assert record['phenotype_gene_ranking']['name'] == f'{family}.gene_ranked.tsv', record
+    assert sorted(p.name for p in (root / 'phenotype_gene_ranking' / family).iterdir()) == sorted(
+        [f'{family}.{t}.tsv' for t in ('frontier_gene_evidence', 'frontier_p_terms', 'gene_ranked', 'gene_score_contributions', 'gene_summary', 'p_pairs')] + ['run_summary.tsv'])
 assert 'left out: ABSENT' in log, 'the family missing from the PED file was not reported'
-print('Phenotype gene bonus wiring passed')
+assert 'Phenotype gene bonus is on for all 2 families' in log
+# Terms for FAM only: the bonus is off for the whole run.
+root, log = cases / 'phenotype-partial', (logs / 'nextflow-stub-phenotype-partial.log').read_text()
+names = tasks(root)
+assert not [t for t in names if t.startswith('RANK_PHENOTYPE_GENES')], names
+assert [t for t in names if t.startswith('PRIORITIZE_ACMG')] == ['PRIORITIZE_ACMG (FAM)', 'PRIORITIZE_ACMG (OTHER)'], names
+for family in ('FAM', 'OTHER'):
+    assert 'phenotype_gene_ranking' not in provenance(root, family), family
+assert not (root / 'phenotype_gene_ranking').exists()
+assert 'Phenotype gene bonus is off: --phenotype_hpo_terms has no HPO terms for OTHER' in log, 'the family without terms was not reported'
+print('Phenotype gene bonus wiring passed (on for all families, off when one lacks terms)')
 PY
 # The removed annotated mode and old hub options are refused with a message
 # that points to the annotation hub.

@@ -58,7 +58,8 @@ WORD = r"[A-Za-z_][A-Za-z0-9_]*"
 def reached_functions() -> set:
     """The installer functions some step's code digest reaches.
 
-    Follows scripts/install_task.sh (step_functions, called_words) on the
+    Follows priva install-task (rust/src/install_task/digest.rs:
+    step_functions, called_words) on the
     source text: from every step's calls and runs, through every function
     those name; in a log, echo or printf line only where a command can start.
     """

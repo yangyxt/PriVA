@@ -36,6 +36,7 @@ mod fdr;
 mod gnomad_cache;
 mod gofcards_clinvar_injection;
 mod gofcards_exact_gof;
+mod install_task;
 mod installer_config_paths;
 mod mapped_artifact_publish;
 mod nextflow_task;

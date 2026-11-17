@@ -159,7 +159,7 @@ fn names(line: &str) -> impl Iterator<Item = &str> {
 /// log, echo or printf line) only a name where a command can start counts:
 /// after `$(`, a backquote, `|`, `&` or `;`. Read whole, a message that
 /// mentions a function would tie the step to it. The install steps' code
-/// digest (`called_words` in scripts/install_task.sh) reads lines the same way.
+/// digest (`called_words` in rust/src/install_task/digest.rs) reads lines the same way.
 fn run_names(line: &str) -> Vec<&str> {
     let trimmed = line.trim_start();
     let message = ["log", "echo", "printf"].iter().any(|command| {

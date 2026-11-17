@@ -12,26 +12,29 @@ def shellWord(value) {
 process RANK_PHENOTYPE_GENES {
     tag "${family}"
     label 'phenotype_ranking'
-    publishDir "${params.outdir}/phenotype_gene_ranking/${family}", mode: 'copy', overwrite: false, saveAs: { name -> new File(name).name }
+    // The task writes its tables into a folder named after the family, which
+    // keeps that name when published (the strict parser evaluates the
+    // publishDir path once, before any task, so it cannot name the family).
+    publishDir "${params.outdir}/phenotype_gene_ranking", mode: 'copy', overwrite: false
     input:
     tuple val(family), val(terms), val(ranking)
     output:
-    tuple val(family), path('ranking/*.gene_ranked.tsv'), emit: ranking
+    tuple val(family), path("${family}/*.gene_ranked.tsv"), emit: ranking
     // The other tables of rank-genes, published beside the ranking.
-    path('ranking/*.{frontier_p_terms,p_pairs,frontier_gene_evidence,gene_summary,gene_score_contributions}.tsv'), emit: tables
-    path('ranking/run_summary.tsv'), emit: summary
+    path("${family}/*.{frontier_p_terms,p_pairs,frontier_gene_evidence,gene_summary,gene_score_contributions}.tsv"), emit: tables
+    path("${family}/run_summary.tsv"), emit: summary
     script:
     def rows = terms.collect { term -> "${shellWord(family)} ${shellWord(term)}" }.join(' ')
     """
     printf 'sample_id\\thpo_term\\n' > hpo_terms.tsv
     printf '%s\\t%s\\n' ${rows} >> hpo_terms.tsv
-    '${ranking.binary}' rank-genes --reference-dir '${ranking.reference}' --hpo-term-table hpo_terms.tsv --sample-id ${shellWord(family)} --output-dir ranking
+    '${ranking.binary}' rank-genes --reference-dir '${ranking.reference}' --hpo-term-table hpo_terms.tsv --sample-id ${shellWord(family)} --output-dir ${shellWord(family)}
     """
     stub:
     """
-    mkdir ranking
-    printf 'sample_id\\tgene_symbol\\tncbi_gene_ids\\ttotal_score\\n' > 'ranking/${family}.gene_ranked.tsv'
-    for table in frontier_p_terms p_pairs frontier_gene_evidence gene_summary gene_score_contributions; do : > "ranking/${family}.\$table.tsv"; done
-    : > ranking/run_summary.tsv
+    mkdir ${shellWord(family)}
+    printf 'sample_id\\tgene_symbol\\tncbi_gene_ids\\ttotal_score\\n' > '${family}/${family}.gene_ranked.tsv'
+    for table in frontier_p_terms p_pairs frontier_gene_evidence gene_summary gene_score_contributions; do : > "${family}/${family}.\$table.tsv"; done
+    : > '${family}/run_summary.tsv'
     """
 }

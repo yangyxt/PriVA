@@ -1,3 +1,9 @@
+// One shell word: the value in single quotes, each single quote in it written
+// as '"'"'.
+def shellWord(value) {
+    "'" + value.toString().replace("'", "'\"'\"'") + "'"
+}
+
 // One family's genes ranked for its HPO terms by `hpo-gene-ranking rank-genes`
 // (repository llm_gene_reranker). PRIORITIZE_ACMG turns the family's
 // gene_ranked.tsv into each gene's phenotype_gene_index. The terms arrive as
@@ -15,12 +21,11 @@ process RANK_PHENOTYPE_GENES {
     path('ranking/*.{frontier_p_terms,p_pairs,frontier_gene_evidence,gene_summary,gene_score_contributions}.tsv'), emit: tables
     path('ranking/run_summary.tsv'), emit: summary
     script:
-    def quote = { value -> "'" + value.toString().replace("'", "'\"'\"'") + "'" }
-    def rows = terms.collect { term -> "${quote(family)} ${quote(term)}" }.join(' ')
+    def rows = terms.collect { term -> "${shellWord(family)} ${shellWord(term)}" }.join(' ')
     """
     printf 'sample_id\\thpo_term\\n' > hpo_terms.tsv
     printf '%s\\t%s\\n' ${rows} >> hpo_terms.tsv
-    '${ranking.binary}' rank-genes --reference-dir '${ranking.reference}' --hpo-term-table hpo_terms.tsv --sample-id ${quote(family)} --output-dir ranking
+    '${ranking.binary}' rank-genes --reference-dir '${ranking.reference}' --hpo-term-table hpo_terms.tsv --sample-id ${shellWord(family)} --output-dir ranking
     """
     stub:
     """

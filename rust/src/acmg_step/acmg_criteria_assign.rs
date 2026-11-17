@@ -694,7 +694,9 @@ fn phenotype_gene_ranking(config: Option<&str>) -> Result<Option<String>> {
         return Ok(None);
     }
     if !Path::new(path).is_file() {
-        return Err(invalid(format!("phenotype_gene_ranking: {path} is not a file")));
+        return Err(invalid(format!(
+            "phenotype_gene_ranking: {path} is not a file"
+        )));
     }
     Ok(Some(path.to_owned()))
 }

@@ -1464,7 +1464,11 @@ mod tests {
         let relevant = directory.join("relevant_genes.txt");
         std::fs::write(&relevant, "G1\n").unwrap();
         let broken = directory.join("broken.gene_ranked.tsv");
-        std::fs::write(&broken, "sample_id\tgene_symbol\ttotal_score\nF1\tG2\tabc\n").unwrap();
+        std::fs::write(
+            &broken,
+            "sample_id\tgene_symbol\ttotal_score\nF1\tG2\tabc\n",
+        )
+        .unwrap();
         let (ranking, relevant, broken) = (
             ranking.to_str().unwrap(),
             relevant.to_str().unwrap(),
@@ -1529,7 +1533,10 @@ mod tests {
         assert_eq!(listed_index[1], plain_index[1]);
 
         let error = rank(None, Some(broken)).unwrap_err().to_string();
-        assert!(error.contains("total_score of G2 is not a number"), "{error}");
+        assert!(
+            error.contains("total_score of G2 is not a number"),
+            "{error}"
+        );
         std::fs::remove_dir_all(&directory).unwrap();
     }
 }

@@ -2,6 +2,7 @@ nextflow.enable.dsl=2
 
 include { VALIDATE_INPUTS; ANNOTATE_PREPROCESS; ANNOTATE_STEP; ANNOTATE_CADD; SPLIT_CHROMOSOMES; GATHER_PIECES; ANNOTATE_MERGE; HUB_LOOKUP; HUB_FILL; HUB_ADD; HUB_REFRESH_PLAN; FILTER_FAMILY; PRIORITIZE_COMBINE; PRIORITIZE_SPLICING; PRIORITIZE_UTR; PRIORITIZE_JOIN; PRIORITIZE_ACMG } from './modules/local/compatibility'
 include { INSTALL_RESOURCES } from './workflows/install'
+include { RANK_PHENOTYPE_GENES } from './modules/local/phenotype_genes'
 
 // The scientific source is deliberately retained during orchestration parity.
 // Its content identity, rather than only its pathname, participates in every task hash.
@@ -28,6 +29,28 @@ def lockFields() {
     if (!params.resources_lock) return [resources_lock: '', resources_lock_sha256: '']
     def lock = file(params.resources_lock, checkIfExists: true)
     [resources_lock: lock.toString(), resources_lock_sha256: java.security.MessageDigest.getInstance('SHA-256').digest(lock.bytes).encodeHex().toString()]
+}
+
+// --phenotype_hpo_terms: each family's HPO terms (an HPO id or exact term
+// name), in the table's order, from the columns sample_id (the PED family
+// identifier) and hpo_term.
+def readHpoTerms(path) {
+    def lines = file(path, checkIfExists: true).readLines().findAll { line -> line.trim() }
+    def header = lines ? lines[0].split('\t', -1).collect { name -> name.trim() } : []
+    def familyColumn = header.indexOf('sample_id')
+    def termColumn = header.indexOf('hpo_term')
+    if (familyColumn < 0 || termColumn < 0) error '--phenotype_hpo_terms needs the columns sample_id and hpo_term'
+    def terms = [:]
+    lines.drop(1).each { line ->
+        def fields = line.split('\t', -1)
+        def family = fields.size() > familyColumn ? fields[familyColumn].trim() : ''
+        def term = fields.size() > termColumn ? fields[termColumn].trim() : ''
+        if (family && term) {
+            if (!terms.containsKey(family)) terms[family] = []
+            terms[family].add(term)
+        }
+    }
+    terms
 }
 
 // The plan HUB_REFRESH_PLAN writes: which steps to refresh, and how many variants.
@@ -91,6 +114,11 @@ Optional: --ped COHORT.ped --family ID --vcf_index VCF.vcf.gz.tbi
           --annotation_hub FOLDER (reuse stored annotation across runs)
           --resources_lock resources.lock.json (from --action install: hub
             folders named from install-step lineages)
+          --phenotype_hpo_terms TERMS.tsv (columns sample_id, the PED family,
+            and hpo_term, an HPO id or exact term name) with
+            --hpo_gene_ranking_binary HPO_GENE_RANKING --hpo_gene_ranking_reference
+            FOLDER: raises the sort index of variants in genes ranked high for
+            the family's terms
 The cohort VCF is validated and annotated once, one task per annotation step.
 With --ped, every PED family is then filtered and prioritized in its own tasks
 (--family selects one); without --ped, one run covers all samples without
@@ -129,6 +157,25 @@ outputs and scientific-profile requirements.'''
         if (!(privaBinary.toString() ==~ /[A-Za-z0-9_\.\/:+\-]+/)) error '--priva_binary must be a path without whitespace or shell metacharacters'
         def base = new File(params.input.toString()).name.replaceFirst(/\.vcf\.gz$/, '')
         if (!(base ==~ /[A-Za-z0-9_][A-Za-z0-9_.-]*/)) error 'Unsafe input basename'
+        // The optional phenotype gene bonus: the families' HPO terms, the
+        // ranking program (its bytes join the ranking tasks' identity) and its
+        // reference folder.
+        def phenotypeTerms = [:]
+        def phenotypeRanking = [:]
+        if (params.phenotype_hpo_terms) {
+            ['hpo_gene_ranking_binary', 'hpo_gene_ranking_reference'].each { key ->
+                if (!params[key]) error "--phenotype_hpo_terms needs --${key}"
+            }
+            def rankingBinary = new File(params.hpo_gene_ranking_binary.toString()).canonicalFile
+            if (!rankingBinary.isFile() || !rankingBinary.canExecute()) error '--hpo_gene_ranking_binary must be an executable hpo-gene-ranking program'
+            def rankingReference = new File(params.hpo_gene_ranking_reference.toString()).canonicalFile
+            if (!['raw', 'prepared', 'hpo_graph'].every { name -> new File(rankingReference, name).isDirectory() }) error '--hpo_gene_ranking_reference must be a folder with raw/, prepared/ and hpo_graph/'
+            phenotypeTerms = readHpoTerms(params.phenotype_hpo_terms)
+            phenotypeRanking = [binary: rankingBinary.toString(), reference: rankingReference.toString(),
+                                sha256: java.security.MessageDigest.getInstance('SHA-256').digest(rankingBinary.bytes).encodeHex().toString()]
+        } else if (params.hpo_gene_ranking_binary || params.hpo_gene_ranking_reference) {
+            error '--hpo_gene_ranking_binary and --hpo_gene_ranking_reference need --phenotype_hpo_terms'
+        }
         def meta = [family: params.family ? params.family.toString() : '', base: base, assembly: params.assembly, mode: params.mode,
                     source_root: sourceRoot.toString(), source_digest: sourceDigest(sourceRoot),
                     software_id: params.software_id.toString(), vcf_hub_mode: params.vcf_hub_mode,
@@ -255,7 +302,26 @@ outputs and scientific-profile requirements.'''
             .join(PRIORITIZE_UTR.out.table.map { run, family, table -> [family, table] })
             .map { family, run, table, bundle, splicing, utr -> [run, family, table, splicing, utr, bundle] }
         PRIORITIZE_JOIN(toJoin)
-        PRIORITIZE_ACMG(PRIORITIZE_JOIN.out.table.map(bundleLast))
+        // With --phenotype_hpo_terms each family that has terms gets its genes
+        // ranked, and its ACMG task the ranking (the phenotype gene bonus);
+        // the other families, and every family without the option, rank as
+        // before: they are joined with no ranking and given an empty list.
+        def rankings = Channel.empty()
+        if (phenotypeRanking) {
+            families.toList().subscribe { listed ->
+                def absent = phenotypeTerms.keySet().findAll { family -> !(family in listed) }
+                if (absent) log.warn "HPO terms of families not in this run are left out: ${absent.sort().join(', ')}"
+            }
+            RANK_PHENOTYPE_GENES(families.filter { family -> phenotypeTerms.containsKey(family) }
+                .map { family -> [family, phenotypeTerms[family], phenotypeRanking] })
+            rankings = RANK_PHENOTYPE_GENES.out.ranking
+        }
+        def toAcmg = PRIORITIZE_JOIN.out.table.map(bundleLast)
+            .map { run, family, table, bundle -> [family, run, table, bundle] }
+            .join(rankings, remainder: true)
+            .filter { item -> item[1] != null }
+            .map { family, run, table, bundle, ranking -> [run, family, table, ranking ?: [], bundle] }
+        PRIORITIZE_ACMG(toAcmg)
     }
 }
 

@@ -1336,6 +1336,18 @@ pub(crate) fn run(options: &Options) -> Result<()> {
     provenance.set("phase", text(phase));
     provenance.set("family", family.clone().map_or(Json::Null, text));
     provenance.set("cpus", Json::Int(cpus as i128));
+    if let Some(path) = &phenotype_gene_ranking {
+        provenance.set(
+            "phenotype_gene_ranking",
+            object(vec![
+                (
+                    "name",
+                    text(path.file_name().unwrap().to_string_lossy().into_owned()),
+                ),
+                ("sha256", text(sha256(path)?)),
+            ]),
+        );
+    }
     let mut listed = Vec::new();
     for path in &outputs {
         listed.push(object(vec![

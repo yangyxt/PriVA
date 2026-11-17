@@ -1,0 +1,28 @@
+// One family's genes ranked for its HPO terms by `hpo-gene-ranking rank-genes`
+// (repository llm_gene_reranker). PRIORITIZE_ACMG turns the family's
+// gene_ranked.tsv into each gene's phenotype_gene_index. The terms arrive as
+// values, so a task's identity counts only its own family's terms, the
+// program's bytes (its sha256) and the reference folder's path.
+process RANK_PHENOTYPE_GENES {
+    tag "${family}"
+    label 'phenotype_ranking'
+    publishDir "${params.outdir}/phenotype_gene_ranking/${family}", mode: 'copy', overwrite: false, saveAs: { name -> new File(name).name }
+    input:
+    tuple val(family), val(terms), val(ranking)
+    output:
+    tuple val(family), path('ranking/*.gene_ranked.tsv'), emit: ranking
+    path('ranking/*'), emit: tables
+    script:
+    def quote = { value -> "'" + value.toString().replace("'", "'\"'\"'") + "'" }
+    def rows = terms.collect { term -> "${quote(family)} ${quote(term)}" }.join(' ')
+    """
+    printf 'sample_id\\thpo_term\\n' > hpo_terms.tsv
+    printf '%s\\t%s\\n' ${rows} >> hpo_terms.tsv
+    '${ranking.binary}' rank-genes --reference-dir '${ranking.reference}' --hpo-term-table hpo_terms.tsv --sample-id ${quote(family)} --output-dir ranking
+    """
+    stub:
+    """
+    mkdir ranking
+    printf 'sample_id\\tgene_symbol\\tncbi_gene_ids\\ttotal_score\\n' > 'ranking/${family}.gene_ranked.tsv'
+    """
+}

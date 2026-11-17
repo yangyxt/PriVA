@@ -131,6 +131,31 @@ contract = json.loads(next((root / 'no-pedigree').rglob('contract.json')).read_t
 assert contract['families'] == [] and contract['ped_sha256'] is None, contract
 print('Cohort stub with two families and no-pedigree stub passed')
 PY
+# Phenotype gene bonus: the family with HPO terms (FAM) gets its genes ranked
+# (a header-only stub table here) and its ACMG task the ranking; OTHER ranks as
+# before. Terms of a family that is not in the PED file are reported and left out.
+mkdir -p "${fixture}/hpo_reference/raw" "${fixture}/hpo_reference/prepared" "${fixture}/hpo_reference/hpo_graph"
+printf 'sample_id\thpo_term\nFAM\tHP:0001250\nFAM\tGlobal developmental delay\nABSENT\tHP:0000252\n' > "${fixture}/hpo_terms.tsv"
+run_with nextflow-stub-phenotype "${shared[@]}" --ped "${fixture}/family.ped" \
+    --phenotype_hpo_terms "${fixture}/hpo_terms.tsv" --hpo_gene_ranking_binary "$(command -v true)" \
+    --hpo_gene_ranking_reference "${fixture}/hpo_reference" --outdir "${case_root}/phenotype"
+python3 - "${case_root}/phenotype" "${run_root}/logs/nextflow-stub-phenotype.log" <<'PY'
+import csv
+import json
+from pathlib import Path
+import sys
+root, log = Path(sys.argv[1]), Path(sys.argv[2]).read_text()
+trace = sorted((root / 'pipeline_info').glob('trace-*.tsv'))[-1]
+tasks = sorted(row['name'] for row in csv.DictReader(trace.open(), delimiter='\t'))
+assert [t for t in tasks if t.startswith('RANK_PHENOTYPE_GENES')] == ['RANK_PHENOTYPE_GENES (FAM)'], tasks
+assert sorted(t for t in tasks if t.startswith('PRIORITIZE_ACMG')) == ['PRIORITIZE_ACMG (FAM)', 'PRIORITIZE_ACMG (OTHER)'], tasks
+records = {f: json.loads((root / 'pipeline_info' / f'prioritization-acmg.{f}.provenance.json').read_text()) for f in ('FAM', 'OTHER')}
+assert records['FAM']['phenotype_gene_ranking']['name'] == 'FAM.gene_ranked.tsv', records['FAM']
+assert 'phenotype_gene_ranking' not in records['OTHER'], records['OTHER']
+assert (root / 'phenotype_gene_ranking' / 'FAM' / 'FAM.gene_ranked.tsv').is_file()
+assert 'left out: ABSENT' in log, 'the family missing from the PED file was not reported'
+print('Phenotype gene bonus wiring passed')
+PY
 # The removed annotated mode and old hub options are refused with a message
 # that points to the annotation hub.
 if "${nextflow_bin}" -log "${run_root}/logs/nextflow-stub-removed-mode.log" "${common[@]}" \

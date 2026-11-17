@@ -405,22 +405,37 @@ Refresh of the light steps for real (14 November 2026, `validation/install_workf
 
 Adopted steps (15 November 2026, `validation/install_workflow_20261110/adopt_shipped_1547529`, commit `2b967fe`, every step adopted from the existing installation except F7, F8 and F9, all tasks inside one 4-CPU job). Three changes. (1) The existing installation names the files shipped with the repository by their path in the source tree it was installed from, which the installer's functions of another source tree do not take for their shipped file. `install-task adopt` now lists an adopted key under `shipped` when the file lies in the `data` folder of another PriVA source tree and this source tree has the same bytes at the same place (`shipped_twin`, `6acb2db`); a file with other bytes stays as the installation names it. (2) The existing installation's configuration names an hg19 reference for the GoFCards step, and resolving a step's folders copied it into every running step (3 GB each). `gofcards_hg19_fasta`, `gofcards_hg38_fasta` and `gofcards_hg19_to_hg38_chain` are now `user_inputs` of F5, so like the SpliceAI2 pair they are left out of that for every other step and count in F5's lineage (`acbd27f`). (3) An adopted step only writes its receipt, yet asked for its step's resources, 24 CPUs and 64 GB for a ClinVar VEP piece (job 1547520 stopped on that); it now asks for 1 CPU, 1 GB and 30 minutes (`2b967fe`). Job 1547529 PASSED: 80 adopted receipts; nine keys listed under `shipped` (C8 `interpro_mapping_pickle`, D1 `clinvar_gene_stat`, D9 `clingen_map` and `gene_dosage_sensitivity`, F4 `ddg2p_mechanism_evidence`, F5 `gofcards_exact_gof_cache`, and the outputs of F7, F8 and F9); F7, F8 and F9 ran on the adopted receipts in about 3 seconds each and hold no file above 1 GB; the published configuration names this source tree's file for the six shipped keys it was asked about; the second launch submitted no step task.
 
-## Installer: from shell to `priva`
+## Installer and pipeline: from shell to `priva` and Nextflow
 
 Goal: `nextflow run main.nf --action install` is the only installer, every
-install step is a `priva` command, and `scripts/install_utils.sh` (5,606
-lines, 114 functions) and the Python it calls are gone. What stays outside
-`priva`: the bootstrap that builds it, and the external programs the steps
-drive (VEP, upstream `CADD.sh` with its Python scorer, bcftools, tabix,
-bgzip, CrossMap, curl, git, conda/mamba).
+task of the install and the analysis is a Nextflow process, and PriVA's own
+shell glue (`install_utils.sh`, `annotation_vcf.sh`,
+`filtration_vcf_per_fam.sh`, `prioritization_vcf_per_fam.sh`,
+`common_bash_utils.sh`) and the Python it calls are gone.
 
-### Bootstrap
+The rule for every step: **mature tools keep their own commands.** VEP,
+upstream `CADD.sh`, bcftools, tabix, bgzip, samtools, CrossMap, curl, git and
+conda run as they are, as lines of a Nextflow process's `script:` block.
+What moves into `priva` is PriVA's own logic around them: checks, receipts,
+reuse decisions, configuration keys. That is what the shell functions do today.
 
-`scripts/bootstrap_nextflow_runtime.sh` (Java and Nextflow) and
-`scripts/bootstrap_priva_rust.py` (the Rust toolchain and `priva` itself) run
-before `priva` exists, so they cannot be `priva` commands. They stay as they
-are and do nothing else: no resource is installed before `priva` is built, and
-`--action install` already requires `--priva_binary`.
+```mermaid
+flowchart LR
+  subgraph now["Now: one install step"]
+    direction TB
+    N1["Nextflow process INSTALL_STEP"] --> N2["priva install-task run"]
+    N2 --> N3["bash: source install_utils.sh<br/>(5,606 lines, 114 functions)"]
+    N3 --> N4["shell function, e.g. ClinVar_vep_chrom"]
+    N4 --> N5["vep / bcftools / tabix"]
+    N4 --> N6["checks, receipts, yq edits<br/>(shell, some Python)"]
+  end
+  subgraph goal["Goal: the same step"]
+    direction TB
+    G1["Nextflow process CLINVAR_VEP_CHROM<br/>inputs and outputs as channels"] --> G5["vep / bcftools / tabix<br/>(their own command lines)"]
+    G1 --> G6["priva install check / record<br/>(checks, receipts)"]
+  end
+  now -. "phases 1 to 7" .-> goal
+```
 
 ### Done: the install runner (`priva install-task`, 17 November 2026)
 
@@ -444,8 +459,7 @@ Two details keep the digests: the installer functions' text is still what
 the shell runner's `identity` function defined first, because B4, C6, C8, C10,
 C11, D1, D6 and D9 reach the word `identity` and so counted that function; and
 functions, scripts and data files are ordered by the system's `sort` in the
-environment's locale, as the shell runner ordered them. Both go away with the
-shell functions themselves (below).
+environment's locale, as the shell runner ordered them. Phase 1 removes both.
 
 A step's installer calls still run in one `bash` that sources
 `install_utils.sh`; each call's arguments come from `priva install-task
@@ -453,30 +467,87 @@ call-args`, so they are read from the private configuration as the calls
 before it left it, as before. Folder resolution (`installer-config-paths
 managed-roots` and `resolve`) and the reuse check for shipped files are native.
 
-### Next: the step functions, one step at a time
+### Why one small change can rebuild 40 steps
 
-A registry call whose first word is `priva` will run the program directly,
-without the shell. Its step's code digest then counts the registry entry and
-the Rust files that command reaches (the reach the annotation hub lineage uses,
-`nextflow_task/rust_reach.rs`), not the whole `priva` source. When every call
-of a step is native the step no longer sources `install_utils.sh`.
+A step's lineage hashes its own code digest **and the lineages of the steps
+it needs**, so a change anywhere upstream gives every step below it a new
+folder, even when the upstream output is byte for byte the same. From the
+registry's `needs`:
 
-Changing a function changes the digest of every step that reaches it, and
-those steps run again. The heavy steps (A2 VEP cache, C1 gnomAD, C3 and C4
-AlphaMissense VEP, D1 ClinVar VEP, about 34 hours, E1 CADD) are therefore
-converted in one change each, and an existing installation can be carried
-over with `--adopt` instead of rebuilding.
+```mermaid
+flowchart LR
+  A1["A1 reference FASTA<br/>(minutes)"] --> C1["C1 gnomAD<br/>+ 24 downloads"]
+  A1 --> B2["B2 conservation"]
+  A1 --> C3["C3, C4 AlphaMissense VEP"]
+  A1 --> D1["D1 ClinVar VEP<br/>26 pieces, about 34 CPU hours"]
+  C3 --> C6["C6, C8, C10, C11"]
+  D1 --> D6["D6, D8, D9, F9"]
+```
 
-| Order | Steps | Installer functions now | Python they still run | Work |
+| Change in | Steps that run again |
+| --- | --- |
+| A1 (reference download) | 40, including C1, C3, C4 and all of D1 |
+| A2 (VEP cache) | 40, including all of D1 |
+| D0 (ClinVar download) | 33, including all of D1 |
+| B9 (pext) | 32, including all of D1 |
+| A4 (CDS FASTA) | none |
+| F1 (HPO and MONDO) | 2 (F4, F9) |
+
+Two remedies, both in phase 1:
+
+- **Follow the output, not the code.** Each receipt records the SHA-256 of
+  its output files, and a step's lineage hashes those instead of the upstream
+  lineage. An upstream rewrite that produces the same bytes then rebuilds only
+  itself.
+- **Bundle.** Changes that alter lineages go out together, so an existing
+  installation pays at most one rebuild, and `--adopt all` carries the
+  unchanged results over instead.
+
+### Phase 1: one deliberate lineage switch (bundled)
+
+Everything that changes digests without changing results, in one change:
+
+| Item | Today | After |
+| --- | --- | --- |
+| Order of functions, scripts and data files in a digest | the system `sort`, so it depends on the machine's language setting: a laptop and the cluster can compute different lineages for the same code | byte order, the same everywhere |
+| The shell runner's `identity` function | counted in 8 steps' digests (kept only for parity) | dropped |
+| Upstream lineages in a step's lineage | the upstream step's lineage | the SHA-256 of the upstream step's output files |
+| `conda_install_vep` plugin transition, `AlphaMissense_pick_missense_constrained_segments`, `alphamissense_python_das_complete` | run `vep_plugins_release.py`, `alphamissense_annotation_base.py`, `mapped_artifact_publish.py`, `das_install_state.py`, `das_input_continuity.py` | call the existing `priva vep-plugins`, `alpha-annotation-base`, `mapped-artifact`, `das-install-state`, `das-input-continuity` |
+| `SpliceAI2_install`, `validate_loftee_resources`, `validate_cds_fasta`, `validate_gene_pathogenic_mechanism_evidence` | four inline `python - <<PY` blocks | small `priva` checks |
+
+Check: the stub install gives one new folder per step and nothing else
+changes; a real install adopted with `--adopt all` reuses every result.
+
+### Phase 2: a bootstrap without `install_utils.sh`
+
+Today `main_install` creates the conda environment, installs Nextflow and
+builds `priva` before any resource. The same, as four documented commands,
+each the tool's own:
+
+```mermaid
+flowchart LR
+  B1["conda env create<br/>-f acmg_conda.yml"] --> B2["bash scripts/bootstrap_nextflow_runtime.sh<br/>install --prefix PREFIX"]
+  B2 --> B3["python scripts/bootstrap_priva_rust.py<br/>install --source-root . --cache-root CACHE"]
+  B3 --> B4["nextflow run main.nf --action install<br/>--priva_binary PRIVA ..."]
+```
+
+`bootstrap_priva_rust.py` stays Python (it builds `priva`, so it cannot be
+`priva`). Work: move what `main_install` does before `PriVA_rust_install`
+(basic paths, the VEP release in the environment, bundled snapshots) into the
+environment file or into install steps, and make the README lead with these
+four commands; `main_install` stays only until phase 7.
+
+### Phases 3 to 7
+
+| Phase | Scope | Shell glue now | Python it still runs | Work (tools keep their commands) |
 | --- | --- | --- | --- | --- |
-| 1 | Switch callers to existing native commands | `conda_install_vep` (plugin transition), `AlphaMissense_pick_missense_constrained_segments`, `alphamissense_python_das_complete` | `vep_plugins_release.py transition`, `alphamissense_annotation_base.py`, `mapped_artifact_publish.py`, `das_install_state.py`, `das_input_continuity.py` | Call `priva vep-plugins`, `alpha-annotation-base`, `mapped-artifact`, `das-install-state`, `das-input-continuity`; check each against its receipts |
-| 2 | Inline Python in the shell | `SpliceAI2_install` (receipt), `validate_loftee_resources`, `validate_cds_fasta`, `validate_gene_pathogenic_mechanism_evidence` | four `python - <<PY` blocks | Small `priva` checks |
-| 3 | Downloads (A1, A4, A5, B1, B2, B3, B5, B6, B7, B8, B9, D0, F1) | 4 to 10 functions each | `alternative_start_codon.py` (A4) | `priva install <step>` commands around curl/git with the same checksums and receipts |
-| 4 | Steps that already call native builders (C6, C8, C10, C11, D6, D8, D9, F4 to F9) | 7 to 19 functions each | `protein_domain_mapping.py` (C8), `build_gene_pathogenic_mechanism_cache.py` acquisition (F4); a configured non-default builder script | Move the orchestration (locks, receipts, reuse checks) into `priva`; F4's acquisition |
-| 5 | Heavy chains (A2, C1, C3, C4, D1, E1) | 13 to 49 functions each | `cadd_scripts_install.py`, `cadd_prescore_index.py` (kept: they belong to CADD) | `priva` drives VEP, bcftools, CrossMap and `CADD.sh`; one change per step |
-| 6 | Remove the shell installer | `main_install` and the cluster scripts (`install_cluster.sh`, `*.sbatch`) | | `--action install` is the only entry point; delete `install_utils.sh` and the bash part of the digest |
+| 3 | Downloads: A1, A4, A5, B1, B2, B3, B5, B6, B7, B8, B9, D0, F1 | 4 to 10 functions each | `alternative_start_codon.py` (A4) | Each a Nextflow process: curl or git, then `priva install check/record` for checksums and the receipt |
+| 4 | Pipeline scripts: `annotation_vcf.sh` (1,827 lines), `filtration_vcf_per_fam.sh` (356), `prioritization_vcf_per_fam.sh` (430), `common_bash_utils.sh` (1,627) | run inside every analysis task | an inline `python - <<PY` block in `anno_VEP_cache_worker`, and `cadd_conda.py` (finds CADD's conda) | The annotation, filtration and prioritization tasks already exist per step; their `script:` blocks call VEP, bcftools, `CADD.sh` and `priva` directly instead of a shell function. Every run goes through this, so it comes before the heavier installer phases |
+| 5 | Steps on native builders: C6, C8, C10, C11, D6, D8, D9, F4 to F9 | 7 to 19 functions each | `protein_domain_mapping.py` (C8), `build_gene_pathogenic_mechanism_cache.py` acquisition (F4); a configured non-default builder script | Locks, receipts and reuse checks into `priva`; F4's acquisition |
+| 6 | Heavy chains: A2, C1, C3, C4, D1, E1 | 13 to 49 functions each | `cadd_scripts_install.py`, `cadd_prescore_index.py` (kept: they belong to CADD) | VEP, bcftools, CrossMap and `CADD.sh` command lines in the process; one change per step |
+| 7 | Remove the shell installer | `main_install`, `install_cluster.sh`, the `*.sbatch` scripts | | Delete `install_utils.sh` and the bash part of the digest |
 
-The annotation steps (`annotation_vcf.sh`) are outside this plan.
+Each phase is its own pull request against `main` once PR #1 is merged.
 
 ## Retained Python tools
 

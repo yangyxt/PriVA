@@ -30,7 +30,7 @@ use crate::cache_convert::clingen_map::ClingenCache;
 use crate::cli::{Result, invalid};
 use crate::json_text::Json;
 use crate::pandas_table::{Cell, Column, ObjectValue, Table, TextColumn};
-use crate::pandas_table::{Header, ReadOptions, read_table_with};
+use crate::pandas_table::{Header, ReadOptions, UseColumns, read_table_with};
 use crate::python_text::python_strip;
 use std::cmp::Ordering;
 use std::collections::HashMap;
@@ -125,6 +125,7 @@ pub(crate) fn run_harness(function: &str, call: &HarnessCall) -> Result<Table> {
                 pext_penalty_shape: number("pext_penalty_shape", 0.5),
                 relevant_gene_list: text("relevant_gene_list"),
                 dispensable_gene_list: text("dispensable_gene_list"),
+                phenotype_gene_ranking: text("phenotype_gene_ranking"),
             };
             sort_and_rank_variants(call.table.clone(), ped.as_ref(), text("fam_name"), &options)
         }
@@ -541,6 +542,92 @@ pub(crate) struct RankingOptions<'a> {
     pub(crate) pext_penalty_shape: f64,
     pub(crate) relevant_gene_list: Option<&'a str>,
     pub(crate) dispensable_gene_list: Option<&'a str>,
+    /// The family's gene ranking for the phenotype gene bonus (see
+    /// `phenotype_gene_indices`). Python has no such argument: `None` ranks as Python does.
+    pub(crate) phenotype_gene_ranking: Option<&'a str>,
+}
+
+/// The weight of the phenotype gene bonus at the family's top gene, the same as the
+/// relevant gene list's weight.
+const PHENOTYPE_GENE_TOP_WEIGHT: f64 = 1.2;
+
+/// `phenotype_gene_index` of a gene from its share of the family's top `total_score`:
+/// `1 + 0.2 * clip(1 + log10(share) / 2, 0, 1)`. The top gene gets 1.2, a gene at a tenth
+/// of the top score 1.1, and a gene at a hundredth of it or below 1.0 (no gain).
+fn phenotype_gene_index(share: f64) -> f64 {
+    if share.is_nan() || share <= 0.0 {
+        return 1.0;
+    }
+    let level = (1.0 + share.log10() / 2.0).clamp(0.0, 1.0);
+    1.0 + (PHENOTYPE_GENE_TOP_WEIGHT - 1.0) * level
+}
+
+/// The phenotype gene bonus of each gene in a gene ranking table written by
+/// `hpo-gene-ranking rank-genes` (`<sample>.gene_ranked.tsv`) for the proband's HPO terms:
+/// `phenotype_gene_index` of `total_score / top`, where `top` is the largest `total_score`
+/// of the table. A gene listed twice keeps its larger bonus; a table whose top score is not
+/// above zero gives no gene a gain. This is a Rust-only revision of the ranking.
+fn phenotype_gene_indices(path: &str) -> Result<HashMap<String, f64>> {
+    let options = ReadOptions {
+        all_text: true,
+        keep_default_na: false,
+        use_columns: Some(UseColumns::Names(vec![
+            "gene_symbol".to_owned(),
+            "total_score".to_owned(),
+        ])),
+        ..ReadOptions::default()
+    };
+    let ranking = read_table_with(Path::new(path), &options)
+        .map_err(|error| refuse(format!("the gene ranking {path}: {error}")))?;
+    let symbols = ranking.column("gene_symbol")?;
+    let scores = ranking.column("total_score")?;
+    let mut genes = Vec::with_capacity(ranking.rows);
+    let mut top = 0.0_f64;
+    for row in 0..ranking.rows {
+        let symbol = match symbols.cell(row) {
+            Cell::Text(text) => text.trim(),
+            _ => "",
+        };
+        if symbol.is_empty() {
+            continue;
+        }
+        let score = match scores.cell(row) {
+            Cell::Text(text) => text.trim().parse::<f64>().ok(),
+            _ => None,
+        }
+        .filter(|score| !score.is_nan())
+        .ok_or_else(|| {
+            refuse(format!(
+                "the gene ranking {path}: total_score of {symbol} is not a number"
+            ))
+        })?;
+        top = top.max(score);
+        genes.push((symbol.to_owned(), score));
+    }
+    let mut indices = HashMap::with_capacity(genes.len());
+    for (symbol, score) in genes {
+        let index = if top > 0.0 {
+            phenotype_gene_index(score / top)
+        } else {
+            1.0
+        };
+        let kept = indices.entry(symbol).or_insert(index);
+        if index > *kept {
+            *kept = index;
+        }
+    }
+    Ok(indices)
+}
+
+/// Each row's value in `values` for its `SYMBOL`, 1.0 for a symbol not listed.
+fn symbol_values(table: &Table, values: &HashMap<String, f64>) -> Result<Vec<f64>> {
+    let symbols = table.column("SYMBOL")?;
+    Ok((0..table.rows)
+        .map(|row| match symbols.cell(row) {
+            Cell::Text(text) => values.get(text).copied().unwrap_or(1.0),
+            _ => 1.0,
+        })
+        .collect())
 }
 
 fn python_error(
@@ -873,7 +960,20 @@ pub(crate) fn sort_and_rank_variants(
         Column::Float(compatibility.clone()),
     );
 
-    // R5 and R6: the dispensable and relevant gene lists.
+    // R5 and R6: the dispensable and relevant gene lists. The phenotype gene bonus (a
+    // Rust-only revision) takes R6's place: a row gains the larger of its relevant gene
+    // list weight and its bonus, never both.
+    let phenotype_index = match options.phenotype_gene_ranking {
+        Some(path) => {
+            let indices = phenotype_gene_indices(path)?;
+            eprintln!(
+                "INFO: phenotype gene bonus from {path}: {} genes of the gene ranking",
+                indices.len()
+            );
+            Some(symbol_values(&df, &indices)?)
+        }
+        None => None,
+    };
     for (list, column, weight) in [
         (options.dispensable_gene_list, "dispensable_gene_index", 0.9),
         (options.relevant_gene_list, "relevant_gene_index", 1.2),
@@ -888,10 +988,27 @@ pub(crate) fn sort_and_rank_variants(
             .map(|listed| if *listed { weight } else { 1.0 })
             .collect();
         df.set_column(column, Column::Float(index.clone()));
+        let gain: Vec<f64> = match &phenotype_index {
+            Some(bonus) if column == "relevant_gene_index" => index
+                .iter()
+                .zip(bonus)
+                .map(|(listed, bonus)| listed.max(*bonus))
+                .collect(),
+            _ => index,
+        };
         for row in 0..rows {
-            sort_index[row] *= index[row];
+            sort_index[row] *= gain[row];
         }
         df.set_column("sort_index", Column::Float(sort_index.clone()));
+    }
+    if let Some(bonus) = phenotype_index {
+        if options.relevant_gene_list.is_none() {
+            for row in 0..rows {
+                sort_index[row] *= bonus[row];
+            }
+            df.set_column("sort_index", Column::Float(sort_index.clone()));
+        }
+        df.set_column("phenotype_gene_index", Column::Float(bonus));
     }
     for row in 0..rows {
         if penalty_rows[row] {
@@ -1272,6 +1389,7 @@ mod tests {
             pext_penalty_shape: 0.5,
             relevant_gene_list: None,
             dispensable_gene_list: None,
+            phenotype_gene_ranking: None,
         };
         let ranked = sort_and_rank_variants(input.clone(), None, None, &options).unwrap();
         assert_eq!(ranked.rows, 3);
@@ -1292,5 +1410,126 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert_eq!(error, "KeyError: '#FamilyID'");
+    }
+
+    #[test]
+    fn phenotype_gene_index_follows_the_share_of_the_top_score() {
+        let close = |value: f64, expected: f64| (value - expected).abs() < 1e-12;
+        assert_eq!(phenotype_gene_index(1.0), 1.2);
+        assert!(close(phenotype_gene_index(0.1), 1.1));
+        assert!(close(phenotype_gene_index(10f64.powf(-0.5)), 1.15));
+        assert!(close(phenotype_gene_index(10f64.powf(-1.5)), 1.05));
+        assert_eq!(phenotype_gene_index(0.01), 1.0);
+        assert_eq!(phenotype_gene_index(0.0001), 1.0);
+        assert_eq!(phenotype_gene_index(0.0), 1.0);
+        assert_eq!(phenotype_gene_index(f64::NAN), 1.0);
+    }
+
+    fn floats(table: &Table, name: &str) -> Vec<f64> {
+        match table.column(name).unwrap() {
+            Column::Float(values) => values.clone(),
+            _ => panic!("{name} is not a float column"),
+        }
+    }
+
+    #[test]
+    fn phenotype_gene_bonus_raises_the_sort_index_of_ranked_genes() {
+        // Two variants whose ACMG scores are close: G2 is the family's top gene, G1 has a
+        // hundredth of its score.
+        let input = table(vec![
+            ("chrom", texts(&["chr1", "chr2"])),
+            ("pos", Column::Int(vec![5, 3])),
+            ("ref", texts(&["A", "C"])),
+            ("alt", texts(&["T", "G"])),
+            ("BIOTYPE", texts(&["protein_coding", "protein_coding"])),
+            ("SYMBOL", texts(&["G1", "G2"])),
+            ("ACMG_quant_score", Column::Float(vec![0.5, 0.45])),
+            ("var_plausible_patho_mechs", texts(&["", ""])),
+            ("variant_effect", texts(&["uncertain", "uncertain"])),
+            ("variant_id", texts(&["1:5:A-T", "2:3:C-G"])),
+        ]);
+        let directory =
+            std::env::temp_dir().join(format!("priva_phenotype_bonus_{}", std::process::id()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let ranking = directory.join("F1.gene_ranked.tsv");
+        std::fs::write(
+            &ranking,
+            "sample_id\tgene_symbol\tncbi_gene_ids\ttotal_score\tbase_term_score\n\
+             F1\tG2\t2\t5.0\t1.0\n\
+             F1\tG7\t7\t2.5\t1.0\n\
+             F1\tG2\t2\t0.5\t1.0\n\
+             F1\tG1\t1\t0.05\t1.0\n",
+        )
+        .unwrap();
+        let relevant = directory.join("relevant_genes.txt");
+        std::fs::write(&relevant, "G1\n").unwrap();
+        let broken = directory.join("broken.gene_ranked.tsv");
+        std::fs::write(&broken, "sample_id\tgene_symbol\ttotal_score\nF1\tG2\tabc\n").unwrap();
+        let (ranking, relevant, broken) = (
+            ranking.to_str().unwrap(),
+            relevant.to_str().unwrap(),
+            broken.to_str().unwrap(),
+        );
+        let options = |relevant_gene_list, phenotype_gene_ranking| RankingOptions {
+            pext_tissues: "",
+            pext_low_expression_cutoff: 0.1,
+            pext_penalty_floor: 0.8,
+            pext_penalty_shape: 0.5,
+            relevant_gene_list,
+            dispensable_gene_list: None,
+            phenotype_gene_ranking,
+        };
+        let rank = |relevant_gene_list, phenotype_gene_ranking| {
+            sort_and_rank_variants(
+                input.clone(),
+                None,
+                None,
+                &options(relevant_gene_list, phenotype_gene_ranking),
+            )
+        };
+
+        // Without the ranking: G1 first, and no new column.
+        let plain = rank(None, None).unwrap();
+        assert_eq!(
+            plain.column("variant_id").unwrap(),
+            &texts(&["1:5:A-T", "2:3:C-G"])
+        );
+        assert!(!plain.has_column("phenotype_gene_index"));
+        let plain_index = floats(&plain, "sort_index");
+
+        // With it: G2 gains 1.2 (the larger of its two rows), G1 nothing, so G2 goes first.
+        let bonus = rank(None, Some(ranking)).unwrap();
+        assert_eq!(
+            bonus.column("variant_id").unwrap(),
+            &texts(&["2:3:C-G", "1:5:A-T"])
+        );
+        assert_eq!(floats(&bonus, "phenotype_gene_index"), vec![1.2, 1.0]);
+        let bonus_index = floats(&bonus, "sort_index");
+        assert!((bonus_index[0] - plain_index[1] * 1.2).abs() < 1e-12);
+        assert!((bonus_index[1] - plain_index[0]).abs() < 1e-12);
+
+        // With a relevant gene list too: each row gains the larger weight, never both.
+        let both = rank(Some(relevant), Some(ranking)).unwrap();
+        assert_eq!(
+            both.column("variant_id").unwrap(),
+            &texts(&["1:5:A-T", "2:3:C-G"])
+        );
+        assert_eq!(floats(&both, "relevant_gene_index"), vec![1.2, 1.0]);
+        assert_eq!(floats(&both, "phenotype_gene_index"), vec![1.0, 1.2]);
+        let both_index = floats(&both, "sort_index");
+        assert!((both_index[0] - plain_index[0] * 1.2).abs() < 1e-12);
+        assert!((both_index[1] - plain_index[1] * 1.2).abs() < 1e-12);
+
+        // The relevant gene list alone keeps Python's ranking.
+        let listed = rank(Some(relevant), None).unwrap();
+        assert!(!listed.has_column("phenotype_gene_index"));
+        assert_eq!(floats(&listed, "relevant_gene_index"), vec![1.2, 1.0]);
+        let listed_index = floats(&listed, "sort_index");
+        assert_eq!(listed_index[0], both_index[0]);
+        assert_eq!(listed_index[1], plain_index[1]);
+
+        let error = rank(None, Some(broken)).unwrap_err().to_string();
+        assert!(error.contains("total_score of G2 is not a number"), "{error}");
+        std::fs::remove_dir_all(&directory).unwrap();
     }
 }

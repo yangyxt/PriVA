@@ -268,6 +268,7 @@ fn parse_task(args: &[String]) -> std::result::Result<(String, Options), String>
                     "splicing-table",
                     "utr-table",
                     "threads",
+                    "phenotype-gene-ranking",
                 ],
                 &["stub"],
             )?;

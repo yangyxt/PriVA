@@ -670,6 +670,35 @@ fn pm5_assembly(config: Option<&str>) -> String {
     "hg38".to_owned()
 }
 
+/// The family's gene ranking for the phenotype gene bonus: the configuration's
+/// `phenotype_gene_ranking`, a `<sample>.gene_ranked.tsv` of `hpo-gene-ranking rank-genes`
+/// for the proband's HPO terms. A Rust-only revision with no Python option: without the
+/// key, or with an empty or null value, the step ranks as the Python script does. A path
+/// that is not a file is refused, so a requested bonus is never left out quietly.
+fn phenotype_gene_ranking(config: Option<&str>) -> Result<Option<String>> {
+    let text = config
+        .filter(|path| !path.is_empty())
+        .and_then(|path| std::fs::read_to_string(path).ok());
+    let Some(text) = text else {
+        return Ok(None);
+    };
+    let Ok(Parsed::Mapping(document)) = parse_config(&text) else {
+        return Ok(None);
+    };
+    let path = match document.get("phenotype_gene_ranking") {
+        None | Some(ConfigValue::Scalar(Scalar::Null)) => return Ok(None),
+        Some(ConfigValue::Scalar(Scalar::Str(path))) => path.trim(),
+        Some(_) => return Err(invalid("phenotype_gene_ranking: expected a path")),
+    };
+    if path.is_empty() || path == "null" {
+        return Ok(None);
+    }
+    if !Path::new(path).is_file() {
+        return Err(invalid(format!("phenotype_gene_ranking: {path} is not a file")));
+    }
+    Ok(Some(path.to_owned()))
+}
+
 /// The resolver handed to `annotate_exact_nonlof_variants` when no row has a symbol, where
 /// Python builds no hub and the function returns before matching.
 struct NoSymbols;
@@ -687,6 +716,8 @@ impl SymbolResolver for NoSymbols {
 /// `ACMG_criteria_assign(...)` with the parsed command line, in the script's order; the
 /// final table, which is also written over the input.
 pub(crate) fn run_step(args: &StepArguments, cutoffs: &Cutoffs) -> Result<Table> {
+    // Read before the criteria so that a wrong path stops the step at once.
+    let phenotype_gene_ranking = phenotype_gene_ranking(args.config.as_deref())?;
     let read = read_table(Path::new(&args.anno_table))?;
     let kept = pandas_polars::drop_duplicates_first(&read, None)?;
     // PVS1 reads its LoF gate by pandas index label, which drop_duplicates() leaves gapped.
@@ -980,6 +1011,7 @@ pub(crate) fn run_step(args: &StepArguments, cutoffs: &Cutoffs) -> Result<Table>
         pext_penalty_shape: args.pext_penalty_shape,
         relevant_gene_list: args.relevant_gene_list.as_deref(),
         dispensable_gene_list: args.dispensable_gene_list.as_deref(),
+        phenotype_gene_ranking: phenotype_gene_ranking.as_deref(),
     };
     let ranked = sort_and_rank_variants(table, ped.as_ref(), args.fam_name.as_deref(), &options)?;
     write_table(Path::new(&args.anno_table), &ranked)?;

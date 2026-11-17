@@ -11,7 +11,9 @@ process RANK_PHENOTYPE_GENES {
     tuple val(family), val(terms), val(ranking)
     output:
     tuple val(family), path('ranking/*.gene_ranked.tsv'), emit: ranking
-    path('ranking/*'), emit: tables
+    // The other tables of rank-genes, published beside the ranking.
+    path('ranking/*.{frontier_p_terms,p_pairs,frontier_gene_evidence,gene_summary,gene_score_contributions}.tsv'), emit: tables
+    path('ranking/run_summary.tsv'), emit: summary
     script:
     def quote = { value -> "'" + value.toString().replace("'", "'\"'\"'") + "'" }
     def rows = terms.collect { term -> "${quote(family)} ${quote(term)}" }.join(' ')
@@ -24,5 +26,7 @@ process RANK_PHENOTYPE_GENES {
     """
     mkdir ranking
     printf 'sample_id\\tgene_symbol\\tncbi_gene_ids\\ttotal_score\\n' > 'ranking/${family}.gene_ranked.tsv'
+    for table in frontier_p_terms p_pairs frontier_gene_evidence gene_summary gene_score_contributions; do : > "ranking/${family}.\$table.tsv"; done
+    : > ranking/run_summary.tsv
     """
 }

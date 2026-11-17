@@ -137,7 +137,7 @@ PY
 mkdir -p "${fixture}/hpo_reference/raw" "${fixture}/hpo_reference/prepared" "${fixture}/hpo_reference/hpo_graph"
 printf 'sample_id\thpo_term\nFAM\tHP:0001250\nFAM\tGlobal developmental delay\nABSENT\tHP:0000252\n' > "${fixture}/hpo_terms.tsv"
 run_with nextflow-stub-phenotype "${shared[@]}" --ped "${fixture}/family.ped" \
-    --phenotype_hpo_terms "${fixture}/hpo_terms.tsv" --hpo_gene_ranking_binary "$(command -v true)" \
+    --phenotype_hpo_terms "${fixture}/hpo_terms.tsv" --hpo_gene_ranking_binary "$(type -P true)" \
     --hpo_gene_ranking_reference "${fixture}/hpo_reference" --outdir "${case_root}/phenotype"
 python3 - "${case_root}/phenotype" "${run_root}/logs/nextflow-stub-phenotype.log" <<'PY'
 import csv
@@ -152,7 +152,8 @@ assert sorted(t for t in tasks if t.startswith('PRIORITIZE_ACMG')) == ['PRIORITI
 records = {f: json.loads((root / 'pipeline_info' / f'prioritization-acmg.{f}.provenance.json').read_text()) for f in ('FAM', 'OTHER')}
 assert records['FAM']['phenotype_gene_ranking']['name'] == 'FAM.gene_ranked.tsv', records['FAM']
 assert 'phenotype_gene_ranking' not in records['OTHER'], records['OTHER']
-assert (root / 'phenotype_gene_ranking' / 'FAM' / 'FAM.gene_ranked.tsv').is_file()
+assert sorted(p.name for p in (root / 'phenotype_gene_ranking' / 'FAM').iterdir()) == sorted(
+    [f'FAM.{t}.tsv' for t in ('frontier_gene_evidence', 'frontier_p_terms', 'gene_ranked', 'gene_score_contributions', 'gene_summary', 'p_pairs')] + ['run_summary.tsv'])
 assert 'left out: ABSENT' in log, 'the family missing from the PED file was not reported'
 print('Phenotype gene bonus wiring passed')
 PY

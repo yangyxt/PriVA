@@ -1,4 +1,7 @@
-use super::digest::{called_words, data_names, script_names, toplevel_lines};
+use super::content::{Input, Places, content, listing};
+use super::digest::{
+    called_commands, called_words, data_names, dynamic_command, script_names, toplevel_lines,
+};
 use super::plan::{add_months, glob_match, header_release, sorted_lines_sha256};
 use super::{delete_key, set_key, yaml_value};
 use crate::sha256::sha256_hex;
@@ -94,5 +97,75 @@ fn configuration_keys_are_set_and_read_like_the_shell_runner() {
         text,
         "a: 1  # one\non: true\nlist: [x, 2]\nb : /new/path\nlast: z\nadded: v\n"
     );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn priva_commands_are_read_from_the_lines_that_run_them() {
+    assert_eq!(
+        called_commands(r#"  "${PRIVA_BIN}" mondo-scope --out x"#),
+        vec!["mondo-scope"]
+    );
+    assert_eq!(
+        called_commands(r#""$PRIVA_CACHE_INSTALL_BINARY" builder-identity --step A"#),
+        vec!["builder-identity"]
+    );
+    assert!(dynamic_command(r#""${PRIVA_BIN}" "$command" --in x"#));
+    assert!(!dynamic_command(r#""${PRIVA_BIN}" mondo-scope"#));
+}
+
+#[cfg(unix)]
+#[test]
+fn content_names_results_not_the_folder_they_sit_in() {
+    use std::os::unix::fs::symlink;
+    let dir = scratch("content");
+    let upstream = dir.join("UP/lineage1");
+    std::fs::create_dir_all(upstream.join("data")).unwrap();
+    std::fs::write(upstream.join("data/ref.fa"), "ACGT\n").unwrap();
+    let tree = dir.join("tree");
+    std::fs::create_dir_all(tree.join("data")).unwrap();
+    std::fs::write(tree.join("data/shipped.tsv"), "x\n").unwrap();
+    let inputs = vec![Input {
+        id: "UP".into(),
+        folder: upstream.clone(),
+        content: "abc".into(),
+    }];
+    let make = |lineage: &str, body: &str| {
+        let own = dir.join("STEP").join(lineage);
+        let data = own.join("data");
+        std::fs::create_dir_all(data.join("sub")).unwrap();
+        std::fs::write(data.join("sub/out.tsv"), body).unwrap();
+        symlink(upstream.join("data/ref.fa"), data.join("ref.fa")).unwrap();
+        symlink("sub/out.tsv", data.join("alias.tsv")).unwrap();
+        let keys = vec![
+            (
+                "out".to_owned(),
+                data.join("sub/out.tsv").to_string_lossy().into_owned(),
+            ),
+            (
+                "shipped".to_owned(),
+                tree.join("data/shipped.tsv").to_string_lossy().into_owned(),
+            ),
+        ];
+        let places = Places {
+            own: own.clone(),
+            tree: tree.clone(),
+            inputs: &inputs,
+        };
+        listing(&data, &keys, &places, 2).unwrap()
+    };
+    let first = make("aaaa", "1\t2\n");
+    let moved = make("bbbb", "1\t2\n");
+    let changed = make("cccc", "1\t3\n");
+    assert_eq!(first, moved);
+    assert_eq!(content(&first), content(&moved));
+    assert_ne!(content(&first), content(&changed));
+    let lines: Vec<&str> = first.lines().collect();
+    assert_eq!(lines[0], "l alias.tsv own data/sub/out.tsv");
+    assert_eq!(lines[1], "l ref.fa input UP data/ref.fa abc");
+    assert_eq!(lines[2], "d sub");
+    assert!(lines[3].starts_with("f sub/out.tsv "));
+    assert_eq!(lines[4], "k out own data/sub/out.tsv");
+    assert!(lines[5].starts_with("k shipped tree data/shipped.tsv "));
     let _ = std::fs::remove_dir_all(&dir);
 }

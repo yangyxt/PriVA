@@ -1,34 +1,26 @@
 //! A step's code digest: its registry entry, the text of the installer
-//! functions it reaches, the shared shell files' lines outside functions, and
-//! the content of the script files and of the shipped data files it names.
+//! functions it reaches, the shared shell files' lines outside functions, the
+//! content of the script files and of the shipped data files it names, and
+//! the Rust files behind every `priva` command those functions run.
 //!
 //! The installer functions are still shell, so their text is what bash prints
-//! for them (`declare -f`) after sourcing `scripts/install_utils.sh`, as the
-//! shell runner read it. Two details keep the digests the shell runner wrote:
+//! for them (`declare -f`) after sourcing `scripts/install_utils.sh`. Lists are
+//! in byte order, so every machine computes the same digest whatever its
+//! language setting.
 //!
-//! - The shell runner defined its own functions before it sourced the
-//!   installer, so a step whose functions use the word `identity` (B4, C6, C8,
-//!   C10, C11, D1, D6 and D9 when this was ported) counted the runner's
-//!   `identity` function. That text is defined here the same way
-//!   (`RUNNER_IDENTITY`); none of the runner's other function names was reached.
-//! - The functions, scripts and data files are ordered by the system's `sort`
-//!   in the environment's locale, as the shell runner ordered them.
-use super::{Options, Result, compact, fail, read_json, step, strings, system_sort};
+//! A step counts only the Rust code it runs: the files the command table hands
+//! each of its `priva` commands to, and the files those name (the reach the
+//! annotation hub lineage uses, `nextflow_task/rust_reach.rs`). A command
+//! chosen at run time (`"${PRIVA_BIN}" "$command"`) cannot be read from the
+//! text, so a step that reaches such a line must name its commands in the
+//! registry (`priva_commands`).
+use super::{Options, Result, compact, fail, read_json, step, strings};
 use crate::json_text::Json;
+use crate::nextflow_task::rust_reach;
 use crate::sha256::{Sha256, sha256_file};
-use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-
-/// The shell runner's `identity` function, as `scripts/install_task.sh`
-/// defined it (see the module comment).
-const RUNNER_IDENTITY: &str = r#"identity() { # path size mtime for a file, path "folder" mtime for a folder, or "missing"
-    # A folder's size is not stable on StorNext (0, then 1, for an unchanged
-    # LOFTEE repository between two launches of job 1540691).
-    local p=$1
-    if [[ -d $p ]]; then stat -L -c '%n folder %Y' -- "$p"
-    elif [[ -e $p ]]; then stat -L -c '%n %s %Y' -- "$p"; else echo "missing $p"; fi
-}"#;
 
 /// The shell files whose functions every step shares. A step counts the
 /// functions it reaches, not these whole files; their lines outside any
@@ -49,10 +41,8 @@ pub(crate) struct Installer {
 impl Installer {
     pub(crate) fn load(root: &Path) -> Result<Installer> {
         let scripts = root.join("scripts");
-        let program = format!(
-            "set -o pipefail\n{RUNNER_IDENTITY}\nsource \"$1/install_utils.sh\" > /dev/null 2>&1 || exit 97\n\
-             while read -r _ _ f; do printf '%s\\0' \"$f\"; declare -f \"$f\"; printf '\\0'; done < <(declare -F)\n"
-        );
+        let program = "set -o pipefail\nsource \"$1/install_utils.sh\" > /dev/null 2>&1 || exit 97\n\
+             while read -r _ _ f; do printf '%s\\0' \"$f\"; declare -f \"$f\"; printf '\\0'; done < <(declare -F)\n";
         let output = Command::new("bash")
             .arg("-c")
             .arg(program)
@@ -129,8 +119,15 @@ impl Installer {
                     queue.push_back(word);
                 }
             }
+            // priva_wrap_cache_builders renames a cache builder's own body to
+            // _priva_cache_builder_NAME and leaves a wrapper under NAME that
+            // reaches the body only through a variable; the body counts too.
+            let body = format!("_priva_cache_builder_{name}");
+            if self.has(&body) && !seen.contains(&body) {
+                queue.push_back(body);
+            }
         }
-        system_sort(&found, false)
+        Ok(sorted(found, false))
     }
 
     /// The script files those functions name: by a script file name, or as
@@ -140,7 +137,7 @@ impl Installer {
     pub(crate) fn step_scripts(&self, names: &[String]) -> Result<Vec<String>> {
         let text: String = names.iter().map(|n| self.text(n)).collect();
         let named: Vec<String> = script_names(&text);
-        let named = system_sort(&named, true)?;
+        let named = sorted(named, true);
         let mut queue: VecDeque<String> = named
             .into_iter()
             .filter(|w| !SHELL_LIBRARIES.contains(&w.as_str()) && self.scripts.join(w).is_file())
@@ -157,7 +154,7 @@ impl Installer {
             }
             let content = std::fs::read(self.scripts.join(&name)).unwrap_or_default();
             let modules: BTreeSet<String> = python_imports(&content).into_iter().collect();
-            let modules = system_sort(&modules.into_iter().collect::<Vec<_>>(), true)?;
+            let modules = sorted(modules.into_iter().collect(), true);
             for module in modules {
                 let file = format!("{module}.py");
                 if self.scripts.join(&file).is_file() && !seen.contains(&file) {
@@ -165,7 +162,7 @@ impl Installer {
                 }
             }
         }
-        system_sort(&found, true)
+        Ok(sorted(found, true))
     }
 
     /// The data files shipped with the repository that those functions name
@@ -175,7 +172,7 @@ impl Installer {
     /// the data folder).
     pub(crate) fn step_data(&self, names: &[String]) -> Result<Vec<String>> {
         let text: String = names.iter().map(|n| self.text(n)).collect();
-        let named = system_sort(&data_names(&text), true)?;
+        let named = sorted(data_names(&text), true);
         let git = self.root.join(".git").exists();
         let mut found = Vec::new();
         for name in named {
@@ -201,7 +198,7 @@ impl Installer {
                 found.push(path);
             }
         }
-        system_sort(&found, true)
+        Ok(sorted(found, true))
     }
 
     /// The lines of the shared shell files outside any function.
@@ -234,8 +231,87 @@ impl Installer {
             let sum = sha256_file(&self.root.join("data").join(&data))?;
             hash.update(format!("data {data} {sum}  -\n").as_bytes());
         }
+        let commands = self.step_commands(entry, &names)?;
+        for command in &commands {
+            hash.update(format!("priva {command}\n").as_bytes());
+        }
+        for (file, sum) in self.rust_files(&commands)? {
+            hash.update(format!("rust {file} {sum}\n").as_bytes());
+        }
         Ok(hash.finish_hex())
     }
+
+    /// The `priva` commands a step runs: those its functions name, and those
+    /// its registry entry lists (`priva_commands`). A function that picks the
+    /// command at run time needs the registry list.
+    pub(crate) fn step_commands(&self, entry: &Json, names: &[String]) -> Result<Vec<String>> {
+        let table = rust_reach::commands(&self.root);
+        let listed = strings(entry, "priva_commands");
+        for command in &listed {
+            if !table.contains_key(command) {
+                return Err(fail(format!(
+                    "step {}: priva_commands names {command}, which is not a priva command",
+                    super::text(entry, "id")
+                )));
+            }
+        }
+        let mut found: BTreeSet<String> = listed.iter().cloned().collect();
+        for name in names {
+            for line in self.text(name).lines() {
+                if dynamic_command(line) && listed.is_empty() {
+                    return Err(fail(format!(
+                        "step {}: {name} picks its priva command at run time; list the commands in the registry's priva_commands",
+                        super::text(entry, "id")
+                    )));
+                }
+                for command in called_commands(line) {
+                    if table.contains_key(&command) {
+                        found.insert(command);
+                    }
+                }
+            }
+        }
+        Ok(found.into_iter().collect())
+    }
+
+    /// {file: SHA-256 of its counted lines} for the Rust files behind the
+    /// commands.
+    pub(crate) fn rust_files(&self, commands: &[String]) -> Result<BTreeMap<String, String>> {
+        let table = rust_reach::commands(&self.root);
+        let mut files = BTreeMap::new();
+        for command in commands {
+            if let Some(entry) = table.get(command) {
+                files.extend(rust_reach::command_files(&self.root, entry)?);
+            }
+        }
+        Ok(files)
+    }
+}
+
+/// The commands a line runs: `"${PRIVA_BIN}" COMMAND` and the forms
+/// `rust_reach` reads, and `"$PRIVA_CACHE_INSTALL_BINARY" COMMAND`.
+pub(super) fn called_commands(line: &str) -> Vec<String> {
+    let mut found = rust_reach::called_commands(line);
+    let mut rest = line;
+    while let Some(at) = rest.find("PRIVA_CACHE_INSTALL_BINARY") {
+        let after = rest[at + "PRIVA_CACHE_INSTALL_BINARY".len()..]
+            .trim_start_matches(['}', '"', '\'', ' ']);
+        let end = after
+            .find(|c: char| !(c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-'))
+            .unwrap_or(after.len());
+        if after.starts_with(|c: char| c.is_ascii_lowercase()) {
+            found.push(after[..end].to_owned());
+        }
+        rest = &rest[at + 1..];
+    }
+    found
+}
+
+/// A line that runs `priva` with a command held in a variable.
+pub(super) fn dynamic_command(line: &str) -> bool {
+    ["PRIVA_BIN}\" \"$", "PRIVA_BIN\" \"$"]
+        .iter()
+        .any(|form| line.contains(form))
 }
 
 fn is_word_start(b: u8) -> bool {
@@ -499,6 +575,22 @@ pub(crate) fn reach(options: &Options) -> Result<()> {
     for data in installer.step_data(&names)? {
         println!("data {data}");
     }
+    let commands = installer.step_commands(entry, &names)?;
+    for command in &commands {
+        println!("priva {command}");
+    }
+    for file in installer.rust_files(&commands)?.keys() {
+        println!("rust {file}");
+    }
     println!("digest {}", installer.digest(entry)?);
     Ok(())
+}
+
+/// Byte order, once each with `unique`.
+fn sorted(mut items: Vec<String>, unique: bool) -> Vec<String> {
+    items.sort();
+    if unique {
+        items.dedup();
+    }
+    items
 }

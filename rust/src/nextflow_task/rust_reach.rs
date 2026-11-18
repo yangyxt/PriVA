@@ -254,7 +254,7 @@ fn embedded(text: &str, file: &Path, root: &Path, out: &mut BTreeSet<String>) {
 }
 
 /// {command: its file relative to rust/src}, read from the command table.
-pub(super) fn commands(root: &Path) -> BTreeMap<String, String> {
+pub(crate) fn commands(root: &Path) -> BTreeMap<String, String> {
     let src = root.join("rust/src");
     let mut out = BTreeMap::new();
     let Ok(table) = std::fs::read_to_string(src.join(TABLE)) else {
@@ -288,7 +288,7 @@ pub(super) fn commands(root: &Path) -> BTreeMap<String, String> {
 /// (`"${PRIVA_BIN}" COMMAND`), and the command a tool is handed the program
 /// for (`PRIVA_CADD_PRESCORE_BIN=...` is `cadd-prescore`). Only names of the
 /// command table count; the caller checks that.
-pub(super) fn called_commands(line: &str) -> Vec<String> {
+pub(crate) fn called_commands(line: &str) -> Vec<String> {
     let mut found = Vec::new();
     let mut from = 0;
     while let Some(offset) = line[from..].find("PRIVA_") {
@@ -320,7 +320,7 @@ pub(super) fn called_commands(line: &str) -> Vec<String> {
 /// {file relative to the checkout: SHA-256} for the Rust files behind the
 /// command whose file is `entry`, and the files they embed. A Rust file is
 /// hashed over its counted lines, an embedded file over its content.
-pub(super) fn command_files(root: &Path, entry: &str) -> Result<BTreeMap<String, String>> {
+pub(crate) fn command_files(root: &Path, entry: &str) -> Result<BTreeMap<String, String>> {
     let src = root.join("rust/src");
     let mut texts: BTreeMap<String, String> = BTreeMap::new();
     let mut embedded_files = BTreeSet::new();

@@ -1,5 +1,5 @@
 {
-  "about": "Install steps run as Nextflow tasks by workflows/install.nf. Each step calls existing installer functions from scripts/install_utils.sh with its own private configuration, whose cache_root is the step's lineage folder. Tokens: {config} is that configuration, {script_dir} the scripts folder, {KEY} the configuration value of KEY. runs: installer functions that a program of the step runs itself (priva clinvar-gene-refresh runs the ClinVar stages), counted in the step's code digest with the functions its calls reach. needs: steps whose receipts supply input keys. outputs: keys the step must set; optional_outputs may be empty. user_inputs: keys naming files you supply, kept from your configuration and counted in lineage. settings: configuration values that change results (glob patterns allowed). copies: input keys the step rewrites in place; the runner copies them into the step's own folder first. writable: the folder stays writable after the step (otherwise it is made read-only). native: the step's results are computed by priva, so the priva source identity counts in its lineage. release: how to ask a changing source for its current release (git: the commit of url and ref; http: the server's ETag, Last-Modified and size), part of the step's lineage. Tokens {grch} (GRCh37 or GRCh38) and {loftee_branch} (master or grch38) follow the assembly. adopt_paths: where an older installation that does not name an output key put that file, for --adopt ({KEY} from the old configuration). pinned: the release is kept in resource_root/pins.json and only checked again with --refresh STEP. max_age_months: a pinned release older than this many calendar months (from the day it was taken) is replaced by the current one.",
+  "about": "Install steps run as Nextflow tasks by workflows/install.nf. Each step calls existing installer functions from scripts/install_utils.sh with its own private configuration, whose cache_root is the step's lineage folder. Tokens: {config} is that configuration, {script_dir} the scripts folder, {KEY} the configuration value of KEY. runs: installer functions that a program of the step runs itself (priva clinvar-gene-refresh runs the ClinVar stages), counted in the step's code digest with the functions its calls reach. needs: steps whose receipts supply input keys. outputs: keys the step must set; optional_outputs may be empty. user_inputs: keys naming files you supply, kept from your configuration and counted in lineage. settings: configuration values that change results (glob patterns allowed). copies: input keys the step rewrites in place; the runner copies them into the step's own folder first. writable: the folder stays writable after the step (otherwise it is made read-only). priva_commands: priva commands the step runs that its functions pick at run time (\"${PRIVA_BIN}\" \"$command\"); the Rust files behind every priva command a step runs count in its code digest. release: how to ask a changing source for its current release (git: the commit of url and ref; http: the server's ETag, Last-Modified and size), part of the step's lineage. Tokens {grch} (GRCh37 or GRCh38) and {loftee_branch} (master or grch38) follow the assembly. adopt_paths: where an older installation that does not name an output key put that file, for --adopt ({KEY} from the old configuration). pinned: the release is kept in resource_root/pins.json and only checked again with --refresh STEP. max_age_months: a pinned release older than this many calendar months (from the day it was taken) is replaced by the current one.",
   "folder_keys": [
     "cache_root",
     "vep_cache_dir",
@@ -105,8 +105,7 @@
       "settings": [
         "assembly",
         "vep_installed_version"
-      ],
-      "native": true
+      ]
     },
     {
       "id": "B1",
@@ -871,8 +870,7 @@
       "settings": [
         "assembly",
         "vep_installed_version"
-      ],
-      "native": true
+      ]
     },
     {
       "id": "C4",
@@ -915,7 +913,9 @@
       "settings": [
         "assembly"
       ],
-      "native": true
+      "priva_commands": [
+        "alphamissense-domain"
+      ]
     },
     {
       "id": "C8",
@@ -936,7 +936,6 @@
         "assembly",
         "interpro_xml_gz_url"
       ],
-      "native": true,
       "release": [
         {
           "kind": "http",
@@ -1864,8 +1863,7 @@
         "assembly",
         "vep_installed_version",
         "clinvar_*"
-      ],
-      "native": true
+      ]
     },
     {
       "id": "C10",
@@ -1891,7 +1889,10 @@
         "assembly",
         "priva_python_hash_seed"
       ],
-      "native": true
+      "priva_commands": [
+        "alphamissense-domain",
+        "alpha-exon-history"
+      ]
     },
     {
       "id": "C11",
@@ -1912,8 +1913,7 @@
       ],
       "settings": [
         "assembly"
-      ],
-      "native": true
+      ]
     },
     {
       "id": "D6",
@@ -1933,8 +1933,7 @@
       ],
       "settings": [
         "assembly"
-      ],
-      "native": true
+      ]
     },
     {
       "id": "D8",
@@ -1953,8 +1952,7 @@
       ],
       "settings": [
         "assembly"
-      ],
-      "native": true
+      ]
     },
     {
       "id": "D9",
@@ -1976,7 +1974,6 @@
         "assembly",
         "clingen_*url*"
       ],
-      "native": true,
       "release": [
         {
           "kind": "http",
@@ -2041,7 +2038,9 @@
         "mondo_url",
         "mondo_sha256"
       ],
-      "native": true
+      "priva_commands": [
+        "mondo-scope"
+      ]
     },
     {
       "id": "F4",
@@ -2062,7 +2061,6 @@
         "g2p_ddg2p_url",
         "orphadata_gene_disease_url"
       ],
-      "native": true,
       "release": [
         {
           "kind": "http",
@@ -2097,7 +2095,6 @@
         "gofcards_refresh_days",
         "vep_installed_version"
       ],
-      "native": true,
       "release": [
         {
           "kind": "http",
@@ -2158,8 +2155,7 @@
       "settings": [
         "clinvar_min_review_stars",
         "gofcards_clinvar_reinjection_lag_days"
-      ],
-      "native": true
+      ]
     },
     {
       "id": "F8",
@@ -2177,8 +2173,7 @@
       "outputs": [
         "gene_nonlof_mechanism_json"
       ],
-      "settings": [],
-      "native": true
+      "settings": []
     },
     {
       "id": "F9",
@@ -2201,8 +2196,7 @@
       "settings": [
         "hpo_release",
         "mondo_release"
-      ],
-      "native": true
+      ]
     }
   ]
 }

@@ -29,7 +29,7 @@ def render() -> str:
     lines = [HEADER.read_text().replace("@INCLUDES@", include).rstrip("\n")]
     for s in steps:
         needs = ", ".join(f"{alias(ids[n])}.out.receipt" for n in s["needs"])
-        lines.append(f"    {alias(s)}(installWire('{s['id']}', plan, [{needs}], nativeSteps))")
+        lines.append(f"    {alias(s)}(installWire('{s['id']}', plan, [{needs}]))")
     receipts = ", ".join(f"{alias(s)}.out.receipt" for s in steps)
     lines.append(FOOTER.replace("@RECEIPTS@", receipts))
     return "\n".join(lines)
@@ -38,8 +38,11 @@ def render() -> str:
 FOOTER = """    def all = Channel.empty().mix(@RECEIPTS@).collect()
     def toPublish = plan.combine(all.map { [it] }).map { p, receipts ->
         def names = receipts.collect { it.toString() }.sort()
+        // Publishing writes every step's paths into one configuration, so it
+        // keys on their lineages (folders), and on the publishing code.
         def lineages = names.collect { r -> new groovy.json.JsonSlurper().parse(new File(r)).lineage }
-        [installSha(groovy.json.JsonOutput.toJson(lineages)).take(16), p, names]
+        def digest = new groovy.json.JsonSlurper().parse(p.toFile()).publish_digest
+        [installSha(groovy.json.JsonOutput.toJson([lineages: lineages, publish: digest])).take(16), p, names]
     }
     INSTALL_PUBLISH(toPublish)
     emit:

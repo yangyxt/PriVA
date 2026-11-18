@@ -1,4 +1,5 @@
 //! `run`, `adopt`, `publish` and the `call-args` helper of the step driver.
+use super::content;
 use super::plan::normalize_pin;
 use super::{
     Options, Result, absolute, clear, compact, copy_preserving, delete_key, fail, hostname,
@@ -311,9 +312,10 @@ pub(crate) fn run(options: &Options) -> Result<()> {
         }
     }
     let mut upstream = Vec::new();
+    let mut inputs = Vec::new();
     for input in options.all("input") {
         let receipt = read_json(Path::new(input))?;
-        upstream.push(object(vec![
+        let mut fields = vec![
             (
                 "id".into(),
                 receipt.get("id").cloned().unwrap_or(Json::Null),
@@ -322,8 +324,40 @@ pub(crate) fn run(options: &Options) -> Result<()> {
                 "lineage".into(),
                 receipt.get("lineage").cloned().unwrap_or(Json::Null),
             ),
-        ]));
+        ];
+        if let Some(content) = receipt.get("content") {
+            fields.push(("content".into(), content.clone()));
+        }
+        upstream.push(object(fields));
+        if let Some(folder) = receipt.get("folder").and_then(Json::as_str) {
+            inputs.push(content::Input {
+                id: text(&receipt, "id"),
+                folder: realpath_m(Path::new(folder)),
+                content: receipt_content(&receipt),
+            });
+        }
     }
+    // Only a step that others need keys them by content; hashing the data
+    // folder of a step nobody reads (a 30 GB gnomAD join) would be wasted.
+    let needed = steps(&registry)?
+        .iter()
+        .any(|s| strings(s, "needs").iter().any(|n| *n == id));
+    let content = if needed {
+        let places = content::Places {
+            own: inside.clone(),
+            tree: tree.clone(),
+            inputs: &inputs,
+        };
+        let pairs: Vec<(String, String)> = keys
+            .iter()
+            .map(|(k, v)| (k.clone(), json_scalar_text(v)))
+            .collect();
+        let listing = content::listing(&work, &pairs, &places, hashing_threads())?;
+        std::fs::write(here.join("content.txt"), &listing)?;
+        Some(content::content(&listing))
+    } else {
+        None
+    };
     let diff = Command::new("diff")
         .arg(here.join("private.before.yaml"))
         .arg(&private)
@@ -349,7 +383,35 @@ pub(crate) fn run(options: &Options) -> Result<()> {
         ("host".into(), string(hostname())),
         ("stub".into(), Json::Bool(stub)),
     ]);
+    let receipt = match (receipt, content) {
+        (Json::Object(mut fields), Some(content)) => {
+            let at = fields
+                .iter()
+                .position(|(k, _)| k == "files")
+                .unwrap_or(fields.len());
+            fields.insert(at, ("content".into(), string(content)));
+            Json::Object(fields)
+        }
+        (receipt, _) => receipt,
+    };
     write_file(&receipt_path, &pretty(&receipt)?)
+}
+
+/// What a step downstream keys on: the receipt's content, or its lineage
+/// for a receipt without one (adopted, or written before contents).
+pub(crate) fn receipt_content(receipt: &Json) -> String {
+    receipt
+        .get("content")
+        .and_then(Json::as_str)
+        .or_else(|| receipt.get("lineage").and_then(Json::as_str))
+        .unwrap_or_default()
+        .to_owned()
+}
+
+fn hashing_threads() -> usize {
+    nonempty_env("INSTALL_THREADS")
+        .and_then(|t| t.parse().ok())
+        .unwrap_or_else(|| std::thread::available_parallelism().map_or(1, |n| n.get()))
 }
 
 /// The step's folders under its own cache_root (`priva_configure_cache_paths`
@@ -663,8 +725,8 @@ pub(crate) fn publish(options: &Options) -> Result<()> {
         ("lineage".into(), string(lineage)),
         ("published".into(), string(now_iso())),
         (
-            "priva_identity".into(),
-            string(text(&plan, "priva_identity")),
+            "publish_digest".into(),
+            string(text(&plan, "publish_digest")),
         ),
         ("steps".into(), object(published)),
     ]);

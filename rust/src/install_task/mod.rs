@@ -46,6 +46,7 @@
 //! texts are the values the shell runner wrote, so every folder an earlier
 //! installation made is found again (see `digest` for the two places where that
 //! takes care).
+mod content;
 mod digest;
 mod plan;
 mod run;
@@ -681,40 +682,6 @@ where
         .output()
         .ok()?;
     output.status.success().then_some(output.stdout)
-}
-
-/// Lines sorted by the system's `sort` (`sort -u` with `unique`), in the
-/// environment's locale. The shell runner ordered the installer functions,
-/// scripts and data files of a step's code digest this way, so the digest
-/// keeps the value it had on the same machine.
-pub(crate) fn system_sort(lines: &[String], unique: bool) -> Result<Vec<String>> {
-    if lines.is_empty() {
-        return Ok(Vec::new());
-    }
-    let mut child = Command::new("sort")
-        .args(if unique { &["-u"][..] } else { &[][..] })
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .spawn()
-        .map_err(|e| fail(format!("cannot run sort: {e}")))?;
-    {
-        let mut input = child
-            .stdin
-            .take()
-            .ok_or_else(|| fail("sort has no input"))?;
-        for line in lines {
-            input.write_all(line.as_bytes())?;
-            input.write_all(b"\n")?;
-        }
-    }
-    let output = child.wait_with_output()?;
-    if !output.status.success() {
-        return Err(fail("sort failed"));
-    }
-    Ok(String::from_utf8_lossy(&output.stdout)
-        .lines()
-        .map(str::to_owned)
-        .collect())
 }
 
 #[cfg(test)]

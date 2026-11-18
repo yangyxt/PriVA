@@ -170,7 +170,7 @@ pub(crate) fn plan(options: &Options) -> Result<()> {
         delete_key(&base, key)?;
     }
 
-    let priva_identity = priva_identity(&root)?;
+    let publish_digest = publish_digest(&root)?;
     let all_keys = yaml_keys(&config)?;
     let adopt_config = options.get("adopt-config").unwrap_or("");
     let adopt = options.get("adopt").unwrap_or("");
@@ -289,28 +289,24 @@ pub(crate) fn plan(options: &Options) -> Result<()> {
     let plan = object(vec![
         ("schema".into(), Json::Int(1)),
         ("base_config".into(), string(base.to_string_lossy())),
-        ("priva_identity".into(), string(priva_identity)),
+        ("publish_digest".into(), string(publish_digest)),
         ("steps".into(), object(planned)),
     ]);
     write_file(&out.join("plan.json"), &pretty(&plan)?)
 }
 
-/// The rust tree's git object in a checkout, otherwise the SHA-256 of the
-/// priva program.
-fn priva_identity(root: &Path) -> Result<String> {
-    if let Some(out) = output_of(
-        "git",
-        [
-            std::ffi::OsStr::new("-C"),
-            root.as_os_str(),
-            "rev-parse".as_ref(),
-            "HEAD:rust".as_ref(),
-        ],
-    ) {
-        let text = String::from_utf8_lossy(&out).trim_end().to_owned();
-        if !text.is_empty() {
-            return Ok(text);
-        }
+/// What the publish task runs besides the receipts it reads: the Rust files
+/// behind `priva cache-install` (prepare and publish), by content. Without
+/// the Rust sources (an installed program), the SHA-256 of the program.
+fn publish_digest(root: &Path) -> Result<String> {
+    let table = crate::nextflow_task::rust_reach::commands(root);
+    if let Some(entry) = table.get("cache-install") {
+        let files = crate::nextflow_task::rust_reach::command_files(root, entry)?;
+        let text: String = files
+            .iter()
+            .map(|(file, sum)| format!("rust {file} {sum}\n"))
+            .collect();
+        return Ok(crate::sha256::sha256_hex(text.as_bytes()));
     }
     let program = std::env::var("PRIVA_BINARY")
         .ok()

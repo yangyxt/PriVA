@@ -476,7 +476,7 @@ Two details keep the digests: the installer functions' text is still what
 the shell runner's `identity` function defined first, because B4, C6, C8, C10,
 C11, D1, D6 and D9 reach the word `identity` and so counted that function; and
 functions, scripts and data files are ordered by the system's `sort` in the
-environment's locale, as the shell runner ordered them. Phase 1 removes both.
+environment's locale, as the shell runner ordered them. Phase 1 removed both.
 
 A step's installer calls still run in one `bash` that sources
 `install_utils.sh`; each call's arguments come from `priva install-task
@@ -520,20 +520,74 @@ Two remedies, both in phase 1:
   installation pays at most one rebuild, and `--adopt all` carries the
   unchanged results over instead.
 
-### Phase 1: one deliberate lineage switch (bundled)
+### Phase 1: content-keyed step versions (done, 18 November 2026)
 
-Everything that changes digests without changing results, in one change:
+A step downstream now keys on **what its inputs hold**, not on how they were
+made. Each receipt of a step that others need records a `content` key: the
+SHA-256 of a listing of its data folder and output keys, which never names
+the step's own (lineage) folder.
 
-| Item | Today | After |
+```mermaid
+flowchart LR
+  subgraph before["Before"]
+    direction TB
+    a1["A1 code changes"] --> l1["A1 lineage new"]
+    l1 --> d1["D1 lineage new<br/>(hashes A1's lineage)"]
+    d1 --> x1["40 steps rebuild,<br/>34 CPU hours for D1 alone"]
+  end
+  subgraph after["After"]
+    direction TB
+    a2["A1 code changes"] --> l2["A1 lineage new: A1 runs"]
+    l2 --> c2{"A1 content<br/>(its output bytes)<br/>changed?"}
+    c2 -- "no" --> s2["D1 lineage the same:<br/>nothing else runs"]
+    c2 -- "yes" --> r2["only steps whose<br/>inputs changed run"]
+  end
+```
+
+The content listing, one line per entry in byte order
+([`src/install_task/content.rs`](src/install_task/content.rs)):
+
+| Line | Entry | Why this form |
 | --- | --- | --- |
-| Order of functions, scripts and data files in a digest | the system `sort`, so it depends on the machine's language setting: a laptop and the cluster can compute different lineages for the same code | byte order, the same everywhere |
-| The shell runner's `identity` function | counted in 8 steps' digests (kept only for parity) | dropped |
-| Upstream lineages in a step's lineage | the upstream step's lineage | the SHA-256 of the upstream step's output files |
-| `conda_install_vep` plugin transition, `AlphaMissense_pick_missense_constrained_segments`, `alphamissense_python_das_complete` | run `vep_plugins_release.py`, `alphamissense_annotation_base.py`, `mapped_artifact_publish.py`, `das_install_state.py`, `das_input_continuity.py` | call the existing `priva vep-plugins`, `alpha-annotation-base`, `mapped-artifact`, `das-install-state`, `das-input-continuity` |
-| `SpliceAI2_install`, `validate_loftee_resources`, `validate_cds_fasta`, `validate_gene_pathogenic_mechanism_evidence` | four inline `python - <<PY` blocks | small `priva` checks |
+| `f REL SHA256` | a file in the data folder | its bytes, hashed on all threads (`INSTALL_THREADS`) |
+| `d REL` | a folder | an empty folder still counts |
+| `l REL input ID REL2 CONTENT` | a link into an input step's folder | names the input's content, not its lineage path |
+| `l REL own REL2` | a link inside this step's folder | no lineage in the text |
+| `l REL tree REL2 SHA256` | a link to a file shipped in the checkout | the checkout path differs between machines |
+| `l REL other IDENTITY` | a link elsewhere | path, size and modification time, as before |
+| `k KEY ...` | an output key's value | one of the link forms above |
 
-Check: the stub install gives one new folder per step and nothing else
-changes; a real install adopted with `--adopt all` reuses every result.
+What changed, all in one lineage switch (an existing installation pays it
+once, or not at all with `--adopt all`):
+
+| Item | Before | After |
+| --- | --- | --- |
+| Input of a step's lineage | each input's lineage | each input's `content` (an adopted receipt, or one written before this change, counts by its lineage) |
+| Order inside a digest | the system `sort` in the machine's locale: a laptop and the cluster could compute different lineages | byte order, the same everywhere |
+| The shell runner's `identity` function | counted in 8 steps' digests | dropped |
+| Rust code in a digest | the whole `rust/` tree's git object, for the 16 steps flagged `native`, so any Rust edit rebuilt all 16 | for every step, the Rust files its `priva` commands reach (`priva C`, `rust FILE SHA` lines of `reach`); `native` is gone, and `priva_commands` in the registry names commands a function picks at run time (C6, C10, F1) |
+| Wrapped cache builders | the 11 builders `priva_wrap_cache_builders` renames to `_priva_cache_builder_NAME` were reached only through a variable, so their bodies were not in any digest | counted |
+| Publish | keyed on every step's lineage | the same, plus the Rust files of `priva cache-install` (`publish_digest` in the plan and in `resources.lock.json`) |
+| AlphaMissense motifs, DAS completion | `alphamissense_annotation_base.py`, `mapped_artifact_publish.py`, `das_install_state.py`, `das_input_continuity.py` | `priva alpha-annotation-base`, `mapped-artifact`, `das-install-state`, `das-input-continuity` (the checkers' sources stay hashed in their receipts, never run) |
+
+A step nobody needs (for example a gnomAD chromosome join used only by
+publish) is not hashed: hashing its folder would cost minutes for nothing.
+
+| Check | Result |
+| --- | --- |
+| `cargo test --lib` | 610 passed (new: content of moved and changed folders, command detection) |
+| `tests/install_workflow_check.py` | workflow regenerated, check passes |
+| Stub install twice | 83 receipts, the second run reuses every folder |
+| Cascade: a no-op line added to A1's `reference_genome_install` | A1 and publish run again; nothing else (before: 40 steps) |
+| `das_install_state_compare.py`, `das_input_continuity_compare.py` | 121 and 91 cases, no mismatch |
+
+Left for the next change, since a content key no longer forces them into
+one rebuild:
+
+| Item | Now | Next |
+| --- | --- | --- |
+| `conda_install_vep` plugin transition | `vep_plugins_release.py`, because it runs before `priva` is built | `priva vep-plugins transition` once phase 2 builds `priva` first |
+| `SpliceAI2_install`, `validate_loftee_resources`, `validate_cds_fasta`, `validate_gene_pathogenic_mechanism_evidence` | inline `python - <<PY` blocks | small `priva` checks |
 
 ### Phase 2: a bootstrap without `install_utils.sh`
 

@@ -1521,16 +1521,15 @@ function AlphaMissense_pick_missense_constrained_segments() {
         fi
     fi
 
-    local base_helper=${SCRIPT_DIR}/alphamissense_annotation_base.py
+    priva_resolve_binary "$config_file" || return 1
     local alphamissense_vep_vcf
-    alphamissense_vep_vcf=$(python "$base_helper" path --config "$config_file" --source-root "$BASE_DIR") || return 1
-    python "$base_helper" check --config "$config_file" --source-root "$BASE_DIR" || return 1
+    alphamissense_vep_vcf=$("${PRIVA_BIN}" alpha-annotation-base path --config "$config_file" --source-root "$BASE_DIR") || return 1
+    "${PRIVA_BIN}" alpha-annotation-base check --config "$config_file" --source-root "$BASE_DIR" || return 1
     local threads=$(read_yaml "${config_file}" "threads")
     if [[ -z $alphamissense_intolerant_motifs || $alphamissense_intolerant_motifs == null || ! -d $(dirname "$alphamissense_intolerant_motifs") ]]; then
         alphamissense_intolerant_motifs="${intolerant_motif_prefix}.pkl"
     fi
     local nm_to_enst_tsv
-    priva_resolve_binary "$config_file" || return 1
     nm_to_enst_tsv=$("${PRIVA_BIN}" installer-prerequisites "${config_file}" \
         --source-root "${BASE_DIR}" --stage mapping --print-mapping) || return 1
     local -a mapping_inputs=(
@@ -1542,11 +1541,11 @@ function AlphaMissense_pick_missense_constrained_segments() {
         --mapping "$nm_to_enst_tsv" --kind motifs --assembly "$assembly"
         --cache-root "$(read_yaml "$config_file" cache_root)"
         --output-dir "$(read_yaml "$config_file" vep_plugins_cachedir)/AlphaMissense"
-        --annotation-base "$alphamissense_vep_vcf"
+        --annotation-base "$alphamissense_vep_vcf" --helper-root "$BASE_DIR"
         "${mapping_inputs[@]}"
     )
     # Finish only our own completed two-file transaction before normal receipt gates.
-    python "${SCRIPT_DIR}/mapped_artifact_publish.py" recover \
+    "${PRIVA_BIN}" mapped-artifact recover \
         --artifact "$alphamissense_intolerant_motifs" "${publication_args[@]}" || return 1
     local original_motifs=$alphamissense_intolerant_motifs
     if [[ -e "$alphamissense_intolerant_motifs" || -L "$alphamissense_intolerant_motifs" ||
@@ -1558,7 +1557,7 @@ function AlphaMissense_pick_missense_constrained_segments() {
             --assembly "$assembly" --kind motifs --print-path "${mapping_inputs[@]}") || return 1
     fi
     if [[ -s "$alphamissense_intolerant_motifs" ]] && \
-       python "$base_helper" motif-check --config "$config_file" --source-root "$BASE_DIR" \
+       "${PRIVA_BIN}" alpha-annotation-base motif-check --config "$config_file" --source-root "$BASE_DIR" \
            --artifact "$alphamissense_intolerant_motifs"; then
         [[ "$alphamissense_intolerant_motifs" == "$original_motifs" ]] || \
             update_yaml "$config_file" alphamissense_intolerant_motifs "$alphamissense_intolerant_motifs" || return 1
@@ -1573,7 +1572,7 @@ function AlphaMissense_pick_missense_constrained_segments() {
 
     mkdir -p "$(dirname "$alphamissense_intolerant_motifs")" || return 1
 
-    python "${SCRIPT_DIR}/mapped_artifact_publish.py" run \
+    "${PRIVA_BIN}" mapped-artifact run \
     --artifact "$alphamissense_intolerant_motifs" --expected-identity "$mapping_identity" \
     "${publication_args[@]}" -- \
     --vcf_path "$alphamissense_vep_vcf" \
@@ -1741,9 +1740,13 @@ function alphamissense_python_das_complete() {
     # closed proof establishes identical ordered ClinVar consumer inputs. The
     # optional sidecar admits only that one input replacement; every other
     # dependency/output stays strict. No sidecar is inferred or created here.
-    python "$completion_state" check --receipt "$completion_receipt" \
+    # priva das-install-state and das-input-continuity read the same receipts
+    # as the Python checkers; the checkers' sources stay hashed, never run.
+    priva_resolve_binary "$config_file" || return 1
+    "${PRIVA_BIN}" das-install-state check --receipt "$completion_receipt" \
         "${state_inputs[@]}" "${state_outputs[@]}" || \
-    python "${SCRIPT_DIR}/das_input_continuity.py" check \
+    "${PRIVA_BIN}" das-input-continuity check \
+        --checker-source "${SCRIPT_DIR}/das_input_continuity.py" \
         --receipt "$completion_receipt" \
         --continuity "${completion_receipt}.clinvar-continuity.json" \
         "${state_inputs[@]}" "${state_outputs[@]}" || return 1

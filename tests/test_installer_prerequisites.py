@@ -438,7 +438,9 @@ class InstallerPrerequisites(unittest.TestCase):
         resolve = [call for call in native if call[:2] == ["cache-install", "resolve"]]
         self.assertEqual(resolve[0], ["cache-install", "resolve", "--key", "all_intolerant_domains",
                                       "--build-config", str(self.config_file), "--source-root", str(ROOT)])
-        run = next(call for call in native if call[:2] == ["mapped-artifact", "run"])
+        # The motif step also runs through priva mapped-artifact, with its Python producer.
+        run = next(call for call in native
+                   if call[:2] == ["mapped-artifact", "run"] and "--native-producer" in call)
         self.assertEqual(run[run.index("--") + 1:], [
             "--assembly", "hg38", "--nm-to-enst", str(self.mapping), "--intolerant-domains", str(domains),
             "--hcseeker", str(ROOT / "data/HCSeeker/HC_spots.hg38.tsv"),

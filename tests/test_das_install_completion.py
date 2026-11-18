@@ -91,6 +91,15 @@ class DASInstallCompletion(unittest.TestCase):
     def native(self):
         return fake_priva_binary.calls(self.priva["PRIVA_FAKE_CALLS"])
 
+    def builders(self):
+        """Every priva call except the two checks of a Python completion receipt.
+
+        The completion step asks priva das-install-state check and, when that
+        fails, priva das-input-continuity check; neither builds anything.
+        """
+        return [call for call in self.native()
+                if call[:2] not in (["das-install-state", "check"], ["das-input-continuity", "check"])]
+
     def calls(self):
         """The das-domains analyze calls, oldest first."""
         return [call for call in self.native() if call[:2] == ["das-domains", "analyze"]]
@@ -452,7 +461,7 @@ python() {
         for function in ("AlphaMissense_stat", "AlphaMissense_pick_intolerant_domains"):
             with self.subTest(function=function):
                 self.assert_ok(self.run_install(override=override, function=function))
-        self.assertEqual(self.native(), [])
+        self.assertEqual(self.builders(), [])
         events = (self.folder / "legacy.events").read_text()
         self.assertIn("analysis=" + str(ROOT / "scripts/am_pick_intolerant_domains.py"), events)
         config = json.loads(self.config_path.read_text())
@@ -466,7 +475,7 @@ python() {
         result = self.run_install()
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("run AlphaMissense_stat", result.stderr)
-        self.assertEqual(self.native(), [])
+        self.assertEqual(self.builders(), [])
         self.stats.unlink()
         self.assert_ok(self.run_install(function="AlphaMissense_stat"))
         shards = self.cache / "input.stats.parquet.chromosomes"

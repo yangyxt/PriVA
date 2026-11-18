@@ -337,6 +337,9 @@ class InstallerResources(unittest.TestCase):
                     *) return 99 ;;
                 esac
             }
+            # The motif step runs these helpers through priva; the stand-in
+            # priva starts python in a new shell, which sees exported functions only.
+            export -f python
             update_yaml() { printf 'UPDATE:%s\\n' "$*"; }
             AlphaMissense_pick_missense_constrained_segments "$TEST_MAPPING_CONFIG"
         ''')

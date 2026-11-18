@@ -12,13 +12,19 @@ PRIVA_FAKE_BUILDER_SHA256 when it is set, and runs no script.
 values under --source-root) without converting it, and runs no script.
 `mapped-artifact run/recover --native-producer pm1-regions` runs the Python
 publication helper with the Python PM1 producer and its --skip_das arguments.
+`mapped-artifact run/recover --producer SCRIPT` runs the Python publication
+helper with the same options except --helper-root, and the same producer
+arguments after `--`.
 `das-install-state` runs scripts/das_install_state.py with the same arguments.
+`das-input-continuity record/check` runs scripts/das_input_continuity.py with
+every option except --checker-source, which the native command requires.
 `mechanism-source` runs scripts/mechanism_source_input.py with the same arguments.
 `alphamissense-vcf build --input TSV --output VCF` runs scripts/alphmis_tsv2vcf.py
 TSV VCF. `alpha-annotation-base` runs scripts/alphamissense_annotation_base.py
 with the same arguments, but with --source-root pointing at a private copy
 whose install_utils.sh has the original Python converter line instead of the
 native one; priva's recipe fingerprint counts the two lines as the same step.
+A source root without scripts/install_utils.sh is passed on unchanged.
 `installer-prerequisites` runs scripts/installer_prerequisites.py with the same
 arguments (CONFIG first, then the script's own options).
 `reference-resources` runs scripts/reference_resources.py with the same
@@ -189,6 +195,14 @@ if command == "installed-environment":
     script, forwarded = "installed_environment.py", rest
 elif command == "das-install-state":
     script, forwarded = "das_install_state.py", rest
+elif command == "das-input-continuity" and rest[:1] in (["record"], ["check"]):
+    pairs = options(rest[1:], {"--checker-source", "--receipt", "--continuity", "--profile", "--input",
+                               "--output", "--source", "--bundled", "--parameter", "--old-input",
+                               "--new-input", "--proof", "--proof-sha256"})
+    if "--checker-source" not in dict(pairs):
+        raise SystemExit("priva fixture: das-input-continuity needs --checker-source")
+    script = "das_input_continuity.py"
+    forwarded = [rest[0], *sum((pair for pair in pairs if pair[0] != "--checker-source"), ())]
 elif command == "mechanism-source":
     script, forwarded = "mechanism_source_input.py", rest
 elif command == "alphamissense-vcf" and rest[:1] == ["build"]:
@@ -202,12 +216,15 @@ elif command == "alpha-annotation-base":
     real = SourcePath(forwarded[index])
     native = '"${PRIVA_BIN}" alphamissense-vcf build --input "$alphamissense_prescore" --output "$converted" && \\'
     original = 'python "$convert_py" "$alphamissense_prescore" "$converted" && \\'
-    view = SourcePath(tempfile.mkdtemp(prefix="priva_fixture_source_"))
-    (view / "scripts").mkdir()
-    (view / "scripts/alphmis_tsv2vcf.py").symlink_to(real / "scripts/alphmis_tsv2vcf.py")
-    (view / "scripts/install_utils.sh").write_text(
-        (real / "scripts/install_utils.sh").read_text().replace(native, original))
-    forwarded[index] = str(view)
+    # A test's own source root without install_utils.sh has no converter line
+    # to restore, and is passed on as it is.
+    if (real / "scripts/install_utils.sh").is_file():
+        view = SourcePath(tempfile.mkdtemp(prefix="priva_fixture_source_"))
+        (view / "scripts").mkdir()
+        (view / "scripts/alphmis_tsv2vcf.py").symlink_to(real / "scripts/alphmis_tsv2vcf.py")
+        (view / "scripts/install_utils.sh").write_text(
+            (real / "scripts/install_utils.sh").read_text().replace(native, original))
+        forwarded[index] = str(view)
     script = "alphamissense_annotation_base.py"
 elif command == "installer-prerequisites":
     # Same positional CONFIG and options; the native command requires --source-root.
@@ -360,13 +377,27 @@ elif command == "mapped-artifact" and rest[:1] in (["run"], ["recover"]):
     if "--" in head:
         head, producer = head[:head.index("--")], head[head.index("--") + 1:]
     pairs = options(head, {"--artifact", "--mapping", "--input", "--cache-root", "--output-dir", "--assembly",
-                           "--config", "--kind", "--helper-root", "--native-producer", "--expected-identity"})
+                           "--config", "--kind", "--helper-root", "--native-producer", "--expected-identity",
+                           "--producer", "--annotation-base", "--native-lineage"})
     values = dict(pairs)
-    if values.get("--native-producer") != "pm1-regions" or values.get("--kind") != "pm1":
-        raise SystemExit("priva fixture: only the native PM1 producer has a Python equivalent")
+    if "--helper-root" not in values:
+        raise SystemExit("priva fixture: mapped-artifact needs --helper-root")
     script = "mapped_artifact_publish.py"
-    forwarded = [rest[0], *sum((pair for pair in pairs if pair[0] not in ("--helper-root", "--native-producer")), ()),
-                 "--producer", os.path.join(SCRIPTS, "prepare_pm1_regions.py")]
+    if "--producer" in values:
+        # A Python producer: the native command takes the helper's own options
+        # and --helper-root, and passes the producer's arguments on unchanged.
+        if "--native-producer" in values:
+            raise SystemExit("priva fixture: --native-producer is not allowed with --producer")
+        forwarded = [rest[0], *sum((pair for pair in pairs if pair[0] != "--helper-root"), ())]
+        if producer is not None:
+            forwarded += ["--", *producer]
+        producer = None
+    elif values.get("--native-producer") != "pm1-regions" or values.get("--kind") != "pm1":
+        raise SystemExit("priva fixture: only the native PM1 producer has a Python equivalent")
+    else:
+        forwarded = [rest[0], *sum((pair for pair in pairs
+                                    if pair[0] not in ("--helper-root", "--native-producer")), ()),
+                     "--producer", os.path.join(SCRIPTS, "prepare_pm1_regions.py")]
     if producer is not None:
         built = dict(options(producer, {"--assembly", "--nm-to-enst", "--intolerant-domains", "--hcseeker",
                                         "--rmc", "--output"}))

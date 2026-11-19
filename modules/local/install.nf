@@ -39,6 +39,28 @@ process INSTALL_PLAN {
     """
 }
 
+// priva's checks before any step runs (install-task preflight): the files
+// you supply for the steps that will run, and the data files shipped in the
+// checkout. The plan passes through it, so no step starts before they pass.
+process INSTALL_PREFLIGHT {
+    tag 'preflight'
+    label 'install_light'
+    input:
+    path(plan, stageAs: 'plan.json')
+    output:
+    path('checked/plan.json'), emit: plan
+    script:
+    """
+    '${params.priva_binary}' install-task preflight --source-root '${projectDir}' --registry '${projectDir}/conf/install_steps.json' --plan plan.json
+    mkdir checked && cp plan.json checked/plan.json
+    """
+    stub:
+    """
+    '${params.priva_binary}' install-task preflight --source-root '${projectDir}' --registry '${projectDir}/conf/install_steps.json' --plan plan.json --stub
+    mkdir checked && cp plan.json checked/plan.json
+    """
+}
+
 process INSTALL_STEP {
     tag "${id} ${lineage}"
     label 'install'

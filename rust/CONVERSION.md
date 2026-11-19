@@ -625,24 +625,50 @@ Each check is a file of its own, so a step's digest reaches only the Rust it
 runs: A4, B4, B8, F1 and F4 get new lineages; no step they feed rebuilds
 unless their output bytes change (phase 1).
 
-### Phase 2: a bootstrap without `install_utils.sh`
+### Phase 2: a bootstrap without `install_utils.sh` (started, 19 November 2026)
 
-Today `main_install` creates the conda environment, installs Nextflow and
-builds `priva` before any resource. The same, as four documented commands,
-each the tool's own:
+`main_install` creates the conda environment, installs Nextflow and builds
+`priva` before any resource. The README's "Install as Nextflow tasks" now
+gives the same as four commands, each the tool's own:
 
 ```mermaid
 flowchart LR
-  B1["conda env create<br/>-f acmg_conda.yml"] --> B2["bash scripts/bootstrap_nextflow_runtime.sh<br/>install --prefix PREFIX"]
+  B1["mamba env create<br/>acmg_conda_rough.yml, ensembl-vep=R.*"] --> B2["bash scripts/bootstrap_nextflow_runtime.sh<br/>install --prefix PREFIX"]
   B2 --> B3["python scripts/bootstrap_priva_rust.py<br/>install --source-root . --cache-root CACHE"]
   B3 --> B4["nextflow run main.nf --action install<br/>--priva_binary PRIVA ..."]
 ```
 
 `bootstrap_priva_rust.py` stays Python (it builds `priva`, so it cannot be
-`priva`). Work: move what `main_install` does before `PriVA_rust_install`
-(basic paths, the VEP release in the environment, bundled snapshots) into the
-environment file or into install steps, and make the README lead with these
-four commands; `main_install` stays only until phase 7.
+`priva`). What `main_install` does before `PriVA_rust_install`, and where it
+is now:
+
+| `main_install` stage | Nextflow install |
+| --- | --- |
+| `priva_install_basic_paths` (`cache_root`, `tmp_dir`, assembly, VEP major) | each step's private configuration names its own folders; the assembly and VEP major are step settings |
+| `conda_install_vep`: create `priva_acmg` | command 1 (`ensembl-vep=R.*` in the environment file, as `conda_install_vep` writes it) |
+| `conda_install_vep`: change an existing environment's VEP release | still `main_install` (`priva vep-release pins`, `priva vep-plugins transition`, then the manager's `install`) |
+| `priva_manual_cache_inputs` | `INSTALL_PREFLIGHT`: `priva install-task preflight` checks the files you supply for every step that will run (adopted steps left out); SpliceAI and PrimateAI publisher files must be set |
+| `bundled_snapshot_install` | `INSTALL_PREFLIGHT`, through `priva installer-prerequisites --stage snapshots` |
+| `priva_prepare_install_config` (folders, prerequisites, NM-to-ENST mapping) | `install-task run` (folders), step A5 (mapping); A1 checks and installs the selected reference (`priva reference-resources install`), F5 runs the GoFCards checks |
+| `CADD_conda_install`, `Nextflow_runtime_install`, `PriVA_rust_install` | step E1; commands 2 and 3 |
+| `priva_export_installed_environment` (after the last resource) | not yet a task |
+
+`INSTALL_PREFLIGHT` takes the plan and passes it on, so no step starts before
+it passes. Its file rules are those of `installer-prerequisites --stage
+manual-inputs`, kept in [`src/install_task/preflight.rs`](src/install_task/preflight.rs)
+rather than shared: `installer_prerequisites` is reached by the digest of 37
+steps, all of the ClinVar VEP chain among them, so editing it would give them
+new lineages, while no step runs `install-task`.
+
+| Check | Result |
+| --- | --- |
+| `nextflow run main.nf --action install -stub`, then again with the preflight | the second run starts `INSTALL_PREFLIGHT` only: every step folder and the publish folder are reused |
+| `install-task preflight` on plans with unset, missing, partial (`.partial`) and complete publisher files, and with B4 and B7 adopted | refuses the first three with the installer's messages; passes the last two |
+
+Left for phase 2: export the installed environments as a task, and make the
+README lead with the four commands once a complete installation through the
+tasks has been compared with `main_install`; `main_install` stays until
+phase 7.
 
 ### Phases 3 to 7
 

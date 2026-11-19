@@ -6,6 +6,7 @@
 //! priva install-task plan    --registry R --config USER --out DIR --source-root CHECKOUT
 //!                            [--adopt-config OLD --adopt all|ID,ID] [--run ID,ID]
 //!                            [--pins PINS.json] [--refresh ID,ID] [--releases FILE]...
+//! priva install-task preflight --registry R --plan PLAN --source-root CHECKOUT [--stub]
 //! priva install-task run     --registry R --plan PLAN --step ID --lineage L --folder F
 //!                            --receipt FILE --source-root CHECKOUT [--input RECEIPT]... [--stub]
 //! priva install-task adopt   --plan PLAN --step ID --lineage L --receipt FILE --source-root CHECKOUT
@@ -26,6 +27,9 @@
 //! plan: writes DIR/base.yaml (your configuration without any key an install
 //! step writes, so each step resolves its own destinations) and DIR/plan.json
 //! (per step: code digest, settings, the files you supply, adopted keys).
+//!
+//! preflight: checks the files you supply for the steps that will run and
+//! the data files shipped in the checkout, before any step (see `preflight`).
 //!
 //! run: builds a private configuration whose `cache_root` is F/data, adds the
 //! keys of the input receipts, calls the step's installer functions unchanged
@@ -49,6 +53,7 @@
 mod content;
 mod digest;
 mod plan;
+mod preflight;
 mod run;
 
 use crate::cli::{Result, invalid};
@@ -68,6 +73,7 @@ pub(crate) fn dispatch(args: &[String]) -> Result<()> {
     let options = Options::parse(&args[1..])?;
     match command.as_str() {
         "plan" => plan::plan(&options),
+        "preflight" => preflight::preflight(&options),
         "release" => plan::release(&options),
         "reach" => digest::reach(&options),
         "run" => run::run(&options),
@@ -90,9 +96,10 @@ pub(crate) fn dispatch(args: &[String]) -> Result<()> {
     }
 }
 
-const USAGE: &str = "usage: priva install-task plan|run|adopt|publish|release|reach|value [options]
+const USAGE: &str = "usage: priva install-task plan|preflight|run|adopt|publish|release|reach|value [options]
   plan    --registry R --config USER --out DIR --source-root CHECKOUT [--adopt-config OLD --adopt all|ID,ID]
           [--run ID,ID] [--pins PINS.json] [--refresh ID,ID] [--releases FILE]...
+  preflight --registry R --plan PLAN --source-root CHECKOUT [--stub]
   run     --registry R --plan PLAN --step ID --lineage L --folder F --receipt FILE --source-root CHECKOUT
           [--input RECEIPT]... [--stub]
   adopt   --plan PLAN --step ID --lineage L --receipt FILE --source-root CHECKOUT

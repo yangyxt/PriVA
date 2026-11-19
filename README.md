@@ -55,13 +55,40 @@ This prepares `priva_acmg`, reuses bundled snapshots, acquires/builds other reso
 
 ### Install as Nextflow tasks
 
-The same installer functions can also run as one Nextflow task per install step, listed in [`conf/install_steps.json`](conf/install_steps.json):
+The installation can also run as one Nextflow task per install step, listed in [`conf/install_steps.json`](conf/install_steps.json). Four commands set it up and start it, each the tool's own; `main_install` above remains the qualified route until a complete installation through these tasks has been compared with it. Use the `vep_installed_version` of your configuration in the first line (`116` here):
+
+```mermaid
+flowchart LR
+    E["1 mamba env create<br/>priva_acmg, VEP 116"] --> N["2 bootstrap_nextflow_runtime.sh<br/>pinned driver and JRE"]
+    N --> P["3 bootstrap_priva_rust.py<br/>the priva program"]
+    P --> I["4 nextflow run main.nf --action install<br/>preflight, then one task per step"]
+```
 
 ```bash
+# 1. The scientific environment, with the VEP release of vep_installed_version
+sed 's/^  - ensembl-vep$/  - ensembl-vep=116.*/' "$PRIVA_ROOT/acmg_conda_rough.yml" > ../priva_acmg.yml
+mamba env create --name priva_acmg --file ../priva_acmg.yml
+mamba activate priva_acmg
+
+# 2. The pinned Nextflow driver and its private JRE
+PRIVA_CACHE="$(yq -r '.cache_root' "$PRIVA_CONFIG")"
+bash "$PRIVA_ROOT/scripts/bootstrap_nextflow_runtime.sh" install \
+  --prefix "$PRIVA_CACHE/runtime/priva-nextflow-25.10.4"
+PRIVA_NF="$PRIVA_CACHE/runtime/priva-nextflow-25.10.4/bin/nextflow"
+
+# 3. The priva program, built in the active environment
+PRIVA_BINARY="$(python "$PRIVA_ROOT/scripts/bootstrap_priva_rust.py" install \
+  --source-root "$PRIVA_ROOT" --cache-root "$PRIVA_CACHE" |
+  python -c 'import json, sys; print(json.load(sys.stdin)["binary"])')"
+
+# 4. Every install step as its own task, launched outside the checkout
+mkdir -p "$PRIVA_ROOT/../priva-install" && cd "$PRIVA_ROOT/../priva-install"
 "$PRIVA_NF" run "$PRIVA_ROOT/main.nf" --action install \
-  --install_config "$PRIVA_CONFIG" --resource_root /path/to/resources \
-  --priva_binary /path/to/priva --install_outdir /path/to/published
+  --install_config "$PRIVA_CONFIG" --resource_root "$PRIVA_CACHE/resources" \
+  --priva_binary "$PRIVA_BINARY" --install_outdir "$PRIVA_CACHE/published"
 ```
+
+Before any step, a preflight task checks the files you supply for the steps that will run (the SpliceAI and PrimateAI publisher files must be set, as absolute paths to completed files) and the data files shipped in the checkout, so a missing file stops the run before any download. The installed configuration is `published/config.yaml`, with `priva_binary` set; use it as `PRIVA_CONFIG` in the sections below. This route does not yet export the installed environments; run `priva_export_installed_environment` (below) afterwards when you need those files.
 
 Each step writes only into `resource_root/STEP/LINEAGE/data`. Its lineage is a hash of the step's code, the settings that change its results, the files you supply, the current release of a changing source (ClinVar, InterPro, ClinGen, VEP plugins and others) and the content of every step it needs (a hash of that step's result files). A step whose folder already holds `receipt.json` is reused, so a later run builds only what changed, and a step below it only when its inputs' files changed. Finished folders are read-only. The last task writes one configuration and `resources.lock.json`, which names every step's lineage and output keys. `--adopt_config OLD.yaml --adopt all --run_steps ID,ID` takes every other step's files from an existing installation without copying them. SpliceVault, MaveDB, UTRannotator and LOFTEE keep the release they were first built from (recorded in `resource_root/pins.json`) until you ask for a newer one with `--refresh B5,B6,B1,B8`. The ClinVar download (step D0) keeps its release for three calendar months, the original installer's refresh interval, then takes the current one; `--refresh D0` takes it sooner. gnomAD downloads run as 24 tasks, one per chromosome.
 

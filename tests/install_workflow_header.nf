@@ -10,7 +10,7 @@
 // resource_root/STEP/LINEAGE/, so a change reruns the step it touches, and
 // the steps after it only when that step's results changed.
 
-include { INSTALL_RELEASE; INSTALL_PLAN; INSTALL_PUBLISH } from '../modules/local/install'
+include { INSTALL_RELEASE; INSTALL_PLAN; INSTALL_PREFLIGHT; INSTALL_PUBLISH } from '../modules/local/install'
 include { @INCLUDES@ } from '../modules/local/install'
 
 def installSha(String text) {
@@ -55,5 +55,7 @@ workflow INSTALL_RESOURCES {
     def releases = INSTALL_RELEASE.out.release.collect().ifEmpty([])
     INSTALL_PLAN(Channel.of([file(params.install_config), registryPath, params.adopt_config ?: '', params.adopt ?: '', params.run_steps ?: '', refreshSteps.join(',')])
         .combine(releases.map { files -> [files] }))
-    def plan = INSTALL_PLAN.out.plan
+    // Every step waits for the preflight checks (files you supply, shipped data).
+    INSTALL_PREFLIGHT(INSTALL_PLAN.out.plan)
+    def plan = INSTALL_PREFLIGHT.out.plan
 

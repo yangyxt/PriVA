@@ -53,6 +53,10 @@ pub(crate) const OPTIONAL_INPUTS: &[&str] = &[
     "dispensable_gene_list",
     "cds_fasta_file",
 ];
+/// The configuration key of the phenotype gene bonus's reference folder
+/// (`priva hpo-gene-ranking`: raw/, prepared/ and hpo_graph/), set by install
+/// step F10 HPO_GENE_RANKING.
+pub(crate) const PHENOTYPE_REFERENCE_KEY: &str = "hpo_gene_ranking_reference_dir";
 /// Executables whose bytes are pinned by SHA-256 even when large caches use
 /// stat reuse: `priva_binary` runs the converted pipeline steps from the
 /// shell scripts; `priva_ranking_binary` is the optional ranking program.
@@ -283,6 +287,16 @@ pub(crate) fn runtime_resources(
             }
             put(&mut paths, key.to_string(), binary);
         }
+    }
+    // The reference folder of the phenotype gene bonus (install step F10):
+    // inventoried so main.nf can find it and a change is noticed, but never
+    // copied into a task (RANK_PHENOTYPE_GENES reads it in place).
+    if config.truthy(PHENOTYPE_REFERENCE_KEY) {
+        put(
+            &mut paths,
+            PHENOTYPE_REFERENCE_KEY.to_string(),
+            config_path(config, PHENOTYPE_REFERENCE_KEY)?,
+        );
     }
     if config.truthy("pp1_vcf") != config.truthy("pp1_ped") {
         return refuse("pp1_vcf and pp1_ped must be supplied together");
@@ -823,6 +837,13 @@ pub(crate) fn phase_reads(phase: &str, key: &str) -> bool {
     let key = key.split('/').next().unwrap_or(key);
     if EXECUTABLE_KEYS.contains(&key) {
         return true;
+    }
+    // Read only by RANK_PHENOTYPE_GENES, which runs the ranking program
+    // directly; of the priva phases, only input validation checks it.
+    if key == PHENOTYPE_REFERENCE_KEY {
+        return !(phase.starts_with("annotation-")
+            || phase == "filtration"
+            || phase.starts_with("prioritization"));
     }
     match phase {
         "annotation-preprocess" => key == "ref_genome",

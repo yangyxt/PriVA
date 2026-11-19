@@ -136,15 +136,45 @@ PY
 # stub table here) and their ACMG task the ranking. Terms of a family that is not
 # in the PED file are reported and left out. With terms for FAM only, FAM gets
 # its ranking and OTHER ranks as before, with a warning naming it.
+# The ranking program is priva's own (priva hpo-gene-ranking); its reference
+# folder is the installed hpo_gene_ranking_reference_dir, which main.nf takes
+# from the resource manifest (here a stub manifest that lists only it).
 mkdir -p "${fixture}/hpo_reference/raw" "${fixture}/hpo_reference/prepared" "${fixture}/hpo_reference/hpo_graph"
 printf 'sample_id\thpo_term\nFAM\tHP:0001250\nFAM\tGlobal developmental delay\nOTHER\tHP:0001263\nABSENT\tHP:0000252\n' > "${fixture}/hpo_terms.tsv"
 printf 'sample_id\thpo_term\nFAM\tHP:0001250\n' > "${fixture}/hpo_terms_partial.tsv"
-phenotype=(--ped "${fixture}/family.ped" --hpo_gene_ranking_binary "$(type -P true)"
-    --hpo_gene_ranking_reference "${fixture}/hpo_reference")
-run_with nextflow-stub-phenotype "${shared[@]}" "${phenotype[@]}" \
+python3 - "${fixture}" <<'PY'
+import json
+from pathlib import Path
+import sys
+fixture = Path(sys.argv[1])
+reference = (fixture / 'hpo_reference').resolve()
+record = {'path': str(reference), 'resolved_path': str(reference), 'type': 'directory', 'size': 4096, 'mtime_ns': 0}
+(fixture / 'resources_phenotype.json').write_text(json.dumps(
+    {'bundle_id': 'stub-only', 'stub': True, 'resources': {'hpo_gene_ranking_reference_dir': record}}) + '\n')
+PY
+phenotype_shared=("${shared[@]/#${fixture}\/resources.json/${fixture}/resources_phenotype.json}")
+phenotype=(--ped "${fixture}/family.ped")
+run_with nextflow-stub-phenotype "${phenotype_shared[@]}" "${phenotype[@]}" \
     --phenotype_hpo_terms "${fixture}/hpo_terms.tsv" --outdir "${case_root}/phenotype"
-run_with nextflow-stub-phenotype-partial "${shared[@]}" "${phenotype[@]}" \
+run_with nextflow-stub-phenotype-partial "${phenotype_shared[@]}" "${phenotype[@]}" \
     --phenotype_hpo_terms "${fixture}/hpo_terms_partial.tsv" --outdir "${case_root}/phenotype-partial"
+# Without the installed reference in the manifest, and with the removed
+# program and reference options, the run is refused at launch.
+if "${nextflow_bin}" -log "${run_root}/logs/nextflow-stub-phenotype-no-reference.log" "${shared[@]}" "${phenotype[@]}" \
+    --phenotype_hpo_terms "${fixture}/hpo_terms.tsv" --outdir "${case_root}/phenotype-no-reference" \
+    > "${run_root}/logs/nextflow-stub-phenotype-no-reference.stdout.log" 2>&1; then
+    echo 'ERROR: --phenotype_hpo_terms was accepted without an installed reference' >&2
+    exit 1
+fi
+grep -q 'install step F10 HPO_GENE_RANKING' "${run_root}/logs/nextflow-stub-phenotype-no-reference.stdout.log"
+if "${nextflow_bin}" -log "${run_root}/logs/nextflow-stub-phenotype-removed.log" "${phenotype_shared[@]}" "${phenotype[@]}" \
+    --phenotype_hpo_terms "${fixture}/hpo_terms.tsv" --hpo_gene_ranking_binary "$(type -P true)" \
+    --outdir "${case_root}/phenotype-removed" \
+    > "${run_root}/logs/nextflow-stub-phenotype-removed.stdout.log" 2>&1; then
+    echo 'ERROR: the removed --hpo_gene_ranking_binary was accepted' >&2
+    exit 1
+fi
+grep -q 'hpo_gene_ranking_reference were removed' "${run_root}/logs/nextflow-stub-phenotype-removed.stdout.log"
 python3 - "${case_root}" "${run_root}/logs" <<'PY'
 import csv
 import json
@@ -178,7 +208,7 @@ assert 'phenotype_gene_ranking' not in provenance(root, 'OTHER')
 assert sorted(p.name for p in (root / 'phenotype_gene_ranking').iterdir()) == ['FAM']
 assert 'Phenotype gene bonus is on for 1 of 2 families' in log
 assert 'Phenotype gene bonus is off for families without HPO terms: OTHER' in log, 'the family without terms was not reported'
-print('Phenotype gene bonus wiring passed (on for each family with terms, off for one without)')
+print('Phenotype gene bonus wiring passed (on for each family with terms, off for one without, refused without the installed reference or with the removed options)')
 PY
 # The removed annotated mode and old hub options are refused with a message
 # that points to the annotation hub.

@@ -276,6 +276,10 @@ mondo_obo: ""
 mondo_scope_builder_script: "scripts/build_mondo_disease_scope.py"
 mondo_disease_scope_registry: ""
 mondo_disease_scope_overrides: "data/mondo/disease_scope_overrides.tsv"
+# Reference folder of the phenotype gene bonus (priva hpo-gene-ranking): raw/,
+# prepared/ and hpo_graph/. Install step F10 HPO_GENE_RANKING builds it under
+# cache_root/hpo_gene_ranking when empty; --phenotype_hpo_terms runs read it.
+hpo_gene_ranking_reference_dir: ""
 
 
 ####################################################pext (proportion expressed across transcripts) Configuration####################################################

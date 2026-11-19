@@ -4713,6 +4713,121 @@ function mondo_hpo_scope_install() {
 }
 
 
+# One public input of the HPO gene ranking: OUTPUT_DIR URL NAME. Kept when the
+# file is already there; a new download is logged with its size and sha256.
+function hpo_gene_ranking_fetch() {
+    local out=$1 url=$2 name=$3 target="$1/$3"
+    if [[ -s ${target} ]]; then
+        log "HPO gene ranking input exists: ${name}"
+        return 0
+    fi
+    log "Downloading HPO gene ranking input ${name}"
+    if curl -L --fail --retry 4 --retry-delay 5 --connect-timeout 30 -sS -o "${target}.part" "${url}"; then
+        mv "${target}.part" "${target}" || return 1
+        printf '%s\t%s\t%s\t%s\t%s\n' "${name}" "${url}" "$(date -Is)" "$(wc -c < "${target}" | tr -d ' ')" \
+            "$(sha256sum "${target}" | cut -c1-64)" >> "${out}/download_log.tsv"
+    else
+        rm -f "${target}.part"
+        log "ERROR: HPO gene ranking download failed: ${name} (${url})"
+        return 1
+    fi
+}
+
+# The public inputs of the HPO gene ranking (priva hpo-gene-ranking), as
+# llm_gene_reranker's nextflow/download_public_inputs.sh downloads them: the
+# same URLs and file names, gene2go kept to its human (9606) rows and header.
+# A file that is already there is kept. The Human Protein Atlas tables are
+# optional (no ranking step reads them). Writes download_log.tsv beside them.
+function hpo_gene_ranking_download_public_inputs() {
+    local out=${1:?usage: hpo_gene_ranking_download_public_inputs OUTPUT_DIR}
+    mkdir -p "${out}" || return 1
+    local download_log="${out}/download_log.tsv"
+    [[ -s ${download_log} ]] || printf 'file\turl\tdownloaded_at\tbytes\tsha256\n' > "${download_log}"
+    local failed=0
+
+    local uniprot='https://rest.uniprot.org/uniprotkb/stream?query=(organism_id:9606)%20AND%20(reviewed:true)&fields=accession,gene_primary,gene_names,protein_name,cc_function,cc_subcellular_location,cc_tissue_specificity,cc_disease,xref_geneid&format=tsv&compressed=true'
+    hpo_gene_ranking_fetch "${out}" http://purl.obolibrary.org/obo/hp.owl hp.owl || failed=1
+    hpo_gene_ranking_fetch "${out}" http://purl.obolibrary.org/obo/hp/hpoa/phenotype_to_genes.txt phenotype_to_genes.txt || failed=1
+    hpo_gene_ranking_fetch "${out}" http://purl.obolibrary.org/obo/go/go-basic.obo go-basic.obo || failed=1
+    [[ -s ${out}/goa_human.gaf ]] || hpo_gene_ranking_fetch "${out}" https://current.geneontology.org/annotations/goa_human.gaf.gz goa_human.gaf.gz || failed=1
+    [[ -s ${out}/Homo_sapiens.gene_info ]] || hpo_gene_ranking_fetch "${out}" https://ftp.ncbi.nlm.nih.gov/gene/DATA/GENE_INFO/Mammalia/Homo_sapiens.gene_info.gz Homo_sapiens.gene_info.gz || failed=1
+    [[ -s ${out}/gene2go ]] || hpo_gene_ranking_fetch "${out}" https://ftp.ncbi.nlm.nih.gov/gene/DATA/gene2go.gz gene2go.gz || failed=1
+    hpo_gene_ranking_fetch "${out}" https://reactome.org/download/current/NCBI2Reactome_All_Levels.txt NCBI2Reactome_All_Levels.txt || failed=1
+    hpo_gene_ranking_fetch "${out}" https://reactome.org/download/current/ReactomePathwaysRelation.txt ReactomePathwaysRelation.txt || failed=1
+    [[ -s ${out}/uniprot_human_reviewed.tsv ]] || hpo_gene_ranking_fetch "${out}" "${uniprot}" uniprot_human_reviewed.tsv.gz || failed=1
+    hpo_gene_ranking_fetch "${out}" http://purl.obolibrary.org/obo/pr.obo pr.obo || failed=1
+    hpo_gene_ranking_fetch "${out}" https://www.informatics.jax.org/downloads/reports/MGI_GenePheno.rpt MGI_GenePheno.rpt || failed=1
+    hpo_gene_ranking_fetch "${out}" https://www.informatics.jax.org/downloads/reports/HOM_MouseHumanSequence.rpt HOM_MouseHumanSequence.rpt || failed=1
+    hpo_gene_ranking_fetch "${out}" https://www.orphadata.com/data/xml/en_product6.xml orphadata_en_product6.xml || failed=1
+    local table
+    for table in rna_tissue_consensus rna_single_cell_type rna_immune_cell_schmiedel; do
+        [[ -s ${out}/${table}.tsv ]] && continue
+        hpo_gene_ranking_fetch "${out}" "https://www.proteinatlas.org/download/tsv/${table}.tsv.zip" "${table}.tsv.zip" \
+            && unzip -p "${out}/${table}.tsv.zip" > "${out}/${table}.tsv" \
+            || log "Optional Human Protein Atlas table ${table} not available"
+    done
+
+    local archive
+    for archive in goa_human.gaf Homo_sapiens.gene_info uniprot_human_reviewed.tsv; do
+        if [[ ! -s ${out}/${archive} ]] && [[ -s ${out}/${archive}.gz ]]; then
+            gzip -dc "${out}/${archive}.gz" > "${out}/${archive}.part" && mv "${out}/${archive}.part" "${out}/${archive}" || failed=1
+        fi
+    done
+    if [[ ! -s ${out}/gene2go ]] && [[ -s ${out}/gene2go.gz ]]; then
+        gzip -dc "${out}/gene2go.gz" | awk -F '\t' '/^#/ || $1 == "9606"' > "${out}/gene2go.part" \
+            && mv "${out}/gene2go.part" "${out}/gene2go" || failed=1
+    fi
+    rm -f "${out}"/*.gz "${out}"/*.zip
+    [[ ${failed} -eq 0 ]] || { log "ERROR: some required HPO gene ranking downloads failed"; return 1; }
+}
+
+
+# The reference folder of the phenotype gene bonus: raw/ (the public inputs),
+# prepared/ (term-to-gene tables) and hpo_graph/ (HPO nodes and edges), built
+# with the ranking program's own commands, as llm_gene_reranker's pipeline does:
+# `hpo-gene-ranking prepare-gene-evidence` and `build-hpo-graph`, here run as
+# `priva hpo-gene-ranking ...`. Sets hpo_gene_ranking_reference_dir.
+function hpo_gene_ranking_reference_install() {
+    local config_file=${1}
+    [[ -f ${config_file} ]] || { log "ERROR: Config file not found: ${config_file}"; return 1; }
+    # Under cache_root by default: in an install task that is the step's own
+    # lineage folder.
+    local cache_root reference
+    cache_root=$(yaml_value_or_default "${config_file}" "cache_root" "")
+    [[ -n ${cache_root} ]] || cache_root=${DATA_DIR}
+    reference=$(yaml_value_or_default "${config_file}" "hpo_gene_ranking_reference_dir" "${cache_root}/hpo_gene_ranking")
+    priva_resolve_binary "${config_file}" || return 1
+    mkdir -p "${reference}/raw" "${reference}/prepared" "${reference}/hpo_graph" || return 1
+
+    local force=0
+    [[ "${PRIVA_FORCE_HPO_GENE_RANKING:-0}" == "1" || "${PRIVA_FORCE_ALL_CACHES:-0}" == "1" ]] && force=1
+    if [[ ${force} -eq 1 ]]; then
+        rm -f "${reference}"/raw/* "${reference}"/prepared/* "${reference}"/hpo_graph/* || return 1
+    fi
+    hpo_gene_ranking_download_public_inputs "${reference}/raw" || return 1
+
+    local manifest="${reference}/prepared/manifest.json"
+    if [[ ! -s ${manifest} ]] || [[ ${PRIVA_BIN} -nt ${manifest} ]] || \
+       [[ -n $(find "${reference}/raw" -newer "${manifest}" -type f -print -quit) ]]; then
+        log "Building the HPO gene ranking term-to-gene tables"
+        "${PRIVA_BIN}" hpo-gene-ranking prepare-gene-evidence \
+            --raw-dir "${reference}/raw" --out-dir "${reference}/prepared" || return 1
+    fi
+    local graph="${reference}/hpo_graph/hp_owl_hpo_only"
+    if [[ ! -s ${graph}.nodes.tsv ]] || [[ ! -s ${graph}.edges.tsv ]] || \
+       [[ ${PRIVA_BIN} -nt ${graph}.nodes.tsv ]] || [[ ${reference}/raw/hp.owl -nt ${graph}.nodes.tsv ]]; then
+        log "Building the HPO gene ranking HPO graph tables"
+        "${PRIVA_BIN}" hpo-gene-ranking build-hpo-graph \
+            --hpo-owl "${reference}/raw/hp.owl" --hpo-only --output-prefix "${graph}" || return 1
+    fi
+    [[ -s ${manifest} && -s ${graph}.nodes.tsv && -s ${graph}.edges.tsv ]] || {
+        log "ERROR: HPO gene ranking reference is incomplete: ${reference}"
+        return 1
+    }
+    update_or_append_yaml "${config_file}" "hpo_gene_ranking_reference_dir" "${reference}" || return 1
+    log "HPO gene ranking reference deployed: ${reference}"
+}
+
 function mechanism_resource_install() {
     local config_file=${1}
 
@@ -5238,6 +5353,11 @@ function main_install() (
     mechanism_resource_install \
         "${config_file}" || \
     { log "Failed to install HPO/MONDO or mechanism resources"; return 1; }
+
+    # 12. Reference folder of the phenotype gene bonus (priva hpo-gene-ranking)
+    hpo_gene_ranking_reference_install \
+        "${config_file}" || \
+    { log "Failed to build the HPO gene ranking reference"; return 1; }
     
     priva_export_installed_environment --config "${config_file}" || \
     { log "Failed to export the installed PriVA/CADD package environments"; return 1; }

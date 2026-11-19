@@ -1,0 +1,2 @@
+external_immune_genes=6
+distance_reference=3

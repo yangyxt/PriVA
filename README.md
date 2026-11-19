@@ -271,12 +271,23 @@ proband's terms); there is no separate switch. That family's variants are then
 sorted with the genes' relevance to its terms:
 
 1. `RANK_PHENOTYPE_GENES` ranks the family's genes for its terms with
-   `hpo-gene-ranking rank-genes` (repository llm_gene_reranker; pass the program
-   as `--hpo_gene_ranking_binary` and its reference folder of `raw/`, `prepared/`
-   and `hpo_graph/` as `--hpo_gene_ranking_reference`). The table has the columns
-   `sample_id` (the PED family identifier) and `hpo_term` (an HPO id or exact term
-   name), one row per term. The rankings are published under
-   `phenotype_gene_ranking/FAMILY/`.
+   `priva hpo-gene-ranking rank-genes`, the gene ranking of llm_gene_reranker
+   built into `priva` with its own commands and options. Its reference folder
+   (`raw/`, `prepared/`, `hpo_graph/`) is built by install step F10
+   `HPO_GENE_RANKING` and recorded as `hpo_gene_ranking_reference_dir` in the
+   installed configuration; the run takes it from the resource manifest, so make
+   the manifest after installing. Nothing else needs to be passed. The table has
+   the columns `sample_id` (the PED family identifier) and `hpo_term` (an HPO id
+   or exact term name), one row per term:
+
+   ```
+   sample_id	hpo_term
+   FAM001	HP:0001250
+   FAM001	Global developmental delay
+   FAM002	HP:0001263
+   ```
+
+   The rankings are published under `phenotype_gene_ranking/FAMILY/`.
 2. The family's ACMG task gives each gene of the ranking
    `phenotype_gene_index = 1 + 0.2 × clip(1 + log10(share) / 2, 0, 1)`, where
    `share` is the gene's `total_score` divided by the family's top `total_score`:
@@ -302,7 +313,7 @@ The example `inputs/` paths are relative to the external `PRIVA_RUNS` directory;
 | `-profile apptainer` | Requires an explicitly selected tested `--container_image` and matching software identity. Tasks run with `--cleanenv`, so they use the image's tools; bind the cache, data and input folders with `--container_run_options='-B /path'`. Build the image from [priva_acmg.def](priva_acmg.def) |
 | `-profile task_readonly` | Optional Linux Bubblewrap task filesystem boundary; it cannot be combined with `apptainer` |
 | `-profile test -stub-run` | Synthetic wiring only; its outputs are not scientific results |
-| `--phenotype_hpo_terms`, `--hpo_gene_ranking_binary`, `--hpo_gene_ranking_reference` | The optional phenotype gene bonus, above; the ranking task asks for 1 CPU, 4 GB and 1 hour |
+| `--phenotype_hpo_terms` | The optional phenotype gene bonus, above (needs install step F10); the ranking task asks for 1 CPU, 4 GB and 1 hour |
 
 Keep scientific worker counts in the legacy configuration's `threads` and
 `threads_per_fam`; set task CPU allocations independently. Family tasks need at

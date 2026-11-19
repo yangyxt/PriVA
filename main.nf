@@ -115,11 +115,11 @@ Optional: --ped COHORT.ped --family ID --vcf_index VCF.vcf.gz.tbi
           --resources_lock resources.lock.json (from --action install: hub
             folders named from install-step lineages)
           --phenotype_hpo_terms TERMS.tsv (columns sample_id, the PED family,
-            and hpo_term, an HPO id or exact term name) with
-            --hpo_gene_ranking_binary HPO_GENE_RANKING --hpo_gene_ranking_reference
-            FOLDER: raises the sort index of variants in genes ranked high for
-            the family's terms. On for each family with terms; families
-            without terms rank as before
+            and hpo_term, an HPO id or exact term name): raises the sort index
+            of variants in genes ranked high for the family's terms, with
+            priva hpo-gene-ranking and the installed reference (install step
+            F10). On for each family with terms; families without terms rank
+            as before
 The cohort VCF is validated and annotated once, one task per annotation step.
 With --ped, every PED family is then filtered and prioritized in its own tasks
 (--family selects one); without --ped, one run covers all samples without
@@ -159,23 +159,30 @@ outputs and scientific-profile requirements.'''
         def base = new File(params.input.toString()).name.replaceFirst(/\.vcf\.gz$/, '')
         if (!(base ==~ /[A-Za-z0-9_][A-Za-z0-9_.-]*/)) error 'Unsafe input basename'
         // The optional phenotype gene bonus: the families' HPO terms, the
-        // ranking program (its bytes join the ranking tasks' identity) and its
-        // reference folder.
+        // ranking program (priva's own `priva hpo-gene-ranking`, whose bytes
+        // already join every task's identity) and its reference folder, the
+        // installed hpo_gene_ranking_reference_dir (install step F10
+        // HPO_GENE_RANKING) as the resource manifest lists it.
+        if (params.hpo_gene_ranking_binary || params.hpo_gene_ranking_reference) {
+            error '--hpo_gene_ranking_binary and --hpo_gene_ranking_reference were removed: the ranking is built into priva, and its reference comes from the installation (step F10 HPO_GENE_RANKING)'
+        }
+        def privaSha256 = java.security.MessageDigest.getInstance('SHA-256').digest(privaBinary.bytes).encodeHex().toString()
         def phenotypeTerms = [:]
         def phenotypeRanking = [:]
         if (params.phenotype_hpo_terms) {
-            ['hpo_gene_ranking_binary', 'hpo_gene_ranking_reference'].each { key ->
-                if (!params[key]) error "--phenotype_hpo_terms needs --${key}"
+            def manifest = new groovy.json.JsonSlurper().parse(file(params.resource_manifest, checkIfExists: true).toFile())
+            def record = manifest.resources instanceof Map ? manifest.resources.hpo_gene_ranking_reference_dir : null
+            if (!(record instanceof Map) || !record.resolved_path) {
+                error '--phenotype_hpo_terms needs the HPO gene ranking reference: install step F10 HPO_GENE_RANKING (--action install) sets hpo_gene_ranking_reference_dir in the configuration; then make the resource manifest again'
             }
-            def rankingBinary = new File(params.hpo_gene_ranking_binary.toString()).canonicalFile
-            if (!rankingBinary.isFile() || !rankingBinary.canExecute()) error '--hpo_gene_ranking_binary must be an executable hpo-gene-ranking program'
-            def rankingReference = new File(params.hpo_gene_ranking_reference.toString()).canonicalFile
-            if (!['raw', 'prepared', 'hpo_graph'].every { name -> new File(rankingReference, name).isDirectory() }) error '--hpo_gene_ranking_reference must be a folder with raw/, prepared/ and hpo_graph/'
+            def rankingReference = new File(record.resolved_path.toString()).canonicalFile
+            if (!['raw', 'prepared', 'hpo_graph'].every { name -> new File(rankingReference, name).isDirectory() }) error "hpo_gene_ranking_reference_dir ${rankingReference} must be a folder with raw/, prepared/ and hpo_graph/"
+            if (!(rankingReference.toString() ==~ /[A-Za-z0-9_\.\/:+\-]+/)) error 'hpo_gene_ranking_reference_dir must be a path without whitespace or shell metacharacters'
             phenotypeTerms = readHpoTerms(params.phenotype_hpo_terms)
-            phenotypeRanking = [binary: rankingBinary.toString(), reference: rankingReference.toString(),
-                                sha256: java.security.MessageDigest.getInstance('SHA-256').digest(rankingBinary.bytes).encodeHex().toString()]
-        } else if (params.hpo_gene_ranking_binary || params.hpo_gene_ranking_reference) {
-            error '--hpo_gene_ranking_binary and --hpo_gene_ranking_reference need --phenotype_hpo_terms'
+            // The reference's manifest record (size and time) joins the ranking
+            // tasks' identity, so a rebuilt reference ranks again on -resume.
+            phenotypeRanking = [binary: privaBinary.toString(), sha256: privaSha256, reference: rankingReference.toString(),
+                                reference_record: groovy.json.JsonOutput.toJson(record)]
         }
         def meta = [family: params.family ? params.family.toString() : '', base: base, assembly: params.assembly, mode: params.mode,
                     source_root: sourceRoot.toString(), source_digest: sourceDigest(sourceRoot),
@@ -183,7 +190,7 @@ outputs and scientific-profile requirements.'''
                     cadd_hub_mode: params.cadd_hub_mode, task_boundary: taskBoundary,
                     // The task program's bytes, not only its path, join every task hash.
                     priva_binary: privaBinary.toString(),
-                    priva_sha256: java.security.MessageDigest.getInstance('SHA-256').digest(privaBinary.bytes).encodeHex().toString()] + lockFields()
+                    priva_sha256: privaSha256] + lockFields()
         // This check executes outside the task cache. A fully cached -resume
         // still verifies external resources and the published run identity.
         def launchCommand = [meta.priva_binary, 'task', 'launch',

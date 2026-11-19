@@ -1,0 +1,4 @@
+sample_id	gene_symbol	ncbi_gene_ids	frontier_hp_count	frontier_hp_ids	frontier_hp_names	candidate_sources	candidate_statuses	external_ids	evidence_row_count
+S.4	DOCK8	81704	1	HP:0001880	Eosinophilia	HPO_PHENOTYPE_TO_GENES	direct_responsible_gene_candidate	HP:0001880	1
+S.4	IL5	3567	1	HP:0001880	Eosinophilia	HPO_PHENOTYPE_TO_GENES	direct_responsible_gene_candidate	HP:0001880	1
+S.4	STAT3	6774	1	HP:0001880	Eosinophilia	HPO_PHENOTYPE_TO_GENES	direct_responsible_gene_candidate	HP:0001880	1

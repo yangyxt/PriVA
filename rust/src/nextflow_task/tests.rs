@@ -947,6 +947,49 @@ fn the_pipeline_program_is_required_and_content_pinned() {
 }
 
 #[test]
+fn the_phenotype_reference_folder_is_listed_but_not_checked_by_tasks() {
+    use contract::{PHENOTYPE_REFERENCE_KEY, phase_reads};
+    let fixture = LaunchFixture::new("phenotype-reference");
+    let reference = fixture.folder.0.join("hpo_gene_ranking");
+    for name in ["raw", "prepared", "hpo_graph"] {
+        fs::create_dir_all(reference.join(name)).unwrap();
+    }
+    let config = PathBuf::from(fixture.value("config"));
+    let root = PathBuf::from(fixture.value("legacy-root"));
+    let listed = |config: &Path| {
+        contract::runtime_resources(
+            &contract::read_config(config).unwrap(),
+            &root,
+            "annotated",
+            "off",
+            "copy",
+        )
+        .unwrap()
+        .into_iter()
+        .find(|(key, _)| key == PHENOTYPE_REFERENCE_KEY)
+    };
+    // Not configured: not listed.
+    assert!(listed(&config).is_none());
+    let mut text = fs::read_to_string(&config).unwrap();
+    text.push_str(&format!(
+        "{PHENOTYPE_REFERENCE_KEY}: {}\n",
+        reference.display()
+    ));
+    fs::write(&config, text).unwrap();
+    assert_eq!(listed(&config).map(|(_, path)| path), Some(reference));
+    // RANK_PHENOTYPE_GENES reads it in place; no priva task phase checks it.
+    for phase in [
+        "annotation-preprocess",
+        "annotation-vep",
+        "filtration",
+        "prioritization-join",
+        "prioritization-acmg",
+    ] {
+        assert!(!phase_reads(phase, PHENOTYPE_REFERENCE_KEY), "{phase}");
+    }
+}
+
+#[test]
 fn annotation_steps_check_only_the_resources_they_read() {
     use contract::phase_reads;
     assert!(phase_reads("annotation-clinvar", "clinvar_vcf"));

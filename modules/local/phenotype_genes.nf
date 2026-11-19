@@ -4,11 +4,12 @@ def shellWord(value) {
     "'" + value.toString().replace("'", "'\"'\"'") + "'"
 }
 
-// One family's genes ranked for its HPO terms by `hpo-gene-ranking rank-genes`
-// (repository llm_gene_reranker). PRIORITIZE_ACMG turns the family's
+// One family's genes ranked for its HPO terms by `priva hpo-gene-ranking
+// rank-genes` (the hpo-gene-ranking program of llm_gene_reranker, built into
+// priva with its own commands and options). PRIORITIZE_ACMG turns the family's
 // gene_ranked.tsv into each gene's phenotype_gene_index. The terms arrive as
-// values, so a task's identity counts only its own family's terms, the
-// program's bytes (its sha256) and the reference folder's path.
+// values, so a task's identity counts only its own family's terms, priva's
+// bytes (its sha256), the reference folder's path and its manifest record.
 process RANK_PHENOTYPE_GENES {
     tag "${family}"
     label 'phenotype_ranking'
@@ -28,7 +29,7 @@ process RANK_PHENOTYPE_GENES {
     """
     printf 'sample_id\\thpo_term\\n' > hpo_terms.tsv
     printf '%s\\t%s\\n' ${rows} >> hpo_terms.tsv
-    '${ranking.binary}' rank-genes --reference-dir '${ranking.reference}' --hpo-term-table hpo_terms.tsv --sample-id ${shellWord(family)} --output-dir ${shellWord(family)}
+    '${ranking.binary}' hpo-gene-ranking rank-genes --reference-dir '${ranking.reference}' --hpo-term-table hpo_terms.tsv --sample-id ${shellWord(family)} --output-dir ${shellWord(family)}
     """
     stub:
     """

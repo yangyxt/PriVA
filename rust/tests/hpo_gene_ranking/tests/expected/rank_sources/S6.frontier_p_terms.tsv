@@ -1,0 +1,2 @@
+sample_id	hp_id	hp_name	shortest_p_depth	longest_p_depth	original_entries	sources	gene_evidence_rows	direct_hpo_gene_count	goa_gene_count	pr_gene_count	mp_gene_count	orpha_gene_count	term_gene_set_size_for_scoring	term_gene_breadth_tier	term_candidate_role	term_weight	all_gene_symbols
+S6	HP:0002090	Pneumonia	3	3		propagated	4	4	0	0	0	0	4	broad_weak	weak_candidate_generator	0.25	BTK|CFTR|DOCK8|STAT3

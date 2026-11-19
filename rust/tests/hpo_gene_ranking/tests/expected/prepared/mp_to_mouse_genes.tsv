@@ -1,0 +1,5 @@
+mp_id	mgi_marker_id	mouse_gene_symbol	mouse_entrez_gene_id	allelic_composition	allele_symbols	allele_ids	genetic_background	pubmed_ids	mgi_genotype_id	homology_class_key	source
+MP:0002491	MGI:88216	Btk	12229	Btk<tm1>/Btk<tm1>	Btk<tm1>	MGI:1	involves: 129	12345	MGI:2	1001	MGI_GenePheno
+MP:0002491	MGI:99999			Btk<tm1>/Btk<tm1>	Btk<tm1>	MGI:1	involves: 129	12345	MGI:2		MGI_GenePheno
+MP:0002491	MGI:88217	Cd19	12478	Cd19<tm1>/Cd19<tm1>	Cd19<tm1>	MGI:3	involves: C57BL/6	222	MGI:4	1002	MGI_GenePheno
+MP:0002491	MGI:88217	Cd19	12478	Cd19<tm1>/Cd19<tm1>	Cd19<tm1>	MGI:3	involves: C57BL/6	111	MGI:5	1002	MGI_GenePheno

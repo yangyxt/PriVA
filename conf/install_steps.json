@@ -2197,6 +2197,24 @@
         "hpo_release",
         "mondo_release"
       ]
+    },
+    {
+      "id": "F10",
+      "name": "HPO_GENE_RANKING",
+      "calls": [
+        [
+          "hpo_gene_ranking_reference_install",
+          "{config}"
+        ]
+      ],
+      "needs": [],
+      "outputs": [
+        "hpo_gene_ranking_reference_dir"
+      ],
+      "settings": [],
+      "priva_commands": [
+        "hpo-gene-ranking"
+      ]
     }
   ]
 }

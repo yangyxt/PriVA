@@ -366,7 +366,9 @@ pub fn run(arguments: &[String]) -> Result<()> {
                 continue;
             };
             let label = labels.get(filler).map(String::as_str).unwrap_or("");
-            let text = crate::hpo_gene_ranking::python_text::strip(&format!("{filler_curie} {label}")).to_owned();
+            let text =
+                crate::hpo_gene_ranking::python_text::strip(&format!("{filler_curie} {label}"))
+                    .to_owned();
             by_prefix
                 .entry(filler_prefix.to_owned())
                 .or_default()

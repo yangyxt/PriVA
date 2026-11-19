@@ -1006,8 +1006,9 @@ pub fn process_sample(
                 .collect::<HashSet<_>>()
                 .len()
         };
-        let direct_hpo_gene_count =
-            count_genes(&|row| row.candidate_source == crate::hpo_gene_ranking::evidence::HPO_SOURCE);
+        let direct_hpo_gene_count = count_genes(&|row| {
+            row.candidate_source == crate::hpo_gene_ranking::evidence::HPO_SOURCE
+        });
         let mut positive_sizes = Vec::new();
         let mut best: Option<(&'static str, &'static str, f64)> = None;
         for row in &gene_rows {

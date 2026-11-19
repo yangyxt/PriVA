@@ -43,13 +43,19 @@ Commands, in the order a full run uses them:
 Run `priva hpo-gene-ranking COMMAND --help` for the options of a command.";
 
 /// `priva hpo-gene-ranking ARGUMENTS`: the program's own commands and options.
-pub(crate) fn dispatch(arguments: &[String]) -> std::result::Result<(), Box<dyn std::error::Error>> {
+pub(crate) fn dispatch(
+    arguments: &[String],
+) -> std::result::Result<(), Box<dyn std::error::Error>> {
     let result = match arguments.first().map(String::as_str) {
         Some("rank-genes") => rank_genes::run(&arguments[1..]),
         Some("prepare-gene-evidence") => gene_evidence::run(&arguments[1..]),
         Some("build-hpo-graph") => hpo_graph::run(&arguments[1..]),
         Some("--version") => {
-            println!("hpo-gene-ranking {} (in priva {})", UPSTREAM_VERSION, env!("CARGO_PKG_VERSION"));
+            println!(
+                "hpo-gene-ranking {} (in priva {})",
+                UPSTREAM_VERSION,
+                env!("CARGO_PKG_VERSION")
+            );
             Ok(())
         }
         None | Some("-h") | Some("--help") | Some("help") => {

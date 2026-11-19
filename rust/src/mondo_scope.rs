@@ -595,9 +595,12 @@ pub(crate) fn annotate(assertions: &Table, registry: &Table) -> Result<Table> {
     Ok(scoped)
 }
 
-const USAGE: &str = "priva mondo-scope build --mondo-obo FILE --hpo-assertions TSV --registry-output TSV[.gz] [--manual-overrides TSV] [--annotated-assertions-output TSV[.gz]]\npriva mondo-scope annotate --hpo-assertions TSV --registry TSV --output TSV[.gz]\nBuild or attach disease scope using existing MONDO/HPO rules. Success prints JSON coverage metadata. Installer callers are unchanged.";
+const USAGE: &str = "priva mondo-scope build --mondo-obo FILE --hpo-assertions TSV --registry-output TSV[.gz] [--manual-overrides TSV] [--annotated-assertions-output TSV[.gz]]\npriva mondo-scope annotate --hpo-assertions TSV --registry TSV --output TSV[.gz]\npriva mondo-scope validate --registry TSV[.gz] --hpo-assertions TSV[.gz]\nBuild or attach disease scope using existing MONDO/HPO rules, or check the two tables the installer records. Success prints JSON coverage metadata (build, annotate) or the row counts (validate).";
 
 pub(crate) fn dispatch(args: &[String]) -> Result<()> {
+    if args.first().map(String::as_str) == Some("validate") {
+        return crate::mondo_scope_check::dispatch(&args[1..]);
+    }
     if args.is_empty() || args.iter().any(|arg| arg == "--help" || arg == "-h") {
         println!("{USAGE}");
         return Ok(());

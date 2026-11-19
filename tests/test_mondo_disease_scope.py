@@ -215,7 +215,8 @@ mondo_hpo_scope_install "$2"
     assert "UNEXPECTED" not in retry.stdout + retry.stderr
     assert fake_priva_binary.calls(fake["PRIVA_FAKE_CALLS"]) == [[
         "mondo-scope", "build", "--mondo-obo", str(mondo), "--hpo-assertions", str(base),
-        "--registry-output", str(registry), "--annotated-assertions-output", str(scoped)]]
+        "--registry-output", str(registry), "--annotated-assertions-output", str(scoped)], [
+        "mondo-scope", "validate", "--registry", str(registry), "--hpo-assertions", str(scoped)]]
     assert len(pd.read_csv(registry, sep="\t")) == 7
     assert len(pd.read_csv(scoped, sep="\t")) == 7
     expected = subject.annotate_hpo_assertions(frame.astype(str), subject.build_disease_scope_registry(mondo, base))
@@ -232,7 +233,9 @@ mondo_hpo_scope_install "$2"
     for path in (registry, scoped):
         assert (path.read_bytes(), identity(path)) == before[path]
     assert config.read_bytes() == before[config][0]
-    assert len(fake_priva_binary.calls(fake["PRIVA_FAKE_CALLS"])) == 1
+    # The warm run only validates the published pair; nothing is rebuilt.
+    assert [call[:2] for call in fake_priva_binary.calls(fake["PRIVA_FAKE_CALLS"])] == [
+        ["mondo-scope", "build"], ["mondo-scope", "validate"], ["mondo-scope", "validate"]]
 
 
 def test_installer_builds_hpo_assertions_and_scope_with_priva(tmp_path):

@@ -159,6 +159,30 @@ function priva_install_basic_paths() {
 }
 
 
+# Builds the PriVA program in the activated environment, or reuses the build
+# bootstrap_priva_rust.py made before, and selects it as PRIVA_BIN. A caller's
+# PRIVA_BINARY keeps its priority, as in priva_resolve_binary. This lets the
+# VEP release switch run priva before main_install records priva_binary.
+function priva_bootstrap_binary() {
+    [[ $# -eq 1 && -r ${1:-} ]] || { log "ERROR: Use priva_bootstrap_binary CONFIG"; return 2; }
+    if [[ -n ${PRIVA_BINARY:-} ]]; then
+        priva_resolve_binary "$1"
+        return
+    fi
+    local cache_root receipt binary
+    cache_root=$(read_yaml "$1" cache_root) || return 1
+    [[ ${cache_root} == /* && -d ${cache_root} ]] || {
+        log "ERROR: Configure an existing absolute cache_root before building the PriVA program."
+        return 1
+    }
+    cache_root=$(realpath -e -- "${cache_root}") || return 1
+    receipt=$(python "${SCRIPT_DIR}/bootstrap_priva_rust.py" install \
+        --source-root "${BASE_DIR}" --cache-root "${cache_root}") || return 1
+    binary=$(read_yaml <(printf '%s\n' "${receipt}") binary) || return 1
+    PRIVA_BINARY=${binary} priva_resolve_binary "$1"
+}
+
+
 function priva_configure_portable_paths() {
     [[ $# -eq 2 && ${1:-} == --config ]] || {
         log "ERROR: Use priva_configure_portable_paths --config CONFIG."
@@ -315,6 +339,9 @@ function conda_install_vep() {
         current=$(priva_installed_vep_release) || return 1
         if [[ $current != "$requested" ]]; then
             log "Changing $env_name VEP release $current to requested release $requested."
+            # The package pins and the plugin transition record are priva
+            # commands; build priva in this environment first (or reuse it).
+            priva_bootstrap_binary "$1" || return 1
             local constraints install_status=0
             constraints=$(mktemp "${TMPDIR:-/tmp}/priva-vep-pins.XXXXXX") || return 1
             "$PRIVA_ENV_MANAGER" list --prefix "$CONDA_PREFIX" --json > "$constraints" || {
@@ -324,50 +351,13 @@ function conda_install_vep() {
             # Exact name/version/build constraints keep every other Conda
             # package fixed. Do not freeze installed packages as well:
             # Micromamba can then freeze the targeted VEP package itself.
-            if ! python - "$constraints" <<'PRIVA_VEP_PINS_PY'
-import json
-from pathlib import Path
-import re
-import sys
-
-path = Path(sys.argv[1])
-try:
-    records = json.loads(path.read_text())
-    if isinstance(records, dict):
-        records = records.get("packages")
-    if not isinstance(records, list) or not records:
-        raise ValueError("package list must be a nonempty JSON array")
-    pins = {}
-    for record in records:
-        if not isinstance(record, dict):
-            raise ValueError("installed package records must be JSON objects")
-        name = record["name"]
-        build = record.get("build_string") or record.get("build")
-        if (record.get("channel") == "pypi" or record.get("platform") == "pypi"
-                or build == "pypi_0" or name == "ensembl-vep"):
-            continue
-        version = record["version"]
-        if not all(isinstance(value, str) and re.fullmatch(r"[A-Za-z0-9_.+!-]+", value)
-                   for value in (name, version, build)):
-            raise ValueError(f"cannot pin installed package {name}")
-        if name in pins:
-            raise ValueError(f"duplicate installed package {name}")
-        pins[name] = f"{name}={version}={build}"
-    if not pins:
-        raise ValueError("no installed Conda dependencies could be pinned")
-    path.write_text("\n".join(pins[name] for name in sorted(pins)) + "\n")
-except (OSError, ValueError, KeyError, TypeError) as exc:
-    print(f"ERROR: Cannot preserve installed Conda packages while changing VEP: {exc}", file=sys.stderr)
-    sys.exit(1)
-PRIVA_VEP_PINS_PY
-            then
+            "${PRIVA_BIN}" vep-release pins --packages "$constraints" || {
                 rm -f -- "$constraints"
                 return 1
-            fi
+            }
             local config_json
             config_json=$(yq '.' "$1") || { rm -f -- "$constraints"; return 1; }
-            # Runs before priva_cache_install_begin builds priva; stays on Python.
-            python "$SCRIPT_DIR/vep_plugins_release.py" transition \
+            "${PRIVA_BIN}" vep-plugins transition \
                 --transition-file "$CONDA_PREFIX/.priva-vep-release-transition.json" \
                 --from-release "$current" --release "$requested" --config-json "$config_json" || {
                 rm -f -- "$constraints"
@@ -800,61 +790,16 @@ function SpliceAI2_install() {
     }
     local config_file=$1 manifest=$2 output_dir=$3 converter=${4:-}
     local receipt="${output_dir}/adapter.ready.json" identities config_sha manifest_sha
-    identities=$(python - "${config_file}" "${manifest}" "${output_dir}" <<'PY'
-import hashlib
-import json
-import os
-from pathlib import Path
-import sys
-import yaml
-
-config, manifest, output = map(Path, sys.argv[1:])
-content = config.read_bytes()
-settings = yaml.safe_load(content)
-if not isinstance(settings, dict) or settings.get('assembly') not in ('hg38', 'GRCh38'):
-    raise SystemExit('SpliceAI2 preparation requires hg38/GRCh38; no fallback is performed.')
-if not manifest.is_absolute() or not output.is_absolute():
-    raise SystemExit('SpliceAI2 manifest and output directory must be absolute paths.')
-
-def partial(path):
-    return any('.partial' in part.lower() for part in Path(path).parts)
-
-if (partial(manifest) or partial(output) or manifest.resolve() != manifest
-        or output.resolve() != output or Path(os.path.abspath(output)) != output or not manifest.is_file()):
-    raise SystemExit('SpliceAI2 requires a complete regular manifest and a non-partial output path.')
-raw = manifest.read_bytes()
-data = json.loads(raw)
-if (not isinstance(data, dict) or data.get('status') != 'downloads_complete'
-        or not isinstance(data.get('confirmed_by'), str) or not data['confirmed_by'].strip()
-        or data.get('assembly') != 'GRCh38' or data.get('version') != '2.0'
-        or data.get('source_revision') != 'cd1b8b82bcef9c97ac3b3b9a24f0de3a5bbf77f9'):
-    raise SystemExit('SpliceAI2 requires an owner-confirmed complete GRCh38 v2.0 source manifest at the pinned revision.')
-
-def inspect_paths(value):
-    if isinstance(value, dict):
-        for key, item in value.items():
-            if key == 'path' and (not isinstance(item, str) or partial(item)):
-                raise SystemExit('SpliceAI2 does not consume .partial source paths.')
-            inspect_paths(item)
-    elif isinstance(value, list):
-        for item in value:
-            inspect_paths(item)
-
-inspect_paths(data)
-if output.exists():
-    if not output.is_dir() or any(path.name.startswith('.building-') for path in output.iterdir()):
-        raise SystemExit('SpliceAI2 output is incomplete or still being prepared; refusing reuse.')
-    if not (output / 'adapter.ready.json').exists() and any(output.iterdir()):
-        raise SystemExit('SpliceAI2 output has no completed receipt; refusing duplicate conversion.')
-print(hashlib.sha256(content).hexdigest(), hashlib.sha256(raw).hexdigest())
-PY
-    ) || return 1
+    # Callers reach this after PriVA_rust_install records priva_binary.
+    priva_resolve_binary "${config_file}" || return 1
+    # hg38 only, a complete owner-confirmed manifest, no unfinished output
+    # (priva spliceai2-install; rust/src/spliceai2_install.rs).
+    identities=$("${PRIVA_BIN}" spliceai2-install check --config "${config_file}" \
+        --manifest "${manifest}" --output-dir "${output_dir}") || return 1
     read -r config_sha manifest_sha <<< "${identities}"
     if [[ -e ${receipt} || -L ${receipt} ]]; then
         log "Reusing the completed SpliceAI2 receipt after verification; no conversion is started."
     else
-        # Callers reach this after PriVA_rust_install records priva_binary.
-        priva_resolve_binary "${config_file}" || return 1
         log "Preparing SpliceAI2 GRCh38 from the complete source manifest; no score download or v1 fallback is performed."
         local -a converter_args=()
         [[ -z ${converter} ]] || converter_args=(--converter-bin "${converter}")
@@ -862,137 +807,11 @@ PY
             --manifest "${manifest}" --assembly GRCh38 --output-dir "${output_dir}" \
             --receipt "${receipt}" "${converter_args[@]}" || return 1
     fi
-    python - "${config_file}" "${manifest}" "${output_dir}" "${receipt}" "${config_sha}" "${manifest_sha}" <<'PY'
-import fcntl
-import hashlib
-import json
-import os
-from pathlib import Path
-import re
-import stat
-import sys
-import tempfile
-import yaml
-
-config, manifest, output, receipt = map(Path, sys.argv[1:5])
-config_sha, manifest_sha = sys.argv[5:7]
-
-def identity(path):
-    value = path.stat()
-    return (value.st_dev, value.st_ino, value.st_size, value.st_mtime_ns, value.st_ctime_ns)
-
-def sha256(path):
-    print('SpliceAI2: verify SHA256 ' + str(path), flush=True)
-    digest = hashlib.sha256()
-    with path.open('rb') as stream:
-        for block in iter(lambda: stream.read(8 * 1024 * 1024), b''):
-            digest.update(block)
-    return digest.hexdigest()
-
-def no_links_or_partial(path):
-    if not path.is_absolute() or Path(os.path.abspath(path)) != path:
-        raise SystemExit('SpliceAI2 receipt paths must be absolute and canonical.')
-    for part in (path, *path.parents):
-        if '.partial' in part.name.lower() or part.is_symlink():
-            raise SystemExit('SpliceAI2 refuses symlinks or .partial paths: ' + str(path))
-
-no_links_or_partial(output)
-no_links_or_partial(receipt)
-if receipt.parent != output or not receipt.is_file() or receipt.stat().st_size == 0:
-    raise SystemExit('SpliceAI2 requires a nonempty regular adapter receipt under OUTPUT_DIR.')
-lock_path = output / '.install.lock'
-no_links_or_partial(lock_path)
-lock = lock_path.open('a')
-try:
-    fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-except BlockingIOError:
-    raise SystemExit('SpliceAI2 preparation is active; refusing receipt reuse.')
-if any(path.name.startswith('.building-') for path in output.iterdir()):
-    raise SystemExit('SpliceAI2 output is incomplete or still being prepared; refusing reuse.')
-tracked = {receipt: identity(receipt), manifest: identity(manifest), config: identity(config)}
-data = json.loads(receipt.read_bytes())
-if not isinstance(data, dict):
-    raise SystemExit('SpliceAI2 adapter receipt must be an object.')
-expected = dict(schema_version=1, resource='SpliceAI2', version='2.0', assembly='GRCh38',
-                status='prepared_annotation_only', scientific_qualified=False,
-                coverage='complete_published',
-                source_revision='cd1b8b82bcef9c97ac3b3b9a24f0de3a5bbf77f9',
-                source_manifest_sha256=manifest_sha)
-for key, value in expected.items():
-    if data.get(key) != value or type(data.get(key)) is not type(value):
-        raise SystemExit('SpliceAI2 receipt does not qualify full cache preparation: ' + key)
-if sha256(manifest) != manifest_sha:
-    raise SystemExit('SpliceAI2 source manifest changed during preparation.')
-original = config.read_bytes()
-if hashlib.sha256(original).hexdigest() != config_sha:
-    raise SystemExit('PriVA config changed during SpliceAI2 preparation; refusing to overwrite it.')
-outputs = data.get('outputs')
-if not isinstance(outputs, dict) or set(outputs) != {'snv', 'indel'}:
-    raise SystemExit('SpliceAI2 receipt requires both SNV and indel outputs.')
-paths = {}
-seen = set()
-for role in ('snv', 'indel'):
-    item = outputs[role]
-    if not isinstance(item, dict):
-        raise SystemExit('SpliceAI2 output entry must be an object: ' + role)
-    for key, checksum_key in (('path', 'sha256'), ('index_path', 'index_sha256')):
-        value, checksum = item.get(key), item.get(checksum_key)
-        if not isinstance(value, str) or not isinstance(checksum, str) or not re.fullmatch('[0-9a-f]{64}', checksum):
-            raise SystemExit('SpliceAI2 output path/checksum is missing or invalid: ' + role)
-        path = Path(value)
-        no_links_or_partial(path)
-        if output not in path.parents or not path.is_file() or path.stat().st_size == 0 or path in seen:
-            raise SystemExit('SpliceAI2 output must be a distinct nonempty regular file under OUTPUT_DIR: ' + str(path))
-        seen.add(path)
-        tracked[path] = identity(path)
-        if key == 'path':
-            if type(item.get('bytes')) is not int or item['bytes'] != path.stat().st_size:
-                raise SystemExit('SpliceAI2 output size mismatch: ' + role)
-            if not path.name.endswith(('.vcf.gz', '.vcf.bgz')):
-                raise SystemExit('SpliceAI2 output must have a BGZF VCF filename: ' + role)
-            paths[role] = str(path)
-        elif value != item['path'] + '.tbi':
-            raise SystemExit('SpliceAI2 tabix index must match its VCF path: ' + role)
-        if sha256(path) != checksum:
-            raise SystemExit('SpliceAI2 output SHA256 mismatch: ' + str(path))
-
-updates = {
-    'spliceai_snv_prescore': paths['snv'],
-    'spliceai_indel_prescore': paths['indel'],
-}
-settings = yaml.safe_load(original)
-text = original.decode()
-for key, value in updates.items():
-    pattern = re.compile(r'^' + re.escape(key) + r':[^\r\n]*', re.MULTILINE)
-    if len(pattern.findall(text)) > 1:
-        raise SystemExit('Duplicate SpliceAI2 config key: ' + key)
-    replacement = key + ': ' + json.dumps(value)
-    if pattern.search(text):
-        text = pattern.sub(lambda match: replacement, text)
-    else:
-        text = text + ('' if not text or text.endswith('\n') else '\n') + replacement + '\n'
-modified = yaml.safe_load(text)
-if modified != dict(settings, **updates):
-    raise SystemExit('SpliceAI2 config update would alter unrelated settings; refusing it.')
-for path, before in tracked.items():
-    if identity(path) != before:
-        raise SystemExit('SpliceAI2 verification input changed: ' + str(path))
-# Preserve all existing keys/comments except the original two cache paths.
-# Preparation provenance and scientific status remain in the sidecar receipt.
-name = None
-try:
-    with tempfile.NamedTemporaryFile(mode='w', dir=config.parent, prefix=config.name + '.', delete=False) as stream:
-        name = stream.name
-        stream.write(text)
-        stream.flush()
-        os.fsync(stream.fileno())
-    os.chmod(name, stat.S_IMODE(config.stat().st_mode))
-    os.replace(name, config)
-finally:
-    if name and os.path.exists(name):
-        os.unlink(name)
-print('SpliceAI2 preparation recorded; scientific activation remains pending.', flush=True)
-PY
+    # Verify the receipt and both outputs, then record their two paths in the
+    # configuration; provenance and scientific status stay in the receipt.
+    "${PRIVA_BIN}" spliceai2-install register --config "${config_file}" \
+        --manifest "${manifest}" --output-dir "${output_dir}" --receipt "${receipt}" \
+        --config-sha "${config_sha}" --manifest-sha "${manifest_sha}"
 }
 
 
@@ -3322,42 +3141,11 @@ function validate_loftee_resources() {
     [[ -s "$loftee_repo/LoF.pm" && -s "$ancestor" && -s "$ancestor.fai" && -s "$conservation" ]] || \
         { log "ERROR: Required LoFtee module/ancestor/index/SQLite resource is missing or empty"; return 1; }
     gzip -t "$ancestor" || { log "ERROR: Invalid LoFtee ancestral FASTA gzip"; return 1; }
-    python - "$ancestor" "$conservation" "$assembly" <<'LOFTEE_VALIDATION_PY'
-import gzip
-from pathlib import Path
-import sqlite3
-import sys
-try:
-    ancestor, conservation, assembly = sys.argv[1:]
-    with gzip.open(ancestor, "rt") as stream:
-        if not stream.readline().startswith(">"):
-            raise ValueError("LoFtee ancestor is not FASTA")
-    lengths = {}
-    with open(ancestor + ".fai", encoding="utf-8") as stream:
-        for line in stream:
-            fields = line.rstrip("\r\n").split("\t")
-            if len(fields) < 5 or not all(value.isdigit() for value in fields[1:5]) or int(fields[1]) < 1:
-                raise ValueError("Malformed LoFtee ancestor FASTA index")
-            name = fields[0].removeprefix("chr")
-            if name in lengths and lengths[name] != int(fields[1]):
-                raise ValueError("Conflicting LoFtee ancestor chromosome lengths")
-            lengths[name] = int(fields[1])
-    expected = 249250621 if assembly in ("hg19", "GRCh37") else 248956422
-    if lengths.get("1") != expected:
-        raise ValueError("LoFtee ancestor FASTA index has the wrong assembly")
-    with sqlite3.connect(Path(conservation).resolve().as_uri() + "?mode=ro", uri=True) as database:
-        if database.execute("PRAGMA quick_check").fetchall() != [("ok",)]:
-            raise ValueError("LoFtee conservation SQLite integrity check failed")
-        if not database.execute("SELECT name FROM sqlite_master WHERE type='table' LIMIT 1").fetchone():
-            raise ValueError("LoFtee conservation SQLite has no tables")
-except (OSError, ValueError, sqlite3.Error) as error:
-    print(f"ERROR: Invalid LoFtee resource: {error}", file=sys.stderr)
-    sys.exit(1)
-LOFTEE_VALIDATION_PY
-    [[ $? -eq 0 ]] || return 1
+    priva_resolve_binary "$config" || return 1
+    "${PRIVA_BIN}" loftee-resources validate --ancestor "$ancestor" \
+        --conservation "$conservation" --assembly "$assembly" || return 1
     if [[ "$assembly" == hg38 || "$assembly" == GRCh38 ]]; then
         reference=$(read_yaml "$config" ref_genome)
-        priva_resolve_binary "$config" || return 1
         local tool_prefix
         tool_prefix=$(type -P python) || { log "ERROR: No python executable on PATH for the GERP check"; return 1; }
         "${PRIVA_BIN}" conservation-resource validate --input "$gerp" --assembly "$assembly" \
@@ -3590,41 +3378,10 @@ function AlphaMissense_anno_gnomAD() {
 
 function validate_cds_fasta() {
     # Read the same plain/gzip format as AlternativeStartCodonDetector without
-    # creating its runtime pickle or changing any sequence interpretation.
-    python - "$1" "$2" <<'PRIVA_CDS_VALIDATE_PY'
-import gzip
-from pathlib import Path
-import re
-import sys
-
-path = Path(sys.argv[1])
-assembly = {"hg19": "GRCh37", "GRCh37": "GRCh37", "hg38": "GRCh38", "GRCh38": "GRCh38"}[sys.argv[2]]
-opener = gzip.open if str(path).endswith(".gz") else open
-records = 0
-has_sequence = False
-with opener(path, "rt", encoding="utf-8") as handle:
-    for line in handle:
-        line = line.strip()
-        if not line:
-            continue
-        if line.startswith(">"):
-            if records and not has_sequence:
-                raise ValueError(f"CDS FASTA contains an empty sequence: {path}")
-            if not line[1:].strip():
-                raise ValueError(f"CDS FASTA contains an empty header: {path}")
-            declared = set(re.findall(r"\bGRCh(?:37|38)\b", line))
-            if declared and declared != {assembly}:
-                raise ValueError(f"CDS FASTA header conflicts with {assembly}: {path}")
-            records += 1
-            has_sequence = False
-        else:
-            if not records:
-                raise ValueError(f"Not a CDS FASTA: {path}")
-            has_sequence = True
-if not records or not has_sequence:
-    raise ValueError(f"CDS FASTA has no complete sequence: {path}")
-print(f"Validated CDS FASTA structure: {path}; records={records}")
-PRIVA_CDS_VALIDATE_PY
+    # creating its runtime pickle or changing any sequence interpretation
+    # (priva cds-fasta validate; rust/src/cds_fasta.rs).
+    [[ -n ${PRIVA_BIN:-} ]] || priva_resolve_binary || return 1
+    "${PRIVA_BIN}" cds-fasta validate --fasta "$1" --assembly "$2"
 }
 
 
@@ -3635,7 +3392,9 @@ function CDS_FASTA_install() {
     local config_file=${1}
     local assembly=$(read_yaml "${config_file}" "assembly")
     local vep_plugins_cachedir=$(read_yaml "${config_file}" "vep_plugins_cachedir")
-    
+    # validate_cds_fasta runs priva cds-fasta validate.
+    priva_resolve_binary "${config_file}" || return 1
+
     local release
     release=$(read_yaml "$config_file" vep_installed_version)
     [[ "$release" =~ ^[1-9][0-9]*$ ]] || {
@@ -4017,95 +3776,8 @@ function validate_gene_pathogenic_mechanism_evidence() {
 
     [[ -s ${evidence_tsv} ]] || { log "ERROR: Missing/empty DDG2P/G2P mechanism evidence TSV: ${evidence_tsv}"; return 1; }
 
-    python - "${evidence_tsv}" <<'PY'
-import csv
-import sys
-
-evidence_tsv = sys.argv[1]
-
-required = {
-    "gene_symbol",
-    "source",
-    "source_record_id",
-    "source_condition_id",
-    "mondo_id",
-    "disease_scope",
-    "priva_scope",
-    "scope_review_status",
-    "disease_label",
-    "inheritance",
-    "penetrance_raw",
-    "penetrance_hpo_ids",
-    "normalized_penetrance",
-    "patho_mode_raw",
-    "normalized_mechanisms",
-    "mechanism_confidence",
-    "disease_confidence",
-    "pmids",
-}
-row_count = 0
-g2p_rows = 0
-g2p_lof_rows = 0
-g2p_penetrance_rows = 0
-orphadata_rows = 0
-orphadata_mondo_rows = 0
-unexpected_sources = set()
-with open(evidence_tsv, encoding="utf-8", newline="") as handle:
-    reader = csv.DictReader(handle, delimiter="\t")
-    missing = sorted(required - set(reader.fieldnames or []))
-    if missing:
-        raise SystemExit(f"{evidence_tsv} missing required columns: {', '.join(missing)}")
-    for row in reader:
-        row_count += 1
-        source = row.get("source", "")
-        if source not in {"G2P_DDG2P", "Orphadata"}:
-            unexpected_sources.add(source or "<blank>")
-        if source == "G2P_DDG2P":
-            g2p_rows += 1
-            normalized = row.get("normalized_mechanisms", "").upper()
-            raw = row.get("patho_mode_raw", "").lower()
-            if "LOF" in normalized or "loss of function" in raw:
-                g2p_lof_rows += 1
-            penetrance = row.get("normalized_penetrance", "").strip().lower()
-            if penetrance:
-                if penetrance not in {"complete", "incomplete"}:
-                    raise SystemExit(
-                        f"{evidence_tsv} has unsupported penetrance {penetrance!r}"
-                    )
-                if not (row.get("source_condition_id") or row.get("mondo_id")):
-                    raise SystemExit(
-                        f"{evidence_tsv} has penetrance without a condition identifier"
-                    )
-                g2p_penetrance_rows += 1
-        if source == "Orphadata":
-            orphadata_rows += 1
-            if row.get("mondo_id"):
-                orphadata_mondo_rows += 1
-if row_count == 0:
-    raise SystemExit(f"{evidence_tsv} contains no evidence rows")
-if unexpected_sources:
-    raise SystemExit(
-        f"{evidence_tsv} contains non-condition sources: "
-        + ", ".join(sorted(unexpected_sources))
-    )
-if g2p_rows == 0:
-    raise SystemExit(f"{evidence_tsv} contains no G2P_DDG2P rows")
-if g2p_lof_rows == 0:
-    raise SystemExit(f"{evidence_tsv} contains no DDG2P/G2P LoF rows")
-if g2p_penetrance_rows == 0:
-    raise SystemExit(f"{evidence_tsv} contains no condition-linked G2P penetrance rows")
-if orphadata_rows == 0:
-    raise SystemExit(f"{evidence_tsv} contains no explicit Orphadata mechanism rows")
-if orphadata_mondo_rows == 0:
-    raise SystemExit(f"{evidence_tsv} contains no MONDO-mapped Orphadata rows")
-print(
-    f"evidence_rows={row_count}; g2p_rows={g2p_rows}; "
-    f"g2p_lof_rows={g2p_lof_rows}; "
-    f"g2p_penetrance_rows={g2p_penetrance_rows}; "
-    f"orphadata_rows={orphadata_rows}; "
-    f"orphadata_mondo_rows={orphadata_mondo_rows}"
-)
-PY
+    [[ -n ${PRIVA_BIN:-} ]] || priva_resolve_binary || return 1
+    "${PRIVA_BIN}" mechanism-evidence validate --evidence "${evidence_tsv}"
 }
 
 
@@ -4201,6 +3873,7 @@ function gene_pathogenic_mechanism_cache_install() {
         return 1
     }
 
+    priva_resolve_binary "${config_file}" || return 1
     validate_gene_pathogenic_mechanism_evidence "${evidence_tsv}" || {
         log "ERROR: Gene mechanism/DDG2P cache validation failed"
         return 1
@@ -4919,36 +4592,8 @@ function validate_mondo_hpo_scope_cache() {
         return 1
     }
 
-    python - "${registry}" "${hpo_assertions}" <<'PY'
-import csv
-import gzip
-import sys
-
-registry_path, assertions_path = sys.argv[1:]
-
-def inspect(path, required):
-    opener = gzip.open if path.endswith(".gz") else open
-    with opener(path, "rt", encoding="utf-8", newline="") as handle:
-        reader = csv.DictReader(handle, delimiter="\t")
-        missing = sorted(required - set(reader.fieldnames or []))
-        if missing:
-            raise SystemExit(f"{path} missing required columns: {', '.join(missing)}")
-        count = sum(1 for _ in reader)
-    if count == 0:
-        raise SystemExit(f"{path} contains no data rows")
-    return count
-
-registry_count = inspect(registry_path, {
-    "disease_id", "mondo_id", "disease_scope", "priva_scope",
-    "scope_evidence", "scope_review_status",
-})
-assertion_count = inspect(assertions_path, {
-    "gene_symbol", "disease_id", "hpo_id", "frequency", "evidence",
-    "reference", "mondo_id", "disease_scope", "priva_scope",
-    "scope_evidence", "scope_review_status",
-})
-print(f"disease_scope_rows={registry_count}; scoped_hpo_assertions={assertion_count}")
-PY
+    [[ -n ${PRIVA_BIN:-} ]] || priva_resolve_binary || return 1
+    "${PRIVA_BIN}" mondo-scope validate --registry "${registry}" --hpo-assertions "${hpo_assertions}"
 }
 
 

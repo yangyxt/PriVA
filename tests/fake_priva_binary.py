@@ -29,6 +29,10 @@ A source root without scripts/install_utils.sh is passed on unchanged.
 arguments (CONFIG first, then the script's own options).
 `reference-resources` runs scripts/reference_resources.py with the same
 subcommand, CONFIG and options.
+`cds-fasta validate`, `loftee-resources validate`, `mechanism-evidence validate`,
+`mondo-scope validate`, `spliceai2-install check/register` and `vep-release pins`
+run the inline Python block each replaced, kept in
+tests/fixtures/install-checks-8070d3d, with its positional arguments.
 `vep-plugins MODE` runs scripts/vep_plugins_release.py with the same mode and
 options; `gnomad-cache COMMAND` runs scripts/gnomad_cache.py and
 `alphamissense-cache COMMAND` runs scripts/alphamissense_cache.py and
@@ -67,6 +71,8 @@ ROOT = Path(__file__).resolve().parents[1]
 PROGRAM = r'''#!PYTHON
 import hashlib, json, os, subprocess, sys
 SCRIPTS = SCRIPT_FOLDER
+# The inline Python blocks the installer's check commands replaced.
+CHECKS = CHECK_FOLDER
 args = sys.argv[1:]
 if args == ["--version"]:
     print("priva fixture")
@@ -246,6 +252,30 @@ elif command == "installer-config-paths" and rest[:1] in (["resolve"], ["managed
     if "--source-root" not in dict(pairs) or not os.environ.get("PYTHONHASHSEED", "").isdigit():
         raise SystemExit("priva fixture: installer-config-paths needs --source-root and PYTHONHASHSEED")
     script, forwarded = "installer_config_paths.py", [rest[0], *sum(pairs, ()), *flags]
+elif command == "cds-fasta" and rest[:1] == ["validate"]:
+    values = dict(options(rest[1:], {"--fasta", "--assembly"}))
+    script, forwarded = os.path.join(CHECKS, "cds_fasta.py"), [values["--fasta"], values["--assembly"]]
+elif command == "loftee-resources" and rest[:1] == ["validate"]:
+    values = dict(options(rest[1:], {"--ancestor", "--conservation", "--assembly"}))
+    script = os.path.join(CHECKS, "loftee_resources.py")
+    forwarded = [values["--ancestor"], values["--conservation"], values["--assembly"]]
+elif command == "mechanism-evidence" and rest[:1] == ["validate"]:
+    values = dict(options(rest[1:], {"--evidence"}))
+    script, forwarded = os.path.join(CHECKS, "mechanism_evidence.py"), [values["--evidence"]]
+elif command == "mondo-scope" and rest[:1] == ["validate"]:
+    values = dict(options(rest[1:], {"--registry", "--hpo-assertions"}))
+    script, forwarded = os.path.join(CHECKS, "mondo_scope.py"), [values["--registry"], values["--hpo-assertions"]]
+elif command == "spliceai2-install" and rest[:1] == ["check"]:
+    values = dict(options(rest[1:], {"--config", "--manifest", "--output-dir"}))
+    script = os.path.join(CHECKS, "spliceai2_check.py")
+    forwarded = [values["--config"], values["--manifest"], values["--output-dir"]]
+elif command == "spliceai2-install" and rest[:1] == ["register"]:
+    names = ("--config", "--manifest", "--output-dir", "--receipt", "--config-sha", "--manifest-sha")
+    values = dict(options(rest[1:], set(names)))
+    script, forwarded = os.path.join(CHECKS, "spliceai2_register.py"), [values[name] for name in names]
+elif command == "vep-release" and rest[:1] == ["pins"]:
+    values = dict(options(rest[1:], {"--packages"}))
+    script, forwarded = os.path.join(CHECKS, "vep_release_pins.py"), [values["--packages"]]
 elif command == "vep-plugins" and rest[:1] in (["check"], ["install"], ["transition"],
                                               ["clear-transition"], ["ensure-utr-reporting"]):
     script, forwarded = "vep_plugins_release.py", rest
@@ -417,7 +447,8 @@ def install(directory=None, scripts=ROOT / "scripts"):
     folder = Path(directory or tempfile.mkdtemp(prefix="priva_fake_binary_"))
     program = folder / "priva"
     program.write_text(PROGRAM.replace("#!PYTHON", "#!" + sys.executable, 1)
-                       .replace("SCRIPT_FOLDER", repr(str(scripts)), 1))
+                       .replace("SCRIPT_FOLDER", repr(str(scripts)), 1)
+                       .replace("CHECK_FOLDER", repr(str(ROOT / "tests/fixtures/install-checks-8070d3d")), 1))
     program.chmod(0o755)
     return program
 

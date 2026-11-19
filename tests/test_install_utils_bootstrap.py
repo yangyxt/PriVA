@@ -294,6 +294,9 @@ class InstallerBootstrapTests(unittest.TestCase):
         )
 
     def run_main(self, *args):
+        # A VEP release switch runs priva (package pins, plugin transition);
+        # the fixture runs the Python each command replaced.
+        self.env.update(fake_priva_binary.environment(self.directory))
         # Stop at the first real resource operation, after startup/config reads.
         return self.run_shell('''
             # Resource preparation is tested separately with actual sources.

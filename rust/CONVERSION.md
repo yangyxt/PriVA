@@ -122,7 +122,7 @@ Installer callers remain Python unless their row says the installer calls
 | [`scripts/build_gene_pathogenic_mechanism_cache.py`](../scripts/build_gene_pathogenic_mechanism_cache.py) | Optional `priva gene-mechanism parse/build/attach` for prepared inputs. Acquisition, refresh, locking and installer orchestration remain Python; see the manual for the supported procedures. |
 | [`scripts/build_gofcards_exact_gof_cache.py`](../scripts/build_gofcards_exact_gof_cache.py) | Optional `priva gofcards-exact-gof` with the script's options. The workbook (pandas' default column typing), the summary cache and its retries, the GRCh37 reference check, the bcftools, VEP and CrossMap runs, the endpoint recovery, the HGNC and review rules, the export, the rejects table and the stats file follow the script; the gzip is the same zlib stream, with `gzip.open`'s name and time in the header. Requests run through `curl`, so transport failures carry curl's message; `--summary-endpoint` replaces the script's constant for tests; a workbook with two columns mapping to one source field and a compressed FASTA are refused. Installer calls it in `gofcards_exact_gof_cache_install` when `gofcards_builder_script` is the checkout's own script; a custom script still runs with Python. Compared by `rust/tests/gofcards_exact_gof_compare.py` (no case reaches a publisher). |
 | [`scripts/build_hpo_condition_mechanism_cache.py`](../scripts/build_hpo_condition_mechanism_cache.py) | Optional `priva hpo-condition-mechanism --source-root CHECKOUT` with the script's options. The HPO frame and its MONDO merge, the G2P/Orphadata mechanisms and penetrance, ClinGen haploinsufficiency, the GoFCards exact alleles with their ClinVar condition links, the deduced recessive LOF, the scope gate, the payload and provenance checks and the atomic publication follow the script; the default ClinGen table comes from the checkout, and the cache records the checkout's Python builder as its builder source, so either one accepts the other's cache. Input tables are decoded completely before their rows are read. Installer calls `priva hpo-condition-mechanism` when `hpo_condition_mechanism_builder_script` is the checkout's script; another configured script still runs with Python. `rust/tests/hpo_condition_mechanism_compare.py` compares them. |
-| [`scripts/build_mondo_disease_scope.py`](../scripts/build_mondo_disease_scope.py) | Optional `priva mondo-scope`. Installer calls `priva mondo-scope build`. |
+| [`scripts/build_mondo_disease_scope.py`](../scripts/build_mondo_disease_scope.py) | Optional `priva mondo-scope`. Installer calls `priva mondo-scope build`, and `priva mondo-scope validate` for the finished registry and scoped HPO assertions. |
 | [`scripts/clinvar_annotation_contract.py`](../scripts/clinvar_annotation_contract.py) | Replaced in the installer by `priva clinvar-contract`; see the installer helpers table. |
 | [`scripts/clinvar_gene_refresh.py`](../scripts/clinvar_gene_refresh.py) | Optional `priva clinvar-gene-refresh {plan,install,deploy,retire-owned,retire-shards,check-header,acquire,file-date,candidate-route,candidate-begin,candidate-complete}` with the script's options; the subcommand comes first. The registry policy, the bounded fileDate checks, the NCBI MD5 and 1 MiB header probes (`curl`), the scientific profile and its signature, completed-receipt reuse, the locked deployment with retained generations and recovery journals, the candidate receipts and the configuration rewrite follow the script; the original ClinVar stages still run through `install_utils.sh`. The profile observes the Python runtime with one `python -c` so that signatures and workspaces stay those of the script and `vep_chromosome_jobs.py`. Installer calls `priva clinvar-gene-refresh` in `ClinVar_install`, `ClinVar_VCF_deploy` and `_ClinVar_VCF_deploy`; `annotation_vcf.sh` calls it for `retire-shards` and the candidate phases. Retained for `vep_chromosome_jobs.py` and the Python tests. `rust/tests/clinvar_gene_refresh_compare.py` compares it with the script. |
 | [`scripts/clinvar_stat_variants.py`](../scripts/clinvar_stat_variants.py) | Optional `priva clinvar-gene-stats build/merge` with an explicit Python hash seed and recorded completion order for reference comparisons. Installer calls `priva clinvar-gene-stats build` in `ClinVar_Gene_stat_regenerate` with `--python-hash-seed` from `priva_python_hash_seed` (default 0) and writes the refresh candidate `clinvar_2star_stats.rkyv`; the bundled pickle is still converted by `cache-install publish`. |
@@ -166,7 +166,7 @@ Installer callers remain Python unless their row says the installer calls
 | [`scripts/spliceai2_to_vep_vcf.py`](../scripts/spliceai2_to_vep_vcf.py) | Optional `priva spliceai2-prepare {prepare,gene-context}` with the script's options; the subcommand comes first. Manifest, input and tool verification, the GENCODE48 gene context with the VEP release's gene names, the gzip, projection and bgzip pipeline, the tabix index with its first-record probe, the receipt and the publication order follow the script. By decision (4 Nov 2026) the projection runs as this executable's `spliceai2-vcf` instead of a converter compiled from `spliceai2_converter.rs` with rustc at installation: `build-converter` is not provided, and the receipt's `converter` (`role` `priva_builtin`) and `driver_sha256` name this executable. `--converter-bin` still runs an explicit standalone converter. Installer calls `priva spliceai2-prepare prepare` in `SpliceAI2_install`. Rust-only `--jobs N` checks and converts the shards N at a time and joins the BGZF parts; `rust/tests/spliceai2_prepare_jobs_compare.py` checks it against one job on real shards. Compared by `rust/tests/spliceai2_prepare_compare.py`. |
 | [`scripts/vep_chromosome_cache.py`](../scripts/vep_chromosome_cache.py) | Legacy/manual helper, outside native conversion scope. |
 | [`scripts/vep_chromosome_jobs.py`](../scripts/vep_chromosome_jobs.py) | Legacy/manual helper, outside native conversion scope. |
-| [`scripts/vep_plugins_release.py`](../scripts/vep_plugins_release.py) | Optional `priva vep-plugins {check,install,transition,clear-transition,ensure-utr-reporting} --release RELEASE` with the same options; the mode comes first. Receipt checks, local-patch recognition, staged publication with the release-switch and partial-retry rules, the transition record, and the locked UTRAnnotator 116 reporting transaction (pinned upstream and installed bytes, original and patch backups, the pending recovery receipt) follow the script; the patch is the same `difflib.unified_diff` text. The bundled reporting module is read from `PRIVA_DATA_DIR`. Installer calls `priva vep-plugins check/install/ensure-utr-reporting/clear-transition` in `vep_cache_api_install`; the `transition` call in `conda_install_vep` runs before `PriVA_rust_install` records `priva_binary` and remains Python. Compared by `rust/tests/vep_plugins_compare.py` (no case reaches the network). |
+| [`scripts/vep_plugins_release.py`](../scripts/vep_plugins_release.py) | Optional `priva vep-plugins {check,install,transition,clear-transition,ensure-utr-reporting} --release RELEASE` with the same options; the mode comes first. Receipt checks, local-patch recognition, staged publication with the release-switch and partial-retry rules, the transition record, and the locked UTRAnnotator 116 reporting transaction (pinned upstream and installed bytes, original and patch backups, the pending recovery receipt) follow the script; the patch is the same `difflib.unified_diff` text. The bundled reporting module is read from `PRIVA_DATA_DIR`. Installer calls `priva vep-plugins check/install/ensure-utr-reporting/clear-transition` in `vep_cache_api_install`, and `transition` in `conda_install_vep`, which builds `priva` first (`priva_bootstrap_binary`) when the environment's VEP release changes. Compared by `rust/tests/vep_plugins_compare.py` (no case reaches the network). |
 
 ## Task adapters and bridges
 
@@ -581,13 +581,49 @@ publish) is not hashed: hashing its folder would cost minutes for nothing.
 | Cascade: a no-op line added to A1's `reference_genome_install` | A1 and publish run again; nothing else (before: 40 steps) |
 | `das_install_state_compare.py`, `das_input_continuity_compare.py` | 121 and 91 cases, no mismatch |
 
-Left for the next change, since a content key no longer forces them into
-one rebuild:
+### Done: installer checks in `priva` (19 November 2026)
 
-| Item | Now | Next |
+The inline `python - <<PY` blocks of `install_utils.sh` that check or record
+an install step are now `priva` commands. The frozen blocks are kept in
+[`tests/fixtures/install-checks-8070d3d/`](../tests/fixtures/install-checks-8070d3d/)
+as the reference.
+
+| Shell function | Was | Now |
 | --- | --- | --- |
-| `conda_install_vep` plugin transition | `vep_plugins_release.py`, because it runs before `priva` is built | `priva vep-plugins transition` once phase 2 builds `priva` first |
-| `SpliceAI2_install`, `validate_loftee_resources`, `validate_cds_fasta`, `validate_gene_pathogenic_mechanism_evidence` | inline `python - <<PY` blocks | small `priva` checks |
+| `validate_cds_fasta` (A4) | inline Python: FASTA records, `GRCh37`/`GRCh38` in the headers | `priva cds-fasta validate --fasta F --assembly A` ([`src/cds_fasta.rs`](src/cds_fasta.rs)) |
+| `validate_loftee_resources` (B8) | inline Python: ancestor FASTA and `.fai`, chr1 length, GERP SQLite `quick_check` | `priva loftee-resources validate --ancestor F --conservation DB --assembly A` ([`src/loftee_resources.rs`](src/loftee_resources.rs), the vendored SQLite read only) |
+| `validate_gene_pathogenic_mechanism_evidence` (F4) | inline Python: 18 columns, G2P and Orphadata row counts | `priva mechanism-evidence validate --evidence TSV` ([`src/mechanism_evidence.rs`](src/mechanism_evidence.rs)) |
+| `validate_mondo_hpo_scope_cache` (F1) | inline Python: registry and scoped HPO assertions | `priva mondo-scope validate --registry R --hpo-assertions H` ([`src/mondo_scope_check.rs`](src/mondo_scope_check.rs)) |
+| `SpliceAI2_install` (B4) | two inline blocks: identities before, configuration record after | `priva spliceai2-install check` and `register` ([`src/spliceai2_install.rs`](src/spliceai2_install.rs)): the same lock, SHA-256 checks, atomic config rewrite and receipt |
+| `conda_install_vep` release switch | inline Python pins, then `vep_plugins_release.py transition` | `priva vep-release pins --packages FILE` ([`src/vep_release.rs`](src/vep_release.rs)) and `priva vep-plugins transition`; `priva_bootstrap_binary` builds `priva` with `bootstrap_priva_rust.py` first, so this works before `PriVA_rust_install` |
+
+The package manager (`conda`/`mamba install --file PINS ensembl-vep=R.*`),
+`gzip -t`, `samtools` and the downloads stay the tools' own commands.
+
+```mermaid
+flowchart LR
+  subgraph before["Before"]
+    direction TB
+    s1["install_utils.sh function"] --> p1["inline Python heredoc<br/>(one block per check)"]
+  end
+  subgraph after["After"]
+    direction TB
+    s2["install_utils.sh function"] --> r2["priva CHECK<br/>(one Rust file per check)"]
+  end
+  before -.-> after
+```
+
+| Check | Result |
+| --- | --- |
+| [`tests/install_checks_compare.py`](tests/install_checks_compare.py): each case run through the frozen block and through `priva` | 149 cases (49 successes, 95 failure messages), no mismatch in exit, output, message or written bytes |
+| `cargo test --release --lib` | 619 passed (new: an output changed after its checksum is refused before the config write, as the removed Python test checked) |
+| `tests/install_workflow_check.py` | passes: the new commands are reached by A4, B4, B8, F1 and F4 |
+| Python suite (`pytest tests`), this change against 8070d3d | the same 104 failures on both, all from what this sandbox lacks (the `Bio::DB::BigFile` Perl module, the pinned pandas); the MONDO and LOFTEE tests now expect the new calls, and the SpliceAI2 race test is the Rust test above |
+| `mapped_artifact_compare.py`, `alpha_annotation_base_compare.py` (with bcftools) | 121 and 167 cases, no mismatch; `alpha_annotation_base` records the thread count as left out of the comparison on purpose (d9eac64) |
+
+Each check is a file of its own, so a step's digest reaches only the Rust it
+runs: A4, B4, B8, F1 and F4 get new lineages; no step they feed rebuilds
+unless their output bytes change (phase 1).
 
 ### Phase 2: a bootstrap without `install_utils.sh`
 

@@ -125,10 +125,16 @@ class LoFteeInstallerTests(unittest.TestCase):
                 self.assertEqual(self.config.read_bytes(), before)
                 self.assertIn("already installed", result.stderr)
         tool_prefix = os.path.dirname(shutil.which("python", path=self.env.get("PATH")))
-        self.assertEqual(fake_priva_binary.calls(self.env["PRIVA_FAKE_CALLS"]), [
-            ["conservation-resource", "validate", "--input", str(self.folder / (assembly + "_assets/gerp.bw")),
-             "--assembly", assembly, "--reference", str(self.folder / (assembly + "_assets/hg38.reference.fa")),
-             "--tool-prefix", tool_prefix] for assembly in ("hg38", "GRCh38")])
+        expected = []
+        for assembly in ("hg19", "GRCh37", "hg38", "GRCh38"):
+            assets = self.folder / (assembly + "_assets")
+            expected.append(["loftee-resources", "validate", "--ancestor", str(assets / "ancestor.fa.gz"),
+                             "--conservation", str(assets / "conservation.sql"), "--assembly", assembly])
+            if assembly in ("hg38", "GRCh38"):
+                expected.append(["conservation-resource", "validate", "--input", str(assets / "gerp.bw"),
+                                 "--assembly", assembly, "--reference", str(assets / "hg38.reference.fa"),
+                                 "--tool-prefix", tool_prefix])
+        self.assertEqual(fake_priva_binary.calls(self.env["PRIVA_FAKE_CALLS"]), expected)
 
     def test_fresh_hg19_under_nounset_uses_original_three_sources_without_gerp_url(self):
         self.fresh()

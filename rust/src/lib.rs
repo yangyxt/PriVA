@@ -17,6 +17,7 @@ mod cache_install;
 mod cache_resources;
 pub mod cadd_hub;
 mod cadd_prescore;
+mod cds_fasta;
 mod cli;
 mod clingen_map_builder;
 mod clinvar_aa_splice_builder;
@@ -85,13 +86,16 @@ mod installer_prerequisites;
 mod interpro_mapping_builder;
 pub mod interpro_mapping_io;
 mod json_text;
+mod loftee_resources;
 #[allow(
     dead_code,
     reason = "Publisher-checksum API awaiting installer-builder callers"
 )]
 mod md5;
+mod mechanism_evidence;
 mod mechanism_source;
 mod mondo_scope;
+mod mondo_scope_check;
 mod pandas_low_memory;
 mod pandas_polars;
 mod pandas_table;
@@ -114,6 +118,7 @@ mod reference_resources;
 mod rust_cache;
 mod sha256;
 pub mod spliceai2;
+mod spliceai2_install;
 mod spliceai2_prepare;
 pub mod spliceai_cache_input;
 pub mod spliceai_cutoffs;
@@ -121,10 +126,12 @@ mod splicevault_builder;
 mod splicing_cutoffs;
 pub mod splicing_var_analysis;
 mod tabix_index;
+mod tsv_dict;
 pub mod utr_anno_interpret;
 pub mod variant_ids;
 mod vcf_text;
 mod vep_plugins;
+mod vep_release;
 mod yaml_config;
 
 pub fn main_entry() {

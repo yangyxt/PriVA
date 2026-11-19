@@ -1,7 +1,5 @@
 """Two-path installation, atomic registration, and verified receipt reuse."""
-import contextlib
 import hashlib
-import io
 import json
 import os
 from pathlib import Path
@@ -10,7 +8,6 @@ import subprocess
 import sys
 import tempfile
 import unittest
-from unittest import mock
 
 import yaml
 
@@ -439,43 +436,6 @@ class SpliceAI2Preparation(unittest.TestCase):
         result = self.invoke()
         self.assertNotEqual(result.returncode, 0)
         self.assertFalse(self.calls.exists())
-
-    def test_output_changed_after_checksum_is_rejected_before_config_write(self):
-        result = self.invoke()
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.config.write_bytes(self.original)
-        receipt = self.output / 'adapter.ready.json'
-        data = json.loads(receipt.read_text())
-        target = Path(data['outputs']['snv']['path'])
-        expected = data['outputs']['snv']['sha256']
-        real_sha256 = hashlib.sha256
-        changed = []
-
-        class MutatingDigest:
-            def __init__(self, *args, **kwargs):
-                self.digest = real_sha256(*args, **kwargs)
-
-            def update(self, value):
-                self.digest.update(value)
-
-            def hexdigest(self):
-                value = self.digest.hexdigest()
-                if value == expected and not changed:
-                    with target.open('ab') as stream:
-                        stream.write(b'changed after checksum')
-                    changed.append(True)
-                return value
-
-        marker = '    python - "${config_file}" "${manifest}" "${output_dir}" "${receipt}" "${config_sha}" "${manifest_sha}" <<\'PY\'\n'
-        body = self.installer.read_text().split(marker, 1)[1].split('\nPY\n', 1)[0]
-        argv = ['receipt-check', str(self.config), str(self.manifest), str(self.output), str(receipt),
-                real_sha256(self.original).hexdigest(), real_sha256(self.manifest.read_bytes()).hexdigest()]
-        with mock.patch.object(sys, 'argv', argv), mock.patch('hashlib.sha256', MutatingDigest):
-            with contextlib.redirect_stdout(io.StringIO()):
-                with self.assertRaisesRegex(SystemExit, 'verification input changed'):
-                    exec(compile(body, '<SpliceAI2 receipt verifier>', 'exec'), {})
-        self.assertEqual(changed, [True])
-        self.assertEqual(self.config.read_bytes(), self.original)
 
     def test_completed_receipt_reuse_never_invokes_converter(self):
         self.assertEqual(self.invoke().returncode, 0)

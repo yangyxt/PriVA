@@ -265,10 +265,10 @@ Family tasks run prioritization in five steps: combine the family table, add the
 splicing and 5′ UTR columns side by side on copies of it, join the copies (refusing
 differing rows or shared columns), then assign the ACMG criteria.
 
-**Phenotype gene bonus (optional, off by default).** It turns on by itself when
-`--phenotype_hpo_terms TERMS.tsv` gives HPO terms for the proband of every family
-in the run; there is no separate switch. Each family's variants are then sorted
-with the genes' relevance to its terms:
+**Phenotype gene bonus (optional, off by default).** It turns on by itself for
+each family that `--phenotype_hpo_terms TERMS.tsv` gives HPO terms for (the
+proband's terms); there is no separate switch. That family's variants are then
+sorted with the genes' relevance to its terms:
 
 1. `RANK_PHENOTYPE_GENES` ranks the family's genes for its terms with
    `hpo-gene-ranking rank-genes` (repository llm_gene_reranker; pass the program
@@ -286,10 +286,10 @@ with the genes' relevance to its terms:
    gene list weight (1.2), never by both; the table gains the column
    `phenotype_gene_index`.
 
-If any family of the run has no terms (or the run has no PED file), the bonus is
-off for the whole run: no ranking task runs, a warning names the families without
-terms, and every family ranks exactly as before, as in a run without the option.
-Terms of families not in the run are left out with a warning. Outside Nextflow, the key `phenotype_gene_ranking: FAMILY.gene_ranked.tsv`
+A family without terms (and a run without a PED file) ranks exactly as before,
+as in a run without the option; a warning names such families. Terms of families
+not in the run are left out with a warning, so a mistyped family ID shows up in
+both warnings. Outside Nextflow, the key `phenotype_gene_ranking: FAMILY.gene_ranked.tsv`
 in the configuration of a one-family run does the same.
 
 The example `inputs/` paths are relative to the external `PRIVA_RUNS` directory; replace them with your actual input paths and assembly. Use a new output directory for changed inputs, source, resources or settings. For the same run, retain the external launch/work directories and Nextflow cache, and append `-resume`; launch-time resource checks still apply to a fully cached run.

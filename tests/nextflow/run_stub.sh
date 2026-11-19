@@ -131,12 +131,11 @@ contract = json.loads(next((root / 'no-pedigree').rglob('contract.json')).read_t
 assert contract['families'] == [] and contract['ped_sha256'] is None, contract
 print('Cohort stub with two families and no-pedigree stub passed')
 PY
-# Phenotype gene bonus. It is on only when every family's proband has HPO
-# terms: then FAM and OTHER each get their genes ranked (a header-only stub
-# table here) and their ACMG task the ranking. Terms of a family that is not in
-# the PED file are reported and left out. With terms for FAM only, the bonus is
-# off for the whole run: no ranking task, a warning naming OTHER, and both ACMG
-# tasks rank as before.
+# Phenotype gene bonus. It is on for each family whose proband has HPO terms:
+# with terms for both, FAM and OTHER each get their genes ranked (a header-only
+# stub table here) and their ACMG task the ranking. Terms of a family that is not
+# in the PED file are reported and left out. With terms for FAM only, FAM gets
+# its ranking and OTHER ranks as before, with a warning naming it.
 mkdir -p "${fixture}/hpo_reference/raw" "${fixture}/hpo_reference/prepared" "${fixture}/hpo_reference/hpo_graph"
 printf 'sample_id\thpo_term\nFAM\tHP:0001250\nFAM\tGlobal developmental delay\nOTHER\tHP:0001263\nABSENT\tHP:0000252\n' > "${fixture}/hpo_terms.tsv"
 printf 'sample_id\thpo_term\nFAM\tHP:0001250\n' > "${fixture}/hpo_terms_partial.tsv"
@@ -168,17 +167,18 @@ for family in ('FAM', 'OTHER'):
     assert sorted(p.name for p in (root / 'phenotype_gene_ranking' / family).iterdir()) == sorted(
         [f'{family}.{t}.tsv' for t in ('frontier_gene_evidence', 'frontier_p_terms', 'gene_ranked', 'gene_score_contributions', 'gene_summary', 'p_pairs')] + ['run_summary.tsv'])
 assert 'left out: ABSENT' in log, 'the family missing from the PED file was not reported'
-assert 'Phenotype gene bonus is on for all 2 families' in log
-# Terms for FAM only: the bonus is off for the whole run.
+assert 'Phenotype gene bonus is on for 2 of 2 families' in log
+# Terms for FAM only: the bonus is on for FAM and off for OTHER.
 root, log = cases / 'phenotype-partial', (logs / 'nextflow-stub-phenotype-partial.log').read_text()
 names = tasks(root)
-assert not [t for t in names if t.startswith('RANK_PHENOTYPE_GENES')], names
+assert [t for t in names if t.startswith('RANK_PHENOTYPE_GENES')] == ['RANK_PHENOTYPE_GENES (FAM)'], names
 assert [t for t in names if t.startswith('PRIORITIZE_ACMG')] == ['PRIORITIZE_ACMG (FAM)', 'PRIORITIZE_ACMG (OTHER)'], names
-for family in ('FAM', 'OTHER'):
-    assert 'phenotype_gene_ranking' not in provenance(root, family), family
-assert not (root / 'phenotype_gene_ranking').exists()
-assert 'Phenotype gene bonus is off: --phenotype_hpo_terms has no HPO terms for OTHER' in log, 'the family without terms was not reported'
-print('Phenotype gene bonus wiring passed (on for all families, off when one lacks terms)')
+assert provenance(root, 'FAM')['phenotype_gene_ranking']['name'] == 'FAM.gene_ranked.tsv'
+assert 'phenotype_gene_ranking' not in provenance(root, 'OTHER')
+assert sorted(p.name for p in (root / 'phenotype_gene_ranking').iterdir()) == ['FAM']
+assert 'Phenotype gene bonus is on for 1 of 2 families' in log
+assert 'Phenotype gene bonus is off for families without HPO terms: OTHER' in log, 'the family without terms was not reported'
+print('Phenotype gene bonus wiring passed (on for each family with terms, off for one without)')
 PY
 # The removed annotated mode and old hub options are refused with a message
 # that points to the annotation hub.

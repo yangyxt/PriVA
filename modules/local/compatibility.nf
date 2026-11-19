@@ -377,8 +377,8 @@ process PRIORITIZE_ACMG {
     publishDir "${params.outdir}/pipeline_info", mode: 'copy', overwrite: false, pattern: '*.provenance.json'
     input:
     // ranking: the family's gene ranking for its HPO terms (RANK_PHENOTYPE_GENES),
-    // or an empty list when the bonus is off (some family has no HPO terms, or
-    // no --phenotype_hpo_terms), which ranks as before.
+    // or an empty list for a family without HPO terms (or a run without
+    // --phenotype_hpo_terms), which ranks as before.
     tuple val(meta), val(family), path(table, stageAs: 'input.tsv'), path(ranking, stageAs: 'phenotype_gene_ranking/*'), path(bundle, stageAs: 'bundle/*')
     output:
     tuple val(meta), val(family), path('result/*.filtered.tsv'), path('result/*.filtered.acmg.tsv'), emit: tables

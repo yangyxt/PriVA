@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="ISO-8859-1"?>
+<JDBOR date="2024-12-01 00:00:00" version="1.3.31">
+  <Availability><Licence><FullName lang="en">Creative Commons Attribution 4.0</FullName></Licence></Availability>
+  <DisorderList count="2">
+    <Disorder id="1">
+      <OrphaCode>183660</OrphaCode>
+      <Name lang="en">Agammaglobulinémie liée à l'X</Name>
+      <DisorderType id="21394"><Name lang="en">Disease</Name></DisorderType>
+      <DisorderGeneAssociationList count="2">
+        <DisorderGeneAssociation>
+          <SourceOfValidation>PMID:1</SourceOfValidation>
+          <Gene id="1">
+            <Name lang="en">Bruton tyrosine kinase</Name>
+            <Symbol>BTK</Symbol>
+            <OrphaCode>119051</OrphaCode>
+            <ExternalReferenceList count="3">
+              <ExternalReference id="1"><Source>HGNC</Source><Reference>1133</Reference></ExternalReference>
+              <ExternalReference id="2"><Source>OMIM</Source><Reference>300300</Reference></ExternalReference>
+              <ExternalReference id="3"><Source>Ensembl</Source><Reference></Reference></ExternalReference>
+            </ExternalReferenceList>
+          </Gene>
+          <DisorderGeneAssociationType id="17949"><Name lang="en">Disease-causing germline mutation(s) in</Name></DisorderGeneAssociationType>
+          <DisorderGeneAssociationStatus id="17991"><Name lang="en">Assessed</Name></DisorderGeneAssociationStatus>
+        </DisorderGeneAssociation>
+        <DisorderGeneAssociation>
+          <Gene id="2"><Name lang="en">No symbol gene</Name><Symbol></Symbol></Gene>
+          <DisorderGeneAssociationStatus id="17991"><Name lang="en">Not yet assessed</Name></DisorderGeneAssociationStatus>
+        </DisorderGeneAssociation>
+      </DisorderGeneAssociationList>
+    </Disorder>
+    <Disorder id="2">
+      <OrphaCode> 999999 </OrphaCode>
+      <Name lang="en">Made-up &amp; mixed disorder</Name>
+      <DisorderGeneAssociationList count="1">
+        <DisorderGeneAssociation>
+          <Gene id="3"><Symbol>DOCK8</Symbol><OrphaCode>1</OrphaCode></Gene>
+          <DisorderGeneAssociationType id="1"><Name lang="en">Role in the phenotype of</Name></DisorderGeneAssociationType>
+        </DisorderGeneAssociation>
+      </DisorderGeneAssociationList>
+    </Disorder>
+  </DisorderList>
+</JDBOR>

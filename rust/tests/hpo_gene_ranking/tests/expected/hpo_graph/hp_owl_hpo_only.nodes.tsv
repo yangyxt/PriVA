@@ -1,0 +1,21 @@
+hp_id	iri	name	definition	comment	alternative_ids	exact_synonyms	related_synonyms	broad_synonyms	narrow_synonyms	xrefs	subsets	replaced_by	consider	logical_definition_text	linked_go_terms	linked_uberon_terms	linked_pato_terms	linked_cl_terms	linked_other_ontology_terms	obsolete	has_logical_definition	parent_count	child_count	logical_definition_count	linked_ontology_count	annotation_property_count	annotation_value_count
+HP:0000001	http://purl.obolibrary.org/obo/HP_0000001	All																		false	false	0	2	0	0	2	2
+HP:0000005	http://purl.obolibrary.org/obo/HP_0000005	Mode of inheritance																		false	false	1	1	0	0	2	2
+HP:0000006	http://purl.obolibrary.org/obo/HP_0000006	Autosomal dominant inheritance				Autosomal dominant														false	false	1	0	0	0	3	3
+HP:0000118	http://purl.obolibrary.org/obo/HP_0000118	Phenotypic abnormality	A phenotypic abnormality.																	false	false	1	4	0	0	3	3
+HP:0000707	http://purl.obolibrary.org/obo/HP_0000707	Abnormality of the nervous system									hp#hposlim:core									false	false	1	1	0	0	3	3
+HP:0000964	http://purl.obolibrary.org/obo/HP_0000964	Eczema				Eczematous dermatitis | Dermatitis				MSH:D004485 | UMLS:C0013595										false	false	2	0	0	0	4	6
+HP:0000999	http://purl.obolibrary.org/obo/HP_0000999	obsolete Old term										HP:0001250 Seizure	HP:0002069							true	false	0	0	0	0	5	5
+HP:0001250	http://purl.obolibrary.org/obo/HP_0001250	Seizure		"A comment
+spanning two lines."	HP:0001252 | HP:0001251	Seizures	Fits													false	false	1	1	0	0	6	7
+HP:0001574	http://purl.obolibrary.org/obo/HP_0001574	Abnormality of the integument																		false	false	1	1	0	0	2	2
+HP:0001871	http://purl.obolibrary.org/obo/HP_0001871	Abnormality of blood and blood-forming tissues																		false	false	1	1	0	0	2	2
+HP:0001880	http://purl.obolibrary.org/obo/HP_0001880	Eosinophilia												obo.UPHENO_0001001 & obo.BFO_0000051.some(obo.PATO_0000470 & obo.RO_0000052.some(obo.CL_0000771))				CL:0000771 eosinophil		false	true	1	0	1	1	2	2
+HP:0001881	http://purl.obolibrary.org/obo/HP_0001881	Abnormal leukocyte morphology																		false	false	2	1	0	0	2	2
+HP:0002069	http://purl.obolibrary.org/obo/HP_0002069	Bilateral tonic-clonic seizure																		false	false	1	0	0	0	2	2
+HP:0002090	http://purl.obolibrary.org/obo/HP_0002090	Pneumonia								MSH:D011014				obo.UPHENO_0001001 & obo.BFO_0000051.some(obo.PATO_0000470 & obo.RO_0000052.some(obo.PR_000001393) & obo.RO_0002314.some(obo.UBERON_0002048))		UBERON:0002048 lung			PR:000001393 interleukin-6	false	true	1	0	1	2	3	3
+HP:0002715	http://purl.obolibrary.org/obo/HP_0002715	Abnormality of the immune system																		false	false	1	4	0	0	2	2
+HP:0002719	http://purl.obolibrary.org/obo/HP_0002719	Recurrent infections																		false	false	1	1	0	0	2	2
+HP:0002721	http://purl.obolibrary.org/obo/HP_0002721	Immunodeficiency				Immune deficiency | Decreased immune function				UMLS:C0021051				obo.UPHENO_0001001 & obo.BFO_0000051.some(obo.PATO_0001997 & obo.RO_0000052.some(obo.GO_0002376)) | obo.RO_0002573.some(obo.PATO_0000460)	GO:0002376 immune system process		PATO:0000460 abnormal			false	true	1	1	2	2	4	5
+HP:0004313	http://purl.obolibrary.org/obo/HP_0004313	Decreased antibody level in blood	"Antibody ""titres"" below normal & more."							MP:0002491 | ORPHA:183660										false	false	1	0	0	0	4	5
+HP:0011123	http://purl.obolibrary.org/obo/HP_0011123	"Inflammatory ""abnormality"" of the skin"				Dermatitis														false	false	1	1	0	0	3	3

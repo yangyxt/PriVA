@@ -1,0 +1,4 @@
+sample_id	direct_terms	direct_p_terms	frontier_p_terms	pair_rows	gene_evidence_rows	gene_summary_rows
+S2	3	3	2	1	5	5
+S1	6	4	3	3	15	8
+MISSING	0	0	0	0	0	0

@@ -1,0 +1,7 @@
+sample_id	gene_symbol	ncbi_gene_ids	frontier_hp_count	frontier_hp_ids	frontier_hp_names	candidate_sources	candidate_statuses	external_ids	evidence_row_count
+S1	BTK	695	2	HP:0002090|HP:0004313	Decreased antibody level in blood|Pneumonia	HPO_PHENOTYPE_TO_GENES|HPO_XREF_MP_TO_MGI_HUMAN_ORTHOLOG|HPO_XREF_ORPHA_TO_DISEASE_GENES	direct_responsible_gene_candidate|mouse_ortholog_support_for_direct_candidate|orpha_disease_support_for_direct_candidate	HP:0002090|HP:0004313|MP:0002491|ORPHA:183660	4
+S1	CD19	930	1	HP:0004313	Decreased antibody level in blood	HPO_PHENOTYPE_TO_GENES|HPO_XREF_MP_TO_MGI_HUMAN_ORTHOLOG	direct_responsible_gene_candidate|mouse_ortholog_support_for_direct_candidate	HP:0004313|MP:0002491	2
+S1	CFTR	1080	1	HP:0002090	Pneumonia	HPO_PHENOTYPE_TO_GENES	direct_responsible_gene_candidate	HP:0002090	1
+S1	DOCK8	81704	1	HP:0002090	Pneumonia	HPO_PHENOTYPE_TO_GENES	direct_responsible_gene_candidate	HP:0002090	1
+S1	STAT3	6774	1	HP:0002090	Pneumonia	HPO_PHENOTYPE_TO_GENES	direct_responsible_gene_candidate	HP:0002090	1
+S1	TNFRSF13B	23495	1	HP:0004313	Decreased antibody level in blood	HPO_PHENOTYPE_TO_GENES	direct_responsible_gene_candidate	HP:0004313	1

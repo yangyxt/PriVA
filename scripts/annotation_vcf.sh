@@ -40,9 +40,10 @@ function finalize_anno_vcf() {
 
 function priva_check_spliceai_versions() {
     # SpliceAI v1 and SpliceAI2 score VCFs are both accepted; the splicing and
-    # ACMG steps apply each version's own cutoffs (spliceai_cutoffs.py). The SNV
+    # ACMG steps apply each version's own cutoffs (priva spliceai-cutoffs). The SNV
     # and indel files must be the same version. Inspect headers only, never rows.
-    python "${SCRIPT_DIR}/spliceai_cutoffs.py" "$@" >&2
+    priva_resolve_binary "${1:-}" || return 1
+    "${PRIVA_BIN}" spliceai-cutoffs "$@" >&2
 }
 
 function main_workflow() {
@@ -690,7 +691,8 @@ function anno_agg_gnomAD_data () {
     if [[ -n ${PRIVA_CLINVAR_RECOVERY_CONFIG:-} ]]; then
         local -a recovery_chromosomes=()
         for chr in "${valid_chroms[@]}"; do recovery_chromosomes+=(--chromosome "$chr"); done
-        python "${SCRIPT_DIR}/clinvar_gene_refresh.py" retire-shards \
+        priva_resolve_binary "$PRIVA_CLINVAR_RECOVERY_CONFIG" || return 1
+        "${PRIVA_BIN}" clinvar-gene-refresh retire-shards \
             --config "$PRIVA_CLINVAR_RECOVERY_CONFIG" --source-root "${SCRIPT_DIR}/.." \
             --input-vcf "$input_vcf" "${recovery_chromosomes[@]}" || return $?
     fi
@@ -978,7 +980,8 @@ function prepare_vcf_add_varID {
         local output_vcf=${input_vcf/.vcf/.id.vcf}
     fi
 
-    python3 ${SCRIPT_DIR}/generate_varID_for_vcf.py \
+    priva_resolve_binary "${config_file:-}" || return 1
+    "${PRIVA_BIN}" variant-ids \
     -m encode \
     -i ${input_vcf} \
     -o ${output_vcf}
@@ -1106,7 +1109,8 @@ function anno_VEP_cache_candidate_phase() {
         esac
     done
     [[ -n "$phase_config" && -n "$phase_input" && ( "$phase" == begin || "$phase" == complete ) ]] || { log "Candidate phase requires explicit config, managed input and begin|complete"; return 1; }
-    python "${SCRIPT_DIR}/clinvar_gene_refresh.py" "candidate-${phase}" \
+    priva_resolve_binary "$phase_config" || return 1
+    "${PRIVA_BIN}" clinvar-gene-refresh "candidate-${phase}" \
         --config "$phase_config" --source-root "$BASE_DIR" --input-vcf "$phase_input"
 }
 
@@ -1253,7 +1257,8 @@ function _priva_anno_VEP_data() {
     local pext_tissues="${pext_tissues:-${config_args[pext_tissues]}}"
 
     if [[ "$priva_vep_purpose" == cache_candidate ]]; then
-        python "${SCRIPT_DIR}/clinvar_gene_refresh.py" candidate-begin \
+        priva_resolve_binary "$config_file" || return 1
+        "${PRIVA_BIN}" clinvar-gene-refresh candidate-begin \
             --config "$config_file" --source-root "$BASE_DIR" --input-vcf "$input_vcf" || return 1
     elif [[ "$priva_vep_purpose" == runtime ]]; then
         priva_check_spliceai_versions "${config_file}" "${spliceai_snv_prescore}" "${spliceai_indel_prescore}" || return 1
@@ -1376,7 +1381,8 @@ function _priva_anno_VEP_data() {
     display_vcf ${input_vcf/.vcf*/.vcf.gz} || return $?
 
     if [[ "$priva_vep_purpose" == cache_candidate ]]; then
-        python "${SCRIPT_DIR}/clinvar_gene_refresh.py" candidate-complete \
+        priva_resolve_binary "$config_file" || return 1
+        "${PRIVA_BIN}" clinvar-gene-refresh candidate-complete \
             --config "$config_file" --source-root "$BASE_DIR" --input-vcf "$input_vcf" || return 1
     fi
 }
@@ -1399,6 +1405,14 @@ function Calculate_CADD {
     # Snakemake inside CADD.sh deploys the pinned rule environments (-m keeps
     # them conda-only) and needs a conda executable even when one is active.
     priva_cadd_conda check --frontend-prefix "${cadd_base_dir%/*}/conda_frontend" || return 1
+    # 2026-11-14 CT: a per-chromosome piece without records (main.nf gives CADD
+    # one empty piece when every new variant is on MT) gives an empty table.
+    if [[ -f ${input_vcf} && -z $(bcftools view -H ${input_vcf} 2> /dev/null | head -n 1) ]]; then
+        [[ -z ${output_file} ]] && output_file=${input_vcf/.vcf*/.cadd.tsv}
+        : > "${output_file%.gz}"
+        log "${input_vcf} has no records; wrote an empty CADD table ${output_file%.gz}"
+        return 0
+    fi
     check_vcf_validity ${input_vcf} || { \
     log "The input vcf file ${input_vcf} is not valid. Please check the file"; return 1; }
 
@@ -1423,12 +1437,13 @@ function Calculate_CADD {
 
     # 2026-11-14 CT: CADD's v1.7 data have no mitochondrial chromosome (no MT
     # rows in either prescored table, no MT sequence in the reference MMSplice
-    # reads), and MMSplice stops on an MT variant near a mitochondrial gene.
-    # MT records are left out of CADD's input and get no CADD values, as they
-    # get no gnomAD values.
+    # reads), and MMSplice stops on an MT variant near a mitochondrial gene
+    # (TruPath job 1542201). MT records are left out of CADD's input and get
+    # no CADD values, as they get no gnomAD values. CADD reads only the first
+    # five VCF columns, so the genotype columns are left out as well.
     local cadd_input=${nochr_vcf%.vcf.gz}.cadd_input.vcf.gz
-    bcftools view --threads ${threads} -t ^MT -Oz -o ${cadd_input} ${nochr_vcf} || { \
-    log "Failed to write the CADD input ${cadd_input} without MT records. Quit now";
+    bcftools view --threads ${threads} -G -t ^MT -Oz -o ${cadd_input} ${nochr_vcf} || { \
+    log "Failed to write the CADD input ${cadd_input} without MT records and genotypes. Quit now";
     return 1; }
 
     # Determine the genome tag based on the assembly
@@ -1447,11 +1462,20 @@ function Calculate_CADD {
     # from here instead of reading the GTF again; upstream's file ignores it.
     local exon_tables=${cadd_base_dir}/data/annotations/${genome_tag}_v1.7/mmsplice
     [[ -d ${exon_tables} ]] || exon_tables=""
+    # 2026-11-14 CT: PriVA's extract_scored.py hands the prescored lookup to
+    # `priva cadd-prescore` when main_install built a compact copy of the
+    # table (TABLE.priva_compact); without the program or the copy it runs its
+    # own Python lookup.
+    local prescore_bin=""
+    if priva_resolve_binary "${config_file}" > /dev/null 2>&1; then
+        prescore_bin=${PRIVA_BIN}
+    fi
 
     log "Running CADD script ${cadd_script} with the following command"
     log "${cadd_script} -c ${threads} -a -p -m -d -g ${genome_tag} -o ${output_file} ${cadd_input}"
     export TMPDIR=${tmp_dir}
     PRIVA_CADD_MMSPLICE_EXON_CACHE=${exon_tables} \
+    PRIVA_CADD_PRESCORE_BIN=${prescore_bin} \
     ${cadd_script} \
     -c ${threads} \
     -a -p -m -d \
@@ -1676,12 +1700,12 @@ function find_cached_cadd_variants() {
     local uncovered_pos=$(mktemp --tmpdir="$TMPDIR" uncovered_pos.XXXXXX.tsv)
     touch "${uncovered_pos}"
     
-    # Extract matching variants from CADD TSV using Python script
-    
+    # Extract matching variants from CADD TSV with priva cadd-hub
+    priva_resolve_binary "${config_file:-}" || return 2
     log "Using the below command to match variants in CADD hub TSV"
-    log "python ${SCRIPT_DIR}/cadd_hub_util.py match --hub ${hub_cadd_file} --pos ${pos_file} --covered ${output_covered_tsv} --uncovered ${uncovered_pos}"
+    log "${PRIVA_BIN} cadd-hub match --hub ${hub_cadd_file} --pos ${pos_file} --covered ${output_covered_tsv} --uncovered ${uncovered_pos}"
     
-    python ${SCRIPT_DIR}/cadd_hub_util.py match \
+    "${PRIVA_BIN}" cadd-hub match \
         --hub "${hub_cadd_file}" \
         --pos "${pos_file}" \
         --covered "${output_covered_tsv}" \
@@ -1753,9 +1777,10 @@ function update_hub_cadd() {
     }
     
     # Update hub CADD TSV with new scores
+    priva_resolve_binary "${config_file:-}" || return 1
     log "Using the below command to update CADD hub TSV"
-    log "python ${SCRIPT_DIR}/cadd_hub_util.py update --new ${new_cadd_tsv} --hub ${hub_cadd_file}"
-    python ${SCRIPT_DIR}/cadd_hub_util.py update --new "${new_cadd_tsv}" --hub "${hub_cadd_file}" || return 1
+    log "${PRIVA_BIN} cadd-hub update --new ${new_cadd_tsv} --hub ${hub_cadd_file}"
+    "${PRIVA_BIN}" cadd-hub update --new "${new_cadd_tsv}" --hub "${hub_cadd_file}" || return 1
     log "Updated CADD hub TSV ${hub_cadd_file}"
 }
 
@@ -1766,10 +1791,11 @@ function merge_cadd_results() {
     local output_tsv=$3
     
     # Merge covered and new CADD scores
+    priva_resolve_binary "${config_file:-}" || return 1
     log "Using the below command to merge CADD results"
-    log "python ${SCRIPT_DIR}/cadd_hub_util.py merge --covered ${covered_tsv} --new ${new_cadd_tsv} --output ${output_tsv}"
+    log "${PRIVA_BIN} cadd-hub merge --covered ${covered_tsv} --new ${new_cadd_tsv} --output ${output_tsv}"
 
-    python ${SCRIPT_DIR}/cadd_hub_util.py merge \
+    "${PRIVA_BIN}" cadd-hub merge \
         --covered "${covered_tsv}" \
         --new "${new_cadd_tsv}" \
         --output "${output_tsv}"

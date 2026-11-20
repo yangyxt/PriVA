@@ -1,0 +1,90 @@
+{
+  "out_dir": "tests/expected/prepared",
+  "raw_dir": "tests/fixtures/raw",
+  "resources": {
+    "gene_info": {
+      "file": "tests/fixtures/raw/Homo_sapiens.gene_info",
+      "rows": 19,
+      "status": "ok"
+    },
+    "goa": {
+      "file": "tests/fixtures/raw/goa_human.gaf",
+      "rows": 7,
+      "status": "ok",
+      "unique_gene_symbols": 6,
+      "unique_go_terms": 2
+    },
+    "hpa_expression": {
+      "rna_immune_cell_schmiedel.tsv": {
+        "file": "tests/fixtures/raw/rna_immune_cell_schmiedel.tsv",
+        "status": "missing"
+      },
+      "rna_single_cell_type.tsv": {
+        "columns": [
+          "Gene",
+          "Gene name",
+          "Cell type",
+          "nTPM"
+        ],
+        "file": "tests/fixtures/raw/rna_single_cell_type.tsv",
+        "rows": 3,
+        "status": "ok"
+      },
+      "rna_tissue_consensus.tsv": {
+        "columns": [
+          "Gene",
+          "Gene name",
+          "Tissue",
+          "nTPM"
+        ],
+        "file": "tests/fixtures/raw/rna_tissue_consensus.tsv",
+        "rows": 2,
+        "status": "ok"
+      }
+    },
+    "hpo": {
+      "file": "tests/fixtures/raw/phenotype_to_genes.txt",
+      "rows": 76,
+      "status": "ok",
+      "unique_gene_symbols": 15,
+      "unique_hp_terms": 15
+    },
+    "mgi_mp": {
+      "file": "tests/fixtures/raw/MGI_GenePheno.rpt",
+      "homology_file": "tests/fixtures/raw/HOM_MouseHumanSequence.rpt",
+      "homology_status": "ok",
+      "human_ortholog_rows": 5,
+      "mouse_rows": 4,
+      "status": "ok",
+      "unique_human_gene_symbols": 2,
+      "unique_mouse_gene_symbols": 2,
+      "unique_mp_terms_human": 1,
+      "unique_mp_terms_mouse": 1
+    },
+    "orphadata": {
+      "file": "tests/fixtures/raw/orphadata_en_product6.xml",
+      "rows": 3,
+      "status": "ok",
+      "unique_gene_symbols": 2,
+      "unique_orpha_diseases": 2
+    },
+    "pro": {
+      "file": "tests/fixtures/raw/pr.obo",
+      "rows": 4,
+      "status": "ok",
+      "unique_pr_terms": 3
+    },
+    "reactome": {
+      "file": "tests/fixtures/raw/NCBI2Reactome_All_Levels.txt",
+      "rows": 4,
+      "status": "ok",
+      "unique_ncbi_gene_ids": 4,
+      "unique_reactome_pathways": 4
+    },
+    "uniprot": {
+      "file": "tests/fixtures/raw/uniprot_human_reviewed.tsv",
+      "rows": 6,
+      "status": "ok"
+    }
+  }
+}

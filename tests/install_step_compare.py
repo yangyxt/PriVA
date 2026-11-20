@@ -1,0 +1,210 @@
+#!/usr/bin/env python3
+"""Runs one install step both ways and compares what each records.
+
+Old: `priva install-task run` with the registry before the step became its
+own process (tests/fixtures/install-steps-1879c0c.json), which calls the
+step's shell function from scripts/install_utils.sh. New: the step's process
+(conf/install_steps.json "module"), run by Nextflow on the same plan. Both get
+the same configuration, the same receipts of the steps it needs (--input) and,
+with --net, the same server: tests/fake_net.py answers curl and wget from that
+folder (HOST/PATH), so a step can be compared without the network.
+
+The output keys must be the same, and each key's file the same bytes (a
+folder: the same files with the same bytes, git's own folder and the commit
+file the process records left out; a gzip file that is not BGZF may differ in
+its header, which holds the name and time it was written with, and then its
+decompressed bytes must be the same). Exit 1 on any difference.
+
+  python3 tests/install_step_compare.py --step B6 --config C.yaml --work W \\
+      --priva rust/target/release/priva --nextflow nextflow [--net DIR] \\
+      [--input RECEIPT]... [--new-only]
+
+--new-only runs only the step's process and prints the keys it records (for a
+case the old function handled by writing beside a file you supply).
+"""
+import argparse
+import gzip
+import hashlib
+import json
+import os
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+OLD_REGISTRY = ROOT / "tests" / "fixtures" / "install-steps-1879c0c.json"
+LINKED = ("conf", "scripts", "data", "rust", "modules", "workflows", "bin")
+
+
+def sha(path: Path) -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for block in iter(lambda: f.read(1 << 20), b""):
+            h.update(block)
+    return h.hexdigest()
+
+
+def fingerprint(path: Path) -> str:
+    """A file's SHA-256, or a folder's files and their SHA-256 (no .git)."""
+    if path.is_file():
+        return sha(path)
+    lines = []
+    for item in sorted(path.rglob("*")):
+        rel = item.relative_to(path)
+        if rel.parts and rel.parts[0] == ".git":
+            continue
+        if item.is_file():
+            lines.append(f"{rel} {sha(item)}")
+    return hashlib.sha256("\n".join(lines).encode()).hexdigest() + f" ({len(lines)} files)"
+
+
+def gunzipped(path: Path) -> str | None:
+    """The SHA-256 of a gzip file's decompressed bytes (None if not gzip)."""
+    if not path.is_file() or path.read_bytes()[:2] != b"\x1f\x8b":
+        return None
+    h = hashlib.sha256()
+    with gzip.open(path, "rb") as f:
+        for block in iter(lambda: f.read(1 << 20), b""):
+            h.update(block)
+    return h.hexdigest()
+
+
+def run(command, **kw):
+    print("+", " ".join(str(c) for c in command), file=sys.stderr)
+    return subprocess.run([str(c) for c in command], **kw)
+
+
+def plan(args, work: Path) -> Path:
+    releases = work / "releases"
+    releases.mkdir(parents=True, exist_ok=True)
+    registry = json.loads((ROOT / "conf" / "install_steps.json").read_text())
+    files = []
+    for step in registry["steps"]:
+        if step.get("release"):
+            out = releases / f"release_{step['id']}.json"
+            run([args.priva, "install-task", "release", "--source-root", ROOT, "--registry",
+                 ROOT / "conf" / "install_steps.json", "--config", args.config, "--step", step["id"],
+                 "--out", out, "--stub"], check=True)
+            files += ["--releases", out]
+    run([args.priva, "install-task", "plan", "--source-root", ROOT, "--registry",
+         ROOT / "conf" / "install_steps.json", "--config", args.config, "--out", work / "plan",
+         "--refresh", ""] + files, check=True)
+    return work / "plan" / "plan.json"
+
+
+def environment(args) -> dict:
+    env = dict(os.environ)
+    if args.net:
+        net = Path(args.net).resolve()
+        subprocess.run([sys.executable, Path(__file__).with_name("fake_net.py"), "install", net], check=True)
+        env["PATH"] = f"{net / 'bin'}:{env['PATH']}"
+        env["FAKE_NET_ROOT"] = str(net)
+    return env
+
+
+def old_route(args, plan_json: Path, work: Path, env: dict) -> dict:
+    here = work / "old" / "run"
+    here.mkdir(parents=True, exist_ok=True)
+    inputs = [x for r in args.input for x in ("--input", Path(r).resolve())]
+    run([args.priva, "install-task", "run", "--source-root", ROOT, "--registry", OLD_REGISTRY,
+         "--plan", plan_json, "--step", args.step, "--lineage", "old", "--folder", work / "old" / "folder",
+         "--receipt", "receipt.json"] + inputs,
+        cwd=here, env=dict(env, PRIVA_BINARY=str(Path(args.priva).resolve()), INSTALL_THREADS="2"), check=True)
+    return json.loads((here / "receipt.json").read_text())
+
+
+def new_route(args, plan_json: Path, work: Path, env: dict) -> dict:
+    here = work / "new"
+    here.mkdir(parents=True, exist_ok=True)
+    for name in LINKED:
+        link = here / name
+        if not link.exists():
+            link.symlink_to(ROOT / name)
+    registry = json.loads((ROOT / "conf" / "install_steps.json").read_text())
+    entry = next(s for s in registry["steps"] if s["id"] == args.step)
+    module = ROOT / entry["module"]
+    stage = ", ".join(f"'{k}'" for k in entry.get("stage", []))
+    (here / "harness.nf").write_text(f"""
+include {{ installNative }} from '{ROOT}/workflows/install'
+include {{ {entry['name']} }} from '{str(module)[:-3]}'
+workflow {{
+    def plan = Channel.of(file(params.plan))
+    def needs = (params.inputs ?: '').tokenize(',').collect {{ r -> Channel.of(file(r)) }}
+    {entry['name']}(installNative('{args.step}', plan, needs, [{stage}]))
+}}
+""")
+    (here / "limits.config").write_text("process.resourceLimits = [cpus: 4, memory: 12.GB, time: 2.h]\n")
+    resource_root = here / "res"
+    inputs = ",".join(str(Path(r).resolve()) for r in args.input)
+    command = [args.nextflow, "run", "harness.nf", "-c", "limits.config", "-ansi-log", "false",
+               "--plan", plan_json, "--resource_root", resource_root,
+               "--priva_binary", Path(args.priva).resolve()]
+    if inputs:
+        command += ["--inputs", inputs]
+    result = run(command, cwd=here, env=dict(env, NXF_SYNTAX_PARSER="v2", NXF_OFFLINE="true"))
+    if result.returncode != 0:
+        raise SystemExit(f"the {args.step} process failed; see {here}/.nextflow.log and work/")
+    receipts = sorted((resource_root / args.step).glob("*/receipt.json"))
+    return json.loads(receipts[-1].read_text())
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--step", required=True)
+    parser.add_argument("--config", required=True)
+    parser.add_argument("--work", required=True)
+    parser.add_argument("--priva", required=True)
+    parser.add_argument("--nextflow", required=True)
+    parser.add_argument("--net")
+    parser.add_argument("--input", action="append", default=[])
+    parser.add_argument("--new-only", action="store_true")
+    args = parser.parse_args()
+    args.config = str(Path(args.config).resolve())
+    args.priva = str(Path(args.priva).resolve())
+    work = Path(args.work).resolve()
+    if work.exists():
+        subprocess.run(["chmod", "-R", "u+w", work])
+        shutil.rmtree(work)
+    work.mkdir(parents=True)
+    env = environment(args)
+    plan_json = plan(args, work)
+    if args.new_only:
+        new = new_route(args, plan_json, work, env)
+        for key, value in sorted(new["keys"].items()):
+            print(f"  {key}: {fingerprint(Path(value))} {value}")
+        return
+    old = old_route(args, plan_json, work, env)
+    new = new_route(args, plan_json, work, env)
+    differ = 0
+    keys = sorted(set(old["keys"]) | set(new["keys"]))
+    print(f"{args.step}: {len(keys)} key(s)")
+    for key in keys:
+        a, b = old["keys"].get(key), new["keys"].get(key)
+        if a is None or b is None:
+            print(f"  {key}: only {'new' if a is None else 'old'} records it")
+            differ += 1
+            continue
+        fa, fb = fingerprint(Path(a)), fingerprint(Path(b))
+        same = fa == fb
+        if not same and gunzipped(Path(a)) is not None and gunzipped(Path(a)) == gunzipped(Path(b)):
+            # A gzip header holds the name and time it was written with, which
+            # differ between two runs of the same command.
+            print(f"  {key}: same decompressed {gunzipped(Path(a))} (gzip header differs)")
+            print(f"    old {a}\n    new {b}")
+            continue
+        differ += not same
+        print(f"  {key}: {'same' if same else 'DIFFERENT'} {fa}" + ("" if same else f" / {fb}"))
+        print(f"    old {a}\n    new {b}")
+        # The index files beside a key's file are read with it.
+        for ext in (".tbi", ".csi", ".fai", ".gzi"):
+            ia, ib = Path(a + ext), Path(b + ext)
+            if ia.exists() or ib.exists():
+                ok = ia.exists() and ib.exists() and sha(ia) == sha(ib)
+                differ += not ok
+                print(f"  {key}{ext}: {'same' if ok else 'DIFFERENT or missing on one side'}")
+    sys.exit(1 if differ else 0)
+
+
+if __name__ == "__main__":
+    main()

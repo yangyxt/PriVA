@@ -1,0 +1,6 @@
+#tax_id	GeneID	GO_ID	Evidence	Qualifier	GO_term	PubMed	Category
+9606	6774	GO:0002376	IDA	involved_in	immune system process	1	Process
+9606	3861	GO:0045087	IEA	involved_in	innate immune response	-	Process
+9606	6323	GO:0050776	IEA	involved_in	regulation of immune response	-	Process
+10090	3785	GO:0002376	IEA	involved_in	immune system process	-	Process
+9606	3717	GO:0000001	IEA	involved_in	unrelated process	-	Process

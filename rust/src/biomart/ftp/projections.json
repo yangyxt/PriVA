@@ -1,0 +1,44 @@
+{
+  "transcripts": [
+    "hsapiens_gene_ensembl__transcript__main",
+    [
+      "gene_id_1020_key",
+      "transcript_id_1064_key",
+      "stable_id_1023",
+      "stable_id_1066",
+      "biotype_1064"
+    ]
+  ],
+  "main": [
+    "hsapiens_gene_ensembl__translation__main",
+    [
+      "gene_id_1020_key",
+      "transcript_id_1064_key",
+      "translation_id_1068_key",
+      "stable_id_1023",
+      "stable_id_1066",
+      "biotype_1064"
+    ]
+  ],
+  "hgnc": [
+    "hsapiens_gene_ensembl__ox_hgnc__dm",
+    [
+      "gene_id_1020_key",
+      "display_label_1074"
+    ]
+  ],
+  "swissprot": [
+    "hsapiens_gene_ensembl__ox_uniprotswissprot__dm",
+    [
+      "translation_id_1068_key",
+      "dbprimary_acc_1074"
+    ]
+  ],
+  "refseq": [
+    "hsapiens_gene_ensembl__ox_refseq_mrna__dm",
+    [
+      "transcript_id_1064_key",
+      "dbprimary_acc_1074"
+    ]
+  ]
+}

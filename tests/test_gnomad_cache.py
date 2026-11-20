@@ -12,6 +12,8 @@ import unittest
 import pysam
 import yaml
 
+import fake_priva_binary
+
 
 ROOT = Path(__file__).resolve().parents[1]
 SPEC = importlib.util.spec_from_file_location("gnomad_family_tests", ROOT / "scripts/gnomad_cache.py")
@@ -81,7 +83,8 @@ gnomAD_liftover() { printf 'UNEXPECTED_LIFTOVER\n'; return 98; }
 gnomAD_install "$TEST_CONFIG" "$TEST_REFERENCE"
 '''
         return subprocess.run(["bash", "--noprofile", "--norc", "-c", body, "fixture", str(ROOT / "scripts/install_utils.sh")],
-            env=dict(os.environ, TEST_PYTHON=sys.executable, TEST_CONFIG=str(self.config), TEST_REFERENCE=str(self.reference)),
+            env=dict(os.environ, TEST_PYTHON=sys.executable, TEST_CONFIG=str(self.config), TEST_REFERENCE=str(self.reference),
+                     **fake_priva_binary.environment(self.folder)),
             capture_output=True, text=True, timeout=30)
 
     def test_complete_family_checks_headers_indexes_and_leaves_all_source_bytes_unchanged(self):

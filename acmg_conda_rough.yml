@@ -17,6 +17,9 @@ dependencies:
   - conda-forge::parallel
   - conda-forge::perl-compress-raw-zlib[version='>=2.201']
   - ensembl-vep
+  # Static mature XML backend for the native InterPro mapping builder.
+  - conda-forge::expat>=2.6.0
+  - conda-forge::pkg-config
   - gengetopt
   - gffutils
   - mawk

@@ -1,0 +1,20 @@
+child_hp_id	child_name	parent_hp_id	parent_name	edge_class	owl_axiom	predicate_iri	edge_source
+HP:0000005	Mode of inheritance	HP:0000001	All	is_a	SubClassOf	http://www.w3.org/2000/01/rdf-schema#subClassOf	owl_named_subclass
+HP:0000006	Autosomal dominant inheritance	HP:0000005	Mode of inheritance	is_a	SubClassOf	http://www.w3.org/2000/01/rdf-schema#subClassOf	owl_named_subclass
+HP:0000118	Phenotypic abnormality	HP:0000001	All	is_a	SubClassOf	http://www.w3.org/2000/01/rdf-schema#subClassOf	owl_named_subclass
+HP:0000707	Abnormality of the nervous system	HP:0000118	Phenotypic abnormality	is_a	SubClassOf	http://www.w3.org/2000/01/rdf-schema#subClassOf	owl_named_subclass
+HP:0000964	Eczema	HP:0011123	"Inflammatory ""abnormality"" of the skin"	is_a	SubClassOf	http://www.w3.org/2000/01/rdf-schema#subClassOf	owl_named_subclass
+HP:0000964	Eczema	HP:0002715	Abnormality of the immune system	is_a	SubClassOf	http://www.w3.org/2000/01/rdf-schema#subClassOf	owl_named_subclass
+HP:0001250	Seizure	HP:0000707	Abnormality of the nervous system	is_a	SubClassOf	http://www.w3.org/2000/01/rdf-schema#subClassOf	owl_named_subclass
+HP:0001574	Abnormality of the integument	HP:0000118	Phenotypic abnormality	is_a	SubClassOf	http://www.w3.org/2000/01/rdf-schema#subClassOf	owl_named_subclass
+HP:0001871	Abnormality of blood and blood-forming tissues	HP:0000118	Phenotypic abnormality	is_a	SubClassOf	http://www.w3.org/2000/01/rdf-schema#subClassOf	owl_named_subclass
+HP:0001880	Eosinophilia	HP:0001881	Abnormal leukocyte morphology	is_a	SubClassOf	http://www.w3.org/2000/01/rdf-schema#subClassOf	owl_named_subclass
+HP:0001881	Abnormal leukocyte morphology	HP:0002715	Abnormality of the immune system	is_a	SubClassOf	http://www.w3.org/2000/01/rdf-schema#subClassOf	owl_named_subclass
+HP:0001881	Abnormal leukocyte morphology	HP:0001871	Abnormality of blood and blood-forming tissues	is_a	SubClassOf	http://www.w3.org/2000/01/rdf-schema#subClassOf	owl_named_subclass
+HP:0002069	Bilateral tonic-clonic seizure	HP:0001250	Seizure	is_a	SubClassOf	http://www.w3.org/2000/01/rdf-schema#subClassOf	owl_named_subclass
+HP:0002090	Pneumonia	HP:0002719	Recurrent infections	is_a	SubClassOf	http://www.w3.org/2000/01/rdf-schema#subClassOf	owl_named_subclass
+HP:0002715	Abnormality of the immune system	HP:0000118	Phenotypic abnormality	is_a	SubClassOf	http://www.w3.org/2000/01/rdf-schema#subClassOf	owl_named_subclass
+HP:0002719	Recurrent infections	HP:0002715	Abnormality of the immune system	is_a	SubClassOf	http://www.w3.org/2000/01/rdf-schema#subClassOf	owl_named_subclass
+HP:0002721	Immunodeficiency	HP:0002715	Abnormality of the immune system	is_a	SubClassOf	http://www.w3.org/2000/01/rdf-schema#subClassOf	owl_named_subclass
+HP:0004313	Decreased antibody level in blood	HP:0002721	Immunodeficiency	is_a	SubClassOf	http://www.w3.org/2000/01/rdf-schema#subClassOf	owl_named_subclass
+HP:0011123	"Inflammatory ""abnormality"" of the skin"	HP:0001574	Abnormality of the integument	is_a	SubClassOf	http://www.w3.org/2000/01/rdf-schema#subClassOf	owl_named_subclass

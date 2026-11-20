@@ -1,0 +1,29 @@
+# Apptainer image of the priva_acmg scientific environment for
+# `nextflow run main.nf -profile apptainer`.
+#
+# The environment comes from its exact package list, so the image runs the
+# same software as the installed environment:
+#   micromamba env export -n priva_acmg --explicit > env.explicit.txt
+#   micromamba list -n priva_acmg | awk '$NF=="pypi"{print $1"=="$2}' > pip.txt
+#   apptainer build --fakeroot priva_acmg.sif priva_acmg.def
+# Run the build in the folder holding env.explicit.txt and pip.txt. Pass the
+# image's SHA-256 as --software_id. `priva` itself is not in the image: the
+# workflow runs the --priva_binary program, which must be inside a bound
+# folder (--container_run_options='-B /path').
+Bootstrap: docker
+From: mambaorg/micromamba:1.5.10
+
+%files
+    env.explicit.txt /opt/env.explicit.txt
+    pip.txt /opt/pip.txt
+
+%post
+    # Nextflow collects task metrics with ps.
+    apt-get update && apt-get install -y --no-install-recommends procps && rm -rf /var/lib/apt/lists/*
+    micromamba create -y -p /opt/priva_acmg -f /opt/env.explicit.txt
+    if [ -s /opt/pip.txt ]; then /opt/priva_acmg/bin/python -m pip install --no-deps --no-cache-dir -r /opt/pip.txt; fi
+    micromamba clean -a -y
+
+%environment
+    export PATH=/opt/priva_acmg/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+    export LC_ALL=C.UTF-8

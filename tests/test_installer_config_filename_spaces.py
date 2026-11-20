@@ -15,11 +15,11 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 INSTALLER = ROOT / "scripts/install_utils.sh"
-STAGES = ["CADD_conda_install", "VEP_plugins_install", "LoFtee_install", "gnomAD_install", "AlphaMissense_anno_gnomAD",
+STAGES = ["CADD_conda_install", "Nextflow_runtime_install", "PriVA_rust_install", "VEP_plugins_install", "LoFtee_install", "gnomAD_install", "AlphaMissense_anno_gnomAD",
           "InterPro_parsing", "pext_install", "ClinVar_install", "AlphaMissense_stat", "AlphaMissense_pick_intolerant_domains",
-          "prepare_pm1_regions", "ClinVar_patho_AF_stat", "CADD_install", "CADD_upstream_check", "ClinGen_deploy", "CDS_FASTA_install", "mechanism_resource_install"]
+          "prepare_pm1_regions", "ClinVar_patho_AF_stat", "ClinVar_PM5_index", "CADD_install", "CADD_upstream_check", "ClinGen_deploy", "CDS_FASTA_install", "mechanism_resource_install"]
 PLUGINS = ["UTRAnnotator_install", "LOEUF_install", "Conservation_install", "AlphaMissense_install",
-           "AlphaMissense_anno", "AlphaMissense_pick_missense_constrained_segments", "SpliceAI_install",
+           "AlphaMissense_anno", "SpliceAI_install",
            "SpliceVault_install", "MaveDB_install", "PrimateAI_install"]
 PRELUDE = r'''
 source "$1"
@@ -60,6 +60,9 @@ class ConfigFilenameSpaces(unittest.TestCase):
 
     def main_script(self):
         setup = r'''
+# Native cache publication is covered by its dedicated boundary fixtures.
+priva_cache_install_begin() { PRIVA_CACHE_INSTALL_BUILD_CONFIG=$2; }
+priva_cache_install_finish() { return 0; }
 conda_install_vep() { PRIVA_INSTALL_ENV_NAME=priva_acmg; }
 priva_manual_cache_inputs() { :; }
 priva_prepare_install_config() { :; }
@@ -81,7 +84,8 @@ priva_export_installed_environment() { :; }
                 expected.update(VEP_plugins_install=[self.config['vep_plugins_dir'], self.config['vep_plugins_cachedir'], 'hg38', str(config), 'priva_acmg'],
                                 LoFtee_install=[self.config['vep_plugins_cachedir'], str(config)],
                                 gnomAD_install=[str(config), str(self.ref)], ClinVar_install=['--config', str(config)],
-                                CADD_install=[str(config), 'hg38'], CADD_conda_install=['--config', str(config)])
+                                CADD_install=[str(config), 'hg38'], CADD_conda_install=['--config', str(config)],
+                                PriVA_rust_install=['--config', str(config)])
                 for name, *args in calls:
                     self.assertEqual(args, expected[name], name)
 
@@ -124,7 +128,7 @@ ClinVar_install() {
         self.assertEqual([row[0] for row in calls], PLUGINS)
         cache, plugins = self.config['vep_plugins_cachedir'], self.config['vep_plugins_dir']
         expected = [[str(config), cache], [str(config), 'hg38'], [str(config), cache, 'hg38'],
-                    [str(config), cache, 'hg38', plugins], [str(config)], [str(config)],
+                    [str(config), cache, 'hg38', plugins], [str(config)],
                     [str(config), cache, plugins], [str(config), cache, str(ROOT/'scripts')],
                     [str(config), cache], [str(config), cache, plugins]]
         self.assertEqual([row[1:] for row in calls], expected)

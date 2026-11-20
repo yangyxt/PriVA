@@ -230,6 +230,12 @@ class InputContinuity(unittest.TestCase):
                 C.check(self.args)
 
     def test_real_shell_reuses_valid_continuity_without_scientific_writer(self):
+        """The installer keeps a completed Python DAS build after a proven ClinVar replacement.
+
+        Only the Python build of an existing installation (a statistics pickle
+        with a Python completion receipt) is reused this way. A native build
+        is checked by its own receipt alone.
+        """
         spec = importlib.util.spec_from_file_location('existing_das_shell_fixture',
             ROOT/'tests/test_das_install_completion.py')
         module = importlib.util.module_from_spec(spec)
@@ -238,35 +244,48 @@ class InputContinuity(unittest.TestCase):
         fixture.setUp()
         self.addCleanup(fixture.doCleanups)
         _, _, old = fixture.filter_inputs()
-        fixture.assert_ok(fixture.run_install())
+        fixture.legacy_pickle()
+        clinvar = lambda: json.loads(fixture.config_path.read_text())['clinvar_vcf']
+        # Without a receipt the installer refuses. Its check call lists the
+        # state arguments in the installer's own order.
+        self.assertNotEqual(fixture.run_install().returncode, 0)
+        asked = next(call for call in fixture.native() if call[:2] == ['das-install-state', 'check'])
+        options = {}
+        for name, value in zip(asked[2::2], asked[3::2]):
+            options.setdefault(name[2:], []).append(value)
+        args = SimpleNamespace(profile=options['profile'][0], receipt=options['receipt'][0],
+            input=options['input'], output=options['output'], source=options['source'],
+            bundled=options.get('bundled', []), parameter=options['parameter'])
+        self.assertEqual(args.receipt, str(fixture.receipt))
+        self.assertIn(str(old), args.input)
+        # The completed Python outputs and their completion receipt.
+        for output in args.output:
+            Path(output).write_bytes(b'completed Python DAS output fixture\n')
+        args.expected_inputs = json.dumps(C.state.input_state(args))
+        C.state.record(args)
         original = fixture.receipt.read_bytes()
-        completed = json.loads(original)
+        fixture.assert_ok(fixture.run_install())
+        # A replaced ClinVar file ends that reuse ...
         new = fixture.folder/'new-clinvar.vcf.gz'
         new.write_bytes(b'new opaque ClinVar fixture\n')
         config = json.loads(fixture.config_path.read_text())
         config['clinvar_vcf'] = str(new)
         dump(fixture.config_path, config)
-        roles = [('analysis','am_pick_intolerant_domains.py'), ('completion','das_install_state.py'),
-                 ('mapping-io','interpro_mapping_io.py'), ('domain-mapping','protein_domain_mapping.py'),
-                 ('statistics','stat_protein_domain_amscores.py'), ('domain-metadata','domain_metadata_cache.py')]
-        bundle_paths = {'domain-normalization': ROOT/'data/InterPro/InterPro_domain_norm_map.json',
-                        'functional-domains': ROOT/'data/InterPro/curated_InterPro_func_domains.tsv.gz',
-                        'hcseeker-spots': fixture.folder/'bundled data/HCSeeker/HC_spots.hg38.tsv'}
-        args = SimpleNamespace(profile=completed['profile'],
-            input=[str(new) if row['path']==str(old) else row['path'] for row in completed['inputs']],
-            output=[row['path'] for row in completed['outputs']],
-            source=[role+'='+str(ROOT/'scripts'/name) for role,name in roles],
-            bundled=[row['role']+'='+str(bundle_paths[row['role']]) for row in completed['bundled']],
-            parameter=['='.join(pair) for pair in completed['parameters']],
-            receipt=str(fixture.receipt), continuity=str(fixture.receipt)+'.clinvar-continuity.json',
-            old_input=str(old), new_input=str(new))
+        refused = fixture.run_install()
+        self.assertNotEqual(refused.returncode, 0)
+        self.assertIn('run AlphaMissense_stat', refused.stderr)
+        # ... and a recorded continuity for exactly that replacement restores it.
+        args.input = [str(new) if item == str(old) else item for item in args.input]
+        args.continuity = str(fixture.receipt)+'.clinvar-continuity.json'
+        args.old_input, args.new_input = str(old), str(new)
         certificate(fixture.folder, args, old, new)
         C.record(args)
-        fixture.assert_ok(fixture.run_install(mode='0'))
-        self.assertEqual(len(fixture.calls()), 1)
+        fixture.assert_ok(fixture.run_install())
+        self.assertEqual(fixture.builders(), [])
         self.assertEqual(fixture.receipt.read_bytes(), original)
-        self.assertEqual(json.loads(fixture.config_path.read_text())['clinvar_vcf'], str(new))
-
+        self.assertEqual(clinvar(), str(new))
+        self.assertEqual([Path(output).read_bytes() for output in args.output],
+                         [b'completed Python DAS output fixture\n'] * 3)
 
 if __name__ == '__main__':
     unittest.main()

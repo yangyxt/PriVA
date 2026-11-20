@@ -1,0 +1,5 @@
+Btk<tm1>/Btk<tm1>	Btk<tm1>	MGI:1	involves: 129	MP:0002491	12345	MGI:88216|MGI:99999	MGI:2
+Cd19<tm1>/Cd19<tm1>	Cd19<tm1>	MGI:3	involves: C57BL/6	MP:0002491	222	MGI:88217	MGI:4
+Cd19<tm1>/Cd19<tm1>	Cd19<tm1>	MGI:3	involves: C57BL/6	MP:0002491	111	 MGI:88217 	MGI:5
+x	y	z	w		1	MGI:88216	MGI:6
+short	row

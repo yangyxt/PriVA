@@ -515,21 +515,29 @@ def _managed_artifact_path(*, cache_root: Path, output_dir: Path, relative: Path
 
 
 def changed_mapping_target(*, identity: dict, cache_root: Path, output_dir: Path,
-                           assembly: str, kind: str) -> Path:
-    """Compute the existing managed namespace without accepting any artifact."""
+                           assembly: str, kind: str, artifact_format: str = "pickle") -> Path:
+    """Compute the existing managed namespace without accepting any artifact.
+
+    ``artifact_format="rkyv"`` names the natively built PM1 regions archive;
+    motifs have no native producer and remain pickle-only.
+    """
     aliases = {"hg19": "hg19", "GRCh37": "hg19", "hg38": "hg38", "GRCh38": "hg38"}
     if assembly not in aliases or kind not in ("motifs", "pm1"):
         raise ValueError("Select an explicit supported assembly and motif/PM1 artifact kind")
     assembly = aliases[assembly]
-    names = {"motifs": f"AlphaMissense_{assembly}.kde.pkl", "pm1": f"pm1_regions.{assembly}.pkl"}
+    names = {("motifs", "pickle"): f"AlphaMissense_{assembly}.kde.pkl",
+             ("pm1", "pickle"): f"pm1_regions.{assembly}.pkl",
+             ("pm1", "rkyv"): f"pm1_regions.{assembly}.rkyv"}
+    if (kind, artifact_format) not in names:
+        raise ValueError("Select a pickle artifact, or rkyv for natively built PM1 regions")
     key = hashlib.sha256(json.dumps(identity, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
     return _managed_artifact_path(cache_root=cache_root, output_dir=output_dir,
-                                  relative=Path("nm-to-enst") / assembly / kind / key / names[kind])
+                                  relative=Path("nm-to-enst") / assembly / kind / key / names[kind, artifact_format])
 
 
 def artifact_route(*, artifact: Path, mapping: Path, cache_root: Path,
                    output_dir: Path, assembly: str, kind: str,
-                   inputs: list[Path] | tuple = ()) -> Path:
+                   inputs: list[Path] | tuple = (), artifact_format: str = "pickle") -> Path:
     """Read-only routing of an intact old output after a validated input change.
 
     The installer validates the selected mapping/assembly before this call.
@@ -546,7 +554,8 @@ def artifact_route(*, artifact: Path, mapping: Path, cache_root: Path,
     if recorded["mapping_identity"] == identity:
         return artifact
     target = changed_mapping_target(identity=identity, cache_root=cache_root,
-                                    output_dir=output_dir, assembly=assembly, kind=kind)
+                                    output_dir=output_dir, assembly=assembly, kind=kind,
+                                    artifact_format=artifact_format)
     receipt = Path(str(target) + ".nm_to_enst.json")
     if receipt.is_symlink():
         raise ValueError(f"Linked managed mapping receipt is not allowed: {receipt}")
@@ -587,6 +596,8 @@ def main() -> int:
     route.add_argument("--output-dir", type=Path, required=True)
     route.add_argument("--assembly", choices=("hg19", "GRCh37", "hg38", "GRCh38"), required=True)
     route.add_argument("--kind", choices=("motifs", "pm1"), required=True)
+    route.add_argument("--artifact-format", choices=("pickle", "rkyv"), default="pickle",
+                       help="rkyv selects the natively built PM1 regions archive name")
     route.add_argument("--input", type=Path, action="append", default=[])
     route.add_argument("--print-path", action="store_true")
     args = parser.parse_args()
@@ -607,7 +618,8 @@ def main() -> int:
         elif args.command == "artifact-route":
             target = artifact_route(artifact=args.artifact, mapping=args.mapping,
                                     cache_root=args.cache_root, output_dir=args.output_dir,
-                                    assembly=args.assembly, kind=args.kind, inputs=args.input)
+                                    assembly=args.assembly, kind=args.kind, inputs=args.input,
+                                    artifact_format=args.artifact_format)
             print(str(target) if args.print_path else json.dumps({"artifact": str(target)}, sort_keys=True))
         else:
             if not args.artifact.is_file() or not args.artifact.stat().st_size:

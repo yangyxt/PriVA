@@ -20,8 +20,10 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
+sys.path.insert(0, str(ROOT / "tests"))
 import alphamissense_cache as alpha
 import clinvar_gene_refresh as refresh
+import fake_priva_binary
 
 
 def write_vcf(path, *, major="116", assembly="GRCh38", headers=None, label="old"):
@@ -602,8 +604,10 @@ anno_agg_gnomAD_index() { return 0; }
 check_vcf_validity() { return 0; }; check_vcf_infotags() { return 1; }
 bcftools() { [[ $1 == query ]] || return 90; printf '%s\n' chr1 chr1_KI270706v1_random prefixchr1suffix chrM; }
 parallel() { printf 'parallel-start\n' >&2; return 77; }
+priva_resolve_binary() { PRIVA_BIN=$PRIVA_BINARY; }
 '''
-        environment = dict(os.environ, SCRIPT_DIR=str(ROOT / "scripts"))
+        environment = dict(os.environ, SCRIPT_DIR=str(ROOT / "scripts"),
+                           **fake_priva_binary.environment(self.folder))
         environment.pop("PRIVA_CLINVAR_RECOVERY_CONFIG", None)
         if context is not None:
             environment["PRIVA_CLINVAR_RECOVERY_CONFIG"] = str(context)
@@ -647,12 +651,13 @@ with r.build_lock(folder):
     def test_public_shell_forwards_config_and_named_source_without_changing_argv(self):
         text = (ROOT / "scripts/install_utils.sh").read_text()
         wrapper = re.search(r"^function ClinVar_VCF_deploy\(\) \{.*?^\}", text, re.M | re.S)[0]
-        body = 'python() { printf "%s\\n" "$@"; };\n' + wrapper + '\nClinVar_VCF_deploy "$1" --source-vcf "$2"'
+        body = ('arguments() { printf "%s\\n" "$@"; }; priva_resolve_binary() { PRIVA_BIN=arguments; };\n'
+                + wrapper + '\nClinVar_VCF_deploy "$1" --source-vcf "$2"')
         source = self.folder / "input source.vcf.gz"
         result = subprocess.run(["bash", "-c", body, "fixture", str(self.config), str(source)],
             env=dict(os.environ, SCRIPT_DIR=str(ROOT / "scripts"), BASE_DIR=str(ROOT)), capture_output=True, text=True)
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(result.stdout.splitlines(), [str(ROOT / "scripts/clinvar_gene_refresh.py"), "deploy",
+        self.assertEqual(result.stdout.splitlines(), ["clinvar-gene-refresh", "deploy",
             "--config", str(self.config), "--source-root", str(ROOT), "--source-vcf", str(source)])
 
 

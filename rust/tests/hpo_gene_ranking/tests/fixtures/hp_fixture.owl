@@ -1,0 +1,307 @@
+<?xml version="1.0"?>
+<rdf:RDF xmlns="http://purl.obolibrary.org/obo/hp.owl#"
+     xml:base="http://purl.obolibrary.org/obo/hp.owl"
+     xmlns:obo="http://purl.obolibrary.org/obo/"
+     xmlns:owl="http://www.w3.org/2002/07/owl#"
+     xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+     xmlns:xml="http://www.w3.org/XML/1998/namespace"
+     xmlns:xsd="http://www.w3.org/2001/XMLSchema#"
+     xmlns:rdfs="http://www.w3.org/2000/01/rdf-schema#"
+     xmlns:oboInOwl="http://www.geneontology.org/formats/oboInOwl#">
+    <owl:Ontology rdf:about="http://purl.obolibrary.org/obo/hp.owl">
+        <owl:versionIRI rdf:resource="http://purl.obolibrary.org/obo/hp/releases/2026-01-01/hp.owl"/>
+        <rdfs:comment>A made-up fragment of the HPO for tests.</rdfs:comment>
+    </owl:Ontology>
+
+    <!-- Annotation properties -->
+    <owl:AnnotationProperty rdf:about="http://purl.obolibrary.org/obo/IAO_0000115">
+        <rdfs:label>definition</rdfs:label>
+    </owl:AnnotationProperty>
+    <owl:AnnotationProperty rdf:about="http://purl.obolibrary.org/obo/IAO_0100001">
+        <rdfs:label>term replaced by</rdfs:label>
+    </owl:AnnotationProperty>
+    <owl:AnnotationProperty rdf:about="http://purl.obolibrary.org/obo/hp#hposlim_core">
+        <rdfs:comment>Core clinical terminology</rdfs:comment>
+        <rdfs:subPropertyOf rdf:resource="http://www.geneontology.org/formats/oboInOwl#SubsetProperty"/>
+    </owl:AnnotationProperty>
+    <owl:AnnotationProperty rdf:about="http://www.geneontology.org/formats/oboInOwl#SubsetProperty"/>
+    <owl:AnnotationProperty rdf:about="http://www.geneontology.org/formats/oboInOwl#hasAlternativeId"/>
+    <owl:AnnotationProperty rdf:about="http://www.geneontology.org/formats/oboInOwl#hasDbXref"/>
+    <owl:AnnotationProperty rdf:about="http://www.geneontology.org/formats/oboInOwl#hasExactSynonym"/>
+    <owl:AnnotationProperty rdf:about="http://www.geneontology.org/formats/oboInOwl#hasRelatedSynonym"/>
+    <owl:AnnotationProperty rdf:about="http://www.geneontology.org/formats/oboInOwl#id"/>
+    <owl:AnnotationProperty rdf:about="http://www.geneontology.org/formats/oboInOwl#inSubset"/>
+    <owl:AnnotationProperty rdf:about="http://www.geneontology.org/formats/oboInOwl#consider"/>
+
+    <!-- Object properties -->
+    <owl:ObjectProperty rdf:about="http://purl.obolibrary.org/obo/BFO_0000051">
+        <rdfs:label>has part</rdfs:label>
+    </owl:ObjectProperty>
+    <owl:ObjectProperty rdf:about="http://purl.obolibrary.org/obo/RO_0000052">
+        <rdfs:label>characteristic of</rdfs:label>
+    </owl:ObjectProperty>
+    <owl:ObjectProperty rdf:about="http://purl.obolibrary.org/obo/RO_0002314">
+        <rdfs:label>characteristic of part of</rdfs:label>
+    </owl:ObjectProperty>
+    <owl:ObjectProperty rdf:about="http://purl.obolibrary.org/obo/RO_0002573">
+        <rdfs:label>has modifier</rdfs:label>
+    </owl:ObjectProperty>
+
+    <!-- Classes from other ontologies used in logical definitions -->
+    <owl:Class rdf:about="http://purl.obolibrary.org/obo/CL_0000771">
+        <rdfs:label>eosinophil</rdfs:label>
+    </owl:Class>
+    <owl:Class rdf:about="http://purl.obolibrary.org/obo/GO_0002376">
+        <rdfs:label>immune system process</rdfs:label>
+    </owl:Class>
+    <owl:Class rdf:about="http://purl.obolibrary.org/obo/PATO_0000001">
+        <rdfs:label>quality</rdfs:label>
+    </owl:Class>
+    <owl:Class rdf:about="http://purl.obolibrary.org/obo/PATO_0000460">
+        <rdfs:label>abnormal</rdfs:label>
+    </owl:Class>
+    <owl:Class rdf:about="http://purl.obolibrary.org/obo/PATO_0000470">
+        <rdfs:label>increased amount</rdfs:label>
+    </owl:Class>
+    <owl:Class rdf:about="http://purl.obolibrary.org/obo/PATO_0001997">
+        <rdfs:label>decreased amount</rdfs:label>
+    </owl:Class>
+    <owl:Class rdf:about="http://purl.obolibrary.org/obo/PR_000001393">
+        <rdfs:label>interleukin-6</rdfs:label>
+    </owl:Class>
+    <owl:Class rdf:about="http://purl.obolibrary.org/obo/UBERON_0002048">
+        <rdfs:label>lung</rdfs:label>
+    </owl:Class>
+    <owl:Class rdf:about="http://purl.obolibrary.org/obo/UBERON_0001016">
+        <rdfs:label>nervous system</rdfs:label>
+    </owl:Class>
+    <owl:Class rdf:about="http://purl.obolibrary.org/obo/UPHENO_0001001">
+        <rdfs:label>phenotype</rdfs:label>
+    </owl:Class>
+
+    <!-- HPO classes -->
+    <owl:Class rdf:about="http://purl.obolibrary.org/obo/HP_0000001">
+        <oboInOwl:id>HP:0000001</oboInOwl:id>
+        <rdfs:label xml:lang="en">All</rdfs:label>
+    </owl:Class>
+    <owl:Class rdf:about="http://purl.obolibrary.org/obo/HP_0000005">
+        <rdfs:subClassOf rdf:resource="http://purl.obolibrary.org/obo/HP_0000001"/>
+        <oboInOwl:id>HP:0000005</oboInOwl:id>
+        <rdfs:label xml:lang="en">Mode of inheritance</rdfs:label>
+    </owl:Class>
+    <owl:Class rdf:about="http://purl.obolibrary.org/obo/HP_0000006">
+        <rdfs:subClassOf rdf:resource="http://purl.obolibrary.org/obo/HP_0000005"/>
+        <oboInOwl:hasExactSynonym>Autosomal dominant</oboInOwl:hasExactSynonym>
+        <oboInOwl:id>HP:0000006</oboInOwl:id>
+        <rdfs:label xml:lang="en">Autosomal dominant inheritance</rdfs:label>
+    </owl:Class>
+    <owl:Class rdf:about="http://purl.obolibrary.org/obo/HP_0000118">
+        <rdfs:subClassOf rdf:resource="http://purl.obolibrary.org/obo/HP_0000001"/>
+        <obo:IAO_0000115>A phenotypic abnormality.</obo:IAO_0000115>
+        <oboInOwl:id>HP:0000118</oboInOwl:id>
+        <rdfs:label xml:lang="en">Phenotypic abnormality</rdfs:label>
+    </owl:Class>
+    <owl:Class rdf:about="http://purl.obolibrary.org/obo/HP_0000707">
+        <rdfs:subClassOf rdf:resource="http://purl.obolibrary.org/obo/HP_0000118"/>
+        <oboInOwl:id>HP:0000707</oboInOwl:id>
+        <oboInOwl:inSubset rdf:resource="http://purl.obolibrary.org/obo/hp#hposlim_core"/>
+        <rdfs:label xml:lang="en">Abnormality of the nervous system</rdfs:label>
+    </owl:Class>
+    <owl:Class rdf:about="http://purl.obolibrary.org/obo/HP_0000964">
+        <rdfs:subClassOf rdf:resource="http://purl.obolibrary.org/obo/HP_0011123"/>
+        <rdfs:subClassOf rdf:resource="http://purl.obolibrary.org/obo/HP_0002715"/>
+        <oboInOwl:hasDbXref>MSH:D004485</oboInOwl:hasDbXref>
+        <oboInOwl:hasDbXref>UMLS:C0013595</oboInOwl:hasDbXref>
+        <oboInOwl:hasExactSynonym>Eczematous dermatitis</oboInOwl:hasExactSynonym>
+        <oboInOwl:hasExactSynonym>Dermatitis</oboInOwl:hasExactSynonym>
+        <oboInOwl:id>HP:0000964</oboInOwl:id>
+        <rdfs:label xml:lang="en">Eczema</rdfs:label>
+    </owl:Class>
+    <owl:Axiom>
+        <owl:annotatedSource rdf:resource="http://purl.obolibrary.org/obo/HP_0000964"/>
+        <owl:annotatedProperty rdf:resource="http://www.geneontology.org/formats/oboInOwl#hasExactSynonym"/>
+        <owl:annotatedTarget>Eczematous dermatitis</owl:annotatedTarget>
+        <oboInOwl:hasDbXref>ORCID:0000-0000-0000-0000</oboInOwl:hasDbXref>
+    </owl:Axiom>
+    <owl:Class rdf:about="http://purl.obolibrary.org/obo/HP_0000999">
+        <obo:IAO_0100001 rdf:resource="http://purl.obolibrary.org/obo/HP_0001250"/>
+        <oboInOwl:consider>HP:0002069</oboInOwl:consider>
+        <oboInOwl:id>HP:0000999</oboInOwl:id>
+        <rdfs:label xml:lang="en">obsolete Old term</rdfs:label>
+        <owl:deprecated rdf:datatype="http://www.w3.org/2001/XMLSchema#boolean">true</owl:deprecated>
+    </owl:Class>
+    <owl:Class rdf:about="http://purl.obolibrary.org/obo/HP_0001250">
+        <owl:equivalentClass rdf:nodeID="genid1"/>
+        <rdfs:subClassOf rdf:resource="http://purl.obolibrary.org/obo/HP_0000707"/>
+        <oboInOwl:hasAlternativeId>HP:0001252</oboInOwl:hasAlternativeId>
+        <oboInOwl:hasAlternativeId>HP:0001251</oboInOwl:hasAlternativeId>
+        <oboInOwl:hasExactSynonym>Seizures</oboInOwl:hasExactSynonym>
+        <oboInOwl:hasRelatedSynonym>Fits</oboInOwl:hasRelatedSynonym>
+        <oboInOwl:id>HP:0001250</oboInOwl:id>
+        <rdfs:comment>A comment
+spanning two lines.</rdfs:comment>
+        <rdfs:label xml:lang="en">Seizure</rdfs:label>
+    </owl:Class>
+    <owl:Restriction rdf:nodeID="genid1">
+        <owl:onProperty rdf:resource="http://purl.obolibrary.org/obo/BFO_0000051"/>
+        <owl:someValuesFrom>
+            <owl:Class>
+                <owl:intersectionOf rdf:parseType="Collection">
+                    <rdf:Description rdf:about="http://purl.obolibrary.org/obo/PATO_0000001"/>
+                    <owl:Restriction>
+                        <owl:onProperty rdf:resource="http://purl.obolibrary.org/obo/RO_0000052"/>
+                        <owl:someValuesFrom rdf:resource="http://purl.obolibrary.org/obo/UBERON_0001016"/>
+                    </owl:Restriction>
+                </owl:intersectionOf>
+            </owl:Class>
+        </owl:someValuesFrom>
+    </owl:Restriction>
+    <owl:Axiom>
+        <owl:annotatedSource rdf:resource="http://purl.obolibrary.org/obo/HP_0001250"/>
+        <owl:annotatedProperty rdf:resource="http://www.w3.org/2002/07/owl#equivalentClass"/>
+        <owl:annotatedTarget rdf:nodeID="genid1"/>
+        <oboInOwl:hasDbXref>PMID:1</oboInOwl:hasDbXref>
+    </owl:Axiom>
+    <owl:Class rdf:about="http://purl.obolibrary.org/obo/HP_0001574">
+        <rdfs:subClassOf rdf:resource="http://purl.obolibrary.org/obo/HP_0000118"/>
+        <oboInOwl:id>HP:0001574</oboInOwl:id>
+        <rdfs:label xml:lang="en">Abnormality of the integument</rdfs:label>
+    </owl:Class>
+    <owl:Class rdf:about="http://purl.obolibrary.org/obo/HP_0001871">
+        <rdfs:subClassOf rdf:resource="http://purl.obolibrary.org/obo/HP_0000118"/>
+        <oboInOwl:id>HP:0001871</oboInOwl:id>
+        <rdfs:label xml:lang="en">Abnormality of blood and blood-forming tissues</rdfs:label>
+    </owl:Class>
+    <owl:Class rdf:about="http://purl.obolibrary.org/obo/HP_0001880">
+        <owl:equivalentClass>
+            <owl:Class>
+                <owl:intersectionOf rdf:parseType="Collection">
+                    <rdf:Description rdf:about="http://purl.obolibrary.org/obo/UPHENO_0001001"/>
+                    <owl:Restriction>
+                        <owl:onProperty rdf:resource="http://purl.obolibrary.org/obo/BFO_0000051"/>
+                        <owl:someValuesFrom>
+                            <owl:Class>
+                                <owl:intersectionOf rdf:parseType="Collection">
+                                    <rdf:Description rdf:about="http://purl.obolibrary.org/obo/PATO_0000470"/>
+                                    <owl:Restriction>
+                                        <owl:onProperty rdf:resource="http://purl.obolibrary.org/obo/RO_0000052"/>
+                                        <owl:someValuesFrom rdf:resource="http://purl.obolibrary.org/obo/CL_0000771"/>
+                                    </owl:Restriction>
+                                </owl:intersectionOf>
+                            </owl:Class>
+                        </owl:someValuesFrom>
+                    </owl:Restriction>
+                </owl:intersectionOf>
+            </owl:Class>
+        </owl:equivalentClass>
+        <rdfs:subClassOf rdf:resource="http://purl.obolibrary.org/obo/HP_0001881"/>
+        <oboInOwl:id>HP:0001880</oboInOwl:id>
+        <rdfs:label xml:lang="en">Eosinophilia</rdfs:label>
+    </owl:Class>
+    <owl:Class rdf:about="http://purl.obolibrary.org/obo/HP_0001881">
+        <rdfs:subClassOf rdf:resource="http://purl.obolibrary.org/obo/HP_0002715"/>
+        <rdfs:subClassOf rdf:resource="http://purl.obolibrary.org/obo/HP_0001871"/>
+        <oboInOwl:id>HP:0001881</oboInOwl:id>
+        <rdfs:label xml:lang="en">Abnormal leukocyte morphology</rdfs:label>
+    </owl:Class>
+    <owl:Class rdf:about="http://purl.obolibrary.org/obo/HP_0002069">
+        <rdfs:subClassOf rdf:resource="http://purl.obolibrary.org/obo/HP_0001250"/>
+        <rdfs:subClassOf rdf:nodeID="genid2"/>
+        <oboInOwl:id>HP:0002069</oboInOwl:id>
+        <rdfs:label xml:lang="en">Bilateral tonic-clonic seizure</rdfs:label>
+    </owl:Class>
+    <owl:Restriction rdf:nodeID="genid2">
+        <owl:onProperty rdf:resource="http://purl.obolibrary.org/obo/RO_0002573"/>
+        <owl:someValuesFrom rdf:resource="http://purl.obolibrary.org/obo/PATO_0000460"/>
+    </owl:Restriction>
+    <owl:Class rdf:about="http://purl.obolibrary.org/obo/HP_0002090">
+        <owl:equivalentClass>
+            <owl:Class>
+                <owl:intersectionOf rdf:parseType="Collection">
+                    <rdf:Description rdf:about="http://purl.obolibrary.org/obo/UPHENO_0001001"/>
+                    <owl:Restriction>
+                        <owl:onProperty rdf:resource="http://purl.obolibrary.org/obo/BFO_0000051"/>
+                        <owl:someValuesFrom>
+                            <owl:Class>
+                                <owl:intersectionOf rdf:parseType="Collection">
+                                    <rdf:Description rdf:about="http://purl.obolibrary.org/obo/PATO_0000470"/>
+                                    <owl:Restriction>
+                                        <owl:onProperty rdf:resource="http://purl.obolibrary.org/obo/RO_0000052"/>
+                                        <owl:someValuesFrom rdf:resource="http://purl.obolibrary.org/obo/PR_000001393"/>
+                                    </owl:Restriction>
+                                    <owl:Restriction>
+                                        <owl:onProperty rdf:resource="http://purl.obolibrary.org/obo/RO_0002314"/>
+                                        <owl:someValuesFrom rdf:resource="http://purl.obolibrary.org/obo/UBERON_0002048"/>
+                                    </owl:Restriction>
+                                </owl:intersectionOf>
+                            </owl:Class>
+                        </owl:someValuesFrom>
+                    </owl:Restriction>
+                </owl:intersectionOf>
+            </owl:Class>
+        </owl:equivalentClass>
+        <rdfs:subClassOf rdf:resource="http://purl.obolibrary.org/obo/HP_0002719"/>
+        <oboInOwl:hasDbXref>MSH:D011014</oboInOwl:hasDbXref>
+        <oboInOwl:id>HP:0002090</oboInOwl:id>
+        <rdfs:label xml:lang="en">Pneumonia</rdfs:label>
+    </owl:Class>
+    <owl:Class rdf:about="http://purl.obolibrary.org/obo/HP_0002715">
+        <rdfs:subClassOf rdf:resource="http://purl.obolibrary.org/obo/HP_0000118"/>
+        <oboInOwl:id>HP:0002715</oboInOwl:id>
+        <rdfs:label xml:lang="en">Abnormality of the immune system</rdfs:label>
+    </owl:Class>
+    <owl:Class rdf:about="http://purl.obolibrary.org/obo/HP_0002719">
+        <rdfs:subClassOf rdf:resource="http://purl.obolibrary.org/obo/HP_0002715"/>
+        <oboInOwl:id>HP:0002719</oboInOwl:id>
+        <rdfs:label xml:lang="en">Recurrent infections</rdfs:label>
+    </owl:Class>
+    <owl:Class rdf:about="http://purl.obolibrary.org/obo/HP_0002721">
+        <owl:equivalentClass>
+            <owl:Class>
+                <owl:intersectionOf rdf:parseType="Collection">
+                    <rdf:Description rdf:about="http://purl.obolibrary.org/obo/UPHENO_0001001"/>
+                    <owl:Restriction>
+                        <owl:onProperty rdf:resource="http://purl.obolibrary.org/obo/BFO_0000051"/>
+                        <owl:someValuesFrom>
+                            <owl:Class>
+                                <owl:intersectionOf rdf:parseType="Collection">
+                                    <rdf:Description rdf:about="http://purl.obolibrary.org/obo/PATO_0001997"/>
+                                    <owl:Restriction>
+                                        <owl:onProperty rdf:resource="http://purl.obolibrary.org/obo/RO_0000052"/>
+                                        <owl:someValuesFrom rdf:resource="http://purl.obolibrary.org/obo/GO_0002376"/>
+                                    </owl:Restriction>
+                                </owl:intersectionOf>
+                            </owl:Class>
+                        </owl:someValuesFrom>
+                    </owl:Restriction>
+                </owl:intersectionOf>
+            </owl:Class>
+        </owl:equivalentClass>
+        <rdfs:subClassOf rdf:resource="http://purl.obolibrary.org/obo/HP_0002715"/>
+        <rdfs:subClassOf>
+            <owl:Restriction>
+                <owl:onProperty rdf:resource="http://purl.obolibrary.org/obo/RO_0002573"/>
+                <owl:someValuesFrom rdf:resource="http://purl.obolibrary.org/obo/PATO_0000460"/>
+            </owl:Restriction>
+        </rdfs:subClassOf>
+        <oboInOwl:hasDbXref>UMLS:C0021051</oboInOwl:hasDbXref>
+        <oboInOwl:hasExactSynonym>Immune deficiency</oboInOwl:hasExactSynonym>
+        <oboInOwl:hasExactSynonym>Decreased immune function</oboInOwl:hasExactSynonym>
+        <oboInOwl:id>HP:0002721</oboInOwl:id>
+        <rdfs:label xml:lang="en">Immunodeficiency</rdfs:label>
+    </owl:Class>
+    <owl:Class rdf:about="http://purl.obolibrary.org/obo/HP_0004313">
+        <rdfs:subClassOf rdf:resource="http://purl.obolibrary.org/obo/HP_0002721"/>
+        <obo:IAO_0000115>Antibody &quot;titres&quot; below normal &amp; more.</obo:IAO_0000115>
+        <oboInOwl:hasDbXref>MP:0002491</oboInOwl:hasDbXref>
+        <oboInOwl:hasDbXref>ORPHA:183660</oboInOwl:hasDbXref>
+        <oboInOwl:id>HP:0004313</oboInOwl:id>
+        <rdfs:label xml:lang="en">Decreased antibody level in blood</rdfs:label>
+    </owl:Class>
+    <owl:Class rdf:about="http://purl.obolibrary.org/obo/HP_0011123">
+        <rdfs:subClassOf rdf:resource="http://purl.obolibrary.org/obo/HP_0001574"/>
+        <oboInOwl:hasExactSynonym>Dermatitis</oboInOwl:hasExactSynonym>
+        <oboInOwl:id>HP:0011123</oboInOwl:id>
+        <rdfs:label xml:lang="en">Inflammatory "abnormality" of the skin</rdfs:label>
+    </owl:Class>
+</rdf:RDF>

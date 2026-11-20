@@ -1,0 +1,5 @@
+sample_id	gene_symbol	ncbi_gene_ids	frontier_hp_count	frontier_hp_ids	frontier_hp_names	candidate_sources	candidate_statuses	external_ids	evidence_row_count
+S6	BTK	695	1	HP:0002090	Pneumonia	HPO_PHENOTYPE_TO_GENES	direct_responsible_gene_candidate	HP:0002090	1
+S6	CFTR	1080	1	HP:0002090	Pneumonia	HPO_PHENOTYPE_TO_GENES	direct_responsible_gene_candidate	HP:0002090	1
+S6	DOCK8	81704	1	HP:0002090	Pneumonia	HPO_PHENOTYPE_TO_GENES	direct_responsible_gene_candidate	HP:0002090	1
+S6	STAT3	6774	1	HP:0002090	Pneumonia	HPO_PHENOTYPE_TO_GENES	direct_responsible_gene_candidate	HP:0002090	1

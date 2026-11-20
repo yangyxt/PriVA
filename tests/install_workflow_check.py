@@ -25,11 +25,29 @@ def render() -> str:
                 raise SystemExit(f"{s['id']} needs unknown step {n}")
             if [x["id"] for x in steps].index(n) > [x["id"] for x in steps].index(s["id"]):
                 raise SystemExit(f"{s['id']} is listed before its input {n}")
-    include = "; ".join(f"INSTALL_STEP as {alias(s)}" for s in steps)
-    lines = [HEADER.read_text().replace("@INCLUDES@", include).rstrip("\n")]
+    for s in steps:
+        if "module" in s:
+            module = ROOT / s["module"]
+            if s.get("calls"):
+                raise SystemExit(f"{s['id']} has a module and installer calls; a step is one or the other")
+            if not s["module"].startswith("modules/local/install_steps/") or not module.is_file():
+                raise SystemExit(f"{s['id']}: its module {s['module']} is not a file of modules/local/install_steps/")
+            if not re.search(rf"^process {s['name']} \{{", module.read_text(), re.M):
+                raise SystemExit(f"{s['id']}: {s['module']} defines no process {s['name']}")
+        elif s.get("stage"):
+            raise SystemExit(f"{s['id']}: only a step with a module stages files")
+    include = "; ".join(f"INSTALL_STEP as {alias(s)}" for s in steps if "module" not in s)
+    modules = "\n".join(
+        f"include {{ {s['name']} as {alias(s)} }} from '../{s['module'][:-len('.nf')]}'"
+        for s in steps if "module" in s)
+    lines = [HEADER.read_text().replace("@INCLUDES@", include).replace("@PROCESS_INCLUDES@", modules).rstrip("\n")]
     for s in steps:
         needs = ", ".join(f"{alias(ids[n])}.out.receipt" for n in s["needs"])
-        lines.append(f"    {alias(s)}(installWire('{s['id']}', plan, [{needs}]))")
+        if "module" in s:
+            stage = ", ".join(f"'{k}'" for k in s.get("stage", []))
+            lines.append(f"    {alias(s)}(installNative('{s['id']}', plan, [{needs}], [{stage}]))")
+        else:
+            lines.append(f"    {alias(s)}(installWire('{s['id']}', plan, [{needs}]))")
     receipts = ", ".join(f"{alias(s)}.out.receipt" for s in steps)
     lines.append(FOOTER.replace("@RECEIPTS@", receipts))
     return "\n".join(lines)
@@ -76,7 +94,7 @@ def reached_functions() -> set:
             elif current and not line.lstrip().startswith("#"):
                 bodies[current].append(line)
     reg = json.loads((ROOT / "conf" / "install_steps.json").read_text())
-    queue = [c[0] for s in reg["steps"] for c in s["calls"]] + [r for s in reg["steps"] for r in s.get("runs", [])]
+    queue = [c[0] for s in reg["steps"] for c in s.get("calls", [])] + [r for s in reg["steps"] for r in s.get("runs", [])]
     for name in (r for s in reg["steps"] for r in s.get("runs", [])):
         if name not in bodies:
             raise SystemExit(f"a step's runs names {name}, which is not an installer function")

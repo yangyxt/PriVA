@@ -12,6 +12,7 @@
 
 include { INSTALL_RELEASE; INSTALL_PLAN; INSTALL_PREFLIGHT; INSTALL_PUBLISH } from '../modules/local/install'
 include { @INCLUDES@ } from '../modules/local/install'
+@PROCESS_INCLUDES@
 
 def installSha(String text) {
     java.security.MessageDigest.getInstance('SHA-256').digest(text.getBytes('UTF-8')).encodeHex().toString()
@@ -37,6 +38,45 @@ def installWire(String id, plan, List needs) {
         def p = items[0]
         def receipts = items.size() > 1 ? items[1..-1].collect { it.toString() } : []
         [id, installLineage(id, p, receipts), p, receipts]
+    }
+}
+
+// A step that runs as its own process (registry "module",
+// modules/local/install_steps/): one item [id, lineage, plan, [receipts],
+// its plan entry, {key: file name in staged/}, [files to stage]]. It reads the
+// keys its registry entry lists in "stage" from the receipts of the steps it
+// needs (a file shipped in the checkout from this checkout, as install-task
+// run reads it), with their index files, and the files you supply for it
+// (a file that does not exist is left out, and the step says it is missing).
+def installNative(String id, plan, List needs, List stage) {
+    installWire(id, plan, needs).map { item ->
+        def planned = new groovy.json.JsonSlurper().parse(item[2].toFile()).steps[id]
+        def wanted = []
+        item[3].each { r ->
+            def receipt = new groovy.json.JsonSlurper().parse(new File(r.toString()))
+            stage.each { key ->
+                def value = receipt.keys ? receipt.keys[key] : null
+                if (value != null) {
+                    def shipped = receipt.shipped ? receipt.shipped[key] : null
+                    wanted << [key, shipped ? "${projectDir}/${shipped}".toString() : value.toString()]
+                }
+            }
+        }
+        (planned.user_paths ?: [:]).each { key, value -> if (value) wanted << [key.toString(), value.toString()] }
+        def names = [:]
+        def files = []
+        wanted.each { pair ->
+            def main = file(pair[1])
+            if (main.exists()) {
+                names[pair[0]] = main.name
+                files << main
+                ['.fai', '.gzi', '.tbi', '.csi'].each { ext ->
+                    def index = file(pair[1] + ext)
+                    if (index.exists()) files << index
+                }
+            }
+        }
+        [id, item[1], item[2], item[3].collect { r -> file(r) }, planned, names, files]
     }
 }
 

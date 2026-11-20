@@ -1,5 +1,5 @@
 {
-  "about": "Install steps run as Nextflow tasks by workflows/install.nf. Each step calls existing installer functions from scripts/install_utils.sh with its own private configuration, whose cache_root is the step's lineage folder. Tokens: {config} is that configuration, {script_dir} the scripts folder, {KEY} the configuration value of KEY. runs: installer functions that a program of the step runs itself (priva clinvar-gene-refresh runs the ClinVar stages), counted in the step's code digest with the functions its calls reach. needs: steps whose receipts supply input keys. outputs: keys the step must set; optional_outputs may be empty. user_inputs: keys naming files you supply, kept from your configuration and counted in lineage. settings: configuration values that change results (glob patterns allowed). copies: input keys the step rewrites in place; the runner copies them into the step's own folder first. writable: the folder stays writable after the step (otherwise it is made read-only). priva_commands: priva commands the step runs that its functions pick at run time (\"${PRIVA_BIN}\" \"$command\"); the Rust files behind every priva command a step runs count in its code digest. release: how to ask a changing source for its current release (git: the commit of url and ref; http: the server's ETag, Last-Modified and size), part of the step's lineage. Tokens {grch} (GRCh37 or GRCh38) and {loftee_branch} (master or grch38) follow the assembly. adopt_paths: where an older installation that does not name an output key put that file, for --adopt ({KEY} from the old configuration). pinned: the release is kept in resource_root/pins.json and only checked again with --refresh STEP. max_age_months: a pinned release older than this many calendar months (from the day it was taken) is replaced by the current one.",
+  "about": "Install steps run as Nextflow tasks by workflows/install.nf. A step with a module runs as its own process (modules/local/install_steps/MODULE, process NAME): the tools' own commands and priva write its results into the task's data/ folder, and priva install-task record writes its receipt; storeDir keeps both in the step's lineage folder. stage: keys of the steps it needs whose files are staged into such a task. Any other step calls existing installer functions from scripts/install_utils.sh with its own private configuration, whose cache_root is the step's lineage folder. Tokens: {config} is that configuration, {script_dir} the scripts folder, {KEY} the configuration value of KEY. runs: installer functions that a program of the step runs itself (priva clinvar-gene-refresh runs the ClinVar stages), counted in the step's code digest with the functions its calls reach. needs: steps whose receipts supply input keys. outputs: keys the step must set; optional_outputs may be empty. user_inputs: keys naming files you supply, kept from your configuration and counted in lineage. settings: configuration values that change results (glob patterns allowed). copies: input keys the step rewrites in place; the runner copies them into the step's own folder first. writable: the folder stays writable after the step (otherwise it is made read-only). priva_commands: priva commands the step runs that its functions pick at run time (\"${PRIVA_BIN}\" \"$command\"); the Rust files behind every priva command a step runs count in its code digest. release: how to ask a changing source for its current release (git: the commit of url and ref; http: the server's ETag, Last-Modified and size), part of the step's lineage. Tokens {grch} (GRCh37 or GRCh38) and {loftee_branch} (master or grch38) follow the assembly. adopt_paths: where an older installation that does not name an output key put that file, for --adopt ({KEY} from the old configuration). pinned: the release is kept in resource_root/pins.json and only checked again with --refresh STEP. max_age_months: a pinned release older than this many calendar months (from the day it was taken) is replaced by the current one.",
   "folder_keys": [
     "cache_root",
     "vep_cache_dir",
@@ -20,14 +20,12 @@
     {
       "id": "A1",
       "name": "REFERENCE_FASTA",
-      "calls": [
-        [
-          "reference_genome_install",
-          "{config}"
-        ]
-      ],
+      "module": "modules/local/install_steps/reference_fasta.nf",
       "needs": [],
       "outputs": [
+        "ref_genome"
+      ],
+      "user_inputs": [
         "ref_genome"
       ],
       "settings": [
@@ -74,12 +72,7 @@
     {
       "id": "A4",
       "name": "CDS_FASTA",
-      "calls": [
-        [
-          "CDS_FASTA_install",
-          "{config}"
-        ]
-      ],
+      "module": "modules/local/install_steps/cds_fasta.nf",
       "needs": [],
       "outputs": [
         "cds_fasta_file"
@@ -110,13 +103,7 @@
     {
       "id": "B1",
       "name": "UTR_ANNOTATOR",
-      "calls": [
-        [
-          "UTRAnnotator_install",
-          "{config}",
-          "{vep_plugins_cachedir}"
-        ]
-      ],
+      "module": "modules/local/install_steps/utr_annotator.nf",
       "needs": [],
       "outputs": [
         "utr_annotator_file"
@@ -136,16 +123,12 @@
     {
       "id": "B2",
       "name": "CONSERVATION",
-      "calls": [
-        [
-          "Conservation_install",
-          "{config}",
-          "{vep_plugins_cachedir}",
-          "{assembly}"
-        ]
-      ],
+      "module": "modules/local/install_steps/conservation.nf",
       "needs": [
         "A1"
+      ],
+      "stage": [
+        "ref_genome"
       ],
       "outputs": [
         "conservation_file"
@@ -158,15 +141,7 @@
     {
       "id": "B3",
       "name": "ALPHAMISSENSE_TSV",
-      "calls": [
-        [
-          "AlphaMissense_install",
-          "{config}",
-          "{vep_plugins_cachedir}",
-          "{assembly}",
-          "{vep_plugins_dir}"
-        ]
-      ],
+      "module": "modules/local/install_steps/alphamissense.nf",
       "needs": [
         "A2"
       ],
@@ -209,23 +184,20 @@
     {
       "id": "B5",
       "name": "SPLICEVAULT",
-      "calls": [
-        [
-          "SpliceVault_install",
-          "{config}",
-          "{vep_plugins_cachedir}",
-          "{script_dir}"
-        ]
-      ],
+      "module": "modules/local/install_steps/splicevault.nf",
       "needs": [
         "A1"
+      ],
+      "stage": [
+        "ref_genome"
       ],
       "outputs": [
         "splicevault_prescore"
       ],
       "settings": [
         "assembly",
-        "splicevault_url"
+        "splicevault_url",
+        "hg38_hg19_chain"
       ],
       "release": [
         {
@@ -238,13 +210,7 @@
     {
       "id": "B6",
       "name": "MAVEDB",
-      "calls": [
-        [
-          "MaveDB_install",
-          "{config}",
-          "{vep_plugins_cachedir}"
-        ]
-      ],
+      "module": "modules/local/install_steps/mavedb.nf",
       "needs": [],
       "outputs": [],
       "optional_outputs": [
@@ -265,14 +231,7 @@
     {
       "id": "B7",
       "name": "PRIMATEAI",
-      "calls": [
-        [
-          "PrimateAI_install",
-          "{config}",
-          "{vep_plugins_cachedir}",
-          "{vep_plugins_dir}"
-        ]
-      ],
+      "module": "modules/local/install_steps/primateai.nf",
       "needs": [
         "A2"
       ],
@@ -323,12 +282,7 @@
     {
       "id": "B9",
       "name": "PEXT",
-      "calls": [
-        [
-          "pext_install",
-          "{config}"
-        ]
-      ],
+      "module": "modules/local/install_steps/pext.nf",
       "needs": [],
       "outputs": [],
       "optional_outputs": [
@@ -2019,12 +1973,7 @@
     {
       "id": "F1",
       "name": "HPO_MONDO",
-      "calls": [
-        [
-          "mondo_hpo_scope_install",
-          "{config}"
-        ]
-      ],
+      "module": "modules/local/install_steps/hpo_mondo.nf",
       "needs": [],
       "outputs": [
         "hpo_assertions",
@@ -2037,9 +1986,6 @@
         "mondo_release",
         "mondo_url",
         "mondo_sha256"
-      ],
-      "priva_commands": [
-        "mondo-scope"
       ]
     },
     {

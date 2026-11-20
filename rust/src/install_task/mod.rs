@@ -9,6 +9,9 @@
 //! priva install-task preflight --registry R --plan PLAN --source-root CHECKOUT [--stub]
 //! priva install-task run     --registry R --plan PLAN --step ID --lineage L --folder F
 //!                            --receipt FILE --source-root CHECKOUT [--input RECEIPT]... [--stub]
+//! priva install-task record  --registry R --plan PLAN --step ID --lineage L --folder F
+//!                            --receipt FILE --source-root CHECKOUT [--input RECEIPT]...
+//!                            [--key KEY=PATH]... [--stub]
 //! priva install-task adopt   --plan PLAN --step ID --lineage L --receipt FILE --source-root CHECKOUT
 //! priva install-task publish --registry R --plan PLAN --lineage L --folder F --source-root CHECKOUT
 //!                            [--input RECEIPT]... [--pins PINS.json] [--stub]
@@ -38,6 +41,11 @@
 //! Nextflow (storeDir) skips a step whose F holds a receipt. The finished folder
 //! is made read-only unless the step is writable.
 //!
+//! record: the receipt of a step that runs as its own Nextflow process
+//! (registry `module`): its script writes into the task's `data/` with the
+//! tools' own commands, and this checks the output keys and names them where
+//! storeDir moves them, F/data (see `record`).
+//!
 //! adopt: writes a receipt naming the files of an existing installation.
 //!
 //! reach: lists the installer functions, script files and shipped data files a
@@ -54,6 +62,7 @@ mod content;
 mod digest;
 mod plan;
 mod preflight;
+mod record;
 mod run;
 
 use crate::cli::{Result, invalid};
@@ -77,6 +86,7 @@ pub(crate) fn dispatch(args: &[String]) -> Result<()> {
         "release" => plan::release(&options),
         "reach" => digest::reach(&options),
         "run" => run::run(&options),
+        "record" => record::record(&options),
         "adopt" => run::adopt(&options),
         "publish" => run::publish(&options),
         "call-args" => run::call_args(&options),
@@ -96,12 +106,14 @@ pub(crate) fn dispatch(args: &[String]) -> Result<()> {
     }
 }
 
-const USAGE: &str = "usage: priva install-task plan|preflight|run|adopt|publish|release|reach|value [options]
+const USAGE: &str = "usage: priva install-task plan|preflight|run|record|adopt|publish|release|reach|value [options]
   plan    --registry R --config USER --out DIR --source-root CHECKOUT [--adopt-config OLD --adopt all|ID,ID]
           [--run ID,ID] [--pins PINS.json] [--refresh ID,ID] [--releases FILE]...
   preflight --registry R --plan PLAN --source-root CHECKOUT [--stub]
   run     --registry R --plan PLAN --step ID --lineage L --folder F --receipt FILE --source-root CHECKOUT
           [--input RECEIPT]... [--stub]
+  record  --registry R --plan PLAN --step ID --lineage L --folder F --receipt FILE --source-root CHECKOUT
+          [--input RECEIPT]... [--key KEY=PATH]... [--stub]
   adopt   --plan PLAN --step ID --lineage L --receipt FILE --source-root CHECKOUT
   publish --registry R --plan PLAN --lineage L --folder F --source-root CHECKOUT [--input RECEIPT]...
           [--pins PINS.json] [--stub]

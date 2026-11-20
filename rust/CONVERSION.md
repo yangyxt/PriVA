@@ -391,7 +391,8 @@ Whole cohort, 2026-11-17: the program of af24fcf replayed the ACMG step of all 4
 | --- | --- |
 | `INSTALL_RELEASE` | `priva install-task release`, once per step with a changing source (registry `release`): the current git commit, or the server's ETag, Last-Modified and size (an answer without ETag and Last-Modified, such as an API, by the SHA-256 of its sorted lines: the ClinGen evidence repository returns the same rows in varying order). Pinned steps run it only when `--refresh` names them or their pin can expire (`max_age_months`) |
 | `INSTALL_PLAN` | Copies your configuration without any key an install step writes, and records each step's code digest (described below), its settings and the files you supply |
-| `INSTALL_STEP` (one alias per step) | `priva install-task run`: a private configuration whose `cache_root` is `resource_root/STEP/LINEAGE/data`, the keys of the input receipts, then the unchanged installer functions with `PRIVA_CACHE_INSTALL_INTERNAL=1`; the output keys are checked and `receipt.json` is written; the folder is then made read-only unless the step is marked writable (CADD) |
+| `INSTALL_STEP` (one alias per step without a `module`) | `priva install-task run`: a private configuration whose `cache_root` is `resource_root/STEP/LINEAGE/data`, the keys of the input receipts, then the unchanged installer functions with `PRIVA_CACHE_INSTALL_INTERNAL=1`; the output keys are checked and `receipt.json` is written; the folder is then made read-only unless the step is marked writable (CADD) |
+| A step's own process (registry `module`) | the tools' commands and `priva` in its `script:` block, then `priva install-task record` (phase 3 below) |
 | `INSTALL_PUBLISH` | One configuration from every receipt, `priva cache-install prepare` and `publish` for the native statistics files, and `resources.lock.json` |
 
 A step's lineage hashes its code digest, settings, supplied files, the release of a changing source (only for steps that have one), the `priva` source identity (only for steps whose results `priva` computes) and the lineage of every step it needs. SpliceVault (B5), MaveDB (B6), UTRannotator (B1) and LOFTEE (B8) are pinned: their lineage uses the release recorded in `resource_root/pins.json` (`initial` before any refresh) until `--refresh B5,B8` checks them again, and publish then records the new release there with the day it was taken (`{"release": ..., "recorded": "YYYY-MM-DD"}`; a release already pinned keeps its day). The ClinVar download (D0) is pinned with `max_age_months: 3`, the original installer's refresh interval: its release is kept until three calendar months after the day it was taken (the day clamped to the month's length, as `add_calendar_months` does), then the current release is used. `storeDir` reuses a lineage folder that holds a receipt, across runs and after the work folder is deleted. A step that rewrites an input in place (`copies`) works on a copy in its own folder. `--adopt_config` with `--adopt all --run_steps ID,...` writes receipts for an existing installation's files instead of building them.
@@ -683,11 +684,100 @@ README lead with the four commands once a complete installation through the
 tasks has been compared with `main_install`; `main_install` stays until
 phase 7.
 
+### Phase 3: download steps as their own processes (20 November 2026)
+
+Ten steps no longer go through `install_utils.sh`. Each is a Nextflow process
+in `modules/local/install_steps/` whose script runs the tools' own commands
+and `priva` for PriVA's checks, and writes only into its task's work folder:
+
+```mermaid
+flowchart LR
+  subgraph before["Before: B6 MaveDB"]
+    direction TB
+    O1["INSTALL_STEP (B6)"] --> O2["priva install-task run"]
+    O2 --> O3["bash: source install_utils.sh"]
+    O3 --> O4["MaveDB_install (48 lines)<br/>wget, ensure-index, update_yaml"]
+    O4 --> O5["cache_root/VEP_plugin_cache/MaveDB/"]
+  end
+  subgraph after["Now: B6 MaveDB"]
+    direction TB
+    N1["process MAVEDB<br/>modules/local/install_steps/mavedb.nf"] --> N2["curl table and .tbi"]
+    N2 --> N3["priva indexed-plugin-cache ensure-index"]
+    N3 --> N4["priva install-task record<br/>checks the keys, writes receipt.json"]
+    N4 --> N5["work/…/data/ and receipt.json<br/>storeDir moves both to resource_root/B6/LINEAGE"]
+  end
+  before -. "phase 3" .-> after
+```
+
+The whole hg38 branch of the process (the `script:` block):
+
+```bash
+mkdir -p data/MaveDB
+curl -fL --retry 5 --retry-delay 10 -o data/MaveDB/MaveDB_variants.hg38.tsv.gz "$mavedb_url"
+curl -fL --retry 5 --retry-delay 10 -o data/MaveDB/MaveDB_variants.hg38.tsv.gz.tbi "$mavedb_url.tbi"
+"$PRIVA_BIN" indexed-plugin-cache ensure-index --input data/MaveDB/MaveDB_variants.hg38.tsv.gz --kind mavedb
+"$PRIVA_BIN" install-task record ... --key mavedb_file=data/MaveDB/MaveDB_variants.hg38.tsv.gz
+```
+
+How such a step is wired:
+
+| Part | What it is |
+| --- | --- |
+| registry `module` | the process file; it defines `process NAME` (the step's registry name) and replaces `calls` and `runs` |
+| registry `stage` | keys of the steps it needs whose files are staged into the task, with their `.fai`, `.gzi`, `.tbi` and `.csi` (B2 and B5 stage A1's `ref_genome`) |
+| the task's input | `[id, lineage, plan.json, the receipts it needs, its plan entry, {key: staged file name}, staged files]`, made by `installNative` in `workflows/install.nf`; files you supply (the plan's new `user_paths`) are staged too |
+| `priva install-task record` | the script's last line: checks every output key is given and exists, makes the files under `data/` read-only (not the folders: storeDir moves `data/` with `mv`, which a read-only folder refuses for a user who is not root), and writes `receipt.json` with the fields `install-task run` writes and the paths storeDir will give the files. `--relocate data/FILE` rewrites the paths a tool wrote into a JSON file of its own (A1's `.source.json`, B3's `.ready.json`) |
+| code digest | the registry entry, the module's text, the scripts and shipped data files it names as `${projectDir}/scripts/…` or `${projectDir}/data/…` (F1's MONDO overrides, B5's chain), and the Rust behind each `"$PRIVA_BIN" COMMAND` it runs. `modules/local/install_steps/common.nf` (the record, adopt and stub lines) is the runner and is not counted |
+| adopt and stub | as for every step: `install-task adopt` writes the receipt, `record --stub` writes stub files |
+
+A file you supply is never written. Where the old function wrote an index
+beside it (a sorted PrimateAI table or a FASTA without a current index), the
+process keeps the new index in its own folder with a link to your file.
+
+Each step was run both ways on the same plan with `tests/install_step_compare.py`
+(the old route uses the registry before this change,
+`tests/fixtures/install-steps-1879c0c.json`). `tests/fake_net.py` stands in for
+curl and wget and serves files from a folder, so both routes download the same
+bytes without the network; only GitHub is reachable from the test machine.
+
+| Step | Commands in the process | Cases compared | Result |
+| --- | --- | --- | --- |
+| A1 reference | `priva reference-resources install` (curl, samtools faidx) | your FASTA with its index; without an index (process only); UCSC download (stand-in for the pinned 900 MB download) | same bytes; your folder is left as it was |
+| A4 CDS FASTA | curl, `priva cds-fasta validate` | GRCh38 | same bytes |
+| B1 UTRannotator | git clone, git checkout of the pinned commit | real GitHub | same files (without `.git`) |
+| B2 conservation | curl, `priva conservation-resource publish` | hg19 wiring (stand-in for the Perl bigWig reader, not installed here) | receipt names the published file |
+| B3 AlphaMissense | `priva alphamissense-cache install` (curl, bgzip, tabix) | wiring (stand-in for the MD5-pinned 600 MB object) | receipt and `.ready.json` name the moved file |
+| B5 SpliceVault | curl, bgzip, tabix; hg19: `priva splicevault-convert` (CrossMap, shipped chain), sort, bgzip, tabix | hg38; hg19 with real CrossMap | same bytes |
+| B6 MaveDB | curl, `priva indexed-plugin-cache ensure-index` | hg38; hg19 records no table | same bytes |
+| B7 PrimateAI | `priva indexed-plugin-cache format-primate` | publisher table; sorted table with index; sorted table without index (process only); missing file | same bytes; the missing file stops the step with the download link |
+| B9 pext | curl | hg38, hg19, `pext_enabled: false` | same bytes |
+| F1 HPO and MONDO | curl, `priva hpo-assertions build`, `mondo-scope build`, `mondo-scope validate` | real HPO v2026-06-23 and MONDO v2026-07-06 | OBO same bytes; the two `.tsv.gz` the same decompressed bytes (their gzip header holds the write time and a temporary name, as with any two runs of the old function) |
+
+Changes you can notice:
+
+- A1 lists `ref_genome` under `user_inputs`: a FASTA you set there counts in
+  A1's lineage and is used where it is (the old route copied it into A1's
+  folder).
+- F1 reads the MONDO overrides shipped in `data/mondo/`; a
+  `mondo_disease_scope_overrides` of your own is not read.
+- An unknown name in `pext_tissues` stops B9 when UCSC has no such file
+  (the old function checked the names against the list in
+  `common_bash_utils.sh` first; the list moves with phase 4).
+- The ten steps have new code digests, so they and every step that needs
+  them get new lineages once. That includes the 26 ClinVar VEP pieces
+  (`D1_chr*`, about 34 CPU hours); `--adopt all` keeps an existing
+  installation instead.
+
+Still on the shell route: A5 (`priva biomart` asks Ensembl BioMart, which the
+test machine cannot reach), B8 LOFTEE (a pinned git checkout and three
+downloads, next), D0 (its `inputs.ready.json` names absolute paths that D1
+reads, so it needs `--relocate` and a cluster run of D1).
+
 ### Phases 3 to 7
 
 | Phase | Scope | Shell glue now | Python it still runs | Work (tools keep their commands) |
 | --- | --- | --- | --- | --- |
-| 3 | Downloads: A1, A4, A5, B1, B2, B3, B5, B6, B7, B8, B9, D0, F1 | 4 to 10 functions each | `alternative_start_codon.py` (A4) | Each a Nextflow process: curl or git, then `priva install check/record` for checksums and the receipt |
+| 3 | Downloads: A1, A4, A5, B1, B2, B3, B5, B6, B7, B8, B9, D0, F1 | 4 to 10 functions each | `alternative_start_codon.py` (A4) | Each a Nextflow process: curl or git, then `priva install-task record` for the receipt. Done for A1, A4, B1, B2, B3, B5, B6, B7, B9 and F1 (above); A4 no longer runs `alternative_start_codon.py`, whose pickle the Rust detector never reads |
 | 4 | Pipeline scripts: `annotation_vcf.sh` (1,827 lines), `filtration_vcf_per_fam.sh` (356), `prioritization_vcf_per_fam.sh` (430), `common_bash_utils.sh` (1,627) | run inside every analysis task | an inline `python - <<PY` block in `anno_VEP_cache_worker`, and `cadd_conda.py` (finds CADD's conda) | The annotation, filtration and prioritization tasks already exist per step; their `script:` blocks call VEP, bcftools, `CADD.sh` and `priva` directly instead of a shell function. Every run goes through this, so it comes before the heavier installer phases |
 | 5 | Steps on native builders: C6, C8, C10, C11, D6, D8, D9, F4 to F9 | 7 to 19 functions each | `protein_domain_mapping.py` (C8), `build_gene_pathogenic_mechanism_cache.py` acquisition (F4); a configured non-default builder script | Locks, receipts and reuse checks into `priva`; F4's acquisition |
 | 6 | Heavy chains: A2, C1, C3, C4, D1, E1 | 13 to 49 functions each | `cadd_scripts_install.py`, `cadd_prescore_index.py` (kept: they belong to CADD) | VEP, bcftools, CrossMap and `CADD.sh` command lines in the process; one change per step |

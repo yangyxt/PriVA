@@ -136,7 +136,12 @@ impl Installer {
     /// counted by function instead.
     pub(crate) fn step_scripts(&self, names: &[String]) -> Result<Vec<String>> {
         let text: String = names.iter().map(|n| self.text(n)).collect();
-        let named: Vec<String> = script_names(&text);
+        Ok(self.with_imports(script_names(&text)))
+    }
+
+    /// The named script files that exist in the scripts folder, and the
+    /// Python files of that folder they import (and those import).
+    fn with_imports(&self, named: Vec<String>) -> Vec<String> {
         let named = sorted(named, true);
         let mut queue: VecDeque<String> = named
             .into_iter()
@@ -162,7 +167,7 @@ impl Installer {
                 }
             }
         }
-        Ok(sorted(found, true))
+        sorted(found, true)
     }
 
     /// The data files shipped with the repository that those functions name
@@ -214,6 +219,9 @@ impl Installer {
     }
 
     pub(crate) fn digest(&self, entry: &Json) -> Result<String> {
+        if let Some(module) = process_module(entry) {
+            return self.process_digest(entry, module);
+        }
         let names = self.step_functions(entry)?;
         let mut hash = Sha256::new();
         hash.update(compact(entry)?.as_bytes());
@@ -239,6 +247,117 @@ impl Installer {
             hash.update(format!("rust {file} {sum}\n").as_bytes());
         }
         Ok(hash.finish_hex())
+    }
+
+    /// The digest of a step that runs as its own process (registry
+    /// `module`): its registry entry, the text of its Nextflow module, the
+    /// content of the scripts and shipped data files that text names
+    /// (`${projectDir}/scripts/NAME`, `${projectDir}/data/PATH`), and the Rust
+    /// files of the `priva` commands it runs. It runs no installer function,
+    /// so neither those nor the shell files' lines outside functions count.
+    /// The shared helpers of `modules/local/install_steps/common.nf` only
+    /// write the adopt and record lines of `install-task`, the install runner,
+    /// which no step's digest counts.
+    fn process_digest(&self, entry: &Json, module: &str) -> Result<String> {
+        let text = self.module_text(entry, module)?;
+        let mut hash = Sha256::new();
+        hash.update(compact(entry)?.as_bytes());
+        hash.update(b"\n");
+        hash.update(format!("== process {module}\n").as_bytes());
+        hash.update(text.as_bytes());
+        for script in self.process_scripts(&text) {
+            let sum = sha256_file(&self.scripts.join(&script))?;
+            hash.update(format!("{script} {sum}  -\n").as_bytes());
+        }
+        for data in self.process_data(&text) {
+            let sum = sha256_file(&self.root.join("data").join(&data))?;
+            hash.update(format!("data {data} {sum}  -\n").as_bytes());
+        }
+        let commands = self.process_commands(entry, &text)?;
+        for command in &commands {
+            hash.update(format!("priva {command}\n").as_bytes());
+        }
+        for (file, sum) in self.rust_files(&commands)? {
+            hash.update(format!("rust {file} {sum}\n").as_bytes());
+        }
+        Ok(hash.finish_hex())
+    }
+
+    fn module_text(&self, entry: &Json, module: &str) -> Result<String> {
+        let path = self.root.join(module);
+        let text = std::fs::read_to_string(&path).map_err(|e| {
+            fail(format!(
+                "step {}: cannot read its module {}: {e}",
+                super::text(entry, "id"),
+                path.display()
+            ))
+        })?;
+        let process = format!("process {} ", super::text(entry, "name"));
+        if !text.lines().any(|line| line.starts_with(&process)) {
+            return Err(fail(format!(
+                "step {}: {module} defines no process {}",
+                super::text(entry, "id"),
+                super::text(entry, "name")
+            )));
+        }
+        Ok(text)
+    }
+
+    /// The scripts of the checkout a module runs (`${projectDir}/scripts/NAME`)
+    /// and the Python files they import.
+    fn process_scripts(&self, text: &str) -> Vec<String> {
+        self.with_imports(project_paths(text, "scripts"))
+    }
+
+    /// The shipped data files a module names: `${projectDir}/data/PATH`, with
+    /// `${assembly}` read as hg19 and as hg38, tracked by git in a checkout.
+    fn process_data(&self, text: &str) -> Vec<String> {
+        let git = self.root.join(".git").exists();
+        let mut found = Vec::new();
+        for name in sorted(project_paths(text, "data"), true) {
+            for assembly in ["hg19", "hg38"] {
+                let path = name.replace("${assembly}", assembly);
+                if path.contains('$') || !self.root.join("data").join(&path).is_file() {
+                    continue;
+                }
+                if git && !git_tracked(&self.root, &format!("data/{path}")) {
+                    continue;
+                }
+                found.push(path);
+            }
+        }
+        sorted(found, true)
+    }
+
+    /// The `priva` commands a module runs (`"$PRIVA_BIN" COMMAND`) and those
+    /// its registry entry lists, without `install-task`, the runner.
+    pub(crate) fn process_commands(&self, entry: &Json, text: &str) -> Result<Vec<String>> {
+        let table = rust_reach::commands(&self.root);
+        let listed = strings(entry, "priva_commands");
+        for command in &listed {
+            if !table.contains_key(command) {
+                return Err(fail(format!(
+                    "step {}: priva_commands names {command}, which is not a priva command",
+                    super::text(entry, "id")
+                )));
+            }
+        }
+        let mut found: BTreeSet<String> = listed.iter().cloned().collect();
+        for line in text.lines() {
+            if dynamic_command(line) && listed.is_empty() {
+                return Err(fail(format!(
+                    "step {}: its module picks a priva command at run time; list the commands in the registry's priva_commands",
+                    super::text(entry, "id")
+                )));
+            }
+            for command in called_commands(line) {
+                if table.contains_key(&command) {
+                    found.insert(command);
+                }
+            }
+        }
+        found.remove("install-task");
+        Ok(found.into_iter().collect())
     }
 
     /// The `priva` commands a step runs: those its functions name, and those
@@ -286,6 +405,44 @@ impl Installer {
         }
         Ok(files)
     }
+}
+
+/// The Nextflow module of a step that runs as its own process.
+pub(crate) fn process_module(entry: &Json) -> Option<&str> {
+    entry.get("module").and_then(Json::as_str)
+}
+
+fn git_tracked(root: &Path, path: &str) -> bool {
+    Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(["ls-files", "--error-unmatch", "--"])
+        .arg(path)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .is_ok_and(|s| s.success())
+}
+
+/// The paths a module names below `${projectDir}/FOLDER/`.
+pub(crate) fn project_paths(text: &str, folder: &str) -> Vec<String> {
+    let marker = format!("projectDir}}/{folder}/");
+    let mut found = Vec::new();
+    let mut rest = text;
+    while let Some(at) = rest.find(&marker) {
+        let after = &rest[at + marker.len()..];
+        let end = after
+            .find(|c: char| {
+                !(c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '/' | '-' | '$' | '{' | '}'))
+            })
+            .unwrap_or(after.len());
+        let name = after[..end].trim_end_matches(['.', '/']);
+        if !name.is_empty() {
+            found.push(name.to_owned());
+        }
+        rest = &after[end..];
+    }
+    found
 }
 
 /// The commands a line runs: `"${PRIVA_BIN}" COMMAND` and the forms
@@ -565,6 +722,25 @@ pub(crate) fn reach(options: &Options) -> Result<()> {
     let id = options.one("step")?;
     let installer = Installer::load(&options.source_root()?)?;
     let entry = step(&registry, id)?;
+    if let Some(module) = process_module(entry) {
+        let text = installer.module_text(entry, module)?;
+        println!("module {module}");
+        for script in installer.process_scripts(&text) {
+            println!("script {script}");
+        }
+        for data in installer.process_data(&text) {
+            println!("data {data}");
+        }
+        let commands = installer.process_commands(entry, &text)?;
+        for command in &commands {
+            println!("priva {command}");
+        }
+        for file in installer.rust_files(&commands)?.keys() {
+            println!("rust {file}");
+        }
+        println!("digest {}", installer.digest(entry)?);
+        return Ok(());
+    }
     let names = installer.step_functions(entry)?;
     for name in &names {
         println!("function {name}");

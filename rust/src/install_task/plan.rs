@@ -205,10 +205,15 @@ pub(crate) fn plan(options: &Options) -> Result<()> {
             }
         }
         let mut files = Vec::new();
+        let mut paths = Vec::new();
         for key in strings(entry, "user_inputs") {
             let value = yaml_value(&config, &key)?;
             if !value.is_empty() {
-                files.push(Json::Array(vec![string(key), string(identity(&value))]));
+                files.push(Json::Array(vec![
+                    string(key.clone()),
+                    string(identity(&value)),
+                ]));
+                paths.push((key, string(value)));
             }
         }
 
@@ -280,6 +285,10 @@ pub(crate) fn plan(options: &Options) -> Result<()> {
                 ("digest".into(), string(digest)),
                 ("settings".into(), object(settings)),
                 ("user_files".into(), Json::Array(files)),
+                // The same files by path, for a step that runs as its own
+                // process: the workflow stages them into its task. The
+                // lineage counts user_files only.
+                ("user_paths".into(), object(paths)),
                 ("adopt".into(), adopted),
                 ("release".into(), release),
                 ("pinned".into(), Json::Bool(pinned)),

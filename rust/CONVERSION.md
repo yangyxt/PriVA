@@ -686,7 +686,7 @@ phase 7.
 
 ### Phase 3: download steps as their own processes (20 November 2026)
 
-Ten steps no longer go through `install_utils.sh`. Each is a Nextflow process
+Eleven steps no longer go through `install_utils.sh`. Each is a Nextflow process
 in `modules/local/install_steps/` whose script runs the tools' own commands
 and `priva` for PriVA's checks, and writes only into its task's work folder:
 
@@ -750,6 +750,7 @@ bytes without the network; only GitHub is reachable from the test machine.
 | B5 SpliceVault | curl, bgzip, tabix; hg19: `priva splicevault-convert` (CrossMap, shipped chain), sort, bgzip, tabix | hg38; hg19 with real CrossMap | same bytes |
 | B6 MaveDB | curl, `priva indexed-plugin-cache ensure-index` | hg38; hg19 records no table | same bytes |
 | B7 PrimateAI | `priva indexed-plugin-cache format-primate` | publisher table; sorted table with index; sorted table without index (process only); missing file | same bytes; the missing file stops the step with the download link |
+| B8 LOFTEE | git clone and checkout of the pinned commit (master or grch38), curl, gunzip, `priva loftee-resources validate`, for GRCh38 `priva conservation-resource validate`, `bgzip -r` | hg19 (real GitHub); hg38 wiring (stand-in for the GERP bigWig check) | same files and bytes, `.fai` and `.gzi` too (repository without `.git`) |
 | B9 pext | curl | hg38, hg19, `pext_enabled: false` | same bytes |
 | F1 HPO and MONDO | curl, `priva hpo-assertions build`, `mondo-scope build`, `mondo-scope validate` | real HPO v2026-06-23 and MONDO v2026-07-06 | OBO same bytes; the two `.tsv.gz` the same decompressed bytes (their gzip header holds the write time and a temporary name, as with any two runs of the old function) |
 
@@ -763,21 +764,24 @@ Changes you can notice:
 - An unknown name in `pext_tissues` stops B9 when UCSC has no such file
   (the old function checked the names against the list in
   `common_bash_utils.sh` first; the list moves with phase 4).
-- The ten steps have new code digests, so they and every step that needs
+- B8 no longer writes `PERL5LIB` into your conda environment's variables:
+  the annotation already passes `loftee_repo` to VEP with `--dir_plugins`.
+- The eleven steps have new code digests, so they and every step that needs
   them get new lineages once. That includes the 26 ClinVar VEP pieces
   (`D1_chr*`, about 34 CPU hours); `--adopt all` keeps an existing
   installation instead.
 
-Still on the shell route: A5 (`priva biomart` asks Ensembl BioMart, which the
-test machine cannot reach), B8 LOFTEE (a pinned git checkout and three
-downloads, next), D0 (its `inputs.ready.json` names absolute paths that D1
-reads, so it needs `--relocate` and a cluster run of D1).
+Still on the shell route: A5 (it picks the shipped NM-to-ENST table or asks
+Ensembl BioMart through `priva installer-prerequisites` stages that read the
+whole configuration; BioMart is out of the test machine's reach) and D0 (its
+`inputs.ready.json` names absolute paths that D1 reads, so it needs
+`--relocate` and a cluster run of D1).
 
 ### Phases 3 to 7
 
 | Phase | Scope | Shell glue now | Python it still runs | Work (tools keep their commands) |
 | --- | --- | --- | --- | --- |
-| 3 | Downloads: A1, A4, A5, B1, B2, B3, B5, B6, B7, B8, B9, D0, F1 | 4 to 10 functions each | `alternative_start_codon.py` (A4) | Each a Nextflow process: curl or git, then `priva install-task record` for the receipt. Done for A1, A4, B1, B2, B3, B5, B6, B7, B9 and F1 (above); A4 no longer runs `alternative_start_codon.py`, whose pickle the Rust detector never reads |
+| 3 | Downloads: A1, A4, A5, B1, B2, B3, B5, B6, B7, B8, B9, D0, F1 | 4 to 10 functions each | `alternative_start_codon.py` (A4) | Each a Nextflow process: curl or git, then `priva install-task record` for the receipt. Done for A1, A4, B1, B2, B3, B5, B6, B7, B8, B9 and F1 (above); A4 no longer runs `alternative_start_codon.py`, whose pickle the Rust detector never reads |
 | 4 | Pipeline scripts: `annotation_vcf.sh` (1,827 lines), `filtration_vcf_per_fam.sh` (356), `prioritization_vcf_per_fam.sh` (430), `common_bash_utils.sh` (1,627) | run inside every analysis task | an inline `python - <<PY` block in `anno_VEP_cache_worker`, and `cadd_conda.py` (finds CADD's conda) | The annotation, filtration and prioritization tasks already exist per step; their `script:` blocks call VEP, bcftools, `CADD.sh` and `priva` directly instead of a shell function. Every run goes through this, so it comes before the heavier installer phases |
 | 5 | Steps on native builders: C6, C8, C10, C11, D6, D8, D9, F4 to F9 | 7 to 19 functions each | `protein_domain_mapping.py` (C8), `build_gene_pathogenic_mechanism_cache.py` acquisition (F4); a configured non-default builder script | Locks, receipts and reuse checks into `priva`; F4's acquisition |
 | 6 | Heavy chains: A2, C1, C3, C4, D1, E1 | 13 to 49 functions each | `cadd_scripts_install.py`, `cadd_prescore_index.py` (kept: they belong to CADD) | VEP, bcftools, CrossMap and `CADD.sh` command lines in the process; one change per step |

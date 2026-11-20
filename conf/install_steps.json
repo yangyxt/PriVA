@@ -248,16 +248,13 @@
     {
       "id": "B8",
       "name": "LOFTEE",
-      "calls": [
-        [
-          "LoFtee_install",
-          "{vep_plugins_cachedir}",
-          "{config}"
-        ]
-      ],
+      "module": "modules/local/install_steps/loftee.nf",
       "needs": [
         "A1",
         "A2"
+      ],
+      "stage": [
+        "ref_genome"
       ],
       "outputs": [
         "loftee_repo",

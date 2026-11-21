@@ -865,37 +865,6 @@ const STUB_CADD: &str =
 /// `null` as there). Sourced from this file, the script defines its
 /// functions and runs nothing itself.
 /// Arguments: SOURCE_ROOT CONFIG VCF STEP [OUTPUT].
-/// One step of prioritization_vcf_per_fam.sh, as main_prioritization runs
-/// it (threads from threads_per_fam). Sourced from this file, the script
-/// defines its functions and runs nothing itself. A family with no variant
-/// left gets empty tables, as main_prioritization writes them.
-/// Arguments: SOURCE_ROOT CONFIG STEP ARGUMENTS...
-const PRIORITIZATION_STEP: &str = r#"#!/usr/bin/env bash
-source "$1/scripts/prioritization_vcf_per_fam.sh" || exit 1
-config=$2 step=$3
-shift 3
-threads=$(read_yaml "$config" threads_per_fam)
-case $step in
-    combine)
-        vcf=$1 cadd=$2 table=${1/.vcf*/.tsv}
-        if [[ $(count_vcf_records "$vcf") -lt 1 ]] && check_vcf_validity "$vcf" 0; then : > "$table"; exit 0; fi
-        [[ $(wc -l < "$cadd") -le 1 ]] && { echo "The CADD table $cadd is empty" >&2; exit 0; }
-        prepare_combined_tab "$vcf" "$cadd" "$threads" "$config" && [[ -f $table ]] ;;
-    splicing)
-        [[ -s $1 ]] || exit 0
-        interpret_splicing_annotations "$1" "$config" "$threads" ;;
-    utr)
-        [[ -s $1 ]] || exit 0
-        interpret_utr_annotations "$1" "$config" "$threads" ;;
-    acmg)
-        table=$1 family=${2:-}
-        [[ -s $table ]] || { : > "${table%.tsv}.acmg.tsv"; exit 0; }
-        acmg_assign_table -i "$table" -c "$config" -t "$threads" ${family:+-f "$family"} ;;
-    *)
-        echo "Unknown prioritization step: $step" >&2; exit 2 ;;
-esac
-"#;
-
 pub(super) const ANNOTATION_STEP: &str = r#"#!/usr/bin/env bash
 source "$1/scripts/annotation_vcf.sh" || exit 1
 config=$2 vcf=$3 step=$4 output=${5:-}
@@ -1150,6 +1119,33 @@ pub(crate) fn run(options: &Options) -> Result<()> {
         let script = |name: &str| display(&root.join("scripts").join(name));
         let input = display(&input_vcf);
         let config_text = display(&config_path);
+        let threads = cpus.to_string();
+        let temp_text = display(&temp);
+        // The pinned program, whatever PRIVA_BINARY the caller exported.
+        let env: Vec<(String, String)> = [
+            ("PRIVA_BINARY", binary.as_str()),
+            ("TMPDIR", &temp_text),
+            ("TMP", &temp_text),
+            ("TEMP", &temp_text),
+            ("PYTHONDONTWRITEBYTECODE", "1"),
+            ("OMP_NUM_THREADS", &threads),
+            ("OPENBLAS_NUM_THREADS", &threads),
+            ("MKL_NUM_THREADS", &threads),
+            ("NUMEXPR_NUM_THREADS", &threads),
+        ]
+        .iter()
+        .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
+        .collect();
+        // The family steps run their tools from here, without the shell.
+        let private = read_config(&config_path)?;
+        let family_steps = super::family_steps::Context {
+            root: &root,
+            binary: &binary,
+            config_path: &config_path,
+            config: &private,
+            env: &env,
+        };
+        let cadd_text = cadd_path.as_deref().map(display).unwrap_or_default();
         let step_command = |step: &str, output: Option<String>| -> Result<Vec<String>> {
             fs::write("annotation_step.sh", ANNOTATION_STEP)?;
             let mut command = vec![
@@ -1164,18 +1160,6 @@ pub(crate) fn run(options: &Options) -> Result<()> {
             Ok(command)
         };
         let anno = |suffix: &str| display(&result.join(format!("{base}.anno{suffix}")));
-        let prioritization_step = |step: &str, arguments: Vec<String>| -> Result<Vec<String>> {
-            fs::write("prioritization_step.sh", PRIORITIZATION_STEP)?;
-            let mut command = vec![
-                "bash".into(),
-                "prioritization_step.sh".into(),
-                display(&root),
-                config_text.clone(),
-                step.into(),
-            ];
-            command.extend(arguments);
-            Ok(command)
-        };
         let command: Option<Vec<String>> = match phase {
             "annotation-preprocess" => Some(step_command("preprocess", Some(anno(".vcf.gz")))?),
             "annotation-cadd" => Some(step_command("cadd", Some(anno(".cadd.tsv")))?),
@@ -1198,14 +1182,18 @@ pub(crate) fn run(options: &Options) -> Result<()> {
                 None
             }
             _ if step.is_some() => Some(step_command(step.unwrap(), None)?),
-            "prioritization-combine" => Some(prioritization_step(
-                "combine",
-                vec![input.clone(), display(cadd_path.as_deref().unwrap())],
-            )?),
-            "prioritization-splicing" => {
-                Some(prioritization_step("splicing", vec![input.clone()])?)
+            "prioritization-combine" => {
+                super::family_steps::combine(&family_steps, &input, &cadd_text)?;
+                None
             }
-            "prioritization-utr" => Some(prioritization_step("utr", vec![input.clone()])?),
+            "prioritization-splicing" => {
+                super::family_steps::splicing(&family_steps, &input)?;
+                None
+            }
+            "prioritization-utr" => {
+                super::family_steps::utr(&family_steps, &input)?;
+                None
+            }
             "prioritization-join" => {
                 let (Some(splicing), Some(utr)) = (
                     options.get("splicing-table").filter(|v| !v.is_empty()),
@@ -1222,9 +1210,8 @@ pub(crate) fn run(options: &Options) -> Result<()> {
                 None
             }
             "prioritization-acmg" => {
-                let mut arguments = vec![input.clone()];
-                arguments.extend(family.clone());
-                Some(prioritization_step("acmg", arguments)?)
+                super::family_steps::acmg(&family_steps, &input, family.as_deref())?;
+                None
             }
             "annotation" if field("mode") == "raw" => Some(vec![
                 "bash".into(),
@@ -1235,55 +1222,26 @@ pub(crate) fn run(options: &Options) -> Result<()> {
                 "--config".into(),
                 config_text.clone(),
             ]),
-            // Without a family the scripts run their no-pedigree mode.
+            // Without a family the steps run their no-pedigree mode.
             "filtration" => {
-                let mut command: Vec<String> = vec![
-                    "bash".into(),
-                    script("filtration_vcf_per_fam.sh"),
-                    "-v".into(),
-                    input.clone(),
-                ];
-                if let Some(id) = &family {
-                    command.extend(["-f".into(), id.clone()]);
-                }
-                command.extend(["-c".into(), config_text.clone()]);
-                Some(command)
+                super::family_steps::filtration(&family_steps, &input, family.as_deref())?;
+                None
             }
             "prioritization" => {
-                let mut command: Vec<String> = vec![
-                    "bash".into(),
-                    script("prioritization_vcf_per_fam.sh"),
-                    "-i".into(),
-                    input.clone(),
-                ];
-                if let Some(id) = &family {
-                    command.extend(["-f".into(), id.clone()]);
-                }
-                command.extend([
-                    "-c".into(),
-                    config_text.clone(),
-                    "-t".into(),
-                    display(cadd_path.as_deref().unwrap()),
-                ]);
-                Some(command)
+                super::family_steps::prioritize(
+                    &family_steps,
+                    &input,
+                    &cadd_text,
+                    family.as_deref(),
+                )?;
+                None
             }
             _ => None, // An explicit preannotated import keeps the input bytes.
         };
         if let Some(command) = command {
-            let threads = cpus.to_string();
-            let temp_text = display(&temp);
-            // The pinned program, whatever PRIVA_BINARY the caller exported.
             let status = Command::new(&command[0])
                 .args(&command[1..])
-                .env("PRIVA_BINARY", &binary)
-                .env("TMPDIR", &temp_text)
-                .env("TMP", &temp_text)
-                .env("TEMP", &temp_text)
-                .env("PYTHONDONTWRITEBYTECODE", "1")
-                .env("OMP_NUM_THREADS", &threads)
-                .env("OPENBLAS_NUM_THREADS", &threads)
-                .env("MKL_NUM_THREADS", &threads)
-                .env("NUMEXPR_NUM_THREADS", &threads)
+                .envs(env.iter().map(|(k, v)| (k, v)))
                 .status()?;
             if !status.success() {
                 let parts: Vec<&str> = command.iter().map(String::as_str).collect();

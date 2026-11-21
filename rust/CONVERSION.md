@@ -775,16 +775,96 @@ Still on the shell route: A5 (it picks the shipped NM-to-ENST table or asks
 Ensembl BioMart through `priva installer-prerequisites` stages that read the
 whole configuration; BioMart is out of the test machine's reach) and D0 (its
 `inputs.ready.json` names absolute paths that D1 reads, so it needs
-`--relocate` and a cluster run of D1).
+`--relocate` and a cluster run of D1). A5 moves to phase 5, with the other steps whose checks live in `installer-prerequisites`; D0 moves to phase 6, with the ClinVar chain it feeds.
+
+### Phase 4: the family steps without the shell scripts (21 November 2026)
+
+Filtration and the four prioritization steps no longer run
+`filtration_vcf_per_fam.sh` or `prioritization_vcf_per_fam.sh`. `priva task
+run` checks the task as before, then runs the step's tools itself
+([`src/nextflow_task/family_steps.rs`](src/nextflow_task/family_steps.rs)):
+bcftools, tabix and priva's own commands, with the arguments the shell
+functions gave them.
+
+```mermaid
+flowchart LR
+  subgraph before["Before: FILTER_FAMILY"]
+    direction TB
+    O1["priva task run --phase filtration"] --> O2["bash filtration_vcf_per_fam.sh<br/>+ common_bash_utils.sh (yq per setting)"]
+    O2 --> O3["bcftools view -s, priva pedigree-filter,<br/>bcftools view -e | sort, tabix, mawk"]
+  end
+  subgraph after["Now: FILTER_FAMILY"]
+    direction TB
+    N1["priva task run --phase filtration"] --> N3["bcftools view -s, priva pedigree-filter,<br/>bcftools view -e | sort, tabix<br/>(settings read from the task's configuration)"]
+  end
+  before -. "phase 4" .-> after
+```
+
+| Task | Shell function before | Commands now, in this order |
+| --- | --- | --- |
+| `FILTER_FAMILY` (with a PED file) | `main_filtration`: `extract_fam_vcf`, `filter_allele_based_on_pedigree_data`, `filter_af`, `filter_cadd_based_on_vcf` | `bcftools view --threads T --force-samples -s MEMBERS -Oz`, `tabix -p vcf -f`, `priva pedigree-filter -v -p -f -o`, `tabix`, `bcftools view --threads T -e "AF_grpmax_joint > CUTOFF" -Ou \| bcftools sort -Oz`, `tabix`, then the CADD rows of the records left (the `mawk` join, in Rust) |
+| `FILTER_FAMILY` (no PED file) | `main_filtration` without a family | the allele-frequency filter on the cohort VCF, then the CADD rows |
+| `PRIORITIZE_COMBINE` | `prepare_combined_tab` | `priva combine-annotations -i -c -o -p -t` |
+| `PRIORITIZE_SPLICING` | `interpret_splicing_annotations` | `priva splicing-analysis --anno_table --transcript_domain_map --intolerant_domains --interpro_entry_map_pkl --config --threads` |
+| `PRIORITIZE_UTR` | `interpret_utr_annotations` | `priva utr-anno-interpret --variants_table --domain_map --intolerant_domains` |
+| `PRIORITIZE_ACMG` | `acmg_assign_table` | its file checks, then `priva acmg-assign` with the same 22 options and the same optional ones (`--ped_table`, `--fam_name`, `--alt_disease_vcf`, `--mavedb_metadata_tsv` for hg38, `--pp1_vcf`/`--pp1_ped`, gene lists, `--cds_fasta_path`, `--pext_tissues`, `--ignore_clingen_override`) |
+
+Kept as the scripts had them, so the commands are the same: each setting is
+read as `read_yaml` read it (a missing key or null is `null`, a boolean
+`true`/`false`), a value the scripts left unquoted is split into words, the
+scripts' file checks and their messages, the answers for an empty family (an
+empty table, or no table when the CADD table has no row), and the skip of a
+splicing or 5' UTR table that already has its columns. Left out: the checks
+that skipped a step whose output was newer than its inputs (a task's folder is
+new, so its output never exists before it) and the table displays. The
+whole-run `prioritization` phase runs the four steps the same way.
+
+`priva task family-step --step STEP --root CHECKOUT --config CONFIG [--vcf]
+[--cadd] [--table] [--family]` runs one of these steps outside Nextflow,
+without a contract, to look into one family by hand.
+
+[`tests/family_step_compare.py`](../tests/family_step_compare.py) runs each
+case through the shell function (the task's step wrapper before this change is
+kept as [`tests/fixtures/family-steps-952811c/prioritization_step.sh`](../tests/fixtures/family-steps-952811c/prioritization_step.sh))
+and through `priva task family-step`, on the shipped test family
+(`data/test_example/TEST_FAM`, 20,205 records, with a made-up
+`AF_grpmax_joint` and a CADD table made from its records). Filtration runs the
+real `priva pedigree-filter`; the other priva commands are a stand-in that logs
+its arguments, so the comparison is of the commands, not the science.
+
+| Case | Exit | priva commands | Files |
+| --- | --- | --- | --- |
+| filtration: PED family; no PED file; no cohort CADD table (another cutoff) | same | same | same records and header (`##bcftools_` lines aside) and the same CADD rows: 1,295, 7,711 and 1,860 records kept |
+| combine: normal; empty VCF; one-line CADD table; default HPO table | same | same | same |
+| splicing: normal; columns already there; empty table; 5' UTR | same | same | same |
+| ACMG: hg38 with every option; hg19 without family, override off, no CDS FASTA; empty values; a missing resource; a missing `clinvar_gene_stat` path; empty table | same (both refuse the missing files) | same | same |
+| whole prioritization: normal; empty VCF | same | same (4 commands) | same |
+
+19 cases, no difference. The CI job runs the comparison after the Rust build.
+
+Changes you can notice:
+
+- A plain `.vcf` given as `pp1_vcf` or `alt_disease_vcf` is checked without
+  writing a compressed copy beside it (the shell check wrote one to list its
+  samples, and in a folder it could not write to it dropped the option).
+- A family with no member in the PED file stops with that message (the shell
+  stopped on the empty sample list's expansion).
+- The log lines start with `[priva task]`.
+
+Next in phase 4: the annotation steps (`annotation_vcf.sh`). Those change
+the hub lineages: `hub_lineage.rs` counts the shell functions each step runs,
+so each ported step gets a new, empty hub folder once, and the first run after
+it annotates every variant of that source again. They go out together, so
+that happens once.
 
 ### Phases 3 to 7
 
 | Phase | Scope | Shell glue now | Python it still runs | Work (tools keep their commands) |
 | --- | --- | --- | --- | --- |
 | 3 | Downloads: A1, A4, A5, B1, B2, B3, B5, B6, B7, B8, B9, D0, F1 | 4 to 10 functions each | `alternative_start_codon.py` (A4) | Each a Nextflow process: curl or git, then `priva install-task record` for the receipt. Done for A1, A4, B1, B2, B3, B5, B6, B7, B8, B9 and F1 (above); A4 no longer runs `alternative_start_codon.py`, whose pickle the Rust detector never reads |
-| 4 | Pipeline scripts: `annotation_vcf.sh` (1,827 lines), `filtration_vcf_per_fam.sh` (356), `prioritization_vcf_per_fam.sh` (430), `common_bash_utils.sh` (1,627) | run inside every analysis task | an inline `python - <<PY` block in `anno_VEP_cache_worker`, and `cadd_conda.py` (finds CADD's conda) | The annotation, filtration and prioritization tasks already exist per step; their `script:` blocks call VEP, bcftools, `CADD.sh` and `priva` directly instead of a shell function. Every run goes through this, so it comes before the heavier installer phases |
-| 5 | Steps on native builders: C6, C8, C10, C11, D6, D8, D9, F4 to F9 | 7 to 19 functions each | `protein_domain_mapping.py` (C8), `build_gene_pathogenic_mechanism_cache.py` acquisition (F4); a configured non-default builder script | Locks, receipts and reuse checks into `priva`; F4's acquisition |
-| 6 | Heavy chains: A2, C1, C3, C4, D1, E1 | 13 to 49 functions each | `cadd_scripts_install.py`, `cadd_prescore_index.py` (kept: they belong to CADD) | VEP, bcftools, CrossMap and `CADD.sh` command lines in the process; one change per step |
+| 4 | Pipeline scripts: `annotation_vcf.sh` (1,827 lines), `filtration_vcf_per_fam.sh` (356), `prioritization_vcf_per_fam.sh` (430), `common_bash_utils.sh` (1,627) | run inside every analysis task | an inline `python - <<PY` block in `anno_VEP_cache_worker`, and `cadd_conda.py` (finds CADD's conda) | The annotation, filtration and prioritization tasks already exist per step; each runs VEP, bcftools, `CADD.sh` and `priva` with their own command lines instead of a shell function. `priva task run` keeps the task's checks and runs them, since which commands run depends on the settings. Done for filtration and the prioritization steps (above). Every run goes through this, so it comes before the heavier installer phases |
+| 5 | Steps on native builders: A5 (moved from phase 3), C6, C8, C10, C11, D6, D8, D9, F4 to F9 | 7 to 19 functions each | `protein_domain_mapping.py` (C8), `build_gene_pathogenic_mechanism_cache.py` acquisition (F4); a configured non-default builder script | Locks, receipts and reuse checks into `priva`; F4's acquisition |
+| 6 | Heavy chains: A2, C1, C3, C4, D0 (moved from phase 3), D1, E1 | 13 to 49 functions each | `cadd_scripts_install.py`, `cadd_prescore_index.py` (kept: they belong to CADD) | VEP, bcftools, CrossMap and `CADD.sh` command lines in the process; one change per step |
 | 7 | Remove the shell installer | `main_install`, `install_cluster.sh`, the `*.sbatch` scripts | | Delete `install_utils.sh` and the bash part of the digest |
 
 Each phase is its own pull request against `main` once PR #1 is merged.

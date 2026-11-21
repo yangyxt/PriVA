@@ -860,34 +860,6 @@ pub(crate) fn private_config_for_test(
 const STUB_CADD: &str =
     "#Chrom\tPos\tRef\tAlt\tRawScore\tPHRED\tFeatureID\n1\t10\tA\tG\t1.0\t10\tSTUB\n";
 
-/// One function of annotation_vcf.sh, with the arguments main_workflow
-/// gives it (read with the script's own read_yaml, so a missing key is
-/// `null` as there). Sourced from this file, the script defines its
-/// functions and runs nothing itself.
-/// Arguments: SOURCE_ROOT CONFIG VCF STEP [OUTPUT].
-pub(super) const ANNOTATION_STEP: &str = r#"#!/usr/bin/env bash
-source "$1/scripts/annotation_vcf.sh" || exit 1
-config=$2 vcf=$3 step=$4 output=${5:-}
-value() { read_yaml "$config" "$1"; }
-case $step in
-    preprocess)
-        preprocess_vcf -i "$vcf" -o "$output" -r "$(value ref_genome)" -t "$(value threads)" ;;
-    gnomad)
-        anno_agg_gnomAD_data "$vcf" "$(value threads)" "$(value assembly)" "$(value gnomad_vcf_chrX)" ;;
-    clinvar)
-        anno_clinvar_data "$vcf" "$(value clinvar_vcf)" "$(value threads)" ;;
-    control)
-        optional=$(value control_vcf_optional)
-        anno_control_vcf_allele "$vcf" "$(value control_vcf)" "$(value ped_file)" "$(value threads)" "${optional:-false}" ;;
-    vep)
-        anno_VEP_data --input_vcf "$vcf" --config "$config" --assembly "$(value assembly)"             --ref_genome "$(value ref_genome)" --vep_cache_dir "$(value vep_cache_dir)"             --vep_plugins_dir "$(value vep_plugins_dir)"             --vep_plugins_cachedir "$(value vep_plugins_cachedir)" --threads "$(value threads)" ;;
-    cadd)
-        Calculate_CADD "$vcf" "$config" "$output" ;;
-    *)
-        echo "Unknown annotation step: $step" >&2; exit 2 ;;
-esac
-"#;
-
 pub(crate) fn run(options: &Options) -> Result<()> {
     let bundle = PathBuf::from(options.value("bundle"));
     let record = read_json(&bundle.join("contract.json"))?;
@@ -1136,33 +1108,26 @@ pub(crate) fn run(options: &Options) -> Result<()> {
         .iter()
         .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
         .collect();
-        // The family steps run their tools from here, without the shell.
-        let private = read_config(&config_path)?;
-        let family_steps = super::family_steps::Context {
+        // The steps run their tools from here, without the shell scripts.
+        let private = crate::pipeline_steps::tools::Settings::read(&config_path)?;
+        let steps = crate::pipeline_steps::tools::Context {
             root: &root,
             binary: &binary,
             config_path: &config_path,
-            config: &private,
+            settings: &private,
             env: &env,
         };
         let cadd_text = cadd_path.as_deref().map(display).unwrap_or_default();
-        let step_command = |step: &str, output: Option<String>| -> Result<Vec<String>> {
-            fs::write("annotation_step.sh", ANNOTATION_STEP)?;
-            let mut command = vec![
-                "bash".into(),
-                "annotation_step.sh".into(),
-                display(&root),
-                config_text.clone(),
-                input.clone(),
-                step.into(),
-            ];
-            command.extend(output);
-            Ok(command)
-        };
         let anno = |suffix: &str| display(&result.join(format!("{base}.anno{suffix}")));
         let command: Option<Vec<String>> = match phase {
-            "annotation-preprocess" => Some(step_command("preprocess", Some(anno(".vcf.gz")))?),
-            "annotation-cadd" => Some(step_command("cadd", Some(anno(".cadd.tsv")))?),
+            "annotation-preprocess" => {
+                crate::pipeline_steps::preprocess::run(&steps, &input, &anno(".vcf.gz"))?;
+                None
+            }
+            "annotation-cadd" => {
+                crate::pipeline_steps::cadd::run(&steps, &input, &anno(".cadd.tsv"))?;
+                None
+            }
             "annotation-merge" => {
                 let mut steps = Vec::new();
                 for (name, option) in [
@@ -1181,17 +1146,32 @@ pub(crate) fn run(options: &Options) -> Result<()> {
                 super::info_merge::merge(&input_vcf, &steps, &input_vcf)?;
                 None
             }
-            _ if step.is_some() => Some(step_command(step.unwrap(), None)?),
+            "annotation-gnomad" => {
+                crate::pipeline_steps::gnomad::run(&steps, &input)?;
+                None
+            }
+            "annotation-clinvar" => {
+                crate::pipeline_steps::clinvar::run(&steps, &input)?;
+                None
+            }
+            "annotation-control" => {
+                crate::pipeline_steps::control::run(&steps, &input)?;
+                None
+            }
+            "annotation-vep" => {
+                crate::pipeline_steps::vep::run(&steps, &input)?;
+                None
+            }
             "prioritization-combine" => {
-                super::family_steps::combine(&family_steps, &input, &cadd_text)?;
+                crate::pipeline_steps::family::combine(&steps, &input, &cadd_text)?;
                 None
             }
             "prioritization-splicing" => {
-                super::family_steps::splicing(&family_steps, &input)?;
+                crate::pipeline_steps::family::splicing(&steps, &input)?;
                 None
             }
             "prioritization-utr" => {
-                super::family_steps::utr(&family_steps, &input)?;
+                crate::pipeline_steps::family::utr(&steps, &input)?;
                 None
             }
             "prioritization-join" => {
@@ -1210,7 +1190,7 @@ pub(crate) fn run(options: &Options) -> Result<()> {
                 None
             }
             "prioritization-acmg" => {
-                super::family_steps::acmg(&family_steps, &input, family.as_deref())?;
+                crate::pipeline_steps::family::acmg(&steps, &input, family.as_deref())?;
                 None
             }
             "annotation" if field("mode") == "raw" => Some(vec![
@@ -1224,12 +1204,12 @@ pub(crate) fn run(options: &Options) -> Result<()> {
             ]),
             // Without a family the steps run their no-pedigree mode.
             "filtration" => {
-                super::family_steps::filtration(&family_steps, &input, family.as_deref())?;
+                crate::pipeline_steps::family::filtration(&steps, &input, family.as_deref())?;
                 None
             }
             "prioritization" => {
-                super::family_steps::prioritize(
-                    &family_steps,
+                crate::pipeline_steps::family::prioritize(
+                    &steps,
                     &input,
                     &cadd_text,
                     family.as_deref(),

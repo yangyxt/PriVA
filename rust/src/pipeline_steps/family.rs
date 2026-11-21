@@ -18,340 +18,31 @@
 //! Left out: the checks that skipped a step whose output was newer than its
 //! inputs (a task starts in a new folder, so its output never exists before
 //! it), and the scripts' table displays (log lines only).
-use super::contract::Config;
-use super::{Result, refuse};
-use crate::yaml_config::{ConfigValue, Scalar};
+use super::tools::{
+    Context, Result, args, grep_matches, has_column, is_file, line_count, log, newer, not_empty,
+    option, quoted_path, random_tag, refuse, replace_vcf, unquoted_path, words,
+};
 use std::collections::HashSet;
 use std::fs;
 use std::io::{BufRead, BufReader, BufWriter, Write};
-use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::path::Path;
+use std::process::Stdio;
 
-/// What a family step needs: the source checkout (its `data/` folder), the
-/// pinned priva program, the private configuration and the environment the
-/// task gives its commands.
-pub(super) struct Context<'a> {
-    pub(super) root: &'a Path,
-    pub(super) binary: &'a str,
-    pub(super) config_path: &'a Path,
-    pub(super) config: &'a Config,
-    pub(super) env: &'a [(String, String)],
-}
-
-fn log(message: &str) {
-    eprintln!("[priva task] {message}");
-}
-
-impl Context<'_> {
-    /// `read_yaml CONFIG KEY`.
-    pub(super) fn value(&self, key: &str) -> String {
-        read_yaml(self.config, key)
-    }
-
-    fn data(&self, relative: &str) -> PathBuf {
-        self.root.join("data").join(relative)
-    }
-
-    fn command(&self, program: &str) -> Command {
-        let mut command = Command::new(program);
-        for (key, value) in self.env {
-            command.env(key, value);
-        }
-        // priva_resolve_binary pointed the program at this checkout.
-        command.env("PRIVA_DATA_DIR", self.root.join("data"));
-        command.env("PRIVA_SCRIPT_DIR", self.root.join("scripts"));
-        command
-    }
-
-    /// Runs PROGRAM ARGS and fails with its exit status.
-    fn run(&self, program: &str, args: &[String]) -> Result<()> {
-        log(&format!("Running: {program} {}", args.join(" ")));
-        let status = self.command(program).args(args).status()?;
-        if !status.success() {
-            return refuse(format!(
-                "{program} {} failed ({status})",
-                args.first().map(String::as_str).unwrap_or("")
-            ));
-        }
-        Ok(())
-    }
-
-    fn priva(&self, args: Vec<String>) -> Result<()> {
-        self.run(self.binary, &args)
-    }
-
-    /// The output of a command, empty when it cannot run.
-    fn output(&self, program: &str, args: &[&str]) -> String {
-        self.command(program)
-            .args(args)
-            .stderr(Stdio::null())
-            .output()
-            .map(|out| String::from_utf8_lossy(&out.stdout).into_owned())
-            .unwrap_or_default()
-    }
-
-    /// `count_vcf_records VCF`: `bcftools query -f '\n' VCF | wc -l`.
-    fn count_records(&self, vcf: &str) -> usize {
-        self.output("bcftools", &["query", "-f", "\\n", vcf])
-            .bytes()
-            .filter(|b| *b == b'\n')
-            .count()
-    }
-
-    /// `check_vcf_index VCF`: a current `.tbi` (or `.csi`), made or renewed
-    /// with bcftools when it is missing or older than the VCF.
-    fn vcf_index(&self, vcf: &str) -> bool {
-        let ok = |args: &[&str]| {
-            self.command("bcftools")
-                .args(args)
-                .status()
-                .is_ok_and(|s| s.success())
-        };
-        if vcf.ends_with(".vcf.gz") || vcf.ends_with(".vcf.bgz") {
-            let tbi = format!("{vcf}.tbi");
-            let csi = format!("{vcf}.csi");
-            if Path::new(&tbi).is_file() {
-                if newer(&tbi, vcf) {
-                    let _ = fs::remove_file(&csi);
-                    return true;
-                }
-                let renewed = ok(&["index", "-t", "-f", vcf]);
-                if renewed {
-                    let _ = fs::remove_file(&csi);
-                }
-                renewed
-            } else if Path::new(&csi).is_file() {
-                !older(&csi, vcf) || ok(&["index", "-f", vcf])
-            } else {
-                ok(&["index", "-t", "-f", vcf])
-            }
-        } else if vcf.ends_with(".vcf") {
-            true
-        } else if vcf.ends_with(".bcf") {
-            let csi = format!("{vcf}.csi");
-            (Path::new(&csi).is_file() && newer(&csi, vcf)) || ok(&["index", "-f", vcf])
-        } else {
-            false
-        }
-    }
-
-    /// `check_vcf_validity VCF [LINES [SAMPLES]]`: a compressed, plain or
-    /// BCF file with its index, at least LINES records (1 when not given)
-    /// and, when SAMPLES (comma-separated) are given, exactly those samples.
-    /// The script's `bcftools view | head` format check could not fail
-    /// without pipefail, so it is not repeated. Not repeated either: its
-    /// fallback to a plain copy beside a compressed file (a task's folder
-    /// never holds one), and the compressed copy it wrote beside a plain
-    /// file to list its samples.
-    fn vcf_valid(&self, vcf: &str, lines: usize, samples: Option<&str>) -> bool {
-        if !Path::new(vcf).is_file() {
-            return false;
-        }
-        let known = vcf.ends_with("gz") || vcf.ends_with(".vcf") || vcf.ends_with(".bcf");
-        if !known || !self.vcf_index(vcf) || self.count_records(vcf) < lines {
-            return false;
-        }
-        match samples {
-            None | Some("") => true,
-            Some(expected) => {
-                let sorted = |items: Vec<String>| {
-                    let mut items: Vec<String> =
-                        items.into_iter().filter(|s| !s.is_empty()).collect();
-                    items.sort();
-                    items.dedup();
-                    items.join(",")
-                };
-                let actual = sorted(
-                    self.output("bcftools", &["query", "-l", vcf])
-                        .lines()
-                        .map(str::to_owned)
-                        .collect(),
-                );
-                actual == sorted(expected.split(',').map(str::to_owned).collect())
-            }
-        }
-    }
-}
-
-/// `read_yaml FILE KEY` of common_bash_utils.sh: yq's JSON of the value with
-/// the quotes of a string taken off.
-pub(super) fn read_yaml(config: &Config, key: &str) -> String {
-    match config.get(key) {
-        None | Some(ConfigValue::Scalar(Scalar::Null)) => "null".to_owned(),
-        Some(ConfigValue::Scalar(Scalar::Bool(flag))) => flag.to_string(),
-        Some(ConfigValue::Scalar(Scalar::Str(text))) => text.clone(),
-        Some(ConfigValue::Scalar(Scalar::Int(text))) => text.clone(),
-        Some(ConfigValue::Scalar(other)) => other.python_repr(),
-        Some(ConfigValue::Opaque(text)) => text.clone(),
-    }
-}
-
-/// A value the scripts expanded without quotes: its words.
-fn words(value: &str) -> Vec<String> {
-    value.split_whitespace().map(str::to_owned).collect()
-}
-
-/// `--OPTION VALUE` with VALUE unquoted.
-fn option(name: &str, value: &str) -> Vec<String> {
-    let mut out = vec![name.to_owned()];
-    out.extend(words(value));
-    out
-}
-
-/// `${path/.vcf*/SUFFIX}`: everything from the first `.vcf` replaced.
-fn replace_vcf(path: &str, suffix: &str) -> String {
-    match path.find(".vcf") {
-        Some(at) => format!("{}{suffix}", &path[..at]),
-        None => path.to_owned(),
-    }
-}
-
-fn mtime(path: &str) -> Option<std::time::SystemTime> {
-    fs::metadata(path).and_then(|m| m.modified()).ok()
-}
-
-/// `[[ A -nt B ]]`.
-fn newer(a: &str, b: &str) -> bool {
-    match (mtime(a), mtime(b)) {
-        (Some(x), Some(y)) => x > y,
-        (Some(_), None) => true,
-        _ => false,
-    }
-}
-
-/// `[[ A -ot B ]]`.
-fn older(a: &str, b: &str) -> bool {
-    match (mtime(a), mtime(b)) {
-        (Some(x), Some(y)) => x < y,
-        (None, Some(_)) => true,
-        _ => false,
-    }
-}
-
-fn is_file(path: &str) -> bool {
-    Path::new(path).is_file()
-}
-
-/// `[[ -s PATH ]]`.
-fn not_empty(path: &str) -> bool {
-    fs::metadata(path).is_ok_and(|m| m.len() > 0)
-}
-
-/// `check_table_column TABLE COLUMN`: the header names COLUMN.
-fn has_column(table: &str, column: &str) -> bool {
-    let Ok(file) = fs::File::open(table) else {
-        return false;
-    };
-    let mut header = String::new();
-    if BufReader::new(file).read_line(&mut header).is_err() {
-        return false;
-    }
-    header
-        .trim_end_matches(['\n', '\r'])
-        .split('\t')
-        .any(|name| name == column)
-}
-
-/// `grep PATTERN` for a pattern whose only special character is `.` (any
-/// character), as the allele-frequency expression is; a pattern with other
-/// special characters is looked for as it is.
-fn grep_matches(line: &str, pattern: &str) -> bool {
-    if pattern.contains(['*', '[', '^', '$', '\\']) {
-        return line.contains(pattern);
-    }
-    let needle: Vec<char> = pattern.chars().collect();
-    let hay: Vec<char> = line.chars().collect();
-    hay.len() >= needle.len()
-        && (0..=hay.len() - needle.len()).any(|start| {
-            needle
-                .iter()
-                .zip(&hay[start..])
-                .all(|(p, h)| *p == '.' || p == h)
-        })
-}
-
-fn line_count(path: &str) -> usize {
-    fs::read(path)
-        .map(|bytes| bytes.iter().filter(|b| **b == b'\n').count())
-        .unwrap_or(0)
-}
-
-/// `check_path PATH file NAME` with PATH unquoted: the shell passed PATH's
-/// words and then `file NAME`, so an empty value made `file` the path and
-/// NAME the type (which passes), and a value of two words made its second
-/// word the type.
+/// `check_path VALUE file NAME`, VALUE unquoted, collecting the message.
 fn unquoted_file(value: &str, name: &str, errors: &mut Vec<String>) {
-    let mut arguments = words(value);
-    arguments.extend(["file".to_owned(), name.to_owned()]);
-    let (path, kind) = (&arguments[0], &arguments[1]);
-    let missing = match kind.as_str() {
-        "file" => !is_file(path),
-        "dir" => !Path::new(path).is_dir(),
-        _ => false,
-    };
-    if missing {
-        let label = arguments.get(2).map_or("", String::as_str);
-        errors.push(format!("{label} {kind} not found: {path}"));
-    }
+    errors.extend(unquoted_path(value, "file", name));
 }
 
-/// `check_path "PATH" file NAME`.
+/// `check_path "VALUE" file NAME`, collecting the message.
 fn quoted_file(value: &str, name: &str, errors: &mut Vec<String>) {
-    if value.is_empty() {
-        errors.push(format!("{name} not specified"));
-    } else if !is_file(value) {
-        errors.push(format!("{name} file not found: {value}"));
-    }
-}
-
-/// The steps `priva task family-step --step` runs.
-pub(super) const STEPS: &[&str] = &[
-    "filtration",
-    "prioritization",
-    "combine",
-    "splicing",
-    "utr",
-    "acmg",
-];
-
-/// `priva task family-step`: one family step outside Nextflow, in the
-/// current folder, with CONFIG as its configuration and ROOT as the checkout
-/// whose `data/` it reads. It verifies no contract; it is for checking a
-/// step against the shell functions it replaced and for looking into one
-/// family by hand. The priva program is PRIVA_BINARY, else this program.
-pub(super) fn run_step(options: &super::Options) -> Result<()> {
-    let root = PathBuf::from(options.value("root"));
-    let config_path = PathBuf::from(options.value("config"));
-    let config = super::contract::read_config(&config_path)?;
-    let binary = match std::env::var("PRIVA_BINARY") {
-        Ok(path) if !path.is_empty() => path,
-        _ => std::env::current_exe()?.display().to_string(),
-    };
-    let env = vec![("PRIVA_BINARY".to_owned(), binary.clone())];
-    let context = Context {
-        root: &root,
-        binary: &binary,
-        config_path: &config_path,
-        config: &config,
-        env: &env,
-    };
-    let family = options.get("family").filter(|v| !v.is_empty());
-    let value = |name: &str| options.value(name);
-    match options.value("step") {
-        "filtration" => filtration(&context, value("vcf"), family),
-        "prioritization" => prioritize(&context, value("vcf"), value("cadd"), family),
-        "combine" => combine(&context, value("vcf"), value("cadd")),
-        "splicing" => splicing(&context, value("table")),
-        "utr" => utr(&context, value("table")),
-        _ => acmg(&context, value("table"), family),
-    }
+    errors.extend(quoted_path(value, "file", name));
 }
 
 // ---------------------------------------------------------------------------
 // Prioritization
 
 /// `combine`: the family table from the filtered VCF and CADD table.
-pub(super) fn combine(context: &Context, vcf: &str, cadd: &str) -> Result<()> {
+pub(crate) fn combine(context: &Context, vcf: &str, cadd: &str) -> Result<()> {
     let table = replace_vcf(vcf, ".tsv");
     if context.count_records(vcf) < 1 && context.vcf_valid(vcf, 0, None) {
         fs::write(&table, "")?;
@@ -369,10 +60,7 @@ pub(super) fn combine(context: &Context, vcf: &str, cadd: &str) -> Result<()> {
     }
     let configured = context.value("hpo_assertions");
     let hpo = if configured.is_empty() || configured == "null" {
-        context
-            .data("hpo/genes_to_phenotype.assertions.tsv.gz")
-            .display()
-            .to_string()
+        context.data("hpo/genes_to_phenotype.assertions.tsv.gz")
     } else {
         configured
     };
@@ -388,20 +76,12 @@ pub(super) fn combine(context: &Context, vcf: &str, cadd: &str) -> Result<()> {
     }
     // prepare_combined_tab quoted each value.
     let threads = context.value("threads_per_fam");
-    let args = [
+    context.priva(
         "combine-annotations",
-        "-i",
-        vcf,
-        "-c",
-        cadd,
-        "-o",
-        &table,
-        "-p",
-        &hpo,
-        "-t",
-        &threads,
-    ];
-    context.priva(args.iter().map(|a| (*a).to_owned()).collect())?;
+        args(&[
+            "-i", vcf, "-c", cadd, "-o", &table, "-p", &hpo, "-t", &threads,
+        ]),
+    )?;
     if !is_file(&table) {
         return refuse(format!("combine-annotations wrote no table {table}"));
     }
@@ -418,7 +98,7 @@ fn already_done(table: &str, inputs: &[&str], binary: &str, columns: &[&str]) ->
 }
 
 /// `splicing`: priva splicing-analysis adds the splicing columns.
-pub(super) fn splicing(context: &Context, table: &str) -> Result<()> {
+pub(crate) fn splicing(context: &Context, table: &str) -> Result<()> {
     if !not_empty(table) {
         return Ok(());
     }
@@ -441,21 +121,18 @@ pub(super) fn splicing(context: &Context, table: &str) -> Result<()> {
         ));
         return Ok(());
     }
-    let mut args = vec!["splicing-analysis".to_owned()];
+    let mut args = Vec::new();
     args.extend(option("--anno_table", table));
     args.extend(option("--transcript_domain_map", &domain_map));
     args.extend(option("--intolerant_domains", &intolerant));
     args.extend(option("--interpro_entry_map_pkl", &interpro));
-    args.extend(option(
-        "--config",
-        &context.config_path.display().to_string(),
-    ));
+    args.extend(option("--config", &context.config_text()));
     args.extend(option("--threads", &context.value("threads_per_fam")));
-    context.priva(args)
+    context.priva("splicing-analysis", args)
 }
 
 /// `utr`: priva utr-anno-interpret adds the 5' UTR columns.
-pub(super) fn utr(context: &Context, table: &str) -> Result<()> {
+pub(crate) fn utr(context: &Context, table: &str) -> Result<()> {
     if !not_empty(table) {
         return Ok(());
     }
@@ -472,16 +149,16 @@ pub(super) fn utr(context: &Context, table: &str) -> Result<()> {
         ));
         return Ok(());
     }
-    let mut args = vec!["utr-anno-interpret".to_owned()];
+    let mut args = Vec::new();
     args.extend(option("--variants_table", table));
     args.extend(option("--domain_map", &domain_map));
     args.extend(option("--intolerant_domains", &intolerant));
-    context.priva(args)
+    context.priva("utr-anno-interpret", args)
 }
 
 /// `acmg`: priva acmg-assign assigns the ACMG criteria and writes the
 /// criteria matrix TABLE.acmg.tsv beside the table.
-pub(super) fn acmg(context: &Context, table: &str, family: Option<&str>) -> Result<()> {
+pub(crate) fn acmg(context: &Context, table: &str, family: Option<&str>) -> Result<()> {
     if !not_empty(table) {
         // ${table%.tsv}.acmg.tsv
         fs::write(
@@ -491,7 +168,7 @@ pub(super) fn acmg(context: &Context, table: &str, family: Option<&str>) -> Resu
         return Ok(());
     }
     let v = |key: &str| context.value(key);
-    let data = |relative: &str| context.data(relative).display().to_string();
+    let data = |relative: &str| context.data(relative);
     let mean_am_score_table = data("alphamissense/alphamissense_mean_score.tsv");
     let ped_table = v("ped_file");
     let clinvar_aa = v("clinvar_aa_stat");
@@ -632,7 +309,7 @@ pub(super) fn acmg(context: &Context, table: &str, family: Option<&str>) -> Resu
         Vec::new()
     };
 
-    let mut args = vec!["acmg-assign".to_owned()];
+    let mut args = Vec::new();
     for (name, value) in [
         ("--anno_table", table),
         ("--am_score_table", mean_am_score_table.as_str()),
@@ -683,12 +360,12 @@ pub(super) fn acmg(context: &Context, table: &str, family: Option<&str>) -> Resu
     ] {
         args.extend(extra);
     }
-    context.priva(args)
+    context.priva("acmg-assign", args)
 }
 
 /// The whole prioritization of one family (`main_prioritization`): the
 /// table, then splicing, 5' UTR and ACMG on that same table.
-pub(super) fn prioritize(
+pub(crate) fn prioritize(
     context: &Context,
     vcf: &str,
     cadd: &str,
@@ -721,31 +398,23 @@ pub(super) fn prioritize(
 // ---------------------------------------------------------------------------
 // Filtration
 
-fn random_tag() -> String {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |d| d.as_nanos());
-    format!("{:x}{:x}", std::process::id(), nanos)
-}
-
 /// `main_filtration`: with a PED file, the family's samples
 /// (`bcftools view -s`), the records priva pedigree-filter keeps, then the
 /// allele-frequency filter on that file; without one, the allele-frequency
 /// filter on the cohort VCF. Then the CADD rows of the records that are left.
-pub(super) fn filtration(context: &Context, vcf: &str, family: Option<&str>) -> Result<()> {
+pub(crate) fn filtration(context: &Context, vcf: &str, family: Option<&str>) -> Result<()> {
     let ped = context.value("ped_file");
     let threads = context.value("threads_per_fam");
     let family = family.unwrap_or("");
     let filtered = if is_file(&ped) {
         let family_vcf = extract_family(context, vcf, &ped, family, &threads)?;
         let output = replace_vcf(&family_vcf, ".filtered.vcf.gz");
-        let mut args = vec!["pedigree-filter".to_owned()];
+        let mut args = Vec::new();
         args.extend(option("-v", &family_vcf));
         args.extend(option("-p", &ped));
         args.extend(option("-f", family));
         args.extend(option("-o", &output));
-        context.priva(args)?;
+        context.priva("pedigree-filter", args)?;
         context.run(
             "tabix",
             &["-p".into(), "vcf".into(), "-f".into(), output.clone()],
@@ -950,77 +619,4 @@ fn filter_cadd(context: &Context, vcf: &str, cadd: &str, output: &str) -> Result
         line_count(cadd)
     ));
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn vcf_suffix_replacement_follows_the_shell_pattern() {
-        assert_eq!(replace_vcf("/r/a.anno.vcf.gz", ".tsv"), "/r/a.anno.tsv");
-        assert_eq!(
-            replace_vcf("a.anno.F1.vcf.gz", ".filtered.vcf.gz"),
-            "a.anno.F1.filtered.vcf.gz"
-        );
-        assert_eq!(replace_vcf("table.tsv", ".x"), "table.tsv");
-    }
-
-    #[test]
-    fn unquoted_values_split_into_words() {
-        assert_eq!(option("--x", ""), vec!["--x"]);
-        assert_eq!(option("--x", "a, b"), vec!["--x", "a,", "b"]);
-        let mut errors = Vec::new();
-        unquoted_file("", "k", &mut errors);
-        assert!(errors.is_empty());
-        quoted_file("", "k", &mut errors);
-        assert_eq!(errors, vec!["k not specified"]);
-    }
-
-    #[test]
-    fn unquoted_paths_are_checked_as_the_shell_passed_their_words() {
-        let mut errors = Vec::new();
-        // Two words: the second became check_path's type, so nothing failed.
-        unquoted_file("/missing/a /missing/b", "k", &mut errors);
-        assert!(errors.is_empty());
-        unquoted_file("/missing/a", "k", &mut errors);
-        unquoted_file("null", "n", &mut errors);
-        assert_eq!(
-            errors,
-            vec!["k file not found: /missing/a", "n file not found: null"]
-        );
-    }
-
-    #[test]
-    fn grep_dot_matches_any_character() {
-        let line = "##bcftools_viewCommand=view -e AF_grpmax_joint > 0.01 -Ou x.vcf.gz";
-        assert!(grep_matches(line, "AF_grpmax_joint > 0.01"));
-        assert!(grep_matches(
-            "AF_grpmax_joint > 0x01",
-            "AF_grpmax_joint > 0.01"
-        ));
-        assert!(!grep_matches(
-            "AF_grpmax_joint > 0.05",
-            "AF_grpmax_joint > 0.01"
-        ));
-        assert!(!grep_matches("short", "AF_grpmax_joint > 0.01"));
-    }
-
-    #[test]
-    fn read_yaml_renders_values_as_yq_did() {
-        let text = "a: \"x\"\nb: null\nc: 0.0001\nd: false\ne: 8\n";
-        let doc = match crate::yaml_config::parse_config(text).unwrap() {
-            crate::yaml_config::Parsed::Mapping(doc) => doc,
-            _ => unreachable!(),
-        };
-        let config = Config {
-            text: text.into(),
-            doc,
-        };
-        let got: Vec<String> = ["a", "b", "c", "d", "e", "missing"]
-            .iter()
-            .map(|k| read_yaml(&config, k))
-            .collect();
-        assert_eq!(got, ["x", "null", "0.0001", "false", "8", "null"]);
-    }
 }

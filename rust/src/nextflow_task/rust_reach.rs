@@ -1,6 +1,7 @@
-//! The Rust files behind a `priva` command, for an annotation step's hub
-//! lineage: a shell function that runs `priva COMMAND` depends on the Rust
-//! code of that command.
+//! The Rust files behind a `priva` command or an annotation step, for the
+//! lineages of the install steps and the annotation hub folders: code that
+//! runs `priva COMMAND` depends on the Rust code of that command, and an
+//! annotation step on its file under pipeline_steps/ and what that names.
 //!
 //! The files of a command are found from the checkout's rust/src, file by
 //! file: the file the command table (`run` in cli.rs) hands the command to,
@@ -321,6 +322,28 @@ pub(crate) fn called_commands(line: &str) -> Vec<String> {
 /// command whose file is `entry`, and the files they embed. A Rust file is
 /// hashed over its counted lines, an embedded file over its content.
 pub(crate) fn command_files(root: &Path, entry: &str) -> Result<BTreeMap<String, String>> {
+    let (texts, embedded_files) = reach(root, entry)?;
+    let mut out = BTreeMap::new();
+    for (file, text) in texts {
+        let digest = crate::sha256::sha256_hex(text.as_bytes());
+        out.insert(file, digest);
+    }
+    for file in embedded_files {
+        let digest = crate::sha256::sha256_file(&root.join(&file))?;
+        out.entry(file).or_insert(digest);
+    }
+    Ok(out)
+}
+
+/// {file relative to the checkout: its counted lines} for the Rust files
+/// `entry` reaches, the ones command_files hashes.
+pub(crate) fn reached_texts(root: &Path, entry: &str) -> Result<BTreeMap<String, String>> {
+    Ok(reach(root, entry)?.0)
+}
+
+/// The counted text of each Rust file `entry` reaches, and the files they
+/// embed, both relative to the checkout.
+fn reach(root: &Path, entry: &str) -> Result<(BTreeMap<String, String>, BTreeSet<String>)> {
     let src = root.join("rust/src");
     let mut texts: BTreeMap<String, String> = BTreeMap::new();
     let mut embedded_files = BTreeSet::new();
@@ -378,16 +401,11 @@ pub(crate) fn command_files(root: &Path, entry: &str) -> Result<BTreeMap<String,
         embedded(&text, &src.join(&file), root, &mut embedded_files);
         texts.insert(file, text);
     }
-    let mut out = BTreeMap::new();
-    for (file, text) in texts {
-        let digest = crate::sha256::sha256_hex(text.as_bytes());
-        out.insert(format!("rust/src/{file}"), digest);
-    }
-    for file in embedded_files {
-        let digest = crate::sha256::sha256_file(&root.join(&file))?;
-        out.entry(file).or_insert(digest);
-    }
-    Ok(out)
+    let texts = texts
+        .into_iter()
+        .map(|(file, text)| (format!("rust/src/{file}"), text))
+        .collect();
+    Ok((texts, embedded_files))
 }
 
 #[cfg(test)]

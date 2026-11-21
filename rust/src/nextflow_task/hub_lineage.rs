@@ -2,17 +2,14 @@
 //! of the step's name, the code that step runs, and the identity of every
 //! resource that step reads.
 //!
-//! The code of a step is only what that step runs: its own lines of the
-//! annotation step wrapper, the shell functions those lines call and every
-//! function they call in turn (in annotation_vcf.sh and common_bash_utils.sh),
-//! the script-level variables those functions name, and the files under
-//! scripts/ and data/ those functions name. Comment lines and blank lines do
-//! not count. A change inside one step's function therefore gives a new
-//! folder for that step only; a change to a shared function gives a new
-//! folder for each step that calls it. Where those functions run a `priva`
-//! command, the Rust files behind that command count too (rust_reach.rs),
-//! except installer commands (INSTALLER_COMMANDS), which an annotation step
-//! never runs.
+//! The code of a step is only what that step runs: its Rust file
+//! (rust/src/pipeline_steps/STEP.rs) and every file of the crate that one
+//! names in turn (rust_reach.rs), the `priva` commands those files run, each
+//! with the Rust files behind it, and the files of the checkout's data/
+//! folder they name. Comment lines, blank lines and test modules do not
+//! count. A change to one step's file therefore gives a new folder for that
+//! step only; a change to a file several steps share (pipeline_steps/tools.rs)
+//! gives a new folder for each of them.
 //!
 //! A resource's identity leaves its path out, so moving the checkout or the
 //! caches keeps the folder: a file inside the PriVA checkout (bundled data)
@@ -29,19 +26,6 @@ use super::contract::{json_digest, object, text};
 use crate::json_text::Json;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
-
-/// The shell files whose functions the annotation steps run.
-const SHELL_FILES: [&str; 2] = ["annotation_vcf.sh", "common_bash_utils.sh"];
-
-/// `priva` commands of the installer that the annotation functions name but
-/// an annotation step never runs, so their Rust files stay out of a step's
-/// lineage. The installer annotates the ClinVar file with the gnomAD and VEP
-/// functions; only then (PRIVA_CLINVAR_RECOVERY_CONFIG set, or the function
-/// entered as anno_VEP_cache_candidate) do those functions call
-/// `clinvar-gene-refresh`, which keeps the installer's journal and receipts
-/// and writes no annotation value. A unit test checks those conditions in
-/// scripts/annotation_vcf.sh. The install steps count this code themselves.
-const INSTALLER_COMMANDS: [&str; 1] = ["clinvar-gene-refresh"];
 
 pub(crate) const SOURCES: [&str; 5] = ["gnomad", "clinvar", "control", "vep", "cadd"];
 
@@ -109,354 +93,107 @@ fn identity(record: &Json, root: &Path) -> Result<Json> {
     ]))
 }
 
-/// The name a shell function definition line gives, for `function name {`,
-/// `function name() {` and `name () {` at the start of a line.
-fn function_name(line: &str) -> Option<&str> {
-    let is_name = |c: char| c.is_ascii_alphanumeric() || c == '_';
-    let (rest, keyword) = match line.strip_prefix("function ") {
-        Some(rest) => (rest.trim_start(), true),
-        None => (line, false),
-    };
-    let end = rest.find(|c: char| !is_name(c)).unwrap_or(rest.len());
-    let (name, tail) = rest.split_at(end);
-    if name.is_empty() || name.starts_with(|c: char| c.is_ascii_digit()) {
-        return None;
-    }
-    let tail = tail.trim_start();
-    let (tail, parentheses) = match tail.strip_prefix("()") {
-        Some(tail) => (tail.trim_start(), true),
-        None => (tail, false),
-    };
-    (tail.starts_with('{') && (keyword || parentheses)).then_some(name)
-}
-
-/// The variable a script-level assignment line sets (`NAME=...`,
-/// `declare -a NAME=(`), if any.
-fn assigned_name(line: &str) -> Option<&str> {
-    let mut rest = line;
-    for prefix in ["declare ", "export ", "readonly "] {
-        if let Some(after) = rest.strip_prefix(prefix) {
-            rest = after.trim_start();
-            while rest.starts_with('-') {
-                rest = rest.split_once(' ')?.1.trim_start();
-            }
-        }
-    }
-    let (name, _) = rest.split_once('=')?;
-    let named = !name.is_empty()
-        && !name.starts_with(|c: char| c.is_ascii_digit())
-        && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
-    named.then_some(name)
-}
-
-/// The names in a line: runs of letters, digits and `_`.
-fn names(line: &str) -> impl Iterator<Item = &str> {
-    line.split(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
-        .filter(|word| !word.is_empty())
-}
-
-/// The names in a line that may be a function the line runs. In a message (a
-/// log, echo or printf line) only a name where a command can start counts:
-/// after `$(`, a backquote, `|`, `&` or `;`. Read whole, a message that
-/// mentions a function would tie the step to it. The install steps' code
-/// digest (`called_words` in rust/src/install_task/digest.rs) reads lines the same way.
-fn run_names(line: &str) -> Vec<&str> {
-    let trimmed = line.trim_start();
-    let message = ["log", "echo", "printf"].iter().any(|command| {
-        trimmed
-            .strip_prefix(command)
-            .is_some_and(|rest| rest.is_empty() || rest.starts_with(char::is_whitespace))
-    });
-    if !message {
-        return names(line).collect();
-    }
+/// The string literals that follow `marker` in a text, with white space
+/// between them allowed: `.priva("NAME"` gives NAME.
+fn literals_after<'a>(text: &'a str, marker: &str) -> Vec<&'a str> {
     let mut found = Vec::new();
-    let mut rest = line;
-    while let Some(at) = rest.find(['`', '|', '&', ';', '(']) {
-        let opener = rest.as_bytes()[at];
-        let after = &rest[at + 1..];
-        rest = after;
-        if opener == b'(' && !line[..line.len() - after.len() - 1].ends_with('$') {
+    let mut from = 0;
+    while let Some(offset) = text[from..].find(marker) {
+        from += offset + marker.len();
+        let Some(rest) = text[from..].trim_start().strip_prefix('"') else {
             continue;
+        };
+        if let Some(end) = rest.find('"') {
+            found.push(&rest[..end]);
         }
-        if let Some(name) = names(after.trim_start()).next() {
-            if after.trim_start().starts_with(name) {
-                found.push(name);
+    }
+    found
+}
+
+/// The `priva` commands a step's Rust text runs: `context.priva("NAME", ..)`,
+/// `context.priva_succeeds("NAME", ..)`, and the command a tool is handed the
+/// program for (`"PRIVA_CADD_PRESCORE_BIN"` is `cadd-prescore`).
+fn run_commands(text: &str) -> BTreeSet<String> {
+    let mut found: BTreeSet<String> = [".priva(", ".priva_succeeds("]
+        .into_iter()
+        .flat_map(|marker| literals_after(text, marker))
+        .map(str::to_owned)
+        .collect();
+    let mut rest = text;
+    while let Some(at) = rest.find("\"PRIVA_") {
+        rest = &rest[at + "\"PRIVA_".len()..];
+        let Some(end) = rest.find('"') else {
+            break;
+        };
+        if let Some(tool) = rest[..end].strip_suffix("_BIN") {
+            if tool.chars().all(|c| c.is_ascii_uppercase() || c == '_') {
+                found.insert(tool.to_ascii_lowercase().replace('_', "-"));
             }
         }
     }
     found
 }
 
-/// The path-like words of a line: runs of letters, digits and `_ . / -`.
-fn path_words(line: &str) -> impl Iterator<Item = &str> {
-    line.split(|c: char| !(c.is_ascii_alphanumeric() || "_./-".contains(c)))
-        .filter(|word| !word.is_empty())
+/// The files of data/ a step's Rust text names: `context.data("PATH")`.
+fn data_files(text: &str) -> BTreeSet<String> {
+    literals_after(text, ".data(")
+        .into_iter()
+        .map(|path| format!("data/{path}"))
+        .collect()
 }
 
-/// The shell code the annotation steps can run, by unit: every function, every
-/// script-level variable, and the remaining script-level lines.
-#[derive(Default)]
-struct Shell {
-    functions: BTreeMap<String, Vec<String>>,
-    /// Script-level variable -> the lines that assign it.
-    variables: BTreeMap<String, Vec<String>>,
-    /// Script-level lines outside every function and assignment.
-    script_level: Vec<String>,
-}
-
-impl Shell {
-    fn read(root: &Path) -> Shell {
-        let mut shell = Shell::default();
-        for name in SHELL_FILES {
-            if let Ok(content) = std::fs::read_to_string(root.join("scripts").join(name)) {
-                shell.add(&content);
-            }
-        }
-        shell
+/// What one step's lineage records of its code.
+fn step_code(source: &str, root: &Path, table: &BTreeMap<String, String>) -> Result<Json> {
+    let entry = format!("pipeline_steps/{source}.rs");
+    if !root.join("rust/src").join(&entry).is_file() {
+        return Err(format!(
+            "{}: rust/src/{entry} is needed to count the code the {source} step runs",
+            root.display()
+        )
+        .into());
     }
-
-    /// Sorts the lines of one shell file into units. Comment lines and blank
-    /// lines are left out; a function ends at the first line starting with
-    /// `}`, an array assignment at the first line starting with `)`. The
-    /// block that runs only when the file is executed itself (not sourced,
-    /// as every task does) is left out: `if [[ "${#BASH_SOURCE[@]}" -eq 1 ]]`
-    /// to its `fi`.
-    fn add(&mut self, content: &str) {
-        #[derive(PartialEq)]
-        enum Inside {
-            Nothing,
-            Function,
-            Array,
-            DirectRun,
-        }
-        let mut inside = Inside::Nothing;
-        let mut unit = String::new();
-        for line in content.lines() {
-            let line = line.trim_end();
-            let counted = !line.trim_start().is_empty() && !line.trim_start().starts_with('#');
-            match inside {
-                Inside::DirectRun => {
-                    if line == "fi" {
-                        inside = Inside::Nothing;
-                    }
-                    continue;
-                }
-                Inside::Function | Inside::Array => {
-                    let (units, close) = match inside {
-                        Inside::Function => (&mut self.functions, '}'),
-                        _ => (&mut self.variables, ')'),
-                    };
-                    if counted {
-                        units.entry(unit.clone()).or_default().push(line.into());
-                    }
-                    if line.starts_with(close) {
-                        inside = Inside::Nothing;
-                    }
-                    continue;
-                }
-                Inside::Nothing => {}
-            }
-            if !counted {
-                continue;
-            }
-            if line.starts_with("if ") && line.contains("${#BASH_SOURCE[@]}\" -eq 1") {
-                inside = Inside::DirectRun;
-            } else if let Some(name) = function_name(line) {
-                unit = name.to_owned();
-                // A later definition of the same name replaces the earlier.
-                self.functions.insert(unit.clone(), vec![line.into()]);
-                inside = Inside::Function;
-            } else if let Some(name) = assigned_name(line) {
-                unit = name.to_owned();
-                self.variables
-                    .entry(unit.clone())
-                    .or_default()
-                    .push(line.into());
-                if line.ends_with('(') {
-                    inside = Inside::Array;
-                }
-            } else {
-                self.script_level.push(line.into());
-            }
-        }
+    let texts = super::rust_reach::reached_texts(root, &entry)?;
+    let (mut commands, mut data) = (BTreeSet::new(), BTreeSet::new());
+    for text in texts.values() {
+        commands.extend(run_commands(text));
+        data.extend(data_files(text));
     }
-
-    /// The functions and script-level variables a step runs: those its
-    /// wrapper lines name, and those they name in turn.
-    fn reached(&self, lines: &[&str]) -> (BTreeSet<&str>, BTreeSet<&str>) {
-        let (mut functions, mut variables) = (BTreeSet::new(), BTreeSet::new());
-        let mut pending: Vec<&str> = lines.to_vec();
-        while let Some(line) = pending.pop() {
-            for name in run_names(line) {
-                if let Some((name, unit)) = self.functions.get_key_value(name) {
-                    if functions.insert(name.as_str()) {
-                        pending.extend(unit.iter().map(String::as_str));
-                    }
-                }
-            }
-            for name in names(line) {
-                if let Some((name, unit)) = self.variables.get_key_value(name) {
-                    if variables.insert(name.as_str()) {
-                        pending.extend(unit.iter().map(String::as_str));
-                    }
-                }
-            }
-        }
-        (functions, variables)
+    let digests = |files: BTreeMap<String, String>| {
+        Json::Object(files.into_iter().map(|(f, d)| (f, text(d))).collect())
+    };
+    let step = digests(super::rust_reach::command_files(root, &entry)?);
+    if !commands.is_empty() && table.is_empty() {
+        return Err(format!(
+            "{}: rust/src/cli.rs is needed to count the Rust code the {source} step runs",
+            root.display()
+        )
+        .into());
     }
-
-    /// What one step's lineage records of its code.
-    fn step_code(&self, source: &str, root: &Path) -> Result<Json> {
-        let (wrapper, own) = wrapper_lines(source);
-        let mut lines: Vec<&str> = wrapper.clone();
-        lines.extend(&own);
-        let (functions, variables) = self.reached(&lines);
-        let digest = |lines: &[&str]| text(crate::sha256::sha256_hex(lines.join("\n").as_bytes()));
-        // The `priva` commands those lines run, each with its Rust files.
-        let mut called = BTreeSet::new();
-        let function_lines = functions
-            .iter()
-            .flat_map(|name| self.functions[*name].iter().map(String::as_str));
-        for line in lines.iter().copied().chain(function_lines) {
-            called.extend(super::rust_reach::called_commands(line));
-        }
-        let table = super::rust_reach::commands(root);
-        if !called.is_empty() && !root.join("rust/src/cli.rs").is_file() {
-            return Err(format!(
-                "{}: rust/src/cli.rs is needed to count the Rust code the {source} step runs",
-                root.display()
-            )
-            .into());
-        }
-        let mut rust = Vec::new();
-        let mut left_out = Vec::new();
-        for command in called {
-            let Some(entry) = table.get(&command) else {
-                continue;
-            };
-            if INSTALLER_COMMANDS.contains(&command.as_str()) {
-                left_out.push(text(command));
-                continue;
-            }
-            let files = super::rust_reach::command_files(root, entry)?
-                .into_iter()
-                .map(|(file, digest)| (file, text(digest)))
-                .collect();
-            rust.push((command, Json::Object(files)));
-        }
-        let mut files = BTreeSet::new();
-        let mut record = |units: &BTreeMap<String, Vec<String>>, reached: &BTreeSet<&str>| {
-            let mut out = Vec::new();
-            for name in reached {
-                let unit: Vec<&str> = units[*name].iter().map(String::as_str).collect();
-                for line in &unit {
-                    named_files(line, root, &mut files);
-                }
-                out.push(((*name).to_owned(), digest(&unit)));
-            }
-            Json::Object(out)
+    let mut rust = Vec::new();
+    for command in commands {
+        let file = table.get(&command).ok_or_else(|| {
+            format!("the {source} step runs `priva {command}`, which rust/src/cli.rs does not name")
+        })?;
+        rust.push((
+            command,
+            digests(super::rust_reach::command_files(root, file)?),
+        ));
+    }
+    let mut files = Vec::new();
+    for path in data {
+        let file = root.join(&path);
+        let content = if file.is_file() {
+            text(crate::sha256::sha256_file(&file)?)
+        } else {
+            Json::Null
         };
-        let functions = record(&self.functions, &functions);
-        let variables = record(&self.variables, &variables);
-        imported_python(root, &mut files);
-        let mut contents = Vec::new();
-        for path in files {
-            let content = crate::sha256::sha256_file(&root.join(&path))?;
-            contents.push((path, text(content)));
-        }
-        let script_level: Vec<&str> = self.script_level.iter().map(String::as_str).collect();
-        Ok(object(vec![
-            ("wrapper", digest(&wrapper)),
-            ("step", digest(&own)),
-            ("script_level", digest(&script_level)),
-            ("functions", functions),
-            ("variables", variables),
-            ("files", Json::Object(contents)),
-            ("rust", Json::Object(rust)),
-            ("rust_left_out", Json::Array(left_out)),
-        ]))
+        files.push((path, content));
     }
-}
-
-/// The lines of the annotation step wrapper every step runs (before its
-/// `case`), and the lines of this step's own branch.
-fn wrapper_lines(source: &str) -> (Vec<&'static str>, Vec<&'static str>) {
-    let mut lines = super::tasks::ANNOTATION_STEP.lines();
-    let wrapper: Vec<&str> = lines
-        .by_ref()
-        .take_while(|line| !line.starts_with("case "))
-        .collect();
-    let label = format!("{source})");
-    let mut own = Vec::new();
-    let mut found = false;
-    for line in lines {
-        if !found && line.trim() != label {
-            continue;
-        }
-        found = true;
-        own.push(line);
-        if line.trim_end().ends_with(";;") {
-            break;
-        }
-    }
-    (wrapper, own)
-}
-
-/// Adds the files of the checkout a line names, as paths relative to the
-/// checkout: a script file by its name (`NAME.py`, `.sh`, `.R`, `.pl`,
-/// `.bash`) or as a path below a folder variable (`${SCRIPT_DIR}/NAME`), when
-/// scripts/ holds it; and a shipped data file as `.../data/PATH`, when the
-/// checkout holds it. The shared shell files count by function instead. A
-/// path put together while the step runs is not found.
-fn named_files(line: &str, root: &Path, files: &mut BTreeSet<String>) {
-    for word in path_words(line) {
-        let below = word.strip_prefix('/');
-        let base = word.rsplit('/').next().unwrap_or(word);
-        let script = matches!(
-            base.rsplit_once('.'),
-            Some((_, "py" | "sh" | "R" | "pl" | "bash"))
-        );
-        for name in [below.unwrap_or(""), if script { base } else { "" }] {
-            let shared = SHELL_FILES.contains(&name) || name == "install_utils.sh";
-            if !name.is_empty() && !shared && root.join("scripts").join(name).is_file() {
-                files.insert(format!("scripts/{name}"));
-            }
-        }
-        if let Some(at) = word.find("data/") {
-            let path = &word[at..];
-            if (at == 0 || word[..at].ends_with('/')) && root.join(path).is_file() {
-                files.insert(path.to_owned());
-            }
-        }
-    }
-}
-
-/// Adds the Python files of scripts/ that the named Python scripts import,
-/// and those import.
-fn imported_python(root: &Path, files: &mut BTreeSet<String>) {
-    let mut pending: Vec<String> = files.iter().cloned().collect();
-    while let Some(path) = pending.pop() {
-        if !path.ends_with(".py") {
-            continue;
-        }
-        let Ok(content) = std::fs::read_to_string(root.join(&path)) else {
-            continue;
-        };
-        for line in content.lines() {
-            let mut parts = line.split_whitespace();
-            if !matches!(parts.next(), Some("from" | "import")) {
-                continue;
-            }
-            let Some(module) = parts.next().and_then(|name| names(name).next()) else {
-                continue;
-            };
-            let imported = format!("scripts/{module}.py");
-            if root.join(&imported).is_file() && files.insert(imported.clone()) {
-                pending.push(imported);
-            }
-        }
-    }
+    Ok(object(vec![
+        ("step", step),
+        ("commands", Json::Object(rust)),
+        ("data", Json::Object(files)),
+    ]))
 }
 
 /// What each of the five annotation steps hashes into its lineage; None for
@@ -466,7 +203,7 @@ fn records(
     root: &Path,
     lock: Option<&Json>,
 ) -> Result<Vec<(&'static str, Option<Json>)>> {
-    let shell = Shell::read(root);
+    let table = super::rust_reach::commands(root);
     let resources: Vec<(String, Json)> = match manifest.get("resources") {
         Some(Json::Object(items)) => items.clone(),
         _ => Vec::new(),
@@ -515,7 +252,7 @@ fn records(
         } else {
             Some(object(vec![
                 ("source", text(source)),
-                ("code", shell.step_code(source, root)?),
+                ("code", step_code(source, root, &table)?),
                 ("resources", Json::Object(used)),
             ]))
         };
@@ -582,303 +319,207 @@ mod tests {
         json.get(source).and_then(Json::as_str).unwrap().to_owned()
     }
 
-    /// A checkout with the two shell files, for the code part of a lineage.
-    fn checkout(name: &str, annotation: &str, common: &str) -> std::path::PathBuf {
-        let root =
-            std::env::temp_dir().join(format!("priva-lineage-{}-{name}", std::process::id()));
-        let scripts = root.join("scripts");
-        std::fs::create_dir_all(&scripts).unwrap();
-        std::fs::create_dir_all(root.join("data")).unwrap();
-        std::fs::write(scripts.join("annotation_vcf.sh"), annotation).unwrap();
-        std::fs::write(scripts.join("common_bash_utils.sh"), common).unwrap();
-        root
+    const TABLE: &str = "pub(crate) fn run() {
+    if first() == Some(\"spliceai-cutoffs\") {
+        return crate::splice::dispatch();
     }
-
-    const COMMON: &str = "\
-HELPER=\"$(dirname \"$0\")/helper.py\"
-declare -a TISSUES=(
-    \"Liver\"
-)
-function count_records {
-    wc -l \"$1\"
+    if first() == Some(\"cadd-prescore\") {
+        return crate::prescore::dispatch();
+    }
+    if first() == Some(\"other\") {
+        return crate::other::dispatch();
+    }
 }
-function read_yaml () {
-    cat \"$1\"
-}
-function shared_check {
-    count_records checked
-    log \"see main_workflow, or $(named_in_message)\"
-}
-function named_in_message {
-    true
-}
-if [[ \"${#BASH_SOURCE[@]}\" -eq 1 ]]; then
-    \"$@\"
-fi
 ";
 
-    fn annotation(clinvar: &str, cadd: &str) -> String {
-        format!(
-            "\
-source common_bash_utils.sh
-function anno_clinvar_data {{
-    shared_check
-    {clinvar}
-}}
-function anno_agg_gnomAD_data() {{
-    count_records gnomad
-}}
-function Calculate_CADD {{
-    python \"$HELPER\" {cadd}
-    cut -f1 ${{BASE_DIR}}/data/map.tsv
-}}
-function anno_VEP_data {{
-    echo \"${{TISSUES[@]}}\"
-}}
-function main_workflow {{
-    anno_clinvar_data; anno_agg_gnomAD_data; Calculate_CADD; anno_VEP_data
-}}
-if [[ \"${{#BASH_SOURCE[@]}}\" -eq 1 ]]; then
-    main_workflow \"$@\"
-fi
-"
-        )
+    const PLAIN_STEP: &str = "use super::tools::shared;\npub(crate) fn run() {\n    shared()\n}\n";
+
+    const VEP_STEP: &str = "use super::annotation::assembly;
+use super::tools::shared;
+pub(crate) fn run(context: &Context) -> bool {
+    assembly();
+    shared();
+    context.priva_succeeds(\"spliceai-cutoffs\", &[])
+}
+";
+
+    const CADD_STEP: &str = "use super::annotation::assembly;
+use super::tools::shared;
+pub(crate) fn run(context: &Context) {
+    assembly();
+    shared();
+    let map = context.data(\"liftover/map.tsv\");
+    command.env(\"PRIVA_CADD_PRESCORE_BIN\", context.binary);
+}
+";
+
+    /// A checkout with a command table, the five step files and the files
+    /// they share, for the code part of a lineage.
+    fn checkout(name: &str) -> std::path::PathBuf {
+        let root = std::env::temp_dir().join(format!(
+            "priva-lineage-{}-{name}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        let src = root.join("rust/src");
+        let steps = src.join("pipeline_steps");
+        std::fs::create_dir_all(&steps).unwrap();
+        std::fs::create_dir_all(root.join("data/liftover")).unwrap();
+        for (path, content) in [
+            ("rust/src/cli.rs", TABLE),
+            ("rust/src/splice.rs", "pub(crate) fn dispatch() {}\n"),
+            ("rust/src/prescore.rs", "pub(crate) fn dispatch() {}\n"),
+            ("rust/src/other.rs", "pub(crate) fn dispatch() {}\n"),
+            (
+                "rust/src/pipeline_steps/mod.rs",
+                "pub(crate) mod annotation;\npub(crate) mod tools;\n",
+            ),
+            (
+                "rust/src/pipeline_steps/tools.rs",
+                "pub(crate) fn shared() {}\n",
+            ),
+            (
+                "rust/src/pipeline_steps/annotation.rs",
+                "pub(crate) fn assembly() {}\n",
+            ),
+            ("rust/src/pipeline_steps/gnomad.rs", PLAIN_STEP),
+            ("rust/src/pipeline_steps/clinvar.rs", PLAIN_STEP),
+            ("rust/src/pipeline_steps/control.rs", PLAIN_STEP),
+            ("rust/src/pipeline_steps/vep.rs", VEP_STEP),
+            ("rust/src/pipeline_steps/cadd.rs", CADD_STEP),
+            ("data/liftover/map.tsv", "1\tchr1\n"),
+            ("data/liftover/unused.tsv", "1\tchr1\n"),
+        ] {
+            std::fs::write(root.join(path), content).unwrap();
+        }
+        root
     }
 
     fn code_lineages(root: &Path) -> Json {
         lineages(&manifest(&[("control_vcf", 3)]), root, None).unwrap()
     }
 
-    fn moved(before: &Json, after: &Json) -> Vec<&'static str> {
+    /// The steps whose folder moves when FILE of the checkout becomes
+    /// CONTENT; the file is put back afterwards.
+    fn moved_by(root: &Path, file: &str, content: &str) -> Vec<&'static str> {
+        let before = code_lineages(root);
+        let path = root.join(file);
+        let old = std::fs::read_to_string(&path).unwrap();
+        std::fs::write(&path, content).unwrap();
+        let after = code_lineages(root);
+        std::fs::write(&path, old).unwrap();
         SOURCES
             .into_iter()
-            .filter(|source| lineage(before, source) != lineage(after, source))
+            .filter(|source| lineage(&before, source) != lineage(&after, source))
             .collect()
     }
 
     #[test]
-    fn a_change_inside_one_function_moves_only_the_steps_that_run_it() {
-        let root = checkout("one", &annotation("echo a", "--one"), COMMON);
-        let before = code_lineages(&root);
-        // Calculate_CADD alone: only the CADD step.
-        std::fs::write(
-            root.join("scripts/annotation_vcf.sh"),
-            annotation("echo a", "--two"),
-        )
-        .unwrap();
-        assert_eq!(moved(&before, &code_lineages(&root)), ["cadd"]);
-        // anno_clinvar_data alone: only the ClinVar step.
-        std::fs::write(
-            root.join("scripts/annotation_vcf.sh"),
-            annotation("echo b", "--one"),
-        )
-        .unwrap();
-        assert_eq!(moved(&before, &code_lineages(&root)), ["clinvar"]);
-        // main_workflow and the direct-run block belong to no step.
-        let other = annotation("echo a", "--one").replace(
-            "anno_clinvar_data; anno_agg",
-            "echo start; anno_clinvar_data; anno_agg",
+    fn a_change_to_one_step_file_moves_only_that_step() {
+        let root = checkout("one");
+        let step = "rust/src/pipeline_steps/clinvar.rs";
+        let changed = PLAIN_STEP.replace("shared()", "shared();\n    shared()");
+        assert_eq!(moved_by(&root, step, &changed), ["clinvar"]);
+        let cadd = CADD_STEP.replace("assembly();", "assembly();\n    assembly();");
+        assert_eq!(
+            moved_by(&root, "rust/src/pipeline_steps/cadd.rs", &cadd),
+            ["cadd"]
         );
-        std::fs::write(root.join("scripts/annotation_vcf.sh"), other).unwrap();
-        assert!(moved(&before, &code_lineages(&root)).is_empty());
+        // Comment lines, blank lines and tests do not count.
+        let quiet =
+            format!("// why\n\n{PLAIN_STEP}#[cfg(test)]\nmod tests {{\n    fn t() {{}}\n}}\n");
+        assert!(moved_by(&root, step, &quiet).is_empty());
         std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
-    fn a_shared_function_moves_each_step_that_calls_it() {
-        let root = checkout("shared", &annotation("echo a", "--one"), COMMON);
-        let before = code_lineages(&root);
-        let write = |common: String| {
-            std::fs::write(root.join("scripts/common_bash_utils.sh"), common).unwrap();
-            code_lineages(&root)
-        };
-        // shared_check is called by the ClinVar function only.
-        let after = write(COMMON.replace("count_records checked", "count_records twice"));
-        assert_eq!(moved(&before, &after), ["clinvar"]);
-        // count_records is called by gnomAD directly and by ClinVar through
-        // shared_check.
-        let after = write(COMMON.replace("wc -l", "wc -c"));
-        assert_eq!(moved(&before, &after), ["gnomad", "clinvar"]);
-        // A function a message runs counts; one it only mentions does not.
-        let after = write(COMMON.replace("    true", "    false"));
-        assert_eq!(moved(&before, &after), ["clinvar"]);
-        // read_yaml is called by the wrapper of every step.
-        let after = write(COMMON.replace("cat \"$1\"", "cat -- \"$1\""));
-        assert_eq!(moved(&before, &after).len(), 5);
-        // A script-level variable counts for the steps that name it.
-        let after = write(COMMON.replace("\"Liver\"", "\"Lung\""));
-        assert_eq!(moved(&before, &after), ["vep"]);
-        // Comment lines and blank lines do not count.
-        let after = write(COMMON.replace(
-            "    count_records checked",
-            "    # why\n\n    count_records checked",
-        ));
-        assert!(moved(&before, &after).is_empty());
+    fn a_shared_file_moves_each_step_that_names_it() {
+        let root = checkout("shared");
+        let changed = "pub(crate) fn shared() -> u8 { 1 }\n";
+        let all = moved_by(&root, "rust/src/pipeline_steps/tools.rs", changed);
+        assert_eq!(all, SOURCES);
+        let changed = "pub(crate) fn assembly() -> u8 { 1 }\n";
+        let named = moved_by(&root, "rust/src/pipeline_steps/annotation.rs", changed);
+        assert_eq!(named, ["vep", "cadd"]);
+        // The module list names no step's code.
+        let listed = "pub(crate) mod annotation;\npub(crate) mod cadd;\npub(crate) mod tools;\n";
+        assert!(moved_by(&root, "rust/src/pipeline_steps/mod.rs", listed).is_empty());
         std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
-    fn a_named_file_counts_for_the_steps_whose_code_names_it() {
-        let root = checkout("files", &annotation("echo a", "--one"), COMMON);
-        std::fs::write(root.join("scripts/helper.py"), "import shared_part\n").unwrap();
-        std::fs::write(root.join("scripts/shared_part.py"), "X = 1\n").unwrap();
-        std::fs::write(root.join("scripts/unused.py"), "X = 1\n").unwrap();
-        std::fs::write(root.join("data/map.tsv"), "a\tb\n").unwrap();
-        let mut before = code_lineages(&root);
-        for (path, content) in [
-            ("scripts/helper.py", "import shared_part\nY = 2\n"),
-            ("scripts/shared_part.py", "X = 2\n"),
-            ("data/map.tsv", "a\tc\n"),
-        ] {
-            std::fs::write(root.join(path), content).unwrap();
-            let after = code_lineages(&root);
-            assert_eq!(moved(&before, &after), ["cadd"], "{path}");
-            before = after;
-        }
-        std::fs::write(root.join("scripts/unused.py"), "X = 2\n").unwrap();
-        assert!(moved(&before, &code_lineages(&root)).is_empty());
+    fn a_data_file_counts_for_the_steps_that_name_it() {
+        let root = checkout("data");
+        assert_eq!(
+            moved_by(&root, "data/liftover/map.tsv", "1\tchr2\n"),
+            ["cadd"]
+        );
+        assert!(moved_by(&root, "data/liftover/unused.tsv", "1\tchr2\n").is_empty());
         std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
-    fn a_rust_file_moves_only_the_steps_whose_code_runs_its_command() {
-        let script = annotation("echo a", "--one")
-            .replace(
-                "count_records gnomad",
-                "\"${PRIVA_BIN}\" count-records gnomad",
-            )
-            .replace(
-                "echo \"${TISSUES[@]}\"",
-                "\"${PRIVA_BIN}\" clinvar-gene-refresh candidate-begin",
-            );
-        assert!(script.contains("count-records") && script.contains("clinvar-gene-refresh"));
-        let root = checkout("rust", &script, COMMON);
-        let src = root.join("rust/src");
-        std::fs::create_dir_all(&src).unwrap();
-        let table = "pub(crate) fn run() {
-    if first() == Some(\"count-records\") {
-        return crate::count::dispatch();
-    }
-    if first() == Some(\"other\") {
-        return crate::other::dispatch();
-    }
-    if first() == Some(\"clinvar-gene-refresh\") {
-        return crate::refresh::dispatch();
-    }
-}
-";
-        std::fs::write(src.join("cli.rs"), table).unwrap();
-        std::fs::write(src.join("refresh.rs"), "pub(crate) fn dispatch() {}\n").unwrap();
-        std::fs::write(src.join("count.rs"), "pub(crate) fn dispatch() {}\n").unwrap();
-        std::fs::write(src.join("other.rs"), "pub(crate) fn dispatch() {}\n").unwrap();
-        let before = code_lineages(&root);
-        // A command no step runs, an installer command the VEP function
-        // names, then a test of the command gnomAD runs.
-        std::fs::write(
-            src.join("refresh.rs"),
-            "pub(crate) fn dispatch() -> u8 { 1 }\n",
-        )
-        .unwrap();
-        std::fs::write(
-            src.join("other.rs"),
-            "pub(crate) fn dispatch() -> u8 { 1 }\n",
-        )
-        .unwrap();
-        let tested = "pub(crate) fn dispatch() {}\n#[cfg(test)]\nmod tests {\n    fn t() {}\n}\n";
-        std::fs::write(src.join("count.rs"), tested).unwrap();
-        assert!(moved(&before, &code_lineages(&root)).is_empty());
-        std::fs::write(
-            src.join("count.rs"),
-            "pub(crate) fn dispatch() -> u8 { 1 }\n",
-        )
-        .unwrap();
-        assert_eq!(moved(&before, &code_lineages(&root)), ["gnomad"]);
-        // Without the Rust source the folder cannot be named.
-        std::fs::remove_dir_all(&src).unwrap();
-        assert!(lineages(&manifest(&[("control_vcf", 3)]), &root, None).is_err());
+    fn a_command_file_moves_only_the_steps_that_run_it() {
+        let root = checkout("commands");
+        let changed = "pub(crate) fn dispatch() -> u8 { 1 }\n";
+        assert_eq!(moved_by(&root, "rust/src/splice.rs", changed), ["vep"]);
+        assert_eq!(moved_by(&root, "rust/src/prescore.rs", changed), ["cadd"]);
+        assert!(moved_by(&root, "rust/src/other.rs", changed).is_empty());
+        // A command the table does not name, or no table, names no folder.
+        let unknown = VEP_STEP.replace("spliceai-cutoffs", "spliceai-guess");
+        std::fs::write(root.join("rust/src/pipeline_steps/vep.rs"), unknown).unwrap();
+        assert!(lineages(&manifest(&[]), &root, None).is_err());
+        std::fs::write(root.join("rust/src/pipeline_steps/vep.rs"), VEP_STEP).unwrap();
+        std::fs::remove_file(root.join("rust/src/cli.rs")).unwrap();
+        assert!(lineages(&manifest(&[]), &root, None).is_err());
+        // Without a step's file the folder cannot be named.
+        std::fs::remove_dir_all(root.join("rust/src")).unwrap();
+        assert!(lineages(&manifest(&[]), &root, None).is_err());
         std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
-    fn installer_commands_run_only_under_installer_conditions() {
-        // The reason INSTALLER_COMMANDS may stay out of a step's lineage:
-        // every call sits under a condition only the installer sets, or in
-        // the installer's own entry function.
-        let script = include_str!("../../../scripts/annotation_vcf.sh");
-        let lines: Vec<&str> = script.lines().collect();
-        let mut calls = 0;
-        for (at, line) in lines.iter().enumerate() {
-            let trimmed = line.trim_start();
-            let named = super::super::rust_reach::called_commands(line)
-                .iter()
-                .any(|command| INSTALLER_COMMANDS.contains(&command.as_str()));
-            if !named || trimmed.starts_with('#') || trimmed.starts_with("log ") {
-                continue;
+    fn commands_and_data_files_are_read_from_the_step_text() {
+        let text = "context.priva(\n        \"variant-ids\",\n        args(&[]),\n    )?;
+let ok = context.priva_succeeds(\"spliceai-cutoffs\", &[]);
+context.priva(command, args);
+command.env(\"PRIVA_CADD_PRESCORE_BIN\", binary).env(\"PRIVA_DATA_DIR\", data);
+let map = context.data(\"liftover/map.tsv\");
+let named = context.data(&format!(\"loeuf/{name}\"));";
+        let commands: Vec<String> = run_commands(text).into_iter().collect();
+        assert_eq!(
+            commands,
+            ["cadd-prescore", "spliceai-cutoffs", "variant-ids"]
+        );
+        let data: Vec<String> = data_files(text).into_iter().collect();
+        assert_eq!(data, ["data/liftover/map.tsv"]);
+    }
+
+    #[test]
+    fn each_step_of_this_checkout_has_a_lineage() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+        let explained = explain(&manifest(&[("control_vcf", 3)]), &root, None).unwrap();
+        let commands = |source: &str| -> Vec<String> {
+            match explained
+                .get(source)
+                .and_then(|e| e.get("code"))
+                .and_then(|c| c.get("commands"))
+            {
+                Some(Json::Object(items)) => items.iter().map(|(k, _)| k.clone()).collect(),
+                _ => Vec::new(),
             }
-            calls += 1;
-            let guard = lines[..at]
-                .iter()
-                .rev()
-                .find(|above| {
-                    let above = above.trim_start();
-                    above.starts_with("if ")
-                        || above.starts_with("elif ")
-                        || function_name(above).is_some()
-                })
-                .copied()
-                .unwrap_or_default();
-            assert!(
-                guard.contains("PRIVA_CLINVAR_RECOVERY_CONFIG")
-                    || guard.contains("cache_candidate"),
-                "line {}: {guard}",
-                at + 1
-            );
-        }
-        assert!(calls > 0);
-    }
-
-    #[test]
-    fn shell_definition_lines_are_recognised() {
-        for (line, name) in [
-            ("function anno_x {", Some("anno_x")),
-            ("function anno_x() {", Some("anno_x")),
-            ("function normalize_vcf () {", Some("normalize_vcf")),
-            ("anno_x () {", Some("anno_x")),
-            ("anno_x() {", Some("anno_x")),
-            ("anno_x {", None),
-            ("if [[ -z $x ]]; then", None),
-            ("function {", None),
-        ] {
-            assert_eq!(function_name(line), name, "{line}");
-        }
-        for (line, name) in [
-            ("BASE_DIR=\"$(dirname x)\"", Some("BASE_DIR")),
-            ("declare -a PEXT=(", Some("PEXT")),
-            ("export -x NAME=1", Some("NAME")),
-            ("if [[ -z $TMPDIR ]]; then TMPDIR=/tmp; fi", None),
-            ("log \"a=b\"", None),
-        ] {
-            assert_eq!(assigned_name(line), name, "{line}");
-        }
-        for (line, expected) in [
-            (
-                "    anno_x \"$vcf\" | sort_it",
-                vec!["anno_x", "vcf", "sort_it"],
-            ),
-            ("    log \"run main_install first\"", vec![]),
-            (
-                "    echo \"$(count_it x) and `other y`; third\"",
-                vec!["count_it", "other", "third"],
-            ),
-            ("    logger (x)", vec!["logger", "x"]),
-        ] {
-            assert_eq!(run_names(line), expected, "{line}");
+        };
+        assert_eq!(commands("vep"), ["spliceai-cutoffs"]);
+        assert_eq!(commands("cadd"), ["cadd-prescore"]);
+        for source in ["gnomad", "clinvar", "control"] {
+            assert!(commands(source).is_empty(), "{source}");
         }
     }
 
     #[test]
     fn a_resource_change_moves_only_the_steps_that_read_it() {
-        let root = std::env::temp_dir();
+        let root = checkout("resources");
         let of = |clinvar: i128, vep: i128| {
             let entries = [
                 ("clinvar_vcf", clinvar),
@@ -902,10 +543,12 @@ fi
             lineage(&before, "clinvar"),
             lineage(&vep_changed, "clinvar")
         );
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
     fn moving_a_resource_keeps_its_lineage() {
+        let root = checkout("moving");
         let record = |path: &str| {
             object(vec![
                 ("path", text(path)),
@@ -917,12 +560,13 @@ fi
         let at = |path: &str| {
             let resources = Json::Object(vec![("clinvar_vcf".into(), record(path))]);
             let manifest = Json::Object(vec![("resources".into(), resources)]);
-            lineages(&manifest, &std::env::temp_dir(), None).unwrap()
+            lineages(&manifest, &root, None).unwrap()
         };
         assert_eq!(
             lineage(&at("/old/clinvar.vcf.gz"), "clinvar"),
             lineage(&at("/new/c.vcf.gz"), "clinvar")
         );
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
@@ -943,7 +587,7 @@ fi
             ];
             Json::Object(vec![("steps".into(), Json::Object(steps))])
         };
-        let root = std::env::temp_dir();
+        let root = checkout("lock");
         let (one, two) = (lock("v1"), lock("v2"));
         let first = lineages(&manifest(&entries), &root, Some(&one)).unwrap();
         let second = lineages(&manifest(&entries), &root, Some(&two)).unwrap();
@@ -957,17 +601,15 @@ fi
         ];
         let third = lineages(&manifest(&resized), &root, Some(&one)).unwrap();
         assert_eq!(lineage(&first, "vep"), lineage(&third, "vep"));
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
     fn control_counts_from_the_cohort_have_no_hub_folder() {
-        let json = lineages(
-            &manifest(&[("clinvar_vcf", 1)]),
-            &std::env::temp_dir(),
-            None,
-        )
-        .unwrap();
+        let root = checkout("control");
+        let json = lineages(&manifest(&[("clinvar_vcf", 1)]), &root, None).unwrap();
         assert_eq!(lineage(&json, "control"), "off");
         assert_eq!(lineage(&json, "clinvar").len(), 16);
+        std::fs::remove_dir_all(root).unwrap();
     }
 }

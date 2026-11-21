@@ -77,7 +77,7 @@ jobs:
         # Matches the installed reference's input-library pins. These
         # fixtures do not run scientific annotation, CADD models or a family.
         run: |
-          python -m pip install --only-binary=:all: 'numpy==1.26.4' 'pandas==2.2.3' 'PyYAML==6.0.3' 'pysam==0.22.1' 'CrossMap==0.7.0' 'scipy==1.14.1'
+          python -m pip install --only-binary=:all: 'numpy==1.26.4' 'pandas==2.2.3' 'PyYAML==6.0.3' 'pysam==0.22.1' 'CrossMap==0.7.0' 'scipy==1.14.1' 'packaging==24.2'
           python -m pip check
 
       - name: Install command tools for synthetic installer fixtures
@@ -151,6 +151,12 @@ jobs:
         # Filtration and prioritization on the shipped test family, both ways;
         # priva commands other than pedigree-filter are a logging stand-in.
         run: python tests/family_step_compare.py --priva "$CARGO_TARGET_DIR/debug/priva" --work "$RUNNER_TEMP/family-steps"
+
+      - name: Compare the annotation steps with the shell functions they replaced
+        # Made-up cohort, gnomAD, ClinVar and control files; real bcftools and
+        # tabix behind a logging wrapper, stand-ins for VEP, CADD.sh and its
+        # Conda. The old route's cadd_conda.py needs packaging (pinned above).
+        run: python tests/annotation_step_compare.py --priva "$CARGO_TARGET_DIR/debug/priva" --work "$RUNNER_TEMP/annotation-steps"
 
       - name: Test SpliceAI2 preparation with real Rust, BGZF and tabix
         # Synthetic scores and GENCODE context; no model or full-cache acceptance.

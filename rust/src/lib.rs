@@ -42,6 +42,7 @@ mod install_task;
 mod installer_config_paths;
 mod mapped_artifact_publish;
 mod nextflow_task;
+mod pipeline_steps;
 // Qualified before the opt-in DAS procedures consume this exact random stream.
 #[allow(dead_code)]
 mod numpy_rng;

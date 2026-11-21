@@ -232,7 +232,7 @@ outputs and scientific-profile requirements.'''
             def listed = new groovy.json.JsonSlurper().parse(contract.toFile()).families
             listed ? listed.collect { it.toString() } : ['']
         }
-        // Annotation runs as one task per step of annotation_vcf.sh.
+        // Annotation runs as one task per step (rust/src/pipeline_steps).
         ANNOTATE_PREPROCESS(VALIDATE_INPUTS.out.validated.map(bundleLast).map { run, vcf, index, cadd, bundle -> [run, vcf, index, bundle] })
         def preprocessed = ANNOTATE_PREPROCESS.out.preprocessed.map(bundleLast)
         // Each annotation step's output, as [source, file]: gnomad, clinvar,

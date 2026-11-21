@@ -2,22 +2,21 @@
 //!
 //! This reproduces the former `bin/priva_task.py` and `bin/priva_task_boundary.py`. It
 //! checks inputs and prepared resources and gives each task private copies of
-//! the files its step may change. The family steps (filtration and the
-//! prioritization steps) run bcftools, tabix and priva's own commands
-//! directly (`family_steps`); the annotation steps still run their functions
-//! of annotation_vcf.sh. It implements no variant scoring, filtering, criteria
-//! or sorting itself.
+//! the files its step may change. Each step runs its tools (VEP, CADD.sh,
+//! bcftools, tabix and priva's own commands) directly, with the command lines
+//! of the shell functions it replaced (`crate::pipeline_steps`). It
+//! implements no variant scoring, filtering, criteria or sorting itself.
 //!
 //!   priva task manifest --config CONFIG --legacy-root ROOT --output JSON
 //!   priva task launch|validate|run ...
-//!   priva task family-step --step STEP --root ROOT --config CONFIG ...
+//!   priva task step --step STEP --root ROOT --config CONFIG ...
 //!   priva task-boundary check|exec --task-dir DIR [-- COMMAND...]
 mod boundary;
 pub(crate) mod contract;
-mod family_steps;
 pub(crate) mod hub_lineage;
 mod info_merge;
 pub(crate) mod rust_reach;
+mod step;
 mod table_join;
 mod tasks;
 #[cfg(test)]
@@ -296,24 +295,22 @@ fn parse_task(args: &[String]) -> std::result::Result<(String, Options), String>
             }
             options
         }
-        "family-step" => {
+        "step" => {
             let options = Options::parse(
                 rest,
-                &["step", "root", "config", "vcf", "cadd", "table", "family"],
+                &[
+                    "step", "root", "config", "vcf", "cadd", "table", "family", "output",
+                ],
                 &[],
             )?;
             options.require(&["step", "root", "config"])?;
-            options.choice("step", family_steps::STEPS)?;
-            match options.value("step") {
-                "filtration" => options.require(&["vcf"])?,
-                "prioritization" | "combine" => options.require(&["vcf", "cadd"])?,
-                _ => options.require(&["table"])?,
-            }
+            options.choice("step", step::STEPS)?;
+            options.require(step::required(options.value("step")))?;
             options
         }
         other => {
             return Err(format!(
-                "argument command: invalid choice: '{other}' (choose from 'manifest', 'validate', 'launch', 'run', 'family-step')"
+                "argument command: invalid choice: '{other}' (choose from 'manifest', 'validate', 'launch', 'run', 'step')"
             ));
         }
     };
@@ -324,7 +321,7 @@ fn parse_task(args: &[String]) -> std::result::Result<(String, Options), String>
 pub(crate) fn dispatch(args: &[String]) -> crate::cli::Result<()> {
     if args.first().map(String::as_str) == Some("--help") {
         println!(
-            "usage: priva task {{manifest,validate,launch,run,family-step}} ...\n\nNon-scientific Nextflow task contract: validate inputs and resources, isolate\nwrites, and run each step's tools (bcftools, tabix and priva's own commands for\nthe family steps; the annotation shell functions for annotation).\n\nfamily-step runs one family step outside Nextflow, without a contract:\n  priva task family-step --step {{filtration,prioritization,combine,splicing,utr,acmg}}\n      --root CHECKOUT --config CONFIG [--vcf VCF] [--cadd TSV] [--table TSV] [--family ID]"
+            "usage: priva task {{manifest,validate,launch,run,step}} ...\n\nNon-scientific Nextflow task contract: validate inputs and resources, isolate\nwrites, and run each step's tools (VEP, CADD.sh, bcftools, tabix and priva's own\ncommands).\n\nstep runs one pipeline step outside Nextflow, without a contract:\n  priva task step --step {{preprocess,gnomad,clinvar,control,vep,cadd,filtration,\n      prioritization,combine,splicing,utr,acmg}} --root CHECKOUT --config CONFIG\n      [--vcf VCF] [--output PATH] [--cadd TSV] [--table TSV] [--family ID]"
         );
         return Ok(());
     }
@@ -333,7 +330,7 @@ pub(crate) fn dispatch(args: &[String]) -> crate::cli::Result<()> {
         "manifest" => tasks::build_manifest(&options),
         "validate" => tasks::validate(&options),
         "launch" => tasks::launch(&options),
-        "family-step" => family_steps::run_step(&options),
+        "step" => step::run(&options),
         _ => tasks::run(&options),
     };
     if let Err(error) = outcome {

@@ -5,7 +5,7 @@ Old: the shell functions the analysis tasks ran before phase 4, as they ran
 them: `scripts/filtration_vcf_per_fam.sh` for filtration,
 `scripts/prioritization_vcf_per_fam.sh` for the whole prioritization, and the
 task's step wrapper (tests/fixtures/family-steps-952811c/prioritization_step.sh)
-for one prioritization step. New: `priva task family-step`, the Rust steps
+for one prioritization step. New: `priva task step`, the Rust steps
 `priva task run` calls now.
 
 The test family is data/test_example/TEST_FAM.filtered.vcf.gz with a made-up
@@ -273,7 +273,7 @@ def old_command(root: Path, case: dict, config: Path, result: Path) -> list:
 
 
 def new_command(priva: str, root: Path, case: dict, config: Path, result: Path) -> list:
-    command = [priva, "task", "family-step", "--step", case["step"], "--root", str(root),
+    command = [priva, "task", "step", "--step", case["step"], "--root", str(root),
                "--config", str(config)]
     for option in ("vcf", "cadd", "table"):
         if option in case:

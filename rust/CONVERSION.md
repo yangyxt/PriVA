@@ -251,8 +251,9 @@ and ACMG matrix were identical; `-resume` reused all eight cohort tasks.
 ## Annotation as one task per step
 
 In raw mode with both hubs off, `annotation_vcf.sh`'s functions run as their own
-Nextflow tasks, called with the arguments `main_workflow` gives them and without
-changes to the script: `priva task run --phase annotation-preprocess`, then
+Nextflow tasks, called with the arguments `main_workflow` gives them (since
+phase 4, 21 November 2026, as Rust steps that run the same tool commands; see
+below): `priva task run --phase annotation-preprocess`, then
 `annotation-gnomad`, `-clinvar`, `-control`, `-vep` and `-cadd` side by side on
 copies of the preprocessed VCF, then `annotation-merge`. The merge
 (`rust/src/nextflow_task/info_merge.rs`) reads the preprocessed VCF and the four
@@ -296,7 +297,29 @@ The whole-script annotation task (`ANNOTATE_COHORT`), annotated mode (`--mode an
 
 ## Hub lineages from each step's own code
 
-A step's hub lineage counts only the code that step runs (`rust/src/nextflow_task/hub_lineage.rs`), not the whole text of `annotation_vcf.sh` and `common_bash_utils.sh`: the step's own lines of the annotation step wrapper, the shell functions those lines call and every function they call in turn, the script-level variables those functions name, the script-level lines outside functions (shared by every step; the direct-run block is left out), and the files those functions name under `scripts/` (with the Python files they import) and `data/`. Comment and blank lines do not count. The reach rules are the ones the install steps use (`rust/src/install_task/digest.rs`): in `log`, `echo` and `printf` lines a name counts only where a command can start. They are two implementations of one rule, in shell for the install steps and in Rust here. Where those functions run a `priva` command (`"${PRIVA_BIN}" COMMAND`, or a tool handed the program as `PRIVA_CADD_PRESCORE_BIN=`, which is `cadd-prescore`), the Rust files behind that command count too (`rust/src/nextflow_task/rust_reach.rs`): the file the command table (`run` in `cli.rs`) hands the command to, every crate file that one names (`crate::`, `super::`, `self::`), and those they name in turn; a child module counts when its parent file uses it, or when it implements a trait for a type defined outside itself (that acts without the child being named); embedded files (`include_str!`, `include_bytes!`) count by content. Comment lines, test modules and the command table itself do not count (`cli.rs` counts only above `run`). The reach is by whole file, not by function. `priva annotation-hub lineages --resources RESOURCES.json --legacy-root CHECKOUT [--resources-lock LOCK.json]` prints each step's lineage with the hash of every function, variable and file it counts.
+Since phase 4 (21 November 2026) a step's code is its Rust file
+(`rust/src/pipeline_steps/STEP.rs`) and the crate files that one names, as
+`rust_reach.rs` finds them for a `priva` command (below); the `priva` commands
+those files run (`context.priva("NAME", ..)`, `context.priva_succeeds("NAME",
+..)`, or a tool handed the program as `"PRIVA_CADD_PRESCORE_BIN"`), each with
+the Rust files behind it; and the files of `data/` they name
+(`context.data("PATH")`). A command the command table does not name stops the
+naming. For the source at this commit:
+
+| Step | Files of its code | Commands it runs | `data/` files |
+| --- | --- | --- | --- |
+| gnomAD, ClinVar, control | `pipeline_steps/STEP.rs`, `pipeline_steps/tools.rs`, `yaml_config.rs`, `json_text.rs` | none | none |
+| VEP | those with `vep.rs`, and `pipeline_steps/annotation.rs` | `spliceai-cutoffs` (10 files) | none |
+| CADD | those with `cadd.rs`, and `pipeline_steps/annotation.rs` | `cadd-prescore` (2 files) | `liftover/ucsc_to_GRC.contig.map.tsv` |
+
+So a change to one step's file moves that step's folder only, a change to
+`tools.rs` (or to the configuration reader) moves all five, and one to
+`annotation.rs` moves VEP and CADD. The unit tests in `hub_lineage.rs` check
+each of those on a made-up checkout. The installer's code no longer reaches
+any step, so `INSTALLER_COMMANDS` is gone. The shell text below describes the
+rule until phase 4.
+
+Until phase 4, a step's hub lineage counted only the code that step ran (`rust/src/nextflow_task/hub_lineage.rs`), not the whole text of `annotation_vcf.sh` and `common_bash_utils.sh`: the step's own lines of the annotation step wrapper, the shell functions those lines call and every function they call in turn, the script-level variables those functions name, the script-level lines outside functions (shared by every step; the direct-run block is left out), and the files those functions name under `scripts/` (with the Python files they import) and `data/`. Comment and blank lines do not count. The reach rules are the ones the install steps use (`rust/src/install_task/digest.rs`): in `log`, `echo` and `printf` lines a name counts only where a command can start. They are two implementations of one rule, in shell for the install steps and in Rust here. Where those functions run a `priva` command (`"${PRIVA_BIN}" COMMAND`, or a tool handed the program as `PRIVA_CADD_PRESCORE_BIN=`, which is `cadd-prescore`), the Rust files behind that command count too (`rust/src/nextflow_task/rust_reach.rs`): the file the command table (`run` in `cli.rs`) hands the command to, every crate file that one names (`crate::`, `super::`, `self::`), and those they name in turn; a child module counts when its parent file uses it, or when it implements a trait for a type defined outside itself (that acts without the child being named); embedded files (`include_str!`, `include_bytes!`) count by content. Comment lines, test modules and the command table itself do not count (`cli.rs` counts only above `run`). The reach is by whole file, not by function. `priva annotation-hub lineages --resources RESOURCES.json --legacy-root CHECKOUT [--resources-lock LOCK.json]` prints each step's lineage with the hash of every function, variable and file it counts.
 
 Reason: three commits inside `Calculate_CADD` (`cfcfd0a`, `25c6c9b`, `a995c0a`) gave gnomAD, ClinVar and VEP new, empty hub folders in the TruPath cohort run, although their code and resource records were unchanged. Job 1547787 (15 November 2026, `validation/hub_step_code_lineage_20261115`): 38 `nextflow_task` and 2 `annotation_hub` unit tests pass; between the run sources `e4d8e5d` and `a995c0a` the gnomAD (`6d3de21b88f35a09`), ClinVar (`2e60af9ba375636e`) and VEP (`dda0ab790c97a039`) lineages are equal and only CADD differs (`5ce04639e7fa5660`, then `cb4908f974118d0d`: the text of `Calculate_CADD`, which newly reaches `priva_resolve_binary`). Steps reach 9 (ClinVar) to 27 (VEP) functions. Every lineage differs from the whole-script names, so a hub filled before this commit is read again only after its folders are renamed to the new names (the files do not record the folder name).
 
@@ -777,12 +800,14 @@ whole configuration; BioMart is out of the test machine's reach) and D0 (its
 `inputs.ready.json` names absolute paths that D1 reads, so it needs
 `--relocate` and a cluster run of D1). A5 moves to phase 5, with the other steps whose checks live in `installer-prerequisites`; D0 moves to phase 6, with the ClinVar chain it feeds.
 
-### Phase 4: the family steps without the shell scripts (21 November 2026)
+### Phase 4: the analysis tasks without the shell scripts (21 November 2026)
+
+#### The family steps
 
 Filtration and the four prioritization steps no longer run
 `filtration_vcf_per_fam.sh` or `prioritization_vcf_per_fam.sh`. `priva task
 run` checks the task as before, then runs the step's tools itself
-([`src/nextflow_task/family_steps.rs`](src/nextflow_task/family_steps.rs)):
+([`src/pipeline_steps/family.rs`](src/pipeline_steps/family.rs)):
 bcftools, tabix and priva's own commands, with the arguments the shell
 functions gave them.
 
@@ -819,14 +844,14 @@ that skipped a step whose output was newer than its inputs (a task's folder is
 new, so its output never exists before it) and the table displays. The
 whole-run `prioritization` phase runs the four steps the same way.
 
-`priva task family-step --step STEP --root CHECKOUT --config CONFIG [--vcf]
+`priva task step --step STEP --root CHECKOUT --config CONFIG [--vcf]
 [--cadd] [--table] [--family]` runs one of these steps outside Nextflow,
 without a contract, to look into one family by hand.
 
 [`tests/family_step_compare.py`](../tests/family_step_compare.py) runs each
 case through the shell function (the task's step wrapper before this change is
 kept as [`tests/fixtures/family-steps-952811c/prioritization_step.sh`](../tests/fixtures/family-steps-952811c/prioritization_step.sh))
-and through `priva task family-step`, on the shipped test family
+and through `priva task step`, on the shipped test family
 (`data/test_example/TEST_FAM`, 20,205 records, with a made-up
 `AF_grpmax_joint` and a CADD table made from its records). Filtration runs the
 real `priva pedigree-filter`; the other priva commands are a stand-in that logs
@@ -851,18 +876,121 @@ Changes you can notice:
   stopped on the empty sample list's expansion).
 - The log lines start with `[priva task]`.
 
-Next in phase 4: the annotation steps (`annotation_vcf.sh`). Those change
-the hub lineages: `hub_lineage.rs` counts the shell functions each step runs,
-so each ported step gets a new, empty hub folder once, and the first run after
-it annotates every variant of that source again. They go out together, so
-that happens once.
+#### The annotation steps
+
+The six annotation tasks no longer source `annotation_vcf.sh` and
+`common_bash_utils.sh`. `priva task run` checks the task as before, then runs
+the step in Rust, one file per step in
+[`src/pipeline_steps/`](src/pipeline_steps/) (`preprocess.rs`, `gnomad.rs`,
+`clinvar.rs`, `control.rs`, `vep.rs`, `cadd.rs`; the assembly checks and the
+chromosome renaming they share are in `annotation.rs`, the setting reader and
+the command runner in `tools.rs`). Each runs bcftools, tabix, VEP, `CADD.sh`
+and priva with the arguments the shell function gave them.
+
+```mermaid
+flowchart LR
+  subgraph before["Before: ANNOTATE_STEP for vep (and the other five steps)"]
+    direction TB
+    O1["priva task run --phase annotation-vep"] --> O2["bash step wrapper<br/>source annotation_vcf.sh + common_bash_utils.sh"]
+    O2 --> O3["anno_VEP_data: argparse.bash (python),<br/>yq per setting, check functions"]
+    O3 --> O4["priva spliceai-cutoffs, vep ..., bcftools sort, tabix"]
+  end
+  subgraph after["Now: ANNOTATE_STEP for vep"]
+    direction TB
+    N1["priva task run --phase annotation-vep"] --> N2["pipeline_steps/vep.rs<br/>(settings from the task's configuration)"]
+    N2 --> N4["priva spliceai-cutoffs, vep ..., bcftools sort, tabix"]
+  end
+  before -. "phase 4" .-> after
+```
+
+| Task | Shell function before | Commands now |
+| --- | --- | --- |
+| `ANNOTATE_PREPROCESS` | `preprocess_vcf` | `bcftools view --threads T -r PRIMARY_CONTIGS -Ou \| bcftools sort -Oz`, `tabix`; for NCBI names `bcftools annotate --rename-chrs GRC_to_ucsc.contig.map.txt -Ou \| bcftools sort -Oz`, `tabix`; `bcftools norm -m -both -c s -f REF --atom-overlaps . [--keep-sum AD] -Ou -a \| bcftools norm -d exact \| bcftools filter -i EXPR \| bcftools sort -Oz`, `tabix`; `priva variant-ids -m encode`, `tabix` |
+| `ANNOTATE_STEP` gnomad | `anno_agg_gnomAD_data` | per chromosome `bcftools view -r CHR -Ou \| bcftools sort -Oz`, `tabix`, then `bcftools annotate -a GNOMAD_CHR -c 43_FIELDS -r SPAN -Oz`, `tabix` (chrM copied with `bcftools view -r chrM -Oz`); `bcftools concat -Ou \| bcftools sort -Oz`, `tabix` |
+| `ANNOTATE_STEP` clinvar | `anno_clinvar_data` | `bcftools annotate --threads T -a CLINVAR -c .INFO/CLNDN,...,.INFO/CLNCSQ:=INFO/CSQ -Ou \| bcftools sort -Oz`, `tabix` |
+| `ANNOTATE_STEP` control | `anno_control_vcf_allele` | without a control VCF, `bcftools view --force-samples -s UNAFFECTED \| bcftools +fill-tags -- -t AC,AN,AF,AC_Hom`; a control VCF without those tags, `bcftools +fill-tags`; then `bcftools annotate -a CONTROL -c INFO/control_AC:=INFO/AC,... -Oz`, `tabix` |
+| `ANNOTATE_STEP` vep | `anno_VEP_data` | `priva spliceai-cutoffs`, then the same `vep` command line (every plugin, MaveDB on GRCh38, the pext tracks when `pext_enabled`), `bcftools sort -Oz`, `tabix` |
+| `ANNOTATE_CADD` | `Calculate_CADD` | the Conda frontend check (`scripts/cadd_conda.py check`, now in Rust), `bcftools annotate --rename-chrs ucsc_to_GRC.contig.map.tsv -Ou \| bcftools sort -Oz`, `tabix`, `bcftools view --threads T -G -t ^MT -Oz`, `CADD.sh -c T -a -p -m -d -g GENOME -o OUT.gz` with the same `PATH`, `TMPDIR`, `PRIVA_CADD_MMSPLICE_EXON_CACHE` and `PRIVA_CADD_PRESCORE_BIN`, `gunzip`, the table without its `##` lines |
+
+Kept as the scripts had them, so the commands are the same: the settings as
+`read_yaml` read them; the wrapper's values passed through argparse for VEP
+(`--threads` read as Python's `int()` reads it, so an empty or `null` value
+stops the step); unquoted values split into words; the assembly from the
+VCF header as `check_vcf_assembly_version` found it (its `grep ID=chr1` and
+the `>` its awk kept); every file check, skip (tags already there, a CSQ
+newer than the program) and refusal; the gnomAD worker counts (the split with
+`min(threads, SLURM_CPUS_PER_TASK) / 2`, stopping new pieces after a failure,
+the annotation with `threads`) and its publication markers; pipelines that
+report only their last command's status, except where the script set
+`pipefail`. Left out: the checks that skipped a step whose output was newer
+than its inputs, the displays, and, in a task, the installer's branches
+(`PRIVA_CLINVAR_RECOVERY_CONFIG`, `anno_VEP_cache_candidate`), which stay in
+the shell for D1 until phase 6.
+
+`priva task step --step {preprocess,gnomad,clinvar,control,vep,cadd} --root
+CHECKOUT --config CONFIG --vcf VCF [--output PATH]` runs one of them by hand
+(preprocess and CADD write `--output`; the others change the VCF in place).
+
+[`tests/annotation_step_compare.py`](../tests/annotation_step_compare.py) runs
+each case through the shell function (the task's step wrapper before this
+change is kept as
+[`tests/fixtures/annotation-steps-cd91ec2/annotation_step.sh`](../tests/fixtures/annotation-steps-cd91ec2/annotation_step.sh))
+and through `priva task step`, on made-up data: a small reference named as
+hg38; a cohort VCF of three samples in UCSC and in NCBI names, with records off
+the primary contigs, multi-allelic and duplicate records, `*` alleles, a wrong
+REF and a record without an alternative genotype; per-chromosome gnomAD files
+with the 43 fields; a ClinVar file; control VCFs and PED files. bcftools and
+tabix are the real programs behind a logging wrapper; `vep`, `CADD.sh` and its
+Conda are stand-ins that log their arguments and write what the program
+writes; `priva variant-ids` is the real one. A case must give the same exit
+status, the same commands that write a file (paths and temporary names
+masked), the same records and header of the step's VCF and the same CADD
+table bytes.
+
+| Step | Cases | Exit, commands, outputs |
+| --- | --- | --- |
+| preprocess | UCSC names; NCBI names; sites only (no GT, so no `--keep-sum`); assembly unknown; assembly differs from the reference; missing reference | same; 49 or 55 records kept |
+| gnomAD | 2 threads; 1 thread; tags already there; chrM only; no records; a missing gnomAD chromosome file; a plain `.vcf` | same (25 commands for the full run) |
+| ClinVar | normal; no `threads`; tags already there; missing ClinVar file | same |
+| control | control VCF with counts; with genotypes only and no index; from the cohort's unaffected samples; none and optional; none and required; PED samples not in the VCF; tags already there | same |
+| VEP | GRCh38; GRCh37 (3 forks); pext tracks; pext without its mean file; assembly from the VCF; no `threads`; `threads: " +04 "`; a missing plugin file; no MaveDB file; SpliceAI versions differ; VEP fails; CSQ already there | same |
+| CADD | GRCh38 (MMSplice exon tables); GRCh37; no records; Conda 23.10; no Conda; no `CADD.sh`; unknown assembly | same |
+
+43 cases, no difference, in about a minute. With a route changed on purpose
+(another thread count for ClinVar, one more line in the CADD table) the
+comparison reports both. The CI job runs it after the Rust build.
+
+The hub folders: every annotation step's lineage now counts its Rust file
+instead of the shell functions (see "Hub lineages from each step's own code"),
+so each of the five sources gets a new, empty hub folder once, and the first
+run with `--annotation_hub` after this commit annotates every variant again.
+Later runs reuse the new folders as before.
+
+Changes you can notice:
+
+- The annotation, filtration and prioritization tasks no longer run GNU
+  parallel, yq, mawk or Python themselves (`CADD.sh` still runs its
+  Snakemake, and the standalone CADD workflow, `cadd.nf`, still runs
+  `scripts/cadd_conda.py`).
+- gnomAD leaves only its output in the task folder: the per-chromosome pieces
+  and GNU parallel's job logs were left there before.
+- The CADD Conda check gives Rust's messages; the rule is the same (Conda
+  24.7.1 or newer, read as `packaging` reads versions; a platform; a prefix
+  with `bin/activate`; a readable channel priority; Conda put on `PATH`
+  without changing which Python comes first).
+- The log lines start with `[priva task]`.
+
+Still shell after phase 4: `--phase annotation` (the whole `main_workflow`,
+which the workflow stopped calling when `ANNOTATE_COHORT` was removed), and
+the scripts' functions the installer calls (D1 annotates ClinVar with the
+gnomAD and VEP functions). They go with phase 6.
 
 ### Phases 3 to 7
 
 | Phase | Scope | Shell glue now | Python it still runs | Work (tools keep their commands) |
 | --- | --- | --- | --- | --- |
 | 3 | Downloads: A1, A4, A5, B1, B2, B3, B5, B6, B7, B8, B9, D0, F1 | 4 to 10 functions each | `alternative_start_codon.py` (A4) | Each a Nextflow process: curl or git, then `priva install-task record` for the receipt. Done for A1, A4, B1, B2, B3, B5, B6, B7, B8, B9 and F1 (above); A4 no longer runs `alternative_start_codon.py`, whose pickle the Rust detector never reads |
-| 4 | Pipeline scripts: `annotation_vcf.sh` (1,827 lines), `filtration_vcf_per_fam.sh` (356), `prioritization_vcf_per_fam.sh` (430), `common_bash_utils.sh` (1,627) | run inside every analysis task | an inline `python - <<PY` block in `anno_VEP_cache_worker`, and `cadd_conda.py` (finds CADD's conda) | The annotation, filtration and prioritization tasks already exist per step; each runs VEP, bcftools, `CADD.sh` and `priva` with their own command lines instead of a shell function. `priva task run` keeps the task's checks and runs them, since which commands run depends on the settings. Done for filtration and the prioritization steps (above). Every run goes through this, so it comes before the heavier installer phases |
+| 4 | Pipeline scripts: `annotation_vcf.sh` (1,827 lines), `filtration_vcf_per_fam.sh` (356), `prioritization_vcf_per_fam.sh` (430), `common_bash_utils.sh` (1,627) | run inside every analysis task | an inline `python - <<PY` block in `anno_VEP_cache_worker`, and `cadd_conda.py` (finds CADD's conda) | The annotation, filtration and prioritization tasks already exist per step; each runs VEP, bcftools, `CADD.sh` and `priva` with their own command lines instead of a shell function. `priva task run` keeps the task's checks and runs them, since which commands run depends on the settings. Done (above) for filtration, the prioritization steps and the six annotation steps; the scripts stay for the installer and `--phase annotation` until phase 6 |
 | 5 | Steps on native builders: A5 (moved from phase 3), C6, C8, C10, C11, D6, D8, D9, F4 to F9 | 7 to 19 functions each | `protein_domain_mapping.py` (C8), `build_gene_pathogenic_mechanism_cache.py` acquisition (F4); a configured non-default builder script | Locks, receipts and reuse checks into `priva`; F4's acquisition |
 | 6 | Heavy chains: A2, C1, C3, C4, D0 (moved from phase 3), D1, E1 | 13 to 49 functions each | `cadd_scripts_install.py`, `cadd_prescore_index.py` (kept: they belong to CADD) | VEP, bcftools, CrossMap and `CADD.sh` command lines in the process; one change per step |
 | 7 | Remove the shell installer | `main_install`, `install_cluster.sh`, the `*.sbatch` scripts | | Delete `install_utils.sh` and the bash part of the digest |

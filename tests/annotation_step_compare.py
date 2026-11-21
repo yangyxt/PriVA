@@ -528,12 +528,25 @@ def logging_tools(work: Path, original_path: str) -> Path:
     return tools
 
 
-def clean_path(original: str) -> str:
-    """PATH without folders that hold a conda program, so only the stand-in
-    frontends offer one."""
-    keep = [part for part in original.split(os.pathsep)
-            if part and not os.path.exists(os.path.join(part, "conda"))]
-    return os.pathsep.join(keep)
+def clean_path(original: str, work: Path) -> str:
+    """PATH without a conda program, so only the stand-in frontends offer
+    one: a folder that holds one (on CI runners /usr/bin does) is replaced by
+    a folder of links to everything else in it."""
+    parts = []
+    for index, part in enumerate(original.split(os.pathsep)):
+        if not part:
+            continue
+        if not os.path.lexists(os.path.join(part, "conda")):
+            parts.append(part)
+            continue
+        farm = work / "path" / str(index)
+        shutil.rmtree(farm, ignore_errors=True)
+        farm.mkdir(parents=True)
+        for name in os.listdir(part):
+            if name != "conda":
+                os.symlink(os.path.join(part, name), farm / name)
+        parts.append(str(farm))
+    return os.pathsep.join(parts)
 
 
 def route_env(route: Path, stand_in: Path, real_priva: str, tools: Path, path: str) -> dict:
@@ -752,7 +765,7 @@ def main() -> int:
     work = Path(args.work).resolve()
     work.mkdir(parents=True, exist_ok=True)
     priva = str(Path(args.priva).resolve())
-    path = clean_path(os.environ.get("PATH", ""))
+    path = clean_path(os.environ.get("PATH", ""), work)
     tools = logging_tools(work, path)
     stand_in = work / "priva"
     make_executable(stand_in, FAKE_PRIVA)

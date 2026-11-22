@@ -1,8 +1,0 @@
-Entry	Gene Names (primary)	Gene Names	Protein names	Function [CC]	Subcellular location [CC]	Tissue specificity	Involvement in disease	GeneID
-P05231	IL6	IL6 IFNB2	Interleukin-6	FUNCTION: cytokine.	Secreted			3569;
-Q06187	BTK	BTK AGMX1	"Weird" protein	FUNCTION: kinase.			DISEASE: XLA	695;
-Q9NZQ7	CD274	CD274 PDL1	PD-L1					29126;
-P15391	CD19	CD19	B-lymphocyte antigen CD19					930;
-P40763	STAT3	STAT3	Signal transducer					;6774;6775;
-
-P00001	SHORT

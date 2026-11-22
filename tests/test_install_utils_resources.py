@@ -2,13 +2,10 @@
 import os
 import json
 from pathlib import Path
-import shutil
 import subprocess
 import sys
 import tempfile
 import unittest
-
-import fake_priva_binary
 
 ROOT = Path(__file__).resolve().parents[1]
 INSTALLER = ROOT / "scripts/install_utils.sh"
@@ -24,7 +21,7 @@ class InstallerResources(unittest.TestCase):
         self.chain = self.folder / "test.chain.gz"
         self.chain.write_text("stub chain\n")
         self.env = dict(os.environ, TEST_FOLDER=str(self.folder), TEST_REFERENCE=str(self.reference),
-                        TEST_CHAIN=str(self.chain), **fake_priva_binary.environment(self.folder))
+                        TEST_CHAIN=str(self.chain))
 
     def run_shell(self, body):
         return subprocess.run(["bash", "-c", 'source "$1"; log() { printf "%s\\n" "$*" >&2; }; '
@@ -202,7 +199,6 @@ class InstallerResources(unittest.TestCase):
                 result = self.run_shell('''
                     read_yaml() { printf '%s\\n' "$TEST_REFERENCE"; }
                     python() { printf 'VALIDATE:%s\\n' "$*"; }
-                    export -f python
                     wget() { printf 'UNEXPECTED_DOWNLOAD\\n'; return 74; }
                     update_yaml() { printf 'UNEXPECTED_UPDATE\\n'; }
                     Conservation_install config "$TEST_FOLDER" "$TEST_ASSEMBLY"
@@ -210,11 +206,6 @@ class InstallerResources(unittest.TestCase):
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertNotIn("UNEXPECTED", result.stdout)
                 self.assertIn("conservation_resource_check.py --input " + str(self.reference), result.stdout)
-                genome = "GRCh37" if assembly == "hg19" else "GRCh38"
-                tool_prefix = os.path.dirname(shutil.which("python", path=self.env.get("PATH")))
-                self.assertEqual(fake_priva_binary.calls(self.env["PRIVA_FAKE_CALLS"])[-1], [
-                    "conservation-resource", "validate", "--input", str(self.reference),
-                    "--assembly", genome, "--reference", str(self.reference), "--tool-prefix", tool_prefix])
 
     def test_conservation_download_failure_never_updates_configuration(self):
         result = self.run_shell('''
@@ -337,9 +328,6 @@ class InstallerResources(unittest.TestCase):
                     *) return 99 ;;
                 esac
             }
-            # The motif step runs these helpers through priva; the stand-in
-            # priva starts python in a new shell, which sees exported functions only.
-            export -f python
             update_yaml() { printf 'UPDATE:%s\\n' "$*"; }
             AlphaMissense_pick_missense_constrained_segments "$TEST_MAPPING_CONFIG"
         ''')

@@ -321,58 +321,5 @@ class PositionIndexLookup(unittest.TestCase):
         self.assertEqual((novel, found), reference_lookup(self.table, self.lines)[:2])
 
 
-@unittest.skipUnless(pysam, "pysam is imported by the lookup script")
-class HandOffToPriva(unittest.TestCase):
-    """extract_scored.py hands the lookup to priva cadd-prescore only for a matching compact copy."""
-
-    def setUp(self):
-        self.temp = tempfile.TemporaryDirectory(prefix="cadd_handoff_", dir=os.environ.get("PRIVA_TEST_TMPDIR"))
-        self.addCleanup(self.temp.cleanup)
-        root = Path(self.temp.name)
-        self.table = root / "prescored.tsv.gz"
-        self.table.write_bytes(b"not a real table")
-        Path(str(self.table) + ".tbi").write_bytes(b"")
-        self.compact = Path(str(self.table) + ".priva_compact")
-        self.compact.write_bytes(b"compact rows")
-        self.calls = root / "calls.txt"
-        self.program = root / "priva"
-        self.program.write_text('#!/bin/sh\nprintf "%%s\\n" "$@" > "%s"\necho handed-off\n' % self.calls)
-        self.program.chmod(0o755)
-
-    def write_index(self, table_size, compact_size):
-        payload = b"PRIVA-CADD6IDX\x01\x00" + table_size.to_bytes(8, "little") + compact_size.to_bytes(8, "little")
-        Path(str(self.table) + ".priva_compact.idx").write_bytes(payload + b"rest of the index")
-
-    def lookup(self, program=True):
-        environment = dict(os.environ)
-        environment.pop("PRIVA_CADD_PRESCORE_BIN", None)
-        if program:
-            environment["PRIVA_CADD_PRESCORE_BIN"] = str(self.program)
-        return subprocess.run([sys.executable, str(LOOKUP), "--header", "-p", str(self.table),
-                               "--found_out=" + str(Path(self.temp.name) / "found.tsv")],
-                              input="1\t5\t.\tA\tC\n", capture_output=True, text=True, timeout=60, env=environment)
-
-    def test_matching_compact_copy_runs_priva_with_the_same_arguments(self):
-        self.write_index(self.table.stat().st_size, self.compact.stat().st_size)
-        result = self.lookup()
-        self.assertEqual((result.returncode, result.stdout), (0, "handed-off\n"), result.stderr)
-        self.assertEqual(self.calls.read_text().splitlines(),
-                         ["cadd-prescore", "--header", "-p", str(self.table),
-                          "--found_out=" + str(Path(self.temp.name) / "found.tsv")])
-
-    def test_without_a_matching_copy_or_program_python_runs(self):
-        for program, sizes in ((False, None), (True, (1, 1)), (True, None)):
-            with self.subTest(program=program, sizes=sizes):
-                index = Path(str(self.table) + ".priva_compact.idx")
-                if sizes is None and program:
-                    index.unlink(missing_ok=True)
-                else:
-                    self.write_index(*(sizes or (self.table.stat().st_size, self.compact.stat().st_size)))
-                result = self.lookup(program)
-                # The fake table makes the Python lookup fail; priva was not called.
-                self.assertNotEqual(result.returncode, 0)
-                self.assertFalse(self.calls.exists())
-
-
 if __name__ == "__main__":
     unittest.main()

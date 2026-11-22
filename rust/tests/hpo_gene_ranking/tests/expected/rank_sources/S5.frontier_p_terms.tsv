@@ -1,3 +1,0 @@
-sample_id	hp_id	hp_name	shortest_p_depth	longest_p_depth	original_entries	sources	gene_evidence_rows	direct_hpo_gene_count	goa_gene_count	pr_gene_count	mp_gene_count	orpha_gene_count	term_gene_set_size_for_scoring	term_gene_breadth_tier	term_candidate_role	term_weight	all_gene_symbols
-S5	HP:0002721	Immunodeficiency	2	2	PID	rag_direct	8	6	2	0	0	0	2	well_specified	primary_candidate_generator	0.5	ADA|BTK|CD19|IL7R|STAT3|TNFRSF13B
-S5	HP:0011123	"Inflammatory ""abnormality"" of the skin"	2	2	skin	rag_direct	3	3	0	0	0	0	3	well_specified	primary_candidate_generator	0.333333333	DOCK8|FLG|WAS

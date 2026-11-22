@@ -1,4 +1,0 @@
-orpha_disease_id	disease_name	orpha_gene_id	gene_symbol	gene_name	association_type	association_status	external_refs	source
-ORPHA:183660	Agammaglobulinémie liée à l'X	ORPHA:119051	BTK	Bruton tyrosine kinase	Disease-causing germline mutation(s) in	Assessed	HGNC:1133|OMIM:300300	Orphadata_product6
-ORPHA:183660	Agammaglobulinémie liée à l'X			No symbol gene		Not yet assessed		Orphadata_product6
-ORPHA:999999	Made-up & mixed disorder	ORPHA:1	DOCK8		Role in the phenotype of			Orphadata_product6

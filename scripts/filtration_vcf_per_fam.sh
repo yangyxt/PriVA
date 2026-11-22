@@ -45,14 +45,13 @@ function filter_allele_based_on_pedigree_data {
     fi
 
     log "Start filtering the records where patients GT are the same with controls GT info"
-    priva_resolve_binary "${config_file:-}" || return 1
-    log "Running commands: ${PRIVA_BIN} pedigree-filter \
+    log "Running commands: python3 ${SCRIPT_DIR}/pedigree_filtration_per_fam.py \
     -v ${input_vcf} \
     -p ${pedfile} \
     -f ${family_name} \
     -o ${output_vcf}"
 
-    "${PRIVA_BIN}" pedigree-filter \
+    python3 ${SCRIPT_DIR}/pedigree_filtration_per_fam.py \
     -v ${input_vcf} \
     -p ${pedfile} \
     -f ${family_name} \

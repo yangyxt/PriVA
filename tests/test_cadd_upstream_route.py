@@ -33,8 +33,6 @@ Calculate_CADD "$FIXTURE/input.vcf.gz" "$FIXTURE/config.yaml" "$FIXTURE/output.c
 
 
 BCFTOOLS_STUB = '''#!/usr/bin/env bash
-# `view -H`: the fixture input has one record.
-[[ " $* " == *" -H "* ]] && { [[ -e $FIXTURE/no-records ]] || printf '1\\t10\\t.\\tA\\tG\\n'; exit 0; }
 printf '%s\\n' "$@" > "$FIXTURE/bcftools-argv.txt"
 while [[ $# -gt 1 ]]; do [[ $1 == -o ]] && { out=$2; shift; }; shift; done
 cp -- "$1" "$out"
@@ -83,24 +81,15 @@ class UpstreamCaddRouteTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(argv, ['-c', '2', '-a', '-p', '-m', '-d', '-g', 'GRCh38', '-o',
                                 str(self.root / 'output.cadd.tsv.gz'), str(self.root / 'input.nochr.cadd_input.vcf.gz')])
-        # CADD has no MT data: MT records and genotype columns stay out of its input.
+        # CADD has no MT data: MT records stay out of its input.
         self.assertEqual((self.root / 'bcftools-argv.txt').read_text().splitlines(),
-                         ['view', '--threads', '2', '-G', '-t', '^MT', '-Oz', '-o',
+                         ['view', '--threads', '2', '-t', '^MT', '-Oz', '-o',
                           str(self.root / 'input.nochr.cadd_input.vcf.gz'), str(self.root / 'input.nochr.vcf.gz')])
         # PriVA's MMSplice copy saves and reloads its exon table beside CADD's GTF.
         self.assertEqual((self.root / 'cadd-exon-tables.txt').read_text(), str(self.exon_tables))
         # The consumer receives the plain table without CADD's ## header lines.
         self.assertEqual((self.root / 'output.cadd.tsv').read_text().splitlines()[0],
                          '#Chrom\tPos\tRef\tAlt\tRawScore\tPHRED')
-
-    def test_piece_without_records_gives_an_empty_table(self):
-        # main.nf gives CADD one empty piece when every new variant is on MT.
-        write_conda(self.root)
-        (self.root / 'no-records').write_text('')
-        result, argv = self.run_route()
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(argv, [])
-        self.assertEqual((self.root / 'output.cadd.tsv').read_text(), '')
 
     def test_missing_conda_stops_before_cadd_runs(self):
         result, argv = self.run_route()

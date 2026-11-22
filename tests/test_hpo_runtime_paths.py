@@ -23,7 +23,15 @@ check_vcf_validity() { [[ -s "$1" ]]; }
 check_table_column() { [[ -s "$1" && "$2" == vep_consq_lof ]]; }
 display_table() { [[ -s "$1" ]]; }
 count_vcf_records() { printf '1\n'; }
-priva_resolve_binary() { PRIVA_BIN=$TEST_PRIVA; }
+python() {
+    "$TEST_PYTHON" - "$@" <<'CONVERSION_STUB'
+import json, os, pathlib, sys
+arguments = sys.argv[1:]
+with open(os.environ["TEST_EVENTS"], "a") as stream:
+    stream.write(json.dumps(["conversion", *arguments]) + "\n")
+pathlib.Path(arguments[arguments.index("-o") + 1]).write_text("vep_consq_lof\nfixture\n")
+CONVERSION_STUB
+}
 assign_acmg_criteria() {
     "$TEST_PYTHON" -c 'import json,os,sys; open(os.environ["TEST_EVENTS"],"a").write(json.dumps(["assignment",*sys.argv[1:]])+"\n")' "$@"
 }
@@ -39,18 +47,8 @@ class HPORuntimePaths(unittest.TestCase):
         self.source = self.folder / "source"
         self.scripts = self.folder / "scripts with ' quote"
         self.scripts.mkdir()
-        # A stand-in for the priva program: records its arguments and writes the table.
-        self.converter = self.scripts / "priva"
-        self.converter.write_text('''#!/usr/bin/env bash
-exec "$TEST_PYTHON" - "$@" <<'CONVERSION_STUB'
-import json, os, pathlib, sys
-arguments = sys.argv[1:]
-with open(os.environ["TEST_EVENTS"], "a") as stream:
-    stream.write(json.dumps(["conversion", *arguments]) + "\\n")
-pathlib.Path(arguments[arguments.index("-o") + 1]).write_text("vep_consq_lof\\nfixture\\n")
-CONVERSION_STUB
-''')
-        self.converter.chmod(0o755)
+        self.converter = self.scripts / "combine_annotations.py"
+        self.converter.write_text("# conversion stub is separate from routing under test\n")
         self.default = self.source / "data/hpo/genes_to_phenotype.assertions.tsv.gz"
         self.default.parent.mkdir(parents=True)
         self.hpo(self.default)
@@ -72,7 +70,7 @@ CONVERSION_STUB
             for name in ("prepare_combined_tab", "main_prioritization"))
         self.env = dict(os.environ, TEST_PYTHON=sys.executable, TEST_EVENTS=str(self.events),
                         TEST_CONFIG=str(self.config_file), TEST_VCF=str(self.vcf), TEST_CADD=str(self.cadd),
-                        BASE_DIR=str(self.source), SCRIPT_DIR=str(self.scripts), TEST_PRIVA=str(self.converter))
+                        BASE_DIR=str(self.source), SCRIPT_DIR=str(self.scripts))
 
     @staticmethod
     def hpo(path):
@@ -99,7 +97,7 @@ CONVERSION_STUB
     def test_explicit_hpo_with_spaces_and_quotes_is_passed_verbatim_in_original_option_order(self):
         result, events = self.run_shell()
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(events, [["conversion", "combine-annotations", "-i", str(self.vcf), "-c", str(self.cadd),
+        self.assertEqual(events, [["conversion", str(self.converter), "-i", str(self.vcf), "-c", str(self.cadd),
                                    "-o", str(self.output), "-p", str(self.selected), "-t", "1"]])
 
     def test_three_argument_call_preserves_legacy_default(self):
@@ -161,13 +159,6 @@ CONVERSION_STUB
         result, events = self.run_shell()
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(events[0][events[0].index("-p") + 1], str(self.default))
-
-    def test_rebuilt_program_invalidates_cached_table(self):
-        self.current_output()
-        os.utime(self.converter, (time.time(), time.time()))
-        result, events = self.run_shell()
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(events[0][1], "combine-annotations")
 
     def test_unselected_legacy_hpo_refresh_does_not_invalidate_explicit_selection(self):
         self.current_output()

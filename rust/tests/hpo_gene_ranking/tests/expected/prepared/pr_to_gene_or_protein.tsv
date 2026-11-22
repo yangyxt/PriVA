@@ -1,5 +1,0 @@
-pr_id	pr_name	xref_db	uniprot_accession	ncbi_gene_id	source
-PR:000001393	interleukin-6	UniProtKB	P05231		PRO_pr_obo_xref
-PR:000001393	interleukin-6	NCBIGene		3569	PRO_pr_obo_xref
-PR:000000001	protein	UniProtKB	Q06187		PRO_pr_obo_xref
-PR:000002222		NCBIGene		900001	PRO_pr_obo_xref

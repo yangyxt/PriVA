@@ -33,9 +33,7 @@ check_path() { [[ $# -eq 3 && "$2" == file && -s "$1" ]]; }
 check_vcf_validity() { return 1; }
 check_table_column() { return 1; }
 display_table() { :; }
-# The ACMG step is priva acmg-assign; this stand-in records its arguments.
-priva_resolve_binary() { PRIVA_BIN=priva_stand_in; }
-priva_stand_in() {
+python() {
     "$TEST_PYTHON" - "$@" <<'ASSIGNMENT_STUB'
 import gzip, json, os, pickle, sys
 arguments = sys.argv[1:]

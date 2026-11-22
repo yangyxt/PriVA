@@ -596,7 +596,7 @@ def SpliceAI_interpretation(DS_AG,
         length_changing = True
         # Since the variant is at the upstream of the variant which located on an exon. The early cryptic donor site might get this exon truncated at the 3' end.
         if exon_pos:
-            affected_exons.add(int(exon_pos.split('/')[0].split('-')[0]))
+            affected_exons.add(int(exon_pos.split('/')[0]))
         
         parse_result = parse_hgvsc_splice_position(hgvsc, strand, var_pos)
         canonical_ds_offset = 0
@@ -659,9 +659,9 @@ def SpliceAI_interpretation(DS_AG,
 
                 if abs(canonical_as_offset) >= 30:
                     if intron_pos:
-                        affected_exons.add(int(intron_pos.split('/')[0].split('-')[0]) + 1)
+                        affected_exons.add(int(intron_pos.split('/')[0]) + 1)
                     if exon_pos:
-                        affected_exons.add(int(exon_pos.split('/')[0].split('-')[0]))
+                        affected_exons.add(int(exon_pos.split('/')[0]))
 
                 if cds_pos:
                     if abs(canonical_as_offset) / int(cds_pos.split('/')[1]) > 0.1:
@@ -671,9 +671,9 @@ def SpliceAI_interpretation(DS_AG,
             else:
                 # meaning no nearby acceptor site can rescue the lost acceptor site
                 if exon_pos:
-                    affected_exons.add(int(exon_pos.split('/')[0].split('-')[0]))
+                    affected_exons.add(int(exon_pos.split('/')[0]))
                 if intron_pos:
-                    affected_exons.add(int(intron_pos.split('/')[0].split('-')[0]) + 1)
+                    affected_exons.add(int(intron_pos.split('/')[0]) + 1)
             
         
         # Based on the input annotations, we cannot determine whether:
@@ -956,16 +956,6 @@ def process_exon_skipping(pos_str: str,
     return affected_exons, reason, length_changing, is_lof, frame_shift, loc_intol_domain
 
 
-def position_pair(position: str) -> tuple:
-    """The number and the total of an EXON or INTRON value ("4/12").
-
-    VEP writes a range ("4-5/12") for a variant that spans several exons or
-    introns; its first number is taken, as elsewhere in this script.
-    """
-    number, total = position.split('/')
-    return int(number.split('-')[0]), int(total)
-
-
 def process_cryptic_donor(pos_str: str, 
                          transcript_id: str,
                          transcript_domain_map: dict,
@@ -986,12 +976,12 @@ def process_cryptic_donor(pos_str: str,
     logger.warning(f"The input transcript_id is {transcript_id}, intron_pos is {intron_pos}, exon_pos is {exon_pos}, cds_pos is {cds_pos}, whether intron_pos is NA value? {na_value(intron_pos)}, whether exon_pos is NA value? {na_value(exon_pos)}")
     # Parse position information if available
     if not na_value(intron_pos):
-        intron_num, total_introns = position_pair(intron_pos)
+        intron_num, total_introns = map(int, intron_pos.split('/'))
     else:
         intron_num = None
         total_introns = None
     if not na_value(exon_pos):
-        exon_num, total_exons = position_pair(exon_pos)
+        exon_num, total_exons = map(int, exon_pos.split('/'))
     else:
         exon_num = None
         total_exons = None
@@ -1072,12 +1062,12 @@ def process_cryptic_acceptor(pos_str: str,
     loc_intol_domain = False
     # Parse position information if available
     if not na_value(intron_pos):
-        intron_num, total_introns = position_pair(intron_pos)
+        intron_num, total_introns = map(int, intron_pos.split('/'))
     else:
         intron_num = None
         total_introns = None
     if not na_value(exon_pos):
-        exon_num, total_exons = position_pair(exon_pos)
+        exon_num, total_exons = map(int, exon_pos.split('/'))
     else:
         exon_num = None
         total_exons = None

@@ -1,5 +1,0 @@
-sample_id	hp_id	hp_name	gene_symbol	ncbi_gene_id	uniprot_accession	candidate_source	candidate_status	external_id	external_name	gene_set_size	source_quality	term_gene_breadth_tier	term_candidate_role	term_weight	evidence_detail	evidence_row_count	propagated_from_hp_id	propagated_from_hp_name
-S6	HP:0002090	Pneumonia	BTK	695		HPO_PHENOTYPE_TO_GENES	direct_responsible_gene_candidate	HP:0002090	Pneumonia	4	1.0	broad_weak	weak_candidate_generator	0.25	OMIM:600000	1		
-S6	HP:0002090	Pneumonia	CFTR	1080		HPO_PHENOTYPE_TO_GENES	direct_responsible_gene_candidate	HP:0002090	Pneumonia	4	1.0	broad_weak	weak_candidate_generator	0.25	OMIM:600003	1		
-S6	HP:0002090	Pneumonia	DOCK8	81704		HPO_PHENOTYPE_TO_GENES	direct_responsible_gene_candidate	HP:0002090	Pneumonia	4	1.0	broad_weak	weak_candidate_generator	0.25	OMIM:600002	1		
-S6	HP:0002090	Pneumonia	STAT3	6774		HPO_PHENOTYPE_TO_GENES	direct_responsible_gene_candidate	HP:0002090	Pneumonia	4	1.0	broad_weak	weak_candidate_generator	0.25	OMIM:600001	1		

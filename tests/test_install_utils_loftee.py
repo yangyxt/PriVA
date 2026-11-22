@@ -10,7 +10,6 @@ import sys
 import tempfile
 import unittest
 
-import fake_priva_binary
 from test_conservation_resource_check import make_bigwig, make_reference
 
 
@@ -31,7 +30,6 @@ update_yaml() {
 update_or_append_yaml() { update_yaml "$@"; }
 priva_env_vars_set() { export "$@"; }
 python() { "$TEST_PYTHON" "$@"; }
-export -f python
 git() { event "git $*"; return 72; }
 wget() {
     local destination=${@: -1} name fixture
@@ -69,7 +67,7 @@ class LoFteeInstallerTests(unittest.TestCase):
         self.config = self.folder / "config.json"
         self.env = dict(os.environ, TEST_EVENTS=str(self.events), TEST_PYTHON=sys.executable,
                         TEST_CONFIG=str(self.config), TEST_CACHE=str(self.cache), TEST_FAIL="none",
-                        TMPDIR=str(self.folder), **fake_priva_binary.environment(self.folder))
+                        TMPDIR=str(self.folder))
         self.configure("hg19")
 
     def configure(self, assembly):
@@ -124,17 +122,6 @@ class LoFteeInstallerTests(unittest.TestCase):
                 self.assertEqual(events, [])
                 self.assertEqual(self.config.read_bytes(), before)
                 self.assertIn("already installed", result.stderr)
-        tool_prefix = os.path.dirname(shutil.which("python", path=self.env.get("PATH")))
-        expected = []
-        for assembly in ("hg19", "GRCh37", "hg38", "GRCh38"):
-            assets = self.folder / (assembly + "_assets")
-            expected.append(["loftee-resources", "validate", "--ancestor", str(assets / "ancestor.fa.gz"),
-                             "--conservation", str(assets / "conservation.sql"), "--assembly", assembly])
-            if assembly in ("hg38", "GRCh38"):
-                expected.append(["conservation-resource", "validate", "--input", str(assets / "gerp.bw"),
-                                 "--assembly", assembly, "--reference", str(assets / "hg38.reference.fa"),
-                                 "--tool-prefix", tool_prefix])
-        self.assertEqual(fake_priva_binary.calls(self.env["PRIVA_FAKE_CALLS"]), expected)
 
     def test_fresh_hg19_under_nounset_uses_original_three_sources_without_gerp_url(self):
         self.fresh()
@@ -146,32 +133,6 @@ class LoFteeInstallerTests(unittest.TestCase):
         registered = json.loads(self.config.read_text())
         self.assertEqual(registered["human_ancestor_fasta"], str(self.cache / "LoFtee/hg19/human_ancestor.fa.gz"))
         self.assertEqual(registered["gerp_bigwig"], "")
-
-    def test_block_format_ancestor_gets_its_block_index_and_plain_gzip_none(self):
-        # samtools needs FILE.gzi for a bgzipped FASTA; a finished install
-        # step's folder is read-only, so the installer writes it.
-        installed = self.cache / "LoFtee/hg19/human_ancestor.fa.gz"
-        self.fresh()
-        result, _ = self.run_shell()
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertFalse(Path(str(installed) + ".gzi").exists())
-        if shutil.which("bgzip", path=self.env.get("PATH")) is None:
-            self.skipTest("bgzip is not available")
-        shutil.rmtree(self.cache / "LoFtee")
-        plain = self.ancestor.with_suffix(".plain")
-        with gzip.open(self.ancestor, "rb") as stream, open(plain, "wb") as output:
-            output.write(stream.read())
-        with open(self.ancestor, "wb") as output:
-            subprocess.run(["bgzip", "-c", str(plain)], check=True, stdout=output, env=self.env)
-        self.fresh()
-        result, _ = self.run_shell()
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertGreater(Path(str(installed) + ".gzi").stat().st_size, 0)
-        # A second run reuses the installed files and keeps the index.
-        index = Path(str(installed) + ".gzi").read_bytes()
-        result, _ = self.run_shell()
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(Path(str(installed) + ".gzi").read_bytes(), index)
 
     def test_fresh_grch38_validates_bigwig_before_registration(self):
         self.configure("GRCh38")

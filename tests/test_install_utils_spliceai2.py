@@ -1,5 +1,7 @@
 """Two-path installation, atomic registration, and verified receipt reuse."""
+import contextlib
 import hashlib
+import io
 import json
 import os
 from pathlib import Path
@@ -8,10 +10,9 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 import yaml
-
-import fake_priva_binary
 
 ROOT = Path(__file__).resolve().parents[1]
 INSTALLER = ROOT / 'scripts/install_utils.sh'
@@ -40,12 +41,9 @@ class SpliceAIInstallerInputs(unittest.TestCase):
         self.indel = self.folder / 'indel with spaces.vcf.gz'
         self.snv.write_bytes(b'fixture: helper owns decompressed-header validation')
         self.indel.write_bytes(b'fixture: helper owns decompressed-header validation')
-        # A stand-in for the priva program's spliceai-cache-input command.
-        self.helper = scripts / 'priva'
-        self.helper.write_text('#!' + sys.executable + '\n' + FAKE_INPUT_HELPER)
-        self.helper.chmod(0o755)
-        self.env = dict(os.environ, PRIVA_BINARY=str(self.helper), TEST_SCRIPT_DIR=str(scripts.resolve()),
-                        TEST_CONFIG=str(self.config), TEST_FOLDER=str(self.folder),
+        self.helper = scripts / 'spliceai_cache_input.py'
+        self.helper.write_text(FAKE_INPUT_HELPER)
+        self.env = dict(os.environ, TEST_CONFIG=str(self.config), TEST_FOLDER=str(self.folder),
                         TEST_CALLS=str(self.calls), TEST_PROMPTS=str(self.prompts),
                         TEST_SNV=str(self.snv), TEST_INDEL=str(self.indel))
         self.configure()
@@ -140,7 +138,7 @@ class SpliceAIInstallerInputs(unittest.TestCase):
         self.assertNotEqual(self.invoke().returncode, 0)
         self.assertFalse(self.prompts.exists())
 
-    def test_native_plugin_order_excludes_unused_motif_build(self):
+    def test_original_plugin_stage_order_is_retained(self):
         result = self.shell(r'''
             CONDA_PREFIX="$TEST_FOLDER/envs/priva_acmg"
             for name in UTRAnnotator_install LOEUF_install Conservation_install AlphaMissense_install AlphaMissense_anno AlphaMissense_pick_missense_constrained_segments SpliceAI_install SpliceVault_install MaveDB_install PrimateAI_install; do
@@ -152,20 +150,15 @@ class SpliceAIInstallerInputs(unittest.TestCase):
         self.assertEqual(self.calls.read_text().splitlines(), [
             'UTRAnnotator_install', 'LOEUF_install', 'Conservation_install',
             'AlphaMissense_install', 'AlphaMissense_anno',
-            'SpliceAI_install',
+            'AlphaMissense_pick_missense_constrained_segments', 'SpliceAI_install',
             'SpliceVault_install', 'MaveDB_install', 'PrimateAI_install'])
         self.assertNotIn('SpliceAI_profile_install', INSTALLER.read_text())
 
 
 FAKE_INPUT_HELPER = r'''
-import argparse, hashlib, json, os, sys
+import argparse, hashlib, json, os
 from pathlib import Path
 import yaml
-if sys.argv[1:]==['--version']:print('priva 0.1.0 (fixture)');raise SystemExit(0)
-assert sys.argv[1]=='spliceai-cache-input', sys.argv
-# The command runs install_utils.sh from this folder for SpliceAI2 tables.
-assert os.environ['PRIVA_SCRIPT_DIR']==os.environ['TEST_SCRIPT_DIR'], os.environ.get('PRIVA_SCRIPT_DIR')
-del sys.argv[1]
 p=argparse.ArgumentParser()
 p.add_argument('command', choices=['install'])
 for key in ('config','cache-dir','snv','indel'):p.add_argument('--'+key,required=True)
@@ -317,10 +310,7 @@ class SpliceAI2Preparation(unittest.TestCase):
         self.manifest.write_text(json.dumps(self.source))
         self.output = self.folder / 'output with spaces'
         self.calls = self.folder / 'calls.json'
-        # The installer runs priva spliceai2-prepare; the fixture priva runs the
-        # stand-in driver above with the same arguments.
-        self.env = dict(os.environ, TEST_CONFIG=str(self.config), TEST_CALLS=str(self.calls),
-                        **fake_priva_binary.environment(self.folder, scripts))
+        self.env = dict(os.environ, TEST_CONFIG=str(self.config), TEST_CALLS=str(self.calls))
 
     def invoke(self, mode='valid', converter='/pinned bin/spliceai2-converter'):
         self.env['TEST_ADAPTER_MODE'] = mode
@@ -399,17 +389,15 @@ class SpliceAI2Preparation(unittest.TestCase):
         self.assertNotIn('FileNotFoundError', result.stderr)
         self.assertFalse(self.calls.exists())
 
-    def test_missing_priva_and_failed_preparation_do_not_update_config(self):
+    def test_missing_driver_and_failed_driver_do_not_update_config(self):
         result = self.invoke('failure')
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual(self.config.read_bytes(), self.original)
-        self.calls.unlink(missing_ok=True)
-        self.env['PRIVA_BINARY'] = str(self.folder / 'absent' / 'priva')
+        self.driver.unlink()
         result = self.invoke()
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn('must be an existing executable', result.stderr)
+        self.assertIn('deployment driver is absent', result.stderr)
         self.assertEqual(self.config.read_bytes(), self.original)
-        self.assertFalse(self.calls.exists())
 
     def test_changed_config_is_not_overwritten(self):
         result = self.invoke('config_changed')
@@ -436,6 +424,43 @@ class SpliceAI2Preparation(unittest.TestCase):
         result = self.invoke()
         self.assertNotEqual(result.returncode, 0)
         self.assertFalse(self.calls.exists())
+
+    def test_output_changed_after_checksum_is_rejected_before_config_write(self):
+        result = self.invoke()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.config.write_bytes(self.original)
+        receipt = self.output / 'adapter.ready.json'
+        data = json.loads(receipt.read_text())
+        target = Path(data['outputs']['snv']['path'])
+        expected = data['outputs']['snv']['sha256']
+        real_sha256 = hashlib.sha256
+        changed = []
+
+        class MutatingDigest:
+            def __init__(self, *args, **kwargs):
+                self.digest = real_sha256(*args, **kwargs)
+
+            def update(self, value):
+                self.digest.update(value)
+
+            def hexdigest(self):
+                value = self.digest.hexdigest()
+                if value == expected and not changed:
+                    with target.open('ab') as stream:
+                        stream.write(b'changed after checksum')
+                    changed.append(True)
+                return value
+
+        marker = '    python - "${config_file}" "${manifest}" "${output_dir}" "${receipt}" "${config_sha}" "${manifest_sha}" <<\'PY\'\n'
+        body = self.installer.read_text().split(marker, 1)[1].split('\nPY\n', 1)[0]
+        argv = ['receipt-check', str(self.config), str(self.manifest), str(self.output), str(receipt),
+                real_sha256(self.original).hexdigest(), real_sha256(self.manifest.read_bytes()).hexdigest()]
+        with mock.patch.object(sys, 'argv', argv), mock.patch('hashlib.sha256', MutatingDigest):
+            with contextlib.redirect_stdout(io.StringIO()):
+                with self.assertRaisesRegex(SystemExit, 'verification input changed'):
+                    exec(compile(body, '<SpliceAI2 receipt verifier>', 'exec'), {})
+        self.assertEqual(changed, [True])
+        self.assertEqual(self.config.read_bytes(), self.original)
 
     def test_completed_receipt_reuse_never_invokes_converter(self):
         self.assertEqual(self.invoke().returncode, 0)

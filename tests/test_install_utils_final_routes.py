@@ -11,8 +11,6 @@ import tempfile
 import time
 import unittest
 
-import fake_priva_binary
-
 
 ROOT = Path(__file__).resolve().parents[1]
 INSTALLER = ROOT / "scripts/install_utils.sh"
@@ -65,8 +63,7 @@ class FinalInstallerRoutes(unittest.TestCase):
         self.config = {"assembly": "hg19", "vep_plugins_cachedir": str(self.cache), "vep_installed_version": "116"}
         self.env = dict(os.environ, TEST_PYTHON=sys.executable, TEST_EVENTS=str(self.events),
                         TEST_CONFIG=str(self.config_file), TEST_CACHE=str(self.cache), TEST_DATA=str(self.data),
-                        TEST_FASTA=str(self.fasta), TEST_FAIL="none", TMPDIR=str(self.folder),
-                        **fake_priva_binary.environment(self.folder))
+                        TEST_FASTA=str(self.fasta), TEST_FAIL="none", TMPDIR=str(self.folder))
 
     @staticmethod
     def write_fasta(path, assembly="GRCh37", compressed=True):
@@ -252,7 +249,6 @@ wget() { printf 'corrupt text\n' > "${@: -1}"; }
         os.utime(index, (time.time() + 5, time.time() + 5))
         result, events = self.run_shell('AlphaMissense_install "$TEST_CONFIG" "$TEST_CACHE" hg38 /plugins', r'''
 python() { event alpha-helper "$@"; return 73; }
-export -f python event
 ''')
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual(sum(event[0] == "alpha-helper" for event in events), 1)
@@ -299,7 +295,6 @@ python() {
 validate_gene_pathogenic_mechanism_evidence() { return 0; }
 validate_gene_nonlof_mechanism_cache() { return 0; }
 validate_hpo_condition_mechanism_cache() { return 0; }
-export -f python event
 '''
 
     def test_custom_vcv_selection_is_passed_to_both_builder_phases_and_not_replaced(self):
@@ -427,7 +422,6 @@ out = arguments[arguments.index("--out-json") + 1]
 json.dump({"metadata": {"clinvar": {"source": path, "source_sha256": sha}}}, open(out, "w"))
 INJECTOR_IDENTITY_STUB
 }
-export -f python event
 '''
 
     def test_custom_vcv_changed_bytes_at_same_path_reinjects_and_unchanged_reuses(self):
@@ -459,9 +453,7 @@ interpret_utr_annotations() { return 0; }
 check_path() { return 0; }
 check_vcf_validity() { return 1; }
 display_table() { return 0; }
-# The ACMG step is priva acmg-assign; this stand-in records its arguments.
-priva_resolve_binary() { PRIVA_BIN=priva_stand_in; }
-priva_stand_in() { event acmg "$@"; }
+python() { event acmg "$@"; }
 '''
         for compressed in (True, False):
             with self.subTest(compressed=compressed):
@@ -529,9 +521,7 @@ interpret_utr_annotations() { return 0; }
 check_path() { return 0; }
 check_vcf_validity() { return 1; }
 display_table() { return 0; }
-# The ACMG step is priva acmg-assign; this stand-in records its arguments.
-priva_resolve_binary() { PRIVA_BIN=priva_stand_in; }
-priva_stand_in() { event acmg "$@"; }
+python() { event acmg "$@"; }
 '''
         for assembly in ("hg38", "GRCh38"):
             self.events.write_text("")

@@ -1,6 +1,0 @@
-sample_id	gene_symbol	ncbi_gene_ids	frontier_hp_count	frontier_hp_ids	frontier_hp_names	candidate_sources	candidate_statuses	external_ids	evidence_row_count
-S2	DOCK8	81704	1	HP:0000964	Eczema	HPO_PHENOTYPE_TO_GENES	direct_responsible_gene_candidate	HP:0000964	1
-S2	FLG	2312	1	HP:0000964	Eczema	HPO_PHENOTYPE_TO_GENES	direct_responsible_gene_candidate	HP:0000964	1
-S2	SCN1A	6323	1	HP:0002069	Bilateral tonic-clonic seizure	HPO_PHENOTYPE_TO_GENES	direct_responsible_gene_candidate	HP:0002069	1
-S2	STAT3	6774	1	HP:0000964	Eczema	HPO_PHENOTYPE_TO_GENES	direct_responsible_gene_candidate	HP:0000964	1
-S2	WAS	7454	1	HP:0000964	Eczema	HPO_PHENOTYPE_TO_GENES	direct_responsible_gene_candidate	HP:0000964	1

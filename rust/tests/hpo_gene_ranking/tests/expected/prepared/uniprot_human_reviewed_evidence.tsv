@@ -1,7 +1,0 @@
-uniprot_accession	primary_gene_symbol	gene_names	protein_names	function_text	subcellular_location_text	tissue_specificity_text	disease_text	ncbi_gene_ids
-P05231	IL6	IL6 IFNB2	Interleukin-6	FUNCTION: cytokine.	Secreted			3569;
-Q06187	BTK	BTK AGMX1	Weird protein	FUNCTION: kinase.			DISEASE: XLA	695;
-Q9NZQ7	CD274	CD274 PDL1	PD-L1					29126;
-P15391	CD19	CD19	B-lymphocyte antigen CD19					930;
-P40763	STAT3	STAT3	Signal transducer					;6774;6775;
-P00001	SHORT							

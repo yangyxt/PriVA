@@ -7,8 +7,7 @@
 
 # Maintainer: yangyxt@gmail.com, yangyxt@hku.hk
 
-# BASH_SOURCE, not $0: the Nextflow step wrapper sources this file.
-SCRIPT_DIR=$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")
+SCRIPT_DIR=$(dirname $(readlink -f $0))
 BASE_DIR=$(dirname ${SCRIPT_DIR})
 DATA_DIR=${BASE_DIR}/data
 source ${SCRIPT_DIR}/common_bash_utils.sh
@@ -40,18 +39,17 @@ function prepare_combined_tab () {
 
 	check_vcf_validity "${input_vcf}" || \
 	{ log "The input VCF file ${input_vcf} is not valid, please check the VCF file"; return 1; }
-    priva_resolve_binary "${config_file}" || return 1
 
     [[ -f ${output_tab} ]] && \
     [[ ${output_tab} -nt ${input_vcf} ]] && \
     [[ ${output_tab} -nt ${hpo_tab} ]] && \
     [[ -z "$config_file" || "$output_tab" -nt "$config_file" ]] && \
-    [[ ${output_tab} -nt ${PRIVA_BIN} ]] && \
+    [[ ${output_tab} -nt ${SCRIPT_DIR}/combine_annotations.py ]] && \
     check_table_column "${output_tab}" "vep_consq_lof" && \
     { log "The combined annotation table ${output_tab} is up to date, skip the conversion"; return 0; } || \
     { log "The combined annotation table ${output_tab} is outdated, start the conversion"; }
 
-    "${PRIVA_BIN}" combine-annotations \
+    python "${SCRIPT_DIR}/combine_annotations.py" \
     -i "${input_vcf}" \
     -c "${CADD_anno_file}" \
     -o "${output_tab}" \
@@ -65,7 +63,7 @@ function interpret_splicing_annotations () {
     local input_tab=${1}
     local config_file=${2}
     local threads=${3}
-    priva_resolve_binary "${config_file}" || return 1
+    local splicing_py=${SCRIPT_DIR}/splicing_var_analysis.py
 
     local alphamissense_tranx_domain_map=$(read_yaml ${config_file} "alphamissense_tranx_domain_map")
     local intolerant_domains=$(read_yaml ${config_file} "all_intolerant_domains")
@@ -75,7 +73,8 @@ function interpret_splicing_annotations () {
     [[ ${input_tab} -nt ${interpro_entry_map_pkl} ]] && \
     [[ ${input_tab} -nt ${alphamissense_tranx_domain_map} ]] && \
     [[ ${input_tab} -nt ${intolerant_domains} ]] && \
-    [[ ${input_tab} -nt ${PRIVA_BIN} ]] && \
+    [[ ${input_tab} -nt ${splicing_py} ]] && \
+    [[ ${input_tab} -nt ${SCRIPT_DIR}/spliceai_cutoffs.py ]] && \
     check_table_column ${input_tab} "splicing_lof" && \
     check_table_column ${input_tab} "splicing_len_changing" && \
     check_table_column ${input_tab} "splicing_canonical_offset" && \
@@ -83,7 +82,7 @@ function interpret_splicing_annotations () {
     return 0 || \
     log "The input table ${input_tab} is outdated, start the splicing interpretation"
 
-    "${PRIVA_BIN}" splicing-analysis \
+    python ${splicing_py} \
     --anno_table ${input_tab} \
     --transcript_domain_map ${alphamissense_tranx_domain_map} \
     --intolerant_domains ${intolerant_domains} \
@@ -100,7 +99,8 @@ function interpret_utr_annotations () {
     local input_tab=${1}
     local config_file=${2}
     local threads=${3}
-    priva_resolve_binary "${config_file}" || return 1
+
+    local utr_py=${SCRIPT_DIR}/utr_anno_interpret.py
 
     local alphamissense_tranx_domain_map=$(read_yaml ${config_file} "alphamissense_tranx_domain_map")
     log "The alphamissense_tranx_domain_map is: ${alphamissense_tranx_domain_map}"
@@ -110,14 +110,14 @@ function interpret_utr_annotations () {
     [[ -f ${input_tab} ]] && \
     [[ ${input_tab} -nt ${alphamissense_tranx_domain_map} ]] && \
     [[ ${input_tab} -nt ${intolerant_domains} ]] && \
-    [[ ${input_tab} -nt ${PRIVA_BIN} ]] && \
+    [[ ${input_tab} -nt ${utr_py} ]] && \
     check_table_column ${input_tab} "5UTR_lof" && \
     check_table_column ${input_tab} "5UTR_length_changing" && \
     log "The input table ${input_tab} is up to date, skip the UTR interpretation" && \
     return 0 || \
     log "The input table ${input_tab} is outdated, start the UTR interpretation"
 
-    "${PRIVA_BIN}" utr-anno-interpret \
+    python ${utr_py} \
     --variants_table ${input_tab} \
     --domain_map ${alphamissense_tranx_domain_map} \
     --intolerant_domains ${intolerant_domains} && \
@@ -153,37 +153,11 @@ function assign_acmg_criteria () {
     # Preprocess step, interpret the UTR annotations
     interpret_utr_annotations ${input_tab} ${config_file} ${threads} || \
     { log "Failed to interpret UTR annotations for ${input_tab}"; return 1; }
-
-    [[ -z ${fam_name} ]] && local acmg_fam_arg="" || local acmg_fam_arg="-f ${fam_name}"
-    acmg_assign_table -i ${input_tab} -c ${config_file} -t ${threads} ${acmg_fam_arg}
-}
-
-
-# The ACMG part of assign_acmg_criteria, for a table that already has its
-# splicing and UTR columns (the Nextflow prioritization-acmg task).
-function acmg_assign_table () {
-    local input_tab
-    local config_file
-    local fam_name
-    local threads
-    local OPTIND i c f t
-    while getopts i:c:f::t: args
-    do
-        case ${args} in
-            i) input_tab=$OPTARG ;;
-            c) config_file=$OPTARG ;;
-            f) fam_name=$OPTARG ;;
-            t) threads=$OPTARG ;;
-            *) echo "No argument passed. At least pass an argument specifying the input table" ;;
-        esac
-    done
-
+    
     local mean_am_score_table=${BASE_DIR}/data/alphamissense/alphamissense_mean_score.tsv
     local ped_table=$(read_yaml ${config_file} "ped_file")
     local clinvar_aa_dict_pkl=$(read_yaml ${config_file} "clinvar_aa_stat")
     local clinvar_splice_dict_pkl=$(read_yaml ${config_file} "clinvar_splice_stat")
-    # PM5's residue rules of 30 October 2026 read this index (install_utils.sh ClinVar_PM5_index).
-    local clinvar_pm5_index=$(read_yaml ${config_file} "clinvar_pm5_index")
     local intolerant_domains_pkl=$(read_yaml ${config_file} "all_intolerant_domains")
 	local am_intol_domains_tsv=$(read_yaml ${config_file} "alphamissense_intolerant_domains")
     local clinvar_gene_stat_pkl
@@ -224,7 +198,6 @@ function acmg_assign_table () {
     local has_error=0
     check_path ${clinvar_aa_dict_pkl} "file" "clinvar_aa_stat" || has_error=1
     check_path ${clinvar_splice_dict_pkl} "file" "clinvar_splice_stat" || has_error=1
-    check_path ${clinvar_pm5_index} "file" "clinvar_pm5_index" || has_error=1
     check_path ${intolerant_domains_pkl} "file" "all_intolerant_domains" || has_error=1
     check_path ${am_intol_domains_tsv} "file" "alphamissense_intolerant_domains" || has_error=1
     check_path "${clinvar_gene_stat_pkl}" "file" "clinvar_gene_stat" || has_error=1
@@ -264,18 +237,23 @@ function acmg_assign_table () {
 
     [[ ${has_error} -eq 1 ]] && \
     { log "Failed to offer the valid required files for the ACMG criteria assignment"; return 1; }
-    priva_resolve_binary "${config_file}" || return 1
+    
+    # Define acmg_py before skip check so we can include it in timestamp comparison
+    local acmg_py=${SCRIPT_DIR}/acmg_criteria_assign.py
+    local acmg_pm1_py=${SCRIPT_DIR}/acmg_pm1_pp2_bp1_missense.py
 
     # Test whether the function can be skipped
     # Skip if: input_tab is newer than all data files, output exists and is newer than input,
-    # AND output is newer than the priva program (so a rebuilt program triggers a re-run).
+    # AND output is newer than acmg_criteria_assign.py and the PM1 criteria module
+    # (so script updates trigger re-run).
     [[ -f ${input_tab} ]] && \
     [[ -f ${output_acmg_mat} ]] && \
-    [[ ${output_acmg_mat} -nt ${PRIVA_BIN} ]] && \
+    [[ ${output_acmg_mat} -nt ${acmg_py} ]] && \
+    [[ ${output_acmg_mat} -nt ${acmg_pm1_py} ]] && \
+    [[ ${output_acmg_mat} -nt ${SCRIPT_DIR}/spliceai_cutoffs.py ]] && \
     [[ ${input_tab} -nt ${mean_am_score_table} ]] && \
     [[ ${input_tab} -nt ${clinvar_aa_dict_pkl} ]] && \
     [[ ${input_tab} -nt ${clinvar_splice_dict_pkl} ]] && \
-    [[ ${input_tab} -nt ${clinvar_pm5_index} ]] && \
     [[ ${input_tab} -nt ${intolerant_domains_pkl} ]] && \
     [[ ${input_tab} -nt ${am_intol_domains_tsv} ]] && \
     [[ ${input_tab} -nt ${clinvar_gene_stat_pkl} ]] && \
@@ -301,14 +279,13 @@ function acmg_assign_table () {
     [[ -n "${pext_tissues}" ]] && [[ "${pext_tissues}" != "null" ]] && local pext_arg="--pext_tissues ${pext_tissues}" || local pext_arg=""
 
     log "Running ACMG assignment with integrated condition cache ${hpo_condition_mechanism_json} and exact non-LOF cache ${gene_nonlof_mechanism_json}"
-    "${PRIVA_BIN}" acmg-assign \
+    python ${acmg_py} \
     --anno_table ${input_tab} \
     --am_score_table ${mean_am_score_table} \
     --clinvar_patho_af_stat ${clinvar_patho_af_stat} \
     --clinvar_patho_exon_af_stat ${clinvar_patho_exon_af_stat} \
     --clinvar_aa_dict_pkl ${clinvar_aa_dict_pkl} \
     --clinvar_splice_dict_pkl ${clinvar_splice_dict_pkl} \
-    --clinvar_pm5_index ${clinvar_pm5_index} \
     --interpro_entry_map_pkl ${interpro_entry_map_pkl} \
     --intolerant_domains_pkl ${intolerant_domains_pkl} \
     --gene_dosage_sensitivity ${gene_dosage_sensitivity} \

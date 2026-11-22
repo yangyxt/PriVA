@@ -1,5 +1,0 @@
-reactome_id	pathway_name	ncbi_gene_id	evidence_code	url	species	source
-R-HSA-168256	Immune System	695	TAS	https://reactome.org/PathwayBrowser/#/R-HSA-168256	Homo sapiens	Reactome_NCBI2Reactome_All_Levels
-R-HSA-1280215	Cytokine Signaling in Immune system	3575	TAS	https://reactome.org/PathwayBrowser/#/R-HSA-1280215	Homo sapiens	Reactome_NCBI2Reactome_All_Levels
-R-HSA-9999999	Made-up child pathway	7454	IEA	https://reactome.org/PathwayBrowser/#/R-HSA-9999999	Homo sapiens	Reactome_NCBI2Reactome_All_Levels
-R-HSA-1474244	Extracellular matrix organization	2312	TAS	https://reactome.org/PathwayBrowser/#/R-HSA-1474244	Homo sapiens	Reactome_NCBI2Reactome_All_Levels
